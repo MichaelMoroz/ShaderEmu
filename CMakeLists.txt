@@ -40,3 +40,7 @@ target_link_libraries(harness_core PUBLIC d3d11 dxgi d3dcompiler dxguid windowsc
 
 add_executable(rvc_harness harness/apps/rvc_harness.cpp)
 target_link_libraries(rvc_harness PRIVATE harness_core)
+
+# D3D12 runner for the same FXC bytecode, so D3D12-only profilers (Nsight GPU Trace) can attach.
+add_executable(rvc_trace12 harness/apps/rvc_trace12.cpp)
+target_link_libraries(rvc_trace12 PRIVATE harness_core d3d12)
