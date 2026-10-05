@@ -28,7 +28,11 @@ bool loadImageRGBA8(const std::string& path, ImageRGBA8& out, std::string& err) 
             hr = conv->Initialize(frame.Get(), GUID_WICPixelFormat32bppRGBA, WICBitmapDitherTypeNone, nullptr, 0.0,
                                   WICBitmapPaletteTypeCustom);
         if (FAILED(hr)) { err = "cannot convert " + path + " to RGBA8: " + hrToString(hr); return false; }
-        fprintf(stderr, "[harness] note: %s is not 8-bit RGBA; converted (data may not be bit-exact)\n", path.c_str());
+        // WIC hands 8-bit PNGs back as BGR(A); reordering channels is lossless.
+        bool exact = fmt == GUID_WICPixelFormat32bppBGRA || fmt == GUID_WICPixelFormat24bppBGR ||
+                     fmt == GUID_WICPixelFormat24bppRGB;
+        if (!exact)
+            fprintf(stderr, "[harness] note: %s is not 8-bit RGB(A); converted (data may not be bit-exact)\n", path.c_str());
         src = conv;
     }
     out.width = w;

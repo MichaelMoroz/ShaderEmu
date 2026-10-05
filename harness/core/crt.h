@@ -27,6 +27,8 @@ class CustomRenderTexture {
 public:
     bool init(ID3D11Device* dev, UINT width, UINT height, DXGI_FORMAT format, std::string& err);
     void clear(ID3D11DeviceContext* ctx);
+    // Overwrites both buffers with tightly packed rows (row 0 = top).
+    void load(ID3D11DeviceContext* ctx, const void* data, UINT rowPitch);
     void runZone(Gpu& gpu, GpuPass& pass, Material& mat, const UpdateZone& zone);
 
     ID3D11Texture2D* current() const { return tex_[cur_].Get(); }

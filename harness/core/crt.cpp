@@ -35,6 +35,10 @@ void CustomRenderTexture::clear(ID3D11DeviceContext* ctx) {
     for (int i = 0; i < 2; ++i) ctx->ClearRenderTargetView(rtv_[i].Get(), zero);
 }
 
+void CustomRenderTexture::load(ID3D11DeviceContext* ctx, const void* data, UINT rowPitch) {
+    for (int i = 0; i < 2; ++i) ctx->UpdateSubresource(tex_[i].Get(), 0, nullptr, data, rowPitch, 0);
+}
+
 void CustomRenderTexture::runZone(Gpu& gpu, GpuPass& pass, Material& mat, const UpdateZone& z) {
     ID3D11DeviceContext* ctx = gpu.ctx.Get();
 

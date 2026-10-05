@@ -53,6 +53,7 @@ struct Options {
     std::string cacheDir = "build/shadercache";
     std::string uartLog;
     std::string dumpState;
+    std::string saveState, loadState;
     std::vector<std::pair<std::string, std::string>> expectSend;
     std::string initialInput;
     std::string until;
@@ -62,6 +63,7 @@ struct Options {
     double maxSeconds = 0;
     double fixedDt = 0;  // 0 = real time
     double statsInterval = 0;
+    int64_t benchWarmup = -1;  // >= 0: benchmark mode, this many unmeasured frames first
     bool readStdin = true;
     bool verbose = false;
     GpuOptions gpu;
@@ -88,6 +90,10 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
   --fixed-dt S         drive _Time as frame*S seconds (deterministic) instead of wall clock
   --uart-log FILE      append all UART output to FILE
   --dump-state FILE    write the 64x64 state area (raw uint32 RGBA) at exit
+  --save-state FILE    write a snapshot of the whole machine (128 MB) at exit
+  --load-state FILE    resume from a snapshot instead of booting
+  --bench N            benchmark: skip N warm-up frames, then time the rest (GPU fully drained at both
+                       ends) and print a BENCH line with IPS and a hash of the state area
   --stats S            print speed stats to stderr every S seconds (title bar always shows them)
   --warp               use WARP (software) instead of the GPU
   --adapter N          use DXGI adapter N        --list-adapters
@@ -158,6 +164,9 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--fixed-dt") o.fixedDt = atof(next("--fixed-dt").c_str());
         else if (a == "--uart-log") o.uartLog = next("--uart-log");
         else if (a == "--dump-state") o.dumpState = next("--dump-state");
+        else if (a == "--save-state") o.saveState = next("--save-state");
+        else if (a == "--load-state") o.loadState = next("--load-state");
+        else if (a == "--bench") o.benchWarmup = atoll(next("--bench").c_str());
         else if (a == "--stats") o.statsInterval = atof(next("--stats").c_str());
         else if (a == "--warp") o.gpu.warp = true;
         else if (a == "--adapter") o.gpu.adapterIndex = atoi(next("--adapter").c_str());
@@ -199,6 +208,15 @@ bool loadLaneTextures(Gpu& gpu, Material& mat, const std::string& dir, const std
     }
     return true;
 }
+
+// Snapshot file: this header, then width*height RGBA32_UINT texels, row 0 first.
+struct SnapshotHeader {
+    char magic[8];
+    uint32_t width, height;
+    double time;  // guest wall clock (_Time.y), so the timer does not jump back on resume
+    uint32_t sentTag, sentChar;
+};
+const char kSnapshotMagic[8] = {'S', 'X', '8', '6', 'S', 'N', 'A', 'P'};
 
 std::mutex g_inputMutex;
 std::deque<char> g_stdinQueue;
@@ -284,6 +302,27 @@ int main(int argc, char** argv) {
         return 1;
     }
     crt.clear(gpu.ctx.Get());
+    double timeBase = 0;
+    uint32_t sentTag = 0, consumedTag = 0, sentChar = 0;
+    if (!opt.loadState.empty()) {
+        std::string snap;
+        SnapshotHeader hdr{};
+        size_t need = sizeof hdr + (size_t)W * H * 16;
+        bool ok = readFileBinary(opt.loadState, snap) && snap.size() == need;
+        if (ok) memcpy(&hdr, snap.data(), sizeof hdr);
+        if (!ok || memcmp(hdr.magic, kSnapshotMagic, 8) != 0 || hdr.width != W || hdr.height != H) {
+            fprintf(stderr, "[harness] %s is not a %ux%u snapshot\n", opt.loadState.c_str(), W, H);
+            return 1;
+        }
+        crt.load(gpu.ctx.Get(), snap.data() + sizeof hdr, W * 16);
+        timeBase = hdr.time;
+        sentTag = consumedTag = hdr.sentTag;
+        sentChar = hdr.sentChar;
+        mat.setInt("_UdonUARTInChar", (int)sentChar);
+        mat.setInt("_UdonUARTInTag", (int)sentTag);
+        opt.initFrames = 0;
+        fprintf(stderr, "[harness] resumed from %s (guest time %.1fs)\n", opt.loadState.c_str(), timeBase);
+    }
     const UpdateZone tickZone{32, 4064, 64, 64, 0};
     const UpdateZone commitZone{1024, 2048, 2048, 4096, 1};
 
@@ -296,6 +335,12 @@ int main(int argc, char** argv) {
 
     FILE* uartLog = nullptr;
     if (!opt.uartLog.empty()) uartLog = _wfopen(widen(opt.uartLog).c_str(), L"ab");
+    if (uartLog) {
+        // Marks where this run starts for anyone following the log live.
+        fprintf(uartLog, "\r\n\x1b[7m=== rvc_harness: %s ===\x1b[0m\r\n",
+                opt.loadState.empty() ? "cold boot" : ("resumed from " + opt.loadState).c_str());
+        fflush(uartLog);
+    }
 
     if (opt.readStdin) std::thread(stdinThread).detach();
 
@@ -304,7 +349,6 @@ int main(int argc, char** argv) {
     size_t expectIdx = 0, expectScanFrom = 0;
     std::string transcript;
     bool untilHit = false;
-    uint32_t sentTag = 0, consumedTag = 0;
     bool haveClock = false;
     uint32_t lastClock = 0, commits = 0;
     uint64_t guestInstructions = 0;
@@ -313,6 +357,7 @@ int main(int argc, char** argv) {
     double lastStats = 0;
     uint64_t statsInstr = 0, statsFrames = 0;
     uint64_t frame = 0;
+    double guestTime = timeBase;
 
     auto processRow = [&](const std::vector<uint8_t>& raw, uint64_t rowFrame) {
         const uint32_t* t = (const uint32_t*)raw.data();
@@ -354,9 +399,12 @@ int main(int argc, char** argv) {
 
     std::vector<uint8_t> row;
     int exitCode = 0;
+    auto benchT0 = t0;
+    uint64_t benchInstr0 = 0;
     for (;;) {
         double wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-        double t = opt.fixedDt > 0 ? (double)frame * opt.fixedDt : wall;
+        double t = timeBase + (opt.fixedDt > 0 ? (double)frame * opt.fixedDt : wall);
+        guestTime = t;
         mat.setVector("_Time", t / 20, t, t * 2, t * 3);
         mat.setVector("_SinTime", sin(t / 8), sin(t / 4), sin(t / 2), sin(t));
         mat.setVector("_CosTime", cos(t / 8), cos(t / 4), cos(t / 2), cos(t));
@@ -372,6 +420,7 @@ int main(int argc, char** argv) {
             }
             if (c > 0) {
                 ++sentTag;
+                sentChar = (uint32_t)c;
                 mat.setInt("_UdonUARTInChar", c);
                 mat.setInt("_UdonUARTInTag", sentTag);
             }
@@ -380,6 +429,13 @@ int main(int argc, char** argv) {
         crt.runZone(gpu, passes[0], mat, tickZone);
         crt.runZone(gpu, passes[1], mat, commitZone);
 
+        if (opt.benchWarmup >= 0 && frame == (uint64_t)opt.benchWarmup) {
+            // Start the measurement from an idle GPU with every earlier frame accounted for.
+            uint64_t f;
+            while (rowReadback.pending() > 0 && rowReadback.pop(gpu.ctx.Get(), row, f)) processRow(row, f);
+            benchInstr0 = guestInstructions;
+            benchT0 = std::chrono::steady_clock::now();
+        }
         if (rowReadback.full()) {
             uint64_t f;
             if (!rowReadback.pop(gpu.ctx.Get(), row, f)) { exitCode = 1; break; }
@@ -427,6 +483,23 @@ int main(int argc, char** argv) {
     }
     if (untilHit) exitCode = 0;
 
+    if (opt.benchWarmup >= 0 && exitCode != 1 && frame > (uint64_t)opt.benchWarmup) {
+        // The drain above blocked on the last frame, so this interval covers all GPU work.
+        double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - benchT0).count();
+        uint64_t frames = frame - (uint64_t)opt.benchWarmup, instr = guestInstructions - benchInstr0;
+        uint64_t hash = 0;
+        RegionReadback area;
+        std::vector<uint8_t> data;
+        uint64_t f;
+        if (area.init(gpu.device.Get(), DXGI_FORMAT_R32G32B32A32_UINT, 16, 64, 64, 1, err)) {
+            area.request(gpu.ctx.Get(), crt.current(), 0, 0, 0);
+            if (area.pop(gpu.ctx.Get(), data, f)) hash = fnv1a64(data.data(), data.size());
+        }
+        fprintf(stderr, "\nBENCH frames=%llu seconds=%.3f instructions=%llu ips=%.0f fps=%.1f per_frame=%.1f state=%016llx\n",
+                (unsigned long long)frames, secs, (unsigned long long)instr, instr / secs, frames / secs,
+                (double)instr / frames, (unsigned long long)hash);
+    }
+
     if (!opt.dumpState.empty() && exitCode != 1) {
         RegionReadback full;
         if (full.init(gpu.device.Get(), DXGI_FORMAT_R32G32B32A32_UINT, 16, 64, 64, 1, err)) {
@@ -436,6 +509,30 @@ int main(int argc, char** argv) {
             if (full.pop(gpu.ctx.Get(), data, f) && writeFileBinary(opt.dumpState, data.data(), data.size()))
                 fprintf(stderr, "\n[harness] state area written to %s\n", opt.dumpState.c_str());
         }
+    }
+
+    if (!opt.saveState.empty() && exitCode != 1) {
+        RegionReadback full;
+        std::vector<uint8_t> data;
+        uint64_t f;
+        SnapshotHeader hdr{};
+        memcpy(hdr.magic, kSnapshotMagic, 8);
+        hdr.width = W;
+        hdr.height = H;
+        hdr.time = guestTime;
+        hdr.sentTag = sentTag;
+        hdr.sentChar = sentChar;
+        bool ok = full.init(gpu.device.Get(), DXGI_FORMAT_R32G32B32A32_UINT, 16, W, H, 1, err);
+        if (ok) {
+            full.request(gpu.ctx.Get(), crt.current(), 0, 0, 0);
+            ok = full.pop(gpu.ctx.Get(), data, f);
+        }
+        if (ok) {
+            data.insert(data.begin(), (const uint8_t*)&hdr, (const uint8_t*)&hdr + sizeof hdr);
+            ok = writeFileBinary(opt.saveState, data.data(), data.size());
+        }
+        fprintf(stderr, "\n[harness] snapshot %s %s\n", ok ? "written to" : "FAILED:", opt.saveState.c_str());
+        if (!ok) exitCode = 1;
     }
 
     double wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
