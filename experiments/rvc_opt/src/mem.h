@@ -146,7 +146,7 @@ uint mem_get_word(uint addr) {
             case 0x0200bffc: return cpu.clint.mtime_hi;
 
             // UART (first has rbr_thr_ier_iir, second has lcr_mcr_lsr_scr)
-            case 0x10000000:
+            case 0x10000000: { // braces: DXC rejects a declaration that later cases jump over
                 uint ret = 0;
                 if ((UART_GET2(LCR) >> 7) == 0) {
                     uint rbr = UART_GET1(RBR);
@@ -156,6 +156,7 @@ uint mem_get_word(uint addr) {
                     ret = rbr;
                 }
                 return ret | ((UART_GET2(LCR) >> 7 == 0 ? UART_GET1(IER) : 0) << 8) | (UART_GET1(IIR) << 16) | (UART_GET2(LCR) << 24);
+            }
             /* case 0x10000001: return UART_GET2(LCR) >> 7 == 0 ? UART_GET1(IER) : 0; */
             /* case 0x10000002: return UART_GET1(IIR); */
             /* case 0x10000003: return UART_GET2(LCR); */

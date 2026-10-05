@@ -125,6 +125,36 @@ So about 28% is branch cost and 29% is dependent arithmetic, against 17% for all
 texture waits, which matches the event counters: fewer reads no longer buys much, and the next
 gains have to come from fewer branches and shorter dependency chains per instruction.
 
+## Fast iteration with DXC
+
+`rvc_trace12 --dxc` compiles the same source with DXC to DXIL: 1.1 s for the tick pass against
+2-3 minutes for FXC. It needed one source change (braces around a `case` body with a
+declaration) and two compile-time type mappings for DX9 sampler types DXC no longer has.
+
+| D3D12, busy loop, `--no-doubles` | FXC bytecode | DXC, shader model 6.6 |
+| --- | --- | --- |
+| this folder | 1,087k IPS | 1,101k IPS |
+| `OPT_BASELINE` | 821k IPS | 940k IPS |
+| ratio | 1.32x | 1.17x |
+
+All end in state 8d6fc1106d9cd3a1, and DXIL does so with doubles enabled too: the double
+miscompute on NVIDIA's D3D12 path only affects FXC bytecode.
+
+What moves DXC's speed (`--dxc-opt`, `--dxc-sm`):
+
+| Setting | IPS |
+| --- | --- |
+| shader model 6.6 (default) | 1,101k |
+| shader model 6.0 | 994k |
+| 6.0 with `-Gfp` (prefer flow control) | 911k - 929k |
+| 6.6 with doubles (no `--no-doubles`) | 936k - 940k |
+| `-O1`, `-O2`, `-O3`, `-ffinite-math-only`, `-all-resources-bound` | no difference |
+| `-O0`, `-Od` | fail validation on the `[forcecase]` attribute |
+
+So DXC is reliable for checking that an edit preserves emulation, and with 6.6 and
+`--no-doubles` its speed is close to FXC's for this build, but the two can still disagree on
+how much a change helps. Rank variants with it, then confirm with FXC.
+
 ## Write-cache geometry
 
 `L1_SET_BITS` (sets per slice, default 9), `L1_SLICES` (default 2) and `L1_HASH_LOW` (pick the

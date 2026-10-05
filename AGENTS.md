@@ -50,6 +50,17 @@ A cold boot to the `/ #` prompt takes about 80 s on an RTX 5090. Do it once, the
   double math and the guest diverges otherwise. Check that its BENCH `state` matches D3D11.
 - New D3D12 code: test it with a dummy shader that writes position, uniforms and texture
   contents before trusting it with the emulator.
+- Prototype shader edits with DXC first: about 5 s per try instead of 2-3 minutes.
+
+      bin\rvc_trace12.exe --rvc experiments\rvc_opt --payload rvc\_Nix\rvc\data-net --dxc --no-doubles --frames 500 --bench 30
+
+  The `state` hash is as trustworthy as FXC's, so use it to check that an edit keeps emulation
+  identical. Speed is close to FXC only with these settings: shader model 6.6 (the default;
+  6.0 is 10% slower) and `--no-doubles` (doubles cost 15% under DXIL). `-O1`..`-O3` make no
+  difference, and `-O0`/`-Od` fail to compile. Even so DXC and FXC can disagree on how much a
+  change helps (dispatch + fetch: 1.32x under FXC, 1.17x under DXC), and the first run after
+  a compile is often slow, so run twice and confirm winners with FXC on D3D11
+  (`tools\perf_test.ps1`), which is what VRChat runs.
 - A shader edit costs one FXC compile (90 s alone, about 3 min with three in parallel). Compile
   variants in parallel, then benchmark them one at a time.
 

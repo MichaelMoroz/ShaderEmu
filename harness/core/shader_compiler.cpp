@@ -63,6 +63,26 @@ std::string blobText(ID3DBlob* b) {
 
 }  // namespace
 
+bool preprocessStage(const std::string& source, const std::string& sourceName, const std::string& rootDir,
+                     const Defines& extraDefines, const CompileSettings& settings, std::string& out, std::string& err) {
+    Defines all = settings.defines;
+    all.insert(all.end(), extraDefines.begin(), extraDefines.end());
+    std::vector<D3D_SHADER_MACRO> macros;
+    for (auto& d : all) macros.push_back({d.first.c_str(), d.second.c_str()});
+    macros.push_back({nullptr, nullptr});
+    std::vector<fs::path> sys;
+    for (auto& d : settings.includeDirs) sys.push_back(fs::u8path(d));
+    IncludeHandler inc(fs::u8path(rootDir), sys);
+    ComPtr<ID3DBlob> pre, errors;
+    HRESULT hr = D3DPreprocess(source.data(), source.size(), sourceName.c_str(), macros.data(), &inc, &pre, &errors);
+    if (FAILED(hr)) {
+        err = "preprocess failed (" + hrToString(hr) + "):\n" + blobText(errors.Get());
+        return false;
+    }
+    out = blobText(pre.Get());
+    return true;
+}
+
 StageResult compileStage(const std::string& source, const std::string& sourceName, const std::string& rootDir,
                          const std::string& entry, const std::string& profile, const Defines& extraDefines,
                          const CompileSettings& settings) {

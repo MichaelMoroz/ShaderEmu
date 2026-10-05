@@ -13,6 +13,8 @@
 #include "shaderlab.h"
 
 #include <d3d12.h>
+#include <d3d12shader.h>
+#include <dxcapi.h>
 #include <dxgi1_4.h>
 
 #include <chrono>
@@ -59,6 +61,10 @@ struct Options {
     std::string dumpState;
     bool noDoubles = false;  // NVIDIA's D3D12 path miscomputes rvc's double math; see README
     std::vector<std::string> defines;
+    bool dxc = false;        // compile with DXC to DXIL: seconds instead of minutes, for prototyping
+    std::string dxcOpt = "-O3";  // DXC optimisation flags, space separated
+    std::string dxcSm = "6_6";   // DXC shader model; 6.6 matches FXC speed, 6.0 is ~10% slower
+    std::string dxcDir;      // folder with dxcompiler.dll; default: newest Windows SDK bin
     bool warp = false;   // software adapter, as a reference for driver differences
     bool debug = false;  // D3D12 debug layer; its messages are printed at exit
 };
@@ -213,6 +219,107 @@ std::vector<uint8_t> readRegion(Dx& dx, ID3D12Resource* tex, D3D12_RESOURCE_STAT
     return out;
 }
 
+// DXC (dxcompiler.dll from the Windows SDK), loaded on demand for --dxc.
+struct Dxc {
+    ComPtr<IDxcUtils> utils;
+    ComPtr<IDxcCompiler3> compiler;
+    void init(std::string dir) {
+        if (dir.empty()) {  // newest x64 SDK bin folder that ships the compiler
+            std::error_code ec;
+            for (auto& e : fs::directory_iterator("C:/Program Files (x86)/Windows Kits/10/bin", ec)) {
+                fs::path cand = e.path() / "x64";
+                if (fs::exists(cand / "dxcompiler.dll", ec) && cand.u8string() > dir) dir = cand.u8string();
+            }
+        }
+        std::wstring path = widen((fs::u8path(dir) / "dxcompiler.dll").u8string());
+        HMODULE h = LoadLibraryExW(path.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);  // finds dxil.dll beside it
+        auto create = h ? (DxcCreateInstanceProc)GetProcAddress(h, "DxcCreateInstance") : nullptr;
+        if (!create) die(("cannot load " + narrow(path) + " (use --dxc-dir)").c_str());
+        check(create(CLSID_DxcUtils, IID_PPV_ARGS(&utils)), "DxcUtils");
+        check(create(CLSID_DxcCompiler, IID_PPV_ARGS(&compiler)), "DxcCompiler");
+    }
+};
+
+// The DXIL counterpart of StageLayout::reflect.
+void reflectDxil(StageLayout& L, ID3D12ShaderReflection* refl) {
+    L.present = true;
+    D3D12_SHADER_DESC sd{};
+    refl->GetDesc(&sd);
+    for (UINT i = 0; i < sd.BoundResources; ++i) {
+        D3D12_SHADER_INPUT_BIND_DESC bd{};
+        refl->GetResourceBindingDesc(i, &bd);
+        if (bd.Type == D3D_SIT_TEXTURE) L.textures.push_back({bd.Name, bd.BindPoint});
+        else if (bd.Type == D3D_SIT_SAMPLER) L.samplers.push_back({bd.Name, bd.BindPoint});
+        else if (bd.Type == D3D_SIT_UAV_RWSTRUCTURED) L.uavs.push_back({bd.Name, bd.BindPoint});
+        else if (bd.Type == D3D_SIT_CBUFFER && std::string(bd.Name) == "$Globals") {
+            ID3D12ShaderReflectionConstantBuffer* cb = refl->GetConstantBufferByName("$Globals");
+            D3D12_SHADER_BUFFER_DESC cbd{};
+            cb->GetDesc(&cbd);
+            L.hasGlobals = true;
+            L.globalsSlot = bd.BindPoint;
+            L.globalsSize = cbd.Size;
+            for (UINT v = 0; v < cbd.Variables; ++v) {
+                D3D12_SHADER_VARIABLE_DESC vd{};
+                D3D12_SHADER_TYPE_DESC td{};
+                ID3D12ShaderReflectionVariable* var = cb->GetVariableByIndex(v);
+                var->GetDesc(&vd);
+                var->GetType()->GetDesc(&td);
+                ShaderVar sv;
+                sv.name = vd.Name;
+                sv.offset = vd.StartOffset;
+                sv.size = vd.Size;
+                sv.cls = td.Class;
+                sv.type = td.Type;
+                sv.rows = td.Rows;
+                sv.cols = td.Columns;
+                sv.elements = td.Elements;
+                L.vars.push_back(sv);
+            }
+            L.scratch.assign((cbd.Size + 15) & ~15u, 0);
+        }
+    }
+}
+
+// Compiles preprocessed HLSL with DXC in FXC-compatibility mode and reflects it.
+std::vector<uint8_t> dxcCompile(Dxc& dxc, const std::string& text, const std::string& entry, const std::string& profile,
+                                const std::string& optFlags, StageLayout& layout) {
+    std::wstring wentry = widen(entry);
+    // -Gec / -HV 2016: assignment to uniforms and other FXC-era syntax the shader relies on.
+    // The two defines map DX9 sampler types that DXC no longer has (declared but unused).
+    std::wstring wprofile = widen(profile);
+    std::vector<std::wstring> extra;
+    for (size_t i = 0; i < optFlags.size();) {
+        size_t e = optFlags.find(' ', i);
+        if (e == std::string::npos) e = optFlags.size();
+        if (e > i) extra.push_back(widen(optFlags.substr(i, e - i)));
+        i = e + 1;
+    }
+    std::vector<LPCWSTR> args = {L"-T", wprofile.c_str(), L"-E", wentry.c_str(), L"-Gec", L"-HV", L"2016",
+                                 L"-D", L"samplerCUBE=TextureCube", L"-D", L"sampler3D=Texture3D"};
+    for (auto& x : extra) args.push_back(x.c_str());
+    DxcBuffer src{text.data(), text.size(), DXC_CP_UTF8};
+    ComPtr<IDxcResult> res;
+    check(dxc.compiler->Compile(&src, args.data(), (UINT32)args.size(), nullptr, IID_PPV_ARGS(&res)), "DXC Compile");
+    HRESULT status = E_FAIL;
+    res->GetStatus(&status);
+    if (FAILED(status)) {
+        ComPtr<IDxcBlobUtf8> errs;
+        res->GetOutput(DXC_OUT_ERRORS, IID_PPV_ARGS(&errs), nullptr);
+        std::string log = errs && errs->GetStringLength() ? std::string(errs->GetStringPointer(), errs->GetStringLength()) : "";
+        size_t firstError = log.find("error");
+        die(("DXC failed for " + entry + ":\n" + log.substr(firstError == std::string::npos ? 0 : log.rfind('\n', firstError) + 1, 1500)).c_str());
+    }
+    ComPtr<IDxcBlob> obj, reflBlob;
+    check(res->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&obj), nullptr), "DXC object");
+    check(res->GetOutput(DXC_OUT_REFLECTION, IID_PPV_ARGS(&reflBlob), nullptr), "DXC reflection");
+    DxcBuffer rb{reflBlob->GetBufferPointer(), reflBlob->GetBufferSize(), 0};
+    ComPtr<ID3D12ShaderReflection> refl;
+    check(dxc.utils->CreateReflection(&rb, IID_PPV_ARGS(&refl)), "DXC CreateReflection");
+    reflectDxil(layout, refl.Get());
+    const uint8_t* p = (const uint8_t*)obj->GetBufferPointer();
+    return std::vector<uint8_t>(p, p + obj->GetBufferSize());
+}
+
 struct Pass12 {
     std::string name;
     StageLayout vs, ps;
@@ -242,11 +349,16 @@ int main(int argc, char** argv) {
         else if (a == "--dump-state") opt.dumpState = next();
         else if (a == "--debug") opt.debug = true;
         else if (a == "--warp") opt.warp = true;
+        else if (a == "--dxc") opt.dxc = true;
+        else if (a == "--dxc-dir") opt.dxcDir = next();
+        else if (a == "--dxc-opt") opt.dxcOpt = next();
+        else if (a == "--dxc-sm") opt.dxcSm = next();
         else if (a == "--no-doubles") opt.noDoubles = true;
         else if (a == "--define") opt.defines.push_back(next());
         else {
             fprintf(stderr, "usage: rvc_trace12 [--rvc DIR] [--payload DIR] [--load-state FILE] [--ticks N]\n"
-                            "                   [--frames N | --seconds S] [--bench WARMUP] [--fixed-dt S] [--cache DIR] [--dump-state FILE]\n");
+                            "                   [--frames N | --seconds S] [--bench WARMUP] [--fixed-dt S] [--cache DIR] [--dump-state FILE]\n"
+                            "                   [--dxc [--dxc-dir DIR] [--dxc-opt \"FLAGS\"] [--dxc-sm 6_x]] [--no-doubles] [--define NAME[=V]] [--warp] [--debug]\n");
             return a == "--help" ? 0 : 1;
         }
     }
@@ -308,6 +420,8 @@ int main(int argc, char** argv) {
     }
     std::string rootDir = fs::u8path(shader.path).parent_path().u8string();
 
+    Dxc dxc;
+    if (opt.dxc) dxc.init(opt.dxcDir);
     Pass12 passes[2];
     const char* passNames[2] = {"CPUTick", "Commit"};
     for (int p = 0; p < 2; ++p) {
@@ -316,12 +430,27 @@ int main(int argc, char** argv) {
         Pass12& P = passes[p];
         P.name = passNames[p];
         std::string sm = shaderModelSuffix(sp->target);
+        std::vector<uint8_t> vsBytes, psBytes;
+        if (opt.dxc) {
+            auto tc = std::chrono::steady_clock::now();
+            std::string vsText, psText;
+            if (!preprocessStage(sp->code, shader.path, rootDir, {{"SHADER_STAGE_VERTEX", "1"}}, cs, vsText, err) ||
+                !preprocessStage(sp->code, shader.path, rootDir, {{"SHADER_STAGE_FRAGMENT", "1"}}, cs, psText, err))
+                die(err.c_str());
+            vsBytes = dxcCompile(dxc, vsText, sp->vertexEntry, "vs_" + opt.dxcSm, opt.dxcOpt, P.vs);
+            psBytes = dxcCompile(dxc, psText, sp->fragmentEntry, "ps_" + opt.dxcSm, opt.dxcOpt, P.ps);
+            fprintf(stderr, "[trace12] pass '%s': DXC in %.1fs (ps %zu bytes)\n", P.name.c_str(),
+                    std::chrono::duration<double>(std::chrono::steady_clock::now() - tc).count(), psBytes.size());
+        } else {
         StageResult vs = compileStage(sp->code, shader.path, rootDir, sp->vertexEntry, "vs_" + sm, {{"SHADER_STAGE_VERTEX", "1"}}, cs);
         StageResult ps = compileStage(sp->code, shader.path, rootDir, sp->fragmentEntry, "ps_" + sm, {{"SHADER_STAGE_FRAGMENT", "1"}}, cs);
         if (!vs.ok || !ps.ok) die((P.name + " failed to compile:\n" + vs.log + ps.log).c_str());
         fprintf(stderr, "[trace12] pass '%s': vs %s, ps %s in %.1fs (%zu bytes)\n", P.name.c_str(), vs.fromCache ? "cached" : "compiled",
                 ps.fromCache ? "cached" : "compiled", ps.seconds, (size_t)ps.bytecode->GetBufferSize());
         if (!P.vs.reflect(nullptr, vs.bytecode.Get(), err) || !P.ps.reflect(nullptr, ps.bytecode.Get(), err)) die(err.c_str());
+        vsBytes.assign((const uint8_t*)vs.bytecode->GetBufferPointer(), (const uint8_t*)vs.bytecode->GetBufferPointer() + vs.bytecode->GetBufferSize());
+        psBytes.assign((const uint8_t*)ps.bytecode->GetBufferPointer(), (const uint8_t*)ps.bytecode->GetBufferPointer() + ps.bytecode->GetBufferSize());
+        }
         if (!P.vs.textures.empty() || !P.vs.samplers.empty() || !P.ps.samplers.empty() || !P.ps.uavs.empty())
             die("shader uses vertex textures, samplers or UAVs, which this runner does not bind");
         if (P.vs.globalsSize > kCbBytes || P.ps.globalsSize > kCbBytes) die("$Globals larger than the upload slot");
@@ -353,8 +482,8 @@ int main(int argc, char** argv) {
         // Cull Off, ZTest Off, Blend One Zero, as in the ShaderLab pass.
         D3D12_GRAPHICS_PIPELINE_STATE_DESC pd{};
         pd.pRootSignature = P.root.Get();
-        pd.VS = {vs.bytecode->GetBufferPointer(), vs.bytecode->GetBufferSize()};
-        pd.PS = {ps.bytecode->GetBufferPointer(), ps.bytecode->GetBufferSize()};
+        pd.VS = {vsBytes.data(), vsBytes.size()};
+        pd.PS = {psBytes.data(), psBytes.size()};
         pd.BlendState.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
         pd.SampleMask = 0xffffffff;
         pd.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;

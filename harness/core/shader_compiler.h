@@ -34,6 +34,11 @@ struct StageResult {
     std::string log;  // errors and warnings
 };
 
+// Runs only the preprocessor (includes and macros resolved), for handing the source to another
+// compiler such as DXC.
+bool preprocessStage(const std::string& source, const std::string& sourceName, const std::string& rootDir,
+                     const Defines& extraDefines, const CompileSettings& settings, std::string& out, std::string& err);
+
 // rootDir: directory used to resolve #include "..." from the top-level source.
 StageResult compileStage(const std::string& source, const std::string& sourceName, const std::string& rootDir,
                          const std::string& entry, const std::string& profile, const Defines& extraDefines,
