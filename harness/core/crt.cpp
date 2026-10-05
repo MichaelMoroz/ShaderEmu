@@ -66,7 +66,13 @@ void CustomRenderTexture::runZone(Gpu& gpu, GpuPass& pass, Material& mat, const 
     ctx->PSSetShaderResources(0, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT, nulls);
 
     int dst = 1 - cur_;
-    ctx->OMSetRenderTargets(1, rtv_[dst].GetAddressOf(), nullptr);
+    // A pixel shader may declare one UAV (profiling counters); its slot must follow the RTV.
+    ID3D11UnorderedAccessView* uav = pass.psLayout.uavs.empty() ? nullptr : mat.uav(pass.psLayout.uavs[0].name);
+    if (uav)
+        ctx->OMSetRenderTargetsAndUnorderedAccessViews(1, rtv_[dst].GetAddressOf(), nullptr,
+                                                       pass.psLayout.uavs[0].slot, 1, &uav, nullptr);
+    else
+        ctx->OMSetRenderTargets(1, rtv_[dst].GetAddressOf(), nullptr);
     D3D11_VIEWPORT vp{0, 0, (float)width_, (float)height_, 0, 1};
     ctx->RSSetViewports(1, &vp);
     ctx->RSSetState(gpu.rasterNoCull.Get());

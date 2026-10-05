@@ -57,7 +57,7 @@ bool StageLayout::reflect(ID3D11Device* dev, ID3DBlob* bytecode, std::string& er
                 bdesc.ByteWidth = (globalsSize + 15) & ~15u;
                 bdesc.Usage = D3D11_USAGE_DEFAULT;
                 bdesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-                hr = dev->CreateBuffer(&bdesc, nullptr, &globalsBuffer);
+                hr = dev ? dev->CreateBuffer(&bdesc, nullptr, &globalsBuffer) : S_OK;  // null: layout only
                 if (FAILED(hr)) {
                     err = "CreateBuffer($Globals) failed: " + hrToString(hr);
                     return false;
@@ -70,6 +70,9 @@ bool StageLayout::reflect(ID3D11Device* dev, ID3DBlob* bytecode, std::string& er
                 break;
             case D3D_SIT_SAMPLER:
                 samplers.push_back({bd.Name, bd.BindPoint});
+                break;
+            case D3D_SIT_UAV_RWSTRUCTURED:
+                uavs.push_back({bd.Name, bd.BindPoint});
                 break;
             default:
                 fprintf(stderr, "[harness] warning: unsupported resource '%s' (type %d)\n", bd.Name, (int)bd.Type);
@@ -209,6 +212,11 @@ void Material::applyDefaults(const SLShader& shader) {
     }
 }
 
+ID3D11UnorderedAccessView* Material::uav(const std::string& name) const {
+    auto it = uavs_.find(name);
+    return it == uavs_.end() ? nullptr : it->second.Get();
+}
+
 double Material::getFloat(const std::string& name, double fallback) const {
     auto it = values_.find(name);
     return it == values_.end() || it->second.empty() ? fallback : it->second[0];
@@ -220,37 +228,42 @@ void Material::setTexture(const std::string& name, ID3D11ShaderResourceView* srv
     if (!values_.count(name + "_ST")) setVector(name + "_ST", 1, 1, 0, 0);
 }
 
+void Material::fillGlobals(StageLayout& L) const {
+    if (!L.present || !L.hasGlobals) return;
+    std::fill(L.scratch.begin(), L.scratch.end(), 0);
+    for (auto& v : L.vars) {
+        auto it = values_.find(v.name);
+        if (it == values_.end()) continue;
+        const std::vector<double>& vals = it->second;
+        if (v.type == D3D_SVT_DOUBLE) continue;  // not used by Unity materials
+        UINT comps = v.rows * v.cols;
+        UINT elems = (std::max)(1u, v.elements);
+        bool matrix = v.cls == D3D_SVC_MATRIX_COLUMNS || v.cls == D3D_SVC_MATRIX_ROWS;
+        for (UINT e = 0; e < elems; ++e) {
+            for (UINT c = 0; c < comps; ++c) {
+                size_t idx = (size_t)e * comps + c;
+                if (idx >= vals.size()) goto next_var;
+                UINT off;
+                if (matrix) {
+                    // Values are given row-major (m[r][c] at r*cols+c).
+                    UINT r = c / v.cols, col = c % v.cols;
+                    if (v.cls == D3D_SVC_MATRIX_COLUMNS) off = v.offset + e * 16 * v.cols + col * 16 + r * 4;
+                    else off = v.offset + e * 16 * v.rows + r * 16 + col * 4;
+                } else {
+                    off = v.offset + e * 16 + c * 4;
+                }
+                if (off + 4 > v.offset + v.size || off + 4 > L.scratch.size()) goto next_var;
+                writeScalar(L.scratch.data() + off, v.type, vals[idx]);
+            }
+        }
+    next_var:;
+    }
+}
+
 void Material::bindStage(ID3D11DeviceContext* ctx, StageLayout& L, int stage, const Gpu& gpu) {
     if (!L.present) return;
     if (L.hasGlobals) {
-        std::fill(L.scratch.begin(), L.scratch.end(), 0);
-        for (auto& v : L.vars) {
-            auto it = values_.find(v.name);
-            if (it == values_.end()) continue;
-            const std::vector<double>& vals = it->second;
-            if (v.type == D3D_SVT_DOUBLE) continue;  // not used by Unity materials
-            UINT comps = v.rows * v.cols;
-            UINT elems = (std::max)(1u, v.elements);
-            bool matrix = v.cls == D3D_SVC_MATRIX_COLUMNS || v.cls == D3D_SVC_MATRIX_ROWS;
-            for (UINT e = 0; e < elems; ++e) {
-                for (UINT c = 0; c < comps; ++c) {
-                    size_t idx = (size_t)e * comps + c;
-                    if (idx >= vals.size()) goto next_var;
-                    UINT off;
-                    if (matrix) {
-                        // Values are given row-major (m[r][c] at r*cols+c).
-                        UINT r = c / v.cols, col = c % v.cols;
-                        if (v.cls == D3D_SVC_MATRIX_COLUMNS) off = v.offset + e * 16 * v.cols + col * 16 + r * 4;
-                        else off = v.offset + e * 16 * v.rows + r * 16 + col * 4;
-                    } else {
-                        off = v.offset + e * 16 + c * 4;
-                    }
-                    if (off + 4 > v.offset + v.size || off + 4 > L.scratch.size()) goto next_var;
-                    writeScalar(L.scratch.data() + off, v.type, vals[idx]);
-                }
-            }
-        next_var:;
-        }
+        fillGlobals(L);
         ctx->UpdateSubresource(L.globalsBuffer.Get(), 0, nullptr, L.scratch.data(), 0, 0);
         ID3D11Buffer* cb = L.globalsBuffer.Get();
         if (stage == 0) ctx->VSSetConstantBuffers(L.globalsSlot, 1, &cb);

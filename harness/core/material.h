@@ -38,6 +38,7 @@ struct StageLayout {
     std::vector<ShaderVar> vars;
     std::vector<ShaderBinding> textures;
     std::vector<ShaderBinding> samplers;
+    std::vector<ShaderBinding> uavs;
     ComPtr<ID3D11Buffer> globalsBuffer;
     std::vector<uint8_t> scratch;
 
@@ -75,13 +76,18 @@ public:
 
     // Also sets <name>_TexelSize and <name>_ST like Unity.
     void setTexture(const std::string& name, ID3D11ShaderResourceView* srv, UINT width, UINT height);
+    void setUav(const std::string& name, ID3D11UnorderedAccessView* uav) { uavs_[name] = uav; }
+    ID3D11UnorderedAccessView* uav(const std::string& name) const;
     void setLinearSampler(const std::string& samplerName, bool linear) { linearSamplers_[samplerName] = linear; }
 
     void bind(ID3D11DeviceContext* ctx, GpuPass& pass, const Gpu& gpu);
+    // Writes the current values into L.scratch in the stage's $Globals layout (no GPU calls).
+    void fillGlobals(StageLayout& L) const;
 
 private:
     void bindStage(ID3D11DeviceContext* ctx, StageLayout& L, int stage, const Gpu& gpu);
     std::map<std::string, std::vector<double>> values_;
     std::map<std::string, ComPtr<ID3D11ShaderResourceView>> textures_;
     std::map<std::string, bool> linearSamplers_;
+    std::map<std::string, ComPtr<ID3D11UnorderedAccessView>> uavs_;
 };

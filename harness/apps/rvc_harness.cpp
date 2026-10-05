@@ -20,6 +20,7 @@
 #include "image.h"
 #include "material.h"
 #include "readback.h"
+#include "rvc_time.h"
 #include "shaderlab.h"
 
 #include <fcntl.h>
@@ -33,6 +34,7 @@
 #include <cstring>
 #include <deque>
 #include <filesystem>
+#include <map>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -66,6 +68,10 @@ struct Options {
     int64_t benchWarmup = -1;  // >= 0: benchmark mode, this many unmeasured frames first
     bool readStdin = true;
     bool verbose = false;
+    bool profile = false;
+    bool present = false;
+    bool noDoubles = false;
+    std::vector<std::string> defines;
     GpuOptions gpu;
     UINT fxcFlags = D3DCOMPILE_ENABLE_BACKWARDS_COMPATIBILITY | D3DCOMPILE_OPTIMIZATION_LEVEL3;
 };
@@ -94,6 +100,13 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
   --load-state FILE    resume from a snapshot instead of booting
   --bench N            benchmark: skip N warm-up frames, then time the rest (GPU fully drained at both
                        ends) and print a BENCH line with IPS and a hash of the state area
+  --present            present each frame to a hidden 64x64 swapchain, so tools that define a frame
+                       by Present (Nsight GPU Trace) can see frame boundaries
+  --no-doubles         compile with NO_DOUBLES (shader must support it): timer value from the host,
+                       exact integer MULH. Not bit-identical to the double build.
+  --define NAME        add a preprocessor define to the shader build (repeatable)
+  --profile            compile with PROFILE defined and print the shader's PROF() event counters at
+                       exit (names from <rvc>/src/prof.h; with --bench, counted after the warm-up)
   --stats S            print speed stats to stderr every S seconds (title bar always shows them)
   --warp               use WARP (software) instead of the GPU
   --adapter N          use DXGI adapter N        --list-adapters
@@ -176,6 +189,10 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--cache") o.cacheDir = next("--cache");
         else if (a == "--init-frames") o.initFrames = atoi(next("--init-frames").c_str());
         else if (a == "--verbose") o.verbose = true;
+        else if (a == "--profile") o.profile = true;
+        else if (a == "--present") o.present = true;
+        else if (a == "--no-doubles") o.noDoubles = true;
+        else if (a == "--define") o.defines.push_back(next("--define"));
         else { fprintf(stderr, "unknown option %s\n", a.c_str()); usage(); return false; }
     }
     if (havePendingExpect) { fprintf(stderr, "--expect without --send\n"); return false; }
@@ -272,6 +289,12 @@ int main(int argc, char** argv) {
     bo.settings.includeDirs = {SHADERX86_UNITY_INCLUDE_DIR};
     bo.settings.defines = {{"SHADER_API_D3D11", "1"}, {"SHADER_TARGET", "50"}, {"UNITY_COMPILER_HLSL", "1"},
                            {"UNITY_VERSION", "202235"}};
+    if (opt.profile) bo.settings.defines.push_back({"PROFILE", "1"});
+    if (opt.noDoubles) bo.settings.defines.push_back({"NO_DOUBLES", "1"});
+    for (auto& d : opt.defines) {  // NAME or NAME=VALUE
+        size_t eq = d.find('=');
+        bo.settings.defines.push_back({d.substr(0, eq), eq == std::string::npos ? "1" : d.substr(eq + 1)});
+    }
     std::vector<GpuPass> passes;
     if (!buildPasses(gpu, shader, {"CPUTick", "Commit"}, bo, passes, err)) {
         fprintf(stderr, "[harness] %s\n", err.c_str());
@@ -293,6 +316,74 @@ int main(int argc, char** argv) {
     mat.setInt("_UdonUARTInChar", 0);
     mat.setInt("_UdonUARTInTag", 0);
     mat.setVector("unity_OrthoParams", 1, 1, 0, 1);
+
+    // --- Optional hidden swapchain, only to give external profilers a Present per frame ---
+    ComPtr<IDXGISwapChain> swapChain;
+    HWND presentWnd = nullptr;
+    if (opt.present) {
+        WNDCLASSW wc{};
+        wc.lpfnWndProc = DefWindowProcW;
+        wc.hInstance = GetModuleHandleW(nullptr);
+        wc.lpszClassName = L"rvc_harness_present";
+        RegisterClassW(&wc);
+        presentWnd = CreateWindowExW(WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW, wc.lpszClassName, L"rvc_harness", WS_POPUP,
+                                     0, 0, 64, 64, nullptr, nullptr, wc.hInstance, nullptr);  // never shown
+        ComPtr<IDXGIDevice> dxgiDev;
+        ComPtr<IDXGIAdapter> adapter;
+        ComPtr<IDXGIFactory> factory;
+        DXGI_SWAP_CHAIN_DESC sd{};
+        sd.BufferDesc.Width = sd.BufferDesc.Height = 64;
+        sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        sd.SampleDesc.Count = 1;
+        sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+        sd.BufferCount = 1;
+        sd.OutputWindow = presentWnd;
+        sd.Windowed = TRUE;
+        HRESULT hr = presentWnd ? gpu.device.As(&dxgiDev) : E_FAIL;
+        if (SUCCEEDED(hr)) hr = dxgiDev->GetAdapter(&adapter);
+        if (SUCCEEDED(hr)) hr = adapter->GetParent(IID_PPV_ARGS(&factory));
+        if (SUCCEEDED(hr)) hr = factory->CreateSwapChain(gpu.device.Get(), &sd, &swapChain);
+        if (FAILED(hr)) {
+            fprintf(stderr, "[harness] creating the hidden swapchain failed: %s\n", hrToString(hr).c_str());
+            return 1;
+        }
+    }
+
+    // --- Profiling counters: a uint buffer the tick pass increments through a UAV ---
+    const UINT kProfCount = 256;
+    ComPtr<ID3D11Buffer> profBuf, profStaging;
+    ComPtr<ID3D11UnorderedAccessView> profUav;
+    if (opt.profile) {
+        D3D11_BUFFER_DESC bd{};
+        bd.ByteWidth = kProfCount * 4;
+        bd.Usage = D3D11_USAGE_DEFAULT;
+        bd.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+        bd.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+        bd.StructureByteStride = 4;
+        HRESULT hr = gpu.device->CreateBuffer(&bd, nullptr, &profBuf);
+        if (SUCCEEDED(hr)) hr = gpu.device->CreateUnorderedAccessView(profBuf.Get(), nullptr, &profUav);
+        bd.Usage = D3D11_USAGE_STAGING;
+        bd.BindFlags = 0;
+        bd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        if (SUCCEEDED(hr)) hr = gpu.device->CreateBuffer(&bd, nullptr, &profStaging);
+        if (FAILED(hr)) {
+            fprintf(stderr, "[harness] creating the profile buffer failed: %s\n", hrToString(hr).c_str());
+            return 1;
+        }
+        const UINT zero[4] = {0, 0, 0, 0};
+        gpu.ctx->ClearUnorderedAccessViewUint(profUav.Get(), zero);
+        mat.setUav("_Prof", profUav.Get());
+    }
+    std::vector<uint32_t> profBase(kProfCount, 0);
+    auto readProf = [&](std::vector<uint32_t>& out) {
+        out.assign(kProfCount, 0);
+        gpu.ctx->CopyResource(profStaging.Get(), profBuf.Get());
+        D3D11_MAPPED_SUBRESOURCE m{};
+        if (FAILED(gpu.ctx->Map(profStaging.Get(), 0, D3D11_MAP_READ, 0, &m))) return false;
+        memcpy(out.data(), m.pData, kProfCount * 4);
+        gpu.ctx->Unmap(profStaging.Get(), 0);
+        return true;
+    };
 
     // --- Render texture, as configured in rvc's vm_state_crt.asset ---
     const UINT W = 2048, H = 4096;
@@ -406,6 +497,10 @@ int main(int argc, char** argv) {
         double t = timeBase + (opt.fixedDt > 0 ? (double)frame * opt.fixedDt : wall);
         guestTime = t;
         mat.setVector("_Time", t / 20, t, t * 2, t * 3);
+        uint32_t mtimeLo, mtimeHi;
+        rvcMtime(t, mtimeLo, mtimeHi);
+        mat.setInt("_HostMtimeLo", mtimeLo);
+        mat.setInt("_HostMtimeHi", mtimeHi);
         mat.setVector("_SinTime", sin(t / 8), sin(t / 4), sin(t / 2), sin(t));
         mat.setVector("_CosTime", cos(t / 8), cos(t / 4), cos(t / 2), cos(t));
         mat.setInt("_Init", frame < (uint64_t)opt.initFrames ? 1 : 0);
@@ -426,16 +521,22 @@ int main(int argc, char** argv) {
             }
         }
 
-        crt.runZone(gpu, passes[0], mat, tickZone);
-        crt.runZone(gpu, passes[1], mat, commitZone);
-
         if (opt.benchWarmup >= 0 && frame == (uint64_t)opt.benchWarmup) {
             // Start the measurement from an idle GPU with every earlier frame accounted for.
             uint64_t f;
             while (rowReadback.pending() > 0 && rowReadback.pop(gpu.ctx.Get(), row, f)) processRow(row, f);
             benchInstr0 = guestInstructions;
+            if (profUav) readProf(profBase);  // warm-up events are subtracted at the end
             benchT0 = std::chrono::steady_clock::now();
         }
+        crt.runZone(gpu, passes[0], mat, tickZone);
+        crt.runZone(gpu, passes[1], mat, commitZone);
+        if (swapChain) {
+            swapChain->Present(0, 0);
+            MSG msg;
+            while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) DispatchMessageW(&msg);
+        }
+
         if (rowReadback.full()) {
             uint64_t f;
             if (!rowReadback.pop(gpu.ctx.Get(), row, f)) { exitCode = 1; break; }
@@ -498,6 +599,39 @@ int main(int argc, char** argv) {
         fprintf(stderr, "\nBENCH frames=%llu seconds=%.3f instructions=%llu ips=%.0f fps=%.1f per_frame=%.1f state=%016llx\n",
                 (unsigned long long)frames, secs, (unsigned long long)instr, instr / secs, frames / secs,
                 (double)instr / frames, (unsigned long long)hash);
+    }
+
+    if (profUav && exitCode != 1) {
+        // Counter names come from the shader's own prof.h: '#define PROF_<name> <id>'.
+        std::map<uint32_t, std::string> names;
+        std::string text;
+        if (readFileBinary((fs::u8path(opt.rvcDir) / "src" / "prof.h").u8string(), text)) {
+            size_t p = 0;
+            while ((p = text.find("#define PROF_", p)) != std::string::npos) {
+                p += 13;
+                size_t e = text.find_first_of(" \t", p);
+                if (e == std::string::npos) break;
+                std::string name = text.substr(p, e - p);
+                const char* num = text.c_str() + e;
+                while (*num == ' ' || *num == '\t') ++num;
+                if (*num >= '0' && *num <= '9') names[(uint32_t)strtoul(num, nullptr, 10)] = name;
+            }
+        }
+        std::vector<uint32_t> c;
+        if (readProf(c)) {
+            for (uint32_t i = 0; i < kProfCount; ++i) c[i] -= profBase[i];
+            std::vector<std::pair<uint32_t, uint32_t>> rows;  // count, id
+            for (uint32_t i = 0; i < kProfCount; ++i)
+                if (c[i]) rows.push_back({c[i], i});
+            std::sort(rows.rbegin(), rows.rend());
+            double ticks = c[0] ? (double)c[0] : 1.0;
+            fprintf(stderr, "\nPROFILE (events, and events per emulated instruction)\n");
+            for (auto& r : rows) {
+                auto it = names.find(r.second);
+                std::string n = it != names.end() ? it->second : "id" + std::to_string(r.second);
+                fprintf(stderr, "PROF %-22s %10u %8.4f\n", n.c_str(), r.first, r.first / ticks);
+            }
+        }
     }
 
     if (!opt.dumpState.empty() && exitCode != 1) {
