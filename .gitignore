@@ -1,0 +1,8 @@
+# Upstream reference clone (pimaker/rvc), kept as its own git repo
+/rvc/
+# Build output
+/build/
+/bin/
+/logs/
+*.cso
+.vs/
