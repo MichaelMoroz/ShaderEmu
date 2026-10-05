@@ -96,6 +96,7 @@ Shader "Nix/rvc"
             static uint2 m_dim;
 
             #include "helpers.cginc"
+            #include "src/prof.h"
 
             #include "src/types.h"
             #include "src/ins.h"
@@ -139,11 +140,20 @@ Shader "Nix/rvc"
 
                     decode();
                     time_prepare();
+                    #ifdef XREG_ARRAY
+                    xreg_load();
+                    #endif
 
                     [fastopt]
                     for (uint i = 0; i < _Ticks && !cpu.stall; i++) {
                         cpu_tick();
                     }
+                    #ifdef XREG_ARRAY
+                    xreg_store();
+                    #endif
+                    #ifdef PROFILE
+                    prof_flush(pos);
+                    #endif
                 }
 
                 /* cpu.debug_csr_val = read_csr_raw(_CheckCSR); */

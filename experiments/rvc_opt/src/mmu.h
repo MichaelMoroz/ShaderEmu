@@ -7,11 +7,13 @@
 // the state texture: each pass starts with them empty.
 static bool hot_mstatus_ok = false, hot_mip_ok = false, hot_mie_ok = false;
 static uint hot_mstatus, hot_mip, hot_mie;
-static uint3 tlb_vpn = uint3(0xffffffff, 0xffffffff, 0xffffffff);  // per access mode
-static uint3 tlb_page;
+#define TLB_EMPTY uint4(0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff)
+static uint4 tlb_f_vpn = TLB_EMPTY, tlb_r_vpn = TLB_EMPTY, tlb_w_vpn = TLB_EMPTY;  // slot = vpn & 3
+static uint4 tlb_f_page, tlb_r_page, tlb_w_page;
 void hot_flush() {
+    PROF(PROF_hot_flush)
     hot_mstatus_ok = false; hot_mip_ok = false; hot_mie_ok = false;
-    tlb_vpn = uint3(0xffffffff, 0xffffffff, 0xffffffff);
+    tlb_f_vpn = TLB_EMPTY; tlb_r_vpn = TLB_EMPTY; tlb_w_vpn = TLB_EMPTY;
 }
 
 void mmu_update(uint satp) {
@@ -61,6 +63,7 @@ uint get_effective_privilege(out uint sum, out uint mxr) {
 }
 
 mmu_page load_page(uint addr) {
+    PROF(PROF_pte_load)
     uint data = mem_get_cached_or_tex(addr & 0x7ffffffc);
     mmu_page ret;
     #define BOOL(name, bit) ret.name = (data >> bit) & 0x1;
@@ -81,6 +84,7 @@ mmu_page load_page(uint addr) {
 
 uint mmu_translate(inout ins_ret ins, uint addr, uint mode) {
     if (cpu.mmu.mode == MMU_MODE_OFF) {
+        PROF(PROF_mmu_off)
         return addr;
     }
 
@@ -96,14 +100,18 @@ uint mmu_translate(inout ins_ret ins, uint addr, uint mode) {
     // machine mode fetch will always use physical addresses, otherwise 'mxr'
     // defines if paging will be used
     if (priv == PRIV_MACHINE || (cpu.csr.privilege == PRIV_MACHINE && mode == MMU_ACCESS_FETCH)) {
+        PROF(PROF_mmu_machine)
         return addr;
     }
 
-    // One cached successful translation per access mode; flushed by hot_flush().
-    uint hit_vpn = mode == MMU_ACCESS_FETCH ? tlb_vpn.x : (mode == MMU_ACCESS_READ ? tlb_vpn.y : tlb_vpn.z);
-    if (hit_vpn == (addr >> 12)) {
-        uint hit_page = mode == MMU_ACCESS_FETCH ? tlb_page.x : (mode == MMU_ACCESS_READ ? tlb_page.y : tlb_page.z);
-        return hit_page | ADDR_PART_OFFSET(addr);
+    if (mode == MMU_ACCESS_FETCH) { PROF(PROF_mmu_fetch) } else if (mode == MMU_ACCESS_READ) { PROF(PROF_mmu_read) } else { PROF(PROF_mmu_write) }
+    // Successful translations cached per access mode; flushed by hot_flush().
+    uint tlb_slot = (addr >> 12) & 3;
+    uint4 hit_vpns = mode == MMU_ACCESS_FETCH ? tlb_f_vpn : (mode == MMU_ACCESS_READ ? tlb_r_vpn : tlb_w_vpn);
+    if (idx_uint4(hit_vpns, tlb_slot) == (addr >> 12)) {
+        if (mode == MMU_ACCESS_FETCH) { PROF(PROF_tlb_hit_fetch) } else if (mode == MMU_ACCESS_READ) { PROF(PROF_tlb_hit_read) } else { PROF(PROF_tlb_hit_write) }
+        uint4 hit_pages = mode == MMU_ACCESS_FETCH ? tlb_f_page : (mode == MMU_ACCESS_READ ? tlb_r_page : tlb_w_page);
+        return idx_uint4(hit_pages, tlb_slot) | ADDR_PART_OFFSET(addr);
     }
 
     bool super;
@@ -161,9 +169,9 @@ uint mmu_translate(inout ins_ret ins, uint addr, uint mode) {
     pa |= super ? ADDR_PART_PN0(addr) << 12 : page.ppn0 << 12;
     pa |= page.ppn1 << 22;
 
-    if (mode == MMU_ACCESS_FETCH) { tlb_vpn.x = addr >> 12; tlb_page.x = pa & ~0xfff; }
-    else if (mode == MMU_ACCESS_READ) { tlb_vpn.y = addr >> 12; tlb_page.y = pa & ~0xfff; }
-    else { tlb_vpn.z = addr >> 12; tlb_page.z = pa & ~0xfff; }
+    if (mode == MMU_ACCESS_FETCH) { set_idx_uint4(tlb_f_vpn, addr >> 12, tlb_slot); set_idx_uint4(tlb_f_page, pa & ~0xfff, tlb_slot); }
+    else if (mode == MMU_ACCESS_READ) { set_idx_uint4(tlb_r_vpn, addr >> 12, tlb_slot); set_idx_uint4(tlb_r_page, pa & ~0xfff, tlb_slot); }
+    else { set_idx_uint4(tlb_w_vpn, addr >> 12, tlb_slot); set_idx_uint4(tlb_w_page, pa & ~0xfff, tlb_slot); }
 
     /* if (!(pa & 0x80000000) || (pa & 0x7fffffff) >= RAM_MAX) { */
     /*     FAULT */

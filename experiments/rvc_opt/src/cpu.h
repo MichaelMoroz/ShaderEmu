@@ -26,6 +26,7 @@ void cpu_tick() {
     cpu.debug_do_tick = _DoTick;
 
     cpu.clock++;
+    PROF(PROF_tick)
     emulate();
 
     /* if ((_BreakpointClock && _BreakpointClock == cpu.clock) || (_Breakpoint && _Breakpoint == cpu.pc)) { */
@@ -34,6 +35,7 @@ void cpu_tick() {
     /* } */
 
     if (cpu.stall) {
+        PROF(PROF_stalled_tick)
         cpu.stall_count++;
     }
 }

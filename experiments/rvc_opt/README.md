@@ -17,10 +17,15 @@ pass-local (`static`), never stored in the texture.
 2. **Hot CSR shadows** (`mmu.h`, `csr.h`, `trap.h`, `emu.h`): `mstatus`, `mip` and `mie` were
    each looked up per instruction (a 16-way compare chain, then a texture read). They are now
    read once and dropped on any CSR write.
-3. **One-entry TLB per access mode** (`mmu.h`): a successful fetch/read/write translation is
-   reused while the page number repeats, instead of a two-level page walk (two dependent
-   texture reads) per access. Flushed on any CSR write, `satp` change, privilege change, trap
+3. **Small TLB per access mode** (`mmu.h`): four direct-mapped entries each for fetch, read
+   and write reuse a successful translation instead of a two-level page walk (two dependent
+   texture reads) per access. Flushed on `mstatus` and `satp` writes, privilege changes, traps
    and `sfence.vma`. Only successful translations are cached, as RISC-V permits.
+4. **Aligned word stores in one step** (`mem.h`): upstream stores a word as four byte writes,
+   each a read-modify-write of the same word. An aligned RAM `sw` is now one read and one store.
+5. **CSR writes drop only what they affect** (`csr.h`): a `mip`/`mie` write updates its shadow
+   in place; only `mstatus` flushes the TLB. A pending-but-masked interrupt rewrites `mip` on
+   every instruction, which used to flush everything each time.
 
 ## Measured (RTX 5090, `tools\perf_test.ps1`, 2048 ticks)
 
@@ -28,10 +33,106 @@ pass-local (`static`), never stored in the texture.
 | --- | --- | --- |
 | upstream | 517k | 8d6fc1106d9cd3a1 |
 | 1 + 2 | 604k | 8d6fc1106d9cd3a1 |
-| 1 + 2 + 3 (this folder) | 748k | 8d6fc1106d9cd3a1 |
+| 1 + 2 + 3 (one-entry TLB) | 748k | 8d6fc1106d9cd3a1 |
+| 1 - 5 (this folder) | 781k | 8d6fc1106d9cd3a1 |
 
 A scripted shell session (5.07 M instructions, with traps, syscalls and cache stalls) also ends
-in the same state and UART output as upstream. Cold boot to the prompt: 78.5 s -> 52.9 s.
+in the same state and UART output as upstream. Cold boot to the prompt: 78.5 s -> 52.9 s
+(measured with changes 1-3; not re-run since).
+
+## Profiling counters
+
+`PROF(id)` marks an event; ids and names are in `src/prof.h`. A normal build compiles them
+away. With `rvc_harness --profile` each pixel tallies events in a local array and one pixel
+adds its tally to a UAV buffer at the end of the pass, so the redundant copies of the CPU do
+not inflate the totals (`tick` equals the instruction count exactly). Do not write the UAV at
+the event site: FXC then refuses to compile the `[loop]` loops (X3531).
+
+    bin\rvc_harness.exe --rvc experiments\rvc_opt --payload rvc\_Nix\rvc\data-net --no-stdin --load-state build\snapshots\rvc_bench.snap --fixed-dt 0.004 --bench 30 --frames 530 --profile
+
+Events per emulated instruction on the benchmark, before and after changes 4-5 and the larger TLB:
+
+| Event | 1-3 | 1-5 |
+| --- | --- | --- |
+| RAM word reads (`ram_read`) | 1.19 | 0.63 |
+| ...of which texture reads | 0.77 | 0.50 |
+| store steps (`ram_write_byte`) | 0.63 | 0.17 |
+| page-table entry loads | 0.28 | 0.19 |
+| CSR lookups | 0.21 | 0.15 |
+| shadow/TLB flushes | 0.023 | 0.001 |
+
+Halving memory reads bought only 4.5%, so what remains is mostly the per-instruction decode
+and dispatch, not memory. 2% of instructions run the interrupt path for a pending but masked
+interrupt (about six CSR lookups each); skipping it would change the CSR cache contents, so
+it would no longer be bit-identical.
+
+## GPU hardware counters (Nsight GPU Trace)
+
+    pwsh tools\gpu_trace.ps1 -Filter warps_issue_stalled,latency
+
+Nsight does not attach to the D3D11 harness, so `bin\rvc_trace12.exe` runs the same FXC bytecode
+on D3D12. Two build switches exist for it:
+
+- `NO_DOUBLES` (`--no-doubles`): NVIDIA's D3D12 path miscomputes double math in this shader (a
+  double divide converted to uint returns 0xffffffff), which breaks the timer and MULH. With
+  this define the host supplies the timer value and MULH uses exact 16-bit partial products.
+  D3D11 doubles, D3D11 no-doubles and D3D12 no-doubles all end in state 8d6fc1106d9cd3a1 on the
+  benchmark; MULH results can differ from upstream once a product needs more than 53 bits.
+- `XREG_ARRAY` (`--define XREG_ARRAY`): guest registers in an indexable array instead of 31
+  conditional moves per instruction. Bit-identical, bytecode 358 KB -> 236 KB and FXC time
+  down about 30%, but 2.6% slower (773k vs 793k IPS), so it is off by default.
+
+What the trace says about one frame (RTX 5090, 2048 ticks, mean of 20 frames):
+
+| | CPUTick | Commit |
+| --- | --- | --- |
+| GPU time per draw | 2.30 ms | 0.075 ms |
+| SM throughput, % of peak | 1.9 | 28.7 |
+| pixel-shader warps active per cycle | 0.22 | 15 |
+| texture read latency, cycles | 247 | 332 |
+| local/global memory read latency, cycles | 159 | 502 |
+
+The tick is 97% of the frame and leaves the GPU almost idle: it is a serial dependency chain,
+not a throughput problem. Where its active warps spend their cycles:
+
+| Warp state during CPUTick | Share |
+| --- | --- |
+| waiting on a fixed-latency dependency (ALU chain) | 29% |
+| issuing an instruction | 23% |
+| no instruction ready (after a branch) | 20% |
+| waiting on L1/texture data | 17% |
+| resolving a branch | 8% |
+
+So about 28% is branch cost and 29% is dependent arithmetic, against 17% for all memory and
+texture waits, which matches the event counters: fewer reads no longer buys much, and the next
+gains have to come from fewer branches and shorter dependency chains per instruction.
+
+## Write-cache geometry
+
+`L1_SET_BITS` (sets per slice, default 9), `L1_SLICES` (default 2) and `L1_HASH_LOW` (pick the
+set from low word bits only) are build defines, e.g. `--define L1_SLICES=1`. The defaults are
+upstream's geometry. Other geometries stall at different times, so their state hash differs
+from upstream; guest output was checked against upstream instead (identical for b9s1, b10s1
+and b7s2 over a scripted shell session).
+
+| Geometry | Texels | Busy loop IPS (instr/frame) | Shell session IPS (instr/frame) |
+| --- | --- | --- | --- |
+| 9 bits x 2 slices (default) | 1024 | 797k (2048) | 780k (2036) |
+| 7 bits x 2 | 256 | 809k (1879) | 796k (1890) |
+| 5 bits x 2 | 64 | 704k (502) | 669k (434) |
+| 3 bits x 2 | 16 | 474k (135) | 500k (151) |
+| 9 bits x 1 | 512 | 838k (2018) | 834k (1904) |
+| 10 bits x 1 | 1024 | 831k (2048) | 825k (2001) |
+| 10 bits x 1, low-bits hash | 1024 | 826k (2001) | 789k (2019) |
+| 9 bits x 2, low-bits hash | 1024 | 802k (2048) | 789k (2039) |
+
+- Size is not a speed lever: a quarter of the cache gains about 1.5%, and below that the pass
+  ends early on stalls and the fixed per-frame cost takes over.
+- Associativity is: one slice means one array read per lookup instead of two, worth about 5%,
+  more than the extra stalls cost on these workloads. Not measured on a cold boot, which
+  writes far more.
+- The hash itself is a few shifts and masks; changing it moves stall counts, not per-lookup
+  cost. Upstream's mixed hash stalls less than plain low bits once there is only one slice.
 
 ## ddx_fine / ddy_fine quad sharing: works, not worth it for rvc
 

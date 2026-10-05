@@ -8,7 +8,22 @@
 
 
 /* shift by two to ignore byte offset */
-#define RAM_L1_ARRAY_IDX(a) (((a >> 2) & 127) | (((a >> 11) & 0x3) << 7))
+// Write-cache geometry: 2^L1_SET_BITS sets per slice, L1_SLICES slices, two entries per set.
+// Upstream is 9 bits x 2 slices (1024 texels). L1_HASH_LOW picks sets from the low word
+// bits only instead of mixing in address bits 11-12.
+#ifndef L1_SET_BITS
+#define L1_SET_BITS 9
+#endif
+#ifndef L1_SLICES
+#define L1_SLICES 2
+#endif
+#define L1_SETS (1 << L1_SET_BITS)
+#define L1_ENTRIES (L1_SETS * L1_SLICES)
+#ifdef L1_HASH_LOW
+#define RAM_L1_ARRAY_IDX(a) ((a >> 2) & (L1_SETS - 1))
+#else
+#define RAM_L1_ARRAY_IDX(a) (((a >> 2) & ((L1_SETS >> 2) - 1)) | (((a >> 11) & 0x3) << (L1_SET_BITS - 2)))
+#endif
 
 
 #define WORD_SIZE_NONE 0
@@ -21,6 +36,7 @@ uint mem_get_instruction(uint addr) {
     uint idx = (addr >> 2) & 0x3;
     addr = addr >> 4;
 
+    PROF(PROF_fetch_tex)
     uint4 raw = STATE_TEX(RAM_ADDR(addr));
     return idx_uint4(raw, idx);
 }
@@ -30,14 +46,16 @@ static uint mem_cache_bloom = 0;
 
 // addr must be aligned to word boundary (4 byte)
 uint mem_get_cached_or_tex(uint addr) {
+    PROF(PROF_ram_read)
     // query L1 cache
     if ((addr & mem_cache_bloom) == addr) {
+        PROF(PROF_ram_read_bloom_pass)
         // array-style L1
-        for (uint slice = 0; slice < 2; slice++) {
-            uint arr_idx = RAM_L1_ARRAY_IDX(addr) + slice * 512;
+        for (uint slice = 0; slice < L1_SLICES; slice++) {
+            uint arr_idx = RAM_L1_ARRAY_IDX(addr) + slice * L1_SETS;
             uint4 cur = l1_cache[arr_idx];
-                 if (cur.x == addr) return cur.y;
-            else if (cur.z == addr) return cur.w;
+                 if (cur.x == addr) { PROF(PROF_ram_read_l1_hit) return cur.y; }
+            else if (cur.z == addr) { PROF(PROF_ram_read_l1_hit) return cur.w; }
         }
 
         if (cpu.cache.ram_l1_last_addr == addr) {
@@ -49,6 +67,7 @@ uint mem_get_cached_or_tex(uint addr) {
     }
 
     // not in cache, query RAM texture
+    PROF(PROF_ram_read_tex)
     uint idx = (addr >> 2) & 0x3;
     addr >>= 4;
     uint4 raw = STATE_TEX(RAM_ADDR(addr));
@@ -64,6 +83,7 @@ uint mem_get_word(uint addr) {
         [branch]
         if (addr & 0x40000000) {
             // MTD/ROM
+            PROF(PROF_mtd_read)
             uint mtd_addr = addr - 0x40000000;
             uint mtd_idx = (mtd_addr >> 2) & 0x3;
             mtd_addr = mtd_addr >> 4;
@@ -91,6 +111,7 @@ uint mem_get_word(uint addr) {
 
         [branch]
         if (addr >= 0x1020 && addr <= 0x1fff) {
+            PROF(PROF_dtb_read)
             uint dtb_addr = addr - 0x1020;
             uint dtb_idx = (dtb_addr >> 2) & 0x3;
             dtb_addr = dtb_addr >> 4;
@@ -113,6 +134,7 @@ uint mem_get_word(uint addr) {
             return unpack_raw_float4(full);
         }
 
+        PROF(PROF_mmio_read)
         [forcecase]
         switch (addr) {
             // CLINT
@@ -158,7 +180,8 @@ uint mem_get_word(uint addr) {
     return mem_get_cached_or_tex(addr);
 }
 
-void mem_set_byte(uint addr, uint val) {
+// whole_word: addr is a word-aligned RAM address and val is the full 32-bit value.
+void mem_set_byte(uint addr, uint val, bool whole_word) {
     if ((addr & 0x80000000) == 0) {
         [branch]
         switch (addr) {
@@ -200,13 +223,16 @@ void mem_set_byte(uint addr, uint val) {
         return;
     }
 
+    PROF(PROF_ram_write_byte)
     // caching can cause stalls, so check for same value before storing
     uint word_addr = addr & (~0x3);
     uint byte_offset = (addr & 0x3)*8;
     uint cur_val = mem_get_cached_or_tex(word_addr);
-    val = (cur_val & ~(0xff << byte_offset)) | (val << byte_offset);
+    uint mask = whole_word ? 0xffffffff : (0xff << byte_offset);
+    val = (cur_val & ~mask) | (whole_word ? val : (val << byte_offset));
     if (val != cur_val) {
         // put written value into L1 cache
+        PROF(PROF_ram_write_store)
         mem_cache_bloom |= word_addr;
 
         if (word_addr == 0) {
@@ -226,7 +252,8 @@ void mem_set_byte(uint addr, uint val) {
             l1_cache[arr_idx].z = word_addr;
             l1_cache[arr_idx].w = val;
         } else {
-            arr_idx += 512;
+#if L1_SLICES > 1
+            arr_idx += L1_SETS;
             uint4 cur = l1_cache[arr_idx];
             if (cur.x == 0 || cur.x == word_addr) {
                 l1_cache[arr_idx].x = word_addr;
@@ -234,7 +261,10 @@ void mem_set_byte(uint addr, uint val) {
             } else if (cur.z == 0 || cur.z == word_addr) {
                 l1_cache[arr_idx].z = word_addr;
                 l1_cache[arr_idx].w = val;
-            } else {
+            } else
+#endif
+            {
+                PROF(PROF_l1_stall)
                 cpu.cache.ram_l1_last_addr = word_addr;
                 cpu.cache.ram_l1_last_val = val;
                 cpu.stall = STALL_MEM_CACHE_L1;
@@ -257,9 +287,11 @@ void mem_set(uint addr, uint val, uint word_size) {
         }
     }
 
+    bool whole_word = word_size == WORD_SIZE_FULL && (addr & 0x3) == 0 && (addr & 0x80000000) != 0;
+    uint steps = whole_word ? 1 : word_size;
     [loop]
-    for (uint i = 0; i < word_size; i++) {
-        mem_set_byte(addr + i, (val >> (8 * i)) & 0xff);
+    for (uint i = 0; i < steps; i++) {
+        mem_set_byte(addr + i, whole_word ? val : ((val >> (8 * i)) & 0xff), whole_word);
     }
 }
 

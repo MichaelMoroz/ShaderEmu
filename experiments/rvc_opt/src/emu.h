@@ -252,6 +252,28 @@ DEF(mul, FormatR, { // rv32m
     uint tmp = AS_SIGNED(xreg(ins.rs1)) * AS_SIGNED(xreg(ins.rs2));
     WR_RD(tmp)
 })
+#ifdef NO_DOUBLES
+// Exact high word of a 32x32 multiply from 16-bit partial products, for hosts whose double
+// support cannot be trusted. Upstream's double version rounds once the product needs more
+// than 53 bits, so results differ from it there.
+uint mulhu32(uint a, uint b) {
+    uint al = a & 0xffff, ah = a >> 16, bl = b & 0xffff, bh = b >> 16;
+    uint lh = al * bh, hl = ah * bl;
+    uint mid = ((al * bl) >> 16) + (lh & 0xffff) + (hl & 0xffff);
+    return ah * bh + (lh >> 16) + (hl >> 16) + (mid >> 16);
+}
+DEF(mulh, FormatR, { // rv32m
+    uint a = xreg(ins.rs1), b = xreg(ins.rs2);
+    WR_RD(mulhu32(a, b) - ((a >> 31) ? b : 0) - ((b >> 31) ? a : 0))
+})
+DEF(mulhsu, FormatR, { // rv32m
+    uint a = xreg(ins.rs1), b = xreg(ins.rs2);
+    WR_RD(mulhu32(a, b) - ((a >> 31) ? b : 0))
+})
+DEF(mulhu, FormatR, { // rv32m
+    WR_RD(mulhu32(xreg(ins.rs1), xreg(ins.rs2)))
+})
+#else
 DEF(mulh, FormatR, { // rv32m
     // FIXME: mulh-family instructions have to use double precision floating points internally atm...
     // umul/imul (https://docs.microsoft.com/en-us/windows/win32/direct3dhlsl/umul--sm4---asm-)
@@ -274,6 +296,7 @@ DEF(mulhu, FormatR, { // rv32m
     uint tmp = uint((op1 * op2) / 4294967296.0l); // '/ 4294967296' == '>> 32'
     WR_RD(tmp)
 })
+#endif
 DEF(or, FormatR, { // rv32i
     WR_RD(xreg(ins.rs1) | xreg(ins.rs2))
 })
@@ -416,6 +439,7 @@ DEF(xori, FormatI, { // rv32i
  */
 
 #define RUN(name, data, insf) case data : { \
+    PROF(PROF_ins_##name) \
     emu_##name(ins_word, ret, insf); \
     return ret; \
 }
@@ -587,6 +611,7 @@ ins_ret ins_select(uint ins_word, inout ins_ret ret) {
         RUN(wfi, 0x10500073, ins_FormatEmpty)
     }
 
+    PROF(PROF_illegal_ins)
     ret.trap.en = true;
     ret.trap.type = trap_IllegalInstruction;
     ret.trap.value = ins_word;
@@ -596,11 +621,19 @@ ins_ret ins_select(uint ins_word, inout ins_ret ret) {
 
 // _Time is constant for the whole pass, so the timer value is computed once.
 static uint pass_mtime_lo, pass_mtime_hi;
+#ifdef NO_DOUBLES
+uniform uint _HostMtimeLo, _HostMtimeHi;  // the same value, computed by the host
+void time_prepare() {
+    pass_mtime_lo = _HostMtimeLo;
+    pass_mtime_hi = _HostMtimeHi;
+}
+#else
 void time_prepare() {
     double mtime = (double)_Time.x * 1000000.0 * 0.1;
     pass_mtime_lo = (uint)(floor(glsl_mod(mtime, 4294967296.0)));
     pass_mtime_hi = (uint)(mtime / 4294967296.0);
 }
+#endif
 
 void emulate() {
     uint ins_word = 0;
@@ -647,6 +680,11 @@ void emulate() {
                 }
             }
 
+#ifdef XREG_ARRAY
+            if (!ret.trap.en && ret.write_reg) {
+                xr[ret.write_reg] = ret.write_val;
+            }
+#else
             if (!ret.trap.en && ret.write_reg) {
                 #define C(x) case x: cpu.xreg[x] = ret.write_val; break;
                 if (ret.write_reg < 16) {
@@ -668,6 +706,7 @@ void emulate() {
                 }
                 #undef C
             }
+#endif
         }
     } else {
         ret.trap.en = true;

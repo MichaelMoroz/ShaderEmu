@@ -69,6 +69,7 @@ bool has_csr_access_privilege(uint addr) {
 
 // SSTATUS, SIE, and SIP are subsets of MSTATUS, MIE, and MIP
 uint read_csr_raw(uint address) {
+    PROF(PROF_csr_read)
     address &= 0x1fff;
 
     uint read_mask = 0xffffffff;
@@ -110,6 +111,7 @@ else if (cpu.cache.csr_cache_15_addr == address) { ret = cpu.cache.csr_cache_15_
 
     else {
         // fallback, read value from CSR texture area
+        PROF(PROF_csr_read_tex)
         ret = tex_get_csr(address);
     }
 
@@ -130,7 +132,7 @@ uint read_mie() {
 }
 
 void write_csr_raw(uint address, uint value) {
-    hot_flush();
+    PROF(PROF_csr_write)
     uint where = address & 0x1fff;
     uint what = value;
     uint modify_mask = 0;
@@ -170,6 +172,11 @@ void write_csr_raw(uint address, uint value) {
     if (modify_mask) {
         what = (read_csr_raw(where) & ~modify_mask) | (value & modify_mask);
     }
+
+    // Keep the pass-local shadows in step; only mstatus changes what a translation means.
+    if (where == CSR_MIP) { hot_mip = what; hot_mip_ok = true; }
+    else if (where == CSR_MIE) { hot_mie = what; hot_mie_ok = true; }
+    else if (where == CSR_MSTATUS) { hot_flush(); }
 
     if (false) {}
 else if (cpu.cache.csr_cache_0_addr == 0xffffffff || cpu.cache.csr_cache_0_addr == where) { cpu.cache.csr_cache_0_addr = where; cpu.cache.csr_cache_0_val = what; return; }

@@ -10,7 +10,22 @@
 
 
 /* shift by two to ignore byte offset */
-#define RAM_L1_ARRAY_IDX(a) (((a >> 2) & 127) | (((a >> 11) & 0x3) << 7))
+// Write-cache geometry: 2^L1_SET_BITS sets per slice, L1_SLICES slices, two entries per set.
+// Upstream is 9 bits x 2 slices (1024 texels). L1_HASH_LOW picks sets from the low word
+// bits only instead of mixing in address bits 11-12.
+#ifndef L1_SET_BITS
+#define L1_SET_BITS 9
+#endif
+#ifndef L1_SLICES
+#define L1_SLICES 2
+#endif
+#define L1_SETS (1 << L1_SET_BITS)
+#define L1_ENTRIES (L1_SETS * L1_SLICES)
+#ifdef L1_HASH_LOW
+#define RAM_L1_ARRAY_IDX(a) ((a >> 2) & (L1_SETS - 1))
+#else
+#define RAM_L1_ARRAY_IDX(a) (((a >> 2) & ((L1_SETS >> 2) - 1)) | (((a >> 11) & 0x3) << (L1_SET_BITS - 2)))
+#endif
 
 
 #define STALL_EXIT_CALL 1
@@ -209,7 +224,7 @@ typedef struct {
 static cpu_t cpu;
 
 #ifdef PASS_TICK
-static uint4 l1_cache[1024];
+static uint4 l1_cache[L1_ENTRIES];
 #endif
 
 // TYPE HELPERS
@@ -224,9 +239,24 @@ uint sign_extend(uint x, uint b) {
     return (x ^ m) - m;
 }
 
+#if defined(XREG_ARRAY) && defined(PASS_TICK)
+// Guest registers in an indexable array for the tick loop: one indexed store per instruction
+// instead of a conditional move over every register.
+static uint xr[32];
+uint xreg(uint i) {
+    return xr[i];
+}
+void xreg_load() {
+    for (uint k = 0; k < 32; k++) xr[k] = cpu.xreg[k];
+}
+void xreg_store() {
+    for (uint k = 0; k < 32; k++) cpu.xreg[k] = xr[k];
+}
+#else
 uint xreg(uint i) {
     return cpu.xreg[i];
 }
+#endif
 
 // ENCODE/DECODE LOGIC (state serialization into self texture)
 
@@ -593,13 +623,13 @@ void decode_for_commit() {
 bool pixel_has_state(uint2 pos) {
     // CSR data area and FB are not "state", they're only touched by commit
     uint lin = pos.x + 64 * pos.y;
-    return lin < 44 || (lin >= 1068 && lin < 2092);
+    return lin < 44 || (lin >= 1068 && lin < 1068 + L1_ENTRIES);
 }
 
 uint4 encode(uint2 pos) {
     // L1 cache
     uint s_lin = pos.x + pos.y * 64;
-    if (s_lin >= 1068 && s_lin < 2092) {
+    if (s_lin >= 1068 && s_lin < 1068 + L1_ENTRIES) {
         uint offset = s_lin - 1068;
         return l1_cache[offset];
     }
@@ -872,8 +902,8 @@ uint tex_get_csr(uint addr) {
 
 uint mem_get_cached_or_tex_from_state_cache(uint addr) {
     // array-style L1 (direct texture access)
-    for (uint i = 0; i < 2; i++) {
-        uint arr_idx = RAM_L1_ARRAY_IDX(addr) + i * 512;
+    for (uint i = 0; i < L1_SLICES; i++) {
+        uint arr_idx = RAM_L1_ARRAY_IDX(addr) + i * L1_SETS;
         uint lin = 1068 + arr_idx;
         uint4 cur = STATE_TEX_HART(uint2(lin % 64, lin / 64), 0);
              if (cur.x == addr) return cur.y;
@@ -1080,8 +1110,8 @@ uint4 commit(uint2 pos) {
                 [loop]
                 for (uint offset = 0; offset < 4; offset++) {
                     uint addr_off = lin + (offset << 2);
-                    for (uint slice = 0; slice < 2; slice++) {
-                        uint cache_idx = RAM_L1_ARRAY_IDX(addr_off) + slice * 512;
+                    for (uint slice = 0; slice < L1_SLICES; slice++) {
+                        uint cache_idx = RAM_L1_ARRAY_IDX(addr_off) + slice * L1_SETS;
                         uint lin = 1068 + cache_idx;
                         uint4 cur = STATE_TEX_HART(uint2(lin % 64, lin / 64), 0);
                              if (cur.x == addr_off) { set_idx_uint4(ret, cur.y, offset); }

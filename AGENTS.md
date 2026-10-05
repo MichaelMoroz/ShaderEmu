@@ -41,6 +41,15 @@ A cold boot to the `/ #` prompt takes about 80 s on an RTX 5090. Do it once, the
   use from `rvc_shell.snap`), runs 500 frames on a fixed timestep and prints IPS.
 - Runs are deterministic. If `instructions` and `state` match upstream, the change did not alter
   emulation; if they differ, it did, and that needs explaining before any speed claim.
+- `rvc_harness --profile` (on a shader with `PROF()` counters, see `experiments\rvc_opt\README.md`)
+  prints how often each instruction and memory/CSR/TLB path runs. Counts are per emulated
+  instruction, not per pixel.
+- `pwsh tools\gpu_trace.ps1` captures an Nsight GPU Trace (per-draw hardware counters) in about
+  15 s. It runs `bin\rvc_trace12.exe`, the D3D12 twin of the harness, because Nsight does not
+  attach to D3D11. Always with `--no-doubles`: NVIDIA's D3D12 path miscomputes the shader's
+  double math and the guest diverges otherwise. Check that its BENCH `state` matches D3D11.
+- New D3D12 code: test it with a dummy shader that writes position, uniforms and texture
+  contents before trusting it with the emulator.
 - A shader edit costs one FXC compile (90 s alone, about 3 min with three in parallel). Compile
   variants in parallel, then benchmark them one at a time.
 
@@ -48,5 +57,5 @@ A cold boot to the `/ #` prompt takes about 80 s on an RTX 5090. Do it once, the
 
 - Harness build: about 5 s.
 - First FXC compile of rvc's `CPUTick` pass: about 90 s; cached afterwards in `build\shadercache`.
-- Speed: about 520k instructions/s upstream, 750k with `experiments\rvc_opt`. It barely depends on
+- Speed: about 520k instructions/s upstream, 780k with `experiments\rvc_opt`. It barely depends on
   `--ticks`: frame time is the serial CPU loop, about 1.8 us per instruction upstream.
