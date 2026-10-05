@@ -3,6 +3,12 @@
 
 #include "mmu.h"
 
+// Exact fast paths, on unless OPT_BASELINE is defined (to measure against the old decoder).
+#ifndef OPT_BASELINE
+#define OPT_DISPATCH 1
+#define OPT_FETCH_FAST 1
+#endif
+
 #define AS_SIGNED(val) (asint(val))
 #define AS_UNSIGNED(val) (asuint(val))
 
@@ -451,6 +457,134 @@ ins_ret ins_select(uint ins_word, inout ins_ret ret) {
     FormatI ins_FormatI = parse_FormatI(ins_word);
     FormatU ins_FormatU = parse_FormatU(ins_word);
 
+#ifdef OPT_DISPATCH
+    // One dispatch on the major opcode for the instructions that make up most of any workload
+    // (integer ALU, branches, jumps, loads, stores). Anything it does not fully recognise
+    // falls through to the original decoder below, so behaviour is unchanged.
+    uint f_opc = ins_word & 0x7f;
+    uint f_f3 = (ins_word >> 12) & 0x7;
+    uint f_rd = (ins_word >> 7) & 0x1f;
+    bool f_done = true;
+    [forcecase]
+    switch (f_opc) {
+        case 0x37: { // lui
+            PROF(PROF_fast_upper)
+            ret.write_reg = f_rd; ret.write_val = ins_word & 0xfffff000;
+            break;
+        }
+        case 0x17: { // auipc
+            PROF(PROF_fast_upper)
+            ret.write_reg = f_rd; ret.write_val = cpu.pc + (ins_word & 0xfffff000);
+            break;
+        }
+        case 0x6f: { // jal
+            PROF(PROF_fast_jump)
+            FormatJ f_j = parse_FormatJ(ins_word);
+            ret.write_reg = f_rd; ret.write_val = cpu.pc + 4;
+            ret.pc_val = cpu.pc + f_j.imm;
+            break;
+        }
+        case 0x67: { // jalr
+            if (f_f3 == 0) {
+                PROF(PROF_fast_jump)
+                ret.write_reg = f_rd; ret.write_val = cpu.pc + 4;
+                ret.pc_val = xreg(ins_FormatI.rs1) + ins_FormatI.imm;
+            } else { f_done = false; }
+            break;
+        }
+        case 0x13: { // addi slti sltiu xori ori andi slli srli srai
+            uint a = xreg(ins_FormatI.rs1);
+            uint b = ins_FormatI.imm;
+            uint sh = (ins_word >> 20) & 0x1f;
+            uint f6 = ins_word >> 26;
+            uint f_sra = (a & 0x80000000) ? ~(~a >> sh) : a >> sh;
+            uint r;
+            bool ok = true;
+#ifdef OPT_ALU_SELECT
+            r = f_f3 == 0 ? a + b :
+                f_f3 == 1 ? a << sh :
+                f_f3 == 2 ? (AS_SIGNED(a) < AS_SIGNED(b) ? 1 : 0) :
+                f_f3 == 3 ? (a < b ? 1 : 0) :
+                f_f3 == 4 ? a ^ b :
+                f_f3 == 5 ? (f6 == 0x10 ? f_sra : a >> sh) :
+                f_f3 == 6 ? a | b : a & b;
+            ok = (f_f3 != 1 || f6 == 0) && (f_f3 != 5 || f6 == 0 || f6 == 0x10);
+#else
+            [forcecase]
+            switch (f_f3) {
+                case 0: r = a + b; break;
+                case 1: r = a << sh; ok = f6 == 0; break;
+                case 2: r = AS_SIGNED(a) < AS_SIGNED(b) ? 1 : 0; break;
+                case 3: r = a < b ? 1 : 0; break;
+                case 4: r = a ^ b; break;
+                case 5: r = f6 == 0x10 ? f_sra : a >> sh; ok = f6 == 0 || f6 == 0x10; break;
+                case 6: r = a | b; break;
+                default: r = a & b; break;
+            }
+#endif
+            if (ok) { PROF(PROF_fast_opimm) ret.write_reg = f_rd; ret.write_val = r; } else { f_done = false; }
+            break;
+        }
+        case 0x33: { // add sub sll slt sltu xor srl sra or and (M extension: original decoder)
+            uint a = xreg((ins_word >> 15) & 0x1f);
+            uint b = xreg((ins_word >> 20) & 0x1f);
+            uint f7 = ins_word >> 25;
+            uint f_sra = (a & 0x80000000) ? ~(~a >> b) : a >> b;
+            uint r;
+            bool ok = f7 == 0 || (f7 == 0x20 && (f_f3 == 0 || f_f3 == 5));
+#ifdef OPT_ALU_SELECT
+            r = f_f3 == 0 ? (f7 ? a - b : a + b) :
+                f_f3 == 1 ? a << b :
+                f_f3 == 2 ? (AS_SIGNED(a) < AS_SIGNED(b) ? 1 : 0) :
+                f_f3 == 3 ? (a < b ? 1 : 0) :
+                f_f3 == 4 ? a ^ b :
+                f_f3 == 5 ? (f7 ? f_sra : a >> b) :
+                f_f3 == 6 ? a | b : a & b;
+#else
+            [forcecase]
+            switch (f_f3) {
+                case 0: r = f7 ? a - b : a + b; break;
+                case 1: r = a << b; break;
+                case 2: r = AS_SIGNED(a) < AS_SIGNED(b) ? 1 : 0; break;
+                case 3: r = a < b ? 1 : 0; break;
+                case 4: r = a ^ b; break;
+                case 5: r = f7 ? f_sra : a >> b; break;
+                case 6: r = a | b; break;
+                default: r = a & b; break;
+            }
+#endif
+            if (ok) { PROF(PROF_fast_op) ret.write_reg = f_rd; ret.write_val = r; } else { f_done = false; }
+            break;
+        }
+        case 0x63: { // beq bne blt bge bltu bgeu
+            uint a = xreg((ins_word >> 15) & 0x1f);
+            uint b = xreg((ins_word >> 20) & 0x1f);
+            bool lt = AS_SIGNED(a) < AS_SIGNED(b), ltu = a < b;
+            bool taken = f_f3 == 0 ? a == b : f_f3 == 1 ? a != b : f_f3 == 4 ? lt : f_f3 == 5 ? !lt : f_f3 == 6 ? ltu : !ltu;
+            if (f_f3 != 2 && f_f3 != 3) {
+                PROF(PROF_fast_branch)
+                FormatB f_b = parse_FormatB(ins_word);
+                if (taken) { ret.pc_val = cpu.pc + f_b.imm; }
+            } else { f_done = false; }
+            break;
+        }
+        case 0x23: { // sb sh sw
+            if (f_f3 < 3) {
+                PROF(PROF_fast_store)
+                FormatS f_s = parse_FormatS(ins_word);
+                ret.mem_wr_addr = f_s.addr; ret.mem_wr_size = 8 << f_f3; ret.mem_wr_value = xreg(f_s.rs2);
+            } else { f_done = false; }
+            break;
+        }
+        default:
+            f_done = false;
+            break;
+    }
+    if (f_done) {
+        return ret;
+    }
+#endif
+
     /*
        NOTE: The switch statements below can't all use [forcecase].
        While this would be best for performance (according to my testing),
@@ -529,6 +663,20 @@ ins_ret ins_select(uint ins_word, inout ins_ret ret) {
         /* cpu.debug_arb_6 = prepared_read_addr; */
         /* cpu.debug_arb_7 = prepared_mem_val; */
     }
+
+#ifdef OPT_DISPATCH
+    if ((ins_word & 0x7f) == 0x03) { // lb lh lw lbu lhu, value already read above
+        uint f_l3 = (ins_word >> 12) & 0x7;
+        if (f_l3 < 3 || f_l3 == 4 || f_l3 == 5) {
+            PROF(PROF_fast_load)
+            uint v = prepared_mem_val;
+            ret.write_reg = (ins_word >> 7) & 0x1f;
+            ret.write_val = f_l3 == 0 ? sign_extend(v & 0xff, 8) : f_l3 == 1 ? sign_extend(v & 0xffff, 16) :
+                            f_l3 == 2 ? v : f_l3 == 4 ? v & 0xff : v & 0xffff;
+            return ret;
+        }
+    }
+#endif
 
     if ((ins_word & 0x00000073) == 0x00000073) {
         // could be CSR instruction
@@ -640,7 +788,18 @@ void emulate() {
     ins_ret ret = ins_ret_noop();
     bool mtip_reset = false;
     if ((cpu.pc & 0x3) == 0) {
+#ifdef OPT_FETCH_FAST
+        // Same page as the last translated fetch: reuse it without re-checking mode and privilege.
+        uint ins_addr;
+        if ((cpu.pc >> 12) == fetch_vpn) {
+            PROF(PROF_fast_fetch)
+            ins_addr = fetch_page | (cpu.pc & 0xfff);
+        } else {
+            ins_addr = mmu_translate(ret, cpu.pc, MMU_ACCESS_FETCH);
+        }
+#else
         uint ins_addr = mmu_translate(ret, cpu.pc, MMU_ACCESS_FETCH);
+#endif
 
         if (!ret.trap.en) {
             ins_word = mem_get_instruction(ins_addr);

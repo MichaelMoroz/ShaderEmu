@@ -11,7 +11,7 @@ handoff for the plan; this repo currently holds the headless D3D11 harness.
 - `harness/unity_include/` – minimal stand-ins for Unity's built-in `.cginc` files.
 - `harness/apps/rvc_harness.cpp` – runs pimaker's rvc (RISC-V Linux) unmodified, with its UART
   on the console. This proves the harness reproduces Unity's CRT behaviour.
-- `experiments/rvc_opt/` – patched copy of rvc's shader, 50% faster with bit-identical emulation.
+- `experiments/rvc_opt/` – patched copy of rvc's shader, 2x faster with bit-identical emulation.
 - `harness/apps/rvc_trace12.cpp` – the same two draws on D3D12, for `tools/gpu_trace.ps1`
   (Nsight GPU Trace hardware counters per draw).
 - `tools/perf_test.ps1` – 3-second speed benchmark; `tools/watch_console.cmd` – live console.

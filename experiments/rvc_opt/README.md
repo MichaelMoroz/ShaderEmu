@@ -27,6 +27,17 @@ pass-local (`static`), never stored in the texture.
    in place; only `mstatus` flushes the TLB. A pending-but-masked interrupt rewrites `mip` on
    every instruction, which used to flush everything each time.
 
+6. **One dispatch for the common instructions** (`emu.h`, `OPT_DISPATCH`): upstream probes nine
+   switches in turn. Integer ALU ops, branches, jumps, loads and stores now go through a single
+   `[forcecase]` switch on the major opcode; anything it does not fully recognise falls through
+   to the original decoder.
+7. **Same-page fetch fast path** (`emu.h`, `mmu.h`, `OPT_FETCH_FAST`): a fetch from the page of
+   the last translated fetch skips the mode, privilege and TLB checks.
+
+6 and 7 are on by default; define `OPT_BASELINE` to build without them. `OPT_ALU_SELECT`
+replaces the inner funct3 switch of 6 with a branch-free select; it measured within noise of
+the switch, so it is off.
+
 ## Measured (RTX 5090, `tools\perf_test.ps1`, 2048 ticks)
 
 | Shader | IPS | State hash after 1,024,000 instr |
@@ -34,7 +45,14 @@ pass-local (`static`), never stored in the texture.
 | upstream | 517k | 8d6fc1106d9cd3a1 |
 | 1 + 2 | 604k | 8d6fc1106d9cd3a1 |
 | 1 + 2 + 3 (one-entry TLB) | 748k | 8d6fc1106d9cd3a1 |
-| 1 - 5 (this folder) | 781k | 8d6fc1106d9cd3a1 |
+| 1 - 5 | 781k | 8d6fc1106d9cd3a1 |
+| 1 - 5 + fetch fast path | 814k - 831k | 8d6fc1106d9cd3a1 |
+| 1 - 5 + dispatch | 975k - 993k | 8d6fc1106d9cd3a1 |
+| 1 - 7 (this folder) | 1,050k | 8d6fc1106d9cd3a1 |
+
+After 6 and 7 the tick draw takes 1.66 ms instead of 2.30 ms, and its warp time shifts from
+branches (28% -> 20%) towards memory and texture waits (17% -> 23%); dependent arithmetic stays
+near 30%. The tables in the GPU counters section below were taken before 6 and 7.
 
 A scripted shell session (5.07 M instructions, with traps, syscalls and cache stalls) also ends
 in the same state and UART output as upstream. Cold boot to the prompt: 78.5 s -> 52.9 s

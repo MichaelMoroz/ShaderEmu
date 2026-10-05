@@ -10,10 +10,12 @@ static uint hot_mstatus, hot_mip, hot_mie;
 #define TLB_EMPTY uint4(0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff)
 static uint4 tlb_f_vpn = TLB_EMPTY, tlb_r_vpn = TLB_EMPTY, tlb_w_vpn = TLB_EMPTY;  // slot = vpn & 3
 static uint4 tlb_f_page, tlb_r_page, tlb_w_page;
+static uint fetch_vpn = 0xffffffff, fetch_page;  // last translated fetch page (OPT_FETCH_FAST)
 void hot_flush() {
     PROF(PROF_hot_flush)
     hot_mstatus_ok = false; hot_mip_ok = false; hot_mie_ok = false;
     tlb_f_vpn = TLB_EMPTY; tlb_r_vpn = TLB_EMPTY; tlb_w_vpn = TLB_EMPTY;
+    fetch_vpn = 0xffffffff;
 }
 
 void mmu_update(uint satp) {
@@ -111,7 +113,9 @@ uint mmu_translate(inout ins_ret ins, uint addr, uint mode) {
     if (idx_uint4(hit_vpns, tlb_slot) == (addr >> 12)) {
         if (mode == MMU_ACCESS_FETCH) { PROF(PROF_tlb_hit_fetch) } else if (mode == MMU_ACCESS_READ) { PROF(PROF_tlb_hit_read) } else { PROF(PROF_tlb_hit_write) }
         uint4 hit_pages = mode == MMU_ACCESS_FETCH ? tlb_f_page : (mode == MMU_ACCESS_READ ? tlb_r_page : tlb_w_page);
-        return idx_uint4(hit_pages, tlb_slot) | ADDR_PART_OFFSET(addr);
+        uint hit_page = idx_uint4(hit_pages, tlb_slot);
+        if (mode == MMU_ACCESS_FETCH) { fetch_vpn = addr >> 12; fetch_page = hit_page; }
+        return hit_page | ADDR_PART_OFFSET(addr);
     }
 
     bool super;
@@ -169,7 +173,7 @@ uint mmu_translate(inout ins_ret ins, uint addr, uint mode) {
     pa |= super ? ADDR_PART_PN0(addr) << 12 : page.ppn0 << 12;
     pa |= page.ppn1 << 22;
 
-    if (mode == MMU_ACCESS_FETCH) { set_idx_uint4(tlb_f_vpn, addr >> 12, tlb_slot); set_idx_uint4(tlb_f_page, pa & ~0xfff, tlb_slot); }
+    if (mode == MMU_ACCESS_FETCH) { set_idx_uint4(tlb_f_vpn, addr >> 12, tlb_slot); set_idx_uint4(tlb_f_page, pa & ~0xfff, tlb_slot); fetch_vpn = addr >> 12; fetch_page = pa & ~0xfff; }
     else if (mode == MMU_ACCESS_READ) { set_idx_uint4(tlb_r_vpn, addr >> 12, tlb_slot); set_idx_uint4(tlb_r_page, pa & ~0xfff, tlb_slot); }
     else { set_idx_uint4(tlb_w_vpn, addr >> 12, tlb_slot); set_idx_uint4(tlb_w_page, pa & ~0xfff, tlb_slot); }
 

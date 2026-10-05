@@ -49,6 +49,14 @@ void prof_flush(uint2 pos) {
 #define PROF_irq_or_trap_path 26
 #define PROF_trap_taken 27
 #define PROF_illegal_ins 28
+#define PROF_fast_upper 40
+#define PROF_fast_jump 41
+#define PROF_fast_opimm 42
+#define PROF_fast_op 43
+#define PROF_fast_branch 44
+#define PROF_fast_store 45
+#define PROF_fast_load 46
+#define PROF_fast_fetch 47
 #define PROF_ins_auipc 64
 #define PROF_ins_jal 65
 #define PROF_ins_lui 66

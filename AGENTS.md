@@ -57,5 +57,5 @@ A cold boot to the `/ #` prompt takes about 80 s on an RTX 5090. Do it once, the
 
 - Harness build: about 5 s.
 - First FXC compile of rvc's `CPUTick` pass: about 90 s; cached afterwards in `build\shadercache`.
-- Speed: about 520k instructions/s upstream, 780k with `experiments\rvc_opt`. It barely depends on
+- Speed: about 520k instructions/s upstream, 1,050k with `experiments\rvc_opt`. It barely depends on
   `--ticks`: frame time is the serial CPU loop, about 1.8 us per instruction upstream.
