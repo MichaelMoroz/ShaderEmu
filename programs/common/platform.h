@@ -27,6 +27,12 @@ static inline void uart_puts(const char* s) {
     while (*s) uart_putc(*s++);
 }
 
+// Gives up the rest of the current emulator frame. Use it when waiting for something that can
+// only change between frames (the GPU, the timer), instead of spinning.
+static inline void cpu_wait(void) {
+    __asm__ volatile("wfi");
+}
+
 // Free-running timer (low word of the CLINT's mtime).
 #define CLINT_MTIME (*(volatile uint32_t*)0x0200bff8)
 #define CLINT_HZ 5000
@@ -38,6 +44,7 @@ static inline void uart_puts(const char* s) {
 #define DISP_MODE_OFF     0
 #define DISP_MODE_RGB32   1   // one word per pixel, 0x00RRGGBB
 #define DISP_MODE_INDEXED 2   // one byte per pixel, an index into DISP_PALETTE
+#define DISP_MODE_GPU     3   // show what the GPU device drew (gpu.h) instead of DISP_PIXELS
 
 #define DISP_PALETTE ((volatile uint32_t*)0x87000400)   // 256 words, 0x00RRGGBB
 #define DISP_PIXELS  0x87001000u                        // rows top to bottom, no padding
