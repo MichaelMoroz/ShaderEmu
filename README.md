@@ -53,6 +53,8 @@ the design notes are kept in `docs/original-x86-plan.md`.
 - `linux/kernel/` – this project's Linux kernel: a build script (WSL, no root) for pimaker's
   5.17.11 fork with our drivers added: the GPU (`/dev/gpu`), the display as a framebuffer
   (`/dev/fb0`), keyboard and pointer as evdev devices (`docs/input.md`).
+- `linux/prebuilt/` – that kernel and the image's programs already built, so
+  `python tools\make_linux_image.py` needs no compiler (sources and licences in its README).
 - `linux/userland/`, `linux/nanox/` – a musl toolchain for the Linux image, and the Nano-X
   window system built with it, with drivers for the GPU, keyboard and pointer (`docs/nanox.md`).
 - `programs/linux/` – programs for the Linux image: an OpenGL driver for the GPU device and the
@@ -131,3 +133,10 @@ adds it to any other invocation.
 The first run compiles rvc's shader with FXC, which can take several minutes; the bytecode is
 cached in `build/shadercache/`. UART output is also appended to `logs/uart.log`.
 `--skip-opt` compiles much faster at some runtime cost. `rvc_harness --help` lists all options.
+
+## Licence
+
+MIT (`LICENSE`). `experiments/rvc_opt` is derived from pimaker's rvc and keeps its own MIT
+licence file. The kernel drivers in `linux/kernel` are GPL-2.0, as they are built into Linux.
+`linux/prebuilt` holds binaries built from other projects' sources; its README lists them
+with their licences.
