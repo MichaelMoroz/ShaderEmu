@@ -75,6 +75,7 @@ struct Options {
     bool resume = false;      // with no other arguments: resume the shell snapshot instead of booting
     std::string vizCapture;   // BMP of the memory view, written at exit
     std::string gpuCapture;   // BMP of the GPU device's colour target, written at exit
+    std::string pcLog;        // per frame: the guest's pc and the instructions it ran, as two uint32
     bool noDoubles = false;
     bool noGpu = false;       // --no-gpu: leave out the GPU device's passes (gpu.shader)
     bool doubles = false;     // --doubles: keep the shader's double math under DXC too
@@ -135,6 +136,7 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
                          auto      (default) the smallest one the chosen image runs on
   --no-gpu             leave out the GPU device (the passes in <rvc>/gpu.shader, docs/gpu.md)
   --gpu-capture FILE   save the GPU device's whole colour target as a BMP at exit
+  --pc-log FILE        sample the guest's pc once a frame, for tools/pc_profile.py
   --dxc / --d3d11      backend: D3D12 with DXC-compiled DXIL, or D3D11 with FXC bytecode (what VRChat
                        runs). rvc_harness_dxc.exe defaults to --dxc. DXC implies NO_DOUBLES and, unless
                        --rvc is given, the experiments/rvc_opt shader (upstream does not compile with DXC).
@@ -249,6 +251,7 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--no-doubles") o.noDoubles = true;
         else if (a == "--no-gpu") o.noGpu = true;
         else if (a == "--gpu-capture") o.gpuCapture = next("--gpu-capture");
+        else if (a == "--pc-log") o.pcLog = next("--pc-log");
         else if (a == "--define") o.defines.push_back(next("--define"));
         else { fprintf(stderr, "unknown option %s\n", a.c_str()); usage(); return false; }
     }
@@ -354,6 +357,7 @@ const BootImage kImages[] = {
     {"micropython", "MicroPython on OpenSBI (bare metal REPL)", "data", "mprv_payload", "none", "dts", 1},
     {"rust", "Rust test payload on OpenSBI (bare metal)", "data", "rust_payload", "none", "dts", 1},
     {"gears", "Gears: three lit, textured gears drawn by the GPU device (bare metal C)", nullptr, "gears", "none", "none", 2},
+    {"rects", "GPU test card: 3,600 rectangles in one list, written back to RAM (bare metal C)", nullptr, "rects", "none", "none", 2},
     {"raycast", "Raycaster: walk a textured maze on the display (bare metal C)", nullptr, "raycast", "none", "none", 2},
     {"raytrace", "Raytracer drawing to the display (bare metal C)", nullptr, "raytrace", "none", "none", 2},
     {"rvc-raytrace", "rvc's Rust raytracer, drawing into raw memory", "data", "rust_raytrace", "none", "dts", 1},
@@ -388,6 +392,8 @@ void applyImage(Options& o, const BootImage& im) {
     if (o.image == "linux-net" && fs::exists("build/images/linux/rootfs.bin", ec) && fs::exists("build/images/linux/dts.bin", ec)) {
         o.mtdPrefix = "build/images/linux/rootfs";
         o.dtbPrefix = "build/images/linux/dts";
+        // and our kernel, if it has been built (linux/kernel/build.sh)
+        if (fs::exists("build/images/linux/linux_payload.bin", ec)) o.ramPrefix = "build/images/linux/linux_payload";
     }
 }
 
@@ -532,6 +538,7 @@ int main(int argc, char** argv) {
             return 1;
         }
         bo.gpuShader = &gpuShader;
+        opt.defines.push_back("GPU_DEVICE");   // the Commit pass copies the GPU's picture back
     }
     bo.compile.flags = opt.fxcFlags;
     bo.compile.cacheDir = opt.cacheDir;
@@ -624,6 +631,9 @@ int main(int argc, char** argv) {
     uint64_t ovInstr = 0, ovFrames = 0;
     double gpuTickMs = -1, gpuCommitMs = -1, gpuDeviceMs = 0;
     unsigned lastKey = 0;   // last character handed to the guest
+    std::deque<uint32_t> keyEvents;   // raw key events from the window, waiting for the input device
+    uint32_t keySeq = 0;              // events delivered so far
+    MemoryViewInput pointer;
     auto withCommas = [](uint64_t v) {
         std::string s = std::to_string(v);
         for (int i = (int)s.size() - 3; i > 0; i -= 3) s.insert((size_t)i, ",");
@@ -642,14 +652,21 @@ int main(int argc, char** argv) {
     uint64_t frame = 0;
     double guestTime = timeBase;
 
+    std::vector<uint32_t> pcSamples;
+    bool keyboardOwned = false;   // a guest program reads the keyboard device (docs/input.md)
     auto processRow = [&](const std::vector<uint8_t>& raw, uint64_t rowFrame) {
         const uint32_t* t = (const uint32_t*)raw.data();
         auto texel = [&](int x, int c) { return t[x * 4 + c]; };
         uint32_t clock = texel(28, 1);
+        keyboardOwned = raw.size() >= (64 + 4) * 16 && texel(64 + 3, 0) == 0x6b657973u;
         commits = texel(28, 2);
         consumedTag = texel(9, 3);
         if (rowFrame < (uint64_t)opt.initFrames) return;  // cpu_init leaves junk in the UART buffer
         if (haveClock) guestInstructions += (uint32_t)(clock - lastClock);
+        if (haveClock && !opt.pcLog.empty()) {
+            pcSamples.push_back(texel(36, 3));
+            pcSamples.push_back((uint32_t)(clock - lastClock));
+        }
         lastClock = clock;
         haveClock = true;
 
@@ -689,6 +706,17 @@ int main(int argc, char** argv) {
         double t = timeBase + (opt.fixedDt > 0 ? (double)frame * opt.fixedDt : wall);
         guestTime = t;
         mat.setVector("_Time", t / 20, t, t * 2, t * 3);
+        if (opt.fixedDt <= 0) {
+            // the machine's clock chip (DS1742): local time as BCD, century in the control byte.
+            // Fixed-timestep runs leave it at zero so that they stay repeatable.
+            auto bcd = [](int v) { return (uint32_t)((v / 10) << 4 | (v % 10)); };
+            time_t now = time(nullptr);
+            struct tm lt{};
+            localtime_s(&lt, &now);
+            int year = lt.tm_year + 1900;
+            mat.setInt("_RTC0", (int64_t)(bcd(year / 100) | bcd(lt.tm_sec) << 8 | bcd(lt.tm_min) << 16 | bcd(lt.tm_hour) << 24));
+            mat.setInt("_RTC1", (int64_t)(bcd(lt.tm_wday + 1) | bcd(lt.tm_mday) << 8 | bcd(lt.tm_mon + 1) << 16 | bcd(year % 100) << 24));
+        }
         uint32_t mtimeLo, mtimeHi;
         rvcMtime(t, mtimeLo, mtimeHi);
         mat.setInt("_HostMtimeLo", mtimeLo);
@@ -718,6 +746,25 @@ int main(int argc, char** argv) {
                 mat.setInt("_UdonUARTInChar", (int64_t)group);
                 mat.setInt("_UdonUARTInTag", sentTag);
             }
+        }
+
+        // The input device: the pointer every frame, and up to four key events.
+        {
+            uint32_t batch[4] = {0, 0, 0, 0};
+            int n = 0;
+            for (; n < 4 && !keyEvents.empty(); ++n) {
+                batch[n] = keyEvents.front();
+                keyEvents.pop_front();
+            }
+            mat.setVector("_InputPointer", pointer.x, pointer.y, pointer.panelW, pointer.panelH);
+            mat.setInt("_InputButtons", pointer.buttons);
+            mat.setInt("_InputKeySeq", keySeq);
+            mat.setInt("_InputKeyCount", n);
+            mat.setInt("_InputKey0", batch[0]);
+            mat.setInt("_InputKey1", batch[1]);
+            mat.setInt("_InputKey2", batch[2]);
+            mat.setInt("_InputKey3", batch[3]);
+            keySeq += (uint32_t)n;
         }
 
         if (opt.benchWarmup >= 0 && frame == (uint64_t)opt.benchWarmup) {
@@ -804,7 +851,8 @@ int main(int argc, char** argv) {
                 std::lock_guard<std::mutex> lock(g_inputMutex);
                 queued = scriptQueue.size() + g_stdinQueue.size();
             }
-            snprintf(i1, sizeof i1, "input: window, %s", g_rawConsole ? "console" : (opt.readStdin ? "stdin" : "script"));
+            snprintf(i1, sizeof i1, "input: window%s, %s", keyboardOwned ? " (keys to the keyboard device only)" : "",
+                     g_rawConsole ? "console" : (opt.readStdin ? "stdin" : "script"));
             snprintf(i2, sizeof i2, "queued %zu   sent %u", queued, sentTag);
             snprintf(i3, sizeof i3, "taken by guest %u", consumedTag);
             if (lastKey >= 0x20 && lastKey < 0x7f) snprintf(i4, sizeof i4, "last key '%c' (0x%02x)", lastKey, lastKey);
@@ -819,13 +867,17 @@ int main(int argc, char** argv) {
         if (backend.viewOpen() && wall - lastViz >= 1.0 / 60) {
             backend.viewRender();
             lastViz = wall;
-            // keys typed into the window go to the guest like console keys; Ctrl+] quits
+            pointer = memoryViewTakeInput();
+            keyEvents.insert(keyEvents.end(), pointer.keys.begin(), pointer.keys.end());
+            pointer.keys.clear();
+            // keys typed into the window go to the guest's console too, unless a program there
+            // has the keyboard device open; Ctrl+] quits
             std::string typed = memoryViewTakeKeys();
             if (!typed.empty()) {
                 std::lock_guard<std::mutex> lock(g_inputMutex);
                 for (char c : typed) {
                     if (c == kQuitKey) g_quit = true;
-                    else g_stdinQueue.push_back(c);
+                    else if (!keyboardOwned) g_stdinQueue.push_back(c);
                 }
             }
         }
@@ -914,6 +966,7 @@ int main(int argc, char** argv) {
         if (!ok) exitCode = 1;
     }
 
+    if (!opt.pcLog.empty()) writeFileBinary(opt.pcLog, (const uint8_t*)pcSamples.data(), pcSamples.size() * 4);
     if (!opt.gpuCapture.empty() && exitCode != 1)
         fprintf(stderr, "\n[harness] GPU target %s %s\n", backend.gpuCapture(opt.gpuCapture) ? "written to" : "capture FAILED:", opt.gpuCapture.c_str());
     if (!opt.vizCapture.empty() && backend.viewOpen() && exitCode != 1) {

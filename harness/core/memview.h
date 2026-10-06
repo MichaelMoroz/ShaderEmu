@@ -36,6 +36,14 @@ const char* memoryViewShader();
 // What was typed into the window since the last call, as terminal bytes (arrows as escape
 // sequences). Keys arrive when the window's messages are pumped, which render() does.
 std::string memoryViewTakeKeys();
+// The window's pointer and raw key events, for the machine's input device.
+struct MemoryViewInput {
+    float x = 0, y = 0;             // pointer, in window pixels over the display panel
+    float panelW = 0, panelH = 0;   // the display panel's size; 0 without a window
+    unsigned buttons = 0;           // bit 0 left, 1 right, 2 middle
+    std::vector<uint32_t> keys;     // since the last call: Linux key code, bit 31 while pressed
+};
+MemoryViewInput memoryViewTakeInput();
 // WM_CLOSE sets the window property L"closed" instead of destroying the window.
 HWND memoryViewCreateWindow();
 // Rasterises the lines into a kMemoryViewTextW x kMemoryViewTextH BGRA bitmap, white on black.

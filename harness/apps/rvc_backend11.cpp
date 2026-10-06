@@ -36,7 +36,8 @@ public:
 
         if (!crt_.init(gpu_.device.Get(), kWidth, kHeight, DXGI_FORMAT_R32G32B32A32_UINT, err)) return false;
         crt_.clear(gpu_.ctx.Get());
-        return rows_.init(gpu_.device.Get(), DXGI_FORMAT_R32G32B32A32_UINT, 16, 64, 1, 3, err);
+        return rows_.init(gpu_.device.Get(), DXGI_FORMAT_R32G32B32A32_UINT, 16, 64, 1, 3, err) &&
+               control_.init(gpu_.device.Get(), DXGI_FORMAT_R32G32B32A32_UINT, 16, kControlTexels, 1, 3, err);
     }
 
     bool loadPayload(Material& mat, const std::string& dir, const std::string& prefix, const std::string& propBase,
@@ -75,6 +76,7 @@ public:
         }
         crt_.runZone(gpu_, passes_[0], mat, UpdateZone{32, 4064, 64, 64, 0});
         if (timeIt) gpu_.ctx->End(tsQuery_[1].Get());
+        if (!gpuPasses_.empty()) mat.setTexture("_GpuTarget", gpuSrv_.Get(), kGpuTarget, kGpuTarget);   // Commit copies it back
         crt_.runZone(gpu_, passes_[1], mat, UpdateZone{1024, 2048, 2048, 4096, 1});
         if (timeIt) gpu_.ctx->End(tsQuery_[2].Get());
         if (gpuPasses_.size() == 2) {
@@ -93,11 +95,18 @@ public:
             while (PeekMessageW(&msg, presentWnd_, 0, 0, PM_REMOVE)) DispatchMessageW(&msg);
         }
         rows_.request(gpu_.ctx.Get(), crt_.current(), 0, 0, tag);
+        control_.request(gpu_.ctx.Get(), crt_.current(), 0, kControlRow, tag);
         return true;
     }
     bool rowFull() const override { return rows_.full(); }
     size_t rowPending() const override { return rows_.pending(); }
-    bool popRow(std::vector<uint8_t>& out, uint64_t& tag) override { return rows_.pop(gpu_.ctx.Get(), out, tag); }
+    bool popRow(std::vector<uint8_t>& out, uint64_t& tag) override {
+        std::vector<uint8_t> control;
+        uint64_t controlTag;
+        if (!rows_.pop(gpu_.ctx.Get(), out, tag) || !control_.pop(gpu_.ctx.Get(), control, controlTag)) return false;
+        out.insert(out.end(), control.begin(), control.end());
+        return true;
+    }
 
     bool readState(UINT w, UINT h, std::vector<uint8_t>& out) override {
         RegionReadback rb;
@@ -298,7 +307,7 @@ private:
     ComPtr<ID3D11DepthStencilState> gpuDepthState_;
     std::vector<ComPtr<ID3D11ShaderResourceView>> keep_;
     CustomRenderTexture crt_;
-    RegionReadback rows_;
+    RegionReadback rows_, control_;
     ComPtr<IDXGISwapChain> swapChain_;
     HWND presentWnd_ = nullptr;
     ComPtr<ID3D11Buffer> profBuf_, profStaging_;

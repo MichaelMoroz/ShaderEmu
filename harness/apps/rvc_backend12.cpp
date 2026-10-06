@@ -46,11 +46,10 @@ public:
         b.dxcDir = opt.dxcDir;
         buildPasses12(dx_, shader, opt.compile, b, passes_);
         if (opt.gpuShader) {
-            Pass12 control[2];   // the builder makes two passes; the control zone is one
-            buildPasses12(dx_, *opt.gpuShader, opt.compile, b, control, "GPUControl", "GPUControl");
-            passes_[2] = control[0];
+            buildPasses12(dx_, *opt.gpuShader, opt.compile, b, passes_ + 2, "GPUControl", "", 1);
             passCount_ = 3;
             buildGpuDraw(*opt.gpuShader, opt.compile, b);
+            textures_["_GpuTarget"] = gpuColor_;
         }
 
         const uint8_t black[4] = {0, 0, 0, 0};
@@ -59,7 +58,7 @@ public:
 
         for (UINT s = 0; s < kSlots; ++s) {
             check(dx_.dev->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocs_[s])), "allocator");
-            rowBuf_[s] = readbackBuffer(rowFootprint_, 64, 1);
+            rowBuf_[s] = readbackBuffer(rowFootprint_, 64, 2);   // row 0, then the control texels
         }
         check(dx_.dev->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocs_[0].Get(), nullptr, IID_PPV_ARGS(&cl_)), "command list");
         cl_->Close();
@@ -184,9 +183,19 @@ public:
         cl_->ResourceBarrier(2, fromCopy);
 
         // Zone 2: Commit on the whole texture; row 0 of the result goes to this slot's readback.
+        // Commit reads the GPU's picture, to copy it into RAM when the guest asked.
+        const D3D12_RESOURCE_STATES gpuRt = D3D12_RESOURCE_STATE_RENDER_TARGET, gpuRead = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        if (passCount_ == 3) {
+            auto toRead = transition(gpuColor_.Get(), gpuRt, gpuRead);
+            cl_->ResourceBarrier(1, &toRead);
+        }
         draw(1, 1024, 2048, 2048, 4096);
+        if (passCount_ == 3) {
+            auto toDraw = transition(gpuColor_.Get(), gpuRead, gpuRt);
+            cl_->ResourceBarrier(1, &toDraw);
+        }
         stamp(2);
-        // The GPU device's zones read the committed state and write part of it: each renders
+        // The GPU device's zone reads the committed state and writes part of it: it renders
         // into the other buffer and its rows are copied back, as the CPUTick zone does.
         if (passCount_ == 3) {
             D3D12_RESOURCE_BARRIER swapIn[2] = {
@@ -218,6 +227,7 @@ public:
             auto toPixel = transition(state_[cur].Get(), anyStage, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             cl_->ResourceBarrier(1, &toPixel);
             cl_->RSSetViewports(1, &vp);
+            // then the control zone on the state texture: mark the list drawn, deliver input
             {
                 const float* zn = kGpuControlZone;
                 draw(2, zn[0], zn[1], zn[2], zn[3]);
@@ -254,6 +264,8 @@ public:
         rsrc.pResource = state_[dst].Get();
         D3D12_BOX rowBox{0, 0, 0, 64, 1, 1};
         cl_->CopyTextureRegion(&rdst, 0, 0, 0, &rsrc, &rowBox);
+        D3D12_BOX controlBox{0, kControlRow, 0, kControlTexels, kControlRow + 1, 1};
+        cl_->CopyTextureRegion(&rdst, 0, 1, 0, &rsrc, &controlBox);
         D3D12_RESOURCE_BARRIER swapStates[2] = {
             transition(state_[dst].Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE),
             transition(state_[cur].Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET)};
@@ -281,7 +293,9 @@ public:
         if (FAILED(dx_.dev->GetDeviceRemovedReason())) return false;
         uint8_t* p = nullptr;
         if (FAILED(rowBuf_[r.slot]->Map(0, nullptr, (void**)&p))) return false;
-        out.assign(p + rowFootprint_.Offset, p + rowFootprint_.Offset + 64 * 16);
+        const uint8_t* base = p + rowFootprint_.Offset;
+        out.assign(base, base + 64 * 16);
+        out.insert(out.end(), base + rowFootprint_.Footprint.RowPitch, base + rowFootprint_.Footprint.RowPitch + kControlTexels * 16);
         rowBuf_[r.slot]->Unmap(0, nullptr);
         tag = r.tag;
         return true;
@@ -427,7 +441,7 @@ private:
     }
 
     Dx dx_;
-    Pass12 passes_[4];   // CPUTick, Commit, and the GPU device's control zone if present
+    Pass12 passes_[3];   // CPUTick, Commit, and the GPU device's control zone if present
     int passCount_ = 2;
 
     // The GPU device's draw: its own pipeline (depth test, state texture visible to both stages)

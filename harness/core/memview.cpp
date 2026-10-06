@@ -61,6 +61,7 @@ float3 rgb(uint v) {
 // The guest's display (docs/display.md): control words at 0x87000000 (mode, width, height),
 // palette at 0x87000400, pixels from 0x87001000.
 static const uint DispCtrl = 0x700000, DispPalette = 0x700040, DispPixels = 0x700100;
+static const uint DispCursor = 0x700004;   // x, y, on, address of a 32x32 image
 
 float3 display(float2 p, float2 size) {
     float3 c = float3(0.035, 0.038, 0.047);
@@ -71,6 +72,16 @@ float3 display(float2 p, float2 size) {
     if (scale >= 1) scale = floor(scale);   // whole multiples keep pixels square and sharp
     float2 q = (p - (size - float2(w, h) * scale) * 0.5) / scale;
     if (q.x < 0 || q.y < 0 || q.x >= w || q.y >= h) return c;
+    uint4 cursor = ram(DispCursor);
+    if (cursor.b == 1) {
+        // drawn over whatever the display shows; image words with a zero top byte are clear
+        int2 d = int2(floor(q)) - int2(asint(cursor.r), asint(cursor.g));
+        if (d.x >= 0 && d.y >= 0 && d.x < 32 && d.y < 32) {
+            uint at = (cursor.a & 0x7fffffff) + 4 * (uint)(d.y * 32 + d.x);
+            uint v = word(ram(at >> 4), (at >> 2) & 3);
+            if ((v >> 24) != 0) return rgb(v);
+        }
+    }
     if (mode == 3) {
         // the GPU's picture; shrunk to fit, a 2x2 block of taps keeps thin lines
         if (scale >= 1) return Gpu.Load(int3(q, 0)).rgb;
@@ -178,6 +189,35 @@ Out ps(float4 pos : SV_Position) {
 
 // Keys typed into the window, as the bytes a terminal would send, until someone takes them.
 std::string g_typed;
+// The same keyboard as raw press and release events, and the pointer, for the input device.
+std::vector<uint32_t> g_keyEvents;
+int g_pointerX = 0, g_pointerY = 0;
+unsigned g_buttons = 0;
+HWND g_window = nullptr;
+
+// Windows scan code (set 1, plus the extended flag) to Linux key code. The main block of the
+// keyboard has the same numbers in both; the extended keys do not.
+unsigned linuxKey(unsigned scan, bool extended) {
+    if (!extended) return scan < 0x59 ? scan : 0;
+    switch (scan) {
+        case 0x1c: return 96;    // keypad Enter
+        case 0x1d: return 97;    // right Ctrl
+        case 0x35: return 98;    // keypad /
+        case 0x38: return 100;   // right Alt
+        case 0x47: return 102;   // Home
+        case 0x48: return 103;   // Up
+        case 0x49: return 104;   // Page Up
+        case 0x4b: return 105;   // Left
+        case 0x4d: return 106;   // Right
+        case 0x4f: return 107;   // End
+        case 0x50: return 108;   // Down
+        case 0x51: return 109;   // Page Down
+        case 0x52: return 110;   // Insert
+        case 0x53: return 111;   // Delete
+        case 0x5b: return 125;   // left Windows key
+        default: return 0;
+    }
+}
 
 LRESULT CALLBACK wndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     if (m == WM_CHAR) {
@@ -185,6 +225,19 @@ LRESULT CALLBACK wndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         if (ch == 8) g_typed += '';              // Backspace, as a Linux terminal sends it
         else if (ch < 0x80) g_typed += (char)ch;      // includes Enter (CR) and Ctrl+letter
         else g_typed += narrow(std::wstring(1, ch));
+        return 0;
+    }
+    if (m == WM_KEYDOWN || m == WM_KEYUP || m == WM_SYSKEYDOWN || m == WM_SYSKEYUP) {
+        bool down = m == WM_KEYDOWN || m == WM_SYSKEYDOWN, repeat = down && (l & (1 << 30)) != 0;
+        unsigned code = linuxKey((unsigned)(l >> 16) & 0xff, (l & (1 << 24)) != 0);
+        if (code && !repeat) g_keyEvents.push_back(code | (down ? 0x80000000u : 0));   // the guest repeats keys itself
+    }
+    if (m == WM_MOUSEMOVE || (m >= WM_LBUTTONDOWN && m <= WM_MBUTTONDBLCLK)) {
+        g_pointerX = (short)LOWORD(l);
+        g_pointerY = (short)HIWORD(l);
+        g_buttons = ((w & MK_LBUTTON) ? 1 : 0) | ((w & MK_RBUTTON) ? 2 : 0) | ((w & MK_MBUTTON) ? 4 : 0);
+        if (m == WM_LBUTTONDOWN || m == WM_RBUTTONDOWN || m == WM_MBUTTONDOWN) SetCapture(h);   // keep a drag that leaves the window
+        else if (g_buttons == 0 && m != WM_MOUSEMOVE) ReleaseCapture();
         return 0;
     }
     if (m == WM_KEYDOWN) {
@@ -217,6 +270,19 @@ std::string memoryViewTakeKeys() {
     return keys;
 }
 
+MemoryViewInput memoryViewTakeInput() {
+    MemoryViewInput in;
+    in.keys.swap(g_keyEvents);
+    RECT rc{};
+    if (!g_window || !IsWindow(g_window) || !GetClientRect(g_window, &rc) || rc.bottom <= (LONG)kBarHeight) return in;
+    in.x = (float)g_pointerX;
+    in.y = (float)g_pointerY;
+    in.buttons = g_buttons;
+    in.panelW = (float)rc.right * kMemoryViewDispW / (kMemoryViewDispW + kMemoryViewMemW);   // as the views' `split`
+    in.panelH = (float)(rc.bottom - (LONG)kBarHeight);
+    return in;
+}
+
 HWND memoryViewCreateWindow() {
     WNDCLASSW wc{};
     wc.lpfnWndProc = wndProc;
@@ -233,7 +299,7 @@ HWND memoryViewCreateWindow() {
         r.bottom = r.right * (LONG)kMemoryViewHeight / (LONG)(kMemoryViewDispW + kMemoryViewMemW) + (LONG)kBarHeight;
     }
     AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE);
-    return CreateWindowExW(0, wc.lpszClassName, L"memory", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
+    return g_window = CreateWindowExW(0, wc.lpszClassName, L"memory", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
                            r.right - r.left, r.bottom - r.top, nullptr, nullptr, wc.hInstance, nullptr);
 }
 
