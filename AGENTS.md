@@ -96,6 +96,10 @@ watch the emulated machine:
   bits 16-29): a wrong one returns ENOTTY and the program carries on drawing nothing.
 - To see what is on the guest's screen without opening a picture, print a region of the RAM
   framebuffer as characters, one per colour; that is how the terminal's problems were found.
+- `linux\prebuilt` holds the kernel and the image's programs for people without a compiler;
+  `make_linux_image.py` uses it only when `build\images\linux` has no `Image` or `root`.
+  After a rebuild worth keeping, run `python tools\make_linux_image.py --save-prebuilt` and
+  commit the result (about 7 MB each time, so not after every experiment).
 - An `--until` text must not appear in the command typed with `--input`, or the echo matches
   it: write the marker as `echo DONE-''MARK` and wait for `DONE-MARK`.
 - The harness window gets the developer's real pointer too. A test that posts pointer

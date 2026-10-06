@@ -1,4 +1,7 @@
 * text=auto eol=lf
 *.bat text eol=crlf
 *.png binary
+linux/prebuilt/Image binary
+linux/prebuilt/root/usr/bin/* binary
+linux/prebuilt/root/usr/bin/nx text eol=lf
 *.sh text eol=lf

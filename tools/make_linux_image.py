@@ -10,18 +10,29 @@ build/images/linux, which the harness's linux-net entry uses when present:
               build/images/linux/Image): upstream's OpenSBI with that kernel in place of its own
 
     python tools/make_linux_image.py
+    python tools/make_linux_image.py --save-prebuilt    # then keep this build in linux/prebuilt
+
+Our kernel and programs are taken from build/images/linux (Image, root/) when they have been
+built there, else from the copies checked in under linux/prebuilt, so the image needs no
+compiler.
 
 Needs Pillow to read upstream's PNG lanes. Files are added to the romfs in place: a new entry
 is appended to the image and linked to the end of its directory's list.
 """
-import os, struct, sys
+import os, shutil, struct, sys
 from PIL import Image
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = os.path.join(ROOT, 'rvc', '_Nix', 'rvc', 'data-net')
 OUT = os.path.join(ROOT, 'build', 'images', 'linux')
 PROGRAMS = [('glxgears', '/usr/bin')]
-EXTRA = os.path.join(OUT, 'root')   # a tree of more files for the image (linux/nanox/build.sh)
+PREBUILT = os.path.join(ROOT, 'linux', 'prebuilt')   # checked-in copies of Image and root/
+
+
+def ours(name):
+    """What the build left in OUT, or failing that the checked-in copy."""
+    built = os.path.join(OUT, name)
+    return built if os.path.exists(built) else os.path.join(PREBUILT, name)
 
 
 def read_lanes(prefix):
@@ -103,14 +114,15 @@ def add_file(data, directory, name, content):
 
 def main():
     os.makedirs(OUT, exist_ok=True)
+    extra = ours('root')   # a tree of more files for the image (linux/nanox/build.sh)
     rom = read_lanes('rootfs')
     if rom[:8] != b'-rom1fs-':
         raise SystemExit('upstream rootfs is not a romfs image')
     rom = bytearray(rom[:(be32(rom, 8) + 1023) & ~1023])
     before = len(rom)
     files = [(os.path.join(ROOT, 'programs', 'bin', name), directory, name) for name, directory in PROGRAMS]
-    for folder, _, names in os.walk(EXTRA):
-        directory = '/' + os.path.relpath(folder, EXTRA).replace(os.sep, '/')
+    for folder, _, names in os.walk(extra):
+        directory = '/' + os.path.relpath(folder, extra).replace(os.sep, '/')
         files += [(os.path.join(folder, name), directory, name) for name in sorted(names)]
     # a file in the tree replaces the one of the same name listed above
     last = {(directory, name): path for path, directory, name in files}
@@ -132,7 +144,7 @@ def main():
     print('dts.bin: RAM now ends at 0x86000000 (%d bytes)' % len(dtb))
 
     # The boot image is OpenSBI with the kernel as its payload at +4 MiB; swap the kernel.
-    kernel, payload = os.path.join(OUT, 'Image'), os.path.join(OUT, 'linux_payload.bin')
+    kernel, payload = ours('Image'), os.path.join(OUT, 'linux_payload.bin')
     if os.path.exists(kernel):
         boot = read_lanes('linux_payload')
         image = open(kernel, 'rb').read()
@@ -141,9 +153,24 @@ def main():
             raise SystemExit("expected a RISC-V kernel image at +4 MiB of upstream's payload, and in " + kernel)
         open(payload, 'wb').write(bytes(boot[:at]) + image)
         print('linux_payload.bin: OpenSBI + our kernel (%d bytes)' % (at + len(image)))
+        print('kernel from %s, programs from %s' % (os.path.relpath(kernel, ROOT), os.path.relpath(extra, ROOT)))
     elif os.path.exists(payload):
         os.remove(payload)
 
 
+def save_prebuilt():
+    """Replaces the checked-in kernel and programs with the ones built into OUT."""
+    for name in ('Image', 'root'):
+        if not os.path.exists(os.path.join(OUT, name)):
+            raise SystemExit('build/images/linux/%s is missing: build it first' % name)
+    os.makedirs(PREBUILT, exist_ok=True)
+    shutil.copyfile(os.path.join(OUT, 'Image'), os.path.join(PREBUILT, 'Image'))
+    shutil.rmtree(os.path.join(PREBUILT, 'root'), ignore_errors=True)
+    shutil.copytree(os.path.join(OUT, 'root'), os.path.join(PREBUILT, 'root'))
+    print('linux/prebuilt now holds this build')
+
+
 if __name__ == '__main__':
     main()
+    if '--save-prebuilt' in sys.argv:
+        save_prebuilt()
