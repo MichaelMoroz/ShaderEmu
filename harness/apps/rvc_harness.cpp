@@ -83,7 +83,7 @@ struct Options {
     std::string dxcOpt = "-O3", dxcSm = "6_6", dxcDir;
     bool rvcDirSet = false, payloadSet = false;
     std::string image;        // --image: a named boot image from kImages
-    int paging = -1;          // --paging: 1 on, 0 off (NO_PAGING build), -1 = what the image needs
+    int machine = -1;         // --machine: 0 full, 1 no paging, 2 machine mode only, -1 = most the image allows
     std::vector<std::string> defines;
     GpuOptions gpu;
     UINT fxcFlags = D3DCOMPILE_ENABLE_BACKWARDS_COMPATIBILITY | D3DCOMPILE_OPTIMIZATION_LEVEL3;
@@ -125,10 +125,11 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
   --image NAME         boot a named image instead of --payload/--ram/--mtd/--dtb; --image list shows them.
                        Without it (and without --payload, --ram or --load-state) a menu asks at start
                        when run from a console; scripts with redirected input or --no-stdin get linux-net.
-  --paging on|off|auto the machine's MMU. off compiles the shader with NO_PAGING (satp hardwired to 0,
-                       no translation or TLBs: faster, but Linux cannot run). auto (default) turns it
-                       off for the bare-metal images and leaves it on otherwise. Needs a shader with
-                       NO_PAGING support (experiments/rvc_opt).
+  --machine M          how much machine the shader is compiled with (experiments/rvc_opt only):
+                         full      everything; needed for Linux
+                         nopaging  NO_PAGING: satp hardwired to 0, no translation or TLBs
+                         mmode     M_MODE_ONLY: also no supervisor/user mode or trap delegation
+                         auto      (default) the smallest one the chosen image runs on
   --dxc / --d3d11      backend: D3D12 with DXC-compiled DXIL, or D3D11 with FXC bytecode (what VRChat
                        runs). rvc_harness_dxc.exe defaults to --dxc. DXC implies NO_DOUBLES and, unless
                        --rvc is given, the experiments/rvc_opt shader (upstream does not compile with DXC).
@@ -188,10 +189,13 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--rvc") { o.rvcDir = next("--rvc"); o.rvcDirSet = true; }
         else if (a == "--payload") { o.payloadDir = next("--payload"); o.payloadSet = true; }
         else if (a == "--image") o.image = next("--image");
-        else if (a == "--paging") {
-            std::string v = next("--paging");
-            if (v != "on" && v != "off" && v != "auto") { fprintf(stderr, "--paging takes on, off or auto\n"); return false; }
-            o.paging = v == "on" ? 1 : v == "off" ? 0 : -1;
+        else if (a == "--machine") {
+            std::string v = next("--machine");
+            const char* names[4] = {"auto", "full", "nopaging", "mmode"};
+            int k = 0;
+            while (k < 4 && v != names[k]) ++k;
+            if (k == 4) { fprintf(stderr, "--machine takes auto, full, nopaging or mmode\n"); return false; }
+            o.machine = k - 1;
         }
         else if (a == "--dxc") o.dxc = true;
         else if (a == "--d3d11") o.dxc = false;
@@ -335,16 +339,17 @@ struct BootImage {
     const char* ram;
     const char* mtd;
     const char* dtb;
-    bool needsPaging;
+    int machine;   // the smallest machine it runs on: 0 full, 1 no paging, 2 machine mode only
 };
 const BootImage kImages[] = {
-    {"linux-net", "Linux, networking kernel with a romfs root (boots to a shell)", "data-net", "linux_payload", "rootfs", "dts", true},
-    {"linux", "Linux, kernel with built-in initramfs", "data", "linux_payload", "none", "dts", true},
-    {"micropython", "MicroPython on OpenSBI (bare metal REPL)", "data", "mprv_payload", "none", "dts", false},
-    {"rust", "Rust test payload on OpenSBI (bare metal)", "data", "rust_payload", "none", "dts", false},
-    {"raytrace", "Raytracer drawing to the display (bare metal C)", nullptr, "raytrace", "none", "none", false},
-    {"rvc-raytrace", "rvc's Rust raytracer, drawing into raw memory", "data", "rust_raytrace", "none", "dts", false},
-    {"bare", "C bare-metal test (no firmware)", "data", "bare", "none", "dts", false},
+    {"linux-net", "Linux, networking kernel with a romfs root (boots to a shell)", "data-net", "linux_payload", "rootfs", "dts", 0},
+    {"linux", "Linux, kernel with built-in initramfs", "data", "linux_payload", "none", "dts", 0},
+    {"micropython", "MicroPython on OpenSBI (bare metal REPL)", "data", "mprv_payload", "none", "dts", 1},
+    {"rust", "Rust test payload on OpenSBI (bare metal)", "data", "rust_payload", "none", "dts", 1},
+    {"raycast", "Raycaster: walk a textured maze on the display (bare metal C)", nullptr, "raycast", "none", "none", 2},
+    {"raytrace", "Raytracer drawing to the display (bare metal C)", nullptr, "raytrace", "none", "none", 2},
+    {"rvc-raytrace", "rvc's Rust raytracer, drawing into raw memory", "data", "rust_raytrace", "none", "dts", 1},
+    {"bare", "C bare-metal test (no firmware)", "data", "bare", "none", "dts", 1},
 };
 
 // dir = nullptr: one of our programs.
@@ -379,17 +384,19 @@ bool chooseImage(Options& o, bool canResume) {
     fprintf(stderr, "\n  rvc: a RISC-V machine in a pixel shader    [%s]\n\n  Boot which image?\n\n",
             o.dxc ? "D3D12 + DXC" : "D3D11 + FXC");
     for (size_t i = 0; i < list.size(); ++i)
-        fprintf(stderr, "    %zu  %-13s %s%s\n", i + 1, list[i]->name, list[i]->title, list[i]->needsPaging ? "  [needs MMU]" : "");
+        fprintf(stderr, "    %zu  %-13s %s%s\n", i + 1, list[i]->name, list[i]->title,
+                list[i]->machine == 0 ? "  [full machine]" : list[i]->machine == 1 ? "  [no paging]" : "  [machine mode only]");
     if (canResume) fprintf(stderr, "    r  %-13s %s\n", "resume", "Linux at the shell prompt, from the saved snapshot");
-    const char* kPaging[3] = {"auto: off unless the image needs it", "off (fastest; Linux will not boot)", "on"};
-    fprintf(stderr, "\n    m  MMU / paging: %s\n", kPaging[o.paging + 1]);
+    const char* kMachine[4] = {"auto: the smallest the image runs on (shown in brackets)", "full",
+                               "no paging (Linux will not boot)", "machine mode only (OpenSBI images will not boot)"};
+    fprintf(stderr, "\n    m  machine: %s\n", kMachine[o.machine + 1]);
     fprintf(stderr, "\n  Press a key (Enter = 1, Esc = quit): ");
     for (;;) {
         int c = _getch();
         if (c == 0 || c == 0xE0) { _getch(); continue; }  // function and arrow keys come as two codes
         if (c == 'm' || c == 'M') {
-            o.paging = o.paging == -1 ? 0 : o.paging == 0 ? 1 : -1;
-            fprintf(stderr, "\n    m  MMU / paging: %s\n\n  Press a key (Enter = 1, Esc = quit): ", kPaging[o.paging + 1]);
+            o.machine = o.machine == 2 ? -1 : o.machine + 1;
+            fprintf(stderr, "\n    m  machine: %s\n\n  Press a key (Enter = 1, Esc = quit): ", kMachine[o.machine + 1]);
             continue;
         }
         if (c == 27 || c == 3 || c == kQuitKey) { fprintf(stderr, "\n"); return false; }
@@ -453,15 +460,15 @@ int main(int argc, char** argv) {
         }
         applyImage(opt, *im);
     }
-    // Paging stays on unless a named image is known not to need it, or the user said so.
-    if (opt.paging < 0) {
+    // The full machine unless a named image is known to need less, or the user said so.
+    if (opt.machine < 0) {
         const BootImage* im = opt.loadState.empty() ? findImage(opt.image) : nullptr;
-        opt.paging = im && !im->needsPaging && opt.rvcDir == "experiments/rvc_opt" ? 0 : 1;
+        opt.machine = im && opt.rvcDir == "experiments/rvc_opt" ? im->machine : 0;
     }
-    if (!opt.paging) {
-        opt.defines.push_back("NO_PAGING");
-        fprintf(stderr, "[harness] machine without paging (NO_PAGING): Linux will not run\n");
-    }
+    if (opt.machine == 1) opt.defines.push_back("NO_PAGING");
+    if (opt.machine == 2) opt.defines.push_back("M_MODE_ONLY");
+    if (opt.machine > 0)
+        fprintf(stderr, "[harness] machine: %s\n", opt.machine == 1 ? "no paging (NO_PAGING)" : "machine mode only (M_MODE_ONLY)");
     // Payloads live with upstream rvc; a patched shader folder usually has none of its own.
     if (opt.payloadDir.empty()) {
         opt.payloadDir = (fs::u8path(opt.rvcDir) / "data-net").u8string();
