@@ -1,8 +1,9 @@
 Shader "ShaderEmu/Machine"
 {
-    // The machine: experiments/rvc_opt/main.shader's two passes plus the GPU device's control
-    // pass, drawn by EmuMachine.cs with VRCGraphics.Blit between two state textures. CPUTick
-    // draws into a 64x64 texture (_TickState) which Commit reads the CPU's state from.
+    // The machine's Commit pass (experiments/rvc_opt/main.shader's) and the GPU device's control
+    // pass, drawn by EmuMachine.cs with VRCGraphics.Blit between two state textures. The CPUTick
+    // pass is MachineTick.shader: a file of its own, so that nothing changed here or in the GPU's
+    // sources makes Unity compile it again (four minutes).
     // A material's numbers are floats, exact to 24 bits, so 32-bit values arrive as two halves.
     Properties
     {
@@ -51,6 +52,7 @@ Shader "ShaderEmu/Machine"
         _InputKeyCode3 ("Key event 3", Int) = 0
         _HostMsLo ("Host clock in ms, low half", Int) = 0
         _HostMsHi ("Host clock in ms, high half", Int) = 0
+        _HostFlags ("Host flags (1: the guest starts its desktop at boot)", Int) = 1
     }
     SubShader
     {
@@ -59,111 +61,6 @@ Shader "ShaderEmu/Machine"
         ZTest Off
         Lighting Off
         Blend One Zero
-
-        Pass
-        {
-            Name "CPUTick"
-
-            CGPROGRAM
-            #pragma target 5.0
-            #pragma vertex blit_vert
-            #pragma fragment frag
-            #pragma editor_sync_compilation
-            // One permutation only: the full machine, started in the kernel with no firmware
-            // (docs/boot.md). Images that need machine-mode start-up do not boot on it.
-            #define SBI_HLE
-
-            #define PASS_TICK
-
-            #include "UnityCG.cginc"
-            #include "MachineBlit.cginc"
-
-            uniform uint _Init, _InitRaw;
-            uniform uint _Ticks;
-            uniform uint _UartInLo, _UartInHi, _UdonUARTInTag;
-            uniform uint _PlayerID;
-            uniform uint _Rtc0Lo, _Rtc0Hi, _Rtc1Lo, _Rtc1Hi;
-            uniform uint _DoTick;
-            static uint _UdonUARTInChar, _RTC0, _RTC1;
-
-            Texture2D<float4> _Data_DTB_R;
-            Texture2D<float4> _Data_DTB_G;
-            Texture2D<float4> _Data_DTB_B;
-            Texture2D<float4> _Data_DTB_A;
-
-            Texture2D<float4> _Data_MTD_R;
-            Texture2D<float4> _Data_MTD_G;
-            Texture2D<float4> _Data_MTD_B;
-            Texture2D<float4> _Data_MTD_A;
-
-            static uint hart = 0;
-            static uint2 hart_offset = uint2(0, 0);
-
-            #define STATE_TEX_HART(pos, hartidx) (_SelfTexture2D[uint2(pos) + uint2(hartidx % 2, hartidx / 2)])
-            #define STATE_TEX(pos) (_SelfTexture2D[pos])
-
-            static uint2 s_dim;
-            static uint2 m_dim;
-
-            #include "helpers.cginc"
-            #include "src/prof.cginc"
-
-            #include "src/types.cginc"
-            #include "src/ins.cginc"
-            #include "src/uart.cginc"
-            #include "src/emu.cginc" // includes mmu.h, csr.h, mem.h, trap.h
-            #include "src/cpu.cginc"
-
-            uint4 frag(blit_v2f i) : SV_Target {
-                _SelfTexture2D.GetDimensions(s_dim.x, s_dim.y);
-                _Data_MTD_R.GetDimensions(m_dim.x, m_dim.y);
-
-                uint2 pos = (uint2)i.vertex.xy;
-
-                _UdonUARTInChar = _UartInLo | (_UartInHi << 16);
-                _RTC0 = _Rtc0Lo | (_Rtc0Hi << 16);
-                _RTC1 = _Rtc1Lo | (_Rtc1Hi << 16);
-                uint ticks = max(_Ticks, 2);
-
-                if (_Init) {
-                    if (_InitRaw) {
-                        return _SelfTexture2D[pos];
-                    } else {
-                        cpu = cpu_init();
-                    }
-                } else {
-                    if (!pixel_has_state(pos)) {
-                        return STATE_TEX(pos);
-                    }
-
-                    decode();
-                    time_prepare();
-                    xreg_load();
-#ifndef NO_PAGING
-                    tlb_state_load();
-#endif
-
-                    uint i = 0;
-                    [loop]
-                    while (i < ticks && !cpu.stall) {
-                        // as many fast ticks in a row as possible, then one general tick
-                        i += fast_run(ticks - i);
-                        if (i < ticks && !cpu.stall) {
-                            cpu_tick_l1(L1A0);
-                            i++;
-                        }
-                    }
-                    xreg_store();
-                }
-
-#ifndef NO_PAGING
-                uint4 tlb_texel;
-                if (!_Init && tlb_state_texel(pos, tlb_texel)) return tlb_texel;
-#endif
-                return encode(pos);
-            }
-            ENDCG
-        }
 
         Pass
         {
@@ -249,6 +146,7 @@ Shader "ShaderEmu/Machine"
             uniform uint _InputButtons, _InputKeySeq, _InputKeyCount;
             uniform uint _InputKeyCode0, _InputKeyCode1, _InputKeyCode2, _InputKeyCode3;
             uniform uint _HostMsLo, _HostMsHi;
+            uniform uint _HostFlags;   // bit 0: the guest should start its desktop when it boots
             static uint _InputKey0, _InputKey1, _InputKey2, _InputKey3, _HostMs;
             // The GPU's camera draws all eight passes every frame.
             #define _GpuPasses 0xffu

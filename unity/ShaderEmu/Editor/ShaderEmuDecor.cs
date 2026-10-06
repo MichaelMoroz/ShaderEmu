@@ -415,6 +415,8 @@ public static partial class ShaderEmuBuilder
         RBox(chair, "Chair seat", new Vector3(0, 0.48f, 0), new Vector3(0.46f, 0.08f, 0.46f), sofaMat, 0.035f);
         RBox(chair, "Chair back", new Vector3(0, 0.82f, -0.21f), new Vector3(0.44f, 0.5f, 0.07f), sofaMat, 0.03f);
 
+        About(decor, halfW, plasticMat);
+
         // ---- light for whatever moves: probes through the room, and one reflection of it
         List<Vector3> probes = new List<Vector3>();
         for (float x = -halfW + 0.5f; x <= halfW - 0.4f; x += 1.7f)
@@ -441,6 +443,77 @@ public static partial class ShaderEmuBuilder
             Light sun = go.GetComponent<Light>();
             if (sun != null) sun.gameObject.SetActive(false);
         }
+    }
+
+    // A board on the left wall for visitors: what this is, what to do with it, and whose work it
+    // stands on. Text only, so nothing on it takes the laser.
+    static void About(Transform decor, float halfW, Material frameMat)
+    {
+        const float wide = 2.3f, high = 1.7f, centreZ = -0.2f, centreY = 1.72f;
+        Box(decor, "About frame", new Vector3(-halfW + 0.015f, centreY, centreZ), new Vector3(0.03f, high + 0.08f, wide + 0.08f), frameMat, false);
+        RectTransform board = Panel(decor, "About", new Vector3(-halfW + 0.034f, centreY, centreZ), new Vector3(0, -90f, 0),
+                                    wide * 1000, high * 1000, new Color(0.05f, 0.055f, 0.07f));
+        Object.DestroyImmediate(board.GetComponent<VRC.SDK3.Components.VRCUiShape>());
+        Object.DestroyImmediate(board.GetComponent<BoxCollider>());
+        Object.DestroyImmediate(board.GetComponent<UnityEngine.UI.GraphicRaycaster>());
+        Color head = new Color(0.98f, 0.75f, 0.2f), body = new Color(0.86f, 0.88f, 0.92f), dim = new Color(0.6f, 0.63f, 0.7f);
+        const float left = 60, columnWide = 1040, right = 1200, rightWide = 1040;
+
+        Label(board, "Title", "A whole computer in a pixel shader", left, 40, 2180, 80, 60, TextAnchor.MiddleLeft, Color.white);
+
+        Label(board, "What head", "WHAT IS RUNNING HERE", left, 150, columnWide, 44, 36, TextAnchor.MiddleLeft, head);
+        Label(board, "What",
+              "The screens on the front wall are a real computer: a 32-bit RISC-V processor, its memory " +
+              "and its disk, all kept in textures. A shader on your graphics card runs tens of thousands of its " +
+              "instructions every frame, a few million a second. It boots an ordinary Linux kernel and a small " +
+              "desktop.\n\n" +
+              "Nothing is streamed or simulated elsewhere. Every player's own graphics card runs a machine of " +
+              "its own, so what you do here only you see.",
+              left, 200, columnWide, 400, 33, TextAnchor.UpperLeft, body);
+
+        Label(board, "Do head", "WHAT YOU CAN DO", left, 620, columnWide, 44, 36, TextAnchor.MiddleLeft, head);
+        Label(board, "Do",
+              "Press Power on the control panel. Linux boots in a few seconds and starts the desktop.\n\n" +
+              "DISPLAY: point at it and your laser is the mouse (trigger = left button, grip = right).\n" +
+              "Keyboards on the desk: type on them, or press 'Use my keyboard' to use your real one.\n" +
+              "Start menu: Terminal, Editor, Files, Paint, Settings (pick a desktop picture), Monitor, " +
+              "Doom, glxgears and a few small games.\n" +
+              "CONSOLE: the machine's serial line, a Linux shell of its own.\n" +
+              "MEMORY: all of the machine's memory at once; what is being written glows.\n" +
+              "Speed: how many instructions the machine runs each frame.",
+              left, 670, columnWide, 560, 33, TextAnchor.UpperLeft, body);
+
+        Label(board, "How head", "WHY IT IS USABLE AT ALL", left, 1250, columnWide, 44, 36, TextAnchor.MiddleLeft, head);
+        Label(board, "How",
+              "The processor is slow and strictly one step at a time. So everything that touches many pixels or " +
+              "bytes is handed to hardware of the machine's own, which is more shader passes: drawing, windows, " +
+              "text, 3D, pictures, copies of memory. Doom's walls are drawn by the machine's GPU, not its CPU.",
+              left, 1300, columnWide, 340, 33, TextAnchor.UpperLeft, body);
+
+        Label(board, "Credits head", "BUILT ON THE WORK OF", right, 150, rightWide, 44, 36, TextAnchor.MiddleLeft, head);
+        Label(board, "Credits",
+              "rvc by pimaker: the RISC-V emulator in a shader this grew from, and its Linux port (linux-rvc, " +
+              "kernel 5.17)\n" +
+              "Linux, by Linus Torvalds and its many contributors\n" +
+              "OpenSBI, in the boot image\n" +
+              "musl libc, by Rich Felker and contributors\n" +
+              "BusyBox: the shell and the command line tools\n" +
+              "GCC, binutils, LLVM's clang and compiler-rt: the compilers and their runtime\n" +
+              "Microwindows / Nano-X by Greg Haerr and contributors: the window system, its terminal, " +
+              "calculator and games, and its port of Doom\n" +
+              "DOOM by id Software: the source release, and the shareware episode's data\n" +
+              "glxgears by Brian Paul, from the Mesa demos\n" +
+              "Desktop photographs from Unsplash, and somebody's cats\n" +
+              "Cascadia Mono by Microsoft: the console's font\n" +
+              "VRChat's Worlds SDK, UdonSharp by Merlin, TextMesh Pro and Unity: this room",
+              right, 200, rightWide, 1100, 33, TextAnchor.UpperLeft, body);
+
+        Label(board, "Project head", "THE PROJECT", right, 1250, rightWide, 44, 36, TextAnchor.MiddleLeft, head);
+        Label(board, "Project",
+              "ShaderEmu by Michael Moroz. Sources, the desktop harness and documentation:\n" +
+              "github.com/MichaelMoroz/ShaderEmu (MIT licence)",
+              right, 1300, rightWide, 200, 33, TextAnchor.UpperLeft, body);
+        Label(board, "Note", "Each of the projects above keeps its own licence.", right, 1560, rightWide, 60, 24, TextAnchor.MiddleLeft, dim);
     }
 
     [MenuItem("ShaderEmu/Bake lighting")]

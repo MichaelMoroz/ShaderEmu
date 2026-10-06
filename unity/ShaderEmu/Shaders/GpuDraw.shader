@@ -1,7 +1,7 @@
 Shader "ShaderEmu/GpuDraw"
 {
-    // The machine's GPU (docs/gpu.md): a mesh that carries only vertex numbers, drawn by a camera
-    // of its own into the GPU's colour and depth target. One pass per GPU pass, in order.
+    // The machine's GPU (docs/gpu.md): a mesh of points, one per triangle, drawn by a camera of
+    // its own into the GPU's colour and depth target. One pass per GPU pass, in order.
     Properties
     {
         _State ("Machine state texture", 2D) = "black" {}
@@ -25,6 +25,7 @@ Shader "ShaderEmu/GpuDraw"
             CGPROGRAM
             #pragma target 5.0
             #pragma vertex vert
+            #pragma geometry geom
             #pragma fragment frag
             #define _GpuPass 0
             #include "GpuDrawPass.cginc"
@@ -39,6 +40,7 @@ Shader "ShaderEmu/GpuDraw"
             CGPROGRAM
             #pragma target 5.0
             #pragma vertex vert
+            #pragma geometry geom
             #pragma fragment frag
             #define _GpuPass 1
             #include "GpuDrawPass.cginc"
@@ -53,6 +55,7 @@ Shader "ShaderEmu/GpuDraw"
             CGPROGRAM
             #pragma target 5.0
             #pragma vertex vert
+            #pragma geometry geom
             #pragma fragment frag
             #define _GpuPass 2
             #include "GpuDrawPass.cginc"
@@ -67,6 +70,7 @@ Shader "ShaderEmu/GpuDraw"
             CGPROGRAM
             #pragma target 5.0
             #pragma vertex vert
+            #pragma geometry geom
             #pragma fragment frag
             #define _GpuPass 3
             #include "GpuDrawPass.cginc"
@@ -81,6 +85,7 @@ Shader "ShaderEmu/GpuDraw"
             CGPROGRAM
             #pragma target 5.0
             #pragma vertex vert
+            #pragma geometry geom
             #pragma fragment frag
             #define _GpuPass 4
             #include "GpuDrawPass.cginc"
@@ -95,6 +100,7 @@ Shader "ShaderEmu/GpuDraw"
             CGPROGRAM
             #pragma target 5.0
             #pragma vertex vert
+            #pragma geometry geom
             #pragma fragment frag
             #define _GpuPass 5
             #include "GpuDrawPass.cginc"
@@ -109,6 +115,7 @@ Shader "ShaderEmu/GpuDraw"
             CGPROGRAM
             #pragma target 5.0
             #pragma vertex vert
+            #pragma geometry geom
             #pragma fragment frag
             #define _GpuPass 6
             #include "GpuDrawPass.cginc"
@@ -123,6 +130,7 @@ Shader "ShaderEmu/GpuDraw"
             CGPROGRAM
             #pragma target 5.0
             #pragma vertex vert
+            #pragma geometry geom
             #pragma fragment frag
             #define _GpuPass 7
             #include "GpuDrawPass.cginc"

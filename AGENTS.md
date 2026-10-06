@@ -4,9 +4,11 @@ Rules for anyone (human or agent) running the emulator harness in this repo.
 
 ## Direction
 
-Speed first. In order: a bare-metal machine with no MMU (no translation, TLBs or state for
-them), Doom on it, then an emulated GPU with its own driver so drawing runs in parallel shader
-passes instead of on the serial emulated CPU. x86 is dropped (`docs/original-x86-plan.md`).
+Speed first, and by one rule: accelerate everything that can be accelerated. The emulated CPU
+is serial and slow; whatever touches many bytes or pixels goes to a device that runs in shader
+passes of its own (the GPU, window composition, parallel copies, pictures sampled from the
+ROM). The machine boots Linux to a desktop and runs Doom on its GPU; the VRChat world
+(`unity/ShaderEmu`) is the target. x86 is dropped (`docs/original-x86-plan.md`).
 
 ## Show the live console whenever the emulator runs
 
@@ -316,13 +318,21 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   it is 2.7M to 2.9M and glxgears 250 to 340.
 - One shader permutation only: full machine with `SBI_HLE` (our Linux image). The CPUTick pass
   takes about four minutes to compile in Unity, with the editor frozen (`editor_sync_compilation`).
+- `_HostFlags` on the machine's material is 1 there: the guest starts its desktop at boot.
 - Unity's shader preprocessor splits macro arguments at commas inside braces and does not
   process `#ifdef` inside a macro argument. FXC and DXC accept both; write neither in `DEF()`.
 - A material's `Int` is a float: 32-bit values go in as two 16-bit halves (`_UartInLo/Hi`,
   `_HostMsLo/Hi`, the RTC words) and Machine.shader puts them together.
-- The GPU mesh's vertex shader writes clip positions itself: flip z for Unity's reversed depth,
-  and collapse everything unless the camera is the GPU's (orthographic, 2048x2048 target), or
-  every other camera draws the guest's picture over the room.
+- The GPU there is a mesh of 65,536 points, one per triangle, and a geometry shader
+  (`GpuDrawPass.cginc`): it finds the command once per triangle (`gpu_command` in `gpu.h`) and
+  emits nothing for a triangle no command claims whole. Its target is 1280x720 (`GPU_TARGET_W`,
+  `GPU_TARGET_H`; the harness keeps 2048x2048), so the guest's picture is 720p at most.
+- That shader writes clip positions itself: flip z for Unity's reversed depth, and emit nothing
+  unless the camera is the GPU's (orthographic, a target of that size), or every other camera
+  draws the guest's picture over the room.
+- CPUTick is a shader file of its own (`MachineTick.shader`, its own material): Unity compiles
+  a whole shader again when any file it includes changes, and the tick takes four minutes.
+  "Sync shader sources" writes only the files that changed, for the same reason.
 - To test in the editor: enter play mode (ClientSim), then read Udon's variables with
   `UdonBehaviour.GetProgramVariable` (the C# proxy's fields are not the running values) and type
   by writing into `EmuKeyboard`'s `queue` and `tail`.
@@ -332,3 +342,9 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
 - Labels are TextMeshPro and UI images use VRChat's super-sampled UI material, which is what
   the SDK's build panel asks for. Two same-facing faces in one plane flicker: after adding
   props, compare renderer bounds pairwise for coincident faces that overlap.
+- The board on the left wall (`About()` in `ShaderEmuDecor.cs`) tells visitors what the machine
+  is, what they can do and whose work it uses. When the image gains a program or the project a
+  dependency, add it there and to the README's "Built on"; then "Build world" and bake.
+- After `make_linux_image.py`, run "Import boot images" in Unity: the world boots the copy in
+  `Assets/ShaderEmu/Images`, not the files in `build`. To check it, decode the four PNGs of a
+  part (texel 0 is the top row) and compare with the `.bin` byte for byte.

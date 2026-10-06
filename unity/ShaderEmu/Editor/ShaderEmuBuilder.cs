@@ -212,6 +212,12 @@ public static partial class ShaderEmuBuilder
     {
         RenderTexture rt = LoadOrCreate(Generated + "/" + name + ".renderTexture",
             () => new RenderTexture(width, height, depth, RenderTextureFormat.ARGB32, RenderTextureReadWrite.Linear));
+        if (rt.width != width || rt.height != height)
+        {
+            rt.Release();
+            rt.width = width;
+            rt.height = height;
+        }
         rt.antiAliasing = 1;
         rt.filterMode = FilterMode.Point;
         rt.wrapMode = TextureWrapMode.Clamp;
@@ -221,15 +227,16 @@ public static partial class ShaderEmuBuilder
 
     static Mesh GpuMesh()
     {
-        // Nothing but vertex numbers: the vertex shader places every vertex from the guest's list.
-        return LoadOrCreate(Generated + "/GpuMesh.asset", () =>
+        // One point per triangle the GPU can draw. A point carries nothing but its number:
+        // the geometry shader makes the triangle from the guest's list.
+        AssetDatabase.DeleteAsset(Generated + "/GpuMesh.asset");
+        return LoadOrCreate(Generated + "/GpuPoints.asset", () =>
         {
-            int count = GpuTriangles * 3;
-            int[] indices = new int[count];
-            for (int i = 0; i < count; i++) indices[i] = i;
-            Mesh mesh = new Mesh { name = "GpuMesh", indexFormat = UnityEngine.Rendering.IndexFormat.UInt32 };
-            mesh.vertices = new Vector3[count];
-            mesh.SetIndices(indices, MeshTopology.Triangles, 0, false);
+            int[] indices = new int[GpuTriangles];
+            for (int i = 0; i < GpuTriangles; i++) indices[i] = i;
+            Mesh mesh = new Mesh { name = "GpuPoints", indexFormat = UnityEngine.Rendering.IndexFormat.UInt32 };
+            mesh.vertices = new Vector3[GpuTriangles];
+            mesh.SetIndices(indices, MeshTopology.Points, 0, false);
             mesh.bounds = new Bounds(Vector3.zero, Vector3.one);
             return mesh;
         });
@@ -458,6 +465,7 @@ public static partial class ShaderEmuBuilder
 
         // ---- what the machine runs on
         Material machineMat = Mat("Machine", "ShaderEmu/Machine");
+        Material tickMat = Mat("MachineTick", "ShaderEmu/MachineTick");
         Material gpuMat = Mat("GpuDraw", "ShaderEmu/GpuDraw");
         Material displayMat = Mat("Display", "ShaderEmu/Display");
         Material heatMat = Mat("MemHeat", "ShaderEmu/MemHeat");
@@ -469,7 +477,7 @@ public static partial class ShaderEmuBuilder
         RenderTexture stateB = StateTexture("StateB", 2048, 4096);
         RenderTexture tickState = StateTexture("TickState", 64, 64);
         AssetDatabase.DeleteAsset(Generated + "/MachineState.asset");
-        RenderTexture gpuTarget = Target("GpuTarget", 2048, 2048, 32);
+        RenderTexture gpuTarget = Target("GpuTarget", 1280, 720, 32);   // the picture is 720p at most
         RenderTexture readback = Target("Readback", 320, 1, 0);
         CustomRenderTexture heat = LoadOrCreate(Generated + "/MemHeat.asset",
             () => new CustomRenderTexture(1024, 512, RenderTextureFormat.ARGBFloat, RenderTextureReadWrite.Linear));
@@ -650,6 +658,7 @@ public static partial class ShaderEmuBuilder
         machine.stateA = state;
         machine.stateB = stateB;
         machine.tickState = tickState;
+        machine.tickMaterial = tickMat;
         machine.machineMaterial = machineMat;
         machine.gpuMaterial = gpuMat;
         machine.gpuCamera = camera;

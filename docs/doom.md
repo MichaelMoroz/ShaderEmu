@@ -7,8 +7,9 @@ image with the GPU drawing its picture.
     wsl -- bash /mnt/c/Development/ShaderX86/linux/nanox/doom.sh
     python tools\make_linux_image.py                                  (then a new shell snapshot)
 
-In the guest: `nano-X & doom` (or start it from a terminal under `nx`). `-timedemo demo1`
-plays the first demo as fast as it goes; the frame rate is printed every five seconds.
+In the guest: start it from the desktop's Start menu or a terminal, or `nano-X -p & doom` at
+the console. `-timedemo demo1` plays the first demo as fast as it goes, `-warp 1 1` starts in
+the first level; the frame rate is printed every five seconds.
 The shareware `doom1.wad` is fetched by the build and is not kept in this repository.
 
 | How the picture is made | Frames/s, `-timedemo demo1`, RTX 5090 with DXC |
@@ -16,6 +17,12 @@ The shareware `doom1.wad` is fetched by the build and is not kept in this reposi
 | `DOOM_SOFTWARE=1`: the port as it comes. Doom fills its 8-bit screen, converts it to 32-bit colour, sends it to the server, which blits it | 0.9 |
 | `DOOM_RENDER=soft`: Doom fills the screen; the screen is a texture and the GPU shows it through the palette | 3.7 |
 | default: the GPU also draws the 3D view | 12 to 22 |
+
+Played in real time, standing at the start of the first level: 31 frames/s with DXC and 23 with
+FXC. Doom runs its 35 game tics a second whatever the frame rate, and they take about 0.9
+million instructions a second, so the frame rate falls faster than the machine's speed does.
+The table above is from before the port's fixed-point division stopped going through software
+floating point and before the status bar and the event polling were made cheaper.
 
 ## What the build changes
 

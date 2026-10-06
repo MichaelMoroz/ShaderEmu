@@ -18,7 +18,8 @@ public class EmuMachine : UdonSharpBehaviour
 {
     public RenderTexture stateA, stateB;    // 2048 x 4096, four 32-bit words a texel
     public RenderTexture tickState;         // 64 x 64: the CPU's state area after a tick
-    public Material machineMaterial;        // Machine.shader: passes CPUTick, Commit, GPUControl
+    public Material tickMaterial;           // MachineTick.shader: CPUTick
+    public Material machineMaterial;        // Machine.shader: passes Commit and GPUControl
     public Material gpuMaterial;            // the GPU mesh's material
     public Camera gpuCamera;                // disabled: rendered from here, once a round
     public Material displayMaterial;
@@ -50,7 +51,7 @@ public class EmuMachine : UdonSharpBehaviour
     private const int InitFrames = 2;
     private const int TicksPerRound = 8192;   // more per tick pass only fills the write cache
     private const int MaxRounds = 32;
-    private const int PassTick = 0, PassCommit = 1, PassControl = 2;
+    private const int PassCommit = 0, PassControl = 1;
 
     private bool powered, paused;
     private int budget = 32768;        // instructions a frame
@@ -123,7 +124,7 @@ public class EmuMachine : UdonSharpBehaviour
         budget = instructionsPerFrame;
         ticks = Mathf.Min(budget, TicksPerRound);
         rounds = Mathf.Clamp(budget / TicksPerRound, 1, MaxRounds);
-        machineMaterial.SetInt("_Ticks", ticks);
+        tickMaterial.SetInt("_Ticks", ticks);
     }
 
     private void ShowLabels()
@@ -147,13 +148,17 @@ public class EmuMachine : UdonSharpBehaviour
         machineMaterial.SetTexture("_Data_RAM_B", Pick(2));
         machineMaterial.SetTexture("_Data_RAM_A", Pick(3));
         machineMaterial.SetTexture("_Data_MTD_R", Pick(4));
+        tickMaterial.SetTexture("_Data_MTD_R", Pick(4));
         machineMaterial.SetTexture("_Data_MTD_G", Pick(5));
+        tickMaterial.SetTexture("_Data_MTD_G", Pick(5));
         machineMaterial.SetTexture("_Data_MTD_B", Pick(6));
+        tickMaterial.SetTexture("_Data_MTD_B", Pick(6));
         machineMaterial.SetTexture("_Data_MTD_A", Pick(7));
-        machineMaterial.SetTexture("_Data_DTB_R", Pick(8));
-        machineMaterial.SetTexture("_Data_DTB_G", Pick(9));
-        machineMaterial.SetTexture("_Data_DTB_B", Pick(10));
-        machineMaterial.SetTexture("_Data_DTB_A", Pick(11));
+        tickMaterial.SetTexture("_Data_MTD_A", Pick(7));
+        tickMaterial.SetTexture("_Data_DTB_R", Pick(8));
+        tickMaterial.SetTexture("_Data_DTB_G", Pick(9));
+        tickMaterial.SetTexture("_Data_DTB_B", Pick(10));
+        tickMaterial.SetTexture("_Data_DTB_A", Pick(11));
         gpuMaterial.SetTexture("_Data_MTD_R", Pick(4));
         gpuMaterial.SetTexture("_Data_MTD_G", Pick(5));
         gpuMaterial.SetTexture("_Data_MTD_B", Pick(6));
@@ -177,15 +182,17 @@ public class EmuMachine : UdonSharpBehaviour
         displayHeight = 0;
         machineMaterial.SetTexture("_TickState", tickState);
         machineMaterial.SetInt("_Init", 1);
+        tickMaterial.SetInt("_Init", 1);
         machineMaterial.SetInt("_InitRaw", 0);
-        machineMaterial.SetInt("_DoTick", 0);
-        machineMaterial.SetInt("_Ticks", ticks);
-        machineMaterial.SetInt("_UartInLo", 0);
-        machineMaterial.SetInt("_UartInHi", 0);
-        machineMaterial.SetInt("_UdonUARTInTag", 0);
+        tickMaterial.SetInt("_InitRaw", 0);
+        tickMaterial.SetInt("_DoTick", 0);
+        tickMaterial.SetInt("_Ticks", ticks);
+        tickMaterial.SetInt("_UartInLo", 0);
+        tickMaterial.SetInt("_UartInHi", 0);
+        tickMaterial.SetInt("_UdonUARTInTag", 0);
         machineMaterial.SetInt("_InputKeyCount", 0);
         VRCPlayerApi player = Networking.LocalPlayer;
-        machineMaterial.SetInt("_PlayerID", player != null ? player.playerId : 0);
+        tickMaterial.SetInt("_PlayerID", player != null ? player.playerId : 0);
         if (consoleKeyboard != null) consoleKeyboard.Flush();
         if (gpuKeyboard != null) gpuKeyboard.Flush();
         if (terminal != null) terminal.Clear();
@@ -239,8 +246,8 @@ public class EmuMachine : UdonSharpBehaviour
         {
             // The tick writes only the CPU's 64 x 64 state area, into a texture of that size;
             // the commit reads it from there and writes the whole state.
-            machineMaterial.SetTexture("_SelfTexture2D", current);
-            VRCGraphics.Blit(current, tickState, machineMaterial, PassTick);
+            tickMaterial.SetTexture("_SelfTexture2D", current);
+            VRCGraphics.Blit(current, tickState, tickMaterial, 0);
             Pass(PassCommit);
             // What that round left: the console's output is only there until the next tick.
             readbackMaterial.SetTexture("_State", current);
@@ -262,6 +269,7 @@ public class EmuMachine : UdonSharpBehaviour
             if (initLeft == 0)
             {
                 machineMaterial.SetInt("_Init", 0);
+                tickMaterial.SetInt("_Init", 0);
                 ignoreUntil = requestsSent;   // init frames leave junk in the UART buffer
             }
         }
@@ -291,9 +299,9 @@ public class EmuMachine : UdonSharpBehaviour
             if (count > 0)
             {
                 sentTag += (uint)count;
-                machineMaterial.SetInt("_UartInLo", lo);
-                machineMaterial.SetInt("_UartInHi", hi);
-                machineMaterial.SetInt("_UdonUARTInTag", (int)sentTag);
+                tickMaterial.SetInt("_UartInLo", lo);
+                tickMaterial.SetInt("_UartInHi", hi);
+                tickMaterial.SetInt("_UdonUARTInTag", (int)sentTag);
             }
         }
 
@@ -333,10 +341,10 @@ public class EmuMachine : UdonSharpBehaviour
         {
             rtcSecond = now.Second;
             int year = now.Year;
-            machineMaterial.SetInt("_Rtc0Lo", Bcd(year / 100) | Bcd(now.Second) << 8);
-            machineMaterial.SetInt("_Rtc0Hi", Bcd(now.Minute) | Bcd(now.Hour) << 8);
-            machineMaterial.SetInt("_Rtc1Lo", Bcd((int)now.DayOfWeek + 1) | Bcd(now.Day) << 8);
-            machineMaterial.SetInt("_Rtc1Hi", Bcd(now.Month) | Bcd(year % 100) << 8);
+            tickMaterial.SetInt("_Rtc0Lo", Bcd(year / 100) | Bcd(now.Second) << 8);
+            tickMaterial.SetInt("_Rtc0Hi", Bcd(now.Minute) | Bcd(now.Hour) << 8);
+            tickMaterial.SetInt("_Rtc1Lo", Bcd((int)now.DayOfWeek + 1) | Bcd(now.Day) << 8);
+            tickMaterial.SetInt("_Rtc1Hi", Bcd(now.Month) | Bcd(year % 100) << 8);
         }
     }
 

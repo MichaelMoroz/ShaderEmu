@@ -39,16 +39,23 @@ public static class ShaderEmuImages
     public static void SyncShaders()
     {
         string from = Repo + "/experiments/rvc_opt", to = Root + "/Shaders";
-        foreach (string file in new[] { "crt.cginc", "helpers.cginc" }) File.Copy(from + "/" + file, to + "/" + file, true);
+        foreach (string file in new[] { "crt.cginc", "helpers.cginc" }) WriteIfChanged(to + "/" + file, File.ReadAllText(from + "/" + file));
         Directory.CreateDirectory(to + "/src");
         // As .cginc: Unity tracks those as shader includes; a changed .h was never recompiled.
         foreach (string path in Directory.GetFiles(from + "/src", "*.h"))
         {
             string text = Regex.Replace(File.ReadAllText(path), "(#include\\s+\"[^\"]+)\\.h\"", "$1.cginc\"");
-            File.WriteAllText(to + "/src/" + Path.GetFileNameWithoutExtension(path) + ".cginc", text);
+            WriteIfChanged(to + "/src/" + Path.GetFileNameWithoutExtension(path) + ".cginc", text);
         }
         AssetDatabase.Refresh();
         Debug.Log("[ShaderEmu] shader sources copied from " + from);
+    }
+
+    // An untouched file keeps its date, and Unity does not compile the shaders that include it again.
+    static void WriteIfChanged(string path, string text)
+    {
+        if (File.Exists(path) && File.ReadAllText(path) == text) return;
+        File.WriteAllText(path, text);
     }
 
     [MenuItem("ShaderEmu/Import boot images from the repository")]

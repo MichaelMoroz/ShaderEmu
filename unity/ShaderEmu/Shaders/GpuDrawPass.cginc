@@ -1,5 +1,8 @@
 // One pass of the GPU device's draw (docs/gpu.md). The including pass defines _GpuPass (0-7)
 // and sets that pass's blending and depth use.
+// The mesh is 65,536 points, one per triangle of the device's mesh. The geometry shader finds
+// the command that claims the point's three vertices and emits them; for a triangle no
+// command claims, or only claims part of, it emits nothing.
 #include "UnityCG.cginc"
 
 Texture2D<uint4> _State;
@@ -12,26 +15,39 @@ Texture2D<float4> _Data_MTD_A;
 #define GPU_STATE _State
 #define GPU_PASS_UNIFORMS
 #define _GpuPasses 0xffu
+// the picture is 1280x720 at most here
+#define GPU_TARGET_W 1280.0
+#define GPU_TARGET_H 720.0
 #include "src/gpu.cginc"
 
-gpu_varyings vert(uint id : SV_VertexID) {
-    gpu_varyings o;
-    o.position = float4(2, 2, 2, 1);
-    o.colour = 0;
-    o.uv = 0;
-    o.texture_info = 0;
-    o.key = 0;
-    // Only the GPU's own camera draws this mesh: orthographic, onto the 2048x2048 target.
-    if (unity_OrthoParams.w != 1.0 || _ScreenParams.x != GPU_TARGET || _ScreenParams.y != GPU_TARGET) return o;
+struct gpu_point {
+    uint triangle_id : TEXCOORD0;
+};
+
+gpu_point vert(uint id : SV_VertexID) {
+    gpu_point o;
+    o.triangle_id = id;
+    return o;
+}
+
+[maxvertexcount(3)]
+void geom(point gpu_point i[1], inout TriangleStream<gpu_varyings> stream) {
+    // Only the GPU's own camera draws this mesh: orthographic, onto the GPU's target.
+    if (unity_OrthoParams.w != 1.0 || _ScreenParams.x != GPU_TARGET_W || _ScreenParams.y != GPU_TARGET_H) return;
 #if _GpuPass != 0
     // nothing to do unless the submitted list says it has commands for this pass
-    if (((ram(GPU_CTRL).r >> (8 + _GpuPass)) & 1) == 0) return o;
+    if (((ram(GPU_CTRL).r >> (8 + _GpuPass)) & 1) == 0) return;
 #endif
-    o = gpu_vertex(id);
+    uint first = i[0].triangle_id * 3, base;
+    uint4 head;
+    if (!gpu_command(first, 3, base, head)) return;
+    for (uint k = 0; k < 3; k++) {
+        gpu_varyings o = gpu_vertex_of(first + k, base, head);
 #if defined(UNITY_REVERSED_Z)
-    o.position.z = o.position.w - o.position.z;
+        o.position.z = o.position.w - o.position.z;
 #endif
-    return o;
+        stream.Append(o);
+    }
 }
 
 float4 frag(gpu_varyings i) : SV_Target {
