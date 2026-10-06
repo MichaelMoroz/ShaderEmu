@@ -226,8 +226,14 @@
             // last one changes is already right there and is not drawn.
             uint commit_bands_changed() {
                 uint stalled = STATE_TEX_HART(uint2(28, 0), 0).r;
-                if (_Init || stalled == STALL_MEMOP_COPY || stalled == STALL_MEMOP_FILL) return 0xffffffff;
+                if (_Init) return 0xffffffff;
                 uint changed = STATE_TEX_HART(uint2(41, 0), 0).g | (1u << 28);   // the tick's writes; GPU control words
+                if (stalled == STALL_MEMOP_COPY || stalled == STALL_MEMOP_FILL) {
+                    // a parallel copy or fill: the bands from its destination to its end
+                    uint4 op = STATE_TEX_HART(uint2(38, 0), 0);
+                    uint lo = (op.g >> 22) & 31, hi = min((op.g + op.b - 1) >> 22, 31u);
+                    if (op.b != 0 && hi >= lo) changed |= ((2u << hi) - 1) & ~((1u << lo) - 1);
+                }
 #ifdef GPU_DEVICE
                 changed |= gpu_copy_bands();
 #endif

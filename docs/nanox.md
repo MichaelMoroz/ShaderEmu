@@ -56,7 +56,7 @@ Drawing into a buffer goes through the GPU too (`gpu.md`):
 | filled rectangle, horizontal and vertical line | a coloured rectangle |
 | text and other one-bit bitmaps | a mask texture (fragment mode 3), over a coloured rectangle when the background is drawn too. Glyphs of the built-in fonts are copied into GPU memory once and stay there; other bitmaps are copied for each list |
 | copy from a window (scrolling) | a rectangle textured with that window's buffer |
-| a PPM file (`GrDrawImageFromFile`), at any size | the file's rows read straight into texture memory, as many as fit (1.8 MB), and a rectangle textured with them (fragment mode 4, three bytes a pixel); the GPU does the scaling |
+| a PPM file (`GrDrawImageFromFile`), at any size | one rectangle whose texture is the file where it lies in the ROM (fragment mode 4, three bytes a pixel); the GPU does the scaling and nothing is read. A file that is not in the ROM has its rows read into texture memory, as many as fit (1.8 MB) at a time |
 | single pixels with nothing else queued, other images, blending, XOR drawing, reading pixels | software, into the buffer |
 
 Commands are queued for one buffer at a time and submitted when drawing moves to another
@@ -120,10 +120,14 @@ repository) and every picture in the folders given. One 1920 or more across is b
 fit 1920x1080, one 1280 or more to fit 1280x720. Run it before `make_linux_image.py`. The
 choice is kept in `/tmp/nxwallpaper`; a new image shows `wallpaper-fox.ppm`.
 
-A picture is not decoded by anyone: a PPM file is already three bytes a pixel, so the screen
-driver reads the rows it needs into GPU memory and the GPU samples them. The 1623x1080
-desktop picture takes 0.2 s to put up on a 640x480 screen (drawing it pixel by pixel through
-`GrArea` took 6 s). It is not clipped by child windows.
+A picture is not decoded or copied by anyone. A PPM file is already three bytes a pixel, and
+the root file system is romfs, which keeps every file in one piece in the ROM: the GPU samples
+the file there. The screen driver finds it from the file's number, which romfs makes the
+offset of the file's header (the overlay mounted over the ROM passes it on), and checks the
+header's size and the file's first bytes through `/dev/mtd0` before trusting it. Putting up the
+1623x1080 desktop picture costs the server about 15 ms. A file elsewhere (one Paint saved, in
+RAM) has its rows read into GPU memory first, which takes about 1.2 s for a picture that size;
+drawing it pixel by pixel through `GrArea` took 6 s. Pictures are not clipped by child windows.
 
 The server is started with `-p`: without it Nano-X ends when its last program has gone, and
 the program that puts up the desktop's picture is the first to come and go.

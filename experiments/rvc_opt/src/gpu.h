@@ -42,7 +42,7 @@
 #define FRAGMENT_TEXTURE 1    // 0x00RRGGBB texture times colour
 #define FRAGMENT_INDEXED 2    // 8-bit texture through the display palette, times colour
 #define FRAGMENT_MASK 3       // 1-bit texture, rows of whole bytes, leftmost bit highest: set bits take the colour
-#define FRAGMENT_RGB24 4      // texture of three bytes a pixel (red, green, blue), rows with no padding, times colour
+#define FRAGMENT_RGB24 4      // texture of three bytes a pixel (red, green, blue), rows with no padding, at any byte address, in RAM or ROM; times colour
 #define FRAGMENT_KEYED 0x100  // flag: texels equal to the key colour (or index) are not drawn
 // Bits 16-18 of the same word: the pass the command is drawn in. Passes are drawn in order, each
 // with fixed blending and depth use; within a pass commands keep the list's order.
@@ -61,6 +61,27 @@ uint ram_word(uint address) {
     uint k = (address >> 2) & 3;
     return k == 0 ? t.r : k == 1 ? t.g : k == 2 ? t.b : t.a;
 }
+// A word of a texture: RAM, or with GPU_ROM the ROM (addresses from 0x40000000), read as the
+// CPU reads it: four textures, one for each word of a 16-byte texel, rows bottom up.
+#ifdef GPU_ROM
+uint texture_word(uint address) {
+    [branch]
+    if ((address >> 30) != 1) return ram_word(address);
+    uint2 dim;
+    _Data_MTD_R.GetDimensions(dim.x, dim.y);
+    uint texel = (address - 0x40000000) >> 4, k = (address >> 2) & 3;
+    uint2 at = uint2(texel % dim.x, dim.y - 1 - texel / dim.x);
+    float4 t;
+    if (k == 0) t = _Data_MTD_R[at];
+    else if (k == 1) t = _Data_MTD_G[at];
+    else if (k == 2) t = _Data_MTD_B[at];
+    else t = _Data_MTD_A[at];
+    uint4 b = (uint4)(t * 255.0 + 0.5);
+    return b.r | b.g << 8 | b.b << 16 | b.a << 24;
+}
+#else
+#define texture_word ram_word
+#endif
 // Guest numbers are 16.16 fixed point.
 float4 from_fixed(uint4 t) {
     return float4(asint(t)) / 65536.0;
@@ -215,10 +236,10 @@ float4 gpu_fragment(gpu_varyings i) {
             if ((i.texture_info.r & FRAGMENT_KEYED) && texel == i.key) discard;
             texel = ram_word(0x87000400 + 4 * texel);
         } else if (mode == FRAGMENT_RGB24) {
-            // the three bytes may run into the next word
-            uint at = i.texture_info.g + ((3 * n) & ~3u), shift = 8 * ((3 * n) & 3);
-            texel = ram_word(at) >> shift;
-            if (shift > 8) texel |= ram_word(at + 4) << (32 - shift);
+            // the texture may start at any byte, and three bytes may run into the next word
+            uint first = i.texture_info.g + 3 * n, at = first & ~3u, shift = 8 * (first & 3);
+            texel = texture_word(at) >> shift;
+            if (shift > 8) texel |= texture_word(at + 4) << (32 - shift);
             texel = (texel & 0xff) << 16 | (texel & 0xff00) | ((texel >> 16) & 0xff);
         } else {
             texel = ram_word(i.texture_info.g + 4 * n);

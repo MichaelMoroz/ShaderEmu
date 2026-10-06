@@ -102,7 +102,7 @@ A textured quad is then 16 words of vertices instead of 96.
 | 1 | a texture of `0x00RRGGBB` words, times the colour |
 | 2 | a texture of bytes looked up in the display palette (`0x87000400`), times the colour |
 | 3 | a texture of single bits, each row a whole number of bytes, leftmost pixel in the highest bit: set bits take the colour, clear bits are not drawn |
-| 4 | a texture of three bytes a pixel (red, green, blue, as in a PPM file), rows not padded, times the colour |
+| 4 | a texture of three bytes a pixel (red, green, blue, as in a PPM file), rows not padded, starting at any byte, times the colour. Its address may be in the ROM (from `0x40000000`): the draw pass has the ROM's four textures (`_Data_MTD_R/G/B/A`) as well as the state |
 | +0x100 | texels equal to the key (a colour, or an index in mode 2) are not drawn |
 
 Textures are anywhere in RAM, sampled nearest and repeating, with coordinates 0..1 across.

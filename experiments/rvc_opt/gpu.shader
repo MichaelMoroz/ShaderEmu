@@ -7,6 +7,10 @@ Shader "ShaderEmu/gpu"
     {
         _State ("Machine state texture", 2D) = "black" {}
         _GpuTarget ("The GPU's own colour target", 2D) = "black" {}
+        _Data_MTD_R ("ROM, first word of each texel", 2D) = "black" {}
+        _Data_MTD_G ("ROM, second word", 2D) = "black" {}
+        _Data_MTD_B ("ROM, third word", 2D) = "black" {}
+        _Data_MTD_A ("ROM, fourth word", 2D) = "black" {}
     }
     SubShader
     {
@@ -27,6 +31,12 @@ Shader "ShaderEmu/gpu"
             #pragma fragment frag
 
             Texture2D<uint4> _State;
+            // The ROM, for textures that are files in it (FRAGMENT_RGB24).
+            Texture2D<float4> _Data_MTD_R;
+            Texture2D<float4> _Data_MTD_G;
+            Texture2D<float4> _Data_MTD_B;
+            Texture2D<float4> _Data_MTD_A;
+            #define GPU_ROM
             // The pass this draw is (see FRAGMENT_PASS in gpu.h) and the passes drawn this frame,
             // one bit each. A host that only ever draws pass 0 leaves both at their defaults.
             uniform uint _GpuPass, _GpuPasses;

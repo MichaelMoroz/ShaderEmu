@@ -84,9 +84,17 @@ watch the emulated machine:
 - Start the server by hand as `nano-X -p &`: without `-p` it ends when its last program has
   gone, and what follows cannot reach it. Windows are placed in the order programs connect,
   so a test that clicks at fixed places must start its programs a few seconds apart.
-- A PPM picture is drawn by the GPU from the file's bytes (`GrDrawImageFromFile`). To check
-  one, stretch the file over the same rectangle on the host with nearest sampling and compare
-  with the window's buffer: all pixels match within one texel across.
+- A PPM picture is drawn by the GPU from the file's bytes in the ROM (`GrDrawImageFromFile`).
+  To check one, stretch the file over the same rectangle on the host, sampling at pixel
+  centres, and compare with the window's buffer: all pixels match within one texel.
+- A program's own timing does not include what it asked the Nano-X server to do. To time a
+  drawing request, run the program ten times in a row (each waits for the server to be free)
+  and subtract ten runs of one that draws nothing.
+- Reading a file costs about 2,000 instructions a 4 KB page in Linux's page cache, whatever
+  the copy costs: the ROM driver's reads go through the machine's parallel copy
+  (`linux\kernel\phram_hook.py`) and a 5 MB cold read only went from 0.99 s to 0.89 s.
+- The root is an overlay over the ROM's romfs: `fstatfs` says overlay, not romfs, for a file
+  in the ROM. A file's number is still romfs's, the offset of its header in the ROM.
 - To see where a guest spends instructions, pass `--pc-log FILE --ticks 2048` and run
   `python tools\pc_profile.py FILE kernel=vmlinux.nm server=nano-X.nm` (`nm -n` output; the
   unstripped binaries are in `~/shaderemu-linux`). Measure before optimising drawing: the

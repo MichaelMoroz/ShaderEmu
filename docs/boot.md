@@ -34,6 +34,10 @@ A snapshot made with firmware does not run without it, and the other way round.
 - `linux/userland/emuinit.c` does what upstream's `/rvcinit` script does, as one static
   program. The script started a dozen dynamically linked processes: 12 million instructions.
   Build it with `linux/userland/build.sh`; the image builder then makes it the kernel's init.
+- `linux/kernel/phram_hook.py`: the ROM driver reads through the machine's parallel copy
+  (CSRs `0x0b0`-`0x0b3`, whose source may be the ROM), and a commit with a copy now draws only
+  the bands of RAM the copy writes. It changed little: 0.99 s to 0.89 s for a 5 MB cold read,
+  boot the same. A page read costs about 2,000 instructions of page-cache work besides the copy.
 
 ## What an operation costs in the tick shader
 

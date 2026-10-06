@@ -32,6 +32,7 @@ fi
 python3 "$HERE/install_drivers.py" linux
 python3 "$HERE/memset_hook.py" linux
 python3 "$HERE/memcpy_hook.py" linux
+python3 "$HERE/phram_hook.py" linux
 cat linux.config "$HERE/config.extra" > all.config
 
 echo "== configure and build"

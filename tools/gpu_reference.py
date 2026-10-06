@@ -10,7 +10,7 @@ The real picture comes from the graphics card's rasteriser, so this is not bit-e
 on triangle edges can fall either way, and colours can differ by a rounding step. The report
 separates interior agreement from edge pixels.
 """
-import struct, sys, zlib
+import os, struct, sys, zlib
 import numpy as np
 
 f32 = np.float32
@@ -21,6 +21,15 @@ class Machine:
     def __init__(self, path):
         tex = np.memmap(path, dtype=np.uint32, mode='r', offset=32).reshape(4096, 2048, 4)
         self.words = tex[64:].reshape(-1)
+        self.rom_words = None
+
+    def rom(self):
+        """The ROM (addresses from 0x40000000) as words: the Linux image's root file system."""
+        if self.rom_words is None:
+            path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'build', 'images', 'linux', 'rootfs.bin')
+            data = open(path, 'rb').read()
+            self.rom_words = np.frombuffer(data + bytes(-len(data) % 4 + 4), dtype=np.uint32)
+        return self.rom_words
 
     def w(self, addr, n=1):
         i = (addr & 0x7fffffff) >> 2
@@ -127,9 +136,12 @@ def shade(m, colour, uv, tex, key):
                 keep = texel != key
             texel = m.words[(0x07000400 >> 2) + texel]
         elif mode == 4:
-            # three bytes a pixel, running on into the next word
-            at, shift = base + 3 * n // 4, (8 * ((3 * n) & 3)).astype(np.uint64)
-            texel = ((m.words[at].astype(np.uint64) | m.words[at + 1].astype(np.uint64) << np.uint64(32)) >> shift).astype(np.uint32)
+            # three bytes a pixel from any byte address, in RAM or the ROM, running on into the next word
+            in_rom = (addr >> 30) == 1
+            store = m.rom() if in_rom else m.words
+            first = (addr - 0x40000000 if in_rom else addr & 0x7fffffff) + 3 * n
+            at, shift = first // 4, (8 * (first & 3)).astype(np.uint64)
+            texel = ((store[at].astype(np.uint64) | store[at + 1].astype(np.uint64) << np.uint64(32)) >> shift).astype(np.uint32)
             texel = (texel & 0xff) << 16 | (texel & 0xff00) | (texel >> 16) & 0xff
         else:
             texel = m.words[base + n]

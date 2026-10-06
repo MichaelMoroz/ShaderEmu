@@ -9,6 +9,7 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <sched.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -54,6 +55,7 @@
 #define FRAG_TEXTURE	1
 #define FRAG_MASK	3
 #define FRAG_RGB24	4
+#define ROM_PHYS	0x40000000u	/* the ROM the root file system is in */
 #define SUBMIT_DRAW	1
 #define SUBMIT_INTO	4		/* then copy the picture to the given rectangle of RAM */
 /* The pause hint: this machine ends its frame there, which is when the GPU does its work. */
@@ -469,8 +471,37 @@ gpu_maskbytemsb(PSD psd, PMWBLITPARMS gc)
 }
 
 /*
- * A PPM file stretched over a rectangle: its rows are read straight into texture memory, as
- * many as fit at a time, and the GPU scales them. 0 leaves the file to the engine's decoder.
+ * The physical address of a file's first byte when the file is in the ROM, else 0. romfs
+ * numbers a file by where its header is (16 bytes, then its name, each padded to 16, then the
+ * data in one piece), and the overlay on top passes the number on. `begins` is how the file
+ * starts: a file that only has such a number by chance does not have that there.
+ */
+static uint32_t
+rom_address(int fd, const char *begins, int count)
+{
+	struct stat st;
+	unsigned char head[16 + 256], data[64];
+	uint32_t at;
+	int mtd, n;
+
+	if (fstat(fd, &st) || !S_ISREG(st.st_mode) || count > (int)sizeof data || (mtd = open("/dev/mtd0", O_RDONLY)) < 0)
+		return 0;
+	n = pread(mtd, head, sizeof head, st.st_ino);
+	for (at = 16; (int)at < n && head[at]; at++)
+		continue;
+	/* the header's size field (big-endian) must be this file's, and the data its start */
+	if (n < 32 || (int)at >= n ||
+	    ((uint32_t)head[8] << 24 | head[9] << 16 | head[10] << 8 | head[11]) != (uint32_t)st.st_size ||
+	    pread(mtd, data, count, st.st_ino + 16 + (at & ~15u)) != count || memcmp(data, begins, count) != 0)
+		at = 0;
+	close(mtd);
+	return at ? ROM_PHYS + (uint32_t)st.st_ino + 16 + (at & ~15u) : 0;
+}
+
+/*
+ * A PPM file stretched over a rectangle, scaled by the GPU. A file in the ROM is sampled where
+ * it is; another has its rows read into texture memory, as many as fit at a time. 0 leaves
+ * the file to the engine's decoder.
  */
 static int
 gpu_picture(PSD psd, MWCOORD x, MWCOORD y, MWCOORD width, MWCOORD height, const char *path)
@@ -479,6 +510,7 @@ gpu_picture(PSD psd, MWCOORD x, MWCOORD y, MWCOORD width, MWCOORD height, const 
 	int pw = 0, ph = 0, most = 0, start = 0, x0, x1, y0, y1, band, rows, j, fd;
 	char head[64];
 	volatile uint32_t *c;
+	uint32_t rom;
 
 	if (!is_surface(psd) || (fd = open(path, O_RDONLY)) < 0)
 		return 0;
@@ -493,15 +525,28 @@ gpu_picture(PSD psd, MWCOORD x, MWCOORD y, MWCOORD width, MWCOORD height, const 
 	if (width <= 0) width = pw;
 	if (height <= 0) height = ph;
 	s = draw_on(psd);
-	flush();
 	x0 = x > s->x ? x : s->x;
 	x1 = x + width < s->x + s->w ? x + width : s->x + s->w;
+	y0 = y > s->y ? y : s->y;
 	y1 = y + height < s->y + s->h ? y + height : s->y + s->h;
-	for (y0 = y > s->y ? y : s->y; x0 < x1 && y0 < y1; y0 += band) {
+	if (accelerate && x0 < x1 && y0 < y1 && (rom = rom_address(fd, head, j)) != 0) {
+		/* a file in the ROM is the texture where it lies: one rectangle, nothing read */
+		close(fd);
+		queue(x0, y0, x1, y1, 0xffffff, FRAG_RGB24, 0, pw, ph, 0, 0);
+		c = (volatile uint32_t *)(gpu + LIST_OFFSET) + 16 * (commands - 1);
+		c[9] = rom + start;
+		c[12] = (uint32_t)(((long long)(x0 - x) << 16) / width);
+		c[13] = (uint32_t)(((long long)(y0 - y) << 16) / height);
+		c[14] = (uint32_t)(((long long)(x1 - x) << 16) / width);
+		c[15] = (uint32_t)(((long long)(y1 - y) << 16) / height);
+		return 1;
+	}
+	flush();
+	for (; x0 < x1 && y0 < y1; y0 += band) {
 		band = !accelerate ? 1 : y1 - y0 < rows ? y1 - y0 : rows;
 		for (j = 0; j < band; j++)
 			if (pread(fd, gpu + DATA_OFFSET + j * 3 * pw, 3 * pw,
-				  start + (off_t)((long long)(y0 + j - y) * ph / height) * 3 * pw) != 3 * pw)
+				  start + (off_t)((2LL * (y0 + j - y) + 1) * ph / (2 * height)) * 3 * pw) != 3 * pw)
 				break;
 		if (!accelerate) {
 			/* without the GPU: the same texels, a row at a time */

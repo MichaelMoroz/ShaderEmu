@@ -229,7 +229,7 @@ public:
             cl_->ClearDepthStencilView(gdsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
             cl_->SetGraphicsRootSignature(gpuRoot_.Get());
             D3D12_GPU_DESCRIPTOR_HANDLE gtable = srvHeap_->GetGPUDescriptorHandleForHeapStart();
-            gtable.ptr += (UINT64)(8 * kTableSize + cur) * srvStep_;
+            gtable.ptr += (UINT64)(8 * kTableSize + 2 + cur * kGpuTable) * srvStep_;
             cl_->SetGraphicsRootDescriptorTable(0, gtable);
             // the vertex shader reads the state texture too, which needs the non-pixel state
             const D3D12_RESOURCE_STATES anyStage =
@@ -432,7 +432,8 @@ private:
         hd.NumDescriptors = 2;
         check(dx_.dev->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&rtvHeap_)), "RTV heap");
         hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-        hd.NumDescriptors = 8 * kTableSize + 2;   // the tables, then each state texture for the GPU device
+        // the tables, each state texture alone, then the GPU draw's tables (state and ROM)
+        hd.NumDescriptors = 8 * kTableSize + 2 + 2 * kGpuTable;
         hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         check(dx_.dev->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&srvHeap_)), "SRV heap");
         UINT rtvStep = dx_.dev->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
@@ -462,6 +463,16 @@ private:
             h.ptr += (SIZE_T)(8 * kTableSize + i) * srvStep_;
             dx_.dev->CreateShaderResourceView(state_[i].Get(), nullptr, h);
         }
+        for (int cur = 0; cur < 2; ++cur) {
+            for (UINT s = 0; s < kGpuTable; ++s) {
+                ID3D12Resource* res = s == 0 ? state_[cur].Get() : blackTex_.Get();
+                for (auto& t : gpuPl_.textures)
+                    if (t.slot == s && textures_.count(t.name)) res = textures_[t.name].Get();
+                D3D12_CPU_DESCRIPTOR_HANDLE h = srvHeap_->GetCPUDescriptorHandleForHeapStart();
+                h.ptr += (SIZE_T)(8 * kTableSize + 2 + cur * kGpuTable + s) * srvStep_;
+                dx_.dev->CreateShaderResourceView(res, nullptr, h);
+            }
+        }
         tablesBuilt_ = true;
     }
 
@@ -480,21 +491,20 @@ private:
         if (!preprocessStage(sp->code, shader.path, rootDir, {{"SHADER_STAGE_VERTEX", "1"}}, cs, vsText, err) ||
             !preprocessStage(sp->code, shader.path, rootDir, {{"SHADER_STAGE_FRAGMENT", "1"}}, cs, psText, err))
             die(err.c_str());
-        StageLayout& vl = gpuVl_;
-        StageLayout pl;
+        StageLayout &vl = gpuVl_, &pl = gpuPl_;
         std::vector<uint8_t> vs = dxcCompile(dxc, vsText, sp->vertexEntry, "vs_" + b.dxcSm, b.dxcOpt, vl);
         std::vector<uint8_t> ps = dxcCompile(dxc, psText, sp->fragmentEntry, "ps_" + b.dxcSm, b.dxcOpt, pl);
         for (auto& t : vl.textures)
             if (t.slot != 0) die("GPUDraw: the state texture must be t0");
         for (auto& t : pl.textures)
-            if (t.slot != 0) die("GPUDraw: the state texture must be t0");
+            if ((t.slot == 0) != (t.name == "_State") || t.slot >= kGpuTable) die("GPUDraw: the state texture must be t0, the ROM t1-t4");
         if (pl.hasGlobals) die("GPUDraw: uniforms in the vertex shader only");
         if (vl.globalsSize > kCbBytes) die("GPUDraw: $Globals larger than the upload slot");
 
         D3D12_DESCRIPTOR_RANGE range{};
         range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-        range.NumDescriptors = 1;
-        // [0] the state texture for both stages, [1] the vertex shader's uniforms
+        range.NumDescriptors = kGpuTable;
+        // [0] the state texture for both stages and the ROM, [1] the vertex shader's uniforms
         D3D12_ROOT_PARAMETER rp[2]{};
         rp[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
         rp[0].DescriptorTable.NumDescriptorRanges = 1;
@@ -573,7 +583,8 @@ private:
 
     ComPtr<ID3D12RootSignature> gpuRoot_;
     ComPtr<ID3D12PipelineState> gpuPso_[8];
-    StageLayout gpuVl_;
+    StageLayout gpuVl_, gpuPl_;
+    static constexpr UINT kGpuTable = 5;   // the GPU draw's textures: the state, then the ROM's four
     ComPtr<ID3D12Resource> gpuColor_, gpuDepth_;
     ComPtr<ID3D12DescriptorHeap> gpuRtvHeap_, gpuDsvHeap_;
     ComPtr<ID3D12Resource> state_[2], blackTex_;

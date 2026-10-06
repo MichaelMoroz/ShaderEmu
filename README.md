@@ -4,6 +4,16 @@ A computer emulated entirely in a pixel shader, as fast as it can be made to go.
 platform is VRChat, which allows only Direct3D 11 graphics shaders (no compute shaders, no
 UAVs), so the whole machine lives in a render texture that a fragment shader rewrites each frame.
 
+> **Accelerate everything that can be accelerated.**
+
+The emulated CPU runs a few million instructions a second, one after another, and no amount of
+tuning changes what kind of machine that is. The shader around it is massively parallel. So
+anything that touches many bytes or many pixels is given to hardware devices that run in their
+own shader passes, and the CPU only says what it wants: drawing, window composition, text,
+3D, copies and fills of memory, pictures sampled from the ROM where they lie. That is the
+difference between a desktop picture that takes 6 seconds to appear and one that takes 15 ms,
+and it is the only way this computer becomes usable.
+
 ## Where it stands
 
 The machine today is a RISC-V (RV32IMA) computer derived from

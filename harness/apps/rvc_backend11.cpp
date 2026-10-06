@@ -293,8 +293,10 @@ private:
             if (!((gpuPasses >> p) & 1)) continue;
             mat.setInt("_GpuPass", p);
             mat.bind(ctx, pass, gpu_);
+            // the state texture; the ROM's textures are the material's and already bound
             for (auto& t : pass.vsLayout.textures) ctx->VSSetShaderResources(t.slot, 1, &state);
-            for (auto& t : pass.psLayout.textures) ctx->PSSetShaderResources(t.slot, 1, &state);
+            for (auto& t : pass.psLayout.textures)
+                if (t.name == "_State") ctx->PSSetShaderResources(t.slot, 1, &state);
             ctx->OMSetBlendState(gpuBlend_[p & 3].Get(), nullptr, 0xffffffff);
             ctx->OMSetDepthStencilState(gpuDepthState_[p == 0 ? 0 : p < 4 ? 1 : 2].Get(), 0);
             ctx->Draw(kGpuTriangles * 3, 0);
