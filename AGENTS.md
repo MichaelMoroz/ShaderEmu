@@ -30,6 +30,21 @@ watch the emulated machine:
   headless; never start the no-argument form from a script and leave it running.
 - An image menu blocks at start when nothing says what to boot and stdin is a console. Scripted
   runs must pass one of `--image NAME`, `--payload`, `--ram`, `--load-state` or `--no-stdin`.
+- `rvc_harness` runs 16,384 instructions per draw by default (about 20% faster than 2,048 on DXC).
+  Every reference state hash was taken at 2,048: pass `--ticks 2048` when comparing
+  (`perf_test.ps1` and `rvc_trace12` already use 2,048).
+- Our programs live in `programs/`; `programs\build.bat` builds them with clang for rv32ima and
+  the harness loads `programs\bin\<name>.bin` directly (no PNG step). They are integer-only C,
+  so the same source compiled natively gives a bit-exact reference for what the emulator must
+  produce: check framebuffers against that, not by eye.
+- `raytrace` waits for five answers on the console before rendering. Script it with
+  `--expect width --send ""` style pairs (one per prompt: width, height, bounces, side,
+  shadows) and `--until "raytrace: done"`.
+- The display is RAM at fixed addresses (`docs/display.md`); the view window decodes it beside
+  the memory image. The CPU shader has no display code and should not grow any.
+- `--paging auto` (the default) compiles `NO_PAGING` for the bare-metal images. It must not
+  change emulation for a guest that never enables paging: compare `state` and `instructions`
+  with `--paging on` on a fixed-timestep run (`--fixed-dt 0.004 --frames N --bench 0 --ticks 2048`).
 - `--dxc` implies `NO_DOUBLES` and, without `--rvc`, the `experiments\rvc_opt` shader (upstream
   does not compile with DXC). `--profile` and `--present` are D3D11 only.
 - The D3D12 backend has its own memory view (`rvc_memview12.h`) sharing shader, window and text
@@ -99,7 +114,7 @@ A cold boot to the `/ #` prompt takes about 80 s on an RTX 5090 with upstream on
   loops, and keep rarely changed state out of the hot one.
 - `rvc_trace12 --cold` boots from power-on on D3D12, for checking early-boot paths under DXC.
 - `rvc_harness --dxc --load-state build\snapshots\rvc_bench.snap --no-stdin --fixed-dt 0.004
-  --frames 830 --bench 30` must print the same `state` as `rvc_trace12 --dxc --no-doubles
+  --ticks 2048 --frames 830 --bench 30` must print the same `state` as `rvc_trace12 --dxc --no-doubles
   --frames 800 --bench 30` (`231e365030389de0` for the current shader).
 - A shader edit costs one FXC compile (90 s alone, about 3 min with three in parallel). Compile
   variants in parallel, then benchmark them one at a time.

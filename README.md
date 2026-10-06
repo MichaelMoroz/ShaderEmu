@@ -46,6 +46,9 @@ the design notes are kept in `docs/original-x86-plan.md`.
 - `experiments/rvc_opt/` – patched copy of rvc's shader (MIT, see its `LICENSE`).
 - `harness/apps/rvc_trace12.cpp` – the same two draws on D3D12, for benchmarks and
   `tools/gpu_trace.ps1` (Nsight GPU Trace hardware counters per draw).
+- `programs/` – our own bare-metal programs in C (`programs\build.bat`, needs LLVM with the
+  RISC-V target). The built images in `programs/bin/` are checked in, so running them needs no
+  compiler.
 - `tools/perf_test.ps1` – 3-second speed benchmark; `tools/watch_console.cmd` – live console.
 - `rvc/` – clone of upstream rvc (not part of this repo): the payload images and the reference shader.
 
@@ -70,12 +73,18 @@ boot:
 | `linux` | Linux with a built-in initramfs (slow to unpack) |
 | `micropython` | MicroPython REPL on OpenSBI |
 | `rust` | Rust test payload on OpenSBI |
-| `raytrace` | Rust raytracer, no firmware |
+| `raytrace` | our C raytracer: asks for resolution, bounces, rays per pixel and shadows on the console, then draws to the display (`programs/raytrace`) |
+| `rvc-raytrace` | rvc's Rust raytracer, which fills raw memory instead |
 | `bare` | C bare-metal self test, no firmware |
 
 The menu appears whenever the command line does not say what to boot (`--image NAME`,
 `--payload`, `--ram`, `--load-state`) and input is a console; scripts with redirected input or
 `--no-stdin` get `linux-net`. `--image list` prints the table.
+
+The bare-metal images run on a machine built without paging (`NO_PAGING`: `satp` hardwired
+to 0, no translation, no TLBs), which is 14-17% faster and ends in the same state as the full
+machine. Linux needs the MMU and gets the full build. `--paging on|off|auto` or `m` in the menu
+overrides the choice.
 
 The console then becomes the emulated machine's terminal: every key goes to the guest, including
 Ctrl+C, arrows and Tab, and the guest does its own echo. **Ctrl+]** quits. It runs the fastest
@@ -83,9 +92,11 @@ shader (`experiments/rvc_opt`) and boots from power-on. `--resume` starts at the
 prompt from `build\snapshots\rvc_shell.snap` instead.
 
 A second window shows memory live: RAM as colour in two strips (low addresses top left), texels
-written since the previous screen frame glowing and fading. A bar underneath, clear of the memory
+written since the previous screen frame glowing and fading. To its right is the machine's
+display: a framebuffer the guest keeps in RAM at fixed addresses, with a mode and resolution it
+sets itself (`docs/display.md`). A bar underneath, clear of the memory
 image, shows IPS, frames/s, frame time, GPU time of the tick and commit draws, uptime, guest
-clock and totals, with the 64x64 CPU state area magnified at its right end. Closing it leaves the emulator running; `--no-viz` skips it, and `--viz`
+clock and totals, with the 64x64 CPU state area magnified at its right end. Closing it quits the harness; `--no-viz` skips it, and `--viz`
 adds it to any other invocation.
 
 ## Run rvc
