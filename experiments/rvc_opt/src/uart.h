@@ -3,7 +3,7 @@
 
 
 
-#define RAM_ADDR(lin) uint2(lin % 2048, 64 + (lin / 2048))
+// RAM_ADDR / RAM_LIN: see types.h
 #define RAM_MAX (2048 * (4096 - 64) * 4 * 4)
 
 
@@ -137,9 +137,28 @@ void uart_tick() {
 
     if ((cpu.clock & 0xff) == 0xff) {
         if (cpu.uart.input_tag != _UdonUARTInTag && UART_GET1(RBR) == 0) {
+#ifdef OPT_BASELINE
+            uint in_char = _UdonUARTInChar;
             cpu.uart.input_tag = _UdonUARTInTag;
-            if (_UdonUARTInChar != 0) {
-                UART_SET1(RBR, _UdonUARTInChar);
+#else
+            // Burst input: _UdonUARTInChar carries up to four characters, first in the low byte,
+            // and the host advances the tag by their count. One is handed over each time the
+            // receive register is free, so the guest's console poll reads a whole escape
+            // sequence at once instead of one byte per poll. A single character with the tag
+            // advanced by one behaves exactly as upstream.
+            uint in_count = (_UdonUARTInChar >> 24) ? 4 : ((_UdonUARTInChar >> 16) ? 3 : ((_UdonUARTInChar >> 8) ? 2 : 1));
+            uint in_left = _UdonUARTInTag - cpu.uart.input_tag;
+            uint in_char;
+            if (in_left > in_count) {
+                in_char = _UdonUARTInChar & 0xff;
+                cpu.uart.input_tag = _UdonUARTInTag;
+            } else {
+                in_char = (_UdonUARTInChar >> (8 * (in_count - in_left))) & 0xff;
+                cpu.uart.input_tag++;
+            }
+#endif
+            if (in_char != 0) {
+                UART_SET1(RBR, in_char);
                 UART_SET2(LSR, (UART_GET2(LSR) | LSR_DATA_AVAILABLE));
                 uart_update_iir();
                 //if ((UART_GET1(IER) & IER_RXINT_BIT) != 0) {

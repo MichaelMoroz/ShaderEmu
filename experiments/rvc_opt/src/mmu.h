@@ -10,7 +10,36 @@ static uint hot_mstatus, hot_mip, hot_mie;
 #define TLB_EMPTY uint4(0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff)
 static uint4 tlb_f_vpn = TLB_EMPTY, tlb_r_vpn = TLB_EMPTY, tlb_w_vpn = TLB_EMPTY;  // slot = vpn & 3
 static uint4 tlb_f_page, tlb_r_page, tlb_w_page;
+// True while no interrupt can be pending-and-enabled and the UART has nothing to flush, so the
+// per-instruction interrupt/UART step would do nothing. Cleared by anything that feeds it:
+// CSR writes and MMIO writes. Starts false, so each pass re-establishes it.
+static bool irq_quiet = false;
+static bool irq_last_handled = false;  // did the last interrupt/trap step take a trap
+static uint fw_addr0 = 0xffffffff, fw_addr1 = 0xffffffff;  // instruction window: current and next texel
+static uint4 fw_tex0, fw_tex1;
 static uint fetch_vpn = 0xffffffff, fetch_page;  // last translated fetch page (OPT_FETCH_FAST)
+// Second-level TLB: TLB2_N direct-mapped entries per access mode, consulted only when the small
+// first-level TLB misses. A tag holds the page number, the privilege context the translation
+// was made under (effective privilege, SUM, MXR) and a generation number, so entries survive
+// traps and mstatus changes and are dropped wholesale only when mappings change (satp write,
+// sfence.vma). Zero-initialised tags have generation 0 and never match.
+#ifndef TLB2_N
+#define TLB2_N 256
+#endif
+static uint tlb2_tag[3 * TLB2_N];
+static uint tlb2_pg[3 * TLB2_N];
+static uint tlb2_gen = 1;
+static uint xl_ctx = 0;  // current privilege context, refreshed by the general path
+#define TLB2_IDX(mode, va) ((mode) * TLB2_N + (((va) >> 12) & (TLB2_N - 1)))
+#define TLB2_TAG(va, ctx) (((va) >> 12) | ((ctx) << 20) | (tlb2_gen << 24))
+void tlb2_flush() {
+    tlb2_gen++;
+    if (tlb2_gen == 256) {
+        for (uint k2 = 0; k2 < 3 * TLB2_N; k2++) tlb2_tag[k2] = 0;
+        tlb2_gen = 1;
+    }
+}
+
 void hot_flush() {
     PROF(PROF_hot_flush)
     hot_mstatus_ok = false; hot_mip_ok = false; hot_mie_ok = false;
@@ -20,6 +49,8 @@ void hot_flush() {
 
 void mmu_update(uint satp) {
     hot_flush();
+    tlb2_flush();
+    irq_quiet = false;  // paging mode feeds the fast step's translation flags; take the general path once
     cpu.mmu.mode = satp >> 31;
     cpu.mmu.ppn = satp & 0x7fffffff;
 }
@@ -110,13 +141,33 @@ uint mmu_translate(inout ins_ret ins, uint addr, uint mode) {
     // Successful translations cached per access mode; flushed by hot_flush().
     uint tlb_slot = (addr >> 12) & 3;
     uint4 hit_vpns = mode == MMU_ACCESS_FETCH ? tlb_f_vpn : (mode == MMU_ACCESS_READ ? tlb_r_vpn : tlb_w_vpn);
+#ifdef OPT_TLB_ARRAY
+    if (false) {
+#else
     if (idx_uint4(hit_vpns, tlb_slot) == (addr >> 12)) {
+#endif
         if (mode == MMU_ACCESS_FETCH) { PROF(PROF_tlb_hit_fetch) } else if (mode == MMU_ACCESS_READ) { PROF(PROF_tlb_hit_read) } else { PROF(PROF_tlb_hit_write) }
         uint4 hit_pages = mode == MMU_ACCESS_FETCH ? tlb_f_page : (mode == MMU_ACCESS_READ ? tlb_r_page : tlb_w_page);
         uint hit_page = idx_uint4(hit_pages, tlb_slot);
         if (mode == MMU_ACCESS_FETCH) { fetch_vpn = addr >> 12; fetch_page = hit_page; }
         return hit_page | ADDR_PART_OFFSET(addr);
     }
+
+#ifndef OPT_NO_TLB2
+    uint tlb2_k = TLB2_IDX(mode, addr);
+    uint tlb2_ctx = priv | (sum << 2) | (mxr << 3);
+    if (tlb2_tag[tlb2_k] == TLB2_TAG(addr, tlb2_ctx)) {
+        uint l2_page = tlb2_pg[tlb2_k];
+#ifdef OPT_TLB_ARRAY
+        if (mode == MMU_ACCESS_FETCH) { fetch_vpn = addr >> 12; fetch_page = l2_page; }
+        return l2_page | ADDR_PART_OFFSET(addr);
+#endif
+        if (mode == MMU_ACCESS_FETCH) { set_idx_uint4(tlb_f_vpn, addr >> 12, tlb_slot); set_idx_uint4(tlb_f_page, l2_page, tlb_slot); fetch_vpn = addr >> 12; fetch_page = l2_page; }
+        else if (mode == MMU_ACCESS_READ) { set_idx_uint4(tlb_r_vpn, addr >> 12, tlb_slot); set_idx_uint4(tlb_r_page, l2_page, tlb_slot); }
+        else { set_idx_uint4(tlb_w_vpn, addr >> 12, tlb_slot); set_idx_uint4(tlb_w_page, l2_page, tlb_slot); }
+        return l2_page | ADDR_PART_OFFSET(addr);
+    }
+#endif
 
     bool super;
     mmu_page page;
@@ -173,9 +224,17 @@ uint mmu_translate(inout ins_ret ins, uint addr, uint mode) {
     pa |= super ? ADDR_PART_PN0(addr) << 12 : page.ppn0 << 12;
     pa |= page.ppn1 << 22;
 
+#ifdef OPT_TLB_ARRAY
+    if (mode == MMU_ACCESS_FETCH) { fetch_vpn = addr >> 12; fetch_page = pa & ~0xfff; }
+#else
     if (mode == MMU_ACCESS_FETCH) { set_idx_uint4(tlb_f_vpn, addr >> 12, tlb_slot); set_idx_uint4(tlb_f_page, pa & ~0xfff, tlb_slot); fetch_vpn = addr >> 12; fetch_page = pa & ~0xfff; }
     else if (mode == MMU_ACCESS_READ) { set_idx_uint4(tlb_r_vpn, addr >> 12, tlb_slot); set_idx_uint4(tlb_r_page, pa & ~0xfff, tlb_slot); }
     else { set_idx_uint4(tlb_w_vpn, addr >> 12, tlb_slot); set_idx_uint4(tlb_w_page, pa & ~0xfff, tlb_slot); }
+#endif
+#ifndef OPT_NO_TLB2
+    tlb2_tag[tlb2_k] = TLB2_TAG(addr, tlb2_ctx);
+    tlb2_pg[tlb2_k] = pa & ~0xfff;
+#endif
 
     /* if (!(pa & 0x80000000) || (pa & 0x7fffffff) >= RAM_MAX) { */
     /*     FAULT */

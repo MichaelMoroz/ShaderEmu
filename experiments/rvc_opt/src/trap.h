@@ -143,6 +143,7 @@ bool handle_trap(inout ins_ret ret, bool is_interrupt, uint c_mie) {
 
 void handle_irq_and_trap(inout ins_ret ret, uint mip_override) {
     bool trap = ret.trap.en;
+    irq_last_handled = false;
     uint mip_reset = MIP_ALL;
     uint mie = read_mie();
     bool irq = false;
@@ -166,6 +167,7 @@ void handle_irq_and_trap(inout ins_ret ret, uint mip_override) {
         uint new_mip = mip_override;
         bool handled = handle_trap(ret, irq, mie);
         if (handled) {
+            irq_last_handled = true;
             PROF(PROF_trap_taken)
             cpu.trap_count++;
         }

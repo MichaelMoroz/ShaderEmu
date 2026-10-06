@@ -3,7 +3,7 @@
 
 
 
-#define RAM_ADDR(lin) uint2(lin % 2048, 64 + (lin / 2048))
+// RAM_ADDR / RAM_LIN: see types.h
 #define RAM_MAX (2048 * (4096 - 64) * 4 * 4)
 
 
@@ -133,6 +133,7 @@ uint read_mie() {
 
 void write_csr_raw(uint address, uint value) {
     PROF(PROF_csr_write)
+    irq_quiet = false;
     uint where = address & 0x1fff;
     uint what = value;
     uint modify_mask = 0;

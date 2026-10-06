@@ -1,4 +1,4 @@
-Shader "Nix/rvc"
+﻿Shader "Nix/rvc"
 {
     Properties
     {
@@ -9,6 +9,7 @@ Shader "Nix/rvc"
 
         _UdonUARTInChar ("UART input Udon side", Int) = 0
         _UdonUARTInTag ("UART input unique tag", Int) = 0
+        _UartBurst ("UART input characters per tag step this shader accepts (host hint)", Int) = 4
 
         _PlayerID ("Player ID", Int) = -1
         _RTC0 ("RTC0", Int) = 0
@@ -144,10 +145,23 @@ Shader "Nix/rvc"
                     xreg_load();
                     #endif
 
+#ifdef OPT_FAST_STEP
+                    uint i = 0;
+                    [loop]
+                    while (i < _Ticks && !cpu.stall) {
+                        // as many fast ticks in a row as possible, then one general tick
+                        i += fast_run(_Ticks - i);
+                        if (i < _Ticks && !cpu.stall) {
+                            cpu_tick();
+                            i++;
+                        }
+                    }
+#else
                     [fastopt]
                     for (uint i = 0; i < _Ticks && !cpu.stall; i++) {
                         cpu_tick();
                     }
+#endif
                     #ifdef XREG_ARRAY
                     xreg_store();
                     #endif

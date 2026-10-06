@@ -17,7 +17,13 @@ uint2 next_pos(in uint2 pos, in uint2 dim) {
 }
 
 uint idx_uint4(uint4 data, uint idx) {
+    // Selects, not data[idx]: DXC compiles a dynamic vector index as four stores to a local
+    // array plus a load, on every instruction fetch. idx is always 0..3.
+#ifdef OPT_BASELINE
     return data[idx];
+#else
+    return (idx & 2) ? ((idx & 1) ? data.w : data.z) : ((idx & 1) ? data.y : data.x);
+#endif
     /* [flatten] */
     /* switch (idx) { */
     /*     case 0: */

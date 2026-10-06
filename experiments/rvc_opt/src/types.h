@@ -5,7 +5,44 @@
 
 
 
-#define RAM_ADDR(lin) uint2(lin % 2048, 64 + (lin / 2048))
+// Where RAM texel number `lin` (16 bytes each) lives in the state texture.
+// RAM_TILE_BITS = 0: upstream's row-major order, 2048 texels (32 KB) per row.
+// RAM_TILE_BITS = b: square tiles of 2^b x 2^b texels laid out row by row, so nearby addresses
+// are near each other in both directions (b = 4: one 4 KB page per 16x16 tile).
+// RAM_TILE_ZORDER additionally walks each tile in Z-order (Morton order).
+#ifndef RAM_TILE_BITS
+#define RAM_TILE_BITS 0
+#endif
+#if RAM_TILE_BITS == 0
+#define RAM_ADDR(lin) uint2((lin) % 2048, 64 + ((lin) / 2048))
+#define RAM_LIN(x, y) ((x) + (y) * 2048)
+#else
+#define RAM_TILE (1 << RAM_TILE_BITS)
+#define RAM_TILES_PER_ROW (2048 >> RAM_TILE_BITS)
+#ifdef RAM_TILE_ZORDER
+uint ram_even_bits(uint v) {   // bits 0,2,4,.. of v packed together
+    v &= 0x55555555; v = (v | (v >> 1)) & 0x33333333; v = (v | (v >> 2)) & 0x0f0f0f0f; v = (v | (v >> 4)) & 0x00ff00ff;
+    return v & 0xff;
+}
+uint ram_spread_bits(uint v) { // inverse of ram_even_bits for 8 bits
+    v &= 0xff; v = (v | (v << 4)) & 0x0f0f; v = (v | (v << 2)) & 0x3333; v = (v | (v << 1)) & 0x5555;
+    return v;
+}
+#define RAM_IN_X(i) ram_even_bits(i)
+#define RAM_IN_Y(i) ram_even_bits((i) >> 1)
+#define RAM_IN(x, y) (ram_spread_bits(x) | (ram_spread_bits(y) << 1))
+#else
+#define RAM_IN_X(i) ((i) & (RAM_TILE - 1))
+#define RAM_IN_Y(i) ((i) >> RAM_TILE_BITS)
+#define RAM_IN(x, y) ((x) | ((y) << RAM_TILE_BITS))
+#endif
+#define RAM_TILE_OF(lin) ((lin) >> (2 * RAM_TILE_BITS))
+#define RAM_WITHIN(lin) ((lin) & (RAM_TILE * RAM_TILE - 1))
+#define RAM_ADDR(lin) uint2(((RAM_TILE_OF(lin) % RAM_TILES_PER_ROW) << RAM_TILE_BITS) | RAM_IN_X(RAM_WITHIN(lin)), \
+                            64 + ((RAM_TILE_OF(lin) / RAM_TILES_PER_ROW) << RAM_TILE_BITS) + RAM_IN_Y(RAM_WITHIN(lin)))
+#define RAM_LIN(x, y) (((((y) >> RAM_TILE_BITS) * RAM_TILES_PER_ROW + ((x) >> RAM_TILE_BITS)) << (2 * RAM_TILE_BITS)) | \
+                       RAM_IN((x) & (RAM_TILE - 1), (y) & (RAM_TILE - 1)))
+#endif
 #define RAM_MAX (2048 * (4096 - 64) * 4 * 4)
 
 
@@ -239,10 +276,25 @@ uint sign_extend(uint x, uint b) {
     return (x ^ m) - m;
 }
 
+// The tick pass hands its write bloom filter (the OR of every written word address) to the
+// commit pass in a spare state word, texel (41,0).r, so RAM texels that cannot have been
+// written skip the eight write-cache lookups. The commit pass clears the word again, so the
+// state after a frame is unchanged.
+#if !defined(OPT_BASELINE) && !defined(OPT_NO_COMMIT_BLOOM)
+#define OPT_COMMIT_BLOOM 1
+#endif
+#ifdef PASS_TICK
+static uint mem_cache_bloom = 0;
+#endif
+
+// Guest registers in an indexable array (one store per write) unless OPT_BASELINE.
+#if !defined(OPT_BASELINE) && !defined(XREG_SWITCH)
+#define XREG_ARRAY 1
+#endif
 #if defined(XREG_ARRAY) && defined(PASS_TICK)
 // Guest registers in an indexable array for the tick loop: one indexed store per instruction
 // instead of a conditional move over every register.
-static uint xr[32];
+static uint xr[33];  // [32] is a scratch slot for writes that must not land (x0, no result)
 uint xreg(uint i) {
     return xr[i];
 }
@@ -251,6 +303,43 @@ void xreg_load() {
 }
 void xreg_store() {
     for (uint k = 0; k < 32; k++) cpu.xreg[k] = xr[k];
+}
+#elif defined(XREG_TREE)
+// FXC turns cpu.xreg[i] into ~70 instructions ending in a 32-step dependent OR chain.
+// A balanced select tree gives the same value with a dependency depth of 5.
+uint xreg(uint i) {
+    bool b0 = (i & 1) != 0, b1 = (i & 2) != 0, b2 = (i & 4) != 0, b3 = (i & 8) != 0, b4 = (i & 16) != 0;
+    uint p0 = b0 ? cpu.xreg[1] : cpu.xreg[0];
+    uint p1 = b0 ? cpu.xreg[3] : cpu.xreg[2];
+    uint p2 = b0 ? cpu.xreg[5] : cpu.xreg[4];
+    uint p3 = b0 ? cpu.xreg[7] : cpu.xreg[6];
+    uint p4 = b0 ? cpu.xreg[9] : cpu.xreg[8];
+    uint p5 = b0 ? cpu.xreg[11] : cpu.xreg[10];
+    uint p6 = b0 ? cpu.xreg[13] : cpu.xreg[12];
+    uint p7 = b0 ? cpu.xreg[15] : cpu.xreg[14];
+    uint p8 = b0 ? cpu.xreg[17] : cpu.xreg[16];
+    uint p9 = b0 ? cpu.xreg[19] : cpu.xreg[18];
+    uint p10 = b0 ? cpu.xreg[21] : cpu.xreg[20];
+    uint p11 = b0 ? cpu.xreg[23] : cpu.xreg[22];
+    uint p12 = b0 ? cpu.xreg[25] : cpu.xreg[24];
+    uint p13 = b0 ? cpu.xreg[27] : cpu.xreg[26];
+    uint p14 = b0 ? cpu.xreg[29] : cpu.xreg[28];
+    uint p15 = b0 ? cpu.xreg[31] : cpu.xreg[30];
+    uint q0 = b1 ? p1 : p0;
+    uint q1 = b1 ? p3 : p2;
+    uint q2 = b1 ? p5 : p4;
+    uint q3 = b1 ? p7 : p6;
+    uint q4 = b1 ? p9 : p8;
+    uint q5 = b1 ? p11 : p10;
+    uint q6 = b1 ? p13 : p12;
+    uint q7 = b1 ? p15 : p14;
+    uint r0 = b2 ? q1 : q0;
+    uint r1 = b2 ? q3 : q2;
+    uint r2 = b2 ? q5 : q4;
+    uint r3 = b2 ? q7 : q6;
+    uint s0 = b3 ? r1 : r0;
+    uint s1 = b3 ? r3 : r2;
+    return b4 ? s1 : s0;
 }
 #else
 uint xreg(uint i) {
@@ -637,6 +726,13 @@ uint4 encode(uint2 pos) {
     // fallback is passthrough
     uint4 ret = STATE_TEX(pos);
 
+#ifdef OPT_COMMIT_BLOOM
+    if (pos.x == 41 && pos.y == 0) {
+        ret.r = mem_cache_bloom;
+        return ret;
+    }
+#endif
+
     // cpu_t serialization
     uint pos_id = pos.x | (pos.y << 16);
     [forcecase]
@@ -965,6 +1061,9 @@ uint4 commit(uint2 pos) {
         ++ret.b;
     }
 
+#ifdef OPT_COMMIT_BLOOM
+    uint c_bloom = STATE_TEX_HART(uint2(41, 0), 0).r;
+#endif
     // clear stalls
     if (pos_id == 28) {
         switch (ret.r) {
@@ -1062,13 +1161,13 @@ uint4 commit(uint2 pos) {
     // RAM
     if (pos.y >= 64) {
         uint2 pos_ram = uint2(pos.x, pos.y - 64);
-        uint lin = pos_ram.x + pos_ram.y * 2048;
+        uint lin = RAM_LIN(pos_ram.x, pos_ram.y);
 
         if (_Init) {
             // init main memory from texture
             uint2 ram_dim;
             _Data_RAM_A.GetDimensions(ram_dim.x, ram_dim.y);
-            uint2 pos2 = uint2(pos.x, pos.y - 64);
+            uint2 pos2 = uint2(lin % 2048, lin / 2048);  // the payload image is row-major
             // something feels off here... off by one, you might say...
             // ...but this way it actually works
             pos2.y = ram_dim.y - pos2.y - 1;
@@ -1107,6 +1206,10 @@ uint4 commit(uint2 pos) {
                 }
             } else {
                 // write back L1 cache
+#ifdef OPT_COMMIT_BLOOM
+                [branch]
+                if ((lin & c_bloom) == lin)
+#endif
                 [loop]
                 for (uint offset = 0; offset < 4; offset++) {
                     uint addr_off = lin + (offset << 2);
@@ -1127,6 +1230,13 @@ uint4 commit(uint2 pos) {
         }
     }
 
+#ifdef OPT_COMMIT_BLOOM
+    // hand-over word is cleared here (FXC hits an internal error if this sits next to the
+    // stall-clearing switch above)
+    if (pos.x == 41 && pos.y == 0) {
+        ret = uint4(0, ret.g, ret.b, ret.a);
+    }
+#endif
     return ret;
 }
 #endif

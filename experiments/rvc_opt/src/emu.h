@@ -7,6 +7,11 @@
 #ifndef OPT_BASELINE
 #define OPT_DISPATCH 1
 #define OPT_FETCH_FAST 1
+#define OPT_IRQ_GATE 1
+#ifndef MULH_DOUBLES
+#define NO_DOUBLES_MULH 1   // exact integer MULH; upstream's double version rounds large products
+#endif
+#define OPT_FAST_STEP 1
 #endif
 
 #define AS_SIGNED(val) (asint(val))
@@ -258,7 +263,7 @@ DEF(mul, FormatR, { // rv32m
     uint tmp = AS_SIGNED(xreg(ins.rs1)) * AS_SIGNED(xreg(ins.rs2));
     WR_RD(tmp)
 })
-#ifdef NO_DOUBLES
+#if defined(NO_DOUBLES) || defined(NO_DOUBLES_MULH)
 // Exact high word of a 32x32 multiply from 16-bit partial products, for hosts whose double
 // support cannot be trusted. Upstream's double version rounds once the product needs more
 // than 53 bits, so results differ from it there.
@@ -350,6 +355,7 @@ DEF(sc_w, FormatR, { // rv32a
 })
 DEF(sfence_vma, FormatEmpty, { // system
     hot_flush();
+    tlb2_flush();
     /* cpu.stall = STALL_FENCE; */
 })
 DEF(sh, FormatS, { // rv32i
@@ -769,7 +775,7 @@ ins_ret ins_select(uint ins_word, inout ins_ret ret) {
 
 // _Time is constant for the whole pass, so the timer value is computed once.
 static uint pass_mtime_lo, pass_mtime_hi;
-#ifdef NO_DOUBLES
+#if defined(NO_DOUBLES) || defined(NO_DOUBLES_TIME)
 uniform uint _HostMtimeLo, _HostMtimeHi;  // the same value, computed by the host
 void time_prepare() {
     pass_mtime_lo = _HostMtimeLo;
@@ -783,6 +789,300 @@ void time_prepare() {
 }
 #endif
 
+#ifdef OPT_FAST_STEP
+// The instruction word cpu_tick already fetched for this tick, if any.
+static bool pre_valid = false;
+static uint pre_word;
+
+void xreg_set(uint r, uint v) {
+#ifdef XREG_ARRAY
+    xr[r] = v;
+#else
+    #define C(x) case x: cpu.xreg[x] = v; break;
+    if (r < 16) {
+        [flatten]
+        switch (r) {
+                  C(1)  C(2)  C(3)
+            C(4)  C(5)  C(6)  C(7)
+            C(8)  C(9)  C(10) C(11)
+            C(12) C(13) C(14) C(15)
+        }
+    } else {
+        [flatten]
+        switch (r) {
+            C(16) C(17) C(18) C(19)
+            C(20) C(21) C(22) C(23)
+            C(24) C(25) C(26) C(27)
+            C(28) C(29) C(30) C(31)
+        }
+    }
+    #undef C
+#endif
+}
+
+// Fast-step address translation is branch-free: identity when paging does not apply, else a
+// TLB hit. The two "paging does not apply" flags are recomputed at the end of every general-path
+// instruction, which is where paging mode, privilege and mstatus can change.
+static bool xl_ident_f = false;  // fetches: paging off, or machine mode
+static bool xl_ident_d = false;  // loads/stores: paging off, or machine mode without MPRV redirection
+#if defined(OPT_TLB_ARRAY)
+// The tagged array is the whole TLB: two array reads, no branch, and nothing held in registers
+// that would have to be merged at every join of the fast loop.
+#define FAST_XL(ident, mode, vpns, pages, va, ok, pa) \
+    uint ok##_k = TLB2_IDX(mode, va); \
+    bool ok = ident || tlb2_tag[ok##_k] == TLB2_TAG(va, xl_ctx); \
+    uint pa = ident ? (va) : (tlb2_pg[ok##_k] | ((va) & 0xfff));
+#elif defined(OPT_NO_TLB2)
+#define FAST_XL(ident, mode, vpns, pages, va, ok, pa) \
+    uint ok##_slot = ((va) >> 12) & 3; \
+    bool ok = ident || idx_uint4(vpns, ok##_slot) == ((va) >> 12); \
+    uint pa = ident ? (va) : (idx_uint4(pages, ok##_slot) | ((va) & 0xfff));
+#else
+// A first-level miss tries the second-level TLB and, on a hit, refills the first level.
+#define FAST_XL(ident, mode, vpns, pages, va, ok, pa) \
+    uint ok##_slot = ((va) >> 12) & 3; \
+    bool ok = ident || idx_uint4(vpns, ok##_slot) == ((va) >> 12); \
+    uint pa = ident ? (va) : (idx_uint4(pages, ok##_slot) | ((va) & 0xfff)); \
+    [branch] if (!ok) { \
+        uint ok##_k = TLB2_IDX(mode, va); \
+        if (tlb2_tag[ok##_k] == TLB2_TAG(va, xl_ctx)) { \
+            uint ok##_pg = tlb2_pg[ok##_k]; \
+            ok = true; \
+            pa = ok##_pg | ((va) & 0xfff); \
+            set_idx_uint4(vpns, (va) >> 12, ok##_slot); \
+            set_idx_uint4(pages, ok##_pg, ok##_slot); \
+        } \
+    }
+#endif
+
+// Runs one instruction that cannot trap, touch memory or change what interrupts see (integer
+// ALU, branches, jumps) without the general path. Only called while irq_quiet holds, so the
+// general path's interrupt/UART step would have done nothing. Returns false, having changed
+// nothing, for anything else.
+bool fast_exec(uint w) {
+    uint opc = w & 0x7f;
+    uint f3 = (w >> 12) & 0x7;
+    uint rd = (w >> 7) & 0x1f;
+#ifndef OPT_NO_EARLY_REGS
+    // rs1 and rs2 sit at the same bits in every format, so both registers are read before the
+    // opcode is known: the reads overlap the decode instead of following it.
+    uint rs1v = xreg((w >> 15) & 0x1f);
+    uint rs2v = xreg((w >> 20) & 0x1f);
+#else
+    #define rs1v xreg((w >> 15) & 0x1f)
+    #define rs2v xreg((w >> 20) & 0x1f)
+#endif
+    uint pc = cpu.pc;
+    uint npc = pc + 4;
+    uint val = 0;
+    bool wr = true;
+    bool ok = true;
+#ifdef OPT_BRANCHLESS_ALU
+    // Everything that is not a load or store is pure arithmetic on rs1, rs2 and the immediate:
+    // all candidate results are computed side by side and picked with selects, so these
+    // instructions (about 60% of the mix) pass no decode branch at all.
+    bool is_mem = opc == 0x03 || opc == 0x23;
+    [branch]
+    if (!is_mem) {
+        bool is_imm = opc == 0x13, is_op = opc == 0x33, is_br = opc == 0x63;
+        uint imm_i = (w & 0x80000000 ? 0xfffff800 : 0) | ((w >> 20) & 0x7ff);
+        uint imm_u = w & 0xfffff000;
+        uint imm_b = (w & 0x80000000 ? 0xfffff000 : 0) | ((w << 4) & 0x800) | ((w >> 20) & 0x7e0) | ((w >> 7) & 0x1e);
+        uint imm_j = (w & 0x80000000 ? 0xfff00000 : 0) | (w & 0x000ff000) | ((w & 0x00100000) >> 9) | ((w & 0x7fe00000) >> 20);
+        uint f6 = w >> 26, f7 = w >> 25;
+        uint a = rs1v;
+        uint b = is_imm ? imm_i : rs2v;
+        uint sh = (is_imm ? (w >> 20) : rs2v) & 0x1f;
+        bool lt = AS_SIGNED(a) < AS_SIGNED(b), ltu = a < b;
+        bool arith = is_imm ? f6 == 0x10 : f7 != 0;
+        uint shr = arith ? ((a & 0x80000000) ? ~(~a >> sh) : a >> sh) : a >> sh;
+        uint sum = (is_op && f7 != 0) ? a - b : a + b;
+        uint alu = f3 == 0 ? sum :
+                   f3 == 1 ? a << sh :
+                   f3 == 2 ? (lt ? 1 : 0) :
+                   f3 == 3 ? (ltu ? 1 : 0) :
+                   f3 == 4 ? a ^ b :
+                   f3 == 5 ? shr :
+                   f3 == 6 ? a | b : a & b;
+        bool ok_imm = (f3 != 1 || f6 == 0) && (f3 != 5 || f6 == 0 || f6 == 0x10);
+        bool ok_op = f7 == 0 || (f7 == 0x20 && (f3 == 0 || f3 == 5));
+        bool taken = f3 == 0 ? a == b : f3 == 1 ? a != b : f3 == 4 ? lt : f3 == 5 ? !lt : f3 == 6 ? ltu : !ltu;
+        val = (is_imm || is_op) ? alu : opc == 0x37 ? imm_u : opc == 0x17 ? pc + imm_u : pc + 4;
+        npc = opc == 0x6f ? pc + imm_j : opc == 0x67 ? a + imm_i : (is_br && taken) ? pc + imm_b : pc + 4;
+        wr = !is_br;
+        ok = is_imm ? ok_imm : is_op ? ok_op : is_br ? (f3 != 2 && f3 != 3) : opc == 0x67 ? f3 == 0 :
+             (opc == 0x37 || opc == 0x17 || opc == 0x6f);
+    } else
+#endif
+    [forcecase]
+    switch (opc) {
+        case 0x37: val = w & 0xfffff000; break;                 // lui
+        case 0x17: val = pc + (w & 0xfffff000); break;          // auipc
+        case 0x6f: {                                            // jal
+            FormatJ j = parse_FormatJ(w);
+            val = pc + 4;
+            npc = pc + j.imm;
+            break;
+        }
+        case 0x67: {                                            // jalr
+            FormatI i = parse_FormatI(w);
+            ok = f3 == 0;
+            val = pc + 4;
+            npc = rs1v + i.imm;
+            break;
+        }
+        case 0x13: {                                            // op-imm
+            FormatI i = parse_FormatI(w);
+            uint a = rs1v;
+            uint b = i.imm;
+            uint sh = (w >> 20) & 0x1f;
+            uint f6 = w >> 26;
+            uint f_sra = (a & 0x80000000) ? ~(~a >> sh) : a >> sh;
+#ifdef OPT_ADDI_FIRST
+            [branch]
+            if (f3 == 0) {                 // addi is about a quarter of all instructions
+                val = a + b;
+                break;
+            }
+#endif
+#ifdef OPT_FAST_ALU_SELECT
+            val = f3 == 0 ? a + b :
+                  f3 == 1 ? a << sh :
+                  f3 == 2 ? (AS_SIGNED(a) < AS_SIGNED(b) ? 1 : 0) :
+                  f3 == 3 ? (a < b ? 1 : 0) :
+                  f3 == 4 ? a ^ b :
+                  f3 == 5 ? (f6 == 0x10 ? f_sra : a >> sh) :
+                  f3 == 6 ? a | b : a & b;
+            ok = (f3 != 1 || f6 == 0) && (f3 != 5 || f6 == 0 || f6 == 0x10);
+#else
+            [forcecase]
+            switch (f3) {
+                case 0: val = a + b; break;
+                case 1: val = a << sh; ok = f6 == 0; break;
+                case 2: val = AS_SIGNED(a) < AS_SIGNED(b) ? 1 : 0; break;
+                case 3: val = a < b ? 1 : 0; break;
+                case 4: val = a ^ b; break;
+                case 5: val = f6 == 0x10 ? f_sra : a >> sh; ok = f6 == 0 || f6 == 0x10; break;
+                case 6: val = a | b; break;
+                default: val = a & b; break;
+            }
+#endif
+            break;
+        }
+        case 0x33: {                                            // op (M extension: general path)
+            uint a = rs1v;
+            uint b = rs2v;
+            uint f7 = w >> 25;
+            uint f_sra = (a & 0x80000000) ? ~(~a >> b) : a >> b;
+            ok = f7 == 0 || (f7 == 0x20 && (f3 == 0 || f3 == 5));
+#ifdef OPT_FAST_ALU_SELECT
+            val = f3 == 0 ? (f7 ? a - b : a + b) :
+                  f3 == 1 ? a << b :
+                  f3 == 2 ? (AS_SIGNED(a) < AS_SIGNED(b) ? 1 : 0) :
+                  f3 == 3 ? (a < b ? 1 : 0) :
+                  f3 == 4 ? a ^ b :
+                  f3 == 5 ? (f7 ? f_sra : a >> b) :
+                  f3 == 6 ? a | b : a & b;
+#else
+            [forcecase]
+            switch (f3) {
+                case 0: val = f7 ? a - b : a + b; break;
+                case 1: val = a << b; break;
+                case 2: val = AS_SIGNED(a) < AS_SIGNED(b) ? 1 : 0; break;
+                case 3: val = a < b ? 1 : 0; break;
+                case 4: val = a ^ b; break;
+                case 5: val = f7 ? f_sra : a >> b; break;
+                case 6: val = a | b; break;
+                default: val = a & b; break;
+            }
+#endif
+            break;
+        }
+        case 0x63: {                                            // branches
+            uint a = rs1v;
+            uint b = rs2v;
+            bool lt = AS_SIGNED(a) < AS_SIGNED(b), ltu = a < b;
+            bool taken = f3 == 0 ? a == b : f3 == 1 ? a != b : f3 == 4 ? lt : f3 == 5 ? !lt : f3 == 6 ? ltu : !ltu;
+            FormatB br = parse_FormatB(w);
+            ok = f3 != 2 && f3 != 3;
+            wr = false;
+            if (taken) { npc = pc + br.imm; }
+            break;
+        }
+#ifndef OPT_NO_FAST_MEM
+        case 0x03: {                                            // loads from RAM, translation available
+            FormatI i = parse_FormatI(w);
+            uint va = rs1v + i.imm;
+            FAST_XL(xl_ident_d, MMU_ACCESS_READ, tlb_r_vpn, tlb_r_page, va, t_ok, pa)
+            ok = false;
+            // va == 0 is left to the general path, which treats it specially
+            [branch]
+            if (va != 0 && (f3 < 3 || f3 == 4 || f3 == 5) && t_ok && (pa & 0x80000000) != 0) {
+                {
+                    // Same two-word read as the general path: the second word is read whenever
+                    // the address is not word aligned, at physical address + 4.
+                    uint off = pa & 0x3;
+                    uint a1 = pa & 0x7ffffffc;
+                    uint a2 = (pa & ~0x3) + 4;
+                    uint w1 = 0, w2 = 0;
+                    [branch]
+                    if (a1 < RAM_MAX) {
+                        w1 = mem_get_cached_or_tex(a1);
+                    }
+                    [branch]
+                    if (off != 0 && (a2 & 0x80000000) != 0 && (a2 & 0x7fffffff) < RAM_MAX) {
+                        w2 = mem_get_cached_or_tex(a2 & 0x7fffffff);
+                    }
+                    uint v = off != 0 ? ((w1 >> (off * 8)) | (w2 << ((4 - off) * 8))) : w1;
+                    prepared_mem_val = v;
+                    val = f3 == 0 ? sign_extend(v & 0xff, 8) : f3 == 1 ? sign_extend(v & 0xffff, 16) :
+                          f3 == 2 ? v : f3 == 4 ? v & 0xff : v & 0xffff;
+                    ok = true;
+                }
+            }
+            break;
+        }
+        case 0x23: {                                            // sb/sh/sw to RAM, translation available
+            FormatS s;
+            s.rs2 = (w >> 20) & 0x1f;
+            s.addr = rs1v + ((w & 0x80000000 ? 0xfffff000 : 0) | ((w >> 20) & 0xfe0) | ((w >> 7) & 0x1f));
+            FAST_XL(xl_ident_d, MMU_ACCESS_WRITE, tlb_w_vpn, tlb_w_page, s.addr, t_ok, pa)
+            ok = false;
+            wr = false;
+            [branch]
+            if (f3 < 3 && t_ok && (pa & 0x80000000) != 0) {
+                {
+                    mem_set(pa, rs2v, 1u << f3);          // may set cpu.stall when the cache is full
+                    ok = true;
+                }
+            }
+            break;
+        }
+#endif
+        default:
+            ok = false;
+            break;
+    }
+    if (!ok) {
+        return false;
+    }
+#if defined(XREG_ARRAY) && !defined(OPT_NO_SCRATCH_WRITE)
+    xr[(wr && rd != 0) ? rd : 32] = val;   // branch-free: discarded writes go to the scratch slot
+#else
+    if (wr && rd != 0) {
+        xreg_set(rd, val);
+    }
+#endif
+    cpu.debug_last_ins = w;
+    // cpu.clint.mtime and cpu.debug_do_tick already hold this pass's values: the first tick of
+    // every pass takes the general path (irq_quiet starts false), which sets both.
+    cpu.pc = npc;
+    return true;
+}
+#undef rs1v
+#undef rs2v
+#endif
+
 void emulate() {
     uint ins_word = 0;
     ins_ret ret = ins_ret_noop();
@@ -790,7 +1090,12 @@ void emulate() {
     if ((cpu.pc & 0x3) == 0) {
 #ifdef OPT_FETCH_FAST
         // Same page as the last translated fetch: reuse it without re-checking mode and privilege.
-        uint ins_addr;
+        uint ins_addr = 0;
+#ifdef OPT_FAST_STEP
+        if (pre_valid) {
+            // cpu_tick already fetched this instruction through the same check
+        } else
+#endif
         if ((cpu.pc >> 12) == fetch_vpn) {
             PROF(PROF_fast_fetch)
             ins_addr = fetch_page | (cpu.pc & 0xfff);
@@ -802,7 +1107,11 @@ void emulate() {
 #endif
 
         if (!ret.trap.en) {
+#if defined(OPT_FAST_STEP)
+            if (pre_valid) { ins_word = pre_word; } else { ins_word = mem_get_instruction(ins_addr); }
+#else
             ins_word = mem_get_instruction(ins_addr);
+#endif
             cpu.debug_last_ins = ins_word;
 
             ret = ins_select(ins_word, ret);
@@ -874,13 +1183,23 @@ void emulate() {
     }
 
     // handle CLINT IRQs
+    cpu.clint.mtime_lo = pass_mtime_lo;
+    cpu.clint.mtime_hi = pass_mtime_hi;
+
+#ifdef OPT_IRQ_GATE
+    // Nothing below can have an effect while irq_quiet holds, no trap is pending and this is
+    // not a UART input poll tick.
+    if (irq_quiet && !ret.trap.en && (cpu.clock & 0xff) != 0xff) {
+        PROF(PROF_irq_gated)
+        cpu.pc = ret.pc_val;
+        return;
+    }
+#endif
+
     uint mip_override = read_mip();
     if (cpu.clint.msip) {
         mip_override |= MIP_MSIP;
     }
-
-    cpu.clint.mtime_lo = pass_mtime_lo;
-    cpu.clint.mtime_hi = pass_mtime_hi;
 
     if ((cpu.clint.mtimecmp_lo != 0 || cpu.clint.mtimecmp_hi != 0) && (cpu.clint.mtime_hi > cpu.clint.mtimecmp_hi || (cpu.clint.mtime_hi == cpu.clint.mtimecmp_hi && cpu.clint.mtime_lo >= cpu.clint.mtimecmp_lo))) {
         mip_override |= MIP_MTIP;
@@ -901,8 +1220,22 @@ void emulate() {
     /*     cpu.trap_count = cpu.pc; */
     /* } */
 
+    bool e_no_trap = !ret.trap.en;
+
     // will write CSR_MIP if necessary
     handle_irq_and_trap(ret, mip_override);
+
+#ifdef OPT_IRQ_GATE
+    // If this step took no trap, repeating it with the same inputs does nothing: either no
+    // interrupt is pending-and-enabled, or one is pending but masked, in which case the only
+    // effect was writing mip, and writing the same value again changes nothing. Every input
+    // (CSRs, CLINT, privilege) clears the flag when it changes.
+#ifdef OPT_NO_IDEM
+    irq_quiet = e_no_trap && (mip_override & read_mie()) == 0;
+#else
+    irq_quiet = e_no_trap && !irq_last_handled && cpu.stall == 0;
+#endif
+#endif
 
     /* if (ret.pc_val & 0x3) { */
     /*     cpu.debug_arb_0 = ret.pc_val; */
@@ -916,6 +1249,25 @@ void emulate() {
 
     // ret.pc_val should be set to pc+4 by default
     cpu.pc = ret.pc_val;
+
+#ifdef OPT_FAST_STEP
+    {
+        uint xs, xm;
+        uint xp = get_effective_privilege(xs, xm);
+        xl_ctx = xp | (xs << 2) | (xm << 3);
+    }
+#ifdef OPT_NO_MMODE
+    xl_ident_f = cpu.mmu.mode == MMU_MODE_OFF;
+    xl_ident_d = xl_ident_f;
+#else
+    {
+        bool machine = cpu.csr.privilege == PRIV_MACHINE;
+        uint ms = read_mstatus();
+        xl_ident_f = cpu.mmu.mode == MMU_MODE_OFF || machine;
+        xl_ident_d = cpu.mmu.mode == MMU_MODE_OFF || (machine && (((ms >> 17) & 0x1) == 0 || ((ms >> 11) & 0x3) == PRIV_MACHINE));
+    }
+#endif
+#endif
 }
 
 #endif

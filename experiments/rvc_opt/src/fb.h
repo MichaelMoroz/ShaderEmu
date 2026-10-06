@@ -3,7 +3,7 @@
 
 
 
-#define RAM_ADDR(lin) uint2(lin % 2048, 64 + (lin / 2048))
+// RAM_ADDR / RAM_LIN: see types.h
 #define RAM_MAX (2048 * (4096 - 64) * 4 * 4)
 
 

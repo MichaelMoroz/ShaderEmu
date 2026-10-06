@@ -57,6 +57,8 @@ void prof_flush(uint2 pos) {
 #define PROF_fast_store 45
 #define PROF_fast_load 46
 #define PROF_fast_fetch 47
+#define PROF_irq_gated 48
+#define PROF_fast_step 49
 #define PROF_ins_auipc 64
 #define PROF_ins_jal 65
 #define PROF_ins_lui 66

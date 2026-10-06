@@ -33,6 +33,8 @@ public:
 
     ID3D11Texture2D* current() const { return tex_[cur_].Get(); }
     ID3D11ShaderResourceView* currentSRV() const { return srv_[cur_].Get(); }
+    // The other buffer: RAM as it was before the last full-texture zone ran.
+    ID3D11ShaderResourceView* previousSRV() const { return srv_[1 - cur_].Get(); }
     UINT width() const { return width_; }
     UINT height() const { return height_; }
 

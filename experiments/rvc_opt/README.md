@@ -34,7 +34,50 @@ pass-local (`static`), never stored in the texture.
 7. **Same-page fetch fast path** (`emu.h`, `mmu.h`, `OPT_FETCH_FAST`): a fetch from the page of
    the last translated fetch skips the mode, privilege and TLB checks.
 
-6 and 7 are on by default; define `OPT_BASELINE` to build without them. `OPT_ALU_SELECT`
+8. **Interrupt gate** (`emu.h`, `OPT_IRQ_GATE`): the per-instruction interrupt/UART step is
+   skipped while repeating it would do nothing: no trap was taken last time and none of its
+   inputs (CSRs, CLINT and other MMIO, paging mode) has been written since. That includes an
+   interrupt that is pending but masked. One UART poll tick in 256 still runs it.
+9. **Fast step** (`cpu.h`, `emu.h`, `OPT_FAST_STEP`): while the gate holds, integer ALU ops,
+   branches, jumps and RAM loads/stores whose translation is known (TLB hit, machine mode, or
+   paging off) run on a short path that skips the general instruction path entirely. About 90%
+   of instructions take it. Everything else, and anything that would trap, uses the general
+   path unchanged.
+10. **Guest registers in an indexed array** (`types.h`, `XREG_ARRAY`): one store per register
+    write instead of a conditional move over all 31.
+11. **Write-cache occupancy bitmap** (`mem.h`): one bit per cache entry written this pass, so
+    lookups skip entries that are still empty instead of reading the 16 KB array.
+12. **Vector component select** (`helpers.cginc`): `data[idx]` on a `uint4` became selects; DXC
+    compiled it as four stores and a load on every fetch.
+13. **Commit skip** (`types.h`, `OPT_COMMIT_BLOOM`): the tick pass leaves its write bloom filter
+    in spare state word (41,0).r; RAM texels it rules out skip their eight cache lookups, and
+    the commit pass clears the word, so the state after a frame is unchanged. Worth about 1%.
+
+14. **Inner fast loop** (`main.shader`, `cpu.h`): fast steps run in their own tight loop
+    (`fast_tick()`), and the general path runs once when one fails. With both paths in one
+    loop body, every value the general path can modify had to be merged where the paths
+    rejoin, on every tick: about 680 phi nodes per iteration in the DXIL, against roughly 70
+    instructions of real work. The inner loop carries only what a fast step can change (93).
+15. **Second-level TLB** (`mmu.h`): 64 entries per access mode behind the small first-level one,
+    tagged with the privilege context and a generation number, so entries survive traps and
+    are dropped only on `satp` writes and `sfence.vma`. Fast-step coverage 89.5% -> 94.6%.
+16. **Integer MULH** (`emu.h`): exact 16-bit partial products instead of upstream's doubles,
+    which round once a product needs more than 53 bits. Results can therefore differ from
+    upstream on very large products; none did in any test. `MULH_DOUBLES` restores upstream's.
+17. **Redundant fast-step writes removed** (`emu.h`): the timer value and the single-step
+    marker are already set by the first tick of each pass, which always takes the general path.
+
+18. **Fast run** (`cpu.h`, `fast_run`): what is constant for a run of fast instructions is
+    decided once, not per instruction: single-stepping, the interrupt gate, and the distance to
+    the next UART poll tick. The clock is advanced once at the end of the run.
+19. **Early register reads** (`emu.h`): rs1 and rs2 sit at the same bits in every format, so both
+    are read before the opcode is decoded and the reads overlap the decode.
+20. **Instruction window with read-ahead** (`cpu.h`): the fetched RAM texel (four instructions)
+    is kept, and entering a texel also reads the next one, so in straight-line code the texture
+    read has finished long before its instructions are needed.
+21. **Second-level TLB grown to 256 entries per mode.**
+
+6 to 21 are on by default; define `OPT_BASELINE` to build without them. `OPT_ALU_SELECT`
 replaces the inner funct3 switch of 6 with a branch-free select; it measured within noise of
 the switch, so it is off.
 
@@ -48,7 +91,66 @@ the switch, so it is off.
 | 1 - 5 | 781k | 8d6fc1106d9cd3a1 |
 | 1 - 5 + fetch fast path | 814k - 831k | 8d6fc1106d9cd3a1 |
 | 1 - 5 + dispatch | 975k - 993k | 8d6fc1106d9cd3a1 |
-| 1 - 7 (this folder) | 1,050k | 8d6fc1106d9cd3a1 |
+| 1 - 7 | 1,050k | 8d6fc1106d9cd3a1 |
+| 1 - 13 | 1,575k | 8d6fc1106d9cd3a1 |
+
+With 14 to 17, FXC on D3D11 measures 1,856k - 1,865k IPS on the perf test (five runs) with the
+upstream state hash. The scripted shell session ends in upstream's state and output at
+1,827k IPS, and the deterministic cold boot ends in upstream's state, instruction count
+(42,245,866) and console output at 2,037k IPS, 21 s instead of 77 s.
+
+14 to 17 were developed with DXC on D3D12 (`rvc_trace12 --dxc --no-doubles`). Under DXC, median
+of five runs:
+
+| Build | Busy loop | Syscall-heavy | Cold boot (21,000 frames) |
+| --- | --- | --- | --- |
+| 1 - 13 | about 1,750k | about 1,700k | |
+| 1 - 17 (this folder) | 2,052k | 1,982k | 2.2M IPS, 19 s |
+| `OPT_BASELINE` | about 930k | about 900k | 987k IPS, 43 s |
+
+All three workloads end in the same state as the `OPT_BASELINE` build, cold boot included
+(42,231,339 instructions).
+
+With 18 to 21 (DXC, D3D12, median of 3 to 5 runs), by ticks per draw:
+
+| Ticks per draw | Busy loop | Syscall-heavy | Draw time |
+| --- | --- | --- | --- |
+| 2,048 | 2,193k | 2,093k | 0.9 ms |
+| 32,768 | 2,992k | 2,540k | 11 ms |
+| 65,536 | 3,013k | 2,488k | 22 ms |
+| 131,072 | 3,053k | 2,429k | 43 ms |
+
+About 0.15 ms per draw is fixed, so more ticks per draw raise IPS until the write cache fills:
+the write-heavy workload peaks near 16,000 to 32,000 ticks, the busy loop keeps gaining. A draw
+of 22 ms is fine for a benchmark and far too long for a VR frame; pick ticks for the frame
+budget, not for the headline number. The cold boot at 2,048 ticks runs at 2.38M IPS (18 s).
+
+Measured and left off in this round (all exact, all slower or neutral): a branch-free datapath
+for the non-memory instructions (`OPT_BRANCHLESS_ALU`, 5% slower than the switches), a data
+texel window (`OPT_DATA_WINDOW`), `OPT_ADDI_FIRST`, folding the page and alignment checks into
+one compare, an innermost per-texel instruction loop, a 2048-entry write cache, and a single
+array TLB (`OPT_TLB_ARRAY`). What helped was hiding latency, not removing branches.
+
+18 to 21 have not been built or measured with FXC.
+
+With 1 - 13 the scripted shell session runs at 1,566k IPS with upstream's final state and
+output, and a deterministic cold boot (21,000 frames, 42.2 M instructions) ends in the same
+state and console output as upstream in 25 s instead of 77 s.
+
+How the last third was found (all under DXC, a few seconds per try):
+
+- Timing-only ablations: the bare fetch loop runs at 7M IPS, and the interrupt/UART step alone
+  cost 25%.
+- Unit-cost probes (extra work whose result lands in a debug field): a dependent texture read
+  costs about 57 ns, a write-cache array read 27 ns, a switch about 9 ns per binary level, and
+  independent loads, small-array stores and plain branches 3 to 5 ns.
+- Counting fast versus general-path ticks by reason showed which cases were worth moving.
+- Unrelated code changes move DXC results by up to 10%, so only structural changes counted.
+
+Tried and left out: caching the fetched instruction texel, a 16-entry array TLB (more fast
+ticks, but slower lookups), select-based ALU, a branch-free register write. A one-slice write
+cache is 9 to 14% faster again but changes when passes stall, so its state no longer matches
+upstream (see the geometry section).
 
 After 6 and 7 the tick draw takes 1.66 ms instead of 2.30 ms, and its warp time shifts from
 branches (28% -> 20%) towards memory and texture waits (17% -> 23%); dependent arithmetic stays
@@ -181,6 +283,30 @@ and b7s2 over a scripted shell session).
   writes far more.
 - The hash itself is a few shifts and masks; changing it moves stall counts, not per-lookup
   cost. Upstream's mixed hash stalls less than plain low bits once there is only one slice.
+
+## RAM texel layout
+
+`RAM_TILE_BITS=b` places RAM in square tiles of 2^b x 2^b texels instead of upstream's
+row-major order (32 KB per texture row), so nearby addresses are close in both directions;
+`RAM_TILE_ZORDER` walks each tile in Z-order (Morton order). Only the address-to-texel mapping
+changes. Snapshots are tied to the layout: `tools\relayout_snapshot.py in.snap out.snap BITS [z]`
+converts a row-major one.
+
+All layouts end in the reference state on both workloads. Speed (DXC, D3D12, median of 4 and 3
+runs):
+
+| Layout | Busy loop | Syscall-heavy |
+| --- | --- | --- |
+| row-major (default) | 1,731k | 1,744k |
+| 8x8 tiles (1 KB) | 1,788k | 1,609k |
+| 16x16 tiles (one 4 KB page) | 1,743k | 1,790k |
+| 32x32 tiles (16 KB) | 1,843k | 1,680k |
+| 64x64 tiles (64 KB) | 1,774k | 1,770k |
+| 16x16 tiles, Z-order | 1,825k | 1,696k |
+
+No layout wins on both workloads and the spread is within what unrelated code changes cause,
+so texture locality is not a limit here and the default stays row-major. The guest touches
+only a few MB, which the GPU's caches hold in any order.
 
 ## ddx_fine / ddy_fine quad sharing: works, not worth it for rvc
 

@@ -31,15 +31,21 @@ add_library(harness_core STATIC
   harness/core/crt.cpp
   harness/core/readback.cpp
   harness/core/image.cpp
+  harness/core/memview.cpp
 )
 target_include_directories(harness_core PUBLIC harness/core)
 target_compile_definitions(harness_core PUBLIC
   NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS
   SHADERX86_UNITY_INCLUDE_DIR="${CMAKE_SOURCE_DIR}/harness/unity_include")
-target_link_libraries(harness_core PUBLIC d3d11 dxgi d3dcompiler dxguid windowscodecs ole32)
+target_link_libraries(harness_core PUBLIC d3d11 dxgi d3dcompiler dxguid windowscodecs ole32 gdi32)
 
-add_executable(rvc_harness harness/apps/rvc_harness.cpp)
-target_link_libraries(rvc_harness PRIVATE harness_core)
+# One frontend, two backends (D3D11 + FXC, D3D12 + DXC). rvc_harness_dxc only differs in its default.
+set(RVC_HARNESS_SOURCES harness/apps/rvc_harness.cpp harness/apps/rvc_backend11.cpp harness/apps/rvc_backend12.cpp)
+add_executable(rvc_harness ${RVC_HARNESS_SOURCES})
+target_link_libraries(rvc_harness PRIVATE harness_core d3d12)
+add_executable(rvc_harness_dxc ${RVC_HARNESS_SOURCES})
+target_compile_definitions(rvc_harness_dxc PRIVATE RVC_DEFAULT_DXC)
+target_link_libraries(rvc_harness_dxc PRIVATE harness_core d3d12)
 
 # D3D12 runner for the same FXC bytecode, so D3D12-only profilers (Nsight GPU Trace) can attach.
 add_executable(rvc_trace12 harness/apps/rvc_trace12.cpp)

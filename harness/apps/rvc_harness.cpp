@@ -15,18 +15,17 @@
 //     is empty, and echoes the tag back through (9,0).a.
 
 #include "common.h"
-#include "crt.h"
-#include "gpu.h"
-#include "image.h"
 #include "material.h"
-#include "readback.h"
+#include "rvc_backend.h"
 #include "rvc_time.h"
 #include "shaderlab.h"
 
+#include <conio.h>
 #include <fcntl.h>
 #include <io.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -70,7 +69,20 @@ struct Options {
     bool verbose = false;
     bool profile = false;
     bool present = false;
+    bool viz = false;         // memory view window
+    int uartBurst = 0;        // input characters per handshake; 0 = what the shader declares
+    bool resume = false;      // with no other arguments: resume the shell snapshot instead of booting
+    std::string vizCapture;   // BMP of the memory view, written at exit
     bool noDoubles = false;
+    bool doubles = false;     // --doubles: keep the shader's double math under DXC too
+#ifdef RVC_DEFAULT_DXC
+    bool dxc = true;          // D3D12 + DXC instead of D3D11 + FXC
+#else
+    bool dxc = false;
+#endif
+    std::string dxcOpt = "-O3", dxcSm = "6_6", dxcDir;
+    bool rvcDirSet = false, payloadSet = false;
+    std::string image;        // --image: a named boot image from kImages
     std::vector<std::string> defines;
     GpuOptions gpu;
     UINT fxcFlags = D3DCOMPILE_ENABLE_BACKWARDS_COMPATIBILITY | D3DCOMPILE_OPTIMIZATION_LEVEL3;
@@ -105,6 +117,18 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
   --no-doubles         compile with NO_DOUBLES (shader must support it): timer value from the host,
                        exact integer MULH. Not bit-identical to the double build.
   --define NAME        add a preprocessor define to the shader build (repeatable)
+  --uart-burst N       input characters per handshake (default: the shader's _UartBurst property, else 1)
+  --viz                open a window showing memory live (writes glow); --no-viz turns it off
+  --viz-capture FILE   save the memory view as a BMP at exit
+  --resume             when started without other arguments: resume the shell snapshot instead of booting
+  --image NAME         boot a named image instead of --payload/--ram/--mtd/--dtb; --image list shows them.
+                       Without it (and without --payload, --ram or --load-state) a menu asks at start
+                       when run from a console; scripts with redirected input or --no-stdin get linux-net.
+  --dxc / --d3d11      backend: D3D12 with DXC-compiled DXIL, or D3D11 with FXC bytecode (what VRChat
+                       runs). rvc_harness_dxc.exe defaults to --dxc. DXC implies NO_DOUBLES and, unless
+                       --rvc is given, the experiments/rvc_opt shader (upstream does not compile with DXC).
+  --doubles            with --dxc: keep the shader's double math (about 15 percent slower)
+  --dxc-opt "FLAGS"    DXC optimisation flags (default -O3)   --dxc-sm 6_x   --dxc-dir DIR
   --profile            compile with PROFILE defined and print the shader's PROF() event counters at
                        exit (names from <rvc>/src/prof.h; with --bench, counted after the warm-up)
   --stats S            print speed stats to stderr every S seconds (title bar always shows them)
@@ -156,9 +180,16 @@ bool parseArgs(int argc, char** argv, Options& o) {
         };
         if (a == "--help" || a == "-h") { usage(); exit(0); }
         else if (a == "--list-adapters") { listAdapters(); exit(0); }
-        else if (a == "--rvc") o.rvcDir = next("--rvc");
-        else if (a == "--payload") o.payloadDir = next("--payload");
-        else if (a == "--ram") o.ramPrefix = next("--ram");
+        else if (a == "--rvc") { o.rvcDir = next("--rvc"); o.rvcDirSet = true; }
+        else if (a == "--payload") { o.payloadDir = next("--payload"); o.payloadSet = true; }
+        else if (a == "--image") o.image = next("--image");
+        else if (a == "--dxc") o.dxc = true;
+        else if (a == "--d3d11") o.dxc = false;
+        else if (a == "--doubles") o.doubles = true;
+        else if (a == "--dxc-opt") o.dxcOpt = next("--dxc-opt");
+        else if (a == "--dxc-sm") o.dxcSm = next("--dxc-sm");
+        else if (a == "--dxc-dir") o.dxcDir = next("--dxc-dir");
+        else if (a == "--ram") { o.ramPrefix = next("--ram"); o.payloadSet = true; }
         else if (a == "--mtd") o.mtdPrefix = next("--mtd");
         else if (a == "--dtb") o.dtbPrefix = next("--dtb");
         else if (a == "--ticks") o.ticks = atoi(next("--ticks").c_str());
@@ -191,38 +222,17 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--verbose") o.verbose = true;
         else if (a == "--profile") o.profile = true;
         else if (a == "--present") o.present = true;
+        else if (a == "--uart-burst") o.uartBurst = atoi(next("--uart-burst").c_str());
+        else if (a == "--viz") o.viz = true;
+        else if (a == "--no-viz") o.viz = false;
+        else if (a == "--resume") o.resume = true;
+        else if (a == "--viz-capture") { o.vizCapture = next("--viz-capture"); o.viz = true; }
         else if (a == "--no-doubles") o.noDoubles = true;
         else if (a == "--define") o.defines.push_back(next("--define"));
         else { fprintf(stderr, "unknown option %s\n", a.c_str()); usage(); return false; }
     }
     if (havePendingExpect) { fprintf(stderr, "--expect without --send\n"); return false; }
-    if (o.payloadDir.empty()) o.payloadDir = (fs::u8path(o.rvcDir) / "data-net").u8string();
-    return true;
-}
-
-// Loads <dir>/<prefix>.{r,g,b,a}.png into <propBase>_{R,G,B,A}.
-bool loadLaneTextures(Gpu& gpu, Material& mat, const std::string& dir, const std::string& prefix,
-                      const std::string& propBase, std::vector<ComPtr<ID3D11ShaderResourceView>>& keep) {
-    if (prefix == "none") return true;
-    const char* lanes[4] = {"r", "g", "b", "a"};
-    const char* props[4] = {"_R", "_G", "_B", "_A"};
-    for (int i = 0; i < 4; ++i) {
-        std::string path = (fs::u8path(dir) / (prefix + "." + lanes[i] + ".png")).u8string();
-        ImageRGBA8 img;
-        std::string err;
-        if (!loadImageRGBA8(path, img, err)) {
-            fprintf(stderr, "[harness] %s\n", err.c_str());
-            return false;
-        }
-        auto srv = createTextureRGBA8(gpu.device.Get(), img, /*flipY=*/true, err);
-        if (!srv) {
-            fprintf(stderr, "[harness] %s: %s\n", path.c_str(), err.c_str());
-            return false;
-        }
-        mat.setTexture(propBase + props[i], srv.Get(), img.width, img.height);
-        keep.push_back(srv);
-        if (i == 0) fprintf(stderr, "[harness] %s%s <- %s.*.png (%ux%u)\n", propBase.c_str(), "_{R,G,B,A}", prefix.c_str(), img.width, img.height);
-    }
+    if (o.dxc && !o.doubles) o.noDoubles = true;
     return true;
 }
 
@@ -238,13 +248,137 @@ const char kSnapshotMagic[8] = {'S', 'X', '8', '6', 'S', 'N', 'A', 'P'};
 std::mutex g_inputMutex;
 std::deque<char> g_stdinQueue;
 
+std::atomic<bool> g_quit{false};
+
+// Raw console pass-through: every key goes to the guest as the bytes a terminal would send
+// (arrows as escape sequences, Ctrl+C as 0x03). Ctrl+] is the one key kept for the host.
+bool g_rawConsole = false;
+HANDLE g_conIn = nullptr, g_conOut = nullptr;
+DWORD g_oldInMode = 0, g_oldOutMode = 0;
+UINT g_oldOutCp = 0;
+const char kQuitKey = 0x1d;  // Ctrl+]
+
+void restoreConsole();
+
+bool beginRawConsole() {
+    g_conIn = GetStdHandle(STD_INPUT_HANDLE);
+    g_conOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (!GetConsoleMode(g_conIn, &g_oldInMode)) return false;  // stdin is a pipe or file
+    GetConsoleMode(g_conOut, &g_oldOutMode);
+    g_oldOutCp = GetConsoleOutputCP();
+    // No line buffering, echo or Ctrl+C handling: the guest's tty does all of that.
+    if (!SetConsoleMode(g_conIn, ENABLE_VIRTUAL_TERMINAL_INPUT)) return false;
+    SetConsoleOutputCP(CP_UTF8);
+    g_rawConsole = true;
+    atexit(restoreConsole);  // error paths that exit() must not leave the user's shell in raw mode
+    return true;
+}
+
+void restoreConsole() {
+    if (!g_rawConsole) return;
+    SetConsoleMode(g_conIn, g_oldInMode);
+    SetConsoleMode(g_conOut, g_oldOutMode);
+    SetConsoleOutputCP(g_oldOutCp);
+    g_rawConsole = false;
+}
+
 void stdinThread() {
+    if (g_rawConsole) {
+        char buf[256];
+        DWORD n = 0;
+        while (ReadFile(g_conIn, buf, sizeof buf, &n, nullptr) && n > 0) {
+            std::lock_guard<std::mutex> lock(g_inputMutex);
+            for (DWORD i = 0; i < n; ++i) {
+                if (buf[i] == kQuitKey) { g_quit = true; return; }
+                g_stdinQueue.push_back(buf[i]);
+            }
+        }
+        return;
+    }
     for (;;) {
         int c = getchar();
         if (c == EOF) return;
-        if (c == '\r') continue;  // console gives CRLF; the guest tty wants a single newline
+        if (c == '\r') continue;  // piped text has CRLF; the guest tty wants a single newline
         std::lock_guard<std::mutex> lock(g_inputMutex);
         g_stdinQueue.push_back((char)c);
+    }
+}
+
+// Started from Explorer the working directory is bin\; the default paths are relative to the
+// repository root one level up.
+void findRepoRoot(const Options& o) {
+    if (fs::exists(fs::u8path(o.rvcDir) / "main.shader")) return;
+    wchar_t exe[MAX_PATH];
+    if (!GetModuleFileNameW(nullptr, exe, MAX_PATH)) return;
+    fs::path root = fs::path(exe).parent_path().parent_path();
+    std::error_code ec;
+    if (fs::exists(root / fs::u8path(o.rvcDir) / "main.shader", ec)) fs::current_path(root, ec);
+}
+
+// What the emulated machine can boot: payload PNG sets shipped with rvc, under kUpstream.
+const char* const kUpstream = "rvc/_Nix/rvc";
+struct BootImage {
+    const char* name;
+    const char* title;
+    const char* dir;
+    const char* ram;
+    const char* mtd;
+    const char* dtb;
+};
+const BootImage kImages[] = {
+    {"linux-net", "Linux, networking kernel with a romfs root (boots to a shell)", "data-net", "linux_payload", "rootfs", "dts"},
+    {"linux", "Linux, kernel with built-in initramfs", "data", "linux_payload", "none", "dts"},
+    {"micropython", "MicroPython on OpenSBI (bare metal REPL)", "data", "mprv_payload", "none", "dts"},
+    {"rust", "Rust test payload on OpenSBI (bare metal)", "data", "rust_payload", "none", "dts"},
+    {"raytrace", "Rust raytracer (bare metal, no firmware)", "data", "rust_raytrace", "none", "dts"},
+    {"bare", "C bare-metal test (no firmware)", "data", "bare", "none", "dts"},
+};
+
+bool imageAvailable(const BootImage& im) {
+    std::error_code ec;
+    return fs::exists(fs::u8path(kUpstream) / im.dir / (std::string(im.ram) + ".r.png"), ec);
+}
+
+const BootImage* findImage(const std::string& name) {
+    for (auto& im : kImages)
+        if (name == im.name) return &im;
+    return nullptr;
+}
+
+void applyImage(Options& o, const BootImage& im) {
+    o.image = im.name;
+    o.payloadDir = (fs::u8path(kUpstream) / im.dir).u8string();
+    o.ramPrefix = im.ram;
+    o.mtdPrefix = im.mtd;
+    o.dtbPrefix = im.dtb;
+}
+
+// Start menu, shown when the command line does not say what to boot. False = the user backed out.
+bool chooseImage(Options& o, bool canResume) {
+    std::vector<const BootImage*> list;
+    for (auto& im : kImages)
+        if (imageAvailable(im)) list.push_back(&im);
+    fprintf(stderr, "\n  rvc: a RISC-V machine in a pixel shader    [%s]\n\n  Boot which image?\n\n",
+            o.dxc ? "D3D12 + DXC" : "D3D11 + FXC");
+    for (size_t i = 0; i < list.size(); ++i)
+        fprintf(stderr, "    %zu  %-12s %s\n", i + 1, list[i]->name, list[i]->title);
+    if (canResume) fprintf(stderr, "    r  %-12s %s\n", "resume", "Linux at the shell prompt, from the saved snapshot");
+    fprintf(stderr, "\n  Press a key (Enter = 1, Esc = quit): ");
+    for (;;) {
+        int c = _getch();
+        if (c == 0 || c == 0xE0) { _getch(); continue; }  // function and arrow keys come as two codes
+        if (c == 27 || c == 3 || c == kQuitKey) { fprintf(stderr, "\n"); return false; }
+        if (c == '\r') c = '1';
+        if ((c == 'r' || c == 'R') && canResume) {
+            o.resume = true;
+            fprintf(stderr, "resume\n\n");
+            return true;
+        }
+        if (c >= '1' && (size_t)(c - '1') < list.size()) {
+            applyImage(o, *list[c - '1']);
+            fprintf(stderr, "%s\n\n", o.image.c_str());
+            return true;
+        }
     }
 }
 
@@ -253,6 +387,54 @@ void stdinThread() {
 int main(int argc, char** argv) {
     Options opt;
     if (!parseArgs(argc, argv, opt)) return 1;
+    findRepoRoot(opt);
+    if (opt.image == "list") {
+        for (auto& im : kImages)
+            printf("%-12s %s%s\n", im.name, im.title, imageAvailable(im) ? "" : "  (files missing)");
+        return 0;
+    }
+
+    // Opened with no arguments (or only --resume / --no-viz): act as a terminal on the emulated
+    // machine. Fastest shader, a cold boot you can watch, memory view on.
+    bool terminalMode = true;
+    for (int i = 1; i < argc; ++i) {
+        std::string a = argv[i];
+        if (a == "--image") ++i;
+        else if (a != "--resume" && a != "--no-viz" && a != "--dxc" && a != "--d3d11") terminalMode = false;
+    }
+    std::error_code ec;
+    bool haveOpt = fs::exists("experiments/rvc_opt/main.shader", ec);
+    if ((terminalMode || opt.dxc) && !opt.rvcDirSet && haveOpt) opt.rvcDir = "experiments/rvc_opt";
+    const char* shellSnap = "build/snapshots/rvc_shell.snap";
+    bool canResume = terminalMode && fs::exists(shellSnap, ec);
+    // Nothing on the command line says what to boot: ask, if there is someone to ask.
+    DWORD conMode = 0;
+    bool interactive = opt.readStdin && GetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), &conMode) != 0;
+    bool chosen = !opt.image.empty() || opt.payloadSet || !opt.loadState.empty() || opt.resume;
+    if (!chosen && interactive && !chooseImage(opt, canResume)) return 0;
+    if (terminalMode) {
+        if (opt.resume && canResume) opt.loadState = shellSnap;
+        fs::create_directories("logs", ec);
+        opt.uartLog = "logs/uart.log";
+        opt.viz = true;
+        for (int i = 1; i < argc; ++i)
+            if (strcmp(argv[i], "--no-viz") == 0) opt.viz = false;
+    }
+    if (!opt.image.empty() && !opt.payloadSet) {
+        const BootImage* im = findImage(opt.image);
+        if (!im) {
+            fprintf(stderr, "[harness] unknown image '%s' (try --image list)\n", opt.image.c_str());
+            return 1;
+        }
+        applyImage(opt, *im);
+    }
+    // Payloads live with upstream rvc; a patched shader folder usually has none of its own.
+    if (opt.payloadDir.empty()) {
+        opt.payloadDir = (fs::u8path(opt.rvcDir) / "data-net").u8string();
+        if (!fs::exists(fs::u8path(opt.payloadDir), ec)) opt.payloadDir = (fs::u8path(kUpstream) / "data-net").u8string();
+    }
+    if (opt.readStdin && beginRawConsole())
+        fprintf(stderr, "[harness] console attached to the guest: every key goes to it, Ctrl+C included. Ctrl+] quits.\n");
 
     HRESULT hrCo = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     (void)hrCo;
@@ -265,15 +447,7 @@ int main(int argc, char** argv) {
         if (GetConsoleMode(h, &mode)) SetConsoleMode(h, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
     }
 
-    Gpu gpu;
     std::string err;
-    if (!gpu.init(opt.gpu, err)) {
-        fprintf(stderr, "[harness] %s\n", err.c_str());
-        return 1;
-    }
-    fprintf(stderr, "[harness] device: %s%s, doubles: %s, extended doubles: %s\n", gpu.adapterName.c_str(),
-            opt.gpu.warp ? " (WARP)" : "", gpu.doubles ? "yes" : "NO", gpu.extendedDoubles ? "yes" : "no");
-    if (!gpu.doubles) fprintf(stderr, "[harness] warning: rvc uses doubles (MULH, timer); this device lacks them\n");
 
     // --- Shader ---
     std::string shaderPath = (fs::u8path(opt.rvcDir) / "main.shader").u8string();
@@ -282,33 +456,41 @@ int main(int argc, char** argv) {
         fprintf(stderr, "[harness] %s\n", err.c_str());
         return 1;
     }
-    ShaderBuildOptions bo;
+    BackendOptions bo;
     bo.verbose = opt.verbose;
-    bo.settings.flags = opt.fxcFlags;
-    bo.settings.cacheDir = opt.cacheDir;
-    bo.settings.includeDirs = {SHADERX86_UNITY_INCLUDE_DIR};
-    bo.settings.defines = {{"SHADER_API_D3D11", "1"}, {"SHADER_TARGET", "50"}, {"UNITY_COMPILER_HLSL", "1"},
-                           {"UNITY_VERSION", "202235"}};
-    if (opt.profile) bo.settings.defines.push_back({"PROFILE", "1"});
-    if (opt.noDoubles) bo.settings.defines.push_back({"NO_DOUBLES", "1"});
+    bo.gpu = opt.gpu;
+    bo.profile = opt.profile;
+    bo.present = opt.present;
+    bo.dxcOpt = opt.dxcOpt;
+    bo.dxcSm = opt.dxcSm;
+    bo.dxcDir = opt.dxcDir;
+    bo.compile.flags = opt.fxcFlags;
+    bo.compile.cacheDir = opt.cacheDir;
+    bo.compile.includeDirs = {SHADERX86_UNITY_INCLUDE_DIR};
+    bo.compile.defines = {{"SHADER_API_D3D11", "1"}, {"SHADER_TARGET", "50"}, {"UNITY_COMPILER_HLSL", "1"},
+                          {"UNITY_VERSION", "202235"}};
+    if (opt.profile) bo.compile.defines.push_back({"PROFILE", "1"});
+    if (opt.noDoubles) bo.compile.defines.push_back({"NO_DOUBLES", "1"});
     for (auto& d : opt.defines) {  // NAME or NAME=VALUE
         size_t eq = d.find('=');
-        bo.settings.defines.push_back({d.substr(0, eq), eq == std::string::npos ? "1" : d.substr(eq + 1)});
+        bo.compile.defines.push_back({d.substr(0, eq), eq == std::string::npos ? "1" : d.substr(eq + 1)});
     }
-    std::vector<GpuPass> passes;
-    if (!buildPasses(gpu, shader, {"CPUTick", "Commit"}, bo, passes, err)) {
+
+    // --- Material and backend ---
+    Material mat;
+    mat.applyDefaults(shader);
+    std::unique_ptr<RvcBackend> backendPtr = opt.dxc ? makeBackend12() : makeBackend11();
+    RvcBackend& backend = *backendPtr;
+    if (!backend.init(bo, shader, mat, err)) {
         fprintf(stderr, "[harness] %s\n", err.c_str());
         return 1;
     }
-
-    // --- Material ---
-    Material mat;
-    mat.applyDefaults(shader);
-    std::vector<ComPtr<ID3D11ShaderResourceView>> keepAlive;
-    if (!loadLaneTextures(gpu, mat, opt.payloadDir, opt.ramPrefix, "_Data_RAM", keepAlive) ||
-        !loadLaneTextures(gpu, mat, opt.payloadDir, opt.mtdPrefix, "_Data_MTD", keepAlive) ||
-        !loadLaneTextures(gpu, mat, opt.payloadDir, opt.dtbPrefix, "_Data_DTB", keepAlive))
+    if (!backend.loadPayload(mat, opt.payloadDir, opt.ramPrefix, "_Data_RAM", err) ||
+        !backend.loadPayload(mat, opt.payloadDir, opt.mtdPrefix, "_Data_MTD", err) ||
+        !backend.loadPayload(mat, opt.payloadDir, opt.dtbPrefix, "_Data_DTB", err)) {
+        fprintf(stderr, "[harness] %s\n", err.c_str());
         return 1;
+    }
     mat.setInt("_Ticks", opt.ticks);
     mat.setInt("_TicksDivisor", 1);
     mat.setInt("_DoTick", 0);
@@ -317,82 +499,8 @@ int main(int argc, char** argv) {
     mat.setInt("_UdonUARTInTag", 0);
     mat.setVector("unity_OrthoParams", 1, 1, 0, 1);
 
-    // --- Optional hidden swapchain, only to give external profilers a Present per frame ---
-    ComPtr<IDXGISwapChain> swapChain;
-    HWND presentWnd = nullptr;
-    if (opt.present) {
-        WNDCLASSW wc{};
-        wc.lpfnWndProc = DefWindowProcW;
-        wc.hInstance = GetModuleHandleW(nullptr);
-        wc.lpszClassName = L"rvc_harness_present";
-        RegisterClassW(&wc);
-        presentWnd = CreateWindowExW(WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW, wc.lpszClassName, L"rvc_harness", WS_POPUP,
-                                     0, 0, 64, 64, nullptr, nullptr, wc.hInstance, nullptr);  // never shown
-        ComPtr<IDXGIDevice> dxgiDev;
-        ComPtr<IDXGIAdapter> adapter;
-        ComPtr<IDXGIFactory> factory;
-        DXGI_SWAP_CHAIN_DESC sd{};
-        sd.BufferDesc.Width = sd.BufferDesc.Height = 64;
-        sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-        sd.SampleDesc.Count = 1;
-        sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-        sd.BufferCount = 1;
-        sd.OutputWindow = presentWnd;
-        sd.Windowed = TRUE;
-        HRESULT hr = presentWnd ? gpu.device.As(&dxgiDev) : E_FAIL;
-        if (SUCCEEDED(hr)) hr = dxgiDev->GetAdapter(&adapter);
-        if (SUCCEEDED(hr)) hr = adapter->GetParent(IID_PPV_ARGS(&factory));
-        if (SUCCEEDED(hr)) hr = factory->CreateSwapChain(gpu.device.Get(), &sd, &swapChain);
-        if (FAILED(hr)) {
-            fprintf(stderr, "[harness] creating the hidden swapchain failed: %s\n", hrToString(hr).c_str());
-            return 1;
-        }
-    }
-
-    // --- Profiling counters: a uint buffer the tick pass increments through a UAV ---
-    const UINT kProfCount = 256;
-    ComPtr<ID3D11Buffer> profBuf, profStaging;
-    ComPtr<ID3D11UnorderedAccessView> profUav;
-    if (opt.profile) {
-        D3D11_BUFFER_DESC bd{};
-        bd.ByteWidth = kProfCount * 4;
-        bd.Usage = D3D11_USAGE_DEFAULT;
-        bd.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
-        bd.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
-        bd.StructureByteStride = 4;
-        HRESULT hr = gpu.device->CreateBuffer(&bd, nullptr, &profBuf);
-        if (SUCCEEDED(hr)) hr = gpu.device->CreateUnorderedAccessView(profBuf.Get(), nullptr, &profUav);
-        bd.Usage = D3D11_USAGE_STAGING;
-        bd.BindFlags = 0;
-        bd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-        if (SUCCEEDED(hr)) hr = gpu.device->CreateBuffer(&bd, nullptr, &profStaging);
-        if (FAILED(hr)) {
-            fprintf(stderr, "[harness] creating the profile buffer failed: %s\n", hrToString(hr).c_str());
-            return 1;
-        }
-        const UINT zero[4] = {0, 0, 0, 0};
-        gpu.ctx->ClearUnorderedAccessViewUint(profUav.Get(), zero);
-        mat.setUav("_Prof", profUav.Get());
-    }
+    const UINT W = RvcBackend::kWidth, H = RvcBackend::kHeight, kProfCount = RvcBackend::kProfCount;
     std::vector<uint32_t> profBase(kProfCount, 0);
-    auto readProf = [&](std::vector<uint32_t>& out) {
-        out.assign(kProfCount, 0);
-        gpu.ctx->CopyResource(profStaging.Get(), profBuf.Get());
-        D3D11_MAPPED_SUBRESOURCE m{};
-        if (FAILED(gpu.ctx->Map(profStaging.Get(), 0, D3D11_MAP_READ, 0, &m))) return false;
-        memcpy(out.data(), m.pData, kProfCount * 4);
-        gpu.ctx->Unmap(profStaging.Get(), 0);
-        return true;
-    };
-
-    // --- Render texture, as configured in rvc's vm_state_crt.asset ---
-    const UINT W = 2048, H = 4096;
-    CustomRenderTexture crt;
-    if (!crt.init(gpu.device.Get(), W, H, DXGI_FORMAT_R32G32B32A32_UINT, err)) {
-        fprintf(stderr, "[harness] %s\n", err.c_str());
-        return 1;
-    }
-    crt.clear(gpu.ctx.Get());
     double timeBase = 0;
     uint32_t sentTag = 0, consumedTag = 0, sentChar = 0;
     if (!opt.loadState.empty()) {
@@ -405,7 +513,10 @@ int main(int argc, char** argv) {
             fprintf(stderr, "[harness] %s is not a %ux%u snapshot\n", opt.loadState.c_str(), W, H);
             return 1;
         }
-        crt.load(gpu.ctx.Get(), snap.data() + sizeof hdr, W * 16);
+        if (!backend.setState(snap.data() + sizeof hdr, err)) {
+            fprintf(stderr, "[harness] %s\n", err.c_str());
+            return 1;
+        }
         timeBase = hdr.time;
         sentTag = consumedTag = hdr.sentTag;
         sentChar = hdr.sentChar;
@@ -414,22 +525,12 @@ int main(int argc, char** argv) {
         opt.initFrames = 0;
         fprintf(stderr, "[harness] resumed from %s (guest time %.1fs)\n", opt.loadState.c_str(), timeBase);
     }
-    const UpdateZone tickZone{32, 4064, 64, 64, 0};
-    const UpdateZone commitZone{1024, 2048, 2048, 4096, 1};
-
-    RegionReadback rowReadback;
-    const int kRing = 3;
-    if (!rowReadback.init(gpu.device.Get(), DXGI_FORMAT_R32G32B32A32_UINT, 16, 64, 1, kRing, err)) {
-        fprintf(stderr, "[harness] %s\n", err.c_str());
-        return 1;
-    }
-
     FILE* uartLog = nullptr;
     if (!opt.uartLog.empty()) uartLog = _wfopen(widen(opt.uartLog).c_str(), L"ab");
     if (uartLog) {
         // Marks where this run starts for anyone following the log live.
-        fprintf(uartLog, "\r\n\x1b[7m=== rvc_harness: %s ===\x1b[0m\r\n",
-                opt.loadState.empty() ? "cold boot" : ("resumed from " + opt.loadState).c_str());
+        std::string what = opt.loadState.empty() ? "cold boot of " + opt.payloadDir + "/" + opt.ramPrefix : "resumed from " + opt.loadState;
+        fprintf(uartLog, "\r\n\x1b[7m=== rvc_harness (%s): %s ===\x1b[0m\r\n", opt.dxc ? "D3D12/DXC" : "D3D11/FXC", what.c_str());
         fflush(uartLog);
     }
 
@@ -437,6 +538,26 @@ int main(int argc, char** argv) {
 
     // --- State shared by the loop ---
     std::deque<char> scriptQueue(opt.initialInput.begin(), opt.initialInput.end());
+    // A resumed guest is sitting at its prompt; a newline makes it print one.
+    if (g_rawConsole && !opt.loadState.empty() && scriptQueue.empty()) scriptQueue.push_back('\r');
+
+    int uartBurst = opt.uartBurst > 0 ? opt.uartBurst : (int)mat.getFloat("_UartBurst", 1);
+    if (uartBurst < 1) uartBurst = 1;
+    if (uartBurst > 4) uartBurst = 4;
+
+    if (opt.viz && !backend.viewInit(err)) fprintf(stderr, "[harness] memory view: %s\n", err.c_str());
+    double lastViz = -1;
+
+    // Counters for the memory view's text box, refreshed four times a second.
+    double ovLast = 0;
+    std::vector<std::string> overlayLines;
+    uint64_t ovInstr = 0, ovFrames = 0;
+    double gpuTickMs = -1, gpuCommitMs = -1;
+    auto withCommas = [](uint64_t v) {
+        std::string s = std::to_string(v);
+        for (int i = (int)s.size() - 3; i > 0; i -= 3) s.insert((size_t)i, ",");
+        return s;
+    };
     size_t expectIdx = 0, expectScanFrom = 0;
     std::string transcript;
     bool untilHit = false;
@@ -507,16 +628,22 @@ int main(int argc, char** argv) {
 
         // Feed one input character per handshake.
         if (frame >= (uint64_t)opt.initFrames && sentTag == consumedTag) {
-            int c = -1;
-            if (!scriptQueue.empty()) { c = (unsigned char)scriptQueue.front(); scriptQueue.pop_front(); }
-            else {
-                std::lock_guard<std::mutex> lock(g_inputMutex);
-                if (!g_stdinQueue.empty()) { c = (unsigned char)g_stdinQueue.front(); g_stdinQueue.pop_front(); }
+            // Up to uartBurst characters per handshake, first one in the low byte. NUL cannot be
+            // sent (the guest treats 0 as "no character") and is dropped.
+            uint32_t group = 0;
+            int count = 0;
+            std::lock_guard<std::mutex> lock(g_inputMutex);
+            std::deque<char>& q = !scriptQueue.empty() ? scriptQueue : g_stdinQueue;
+            while (count < uartBurst && !q.empty()) {
+                unsigned char c = (unsigned char)q.front();
+                q.pop_front();
+                if (c == 0) continue;
+                group |= (uint32_t)c << (8 * count++);
             }
-            if (c > 0) {
-                ++sentTag;
-                sentChar = (uint32_t)c;
-                mat.setInt("_UdonUARTInChar", c);
+            if (count > 0) {
+                sentTag += (uint32_t)count;
+                sentChar = group;
+                mat.setInt("_UdonUARTInChar", (int64_t)group);
                 mat.setInt("_UdonUARTInTag", sentTag);
             }
         }
@@ -524,28 +651,21 @@ int main(int argc, char** argv) {
         if (opt.benchWarmup >= 0 && frame == (uint64_t)opt.benchWarmup) {
             // Start the measurement from an idle GPU with every earlier frame accounted for.
             uint64_t f;
-            while (rowReadback.pending() > 0 && rowReadback.pop(gpu.ctx.Get(), row, f)) processRow(row, f);
+            while (backend.rowPending() > 0 && backend.popRow(row, f)) processRow(row, f);
             benchInstr0 = guestInstructions;
-            if (profUav) readProf(profBase);  // warm-up events are subtracted at the end
+            backend.readProf(profBase);  // warm-up events are subtracted at the end
             benchT0 = std::chrono::steady_clock::now();
         }
-        crt.runZone(gpu, passes[0], mat, tickZone);
-        crt.runZone(gpu, passes[1], mat, commitZone);
-        if (swapChain) {
-            swapChain->Present(0, 0);
-            MSG msg;
-            while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) DispatchMessageW(&msg);
-        }
-
-        if (rowReadback.full()) {
+        if (backend.rowFull()) {
             uint64_t f;
-            if (!rowReadback.pop(gpu.ctx.Get(), row, f)) { exitCode = 1; break; }
+            if (!backend.popRow(row, f)) { exitCode = 1; break; }
             processRow(row, f);
         }
-        rowReadback.request(gpu.ctx.Get(), crt.current(), 0, 0, frame);
+        // The GPU times the two draws of one frame per refresh of the text box.
+        backend.frame(mat, frame, backend.viewOpen() && wall - ovLast >= 0.2);
         ++frame;
 
-        std::string removed = gpu.deviceRemovedReason();
+        std::string removed = backend.deviceRemoved();
         if (!removed.empty()) {
             fprintf(stderr, "\n[harness] GPU device lost: %s. If this is a timeout (TDR), lower --ticks or use --warp.\n",
                     removed.c_str());
@@ -562,6 +682,7 @@ int main(int argc, char** argv) {
             snprintf(title, sizeof title, "rvc_harness | %.1fk IPS | %.1f frames/s | frame %llu | commits %u", ips / 1000.0,
                      fps, (unsigned long long)frame, commits);
             SetConsoleTitleA(title);
+            backend.viewTitle(std::string("memory | ") + (title + 14));
             if (opt.statsInterval > 0 && wall - lastStats >= opt.statsInterval)
                 fprintf(stderr, "\n[harness] %s\n", title + 14);
             if (opt.statsInterval <= 0 || wall - lastStats >= opt.statsInterval) {
@@ -571,15 +692,39 @@ int main(int argc, char** argv) {
             }
         }
 
+        if (backend.viewOpen() && wall - ovLast >= 0.25) {
+            backend.gpuTimes(gpuTickMs, gpuCommitMs);
+            double dt = wall - ovLast;
+            double ips = (double)(guestInstructions - ovInstr) / dt, fps = (double)(frame - ovFrames) / dt;
+            char l1[96], l2[96], l3[96], l4[96], l5[96];
+            snprintf(l1, sizeof l1, "%s IPS    %.0f frames/s", withCommas((uint64_t)ips).c_str(), fps);
+            snprintf(l2, sizeof l2, "frame %.3f ms    %.0f instr/frame", fps > 0 ? 1000.0 / fps : 0.0, fps > 0 ? ips / fps : 0.0);
+            if (gpuTickMs >= 0) snprintf(l3, sizeof l3, "GPU: tick %.3f ms    commit %.3f ms", gpuTickMs, gpuCommitMs);
+            else snprintf(l3, sizeof l3, "GPU: tick -    commit -");
+            unsigned up = (unsigned)wall;
+            snprintf(l4, sizeof l4, "up %02u:%02u:%02u    guest clock %.1f s", up / 3600, up / 60 % 60, up % 60, guestTime);
+            snprintf(l5, sizeof l5, "%s instructions    %s commits", withCommas(guestInstructions).c_str(), withCommas(commits).c_str());
+            overlayLines = {l1, l2, l3, l4, l5};
+            backend.viewText(overlayLines);
+            ovLast = wall;
+            ovInstr = guestInstructions;
+            ovFrames = frame;
+        }
+        // The memory view samples the state at about 60 Hz, however fast the emulator runs.
+        if (backend.viewOpen() && wall - lastViz >= 1.0 / 60) {
+            backend.viewRender();
+            lastViz = wall;
+        }
+        if (g_quit) break;
         if (untilHit) break;
         if (opt.maxFrames && frame >= opt.maxFrames) { if (!opt.until.empty()) exitCode = 3; break; }
         if (opt.maxSeconds > 0 && wall >= opt.maxSeconds) { if (!opt.until.empty()) exitCode = 3; break; }
     }
 
     // Drain outstanding readbacks so trailing output is not lost.
-    while (exitCode != 1 && rowReadback.pending() > 0) {
+    while (exitCode != 1 && backend.rowPending() > 0) {
         uint64_t f;
-        if (!rowReadback.pop(gpu.ctx.Get(), row, f)) break;
+        if (!backend.popRow(row, f)) break;
         processRow(row, f);
     }
     if (untilHit) exitCode = 0;
@@ -589,19 +734,15 @@ int main(int argc, char** argv) {
         double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - benchT0).count();
         uint64_t frames = frame - (uint64_t)opt.benchWarmup, instr = guestInstructions - benchInstr0;
         uint64_t hash = 0;
-        RegionReadback area;
         std::vector<uint8_t> data;
-        uint64_t f;
-        if (area.init(gpu.device.Get(), DXGI_FORMAT_R32G32B32A32_UINT, 16, 64, 64, 1, err)) {
-            area.request(gpu.ctx.Get(), crt.current(), 0, 0, 0);
-            if (area.pop(gpu.ctx.Get(), data, f)) hash = fnv1a64(data.data(), data.size());
-        }
+        if (backend.readState(64, 64, data)) hash = fnv1a64(data.data(), data.size());
         fprintf(stderr, "\nBENCH frames=%llu seconds=%.3f instructions=%llu ips=%.0f fps=%.1f per_frame=%.1f state=%016llx\n",
                 (unsigned long long)frames, secs, (unsigned long long)instr, instr / secs, frames / secs,
                 (double)instr / frames, (unsigned long long)hash);
     }
 
-    if (profUav && exitCode != 1) {
+    std::vector<uint32_t> profNow;
+    if (opt.profile && exitCode != 1 && backend.readProf(profNow)) {
         // Counter names come from the shader's own prof.h: '#define PROF_<name> <id>'.
         std::map<uint32_t, std::string> names;
         std::string text;
@@ -617,8 +758,8 @@ int main(int argc, char** argv) {
                 if (*num >= '0' && *num <= '9') names[(uint32_t)strtoul(num, nullptr, 10)] = name;
             }
         }
-        std::vector<uint32_t> c;
-        if (readProf(c)) {
+        std::vector<uint32_t>& c = profNow;
+        {
             for (uint32_t i = 0; i < kProfCount; ++i) c[i] -= profBase[i];
             std::vector<std::pair<uint32_t, uint32_t>> rows;  // count, id
             for (uint32_t i = 0; i < kProfCount; ++i)
@@ -635,20 +776,13 @@ int main(int argc, char** argv) {
     }
 
     if (!opt.dumpState.empty() && exitCode != 1) {
-        RegionReadback full;
-        if (full.init(gpu.device.Get(), DXGI_FORMAT_R32G32B32A32_UINT, 16, 64, 64, 1, err)) {
-            full.request(gpu.ctx.Get(), crt.current(), 0, 0, 0);
-            uint64_t f;
-            std::vector<uint8_t> data;
-            if (full.pop(gpu.ctx.Get(), data, f) && writeFileBinary(opt.dumpState, data.data(), data.size()))
-                fprintf(stderr, "\n[harness] state area written to %s\n", opt.dumpState.c_str());
-        }
+        std::vector<uint8_t> data;
+        if (backend.readState(64, 64, data) && writeFileBinary(opt.dumpState, data.data(), data.size()))
+            fprintf(stderr, "\n[harness] state area written to %s\n", opt.dumpState.c_str());
     }
 
     if (!opt.saveState.empty() && exitCode != 1) {
-        RegionReadback full;
         std::vector<uint8_t> data;
-        uint64_t f;
         SnapshotHeader hdr{};
         memcpy(hdr.magic, kSnapshotMagic, 8);
         hdr.width = W;
@@ -656,11 +790,7 @@ int main(int argc, char** argv) {
         hdr.time = guestTime;
         hdr.sentTag = sentTag;
         hdr.sentChar = sentChar;
-        bool ok = full.init(gpu.device.Get(), DXGI_FORMAT_R32G32B32A32_UINT, 16, W, H, 1, err);
-        if (ok) {
-            full.request(gpu.ctx.Get(), crt.current(), 0, 0, 0);
-            ok = full.pop(gpu.ctx.Get(), data, f);
-        }
+        bool ok = backend.readState(W, H, data);
         if (ok) {
             data.insert(data.begin(), (const uint8_t*)&hdr, (const uint8_t*)&hdr + sizeof hdr);
             ok = writeFileBinary(opt.saveState, data.data(), data.size());
@@ -668,6 +798,15 @@ int main(int argc, char** argv) {
         fprintf(stderr, "\n[harness] snapshot %s %s\n", ok ? "written to" : "FAILED:", opt.saveState.c_str());
         if (!ok) exitCode = 1;
     }
+
+    if (!opt.vizCapture.empty() && backend.viewOpen() && exitCode != 1) {
+        backend.viewRender(false);
+        bool ok = backend.viewCapture(opt.vizCapture);
+        for (auto& l : overlayLines) fprintf(stderr, "\n[harness] overlay: %s", l.c_str());
+        fprintf(stderr, "\n[harness] memory view %s %s\n", ok ? "written to" : "capture FAILED:", opt.vizCapture.c_str());
+    }
+    backend.viewClose();
+    restoreConsole();
 
     double wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     fprintf(stderr, "\n[harness] %llu frames in %.1fs, %llu guest instructions, avg %.1fk IPS, %u commits%s\n",

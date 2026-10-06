@@ -15,9 +15,33 @@ watch the emulated machine:
   reuse it instead of opening another.
 - Launch it through `explorer.exe`: `Start-Process pwsh` from an agent shell gets no window.
 
+## Terminal mode and the memory view
+
+- `bin\rvc_harness.exe` (D3D11 + FXC) and `bin\rvc_harness_dxc.exe` (D3D12 + DXC) are one program
+  with a different default backend; `--dxc` / `--d3d11` switch. With no arguments either is the
+  interactive terminal (raw console pass-through, memory view window, cold boot; `--resume`
+  starts from the shell snapshot). Automated runs always pass arguments, which keeps them
+  headless; never start the no-argument form from a script and leave it running.
+- An image menu blocks at start when nothing says what to boot and stdin is a console. Scripted
+  runs must pass one of `--image NAME`, `--payload`, `--ram`, `--load-state` or `--no-stdin`.
+- `--dxc` implies `NO_DOUBLES` and, without `--rvc`, the `experiments\rvc_opt` shader (upstream
+  does not compile with DXC). `--profile` and `--present` are D3D11 only.
+- The D3D12 backend has its own memory view (`rvc_memview12.h`) sharing shader, window and text
+  code with `memview.cpp`. D3D11 cannot open a 128-bit-per-texel texture shared from D3D12, so
+  do not try to reuse the D3D11 view there.
+- Raw pass-through only engages when stdin is a real console. To test it without the physical
+  keyboard, run the harness in its own hidden console and write key events into that console's
+  input buffer (`WriteConsoleInput`), then read its screen buffer back.
+- Input reaches the guest slowly (about 27 characters/s): each console poll costs the guest
+  tens of thousands of instructions. `rvc_opt` accepts up to four characters per handshake
+  (`_UartBurst`), which is what keeps escape sequences such as arrow keys in one piece. Pass
+  `--uart-burst 1` when comparing against upstream, whose shader takes one.
+- `--viz-capture FILE.bmp` saves the memory view at exit, for checking it by measurement.
+
 ## Do not cold-boot; resume from a snapshot
 
-A cold boot to the `/ #` prompt takes about 80 s on an RTX 5090. Do it once, then resume:
+A cold boot to the `/ #` prompt takes about 80 s on an RTX 5090 with upstream on D3D11 (about
+17 s with `--dxc`). Do it once, then resume:
 
     run_rvc.bat --no-stdin --until "/ # " --seconds 600 --save-state build\snapshots\rvc_shell.snap
     run_rvc.bat --load-state build\snapshots\rvc_shell.snap ...
@@ -61,6 +85,16 @@ A cold boot to the `/ #` prompt takes about 80 s on an RTX 5090. Do it once, the
   change helps (dispatch + fetch: 1.32x under FXC, 1.17x under DXC), and the first run after
   a compile is often slow, so run twice and confirm winners with FXC on D3D11
   (`tools\perf_test.ps1`), which is what VRChat runs.
+- In a shader loop this size, how control flow joins matters more than instruction counts:
+  every value both sides of a branch can modify becomes a phi (a register move, or a spill)
+  wherever they rejoin. `python tools\dxil_path.py tick.ll 19` prints one loop iteration's path
+  through the DXIL for an opcode, with its phi and instruction counts; get `tick.ll` from
+  `rvc_trace12 --dxc --dxc-dump DIR` and `dxc -dumpbin`. Keep hot and cold paths in separate
+  loops, and keep rarely changed state out of the hot one.
+- `rvc_trace12 --cold` boots from power-on on D3D12, for checking early-boot paths under DXC.
+- `rvc_harness --dxc --load-state build\snapshots\rvc_bench.snap --no-stdin --fixed-dt 0.004
+  --frames 830 --bench 30` must print the same `state` as `rvc_trace12 --dxc --no-doubles
+  --frames 800 --bench 30` (`231e365030389de0` for the current shader).
 - A shader edit costs one FXC compile (90 s alone, about 3 min with three in parallel). Compile
   variants in parallel, then benchmark them one at a time.
 
@@ -68,5 +102,6 @@ A cold boot to the `/ #` prompt takes about 80 s on an RTX 5090. Do it once, the
 
 - Harness build: about 5 s.
 - First FXC compile of rvc's `CPUTick` pass: about 90 s; cached afterwards in `build\shadercache`.
-- Speed: about 520k instructions/s upstream, 1,050k with `experiments\rvc_opt`. It barely depends on
+- Speed: about 520k instructions/s upstream, 1,860k with `experiments\rvc_opt` on FXC
+  (under DXC on D3D12: about 2.2M at 2,048 ticks per draw, 3.0M at 65,536). It barely depends on
   `--ticks`: frame time is the serial CPU loop, about 1.8 us per instruction upstream.
