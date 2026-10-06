@@ -138,6 +138,7 @@ public:
         c.stateRows = stateRows_;
         c.bar = (float)kMemoryViewBar;
         c.inset = (float)(kMemoryViewBar - 16);
+        c.memWidth = (float)width_ * kMemoryViewMemW / (kMemoryViewMemW + kMemoryViewDispW);
         c.textSize[0] = (float)textW_;
         c.textSize[1] = (float)textH_;
         memcpy(cbMapped_, &c, sizeof c);

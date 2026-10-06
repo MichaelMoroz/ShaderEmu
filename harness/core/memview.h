@@ -1,9 +1,10 @@
 // A window that shows the emulated machine's memory live: the RAM part of the state texture
-// drawn as colour (three bytes of each texel's first two words), with texels written since
-// the view's previous frame glowing and fading. A bar underneath, clear of the memory image,
+// drawn as colour (the largest byte of each texel's words), with texels written since
+// the view's previous frame glowing and fading. Beside it, the guest's display (docs/display.md),
+// decoded from the framebuffer it keeps in RAM. A bar underneath, clear of the memory image,
 // holds the speed counters and the 64x64 CPU state area magnified. It keeps its own copy of
 // the texture to compare against.
-// It only reads the state textures; closing the window does not stop the emulator.
+// It only reads the state textures. Closing the window closes the view; rvc_harness then quits.
 #pragma once
 
 #include "common.h"
@@ -18,13 +19,14 @@
 // textures t0..t3 = current, previous, heat, text; cbuffer b0), window, text and BMP output.
 const UINT kMemoryViewBar = 116;  // info bar: five text lines, and the CPU state area at 100 px
 const UINT kMemoryViewTextW = 512, kMemoryViewTextH = 160;
+const UINT kMemoryViewMemW = 1024, kMemoryViewDispW = 672;  // initial widths: memory image, display panel
 struct MemoryViewConstants {
     float winSize[2];
     uint32_t frame, strips, texWidth, ramRows, stateRows;
     float inset;
     float textSize[2];
     float bar;
-    float pad;
+    float memWidth;
 };
 const char* memoryViewShader();
 // WM_CLOSE sets the window property L"closed" instead of destroying the window.

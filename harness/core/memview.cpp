@@ -22,6 +22,7 @@ cbuffer C : register(b0) {
     float Inset;       // side of the CPU state inset in window pixels
     float2 TextSize;   // used size of the text texture; 0 = no text
     float Bar;         // height of the info bar under the memory image
+    float MemWidth;    // width of the memory image; the display panel is to its right
 };
 
 float4 vs(uint id : SV_VertexID) : SV_Position {
@@ -33,8 +34,46 @@ uint hash(uint x) {
     return x;
 }
 
+uint peak(uint v) {
+    return max(max(v & 0xff, (v >> 8) & 0xff), max((v >> 16) & 0xff, v >> 24));
+}
+
+// A texel as a colour: the largest byte of word 0, of word 1 and of words 2-3, lifted off black
+// so that any texel holding data shows, whichever of its bytes are in use.
 float3 bytes(uint4 t) {
-    return float3(t.r & 0xff, (t.r >> 8) & 0xff, t.g & 0xff) / 255.0;
+    return float3(peak(t.r), peak(t.g), peak(t.b | t.a)) / 255.0 * 0.88 + 0.12;
+}
+
+uint word(uint4 t, uint i) {
+    return i == 0 ? t.r : i == 1 ? t.g : i == 2 ? t.b : t.a;
+}
+
+// RAM texel by index (physical address - 0x80000000) / 16.
+uint4 ram(uint index) {
+    return Cur.Load(int3(index % TexWidth, StateRows + index / TexWidth, 0));
+}
+
+float3 rgb(uint v) {
+    return float3((v >> 16) & 0xff, (v >> 8) & 0xff, v & 0xff) / 255.0;
+}
+
+// The guest's display (docs/display.md): control words at 0x87000000 (mode, width, height),
+// palette at 0x87000400, pixels from 0x87001000.
+static const uint DispCtrl = 0x700000, DispPalette = 0x700040, DispPixels = 0x700100;
+
+float3 display(float2 p, float2 size) {
+    float3 c = float3(0.035, 0.038, 0.047);
+    uint4 ctrl = ram(DispCtrl);
+    uint mode = ctrl.r, w = ctrl.g, h = ctrl.b;
+    if ((mode != 1 && mode != 2) || w == 0 || h == 0 || w > 2048 || h > 2048) return c;
+    float scale = min((size.x - 16) / w, (size.y - 16) / h);
+    if (scale >= 1) scale = floor(scale);   // whole multiples keep pixels square and sharp
+    float2 q = (p - (size - float2(w, h) * scale) * 0.5) / scale;
+    if (q.x < 0 || q.y < 0 || q.x >= w || q.y >= h) return c;
+    uint i = (uint)q.y * w + (uint)q.x;
+    if (mode == 1) return rgb(word(ram(DispPixels + i / 4), i & 3));          // 0x00RRGGBB
+    uint b = (word(ram(DispPixels + i / 16), (i / 4) & 3) >> (8 * (i & 3))) & 0xff;
+    return rgb(word(ram(DispPalette + b / 4), b & 3));                        // palette index
 }
 
 struct Out {
@@ -71,6 +110,15 @@ Out ps(float4 pos : SV_Position) {
         return o;
     }
 
+    // Display panel to the right of the memory image.
+    if (pos.x >= MemWidth) {
+        o.heat = 0;
+        float3 c = display(pos.xy - float2(MemWidth, 0), float2(WinSize.x - MemWidth, memHeight));
+        if (pos.x < MemWidth + 1) c = float3(0.22, 0.24, 0.28);    // separator line
+        o.color = float4(c, 1);
+        return o;
+    }
+
     // Heat fades in place and bleeds a little into neighbours, so a single written texel
     // shows up as a small dot rather than one pixel.
     float prevHeat = Heat.Load(int3(px, 0)) * 0.955;
@@ -80,10 +128,10 @@ Out ps(float4 pos : SV_Position) {
 
     // RAM: strip s covers rows [s, s+1) * rowsPerStrip
     float rowsPerStrip = (float)RamRows / Strips;
-    float sx = pos.x / WinSize.x * Strips;
+    float sx = pos.x / MemWidth * Strips;
     uint strip = min((uint)sx, Strips - 1);
     float2 texel = float2(frac(sx) * TexWidth, StateRows + (strip + pos.y / memHeight) * rowsPerStrip);
-    float2 footprint = float2(TexWidth * Strips / WinSize.x, rowsPerStrip / memHeight);
+    float2 footprint = float2(TexWidth * Strips / MemWidth, rowsPerStrip / memHeight);
 
     // A window pixel covers several texels: a 4x4 grid of taps over its footprint, nudged per
     // frame so larger footprints are covered over time.
@@ -99,7 +147,7 @@ Out ps(float4 pos : SV_Position) {
         if (k == 5) first = a;
     }
     float heat = max(changed ? 1.0 : 0.0, prevHeat);
-    float3 base = any(first != 0) ? bytes(first) * 0.5 + 0.05 : float3(0.02, 0.025, 0.04);
+    float3 base = any(first != 0) ? bytes(first) : float3(0.02, 0.025, 0.04);
     float3 glow = lerp(float3(1.0, 0.45, 0.05), float3(1.0, 0.95, 0.8), saturate(heat * heat));
     o.color = float4(lerp(base, glow, saturate(heat * 1.2)), 1);
     o.heat = heat;
@@ -131,7 +179,8 @@ HWND memoryViewCreateWindow() {
     wc.hCursor = LoadCursorW(nullptr, (LPCWSTR)IDC_ARROW);
     wc.lpszClassName = L"ShaderEmuMemoryView";
     RegisterClassW(&wc);
-    RECT r{0, 0, 1024, 504 + (LONG)kBarHeight};  // two 2048-texel strips at quarter scale, plus the info bar
+    // two 2048-texel strips at quarter scale, the display panel beside them, the info bar below
+    RECT r{0, 0, (LONG)(kMemoryViewMemW + kMemoryViewDispW), 504 + (LONG)kBarHeight};
     AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE);
     return CreateWindowExW(0, wc.lpszClassName, L"memory", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
                            r.right - r.left, r.bottom - r.top, nullptr, nullptr, wc.hInstance, nullptr);
@@ -341,6 +390,7 @@ bool MemoryView::render(ID3D11DeviceContext* ctx, ID3D11ShaderResourceView* cur,
     c.stateRows = stateRows_;
     c.bar = (float)kBarHeight;
     c.inset = (float)(kBarHeight - 16);
+    c.memWidth = (float)width_ * kMemoryViewMemW / (kMemoryViewMemW + kMemoryViewDispW);
     c.textSize[0] = (float)textW_;
     c.textSize[1] = (float)textH_;
     ctx->UpdateSubresource(cb_.Get(), 0, nullptr, &c, 0, 0);
