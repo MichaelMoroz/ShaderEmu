@@ -4,5 +4,6 @@
 /build/
 /bin/
 /logs/
+/programs/build/
 *.cso
 .vs/
