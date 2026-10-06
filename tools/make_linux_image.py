@@ -1,9 +1,13 @@
 """Builds this project's Linux image from upstream rvc's (rvc/_Nix/rvc/data-net) into
 build/images/linux, which the harness's linux-net entry uses when present:
 
-  rootfs.bin  upstream's romfs with our programs added to /usr/bin (programs/bin/glxgears)
-  dts.bin     upstream's device tree with RAM ending at 0x87000000, so the kernel leaves the
+  rootfs.bin  upstream's romfs with our programs added: programs/bin/glxgears in /usr/bin, and
+              everything under build/images/linux/root at the same path in the image
+  dts.bin     upstream's device tree with RAM ending at 0x86000000, so the kernel leaves the
               GPU device's memory alone (docs/gpu.md)
+  linux_payload.bin
+              only if our kernel has been built (linux/kernel/build.sh leaves it in
+              build/images/linux/Image): upstream's OpenSBI with that kernel in place of its own
 
     python tools/make_linux_image.py
 
@@ -17,6 +21,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = os.path.join(ROOT, 'rvc', '_Nix', 'rvc', 'data-net')
 OUT = os.path.join(ROOT, 'build', 'images', 'linux')
 PROGRAMS = [('glxgears', '/usr/bin')]
+EXTRA = os.path.join(OUT, 'root')   # a tree of more files for the image (linux/nanox/build.sh)
 
 
 def read_lanes(prefix):
@@ -103,22 +108,41 @@ def main():
         raise SystemExit('upstream rootfs is not a romfs image')
     rom = bytearray(rom[:(be32(rom, 8) + 1023) & ~1023])
     before = len(rom)
-    for name, directory in PROGRAMS:
-        path = os.path.join(ROOT, 'programs', 'bin', name)
+    files = [(os.path.join(ROOT, 'programs', 'bin', name), directory, name) for name, directory in PROGRAMS]
+    for folder, _, names in os.walk(EXTRA):
+        directory = '/' + os.path.relpath(folder, EXTRA).replace(os.sep, '/')
+        files += [(os.path.join(folder, name), directory, name) for name in sorted(names)]
+    # a file in the tree replaces the one of the same name listed above
+    last = {(directory, name): path for path, directory, name in files}
+    files = [(path, directory, name) for (directory, name), path in last.items()]
+    for path, directory, name in files:
         add_file(rom, directory, name, open(path, 'rb').read())
-        print('added %s/%s (%d bytes)' % (directory, name, os.path.getsize(path)))
+    print('added %d files, %d bytes' % (len(files), sum(os.path.getsize(f[0]) for f in files)))
     open(os.path.join(OUT, 'rootfs.bin'), 'wb').write(rom)
     print('rootfs.bin: %d -> %d bytes' % (before, len(rom)))
 
     dtb = read_lanes('dts')
     dtb = bytearray(dtb[:be32(dtb, 4)])
     # memory@80000000 { reg = <0 0x80000000 0 size> }: two cells each for address and size
-    old, new = struct.pack('>IIII', 0, 0x80000000, 0, 0x07b00000), struct.pack('>IIII', 0, 0x80000000, 0, 0x07000000)
+    old, new = struct.pack('>IIII', 0, 0x80000000, 0, 0x07b00000), struct.pack('>IIII', 0, 0x80000000, 0, 0x06000000)
     if dtb[:4] != b'\xd0\x0d\xfe\xed' or dtb.count(old) != 1:
         raise SystemExit('device tree: expected one memory range 0x80000000 + 0x07b00000')
     dtb[dtb.index(old):dtb.index(old) + 16] = new
     open(os.path.join(OUT, 'dts.bin'), 'wb').write(dtb)
-    print('dts.bin: RAM now ends at 0x87000000 (%d bytes)' % len(dtb))
+    print('dts.bin: RAM now ends at 0x86000000 (%d bytes)' % len(dtb))
+
+    # The boot image is OpenSBI with the kernel as its payload at +4 MiB; swap the kernel.
+    kernel, payload = os.path.join(OUT, 'Image'), os.path.join(OUT, 'linux_payload.bin')
+    if os.path.exists(kernel):
+        boot = read_lanes('linux_payload')
+        image = open(kernel, 'rb').read()
+        at = 0x400000
+        if boot[at + 0x38:at + 0x3c] != b'RSC\x05' or image[0x38:0x3c] != b'RSC\x05':
+            raise SystemExit("expected a RISC-V kernel image at +4 MiB of upstream's payload, and in " + kernel)
+        open(payload, 'wb').write(bytes(boot[:at]) + image)
+        print('linux_payload.bin: OpenSBI + our kernel (%d bytes)' % (at + len(image)))
+    elif os.path.exists(payload):
+        os.remove(payload)
 
 
 if __name__ == '__main__':

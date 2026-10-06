@@ -1,0 +1,11 @@
+# Added to upstream rvc's linux.config for this project's kernel.
+CONFIG_SHADEREMU_GPU=y
+CONFIG_FB=y
+CONFIG_FB_SHADEREMU=y
+CONFIG_INPUT=y
+CONFIG_INPUT_EVDEV=y
+CONFIG_INPUT_MISC=y
+CONFIG_INPUT_SHADEREMU=y
+# Upstream ticks at 20 Hz; the polled input device and short sleeps want more.
+CONFIG_HZ_20=n
+CONFIG_HZ_100=y
