@@ -302,13 +302,14 @@ struct Build12 {
     std::string dxcDir;          // folder with dxcompiler.dll; default: newest Windows SDK bin
 };
 
-// Compiles CPUTick and Commit (FXC bytecode from the shared cache, or DXC) into passes[0..1].
-void buildPasses12(Dx& dx, const SLShader& shader, const CompileSettings& cs, const Build12& opt, Pass12 passes[2]) {
+// Compiles two passes of a shader (FXC bytecode from the shared cache, or DXC) into passes[0..1].
+void buildPasses12(Dx& dx, const SLShader& shader, const CompileSettings& cs, const Build12& opt, Pass12 passes[2],
+                   const char* first = "CPUTick", const char* second = "Commit") {
     std::string err;
     std::string rootDir = std::filesystem::u8path(shader.path).parent_path().u8string();
     Dxc dxc;
     if (opt.dxc) dxc.init(opt.dxcDir);
-    const char* passNames[2] = {"CPUTick", "Commit"};
+    const char* passNames[2] = {first, second};
     for (int p = 0; p < 2; ++p) {
         const SLPass* sp = shader.findPass(passNames[p]);
         if (!sp) die("pass not found in shader");

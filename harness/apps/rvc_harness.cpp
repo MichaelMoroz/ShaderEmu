@@ -73,7 +73,9 @@ struct Options {
     int uartBurst = 0;        // input characters per handshake; 0 = what the shader declares
     bool resume = false;      // with no other arguments: resume the shell snapshot instead of booting
     std::string vizCapture;   // BMP of the memory view, written at exit
+    std::string gpuCapture;   // BMP of the GPU device's colour target, written at exit
     bool noDoubles = false;
+    bool noGpu = false;       // --no-gpu: leave out the GPU device's passes (gpu.shader)
     bool doubles = false;     // --doubles: keep the shader's double math under DXC too
 #ifdef RVC_DEFAULT_DXC
     bool dxc = true;          // D3D12 + DXC instead of D3D11 + FXC
@@ -130,6 +132,8 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
                          nopaging  NO_PAGING: satp hardwired to 0, no translation or TLBs
                          mmode     M_MODE_ONLY: also no supervisor/user mode or trap delegation
                          auto      (default) the smallest one the chosen image runs on
+  --no-gpu             leave out the GPU device (the passes in <rvc>/gpu.shader, docs/gpu.md)
+  --gpu-capture FILE   save the GPU device's whole colour target as a BMP at exit
   --dxc / --d3d11      backend: D3D12 with DXC-compiled DXIL, or D3D11 with FXC bytecode (what VRChat
                        runs). rvc_harness_dxc.exe defaults to --dxc. DXC implies NO_DOUBLES and, unless
                        --rvc is given, the experiments/rvc_opt shader (upstream does not compile with DXC).
@@ -242,6 +246,8 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--resume") o.resume = true;
         else if (a == "--viz-capture") { o.vizCapture = next("--viz-capture"); o.viz = true; }
         else if (a == "--no-doubles") o.noDoubles = true;
+        else if (a == "--no-gpu") o.noGpu = true;
+        else if (a == "--gpu-capture") o.gpuCapture = next("--gpu-capture");
         else if (a == "--define") o.defines.push_back(next("--define"));
         else { fprintf(stderr, "unknown option %s\n", a.c_str()); usage(); return false; }
     }
@@ -346,6 +352,7 @@ const BootImage kImages[] = {
     {"linux", "Linux, kernel with built-in initramfs", "data", "linux_payload", "none", "dts", 0},
     {"micropython", "MicroPython on OpenSBI (bare metal REPL)", "data", "mprv_payload", "none", "dts", 1},
     {"rust", "Rust test payload on OpenSBI (bare metal)", "data", "rust_payload", "none", "dts", 1},
+    {"gears", "Gears: three lit, textured gears drawn by the GPU device (bare metal C)", nullptr, "gears", "none", "none", 2},
     {"raycast", "Raycaster: walk a textured maze on the display (bare metal C)", nullptr, "raycast", "none", "none", 2},
     {"raytrace", "Raytracer drawing to the display (bare metal C)", nullptr, "raytrace", "none", "none", 2},
     {"rvc-raytrace", "rvc's Rust raytracer, drawing into raw memory", "data", "rust_raytrace", "none", "dts", 1},
@@ -505,6 +512,16 @@ int main(int argc, char** argv) {
     bo.dxcOpt = opt.dxcOpt;
     bo.dxcSm = opt.dxcSm;
     bo.dxcDir = opt.dxcDir;
+    // The GPU device is a second shader next to the CPU's; upstream rvc has none.
+    SLShader gpuShader;
+    std::string gpuPath = (fs::u8path(opt.rvcDir) / "gpu.shader").u8string();
+    if (!opt.noGpu && fs::exists(fs::u8path(gpuPath), ec)) {
+        if (!loadShaderLab(gpuPath, gpuShader, err)) {
+            fprintf(stderr, "[harness] %s\n", err.c_str());
+            return 1;
+        }
+        bo.gpuShader = &gpuShader;
+    }
     bo.compile.flags = opt.fxcFlags;
     bo.compile.cacheDir = opt.cacheDir;
     bo.compile.includeDirs = {SHADEREMU_UNITY_INCLUDE_DIR};
@@ -594,7 +611,7 @@ int main(int argc, char** argv) {
     double ovLast = 0;
     std::vector<std::string> overlayLines;
     uint64_t ovInstr = 0, ovFrames = 0;
-    double gpuTickMs = -1, gpuCommitMs = -1;
+    double gpuTickMs = -1, gpuCommitMs = -1, gpuDeviceMs = 0;
     auto withCommas = [](uint64_t v) {
         std::string s = std::to_string(v);
         for (int i = (int)s.size() - 3; i > 0; i -= 3) s.insert((size_t)i, ",");
@@ -735,14 +752,15 @@ int main(int argc, char** argv) {
         }
 
         if (backend.viewOpen() && wall - ovLast >= 0.25) {
-            backend.gpuTimes(gpuTickMs, gpuCommitMs);
+            backend.gpuTimes(gpuTickMs, gpuCommitMs, gpuDeviceMs);
             double dt = wall - ovLast;
             double ips = (double)(guestInstructions - ovInstr) / dt, fps = (double)(frame - ovFrames) / dt;
             char l1[96], l2[96], l3[96], l4[96], l5[96];
             snprintf(l1, sizeof l1, "%s IPS    %.0f frames/s", withCommas((uint64_t)ips).c_str(), fps);
             snprintf(l2, sizeof l2, "frame %.3f ms    %.0f instr/frame", fps > 0 ? 1000.0 / fps : 0.0, fps > 0 ? ips / fps : 0.0);
-            if (gpuTickMs >= 0) snprintf(l3, sizeof l3, "GPU: tick %.3f ms    commit %.3f ms", gpuTickMs, gpuCommitMs);
-            else snprintf(l3, sizeof l3, "GPU: tick -    commit -");
+            if (gpuTickMs >= 0)
+                snprintf(l3, sizeof l3, "draws: tick %.3f ms   commit %.3f ms   gpu device %.3f ms", gpuTickMs, gpuCommitMs, gpuDeviceMs);
+            else snprintf(l3, sizeof l3, "draws: tick -   commit -   gpu device -");
             unsigned up = (unsigned)wall;
             snprintf(l4, sizeof l4, "up %02u:%02u:%02u    guest clock %.1f s", up / 3600, up / 60 % 60, up % 60, guestTime);
             snprintf(l5, sizeof l5, "%s instructions    %s commits", withCommas(guestInstructions).c_str(), withCommas(commits).c_str());
@@ -842,6 +860,8 @@ int main(int argc, char** argv) {
         if (!ok) exitCode = 1;
     }
 
+    if (!opt.gpuCapture.empty() && exitCode != 1)
+        fprintf(stderr, "\n[harness] GPU target %s %s\n", backend.gpuCapture(opt.gpuCapture) ? "written to" : "capture FAILED:", opt.gpuCapture.c_str());
     if (!opt.vizCapture.empty() && backend.viewOpen() && exitCode != 1) {
         backend.viewRender(false);
         bool ok = backend.viewCapture(opt.vizCapture);

@@ -45,6 +45,13 @@ public:
         b.dxcSm = opt.dxcSm;
         b.dxcDir = opt.dxcDir;
         buildPasses12(dx_, shader, opt.compile, b, passes_);
+        if (opt.gpuShader) {
+            Pass12 control[2];   // the builder makes two passes; the control zone is one
+            buildPasses12(dx_, *opt.gpuShader, opt.compile, b, control, "GPUControl", "GPUControl");
+            passes_[2] = control[0];
+            passCount_ = 3;
+            buildGpuDraw(*opt.gpuShader, opt.compile, b);
+        }
 
         const uint8_t black[4] = {0, 0, 0, 0};
         blackTex_ = uploadTexture(dx_, 1, 1, DXGI_FORMAT_R8G8B8A8_UNORM, 4, black, D3D12_RESOURCE_FLAG_NONE,
@@ -56,7 +63,7 @@ public:
         }
         check(dx_.dev->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocs_[0].Get(), nullptr, IID_PPV_ARGS(&cl_)), "command list");
         cl_->Close();
-        auto cbd = bufferDesc((UINT64)kSlots * 4 * kCbBytes);
+        auto cbd = bufferDesc((UINT64)kSlots * 8 * kCbBytes);
         auto hu = heapProps(D3D12_HEAP_TYPE_UPLOAD);
         check(dx_.dev->CreateCommittedResource(&hu, D3D12_HEAP_FLAG_NONE, &cbd, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
                                                IID_PPV_ARGS(&cbuf_)), "constant buffer");
@@ -64,8 +71,8 @@ public:
 
         D3D12_QUERY_HEAP_DESC qh{};
         qh.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
-        qh.Count = 3;
-        auto tsd = bufferDesc(3 * sizeof(UINT64));
+        qh.Count = 4;
+        auto tsd = bufferDesc(4 * sizeof(UINT64));
         auto hr = heapProps(D3D12_HEAP_TYPE_READBACK);
         if (FAILED(dx_.dev->CreateQueryHeap(&qh, IID_PPV_ARGS(&tsHeap_))) ||
             FAILED(dx_.dev->CreateCommittedResource(&hr, D3D12_HEAP_FLAG_NONE, &tsd, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
@@ -135,12 +142,13 @@ public:
         mat.setVector("_CustomRenderTextureInfo", kWidth, kHeight, 1, 0);
 
         auto draw = [&](int p, double cx, double cy, double zw, double zh) {
+            cl_->RSSetScissorRects(1, &scissor);
             Pass12& P = passes_[p];
             mat.setVector("CustomRenderTextureCenters", cx, cy, 0.5, 0);
             mat.setVector("CustomRenderTextureSizesAndRotations", zw, zh, 1, 0);
             mat.fillGlobals(P.vs);
             mat.fillGlobals(P.ps);
-            UINT64 base = ((UINT64)slot * 4 + (UINT64)p * 2) * kCbBytes;
+            UINT64 base = ((UINT64)slot * 8 + (UINT64)p * 2) * kCbBytes;
             if (P.vs.hasGlobals) memcpy(cbMapped_ + base, P.vs.scratch.data(), P.vs.scratch.size());
             if (P.ps.hasGlobals) memcpy(cbMapped_ + base + kCbBytes, P.ps.scratch.data(), P.ps.scratch.size());
             cl_->SetPipelineState(P.pso.Get());
@@ -178,7 +186,65 @@ public:
         // Zone 2: Commit on the whole texture; row 0 of the result goes to this slot's readback.
         draw(1, 1024, 2048, 2048, 4096);
         stamp(2);
-        if (timeIt) cl_->ResolveQueryData(tsHeap_.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0, 3, tsBuf_.Get(), 0);
+        // The GPU device's zones read the committed state and write part of it: each renders
+        // into the other buffer and its rows are copied back, as the CPUTick zone does.
+        if (passCount_ == 3) {
+            D3D12_RESOURCE_BARRIER swapIn[2] = {
+                transition(state_[dst].Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE),
+                transition(state_[cur].Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET)};
+            cl_->ResourceBarrier(2, swapIn);
+            std::swap(cur, dst);   // `cur` is the committed state from here on
+            // The mesh, into the GPU's own target. Depth starts fresh every frame; colour is
+            // kept, so the picture stays until the guest submits another list.
+            D3D12_CPU_DESCRIPTOR_HANDLE grtv = gpuRtvHeap_->GetCPUDescriptorHandleForHeapStart();
+            D3D12_CPU_DESCRIPTOR_HANDLE gdsv = gpuDsvHeap_->GetCPUDescriptorHandleForHeapStart();
+            D3D12_VIEWPORT gvp{0, 0, (float)kGpuTarget, (float)kGpuTarget, 0, 1};
+            D3D12_RECT gsc{0, 0, (LONG)kGpuTarget, (LONG)kGpuTarget};
+            cl_->RSSetViewports(1, &gvp);
+            cl_->RSSetScissorRects(1, &gsc);
+            cl_->OMSetRenderTargets(1, &grtv, FALSE, &gdsv);
+            cl_->ClearDepthStencilView(gdsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+            cl_->SetPipelineState(gpuPso_.Get());
+            cl_->SetGraphicsRootSignature(gpuRoot_.Get());
+            D3D12_GPU_DESCRIPTOR_HANDLE gtable = srvHeap_->GetGPUDescriptorHandleForHeapStart();
+            gtable.ptr += (UINT64)(8 * kTableSize + cur) * srvStep_;
+            cl_->SetGraphicsRootDescriptorTable(0, gtable);
+            // the vertex shader reads the state texture too, which needs the non-pixel state
+            const D3D12_RESOURCE_STATES anyStage =
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            auto toAny = transition(state_[cur].Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, anyStage);
+            cl_->ResourceBarrier(1, &toAny);
+            cl_->DrawInstanced(kGpuTriangles * 3, 1, 0, 0);
+            auto toPixel = transition(state_[cur].Get(), anyStage, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            cl_->ResourceBarrier(1, &toPixel);
+            cl_->RSSetViewports(1, &vp);
+            {
+                const float* zn = kGpuControlZone;
+                draw(2, zn[0], zn[1], zn[2], zn[3]);
+                D3D12_RESOURCE_BARRIER in[2] = {
+                    transition(state_[dst].Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE),
+                    transition(state_[cur].Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST)};
+                cl_->ResourceBarrier(2, in);
+                UINT top = kHeight - (UINT)(zn[1] + zn[3] / 2), left = (UINT)(zn[0] - zn[2] / 2);
+                D3D12_TEXTURE_COPY_LOCATION zd{}, zs{};
+                zd.pResource = state_[cur].Get();
+                zs.pResource = state_[dst].Get();
+                D3D12_BOX zbox{left, top, 0, left + (UINT)zn[2], top + (UINT)zn[3], 1};
+                cl_->CopyTextureRegion(&zd, left, top, 0, &zs, &zbox);
+                D3D12_RESOURCE_BARRIER out[2] = {
+                    transition(state_[dst].Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET),
+                    transition(state_[cur].Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE)};
+                cl_->ResourceBarrier(2, out);
+            }
+            // back to the names the rest of the frame uses: dst = the new state, in RENDER_TARGET
+            D3D12_RESOURCE_BARRIER swapOut[2] = {
+                transition(state_[cur].Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET),
+                transition(state_[dst].Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE)};
+            cl_->ResourceBarrier(2, swapOut);
+            std::swap(cur, dst);
+        }
+        stamp(3);
+        if (timeIt) cl_->ResolveQueryData(tsHeap_.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0, 4, tsBuf_.Get(), 0);
         auto toRead = transition(state_[dst].Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE);
         cl_->ResourceBarrier(1, &toRead);
         D3D12_TEXTURE_COPY_LOCATION rdst{}, rsrc{};
@@ -228,19 +294,21 @@ public:
         return true;
     }
 
-    bool gpuTimes(double& tickMs, double& commitMs) override {
+    bool gpuTimes(double& tickMs, double& commitMs, double& deviceMs) override {
         UINT64 freq = 0;
         if (tsPending_ && dx_.fence->GetCompletedValue() >= tsFence_) {
             UINT64* ts = nullptr;
             if (SUCCEEDED(dx_.queue->GetTimestampFrequency(&freq)) && freq && SUCCEEDED(tsBuf_->Map(0, nullptr, (void**)&ts))) {
                 tickMs_ = (double)(ts[1] - ts[0]) * 1000.0 / (double)freq;
                 commitMs_ = (double)(ts[2] - ts[1]) * 1000.0 / (double)freq;
+                deviceMs_ = (double)(ts[3] - ts[2]) * 1000.0 / (double)freq;
                 tsBuf_->Unmap(0, nullptr);
             }
             tsPending_ = false;
         }
         tickMs = tickMs_;
         commitMs = commitMs_;
+        deviceMs = deviceMs_;
         return tickMs_ >= 0;
     }
 
@@ -255,7 +323,37 @@ public:
         if (!view_.open()) return;
         prepare();
         dx_.flush();
-        view_.render(state_[cur_].Get(), present);
+        view_.render(state_[cur_].Get(), present, gpuColor_.Get());
+    }
+    bool gpuCapture(const std::string& path) override {
+        if (!gpuColor_) return false;
+        dx_.flush();
+        auto td = texDesc(kGpuTarget, kGpuTarget, DXGI_FORMAT_R8G8B8A8_UNORM, D3D12_RESOURCE_FLAG_NONE);
+        D3D12_PLACED_SUBRESOURCE_FOOTPRINT fp{};
+        UINT64 total = 0;
+        dx_.dev->GetCopyableFootprints(&td, 0, 1, 0, &fp, nullptr, nullptr, &total);
+        ComPtr<ID3D12Resource> rb;
+        auto bd = bufferDesc(total);
+        auto hr = heapProps(D3D12_HEAP_TYPE_READBACK);
+        check(dx_.dev->CreateCommittedResource(&hr, D3D12_HEAP_FLAG_NONE, &bd, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                                               IID_PPV_ARGS(&rb)), "readback buffer");
+        OneShot os(dx_);
+        auto b0 = transition(gpuColor_.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        os.list->ResourceBarrier(1, &b0);
+        D3D12_TEXTURE_COPY_LOCATION dst{}, src{};
+        dst.pResource = rb.Get();
+        dst.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+        dst.PlacedFootprint = fp;
+        src.pResource = gpuColor_.Get();
+        os.list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+        auto b1 = transition(gpuColor_.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
+        os.list->ResourceBarrier(1, &b1);
+        os.run();
+        uint8_t* p = nullptr;
+        if (FAILED(rb->Map(0, nullptr, (void**)&p))) return false;
+        bool ok = memoryViewWriteBmp(path, kGpuTarget, kGpuTarget, p + fp.Offset, fp.Footprint.RowPitch);
+        rb->Unmap(0, nullptr);
+        return ok;
     }
     void viewText(const std::vector<std::string>& lines) override { view_.setText(lines); }
     void viewTitle(const std::string& title) override { view_.setTitle(title); }
@@ -295,7 +393,7 @@ private:
         hd.NumDescriptors = 2;
         check(dx_.dev->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&rtvHeap_)), "RTV heap");
         hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-        hd.NumDescriptors = 4 * kTableSize;
+        hd.NumDescriptors = 8 * kTableSize + 2;   // the tables, then each state texture for the GPU device
         hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         check(dx_.dev->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&srvHeap_)), "SRV heap");
         UINT rtvStep = dx_.dev->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
@@ -305,7 +403,7 @@ private:
             rtv_[i].ptr += (SIZE_T)i * rtvStep;
             dx_.dev->CreateRenderTargetView(state_[i].Get(), nullptr, rtv_[i]);
         }
-        for (int p = 0; p < 2; ++p) {
+        for (int p = 0; p < passCount_; ++p) {
             for (int cur = 0; cur < 2; ++cur) {
                 for (UINT s = 0; s < kTableSize; ++s) {
                     ID3D12Resource* res = blackTex_.Get();
@@ -320,11 +418,101 @@ private:
                 }
             }
         }
+        for (int i = 0; i < 2; ++i) {
+            D3D12_CPU_DESCRIPTOR_HANDLE h = srvHeap_->GetCPUDescriptorHandleForHeapStart();
+            h.ptr += (SIZE_T)(8 * kTableSize + i) * srvStep_;
+            dx_.dev->CreateShaderResourceView(state_[i].Get(), nullptr, h);
+        }
         tablesBuilt_ = true;
     }
 
     Dx dx_;
-    Pass12 passes_[2];
+    Pass12 passes_[4];   // CPUTick, Commit, and the GPU device's control zone if present
+    int passCount_ = 2;
+
+    // The GPU device's draw: its own pipeline (depth test, state texture visible to both stages)
+    // and its own colour and depth target.
+    void buildGpuDraw(const SLShader& shader, const CompileSettings& cs, const Build12& b) {
+        const SLPass* sp = shader.findPass("GPUDraw");
+        if (!sp) die("gpu.shader has no GPUDraw pass");
+        Dxc dxc;
+        dxc.init(b.dxcDir);
+        std::string err, vsText, psText, rootDir = fs::u8path(shader.path).parent_path().u8string();
+        if (!preprocessStage(sp->code, shader.path, rootDir, {{"SHADER_STAGE_VERTEX", "1"}}, cs, vsText, err) ||
+            !preprocessStage(sp->code, shader.path, rootDir, {{"SHADER_STAGE_FRAGMENT", "1"}}, cs, psText, err))
+            die(err.c_str());
+        StageLayout vl, pl;
+        std::vector<uint8_t> vs = dxcCompile(dxc, vsText, sp->vertexEntry, "vs_" + b.dxcSm, b.dxcOpt, vl);
+        std::vector<uint8_t> ps = dxcCompile(dxc, psText, sp->fragmentEntry, "ps_" + b.dxcSm, b.dxcOpt, pl);
+        for (auto& t : vl.textures)
+            if (t.slot != 0) die("GPUDraw: the state texture must be t0");
+        for (auto& t : pl.textures)
+            if (t.slot != 0) die("GPUDraw: the state texture must be t0");
+        if (vl.hasGlobals || pl.hasGlobals) die("GPUDraw must not use uniforms");
+
+        D3D12_DESCRIPTOR_RANGE range{};
+        range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+        range.NumDescriptors = 1;
+        D3D12_ROOT_PARAMETER rp{};
+        rp.ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        rp.DescriptorTable.NumDescriptorRanges = 1;
+        rp.DescriptorTable.pDescriptorRanges = &range;
+        rp.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+        D3D12_ROOT_SIGNATURE_DESC rsd{};
+        rsd.NumParameters = 1;
+        rsd.pParameters = &rp;
+        ComPtr<ID3DBlob> blob, rsErr;
+        check(D3D12SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &blob, &rsErr), "GPU root signature");
+        check(dx_.dev->CreateRootSignature(0, blob->GetBufferPointer(), blob->GetBufferSize(), IID_PPV_ARGS(&gpuRoot_)), "GPU root signature");
+
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC pd{};
+        pd.pRootSignature = gpuRoot_.Get();
+        pd.VS = {vs.data(), vs.size()};
+        pd.PS = {ps.data(), ps.size()};
+        pd.BlendState.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+        pd.SampleMask = 0xffffffff;
+        pd.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+        pd.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+        pd.RasterizerState.DepthClipEnable = TRUE;
+        pd.DepthStencilState.DepthEnable = TRUE;
+        pd.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+        pd.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+        pd.DSVFormat = DXGI_FORMAT_D32_FLOAT;
+        pd.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+        pd.NumRenderTargets = 1;
+        pd.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+        pd.SampleDesc.Count = 1;
+        check(dx_.dev->CreateGraphicsPipelineState(&pd, IID_PPV_ARGS(&gpuPso_)), "GPU pipeline state");
+        fprintf(stderr, "[d3d12] pass 'GPUDraw': vs %zu bytes, ps %zu bytes\n", vs.size(), ps.size());
+
+        auto hp = heapProps(D3D12_HEAP_TYPE_DEFAULT);
+        auto cd = texDesc(kGpuTarget, kGpuTarget, DXGI_FORMAT_R8G8B8A8_UNORM, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
+        auto dd = texDesc(kGpuTarget, kGpuTarget, DXGI_FORMAT_D32_FLOAT, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
+        D3D12_CLEAR_VALUE depthClear{};
+        depthClear.Format = DXGI_FORMAT_D32_FLOAT;
+        depthClear.DepthStencil.Depth = 1.0f;
+        check(dx_.dev->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &cd, D3D12_RESOURCE_STATE_RENDER_TARGET, nullptr,
+                                               IID_PPV_ARGS(&gpuColor_)), "GPU colour target");
+        check(dx_.dev->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &dd, D3D12_RESOURCE_STATE_DEPTH_WRITE, &depthClear,
+                                               IID_PPV_ARGS(&gpuDepth_)), "GPU depth target");
+        D3D12_DESCRIPTOR_HEAP_DESC hd{};
+        hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+        hd.NumDescriptors = 1;
+        check(dx_.dev->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&gpuRtvHeap_)), "GPU RTV heap");
+        hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
+        check(dx_.dev->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&gpuDsvHeap_)), "GPU DSV heap");
+        dx_.dev->CreateRenderTargetView(gpuColor_.Get(), nullptr, gpuRtvHeap_->GetCPUDescriptorHandleForHeapStart());
+        dx_.dev->CreateDepthStencilView(gpuDepth_.Get(), nullptr, gpuDsvHeap_->GetCPUDescriptorHandleForHeapStart());
+        OneShot os(dx_);
+        const float black[4] = {0, 0, 0, 1};
+        os.list->ClearRenderTargetView(gpuRtvHeap_->GetCPUDescriptorHandleForHeapStart(), black, 0, nullptr);
+        os.run();
+    }
+
+    ComPtr<ID3D12RootSignature> gpuRoot_;
+    ComPtr<ID3D12PipelineState> gpuPso_;
+    ComPtr<ID3D12Resource> gpuColor_, gpuDepth_;
+    ComPtr<ID3D12DescriptorHeap> gpuRtvHeap_, gpuDsvHeap_;
     ComPtr<ID3D12Resource> state_[2], blackTex_;
     std::map<std::string, ComPtr<ID3D12Resource>> textures_;
     int cur_ = 0;
@@ -345,7 +533,7 @@ private:
     ComPtr<ID3D12Resource> tsBuf_;
     bool tsPending_ = false;
     UINT64 tsFence_ = 0;
-    double tickMs_ = -1, commitMs_ = -1;
+    double tickMs_ = -1, commitMs_ = -1, deviceMs_ = 0;
 
     MemoryView12 view_;
 };

@@ -42,7 +42,9 @@ public:
     // Draws one frame from the current state texture and presents it.
     // Returns false once the window has been closed.
     // present = false leaves the frame in the back buffer for capture().
-    bool render(ID3D11DeviceContext* ctx, ID3D11ShaderResourceView* cur, bool present = true);
+    // gpu: the GPU device's colour target, shown when the guest selects display mode 3.
+    bool render(ID3D11DeviceContext* ctx, ID3D11ShaderResourceView* cur, bool present = true,
+                ID3D11ShaderResourceView* gpu = nullptr);
     // Saves the back buffer as a 32-bit BMP; call after render(..., false).
     bool capture(ID3D11DeviceContext* ctx, const std::string& path);
     void setTitle(const std::string& title);

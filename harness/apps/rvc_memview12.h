@@ -28,7 +28,7 @@ public:
         // Root: [0] constants b0, [1] textures t0..t3 (current, previous, heat, text).
         D3D12_DESCRIPTOR_RANGE range{};
         range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-        range.NumDescriptors = 4;
+        range.NumDescriptors = 5;
         D3D12_ROOT_PARAMETER rp[2]{};
         rp[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
         rp[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
@@ -63,6 +63,7 @@ public:
         hd.NumDescriptors = 4;  // two back buffers, two heat textures
         if (SUCCEEDED(hr)) hr = dx.dev->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&rtvHeap_));
         hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+        hd.NumDescriptors = 5;
         hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         if (SUCCEEDED(hr)) hr = dx.dev->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&srvHeap_));
         rtvStep_ = dx.dev->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
@@ -112,7 +113,8 @@ public:
     }
 
     // Draws one frame from `cur` (in PIXEL_SHADER_RESOURCE state, GPU idle) and presents it.
-    void render(ID3D12Resource* cur, bool present) {
+    // gpu: the GPU device's colour target (in RENDER_TARGET state), or null.
+    void render(ID3D12Resource* cur, bool present, ID3D12Resource* gpu = nullptr) {
         if (!hwnd_) return;
         MSG msg;
         while (PeekMessageW(&msg, hwnd_, 0, 0, PM_REMOVE)) {
@@ -145,8 +147,8 @@ public:
 
         // The first frame has nothing to compare with, so it compares the state with itself.
         int dst = 1 - heatCur_;
-        ID3D12Resource* srvs[4] = {cur, refValid_ ? ref_.Get() : cur, heat_[heatCur_].Get(), text_.Get()};
-        for (UINT i = 0; i < 4; ++i) {
+        ID3D12Resource* srvs[5] = {cur, refValid_ ? ref_.Get() : cur, heat_[heatCur_].Get(), text_.Get(), gpu ? gpu : text_.Get()};
+        for (UINT i = 0; i < 5; ++i) {
             D3D12_CPU_DESCRIPTOR_HANDLE h = srvHeap_->GetCPUDescriptorHandleForHeapStart();
             h.ptr += (SIZE_T)i * srvStep_;
             dx_->dev->CreateShaderResourceView(srvs[i], nullptr, h);
@@ -172,6 +174,7 @@ public:
         }
         UINT back = swap_->GetCurrentBackBufferIndex();
         move(back_[back].Get(), D3D12_RESOURCE_STATE_PRESENT, rt);
+        if (gpu) move(gpu, rt, psr);
         if (heatNeedsClear_) {
             const float zero[4] = {0, 0, 0, 0};
             move(heat_[heatCur_].Get(), psr, rt);
@@ -194,6 +197,7 @@ public:
         D3D12_CPU_DESCRIPTOR_HANDLE rtvs[2] = {rtv(back), rtv(2 + dst)};
         list_->OMSetRenderTargets(2, rtvs, FALSE, nullptr);
         list_->DrawInstanced(3, 1, 0, 0);
+        if (gpu) move(gpu, psr, rt);
         move(heat_[dst].Get(), rt, psr);
         move(back_[back].Get(), rt, D3D12_RESOURCE_STATE_PRESENT);
 

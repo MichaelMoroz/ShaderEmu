@@ -21,7 +21,15 @@ struct BackendOptions {
     bool profile = false;         // D3D11 only: PROF() counters through a UAV
     bool present = false;         // D3D11 only: hidden swapchain presented once per frame
     std::string dxcOpt = "-O3", dxcSm = "6_6", dxcDir;
+    const SLShader* gpuShader = nullptr;   // the GPU device's passes (gpu.shader), if the machine has one
 };
+
+// The GPU device (docs/gpu.md): a mesh of kGpuTriangles triangles drawn into a square colour and
+// depth target of kGpuTarget pixels, then one small update zone on the state texture (Unity
+// pixel space, y up) holding its control words at RAM 0x87000010.
+const UINT kGpuTriangles = 65536;
+const UINT kGpuTarget = 2048;
+const float kGpuControlZone[4] = {8, 447.5f, 16, 1};
 
 class RvcBackend {
 public:
@@ -45,9 +53,12 @@ public:
     virtual bool popRow(std::vector<uint8_t>& out, uint64_t& tag) = 0;
     // Blocking read of the top-left w x h texels of the current state.
     virtual bool readState(UINT w, UINT h, std::vector<uint8_t>& out) = 0;
-    // GPU time of the two draws of the last frame run with timeIt, once it is known.
-    virtual bool gpuTimes(double& tickMs, double& commitMs) = 0;
+    // Time on the graphics card of the last frame run with timeIt, once it is known: the CPUTick
+    // draw, the Commit draw, and the emulated GPU device's two draws together (0 without one).
+    virtual bool gpuTimes(double& tickMs, double& commitMs, double& deviceMs) = 0;
     virtual bool readProf(std::vector<uint32_t>& out) { (void)out; return false; }
+    // Saves the GPU device's whole colour target as a BMP.
+    virtual bool gpuCapture(const std::string& path) { (void)path; return false; }
     // Empty while the device is fine.
     virtual std::string deviceRemoved() = 0;
 

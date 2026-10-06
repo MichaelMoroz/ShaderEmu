@@ -12,6 +12,7 @@ Texture2D<uint4> Cur : register(t0);
 Texture2D<uint4> Prev : register(t1);
 Texture2D<float> Heat : register(t2);
 Texture2D<float4> Text : register(t3);
+Texture2D<float4> Gpu : register(t4);    // the GPU device's colour target (display mode 3)
 cbuffer C : register(b0) {
     float2 WinSize;
     uint Frame;
@@ -65,12 +66,31 @@ float3 display(float2 p, float2 size) {
     float3 c = float3(0.035, 0.038, 0.047);
     uint4 ctrl = ram(DispCtrl);
     uint mode = ctrl.r, w = ctrl.g, h = ctrl.b;
-    if ((mode != 1 && mode != 2) || w == 0 || h == 0 || w > 2048 || h > 2048) return c;
+    if (mode < 1 || mode > 3 || w == 0 || h == 0 || w > 2048 || h > 2048) return c;
     float scale = min((size.x - 16) / w, (size.y - 16) / h);
     if (scale >= 1) scale = floor(scale);   // whole multiples keep pixels square and sharp
     float2 q = (p - (size - float2(w, h) * scale) * 0.5) / scale;
     if (q.x < 0 || q.y < 0 || q.x >= w || q.y >= h) return c;
+    if (mode == 3) {
+        // the GPU's picture; shrunk to fit, a 2x2 block of taps keeps thin lines
+        if (scale >= 1) return Gpu.Load(int3(q, 0)).rgb;
+        float3 sum = 0;
+        for (uint g = 0; g < 4; g++) {
+            sum += Gpu.Load(int3(clamp(q + (float2(g & 1, g >> 1) - 0.5) * 0.5 / scale, 0, float2(w, h) - 1), 0)).rgb;
+        }
+        return sum * 0.25;
+    }
     uint i = (uint)q.y * w + (uint)q.x;
+    if (mode == 1 && scale < 1) {
+        // shrunk to fit: average a 2x2 block of taps so thin lines do not drop out
+        float3 sum = 0;
+        for (uint k = 0; k < 4; k++) {
+            float2 t = clamp(q + (float2(k & 1, k >> 1) - 0.5) * 0.5 / scale, 0, float2(w, h) - 1);
+            uint j = (uint)t.y * w + (uint)t.x;
+            sum += rgb(word(ram(DispPixels + j / 4), j & 3));
+        }
+        return sum * 0.25;
+    }
     if (mode == 1) return rgb(word(ram(DispPixels + i / 4), i & 3));          // 0x00RRGGBB
     uint b = (word(ram(DispPixels + i / 16), (i / 4) & 3) >> (8 * (i & 3))) & 0xff;
     return rgb(word(ram(DispPalette + b / 4), b & 3));                        // palette index
@@ -355,7 +375,7 @@ bool MemoryView::createTargets(std::string& err) {
     return true;
 }
 
-bool MemoryView::render(ID3D11DeviceContext* ctx, ID3D11ShaderResourceView* cur, bool present) {
+bool MemoryView::render(ID3D11DeviceContext* ctx, ID3D11ShaderResourceView* cur, bool present, ID3D11ShaderResourceView* gpu) {
     if (!hwnd_) return false;
     MSG msg;
     while (PeekMessageW(&msg, hwnd_, 0, 0, PM_REMOVE)) {
@@ -396,8 +416,8 @@ bool MemoryView::render(ID3D11DeviceContext* ctx, ID3D11ShaderResourceView* cur,
     ctx->UpdateSubresource(cb_.Get(), 0, nullptr, &c, 0, 0);
 
     int dst = 1 - heatCur_;
-    ID3D11ShaderResourceView* nulls[4] = {};
-    ctx->PSSetShaderResources(0, 4, nulls);
+    ID3D11ShaderResourceView* nulls[5] = {};
+    ctx->PSSetShaderResources(0, 5, nulls);
     ID3D11RenderTargetView* rtvs[2] = {backRtv_.Get(), heatRtv_[dst].Get()};
     ctx->OMSetRenderTargets(2, rtvs, nullptr);
     D3D11_VIEWPORT vp{0, 0, (float)width_, (float)height_, 0, 1};
@@ -413,11 +433,11 @@ bool MemoryView::render(ID3D11DeviceContext* ctx, ID3D11ShaderResourceView* cur,
     ID3D11Buffer* cb = cb_.Get();
     ctx->PSSetConstantBuffers(0, 1, &cb);
     // The first frame has nothing to compare with, so it compares the state with itself.
-    ID3D11ShaderResourceView* srvs[4] = {cur, refValid_ ? refSrv_.Get() : cur, heatSrv_[heatCur_].Get(), textSrv_.Get()};
-    ctx->PSSetShaderResources(0, 4, srvs);
+    ID3D11ShaderResourceView* srvs[5] = {cur, refValid_ ? refSrv_.Get() : cur, heatSrv_[heatCur_].Get(), textSrv_.Get(), gpu};
+    ctx->PSSetShaderResources(0, 5, srvs);
     ctx->Draw(3, 0);
     ctx->OMSetRenderTargets(0, nullptr, nullptr);
-    ctx->PSSetShaderResources(0, 4, nulls);
+    ctx->PSSetShaderResources(0, 5, nulls);
     heatCur_ = dst;
     if (present) swap_->Present(0, 0);
 
