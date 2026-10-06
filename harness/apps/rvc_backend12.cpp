@@ -355,7 +355,7 @@ public:
         rb->Unmap(0, nullptr);
         return ok;
     }
-    void viewText(const std::vector<std::string>& lines) override { view_.setText(lines); }
+    void viewText(const std::vector<std::vector<std::string>>& columns) override { view_.setText(columns); }
     void viewTitle(const std::string& title) override { view_.setTitle(title); }
     bool viewCapture(const std::string& path) override { return view_.capture(path); }
     void viewClose() override { view_.close(); }

@@ -164,7 +164,7 @@ public:
         gpu_.ctx->Unmap(staging.Get(), 0);
         return ok;
     }
-    void viewText(const std::vector<std::string>& lines) override { view_.setText(gpu_.ctx.Get(), lines); }
+    void viewText(const std::vector<std::vector<std::string>>& columns) override { view_.setText(gpu_.ctx.Get(), columns); }
     void viewTitle(const std::string& title) override { view_.setTitle(title); }
     bool viewCapture(const std::string& path) override { return view_.capture(gpu_.ctx.Get(), path); }
     void viewClose() override { view_.close(); }

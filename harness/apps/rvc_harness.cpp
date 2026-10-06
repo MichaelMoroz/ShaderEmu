@@ -16,6 +16,7 @@
 
 #include "common.h"
 #include "material.h"
+#include "memview.h"
 #include "rvc_backend.h"
 #include "rvc_time.h"
 #include "shaderlab.h"
@@ -348,7 +349,7 @@ struct BootImage {
     int machine;   // the smallest machine it runs on: 0 full, 1 no paging, 2 machine mode only
 };
 const BootImage kImages[] = {
-    {"linux-net", "Linux, networking kernel with a romfs root (boots to a shell)", "data-net", "linux_payload", "rootfs", "dts", 0},
+    {"linux-net", "Linux with a shell; glxgears runs on the GPU device", "data-net", "linux_payload", "rootfs", "dts", 0},
     {"linux", "Linux, kernel with built-in initramfs", "data", "linux_payload", "none", "dts", 0},
     {"micropython", "MicroPython on OpenSBI (bare metal REPL)", "data", "mprv_payload", "none", "dts", 1},
     {"rust", "Rust test payload on OpenSBI (bare metal)", "data", "rust_payload", "none", "dts", 1},
@@ -381,6 +382,13 @@ void applyImage(Options& o, const BootImage& im) {
     o.ramPrefix = im.ram;
     o.mtdPrefix = im.mtd;
     o.dtbPrefix = im.dtb;
+    // Our build of the Linux image (tools/make_linux_image.py): upstream's root filesystem with
+    // our programs added, and a device tree that keeps the kernel out of the GPU's memory.
+    std::error_code ec;
+    if (o.image == "linux-net" && fs::exists("build/images/linux/rootfs.bin", ec) && fs::exists("build/images/linux/dts.bin", ec)) {
+        o.mtdPrefix = "build/images/linux/rootfs";
+        o.dtbPrefix = "build/images/linux/dts";
+    }
 }
 
 // Start menu, shown when the command line does not say what to boot. False = the user backed out.
@@ -452,7 +460,10 @@ int main(int argc, char** argv) {
     bool chosen = !opt.image.empty() || opt.payloadSet || !opt.loadState.empty() || opt.resume;
     if (!chosen && interactive && !chooseImage(opt, canResume)) return 0;
     if (terminalMode) {
-        if (opt.resume && canResume) opt.loadState = shellSnap;
+        if (opt.resume && canResume) {
+            opt.loadState = shellSnap;
+            if (opt.image.empty()) opt.image = "linux-net";   // the snapshot is of that image
+        }
         fs::create_directories("logs", ec);
         opt.uartLog = "logs/uart.log";
         opt.viz = true;
@@ -612,6 +623,7 @@ int main(int argc, char** argv) {
     std::vector<std::string> overlayLines;
     uint64_t ovInstr = 0, ovFrames = 0;
     double gpuTickMs = -1, gpuCommitMs = -1, gpuDeviceMs = 0;
+    unsigned lastKey = 0;   // last character handed to the guest
     auto withCommas = [](uint64_t v) {
         std::string s = std::to_string(v);
         for (int i = (int)s.size() - 3; i > 0; i -= 3) s.insert((size_t)i, ",");
@@ -697,6 +709,7 @@ int main(int argc, char** argv) {
                 unsigned char c = (unsigned char)q.front();
                 q.pop_front();
                 if (c == 0) continue;
+                lastKey = c;
                 group |= (uint32_t)c << (8 * count++);
             }
             if (count > 0) {
@@ -758,14 +771,46 @@ int main(int argc, char** argv) {
             char l1[96], l2[96], l3[96], l4[96], l5[96];
             snprintf(l1, sizeof l1, "%s IPS    %.0f frames/s", withCommas((uint64_t)ips).c_str(), fps);
             snprintf(l2, sizeof l2, "frame %.3f ms    %.0f instr/frame", fps > 0 ? 1000.0 / fps : 0.0, fps > 0 ? ips / fps : 0.0);
-            if (gpuTickMs >= 0)
-                snprintf(l3, sizeof l3, "draws: tick %.3f ms   commit %.3f ms   gpu device %.3f ms", gpuTickMs, gpuCommitMs, gpuDeviceMs);
-            else snprintf(l3, sizeof l3, "draws: tick -   commit -   gpu device -");
+            char l6[96];
+            snprintf(l6, sizeof l6, "gpu device %.3f ms", gpuDeviceMs);
+            if (gpuTickMs >= 0) snprintf(l3, sizeof l3, "tick %.3f ms    commit %.3f ms", gpuTickMs, gpuCommitMs);
+            else snprintf(l3, sizeof l3, "tick -    commit -");
             unsigned up = (unsigned)wall;
             snprintf(l4, sizeof l4, "up %02u:%02u:%02u    guest clock %.1f s", up / 3600, up / 60 % 60, up % 60, guestTime);
             snprintf(l5, sizeof l5, "%s instructions    %s commits", withCommas(guestInstructions).c_str(), withCommas(commits).c_str());
-            overlayLines = {l1, l2, l3, l4, l5};
-            backend.viewText(overlayLines);
+            overlayLines = {l1, l2, l3, l6, l4, l5};
+            // The console column: the last lines the guest printed, without escape sequences.
+            std::vector<std::string> console(1);
+            size_t from = transcript.size() > 2000 ? transcript.size() - 2000 : 0;
+            for (size_t k = from; k < transcript.size(); ++k) {
+                unsigned char ch = (unsigned char)transcript[k];
+                if (ch == 0x1b) {   // ESC [ ... letter
+                    if (k + 1 < transcript.size() && transcript[k + 1] == '[')
+                        for (k += 2; k < transcript.size() && !isalpha((unsigned char)transcript[k]); ++k) {}
+                } else if (ch == '\n') {
+                    console.emplace_back();
+                } else if (ch == '\b') {
+                    if (!console.back().empty()) console.back().pop_back();
+                } else if (ch >= 0x20 && ch < 0x7f) {
+                    console.back() += (char)ch;
+                }
+            }
+            if (console.size() > 8) console.erase(console.begin(), console.end() - 8);
+            for (auto& l : console)
+                if (l.size() > 72) l = l.substr(l.size() - 72);
+            char i1[64], i2[64], i3[64], i4[64];
+            size_t queued;
+            {
+                std::lock_guard<std::mutex> lock(g_inputMutex);
+                queued = scriptQueue.size() + g_stdinQueue.size();
+            }
+            snprintf(i1, sizeof i1, "input: window, %s", g_rawConsole ? "console" : (opt.readStdin ? "stdin" : "script"));
+            snprintf(i2, sizeof i2, "queued %zu   sent %u", queued, sentTag);
+            snprintf(i3, sizeof i3, "taken by guest %u", consumedTag);
+            if (lastKey >= 0x20 && lastKey < 0x7f) snprintf(i4, sizeof i4, "last key '%c' (0x%02x)", lastKey, lastKey);
+            else if (lastKey) snprintf(i4, sizeof i4, "last key 0x%02x", lastKey);
+            else snprintf(i4, sizeof i4, "last key -");
+            backend.viewText({overlayLines, console, {i1, i2, i3, i4}});
             ovLast = wall;
             ovInstr = guestInstructions;
             ovFrames = frame;
@@ -774,6 +819,15 @@ int main(int argc, char** argv) {
         if (backend.viewOpen() && wall - lastViz >= 1.0 / 60) {
             backend.viewRender();
             lastViz = wall;
+            // keys typed into the window go to the guest like console keys; Ctrl+] quits
+            std::string typed = memoryViewTakeKeys();
+            if (!typed.empty()) {
+                std::lock_guard<std::mutex> lock(g_inputMutex);
+                for (char c : typed) {
+                    if (c == kQuitKey) g_quit = true;
+                    else g_stdinQueue.push_back(c);
+                }
+            }
         }
         if (viewShown && !backend.viewOpen()) break;  // closing the memory window quits
         if (g_quit) break;

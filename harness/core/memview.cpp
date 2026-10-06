@@ -23,7 +23,7 @@ cbuffer C : register(b0) {
     float Inset;       // side of the CPU state inset in window pixels
     float2 TextSize;   // used size of the text texture; 0 = no text
     float Bar;         // height of the info bar under the memory image
-    float MemWidth;    // width of the memory image; the display panel is to its right
+    float Split;       // the display is left of this x, the memory image right of it
 };
 
 float4 vs(uint id : SV_VertexID) : SV_Position {
@@ -130,11 +130,11 @@ Out ps(float4 pos : SV_Position) {
         return o;
     }
 
-    // Display panel to the right of the memory image.
-    if (pos.x >= MemWidth) {
+    // The display, left of the memory image.
+    if (pos.x < Split) {
         o.heat = 0;
-        float3 c = display(pos.xy - float2(MemWidth, 0), float2(WinSize.x - MemWidth, memHeight));
-        if (pos.x < MemWidth + 1) c = float3(0.22, 0.24, 0.28);    // separator line
+        float3 c = display(pos.xy, float2(Split, memHeight));
+        if (pos.x >= Split - 1) c = float3(0.22, 0.24, 0.28);    // separator line
         o.color = float4(c, 1);
         return o;
     }
@@ -148,10 +148,11 @@ Out ps(float4 pos : SV_Position) {
 
     // RAM: strip s covers rows [s, s+1) * rowsPerStrip
     float rowsPerStrip = (float)RamRows / Strips;
-    float sx = pos.x / MemWidth * Strips;
+    float memWidth = WinSize.x - Split;
+    float sx = (pos.x - Split) / memWidth * Strips;
     uint strip = min((uint)sx, Strips - 1);
     float2 texel = float2(frac(sx) * TexWidth, StateRows + (strip + pos.y / memHeight) * rowsPerStrip);
-    float2 footprint = float2(TexWidth * Strips / MemWidth, rowsPerStrip / memHeight);
+    float2 footprint = float2(TexWidth * Strips / memWidth, rowsPerStrip / memHeight);
 
     // A window pixel covers several texels: a 4x4 grid of taps over its footprint, nudged per
     // frame so larger footprints are covered over time.
@@ -175,7 +176,25 @@ Out ps(float4 pos : SV_Position) {
 }
 )";
 
+// Keys typed into the window, as the bytes a terminal would send, until someone takes them.
+std::string g_typed;
+
 LRESULT CALLBACK wndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
+    if (m == WM_CHAR) {
+        wchar_t ch = (wchar_t)w;
+        if (ch == 8) g_typed += '';              // Backspace, as a Linux terminal sends it
+        else if (ch < 0x80) g_typed += (char)ch;      // includes Enter (CR) and Ctrl+letter
+        else g_typed += narrow(std::wstring(1, ch));
+        return 0;
+    }
+    if (m == WM_KEYDOWN) {
+        const char* seq = w == VK_UP ? "[A" : w == VK_DOWN ? "[B" : w == VK_RIGHT ? "[C" : w == VK_LEFT ? "[D" :
+                          w == VK_HOME ? "[H" : w == VK_END ? "[F" : w == VK_DELETE ? "[3~" : nullptr;
+        if (seq) {
+            g_typed += seq;
+            return 0;
+        }
+    }
     if (m == WM_CLOSE) {
         // Flag it for render(); the emulator keeps running without the view.
         SetPropW(h, L"closed", (HANDLE)1);
@@ -192,6 +211,12 @@ using Constants = MemoryViewConstants;
 
 const char* memoryViewShader() { return kShader; }
 
+std::string memoryViewTakeKeys() {
+    std::string keys;
+    keys.swap(g_typed);
+    return keys;
+}
+
 HWND memoryViewCreateWindow() {
     WNDCLASSW wc{};
     wc.lpfnWndProc = wndProc;
@@ -199,8 +224,14 @@ HWND memoryViewCreateWindow() {
     wc.hCursor = LoadCursorW(nullptr, (LPCWSTR)IDC_ARROW);
     wc.lpszClassName = L"ShaderEmuMemoryView";
     RegisterClassW(&wc);
-    // two 2048-texel strips at quarter scale, the display panel beside them, the info bar below
-    RECT r{0, 0, (LONG)(kMemoryViewMemW + kMemoryViewDispW), 504 + (LONG)kBarHeight};
+    // the display at 1280x720, the memory strips beside it, the info bar below; smaller if
+    // the desktop is
+    RECT r{0, 0, (LONG)(kMemoryViewDispW + kMemoryViewMemW), (LONG)(kMemoryViewHeight + kBarHeight)};
+    RECT work{};
+    if (SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0) && work.right - work.left - 40 < r.right) {
+        r.right = work.right - work.left - 40;
+        r.bottom = r.right * (LONG)kMemoryViewHeight / (LONG)(kMemoryViewDispW + kMemoryViewMemW) + (LONG)kBarHeight;
+    }
     AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE);
     return CreateWindowExW(0, wc.lpszClassName, L"memory", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
                            r.right - r.left, r.bottom - r.top, nullptr, nullptr, wc.hInstance, nullptr);
@@ -230,7 +261,7 @@ bool memoryViewWriteBmp(const std::string& path, UINT width, UINT height, const 
     return writeFileBinary(path, file.data(), file.size());
 }
 
-bool memoryViewText(const std::vector<std::string>& lines, std::vector<uint8_t>& out, UINT& usedW, UINT& usedH) {
+bool memoryViewText(const MemoryViewText& columns, std::vector<uint8_t>& out, UINT& usedW, UINT& usedH) {
     const UINT kW = kMemoryViewTextW, kH = kMemoryViewTextH, kLine = 19;
     bool ok = false;
     // White text on black in a memory bitmap; the shader uses one channel as coverage.
@@ -250,22 +281,22 @@ bool memoryViewText(const std::vector<std::string>& lines, std::vector<uint8_t>&
         memset(bits, 0, (size_t)kW * kH * 4);
         SetBkMode(dc, TRANSPARENT);
         SetTextColor(dc, RGB(255, 255, 255));
-        LONG widest = 0;
-        UINT n = 0;
-        for (auto& line : lines) {
-            if ((n + 1) * kLine > kH) break;
-            std::wstring w = widen(line);
-            TextOutW(dc, 0, (int)(n * kLine), w.c_str(), (int)w.size());
-            SIZE sz{};
-            GetTextExtentPoint32W(dc, w.c_str(), (int)w.size(), &sz);
-            if (sz.cx > widest) widest = sz.cx;
-            ++n;
+        UINT rows = 0;
+        for (size_t col = 0; col < columns.size() && col < 3; ++col) {
+            UINT n = 0;
+            for (auto& line : columns[col]) {
+                if ((n + 1) * kLine > kH) break;
+                std::wstring w = widen(line);
+                TextOutW(dc, (int)kMemoryViewColumnX[col], (int)(n * kLine), w.c_str(), (int)w.size());
+                ++n;
+            }
+            if (n > rows) rows = n;
         }
         GdiFlush();
         out.assign((const uint8_t*)bits, (const uint8_t*)bits + (size_t)kW * kH * 4);
         ok = true;
-        usedW = (UINT)(widest < (LONG)kW ? widest : (LONG)kW);
-        usedH = n * kLine;
+        usedW = kW;
+        usedH = rows * kLine;
         SelectObject(dc, oldFont);
         SelectObject(dc, oldBmp);
     }
@@ -410,7 +441,7 @@ bool MemoryView::render(ID3D11DeviceContext* ctx, ID3D11ShaderResourceView* cur,
     c.stateRows = stateRows_;
     c.bar = (float)kBarHeight;
     c.inset = (float)(kBarHeight - 16);
-    c.memWidth = (float)width_ * kMemoryViewMemW / (kMemoryViewMemW + kMemoryViewDispW);
+    c.split = (float)width_ * kMemoryViewDispW / (kMemoryViewDispW + kMemoryViewMemW);
     c.textSize[0] = (float)textW_;
     c.textSize[1] = (float)textH_;
     ctx->UpdateSubresource(cb_.Get(), 0, nullptr, &c, 0, 0);
@@ -466,7 +497,7 @@ bool MemoryView::capture(ID3D11DeviceContext* ctx, const std::string& path) {
     return ok;
 }
 
-void MemoryView::setText(ID3D11DeviceContext* ctx, const std::vector<std::string>& lines) {
+void MemoryView::setText(ID3D11DeviceContext* ctx, const MemoryViewText& columns) {
     if (!hwnd_) return;
     const UINT kW = kMemoryViewTextW, kH = kMemoryViewTextH;
     if (!textTex_) {
@@ -482,7 +513,7 @@ void MemoryView::setText(ID3D11DeviceContext* ctx, const std::vector<std::string
             return;
     }
     std::vector<uint8_t> bits;
-    if (memoryViewText(lines, bits, textW_, textH_)) ctx->UpdateSubresource(textTex_.Get(), 0, nullptr, bits.data(), kW * 4, 0);
+    if (memoryViewText(columns, bits, textW_, textH_)) ctx->UpdateSubresource(textTex_.Get(), 0, nullptr, bits.data(), kW * 4, 0);
 }
 
 void MemoryView::setTitle(const std::string& title) {

@@ -140,7 +140,7 @@ public:
         c.stateRows = stateRows_;
         c.bar = (float)kMemoryViewBar;
         c.inset = (float)(kMemoryViewBar - 16);
-        c.memWidth = (float)width_ * kMemoryViewMemW / (kMemoryViewMemW + kMemoryViewDispW);
+        c.split = (float)width_ * kMemoryViewDispW / (kMemoryViewDispW + kMemoryViewMemW);
         c.textSize[0] = (float)textW_;
         c.textSize[1] = (float)textH_;
         memcpy(cbMapped_, &c, sizeof c);
@@ -249,9 +249,9 @@ public:
         return ok;
     }
 
-    void setText(const std::vector<std::string>& lines) {
+    void setText(const MemoryViewText& columns) {
         std::vector<uint8_t> bits;
-        if (!hwnd_ || !memoryViewText(lines, bits, textW_, textH_)) return;
+        if (!hwnd_ || !memoryViewText(columns, bits, textW_, textH_)) return;
         for (UINT y = 0; y < kMemoryViewTextH; ++y)
             memcpy(textMapped_ + textFp_.Offset + (size_t)y * textFp_.Footprint.RowPitch, bits.data() + (size_t)y * kMemoryViewTextW * 4,
                    (size_t)kMemoryViewTextW * 4);

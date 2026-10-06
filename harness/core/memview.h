@@ -1,4 +1,5 @@
-// A window that shows the emulated machine's memory live: the RAM part of the state texture
+// The machine's window. Left two thirds: the guest's display (docs/display.md), decoded from
+// its framebuffer in RAM or taken from the GPU device. Right third: memory live, the RAM part of the state texture
 // drawn as colour (the largest byte of each texel's words), with texels written since
 // the view's previous frame glowing and fading. Beside it, the guest's display (docs/display.md),
 // decoded from the framebuffer it keeps in RAM. A bar underneath, clear of the memory image,
@@ -17,22 +18,28 @@
 
 // Pieces shared with the D3D12 view (rvc_memview12.h): shader source (entry points vs/ps,
 // textures t0..t3 = current, previous, heat, text; cbuffer b0), window, text and BMP output.
-const UINT kMemoryViewBar = 116;  // info bar: five text lines, and the CPU state area at 100 px
-const UINT kMemoryViewTextW = 512, kMemoryViewTextH = 160;
-const UINT kMemoryViewMemW = 1024, kMemoryViewDispW = 672;  // initial widths: memory image, display panel
+const UINT kMemoryViewBar = 176;  // info bar: eight text lines, and the CPU state area at 160 px
+const UINT kMemoryViewTextW = 1536, kMemoryViewTextH = 160;
+// Columns of text in the bar under the picture: speed, console, input. The CPU state sits right of them.
+const UINT kMemoryViewColumnX[3] = {0, 408, 1016};   // 48 and 72 characters wide
+typedef std::vector<std::vector<std::string>> MemoryViewText;
+const UINT kMemoryViewDispW = 1280, kMemoryViewMemW = 640, kMemoryViewHeight = 720;  // initial layout above the bar
 struct MemoryViewConstants {
     float winSize[2];
     uint32_t frame, strips, texWidth, ramRows, stateRows;
     float inset;
     float textSize[2];
     float bar;
-    float memWidth;
+    float split;   // x where the display ends and the memory image begins
 };
 const char* memoryViewShader();
+// What was typed into the window since the last call, as terminal bytes (arrows as escape
+// sequences). Keys arrive when the window's messages are pumped, which render() does.
+std::string memoryViewTakeKeys();
 // WM_CLOSE sets the window property L"closed" instead of destroying the window.
 HWND memoryViewCreateWindow();
 // Rasterises the lines into a kMemoryViewTextW x kMemoryViewTextH BGRA bitmap, white on black.
-bool memoryViewText(const std::vector<std::string>& lines, std::vector<uint8_t>& out, UINT& usedW, UINT& usedH);
+bool memoryViewText(const MemoryViewText& columns, std::vector<uint8_t>& out, UINT& usedW, UINT& usedH);
 bool memoryViewWriteBmp(const std::string& path, UINT width, UINT height, const uint8_t* rgba, size_t pitch);
 
 class MemoryView {
@@ -49,7 +56,7 @@ public:
     bool capture(ID3D11DeviceContext* ctx, const std::string& path);
     void setTitle(const std::string& title);
     // Lines of text shown in the info bar under the memory image (speed counters).
-    void setText(ID3D11DeviceContext* ctx, const std::vector<std::string>& lines);
+    void setText(ID3D11DeviceContext* ctx, const MemoryViewText& columns);
     bool open() const { return hwnd_ != nullptr; }
     void close();
 

@@ -65,7 +65,8 @@ public:
     virtual bool viewInit(std::string& err) = 0;
     virtual bool viewOpen() const = 0;
     virtual void viewRender(bool present = true) = 0;
-    virtual void viewText(const std::vector<std::string>& lines) = 0;
+    // Columns of the bar under the picture: speed, console, input.
+    virtual void viewText(const std::vector<std::vector<std::string>>& columns) = 0;
     virtual void viewTitle(const std::string& title) = 0;
     virtual bool viewCapture(const std::string& path) = 0;
     virtual void viewClose() = 0;
@@ -74,10 +75,12 @@ public:
 // One lane (0..3 = r, g, b, a) of a payload as rvc's importer lays it out: 2048 texels per row,
 // the lane's word of each 16-byte texel as one RGBA8 pixel. Comes from <dir>/<prefix>.bin (a raw
 // memory image, as our own programs are built) if that exists, else <dir>/<prefix>.<lane>.png.
+// A prefix with a slash in it is a path of its own, and <dir> is not used.
 inline bool loadPayloadLane(const std::string& dir, const std::string& prefix, int lane, ImageRGBA8& img, std::string& err) {
     namespace fs = std::filesystem;
     std::string bin;
-    if (readFileBinary((fs::u8path(dir) / (prefix + ".bin")).u8string(), bin)) {
+    fs::path base = prefix.find_first_of("/\\") == std::string::npos ? fs::u8path(dir) / prefix : fs::u8path(prefix);
+    if (readFileBinary(base.u8string() + ".bin", bin)) {
         size_t texels = (bin.size() + 15) / 16;
         img.width = 2048;
         img.height = (UINT)((texels + 2047) / 2048);
@@ -88,7 +91,7 @@ inline bool loadPayloadLane(const std::string& dir, const std::string& prefix, i
         return true;
     }
     const char* lanes[4] = {"r", "g", "b", "a"};
-    return loadImageRGBA8((fs::u8path(dir) / (prefix + "." + lanes[lane] + ".png")).u8string(), img, err);
+    return loadImageRGBA8(base.u8string() + "." + lanes[lane] + ".png", img, err);
 }
 
 std::unique_ptr<RvcBackend> makeBackend11();
