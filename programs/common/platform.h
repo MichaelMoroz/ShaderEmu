@@ -27,6 +27,10 @@ static inline void uart_puts(const char* s) {
     while (*s) uart_putc(*s++);
 }
 
+// Free-running timer (low word of the CLINT's mtime).
+#define CLINT_MTIME (*(volatile uint32_t*)0x0200bff8)
+#define CLINT_HZ 5000
+
 // Display control words. Write width and height first, the mode last.
 #define DISP_MODE   (*(volatile uint32_t*)0x87000000)
 #define DISP_WIDTH  (*(volatile uint32_t*)0x87000004)
