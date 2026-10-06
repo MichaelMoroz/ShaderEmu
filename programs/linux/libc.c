@@ -9,6 +9,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
+#include <sys/mman.h>
 #include <sys/time.h>
 #include <unistd.h>
 
@@ -35,6 +37,18 @@ long write(int fd, const void* buf, size_t n) { return SYS(64, fd, buf, n, 0, 0)
 long pread(int fd, void* buf, unsigned long n, unsigned long offset) { return SYS(67, fd, buf, n, offset, 0); }
 long pwrite(int fd, const void* buf, unsigned long n, unsigned long offset) { return SYS(68, fd, buf, n, offset, 0); }
 int sched_yield(void) { return (int)SYS(124, 0, 0, 0, 0, 0); }
+int ioctl(int fd, unsigned long request, ...) {
+    va_list ap;
+    va_start(ap, request);
+    unsigned long arg = va_arg(ap, unsigned long);
+    va_end(ap);
+    return (int)SYS(29, fd, request, arg, 0, 0);
+}
+// mmap2: the offset is passed in pages; failure comes back as a small negative number
+void* mmap(void* addr, unsigned long length, int prot, int flags, int fd, long offset) {
+    long r = syscall6(222, (long)addr, (long)length, prot, flags, fd, offset >> 12);
+    return r < 0 && r > -4096 ? MAP_FAILED : (void*)r;
+}
 void exit(int status) {
     SYS(94, status, 0, 0, 0, 0);   // exit_group
     for (;;) {}
@@ -103,14 +117,22 @@ char* strstr(const char* hay, const char* needle) {
         if (strncmp(hay, needle, n) == 0) return (char*)hay;
     return n ? 0 : (char*)hay;
 }
+// Whole words when both ends are aligned: most copies here are matrices and vertex data.
 void* memcpy(void* d, const void* s, size_t n) {
     char* dp = d;
     const char* sp = s;
+    if ((((uintptr_t)dp | (uintptr_t)sp) & 3) == 0) {
+        for (; n >= 4; n -= 4, dp += 4, sp += 4) *(uint32_t*)dp = *(const uint32_t*)sp;
+    }
     while (n--) *dp++ = *sp++;
     return d;
 }
 void* memset(void* d, int c, size_t n) {
     char* dp = d;
+    if (((uintptr_t)dp & 3) == 0) {
+        uint32_t word = (uint8_t)c * 0x01010101u;
+        for (; n >= 4; n -= 4, dp += 4) *(uint32_t*)dp = word;
+    }
     while (n--) *dp++ = (char)c;
     return d;
 }

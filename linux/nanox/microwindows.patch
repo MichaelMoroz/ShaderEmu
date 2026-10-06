@@ -1,0 +1,643 @@
+diff --git a/src/demos/nanox/nxterm.c b/src/demos/nanox/nxterm.c
+index 91ec808..c83d841 100755
+--- a/src/demos/nanox/nxterm.c
++++ b/src/demos/nanox/nxterm.c
+@@ -74,13 +74,22 @@
+ #define	KBDBUF          1024
+ #else
+ #define stdcol          80
+-#define stdrow          50
++#define stdrow          24
+ #define	KBDBUF          10240
+ #endif
+ 
+ #define TITLE           "nxterm"
+-#define stdforeground   BLACK
+-#define stdbackground   LTGRAY
++/* light text on black, and the eight ANSI colours bright enough to read on it */
++#define stdforeground   MWRGB(216,216,216)
++#define stdbackground   BLACK
++#define TERM_BLACK      MWRGB(0,0,0)
++#define TERM_RED        MWRGB(240,80,80)
++#define TERM_GREEN      MWRGB(80,220,100)
++#define TERM_YELLOW     MWRGB(230,220,90)
++#define TERM_BLUE       MWRGB(100,150,255)
++#define TERM_MAGENTA    MWRGB(220,110,220)
++#define TERM_CYAN       MWRGB(80,210,220)
++#define TERM_WHITE      MWRGB(255,255,255)
+ //#define stdbackground GR_COLOR_GAINSBORO
+ //#define stdbackground BLUE
+ #define	LINEBUF         stdcol
+@@ -549,28 +558,28 @@ void rendition(int escvalue) {
+ 		} else if ((escvalue>29) && (escvalue<38)){
+     		switch(escvalue) {
+ 		    case 30:
+-    			GrSetGCForeground(gc1, BLACK);
++    			GrSetGCForeground(gc1, TERM_BLACK);
+     			break;
+ 		    case 31:
+-    			GrSetGCForeground(gc1, RED);
++    			GrSetGCForeground(gc1, TERM_RED);
+     			break;
+ 		    case 32:
+-    			GrSetGCForeground(gc1, GREEN);
++    			GrSetGCForeground(gc1, TERM_GREEN);
+     			break;
+ 		    case 33:
+-    			GrSetGCForeground(gc1, BROWN);
++    			GrSetGCForeground(gc1, TERM_YELLOW);
+     			break;
+ 		    case 34:
+-    			GrSetGCForeground(gc1, BLUE);
++    			GrSetGCForeground(gc1, TERM_BLUE);
+     			break;
+ 		    case 35:
+-    			GrSetGCForeground(gc1, MAGENTA);
++    			GrSetGCForeground(gc1, TERM_MAGENTA);
+     			break;
+ 		    case 36:
+-    			GrSetGCForeground(gc1, CYAN);
++    			GrSetGCForeground(gc1, TERM_CYAN);
+     			break;
+ 		    case 37:
+-    			GrSetGCForeground(gc1, WHITE);
++    			GrSetGCForeground(gc1, TERM_WHITE);
+     			break;
+ 		    case 39:
+     			GrSetGCForeground(gc1, stdforeground); //default color
+@@ -579,28 +588,28 @@ void rendition(int escvalue) {
+ 		} else if ((escvalue>39) && (escvalue<49)){
+     		switch(escvalue) {
+ 		    case 40:
+-    			GrSetGCBackground(gc1, BLACK);
++    			GrSetGCBackground(gc1, TERM_BLACK);
+     			break;
+ 		    case 41:
+-    			GrSetGCBackground(gc1, RED);
++    			GrSetGCBackground(gc1, TERM_RED);
+     			break;
+ 		    case 42:
+-    			GrSetGCBackground(gc1, GREEN);
++    			GrSetGCBackground(gc1, TERM_GREEN);
+     			break;
+ 		    case 43:
+-    			GrSetGCBackground(gc1, BROWN);
++    			GrSetGCBackground(gc1, TERM_YELLOW);
+     			break;
+ 		    case 44:
+-    			GrSetGCBackground(gc1, BLUE);
++    			GrSetGCBackground(gc1, TERM_BLUE);
+     			break;
+ 		    case 45:
+-    			GrSetGCBackground(gc1, MAGENTA);
++    			GrSetGCBackground(gc1, TERM_MAGENTA);
+     			break;
+ 		    case 46:
+-    			GrSetGCBackground(gc1, CYAN);
++    			GrSetGCBackground(gc1, TERM_CYAN);
+     			break;
+ 		    case 47:
+-    			GrSetGCBackground(gc1, WHITE);
++    			GrSetGCBackground(gc1, TERM_WHITE);
+     			break;
+ 		    case 49:
+     			GrSetGCBackground(gc1, stdbackground); //default color
+diff --git a/src/engine/devdraw.c b/src/engine/devdraw.c
+index c389e46..b528bb5 100644
+--- a/src/engine/devdraw.c
++++ b/src/engine/devdraw.c
+@@ -517,6 +517,28 @@ GdFillRect(PSD psd, MWCOORD x1, MWCOORD y1, MWCOORD width, MWCOORD height)
+ 	}
+ 
+ 
++#if DYNAMICREGIONS
++	/* Partly visible: fill what lies inside each rectangle of the clip region. */
++	{
++		extern MWCLIPREGION *clipregion;
++		MWRECT *rc = clipregion->rects;
++		int n = clipregion->numRects;
++
++		GdCheckCursor(psd, x1, y1, x2, y2);
++		for (; n-- > 0; rc++) {
++			MWCOORD l = MWMAX(MWMAX(x1, rc->left), 0);
++			MWCOORD t = MWMAX(MWMAX(y1, rc->top), 0);
++			MWCOORD r = MWMIN(MWMIN(x2, rc->right - 1), psd->xvirtres - 1);
++			MWCOORD b = MWMIN(MWMIN(y2, rc->bottom - 1), psd->yvirtres - 1);
++
++			if (l <= r && t <= b)
++				psd->FillRect(psd, l, t, r, b, gr_foreground);
++		}
++		GdFixCursor(psd);
++		return;
++	}
++#endif
++
+ 	/* Quickly save off the dash settings to avoid problems with drawrow */
+ 	GdSetDash(&dm, &dc);
+ 
+diff --git a/src/engine/devmouse.c b/src/engine/devmouse.c
+index ee97b9f..f774c79 100644
+--- a/src/engine/devmouse.c
++++ b/src/engine/devmouse.c
+@@ -54,6 +54,13 @@ static MWPIXELVALHW cursavbits[MWMAX_CURSOR_SIZE * MWMAX_CURSOR_SIZE];
+ static MWIMAGEBITS cursormask[MWMAX_CURSOR_BUFLEN];
+ static MWIMAGEBITS cursorcolor[MWMAX_CURSOR_BUFLEN];
+ 
++struct gd_compositor *gd_compositor;
++void (*gd_composite_walk)(void (*show)(PSD psd));
++
++/* Set by a screen driver that shows the cursor itself; the engine then never draws it. */
++void (*gd_hwcursor)(MWCOORD x, MWCOORD y, MWCOORD width, MWCOORD height, int visible,
++	const MWIMAGEBITS *image, const MWIMAGEBITS *mask, MWPIXELVAL fg, MWPIXELVAL bg);
++
+ extern int gr_mode;
+ 
+ /* Advance declarations */
+@@ -203,44 +210,48 @@ MWCURSOR cursor_lg = {
+ };
+ #else   /* standard Microwindows cursor */
+ MWCURSOR cursor_lg = {
+-    16, 16, 0, 0, WHITE, BLACK,
+-    {   // lgcursorbits
+-        //   8 4 2 1 8 4 2 1 8 4 2 1 8 4 2 1
+-        MASK(X,X,X,_,_,_,_,_,_,_,_,_,_,_,_,_),  // E000
+-        MASK(X,_,_,X,X,_,_,_,_,_,_,_,_,_,_,_),  // 9800
+-        MASK(X,_,_,_,_,X,X,_,_,_,_,_,_,_,_,_),  // 8600
+-        MASK(_,X,_,_,_,_,_,X,X,_,_,_,_,_,_,_),  // 4180
+-        MASK(_,X,_,_,_,_,_,_,_,X,X,_,_,_,_,_),  // 4060
+-        MASK(_,_,X,_,_,_,_,_,_,_,_,X,X,_,_,_),  // 2018
+-        MASK(_,_,X,_,_,_,_,_,_,_,_,_,_,X,_,_),  // 2004
+-        MASK(_,_,_,X,_,_,_,_,_,X,X,X,X,X,_,_),  // 107C
+-        MASK(_,_,_,X,_,_,_,_,_,_,X,_,_,_,_,_),  // 1020
+-        MASK(_,_,_,_,X,_,_,X,_,_,_,X,_,_,_,_),  // 0910
+-        MASK(_,_,_,_,X,_,_,X,_,_,_,_,X,_,_,_),  // 0988
+-        MASK(_,_,_,_,_,X,_,X,_,X,_,_,_,X,_,_),  // 0544
+-        MASK(_,_,_,_,_,X,_,X,_,_,X,_,_,_,X,_),  // 0522
+-        MASK(_,_,_,_,_,_,X,_,_,_,_,X,_,_,_,X),  // 0211
+-        MASK(_,_,_,_,_,_,_,_,_,_,_,_,X,_,X,_),  // 000A
+-        MASK(_,_,_,_,_,_,_,_,_,_,_,_,_,X,_,_)   // 0004
+-        },
++    12, 19, 0, 0, WHITE, BLACK,
++    {   //  lgcursorbits: the outline
++        MASK(X,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_),
++        MASK(X,X,_,_,_,_,_,_,_,_,_,_,_,_,_,_),
++        MASK(X,_,X,_,_,_,_,_,_,_,_,_,_,_,_,_),
++        MASK(X,_,_,X,_,_,_,_,_,_,_,_,_,_,_,_),
++        MASK(X,_,_,_,X,_,_,_,_,_,_,_,_,_,_,_),
++        MASK(X,_,_,_,_,X,_,_,_,_,_,_,_,_,_,_),
++        MASK(X,_,_,_,_,_,X,_,_,_,_,_,_,_,_,_),
++        MASK(X,_,_,_,_,_,_,X,_,_,_,_,_,_,_,_),
++        MASK(X,_,_,_,_,_,_,_,X,_,_,_,_,_,_,_),
++        MASK(X,_,_,_,_,_,_,_,_,X,_,_,_,_,_,_),
++        MASK(X,_,_,_,_,_,_,_,_,_,X,_,_,_,_,_),
++        MASK(X,_,_,_,_,_,_,X,X,X,X,X,_,_,_,_),
++        MASK(X,_,_,_,X,_,_,X,_,_,_,_,_,_,_,_),
++        MASK(X,_,_,X,X,_,_,X,_,_,_,_,_,_,_,_),
++        MASK(X,_,X,_,_,X,_,_,X,_,_,_,_,_,_,_),
++        MASK(X,X,_,_,_,X,_,_,X,_,_,_,_,_,_,_),
++        MASK(X,_,_,_,_,_,X,_,_,X,_,_,_,_,_,_),
++        MASK(_,_,_,_,_,_,X,_,_,X,_,_,_,_,_,_),
++        MASK(_,_,_,_,_,_,_,X,X,_,_,_,_,_,_,_)
++    },
+     {   //  lgcursormask
+-        //   8 4 2 1 8 4 2 1 8 4 2 1 8 4 2 1
+-        MASK(X,X,X,_,_,_,_,_,_,_,_,_,_,_,_,_),  // E000
+-        MASK(X,X,X,X,X,_,_,_,_,_,_,_,_,_,_,_),  // F800
+-        MASK(X,X,X,X,X,X,X,_,_,_,_,_,_,_,_,_),  // FE00
+-        MASK(_,X,X,X,X,X,X,X,X,_,_,_,_,_,_,_),  // 7F80
+-        MASK(_,X,X,X,X,X,X,X,X,X,X,_,_,_,_,_),  // 7FE0
+-        MASK(_,_,X,X,X,X,X,X,X,X,X,X,X,_,_,_),  // 3FF8
+-        MASK(_,_,X,X,X,X,X,X,X,X,X,X,X,X,_,_),  // 3FFC
+-        MASK(_,_,_,X,X,X,X,X,X,X,X,X,X,X,_,_),  // 1FFC
+-        MASK(_,_,_,X,X,X,X,X,X,X,X,_,_,_,_,_),  // 1FE0
+-        MASK(_,_,_,_,X,X,X,X,X,X,X,X,_,_,_,_),  // 0FF0
+-        MASK(_,_,_,_,X,X,X,X,X,X,X,X,X,_,_,_),  // 0FF8
+-        MASK(_,_,_,_,_,X,X,X,_,X,X,X,X,X,_,_),  // 077C
+-        MASK(_,_,_,_,_,X,X,X,_,_,X,X,X,X,X,_),  // 073E
+-        MASK(_,_,_,_,_,_,X,_,_,_,_,X,X,X,X,X),  // 021F
+-        MASK(_,_,_,_,_,_,_,_,_,_,_,_,X,X,X,_),  // 000E
+-        MASK(_,_,_,_,_,_,_,_,_,_,_,_,_,X,_,_)   // 0004
++        MASK(X,_,_,_,_,_,_,_,_,_,_,_,_,_,_,_),
++        MASK(X,X,_,_,_,_,_,_,_,_,_,_,_,_,_,_),
++        MASK(X,X,X,_,_,_,_,_,_,_,_,_,_,_,_,_),
++        MASK(X,X,X,X,_,_,_,_,_,_,_,_,_,_,_,_),
++        MASK(X,X,X,X,X,_,_,_,_,_,_,_,_,_,_,_),
++        MASK(X,X,X,X,X,X,_,_,_,_,_,_,_,_,_,_),
++        MASK(X,X,X,X,X,X,X,_,_,_,_,_,_,_,_,_),
++        MASK(X,X,X,X,X,X,X,X,_,_,_,_,_,_,_,_),
++        MASK(X,X,X,X,X,X,X,X,X,_,_,_,_,_,_,_),
++        MASK(X,X,X,X,X,X,X,X,X,X,_,_,_,_,_,_),
++        MASK(X,X,X,X,X,X,X,X,X,X,X,_,_,_,_,_),
++        MASK(X,X,X,X,X,X,X,X,X,X,X,X,_,_,_,_),
++        MASK(X,X,X,X,X,X,X,X,_,_,_,_,_,_,_,_),
++        MASK(X,X,X,X,X,X,X,X,_,_,_,_,_,_,_,_),
++        MASK(X,X,X,_,_,X,X,X,X,_,_,_,_,_,_,_),
++        MASK(X,X,_,_,_,X,X,X,X,_,_,_,_,_,_,_),
++        MASK(X,_,_,_,_,_,X,X,X,X,_,_,_,_,_,_),
++        MASK(_,_,_,_,_,_,X,X,X,X,_,_,_,_,_,_),
++        MASK(_,_,_,_,_,_,_,X,X,_,_,_,_,_,_,_)
+     }
+ };
+ #endif
+@@ -585,6 +596,11 @@ GdShowCursor(PSD psd)
+ 
+ 	if(++curvisible != 1)
+ 		return prevcursor;
++	if (gd_hwcursor) {
++		gd_hwcursor(curminx, curminy, curmaxx - curminx + 1, curmaxy - curminy + 1, 1,
++			cursorcolor, cursormask, curfg, curbg);
++		return prevcursor;
++	}
+ 
+ 	cursavx = curminx;
+ 	cursavy = curminy;
+@@ -653,6 +669,10 @@ GdHideCursor(PSD psd)
+ 
+ 	if(curvisible-- <= 0)
+ 		return prevcursor;
++	if (gd_hwcursor) {
++		gd_hwcursor(curminx, curminy, 0, 0, 0, cursorcolor, cursormask, curfg, curbg);
++		return prevcursor;
++	}
+ #if USE_VGA_XOR_CURSOR
+ 	vga_drawcursor(cursavx, cursavy, cursavy2 - cursavy + 1, cursormask);
+ #else
+@@ -702,7 +722,7 @@ GdCheckCursor(PSD psd,MWCOORD x1,MWCOORD y1,MWCOORD x2,MWCOORD y2)
+ {
+ 	MWCOORD temp;
+ 
+-	if (curvisible <= 0 || (psd->flags & PSF_SCREEN) == 0)
++	if (curvisible <= 0 || (psd->flags & PSF_SCREEN) == 0 || gd_hwcursor)
+ 		return;
+ 
+ 	if (x1 > x2) {
+@@ -728,7 +748,7 @@ GdCheckCursor(PSD psd,MWCOORD x1,MWCOORD y1,MWCOORD x2,MWCOORD y2)
+ void
+ GdEraseCursor(PSD psd)
+ {
+-	if (curvisible <= 0 || (psd->flags & PSF_SCREEN) == 0)
++	if (curvisible <= 0 || (psd->flags & PSF_SCREEN) == 0 || gd_hwcursor)
+ 		return;
+ 
+ 	GdHideCursor(psd);
+diff --git a/src/include/device.h b/src/include/device.h
+index abd632c..b3b0ee2 100644
+--- a/src/include/device.h
++++ b/src/include/device.h
+@@ -350,6 +350,22 @@ extern MOUSEDEVICE mousedev;
+ extern MWCURSOR cursor_lg;      /* 16x16 standard cursor */
+ extern MWCURSOR cursor_sm;      /* 8x8 cursor for slow systems */
+ 
++/*
++ * A screen driver that composes the screen from one surface per top-level window sets
++ * gd_compositor; the window system then draws each window on the surface it is given.
++ */
++struct gd_compositor {
++	/* the surface of window `owner`, which is at x, y on the screen and this big */
++	PSD	(*surface)(void *owner, MWCOORD x, MWCOORD y, MWCOORD width, MWCOORD height);
++	void	(*release)(void *owner);
++	void	(*touch)(PSD psd);		/* something else drew on it */
++	/* where the surface keeps the pixel for screen position x, y */
++	void	(*locate)(PSD psd, MWCOORD x, MWCOORD y, uint32_t *address, uint32_t *row);
++};
++extern struct gd_compositor *gd_compositor;
++/* set by the window system: calls show() with each visible window's surface, lowest first */
++extern void (*gd_composite_walk)(void (*show)(PSD psd));
++
+ /* devkbd.c*/
+ int  	GdOpenKeyboard(void);
+ void 	GdCloseKeyboard(void);
+diff --git a/src/include/nano-X.h b/src/include/nano-X.h
+index 409290c..828a708 100644
+--- a/src/include/nano-X.h
++++ b/src/include/nano-X.h
+@@ -251,6 +251,8 @@ typedef struct {
+   GR_CURSOR_ID cursor;		/**< cursor id*/
+   int processid;		/**< process id of owner*/
+   GR_LENGTH bufsize;		/**< mmaped buffer size if GR_WM_PROPS_BUFFER_MMAP*/
++  uint32_t surface_address;	/**< composed screen: physical address of the window's first pixel, or 0 */
++  uint32_t surface_row;		/**< and the length of a row of its surface, in pixels */
+ } GR_WINDOW_INFO;
+ 
+ /**
+diff --git a/src/nanox/serv.h b/src/nanox/serv.h
+index 4a9efee..2e33007 100644
+--- a/src/nanox/serv.h
++++ b/src/nanox/serv.h
+@@ -451,6 +451,8 @@ void		GsDestroyPixmap(GR_PIXMAP *pp);
+ void		GsSetPortraitMode(int mode);
+ void		GsSetPortraitModeFromXY(GR_COORD rootx, GR_COORD rooty);
+ void		GsSetClipWindow(GR_WINDOW *wp, MWCLIPREGION *userregion, int flags);
++void		GsWindowSurface(GR_WINDOW *wp);
++void		GsCompositeWalk(void (*show)(PSD psd));
+ void		GsHandleMouseStatus(GR_COORD newx, GR_COORD newy, int newbuttons);
+ void		GsFreePositionEvent(GR_CLIENT *client, GR_WINDOW_ID wid, GR_WINDOW_ID subwid);
+ void		GsDeliverButtonEvent(GR_EVENT_TYPE type, int buttons, int changebuttons, int modifiers);
+diff --git a/src/nanox/srvclip2.c b/src/nanox/srvclip2.c
+index 0679f9f..c48b8a7 100644
+--- a/src/nanox/srvclip2.c
++++ b/src/nanox/srvclip2.c
+@@ -33,6 +33,9 @@ GsSetClipWindow(GR_WINDOW *wp, MWCLIPREGION *userregion, int flags)
+ 	if (!wp->realized || !wp->output)
+ 		return;
+ 
++	/* composed screen: make sure the window draws on its top-level window's surface */
++	GsWindowSurface(wp);
++
+ 	clipwp = wp;
+ 
+ 	/*
+@@ -122,6 +125,9 @@ GsSetClipWindow(GR_WINDOW *wp, MWCLIPREGION *userregion, int flags)
+ 		} else {
+ 			sibwp = pwp->children;	 /* clip siblings*/
+ 		}
++		/* composed screen: top-level windows do not hide each other or the desktop */
++		if (gd_compositor && (!pwp || pwp == rootwp))
++			sibwp = wp;
+ 
+ 		for (; sibwp != wp; sibwp = sibwp->siblings) {
+ 			if (!sibwp->realized || !sibwp->output)
+diff --git a/src/nanox/srvfunc.c b/src/nanox/srvfunc.c
+index 3455994..144b91f 100644
+--- a/src/nanox/srvfunc.c
++++ b/src/nanox/srvfunc.c
+@@ -173,6 +173,12 @@ GrGetWindowInfo(GR_WINDOW_ID wid, GR_WINDOW_INFO *infoptr)
+ 		infoptr->processid = wp->owner? wp->owner->processid: 0;
+ 		infoptr->eventmask = 0;
+ 		infoptr->bufsize = wp->buffer? wp->buffer->psd->size: 0;
++		/* composed screen: where the window's pixels are, for a program that draws them itself */
++		infoptr->surface_address = infoptr->surface_row = 0;
++		if (gd_compositor && wp != rootwp && wp->realized && wp->output) {
++			GsWindowSurface(wp);
++			gd_compositor->locate(wp->psd, wp->x, wp->y, &infoptr->surface_address, &infoptr->surface_row);
++		}
+ 
+ 		for (evp = wp->eventclients; evp; evp = evp->next) {
+ 			if (evp->client == curclient)
+@@ -286,7 +292,7 @@ GrRaiseWindow(GR_WINDOW_ID wid)
+ 	/*
+ 	 * Finally redraw the window if necessary.
+ 	 */
+-	if (overlap) {
++	if (overlap && !(gd_compositor && wp->parent == rootwp)) {
+ 		GsDrawBorder(wp);
+ 		GsExposeArea(wp, wp->x, wp->y, wp->width, wp->height, NULL);
+ 	}
+@@ -352,7 +358,7 @@ GrLowerWindow(GR_WINDOW_ID wid)
+ 	 * Finally redraw the sibling windows which this window covered
+ 	 * if they overlapped our window.
+ 	 */
+-	while (expwp && (expwp != wp)) {
++	while (expwp && (expwp != wp) && !(gd_compositor && wp->parent == rootwp)) {
+ 		if (GsCheckOverlap(wp, expwp)) {
+ 			GsExposeArea(expwp, wp->x - wp->bordersize,
+ 				wp->y - wp->bordersize,
+@@ -445,6 +451,21 @@ GrMoveWindow(GR_WINDOW_ID wid, GR_COORD x, GR_COORD y)
+ 		return;
+ 	}
+ 
++	/* composed screen: a top-level window just changes place; nothing is repainted */
++	if (gd_compositor && parent == rootwp && wp->mapped) {
++		int outside = wp->x < 0 || wp->y < 0 || wp->x + wp->width > rootwp->width ||
++			wp->y + wp->height > rootwp->height;
++
++		OffsetWindow(wp, offx, offy);
++		clipwp = NULL;
++		/* except what was off the screen, which was never drawn */
++		if (outside && wp->realized)
++			GsExposeArea(wp, wp->x, wp->y, wp->width, wp->height, NULL);
++		DeliverUpdateMoveEventAndChildren(wp);
++		SERVER_UNLOCK();
++		return;
++	}
++
+ 	/*
+ 	 * move algorithms not requiring unmap/map
+ 	 */
+diff --git a/src/nanox/srvmain.c b/src/nanox/srvmain.c
+index 47260c5..2205be8 100644
+--- a/src/nanox/srvmain.c
++++ b/src/nanox/srvmain.c
+@@ -1032,6 +1032,7 @@ GsInitialize(void)
+ 	GdMoveMouse(psd->xvirtres / 2, psd->yvirtres / 2);
+ 
+ 	/* Force root window screen paint*/
++	gd_composite_walk = GsCompositeWalk;
+ 	GsRedrawScreen();
+ 
+ 	/* 
+diff --git a/src/nanox/srvnet.c b/src/nanox/srvnet.c
+index 1f106c0..a19f4b5 100644
+--- a/src/nanox/srvnet.c
++++ b/src/nanox/srvnet.c
+@@ -2232,41 +2232,69 @@ int GsWriteType(int fd, short type)
+  * Note that the maximum request size is allocated from the stack
+  * in this function.
+  */
++/* The next c bytes from a client: what is left of the last read, then the socket. */
++static int
++GsTake(int fd, char *rbuf, int *rpos, int rhave, void *buf, int c)
++{
++	int n = rhave - *rpos;
++
++	if (n > c)
++		n = c;
++	memcpy(buf, rbuf + *rpos, n);
++	*rpos += n;
++	return n < c ? GsRead(fd, (char *)buf + n, c - n) : 0;
++}
++
++/* Handles every request the client has sent so far, with one read where possible. */
+ void
+ GsHandleClient(int fd)
+ {
+ 	nxReq *	req;
+ 	long	len;
+ 	char	buf[MAXREQUESTSZ];
++	char	rbuf[MAXREQUESTSZ];
++	int	rpos = 0, rhave;
+ 
+ 	current_fd = fd;
+ #if HAVE_SHAREDMEM_SUPPORT
+ 	current_shm_cmds = curclient->shm_cmds;
+ 	current_shm_cmds_size = curclient->shm_cmds_size;
+ #endif
+-	/* read request header*/
+-	if(GsRead(fd, buf, sizeof(nxReq)))
++	rhave = read(fd, rbuf, sizeof(rbuf));
++	if (rhave <= 0) {
++		if (rhave == 0)
++			EPRINTF("nano-X: client closed socket: %d\n", fd);
++		else EPRINTF("nano-X: GsHandleClient read failed: %d\n", errno);
++		GsClose(fd);
+ 		return;
++	}
++
++	do {
++		/* read request header*/
++		if(GsTake(fd, rbuf, &rpos, rhave, buf, sizeof(nxReq)))
++			return;
+ 
+ #pragma GCC diagnostic ignored "-Wstrict-aliasing"
+-	len = GetReqAlignedLen((nxReq *)&buf[0]);
+-	if(len > sizeof(nxReq)) {
+-		if(len > MAXREQUESTSZ) {
+-			EPRINTF("nano-X: GsHandleClient request too large: %ld > %d\n",
+-				len, MAXREQUESTSZ);
+-			exit(1);
++		len = GetReqAlignedLen((nxReq *)&buf[0]);
++		if(len > sizeof(nxReq)) {
++			if(len > MAXREQUESTSZ) {
++				EPRINTF("nano-X: GsHandleClient request too large: %ld > %d\n",
++					len, MAXREQUESTSZ);
++				exit(1);
++			}
++			/* read additional request data*/
++			if(GsTake(fd, rbuf, &rpos, rhave, &buf[sizeof(nxReq)], len-sizeof(nxReq)))
++				return;
+ 		}
+-		/* read additional request data*/
+-		if(GsRead(fd, &buf[sizeof(nxReq)], len-sizeof(nxReq)))
+-			return;
+-	}
+-	req = (nxReq *)&buf[0];
++		req = (nxReq *)&buf[0];
+ 
+-	if(req->reqType < GrTotalNumCalls) {
+-		curfunc = (char *)GrFunctions[req->reqType].name;
+-		/*DPRINTF("HandleClient %s\n", curfunc);*/
+-		GrFunctions[req->reqType].func(req);
+-	} else {
+-		EPRINTF("nano-X: GsHandleClient bad function\n");
+-	}
++		if(req->reqType < GrTotalNumCalls) {
++			curfunc = (char *)GrFunctions[req->reqType].name;
++			/*DPRINTF("HandleClient %s\n", curfunc);*/
++			GrFunctions[req->reqType].func(req);
++		} else {
++			EPRINTF("nano-X: GsHandleClient bad function\n");
++		}
++		/* a request may have closed the client*/
++	} while (rpos < rhave && GsFindClient(fd) != NULL && curclient && curclient->id == fd);
+ }
+diff --git a/src/nanox/srvutil.c b/src/nanox/srvutil.c
+index fae5bfa..a073ebb 100644
+--- a/src/nanox/srvutil.c
++++ b/src/nanox/srvutil.c
+@@ -58,6 +58,47 @@ GsResetScreenSaver(void)
+ #endif
+ }
+ 
++/*
++ * Composed screen: gives a window the surface of its top-level window, which is as big as
++ * that window with its border. The surface follows the window when it moves or is resized.
++ */
++void
++GsWindowSurface(GR_WINDOW *wp)
++{
++	GR_WINDOW *top = wp;
++	int bs;
++
++	if (!gd_compositor || wp == rootwp)
++		return;
++	while (top->parent != rootwp)
++		top = top->parent;
++	bs = top->bordersize;
++	top->psd = gd_compositor->surface(top, top->x - bs, top->y - bs, top->width + bs * 2, top->height + bs * 2);
++	if (wp != top && wp->psd != top->psd) {
++		gd_compositor->release(wp);	/* it may have been a top-level window before */
++		wp->psd = top->psd;
++	}
++}
++
++/* Shows the screen driver every visible top-level window's surface, lowest window first. */
++static void
++show_windows(GR_WINDOW *wp, void (*show)(PSD psd))
++{
++	if (!wp)
++		return;
++	show_windows(wp->siblings, show);
++	if (wp->realized && wp->output) {
++		GsWindowSurface(wp);
++		show(wp->psd);
++	}
++}
++
++void
++GsCompositeWalk(void (*show)(PSD psd))
++{
++	show_windows(rootwp->children, show);
++}
++
+ /*
+  * Unmap the window to make it and its children invisible on the screen.
+  * This is a recursive routine which unrealizes this window and all of its
+@@ -116,6 +157,10 @@ GsUnrealizeWindow(GR_WINDOW *wp, GR_BOOL temp_unmap)
+ 	if (!wp->parent->realized || !wp->output)
+ 		return;
+ 
++	/* composed screen: what a top-level window covered was never lost */
++	if (gd_compositor && wp->parent == rootwp)
++		return;
++
+ 	/*
+ 	 * Clear the area in the parent for this window, causing an
+ 	 * exposure event for it.  Take into account the border size.
+@@ -326,6 +371,8 @@ GsDestroyWindow(GR_WINDOW *wp)
+ 		GsDestroyPixmap(wp->bgpixmap);
+ 	if (wp->buffer)
+ 		GsFreeWindowBuffer(wp);
++	if (gd_compositor)
++		gd_compositor->release(wp);
+ #if DYNAMICREGIONS
+ 	if (wp->clipregion)
+ 		GdDestroyRegion(wp->clipregion);
+@@ -733,8 +780,15 @@ GsClearWindow(GR_WINDOW *wp, GR_COORD x, GR_COORD y, GR_SIZE width, GR_SIZE  hei
+ 	 * with buffered windows, all drawing is postponed until the application
+ 	 * is finished by calling GrClearWindow(..., 2), ie. GrFlushWindow()
+ 	 */
+-	if (exposeflag == 2)
++	if (exposeflag == 2) {
+ 		wp->props |= GR_WM_PROPS_DRAWING_DONE;
++		/* a program that drew into the window's surface itself says so with this */
++		if (gd_compositor) {
++			gd_compositor->touch(wp->psd);
++			if (!(wp->props & GR_WM_PROPS_BUFFERED))
++				return;
++		}
++	}
+ 
+ 	if (wp->props & GR_WM_PROPS_BUFFERED) {
+ 
+diff --git a/src/nanox/wmclients.c b/src/nanox/wmclients.c
+index 9214904..28ecfad 100644
+--- a/src/nanox/wmclients.c
++++ b/src/nanox/wmclients.c
+@@ -94,7 +94,7 @@ int wm_new_client_window(GR_WINDOW_ID wid)
+ 		}
+ 	}
+ 
+-#if NO_AUTO_MOVE
++#if 0
+ 	x = MWABS(winfo.x - xoffset);
+ 	y = MWABS(winfo.y - yoffset);
+ #else
+@@ -109,13 +109,14 @@ int wm_new_client_window(GR_WINDOW_ID wid)
+ 
+ 		/* We could proably use a more intelligent algorithm here */
+ 		GrGetScreenInfo(&si);
+-		x = lastx + WINDOW_STEP;
++		/* each new window a step right and down of the last; a bar may sit at the bottom */
++		x = lastx + WINDOW_STEP * 2;
+ 		if((x + width) > si.cols)
+-			x = 0;
++			x = 4;
+ 		lastx = x;
+ 		y = lasty + WINDOW_STEP;
+-		if((y + height) > si.rows)
+-			y = 0;
++		if((y + height) > si.rows - 28)
++			y = 4;
+ 		lasty = y;
+ 	}
+ #endif

@@ -3,10 +3,10 @@
 // calling one becomes a lit draw command with the current matrices as uniforms; swapping
 // buffers submits the frame's command list.
 //
-// Linux has no /dev/mem here, so GPU memory (physical 0x87000000, kept out of the kernel's RAM
-// by the device tree) is reached as an MTD device the phram driver makes for that range.
+// Built with GL_NANOX and run under the Nano-X server, the window is a Nano-X window and frames
+// are drawn into its buffer (docs/nanox.md); otherwise the window is the whole display.
 // Everything inside works in 16.16 fixed point, which is also what the GPU reads; floats are
-// converted at the API boundary, because the CPU has no FPU.
+// converted at the API boundary, because the CPU has no FPU. docs/gpu.md has the rest.
 
 #include <GL/glx.h>
 #include <fcntl.h>
@@ -14,14 +14,22 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
+#include <sys/mman.h>
 #include <unistd.h>
+#ifdef GL_NANOX
+#include <sched.h>
+#include <X11/keysym.h>
+#include <nano-X.h>
+#endif
 
 // ---- GPU memory ----
 
 #define GPU_PHYS 0x87000000u
 #define GPU_SIZE 0x00b00000u
-#define FRAME_AT 0x00100000u    // this frame's uniform blocks, then its command list
-#define VERTEX_AT 0x00200000u   // vertex buffers of display lists, to the end
+// This frame's uniform blocks and command list, then the vertex buffers of display lists to
+// the end. Under Nano-X they start higher, in the part of GPU memory its server leaves alone.
+static uint32_t frame_at = 0x00100000u, vertex_top = 0x00200000u;
 #define REG_DISPLAY 0x00        // mode, width, height
 #define REG_SUBMIT 0x10         // submit, list address, command count
 #define REG_FRAMES 0x1c
@@ -29,8 +37,10 @@
 enum { CMD_CLEAR = 1, CMD_RECT = 2, CMD_DRAW = 3 };
 enum { VERTEX_CLIP = 1, VERTEX_LIT = 2 };
 
+#define GPU_WAIT 0x4701   // _IO('G', 1): wait until the frame counter leaves the given value
+
 static int gpu_fd = -1;
-static uint32_t vertex_top = VERTEX_AT;
+static uint8_t* gpu_map;   // the whole GPU memory, when the kernel has the driver
 
 static void die(const char* what) {
     fprintf(stderr, "gl: %s\n", what);
@@ -53,6 +63,13 @@ static int find_gpu_mtd(void) {
 
 static void gpu_open(void) {
     if (gpu_fd >= 0) return;
+    gpu_fd = open("/dev/gpu", O_RDWR);
+    if (gpu_fd >= 0) {
+        void* map = mmap(0, GPU_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, gpu_fd, 0x01000000);   // the device maps from 0x86000000
+        if (map == MAP_FAILED) die("cannot map /dev/gpu");
+        gpu_map = map;
+        return;
+    }
     int n = find_gpu_mtd();
     if (n < 0) {
         const char spec[] = "gpu,0x87000000,0xb00000";
@@ -69,7 +86,15 @@ static void gpu_open(void) {
 }
 
 static void gpu_write(uint32_t offset, const void* data, uint32_t bytes) {
-    if (pwrite(gpu_fd, data, bytes, offset) != (long)bytes) die("write to GPU memory failed");
+    if (gpu_map) memcpy(gpu_map + offset, data, bytes);
+    else if (pwrite(gpu_fd, data, bytes, offset) != (long)bytes) die("write to GPU memory failed");
+}
+
+static uint32_t gpu_frames(void) {
+    uint32_t n = 0;
+    if (gpu_map) n = *(volatile uint32_t*)(gpu_map + REG_FRAMES);
+    else pread(gpu_fd, &n, 4, REG_FRAMES);
+    return n;
 }
 
 // ---- fixed point ----
@@ -407,7 +432,7 @@ static void draw(uint32_t address, uint32_t count, const fx* colour, int lit) {
     c[1] = GPU_PHYS + address;
     c[2] = count;
     c[4] = lit ? VERTEX_LIT : VERTEX_CLIP;
-    c[6] = GPU_PHYS + FRAME_AT + uniform_count * sizeof uniforms[0];
+    c[6] = GPU_PHYS + frame_at + uniform_count * sizeof uniforms[0];
     uniform_count++;
 }
 
@@ -481,16 +506,56 @@ void glClear(GLbitfield mask) {
     if (mask & GL_COLOR_BUFFER_BIT) command(CMD_CLEAR, 3)[1] = clear_colour;
 }
 
-// ---- GLX and Xlib: one window, which is the display ----
+// ---- GLX and Xlib: one window, which is the display or a Nano-X window ----
 
 struct x_display { int width, height; };
 static struct x_display the_display = {1280, 720};
 static Visual the_visual;
 static XVisualInfo the_visual_info = {&the_visual, 0, 0, 24};
 
+#ifdef GL_NANOX
+#define GPU_SUBMIT 0x401c4702u   // _IOW('G', 2, struct gpu_submit): draw a list, copy the picture, return
+struct gpu_submit { uint32_t list, count, how, address, width, height, row; };
+
+static int nano_x;               // a Nano-X server is running: be one of its clients
+static GR_WINDOW_ID nano_window;
+static GR_EVENT nano_event;      // the event XPending found, for XNextEvent
+static int nano_pending;
+
+// One Nano-X event as the X event glxgears understands, or 0 for one it has no use for.
+static int translate(const GR_EVENT* in, XEvent* out) {
+    switch (in->type) {
+        case GR_EVENT_TYPE_EXPOSURE:
+            out->type = Expose;
+            return 1;
+        case GR_EVENT_TYPE_UPDATE:
+            if (in->update.utype != GR_UPDATE_SIZE) return 0;
+            out->type = ConfigureNotify;
+            out->xconfigure.width = in->update.width;
+            out->xconfigure.height = in->update.height;
+            return 1;
+        case GR_EVENT_TYPE_KEY_DOWN:
+            out->type = KeyPress;
+            out->xkey.keycode = in->keystroke.ch;
+            return 1;
+        case GR_EVENT_TYPE_CLOSE_REQ:
+            GrClose();
+            exit(0);
+    }
+    return 0;
+}
+#endif
+
 Display* XOpenDisplay(const char* name) {
     (void)name;
     gpu_open();
+#ifdef GL_NANOX
+    nano_x = gpu_map && GrOpen() >= 0;
+    if (nano_x) {
+        frame_at = 0x00700000u;
+        vertex_top = 0x00780000u;
+    }
+#endif
     return &the_display;
 }
 int XCloseDisplay(Display* dpy) { (void)dpy; return 0; }
@@ -511,13 +576,29 @@ Window XCreateWindow(Display* dpy, Window parent, int x, int y, unsigned width, 
     if (height > 2048) height = 2048;
     dpy->width = (int)width;
     dpy->height = (int)height;
+#ifdef GL_NANOX
+    if (nano_x) {
+        (void)x; (void)y;   // the window manager chooses the place
+        nano_window = GrNewWindowEx(GR_WM_PROPS_APPWINDOW | GR_WM_PROPS_NOBACKGROUND, "glxgears", GR_ROOT_WINDOW_ID,
+                                    -1, -1, width, height, 0);
+        GrSelectEvents(nano_window, GR_EVENT_MASK_EXPOSURE | GR_EVENT_MASK_UPDATE | GR_EVENT_MASK_KEY_DOWN |
+                                    GR_EVENT_MASK_CLOSE_REQ);
+        return 2;
+    }
+#endif
     uint32_t mode[3] = {3, width, height};
     gpu_write(REG_DISPLAY + 4, &mode[1], 8);   // size first, mode last
     gpu_write(REG_DISPLAY, &mode[0], 4);
     return 2;
 }
 int XDestroyWindow(Display* dpy, Window w) { (void)dpy; (void)w; return 0; }
-int XMapWindow(Display* dpy, Window w) { (void)dpy; (void)w; return 0; }
+int XMapWindow(Display* dpy, Window w) {
+    (void)dpy; (void)w;
+#ifdef GL_NANOX
+    if (nano_x) GrMapWindow(nano_window);
+#endif
+    return 0;
+}
 int XSetNormalHints(Display* dpy, Window w, XSizeHints* hints) { (void)dpy; (void)w; (void)hints; return 0; }
 int XSetStandardProperties(Display* dpy, Window w, const char* name, const char* icon, XID pixmap, char** argv, int argc,
                            XSizeHints* hints) {
@@ -530,12 +611,53 @@ int XChangeProperty(Display* dpy, Window w, Atom property, Atom type, int format
     return 0;
 }
 int XFree(void* data) { (void)data; return 0; }
-int XPending(Display* dpy) { (void)dpy; return 0; }   // no events ever arrive
-int XNextEvent(Display* dpy, XEvent* event) { (void)dpy; event->type = 0; return 0; }
-KeySym XLookupKeysym(XKeyEvent* event, int index) { (void)event; (void)index; return 0; }
-int XLookupString(XKeyEvent* event, char* buffer, int bytes, KeySym* keysym, XComposeStatus* status) {
-    (void)event; (void)buffer; (void)bytes; (void)keysym; (void)status;
+// Without Nano-X no events ever arrive.
+int XPending(Display* dpy) {
+    (void)dpy;
+#ifdef GL_NANOX
+    XEvent unused;
+    while (nano_x && !nano_pending) {
+        GrCheckNextEvent(&nano_event);
+        if (nano_event.type == GR_EVENT_TYPE_NONE) break;
+        nano_pending = translate(&nano_event, &unused);
+    }
+    return nano_pending;
+#else
     return 0;
+#endif
+}
+int XNextEvent(Display* dpy, XEvent* event) {
+    (void)dpy;
+    event->type = 0;
+#ifdef GL_NANOX
+    while (nano_x && !nano_pending) {
+        GrGetNextEvent(&nano_event);
+        nano_pending = translate(&nano_event, event);
+    }
+    if (nano_x) translate(&nano_event, event);
+    nano_pending = 0;
+#endif
+    return 0;
+}
+KeySym XLookupKeysym(XKeyEvent* event, int index) {
+    (void)index;
+#ifdef GL_NANOX
+    switch (event->keycode) {
+        case MWKEY_LEFT: return XK_Left;
+        case MWKEY_RIGHT: return XK_Right;
+        case MWKEY_UP: return XK_Up;
+        case MWKEY_DOWN: return XK_Down;
+    }
+#else
+    (void)event;
+#endif
+    return 0;
+}
+int XLookupString(XKeyEvent* event, char* buffer, int bytes, KeySym* keysym, XComposeStatus* status) {
+    (void)keysym; (void)status;
+    if (bytes < 1 || event->keycode > 0x7f) return 0;
+    buffer[0] = (char)event->keycode;
+    return 1;
 }
 
 // "WIDTHxHEIGHT+X+Y"; only the size matters here.
@@ -564,6 +686,20 @@ void glXQueryDrawable(Display* dpy, GLXDrawable drawable, int attribute, unsigne
 }
 void (*glXGetProcAddressARB(const GLubyte* name))(void) { (void)name; return 0; }
 
+// Without the driver: the list is drawn between the emulator's frames, so there is nothing to
+// do until this one ends, and yielding in a loop is the best a process can do. A sleep is
+// rounded up to the kernel's 50 ms tick (GLWAIT=sleep shows it: 20 frames/s against 80), and
+// wfi, which would end the frame at once, is refused in user mode.
+static void wait_for_frame(void) {
+    static int mode = -1;
+    if (mode < 0) {
+        const char* m = getenv("GLWAIT");
+        mode = m && strcmp(m, "sleep") == 0;
+    }
+    if (mode) usleep(100);
+    else sched_yield();
+}
+
 // Sends the frame: its uniform blocks and command list in one write, then the submit word, and
 // waits for the GPU to count it.
 void glXSwapBuffers(Display* dpy, GLXDrawable drawable) {
@@ -572,13 +708,29 @@ void glXSwapBuffers(Display* dpy, GLXDrawable drawable) {
     uint32_t uniform_bytes = uniform_count * sizeof uniforms[0], command_bytes = command_count * sizeof commands[0];
     memcpy(frame, uniforms, uniform_bytes);
     memcpy((char*)frame + uniform_bytes, commands, command_bytes);
-    gpu_write(FRAME_AT, frame, uniform_bytes + command_bytes);
-    uint32_t before, now, submit[3] = {1, GPU_PHYS + FRAME_AT + uniform_bytes, command_count};
-    pread(gpu_fd, &before, 4, REG_FRAMES);
+    gpu_write(frame_at, frame, uniform_bytes + command_bytes);
+#ifdef GL_NANOX
+    if (nano_x) {
+        // into the window's part of its buffer, which may have moved; then the server composes
+        GR_WINDOW_INFO info;
+        GrGetWindowInfo(nano_window, &info);
+        if (info.realized && info.surface_address) {
+            struct gpu_submit s = {GPU_PHYS + frame_at + uniform_bytes, command_count, 1 | 4,
+                                   info.surface_address, info.width, info.height, info.surface_row};
+            ioctl(gpu_fd, GPU_SUBMIT, &s);
+            GrFlushWindow(nano_window);
+        } else {
+            sched_yield();
+        }
+        command_count = uniform_count = vertex_slots = frame_vertices = 0;
+        return;
+    }
+#endif
+    uint32_t before = gpu_frames(), submit[3] = {1, GPU_PHYS + frame_at + uniform_bytes, command_count};
     gpu_write(REG_SUBMIT, submit, sizeof submit);
     do {
-        sched_yield();   // the list is drawn between the emulator's frames
-        pread(gpu_fd, &now, 4, REG_FRAMES);
-    } while (now == before);
+        if (gpu_map) ioctl(gpu_fd, GPU_WAIT, (unsigned long)before);
+        else wait_for_frame();
+    } while (gpu_frames() == before);
     command_count = uniform_count = vertex_slots = frame_vertices = 0;
 }
