@@ -7,3 +7,4 @@
 /programs/build/
 *.cso
 .vs/
+__pycache__/

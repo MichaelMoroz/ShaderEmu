@@ -29,6 +29,9 @@ Speed is the priority, in this order:
 3. **An emulated GPU with its own driver.** The emulated CPU is one serial chain per frame; a
    GPU's strength is running every pixel at once. Drawing moves out of the emulated CPU into
    shader passes that work in parallel, and the guest talks to them through a driver.
+   The first version exists (`docs/gpu.md`): the guest writes vertex buffers and a command
+   list into RAM, and a mesh whose vertex shader reads them is rasterised by the real graphics
+   card, with a few selectable vertex and fragment modes.
 
 An earlier plan targeted an 8086 PC running MS-DOS and Windows 3.0. It was dropped as too slow;
 the design notes are kept in `docs/original-x86-plan.md`.
@@ -43,12 +46,14 @@ the design notes are kept in `docs/original-x86-plan.md`.
   frontend over two backends: `rvc_backend11.cpp` (D3D11, FXC bytecode, what VRChat runs) and
   `rvc_backend12.cpp` (D3D12, DXC-compiled DXIL). `bin\rvc_harness.exe` defaults to the first,
   `bin\rvc_harness_dxc.exe` to the second; `--dxc` / `--d3d11` switch either.
-- `experiments/rvc_opt/` – patched copy of rvc's shader (MIT, see its `LICENSE`).
+- `experiments/rvc_opt/` – patched copy of rvc's shader (MIT, see its `LICENSE`), plus
+  `gpu.shader`, the machine's GPU device.
 - `harness/apps/rvc_trace12.cpp` – the same two draws on D3D12, for benchmarks and
   `tools/gpu_trace.ps1` (Nsight GPU Trace hardware counters per draw).
 - `programs/` – our own bare-metal programs in C (`programs\build.bat`, needs LLVM with the
   RISC-V target). The built images in `programs/bin/` are checked in, so running them needs no
   compiler.
+- `tools/gpu_reference.py` – software model of the GPU device, for checking the shader.
 - `tools/perf_test.ps1` – 3-second speed benchmark; `tools/watch_console.cmd` – live console.
 - `rvc/` – clone of upstream rvc (not part of this repo): the payload images and the reference shader.
 
@@ -73,6 +78,7 @@ boot:
 | `linux` | Linux with a built-in initramfs (slow to unpack) |
 | `micropython` | MicroPython REPL on OpenSBI |
 | `rust` | Rust test payload on OpenSBI |
+| `gears` | three lit, textured gears at 1280x720, drawn by the emulated GPU from a command list (`programs/gears`, `docs/gpu.md`) |
 | `raycast` | our Wolfenstein-style raycaster: walk a textured maze with w/a/s/d or the arrow keys, `x` walks on its own; about 20 frames/s at 160x100 (`programs/raycast`) |
 | `raytrace` | our C raytracer: asks for resolution, bounces, rays per pixel and shadows on the console, then draws to the display (`programs/raytrace`) |
 | `rvc-raytrace` | rvc's Rust raytracer, which fills raw memory instead |

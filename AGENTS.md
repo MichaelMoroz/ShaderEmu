@@ -44,6 +44,22 @@ watch the emulated machine:
   `b` runs a fixed 354-frame walk and prints `raycast: demo done` (the benchmark: about 218k
   instructions per frame); `x` walks forever. Typed input reaches a guest at about 25 keys/s,
   so give scripted key strings enough time before snapshotting, or the last frame is half drawn.
+- The GPU device (`docs/gpu.md`) is `experiments\rvc_opt\gpu.shader`: a real mesh draw into
+  its own colour and depth target plus one small control zone, run after Commit when that file
+  exists (`--no-gpu` leaves them out). Check it against `tools\gpu_reference.py`: pause the
+  guest (`gears`: `--expect "frame 1024" --send p --until "paused at"`), pass `--save-state` and
+  `--gpu-capture`, then run the model on both. Expect 99.9% of pixels away from triangle edges
+  within 2 levels; the rest are one-pixel shifts at texel boundaries.
+- A vertex shader reading a texture in D3D12 needs the NON_PIXEL_SHADER_RESOURCE state. With
+  only PIXEL_SHADER_RESOURCE the pixel shader sees fresh data and the vertex shader stale data
+  in the same draw, with no error. To find such a thing, write what each stage reads into the
+  colour and capture it.
+- `wfi` ends the CPU's tick pass early (a stall, cleared at commit). It is the way for a guest to
+  wait for anything that changes between frames; an idle Linux now runs short frames too.
+- `gpu.shader` compiles under FXC in 0.1 s and gears on D3D11 matches the software model as
+  well as on D3D12. It ran at 78 frames/s there against 485 on D3D12/DXC; why is not known yet.
+- Guest data the GPU reads a texel at a time (vertex buffers, uniform vectors) must be 16-byte
+  aligned (`GPU_ALIGNED`); unaligned data renders garbage without any error.
 - The display is RAM at fixed addresses (`docs/display.md`); the view window decodes it beside
   the memory image. The CPU shader has no display code and should not grow any.
 - `--machine auto` (the default) compiles the smallest machine the image runs on: `NO_PAGING`
