@@ -50,10 +50,13 @@ the design notes are kept in `docs/original-x86-plan.md`.
   `gpu.shader`, the machine's GPU device.
 - `harness/apps/rvc_trace12.cpp` – the same two draws on D3D12, for benchmarks and
   `tools/gpu_trace.ps1` (Nsight GPU Trace hardware counters per draw).
+- `programs/linux/` – programs for the Linux image: an OpenGL driver for the GPU device and the
+  runtime to build the stock `glxgears` against it (`programs\linux\build.bat`).
 - `programs/` – our own bare-metal programs in C (`programs\build.bat`, needs LLVM with the
   RISC-V target). The built images in `programs/bin/` are checked in, so running them needs no
   compiler.
 - `tools/gpu_reference.py` – software model of the GPU device, for checking the shader.
+- `tools/make_linux_image.py` – builds our Linux image from upstream's into `build/images/linux`.
 - `tools/perf_test.ps1` – 3-second speed benchmark; `tools/watch_console.cmd` – live console.
 - `rvc/` – clone of upstream rvc (not part of this repo): the payload images and the reference shader.
 
@@ -74,7 +77,7 @@ boot:
 
 | image | what it is |
 |---|---|
-| `linux-net` | Linux with networking and a romfs root; about 17 s to the shell on DXC |
+| `linux-net` | Linux with a shell, about 12 s to the prompt on DXC. With our image built (`python tools\make_linux_image.py`), `glxgears` runs there on the GPU |
 | `linux` | Linux with a built-in initramfs (slow to unpack) |
 | `micropython` | MicroPython REPL on OpenSBI |
 | `rust` | Rust test payload on OpenSBI |
@@ -99,12 +102,13 @@ Ctrl+C, arrows and Tab, and the guest does its own echo. **Ctrl+]** quits. It ru
 shader (`experiments/rvc_opt`) and boots from power-on. `--resume` starts at the Linux shell
 prompt from `build\snapshots\rvc_shell.snap` instead.
 
-A second window shows memory live: RAM as colour in two strips (low addresses top left), texels
-written since the previous screen frame glowing and fading. To its right is the machine's
-display: a framebuffer the guest keeps in RAM at fixed addresses, with a mode and resolution it
-sets itself (`docs/display.md`). A bar underneath, clear of the memory
-image, shows IPS, frames/s, frame time, GPU time of the tick and commit draws, uptime, guest
-clock and totals, with the 64x64 CPU state area magnified at its right end. Closing it quits the harness; `--no-viz` skips it, and `--viz`
+A second window is the machine's screen. Its left two thirds are the display: a framebuffer the
+guest keeps in RAM, or what the GPU device drew, at the mode and resolution the guest sets
+(`docs/display.md`). The right third shows memory live: RAM as colour in two strips, texels
+written since the previous screen frame glowing and fading. A bar underneath shows, left to
+right: speed (IPS, frames/s, frame time, the time of each draw, uptime, totals), the last lines
+of the console, the state of input to the guest, and the 64x64 CPU state area magnified. Keys typed into
+the window go to the guest as well. Closing it quits the harness; `--no-viz` skips it, and `--viz`
 adds it to any other invocation.
 
 ## Run rvc

@@ -60,6 +60,19 @@ watch the emulated machine:
   well as on D3D12. It ran at 78 frames/s there against 485 on D3D12/DXC; why is not known yet.
 - Guest data the GPU reads a texel at a time (vertex buffers, uniform vectors) must be 16-byte
   aligned (`GPU_ALIGNED`); unaligned data renders garbage without any error.
+- The Linux image the harness boots for `linux-net` is `build\images\linux` when it exists
+  (`python tools\make_linux_image.py`: upstream's root filesystem plus `programs\bin\glxgears`,
+  and a device tree with RAM ending at 0x87000000). Without it, upstream's image boots and has
+  no glxgears. `build\snapshots\rvc_shell.snap` is of our image; the old one is kept as
+  `rvc_shell_upstream.snap`. Re-run the script and re-make the snapshot after rebuilding a
+  Linux program.
+- Linux reaches GPU memory through an MTD device made at run time by writing
+  `gpu,0x87000000,0xb00000` to `/sys/module/phram/parameters/phram`; the kernel has no /dev/mem.
+- `programs\linux\build.bat` downloads glxgears.c and compiler-rt's builtins into
+  `programs\build\fetch`; they are not kept in the repository.
+- To check something inside Linux, resume the shell snapshot with `--input "commands\n"` and
+  `--until`: about 10 s. Do not cold-boot for that, and avoid `$` in the commands (the
+  PowerShell and guest shell quoting together is easy to get wrong).
 - The display is RAM at fixed addresses (`docs/display.md`); the view window decodes it beside
   the memory image. The CPU shader has no display code and should not grow any.
 - `--machine auto` (the default) compiles the smallest machine the image runs on: `NO_PAGING`
