@@ -1,7 +1,7 @@
 // The classic three gears, drawn by the GPU device. The CPU builds the meshes once, and per
 // frame only computes three matrices and a short command list; transforming, lighting,
 // rasterising and texturing all happen on the GPU.
-// Any key pauses and resumes.
+// w toggles copying each frame back into the RAM framebuffer; any other key pauses and resumes.
 
 #include "../common/gpu.h"
 #include "sintab.h"
@@ -232,6 +232,7 @@ int main(void) {
     put_number(mesh_count / 3);
     uart_puts(" triangles; any key pauses\r\n");
     uint32_t frames = 0, mark = CLINT_MTIME;
+    int writeback = 0;
     for (;;) {
         int angle = (int)(CLINT_MTIME / 25);   // about 70 degrees a second
         set_gear(0, view, proj, FX(-3.0), FX(-2.0), angle, 0x00cc1a00);
@@ -245,7 +246,7 @@ int main(void) {
         gpu_rect(0, H - 40, W, H, 0x00202c40);
         gpu_rect(0, H - 42, W, H - 40, 0x00607090);
         gpu_image(W - BADGE - 16, 16, W - 16, 16 + BADGE, badge, BADGE, BADGE, 1, KEY);
-        gpu_submit();
+        gpu_submit_as(writeback ? GPU_SUBMIT_DRAW | GPU_SUBMIT_WRITEBACK : GPU_SUBMIT_DRAW);
 
         if ((++frames & 255) == 0) {
             uint32_t now = CLINT_MTIME;
@@ -257,7 +258,11 @@ int main(void) {
             mark = now;
         }
         if (UART_LSR & UART_LSR_DATA) {
-            (void)uart_getc();
+            if (uart_getc() == 'w') {
+                writeback = !writeback;
+                uart_puts(writeback ? "gears: writing frames back to RAM\r\n" : "gears: writeback off\r\n");
+                continue;
+            }
             uart_puts("gears: paused at frame ");
             put_number(frames);
             uart_puts("\r\n");
