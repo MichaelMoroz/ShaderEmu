@@ -73,6 +73,7 @@ boot:
 | `linux` | Linux with a built-in initramfs (slow to unpack) |
 | `micropython` | MicroPython REPL on OpenSBI |
 | `rust` | Rust test payload on OpenSBI |
+| `raycast` | our Wolfenstein-style raycaster: walk a textured maze with w/a/s/d or the arrow keys, `x` walks on its own; about 20 frames/s at 160x100 (`programs/raycast`) |
 | `raytrace` | our C raytracer: asks for resolution, bounces, rays per pixel and shadows on the console, then draws to the display (`programs/raytrace`) |
 | `rvc-raytrace` | rvc's Rust raytracer, which fills raw memory instead |
 | `bare` | C bare-metal self test, no firmware |
@@ -83,8 +84,9 @@ The menu appears whenever the command line does not say what to boot (`--image N
 
 The bare-metal images run on a machine built without paging (`NO_PAGING`: `satp` hardwired
 to 0, no translation, no TLBs), which is 14-17% faster and ends in the same state as the full
-machine. Linux needs the MMU and gets the full build. `--paging on|off|auto` or `m` in the menu
-overrides the choice.
+machine. Our own programs go one step further, to a machine with machine mode only
+(`M_MODE_ONLY`: no supervisor or user mode, 3-4% faster again). Linux needs the full build.
+`--machine full|nopaging|mmode|auto` or `m` in the menu overrides the choice.
 
 The console then becomes the emulated machine's terminal: every key goes to the guest, including
 Ctrl+C, arrows and Tab, and the guest does its own echo. **Ctrl+]** quits. It runs the fastest

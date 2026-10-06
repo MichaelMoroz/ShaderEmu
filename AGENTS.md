@@ -40,11 +40,20 @@ watch the emulated machine:
 - `raytrace` waits for five answers on the console before rendering. Script it with
   `--expect width --send ""` style pairs (one per prompt: width, height, bounces, side,
   shadows) and `--until "raytrace: done"`.
+- `raycast` waits for a key at its title screen, then draws only when a key changes the view.
+  `b` runs a fixed 354-frame walk and prints `raycast: demo done` (the benchmark: about 218k
+  instructions per frame); `x` walks forever. Typed input reaches a guest at about 25 keys/s,
+  so give scripted key strings enough time before snapshotting, or the last frame is half drawn.
 - The display is RAM at fixed addresses (`docs/display.md`); the view window decodes it beside
   the memory image. The CPU shader has no display code and should not grow any.
-- `--paging auto` (the default) compiles `NO_PAGING` for the bare-metal images. It must not
-  change emulation for a guest that never enables paging: compare `state` and `instructions`
-  with `--paging on` on a fixed-timestep run (`--fixed-dt 0.004 --frames N --bench 0 --ticks 2048`).
+- `--machine auto` (the default) compiles the smallest machine the image runs on: `NO_PAGING`
+  for rvc's bare-metal images, `M_MODE_ONLY` for our own programs, full for Linux and snapshots.
+  A smaller machine must not change emulation for a guest that stays within it: compare `state`
+  and `instructions` with `--machine full` on a fixed-timestep run (`--fixed-dt 0.004 --frames N
+  --bench 0`).
+- The shader has no switches for old or rejected code paths any more. When removing a switch,
+  dump the DXIL before and after (`rvc_trace12 --dxc --dxc-dump DIR`, with and without each
+  remaining define) and require the files to be identical.
 - `--dxc` implies `NO_DOUBLES` and, without `--rvc`, the `experiments\rvc_opt` shader (upstream
   does not compile with DXC). `--profile` and `--present` are D3D11 only.
 - The D3D12 backend has its own memory view (`rvc_memview12.h`) sharing shader, window and text
