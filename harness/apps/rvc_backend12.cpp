@@ -62,7 +62,7 @@ public:
         }
         check(dx_.dev->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocs_[0].Get(), nullptr, IID_PPV_ARGS(&cl_)), "command list");
         cl_->Close();
-        auto cbd = bufferDesc((UINT64)kSlots * 8 * kCbBytes);
+        auto cbd = bufferDesc((UINT64)kSlots * 16 * kCbBytes);
         auto hu = heapProps(D3D12_HEAP_TYPE_UPLOAD);
         check(dx_.dev->CreateCommittedResource(&hu, D3D12_HEAP_FLAG_NONE, &cbd, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
                                                IID_PPV_ARGS(&cbuf_)), "constant buffer");
@@ -147,7 +147,7 @@ public:
             mat.setVector("CustomRenderTextureSizesAndRotations", zw, zh, 1, 0);
             mat.fillGlobals(P.vs);
             mat.fillGlobals(P.ps);
-            UINT64 base = ((UINT64)slot * 8 + (UINT64)p * 2) * kCbBytes;
+            UINT64 base = ((UINT64)slot * 16 + (UINT64)p * 2) * kCbBytes;   // 16 per frame: two a pass, then the GPU draws
             if (P.vs.hasGlobals) memcpy(cbMapped_ + base, P.vs.scratch.data(), P.vs.scratch.size());
             if (P.ps.hasGlobals) memcpy(cbMapped_ + base + kCbBytes, P.ps.scratch.data(), P.ps.scratch.size());
             cl_->SetPipelineState(P.pso.Get());
@@ -227,7 +227,6 @@ public:
             cl_->RSSetScissorRects(1, &gsc);
             cl_->OMSetRenderTargets(1, &grtv, FALSE, &gdsv);
             cl_->ClearDepthStencilView(gdsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
-            cl_->SetPipelineState(gpuPso_.Get());
             cl_->SetGraphicsRootSignature(gpuRoot_.Get());
             D3D12_GPU_DESCRIPTOR_HANDLE gtable = srvHeap_->GetGPUDescriptorHandleForHeapStart();
             gtable.ptr += (UINT64)(8 * kTableSize + cur) * srvStep_;
@@ -237,7 +236,19 @@ public:
                 D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
             auto toAny = transition(state_[cur].Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, anyStage);
             cl_->ResourceBarrier(1, &toAny);
-            cl_->DrawInstanced(kGpuTriangles * 3, 1, 0, 0);
+            // one draw per pass in use, in order: each has its own blending and depth use
+            for (int p = 0; p < 8; ++p) {
+                if (!((gpuPasses >> p) & 1)) continue;
+                if (gpuVl_.hasGlobals) {
+                    mat.setInt("_GpuPass", p);
+                    mat.fillGlobals(gpuVl_);
+                    UINT64 at = ((UINT64)slot * 16 + 8 + (UINT64)p) * kCbBytes;
+                    memcpy(cbMapped_ + at, gpuVl_.scratch.data(), gpuVl_.scratch.size());
+                    cl_->SetGraphicsRootConstantBufferView(1, cbuf_->GetGPUVirtualAddress() + at);
+                }
+                cl_->SetPipelineState(gpuPso_[p].Get());
+                cl_->DrawInstanced(kGpuTriangles * 3, 1, 0, 0);
+            }
             auto toPixel = transition(state_[cur].Get(), anyStage, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             cl_->ResourceBarrier(1, &toPixel);
             cl_->RSSetViewports(1, &vp);
@@ -469,28 +480,38 @@ private:
         if (!preprocessStage(sp->code, shader.path, rootDir, {{"SHADER_STAGE_VERTEX", "1"}}, cs, vsText, err) ||
             !preprocessStage(sp->code, shader.path, rootDir, {{"SHADER_STAGE_FRAGMENT", "1"}}, cs, psText, err))
             die(err.c_str());
-        StageLayout vl, pl;
+        StageLayout& vl = gpuVl_;
+        StageLayout pl;
         std::vector<uint8_t> vs = dxcCompile(dxc, vsText, sp->vertexEntry, "vs_" + b.dxcSm, b.dxcOpt, vl);
         std::vector<uint8_t> ps = dxcCompile(dxc, psText, sp->fragmentEntry, "ps_" + b.dxcSm, b.dxcOpt, pl);
         for (auto& t : vl.textures)
             if (t.slot != 0) die("GPUDraw: the state texture must be t0");
         for (auto& t : pl.textures)
             if (t.slot != 0) die("GPUDraw: the state texture must be t0");
-        if (vl.hasGlobals || pl.hasGlobals) die("GPUDraw must not use uniforms");
+        if (pl.hasGlobals) die("GPUDraw: uniforms in the vertex shader only");
+        if (vl.globalsSize > kCbBytes) die("GPUDraw: $Globals larger than the upload slot");
 
         D3D12_DESCRIPTOR_RANGE range{};
         range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
         range.NumDescriptors = 1;
-        D3D12_ROOT_PARAMETER rp{};
-        rp.ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-        rp.DescriptorTable.NumDescriptorRanges = 1;
-        rp.DescriptorTable.pDescriptorRanges = &range;
-        rp.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+        // [0] the state texture for both stages, [1] the vertex shader's uniforms
+        D3D12_ROOT_PARAMETER rp[2]{};
+        rp[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        rp[0].DescriptorTable.NumDescriptorRanges = 1;
+        rp[0].DescriptorTable.pDescriptorRanges = &range;
+        rp[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+        rp[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+        rp[1].Descriptor.ShaderRegister = vl.globalsSlot;
+        rp[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
         D3D12_ROOT_SIGNATURE_DESC rsd{};
-        rsd.NumParameters = 1;
-        rsd.pParameters = &rp;
+        rsd.NumParameters = vl.hasGlobals ? 2 : 1;
+        rsd.pParameters = rp;
         ComPtr<ID3DBlob> blob, rsErr;
-        check(D3D12SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &blob, &rsErr), "GPU root signature");
+        if (FAILED(D3D12SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &blob, &rsErr))) {
+            fprintf(stderr, "[d3d12] GPU root signature (uniforms: slot %u, %u bytes): %s\n", vl.globalsSlot, vl.globalsSize,
+                    rsErr ? (const char*)rsErr->GetBufferPointer() : "?");
+            die("GPU root signature");
+        }
         check(dx_.dev->CreateRootSignature(0, blob->GetBufferPointer(), blob->GetBufferSize(), IID_PPV_ARGS(&gpuRoot_)), "GPU root signature");
 
         D3D12_GRAPHICS_PIPELINE_STATE_DESC pd{};
@@ -510,7 +531,20 @@ private:
         pd.NumRenderTargets = 1;
         pd.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
         pd.SampleDesc.Count = 1;
-        check(dx_.dev->CreateGraphicsPipelineState(&pd, IID_PPV_ARGS(&gpuPso_)), "GPU pipeline state");
+        // The eight passes (FRAGMENT_PASS in gpu.h): opaque, alpha, additive, multiply with the
+        // depth test, then the same four without. Only the first writes depth.
+        for (int p = 0; p < 8; ++p) {
+            auto& rt = pd.BlendState.RenderTarget[0];
+            int blend = p & 3;
+            rt.BlendEnable = blend != 0;
+            rt.SrcBlend = rt.SrcBlendAlpha = blend == 3 ? D3D12_BLEND_DEST_COLOR : D3D12_BLEND_SRC_ALPHA;
+            rt.DestBlend = rt.DestBlendAlpha = blend == 1 ? D3D12_BLEND_INV_SRC_ALPHA : blend == 2 ? D3D12_BLEND_ONE : D3D12_BLEND_ZERO;
+            rt.BlendOp = rt.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+            if (blend == 3) rt.SrcBlendAlpha = D3D12_BLEND_ZERO, rt.DestBlendAlpha = D3D12_BLEND_ONE;
+            pd.DepthStencilState.DepthEnable = p < 4;
+            pd.DepthStencilState.DepthWriteMask = p == 0 ? D3D12_DEPTH_WRITE_MASK_ALL : D3D12_DEPTH_WRITE_MASK_ZERO;
+            check(dx_.dev->CreateGraphicsPipelineState(&pd, IID_PPV_ARGS(&gpuPso_[p])), "GPU pipeline state");
+        }
         fprintf(stderr, "[d3d12] pass 'GPUDraw': vs %zu bytes, ps %zu bytes\n", vs.size(), ps.size());
 
         auto hp = heapProps(D3D12_HEAP_TYPE_DEFAULT);
@@ -538,7 +572,8 @@ private:
     }
 
     ComPtr<ID3D12RootSignature> gpuRoot_;
-    ComPtr<ID3D12PipelineState> gpuPso_;
+    ComPtr<ID3D12PipelineState> gpuPso_[8];
+    StageLayout gpuVl_;
     ComPtr<ID3D12Resource> gpuColor_, gpuDepth_;
     ComPtr<ID3D12DescriptorHeap> gpuRtvHeap_, gpuDsvHeap_;
     ComPtr<ID3D12Resource> state_[2], blackTex_;

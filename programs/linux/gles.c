@@ -1,0 +1,476 @@
+// A fixed-point OpenGL (include/GLES/gl.h) on the machine's GPU device, for Nano-X programs.
+// Vertex arrays become compact vertices in GPU memory and one draw command per run of calls
+// with the same state; blending and depth use pick the GPU pass (docs/gpu.md). Nothing is
+// converted to floating point on the way: GLfixed is what the device reads.
+
+#include <GLES/segl.h>
+#include <fcntl.h>
+#include <sched.h>
+#include <stdint.h>
+#include <string.h>
+#include <sys/mman.h>
+#include <nano-X.h>
+
+// ---- GPU memory: the part Nano-X leaves to one program ----
+
+#define GPU_PHYS 0x87000000u
+#define GPU_SIZE 0x00b00000u
+#define LIST_AT 0x00700000u        // the frame's commands
+#define UNIFORMS_AT 0x00730000u    // then its matrix blocks, eight vectors each
+#define VERTICES_AT 0x00740000u    // then its vertices
+#define TEXTURES_AT 0x007c0000u    // then textures, to the end
+#define MAX_COMMANDS 3072
+#define MAX_BLOCKS 512
+#define MAX_MESH 196608            // vertices the device's mesh has for one list
+#define REG_PALETTE 0x400
+#define REG_SUBMIT 0x10            // submit, list address, command count
+#define REG_INTO 0x50              // where the picture is copied: address, width, height, row
+#define REG_LOCK 0x60
+#define REG_BUFFERS 0x64           // goes up when the window system gives a window another buffer
+// The pause hint: this machine ends its frame there, which is when the GPU does its work.
+#define next_frame() __asm__ volatile(".word 0x0100000f")
+
+enum { CMD_CLEAR = 1, CMD_DRAW = 3 };
+enum { VERTEX_CLIP = 1, VERTEX_MODELVIEW = 0x100, VERTEX_QUADS = 0x200, VERTEX_COMPACT = 0x400 };
+enum { FRAGMENT_COLOUR, FRAGMENT_TEXTURE, FRAGMENT_INDEXED, FRAGMENT_KEYED = 0x100 };
+
+static uint8_t* gpu;   // GPU memory from GPU_PHYS
+static GR_WINDOW_ID window;
+static GR_WINDOW_INFO window_info;
+static int swaps;
+static uint32_t buffers_seen;
+
+static uint32_t commands, blocks, mesh_vertices, vertex_top, texture_top = TEXTURES_AT, passes_used;
+static uint32_t* last_draw;   // the command the next vertices may join, with what it was made for
+static uint32_t last_state[6];
+
+// ---- state ----
+
+typedef struct { GLfixed r[4][4]; } matrix;   // rows: what the device takes dot products with
+static matrix modelview[8], projection[4];
+static int modelview_top, projection_top, matrix_mode = GL_MODELVIEW, matrices_dirty = 1;
+static int view_x, view_y, view_w, view_h;
+
+static uint32_t colour = 0x00ffffff, clear_colour;
+static int texturing, depth_test, blending, alpha_test, blend_kind = 1, key_index;
+typedef struct { uint32_t address, width, height, indexed, used; } texture;
+static texture textures[512];
+static uint32_t bound;
+
+typedef struct { const uint8_t* pointer; int size, stride, enabled; } array;
+static array vertex_array, coord_array;
+
+static inline GLfixed mul(GLfixed a, GLfixed b) { return (GLfixed)(((int64_t)a * b) >> 16); }
+static inline GLfixed quotient(GLfixed a, GLfixed b) { return (GLfixed)(((int64_t)a << 16) / b); }
+
+static matrix* current(void) {
+    return matrix_mode == GL_PROJECTION ? &projection[projection_top] : &modelview[modelview_top];
+}
+
+static const matrix identity = {{{65536, 0, 0, 0}, {0, 65536, 0, 0}, {0, 0, 65536, 0}, {0, 0, 0, 65536}}};
+
+// current = current * m
+static void multiply(const matrix* m) {
+    matrix* c = current();
+    matrix out;
+    for (int i = 0; i < 4; i++)
+        for (int j = 0; j < 4; j++)
+            out.r[i][j] = mul(c->r[i][0], m->r[0][j]) + mul(c->r[i][1], m->r[1][j]) + mul(c->r[i][2], m->r[2][j]) +
+                          mul(c->r[i][3], m->r[3][j]);
+    *c = out;
+    matrices_dirty = 1;
+}
+
+// ---- window ----
+
+int seglInit(unsigned int nano_x_window) {
+    int fd = open("/dev/gpu", O_RDWR);
+    if (fd < 0) return -1;
+    void* map = mmap(0, GPU_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0x01000000);   // the device maps from 0x86000000
+    if (map == MAP_FAILED) return -1;
+    gpu = map;
+    window = nano_x_window;
+    GrGetWindowInfo(window, &window_info);
+    modelview[0] = projection[0] = identity;
+    view_w = window_info.width;
+    view_h = window_info.height;
+    vertex_top = VERTICES_AT;
+    return 0;
+}
+
+void seglSize(int* width, int* height) {
+    *width = window_info.width;
+    *height = window_info.height;
+}
+
+void* seglMemory(unsigned int bytes) {
+    uint32_t at = texture_top;
+    bytes = (bytes + 15) & ~15u;
+    if (!gpu || at + bytes > GPU_SIZE) return 0;
+    texture_top += bytes;
+    return gpu + at;
+}
+
+unsigned int* seglPalette(void) { return (unsigned int*)(gpu + REG_PALETTE); }
+
+void seglSwap(void) {
+    volatile uint32_t* regs = (volatile uint32_t*)gpu;
+    // the window has another buffer (it was resized): ask where and how large
+    if (regs[REG_BUFFERS / 4] != buffers_seen || swaps++ == 0) {
+        buffers_seen = regs[REG_BUFFERS / 4];
+        GrGetWindowInfo(window, &window_info);
+    }
+    if (commands && window_info.realized && window_info.surface_address) {
+        for (;;) {
+            while (__atomic_exchange_n(&regs[REG_LOCK / 4], 1, __ATOMIC_ACQUIRE)) sched_yield();
+            if (regs[REG_SUBMIT / 4] == 0) break;
+            __atomic_store_n(&regs[REG_LOCK / 4], 0, __ATOMIC_RELEASE);
+            next_frame();
+        }
+        regs[REG_INTO / 4] = window_info.surface_address;
+        regs[REG_INTO / 4 + 1] = window_info.width;
+        regs[REG_INTO / 4 + 2] = window_info.height;
+        regs[REG_INTO / 4 + 3] = window_info.surface_row;
+        regs[REG_SUBMIT / 4 + 1] = GPU_PHYS + LIST_AT;
+        regs[REG_SUBMIT / 4 + 2] = commands;
+        regs[REG_SUBMIT / 4] = 1 | 4 | passes_used << 8;   // draw, copy into the window; the passes used
+        __atomic_store_n(&regs[REG_LOCK / 4], 0, __ATOMIC_RELEASE);
+        // the list and the textures are memory the program goes on to change: wait until drawn
+        while (regs[REG_SUBMIT / 4] != 0) next_frame();
+    }
+    commands = blocks = mesh_vertices = passes_used = 0;
+    last_draw = 0;
+    vertex_top = VERTICES_AT;
+    matrices_dirty = 1;
+}
+
+// ---- frame ----
+
+static uint32_t* command(uint32_t op, uint32_t mesh) {
+    if (commands == MAX_COMMANDS || mesh_vertices + mesh > MAX_MESH) return 0;
+    uint32_t* c = (uint32_t*)(gpu + LIST_AT) + 16 * commands++;
+    c[0] = op;
+    c[3] = mesh_vertices;
+    mesh_vertices += mesh;
+    return c;
+}
+
+void glClearColorx(GLfixed red, GLfixed green, GLfixed blue, GLfixed alpha) {
+    (void)alpha;
+    clear_colour = (uint32_t)(red >> 8 > 255 ? 255 : red >> 8) << 16 | (uint32_t)(green >> 8 > 255 ? 255 : green >> 8) << 8 |
+                   (uint32_t)(blue >> 8 > 255 ? 255 : blue >> 8);
+}
+
+// The device starts every list with a fresh depth buffer; only the colour needs a command.
+void glClear(GLbitfield mask) {
+    if (!gpu || !(mask & GL_COLOR_BUFFER_BIT)) return;
+    uint32_t* c = command(CMD_CLEAR, 3);
+    if (c) c[1] = clear_colour;
+    last_draw = 0;
+}
+
+void glViewport(GLint x, GLint y, GLsizei width, GLsizei height) {
+    view_x = x;
+    view_y = y;
+    view_w = width;
+    view_h = height;
+    matrices_dirty = 1;
+}
+
+// ---- matrices ----
+
+void glMatrixMode(GLenum mode) { matrix_mode = mode; }
+void glLoadIdentity(void) {
+    *current() = identity;
+    matrices_dirty = 1;
+}
+static void from_columns(matrix* out, const GLfixed* m) {
+    for (int i = 0; i < 4; i++)
+        for (int j = 0; j < 4; j++) out->r[i][j] = m[j * 4 + i];
+}
+void glLoadMatrixx(const GLfixed* m) {
+    from_columns(current(), m);
+    matrices_dirty = 1;
+}
+void glMultMatrixx(const GLfixed* m) {
+    matrix t;
+    from_columns(&t, m);
+    multiply(&t);
+}
+void glPushMatrix(void) {
+    if (matrix_mode == GL_PROJECTION) {
+        if (projection_top < 3) projection[projection_top + 1] = projection[projection_top], projection_top++;
+    } else if (modelview_top < 7) {
+        modelview[modelview_top + 1] = modelview[modelview_top], modelview_top++;
+    }
+}
+void glPopMatrix(void) {
+    if (matrix_mode == GL_PROJECTION) {
+        if (projection_top > 0) projection_top--;
+    } else if (modelview_top > 0) {
+        modelview_top--;
+    }
+    matrices_dirty = 1;
+}
+void glFrustumx(GLfixed l, GLfixed r, GLfixed b, GLfixed t, GLfixed n, GLfixed f) {
+    matrix m = {{{quotient(2 * n, r - l), 0, quotient(r + l, r - l), 0},
+                 {0, quotient(2 * n, t - b), quotient(t + b, t - b), 0},
+                 {0, 0, -quotient(f + n, f - n), -quotient(mul(2 * f, n), f - n)},
+                 {0, 0, -65536, 0}}};
+    multiply(&m);
+}
+void glOrthox(GLfixed l, GLfixed r, GLfixed b, GLfixed t, GLfixed n, GLfixed f) {
+    matrix m = {{{quotient(2 * 65536, r - l), 0, 0, -quotient(r + l, r - l)},
+                 {0, quotient(2 * 65536, t - b), 0, -quotient(t + b, t - b)},
+                 {0, 0, -quotient(2 * 65536, f - n), -quotient(f + n, f - n)},
+                 {0, 0, 0, 65536}}};
+    multiply(&m);
+}
+void glTranslatex(GLfixed x, GLfixed y, GLfixed z) {
+    matrix m = identity;
+    m.r[0][3] = x;
+    m.r[1][3] = y;
+    m.r[2][3] = z;
+    multiply(&m);
+}
+void glScalex(GLfixed x, GLfixed y, GLfixed z) {
+    matrix m = identity;
+    m.r[0][0] = x;
+    m.r[1][1] = y;
+    m.r[2][2] = z;
+    multiply(&m);
+}
+// Sine of an angle in degrees (16.16), by a polynomial on the first quarter turn.
+static GLfixed sine(GLfixed degrees) {
+    int64_t d = degrees % (360 * 65536);
+    if (d < 0) d += 360 * 65536;
+    int negative = d >= 180 * 65536;
+    if (negative) d -= 180 * 65536;
+    if (d > 90 * 65536) d = 180 * 65536 - d;
+    GLfixed x = (GLfixed)(d * 1144 >> 16);   // radians: pi/180 is 1144/65536
+    GLfixed x2 = mul(x, x);
+    GLfixed s = mul(x, 65536 - mul(x2, 10923 - mul(x2, 546 - mul(x2, 13))));   // 1/6, 1/120, 1/5040
+    return negative ? -s : s;
+}
+void glRotatex(GLfixed degrees, GLfixed x, GLfixed y, GLfixed z) {
+    GLfixed s = sine(degrees), c = sine(degrees + 90 * 65536);
+    matrix m = identity;
+    if (x && !y && !z) {
+        if (x < 0) s = -s;
+        m.r[1][1] = c, m.r[1][2] = -s, m.r[2][1] = s, m.r[2][2] = c;
+    } else if (y && !x && !z) {
+        if (y < 0) s = -s;
+        m.r[0][0] = c, m.r[0][2] = s, m.r[2][0] = -s, m.r[2][2] = c;
+    } else if (z && !x && !y) {
+        if (z < 0) s = -s;
+        m.r[0][0] = c, m.r[0][1] = -s, m.r[1][0] = s, m.r[1][1] = c;
+    } else {
+        return;
+    }
+    multiply(&m);
+}
+
+// ---- state ----
+
+static int* flag(GLenum what) {
+    switch (what) {
+        case GL_TEXTURE_2D: return &texturing;
+        case GL_DEPTH_TEST: return &depth_test;
+        case GL_BLEND: return &blending;
+        case GL_ALPHA_TEST: return &alpha_test;
+    }
+    return 0;
+}
+void glEnable(GLenum what) {
+    int* f = flag(what);
+    if (f) *f = 1;
+}
+void glDisable(GLenum what) {
+    int* f = flag(what);
+    if (f) *f = 0;
+}
+void glBlendFunc(GLenum source, GLenum destination) {
+    if (destination == GL_ONE_MINUS_SRC_ALPHA) blend_kind = 1;
+    else if (destination == GL_ONE) blend_kind = 2;
+    else if (source == GL_DST_COLOR || destination == GL_SRC_COLOR) blend_kind = 3;
+}
+void glColorKeySE(GLint index) { key_index = index; }
+
+static uint32_t byte_of(GLfixed v) { return v <= 0 ? 0 : v >= 65536 ? 255 : (uint32_t)v >> 8; }
+void glColor4x(GLfixed red, GLfixed green, GLfixed blue, GLfixed alpha) {
+    colour = (255 - byte_of(alpha)) << 24 | byte_of(red) << 16 | byte_of(green) << 8 | byte_of(blue);
+}
+void glColor4ub(GLubyte red, GLubyte green, GLubyte blue, GLubyte alpha) {
+    colour = (uint32_t)(255 - alpha) << 24 | (uint32_t)red << 16 | (uint32_t)green << 8 | blue;
+}
+
+static array* array_of(GLenum which) {
+    return which == GL_VERTEX_ARRAY ? &vertex_array : which == GL_TEXTURE_COORD_ARRAY ? &coord_array : 0;
+}
+void glEnableClientState(GLenum which) {
+    array* a = array_of(which);
+    if (a) a->enabled = 1;
+}
+void glDisableClientState(GLenum which) {
+    array* a = array_of(which);
+    if (a) a->enabled = 0;
+}
+void glVertexPointer(GLint size, GLenum type, GLsizei stride, const GLvoid* pointer) {
+    (void)type;
+    vertex_array.pointer = pointer, vertex_array.size = size, vertex_array.stride = stride ? stride : size * 4;
+}
+void glTexCoordPointer(GLint size, GLenum type, GLsizei stride, const GLvoid* pointer) {
+    (void)type;
+    coord_array.pointer = pointer, coord_array.size = size, coord_array.stride = stride ? stride : size * 4;
+}
+
+// ---- textures ----
+
+void glGenTextures(GLsizei n, GLuint* out) {
+    for (uint32_t t = 1; t < 512 && n > 0; t++)
+        if (!textures[t].used) {
+            textures[t].used = 1;
+            textures[t].address = 0;
+            *out++ = t;
+            n--;
+        }
+    while (n-- > 0) *out++ = 0;
+}
+// Texture memory is taken in order and given back only from the end: enough for a program
+// that drops all of a level's textures together.
+void glDeleteTextures(GLsizei n, const GLuint* which) {
+    for (int i = 0; i < n; i++)
+        if (which[i] < 512) textures[which[i]].used = 0;
+    uint32_t top = TEXTURES_AT;
+    for (uint32_t t = 1; t < 512; t++) {
+        texture* x = &textures[t];
+        uint32_t bytes = x->indexed ? x->width * x->height : x->width * x->height * 4;
+        if (x->used && x->address >= TEXTURES_AT && x->address + bytes > top) top = (x->address + bytes + 15) & ~15u;
+    }
+    if (top < texture_top) texture_top = top;
+}
+void glBindTexture(GLenum target, GLuint which) {
+    (void)target;
+    bound = which < 512 ? which : 0;
+}
+void seglTexturePointer(const void* pixels, GLsizei width, GLsizei height, GLenum internal) {
+    texture* x = &textures[bound];
+    x->address = (uint32_t)((const uint8_t*)pixels - gpu);
+    x->width = width;
+    x->height = height;
+    x->indexed = internal == GL_COLOR_INDEX8_EXT;
+}
+void glTexImage2D(GLenum target, GLint level, GLint internal, GLsizei width, GLsizei height, GLint border, GLenum format,
+                  GLenum type, const GLvoid* pixels) {
+    (void)target, (void)border, (void)format, (void)type;
+    if (!gpu || level != 0 || !bound) return;
+    int indexed = internal == GL_COLOR_INDEX8_EXT;
+    uint8_t* to = seglMemory(indexed ? width * height : width * height * 4);
+    if (!to) return;
+    if (indexed) {
+        if (pixels) memcpy(to, pixels, width * height);
+    } else if (pixels) {
+        const uint8_t* p = pixels;
+        uint32_t* w = (uint32_t*)to;
+        for (int i = 0; i < width * height; i++, p += 4)
+            w[i] = (uint32_t)(255 - p[3]) << 24 | (uint32_t)p[0] << 16 | (uint32_t)p[1] << 8 | p[2];
+    }
+    seglTexturePointer(to, width, height, internal);
+}
+void glColorTableEXT(GLenum target, GLenum internal, GLsizei count, GLenum format, GLenum type, const GLvoid* table) {
+    (void)target, (void)internal, (void)format, (void)type;
+    const uint8_t* p = table;
+    uint32_t* words = seglPalette();
+    for (int i = 0; i < count && i < 256; i++, p += 3) words[i] = (uint32_t)p[0] << 16 | (uint32_t)p[1] << 8 | p[2];
+}
+
+// ---- drawing ----
+
+// The block of vectors a draw reads its matrices from: the projection with the viewport folded
+// in (rows 0-3), then the modelview (rows 4-6), which the device applies first.
+static uint32_t matrix_block(void) {
+    if (matrices_dirty && blocks < MAX_BLOCKS) {
+        GLfixed* u = (GLfixed*)(gpu + UNIFORMS_AT) + 32 * blocks++;
+        const matrix* p = &projection[projection_top];
+        const matrix* m = &modelview[modelview_top];
+        int w = window_info.width ? window_info.width : 1, h = window_info.height ? window_info.height : 1;
+        GLfixed sx = (GLfixed)(((int64_t)view_w << 16) / w), ox = (GLfixed)(((int64_t)(2 * view_x + view_w) << 16) / w) - 65536;
+        GLfixed sy = (GLfixed)(((int64_t)view_h << 16) / h), oy = (GLfixed)(((int64_t)(2 * view_y + view_h) << 16) / h) - 65536;
+        for (int j = 0; j < 4; j++) {
+            u[j] = mul(sx, p->r[0][j]) + mul(ox, p->r[3][j]);
+            u[4 + j] = mul(sy, p->r[1][j]) + mul(oy, p->r[3][j]);
+            u[8 + j] = p->r[2][j];
+            u[12 + j] = p->r[3][j];
+            u[16 + j] = m->r[0][j];
+            u[20 + j] = m->r[1][j];
+            u[24 + j] = m->r[2][j];
+        }
+        matrices_dirty = 0;
+    }
+    return GPU_PHYS + UNIFORMS_AT + 128 * (blocks ? blocks - 1 : 0);
+}
+
+// One compact vertex (a texel): position, and the texture coordinates in 1/1024ths.
+static inline void put(uint32_t* to, int index) {
+    const GLfixed* v = (const GLfixed*)(vertex_array.pointer + (size_t)index * vertex_array.stride);
+    to[0] = v[0];
+    to[1] = v[1];
+    to[2] = vertex_array.size > 2 ? v[2] : 0;
+    if (coord_array.enabled) {
+        const GLfixed* t = (const GLfixed*)(coord_array.pointer + (size_t)index * coord_array.stride);
+        to[3] = ((uint32_t)(t[0] >> 6) & 0xffff) | (uint32_t)(t[1] >> 6) << 16;
+    } else {
+        to[3] = 0;
+    }
+}
+
+void glDrawArrays(GLenum mode, GLint first, GLsizei count) {
+    if (!gpu || !vertex_array.enabled || count < 3) return;
+    const texture* x = &textures[texturing ? bound : 0];
+    uint32_t pass = (blending ? blend_kind : 0) + (depth_test ? 0 : 4);
+    uint32_t fragment = (texturing && x->address ? (x->indexed ? FRAGMENT_INDEXED : FRAGMENT_TEXTURE) : FRAGMENT_COLOUR) | pass << 16;
+    if (alpha_test && x->indexed && texturing) fragment |= FRAGMENT_KEYED;
+    int quads = mode == GL_QUADS;
+    uint32_t stored = quads ? (uint32_t)count & ~3u : mode == GL_TRIANGLES ? (uint32_t)count - count % 3 : ((uint32_t)count - 2) * 3;
+    uint32_t mesh = quads ? stored / 4 * 6 : stored;
+    uint32_t vertex = VERTEX_CLIP | VERTEX_MODELVIEW | VERTEX_COMPACT | (quads ? VERTEX_QUADS : 0);
+    if (vertex_top + stored * 16 > TEXTURES_AT || mesh_vertices + mesh > MAX_MESH) return;
+    uint32_t block = matrix_block();
+    uint32_t state[6] = {vertex, fragment, block, x->address, colour, (uint32_t)key_index};
+    uint32_t* to = (uint32_t*)(gpu + vertex_top);
+
+    // more of the same joins the command before: one command, and one draw, per run of state
+    if (last_draw && last_draw == (uint32_t*)(gpu + LIST_AT) + 16 * (commands - 1) && !memcmp(state, last_state, sizeof state)) {
+        last_draw[2] += mesh;
+        mesh_vertices += mesh;
+    } else {
+        uint32_t* c = command(CMD_DRAW, mesh);
+        if (!c) return;
+        c[1] = GPU_PHYS + vertex_top;
+        c[2] = mesh;
+        c[4] = vertex;
+        c[5] = fragment;
+        c[6] = block;
+        c[7] = GPU_PHYS + x->address;
+        c[8] = x->width;
+        c[9] = x->height;
+        c[10] = key_index;
+        c[11] = colour;
+        last_draw = c;
+        memcpy(last_state, state, sizeof state);
+        passes_used |= (1u << pass) & 0xfe;
+    }
+    if (mode == GL_TRIANGLE_FAN) {
+        for (int i = 1; i + 1 < count; i++, to += 12) put(to, first), put(to + 4, first + i), put(to + 8, first + i + 1);
+    } else if (mode == GL_TRIANGLE_STRIP) {
+        for (int i = 0; i + 2 < count; i++, to += 12)
+            put(to, first + i + (i & 1)), put(to + 4, first + i + 1 - (i & 1)), put(to + 8, first + i + 2);
+    } else {
+        for (uint32_t i = 0; i < stored; i++, to += 4) put(to, first + i);
+    }
+    vertex_top += stored * 16;
+}
+
+void glFlush(void) {}
+void glFinish(void) {}
+GLenum glGetError(void) { return GL_NO_ERROR; }

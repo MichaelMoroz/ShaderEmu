@@ -17,6 +17,9 @@
 #define SUBMIT_WRITEBACK 2   // afterwards copy the picture into the RAM framebuffer
 #define SUBMIT_INTO 4        // afterwards copy it into the rectangle of RAM at GPU_INTO, whose size the picture has
 #define SUBMIT_COPIES (SUBMIT_WRITEBACK | SUBMIT_INTO)
+// Bits 9-15: the list has commands for passes 1-7. It is drawn, and the submit word taken back,
+// once the host draws all of those (it learns of them by reading these words back).
+#define SUBMIT_PASSES(submit) (((submit) >> 8) & 0xfe)
 
 #define GPU_TARGET 2048.0       // the GPU's render target is GPU_TARGET pixels square
 #define GPU_MAX_COMMANDS 4096
@@ -31,13 +34,21 @@
 #define VERTEX_CLIP 1     // uniforms c0-c3 are a clip matrix; colour is the vertex colour
 #define VERTEX_LIT 2      // also c4-c6 normal matrix, c7 light direction, c8 diffuse, c9 ambient
 #define VERTEX_MODELVIEW 0x100   // flag: c0-c3 is the projection alone and c4-c6 the modelview's rows
+#define VERTEX_QUADS 0x200       // flag: the buffer holds four corners per quad, in order round it, for every six vertices drawn
+#define VERTEX_COMPACT 0x400     // flag: a vertex is one texel: x, y, z, then u | v << 16 in 1/1024ths; the colour is the command's word 11
 
 // How fragments are coloured (low byte), plus flags.
 #define FRAGMENT_COLOUR 0     // interpolated colour
 #define FRAGMENT_TEXTURE 1    // 0x00RRGGBB texture times colour
 #define FRAGMENT_INDEXED 2    // 8-bit texture through the display palette, times colour
 #define FRAGMENT_MASK 3       // 1-bit texture, rows of whole bytes, leftmost bit highest: set bits take the colour
+#define FRAGMENT_RGB24 4      // texture of three bytes a pixel (red, green, blue), rows with no padding, times colour
 #define FRAGMENT_KEYED 0x100  // flag: texels equal to the key colour (or index) are not drawn
+// Bits 16-18 of the same word: the pass the command is drawn in. Passes are drawn in order, each
+// with fixed blending and depth use; within a pass commands keep the list's order.
+//   0 opaque   1 alpha blend   2 additive   3 multiply     depth tested; only pass 0 writes it
+//   4 opaque   5 alpha blend   6 additive   7 multiply     no depth
+#define FRAGMENT_PASS(mode) (((mode) >> 16) & 7)
 
 uint4 ram(uint index) {
     return GPU_STATE[uint2(index % 2048, 64 + index / 2048)];
@@ -54,8 +65,9 @@ uint ram_word(uint address) {
 float4 from_fixed(uint4 t) {
     return float4(asint(t)) / 65536.0;
 }
+// A colour word is 0xTTRRGGBB: T is transparency, so that the usual 0x00RRGGBB is opaque.
 float4 colour_of(uint v) {
-    return float4((v >> 16) & 0xff, (v >> 8) & 0xff, v & 0xff, 255) / 255.0;
+    return float4((v >> 16) & 0xff, (v >> 8) & 0xff, v & 0xff, 255 - (v >> 24)) / 255.0;
 }
 
 struct gpu_varyings {
@@ -83,6 +95,9 @@ gpu_varyings gpu_vertex(uint id) {
     uint4 ctrl = ram(GPU_CTRL);
     uint list = texel_of(ctrl.g), count = min(ctrl.b, GPU_MAX_COMMANDS);
     if ((ctrl.r & SUBMIT_DRAW) == 0 || count == 0) return o;
+#ifdef GPU_PASS_UNIFORMS
+    if ((SUBMIT_PASSES(ctrl.r) & ~_GpuPasses) != 0) return o;   // not until every pass it needs is drawn
+#endif
     uint4 disp = ram(GPU_DISPLAY);
     float2 size = float2(disp.g, disp.b);
     if (ctrl.r & SUBMIT_INTO) {
@@ -106,6 +121,10 @@ gpu_varyings gpu_vertex(uint id) {
         uint slots = op == CMD_CLEAR ? 3 : op == CMD_RECT ? 6 : op == CMD_DRAW ? head.b : 0;
         if (id < head.a || id >= head.a + slots) return o;
         uint k = id - head.a;
+#ifdef GPU_PASS_UNIFORMS
+        uint drawn_in = op == CMD_RECT ? FRAGMENT_PASS(ram(base + 2).r) : op == CMD_DRAW ? FRAGMENT_PASS(ram(base + 1).g) : 0;
+        if (drawn_in != _GpuPass) return o;
+#endif
         [branch]
         if (op == CMD_CLEAR) {
             // one triangle over the whole picture, at the far plane
@@ -127,10 +146,26 @@ gpu_varyings gpu_vertex(uint id) {
             // head.g vertex buffer, head.b count; then vertex mode, fragment mode, uniforms,
             // texture address; width, height, key
             uint4 how = ram(base + 1), more = ram(base + 2);
-            uint v = texel_of(head.g) + 4 * k, u = texel_of(how.b);
-            float4 pos = from_fixed(ram(v)), normal = from_fixed(ram(v + 1));
-            o.uv = from_fixed(ram(v + 2)).xy;
-            o.colour = from_fixed(ram(v + 3));
+            uint u = texel_of(how.b);
+            if (how.r & VERTEX_QUADS) {
+                // triangles 0 1 2 and 0 2 3 of each quad's corners
+                uint part = k % 6;
+                k = (k / 6) * 4 + (part < 3 ? part : part == 3 ? 0 : part - 2);
+            }
+            float4 pos, normal = 0;
+            [branch]
+            if (how.r & VERTEX_COMPACT) {
+                uint4 t = ram(texel_of(head.g) + k);
+                pos = float4(from_fixed(t).xyz, 1.0);
+                o.uv = float2(asint(t.a << 16) >> 16, asint(t.a) >> 16) / 1024.0;
+                o.colour = colour_of(more.a);
+            } else {
+                uint v = texel_of(head.g) + 4 * k;
+                pos = from_fixed(ram(v));
+                normal = from_fixed(ram(v + 1));
+                o.uv = from_fixed(ram(v + 2)).xy;
+                o.colour = from_fixed(ram(v + 3));
+            }
             o.texture_info = uint4(how.g, how.a, more.r, more.g);
             o.key = more.b;
             [branch]
@@ -173,19 +208,25 @@ float4 gpu_fragment(gpu_varyings i) {
             n = y * ((width + 7) >> 3) + (x >> 3);
             texel = (ram_word(i.texture_info.g + (n & ~3u)) >> (8 * (n & 3))) & 0xff;
             if (((texel << (x & 7)) & 0x80) == 0) discard;
-            return float4(saturate(c.rgb), 1.0);
+            return saturate(c);
         }
         if (mode == FRAGMENT_INDEXED) {
             texel = (ram_word(i.texture_info.g + (n & ~3u)) >> (8 * (n & 3))) & 0xff;
             if ((i.texture_info.r & FRAGMENT_KEYED) && texel == i.key) discard;
             texel = ram_word(0x87000400 + 4 * texel);
+        } else if (mode == FRAGMENT_RGB24) {
+            // the three bytes may run into the next word
+            uint at = i.texture_info.g + ((3 * n) & ~3u), shift = 8 * ((3 * n) & 3);
+            texel = ram_word(at) >> shift;
+            if (shift > 8) texel |= ram_word(at + 4) << (32 - shift);
+            texel = (texel & 0xff) << 16 | (texel & 0xff00) | ((texel >> 16) & 0xff);
         } else {
             texel = ram_word(i.texture_info.g + 4 * n);
             if ((i.texture_info.r & FRAGMENT_KEYED) && texel == i.key) discard;
         }
         c *= colour_of(texel);
     }
-    return float4(saturate(c.rgb), 1.0);
+    return saturate(c);
 }
 
 #ifdef GPU_WRITEBACK
@@ -262,10 +303,16 @@ uint4 gpu_control(uint2 pos) {
     uint index = (pos.y - 64) * 2048 + pos.x;
     // A submitted list has been drawn by now: the GPU is free for the next one. A copy it asked
     // for is noted in GPU_COPY, for the next commit to make.
-    if (index == GPU_CTRL) return keep.r == 0 ? keep : uint4(0, keep.g, keep.b, keep.a + 1);
+    // (A list that needs passes the host is not drawing yet waits, submitted, until it is.)
+#ifdef GPU_INPUT
+    bool served = (SUBMIT_PASSES(ram(GPU_CTRL).r) & ~_GpuPasses) == 0;
+#else
+    bool served = true;
+#endif
+    if (index == GPU_CTRL) return (keep.r == 0 || !served) ? keep : uint4(0, keep.g, keep.b, keep.a + 1);
     if (index == GPU_COPY) {
         uint4 ctrl = ram(GPU_CTRL), into = ram(GPU_INTO);
-        if ((ctrl.r & SUBMIT_DRAW) == 0 || (ctrl.r & SUBMIT_COPIES) == 0) return keep;
+        if (!served || (ctrl.r & SUBMIT_DRAW) == 0 || (ctrl.r & SUBMIT_COPIES) == 0) return keep;
         return uint4(ctrl.r & SUBMIT_COPIES, into.r, (into.g & 0xffff) | (into.b << 16), into.a);
     }
 #ifdef GPU_INPUT

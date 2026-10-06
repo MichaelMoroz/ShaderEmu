@@ -77,6 +77,16 @@ watch the emulated machine:
   PowerShell: Git Bash rewrites the `/mnt/c` path), then `make_linux_image.py` and a new shell
   snapshot. `nx` starts it in the guest. To check its drawing, run the same scene with
   `NANOX_SOFTWARE=1` and compare the framebuffers in RAM (`docs/nanox.md`).
+- The desktop's own programs (`linux\apps`, `docs/nanox.md`): `wsl -- bash
+  /mnt/c/Development/ShaderX86/linux/apps/build.sh` after Nano-X's build, and
+  `python tools\make_wallpaper.py [FOLDER ...]` for the desktop's pictures (needs the network
+  for the Unsplash ones), then `make_linux_image.py` and a new shell snapshot.
+- Start the server by hand as `nano-X -p &`: without `-p` it ends when its last program has
+  gone, and what follows cannot reach it. Windows are placed in the order programs connect,
+  so a test that clicks at fixed places must start its programs a few seconds apart.
+- A PPM picture is drawn by the GPU from the file's bytes (`GrDrawImageFromFile`). To check
+  one, stretch the file over the same rectangle on the host with nearest sampling and compare
+  with the window's buffer: all pixels match within one texel across.
 - To see where a guest spends instructions, pass `--pc-log FILE --ticks 2048` and run
   `python tools\pc_profile.py FILE kernel=vmlinux.nm server=nano-X.nm` (`nm -n` output; the
   unstripped binaries are in `~/shaderemu-linux`). Measure before optimising drawing: the
@@ -213,6 +223,30 @@ A cold boot to the `/ #` prompt takes about 80 s on an RTX 5090 with upstream on
   list from the state instead and draws one quad per band; the harness binds the state texture
   to that stage and draws 33 quads.
 - A guest ends its frame from user mode with `pause` (`0x0100000f`); `wfi` traps there.
+- The GPU draws a list in up to eight passes (`docs/gpu.md`); `programs\blend` is their test
+  card and must match `tools\gpu_reference.py` on both backends. `pass` is a reserved word
+  under FXC: a shader that names a variable so compiles with DXC and fails on D3D11.
+- Re-make `rvc_shell.snap` after every `make_linux_image.py`, not only when a program changes:
+  the snapshot's kernel has the old image's file layout cached and reads garbage from a new
+  one (a missing WAD lump, a crash in a program that worked).
+- Doom (`docs/doom.md`): `linux\nanox\doom.sh`. To compare two ways of drawing it, hold both
+  at one game tic with `DOOM_STOP_TIC=N` and compare the windows; a check against the buffer
+  the GPU reads only proves the copy.
+- Text with a backslash in it (`\n` in a C string, a Windows path) does not survive a bash
+  heredoc into Python here: write it with the edit tools.
+- Our Linux image boots without firmware (`docs/boot.md`): the harness defines `SBI_HLE` for it
+  and for snapshots, and `--firmware` boots OpenSBI as before. A snapshot from one does not run
+  on the other; `rvc_trace12` needs `--define SBI_HLE --define L1_LOCAL` to match the harness.
+  The state hashes above were taken with firmware and have not been re-taken.
+- To check a shader change keeps emulation the same, cold-boot twice with `--fixed-dt 0.004
+  --frames 2600 --bench 0 --save-state`, before and after, and compare with a state diff: RAM
+  and registers must be equal (leftover write-cache texels may differ).
+- In the tick shader a `switch` costs about 4 ns per case, an array read 10 to 15 ns, a branch
+  4 ns and arithmetic 0.7 ns (`docs/boot.md`). Do not add a switch to the fast path.
+- Resuming a snapshot of our image needs `--image linux-net` as well as `--load-state`:
+  without it the root filesystem is upstream's and none of our programs are found.
+- `tools\boot_profile.py` with `rvc_harness --frame-log FILE`: boot time, the median rate and
+  why frames ended early.
 - A shader edit costs one FXC compile (90 s alone, about 3 min with three in parallel). Compile
   variants in parallel, then benchmark them one at a time.
 

@@ -10,6 +10,7 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sched.h>
+#include <stdio.h>
 #include <unistd.h>
 #include "device.h"
 #include "genfont.h"
@@ -37,6 +38,8 @@
 #define REG_FRAMES	7
 #define REG_INTO	20		/* where the picture is copied: address, width, height, row */
 #define REG_LOCK	24		/* taken (with an atomic swap) by whoever writes the words above */
+#define REG_BUFFERS	25		/* goes up when a window gets another buffer: programs that draw into
+					 * their window themselves ask where it is again */
 #define REG_COPY	28		/* nonzero: the list drawn last has a copy still to be made */
 #define REG_KEYBOARD	12		/* KEYBOARD_OWNED while a program reads the keyboard device */
 #define REG_COPIES	14		/* copies of a drawn picture into RAM made so far */
@@ -50,6 +53,7 @@
 #define FRAG_COLOUR	0
 #define FRAG_TEXTURE	1
 #define FRAG_MASK	3
+#define FRAG_RGB24	4
 #define SUBMIT_DRAW	1
 #define SUBMIT_INTO	4		/* then copy the picture to the given rectangle of RAM */
 /* The pause hint: this machine ends its frame there, which is when the GPU does its work. */
@@ -64,6 +68,7 @@ struct surface {
 };
 
 extern int gr_mode;
+extern int (*gd_drawpicture)(PSD psd, MWCOORD x, MWCOORD y, MWCOORD width, MWCOORD height, const char *path);
 extern void (*gd_hwcursor)(MWCOORD x, MWCOORD y, MWCOORD width, MWCOORD height, int visible,
 	const MWIMAGEBITS *image, const MWIMAGEBITS *mask, MWPIXELVAL fg, MWPIXELVAL bg);
 
@@ -463,6 +468,67 @@ gpu_maskbytemsb(PSD psd, PMWBLITPARMS gc)
 	soft.BlitCopyMaskMonoByteMSB(psd, gc);
 }
 
+/*
+ * A PPM file stretched over a rectangle: its rows are read straight into texture memory, as
+ * many as fit at a time, and the GPU scales them. 0 leaves the file to the engine's decoder.
+ */
+static int
+gpu_picture(PSD psd, MWCOORD x, MWCOORD y, MWCOORD width, MWCOORD height, const char *path)
+{
+	struct surface *s;
+	int pw = 0, ph = 0, most = 0, start = 0, x0, x1, y0, y1, band, rows, j, fd;
+	char head[64];
+	volatile uint32_t *c;
+
+	if (!is_surface(psd) || (fd = open(path, O_RDONLY)) < 0)
+		return 0;
+	j = read(fd, head, sizeof head - 1);
+	head[j > 0 ? j : 0] = 0;
+	if (sscanf(head, "P6 %d %d %d%n", &pw, &ph, &most, &start) != 3 || most != 255 || pw < 1 || ph < 1 ||
+	    (rows = (DATA_END - DATA_OFFSET) / (3 * pw)) < 1) {
+		close(fd);
+		return 0;
+	}
+	start++;	/* one white space ends the header */
+	if (width <= 0) width = pw;
+	if (height <= 0) height = ph;
+	s = draw_on(psd);
+	flush();
+	x0 = x > s->x ? x : s->x;
+	x1 = x + width < s->x + s->w ? x + width : s->x + s->w;
+	y1 = y + height < s->y + s->h ? y + height : s->y + s->h;
+	for (y0 = y > s->y ? y : s->y; x0 < x1 && y0 < y1; y0 += band) {
+		band = !accelerate ? 1 : y1 - y0 < rows ? y1 - y0 : rows;
+		for (j = 0; j < band; j++)
+			if (pread(fd, gpu + DATA_OFFSET + j * 3 * pw, 3 * pw,
+				  start + (off_t)((long long)(y0 + j - y) * ph / height) * 3 * pw) != 3 * pw)
+				break;
+		if (!accelerate) {
+			/* without the GPU: the same texels, a row at a time */
+			uint32_t *to = (uint32_t *)(gpu + s->at) + (y0 - s->y) * s->w - s->x;
+			const unsigned char *row = gpu + DATA_OFFSET, *p;
+			uint32_t step = ((uint32_t)pw << 16) / width;	/* texels a pixel, 16.16 */
+			uint32_t at = (uint32_t)(((2LL * (x0 - x) + 1) * pw << 15) / width);
+
+			for (j = x0; j < x1; j++, at += step) {
+				p = row + 3 * (at >> 16 < (uint32_t)pw ? at >> 16 : (uint32_t)pw - 1);
+				to[j] = 0xff000000u | (uint32_t)p[0] << 16 | (uint32_t)p[1] << 8 | p[2];
+			}
+			continue;
+		}
+		queue(x0, y0, x1, y0 + band, 0xffffff, FRAG_RGB24, DATA_OFFSET, pw, band, 0, 0);
+		/* the part of the picture's width this rectangle shows, as 16.16 fractions */
+		c = (volatile uint32_t *)(gpu + LIST_OFFSET) + 16 * (commands - 1);
+		c[12] = (uint32_t)(((long long)(x0 - x) << 16) / width);
+		c[13] = 0;
+		c[14] = (uint32_t)(((long long)(x1 - x) << 16) / width);
+		c[15] = 65536;
+		flush();
+	}
+	close(fd);
+	return 1;
+}
+
 /* The remaining blits read or blend in software, on a buffer that is up to date. */
 #define SOFTWARE_BLIT(name, member) \
 static void name(PSD psd, PMWBLITPARMS gc) { software(psd); soft.member(psd, gc); }
@@ -497,7 +563,7 @@ static PSD
 surface_for(void *owner, MWCOORD x, MWCOORD y, MWCOORD width, MWCOORD height)
 {
 	static struct surface *last;
-	struct surface *s, *spare = NULL;
+	struct surface *s, *spare = NULL, *old = NULL;
 	uint32_t at;
 
 	if (last && last->owner == owner)
@@ -516,18 +582,31 @@ surface_for(void *owner, MWCOORD x, MWCOORD y, MWCOORD width, MWCOORD height)
 			}
 			return &s->psd;
 		}
-		/* another size: a new buffer, which the window is then asked to paint */
+		/* another size: a new buffer, which takes over what the old one shows */
 		if (s == target)
 			flush();
-		pool_give(s->at);
-		s->owner = NULL;
-		spare = s;
+		old = spare = s;
 	}
-	if (!spare || width <= 0 || height <= 0 || (at = pool_take((uint32_t)width * height * 4)) == ~0u)
+	if (!spare || width <= 0 || height <= 0 || (at = pool_take((uint32_t)width * height * 4)) == ~0u) {
+		if (old) {
+			pool_give(old->at);
+			old->owner = NULL;
+		}
 		return &scrdev;		/* nowhere to put it: it draws on the desktop */
+	}
+	if (old) {
+		int rows = old->h < height ? old->h : height, columns = old->w < width ? old->w : width, row;
+
+		for (row = 0; row < rows; row++)
+			memcpy(gpu + at + (uint32_t)row * width * 4, gpu + old->at + (uint32_t)row * old->w * 4, columns * 4);
+		pool_give(old->at);
+	}
 	s = spare;
+	regs[REG_BUFFERS]++;
 	s->psd = scrdev;
 	s->psd.pitch = width * 4;
+	/* the engine clips to these: a window is drawn past the screen's right and bottom edges */
+	s->psd.xvirtres = s->psd.yvirtres = 16384;
 	s->owner = owner;
 	s->at = at;
 	s->w = width;
@@ -740,6 +819,7 @@ gpu_open(PSD psd)
 	memset(gpu + LAYERS_OFFSET, 0, 4096);
 	regs[REG_CURSOR + 2] = 0;
 	gd_hwcursor = gpu_cursor;
+	gd_drawpicture = gpu_picture;
 	gd_compositor = &compositor;
 	regs[REG_WIDTH] = width;
 	regs[REG_HEIGHT] = height;

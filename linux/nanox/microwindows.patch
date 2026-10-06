@@ -1,5 +1,5 @@
 diff --git a/src/demos/nanox/nxterm.c b/src/demos/nanox/nxterm.c
-index 91ec808..c83d841 100755
+index 91ec808..1c8d4c9 100755
 --- a/src/demos/nanox/nxterm.c
 +++ b/src/demos/nanox/nxterm.c
 @@ -74,13 +74,22 @@
@@ -28,7 +28,154 @@ index 91ec808..c83d841 100755
  //#define stdbackground GR_COLOR_GAINSBORO
  //#define stdbackground BLUE
  #define	LINEBUF         stdcol
-@@ -549,28 +558,28 @@ void rendition(int escvalue) {
+@@ -160,6 +169,125 @@ void rendition(int escvalue);
+ 
+ /* **************************************************************************/
+ 
++/*
++ * What each character cell shows, kept beside the drawing: every text, fill and copy the
++ * terminal draws goes through the three functions below, which do the same to the cells. The
++ * rows that scroll off the top go to a history, which Shift+Page Up brings back.
++ */
++#define CELL_ROWS	128
++#define CELL_COLS	160
++#define HISTORY_ROWS	400
++static char cells[CELL_ROWS][CELL_COLS];
++static char history[HISTORY_ROWS][CELL_COLS];
++static int history_count;		/* rows ever put in; the newest is at (count - 1) % HISTORY_ROWS */
++static int back;			/* rows scrolled back; 0 shows the live screen */
++static GR_WINDOW_ID live;		/* the live screen's picture while scrolled back */
++static int in_cursor;
++
++static void cell_text(GR_DRAW_ID id, GR_GC_ID gc, GR_COORD x, GR_COORD y, void *str, GR_COUNT count, GR_TEXTFLAGS flags)
++{
++	int r = y / fonh, c = x / fonw, i;
++
++	GrText(id, gc, x, y, str, count, flags);
++	for (i = 0; i < count && r >= 0 && r < CELL_ROWS && c + i < CELL_COLS; i++)
++		cells[r][c + i] = ((char *)str)[i];
++}
++
++static void cell_fill(GR_DRAW_ID id, GR_GC_ID gc, GR_COORD x, GR_COORD y, GR_SIZE w, GR_SIZE h)
++{
++	int r, c;
++
++	GrFillRect(id, gc, x, y, w, h);
++	if (in_cursor)
++		return;		/* the cursor is drawn over a cell, not instead of it */
++	for (r = y / fonh; r < (y + h) / fonh && r < CELL_ROWS; r++)
++		for (c = x / fonw; c < (x + w + fonw - 1) / fonw && c < CELL_COLS; c++)
++			if (r >= 0 && c >= 0)
++				cells[r][c] = 0;
++}
++
++static void cell_copy(GR_DRAW_ID id, GR_GC_ID gc, GR_COORD x, GR_COORD y, GR_SIZE w, GR_SIZE h, GR_DRAW_ID from,
++	GR_COORD fx, GR_COORD fy, unsigned long op)
++{
++	static char moved[CELL_ROWS][CELL_COLS];
++	int r0 = y / fonh, c0 = x / fonw, fr0 = fy / fonh, fc0 = fx / fonw, rows = h / fonh, cols = (w + fonw - 1) / fonw, r;
++
++	GrCopyArea(id, gc, x, y, w, h, from, fx, fy, op);
++	if (rows <= 0 || cols <= 0)
++		return;
++	if (cols > CELL_COLS)
++		cols = CELL_COLS;
++	/* the whole screen moving up: the rows it covers leave for the history */
++	if (r0 == 0 && c0 == 0 && fc0 == 0 && fr0 > 0)
++		for (r = 0; r < fr0 && r < CELL_ROWS; r++)
++			memcpy(history[history_count++ % HISTORY_ROWS], cells[r], CELL_COLS);
++	for (r = 0; r < rows && fr0 + r < CELL_ROWS; r++)
++		memcpy(moved[r], cells[fr0 + r] + fc0, cols < CELL_COLS - fc0 ? cols : CELL_COLS - fc0);
++	for (r = 0; r < rows && r0 + r < CELL_ROWS; r++)
++		memcpy(cells[r0 + r] + c0, moved[r], cols < CELL_COLS - c0 ? cols : CELL_COLS - c0);
++}
++
++static void cell_clear(GR_WINDOW_ID id, int exposeflag)
++{
++	GrClearWindow(id, exposeflag);
++	memset(cells, 0, sizeof cells);
++}
++
++/* One row of the scrolled-back view: history above, the live screen's cells below. */
++static void back_row(int r)
++{
++	int line = r - back, n, kept = history_count < HISTORY_ROWS ? history_count : HISTORY_ROWS;
++	const char *text;
++	char shown[CELL_COLS];
++
++	GrSetGCForeground(gc1, stdbackground);
++	GrFillRect(w1, gc1, 0, r * fonh, winw, fonh);
++	if (line >= 0)
++		text = cells[line];
++	else if (-line <= kept)
++		text = history[(history_count + line) % HISTORY_ROWS];
++	else
++		return;
++	for (n = 0; n < col && n < CELL_COLS; n++)
++		shown[n] = text[n] ? text[n] : ' ';
++	GrSetGCForeground(gc1, stdforeground);
++	GrText(w1, gc1, 0, r * fonh, shown, n, GR_TFTOP);
++}
++
++/* Scrolls the view back by `rows` (forward when negative); at 0 the live screen returns. */
++static void scroll_back(int rows)
++{
++	int kept = history_count < HISTORY_ROWS ? history_count : HISTORY_ROWS, to = back + rows, r;
++
++	if (to > kept)
++		to = kept;
++	if (to < 0)
++		to = 0;
++	if (to == back)
++		return;
++	hide_cursor();
++	if (back == 0) {
++		/* leaving the live screen: keep its picture, colours and all */
++		live = GrNewPixmap(winw, winh, NULL);
++		GrCopyArea(live, gc1, 0, 0, winw, winh, w1, 0, 0, MWROP_COPY);
++	}
++	back = to;
++	if (back == 0) {
++		GrCopyArea(w1, gc1, 0, 0, winw, winh, live, 0, 0, MWROP_COPY);
++		GrDestroyWindow(live);
++		GrSetGCForeground(gc1, gi.foreground);
++		return;
++	}
++	for (r = 0; r < row; r++)
++		back_row(r);
++	GrSetGCForeground(gc1, gi.foreground);
++}
++
++#define GrText cell_text
++#define GrFillRect cell_fill
++#define GrCopyArea cell_copy
++#define GrClearWindow cell_clear
++
+ void sflush(void)
+ {
+ 	if (sbufcnt) {
+@@ -194,17 +322,19 @@ void sadd(char c)
+ 
+ void show_cursor(void)
+ {
++	in_cursor = 1;
+ 	GrSetGCMode(gc1,GR_MODE_XOR);
+ 	GrSetGCForeground(gc1, WHITE);
+ 	GrFillRect(w1, gc1, curx*fonw, cury*fonh+1, fonw, fonh-1);
+ 	GrSetGCForeground(gc1, gi.foreground);
+ 	GrSetGCMode(gc1,GR_MODE_COPY);
++	in_cursor = 0;
+ }
+ 
+ 
+ void draw_cursor (void)
+ {
+-	if(curon)
++	if(curon && !back)	/* the scrolled-back view has no cursor */
+ 		if(!curvis) {
+ 			curvis = 1;
+ 			show_cursor();
+@@ -549,28 +679,28 @@ void rendition(int escvalue) {
  		} else if ((escvalue>29) && (escvalue<38)){
      		switch(escvalue) {
  		    case 30:
@@ -65,7 +212,7 @@ index 91ec808..c83d841 100755
      			break;
  		    case 39:
      			GrSetGCForeground(gc1, stdforeground); //default color
-@@ -579,28 +588,28 @@ void rendition(int escvalue) {
+@@ -579,28 +709,28 @@ void rendition(int escvalue) {
  		} else if ((escvalue>39) && (escvalue<49)){
      		switch(escvalue) {
  		    case 40:
@@ -102,6 +249,56 @@ index 91ec808..c83d841 100755
      			break;
  		    case 49:
      			GrSetGCBackground(gc1, stdbackground); //default color
+@@ -1158,6 +1288,12 @@ term(void)
+ 		case GR_EVENT_TYPE_KEY_DOWN:
+ 		  /* deal with special keys*/
+ 			kp = (GR_EVENT_KEYSTROKE *)&wevent;
++			/* Shift+Page Up and Down look back; any other key returns to the present */
++			if ((kp->modifiers & MWKMOD_SHIFT) && (kp->ch == MWKEY_PAGEUP || kp->ch == MWKEY_PAGEDOWN)) {
++				scroll_back(kp->ch == MWKEY_PAGEUP ? row - 1 : 1 - row);
++				break;
++			}
++			scroll_back(-back);
+ 			if (kp->ch & MWKEY_NONASCII_MASK)
+ 				if (termtype == ANSI){
+ 				bufflen = do_special_key_ansi(buf,kp->ch,kp->modifiers);
+@@ -1188,6 +1324,28 @@ term(void)
+ 			 */
+ 			if (wevent.update.utype == GR_UPDATE_UNMAPTEMP)
+ 				hide_cursor();
++			if (wevent.update.utype == GR_UPDATE_SIZE && wevent.update.width && wevent.update.height) {
++				/* the window is another size: as many columns and rows as fit, and
++				 * the program inside is told (it redraws its line, or its screen) */
++				struct winsize size;
++
++				scroll_back(-back);
++				hide_cursor();
++				winw = wevent.update.width;
++				winh = wevent.update.height;
++				col = winw / fonw > 127 ? 127 : winw / fonw;
++				row = winh / fonh > 127 ? 127 : winh / fonh;
++				if (col < 2) col = 2;
++				if (row < 2) row = 2;
++				scrolltop = 0;
++				scrollbottom = row;
++				if (curx >= col) curx = col - 1;
++				if (cury >= row) cury = row - 1;
++				memset(&size, 0, sizeof size);
++				size.ws_col = col;
++				size.ws_row = row;
++				ioctl(termfd, TIOCSWINSZ, &size);
++			}
+ 			break;
+ 
+ 		case GR_EVENT_TYPE_EXPOSURE:
+@@ -1199,6 +1357,7 @@ term(void)
+ 
+ 		case GR_EVENT_TYPE_FDINPUT:
+ 			if (!gotexpose) break;	/* wait until mapped before reading */
++			scroll_back(-back);
+ 			hide_cursor();
+ 			if ((in = read(termfd, buf, sizeof(buf))) > 0) {
+ 				for (l=0; l<in; l++) {
 diff --git a/src/engine/devdraw.c b/src/engine/devdraw.c
 index c389e46..b528bb5 100644
 --- a/src/engine/devdraw.c
@@ -135,6 +332,28 @@ index c389e46..b528bb5 100644
  	/* Quickly save off the dash settings to avoid problems with drawrow */
  	GdSetDash(&dm, &dc);
  
+diff --git a/src/engine/devimage.c b/src/engine/devimage.c
+index be20461..04f7a63 100644
+--- a/src/engine/devimage.c
++++ b/src/engine/devimage.c
+@@ -170,12 +170,17 @@ GdDrawImageFromBuffer(PSD psd, MWCOORD x, MWCOORD y, MWCOORD width,
+  * @param path The file containing the image data.
+  * @param flags If nonzero, JPEG images will be loaded as grayscale.  Yuck!
+  */
++/* Set by a screen driver that can draw some picture files itself: nonzero when it has. */
++int (*gd_drawpicture)(PSD psd, MWCOORD x, MWCOORD y, MWCOORD width, MWCOORD height, const char *path);
++
+ void
+ GdDrawImageFromFile(PSD psd, MWCOORD x, MWCOORD y, MWCOORD width, MWCOORD height,
+ 	char *path, int flags)
+ {
+ 	PSD	pmd;
+ 
++	if (gd_drawpicture && gd_drawpicture(psd, x, y, width, height, path))
++		return;
+ 	pmd = GdLoadImageFromFile(path, flags);
+ 	if (pmd) {
+ 		GdDrawImagePartToFit(psd, x, y, width, height, 0, 0, 0, 0, pmd);
 diff --git a/src/engine/devmouse.c b/src/engine/devmouse.c
 index ee97b9f..f774c79 100644
 --- a/src/engine/devmouse.c
@@ -320,6 +539,73 @@ index 409290c..828a708 100644
  } GR_WINDOW_INFO;
  
  /**
+diff --git a/src/include/nanowm.h b/src/include/nanowm.h
+index 5f31f08..7854dee 100644
+--- a/src/include/nanowm.h
++++ b/src/include/nanowm.h
+@@ -57,6 +57,9 @@
+ #define Dprintf(...)
+ #endif
+ 
++/* a maximised window leaves this much of the screen's bottom free (ShaderEmu's bar, nxbar.c) */
++#define WM_BAR_HEIGHT	26
++
+ /* GrGetSystemColor color scheme definitions*/
+ extern const GR_COLOR nxSysColors[MAXSYSCOLORS];
+ 
+@@ -103,6 +106,11 @@ struct windowlist {
+ 	int active;			/* Whether this window is active or not */
+ 	void *data;			/* Data associated with this window */
+ 	struct windowlist *next; /* The next window in the list */
++	/* added for ShaderEmu, after everything that was there */
++	int maximize;			/* Maximise button pressed*/
++	int minimize;			/* Minimise button pressed*/
++	int maximized;			/* fills the screen; the place to go back to follows */
++	int restore_x, restore_y, restore_w, restore_h;
+ };
+ typedef struct windowlist win;
+ 
+diff --git a/src/nanox/nxpaintnc.c b/src/nanox/nxpaintnc.c
+index 9e40afe..37bace1 100644
+--- a/src/nanox/nxpaintnc.c
++++ b/src/nanox/nxpaintnc.c
+@@ -111,6 +111,36 @@ nxPaintNCArea(GR_DRAW_ID id, int w, int h, char *title, GR_BOOL active, GR_WM_PR
+ 		GrSetGCForeground(gc, GrGetSysColor(GR_COLOR_BTNTEXT));
+ 		GrLine(id, gc, r.x, r.y, r.x+r.width-1, r.y+r.height-1);
+ 		GrLine(id, gc, r.x, r.y+r.height-1, r.x+r.width-1, r.y);
++
++		/* and a maximise box to its left: a small window with a thick top */
++		r.x = x + w - 2 * CXCLOSEBOX - 4;
++		r.y = y - CYCAPTION + 2;
++		r.width = CXCLOSEBOX;
++		r.height = CYCLOSEBOX;
++		nxDraw3dBox(id, r.x, r.y, r.width, r.height,
++			GrGetSysColor(GR_COLOR_BTNHIGHLIGHT),
++			GrGetSysColor(GR_COLOR_3DFRAME));
++		nxInflateRect(&r, -1, -1);
++		GrSetGCForeground(gc, GrGetSysColor(GR_COLOR_3DLIGHT));
++		GrFillRect(id, gc, r.x, r.y, r.width, r.height);
++		nxInflateRect(&r, -1, -1);
++		GrSetGCForeground(gc, GrGetSysColor(GR_COLOR_BTNTEXT));
++		GrRect(id, gc, r.x, r.y, r.width, r.height);
++		GrLine(id, gc, r.x, r.y+1, r.x+r.width-1, r.y+1);
++
++		/* and a minimise box left of that: a line along its bottom */
++		r.x = x + w - 3 * CXCLOSEBOX - 6;
++		r.y = y - CYCAPTION + 2;
++		r.width = CXCLOSEBOX;
++		r.height = CYCLOSEBOX;
++		nxDraw3dBox(id, r.x, r.y, r.width, r.height,
++			GrGetSysColor(GR_COLOR_BTNHIGHLIGHT),
++			GrGetSysColor(GR_COLOR_3DFRAME));
++		nxInflateRect(&r, -1, -1);
++		GrSetGCForeground(gc, GrGetSysColor(GR_COLOR_3DLIGHT));
++		GrFillRect(id, gc, r.x, r.y, r.width, r.height);
++		GrSetGCForeground(gc, GrGetSysColor(GR_COLOR_BTNTEXT));
++		GrFillRect(id, gc, r.x+1, r.y+r.height-3, r.width-2, 2);
+ #endif
+ 	}
+ 
 diff --git a/src/nanox/serv.h b/src/nanox/serv.h
 index 4a9efee..2e33007 100644
 --- a/src/nanox/serv.h
@@ -334,7 +620,7 @@ index 4a9efee..2e33007 100644
  void		GsFreePositionEvent(GR_CLIENT *client, GR_WINDOW_ID wid, GR_WINDOW_ID subwid);
  void		GsDeliverButtonEvent(GR_EVENT_TYPE type, int buttons, int changebuttons, int modifiers);
 diff --git a/src/nanox/srvclip2.c b/src/nanox/srvclip2.c
-index 0679f9f..c48b8a7 100644
+index 0679f9f..29d2087 100644
 --- a/src/nanox/srvclip2.c
 +++ b/src/nanox/srvclip2.c
 @@ -33,6 +33,9 @@ GsSetClipWindow(GR_WINDOW *wp, MWCLIPREGION *userregion, int flags)
@@ -347,7 +633,28 @@ index 0679f9f..c48b8a7 100644
  	clipwp = wp;
  
  	/*
-@@ -122,6 +125,9 @@ GsSetClipWindow(GR_WINDOW *wp, MWCLIPREGION *userregion, int flags)
+@@ -59,8 +62,10 @@ GsSetClipWindow(GR_WINDOW *wp, MWCLIPREGION *userregion, int flags)
+ 			x = pwp->x;
+ 		}
+ 
++		/* composed screen: a top-level window's surface holds all of it, so what is past
++		 * the right or bottom edge of the screen is drawn all the same */
+ 		diff = (pwp->x + pwp->width) - (x + width);
+-		if (diff < 0)
++		if (diff < 0 && !(gd_compositor && pwp == rootwp))
+ 			width += diff;
+ 
+ 		diff = pwp->y - y;
+@@ -70,7 +75,7 @@ GsSetClipWindow(GR_WINDOW *wp, MWCLIPREGION *userregion, int flags)
+ 		}
+ 
+ 		diff = (pwp->y + pwp->height) - (y + height);
+-		if (diff < 0)
++		if (diff < 0 && !(gd_compositor && pwp == rootwp))
+ 			height += diff;
+ 	}
+ 
+@@ -122,6 +127,9 @@ GsSetClipWindow(GR_WINDOW *wp, MWCLIPREGION *userregion, int flags)
  		} else {
  			sibwp = pwp->children;	 /* clip siblings*/
  		}
@@ -358,7 +665,7 @@ index 0679f9f..c48b8a7 100644
  		for (; sibwp != wp; sibwp = sibwp->siblings) {
  			if (!sibwp->realized || !sibwp->output)
 diff --git a/src/nanox/srvfunc.c b/src/nanox/srvfunc.c
-index 3455994..144b91f 100644
+index 3455994..97f239e 100644
 --- a/src/nanox/srvfunc.c
 +++ b/src/nanox/srvfunc.c
 @@ -173,6 +173,12 @@ GrGetWindowInfo(GR_WINDOW_ID wid, GR_WINDOW_INFO *infoptr)
@@ -392,20 +699,22 @@ index 3455994..144b91f 100644
  		if (GsCheckOverlap(wp, expwp)) {
  			GsExposeArea(expwp, wp->x - wp->bordersize,
  				wp->y - wp->bordersize,
-@@ -445,6 +451,21 @@ GrMoveWindow(GR_WINDOW_ID wid, GR_COORD x, GR_COORD y)
+@@ -445,6 +451,23 @@ GrMoveWindow(GR_WINDOW_ID wid, GR_COORD x, GR_COORD y)
  		return;
  	}
  
 +	/* composed screen: a top-level window just changes place; nothing is repainted */
 +	if (gd_compositor && parent == rootwp && wp->mapped) {
-+		int outside = wp->x < 0 || wp->y < 0 || wp->x + wp->width > rootwp->width ||
-+			wp->y + wp->height > rootwp->height;
++		int left = -wp->x, top = -wp->y;
 +
 +		OffsetWindow(wp, offx, offy);
 +		clipwp = NULL;
-+		/* except what was off the screen, which was never drawn */
-+		if (outside && wp->realized)
-+			GsExposeArea(wp, wp->x, wp->y, wp->width, wp->height, NULL);
++		/* except a strip that was off the left or top of the screen, where nothing
++		 * could be drawn (coordinates below zero are clipped) */
++		if (left > 0 && wp->realized)
++			GsExposeArea(wp, wp->x, wp->y, left < wp->width ? left : wp->width, wp->height, NULL);
++		if (top > 0 && wp->realized)
++			GsExposeArea(wp, wp->x, wp->y, wp->width, top < wp->height ? top : wp->height, NULL);
 +		DeliverUpdateMoveEventAndChildren(wp);
 +		SERVER_UNLOCK();
 +		return;
@@ -414,6 +723,22 @@ index 3455994..144b91f 100644
  	/*
  	 * move algorithms not requiring unmap/map
  	 */
+@@ -696,6 +719,15 @@ GrResizeWindow(GR_WINDOW_ID wid, GR_SIZE width, GR_SIZE height)
+ 	wp->width = width;
+ 	wp->height = height;
+ 
++	if (gd_compositor) {
++		/* composed screen: the window's surface keeps what was drawn on it, so only
++		 * what the window gained is cleared and exposed, and children are left alone */
++		GsDrawBorder(wp);
++		if (width > oldw)
++			GsClearWindow(wp, oldw, 0, width - oldw, height, 1);
++		if (height > oldh)
++			GsClearWindow(wp, 0, oldh, oldw < width ? oldw : width, height - oldh, 1);
++	} else
+ 	/* draw background and send expose events in resized window and all children*/
+ 	drawBackgroundAndExpose(wp);
+ 
 diff --git a/src/nanox/srvmain.c b/src/nanox/srvmain.c
 index 47260c5..2205be8 100644
 --- a/src/nanox/srvmain.c
@@ -609,6 +934,78 @@ index fae5bfa..a073ebb 100644
  
  	if (wp->props & GR_WM_PROPS_BUFFERED) {
  
+diff --git a/src/nanox/wmaction.c b/src/nanox/wmaction.c
+index 27dcbe8..ce3f2ad 100644
+--- a/src/nanox/wmaction.c
++++ b/src/nanox/wmaction.c
+@@ -138,6 +138,18 @@ void wm_container_buttondown(win *window, GR_EVENT_BUTTON *event)
+ 			window->close = GR_TRUE;
+       		return;
+ 		}
++		/* and in the maximise box to its left */
++		r.x -= CXCLOSEBOX + 2;
++		if (PtInRect(&r, event->x, event->y)) {
++			window->maximize = GR_TRUE;
++			return;
++		}
++		/* and in the minimise box left of that */
++		r.x -= CXCLOSEBOX + 2;
++		if (PtInRect(&r, event->x, event->y)) {
++			window->minimize = GR_TRUE;
++			return;
++		}
+ 	}
+ 
+ 	/* 
+@@ -299,8 +311,48 @@ void wm_container_buttonup(win *window, GR_EVENT_BUTTON *event)
+         		return;
+       		}
+ 		}
++		/* the maximise box: fill the screen above the bar, or go back to where it was */
++		r.x -= CXCLOSEBOX + 2;
++		if (PtInRect(&r, event->x, event->y) && window->maximize) {
++			GR_WINDOW_INFO cinfo;
++			GR_SCREEN_INFO si;
++			int nx, ny, nw, nh;
++
++			GrGetWindowInfo(window->clientid, &cinfo);
++			GrGetScreenInfo(&si);
++			if (!window->maximized) {
++				window->restore_x = info.x;
++				window->restore_y = info.y;
++				window->restore_w = info.width;
++				window->restore_h = info.height;
++				nx = ny = 0;
++				nw = si.cols;
++				nh = si.rows - WM_BAR_HEIGHT;
++			} else {
++				nx = window->restore_x;
++				ny = window->restore_y;
++				nw = window->restore_w;
++				nh = window->restore_h;
++			}
++			window->maximized = !window->maximized;
++			window->maximize = GR_FALSE;
++			GrMoveWindow(window->wid, nx, ny);
++			GrResizeWindow(window->wid, nw, nh);
++			/* the program's window keeps its margins inside the frame */
++			GrResizeWindow(window->clientid, nw - (info.width - cinfo.width), nh - (info.height - cinfo.height));
++			return;
++		}
++		/* the minimise box: the window goes away until something maps it again (the bar's button) */
++		r.x -= CXCLOSEBOX + 2;
++		if (PtInRect(&r, event->x, event->y) && window->minimize) {
++			window->minimize = GR_FALSE;
++			GrUnmapWindow(window->wid);
++			return;
++		}
+ 	}
+ 	window->close = GR_FALSE;
++	window->maximize = GR_FALSE;
++	window->minimize = GR_FALSE;
+ 
+ 	if(window->active) {
+ #if OUTLINE_MOVE
 diff --git a/src/nanox/wmclients.c b/src/nanox/wmclients.c
 index 9214904..28ecfad 100644
 --- a/src/nanox/wmclients.c
@@ -641,3 +1038,15 @@ index 9214904..28ecfad 100644
  		lasty = y;
  	}
  #endif
+diff --git a/src/nanox/wmutil.c b/src/nanox/wmutil.c
+index 5af65d6..5397774 100644
+--- a/src/nanox/wmutil.c
++++ b/src/nanox/wmutil.c
+@@ -49,6 +49,7 @@ int wm_add_window (win * window)
+ 	w->wid = window->wid;
+ 	w->pid = window->pid;
+ 	w->type = window->type;
++	w->maximize = w->maximized = w->minimize = 0;
+ 	w->sizing = GR_FALSE;	/* window->sizing*/
+ 	w->active = window->active;
+ 	w->clientid = window->clientid;

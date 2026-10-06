@@ -52,6 +52,10 @@ GL=$REPO/programs
 rv32-cc -O2 -w -DGL_NANOX -I"$MW/src/include" -idirafter "$GL/linux/include" "$GL/build/fetch/glxgears.c" \
     "$GL/linux/gl.c" "$MW/src/lib/libnano-X.a" -lm -o "$MW/src/bin/glxgears"
 tr -d '\r' < "$HERE/nx" > "$OUT/nx"
+# the Start menu lists what the nxapps.* files name (nxbar.c): a program adds itself with one
+mkdir -p "$OUT/../share"
+printf '%s\n' "Terminal=nxterm" "Calculator=nxcalc" "Clock=nxclock" "Eyes=nxeyes" "Tetris=nxtetris" "Mines=nxmine" \
+    "Roaches=nxroach" "Gears (OpenGL)=glxgears" > "$OUT/../share/nxapps.10-nanox"
 for p in $PROGRAMS; do
     [ -f "$MW/src/bin/$p" ] || { echo "not built: $p"; continue; }
     riscv32-linux-strip -o "$OUT/$p" "$MW/src/bin/$p"

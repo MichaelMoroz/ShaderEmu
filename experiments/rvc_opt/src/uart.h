@@ -46,6 +46,9 @@
 #define LSR_DATA_AVAILABLE 0x1
 #define LSR_THR_EMPTY 0x20
 
+// The host has sent a character this machine has not put in the receive register yet.
+#define UART_INPUT_WAITING (cpu.uart.input_tag != _UdonUARTInTag)
+
 void uart_update_iir() {
     bool rx_ip = (UART_GET1(IER) & IER_RXINT_BIT) != 0 && UART_GET1(RBR) != 0;
     bool thre_ip = (UART_GET1(IER) & IER_THREINT_BIT) != 0 && UART_GET1(THR) == 0;

@@ -2,7 +2,8 @@
 # Starts the Nano-X window system with its bar and a terminal. NANOX_SIZE=WIDTHxHEIGHT picks
 # the screen size (640x480 by default); NANOX_SOFTWARE=1 draws without the GPU.
 [ -d /dev/pts ] || { mkdir /dev/pts && mount -t devpts devpts /dev/pts; }
-nano-X &
+nano-X -p &            # -p: it stays when the last program has gone
 sleep 2
+nxsettings apply &    # the desktop's picture
 nxbar &
 nxterm &

@@ -85,7 +85,7 @@ boot:
 
 | image | what it is |
 |---|---|
-| `linux-net` | Linux with a shell, about 12 s to the prompt on DXC. With our image built (`python tools\make_linux_image.py`), `nx` starts the Nano-X window system, composed by the GPU, with a Start menu, a terminal and `glxgears` in a window (`docs/nanox.md`) |
+| `linux-net` | Linux with a shell, about 12 s to the prompt on DXC. With our image built (`python tools\make_linux_image.py`), `nx` starts the Nano-X window system, composed by the GPU, with a Start menu, a terminal, an editor, file manager, paint, picture viewer, settings and monitor, a photograph for a desktop, and `glxgears` in a window (`docs/nanox.md`) |
 | `linux` | Linux with a built-in initramfs (slow to unpack) |
 | `micropython` | MicroPython REPL on OpenSBI |
 | `rust` | Rust test payload on OpenSBI |

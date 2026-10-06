@@ -80,7 +80,7 @@ public:
         crt_.runZone(gpu_, passes_[1], mat, UpdateZone{1024, 2048, 2048, 4096, 1});
         if (timeIt) gpu_.ctx->End(tsQuery_[2].Get());
         if (gpuPasses_.size() == 2) {
-            gpuDraw();
+            gpuDraw(mat);
             const float* z = kGpuControlZone;
             crt_.runZone(gpu_, gpuPasses_[1], mat, UpdateZone{z[0], z[1], z[2], z[3], 1});
         }
@@ -247,11 +247,25 @@ private:
         ComPtr<ID3D11Texture2D> depth;
         if (SUCCEEDED(hr)) hr = gpu_.device->CreateTexture2D(&td, nullptr, &depth);
         if (SUCCEEDED(hr)) hr = gpu_.device->CreateDepthStencilView(depth.Get(), nullptr, &gpuDsv_);
-        D3D11_DEPTH_STENCIL_DESC dd{};
-        dd.DepthEnable = TRUE;
-        dd.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
-        dd.DepthFunc = D3D11_COMPARISON_LESS_EQUAL;
-        if (SUCCEEDED(hr)) hr = gpu_.device->CreateDepthStencilState(&dd, &gpuDepthState_);
+        // depth: tested and written, tested only, unused; blending: none, alpha, additive, multiply
+        for (int k = 0; k < 3 && SUCCEEDED(hr); ++k) {
+            D3D11_DEPTH_STENCIL_DESC dd{};
+            dd.DepthEnable = k < 2;
+            dd.DepthWriteMask = k == 0 ? D3D11_DEPTH_WRITE_MASK_ALL : D3D11_DEPTH_WRITE_MASK_ZERO;
+            dd.DepthFunc = D3D11_COMPARISON_LESS_EQUAL;
+            hr = gpu_.device->CreateDepthStencilState(&dd, &gpuDepthState_[k]);
+        }
+        for (int k = 0; k < 4 && SUCCEEDED(hr); ++k) {
+            D3D11_BLEND_DESC bd{};
+            auto& rt = bd.RenderTarget[0];
+            rt.BlendEnable = k != 0;
+            rt.SrcBlend = rt.SrcBlendAlpha = k == 3 ? D3D11_BLEND_DEST_COLOR : D3D11_BLEND_SRC_ALPHA;
+            rt.DestBlend = rt.DestBlendAlpha = k == 1 ? D3D11_BLEND_INV_SRC_ALPHA : k == 2 ? D3D11_BLEND_ONE : D3D11_BLEND_ZERO;
+            if (k == 3) rt.SrcBlendAlpha = D3D11_BLEND_ZERO, rt.DestBlendAlpha = D3D11_BLEND_ONE;
+            rt.BlendOp = rt.BlendOpAlpha = D3D11_BLEND_OP_ADD;
+            rt.RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+            hr = gpu_.device->CreateBlendState(&bd, &gpuBlend_[k]);
+        }
         if (FAILED(hr)) {
             err = "GPU target: " + hrToString(hr);
             return false;
@@ -263,7 +277,7 @@ private:
 
     // Draws the GPU device's mesh. Depth starts fresh every frame; colour is kept, so the
     // picture stays until the guest submits another list.
-    void gpuDraw() {
+    void gpuDraw(Material& mat) {
         ID3D11DeviceContext* ctx = gpu_.ctx.Get();
         GpuPass& pass = gpuPasses_[0];
         ctx->OMSetRenderTargets(1, gpuRtv_.GetAddressOf(), gpuDsv_.Get());
@@ -271,17 +285,20 @@ private:
         D3D11_VIEWPORT vp{0, 0, (float)kGpuTarget, (float)kGpuTarget, 0, 1};
         ctx->RSSetViewports(1, &vp);
         ctx->RSSetState(gpu_.rasterNoCull.Get());
-        ctx->OMSetBlendState(gpu_.blendOpaque.Get(), nullptr, 0xffffffff);
-        ctx->OMSetDepthStencilState(gpuDepthState_.Get(), 0);
         ctx->IASetInputLayout(nullptr);
         ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        ctx->VSSetShader(pass.vs.Get(), nullptr, 0);
-        ctx->GSSetShader(nullptr, nullptr, 0);
-        ctx->PSSetShader(pass.ps.Get(), nullptr, 0);
         ID3D11ShaderResourceView* state = crt_.currentSRV();
-        for (auto& t : pass.vsLayout.textures) ctx->VSSetShaderResources(t.slot, 1, &state);
-        for (auto& t : pass.psLayout.textures) ctx->PSSetShaderResources(t.slot, 1, &state);
-        ctx->Draw(kGpuTriangles * 3, 0);
+        // one draw per pass in use, in order: each has its own blending and depth use
+        for (int p = 0; p < 8; ++p) {
+            if (!((gpuPasses >> p) & 1)) continue;
+            mat.setInt("_GpuPass", p);
+            mat.bind(ctx, pass, gpu_);
+            for (auto& t : pass.vsLayout.textures) ctx->VSSetShaderResources(t.slot, 1, &state);
+            for (auto& t : pass.psLayout.textures) ctx->PSSetShaderResources(t.slot, 1, &state);
+            ctx->OMSetBlendState(gpuBlend_[p & 3].Get(), nullptr, 0xffffffff);
+            ctx->OMSetDepthStencilState(gpuDepthState_[p == 0 ? 0 : p < 4 ? 1 : 2].Get(), 0);
+            ctx->Draw(kGpuTriangles * 3, 0);
+        }
         ID3D11ShaderResourceView* none = nullptr;
         for (auto& t : pass.vsLayout.textures) ctx->VSSetShaderResources(t.slot, 1, &none);
         for (auto& t : pass.psLayout.textures) ctx->PSSetShaderResources(t.slot, 1, &none);
@@ -304,7 +321,8 @@ private:
     ComPtr<ID3D11RenderTargetView> gpuRtv_;
     ComPtr<ID3D11ShaderResourceView> gpuSrv_;
     ComPtr<ID3D11DepthStencilView> gpuDsv_;
-    ComPtr<ID3D11DepthStencilState> gpuDepthState_;
+    ComPtr<ID3D11DepthStencilState> gpuDepthState_[3];
+    ComPtr<ID3D11BlendState> gpuBlend_[4];
     std::vector<ComPtr<ID3D11ShaderResourceView>> keep_;
     CustomRenderTexture crt_;
     RegionReadback rows_, control_;

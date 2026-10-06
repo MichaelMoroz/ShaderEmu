@@ -4,13 +4,14 @@ The Linux image has a window system: Nano-X from [Microwindows](https://github.c
 the server with its window manager built in, and a handful of its clients. It draws through
 the machine's GPU and takes the machine's keyboard and pointer.
 
-    / # nx                      # server, the bar, a terminal
+    / # nx                      # server, the desktop's picture, the bar, a terminal
     / # nxcalc &                # more clients: nxeyes, nxtetris, nxmine, nxroach, nxev, demo-*
     / # NANOX_SIZE=1024x600 nx  # another screen size (640x480 by default)
 
 The harness window's pointer and keys are the machine's (`input.md`). The bar along the
 bottom (`linux/nanox/nxbar.c`) has a Start menu with the programs in the image and a clock;
-the machine's clock chip is fed the host's local time. `glxgears` runs in a window.
+the machine's clock chip is fed the host's local time. `glxgears` runs in a window. The
+desktop has a small set of programs of its own, listed under "The desktop's programs".
 
 ## Building it
 
@@ -43,9 +44,10 @@ a table with one entry per window, lowest first, and whatever shows the display 
 There is no composed framebuffer in RAM and nothing to redraw when a buffer changes.
 
 So moving a window, raising it, or uncovering it by closing another costs a few words: no
-pixels are copied by the CPU and no program is asked to draw again. Only a window that was
-partly off the screen is repainted when it comes back, because drawing is still clipped to the
-screen.
+pixels are copied by the CPU and no program is asked to draw again. A window keeps being
+drawn past the right and bottom edges of the screen, so it comes back as it was. Coordinates
+below zero are still clipped: a strip that was off the left or top edge is cleared and its
+program asked to draw it again, which a terminal cannot do for text already printed.
 
 Drawing into a buffer goes through the GPU too (`gpu.md`):
 
@@ -54,7 +56,8 @@ Drawing into a buffer goes through the GPU too (`gpu.md`):
 | filled rectangle, horizontal and vertical line | a coloured rectangle |
 | text and other one-bit bitmaps | a mask texture (fragment mode 3), over a coloured rectangle when the background is drawn too. Glyphs of the built-in fonts are copied into GPU memory once and stay there; other bitmaps are copied for each list |
 | copy from a window (scrolling) | a rectangle textured with that window's buffer |
-| single pixels with nothing else queued, images, blending, XOR drawing, reading pixels | software, into the buffer |
+| a PPM file (`GrDrawImageFromFile`), at any size | the file's rows read straight into texture memory, as many as fit (1.8 MB), and a rectangle textured with them (fragment mode 4, three bytes a pixel); the GPU does the scaling |
+| single pixels with nothing else queued, other images, blending, XOR drawing, reading pixels | software, into the buffer |
 
 Commands are queued for one buffer at a time and submitted when drawing moves to another
 buffer, when software needs the pixels, or when the server is about to wait for events. Each
@@ -73,6 +76,57 @@ server the pixels changed. The OpenGL driver does this.
 GPU memory under Nano-X: window buffers in the first 16 MiB (`0x86000000`), then the control
 words and the display's framebuffer, the server's command list, cursor, glyph cache and
 scratch textures up to `0x87700000`; the last 4 MiB are left to one OpenGL program.
+
+## The bar, and what a program adds to it
+
+`nxbar` has the Start menu, a button for every open window (a click brings the window to the
+front) and the clock. The menu is whatever the files `/usr/share/nxapps.*` list, one
+`Label=command` a line, so a program gets into it by having its build put such a file in the
+image: `linux/nanox/build.sh` writes `nxapps.10-nanox`, `doom.sh` writes `nxapps.50-doom`.
+
+A window's frame has, left of its close box, a maximise box (the window fills the screen above
+the bar, and goes back on the second click) and a minimise box (the window goes away; its
+button on the bar, greyed meanwhile, brings it back).
+
+A window that changes size gets another buffer, which starts as a copy of the old one: what
+was drawn stays, and only the area the window gained is cleared and its program asked to
+draw. (A terminal's text survives, and the terminal takes as many columns and rows as now fit.) The
+screen driver counts new buffers at `0x87000064`, and a program that draws into its window
+itself (the OpenGL library) asks the server where its window is whenever the count moves.
+
+The window manager's record of a window (`nanowm.h`) has our fields at its end. The build
+does not recompile files for a changed header, so a field added in the middle leaves the
+files the patch does not touch using the old layout: delete `obj/nanox/wm*.o` after such a
+change.
+
+## The desktop's programs
+
+`linux/apps/` (built by `linux/apps/build.sh` after Nano-X, each one file on `ui.h`):
+
+| Program | What it does |
+|---|---|
+| `nxedit FILE` | a text editor: arrows, Home, End, Page Up and Down, a click places the cursor; Ctrl+S saves, Ctrl+Q quits |
+| `nxfiles [FOLDER]` | a file manager: a click selects, a second click (or Enter) opens: a folder, a picture in the viewer, a program, anything else in the editor. Up, Open, Edit, New file, Delete, Refresh |
+| `nxpaint [FILE]` | pen, eraser, line, box, filled box in sixteen colours and three sizes; Save writes a PPM file (`/root/picture.ppm` unless a file was named) |
+| `nxview FILE` | shows a picture as large as fits its window: PPM through the GPU, PGM, BMP, GIF and XPM through the engine's decoders |
+| `nxsettings` | picks the desktop's picture or colour, and says what the machine is. `nxsettings apply` only puts the chosen desktop up (the `nx` script runs it) |
+| `nxmon` | instructions a second over the last minute (from `rdcycle`), how busy Linux is, memory in use |
+| `nxterm` | Microwindows' terminal, patched: it follows its window's size, and Shift+Page Up and Down look back through the last 400 lines |
+
+**Pictures for the desktop** are `/usr/share/wallpaper-NAME.ppm`, made on the host by
+`python tools\make_wallpaper.py [FOLDER ...]`: the Unsplash photographs listed in
+`linux/apps/wallpapers.txt` (a name and the photo's id a line; fetched, never kept in this
+repository) and every picture in the folders given. One 1920 or more across is brought down to
+fit 1920x1080, one 1280 or more to fit 1280x720. Run it before `make_linux_image.py`. The
+choice is kept in `/tmp/nxwallpaper`; a new image shows `wallpaper-fox.ppm`.
+
+A picture is not decoded by anyone: a PPM file is already three bytes a pixel, so the screen
+driver reads the rows it needs into GPU memory and the GPU samples them. The 1623x1080
+desktop picture takes 0.2 s to put up on a 640x480 screen (drawing it pixel by pixel through
+`GrArea` took 6 s). It is not clipped by child windows.
+
+The server is started with `-p`: without it Nano-X ends when its last program has gone, and
+the program that puts up the desktop's picture is the first to come and go.
 
 ## Changes to Microwindows
 
@@ -94,7 +148,11 @@ scratch textures up to `0x87700000`; the last 4 MiB are left to one OpenGL progr
 - The default cursor is the familiar arrow; new windows step across the screen instead of
   piling up at one place.
 - The terminal is 80x24 (it was 50 rows, taller than the screen) and light on black, with
-  the eight ANSI colours bright enough to read.
+  the eight ANSI colours bright enough to read. It keeps what every character cell shows
+  beside the drawing, which is what the look back through earlier lines is drawn from, and
+  tells the program inside (`TIOCSWINSZ`) when its window changes size.
+- **A driver may draw a picture file itself** (`gd_drawpicture`, asked first by
+  `GdDrawImageFromFile`).
 
 ## Checking it
 

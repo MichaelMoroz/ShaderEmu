@@ -31,8 +31,9 @@ class Machine:
 
 
 def colour_of(v):
+    """0xTTRRGGBB as red, green, blue, alpha: T is transparency, so 0x00RRGGBB is opaque."""
     v = np.asarray(v, np.uint32)
-    return np.stack([(v >> 16) & 255, (v >> 8) & 255, v & 255], axis=-1).astype(f32) / f32(255.0)
+    return np.stack([(v >> 16) & 255, (v >> 8) & 255, v & 255, 255 - (v >> 24)], axis=-1).astype(f32) / f32(255.0)
 
 
 def place_pixels(p, depth):
@@ -69,10 +70,24 @@ def vertices(m):
                             tex=tuple(int(v) for v in w[8:12]), key=int(w[2])))
         elif op == 3:
             n = int(w[2])
-            v = m.fixed(int(w[1]), n * 16).reshape(n, 4, 4)
-            pos, normal = v[:, 0], v[:, 1]
-            colour = v[:, 3, :3].copy()
             vmode, modelview = int(w[4]) & 0xff, int(w[4]) & 0x100
+            # with the quads flag every six vertices drawn are four stored corners: 0 1 2, 0 2 3
+            which = np.arange(n)
+            if int(w[4]) & 0x200:
+                which = (which // 6) * 4 + np.array([0, 1, 2, 0, 2, 3])[which % 6]
+            stored = int(which.max()) + 1 if n else 0
+            if int(w[4]) & 0x400:
+                # compact: one texel a vertex (x, y, z, packed uv), the colour from the command
+                t = m.w(int(w[1]), stored * 4).reshape(stored, 4)[which]
+                pos = np.concatenate([(t[:, :3].view(np.int32) / f32(65536.0)).astype(f32), np.ones((n, 1), f32)], axis=1)
+                packed = t[:, 3].astype(np.uint32)
+                uv = np.stack([(packed & 0xffff).astype(np.int16), (packed >> 16).astype(np.uint16).astype(np.int16)], axis=1).astype(f32) / f32(1024.0)
+                v = np.zeros((n, 4, 4), f32)
+                v[:, 0], v[:, 2, :2], v[:, 3] = pos, uv, colour_of(w[11])
+            else:
+                v = m.fixed(int(w[1]), stored * 16).reshape(stored, 4, 4)[which]
+            pos, normal = v[:, 0], v[:, 1]
+            colour = v[:, 3].copy()
             if vmode == 0:
                 clip = place_pixels(pos[:, :2], pos[:, 2])
             else:
@@ -86,14 +101,14 @@ def vertices(m):
                 if vmode == 2:
                     nv = (normal[:, :3] @ u[4:7, :3].T).astype(f32)
                     facing = np.maximum(nv @ u[7, :3], 0).astype(f32)
-                    colour = facing[:, None] * u[8, :3] + u[9, :3]
+                    colour = np.concatenate([facing[:, None] * u[8, :3] + u[9, :3], np.ones((n, 1), f32)], axis=1)
             out.append(dict(op=op, pos=clip, colour=colour.astype(f32), uv=v[:, 2, :2].copy(),
                             tex=(int(w[5]), int(w[7]), int(w[8]), int(w[9])), key=int(w[10])))
     return width, height, out
 
 
 def shade(m, colour, uv, tex, key):
-    """Returns (rgb 0..1, keep mask)."""
+    """Returns (red, green, blue, alpha 0..1, keep mask)."""
     mode, addr, tw, th = tex[0] & 0xff, tex[1], tex[2], tex[3]
     keep = np.ones(len(colour), bool)
     if mode != 0 and tw and th:
@@ -111,6 +126,11 @@ def shade(m, colour, uv, tex, key):
             if tex[0] & 0x100:
                 keep = texel != key
             texel = m.words[(0x07000400 >> 2) + texel]
+        elif mode == 4:
+            # three bytes a pixel, running on into the next word
+            at, shift = base + 3 * n // 4, (8 * ((3 * n) & 3)).astype(np.uint64)
+            texel = ((m.words[at].astype(np.uint64) | m.words[at + 1].astype(np.uint64) << np.uint64(32)) >> shift).astype(np.uint32)
+            texel = (texel & 0xff) << 16 | (texel & 0xff00) | (texel >> 16) & 0xff
         else:
             texel = m.words[base + n]
             if tex[0] & 0x100:
@@ -119,13 +139,20 @@ def shade(m, colour, uv, tex, key):
     return np.clip(colour, 0, 1), keep
 
 
+def pass_of(cmd):
+    """The pass a command is drawn in: bits 16-18 of its fragment mode word (docs/gpu.md)."""
+    return (cmd['tex'][0] >> 16) & 7 if cmd['op'] != 1 else 0
+
+
 def draw(m):
     width, height, commands = vertices(m)
     image = np.zeros((height, width, 3), np.uint8)
     depth = np.full((height, width), np.inf)
     edge = np.zeros((height, width), bool)   # pixels within half a pixel of some triangle edge
-    stats = {'commands': len(commands), 'triangles': 0, 'behind_eye': 0}
-    for cmd in commands:
+    stats = {'commands': len(commands), 'triangles': 0, 'behind_eye': 0, 'passes': sorted({pass_of(c) for c in commands})}
+    # passes in order, each with the list's commands in order; 0-3 test depth, only 0 writes it
+    for cmd in sorted(commands, key=pass_of):
+        which = pass_of(cmd)
         pos = cmd['pos'].astype(np.float64)
         for t in range(len(pos) // 3):
             p = pos[3 * t:3 * t + 3]
@@ -150,7 +177,15 @@ def draw(m):
             e = [(sx[(i + 2) % 3] - sx[(i + 1) % 3]) * (py - sy[(i + 1) % 3]) - (sy[(i + 2) % 3] - sy[(i + 1) % 3]) * (px - sx[(i + 1) % 3])
                  for i in range(3)]
             sign = 1.0 if area > 0 else -1.0
-            inside = (e[0] * sign >= 0) & (e[1] * sign >= 0) & (e[2] * sign >= 0)
+            # A pixel centre exactly on an edge belongs to the triangle only if that edge is a
+            # left or a top one, so that two triangles sharing an edge never both draw it
+            # (which blending would show).
+            inside = np.ones(e[0].shape, bool)
+            for i in range(3):
+                a_, b_ = (i + 1) % 3, (i + 2) % 3
+                gx, gy = -(sy[b_] - sy[a_]) * sign, (sx[b_] - sx[a_]) * sign   # the edge function's gradient
+                owns = gx > 0 or (gx == 0 and gy > 0)
+                inside &= (e[i] * sign > 0) | ((e[i] == 0) & owns)
             # distance to each edge line, to mark pixels whose coverage is a close call
             near = np.zeros_like(inside)
             for i in range(3):
@@ -165,7 +200,9 @@ def draw(m):
                 continue
             l = [e[i] / area for i in range(3)]
             zf = l[0] * z[0] + l[1] * z[1] + l[2] * z[2]
-            ok = inside & (zf <= depth[sl]) & (zf >= 0) & (zf <= 1)
+            ok = inside & (zf >= -1e-9) & (zf <= 1 + 1e-9)   # the far plane itself is inside
+            if which < 4:
+                ok &= zf <= depth[sl]
             if not ok.any():
                 continue
             pw = [l[i][ok] * iw[i] for i in range(3)]
@@ -173,11 +210,16 @@ def draw(m):
             pw = [v / total for v in pw]
             col = sum(pw[i][:, None] * cmd['colour'][3 * t + i].astype(np.float64) for i in range(3))
             uv = sum(pw[i][:, None] * cmd['uv'][3 * t + i].astype(np.float64) for i in range(3))
-            rgb, keep = shade(m, col.astype(f32), uv.astype(f32), cmd['tex'], cmd['key'])
+            rgba, keep = shade(m, col.astype(f32), uv.astype(f32), cmd['tex'], cmd['key'])
             idx = np.argwhere(ok)[keep]
             yy, xx = idx[:, 0] + y_lo, idx[:, 1] + x_lo
-            image[yy, xx] = (rgb[keep] * 255.0 + 0.5).astype(np.uint8)
-            depth[yy, xx] = zf[ok][keep]
+            src, alpha = rgba[keep][:, :3].astype(np.float64), rgba[keep][:, 3:4].astype(np.float64)
+            dst = image[yy, xx] / 255.0
+            blend = which & 3   # none, alpha, additive, multiply
+            out = src if blend == 0 else src * alpha + dst * (1 - alpha) if blend == 1 else src * alpha + dst if blend == 2 else src * dst
+            image[yy, xx] = (np.clip(out, 0, 1) * 255.0 + 0.5).astype(np.uint8)
+            if which == 0:
+                depth[yy, xx] = zf[ok][keep]
     return image, edge, stats
 
 

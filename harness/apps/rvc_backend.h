@@ -39,6 +39,8 @@ const unsigned kControlRow = 64 + 0x700000 / 2048, kControlTexels = 16;
 
 class RvcBackend {
 public:
+    // The GPU device's passes to draw in the next frame, one bit each (docs/gpu.md); pass 0 always.
+    uint32_t gpuPasses = 1;
     static const UINT kWidth = 2048, kHeight = 4096;   // rvc's vm_state_crt.asset
     static const UINT kProfCount = 256;
 

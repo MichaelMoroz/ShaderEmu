@@ -37,7 +37,7 @@ colour fragments. The CPU shader has no GPU code.
 | Address | Contents |
 |---|---|
 | `0x87000000` | display mode: 3 shows the GPU's picture (see `display.md` for width and height) |
-| `0x87000010` | submit: bit 0 draws the list; bit 1 then copies the picture to the RAM framebuffer at `0x87001000`; bit 2 copies it into the rectangle below instead. The GPU sets it back to 0 |
+| `0x87000010` | submit: bit 0 draws the list; bit 1 then copies the picture to the RAM framebuffer at `0x87001000`; bit 2 copies it into the rectangle below instead; bits 9-15 say the list has commands for passes 1-7 (below). The GPU sets it back to 0 |
 | `0x87000014` | address of the command list |
 | `0x87000018` | number of commands in it (at most 4096) |
 | `0x8700001c` | lists drawn so far; it changes when a submitted list has been drawn |
@@ -68,11 +68,13 @@ mesh order.
 | 0 | end | | |
 | 1 | clear | 3 | 1: colour. Fills the picture, at the far plane |
 | 2 | rectangle | 6 | 1: colour, 2: key, 4-7: x0, y0, x1, y1 (exclusive), 8: fragment mode, 9-11: texture address, width, height, 12-15: u0, v0, u1, v1. Drawn at the near plane |
-| 3 | draw | count | 1: vertex buffer, 2: count, 4: vertex mode, 5: fragment mode, 6: uniforms address, 7-9: texture address, width, height, 10: key |
+| 3 | draw | count | 1: vertex buffer, 2: count, 4: vertex mode, 5: fragment mode, 6: uniforms address, 7-9: texture address, width, height, 10: key, 11: colour (compact vertices) |
 
 A vertex is 64 bytes: position, normal, texture coordinates, colour, four numbers each.
-Numbers are 16.16 fixed point; colours given as one word are `0x00RRGGBB`. Vertex buffers and
-uniform vectors must be 16-byte aligned, because the GPU reads them a RAM texel at a time.
+Numbers are 16.16 fixed point. A colour given as one word is `0xTTRRGGBB`, T being
+transparency, so that `0x00RRGGBB` is opaque; a vertex colour's fourth number is its alpha.
+Vertex buffers and uniform vectors must be 16-byte aligned, because the GPU reads them a RAM
+texel at a time.
 
 **Vertex modes**
 
@@ -82,6 +84,16 @@ uniform vectors must be 16-byte aligned, because the GPU reads them a RAM texel 
 | 1 clip | uniforms 0-3 are the rows of a clip matrix (OpenGL conventions: y up, z from -w to w) |
 | 2 lit | as clip; uniforms 4-6 are a normal matrix, 7 a light direction, 8 a diffuse and 9 an ambient colour. The vertex colour becomes max(n.l, 0) * diffuse + ambient |
 
+Flags added to the vertex mode:
+
+| Flag | Meaning |
+|---|---|
+| `0x100` modelview | uniforms 0-3 are the projection alone and 4-6 the modelview's rows; the GPU multiplies |
+| `0x200` quads | the buffer holds four corners per quad, in order round it, for every six vertices drawn |
+| `0x400` compact | a vertex is one texel: x, y, z, then u in the low and v in the high 16 bits, in 1/1024ths (so within 32 repeats). All of the command's vertices take the colour in its word 11 |
+
+A textured quad is then 16 words of vertices instead of 96.
+
 **Fragment modes**
 
 | Mode | Colour |
@@ -90,9 +102,32 @@ uniform vectors must be 16-byte aligned, because the GPU reads them a RAM texel 
 | 1 | a texture of `0x00RRGGBB` words, times the colour |
 | 2 | a texture of bytes looked up in the display palette (`0x87000400`), times the colour |
 | 3 | a texture of single bits, each row a whole number of bytes, leftmost pixel in the highest bit: set bits take the colour, clear bits are not drawn |
+| 4 | a texture of three bytes a pixel (red, green, blue, as in a PPM file), rows not padded, times the colour |
 | +0x100 | texels equal to the key (a colour, or an index in mode 2) are not drawn |
 
 Textures are anywhere in RAM, sampled nearest and repeating, with coordinates 0..1 across.
+
+**Passes.** Bits 16-18 of the fragment mode word say which pass a command is drawn in. The
+passes are drawn in order, each as one draw of the whole mesh with fixed blending and depth
+use, and within a pass commands keep the list's order:
+
+| Pass | Blending | Depth |
+|---|---|---|
+| 0 | none | tested and written |
+| 1 | over what is there, by alpha | tested |
+| 2 | added, scaled by alpha | tested |
+| 3 | what is there times the colour | tested |
+| 4-7 | the same four | not used: for drawing on top |
+
+So a frame is at most eight draws however many commands and state changes it has, and a list
+that only uses pass 0 is one, as before. The host draws passes 1-7 only while lists ask for
+them: it reads the submit word back, sees the bits, and from then on draws those passes (and
+for some hundred frames after their last use). A list that needs a pass not being drawn yet
+stays submitted, undrawn, until it is; that delay happens once, not per frame. In the shader
+the pass is `_GpuPass` and the passes drawn `_GpuPasses`; a host that leaves both at zero draws
+pass 0 only, and lists that ask for more wait for ever.
+
+`programs/blend` is the test card for all of this.
 
 A window system uses the GPU as a 2D accelerator this way (`nanox.md`): each list starts with
 a rectangle textured with the buffer it draws on and is copied back into that buffer, so the
@@ -106,6 +141,24 @@ textured rectangle per window, copied into the display's framebuffer.
 `programs/gears` is the example: three gears, 640 triangles, lit and textured, with a bar and
 a keyed image on top (`w` toggles the writeback). `programs/rects` is a test card of 3,600
 rectangles in one list, written back.
+
+## OpenGL for Nano-X programs
+
+`programs/linux/gles.c` (`include/GLES/gl.h`, `segl.h`) is a fixed-point OpenGL in the manner of
+OpenGL ES 1.x: `GLfixed` everywhere, vertex arrays and `glDrawArrays`, matrices, paletted and
+RGBA textures, blending, depth and alpha test. Nothing is converted to floating point on the
+way: `GLfixed` is what the device reads.
+
+- `GL_QUADS` and triangles go into GPU memory as compact vertices; calls with the same state
+  join one command. Blending and the depth test choose the pass, so a program may set state
+  in any order and still costs at most eight draws.
+- A paletted texture (`GL_COLOR_INDEX8_EXT`) is looked up in one shared palette
+  (`glColorTableEXT`, or `seglPalette()`); with `GL_ALPHA_TEST` on, texels of the index given
+  to `glColorKeySE` are holes.
+- `seglMemory()` hands out GPU memory and `seglTexturePointer()` makes it a texture with no
+  copy; `seglInit(window)` attaches to a Nano-X window and `seglSwap()` shows the frame.
+- A matrix holds 16.16 numbers, so `glOrthox` over a pixel-sized range is not exact (2/320
+  is not representable). Draw 2D in units of the whole view (0 to 1) instead.
 
 ## From Linux
 

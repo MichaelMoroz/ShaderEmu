@@ -76,9 +76,13 @@ struct Options {
     std::string vizCapture;   // BMP of the memory view, written at exit
     std::string gpuCapture;   // BMP of the GPU device's colour target, written at exit
     std::string pcLog;        // per frame: the guest's pc and the instructions it ran, as two uint32
+    std::string frameLog;     // per frame, four uint32: pc, instructions, last stall, microseconds since start
     double statsAfter = -1;   // >= 0: print a STATS line for the part of the run after this many seconds
     bool noDoubles = false;
     bool noBands = false;     // --no-bands: the commit rewrites all of RAM, as on D3D11
+    bool firmware = false;    // --firmware: boot OpenSBI instead of answering the kernel's SBI calls
+    bool ourKernel = false;   // the RAM image is this project's (kernel at +4 MiB, device tree at +34 MiB)
+    bool sbi = false;         // compile with SBI_HLE
     bool noGpu = false;       // --no-gpu: leave out the GPU device's passes (gpu.shader)
     bool doubles = false;     // --doubles: keep the shader's double math under DXC too
 #ifdef RVC_DEFAULT_DXC
@@ -138,8 +142,11 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
                          auto      (default) the smallest one the chosen image runs on
   --no-gpu             leave out the GPU device (the passes in <rvc>/gpu.shader, docs/gpu.md)
   --no-bands           D3D12: have the commit rewrite all of RAM instead of only the bands written to
+  --firmware           boot the image's OpenSBI. Without it this project's Linux image starts in the
+                       kernel and the machine answers its firmware (SBI) calls itself (docs/boot.md)
   --gpu-capture FILE   save the GPU device's whole colour target as a BMP at exit
   --pc-log FILE        sample the guest's pc once a frame, for tools/pc_profile.py
+  --frame-log FILE     per frame: pc, instructions, last stall and time, for tools/boot_profile.py
   --stats-after S      print instructions/s and frames/s for the run after its first S seconds
                        (and start the pc log there)
   --dxc / --d3d11      backend: D3D12 with DXC-compiled DXIL, or D3D11 with FXC bytecode (what VRChat
@@ -198,7 +205,11 @@ bool parseArgs(int argc, char** argv, Options& o) {
         };
         if (a == "--help" || a == "-h") { usage(); exit(0); }
         else if (a == "--list-adapters") { listAdapters(); exit(0); }
-        else if (a == "--rvc") { o.rvcDir = next("--rvc"); o.rvcDirSet = true; }
+        else if (a == "--rvc") {
+            o.rvcDir = next("--rvc");
+            std::replace(o.rvcDir.begin(), o.rvcDir.end(), '\\', '/');   // compared with "experiments/rvc_opt"
+            o.rvcDirSet = true;
+        }
         else if (a == "--payload") { o.payloadDir = next("--payload"); o.payloadSet = true; }
         else if (a == "--image") o.image = next("--image");
         else if (a == "--machine") {
@@ -257,9 +268,11 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--no-gpu") o.noGpu = true;
         else if (a == "--gpu-capture") o.gpuCapture = next("--gpu-capture");
         else if (a == "--pc-log") o.pcLog = next("--pc-log");
+        else if (a == "--frame-log") o.frameLog = next("--frame-log");
         else if (a == "--stats-after") o.statsAfter = atof(next("--stats-after").c_str());
         else if (a == "--define") o.defines.push_back(next("--define"));
         else if (a == "--no-bands") o.noBands = true;
+        else if (a == "--firmware") o.firmware = true;
         else { fprintf(stderr, "unknown option %s\n", a.c_str()); usage(); return false; }
     }
     if (havePendingExpect) { fprintf(stderr, "--expect without --send\n"); return false; }
@@ -365,6 +378,7 @@ const BootImage kImages[] = {
     {"rust", "Rust test payload on OpenSBI (bare metal)", "data", "rust_payload", "none", "dts", 1},
     {"gears", "Gears: three lit, textured gears drawn by the GPU device (bare metal C)", nullptr, "gears", "none", "none", 2},
     {"rects", "GPU test card: 3,600 rectangles in one list, written back to RAM (bare metal C)", nullptr, "rects", "none", "none", 2},
+    {"blend", "GPU test card: the eight passes, blending with and without depth (bare metal C)", nullptr, "blend", "none", "none", 2},
     {"raycast", "Raycaster: walk a textured maze on the display (bare metal C)", nullptr, "raycast", "none", "none", 2},
     {"raytrace", "Raytracer drawing to the display (bare metal C)", nullptr, "raytrace", "none", "none", 2},
     {"rvc-raytrace", "rvc's Rust raytracer, drawing into raw memory", "data", "rust_raytrace", "none", "dts", 1},
@@ -400,7 +414,10 @@ void applyImage(Options& o, const BootImage& im) {
         o.mtdPrefix = "build/images/linux/rootfs";
         o.dtbPrefix = "build/images/linux/dts";
         // and our kernel, if it has been built (linux/kernel/build.sh)
-        if (fs::exists("build/images/linux/linux_payload.bin", ec)) o.ramPrefix = "build/images/linux/linux_payload";
+        if (fs::exists("build/images/linux/linux_payload.bin", ec)) {
+            o.ramPrefix = "build/images/linux/linux_payload";
+            o.ourKernel = true;
+        }
     }
 }
 
@@ -496,6 +513,8 @@ int main(int argc, char** argv) {
         const BootImage* im = opt.loadState.empty() ? findImage(opt.image) : nullptr;
         opt.machine = im && opt.rvcDir == "experiments/rvc_opt" ? im->machine : 0;
     }
+    // Our Linux image, and snapshots (which are of it), run without firmware.
+    opt.sbi = !opt.firmware && opt.machine == 0 && opt.rvcDir == "experiments/rvc_opt" && (opt.ourKernel || !opt.loadState.empty());
     if (opt.machine == 1) opt.defines.push_back("NO_PAGING");
     if (opt.machine == 2) opt.defines.push_back("M_MODE_ONLY");
     if (opt.machine > 0)
@@ -548,6 +567,7 @@ int main(int argc, char** argv) {
         opt.defines.push_back("GPU_DEVICE");   // the Commit pass copies the GPU's picture back
     }
     // D3D12 keeps both state buffers, which is what lets the commit skip unwritten bands
+    if (opt.sbi) opt.defines.push_back("SBI_HLE");
     if (opt.dxc && !opt.noBands) opt.defines.push_back("COMMIT_BANDS");
     // under DXC a local array is not zeroed at the start of every tick, a static one is
     if (opt.dxc) opt.defines.push_back("L1_LOCAL");
@@ -664,17 +684,23 @@ int main(int argc, char** argv) {
     double guestTime = timeBase;
 
     std::vector<uint32_t> pcSamples;
+    std::vector<uint32_t> frameSamples;
     bool statsStarted = false;
     double timeSum[3] = {0, 0, 0};
     int timeSamples = 0;
     uint64_t statsInstr0 = 0, statsFrame0 = 0;
     auto statsT0 = t0;
     bool keyboardOwned = false;   // a guest program reads the keyboard device (docs/input.md)
+    int gpuPassLife[8] = {};      // frames each of the GPU's passes 1-7 is still drawn for
     auto processRow = [&](const std::vector<uint8_t>& raw, uint64_t rowFrame) {
         const uint32_t* t = (const uint32_t*)raw.data();
         auto texel = [&](int x, int c) { return t[x * 4 + c]; };
         uint32_t clock = texel(28, 1);
         keyboardOwned = raw.size() >= (64 + 4) * 16 && texel(64 + 3, 0) == 0x6b657973u;
+        // passes a submitted list asks for: drawn from now on, and for a while after the last use
+        if (raw.size() >= (64 + 2) * 16)
+            for (int p = 1; p < 8; ++p)
+                if ((texel(64 + 1, 0) >> (8 + p)) & 1) gpuPassLife[p] = 600;
         commits = texel(28, 2);
         consumedTag = texel(9, 3);
         if (rowFrame < (uint64_t)opt.initFrames) return;  // cpu_init leaves junk in the UART buffer
@@ -682,6 +708,10 @@ int main(int argc, char** argv) {
         if (haveClock && !opt.pcLog.empty() && (opt.statsAfter < 0 || statsStarted)) {
             pcSamples.push_back(texel(36, 3));
             pcSamples.push_back((uint32_t)(clock - lastClock));
+        }
+        if (haveClock && !opt.frameLog.empty()) {
+            double us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();
+            frameSamples.insert(frameSamples.end(), {texel(36, 3), (uint32_t)(clock - lastClock), texel(40, 2), (uint32_t)us});
         }
         lastClock = clock;
         haveClock = true;
@@ -811,6 +841,16 @@ int main(int argc, char** argv) {
             timeSum[1] += gpuCommitMs;
             timeSum[2] += gpuDeviceMs;
             ++timeSamples;
+        }
+        {
+            uint32_t passes = 1;
+            for (int p = 1; p < 8; ++p)
+                if (gpuPassLife[p] > 0) {
+                    --gpuPassLife[p];
+                    passes |= 1u << p;
+                }
+            backend.gpuPasses = passes;
+            mat.setInt("_GpuPasses", passes);
         }
         backend.frame(mat, frame, sampleTimes || (backend.viewOpen() && wall - ovLast >= 0.2));
         ++frame;
@@ -1006,6 +1046,7 @@ int main(int argc, char** argv) {
             fprintf(stderr, "STATS gpu per frame: tick %.3f ms, commit %.3f ms, device %.3f ms; wall %.3f ms\n", timeSum[0] / timeSamples,
                     timeSum[1] / timeSamples, timeSum[2] / timeSamples, 1000.0 * secs / (double)frames);
     }
+    if (!opt.frameLog.empty()) writeFileBinary(opt.frameLog, (const uint8_t*)frameSamples.data(), frameSamples.size() * 4);
     if (!opt.pcLog.empty()) writeFileBinary(opt.pcLog, (const uint8_t*)pcSamples.data(), pcSamples.size() * 4);
     if (!opt.gpuCapture.empty() && exitCode != 1)
         fprintf(stderr, "\n[harness] GPU target %s %s\n", backend.gpuCapture(opt.gpuCapture) ? "written to" : "capture FAILED:", opt.gpuCapture.c_str());

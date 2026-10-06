@@ -57,17 +57,20 @@ uint mem_get_cached_or_tex_l1(L1P uint addr) {
         // array-style L1: most words that pass the filter are in no slice of their set
         uint set = RAM_L1_ARRAY_IDX(addr);
         uint occ = L1_OCC_SLICES(set);
+        // An array read costs as much as a dozen additions: read the two addresses of an
+        // entry, then only the value that matched.
         [branch]
-        if (occ != 0) {
-            for (uint slice = 0; slice < L1_SLICES; slice++) {
-                [branch]
-                if ((occ >> slice) & 1) {
-                    uint4 cur = l1_cache[set + slice * L1_SETS];
-                         if (cur.x == addr) { PROF(PROF_ram_read_l1_hit) return cur.y; }
-                    else if (cur.z == addr) { PROF(PROF_ram_read_l1_hit) return cur.w; }
-                }
-            }
+        if (occ & 1) {
+            [branch] if (l1_cache[set].x == addr) { PROF(PROF_ram_read_l1_hit) return l1_cache[set].y; }
+            [branch] if (l1_cache[set].z == addr) { PROF(PROF_ram_read_l1_hit) return l1_cache[set].w; }
         }
+#if L1_SLICES > 1
+        [branch]
+        if (occ & 2) {
+            [branch] if (l1_cache[set + L1_SETS].x == addr) { PROF(PROF_ram_read_l1_hit) return l1_cache[set + L1_SETS].y; }
+            [branch] if (l1_cache[set + L1_SETS].z == addr) { PROF(PROF_ram_read_l1_hit) return l1_cache[set + L1_SETS].w; }
+        }
+#endif
 
         if (cpu.cache.ram_l1_last_addr == addr) {
             // this may seem unnecessary, but is required for multi-byte write instructions
@@ -312,63 +315,80 @@ void mem_set_ram_l1(L1P uint word_addr, uint bits, uint mask) {
     }
     PROF(PROF_ram_write_byte)
     uint i0 = RAM_L1_ARRAY_IDX(word_addr);
+    uint i1 = i0 + L1_SETS;
     uint occ = L1_OCC_SLICES(i0);
-    uint4 c0 = 0;
+    // Only the addresses are read (an array read is costly); a value only when part of a word
+    // is stored, and the second entry only when the first does not hold the word.
+    bool real = word_addr != 0;   // address 0 is never cached (0 marks an empty entry)
+    uint a0x = 0, a0z = 0, a1x = 0, a1z = 0;
     [branch]
     if (occ & 1) {
-        c0 = l1_cache[i0];
+        a0x = l1_cache[i0].x;
+        a0z = l1_cache[i0].z;
     }
+    bool h0x = real && a0x == word_addr, h0z = real && a0z == word_addr;
 #if L1_SLICES > 1
-    uint i1 = i0 + L1_SETS;
-    uint4 c1 = 0;
     [branch]
-    if (occ & 2) {
-        c1 = l1_cache[i1];
+    if ((occ & 2) && !(h0x || h0z)) {
+        a1x = l1_cache[i1].x;
+        a1z = l1_cache[i1].z;
     }
-#else
-    uint4 c1 = 0;
 #endif
-    bool real = word_addr != 0;   // address 0 is never cached (0 marks an empty entry)
-    bool h0x = real && c0.x == word_addr, h0z = real && c0.z == word_addr;
-    bool h1x = real && c1.x == word_addr, h1z = real && c1.z == word_addr;
+    bool h1x = real && a1x == word_addr, h1z = real && a1z == word_addr;
     bool last = cpu.cache.ram_l1_last_addr == word_addr && (word_addr & mem_cache_bloom) == word_addr;
     bool known = h0x || h0z || h1x || h1z || last;
-    uint cur_val = h0x ? c0.y : h0z ? c0.w : h1x ? c1.y : h1z ? c1.w : cpu.cache.ram_l1_last_val;
+    uint val = bits;
     [branch]
-    if (!known && mask != 0xffffffff) {
-        PROF(PROF_ram_read_tex)
-        cur_val = idx_uint4(STATE_TEX(RAM_ADDR(word_addr >> 4)), (word_addr >> 2) & 0x3);
-        known = true;
-    }
-    uint val = (cur_val & ~mask) | (bits & mask);
-    [branch]
-    if (!(known && val == cur_val)) {
-        PROF(PROF_ram_write_store)
-        mem_cache_bloom |= word_addr;
-        mem_dirty |= 1u << ((word_addr >> 22) & 31);
-        // first entry that is free or already this word's, in the order lookups search them
-        if (real && (c0.x == 0 || h0x)) {
-            l1_cache[i0] = uint4(word_addr, val, c0.zw);
-            L1_OCC_SET(i0)
-        } else if (real && (c0.z == 0 || h0z)) {
-            l1_cache[i0].z = word_addr;
-            l1_cache[i0].w = val;
-            L1_OCC_SET(i0)
-#if L1_SLICES > 1
-        } else if (real && (c1.x == 0 || h1x)) {
-            l1_cache[i1] = uint4(word_addr, val, c1.zw);
-            L1_OCC_SET(i1)
-        } else if (real && (c1.z == 0 || h1z)) {
-            l1_cache[i1].z = word_addr;
-            l1_cache[i1].w = val;
-            L1_OCC_SET(i1)
-#endif
+    if (mask != 0xffffffff) {
+        uint cur_val;
+        [branch]
+        if (known) {
+            if (h0x) { cur_val = l1_cache[i0].y; }
+            else if (h0z) { cur_val = l1_cache[i0].w; }
+            else if (h1x) { cur_val = l1_cache[i1].y; }
+            else if (h1z) { cur_val = l1_cache[i1].w; }
+            else { cur_val = cpu.cache.ram_l1_last_val; }
         } else {
-            PROF(PROF_l1_stall)
-            cpu.cache.ram_l1_last_addr = word_addr;
-            cpu.cache.ram_l1_last_val = val;
-            cpu.stall = STALL_MEM_CACHE_L1;
+            PROF(PROF_ram_read_tex)
+            cur_val = idx_uint4(STATE_TEX(RAM_ADDR(word_addr >> 4)), (word_addr >> 2) & 0x3);
         }
+        val = (cur_val & ~mask) | (bits & mask);
+        // a store that changes nothing in a word not yet cached is not worth an entry
+        if (!known && val == cur_val) {
+            return;
+        }
+    }
+    PROF(PROF_ram_write_store)
+    mem_cache_bloom |= word_addr;
+    mem_dirty |= 1u << ((word_addr >> 22) & 31);
+    // the entry that already is this word's, else the first free one in the order lookups search
+    if (h0x) {
+        l1_cache[i0].y = val;
+    } else if (h0z) {
+        l1_cache[i0].w = val;
+    } else if (h1x) {
+        l1_cache[i1].y = val;
+    } else if (h1z) {
+        l1_cache[i1].w = val;
+    } else if (real && (occ & 1) == 0) {
+        l1_cache[i0] = uint4(word_addr, val, 0, 0);
+        L1_OCC_SET(i0)
+    } else if (real && a0z == 0) {
+        l1_cache[i0].z = word_addr;
+        l1_cache[i0].w = val;
+#if L1_SLICES > 1
+    } else if (real && (occ & 2) == 0) {
+        l1_cache[i1] = uint4(word_addr, val, 0, 0);
+        L1_OCC_SET(i1)
+    } else if (real && a1z == 0) {
+        l1_cache[i1].z = word_addr;
+        l1_cache[i1].w = val;
+#endif
+    } else {
+        PROF(PROF_l1_stall)
+        cpu.cache.ram_l1_last_addr = word_addr;
+        cpu.cache.ram_l1_last_val = val;
+        cpu.stall = STALL_MEM_CACHE_L1;
     }
 }
 

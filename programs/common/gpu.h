@@ -27,6 +27,9 @@ enum {
     GPU_VERTEX_SCREEN,   // position is pixels (x, y) and depth (z, 0 near .. 1 far)
     GPU_VERTEX_CLIP,     // uniforms 0-3: clip matrix rows (OpenGL conventions)
     GPU_VERTEX_LIT,      // also 4-6: normal matrix rows, 7: light direction, 8: diffuse, 9: ambient colour
+    GPU_VERTEX_MODELVIEW = 0x100,   // add: 0-3 is the projection alone and 4-6 the modelview's rows
+    GPU_VERTEX_QUADS = 0x200,       // add: four corners stored per quad (in order round it) for every six vertices drawn
+    GPU_VERTEX_COMPACT = 0x400,     // add: a vertex is gpu_compact_vertex, and the colour is the command's word 11
 };
 
 // How its fragments are coloured.
@@ -35,8 +38,23 @@ enum {
     GPU_FRAGMENT_TEXTURE,         // a texture of 0x00RRGGBB words, times the colour
     GPU_FRAGMENT_INDEXED,         // a texture of bytes through the display palette, times the colour
     GPU_FRAGMENT_MASK,            // a 1-bit texture (rows of whole bytes, leftmost bit highest): set bits take the colour
+    GPU_FRAGMENT_RGB24,           // a texture of three bytes a pixel (red, green, blue; rows not padded), times the colour
     GPU_FRAGMENT_KEYED = 0x100,   // add: texels equal to the key are not drawn
 };
+
+// The pass a command is drawn in, added to its fragment mode with GPU_PASS(). Passes are drawn
+// in this order, each command list order within; colours are 0xTTRRGGBB, T being transparency.
+enum {
+    GPU_PASS_OPAQUE,         // depth tested and written (what a command is without GPU_PASS)
+    GPU_PASS_BLEND,          // over what is there by its alpha; depth tested, not written
+    GPU_PASS_ADD,            // added, scaled by its alpha
+    GPU_PASS_MULTIPLY,       // what is there times its colour
+    GPU_PASS_FLAT,           // the same four with no depth test: for drawing on top
+    GPU_PASS_FLAT_BLEND,
+    GPU_PASS_FLAT_ADD,
+    GPU_PASS_FLAT_MULTIPLY,
+};
+#define GPU_PASS(n) ((uint32_t)(n) << 16)
 
 // The GPU reads vertices and uniform vectors a whole 16-byte RAM texel at a time, so both must
 // sit on 16-byte boundaries. Textures may be anywhere.
@@ -49,14 +67,31 @@ typedef struct {
     int32_t colour[4];     // 0..1 red, green, blue (not used by GPU_VERTEX_LIT)
 } GPU_ALIGNED gpu_vertex;
 
+// One texel: u and v are in 1/1024ths, 16 bits each (so within 32 repeats of the texture).
+typedef struct {
+    int32_t x, y, z;
+    uint32_t uv;   // u | v << 16
+} GPU_ALIGNED gpu_compact_vertex;
+
 static volatile uint32_t* gpu_next;
 static uint32_t gpu_commands, gpu_vertices;
+static uint32_t gpu_passes;   // passes 1-7 this list uses, one bit each, for the submit word
 
 static inline void gpu_begin(void) {
     gpu_next = (volatile uint32_t*)GPU_COMMANDS;
     gpu_commands = 0;
     gpu_vertices = 0;
+    gpu_passes = 0;
 }
+
+// Notes the pass of a fragment mode, so the submit word can tell the host which to draw.
+static inline uint32_t gpu_mode(uint32_t fragment_mode) {
+    gpu_passes |= (1u << ((fragment_mode >> 16) & 7)) & 0xfe;
+    return fragment_mode;
+}
+
+// A rectangle of one colour in a pass: gpu_rect() with blending.
+static inline void gpu_rect_in(int x0, int y0, int x1, int y1, uint32_t colour, uint32_t pass);
 
 // Commands are 16 words; word 3 is where the command's vertices sit in the GPU's mesh.
 static inline volatile uint32_t* gpu_command(uint32_t op, uint32_t vertices) {
@@ -83,6 +118,11 @@ static inline void gpu_rect(int x0, int y0, int x1, int y1, uint32_t colour) {
     c[6] = (uint32_t)x1;
     c[7] = (uint32_t)y1;
     c[8] = GPU_FRAGMENT_COLOUR;
+}
+
+static inline void gpu_rect_in(int x0, int y0, int x1, int y1, uint32_t colour, uint32_t pass) {
+    gpu_rect(x0, y0, x1, y1, colour);
+    gpu_next[-16 + 8] = gpu_mode(GPU_FRAGMENT_COLOUR | GPU_PASS(pass));
 }
 
 // Draws an image of 0x00RRGGBB words (iw x ih) stretched over the rectangle. With use_key,
@@ -113,7 +153,7 @@ static inline void gpu_draw(const gpu_vertex* vertices, uint32_t count, uint32_t
     c[1] = (uint32_t)vertices;
     c[2] = count;
     c[4] = vertex_mode;
-    c[5] = fragment_mode;
+    c[5] = gpu_mode(fragment_mode);
     c[6] = (uint32_t)uniforms;
     c[7] = (uint32_t)texture;
     c[8] = w;
@@ -127,7 +167,7 @@ static inline void gpu_submit_as(uint32_t how) {
     uint32_t before = GPU_FRAMES;
     GPU_LIST = GPU_COMMANDS;
     GPU_COUNT = gpu_commands;
-    GPU_SUBMIT = how;
+    GPU_SUBMIT = how | (gpu_passes << 8);   // drawn once the host draws every pass used
     do {
         cpu_wait();   // the list is drawn between frames
     } while (GPU_FRAMES == before);

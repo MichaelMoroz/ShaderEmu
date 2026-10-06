@@ -173,7 +173,53 @@ DEF(divu, FormatR, { // rv32m
 DEF(ebreak, FormatEmpty, { // system
     // unnecessary?
 })
+#ifdef SBI_HLE
+// The supervisor's calls to firmware (SBI), answered by the machine itself: with SBI_HLE it
+// starts the kernel in supervisor mode and runs no machine-mode firmware (docs/boot.md).
+void sbi_call() {
+    uint ext = xr[17], a0 = xr[10];
+    uint error = 0, value = 0;
+    if (ext == 0x54494D45 || ext == 0) {
+        // set_timer: the timer interrupt stays pending until the next deadline is set
+        cpu.clint.mtimecmp_lo = a0;
+        cpu.clint.mtimecmp_hi = xr[11];
+        write_csr_raw(CSR_MIP, read_mip() & ~MIP_STIP);
+    } else if (ext == 1) {
+        put_byte_to_fb(a0 & 0xff);
+    } else if (ext == 2) {
+        value = UART_GET1(RBR);
+        if (value != 0) {
+            UART_SET1(RBR, 0);
+            UART_SET2(LSR, (UART_GET2(LSR) & ~LSR_DATA_AVAILABLE));
+            uart_update_iir();
+        } else {
+            value = 0xffffffff;
+        }
+    } else if (ext == 0x10) {
+        // base: specification 0.2, an implementation of our own, and which extensions exist
+        uint fn = xr[16];
+        value = fn == 0 ? 2 : fn == 1 ? 0x454d55 : fn == 2 ? 1 : (fn == 3 && (a0 == 0x54494D45 || a0 <= 2)) ? 1 : 0;
+    } else {
+        error = 0xfffffffe;   // not supported
+    }
+    // the legacy calls (below 0x10) return one value; the others an error and a value
+    if (ext < 0x10) {
+        xr[10] = value;
+    } else {
+        xr[10] = error;
+        xr[11] = value;
+    }
+    irq_quiet = false;
+}
+#endif
+
 DEF(ecall, FormatEmpty, { // system
+#ifdef SBI_HLE
+    if (cpu.csr.privilege == PRIV_SUPERVISOR) {
+        sbi_call();
+        return;
+    }
+#endif
     /* if (xreg(17) == 93) { */
     /*     // EXIT CALL - only used for self-tests */
     /*     uint status = xreg(10); */
@@ -743,6 +789,7 @@ void time_prepare() {
 
 // The instruction word cpu_tick already fetched for this tick, if any.
 static bool pre_valid = false;
+static bool fast_same = false;   // the last fast instruction left pc in the texel it was fetched from
 static uint pre_word;
 
 void xreg_set(uint r, uint v) {
@@ -802,49 +849,119 @@ bool fast_exec_l1(L1P uint w) {
     uint val = 0;
     bool wr = true;
     bool ok = true;
-    [forcecase]
-    switch (opc) {
-        case 0x37: val = w & 0xfffff000; break;                 // lui
-        case 0x17: val = pc + (w & 0xfffff000); break;          // auipc
-        case 0x6f: {                                            // jal
-            FormatJ j = parse_FormatJ(w);
-            val = pc + 4;
-            npc = pc + j.imm;
-            break;
+    // A switch is the costly thing here: on the GPU one with eight cases takes as long as fifty
+    // additions, a two-way branch as long as six. So the arithmetic instructions compute every
+    // result and select one, and the common classes are told apart by tests, most frequent first.
+    bool low_ok = (w & 3) == 3;
+    [branch]
+    if ((w & 0x5c) == 0x10 && (opc == 0x13 || (w >> 25) != 1)) {
+        // op-imm and op (the M extension aside): bit 5 tells them apart
+        bool reg = (w & 0x20) != 0;
+        bool alt = (w & 0x40000000) != 0;   // subtract, or shift right arithmetic
+        uint a = rs1v;
+        uint b = reg ? rs2v : ((w & 0x80000000 ? 0xfffff800 : 0) | ((w >> 20) & 0x7ff));
+        uint sh = (reg ? rs2v : (w >> 20)) & 0x1f;
+        uint srl = a >> sh;
+        uint sra = (a & 0x80000000) ? ~(~a >> sh) : srl;
+        uint r01 = (f3 & 1) ? a << sh : ((reg && alt) ? a - b : a + b);
+        uint r23 = ((f3 & 1) ? a < b : AS_SIGNED(a) < AS_SIGNED(b)) ? 1 : 0;
+        uint r45 = (f3 & 1) ? (alt ? sra : srl) : a ^ b;
+        uint r67 = (f3 & 1) ? a & b : a | b;
+        val = (f3 & 4) ? ((f3 & 2) ? r67 : r45) : ((f3 & 2) ? r23 : r01);
+        uint f7 = w >> 25;
+        bool shift = (f3 & 3) == 1;
+        ok = low_ok && (reg ? (f7 == 0 || (f7 == 0x20 && (f3 == 0 || f3 == 5)))
+                            : (!shift || f7 == 0 || (f7 == 0x20 && f3 == 5)));
+    } else if (opc == 0x03) {                                   // loads from RAM, translation available
+        FormatI i = parse_FormatI(w);
+        uint va = rs1v + i.imm;
+        FAST_XL(xl_ident_d, MMU_ACCESS_READ, tlb_r_vpn, tlb_r_page, va, t_ok, pa)
+        ok = false;
+        // va == 0 is left to the general path, which treats it specially; so is a load that
+        // straddles two words, which is rare and would double the code on this path
+        uint off = pa & 0x3;
+        [branch]
+        if (va != 0 && (f3 < 3 || f3 == 4 || f3 == 5) && t_ok && (pa & 0x80000000) != 0 &&
+            off + (1u << (f3 & 3)) <= 4 && (pa & 0x7ffffffc) < RAM_MAX) {
+            uint v = mem_get_cached_or_tex(pa & 0x7ffffffc) >> (off * 8);
+            val = f3 == 0 ? sign_extend(v & 0xff, 8) : f3 == 1 ? sign_extend(v & 0xffff, 16) :
+                  f3 == 2 ? v : f3 == 4 ? v & 0xff : v & 0xffff;
+            ok = true;
         }
-        case 0x67: {                                            // jalr
-            FormatI i = parse_FormatI(w);
-            ok = f3 == 0;
-            val = pc + 4;
-            npc = rs1v + i.imm;
-            break;
+    } else if ((w & 0x7c) == 0x20) {                            // sb/sh/sw to RAM, translation available
+        FormatS s;
+        s.rs2 = (w >> 20) & 0x1f;
+        s.addr = rs1v + ((w & 0x80000000 ? 0xfffff000 : 0) | ((w >> 20) & 0xfe0) | ((w >> 7) & 0x1f));
+        FAST_XL(xl_ident_d, MMU_ACCESS_WRITE, tlb_w_vpn, tlb_w_page, s.addr, t_ok, pa)
+        ok = false;
+        wr = false;
+        // within one RAM word: a single read-modify-write (may set cpu.stall when the
+        // cache is full). A store that straddles two words takes the general path.
+        uint s_off = pa & 0x3;
+        [branch]
+        if (low_ok && f3 < 3 && t_ok && (pa & 0x80000000) != 0 && s_off + (1u << f3) <= 4) {
+            uint s_mask = (f3 == 2 ? 0xffffffff : f3 == 1 ? 0xffff : 0xff) << (s_off * 8);
+            mem_set_ram(pa & 0x7ffffffc, rs2v << (s_off * 8), s_mask);
+            ok = true;
         }
-        case 0x13: {                                            // op-imm
-            FormatI i = parse_FormatI(w);
-            uint a = rs1v;
-            uint b = i.imm;
-            uint sh = (w >> 20) & 0x1f;
-            uint f6 = w >> 26;
-            uint f_sra = (a & 0x80000000) ? ~(~a >> sh) : a >> sh;
-            [forcecase]
-            switch (f3) {
-                case 0: val = a + b; break;
-                case 1: val = a << sh; ok = f6 == 0; break;
-                case 2: val = AS_SIGNED(a) < AS_SIGNED(b) ? 1 : 0; break;
-                case 3: val = a < b ? 1 : 0; break;
-                case 4: val = a ^ b; break;
-                case 5: val = f6 == 0x10 ? f_sra : a >> sh; ok = f6 == 0 || f6 == 0x10; break;
-                case 6: val = a | b; break;
-                default: val = a & b; break;
-            }
-            break;
-        }
-        case 0x33: {                                            // op, and the M extension
-            uint a = rs1v;
-            uint b = rs2v;
-            uint f7 = w >> 25;
+    } else if ((w & 0x7c) == 0x60) {                            // branches
+        uint a = rs1v;
+        uint b = rs2v;
+        bool lt = (f3 & 2) ? a < b : AS_SIGNED(a) < AS_SIGNED(b);
+        bool taken = ((f3 & 4) ? lt : a == b) != ((f3 & 1) != 0);
+        FormatB br = parse_FormatB(w);
+        ok = low_ok && f3 != 2 && f3 != 3;
+        wr = false;
+        if (taken) { npc = pc + br.imm; }
+    } else if ((w & 0x04) != 0 && ((w & 0x08) == 0 || (w & 0x40) != 0)) {
+        // lui, auipc, jal and jalr share opcode bit 2 (fence and the atomics, which also have
+        // it, are excluded above); bit 6 is a jump, then bit 3 says jal and bit 5 says lui
+        bool jump = (w & 0x40) != 0, jal = (w & 0x08) != 0;
+        FormatJ j = parse_FormatJ(w);
+        FormatI i = parse_FormatI(w);
+        val = jump ? pc + 4 : (w & 0xfffff000) + ((w & 0x20) ? 0 : pc);
+        npc = jump ? (jal ? pc + j.imm : rs1v + i.imm) : npc;
+        // of opcode bits 6..3 only 0110 (lui), 0010 (auipc), 1101 (jal) and 1100 (jalr) exist
+        ok = low_ok && ((0x3044u >> ((w >> 3) & 15)) & 1) != 0 && (jal || !jump || f3 == 0);
+    } else if (opc == 0x2f) {
+        // atomics on a word of RAM the write TLB knows (a writable page is readable too):
+        // amoadd, amoswap, lr, sc, amoxor, amoor, amoand. The rest take the general path.
+        uint f5 = w >> 27;
+        bool is_lr = f5 == 2, is_sc = f5 == 3;
+        uint va = rs1v;
+        FAST_XL(xl_ident_d, MMU_ACCESS_WRITE, tlb_w_vpn, tlb_w_page, va, t_ok, pa)
+        ok = false;
+        [branch]
+        if (f3 == 2 && va != 0 && t_ok && (pa & 0x80000003) == 0x80000000 && (pa & 0x7ffffffc) < RAM_MAX &&
+            f5 < 16 && ((0x111fu >> f5) & 1) != 0) {
+            uint at = pa & 0x7ffffffc;
+            bool sc_ok = cpu.reservation_en && cpu.reservation_addr == va;
+            uint old = 0;
             [branch]
-            if (f7 == 1) {
+            if (!is_sc) {
+                old = mem_get_cached_or_tex(at);
+            }
+            uint next = f5 == 0 ? old + rs2v : f5 == 4 ? old ^ rs2v : f5 == 8 ? old | rs2v : f5 == 12 ? old & rs2v : rs2v;
+            [branch]
+            if (is_sc ? sc_ok : !is_lr) {
+                mem_set_ram(at, next, 0xffffffff);
+            }
+            if (is_lr) {
+                cpu.reservation_en = true;
+                cpu.reservation_addr = va;
+            }
+            if (is_sc && sc_ok) {
+                cpu.reservation_en = false;
+            }
+            val = is_sc ? (sc_ok ? 0 : 1) : old;
+            ok = true;
+        }
+    } else {
+        [forcecase]
+        switch (opc) {
+            case 0x33: {                                            // the M extension (f7 == 1)
+                uint a = rs1v;
+                uint b = rs2v;
                 // multiply and divide: the same results as the general path's routines
                 bool by_zero = b == 0, wraps = a == 0x80000000 && b == 0xFFFFFFFF;
                 uint safe = by_zero ? 1 : b;
@@ -862,71 +979,10 @@ bool fast_exec_l1(L1P uint w) {
                 }
                 break;
             }
-            uint f_sra = (a & 0x80000000) ? ~(~a >> b) : a >> b;
-            ok = f7 == 0 || (f7 == 0x20 && (f3 == 0 || f3 == 5));
-            [forcecase]
-            switch (f3) {
-                case 0: val = f7 ? a - b : a + b; break;
-                case 1: val = a << b; break;
-                case 2: val = AS_SIGNED(a) < AS_SIGNED(b) ? 1 : 0; break;
-                case 3: val = a < b ? 1 : 0; break;
-                case 4: val = a ^ b; break;
-                case 5: val = f7 ? f_sra : a >> b; break;
-                case 6: val = a | b; break;
-                default: val = a & b; break;
-            }
-            break;
+            default:
+                ok = false;
+                break;
         }
-        case 0x63: {                                            // branches
-            uint a = rs1v;
-            uint b = rs2v;
-            bool lt = AS_SIGNED(a) < AS_SIGNED(b), ltu = a < b;
-            bool taken = f3 == 0 ? a == b : f3 == 1 ? a != b : f3 == 4 ? lt : f3 == 5 ? !lt : f3 == 6 ? ltu : !ltu;
-            FormatB br = parse_FormatB(w);
-            ok = f3 != 2 && f3 != 3;
-            wr = false;
-            if (taken) { npc = pc + br.imm; }
-            break;
-        }
-        case 0x03: {                                            // loads from RAM, translation available
-            FormatI i = parse_FormatI(w);
-            uint va = rs1v + i.imm;
-            FAST_XL(xl_ident_d, MMU_ACCESS_READ, tlb_r_vpn, tlb_r_page, va, t_ok, pa)
-            ok = false;
-            // va == 0 is left to the general path, which treats it specially; so is a load that
-            // straddles two words, which is rare and would double the code on this path
-            uint off = pa & 0x3;
-            [branch]
-            if (va != 0 && (f3 < 3 || f3 == 4 || f3 == 5) && t_ok && (pa & 0x80000000) != 0 &&
-                off + (1u << (f3 & 3)) <= 4 && (pa & 0x7ffffffc) < RAM_MAX) {
-                uint v = mem_get_cached_or_tex(pa & 0x7ffffffc) >> (off * 8);
-                val = f3 == 0 ? sign_extend(v & 0xff, 8) : f3 == 1 ? sign_extend(v & 0xffff, 16) :
-                      f3 == 2 ? v : f3 == 4 ? v & 0xff : v & 0xffff;
-                ok = true;
-            }
-            break;
-        }
-        case 0x23: {                                            // sb/sh/sw to RAM, translation available
-            FormatS s;
-            s.rs2 = (w >> 20) & 0x1f;
-            s.addr = rs1v + ((w & 0x80000000 ? 0xfffff000 : 0) | ((w >> 20) & 0xfe0) | ((w >> 7) & 0x1f));
-            FAST_XL(xl_ident_d, MMU_ACCESS_WRITE, tlb_w_vpn, tlb_w_page, s.addr, t_ok, pa)
-            ok = false;
-            wr = false;
-            // within one RAM word: a single read-modify-write (may set cpu.stall when the
-            // cache is full). A store that straddles two words takes the general path.
-            uint s_off = pa & 0x3;
-            [branch]
-            if (f3 < 3 && t_ok && (pa & 0x80000000) != 0 && s_off + (1u << f3) <= 4) {
-                uint s_mask = (f3 == 2 ? 0xffffffff : f3 == 1 ? 0xffff : 0xff) << (s_off * 8);
-                mem_set_ram(pa & 0x7ffffffc, rs2v << (s_off * 8), s_mask);
-                ok = true;
-            }
-            break;
-        }
-        default:
-            ok = false;
-            break;
     }
     if (!ok) {
         return false;
@@ -936,6 +992,7 @@ bool fast_exec_l1(L1P uint w) {
     // cpu.clint.mtime and cpu.debug_do_tick already hold this pass's values: the first tick of
     // every pass takes the general path (irq_quiet starts false), which sets both.
     cpu.pc = npc;
+    fast_same = (npc ^ pc) < 16 && (npc & 3) == 0;
     return true;
 }
 #undef rs1v
@@ -1023,7 +1080,7 @@ void emulate_l1(L1P0) {
 
     // Nothing below can have an effect while irq_quiet holds, no trap is pending and this is
     // not a UART input poll tick.
-    if (irq_quiet && !ret.trap.en && (cpu.clock & 0xff) != 0xff) {
+    if (irq_quiet && !ret.trap.en && !(UART_INPUT_WAITING && (cpu.clock & 0xff) == 0xff)) {
         PROF(PROF_irq_gated)
         cpu.pc = ret.pc_val;
         return;
@@ -1035,7 +1092,11 @@ void emulate_l1(L1P0) {
     }
 
     if ((cpu.clint.mtimecmp_lo != 0 || cpu.clint.mtimecmp_hi != 0) && (cpu.clint.mtime_hi > cpu.clint.mtimecmp_hi || (cpu.clint.mtime_hi == cpu.clint.mtimecmp_hi && cpu.clint.mtime_lo >= cpu.clint.mtimecmp_lo))) {
+#ifdef SBI_HLE
+        mip_override |= MIP_STIP;   // no firmware in between: the supervisor's timer interrupt
+#else
         mip_override |= MIP_MTIP;
+#endif
     }
     [flatten]
     if (mtip_reset) {

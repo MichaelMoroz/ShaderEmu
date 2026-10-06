@@ -12,6 +12,13 @@ cpu_t cpu_init() {
     ret.uart.lcr_mcr_lsr_scr = 0x00200000; // LSR_THR_EMPTY is set
 
     ret.csr.privilege = 3; // PRIV_MACHINE
+#ifdef SBI_HLE
+    // straight into the kernel, as firmware would enter it: supervisor mode, hart 0 in a0 and
+    // the device tree (which the image has in RAM at this address) in a1
+    ret.xreg[11] = 0x82200000;
+    ret.pc = 0x80400000;
+    ret.csr.privilege = 1;
+#endif
 
     ret.start_time_ref = _Time.y;
 
@@ -27,6 +34,10 @@ cpu_t cpu_init() {
 // happened on every tick. The inner loop only carries what a fast step can change.
 bool fast_step_l1(L1P0) {
     pre_valid = false;
+    // After an instruction that stayed within its texel (three in four of straight-line code)
+    // the window already holds this one: no translation, alignment or window check.
+    [branch]
+    if (!fast_same) {
     // Same page as the last fetch is the common case and costs one compare; anything else goes
     // through the TLBs and becomes the new "last page".
 #ifdef NO_PAGING
@@ -69,7 +80,8 @@ bool fast_step_l1(L1P0) {
         fw_addr1 = f_t + 1;
         fw_tex1 = STATE_TEX(RAM_ADDR(f_t + 1));
     }
-    pre_word = idx_uint4(fw_tex0, (f_pa >> 2) & 0x3);
+    }
+    pre_word = idx_uint4(fw_tex0, (cpu.pc >> 2) & 0x3);
     pre_valid = true;
     if (!fast_exec(pre_word)) {
         return false;                       // the general path reuses pre_word
@@ -90,15 +102,17 @@ bool fast_step_l1(L1P0) {
 // to take the general path. The clock is advanced once at the end.
 uint fast_run_l1(L1P uint room) {
     pre_valid = false;
+    fast_same = false;
     if (_DoTick != 0 || !irq_quiet) {
         return 0;
     }
-    // the tick that makes (clock & 0xff) == 0xff polls the UART
+    // the tick that makes (clock & 0xff) == 0xff polls the UART for input, on the general path;
+    // there is nothing to poll for unless the host has a character the guest has not taken
     uint to_poll = (0xff - (cpu.clock & 0xff)) & 0xff;
     if (to_poll == 0) {
         to_poll = 256;
     }
-    uint budget = min(room, to_poll - 1);
+    uint budget = UART_INPUT_WAITING ? min(room, to_poll - 1) : room;
     uint n = 0;
     bool again = budget > 0;
     [loop]

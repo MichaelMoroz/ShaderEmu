@@ -94,6 +94,7 @@ for b in path:
             m2 = re.search(r'@dx\.op\.(\w+)', i); op = 'call ' + (m2.group(1) if m2 else '?')
         ops[op] += 1
 print(', '.join('%s %d' % kv for kv in ops.most_common()))
+print('per block (instructions + phis): ' + ' '.join('%s:%d+%d' % (b, cost(b), len(blocks[b]) - cost(b)) for b in path))
 if len(sys.argv) > 3:
     for b in path:
         print('--- block', b, '(%d)' % cost(b))

@@ -64,7 +64,11 @@ bool handle_trap(inout ins_ret ret, bool is_interrupt, uint c_mie) {
 #else
     uint current_privilege = cpu.csr.privilege;
 
+#ifdef SBI_HLE
+    uint mdeleg = 0xffffffff;   // nothing runs in machine mode: every trap is the supervisor's
+#else
     uint mdeleg = read_csr_raw(is_interrupt ? CSR_MIDELEG : CSR_MEDELEG);
+#endif
     uint sdeleg = read_csr_raw(is_interrupt ? CSR_SIDELEG : CSR_SEDELEG);
     uint pos = t.type & 0xFFFF;
 

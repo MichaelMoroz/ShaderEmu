@@ -140,6 +140,18 @@ def main():
     if dtb[:4] != b'\xd0\x0d\xfe\xed' or dtb.count(old) != 1:
         raise SystemExit('device tree: expected one memory range 0x80000000 + 0x07b00000')
     dtb[dtb.index(old):dtb.index(old) + 16] = new
+    # The root device is mapped a page at a time, so it is no larger than the image needs.
+    # The new text has the old one's length: the tree's offsets stay as they are.
+    old, new = b',256Mi console=', b',%dMi console=' % ((len(rom) >> 20) + 1)
+    if dtb.count(old) != 1 or len(new) > len(old):
+        raise SystemExit('device tree: expected one root device of 256Mi in the boot arguments')
+    dtb[dtb.index(old):dtb.index(old) + len(old)] = new[:-9] + b' ' * (len(old) - len(new)) + new[-9:]
+    # our init in place of upstream's script, when it has been built (linux/userland/build.sh)
+    old, new = b' init=/rvcinit ', b' init=/emuinit '
+    if os.path.exists(os.path.join(extra, 'emuinit')):
+        if dtb.count(old) != 1:
+            raise SystemExit('device tree: expected init=/rvcinit in the boot arguments')
+        dtb[dtb.index(old):dtb.index(old) + len(old)] = new
     open(os.path.join(OUT, 'dts.bin'), 'wb').write(dtb)
     print('dts.bin: RAM now ends at 0x86000000 (%d bytes)' % len(dtb))
 
@@ -151,8 +163,13 @@ def main():
         at = 0x400000
         if boot[at + 0x38:at + 0x3c] != b'RSC\x05' or image[0x38:0x3c] != b'RSC\x05':
             raise SystemExit("expected a RISC-V kernel image at +4 MiB of upstream's payload, and in " + kernel)
-        open(payload, 'wb').write(bytes(boot[:at]) + image)
-        print('linux_payload.bin: OpenSBI + our kernel (%d bytes)' % (at + len(image)))
+        # and the device tree in RAM where OpenSBI would copy it, for booting without firmware
+        tree_at = 0x2200000
+        if at + len(image) > tree_at - 0x400000:
+            raise SystemExit('kernel image too large for the device tree at +34 MiB')
+        boot = bytes(boot[:at]) + image
+        open(payload, 'wb').write(boot + bytes(tree_at - len(boot)) + bytes(dtb))
+        print('linux_payload.bin: OpenSBI, our kernel, device tree (%d bytes)' % (tree_at + len(dtb)))
         print('kernel from %s, programs from %s' % (os.path.relpath(kernel, ROOT), os.path.relpath(extra, ROOT)))
     elif os.path.exists(payload):
         os.remove(payload)

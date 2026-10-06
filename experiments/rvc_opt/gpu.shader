@@ -27,7 +27,11 @@ Shader "ShaderEmu/gpu"
             #pragma fragment frag
 
             Texture2D<uint4> _State;
+            // The pass this draw is (see FRAGMENT_PASS in gpu.h) and the passes drawn this frame,
+            // one bit each. A host that only ever draws pass 0 leaves both at their defaults.
+            uniform uint _GpuPass, _GpuPasses;
             #define GPU_STATE _State
+            #define GPU_PASS_UNIFORMS
             #include "src/gpu.h"
 
             // In Unity the mesh carries its vertex number; here SV_VertexID is the same thing.
@@ -58,6 +62,7 @@ Shader "ShaderEmu/gpu"
             uniform float4 _InputPointer;
             uniform uint _InputButtons, _InputKeySeq, _InputKeyCount;
             uniform uint _HostMs;   // the host's clock, in milliseconds
+            uniform uint _GpuPasses;   // the passes the GPU draw made this frame, one bit each
             uniform uint _InputKey0, _InputKey1, _InputKey2, _InputKey3;
             #define GPU_STATE _SelfTexture2D
             #define GPU_INPUT
