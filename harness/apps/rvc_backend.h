@@ -5,9 +5,11 @@
 
 #include "common.h"
 #include "gpu.h"
+#include "image.h"
 #include "material.h"
 #include "shaderlab.h"
 
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <vector>
@@ -57,6 +59,26 @@ public:
     virtual bool viewCapture(const std::string& path) = 0;
     virtual void viewClose() = 0;
 };
+
+// One lane (0..3 = r, g, b, a) of a payload as rvc's importer lays it out: 2048 texels per row,
+// the lane's word of each 16-byte texel as one RGBA8 pixel. Comes from <dir>/<prefix>.bin (a raw
+// memory image, as our own programs are built) if that exists, else <dir>/<prefix>.<lane>.png.
+inline bool loadPayloadLane(const std::string& dir, const std::string& prefix, int lane, ImageRGBA8& img, std::string& err) {
+    namespace fs = std::filesystem;
+    std::string bin;
+    if (readFileBinary((fs::u8path(dir) / (prefix + ".bin")).u8string(), bin)) {
+        size_t texels = (bin.size() + 15) / 16;
+        img.width = 2048;
+        img.height = (UINT)((texels + 2047) / 2048);
+        img.pixels.assign((size_t)img.width * img.height * 4, 0);
+        for (size_t t = 0; t < texels; ++t)
+            for (size_t k = 0; k < 4; ++k)
+                if (t * 16 + lane * 4 + k < bin.size()) img.pixels[t * 4 + k] = (uint8_t)bin[t * 16 + lane * 4 + k];
+        return true;
+    }
+    const char* lanes[4] = {"r", "g", "b", "a"};
+    return loadImageRGBA8((fs::u8path(dir) / (prefix + "." + lanes[lane] + ".png")).u8string(), img, err);
+}
 
 std::unique_ptr<RvcBackend> makeBackend11();
 std::unique_ptr<RvcBackend> makeBackend12();

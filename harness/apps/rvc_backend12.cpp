@@ -82,7 +82,7 @@ public:
         for (int i = 0; i < 4; ++i) {
             ImageRGBA8 img;
             std::string path = (fs::u8path(dir) / (prefix + "." + lanes[i] + ".png")).u8string();
-            if (!loadImageRGBA8(path, img, err)) return false;
+            if (!loadPayloadLane(dir, prefix, i, img, err)) return false;
             std::vector<uint8_t> flipped(img.pixels.size());  // Unity layout: row 0 = bottom of the image
             size_t pitch = (size_t)img.width * 4;
             for (UINT y = 0; y < img.height; ++y)
@@ -92,7 +92,7 @@ public:
                                             D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             mat.setVector(name + "_TexelSize", 1.0 / img.width, 1.0 / img.height, img.width, img.height);
             if (i == 0)
-                fprintf(stderr, "[harness] %s_{R,G,B,A} <- %s.*.png (%ux%u)\n", propBase.c_str(), prefix.c_str(), img.width, img.height);
+                fprintf(stderr, "[harness] %s_{R,G,B,A} <- %s (%ux%u)\n", propBase.c_str(), prefix.c_str(), img.width, img.height);
         }
         tablesBuilt_ = false;
         return true;

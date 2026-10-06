@@ -58,7 +58,7 @@ struct Options {
     std::vector<std::pair<std::string, std::string>> expectSend;
     std::string initialInput;
     std::string until;
-    int ticks = 2048;
+    int ticks = 16384;
     int initFrames = 2;
     uint64_t maxFrames = 0;
     double maxSeconds = 0;
@@ -83,6 +83,7 @@ struct Options {
     std::string dxcOpt = "-O3", dxcSm = "6_6", dxcDir;
     bool rvcDirSet = false, payloadSet = false;
     std::string image;        // --image: a named boot image from kImages
+    int paging = -1;          // --paging: 1 on, 0 off (NO_PAGING build), -1 = what the image needs
     std::vector<std::string> defines;
     GpuOptions gpu;
     UINT fxcFlags = D3DCOMPILE_ENABLE_BACKWARDS_COMPATIBILITY | D3DCOMPILE_OPTIMIZATION_LEVEL3;
@@ -98,7 +99,7 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
   --payload DIR        folder with the payload PNGs (default <rvc>/data-net)
   --ram/--mtd/--dtb P  PNG name prefixes in the payload folder (default linux_payload, rootfs, dts;
                        "none" leaves that texture black)
-  --ticks N            emulated instructions per tick pass (default 2048). Large values on a real
+  --ticks N            emulated instructions per tick pass (default 16384; upstream uses 2048). Large values on a real
                        GPU can trigger a driver timeout (TDR); WARP has no timeout.
   --frames N           stop after N frames          --seconds S   stop after S seconds
   --until TEXT         stop (exit 0) once the UART output contains TEXT; exit 3 if a limit hits first
@@ -124,6 +125,10 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
   --image NAME         boot a named image instead of --payload/--ram/--mtd/--dtb; --image list shows them.
                        Without it (and without --payload, --ram or --load-state) a menu asks at start
                        when run from a console; scripts with redirected input or --no-stdin get linux-net.
+  --paging on|off|auto the machine's MMU. off compiles the shader with NO_PAGING (satp hardwired to 0,
+                       no translation or TLBs: faster, but Linux cannot run). auto (default) turns it
+                       off for the bare-metal images and leaves it on otherwise. Needs a shader with
+                       NO_PAGING support (experiments/rvc_opt).
   --dxc / --d3d11      backend: D3D12 with DXC-compiled DXIL, or D3D11 with FXC bytecode (what VRChat
                        runs). rvc_harness_dxc.exe defaults to --dxc. DXC implies NO_DOUBLES and, unless
                        --rvc is given, the experiments/rvc_opt shader (upstream does not compile with DXC).
@@ -183,6 +188,11 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--rvc") { o.rvcDir = next("--rvc"); o.rvcDirSet = true; }
         else if (a == "--payload") { o.payloadDir = next("--payload"); o.payloadSet = true; }
         else if (a == "--image") o.image = next("--image");
+        else if (a == "--paging") {
+            std::string v = next("--paging");
+            if (v != "on" && v != "off" && v != "auto") { fprintf(stderr, "--paging takes on, off or auto\n"); return false; }
+            o.paging = v == "on" ? 1 : v == "off" ? 0 : -1;
+        }
         else if (a == "--dxc") o.dxc = true;
         else if (a == "--d3d11") o.dxc = false;
         else if (a == "--doubles") o.doubles = true;
@@ -317,6 +327,7 @@ void findRepoRoot(const Options& o) {
 
 // What the emulated machine can boot: payload PNG sets shipped with rvc, under kUpstream.
 const char* const kUpstream = "rvc/_Nix/rvc";
+const char* const kPrograms = "programs/bin";   // our own programs, as raw memory images
 struct BootImage {
     const char* name;
     const char* title;
@@ -324,19 +335,26 @@ struct BootImage {
     const char* ram;
     const char* mtd;
     const char* dtb;
+    bool needsPaging;
 };
 const BootImage kImages[] = {
-    {"linux-net", "Linux, networking kernel with a romfs root (boots to a shell)", "data-net", "linux_payload", "rootfs", "dts"},
-    {"linux", "Linux, kernel with built-in initramfs", "data", "linux_payload", "none", "dts"},
-    {"micropython", "MicroPython on OpenSBI (bare metal REPL)", "data", "mprv_payload", "none", "dts"},
-    {"rust", "Rust test payload on OpenSBI (bare metal)", "data", "rust_payload", "none", "dts"},
-    {"raytrace", "Rust raytracer (bare metal, no firmware)", "data", "rust_raytrace", "none", "dts"},
-    {"bare", "C bare-metal test (no firmware)", "data", "bare", "none", "dts"},
+    {"linux-net", "Linux, networking kernel with a romfs root (boots to a shell)", "data-net", "linux_payload", "rootfs", "dts", true},
+    {"linux", "Linux, kernel with built-in initramfs", "data", "linux_payload", "none", "dts", true},
+    {"micropython", "MicroPython on OpenSBI (bare metal REPL)", "data", "mprv_payload", "none", "dts", false},
+    {"rust", "Rust test payload on OpenSBI (bare metal)", "data", "rust_payload", "none", "dts", false},
+    {"raytrace", "Raytracer drawing to the display (bare metal C)", nullptr, "raytrace", "none", "none", false},
+    {"rvc-raytrace", "rvc's Rust raytracer, drawing into raw memory", "data", "rust_raytrace", "none", "dts", false},
+    {"bare", "C bare-metal test (no firmware)", "data", "bare", "none", "dts", false},
 };
+
+// dir = nullptr: one of our programs.
+std::string imageDir(const BootImage& im) {
+    return im.dir ? (fs::u8path(kUpstream) / im.dir).u8string() : std::string(kPrograms);
+}
 
 bool imageAvailable(const BootImage& im) {
     std::error_code ec;
-    return fs::exists(fs::u8path(kUpstream) / im.dir / (std::string(im.ram) + ".r.png"), ec);
+    return fs::exists(fs::u8path(imageDir(im)) / (std::string(im.ram) + (im.dir ? ".r.png" : ".bin")), ec);
 }
 
 const BootImage* findImage(const std::string& name) {
@@ -347,7 +365,7 @@ const BootImage* findImage(const std::string& name) {
 
 void applyImage(Options& o, const BootImage& im) {
     o.image = im.name;
-    o.payloadDir = (fs::u8path(kUpstream) / im.dir).u8string();
+    o.payloadDir = imageDir(im);
     o.ramPrefix = im.ram;
     o.mtdPrefix = im.mtd;
     o.dtbPrefix = im.dtb;
@@ -361,12 +379,19 @@ bool chooseImage(Options& o, bool canResume) {
     fprintf(stderr, "\n  rvc: a RISC-V machine in a pixel shader    [%s]\n\n  Boot which image?\n\n",
             o.dxc ? "D3D12 + DXC" : "D3D11 + FXC");
     for (size_t i = 0; i < list.size(); ++i)
-        fprintf(stderr, "    %zu  %-12s %s\n", i + 1, list[i]->name, list[i]->title);
-    if (canResume) fprintf(stderr, "    r  %-12s %s\n", "resume", "Linux at the shell prompt, from the saved snapshot");
+        fprintf(stderr, "    %zu  %-13s %s%s\n", i + 1, list[i]->name, list[i]->title, list[i]->needsPaging ? "  [needs MMU]" : "");
+    if (canResume) fprintf(stderr, "    r  %-13s %s\n", "resume", "Linux at the shell prompt, from the saved snapshot");
+    const char* kPaging[3] = {"auto: off unless the image needs it", "off (fastest; Linux will not boot)", "on"};
+    fprintf(stderr, "\n    m  MMU / paging: %s\n", kPaging[o.paging + 1]);
     fprintf(stderr, "\n  Press a key (Enter = 1, Esc = quit): ");
     for (;;) {
         int c = _getch();
         if (c == 0 || c == 0xE0) { _getch(); continue; }  // function and arrow keys come as two codes
+        if (c == 'm' || c == 'M') {
+            o.paging = o.paging == -1 ? 0 : o.paging == 0 ? 1 : -1;
+            fprintf(stderr, "\n    m  MMU / paging: %s\n\n  Press a key (Enter = 1, Esc = quit): ", kPaging[o.paging + 1]);
+            continue;
+        }
         if (c == 27 || c == 3 || c == kQuitKey) { fprintf(stderr, "\n"); return false; }
         if (c == '\r') c = '1';
         if ((c == 'r' || c == 'R') && canResume) {
@@ -427,6 +452,15 @@ int main(int argc, char** argv) {
             return 1;
         }
         applyImage(opt, *im);
+    }
+    // Paging stays on unless a named image is known not to need it, or the user said so.
+    if (opt.paging < 0) {
+        const BootImage* im = opt.loadState.empty() ? findImage(opt.image) : nullptr;
+        opt.paging = im && !im->needsPaging && opt.rvcDir == "experiments/rvc_opt" ? 0 : 1;
+    }
+    if (!opt.paging) {
+        opt.defines.push_back("NO_PAGING");
+        fprintf(stderr, "[harness] machine without paging (NO_PAGING): Linux will not run\n");
     }
     // Payloads live with upstream rvc; a patched shader folder usually has none of its own.
     if (opt.payloadDir.empty()) {
@@ -547,6 +581,7 @@ int main(int argc, char** argv) {
 
     if (opt.viz && !backend.viewInit(err)) fprintf(stderr, "[harness] memory view: %s\n", err.c_str());
     double lastViz = -1;
+    const bool viewShown = backend.viewOpen();
 
     // Counters for the memory view's text box, refreshed four times a second.
     double ovLast = 0;
@@ -715,6 +750,7 @@ int main(int argc, char** argv) {
             backend.viewRender();
             lastViz = wall;
         }
+        if (viewShown && !backend.viewOpen()) break;  // closing the memory window quits
         if (g_quit) break;
         if (untilHit) break;
         if (opt.maxFrames && frame >= opt.maxFrames) { if (!opt.until.empty()) exitCode = 3; break; }
