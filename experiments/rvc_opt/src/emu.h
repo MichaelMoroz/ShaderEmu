@@ -823,6 +823,11 @@ void xreg_set(uint r, uint v) {
 // Fast-step address translation is branch-free: identity when paging does not apply, else a
 // TLB hit. The two "paging does not apply" flags are recomputed at the end of every general-path
 // instruction, which is where paging mode, privilege and mstatus can change.
+#ifdef NO_PAGING
+#define FAST_XL(ident, mode, vpns, pages, va, ok, pa) \
+    bool ok = true; \
+    uint pa = (va);
+#else
 static bool xl_ident_f = false;  // fetches: paging off, or machine mode
 static bool xl_ident_d = false;  // loads/stores: paging off, or machine mode without MPRV redirection
 #if defined(OPT_TLB_ARRAY)
@@ -853,6 +858,7 @@ static bool xl_ident_d = false;  // loads/stores: paging off, or machine mode wi
             set_idx_uint4(pages, ok##_pg, ok##_slot); \
         } \
     }
+#endif
 #endif
 
 // Runs one instruction that cannot trap, touch memory or change what interrupts see (integer
@@ -1096,12 +1102,18 @@ void emulate() {
             // cpu_tick already fetched this instruction through the same check
         } else
 #endif
+#ifdef NO_PAGING
+        {
+            ins_addr = cpu.pc;
+        }
+#else
         if ((cpu.pc >> 12) == fetch_vpn) {
             PROF(PROF_fast_fetch)
             ins_addr = fetch_page | (cpu.pc & 0xfff);
         } else {
             ins_addr = mmu_translate(ret, cpu.pc, MMU_ACCESS_FETCH);
         }
+#endif
 #else
         uint ins_addr = mmu_translate(ret, cpu.pc, MMU_ACCESS_FETCH);
 #endif
@@ -1250,7 +1262,7 @@ void emulate() {
     // ret.pc_val should be set to pc+4 by default
     cpu.pc = ret.pc_val;
 
-#ifdef OPT_FAST_STEP
+#if defined(OPT_FAST_STEP) && !defined(NO_PAGING)
     {
         uint xs, xm;
         uint xp = get_effective_privilege(xs, xm);

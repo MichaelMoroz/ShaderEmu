@@ -30,6 +30,10 @@ bool fast_step() {
     pre_valid = false;
     // Same page as the last fetch is the common case and costs one compare; anything else goes
     // through the TLBs and becomes the new "last page".
+#ifdef NO_PAGING
+    bool f_ok = true;
+    uint f_pa = cpu.pc;
+#else
     bool f_ok = (cpu.pc >> 12) == fetch_vpn;
     uint f_pa = fetch_page | (cpu.pc & 0xfff);
     [branch]
@@ -42,6 +46,7 @@ bool fast_step() {
             fetch_page = g_pa & ~0xfff;
         }
     }
+#endif
     [branch]
     if (!(f_ok && (cpu.pc & 0x3) == 0)) {
         return false;

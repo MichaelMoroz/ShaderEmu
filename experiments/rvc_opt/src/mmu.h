@@ -7,9 +7,14 @@
 // the state texture: each pass starts with them empty.
 static bool hot_mstatus_ok = false, hot_mip_ok = false, hot_mie_ok = false;
 static uint hot_mstatus, hot_mip, hot_mie;
+// NO_PAGING: a machine whose satp is hardwired to 0 (Bare), as the privileged spec allows.
+// Every address is physical, so there are no TLBs and no translation state at all. Linux
+// needs paging; bare-metal programs and OpenSBI payloads that stay in Bare mode do not.
+#ifndef NO_PAGING
 #define TLB_EMPTY uint4(0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff)
 static uint4 tlb_f_vpn = TLB_EMPTY, tlb_r_vpn = TLB_EMPTY, tlb_w_vpn = TLB_EMPTY;  // slot = vpn & 3
 static uint4 tlb_f_page, tlb_r_page, tlb_w_page;
+#endif
 // True while no interrupt can be pending-and-enabled and the UART has nothing to flush, so the
 // per-instruction interrupt/UART step would do nothing. Cleared by anything that feeds it:
 // CSR writes and MMIO writes. Starts false, so each pass re-establishes it.
@@ -17,6 +22,7 @@ static bool irq_quiet = false;
 static bool irq_last_handled = false;  // did the last interrupt/trap step take a trap
 static uint fw_addr0 = 0xffffffff, fw_addr1 = 0xffffffff;  // instruction window: current and next texel
 static uint4 fw_tex0, fw_tex1;
+#ifndef NO_PAGING
 static uint fetch_vpn = 0xffffffff, fetch_page;  // last translated fetch page (OPT_FETCH_FAST)
 // Second-level TLB: TLB2_N direct-mapped entries per access mode, consulted only when the small
 // first-level TLB misses. A tag holds the page number, the privilege context the translation
@@ -40,14 +46,23 @@ void tlb2_flush() {
     }
 }
 
+#else
+void tlb2_flush() {}
+#endif
+
 void hot_flush() {
     PROF(PROF_hot_flush)
     hot_mstatus_ok = false; hot_mip_ok = false; hot_mie_ok = false;
+#ifndef NO_PAGING
     tlb_f_vpn = TLB_EMPTY; tlb_r_vpn = TLB_EMPTY; tlb_w_vpn = TLB_EMPTY;
     fetch_vpn = 0xffffffff;
+#endif
 }
 
 void mmu_update(uint satp) {
+#ifdef NO_PAGING
+    return;  // satp stays 0: writes are ignored and it reads back as Bare
+#endif
     hot_flush();
     tlb2_flush();
     irq_quiet = false;  // paging mode feeds the fast step's translation flags; take the general path once
@@ -116,6 +131,9 @@ mmu_page load_page(uint addr) {
 }
 
 uint mmu_translate(inout ins_ret ins, uint addr, uint mode) {
+#ifdef NO_PAGING
+    return addr;
+#else
     if (cpu.mmu.mode == MMU_MODE_OFF) {
         PROF(PROF_mmu_off)
         return addr;
@@ -241,6 +259,7 @@ uint mmu_translate(inout ins_ret ins, uint addr, uint mode) {
     /* } */
 
     return pa;
+#endif
 }
 
 #endif

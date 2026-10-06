@@ -81,6 +81,22 @@ pass-local (`static`), never stored in the texture.
 replaces the inner funct3 switch of 6 with a branch-free select; it measured within noise of
 the switch, so it is off.
 
+## `NO_PAGING`: a machine without an MMU
+
+`--define NO_PAGING` (harness: `--paging off`, automatic for the bare-metal images) hardwires
+`satp` to 0, which the privileged spec permits: writes are ignored, every address is physical,
+and the TLBs, the fetch-page check and the translation flags are not compiled in at all. Linux
+cannot run on it. Guests that never enable paging run identically: same instruction count and
+state hash after 6,000 frames at 2,048 ticks on a fixed timestep (DXC, D3D12, with another
+harness instance running at the same time, so absolute speeds are low):
+
+| Image | Full machine | `NO_PAGING` | State hash (both) |
+|---|---|---|---|
+| rvc-raytrace | 2,613k IPS | 2,982k | `8d45fbbd0d818281` |
+| bare | 4,764k | 5,575k | `2748940119e7f826` |
+| rust | 3,867k | 4,484k | `0cad656e1252cdc8` |
+| micropython | 2,436k | 2,855k | `a624cde3d3333ff3` |
+
 ## Measured (RTX 5090, `tools\perf_test.ps1`, 2048 ticks)
 
 | Shader | IPS | State hash after 1,024,000 instr |
