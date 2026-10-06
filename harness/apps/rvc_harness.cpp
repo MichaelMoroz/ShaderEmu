@@ -41,8 +41,8 @@
 
 namespace fs = std::filesystem;
 
-#ifndef SHADERX86_UNITY_INCLUDE_DIR
-#define SHADERX86_UNITY_INCLUDE_DIR "harness/unity_include"
+#ifndef SHADEREMU_UNITY_INCLUDE_DIR
+#define SHADEREMU_UNITY_INCLUDE_DIR "harness/unity_include"
 #endif
 
 namespace {
@@ -466,7 +466,7 @@ int main(int argc, char** argv) {
     bo.dxcDir = opt.dxcDir;
     bo.compile.flags = opt.fxcFlags;
     bo.compile.cacheDir = opt.cacheDir;
-    bo.compile.includeDirs = {SHADERX86_UNITY_INCLUDE_DIR};
+    bo.compile.includeDirs = {SHADEREMU_UNITY_INCLUDE_DIR};
     bo.compile.defines = {{"SHADER_API_D3D11", "1"}, {"SHADER_TARGET", "50"}, {"UNITY_COMPILER_HLSL", "1"},
                           {"UNITY_VERSION", "202235"}};
     if (opt.profile) bo.compile.defines.push_back({"PROFILE", "1"});

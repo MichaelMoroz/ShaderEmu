@@ -30,8 +30,8 @@
 
 namespace fs = std::filesystem;
 
-#ifndef SHADERX86_UNITY_INCLUDE_DIR
-#define SHADERX86_UNITY_INCLUDE_DIR "harness/unity_include"
+#ifndef SHADEREMU_UNITY_INCLUDE_DIR
+#define SHADEREMU_UNITY_INCLUDE_DIR "harness/unity_include"
 #endif
 
 namespace {
@@ -145,7 +145,7 @@ int main(int argc, char** argv) {
     if (!loadShaderLab(shaderPath, shader, err)) die(err.c_str());
     CompileSettings cs;
     cs.cacheDir = opt.cacheDir;
-    cs.includeDirs = {SHADERX86_UNITY_INCLUDE_DIR};
+    cs.includeDirs = {SHADEREMU_UNITY_INCLUDE_DIR};
     cs.defines = {{"SHADER_API_D3D11", "1"}, {"SHADER_TARGET", "50"}, {"UNITY_COMPILER_HLSL", "1"}, {"UNITY_VERSION", "202235"}};
     if (opt.noDoubles) cs.defines.push_back({"NO_DOUBLES", "1"});
     for (auto& d : opt.defines) {  // NAME or NAME=VALUE

@@ -1,8 +1,8 @@
 cmake_minimum_required(VERSION 3.20)
-project(ShaderX86 LANGUAGES CXX)
+project(ShaderEmu LANGUAGES CXX)
 
 if(NOT WIN32)
-  message(FATAL_ERROR "The harness uses Direct3D 11 and FXC; build it on Windows.")
+  message(FATAL_ERROR "The harness uses Direct3D 11 and 12; build it on Windows.")
 endif()
 
 set(CMAKE_CXX_STANDARD 17)
@@ -36,7 +36,7 @@ add_library(harness_core STATIC
 target_include_directories(harness_core PUBLIC harness/core)
 target_compile_definitions(harness_core PUBLIC
   NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS
-  SHADERX86_UNITY_INCLUDE_DIR="${CMAKE_SOURCE_DIR}/harness/unity_include")
+  SHADEREMU_UNITY_INCLUDE_DIR="${CMAKE_SOURCE_DIR}/harness/unity_include")
 target_link_libraries(harness_core PUBLIC d3d11 dxgi d3dcompiler dxguid windowscodecs ole32 gdi32)
 
 # One frontend, two backends (D3D11 + FXC, D3D12 + DXC). rvc_harness_dxc only differs in its default.

@@ -1,7 +1,37 @@
-# ShaderX86
+# ShaderEmu
 
-An 8086 PC (MS-DOS, Windows 3.0 real mode) emulated in a VRChat pixel shader. See the design
-handoff for the plan; this repo currently holds the headless D3D11 harness.
+A computer emulated entirely in a pixel shader, as fast as it can be made to go. The target
+platform is VRChat, which allows only Direct3D 11 graphics shaders (no compute shaders, no
+UAVs), so the whole machine lives in a render texture that a fragment shader rewrites each frame.
+
+## Where it stands
+
+The machine today is a RISC-V (RV32IMA) computer derived from
+[pimaker's rvc](https://github.com/pimaker/rvc), run outside Unity by a headless harness:
+
+| Shader | Compiler / API | Instructions per second (RTX 5090) |
+|---|---|---|
+| upstream rvc | FXC, D3D11 | about 520k |
+| `experiments/rvc_opt`, changes 1-17 | FXC, D3D11 | about 1,860k, bit-identical to upstream |
+| `experiments/rvc_opt`, all changes | DXC, D3D12 | 2.2M at 2,048 instructions per draw, 3.0M at 65,536 |
+
+It boots Linux to a shell in about 17 s (DXC), and runs MicroPython and bare-metal C and Rust
+payloads. `experiments/rvc_opt/README.md` lists every change and what was measured.
+
+## Where it is going
+
+Speed is the priority, in this order:
+
+1. **Bare-metal mode with no MMU.** Address translation, its TLBs and the state that carries
+   them sit on the serial dependency chain of every emulated instruction. A machine that runs
+   bare-metal programs needs none of it.
+2. **Doom**, running bare metal on that machine.
+3. **An emulated GPU with its own driver.** The emulated CPU is one serial chain per frame; a
+   GPU's strength is running every pixel at once. Drawing moves out of the emulated CPU into
+   shader passes that work in parallel, and the guest talks to them through a driver.
+
+An earlier plan targeted an 8086 PC running MS-DOS and Windows 3.0. It was dropped as too slow;
+the design notes are kept in `docs/original-x86-plan.md`.
 
 ## Layout
 
@@ -9,20 +39,22 @@ handoff for the plan; this repo currently holds the headless D3D11 harness.
   Unity-style materials (uniforms/textures by name via reflection), a double-buffered
   Custom Render Texture with update zones, pipelined readback, WIC image loading.
 - `harness/unity_include/` – minimal stand-ins for Unity's built-in `.cginc` files.
-- `harness/apps/rvc_harness.cpp` – runs pimaker's rvc (RISC-V Linux) unmodified, with its UART
-  on the console. This proves the harness reproduces Unity's CRT behaviour. It is a frontend over
-  two backends: `rvc_backend11.cpp` (D3D11, FXC bytecode, what VRChat runs) and
+- `harness/apps/rvc_harness.cpp` – runs rvc's shader with its UART on the console. It is a
+  frontend over two backends: `rvc_backend11.cpp` (D3D11, FXC bytecode, what VRChat runs) and
   `rvc_backend12.cpp` (D3D12, DXC-compiled DXIL). `bin\rvc_harness.exe` defaults to the first,
   `bin\rvc_harness_dxc.exe` to the second; `--dxc` / `--d3d11` switch either.
-- `experiments/rvc_opt/` – patched copy of rvc's shader, 3x faster with bit-identical emulation.
-- `harness/apps/rvc_trace12.cpp` – the same two draws on D3D12, for `tools/gpu_trace.ps1`
-  (Nsight GPU Trace hardware counters per draw).
+- `experiments/rvc_opt/` – patched copy of rvc's shader (MIT, see its `LICENSE`).
+- `harness/apps/rvc_trace12.cpp` – the same two draws on D3D12, for benchmarks and
+  `tools/gpu_trace.ps1` (Nsight GPU Trace hardware counters per draw).
 - `tools/perf_test.ps1` – 3-second speed benchmark; `tools/watch_console.cmd` – live console.
-- `rvc/` – upstream clone of https://github.com/pimaker/rvc (not part of this repo; ignored).
+- `rvc/` – clone of upstream rvc (not part of this repo): the payload images and the reference shader.
 
 ## Build (Windows)
 
-Needs CMake 3.20+ and Visual Studio 2022 (MSVC) with the Windows SDK.
+Needs CMake 3.20+ and Visual Studio 2022 (MSVC) with the Windows SDK, and upstream rvc
+cloned next to the sources for its payload images:
+
+    git clone https://github.com/pimaker/rvc rvc
 
     build.bat            # cmake -S . -B build && cmake --build build --config Release
 

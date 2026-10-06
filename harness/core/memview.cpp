@@ -129,7 +129,7 @@ HWND memoryViewCreateWindow() {
     wc.lpfnWndProc = wndProc;
     wc.hInstance = GetModuleHandleW(nullptr);
     wc.hCursor = LoadCursorW(nullptr, (LPCWSTR)IDC_ARROW);
-    wc.lpszClassName = L"ShaderX86MemoryView";
+    wc.lpszClassName = L"ShaderEmuMemoryView";
     RegisterClassW(&wc);
     RECT r{0, 0, 1024, 504 + (LONG)kBarHeight};  // two 2048-texel strips at quarter scale, plus the info bar
     AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE);

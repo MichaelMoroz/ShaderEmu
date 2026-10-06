@@ -1,5 +1,7 @@
 # Windows in a VRChat Shader — Project Handoff
 
+> Superseded. The project is now ShaderEmu: a bare-metal RISC-V machine tuned for speed, with Doom and an emulated GPU as the goal (see the README). An 8086 was judged too slow. Kept for its analysis of the platform and of rvc.
+
 Oct 5, 2026 · @Mykhailo
 
 ## Summary

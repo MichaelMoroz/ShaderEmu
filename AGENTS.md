@@ -2,6 +2,12 @@
 
 Rules for anyone (human or agent) running the emulator harness in this repo.
 
+## Direction
+
+Speed first. In order: a bare-metal machine with no MMU (no translation, TLBs or state for
+them), Doom on it, then an emulated GPU with its own driver so drawing runs in parallel shader
+passes instead of on the serial emulated CPU. x86 is dropped (`docs/original-x86-plan.md`).
+
 ## Show the live console whenever the emulator runs
 
 Before starting `rvc_harness`, make sure the console viewer window is open so the developer can

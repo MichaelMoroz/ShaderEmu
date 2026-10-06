@@ -15,7 +15,7 @@ $Out = Join-Path $Dir 'output.txt'
 $Status = Join-Path $Dir 'status.txt'
 $Cancel = Join-Path $Dir 'cancel.txt'
 
-Write-Host "ShaderX86 agent runner: watching $Req (Ctrl+C to stop)"
+Write-Host "ShaderEmu agent runner: watching $Req (Ctrl+C to stop)"
 Set-Content $Status "idle"
 while ($true) {
     if (Test-Path $Req) {
