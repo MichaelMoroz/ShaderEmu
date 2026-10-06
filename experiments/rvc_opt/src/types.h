@@ -4,7 +4,6 @@
 #define glsl_mod(x,y) (((x)-(y)*floor((x)/(y)))) 
 
 
-
 // Where RAM texel number `lin` (16 bytes each) lives in the state texture.
 // RAM_TILE_BITS = 0: upstream's row-major order, 2048 texels (32 KB) per row.
 // RAM_TILE_BITS = b: square tiles of 2^b x 2^b texels laid out row by row, so nearby addresses
@@ -19,23 +18,9 @@
 #else
 #define RAM_TILE (1 << RAM_TILE_BITS)
 #define RAM_TILES_PER_ROW (2048 >> RAM_TILE_BITS)
-#ifdef RAM_TILE_ZORDER
-uint ram_even_bits(uint v) {   // bits 0,2,4,.. of v packed together
-    v &= 0x55555555; v = (v | (v >> 1)) & 0x33333333; v = (v | (v >> 2)) & 0x0f0f0f0f; v = (v | (v >> 4)) & 0x00ff00ff;
-    return v & 0xff;
-}
-uint ram_spread_bits(uint v) { // inverse of ram_even_bits for 8 bits
-    v &= 0xff; v = (v | (v << 4)) & 0x0f0f; v = (v | (v << 2)) & 0x3333; v = (v | (v << 1)) & 0x5555;
-    return v;
-}
-#define RAM_IN_X(i) ram_even_bits(i)
-#define RAM_IN_Y(i) ram_even_bits((i) >> 1)
-#define RAM_IN(x, y) (ram_spread_bits(x) | (ram_spread_bits(y) << 1))
-#else
 #define RAM_IN_X(i) ((i) & (RAM_TILE - 1))
 #define RAM_IN_Y(i) ((i) >> RAM_TILE_BITS)
 #define RAM_IN(x, y) ((x) | ((y) << RAM_TILE_BITS))
-#endif
 #define RAM_TILE_OF(lin) ((lin) >> (2 * RAM_TILE_BITS))
 #define RAM_WITHIN(lin) ((lin) & (RAM_TILE * RAM_TILE - 1))
 #define RAM_ADDR(lin) uint2(((RAM_TILE_OF(lin) % RAM_TILES_PER_ROW) << RAM_TILE_BITS) | RAM_IN_X(RAM_WITHIN(lin)), \
@@ -58,11 +43,7 @@ uint ram_spread_bits(uint v) { // inverse of ram_even_bits for 8 bits
 #endif
 #define L1_SETS (1 << L1_SET_BITS)
 #define L1_ENTRIES (L1_SETS * L1_SLICES)
-#ifdef L1_HASH_LOW
-#define RAM_L1_ARRAY_IDX(a) ((a >> 2) & (L1_SETS - 1))
-#else
 #define RAM_L1_ARRAY_IDX(a) (((a >> 2) & ((L1_SETS >> 2) - 1)) | (((a >> 11) & 0x3) << (L1_SET_BITS - 2)))
-#endif
 
 
 #define STALL_EXIT_CALL 1
@@ -73,7 +54,6 @@ uint ram_spread_bits(uint v) { // inverse of ram_even_bits for 8 bits
 #define STALL_UART 6
 #define STALL_FENCE 7
 #define STALL_MEMOP_COPY 8
-
 
 
 // STRUCT TYPES
@@ -280,18 +260,12 @@ uint sign_extend(uint x, uint b) {
 // commit pass in a spare state word, texel (41,0).r, so RAM texels that cannot have been
 // written skip the eight write-cache lookups. The commit pass clears the word again, so the
 // state after a frame is unchanged.
-#if !defined(OPT_BASELINE) && !defined(OPT_NO_COMMIT_BLOOM)
-#define OPT_COMMIT_BLOOM 1
-#endif
 #ifdef PASS_TICK
 static uint mem_cache_bloom = 0;
 #endif
 
 // Guest registers in an indexable array (one store per write) unless OPT_BASELINE.
-#if !defined(OPT_BASELINE) && !defined(XREG_SWITCH)
-#define XREG_ARRAY 1
-#endif
-#if defined(XREG_ARRAY) && defined(PASS_TICK)
+#ifdef PASS_TICK
 // Guest registers in an indexable array for the tick loop: one indexed store per instruction
 // instead of a conditional move over every register.
 static uint xr[33];  // [32] is a scratch slot for writes that must not land (x0, no result)
@@ -726,12 +700,10 @@ uint4 encode(uint2 pos) {
     // fallback is passthrough
     uint4 ret = STATE_TEX(pos);
 
-#ifdef OPT_COMMIT_BLOOM
     if (pos.x == 41 && pos.y == 0) {
         ret.r = mem_cache_bloom;
         return ret;
     }
-#endif
 
     // cpu_t serialization
     uint pos_id = pos.x | (pos.y << 16);
@@ -1061,9 +1033,7 @@ uint4 commit(uint2 pos) {
         ++ret.b;
     }
 
-#ifdef OPT_COMMIT_BLOOM
     uint c_bloom = STATE_TEX_HART(uint2(41, 0), 0).r;
-#endif
     // clear stalls
     if (pos_id == 28) {
         switch (ret.r) {
@@ -1206,10 +1176,8 @@ uint4 commit(uint2 pos) {
                 }
             } else {
                 // write back L1 cache
-#ifdef OPT_COMMIT_BLOOM
                 [branch]
                 if ((lin & c_bloom) == lin)
-#endif
                 [loop]
                 for (uint offset = 0; offset < 4; offset++) {
                     uint addr_off = lin + (offset << 2);
@@ -1230,13 +1198,11 @@ uint4 commit(uint2 pos) {
         }
     }
 
-#ifdef OPT_COMMIT_BLOOM
     // hand-over word is cleared here (FXC hits an internal error if this sits next to the
     // stall-clearing switch above)
     if (pos.x == 41 && pos.y == 0) {
         ret = uint4(0, ret.g, ret.b, ret.a);
     }
-#endif
     return ret;
 }
 #endif

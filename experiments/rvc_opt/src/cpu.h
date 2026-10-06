@@ -18,7 +18,6 @@ cpu_t cpu_init() {
     return ret;
 }
 
-#ifdef OPT_FAST_STEP
 // One instruction on the short path, or false with nothing changed (the general path then
 // runs the tick, reusing the instruction word if this got as far as fetching it).
 //
@@ -51,7 +50,6 @@ bool fast_step() {
     if (!(f_ok && (cpu.pc & 0x3) == 0)) {
         return false;
     }
-#ifndef OPT_NO_FETCH_WINDOW
     // Instruction window: a RAM texel holds four instructions, and fetches read the texture
     // directly (never the write cache), so a fetched texel stays valid for the whole pass.
     // Entering a new texel also reads the one after it, so in straight-line code the texture
@@ -68,15 +66,10 @@ bool fast_step() {
             fw_tex0 = STATE_TEX(RAM_ADDR(f_t));
         }
         fw_addr0 = f_t;
-#ifndef OPT_NO_FETCH_AHEAD
         fw_addr1 = f_t + 1;
         fw_tex1 = STATE_TEX(RAM_ADDR(f_t + 1));
-#endif
     }
     pre_word = idx_uint4(fw_tex0, (f_pa >> 2) & 0x3);
-#else
-    pre_word = mem_get_instruction(f_pa);
-#endif
     pre_valid = true;
     if (!fast_exec(pre_word)) {
         return false;                       // the general path reuses pre_word
@@ -119,7 +112,6 @@ uint fast_run(uint room) {
     cpu.clock += n;
     return n;
 }
-#endif
 
 void cpu_tick() {
     // DEBUG: single stepping

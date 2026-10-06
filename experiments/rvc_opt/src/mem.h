@@ -2,7 +2,6 @@
 #define MEM_H
 
 
-
 // RAM_ADDR / RAM_LIN: see types.h
 #define RAM_MAX (2048 * (4096 - 64) * 4 * 4)
 
@@ -19,11 +18,7 @@
 #endif
 #define L1_SETS (1 << L1_SET_BITS)
 #define L1_ENTRIES (L1_SETS * L1_SLICES)
-#ifdef L1_HASH_LOW
-#define RAM_L1_ARRAY_IDX(a) ((a >> 2) & (L1_SETS - 1))
-#else
 #define RAM_L1_ARRAY_IDX(a) (((a >> 2) & ((L1_SETS >> 2) - 1)) | (((a >> 11) & 0x3) << (L1_SET_BITS - 2)))
-#endif
 
 
 #define WORD_SIZE_NONE 0
@@ -45,19 +40,10 @@ uint mem_get_instruction(uint addr) {
 
 // One bit per write-cache entry written this pass. An entry that was never written is all
 // zeros, so its array read (slow: the array is far larger than the small bitmap) can be skipped.
-#ifndef OPT_NO_L1_OCC
 static uint l1_occ[(L1_ENTRIES + 31) / 32];
 #define L1_OCC(idx) (((l1_occ[(idx) >> 5] >> ((idx) & 31)) & 1) != 0)
 #define L1_OCC_SET(idx) l1_occ[(idx) >> 5] |= 1u << ((idx) & 31);
-#else
-#define L1_OCC(idx) true
-#define L1_OCC_SET(idx)
-#endif
 
-#ifdef OPT_DATA_WINDOW
-static uint dw_addr[OPT_DATA_WINDOW];
-static uint dw_tex[OPT_DATA_WINDOW * 4];
-#endif
 
 // addr must be aligned to word boundary (4 byte)
 uint mem_get_cached_or_tex(uint addr) {
@@ -88,23 +74,8 @@ uint mem_get_cached_or_tex(uint addr) {
     PROF(PROF_ram_read_tex)
     uint idx = (addr >> 2) & 0x3;
     addr >>= 4;
-#ifdef OPT_DATA_WINDOW
-    // The RAM texture does not change during a pass (writes go to the cache above), so the
-    // last OPT_DATA_WINDOW data texels read can be reused; stack accesses repeat a lot.
-    uint dslot = addr & (OPT_DATA_WINDOW - 1);
-    [branch]
-    if (dw_addr[dslot] != addr + 1) {
-        dw_addr[dslot] = addr + 1;       // +1 so the zero-initialised table is empty
-        uint4 fresh = STATE_TEX(RAM_ADDR(addr));
-        dw_tex[dslot * 4 + 0] = fresh.x; dw_tex[dslot * 4 + 1] = fresh.y;
-        dw_tex[dslot * 4 + 2] = fresh.z; dw_tex[dslot * 4 + 3] = fresh.w;
-        return idx_uint4(fresh, idx);
-    }
-    return dw_tex[dslot * 4 + idx];
-#else
     uint4 raw = STATE_TEX(RAM_ADDR(addr));
     return idx_uint4(raw, idx);
-#endif
 }
 
 

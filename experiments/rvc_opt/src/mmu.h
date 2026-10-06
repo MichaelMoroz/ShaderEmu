@@ -3,6 +3,13 @@
 
 #include "types.h"
 
+// M_MODE_ONLY: machine mode is the only privilege level. No supervisor or user mode, no trap
+// delegation, no sret; MPP is hardwired to machine. It includes NO_PAGING. For firmware-less
+// programs; OpenSBI and anything it starts need the supervisor.
+#if defined(M_MODE_ONLY) && !defined(NO_PAGING)
+#define NO_PAGING 1
+#endif
+
 // Pass-local shadows of state that is read on every instruction. They are never stored in
 // the state texture: each pass starts with them empty.
 static bool hot_mstatus_ok = false, hot_mip_ok = false, hot_mie_ok = false;
@@ -159,11 +166,7 @@ uint mmu_translate(inout ins_ret ins, uint addr, uint mode) {
     // Successful translations cached per access mode; flushed by hot_flush().
     uint tlb_slot = (addr >> 12) & 3;
     uint4 hit_vpns = mode == MMU_ACCESS_FETCH ? tlb_f_vpn : (mode == MMU_ACCESS_READ ? tlb_r_vpn : tlb_w_vpn);
-#ifdef OPT_TLB_ARRAY
-    if (false) {
-#else
     if (idx_uint4(hit_vpns, tlb_slot) == (addr >> 12)) {
-#endif
         if (mode == MMU_ACCESS_FETCH) { PROF(PROF_tlb_hit_fetch) } else if (mode == MMU_ACCESS_READ) { PROF(PROF_tlb_hit_read) } else { PROF(PROF_tlb_hit_write) }
         uint4 hit_pages = mode == MMU_ACCESS_FETCH ? tlb_f_page : (mode == MMU_ACCESS_READ ? tlb_r_page : tlb_w_page);
         uint hit_page = idx_uint4(hit_pages, tlb_slot);
@@ -171,21 +174,15 @@ uint mmu_translate(inout ins_ret ins, uint addr, uint mode) {
         return hit_page | ADDR_PART_OFFSET(addr);
     }
 
-#ifndef OPT_NO_TLB2
     uint tlb2_k = TLB2_IDX(mode, addr);
     uint tlb2_ctx = priv | (sum << 2) | (mxr << 3);
     if (tlb2_tag[tlb2_k] == TLB2_TAG(addr, tlb2_ctx)) {
         uint l2_page = tlb2_pg[tlb2_k];
-#ifdef OPT_TLB_ARRAY
-        if (mode == MMU_ACCESS_FETCH) { fetch_vpn = addr >> 12; fetch_page = l2_page; }
-        return l2_page | ADDR_PART_OFFSET(addr);
-#endif
         if (mode == MMU_ACCESS_FETCH) { set_idx_uint4(tlb_f_vpn, addr >> 12, tlb_slot); set_idx_uint4(tlb_f_page, l2_page, tlb_slot); fetch_vpn = addr >> 12; fetch_page = l2_page; }
         else if (mode == MMU_ACCESS_READ) { set_idx_uint4(tlb_r_vpn, addr >> 12, tlb_slot); set_idx_uint4(tlb_r_page, l2_page, tlb_slot); }
         else { set_idx_uint4(tlb_w_vpn, addr >> 12, tlb_slot); set_idx_uint4(tlb_w_page, l2_page, tlb_slot); }
         return l2_page | ADDR_PART_OFFSET(addr);
     }
-#endif
 
     bool super;
     mmu_page page;
@@ -242,17 +239,11 @@ uint mmu_translate(inout ins_ret ins, uint addr, uint mode) {
     pa |= super ? ADDR_PART_PN0(addr) << 12 : page.ppn0 << 12;
     pa |= page.ppn1 << 22;
 
-#ifdef OPT_TLB_ARRAY
-    if (mode == MMU_ACCESS_FETCH) { fetch_vpn = addr >> 12; fetch_page = pa & ~0xfff; }
-#else
     if (mode == MMU_ACCESS_FETCH) { set_idx_uint4(tlb_f_vpn, addr >> 12, tlb_slot); set_idx_uint4(tlb_f_page, pa & ~0xfff, tlb_slot); fetch_vpn = addr >> 12; fetch_page = pa & ~0xfff; }
     else if (mode == MMU_ACCESS_READ) { set_idx_uint4(tlb_r_vpn, addr >> 12, tlb_slot); set_idx_uint4(tlb_r_page, pa & ~0xfff, tlb_slot); }
     else { set_idx_uint4(tlb_w_vpn, addr >> 12, tlb_slot); set_idx_uint4(tlb_w_page, pa & ~0xfff, tlb_slot); }
-#endif
-#ifndef OPT_NO_TLB2
     tlb2_tag[tlb2_k] = TLB2_TAG(addr, tlb2_ctx);
     tlb2_pg[tlb2_k] = pa & ~0xfff;
-#endif
 
     /* if (!(pa & 0x80000000) || (pa & 0x7fffffff) >= RAM_MAX) { */
     /*     FAULT */

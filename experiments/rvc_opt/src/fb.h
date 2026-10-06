@@ -2,7 +2,6 @@
 #define FB_H
 
 
-
 // RAM_ADDR / RAM_LIN: see types.h
 #define RAM_MAX (2048 * (4096 - 64) * 4 * 4)
 
@@ -19,11 +18,7 @@
 #endif
 #define L1_SETS (1 << L1_SET_BITS)
 #define L1_ENTRIES (L1_SETS * L1_SLICES)
-#ifdef L1_HASH_LOW
-#define RAM_L1_ARRAY_IDX(a) ((a >> 2) & (L1_SETS - 1))
-#else
 #define RAM_L1_ARRAY_IDX(a) (((a >> 2) & ((L1_SETS >> 2) - 1)) | (((a >> 11) & 0x3) << (L1_SET_BITS - 2)))
-#endif
 
 
 #define BUFFER_MAX 63

@@ -7,6 +7,23 @@ so it runs upstream snapshots and payloads, and its emulation is bit-identical t
     tools\perf_test.ps1 -Rvc experiments\rvc_opt
     bin\rvc_harness.exe --rvc experiments\rvc_opt --payload rvc\_Nix\rvc\data-net --load-state build\snapshots\rvc_shell.snap
 
+## Build switches
+
+Only these remain in the source:
+
+| Define | Effect |
+|---|---|
+| `NO_PAGING` | machine without an MMU (below) |
+| `M_MODE_ONLY` | machine mode only, includes `NO_PAGING` (below) |
+| `NO_DOUBLES` | timer value from the host instead of double math (needed on D3D12) |
+| `PROFILE` | `PROF()` event counters through a UAV |
+| `L1_SET_BITS`, `L1_SLICES`, `TLB2_N`, `RAM_TILE_BITS` | cache, TLB and layout sizes |
+
+Everything else named in this document (`OPT_BASELINE`, the `OPT_*` experiments, `XREG_*`,
+`MULH_DOUBLES`, `L1_HASH_LOW`, `RAM_TILE_ZORDER`) was a switch that existed while it was being
+measured and has since been removed: the faster side is now the only code. The names are kept
+below as labels for what was measured. Removing them left the compiled shader byte-identical.
+
 ## Changes (all in the CPUTick pass)
 
 Each one removes work that upstream repeats on every emulated instruction. All added state is
@@ -77,13 +94,31 @@ pass-local (`static`), never stored in the texture.
     read has finished long before its instructions are needed.
 21. **Second-level TLB grown to 256 entries per mode.**
 
-6 to 21 are on by default; define `OPT_BASELINE` to build without them. `OPT_ALU_SELECT`
+6 to 21 were once switchable (`OPT_BASELINE` built without them); they are now unconditional. `OPT_ALU_SELECT`
 replaces the inner funct3 switch of 6 with a branch-free select; it measured within noise of
 the switch, so it is off.
 
+## `M_MODE_ONLY`: machine mode only
+
+`--define M_MODE_ONLY` (harness: `--machine mmode`, automatic for our own programs) builds on
+`NO_PAGING` and removes the other privilege levels: no supervisor or user mode, no trap
+delegation, no `sret`, `MPP` hardwired to machine, every CSR accessible. OpenSBI and what it
+starts (Linux, MicroPython, the Rust payload) and rvc's `bare` test need the supervisor and do
+not run on it.
+
+All of this is on the slow path (traps, CSR instructions, `mret`), so the gain is small. Our
+raytracer, 75,275,360 instructions on a fixed timestep at 16,384 ticks, two runs each, same
+state hash `35e2e5a58f60087b` on all three:
+
+| Machine | IPS | CPUTick DXIL |
+|---|---|---|
+| full | 3.00M - 3.17M | 158 KB |
+| `NO_PAGING` | 3.52M - 3.61M | 114 KB |
+| `M_MODE_ONLY` | 3.67M - 3.71M | 101 KB |
+
 ## `NO_PAGING`: a machine without an MMU
 
-`--define NO_PAGING` (harness: `--paging off`, automatic for the bare-metal images) hardwires
+`--define NO_PAGING` (harness: `--machine nopaging`, automatic for the bare-metal images) hardwires
 `satp` to 0, which the privileged spec permits: writes are ignored, every address is physical,
 and the TLBs, the fetch-page check and the translation flags are not compiled in at all. Linux
 cannot run on it. Guests that never enable paging run identically: same instruction count and

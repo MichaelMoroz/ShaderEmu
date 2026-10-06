@@ -2,7 +2,6 @@
 #define CSR_H
 
 
-
 // RAM_ADDR / RAM_LIN: see types.h
 #define RAM_MAX (2048 * (4096 - 64) * 4 * 4)
 
@@ -63,8 +62,12 @@
 #define CSR_NET_RX_BUF_READY 0x0c3
 
 bool has_csr_access_privilege(uint addr) {
+#ifdef M_MODE_ONLY
+    return true;
+#else
     uint privilege = (addr >> 8) & 0x3;
     return privilege <= cpu.csr.privilege;
+#endif
 }
 
 // SSTATUS, SIE, and SIP are subsets of MSTATUS, MIE, and MIP

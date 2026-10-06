@@ -2,7 +2,6 @@
 #define UART_H
 
 
-
 // RAM_ADDR / RAM_LIN: see types.h
 #define RAM_MAX (2048 * (4096 - 64) * 4 * 4)
 
@@ -19,11 +18,7 @@
 #endif
 #define L1_SETS (1 << L1_SET_BITS)
 #define L1_ENTRIES (L1_SETS * L1_SLICES)
-#ifdef L1_HASH_LOW
-#define RAM_L1_ARRAY_IDX(a) ((a >> 2) & (L1_SETS - 1))
-#else
 #define RAM_L1_ARRAY_IDX(a) (((a >> 2) & ((L1_SETS >> 2) - 1)) | (((a >> 11) & 0x3) << (L1_SET_BITS - 2)))
-#endif
 
 
 #define SHIFT_RBR 0
@@ -137,10 +132,6 @@ void uart_tick() {
 
     if ((cpu.clock & 0xff) == 0xff) {
         if (cpu.uart.input_tag != _UdonUARTInTag && UART_GET1(RBR) == 0) {
-#ifdef OPT_BASELINE
-            uint in_char = _UdonUARTInChar;
-            cpu.uart.input_tag = _UdonUARTInTag;
-#else
             // Burst input: _UdonUARTInChar carries up to four characters, first in the low byte,
             // and the host advances the tag by their count. One is handed over each time the
             // receive register is free, so the guest's console poll reads a whole escape
@@ -156,7 +147,6 @@ void uart_tick() {
                 in_char = (_UdonUARTInChar >> (8 * (in_count - in_left))) & 0xff;
                 cpu.uart.input_tag++;
             }
-#endif
             if (in_char != 0) {
                 UART_SET1(RBR, in_char);
                 UART_SET2(LSR, (UART_GET2(LSR) | LSR_DATA_AVAILABLE));

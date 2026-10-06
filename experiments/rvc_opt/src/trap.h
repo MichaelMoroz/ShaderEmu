@@ -44,6 +44,24 @@
 // returns true if IRQ was handled or !is_interrupt
 bool handle_trap(inout ins_ret ret, bool is_interrupt, uint c_mie) {
     trap t = ret.trap;
+#ifdef M_MODE_ONLY
+    // Nothing is delegated and only machine interrupts exist (cause 3, 7 or 11).
+    uint pos = t.type & 0xFFFF;
+    uint mstatus = read_csr_raw(CSR_MSTATUS);
+    uint mie = (mstatus >> 3) & 1;
+    if (is_interrupt && (mie == 0 || ((c_mie >> pos) & 1) == 0)) {
+        return false;
+    }
+    write_csr_raw(CSR_MEPC, is_interrupt ? ret.pc_val : cpu.pc);
+    write_csr_raw(CSR_MCAUSE, t.type);
+    write_csr_raw(CSR_MTVAL, t.value);
+    ret.pc_val = read_csr_raw(CSR_MTVEC);
+    if ((ret.pc_val & 0x3) != 0) {
+        ret.pc_val = (ret.pc_val & ~0x3) + 4*pos;
+    }
+    write_csr_raw(CSR_MSTATUS, (mstatus & ~0x1888) | (mie << 7) | (PRIV_MACHINE << 11));
+    return true;
+#else
     uint current_privilege = cpu.csr.privilege;
 
     uint mdeleg = read_csr_raw(is_interrupt ? CSR_MIDELEG : CSR_MEDELEG);
@@ -139,6 +157,7 @@ bool handle_trap(inout ins_ret ret, bool is_interrupt, uint c_mie) {
     }
 
     return true;
+#endif
 }
 
 void handle_irq_and_trap(inout ins_ret ret, uint mip_override) {
@@ -156,9 +175,11 @@ void handle_irq_and_trap(inout ins_ret ret, uint mip_override) {
             HANDLE(MIP_MEIP, trap_MachineExternalInterrupt)
             HANDLE(MIP_MSIP, trap_MachineSoftwareInterrupt)
             HANDLE(MIP_MTIP, trap_MachineTimerInterrupt)
+#ifndef M_MODE_ONLY
             HANDLE(MIP_SEIP, trap_SupervisorExternalInterrupt)
             HANDLE(MIP_SSIP, trap_SupervisorSoftwareInterrupt)
             HANDLE(MIP_STIP, trap_SupervisorTimerInterrupt)
+#endif
 #undef HANDLE
     }
 

@@ -141,11 +141,8 @@
 
                     decode();
                     time_prepare();
-                    #ifdef XREG_ARRAY
                     xreg_load();
-                    #endif
 
-#ifdef OPT_FAST_STEP
                     uint i = 0;
                     [loop]
                     while (i < _Ticks && !cpu.stall) {
@@ -156,15 +153,7 @@
                             i++;
                         }
                     }
-#else
-                    [fastopt]
-                    for (uint i = 0; i < _Ticks && !cpu.stall; i++) {
-                        cpu_tick();
-                    }
-#endif
-                    #ifdef XREG_ARRAY
                     xreg_store();
-                    #endif
                     #ifdef PROFILE
                     prof_flush(pos);
                     #endif

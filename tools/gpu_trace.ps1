@@ -4,7 +4,7 @@
 #
 #   pwsh tools\gpu_trace.ps1                                   # experiments\rvc_opt
 #   pwsh tools\gpu_trace.ps1 -Filter warps_issue_stalled,latency   # only metrics containing these
-#   pwsh tools\gpu_trace.ps1 -Extra '--define XREG_ARRAY'      # more rvc_trace12 arguments
+#   pwsh tools\gpu_trace.ps1 -Extra '--define NO_PAGING'      # more rvc_trace12 arguments
 #
 # --no-doubles is always passed: NVIDIA's D3D12 path miscomputes rvc's double math (timer and
 # MULH), so the guest diverges without it. The shader folder must support NO_DOUBLES.
