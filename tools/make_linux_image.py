@@ -93,8 +93,13 @@ def find_dir(data, path):
 def add_file(data, directory, name, content):
     first = find_dir(data, directory)
     listing = list(entries(data, first))
-    if any(n == name for _, n, _, _ in listing):
-        raise SystemExit('%s/%s is already in the image' % (directory, name))
+    for old, n, kind, _ in listing:
+        if n == name:
+            # ours replaces upstream's: the old entry stays in the ROM under a hidden name
+            if kind != 2:
+                raise SystemExit('%s/%s is in the image and not a regular file' % (directory, name))
+            data[old + 16] = ord('.')
+            checksum_fix(data, old, name_end(data, old + 16) - old, old + 12)
     size = be32(data, 8)
     at = (size + 15) & ~15
     del data[size:]

@@ -145,6 +145,9 @@
                     decode();
                     time_prepare();
                     xreg_load();
+#ifndef NO_PAGING
+                    tlb_state_load();
+#endif
 
                     uint i = 0;
                     [loop]
@@ -165,6 +168,10 @@
                 /* cpu.debug_csr_val = read_csr_raw(_CheckCSR); */
                 /* cpu.debug_mem_val = mem_get_word(_CheckMEM | (_CheckMEMraw ? 0 : 0x80000000)); */
 
+#ifndef NO_PAGING
+                uint4 tlb_texel;
+                if (!_Init && tlb_state_texel(pos, tlb_texel)) return tlb_texel;
+#endif
                 return encode(pos);
             }
             ENDCG

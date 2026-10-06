@@ -31,13 +31,12 @@ static uint fw_addr0 = 0xffffffff, fw_addr1 = 0xffffffff;  // instruction window
 static uint4 fw_tex0, fw_tex1;
 #ifndef NO_PAGING
 static uint fetch_vpn = 0xffffffff, fetch_page;  // last translated fetch page (OPT_FETCH_FAST)
-// Second-level TLB: TLB2_N direct-mapped entries per access mode, consulted only when the small
-// first-level TLB misses. A tag holds the page number, the privilege context the translation
-// was made under (effective privilege, SUM, MXR) and a generation number, so entries survive
-// traps and mstatus changes and are dropped wholesale only when mappings change (satp write,
-// sfence.vma). Zero-initialised tags have generation 0 and never match.
+// Second-level TLB: TLB2_N direct-mapped entries per access mode, behind the small first level.
+// A tag is the page number, the privilege context (effective privilege, SUM, MXR) and a
+// generation: entries outlive traps and are dropped together when mappings change (satp,
+// sfence.vma). A zero tag never matches. 64 entries were too few for a program like Doom.
 #ifndef TLB2_N
-#define TLB2_N 64
+#define TLB2_N 256
 #endif
 static uint tlb2_tag[3 * TLB2_N];
 static uint tlb2_pg[3 * TLB2_N];
@@ -61,6 +60,45 @@ void tlb2_flush() {
         tlb2_gen = 1;
     }
 }
+
+
+#if 3 * TLB2_N / 2 + 3 * TLBM_N / 2 + 1 != TLB_STATE_TEXELS
+#error TLB_STATE_TEXELS (types.h) does not match the TLB sizes
+#endif
+#ifdef PASS_TICK
+// A real TLB keeps its entries until they are flushed; so do these, across passes. Without
+// this every page a program touches costs a page walk on the general path in every pass.
+void tlb_state_load() {
+    uint k;
+    for (k = 0; k < 3 * TLB2_N / 2; k++) {
+        uint4 t = STATE_TEX(uint2((TLB_STATE_AT + k) & 63, (TLB_STATE_AT + k) >> 6));
+        tlb2_tag[2 * k] = t.r; tlb2_pg[2 * k] = t.g; tlb2_tag[2 * k + 1] = t.b; tlb2_pg[2 * k + 1] = t.a;
+    }
+    for (k = 0; k < 3 * TLBM_N / 2; k++) {
+        uint at = TLB_STATE_AT + 3 * TLB2_N / 2 + k;
+        uint4 t = STATE_TEX(uint2(at & 63, at >> 6));
+        tlbm_tag[2 * k] = t.r; tlbm_pg[2 * k] = t.g; tlbm_tag[2 * k + 1] = t.b; tlbm_pg[2 * k + 1] = t.a;
+    }
+    uint last = TLB_STATE_AT + TLB_STATE_TEXELS - 1;
+    uint gen = STATE_TEX(uint2(last & 63, last >> 6)).r;
+    tlb2_gen = gen == 0 ? 1 : gen;   // a state from before these texels existed: all zero, nothing matches
+}
+// What a pixel of the TLB's texels holds after this pass; false for any other pixel.
+bool tlb_state_texel(uint2 pos, out uint4 t) {
+    uint k = pos.x + 64 * pos.y - TLB_STATE_AT;
+    t = 0;
+    if (pos.x + 64 * pos.y < TLB_STATE_AT || k >= TLB_STATE_TEXELS) return false;
+    if (k < 3 * TLB2_N / 2) {
+        t = uint4(tlb2_tag[2 * k], tlb2_pg[2 * k], tlb2_tag[2 * k + 1], tlb2_pg[2 * k + 1]);
+    } else if (k < TLB_STATE_TEXELS - 1) {
+        uint m = k - 3 * TLB2_N / 2;
+        t = uint4(tlbm_tag[2 * m], tlbm_pg[2 * m], tlbm_tag[2 * m + 1], tlbm_pg[2 * m + 1]);
+    } else {
+        t.r = tlb2_gen;
+    }
+    return true;
+}
+#endif
 
 #else
 void tlb2_flush() {}

@@ -1,6 +1,6 @@
 # Booting Linux
 
-A cold boot of this project's image to the shell prompt takes about 3.1 s and 11.5 million
+A cold boot of this project's image to the shell prompt takes about 2.8 s and 10.5 million
 instructions on an RTX 5090 with DXC (it was 10 s and 35 million). `tools/boot_profile.py`
 measures it: run the harness with `--frame-log FILE` and give it the file.
 
@@ -34,6 +34,9 @@ A snapshot made with firmware does not run without it, and the other way round.
 - `linux/userland/emuinit.c` does what upstream's `/rvcinit` script does, as one static
   program. The script started a dozen dynamically linked processes: 12 million instructions.
   Build it with `linux/userland/build.sh`; the image builder then makes it the kernel's init.
+- `linux/userland/busybox.sh` builds the shell and tools static against our musl, in place of
+  upstream's dynamically linked ones: the boot runs 10.5 million instructions instead of 11.6,
+  and a command starts in 75 ms instead of 175.
 - `linux/kernel/phram_hook.py`: the ROM driver reads through the machine's parallel copy
   (CSRs `0x0b0`-`0x0b3`, whose source may be the ROM), and a commit with a copy now draws only
   the bands of RAM the copy writes. It changed little: 0.99 s to 0.89 s for a 5 MB cold read,

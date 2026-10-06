@@ -695,10 +695,21 @@ void decode_for_commit() {
 }
 #endif
 
+// The second-level and megapage TLBs (mmu.h) are kept from pass to pass in the state zone, after
+// the write cache: two entries (tag, page) a texel, then one texel with the generation.
+#define TLB_STATE_AT 2112
+#ifndef TLB2_N
+#define TLB2_N 256
+#endif
+#define TLB_STATE_TEXELS (3 * TLB2_N / 2 + 3 * 16 / 2 + 1)
+
 #ifdef PASS_TICK
 bool pixel_has_state(uint2 pos) {
     // CSR data area and FB are not "state", they're only touched by commit
     uint lin = pos.x + 64 * pos.y;
+#ifndef NO_PAGING
+    if (lin >= TLB_STATE_AT && lin < TLB_STATE_AT + TLB_STATE_TEXELS) return true;
+#endif
     return lin < 44 || (lin >= 1068 && lin < 1068 + L1_ENTRIES);
 }
 

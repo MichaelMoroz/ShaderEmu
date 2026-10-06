@@ -80,7 +80,7 @@ int main(void) {
     say("> Starting login shell on TTY /dev/hvc0\n");
 
     setenv("PATH", "/sbin:/usr/sbin:/bin:/usr/bin:/usr/local/bin", 1);
-    setenv("HOME", "/", 1);
+    setenv("HOME", "/root", 1);   // not "/": the shell would show the prompt there as "~ # "
     setenv("TERM", "vt100", 0);
     for (;;) {
         mark("before fork");

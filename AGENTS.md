@@ -255,8 +255,35 @@ A cold boot to the `/ #` prompt takes about 80 s on an RTX 5090 with upstream on
   without it the root filesystem is upstream's and none of our programs are found.
 - `tools\boot_profile.py` with `rvc_harness --frame-log FILE`: boot time, the median rate and
   why frames ended early.
-- A shader edit costs one FXC compile (90 s alone, about 3 min with three in parallel). Compile
-  variants in parallel, then benchmark them one at a time.
+- A shader edit costs one FXC compile (now 140 s to 290 s for the tick). Compile variants in
+  parallel, then benchmark them one at a time. Never compile the tick with FXC's "avoid flow
+  control" flag (`--fxc-flags 9200`): the compiler grew past 34 GB of memory.
+- The second-level TLB (256 entries a mode) and the megapage TLB are kept between passes in
+  state texels from 2112 on. A snapshot from before has zeros there, which never match.
+- Doom's frame rate falls faster than the emulator's speed: about 0.9M instructions a second go
+  to its 35 game tics whatever the frame rate, so a 1.3x slower machine draws 1.5x fewer frames.
+- To try a change to the fast loop under FXC in seconds, compile the tick without its general
+  path (a copy of the shader folder, `--rvc`, the loop's entry flags set by hand) and run it
+  from a snapshot of a loop that never leaves the fast path. The driver, not FXC, decides how
+  that bytecode runs, and decides differently for the small shader: confirm in the full one.
+- The same FXC bytecode loop ran at half the speed in a small shader: the driver runs branches
+  that hide texture reads as "both sides, then select". A one-trip loop around such a branch
+  stops it there, and made the full shader slower.
+- The image's shell and tools are our own static busybox (`wsl -- bash
+  /mnt/c/Development/ShaderX86/linux/userland/busybox.sh`, 13 s after the first time), which
+  the image builder puts in place of upstream's. Upstream's is linked against glibc at run
+  time: each command it started took 175 ms, against 75 ms now. `HOME` is `/root`, because this
+  shell writes the home directory as `~` and everything here waits for the prompt `/ # `.
+- A file in `build\images\linux\root` with the name of one upstream's image has replaces it
+  (the old one stays in the ROM under a name starting with a dot).
+- Two tests that start programs a second apart can see them stacked in either order: the
+  second to start may map its window first. Start them three or more seconds apart.
+- The tick rate is not worth changing: 20 Hz against 100 Hz gained 2 to 3%, and a timer for
+  input polling of its own cost nothing measurable either way.
+- Starting a program costs about 60 ms even when it does nothing: about 100 parallel copies,
+  75 fills and 13 instruction-cache flushes, each of which ends the frame.
+- 98% of Doom's instructions take the fast step (`--profile` on D3D11). Each kind of
+  instruction is 1.2 to 1.45 times slower under FXC than under DXC, none stands out.
 
 ## Timings to expect
 
@@ -266,3 +293,31 @@ A cold boot to the `/ #` prompt takes about 80 s on an RTX 5090 with upstream on
   (under DXC on D3D12: about 2.8M at 2,048 ticks per draw, 3.1M at 65,536; 4.0M while glxgears
   runs under Nano-X). It barely depends on
   `--ticks`: frame time is the serial CPU loop, about 1.8 us per instruction upstream.
+
+## The VRChat world (Unity)
+
+The machine also runs in a Unity 2022.3 / VRChat Worlds SDK project, `C:/Development/VRChat/ShaderEmu`
+(not a git repository). Its sources live here in `unity/ShaderEmu` and are copied to that
+project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
+
+- Menu `ShaderEmu`: "Sync shader sources" copies `experiments/rvc_opt` in (the `src/*.h` files
+  become `.cginc`: Unity never recompiled a changed `.h`), "Import boot images" turns
+  `build/images/linux/*.bin` into textures, "Create Udon program assets", then "Build world"
+  makes every asset and the scene `Assets/ShaderEmu/ShaderEmuWorld.unity` from nothing.
+- `EmuMachine.cs` runs the machine with `VRCGraphics.Blit`, several rounds per Unity frame:
+  CPUTick into a 64x64 texture, Commit (which reads the CPU's state from it), a readback,
+  `Camera.Render()` of the GPU's mesh, GPUControl. One round a frame through a Custom Render
+  Texture was capped by the frame rate (0.7M instructions/s, glxgears 80 frames/s); in rounds
+  it is 2.7M to 2.9M and glxgears 250 to 340.
+- One shader permutation only: full machine with `SBI_HLE` (our Linux image). The CPUTick pass
+  takes about four minutes to compile in Unity, with the editor frozen (`editor_sync_compilation`).
+- Unity's shader preprocessor splits macro arguments at commas inside braces and does not
+  process `#ifdef` inside a macro argument. FXC and DXC accept both; write neither in `DEF()`.
+- A material's `Int` is a float: 32-bit values go in as two 16-bit halves (`_UartInLo/Hi`,
+  `_HostMsLo/Hi`, the RTC words) and Machine.shader puts them together.
+- The GPU mesh's vertex shader writes clip positions itself: flip z for Unity's reversed depth,
+  and collapse everything unless the camera is the GPU's (orthographic, 2048x2048 target), or
+  every other camera draws the guest's picture over the room.
+- To test in the editor: enter play mode (ClientSim), then read Udon's variables with
+  `UdonBehaviour.GetProgramVariable` (the C# proxy's fields are not the running values) and type
+  by writing into `EmuKeyboard`'s `queue` and `tail`.
