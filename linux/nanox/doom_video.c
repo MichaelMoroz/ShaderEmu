@@ -34,6 +34,10 @@ extern int doom_gl, doom_gl_scene;
 #define SCREEN_H	200
 #define KEY		247		/* as in doom_gl.c */
 #define ONE		65536
+#define REG_PALETTE	0x400		/* offsets in the machine's control words: what seglPalette() points at, */
+#define REG_INPUT	0x20		/* and pointer x, y, buttons, key events so far */
+
+void I_StartTic_port(void);
 
 static int stop_tic = -1;
 static int gpu;			/* the GPU shows the screen */
@@ -63,6 +67,36 @@ I_InitGraphics(void)
 	seglTexturePointer(screen, SCREEN_W, SCREEN_H, GL_COLOR_INDEX8_EXT);
 	gpu = 1;
 	doom_gl = !(render && !strcmp(render, "soft"));
+}
+
+/*
+ * Asking the server for events costs two system calls and two task switches, every tic. The
+ * machine's own input words (pointer, buttons, key events so far; docs/input.md) say when
+ * there can be any: ask when they have moved, for a few tics after, and twice a second.
+ */
+void
+I_StartTic(void)
+{
+	static uint32_t seen[4];
+	static int ask = 8, quiet;
+
+	if (gpu) {
+		const volatile uint32_t *input = (const volatile uint32_t *)((const char *)seglPalette() - REG_PALETTE + REG_INPUT);
+		int i;
+
+		for (i = 0; i < 4; i++)
+			if (seen[i] != input[i]) {
+				seen[i] = input[i];
+				ask = 8;
+			}
+		if (++quiet >= 16)
+			ask = ask ? ask : 1;
+		if (!ask)
+			return;
+		ask--;
+		quiet = 0;
+	}
+	I_StartTic_port();
 }
 
 void

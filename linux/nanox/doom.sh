@@ -35,7 +35,7 @@ rm g_game_demo.c
 # The frame goes to the GPU (doom_video.c): the port's frame and palette functions under other
 # names, as the fallback, and its window handle made reachable.
 { cat "$DOOM/i_video.c"; echo 'GR_WINDOW_ID doom_window(void) { return win; }'; } > i_video_ours.c
-rv32-cc -O2 -w -c -fsigned-char -DALWAYS=1 -DI_FinishUpdate=I_FinishUpdate_port -DI_SetPalette=I_SetPalette_port -DI_InitGraphics=I_InitGraphics_port     -I"$DOOM" -I"$MW/src/include" i_video_ours.c -o i_video.o
+rv32-cc -O2 -w -c -fsigned-char -DALWAYS=1 -DI_FinishUpdate=I_FinishUpdate_port -DI_SetPalette=I_SetPalette_port -DI_InitGraphics=I_InitGraphics_port -DI_StartTic=I_StartTic_port    -I"$DOOM" -I"$MW/src/include" i_video_ours.c -o i_video.o
 rm i_video_ours.c
 # The 3D view goes to the GPU too (doom_gl.c): the renderer's entry points under other names,
 # which ours call when the GPU is not drawing the view.
@@ -47,6 +47,17 @@ grep -q 'R_Subsector_soft' r_bsp_ours.c || { echo "r_bsp.c: R_Subsector was not 
 rv32-cc -O2 -w -c -fsigned-char -I"$DOOM" r_bsp_ours.c -o r_bsp.o
 rm r_bsp_ours.c
 rv32-cc -O2 -w -c -fsigned-char -DV_DrawPatch=V_DrawPatch_cpu -I"$DOOM" "$DOOM/v_video.c" -o v_video.o
+# The port divides fixed-point numbers as doubles, which this machine has no hardware for:
+# ours (doom_gl.c) divides integers, as the original did.
+sed 's/^FixedDiv2$/FixedDiv2_double/' "$DOOM/m_fixed.c" > m_fixed_ours.c
+grep -q '^FixedDiv2_double$' m_fixed_ours.c || { echo "m_fixed.c: FixedDiv2 was not found"; exit 1; }
+rv32-cc -O2 -w -c -fsigned-char -I"$DOOM" m_fixed_ours.c -o m_fixed.o
+rm m_fixed_ours.c
+# A status bar number is drawn again every frame: only when it has changed, or all is redrawn.
+sed 's/^    n->oldnum = \*n->num;/    if (n->oldnum == *n->num \&\& !refresh) return; n->oldnum = *n->num;/' "$DOOM/st_lib.c" > st_lib_ours.c
+grep -q 'oldnum == \*n->num && !refresh' st_lib_ours.c || { echo "st_lib.c: the number drawing was not found"; exit 1; }
+rv32-cc -O2 -w -c -fsigned-char -I"$DOOM" st_lib_ours.c -o st_lib.o
+rm st_lib_ours.c
 rv32-cc -O2 -Wall -c $GLINC -I"$MW/src/include" "$REPO/programs/linux/gles.c" -o gles.o
 rv32-cc -O2 -Wall -Wno-unused -c -fsigned-char $GLINC -I"$DOOM" "$HERE/doom_gl.c" -o doom_gl.o
 rv32-cc -O2 -Wall -c $GLINC -I"$MW/src/include" "$HERE/doom_video.c" -o doom_video.o

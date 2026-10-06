@@ -57,6 +57,30 @@ static int frame_number;
 
 static GLfixed quad_xyz[12], quad_uv[8], fan_xyz[MAX_CORNERS * 3], fan_uv[MAX_CORNERS * 2];
 
+/*
+ * a / b in 16.16, for |a| >> 14 < |b| (FixedDiv has seen to that), rounded toward zero: the
+ * whole part by one division, the sixteen bits after it a bit at a time.
+ */
+fixed_t
+FixedDiv2(fixed_t a, fixed_t b)
+{
+	unsigned ua = a < 0 ? -(unsigned)a : (unsigned)a, ub = b < 0 ? -(unsigned)b : (unsigned)b;
+	unsigned q = ua / ub, r = ua % ub;
+	int i;
+
+	for (i = 0; i < 16; i++) {
+		unsigned carry = r >> 31;
+
+		r <<= 1;
+		q <<= 1;
+		if (carry || r >= ub) {
+			r -= ub;
+			q |= 1;
+		}
+	}
+	return (a ^ b) < 0 ? -(fixed_t)q : (fixed_t)q;
+}
+
 /* ---- full-screen pictures ---- */
 
 void V_DrawPatch_cpu(int x, int y, int scrn, patch_t *patch);

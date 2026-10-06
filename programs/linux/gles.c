@@ -410,18 +410,21 @@ static uint32_t matrix_block(void) {
     return GPU_PHYS + UNIFORMS_AT + 128 * (blocks ? blocks - 1 : 0);
 }
 
+// The arrays a draw reads, copied out of the state once: a store to GPU memory cannot change these.
+typedef struct { const uint8_t *positions, *coords; size_t position_step, coord_step; int has_z; } arrays;
+
 // One compact vertex (a texel): position, and the texture coordinates in 1/1024ths.
-static inline void put(uint32_t* to, int index) {
-    const GLfixed* v = (const GLfixed*)(vertex_array.pointer + (size_t)index * vertex_array.stride);
+static inline void put(uint32_t* restrict to, const arrays* a, int index) {
+    const GLfixed* v = (const GLfixed*)(a->positions + (size_t)index * a->position_step);
+    uint32_t uv = 0;
+    if (a->coords) {
+        const GLfixed* t = (const GLfixed*)(a->coords + (size_t)index * a->coord_step);
+        uv = ((uint32_t)(t[0] >> 6) & 0xffff) | (uint32_t)(t[1] >> 6) << 16;
+    }
     to[0] = v[0];
     to[1] = v[1];
-    to[2] = vertex_array.size > 2 ? v[2] : 0;
-    if (coord_array.enabled) {
-        const GLfixed* t = (const GLfixed*)(coord_array.pointer + (size_t)index * coord_array.stride);
-        to[3] = ((uint32_t)(t[0] >> 6) & 0xffff) | (uint32_t)(t[1] >> 6) << 16;
-    } else {
-        to[3] = 0;
-    }
+    to[2] = a->has_z ? v[2] : 0;
+    to[3] = uv;
 }
 
 void glDrawArrays(GLenum mode, GLint first, GLsizei count) {
@@ -430,8 +433,10 @@ void glDrawArrays(GLenum mode, GLint first, GLsizei count) {
     uint32_t pass = (blending ? blend_kind : 0) + (depth_test ? 0 : 4);
     uint32_t fragment = (texturing && x->address ? (x->indexed ? FRAGMENT_INDEXED : FRAGMENT_TEXTURE) : FRAGMENT_COLOUR) | pass << 16;
     if (alpha_test && x->indexed && texturing) fragment |= FRAGMENT_KEYED;
-    int quads = mode == GL_QUADS;
-    uint32_t stored = quads ? (uint32_t)count & ~3u : mode == GL_TRIANGLES ? (uint32_t)count - count % 3 : ((uint32_t)count - 2) * 3;
+    // a fan goes in as quads, two of its triangles each (the last may have its fourth corner twice)
+    int fan = mode == GL_TRIANGLE_FAN, quads = mode == GL_QUADS || fan;
+    uint32_t stored = fan ? ((uint32_t)count - 1) / 2 * 4 : quads ? (uint32_t)count & ~3u :
+                      mode == GL_TRIANGLES ? (uint32_t)count - count % 3 : ((uint32_t)count - 2) * 3;
     uint32_t mesh = quads ? stored / 4 * 6 : stored;
     uint32_t vertex = VERTEX_CLIP | VERTEX_MODELVIEW | VERTEX_COMPACT | (quads ? VERTEX_QUADS : 0);
     if (vertex_top + stored * 16 > TEXTURES_AT || mesh_vertices + mesh > MAX_MESH) return;
@@ -440,7 +445,9 @@ void glDrawArrays(GLenum mode, GLint first, GLsizei count) {
     uint32_t* to = (uint32_t*)(gpu + vertex_top);
 
     // more of the same joins the command before: one command, and one draw, per run of state
-    if (last_draw && last_draw == (uint32_t*)(gpu + LIST_AT) + 16 * (commands - 1) && !memcmp(state, last_state, sizeof state)) {
+    int same = 1;
+    for (int i = 0; i < 6; i++) same &= state[i] == last_state[i];   // (the library's memcmp goes a byte at a time)
+    if (last_draw && last_draw == (uint32_t*)(gpu + LIST_AT) + 16 * (commands - 1) && same) {
         last_draw[2] += mesh;
         mesh_vertices += mesh;
     } else {
@@ -457,16 +464,21 @@ void glDrawArrays(GLenum mode, GLint first, GLsizei count) {
         c[10] = key_index;
         c[11] = colour;
         last_draw = c;
-        memcpy(last_state, state, sizeof state);
+        for (int i = 0; i < 6; i++) last_state[i] = state[i];
         passes_used |= (1u << pass) & 0xfe;
     }
-    if (mode == GL_TRIANGLE_FAN) {
-        for (int i = 1; i + 1 < count; i++, to += 12) put(to, first), put(to + 4, first + i), put(to + 8, first + i + 1);
+    const arrays a = {vertex_array.pointer, coord_array.enabled ? coord_array.pointer : 0, (size_t)vertex_array.stride,
+                      (size_t)coord_array.stride, vertex_array.size > 2};
+    if (fan) {
+        for (int i = 1; i + 1 < count; i += 2, to += 16) {
+            int last = i + 2 < count ? i + 2 : count - 1;
+            put(to, &a, first), put(to + 4, &a, first + i), put(to + 8, &a, first + i + 1), put(to + 12, &a, first + last);
+        }
     } else if (mode == GL_TRIANGLE_STRIP) {
         for (int i = 0; i + 2 < count; i++, to += 12)
-            put(to, first + i + (i & 1)), put(to + 4, first + i + 1 - (i & 1)), put(to + 8, first + i + 2);
+            put(to, &a, first + i + (i & 1)), put(to + 4, &a, first + i + 1 - (i & 1)), put(to + 8, &a, first + i + 2);
     } else {
-        for (uint32_t i = 0; i < stored; i++, to += 4) put(to, first + i);
+        for (uint32_t i = 0; i < stored; i++, to += 4) put(to, &a, first + i);
     }
     vertex_top += stored * 16;
 }
