@@ -410,7 +410,9 @@ DEF(uret, FormatEmpty, { // system
     // unnecessary?
 })
 DEF(wfi, FormatEmpty, { // system
-    // no-op is valid here, so skip
+    // Ends this pass's run of instructions: interrupts, input and the GPU device can only
+    // change anything between passes, so there is nothing to wait for inside one.
+    cpu.stall = STALL_WFI;
 })
 DEF(xor, FormatR, { // rv32i
     WR_RD(xreg(ins.rs1) ^ xreg(ins.rs2))

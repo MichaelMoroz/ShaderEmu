@@ -54,6 +54,7 @@
 #define STALL_UART 6
 #define STALL_FENCE 7
 #define STALL_MEMOP_COPY 8
+#define STALL_WFI 9   // the guest has nothing to do until the next frame
 
 
 // STRUCT TYPES
@@ -1050,6 +1051,9 @@ uint4 commit(uint2 pos) {
                 ret.r = 0;
                 break;
             case STALL_UART:
+                ret.r = 0;
+                break;
+            case STALL_WFI:
                 ret.r = 0;
                 break;
         }
