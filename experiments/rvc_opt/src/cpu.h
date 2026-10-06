@@ -25,7 +25,7 @@ cpu_t cpu_init() {
 // saved per instruction: every value the general path can modify must be merged wherever its
 // control flow rejoins, and with both paths in one loop body that merge of the whole CPU state
 // happened on every tick. The inner loop only carries what a fast step can change.
-bool fast_step() {
+bool fast_step_l1(L1P0) {
     pre_valid = false;
     // Same page as the last fetch is the common case and costs one compare; anything else goes
     // through the TLBs and becomes the new "last page".
@@ -88,7 +88,7 @@ bool fast_step() {
 // that is the same for a whole run is decided once up front: single-stepping, the interrupt
 // gate (a fast step cannot change it) and the distance to the next UART poll tick, which has
 // to take the general path. The clock is advanced once at the end.
-uint fast_run(uint room) {
+uint fast_run_l1(L1P uint room) {
     pre_valid = false;
     if (_DoTick != 0 || !irq_quiet) {
         return 0;
@@ -104,7 +104,7 @@ uint fast_run(uint room) {
     [loop]
     while (again) {
         again = false;
-        if (fast_step()) {
+        if (fast_step_l1(L1A0)) {
             n++;
             again = n < budget && !cpu.stall;
         }
@@ -113,7 +113,7 @@ uint fast_run(uint room) {
     return n;
 }
 
-void cpu_tick() {
+void cpu_tick_l1(L1P0) {
     // DEBUG: single stepping
     if (_DoTick && _DoTick == cpu.debug_do_tick) {
         return;
@@ -123,7 +123,7 @@ void cpu_tick() {
     cpu.clock++;
     PROF(PROF_tick)
     // (with OPT_FAST_STEP, fast_tick() has already declined this tick)
-    emulate();
+    emulate_l1(L1A0);
 
     /* if ((_BreakpointClock && _BreakpointClock == cpu.clock) || (_Breakpoint && _Breakpoint == cpu.pc)) { */
     /*     cpu.debug_do_tick = 0xffffffff; */

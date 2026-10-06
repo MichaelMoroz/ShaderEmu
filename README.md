@@ -12,8 +12,8 @@ The machine today is a RISC-V (RV32IMA) computer derived from
 | Shader | Compiler / API | Instructions per second (RTX 5090) |
 |---|---|---|
 | upstream rvc | FXC, D3D11 | about 520k |
-| `experiments/rvc_opt`, changes 1-17 | FXC, D3D11 | about 1,860k, bit-identical to upstream |
-| `experiments/rvc_opt`, all changes | DXC, D3D12 | 2.2M at 2,048 instructions per draw, 3.0M at 65,536 |
+| `experiments/rvc_opt`, changes 1-17 | FXC, D3D11 | about 2,240k |
+| `experiments/rvc_opt`, all changes | DXC, D3D12 | 2.8M at 2,048 instructions per draw, 3.1M at 65,536; 4.0M under glxgears in Nano-X |
 
 It boots Linux to a shell in about 17 s (DXC), and runs MicroPython and bare-metal C and Rust
 payloads. `experiments/rvc_opt/README.md` lists every change and what was measured.

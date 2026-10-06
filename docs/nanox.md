@@ -38,8 +38,9 @@ the machine's clock chip is fed the host's local time. `glxgears` runs in a wind
 
 Every top-level window (with its frame and everything inside it) has a buffer of its own in
 GPU memory, and so has the desktop. Programs draw into their window's buffer whether or not
-the window is covered. The screen is a GPU list with one textured rectangle per window, lowest
-first, copied into the display's framebuffer whenever a buffer or the arrangement changed.
+the window is covered. The screen is the display's layer mode (`display.md`): the driver keeps
+a table with one entry per window, lowest first, and whatever shows the display composes them.
+There is no composed framebuffer in RAM and nothing to redraw when a buffer changes.
 
 So moving a window, raising it, or uncovering it by closing another costs a few words: no
 pixels are copied by the CPU and no program is asked to draw again. Only a window that was
@@ -58,7 +59,8 @@ Drawing into a buffer goes through the GPU too (`gpu.md`):
 Commands are queued for one buffer at a time and submitted when drawing moves to another
 buffer, when software needs the pixels, or when the server is about to wait for events. Each
 list starts by drawing the buffer as a texture and is copied back into it, so software and GPU
-drawing can be mixed freely. A copy within a buffer reads RAM, which lacks what is still
+drawing can be mixed freely. Submitting takes no system call (the lock word and `pause`,
+`gpu.md`); the server waits until the copies counter says its picture is in RAM. A copy within a buffer reads RAM, which lacks what is still
 queued, so it submits first if its source overlaps the queued area.
 
 The cursor is not drawn at all: it is the display's cursor (`display.md`), an arrow by
@@ -105,10 +107,13 @@ identical pixel for pixel on three scenes (windows with text, a terminal, a game
 
 | | software | GPU |
 |---|---|---|
-| 25 fills of 480x320 | 6.4 s | 0.27 s |
-| 100 lines of text (5,400 characters) | 1.5 s | 0.74 s |
-| 15 scrolls of the window by one line | 4.4 s | 0.27 s |
-| 200 buttons (face, edges, label) | 1.6 s | 0.98 s |
+| 25 fills of 480x320 | 4.7 s | 0.19 s |
+| 100 lines of text (5,400 characters) | 1.4 s | 0.64 s |
+| 15 scrolls of the window by one line | 4.5 s | 0.22 s |
+| 200 buttons (face, edges, label) | 1.4 s | 0.82 s |
+
+`glxgears` in a 300x300 window runs at about 500 frames a second, with the emulator at
+4.0 million instructions a second (`--stats-after S` prints both rates after a warm-up).
 
 ## Where the time goes
 

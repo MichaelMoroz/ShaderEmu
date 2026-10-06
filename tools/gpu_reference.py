@@ -72,11 +72,13 @@ def vertices(m):
             v = m.fixed(int(w[1]), n * 16).reshape(n, 4, 4)
             pos, normal = v[:, 0], v[:, 1]
             colour = v[:, 3, :3].copy()
-            vmode = int(w[4])
+            vmode, modelview = int(w[4]) & 0xff, int(w[4]) & 0x100
             if vmode == 0:
                 clip = place_pixels(pos[:, :2], pos[:, 2])
             else:
                 u = m.fixed(int(w[6]), 40).reshape(10, 4)
+                if modelview:   # rows 4-6 are the modelview, applied before the projection
+                    pos = np.concatenate([(pos @ u[4:7].T).astype(f32), pos[:, 3:4]], axis=1)
                 cl = (pos @ u[0:4].T).astype(f32)
                 part = size / f32(TARGET)
                 clip = np.stack([(cl[:, 0] + cl[:, 3]) * part[0] - cl[:, 3], cl[:, 3] - (cl[:, 3] - cl[:, 1]) * part[1],

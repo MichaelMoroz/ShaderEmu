@@ -57,6 +57,7 @@ Shader "ShaderEmu/gpu"
             // code, bit 31 while pressed) numbered from _InputKeySeq.
             uniform float4 _InputPointer;
             uniform uint _InputButtons, _InputKeySeq, _InputKeyCount;
+            uniform uint _HostMs;   // the host's clock, in milliseconds
             uniform uint _InputKey0, _InputKey1, _InputKey2, _InputKey3;
             #define GPU_STATE _SelfTexture2D
             #define GPU_INPUT

@@ -9,6 +9,7 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sched.h>
 #include <unistd.h>
 #include "device.h"
 #include "genfont.h"
@@ -20,7 +21,7 @@
 #define GPU_SIZE	0x01b00000u
 #define POOL_SIZE	0x01000000u	/* window buffers, from offset 0 */
 #define REGS_OFFSET	0x01000000u	/* the machine's control words (physical 0x87000000) */
-#define FB_OFFSET	0x01001000u	/* the display's framebuffer: the composed screen */
+#define LAYERS_OFFSET	0x01001000u	/* the display's layer table: count, then x, y, w, h, address */
 #define LIST_OFFSET	0x01400000u	/* our command list: 4096 commands of 64 bytes */
 #define CURSOR_OFFSET	0x01440000u	/* the cursor's image */
 #define CACHE_OFFSET	0x01441000u	/* glyphs of the built-in fonts, kept between lists */
@@ -29,11 +30,20 @@
 #define REG_MODE	0		/* word indices from REGS_OFFSET */
 #define REG_WIDTH	1
 #define REG_HEIGHT	2
+#define REG_LAYERS	3		/* display mode 4: address of the layer table */
+#define REG_SUBMIT	4		/* what to do with the list; the GPU clears it when done */
+#define REG_LIST	5
+#define REG_COUNT	6
+#define REG_FRAMES	7
+#define REG_INTO	20		/* where the picture is copied: address, width, height, row */
+#define REG_LOCK	24		/* taken (with an atomic swap) by whoever writes the words above */
+#define REG_COPY	28		/* nonzero: the list drawn last has a copy still to be made */
 #define REG_KEYBOARD	12		/* KEYBOARD_OWNED while a program reads the keyboard device */
+#define REG_COPIES	14		/* copies of a drawn picture into RAM made so far */
 #define REG_CURSOR	16		/* x, y, on, address of a 32x32 image */
 #define KEYBOARD_OWNED	0x6b657973u
 #define MAX_COMMANDS	4096
-#define MAX_SURFACES	32
+#define MAX_SURFACES	15		/* the display shows 16 layers; one is the desktop */
 #define MAX_BLOCKS	(2 * MAX_SURFACES + 2)
 #define CACHE_SLOTS	2048
 #define CMD_RECT	2
@@ -41,14 +51,9 @@
 #define FRAG_TEXTURE	1
 #define FRAG_MASK	3
 #define SUBMIT_DRAW	1
-#define SUBMIT_SCREEN	2		/* then copy the picture to the display's framebuffer */
-#define SUBMIT_INTO	4		/* then copy it to the given rectangle of RAM */
-
-struct gpu_submit {			/* the kernel's shaderemu_gpu_submit */
-	uint32_t list, count, how;
-	uint32_t address, width, height, row;
-};
-#define GPU_SUBMIT	_IOW('G', 2, struct gpu_submit)
+#define SUBMIT_INTO	4		/* then copy the picture to the given rectangle of RAM */
+/* The pause hint: this machine ends its frame there, which is when the GPU does its work. */
+#define next_frame()	__asm__ volatile(".word 0x0100000f")
 
 /* What a window (and everything inside it) is drawn on: a buffer the size of the window. */
 struct surface {
@@ -56,7 +61,6 @@ struct surface {
 	void *owner;			/* the window; NULL for a free slot */
 	uint32_t at;			/* the buffer, in GPU memory */
 	int x, y, w, h;			/* where the window is on the screen */
-	int changed;			/* drawn on since the screen was last composed */
 };
 
 extern int gr_mode;
@@ -135,21 +139,49 @@ surface_of(PSD psd)
 	return psd == &scrdev ? &root : (struct surface *)psd;
 }
 
-static void
-submit(int count, int how, uint32_t address, int width, int height)
+/*
+ * Programs share the GPU through its submit word: nonzero until the list has been drawn. The
+ * lock only covers looking at that word and writing a new list's registers. Returns the value
+ * the copy counter will have when this list's picture is in RAM.
+ */
+static uint32_t
+submit(int count, uint32_t address, int width, int height)
 {
-	struct gpu_submit s = { GPU_PHYS + LIST_OFFSET, count, how, address, width, height, width };
+	uint32_t landed;
 
-	ioctl(gpu_fd, GPU_SUBMIT, &s);
+	for (;;) {
+		while (__atomic_exchange_n(&regs[REG_LOCK], 1, __ATOMIC_ACQUIRE))
+			sched_yield();
+		if (regs[REG_SUBMIT] == 0)
+			break;
+		__atomic_store_n(&regs[REG_LOCK], 0, __ATOMIC_RELEASE);
+		next_frame();
+	}
+	/* a copy still pending is another list's and is made before ours */
+	landed = regs[REG_COPIES] + (regs[REG_COPY] != 0) + 1;
+	regs[REG_INTO] = address;
+	regs[REG_INTO + 1] = width;
+	regs[REG_INTO + 2] = height;
+	regs[REG_INTO + 3] = width;
+	regs[REG_LIST] = GPU_PHYS + LIST_OFFSET;
+	regs[REG_COUNT] = count;
+	regs[REG_SUBMIT] = SUBMIT_DRAW | SUBMIT_INTO;
+	__atomic_store_n(&regs[REG_LOCK], 0, __ATOMIC_RELEASE);
+	return landed;
 }
 
 /* Draws the queued commands and copies the picture back into the surface's buffer. */
 static void
 flush(void)
 {
+	uint32_t landed;
+
 	if (commands == 0)
 		return;
-	submit(commands, SUBMIT_DRAW | SUBMIT_INTO, GPU_PHYS + target->at, target->w, target->h);
+	landed = submit(commands, GPU_PHYS + target->at, target->w, target->h);
+	/* software may read the buffer next, and the list memory is reused: wait for the copy */
+	while ((int32_t)(regs[REG_COPIES] - landed) < 0)
+		next_frame();
 	commands = 0;
 	data_top = DATA_OFFSET;
 	dirty_x0 = dirty_y0 = 1 << 30;
@@ -217,7 +249,6 @@ draw_on(PSD psd)
 		flush();
 		target = s;
 	}
-	s->changed = 1;
 	return s;
 }
 
@@ -501,7 +532,6 @@ surface_for(void *owner, MWCOORD x, MWCOORD y, MWCOORD width, MWCOORD height)
 	s->at = at;
 	s->w = width;
 	s->h = height;
-	s->changed = 1;
 	place(s, x, y);
 	last = s;
 	return &s->psd;
@@ -526,8 +556,6 @@ surface_release(void *owner)
 static void
 surface_touch(PSD psd)
 {
-	if (is_surface(psd))
-		surface_of(psd)->changed = 1;
 }
 
 /* Where a surface keeps the pixel for screen position x, y: physical address, row length. */
@@ -544,48 +572,42 @@ static struct gd_compositor compositor = { surface_for, surface_release, surface
 
 /* ---------------- the screen: the desktop's buffer, then each window's, lowest first */
 
-static struct { struct surface *s; int x, y; uint32_t at; } scene[MAX_SURFACES + 1], shown[MAX_SURFACES + 1];
-static int scene_count, shown_count;
+static int layer_count;
 
 static void
 show(PSD psd)
 {
 	struct surface *s = surface_of(psd);
+	volatile uint32_t *layer = (volatile uint32_t *)(gpu + LAYERS_OFFSET) + 4 + 8 * layer_count;
 
-	if (s == &root || scene_count > MAX_SURFACES)
+	if ((s == &root && layer_count > 0) || layer_count > MAX_SURFACES)
 		return;
-	scene[scene_count].s = s;
-	scene[scene_count].x = s->x;
-	scene[scene_count].y = s->y;
-	scene[scene_count++].at = s->at;
+	/* stores only what differs, so an unchanged screen costs no writes */
+	if ((int)layer[0] != s->x) layer[0] = s->x;
+	if ((int)layer[1] != s->y) layer[1] = s->y;
+	if ((int)layer[2] != s->w) layer[2] = s->w;
+	if ((int)layer[3] != s->h) layer[3] = s->h;
+	if (layer[4] != GPU_PHYS + s->at) layer[4] = GPU_PHYS + s->at;
+	layer_count++;
 }
 
+/*
+ * Before the server waits: finish drawing, and tell the display what is where. The display
+ * composes the layers itself, so showing a window, moving it or changing the order of
+ * windows is a matter of these few words.
+ */
 static int
 gpu_preselect(PSD psd)
 {
-	int i, changed;
+	volatile uint32_t *table = (volatile uint32_t *)(gpu + LAYERS_OFFSET);
 
 	flush();
-	scene[0].s = &root;
-	scene[0].x = scene[0].y = 0;
-	scene[0].at = root.at;
-	scene_count = 1;
+	layer_count = 0;
+	show(&scrdev);
 	if (gd_composite_walk)
 		gd_composite_walk(show);
-	changed = scene_count != shown_count || memcmp(scene, shown, scene_count * sizeof(scene[0])) != 0;
-	for (i = 0; i < scene_count; i++)
-		changed |= scene[i].s->changed;
-	if (!changed)
-		return 0;
-	for (i = 0; i < scene_count; i++) {
-		struct surface *s = scene[i].s;
-
-		emit(i, s->x, s->y, s->x + s->w, s->y + s->h, 0xffffff, FRAG_TEXTURE, s->at, s->w, s->h, 0, 0);
-		s->changed = 0;
-	}
-	submit(scene_count, SUBMIT_DRAW | SUBMIT_SCREEN, 0, 0, 0);
-	memcpy(shown, scene, scene_count * sizeof(scene[0]));
-	shown_count = scene_count;
+	if ((int)table[0] != layer_count)
+		table[0] = layer_count;
 	return 0;
 }
 
@@ -643,7 +665,7 @@ gpu_open(PSD psd)
 		width = atoi(size);
 		height = atoi(x + 1);
 	}
-	if (width < 64 || height < 64 || width > 2048 || (unsigned)(width * height * 4) > LIST_OFFSET - FB_OFFSET) {
+	if (width < 64 || height < 64 || width > 2048 || (unsigned)(width * height * 4) > POOL_SIZE / 2) {
 		EPRINTF("NANOX_SIZE: %dx%d does not fit the display\n", width, height);
 		return NULL;
 	}
@@ -679,7 +701,6 @@ gpu_open(PSD psd)
 	root.at = pool_take(width * height * 4);
 	root.w = width;
 	root.h = height;
-	root.changed = 1;
 	psd->portrait = MWPORTRAIT_NONE;
 	psd->xres = psd->xvirtres = width;
 	psd->yres = psd->yvirtres = height;
@@ -716,13 +737,15 @@ gpu_open(PSD psd)
 	WRAP(BlitStretchRGBA8888, soft_stretchrgba);
 
 	memset(gpu + root.at, 0, psd->size);
-	memset(gpu + FB_OFFSET, 0, psd->size);
+	memset(gpu + LAYERS_OFFSET, 0, 4096);
 	regs[REG_CURSOR + 2] = 0;
 	gd_hwcursor = gpu_cursor;
 	gd_compositor = &compositor;
 	regs[REG_WIDTH] = width;
 	regs[REG_HEIGHT] = height;
-	regs[REG_MODE] = 1;
+	regs[REG_LAYERS] = GPU_PHYS + LAYERS_OFFSET;
+	regs[REG_LOCK] = 0;
+	regs[REG_MODE] = 4;
 	regs[REG_KEYBOARD] = KEYBOARD_OWNED;	/* the kernel clears it when /dev/gpu is closed */
 	EPRINTF("ShaderEmu display %dx%d, %s drawing\n", width, height, accelerate ? "GPU" : "software");
 	return psd;

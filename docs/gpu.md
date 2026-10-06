@@ -15,12 +15,14 @@ How it is drawn:
   width x height pixels. In the harness it is a render target; in a VRChat world it is a camera
   that sees only this mesh, on a layer of its own, clearing depth only.
 - **GPUControl** is one small extra update zone on the state texture. After a submitted list
-  has been drawn it takes the submit word back and counts the frame. It also delivers the
-  keyboard and pointer (`input.md`).
+  has been drawn it takes the submit word back and counts the frame, so the next list can be
+  submitted at once. It also delivers the keyboard and pointer (`input.md`) and the host's
+  clock.
 - **Writeback** needs no pass of its own: when a submit asks for it, the machine's Commit pass
   (built with `GPU_DEVICE`) copies the picture into RAM, one `0x00RRGGBB` word per pixel, so
-  the CPU can read what the GPU drew. That happens on the commit after the draw; the submit
-  word keeps only its copy bits in between, and the frame is counted once the copy is done.
+  the CPU can read what the GPU drew. The control pass notes the copy at `0x87000070`; the
+  commit after the draw makes it and adds one to the copies counter. A program that needs the
+  pixels waits for that counter; one that only wants them shown does not wait at all.
 - The copy can go to the display's framebuffer, or to **any rectangle of RAM** from
   `0x86000000` up: a picture of the rectangle's size is drawn and stored there, a row length
   apart. That makes any buffer a render target, which is how a window system gives each
@@ -39,11 +41,20 @@ colour fragments. The CPU shader has no GPU code.
 | `0x87000014` | address of the command list |
 | `0x87000018` | number of commands in it (at most 4096) |
 | `0x8700001c` | lists drawn so far; it changes when a submitted list has been drawn |
+| `0x87000034` | the host's clock in milliseconds, updated once per frame |
+| `0x87000038` | copies made so far |
+| `0x87000060` | a lock for programs that share the GPU: take it with an atomic swap around looking at the submit word and writing a list's registers |
+| `0x87000070` | the copy still to be made for the list drawn last (0: none), then its address, width and height, row length |
 | `0x87000050` | for bit 2: address of the rectangle's first pixel (a multiple of 4), its width, its height, and the length of a row in pixels (0: the width) |
 
 The list is drawn between two CPU frames, once. The picture then stays until the next submit.
 Nothing the CPU can observe changes inside one of its frames, so a program should end its frame
 with `wfi` after submitting (`cpu_wait()`; `gpu_submit()` does this and waits for the counter).
+`wfi` is not allowed in user mode, so a Linux program uses `pause` instead (the Zihintpause
+hint, `0x0100000f`), which ends the frame the same way from any mode.
+
+A vertex flag (`0x100` in a draw's vertex word) has the GPU multiply projection (c0-c3) by a
+modelview matrix (rows in c4-c6) per vertex, so the program does not multiply matrices itself.
 
 ## Commands
 
@@ -114,11 +125,14 @@ frames a second with this project's kernel (about 80 on upstream's):
   in), so buffers are written with plain stores. One ioctl draws a list, copies the picture
   where asked and returns when that is done; it holds a lock, so several programs can use
   the GPU without stepping on each other's lists. An older ioctl only waits for a frame.
-  Either way the kernel waits with `wfi`, which ends the emulator's frame; a process cannot
-  do that itself, and a sleep is rounded up to the kernel's tick.
+  Either way the kernel waits with `wfi`, which ends the emulator's frame.
+- A program can also submit with no system call: it takes the lock word, writes the registers
+  through its mapping and ends the frame with `pause`. The OpenGL library and Nano-X do this,
+  and the library reads the time from the clock word instead of asking the kernel.
 - Under Nano-X `glxgears` is a window: the library asks the server where the window's
-  pixels are and has each frame copied there (about 45 frames a second at 300x300). With no
-  server running it takes the whole display, as before.
+  pixels are and has each frame copied there (about 500 frames a second at 300x300 on an RTX
+  5090 with DXC, one emulator frame of about 8,000 instructions each). With no server running
+  it takes the whole display, as before.
 - Upstream's kernel has neither `/dev/gpu` nor `/dev/mem`. There the library falls back to
   an MTD device: the phram driver makes one for a physical range written to
   `/sys/module/phram/parameters/phram`, and the library uses `pread` and `pwrite` on it and

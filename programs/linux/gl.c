@@ -19,6 +19,9 @@
 #include <unistd.h>
 #ifdef GL_NANOX
 #include <sched.h>
+#include <sys/select.h>
+#include <sys/time.h>
+#include <time.h>
 #include <X11/keysym.h>
 #include <nano-X.h>
 #endif
@@ -30,12 +33,14 @@
 // This frame's uniform blocks and command list, then the vertex buffers of display lists to
 // the end. Under Nano-X they start higher, in the part of GPU memory its server leaves alone.
 static uint32_t frame_at = 0x00100000u, vertex_top = 0x00200000u;
+static uint32_t frame_flip;   // under Nano-X frames alternate between two places: 0 or FRAME_FLIP
+#define FRAME_FLIP 0x00010000u
 #define REG_DISPLAY 0x00        // mode, width, height
 #define REG_SUBMIT 0x10         // submit, list address, command count
 #define REG_FRAMES 0x1c
 
 enum { CMD_CLEAR = 1, CMD_RECT = 2, CMD_DRAW = 3 };
-enum { VERTEX_CLIP = 1, VERTEX_LIT = 2 };
+enum { VERTEX_CLIP = 1, VERTEX_LIT = 2, VERTEX_MODELVIEW = 0x100 };
 
 #define GPU_WAIT 0x4701   // _IO('G', 1): wait until the frame counter leaves the given value
 
@@ -102,7 +107,17 @@ static uint32_t gpu_frames(void) {
 typedef int32_t fx;
 #define ONE 65536
 static inline fx mul(fx a, fx b) { return (fx)(((int64_t)a * b) >> 16); }
-static inline fx from_float(float f) { return (fx)(f * 65536.0f); }
+// A float as 16.16, from its bits: the CPU has no FPU, and the library's multiply and
+// convert cost a few hundred instructions where this costs a dozen.
+static inline fx from_float(float f) {
+    union { float f; uint32_t u; } v = {f};
+    int shift = (int)((v.u >> 23) & 0xff) - 127 - 23 + 16;
+    uint32_t mantissa = (v.u & 0x7fffff) | 0x800000;
+    if (shift <= -32 || (v.u & 0x7fffffff) == 0) return 0;
+    if (shift >= 8) return (v.u >> 31) ? -0x7fffffff : 0x7fffffff;
+    fx r = shift >= 0 ? (fx)(mantissa << shift) : (fx)(mantissa >> -shift);
+    return (v.u >> 31) ? -r : r;
+}
 
 static uint32_t isqrt(uint32_t v) {
     uint32_t r = 0, bit = 1u << 30;
@@ -176,12 +191,11 @@ void glPopMatrix(void) {
     if (*top > 0) --*top;
 }
 
+// Only the last column changes.
 void glTranslatef(GLfloat x, GLfloat y, GLfloat z) {
-    mat t = identity;
-    t.m[0][3] = from_float(x);
-    t.m[1][3] = from_float(y);
-    t.m[2][3] = from_float(z);
-    apply(&t);
+    fx tx = from_float(x), ty = from_float(y), tz = from_float(z);
+    mat* c = current();
+    for (int i = 0; i < 4; i++) c->m[i][3] += mul(c->m[i][0], tx) + mul(c->m[i][1], ty) + mul(c->m[i][2], tz);
 }
 void glTranslated(GLdouble x, GLdouble y, GLdouble z) { glTranslatef((GLfloat)x, (GLfloat)y, (GLfloat)z); }
 
@@ -197,6 +211,18 @@ void glRotatef(GLfloat angle, GLfloat x, GLfloat y, GLfloat z) {
     fx degrees = from_float(angle);
     fx s = sin_degrees(degrees), c = sin_degrees(degrees + 90 * ONE);
     fx ax = from_float(x), ay = from_float(y), az = from_float(z);
+    if ((ax != 0) + (ay != 0) + (az != 0) == 1) {
+        // about a coordinate axis: two columns turn into each other
+        int j = az ? 0 : ax ? 1 : 2, k = az ? 1 : ax ? 2 : 0;
+        if (ax + ay + az < 0) s = -s;
+        mat* m = current();
+        for (int i = 0; i < 4; i++) {
+            fx a = m->m[i][j], b = m->m[i][k];
+            m->m[i][j] = mul(a, c) + mul(b, s);
+            m->m[i][k] = mul(b, c) - mul(a, s);
+        }
+        return;
+    }
     fx len = (fx)isqrt((uint32_t)(mul(ax, ax) + mul(ay, ay) + mul(az, az)) << 8) << 4;
     if (len == 0) return;
     fx inv = (fx)(0xffffffffu / (uint32_t)len);
@@ -418,11 +444,10 @@ static void draw(uint32_t address, uint32_t count, const fx* colour, int lit) {
     if (uniform_count == MAX_UNIFORMS || count == 0) return;
     fx (*u)[4] = uniforms[uniform_count];
     const mat* mv = &modelview[modelview_top];
-    mat clip = multiply(&projection[projection_top], mv);
-    memcpy(u, clip.m, sizeof clip.m);
+    // the GPU multiplies the two: rows 0-3 are the projection, 4-6 the modelview's first three
+    memcpy(u, projection[projection_top].m, sizeof(mat));
+    memcpy(u + 4, mv->m, 3 * sizeof mv->m[0]);
     for (int i = 0; i < 3; i++) {
-        for (int j = 0; j < 3; j++) u[4 + i][j] = mv->m[i][j];
-        u[4 + i][3] = 0;
         u[7][i] = light_direction[i];
         u[8][i] = colour[i];              // light 0's diffuse is white
         u[9][i] = mul(colour[i], 13107);  // the default scene ambient, 0.2
@@ -431,8 +456,8 @@ static void draw(uint32_t address, uint32_t count, const fx* colour, int lit) {
     uint32_t* c = command(CMD_DRAW, count);
     c[1] = GPU_PHYS + address;
     c[2] = count;
-    c[4] = lit ? VERTEX_LIT : VERTEX_CLIP;
-    c[6] = GPU_PHYS + frame_at + uniform_count * sizeof uniforms[0];
+    c[4] = (lit ? VERTEX_LIT : VERTEX_CLIP) | VERTEX_MODELVIEW;
+    c[6] = GPU_PHYS + frame_at + frame_flip + uniform_count * sizeof uniforms[0];
     uniform_count++;
 }
 
@@ -514,13 +539,19 @@ static Visual the_visual;
 static XVisualInfo the_visual_info = {&the_visual, 0, 0, 24};
 
 #ifdef GL_NANOX
-#define GPU_SUBMIT 0x401c4702u   // _IOW('G', 2, struct gpu_submit): draw a list, copy the picture, return
-struct gpu_submit { uint32_t list, count, how, address, width, height, row; };
+#define REG_INTO 0x50            // where the picture is copied: address, width, height, row
+#define REG_LOCK 0x60            // taken with an atomic swap by whoever writes a new list's registers
+#define REG_CLOCK 0x34           // the host's clock in milliseconds
+// The pause hint: this machine ends its frame there, which is when the GPU does its work.
+#define next_frame() __asm__ volatile(".word 0x0100000f")
 
 static int nano_x;               // a Nano-X server is running: be one of its clients
 static GR_WINDOW_ID nano_window;
+static GR_WINDOW_INFO nano_info; // where the window's pixels are; asked again when the window changes
+static int nano_info_stale = 1;
 static GR_EVENT nano_event;      // the event XPending found, for XNextEvent
-static int nano_pending;
+static int nano_pending, nano_asked, nano_socket, nano_got;
+static fd_set nano_set;
 
 // One Nano-X event as the X event glxgears understands, or 0 for one it has no use for.
 static int translate(const GR_EVENT* in, XEvent* out) {
@@ -529,6 +560,7 @@ static int translate(const GR_EVENT* in, XEvent* out) {
             out->type = Expose;
             return 1;
         case GR_EVENT_TYPE_UPDATE:
+            nano_info_stale = 1;   // moved, resized, mapped: the pixels may be elsewhere
             if (in->update.utype != GR_UPDATE_SIZE) return 0;
             out->type = ConfigureNotify;
             out->xconfigure.width = in->update.width;
@@ -543,6 +575,45 @@ static int translate(const GR_EVENT* in, XEvent* out) {
             exit(0);
     }
     return 0;
+}
+
+// The time of day from the machine's clock word instead of a system call per frame. It moves
+// once per emulator frame, which is as often as anything a program draws can be shown.
+int gettimeofday(struct timeval* restrict tv, void* restrict tz) {
+    (void)tz;
+    if (nano_x && gpu_map) {
+        uint32_t ms = *(volatile uint32_t*)(gpu_map + REG_CLOCK);
+        tv->tv_sec = ms / 1000;
+        tv->tv_usec = (ms % 1000) * 1000;
+    } else {
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        tv->tv_sec = ts.tv_sec;
+        tv->tv_usec = ts.tv_nsec / 1000;
+    }
+    return 0;
+}
+
+static void nano_take(GR_EVENT* event) {
+    nano_event = *event;
+    nano_got = 1;
+}
+
+// Whether an event has arrived. The server is asked for the next event once and answers
+// when there is one, so looking is one select() on the socket and no round trip.
+static int nano_poll(int wait) {
+    struct timeval none = {0, 0};
+    if (!nano_asked) {
+        FD_ZERO(&nano_set);
+        nano_socket = 0;
+        GrPrepareSelect(&nano_socket, &nano_set);
+        nano_asked = 1;
+    }
+    fd_set ready = nano_set;
+    if (select(nano_socket + 1, &ready, 0, 0, wait ? 0 : &none) <= 0) return 0;
+    nano_asked = nano_got = 0;
+    GrServiceSelect(&ready, nano_take);
+    return nano_got;
 }
 #endif
 
@@ -611,16 +682,17 @@ int XChangeProperty(Display* dpy, Window w, Atom property, Atom type, int format
     return 0;
 }
 int XFree(void* data) { (void)data; return 0; }
-// Without Nano-X no events ever arrive.
+// Without Nano-X no events ever arrive. With it, looking costs a system call, so an
+// animating program only looks every few frames.
 int XPending(Display* dpy) {
     (void)dpy;
 #ifdef GL_NANOX
+    static int skipped;
     XEvent unused;
-    while (nano_x && !nano_pending) {
-        GrCheckNextEvent(&nano_event);
-        if (nano_event.type == GR_EVENT_TYPE_NONE) break;
-        nano_pending = translate(&nano_event, &unused);
-    }
+    if (!nano_x || nano_pending) return nano_pending;
+    if (++skipped < 6) return 0;
+    skipped = 0;
+    while (!nano_pending && nano_poll(0)) nano_pending = translate(&nano_event, &unused);
     return nano_pending;
 #else
     return 0;
@@ -630,10 +702,8 @@ int XNextEvent(Display* dpy, XEvent* event) {
     (void)dpy;
     event->type = 0;
 #ifdef GL_NANOX
-    while (nano_x && !nano_pending) {
-        GrGetNextEvent(&nano_event);
-        nano_pending = translate(&nano_event, event);
-    }
+    while (nano_x && !nano_pending)
+        if (nano_poll(1)) nano_pending = translate(&nano_event, event);
     if (nano_x) translate(&nano_event, event);
     nano_pending = 0;
 #endif
@@ -706,19 +776,50 @@ void glXSwapBuffers(Display* dpy, GLXDrawable drawable) {
     (void)dpy; (void)drawable;
     static uint32_t frame[(sizeof uniforms + sizeof commands) / 4];
     uint32_t uniform_bytes = uniform_count * sizeof uniforms[0], command_bytes = command_count * sizeof commands[0];
-    memcpy(frame, uniforms, uniform_bytes);
-    memcpy((char*)frame + uniform_bytes, commands, command_bytes);
-    gpu_write(frame_at, frame, uniform_bytes + command_bytes);
+    if (gpu_map) {
+        // mapped: the two parts go straight to GPU memory
+        memcpy(gpu_map + frame_at + frame_flip, uniforms, uniform_bytes);
+        memcpy(gpu_map + frame_at + frame_flip + uniform_bytes, commands, command_bytes);
+    } else {
+        memcpy(frame, uniforms, uniform_bytes);
+        memcpy((char*)frame + uniform_bytes, commands, command_bytes);
+        gpu_write(frame_at + frame_flip, frame, uniform_bytes + command_bytes);
+    }
 #ifdef GL_NANOX
     if (nano_x) {
-        // into the window's part of its buffer, which may have moved; then the server composes
-        GR_WINDOW_INFO info;
-        GrGetWindowInfo(nano_window, &info);
-        if (info.realized && info.surface_address) {
-            struct gpu_submit s = {GPU_PHYS + frame_at + uniform_bytes, command_count, 1 | 4,
-                                   info.surface_address, info.width, info.height, info.surface_row};
-            ioctl(gpu_fd, GPU_SUBMIT, &s);
-            GrFlushWindow(nano_window);
+        volatile uint32_t* regs = (volatile uint32_t*)gpu_map;
+        if (nano_info_stale) {
+            fd_set none;
+            GrGetWindowInfo(nano_window, &nano_info);
+            nano_info_stale = 0;
+            // an event that arrived with the answer is waiting inside the library
+            FD_ZERO(&none);
+            nano_got = 0;
+            GrServiceSelect(&none, nano_take);
+            if (nano_got) {
+                XEvent unused;
+                nano_asked = 0;
+                nano_pending = translate(&nano_event, &unused);
+            }
+        }
+        if (nano_info.realized && nano_info.surface_address) {
+            // Hand the list to the GPU, to be drawn into the window's part of its buffer, and
+            // go on to the next frame. Only wait while the GPU still has the last one.
+            for (;;) {
+                while (__atomic_exchange_n(&regs[REG_LOCK / 4], 1, __ATOMIC_ACQUIRE)) sched_yield();
+                if (regs[REG_SUBMIT / 4] == 0) break;
+                __atomic_store_n(&regs[REG_LOCK / 4], 0, __ATOMIC_RELEASE);
+                next_frame();
+            }
+            regs[REG_INTO / 4] = nano_info.surface_address;
+            regs[REG_INTO / 4 + 1] = nano_info.width;
+            regs[REG_INTO / 4 + 2] = nano_info.height;
+            regs[REG_INTO / 4 + 3] = nano_info.surface_row;
+            regs[REG_SUBMIT / 4 + 1] = GPU_PHYS + frame_at + frame_flip + uniform_bytes;
+            regs[REG_SUBMIT / 4 + 2] = command_count;
+            regs[REG_SUBMIT / 4] = 1 | 4;
+            __atomic_store_n(&regs[REG_LOCK / 4], 0, __ATOMIC_RELEASE);
+            frame_flip ^= FRAME_FLIP;
         } else {
             sched_yield();
         }

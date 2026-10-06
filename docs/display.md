@@ -6,9 +6,10 @@ window today, a material in a VRChat world later) reads the RAM texture and deco
 
 | Address | Contents |
 |---|---|
-| `0x87000000` | mode: 0 = off, 1 = 32-bit colour, 2 = 8-bit indexed, 3 = the GPU's picture |
+| `0x87000000` | mode: 0 = off, 1 = 32-bit colour, 2 = 8-bit indexed, 3 = the GPU's picture, 4 = layers |
 | `0x87000004` | width in pixels |
 | `0x87000008` | height in pixels |
+| `0x8700000c` | mode 4: address of the layer table |
 | `0x87000040` | cursor x: where the left edge of the cursor image is, in display pixels (may be negative) |
 | `0x87000044` | cursor y |
 | `0x87000048` | cursor on: 1 shows it |
@@ -21,6 +22,10 @@ window today, a material in a VRChat world later) reads the RAM texture and deco
   into, and it packs 16 pixels into each 16-byte RAM texel.
 - **Mode 3**: the pixels are not in RAM: the display shows what the GPU drew (`gpu.md`), at
   this width and height.
+- **Mode 4**: the picture is up to 16 rectangles of 32-bit pixels anywhere in RAM, composed
+  by whatever shows the display, the last one on top. The table is a count, then 8 words per
+  layer: x, y, width, height, address of the first pixel (rows are the layer's width apart).
+  Moving or restacking a window is a few stores and nothing is drawn or copied.
 - The cursor is drawn by whatever shows the display, over the picture in any mode. It is in
   neither the framebuffer nor the GPU's picture, so moving it is two stores and nothing
   under it needs saving. The image may be anywhere in RAM.

@@ -158,7 +158,21 @@ public:
             table.ptr += (UINT64)tableIndex(p, cur) * srvStep_;
             cl_->SetGraphicsRootDescriptorTable(2, table);
             cl_->OMSetRenderTargets(1, &rtv_[dst], FALSE, nullptr);
-            cl_->DrawInstanced(6, 1, 0, 0);
+            if (P.vsSelf < 0) {
+                cl_->DrawInstanced(6, 1, 0, 0);
+                return;
+            }
+            // the vertex shader picks the quads from the state: it needs the non-pixel state too
+            D3D12_GPU_DESCRIPTOR_HANDLE self = srvHeap_->GetGPUDescriptorHandleForHeapStart();
+            self.ptr += (UINT64)(8 * kTableSize + cur) * srvStep_;
+            cl_->SetGraphicsRootDescriptorTable(3, self);
+            const D3D12_RESOURCE_STATES both =
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            auto toBoth = transition(state_[cur].Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, both);
+            cl_->ResourceBarrier(1, &toBoth);
+            cl_->DrawInstanced(6 * kCommitQuads, 1, 0, 0);
+            auto toPixel = transition(state_[cur].Get(), both, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            cl_->ResourceBarrier(1, &toPixel);
         };
         auto stamp = [&](UINT i) {
             if (timeIt) cl_->EndQuery(tsHeap_.Get(), D3D12_QUERY_TYPE_TIMESTAMP, i);

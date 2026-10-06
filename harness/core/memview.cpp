@@ -67,7 +67,7 @@ float3 display(float2 p, float2 size) {
     float3 c = float3(0.035, 0.038, 0.047);
     uint4 ctrl = ram(DispCtrl);
     uint mode = ctrl.r, w = ctrl.g, h = ctrl.b;
-    if (mode < 1 || mode > 3 || w == 0 || h == 0 || w > 2048 || h > 2048) return c;
+    if (mode < 1 || mode > 4 || w == 0 || h == 0 || w > 2048 || h > 2048) return c;
     float scale = min((size.x - 16) / w, (size.y - 16) / h);
     if (scale >= 1) scale = floor(scale);   // whole multiples keep pixels square and sharp
     float2 q = (p - (size - float2(w, h) * scale) * 0.5) / scale;
@@ -81,6 +81,20 @@ float3 display(float2 p, float2 size) {
             uint v = word(ram(at >> 4), (at >> 2) & 3);
             if ((v >> 24) != 0) return rgb(v);
         }
+    }
+    if (mode == 4) {
+        // layers: a table of rectangles of RAM, the last one on top (docs/display.md)
+        uint table = (ctrl.a & 0x7fffffff) >> 4, count = min(ram(table).r, 16u);
+        int2 at = int2(floor(q));
+        for (uint n = count; n > 0; n--) {
+            uint4 box = ram(table + 2 * n - 1);
+            int2 d = at - int2(asint(box.r), asint(box.g));
+            if (d.x >= 0 && d.y >= 0 && d.x < (int)box.b && d.y < (int)box.a) {
+                uint word_at = (ram(table + 2 * n).r & 0x7fffffff) + 4 * (uint)(d.y * (int)box.b + d.x);
+                return rgb(word(ram(word_at >> 4), (word_at >> 2) & 3));
+            }
+        }
+        return c;
     }
     if (mode == 3) {
         // the GPU's picture; shrunk to fit, a 2x2 block of taps keeps thin lines

@@ -20,31 +20,40 @@ static struct input_dev *keyboard_dev, *pointer_dev;
 static struct timer_list input_timer;
 static u32 input_tail;
 static bool input_started;
+static u32 pointer_x = ~0u, pointer_y, pointer_buttons;
 
 static void shaderemu_input_poll(struct timer_list *t)
 {
 	u32 x = readl(input_regs + INPUT_STATE);
 	u32 y = readl(input_regs + INPUT_STATE + 4);
 	u32 buttons = readl(input_regs + INPUT_STATE + 8);
-	u32 head = readl(input_regs + INPUT_STATE + 12);
+	u32 head = readl(input_regs + INPUT_STATE + 12), keys;
 
 	/* first poll, a restarted host, or more events than the ring holds: start from now */
 	if (!input_started || head - input_tail > INPUT_RING) {
 		input_tail = head;
 		input_started = true;
 	}
+	keys = input_tail;
 	for (; input_tail != head; input_tail++) {
 		u32 event = readl(input_regs + INPUT_KEYS + 4 * (input_tail % INPUT_RING));
 
 		input_report_key(keyboard_dev, event & 0x3ff, event >> 31);
 	}
-	input_sync(keyboard_dev);
-	input_report_abs(pointer_dev, ABS_X, x);
-	input_report_abs(pointer_dev, ABS_Y, y);
-	input_report_key(pointer_dev, BTN_LEFT, buttons & 1);
-	input_report_key(pointer_dev, BTN_RIGHT, (buttons >> 1) & 1);
-	input_report_key(pointer_dev, BTN_MIDDLE, (buttons >> 2) & 1);
-	input_sync(pointer_dev);
+	if (keys != head)
+		input_sync(keyboard_dev);
+	/* most ticks nothing moved: reporting it anyway costs more than this poll should */
+	if (x != pointer_x || y != pointer_y || buttons != pointer_buttons) {
+		pointer_x = x;
+		pointer_y = y;
+		pointer_buttons = buttons;
+		input_report_abs(pointer_dev, ABS_X, x);
+		input_report_abs(pointer_dev, ABS_Y, y);
+		input_report_key(pointer_dev, BTN_LEFT, buttons & 1);
+		input_report_key(pointer_dev, BTN_RIGHT, (buttons >> 1) & 1);
+		input_report_key(pointer_dev, BTN_MIDDLE, (buttons >> 2) & 1);
+		input_sync(pointer_dev);
+	}
 	mod_timer(&input_timer, jiffies + 1);
 }
 

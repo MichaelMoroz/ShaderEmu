@@ -289,6 +289,7 @@ std::vector<uint8_t> dxcCompile(Dxc& dxc, const std::string& text, const std::st
 struct Pass12 {
     std::string name;
     StageLayout vs, ps;
+    int vsSelf = -1;   // register of _SelfTexture2D in the vertex shader, when it reads the state
     ComPtr<ID3D12RootSignature> root;
     ComPtr<ID3D12PipelineState> pso;
 };
@@ -339,8 +340,10 @@ void buildPasses12(Dx& dx, const SLShader& shader, const CompileSettings& cs, co
         vsBytes.assign((const uint8_t*)vs.bytecode->GetBufferPointer(), (const uint8_t*)vs.bytecode->GetBufferPointer() + vs.bytecode->GetBufferSize());
         psBytes.assign((const uint8_t*)ps.bytecode->GetBufferPointer(), (const uint8_t*)ps.bytecode->GetBufferPointer() + ps.bytecode->GetBufferSize());
         }
-        if (!P.vs.textures.empty() || !P.vs.samplers.empty() || !P.ps.samplers.empty() || !P.ps.uavs.empty())
-            die("shader uses vertex textures, samplers or UAVs, which this runner does not bind");
+        if (P.vs.textures.size() == 1 && P.vs.textures[0].name == "_SelfTexture2D") P.vsSelf = (int)P.vs.textures[0].slot;
+        else if (!P.vs.textures.empty()) die("a vertex shader may read no texture but _SelfTexture2D");
+        if (!P.vs.samplers.empty() || !P.ps.samplers.empty() || !P.ps.uavs.empty())
+            die("shader uses samplers or UAVs, which this runner does not bind");
         if (P.vs.globalsSize > kCbBytes || P.ps.globalsSize > kCbBytes) die("$Globals larger than the upload slot");
         for (auto& t : P.ps.textures)
             if (t.slot >= kTableSize) die("texture slot beyond the SRV table");
@@ -349,7 +352,15 @@ void buildPasses12(Dx& dx, const SLShader& shader, const CompileSettings& cs, co
         D3D12_DESCRIPTOR_RANGE range{};
         range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
         range.NumDescriptors = kTableSize;
-        D3D12_ROOT_PARAMETER rp[3]{};
+        D3D12_DESCRIPTOR_RANGE vsRange{};
+        vsRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+        vsRange.NumDescriptors = 1;
+        vsRange.BaseShaderRegister = (UINT)(P.vsSelf < 0 ? 0 : P.vsSelf);
+        D3D12_ROOT_PARAMETER rp[4]{};
+        rp[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;   // [3] the state, for the vertex shader
+        rp[3].DescriptorTable.NumDescriptorRanges = 1;
+        rp[3].DescriptorTable.pDescriptorRanges = &vsRange;
+        rp[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
         rp[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
         rp[0].Descriptor.ShaderRegister = P.vs.globalsSlot;
         rp[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
@@ -361,7 +372,7 @@ void buildPasses12(Dx& dx, const SLShader& shader, const CompileSettings& cs, co
         rp[2].DescriptorTable.pDescriptorRanges = &range;
         rp[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
         D3D12_ROOT_SIGNATURE_DESC rsd{};
-        rsd.NumParameters = 3;
+        rsd.NumParameters = P.vsSelf < 0 ? 3 : 4;
         rsd.pParameters = rp;
         ComPtr<ID3DBlob> rsBlob, rsErr;
         check(D3D12SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &rsBlob, &rsErr), "root signature");

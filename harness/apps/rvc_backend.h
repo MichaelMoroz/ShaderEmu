@@ -30,6 +30,8 @@ struct BackendOptions {
 const UINT kGpuTriangles = 65536;
 const UINT kGpuTarget = 2048;
 const float kGpuControlZone[4] = {8, 447.5f, 16, 1};
+// Quads the Commit pass draws when its vertex shader chooses them: the state rows and 32 bands of RAM.
+const unsigned kCommitQuads = 33;
 // The machine's control words (display, GPU, input: RAM from 0x87000000) as a row of the
 // state texture. popRow() returns them after the 64 texels of row 0.
 const unsigned kControlRow = 64 + 0x700000 / 2048, kControlTexels = 16;

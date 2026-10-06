@@ -196,7 +196,23 @@ A cold boot to the `/ #` prompt takes about 80 s on an RTX 5090 with upstream on
 - `rvc_trace12 --cold` boots from power-on on D3D12, for checking early-boot paths under DXC.
 - `rvc_harness --dxc --load-state build\snapshots\rvc_bench.snap --no-stdin --fixed-dt 0.004
   --ticks 2048 --frames 830 --bench 30` must print the same `state` as `rvc_trace12 --dxc --no-doubles
-  --frames 800 --bench 30` (`231e365030389de0` for the current shader).
+  --frames 800 --bench 30` (`d38498f4259b6757` for the current shader). Pass the harness
+  `--no-bands` for this: on D3D12 its commit skips the 4 MiB bands of RAM nothing wrote to and
+  keeps their list in state texel (41,0), which changes the hash and nothing else.
+- `--stats-after S` prints instructions/s, frames/s and the GPU time of each pass, measured
+  from S seconds in. With `--ticks 2` it shows the fixed cost of a frame: tick 0.015 ms,
+  commit and device 0.01 each.
+- A static array in the tick shader is zeroed at the start of every pixel's run (the write
+  cache's 4,096 words cost 0.035 ms a frame). A local array passed down as `inout` is not, and
+  DXC makes no copies of it. Under DXC the harness defines `L1_LOCAL`, which does that for the
+  write cache; `src/l1_local.h` lists the functions that take it. A new function that reaches
+  `l1_cache` must be added there the same way, and an entry may only be read when its
+  occupancy bit is set. FXC builds keep the static array.
+- Skipping pixels in the commit with `discard` saves little: rasterising the whole texture is
+  0.06 ms even when every pixel is discarded. Its vertex shader (`commit_vert`) reads the band
+  list from the state instead and draws one quad per band; the harness binds the state texture
+  to that stage and draws 33 quads.
+- A guest ends its frame from user mode with `pause` (`0x0100000f`); `wfi` traps there.
 - A shader edit costs one FXC compile (90 s alone, about 3 min with three in parallel). Compile
   variants in parallel, then benchmark them one at a time.
 
@@ -204,6 +220,7 @@ A cold boot to the `/ #` prompt takes about 80 s on an RTX 5090 with upstream on
 
 - Harness build: about 5 s.
 - First FXC compile of rvc's `CPUTick` pass: about 90 s; cached afterwards in `build\shadercache`.
-- Speed: about 520k instructions/s upstream, 1,860k with `experiments\rvc_opt` on FXC
-  (under DXC on D3D12: about 2.2M at 2,048 ticks per draw, 3.0M at 65,536). It barely depends on
+- Speed: about 520k instructions/s upstream, 2,240k with `experiments\rvc_opt` on FXC
+  (under DXC on D3D12: about 2.8M at 2,048 ticks per draw, 3.1M at 65,536; 4.0M while glxgears
+  runs under Nano-X). It barely depends on
   `--ticks`: frame time is the serial CPU loop, about 1.8 us per instruction upstream.

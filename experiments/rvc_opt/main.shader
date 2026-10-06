@@ -110,6 +110,9 @@
                 _Data_MTD_R.GetDimensions(m_dim.x, m_dim.y);
 
                 uint2 pos = i.globalTexcoord.xy * s_dim;
+#ifdef L1_LOCAL
+                uint4 l1_cache[L1_ENTRIES];
+#endif
 
                 _Ticks /= max(_TicksDivisor, 1);
                 _Ticks = max(_Ticks, 2);
@@ -149,7 +152,7 @@
                         // as many fast ticks in a row as possible, then one general tick
                         i += fast_run(_Ticks - i);
                         if (i < _Ticks && !cpu.stall) {
-                            cpu_tick();
+                            cpu_tick_l1(L1A0);
                             i++;
                         }
                     }
@@ -173,7 +176,7 @@
 
             CGPROGRAM
             #pragma target 5.0
-            #pragma vertex CustomRenderTextureVertexShader
+            #pragma vertex commit_vert
             #pragma fragment frag
 
             #define PASS_COMMIT
@@ -214,6 +217,47 @@
             #include "src/gpu.h"
 #endif
 
+#ifdef COMMIT_BANDS
+#if RAM_TILE_BITS != 0
+#error COMMIT_BANDS needs RAM in row order
+#endif
+            // RAM in 4 MB bands (128 rows), one bit each: those this commit changes. The other
+            // buffer holds the state of two commits ago, so a band neither this commit nor the
+            // last one changes is already right there and is not drawn.
+            uint commit_bands_changed() {
+                uint stalled = STATE_TEX_HART(uint2(28, 0), 0).r;
+                if (_Init || stalled == STALL_MEMOP_COPY || stalled == STALL_MEMOP_FILL) return 0xffffffff;
+                uint changed = STATE_TEX_HART(uint2(41, 0), 0).g | (1u << 28);   // the tick's writes; GPU control words
+#ifdef GPU_DEVICE
+                changed |= gpu_copy_bands();
+#endif
+                return changed;
+            }
+#endif
+
+            // One quad for the whole texture, or with COMMIT_BANDS (33 quads) the state rows and
+            // each band of RAM that has to be drawn.
+            v2f_customrendertexture commit_vert(appdata_customrendertexture IN) {
+#ifdef COMMIT_BANDS
+                static const float2 corners[6] = {{0, 0}, {0, 1}, {1, 1}, {1, 0}, {0, 0}, {1, 1}};
+                uint quad = IN.vertexID / 6;
+                float2 corner = corners[IN.vertexID % 6];
+                float top = quad == 0 ? 0.0 : 64.0 + (quad - 1) * 128.0, rows = quad == 0 ? 64.0 : 128.0;
+                uint drawn = commit_bands_changed() | STATE_TEX_HART(uint2(41, 0), 0).b;
+                bool on = quad == 0 || ((drawn >> ((quad - 1) & 31)) & 1) != 0;
+                float2 uv = float2(corner.x, (top + corner.y * rows) / _CustomRenderTextureInfo.y);
+                v2f_customrendertexture OUT;
+                OUT.vertex = on ? float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0) : float4(2.0, 2.0, 0.0, 1.0);
+                OUT.localTexcoord = float3(uv, 0);
+                OUT.globalTexcoord = float3(uv, 0);
+                OUT.primitiveID = 0;
+                OUT.direction = 0;
+                return OUT;
+#else
+                return CustomRenderTextureVertexShader(IN);
+#endif
+            }
+
             uint4 frag(v2f_customrendertexture i) : SV_Target {
                 _SelfTexture2D.GetDimensions(s_dim.x, s_dim.y);
                 _Data_MTD_R.GetDimensions(m_dim.x, m_dim.y);
@@ -233,7 +277,11 @@
                 if (gpu_writeback(pos, picture)) return picture;
 #endif
                 decode_for_commit();
-                return commit(pos);
+                uint4 result = commit(pos);
+#ifdef COMMIT_BANDS
+                if (pos.x == 41 && pos.y == 0) result.b = commit_bands_changed();   // for the next commit
+#endif
+                return result;
             }
             ENDCG
         }

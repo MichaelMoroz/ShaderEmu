@@ -430,7 +430,7 @@ DEF(xori, FormatI, { // rv32i
     emu_##name(ins_word, ret, insf); \
     return ret; \
 }
-ins_ret ins_select(uint ins_word, inout ins_ret ret) {
+ins_ret ins_select_l1(L1P uint ins_word, inout ins_ret ret) {
     uint ins_masked;
 
     FormatEmpty ins_FormatEmpty = parse_FormatEmpty(ins_word);
@@ -772,6 +772,15 @@ static bool xl_ident_d = false;  // loads/stores: paging off, or machine mode wi
             pa = ok##_pg | ((va) & 0xfff); \
             set_idx_uint4(vpns, (va) >> 12, ok##_slot); \
             set_idx_uint4(pages, ok##_pg, ok##_slot); \
+        } else { \
+            uint ok##_m = TLBM_IDX(mode, va); \
+            if (tlbm_tag[ok##_m] == TLBM_TAG(va, xl_ctx)) { \
+                uint ok##_mp = tlbm_pg[ok##_m] | ((va) & 0x3ff000); \
+                ok = true; \
+                pa = ok##_mp | ((va) & 0xfff); \
+                set_idx_uint4(vpns, (va) >> 12, ok##_slot); \
+                set_idx_uint4(pages, ok##_mp, ok##_slot); \
+            } \
         } \
     }
 #endif
@@ -780,7 +789,7 @@ static bool xl_ident_d = false;  // loads/stores: paging off, or machine mode wi
 // ALU, branches, jumps) without the general path. Only called while irq_quiet holds, so the
 // general path's interrupt/UART step would have done nothing. Returns false, having changed
 // nothing, for anything else.
-bool fast_exec(uint w) {
+bool fast_exec_l1(L1P uint w) {
     uint opc = w & 0x7f;
     uint f3 = (w >> 12) & 0x7;
     uint rd = (w >> 7) & 0x1f;
@@ -830,10 +839,29 @@ bool fast_exec(uint w) {
             }
             break;
         }
-        case 0x33: {                                            // op (M extension: general path)
+        case 0x33: {                                            // op, and the M extension
             uint a = rs1v;
             uint b = rs2v;
             uint f7 = w >> 25;
+            [branch]
+            if (f7 == 1) {
+                // multiply and divide: the same results as the general path's routines
+                bool by_zero = b == 0, wraps = a == 0x80000000 && b == 0xFFFFFFFF;
+                uint safe = by_zero ? 1 : b;
+                int sa = AS_SIGNED(a), sb = AS_SIGNED((by_zero || wraps) ? 1 : b);
+                [forcecase]
+                switch (f3) {
+                    case 0: val = a * b; break;
+                    case 1: val = mulhu32(a, b) - ((a >> 31) ? b : 0) - ((b >> 31) ? a : 0); break;
+                    case 2: val = mulhu32(a, b) - ((a >> 31) ? b : 0); break;
+                    case 3: val = mulhu32(a, b); break;
+                    case 4: val = by_zero ? 0xFFFFFFFF : wraps ? a : AS_UNSIGNED(sa / sb); break;
+                    case 5: val = by_zero ? 0xFFFFFFFF : a / safe; break;
+                    case 6: val = by_zero ? a : wraps ? 0 : AS_UNSIGNED(sa % sb); break;
+                    default: val = by_zero ? a : a % safe; break;
+                }
+                break;
+            }
             uint f_sra = (a & 0x80000000) ? ~(~a >> b) : a >> b;
             ok = f7 == 0 || (f7 == 0x20 && (f3 == 0 || f3 == 5));
             [forcecase]
@@ -865,30 +893,16 @@ bool fast_exec(uint w) {
             uint va = rs1v + i.imm;
             FAST_XL(xl_ident_d, MMU_ACCESS_READ, tlb_r_vpn, tlb_r_page, va, t_ok, pa)
             ok = false;
-            // va == 0 is left to the general path, which treats it specially
+            // va == 0 is left to the general path, which treats it specially; so is a load that
+            // straddles two words, which is rare and would double the code on this path
+            uint off = pa & 0x3;
             [branch]
-            if (va != 0 && (f3 < 3 || f3 == 4 || f3 == 5) && t_ok && (pa & 0x80000000) != 0) {
-                {
-                    // Same two-word read as the general path: the second word is read whenever
-                    // the address is not word aligned, at physical address + 4.
-                    uint off = pa & 0x3;
-                    uint a1 = pa & 0x7ffffffc;
-                    uint a2 = (pa & ~0x3) + 4;
-                    uint w1 = 0, w2 = 0;
-                    [branch]
-                    if (a1 < RAM_MAX) {
-                        w1 = mem_get_cached_or_tex(a1);
-                    }
-                    [branch]
-                    if (off != 0 && (a2 & 0x80000000) != 0 && (a2 & 0x7fffffff) < RAM_MAX) {
-                        w2 = mem_get_cached_or_tex(a2 & 0x7fffffff);
-                    }
-                    uint v = off != 0 ? ((w1 >> (off * 8)) | (w2 << ((4 - off) * 8))) : w1;
-                    prepared_mem_val = v;
-                    val = f3 == 0 ? sign_extend(v & 0xff, 8) : f3 == 1 ? sign_extend(v & 0xffff, 16) :
-                          f3 == 2 ? v : f3 == 4 ? v & 0xff : v & 0xffff;
-                    ok = true;
-                }
+            if (va != 0 && (f3 < 3 || f3 == 4 || f3 == 5) && t_ok && (pa & 0x80000000) != 0 &&
+                off + (1u << (f3 & 3)) <= 4 && (pa & 0x7ffffffc) < RAM_MAX) {
+                uint v = mem_get_cached_or_tex(pa & 0x7ffffffc) >> (off * 8);
+                val = f3 == 0 ? sign_extend(v & 0xff, 8) : f3 == 1 ? sign_extend(v & 0xffff, 16) :
+                      f3 == 2 ? v : f3 == 4 ? v & 0xff : v & 0xffff;
+                ok = true;
             }
             break;
         }
@@ -899,12 +913,14 @@ bool fast_exec(uint w) {
             FAST_XL(xl_ident_d, MMU_ACCESS_WRITE, tlb_w_vpn, tlb_w_page, s.addr, t_ok, pa)
             ok = false;
             wr = false;
+            // within one RAM word: a single read-modify-write (may set cpu.stall when the
+            // cache is full). A store that straddles two words takes the general path.
+            uint s_off = pa & 0x3;
             [branch]
-            if (f3 < 3 && t_ok && (pa & 0x80000000) != 0) {
-                {
-                    mem_set(pa, rs2v, 1u << f3);          // may set cpu.stall when the cache is full
-                    ok = true;
-                }
+            if (f3 < 3 && t_ok && (pa & 0x80000000) != 0 && s_off + (1u << f3) <= 4) {
+                uint s_mask = (f3 == 2 ? 0xffffffff : f3 == 1 ? 0xffff : 0xff) << (s_off * 8);
+                mem_set_ram(pa & 0x7ffffffc, rs2v << (s_off * 8), s_mask);
+                ok = true;
             }
             break;
         }
@@ -925,7 +941,7 @@ bool fast_exec(uint w) {
 #undef rs1v
 #undef rs2v
 
-void emulate() {
+void emulate_l1(L1P0) {
     uint ins_word = 0;
     ins_ret ret = ins_ret_noop();
     bool mtip_reset = false;
@@ -953,6 +969,11 @@ void emulate() {
             cpu.debug_last_ins = ins_word;
 
             ret = ins_select(ins_word, ret);
+            // pause (the Zihintpause hint, a fence that does nothing): the program is waiting for
+            // something only another pass can bring, and unlike wfi it may say so in any mode
+            if (ins_word == 0x0100000f) {
+                cpu.stall = STALL_WFI;
+            }
 
             if (ret.csr_write && !ret.trap.en) {
                 set_csr(ret.csr_write, ret.csr_val, ret);

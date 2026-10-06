@@ -239,11 +239,20 @@ typedef struct {
     trap trap;
 } ins_ret;
 
+#include "l1_local.h"
+
 // GLOBAL STATICS
 static cpu_t cpu;
 
 #ifdef PASS_TICK
+// With L1_LOCAL the array is a local of the tick's main and starts undefined (zeroing a static
+// one costs every tick): an entry may only be read when its occupancy bit is set.
+#ifndef L1_LOCAL
 static uint4 l1_cache[L1_ENTRIES];
+#endif
+static uint l1_occ[(L1_ENTRIES + 31) / 32];
+#define L1_OCC_POS(idx) ((((idx) & (L1_SETS - 1)) * L1_SLICES) + ((idx) >> L1_SET_BITS))
+#define L1_OCC(idx) (((l1_occ[L1_OCC_POS(idx) >> 5] >> (L1_OCC_POS(idx) & 31)) & 1) != 0)
 #endif
 
 // TYPE HELPERS
@@ -264,6 +273,8 @@ uint sign_extend(uint x, uint b) {
 // state after a frame is unchanged.
 #ifdef PASS_TICK
 static uint mem_cache_bloom = 0;
+// one bit per 4 MB of RAM this tick wrote to, for a commit that skips the rest (COMMIT_BANDS)
+static uint mem_dirty = 0;
 #endif
 
 // Guest registers in an indexable array (one store per write) unless OPT_BASELINE.
@@ -691,11 +702,14 @@ bool pixel_has_state(uint2 pos) {
     return lin < 44 || (lin >= 1068 && lin < 1068 + L1_ENTRIES);
 }
 
-uint4 encode(uint2 pos) {
+uint4 encode_l1(L1P uint2 pos) {
     // L1 cache
     uint s_lin = pos.x + pos.y * 64;
     if (s_lin >= 1068 && s_lin < 1068 + L1_ENTRIES) {
         uint offset = s_lin - 1068;
+#ifdef L1_LOCAL
+        if (!L1_OCC(offset)) return 0;
+#endif
         return l1_cache[offset];
     }
 
@@ -704,6 +718,9 @@ uint4 encode(uint2 pos) {
 
     if (pos.x == 41 && pos.y == 0) {
         ret.r = mem_cache_bloom;
+#ifdef COMMIT_BANDS
+        ret.g = mem_dirty;
+#endif
         return ret;
     }
 

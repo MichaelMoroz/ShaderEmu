@@ -9,12 +9,14 @@
 #define GPU_CTRL    0x700001u   // submit, command list address, command count, frames done
 #define GPU_PIXELS  0x700100u   // the display's framebuffer in RAM, for writing the picture back
 #define GPU_INTO    0x700005u   // where SUBMIT_INTO writes the picture: address, width, height, row length
+#define GPU_COPY    0x700007u   // the copy still to do for the list just drawn: how (0: none), address, width | height << 16, row length
+#define GPU_CLOCK   0x700003u   // word 1: the host's clock in milliseconds; word 2: copies made so far
 
 // Submit word: what to do with the list.
 #define SUBMIT_DRAW 1        // draw it
 #define SUBMIT_WRITEBACK 2   // afterwards copy the picture into the RAM framebuffer
 #define SUBMIT_INTO 4        // afterwards copy it into the rectangle of RAM at GPU_INTO, whose size the picture has
-#define SUBMIT_COPIES (SUBMIT_WRITEBACK | SUBMIT_INTO)   // without SUBMIT_DRAW: drawn, copy pending
+#define SUBMIT_COPIES (SUBMIT_WRITEBACK | SUBMIT_INTO)
 
 #define GPU_TARGET 2048.0       // the GPU's render target is GPU_TARGET pixels square
 #define GPU_MAX_COMMANDS 4096
@@ -28,6 +30,7 @@
 #define VERTEX_SCREEN 0   // position is already in pixels (x, y) and depth (z, 0..1)
 #define VERTEX_CLIP 1     // uniforms c0-c3 are a clip matrix; colour is the vertex colour
 #define VERTEX_LIT 2      // also c4-c6 normal matrix, c7 light direction, c8 diffuse, c9 ambient
+#define VERTEX_MODELVIEW 0x100   // flag: c0-c3 is the projection alone and c4-c6 the modelview's rows
 
 // How fragments are coloured (low byte), plus flags.
 #define FRAGMENT_COLOUR 0     // interpolated colour
@@ -131,9 +134,14 @@ gpu_varyings gpu_vertex(uint id) {
             o.texture_info = uint4(how.g, how.a, more.r, more.g);
             o.key = more.b;
             [branch]
-            if (how.r == VERTEX_SCREEN) {
+            uint vertex_mode = how.r & 0xff;
+            if (vertex_mode == VERTEX_SCREEN) {
                 o.position = place_pixels(pos.xy, pos.z);
             } else {
+                // with VERTEX_MODELVIEW the GPU does the matrix product the program would have done
+                if (how.r & VERTEX_MODELVIEW)
+                    pos = float4(dot(from_fixed(ram(u + 4)), pos), dot(from_fixed(ram(u + 5)), pos),
+                                 dot(from_fixed(ram(u + 6)), pos), pos.w);
                 float4 clip = float4(dot(from_fixed(ram(u)), pos), dot(from_fixed(ram(u + 1)), pos),
                                      dot(from_fixed(ram(u + 2)), pos), dot(from_fixed(ram(u + 3)), pos));
                 // The picture is the top-left size.x by size.y pixels of the target; clip z
@@ -141,7 +149,7 @@ gpu_varyings gpu_vertex(uint id) {
                 float2 part = size / GPU_TARGET;
                 o.position = float4((clip.x + clip.w) * part.x - clip.w, clip.w - (clip.w - clip.y) * part.y,
                                     (clip.z + clip.w) * 0.5, clip.w);
-                if (how.r == VERTEX_LIT) {
+                if (vertex_mode == VERTEX_LIT) {
                     float3 n = float3(dot(from_fixed(ram(u + 4)).xyz, normal.xyz), dot(from_fixed(ram(u + 5)).xyz, normal.xyz),
                                       dot(from_fixed(ram(u + 6)).xyz, normal.xyz));
                     float facing = max(dot(n, from_fixed(ram(u + 7)).xyz), 0.0);
@@ -181,22 +189,44 @@ float4 gpu_fragment(gpu_varyings i) {
 }
 
 #ifdef GPU_WRITEBACK
-// For the Commit pass: once a list submitted with a copy has been drawn, the RAM texels the
-// copy covers take the picture (one 0x00RRGGBB word per pixel). False for every other texel.
+// The 4 MB bands of RAM the pending copy writes, one bit each.
+uint gpu_copy_bands() {
+    uint4 copy = ram(GPU_COPY);
+    if (copy.r == 0) return 0;
+    uint first = GPU_PIXELS * 16, bytes;
+    if (copy.r & SUBMIT_INTO) {
+        first = copy.g & 0x7ffffffc;
+        bytes = max(copy.a, copy.b & 0xffff) * (copy.b >> 16) * 4;
+    } else {
+        uint4 disp = ram(GPU_DISPLAY);
+        bytes = disp.g * disp.b * 4;
+    }
+    uint lo = (first >> 22) & 31, hi = min((first + bytes) >> 22, 31u);
+    return hi < lo ? 0 : ((2u << hi) - 1) & ~((1u << lo) - 1);
+}
+
+// For the Commit pass. The control pass leaves the copy a drawn list asked for in GPU_COPY; the
+// next commit makes it: the RAM texels it covers take the picture (one 0x00RRGGBB word per
+// pixel) and GPU_COPY is cleared. False for every other texel.
 bool gpu_writeback(uint2 pos, out uint4 result) {
     result = 0;
     if (pos.y < 64) return false;
     uint index = (pos.y - 64) * 2048 + pos.x;
     if (index < 0x600000u) return false;   // below anything a GPU program may own
-    uint how = ram(GPU_CTRL).r;
-    if ((how & SUBMIT_DRAW) != 0 || (how & SUBMIT_COPIES) == 0) return false;
+    uint4 copy = ram(GPU_COPY);
+    if (copy.r == 0) return false;
+    if (index == GPU_COPY) return true;    // done: result is all zeros
+    if (index == GPU_CLOCK) {
+        result = GPU_STATE[pos];
+        result.b += 1;
+        return true;
+    }
     uint first, width, height, row;
-    if (how & SUBMIT_INTO) {
-        uint4 into = ram(GPU_INTO);
-        first = (into.r & 0x7fffffff) >> 2;
-        width = into.g;
-        height = into.b;
-        row = max(into.a, into.g);
+    if (copy.r & SUBMIT_INTO) {
+        first = (copy.g & 0x7fffffff) >> 2;
+        width = copy.b & 0xffff;
+        height = copy.b >> 16;
+        row = max(copy.a, width);
     } else {
         uint4 disp = ram(GPU_DISPLAY);
         first = GPU_PIXELS * 4;
@@ -230,13 +260,16 @@ uint4 gpu_control(uint2 pos) {
     uint4 keep = GPU_STATE[pos];
     if (pos.y < 64) return keep;
     uint index = (pos.y - 64) * 2048 + pos.x;
-    if (index == GPU_CTRL) {
-        if (keep.r == 0) return keep;
-        // a drawn list that wants the picture back waits one frame for Commit to copy it
-        if ((keep.r & SUBMIT_DRAW) && (keep.r & SUBMIT_COPIES)) return uint4(keep.r & SUBMIT_COPIES, keep.g, keep.b, keep.a);
-        return uint4(0, keep.g, keep.b, keep.a + 1);
+    // A submitted list has been drawn by now: the GPU is free for the next one. A copy it asked
+    // for is noted in GPU_COPY, for the next commit to make.
+    if (index == GPU_CTRL) return keep.r == 0 ? keep : uint4(0, keep.g, keep.b, keep.a + 1);
+    if (index == GPU_COPY) {
+        uint4 ctrl = ram(GPU_CTRL), into = ram(GPU_INTO);
+        if ((ctrl.r & SUBMIT_DRAW) == 0 || (ctrl.r & SUBMIT_COPIES) == 0) return keep;
+        return uint4(ctrl.r & SUBMIT_COPIES, into.r, (into.g & 0xffff) | (into.b << 16), into.a);
     }
 #ifdef GPU_INPUT
+    if (index == GPU_CLOCK) return uint4(keep.r, _HostMs, keep.b, keep.a);
     if (index == INPUT_STATE) {
         uint4 state = uint4(keep.r, keep.g, _InputButtons, _InputKeySeq + _InputKeyCount);
         uint4 disp = ram(GPU_DISPLAY);

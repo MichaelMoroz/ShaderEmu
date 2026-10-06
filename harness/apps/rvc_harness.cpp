@@ -76,7 +76,9 @@ struct Options {
     std::string vizCapture;   // BMP of the memory view, written at exit
     std::string gpuCapture;   // BMP of the GPU device's colour target, written at exit
     std::string pcLog;        // per frame: the guest's pc and the instructions it ran, as two uint32
+    double statsAfter = -1;   // >= 0: print a STATS line for the part of the run after this many seconds
     bool noDoubles = false;
+    bool noBands = false;     // --no-bands: the commit rewrites all of RAM, as on D3D11
     bool noGpu = false;       // --no-gpu: leave out the GPU device's passes (gpu.shader)
     bool doubles = false;     // --doubles: keep the shader's double math under DXC too
 #ifdef RVC_DEFAULT_DXC
@@ -135,8 +137,11 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
                          mmode     M_MODE_ONLY: also no supervisor/user mode or trap delegation
                          auto      (default) the smallest one the chosen image runs on
   --no-gpu             leave out the GPU device (the passes in <rvc>/gpu.shader, docs/gpu.md)
+  --no-bands           D3D12: have the commit rewrite all of RAM instead of only the bands written to
   --gpu-capture FILE   save the GPU device's whole colour target as a BMP at exit
   --pc-log FILE        sample the guest's pc once a frame, for tools/pc_profile.py
+  --stats-after S      print instructions/s and frames/s for the run after its first S seconds
+                       (and start the pc log there)
   --dxc / --d3d11      backend: D3D12 with DXC-compiled DXIL, or D3D11 with FXC bytecode (what VRChat
                        runs). rvc_harness_dxc.exe defaults to --dxc. DXC implies NO_DOUBLES and, unless
                        --rvc is given, the experiments/rvc_opt shader (upstream does not compile with DXC).
@@ -252,7 +257,9 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--no-gpu") o.noGpu = true;
         else if (a == "--gpu-capture") o.gpuCapture = next("--gpu-capture");
         else if (a == "--pc-log") o.pcLog = next("--pc-log");
+        else if (a == "--stats-after") o.statsAfter = atof(next("--stats-after").c_str());
         else if (a == "--define") o.defines.push_back(next("--define"));
+        else if (a == "--no-bands") o.noBands = true;
         else { fprintf(stderr, "unknown option %s\n", a.c_str()); usage(); return false; }
     }
     if (havePendingExpect) { fprintf(stderr, "--expect without --send\n"); return false; }
@@ -540,6 +547,10 @@ int main(int argc, char** argv) {
         bo.gpuShader = &gpuShader;
         opt.defines.push_back("GPU_DEVICE");   // the Commit pass copies the GPU's picture back
     }
+    // D3D12 keeps both state buffers, which is what lets the commit skip unwritten bands
+    if (opt.dxc && !opt.noBands) opt.defines.push_back("COMMIT_BANDS");
+    // under DXC a local array is not zeroed at the start of every tick, a static one is
+    if (opt.dxc) opt.defines.push_back("L1_LOCAL");
     bo.compile.flags = opt.fxcFlags;
     bo.compile.cacheDir = opt.cacheDir;
     bo.compile.includeDirs = {SHADEREMU_UNITY_INCLUDE_DIR};
@@ -653,6 +664,11 @@ int main(int argc, char** argv) {
     double guestTime = timeBase;
 
     std::vector<uint32_t> pcSamples;
+    bool statsStarted = false;
+    double timeSum[3] = {0, 0, 0};
+    int timeSamples = 0;
+    uint64_t statsInstr0 = 0, statsFrame0 = 0;
+    auto statsT0 = t0;
     bool keyboardOwned = false;   // a guest program reads the keyboard device (docs/input.md)
     auto processRow = [&](const std::vector<uint8_t>& raw, uint64_t rowFrame) {
         const uint32_t* t = (const uint32_t*)raw.data();
@@ -663,7 +679,7 @@ int main(int argc, char** argv) {
         consumedTag = texel(9, 3);
         if (rowFrame < (uint64_t)opt.initFrames) return;  // cpu_init leaves junk in the UART buffer
         if (haveClock) guestInstructions += (uint32_t)(clock - lastClock);
-        if (haveClock && !opt.pcLog.empty()) {
+        if (haveClock && !opt.pcLog.empty() && (opt.statsAfter < 0 || statsStarted)) {
             pcSamples.push_back(texel(36, 3));
             pcSamples.push_back((uint32_t)(clock - lastClock));
         }
@@ -705,6 +721,12 @@ int main(int argc, char** argv) {
         double wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
         double t = timeBase + (opt.fixedDt > 0 ? (double)frame * opt.fixedDt : wall);
         guestTime = t;
+        if (opt.statsAfter >= 0 && !statsStarted && wall >= opt.statsAfter) {
+            statsStarted = true;
+            statsInstr0 = guestInstructions;
+            statsFrame0 = frame;
+            statsT0 = std::chrono::steady_clock::now();
+        }
         mat.setVector("_Time", t / 20, t, t * 2, t * 3);
         if (opt.fixedDt <= 0) {
             // the machine's clock chip (DS1742): local time as BCD, century in the control byte.
@@ -758,6 +780,7 @@ int main(int argc, char** argv) {
             }
             mat.setVector("_InputPointer", pointer.x, pointer.y, pointer.panelW, pointer.panelH);
             mat.setInt("_InputButtons", pointer.buttons);
+            mat.setInt("_HostMs", (int64_t)(uint32_t)(t * 1000.0));   // a clock programs read without a system call
             mat.setInt("_InputKeySeq", keySeq);
             mat.setInt("_InputKeyCount", n);
             mat.setInt("_InputKey0", batch[0]);
@@ -781,7 +804,15 @@ int main(int argc, char** argv) {
             processRow(row, f);
         }
         // The GPU times the two draws of one frame per refresh of the text box.
-        backend.frame(mat, frame, backend.viewOpen() && wall - ovLast >= 0.2);
+        // with --stats-after, one frame in 64 is timed on the GPU and the times are averaged
+        bool sampleTimes = statsStarted && (frame & 63) == 0;
+        if (sampleTimes && backend.gpuTimes(gpuTickMs, gpuCommitMs, gpuDeviceMs)) {
+            timeSum[0] += gpuTickMs;
+            timeSum[1] += gpuCommitMs;
+            timeSum[2] += gpuDeviceMs;
+            ++timeSamples;
+        }
+        backend.frame(mat, frame, sampleTimes || (backend.viewOpen() && wall - ovLast >= 0.2));
         ++frame;
 
         std::string removed = backend.deviceRemoved();
@@ -966,6 +997,15 @@ int main(int argc, char** argv) {
         if (!ok) exitCode = 1;
     }
 
+    if (statsStarted) {
+        double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - statsT0).count();
+        uint64_t instr = guestInstructions - statsInstr0, frames = frame - statsFrame0;
+        fprintf(stderr, "\nSTATS seconds=%.2f instructions=%llu ips=%.0f frames=%llu fps=%.1f per_frame=%.1f\n", secs,
+                (unsigned long long)instr, instr / secs, (unsigned long long)frames, frames / secs, (double)instr / (double)frames);
+        if (timeSamples > 0)
+            fprintf(stderr, "STATS gpu per frame: tick %.3f ms, commit %.3f ms, device %.3f ms; wall %.3f ms\n", timeSum[0] / timeSamples,
+                    timeSum[1] / timeSamples, timeSum[2] / timeSamples, 1000.0 * secs / (double)frames);
+    }
     if (!opt.pcLog.empty()) writeFileBinary(opt.pcLog, (const uint8_t*)pcSamples.data(), pcSamples.size() * 4);
     if (!opt.gpuCapture.empty() && exitCode != 1)
         fprintf(stderr, "\n[harness] GPU target %s %s\n", backend.gpuCapture(opt.gpuCapture) ? "written to" : "capture FAILED:", opt.gpuCapture.c_str());
