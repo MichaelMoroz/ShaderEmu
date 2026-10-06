@@ -8,12 +8,31 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/mman.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
 static void say(const char* text) { write(1, text, strlen(text)); }
+
+/* Whether the host asks for the desktop at boot: bit 0 of the machine's host flags (the word at
+ * 0x8700003c, docs/gpu.md). A machine without the GPU device has no such word and no desktop. */
+static int desktop_wanted(void) {
+    int fd = open("/dev/gpu", O_RDWR), wanted = 0;
+    const unsigned* words;
+
+    if (fd < 0 || access("/usr/bin/nx", X_OK) != 0) {
+        return 0;
+    }
+    words = mmap(NULL, 4096, PROT_READ, MAP_SHARED, fd, 0x01000000);   /* the control words */
+    if (words != MAP_FAILED) {
+        wanted = words[0x3c / 4] & 1;
+        munmap((void*)words, 4096);
+    }
+    close(fd);
+    return wanted;
+}
 
 static void must(int result, const char* what) {
     if (result < 0) {
@@ -82,6 +101,12 @@ int main(void) {
     setenv("PATH", "/sbin:/usr/sbin:/bin:/usr/bin:/usr/local/bin", 1);
     setenv("HOME", "/root", 1);   // not "/": the shell would show the prompt there as "~ # "
     setenv("TERM", "vt100", 0);
+    if (desktop_wanted() && fork() == 0) {
+        /* the window system, the bar and a terminal; the console keeps its shell */
+        setsid();
+        execl("/bin/sh", "sh", "/usr/bin/nx", (char*)NULL);
+        _exit(127);
+    }
     for (;;) {
         mark("before fork");
         pid_t pid = fork();

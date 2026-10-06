@@ -213,7 +213,8 @@ void sbi_call() {
 }
 #endif
 
-DEF(ecall, FormatEmpty, { // system
+// Not through DEF: conditional compilation inside a macro argument is not portable.
+void emu_ecall(uint ins_word, inout ins_ret ret, FormatEmpty ins) { // system
 #ifdef SBI_HLE
     if (cpu.csr.privilege == PRIV_SUPERVISOR) {
         sbi_call();
@@ -241,7 +242,7 @@ DEF(ecall, FormatEmpty, { // system
         ret.trap.type = trap_EnvironmentCallFromMMode;
     }
     /* } */
-})
+}
 DEF(fence, FormatEmpty, { // rv32i
     // skip
 })
@@ -286,7 +287,8 @@ DEF(lw, FormatI, { // rv32i
     // would need sign extend for xlen > 32
     WR_RD(prepared_mem_val)
 })
-DEF(mret, FormatEmpty, { // system
+// Not through DEF: conditional compilation inside a macro argument is not portable.
+void emu_mret(uint ins_word, inout ins_ret ret, FormatEmpty ins) { // system
     uint newpc = get_csr(CSR_MEPC, ret);
     if (!ret.trap.en) {
         uint status = read_csr_raw(CSR_MSTATUS);
@@ -302,7 +304,7 @@ DEF(mret, FormatEmpty, { // system
 #endif
         WR_PC(newpc)
     }
-})
+}
 DEF(mul, FormatR, { // rv32m
     uint tmp = AS_SIGNED(xreg(ins.rs1)) * AS_SIGNED(xreg(ins.rs2));
     WR_RD(tmp)
@@ -317,11 +319,13 @@ uint mulhu32(uint a, uint b) {
     return ah * bh + (lh >> 16) + (hl >> 16) + (mid >> 16);
 }
 DEF(mulh, FormatR, { // rv32m
-    uint a = xreg(ins.rs1), b = xreg(ins.rs2);
+    uint a = xreg(ins.rs1);   // one declaration each: Unity's preprocessor splits macro arguments at this comma
+    uint b = xreg(ins.rs2);
     WR_RD(mulhu32(a, b) - ((a >> 31) ? b : 0) - ((b >> 31) ? a : 0))
 })
 DEF(mulhsu, FormatR, { // rv32m
-    uint a = xreg(ins.rs1), b = xreg(ins.rs2);
+    uint a = xreg(ins.rs1);   // one declaration each: Unity's preprocessor splits macro arguments at this comma
+    uint b = xreg(ins.rs2);
     WR_RD(mulhu32(a, b) - ((a >> 31) ? b : 0))
 })
 DEF(mulhu, FormatR, { // rv32m
@@ -813,8 +817,16 @@ static bool xl_ident_d = false;  // loads/stores: paging off, or machine mode wi
     uint pa = ident ? (va) : (idx_uint4(pages, ok##_slot) | ((va) & 0xfff)); \
     [branch] if (!ok) { \
         uint ok##_k = TLB2_IDX(mode, va); \
-        if (tlb2_tag[ok##_k] == TLB2_TAG(va, xl_ctx)) { \
-            uint ok##_pg = tlb2_pg[ok##_k]; \
+        uint ok##_pg = tlb2_pg[ok##_k]; \
+        bool ok##_l2 = tlb2_tag[ok##_k] == TLB2_TAG(va, xl_ctx); \
+        [branch] if (!ok##_l2) { \
+            if (tlb2_saved(ok##_k, TLB2_TAG(va, xl_ctx), ok##_pg)) { \
+                tlb2_tag[ok##_k] = TLB2_TAG(va, xl_ctx); \
+                tlb2_pg[ok##_k] = ok##_pg; \
+                ok##_l2 = true; \
+            } \
+        } \
+        if (ok##_l2) { \
             ok = true; \
             pa = ok##_pg | ((va) & 0xfff); \
             set_idx_uint4(vpns, (va) >> 12, ok##_slot); \

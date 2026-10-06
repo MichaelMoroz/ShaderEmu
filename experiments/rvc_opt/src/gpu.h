@@ -10,7 +10,7 @@
 #define GPU_PIXELS  0x700100u   // the display's framebuffer in RAM, for writing the picture back
 #define GPU_INTO    0x700005u   // where SUBMIT_INTO writes the picture: address, width, height, row length
 #define GPU_COPY    0x700007u   // the copy still to do for the list just drawn: how (0: none), address, width | height << 16, row length
-#define GPU_CLOCK   0x700003u   // word 1: the host's clock in milliseconds; word 2: copies made so far
+#define GPU_CLOCK   0x700003u   // word 1: the host's clock in milliseconds; word 2: copies made so far; word 3: host flags
 
 // Submit word: what to do with the list.
 #define SUBMIT_DRAW 1        // draw it
@@ -21,7 +21,12 @@
 // once the host draws all of those (it learns of them by reading these words back).
 #define SUBMIT_PASSES(submit) (((submit) >> 8) & 0xfe)
 
-#define GPU_TARGET 2048.0       // the GPU's render target is GPU_TARGET pixels square
+#define GPU_TARGET 2048.0       // the GPU's render target is GPU_TARGET pixels square,
+// unless the host draws into a smaller one and says so (the picture cannot be larger than it)
+#ifndef GPU_TARGET_W
+#define GPU_TARGET_W GPU_TARGET
+#define GPU_TARGET_H GPU_TARGET
+#endif
 #define GPU_MAX_COMMANDS 4096
 
 #define CMD_END 0
@@ -101,30 +106,21 @@ struct gpu_varyings {
 
 // Pixels (x right, y down, depth 0..1) to the corner of the render target the display shows.
 float4 place_pixels(float2 p, float depth) {
-    return float4(p.x * 2.0 / GPU_TARGET - 1.0, 1.0 - p.y * 2.0 / GPU_TARGET, depth, 1.0);
+    return float4(p.x * 2.0 / GPU_TARGET_W - 1.0, 1.0 - p.y * 2.0 / GPU_TARGET_H, depth, 1.0);
 }
 
-// The mesh's vertex `id` belongs to whichever command claims that slot. Vertices no command
-// claims, and everything while no list is submitted, collapse to nothing.
-gpu_varyings gpu_vertex(uint id) {
-    gpu_varyings o;
-    o.position = float4(2, 2, 2, 1);   // outside the clip volume
-    o.colour = 0;
-    o.uv = 0;
-    o.texture_info = 0;
-    o.key = 0;
+// The command that claims mesh vertices `id` to `id + span - 1`: its first texel and first
+// word (op, a, b, first slot). False while no list is submitted, when no command claims all of
+// them, or when the command belongs to another pass than the one being drawn.
+bool gpu_command(uint id, uint span, out uint base, out uint4 head) {
+    base = 0;
+    head = 0;
     uint4 ctrl = ram(GPU_CTRL);
     uint list = texel_of(ctrl.g), count = min(ctrl.b, GPU_MAX_COMMANDS);
-    if ((ctrl.r & SUBMIT_DRAW) == 0 || count == 0) return o;
+    if ((ctrl.r & SUBMIT_DRAW) == 0 || count == 0) return false;
 #ifdef GPU_PASS_UNIFORMS
-    if ((SUBMIT_PASSES(ctrl.r) & ~_GpuPasses) != 0) return o;   // not until every pass it needs is drawn
+    if ((SUBMIT_PASSES(ctrl.r) & ~_GpuPasses) != 0) return false;   // not until every pass it needs is drawn
 #endif
-    uint4 disp = ram(GPU_DISPLAY);
-    float2 size = float2(disp.g, disp.b);
-    if (ctrl.r & SUBMIT_INTO) {
-        uint4 into = ram(GPU_INTO);
-        size = float2(into.g, into.b);
-    }
     // Commands claim rising vertex ranges, so the owner is the last one starting at or before
     // this vertex: a binary search, twelve steps for the largest list.
     uint lo = 0, hi = count;
@@ -135,17 +131,36 @@ gpu_varyings gpu_vertex(uint id) {
             else hi = mid;
         }
     }
-    {
-        uint base = list + 4 * lo;
-        uint4 head = ram(base);   // op, a, b, first slot
-        uint op = head.r;
-        uint slots = op == CMD_CLEAR ? 3 : op == CMD_RECT ? 6 : op == CMD_DRAW ? head.b : 0;
-        if (id < head.a || id >= head.a + slots) return o;
-        uint k = id - head.a;
+    base = list + 4 * lo;
+    head = ram(base);
+    uint op = head.r;
+    uint slots = op == CMD_CLEAR ? 3 : op == CMD_RECT ? 6 : op == CMD_DRAW ? head.b : 0;
+    if (id < head.a || id + span > head.a + slots) return false;
 #ifdef GPU_PASS_UNIFORMS
-        uint drawn_in = op == CMD_RECT ? FRAGMENT_PASS(ram(base + 2).r) : op == CMD_DRAW ? FRAGMENT_PASS(ram(base + 1).g) : 0;
-        if (drawn_in != _GpuPass) return o;
+    uint drawn_in = op == CMD_RECT ? FRAGMENT_PASS(ram(base + 2).r) : op == CMD_DRAW ? FRAGMENT_PASS(ram(base + 1).g) : 0;
+    if (drawn_in != _GpuPass) return false;
 #endif
+    return true;
+}
+
+// Mesh vertex `id`, which the command at `base` claims (gpu_command), placed and coloured.
+gpu_varyings gpu_vertex_of(uint id, uint base, uint4 head) {
+    gpu_varyings o;
+    o.position = float4(2, 2, 2, 1);
+    o.colour = 0;
+    o.uv = 0;
+    o.texture_info = 0;
+    o.key = 0;
+    uint4 ctrl = ram(GPU_CTRL);
+    uint4 disp = ram(GPU_DISPLAY);
+    float2 size = float2(disp.g, disp.b);
+    if (ctrl.r & SUBMIT_INTO) {
+        uint4 into = ram(GPU_INTO);
+        size = float2(into.g, into.b);
+    }
+    {
+        uint op = head.r;
+        uint k = id - head.a;
         [branch]
         if (op == CMD_CLEAR) {
             // one triangle over the whole picture, at the far plane
@@ -202,7 +217,7 @@ gpu_varyings gpu_vertex(uint id) {
                                      dot(from_fixed(ram(u + 2)), pos), dot(from_fixed(ram(u + 3)), pos));
                 // The picture is the top-left size.x by size.y pixels of the target; clip z
                 // arrives as -w..w (the OpenGL convention) and leaves as 0..w.
-                float2 part = size / GPU_TARGET;
+                float2 part = size / float2(GPU_TARGET_W, GPU_TARGET_H);
                 o.position = float4((clip.x + clip.w) * part.x - clip.w, clip.w - (clip.w - clip.y) * part.y,
                                     (clip.z + clip.w) * 0.5, clip.w);
                 if (vertex_mode == VERTEX_LIT) {
@@ -214,6 +229,22 @@ gpu_varyings gpu_vertex(uint id) {
             }
         }
     }
+    return o;
+}
+
+// The mesh's vertex `id` belongs to whichever command claims that slot. Vertices no command
+// claims, and everything while no list is submitted, collapse to nothing.
+gpu_varyings gpu_vertex(uint id) {
+    gpu_varyings o;
+    o.position = float4(2, 2, 2, 1);   // outside the clip volume
+    o.colour = 0;
+    o.uv = 0;
+    o.texture_info = 0;
+    o.key = 0;
+    uint base;
+    uint4 head;
+    [branch]
+    if (gpu_command(id, 1, base, head)) o = gpu_vertex_of(id, base, head);
     return o;
 }
 
@@ -337,7 +368,7 @@ uint4 gpu_control(uint2 pos) {
         return uint4(ctrl.r & SUBMIT_COPIES, into.r, (into.g & 0xffff) | (into.b << 16), into.a);
     }
 #ifdef GPU_INPUT
-    if (index == GPU_CLOCK) return uint4(keep.r, _HostMs, keep.b, keep.a);
+    if (index == GPU_CLOCK) return uint4(keep.r, _HostMs, keep.b, _HostFlags);
     if (index == INPUT_STATE) {
         uint4 state = uint4(keep.r, keep.g, _InputButtons, _InputKeySeq + _InputKeyCount);
         uint4 disp = ram(GPU_DISPLAY);

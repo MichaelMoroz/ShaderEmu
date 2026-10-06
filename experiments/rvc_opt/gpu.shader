@@ -7,6 +7,7 @@ Shader "ShaderEmu/gpu"
     {
         _State ("Machine state texture", 2D) = "black" {}
         _GpuTarget ("The GPU's own colour target", 2D) = "black" {}
+        _HostFlags ("Host flags (1: the guest starts its desktop at boot)", Int) = 1
         _Data_MTD_R ("ROM, first word of each texel", 2D) = "black" {}
         _Data_MTD_G ("ROM, second word", 2D) = "black" {}
         _Data_MTD_B ("ROM, third word", 2D) = "black" {}
@@ -72,6 +73,7 @@ Shader "ShaderEmu/gpu"
             uniform float4 _InputPointer;
             uniform uint _InputButtons, _InputKeySeq, _InputKeyCount;
             uniform uint _HostMs;   // the host's clock, in milliseconds
+            uniform uint _HostFlags;   // bit 0: the guest should start its desktop when it boots
             uniform uint _GpuPasses;   // the passes the GPU draw made this frame, one bit each
             uniform uint _InputKey0, _InputKey1, _InputKey2, _InputKey3;
             #define GPU_STATE _SelfTexture2D

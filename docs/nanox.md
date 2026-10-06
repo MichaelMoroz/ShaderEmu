@@ -8,6 +8,11 @@ the machine's GPU and takes the machine's keyboard and pointer.
     / # nxcalc &                # more clients: nxeyes, nxtetris, nxmine, nxroach, nxev, demo-*
     / # NANOX_SIZE=1024x600 nx  # another screen size (640x480 by default)
 
+The machine starts `nx` by itself when it boots, unless the host says not to (bit 0 of the host
+flags, `gpu.md`; the image's init reads it). The harness asks for the desktop in its terminal
+mode (`--no-desktop` leaves it at the shell) and not in runs with other arguments, which wait
+for the shell prompt (`--desktop` asks for it there); a resumed shell gets `nx` typed for it.
+
 The harness window's pointer and keys are the machine's (`input.md`). The bar along the
 bottom (`linux/nanox/nxbar.c`) has a Start menu with the programs in the image and a clock;
 the machine's clock chip is fed the host's local time. `glxgears` runs in a window. The

@@ -41,6 +41,7 @@ static uint fetch_vpn = 0xffffffff, fetch_page;  // last translated fetch page (
 static uint tlb2_tag[3 * TLB2_N];
 static uint tlb2_pg[3 * TLB2_N];
 static uint tlb2_gen = 1;
+static bool tlb_wiped = false;   // the generations wrapped in this pass: what the last pass left is void
 // Megapage TLB, behind the second level: one entry maps 4 MiB, which is how a kernel maps its
 // own memory. Without it every 4 KiB page of such a mapping costs a page walk of its own, and
 // the TLBs start empty on every pass. Same tags and generation as the second level.
@@ -58,6 +59,7 @@ void tlb2_flush() {
         for (uint k2 = 0; k2 < 3 * TLB2_N; k2++) tlb2_tag[k2] = 0;
         for (uint km = 0; km < 3 * TLBM_N; km++) tlbm_tag[km] = 0;
         tlb2_gen = 1;
+        tlb_wiped = true;
     }
 }
 
@@ -66,14 +68,11 @@ void tlb2_flush() {
 #error TLB_STATE_TEXELS (types.h) does not match the TLB sizes
 #endif
 #ifdef PASS_TICK
-// A real TLB keeps its entries until they are flushed; so do these, across passes. Without
-// this every page a program touches costs a page walk on the general path in every pass.
+// A real TLB keeps its entries until they are flushed; so do these, across passes. The
+// megapage entries are read back here. The second level's arrays start each pass empty, and
+// an entry they lack is looked up where the last pass left it (tlb2_saved).
 void tlb_state_load() {
     uint k;
-    for (k = 0; k < 3 * TLB2_N / 2; k++) {
-        uint4 t = STATE_TEX(uint2((TLB_STATE_AT + k) & 63, (TLB_STATE_AT + k) >> 6));
-        tlb2_tag[2 * k] = t.r; tlb2_pg[2 * k] = t.g; tlb2_tag[2 * k + 1] = t.b; tlb2_pg[2 * k + 1] = t.a;
-    }
     for (k = 0; k < 3 * TLBM_N / 2; k++) {
         uint at = TLB_STATE_AT + 3 * TLB2_N / 2 + k;
         uint4 t = STATE_TEX(uint2(at & 63, at >> 6));
@@ -83,13 +82,26 @@ void tlb_state_load() {
     uint gen = STATE_TEX(uint2(last & 63, last >> 6)).r;
     tlb2_gen = gen == 0 ? 1 : gen;   // a state from before these texels existed: all zero, nothing matches
 }
+// Second-level entry k as the last pass left it, if it is the one for `tag`.
+bool tlb2_saved(uint k, uint tag, inout uint page) {
+    uint at = TLB_STATE_AT + (k >> 1);
+    uint4 t = STATE_TEX(uint2(at & 63, at >> 6));
+    bool odd = (k & 1) != 0;
+    if (tlb_wiped || (odd ? t.b : t.r) != tag) return false;
+    page = odd ? t.a : t.g;
+    return true;
+}
 // What a pixel of the TLB's texels holds after this pass; false for any other pixel.
 bool tlb_state_texel(uint2 pos, out uint4 t) {
     uint k = pos.x + 64 * pos.y - TLB_STATE_AT;
     t = 0;
     if (pos.x + 64 * pos.y < TLB_STATE_AT || k >= TLB_STATE_TEXELS) return false;
     if (k < 3 * TLB2_N / 2) {
-        t = uint4(tlb2_tag[2 * k], tlb2_pg[2 * k], tlb2_tag[2 * k + 1], tlb2_pg[2 * k + 1]);
+        // an entry made in this pass (its tag has the generation), or the one already there
+        uint4 was = tlb_wiped ? (uint4)0 : STATE_TEX(pos);
+        bool a = tlb2_tag[2 * k] != 0 && (tlb2_tag[2 * k] >> 24) == tlb2_gen;
+        bool b = tlb2_tag[2 * k + 1] != 0 && (tlb2_tag[2 * k + 1] >> 24) == tlb2_gen;
+        t = uint4(a ? tlb2_tag[2 * k] : was.r, a ? tlb2_pg[2 * k] : was.g, b ? tlb2_tag[2 * k + 1] : was.b, b ? tlb2_pg[2 * k + 1] : was.a);
     } else if (k < TLB_STATE_TEXELS - 1) {
         uint m = k - 3 * TLB2_N / 2;
         t = uint4(tlbm_tag[2 * m], tlbm_pg[2 * m], tlbm_tag[2 * m + 1], tlbm_pg[2 * m + 1]);
@@ -223,8 +235,14 @@ uint mmu_translate_l1(L1P inout ins_ret ins, uint addr, uint mode) {
 
     uint tlb2_k = TLB2_IDX(mode, addr);
     uint tlb2_ctx = priv | (sum << 2) | (mxr << 3);
-    if (tlb2_tag[tlb2_k] == TLB2_TAG(addr, tlb2_ctx)) {
-        uint l2_page = tlb2_pg[tlb2_k];
+    uint l2_page = tlb2_pg[tlb2_k];
+    bool l2_hit = tlb2_tag[tlb2_k] == TLB2_TAG(addr, tlb2_ctx);
+    if (!l2_hit && tlb2_saved(tlb2_k, TLB2_TAG(addr, tlb2_ctx), l2_page)) {
+        tlb2_tag[tlb2_k] = TLB2_TAG(addr, tlb2_ctx);
+        tlb2_pg[tlb2_k] = l2_page;
+        l2_hit = true;
+    }
+    if (l2_hit) {
         if (mode == MMU_ACCESS_FETCH) { set_idx_uint4(tlb_f_vpn, addr >> 12, tlb_slot); set_idx_uint4(tlb_f_page, l2_page, tlb_slot); fetch_vpn = addr >> 12; fetch_page = l2_page; }
         else if (mode == MMU_ACCESS_READ) { set_idx_uint4(tlb_r_vpn, addr >> 12, tlb_slot); set_idx_uint4(tlb_r_page, l2_page, tlb_slot); }
         else { set_idx_uint4(tlb_w_vpn, addr >> 12, tlb_slot); set_idx_uint4(tlb_w_page, l2_page, tlb_slot); }

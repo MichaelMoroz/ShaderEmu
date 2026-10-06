@@ -259,7 +259,9 @@ A cold boot to the `/ #` prompt takes about 80 s on an RTX 5090 with upstream on
   parallel, then benchmark them one at a time. Never compile the tick with FXC's "avoid flow
   control" flag (`--fxc-flags 9200`): the compiler grew past 34 GB of memory.
 - The second-level TLB (256 entries a mode) and the megapage TLB are kept between passes in
-  state texels from 2112 on. A snapshot from before has zeros there, which never match.
+  state texels from 2112 on. A snapshot from before has zeros there, which never match. The
+  second level's arrays still start each pass empty: an entry they lack is read from its texel
+  on the miss (loading all of them at the start of every pass cost small programs 2%).
 - Doom's frame rate falls faster than the emulator's speed: about 0.9M instructions a second go
   to its 35 game tics whatever the frame rate, so a 1.3x slower machine draws 1.5x fewer frames.
 - To try a change to the fast loop under FXC in seconds, compile the tick without its general
@@ -269,6 +271,9 @@ A cold boot to the `/ #` prompt takes about 80 s on an RTX 5090 with upstream on
 - The same FXC bytecode loop ran at half the speed in a small shader: the driver runs branches
   that hide texture reads as "both sides, then select". A one-trip loop around such a branch
   stops it there, and made the full shader slower.
+- The guest starts its desktop at boot when the host flags say so (`docs/nanox.md`): the
+  no-argument terminal mode does, a run with arguments does not unless it passes `--desktop`.
+  A test must not rely on either default: pass `--desktop` or start `nano-X -p` itself.
 - The image's shell and tools are our own static busybox (`wsl -- bash
   /mnt/c/Development/ShaderX86/linux/userland/busybox.sh`, 13 s after the first time), which
   the image builder puts in place of upstream's. Upstream's is linked against glibc at run
@@ -321,3 +326,9 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
 - To test in the editor: enter play mode (ClientSim), then read Udon's variables with
   `UdonBehaviour.GetProgramVariable` (the C# proxy's fields are not the running values) and type
   by writing into `EmuKeyboard`'s `queue` and `tail`.
+- The room's light is baked: run "ShaderEmu/Bake lighting" after every "Build world" (about a
+  minute on the GPU lightmapper: 30 texels a unit, one 1024x1024 lightmap). The machine starts
+  off; in play mode press the panel's Power button (`Button.onClick.Invoke()` from editor code).
+- Labels are TextMeshPro and UI images use VRChat's super-sampled UI material, which is what
+  the SDK's build panel asks for. Two same-facing faces in one plane flicker: after adding
+  props, compare renderer bounds pairwise for coincident faces that overlap.

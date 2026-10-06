@@ -73,6 +73,7 @@ struct Options {
     bool viz = false;         // memory view window
     int uartBurst = 0;        // input characters per handshake; 0 = what the shader declares
     bool resume = false;      // with no other arguments: resume the shell snapshot instead of booting
+    bool desktop = false;     // ask the guest to start its desktop: the terminal mode, unless --no-desktop
     std::string vizCapture;   // BMP of the memory view, written at exit
     std::string gpuCapture;   // BMP of the GPU device's colour target, written at exit
     std::string pcLog;        // per frame: the guest's pc and the instructions it ran, as two uint32
@@ -149,6 +150,8 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
   --frame-log FILE     per frame: pc, instructions, last stall and time, for tools/boot_profile.py
   --stats-after S      print instructions/s and frames/s for the run after its first S seconds
                        (and start the pc log there)
+  --no-desktop         terminal mode: boot to the shell only (by default the guest starts its desktop);
+                       --desktop asks for it in a run with other arguments
   --dxc / --d3d11      backend: D3D12 with DXC-compiled DXIL, or D3D11 with FXC bytecode (what VRChat
                        runs). rvc_harness_dxc.exe defaults to --dxc. DXC implies NO_DOUBLES and, unless
                        --rvc is given, the experiments/rvc_opt shader (upstream does not compile with DXC).
@@ -263,6 +266,8 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--viz") o.viz = true;
         else if (a == "--no-viz") o.viz = false;
         else if (a == "--resume") o.resume = true;
+        else if (a == "--no-desktop") o.desktop = false;
+        else if (a == "--desktop") o.desktop = true;
         else if (a == "--viz-capture") { o.vizCapture = next("--viz-capture"); o.viz = true; }
         else if (a == "--no-doubles") o.noDoubles = true;
         else if (a == "--no-gpu") o.noGpu = true;
@@ -477,7 +482,7 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         if (a == "--image") ++i;
-        else if (a != "--resume" && a != "--no-viz" && a != "--dxc" && a != "--d3d11") terminalMode = false;
+        else if (a != "--resume" && a != "--no-viz" && a != "--dxc" && a != "--d3d11" && a != "--no-desktop") terminalMode = false;
     }
     std::error_code ec;
     bool haveOpt = fs::exists("experiments/rvc_opt/main.shader", ec);
@@ -499,6 +504,11 @@ int main(int argc, char** argv) {
         opt.viz = true;
         for (int i = 1; i < argc; ++i)
             if (strcmp(argv[i], "--no-viz") == 0) opt.viz = false;
+        opt.desktop = true;
+        for (int i = 1; i < argc; ++i)
+            if (strcmp(argv[i], "--no-desktop") == 0) opt.desktop = false;
+        // a resumed shell is past the point where the guest decides: type the command instead
+        if (opt.desktop && !opt.loadState.empty()) opt.initialInput += "nx\n";
     }
     if (!opt.image.empty() && !opt.payloadSet) {
         const BootImage* im = findImage(opt.image);
@@ -811,6 +821,7 @@ int main(int argc, char** argv) {
             mat.setVector("_InputPointer", pointer.x, pointer.y, pointer.panelW, pointer.panelH);
             mat.setInt("_InputButtons", pointer.buttons);
             mat.setInt("_HostMs", (int64_t)(uint32_t)(t * 1000.0));   // a clock programs read without a system call
+            mat.setInt("_HostFlags", opt.desktop ? 1 : 0);
             mat.setInt("_InputKeySeq", keySeq);
             mat.setInt("_InputKeyCount", n);
             mat.setInt("_InputKey0", batch[0]);
