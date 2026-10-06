@@ -77,6 +77,30 @@ Textures are anywhere in RAM, sampled nearest and repeating, with coordinates 0.
 `gpu_draw()`, `gpu_submit()`. `programs/gears` is the example: three gears, 640 triangles, lit
 and textured, with a bar and a keyed image on top.
 
+## From Linux
+
+The stock `glxgears.c` from Mesa's demos runs under the Linux image, unmodified, at about 70
+frames a second:
+
+    / # glxgears
+    / # glxgears -geometry 1280x720
+
+- `programs/linux/gl.c` is the driver: a small OpenGL 1.x library (immediate mode, display
+  lists, the matrix stacks, one light, flat and smooth shading) with the GLX and Xlib calls a
+  program uses to open its window. A display list becomes a vertex buffer in GPU memory;
+  calling it becomes a lit draw; `glXSwapBuffers` submits. A call outside the subset does not
+  exist, so such a program fails to link rather than misbehave.
+- The kernel has no `/dev/mem`. GPU memory is reached through an MTD device instead: the
+  phram driver makes one for a physical range written to
+  `/sys/module/phram/parameters/phram`, and the library reads and writes it with `pread` and
+  `pwrite`. No kernel change is needed.
+- The GPU's memory must not be RAM the kernel uses, so the image's device tree ends RAM at
+  `0x87000000` (`tools/make_linux_image.py`, which also adds the binary to the root
+  filesystem).
+- The binary is static and links no C library: `programs/linux/libc.c` is a tiny runtime, and
+  floating point comes from compiler-rt's soft-float routines, fetched at build time
+  (`programs/linux/fetch.py`). Inside, the driver works in 16.16 fixed point.
+
 ## Checking it
 
 `tools/gpu_reference.py SNAPSHOT TARGET.bmp` redraws the command list left in a snapshot's RAM
