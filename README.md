@@ -50,12 +50,18 @@ the design notes are kept in `docs/original-x86-plan.md`.
   `gpu.shader`, the machine's GPU device.
 - `harness/apps/rvc_trace12.cpp` – the same two draws on D3D12, for benchmarks and
   `tools/gpu_trace.ps1` (Nsight GPU Trace hardware counters per draw).
+- `linux/kernel/` – this project's Linux kernel: a build script (WSL, no root) for pimaker's
+  5.17.11 fork with our drivers added: the GPU (`/dev/gpu`), the display as a framebuffer
+  (`/dev/fb0`), keyboard and pointer as evdev devices (`docs/input.md`).
+- `linux/userland/`, `linux/nanox/` – a musl toolchain for the Linux image, and the Nano-X
+  window system built with it, with drivers for the GPU, keyboard and pointer (`docs/nanox.md`).
 - `programs/linux/` – programs for the Linux image: an OpenGL driver for the GPU device and the
   runtime to build the stock `glxgears` against it (`programs\linux\build.bat`).
 - `programs/` – our own bare-metal programs in C (`programs\build.bat`, needs LLVM with the
   RISC-V target). The built images in `programs/bin/` are checked in, so running them needs no
   compiler.
 - `tools/gpu_reference.py` – software model of the GPU device, for checking the shader.
+- `tools/pc_profile.py` – profile of a guest by function, from `rvc_harness --pc-log`.
 - `tools/make_linux_image.py` – builds our Linux image from upstream's into `build/images/linux`.
 - `tools/perf_test.ps1` – 3-second speed benchmark; `tools/watch_console.cmd` – live console.
 - `rvc/` – clone of upstream rvc (not part of this repo): the payload images and the reference shader.
@@ -77,11 +83,12 @@ boot:
 
 | image | what it is |
 |---|---|
-| `linux-net` | Linux with a shell, about 12 s to the prompt on DXC. With our image built (`python tools\make_linux_image.py`), `glxgears` runs there on the GPU |
+| `linux-net` | Linux with a shell, about 12 s to the prompt on DXC. With our image built (`python tools\make_linux_image.py`), `nx` starts the Nano-X window system, composed by the GPU, with a Start menu, a terminal and `glxgears` in a window (`docs/nanox.md`) |
 | `linux` | Linux with a built-in initramfs (slow to unpack) |
 | `micropython` | MicroPython REPL on OpenSBI |
 | `rust` | Rust test payload on OpenSBI |
 | `gears` | three lit, textured gears at 1280x720, drawn by the emulated GPU from a command list (`programs/gears`, `docs/gpu.md`) |
+| `rects` | GPU test card: 3,600 rectangles in one command list, copied back into the RAM framebuffer (`programs/rects`) |
 | `raycast` | our Wolfenstein-style raycaster: walk a textured maze with w/a/s/d or the arrow keys, `x` walks on its own; about 20 frames/s at 160x100 (`programs/raycast`) |
 | `raytrace` | our C raytracer: asks for resolution, bounces, rays per pixel and shadows on the console, then draws to the display (`programs/raytrace`) |
 | `rvc-raytrace` | rvc's Rust raytracer, which fills raw memory instead |
@@ -108,7 +115,8 @@ guest keeps in RAM, or what the GPU device drew, at the mode and resolution the 
 written since the previous screen frame glowing and fading. A bar underneath shows, left to
 right: speed (IPS, frames/s, frame time, the time of each draw, uptime, totals), the last lines
 of the console, the state of input to the guest, and the 64x64 CPU state area magnified. Keys typed into
-the window go to the guest as well. Closing it quits the harness; `--no-viz` skips it, and `--viz`
+the window go to the guest's console, and the window's keys and pointer are the machine's
+keyboard and pointer (`docs/input.md`). Closing it quits the harness; `--no-viz` skips it, and `--viz`
 adds it to any other invocation.
 
 ## Run rvc

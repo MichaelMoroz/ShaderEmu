@@ -62,11 +62,50 @@ watch the emulated machine:
   aligned (`GPU_ALIGNED`); unaligned data renders garbage without any error.
 - The Linux image the harness boots for `linux-net` is `build\images\linux` when it exists
   (`python tools\make_linux_image.py`: upstream's root filesystem plus `programs\bin\glxgears`,
-  and a device tree with RAM ending at 0x87000000). Without it, upstream's image boots and has
+  and a device tree with RAM ending at 0x86000000). Without it, upstream's image boots and has
   no glxgears. `build\snapshots\rvc_shell.snap` is of our image; the old one is kept as
   `rvc_shell_upstream.snap`. Re-run the script and re-make the snapshot after rebuilding a
   Linux program.
-- Linux reaches GPU memory through an MTD device made at run time by writing
+- The kernel is ours when `build\images\linux\Image` exists: build it with
+  `wsl -- bash /mnt/c/Development/ShaderX86/linux/kernel/build.sh` (84 s the first time,
+  downloads included; everything goes to `~/shaderemu-linux`, nothing is installed), then run
+  `make_linux_image.py`, which puts it behind upstream's OpenSBI (the kernel sits at +4 MiB of
+  the boot image). It adds `/dev/gpu` (mmap, and a wait that runs `wfi` in the kernel),
+  `/dev/fb0` and the evdev keyboard and pointer (`docs/input.md`).
+- Our kernel's tick is 100 Hz (upstream's is 20 Hz, where any sleep takes at least 50 ms).
+- Nano-X: `wsl -- bash /mnt/c/Development/ShaderX86/linux/nanox/build.sh` (run it from
+  PowerShell: Git Bash rewrites the `/mnt/c` path), then `make_linux_image.py` and a new shell
+  snapshot. `nx` starts it in the guest. To check its drawing, run the same scene with
+  `NANOX_SOFTWARE=1` and compare the framebuffers in RAM (`docs/nanox.md`).
+- To see where a guest spends instructions, pass `--pc-log FILE --ticks 2048` and run
+  `python tools\pc_profile.py FILE kernel=vmlinux.nm server=nano-X.nm` (`nm -n` output; the
+  unstripped binaries are in `~/shaderemu-linux`). Measure before optimising drawing: the
+  first Nano-X profile was 57% system calls, not pixels.
+- The harness reads the machine's control words (RAM from 0x87000000, 16 texels) back with
+  row 0 every frame: `popRow()` returns them after the 64 texels of row 0. A guest program
+  that owns the keyboard (`docs/input.md`) stops window keys from also reaching the console.
+- A change to Microwindows itself goes into `linux\nanox\microwindows.patch`: edit a clean
+  tree in `~/shaderemu-linux/src/microwindows` and save `git diff -- src/nanox src/engine`.
+  The software-versus-GPU comparison cannot catch a mistake there (both runs share the
+  engine): compare with frames from the build before the change.
+- GPU memory is 0x86000000-0x87b00000 now (`/dev/gpu` maps from 0x86000000; the control words
+  are still at 0x87000000) and the image's RAM ends at 0x86000000. A change to that layout
+  touches `shaderemu_gpu.c`, `make_linux_image.py`, `scr_shaderemu.c`, `gl.c` and the
+  `0x600000` texel bound in the shader's `gpu_writeback`.
+- An ioctl number written as a constant must carry the argument's size (`_IOW` puts it in
+  bits 16-29): a wrong one returns ENOTTY and the program carries on drawing nothing.
+- To see what is on the guest's screen without opening a picture, print a region of the RAM
+  framebuffer as characters, one per colour; that is how the terminal's problems were found.
+- An `--until` text must not appear in the command typed with `--input`, or the echo matches
+  it: write the marker as `echo DONE-''MARK` and wait for `DONE-MARK`.
+- The harness window gets the developer's real pointer too. A test that posts pointer
+  messages to it may see extra events; aim posted points with the window's client size.
+- `--d3d11` with other arguments runs upstream's shader, which has no GPU device: pass
+  `--rvc experiments\rvc_opt` to test the GPU on D3D11.
+- Writing the GPU's picture back to RAM happens in the Commit pass, compiled with
+  `GPU_DEVICE` whenever `gpu.shader` is loaded; `--no-gpu` builds the commit without it.
+- The runtime's `memcpy` matters: a byte-at-a-time copy cost glxgears a third of its frame.
+- On upstream's kernel Linux reaches GPU memory through an MTD device made at run time by writing
   `gpu,0x87000000,0xb00000` to `/sys/module/phram/parameters/phram`; the kernel has no /dev/mem.
 - `programs\linux\build.bat` downloads glxgears.c and compiler-rt's builtins into
   `programs\build\fetch`; they are not kept in the repository.

@@ -15,7 +15,16 @@ How it is drawn:
   width x height pixels. In the harness it is a render target; in a VRChat world it is a camera
   that sees only this mesh, on a layer of its own, clearing depth only.
 - **GPUControl** is one small extra update zone on the state texture. After a submitted list
-  has been drawn it takes the submit word back and counts the frame.
+  has been drawn it takes the submit word back and counts the frame. It also delivers the
+  keyboard and pointer (`input.md`).
+- **Writeback** needs no pass of its own: when a submit asks for it, the machine's Commit pass
+  (built with `GPU_DEVICE`) copies the picture into RAM, one `0x00RRGGBB` word per pixel, so
+  the CPU can read what the GPU drew. That happens on the commit after the draw; the submit
+  word keeps only its copy bits in between, and the frame is counted once the copy is done.
+- The copy can go to the display's framebuffer, or to **any rectangle of RAM** from
+  `0x86000000` up: a picture of the rectangle's size is drawn and stored there, a row length
+  apart. That makes any buffer a render target, which is how a window system gives each
+  window its own (`nanox.md`), and how an OpenGL program draws into a window.
 
 Depth test (less-or-equal, write on), blending (none) and culling (none) are fixed. What a
 program chooses, per draw, is one of a few ways to project vertices and one of a few ways to
@@ -26,10 +35,11 @@ colour fragments. The CPU shader has no GPU code.
 | Address | Contents |
 |---|---|
 | `0x87000000` | display mode: 3 shows the GPU's picture (see `display.md` for width and height) |
-| `0x87000010` | submit: write 1 to draw the list; the GPU sets it back to 0 |
+| `0x87000010` | submit: bit 0 draws the list; bit 1 then copies the picture to the RAM framebuffer at `0x87001000`; bit 2 copies it into the rectangle below instead. The GPU sets it back to 0 |
 | `0x87000014` | address of the command list |
-| `0x87000018` | number of commands in it (at most 256) |
+| `0x87000018` | number of commands in it (at most 4096) |
 | `0x8700001c` | lists drawn so far; it changes when a submitted list has been drawn |
+| `0x87000050` | for bit 2: address of the rectangle's first pixel (a multiple of 4), its width, its height, and the length of a row in pixels (0: the width) |
 
 The list is drawn between two CPU frames, once. The picture then stays until the next submit.
 Nothing the CPU can observe changes inside one of its frames, so a program should end its frame
@@ -38,8 +48,9 @@ with `wfi` after submitting (`cpu_wait()`; `gpu_submit()` does this and waits fo
 ## Commands
 
 A command is 16 words (64 bytes). Word 0 is the opcode and word 3 is the command's first
-vertex in the mesh; commands must claim separate ranges, 196,608 vertices in all. Triangles are
-drawn in mesh order.
+vertex in the mesh; commands must claim separate ranges in increasing order (the vertex shader
+finds its command by binary search on word 3), 196,608 vertices in all. Triangles are drawn in
+mesh order.
 
 | Op | Command | Vertices | Words |
 |---|---|---|---|
@@ -67,20 +78,28 @@ uniform vectors must be 16-byte aligned, because the GPU reads them a RAM texel 
 | 0 | the interpolated vertex colour |
 | 1 | a texture of `0x00RRGGBB` words, times the colour |
 | 2 | a texture of bytes looked up in the display palette (`0x87000400`), times the colour |
+| 3 | a texture of single bits, each row a whole number of bytes, leftmost pixel in the highest bit: set bits take the colour, clear bits are not drawn |
 | +0x100 | texels equal to the key (a colour, or an index in mode 2) are not drawn |
 
 Textures are anywhere in RAM, sampled nearest and repeating, with coordinates 0..1 across.
 
+A window system uses the GPU as a 2D accelerator this way (`nanox.md`): each list starts with
+a rectangle textured with the buffer it draws on and is copied back into that buffer, so the
+CPU and the GPU take turns drawing on the same pixels. The screen is then one more list: a
+textured rectangle per window, copied into the display's framebuffer.
+
 ## For C programs
 
 `programs/common/gpu.h`: `gpu_begin()`, `gpu_clear()`, `gpu_rect()`, `gpu_image()`,
-`gpu_draw()`, `gpu_submit()`. `programs/gears` is the example: three gears, 640 triangles, lit
-and textured, with a bar and a keyed image on top.
+`gpu_draw()`, `gpu_submit()`, and `gpu_submit_as()` to ask for the writeback.
+`programs/gears` is the example: three gears, 640 triangles, lit and textured, with a bar and
+a keyed image on top (`w` toggles the writeback). `programs/rects` is a test card of 3,600
+rectangles in one list, written back.
 
 ## From Linux
 
-The stock `glxgears.c` from Mesa's demos runs under the Linux image, unmodified, at about 70
-frames a second:
+The stock `glxgears.c` from Mesa's demos runs under the Linux image, unmodified, at about 145
+frames a second with this project's kernel (about 80 on upstream's):
 
     / # glxgears
     / # glxgears -geometry 1280x720
@@ -90,12 +109,22 @@ frames a second:
   program uses to open its window. A display list becomes a vertex buffer in GPU memory;
   calling it becomes a lit draw; `glXSwapBuffers` submits. A call outside the subset does not
   exist, so such a program fails to link rather than misbehave.
-- The kernel has no `/dev/mem`. GPU memory is reached through an MTD device instead: the
-  phram driver makes one for a physical range written to
-  `/sys/module/phram/parameters/phram`, and the library reads and writes it with `pread` and
-  `pwrite`. No kernel change is needed.
+- This project's kernel (`linux/kernel`: pimaker's 5.17.11 fork plus our drivers) has
+  `/dev/gpu`. It maps GPU memory, `0x86000000` to `0x87b00000` (the control words are 16 MiB
+  in), so buffers are written with plain stores. One ioctl draws a list, copies the picture
+  where asked and returns when that is done; it holds a lock, so several programs can use
+  the GPU without stepping on each other's lists. An older ioctl only waits for a frame.
+  Either way the kernel waits with `wfi`, which ends the emulator's frame; a process cannot
+  do that itself, and a sleep is rounded up to the kernel's tick.
+- Under Nano-X `glxgears` is a window: the library asks the server where the window's
+  pixels are and has each frame copied there (about 45 frames a second at 300x300). With no
+  server running it takes the whole display, as before.
+- Upstream's kernel has neither `/dev/gpu` nor `/dev/mem`. There the library falls back to
+  an MTD device: the phram driver makes one for a physical range written to
+  `/sys/module/phram/parameters/phram`, and the library uses `pread` and `pwrite` on it and
+  spins while it waits.
 - The GPU's memory must not be RAM the kernel uses, so the image's device tree ends RAM at
-  `0x87000000` (`tools/make_linux_image.py`, which also adds the binary to the root
+  `0x86000000` (`tools/make_linux_image.py`, which also adds the binary to the root
   filesystem).
 - The binary is static and links no C library: `programs/linux/libc.c` is a tiny runtime, and
   floating point comes from compiler-rt's soft-float routines, fetched at build time
