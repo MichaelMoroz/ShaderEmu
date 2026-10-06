@@ -957,9 +957,9 @@ void emulate() {
             if (ret.csr_write && !ret.trap.en) {
                 set_csr(ret.csr_write, ret.csr_val, ret);
 
-                if (cpu.stall == STALL_MEMOP_COPY) {
+                if (cpu.stall == STALL_MEMOP_COPY || cpu.stall == STALL_MEMOP_FILL) {
                     [loop]
-                    for (uint imc = 0; imc < 2; imc++) {
+                    for (uint imc = cpu.stall == STALL_MEMOP_FILL ? 1 : 0; imc < 2; imc++) {   // a fill has no source address
                         uint phys = mmu_translate(ret,
                             imc == 0 ? cpu.memop_src_v : cpu.memop_dst_v,
                             imc == 0 ? MMU_ACCESS_READ : MMU_ACCESS_WRITE);

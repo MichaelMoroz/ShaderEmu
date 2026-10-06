@@ -7,13 +7,17 @@
 
 #include "platform.h"
 
-#define GPU_SUBMIT (*(volatile uint32_t*)0x87000010)   // write 1 to draw the list; the GPU clears it
+#define GPU_SUBMIT (*(volatile uint32_t*)0x87000010)   // what to do with the list (below); the GPU clears it
+#define GPU_SUBMIT_DRAW 1        // draw it
+#define GPU_SUBMIT_WRITEBACK 2   // then copy the picture into the RAM framebuffer (DISP_PIXELS)
+#define GPU_SUBMIT_INTO 4        // then copy it into the rectangle at GPU_INTO, whose size the picture has
+#define GPU_INTO ((volatile uint32_t*)0x87000050)   // address, width, height, row length in pixels
 #define GPU_LIST   (*(volatile uint32_t*)0x87000014)   // address of the command list
 #define GPU_COUNT  (*(volatile uint32_t*)0x87000018)   // number of commands in it
 #define GPU_FRAMES (*(volatile uint32_t*)0x8700001c)   // lists drawn so far
 
-#define GPU_COMMANDS 0x87500000u   // where gpu_begin() builds the list: 256 commands of 64 bytes
-#define GPU_MAX_COMMANDS 256
+#define GPU_COMMANDS 0x87500000u   // where gpu_begin() builds the list: 4096 commands of 64 bytes
+#define GPU_MAX_COMMANDS 4096
 #define GPU_MAX_VERTICES 196608    // per list, over all commands (65,536 triangles)
 
 enum { GPU_END, GPU_CLEAR, GPU_RECT, GPU_DRAW };
@@ -30,6 +34,7 @@ enum {
     GPU_FRAGMENT_COLOUR,          // the vertex colour
     GPU_FRAGMENT_TEXTURE,         // a texture of 0x00RRGGBB words, times the colour
     GPU_FRAGMENT_INDEXED,         // a texture of bytes through the display palette, times the colour
+    GPU_FRAGMENT_MASK,            // a 1-bit texture (rows of whole bytes, leftmost bit highest): set bits take the colour
     GPU_FRAGMENT_KEYED = 0x100,   // add: texels equal to the key are not drawn
 };
 
@@ -116,13 +121,18 @@ static inline void gpu_draw(const gpu_vertex* vertices, uint32_t count, uint32_t
     c[10] = key;
 }
 
-// Hands the list to the GPU and waits until it has been drawn.
-static inline void gpu_submit(void) {
+// Hands the list to the GPU and waits until it has been drawn. `how` is GPU_SUBMIT_DRAW,
+// optionally with GPU_SUBMIT_WRITEBACK.
+static inline void gpu_submit_as(uint32_t how) {
     uint32_t before = GPU_FRAMES;
     GPU_LIST = GPU_COMMANDS;
     GPU_COUNT = gpu_commands;
-    GPU_SUBMIT = 1;
+    GPU_SUBMIT = how;
     do {
         cpu_wait();   // the list is drawn between frames
     } while (GPU_FRAMES == before);
+}
+
+static inline void gpu_submit(void) {
+    gpu_submit_as(GPU_SUBMIT_DRAW);
 }

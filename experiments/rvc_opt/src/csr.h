@@ -167,8 +167,8 @@ void write_csr_raw(uint address, uint value) {
         case CSR_MEMOP_N:
             cpu.memop_n = what;
             return;
-        case CSR_MEMOP_OP:
-            cpu.stall = STALL_MEMOP_COPY;
+        case CSR_MEMOP_OP:   // 2: fill the range with the word in MEMOP_SRC; otherwise copy
+            cpu.stall = what == 2 ? STALL_MEMOP_FILL : STALL_MEMOP_COPY;
             cpu.debug_arb_0++;
             return;
     };

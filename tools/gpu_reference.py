@@ -50,7 +50,7 @@ def vertices(m):
     list_addr, count = (int(v) for v in m.w(0x87000014, 2))
     size = np.array([width, height], f32)
     out = []
-    for c in range(min(count, 256)):
+    for c in range(min(count, 4096)):
         w = m.w(list_addr + 64 * c, 16)
         op = int(w[0])
         if op == 0:
@@ -100,6 +100,10 @@ def shade(m, colour, uv, tex, key):
         y = np.minimum((fy.astype(f32) * f32(th)).astype(np.int64), th - 1)
         n = y * tw + x
         base = (addr & 0x7fffffff) >> 2
+        if mode == 3:
+            n = y * ((tw + 7) >> 3) + (x >> 3)
+            texel = (m.words[base + n // 4] >> (8 * (n & 3)).astype(np.uint32)) & 0xff
+            return np.clip(colour, 0, 1), ((texel << (x & 7).astype(np.uint32)) & 0x80) != 0
         if mode == 2:
             texel = (m.words[base + n // 4] >> (8 * (n & 3)).astype(np.uint32)) & 0xff
             if tex[0] & 0x100:

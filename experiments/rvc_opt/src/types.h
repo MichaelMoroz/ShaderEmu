@@ -55,6 +55,7 @@
 #define STALL_FENCE 7
 #define STALL_MEMOP_COPY 8
 #define STALL_WFI 9   // the guest has nothing to do until the next frame
+#define STALL_MEMOP_FILL 10   // as MEMOP_COPY, but every word becomes memop_src_v
 
 
 // STRUCT TYPES
@@ -1056,6 +1057,9 @@ uint4 commit(uint2 pos) {
             case STALL_WFI:
                 ret.r = 0;
                 break;
+            case STALL_MEMOP_FILL:
+                ret.r = 0;
+                break;
         }
     }
 
@@ -1159,11 +1163,11 @@ uint4 commit(uint2 pos) {
         } else {
             lin <<= 4;
 
-            if (cpu.stall == STALL_MEMOP_COPY &&
+            if ((cpu.stall == STALL_MEMOP_COPY || cpu.stall == STALL_MEMOP_FILL) &&
                 (lin + (3 << 2)) >= cpu.memop_dst_p &&
                 lin < (cpu.memop_dst_p + cpu.memop_n))
             {
-                // we've found ourselves in a position for a memcpy, ignore cache and perform it
+                // we've found ourselves in a position for a memcpy (or a fill), ignore cache and perform it
                 // (a memop is always the last instruction in a commit cycle, so we know we have
                 // higher priority than the L1 cache)
                 [loop]
@@ -1174,7 +1178,9 @@ uint4 commit(uint2 pos) {
                     {
                         uint offset = lin_word - cpu.memop_dst_p;
                         uint src = cpu.memop_src_p + offset;
-                        uint transfer = mem_get_cached_or_tex_from_state_cache_or_mtd(src);
+                        uint transfer = cpu.memop_src_v;
+                        [branch]
+                        if (cpu.stall == STALL_MEMOP_COPY) transfer = mem_get_cached_or_tex_from_state_cache_or_mtd(src);
                         set_idx_uint4(ret, transfer, icp);
                     }
                 }

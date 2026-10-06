@@ -206,6 +206,14 @@
             #include "helpers.cginc"
             #include "src/types.h" // includes fb.h
 
+#ifdef GPU_DEVICE
+            // The GPU device's picture, for copying into the RAM framebuffer (docs/gpu.md).
+            Texture2D<float4> _GpuTarget;
+            #define GPU_STATE _SelfTexture2D
+            #define GPU_WRITEBACK
+            #include "src/gpu.h"
+#endif
+
             uint4 frag(v2f_customrendertexture i) : SV_Target {
                 _SelfTexture2D.GetDimensions(s_dim.x, s_dim.y);
                 _Data_MTD_R.GetDimensions(m_dim.x, m_dim.y);
@@ -220,6 +228,10 @@
                     return data;
                 }
 
+#ifdef GPU_DEVICE
+                uint4 picture;
+                if (gpu_writeback(pos, picture)) return picture;
+#endif
                 decode_for_commit();
                 return commit(pos);
             }

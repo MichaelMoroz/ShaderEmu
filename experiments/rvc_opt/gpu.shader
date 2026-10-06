@@ -1,17 +1,12 @@
 Shader "ShaderEmu/gpu"
 {
-    // The machine's GPU (docs/gpu.md): real triangles, rasterised by the graphics card.
-    //   GPUDraw     is drawn as a mesh of GPU_TRIANGLES triangles into the GPU's own colour and
-    //               depth target (in a world: a camera on a private layer). The vertex shader
-    //               reads the guest's command list and vertex buffers from the state texture
-    //               and places each vertex; the fragment shader textures and colours.
-    //   GPUControl  is one more update zone on the state texture: it marks a submitted list as
-    //               drawn.
-    // Depth test, blending and culling are fixed. The guest chooses, per draw, how vertices are
-    // projected and how fragments are coloured, from a small set of modes.
+    // The machine's GPU (docs/gpu.md). GPUDraw is a mesh drawn into the GPU's own colour and
+    // depth target, its vertex shader reading the guest's command list from the state texture.
+    // GPUControl is an update zone on the state texture: list drawn, input delivered.
     Properties
     {
         _State ("Machine state texture", 2D) = "black" {}
+        _GpuTarget ("The GPU's own colour target", 2D) = "black" {}
     }
     SubShader
     {
@@ -57,7 +52,14 @@ Shader "ShaderEmu/gpu"
 
             #include "crt.cginc"
             #include "UnityCG.cginc"
+            // The host's input for this frame: pointer position over the display panel and the
+            // panel's size, both in window pixels; buttons; up to four key events (Linux key
+            // code, bit 31 while pressed) numbered from _InputKeySeq.
+            uniform float4 _InputPointer;
+            uniform uint _InputButtons, _InputKeySeq, _InputKeyCount;
+            uniform uint _InputKey0, _InputKey1, _InputKey2, _InputKey3;
             #define GPU_STATE _SelfTexture2D
+            #define GPU_INPUT
             #include "src/gpu.h"
 
             uint4 frag(v2f_customrendertexture i) : SV_Target {
