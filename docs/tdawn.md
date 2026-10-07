@@ -12,8 +12,8 @@ desktop's 1280x720, which costs the game nothing (the GPU does the stretching).
 
 In the guest: `nano-X -p & tdawn` at the console (it is also listed for the desktop's Start
 menu, which was not tried). The data is the 1995 demo's (GDI missions 1, 3, 5, 6 and 10; the
-menu starts the first), which the build fetches and the repository does not keep. There is no
-sound.
+menu starts the first), which the build fetches and the repository does not keep. Effects and
+speech play on the sound card (`docs/sound.md`); there is no music.
 
 ## What the build is made of (`linux/tdawn`)
 
@@ -95,6 +95,8 @@ Each run prints these figures (`tdstat:` lines, every five seconds):
     TDAWN_INPUT_LOG=1   print the keys and buttons that arrive, and where in the window
     TDAWN_RESIZE=WxH    give the window that size after its 60th frame, as a drag would
     TDAWN_SCROLL=N      scroll the map for N frames from frame 20: east, south, west, north
+    TDAWN_SAY=1         in a mission, EVA says each line the data has, one after another
+    TDAWN_SOUND_LOG=1   print every sound the game asks for, and whether the pack has it
     TDAWN_BUILD=N       put a refinery in view at frame N, which plays its construction
     TDAWN_CHECK_REDRAW=1  at the held frame, count the pixels a full redraw would change
     TDAWN_SKIP=N        how many frames in a row may go undrawn (2)
@@ -118,7 +120,7 @@ the credits counter counting.
 
 - Drawing on the GPU: sprites and terrain as commands instead of pixels. House colours and the
   cloak effect need fragment modes the GPU does not have.
-- Sound. The full game's data (the demo's is 6 MB; the CDs' movies and music are not wanted).
+- Music. The full game's data (the demo's is 6 MB; the CDs' movies and music are not wanted).
 - Red Alert is the same tree (`BUILD_VANILLARA`) and is not built.
 - With `NANOX_SIZE=640x480` the window has no frame (640x400 leaves no room for one) and is
   left through the game's own menu (Escape).

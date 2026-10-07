@@ -39,7 +39,7 @@ fi
 # the tree is upstream's commit plus our patch and our files, put there again on every build
 git -C "$VC" checkout -q -f "$COMMIT" && git -C "$VC" clean -q -fd
 git -C "$VC" apply "$HERE/vanilla-conquer.patch"
-cp "$HERE/cxxrt.cpp" "$HERE/shaderemu.cpp" "$HERE/host.c" "$HERE/host.h" "$VC/common/"
+cp "$HERE/cxxrt.cpp" "$HERE/shaderemu.cpp" "$HERE/soundio_shaderemu.cpp" "$HERE/host.c" "$HERE/host.h" "$VC/common/"
 
 cat > "$WORK/src/tdawn-toolchain.cmake" <<EOF
 set(CMAKE_SYSTEM_NAME Linux)
@@ -50,7 +50,7 @@ set(CMAKE_AR $(command -v riscv32-linux-ar))
 set(CMAKE_RANLIB $(command -v riscv32-linux-ranlib))
 set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
 EOF
-GLINC="-idirafter $REPO/programs/linux/include -I$MW/src/include"
+GLINC="-idirafter $REPO/programs/linux/include -I$MW/src/include -I$REPO/linux/userland"
 # -fno-pie: a use of a global costs a load from a table otherwise (docs/doom.md)
 # -fno-lifetime-dse: the game's operator new marks an object active before its constructor
 # runs, a store the compiler may otherwise drop (a native -O3 build then has no overlays)
@@ -67,24 +67,35 @@ mkdir -p "$OUT/usr/bin" "$OUT/usr/share"
 riscv32-linux-strip -o "$OUT/usr/bin/tdawn.bin" "$BUILD/vanillatd"
 riscv32-linux-nm -n "$BUILD/vanillatd" > "$WORK/src/tdawn.nm"
 
-if [ ! -f "$WORK/src/tdawn-demo/DEMO.MIX" ]; then
+if [ ! -f "$WORK/src/tdawn-demo/DEMO.MIX" ] || [ ! -f "$WORK/src/tdawn-demo/MAP1.AUD" ]; then
     echo "== the demo's data"
     mkdir -p "$WORK/src/tdawn-demo"
     curl -sSL "$DEMO" -o "$WORK/src/tdawn-demo.zip"
     python3 - "$WORK/src/tdawn-demo.zip" "$WORK/src/tdawn-demo" <<'PY'
 import sys, zipfile
 z = zipfile.ZipFile(sys.argv[1])
-for name in ('DEMO.MIX', 'DEMOL.MIX', 'SOUNDS.MIX', 'SPEECH.MIX'):
+for name in ('DEMO.MIX', 'DEMOL.MIX', 'SOUNDS.MIX', 'SPEECH.MIX', 'MAP1.AUD', 'WIN1.AUD'):
     open(sys.argv[2] + '/' + name, 'wb').write(z.read(name))
 PY
 fi
 # all in /usr/share: the image builder adds files to folders the ROM has, and makes none.
 # The game looks for its files by name in one folder, which the starter makes of links.
 for f in DEMO DEMOL SOUNDS SPEECH; do cp "$WORK/src/tdawn-demo/$f.MIX" "$OUT/usr/share/tdawn-$f.MIX"; done
+# the sounds as the sound card plays them from the ROM (docs/sound.md); made again when stale
+PAK="$WORK/src/tdawn-demo/tdawn-sound.pak"
+if [ ! "$PAK" -nt "$WORK/src/tdawn-demo/SOUNDS.MIX" ] || [ ! "$PAK" -nt "$REPO/tools/make_tdawn_sound.py" ]; then
+    python3 "$REPO/tools/make_tdawn_sound.py" "$PAK" "$WORK/src/tdawn-demo"/{SOUNDS,SPEECH,DEMO,DEMOL}.MIX \
+        "$WORK/src/tdawn-demo"/{MAP1,WIN1}.AUD
+fi
+cp "$PAK" "$OUT/usr/share/tdawn-sound.pak"
+# the demo's two tunes (the map's and the score's): the game finds them by name, the card plays
+# them from the pack, so only how each begins has to be there
+for f in MAP1 WIN1; do head -c 64 "$WORK/src/tdawn-demo/$f.AUD" > "$OUT/usr/share/tdawn-$f.AUD"; done
 cat > "$OUT/usr/bin/tdawn" <<'EOF'
 #!/bin/sh
 mkdir -p /tmp/tdawn && cd /tmp/tdawn || exit 1
 for f in DEMO DEMOL SOUNDS SPEECH; do ln -sf /usr/share/tdawn-$f.MIX $f.MIX; done
+for f in MAP1 WIN1; do ln -sf /usr/share/tdawn-$f.AUD $f.AUD; done
 # the game reads the whole of its program's folder for every file it looks for: not /usr/bin
 [ -x game ] || cp /usr/bin/tdawn.bin game
 HOME=/tmp/tdawn exec ./game "$@"

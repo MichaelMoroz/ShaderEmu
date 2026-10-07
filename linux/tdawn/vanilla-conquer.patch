@@ -11,22 +11,24 @@ index 8d094fa..d6d9a66 100644
  option(BUILD_TESTS "Build unit tests." OFF)
  option(BUILD_TOOLS "Build modding utilities." OFF)
 diff --git a/common/CMakeLists.txt b/common/CMakeLists.txt
-index eada872..5a796c4 100644
+index eada872..a3e9b31 100644
 --- a/common/CMakeLists.txt
 +++ b/common/CMakeLists.txt
-@@ -140,7 +140,10 @@ else()
+@@ -140,7 +140,12 @@ else()
      list(APPEND COMMONV_SRC soundio_null.cpp vqaaudio_null.cpp)
  endif()
  
 -if(DDRAW)
 +if(SHADEREMU)
-+    list(APPEND COMMONV_SRC shaderemu.cpp host.c cxxrt.cpp ${SHADEREMU_GLES})
++    # the sound card plays the game's sounds (soundio_shaderemu.cpp), not the null backend chosen above
++    list(REMOVE_ITEM COMMONV_SRC soundio_null.cpp)
++    list(APPEND COMMONV_SRC shaderemu.cpp soundio_shaderemu.cpp host.c cxxrt.cpp ${SHADEREMU_GLES})
 +    list(APPEND VANILLA_LIBS ${SHADEREMU_NANOX})
 +elseif(DDRAW)
      list(APPEND COMMONV_SRC video_ddraw.cpp wwkeyboard_win32.cpp)
      list(APPEND VANILLA_LIBS ddraw)
  elseif(SDL2)
-@@ -200,6 +203,9 @@ if(BUILD_VANILLATD OR BUILD_VANILLARA OR BUILD_TESTS)
+@@ -200,6 +205,9 @@ if(BUILD_VANILLATD OR BUILD_VANILLARA OR BUILD_TESTS)
      if(OPENAL)
          target_compile_definitions(commonv PUBLIC OPENAL_BUILD)
      endif()
@@ -123,7 +125,7 @@ index ea6a5c0..31c6e4b 100644
  }
  
 diff --git a/tiberiandawn/conquer.cpp b/tiberiandawn/conquer.cpp
-index a8aebd8..0add8ef 100644
+index a8aebd8..9beebd2 100644
 --- a/tiberiandawn/conquer.cpp
 +++ b/tiberiandawn/conquer.cpp
 @@ -98,6 +98,264 @@ extern void Send_Statistics_Packet(void);
@@ -391,7 +393,28 @@ index a8aebd8..0add8ef 100644
  #ifndef ARRAY_SIZE
  #define ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
  #endif
-@@ -1516,7 +1774,7 @@ static void Sync_Delay(void)
+@@ -1222,6 +1480,20 @@ void Call_Back(void)
+     if (SampleType) {
+         Theme.AI();
+         Speak_AI();
++#ifdef SHADEREMU
++        /* TDAWN_SAY=1: once in a mission EVA says her lines one after another, to test speech
++        ** with. A line the data lacks is passed over: asking for its file never returns. */
++        static int say_next = getenv("TDAWN_SAY") ? VOX_FIRST : VOX_COUNT;
++        if (say_next < VOX_COUNT && Frame > 15 && !Is_Speaking()) {
++            extern char const* Speech[VOX_COUNT];
++            char name[32];
++            snprintf(name, sizeof(name), "%s.AUD", Speech[say_next]);
++            if (CCFileClass(name).Is_Available()) {
++                Speak((VoxType)say_next);
++            }
++            say_next++;
++        }
++#endif
+     }
+ 
+ #ifdef NETWORKING
+@@ -1516,7 +1788,7 @@ static void Sync_Delay(void)
              if (input) {
                  Keyboard_Process(input);
              }
@@ -400,7 +423,7 @@ index a8aebd8..0add8ef 100644
          }
  
          Frame_Limiter(FL_NONE);
-@@ -1611,6 +1869,9 @@ bool Main_Loop()
+@@ -1611,6 +1883,9 @@ bool Main_Loop()
      } else {
          FrameTimer.Set(Options.GameSpeed);
      }
@@ -410,7 +433,7 @@ index a8aebd8..0add8ef 100644
  
      /*
      **	Update the display, unless we're inside a dialog.
-@@ -1624,7 +1885,10 @@ bool Main_Loop()
+@@ -1624,7 +1899,10 @@ bool Main_Loop()
                  Keyboard_Process(input);
              }
              //			HidPage.Lock();
@@ -422,7 +445,7 @@ index a8aebd8..0add8ef 100644
              //			HidPage.Unlock();
          }
      }
-@@ -1650,7 +1914,7 @@ bool Main_Loop()
+@@ -1650,7 +1928,7 @@ bool Main_Loop()
      /*
      **	AI logic operations are performed here.
      */
@@ -432,10 +455,22 @@ index a8aebd8..0add8ef 100644
      //	Heap_Dump_Check( "After Logic.AI" );
  
 diff --git a/tiberiandawn/init.cpp b/tiberiandawn/init.cpp
-index 8ae9955..fc0f2f3 100644
+index 8ae9955..08538a1 100644
 --- a/tiberiandawn/init.cpp
 +++ b/tiberiandawn/init.cpp
-@@ -1016,6 +1016,13 @@ bool Select_Game(bool fade)
+@@ -412,6 +412,11 @@ bool Init_Game(int, char*[])
+             ScoresPresent = true;
+             ThemeClass::Scan();
+         }
++#ifdef SHADEREMU
++        /* the demo's two tunes, for the map and the score screens, are files of their own */
++        ScoresPresent = true;
++        ThemeClass::Scan();
++#endif
+     } else {
+         CCDebugString("C&C95 - About to register CONQUER.MIX\n");
+         new MFCD("CONQUER.MIX"); // Cached.
+@@ -1016,6 +1021,13 @@ bool Select_Game(bool fade)
  
                      Scen.Scenario = 1;
                      BuildLevel = 1;
@@ -449,7 +484,7 @@ index 8ae9955..fc0f2f3 100644
  
                      ScenPlayer = SCEN_PLAYER_GDI;
                      ScenDir = SCEN_DIR_EAST;
-@@ -2533,6 +2540,12 @@ void Init_Random(void)
+@@ -2533,6 +2545,12 @@ void Init_Random(void)
          /*
          ** Set the optional user-specified seed
          */
@@ -486,3 +521,22 @@ index 596a8f7..e7e549e 100644
  
                  if (!Scroll_Map(direction, distance, false)) {
                      Override_Mouse_Shape((MouseType)(MOUSE_NO_N + control), false);
+diff --git a/tiberiandawn/theme.cpp b/tiberiandawn/theme.cpp
+index 972a6dc..2e1a5ab 100644
+--- a/tiberiandawn/theme.cpp
++++ b/tiberiandawn/theme.cpp
+@@ -187,6 +187,14 @@ void ThemeClass::AI(void)
+             /*
+             **	If the pending song needs to be picked, then pick it now.
+             */
++#ifdef SHADEREMU
++            /* the demo has no tune that a mission may play: looking for one would never end */
++            if (Pending == THEME_PICK_ANOTHER && Is_Demo()) {
++                Pending = THEME_NONE;
++                Sound_Callback();
++                return;
++            }
++#endif
+             if (Pending == THEME_PICK_ANOTHER) {
+                 Pending = Next_Song(Score);
+             }
