@@ -19,7 +19,9 @@ mkdir -p "$WORK/src/doom-build" "$OUT/usr/bin" "$OUT/usr/share"
 export OPT="-O2 -flto -fno-pie"
 cd "$WORK/src/doom-build"
 # Doom assumes char is signed (its tables end with -1); on RISC-V it is not unless asked
-SOURCES=$(cd "$DOOM" && ls *.c | grep -v _sdl)
+# (i_sound.c is the port's sound, which mixed for a sound server: doom_sound.c takes its place)
+SOURCES=$(cd "$DOOM" && ls *.c | grep -v _sdl | grep -vx i_sound.c)
+rm -f i_sound.o
 for f in $SOURCES; do
     [ "${f%.c}.o" -nt "$DOOM/$f" ] || echo "$f"
 done | xargs -r -P "$(nproc)" -I{} sh -c \
@@ -93,6 +95,7 @@ sed 's/^static hu_stext_t	w_message;/hu_stext_t w_message;/; s/^static boolean		
 rv32-cc $OPT -w -c -fsigned-char -I"$DOOM" hu_stuff_ours.c -o hu_stuff.o
 rm hu_stuff_ours.c
 rv32-cc $OPT -Wall -c -fsigned-char -I"$DOOM" "$HERE/doom_fast.c" -o doom_fast.o
+rv32-cc $OPT -Wall -Wno-unused -c -fsigned-char -I"$DOOM" -I"$REPO/linux/userland" "$HERE/doom_sound.c" -o doom_sound.o
 rv32-cc $OPT -Wall -c $GLINC -I"$MW/src/include" "$REPO/programs/linux/gles.c" -o gles.o
 rv32-cc $OPT -Wall -Wno-unused -c -fsigned-char $GLINC -I"$DOOM" "$HERE/doom_gl.c" -o doom_gl.o
 rv32-cc $OPT -Wall -c $GLINC -I"$MW/src/include" "$HERE/doom_video.c" -o doom_video.o

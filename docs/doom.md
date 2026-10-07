@@ -154,5 +154,5 @@ the window's size, the screen stretched from its 320 by 200.
 
 A tic is the game itself: sight checks (about a third still), thinkers, movement. A frame is
 the things in view (about 250 instructions each, and 20 for each one looked at and left out),
-the status bar and the frame's bookkeeping. Sound is not played: the port expects a sound
-server that is not there.
+the status bar and the frame's bookkeeping. Sound costs it next to nothing: effects and music
+are the sound card's (`docs/sound.md`, `linux/nanox/doom_sound.c`).
