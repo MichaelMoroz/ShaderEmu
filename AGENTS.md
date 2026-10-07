@@ -427,6 +427,16 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
 - The board on the left wall (`About()` in `ShaderEmuDecor.cs`) tells visitors what the machine
   is, what they can do and whose work it uses. When the image gains a program or the project a
   dependency, add it there and to the README's "Built on"; then "Build world" and bake.
+- Players see each other's console and display (`docs/share.md`): `EmuShare` is a player
+  object, `EmuShareHub` ("Share" in the scene) packs and unpacks. To test with one player, set
+  the hub's `selfTest` in play mode, or `ClientSimMain.SpawnRemotePlayer`, write the new
+  player's `EmuShare` variables and send it `_onDeserialization`. ClientSim sends a packet a
+  second where VRChat sends five. With two real clients the hub's `netTest` makes them test
+  themselves and log `[ShareTest]` lines to VRChat's output logs. "ShaderEmu/Add sharing to the open scene" puts it into a
+  scene without building the world again.
+- A shader that packs bytes for Udon uses `SV_Position` and `Load` on both sides (target rows
+  are then the readback's rows and `LoadRawTextureData`'s); only where it meets
+  `DisplayPicture` does it use the `uv`, as `Display.shader` does. `sample` is a reserved word.
 - After `make_linux_image.py`, run "Import boot images" in Unity: the world boots the copy in
   `Assets/ShaderEmu/Images`, not the files in `build`. To check it, decode the four PNGs of a
   part (texel 0 is the top row) and compare with the `.bin` byte for byte.

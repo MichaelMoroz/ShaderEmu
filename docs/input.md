@@ -75,6 +75,8 @@ is told that a canvas was pressed, never where.
 - The display draws the guest's cursor under the beam itself (`_HostPointer` in
   `Display.shader`, with the hot spot the guest publishes): the guest's own idea of where the
   pointer is arrives a few frames late.
+- A beam that meets the open links panel (`fetch.md`) is not the pointer: the panel stands
+  in front of the display, and a click on one of its fields would click the guest too.
 - On a keyboard (`EmuKeyboard.cs`: 104 keys, found from their rectangles) the key under the
   beam is down from the trigger's press to its release, one key a hand. Shift, Ctrl and Alt
   also latch for the next key when pressed and let go alone.

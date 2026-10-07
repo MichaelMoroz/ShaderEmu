@@ -690,6 +690,7 @@ public static partial class ShaderEmuBuilder
               "TinyCC by Fabrice Bellard and contributors, with jrrk2's RISC-V port: the C compiler inside\n" +
               "Desktop photographs from Unsplash, and somebody's cats\n" +
               "Cascadia Mono by Microsoft: the console's font\n" +
+              "ShaderAudio by lox9973: how sound gets out of a shader\n" +
               "VRChat's Worlds SDK, UdonSharp by Merlin, TextMesh Pro and Unity: this room",
               right, 200, rightWide, 1100, 33, TextAnchor.UpperLeft, body);
 

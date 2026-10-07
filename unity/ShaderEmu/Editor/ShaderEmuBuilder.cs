@@ -402,6 +402,17 @@ public static partial class ShaderEmuBuilder
         return button;
     }
 
+    // A slider that was touched stays selected, and Unity then moves it with the keys and
+    // stick a player walks with. Sent to itself in every direction, it does not move.
+    public static void DeafToWalking(Slider slider)
+    {
+        Navigation navigation = slider.navigation;
+        navigation.mode = Navigation.Mode.Explicit;
+        navigation.selectOnLeft = navigation.selectOnRight = navigation.selectOnUp = navigation.selectOnDown = slider;
+        slider.navigation = navigation;
+        EditorUtility.SetDirty(slider);
+    }
+
     static void OnClick(Button button, UdonSharpBehaviour target, string method)
     {
         UdonBehaviour udon = UdonSharpEditorUtility.GetBackingUdonBehaviour(target);
@@ -610,6 +621,7 @@ public static partial class ShaderEmuBuilder
             part.color = part.name == "Handle" ? Color.white : part.name == "Fill" ? new Color(0.3f, 0.65f, 1f) : new Color(0.2f, 0.21f, 0.25f);
         }
         plane.handleRect.sizeDelta = new Vector2(36, 0);
+        DeafToWalking(plane);
         volume.planeSlider = plane;
         Apply(volume);
         OnClick(power, volume, "Toggle");
@@ -971,7 +983,7 @@ public static partial class ShaderEmuBuilder
         Label(panel, "Title", "ShaderEmu: a RISC-V computer in a pixel shader", 30, 16, 1640, 56, 38, TextAnchor.MiddleLeft, Color.white);
         machine.statsText = Label(panel, "Stats", "off", 30, 84, 1000, 420, 30, TextAnchor.UpperLeft, new Color(0.75f, 0.95f, 0.8f));
         Label(panel, "Help",
-              "This machine runs on your own graphics card; other players have their own.\n" +
+              "This machine runs on your own graphics card; other players have their own, and can show you theirs.\n" +
               "Each hand has a beam. On the big screen it is the mouse: trigger = left, grip = right, right stick = wheel.\n" +
               "On a keyboard a key stays down while the trigger is held; Shift, Ctrl and Alt also latch.\n" +
               "Desktop: click 'Use my keyboard' on a keyboard to type with the real one.",
@@ -1004,6 +1016,7 @@ public static partial class ShaderEmuBuilder
         }
         RectTransform handle = slider.handleRect;
         handle.sizeDelta = new Vector2(36, 0);
+        DeafToWalking(slider);
         machine.speedSlider = slider;
 
         // an address of the visitor's own for the guest's browser: VRChat only loads what is
@@ -1023,6 +1036,8 @@ public static partial class ShaderEmuBuilder
         Apply(pointer);
         OnClick(beamUp, pointer, "PitchUp");
         OnClick(beamDown, pointer, "PitchDown");
+        Sharing(world, computer, panel, machine, new Vector3(1.28f, 1.82f, screenZ));
+        Sound(world, panel, machine);
         UnityEventTools.AddStringPersistentListener(slider.onValueChanged,
             UdonSharpEditorUtility.GetBackingUdonBehaviour(machine).SendCustomEvent, "SpeedChanged");
 

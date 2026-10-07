@@ -38,6 +38,7 @@ public class EmuPointer : UdonSharpBehaviour
     private float stick;                    // the right stick, up positive
     private float turned;                   // notches of the wheel not sent yet
     private bool started;
+    private Collider linksPlate;            // the links panel, in front of the display while open
 
     private void Init()
     {
@@ -49,6 +50,7 @@ public class EmuPointer : UdonSharpBehaviour
             key[h] = -1;
             pressedOn[h] = -1;
         }
+        if (machine.linksPanel != null) linksPlate = machine.linksPanel.GetComponent<Collider>();
         ShowPitch();
     }
 
@@ -101,12 +103,14 @@ public class EmuPointer : UdonSharpBehaviour
         int found = Nothing, foundKey = -1;
         bool landed = false;
         Vector3 at = origin;
-        if (screen.Raycast(ray, out hit, best))
+        // a beam that meets the open links panel is VRChat's to use, not the machine's pointer
+        bool covered = linksPlate != null && machine.linksPanel.activeSelf && linksPlate.Raycast(ray, out hit, best);
+        if (!covered && screen.Raycast(ray, out hit, best))
         {
             landed = true;
             best = hit.distance;
             at = hit.point;
-            int w = machine.displayWidth, ht = machine.displayHeight;
+            int w = machine.shownWidth, ht = machine.shownHeight;   // another player's, while theirs is shown
             if (w > 0 && ht > 0)
             {
                 Vector3 local = screen.transform.InverseTransformPoint(hit.point);

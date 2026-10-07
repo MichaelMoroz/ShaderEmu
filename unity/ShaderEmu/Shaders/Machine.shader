@@ -62,6 +62,10 @@ Shader "ShaderEmu/Machine"
         _FetchInfo ("A picture's width | height << 16", Int) = 0
         _FetchW ("or its width", Int) = 0
         _FetchH ("and its height", Int) = 0
+        _SoundCursorLo ("Sound: the sample the host's ring starts at, low half", Int) = 0
+        _SoundCursorHi ("and high half", Int) = 0
+        _SoundMixed ("Sound: the host mixed before this control pass", Int) = 0
+        _SoundRate ("Sound: output samples a second", Int) = 48000
     }
     SubShader
     {
@@ -162,6 +166,12 @@ Shader "ShaderEmu/Machine"
             uniform uint _FetchInfo, _FetchW, _FetchH;   // a picture's size: one word, or its halves
             Texture2D<float4> _HostData;
             Texture2D<float4> _HostImage;
+            // The sound card (docs/sound.md): its words move on in a pass that follows a mix.
+            uniform uint _SoundCursorLo, _SoundCursorHi, _SoundMixed, _SoundRate;
+            #define SOUND_CURSOR (_SoundCursorLo | (_SoundCursorHi << 16))
+            #define SOUND_MIXED _SoundMixed
+            #define SOUND_RATE _SoundRate
+            #define GPU_SOUND
             // The GPU's camera draws all eight passes every frame.
             #define _GpuPasses 0xffu
             #define GPU_STATE _SelfTexture2D

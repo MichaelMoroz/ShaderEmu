@@ -15,7 +15,7 @@ using VRC.Udon.Common.Interfaces;
 // a readback of state row 0 and the control words, the GPU's camera drawing the list the
 // guest submitted, and the GPU's control pass. Around that this script does what
 // rvc_harness.cpp does: boots the image and feeds the console and the input device.
-// The machine is local: every player runs their own.
+// The machine is local: every player runs their own, and EmuShareHub shows it to the others.
 [UdonBehaviourSyncMode(BehaviourSyncMode.None)]
 public class EmuMachine : UdonSharpBehaviour
 {
@@ -33,6 +33,7 @@ public class EmuMachine : UdonSharpBehaviour
     public Material readbackMaterial;
     public RenderTexture readbackTexture;   // 448 x 1, one pixel per word
 
+    public EmuSound sound;                  // the sound card's host side, if the world has one
     public EmuTerminal terminal;
     public EmuKeyboard consoleKeyboard;
     public EmuKeyboard gpuKeyboard;
@@ -63,6 +64,13 @@ public class EmuMachine : UdonSharpBehaviour
     [HideInInspector] public int displayMode, displayWidth, displayHeight;
     [HideInInspector] public bool keyboardOwned;   // a guest program reads the keyboard device
 
+    // Another player's machine is on the screens (EmuShareHub): the wall is not this one's to
+    // size, and the keyboards and pointer are not this one's to read.
+    [HideInInspector] public bool showRemote, inputAway;
+    [HideInInspector] public int shownWidth, shownHeight;   // the display the pointer is mapped to
+    [HideInInspector] public int pointerX, pointerY, pointerButtons;
+    [HideInInspector] public bool pointerOn;            // a beam is on the display
+
     private const int Words = 448;
     private const int FetchMost = 262144;
     private const int FetchIdle = 0, FetchLoading = 1, FetchPacking = 2, FetchReady = 3, FetchDelivering = 4;
@@ -84,8 +92,12 @@ public class EmuMachine : UdonSharpBehaviour
     private uint sentTag, consumedTag;
     private uint keySeq;
     private uint lastMs;
-    private int pointerX, pointerY, pointerButtons;
-    private bool pointerOn;            // a beam is on the display
+    private int remoteX, remoteY, remoteButtons;   // a watching player's pointer
+    private bool remoteOn;
+    private float ownMovedAt, remoteMovedAt;
+    private int[] remoteChars = new int[256];      // and what they typed: console, key events
+    private int[] remoteKeys = new int[256];
+    private int charHead, charTail, keyHead, keyTail;
 
     private int fetchState;
     private uint fetchSeq, fetchAnswered;
@@ -99,6 +111,8 @@ public class EmuMachine : UdonSharpBehaviour
     private byte[] fetchBytes;
     private Color32[] fetchPixels = new Color32[65536];
 
+    private bool soundEnabled;         // the guest has the sound card on, and where its clock is
+    private uint soundClock;
     private bool haveClock;
     private uint lastClock, lastCommits, pc, lastStall, gpuFrames;
     private float instructions;        // since the last stats line
@@ -145,6 +159,7 @@ public class EmuMachine : UdonSharpBehaviour
     {
         if (!powered) return;
         paused = !paused;
+        if (paused && sound != null) sound.Quiet();
         ShowLabels();
     }
 
@@ -175,8 +190,13 @@ public class EmuMachine : UdonSharpBehaviour
     {
         if (current == null) return;
         displayMaterial.SetTexture("_State", current);
-        displayMaterial.SetVector("_HostPointer", new Vector4(pointerX, pointerY, pointerOn ? 1 : 0, 0));
+        bool theirs = UseRemote();
+        displayMaterial.SetVector("_HostPointer", new Vector4(theirs ? remoteX : pointerX, theirs ? remoteY : pointerY,
+                                                              theirs || (pointerOn && !inputAway) ? 1 : 0, 0));
         VRCGraphics.Blit(current, displayTexture, displayMaterial);
+        if (showRemote) return;
+        shownWidth = powered ? displayWidth : 0;
+        shownHeight = powered ? displayHeight : 0;
         displayShowMaterial.SetVector("_Size", new Vector4(powered ? displayWidth : 0, powered ? displayHeight : 0, 0, 0));
     }
 
@@ -208,6 +228,14 @@ public class EmuMachine : UdonSharpBehaviour
         gpuMaterial.SetTexture("_Data_MTD_G", Pick(5));
         gpuMaterial.SetTexture("_Data_MTD_B", Pick(6));
         gpuMaterial.SetTexture("_Data_MTD_A", Pick(7));
+        if (sound != null)
+        {
+            // samples are played from where they lie in the ROM
+            sound.mixMaterial.SetTexture("_Data_MTD_R", Pick(4));
+            sound.mixMaterial.SetTexture("_Data_MTD_G", Pick(5));
+            sound.mixMaterial.SetTexture("_Data_MTD_B", Pick(6));
+            sound.mixMaterial.SetTexture("_Data_MTD_A", Pick(7));
+        }
     }
 
     public void PowerOn()
@@ -217,10 +245,13 @@ public class EmuMachine : UdonSharpBehaviour
         paused = false;
         live = false;
         haveClock = false;
+        soundEnabled = false;
+        if (sound != null) sound.Quiet();
         initLeft = InitFrames;
         ignoreUntil = int.MaxValue;
         sentTag = 0;
         consumedTag = 0;
+        charHead = charTail = keyHead = keyTail = 0;
         totalInstructions = 0;
         displayMode = 0;
         displayWidth = 0;
@@ -251,15 +282,60 @@ public class EmuMachine : UdonSharpBehaviour
     {
         powered = false;
         paused = false;
+        soundEnabled = false;
+        if (sound != null) sound.Quiet();
         ShowLabels();
         Say("The computer is off.\r\n");
         if (statsText != null) statsText.text = "off";
     }
 
+    public bool IsOn()
+    {
+        return powered;
+    }
+
+    // ---- a watching player's hands (EmuShareHub) ----
+
+    public void RemoteChar(int c)
+    {
+        int next = (charTail + 1) & 255;
+        if (next == charHead) return;
+        remoteChars[charTail] = c;
+        charTail = next;
+    }
+
+    public void RemoteKey(int e)
+    {
+        int next = (keyTail + 1) & 255;
+        if (next == keyHead) return;
+        remoteKeys[keyTail] = e;
+        keyTail = next;
+    }
+
+    public void SetRemotePointer(int x, int y, int buttons, bool on)
+    {
+        if (x != remoteX || y != remoteY || (on ? buttons : 0) != remoteButtons || on != remoteOn) remoteMovedAt = Time.time;
+        remoteX = x;
+        remoteY = y;
+        remoteButtons = on ? buttons : 0;
+        remoteOn = on;
+    }
+
     // ---- the pointer (EmuPointer) ----
+
+    // Two pointers may be on the display, this player's and a watcher's: the one holding a
+    // button has the machine, else the one that moved last. A desktop player's is always there.
+    private bool UseRemote()
+    {
+        if (!remoteOn) return false;
+        if (!pointerOn || inputAway) return true;
+        if (pointerButtons != 0) return false;
+        return remoteButtons != 0 || remoteMovedAt > ownMovedAt;
+    }
 
     public void SetPointer(int x, int y, int buttons)
     {
+        if (x != pointerX || y != pointerY || buttons != pointerButtons || !pointerOn) ownMovedAt = Time.time;
         pointerX = x;
         pointerY = y;
         pointerButtons = buttons;
@@ -513,6 +589,7 @@ public class EmuMachine : UdonSharpBehaviour
         if (running) Inputs();
         if (running) FetchStep();
         int n = running ? rounds : 1;
+        machineMaterial.SetInt("_SoundMixed", 0);
         for (int i = 0; i < n; i++)
         {
             // The tick writes only the CPU's 64 x 64 state area, into a texture of that size;
@@ -531,6 +608,9 @@ public class EmuMachine : UdonSharpBehaviour
                 // then takes the submit word back and delivers the input.
                 gpuMaterial.SetTexture("_State", current);
                 gpuCamera.Render();
+                // The sound card mixes once a frame, before the last control pass, which then
+                // moves its voices up to where the mix began.
+                if (i == n - 1 && sound != null) sound.Mix(current, machineMaterial, soundEnabled, soundClock);
                 Pass(PassControl);
             }
         }
@@ -560,9 +640,16 @@ public class EmuMachine : UdonSharpBehaviour
         if (live && sentTag == consumedTag && consoleKeyboard != null)
         {
             int lo = 0, hi = 0, count = 0;
-            while (count < UartBurst && consoleKeyboard.Count() > 0)
+            while (count < UartBurst)
             {
-                int c = consoleKeyboard.Pop() & 0xff;
+                int c;
+                if (charHead != charTail)
+                {
+                    c = remoteChars[charHead] & 0xff;
+                    charHead = (charHead + 1) & 255;
+                }
+                else if (!inputAway && consoleKeyboard.Count() > 0) c = consoleKeyboard.Pop() & 0xff;
+                else break;
                 if (c == 0) continue;   // 0 means "no character" to the guest
                 if (count < 2) lo |= c << (8 * count);
                 else hi |= c << (8 * (count - 2));
@@ -583,9 +670,16 @@ public class EmuMachine : UdonSharpBehaviour
         if (gpuKeyboard != null)
         {
             int k0 = 0, k1 = 0, k2 = 0, k3 = 0;
-            while (keys < 4 && gpuKeyboard.Count() > 0)
+            while (keys < 4)
             {
-                int e = gpuKeyboard.Pop();
+                int e;
+                if (keyHead != keyTail)
+                {
+                    e = remoteKeys[keyHead];
+                    keyHead = (keyHead + 1) & 255;
+                }
+                else if (!inputAway && gpuKeyboard.Count() > 0) e = gpuKeyboard.Pop();
+                else break;
                 if (keys == 0) k0 = e;
                 else if (keys == 1) k1 = e;
                 else if (keys == 2) k2 = e;
@@ -600,8 +694,10 @@ public class EmuMachine : UdonSharpBehaviour
         machineMaterial.SetInt("_InputKeySeq", (int)(keySeq & 0xffffff));
         machineMaterial.SetInt("_InputKeyCount", keys);
         keySeq += (uint)keys;
-        machineMaterial.SetVector("_InputPointer", new Vector4(pointerX + 8, pointerY + 8, displayWidth + 16, displayHeight + 16));
-        machineMaterial.SetInt("_InputButtons", pointerButtons);
+        bool theirs = UseRemote();
+        machineMaterial.SetVector("_InputPointer", new Vector4((theirs ? remoteX : pointerX) + 8, (theirs ? remoteY : pointerY) + 8,
+                                                               displayWidth + 16, displayHeight + 16));
+        machineMaterial.SetInt("_InputButtons", theirs ? remoteButtons : inputAway ? 0 : pointerButtons);
 
         uint ms = (uint)(Time.timeSinceLevelLoad * 1000f);
         machineMaterial.SetInt("_HostMsLo", (int)(ms & 0xffff));
@@ -653,6 +749,8 @@ public class EmuMachine : UdonSharpBehaviour
         }
         gpuFrames = Word(65, 3);
         keyboardOwned = Word(67, 0) == 0x6b657973u;
+        soundEnabled = Word(64 + 0x22, 0) != 0;
+        soundClock = Word(64 + 0x23, 0);
         uint asked = Word(64 + 16, 0);
         if (fetchState == FetchIdle && asked != Word(64 + 17, 0) && asked != fetchAnswered) FetchAsked(asked);
 
@@ -697,6 +795,7 @@ public class EmuMachine : UdonSharpBehaviour
             "instructions " + totalInstructions.ToString("N0") + "\n" +
             "display " + display + "   GPU lists drawn " + gpuFrames + "\n" +
             "console: sent " + sentTag + ", taken " + consumedTag + ", waiting " + (consoleKeyboard != null ? consoleKeyboard.Count() : 0) + "\n" +
-            "keyboard device: " + keySeq + " events" + (keyboardOwned ? ", owned by a program" : "");
+            "keyboard device: " + keySeq + " events" + (keyboardOwned ? ", owned by a program" : "") + "\n" +
+            "sound: " + (sound == null ? "none" : !sound.on ? "off" : !soundEnabled ? "idle" : sound.mixes + " mixes, " + sound.late + " late");
     }
 }

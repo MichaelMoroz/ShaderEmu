@@ -25,6 +25,9 @@ public class EmuTerminal : UdonSharpBehaviour
     private int escCount;
     private bool escHasDigits;
 
+    [HideInInspector] public bool[] rowChanged;   // grid rows written since EmuShareHub last sent them
+    private bool remote;              // another player's screen is shown, not this one
+
     void Start()
     {
         Init();
@@ -34,6 +37,7 @@ public class EmuTerminal : UdonSharpBehaviour
     {
         if (grid != null) return;
         grid = new Color32[cols * rows];
+        rowChanged = new bool[rows];
         Clear();
     }
 
@@ -42,6 +46,7 @@ public class EmuTerminal : UdonSharpBehaviour
         Init();
         Color32 blank = new Color32(32, 7, 0, 255);
         for (int i = 0; i < grid.Length; i++) grid[i] = blank;
+        MarkAll();
         top = 0;
         cx = 0;
         cy = 0;
@@ -57,6 +62,7 @@ public class EmuTerminal : UdonSharpBehaviour
         Color32 blank = new Color32(32, (byte)fg, (byte)bg, 255);
         int at = ((row + top) % rows) * cols;
         for (int x = from; x < to; x++) grid[at + x] = blank;
+        rowChanged[(row + top) % rows] = true;
     }
 
     private void LineFeed()
@@ -112,6 +118,7 @@ public class EmuTerminal : UdonSharpBehaviour
         if (c == 9) { cx = (cx + 8) & ~7; if (cx >= cols) cx = cols - 1; return; }
         if (c < 32 || c > 126) return;
         if (cx >= cols) { cx = 0; LineFeed(); }
+        rowChanged[(cy + top) % rows] = true;
         grid[((cy + top) % rows) * cols + cx] = new Color32((byte)c, (byte)(bold && fg < 8 ? fg + 8 : fg), (byte)bg, 255);
         cx++;
     }
@@ -192,10 +199,68 @@ public class EmuTerminal : UdonSharpBehaviour
     }
 
     public int CursorRow() { return cy; }
+    public int CursorColumn() { return Mathf.Min(cx, cols - 1); }
+    public int Top() { return top; }
+
+    // ---- for EmuShareHub ----
+
+    public void MarkAll()
+    {
+        Init();
+        for (int r = 0; r < rows; r++) rowChanged[r] = true;
+    }
+
+    // Grid row r as bytes: row, length without the blanks at its end, characters, then 0, or
+    // 1 and a byte of colours a cell. Returns where the next row goes; at most 3 + 2 * cols.
+    public int PackRow(int r, byte[] into, int at)
+    {
+        int from = r * cols, length = cols;
+        while (length > 0)
+        {
+            Color32 c = grid[from + length - 1];
+            if (c.r != 32 || c.g != 7 || c.b != 0) break;
+            length--;
+        }
+        into[at++] = (byte)r;
+        into[at++] = (byte)length;
+        bool plain = true;
+        for (int x = 0; x < length; x++)
+        {
+            Color32 c = grid[from + x];
+            into[at + x] = c.r;
+            if (c.g != 7 || c.b != 0) plain = false;
+        }
+        at += length;
+        into[at++] = (byte)(plain ? 0 : 1);
+        if (plain) return at;
+        for (int x = 0; x < length; x++)
+        {
+            Color32 c = grid[from + x];
+            into[at + x] = (byte)(c.g | c.b << 4);
+        }
+        return at + length;
+    }
+
+    // Another player's screen, in this one's place until ShowLocal.
+    public void ShowRemote(Color32[] cells, int first, int x, int y)
+    {
+        remote = true;
+        gridTexture.SetPixels32(cells);
+        gridTexture.Apply(false);
+        screenMaterial.SetInt("_RowOffset", first);
+        screenMaterial.SetVector("_Cursor", new Vector4(x, y, 1, 0));
+    }
+
+    public void ShowLocal()
+    {
+        remote = false;
+        dirty = true;
+        nextFlush = 0f;
+    }
 
     void Update()
     {
-        if (!dirty || Time.time < nextFlush) return;
+        if (remote || !dirty || Time.time < nextFlush) return;
         dirty = false;
         nextFlush = Time.time + flushInterval;
         gridTexture.SetPixels32(grid);
