@@ -5,6 +5,7 @@ import os, shutil, sys
 here, tree = os.path.dirname(os.path.abspath(__file__)), sys.argv[1]
 DRIVERS = [  # source, directory, config symbol, prompt, extra Kconfig lines
     ('shaderemu_gpu.c', 'drivers/misc', 'SHADEREMU_GPU', 'ShaderEmu GPU device', []),
+    ('shaderemu_sound.c', 'drivers/misc', 'SHADEREMU_SOUND', 'ShaderEmu sound card', []),
     ('shaderemu_fb.c', 'drivers/video/fbdev', 'FB_SHADEREMU', 'ShaderEmu display',
      ['depends on FB', 'select FB_CFB_FILLRECT', 'select FB_CFB_COPYAREA', 'select FB_CFB_IMAGEBLIT']),
     ('shaderemu_input.c', 'drivers/input/misc', 'INPUT_SHADEREMU', 'ShaderEmu keyboard and pointer', []),

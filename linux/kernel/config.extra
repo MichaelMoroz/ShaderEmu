@@ -1,5 +1,6 @@
 # Added to upstream rvc's linux.config for this project's kernel.
 CONFIG_SHADEREMU_GPU=y
+CONFIG_SHADEREMU_SOUND=y
 CONFIG_FB=y
 CONFIG_FB_SHADEREMU=y
 CONFIG_INPUT=y
