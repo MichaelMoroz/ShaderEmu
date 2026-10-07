@@ -90,6 +90,10 @@ Shader "ShaderEmu/gpu"
             uniform uint _FetchInfo, _FetchW, _FetchH;   // a picture's size: one word, or its halves
             Texture2D<float4> _HostData;
             Texture2D<float4> _HostImage;
+            // The sound card (docs/sound.md): the sample the host's ring starts at this frame,
+            // whether it mixed (the device's words move only then), and its output rate.
+            uniform uint _SoundCursor, _SoundMixed, _SoundRate;
+            #define GPU_SOUND
             #define GPU_STATE _SelfTexture2D
             #define GPU_INPUT
             #include "src/gpu.h"

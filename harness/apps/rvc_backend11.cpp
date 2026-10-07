@@ -6,6 +6,7 @@
 #include "readback.h"
 #include "rvc_backend.h"
 
+#include <deque>
 #include <filesystem>
 
 namespace fs = std::filesystem;
@@ -29,6 +30,11 @@ public:
                               !createGpuTarget(gpuErr))) {
             fprintf(stderr, "[harness] GPU device disabled: %s\n", gpuErr.c_str());
             gpuPasses_.clear();
+        }
+        if (opt.soundShader && !gpuPasses_.empty() &&
+            (!buildPasses(gpu_, *opt.soundShader, {"SoundMix"}, bo, soundPasses_, gpuErr) || !createSoundTarget(gpuErr))) {
+            fprintf(stderr, "[harness] sound card disabled: %s\n", gpuErr.c_str());
+            soundPasses_.clear();
         }
 
         if (opt.present && !createSwapChain(err)) return false;
@@ -92,6 +98,8 @@ public:
         if (timeIt) gpu_.ctx->End(tsQuery_[2].Get());
         if (gpuPasses_.size() == 2) {
             gpuDraw(mat);
+            bool mixed = soundMix && !soundPasses_.empty();
+            if (mixed) soundDraw(mat, tag);   // before the control zone moves the voices on
             const float* z = kGpuControlZone;
             crt_.runZone(gpu_, gpuPasses_[1], mat, UpdateZone{z[0], z[1], z[2], z[3], 1});
             if (deliver_) {
@@ -121,6 +129,17 @@ public:
         uint64_t controlTag;
         if (!rows_.pop(gpu_.ctx.Get(), out, tag) || !control_.pop(gpu_.ctx.Get(), control, controlTag)) return false;
         out.insert(out.end(), control.begin(), control.end());
+        lastSound_.clear();
+        if (!soundTags_.empty() && soundTags_.front() == tag) {
+            soundTags_.pop_front();
+            if (!sound_.pop(gpu_.ctx.Get(), lastSound_, controlTag)) lastSound_.clear();
+        }
+        return true;
+    }
+    bool takeSound(std::vector<uint8_t>& out) override {
+        if (lastSound_.empty()) return false;
+        out.swap(lastSound_);
+        lastSound_.clear();
         return true;
     }
 
@@ -323,6 +342,47 @@ private:
         ctx->OMSetRenderTargets(0, nullptr, nullptr);
     }
 
+    // The sound card's mix target: two floats a sample, read back whole.
+    bool createSoundTarget(std::string& err) {
+        D3D11_TEXTURE2D_DESC td{};
+        td.Width = td.Height = kSoundSide;
+        td.MipLevels = td.ArraySize = 1;
+        td.Format = DXGI_FORMAT_R32G32_FLOAT;
+        td.SampleDesc.Count = 1;
+        td.BindFlags = D3D11_BIND_RENDER_TARGET;
+        HRESULT hr = gpu_.device->CreateTexture2D(&td, nullptr, &soundTex_);
+        if (SUCCEEDED(hr)) hr = gpu_.device->CreateRenderTargetView(soundTex_.Get(), nullptr, &soundRtv_);
+        if (FAILED(hr)) {
+            err = "sound target: " + hrToString(hr);
+            return false;
+        }
+        return sound_.init(gpu_.device.Get(), td.Format, 8, kSoundSide, kSoundSide, 3, err);
+    }
+
+    // Draws the mix from the committed state and queues its readback.
+    void soundDraw(Material& mat, uint64_t tag) {
+        ID3D11DeviceContext* ctx = gpu_.ctx.Get();
+        GpuPass& pass = soundPasses_[0];
+        ctx->OMSetRenderTargets(1, soundRtv_.GetAddressOf(), nullptr);
+        D3D11_VIEWPORT vp{0, 0, (float)kSoundSide, (float)kSoundSide, 0, 1};
+        ctx->RSSetViewports(1, &vp);
+        ctx->RSSetState(gpu_.rasterNoCull.Get());
+        ctx->OMSetBlendState(gpu_.blendOpaque.Get(), nullptr, 0xffffffff);
+        ctx->OMSetDepthStencilState(gpu_.depthOff.Get(), 0);
+        ctx->IASetInputLayout(nullptr);
+        ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        mat.bind(ctx, pass, gpu_);
+        ID3D11ShaderResourceView* state = crt_.currentSRV();
+        for (auto& t : pass.psLayout.textures)
+            if (t.name == "_State") ctx->PSSetShaderResources(t.slot, 1, &state);
+        ctx->Draw(3, 0);
+        ID3D11ShaderResourceView* none = nullptr;
+        for (auto& t : pass.psLayout.textures) ctx->PSSetShaderResources(t.slot, 1, &none);
+        ctx->OMSetRenderTargets(0, nullptr, nullptr);
+        sound_.request(ctx, soundTex_.Get(), 0, 0, tag);
+        soundTags_.push_back(tag);
+    }
+
     bool ensureQueries() {
         if (!tsDisjoint_) {
             D3D11_QUERY_DESC qd{D3D11_QUERY_TIMESTAMP_DISJOINT, 0};
@@ -334,7 +394,12 @@ private:
     }
 
     Gpu gpu_;
-    std::vector<GpuPass> passes_, gpuPasses_;
+    std::vector<GpuPass> passes_, gpuPasses_, soundPasses_;
+    ComPtr<ID3D11Texture2D> soundTex_;
+    ComPtr<ID3D11RenderTargetView> soundRtv_;
+    RegionReadback sound_;
+    std::deque<uint64_t> soundTags_;   // frames whose mix is still to be read back
+    std::vector<uint8_t> lastSound_;
     ComPtr<ID3D11Texture2D> gpuColor_;
     ComPtr<ID3D11RenderTargetView> gpuRtv_;
     ComPtr<ID3D11ShaderResourceView> gpuSrv_;

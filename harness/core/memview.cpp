@@ -202,7 +202,7 @@ Out ps(float4 pos : SV_Position) {
 )";
 
 // Keys typed into the window, as the bytes a terminal would send, until someone takes them.
-std::string g_typed;
+std::string g_typed, g_hostKeys;
 // The same keyboard as raw press and release events, and the pointer, for the input device.
 std::vector<uint32_t> g_keyEvents;
 int g_pointerX = 0, g_pointerY = 0;
@@ -239,6 +239,10 @@ LRESULT CALLBACK wndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         if (ch == 8) g_typed += '';              // Backspace, as a Linux terminal sends it
         else if (ch < 0x80) g_typed += (char)ch;      // includes Enter (CR) and Ctrl+letter
         else g_typed += narrow(std::wstring(1, ch));
+        return 0;
+    }
+    if ((m == WM_KEYDOWN || m == WM_KEYUP) && (w == VK_F9 || w == VK_F11 || w == VK_F12) && GetKeyState(VK_CONTROL) < 0) {
+        if (m == WM_KEYDOWN) g_hostKeys += w == VK_F9 ? 's' : w == VK_F11 ? '-' : '+';
         return 0;
     }
     if (m == WM_KEYDOWN || m == WM_KEYUP || m == WM_SYSKEYDOWN || m == WM_SYSKEYUP) {
@@ -285,6 +289,12 @@ using Constants = MemoryViewConstants;
 }  // namespace
 
 const char* memoryViewShader() { return kShader; }
+
+std::string memoryViewTakeHostKeys() {
+    std::string keys;
+    keys.swap(g_hostKeys);
+    return keys;
+}
 
 std::string memoryViewTakeKeys() {
     std::string keys;

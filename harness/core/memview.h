@@ -36,6 +36,9 @@ const char* memoryViewShader();
 // What was typed into the window since the last call, as terminal bytes (arrows as escape
 // sequences). Keys arrive when the window's messages are pumped, which render() does.
 std::string memoryViewTakeKeys();
+// Keys the window keeps for the host, since the last call: 's' Ctrl+F9 (the sound card on or
+// off), '-' Ctrl+F11 and '+' Ctrl+F12 (its volume).
+std::string memoryViewTakeHostKeys();
 // The window's pointer and raw key events, for the machine's input device.
 struct MemoryViewInput {
     float x = 0, y = 0;             // pointer, in window pixels over the display panel

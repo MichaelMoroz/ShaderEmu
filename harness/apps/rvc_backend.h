@@ -22,28 +22,33 @@ struct BackendOptions {
     bool present = false;         // D3D11 only: hidden swapchain presented once per frame
     std::string dxcOpt = "-O3", dxcSm = "6_6", dxcDir;
     const SLShader* gpuShader = nullptr;   // the GPU device's passes (gpu.shader), if the machine has one
+    const SLShader* soundShader = nullptr; // the sound card's mix pass (sound.shader); needs the GPU device
 };
 
 // The GPU device (docs/gpu.md): a mesh of kGpuTriangles triangles drawn into a square colour and
 // depth target of kGpuTarget pixels, then one small update zone on the state texture (Unity
-// pixel space, y up) holding its control words at RAM 0x87000010.
+// pixel space, y up) holding the control words: RAM 0x87000000 to 0x87000fff.
 const UINT kGpuTriangles = 65536;
 const UINT kGpuTarget = 2048;
-const float kGpuControlZone[4] = {16, 447.5f, 32, 1};
+const float kGpuControlZone[4] = {128, 447.5f, 256, 1};
+// The sound card's mix target (docs/sound.md): kSoundSide squared samples, two floats each.
+const UINT kSoundSide = 128;
 // The rows of RAM an answer to the guest's request is written to (docs/fetch.md), as a zone.
 const float kFetchZone[4] = {1024, 4096 - (64 + 0x76c000 / 2048) - 4, 2048, 8};
 const UINT kFetchSide = 256;   // the answer's texture: one word a texel, 256 KB
 // Quads the Commit pass draws when its vertex shader chooses them: the state rows and 32 bands of RAM.
 const unsigned kCommitQuads = 33;
-// The machine's control words (display, GPU, input: RAM from 0x87000000) as a row of the
+// The machine's control words (display, GPU, input, sound: RAM from 0x87000000) as a row of the
 // state texture. popRow() returns them after the 64 texels of row 0.
-const unsigned kControlRow = 64 + 0x700000 / 2048, kControlTexels = 48;
+const unsigned kControlRow = 64 + 0x700000 / 2048, kControlTexels = 256;
 // The display's RAM framebuffer (RAM 0x87000000, 128 texture rows), for writing the picture back.
 
 class RvcBackend {
 public:
     // The GPU device's passes to draw in the next frame, one bit each (docs/gpu.md); pass 0 always.
     uint32_t gpuPasses = 1;
+    // Draw the sound card's mix in the next frame and read it back with that frame's row.
+    bool soundMix = false;
     static const UINT kWidth = 2048, kHeight = 4096;   // rvc's vm_state_crt.asset
     static const UINT kProfCount = 256;
 
@@ -65,6 +70,9 @@ public:
     virtual size_t rowPending() const = 0;
     // Blocks until the oldest queued row (64 texels) is available.
     virtual bool popRow(std::vector<uint8_t>& out, uint64_t& tag) = 0;
+    // The mix drawn in the frame whose row popRow() returned last: kSoundSide squared pairs of
+    // floats, row 0 first. False when that frame drew none.
+    virtual bool takeSound(std::vector<uint8_t>& out) { (void)out; return false; }
     // Blocking read of the top-left w x h texels of the current state.
     virtual bool readState(UINT w, UINT h, std::vector<uint8_t>& out) = 0;
     // Time on the graphics card of the last frame run with timeIt, once it is known: the CPUTick

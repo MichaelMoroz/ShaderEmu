@@ -50,6 +50,7 @@ public:
             passCount_ = 3;
             buildGpuDraw(*opt.gpuShader, opt.compile, b);
             textures_["_GpuTarget"] = gpuColor_;
+            if (opt.soundShader) buildSoundMix(*opt.soundShader, opt.compile, b);
         }
 
         const uint8_t black[4] = {0, 0, 0, 0};
@@ -58,11 +59,12 @@ public:
 
         for (UINT s = 0; s < kSlots; ++s) {
             check(dx_.dev->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocs_[s])), "allocator");
-            rowBuf_[s] = readbackBuffer(rowFootprint_, 64, 2);   // row 0, then the control texels
+            rowBuf_[s] = readbackBuffer(rowFootprint_, kControlTexels, 2, kStateFormat);   // row 0, then the control texels
+            if (soundPso_) soundBuf_[s] = readbackBuffer(soundFootprint_, kSoundSide, kSoundSide, kSoundFormat);
         }
         check(dx_.dev->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocs_[0].Get(), nullptr, IID_PPV_ARGS(&cl_)), "command list");
         cl_->Close();
-        auto cbd = bufferDesc((UINT64)kSlots * 16 * kCbBytes);
+        auto cbd = bufferDesc((UINT64)kSlots * kCbPerFrame * kCbBytes);
         auto hu = heapProps(D3D12_HEAP_TYPE_UPLOAD);
         check(dx_.dev->CreateCommittedResource(&hu, D3D12_HEAP_FLAG_NONE, &cbd, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
                                                IID_PPV_ARGS(&cbuf_)), "constant buffer");
@@ -136,6 +138,7 @@ public:
         check(allocs_[slot]->Reset(), "allocator reset");
         check(cl_->Reset(allocs_[slot].Get(), nullptr), "list reset");
         timeIt = timeIt && tsHeap_ && !tsPending_;
+        bool mixed = false;
 
         ID3D12DescriptorHeap* heaps[] = {srvHeap_.Get()};
         cl_->SetDescriptorHeaps(1, heaps);
@@ -156,8 +159,8 @@ public:
             mat.setVector("CustomRenderTextureSizesAndRotations", zw, zh, 1, 0);
             mat.fillGlobals(P.vs);
             mat.fillGlobals(P.ps);
-            // 16 per frame: two a pass (the fetch zone's draw has the fourth pair), then the GPU draws
-            UINT64 base = ((UINT64)slot * 16 + (UINT64)(cb < 0 ? p : cb) * 2) * kCbBytes;
+            // two a pass (the fetch zone's draw has the fourth pair), then the GPU draws, then the sound mix
+            UINT64 base = ((UINT64)slot * kCbPerFrame + (UINT64)(cb < 0 ? p : cb) * 2) * kCbBytes;
             if (P.vs.hasGlobals) memcpy(cbMapped_ + base, P.vs.scratch.data(), P.vs.scratch.size());
             if (P.ps.hasGlobals) memcpy(cbMapped_ + base + kCbBytes, P.ps.scratch.data(), P.ps.scratch.size());
             cl_->SetPipelineState(P.pso.Get());
@@ -252,7 +255,7 @@ public:
                 if (gpuVl_.hasGlobals) {
                     mat.setInt("_GpuPass", p);
                     mat.fillGlobals(gpuVl_);
-                    UINT64 at = ((UINT64)slot * 16 + 8 + (UINT64)p) * kCbBytes;
+                    UINT64 at = ((UINT64)slot * kCbPerFrame + 8 + (UINT64)p) * kCbBytes;
                     memcpy(cbMapped_ + at, gpuVl_.scratch.data(), gpuVl_.scratch.size());
                     cl_->SetGraphicsRootConstantBufferView(1, cbuf_->GetGPUVirtualAddress() + at);
                 }
@@ -261,6 +264,37 @@ public:
             }
             auto toPixel = transition(state_[cur].Get(), anyStage, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             cl_->ResourceBarrier(1, &toPixel);
+            // The sound card's mix, from the committed state, before the control zone moves the
+            // voices on; it shares the GPU draw's table (the state and the ROM).
+            mixed = soundMix && soundPso_;
+            if (mixed) {
+                D3D12_CPU_DESCRIPTOR_HANDLE srtv = soundRtvHeap_->GetCPUDescriptorHandleForHeapStart();
+                D3D12_VIEWPORT svp{0, 0, (float)kSoundSide, (float)kSoundSide, 0, 1};
+                D3D12_RECT ssc{0, 0, (LONG)kSoundSide, (LONG)kSoundSide};
+                cl_->RSSetViewports(1, &svp);
+                cl_->RSSetScissorRects(1, &ssc);
+                cl_->OMSetRenderTargets(1, &srtv, FALSE, nullptr);
+                cl_->SetGraphicsRootSignature(soundRoot_.Get());
+                cl_->SetGraphicsRootDescriptorTable(0, gtable);
+                if (soundPl_.hasGlobals) {
+                    mat.fillGlobals(soundPl_);
+                    UINT64 at = ((UINT64)slot * kCbPerFrame + 16) * kCbBytes;
+                    memcpy(cbMapped_ + at, soundPl_.scratch.data(), soundPl_.scratch.size());
+                    cl_->SetGraphicsRootConstantBufferView(1, cbuf_->GetGPUVirtualAddress() + at);
+                }
+                cl_->SetPipelineState(soundPso_.Get());
+                cl_->DrawInstanced(3, 1, 0, 0);
+                auto toCopy = transition(soundTex_.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE);
+                cl_->ResourceBarrier(1, &toCopy);
+                D3D12_TEXTURE_COPY_LOCATION sd{}, ss{};
+                sd.pResource = soundBuf_[slot].Get();
+                sd.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+                sd.PlacedFootprint = soundFootprint_;
+                ss.pResource = soundTex_.Get();
+                cl_->CopyTextureRegion(&sd, 0, 0, 0, &ss, nullptr);
+                auto toDraw = transition(soundTex_.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
+                cl_->ResourceBarrier(1, &toDraw);
+            }
             cl_->RSSetViewports(1, &vp);
             // then the control zone on the state texture: mark the list drawn, deliver input
             for (int z = 0; z < (deliver_ ? 2 : 1); ++z) {
@@ -314,7 +348,7 @@ public:
             tsPending_ = true;
             tsFence_ = slotFence_[slot];
         }
-        rows_.push_back({slot, slotFence_[slot], tag});
+        rows_.push_back({slot, slotFence_[slot], tag, mixed});
         cur_ = dst;
         ++frameCount_;
         return true;
@@ -334,6 +368,20 @@ public:
         out.insert(out.end(), base + rowFootprint_.Footprint.RowPitch, base + rowFootprint_.Footprint.RowPitch + kControlTexels * 16);
         rowBuf_[r.slot]->Unmap(0, nullptr);
         tag = r.tag;
+        lastSound_.clear();
+        if (r.sound && SUCCEEDED(soundBuf_[r.slot]->Map(0, nullptr, (void**)&p))) {
+            const size_t pitch = (size_t)kSoundSide * 8;
+            lastSound_.resize(pitch * kSoundSide);
+            for (UINT y = 0; y < kSoundSide; ++y)
+                memcpy(lastSound_.data() + y * pitch, p + soundFootprint_.Offset + (size_t)y * soundFootprint_.Footprint.RowPitch, pitch);
+            soundBuf_[r.slot]->Unmap(0, nullptr);
+        }
+        return true;
+    }
+    bool takeSound(std::vector<uint8_t>& out) override {
+        if (lastSound_.empty()) return false;
+        out.swap(lastSound_);
+        lastSound_.clear();
         return true;
     }
 
@@ -415,12 +463,13 @@ private:
         UINT slot;
         UINT64 fence;
         uint64_t tag;
+        bool sound;   // the frame drew the sound card's mix into its slot's buffer
     };
 
     static UINT tableIndex(int pass, int cur) { return (UINT)(pass * 2 + cur) * kTableSize; }
 
-    ComPtr<ID3D12Resource> readbackBuffer(D3D12_PLACED_SUBRESOURCE_FOOTPRINT& fp, UINT w, UINT h) {
-        auto td = texDesc(w, h, kStateFormat, D3D12_RESOURCE_FLAG_NONE);
+    ComPtr<ID3D12Resource> readbackBuffer(D3D12_PLACED_SUBRESOURCE_FOOTPRINT& fp, UINT w, UINT h, DXGI_FORMAT format) {
+        auto td = texDesc(w, h, format, D3D12_RESOURCE_FLAG_NONE);
         UINT64 total = 0;
         dx_.dev->GetCopyableFootprints(&td, 0, 1, 0, &fp, nullptr, nullptr, &total);
         ComPtr<ID3D12Resource> rb;
@@ -591,6 +640,84 @@ private:
         os.list->ClearRenderTargetView(gpuRtvHeap_->GetCPUDescriptorHandleForHeapStart(), black, 0, nullptr);
         os.run();
     }
+
+    // The sound card's mix: a pixel shader over its own small target, reading what the GPU
+    // draw reads (the state at t0, the ROM at t1-t4).
+    void buildSoundMix(const SLShader& shader, const CompileSettings& cs, const Build12& b) {
+        const SLPass* sp = shader.findPass("SoundMix");
+        if (!sp) die("sound.shader has no SoundMix pass");
+        Dxc dxc;
+        dxc.init(b.dxcDir);
+        std::string err, vsText, psText, rootDir = fs::u8path(shader.path).parent_path().u8string();
+        if (!preprocessStage(sp->code, shader.path, rootDir, {{"SHADER_STAGE_VERTEX", "1"}}, cs, vsText, err) ||
+            !preprocessStage(sp->code, shader.path, rootDir, {{"SHADER_STAGE_FRAGMENT", "1"}}, cs, psText, err))
+            die(err.c_str());
+        StageLayout vl;
+        StageLayout& pl = soundPl_;
+        std::vector<uint8_t> vs = dxcCompile(dxc, vsText, sp->vertexEntry, "vs_" + b.dxcSm, b.dxcOpt, vl);
+        std::vector<uint8_t> ps = dxcCompile(dxc, psText, sp->fragmentEntry, "ps_" + b.dxcSm, b.dxcOpt, pl);
+        if (!vl.textures.empty() || vl.hasGlobals) die("SoundMix: the vertex shader reads nothing");
+        for (auto& t : pl.textures)
+            if ((t.slot == 0) != (t.name == "_State") || t.slot >= kGpuTable) die("SoundMix: the state texture must be t0, the ROM t1-t4");
+        for (auto& t : pl.textures)
+            for (auto& g : gpuPl_.textures)
+                if (g.slot == t.slot && g.name != t.name) die("SoundMix: its textures must sit where GPUDraw's do");
+        if (pl.globalsSize > kCbBytes) die("SoundMix: $Globals larger than the upload slot");
+
+        D3D12_DESCRIPTOR_RANGE range{};
+        range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+        range.NumDescriptors = kGpuTable;
+        D3D12_ROOT_PARAMETER rp[2]{};
+        rp[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        rp[0].DescriptorTable.NumDescriptorRanges = 1;
+        rp[0].DescriptorTable.pDescriptorRanges = &range;
+        rp[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+        rp[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+        rp[1].Descriptor.ShaderRegister = pl.globalsSlot;
+        rp[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+        D3D12_ROOT_SIGNATURE_DESC rsd{};
+        rsd.NumParameters = pl.hasGlobals ? 2 : 1;
+        rsd.pParameters = rp;
+        ComPtr<ID3DBlob> blob, rsErr;
+        check(D3D12SerializeRootSignature(&rsd, D3D_ROOT_SIGNATURE_VERSION_1, &blob, &rsErr), "sound root signature");
+        check(dx_.dev->CreateRootSignature(0, blob->GetBufferPointer(), blob->GetBufferSize(), IID_PPV_ARGS(&soundRoot_)), "sound root signature");
+
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC pd{};
+        pd.pRootSignature = soundRoot_.Get();
+        pd.VS = {vs.data(), vs.size()};
+        pd.PS = {ps.data(), ps.size()};
+        pd.BlendState.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+        pd.SampleMask = 0xffffffff;
+        pd.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+        pd.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+        pd.RasterizerState.DepthClipEnable = TRUE;
+        pd.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+        pd.NumRenderTargets = 1;
+        pd.RTVFormats[0] = kSoundFormat;
+        pd.SampleDesc.Count = 1;
+        check(dx_.dev->CreateGraphicsPipelineState(&pd, IID_PPV_ARGS(&soundPso_)), "sound pipeline state");
+        fprintf(stderr, "[d3d12] pass 'SoundMix': ps %zu bytes\n", ps.size());
+
+        auto hp = heapProps(D3D12_HEAP_TYPE_DEFAULT);
+        auto td = texDesc(kSoundSide, kSoundSide, kSoundFormat, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
+        check(dx_.dev->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &td, D3D12_RESOURCE_STATE_RENDER_TARGET, nullptr,
+                                               IID_PPV_ARGS(&soundTex_)), "sound target");
+        D3D12_DESCRIPTOR_HEAP_DESC hd{};
+        hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+        hd.NumDescriptors = 1;
+        check(dx_.dev->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&soundRtvHeap_)), "sound RTV heap");
+        dx_.dev->CreateRenderTargetView(soundTex_.Get(), nullptr, soundRtvHeap_->GetCPUDescriptorHandleForHeapStart());
+    }
+
+    static constexpr DXGI_FORMAT kSoundFormat = DXGI_FORMAT_R32G32_FLOAT;
+    static constexpr UINT kCbPerFrame = 20;   // constant-buffer slots a frame
+    ComPtr<ID3D12RootSignature> soundRoot_;
+    ComPtr<ID3D12PipelineState> soundPso_;
+    StageLayout soundPl_;
+    ComPtr<ID3D12Resource> soundTex_, soundBuf_[kSlots];
+    ComPtr<ID3D12DescriptorHeap> soundRtvHeap_;
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT soundFootprint_{};
+    std::vector<uint8_t> lastSound_;
 
     ComPtr<ID3D12RootSignature> gpuRoot_;
     ComPtr<ID3D12PipelineState> gpuPso_[8];

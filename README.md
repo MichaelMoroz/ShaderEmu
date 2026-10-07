@@ -141,7 +141,7 @@ To rebuild the guest software (WSL, no root; everything goes to `~/shaderemu-lin
 
 ## Not done yet
 
-- Sound, and a real network: pages reach the browser through the host (`docs/fetch.md`), nothing else does.
+- A real network: pages reach the browser through the host (`docs/fetch.md`), nothing else does.
 - `linux/prebuilt` lags behind the sources between refreshes.
 - The Unity world runs one machine configuration (Linux); the bare-metal images run only in
   the harness.
@@ -155,7 +155,9 @@ the design notes are kept in `docs/original-x86-plan.md`.
 pimaker; Linux; OpenSBI; musl; BusyBox; GCC and LLVM; [Microwindows](https://github.com/ghaerr/microwindows)
 by Greg Haerr and contributors, with its port of Doom; TinyCC and jrrk2's riscv32 port of it; DOOM by id Software; [Vanilla Conquer](https://github.com/TheAssemblyArmada/Vanilla-Conquer)
 and Command & Conquer by Westwood Studios (source released by Electronic Arts); glxgears from the
-Mesa demos; photographs from Unsplash; VRChat's SDK and UdonSharp.
+Mesa demos; photographs from Unsplash; VRChat's SDK and UdonSharp;
+[ShaderAudio](https://gitlab.com/lox9973/ShaderAudio) by lox9973, whose way of getting sound out of
+a shader the sound card follows.
 
 ## Licence
 

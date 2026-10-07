@@ -102,7 +102,7 @@ watch the emulated machine:
   `python tools\pc_profile.py FILE kernel=vmlinux.nm server=nano-X.nm` (`nm -n` output; the
   unstripped binaries are in `~/shaderemu-linux`). Measure before optimising drawing: the
   first Nano-X profile was 57% system calls, not pixels.
-- The harness reads the machine's control words (RAM from 0x87000000, 16 texels) back with
+- The harness reads the machine's control words (RAM from 0x87000000, 256 texels) back with
   row 0 every frame: `popRow()` returns them after the 64 texels of row 0. A guest program
   that owns the keyboard (`docs/input.md`) stops window keys from also reaching the console.
 - A change to Microwindows itself goes into `linux\nanox\microwindows.patch`: edit a clean
@@ -451,6 +451,24 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   "Import boot images". To see the guest's screen as a picture, compose the display's layers
   from a snapshot: the table at the address in `0x8700000c` is a count, three unused words,
   then eight words a layer (x, y, width, height, address).
+- The sound card (`docs/sound.md`) is `experiments\rvc_opt\sound.shader` and `sound_control` in the
+  GPU device's control pass. Check it by measurement, never by ear: run with `--fixed-dt 0.004
+  --sound-capture F.wav --save-state F.snap` and `python tools\sound_reference.py F.wav F.snap`
+  (`--rom build\images\linux\rootfs.bin` for Linux, `--stream-test` for `--image sound`): every
+  sample and every device word must match, on both backends.
+- Samples the model reads from a snapshot must not have changed during the run: two programs
+  one after the other reuse sound memory, so start them together (`a & b`).
+- A scripted run is silent unless it passes `--sound`; the card still mixes for the guest.
+  `--volume P` (10 by default), and Ctrl+F9 / F11 / F12 in the window.
+- The card's control row is 256 texels now (RAM 0x87000000 to 0x87000fff): the GPU's control
+  zone and the harness's readback both cover it; Unity's readback is still the first 48.
+- A voice's samples are at a physical address: sound memory (`/dev/sound`'s ioctl) or a file
+  in the ROM (`snd_rom` in `linux\userland\shaderemu_sound.h`), never a program's own memory.
+- After a change to `linux\tdawn\soundio_shaderemu.cpp` or the pack's format, the game's state
+  sums must still be the ones above; `tools\make_tdawn_sound.py --check` tests the pack itself.
+- In Unity the audio thread runs `EmuSoundOut._onAudioFilterRead` (`docs/sound.md`). Play mode
+  that is paused, or paused by an error, leaves the audio clock running: the card's clock
+  jumps when it resumes. "ShaderEmu/Add sound to the open scene" installs it without a bake.
 - Doom's window is the largest of 1x to 3x the display has room for (`doom_window_scale` in
   `doom_video.c`); a test that compares its pictures with older ones passes `-1`.
 - Tiberian Dawn leaves frames undrawn when it is late (`TDAWN_SKIP=0` for none) and sizes

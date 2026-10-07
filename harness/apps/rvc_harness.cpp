@@ -17,6 +17,7 @@
 #include "common.h"
 #include "material.h"
 #include "memview.h"
+#include "rvc_audio.h"
 #include "rvc_backend.h"
 #include "rvc_time.h"
 #include "shaderlab.h"
@@ -88,6 +89,10 @@ struct Options {
     bool ourKernel = false;   // the RAM image is this project's (kernel at +4 MiB, device tree at +34 MiB)
     bool sbi = false;         // compile with SBI_HLE
     bool noGpu = false;       // --no-gpu: leave out the GPU device's passes (gpu.shader)
+    bool noSound = false;     // --no-sound: leave out the sound card (sound.shader)
+    bool sound = false;       // play the sound card: the terminal mode, or --sound
+    std::string soundCapture; // WAV of what the sound card played, written at exit
+    int volume = 10;          // --volume: how loud the host plays it, in percent
     bool doubles = false;     // --doubles: keep the shader's double math under DXC too
 #ifdef RVC_DEFAULT_DXC
     bool dxc = true;          // D3D12 + DXC instead of D3D11 + FXC
@@ -149,6 +154,11 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
   --firmware           boot the image's OpenSBI. Without it this project's Linux image starts in the
                        kernel and the machine answers its firmware (SBI) calls itself (docs/boot.md)
   --gpu-capture FILE   save the GPU device's whole colour target as a BMP at exit
+  --no-sound           leave out the sound card (<rvc>/sound.shader, docs/sound.md)
+  --sound              play what the sound card mixes (the terminal mode does; other runs are silent)
+  --volume P           how loud the host plays it, 0 to 100 (default 10). In the window Ctrl+F11 and
+                       Ctrl+F12 change it and Ctrl+F9 turns the sound card off and on
+  --sound-capture FILE save what it mixed as a WAV at exit, and FILE.frames for tools/sound_reference.py
   --pc-log FILE        sample the guest's pc once a frame, for tools/pc_profile.py
   --frame-log FILE     per frame: pc, instructions, last stall and time, for tools/boot_profile.py
   --stats-after S      print instructions/s and frames/s for the run after its first S seconds
@@ -275,6 +285,10 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--no-doubles") o.noDoubles = true;
         else if (a == "--no-gpu") o.noGpu = true;
         else if (a == "--gpu-capture") o.gpuCapture = next("--gpu-capture");
+        else if (a == "--no-sound") o.noSound = true;
+        else if (a == "--sound") o.sound = true;
+        else if (a == "--volume") o.volume = (std::max)(0, (std::min)(100, atoi(next("--volume").c_str())));
+        else if (a == "--sound-capture") o.soundCapture = next("--sound-capture");
         else if (a == "--pc-log") o.pcLog = next("--pc-log");
         else if (a == "--frame-log") o.frameLog = next("--frame-log");
         else if (a == "--stats-after") o.statsAfter = atof(next("--stats-after").c_str());
@@ -387,6 +401,7 @@ const BootImage kImages[] = {
     {"gears", "Gears: three lit, textured gears drawn by the GPU device (bare metal C)", nullptr, "gears", "none", "none", 2},
     {"rects", "GPU test card: 3,600 rectangles in one list, written back to RAM (bare metal C)", nullptr, "rects", "none", "none", 2},
     {"blend", "GPU test card: the eight passes, blending with and without depth (bare metal C)", nullptr, "blend", "none", "none", 2},
+    {"sound", "Sound test card: every kind of voice for half a second (bare metal C)", nullptr, "sound", "none", "none", 2},
     {"raycast", "Raycaster: walk a textured maze on the display (bare metal C)", nullptr, "raycast", "none", "none", 2},
     {"raytrace", "Raytracer drawing to the display (bare metal C)", nullptr, "raytrace", "none", "none", 2},
     {"rvc-raytrace", "rvc's Rust raytracer, drawing into raw memory", "data", "rust_raytrace", "none", "dts", 1},
@@ -505,6 +520,7 @@ int main(int argc, char** argv) {
         fs::create_directories("logs", ec);
         opt.uartLog = "logs/uart.log";
         opt.viz = true;
+        opt.sound = true;
         for (int i = 1; i < argc; ++i)
             if (strcmp(argv[i], "--no-viz") == 0) opt.viz = false;
         opt.desktop = true;
@@ -578,6 +594,16 @@ int main(int argc, char** argv) {
         }
         bo.gpuShader = &gpuShader;
         opt.defines.push_back("GPU_DEVICE");   // the Commit pass copies the GPU's picture back
+    }
+    // The sound card is a third: its mix pass. Its words are kept by the GPU device's control pass.
+    SLShader soundShader;
+    std::string soundPath = (fs::u8path(opt.rvcDir) / "sound.shader").u8string();
+    if (bo.gpuShader && !opt.noSound && fs::exists(fs::u8path(soundPath), ec)) {
+        if (!loadShaderLab(soundPath, soundShader, err)) {
+            fprintf(stderr, "[harness] %s\n", err.c_str());
+            return 1;
+        }
+        bo.soundShader = &soundShader;
     }
     // D3D12 keeps both state buffers, which is what lets the commit skip unwritten bands
     if (opt.sbi) opt.defines.push_back("SBI_HLE");
@@ -714,11 +740,38 @@ int main(int argc, char** argv) {
     uint32_t fetchAnswered = 0;
     bool fetchDelivering = false;
     int gpuPassLife[8] = {};      // frames each of the GPU's passes 1-7 is still drawn for
+    // The sound card (docs/sound.md). While the guest has it enabled the host mixes: it names a
+    // cursor, the device draws the samples from there on and moves its voices up to it.
+    SoundOut audio;
+    bool audioOpen = false;
+    if (bo.soundShader && opt.sound) {
+        audioOpen = audio.open(err);
+        if (!audioOpen) fprintf(stderr, "[harness] no sound: %s\n", err.c_str());
+        audio.setVolume(opt.volume / 100.0f);
+    }
+    bool soundSwitch = true;   // off: the host mixes nothing, and the card costs nothing
+    SoundCapture soundCapture;
+    const uint32_t kSoundLead = 1024;   // samples the cursor is ahead of the audio thread: the readback's delay
+    bool soundEnabled = false;
+    uint32_t soundCursor = 0, soundBase = 0, soundMixes = 0;
+    double soundT0 = 0;
+    std::deque<std::pair<uint64_t, uint32_t>> soundFrames;   // frames whose mix is on its way back, and their cursors
     auto processRow = [&](const std::vector<uint8_t>& raw, uint64_t rowFrame) {
         const uint32_t* t = (const uint32_t*)raw.data();
         auto texel = [&](int x, int c) { return t[x * 4 + c]; };
         uint32_t clock = texel(28, 1);
         keyboardOwned = raw.size() >= (64 + 4) * 16 && texel(64 + 3, 0) == 0x6b657973u;
+        bool soundOn = bo.soundShader && raw.size() >= (64 + 0x24) * 16 && texel(64 + 0x22, 0) != 0;
+        if (soundOn && !soundEnabled) {
+            // carry on from the device's own clock (a snapshot's is not zero), or from the last
+            // cursor it was given if that is later: it may not have acted on it
+            uint32_t clock = texel(64 + 0x23, 0);
+            soundBase = soundCursor = soundMixes && (int32_t)(soundCursor - clock) > 0 ? soundCursor : clock;
+            soundT0 = guestTime;
+            if (audioOpen) audio.restart(soundBase);
+        }
+        if (!soundOn && soundEnabled && audioOpen) audio.silence();
+        soundEnabled = soundOn;
         // passes a submitted list asks for: drawn from now on, and for a while after the last use
         if (raw.size() >= (64 + 2) * 16)
             for (int p = 1; p < 8; ++p)
@@ -841,7 +894,21 @@ int main(int argc, char** argv) {
         }
     };
 
-    std::vector<uint8_t> row;
+    std::vector<uint8_t> row, mix;
+    // The oldest frame's row, and its mix when it drew one.
+    auto takeRow = [&]() {
+        uint64_t f;
+        if (!backend.popRow(row, f)) return false;
+        processRow(row, f);
+        if (backend.takeSound(mix) && !soundFrames.empty() && soundFrames.front().first == f) {
+            uint32_t cursor = soundFrames.front().second;
+            soundFrames.pop_front();
+            if (audioOpen) audio.submit(cursor, (const float*)mix.data());
+            if (!opt.soundCapture.empty() && ((const uint32_t*)row.data())[(64 + 0x22) * 4] != 0)   // only what the device mixed
+                soundCapture.add(cursor, (const float*)mix.data(), (const uint32_t*)row.data() + 64 * 4, kControlTexels * 4);
+        }
+        return true;
+    };
     int exitCode = 0;
     auto benchT0 = t0;
     uint64_t benchInstr0 = 0;
@@ -947,16 +1014,32 @@ int main(int argc, char** argv) {
 
         if (opt.benchWarmup >= 0 && frame == (uint64_t)opt.benchWarmup) {
             // Start the measurement from an idle GPU with every earlier frame accounted for.
-            uint64_t f;
-            while (backend.rowPending() > 0 && backend.popRow(row, f)) processRow(row, f);
+            while (backend.rowPending() > 0 && takeRow()) {}
             benchInstr0 = guestInstructions;
             backend.readProf(profBase);  // warm-up events are subtracted at the end
             benchT0 = std::chrono::steady_clock::now();
         }
-        if (backend.rowFull()) {
-            uint64_t f;
-            if (!backend.popRow(row, f)) { exitCode = 1; break; }
-            processRow(row, f);
+        if (backend.rowFull() && !takeRow()) { exitCode = 1; break; }
+        {
+            // Mix when the cursor has moved on: with a device it follows the audio thread, without
+            // one the clock (every frame of a fixed-timestep run, so that those stay repeatable).
+            bool mixed = false;
+            if (soundEnabled && soundSwitch) {
+                uint32_t want = audioOpen ? audio.position() + kSoundLead
+                                          : soundBase + (uint32_t)(int64_t)(floor(t * kSoundRate) - floor(soundT0 * kSoundRate));
+                uint32_t ahead = want - soundCursor;
+                if (ahead >= (opt.fixedDt > 0 ? 1u : 240u) && ahead < 0x80000000u) {
+                    soundCursor = want;
+                    mixed = true;
+                    ++soundMixes;
+                }
+            }
+            mat.setInt("_SoundCursor", soundCursor);
+            mat.setInt("_SoundMixed", mixed ? 1 : 0);
+            mat.setInt("_SoundRate", kSoundRate);
+            // drawn and read back only when someone listens; the voices move on either way
+            backend.soundMix = mixed && (audioOpen || !opt.soundCapture.empty());
+            if (backend.soundMix) soundFrames.push_back({frame, soundCursor});
         }
         // The GPU times the two draws of one frame per refresh of the text box.
         // with --stats-after, one frame in 64 is timed on the GPU and the times are averaged
@@ -1015,7 +1098,10 @@ int main(int argc, char** argv) {
             snprintf(l1, sizeof l1, "%s IPS    %.0f frames/s", withCommas((uint64_t)ips).c_str(), fps);
             snprintf(l2, sizeof l2, "frame %.3f ms    %.0f instr/frame", fps > 0 ? 1000.0 / fps : 0.0, fps > 0 ? ips / fps : 0.0);
             char l6[96];
-            snprintf(l6, sizeof l6, "gpu device %.3f ms", gpuDeviceMs);
+            if (!bo.soundShader) snprintf(l6, sizeof l6, "gpu device %.3f ms", gpuDeviceMs);
+            else if (!soundSwitch) snprintf(l6, sizeof l6, "gpu device %.3f ms    sound off (Ctrl+F9)", gpuDeviceMs);
+            else snprintf(l6, sizeof l6, "gpu device %.3f ms    sound %s, volume %d%%", gpuDeviceMs,
+                          !audioOpen ? "not played" : soundEnabled ? "playing" : "idle", opt.volume);
             if (gpuTickMs >= 0) snprintf(l3, sizeof l3, "tick %.3f ms    commit %.3f ms", gpuTickMs, gpuCommitMs);
             else snprintf(l3, sizeof l3, "tick -    commit -");
             unsigned up = (unsigned)wall;
@@ -1068,6 +1154,12 @@ int main(int argc, char** argv) {
             pointer.keys.clear();
             // keys typed into the window go to the guest's console too, unless a program there
             // has the keyboard device open; Ctrl+] quits
+            for (char c : memoryViewTakeHostKeys()) {
+                if (c == 's') soundSwitch = !soundSwitch;
+                else opt.volume = (std::max)(0, (std::min)(100, opt.volume + (c == '+' ? 5 : -5)));
+                if (audioOpen) audio.setVolume(opt.volume / 100.0f);
+                if (audioOpen && !soundSwitch) audio.silence();
+            }
             std::string typed = memoryViewTakeKeys();
             if (!typed.empty()) {
                 std::lock_guard<std::mutex> lock(g_inputMutex);
@@ -1085,11 +1177,8 @@ int main(int argc, char** argv) {
     }
 
     // Drain outstanding readbacks so trailing output is not lost.
-    while (exitCode != 1 && backend.rowPending() > 0) {
-        uint64_t f;
-        if (!backend.popRow(row, f)) break;
-        processRow(row, f);
-    }
+    while (exitCode != 1 && backend.rowPending() > 0 && takeRow()) {}
+    if (audioOpen) audio.close();
     if (untilHit) exitCode = 0;
 
     if (opt.benchWarmup >= 0 && exitCode != 1 && frame > (uint64_t)opt.benchWarmup) {
@@ -1173,6 +1262,9 @@ int main(int argc, char** argv) {
     }
     if (!opt.frameLog.empty()) writeFileBinary(opt.frameLog, (const uint8_t*)frameSamples.data(), frameSamples.size() * 4);
     if (!opt.pcLog.empty()) writeFileBinary(opt.pcLog, (const uint8_t*)pcSamples.data(), pcSamples.size() * 4);
+    if (!opt.soundCapture.empty() && exitCode != 1)
+        fprintf(stderr, "\n[harness] sound (%u mixes) %s %s\n", soundMixes, soundCapture.write(opt.soundCapture) ? "written to" : "capture FAILED:",
+                opt.soundCapture.c_str());
     if (!opt.gpuCapture.empty() && exitCode != 1)
         fprintf(stderr, "\n[harness] GPU target %s %s\n", backend.gpuCapture(opt.gpuCapture) ? "written to" : "capture FAILED:", opt.gpuCapture.c_str());
     if (!opt.vizCapture.empty() && backend.viewOpen() && exitCode != 1) {

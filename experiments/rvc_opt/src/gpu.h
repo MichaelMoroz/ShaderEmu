@@ -477,6 +477,10 @@ uint fetch_word(uint n) {
 }
 #endif
 
+#ifdef GPU_SOUND
+#include "sound.h"
+#endif
+
 // GPUControl: the machine's control words. Once a submitted list has been drawn, take the
 // submit word back and count it; and deliver the host's keyboard and pointer (docs/input.md).
 uint4 gpu_control(uint2 pos) {
@@ -536,7 +540,11 @@ uint4 gpu_control(uint2 pos) {
         return ring;
     }
 #endif
+#ifdef GPU_SOUND
+    return sound_control(index, keep);
+#else
     return keep;
+#endif
 }
 
 #endif
