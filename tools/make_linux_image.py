@@ -7,7 +7,8 @@ build/images/linux, which the harness's linux-net entry uses when present:
               GPU device's memory alone (docs/gpu.md)
   linux_payload.bin
               only if our kernel has been built (linux/kernel/build.sh leaves it in
-              build/images/linux/Image): upstream's OpenSBI with that kernel in place of its own
+              build/images/linux/Image): that kernel and the device tree where the machine
+              expects them. There is no firmware in it (docs/boot.md)
 
     python tools/make_linux_image.py
     python tools/make_linux_image.py --save-prebuilt    # then keep this build in linux/prebuilt
@@ -160,21 +161,18 @@ def main():
     open(os.path.join(OUT, 'dts.bin'), 'wb').write(dtb)
     print('dts.bin: RAM now ends at 0x86000000 (%d bytes)' % len(dtb))
 
-    # The boot image is OpenSBI with the kernel as its payload at +4 MiB; swap the kernel.
+    # The boot image: the kernel at +4 MiB, where it is linked to run and the machine starts,
+    # and the device tree at +34 MiB, where the machine tells the kernel it is.
     kernel, payload = ours('Image'), os.path.join(OUT, 'linux_payload.bin')
     if os.path.exists(kernel):
-        boot = read_lanes('linux_payload')
         image = open(kernel, 'rb').read()
-        at = 0x400000
-        if boot[at + 0x38:at + 0x3c] != b'RSC\x05' or image[0x38:0x3c] != b'RSC\x05':
-            raise SystemExit("expected a RISC-V kernel image at +4 MiB of upstream's payload, and in " + kernel)
-        # and the device tree in RAM where OpenSBI would copy it, for booting without firmware
-        tree_at = 0x2200000
+        at, tree_at = 0x400000, 0x2200000
+        if image[0x38:0x3c] != b'RSC\x05':
+            raise SystemExit('expected a RISC-V kernel image in ' + kernel)
         if at + len(image) > tree_at - 0x400000:
             raise SystemExit('kernel image too large for the device tree at +34 MiB')
-        boot = bytes(boot[:at]) + image
-        open(payload, 'wb').write(boot + bytes(tree_at - len(boot)) + bytes(dtb))
-        print('linux_payload.bin: OpenSBI, our kernel, device tree (%d bytes)' % (tree_at + len(dtb)))
+        open(payload, 'wb').write(bytes(at) + image + bytes(tree_at - at - len(image)) + bytes(dtb))
+        print('linux_payload.bin: our kernel, device tree (%d bytes)' % (tree_at + len(dtb)))
         print('kernel from %s, programs from %s' % (os.path.relpath(kernel, ROOT), os.path.relpath(extra, ROOT)))
     elif os.path.exists(payload):
         os.remove(payload)

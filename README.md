@@ -152,7 +152,7 @@ the design notes are kept in `docs/original-x86-plan.md`.
 ## Built on
 
 [rvc](https://github.com/pimaker/rvc) and [linux-rvc](https://github.com/pimaker/linux-rvc) by
-pimaker; Linux; OpenSBI; musl; BusyBox; GCC and LLVM; [Microwindows](https://github.com/ghaerr/microwindows)
+pimaker; Linux; musl; BusyBox; GCC and LLVM; [Microwindows](https://github.com/ghaerr/microwindows)
 by Greg Haerr and contributors, with its port of Doom; TinyCC and jrrk2's riscv32 port of it; DOOM by id Software; [Vanilla Conquer](https://github.com/TheAssemblyArmada/Vanilla-Conquer)
 and Command & Conquer by Westwood Studios (source released by Electronic Arts); glxgears from the
 Mesa demos; photographs from Unsplash; VRChat's SDK and UdonSharp;

@@ -679,7 +679,6 @@ public static partial class ShaderEmuBuilder
               "rvc by pimaker: the RISC-V emulator in a shader this grew from, and its Linux port (linux-rvc, " +
               "kernel 5.17)\n" +
               "Linux, by Linus Torvalds and its many contributors\n" +
-              "OpenSBI, in the boot image\n" +
               "musl libc, by Rich Felker and contributors\n" +
               "BusyBox: the shell and the command line tools\n" +
               "GCC, binutils, LLVM's clang and compiler-rt: the compilers and their runtime\n" +

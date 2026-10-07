@@ -72,8 +72,8 @@ watch the emulated machine:
 - The kernel is ours when `build\images\linux\Image` exists: build it with
   `wsl -- bash /mnt/c/Development/ShaderX86/linux/kernel/build.sh` (84 s the first time,
   downloads included; everything goes to `~/shaderemu-linux`, nothing is installed), then run
-  `make_linux_image.py`, which puts it behind upstream's OpenSBI (the kernel sits at +4 MiB of
-  the boot image). It adds `/dev/gpu` (mmap, and a wait that runs `wfi` in the kernel),
+  `make_linux_image.py`, which puts it at +4 MiB of the boot image, with nothing before it.
+  It adds `/dev/gpu` (mmap, and a wait that runs `wfi` in the kernel),
   `/dev/fb0` and the evdev keyboard and pointer (`docs/input.md`).
 - Our kernel's tick is 100 Hz (upstream's is 20 Hz, where any sleep takes at least 50 ms).
 - Nano-X: `wsl -- bash /mnt/c/Development/ShaderX86/linux/nanox/build.sh` (run it from
@@ -261,9 +261,10 @@ A cold boot to the `/ #` prompt takes about 80 s on an RTX 5090 with upstream on
   the GPU reads only proves the copy.
 - Text with a backslash in it (`\n` in a C string, a Windows path) does not survive a bash
   heredoc into Python here: write it with the edit tools.
-- Our Linux image boots without firmware (`docs/boot.md`): the harness defines `SBI_HLE` for it
-  and for snapshots, and `--firmware` boots OpenSBI as before. A snapshot from one does not run
-  on the other; `rvc_trace12` needs `--define SBI_HLE --define L1_LOCAL` to match the harness.
+- Our Linux image has no firmware in it (`docs/boot.md`): the harness defines `SBI_HLE` for it
+  and for snapshots, and the machine answers the kernel's SBI calls. `rvc_trace12` needs
+  `--define SBI_HLE --define L1_LOCAL` to match the harness. Only upstream's images
+  (`--payload rvc\_Nix\rvc\data-net`, `micropython`, `rust`) still boot their own OpenSBI.
   The state hashes above were taken with firmware and have not been re-taken.
 - To check a shader change keeps emulation the same, cold-boot twice with `--fixed-dt 0.004
   --frames 2600 --bench 0 --save-state`, before and after, and compare with a state diff: RAM

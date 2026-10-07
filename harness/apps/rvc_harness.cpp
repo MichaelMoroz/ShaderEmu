@@ -85,7 +85,6 @@ struct Options {
     double statsAfter = -1;   // >= 0: print a STATS line for the part of the run after this many seconds
     bool noDoubles = false;
     bool noBands = false;     // --no-bands: the commit rewrites all of RAM, as on D3D11
-    bool firmware = false;    // --firmware: boot OpenSBI instead of answering the kernel's SBI calls
     bool ourKernel = false;   // the RAM image is this project's (kernel at +4 MiB, device tree at +34 MiB)
     bool sbi = false;         // compile with SBI_HLE
     bool noGpu = false;       // --no-gpu: leave out the GPU device's passes (gpu.shader)
@@ -151,8 +150,6 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
                          auto      (default) the smallest one the chosen image runs on
   --no-gpu             leave out the GPU device (the passes in <rvc>/gpu.shader, docs/gpu.md)
   --no-bands           D3D12: have the commit rewrite all of RAM instead of only the bands written to
-  --firmware           boot the image's OpenSBI. Without it this project's Linux image starts in the
-                       kernel and the machine answers its firmware (SBI) calls itself (docs/boot.md)
   --gpu-capture FILE   save the GPU device's whole colour target as a BMP at exit
   --no-sound           leave out the sound card (<rvc>/sound.shader, docs/sound.md)
   --sound              play what the sound card mixes (the terminal mode does; other runs are silent)
@@ -294,7 +291,6 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--stats-after") o.statsAfter = atof(next("--stats-after").c_str());
         else if (a == "--define") o.defines.push_back(next("--define"));
         else if (a == "--no-bands") o.noBands = true;
-        else if (a == "--firmware") o.firmware = true;
         else { fprintf(stderr, "unknown option %s\n", a.c_str()); usage(); return false; }
     }
     if (havePendingExpect) { fprintf(stderr, "--expect without --send\n"); return false; }
@@ -542,8 +538,9 @@ int main(int argc, char** argv) {
         const BootImage* im = opt.loadState.empty() ? findImage(opt.image) : nullptr;
         opt.machine = im && opt.rvcDir == "experiments/rvc_opt" ? im->machine : 0;
     }
-    // Our Linux image, and snapshots (which are of it), run without firmware.
-    opt.sbi = !opt.firmware && opt.machine == 0 && opt.rvcDir == "experiments/rvc_opt" && (opt.ourKernel || !opt.loadState.empty());
+    // Our Linux image, and snapshots (which are of it), have no firmware: the machine answers
+    // the kernel's calls to it (docs/boot.md).
+    opt.sbi = opt.machine == 0 && opt.rvcDir == "experiments/rvc_opt" && (opt.ourKernel || !opt.loadState.empty());
     if (opt.machine == 1) opt.defines.push_back("NO_PAGING");
     if (opt.machine == 2) opt.defines.push_back("M_MODE_ONLY");
     if (opt.machine > 0)

@@ -7,19 +7,19 @@ measures it: run the harness with `--frame-log FILE` and give it the file.
 ## No firmware
 
 Upstream boots OpenSBI, which then starts the kernel and answers its calls. That was a third
-of the boot's instructions. With `SBI_HLE` (the harness defines it for our image and for
-snapshots; `--firmware` turns it off) the machine does the firmware's part itself:
+of the boot's instructions. Our image has no firmware in it: with `SBI_HLE` (the harness
+defines it for our image and for snapshots) the machine does the firmware's part itself:
 
 - It starts at the kernel (`0x80400000`) in supervisor mode with the device tree's address in
   `a1`. The tree has to be in RAM for a 32-bit kernel, so `make_linux_image.py` puts it at
-  `0x82200000`, where OpenSBI would have copied it.
+  `0x82200000`.
 - An `ecall` from supervisor mode is an SBI call answered in place (`sbi_call` in `emu.h`):
   set_timer, console putchar and getchar, and the base extension's version and probe calls.
   Anything else returns "not supported".
 - The timer raises the supervisor's timer interrupt directly, and every trap is the
   supervisor's: nothing runs in machine mode.
 
-A snapshot made with firmware does not run without it, and the other way round.
+Upstream's own images still boot their OpenSBI: they are compiled without `SBI_HLE`.
 
 ## Kernel and init
 
