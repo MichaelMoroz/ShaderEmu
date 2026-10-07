@@ -281,6 +281,81 @@ float4 gpu_fragment(gpu_varyings i) {
     return saturate(c);
 }
 
+#ifdef GPU_VOLUME
+// The volume display (docs/volume.md): a host that shows a 3D program's last whole frame from
+// a point of view of its own, instead of the picture the GPU drew of it.
+#define VOLUME_LIST 0x700030u   // that frame's list address, command count, frames so far
+
+// The frame's command that claims mesh vertices id to id + 2, if it is a draw in perspective
+// with its own modelview: the only kind that has a place in space.
+bool volume_command(uint id, out uint base, out uint4 head) {
+    base = 0;
+    head = 0;
+    uint4 frame = ram(VOLUME_LIST);
+    uint list = texel_of(frame.r), count = min(frame.g, GPU_MAX_COMMANDS);
+    if (frame.r == 0 || count == 0) return false;
+    uint lo = 0, hi = count;
+    for (uint step = 0; step < 12; step++) {
+        uint mid = (lo + hi) >> 1;
+        if (hi - lo > 1) {
+            if (ram(list + 4 * mid).a <= id) lo = mid;
+            else hi = mid;
+        }
+    }
+    base = list + 4 * lo;
+    head = ram(base);
+    if (head.r != CMD_DRAW || id < head.a || id + 3 > head.a + head.b) return false;
+    uint4 how = ram(base + 1);
+    if ((how.r & VERTEX_MODELVIEW) == 0 || (how.r & 0xff) == VERTEX_SCREEN) return false;
+    // a projection whose w does not come from z draws flat on the picture (a status bar)
+    return ram(texel_of(how.b) + 3).b != 0;
+}
+
+// Mesh vertex `id` of such a command as the program's camera sees it, in the camera's own
+// units (x right, y up, the view along -z), coloured as the GPU colours it. `planes` is how
+// far the camera's near and far planes are and `focal` the projection's x and y scales: the
+// picture's edges are at x = +-z / focal.x and y = +-z / focal.y.
+gpu_varyings volume_vertex(uint id, uint base, uint4 head, out float3 eye, out float2 planes, out float2 focal) {
+    gpu_varyings o;
+    o.position = 0;
+    o.texture_info = 0;
+    uint4 how = ram(base + 1), more = ram(base + 2);
+    uint u = texel_of(how.b), k = id - head.a;
+    if (how.r & VERTEX_QUADS) {
+        uint part = k % 6;
+        k = (k / 6) * 4 + (part < 3 ? part : part == 3 ? 0 : part - 2);
+    }
+    float4 pos, normal = 0;
+    [branch]
+    if (how.r & VERTEX_COMPACT) {
+        uint4 t = ram(texel_of(head.g) + k);
+        pos = float4(from_fixed(t).xyz, 1.0);
+        o.uv = float2(asint(t.a << 16) >> 16, asint(t.a) >> 16) / 1024.0;
+        o.colour = colour_of(more.a);
+    } else {
+        uint v = texel_of(head.g) + 4 * k;
+        pos = from_fixed(ram(v));
+        normal = from_fixed(ram(v + 1));
+        o.uv = from_fixed(ram(v + 2)).xy;
+        o.colour = from_fixed(ram(v + 3));
+    }
+    // every pass is drawn as pass 0: what blends there is solid here
+    o.texture_info = uint4(how.g, how.a, more.r, more.g);
+    o.key = more.b;
+    float4 mx = from_fixed(ram(u + 4)), my = from_fixed(ram(u + 5)), mz = from_fixed(ram(u + 6));
+    eye = float3(dot(mx, pos), dot(my, pos), dot(mz, pos));
+    if ((how.r & 0xff) == VERTEX_LIT) {
+        float3 n = float3(dot(mx.xyz, normal.xyz), dot(my.xyz, normal.xyz), dot(mz.xyz, normal.xyz));
+        float facing = max(dot(n, from_fixed(ram(u + 7)).xyz), 0.0);
+        o.colour = float4(facing * from_fixed(ram(u + 8)).rgb + from_fixed(ram(u + 9)).rgb, 1.0);
+    }
+    float4 depth = from_fixed(ram(u + 2));   // OpenGL's third row: 0, 0, -(f+n)/(f-n), -2fn/(f-n)
+    planes = float2(depth.w / (depth.z - 1.0), depth.w / (depth.z + 1.0));
+    focal = float2(from_fixed(ram(u)).x, from_fixed(ram(u + 1)).y);
+    return o;
+}
+#endif
+
 #ifdef GPU_WRITEBACK
 // The 4 MB bands of RAM the pending copy writes, one bit each.
 uint gpu_copy_bands() {
@@ -346,6 +421,16 @@ bool gpu_writeback(uint2 pos, out uint4 result) {
 
 #define INPUT_STATE 0x700002u   // pointer x, y (display pixels), buttons, key events so far
 #define INPUT_KEYS  0x700008u   // ring of the last 32 key events, one word each
+#define FETCH_REPLY 0x700011u   // requests the host has answered, bytes, status (docs/fetch.md)
+#define FETCH_DATA  0x76c000u   // what the host fetched: 0x4000 texels
+
+#ifdef GPU_INPUT
+// A word of what the host fetched: its texture holds one byte a channel, one word a texel.
+uint fetch_word(uint n) {
+    uint4 b = (uint4)(_HostData.Load(int3(n & 255, n >> 8, 0)) * 255.0 + 0.5);
+    return b.r | (b.g << 8) | (b.b << 16) | (b.a << 24);
+}
+#endif
 
 // GPUControl: the machine's control words. Once a submitted list has been drawn, take the
 // submit word back and count it; and deliver the host's keyboard and pointer (docs/input.md).
@@ -382,6 +467,14 @@ uint4 gpu_control(uint2 pos) {
             state.rg = (uint2)q;
         }
         return state;
+    }
+    if (_FetchDeliver != 0) {
+        // the host has an answer: its bytes and the words that say so arrive in one pass
+        if (index == FETCH_REPLY) return uint4(_FetchSeq, _FetchLength, _FetchStatus, 0);
+        if (index >= FETCH_DATA && index < FETCH_DATA + 0x4000) {
+            uint n = (index - FETCH_DATA) * 4;
+            return uint4(fetch_word(n), fetch_word(n + 1), fetch_word(n + 2), fetch_word(n + 3));
+        }
     }
     if (index >= INPUT_KEYS && index < INPUT_KEYS + 8) {
         // up to four new events a frame, at ring positions (sequence number) mod 32

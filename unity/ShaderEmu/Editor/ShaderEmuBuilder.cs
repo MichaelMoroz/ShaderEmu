@@ -30,12 +30,14 @@ public static partial class ShaderEmuBuilder
         public string label;
         public KeyCode host;
         public int linux, normal, shifted;
-        public float width;
+        public float x, y, width, height;   // in key units, from the layout's top left corner
     }
 
-    static Key K(string label, KeyCode host, int linux, int normal, int shifted, float width = 1f)
+    const int None = EmuKeyboard.KeyNone;
+
+    static Key K(string label, KeyCode host, int linux, int normal, int shifted, float width = 1f, float height = 1f)
     {
-        return new Key { label = label, host = host, linux = linux, normal = normal, shifted = shifted, width = width };
+        return new Key { label = label, host = host, linux = linux, normal = normal, shifted = shifted, width = width, height = height };
     }
 
     static Key Letter(char c, int linux)
@@ -48,71 +50,93 @@ public static partial class ShaderEmuBuilder
         return K(shifted + " " + normal, host, linux, normal, shifted);
     }
 
-    const int None = EmuKeyboard.KeyNone;
-
-    static Key[][] Layout()
+    // A key that types nothing at the console: function keys, locks, modifiers.
+    static Key Plain(string label, KeyCode host, int linux, float width = 1f)
     {
-        return new[]
-        {
-            new[]
-            {
-                K("Esc", KeyCode.Escape, 1, 27, 27), Symbol('`', '~', KeyCode.BackQuote, 41),
-                Symbol('1', '!', KeyCode.Alpha1, 2), Symbol('2', '@', KeyCode.Alpha2, 3), Symbol('3', '#', KeyCode.Alpha3, 4),
-                Symbol('4', '$', KeyCode.Alpha4, 5), Symbol('5', '%', KeyCode.Alpha5, 6), Symbol('6', '^', KeyCode.Alpha6, 7),
-                Symbol('7', '&', KeyCode.Alpha7, 8), Symbol('8', '*', KeyCode.Alpha8, 9), Symbol('9', '(', KeyCode.Alpha9, 10),
-                Symbol('0', ')', KeyCode.Alpha0, 11), Symbol('-', '_', KeyCode.Minus, 12), Symbol('=', '+', KeyCode.Equals, 13),
-                K("Bksp", KeyCode.Backspace, 14, 127, 127),
-            },
-            new[]
-            {
-                K("Tab", KeyCode.Tab, 15, 9, 9, 1.5f),
-                Letter('q', 16), Letter('w', 17), Letter('e', 18), Letter('r', 19), Letter('t', 20), Letter('y', 21),
-                Letter('u', 22), Letter('i', 23), Letter('o', 24), Letter('p', 25),
-                Symbol('[', '{', KeyCode.LeftBracket, 26), Symbol(']', '}', KeyCode.RightBracket, 27),
-                K("| \\", KeyCode.Backslash, 43, '\\', '|', 1.5f),
-            },
-            new[]
-            {
-                K("Caps", KeyCode.CapsLock, 58, None, None, 1.75f),
-                Letter('a', 30), Letter('s', 31), Letter('d', 32), Letter('f', 33), Letter('g', 34), Letter('h', 35),
-                Letter('j', 36), Letter('k', 37), Letter('l', 38),
-                Symbol(';', ':', KeyCode.Semicolon, 39), Symbol('\'', '"', KeyCode.Quote, 40),
-                K("Enter", KeyCode.Return, 28, 13, 13, 2.25f),
-            },
-            new[]
-            {
-                K("Shift", KeyCode.LeftShift, 42, None, None, 2f),
-                Letter('z', 44), Letter('x', 45), Letter('c', 46), Letter('v', 47), Letter('b', 48), Letter('n', 49), Letter('m', 50),
-                Symbol(',', '<', KeyCode.Comma, 51), Symbol('.', '>', KeyCode.Period, 52), Symbol('/', '?', KeyCode.Slash, 53),
-                K("Home", KeyCode.Home, 102, EmuKeyboard.KeyHome, EmuKeyboard.KeyHome),
-                K("Up", KeyCode.UpArrow, 103, EmuKeyboard.KeyUp, EmuKeyboard.KeyUp),
-                K("End", KeyCode.End, 107, EmuKeyboard.KeyEnd, EmuKeyboard.KeyEnd),
-            },
-            new[]
-            {
-                K("Ctrl", KeyCode.LeftControl, 29, None, None, 1.5f), K("Alt", KeyCode.LeftAlt, 56, None, None, 1.5f),
-                K("", KeyCode.Space, 57, ' ', ' ', 7f),
-                K("Del", KeyCode.Delete, 111, EmuKeyboard.KeyDelete, EmuKeyboard.KeyDelete),
-                K("PgUp", KeyCode.PageUp, 104, EmuKeyboard.KeyPageUp, EmuKeyboard.KeyPageUp),
-                K("Left", KeyCode.LeftArrow, 105, EmuKeyboard.KeyLeft, EmuKeyboard.KeyLeft),
-                K("Down", KeyCode.DownArrow, 108, EmuKeyboard.KeyDown, EmuKeyboard.KeyDown),
-                K("Right", KeyCode.RightArrow, 106, EmuKeyboard.KeyRight, EmuKeyboard.KeyRight),
-            },
-        };
+        return K(label, host, linux, None, None, width);
     }
 
-    // Keys of a real keyboard that have no on-screen key.
-    static Key[] HostOnly()
+    // A key that types the same with and without shift.
+    static Key Same(string label, KeyCode host, int linux, int character, float width = 1f, float height = 1f)
     {
-        List<Key> keys = new List<Key>
+        return K(label, host, linux, character, character, width, height);
+    }
+
+    static void Row(List<Key> keys, float x, float y, params Key[] row)
+    {
+        foreach (Key key in row)
         {
-            K("", KeyCode.RightShift, 54, None, None), K("", KeyCode.RightControl, 97, None, None),
-            K("", KeyCode.PageDown, 109, EmuKeyboard.KeyPageDown, EmuKeyboard.KeyPageDown),
-            K("", KeyCode.KeypadEnter, 28, 13, 13),
-        };
+            key.x = x;
+            key.y = y;
+            keys.Add(key);
+            x += key.width;
+        }
+    }
+
+    const float LayoutWidth = 22.5f, LayoutHeight = 6.25f;
+
+    // A full-size keyboard: the main block, the navigation keys and the number pad.
+    static List<Key> Layout()
+    {
+        List<Key> keys = new List<Key>();
+        const float nav = 15.25f, pad = 18.5f;
+        float[] y = { 0f, 1.25f, 2.25f, 3.25f, 4.25f, 5.25f };
+
+        Row(keys, 0, y[0], Same("Esc", KeyCode.Escape, 1, 27));
         int[] function = { 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 87, 88 };
-        for (int i = 0; i < 12; i++) keys.Add(K("", KeyCode.F1 + i, function[i], None, None));
-        return keys.ToArray();
+        for (int i = 0; i < 12; i++)
+            Row(keys, 2f + i + (i / 4) * 0.5f, y[0], Plain("F" + (i + 1), KeyCode.F1 + i, function[i]));
+        Row(keys, nav, y[0], Plain("PrtSc", KeyCode.Print, 99), Plain("ScrLk", KeyCode.ScrollLock, 70), Plain("Pause", KeyCode.Pause, 119));
+
+        Row(keys, 0, y[1],
+            Symbol('`', '~', KeyCode.BackQuote, 41),
+            Symbol('1', '!', KeyCode.Alpha1, 2), Symbol('2', '@', KeyCode.Alpha2, 3), Symbol('3', '#', KeyCode.Alpha3, 4),
+            Symbol('4', '$', KeyCode.Alpha4, 5), Symbol('5', '%', KeyCode.Alpha5, 6), Symbol('6', '^', KeyCode.Alpha6, 7),
+            Symbol('7', '&', KeyCode.Alpha7, 8), Symbol('8', '*', KeyCode.Alpha8, 9), Symbol('9', '(', KeyCode.Alpha9, 10),
+            Symbol('0', ')', KeyCode.Alpha0, 11), Symbol('-', '_', KeyCode.Minus, 12), Symbol('=', '+', KeyCode.Equals, 13),
+            Same("Bksp", KeyCode.Backspace, 14, 127, 2f));
+        Row(keys, nav, y[1], Plain("Ins", KeyCode.Insert, 110), Same("Home", KeyCode.Home, 102, EmuKeyboard.KeyHome),
+            Same("PgUp", KeyCode.PageUp, 104, EmuKeyboard.KeyPageUp));
+        Row(keys, pad, y[1], Plain("Num", KeyCode.Numlock, 69), Same("/", KeyCode.KeypadDivide, 98, '/'),
+            Same("*", KeyCode.KeypadMultiply, 55, '*'), Same("-", KeyCode.KeypadMinus, 74, '-'));
+
+        Row(keys, 0, y[2],
+            Same("Tab", KeyCode.Tab, 15, 9, 1.5f),
+            Letter('q', 16), Letter('w', 17), Letter('e', 18), Letter('r', 19), Letter('t', 20), Letter('y', 21),
+            Letter('u', 22), Letter('i', 23), Letter('o', 24), Letter('p', 25),
+            Symbol('[', '{', KeyCode.LeftBracket, 26), Symbol(']', '}', KeyCode.RightBracket, 27),
+            K("| \\", KeyCode.Backslash, 43, '\\', '|', 1.5f));
+        Row(keys, nav, y[2], Same("Del", KeyCode.Delete, 111, EmuKeyboard.KeyDelete), Same("End", KeyCode.End, 107, EmuKeyboard.KeyEnd),
+            Same("PgDn", KeyCode.PageDown, 109, EmuKeyboard.KeyPageDown));
+        Row(keys, pad, y[2], Same("7", KeyCode.Keypad7, 71, '7'), Same("8", KeyCode.Keypad8, 72, '8'), Same("9", KeyCode.Keypad9, 73, '9'),
+            Same("+", KeyCode.KeypadPlus, 78, '+', 1f, 2f));
+
+        Row(keys, 0, y[3],
+            Plain("Caps", KeyCode.CapsLock, 58, 1.75f),
+            Letter('a', 30), Letter('s', 31), Letter('d', 32), Letter('f', 33), Letter('g', 34), Letter('h', 35),
+            Letter('j', 36), Letter('k', 37), Letter('l', 38),
+            Symbol(';', ':', KeyCode.Semicolon, 39), Symbol('\'', '"', KeyCode.Quote, 40),
+            Same("Enter", KeyCode.Return, 28, 13, 2.25f));
+        Row(keys, pad, y[3], Same("4", KeyCode.Keypad4, 75, '4'), Same("5", KeyCode.Keypad5, 76, '5'), Same("6", KeyCode.Keypad6, 77, '6'));
+
+        Row(keys, 0, y[4],
+            Plain("Shift", KeyCode.LeftShift, 42, 2.25f),
+            Letter('z', 44), Letter('x', 45), Letter('c', 46), Letter('v', 47), Letter('b', 48), Letter('n', 49), Letter('m', 50),
+            Symbol(',', '<', KeyCode.Comma, 51), Symbol('.', '>', KeyCode.Period, 52), Symbol('/', '?', KeyCode.Slash, 53),
+            Plain("Shift", KeyCode.RightShift, 54, 2.75f));
+        Row(keys, nav + 1f, y[4], Same("Up", KeyCode.UpArrow, 103, EmuKeyboard.KeyUp));
+        Row(keys, pad, y[4], Same("1", KeyCode.Keypad1, 79, '1'), Same("2", KeyCode.Keypad2, 80, '2'), Same("3", KeyCode.Keypad3, 81, '3'),
+            Same("Enter", KeyCode.KeypadEnter, 96, 13, 1f, 2f));
+
+        Row(keys, 0, y[5],
+            Plain("Ctrl", KeyCode.LeftControl, 29, 1.25f), Plain("Win", KeyCode.LeftWindows, 125, 1.25f),
+            Plain("Alt", KeyCode.LeftAlt, 56, 1.25f), Same("", KeyCode.Space, 57, ' ', 6.25f),
+            Plain("Alt", KeyCode.RightAlt, 100, 1.25f), Plain("Win", KeyCode.RightWindows, 126, 1.25f),
+            Plain("Menu", KeyCode.Menu, 127, 1.25f), Plain("Ctrl", KeyCode.RightControl, 97, 1.25f));
+        Row(keys, nav, y[5], Same("Left", KeyCode.LeftArrow, 105, EmuKeyboard.KeyLeft), Same("Down", KeyCode.DownArrow, 108, EmuKeyboard.KeyDown),
+            Same("Right", KeyCode.RightArrow, 106, EmuKeyboard.KeyRight));
+        Row(keys, pad, y[5], Same("0", KeyCode.Keypad0, 82, '0', 2f), Same(".", KeyCode.KeypadPeriod, 83, '.'));
+        return keys;
     }
 
     // ---------------------------------------------------------------- assets
@@ -395,48 +419,203 @@ public static partial class ShaderEmuBuilder
         EditorUtility.SetDirty(behaviour);
     }
 
+    // A panel of key plates. It is not a VRChat canvas: the players' beams (EmuPointer) find the
+    // key under them from the rectangles, so each hand can hold one.
     static EmuKeyboard Keyboard(Transform parent, string name, string title, Vector3 centre, Vector3 euler, bool raw)
     {
         const float unit = 60f, gap = 6f, top = 56f;
-        Key[][] layout = Layout();
-        RectTransform panel = Panel(parent, name, centre, euler, 15 * unit + gap, top + layout.Length * unit + gap,
-                                    new Color(0.07f, 0.075f, 0.09f));
+        List<Key> keys = Layout();
+        float width = LayoutWidth * unit + gap, height = top + LayoutHeight * unit + gap;
+        keys.Add(new Key { label = "Use my keyboard", linux = EmuKeyboard.LinuxCapture, normal = None, shifted = None,
+                           x = (width - 276 - gap) / unit, y = (6 - top) / unit, width = 276 / unit, height = 50 / unit });
+        RectTransform panel = Panel(parent, name, centre, euler, width, height, new Color(0.07f, 0.075f, 0.09f));
+        Object.DestroyImmediate(panel.GetComponent<VRC.SDK3.Components.VRCUiShape>());
+        Object.DestroyImmediate(panel.GetComponent<GraphicRaycaster>());
         EmuKeyboard keyboard = Udon<EmuKeyboard>(panel.gameObject);
         keyboard.rawKeys = raw;
+        keyboard.panelWidth = width;
+        keyboard.panelHeight = height;
 
-        Label(panel, "Title", title, 12, 6, 420, 44, 26, TextAnchor.MiddleLeft, new Color(0.6f, 0.75f, 0.95f));
-        keyboard.modifierLabel = Label(panel, "Modifiers", "", 430, 6, 200, 44, 24, TextAnchor.MiddleCenter, new Color(1f, 0.8f, 0.3f));
-        TextMeshProUGUI captureText;
-        Button capture = MakeButton(panel, "Capture", "Use my keyboard", 15 * unit + gap - 276, 6, 270, 44, 22, out captureText);
-        keyboard.captureLabel = captureText;
-        OnClick(capture, keyboard, "ToggleCapture");
+        Label(panel, "Title", title, 12, 6, 520, 44, 26, TextAnchor.MiddleLeft, new Color(0.6f, 0.75f, 0.95f));
+        keyboard.modifierLabel = Label(panel, "Modifiers", "", 540, 6, 420, 44, 24, TextAnchor.MiddleCenter, new Color(1f, 0.8f, 0.3f));
 
-        List<Key> host = new List<Key>();
-        for (int r = 0; r < layout.Length; r++)
+        Image[] plates = new Image[keys.Count];
+        float[] kx = new float[keys.Count], ky = new float[keys.Count], kw = new float[keys.Count], kh = new float[keys.Count];
+        for (int i = 0; i < keys.Count; i++)
         {
-            float x = gap;
-            foreach (Key key in layout[r])
-            {
-                TextMeshProUGUI unused;
-                Button button = MakeButton(panel, "Key " + (key.label == "" ? "Space" : key.label), key.label,
-                                           x, top + r * unit, key.width * unit - gap, unit - gap, key.label.Length > 3 ? 18 : 22, out unused);
-                EmuKey behaviour = Udon<EmuKey>(button.gameObject);
-                behaviour.keyboard = keyboard;
-                behaviour.linuxCode = key.linux;
-                behaviour.normal = key.normal;
-                behaviour.shifted = key.shifted;
-                Apply(behaviour);
-                OnClick(button, behaviour, "Press");
-                x += key.width * unit;
-                host.Add(key);
-            }
+            Key key = keys[i];
+            kx[i] = gap + key.x * unit;
+            ky[i] = top + key.y * unit;
+            kw[i] = key.width * unit - gap;
+            kh[i] = key.height * unit - gap;
+            RectTransform rect = Child(panel, "Key " + (key.label == "" ? "Space" : key.label), kx[i], ky[i], kw[i], kh[i]);
+            plates[i] = Plate(rect, KeyColour);
+            plates[i].raycastTarget = false;
+            TextMeshProUGUI text = Label(rect, "Text", key.label, 0, 0, kw[i], kh[i], key.label.Length > 3 ? 18 : 22, TextAnchor.MiddleCenter, KeyText);
+            if (key.linux == EmuKeyboard.LinuxCapture) keyboard.captureLabel = text;
         }
-        host.AddRange(HostOnly());
+        keyboard.keyX = kx;
+        keyboard.keyY = ky;
+        keyboard.keyW = kw;
+        keyboard.keyH = kh;
+        keyboard.keyLinux = keys.ConvertAll(k => k.linux).ToArray();
+        keyboard.keyNormal = keys.ConvertAll(k => k.normal).ToArray();
+        keyboard.keyShifted = keys.ConvertAll(k => k.shifted).ToArray();
+        keyboard.keyPlate = plates;
+        keyboard.plateColour = KeyColour;
+        keyboard.hoverColour = new Color(0.30f, 0.33f, 0.40f);
+        keyboard.pressedColour = new Color(0.15f, 0.45f, 0.95f);
+        keyboard.latchedColour = new Color(0.62f, 0.40f, 0.10f);
+
+        List<Key> host = keys.FindAll(k => k.linux != EmuKeyboard.LinuxCapture);
         keyboard.hostKeys = host.ConvertAll(k => (int)k.host).ToArray();
         keyboard.hostLinux = host.ConvertAll(k => k.linux).ToArray();
         keyboard.hostNormal = host.ConvertAll(k => k.normal).ToArray();
         keyboard.hostShifted = host.ConvertAll(k => k.shifted).ToArray();
         return keyboard;
+    }
+
+    // A hand's beam and the dot where it lands; EmuPointer moves both every frame.
+    static void Beam(Transform parent, string name, Material material, out LineRenderer line, out Transform dot)
+    {
+        GameObject go = new GameObject(name + " beam");
+        go.transform.SetParent(parent, false);
+        line = go.AddComponent<LineRenderer>();
+        line.useWorldSpace = true;
+        line.positionCount = 2;
+        line.startWidth = 0.004f;
+        line.endWidth = 0.002f;
+        line.sharedMaterial = material;
+        line.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        line.receiveShadows = false;
+        line.enabled = false;
+        GameObject sphere = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+        sphere.name = name + " dot";
+        sphere.transform.SetParent(parent, false);
+        sphere.transform.localScale = Vector3.one * 0.014f;
+        Object.DestroyImmediate(sphere.GetComponent<Collider>());
+        MeshRenderer renderer = sphere.GetComponent<MeshRenderer>();
+        renderer.sharedMaterial = material;
+        renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        renderer.receiveShadows = false;
+        sphere.SetActive(false);
+        dot = sphere.transform;
+    }
+
+    // The decoded display: 8-bit sRGB with mipmaps, made again after every frame of the machine.
+    static RenderTexture PictureTexture(string name, int width, int height)
+    {
+        RenderTexture rt = LoadOrCreate(Generated + "/" + name + ".renderTexture",
+            () => new RenderTexture(width, height, 0, RenderTextureFormat.ARGB32, RenderTextureReadWrite.sRGB));
+        rt.Release();
+        rt.width = width;
+        rt.height = height;
+        rt.antiAliasing = 1;
+        rt.useMipMap = true;
+        rt.autoGenerateMips = true;
+        rt.filterMode = FilterMode.Trilinear;
+        rt.anisoLevel = 8;
+        rt.wrapMode = TextureWrapMode.Clamp;
+        EditorUtility.SetDirty(rt);
+        return rt;
+    }
+
+    // The volume display (docs/volume.md): a third screen, on the left wall by the console, that is a window
+    // onto the guest's 3D frame, drawn behind it as the visitor's own eyes see it.
+    static Material Volume(Transform parent, float halfW, RenderTexture state, Material frameMat)
+    {
+        const float wide = 1.28f, high = 0.8f;
+        Transform root = new GameObject("Volume display").transform;
+        root.SetParent(parent, false);
+        root.localPosition = new Vector3(-halfW + 0.04f, 1.65f, 3.9f);
+        root.localEulerAngles = new Vector3(0, -90f, 0);   // its face towards the room
+        Box(root, "Volume bezel", new Vector3(0, 0, 0.02f), new Vector3(wide + 0.08f, high + 0.08f, 0.03f), frameMat, false);
+
+        Material maskMat = Mat("VolumeMask", "ShaderEmu/VolumeMask");
+        Material sealMat = Mat("VolumeSeal", "ShaderEmu/VolumeSeal");
+        Material sceneMat = Mat("GpuVolume", "ShaderEmu/GpuVolume");
+        Material darkMat = Mat("VolumeOff", "Unlit/Color");
+        darkMat.color = new Color(0.01f, 0.011f, 0.014f);
+        sceneMat.SetTexture("_State", state);
+        sceneMat.SetVector("_ScreenSize", new Vector4(wide, high, 0, 0));
+        Transform content = new GameObject("Volume content").transform;
+        content.SetParent(root, false);
+        System.Func<string, Material, Transform, GameObject> face = (name, material, under) =>
+        {
+            GameObject go = GameObject.CreatePrimitive(PrimitiveType.Quad);
+            go.name = name;
+            go.transform.SetParent(under, false);
+            go.transform.localScale = new Vector3(wide, high, 1f);
+            Object.DestroyImmediate(go.GetComponent<Collider>());
+            MeshRenderer r = go.GetComponent<MeshRenderer>();
+            r.sharedMaterial = material;
+            r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            r.receiveShadows = false;
+            r.lightProbeUsage = UnityEngine.Rendering.LightProbeUsage.Off;
+            r.reflectionProbeUsage = UnityEngine.Rendering.ReflectionProbeUsage.Off;
+            return go;
+        };
+        face("Volume mask", maskMat, content);
+        face("Volume seal", sealMat, content);
+        GameObject dark = face("Volume off", darkMat, root);
+        // one point a triangle, as the GPU's own mesh; its bounds are the screen, so it is
+        // drawn whenever the screen is in view
+        Mesh points = LoadOrCreate(Generated + "/VolumePoints.asset", () =>
+        {
+            int[] indices = new int[GpuTriangles];
+            for (int i = 0; i < GpuTriangles; i++) indices[i] = i;
+            Mesh mesh = new Mesh { name = "VolumePoints", indexFormat = UnityEngine.Rendering.IndexFormat.UInt32 };
+            mesh.vertices = new Vector3[GpuTriangles];
+            mesh.SetIndices(indices, MeshTopology.Points, 0, false);
+            return mesh;
+        });
+        points.bounds = new Bounds(Vector3.zero, new Vector3(wide, high, 0.1f));
+        EditorUtility.SetDirty(points);
+        GameObject scene = new GameObject("Volume scene", typeof(MeshFilter), typeof(MeshRenderer));
+        scene.transform.SetParent(content, false);
+        scene.GetComponent<MeshFilter>().sharedMesh = points;
+        MeshRenderer sceneRenderer = scene.GetComponent<MeshRenderer>();
+        sceneRenderer.sharedMaterial = sceneMat;
+        sceneRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        sceneRenderer.receiveShadows = false;
+        sceneRenderer.lightProbeUsage = UnityEngine.Rendering.LightProbeUsage.Off;
+        sceneRenderer.reflectionProbeUsage = UnityEngine.Rendering.ReflectionProbeUsage.Off;
+
+        // its switch, under the screen
+        RectTransform panel = Panel(root, "Volume panel", new Vector3(0, -high / 2 - 0.15f, 0.03f), Vector3.zero, 900, 180,
+                                    new Color(0.05f, 0.055f, 0.07f));
+        EmuVolume volume = Udon<EmuVolume>(panel.gameObject);
+        volume.content = content.gameObject;
+        volume.dark = dark;
+        volume.sceneMaterial = sceneMat;
+        Button power = MakeButton(panel, "Power", "3D screen: on", 14, 14, 260, 76, 26, out volume.powerLabel);
+        Label(panel, "Hint", "A window onto 3D programs: what glxgears or Doom draws, seen in depth from where you stand. Start one from the Start menu.",
+              290, 10, 596, 84, 20, TextAnchor.MiddleLeft, new Color(0.62f, 0.68f, 0.76f));
+        // where the screen lies in the program's view: its near plane, or further out
+        Label(panel, "Plane title", "Screen plane: near ... far", 14, 104, 270, 60, 20, TextAnchor.MiddleLeft, Color.white);
+        GameObject planeObject = DefaultControls.CreateSlider(new DefaultControls.Resources());
+        RectTransform planeRect = planeObject.GetComponent<RectTransform>();
+        planeRect.SetParent(panel, false);
+        planeRect.anchorMin = planeRect.anchorMax = new Vector2(0, 1);
+        planeRect.pivot = new Vector2(0, 1);
+        planeRect.anchoredPosition = new Vector2(290, -110);
+        planeRect.sizeDelta = new Vector2(596, 48);
+        Slider plane = planeObject.GetComponent<Slider>();
+        plane.minValue = 0;
+        plane.maxValue = 1;
+        plane.value = 0;
+        foreach (Image part in planeObject.GetComponentsInChildren<Image>())
+        {
+            part.material = UiMaterial();
+            part.color = part.name == "Handle" ? Color.white : part.name == "Fill" ? new Color(0.3f, 0.65f, 1f) : new Color(0.2f, 0.21f, 0.25f);
+        }
+        plane.handleRect.sizeDelta = new Vector2(36, 0);
+        volume.planeSlider = plane;
+        Apply(volume);
+        OnClick(power, volume, "Toggle");
+        UnityEventTools.AddStringPersistentListener(plane.onValueChanged,
+            UdonSharpEditorUtility.GetBackingUdonBehaviour(volume).SendCustomEvent, "PlaneChanged");
+        return sceneMat;
     }
 
     static void NameLayer(int layer, string name)
@@ -468,6 +647,7 @@ public static partial class ShaderEmuBuilder
         Material tickMat = Mat("MachineTick", "ShaderEmu/MachineTick");
         Material gpuMat = Mat("GpuDraw", "ShaderEmu/GpuDraw");
         Material displayMat = Mat("Display", "ShaderEmu/Display");
+        Material showMat = Mat("DisplayShow", "ShaderEmu/DisplayShow");
         Material heatMat = Mat("MemHeat", "ShaderEmu/MemHeat");
         Material memMat = Mat("MemView", "ShaderEmu/MemView");
         Material readbackMat = Mat("Readback", "ShaderEmu/Readback");
@@ -478,7 +658,12 @@ public static partial class ShaderEmuBuilder
         RenderTexture tickState = StateTexture("TickState", 64, 64);
         AssetDatabase.DeleteAsset(Generated + "/MachineState.asset");
         RenderTexture gpuTarget = Target("GpuTarget", 1280, 720, 32);   // the picture is 720p at most
-        RenderTexture readback = Target("Readback", 320, 1, 0);
+        RenderTexture readback = Target("Readback", 448, 1, 0);
+        RenderTexture picture = PictureTexture("DisplayPicture", 2048, 1024);
+        showMat.mainTexture = picture;
+        showMat.SetVector("_TexSize", new Vector4(picture.width, picture.height, 0, 0));
+        displayMat.SetFloat("_Raw", 1f);
+        displayMat.SetVector("_RawSize", new Vector4(picture.width, picture.height, 0, 0));
         CustomRenderTexture heat = LoadOrCreate(Generated + "/MemHeat.asset",
             () => new CustomRenderTexture(1024, 512, RenderTextureFormat.ARGBFloat, RenderTextureReadWrite.Linear));
         heat.material = heatMat;
@@ -494,6 +679,10 @@ public static partial class ShaderEmuBuilder
         Texture2D grid = LoadOrCreate(Generated + "/TerminalGrid.asset", () => new Texture2D(cols, rows, TextureFormat.RGBA32, false, true));
         grid.filterMode = FilterMode.Point;
         grid.wrapMode = TextureWrapMode.Clamp;
+        // an answer to the guest's browser: 256 KB, four bytes a texel (docs/fetch.md)
+        Texture2D hostData = LoadOrCreate(Generated + "/HostData.asset", () => new Texture2D(256, 256, TextureFormat.RGBA32, false, true));
+        hostData.filterMode = FilterMode.Point;
+        hostData.wrapMode = TextureWrapMode.Clamp;
         Texture2D black = LoadOrCreate(Generated + "/Black.asset", () =>
         {
             Texture2D t = new Texture2D(4, 4, TextureFormat.RGBA32, false, true);
@@ -565,7 +754,13 @@ public static partial class ShaderEmuBuilder
         Box(room, "Wall front", new Vector3(0, height / 2, halfD + wall / 2), new Vector3(halfW * 2 + wall * 2, height, wall), wallMat);
         Box(room, "Wall back", new Vector3(0, height / 2, -halfD - wall / 2), new Vector3(halfW * 2 + wall * 2, height, wall), wallMat);
         Box(room, "Wall left", new Vector3(-halfW - wall / 2, height / 2, 0), new Vector3(wall, height, halfD * 2), wallMat);
-        Box(room, "Wall right", new Vector3(halfW + wall / 2, height / 2, 0), new Vector3(wall, height, halfD * 2), wallMat);
+        // the right wall, in four pieces round the window's opening
+        float wallX = halfW + wall / 2, winZ0 = WindowZ - WindowWide / 2, winZ1 = WindowZ + WindowWide / 2;
+        float winY0 = WindowY - WindowHigh / 2, winY1 = WindowY + WindowHigh / 2;
+        Box(room, "Wall right low", new Vector3(wallX, winY0 / 2, 0), new Vector3(wall, winY0, halfD * 2), wallMat);
+        Box(room, "Wall right high", new Vector3(wallX, (winY1 + height) / 2, 0), new Vector3(wall, height - winY1, halfD * 2), wallMat);
+        Box(room, "Wall right back", new Vector3(wallX, WindowY, (winZ0 - halfD) / 2), new Vector3(wall, WindowHigh, winZ0 + halfD), wallMat);
+        Box(room, "Wall right front", new Vector3(wallX, WindowY, (winZ1 + halfD) / 2), new Vector3(wall, WindowHigh, halfD - winZ1), wallMat);
         Decorate(world, room, halfW, halfD, height, woodMat, plasticMat, metalMat, ledMat, lampMat);
 
         // ---- the computer: a wall of screens over a desk
@@ -586,8 +781,8 @@ public static partial class ShaderEmuBuilder
         Box(computer, "Monitor bezel", dispAt + new Vector3(0, 0, 0.025f), new Vector3(dispW + 0.08f, dispH + 0.08f, 0.04f), plasticMat, false);
         Box(computer, "Monitor neck", new Vector3(0, 1.0075f, halfD - 0.07f), new Vector3(0.12f, 0.465f, 0.05f), metalMat, false);   // ends under the bezel
         Box(computer, "Monitor foot", new Vector3(0, 0.775f, halfD - 0.22f), new Vector3(0.5f, 0.02f, 0.28f), metalMat, false);
-        GameObject displayScreen = Screen(computer, "Display screen", dispAt, dispW, dispH, displayMat);
-        displayMat.SetFloat("_Aspect", dispW / dispH);
+        GameObject displayScreen = Screen(computer, "Display screen", dispAt, dispW, dispH, showMat);
+        showMat.SetFloat("_Aspect", dispW / dispH);
 
         // memory
         const float memW = 1.7f, memH = 0.85f;
@@ -661,8 +856,11 @@ public static partial class ShaderEmuBuilder
         machine.tickMaterial = tickMat;
         machine.machineMaterial = machineMat;
         machine.gpuMaterial = gpuMat;
+        machine.volumeMaterial = Volume(computer, halfW, state, plasticMat);
         machine.gpuCamera = camera;
         machine.displayMaterial = displayMat;
+        machine.displayTexture = picture;
+        machine.displayShowMaterial = showMat;
         machine.heatMaterial = heatMat;
         machine.readbackMaterial = readbackMat;
         machine.readbackTexture = readback;
@@ -670,6 +868,13 @@ public static partial class ShaderEmuBuilder
         machine.consoleKeyboard = consoleKeys;
         machine.gpuKeyboard = gpuKeys;
         machine.blackTexture = black;
+        machine.hostData = hostData;
+        // the sites the browser's home page lists: a world can load no address it was not built with
+        List<string> sites = new List<string>();
+        foreach (string line in File.ReadAllLines(ShaderEmuImages.Repo + "/linux/apps/web/sites.txt"))
+            if (line.Contains("\t")) sites.Add(line.Split('\t')[0]);
+        machine.siteAddresses = sites.ToArray();
+        machine.siteUrls = sites.ConvertAll(s => new VRC.SDKBase.VRCUrl(s)).ToArray();
 
         List<Texture2D> textures = new List<Texture2D>();
         ShaderEmuImages.BootImage boot = ShaderEmuImages.Images[0];
@@ -679,11 +884,25 @@ public static partial class ShaderEmuBuilder
         if (textures[0] == null) Debug.LogError("[ShaderEmu] no boot image: run ShaderEmu/Import boot images first");
         machine.imageTextures = textures.ToArray();
 
-        EmuPointer pointer = Udon<EmuPointer>(displayScreen);
+        Transform beamRoot = new GameObject("Beams").transform;
+        beamRoot.SetParent(world, false);
+        Material beamMat = Mat("Beam", "ShaderEmu/Beam");
+        beamMat.color = new Color(0.35f, 0.85f, 1f, 0.22f);
+        Material beamSolidMat = Mat("BeamSolid", "ShaderEmu/Beam");
+        beamSolidMat.color = new Color(0.45f, 0.9f, 1f, 1f);
+        EmuPointer pointer = Udon<EmuPointer>(beamRoot.gameObject);
         pointer.machine = machine;
         pointer.screen = displayScreen.GetComponent<Collider>();
         pointer.aspect = dispW / dispH;
-        Apply(pointer);
+        pointer.keyboards = new[] { consoleKeys, gpuKeys };
+        pointer.keyboardPlates = new Collider[] { consoleKeys.GetComponent<Collider>(), gpuKeys.GetComponent<Collider>() };
+        pointer.beams = new LineRenderer[2];
+        pointer.dots = new Transform[2];
+        pointer.faintMaterial = beamMat;
+        pointer.solidMaterial = beamSolidMat;
+        Beam(beamRoot, "Left", beamMat, out pointer.beams[0], out pointer.dots[0]);
+        Beam(beamRoot, "Right", beamMat, out pointer.beams[1], out pointer.dots[1]);
+        pointer.dotRenderers = new Renderer[] { pointer.dots[0].GetComponent<Renderer>(), pointer.dots[1].GetComponent<Renderer>() };
 
         // ---- control panel, under the memory view
         Color dim = new Color(0.62f, 0.68f, 0.76f);
@@ -693,9 +912,10 @@ public static partial class ShaderEmuBuilder
         machine.statsText = Label(panel, "Stats", "off", 30, 84, 1000, 420, 30, TextAnchor.UpperLeft, new Color(0.75f, 0.95f, 0.8f));
         Label(panel, "Help",
               "This machine runs on your own graphics card; other players have their own.\n" +
-              "Point at the big screen for the mouse: trigger = left button, grip = right.\n" +
-              "Desktop: press 'Use my keyboard' on a keyboard to type with the real one.",
-              30, 600, 1640, 150, 26, TextAnchor.UpperLeft, dim);
+              "Each hand has a beam. On the big screen it is the mouse: trigger = left, grip = right, right stick = wheel.\n" +
+              "On a keyboard a key stays down while the trigger is held; Shift, Ctrl and Alt also latch.\n" +
+              "Desktop: click 'Use my keyboard' on a keyboard to type with the real one.",
+              30, 580, 1000, 170, 22, TextAnchor.UpperLeft, dim);
 
         TextMeshProUGUI unusedText;
         float bx = 1060;
@@ -725,11 +945,50 @@ public static partial class ShaderEmuBuilder
         RectTransform handle = slider.handleRect;
         handle.sizeDelta = new Vector2(36, 0);
         machine.speedSlider = slider;
+
+        // an address of the visitor's own for the guest's browser: VRChat only loads what is
+        // typed into a field of this kind
+        // A link the browser wants and the world may not open is shown in the first field, for
+        // the visitor to copy into the second: a page opens only on a visitor's own say-so.
+        System.Func<string, float, Text> fieldText = (name, y) =>
+        {
+            RectTransform box = Child(panel, name, bx, y, 600, 44);
+            Plate(box, new Color(0.12f, 0.13f, 0.16f));
+            Text text = Child(box, "Text", 10, 4, 580, 36).gameObject.AddComponent<Text>();
+            text.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+            text.fontSize = 20;
+            text.color = Color.white;
+            text.alignment = TextAnchor.MiddleLeft;
+            text.supportRichText = false;
+            return text;
+        };
+        Label(panel, "Link title", "Link to copy (VRChat opens only what a visitor gives it)", bx, 482, 630, 24, 17, TextAnchor.MiddleLeft, dim);
+        Text linkText = fieldText("Web link", 506);
+        InputField link = linkText.transform.parent.gameObject.AddComponent<InputField>();
+        link.textComponent = linkText;
+        link.targetGraphic = link.GetComponent<Image>();
+        link.lineType = InputField.LineType.SingleLine;
+        machine.wantedLink = link;
+        Label(panel, "Web title", "Paste here: it, or any https address", bx, 552, 630, 24, 17, TextAnchor.MiddleLeft, dim);
+        Text typed = fieldText("Web address", 576);
+        VRC.SDK3.Components.VRCUrlInputField address = typed.transform.parent.gameObject.AddComponent<VRC.SDK3.Components.VRCUrlInputField>();
+        address.textComponent = typed;
+        address.targetGraphic = address.GetComponent<Image>();
+        machine.typedUrl = address;
+        machine.fetchLabel = Label(panel, "Web status", "", 30, 520, 1000, 50, 24, TextAnchor.MiddleLeft, new Color(0.75f, 0.85f, 1f));
         Apply(machine);
 
         OnClick(power, machine, "Power");
         OnClick(reset, machine, "ResetMachine");
         OnClick(pause, machine, "Pause");
+
+        // the beams' angle, for hands and controllers that point elsewhere than the avatar's
+        pointer.pitchLabel = Label(panel, "Beam angle", "", bx, 360, 600, 36, 26, TextAnchor.MiddleLeft, dim);
+        Button beamUp = MakeButton(panel, "Beam up", "Beam up", bx, 404, 190, 70, 26, out unusedText);
+        Button beamDown = MakeButton(panel, "Beam down", "Beam down", bx + 205, 404, 190, 70, 26, out unusedText);
+        Apply(pointer);
+        OnClick(beamUp, pointer, "PitchUp");
+        OnClick(beamDown, pointer, "PitchDown");
         UnityEventTools.AddStringPersistentListener(slider.onValueChanged,
             UdonSharpEditorUtility.GetBackingUdonBehaviour(machine).SendCustomEvent, "SpeedChanged");
 

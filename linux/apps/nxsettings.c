@@ -99,6 +99,8 @@ main(int argc, char **argv)
 			draw();
 			break;
 		case GR_EVENT_TYPE_BUTTON_DOWN:
+			if (ui_wheel(&event))
+				break;
 			i = (event.button.y - 24) / ROW;
 			if (event.button.y >= 24 && i < count) {
 				chosen = i;

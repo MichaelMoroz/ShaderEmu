@@ -29,14 +29,18 @@ and it is the only way this computer becomes usable.
   library sits on it (`programs/linux/gles.c`).
 - **A desktop** (`docs/nanox.md`): Nano-X, with every window in a buffer of its own and the
   screen composed by the GPU. A bar with a Start menu and task buttons, a terminal with
-  scroll-back, an editor, a file manager, paint, a picture viewer, settings, a system monitor,
-  photographs for a desktop, and `glxgears`. The machine starts it by itself at boot.
+  scroll-back, an editor, a file manager, a browser for plain pages, paint, a picture viewer,
+  settings, a system monitor, photographs for a desktop, and `glxgears`. The machine starts
+  it by itself at boot.
+- **Pages from the network** (`docs/fetch.md`): the machine has none of its own, so the browser
+  asks the host, which fetches the page and writes it into memory in one shader pass.
 - **Doom** (`docs/doom.md`): Microwindows' port, with the level drawn by the machine's GPU
   through OpenGL instead of by its CPU.
-- **Keyboard and pointer** as Linux input devices (`docs/input.md`), a display the guest
+- **Keyboard, pointer and wheel** as Linux input devices (`docs/input.md`), a display the guest
   describes in a few control words (`docs/display.md`).
 - **A VRChat world** (`unity/ShaderEmu`): the same shaders run by UdonSharp scripts, with the
-  display, a console, keyboards and a live view of memory on a wall.
+  display, a console, keyboards and a live view of memory on a wall, and a third screen that is a
+  window onto a 3D program's scene, seen in depth from where one stands (`docs/volume.md`).
 
 Speed on an RTX 5090, in emulated instructions per second:
 
@@ -109,7 +113,7 @@ To rebuild the guest software (WSL, no root; everything goes to `~/shaderemu-lin
 - `linux/userland/` – the musl toolchain, the image's init and busybox.
 - `linux/nanox/` – Nano-X: its screen, keyboard and pointer drivers for this machine, our
   patch to Microwindows, the bar, and Doom's video and OpenGL renderer.
-- `linux/apps/` – the desktop's programs: editor, files, paint, viewer, settings, monitor.
+- `linux/apps/` – the desktop's programs: editor, files, browser, paint, viewer, settings, monitor.
 - `linux/prebuilt/` – the kernel and programs already built (sources and licences in its
   README).
 - `programs/` – bare-metal programs in C, and `programs/linux`: the OpenGL library and
@@ -118,13 +122,13 @@ To rebuild the guest software (WSL, no root; everything goes to `~/shaderemu-lin
   that build the scene.
 - `tools/` – the image builder, a software model of the GPU (`gpu_reference.py`), profilers
   (`pc_profile.py`, `boot_profile.py`, `dxil_path.py`), the speed test and the console viewer.
-- `docs/` – one file per subject: `boot`, `gpu`, `display`, `input`, `nanox`, `doom`.
+- `docs/` – one file per subject: `boot`, `gpu`, `display`, `input`, `fetch`, `volume`, `nanox`, `doom`.
 - `rvc/` – a clone of upstream rvc (not part of this repository): its boot images and the
   reference shader.
 
 ## Not done yet
 
-- Sound, and any network: the kernel has upstream's network device, the harness does not back it.
+- Sound, and a real network: pages reach the browser through the host (`docs/fetch.md`), nothing else does.
 - `linux/prebuilt` lags behind the sources between refreshes.
 - The Unity world runs one machine configuration (Linux); the bare-metal images run only in
   the harness.

@@ -278,6 +278,9 @@ main(void)
 	GrSelectEvents(menu, GR_EVENT_MASK_EXPOSURE | GR_EVENT_MASK_BUTTON_DOWN | GR_EVENT_MASK_MOUSE_MOTION |
 		GR_EVENT_MASK_MOUSE_EXIT);
 	GrMapWindow(bar);
+	/* the Windows key, whatever window has the keyboard */
+	GrGrabKey(bar, MWKEY_LMETA, GR_GRAB_HOTKEY);
+	GrGrabKey(bar, MWKEY_RMETA, GR_GRAB_HOTKEY);
 
 	for (;;) {
 		static time_t looked;
@@ -292,7 +295,13 @@ main(void)
 			else
 				draw_menu();
 			break;
+		case GR_EVENT_TYPE_KEY_DOWN:
+			if (event.keystroke.hotkey)
+				show_menu(!menu_open);
+			break;
 		case GR_EVENT_TYPE_BUTTON_DOWN:
+			if (event.button.buttons & (GR_BUTTON_SCROLLUP | GR_BUTTON_SCROLLDN))
+				break;
 			if (event.button.wid == bar) {
 				if (event.button.x < START_WIDTH + 6) {
 					show_menu(!menu_open);

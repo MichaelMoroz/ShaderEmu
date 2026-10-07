@@ -1,0 +1,24 @@
+https://en.wikipedia.org/api/rest_v1/page/random/html	Wikipedia: a random article, another every time
+https://en.wikipedia.org/wiki/Main_Page?action=render	Wikipedia: today's main page
+https://en.wikipedia.org/wiki/Portal:Current_events?action=render	Wikipedia: current events
+https://www.bbc.com/news	BBC News
+https://text.npr.org/	NPR, text only
+https://lite.cnn.com/	CNN Lite
+https://news.ycombinator.com/	Hacker News
+https://news.ycombinator.com/newest	Hacker News: newest
+https://lobste.rs/	Lobsters
+https://slashdot.org/	Slashdot
+https://lwn.net/	LWN: Linux news
+https://tildes.net/	Tildes
+https://plaintextsports.com/	Plain Text Sports: live scores
+https://wttr.in/?T	Weather where you are (wttr.in)
+https://apod.nasa.gov/apod/astropix.html	NASA: astronomy picture of the day (its text)
+https://xkcd.com/	xkcd (its text)
+https://www.google.com/	Google (little without scripts)
+https://www.kernel.org/	The Linux kernel archives
+https://www.gutenberg.org/browse/scores/top	Project Gutenberg: most read books
+https://www.gutenberg.org/cache/epub/84/pg84-images.html	A whole book: Frankenstein (its first 256 KB)
+https://creators.vrchat.com/worlds/udon/string-loading/	VRChat's documentation of how this page was loaded
+https://info.cern.ch/hypertext/WWW/TheProject.html	The first web page (CERN, 1991)
+https://example.com/	example.com
+https://danluu.com/	danluu.com

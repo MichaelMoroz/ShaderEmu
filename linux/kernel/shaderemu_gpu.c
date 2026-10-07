@@ -26,6 +26,7 @@
 #define GPU_INTO	0x50	/* where a copy goes: address, width, height, row length */
 #define KEYBOARD_OWNER	0x30	/* set by a program that takes the keyboard (docs/input.md) */
 #define DISPLAY_CURSOR	0x48	/* 1 while the display shows a cursor (docs/display.md) */
+#define VOLUME_LIST	0x300	/* the frame the volume display shows (docs/volume.md) */
 
 /* arg: the frame counter's value before submitting */
 #define SHADEREMU_GPU_WAIT	_IO('G', 1)
@@ -93,6 +94,8 @@ static int shaderemu_gpu_release(struct inode *inode, struct file *file)
 {
 	writel(0, gpu_regs + KEYBOARD_OWNER);
 	writel(0, gpu_regs + DISPLAY_CURSOR);
+	writel(0, gpu_regs + VOLUME_LIST + 4);
+	writel(0, gpu_regs + VOLUME_LIST);
 	return 0;
 }
 

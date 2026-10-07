@@ -85,7 +85,8 @@ scratch textures up to `0x87700000`; the last 4 MiB are left to one OpenGL progr
 ## The bar, and what a program adds to it
 
 `nxbar` has the Start menu, a button for every open window (a click brings the window to the
-front) and the clock. The menu is whatever the files `/usr/share/nxapps.*` list, one
+front) and the clock. The Windows key opens and closes the menu from anywhere (a key the bar
+grabs with `GrGrabKey`). The menu is whatever the files `/usr/share/nxapps.*` list, one
 `Label=command` a line, so a program gets into it by having its build put such a file in the
 image: `linux/nanox/build.sh` writes `nxapps.10-nanox`, `doom.sh` writes `nxapps.50-doom`.
 
@@ -106,17 +107,22 @@ change.
 
 ## The desktop's programs
 
+Scrolling is shared: `ui.h` has the scroll bar (`ui_scrollbar`, `ui_scroll_to` for a click or
+a drag on it) and `ui_wheel` for a notch of the wheel, which arrives as a button-down event.
+A program that takes clicks must check `ui_wheel` first, or a notch is a click to it.
+
 `linux/apps/` (built by `linux/apps/build.sh` after Nano-X, each one file on `ui.h`):
 
 | Program | What it does |
 |---|---|
-| `nxedit FILE` | a text editor: arrows, Home, End, Page Up and Down, a click places the cursor; Ctrl+S saves, Ctrl+Q quits |
-| `nxfiles [FOLDER]` | a file manager: a click selects, a second click (or Enter) opens: a folder, a picture in the viewer, a program, anything else in the editor. Up, Open, Edit, New file, Delete, Refresh |
+| `nxedit FILE` | a text editor: arrows, Home, End, Page Up and Down, a click places the cursor, the wheel and a scroll bar move through the text; Ctrl+S saves, Ctrl+Q quits |
+| `nxfiles [FOLDER]` | a file manager, a tile with an icon for every entry: a click selects, a second click (or Enter) opens: a folder, a picture in the viewer, a page in the browser, a program, anything else in the editor. Wheel and scroll bar. Up, Open, Edit, New file, Delete, Refresh |
+| `nxweb [ADDRESS]` | a browser for plain HTML (`docs/fetch.md`): Back, Home, Reload, an address to type, wheel and scroll bar |
 | `nxpaint [FILE]` | pen, eraser, line, box, filled box in sixteen colours and three sizes; Save writes a PPM file (`/root/picture.ppm` unless a file was named) |
 | `nxview FILE` | shows a picture as large as fits its window: PPM through the GPU, PGM, BMP, GIF and XPM through the engine's decoders |
 | `nxsettings` | picks the desktop's picture or colour, and says what the machine is. `nxsettings apply` only puts the chosen desktop up (the `nx` script runs it) |
 | `nxmon` | instructions a second over the last minute (from `rdcycle`), how busy Linux is, memory in use |
-| `nxterm` | Microwindows' terminal, patched: it follows its window's size, and Shift+Page Up and Down look back through the last 400 lines |
+| `nxterm` | Microwindows' terminal, patched: it follows its window's size, and Shift+Page Up and Down or the wheel look back through the last 400 lines, with a mark at the right edge for how far |
 
 **Pictures for the desktop** are `/usr/share/wallpaper-NAME.ppm`, made on the host by
 `python tools\make_wallpaper.py [FOLDER ...]`: the Unsplash photographs listed in

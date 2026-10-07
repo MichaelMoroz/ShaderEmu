@@ -73,7 +73,7 @@ float3 display(float2 p, float2 size) {
     float2 q = (p - (size - float2(w, h) * scale) * 0.5) / scale;
     if (q.x < 0 || q.y < 0 || q.x >= w || q.y >= h) return c;
     uint4 cursor = ram(DispCursor);
-    if (cursor.b == 1) {
+    if (cursor.b & 1) {   // the bits above are its hot spot, for a host that draws it itself
         // drawn over whatever the display shows; image words with a zero top byte are clear
         int2 d = int2(floor(q)) - int2(asint(cursor.r), asint(cursor.g));
         if (d.x >= 0 && d.y >= 0 && d.x < 32 && d.y < 32) {
@@ -252,6 +252,14 @@ LRESULT CALLBACK wndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         g_buttons = ((w & MK_LBUTTON) ? 1 : 0) | ((w & MK_RBUTTON) ? 2 : 0) | ((w & MK_MBUTTON) ? 4 : 0);
         if (m == WM_LBUTTONDOWN || m == WM_RBUTTONDOWN || m == WM_MBUTTONDOWN) SetCapture(h);   // keep a drag that leaves the window
         else if (g_buttons == 0 && m != WM_MOUSEMOVE) ReleaseCapture();
+        return 0;
+    }
+    if (m == WM_MOUSEWHEEL) {
+        // a notch is an event of its own in the key ring (docs/input.md): 0x3fe up, 0x3ff down
+        static int turned = 0;
+        turned += GET_WHEEL_DELTA_WPARAM(w);
+        for (; turned >= WHEEL_DELTA; turned -= WHEEL_DELTA) g_keyEvents.push_back(0x800003feu);
+        for (; turned <= -WHEEL_DELTA; turned += WHEEL_DELTA) g_keyEvents.push_back(0x800003ffu);
         return 0;
     }
     if (m == WM_KEYDOWN) {

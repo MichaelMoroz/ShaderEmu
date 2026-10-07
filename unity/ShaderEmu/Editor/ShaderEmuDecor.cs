@@ -94,6 +94,8 @@ public static partial class ShaderEmuBuilder
         return go;
     }
 
+    const float WindowWide = 3.6f, WindowHigh = 1.5f, WindowY = 1.75f, WindowZ = -1.6f;
+
     static Light BakedLight(Transform parent, string name, Vector3 at, Color colour, float intensity, float range)
     {
         Light light = new GameObject(name).AddComponent<Light>();
@@ -106,6 +108,9 @@ public static partial class ShaderEmuBuilder
         light.shadows = LightShadows.Soft;
         light.shadowRadius = 0.25f;
         light.lightmapBakeType = LightmapBakeType.Baked;
+        // On only while the lighting is baked: without baked data Unity draws such a light in
+        // real time, shadows and all, which a headset cannot afford.
+        light.enabled = false;
         return light;
     }
 
@@ -129,6 +134,183 @@ public static partial class ShaderEmuBuilder
         int letter = (int)(x / 6f), column = (int)x % 6;
         if (letter >= text.Length || column >= 5) return false;
         return Glyphs[text[letter]][(int)y][column] == '1';
+    }
+
+    // A quad of the city's mesh, wound to face along `normal`. Corners go round it; `shade`'s
+    // alpha is the haze there.
+    static void CityQuad(List<Vector3> vertices, List<Vector2> uvs, List<Color> colours, List<int> triangles,
+                         Vector3 a, Vector3 b, Vector3 c, Vector3 d, Vector2 ua, Vector2 ub, Vector2 uc, Vector2 ud,
+                         Vector3 normal, Color shade)
+    {
+        int first = vertices.Count;
+        vertices.AddRange(new[] { a, b, c, d });
+        uvs.AddRange(new[] { ua, ub, uc, ud });
+        for (int i = 0; i < 4; i++) colours.Add(shade);
+        bool flip = Vector3.Dot(Vector3.Cross(b - a, c - a), normal) < 0;
+        if (flip) triangles.AddRange(new[] { first, first + 2, first + 1, first, first + 3, first + 2 });
+        else triangles.AddRange(new[] { first, first + 1, first + 2, first, first + 2, first + 3 });
+    }
+
+    static Mesh CityMesh(string name, List<Vector3> vertices, List<Vector2> uvs, List<Color> colours, List<int> triangles)
+    {
+        AssetDatabase.DeleteAsset(Generated + "/" + name + ".asset");
+        Mesh mesh = new Mesh { name = name, indexFormat = IndexFormat.UInt32 };
+        mesh.SetVertices(vertices);
+        mesh.SetUVs(0, uvs);
+        mesh.SetColors(colours);
+        mesh.SetTriangles(triangles, 0);
+        mesh.RecalculateBounds();
+        AssetDatabase.CreateAsset(mesh, Generated + "/" + name + ".asset");
+        return mesh;
+    }
+
+    static void CityObject(Transform parent, string name, Mesh mesh, Material material)
+    {
+        GameObject go = new GameObject(name, typeof(MeshFilter), typeof(MeshRenderer));
+        go.transform.SetParent(parent, false);
+        go.GetComponent<MeshFilter>().sharedMesh = mesh;
+        MeshRenderer renderer = go.GetComponent<MeshRenderer>();
+        renderer.sharedMaterial = material;
+        renderer.shadowCastingMode = ShadowCastingMode.Off;
+        renderer.receiveShadows = false;
+        renderer.lightProbeUsage = LightProbeUsage.Off;
+        renderer.reflectionProbeUsage = ReflectionProbeUsage.Off;
+    }
+
+    // The city outside the window, which is 42 m above its streets: one building a block, as
+    // two meshes (towers, streets) of plain unlit geometry. `window` is the opening's centre.
+    static void City(Transform decor, Vector3 window)
+    {
+        const float block = 16f, above = 42f, storey = 3.3f, bay = 2.4f;
+        const int across = 30, rows = 40, cells = 16;
+        System.Random random = new System.Random(11);
+        System.Func<float, float, float> rand = (a, b) => a + (float)random.NextDouble() * (b - a);
+
+        // windows: a tile of 16 x 16, some lit warm, a few cool, most dark
+        Color[] lit = new Color[cells * cells];
+        for (int i = 0; i < lit.Length; i++)
+        {
+            double chance = random.NextDouble();
+            Color warm = random.NextDouble() < 0.25 ? new Color(0.65f, 0.85f, 1f) : new Color(1f, 0.72f, 0.38f);
+            lit[i] = chance > 0.62 ? warm * rand(0.55f, 1f) : new Color(0.05f, 0.06f, 0.09f);
+        }
+        Texture2D windowsTex = Pattern("CityWindows", 256, (u, v) =>
+        {
+            float x = u * cells, y = v * cells;
+            float fx = x - Mathf.Floor(x), fy = y - Mathf.Floor(y);
+            bool glass = fx > 0.18f && fx < 0.82f && fy > 0.25f && fy < 0.80f;
+            Color c = glass ? lit[((int)y % cells) * cells + (int)x % cells] : new Color(0.07f, 0.075f, 0.10f);
+            c.a = 1f;
+            return c;
+        });
+        Texture2D streetTex = Pattern("CityStreet", 128, (u, v) =>
+        {
+            // one block: dark ground, a lighter road round it, lamps along the road
+            float gx = Mathf.Abs(u - 0.5f), gy = Mathf.Abs(v - 0.5f);
+            bool road = Mathf.Max(gx, gy) > 0.42f;
+            float lx = Mathf.Abs(Mathf.Repeat(u * 4f, 1f) - 0.5f), ly = Mathf.Abs(Mathf.Repeat(v * 4f, 1f) - 0.5f);
+            float lamp = road ? Mathf.Clamp01(1f - Mathf.Sqrt(lx * lx + ly * ly) * 7f) : 0f;
+            Color c = road ? new Color(0.20f, 0.17f, 0.14f) : new Color(0.07f, 0.07f, 0.08f);
+            return c + new Color(1f, 0.7f, 0.35f) * lamp;
+        });
+        Material towerMat = Mat("City", "ShaderEmu/City");
+        towerMat.mainTexture = windowsTex;
+        Material streetMat = Mat("CityStreet", "ShaderEmu/City");
+        streetMat.mainTexture = streetTex;
+
+        Transform city = new GameObject("City").transform;
+        city.SetParent(decor, false);
+        Vector3 origin = new Vector3(window.x, window.y - above, window.z);   // street level, under the window
+        System.Func<Vector3, float> haze = p => 1f - Mathf.Exp(-Vector3.Distance(p, window) / 900f);
+
+        List<Vector3> vertices = new List<Vector3>();
+        List<Vector2> uvs = new List<Vector2>();
+        List<Color> colours = new List<Color>();
+        List<int> triangles = new List<int>();
+        for (int r = 2; r < rows; r++)   // nothing in the first two rows of blocks
+            for (int a = -across; a < across; a++)
+            {
+                float seed = rand(0f, 1f), side = block * rand(0.26f, 0.40f), extra = rand(0f, 30f);
+                Vector2 offset = new Vector2(random.Next(cells), random.Next(cells)) / cells;
+                if (seed < 0.22f) continue;   // an empty lot
+                float tall = 14f + 80f * seed * seed + (seed > 0.8f ? extra : 0f);
+                Vector3 centre = origin + new Vector3((r + 0.5f) * block, 0, (a + 0.5f) * block);
+                float x0 = centre.x - side, x1 = centre.x + side, z0 = centre.z - side, z1 = centre.z + side, y0 = origin.y, y1 = origin.y + tall;
+                float h = haze(new Vector3(x0, window.y, centre.z));
+                float us = 2f * side / bay / cells, vs = tall / storey / cells;
+                Vector2 u00 = offset, u10 = offset + new Vector2(us, 0), u11 = offset + new Vector2(us, vs), u01 = offset + new Vector2(0, vs);
+                // the three walls the room can see, and the roof (dark: a spot of wall between windows)
+                CityQuad(vertices, uvs, colours, triangles, new Vector3(x0, y0, z0), new Vector3(x0, y0, z1), new Vector3(x0, y1, z1), new Vector3(x0, y1, z0),
+                         u00, u10, u11, u01, Vector3.left, new Color(1f, 1f, 1f, h));
+                CityQuad(vertices, uvs, colours, triangles, new Vector3(x0, y0, z0), new Vector3(x1, y0, z0), new Vector3(x1, y1, z0), new Vector3(x0, y1, z0),
+                         u00, u10, u11, u01, Vector3.back, new Color(0.6f, 0.6f, 0.6f, h));
+                CityQuad(vertices, uvs, colours, triangles, new Vector3(x0, y0, z1), new Vector3(x1, y0, z1), new Vector3(x1, y1, z1), new Vector3(x0, y1, z1),
+                         u00, u10, u11, u01, Vector3.forward, new Color(0.6f, 0.6f, 0.6f, h));
+                CityQuad(vertices, uvs, colours, triangles, new Vector3(x0, y1, z0), new Vector3(x1, y1, z0), new Vector3(x1, y1, z1), new Vector3(x0, y1, z1),
+                         Vector2.zero, Vector2.zero, Vector2.zero, Vector2.zero, Vector3.up, new Color(0.5f, 0.5f, 0.5f, h));
+            }
+        CityObject(city, "Towers", CityMesh("CityTowers", vertices, uvs, colours, triangles), towerMat);
+
+        vertices.Clear();
+        uvs.Clear();
+        colours.Clear();
+        triangles.Clear();
+        for (int r = 0; r < rows + 8; r++)
+            for (int a = -across - 8; a < across + 8; a++)
+            {
+                Vector3 p = origin + new Vector3(r * block, 0, a * block);
+                Vector3 q = p + new Vector3(block, 0, block);
+                float h = haze(new Vector3(p.x, origin.y, p.z));
+                CityQuad(vertices, uvs, colours, triangles, p, new Vector3(q.x, p.y, p.z), q, new Vector3(p.x, p.y, q.z),
+                         new Vector2(0, 0), new Vector2(1, 0), new Vector2(1, 1), new Vector2(0, 1), Vector3.up, new Color(1f, 1f, 1f, h));
+            }
+        CityObject(city, "Streets", CityMesh("CityStreets", vertices, uvs, colours, triangles), streetMat);
+    }
+
+    // The night sky as a panorama for the skybox: dark above, the city's glow on the haze at
+    // the horizon, stars, and a moon on the window's side of the room.
+    static Material NightSky()
+    {
+        const int wide = 2048, high = 1024;
+        string path = Root + "/Textures/NightSky.png";
+        Color[] pixels = new Color[wide * high];
+        Vector3 moon = new Vector3(0.84f, 0.42f, 0.35f).normalized;
+        for (int y = 0; y < high; y++)
+            for (int x = 0; x < wide; x++)
+            {
+                // as Unity's panoramic skybox reads it: u = 0.5 looks along +x, v = 1 straight up
+                float angle = (0.5f - (x + 0.5f) / wide) * 2f * Mathf.PI, up = Mathf.Cos((1f - (y + 0.5f) / high) * Mathf.PI);
+                float flat = Mathf.Sqrt(Mathf.Max(0f, 1f - up * up));
+                Vector3 d = new Vector3(Mathf.Cos(angle) * flat, up, Mathf.Sin(angle) * flat);
+                Color c = Color.Lerp(new Color(0.10f, 0.13f, 0.26f), new Color(0.004f, 0.006f, 0.02f), Mathf.Clamp01(d.y * 1.6f + 0.1f));
+                c += new Color(0.30f, 0.16f, 0.10f) * Mathf.Pow(Mathf.Clamp01(1f - Mathf.Abs(d.y) * 6f), 3f);
+                if (d.y < 0) c = Color.Lerp(new Color(0.12f, 0.09f, 0.10f), new Color(0.01f, 0.01f, 0.015f), Mathf.Clamp01(-d.y * 3f));
+                float m = Vector3.Dot(d, moon);
+                if (m > 0.9985f) c = new Color(0.95f, 0.93f, 0.85f);
+                else c += new Color(0.25f, 0.25f, 0.3f) * Mathf.Pow(Mathf.Clamp01(m), 60f);
+                pixels[y * wide + x] = new Color(Mathf.LinearToGammaSpace(c.r), Mathf.LinearToGammaSpace(c.g), Mathf.LinearToGammaSpace(c.b), 1f);
+            }
+        System.Random random = new System.Random(5);
+        for (int i = 0; i < 2600; i++)
+        {
+            // stars: evenly over the upper half of the sphere, most of them faint
+            float v = 0.5f + 0.5f * Mathf.Asin((float)random.NextDouble()) / (Mathf.PI / 2f);
+            int x = random.Next(wide), y = Mathf.Min(high - 1, (int)(v * high));
+            float bright = Mathf.Pow((float)random.NextDouble(), 3f) * 0.9f + 0.1f;
+            if (y < high * 0.52f) continue;
+            pixels[y * wide + x] += new Color(bright, bright, bright * 1.05f, 0f);
+        }
+        Texture2D tex = new Texture2D(wide, high, TextureFormat.RGBA32, false);
+        tex.SetPixels(pixels);
+        File.WriteAllBytes(path, tex.EncodeToPNG());
+        Object.DestroyImmediate(tex);
+        AssetDatabase.ImportAsset(path);
+        Material sky = Mat("NightSky", "Skybox/Panoramic");
+        sky.SetTexture("_MainTex", AssetDatabase.LoadAssetAtPath<Texture2D>(path));
+        sky.SetFloat("_Mapping", 1f);     // latitude and longitude
+        sky.SetFloat("_ImageType", 0f);   // all the way round
+        sky.SetFloat("_Exposure", 1f);
+        return sky;
     }
 
     static void Decorate(Transform world, Transform room, float halfW, float halfD, float height,
@@ -203,7 +385,6 @@ public static partial class ShaderEmuBuilder
         Material stripMat = Glow("Strip", new Color(0.25f, 1.1f, 1.6f));
         Material amberMat = Glow("Amber", new Color(1.8f, 0.9f, 0.15f));
         Material shadeMat = Glow("Shade", new Color(1.9f, 1.35f, 0.8f));
-        Material cityMat = Mat("WindowCity", "ShaderEmu/WindowCity");
         Color[] spines =
         {
             new Color(0.55f, 0.16f, 0.14f), new Color(0.16f, 0.30f, 0.52f), new Color(0.20f, 0.42f, 0.26f),
@@ -367,12 +548,14 @@ public static partial class ShaderEmuBuilder
             }
         }
 
-        // ---- a wide window on the right wall, the city at night behind it (WindowCity.shader)
-        const float windowWide = 3.6f, windowHigh = 1.5f;
-        Vector3 windowAt = new Vector3(halfW - 0.012f, 1.75f, -1.6f);
-        GameObject pane = Prim(decor, PrimitiveType.Quad, "Window", windowAt, new Vector3(windowWide, windowHigh, 1f), cityMat);
-        pane.transform.localEulerAngles = new Vector3(0, 90f, 0);   // seen from inside the room
-        pane.isStatic = false;
+        // ---- a wide window on the right wall: an opening (Build leaves it in the wall) onto the city
+        const float windowWide = WindowWide, windowHigh = WindowHigh;
+        Vector3 windowAt = new Vector3(halfW - 0.012f, WindowY, WindowZ);
+        BoxCollider closed = new GameObject("Window (nobody climbs out)").AddComponent<BoxCollider>();
+        closed.transform.SetParent(decor, false);
+        closed.transform.localPosition = new Vector3(halfW + 0.1f, WindowY, WindowZ);
+        closed.size = new Vector3(0.2f, windowHigh, windowWide);
+        City(decor, new Vector3(halfW + 0.2f, WindowY, WindowZ));
         Box(decor, "Window top", windowAt + new Vector3(-0.03f, windowHigh / 2 + 0.035f, 0), new Vector3(0.08f, 0.07f, windowWide + 0.14f), trimMat, false);
         RBox(decor, "Window sill", windowAt + new Vector3(-0.08f, -windowHigh / 2 - 0.03f, 0), new Vector3(0.20f, 0.06f, windowWide + 0.2f), trimMat, 0.02f);
         for (int i = 0; i <= 3; i++)
@@ -437,7 +620,7 @@ public static partial class ShaderEmuBuilder
         // all of the light is baked: no sun, and only a little flat ambient under it
         RenderSettings.ambientMode = AmbientMode.Flat;
         RenderSettings.ambientLight = new Color(0.035f, 0.04f, 0.05f);
-        RenderSettings.skybox = null;
+        RenderSettings.skybox = NightSky();
         foreach (GameObject go in world.gameObject.scene.GetRootGameObjects())
         {
             Light sun = go.GetComponent<Light>();
@@ -474,14 +657,15 @@ public static partial class ShaderEmuBuilder
         Label(board, "Do head", "WHAT YOU CAN DO", left, 620, columnWide, 44, 36, TextAnchor.MiddleLeft, head);
         Label(board, "Do",
               "Press Power on the control panel. Linux boots in a few seconds and starts the desktop.\n\n" +
-              "DISPLAY: point at it and your laser is the mouse (trigger = left button, grip = right).\n" +
-              "Keyboards on the desk: type on them, or press 'Use my keyboard' to use your real one.\n" +
-              "Start menu: Terminal, Editor, Files, Paint, Settings (pick a desktop picture), Monitor, " +
-              "Doom, glxgears and a few small games.\n" +
+              "DISPLAY: each hand's beam is the mouse (trigger = left, grip = right, right stick = wheel).\n" +
+              "Keyboards on the desk: both hands type, or press 'Use my keyboard' to use your real one.\n" +
+              "Start menu (or the Win key): Terminal, Editor, Files, Web, Paint, Settings, Monitor, " +
+              "Doom, glxgears and games. Web opens only a fixed list of sites, not the links inside " +
+              "them: VRChat lets a world load only addresses it was built with.\n" +
               "CONSOLE: the machine's serial line, a Linux shell of its own.\n" +
               "MEMORY: all of the machine's memory at once; what is being written glows.\n" +
               "Speed: how many instructions the machine runs each frame.",
-              left, 670, columnWide, 560, 33, TextAnchor.UpperLeft, body);
+              left, 670, columnWide, 578, 33, TextAnchor.UpperLeft, body);
 
         Label(board, "How head", "WHY IT IS USABLE AT ALL", left, 1250, columnWide, 44, 36, TextAnchor.MiddleLeft, head);
         Label(board, "How",
@@ -523,22 +707,46 @@ public static partial class ShaderEmuBuilder
         settings.bakedGI = true;
         settings.realtimeGI = false;
         settings.autoGenerate = false;
-        settings.lightmapper = LightingSettings.Lightmapper.ProgressiveGPU;
+        // on the processor: the GPU lightmapper runs out of memory and stalls beside a headset
+        settings.lightmapper = LightingSettings.Lightmapper.ProgressiveCPU;
         settings.mixedBakeMode = MixedLightingMode.Subtractive;
         settings.directionalityMode = LightmapsMode.NonDirectional;
-        settings.lightmapResolution = 30f;
+        settings.lightmapResolution = 24f;   // texels a metre: fewer, and small objects share texels
         settings.lightmapMaxSize = 2048;
         settings.lightmapPadding = 4;
-        settings.directSampleCount = 32;
-        settings.indirectSampleCount = 128;
-        settings.environmentSampleCount = 32;
+        settings.directSampleCount = 64;
+        settings.indirectSampleCount = 512;
+        settings.environmentSampleCount = 128;
         settings.maxBounces = 3;
         settings.ao = true;
         settings.aoMaxDistance = 0.7f;
         settings.filteringMode = LightingSettings.FilterMode.Auto;
         EditorUtility.SetDirty(settings);
         Lightmapping.lightingSettings = settings;
+        foreach (Light light in RoomLights()) light.enabled = true;
+        Lightmapping.bakeCompleted -= Baked;
+        Lightmapping.bakeCompleted += Baked;
         Lightmapping.BakeAsync();
         Debug.Log("[ShaderEmu] lighting bake started");
+    }
+
+    static List<Light> RoomLights()
+    {
+        List<Light> lights = new List<Light>();
+        foreach (GameObject root in UnityEngine.SceneManagement.SceneManager.GetActiveScene().GetRootGameObjects())
+            foreach (Light light in root.GetComponentsInChildren<Light>(true))
+                if (light.lightmapBakeType == LightmapBakeType.Baked) lights.Add(light);
+        return lights;
+    }
+
+    // The lamps have done their work: off again, and the scene saved with its lightmap.
+    static void Baked()
+    {
+        Lightmapping.bakeCompleted -= Baked;
+        foreach (Light light in RoomLights()) light.enabled = false;
+        UnityEngine.SceneManagement.Scene scene = UnityEngine.SceneManagement.SceneManager.GetActiveScene();
+        UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(scene);
+        UnityEditor.SceneManagement.EditorSceneManager.SaveScene(scene);
+        Debug.Log("[ShaderEmu] lighting baked, lamps off, scene saved");
     }
 }

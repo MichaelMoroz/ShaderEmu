@@ -104,6 +104,15 @@ public:
         return true;
     }
 
+    bool deliverHostData(Material&, const uint8_t* rgba, std::string&) override {
+        dx_.flush();
+        textures_["_HostData"] = uploadTexture(dx_, kFetchSide, kFetchSide, DXGI_FORMAT_R8G8B8A8_UNORM, 4, rgba,
+                                               D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        tablesBuilt_ = false;
+        deliver_ = true;
+        return true;
+    }
+
     bool setState(const void* texels, std::string&) override {
         dx_.flush();
         std::vector<uint8_t> zero;
@@ -140,14 +149,15 @@ public:
         mat.setFloat("CustomRenderTexturePrimitiveIDs", 0);
         mat.setVector("_CustomRenderTextureInfo", kWidth, kHeight, 1, 0);
 
-        auto draw = [&](int p, double cx, double cy, double zw, double zh) {
+        auto draw = [&](int p, double cx, double cy, double zw, double zh, int cb = -1) {
             cl_->RSSetScissorRects(1, &scissor);
             Pass12& P = passes_[p];
             mat.setVector("CustomRenderTextureCenters", cx, cy, 0.5, 0);
             mat.setVector("CustomRenderTextureSizesAndRotations", zw, zh, 1, 0);
             mat.fillGlobals(P.vs);
             mat.fillGlobals(P.ps);
-            UINT64 base = ((UINT64)slot * 16 + (UINT64)p * 2) * kCbBytes;   // 16 per frame: two a pass, then the GPU draws
+            // 16 per frame: two a pass (the fetch zone's draw has the fourth pair), then the GPU draws
+            UINT64 base = ((UINT64)slot * 16 + (UINT64)(cb < 0 ? p : cb) * 2) * kCbBytes;
             if (P.vs.hasGlobals) memcpy(cbMapped_ + base, P.vs.scratch.data(), P.vs.scratch.size());
             if (P.ps.hasGlobals) memcpy(cbMapped_ + base + kCbBytes, P.ps.scratch.data(), P.ps.scratch.size());
             cl_->SetPipelineState(P.pso.Get());
@@ -253,9 +263,9 @@ public:
             cl_->ResourceBarrier(1, &toPixel);
             cl_->RSSetViewports(1, &vp);
             // then the control zone on the state texture: mark the list drawn, deliver input
-            {
-                const float* zn = kGpuControlZone;
-                draw(2, zn[0], zn[1], zn[2], zn[3]);
+            for (int z = 0; z < (deliver_ ? 2 : 1); ++z) {
+                const float* zn = z == 0 ? kGpuControlZone : kFetchZone;
+                draw(2, zn[0], zn[1], zn[2], zn[3], z == 0 ? -1 : 3);
                 D3D12_RESOURCE_BARRIER in[2] = {
                     transition(state_[dst].Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE),
                     transition(state_[cur].Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST)};
@@ -271,6 +281,7 @@ public:
                     transition(state_[cur].Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE)};
                 cl_->ResourceBarrier(2, out);
             }
+            deliver_ = false;
             // back to the names the rest of the frame uses: dst = the new state, in RENDER_TARGET
             D3D12_RESOURCE_BARRIER swapOut[2] = {
                 transition(state_[cur].Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET),
@@ -591,6 +602,7 @@ private:
     std::map<std::string, ComPtr<ID3D12Resource>> textures_;
     int cur_ = 0;
     bool tablesBuilt_ = false;
+    bool deliver_ = false;   // the fetch zone is drawn in the next frame
     ComPtr<ID3D12DescriptorHeap> rtvHeap_, srvHeap_;
     D3D12_CPU_DESCRIPTOR_HANDLE rtv_[2]{};
     UINT srvStep_ = 0;

@@ -15,12 +15,17 @@
 
 #define GPU_PHYS 0x87000000u
 #define GPU_SIZE 0x00b00000u
-#define LIST_AT 0x00700000u        // the frame's commands
-#define UNIFORMS_AT 0x00730000u    // then its matrix blocks, eight vectors each
-#define VERTICES_AT 0x00740000u    // then its vertices
-#define TEXTURES_AT 0x007c0000u    // then textures, to the end
-#define MAX_COMMANDS 3072
-#define MAX_BLOCKS 512
+// A frame's commands, matrix blocks and vertices are a set; frames alternate between two sets,
+// so the frame shown last stays whole while the next is built (the volume display draws it
+// again and again from its own point of view, docs/volume.md).
+#define SETS_AT 0x00700000u
+#define SET_SIZE 0x00060000u
+#define UNIFORMS_IN 0x00018000u    // within a set: its matrix blocks, eight vectors each
+#define VERTICES_IN 0x00020000u    // and its vertices
+#define TEXTURES_AT 0x007c0000u    // textures, to the end
+#define MAX_COMMANDS 1536
+#define MAX_BLOCKS 256
+#define REG_VOLUME 0x300           // the last whole frame: list address, command count, frames so far
 #define MAX_MESH 196608            // vertices the device's mesh has for one list
 #define REG_PALETTE 0x400
 #define REG_SUBMIT 0x10            // submit, list address, command count
@@ -41,6 +46,7 @@ static int swaps;
 static uint32_t buffers_seen;
 
 static uint32_t commands, blocks, mesh_vertices, vertex_top, texture_top = TEXTURES_AT, passes_used;
+static uint32_t set_at = SETS_AT;   // the set the frame being built is in
 static uint32_t* last_draw;   // the command the next vertices may join, with what it was made for
 static uint32_t last_state[6];
 
@@ -94,7 +100,7 @@ int seglInit(unsigned int nano_x_window) {
     modelview[0] = projection[0] = identity;
     view_w = window_info.width;
     view_h = window_info.height;
-    vertex_top = VERTICES_AT;
+    vertex_top = set_at + VERTICES_IN;
     return 0;
 }
 
@@ -131,16 +137,20 @@ void seglSwap(void) {
         regs[REG_INTO / 4 + 1] = window_info.width;
         regs[REG_INTO / 4 + 2] = window_info.height;
         regs[REG_INTO / 4 + 3] = window_info.surface_row;
-        regs[REG_SUBMIT / 4 + 1] = GPU_PHYS + LIST_AT;
+        regs[REG_SUBMIT / 4 + 1] = GPU_PHYS + set_at;
         regs[REG_SUBMIT / 4 + 2] = commands;
         regs[REG_SUBMIT / 4] = 1 | 4 | passes_used << 8;   // draw, copy into the window; the passes used
         __atomic_store_n(&regs[REG_LOCK / 4], 0, __ATOMIC_RELEASE);
         // the list and the textures are memory the program goes on to change: wait until drawn
         while (regs[REG_SUBMIT / 4] != 0) next_frame();
+        regs[REG_VOLUME / 4 + 1] = commands;
+        regs[REG_VOLUME / 4] = GPU_PHYS + set_at;
+        regs[REG_VOLUME / 4 + 2]++;
+        set_at = set_at == SETS_AT ? SETS_AT + SET_SIZE : SETS_AT;
     }
     commands = blocks = mesh_vertices = passes_used = 0;
     last_draw = 0;
-    vertex_top = VERTICES_AT;
+    vertex_top = set_at + VERTICES_IN;
     matrices_dirty = 1;
 }
 
@@ -148,7 +158,7 @@ void seglSwap(void) {
 
 static uint32_t* command(uint32_t op, uint32_t mesh) {
     if (commands == MAX_COMMANDS || mesh_vertices + mesh > MAX_MESH) return 0;
-    uint32_t* c = (uint32_t*)(gpu + LIST_AT) + 16 * commands++;
+    uint32_t* c = (uint32_t*)(gpu + set_at) + 16 * commands++;
     c[0] = op;
     c[3] = mesh_vertices;
     mesh_vertices += mesh;
@@ -390,7 +400,7 @@ void glColorTableEXT(GLenum target, GLenum internal, GLsizei count, GLenum forma
 // in (rows 0-3), then the modelview (rows 4-6), which the device applies first.
 static uint32_t matrix_block(void) {
     if (matrices_dirty && blocks < MAX_BLOCKS) {
-        GLfixed* u = (GLfixed*)(gpu + UNIFORMS_AT) + 32 * blocks++;
+        GLfixed* u = (GLfixed*)(gpu + set_at + UNIFORMS_IN) + 32 * blocks++;
         const matrix* p = &projection[projection_top];
         const matrix* m = &modelview[modelview_top];
         int w = window_info.width ? window_info.width : 1, h = window_info.height ? window_info.height : 1;
@@ -407,7 +417,7 @@ static uint32_t matrix_block(void) {
         }
         matrices_dirty = 0;
     }
-    return GPU_PHYS + UNIFORMS_AT + 128 * (blocks ? blocks - 1 : 0);
+    return GPU_PHYS + set_at + UNIFORMS_IN + 128 * (blocks ? blocks - 1 : 0);
 }
 
 // The arrays a draw reads, copied out of the state once: a store to GPU memory cannot change these.
@@ -439,7 +449,7 @@ void glDrawArrays(GLenum mode, GLint first, GLsizei count) {
                       mode == GL_TRIANGLES ? (uint32_t)count - count % 3 : ((uint32_t)count - 2) * 3;
     uint32_t mesh = quads ? stored / 4 * 6 : stored;
     uint32_t vertex = VERTEX_CLIP | VERTEX_MODELVIEW | VERTEX_COMPACT | (quads ? VERTEX_QUADS : 0);
-    if (vertex_top + stored * 16 > TEXTURES_AT || mesh_vertices + mesh > MAX_MESH) return;
+    if (vertex_top + stored * 16 > set_at + SET_SIZE || mesh_vertices + mesh > MAX_MESH) return;
     uint32_t block = matrix_block();
     uint32_t state[6] = {vertex, fragment, block, x->address, colour, (uint32_t)key_index};
     uint32_t* to = (uint32_t*)(gpu + vertex_top);
@@ -447,7 +457,7 @@ void glDrawArrays(GLenum mode, GLint first, GLsizei count) {
     // more of the same joins the command before: one command, and one draw, per run of state
     int same = 1;
     for (int i = 0; i < 6; i++) same &= state[i] == last_state[i];   // (the library's memcmp goes a byte at a time)
-    if (last_draw && last_draw == (uint32_t*)(gpu + LIST_AT) + 16 * (commands - 1) && same) {
+    if (last_draw && last_draw == (uint32_t*)(gpu + set_at) + 16 * (commands - 1) && same) {
         last_draw[2] += mesh;
         mesh_vertices += mesh;
     } else {

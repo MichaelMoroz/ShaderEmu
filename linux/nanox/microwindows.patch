@@ -1,5 +1,5 @@
 diff --git a/src/demos/nanox/nxterm.c b/src/demos/nanox/nxterm.c
-index 91ec808..1c8d4c9 100755
+index 91ec808..baabb30 100755
 --- a/src/demos/nanox/nxterm.c
 +++ b/src/demos/nanox/nxterm.c
 @@ -74,13 +74,22 @@
@@ -28,7 +28,7 @@ index 91ec808..1c8d4c9 100755
  //#define stdbackground GR_COLOR_GAINSBORO
  //#define stdbackground BLUE
  #define	LINEBUF         stdcol
-@@ -160,6 +169,125 @@ void rendition(int escvalue);
+@@ -160,6 +169,131 @@ void rendition(int escvalue);
  
  /* **************************************************************************/
  
@@ -143,6 +143,12 @@ index 91ec808..1c8d4c9 100755
 +	}
 +	for (r = 0; r < row; r++)
 +		back_row(r);
++	/* a mark at the right edge: how far back of all that is kept */
++	GrSetGCForeground(gc1, GR_RGB(96, 96, 96));
++	GrFillRect(w1, gc1, winw - 4, 0, 4, winh);
++	GrSetGCForeground(gc1, GR_RGB(230, 230, 230));
++	r = winh * row / (kept + row);
++	GrFillRect(w1, gc1, winw - 4, (winh - r) * (kept - back) / kept, 4, r);
 +	GrSetGCForeground(gc1, gi.foreground);
 +}
 +
@@ -154,7 +160,7 @@ index 91ec808..1c8d4c9 100755
  void sflush(void)
  {
  	if (sbufcnt) {
-@@ -194,17 +322,19 @@ void sadd(char c)
+@@ -194,17 +328,19 @@ void sadd(char c)
  
  void show_cursor(void)
  {
@@ -175,7 +181,7 @@ index 91ec808..1c8d4c9 100755
  		if(!curvis) {
  			curvis = 1;
  			show_cursor();
-@@ -549,28 +679,28 @@ void rendition(int escvalue) {
+@@ -549,28 +685,28 @@ void rendition(int escvalue) {
  		} else if ((escvalue>29) && (escvalue<38)){
      		switch(escvalue) {
  		    case 30:
@@ -212,7 +218,7 @@ index 91ec808..1c8d4c9 100755
      			break;
  		    case 39:
      			GrSetGCForeground(gc1, stdforeground); //default color
-@@ -579,28 +709,28 @@ void rendition(int escvalue) {
+@@ -579,28 +715,28 @@ void rendition(int escvalue) {
  		} else if ((escvalue>39) && (escvalue<49)){
      		switch(escvalue) {
  		    case 40:
@@ -249,7 +255,18 @@ index 91ec808..1c8d4c9 100755
      			break;
  		    case 49:
      			GrSetGCBackground(gc1, stdbackground); //default color
-@@ -1158,6 +1288,12 @@ term(void)
+@@ -1155,9 +1291,23 @@ term(void)
+ 			exit(0);
+ 			break;
+ 
++		case GR_EVENT_TYPE_BUTTON_DOWN:
++			/* the wheel looks back three rows a notch */
++			if (wevent.button.buttons & GR_BUTTON_SCROLLUP)
++				scroll_back(3);
++			else if (wevent.button.buttons & GR_BUTTON_SCROLLDN)
++				scroll_back(-3);
++			break;
++
  		case GR_EVENT_TYPE_KEY_DOWN:
  		  /* deal with special keys*/
  			kp = (GR_EVENT_KEYSTROKE *)&wevent;
@@ -262,7 +279,7 @@ index 91ec808..1c8d4c9 100755
  			if (kp->ch & MWKEY_NONASCII_MASK)
  				if (termtype == ANSI){
  				bufflen = do_special_key_ansi(buf,kp->ch,kp->modifiers);
-@@ -1188,6 +1324,28 @@ term(void)
+@@ -1188,6 +1338,28 @@ term(void)
  			 */
  			if (wevent.update.utype == GR_UPDATE_UNMAPTEMP)
  				hide_cursor();
@@ -291,7 +308,7 @@ index 91ec808..1c8d4c9 100755
  			break;
  
  		case GR_EVENT_TYPE_EXPOSURE:
-@@ -1199,6 +1357,7 @@ term(void)
+@@ -1199,6 +1371,7 @@ term(void)
  
  		case GR_EVENT_TYPE_FDINPUT:
  			if (!gotexpose) break;	/* wait until mapped before reading */

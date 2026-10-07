@@ -3,7 +3,9 @@ using TMPro;
 using UdonSharp;
 using UnityEngine;
 using UnityEngine.UI;
+using VRC.SDK3.Components;
 using VRC.SDK3.Rendering;
+using VRC.SDK3.StringLoading;
 using VRC.SDKBase;
 using VRC.Udon.Common.Interfaces;
 
@@ -21,11 +23,14 @@ public class EmuMachine : UdonSharpBehaviour
     public Material tickMaterial;           // MachineTick.shader: CPUTick
     public Material machineMaterial;        // Machine.shader: passes Commit and GPUControl
     public Material gpuMaterial;            // the GPU mesh's material
+    public Material volumeMaterial;         // the volume display's: the same lists, seen from the room
     public Camera gpuCamera;                // disabled: rendered from here, once a round
-    public Material displayMaterial;
+    public Material displayMaterial;        // Display.shader: decodes the display from the state
+    public RenderTexture displayTexture;    // the decoded picture, a pixel a texel, with mipmaps
+    public Material displayShowMaterial;    // DisplayShow.shader, on the wall
     public Material heatMaterial;           // the memory view's
     public Material readbackMaterial;
-    public RenderTexture readbackTexture;   // 320 x 1, one pixel per word
+    public RenderTexture readbackTexture;   // 448 x 1, one pixel per word
 
     public EmuTerminal terminal;
     public EmuKeyboard consoleKeyboard;
@@ -35,6 +40,15 @@ public class EmuMachine : UdonSharpBehaviour
     // A missing texture is left black.
     public Texture2D[] imageTextures;
     public Texture2D blackTexture;
+
+    // Pages for the guest's browser (docs/fetch.md). A world can only load the addresses it
+    // was built with, and the one a visitor types into the field on the panel.
+    public string[] siteAddresses;
+    public VRCUrl[] siteUrls;
+    public VRCUrlInputField typedUrl;
+    public InputField wantedLink;      // an address the browser wants and the world may not open: to copy
+    public Texture2D hostData;         // 256 x 256: an answer's bytes, four a texel
+    public TextMeshProUGUI fetchLabel;
 
     public TextMeshProUGUI statsText;
     public TextMeshProUGUI speedLabel;
@@ -46,7 +60,9 @@ public class EmuMachine : UdonSharpBehaviour
     [HideInInspector] public int displayMode, displayWidth, displayHeight;
     [HideInInspector] public bool keyboardOwned;   // a guest program reads the keyboard device
 
-    private const int Words = 320;
+    private const int Words = 448;
+    private const int FetchMost = 262144;
+    private const int FetchIdle = 0, FetchLoading = 1, FetchPacking = 2, FetchReady = 3, FetchDelivering = 4;
     private const int UartBurst = 4;
     private const int InitFrames = 2;
     private const int TicksPerRound = 8192;   // more per tick pass only fills the write cache
@@ -66,6 +82,14 @@ public class EmuMachine : UdonSharpBehaviour
     private uint keySeq;
     private uint lastMs;
     private int pointerX, pointerY, pointerButtons;
+    private bool pointerOn;            // a beam is on the display
+
+    private int fetchState;
+    private uint fetchSeq, fetchAnswered;
+    private int fetchLength, fetchStatus, fetchPacked;
+    private float fetchStarted;
+    private byte[] fetchBytes;
+    private Color32[] fetchPixels = new Color32[65536];
 
     private bool haveClock;
     private uint lastClock, lastCommits, pc, lastStall, gpuFrames;
@@ -133,6 +157,16 @@ public class EmuMachine : UdonSharpBehaviour
         if (powerLabel != null) powerLabel.text = powered ? "Power off" : "Power on";
         if (pauseLabel != null) pauseLabel.text = paused ? "Resume" : "Pause";
         displayMaterial.SetFloat("_Power", powered ? 1f : 0f);
+        ShowDisplay();
+    }
+
+    private void ShowDisplay()
+    {
+        if (current == null) return;
+        displayMaterial.SetTexture("_State", current);
+        displayMaterial.SetVector("_HostPointer", new Vector4(pointerX, pointerY, pointerOn ? 1 : 0, 0));
+        VRCGraphics.Blit(current, displayTexture, displayMaterial);
+        displayShowMaterial.SetVector("_Size", new Vector4(powered ? displayWidth : 0, powered ? displayHeight : 0, 0, 0));
     }
 
     private Texture Pick(int index)
@@ -196,6 +230,9 @@ public class EmuMachine : UdonSharpBehaviour
         if (consoleKeyboard != null) consoleKeyboard.Flush();
         if (gpuKeyboard != null) gpuKeyboard.Flush();
         if (terminal != null) terminal.Clear();
+        fetchState = FetchIdle;
+        fetchAnswered = 0;
+        machineMaterial.SetInt("_FetchDeliver", 0);
         ShowLabels();
     }
 
@@ -215,11 +252,124 @@ public class EmuMachine : UdonSharpBehaviour
         pointerX = x;
         pointerY = y;
         pointerButtons = buttons;
+        pointerOn = true;
     }
 
+    // No beam is on the display any more.
     public void SetPointerButtons(int buttons)
     {
         pointerButtons = buttons;
+        pointerOn = false;
+    }
+
+    // Notches of the wheel, up positive: events of their own in the keyboard's ring.
+    public void Wheel(int notches)
+    {
+        if (gpuKeyboard == null) return;
+        for (int i = 0; i < Mathf.Min(Mathf.Abs(notches), 8); i++) gpuKeyboard.PushEvent((notches > 0 ? 0x3fe : 0x3ff) | 65536);
+    }
+
+    // ---- pages for the guest (docs/fetch.md) ----
+
+    // The guest asked for an address: words 16 and 17 of the control block are the request
+    // and the answer, the address itself follows from texel 18.
+    private void FetchAsked(uint seq)
+    {
+        int length = (int)Mathf.Min(Word(64 + 16, 1), 255);
+        string address = "";
+        for (int i = 0; i < length; i++) address += (char)((Word(64 + 18 + i / 16, (i / 4) % 4) >> (8 * (i % 4))) & 0xff);
+        fetchSeq = seq;
+        fetchLength = 0;
+        VRCUrl url = null;
+        // an address a visitor has put into the field is theirs to open: the one typed for
+        // "world:typed", or the very one the browser asks for
+        if (typedUrl != null && (address == "world:typed" || typedUrl.GetUrl().Get() == address)) url = typedUrl.GetUrl();
+        for (int i = 0; i < siteAddresses.Length; i++)
+            if (siteAddresses[i] == address) url = siteUrls[i];
+        // VRChat throws on an address that is not https, and then calls neither event below
+        if (address != "world:typed" && !address.StartsWith("https://"))
+        {
+            fetchStatus = 3;   // never, in VRChat
+            fetchState = FetchReady;
+            if (fetchLabel != null) fetchLabel.text = "VRChat opens only https addresses";
+            return;
+        }
+        if (url == null || !url.Get().StartsWith("https://"))
+        {
+            fetchStatus = 1;   // not until a visitor hands the world this address
+            fetchState = FetchReady;
+            if (wantedLink != null && wantedLink.text != address) wantedLink.text = address;
+            if (fetchLabel != null) fetchLabel.text = "Copy the link on the right into the field under it to open it";
+            return;
+        }
+        fetchState = FetchLoading;
+        fetchStarted = Time.time;
+        if (fetchLabel != null) fetchLabel.text = "Loading " + address;
+        VRCStringDownloader.LoadUrl(url, (IUdonEventReceiver)this);
+    }
+
+    public override void OnStringLoadSuccess(IVRCStringDownload result)
+    {
+        if (fetchState != FetchLoading) return;
+        fetchBytes = result.ResultBytes;
+        fetchLength = Mathf.Min(fetchBytes.Length, FetchMost);
+        fetchStatus = 200;
+        fetchPacked = 0;
+        fetchState = FetchPacking;
+        if (fetchLabel != null) fetchLabel.text = "Loaded " + fetchLength.ToString("N0") + " bytes";
+    }
+
+    public override void OnStringLoadError(IVRCStringDownload result)
+    {
+        if (fetchState != FetchLoading) return;
+        fetchLength = 0;
+        fetchStatus = result.ErrorCode > 1 && result.ErrorCode != 200 ? result.ErrorCode : 2;
+        fetchState = FetchReady;
+        if (fetchLabel != null) fetchLabel.text = "Not loaded: " + result.Error;
+    }
+
+    // A part of the answer a frame goes into the texture's pixels, then the control pass
+    // writes them and the answer's words into the guest's memory in one frame.
+    private void FetchStep()
+    {
+        if (fetchState == FetchDelivering)
+        {
+            machineMaterial.SetInt("_FetchDeliver", 0);
+            fetchAnswered = fetchSeq;
+            fetchState = FetchIdle;
+        }
+        else if (fetchState == FetchLoading && Time.time - fetchStarted > 20f)
+        {
+            // no answer and no error: tell the guest, and be free for its next request
+            fetchLength = 0;
+            fetchStatus = 2;
+            fetchState = FetchReady;
+            if (fetchLabel != null) fetchLabel.text = "Not loaded: VRChat gave no answer in 20 seconds";
+        }
+        else if (fetchState == FetchPacking)
+        {
+            int end = Mathf.Min(fetchPacked + 6000, fetchLength);
+            for (int at = fetchPacked; at < end; at += 4)
+            {
+                fetchPixels[at >> 2] = new Color32(fetchBytes[at], at + 1 < fetchLength ? fetchBytes[at + 1] : (byte)0,
+                                                   at + 2 < fetchLength ? fetchBytes[at + 2] : (byte)0,
+                                                   at + 3 < fetchLength ? fetchBytes[at + 3] : (byte)0);
+            }
+            fetchPacked = end + 3 & ~3;
+            if (end < fetchLength) return;
+            hostData.SetPixels32(fetchPixels);
+            hostData.Apply(false);
+            fetchState = FetchReady;
+        }
+        else if (fetchState == FetchReady)
+        {
+            machineMaterial.SetTexture("_HostData", hostData);
+            machineMaterial.SetInt("_FetchSeq", (int)(fetchSeq & 0xffffff));
+            machineMaterial.SetInt("_FetchLength", fetchLength);
+            machineMaterial.SetInt("_FetchStatus", fetchStatus);
+            machineMaterial.SetInt("_FetchDeliver", 1);
+            fetchState = FetchDelivering;
+        }
     }
 
     // ---- one frame ----
@@ -241,6 +391,7 @@ public class EmuMachine : UdonSharpBehaviour
 
         bool running = initLeft == 0;
         if (running) Inputs();
+        if (running) FetchStep();
         int n = running ? rounds : 1;
         for (int i = 0; i < n; i++)
         {
@@ -275,8 +426,9 @@ public class EmuMachine : UdonSharpBehaviour
         }
         // whoever shows the state reads the texture this frame ended in
         gpuMaterial.SetTexture("_State", current);
-        displayMaterial.SetTexture("_State", current);
+        ShowDisplay();
         heatMaterial.SetTexture("_State", current);
+        volumeMaterial.SetTexture("_State", current);
 
         if (Time.time - statsAt >= 0.5f) ShowStats();
     }
@@ -381,6 +533,8 @@ public class EmuMachine : UdonSharpBehaviour
         }
         gpuFrames = Word(65, 3);
         keyboardOwned = Word(67, 0) == 0x6b657973u;
+        uint asked = Word(64 + 16, 0);
+        if (fetchState == FetchIdle && asked != Word(64 + 17, 0) && asked != fetchAnswered) FetchAsked(asked);
 
         if (haveClock)
         {

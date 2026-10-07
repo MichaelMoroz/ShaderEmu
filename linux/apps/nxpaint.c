@@ -171,6 +171,8 @@ main(int argc, char **argv)
 			}
 			break;
 		case GR_EVENT_TYPE_BUTTON_DOWN:
+			if (ui_wheel(&event))
+				break;
 			if (event.button.wid == window) {
 				panel_click(event.button.x, event.button.y);
 				break;

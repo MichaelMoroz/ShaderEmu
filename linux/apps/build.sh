@@ -11,10 +11,15 @@ MW=$WORK/src/microwindows
 OUT=$REPO/build/images/linux/root/usr
 [ -f "$MW/src/lib/libnano-X.a" ] || { echo "run linux/nanox/build.sh first"; exit 1; }
 mkdir -p "$OUT/bin" "$OUT/share" "$WORK/src/apps"
-for p in nxedit nxfiles nxpaint nxview nxsettings nxmon; do
+for p in nxedit nxfiles nxpaint nxview nxsettings nxmon nxweb; do
     rv32-cc -O2 -Wall -Wno-unused-function -I"$MW/src/include" "$HERE/$p.c" "$MW/src/lib/libnano-X.a" -o "$WORK/src/apps/$p"
     riscv32-linux-strip -o "$OUT/bin/$p" "$WORK/src/apps/$p"
 done
 # the Start menu lists what the nxapps.* files name (linux/nanox/nxbar.c)
-printf '%s\n' "Editor=nxedit" "Files=nxfiles" "Paint=nxpaint" "Monitor=nxmon" "Settings=nxsettings" > "$OUT/share/nxapps.20-apps"
+printf '%s\n' "Editor=nxedit" "Files=nxfiles" "Paint=nxpaint" "Web=nxweb" "Monitor=nxmon" "Settings=nxsettings" > "$OUT/share/nxapps.20-apps"
+# the browser's pages: its home lists the sites of web/sites.txt (the VRChat world can ask for
+# no others, so its builder reads the same file)
+# (all in /usr/share: the image builder adds files to folders the ROM has, and makes none)
+for f in "$HERE"/web/*.html; do cp "$f" "$OUT/share/web-$(basename "$f")"; done
+python3 "$HERE/web/home.py" "$HERE/web/sites.txt" > "$OUT/share/web-index.html"
 ls -l "$OUT/bin"/nxedit "$OUT/bin"/nxfiles "$OUT/bin"/nxpaint "$OUT/bin"/nxview "$OUT/bin"/nxsettings "$OUT/bin"/nxmon

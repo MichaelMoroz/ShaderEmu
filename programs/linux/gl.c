@@ -541,6 +541,7 @@ static XVisualInfo the_visual_info = {&the_visual, 0, 0, 24};
 #ifdef GL_NANOX
 #define REG_INTO 0x50            // where the picture is copied: address, width, height, row
 #define REG_LOCK 0x60            // taken with an atomic swap by whoever writes a new list's registers
+#define REG_VOLUME 0x300         // the last whole frame: list address, command count, frames so far
 #define REG_CLOCK 0x34           // the host's clock in milliseconds
 // The pause hint: this machine ends its frame there, which is when the GPU does its work.
 #define next_frame() __asm__ volatile(".word 0x0100000f")
@@ -819,6 +820,11 @@ void glXSwapBuffers(Display* dpy, GLXDrawable drawable) {
             regs[REG_SUBMIT / 4 + 2] = command_count;
             regs[REG_SUBMIT / 4] = 1 | 4;
             __atomic_store_n(&regs[REG_LOCK / 4], 0, __ATOMIC_RELEASE);
+            // the last whole frame, for the volume display (docs/volume.md): the other of the
+            // two places is written next, so this one stays as it is until the frame after
+            regs[REG_VOLUME / 4 + 1] = command_count;
+            regs[REG_VOLUME / 4] = GPU_PHYS + frame_at + frame_flip + uniform_bytes;
+            regs[REG_VOLUME / 4 + 2]++;
             frame_flip ^= FRAME_FLIP;
         } else {
             sched_yield();

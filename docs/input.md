@@ -23,6 +23,8 @@ separate and unchanged.
   from the word at `0x8700002c`, read the next ring entry. If more than 32 are outstanding the
   reader has lost some and should restart from the current count.
 - At most four key events arrive per frame; the host queues the rest.
+- A notch of the pointer's wheel travels in the same ring, as a "press" of a code that is no
+  key: `0x3fe` up, `0x3ff` down. It needs no release.
 - The four state words share one RAM texel, so a reader sees one consistent set.
 - A host that also feeds typed keys to the console (the harness window does) stops doing so
   while the keyboard has an owner. Otherwise a key typed into a terminal window would also
@@ -36,7 +38,11 @@ devices, polled every timer tick (100 Hz):
 | Device | Events |
 |---|---|
 | `/dev/input/event0` "ShaderEmu keyboard" | `EV_KEY` for the key codes, with the kernel's auto-repeat |
-| `/dev/input/event1` "ShaderEmu pointer" | `EV_ABS` `ABS_X`, `ABS_Y` in display pixels; `EV_KEY` `BTN_LEFT`, `BTN_RIGHT`, `BTN_MIDDLE` |
+| `/dev/input/event1` "ShaderEmu pointer" | `EV_ABS` `ABS_X`, `ABS_Y` in display pixels; `EV_KEY` `BTN_LEFT`, `BTN_RIGHT`, `BTN_MIDDLE`; `EV_REL` `REL_WHEEL` |
+
+Nano-X's pointer driver turns a notch into one of Microwindows' scroll buttons, down in one
+report and up in the next; a program sees a button-down event with `GR_BUTTON_SCROLLUP` or
+`GR_BUTTON_SCROLLDN` (`ui_wheel()` in `linux/apps/ui.h`).
 
 ## In the harness
 
@@ -53,3 +59,22 @@ program that dies does not keep the keyboard.
 
 In a VRChat world the same uniforms (`_InputPointer`, `_InputButtons`, `_InputKeySeq`,
 `_InputKeyCount`, `_InputKey0`..`_InputKey3` on the GPU device's material) are set by a script.
+
+Input there is the world's own beams (`EmuPointer.cs`), one per hand in VR and the middle of
+the view on desktop. VRChat's laser cannot serve: it works on one hand at a time, and a world
+is told that a canvas was pressed, never where.
+
+- A beam runs along the back of the hand, from the avatar's bones (wrist to knuckles, or elbow
+  to wrist), and is drawn as a line with a dot where it lands. The control panel tips it up
+  or down for controllers that point elsewhere.
+- A beam is faint while it only points and solid while its trigger or grip is held, and is
+  not drawn at all when it points at neither the display nor a keyboard.
+- On the display it is the pointer: trigger or click is the left button, grip or the right
+  mouse button the right one. A hand holding a button keeps the pointer. The mouse's wheel,
+  or the right stick pushed up and down in VR, is the wheel.
+- The display draws the guest's cursor under the beam itself (`_HostPointer` in
+  `Display.shader`, with the hot spot the guest publishes): the guest's own idea of where the
+  pointer is arrives a few frames late.
+- On a keyboard (`EmuKeyboard.cs`: 104 keys, found from their rectangles) the key under the
+  beam is down from the trigger's press to its release, one key a hand. Shift, Ctrl and Alt
+  also latch for the next key when pressed and let go alone.

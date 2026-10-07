@@ -78,6 +78,49 @@ ui_inside(int px, int py, int x, int y, int width, int height)
 	return px >= x && px < x + width && py >= y && py < y + height;
 }
 
+/* A notch of the wheel arrives as a button going down: -1 for up, 1 for down, 0 for a real button. */
+static int
+ui_wheel(const GR_EVENT *event)
+{
+	if (event->type != GR_EVENT_TYPE_BUTTON_DOWN)
+		return 0;
+	return (event->button.buttons & GR_BUTTON_SCROLLUP) ? -1 : (event->button.buttons & GR_BUTTON_SCROLLDN) ? 1 : 0;
+}
+
+#define UI_SCROLL_W 14
+
+static int
+ui_scroll_thumb(int height, int total, int shown)
+{
+	int thumb = total > shown ? height * shown / total : height;
+
+	return thumb < 14 ? (height < 14 ? height : 14) : thumb;
+}
+
+/* A vertical scroll bar: `shown` of `total` rows are in view, from row `top`. */
+static void
+ui_scrollbar(GR_DRAW_ID w, int x, int y, int height, int total, int shown, int top)
+{
+	int thumb = ui_scroll_thumb(height, total, shown);
+	int at = total > shown ? (height - thumb) * top / (total - shown) : 0;
+
+	ui_fill(w, x, y, UI_SCROLL_W, height, MWRGB(226, 226, 226));
+	ui_fill(w, x + 1, y + at, UI_SCROLL_W - 2, thumb, UI_FACE);
+	ui_bevel(w, x + 1, y + at, UI_SCROLL_W - 2, thumb, 0);
+}
+
+/* The first row to show with the pointer at `py` on that bar: the thumb's middle follows it. */
+static int
+ui_scroll_to(int py, int y, int height, int total, int shown)
+{
+	int thumb = ui_scroll_thumb(height, total, shown), top;
+
+	if (total <= shown || height <= thumb)
+		return 0;
+	top = (py - y - thumb / 2) * (total - shown) / (height - thumb);
+	return top < 0 ? 0 : top > total - shown ? total - shown : top;
+}
+
 /* Starts a program with one argument (or none), without a shell. */
 static void
 ui_run(const char *program, const char *argument)

@@ -62,6 +62,17 @@ public:
         return true;
     }
 
+    bool deliverHostData(Material& mat, const uint8_t* rgba, std::string& err) override {
+        ImageRGBA8 img;
+        img.width = img.height = kFetchSide;
+        img.pixels.assign(rgba, rgba + (size_t)kFetchSide * kFetchSide * 4);
+        hostData_ = createTextureRGBA8(gpu_.device.Get(), img, /*flipY=*/false, err);
+        if (!hostData_) return false;
+        mat.setTexture("_HostData", hostData_.Get(), kFetchSide, kFetchSide);
+        deliver_ = true;
+        return true;
+    }
+
     bool setState(const void* texels, std::string&) override {
         if (texels) crt_.load(gpu_.ctx.Get(), texels, kWidth * 16);
         else crt_.clear(gpu_.ctx.Get());
@@ -83,6 +94,11 @@ public:
             gpuDraw(mat);
             const float* z = kGpuControlZone;
             crt_.runZone(gpu_, gpuPasses_[1], mat, UpdateZone{z[0], z[1], z[2], z[3], 1});
+            if (deliver_) {
+                const float* f = kFetchZone;
+                crt_.runZone(gpu_, gpuPasses_[1], mat, UpdateZone{f[0], f[1], f[2], f[3], 1});
+                deliver_ = false;
+            }
         }
         if (timeIt) {
             gpu_.ctx->End(tsQuery_[3].Get());
@@ -328,6 +344,8 @@ private:
     std::vector<ComPtr<ID3D11ShaderResourceView>> keep_;
     CustomRenderTexture crt_;
     RegionReadback rows_, control_;
+    ComPtr<ID3D11ShaderResourceView> hostData_;
+    bool deliver_ = false;   // the fetch zone is drawn in the next frame
     ComPtr<IDXGISwapChain> swapChain_;
     HWND presentWnd_ = nullptr;
     ComPtr<ID3D11Buffer> profBuf_, profStaging_;

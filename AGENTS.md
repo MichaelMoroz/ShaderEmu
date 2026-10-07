@@ -40,7 +40,8 @@ watch the emulated machine:
   so the same source compiled natively gives a bit-exact reference for what the emulator must
   produce: check framebuffers against that, not by eye.
 - `raytrace` waits for five answers on the console before rendering. Script it with
-  `--expect width --send ""` style pairs (one per prompt: width, height, bounces, side,
+  `--expect width --send "
+"` style pairs (one per prompt: width, height, bounces, side,
   shadows) and `--until "raytrace: done"`.
 - `raycast` waits for a key at its title screen, then draws only when a key changes the view.
   `b` runs a fixed 354-frame walk and prints `raycast: demo done` (the benchmark: about 218k
@@ -336,9 +337,43 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
 - To test in the editor: enter play mode (ClientSim), then read Udon's variables with
   `UdonBehaviour.GetProgramVariable` (the C# proxy's fields are not the running values) and type
   by writing into `EmuKeyboard`'s `queue` and `tail`.
-- The room's light is baked: run "ShaderEmu/Bake lighting" after every "Build world" (about a
-  minute on the GPU lightmapper: 30 texels a unit, one 1024x1024 lightmap). The machine starts
-  off; in play mode press the panel's Power button (`Button.onClick.Invoke()` from editor code).
+- Input in the world is `EmuPointer`'s own beams (`docs/input.md`), not VRChat's laser: that
+  is one hand at a time and never says where it points. A collider in front of a canvas
+  also blocks it, which sending UI events by hand in the editor does not show.
+- To test the beams in play mode: `TeleportTo` in front of the target (the desktop beam is the
+  head's), then `RunInputEvent("_inputUse", new UdonInputEventArgs(true, HandType.RIGHT))` on
+  the "Beams" behaviour. ClientSim may scale "DestkopTrackingData"; set it to 1 first.
+- A page for the guest's browser comes from the host (`docs/fetch.md`): control words at
+  0x87000100 and 256 KB at 0x876c0000, written by the control pass. The harness prints
+  `the guest asks for` and `answered with` on stderr. `linux/apps/web/sites.txt` is both the
+  browser's home page and the only addresses the VRChat world can load: rebuild both after editing.
+- The wheel is key-ring events 0x3fe (up) and 0x3ff (down): `WM_MOUSEWHEEL` in the harness
+  window, `EmuMachine.Wheel` in Unity. A program sees a button-down with a scroll bit set.
+- The image builder adds files to folders the ROM already has and cannot make a folder: new
+  data goes into `/usr/share` under a prefix (`web-*.html`).
+- Asking the file system about every name in a large folder takes seconds (each lookup scans
+  the ROM's directory and each read ends a frame): `nxfiles` asks only for the tiles in view.
+- A page's bold in `nxweb` is the text drawn twice a pixel apart; headings are that underlined.
+- The wall shows `DisplayPicture`: `EmuMachine` draws `Display.shader` into it a pixel a texel
+  each frame, with mipmaps, and `DisplayShow.shader` samples it shifted towards texel centres
+  by `fwidth` (sharp close up, filtered far away). The hand rays are untested in a headset.
+- The room's light is baked: run "ShaderEmu/Bake lighting" after every "Build world" and wait
+  for "lighting baked, lamps off, scene saved" in the console before uploading. It runs on the
+  CPU lightmapper (the GPU one ran out of memory and stalled beside a headset). The lamps are
+  enabled only for the bake: a scene without baked data draws "baked" lights in real time,
+  with shadows, and a build made then is very slow in VR.
+- The machine starts off; in play mode press the panel's Power button
+  (`Button.onClick.Invoke()` from editor code).
+- The volume display (`docs/volume.md`): a third screen, on the left wall by the console, that draws a 3D
+  program's last frame behind itself from the visitor's eyes. It reads the frame's list from
+  0x87000300, which both OpenGL libraries publish; a program that builds frames in place must
+  alternate between two places. To test it in play mode, type `glxgears &` or `doom &` at the
+  console (Doom's own demo starts after its title) and render a camera aimed at "Volume
+  display", with "Volume content" on and off. From the side glxgears shows nothing until the
+  slider (`_Plane`) is near 0.84: with the screen at its near plane the gears are 20 m behind.
+- Outside the window is real geometry (`City()` in `ShaderEmuDecor.cs`: two meshes, an unlit
+  shader, haze in vertex alpha) and a panoramic skybox made by `NightSky()`. The wall is four
+  boxes round the opening, with a collider in it.
 - Labels are TextMeshPro and UI images use VRChat's super-sampled UI material, which is what
   the SDK's build panel asks for. Two same-facing faces in one plane flicker: after adding
   props, compare renderer bounds pairwise for coincident faces that overlap.

@@ -14,6 +14,8 @@
 #define INPUT_STATE	0x20
 #define INPUT_KEYS	0x80
 #define INPUT_RING	32
+#define INPUT_WHEEL_UP	0x3fe	/* not keys: a notch of the pointer's wheel */
+#define INPUT_WHEEL_DOWN	0x3ff
 
 static void __iomem *input_regs;
 static struct input_dev *keyboard_dev, *pointer_dev;
@@ -28,6 +30,7 @@ static void shaderemu_input_poll(struct timer_list *t)
 	u32 y = readl(input_regs + INPUT_STATE + 4);
 	u32 buttons = readl(input_regs + INPUT_STATE + 8);
 	u32 head = readl(input_regs + INPUT_STATE + 12), keys;
+	int wheel = 0;
 
 	/* first poll, a restarted host, or more events than the ring holds: start from now */
 	if (!input_started || head - input_tail > INPUT_RING) {
@@ -38,10 +41,17 @@ static void shaderemu_input_poll(struct timer_list *t)
 	for (; input_tail != head; input_tail++) {
 		u32 event = readl(input_regs + INPUT_KEYS + 4 * (input_tail % INPUT_RING));
 
-		input_report_key(keyboard_dev, event & 0x3ff, event >> 31);
+		if ((event & 0x3ff) >= INPUT_WHEEL_UP)
+			wheel += (event & 0x3ff) == INPUT_WHEEL_UP ? 1 : -1;
+		else
+			input_report_key(keyboard_dev, event & 0x3ff, event >> 31);
 	}
 	if (keys != head)
 		input_sync(keyboard_dev);
+	if (wheel) {
+		input_report_rel(pointer_dev, REL_WHEEL, wheel);
+		input_sync(pointer_dev);
+	}
 	/* most ticks nothing moved: reporting it anyway costs more than this poll should */
 	if (x != pointer_x || y != pointer_y || buttons != pointer_buttons) {
 		pointer_x = x;
@@ -83,6 +93,8 @@ static int __init shaderemu_input_init(void)
 	pointer_dev->id.bustype = BUS_HOST;
 	__set_bit(EV_KEY, pointer_dev->evbit);
 	__set_bit(EV_ABS, pointer_dev->evbit);
+	__set_bit(EV_REL, pointer_dev->evbit);
+	__set_bit(REL_WHEEL, pointer_dev->relbit);
 	__set_bit(BTN_LEFT, pointer_dev->keybit);
 	__set_bit(BTN_RIGHT, pointer_dev->keybit);
 	__set_bit(BTN_MIDDLE, pointer_dev->keybit);

@@ -29,12 +29,15 @@ struct BackendOptions {
 // pixel space, y up) holding its control words at RAM 0x87000010.
 const UINT kGpuTriangles = 65536;
 const UINT kGpuTarget = 2048;
-const float kGpuControlZone[4] = {8, 447.5f, 16, 1};
+const float kGpuControlZone[4] = {16, 447.5f, 32, 1};
+// The rows of RAM an answer to the guest's request is written to (docs/fetch.md), as a zone.
+const float kFetchZone[4] = {1024, 4096 - (64 + 0x76c000 / 2048) - 4, 2048, 8};
+const UINT kFetchSide = 256;   // the answer's texture: one word a texel, 256 KB
 // Quads the Commit pass draws when its vertex shader chooses them: the state rows and 32 bands of RAM.
 const unsigned kCommitQuads = 33;
 // The machine's control words (display, GPU, input: RAM from 0x87000000) as a row of the
 // state texture. popRow() returns them after the 64 texels of row 0.
-const unsigned kControlRow = 64 + 0x700000 / 2048, kControlTexels = 16;
+const unsigned kControlRow = 64 + 0x700000 / 2048, kControlTexels = 48;
 // The display's RAM framebuffer (RAM 0x87000000, 128 texture rows), for writing the picture back.
 
 class RvcBackend {
@@ -52,6 +55,9 @@ public:
                              std::string& err) = 0;
     // Sets both state buffers from width*height RGBA32_UINT texels, row 0 first; null = all zero.
     virtual bool setState(const void* texels, std::string& err) = 0;
+    // An answer for the guest: kFetchSide squared RGBA8 texels, row 0 first. The next frame's
+    // control pass writes them into RAM; set the _Fetch uniforms for that frame.
+    virtual bool deliverHostData(Material& mat, const uint8_t* rgba, std::string& err) = 0;
 
     // One emulator frame; also queues a readback of state row 0 tagged `tag`. Pop first if rowFull().
     virtual bool frame(Material& mat, uint64_t tag, bool timeIt) = 0;

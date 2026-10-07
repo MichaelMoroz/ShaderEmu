@@ -12,7 +12,7 @@ window today, a material in a VRChat world later) reads the RAM texture and deco
 | `0x8700000c` | mode 4: address of the layer table |
 | `0x87000040` | cursor x: where the left edge of the cursor image is, in display pixels (may be negative) |
 | `0x87000044` | cursor y |
-| `0x87000048` | cursor on: 1 shows it |
+| `0x87000048` | cursor on: bit 0 shows it. Bits 8-12 and 16-20: where the hot spot is in the image (x, y), for a host that draws the cursor under its own pointer |
 | `0x8700004c` | address of the cursor image: 32x32 words, `0xAARRGGBB`, drawn where the top byte is not 0 |
 | `0x87000400` | palette for mode 2: 256 words, `0x00RRGGBB` |
 | `0x87001000` | pixels, rows top to bottom, no padding between rows |

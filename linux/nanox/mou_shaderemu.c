@@ -13,11 +13,14 @@
 /* the kernel's input_event on a 32-bit machine with 64-bit time: C libraries disagree on it */
 struct event { uint32_t sec, usec; uint16_t type, code; int32_t value; };
 #define EV_KEY 1
+#define EV_REL 2
 #define EV_ABS 3
+#define REL_WHEEL 8
 #define BTN_LEFT 0x110
 
 static int fd = -1;
 static int cur_x, cur_y, cur_buttons;
+static int wheel, wheel_shown;	/* notches still to report (up is positive); the one being reported */
 
 static int
 Ptr_Open(MOUSEDEVICE *pmd)
@@ -39,7 +42,7 @@ Ptr_Close(void)
 static int
 Ptr_GetButtonInfo(void)
 {
-	return MWBUTTON_L | MWBUTTON_M | MWBUTTON_R;
+	return MWBUTTON_L | MWBUTTON_M | MWBUTTON_R | MWBUTTON_SCROLLUP | MWBUTTON_SCROLLDN;
 }
 
 static void
@@ -68,17 +71,29 @@ Ptr_Read(MWCOORD *dx, MWCOORD *dy, MWCOORD *dz, int *bp)
 					cur_buttons |= button[ev[i].code - BTN_LEFT];
 				else
 					cur_buttons &= ~button[ev[i].code - BTN_LEFT];
+			} else if (ev[i].type == EV_REL && ev[i].code == REL_WHEEL) {
+				wheel += ev[i].value;
+				continue;
 			} else
 				continue;
 			changed = 1;
 		}
+	}
+	/* a notch of the wheel is a scroll button seen down in one report and up in the next */
+	if (wheel_shown) {
+		wheel_shown = 0;
+		changed = 1;
+	} else if (wheel) {
+		wheel_shown = wheel > 0 ? MWBUTTON_SCROLLUP : MWBUTTON_SCROLLDN;
+		wheel += wheel > 0 ? -1 : 1;
+		changed = 1;
 	}
 	if (!changed)
 		return MOUSE_NODATA;
 	*dx = cur_x;
 	*dy = cur_y;
 	*dz = 0;
-	*bp = cur_buttons;
+	*bp = cur_buttons | wheel_shown;
 	return MOUSE_ABSPOS;
 }
 

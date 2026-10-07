@@ -53,6 +53,11 @@ Shader "ShaderEmu/Machine"
         _HostMsLo ("Host clock in ms, low half", Int) = 0
         _HostMsHi ("Host clock in ms, high half", Int) = 0
         _HostFlags ("Host flags (1: the guest starts its desktop at boot)", Int) = 1
+        _FetchDeliver ("An answer to the guest's request arrives this frame", Int) = 0
+        _FetchSeq ("The request it answers", Int) = 0
+        _FetchLength ("Its length in bytes", Int) = 0
+        _FetchStatus ("Its status (200: fine)", Int) = 0
+        _HostData ("Its bytes", 2D) = "black" {}
     }
     SubShader
     {
@@ -148,6 +153,9 @@ Shader "ShaderEmu/Machine"
             uniform uint _HostMsLo, _HostMsHi;
             uniform uint _HostFlags;   // bit 0: the guest should start its desktop when it boots
             static uint _InputKey0, _InputKey1, _InputKey2, _InputKey3, _HostMs;
+            // An answer to the guest's request (docs/fetch.md): its bytes, in the frame _FetchDeliver is set.
+            uniform uint _FetchDeliver, _FetchSeq, _FetchLength, _FetchStatus;
+            Texture2D<float4> _HostData;
             // The GPU's camera draws all eight passes every frame.
             #define _GpuPasses 0xffu
             #define GPU_STATE _SelfTexture2D

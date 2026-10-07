@@ -12,6 +12,7 @@ static int count, room;
 static int cx, cy;		/* the cursor: column, line */
 static int top, left;		/* first line and column shown */
 static int rows, columns;	/* that fit the window */
+static int dragging;		/* the scroll bar's thumb is held */
 static int width, height, modified;
 static char path[256] = "/root/untitled.txt";
 static const char *notice = "";
@@ -77,7 +78,7 @@ draw_line(int line)
 
 	if (line < top || line >= top + rows)
 		return;
-	ui_fill(window, 0, y, width, ui_fh, WHITE);
+	ui_fill(window, 0, y, width - UI_SCROLL_W, ui_fh, WHITE);
 	if (line >= count)
 		return;
 	length = strlen(lines[line]);
@@ -104,10 +105,25 @@ draw_all(void)
 {
 	int line;
 
-	ui_fill(window, 0, 0, width, height - STATUS, WHITE);
+	ui_fill(window, 0, 0, width - UI_SCROLL_W, height - STATUS, WHITE);
 	for (line = top; line < top + rows; line++)
 		draw_line(line);
+	ui_scrollbar(window, width - UI_SCROLL_W, 0, height - STATUS, count, rows, top);
 	draw_status();
+}
+
+/* Shows the text from another line on, leaving the cursor where it is in the text. */
+static void
+scroll_to(int line)
+{
+	if (line > count - rows)
+		line = count - rows;
+	if (line < 0)
+		line = 0;
+	if (line != top) {
+		top = line;
+		draw_all();
+	}
 }
 
 /* Brings the cursor into view; true if everything had to move. */
@@ -236,7 +252,7 @@ resized(int w, int h)
 	width = w;
 	height = h;
 	rows = (height - STATUS - MARGIN) / ui_fh;
-	columns = (width - 2 * MARGIN) / ui_fw;
+	columns = (width - 2 * MARGIN - UI_SCROLL_W) / ui_fw;
 	if (rows < 1)
 		rows = 1;
 	if (columns < 1)
@@ -260,7 +276,7 @@ main(int argc, char **argv)
 	window = GrNewWindowEx(GR_WM_PROPS_APPWINDOW, title, GR_ROOT_WINDOW_ID, -1, -1,
 		80 * ui_fw + 2 * MARGIN, 24 * ui_fh + MARGIN + STATUS, WHITE);
 	GrSelectEvents(window, GR_EVENT_MASK_EXPOSURE | GR_EVENT_MASK_KEY_DOWN | GR_EVENT_MASK_UPDATE |
-		GR_EVENT_MASK_BUTTON_DOWN | GR_EVENT_MASK_CLOSE_REQ);
+		GR_EVENT_MASK_BUTTON_DOWN | GR_EVENT_MASK_BUTTON_UP | GR_EVENT_MASK_MOUSE_MOTION | GR_EVENT_MASK_CLOSE_REQ);
 	resized(80 * ui_fw + 2 * MARGIN, 24 * ui_fh + MARGIN + STATUS);
 	GrMapWindow(window);
 	GrSetFocus(window);
@@ -277,8 +293,13 @@ main(int argc, char **argv)
 			}
 			break;
 		case GR_EVENT_TYPE_BUTTON_DOWN:
-			/* a click puts the cursor there */
-			if (event.button.y < height - STATUS) {
+			if (ui_wheel(&event)) {
+				scroll_to(top + 3 * ui_wheel(&event));
+			} else if (event.button.x >= width - UI_SCROLL_W && event.button.y < height - STATUS) {
+				dragging = 1;
+				scroll_to(ui_scroll_to(event.button.y, 0, height - STATUS, count, rows));
+			} else if (event.button.y < height - STATUS) {
+				/* a click puts the cursor there */
 				int was = cy;
 
 				cy = top + (event.button.y - MARGIN) / ui_fh;
@@ -291,6 +312,15 @@ main(int argc, char **argv)
 				draw_line(cy);
 				draw_status();
 			}
+			break;
+		case GR_EVENT_TYPE_BUTTON_UP:
+			dragging = 0;
+			break;
+		case GR_EVENT_TYPE_MOUSE_MOTION:
+			if (dragging && (event.mouse.buttons & GR_BUTTON_L))
+				scroll_to(ui_scroll_to(event.mouse.y, 0, height - STATUS, count, rows));
+			else
+				dragging = 0;
 			break;
 		case GR_EVENT_TYPE_KEY_DOWN:
 			key(event.keystroke.ch, event.keystroke.modifiers);

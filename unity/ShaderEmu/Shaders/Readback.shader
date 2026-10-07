@@ -1,6 +1,6 @@
 Shader "ShaderEmu/Readback"
 {
-    // Blit target for the script's readback: state row 0 (64 texels) and the 16 control texels
+    // Blit target for the script's readback: state row 0 (64 texels) and the 48 control texels
     // at RAM 0x87000000, one output pixel per 32-bit word, its bytes in r, g, b, a.
     Properties
     {
@@ -23,7 +23,7 @@ Shader "ShaderEmu/Readback"
 
             Texture2D<uint4> _State;
 
-            static const uint Words = 320, ControlRow = 64 + 0x700000 / 2048;
+            static const uint Words = 448, ControlRow = 64 + 0x700000 / 2048;
 
             float4 vert(appdata_img v) : SV_Position {
                 return UnityObjectToClipPos(v.vertex);

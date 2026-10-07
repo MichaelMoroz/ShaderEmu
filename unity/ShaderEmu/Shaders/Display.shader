@@ -1,8 +1,8 @@
 Shader "ShaderEmu/Display"
 {
     // The machine's display (docs/display.md), decoded from the state texture: modes 1-4 and
-    // the cursor. The picture is fitted into the quad, keeping its shape; EmuPointer.cs maps
-    // the pointer the same way.
+    // the cursor. With _Raw it writes the picture one pixel a texel from the target's top left
+    // corner (EmuMachine draws that for DisplayShow.shader); without, it fits it into a quad.
     Properties
     {
         _State ("Machine state texture", 2D) = "black" {}
@@ -11,6 +11,9 @@ Shader "ShaderEmu/Display"
         _Off ("Colour while the display is off", Color) = (0.01, 0.011, 0.014, 1)
         _Brightness ("Brightness", Float) = 1
         [ToggleUI] _Power ("Machine is on", Float) = 1
+        [ToggleUI] _Raw ("One pixel a texel", Float) = 0
+        _RawSize ("Size of the target with _Raw", Vector) = (2048, 1024, 0, 0)
+        _HostPointer ("The host's pointer in display pixels (z: it is on the display)", Vector) = (0, 0, 0, 0)
     }
     SubShader
     {
@@ -26,7 +29,8 @@ Shader "ShaderEmu/Display"
 
             Texture2D<uint4> _State;
             Texture2D<float4> _GpuTarget;
-            float _Aspect, _Brightness, _Power;
+            float _Aspect, _Brightness, _Power, _Raw;
+            float4 _RawSize, _HostPointer;
             float4 _Off;
 
             static const uint DispCtrl = 0x700000, DispPalette = 0x700040, DispPixels = 0x700100;
@@ -91,14 +95,19 @@ Shader "ShaderEmu/Display"
                 float2 fit = float2(max(1.0, _Aspect / shape), max(1.0, shape / _Aspect));
                 p *= fit;
                 float2 q = (p + 0.5) * size;
+                if (_Raw > 0.5) q = float2(i.uv.x, 1.0 - i.uv.y) * _RawSize.xy;
                 if (q.x < 0 || q.y < 0 || q.x >= size.x || q.y >= size.y) return _Off;
 
                 float3 c = 0;
                 bool done = false;
                 uint4 cursor = ram(DispCursor);
-                if (cursor.b == 1) {
-                    // over whatever the display shows; image words with a zero top byte are clear
-                    int2 d = int2(floor(q)) - int2(asint(cursor.r), asint(cursor.g));
+                if (cursor.b & 1) {
+                    // over whatever the display shows; image words with a zero top byte are clear.
+                    // Under the host's own pointer when it is here (the guest says where the hot
+                    // spot is in the image): the guest's position is a few frames behind.
+                    int2 corner = int2(asint(cursor.r), asint(cursor.g));
+                    if (_HostPointer.z > 0.5) corner = int2(_HostPointer.xy) - int2((cursor.b >> 8) & 31, (cursor.b >> 16) & 31);
+                    int2 d = int2(floor(q)) - corner;
                     if (d.x >= 0 && d.y >= 0 && d.x < 32 && d.y < 32) {
                         uint v = ram_word(cursor.a + 4 * (uint)(d.y * 32 + d.x));
                         if ((v >> 24) != 0) {
@@ -106,6 +115,10 @@ Shader "ShaderEmu/Display"
                             done = true;
                         }
                     }
+                }
+                if (!done && _Raw > 0.5) {
+                    c = picture(q, ctrl);
+                    done = true;
                 }
                 if (!done) {
                     // four taps over the screen pixel's footprint: sharp when magnified, and thin

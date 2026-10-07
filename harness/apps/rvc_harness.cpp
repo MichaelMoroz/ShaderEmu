@@ -22,6 +22,8 @@
 #include "shaderlab.h"
 
 #include <conio.h>
+#include <wininet.h>
+#pragma comment(lib, "wininet.lib")
 #include <fcntl.h>
 #include <io.h>
 
@@ -701,6 +703,15 @@ int main(int argc, char** argv) {
     uint64_t statsInstr0 = 0, statsFrame0 = 0;
     auto statsT0 = t0;
     bool keyboardOwned = false;   // a guest program reads the keyboard device (docs/input.md)
+    // A page the guest asked for (docs/fetch.md): fetched on a thread, handed over in one frame.
+    struct Fetch {
+        std::mutex lock;
+        bool busy = false, ready = false;
+        uint32_t seq = 0, status = 0;
+        std::string body;
+    } fetch;
+    uint32_t fetchAnswered = 0;
+    bool fetchDelivering = false;
     int gpuPassLife[8] = {};      // frames each of the GPU's passes 1-7 is still drawn for
     auto processRow = [&](const std::vector<uint8_t>& raw, uint64_t rowFrame) {
         const uint32_t* t = (const uint32_t*)raw.data();
@@ -711,6 +722,37 @@ int main(int argc, char** argv) {
         if (raw.size() >= (64 + 2) * 16)
             for (int p = 1; p < 8; ++p)
                 if ((texel(64 + 1, 0) >> (8 + p)) & 1) gpuPassLife[p] = 600;
+        if (raw.size() >= (64 + 34) * 16 && texel(64 + 16, 0) != texel(64 + 17, 0) && texel(64 + 16, 0) != fetchAnswered) {
+            std::lock_guard<std::mutex> lock(fetch.lock);
+            if (!fetch.busy && !fetch.ready) {
+                uint32_t length = (std::min)(texel(64 + 16, 1), 255u);
+                std::string url((const char*)raw.data() + (64 + 18) * 16, length);
+                fetch.busy = true;
+                fetch.seq = texel(64 + 16, 0);
+                fprintf(stderr, "[harness] the guest asks for %s\n", url.c_str());
+                std::thread([&fetch, url] {
+                    std::string body;
+                    uint32_t status = 0;
+                    HINTERNET net = InternetOpenA("ShaderEmu", INTERNET_OPEN_TYPE_PRECONFIG, nullptr, nullptr, 0);
+                    HINTERNET page = net && url.rfind("http", 0) == 0
+                        ? InternetOpenUrlA(net, url.c_str(), nullptr, 0, INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_UI, 0) : nullptr;
+                    if (page) {
+                        DWORD size = sizeof(status), got = 0;
+                        char buf[8192];
+                        HttpQueryInfoA(page, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER, &status, &size, nullptr);
+                        while (body.size() < kFetchSide * kFetchSide * 4 && InternetReadFile(page, buf, sizeof(buf), &got) && got)
+                            body.append(buf, got);
+                        InternetCloseHandle(page);
+                    }
+                    if (net) InternetCloseHandle(net);
+                    std::lock_guard<std::mutex> lock(fetch.lock);
+                    fetch.body.swap(body);
+                    fetch.status = status;
+                    fetch.busy = false;
+                    fetch.ready = true;
+                }).detach();
+            }
+        }
         commits = texel(28, 2);
         consumedTag = texel(9, 3);
         if (rowFrame < (uint64_t)opt.initFrames) return;  // cpu_init leaves junk in the UART buffer
@@ -829,6 +871,31 @@ int main(int argc, char** argv) {
             mat.setInt("_InputKey2", batch[2]);
             mat.setInt("_InputKey3", batch[3]);
             keySeq += (uint32_t)n;
+        }
+
+        // An answer the fetch thread has ready goes into the guest's memory in this frame.
+        if (fetchDelivering) {
+            mat.setInt("_FetchDeliver", 0);
+            fetchDelivering = false;
+        }
+        {
+            std::lock_guard<std::mutex> lock(fetch.lock);
+            if (fetch.ready) {
+                std::vector<uint8_t> bytes((size_t)kFetchSide * kFetchSide * 4, 0);
+                size_t n = (std::min)(fetch.body.size(), bytes.size());
+                memcpy(bytes.data(), fetch.body.data(), n);
+                std::string err;
+                if (backend.deliverHostData(mat, bytes.data(), err)) {
+                    mat.setInt("_FetchDeliver", 1);
+                    mat.setInt("_FetchSeq", fetch.seq);
+                    mat.setInt("_FetchLength", (int64_t)n);
+                    mat.setInt("_FetchStatus", fetch.status);
+                    fetchDelivering = true;
+                    fprintf(stderr, "[harness] answered with %zu bytes, status %u\n", n, fetch.status);
+                }
+                fetchAnswered = fetch.seq;
+                fetch.ready = false;
+            }
         }
 
         if (opt.benchWarmup >= 0 && frame == (uint64_t)opt.benchWarmup) {

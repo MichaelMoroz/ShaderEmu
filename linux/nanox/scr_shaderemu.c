@@ -28,7 +28,7 @@
 #define CURSOR_OFFSET	0x01440000u	/* the cursor's image */
 #define CACHE_OFFSET	0x01441000u	/* glyphs of the built-in fonts, kept between lists */
 #define DATA_OFFSET	0x01541000u	/* other textures for the commands in the list */
-#define DATA_END	0x01700000u	/* beyond: left to an OpenGL program */
+#define DATA_END	0x016c0000u	/* beyond: what the host fetched (docs/fetch.md), then an OpenGL program's */
 #define REG_MODE	0		/* word indices from REGS_OFFSET */
 #define REG_WIDTH	1
 #define REG_HEIGHT	2
@@ -748,6 +748,7 @@ gpu_cursor(MWCOORD x, MWCOORD y, MWCOORD width, MWCOORD height, int visible,
 	static int drawn_width, drawn_height;
 	volatile uint32_t *pixels = (volatile uint32_t *)(gpu + CURSOR_OFFSET);
 	int words = (width + 15) >> 4, bytes = words * height * sizeof(MWIMAGEBITS), r, c;
+	MWCOORD px, py;
 
 	if (!visible) {
 		regs[REG_CURSOR + 2] = 0;
@@ -775,7 +776,9 @@ gpu_cursor(MWCOORD x, MWCOORD y, MWCOORD width, MWCOORD height, int visible,
 	regs[REG_CURSOR] = x;
 	regs[REG_CURSOR + 1] = y;
 	regs[REG_CURSOR + 3] = GPU_PHYS + CURSOR_OFFSET;
-	regs[REG_CURSOR + 2] = 1;
+	/* with the hot spot's place in the image, so a host can draw it under its own pointer */
+	GdGetCursorPos(&px, &py);
+	regs[REG_CURSOR + 2] = 1 | ((px - x) & 31) << 8 | ((py - y) & 31) << 16;
 }
 
 static PSD
