@@ -1,3 +1,19 @@
+diff --git a/src/demos/nanox/nxeyes.c b/src/demos/nanox/nxeyes.c
+index 5f7f002..ed85cbe 100644
+--- a/src/demos/nanox/nxeyes.c
++++ b/src/demos/nanox/nxeyes.c
+@@ -134,6 +134,11 @@ nxeyes_state *init(void)
+ void button_event(GR_EVENT_BUTTON *ev, nxeyes_state *state)
+ {
+ 	if(ev->wid != state->wid) return;
++	/* the eyes have no frame to close them by: the right button closes them */
++	if(ev->type == GR_EVENT_TYPE_BUTTON_DOWN && (ev->buttons & GR_BUTTON_R)) {
++		state->quit = 1;
++		return;
++	}
+ 	if(ev->type == GR_EVENT_TYPE_BUTTON_DOWN) {
+ 		if(ev->buttons & GR_BUTTON_L) {
+ 			state->button_down = 1;
 diff --git a/src/demos/nanox/nxterm.c b/src/demos/nanox/nxterm.c
 index 91ec808..baabb30 100755
 --- a/src/demos/nanox/nxterm.c
@@ -349,16 +365,51 @@ index c389e46..b528bb5 100644
  	/* Quickly save off the dash settings to avoid problems with drawrow */
  	GdSetDash(&dm, &dc);
  
+diff --git a/src/engine/devfont.c b/src/engine/devfont.c
+index f074087..48aa6ac 100644
+--- a/src/engine/devfont.c
++++ b/src/engine/devfont.c
+@@ -560,6 +560,11 @@ GdText(PSD psd, PMWFONT pfont, MWCOORD x, MWCOORD y, const void *str, int cc,MWT
+ 		FREEA(buf);
+ }
+ 
++/* Set by a screen driver that draws a whole string of a built-in font itself: true if it did,
++ * with *endx where the string ended. */
++int (*gd_drawstring)(PSD psd, PMWCFONT font, MWCOORD x, MWCOORD y, const unsigned char *text, int count,
++	MWPIXELVAL fg, MWPIXELVAL bg, int usebg, MWCOORD *endx);
++
+ /*
+  * Draw ASCII or MWTF_UC16 text using COREFONT type font (buitin, PCF, FNT)
+  */
+@@ -626,6 +631,17 @@ gen_drawtext(PMWFONT pfont, PSD psd, MWCOORD x, MWCOORD y,
+ 		return;
+ 	}
+ 
++	/* a string that is all in view goes to the driver whole, if it takes strings */
++	if (gd_drawstring && clip == CLIP_VISIBLE && !(flags & MWTF_DBCSMASK) &&
++	    pfont->fontprocs->encoding != MWTF_UC16 && pfont->fontprocs->GetTextBits == gen_gettextbits &&
++	    gd_drawstring(psd, ((PMWCOREFONT)pfont)->cfont, x, y, str, cc, gr_foreground, gr_background,
++			  gr_usebg, &x)) {
++		if (pfont->fontattr & MWTF_UNDERLINE)
++			GdLine(psd, startx, starty, x, starty, FALSE);
++		GdFixCursor(psd);
++		return;
++	}
++
+ 	/*
+ 	 * Get the bitmap for each character individually, and then display
+ 	 * them possibly using clipping for each one.
 diff --git a/src/engine/devimage.c b/src/engine/devimage.c
-index be20461..04f7a63 100644
+index be20461..53965e2 100644
 --- a/src/engine/devimage.c
 +++ b/src/engine/devimage.c
-@@ -170,12 +170,17 @@ GdDrawImageFromBuffer(PSD psd, MWCOORD x, MWCOORD y, MWCOORD width,
+@@ -170,12 +170,31 @@ GdDrawImageFromBuffer(PSD psd, MWCOORD x, MWCOORD y, MWCOORD width,
   * @param path The file containing the image data.
   * @param flags If nonzero, JPEG images will be loaded as grayscale.  Yuck!
   */
 +/* Set by a screen driver that can draw some picture files itself: nonzero when it has. */
-+int (*gd_drawpicture)(PSD psd, MWCOORD x, MWCOORD y, MWCOORD width, MWCOORD height, const char *path);
++int (*gd_drawpicture)(PSD psd, MWCOORD x, MWCOORD y, MWCOORD width, MWCOORD height, const char *path,
++	const MWRECT *within);
 +
  void
  GdDrawImageFromFile(PSD psd, MWCOORD x, MWCOORD y, MWCOORD width, MWCOORD height,
@@ -366,8 +417,21 @@ index be20461..04f7a63 100644
  {
  	PSD	pmd;
  
-+	if (gd_drawpicture && gd_drawpicture(psd, x, y, width, height, path))
-+		return;
++#if DYNAMICREGIONS
++	if (gd_drawpicture) {
++		/* the driver draws what lies inside each rectangle of the clip region */
++		extern MWCLIPREGION *clipregion;
++		MWRECT *rc = clipregion->rects;
++		int n = clipregion->numRects, drawn = 1;
++
++		GdCheckCursor(psd, x, y, x + width - 1, y + height - 1);
++		for (; drawn && n-- > 0; rc++)
++			drawn = gd_drawpicture(psd, x, y, width, height, path, rc);
++		GdFixCursor(psd);
++		if (drawn)
++			return;
++	}
++#endif
  	pmd = GdLoadImageFromFile(path, flags);
  	if (pmd) {
  		GdDrawImagePartToFit(psd, x, y, width, height, 0, 0, 0, 0, pmd);
@@ -557,9 +621,22 @@ index 409290c..828a708 100644
  
  /**
 diff --git a/src/include/nanowm.h b/src/include/nanowm.h
-index 5f31f08..7854dee 100644
+index 5f31f08..d18531f 100644
 --- a/src/include/nanowm.h
 +++ b/src/include/nanowm.h
+@@ -44,9 +44,9 @@
+ #define SCHEME_TAN  1				/* tan color scheme*/
+ #define CXBORDER	3				/* 3d border width*/
+ #define CYBORDER	3				/* 3d border height*/
+-#define CYCAPTION	12				/* height of caption*/
+-#define CXCLOSEBOX	9				/* width of closebox*/
+-#define CYCLOSEBOX	9				/* height of closebox*/
++#define CYCAPTION	22				/* height of caption*/
++#define CXCLOSEBOX	18				/* width of closebox*/
++#define CYCLOSEBOX	18				/* height of closebox*/
+ #define CXFRAME		(CXBORDER*2)	/* width of frame*/
+ #define CYFRAME		(CYBORDER*2)	/* height of frame*/
+ #endif
 @@ -57,6 +57,9 @@
  #define Dprintf(...)
  #endif
@@ -583,9 +660,18 @@ index 5f31f08..7854dee 100644
  typedef struct windowlist win;
  
 diff --git a/src/nanox/nxpaintnc.c b/src/nanox/nxpaintnc.c
-index 9e40afe..37bace1 100644
+index 9e40afe..56ce572 100644
 --- a/src/nanox/nxpaintnc.c
 +++ b/src/nanox/nxpaintnc.c
+@@ -72,7 +72,7 @@ nxPaintNCArea(GR_DRAW_ID id, int w, int h, char *title, GR_BOOL active, GR_WM_PR
+ 		/* Y = 2 times padding (4) + font ascent+descent (11)*/
+ 		GrText(id, gc, x+2*4, y+2*4+CYTEXTBASE, title, -1, GR_TFASCII|GR_TFBASELINE);
+ #else
+-		GrText(id, gc, x+4, y-1, title, -1, GR_TFASCII|GR_TFTOP);
++		GrText(id, gc, x+4, y+(CYCAPTION-14)/2, title, -1, GR_TFASCII|GR_TFTOP);
+ #endif
+ 	}
+ 	y += CYCAPTION;
 @@ -111,6 +111,36 @@ nxPaintNCArea(GR_DRAW_ID id, int w, int h, char *title, GR_BOOL active, GR_WM_PR
  		GrSetGCForeground(gc, GrGetSysColor(GR_COLOR_BTNTEXT));
  		GrLine(id, gc, r.x, r.y, r.x+r.width-1, r.y+r.height-1);

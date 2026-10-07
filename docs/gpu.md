@@ -72,6 +72,14 @@ mesh order.
 | 1 | clear | 3 | 1: colour. Fills the picture, at the far plane |
 | 2 | rectangle | 6 | 1: colour, 2: key, 4-7: x0, y0, x1, y1 (exclusive), 8: fragment mode, 9-11: texture address, width, height, 12-15: u0, v0, u1, v1. Drawn at the near plane |
 | 3 | draw | count | 1: vertex buffer, 2: count, 4: vertex mode, 5: fragment mode, 6: uniforms address, 7-9: texture address, width, height, 10: key, 11: colour (compact vertices) |
+| 4 | text | 6 a character | 1: colour, 2: font table, 4-5: x, y of the string's top left, 6: characters, 7: address of the string, 8: fragment word (its pass). Drawn at the near plane |
+
+A string for command 4 is a word a character: the glyph's number in its low half and, in the
+high half, how many pixels right of x the character starts (the program adds the widths up;
+the GPU cannot, a vertex at a time). A font table is a texel a glyph: the address of its
+bitmap (fragment mode 3's layout), its width and its height. The GPU makes the six vertices
+of each character's rectangle from those, so a line of text costs the program a store a
+character, not a command.
 
 A vertex is 64 bytes: position, normal, texture coordinates, colour, four numbers each.
 Numbers are 16.16 fixed point. A colour given as one word is `0xTTRRGGBB`, T being

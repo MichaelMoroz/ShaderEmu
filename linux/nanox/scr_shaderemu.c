@@ -26,7 +26,8 @@
 #define LAYERS_OFFSET	0x01001000u	/* the display's layer table: count, then x, y, w, h, address */
 #define LIST_OFFSET	0x01400000u	/* our command list: 4096 commands of 64 bytes */
 #define CURSOR_OFFSET	0x01440000u	/* the cursor's image */
-#define CACHE_OFFSET	0x01441000u	/* glyphs of the built-in fonts, kept between lists */
+#define FONTS_OFFSET	0x01441000u	/* the built-in fonts' glyph tables and bitmaps, kept for good */
+#define CACHE_OFFSET	0x01481000u	/* single glyphs the engine asked for one at a time, kept between lists */
 #define DATA_OFFSET	0x01541000u	/* other textures for the commands in the list */
 #define DATA_END	0x016c0000u	/* beyond: what the host fetched (docs/fetch.md), then an OpenGL program's */
 #define REG_MODE	0		/* word indices from REGS_OFFSET */
@@ -51,6 +52,9 @@
 #define MAX_BLOCKS	(2 * MAX_SURFACES + 2)
 #define CACHE_SLOTS	2048
 #define CMD_RECT	2
+#define CMD_TEXT	4
+#define MAX_MESH	196608		/* vertices the GPU's mesh has for one list */
+#define MAX_FONTS	8
 #define FRAG_COLOUR	0
 #define FRAG_TEXTURE	1
 #define FRAG_MASK	3
@@ -70,7 +74,10 @@ struct surface {
 };
 
 extern int gr_mode;
-extern int (*gd_drawpicture)(PSD psd, MWCOORD x, MWCOORD y, MWCOORD width, MWCOORD height, const char *path);
+extern int (*gd_drawpicture)(PSD psd, MWCOORD x, MWCOORD y, MWCOORD width, MWCOORD height, const char *path,
+	const MWRECT *within);
+extern int (*gd_drawstring)(PSD psd, PMWCFONT font, MWCOORD x, MWCOORD y, const unsigned char *text, int count,
+	MWPIXELVAL fg, MWPIXELVAL bg, int usebg, MWCOORD *endx);
 extern void (*gd_hwcursor)(MWCOORD x, MWCOORD y, MWCOORD width, MWCOORD height, int visible,
 	const MWIMAGEBITS *image, const MWIMAGEBITS *mask, MWPIXELVAL fg, MWPIXELVAL bg);
 
@@ -82,6 +89,9 @@ static int accelerate = 1;
 static struct surface root, surfaces[MAX_SURFACES];
 static struct surface *target = &root;	/* the surface the queued commands draw on */
 static int commands;			/* queued so far, including the first */
+static uint32_t mesh_top;		/* mesh vertices the queued commands take */
+static struct { PMWCFONT font; uint32_t table; } fonts[MAX_FONTS];
+static uint32_t fonts_top = FONTS_OFFSET;
 static uint32_t data_top = DATA_OFFSET;	/* next free byte for textures */
 static int dirty_x0 = 1 << 30, dirty_y0 = 1 << 30, dirty_x1, dirty_y1;	/* what the queue covers */
 static struct { const unsigned char *lo, *hi; } font_bits[NUMBER_FONTS];
@@ -190,6 +200,7 @@ flush(void)
 	while ((int32_t)(regs[REG_COPIES] - landed) < 0)
 		next_frame();
 	commands = 0;
+	mesh_top = 0;
 	data_top = DATA_OFFSET;
 	dirty_x0 = dirty_y0 = 1 << 30;
 	dirty_x1 = dirty_y1 = 0;
@@ -205,7 +216,8 @@ emit(int n, int x0, int y0, int x1, int y1, uint32_t colour, int mode, uint32_t 
 	c[0] = CMD_RECT;
 	c[1] = colour & 0xffffff;
 	c[2] = 0;
-	c[3] = 6 * n;
+	c[3] = mesh_top;
+	mesh_top += 6;
 	c[4] = x0;
 	c[5] = y0;
 	c[6] = x1;
@@ -230,7 +242,7 @@ emit(int n, int x0, int y0, int x1, int y1, uint32_t colour, int mode, uint32_t 
 static void
 queue(int x0, int y0, int x1, int y1, uint32_t colour, int mode, uint32_t at, int w, int h, int sx, int sy)
 {
-	if (commands == MAX_COMMANDS)
+	if (commands == MAX_COMMANDS || mesh_top + 6 > MAX_MESH)
 		flush();
 	if (commands == 0)
 		emit(commands++, 0, 0, target->w, target->h, 0xffffff, FRAG_TEXTURE, target->at,
@@ -452,6 +464,98 @@ mask_blit(PSD psd, PMWBLITPARMS gc, int swap)
 	return 1;
 }
 
+/*
+ * A built-in font's table in GPU memory, made the first time the font draws a string: a texel
+ * a glyph (address of its bitmap, width, height), then the bitmaps, rows of whole bytes with
+ * the first pixel in the highest bit. 0 when there is no room for another font.
+ */
+static uint32_t
+font_table(PMWCFONT font)
+{
+	int f, g, r, b, wide16 = font->offset && ((const uint32_t *)font->offset)[0] >= 0x00010000;
+	uint32_t table, at, bytes = 0;
+	volatile uint32_t *entry;
+
+	for (f = 0; f < MAX_FONTS && fonts[f].font; f++)
+		if (fonts[f].font == font)
+			return fonts[f].table;
+	for (g = 0; g < font->size; g++)
+		bytes += ((((font->width ? font->width[g] : font->maxwidth) + 7) >> 3) * font->height + 3) & ~3u;
+	if (f == MAX_FONTS || fonts_top + 16 * font->size + bytes > CACHE_OFFSET)
+		return 0;
+	table = fonts_top;
+	at = table + 16 * font->size;
+	entry = (volatile uint32_t *)(gpu + table);
+	for (g = 0; g < font->size; g++, entry += 4) {
+		int width = font->width ? font->width[g] : font->maxwidth, row = (width + 7) >> 3, words = (width + 15) >> 4;
+		const MWIMAGEBITS *bits = font->bits + (!font->offset ? font->height * g :
+			wide16 ? ((const unsigned short *)font->offset)[g] : ((const uint32_t *)font->offset)[g]);
+		unsigned char *to = gpu + at;
+
+		for (r = 0; r < (int)font->height; r++)
+			for (b = 0; b < row; b++)
+				*to++ = (b & 1) ? bits[r * words + b / 2] & 0xff : bits[r * words + b / 2] >> 8;
+		entry[0] = GPU_PHYS + at;
+		entry[1] = width;
+		entry[2] = font->height;
+		entry[3] = 0;
+		at += (row * font->height + 3) & ~3u;
+	}
+	fonts_top = (at + 15) & ~15u;
+	fonts[f].font = font;
+	fonts[f].table = table;
+	return table;
+}
+
+/*
+ * A whole string of a built-in font as one command (docs/gpu.md): the GPU makes a rectangle
+ * of each character from the font's table. The processor's part is a word a character, the
+ * glyph's number and where it starts, which for a proportional font only it can add up.
+ */
+static int
+gpu_drawstring(PSD psd, PMWCFONT font, MWCOORD x, MWCOORD y, const unsigned char *text, int count,
+	MWPIXELVAL fg, MWPIXELVAL bg, int usebg, MWCOORD *endx)
+{
+	volatile uint32_t *c, *word;
+	uint32_t table;
+	int i, at = 0;
+
+	if (!queued(psd) || count <= 0 || count > 4096 || (table = font_table(font)) == 0)
+		return 0;
+	draw_on(psd);
+	if (commands + 3 > MAX_COMMANDS || mesh_top + 6 * count + 12 > MAX_MESH || data_top + 4 * count > DATA_END)
+		flush();
+	word = (volatile uint32_t *)(gpu + data_top);
+	for (i = 0; i < count; i++) {
+		int g = text[i] - font->firstchar;
+
+		if (g < 0 || g >= font->size)
+			g = 0;
+		word[i] = (uint32_t)g | (uint32_t)at << 16;
+		at += font->width ? font->width[g] : font->maxwidth;
+	}
+	/* through queue(): it starts a list with the surface's picture and keeps the area covered */
+	queue(x, y, x + at, y + font->height, bg, FRAG_COLOUR, 0, 0, 0, 0, 0);
+	if (!usebg) {
+		commands--;
+		mesh_top -= 6;
+	}
+	c = (volatile uint32_t *)(gpu + LIST_OFFSET) + 16 * commands++;
+	c[0] = CMD_TEXT;
+	c[1] = fg & 0xffffff;
+	c[2] = GPU_PHYS + table;
+	c[3] = mesh_top;
+	c[4] = x - target->x;
+	c[5] = y - target->y;
+	c[6] = count;
+	c[7] = GPU_PHYS + data_top;
+	c[8] = 0;
+	mesh_top += 6 * count;
+	data_top += (4 * count + 15) & ~15u;
+	*endx = x + at;
+	return 1;
+}
+
 static void
 gpu_maskwordmsb(PSD psd, PMWBLITPARMS gc)
 {
@@ -501,10 +605,11 @@ rom_address(int fd, const char *begins, int count)
 /*
  * A PPM file stretched over a rectangle, scaled by the GPU. A file in the ROM is sampled where
  * it is; another has its rows read into texture memory, as many as fit at a time. 0 leaves
- * the file to the engine's decoder.
+ * the file to the engine's decoder. Only what lies within the given rectangle is drawn.
  */
 static int
-gpu_picture(PSD psd, MWCOORD x, MWCOORD y, MWCOORD width, MWCOORD height, const char *path)
+gpu_picture(PSD psd, MWCOORD x, MWCOORD y, MWCOORD width, MWCOORD height, const char *path,
+	const MWRECT *within)
 {
 	struct surface *s;
 	int pw = 0, ph = 0, most = 0, start = 0, x0, x1, y0, y1, band, rows, j, fd;
@@ -529,6 +634,10 @@ gpu_picture(PSD psd, MWCOORD x, MWCOORD y, MWCOORD width, MWCOORD height, const 
 	x1 = x + width < s->x + s->w ? x + width : s->x + s->w;
 	y0 = y > s->y ? y : s->y;
 	y1 = y + height < s->y + s->h ? y + height : s->y + s->h;
+	if (x0 < within->left) x0 = within->left;
+	if (y0 < within->top) y0 = within->top;
+	if (x1 > within->right) x1 = within->right;
+	if (y1 > within->bottom) y1 = within->bottom;
 	if (accelerate && x0 < x1 && y0 < y1 && (rom = rom_address(fd, head, j)) != 0) {
 		/* a file in the ROM is the texture where it lies: one rectangle, nothing read */
 		close(fd);
@@ -867,6 +976,7 @@ gpu_open(PSD psd)
 	memset(gpu + LAYERS_OFFSET, 0, 4096);
 	regs[REG_CURSOR + 2] = 0;
 	gd_hwcursor = gpu_cursor;
+	gd_drawstring = gpu_drawstring;
 	gd_drawpicture = gpu_picture;
 	gd_compositor = &compositor;
 	regs[REG_WIDTH] = width;

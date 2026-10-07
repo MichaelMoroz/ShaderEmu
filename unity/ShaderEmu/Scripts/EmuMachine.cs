@@ -4,6 +4,7 @@ using UdonSharp;
 using UnityEngine;
 using UnityEngine.UI;
 using VRC.SDK3.Components;
+using VRC.SDK3.Image;
 using VRC.SDK3.Rendering;
 using VRC.SDK3.StringLoading;
 using VRC.SDKBase;
@@ -45,8 +46,10 @@ public class EmuMachine : UdonSharpBehaviour
     // was built with, and the one a visitor types into the field on the panel.
     public string[] siteAddresses;
     public VRCUrl[] siteUrls;
-    public VRCUrlInputField typedUrl;
-    public InputField wantedLink;      // an address the browser wants and the world may not open: to copy
+    public InputField[] wantedLinks;       // four addresses the browser wants and the world may not open: to copy
+    public VRCUrlInputField[] typedUrls;   // and four fields to paste them into
+    public GameObject linksButton;         // by the display, while something is wanted
+    public GameObject linksPanel;          // the eight fields, in front of the display
     public Texture2D hostData;         // 256 x 256: an answer's bytes, four a texel
     public TextMeshProUGUI fetchLabel;
 
@@ -88,6 +91,11 @@ public class EmuMachine : UdonSharpBehaviour
     private uint fetchSeq, fetchAnswered;
     private int fetchLength, fetchStatus, fetchPacked;
     private float fetchStarted;
+    private int fetchKind, fetchW, fetchH;
+    private VRCImageDownloader imageLoader;
+    private Texture2D hostImage;
+    private string[] wanted = new string[4];
+    private float[] wantedAt = new float[4];
     private byte[] fetchBytes;
     private Color32[] fetchPixels = new Color32[65536];
 
@@ -104,6 +112,9 @@ public class EmuMachine : UdonSharpBehaviour
     {
         current = stateA;
         other = stateB;
+        for (int i = 0; i < 4; i++) wanted[i] = "";
+        linksPanel.SetActive(false);
+        linksButton.SetActive(false);
         if (speedSlider != null) SetBudget(2048 << (int)speedSlider.value);
         ShowLabels();
         if (powerOnAtStart) PowerOn();
@@ -272,7 +283,7 @@ public class EmuMachine : UdonSharpBehaviour
     // ---- pages for the guest (docs/fetch.md) ----
 
     // The guest asked for an address: words 16 and 17 of the control block are the request
-    // and the answer, the address itself follows from texel 18.
+    // and the answer, the address itself follows from texel 18. Kind 1 is a picture.
     private void FetchAsked(uint seq)
     {
         int length = (int)Mathf.Min(Word(64 + 16, 1), 255);
@@ -280,10 +291,12 @@ public class EmuMachine : UdonSharpBehaviour
         for (int i = 0; i < length; i++) address += (char)((Word(64 + 18 + i / 16, (i / 4) % 4) >> (8 * (i % 4))) & 0xff);
         fetchSeq = seq;
         fetchLength = 0;
+        fetchKind = (int)Word(64 + 16, 2);
         VRCUrl url = null;
-        // an address a visitor has put into the field is theirs to open: the one typed for
-        // "world:typed", or the very one the browser asks for
-        if (typedUrl != null && (address == "world:typed" || typedUrl.GetUrl().Get() == address)) url = typedUrl.GetUrl();
+        // an address a visitor has put into one of the fields is theirs to open: the very one
+        // the browser asks for, or the first field's for "world:typed"
+        for (int i = 0; i < typedUrls.Length; i++)
+            if (typedUrls[i].GetUrl().Get() == address || (i == 0 && address == "world:typed")) url = typedUrls[i].GetUrl();
         for (int i = 0; i < siteAddresses.Length; i++)
             if (siteAddresses[i] == address) url = siteUrls[i];
         // VRChat throws on an address that is not https, and then calls neither event below
@@ -298,14 +311,108 @@ public class EmuMachine : UdonSharpBehaviour
         {
             fetchStatus = 1;   // not until a visitor hands the world this address
             fetchState = FetchReady;
-            if (wantedLink != null && wantedLink.text != address) wantedLink.text = address;
-            if (fetchLabel != null) fetchLabel.text = "Copy the link on the right into the field under it to open it";
+            Want(address, fetchKind);
             return;
         }
+        Unwant(address);
         fetchState = FetchLoading;
         fetchStarted = Time.time;
         if (fetchLabel != null) fetchLabel.text = "Loading " + address;
-        VRCStringDownloader.LoadUrl(url, (IUdonEventReceiver)this);
+        if (fetchKind == 1)
+        {
+            // a picture: VRChat fetches and decodes it into a texture, which the control pass
+            // scales into the guest's memory as pixels
+            if (imageLoader == null) imageLoader = new VRCImageDownloader();
+            TextureInfo info = new TextureInfo();
+            info.GenerateMipMaps = true;
+            imageLoader.DownloadImage(url, null, (IUdonEventReceiver)this, info);
+        }
+        else
+        {
+            VRCStringDownloader.LoadUrl(url, (IUdonEventReceiver)this);
+        }
+    }
+
+    // ---- addresses the visitor has to hand over ----
+
+    // Slot 0 is the page, 1 to 3 what it wants next (pictures, in its order of asking).
+    private void Want(string address, int kind)
+    {
+        int slot = -1;
+        for (int i = 0; i < 4; i++)
+            if (wanted[i] == address) slot = i;
+        if (slot < 0)
+        {
+            if (kind == 0)
+            {
+                // another page: what the last one wanted is no longer wanted
+                for (int i = 1; i < 4; i++) wanted[i] = "";
+                slot = 0;
+            }
+            else
+            {
+                for (int i = 3; i >= 1; i--)
+                    if (wanted[i] == "") slot = i;
+            }
+            if (slot < 0) return;
+            wanted[slot] = address;
+        }
+        wantedAt[slot] = Time.time;
+        ShowLinks();
+    }
+
+    private void Unwant(string address)
+    {
+        for (int i = 0; i < 4; i++)
+            if (wanted[i] == address) wanted[i] = "";
+        ShowLinks();
+    }
+
+    private void ShowLinks()
+    {
+        bool any = false;
+        for (int i = 0; i < 4; i++)
+        {
+            if (wanted[i] != "") any = true;
+            if (wantedLinks[i].text != wanted[i]) wantedLinks[i].text = wanted[i];
+        }
+        linksButton.SetActive(any && !linksPanel.activeSelf);
+        if (fetchLabel != null && any) fetchLabel.text = "The browser needs addresses pasted: the button by the display";
+    }
+
+    // The button by the display, and the panel's Close.
+    public void ToggleLinks()
+    {
+        linksPanel.SetActive(!linksPanel.activeSelf);
+        ShowLinks();
+    }
+
+    public override void OnImageLoadSuccess(IVRCImageDownload result)
+    {
+        if (fetchState != FetchLoading) return;
+        hostImage = result.Result;
+        // as large as fits what the guest can be handed: 65,536 pixels, 256 either way
+        int w = hostImage.width, h = hostImage.height;
+        fetchW = w;
+        fetchH = h;
+        while (fetchW > 256 || fetchH > 256 || fetchW * fetchH > 65536)
+        {
+            fetchW = Mathf.Max(1, fetchW * 7 / 8);
+            fetchH = Mathf.Max(1, h * fetchW / w);
+        }
+        fetchLength = fetchW * fetchH * 4;
+        fetchStatus = 200;
+        fetchState = FetchReady;
+        if (fetchLabel != null) fetchLabel.text = "Loaded a picture, " + w + " x " + h;
+    }
+
+    public override void OnImageLoadError(IVRCImageDownload result)
+    {
+        if (fetchState != FetchLoading) return;
+        fetchLength = 0;
+        fetchStatus = 415;
+        fetchState = FetchReady;
+        if (fetchLabel != null) fetchLabel.text = "Picture not loaded: " + result.ErrorMessage;
     }
 
     public override void OnStringLoadSuccess(IVRCStringDownload result)
@@ -332,11 +439,20 @@ public class EmuMachine : UdonSharpBehaviour
     // writes them and the answer's words into the guest's memory in one frame.
     private void FetchStep()
     {
+        // an address nobody has asked for in a while is no longer wanted
+        for (int i = 0; i < 4; i++)
+            if (wanted[i] != "" && Time.time - wantedAt[i] > 8f) Unwant(wanted[i]);
         if (fetchState == FetchDelivering)
         {
             machineMaterial.SetInt("_FetchDeliver", 0);
             fetchAnswered = fetchSeq;
             fetchState = FetchIdle;
+            // the picture's texture has been copied: VRChat keeps every one until told
+            if (imageLoader != null)
+            {
+                imageLoader.Dispose();
+                imageLoader = null;
+            }
         }
         else if (fetchState == FetchLoading && Time.time - fetchStarted > 20f)
         {
@@ -363,11 +479,15 @@ public class EmuMachine : UdonSharpBehaviour
         }
         else if (fetchState == FetchReady)
         {
+            bool picture = fetchKind == 1 && fetchStatus == 200;
             machineMaterial.SetTexture("_HostData", hostData);
+            if (picture) machineMaterial.SetTexture("_HostImage", hostImage);
             machineMaterial.SetInt("_FetchSeq", (int)(fetchSeq & 0xffffff));
             machineMaterial.SetInt("_FetchLength", fetchLength);
             machineMaterial.SetInt("_FetchStatus", fetchStatus);
-            machineMaterial.SetInt("_FetchDeliver", 1);
+            machineMaterial.SetInt("_FetchW", picture ? fetchW : 0);
+            machineMaterial.SetInt("_FetchH", picture ? fetchH : 0);
+            machineMaterial.SetInt("_FetchDeliver", picture ? 2 : 1);
             fetchState = FetchDelivering;
         }
     }

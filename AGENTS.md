@@ -343,10 +343,24 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
 - To test the beams in play mode: `TeleportTo` in front of the target (the desktop beam is the
   head's), then `RunInputEvent("_inputUse", new UdonInputEventArgs(true, HandType.RIGHT))` on
   the "Beams" behaviour. ClientSim may scale "DestkopTrackingData"; set it to 1 first.
+- The guest has a C compiler (`docs/cc.md`): `wsl -- bash /mnt/c/Development/ShaderX86/linux/tcc/build.sh`
+  (7 s) after Nano-X's build, then the image and snapshot. To check it, resume the snapshot and
+  run `cc` on a file, or `example cube` under `nano-X -p`. A library TinyCC must find after the
+  C library goes into its `libtcc1.a`; the toolchain's default `libgcc.a` is hard-float and
+  gives a program built with it an illegal instruction.
+- Text of a built-in font is one GPU command a string (`CMD_TEXT`, `gd_drawstring`): 374 to 73
+  instructions a character. A drawing request still costs 1,000 to 2,000 whatever it draws.
+  `nxbench` prints instructions as well as time for each of its phases.
 - A page for the guest's browser comes from the host (`docs/fetch.md`): control words at
   0x87000100 and 256 KB at 0x876c0000, written by the control pass. The harness prints
   `the guest asks for` and `answered with` on stderr. `linux/apps/web/sites.txt` is both the
   browser's home page and the only addresses the VRChat world can load: rebuild both after editing.
+- Any other address, and each picture, a visitor of the world hands over by copy and paste
+  (four slots, a button by the display: `docs/fetch.md`). In play mode, paste from editor code:
+  `typedUrls[i].SetUrl(new VRCUrl(wantedLinks[i].text))`. ClientSim loads pictures too.
+- A driver hook that draws for the engine (`gd_drawpicture`) gets one rectangle of the clip
+  region a call and must stay inside it: without that a picture scrolled up painted over the
+  title bar. The caption is 22 pixels high and its buttons 18 (`nanowm.h`), for VR's beams.
 - The wheel is key-ring events 0x3fe (up) and 0x3ff (down): `WM_MOUSEWHEEL` in the harness
   window, `EmuMachine.Wheel` in Unity. A program sees a button-down with a scroll bit set.
 - The image builder adds files to folders the ROM already has and cannot make a folder: new

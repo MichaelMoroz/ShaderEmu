@@ -36,6 +36,8 @@ and it is the only way this computer becomes usable.
   asks the host, which fetches the page and writes it into memory in one shader pass.
 - **Doom** (`docs/doom.md`): Microwindows' port, with the level drawn by the machine's GPU
   through OpenGL instead of by its CPU.
+- **A C compiler in the machine** (`docs/cc.md`): TinyCC, with the C library, Nano-X and
+  OpenGL ES, and two 3D examples it builds there.
 - **Keyboard, pointer and wheel** as Linux input devices (`docs/input.md`), a display the guest
   describes in a few control words (`docs/display.md`).
 - **A VRChat world** (`unity/ShaderEmu`): the same shaders run by UdonSharp scripts, with the
@@ -96,6 +98,7 @@ To rebuild the guest software (WSL, no root; everything goes to `~/shaderemu-lin
     wsl -- bash /mnt/c/.../linux/nanox/build.sh        # Nano-X and its programs
     wsl -- bash /mnt/c/.../linux/apps/build.sh         # the desktop's own programs
     wsl -- bash /mnt/c/.../linux/nanox/doom.sh         # Doom
+    wsl -- bash /mnt/c/.../linux/tcc/build.sh          # the C compiler for the guest, its examples
     python tools\make_wallpaper.py                     # desktop pictures (fetched, not kept here)
     python tools\make_linux_image.py
 
@@ -122,7 +125,7 @@ To rebuild the guest software (WSL, no root; everything goes to `~/shaderemu-lin
   that build the scene.
 - `tools/` – the image builder, a software model of the GPU (`gpu_reference.py`), profilers
   (`pc_profile.py`, `boot_profile.py`, `dxil_path.py`), the speed test and the console viewer.
-- `docs/` – one file per subject: `boot`, `gpu`, `display`, `input`, `fetch`, `volume`, `nanox`, `doom`.
+- `docs/` – one file per subject: `boot`, `gpu`, `display`, `input`, `fetch`, `volume`, `nanox`, `cc`, `doom`.
 - `rvc/` – a clone of upstream rvc (not part of this repository): its boot images and the
   reference shader.
 
@@ -140,7 +143,7 @@ the design notes are kept in `docs/original-x86-plan.md`.
 
 [rvc](https://github.com/pimaker/rvc) and [linux-rvc](https://github.com/pimaker/linux-rvc) by
 pimaker; Linux; OpenSBI; musl; BusyBox; GCC and LLVM; [Microwindows](https://github.com/ghaerr/microwindows)
-by Greg Haerr and contributors, with its port of Doom; DOOM by id Software; glxgears from the
+by Greg Haerr and contributors, with its port of Doom; TinyCC and jrrk2's riscv32 port of it; DOOM by id Software; glxgears from the
 Mesa demos; photographs from Unsplash; VRChat's SDK and UdonSharp.
 
 ## Licence

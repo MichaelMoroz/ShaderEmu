@@ -618,6 +618,66 @@ public static partial class ShaderEmuBuilder
         return sceneMat;
     }
 
+    // What the guest's browser may not open by itself (docs/fetch.md): a button by the display
+    // while something waits, and a panel in front of the display with four addresses to copy
+    // and four fields to paste them into. A page opens only on a visitor's own say-so.
+    public static void WebLinks(Transform computer, EmuMachine machine, Vector3 dispAt, float dispW, float dispH)
+    {
+        Color dim = new Color(0.62f, 0.68f, 0.76f);
+        TextMeshProUGUI unused;
+        RectTransform corner = Panel(computer, "Links button", dispAt + new Vector3(-dispW / 2 - 0.17f, -dispH / 2 + 0.12f, 0), Vector3.zero,
+                                     220, 220, new Color(0.05f, 0.055f, 0.07f));
+        Button open = MakeButton(corner, "Open", "Links\nneeded", 10, 10, 200, 200, 30, out unused);
+        open.GetComponent<Image>().color = new Color(0.55f, 0.30f, 0.08f);
+        OnClick(open, machine, "ToggleLinks");
+
+        RectTransform panel = Panel(computer, "Links panel", dispAt + new Vector3(0, 0, -0.30f), Vector3.zero, 1700, 640,
+                                    new Color(0.05f, 0.055f, 0.07f, 0.97f));
+        Label(panel, "Title", "The browser asks for these. VRChat lets a world open only an address a visitor gives it:", 30, 14, 1400, 40, 26,
+              TextAnchor.MiddleLeft, Color.white);
+        Label(panel, "How", "copy each address on the left and paste it into the field on its right. What was asked for then loads by itself.",
+              30, 54, 1400, 36, 22, TextAnchor.MiddleLeft, dim);
+        Button close = MakeButton(panel, "Close", "Close", 1490, 16, 180, 70, 26, out unused);
+        OnClick(close, machine, "ToggleLinks");
+        string[] rows = { "The page", "Picture or style 1", "Picture or style 2", "Picture or style 3" };
+        machine.wantedLinks = new InputField[4];
+        machine.typedUrls = new VRC.SDK3.Components.VRCUrlInputField[4];
+        for (int i = 0; i < 4; i++)
+        {
+            float y = 112 + i * 128;
+            Label(panel, "Row " + i, rows[i], 30, y, 400, 30, 22, TextAnchor.MiddleLeft, dim);
+            Label(panel, "Copy " + i, "copy", 30, y + 34, 80, 60, 20, TextAnchor.MiddleLeft, dim);
+            Label(panel, "Paste " + i, "paste", 870, y + 34, 90, 60, 20, TextAnchor.MiddleLeft, dim);
+            for (int side = 0; side < 2; side++)
+            {
+                RectTransform box = Child(panel, (side == 0 ? "Link " : "Address ") + i, side == 0 ? 110 : 960, y + 34, 710, 60);
+                Plate(box, side == 0 ? new Color(0.10f, 0.11f, 0.13f) : new Color(0.14f, 0.16f, 0.22f));
+                Text text = Child(box, "Text", 12, 6, 686, 48).gameObject.AddComponent<Text>();
+                text.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+                text.fontSize = 22;
+                text.color = Color.white;
+                text.alignment = TextAnchor.MiddleLeft;
+                text.supportRichText = false;
+                if (side == 0)
+                {
+                    InputField link = box.gameObject.AddComponent<InputField>();
+                    link.textComponent = text;
+                    link.targetGraphic = box.GetComponent<Image>();
+                    machine.wantedLinks[i] = link;
+                }
+                else
+                {
+                    VRC.SDK3.Components.VRCUrlInputField address = box.gameObject.AddComponent<VRC.SDK3.Components.VRCUrlInputField>();
+                    address.textComponent = text;
+                    address.targetGraphic = box.GetComponent<Image>();
+                    machine.typedUrls[i] = address;
+                }
+            }
+        }
+        machine.linksButton = corner.gameObject;
+        machine.linksPanel = panel.gameObject;
+    }
+
     static void NameLayer(int layer, string name)
     {
         SerializedObject tags = new SerializedObject(AssetDatabase.LoadAllAssetsAtPath("ProjectSettings/TagManager.asset")[0]);
@@ -948,33 +1008,7 @@ public static partial class ShaderEmuBuilder
 
         // an address of the visitor's own for the guest's browser: VRChat only loads what is
         // typed into a field of this kind
-        // A link the browser wants and the world may not open is shown in the first field, for
-        // the visitor to copy into the second: a page opens only on a visitor's own say-so.
-        System.Func<string, float, Text> fieldText = (name, y) =>
-        {
-            RectTransform box = Child(panel, name, bx, y, 600, 44);
-            Plate(box, new Color(0.12f, 0.13f, 0.16f));
-            Text text = Child(box, "Text", 10, 4, 580, 36).gameObject.AddComponent<Text>();
-            text.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
-            text.fontSize = 20;
-            text.color = Color.white;
-            text.alignment = TextAnchor.MiddleLeft;
-            text.supportRichText = false;
-            return text;
-        };
-        Label(panel, "Link title", "Link to copy (VRChat opens only what a visitor gives it)", bx, 482, 630, 24, 17, TextAnchor.MiddleLeft, dim);
-        Text linkText = fieldText("Web link", 506);
-        InputField link = linkText.transform.parent.gameObject.AddComponent<InputField>();
-        link.textComponent = linkText;
-        link.targetGraphic = link.GetComponent<Image>();
-        link.lineType = InputField.LineType.SingleLine;
-        machine.wantedLink = link;
-        Label(panel, "Web title", "Paste here: it, or any https address", bx, 552, 630, 24, 17, TextAnchor.MiddleLeft, dim);
-        Text typed = fieldText("Web address", 576);
-        VRC.SDK3.Components.VRCUrlInputField address = typed.transform.parent.gameObject.AddComponent<VRC.SDK3.Components.VRCUrlInputField>();
-        address.textComponent = typed;
-        address.targetGraphic = address.GetComponent<Image>();
-        machine.typedUrl = address;
+        WebLinks(computer, machine, dispAt, dispW, dispH);
         machine.fetchLabel = Label(panel, "Web status", "", 30, 520, 1000, 50, 24, TextAnchor.MiddleLeft, new Color(0.75f, 0.85f, 1f));
         Apply(machine);
 

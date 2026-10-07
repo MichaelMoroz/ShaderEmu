@@ -33,6 +33,7 @@
 #define CMD_CLEAR 1     // 3 vertices
 #define CMD_RECT 2      // 6 vertices
 #define CMD_DRAW 3      // `count` vertices
+#define CMD_TEXT 4      // 6 vertices a character
 
 // How a draw's vertices are projected.
 #define VERTEX_SCREEN 0   // position is already in pixels (x, y) and depth (z, 0..1)
@@ -134,10 +135,10 @@ bool gpu_command(uint id, uint span, out uint base, out uint4 head) {
     base = list + 4 * lo;
     head = ram(base);
     uint op = head.r;
-    uint slots = op == CMD_CLEAR ? 3 : op == CMD_RECT ? 6 : op == CMD_DRAW ? head.b : 0;
+    uint slots = op == CMD_CLEAR ? 3 : op == CMD_RECT ? 6 : op == CMD_DRAW ? head.b : op == CMD_TEXT ? 6 * ram(base + 1).b : 0;
     if (id < head.a || id + span > head.a + slots) return false;
 #ifdef GPU_PASS_UNIFORMS
-    uint drawn_in = op == CMD_RECT ? FRAGMENT_PASS(ram(base + 2).r) : op == CMD_DRAW ? FRAGMENT_PASS(ram(base + 1).g) : 0;
+    uint drawn_in = op == CMD_RECT || op == CMD_TEXT ? FRAGMENT_PASS(ram(base + 2).r) : op == CMD_DRAW ? FRAGMENT_PASS(ram(base + 1).g) : 0;
     if (drawn_in != _GpuPass) return false;
 #endif
     return true;
@@ -178,6 +179,20 @@ gpu_varyings gpu_vertex_of(uint id, uint base, uint4 head) {
             o.uv = float2(right ? uv.z : uv.x, low ? uv.w : uv.y);
             o.texture_info = tex;
             o.key = head.b;
+        } else if (op == CMD_TEXT) {
+            // head.g colour, head.b the font's table; then x, y, count, the string; then the
+            // fragment word. A character is a word: its glyph, and in the high half where it
+            // starts along the line. The table has a texel a glyph: bitmap, width, height.
+            uint4 at = ram(base + 1);
+            uint part = k % 6, corner = part < 3 ? part : (part == 3 ? 2 : (part == 4 ? 1 : 3));
+            uint letter = ram_word(at.a + 4 * (k / 6));
+            uint4 glyph = ram(texel_of(head.b) + (letter & 0xffff));
+            bool right = (corner & 1) != 0, low = (corner & 2) != 0;
+            o.position = place_pixels(float2(asint(at.r) + (int)(letter >> 16) + (right ? (int)glyph.g : 0),
+                                             asint(at.g) + (low ? (int)glyph.b : 0)), 0.0);
+            o.colour = colour_of(head.g);
+            o.uv = float2(right ? 1.0 : 0.0, low ? 1.0 : 0.0);
+            o.texture_info = uint4(FRAGMENT_MASK | (ram(base + 2).r & 0x70000), glyph.r, glyph.g, glyph.b);
         } else {
             // head.g vertex buffer, head.b count; then vertex mode, fragment mode, uniforms,
             // texture address; width, height, key
@@ -426,7 +441,24 @@ bool gpu_writeback(uint2 pos, out uint4 result) {
 
 #ifdef GPU_INPUT
 // A word of what the host fetched: its texture holds one byte a channel, one word a texel.
+// With _FetchDeliver 2 it is a picture the host still has as a texture of its own (_HostImage,
+// any size, sRGB, rows bottom up): word n is pixel n of it scaled to _FetchW by _FetchH.
 uint fetch_word(uint n) {
+    [branch]
+    if (_FetchDeliver == 2) {
+        if (n >= _FetchW * _FetchH) return 0;
+        uint2 size;
+        uint levels;
+        _HostImage.GetDimensions(0, size.x, size.y, levels);
+        // from the level whose texels are about the size of ours
+        uint level = min((uint)max(log2((float)size.x / _FetchW), 0.0), levels - 1);
+        uint2 at = uint2(n % _FetchW, _FetchH - 1 - n / _FetchW), small = max(size >> level, 1u);
+        float4 c = _HostImage.Load(int3(min(at * small / uint2(_FetchW, _FetchH), small - 1), level));
+        float3 seen = c.rgb <= 0.0031308 ? c.rgb * 12.92 : 1.055 * pow(abs(c.rgb), 1.0 / 2.4) - 0.055;
+        seen = lerp(1.0, seen, c.a);   // what shows through is the page
+        uint3 b = (uint3)(saturate(seen) * 255.0 + 0.5);
+        return (b.r << 16) | (b.g << 8) | b.b;
+    }
     uint4 b = (uint4)(_HostData.Load(int3(n & 255, n >> 8, 0)) * 255.0 + 0.5);
     return b.r | (b.g << 8) | (b.b << 16) | (b.a << 24);
 }
@@ -470,7 +502,7 @@ uint4 gpu_control(uint2 pos) {
     }
     if (_FetchDeliver != 0) {
         // the host has an answer: its bytes and the words that say so arrive in one pass
-        if (index == FETCH_REPLY) return uint4(_FetchSeq, _FetchLength, _FetchStatus, 0);
+        if (index == FETCH_REPLY) return uint4(_FetchSeq, _FetchLength, _FetchStatus, _FetchInfo | _FetchW | (_FetchH << 16));
         if (index >= FETCH_DATA && index < FETCH_DATA + 0x4000) {
             uint n = (index - FETCH_DATA) * 4;
             return uint4(fetch_word(n), fetch_word(n + 1), fetch_word(n + 2), fetch_word(n + 3));

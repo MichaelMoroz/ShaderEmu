@@ -7,7 +7,7 @@ REPO=$(cd "$HERE/../.." && pwd)
 . "$REPO/linux/userland/toolchain.sh"
 MW=$WORK/src/microwindows
 MW_COMMIT=a53c319
-PROGRAMS="nano-X nxclock nxeyes nxterm nxcalc nxtetris nxmine nxroach nxev demo-hello demo-blit demo-polygon nxbench nxbar glxgears"
+PROGRAMS="nano-X nxclock nxeyes nxterm nxcalc nxtetris nxmine nxev demo-hello demo-blit demo-polygon nxbench nxbar glxgears"
 
 if [ ! -d "$MW" ]; then
     echo "== Microwindows source"
@@ -55,7 +55,7 @@ tr -d '\r' < "$HERE/nx" > "$OUT/nx"
 # the Start menu lists what the nxapps.* files name (nxbar.c): a program adds itself with one
 mkdir -p "$OUT/../share"
 printf '%s\n' "Terminal=nxterm" "Calculator=nxcalc" "Clock=nxclock" "Eyes=nxeyes" "Tetris=nxtetris" "Mines=nxmine" \
-    "Roaches=nxroach" "Gears (OpenGL)=glxgears" > "$OUT/../share/nxapps.10-nanox"
+    "Gears (OpenGL)=glxgears" > "$OUT/../share/nxapps.10-nanox"
 for p in $PROGRAMS; do
     [ -f "$MW/src/bin/$p" ] || { echo "not built: $p"; continue; }
     riscv32-linux-strip -o "$OUT/$p" "$MW/src/bin/$p"

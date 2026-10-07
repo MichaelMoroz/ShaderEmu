@@ -341,7 +341,7 @@ main(int argc, char **argv)
 			break;
 		case GR_EVENT_TYPE_BUTTON_DOWN:
 			if (ui_wheel(&event)) {
-				scroll_to(top + ui_wheel(&event));
+				scroll_to(top + ui_wheel_sum(&event));
 			} else if (event.button.y < BAR) {
 				for (i = 0; i < BUTTONS; i++)
 					if (ui_inside(event.button.x, event.button.y, 3 + i * (BUTTON_W + 3), 3, BUTTON_W, BAR - 6))

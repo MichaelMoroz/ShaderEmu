@@ -23,6 +23,7 @@
 
 #include <conio.h>
 #include <wininet.h>
+#include <wincodec.h>
 #pragma comment(lib, "wininet.lib")
 #include <fcntl.h>
 #include <io.h>
@@ -707,7 +708,7 @@ int main(int argc, char** argv) {
     struct Fetch {
         std::mutex lock;
         bool busy = false, ready = false;
-        uint32_t seq = 0, status = 0;
+        uint32_t seq = 0, status = 0, info = 0;
         std::string body;
     } fetch;
     uint32_t fetchAnswered = 0;
@@ -729,10 +730,11 @@ int main(int argc, char** argv) {
                 std::string url((const char*)raw.data() + (64 + 18) * 16, length);
                 fetch.busy = true;
                 fetch.seq = texel(64 + 16, 0);
+                bool picture = texel(64 + 16, 2) == 1;
                 fprintf(stderr, "[harness] the guest asks for %s\n", url.c_str());
-                std::thread([&fetch, url] {
+                std::thread([&fetch, url, picture] {
                     std::string body;
-                    uint32_t status = 0;
+                    uint32_t status = 0, info = 0;
                     HINTERNET net = InternetOpenA("ShaderEmu", INTERNET_OPEN_TYPE_PRECONFIG, nullptr, nullptr, 0);
                     HINTERNET page = net && url.rfind("http", 0) == 0
                         ? InternetOpenUrlA(net, url.c_str(), nullptr, 0, INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_UI, 0) : nullptr;
@@ -745,9 +747,53 @@ int main(int argc, char** argv) {
                         InternetCloseHandle(page);
                     }
                     if (net) InternetCloseHandle(net);
+                    if (picture && status == 200) {
+                        // The guest has no decoder: it gets pixels, a word each, of the picture
+                        // scaled to fit the 256 KB it can be handed.
+                        std::string pixels;
+                        CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+                        ComPtr<IWICImagingFactory> wic;
+                        ComPtr<IWICStream> stream;
+                        ComPtr<IWICBitmapDecoder> decoder;
+                        ComPtr<IWICBitmapFrameDecode> frame;
+                        ComPtr<IWICBitmapScaler> scaler;
+                        ComPtr<IWICFormatConverter> converter;
+                        UINT w = 0, h = 0;
+                        if (SUCCEEDED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wic))) &&
+                            SUCCEEDED(wic->CreateStream(&stream)) &&
+                            SUCCEEDED(stream->InitializeFromMemory((BYTE*)body.data(), (DWORD)body.size())) &&
+                            SUCCEEDED(wic->CreateDecoderFromStream(stream.Get(), nullptr, WICDecodeMetadataCacheOnDemand, &decoder)) &&
+                            SUCCEEDED(decoder->GetFrame(0, &frame)) && SUCCEEDED(frame->GetSize(&w, &h)) && w && h) {
+                            UINT tw = w, th = h;
+                            while (tw > 256 || th > 256 || tw * th > 65536) {
+                                tw = (std::max)(1u, tw * 7 / 8);
+                                th = (std::max)(1u, h * tw / w);
+                            }
+                            if (SUCCEEDED(wic->CreateBitmapScaler(&scaler)) &&
+                                SUCCEEDED(scaler->Initialize(frame.Get(), tw, th, WICBitmapInterpolationModeFant)) &&
+                                SUCCEEDED(wic->CreateFormatConverter(&converter)) &&
+                                SUCCEEDED(converter->Initialize(scaler.Get(), GUID_WICPixelFormat32bppBGRA, WICBitmapDitherTypeNone, nullptr, 0,
+                                                                WICBitmapPaletteTypeCustom))) {
+                                pixels.resize((size_t)tw * th * 4);
+                                if (SUCCEEDED(converter->CopyPixels(nullptr, tw * 4, (UINT)pixels.size(), (BYTE*)pixels.data()))) {
+                                    for (size_t i = 0; i < pixels.size(); i += 4) {
+                                        // over white, as the page is; the word is 0x00RRGGBB
+                                        unsigned a = (unsigned char)pixels[i + 3];
+                                        for (int c = 0; c < 3; ++c)
+                                            pixels[i + c] = (char)(((unsigned char)pixels[i + c] * a + 255 * (255 - a)) / 255);
+                                        pixels[i + 3] = 0;
+                                    }
+                                    info = tw | th << 16;
+                                }
+                            }
+                        }
+                        if (info) body.swap(pixels);
+                        else status = 415;   // not a picture this host can read
+                    }
                     std::lock_guard<std::mutex> lock(fetch.lock);
                     fetch.body.swap(body);
                     fetch.status = status;
+                    fetch.info = info;
                     fetch.busy = false;
                     fetch.ready = true;
                 }).detach();
@@ -890,6 +936,7 @@ int main(int argc, char** argv) {
                     mat.setInt("_FetchSeq", fetch.seq);
                     mat.setInt("_FetchLength", (int64_t)n);
                     mat.setInt("_FetchStatus", fetch.status);
+                    mat.setInt("_FetchInfo", fetch.info);
                     fetchDelivering = true;
                     fprintf(stderr, "[harness] answered with %zu bytes, status %u\n", n, fetch.status);
                 }

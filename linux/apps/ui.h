@@ -87,6 +87,25 @@ ui_wheel(const GR_EVENT *event)
 	return (event->button.buttons & GR_BUTTON_SCROLLUP) ? -1 : (event->button.buttons & GR_BUTTON_SCROLLDN) ? 1 : 0;
 }
 
+/* The same, with every notch already waiting added in and taken off the queue: a slow redraw
+ * then answers all of them at once and stops when the wheel does. */
+static int
+ui_wheel_sum(const GR_EVENT *event)
+{
+	GR_EVENT next;
+	int sum = ui_wheel(event);
+
+	while (sum && GrPeekEvent(&next)) {
+		if (ui_wheel(&next))
+			sum += ui_wheel(&next);
+		else if (next.type != GR_EVENT_TYPE_BUTTON_UP ||
+			 !(next.button.changebuttons & (GR_BUTTON_SCROLLUP | GR_BUTTON_SCROLLDN)))
+			break;
+		GrGetNextEvent(&next);
+	}
+	return sum;
+}
+
 #define UI_SCROLL_W 14
 
 static int

@@ -1,6 +1,7 @@
 /*
  * nxbench: times the drawing a window system spends its life on (fills, text, scrolling),
- * through the Nano-X server. Prints milliseconds for each.
+ * through the Nano-X server. Prints milliseconds for each, and the instructions the whole
+ * machine ran meanwhile: far fewer than the time allows means the time went on waiting.
  */
 #include <stdio.h>
 #include <string.h>
@@ -22,6 +23,16 @@ now_ms(void)
 
 	gettimeofday(&tv, NULL);
 	return tv.tv_sec * 1000L + tv.tv_usec / 1000;
+}
+
+/* Instructions the machine has run (the low word: a phase is far shorter than its wrap). */
+static unsigned long
+ran(void)
+{
+	unsigned long n;
+
+	__asm__ volatile("rdcycle %0" : "=r"(n));
+	return n;
 }
 
 /* Returns once the server has handled everything sent so far. */
@@ -65,6 +76,7 @@ main(int argc, char **argv)
 	static const char line[] = "The quick brown fox jumps over the lazy dog 0123456789";
 	GR_EVENT event;
 	long start;
+	unsigned long before;
 	int i;
 
 	if (GrOpen() < 0) {
@@ -91,25 +103,28 @@ main(int argc, char **argv)
 	}
 
 	start = now_ms();
+	before = ran();
 	for (i = 0; i < 25; i++) {
 		GrSetGCForeground(gc, (i & 1) ? WHITE : LTGRAY);
 		GrFillRect(window, gc, 0, 0, WIDTH, HEIGHT);
 		finish();
 	}
-	printf("nxbench: 25 fills of %dx%d: %ld ms\n", WIDTH, HEIGHT, now_ms() - start);
+	printf("nxbench: 25 fills of %dx%d: %ld ms, %lu instructions\n", WIDTH, HEIGHT, now_ms() - start, ran() - before);
 
 	GrSetGCForeground(gc, BLACK);
 	GrSetGCUseBackground(gc, GR_FALSE);
 	start = now_ms();
+	before = ran();
 	for (i = 0; i < 100; i++) {
 		GrText(window, gc, 4, (i % 24) * 13, (void *)line, strlen(line), GR_TFASCII | GR_TFTOP);
 		if (i % 24 == 23)
 			finish();
 	}
 	finish();
-	printf("nxbench: 100 lines of text: %ld ms\n", now_ms() - start);
+	printf("nxbench: 100 lines of text: %ld ms, %lu instructions\n", now_ms() - start, ran() - before);
 
 	start = now_ms();
+	before = ran();
 	for (i = 0; i < 15; i++) {
 		GrCopyArea(window, gc, 0, 0, WIDTH, HEIGHT - 13, window, 0, 13, MWROP_COPY);
 		GrSetGCForeground(gc, WHITE);
@@ -118,10 +133,11 @@ main(int argc, char **argv)
 		GrText(window, gc, 4, HEIGHT - 13, (void *)line, strlen(line), GR_TFASCII | GR_TFTOP);
 		finish();
 	}
-	printf("nxbench: 15 scrolls by one line: %ld ms\n", now_ms() - start);
+	printf("nxbench: 15 scrolls by one line: %ld ms, %lu instructions\n", now_ms() - start, ran() - before);
 	start = now_ms();
+	before = ran();
 	buttons(200);
-	printf("nxbench: 200 buttons: %ld ms\n", now_ms() - start);
+	printf("nxbench: 200 buttons: %ld ms, %lu instructions\n", now_ms() - start, ran() - before);
 
 	usleep(300000);		/* let the server finish drawing; then leave the result up for a while */
 	printf("nxbench: done\n");

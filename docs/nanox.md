@@ -5,7 +5,7 @@ the server with its window manager built in, and a handful of its clients. It dr
 the machine's GPU and takes the machine's keyboard and pointer.
 
     / # nx                      # server, the desktop's picture, the bar, a terminal
-    / # nxcalc &                # more clients: nxeyes, nxtetris, nxmine, nxroach, nxev, demo-*
+    / # nxcalc &                # more clients: nxeyes (the right button closes it), nxtetris, nxmine, nxev, demo-*
     / # NANOX_SIZE=1024x600 nx  # another screen size (640x480 by default)
 
 The machine starts `nx` by itself when it boots, unless the host says not to (bit 0 of the host
@@ -59,7 +59,8 @@ Drawing into a buffer goes through the GPU too (`gpu.md`):
 | Operation | GPU command |
 |---|---|
 | filled rectangle, horizontal and vertical line | a coloured rectangle |
-| text and other one-bit bitmaps | a mask texture (fragment mode 3), over a coloured rectangle when the background is drawn too. Glyphs of the built-in fonts are copied into GPU memory once and stay there; other bitmaps are copied for each list |
+| a string of a built-in font, all of it in view | one text command (`docs/gpu.md`): the font's glyphs and their table are put into GPU memory the first time, and the engine hands the driver the whole string (`gd_drawstring`) instead of a bitmap a character |
+| other text and one-bit bitmaps | a mask texture (fragment mode 3), over a coloured rectangle when the background is drawn too. Glyphs of the built-in fonts are copied into GPU memory once and stay there; other bitmaps are copied for each list |
 | copy from a window (scrolling) | a rectangle textured with that window's buffer |
 | a PPM file (`GrDrawImageFromFile`), at any size | one rectangle whose texture is the file where it lies in the ROM (fragment mode 4, three bytes a pixel); the GPU does the scaling and nothing is read. A file that is not in the ROM has its rows read into texture memory, as many as fit (1.8 MB) at a time |
 | single pixels with nothing else queued, other images, blending, XOR drawing, reading pixels | software, into the buffer |

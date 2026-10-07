@@ -10,6 +10,7 @@
 #include <stdint.h>
 #include <strings.h>
 #include <sys/mman.h>
+#include <time.h>
 #include "ui.h"
 
 #define BAR 26
@@ -19,8 +20,9 @@
 #define HEIGHT 420
 #define HOME "/usr/share/web-index.html"
 #define FETCH_MOST 0x40000	/* bytes the host can hand over */
-#define REG_REQUEST 64		/* words of the control block: requests made, length of the address */
-#define REG_REPLY 68		/* requests answered, bytes, status */
+#define REG_REQUEST 64		/* words of the control block: requests made, length of the address, kind */
+#define REG_REPLY 68		/* requests answered, bytes, status, a picture's width | height << 16 */
+#define MAX_PICTURES 12
 #define REG_ADDRESS 72		/* the address, 256 bytes */
 
 enum { BOLD = 1, LINK = 2, FIXED = 4, HEAD = 8, RULE = 16, PICTURE = 32, DIM = 64 };
@@ -54,9 +56,37 @@ static int loading;		/* the request the host has not answered yet, or 0 */
 static int waited;
 static int by_hand;		/* the host may not open this address itself: asked again until it may */
 
+/* The page's pictures. The host fetches and decodes one and hands over its pixels (docs/fetch.md);
+ * they are kept as a file, which the GPU then draws from. */
+enum { PICTURE_WANTED, PICTURE_HERE, PICTURE_FAILED, PICTURE_BY_HAND };
+static struct picture { char address[256], file[40]; int w, h, state, placed; time_t asked; } pictures[MAX_PICTURES];
+static int picture_count;
+static int asking = -1;		/* the picture the request that is out is for, or -1: the page */
+
+static int resolve(const char *href, char *whole);
+
+static struct picture *
+picture_for(const char *where)
+{
+	int i;
+
+	for (i = 0; i < picture_count; i++)
+		if (!strcmp(pictures[i].address, where))
+			return &pictures[i];
+	if (picture_count == MAX_PICTURES)
+		return NULL;
+	snprintf(pictures[i].address, sizeof pictures[i].address, "%s", where);
+	snprintf(pictures[i].file, sizeof pictures[i].file, "/tmp/nxweb-%d-%d.ppm", (int)getpid(), i);
+	pictures[i].state = PICTURE_WANTED;
+	pictures[i].placed = 0;
+	return &pictures[picture_count++];
+}
+
 /* ---- layout ---- */
 
 static int lx, ly, indent, blank, in_pre, bold, heading, cur_link = -1, skip, list_depth;
+static int hidden;		/* inside an element whose own style says not to show it: how deep */
+static char hidden_tag[16];	/* that element's name: only its like are counted, so a stray tag cannot lose the page */
 
 static void *
 grow(void *block, int *room, int need, int size)
@@ -175,8 +205,11 @@ attribute(const char *tag, int n, const char *name, char *out, int room)
 		for (i++; i < n && isspace((unsigned char)tag[i]); i++)
 			;
 		quote = i < n && (tag[i] == '"' || tag[i] == '\'') ? tag[i++] : 0;
-		while (i < n && k < room - 1 && (quote ? tag[i] != quote : !isspace((unsigned char)tag[i])))
+		while (i < n && k < room - 1 && (quote ? tag[i] != quote : !isspace((unsigned char)tag[i]))) {
+			if (i + 4 < n && !strncmp(tag + i, "&amp;", 5))
+				i += 4;		/* an address has its & written out */
 			out[k++] = tag[i++];
+		}
 		out[k] = 0;
 		return 1;
 	}
@@ -236,6 +269,18 @@ open_tag(const char *tag, int n)
 		tag++, n--;
 	while (name < n && (isalnum((unsigned char)tag[name])))
 		name++;
+	if (hidden) {
+		if (tag_is(tag, name, hidden_tag))
+			hidden += closing ? -1 : 1;
+		return;
+	}
+	if (!closing && name > 0 && name < (int)sizeof hidden_tag && n > 0 && tag[n - 1] != '/' &&
+	    attribute(tag + name, n - name, "style", value, sizeof value) &&
+	    (strstr(value, "display:none") || strstr(value, "display: none"))) {
+		snprintf(hidden_tag, sizeof hidden_tag, "%.*s", name, tag);
+		hidden = 1;
+		return;
+	}
 	if (tag_is(tag, name, "script") || tag_is(tag, name, "style") || tag_is(tag, name, "head") ||
 	    tag_is(tag, name, "svg") || tag_is(tag, name, "noscript") || tag_is(tag, name, "template")) {
 		skip += closing ? (skip > 0 ? -1 : 0) : 1;
@@ -297,25 +342,43 @@ open_tag(const char *tag, int n)
 			link_count++;
 		}
 	} else if (tag_is(tag, name, "img") && !closing) {
-		char label[300];
+		char label[300], whole[256];
+		int pw = 0, ph = 0, here = 0;
 
-		if (attribute(tag + name, n - name, "src", value, sizeof value) && value[0] == '/' &&
-		    strlen(value) > 4 && !strcmp(value + strlen(value) - 4, ".ppm")) {
-			/* a picture in the image: drawn by the GPU from the file where it lies */
-			int pw, ph;
+		if (attribute(tag + name, n - name, "src", value, sizeof value)) {
+			struct picture *p;
 
-			if (ui_picture_size(value, &pw, &ph)) {
-				int most = width - UI_SCROLL_W - 2 * MARGIN, m = strlen(value);
+			if (address[0] == '/' && value[0] == '/' && strlen(value) > 4 && !strcmp(value + strlen(value) - 4, ".ppm")) {
+				/* a picture in the image: drawn by the GPU from the file where it lies */
+				here = ui_picture_size(value, &pw, &ph);
+				strcpy(whole, value);
+			} else if (address[0] != '/' && resolve(value, whole) && (p = picture_for(whole)) != NULL) {
+				/* one the host fetches: its pixels come to a file of ours. A page that says
+				 * how large it is gets the room now, and need not be laid out again then. */
+				char number[16];
 
-				if (pw > most)
-					ph = ph * most / pw, pw = most;
-				block(0);
-				add_run(value, m, PICTURE, pw);
-				runs[run_count - 1].link = ph;
-				ly += (ph + line_h - 1) / line_h * line_h;
-				block(0);
-				return;
+				if (p->state == PICTURE_HERE) {
+					here = 1;
+					pw = p->w;
+					ph = p->h;
+				} else if (attribute(tag + name, n - name, "width", number, sizeof number) && (pw = atoi(number)) > 0 &&
+					   attribute(tag + name, n - name, "height", number, sizeof number) && (ph = atoi(number)) > 0) {
+					here = p->placed = 1;
+				}
+				strcpy(whole, p->file);
 			}
+		}
+		if (here) {
+			int most = width - UI_SCROLL_W - 2 * MARGIN;
+
+			if (pw > most)
+				ph = ph * most / pw, pw = most;
+			block(0);
+			add_run(whole, strlen(whole), PICTURE, pw);
+			runs[run_count - 1].link = ph;
+			ly += (ph + line_h - 1) / line_h * line_h;
+			block(0);
+			return;
 		}
 		if (!attribute(tag + name, n - name, "alt", value, sizeof value) || !value[0])
 			strcpy(value, "picture");
@@ -336,7 +399,7 @@ layout(void)
 	lx = indent = MARGIN;
 	ly = MARGIN;
 	blank = 1;
-	in_pre = bold = heading = skip = list_depth = 0;
+	in_pre = bold = heading = skip = list_depth = hidden = 0;
 	cur_link = -1;
 	title[0] = 0;
 	while (i < page_length) {
@@ -344,7 +407,7 @@ layout(void)
 		int used = 1, ch = c;
 
 		if (c == '<') {
-			int end = i + 1;
+			int end = i + 1, quote;
 
 			if (n)
 				add_word(word, n), n = 0;
@@ -354,8 +417,10 @@ layout(void)
 				i = close ? (int)(close - page) + 3 : page_length;
 				continue;
 			}
-			while (end < page_length && page[end] != '>')
-				end++;
+			/* to the tag's end: a > inside a quoted value is not it */
+			for (quote = 0; end < page_length && (quote || page[end] != '>'); end++)
+				if (page[end] == '"' || page[end] == '\'')
+					quote = quote == page[end] ? 0 : quote ? quote : page[end];
 			if (in_title) {
 				name[title_n] = 0;
 				snprintf(title, sizeof title, "%s", name);
@@ -380,7 +445,7 @@ layout(void)
 				name[title_n++] = ch < 32 ? ' ' : ch;
 			continue;
 		}
-		if (skip)
+		if (skip || hidden)
 			continue;
 		if (in_pre && ch == '\n') {
 			if (n)
@@ -451,9 +516,15 @@ draw_page(void)
 			ui_fill(window, r->x, y + line_h / 2, r->width, 1, UI_SHADOW);
 		} else if (r->style & PICTURE) {
 			char path[256];
+			int k;
 
 			snprintf(path, sizeof path, "%.*s", r->length, pool + r->text);
-			GrDrawImageFromFile(window, ui_gc, r->x, y, r->width, r->link, path, 0);
+			for (k = 0; k < picture_count && strcmp(pictures[k].file, path); k++)
+				;
+			if (k < picture_count && pictures[k].state != PICTURE_HERE)
+				ui_fill(window, r->x, y, r->width, r->link, MWRGB(232, 232, 232));	/* not here yet */
+			else
+				GrDrawImageFromFile(window, ui_gc, r->x, y, r->width, r->link, path, 0);
 		} else {
 			ui_text(window, r->x, y, pool + r->text, r->length, colour, r->style & FIXED);
 			if (r->style & (BOLD | HEAD))
@@ -489,11 +560,19 @@ scroll_to(int y)
 static void
 show(const char *html, int n, const char *note)
 {
+	int i;
+
 	free(page);
 	page = malloc(n + 1);
 	memcpy(page, html, n);
 	page_length = n;
 	top = 0;
+	/* another page: the last one's pictures go */
+	for (i = 0; i < picture_count; i++)
+		if (pictures[i].state == PICTURE_HERE)
+			unlink(pictures[i].file);
+	picture_count = 0;
+	asking = -1;
 	layout();
 	snprintf(status, sizeof status, "%s", note);
 	if (window) {
@@ -514,14 +593,15 @@ say(const char *heading_text, const char *text)
 	show(html, n, "");
 }
 
-/* Asks the host for the page at `address`: it sees the address and the request's number, and
- * answers when it has the page. */
+/* Asks the host for what is at an address, a page (kind 0) or a picture (1): it sees the
+ * address and the request's number, and answers when it has it. */
 static void
-ask(void)
+ask(const char *what, int kind)
 {
 	memset((void *)&regs[REG_ADDRESS], 0, 256);
-	memcpy((void *)&regs[REG_ADDRESS], address, strlen(address));
-	regs[REG_REQUEST + 1] = strlen(address);
+	memcpy((void *)&regs[REG_ADDRESS], what, strlen(what));
+	regs[REG_REQUEST + 1] = strlen(what);
+	regs[REG_REQUEST + 2] = kind;
 	loading = regs[REG_REQUEST] + 1;
 	if (!loading)
 		loading = 1;
@@ -560,7 +640,8 @@ go(const char *where, int remember)
 		say("No network", "This machine has no way to ask its host for a page.");
 		return;
 	}
-	ask();
+	asking = -1;
+	ask(address, 0);
 	snprintf(status, sizeof status, "asking the host for %.150s ...", address);
 	if (window) {
 		draw_bar();
@@ -578,8 +659,11 @@ check_reply(void)
 	if ((int)regs[REG_REPLY] != loading) {
 		if (++waited > 300) {
 			loading = 0;
-			if (!by_hand)
+			if (asking >= 0)
+				pictures[asking].state = PICTURE_FAILED;
+			else if (!by_hand)
 				say("No answer", "The host did not answer in 30 seconds.");
+			asking = -1;
 		}
 		return;
 	}
@@ -588,6 +672,38 @@ check_reply(void)
 	code = regs[REG_REPLY + 2];
 	if (n > FETCH_MOST)
 		n = FETCH_MOST;
+	if (asking >= 0) {
+		struct picture *p = &pictures[asking];
+		int w = regs[REG_REPLY + 3] & 0xffff, h = regs[REG_REPLY + 3] >> 16, i;
+		FILE *file;
+
+		asking = -1;
+		p->state = code == 1 ? PICTURE_BY_HAND : PICTURE_FAILED;
+		p->asked = time(NULL);
+		if (code == 1 && !strstr(status, "by the screen")) {
+			snprintf(status, sizeof status, "pictures need their addresses pasted: the button by the screen");
+			draw_status();
+		}
+		if (code != 200 || w <= 0 || h <= 0 || w * h * 4 > n || (file = fopen(p->file, "wb")) == NULL)
+			return;
+		/* a word a pixel, 0x00RRGGBB, kept as a PPM file */
+		fprintf(file, "P6\n%d %d\n255\n", w, h);
+		for (i = 0; i < w * h; i++) {
+			uint32_t c = ((const uint32_t *)fetched)[i];
+
+			fputc(c >> 16 & 255, file);
+			fputc(c >> 8 & 255, file);
+			fputc(c & 255, file);
+		}
+		fclose(file);
+		p->w = w;
+		p->h = h;
+		p->state = PICTURE_HERE;
+		if (!p->placed)
+			layout();
+		draw_page();
+		return;
+	}
 	if (code == 1) {
 		/* VRChat: a visitor has to hand the world this address. Said once; then the page is
 		 * asked for again every few seconds, and comes when they have. */
@@ -613,38 +729,78 @@ check_reply(void)
 	show((const char *)fetched, n, note);
 }
 
-/* An address a link gives, made whole with the page's own. */
-static void
-follow(const char *href)
+/* An address a page gives (256 bytes of room), made whole with the page's own. 0 for what is
+ * not an address to fetch: mailto: and the like, and pictures written into the page itself. */
+static int
+resolve(const char *href, char *whole)
 {
-	char whole[256], base[256];
+	char base[256];
 	char *slash, *host;
 
+	if (!strncmp(href, "data:", 5) || !href[0])
+		return 0;
 	if (strstr(href, "://") || !strncmp(href, "world:", 6)) {
-		snprintf(whole, sizeof whole, "%s", href);
+		snprintf(whole, 256, "%s", href);
 	} else if (strchr(href, ':') && !strchr(href, '/')) {
-		return;		/* mailto: and the like */
+		return 0;
 	} else {
 		snprintf(base, sizeof base, "%s", address);
 		host = strstr(base, "://");
 		if (!strncmp(href, "//", 2) && host) {
 			host[1] = 0;
-			snprintf(whole, sizeof whole, "%s%s", base, href);
+			snprintf(whole, 256, "%s%s", base, href);
 		} else if (href[0] == '/') {
 			/* from the site's root, or from this computer's for a page that is a file */
 			if (host && (slash = strchr(host + 3, '/')) != NULL)
 				*slash = 0;
-			snprintf(whole, sizeof whole, "%s%s", host ? base : "", href);
+			snprintf(whole, 256, "%s%s", host ? base : "", href);
 		} else {
 			slash = strrchr(base, '/');
 			if (slash && (!host || slash > host + 2))
 				slash[1] = 0;
 			else
 				strcat(base, "/");
-			snprintf(whole, sizeof whole, "%s%s", base, href);
+			snprintf(whole, 256, "%s%s", base, href);
 		}
 	}
-	go(whole, 1);
+	return 1;
+}
+
+static void
+follow(const char *href)
+{
+	char whole[256];
+
+	if (resolve(href, whole))
+		go(whole, 1);
+}
+
+/* The picture to ask the host for next, or -1: the first three it does not have yet, in the
+ * page's order (the host has room for three), one that waits for a visitor once a second. */
+static int
+next_picture(void)
+{
+	time_t now = time(NULL);
+	int i, open = 0;
+
+	for (i = 0; i < picture_count && open < 3; i++) {
+		if (pictures[i].state != PICTURE_WANTED && pictures[i].state != PICTURE_BY_HAND)
+			continue;
+		open++;
+		if (pictures[i].state == PICTURE_WANTED || pictures[i].asked != now)
+			return i;
+	}
+	return -1;
+}
+
+static int
+pictures_open(void)
+{
+	int i, open = 0;
+
+	for (i = 0; i < picture_count; i++)
+		open += pictures[i].state == PICTURE_WANTED || pictures[i].state == PICTURE_BY_HAND;
+	return open;
 }
 
 static void
@@ -755,7 +911,7 @@ main(int argc, char **argv)
 	GrMapWindow(window);
 	GrSetFocus(window);
 	for (;;) {
-		GrGetNextEventTimeout(&event, loading ? 100 : by_hand ? 3000 : 60000);
+		GrGetNextEventTimeout(&event, loading ? 100 : by_hand ? 3000 : regs && pictures_open() ? 400 : 60000);
 		switch (event.type) {
 		case GR_EVENT_TYPE_EXPOSURE:
 			draw_page();
@@ -771,7 +927,7 @@ main(int argc, char **argv)
 			break;
 		case GR_EVENT_TYPE_BUTTON_DOWN:
 			if (ui_wheel(&event))
-				scroll_to(top + 3 * line_h * ui_wheel(&event));
+				scroll_to(top + 3 * line_h * ui_wheel_sum(&event));
 			else
 				click(event.button.x, event.button.y);
 			break;
@@ -794,6 +950,8 @@ main(int argc, char **argv)
 		if (loading)
 			check_reply();
 		else if (by_hand && event.type == GR_EVENT_TYPE_TIMEOUT)
-			ask();
+			ask(address, 0);
+		else if (!by_hand && regs && (asking = next_picture()) >= 0)
+			ask(pictures[asking].address, 1);
 	}
 }

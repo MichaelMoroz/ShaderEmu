@@ -294,7 +294,7 @@ main(int argc, char **argv)
 			break;
 		case GR_EVENT_TYPE_BUTTON_DOWN:
 			if (ui_wheel(&event)) {
-				scroll_to(top + 3 * ui_wheel(&event));
+				scroll_to(top + 3 * ui_wheel_sum(&event));
 			} else if (event.button.x >= width - UI_SCROLL_W && event.button.y < height - STATUS) {
 				dragging = 1;
 				scroll_to(ui_scroll_to(event.button.y, 0, height - STATUS, count, rows));

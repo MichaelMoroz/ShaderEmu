@@ -58,6 +58,10 @@ Shader "ShaderEmu/Machine"
         _FetchLength ("Its length in bytes", Int) = 0
         _FetchStatus ("Its status (200: fine)", Int) = 0
         _HostData ("Its bytes", 2D) = "black" {}
+        _HostImage ("Or a picture, with _FetchDeliver 2", 2D) = "black" {}
+        _FetchInfo ("A picture's width | height << 16", Int) = 0
+        _FetchW ("or its width", Int) = 0
+        _FetchH ("and its height", Int) = 0
     }
     SubShader
     {
@@ -155,7 +159,9 @@ Shader "ShaderEmu/Machine"
             static uint _InputKey0, _InputKey1, _InputKey2, _InputKey3, _HostMs;
             // An answer to the guest's request (docs/fetch.md): its bytes, in the frame _FetchDeliver is set.
             uniform uint _FetchDeliver, _FetchSeq, _FetchLength, _FetchStatus;
+            uniform uint _FetchInfo, _FetchW, _FetchH;   // a picture's size: one word, or its halves
             Texture2D<float4> _HostData;
+            Texture2D<float4> _HostImage;
             // The GPU's camera draws all eight passes every frame.
             #define _GpuPasses 0xffu
             #define GPU_STATE _SelfTexture2D

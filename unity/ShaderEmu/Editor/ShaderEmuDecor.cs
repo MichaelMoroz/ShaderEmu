@@ -687,6 +687,7 @@ public static partial class ShaderEmuBuilder
               "calculator and games, and its port of Doom\n" +
               "DOOM by id Software: the source release, and the shareware episode's data\n" +
               "glxgears by Brian Paul, from the Mesa demos\n" +
+              "TinyCC by Fabrice Bellard and contributors, with jrrk2's RISC-V port: the C compiler inside\n" +
               "Desktop photographs from Unsplash, and somebody's cats\n" +
               "Cascadia Mono by Microsoft: the console's font\n" +
               "VRChat's Worlds SDK, UdonSharp by Merlin, TextMesh Pro and Unity: this room",
