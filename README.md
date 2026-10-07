@@ -29,7 +29,7 @@ and it is the only way this computer becomes usable.
   library sits on it (`programs/linux/gles.c`).
 - **A desktop** (`docs/nanox.md`): Nano-X, with every window in a buffer of its own and the
   screen composed by the GPU. A bar with a Start menu and task buttons, a terminal with
-  scroll-back, an editor, a file manager, a browser for plain pages, paint, a picture viewer,
+  scroll-back, an editor, a file manager, a browser with simple CSS, paint, a picture viewer,
   settings, a system monitor, photographs for a desktop, and `glxgears`. The machine starts
   it by itself at boot.
 - **Pages from the network** (`docs/fetch.md`): the machine has none of its own, so the browser

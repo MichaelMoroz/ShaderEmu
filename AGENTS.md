@@ -358,6 +358,9 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
 - Any other address, and each picture, a visitor of the world hands over by copy and paste
   (four slots, a button by the display: `docs/fetch.md`). In play mode, paste from editor code:
   `typedUrls[i].SetUrl(new VRCUrl(wantedLinks[i].text))`. ClientSim loads pictures too.
+- The browser's style sheets are `linux/apps/css.h` (`docs/fetch.md`): compare a change with
+  the build before it on the local pages (the old binary beside the new one in the image), and
+  expect only what the change is for to move. A page's sheets are request kind 2.
 - A driver hook that draws for the engine (`gd_drawpicture`) gets one rectangle of the clip
   region a call and must stay inside it: without that a picture scrolled up painted over the
   title bar. The caption is 22 pixels high and its buttons 18 (`nanowm.h`), for VR's beams.

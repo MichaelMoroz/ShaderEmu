@@ -1,0 +1,5 @@
+/* the linked half of css.html's test */
+.linked { color: purple; font-weight: 700; }
+@media screen and (min-width: 200px) {
+	.linked { border-top: 1px solid purple; }
+}

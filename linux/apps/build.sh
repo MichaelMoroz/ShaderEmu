@@ -20,6 +20,6 @@ printf '%s\n' "Editor=nxedit" "Files=nxfiles" "Paint=nxpaint" "Web=nxweb" "Monit
 # the browser's pages: its home lists the sites of web/sites.txt (the VRChat world can ask for
 # no others, so its builder reads the same file)
 # (all in /usr/share: the image builder adds files to folders the ROM has, and makes none)
-for f in "$HERE"/web/*.html; do cp "$f" "$OUT/share/web-$(basename "$f")"; done
+for f in "$HERE"/web/*.html "$HERE"/web/*.css; do cp "$f" "$OUT/share/web-$(basename "$f")"; done
 python3 "$HERE/web/home.py" "$HERE/web/sites.txt" > "$OUT/share/web-index.html"
 ls -l "$OUT/bin"/nxedit "$OUT/bin"/nxfiles "$OUT/bin"/nxpaint "$OUT/bin"/nxview "$OUT/bin"/nxsettings "$OUT/bin"/nxmon

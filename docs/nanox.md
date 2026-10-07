@@ -118,7 +118,7 @@ A program that takes clicks must check `ui_wheel` first, or a notch is a click t
 |---|---|
 | `nxedit FILE` | a text editor: arrows, Home, End, Page Up and Down, a click places the cursor, the wheel and a scroll bar move through the text; Ctrl+S saves, Ctrl+Q quits |
 | `nxfiles [FOLDER]` | a file manager, a tile with an icon for every entry: a click selects, a second click (or Enter) opens: a folder, a picture in the viewer, a page in the browser, a program, anything else in the editor. Wheel and scroll bar. Up, Open, Edit, New file, Delete, Refresh |
-| `nxweb [ADDRESS]` | a browser for plain HTML (`docs/fetch.md`): Back, Home, Reload, an address to type, wheel and scroll bar |
+| `nxweb [ADDRESS]` | a browser for HTML and the plainer part of CSS (`docs/fetch.md`): Back, Home, Reload, an address to type, wheel and scroll bar |
 | `nxpaint [FILE]` | pen, eraser, line, box, filled box in sixteen colours and three sizes; Save writes a PPM file (`/root/picture.ppm` unless a file was named) |
 | `nxview FILE` | shows a picture as large as fits its window: PPM through the GPU, PGM, BMP, GIF and XPM through the engine's decoders |
 | `nxsettings` | picks the desktop's picture or colour, and says what the machine is. `nxsettings apply` only puts the chosen desktop up (the `nx` script runs it) |
