@@ -228,7 +228,13 @@ A cold boot to the `/ #` prompt takes about 80 s on an RTX 5090 with upstream on
   DXC makes no copies of it. Under DXC the harness defines `L1_LOCAL`, which does that for the
   write cache; `src/l1_local.h` lists the functions that take it. A new function that reaches
   `l1_cache` must be added there the same way, and an entry may only be read when its
-  occupancy bit is set. FXC builds keep the static array.
+  occupancy bit is set. FXC builds keep the static array. The second-level TLB's two arrays
+  (`tlb2_tag`, `tlb2_pg`) go the same way, with `tlb2_occ` as their occupancy bitmap.
+- fxc2 (`docs/fxc2.md`) is a D3D11 compiler that builds the tick shader in 9 s instead of
+  9 minutes and does compile `L1_LOCAL`; the shader switches it on when `__FXC2__` is
+  defined. Put its `d3dcompiler_47.dll` next to a copy of the harness in `bin_fxc2\` and give
+  that copy its own `--cache`: the cache does not know which compiler made a blob. Tune on
+  D3D11 with it, then confirm the winner with FXC, which is what an unmodified Unity runs.
 - Skipping pixels in the commit with `discard` saves little: rasterising the whole texture is
   0.06 ms even when every pixel is discarded. Its vertex shader (`commit_vert`) reads the band
   list from the state instead and draws one quad per band; the harness binds the state texture

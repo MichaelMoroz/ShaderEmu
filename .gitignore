@@ -3,6 +3,7 @@
 # Build output
 /build/
 /bin/
+/bin_fxc2/
 /logs/
 /programs/build/
 *.cso

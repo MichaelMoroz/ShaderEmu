@@ -18,6 +18,7 @@ Only these remain in the source:
 | `NO_DOUBLES` | timer value from the host instead of double math (needed on D3D12) |
 | `PROFILE` | `PROF()` event counters through a UAV |
 | `L1_SET_BITS`, `L1_SLICES`, `TLB2_N`, `RAM_TILE_BITS` | cache, TLB and layout sizes |
+| `L1_LOCAL`, `L1_STATIC` | the big arrays as locals of the pass (23 below): on with fxc2, off with FXC |
 
 Everything else named in this document (`OPT_BASELINE`, the `OPT_*` experiments, `XREG_*`,
 `MULH_DOUBLES`, `L1_HASH_LOW`, `RAM_TILE_ZORDER`) was a switch that existed while it was being
@@ -93,6 +94,38 @@ pass-local (`static`), never stored in the texture.
     is kept, and entering a texel also reads the next one, so in straight-line code the texture
     read has finished long before its instructions are needed.
 21. **Second-level TLB grown to 256 entries per mode.**
+
+22. **`sfence.vma` for one page** (`emu.h`, `mmu.h`): with an address in rs1 only the entries
+    that could translate that address are dropped (all three access modes, any privilege
+    context; the megapage entry covering it too) instead of every entry. Linux flushes single
+    pages far more often than everything, and after a full flush each page touched next is a
+    page walk on the general path. Over a cold boot: 351k page walks become 141k, 97.8% of
+    instructions on the fast path become 98.4%, same instruction count and console output.
+23. **Write cache and second-level TLB as local arrays** (`L1_LOCAL`; `l1_local.h`, `mmu.h`,
+    `main.shader`): the three big arrays are locals of the tick's `frag`, handed down as `inout`
+    arguments, and so are not zeroed at the start of every pass: 1024 `uint4` and twice 768
+    `uint`, about 0.4 ms of the 0.8 ms a pass costs before it has emulated anything. The TLB
+    got an occupancy bitmap for it, like the write cache had (and a second one for entries
+    flushed by 22, which must also hide what the texture still holds). This needs a compiler
+    that works on an `inout` array in place: fxc2 (it defines `__FXC2__`, which switches this
+    on) and DXC do. FXC copies the array at every call and fails ("can't unroll loops marked
+    with loop attribute"), so under FXC the arrays stay static. `L1_STATIC` keeps them static
+    under fxc2 too.
+
+24. **MULH in one instruction** (`emu.h`): the GPU's `umul` and `imul` return both halves of a
+    32 x 32 bit product, which HLSL cannot ask for. fxc2 adds `mulhi()` (and `umulExtended()`,
+    `imulExtended()`), so with `__FXC2__` `mulhu32()` is that one instruction instead of four
+    multiplications and a carry chain, and `mulh` needs no sign corrections. Our raytracer
+    (73,669,730 instructions, machine mode): 4.18M IPS against 3.96M to 4.13M without, same
+    final state. Under FXC the partial products remain.
+
+With 22 and 23, D3D11, bytecode from fxc2, same machine and the same state hash in each column
+(emulation is unchanged; only the TLB's bookkeeping texels differ from before 22):
+
+| Build | 6000-frame bench, 2,048 ticks | fixed cost per pass | Cold boot (21,000 frames) |
+| --- | --- | --- | --- |
+| static arrays (`L1_STATIC`) | 1,502k IPS | 0.80 ms | 29.9 s |
+| local arrays (default with fxc2) | 1,951k IPS | 0.39 ms | 22.6 s |
 
 6 to 21 were once switchable (`OPT_BASELINE` built without them); they are now unconditional. `OPT_ALU_SELECT`
 replaces the inner funct3 switch of 6 with a branch-free select; it measured within noise of

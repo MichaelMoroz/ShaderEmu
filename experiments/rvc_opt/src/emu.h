@@ -312,16 +312,31 @@ DEF(mul, FormatR, { // rv32m
 // Exact high word of a 32x32 multiply from 16-bit partial products, for hosts whose double
 // support cannot be trusted. Upstream's double version rounds once the product needs more
 // than 53 bits, so results differ from it there.
+//
+// The GPU has had the instruction for this all along (umul and imul return both halves of the
+// product), HLSL just cannot ask for it. fxc2 can: mulhi() there is that one instruction.
 uint mulhu32(uint a, uint b) {
+#ifdef __FXC2__
+    return mulhi(a, b);
+#else
     uint al = a & 0xffff, ah = a >> 16, bl = b & 0xffff, bh = b >> 16;
     uint lh = al * bh, hl = ah * bl;
     uint mid = ((al * bl) >> 16) + (lh & 0xffff) + (hl & 0xffff);
     return ah * bh + (lh >> 16) + (hl >> 16) + (mid >> 16);
+#endif
+}
+// the high word of the signed product
+uint mulhs32(uint a, uint b) {
+#ifdef __FXC2__
+    return AS_UNSIGNED(mulhi(AS_SIGNED(a), AS_SIGNED(b)));
+#else
+    return mulhu32(a, b) - ((a >> 31) ? b : 0) - ((b >> 31) ? a : 0);
+#endif
 }
 DEF(mulh, FormatR, { // rv32m
     uint a = xreg(ins.rs1);   // one declaration each: Unity's preprocessor splits macro arguments at this comma
     uint b = xreg(ins.rs2);
-    WR_RD(mulhu32(a, b) - ((a >> 31) ? b : 0) - ((b >> 31) ? a : 0))
+    WR_RD(mulhs32(a, b))
 })
 DEF(mulhsu, FormatR, { // rv32m
     uint a = xreg(ins.rs1);   // one declaration each: Unity's preprocessor splits macro arguments at this comma
@@ -378,7 +393,14 @@ DEF(sc_w, FormatR, { // rv32a
 })
 DEF(sfence_vma, FormatEmpty, { // system
     hot_flush();
-    tlb2_flush();
+    // rs1 names the one page to flush, x0 means all of them (rs2, the address space, is ignored:
+    // flushing more than asked is allowed)
+    uint sf_rs1 = (ins_word >> 15) & 0x1f;
+    if (sf_rs1 != 0) {
+        tlb2_flush_page(xreg(sf_rs1));
+    } else {
+        tlb2_flush();
+    }
     /* cpu.stall = STALL_FENCE; */
 })
 DEF(sh, FormatS, { // rv32i
@@ -818,11 +840,12 @@ static bool xl_ident_d = false;  // loads/stores: paging off, or machine mode wi
     [branch] if (!ok) { \
         uint ok##_k = TLB2_IDX(mode, va); \
         uint ok##_pg = tlb2_pg[ok##_k]; \
-        bool ok##_l2 = tlb2_tag[ok##_k] == TLB2_TAG(va, xl_ctx); \
+        bool ok##_l2 = TLB2_HIT(ok##_k, TLB2_TAG(va, xl_ctx)); \
         [branch] if (!ok##_l2) { \
             if (tlb2_saved(ok##_k, TLB2_TAG(va, xl_ctx), ok##_pg)) { \
                 tlb2_tag[ok##_k] = TLB2_TAG(va, xl_ctx); \
                 tlb2_pg[ok##_k] = ok##_pg; \
+                TLB2_OCC_SET(ok##_k) \
                 ok##_l2 = true; \
             } \
         } \
@@ -981,7 +1004,7 @@ bool fast_exec_l1(L1P uint w) {
                 [forcecase]
                 switch (f3) {
                     case 0: val = a * b; break;
-                    case 1: val = mulhu32(a, b) - ((a >> 31) ? b : 0) - ((b >> 31) ? a : 0); break;
+                    case 1: val = mulhs32(a, b); break;
                     case 2: val = mulhu32(a, b) - ((a >> 31) ? b : 0); break;
                     case 3: val = mulhu32(a, b); break;
                     case 4: val = by_zero ? 0xFFFFFFFF : wraps ? a : AS_UNSIGNED(sa / sb); break;

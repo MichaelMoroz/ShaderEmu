@@ -38,8 +38,21 @@ static uint fetch_vpn = 0xffffffff, fetch_page;  // last translated fetch page (
 #ifndef TLB2_N
 #define TLB2_N 256
 #endif
+// With L1_LOCAL the two arrays are locals of the tick's main, handed down like the write cache
+// (l1_local.h), and start undefined. Either way an entry counts only when its bit in tlb2_occ
+// says it was written in this pass, and a bit in tlb2_dead says that what the last pass left
+// in the texture for that entry has been flushed since.
+#if !(defined(L1_LOCAL) && defined(PASS_TICK))
 static uint tlb2_tag[3 * TLB2_N];
 static uint tlb2_pg[3 * TLB2_N];
+#endif
+#define TLB2_WORDS ((3 * TLB2_N + 31) / 32)
+static uint tlb2_occ[TLB2_WORDS];
+static uint tlb2_dead[TLB2_WORDS];
+#define TLB2_OCC(k) (((tlb2_occ[(k) >> 5] >> ((k) & 31)) & 1) != 0)
+#define TLB2_OCC_SET(k) tlb2_occ[(k) >> 5] |= 1u << ((k) & 31);
+#define TLB2_DEAD(k) (((tlb2_dead[(k) >> 5] >> ((k) & 31)) & 1) != 0)
+#define TLB2_HIT(k, tag) (TLB2_OCC(k) && tlb2_tag[k] == (tag))
 static uint tlb2_gen = 1;
 static bool tlb_wiped = false;   // the generations wrapped in this pass: what the last pass left is void
 // Megapage TLB, behind the second level: one entry maps 4 MiB, which is how a kernel maps its
@@ -53,10 +66,22 @@ static uint tlbm_pg[3 * TLBM_N];
 static uint xl_ctx = 0;  // current privilege context, refreshed by the general path
 #define TLB2_IDX(mode, va) ((mode) * TLB2_N + (((va) >> 12) & (TLB2_N - 1)))
 #define TLB2_TAG(va, ctx) (((va) >> 12) | ((ctx) << 20) | (tlb2_gen << 24))
+// sfence.vma for one page: only what could translate that address goes, in all three access
+// modes and whatever the privilege context. An entry for another page in the same slot goes
+// with it, which is allowed. Linux flushes single pages far more often than everything, and
+// after a full flush every page touched next costs a page walk on the general path.
+void tlb2_flush_page(uint va) {
+    for (uint fm = 0; fm < 3; fm++) {
+        uint fk = TLB2_IDX(fm, va);
+        tlb2_occ[fk >> 5] &= ~(1u << (fk & 31));
+        tlb2_dead[fk >> 5] |= 1u << (fk & 31);
+        tlbm_tag[TLBM_IDX(fm, va)] = 0;
+    }
+}
 void tlb2_flush() {
     tlb2_gen++;
     if (tlb2_gen == 256) {
-        for (uint k2 = 0; k2 < 3 * TLB2_N; k2++) tlb2_tag[k2] = 0;
+        for (uint k2 = 0; k2 < TLB2_WORDS; k2++) tlb2_occ[k2] = 0;
         for (uint km = 0; km < 3 * TLBM_N; km++) tlbm_tag[km] = 0;
         tlb2_gen = 1;
         tlb_wiped = true;
@@ -87,20 +112,22 @@ bool tlb2_saved(uint k, uint tag, inout uint page) {
     uint at = TLB_STATE_AT + (k >> 1);
     uint4 t = STATE_TEX(uint2(at & 63, at >> 6));
     bool odd = (k & 1) != 0;
-    if (tlb_wiped || (odd ? t.b : t.r) != tag) return false;
+    if (tlb_wiped || TLB2_DEAD(k) || (odd ? t.b : t.r) != tag) return false;
     page = odd ? t.a : t.g;
     return true;
 }
 // What a pixel of the TLB's texels holds after this pass; false for any other pixel.
-bool tlb_state_texel(uint2 pos, out uint4 t) {
+bool tlb_state_texel_l1(L1P uint2 pos, out uint4 t) {
     uint k = pos.x + 64 * pos.y - TLB_STATE_AT;
     t = 0;
     if (pos.x + 64 * pos.y < TLB_STATE_AT || k >= TLB_STATE_TEXELS) return false;
     if (k < 3 * TLB2_N / 2) {
         // an entry made in this pass (its tag has the generation), or the one already there
         uint4 was = tlb_wiped ? (uint4)0 : STATE_TEX(pos);
-        bool a = tlb2_tag[2 * k] != 0 && (tlb2_tag[2 * k] >> 24) == tlb2_gen;
-        bool b = tlb2_tag[2 * k + 1] != 0 && (tlb2_tag[2 * k + 1] >> 24) == tlb2_gen;
+        bool a = TLB2_OCC(2 * k) && (tlb2_tag[2 * k] >> 24) == tlb2_gen;
+        bool b = TLB2_OCC(2 * k + 1) && (tlb2_tag[2 * k + 1] >> 24) == tlb2_gen;
+        if (TLB2_DEAD(2 * k)) was.rg = 0;
+        if (TLB2_DEAD(2 * k + 1)) was.ba = 0;
         t = uint4(a ? tlb2_tag[2 * k] : was.r, a ? tlb2_pg[2 * k] : was.g, b ? tlb2_tag[2 * k + 1] : was.b, b ? tlb2_pg[2 * k + 1] : was.a);
     } else if (k < TLB_STATE_TEXELS - 1) {
         uint m = k - 3 * TLB2_N / 2;
@@ -114,6 +141,7 @@ bool tlb_state_texel(uint2 pos, out uint4 t) {
 
 #else
 void tlb2_flush() {}
+void tlb2_flush_page(uint va) {}
 #endif
 
 void hot_flush() {
@@ -236,10 +264,11 @@ uint mmu_translate_l1(L1P inout ins_ret ins, uint addr, uint mode) {
     uint tlb2_k = TLB2_IDX(mode, addr);
     uint tlb2_ctx = priv | (sum << 2) | (mxr << 3);
     uint l2_page = tlb2_pg[tlb2_k];
-    bool l2_hit = tlb2_tag[tlb2_k] == TLB2_TAG(addr, tlb2_ctx);
+    bool l2_hit = TLB2_HIT(tlb2_k, TLB2_TAG(addr, tlb2_ctx));
     if (!l2_hit && tlb2_saved(tlb2_k, TLB2_TAG(addr, tlb2_ctx), l2_page)) {
         tlb2_tag[tlb2_k] = TLB2_TAG(addr, tlb2_ctx);
         tlb2_pg[tlb2_k] = l2_page;
+        TLB2_OCC_SET(tlb2_k)
         l2_hit = true;
     }
     if (l2_hit) {
@@ -318,6 +347,7 @@ uint mmu_translate_l1(L1P inout ins_ret ins, uint addr, uint mode) {
     else { set_idx_uint4(tlb_w_vpn, addr >> 12, tlb_slot); set_idx_uint4(tlb_w_page, pa & ~0xfff, tlb_slot); }
     tlb2_tag[tlb2_k] = TLB2_TAG(addr, tlb2_ctx);
     tlb2_pg[tlb2_k] = pa & ~0xfff;
+    TLB2_OCC_SET(tlb2_k)
     if (super) {
         tlbm_tag[tlbm_k] = TLBM_TAG(addr, tlb2_ctx);
         tlbm_pg[tlbm_k] = pa & ~0x3fffff;

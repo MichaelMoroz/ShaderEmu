@@ -59,6 +59,13 @@ What that buys, in frames per second: `glxgears` in a window about 580 (DXC) and
 Doom played in real time at the start of the first level about 31 (DXC) and 23 (FXC).
 `experiments/rvc_opt/README.md` lists the changes to the CPU shader and what each measured.
 
+The D3D11 build no longer needs FXC: [fxc2](https://github.com/MichaelMoroz/FXC2) compiles the
+CPU shader in 9 seconds instead of 9 minutes and, because it can compile what FXC cannot (the
+write cache and TLB as local arrays, MULH as one instruction), its build is faster too: on an
+RTX 5070 laptop 1,970k against 1,528k instructions per second at 2,048 instructions a frame, and
+a Linux cold boot in 22.6 s against 30.2 s, with the same emulated state. `docs/fxc2.md` has the
+how and the numbers.
+
 ## Try it (Windows)
 
 Needs CMake 3.20+ and Visual Studio 2022 (MSVC) with the Windows SDK, Python with Pillow, and
@@ -69,7 +76,8 @@ upstream rvc cloned next to the sources for its boot images:
     python tools\make_linux_image.py   # our Linux image, from linux\prebuilt (no compiler needed)
 
 Then double-click `bin\rvc_harness_dxc.exe` (D3D12 + DXC: starts in seconds) or
-`bin\rvc_harness.exe` (D3D11 + FXC: the first start compiles the shader for several minutes).
+`bin\rvc_harness.exe` (D3D11 + FXC: the first start compiles the shader for several minutes;
+with fxc2's `d3dcompiler_47.dll` next to it, seconds: `docs/fxc2.md`).
 A menu asks what to boot; `linux-net` is Linux with the desktop.
 
 Two windows appear. The console is the machine's serial terminal: every key goes to the guest,
