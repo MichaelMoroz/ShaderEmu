@@ -57,6 +57,19 @@ numbers from one session only.
 fxc2 also has `umulExtended(a, b, hi, lo)` and `imulExtended` (both halves of the product from
 one instruction), and struct member functions; nothing here needs those yet.
 
+## Known differences and what to watch
+
+- Use a build of fxc2 from 8 October 2026 or later (FXC2 commit `c39dbd1`). Before that,
+  `float - uint` was compiled wrongly (the unsigned value was negated before it was converted),
+  which is what broke `Terminal.shader`'s `at - cell` in Unity.
+- Upstream rvc's unmodified shader compiles with it since the same build (its
+  `4294967296.0l` literal used to be a syntax error): 5 s instead of 405 s, and the same state
+  hash after 6000 frames. It runs slower though, 351k against 583k instructions per second,
+  and why is not known yet. `experiments/rvc_opt` does not have that gap.
+- fxc2 always optimises; `#pragma skip_optimizations` does nothing.
+- FXC2's `tools/shaderbench.py` times any set of captured shaders under both compilers
+  without Unity; its README says how to capture them.
+
 ## Checking a change against it
 
 `tools\perf_test.ps1` and the state hashes in this repository were taken with FXC or DXC. A build
