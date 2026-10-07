@@ -6,7 +6,7 @@ the machine's GPU and takes the machine's keyboard and pointer.
 
     / # nx                      # server, the desktop's picture, the bar, a terminal
     / # nxcalc &                # more clients: nxeyes (the right button closes it), nxtetris, nxmine, nxev, demo-*
-    / # NANOX_SIZE=1024x600 nx  # another screen size (640x480 by default)
+    / # NANOX_SIZE=640x480 nx   # another screen size (1280x720 by default, what the world shows)
 
 The machine starts `nx` by itself when it boots, unless the host says not to (bit 0 of the host
 flags, `gpu.md`; the image's init reads it). The harness asks for the desktop in its terminal

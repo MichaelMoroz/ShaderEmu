@@ -11,6 +11,11 @@ int seglInit(unsigned int nano_x_window);
 void seglSize(int* width, int* height);
 // Shows what was drawn since the last swap, and returns once the GPU has drawn it.
 void seglSwap(void);
+// The window was resized (a GR_UPDATE_SIZE event): learn its size now, not at the next swap.
+void seglWindowChanged(void);
+// Where a point of the window (an event's x, y) lies in a picture of width x height pixels
+// stretched over the whole window, at the window's size now. Clamped to the picture.
+void seglPicturePoint(int x, int y, int width, int height, int* px, int* py);
 
 // Texture memory the program writes itself: a pointer to `bytes` of GPU memory (16-byte
 // aligned), or NULL when there is none left. It lasts until the program ends.

@@ -36,6 +36,8 @@ and it is the only way this computer becomes usable.
   asks the host, which fetches the page and writes it into memory in one shader pass.
 - **Doom** (`docs/doom.md`): Microwindows' port, with the level drawn by the machine's GPU
   through OpenGL instead of by its CPU.
+- **Command & Conquer** (`docs/tdawn.md`): Vanilla Conquer's Tiberian Dawn with the 1995 demo's
+  missions, drawn in software and shown by the GPU: it plays, at a half to two thirds of its speed.
 - **A C compiler in the machine** (`docs/cc.md`): TinyCC, with the C library, Nano-X and
   OpenGL ES, and two 3D examples it builds there.
 - **Keyboard, pointer and wheel** as Linux input devices (`docs/input.md`), a display the guest
@@ -125,7 +127,7 @@ To rebuild the guest software (WSL, no root; everything goes to `~/shaderemu-lin
   that build the scene.
 - `tools/` – the image builder, a software model of the GPU (`gpu_reference.py`), profilers
   (`pc_profile.py`, `boot_profile.py`, `dxil_path.py`), the speed test and the console viewer.
-- `docs/` – one file per subject: `boot`, `gpu`, `display`, `input`, `fetch`, `volume`, `nanox`, `cc`, `doom`.
+- `docs/` – one file per subject: `boot`, `gpu`, `display`, `input`, `fetch`, `volume`, `nanox`, `cc`, `doom`, `tdawn`.
 - `rvc/` – a clone of upstream rvc (not part of this repository): its boot images and the
   reference shader.
 
@@ -143,7 +145,8 @@ the design notes are kept in `docs/original-x86-plan.md`.
 
 [rvc](https://github.com/pimaker/rvc) and [linux-rvc](https://github.com/pimaker/linux-rvc) by
 pimaker; Linux; OpenSBI; musl; BusyBox; GCC and LLVM; [Microwindows](https://github.com/ghaerr/microwindows)
-by Greg Haerr and contributors, with its port of Doom; TinyCC and jrrk2's riscv32 port of it; DOOM by id Software; glxgears from the
+by Greg Haerr and contributors, with its port of Doom; TinyCC and jrrk2's riscv32 port of it; DOOM by id Software; [Vanilla Conquer](https://github.com/TheAssemblyArmada/Vanilla-Conquer)
+and Command & Conquer by Westwood Studios (source released by Electronic Arts); glxgears from the
 Mesa demos; photographs from Unsplash; VRChat's SDK and UdonSharp.
 
 ## Licence

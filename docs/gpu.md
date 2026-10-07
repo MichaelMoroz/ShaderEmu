@@ -181,6 +181,10 @@ way: `GLfixed` is what the device reads.
 - `seglQuad()` is one textured quad in one call, for the many small draws that differ in
   texture: about 150 instructions against `glDrawArrays` and the state calls before it.
   `seglWindowTexture()` makes the window's own pixels a texture: the last frame, for free.
+- A window may be resized at any time, and a program that stretches a picture over it must
+  not map the pointer by the size it asked for. `seglPicturePoint()` turns an event's x, y
+  into a pixel of such a picture at the window's size now; `seglWindowChanged()` (on a
+  `GR_UPDATE_SIZE` event) has the library learn the new size at once, not at the next swap.
 - A set holds 3,072 commands, 256 matrix blocks and 10,240 compact vertices of a frame's own.
 
 ## From Linux

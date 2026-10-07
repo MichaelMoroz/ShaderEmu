@@ -13,8 +13,8 @@ PARALLEL                 = N
 SCREEN                   = SHADEREMU
 MOUSE                    = SHADEREMUMOUSE
 KEYBOARD                 = SHADEREMUKBD
-SCREEN_WIDTH             = 640
-SCREEN_HEIGHT            = 480
+SCREEN_WIDTH             = 1280
+SCREEN_HEIGHT            = 720
 SCREEN_PIXTYPE           = MWPF_TRUECOLORARGB
 SCREEN_DEPTH             = 8
 

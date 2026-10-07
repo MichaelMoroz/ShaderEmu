@@ -424,3 +424,24 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
 - After `make_linux_image.py`, run "Import boot images" in Unity: the world boots the copy in
   `Assets/ShaderEmu/Images`, not the files in `build`. To check it, decode the four PNGs of a
   part (texel 0 is the top row) and compare with the `.bin` byte for byte.
+- Tiberian Dawn (`docs/tdawn.md`): `wsl -- bash /mnt/c/Development/ShaderX86/linux/tdawn/build.sh`
+  (9 s) after Nano-X's build, then the image and snapshot. To measure it, resume the snapshot
+  with `nano-X -p &` and `TDAWN_AUTO=1 TDAWN_SEED=7 TDAWN_SCEN=10 TDAWN_FRAMES=300 tdawn FROMINSTALL`
+  and wait for `tdawn: done`: 30 s to start, then `tdstat:` lines with a frame's instructions.
+- A change to the game must leave its `state` sum the same (`TDAWN_STOP_FRAME=N` with
+  `TDAWN_NO_DELAY=1` prints it): `f6e24c6c`, `c63742a4` and `f7650705` for missions 1, 3 and 10
+  at frame 300 with seed 7, the same as an x86-64 build's.
+- Its changes to Vanilla Conquer are `linux/tdawn/vanilla-conquer.patch`: edit a clean clone at
+  the commit `build.sh` names and save `git diff`. The build puts the tree back each time.
+- C++ for the guest is `rv32-c++` (made by that build): libstdc++'s headers over musl, with
+  `-fno-exceptions -fno-rtti` and `cxxrt.cpp` in place of the library. A program that needs
+  more of the library than the string class fails to link.
+- Old C++ that sets fields in `operator new` needs `-fno-lifetime-dse`: without it the
+  compiler drops those stores at some optimisation levels, and nothing reports it.
+- A program that looks for its files in any spelling lists whole folders: listing `/` or
+  `/usr/bin` reads the ROM each time. Give such a program a small folder of its own.
+- Nano-X's screen is 1280x720 unless `NANOX_SIZE` says otherwise (`linux/nanox/config`; it was
+  640x480). A change to that file needs Nano-X's build, the image, a new snapshot and Unity's
+  "Import boot images". To see the guest's screen as a picture, compose the display's layers
+  from a snapshot: the table at the address in `0x8700000c` is a count, three unused words,
+  then eight words a layer (x, y, width, height, address).

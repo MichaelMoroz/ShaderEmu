@@ -1,0 +1,332 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 8d094fa..d6d9a66 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -31,6 +31,7 @@ option(DSOUND "Enable DirectSound audio. (deprecated)" OFF)
+ option(DDRAW "Enable DirectDraw video backend. (deprecated)" OFF)
+ option(SDL1 "Enable SDL1 video backend." OFF)
+ option(SDL2 "Enable SDL2 video backend." ON)
++option(SHADEREMU "The ShaderEmu machine's video and input." OFF)
+ option(OPENAL "Enable OpenAL audio backend." ON)
+ option(BUILD_TESTS "Build unit tests." OFF)
+ option(BUILD_TOOLS "Build modding utilities." OFF)
+diff --git a/common/CMakeLists.txt b/common/CMakeLists.txt
+index eada872..5a796c4 100644
+--- a/common/CMakeLists.txt
++++ b/common/CMakeLists.txt
+@@ -140,7 +140,10 @@ else()
+     list(APPEND COMMONV_SRC soundio_null.cpp vqaaudio_null.cpp)
+ endif()
+ 
+-if(DDRAW)
++if(SHADEREMU)
++    list(APPEND COMMONV_SRC shaderemu.cpp host.c cxxrt.cpp ${SHADEREMU_GLES})
++    list(APPEND VANILLA_LIBS ${SHADEREMU_NANOX})
++elseif(DDRAW)
+     list(APPEND COMMONV_SRC video_ddraw.cpp wwkeyboard_win32.cpp)
+     list(APPEND VANILLA_LIBS ddraw)
+ elseif(SDL2)
+@@ -200,6 +203,9 @@ if(BUILD_VANILLATD OR BUILD_VANILLARA OR BUILD_TESTS)
+     if(OPENAL)
+         target_compile_definitions(commonv PUBLIC OPENAL_BUILD)
+     endif()
++    if(SHADEREMU)
++        target_compile_definitions(commonv PUBLIC NEW_VIDEO_BUILD SHADEREMU)
++    endif()
+     if(SDL2)
+         target_compile_definitions(commonv PUBLIC SDL_BUILD SDL2_BUILD NEW_VIDEO_BUILD)
+     endif()
+diff --git a/common/file.cpp b/common/file.cpp
+index d2e727d..f7dbec5 100644
+--- a/common/file.cpp
++++ b/common/file.cpp
+@@ -24,6 +24,14 @@ static void Resolve_File_Single(char* fname)
+ 
+ void Resolve_File(char* fname)
+ {
++#ifdef SHADEREMU
++    /*
++    ** Only the file's own name is looked for in any case: the folders are ours and named
++    ** exactly. Each step up reads a whole folder, and the root one is read from the ROM.
++    */
++    Resolve_File_Single(fname);
++    return;
++#endif
+ #ifndef _WIN32
+     // step through each sub-directory before going for the win
+     char* next = fname;
+diff --git a/common/framelimit.cpp b/common/framelimit.cpp
+index 2a46e07..de9ec8e 100644
+--- a/common/framelimit.cpp
++++ b/common/framelimit.cpp
+@@ -15,6 +15,25 @@ extern WWMouseClass* WWMouse;
+ void Video_Render_Frame();
+ #endif
+ 
++#ifdef SHADEREMU
++#include "host.h"
++/*
++** The machine's clock is a word in memory and its frame ends with one instruction: no system
++** calls, and no 64-bit arithmetic. A forced call shows the screen; others at most 60 times a second.
++*/
++void Frame_Limiter(FrameLimitFlags flags)
++{
++    static unsigned shown;
++    unsigned now = host_ms();
++
++    if ((flags & FL_FORCE_RENDER) || now - shown >= 16) {
++        Video_Render_Frame();
++        shown = now;
++    } else if (!(flags & FL_NO_BLOCK)) {
++        host_wait();
++    }
++}
++#else
+ void Frame_Limiter(FrameLimitFlags flags)
+ {
+     static auto frame_start = std::chrono::steady_clock::now();
+@@ -58,3 +77,4 @@ void Frame_Limiter(FrameLimitFlags flags)
+         }
+     }
+ }
++#endif
+diff --git a/common/timer.cpp b/common/timer.cpp
+index ea6a5c0..31c6e4b 100644
+--- a/common/timer.cpp
++++ b/common/timer.cpp
+@@ -271,6 +271,10 @@ unsigned int WinTimerClass::Get_System_Tick_Count()
+     if (Frequency == 0) {
+         return 0;
+     }
++#ifdef SHADEREMU
++    /* 32 bits: a 64-bit division is a library call of some 400 instructions here */
++    return ((unsigned int)Now() - (unsigned int)Start) / (1000 / Frequency);
++#endif
+     unsigned long long delta = Now() - Start;
+     return (unsigned int)(delta / (1000 / Frequency));
+ }
+@@ -297,8 +301,16 @@ unsigned int WinTimerClass::Get_User_Tick_Count()
+     return (unsigned int)(delta / (1000 / Frequency));
+ }
+ 
++#ifdef SHADEREMU
++#include "host.h"
++#endif
++
+ unsigned long long WinTimerClass::Now()
+ {
++#ifdef SHADEREMU
++    /* the machine's clock word: a load, where the system's clock is a call into the kernel */
++    return host_ms();
++#endif
+     return duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
+ }
+ 
+diff --git a/tiberiandawn/conquer.cpp b/tiberiandawn/conquer.cpp
+index a8aebd8..e51d4ff 100644
+--- a/tiberiandawn/conquer.cpp
++++ b/tiberiandawn/conquer.cpp
+@@ -98,6 +98,135 @@ extern void Send_Statistics_Packet(void);
+ extern char* __nheapbeg;
+ bool InMainLoop = false;
+ 
++#ifdef SHADEREMU
++/*
++** What the game costs on the ShaderEmu machine, in instructions (docs/tdawn.md):
++**   TDAWN_STATS_MS=N   print the figures every N milliseconds (5000; 0 for never)
++**   TDAWN_FRAMES=N     run N game frames with no delay between them, print, and leave
++**   TDAWN_STOP_FRAME=N hold the picture of game frame N (for comparing pictures)
++*/
++void Video_Render_Frame();
++#include "common/host.h"
++extern unsigned ShaderEmu_Show_Cycles, ShaderEmu_Shows, ShaderEmu_Page_Flips, ShaderEmu_Page_Copies;
++static unsigned ShaderEmu_Logic_Cycles, ShaderEmu_Draw_Cycles;
++#define SHADEREMU_COUNT(counter, call)                                                                                 \
++    {                                                                                                                  \
++        unsigned began_ = host_cycles();                                                                               \
++        call;                                                                                                          \
++        counter += host_cycles() - began_;                                                                             \
++    }
++
++/* A sum of the game's state, to see two runs (or two builds) play the same. */
++static void ShaderEmu_State(const char* when)
++{
++    unsigned hash = 2166136261u, overlays = 0;
++    int i;
++#define SHADEREMU_MIX(value) hash = (hash ^ (unsigned)(value)) * 16777619u
++
++    for (i = 0; i < MAP_CELL_TOTAL; i++) {
++        if (Map[(CELL)i].Overlay != OVERLAY_NONE) {
++            overlays++;
++            SHADEREMU_MIX(i * 256 + Map[(CELL)i].Overlay);
++        }
++    }
++    for (i = 0; i < Units.Count(); i++) {
++        SHADEREMU_MIX(Units.Ptr(i)->Coord);
++        SHADEREMU_MIX(Units.Ptr(i)->Strength);
++    }
++    for (i = 0; i < Infantry.Count(); i++) {
++        SHADEREMU_MIX(Infantry.Ptr(i)->Coord);
++        SHADEREMU_MIX(Infantry.Ptr(i)->Strength);
++    }
++    for (i = 0; i < Buildings.Count(); i++) {
++        SHADEREMU_MIX(Buildings.Ptr(i)->Coord);
++        SHADEREMU_MIX(Buildings.Ptr(i)->Strength);
++    }
++    fprintf(stderr,
++            "tdawn: %s at frame %d: %s, %d units, %d infantry, %d buildings, %u overlays, state %08x\n",
++            when,
++            Frame,
++            Scen.ScenarioName,
++            Units.Count(),
++            Infantry.Count(),
++            Buildings.Count(),
++            overlays,
++            hash);
++}
++
++static void ShaderEmu_Stats(void)
++{
++    static int every = -1, cap, stop, frame_then;
++    static unsigned ms_then, cycles_then;
++    unsigned ms = host_ms(), cycles = host_cycles();
++    int frames = Frame - frame_then;
++
++    if (every < 0) {
++        const char* text = getenv("TDAWN_STATS_MS");
++        every = text ? atoi(text) : 5000;
++        text = getenv("TDAWN_FRAMES");
++        cap = text ? atoi(text) : 0;
++        text = getenv("TDAWN_STOP_FRAME");
++        stop = text ? atoi(text) : 0;
++        ms_then = ms;
++        cycles_then = cycles;
++        frame_then = Frame;
++        ShaderEmu_Logic_Cycles = ShaderEmu_Draw_Cycles = ShaderEmu_Show_Cycles = ShaderEmu_Shows = 0;
++        return;
++    }
++    if (cap || (stop && getenv("TDAWN_NO_DELAY"))) {
++        FrameTimer.Set(0);
++    }
++    if (frames > 0 && ((every && ms - ms_then >= (unsigned)every) || (cap && Frame >= cap))) {
++        unsigned all = (cycles - cycles_then) / frames;
++        unsigned logic = ShaderEmu_Logic_Cycles / frames, draw = ShaderEmu_Draw_Cycles / frames;
++        unsigned show = ShaderEmu_Show_Cycles / frames;
++        unsigned span = ms - ms_then ? ms - ms_then : 1;
++
++        fprintf(stderr,
++                "tdstat: frame %d: %d.%d game frames/s of %d, %uk instructions/s; a frame %uk = logic %uk + draw %uk + "
++                "show %uk (%u.%u shows) + rest %uk; %d objects; %u page copies of %u\n",
++                Frame,
++                frames * 1000 / span,
++                frames * 10000 / span % 10,
++                Options.GameSpeed ? 60 / Options.GameSpeed : 60,
++                (cycles - cycles_then) / span,
++                all / 1000,
++                logic / 1000,
++                draw / 1000,
++                show / 1000,
++                ShaderEmu_Shows / frames,
++                ShaderEmu_Shows * 10 / frames % 10,
++                (all - logic - draw - show) / 1000,
++                Units.Count() + Infantry.Count() + Buildings.Count() + Aircraft.Count() + Bullets.Count()
++                    + Anims.Count(),
++                ShaderEmu_Page_Copies,
++                ShaderEmu_Page_Flips);
++        ShaderEmu_Page_Copies = ShaderEmu_Page_Flips = 0;
++        ms_then = ms;
++        cycles_then = cycles;
++        frame_then = Frame;
++        ShaderEmu_Logic_Cycles = ShaderEmu_Draw_Cycles = ShaderEmu_Show_Cycles = ShaderEmu_Shows = 0;
++    }
++    if (cap && Frame >= cap) {
++        ShaderEmu_State("done");
++        exit(0);
++    }
++    if (stop && Frame >= stop) {
++        /* the picture reaches the window a machine frame after it is shown */
++        Video_Render_Frame();
++        for (int wait = 0; wait < 8; wait++) {
++            host_wait();
++        }
++        ShaderEmu_State("stopped");
++        for (;;) {
++            host_wait();
++        }
++    }
++}
++#else
++#define SHADEREMU_COUNT(counter, call) call
++#endif
++
+ #ifndef ARRAY_SIZE
+ #define ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
+ #endif
+@@ -1516,7 +1645,7 @@ static void Sync_Delay(void)
+             if (input) {
+                 Keyboard_Process(input);
+             }
+-            Map.Render();
++            SHADEREMU_COUNT(ShaderEmu_Draw_Cycles, Map.Render());
+         }
+ 
+         Frame_Limiter(FL_NONE);
+@@ -1611,6 +1740,9 @@ bool Main_Loop()
+     } else {
+         FrameTimer.Set(Options.GameSpeed);
+     }
++#ifdef SHADEREMU
++    ShaderEmu_Stats();
++#endif
+ 
+     /*
+     **	Update the display, unless we're inside a dialog.
+@@ -1624,7 +1756,7 @@ bool Main_Loop()
+                 Keyboard_Process(input);
+             }
+             //			HidPage.Lock();
+-            Map.Render();
++            SHADEREMU_COUNT(ShaderEmu_Draw_Cycles, Map.Render());
+             //			HidPage.Unlock();
+         }
+     }
+@@ -1650,7 +1782,7 @@ bool Main_Loop()
+     /*
+     **	AI logic operations are performed here.
+     */
+-    Logic.AI();
++    SHADEREMU_COUNT(ShaderEmu_Logic_Cycles, Logic.AI());
+ 
+     //	Heap_Dump_Check( "After Logic.AI" );
+ 
+diff --git a/tiberiandawn/init.cpp b/tiberiandawn/init.cpp
+index 8ae9955..fc0f2f3 100644
+--- a/tiberiandawn/init.cpp
++++ b/tiberiandawn/init.cpp
+@@ -1016,6 +1016,13 @@ bool Select_Game(bool fade)
+ 
+                     Scen.Scenario = 1;
+                     BuildLevel = 1;
++#ifdef SHADEREMU
++                    /* TDAWN_SCEN=N starts at mission N (the demo has 1, 3, 5, 6 and 10) */
++                    if (getenv("TDAWN_SCEN")) {
++                        Scen.Scenario = atoi(getenv("TDAWN_SCEN"));
++                        BuildLevel = 99;
++                    }
++#endif
+ 
+                     ScenPlayer = SCEN_PLAYER_GDI;
+                     ScenDir = SCEN_DIR_EAST;
+@@ -2533,6 +2540,12 @@ void Init_Random(void)
+         /*
+         ** Set the optional user-specified seed
+         */
++#ifdef SHADEREMU
++        /* TDAWN_SEED=N: the same game every run, for comparing pictures and timings */
++        if (getenv("TDAWN_SEED")) {
++            CustomSeed = atoi(getenv("TDAWN_SEED"));
++        }
++#endif
+         if (CustomSeed != 0) {
+             Seed = CustomSeed;
+         } else {

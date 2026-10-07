@@ -110,6 +110,18 @@ void seglSize(int* width, int* height) {
     *height = window_info.height;
 }
 
+void seglWindowChanged(void) {
+    if (gpu) GrGetWindowInfo(window, &window_info);
+}
+
+void seglPicturePoint(int x, int y, int width, int height, int* px, int* py) {
+    int w = window_info.width > 0 ? window_info.width : 1, h = window_info.height > 0 ? window_info.height : 1;
+    x = x * width / w;
+    y = y * height / h;
+    *px = x < 0 ? 0 : x >= width ? width - 1 : x;
+    *py = y < 0 ? 0 : y >= height ? height - 1 : y;
+}
+
 void* seglMemory(unsigned int bytes) {
     uint32_t at = texture_top;
     bytes = (bytes + 15) & ~15u;
