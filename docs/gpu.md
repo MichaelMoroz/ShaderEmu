@@ -71,7 +71,7 @@ mesh order.
 | 0 | end | | |
 | 1 | clear | 3 | 1: colour. Fills the picture, at the far plane |
 | 2 | rectangle | 6 | 1: colour, 2: key, 4-7: x0, y0, x1, y1 (exclusive), 8: fragment mode, 9-11: texture address, width, height, 12-15: u0, v0, u1, v1. Drawn at the near plane |
-| 3 | draw | count | 1: vertex buffer, 2: count, 4: vertex mode, 5: fragment mode, 6: uniforms address, 7-9: texture address, width, height, 10: key, 11: colour (compact vertices) |
+| 3 | draw | count | 1: vertex buffer, 2: count, 4: vertex mode, 5: fragment mode, 6: uniforms address, 7-9: texture address, width, height, 10: key, 11: colour (compact vertices), 12-15: where a laid texture lies |
 | 4 | text | 6 a character | 1: colour, 2: font table, 4-5: x, y of the string's top left, 6: characters, 7: address of the string, 8: fragment word (its pass). Drawn at the near plane |
 
 A string for command 4 is a word a character: the glyph's number in its low half and, in the
@@ -115,6 +115,7 @@ A textured quad is then 16 words of vertices instead of 96.
 | 3 | a texture of single bits, each row a whole number of bytes, leftmost pixel in the highest bit: set bits take the colour, clear bits are not drawn |
 | 4 | a texture of three bytes a pixel (red, green, blue, as in a PPM file), rows not padded, starting at any byte, times the colour. Its address may be in the ROM (from `0x40000000`): the draw pass has the ROM's four textures (`_Data_MTD_R/G/B/A`) as well as the state |
 | +0x100 | texels equal to the key (a colour, or an index in mode 2) are not drawn |
+| +0x200 | (draws) the texture is laid on the picture, not on the surface: a pixel at (x, y) of the picture takes the texel at words 12-13 plus (x, y) / 1024 times words 14-15 (16.16), and the colour is not applied. The surface still writes depth: a sky that hides what is behind it |
 
 Textures are anywhere in RAM, sampled nearest and repeating, with coordinates 0..1 across.
 
@@ -170,6 +171,17 @@ way: `GLfixed` is what the device reads.
   copy; `seglInit(window)` attaches to a Nano-X window and `seglSwap()` shows the frame.
 - A matrix holds 16.16 numbers, so `glOrthox` over a pixel-sized range is not exact (2/320
   is not representable). Draw 2D in units of the whole view (0 to 1) instead.
+- **Commands that stay** (`seglKeep`): a program whose scene mostly stands still writes its
+  quads into `seglMemory()` once and a command for each run of them (`seglKeptQuads`). Those
+  commands are the head of every frame's list from then on, in both of the library's sets,
+  and a frame costs what it changes: a run's grey, its texture, how many of its quads show,
+  or the vertices themselves, which are the program's memory. `seglKeptMatrices()` gives them
+  the frame's matrices; `seglKeptLaid()` lays a run's texture on the picture. Doom's levels
+  are drawn this way (`docs/doom.md`).
+- `seglQuad()` is one textured quad in one call, for the many small draws that differ in
+  texture: about 150 instructions against `glDrawArrays` and the state calls before it.
+  `seglWindowTexture()` makes the window's own pixels a texture: the last frame, for free.
+- A set holds 3,072 commands, 256 matrix blocks and 10,240 compact vertices of a frame's own.
 
 ## From Linux
 

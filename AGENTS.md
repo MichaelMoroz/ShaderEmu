@@ -364,6 +364,30 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
 - A driver hook that draws for the engine (`gd_drawpicture`) gets one rectangle of the clip
   region a call and must stay inside it: without that a picture scrolled up painted over the
   title bar. The caption is 22 pixels high and its buttons 18 (`nanowm.h`), for VR's beams.
+- Doom's speed is counted in instructions, not seconds (`docs/doom.md`): its `doomstat:` lines
+  give a tic and a frame, and frames/s = (instructions/s - 35 x a tic) / a frame. Seconds lie
+  whenever the developer's GPU is busy (VRChat open: the harness ran at 0.6M to 2M/s instead
+  of 3.3M): run `nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader` before
+  believing a frame rate, and measure again later if it says more than about 20%.
+- A change to Doom's game code must leave a demo playing the same: `DOOM_HASH_TICS=500 doom
+  -timedemo demo1 -nodraw` prints sums of the game's state, `DOOM_PORT=sight,look,think`
+  brings the port's code back to compare with, and `DOOM_PORT=view` the older way of drawing
+  (hold a frame with `DOOM_STOP_TIC=N` and compare the windows).
+- `rdcycle` costs a user program one instruction and counts the machine's instructions: put
+  two around anything to know what it costs. `gettimeofday` is 416; the clock word at
+  0x87000034 (milliseconds, a machine frame old at most) is a load.
+- Stores a power of two apart fill the write cache early: its set comes from address bits 2-8
+  and 11-12, so a field of records 64 bytes apart lands in 32 sets of four. Doom's line marks
+  did that. Keep such marks in an array of their own.
+- A 64-bit division is a library call of some 400 instructions (`__divdi3`); a 32-bit one is
+  an instruction. In the fast path of anything, make the operands fit.
+- musl's `qsort` with a comparison function cost 1,500 instructions an element on 2,500
+  elements. Count into buckets when the key allows.
+- The toolchain's default is position-independent code, which the guest's TinyCC needs of
+  every library it links (`R_RISCV_HI20` and friends are "Unknown relocation type for got"
+  there). A program that wants speed asks for `-fno-pie` itself, as Doom does.
+- A C string with `\n` written through a bash heredoc into Python arrives with a real line
+  break in it. Write the editing script with the Write tool and run that file.
 - The wheel is key-ring events 0x3fe (up) and 0x3ff (down): `WM_MOUSEWHEEL` in the harness
   window, `EmuMachine.Wheel` in Unity. A program sees a button-down with a scroll bit set.
 - The image builder adds files to folders the ROM already has and cannot make a folder: new

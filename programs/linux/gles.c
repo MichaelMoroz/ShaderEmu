@@ -20,10 +20,10 @@
 // again and again from its own point of view, docs/volume.md).
 #define SETS_AT 0x00700000u
 #define SET_SIZE 0x00060000u
-#define UNIFORMS_IN 0x00018000u    // within a set: its matrix blocks, eight vectors each
-#define VERTICES_IN 0x00020000u    // and its vertices
+#define UNIFORMS_IN 0x00030000u    // within a set: its matrix blocks, eight vectors each
+#define VERTICES_IN 0x00038000u    // and its vertices
 #define TEXTURES_AT 0x007c0000u    // textures, to the end
-#define MAX_COMMANDS 1536
+#define MAX_COMMANDS 3072
 #define MAX_BLOCKS 256
 #define REG_VOLUME 0x300           // the last whole frame: list address, command count, frames so far
 #define MAX_MESH 196608            // vertices the device's mesh has for one list
@@ -37,7 +37,7 @@
 
 enum { CMD_CLEAR = 1, CMD_DRAW = 3 };
 enum { VERTEX_CLIP = 1, VERTEX_MODELVIEW = 0x100, VERTEX_QUADS = 0x200, VERTEX_COMPACT = 0x400 };
-enum { FRAGMENT_COLOUR, FRAGMENT_TEXTURE, FRAGMENT_INDEXED, FRAGMENT_KEYED = 0x100 };
+enum { FRAGMENT_COLOUR, FRAGMENT_TEXTURE, FRAGMENT_INDEXED, FRAGMENT_KEYED = 0x100, FRAGMENT_LAID = 0x200 };
 
 static uint8_t* gpu;   // GPU memory from GPU_PHYS
 static GR_WINDOW_ID window;
@@ -49,6 +49,7 @@ static uint32_t commands, blocks, mesh_vertices, vertex_top, texture_top = TEXTU
 static uint32_t set_at = SETS_AT;   // the set the frame being built is in
 static uint32_t* last_draw;   // the command the next vertices may join, with what it was made for
 static uint32_t last_state[6];
+static uint32_t kept, kept_mesh;   // commands at the head of every frame's list that the program wrote itself
 
 // ---- state ----
 
@@ -148,7 +149,9 @@ void seglSwap(void) {
         regs[REG_VOLUME / 4 + 2]++;
         set_at = set_at == SETS_AT ? SETS_AT + SET_SIZE : SETS_AT;
     }
-    commands = blocks = mesh_vertices = passes_used = 0;
+    commands = kept;
+    mesh_vertices = kept_mesh;
+    blocks = passes_used = 0;
     last_draw = 0;
     vertex_top = set_at + VERTICES_IN;
     matrices_dirty = 1;
@@ -398,14 +401,15 @@ void glColorTableEXT(GLenum target, GLenum internal, GLsizei count, GLenum forma
 
 // The block of vectors a draw reads its matrices from: the projection with the viewport folded
 // in (rows 0-3), then the modelview (rows 4-6), which the device applies first.
-static uint32_t matrix_block(void) {
+static void matrix_block_write(void) {
     if (matrices_dirty && blocks < MAX_BLOCKS) {
         GLfixed* u = (GLfixed*)(gpu + set_at + UNIFORMS_IN) + 32 * blocks++;
         const matrix* p = &projection[projection_top];
         const matrix* m = &modelview[modelview_top];
         int w = window_info.width ? window_info.width : 1, h = window_info.height ? window_info.height : 1;
-        GLfixed sx = (GLfixed)(((int64_t)view_w << 16) / w), ox = (GLfixed)(((int64_t)(2 * view_x + view_w) << 16) / w) - 65536;
-        GLfixed sy = (GLfixed)(((int64_t)view_h << 16) / h), oy = (GLfixed)(((int64_t)(2 * view_y + view_h) << 16) / h) - 65536;
+        // (a window is far below 32,768 pixels: these fit a 32-bit division, which this machine has)
+        GLfixed sx = (view_w << 16) / w, ox = ((2 * view_x + view_w) << 16) / w - 65536;
+        GLfixed sy = (view_h << 16) / h, oy = ((2 * view_y + view_h) << 16) / h - 65536;
         for (int j = 0; j < 4; j++) {
             u[j] = mul(sx, p->r[0][j]) + mul(ox, p->r[3][j]);
             u[4 + j] = mul(sy, p->r[1][j]) + mul(oy, p->r[3][j]);
@@ -417,6 +421,10 @@ static uint32_t matrix_block(void) {
         }
         matrices_dirty = 0;
     }
+}
+static uint32_t matrix_block(void) {
+    if (blocks < (kept ? 1u : 0u)) blocks = 1, matrices_dirty = 1;   // block 0 is the kept commands' (seglKeptMatrices)
+    matrix_block_write();
     return GPU_PHYS + set_at + UNIFORMS_IN + 128 * (blocks ? blocks - 1 : 0);
 }
 
@@ -491,6 +499,125 @@ void glDrawArrays(GLenum mode, GLint first, GLsizei count) {
         for (uint32_t i = 0; i < stored; i++, to += 4) put(to, &a, first + i);
     }
     vertex_top += stored * 16;
+}
+
+// The window's own pixels as a texture: the picture the GPU drew last, where the server keeps it.
+int seglWindowTexture(GLuint name, GLfixed* across) {
+    if (!window_info.surface_address) return -1;
+    texture* x = &textures[name < 512 ? name : 0];
+    uint32_t row = window_info.surface_row ? window_info.surface_row : (uint32_t)window_info.width;
+    x->address = window_info.surface_address - GPU_PHYS;   // (below this program's own memory: the sum wraps back)
+    x->width = row;
+    x->height = window_info.height;
+    x->indexed = 0;
+    *across = (GLfixed)(((uint32_t)window_info.width << 16) / (row ? row : 1));
+    return 0;
+}
+
+// One quad of a texture, with everything it needs in the call (segl.h): what
+// glDrawArrays does for four corners, without the state calls before it.
+void seglQuad(const GLfixed* xyz, const GLfixed* uv, GLuint name, unsigned grey, int alpha, int keyed) {
+    const texture* x = &textures[name < 512 ? name : 0];
+    uint32_t pass = (alpha < 255 ? 1u : 0u) + (depth_test ? 0 : 4);
+    uint32_t fragment = (x->indexed ? FRAGMENT_INDEXED : FRAGMENT_TEXTURE) | (keyed ? FRAGMENT_KEYED : 0) | pass << 16;
+    uint32_t vertex = VERTEX_CLIP | VERTEX_MODELVIEW | VERTEX_COMPACT | VERTEX_QUADS;
+    uint32_t tint = (uint32_t)(255 - alpha) << 24 | grey << 16 | grey << 8 | grey;
+    if (!gpu || vertex_top + 64 > set_at + SET_SIZE || mesh_vertices + 6 > MAX_MESH) return;
+    uint32_t block = matrices_dirty || !blocks ? matrix_block() : GPU_PHYS + set_at + UNIFORMS_IN + 128 * (blocks - 1);
+    uint32_t* restrict to = (uint32_t*)(gpu + vertex_top);
+    if (last_draw && last_draw == (uint32_t*)(gpu + set_at) + 16 * (commands - 1) && last_state[0] == vertex &&
+        last_state[1] == fragment && last_state[2] == block && last_state[3] == x->address && last_state[4] == tint &&
+        last_state[5] == (uint32_t)key_index) {
+        last_draw[2] += 6;
+        mesh_vertices += 6;
+    } else {
+        uint32_t* c = command(CMD_DRAW, 6);
+        if (!c) return;
+        c[1] = GPU_PHYS + vertex_top;
+        c[2] = 6;
+        c[4] = last_state[0] = vertex;
+        c[5] = last_state[1] = fragment;
+        c[6] = last_state[2] = block;
+        c[7] = GPU_PHYS + x->address;
+        last_state[3] = x->address;
+        c[8] = x->width;
+        c[9] = x->height;
+        c[10] = last_state[5] = key_index;
+        c[11] = last_state[4] = tint;
+        last_draw = c;
+        passes_used |= (1u << pass) & 0xfe;
+    }
+    for (int i = 0; i < 4; i++, to += 4, xyz += 3, uv += 2) {
+        to[0] = xyz[0];
+        to[1] = xyz[1];
+        to[2] = xyz[2];
+        to[3] = ((uint32_t)(uv[0] >> 6) & 0xffff) | (uint32_t)(uv[1] >> 6) << 16;
+    }
+    vertex_top += 64;
+}
+
+// ---- commands that stay (segl.h) ----
+
+// Both sets hold them: a frame is built in one while the other is still being shown.
+static uint32_t* kept_command(int set, int index) { return (uint32_t*)(gpu + SETS_AT + set * SET_SIZE) + 16 * index; }
+
+int seglKeep(int count, int quads) {
+    if (!gpu || count < 0 || count > MAX_COMMANDS - 64 || (uint32_t)quads * 6 > MAX_MESH - 4096) return -1;
+    kept = count;
+    kept_mesh = (uint32_t)quads * 6;
+    commands = kept;   // (the frame being built starts again: call this before drawing in it)
+    mesh_vertices = kept_mesh;
+    last_draw = 0;
+    blocks = 0;
+    return 0;
+}
+void seglKeptQuads(int index, const void* vertices, int first_quad, int quads, GLuint name, unsigned grey, int keyed) {
+    for (int set = 0; set < 2; set++) {
+        uint32_t* c = kept_command(set, index);
+        const texture* t = &textures[name < 512 ? name : 0];
+        c[0] = CMD_DRAW;
+        c[1] = GPU_PHYS + (uint32_t)((const uint8_t*)vertices - gpu) + (uint32_t)first_quad * 64;   // quad 0 is at `vertices`
+        c[2] = (uint32_t)quads * 6;
+        c[3] = (uint32_t)first_quad * 6;
+        c[4] = VERTEX_CLIP | VERTEX_MODELVIEW | VERTEX_COMPACT | VERTEX_QUADS;
+        c[5] = FRAGMENT_INDEXED | (keyed ? FRAGMENT_KEYED : 0);
+        c[6] = GPU_PHYS + SETS_AT + set * SET_SIZE + UNIFORMS_IN;
+        c[7] = GPU_PHYS + t->address;
+        c[8] = t->width;
+        c[9] = t->height;
+        c[10] = key_index;
+        c[11] = grey << 16 | grey << 8 | grey;
+    }
+}
+void seglKeptShown(int index, int quads) {
+    for (int set = 0; set < 2; set++) kept_command(set, index)[2] = (uint32_t)quads * 6;
+}
+int seglSet(void) { return set_at != SETS_AT; }
+void seglKeptGreyIn(int set, int index, unsigned grey) { kept_command(set, index)[11] = grey << 16 | grey << 8 | grey; }
+void seglKeptGrey(int index, unsigned grey) {
+    for (int set = 0; set < 2; set++) kept_command(set, index)[11] = grey << 16 | grey << 8 | grey;
+}
+void seglKeptTexture(int index, GLuint name) {
+    const texture* t = &textures[name < 512 ? name : 0];
+    for (int set = 0; set < 2; set++) {
+        uint32_t* c = kept_command(set, index);
+        c[7] = GPU_PHYS + t->address;
+        c[8] = t->width;
+        c[9] = t->height;
+    }
+}
+void seglKeptLaid(int index, GLfixed u, GLfixed v, GLfixed du, GLfixed dv) {
+    for (int set = 0; set < 2; set++) {
+        uint32_t* c = kept_command(set, index);
+        c[5] |= FRAGMENT_LAID;
+        c[12] = u, c[13] = v, c[14] = du, c[15] = dv;
+    }
+}
+void seglKeptMatrices(void) {
+    if (!gpu || !kept) return;
+    blocks = 0;
+    matrices_dirty = 1;
+    matrix_block_write();
 }
 
 void glFlush(void) {}

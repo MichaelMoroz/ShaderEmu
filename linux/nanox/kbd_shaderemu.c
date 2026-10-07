@@ -130,6 +130,10 @@ Kbd_Read(MWKEY *kbuf, MWKEYMOD *modifiers, MWSCANCODE *pscancode)
 			continue;
 
 		mod = held_modifier(key);
+		/* a modifier held down is not pressed again and again: the Windows key would open
+		 * and close the Start menu thirty times a second for as long as it is down */
+		if (mod && ev->value == 2)
+			continue;
 		if (mod) {
 			if (pressed)
 				modstate |= mod;

@@ -50,6 +50,7 @@
 #define FRAGMENT_MASK 3       // 1-bit texture, rows of whole bytes, leftmost bit highest: set bits take the colour
 #define FRAGMENT_RGB24 4      // texture of three bytes a pixel (red, green, blue), rows with no padding, at any byte address, in RAM or ROM; times colour
 #define FRAGMENT_KEYED 0x100  // flag: texels equal to the key colour (or index) are not drawn
+#define FRAGMENT_LAID 0x200   // flag (draws): the texture lies on the picture, not on the surface (a sky)
 // Bits 16-18 of the same word: the pass the command is drawn in. Passes are drawn in order, each
 // with fixed blending and depth use; within a pass commands keep the list's order.
 //   0 opaque   1 alpha blend   2 additive   3 multiply     depth tested; only pass 0 writes it
@@ -219,6 +220,13 @@ gpu_varyings gpu_vertex_of(uint id, uint base, uint4 head) {
             }
             o.texture_info = uint4(how.g, how.a, more.r, more.g);
             o.key = more.b;
+            if (how.g & FRAGMENT_LAID) {
+                // words 12-15: the texture coordinates of the picture's corner, and how far
+                // they go in 1,024 pixels. The colour carries the second pair to the fragments.
+                float4 lay = from_fixed(ram(base + 3));
+                o.uv = lay.xy;
+                o.colour = float4(lay.zw, 0.0, 1.0);
+            }
             [branch]
             uint vertex_mode = how.r & 0xff;
             if (vertex_mode == VERTEX_SCREEN) {
@@ -266,10 +274,15 @@ gpu_varyings gpu_vertex(uint id) {
 float4 gpu_fragment(gpu_varyings i) {
     uint mode = i.texture_info.r & 0xff, width = i.texture_info.b, height = i.texture_info.a;
     float4 c = i.colour;
+    float2 uv = i.uv;
+    if (i.texture_info.r & FRAGMENT_LAID) {
+        uv += i.position.xy * c.xy / 1024.0;
+        c = 1.0;
+    }
     [branch]
     if (mode != FRAGMENT_COLOUR && width != 0 && height != 0) {
         // nearest texel, repeating
-        uint x = min((uint)(frac(i.uv.x) * width), width - 1), y = min((uint)(frac(i.uv.y) * height), height - 1);
+        uint x = min((uint)(frac(uv.x) * width), width - 1), y = min((uint)(frac(uv.y) * height), height - 1);
         uint n = y * width + x, texel;
         if (mode == FRAGMENT_MASK) {
             n = y * ((width + 7) >> 3) + (x >> 3);

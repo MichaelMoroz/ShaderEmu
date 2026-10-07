@@ -111,7 +111,13 @@ def vertices(m):
                     nv = (normal[:, :3] @ u[4:7, :3].T).astype(f32)
                     facing = np.maximum(nv @ u[7, :3], 0).astype(f32)
                     colour = np.concatenate([facing[:, None] * u[8, :3] + u[9, :3], np.ones((n, 1), f32)], axis=1)
-            out.append(dict(op=op, pos=clip, colour=colour.astype(f32), uv=v[:, 2, :2].copy(),
+            uv = v[:, 2, :2].copy()
+            if int(w[5]) & 0x200:
+                # laid on the picture: words 12-15 are the corner's coordinates and their change in 1,024 pixels
+                lay = w[12:16].astype(np.int32).astype(f32) / f32(65536.0)
+                uv = np.repeat(lay[None, :2], n, 0)
+                colour = np.repeat(np.array([[lay[2], lay[3], 0, 1]], f32), n, 0)
+            out.append(dict(op=op, pos=clip, colour=colour.astype(f32), uv=uv,
                             tex=(int(w[5]), int(w[7]), int(w[8]), int(w[9])), key=int(w[10])))
     return width, height, out
 
@@ -222,6 +228,11 @@ def draw(m):
             pw = [v / total for v in pw]
             col = sum(pw[i][:, None] * cmd['colour'][3 * t + i].astype(np.float64) for i in range(3))
             uv = sum(pw[i][:, None] * cmd['uv'][3 * t + i].astype(np.float64) for i in range(3))
+            if cmd['op'] == 3 and cmd['tex'][0] & 0x200:
+                at = np.argwhere(ok)
+                centre = np.stack([at[:, 1] + x_lo + 0.5, at[:, 0] + y_lo + 0.5], axis=1)
+                uv = uv[:, :2] + centre * col[:, :2] / 1024.0
+                col = np.ones_like(col)
             rgba, keep = shade(m, col.astype(f32), uv.astype(f32), cmd['tex'], cmd['key'])
             idx = np.argwhere(ok)[keep]
             yy, xx = idx[:, 0] + y_lo, idx[:, 1] + x_lo

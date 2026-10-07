@@ -52,6 +52,7 @@ public class EmuKeyboard : UdonSharpBehaviour
     private bool started;
 
     private bool capturing;
+    private bool[] hostDown;         // real keyboard, raw keys: the ones the guest has been told are down
     private int repeatKey = -1;      // real keyboard, index into hostKeys
     private float repeatAt;
     private int repeatScreen = -1;   // on-screen key held on the console keyboard
@@ -299,6 +300,13 @@ public class EmuKeyboard : UdonSharpBehaviour
         if (on && other != null) other.SetCapture(false);
         capturing = on;
         repeatKey = -1;
+        // keys still down when the typing stops come up, or the guest goes on holding them
+        if (hostDown == null || hostDown.Length != hostKeys.Length) hostDown = new bool[hostKeys.Length];
+        for (int i = 0; i < hostDown.Length; i++)
+        {
+            if (hostDown[i] && rawKeys) Push(hostLinux[i]);
+            hostDown[i] = false;
+        }
         VRCPlayerApi player = Networking.LocalPlayer;
         if (player != null) player.Immobilize(on);   // or typing WASD walks away
         if (captureLabel != null) captureLabel.text = on ? "Typing here (Insert: stop)" : "Use my keyboard";
@@ -328,8 +336,18 @@ public class EmuKeyboard : UdonSharpBehaviour
             if (key == KeyCode.None || key == KeyCode.Insert) continue;
             if (rawKeys)
             {
-                if (Input.GetKeyDown(key)) Push(hostLinux[i] | Pressed);
-                if (Input.GetKeyUp(key)) Push(hostLinux[i]);
+                // by the key's state, not by its release event: the release of a key that took
+                // the focus away (the Windows key) never arrives, and the guest held it for ever
+                if (Input.GetKeyDown(key) && !hostDown[i])
+                {
+                    hostDown[i] = true;
+                    Push(hostLinux[i] | Pressed);
+                }
+                if (hostDown[i] && !Input.GetKey(key))
+                {
+                    hostDown[i] = false;
+                    Push(hostLinux[i]);
+                }
             }
             else if (!IsModifier(hostLinux[i]) && Input.GetKeyDown(key))
             {

@@ -9,7 +9,10 @@ MUSL=1.2.5
 LLVM=18.1.8
 GCC=releases/gcc-13.3.0
 export PATH="$WORK/bin:$WORK/tools/usr/bin:$WORK/toolchain/bin:$PATH"
-ARCH_FLAGS="-march=rv32ima -mabi=ilp32"
+# No stack guard: the compiler's default costs a stored and checked word in most functions.
+# (Position-independent code stays the default: the guest's own linker, TinyCC's, needs the
+# libraries that way. A program that wants its globals without a table asks with -fno-pie.)
+ARCH_FLAGS="-march=rv32ima -mabi=ilp32 -fno-stack-protector"
 [ -d "$WORK/toolchain" ] && [ -d "$WORK/linux" ] || { echo "run linux/kernel/build.sh first"; exit 1; }
 mkdir -p "$WORK/bin" "$WORK/src" "$SYSROOT/lib" && cd "$WORK/src"
 
@@ -36,7 +39,7 @@ link=1
 for a in "\$@"; do case "\$a" in -c|-S|-E|-M|-MM) link=0 ;; esac; done
 inc="-nostdinc -isystem $SYSROOT/include -isystem \$(riscv32-linux-gcc -print-file-name=include)"
 if [ \$link = 1 ]; then
-    exec riscv32-linux-gcc $ARCH_FLAGS \$inc -static -nostdlib -L$SYSROOT/lib $SYSROOT/lib/crt1.o $SYSROOT/lib/crti.o \\
+    exec riscv32-linux-gcc $ARCH_FLAGS \$inc -static -no-pie -nostdlib -L$SYSROOT/lib $SYSROOT/lib/crt1.o $SYSROOT/lib/crti.o \\
         "\$@" -Wl,--start-group -lc -lcompiler_rt -Wl,--end-group $SYSROOT/lib/crtn.o
 fi
 exec riscv32-linux-gcc $ARCH_FLAGS \$inc "\$@"
