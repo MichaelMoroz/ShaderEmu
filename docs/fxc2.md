@@ -12,19 +12,14 @@ For this project it changes two things:
 
 ## Using it with the harness
 
-`rvc_harness.exe` loads `d3dcompiler_47.dll` the usual way, so the fxc2 build of that DLL next to
-the executable is all it takes. Keep it in a folder of its own so that both compilers stay
-available:
+`rvc_harness.exe` loads `d3dcompiler_47.dll` the usual way, and the build copies fxc2's
+(`tools\fxc2\d3dcompiler_47.dll`) next to it: the harness compiles with fxc2. Its banner says
+so ("D3D11 + fxc2"), and the shader cache keys a blob by the compiler that made it. To compile
+with Microsoft's FXC, delete `bin\d3dcompiler_47.dll` (the next build puts it back). The D3D12
+path's preprocessing comes from the same DLL; the harness undefines `__FXC2__` for it.
 
-    mkdir bin_fxc2
-    copy bin\rvc_harness.exe bin_fxc2\
-    copy <FXC2>\bin\d3dcompiler_47.dll bin_fxc2\
-    bin_fxc2\rvc_harness.exe --d3d11 --cache build\cache_fxc2 --image linux-net ...
-
-Give each compiler its own `--cache`: the cache is keyed by the source, not by which compiler
-produced the bytecode, so with a shared folder whichever built a shader first is what both run.
-The banner still says "D3D11 + FXC"; the compile times in the log tell which one it was (seconds
-against minutes).
+Two things do not work with it yet: upstream rvc's own shader (a syntax error; our
+`experiments\rvc_opt` is fine), and `float - uint`, which it computes wrongly (write the cast).
 
 Unity (and so a VRChat world's build) can use it as well: FXC2's `scripts/unity-overlay.ps1` makes
 a copy of the editor whose shader compiler is fxc2, without touching the installed one.

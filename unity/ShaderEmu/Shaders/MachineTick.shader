@@ -71,6 +71,10 @@ Shader "ShaderEmu/MachineTick"
             // One permutation only: the full machine, started in the kernel with no firmware
             // (docs/boot.md). Images that need machine-mode start-up do not boot on it.
             #define SBI_HLE
+            // Built by fxc2 (docs/fxc2.md): the write cache and the TLB as locals, MULH in one
+            // instruction. Unity preprocesses the source itself, so the compiler cannot say
+            // what it is; a stock editor (FXC) needs this line taken out.
+            #define __FXC2__
 
             #define PASS_TICK
 
@@ -118,6 +122,11 @@ Shader "ShaderEmu/MachineTick"
                 _Data_MTD_R.GetDimensions(m_dim.x, m_dim.y);
 
                 uint2 pos = (uint2)i.vertex.xy;
+#ifdef L1_LOCAL
+                uint4 l1_cache[L1_ENTRIES];
+                uint tlb2_tag[3 * TLB2_N];
+                uint tlb2_pg[3 * TLB2_N];
+#endif
 
                 _UdonUARTInChar = _UartInLo | (_UartInHi << 16);
                 _RTC0 = _Rtc0Lo | (_Rtc0Hi << 16);

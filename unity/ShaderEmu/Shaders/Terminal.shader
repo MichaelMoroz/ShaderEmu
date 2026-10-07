@@ -58,7 +58,7 @@ Shader "ShaderEmu/Terminal"
                 float2 gx = ddx(at) / float2(16, 6), gy = ddy(at) / float2(16, 6);
                 if (p.x >= 0 && p.y >= 0 && p.x < 1 && p.y < 1) {
                     uint2 cell = min((uint2)at, uint2(_Cols, _Rows) - 1);
-                    float2 f = at - cell;
+                    float2 f = at - (float2)cell;   // said outright: fxc2 subtracts an unsigned from a float wrongly
                     uint3 t = (uint3)(_Grid.Load(int3(cell.x, (cell.y + _RowOffset) % _Rows, 0)).rgb * 255.0 + 0.5);
                     uint ch = t.r < 32 || t.r > 126 ? 0 : t.r - 32;
                     float3 fg = Palette[t.g & 15], bg = Palette[t.b & 15];

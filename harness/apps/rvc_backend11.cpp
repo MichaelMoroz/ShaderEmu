@@ -17,7 +17,7 @@ class Backend11 : public RvcBackend {
 public:
     bool init(const BackendOptions& opt, const SLShader& shader, Material& mat, std::string& err) override {
         if (!gpu_.init(opt.gpu, err)) return false;
-        fprintf(stderr, "[harness] D3D11 + FXC on %s%s, doubles: %s, extended doubles: %s\n", gpu_.adapterName.c_str(),
+        fprintf(stderr, "[harness] D3D11 + %s on %s%s, doubles: %s, extended doubles: %s\n", shaderCompilerName(), gpu_.adapterName.c_str(),
                 opt.gpu.warp ? " (WARP)" : "", gpu_.doubles ? "yes" : "NO", gpu_.extendedDoubles ? "yes" : "no");
         if (!gpu_.doubles) fprintf(stderr, "[harness] warning: rvc uses doubles (MULH, timer); this device lacks them\n");
 

@@ -63,6 +63,17 @@ std::string blobText(ID3DBlob* b) {
 
 }  // namespace
 
+const char* shaderCompilerName() {
+    static const char* name = nullptr;
+    if (!name) {
+        wchar_t path[MAX_PATH] = L"", windows[MAX_PATH] = L"";
+        GetModuleFileNameW(GetModuleHandleW(L"d3dcompiler_47.dll"), path, MAX_PATH);
+        GetWindowsDirectoryW(windows, MAX_PATH);
+        name = _wcsnicmp(path, windows, wcslen(windows)) == 0 ? "FXC" : "fxc2";
+    }
+    return name;
+}
+
 bool preprocessStage(const std::string& source, const std::string& sourceName, const std::string& rootDir,
                      const Defines& extraDefines, const CompileSettings& settings, std::string& out, std::string& err) {
     Defines all = settings.defines;
@@ -73,8 +84,10 @@ bool preprocessStage(const std::string& source, const std::string& sourceName, c
     std::vector<fs::path> sys;
     for (auto& d : settings.includeDirs) sys.push_back(fs::u8path(d));
     IncludeHandler inc(fs::u8path(rootDir), sys);
+    // The text is for another compiler: what fxc2's preprocessor says of itself must not hold.
+    std::string forOther = "#undef __FXC2__\n#line 1\n" + source;
     ComPtr<ID3DBlob> pre, errors;
-    HRESULT hr = D3DPreprocess(source.data(), source.size(), sourceName.c_str(), macros.data(), &inc, &pre, &errors);
+    HRESULT hr = D3DPreprocess(forOther.data(), forOther.size(), sourceName.c_str(), macros.data(), &inc, &pre, &errors);
     if (FAILED(hr)) {
         err = "preprocess failed (" + hrToString(hr) + "):\n" + blobText(errors.Get());
         return false;
@@ -108,6 +121,7 @@ StageResult compileStage(const std::string& source, const std::string& sourceNam
 
     // Cache key: preprocessed text + entry + profile + flags + compiler identity.
     std::string keyExtra = entry + "|" + profile + "|" + std::to_string(settings.flags) + "|d3dcompiler_47|v1";
+    if (strcmp(shaderCompilerName(), "FXC") != 0) keyExtra += std::string("|") + shaderCompilerName();
     uint64_t h = fnv1a64(pre->GetBufferPointer(), pre->GetBufferSize());
     h = fnv1a64(keyExtra.data(), keyExtra.size(), h);
     char keyHex[17];

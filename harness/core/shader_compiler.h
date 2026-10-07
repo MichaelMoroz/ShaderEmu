@@ -1,8 +1,9 @@
-// FXC (d3dcompiler_47) wrapper with Unity-like settings and an on-disk bytecode cache.
+// d3dcompiler_47 wrapper with Unity-like settings and an on-disk bytecode cache. The DLL beside
+// the executable is fxc2 (tools/fxc2, docs/fxc2.md); without it Windows' own FXC is loaded.
 //
-// Large emulator shaders can take 10+ minutes to compile, so the cache key is a hash of the
-// *preprocessed* source (cheap to produce) plus entry point, profile and flags. Editing any
-// included file therefore invalidates exactly the shaders that use it.
+// The cache key is a hash of the *preprocessed* source (cheap to produce) plus entry point,
+// profile, flags and which compiler it is. Editing an included file invalidates exactly the
+// shaders that use it.
 #pragma once
 
 #include "common.h"
@@ -25,6 +26,9 @@ struct CompileSettings {
     std::string cacheDir;                   // empty = no cache
     bool printWarnings = false;
 };
+
+// "fxc2" when the d3dcompiler_47.dll in use is not Windows' own, else "FXC".
+const char* shaderCompilerName();
 
 struct StageResult {
     bool ok = false;

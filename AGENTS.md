@@ -230,11 +230,21 @@ A cold boot to the `/ #` prompt takes about 80 s on an RTX 5090 with upstream on
   `l1_cache` must be added there the same way, and an entry may only be read when its
   occupancy bit is set. FXC builds keep the static array. The second-level TLB's two arrays
   (`tlb2_tag`, `tlb2_pg`) go the same way, with `tlb2_occ` as their occupancy bitmap.
-- fxc2 (`docs/fxc2.md`) is a D3D11 compiler that builds the tick shader in 9 s instead of
-  9 minutes and does compile `L1_LOCAL`; the shader switches it on when `__FXC2__` is
-  defined. Put its `d3dcompiler_47.dll` next to a copy of the harness in `bin_fxc2\` and give
-  that copy its own `--cache`: the cache does not know which compiler made a blob. Tune on
-  D3D11 with it, then confirm the winner with FXC, which is what an unmodified Unity runs.
+- The D3D11 compiler is fxc2 (`docs/fxc2.md`, `tools\fxc2`): the build puts its
+  `d3dcompiler_47.dll` beside the harness, the tick compiles in about 6 s (FXC: 3 to 9
+  minutes), and the shader switches on `L1_LOCAL` and the one-instruction MULH when `__FXC2__`
+  is defined. The banner says which compiler was loaded, and the cache keeps their blobs apart.
+  Delete `bin\d3dcompiler_47.dll` to compile with Microsoft's FXC again.
+- Upstream rvc's own shader does not compile with fxc2 (a syntax error in its preprocessed
+  source): `--d3d11` without `--rvc`, and `perf_test.ps1` without `-Rvc`, need FXC.
+- fxc2 computes `float - uint` wrongly (it negates the unsigned value first: 25.18 - 25u came
+  out as 4294967296). Write the cast: `at - (float2)cell`. The harness's state hashes do not
+  see such a thing in a shader that only draws; `Terminal.shader` had one.
+- Unity compiles with fxc2 through an overlay copy of the editor (FXC2's
+  `scripts\unity-overlay.ps1`, with `-Dll bin\unity\D3DCompiler_47.dll` and
+  `fxc2_d3dcompiler.dll` copied beside it). Unity preprocesses shaders itself, so
+  `MachineTick.shader` defines `__FXC2__` by hand: a stock editor needs that line out. The
+  stock compiler's cache is `Library\ShaderCache.fxc`.
 - Skipping pixels in the commit with `discard` saves little: rasterising the whole texture is
   0.06 ms even when every pixel is discarded. Its vertex shader (`commit_vert`) reads the band
   list from the state instead and draws one quad per band; the harness binds the state texture
