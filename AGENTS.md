@@ -445,3 +445,9 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   "Import boot images". To see the guest's screen as a picture, compose the display's layers
   from a snapshot: the table at the address in `0x8700000c` is a count, three unused words,
   then eight words a layer (x, y, width, height, address).
+- Doom's window is the largest of 1x to 3x the display has room for (`doom_window_scale` in
+  `doom_video.c`); a test that compares its pictures with older ones passes `-1`.
+- Tiberian Dawn leaves frames undrawn when it is late (`TDAWN_SKIP=0` for none) and sizes
+  scroll steps by time; neither happens with `TDAWN_NO_DELAY=1` or `TDAWN_FRAMES`, which is
+  what makes those runs repeat. `TDAWN_SCROLL=96 TDAWN_CHECK_REDRAW=1` with a held frame must
+  print `0 of 64000 pixels differ from a full redraw`.

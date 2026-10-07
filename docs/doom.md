@@ -10,6 +10,9 @@ image with the GPU drawing its picture.
 In the guest: start it from the desktop's Start menu or a terminal, or `nano-X -p & doom` at
 the console. `-playdemo demo1` plays the first demo in real time, `-timedemo demo1` one tic a
 frame, `-warp 1 1` starts in the first level.
+The window is the largest of one, two or three times 320x200 that the display has room for
+(960x600 on 1280x720: the GPU does the stretching, and draws the 3D view at that size, at the
+same frame rate); `-1`, `-2` or `-3` says which.
 The shareware `doom1.wad` is fetched by the build and is not kept in this repository.
 
 ## Speed

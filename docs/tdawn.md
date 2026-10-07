@@ -47,6 +47,19 @@ sound.
   the program from a folder of its own (the game lists its program's folder too): 70M.
 - **Waiting** ends the machine's frame with `pause`; the screen is shown at most 60 times a
   second unless the game asks.
+- **Frames left undrawn.** A frame that takes longer than the game's speed allows leaves a
+  debt; while it is more than half a frame the next frames are not drawn (two in a row at
+  most, never while the map scrolls), and their waits are shorter. The game then keeps its
+  speed and the picture is drawn less often: mission 10 at normal pacing on FXC went from
+  7.4 to 10.8 game frames a second to 11.8 to 13.1, a third of them undrawn. `TDAWN_SKIP=0`
+  turns it off. What is drawn does not change the game: the state sums are the same.
+- **Scrolling.** The game moves the map a fixed step every pass of its loop, sized for a
+  machine that makes some twenty passes a second; here a pass that scrolls is 400k to 600k
+  instructions, six or seven a second. The step grows with the time since the last one
+  (`ShaderEmu_Scroll_Distance`), up to 36 pixels: beyond that the game draws the whole map
+  again instead of shifting it.
+- A page's blit onto itself (how the map is shifted) copies rows in the order that reads each
+  before it is written. Top to bottom, as it first was, a scroll downward smeared the map.
 
 ## Speed
 
@@ -81,6 +94,10 @@ Each run prints these figures (`tdstat:` lines, every five seconds):
     TDAWN_AUTO=1        Return is pressed through the menus (with FROMINSTALL: straight to the mission)
     TDAWN_INPUT_LOG=1   print the keys and buttons that arrive, and where in the window
     TDAWN_RESIZE=WxH    give the window that size after its 60th frame, as a drag would
+    TDAWN_SCROLL=N      scroll the map for N frames from frame 20: east, south, west, north
+    TDAWN_BUILD=N       put a refinery in view at frame N, which plays its construction
+    TDAWN_CHECK_REDRAW=1  at the held frame, count the pixels a full redraw would change
+    TDAWN_SKIP=N        how many frames in a row may go undrawn (2)
 
 ## Checking it
 

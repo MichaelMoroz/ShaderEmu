@@ -86,6 +86,26 @@ G_Ticker_counted(void)
 }
 
 /*
+ * The window's scale when no option gave one: the largest of 1 to 3 the display has room for
+ * beside a frame and the desktop's bar. The GPU does the stretching; the port's own path
+ * (DOOM_SOFTWARE=1) copies every pixel and stays small.
+ */
+int
+doom_window_scale(int asked, int given)
+{
+	const char *soft = getenv("DOOM_SOFTWARE");
+	GR_SCREEN_INFO info;
+	int scale;
+
+	if (given || (soft && *soft == '1'))
+		return asked;
+	GrGetScreenInfo(&info);
+	for (scale = 3; scale > 1 && (SCREEN_W * scale + 8 > info.cols || SCREEN_H * scale + 52 > info.rows); scale--)
+		;
+	return scale;
+}
+
+/*
  * The port allocates the screen here. Doom takes pointers into it when it first sets up its
  * view, which is after this, so this is where the screen becomes the texture.
  */

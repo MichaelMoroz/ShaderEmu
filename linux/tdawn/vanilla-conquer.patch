@@ -123,10 +123,10 @@ index ea6a5c0..31c6e4b 100644
  }
  
 diff --git a/tiberiandawn/conquer.cpp b/tiberiandawn/conquer.cpp
-index a8aebd8..e51d4ff 100644
+index a8aebd8..0add8ef 100644
 --- a/tiberiandawn/conquer.cpp
 +++ b/tiberiandawn/conquer.cpp
-@@ -98,6 +98,135 @@ extern void Send_Statistics_Packet(void);
+@@ -98,6 +98,264 @@ extern void Send_Statistics_Packet(void);
  extern char* __nheapbeg;
  bool InMainLoop = false;
  
@@ -185,6 +185,132 @@ index a8aebd8..e51d4ff 100644
 +            hash);
 +}
 +
++/*
++** A frame that took too long leaves a debt, which shortens the next frames' waits and, while
++** it is over half a frame, leaves their drawing out: the game keeps its speed and draws less
++** often. TDAWN_SKIP=N: how many frames in a row may go undrawn (2; 0 for none).
++*/
++bool ShaderEmu_Scrolled;
++static unsigned ShaderEmu_Skipped;
++
++static bool ShaderEmu_Skip_Draw(void)
++{
++    static int most = -1, row;
++    static unsigned then, debt;
++    unsigned now = host_ms(), period = Options.GameSpeed * 1000u / 60u;
++    bool scrolled = ShaderEmu_Scrolled;
++
++    if (most < 0) {
++        const char* text = getenv("TDAWN_SKIP");
++        most = text ? atoi(text) : 2;
++        if (getenv("TDAWN_FRAMES") || getenv("TDAWN_NO_DELAY")) {
++            most = 0;
++        }
++        then = now;
++    }
++    ShaderEmu_Scrolled = false;
++    debt += now - then;
++    then = now;
++    debt = debt > period ? debt - period : 0;
++    if (debt > 4 * period) {
++        debt = 4 * period;
++    }
++    if (!most || !period) {
++        return false;
++    }
++    int ticks = Options.GameSpeed - (int)(debt * 60u / 1000u);
++    FrameTimer.Set(ticks > 0 ? ticks : 0);
++    if (debt > period / 2 && row < most && !scrolled) {
++        row++;
++        ShaderEmu_Skipped++;
++        return true;
++    }
++    row = 0;
++    return false;
++}
++
++/*
++** A scroll step is sized for some twenty passes a second. With fewer the steps are longer, up
++** to 0x170: a shift of 37 pixels or more has the whole map drawn again.
++*/
++int ShaderEmu_Scroll_Distance(int distance)
++{
++    static unsigned then;
++    unsigned now = host_ms(), gap = now - then;
++
++    then = now;
++    if (gap > 50 && gap < 1000 && !getenv("TDAWN_NO_DELAY")) {
++        distance = distance * (int)gap / 50;
++    }
++    ShaderEmu_Scrolled = true;
++    return distance > 0x170 ? 0x170 : distance;
++}
++
++/*
++** Things a player would do, for runs nobody is at:
++**   TDAWN_SCROLL=N   from frame 20 the map is scrolled for N frames: east, south, west, north
++**   TDAWN_BUILD=N    at frame N a refinery is put in view, which plays its construction
++*/
++static void ShaderEmu_Script(void)
++{
++    static int scroll = -1, build;
++
++    if (scroll < 0) {
++        const char* text = getenv("TDAWN_SCROLL");
++        scroll = text ? atoi(text) : 0;
++        text = getenv("TDAWN_BUILD");
++        build = text ? atoi(text) : 0;
++    }
++    if (Frame >= 20 && Frame < 20 + scroll) {
++        static const DirType way[4] = {DIR_E, DIR_S, DIR_W, DIR_N};
++        int distance = ShaderEmu_Scroll_Distance(0x60);
++        Map.Scroll_Map(way[(Frame - 20) / 12 % 4], distance, true);
++    }
++    if (build && Frame == build) {
++        CELL corner = Coord_Cell(Map.TacticalCoord);
++        int before = Buildings.Count();
++        for (int y = 2; y < 6 && Buildings.Count() == before; y++) {
++            for (int x = 2; x < 8 && Buildings.Count() == before; x++) {
++                BuildingTypeClass::As_Reference(STRUCT_REFINERY)
++                    .Create_And_Place((CELL)(corner + x + y * MAP_CELL_W), PlayerPtr->Class->House);
++            }
++        }
++        fprintf(stderr, "tdawn: a refinery at frame %d: %s\n", Frame, Buildings.Count() > before ? "placed" : "no room in view");
++    }
++}
++
++/*
++** TDAWN_CHECK_REDRAW=1: at the held frame, is the picture the game kept up by scrolling and
++** redrawing parts the picture it draws from nothing? Counts the pixels that are not.
++*/
++static void ShaderEmu_Check_Redraw(void)
++{
++    const unsigned char* page = host_page(1);
++    int size = SeenBuff.Get_Width() * SeenBuff.Get_Height(), differ = 0;
++
++    if (!getenv("TDAWN_CHECK_REDRAW") || !page) {
++        return;
++    }
++    Map.Render();
++    unsigned char* kept = new unsigned char[size];
++    memcpy(kept, page, size);
++    Map.Flag_To_Redraw(true);
++    Map.Render();
++    int width = SeenBuff.Get_Width(), x0 = width, y0 = size, x1 = -1, y1 = -1;
++    for (int i = 0; i < size; i++) {
++        if (kept[i] != page[i]) {
++            differ++;
++            x0 = MIN(x0, i % width);
++            x1 = MAX(x1, i % width);
++            y0 = MIN(y0, i / width);
++            y1 = MAX(y1, i / width);
++        }
++    }
++    delete[] kept;
++    fprintf(stderr, "tdawn: %d of %d pixels differ from a full redraw (x %d..%d, y %d..%d); the view is at %08x\n",
++            differ, size, x0, x1, y0, y1, (unsigned)Map.TacticalCoord);
++}
++
 +static void ShaderEmu_Stats(void)
 +{
 +    static int every = -1, cap, stop, frame_then;
@@ -216,7 +342,7 @@ index a8aebd8..e51d4ff 100644
 +
 +        fprintf(stderr,
 +                "tdstat: frame %d: %d.%d game frames/s of %d, %uk instructions/s; a frame %uk = logic %uk + draw %uk + "
-+                "show %uk (%u.%u shows) + rest %uk; %d objects; %u page copies of %u\n",
++                "show %uk (%u.%u shows) + rest %uk; %d objects; %u page copies of %u; %u undrawn\n",
 +                Frame,
 +                frames * 1000 / span,
 +                frames * 10000 / span % 10,
@@ -232,8 +358,9 @@ index a8aebd8..e51d4ff 100644
 +                Units.Count() + Infantry.Count() + Buildings.Count() + Aircraft.Count() + Bullets.Count()
 +                    + Anims.Count(),
 +                ShaderEmu_Page_Copies,
-+                ShaderEmu_Page_Flips);
-+        ShaderEmu_Page_Copies = ShaderEmu_Page_Flips = 0;
++                ShaderEmu_Page_Flips,
++                ShaderEmu_Skipped);
++        ShaderEmu_Page_Copies = ShaderEmu_Page_Flips = ShaderEmu_Skipped = 0;
 +        ms_then = ms;
 +        cycles_then = cycles;
 +        frame_then = Frame;
@@ -243,7 +370,9 @@ index a8aebd8..e51d4ff 100644
 +        ShaderEmu_State("done");
 +        exit(0);
 +    }
++    ShaderEmu_Script();
 +    if (stop && Frame >= stop) {
++        ShaderEmu_Check_Redraw();
 +        /* the picture reaches the window a machine frame after it is shown */
 +        Video_Render_Frame();
 +        for (int wait = 0; wait < 8; wait++) {
@@ -262,7 +391,7 @@ index a8aebd8..e51d4ff 100644
  #ifndef ARRAY_SIZE
  #define ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
  #endif
-@@ -1516,7 +1645,7 @@ static void Sync_Delay(void)
+@@ -1516,7 +1774,7 @@ static void Sync_Delay(void)
              if (input) {
                  Keyboard_Process(input);
              }
@@ -271,7 +400,7 @@ index a8aebd8..e51d4ff 100644
          }
  
          Frame_Limiter(FL_NONE);
-@@ -1611,6 +1740,9 @@ bool Main_Loop()
+@@ -1611,6 +1869,9 @@ bool Main_Loop()
      } else {
          FrameTimer.Set(Options.GameSpeed);
      }
@@ -281,16 +410,19 @@ index a8aebd8..e51d4ff 100644
  
      /*
      **	Update the display, unless we're inside a dialog.
-@@ -1624,7 +1756,7 @@ bool Main_Loop()
+@@ -1624,7 +1885,10 @@ bool Main_Loop()
                  Keyboard_Process(input);
              }
              //			HidPage.Lock();
 -            Map.Render();
-+            SHADEREMU_COUNT(ShaderEmu_Draw_Cycles, Map.Render());
++#ifdef SHADEREMU
++            if (!ShaderEmu_Skip_Draw())
++#endif
++                SHADEREMU_COUNT(ShaderEmu_Draw_Cycles, Map.Render());
              //			HidPage.Unlock();
          }
      }
-@@ -1650,7 +1782,7 @@ bool Main_Loop()
+@@ -1650,7 +1914,7 @@ bool Main_Loop()
      /*
      **	AI logic operations are performed here.
      */
@@ -330,3 +462,27 @@ index 8ae9955..fc0f2f3 100644
          if (CustomSeed != 0) {
              Seed = CustomSeed;
          } else {
+diff --git a/tiberiandawn/scroll.cpp b/tiberiandawn/scroll.cpp
+index 596a8f7..e7e549e 100644
+--- a/tiberiandawn/scroll.cpp
++++ b/tiberiandawn/scroll.cpp
+@@ -36,6 +36,9 @@
+  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ 
+ #include "function.h"
++#ifdef SHADEREMU
++int ShaderEmu_Scroll_Distance(int distance);
++#endif
+ 
+ #define SCROLL_DELAY 1
+ 
+@@ -181,6 +184,9 @@ void ScrollClass::AI(KeyNumType& input, int x, int y)
+                 }
+ 
+                 int distance = _rate[rate] / 2;
++#ifdef SHADEREMU
++                distance = ShaderEmu_Scroll_Distance(distance);
++#endif
+ 
+                 if (!Scroll_Map(direction, distance, false)) {
+                     Override_Mouse_Shape((MouseType)(MOUSE_NO_N + control), false);

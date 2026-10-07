@@ -234,11 +234,10 @@ public:
         if (w <= 0 || h <= 0) {
             return;
         }
-        if (w == Width && w == from->Width) {
-            memmove(Pixels + dy * Width, from->Pixels + sy * Width, (size_t)w * h);
-            return;
-        }
-        for (int y = 0; y < h; y++) {
+        // a page scrolled within itself: rows in the order that reads each before it is written
+        bool down = from == this && dy > sy;
+        for (int i = 0; i < h; i++) {
+            int y = down ? h - 1 - i : i;
             memmove(Pixels + (dy + y) * Width + dx, from->Pixels + (sy + y) * from->Width + sx, w);
         }
     }
