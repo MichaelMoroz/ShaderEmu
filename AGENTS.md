@@ -579,3 +579,52 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   give a texture a height of 256 or 512 even when fewer rows are used.
 - GPU memory left to one program is 3.25 MB (`TEXTURES_AT` in `gles.c`). Tiberian Dawn uses
   2.9 MB of it; a build with MEGAMAPS has 16,384 cells, and only 4,096 get a kept quad.
+- The full machine has float instructions (`docs/fpu.md`: the F extension, define `FPU`, which
+  the harness sets for it and `MachineTick.shader` has by hand), and the toolchain's flags
+  make every program and the C library use them (`-march=rv32imaf -mabi=ilp32
+  -ffp-contract=off`; floats still travel in integer registers). After a change to those
+  flags build everything from clean objects: the scripts only look at dates. The kernel keeps
+  the registers per task (`linux/kernel/fpu_hook.py`); `fptest & fptest` checks that, and
+  `fptest` alone every instruction against the runtime's integer routines. A state hash says
+  nothing about a guest that uses floats (divide and square root are as exact as the card
+  makes them).
+- An instruction costs the machine the same whether it adds integers or floats: floats pay
+  where they replace a library call, not in a program that was integers already. Doom's tic
+  and frame did not move when it was rebuilt for them.
+- Linux tests `sstatus`'s summary bit (SD, bit 31) before it looks at FS: a machine that
+  reports FS dirty without it never has its float registers saved.
+- fxc2 gave `(float)` of a signed integer back as the integer's bits, and `(uint)` of a float
+  stopped at 2^31 (8 October 2026; `fp_exec` in `emu.h` words both another way). When a
+  shader converts between floats and integers, test the conversion on D3D11 with values on
+  both sides of zero and of 2^31.
+- A card divides by multiplying with a reciprocal: a quotient of two floats near the largest
+  came out zero. Where that can matter, move the exponents towards the middle first.
+- Quake (`docs/quake.md`): `wsl -- bash /mnt/c/Development/ShaderX86/linux/quake/build.sh` (3 s)
+  after Nano-X's build, then the image and snapshot. To measure it, resume the snapshot with
+  `nano-X -p &` and `QUAKE_HOLD=120 quake +map e1m1` and wait for `quake: holding`: about a
+  minute, with `quakestat:` lines that split a frame's instructions by what they were for.
+  Lines typed at its terminal are console commands.
+- Its changes to id's source are `linux/quake/quake.patch`: edit a clean clone at the commit
+  `build.sh` names and save `git diff -- WinQuake`. The build puts the tree back each time.
+- A window's own pixels are in a snapshot: the display's layer table (address in
+  `0x8700000c`) has the window's buffer, frame and caption included. `gpu_reference.py` takes
+  `--size WIDTHxHEIGHT` for a list drawn into a window, whose picture is the window's size.
+- In C a float times `0.5` is a double multiplication. For a program full of floats built for
+  the float instructions, `-fsingle-precision-constant` keeps such lines out of the runtime's
+  double routines.
+- `gles.c` takes its frame's size from defines (`SET_SIZE`, `UNIFORMS_IN`, `VERTICES_IN`,
+  `MAX_COMMANDS`, `MAX_TEXTURES`); Quake changes only `MAX_TEXTURES`. A program whose textures
+  do not fit keeps them in ordinary memory and GPU memory as a cache of the ones being drawn
+  (`qgl.c`), and may have the display's own framebuffer too (`seglMemorySpare`, 0x87010000 to
+  0x87400000: nothing reads it while the desktop is layers; one program at a time).
+- A name added to `gpu.h` must not be one Unity's own shader files use (`gpu_point` is a
+  struct in `GpuDrawPass.cginc`): the harness compiles and Unity's GPU draws nothing, with a
+  black display. After "Sync shader sources", ask `ShaderUtil.GetShaderMessages` for every
+  shader under `Assets/ShaderEmu` once play mode has compiled them.
+- To see where a Quake scene's instructions go, save a snapshot at a `quakestat:` line
+  (`--until "particles and weapon"`) and resume it with `--pc-log` for a quarter of a minute.
+  Count calls before optimising one: a fight had 11 models and 110 draws, not hundreds.
+- A vertex format the GPU takes as the program's data already is (`docs/gpu.md`: packed,
+  tagged with a table, points) beats any loop that writes vertices: Quake's models went from
+  244k to 93k instructions a fight frame and its particles from 150 each to 70.
+- A bash heredoc does not carry `\n` in a C string into a file even when quoted `'EOF'`.
