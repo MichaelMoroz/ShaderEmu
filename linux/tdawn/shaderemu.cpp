@@ -10,6 +10,7 @@
 #include <cstring>
 
 extern WWKeyboardClass* Keyboard;
+extern bool ShaderEmu_GL_Emitting, ShaderEmu_GL_Touched; // gl.cpp: the map is the GPU's
 extern bool InMainLoop;
 
 class SurfaceMonitorClassDummy : public SurfaceMonitorClass
@@ -101,13 +102,26 @@ void Wait_Blit(void)
 // The game's palette is 6 bits a colour; the machine's is a word of 0x00RRGGBB.
 void Set_DD_Palette(void* palette)
 {
+    static unsigned last[192]; // the 768 bytes it was given last
+    static bool set;
     const unsigned char* from = (const unsigned char*)palette;
     unsigned int* to = host_palette();
 
-    for (int i = 0; i < 256; i++, from += 3) {
-        to[i] = (unsigned)(from[0] << 2 | from[0] >> 4) << 16 | (unsigned)(from[1] << 2 | from[1] >> 4) << 8
-                | (unsigned)(from[2] << 2 | from[2] >> 4);
+    // (the game sets it every frame, to cycle a few of its colours: only those are made again)
+    for (int word = 0; word < 192; word++) {
+        unsigned now;
+        memcpy(&now, from + word * 4, 4);
+        if (set && now == last[word]) {
+            continue;
+        }
+        last[word] = now;
+        for (int i = word * 4 / 3; i <= (word * 4 + 3) / 3; i++) {
+            const unsigned char* c = from + i * 3;
+            to[i] = (unsigned)(c[0] << 2 | c[0] >> 4) << 16 | (unsigned)(c[1] << 2 | c[1] >> 4) << 8
+                    | (unsigned)(c[2] << 2 | c[2] >> 4);
+        }
     }
+    set = true;
 }
 
 // frames shown from the hidden page, and visible pages brought up to date after all (TDAWN_STATS)
@@ -185,6 +199,8 @@ public:
     {
         if (this == Visible) {
             Catch_Up();
+        } else if (this == Hidden && ShaderEmu_GL_Emitting) {
+            ShaderEmu_GL_Touched = true;
         }
         return Pixels != nullptr;
     }
@@ -250,6 +266,8 @@ public:
 
         if (this == Visible) {
             Catch_Up();
+        } else if (this == Hidden && ShaderEmu_GL_Emitting) {
+            ShaderEmu_GL_Touched = true;
         }
         if (x1 > Width) {
             x1 = Width;

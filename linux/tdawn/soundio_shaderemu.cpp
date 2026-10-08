@@ -11,6 +11,7 @@
 
 extern "C" {
 #include "shaderemu_sound.h"
+extern "C" unsigned int host_ms(void);
 }
 
 void (*Audio_Focus_Loss_Function)(void) = nullptr;
@@ -20,7 +21,8 @@ Sample_Type SampleType;
 
 namespace
 {
-const int kVoices = 8, kKeyBytes = 44;
+const int kVoices = 16, kKeyBytes = 44;
+const int kGain = 160;   // of 256: room for a fight's sounds on top of each other before the mix clips
 const char kPack[] = "/usr/share/tdawn-sound.pak";
 
 struct Sound {
@@ -33,6 +35,8 @@ int score_volume = 255;          // what the game set for music, 0 to 255
 int tune_volume;                 // and what it asked of the tune that is playing
 const void* held[kVoices];       // the sample each voice was last started with
 int rank[kVoices];               // and its priority
+uint32_t began[kVoices], lasts[kVoices]; // when it started and how long it is, in ms (TDAWN_SOUND_LOG)
+bool sound_log;
 
 // The sound whose AUD file begins as these bytes do (rate, sizes, coding, then data).
 const Sound* Find(const void* sample)
@@ -63,6 +67,7 @@ bool Playing(int slot)
 uint32_t Tune_Volume()
 {
     uint32_t loud = (uint32_t)(tune_volume * score_volume) / 255;
+    loud = loud * kGain >> 8;
     return SND_VOLUME(loud, loud);
 }
 } // namespace
@@ -97,6 +102,7 @@ int Play_Sample(void const* sample, int priority, int volume, signed short panlo
     if (log) {
         fprintf(stderr, "tdsound: priority %d volume %d: %s\n", priority, volume, sound ? "plays" : "not in the pack");
     }
+    sound_log = log;
     if (sound == nullptr) {
         return -1;
     }
@@ -111,12 +117,23 @@ int Play_Sample(void const* sample, int priority, int volume, signed short panlo
     }
     if (slot < 0) {
         if (rank[least] >= priority) {
+            if (log) {
+                fprintf(stderr, "tdsound: no voice for it\n");
+            }
             return -1;
         }
         slot = least;
+        if (log) {
+            fprintf(stderr, "tdsound: voice %d taken after %u ms of %u\n", slot, host_ms() - began[slot], lasts[slot]);
+        }
+    }
+    began[slot] = host_ms();
+    lasts[slot] = sound->rate ? sound->samples / (sound->rate / 100 + 1) * 10 : 0;
+    if (log) {
+        fprintf(stderr, "tdsound: voice %d, %u ms at %u Hz, kind %u\n", slot, lasts[slot], sound->rate, sound->kind);
     }
     // volume is 0 to 255; a sound to one side loses the other side
-    uint32_t loud = volume < 0 ? 0 : volume > 255 ? 256 : volume + (volume >> 7);
+    uint32_t loud = (volume < 0 ? 0 : volume > 255 ? 256 : volume + (volume >> 7)) * kGain >> 8;
     uint32_t left = (loud * (0x8000 - (panloc > 0 ? panloc : 0))) >> 15, right = (loud * (0x8000 + (panloc < 0 ? panloc : 0))) >> 15;
     held[slot] = sample;
     rank[slot] = priority;
@@ -131,6 +148,9 @@ void Stop_Sample(int handle)
         snd_stop(voice[kVoices]);
     }
     if (handle >= 0 && handle < kVoices && held[handle] != nullptr) {
+        if (sound_log && snd_playing(voice[handle])) {
+            fprintf(stderr, "tdsound: voice %d stopped after %u ms of %u\n", handle, host_ms() - began[handle], lasts[handle]);
+        }
         snd_stop(voice[handle]);
         held[handle] = nullptr;
     }
@@ -215,6 +235,15 @@ int File_Stream_Sample_Vol(char const* filename, int volume, bool real_time_star
 
 void Sound_Callback(void)
 {
+    // TDAWN_SOUND_LOG: when each voice was found ended, against how long its sound is
+    static bool told[kVoices];
+    for (int n = 0; n < kVoices && sound_log; n++) {
+        bool on = held[n] != nullptr && snd_playing(voice[n]);
+        if (!on && !told[n] && held[n] != nullptr) {
+            fprintf(stderr, "tdsound: voice %d ended after %u ms of %u\n", n, host_ms() - began[n], lasts[n]);
+        }
+        told[n] = !on;
+    }
 }
 
 void Sound_End(void)

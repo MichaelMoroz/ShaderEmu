@@ -40,6 +40,7 @@ fi
 git -C "$VC" checkout -q -f "$COMMIT" && git -C "$VC" clean -q -fd
 git -C "$VC" apply "$HERE/vanilla-conquer.patch"
 cp "$HERE/cxxrt.cpp" "$HERE/shaderemu.cpp" "$HERE/soundio_shaderemu.cpp" "$HERE/host.c" "$HERE/host.h" "$VC/common/"
+cp "$HERE/gl.cpp" "$VC/tiberiandawn/"
 
 cat > "$WORK/src/tdawn-toolchain.cmake" <<EOF
 set(CMAKE_SYSTEM_NAME Linux)

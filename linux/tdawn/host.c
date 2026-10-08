@@ -26,6 +26,7 @@ static unsigned char *screen, *cursor;	/* screen: two pages, one after the other
 static GLuint page_texture[2], cursor_texture;
 static int cursor_w, cursor_h, cursor_hot_x, cursor_hot_y;
 static int pointer_x, pointer_y;	/* in the game's pixels */
+static int page_rows;			/* a page's texture is this high: a row is a whole number of 1,024ths */
 
 static const volatile uint32_t *
 control(int offset)
@@ -109,9 +110,11 @@ host_open(int width, int height)
 	memset(screen, 0, 2 * width * height);
 	glGenTextures(2, page_texture);
 	glGenTextures(1, &cursor_texture);
+	for (page_rows = 256; page_rows < height; page_rows *= 2)
+		;
 	for (page = 0; page < 2; page++) {
 		glBindTexture(GL_TEXTURE_2D, page_texture[page]);
-		seglTexturePointer(screen + page * width * height, width, height, GL_COLOR_INDEX8_EXT);
+		seglTexturePointer(screen + page * width * height, width, page_rows, GL_COLOR_INDEX8_EXT);
 	}
 	pointer_x = width / 2;
 	pointer_y = height / 2;
@@ -169,27 +172,269 @@ resize_for_test(void)
 	GrResizeWindow(window, atoi(size), atoi(x + 1));
 }
 
-void
-host_present(int page, int with_cursor)
+/* The window's matrices: glOrthox(0, 1, 1, 0, -1, 1), and a place for the map's corner. */
+static void
+whole_window(int origin_x, int origin_y)
 {
-	/* glOrthox(0, 1, 1, 0, -1, 1) column by column */
 	static const GLfixed whole[16] = {2 * ONE, 0, 0, 0, 0, -2 * ONE, 0, 0, 0, 0, -ONE, 0, -ONE, ONE, 0, ONE};
 	int width, height;
 
-	if (!screen)
-		return;
 	seglSize(&width, &height);
 	glViewport(0, 0, width, height);
 	glMatrixMode(GL_PROJECTION);
 	glLoadMatrixx(whole);
 	glMatrixMode(GL_MODELVIEW);
 	glLoadIdentity();
+	if (origin_x || origin_y)
+		glTranslatex(origin_x * ONE / screen_w, origin_y * ONE / screen_h, 0);
 	glDisable(GL_DEPTH_TEST);
+}
+
+/* ---- the map drawn by the GPU (docs/tdawn.md) ---- */
+
+#define ATLAS_W		1024		/* texels across: a texture coordinate is a 1,024th */
+#define ATLAS_ROWS	2048
+#define VIEW_ROWS	1024		/* what one texture of it shows; the sprites' start at 512 and 1024 */
+#define SHADE_W		128
+#define SHADE_H		256
+
+static unsigned char *atlas, *masks;
+static unsigned int *shades, *tiles;
+static GLuint icon_texture, sprite_texture[2], mask_texture[2], shade_texture;
+static int tile_count;
+static int scene_built, scene_shown;	/* a scene waits for its swap; the list shown last has one */
+static int scene_rect[4], scene_key;	/* where the page lets the scene through, and by which index */
+static unsigned int *page_commands[2], *cursor_command, *cursor_vertices;
+
+int
+host_scene_open(int cells)
+{
+	int i;
+
+	if (!screen)
+		return -1;
+	if (tiles)
+		return cells <= tile_count ? 0 : -1;
+	atlas = seglMemory(ATLAS_W * ATLAS_ROWS);
+	masks = seglMemory(ATLAS_W / 8 * ATLAS_ROWS);
+	shades = seglMemory(SHADE_W * SHADE_H * 4);
+	tiles = seglMemory(cells * 64);
+	if (!atlas || !masks || !shades || !tiles) {
+		fprintf(stderr, "tdawn: no GPU memory for the map: the game draws it\n");
+		tiles = NULL;
+		return -1;
+	}
+	memset(tiles, 0, cells * 64);
+	memset(masks, 0, ATLAS_W / 8 * ATLAS_ROWS);
+	tile_count = cells;
+	glGenTextures(1, &icon_texture);
+	glGenTextures(2, sprite_texture);
+	glGenTextures(2, mask_texture);
+	glGenTextures(1, &shade_texture);
+	glBindTexture(GL_TEXTURE_2D, icon_texture);
+	seglTexturePointer(atlas, ATLAS_W, VIEW_ROWS, GL_COLOR_INDEX8_EXT);
+	for (i = 0; i < 2; i++) {
+		glBindTexture(GL_TEXTURE_2D, sprite_texture[i]);
+		seglTexturePointer(atlas + (i + 1) * 512 * ATLAS_W, ATLAS_W, VIEW_ROWS, GL_COLOR_INDEX8_EXT);
+		glBindTexture(GL_TEXTURE_2D, mask_texture[i]);
+		seglTexturePointer(masks + (i + 1) * 512 * (ATLAS_W / 8), ATLAS_W, VIEW_ROWS, SEGL_BITS);
+	}
+	glBindTexture(GL_TEXTURE_2D, shade_texture);
+	seglTexturePointer(shades, SHADE_W, SHADE_H, GL_RGBA);
+	seglKeep(1, cells);
+	seglKeptQuads(0, tiles, 0, cells, icon_texture, 255, 0);
+	return 0;
+}
+
+unsigned char *
+host_atlas(void)
+{
+	return atlas;
+}
+
+unsigned char *
+host_masks(void)
+{
+	return masks;
+}
+
+unsigned int *
+host_shades(void)
+{
+	return shades;
+}
+
+/* A cell of the map: 24 pixels square at a place of the map, from the atlas. */
+void
+host_tile(int index, int map_x, int map_y, int atlas_x, int atlas_y)
+{
+	unsigned int *to = tiles + 16 * index;
+	unsigned int x0, y0, x1, y1, u0 = atlas_x, u1 = atlas_x + 24, v0 = atlas_y << 16, v1 = (atlas_y + 24) << 16;
+
+	if (!tiles || index < 0 || index >= tile_count)
+		return;
+	if (atlas_x < 0) {
+		memset(to, 0, 64);
+		return;
+	}
+	x0 = map_x * ONE / screen_w, x1 = (map_x + 24) * ONE / screen_w;
+	y0 = map_y * ONE / screen_h, y1 = (map_y + 24) * ONE / screen_h;
+	to[0] = x0, to[1] = y0, to[2] = 0, to[3] = u0 | v0;
+	to[4] = x1, to[5] = y0, to[6] = 0, to[7] = u1 | v0;
+	to[8] = x1, to[9] = y1, to[10] = 0, to[11] = u1 | v1;
+	to[12] = x0, to[13] = y1, to[14] = 0, to[15] = u0 | v1;
+}
+
+void
+host_tiles_clear(void)
+{
+	if (tiles)
+		memset(tiles, 0, tile_count * 64);
+}
+
+/* A frame's scene begins: the map's pixel (0, 0) is at this pixel of the screen. */
+void
+host_scene_begin(int origin_x, int origin_y)
+{
+	if (scene_built)
+		seglDiscard();		/* one nobody showed */
+	whole_window(origin_x, origin_y);
+	seglKeptMatrices();
+	glLoadIdentity();
+	glClearColorx(0, 0, 0, ONE);
+	glClear(GL_COLOR_BUFFER_BIT);
 	glColorKeySE(0);
-	quad(page_texture[page & 1], 0, 0, screen_w, screen_h, 0);
-	if (with_cursor && cursor_w)
-		quad(cursor_texture, pointer_x - cursor_hot_x, pointer_y - cursor_hot_y, cursor_w, cursor_h, 1);
+	scene_built = 1;
+}
+
+/* A rectangle of the screen from an atlas, over what the scene has so far. */
+void
+host_sprite(int kind, int x, int y, int width, int height, int atlas_x, int atlas_y, unsigned int colour)
+{
+	GLfixed box[4] = {x * ONE / screen_w, y * ONE / screen_h, (x + width) * ONE / screen_w, (y + height) * ONE / screen_h};
+	int texels[4];
+	GLuint name;
+
+	if (kind == HOST_SHADE) {
+		texels[0] = atlas_x * (1024 / SHADE_W), texels[1] = atlas_y * (1024 / SHADE_H);
+		texels[2] = (atlas_x + width) * (1024 / SHADE_W), texels[3] = (atlas_y + height) * (1024 / SHADE_H);
+		name = shade_texture;
+	} else {
+		/* the texture that shows these rows: the first for the icons' rows, then two a half apart */
+		int view = atlas_y + height <= VIEW_ROWS && kind != HOST_MASK ? 0 : atlas_y + height <= VIEW_ROWS + 512 ? 1 : 2;
+
+		atlas_y -= view * 512;
+		texels[0] = atlas_x, texels[1] = atlas_y, texels[2] = atlas_x + width, texels[3] = atlas_y + height;
+		name = kind == HOST_MASK ? mask_texture[view ? view - 1 : 0] : view ? sprite_texture[view - 1] : icon_texture;
+	}
+	seglSprite(box, texels, name, colour, kind == HOST_KEYED);
+}
+
+/* A rectangle of one colour: the middle of 24 x 24 set bits in the masks, as large as wanted. */
+void
+host_block(int x, int y, int width, int height, int atlas_x, int atlas_y, unsigned int colour)
+{
+	GLfixed box[4] = {x * ONE / screen_w, y * ONE / screen_h, (x + width) * ONE / screen_w, (y + height) * ONE / screen_h};
+	int view = atlas_y + 24 <= VIEW_ROWS + 512 ? 1 : 2;
+	int texels[4] = {atlas_x + 8, atlas_y - view * 512 + 8, atlas_x + 16, atlas_y - view * 512 + 16};
+
+	seglSprite(box, texels, mask_texture[view - 1], colour, 0);
+}
+
+/* The scene is whole. The page goes over it, with holes of this index inside this rectangle. */
+void
+host_scene_end(int x, int y, int width, int height, int key)
+{
+	scene_rect[0] = x, scene_rect[1] = y, scene_rect[2] = width, scene_rect[3] = height;
+	scene_key = key;
+}
+
+void
+host_scene_drop(void)
+{
+	if (scene_built)
+		seglDiscard();
+	scene_built = scene_shown = 0;
+}
+
+/* A part of a page, in its own place on the screen. */
+static void
+page_part(int page, int x, int y, int width, int height, int keyed)
+{
+	GLfixed box[4] = {x * ONE / screen_w, y * ONE / screen_h, (x + width) * ONE / screen_w, (y + height) * ONE / screen_h};
+	int texels[4] = {x * 1024 / screen_w, y * 1024 / page_rows, (x + width) * 1024 / screen_w, (y + height) * 1024 / page_rows};
+
+	if (width > 0 && height > 0)
+		seglSprite(box, texels, page_texture[page & 1], 0x00ffffff, keyed);
+}
+
+/* The pointer's rectangle as four corners, or nothing at all. */
+static void
+cursor_corners(unsigned int *to, int shown)
+{
+	int x = pointer_x - cursor_hot_x, y = pointer_y - cursor_hot_y;
+	unsigned int x0 = x * ONE / screen_w, y0 = y * ONE / screen_h;
+	unsigned int x1 = (x + cursor_w) * ONE / screen_w, y1 = (y + cursor_h) * ONE / screen_h;
+
+	if (!shown || !cursor_w)
+		x0 = x1 = y0 = y1 = 0;
+	to[0] = x0, to[1] = y0, to[4] = x1, to[5] = y0, to[8] = x1, to[9] = y1, to[12] = x0, to[13] = y1;
+}
+
+/*
+ * A new scene is shown with the page over it: its parts around the map as they are, the part
+ * over the map with holes. The commands and the pointer's corners are remembered, so that the
+ * same list can be drawn again when only the page or the pointer has changed.
+ */
+static void
+present_scene(int page, int with_cursor)
+{
+	static const int all[4] = {0, 0, 1024, 1024};
+	GLfixed box[4] = {0, 0, 0, 0};
+	int x = scene_rect[0], y = scene_rect[1], w = scene_rect[2], h = scene_rect[3];
+
+	glColorKeySE(scene_key);
+	page_part(page, 0, 0, screen_w, y, 0);
+	page_part(page, 0, y + h, screen_w, screen_h - y - h, 0);
+	page_part(page, 0, y, x, h, 0);
+	page_part(page, x + w, y, screen_w - x - w, h, 0);
+	page_commands[0] = y > 0 || x > 0 || x + w < screen_w || y + h < screen_h ? seglLastCommand() : NULL;
+	page_part(page, x, y, w, h, 1);
+	page_commands[1] = seglLastCommand();
+	glColorKeySE(0);
+	seglSprite(box, all, cursor_texture, 0x00ffffff, 1);
+	cursor_command = seglLastCommand();
+	cursor_vertices = seglLastVertices();
+	cursor_corners(cursor_vertices, with_cursor);
 	seglSwap();
+	scene_built = 0;
+	scene_shown = 1;
+}
+
+void
+host_present(int page, int with_cursor)
+{
+	if (!screen)
+		return;
+	if (scene_built) {
+		present_scene(page, with_cursor);
+	} else if (scene_shown) {
+		/* the same scene: the page it shows may be the other one now, the pointer elsewhere */
+		page_commands[1][7] = seglAddress(screen + (page & 1) * screen_w * screen_h);
+		if (page_commands[0])
+			page_commands[0][7] = page_commands[1][7];
+		cursor_command[8] = cursor_w;
+		cursor_command[9] = cursor_h;
+		cursor_corners(cursor_vertices, with_cursor);
+		seglSwapAgain();
+	} else {
+		whole_window(0, 0);
+		glColorKeySE(0);
+		page_part(page, 0, 0, screen_w, screen_h, 0);
+		if (with_cursor && cursor_w)
+			quad(cursor_texture, pointer_x - cursor_hot_x, pointer_y - cursor_hot_y, cursor_w, cursor_h, 1);
+		seglSwap();
+	}
 	resize_for_test();
 }
 

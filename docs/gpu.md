@@ -185,6 +185,12 @@ way: `GLfixed` is what the device reads.
   not map the pointer by the size it asked for. `seglPicturePoint()` turns an event's x, y
   into a pixel of such a picture at the window's size now; `seglWindowChanged()` (on a
   `GR_UPDATE_SIZE` event) has the library learn the new size at once, not at the next swap.
+- `seglSprite()` is a rectangle of a texture over what the list drew before it: always the
+  blended pass with no depth, so that many small pictures and their shadows keep their
+  order. A texture of `SEGL_BITS` is one bit a pixel, drawn in the call's colour.
+- `seglSwapAgain()` draws the last list once more. Its textures, and the commands and vertices
+  `seglLastCommand()` and `seglLastVertices()` pointed at, are the program's memory: a
+  pointer that moved or a picture that changed needs no new list (`docs/tdawn.md`).
 - A set holds 3,072 commands, 256 matrix blocks and 10,240 compact vertices of a frame's own.
 
 ## From Linux

@@ -50,6 +50,7 @@ static uint32_t set_at = SETS_AT;   // the set the frame being built is in
 static uint32_t* last_draw;   // the command the next vertices may join, with what it was made for
 static uint32_t last_state[6];
 static uint32_t kept, kept_mesh;   // commands at the head of every frame's list that the program wrote itself
+static uint32_t shown_set, shown_commands;   // the list drawn last, for seglSwapAgain()
 
 // ---- state ----
 
@@ -153,6 +154,8 @@ void seglSwap(void) {
         regs[REG_SUBMIT / 4 + 1] = GPU_PHYS + set_at;
         regs[REG_SUBMIT / 4 + 2] = commands;
         regs[REG_SUBMIT / 4] = 1 | 4 | passes_used << 8;   // draw, copy into the window; the passes used
+        shown_set = set_at;
+        shown_commands = commands | passes_used << 16;
         __atomic_store_n(&regs[REG_LOCK / 4], 0, __ATOMIC_RELEASE);
         // the list and the textures are memory the program goes on to change: wait until drawn
         while (regs[REG_SUBMIT / 4] != 0) next_frame();
@@ -383,7 +386,7 @@ void seglTexturePointer(const void* pixels, GLsizei width, GLsizei height, GLenu
     x->address = (uint32_t)((const uint8_t*)pixels - gpu);
     x->width = width;
     x->height = height;
-    x->indexed = internal == GL_COLOR_INDEX8_EXT;
+    x->indexed = internal == GL_COLOR_INDEX8_EXT ? 1 : internal == SEGL_BITS ? 2 : 0;
 }
 void glTexImage2D(GLenum target, GLint level, GLint internal, GLsizei width, GLsizei height, GLint border, GLenum format,
                   GLenum type, const GLvoid* pixels) {
@@ -566,6 +569,113 @@ void seglQuad(const GLfixed* xyz, const GLfixed* uv, GLuint name, unsigned grey,
         to[3] = ((uint32_t)(uv[0] >> 6) & 0xffff) | (uint32_t)(uv[1] >> 6) << 16;
     }
     vertex_top += 64;
+}
+
+// A rectangle of a texture on top of what the list drew before it (segl.h): always the blended
+// pass with no depth, so that opaque sprites and their shadows keep the order they come in.
+static inline void sprite_corners(uint32_t* restrict to, const GLfixed* box, const int* texels) {
+    uint32_t u0 = (uint32_t)texels[0] & 0xffff, u1 = (uint32_t)texels[2] & 0xffff;
+    uint32_t v0 = (uint32_t)texels[1] << 16, v1 = (uint32_t)texels[3] << 16;
+    to[0] = box[0], to[1] = box[1], to[2] = 0, to[3] = u0 | v0;
+    to[4] = box[2], to[5] = box[1], to[6] = 0, to[7] = u1 | v0;
+    to[8] = box[2], to[9] = box[3], to[10] = 0, to[11] = u1 | v1;
+    to[12] = box[0], to[13] = box[3], to[14] = 0, to[15] = u0 | v1;
+}
+
+static void sprite_command(const GLfixed* box, const int* texels, GLuint name, unsigned colour, int keyed);
+
+void seglSprite(const GLfixed* box, const int* texels, GLuint name, unsigned colour, int keyed) {
+    const texture* x = &textures[name < 512 ? name : 0];
+    uint32_t fragment = (x->indexed == 2 ? 3u : x->indexed ? FRAGMENT_INDEXED : FRAGMENT_TEXTURE) |
+                        (keyed ? FRAGMENT_KEYED : 0) | 5u << 16;
+    // a quad more of the command before, which is most of them: nothing is called on this path
+    if (last_draw && last_draw == (uint32_t*)(gpu + set_at) + 16 * (commands - 1) && !matrices_dirty && blocks &&
+        last_state[0] == (VERTEX_CLIP | VERTEX_MODELVIEW | VERTEX_COMPACT | VERTEX_QUADS) && last_state[1] == fragment &&
+        last_state[2] == GPU_PHYS + set_at + UNIFORMS_IN + 128 * (blocks - 1) && last_state[3] == x->address &&
+        last_state[4] == colour && last_state[5] == (uint32_t)key_index &&
+        vertex_top + 64 <= set_at + SET_SIZE && mesh_vertices + 6 <= MAX_MESH) {
+        last_draw[2] += 6;
+        mesh_vertices += 6;
+        sprite_corners((uint32_t*)(gpu + vertex_top), box, texels);
+        vertex_top += 64;
+        return;
+    }
+    sprite_command(box, texels, name, colour, keyed);
+}
+
+static __attribute__((noinline)) void sprite_command(const GLfixed* box, const int* texels, GLuint name, unsigned colour,
+                                                     int keyed) {
+    const texture* x = &textures[name < 512 ? name : 0];
+    uint32_t fragment = (x->indexed == 2 ? 3u : x->indexed ? FRAGMENT_INDEXED : FRAGMENT_TEXTURE) |
+                        (keyed ? FRAGMENT_KEYED : 0) | 5u << 16;
+    uint32_t vertex = VERTEX_CLIP | VERTEX_MODELVIEW | VERTEX_COMPACT | VERTEX_QUADS;
+    if (!gpu || vertex_top + 64 > set_at + SET_SIZE || mesh_vertices + 6 > MAX_MESH) return;
+    uint32_t block = matrices_dirty || !blocks ? matrix_block() : GPU_PHYS + set_at + UNIFORMS_IN + 128 * (blocks - 1);
+    uint32_t* restrict to = (uint32_t*)(gpu + vertex_top);
+    if (last_draw && last_draw == (uint32_t*)(gpu + set_at) + 16 * (commands - 1) && last_state[0] == vertex &&
+        last_state[1] == fragment && last_state[2] == block && last_state[3] == x->address && last_state[4] == colour &&
+        last_state[5] == (uint32_t)key_index) {
+        last_draw[2] += 6;
+        mesh_vertices += 6;
+    } else {
+        uint32_t* c = command(CMD_DRAW, 6);
+        if (!c) return;
+        c[1] = GPU_PHYS + vertex_top;
+        c[2] = 6;
+        c[4] = last_state[0] = vertex;
+        c[5] = last_state[1] = fragment;
+        c[6] = last_state[2] = block;
+        c[7] = GPU_PHYS + x->address;
+        last_state[3] = x->address;
+        c[8] = x->width;
+        c[9] = x->height;
+        c[10] = last_state[5] = key_index;
+        c[11] = last_state[4] = colour;
+        last_draw = c;
+        passes_used |= 1u << 5;
+    }
+    sprite_corners(to, box, texels);
+    vertex_top += 64;
+}
+
+uint32_t* seglLastCommand(void) { return last_draw; }
+uint32_t* seglLastVertices(void) { return (uint32_t*)(gpu + vertex_top - 64); }
+uint32_t seglAddress(const void* memory) { return GPU_PHYS + (uint32_t)((const uint8_t*)memory - gpu); }
+
+// Forgets what was drawn since the last swap.
+void seglDiscard(void) {
+    commands = kept;
+    mesh_vertices = kept_mesh;
+    blocks = passes_used = 0;
+    last_draw = 0;
+    vertex_top = set_at + VERTICES_IN;
+    matrices_dirty = 1;
+}
+
+// Has the list drawn last drawn once more, as its memory is now: its textures are the
+// program's memory, and so are the commands and vertices seglLast...() pointed at.
+void seglSwapAgain(void) {
+    volatile uint32_t* regs = (volatile uint32_t*)gpu;
+    if (!gpu || !shown_commands || !window_info.realized || !window_info.surface_address) return;
+    if (regs[REG_BUFFERS / 4] != buffers_seen) {
+        buffers_seen = regs[REG_BUFFERS / 4];
+        GrGetWindowInfo(window, &window_info);
+    }
+    for (;;) {
+        while (__atomic_exchange_n(&regs[REG_LOCK / 4], 1, __ATOMIC_ACQUIRE)) sched_yield();
+        if (regs[REG_SUBMIT / 4] == 0) break;
+        __atomic_store_n(&regs[REG_LOCK / 4], 0, __ATOMIC_RELEASE);
+        next_frame();
+    }
+    regs[REG_INTO / 4] = window_info.surface_address;
+    regs[REG_INTO / 4 + 1] = window_info.width;
+    regs[REG_INTO / 4 + 2] = window_info.height;
+    regs[REG_INTO / 4 + 3] = window_info.surface_row;
+    regs[REG_SUBMIT / 4 + 1] = GPU_PHYS + shown_set;
+    regs[REG_SUBMIT / 4 + 2] = shown_commands & 0xffff;
+    regs[REG_SUBMIT / 4] = 1 | 4 | (shown_commands >> 16) << 8;
+    __atomic_store_n(&regs[REG_LOCK / 4], 0, __ATOMIC_RELEASE);
+    while (regs[REG_SUBMIT / 4] != 0) next_frame();
 }
 
 // ---- commands that stay (segl.h) ----

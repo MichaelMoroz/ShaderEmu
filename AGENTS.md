@@ -520,7 +520,16 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   jumps when it resumes. "ShaderEmu/Add sound to the open scene" installs it without a bake.
 - Doom's window is the largest of 1x to 3x the display has room for (`doom_window_scale` in
   `doom_video.c`); a test that compares its pictures with older ones passes `-1`.
-- Tiberian Dawn leaves frames undrawn when it is late (`TDAWN_SKIP=0` for none) and sizes
-  scroll steps by time; neither happens with `TDAWN_NO_DELAY=1` or `TDAWN_FRAMES`, which is
-  what makes those runs repeat. `TDAWN_SCROLL=96 TDAWN_CHECK_REDRAW=1` with a held frame must
+- Tiberian Dawn sizes scroll steps by time and cycles its palette by the clock (and leaves
+  frames undrawn when late, with `TDAWN_SKIP=N`); none of it happens with `TDAWN_NO_DELAY=1`
+  or `TDAWN_FRAMES`, which is what makes those runs and their pictures repeat. `TDAWN_SCROLL=96 TDAWN_CHECK_REDRAW=1` with a held frame must
   print `0 of 64000 pixels differ from a full redraw`.
+- Tiberian Dawn's map is drawn by the GPU (`linux/tdawn/gl.cpp`, `docs/tdawn.md`); the game's
+  own drawing is `TDAWN_RENDER=soft`, and what the native reference build does. To check a
+  change, hold both at one frame and compare the pictures: only shadows and the shroud's
+  edges may differ, by a few levels (`>32` levels: the pointer and nothing else).
+- A texture coordinate of a compact vertex is a 1,024th of the texture: a rectangle of part of
+  a texture is exact only where its edges are whole 1,024ths. Make atlases 1,024 wide, and
+  give a texture a height of 256 or 512 even when fewer rows are used.
+- GPU memory left to one program is 3.25 MB (`TEXTURES_AT` in `gles.c`). Tiberian Dawn uses
+  2.9 MB of it; a build with MEGAMAPS has 16,384 cells, and only 4,096 get a kept quad.
