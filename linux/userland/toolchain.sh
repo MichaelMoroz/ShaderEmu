@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Builds the C toolchain for programs in the Linux image: musl, static, for RV32IMA without an
-# FPU. Sourced by the build scripts next to it, after linux/kernel/build.sh (docs/nanox.md).
+# Builds the C toolchain for programs in the Linux image: musl, static, for RV32IMAF (the
+# machine's float instructions, docs/fpu.md), with floats passed in integer registers. Sourced
+# by the build scripts next to it, after linux/kernel/build.sh (docs/nanox.md).
 # Leaves headers and libraries in $SYSROOT and the compiler driver $WORK/bin/rv32-cc.
 set -euo pipefail
 WORK=${WORK:-$HOME/shaderemu-linux}
@@ -12,13 +13,20 @@ export PATH="$WORK/bin:$WORK/tools/usr/bin:$WORK/toolchain/bin:$PATH"
 # No stack guard: the compiler's default costs a stored and checked word in most functions.
 # (Position-independent code stays the default: the guest's own linker, TinyCC's, needs the
 # libraries that way. A program that wants its globals without a table asks with -fno-pie.)
-ARCH_FLAGS="-march=rv32ima -mabi=ilp32 -fno-stack-protector"
+# No fused multiply-add: it reads three registers and leaves the machine's fast step.
+ARCH_FLAGS="-march=rv32imaf -mabi=ilp32 -fno-stack-protector -ffp-contract=off"
 [ -d "$WORK/toolchain" ] && [ -d "$WORK/linux" ] || { echo "run linux/kernel/build.sh first"; exit 1; }
 mkdir -p "$WORK/bin" "$WORK/src" "$SYSROOT/lib" && cd "$WORK/src"
 
 if [ ! -f "$SYSROOT/include/linux/fb.h" ]; then
     echo "== kernel headers"
     make -s -C "$WORK/linux" ARCH=riscv headers_install INSTALL_HDR_PATH="$SYSROOT" >/dev/null
+fi
+
+# libraries built with other flags (before the float instructions) are built again
+if [ "$(cat "$SYSROOT/lib/arch-flags" 2>/dev/null)" != "$ARCH_FLAGS" ]; then
+    rm -f "$SYSROOT/lib/libc.a" "$SYSROOT/lib/libcompiler_rt.a"
+    [ ! -d "$WORK/src/musl" ] || make -s -C "$WORK/src/musl" distclean >/dev/null 2>&1 || true
 fi
 
 if [ ! -f "$SYSROOT/lib/libc.a" ]; then
@@ -84,3 +92,4 @@ if [ ! -f "$SYSROOT/lib/libcompiler_rt.a" ]; then
     rm -f "$SYSROOT/lib/libcompiler_rt.a"
     riscv32-linux-ar rcs "$SYSROOT/lib/libcompiler_rt.a" rt-obj/*.o
 fi
+echo "$ARCH_FLAGS" > "$SYSROOT/lib/arch-flags"

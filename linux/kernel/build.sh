@@ -33,12 +33,13 @@ python3 "$HERE/install_drivers.py" linux
 python3 "$HERE/memset_hook.py" linux
 python3 "$HERE/memcpy_hook.py" linux
 python3 "$HERE/phram_hook.py" linux
+python3 "$HERE/fpu_hook.py" linux
 cat linux.config "$HERE/config.extra" > all.config
 
 echo "== configure and build"
 MAKE="make -C linux ARCH=riscv CROSS_COMPILE=riscv32-linux- -j$(nproc)"
 $MAKE KCONFIG_ALLCONFIG="$WORK/all.config" allnoconfig >/dev/null
-for symbol in SHADEREMU_GPU SHADEREMU_SOUND FB_SHADEREMU INPUT_SHADEREMU INPUT_EVDEV HZ_100; do
+for symbol in SHADEREMU_GPU SHADEREMU_SOUND FB_SHADEREMU INPUT_SHADEREMU INPUT_EVDEV HZ_100 FPU; do
     grep -q "^CONFIG_$symbol=y" linux/.config || { echo "CONFIG_$symbol is not set in .config"; exit 1; }
 done
 $MAKE Image 2>&1 | grep -E "error|warning: .*shaderemu|Image is ready" || true

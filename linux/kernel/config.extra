@@ -7,6 +7,8 @@ CONFIG_INPUT=y
 CONFIG_INPUT_EVDEV=y
 CONFIG_INPUT_MISC=y
 CONFIG_INPUT_SHADEREMU=y
+# The machine's float registers are a task's own (docs/fpu.md, fpu_hook.py).
+CONFIG_FPU=y
 # Upstream ticks at 20 Hz; the polled input device and short sleeps want more.
 CONFIG_HZ_20=n
 CONFIG_HZ_100=y

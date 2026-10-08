@@ -18,4 +18,7 @@ python3 -c "
 import math, struct, sys
 sys.stdout.buffer.write(b''.join(struct.pack('<h', int(9000 * math.sin(i * i / 9000.0) * (1 - i / 22050.0))) for i in range(22050)))
 " > "$OUT/usr/share/snd-test.raw"
-ls -l "$OUT/emuinit" "$OUT/usr/bin/sndtest"
+# the float instructions' test (docs/fpu.md): the only program here built to use them
+rv32-cc -O2 -Wall -march=rv32imaf -mabi=ilp32 -ffp-contract=off -fno-math-errno "$HERE/fptest.c" -lm -o "$WORK/src/fptest"
+riscv32-linux-strip -o "$OUT/usr/bin/fptest" "$WORK/src/fptest"
+ls -l "$OUT/emuinit" "$OUT/usr/bin/sndtest" "$OUT/usr/bin/fptest"
