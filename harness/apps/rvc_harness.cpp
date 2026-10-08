@@ -992,7 +992,8 @@ int main(int argc, char** argv) {
             mat.setVector("_InputPointer", pointer.x, pointer.y, pointer.panelW, pointer.panelH);
             mat.setInt("_InputButtons", pointer.buttons);
             mat.setInt("_HostMs", (int64_t)(uint32_t)(t * 1000.0));   // a clock programs read without a system call
-            mat.setInt("_HostFlags", opt.desktop ? 1 : 0);
+            // bit 0: start the desktop at boot; then the largest screen this host shows, in 16s of pixels
+            mat.setInt("_HostFlags", (opt.desktop ? 1 : 0) | (kGpuTarget / 16) << 8 | (kGpuTarget / 16) << 16);
             mat.setInt("_InputKeySeq", keySeq);
             mat.setInt("_InputKeyCount", n);
             mat.setInt("_InputKey0", batch[0]);

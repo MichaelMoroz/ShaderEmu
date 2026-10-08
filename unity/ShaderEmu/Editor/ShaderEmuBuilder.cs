@@ -1051,6 +1051,7 @@ public static partial class ShaderEmuBuilder
         Label(signs, "Console", "CONSOLE", 3500 + termAt.x * 1000 - 750, 20, 1500, 80, 54, TextAnchor.MiddleCenter, dim);
         Label(signs, "Display", "DISPLAY", 3500 + dispAt.x * 1000 - 750, 20, 1500, 80, 54, TextAnchor.MiddleCenter, dim);
         Label(signs, "Memory", "MEMORY (writes glow)", 3500 + memAt.x * 1000 - 850, 20, 1700, 80, 54, TextAnchor.MiddleCenter, dim);
+        Scope(world, computer, panel, machine);   // after the signs: it renames the memory screen's
 
         AssetDatabase.SaveAssets();
         EditorSceneManager.MarkSceneDirty(scene);

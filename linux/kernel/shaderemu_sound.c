@@ -276,7 +276,6 @@ static int shaderemu_sound_open(struct inode *inode, struct file *file)
 	first = snd_opens++ == 0;
 	mutex_unlock(&snd_lock);
 	if (first) {
-		writel(256, snd_regs + SND_MASTER);
 		writel(SND_VOICES, snd_regs + SND_COUNT);
 		writel(1, snd_regs + SND_ENABLE);
 	}
@@ -343,6 +342,8 @@ static int __init shaderemu_sound_init(void)
 	snd_mem = (void __force *)ioremap(SND_MEM, SND_MEM_SIZE);
 	if (!snd_regs || !snd_mem)
 		return -ENOMEM;
+	/* full volume until someone says otherwise (the desktop's Settings): it is not set again */
+	writel(256, snd_regs + SND_MASTER);
 	pr_info("shaderemu_sound: /dev/sound, %lu KiB of sample memory at 0x%lx\n", SND_MEM_SIZE >> 10, SND_MEM);
 	return misc_register(&shaderemu_sound_dev);
 }

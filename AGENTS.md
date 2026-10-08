@@ -518,6 +518,30 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
 - In Unity the audio thread runs `EmuSoundOut._onAudioFilterRead` (`docs/sound.md`). Play mode
   that is paused, or paused by an error, leaves the audio clock running: the card's clock
   jumps when it resumes. "ShaderEmu/Add sound to the open scene" installs it without a bake.
+- The world's speed has two modes (the panel's button by "Speed", `EmuMachine.SpeedMode`): fixed,
+  so many instructions a frame, and steady, so many a second. Steady counts a round for what
+  rounds really ran lately (no less than a quarter of 8,192: an idle guest gets no more), and
+  lowers the most rounds a frame may have while frames come slower than `minFrameRate` (45).
+  To check it, read `totalInstructions` twice in play mode, and `roundCap` with the slider at 7.
+- The memory screen has three pictures (`EmuScope`, `Scope.shader`): RAM with a legend of whose
+  each part is (the colours are `owner()` in `MemView.shader`, the names a canvas over the
+  screen), the ROM, and the sound ring as two traces. The CPU's 64 x 64 state texels have a
+  small screen of their own to its right, always on.
+  "ShaderEmu/Add the memory screen's views and speed modes to the open scene" installs them
+  without a bake. A change to the memory map moves `owner()` and the names in `ShaderEmuScope.cs`.
+- The desktop's programs share a list, a slider and a file chooser (`linux/apps/ui.h`,
+  `ui_files.h`: `ui_list_draw` / `ui_list_event`, `ui_choose_file`). A list's program selects
+  mouse motion events if its scroll bar is to be dragged.
+- Settings (`nxsettings`) changes the screen's size by writing `/tmp/nxsize` and running
+  `nx restart` detached (`setsid`): the window system and every program on it go, Settings too.
+  The host's flags word (0x8700003c) says the largest screen it shows, in 16s of pixels (bits
+  8-15 width, 16-23 height): 1280 x 720 in the world, 2048 x 2048 in the harness. Settings lists
+  only what fits and the window system falls back to its default for anything larger.
+  To check it without a pointer: `nx & sleep 8; nxsettings size 800x600`, then the display's
+  words in a snapshot; `NXSETTINGS_TAB=N nxsettings` opens on a tab, `nxsettings volume 30`
+  must leave 76 at 0x87000224. Its settings last until power-off: nothing is written to the ROM.
+- The sound card's master volume is set to full once, when the driver starts, not at every
+  open: it is the system's volume, which Settings changes.
 - Doom's window is the largest of 1x to 3x the display has room for (`doom_window_scale` in
   `doom_video.c`); a test that compares its pictures with older ones passes `-1`.
 - Tiberian Dawn sizes scroll steps by time and cycles its palette by the clock (and leaves

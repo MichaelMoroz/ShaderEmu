@@ -12,7 +12,7 @@ OUT=$REPO/build/images/linux/root/usr
 [ -f "$MW/src/lib/libnano-X.a" ] || { echo "run linux/nanox/build.sh first"; exit 1; }
 mkdir -p "$OUT/bin" "$OUT/share" "$WORK/src/apps"
 for p in nxedit nxfiles nxpaint nxview nxsettings nxmon nxweb; do
-    rv32-cc -O2 -Wall -Wno-unused-function -I"$MW/src/include" "$HERE/$p.c" "$MW/src/lib/libnano-X.a" -o "$WORK/src/apps/$p"
+    rv32-cc -O2 -Wall -Wno-unused-function -I"$MW/src/include" -I"$HERE/../userland" "$HERE/$p.c" "$MW/src/lib/libnano-X.a" -o "$WORK/src/apps/$p"
     riscv32-linux-strip -o "$OUT/bin/$p" "$WORK/src/apps/$p"
 done
 # the Start menu lists what the nxapps.* files name (linux/nanox/nxbar.c)

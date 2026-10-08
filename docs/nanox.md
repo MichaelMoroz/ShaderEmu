@@ -121,7 +121,7 @@ A program that takes clicks must check `ui_wheel` first, or a notch is a click t
 | `nxweb [ADDRESS]` | a browser for HTML and the plainer part of CSS (`docs/fetch.md`): Back, Home, Reload, an address to type, wheel and scroll bar |
 | `nxpaint [FILE]` | pen, eraser, line, box, filled box in sixteen colours and three sizes; Save writes a PPM file (`/root/picture.ppm` unless a file was named) |
 | `nxview FILE` | shows a picture as large as fits its window: PPM through the GPU, PGM, BMP, GIF and XPM through the engine's decoders |
-| `nxsettings` | picks the desktop's picture or colour, and says what the machine is. `nxsettings apply` only puts the chosen desktop up (the `nx` script runs it) |
+| `nxsettings` | the settings, a tab each: the desktop's picture (the image's, any PPM file through the file chooser, or a colour), the screen's size (only those the host says it can show, in its flags word; the desktop is taken down whole and started again with it: `nx restart`), the sound card's volume, and what the machine is. From a script: `nxsettings apply` (the chosen desktop, as the `nx` script runs it), `size WxH`, `volume 0-100`, `choose [FOLDER]` (the file chooser alone; prints the path) |
 | `nxmon` | instructions a second over the last minute (from `rdcycle`), how busy Linux is, memory in use |
 | `nxterm` | Microwindows' terminal, patched: it follows its window's size, and Shift+Page Up and Down or the wheel look back through the last 400 lines, with a mark at the right edge for how far |
 

@@ -82,7 +82,9 @@ Shader "ShaderEmu/gpu"
             uniform float4 _InputPointer;
             uniform uint _InputButtons, _InputKeySeq, _InputKeyCount;
             uniform uint _HostMs;   // the host's clock, in milliseconds
-            uniform uint _HostFlags;   // bit 0: the guest should start its desktop when it boots
+            // bit 0: the guest should start its desktop when it boots; bits 8-15 and 16-23: the
+            // largest screen this host shows, width and height in 16s of pixels (0: it does not say)
+            uniform uint _HostFlags;
             uniform uint _GpuPasses;   // the passes the GPU draw made this frame, one bit each
             uniform uint _InputKey0, _InputKey1, _InputKey2, _InputKey3;
             // An answer to the guest's request (docs/fetch.md): its bytes, in the frame _FetchDeliver is set.
