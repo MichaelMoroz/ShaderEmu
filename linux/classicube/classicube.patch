@@ -1,0 +1,651 @@
+diff --git a/src/Animations.c b/src/Animations.c
+index f64e11e..73f9f8f 100644
+--- a/src/Animations.c
++++ b/src/Animations.c
+@@ -336,7 +336,13 @@ static void Animations_Validate(void) {
+ 
+ static cc_bool Animations_Tick(struct ScheduledTask2* task) {
+ 	int i;
+-#ifndef CC_BUILD_WEB
++#if defined CC_BUILD_SHADEREMU
++	/* a tick of either is 30,000 instructions of that machine: water 5 times a second, lava half that */
++	static int ticks;
++	ticks++;
++	if (useWaterAnim && (ticks & 3) == 0) WaterAnimation_Tick();
++	if (useLavaAnim  && (ticks & 7) == 2) LavaAnimation_Tick();
++#elif !defined CC_BUILD_WEB
+ 	if (useLavaAnim)  LavaAnimation_Tick();
+ 	if (useWaterAnim) WaterAnimation_Tick();
+ #endif
+diff --git a/src/BlockPhysics.c b/src/BlockPhysics.c
+index a1602b1..d9af3aa 100644
+--- a/src/BlockPhysics.c
++++ b/src/BlockPhysics.c
+@@ -573,5 +573,9 @@ void Physics_Tick(void) {
+ 	Physics_TickWater();
+ 	/*}*/
+ 	physics_tickCount++;
++#ifdef CC_BUILD_SHADEREMU
++	/* three random blocks a chunk are 15,000 instructions of that machine: every fourth tick */
++	if (physics_tickCount & 3) return;
++#endif
+ 	Physics_TickRandomBlocks();
+ }
+diff --git a/src/Builder.c b/src/Builder.c
+index dd3f3f2..1135b6e 100644
+--- a/src/Builder.c
++++ b/src/Builder.c
+@@ -77,10 +77,18 @@ static int Builder1DPart_CalcOffsets(struct Builder1DPart* part, int offset) {
+ 	return offset;
+ }
+ 
++/* (ShaderEmu: of 512 atlases a map uses four, and a walk over all of them is 90,000 instructions) */
++#ifdef CC_BUILD_SHADEREMU
++#define Builder_UsedParts() min(MapRenderer_1DUsedCount, ATLAS1D_MAX_ATLASES)
++#else
++#define Builder_UsedParts() ATLAS1D_MAX_ATLASES
++#endif
++
+ static int Builder_TotalVerticesCount(void) {
+ 	int i, count = 0;
+-	for (i = 0; i < ATLAS1D_MAX_ATLASES * 2; i++) {
++	for (i = 0; i < Builder_UsedParts(); i++) {
+ 		count += Builder1DPart_VerticesCount(&Builder_Parts[i]);
++		count += Builder1DPart_VerticesCount(&Builder_Parts[i + ATLAS1D_MAX_ATLASES]);
+ 	}
+ 	return count;
+ }
+@@ -146,6 +154,42 @@ static cc_bool SetPartInfo(struct Builder1DPart* part, int* offset, struct Chunk
+ }
+ 
+ 
++#ifdef CC_BUILD_SHADEREMU
++/* Most of a chunk is rock or air, and a block is some 200 instructions of that machine to look
++   at. A row of blocks along x (with the block before and after it) is noted as all air or all
++   full opaque blocks; a row of the latter between four such rows shows no face. */
++#define ROW_AIR    1
++#define ROW_SOLID  2
++#define ROW_HIDDEN 4
++static cc_uint8 Builder_Rows[EXTCHUNK_SIZE * EXTCHUNK_SIZE];
++#define Builder_Row(yy, zz) (((yy) + 1) * EXTCHUNK_SIZE + (zz) + 1)
++
++static void Builder_ClassifyRows(void) {
++	const BlockID* row = Builder_Chunk;
++	int r, x, air, solid;
++
++	for (r = 0; r < EXTCHUNK_SIZE * EXTCHUNK_SIZE; r++, row += EXTCHUNK_SIZE) {
++		air = 1; solid = 1;
++		for (x = 0; x < EXTCHUNK_SIZE; x++) {
++			air   &= Blocks.Draw[row[x]] == DRAW_GAS;
++			solid &= Blocks.FullOpaque[row[x]];
++		}
++		Builder_Rows[r] = air * ROW_AIR + solid * ROW_SOLID;
++	}
++}
++
++static cc_bool Builder_SkipRow(int yy, int zz) {
++	int r = Builder_Row(yy, zz), f = Builder_Rows[r];
++	if (f & (ROW_AIR | ROW_HIDDEN)) return true;
++
++	if (!(f & Builder_Rows[r - 1] & Builder_Rows[r + 1] & Builder_Rows[r - EXTCHUNK_SIZE] & Builder_Rows[r + EXTCHUNK_SIZE] & ROW_SOLID))
++		return false;
++	Builder_Rows[r] = f | ROW_HIDDEN;
++	Mem_Set(&Builder_Counts[Builder_PackCount(0, yy, zz)], 0, CHUNK_SIZE * FACE_COUNT);
++	return true;
++}
++#endif
++
+ static void PrepareChunk(int x1, int y1, int z1) {
+ 	int xMax = min(World.Width,  x1 + CHUNK_SIZE);
+ 	int yMax = min(World.Height, y1 + CHUNK_SIZE);
+@@ -172,6 +216,9 @@ static void PrepareChunk(int x1, int y1, int z1) {
+ 	for (y = y1, yy = 0; y < yMax; y++, yy++) {
+ 		for (z = z1, zz = 0; z < zMax; z++, zz++) {
+ 			cIndex = Builder_PackChunk(0, yy, zz);
++#ifdef CC_BUILD_SHADEREMU
++			if (Builder_SkipRow(yy, zz)) continue;
++#endif
+ 
+ 			for (x = x1, xx = 0; x < xMax; x++, xx++, cIndex++) {
+ 				b = Builder_Chunk[cIndex];
+@@ -181,6 +228,16 @@ static void PrepareChunk(int x1, int y1, int z1) {
+ 				/* Sprites can't be stretched, nor can then be they hidden by other blocks. */
+ 				/* Note sprites are drawn using DrawSprite and not with any of the DrawXFace. */
+ 				if (Blocks.Draw[b] == DRAW_SPRITE) { AddSpriteVertices(b); continue; }
++#ifdef CC_BUILD_SHADEREMU
++				/* a full opaque block among six of them shows no face */
++				if (Blocks.FullOpaque[b] && Blocks.FullOpaque[Builder_Chunk[cIndex - 1]] && Blocks.FullOpaque[Builder_Chunk[cIndex + 1]] &&
++					Blocks.FullOpaque[Builder_Chunk[cIndex - EXTCHUNK_SIZE]] && Blocks.FullOpaque[Builder_Chunk[cIndex + EXTCHUNK_SIZE]] &&
++					Blocks.FullOpaque[Builder_Chunk[cIndex - EXTCHUNK_SIZE_2]] && Blocks.FullOpaque[Builder_Chunk[cIndex + EXTCHUNK_SIZE_2]]) {
++					Builder_Counts[index] = 0; Builder_Counts[index + 1] = 0; Builder_Counts[index + 2] = 0;
++					Builder_Counts[index + 3] = 0; Builder_Counts[index + 4] = 0; Builder_Counts[index + 5] = 0;
++					continue;
++				}
++#endif
+ 
+ 				Builder_X = x; Builder_Y = y; Builder_Z = z;
+ 				Builder_FullBright = Blocks.Brightness[b];
+@@ -360,6 +417,16 @@ static void OutputChunkPartsMeta(int x, int y, int z, struct ChunkInfo* info) {
+ 	}
+ }
+ 
++#ifdef SE_COUNT
++/* Where a chunk's instructions go (ShaderEmu, CLASSICUBE_DEFINES=-DSE_COUNT): chunks built, then phases */
++unsigned se_chunk[8];
++static unsigned se_since;
++static unsigned se_cycles(void) { unsigned v; __asm__ volatile("rdcycle %0" : "=r"(v)); return v; }
++#define SE_PHASE(n) { unsigned now = se_cycles(); se_chunk[n] += now - se_since; se_since = now; }
++#else
++#define SE_PHASE(n)
++#endif
++
+ cc_bool Builder_MakeChunk(struct ChunkInfo* info) {
+ #if CC_BUILD_MAXSTACK <= (32 * 1024)
+ 	void* mem        = TempMem_Alloc((EXTCHUNK_SIZE_3 * sizeof(BlockID)) + (CHUNK_SIZE_3 * FACE_COUNT));
+@@ -384,6 +451,9 @@ cc_bool Builder_MakeChunk(struct ChunkInfo* info) {
+ 	int y1 = info->centreY - HALF_CHUNK_SIZE;
+ 	int z1 = info->centreZ - HALF_CHUNK_SIZE;
+ 
++#ifdef SE_COUNT
++	se_since = se_cycles(); se_chunk[0]++;
++#endif
+ 	Builder_Chunk  = chunk;
+ 	Builder_Counts = counts;
+ 	Builder_BitFlags = bitFlags;
+@@ -402,7 +472,11 @@ cc_bool Builder_MakeChunk(struct ChunkInfo* info) {
+ 	}
+ 
+ 	info->allAir = allAir;
++	SE_PHASE(1)
+ 	if (allAir || allSolid) return true;
++#ifdef CC_BUILD_SHADEREMU
++	Builder_ClassifyRows();
++#endif
+ 	Lighting.LightHint(x1 - 1, y1 - 1, z1 - 1);
+ 
+ 	Mem_Set(counts, 1, CHUNK_SIZE_3 * FACE_COUNT);
+@@ -411,7 +485,9 @@ cc_bool Builder_MakeChunk(struct ChunkInfo* info) {
+ 	zMax = min(World.Length, z1 + CHUNK_SIZE);
+ 
+ 	Builder_ChunkEndX = xMax; Builder_ChunkEndZ = zMax;
++	SE_PHASE(2)
+ 	PrepareChunk(x1, y1, z1);
++	SE_PHASE(3)
+ 
+ 	totalVerts = Builder_TotalVerticesCount();
+ 	if (!totalVerts) return true;
+@@ -434,18 +510,27 @@ cc_bool Builder_MakeChunk(struct ChunkInfo* info) {
+ 	Builder_Vertices = (struct VertexTextured*)Gfx_LockVb(0, 
+ 													VERTEX_FORMAT_TEXTURED, totalVerts + 1);
+ #endif
++	SE_PHASE(4)
+ 	Builder_PostPrepareChunk();
++	SE_PHASE(5)
+ 	/* now render the chunk */
+ 
+ 	for (y = y1, yy = 0; y < yMax; y++, yy++) {
+ 		for (z = z1, zz = 0; z < zMax; z++, zz++) {
+ 			cIndex = Builder_PackChunk(0, yy, zz);
++#ifdef CC_BUILD_SHADEREMU
++			if (Builder_Rows[Builder_Row(yy, zz)] & (ROW_AIR | ROW_HIDDEN)) continue;
++#endif
+ 
+ 			for (x = x1, xx = 0; x < xMax; x++, xx++, cIndex++) {
+ 				Builder_Block = chunk[cIndex];
+ 				if (Blocks.Draw[Builder_Block] == DRAW_GAS) continue;
+ 
+ 				index = Builder_PackCount(xx, yy, zz);
++#ifdef CC_BUILD_SHADEREMU
++				if (Blocks.Draw[Builder_Block] != DRAW_SPRITE && !(counts[index] | counts[index + 1] | counts[index + 2] |
++					counts[index + 3] | counts[index + 4] | counts[index + 5])) continue;
++#endif
+ 				Builder_ChunkIndex = cIndex;
+ 				Builder_RenderBlock(index, x, y, z);
+ 			}
+@@ -462,7 +547,9 @@ cc_bool Builder_MakeChunk(struct ChunkInfo* info) {
+ 		BuildPartVbs(&MapRenderer_PartsTranslucent[curIdx]);
+ 	}
+ #else
++	SE_PHASE(6)
+ 	Gfx_UnlockVb(info->vb);
++	SE_PHASE(7)
+ #endif
+ 	return true;
+ }
+@@ -478,13 +565,19 @@ static cc_bool Builder_OccludedLiquid(int chunkIndex) {
+ }
+ 
+ static void DefaultPrePrepateChunk(void) {
++#ifdef CC_BUILD_SHADEREMU
++	int used = Builder_UsedParts();
++	Mem_Set(Builder_Parts, 0, used * sizeof(Builder_Parts[0]));
++	Mem_Set(Builder_Parts + ATLAS1D_MAX_ATLASES, 0, used * sizeof(Builder_Parts[0]));
++#else
+ 	Mem_Set(Builder_Parts, 0, sizeof(Builder_Parts));
++#endif
+ }
+ 
+ static void DefaultPostStretchChunk(void) {
+ 	int i, j, offset;
+ 	offset = 0;
+-	for (i = 0; i < ATLAS1D_MAX_ATLASES; i++) {
++	for (i = 0; i < Builder_UsedParts(); i++) {
+ 		j = i + ATLAS1D_MAX_ATLASES;
+ 
+ 		offset = Builder1DPart_CalcOffsets(&Builder_Parts[i], offset);
+diff --git a/src/Core.h b/src/Core.h
+index 95be4ac..4eb41c2 100644
+--- a/src/Core.h
++++ b/src/Core.h
+@@ -189,7 +189,25 @@ typedef cc_uint8  cc_bool;
+ /*#define CC_BUILD_GL11*/
+ 
+ #ifndef CC_BUILD_MANUAL
+-#if defined NXDK
++#if defined PLAT_SHADEREMU
++	/* The ShaderEmu machine: Linux, a Nano-X window, and a GPU device of its own */
++	#define CC_BUILD_SHADEREMU
++	#define CC_BUILD_LINUX
++	#define CC_BUILD_POSIX
++	#define CC_BUILD_COOPTHREADED
++	#define CC_BUILD_LOWMEM
++	#define CC_BUILD_NOMUSIC
++	#define CC_BUILD_NOSOUNDS
++	#undef  CC_BUILD_FREETYPE
++	#undef  CC_BUILD_RESOURCES
++	#undef  CC_BUILD_PLUGINS
++	#define CC_DISABLE_LAUNCHER
++	#define CC_BACKTRACE_BUILTIN
++	#define CC_WEAKFUNC __attribute__((weak))
++	#define DEFAULT_AUD_BACKEND CC_AUD_BACKEND_NULL
++	#define DEFAULT_NET_BACKEND CC_NET_BACKEND_BUILTIN
++	#define DEFAULT_SSL_BACKEND CC_SSL_BACKEND_NONE
++#elif defined NXDK
+ 	/* XBox also defines _WIN32 */
+ 	#define CC_BUILD_XBOX
+ 	#define CC_BUILD_CONSOLE
+@@ -206,6 +224,7 @@ typedef cc_uint8  cc_bool;
+ 	#define CC_BUILD_CONSOLE
+ 	#define CC_BUILD_LOWMEM
+ 	#define CC_BUILD_COOPTHREADED
++	#define CC_BUILD_LOWMEM
+ 	#define CC_BUILD_NOMUSIC
+ 	#define CC_BUILD_NOSOUNDS
+ 	#undef  CC_BUILD_NETWORKING /* TODO broken */
+@@ -262,9 +281,11 @@ typedef cc_uint8  cc_bool;
+ 	#define CC_BUILD_MSDOS
+ 	#define CC_BUILD_COOPTHREADED
+ 	#define CC_BUILD_LOWMEM
++	#define CC_BUILD_LOWMEM
+ 	#define CC_BUILD_NOMUSIC
+ 	#define CC_BUILD_NOSOUNDS
+ 	#undef  CC_BUILD_NETWORKING
++	#undef  CC_BUILD_NETWORKING
+ 	#define DEFAULT_AUD_BACKEND CC_AUD_BACKEND_NULL
+ 	#define DEFAULT_NET_BACKEND CC_NET_BACKEND_BUILTIN
+ 	#define DEFAULT_GFX_BACKEND CC_GFX_BACKEND_SOFTGPU
+@@ -279,6 +300,7 @@ typedef cc_uint8  cc_bool;
+ 	#undef  CC_BUILD_FREETYPE
+ 	#define CC_BUILD_AMIGA
+ 	#define CC_BUILD_COOPTHREADED
++	#define CC_BUILD_LOWMEM
+ 	#define CC_BUILD_TINYMEM
+ 	#define CC_BUILD_LOWMEM
+ 	#define CC_BUILD_NOMUSIC
+@@ -287,6 +309,7 @@ typedef cc_uint8  cc_bool;
+ 	#undef  CC_BUILD_RESOURCES
+ 	#undef  CC_BUILD_ADVLIGHTING
+ 	#undef  CC_BUILD_NETWORKING
++	#undef  CC_BUILD_NETWORKING
+ 	#undef  CC_BUILD_FILESYSTEM
+ 	#undef  CC_BUILD_COMPRESSION
+ 	#define CC_BUILD_MAXSTACK (32 * 1024)
+@@ -297,6 +320,7 @@ typedef cc_uint8  cc_bool;
+ 	#undef  CC_BUILD_FREETYPE
+ 	#define CC_BUILD_ATARIOS
+ 	#define CC_BUILD_COOPTHREADED
++	#define CC_BUILD_LOWMEM
+ 	#define CC_BUILD_TINYMEM
+ 	#define CC_BUILD_LOWMEM
+ 	#define CC_BUILD_NOMUSIC
+@@ -305,6 +329,7 @@ typedef cc_uint8  cc_bool;
+ 	#undef  CC_BUILD_RESOURCES
+ 	#undef  CC_BUILD_ADVLIGHTING
+ 	#undef  CC_BUILD_NETWORKING
++	#undef  CC_BUILD_NETWORKING
+ 	#undef  CC_BUILD_FILESYSTEM
+ 	#undef  CC_BUILD_COMPRESSION
+ 	#define CC_BUILD_MAXSTACK (32 * 1024)
+@@ -349,11 +374,13 @@ typedef cc_uint8  cc_bool;
+ 	#define CC_BUILD_MACCLASSIC
+ 	#define CC_BUILD_LOWMEM
+ 	#define CC_BUILD_COOPTHREADED
++	#define CC_BUILD_LOWMEM
+ 	#define CC_BUILD_NOMUSIC
+ 	#define CC_BUILD_NOSOUNDS
+ 	#undef  CC_BUILD_RESOURCES
+ 	#undef  CC_BUILD_FREETYPE
+ 	#undef  CC_BUILD_NETWORKING
++	#undef  CC_BUILD_NETWORKING
+ 	#define DEFAULT_AUD_BACKEND CC_AUD_BACKEND_NULL
+ 	#define DEFAULT_GFX_BACKEND CC_GFX_BACKEND_SOFTGPU
+ #elif defined __sun__
+@@ -447,6 +474,7 @@ typedef cc_uint8  cc_bool;
+ 	#define CC_BUILD_NOMUSIC
+ 	#define CC_BUILD_MINFILES
+ 	#define CC_BUILD_COOPTHREADED
++	#define CC_BUILD_LOWMEM
+ 	#undef  CC_BUILD_FREETYPE
+ 	#undef  CC_BUILD_RESOURCES
+ 	#undef  CC_BUILD_PLUGINS
+@@ -467,6 +495,7 @@ typedef cc_uint8  cc_bool;
+ 	#define CC_BUILD_CONSOLE
+ 	#define CC_BUILD_LOWMEM
+ 	#define CC_BUILD_COOPTHREADED
++	#define CC_BUILD_LOWMEM
+ 	#define DEFAULT_NET_BACKEND CC_NET_BACKEND_BUILTIN
+ 	#define DEFAULT_SSL_BACKEND CC_SSL_BACKEND_BEARSSL
+ 	#define DEFAULT_AUD_BACKEND CC_AUD_BACKEND_NULL
+@@ -484,6 +513,7 @@ typedef cc_uint8  cc_bool;
+ 	#define CC_BUILD_CONSOLE
+ 	#define CC_BUILD_LOWMEM
+ 	#define CC_BUILD_COOPTHREADED
++	#define CC_BUILD_LOWMEM
+ 	#define CC_BUILD_SPLITSCREEN
+ 	#define DEFAULT_NET_BACKEND CC_NET_BACKEND_BUILTIN
+ 	#define DEFAULT_SSL_BACKEND CC_SSL_BACKEND_BEARSSL
+@@ -492,6 +522,7 @@ typedef cc_uint8  cc_bool;
+ 	#define CC_BUILD_WII
+ 	#define CC_BUILD_CONSOLE
+ 	#define CC_BUILD_COOPTHREADED
++	#define CC_BUILD_LOWMEM
+ 	#define CC_BUILD_SPLITSCREEN
+ 	#define DEFAULT_NET_BACKEND CC_NET_BACKEND_BUILTIN
+ 	#define DEFAULT_SSL_BACKEND CC_SSL_BACKEND_BEARSSL
+@@ -529,18 +560,21 @@ typedef cc_uint8  cc_bool;
+ 	#define CC_BUILD_CONSOLE
+ 	#define CC_BUILD_LOWMEM
+ 	#define CC_BUILD_COOPTHREADED
++	#define CC_BUILD_LOWMEM
+ 	#define CC_BUILD_NOMUSIC
+ 	#define CC_BUILD_NOSOUNDS
+ 	#define CC_BUILD_MAXSTACK (64 * 1024)
+ 	#define CC_BUILD_SPLITSCREEN
+ 	#undef  CC_BUILD_RESOURCES
+ 	#undef  CC_BUILD_NETWORKING
++	#undef  CC_BUILD_NETWORKING
+ 	#define DEFAULT_AUD_BACKEND CC_AUD_BACKEND_NULL
+ #elif defined PLAT_PS2
+ 	#define CC_BUILD_PS2
+ 	#define CC_BUILD_CONSOLE
+ 	#define CC_BUILD_LOWMEM
+ 	#define CC_BUILD_COOPTHREADED
++	#define CC_BUILD_LOWMEM
+ 	#define CC_BUILD_SPLITSCREEN
+ 	#define DEFAULT_NET_BACKEND CC_NET_BACKEND_BUILTIN
+ 	#define DEFAULT_SSL_BACKEND CC_SSL_BACKEND_BEARSSL
+@@ -552,12 +586,14 @@ typedef cc_uint8  cc_bool;
+ 	#define CC_BUILD_LOWMEM
+ 	#define CC_BUILD_TINYMEM
+ 	#define CC_BUILD_COOPTHREADED
++	#define CC_BUILD_LOWMEM
+ 	#define CC_BUILD_NOMUSIC
+ 	#define CC_BUILD_NOSOUNDS
+ 	#define CC_BUILD_MAXSTACK (8 * 1024) /* TODO verify */
+ 	#define CC_BUILD_FPU_MODE CC_FPU_MODE_MINIMAL
+ 	#undef  CC_BUILD_RESOURCES
+ 	#undef  CC_BUILD_NETWORKING
++	#undef  CC_BUILD_NETWORKING
+ 	#undef  CC_BUILD_ADVLIGHTING
+ 	#undef  CC_BUILD_FILESYSTEM
+ 	#undef  CC_BUILD_COMPRESSION
+@@ -575,6 +611,7 @@ typedef cc_uint8  cc_bool;
+ 	#define CC_BUILD_CONSOLE
+ 	#define CC_BUILD_LOWMEM
+ 	#define CC_BUILD_COOPTHREADED
++	#define CC_BUILD_LOWMEM
+ 	#define CC_BUILD_NOMUSIC
+ 	#define CC_BUILD_NOSOUNDS
+ 	#define CC_BUILD_TOUCH
+@@ -592,6 +629,7 @@ typedef cc_uint8  cc_bool;
+ 	#define CC_BUILD_WIIU
+ 	#define CC_BUILD_CONSOLE
+ 	#define CC_BUILD_COOPTHREADED
++	#define CC_BUILD_LOWMEM
+ 	#define CC_BUILD_SPLITSCREEN
+ 	#define CC_BUILD_TOUCH
+ 	#define DEFAULT_NET_BACKEND CC_NET_BACKEND_BUILTIN
+@@ -610,11 +648,13 @@ typedef cc_uint8  cc_bool;
+ 	#define CC_BUILD_LOWMEM
+ 	#define CC_BUILD_TINYMEM
+ 	#define CC_BUILD_COOPTHREADED
++	#define CC_BUILD_LOWMEM
+ 	#define CC_BUILD_NOMUSIC
+ 	#define CC_BUILD_NOSOUNDS
+ 	#define CC_BUILD_FPU_MODE CC_FPU_MODE_LIMITED
+ 	#undef  CC_BUILD_RESOURCES
+ 	#undef  CC_BUILD_NETWORKING
++	#undef  CC_BUILD_NETWORKING
+ 	#undef  CC_BUILD_ADVLIGHTING
+ 	#undef  CC_BUILD_FILESYSTEM
+ 	#define DEFAULT_AUD_BACKEND CC_AUD_BACKEND_NULL
+@@ -636,12 +676,14 @@ typedef cc_uint8  cc_bool;
+ 	#define CC_BUILD_LOWMEM
+ 	#define CC_BUILD_TINYMEM
+ 	#define CC_BUILD_COOPTHREADED
++	#define CC_BUILD_LOWMEM
+ 	#define CC_BUILD_NOMUSIC
+ 	#define CC_BUILD_NOSOUNDS
+ 	#define CC_BUILD_MAXSTACK (64 * 1024)
+ 	#define CC_BUILD_FPU_MODE CC_FPU_MODE_LIMITED
+ 	#undef  CC_BUILD_RESOURCES
+ 	#undef  CC_BUILD_NETWORKING
++	#undef  CC_BUILD_NETWORKING
+ 	#undef  CC_BUILD_ADVLIGHTING
+ 	#undef  CC_BUILD_FILESYSTEM
+ 	#define DEFAULT_AUD_BACKEND CC_AUD_BACKEND_NULL
+@@ -651,12 +693,14 @@ typedef cc_uint8  cc_bool;
+ 	#define CC_BUILD_LOWMEM
+ 	#define CC_BUILD_TINYMEM
+ 	#define CC_BUILD_COOPTHREADED
++	#define CC_BUILD_LOWMEM
+ 	#define CC_BUILD_NOMUSIC
+ 	#define CC_BUILD_NOSOUNDS
+ 	#define CC_BUILD_MAXSTACK (64 * 1024)
+ 	#define CC_BUILD_FPU_MODE CC_FPU_MODE_MINIMAL
+ 	#undef  CC_BUILD_RESOURCES
+ 	#undef  CC_BUILD_NETWORKING
++	#undef  CC_BUILD_NETWORKING
+ 	#undef  CC_BUILD_ADVLIGHTING
+ 	#undef  CC_BUILD_FILESYSTEM
+ 	#undef  CC_BUILD_COMPRESSION
+diff --git a/src/EnvRenderer.c b/src/EnvRenderer.c
+index 5e7cf6a..7edc2ed 100644
+--- a/src/EnvRenderer.c
++++ b/src/EnvRenderer.c
+@@ -22,7 +22,13 @@
+ 
+ cc_bool EnvRenderer_Legacy, EnvRenderer_Minimal;
+ 
++/* Set while the map's borders are built: a ShaderEmu vertex has room for 32 repeats of a texture */
++static cc_bool env_borders;
++
+ static CC_INLINE int EnvRenderer_AxisSize(void) {
++#ifdef CC_BUILD_SHADEREMU
++	if (env_borders) return 16;
++#endif
+ 	if (Gfx.Limitations & GFX_LIMIT_MAX_VERTEX_SIZE) return 8;
+ 
+ 	return EnvRenderer_Legacy ? 128 : 2048;
+@@ -714,6 +720,7 @@ static CC_NOINLINE void BuildMapSides(void) {
+ 	block = Env.SidesBlock;
+ 
+ 	if (Blocks.Draw[block] == DRAW_GAS) return;
++	env_borders = true;
+ 	CalcBorderRects(rects);
+ 
+ 	sides_vertices = 0;
+@@ -728,7 +735,7 @@ static CC_NOINLINE void BuildMapSides(void) {
+ 	sides_vertices += 2 * CalcNumVertices(World.Length, Math_AbsI(y)); /* XQuads */
+ 
+ 	sides_vb = Gfx_TryCreateStaticVb(VERTEX_FORMAT_TEXTURED, sides_vertices);
+-	if (!sides_vb) return;
++	if (!sides_vb) { env_borders = false; return; }
+ 
+ 	data = (struct VertexTextured*)Gfx_LockVb(sides_vb,
+ 										VERTEX_FORMAT_TEXTURED, sides_vertices);
+@@ -754,6 +761,7 @@ static CC_NOINLINE void BuildMapSides(void) {
+ 	DrawBorderX(World.Width, 0, World.Length, y1, y2, color, &data);
+ 
+ 	Gfx_UnlockVb(sides_vb);
++	env_borders = false;
+ }
+ 
+ static CC_NOINLINE void BuildMapEdges(void) {
+@@ -769,6 +777,7 @@ static CC_NOINLINE void BuildMapEdges(void) {
+ 	block = Env.EdgeBlock;
+ 
+ 	if (Blocks.Draw[block] == DRAW_GAS) return;
++	env_borders = true;
+ 	CalcBorderRects(rects);
+ 
+ 	edges_vertices = 0;
+@@ -778,7 +787,7 @@ static CC_NOINLINE void BuildMapEdges(void) {
+ 	}
+ 
+ 	edges_vb = Gfx_TryCreateStaticVb(VERTEX_FORMAT_TEXTURED, edges_vertices);
+-	if (!edges_vb) return;
++	if (!edges_vb) { env_borders = false; return; }
+ 
+ 	data = (struct VertexTextured*)Gfx_LockVb(edges_vb,
+ 										VERTEX_FORMAT_TEXTURED, edges_vertices);
+@@ -794,6 +803,7 @@ static CC_NOINLINE void BuildMapEdges(void) {
+ 			Borders_HorOffset(block), Borders_YOffset(block), &data);
+ 	}
+ 	Gfx_UnlockVb(edges_vb);
++	env_borders = false;
+ }
+ 
+ static void RenderBorders(BlockID block, GfxResourceID vb, GfxResourceID tex, int count) {
+diff --git a/src/Game.h b/src/Game.h
+index ccfee09..70760c5 100644
+--- a/src/Game.h
++++ b/src/Game.h
+@@ -41,6 +41,8 @@ extern cc_string Game_Mppass;
+     #define DEFAULT_VIEWDIST 20
+ #elif defined CC_BUILD_SYMBIAN
+ 	#define DEFAULT_VIEWDIST 64
++#elif defined CC_BUILD_SHADEREMU
++	#define DEFAULT_VIEWDIST 128
+ #elif defined CC_BUILD_NDS
+     #define DEFAULT_VIEWDIST 192
+ #else
+diff --git a/src/Generator.c b/src/Generator.c
+index d033191..4e31738 100644
+--- a/src/Generator.c
++++ b/src/Generator.c
+@@ -9,6 +9,11 @@
+ #include "Screens.h"
+ #include "Window.h"
+ 
++#ifdef CC_BUILD_SHADEREMU
++/* the machine's float instructions are singles: a double is a library call an operation */
++#define double float
++#endif
++
+ static const struct MapGenerator* gen_active;
+ BlockRaw* Gen_Blocks;
+ 
+diff --git a/src/Launcher.c b/src/Launcher.c
+index 084b974..b1d404a 100644
+--- a/src/Launcher.c
++++ b/src/Launcher.c
+@@ -1,5 +1,5 @@
+ #include "Launcher.h"
+-#ifndef CC_BUILD_WEB
++#if !defined CC_BUILD_WEB && !defined CC_DISABLE_LAUNCHER
+ #include "String_.h"
+ #include "LScreens.h"
+ #include "LWidgets.h"
+diff --git a/src/MapRenderer.c b/src/MapRenderer.c
+index fbe36dd..18add3a 100644
+--- a/src/MapRenderer.c
++++ b/src/MapRenderer.c
+@@ -535,7 +535,15 @@ static void RefreshBorderChunks(int maxHeight) {
+ *--------------------------------------------------Chunks updating/sorting------------------------------------------------*
+ *#########################################################################################################################*/
+ #define CHUNK_TARGET_TIME ((1.0f/30) + 0.01f)
+-static int chunksTarget = 12;
++#ifdef CC_BUILD_SHADEREMU
++/* a chunk is some 0.2 seconds of that machine: one a frame */
++#define CHUNKS_MIN 1
++#define CHUNKS_DEFAULT 1
++#else
++#define CHUNKS_MIN 4
++#define CHUNKS_DEFAULT 30
++#endif
++static int chunksTarget = CHUNKS_MIN;
+ static Vec3 lastCamPos;
+ static float lastYaw, lastPitch;
+ /* Max distance from camera that chunks are rendered within */
+@@ -638,7 +646,7 @@ static void UpdateChunks(float delta) {
+ 
+ 	/* Build more chunks if 30 FPS or over, otherwise slowdown */
+ 	chunksTarget += delta < CHUNK_TARGET_TIME ? 1 : -1; 
+-	Math_Clamp(chunksTarget, 4, maxChunkUpdates);
++	Math_Clamp(chunksTarget, CHUNKS_MIN, maxChunkUpdates);
+ 
+ 	p = Entities.CurPlayer;
+ 	samePos = Vec3_Equals(&Camera.CurrentPos, &lastCamPos)
+@@ -818,7 +826,7 @@ static void OnInit(void) {
+ 	/* This = 87 fixes map being invisible when no textures */
+ 	MapRenderer_1DUsedCount = 87; /* Atlas1D_UsedAtlasesCount(); */
+ 	chunkPos   = IVec3_MaxValue();
+-	maxChunkUpdates = Options_GetInt(OPT_MAX_CHUNK_UPDATES, 4, 1024, 30);
++	maxChunkUpdates = Options_GetInt(OPT_MAX_CHUNK_UPDATES, CHUNKS_MIN, 1024, CHUNKS_DEFAULT);
+ 	CalcViewDists();
+ }
+ 
+diff --git a/src/PackedCol.h b/src/PackedCol.h
+index 0646e39..be5e3b4 100644
+--- a/src/PackedCol.h
++++ b/src/PackedCol.h
+@@ -8,7 +8,7 @@ CC_BEGIN_HEADER
+ */
+ 
+ typedef cc_uint32 PackedCol;
+-#if (CC_GFX_BACKEND == CC_GFX_BACKEND_D3D9) || defined CC_BUILD_XBOX || defined CC_BUILD_DREAMCAST || defined CC_BUILD_XBOX360
++#if (CC_GFX_BACKEND == CC_GFX_BACKEND_D3D9) || defined CC_BUILD_XBOX || defined CC_BUILD_DREAMCAST || defined CC_BUILD_XBOX360 || defined CC_BUILD_SHADEREMU
+ 	#define PACKEDCOL_B_SHIFT  0
+ 	#define PACKEDCOL_G_SHIFT  8
+ 	#define PACKEDCOL_R_SHIFT 16
+diff --git a/src/Server.c b/src/Server.c
+index 761927b..85e8ec1 100644
+--- a/src/Server.c
++++ b/src/Server.c
+@@ -150,6 +150,12 @@ static void SPConnection_BeginConnect(void) {
+ 
+ 	Random_SeedFromCurrentTime(&rnd);
+ 	seed = Random_Next(&rnd, Int32_MaxValue);
++#ifdef CC_BUILD_SHADEREMU
++	{ /* CLASSICUBE_SEED: the same world every time, for comparing pictures */
++		extern int SE_WorldSeed(int seed);
++		seed = SE_WorldSeed(seed);
++	}
++#endif
+ 
+ 	Gen_Start(gen, seed, horSize, verSize, horSize);
+ }
+diff --git a/src/main_impl.h b/src/main_impl.h
+index 21c7255..0960c06 100644
+--- a/src/main_impl.h
++++ b/src/main_impl.h
+@@ -85,7 +85,7 @@ static void RunGame(void) {
+ }
+ 
+ static void RunLauncher(void) {
+-#ifndef CC_BUILD_WEB
++#if !defined CC_BUILD_WEB && !defined CC_DISABLE_LAUNCHER
+ 	Launcher_Setup();
+ 	/* NOTE: Make sure to keep delay same as hardcoded delay in Launcher_Tick */
+ 	while (Launcher_Tick()) { Thread_Sleep(10); }

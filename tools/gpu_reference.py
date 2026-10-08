@@ -193,6 +193,24 @@ def pass_of(cmd):
     return (cmd['tex'][0] >> 16) & 7 if cmd['op'] != 1 else 0
 
 
+def clip_near(p, colour, uv):
+    """A triangle cut at the near plane (clip z = 0) as the card cuts it: none, one or two triangles."""
+    inside = p[:, 2] >= 0
+    if inside.all():
+        return [(p, colour, uv)]
+    if not inside.any():
+        return []
+    poly = []
+    for i in range(3):
+        j = (i + 1) % 3
+        if inside[i]:
+            poly.append((p[i], colour[i], uv[i]))
+        if inside[i] != inside[j]:
+            t = p[i][2] / (p[i][2] - p[j][2])
+            poly.append((p[i] + t * (p[j] - p[i]), colour[i] + t * (colour[j] - colour[i]), uv[i] + t * (uv[j] - uv[i])))
+    return [tuple(np.array([poly[0][k], poly[i][k], poly[i + 1][k]]) for k in range(3)) for i in range(1, len(poly) - 1)]
+
+
 def draw(m):
     width, height, commands = vertices(m)
     image = np.zeros((height, width, 3), np.uint8)
@@ -203,11 +221,17 @@ def draw(m):
     for cmd in sorted(commands, key=pass_of):
         which = pass_of(cmd)
         pos = cmd['pos'].astype(np.float64)
+        triangles = []
         for t in range(len(pos) // 3):
-            p = pos[3 * t:3 * t + 3]
-            if (p[:, 3] <= 1e-6).any():
-                stats['behind_eye'] += 1   # the card clips these; the model leaves them out
+            s = slice(3 * t, 3 * t + 3)
+            if (pos[s, 3] > 1e-6).all():
+                triangles.append((pos[s], cmd['colour'][s].astype(np.float64), cmd['uv'][s].astype(np.float64)))
                 continue
+            cut = [c for c in clip_near(pos[s], cmd['colour'][s].astype(np.float64), cmd['uv'][s].astype(np.float64))
+                   if (c[0][:, 3] > 1e-6).all()]
+            stats['behind_eye'] += not cut
+            triangles += cut
+        for p, corner_colour, corner_uv in triangles:
             iw = 1.0 / p[:, 3]
             # the card snaps vertices to 1/256 of a pixel
             sx = np.round((p[:, 0] * iw * 0.5 + 0.5) * TARGET * 256) / 256
@@ -257,8 +281,8 @@ def draw(m):
             pw = [l[i][ok] * iw[i] for i in range(3)]
             total = pw[0] + pw[1] + pw[2]
             pw = [v / total for v in pw]
-            col = sum(pw[i][:, None] * cmd['colour'][3 * t + i].astype(np.float64) for i in range(3))
-            uv = sum(pw[i][:, None] * cmd['uv'][3 * t + i].astype(np.float64) for i in range(3))
+            col = sum(pw[i][:, None] * corner_colour[i] for i in range(3))
+            uv = sum(pw[i][:, None] * corner_uv[i] for i in range(3))
             if cmd['op'] == 3 and cmd['tex'][0] & 0x200:
                 at = np.argwhere(ok)
                 centre = np.stack([at[:, 1] + x_lo + 0.5, at[:, 0] + y_lo + 0.5], axis=1)
@@ -301,7 +325,7 @@ def main():
     got = read_bmp(sys.argv[2])[:height, :width]
     d = np.abs(got.astype(int) - want.astype(int)).max(axis=2)
     inner = ~edge
-    print('picture %dx%d, %d commands, %d triangles on screen, %d dropped behind the eye'
+    print('picture %dx%d, %d commands, %d triangles on screen, %d wholly behind the eye'
           % (width, height, stats['commands'], stats['triangles'], stats['behind_eye']))
     print('away from triangle edges: %d pixels, %.3f%% identical, %.3f%% within 2 levels, %d differ by more than 8'
           % (inner.sum(), (d[inner] == 0).mean() * 100, (d[inner] <= 2).mean() * 100, int((d[inner] > 8).sum())))

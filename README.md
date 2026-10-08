@@ -40,6 +40,8 @@ and it is the only way this computer becomes usable.
   missions, drawn in software and shown by the GPU: it plays, at a half to two thirds of its speed.
 - **Quake** (`docs/quake.md`): id's GLQuake with the shareware episode, everything drawn by the
   GPU, on float instructions the machine gained for it (`docs/fpu.md`): 2 to 8 frames a second.
+- **ClassiCube** (`docs/classicube.md`): the Minecraft Classic client, a world of blocks to dig and
+  build in, drawn by the GPU from chunks kept in its memory: 50 to 70 frames a second walking.
 - **A C compiler in the machine** (`docs/cc.md`): TinyCC, with the C library, Nano-X and
   OpenGL ES, and two 3D examples it builds there.
 - **Keyboard, pointer and wheel** as Linux input devices (`docs/input.md`), a display the guest
@@ -156,7 +158,8 @@ the design notes are kept in `docs/original-x86-plan.md`.
 [rvc](https://github.com/pimaker/rvc) and [linux-rvc](https://github.com/pimaker/linux-rvc) by
 pimaker; Linux; musl; BusyBox; GCC and LLVM; [Microwindows](https://github.com/ghaerr/microwindows)
 by Greg Haerr and contributors, with its port of Doom; TinyCC and jrrk2's riscv32 port of it; DOOM and [Quake](https://github.com/id-Software/Quake) by id Software; [Vanilla Conquer](https://github.com/TheAssemblyArmada/Vanilla-Conquer)
-and Command & Conquer by Westwood Studios (source released by Electronic Arts); glxgears from the
+and Command & Conquer by Westwood Studios (source released by Electronic Arts);
+[ClassiCube](https://github.com/ClassiCube/ClassiCube) by UnknownShadow200 and contributors; glxgears from the
 Mesa demos; photographs from Unsplash; VRChat's SDK and UdonSharp;
 [ShaderAudio](https://gitlab.com/lox9973/ShaderAudio) by lox9973, whose way of getting sound out of
 a shader the sound card follows.

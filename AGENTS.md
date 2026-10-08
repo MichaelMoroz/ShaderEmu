@@ -612,6 +612,20 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
 - In C a float times `0.5` is a double multiplication. For a program full of floats built for
   the float instructions, `-fsingle-precision-constant` keeps such lines out of the runtime's
   double routines.
+- ClassiCube (`docs/classicube.md`): `wsl -- bash /mnt/c/Development/ShaderX86/linux/classicube/build.sh`
+  (6 s) after Nano-X's build, then the image and snapshot. To measure it, resume the snapshot
+  with `nano-X -p &` and `CLASSICUBE_SEED=7 classicube` and wait for `classicube: steady`
+  (35 s), then read the `ccstat:` lines. Lines typed at its terminal press keys, turn the view
+  and hold a frame (`down W`, `turn 400 60`, `hold`): `--expect "classicube: steady" --send`.
+- Its changes to the game are `linux/classicube/classicube.patch`: edit the clone in
+  `~/shaderemu-linux/src/ClassiCube` (its files have CRLF line ends: keep them) and save
+  `git diff`. The build puts the tree back each time.
+- Its graphics are on the GPU device itself, not on `gles.c`: a change to the device's
+  commands or vertex kinds touches `Graphics_ShaderEmu.c` too.
+- A program for a machine with float instructions and no doubles: look for `__muldf3` and
+  `__adddf3` in a profile first. ClassiCube's map generator and sine were 45% of its start.
+- `tools\gpu_reference.py` cuts triangles at the near plane as the card does. A triangle with
+  a corner behind the eye used to be left out of the model whole.
 - `gles.c` takes its frame's size from defines (`SET_SIZE`, `UNIFORMS_IN`, `VERTICES_IN`,
   `MAX_COMMANDS`, `MAX_TEXTURES`); Quake changes only `MAX_TEXTURES`. A program whose textures
   do not fit keeps them in ordinary memory and GPU memory as a cache of the ones being drawn
