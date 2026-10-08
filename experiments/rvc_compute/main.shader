@@ -271,6 +271,31 @@
                 }
                 xreg_store();
 
+#ifdef RAM_BUFFER_ON
+                // The machine's copy and fill (the Commit pass does them on the texture's RAM):
+                // here on the buffer, the instruction having ended the pass. A copy within RAM
+                // to a higher address goes backwards, as one from the texture's old contents would.
+                if (cpu.stall == STALL_MEMOP_COPY || cpu.stall == STALL_MEMOP_FILL) {
+                    bool fill = cpu.stall == STALL_MEMOP_FILL;
+                    uint first = (cpu.memop_dst_p + 3) & ~3u, end = cpu.memop_dst_p + cpu.memop_n;
+                    uint words = end > first ? (end - first + 3) >> 2 : 0;
+                    bool back = !fill && (cpu.memop_src_p & 0x80000000) != 0 && cpu.memop_dst_p > (cpu.memop_src_p & 0x7fffffff);
+                    [loop]
+                    for (uint k = 0; k < words; k++) {
+                        uint at = first + (back ? words - 1 - k : k) * 4;
+                        uint v = cpu.memop_src_v;
+                        [branch]
+                        if (!fill) {
+                            v = mem_get_word((cpu.memop_src_p + (at - cpu.memop_dst_p)) & ~3u);
+                        }
+                        [branch]
+                        if (at < RAM_MAX) {
+                            _RamB.Store(at, v);
+                        }
+                    }
+                }
+#endif
+
                 uint lin;
                 [loop]
                 for (lin = 0; lin < 44; lin++) {
