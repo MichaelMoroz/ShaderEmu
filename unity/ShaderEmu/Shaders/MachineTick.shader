@@ -75,6 +75,8 @@ Shader "ShaderEmu/MachineTick"
             // instruction. Unity preprocesses the source itself, so the compiler cannot say
             // what it is; a stock editor (FXC) needs this line taken out.
             #define __FXC2__
+            // Single-precision float instructions (docs/fpu.md), as the harness's full machine has.
+            #define FPU
 
             #define PASS_TICK
 
@@ -123,7 +125,10 @@ Shader "ShaderEmu/MachineTick"
 
                 uint2 pos = (uint2)i.vertex.xy;
 #ifdef L1_LOCAL
-                uint4 l1_cache[L1_ENTRIES];
+                uint4 l1_cache[L1_DATA_N];
+#if L1_WAYS == 4
+                uint4 l1_tag[L1_BUCKETS];
+#endif
                 uint tlb2_tag[3 * TLB2_N];
                 uint tlb2_pg[3 * TLB2_N];
 #endif
@@ -147,6 +152,9 @@ Shader "ShaderEmu/MachineTick"
                     decode();
                     time_prepare();
                     xreg_load();
+#ifdef FPU
+                    fp_state_load();
+#endif
 #ifndef NO_PAGING
                     tlb_state_load();
 #endif
@@ -167,6 +175,10 @@ Shader "ShaderEmu/MachineTick"
 #ifndef NO_PAGING
                 uint4 tlb_texel;
                 if (!_Init && tlb_state_texel(pos, tlb_texel)) return tlb_texel;
+#endif
+#ifdef FPU
+                uint4 fp_texel;
+                if (!_Init && fp_state_texel(pos, fp_texel)) return fp_texel;
 #endif
                 return encode(pos);
             }

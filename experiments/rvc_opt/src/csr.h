@@ -140,6 +140,12 @@ else if (cpu.cache.csr_cache_15_addr == address) { ret = cpu.cache.csr_cache_15_
         ret = tex_get_csr(address);
     }
 
+#ifdef FPU
+    // The float registers count as changed whenever they are on at all: mstatus.FS reads
+    // dirty unless it is off, with the summary bit Linux looks at first (SD, bit 31). The
+    // kernel then saves them at every task switch and no instruction has to mark them.
+    if (address == CSR_MSTATUS && (ret & 0x6000) != 0) return (ret & read_mask) | 0x80006000;
+#endif
     return ret & read_mask;
 }
 

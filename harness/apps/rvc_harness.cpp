@@ -546,6 +546,10 @@ int main(int argc, char** argv) {
     opt.sbi = opt.machine == 0 && opt.rvcDir == "experiments/rvc_opt" && (opt.ourKernel || !opt.loadState.empty());
     if (opt.machine == 1) opt.defines.push_back("NO_PAGING");
     if (opt.machine == 2) opt.defines.push_back("M_MODE_ONLY");
+    // The full machine has single-precision float instructions (docs/fpu.md).
+    if (opt.machine == 0 && opt.rvcDir == "experiments/rvc_opt" &&
+        std::find(opt.defines.begin(), opt.defines.end(), "FPU") == opt.defines.end())
+        opt.defines.push_back("FPU");
     if (opt.machine > 0)
         fprintf(stderr, "[harness] machine: %s\n", opt.machine == 1 ? "no paging (NO_PAGING)" : "machine mode only (M_MODE_ONLY)");
     // Payloads live with upstream rvc; a patched shader folder usually has none of its own.

@@ -497,6 +497,76 @@ DEF(xori, FormatI, { // rv32i
  *   END INSTRUCTIONS
  */
 
+
+#ifdef FPU
+// The F extension (docs/fpu.md): an instruction of opcode 0x53 on two register values, for the
+// fast step and the general path alike. Every result is worked out and one is chosen.
+// to_float says which register file the result is for; ok is false for an encoding that
+// does not exist.
+uint fp_exec(uint w, uint ra, uint rb, out bool to_float, out bool ok) {
+    uint f7 = w >> 25, f3 = (w >> 12) & 7, sel = (w >> 20) & 0x1f;
+    precise float a = asfloat(ra);
+    precise float b = asfloat(rb);
+    bool a_nan = (ra & 0x7fffffff) > 0x7f800000, b_nan = (rb & 0x7fffffff) > 0x7f800000;
+    precise float sum = a + b;
+    precise float dif = a - b;
+    precise float prod = a * b;
+    // The card divides by multiplying with 1 / b, which is nothing when b is large and makes
+    // a quotient of two large numbers zero. So two ordinary numbers are divided with their
+    // exponents moved towards the middle, the difference shared between them.
+    uint ea = (ra >> 23) & 0xff, eb = (rb >> 23) & 0xff;
+    int de = (int)ea - (int)eb;
+    int ha = clamp(de, -126, 127);
+    precise float da = asfloat((ra & 0x807fffff) | ((uint)(127 + ha) << 23));
+    precise float db = asfloat((rb & 0x807fffff) | ((uint)(127 - (de - ha)) << 23));
+    precise float quot = (ea - 1 < 254 && eb - 1 < 254) ? da / db : a / b;
+    precise float root = sqrt(a);
+    uint arith = asuint(f7 == 0x00 ? sum : f7 == 0x04 ? dif : f7 == 0x08 ? prod : f7 == 0x0c ? quot : root);
+    if ((arith & 0x7fffffff) > 0x7f800000) arith = 0x7fc00000;   // the one NaN RISC-V makes
+    // fsgnj, fsgnjn, fsgnjx: the first operand with another sign
+    uint sgn = (ra & 0x7fffffff) | ((f3 == 0 ? rb : f3 == 1 ? ~rb : ra ^ rb) & 0x80000000);
+    // fmin, fmax: a NaN loses to a number, and -0 is less than +0
+    bool less = a < b || (ra == 0x80000000 && rb == 0);
+    uint pick = a_nan ? (b_nan ? 0x7fc00000 : rb) : b_nan ? ra : ((less == (f3 == 0)) ? ra : rb);
+    // feq, flt, fle: false when either is a NaN
+    uint cmp = (!a_nan && !b_nan && (f3 == 2 ? a == b : f3 == 1 ? a < b : a <= b)) ? 1 : 0;
+    // fcvt.w.s, fcvt.wu.s: rounded as the instruction says (a C cast truncates), then clamped
+    float whole = f3 == 1 ? trunc(a) : f3 == 2 ? floor(a) : f3 == 3 ? ceil(a) : round(a);
+    uint to_s = (a_nan || whole >= 2147483648.0) ? 0x7fffffff : whole <= -2147483648.0 ? 0x80000000 : AS_UNSIGNED((int)whole);
+    // (from 2^31 up in two parts, and a signed integer by its size and its sign: fxc2 made the
+    // first conversion a signed one and the second no conversion at all)
+    uint to_u = (a_nan || whole >= 4294967296.0) ? 0xffffffff : whole <= 0.0 ? 0
+              : whole >= 2147483648.0 ? 0x80000000 + (uint)(whole - 2147483648.0) : (uint)whole;
+    // fcvt.s.w, fcvt.s.wu
+    bool from_neg = sel == 0 && (ra >> 31) != 0;
+    uint from = asuint((float)(from_neg ? 0 - ra : ra)) | (from_neg ? 0x80000000 : 0);
+    // fclass
+    uint ex = (ra >> 23) & 0xff, man = ra & 0x7fffff;
+    bool neg = (ra >> 31) != 0;
+    uint cls = ex == 0xff ? (man != 0 ? ((man & 0x400000) ? 0x200 : 0x100) : (neg ? 0x001 : 0x080))
+             : ex == 0 ? (man != 0 ? (neg ? 0x004 : 0x020) : (neg ? 0x008 : 0x010))
+             : (neg ? 0x002 : 0x040);
+
+    bool is_arith = (f7 & 0x73) == 0 || f7 == 0x2c;   // 0x00, 0x04, 0x08, 0x0c, and the root
+    to_float = is_arith || f7 == 0x10 || f7 == 0x14 || f7 == 0x68 || f7 == 0x78;
+    ok = is_arith ? (f7 != 0x2c || sel == 0)
+       : f7 == 0x10 ? f3 < 3
+       : f7 == 0x14 ? f3 < 2
+       : f7 == 0x50 ? f3 < 3
+       : (f7 == 0x60 || f7 == 0x68) ? sel < 2
+       : f7 == 0x70 ? (sel == 0 && f3 < 2)
+       : (f7 == 0x78 && sel == 0 && f3 == 0);
+    return is_arith ? arith
+         : f7 == 0x10 ? sgn
+         : f7 == 0x14 ? pick
+         : f7 == 0x50 ? cmp
+         : f7 == 0x60 ? (sel == 0 ? to_s : to_u)
+         : f7 == 0x68 ? from
+         : f7 == 0x70 ? (f3 == 0 ? ra : cls)
+         : ra;                                        // fmv.w.x
+}
+#endif
+
 #define RUN(name, data, insf) case data : { \
     PROF(PROF_ins_##name) \
     emu_##name(ins_word, ret, insf); \
@@ -661,8 +731,13 @@ ins_ret ins_select_l1(L1P uint ins_word, inout ins_ret ret) {
     // all together, this way mem_get_word only has to exist once
     // (though this might cause some unnecessary accesses too)
     uint do_mem_read = 0;
+#ifdef FPU
+    if ((ins_word & 0x0000707f) == 0x00002007 || (ins_word & 0x0000007f) == 0x00000003) {
+        // lX memory read, and flw
+#else
     if ((ins_word & 0x0000007f) == 0x00000003) {
         // lX memory read
+#endif
         do_mem_read = xreg(ins_FormatI.rs1) + ins_FormatI.imm;
     } else if ((ins_word & 0x0000202f) == 0x0000202f) {
         // atomic memory read
@@ -705,6 +780,44 @@ ins_ret ins_select_l1(L1P uint ins_word, inout ins_ret ret) {
             return ret;
         }
     }
+
+#ifdef FPU
+    if ((ins_word & 0x0000707f) == 0x00002007) {            // flw: the word read above, as it is
+        ret.write_reg = XR_F + ((ins_word >> 7) & 0x1f);
+        ret.write_val = prepared_mem_val;
+        return ret;
+    }
+    if ((ins_word & 0x0000707f) == 0x00002027) {            // fsw
+        ret.mem_wr_addr = ins_FormatS.addr; ret.mem_wr_size = 32; ret.mem_wr_value = xr[XR_F + ins_FormatS.rs2];
+        return ret;
+    }
+    if ((ins_word & 0x06000073) == 0x00000043) {
+        // fmadd.s, fmsub.s, fnmsub.s, fnmadd.s: a product and a sum, each rounded (a real one
+        // rounds once). Three registers, so not for the fast step: compilers are told not to
+        // make them (-ffp-contract=off) and they are here for code that asks by name.
+        precise float fm_a = asfloat(xr[XR_F + ins_FormatR.rs1]);
+        precise float fm_b = asfloat(xr[XR_F + ins_FormatR.rs2]);
+        precise float fm_c = asfloat(xr[XR_F + ins_FormatR.rs3]);
+        precise float fm_p = fm_a * fm_b;
+        uint fm_kind = (ins_word >> 2) & 3;
+        precise float fm_r = fm_kind == 0 ? fm_p + fm_c : fm_kind == 1 ? fm_p - fm_c : fm_kind == 2 ? fm_c - fm_p : (-fm_p) - fm_c;
+        uint fm_bits = asuint(fm_r);
+        ret.write_reg = XR_F + ins_FormatR.rd;
+        ret.write_val = (fm_bits & 0x7fffffff) > 0x7f800000 ? 0x7fc00000 : fm_bits;
+        return ret;
+    }
+    if ((ins_word & 0x0000007f) == 0x00000053) {
+        bool fp_to_float, fp_ok;
+        bool fp_int_source = ((ins_word >> 25) & 0x68) == 0x68;   // fcvt.s.w and fmv.w.x take an integer
+        uint fp_val = fp_exec(ins_word, xr[ins_FormatR.rs1 + (fp_int_source ? 0 : XR_F)], xr[XR_F + ins_FormatR.rs2], fp_to_float, fp_ok);
+        if (fp_ok) {
+            // (an integer result for x0 goes nowhere: write_reg 0 means no write)
+            ret.write_reg = fp_to_float ? XR_F + ins_FormatR.rd : ins_FormatR.rd;
+            ret.write_val = fp_val;
+            return ret;
+        }
+    }
+#endif
 
     if ((ins_word & 0x00000073) == 0x00000073) {
         // could be CSR instruction
@@ -877,8 +990,17 @@ bool fast_exec_l1(L1P uint w) {
     uint rd = (w >> 7) & 0x1f;
     // rs1 and rs2 sit at the same bits in every format, so both registers are read before the
     // opcode is known: the reads overlap the decode instead of following it.
+#ifdef FPU
+    // with the F extension either may be a float register: both operands of opcode 0x53 (but
+    // for an integer being converted or moved), and what fsw stores
+    bool fp_op = opc == 0x53;
+    uint rs1v = xr[((w >> 15) & 0x1f) + ((fp_op && ((w >> 25) & 0x68) != 0x68) ? XR_F : 0)];
+    uint rs2v = xr[((w >> 20) & 0x1f) + ((fp_op || opc == 0x27) ? XR_F : 0)];
+    bool to_f = false;
+#else
     uint rs1v = xreg((w >> 15) & 0x1f);
     uint rs2v = xreg((w >> 20) & 0x1f);
+#endif
     uint pc = cpu.pc;
     uint npc = pc + 4;
     uint val = 0;
@@ -907,7 +1029,12 @@ bool fast_exec_l1(L1P uint w) {
         bool shift = (f3 & 3) == 1;
         ok = low_ok && (reg ? (f7 == 0 || (f7 == 0x20 && (f3 == 0 || f3 == 5)))
                             : (!shift || f7 == 0 || (f7 == 0x20 && f3 == 5)));
+#ifdef FPU
+    } else if ((opc & 0x7b) == 0x03) {                          // loads from RAM, and flw
+        to_f = opc == 0x07;
+#else
     } else if (opc == 0x03) {                                   // loads from RAM, translation available
+#endif
         FormatI i = parse_FormatI(w);
         uint va = rs1v + i.imm;
         FAST_XL(xl_ident_d, MMU_ACCESS_READ, tlb_r_vpn, tlb_r_page, va, t_ok, pa)
@@ -916,14 +1043,23 @@ bool fast_exec_l1(L1P uint w) {
         // straddles two words, which is rare and would double the code on this path
         uint off = pa & 0x3;
         [branch]
+#ifdef FPU
+        if (va != 0 && (to_f ? f3 == 2 : (f3 < 3 || f3 == 4 || f3 == 5)) && t_ok && (pa & 0x80000000) != 0 &&
+            off + (1u << (f3 & 3)) <= 4 && (pa & 0x7ffffffc) < RAM_MAX) {
+#else
         if (va != 0 && (f3 < 3 || f3 == 4 || f3 == 5) && t_ok && (pa & 0x80000000) != 0 &&
             off + (1u << (f3 & 3)) <= 4 && (pa & 0x7ffffffc) < RAM_MAX) {
+#endif
             uint v = mem_get_cached_or_tex(pa & 0x7ffffffc) >> (off * 8);
             val = f3 == 0 ? sign_extend(v & 0xff, 8) : f3 == 1 ? sign_extend(v & 0xffff, 16) :
                   f3 == 2 ? v : f3 == 4 ? v & 0xff : v & 0xffff;
             ok = true;
         }
+#ifdef FPU
+    } else if ((w & 0x78) == 0x20) {                            // sb/sh/sw to RAM, and fsw
+#else
     } else if ((w & 0x7c) == 0x20) {                            // sb/sh/sw to RAM, translation available
+#endif
         FormatS s;
         s.rs2 = (w >> 20) & 0x1f;
         s.addr = rs1v + ((w & 0x80000000 ? 0xfffff000 : 0) | ((w >> 20) & 0xfe0) | ((w >> 7) & 0x1f));
@@ -934,7 +1070,11 @@ bool fast_exec_l1(L1P uint w) {
         // cache is full). A store that straddles two words takes the general path.
         uint s_off = pa & 0x3;
         [branch]
+#ifdef FPU
+        if (low_ok && (opc == 0x27 ? f3 == 2 : f3 < 3) && t_ok && (pa & 0x80000000) != 0 && s_off + (1u << f3) <= 4) {
+#else
         if (low_ok && f3 < 3 && t_ok && (pa & 0x80000000) != 0 && s_off + (1u << f3) <= 4) {
+#endif
             uint s_mask = (f3 == 2 ? 0xffffffff : f3 == 1 ? 0xffff : 0xff) << (s_off * 8);
             mem_set_ram(pa & 0x7ffffffc, rs2v << (s_off * 8), s_mask);
             ok = true;
@@ -991,6 +1131,10 @@ bool fast_exec_l1(L1P uint w) {
             val = is_sc ? (sc_ok ? 0 : 1) : old;
             ok = true;
         }
+#ifdef FPU
+    } else if (fp_op) {
+        val = fp_exec(w, rs1v, rs2v, to_f, ok);
+#endif
     } else {
         [forcecase]
         switch (opc) {
@@ -1022,7 +1166,11 @@ bool fast_exec_l1(L1P uint w) {
     if (!ok) {
         return false;
     }
+#ifdef FPU
+    xr[to_f ? XR_F + rd : (wr && rd != 0) ? rd : 32] = val;
+#else
     xr[(wr && rd != 0) ? rd : 32] = val;   // branch-free: discarded writes go to the scratch slot
+#endif
     cpu.debug_last_ins = w;
     // cpu.clint.mtime and cpu.debug_do_tick already hold this pass's values: the first tick of
     // every pass takes the general path (irq_quiet starts false), which sets both.

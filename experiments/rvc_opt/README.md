@@ -16,6 +16,7 @@ Only these remain in the source:
 | `NO_PAGING` | machine without an MMU (below) |
 | `M_MODE_ONLY` | machine mode only, includes `NO_PAGING` (below) |
 | `NO_DOUBLES` | timer value from the host instead of double math (needed on D3D12) |
+| `FPU` | single-precision float instructions, the F extension (`docs/fpu.md`): the harness sets it for the full machine |
 | `PROFILE` | `PROF()` event counters through a UAV |
 | `L1_TABLE_BITS`, `L1_WAYS`, `TLB2_N`, `RAM_TILE_BITS` | cache, TLB and layout sizes |
 | `L1_LOCAL`, `L1_STATIC` | the big arrays as locals of the pass (23 below): on with fxc2, off with FXC |

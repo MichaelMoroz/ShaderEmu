@@ -152,6 +152,9 @@
                     decode();
                     time_prepare();
                     xreg_load();
+#ifdef FPU
+                    fp_state_load();
+#endif
 #ifndef NO_PAGING
                     tlb_state_load();
 #endif
@@ -178,6 +181,10 @@
 #ifndef NO_PAGING
                 uint4 tlb_texel;
                 if (!_Init && tlb_state_texel(pos, tlb_texel)) return tlb_texel;
+#endif
+#ifdef FPU
+                uint4 fp_texel;
+                if (!_Init && fp_state_texel(pos, fp_texel)) return fp_texel;
 #endif
                 return encode(pos);
             }
