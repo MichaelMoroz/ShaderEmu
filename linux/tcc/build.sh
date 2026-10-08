@@ -18,6 +18,8 @@ if [ ! -d "$SRC" ]; then
     git clone -q -b riscv32 https://github.com/jrrk2/tinycc "$SRC"
 fi
 git -C "$SRC" log --oneline -1
+# its float instructions as this machine has them: single precision only (docs/fpu.md)
+python3 "$HERE/fpu_hook.py" "$SRC"
 
 # 1. a compiler that runs here and makes code for the machine: it builds TinyCC's own runtime
 echo "== cross compiler, and the runtime"
@@ -30,8 +32,9 @@ echo "== the guest's compiler"
 mkdir -p "$WORK/build/tcc-guest" && cd "$WORK/build/tcc-guest"
 "$SRC/configure" --cpu=riscv32 --triplet=riscv32-linux-musl --config-musl $PATHS \
     --cc=rv32-cc --ar=riscv32-linux-ar --extra-cflags="-O2" > configure.log
-# (a header the build makes by running a small program: taken from the build that ran here)
-cp "$WORK/build/tcc-cross/tccdefs_.h" . && touch tccdefs_.h
+# (a header the build makes by running a small program: both taken from the build that ran
+# here, the program first, so that the header is the newer and is not made again)
+cp "$WORK/build/tcc-cross/c2str.exe" . && cp "$WORK/build/tcc-cross/tccdefs_.h" . && touch tccdefs_.h
 make tcc > make.log 2>&1 || { tail -20 make.log; exit 1; }
 mkdir -p "$ROOT/usr/bin" "$ROOT/usr/share"
 riscv32-linux-strip -o "$ROOT/usr/bin/tcc" tcc
@@ -57,7 +60,8 @@ cp "$MW/src/lib/libnano-X.a" "$STAGE/usr/lib/" 2>/dev/null || cp "$MW/lib/libnan
 cp "$MW/include/nano-X.h" "$MW/include/mwtypes.h" "$MW/include/mwconfig.h" "$STAGE/usr/include/" 2>/dev/null || true
 mkdir -p "$STAGE/usr/include/GLES"
 cp "$GL"/include/GLES/*.h "$STAGE/usr/include/GLES/"
-rv32-cc -O2 -Wall -c -I"$GL/include" -I"$MW/include" "$GL/gles.c" -o "$WORK/build/gles.o"
+# (the library's float build: what a program here hands it is floats)
+rv32-cc -O2 -Wall -c -DSEGL_FLOAT -I"$GL/include" -I"$MW/include" "$GL/gles.c" -o "$WORK/build/gles.o"
 rm -f "$STAGE/usr/lib/libgles.a"
 riscv32-linux-ar rcs "$STAGE/usr/lib/libgles.a" "$WORK/build/gles.o"
 riscv32-linux-strip -g "$STAGE"/usr/lib/*.a "$STAGE"/usr/lib/*.o 2>/dev/null || true

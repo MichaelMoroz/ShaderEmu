@@ -2,66 +2,65 @@
  * Home: a small place to walk around in, in the spirit of a VRChat home world. Compile with
  *     cc /usr/share/example-home.c -o home
  * Arrows or W A S D walk and turn; Q and E step sideways. The world is a list of boxes, made
- * into quads once; a frame is those quads handed to the GPU, and it is only drawn again when
- * you move, so standing still costs nothing.
+ * into quads once, and drawn again only when you move. Numbers are floats.
  */
+#include <math.h>
 #include <stdlib.h>
 #define MWINCLUDECOLORS
 #include <nano-X.h>
 #include <GLES/segl.h>
 
-#define F(x) ((GLfixed)((x) * 65536))
 #define MAX_BOXES 96
 
 /* a box: its centre, its size, its colour. Metres; y is up. */
-static const struct box { GLfixed x, y, z, w, h, d; unsigned char r, g, b; } boxes[] = {
+static const struct box { GLfloat x, y, z, w, h, d; unsigned char r, g, b; } boxes[] = {
 	/* ground, and the terrace */
-	{ F(0), F(-0.1), F(0), F(60), F(0.2), F(60), 74, 122, 74 },
-	{ F(0), F(0.05), F(0), F(14), F(0.1), F(12), 176, 164, 150 },
-	{ F(0), F(0.12), F(1), F(5), F(0.04), F(4), 150, 60, 60 },		/* rug */
+	{ 0.0f, -0.1f, 0.0f, 60.0f, 0.2f, 60.0f, 74, 122, 74 },
+	{ 0.0f, 0.05f, 0.0f, 14.0f, 0.1f, 12.0f, 176, 164, 150 },
+	{ 0.0f, 0.12f, 1.0f, 5.0f, 0.04f, 4.0f, 150, 60, 60 },		/* rug */
 	/* the house: back wall, sides, a roof on four posts */
-	{ F(0), F(1.6), F(-6), F(14), F(3.2), F(0.3), 226, 220, 208 },
-	{ F(-7), F(1.6), F(-3), F(0.3), F(3.2), F(6), 226, 220, 208 },
-	{ F(7), F(1.6), F(-3), F(0.3), F(3.2), F(6), 226, 220, 208 },
-	{ F(0), F(3.3), F(-2), F(15), F(0.25), F(9), 120, 84, 60 },
-	{ F(-6.5), F(1.6), F(2.2), F(0.3), F(3.2), F(0.3), 120, 84, 60 },
-	{ F(6.5), F(1.6), F(2.2), F(0.3), F(3.2), F(0.3), 120, 84, 60 },
+	{ 0.0f, 1.6f, -6.0f, 14.0f, 3.2f, 0.3f, 226, 220, 208 },
+	{ -7.0f, 1.6f, -3.0f, 0.3f, 3.2f, 6.0f, 226, 220, 208 },
+	{ 7.0f, 1.6f, -3.0f, 0.3f, 3.2f, 6.0f, 226, 220, 208 },
+	{ 0.0f, 3.3f, -2.0f, 15.0f, 0.25f, 9.0f, 120, 84, 60 },
+	{ -6.5f, 1.6f, 2.2f, 0.3f, 3.2f, 0.3f, 120, 84, 60 },
+	{ 6.5f, 1.6f, 2.2f, 0.3f, 3.2f, 0.3f, 120, 84, 60 },
 	/* a mirror on the back wall, a screen beside it */
-	{ F(-3), F(1.7), F(-5.8), F(3.2), F(2.2), F(0.08), 170, 205, 225 },
-	{ F(-3), F(1.7), F(-5.82), F(3.4), F(2.4), F(0.06), 60, 60, 66 },
-	{ F(3.2), F(1.9), F(-5.8), F(2.6), F(1.5), F(0.08), 30, 40, 70 },
+	{ -3.0f, 1.7f, -5.8f, 3.2f, 2.2f, 0.08f, 170, 205, 225 },
+	{ -3.0f, 1.7f, -5.82f, 3.4f, 2.4f, 0.06f, 60, 60, 66 },
+	{ 3.2f, 1.9f, -5.8f, 2.6f, 1.5f, 0.08f, 30, 40, 70 },
 	/* a sofa: seat, back, two arms; a low table */
-	{ F(0), F(0.45), F(-1.2), F(3.2), F(0.5), F(1.1), 70, 90, 140 },
-	{ F(0), F(0.95), F(-1.65), F(3.2), F(0.6), F(0.3), 62, 80, 126 },
-	{ F(-1.75), F(0.6), F(-1.2), F(0.3), F(0.8), F(1.1), 62, 80, 126 },
-	{ F(1.75), F(0.6), F(-1.2), F(0.3), F(0.8), F(1.1), 62, 80, 126 },
-	{ F(0), F(0.4), F(0.9), F(1.6), F(0.08), F(0.8), 110, 76, 50 },
-	{ F(0), F(0.2), F(0.9), F(0.2), F(0.4), F(0.2), 60, 60, 66 },
+	{ 0.0f, 0.45f, -1.2f, 3.2f, 0.5f, 1.1f, 70, 90, 140 },
+	{ 0.0f, 0.95f, -1.65f, 3.2f, 0.6f, 0.3f, 62, 80, 126 },
+	{ -1.75f, 0.6f, -1.2f, 0.3f, 0.8f, 1.1f, 62, 80, 126 },
+	{ 1.75f, 0.6f, -1.2f, 0.3f, 0.8f, 1.1f, 62, 80, 126 },
+	{ 0.0f, 0.4f, 0.9f, 1.6f, 0.08f, 0.8f, 110, 76, 50 },
+	{ 0.0f, 0.2f, 0.9f, 0.2f, 0.4f, 0.2f, 60, 60, 66 },
 	/* lamps */
-	{ F(-5.5), F(1.0), F(1.5), F(0.1), F(2.0), F(0.1), 60, 60, 66 },
-	{ F(-5.5), F(2.1), F(1.5), F(0.5), F(0.4), F(0.5), 255, 236, 180 },
-	{ F(5.5), F(1.0), F(1.5), F(0.1), F(2.0), F(0.1), 60, 60, 66 },
-	{ F(5.5), F(2.1), F(1.5), F(0.5), F(0.4), F(0.5), 255, 236, 180 },
+	{ -5.5f, 1.0f, 1.5f, 0.1f, 2.0f, 0.1f, 60, 60, 66 },
+	{ -5.5f, 2.1f, 1.5f, 0.5f, 0.4f, 0.5f, 255, 236, 180 },
+	{ 5.5f, 1.0f, 1.5f, 0.1f, 2.0f, 0.1f, 60, 60, 66 },
+	{ 5.5f, 2.1f, 1.5f, 0.5f, 0.4f, 0.5f, 255, 236, 180 },
 	/* trees: a trunk and two crowns each */
-	{ F(-12), F(1.2), F(6), F(0.5), F(2.4), F(0.5), 96, 66, 44 },
-	{ F(-12), F(3.2), F(6), F(2.6), F(1.8), F(2.6), 46, 110, 60 },
-	{ F(-12), F(4.6), F(6), F(1.6), F(1.2), F(1.6), 56, 128, 70 },
-	{ F(11), F(1.2), F(9), F(0.5), F(2.4), F(0.5), 96, 66, 44 },
-	{ F(11), F(3.2), F(9), F(2.6), F(1.8), F(2.6), 46, 110, 60 },
-	{ F(11), F(4.6), F(9), F(1.6), F(1.2), F(1.6), 56, 128, 70 },
-	{ F(3), F(1.2), F(16), F(0.5), F(2.4), F(0.5), 96, 66, 44 },
-	{ F(3), F(3.4), F(16), F(3.0), F(2.2), F(3.0), 46, 110, 60 },
+	{ -12.0f, 1.2f, 6.0f, 0.5f, 2.4f, 0.5f, 96, 66, 44 },
+	{ -12.0f, 3.2f, 6.0f, 2.6f, 1.8f, 2.6f, 46, 110, 60 },
+	{ -12.0f, 4.6f, 6.0f, 1.6f, 1.2f, 1.6f, 56, 128, 70 },
+	{ 11.0f, 1.2f, 9.0f, 0.5f, 2.4f, 0.5f, 96, 66, 44 },
+	{ 11.0f, 3.2f, 9.0f, 2.6f, 1.8f, 2.6f, 46, 110, 60 },
+	{ 11.0f, 4.6f, 9.0f, 1.6f, 1.2f, 1.6f, 56, 128, 70 },
+	{ 3.0f, 1.2f, 16.0f, 0.5f, 2.4f, 0.5f, 96, 66, 44 },
+	{ 3.0f, 3.4f, 16.0f, 3.0f, 2.2f, 3.0f, 46, 110, 60 },
 	/* a path, a pond, hills at the horizon */
-	{ F(0), F(0.02), F(12), F(2), F(0.04), F(14), 190, 176, 150 },
-	{ F(-9), F(0.02), F(13), F(6), F(0.04), F(4), 70, 130, 190 },
-	{ F(-20), F(2), F(-24), F(24), F(6), F(8), 88, 120, 96 },
-	{ F(14), F(3), F(-26), F(30), F(8), F(8), 80, 112, 90 },
-	{ F(28), F(2.5), F(4), F(8), F(7), F(30), 86, 118, 94 },
-	{ F(-28), F(2.5), F(6), F(8), F(7), F(34), 84, 116, 92 },
+	{ 0.0f, 0.02f, 12.0f, 2.0f, 0.04f, 14.0f, 190, 176, 150 },
+	{ -9.0f, 0.02f, 13.0f, 6.0f, 0.04f, 4.0f, 70, 130, 190 },
+	{ -20.0f, 2.0f, -24.0f, 24.0f, 6.0f, 8.0f, 88, 120, 96 },
+	{ 14.0f, 3.0f, -26.0f, 30.0f, 8.0f, 8.0f, 80, 112, 90 },
+	{ 28.0f, 2.5f, 4.0f, 8.0f, 7.0f, 30.0f, 86, 118, 94 },
+	{ -28.0f, 2.5f, 6.0f, 8.0f, 7.0f, 34.0f, 84, 116, 92 },
 };
 #define BOXES ((int)(sizeof boxes / sizeof boxes[0]))
 
-static GLfixed quads[MAX_BOXES * 24 * 3];	/* six faces a box, four corners a face */
+static GLfloat quads[MAX_BOXES * 24 * 3];	/* six faces a box, four corners a face */
 
 /* A box's faces, in the order sides along x, sides along z, top and bottom: each pair gets its
  * own shade of the colour, which is all the lighting there is. */
@@ -73,52 +72,37 @@ build(void)
 		{ { -1, -1, 1 }, { 1, -1, 1 }, { 1, 1, 1 }, { -1, 1, 1 } },     { { 1, -1, -1 }, { -1, -1, -1 }, { -1, 1, -1 }, { 1, 1, -1 } },
 		{ { -1, 1, 1 }, { 1, 1, 1 }, { 1, 1, -1 }, { -1, 1, -1 } },     { { -1, -1, -1 }, { 1, -1, -1 }, { 1, -1, 1 }, { -1, -1, 1 } },
 	};
-	GLfixed *q = quads;
+	GLfloat *q = quads;
 	int i, f, c;
 
 	for (i = 0; i < BOXES; i++)
 		for (f = 0; f < 6; f++)
 			for (c = 0; c < 4; c++) {
-				*q++ = boxes[i].x + face[f][c][0] * (boxes[i].w / 2);
-				*q++ = boxes[i].y + face[f][c][1] * (boxes[i].h / 2);
-				*q++ = boxes[i].z + face[f][c][2] * (boxes[i].d / 2);
+				*q++ = boxes[i].x + (GLfloat)face[f][c][0] * (boxes[i].w * 0.5f);
+				*q++ = boxes[i].y + (GLfloat)face[f][c][1] * (boxes[i].h * 0.5f);
+				*q++ = boxes[i].z + (GLfloat)face[f][c][2] * (boxes[i].d * 0.5f);
 			}
 }
 
-/* The sine of an angle in degrees, 16.16 both: a few terms of its series are enough here. */
-static GLfixed
-sine(int degrees)
-{
-	long long d = ((degrees % 360) + 360) % 360, x, x2, s;
-	int negative = d >= 180;
-
-	if (negative)
-		d -= 180;
-	if (d > 90)
-		d = 180 - d;
-	x = d * 1144;				/* radians: pi / 180 is 1144 / 65536 */
-	x2 = x * x >> 16;
-	s = x * (65536 - (x2 * (10923 - (x2 * 546 >> 16)) >> 16)) >> 16;
-	return (GLfixed)(negative ? -s : s);
-}
-
 static void
-draw(GLfixed x, GLfixed z, int yaw)
+draw(GLfloat x, GLfloat z, int yaw)
 {
 	static const int shade[3] = { 205, 160, 255 };	/* sides along x, along z, top */
 	int width, height, i, pair;
+	GLfloat tall;
 
 	seglSize(&width, &height);
 	glViewport(0, 0, width, height);
 	glMatrixMode(GL_PROJECTION);
 	glLoadIdentity();
-	glFrustumx(-F(0.1), F(0.1), -F(0.1) * height / width, F(0.1) * height / width, F(0.1), F(120));
+	tall = 0.1f * (GLfloat)height / (GLfloat)width;
+	glFrustumf(-0.1f, 0.1f, -tall, tall, 0.1f, 120.0f);
 	glMatrixMode(GL_MODELVIEW);
 	glLoadIdentity();
-	glRotatex(yaw * F(1), 0, F(1), 0);
-	glTranslatex(-x, -F(1.6), -z);		/* eyes 1.6 m up */
+	glRotatef((GLfloat)yaw, 0.0f, 1.0f, 0.0f);
+	glTranslatef(-x, -1.6f, -z);		/* eyes 1.6 m up */
 
-	glClearColorx(F(0.55), F(0.74), F(0.93), F(1));
+	glClearColor(0.55f, 0.74f, 0.93f, 1.0f);
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 	for (i = 0; i < BOXES; i++)
 		for (pair = 0; pair < 3; pair++) {
@@ -133,7 +117,7 @@ main(void)
 {
 	GR_WINDOW_ID window;
 	GR_EVENT event;
-	GLfixed x = 0, z = F(7), step = F(0.25);
+	GLfloat x = 0.0f, z = 7.0f, step = 0.25f;
 	int yaw = 0, moved = 1;
 
 	if (GrOpen() < 0)
@@ -150,7 +134,7 @@ main(void)
 	build();
 	glEnable(GL_DEPTH_TEST);
 	glEnableClientState(GL_VERTEX_ARRAY);
-	glVertexPointer(3, GL_FIXED, 0, quads);
+	glVertexPointer(3, GL_FLOAT, 0, quads);
 
 	for (;;) {
 		if (moved)
@@ -163,7 +147,7 @@ main(void)
 			moved = 1;
 		if (event.type == GR_EVENT_TYPE_KEY_DOWN) {
 			/* facing yaw, forward is (sin yaw, -cos yaw) on the ground */
-			GLfixed fx = (GLfixed)((long long)sine(yaw) * step >> 16), fz = -(GLfixed)((long long)sine(yaw + 90) * step >> 16);
+			GLfloat turn = (GLfloat)yaw * 0.017453292f, fx = sinf(turn) * step, fz = -cosf(turn) * step;
 
 			moved = 1;
 			switch (event.keystroke.ch) {

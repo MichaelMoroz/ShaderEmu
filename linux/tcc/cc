@@ -3,4 +3,5 @@
 #   cc cube.c -o cube
 # Headers and libraries are unpacked the first time: they live in the ROM as one archive.
 [ -f /usr/lib/libc.a ] || tar -xf /usr/share/cc-sysroot.tar -C /
-exec tcc -static "$@" -lgles -lnano-X
+# -mfpu: float arithmetic as the machine's instructions (a double is still a library call)
+exec tcc -static -mfpu "$@" -lgles -lnano-X

@@ -1,24 +1,21 @@
 /*
  * A spinning cube: the smallest OpenGL program for this machine. Compile it here with
  *     cc /usr/share/example-cube.c -o cube
- * Numbers are 16.16 fixed point (the machine has no floating point unit); F() makes one at
- * compile time. The GPU does the matrices and the pixels; this program only says what to draw.
+ * Numbers are floats: write constants with an f (a plain 0.5 is a double, a library call here).
  */
 #include <stdlib.h>
 #define MWINCLUDECOLORS
 #include <nano-X.h>
 #include <GLES/segl.h>
 
-#define F(x) ((GLfixed)((x) * 65536))
-
 /* four corners a face, six faces */
-static const GLfixed corners[] = {
-	F(-1), F(-1), F(1),   F(1), F(-1), F(1),    F(1), F(1), F(1),     F(-1), F(1), F(1),	/* front */
-	F(1), F(-1), F(-1),   F(-1), F(-1), F(-1),  F(-1), F(1), F(-1),   F(1), F(1), F(-1),	/* back */
-	F(-1), F(-1), F(-1),  F(-1), F(-1), F(1),   F(-1), F(1), F(1),    F(-1), F(1), F(-1),	/* left */
-	F(1), F(-1), F(1),    F(1), F(-1), F(-1),   F(1), F(1), F(-1),    F(1), F(1), F(1),	/* right */
-	F(-1), F(1), F(1),    F(1), F(1), F(1),     F(1), F(1), F(-1),    F(-1), F(1), F(-1),	/* top */
-	F(-1), F(-1), F(-1),  F(1), F(-1), F(-1),   F(1), F(-1), F(1),    F(-1), F(-1), F(1),	/* bottom */
+static const GLfloat corners[] = {
+	-1, -1, 1,   1, -1, 1,    1, 1, 1,     -1, 1, 1,	/* front */
+	1, -1, -1,   -1, -1, -1,  -1, 1, -1,   1, 1, -1,	/* back */
+	-1, -1, -1,  -1, -1, 1,   -1, 1, 1,    -1, 1, -1,	/* left */
+	1, -1, 1,    1, -1, -1,   1, 1, -1,    1, 1, 1,		/* right */
+	-1, 1, 1,    1, 1, 1,     1, 1, -1,    -1, 1, -1,	/* top */
+	-1, -1, -1,  1, -1, -1,   1, -1, 1,    -1, -1, 1,	/* bottom */
 };
 static const unsigned char colours[6][3] = {
 	{ 230, 70, 60 }, { 60, 170, 90 }, { 70, 110, 230 }, { 240, 200, 60 }, { 200, 90, 220 }, { 70, 200, 220 },
@@ -29,7 +26,8 @@ main(void)
 {
 	GR_WINDOW_ID window;
 	GR_EVENT event;
-	int width, height, face, angle = 0;
+	int width, height, face;
+	GLfloat angle = 0, tall;
 
 	if (GrOpen() < 0)
 		return 1;
@@ -44,8 +42,8 @@ main(void)
 
 	glEnable(GL_DEPTH_TEST);
 	glEnableClientState(GL_VERTEX_ARRAY);
-	glVertexPointer(3, GL_FIXED, 0, corners);
-	glClearColorx(F(0.05), F(0.06), F(0.10), F(1));
+	glVertexPointer(3, GL_FLOAT, 0, corners);
+	glClearColor(0.05f, 0.06f, 0.10f, 1.0f);
 	for (;;) {
 		/* 30 frames a second is plenty, and leaves the processor to other programs */
 		GrGetNextEventTimeout(&event, 33);
@@ -53,16 +51,19 @@ main(void)
 			break;
 
 		seglSize(&width, &height);
+		tall = (GLfloat)height / (GLfloat)width;
 		glViewport(0, 0, width, height);
 		glMatrixMode(GL_PROJECTION);
 		glLoadIdentity();
-		glFrustumx(-F(1), F(1), -F(1) * height / width, F(1) * height / width, F(2), F(40));
+		glFrustumf(-1.0f, 1.0f, -tall, tall, 2.0f, 40.0f);
 		glMatrixMode(GL_MODELVIEW);
 		glLoadIdentity();
-		glTranslatex(0, 0, -F(6));
-		glRotatex(angle * F(1), F(1), 0, 0);
-		glRotatex(angle * F(1.7), 0, F(1), 0);
-		angle = (angle + 2) % 3600;
+		glTranslatef(0.0f, 0.0f, -6.0f);
+		glRotatef(angle, 1.0f, 0.0f, 0.0f);
+		glRotatef(angle * 1.7f, 0.0f, 1.0f, 0.0f);
+		angle += 2.0f;
+		if (angle >= 3600.0f)
+			angle -= 3600.0f;
 
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 		for (face = 0; face < 6; face++) {
