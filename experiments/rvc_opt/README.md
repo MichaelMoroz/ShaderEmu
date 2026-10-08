@@ -119,6 +119,17 @@ pass-local (`static`), never stored in the texture.
     (73,669,730 instructions, machine mode): 4.18M IPS against 3.96M to 4.13M without, same
     final state. Under FXC the partial products remain.
 
+25. **The fast loop is left where a thing is found out** (`cpu.h`, `fast_run`): the step used
+    to be a function returning success, and the loop tested that, the budget and the stall
+    flag on its way round. In D3D11 bytecode a return value is a flag, so every instruction
+    paid for writing it, copying it into the caller's, testing it twice, and keeping
+    `pre_valid` and the stall count up to date: 6 branches and some 20 other operations a
+    turn where DXC's arbitrary control flow has 4 branches. The fetch and the step are now
+    written into the loop, and each way out is a `break` at the place that decides it;
+    `pre_valid` is set on the one path that needs it and the stall count after the loop. Our
+    raytracer's tick pass on D3D11 (fxc2): 0.444 ms to 0.365 ms for 2,048 instructions; DXC on
+    D3D12 0.354 to 0.348. Same state hash on both.
+
 With 22 and 23, D3D11, bytecode from fxc2, same machine and the same state hash in each column
 (emulation is unchanged; only the TLB's bookkeeping texels differ from before 22):
 

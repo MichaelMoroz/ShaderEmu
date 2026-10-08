@@ -235,11 +235,20 @@ A cold boot to the `/ #` prompt takes about 80 s on an RTX 5090 with upstream on
   minutes), and the shader switches on `L1_LOCAL` and the one-instruction MULH when `__FXC2__`
   is defined. The banner says which compiler was loaded, and the cache keeps their blobs apart.
   Delete `bin\d3dcompiler_47.dll` to compile with Microsoft's FXC again.
-- Upstream rvc's own shader does not compile with fxc2 (a syntax error in its preprocessed
-  source): `--d3d11` without `--rvc`, and `perf_test.ps1` without `-Rvc`, need FXC.
-- fxc2 computes `float - uint` wrongly (it negates the unsigned value first: 25.18 - 25u came
-  out as 4294967296). Write the cast: `at - (float2)cell`. The harness's state hashes do not
-  see such a thing in a shader that only draws; `Terminal.shader` had one.
+- In D3D11 bytecode a function's return value is a flag that is written, copied and tested.
+  In the fast loop, leave with `break` from the place that finds a thing out instead of
+  returning a bool to test (`fast_run` in `cpu.h`): that was 18% of the tick pass.
+- `RVC12_DXBC=1` with `--dxc` runs the D3D12 backend on bytecode from `d3dcompiler_47.dll`
+  (fxc2) instead of DXC's. Its timings repeat within 0.002 ms where D3D11's wander by 0.015,
+  so compare compiler changes there first. The same bytecode is about 10% slower on D3D11.
+- Both backends commit in bands now; a state hash taken without them needs `--no-bands`.
+- An array of scalars declared one component wide in the bytecode (as FXC does) ran 3.5%
+  slower than four wide; fxc2 keeps four.
+- Upstream rvc's own shader compiles with the fxc2 in `tools\fxc2` (older builds had a syntax
+  error on its `4294967296.0l`), but runs at 60% of FXC's speed there; why is not known.
+- fxc2 before 8 October 2026 computed `float - uint` wrongly (it negated the unsigned value
+  first: 25.18 - 25u came out as 4294967296). The harness's state hashes do not see such a
+  thing in a shader that only draws; `Terminal.shader` had one, and keeps its explicit cast.
 - Unity compiles with fxc2 through an overlay copy of the editor (FXC2's
   `scripts\unity-overlay.ps1`, with `-Dll bin\unity\D3DCompiler_47.dll` and
   `fxc2_d3dcompiler.dll` copied beside it). Unity preprocesses shaders itself, so

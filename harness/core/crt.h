@@ -29,7 +29,9 @@ public:
     void clear(ID3D11DeviceContext* ctx);
     // Overwrites both buffers with tightly packed rows (row 0 = top).
     void load(ID3D11DeviceContext* ctx, const void* data, UINT rowPitch);
-    void runZone(Gpu& gpu, GpuPass& pass, Material& mat, const UpdateZone& zone);
+    // `vertices` is 6 for the zone's quad; a pass whose vertex shader places quads of its own
+    // (the banded commit) asks for more.
+    void runZone(Gpu& gpu, GpuPass& pass, Material& mat, const UpdateZone& zone, UINT vertices = 6);
 
     ID3D11Texture2D* current() const { return tex_[cur_].Get(); }
     ID3D11ShaderResourceView* currentSRV() const { return srv_[cur_].Get(); }

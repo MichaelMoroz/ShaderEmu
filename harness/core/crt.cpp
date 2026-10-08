@@ -39,7 +39,7 @@ void CustomRenderTexture::load(ID3D11DeviceContext* ctx, const void* data, UINT 
     for (int i = 0; i < 2; ++i) ctx->UpdateSubresource(tex_[i].Get(), 0, nullptr, data, rowPitch, 0);
 }
 
-void CustomRenderTexture::runZone(Gpu& gpu, GpuPass& pass, Material& mat, const UpdateZone& z) {
+void CustomRenderTexture::runZone(Gpu& gpu, GpuPass& pass, Material& mat, const UpdateZone& z, UINT vertices) {
     ID3D11DeviceContext* ctx = gpu.ctx.Get();
 
     // Region in memory coordinates (row 0 = top), for the copy-back of partial zones.
@@ -82,7 +82,7 @@ void CustomRenderTexture::runZone(Gpu& gpu, GpuPass& pass, Material& mat, const 
     ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
     mat.bind(ctx, pass, gpu);
-    ctx->Draw(6, 0);
+    ctx->Draw(vertices, 0);
 
     ctx->OMSetRenderTargets(0, nullptr, nullptr);
     if (full) {

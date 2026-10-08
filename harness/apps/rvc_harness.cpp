@@ -84,7 +84,7 @@ struct Options {
     std::string frameLog;     // per frame, four uint32: pc, instructions, last stall, microseconds since start
     double statsAfter = -1;   // >= 0: print a STATS line for the part of the run after this many seconds
     bool noDoubles = false;
-    bool noBands = false;     // --no-bands: the commit rewrites all of RAM, as on D3D11
+    bool noBands = false;     // --no-bands: the commit rewrites all of RAM, as a CustomRenderTexture does
     bool ourKernel = false;   // the RAM image is this project's (kernel at +4 MiB, device tree at +34 MiB)
     bool sbi = false;         // compile with SBI_HLE
     bool noGpu = false;       // --no-gpu: leave out the GPU device's passes (gpu.shader)
@@ -149,7 +149,7 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
                          mmode     M_MODE_ONLY: also no supervisor/user mode or trap delegation
                          auto      (default) the smallest one the chosen image runs on
   --no-gpu             leave out the GPU device (the passes in <rvc>/gpu.shader, docs/gpu.md)
-  --no-bands           D3D12: have the commit rewrite all of RAM instead of only the bands written to
+  --no-bands           have the commit rewrite all of RAM instead of only the bands written to
   --gpu-capture FILE   save the GPU device's whole colour target as a BMP at exit
   --no-sound           leave out the sound card (<rvc>/sound.shader, docs/sound.md)
   --sound              play what the sound card mixes (the terminal mode does; other runs are silent)
@@ -602,9 +602,9 @@ int main(int argc, char** argv) {
         }
         bo.soundShader = &soundShader;
     }
-    // D3D12 keeps both state buffers, which is what lets the commit skip unwritten bands
+    // both backends keep two state buffers, which is what lets the commit skip unwritten bands
     if (opt.sbi) opt.defines.push_back("SBI_HLE");
-    if (opt.dxc && !opt.noBands) opt.defines.push_back("COMMIT_BANDS");
+    if (!opt.noBands) opt.defines.push_back("COMMIT_BANDS");
     // under DXC a local array is not zeroed at the start of every tick, a static one is
     if (opt.dxc) opt.defines.push_back("L1_LOCAL");
     bo.compile.flags = opt.fxcFlags;

@@ -18,9 +18,6 @@ so ("D3D11 + fxc2"), and the shader cache keys a blob by the compiler that made 
 with Microsoft's FXC, delete `bin\d3dcompiler_47.dll` (the next build puts it back). The D3D12
 path's preprocessing comes from the same DLL; the harness undefines `__FXC2__` for it.
 
-Two things do not work with it yet: upstream rvc's own shader (a syntax error; our
-`experiments\rvc_opt` is fine), and `float - uint`, which it computes wrongly (write the cast).
-
 Unity (and so a VRChat world's build) can use it as well: FXC2's `scripts/unity-overlay.ps1` makes
 a copy of the editor whose shader compiler is fxc2, without touching the installed one.
 
@@ -46,6 +43,34 @@ arrays under fxc2 too, `--define L1_STATIC`) runs within 1 to 2% of FXC's build.
 
 The machine these were taken on drifts by several percent from one session to the next; compare
 numbers from one session only.
+
+## Against DXC on D3D12
+
+D3D12 with DXC was the fast backend: 16% more instructions a second on the Linux bench and a
+cold boot 1.5 s shorter. Three things closed most of that (8 October 2026, same session for
+each row, `--fixed-dt 0.004`, state hashes equal between the two backends):
+
+| | D3D11 + fxc2 before | D3D11 + fxc2 | D3D12 + DXC |
+|---|---|---|---|
+| fixed cost of a frame (`--ticks 2`) | 0.37 ms | 0.091 ms | 0.091 ms |
+| Linux bench, 2,048 instructions a frame | 2,759k IPS | 3,106k IPS | 3,227k IPS |
+| the same at 16,384 | 3,187k IPS | 3,627k IPS | 3,640k IPS |
+| Linux cold boot, 21,000 frames | 16.1 s | 14.55 s | 14.21 s |
+| raytracer, tick pass for 2,048 instructions | 0.444 ms | 0.365 ms | 0.348 ms |
+
+- The D3D11 harness commits in bands now, as D3D12 did (`COMMIT_BANDS`, one quad per 4 MiB
+  band something wrote to). Rewriting all of RAM was 0.28 ms of every frame. `--no-bands`
+  turns it off on either backend; hashes taken without bands need it.
+- The fast loop leaves from where a thing is found out (item 25 in
+  `experiments/rvc_opt/README.md`).
+- fxc2 puts the code behind a test of a flag where the flag was set, when both sides of the
+  branch before it leave a constant there: what is left of `if (!step()) break;` is one test.
+
+What remains is not the bytecode. The harness can hand fxc2's bytecode to D3D12
+(`set RVC12_DXBC=1` with `--dxc`: every shader is then compiled by `d3dcompiler_47.dll`), and
+there the same tick takes 0.331 ms, less than DXC's 0.348. On D3D11 that bytecode takes 0.365:
+the driver runs it about 10% slower through that API, and its timings vary more from run to
+run (0.363 to 0.380 over six runs; D3D12's stay within 0.002).
 
 ## What the shader uses from it
 

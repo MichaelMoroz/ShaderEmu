@@ -24,6 +24,8 @@ public:
         ShaderBuildOptions bo;
         bo.verbose = opt.verbose;
         bo.settings = opt.compile;
+        for (auto& d : opt.compile.defines)
+            if (d.first == "COMMIT_BANDS") bands_ = true;
         if (!buildPasses(gpu_, shader, {"CPUTick", "Commit"}, bo, passes_, err)) return false;
         std::string gpuErr;
         if (opt.gpuShader && (!buildPasses(gpu_, *opt.gpuShader, {"GPUDraw", "GPUControl"}, bo, gpuPasses_, gpuErr) ||
@@ -94,7 +96,9 @@ public:
         crt_.runZone(gpu_, passes_[0], mat, UpdateZone{32, 4064, 64, 64, 0});
         if (timeIt) gpu_.ctx->End(tsQuery_[1].Get());
         if (!gpuPasses_.empty()) mat.setTexture("_GpuTarget", gpuSrv_.Get(), kGpuTarget, kGpuTarget);   // Commit copies it back
-        crt_.runZone(gpu_, passes_[1], mat, UpdateZone{1024, 2048, 2048, 4096, 1});
+        // With COMMIT_BANDS the vertex shader draws the state rows and the bands of RAM that changed;
+        // the buffer drawn into holds the state of two commits ago, as on D3D12.
+        crt_.runZone(gpu_, passes_[1], mat, UpdateZone{1024, 2048, 2048, 4096, 1}, bands_ ? 6 * kCommitQuads : 6);
         if (timeIt) gpu_.ctx->End(tsQuery_[2].Get());
         if (gpuPasses_.size() == 2) {
             gpuDraw(mat);
@@ -418,6 +422,7 @@ private:
     ComPtr<ID3D11Query> tsDisjoint_, tsQuery_[4];
     bool tsPending_ = false;
     double tickMs_ = -1, commitMs_ = -1, deviceMs_ = 0;
+    bool bands_ = false;   // the commit draws only the bands of RAM that changed
     MemoryView view_;
 };
 

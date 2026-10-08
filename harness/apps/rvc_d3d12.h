@@ -9,6 +9,7 @@
 
 #include <d3d12.h>
 #include <d3d12shader.h>
+#include <d3dcompiler.h>
 #include <dxcapi.h>
 #include <dxgi1_4.h>
 
@@ -249,6 +250,22 @@ void reflectDxil(StageLayout& L, ID3D12ShaderReflection* refl) {
 // Compiles preprocessed HLSL with DXC in FXC-compatibility mode and reflects it.
 std::vector<uint8_t> dxcCompile(Dxc& dxc, const std::string& text, const std::string& entry, const std::string& profile,
                                 const std::string& optFlags, StageLayout& layout) {
+    // RVC12_DXBC=1: shaders as DXBC from d3dcompiler_47.dll (fxc2 when its DLL is beside the
+    // harness), to tell the bytecode's cost from the API's
+    if (getenv("RVC12_DXBC")) {
+        ComPtr<ID3DBlob> code, errors;
+        HRESULT hr = D3DCompile(text.data(), text.size(), entry.c_str(), nullptr, nullptr, entry.c_str(),
+                                profile.compare(0, 3, "ps_") == 0 ? "ps_5_0" : "vs_5_0",
+                                D3DCOMPILE_ENABLE_BACKWARDS_COMPATIBILITY, 0, &code, &errors);
+        if (FAILED(hr))
+            die(("D3DCompile failed for " + entry + ":\n" +
+                 (errors ? std::string((const char*)errors->GetBufferPointer(), errors->GetBufferSize()).substr(0, 1500) : "")).c_str());
+        ComPtr<ID3D12ShaderReflection> refl;
+        check(D3DReflect(code->GetBufferPointer(), code->GetBufferSize(), IID_PPV_ARGS(&refl)), "D3DReflect (D3D12)");
+        reflectDxil(layout, refl.Get());
+        const uint8_t* p = (const uint8_t*)code->GetBufferPointer();
+        return std::vector<uint8_t>(p, p + code->GetBufferSize());
+    }
     std::wstring wentry = widen(entry);
     // -Gec / -HV 2016: assignment to uniforms and other FXC-era syntax the shader relies on.
     // The two defines map DX9 sampler types that DXC no longer has (declared but unused).
