@@ -379,6 +379,22 @@ and b7s2 over a scripted shell session).
 - The hash itself is a few shifts and masks; changing it moves stall counts, not per-lookup
   cost. Upstream's mixed hash stalls less than plain low bits once there is only one slice.
 
+The table above is of upstream's hash (address bits 2-8 and 11-12). The set is now bits 2-10
+xor bits 11-19. With upstream's, a frame ended on a full set with a median of 550 of the
+2,048 places taken, and in the set that overflowed the words were 512 bytes apart nine
+times in ten (`--l1-log` and `tools/l1_study.py`, which replays a run's writes through other
+designs). Frames that ended on a full set, D3D12 + DXC, same runs before and after:
+
+| Run | Upstream's hash | Xor | Instructions in such a frame |
+| --- | --- | --- | --- |
+| Tiberian Dawn, mission 3 to frame 300 | 11,040 | 5,408 | 5,624 to 8,416 |
+| Tiberian Dawn, mission 1 to frame 300 | 11,353 | 6,038 | 5,842 to 8,265 |
+| Doom, to its first figures | 5,089 | 2,488 | 3,954 to 6,309 |
+
+The game's state sums are unchanged on both backends. What the replay says is left: 16 words
+of overflow would take most of the remaining stalls (not built: the commit pass would have
+to look there too), and one texel a lookup (1,024 sets of two) doubles them.
+
 ## RAM texel layout
 
 `RAM_TILE_BITS=b` places RAM in square tiles of 2^b x 2^b texels instead of upstream's

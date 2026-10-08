@@ -8,8 +8,8 @@
 
 /* shift by two to ignore byte offset */
 // Write-cache geometry: 2^L1_SET_BITS sets per slice, L1_SLICES slices, two entries per set.
-// Upstream is 9 bits x 2 slices (1024 texels). L1_HASH_LOW picks sets from the low word
-// bits only instead of mixing in address bits 11-12.
+// Upstream is 9 bits x 2 slices (1024 texels). The set is the word's low bits xor the bits
+// above them: upstream's (bits 2-8 and 11-12) put words 512 bytes apart in one set.
 #ifndef L1_SET_BITS
 #define L1_SET_BITS 9
 #endif
@@ -18,7 +18,7 @@
 #endif
 #define L1_SETS (1 << L1_SET_BITS)
 #define L1_ENTRIES (L1_SETS * L1_SLICES)
-#define RAM_L1_ARRAY_IDX(a) (((a >> 2) & ((L1_SETS >> 2) - 1)) | (((a >> 11) & 0x3) << (L1_SET_BITS - 2)))
+#define RAM_L1_ARRAY_IDX(a) ((((a) >> 2) ^ ((a) >> (2 + L1_SET_BITS))) & (L1_SETS - 1))
 
 
 #define SHIFT_RBR 0

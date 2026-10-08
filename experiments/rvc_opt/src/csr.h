@@ -7,7 +7,7 @@
 
 
 /* shift by two to ignore byte offset */
-#define RAM_L1_ARRAY_IDX(a) (((a >> 2) & 127) | (((a >> 11) & 0x3) << 7))
+#define RAM_L1_ARRAY_IDX(a) ((((a) >> 2) ^ ((a) >> 11)) & 511)
 
 
 #define CSR_USTATUS 0x000

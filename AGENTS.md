@@ -408,9 +408,13 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
 - `rdcycle` costs a user program one instruction and counts the machine's instructions: put
   two around anything to know what it costs. `gettimeofday` is 416; the clock word at
   0x87000034 (milliseconds, a machine frame old at most) is a load.
-- Stores a power of two apart fill the write cache early: its set comes from address bits 2-8
-  and 11-12, so a field of records 64 bytes apart lands in 32 sets of four. Doom's line marks
-  did that. Keep such marks in an array of their own.
+- The write cache's set is the word's address bits 2-10 xor bits 11-19 (`RAM_L1_ARRAY_IDX`,
+  the same line in five headers), four words a set: a frame ends when a fifth word wants a
+  set, with the cache a quarter full as a rule. Upstream's (bits 2-8 and 11-12) put words
+  512 bytes apart together and ended twice as many frames. To study a change, record a run
+  with `--l1-log FILE` (D3D12) and run `python tools\l1_study.py FILE`; then count "write
+  cache full" frames with `--frame-log` and `tools\boot_profile.py`. Stalls move, so state
+  hashes change: check the guest's own sums (Tiberian Dawn's) and re-make the snapshots.
 - A 64-bit division is a library call of some 400 instructions (`__divdi3`); a 32-bit one is
   an instruction. In the fast path of anything, make the operands fit.
 - musl's `qsort` with a comparison function cost 1,500 instructions an element on 2,500

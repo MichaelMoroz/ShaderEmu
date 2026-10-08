@@ -23,6 +23,7 @@ struct BackendOptions {
     std::string dxcOpt = "-O3", dxcSm = "6_6", dxcDir;
     const SLShader* gpuShader = nullptr;   // the GPU device's passes (gpu.shader), if the machine has one
     const SLShader* soundShader = nullptr; // the sound card's mix pass (sound.shader); needs the GPU device
+    bool stateLog = false;        // D3D12 only: read the CPU's 64 x 64 state texels back every frame (--l1-log)
 };
 
 // The GPU device (docs/gpu.md): a mesh of kGpuTriangles triangles drawn into a square colour and
@@ -73,6 +74,8 @@ public:
     // The mix drawn in the frame whose row popRow() returned last: kSoundSide squared pairs of
     // floats, row 0 first. False when that frame drew none.
     virtual bool takeSound(std::vector<uint8_t>& out) { (void)out; return false; }
+    // The CPU's state texels (64 x 64, 16 bytes each) of that same frame, when stateLog is set.
+    virtual bool takeState(std::vector<uint8_t>& out) { (void)out; return false; }
     // Blocking read of the top-left w x h texels of the current state.
     virtual bool readState(UINT w, UINT h, std::vector<uint8_t>& out) = 0;
     // Time on the graphics card of the last frame run with timeIt, once it is known: the CPUTick
