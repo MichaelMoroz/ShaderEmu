@@ -990,17 +990,11 @@ bool fast_exec_l1(L1P uint w) {
     uint rd = (w >> 7) & 0x1f;
     // rs1 and rs2 sit at the same bits in every format, so both registers are read before the
     // opcode is known: the reads overlap the decode instead of following it.
-#ifdef FPU
-    // with the F extension either may be a float register: both operands of opcode 0x53 (but
-    // for an integer being converted or moved), and what fsw stores
-    bool fp_op = opc == 0x53;
-    uint rs1v = xr[((w >> 15) & 0x1f) + ((fp_op && ((w >> 25) & 0x68) != 0x68) ? XR_F : 0)];
-    uint rs2v = xr[((w >> 20) & 0x1f) + ((fp_op || opc == 0x27) ? XR_F : 0)];
-    bool to_f = false;
-#else
+    // (Float instructions read their float operands themselves, in their own branch below:
+    // choosing between the two register sets up here, and carrying flw and fsw in the integer
+    // load and store, cost every instruction 5% for the sake of the few that are float.)
     uint rs1v = xreg((w >> 15) & 0x1f);
     uint rs2v = xreg((w >> 20) & 0x1f);
-#endif
     uint pc = cpu.pc;
     uint npc = pc + 4;
     uint val = 0;
@@ -1029,12 +1023,7 @@ bool fast_exec_l1(L1P uint w) {
         bool shift = (f3 & 3) == 1;
         ok = low_ok && (reg ? (f7 == 0 || (f7 == 0x20 && (f3 == 0 || f3 == 5)))
                             : (!shift || f7 == 0 || (f7 == 0x20 && f3 == 5)));
-#ifdef FPU
-    } else if ((opc & 0x7b) == 0x03) {                          // loads from RAM, and flw
-        to_f = opc == 0x07;
-#else
     } else if (opc == 0x03) {                                   // loads from RAM, translation available
-#endif
         FormatI i = parse_FormatI(w);
         uint va = rs1v + i.imm;
         FAST_XL(xl_ident_d, MMU_ACCESS_READ, tlb_r_vpn, tlb_r_page, va, t_ok, pa)
@@ -1043,23 +1032,14 @@ bool fast_exec_l1(L1P uint w) {
         // straddles two words, which is rare and would double the code on this path
         uint off = pa & 0x3;
         [branch]
-#ifdef FPU
-        if (va != 0 && (to_f ? f3 == 2 : (f3 < 3 || f3 == 4 || f3 == 5)) && t_ok && (pa & 0x80000000) != 0 &&
-            off + (1u << (f3 & 3)) <= 4 && (pa & 0x7ffffffc) < RAM_MAX) {
-#else
         if (va != 0 && (f3 < 3 || f3 == 4 || f3 == 5) && t_ok && (pa & 0x80000000) != 0 &&
             off + (1u << (f3 & 3)) <= 4 && (pa & 0x7ffffffc) < RAM_MAX) {
-#endif
             uint v = mem_get_cached_or_tex(pa & 0x7ffffffc) >> (off * 8);
             val = f3 == 0 ? sign_extend(v & 0xff, 8) : f3 == 1 ? sign_extend(v & 0xffff, 16) :
                   f3 == 2 ? v : f3 == 4 ? v & 0xff : v & 0xffff;
             ok = true;
         }
-#ifdef FPU
-    } else if ((w & 0x78) == 0x20) {                            // sb/sh/sw to RAM, and fsw
-#else
     } else if ((w & 0x7c) == 0x20) {                            // sb/sh/sw to RAM, translation available
-#endif
         FormatS s;
         s.rs2 = (w >> 20) & 0x1f;
         s.addr = rs1v + ((w & 0x80000000 ? 0xfffff000 : 0) | ((w >> 20) & 0xfe0) | ((w >> 7) & 0x1f));
@@ -1070,11 +1050,7 @@ bool fast_exec_l1(L1P uint w) {
         // cache is full). A store that straddles two words takes the general path.
         uint s_off = pa & 0x3;
         [branch]
-#ifdef FPU
-        if (low_ok && (opc == 0x27 ? f3 == 2 : f3 < 3) && t_ok && (pa & 0x80000000) != 0 && s_off + (1u << f3) <= 4) {
-#else
         if (low_ok && f3 < 3 && t_ok && (pa & 0x80000000) != 0 && s_off + (1u << f3) <= 4) {
-#endif
             uint s_mask = (f3 == 2 ? 0xffffffff : f3 == 1 ? 0xffff : 0xff) << (s_off * 8);
             mem_set_ram(pa & 0x7ffffffc, rs2v << (s_off * 8), s_mask);
             ok = true;
@@ -1132,8 +1108,44 @@ bool fast_exec_l1(L1P uint w) {
             ok = true;
         }
 #ifdef FPU
-    } else if (fp_op) {
-        val = fp_exec(w, rs1v, rs2v, to_f, ok);
+    } else if ((w & 0x5f) == 0x07 || opc == 0x53) {
+        // The F extension, all of it here: flw, fsw and opcode 0x53. Its results go to the float
+        // registers from here too, so the instruction's end is the integer one's.
+        bool to_f = false;
+        [branch]
+        if (opc == 0x53) {
+            uint fp_a = rs1v;       // an integer being converted or moved, else a float register
+            [branch]
+            if (((w >> 25) & 0x68) != 0x68) {
+                fp_a = xr[XR_F + ((w >> 15) & 0x1f)];
+            }
+            val = fp_exec(w, fp_a, xr[XR_F + ((w >> 20) & 0x1f)], to_f, ok);
+        } else if (opc == 0x07) {
+            uint f_va = rs1v + ((w & 0x80000000 ? 0xfffff800 : 0) | ((w >> 20) & 0x7ff));
+            FAST_XL(xl_ident_d, MMU_ACCESS_READ, tlb_r_vpn, tlb_r_page, f_va, fl_ok, fl_pa)
+            ok = false;
+            [branch]
+            if (f_va != 0 && f3 == 2 && fl_ok && (fl_pa & 0x80000003) == 0x80000000 && (fl_pa & 0x7ffffffc) < RAM_MAX) {
+                val = mem_get_cached_or_tex(fl_pa & 0x7ffffffc);
+                to_f = true;
+                ok = true;
+            }
+        } else {
+            uint f_sa = rs1v + ((w & 0x80000000 ? 0xfffff000 : 0) | ((w >> 20) & 0xfe0) | ((w >> 7) & 0x1f));
+            FAST_XL(xl_ident_d, MMU_ACCESS_WRITE, tlb_w_vpn, tlb_w_page, f_sa, fs_ok, fs_pa)
+            ok = false;
+            wr = false;
+            [branch]
+            if (low_ok && f3 == 2 && fs_ok && (fs_pa & 0x80000003) == 0x80000000) {
+                mem_set_ram(fs_pa & 0x7ffffffc, xr[XR_F + ((w >> 20) & 0x1f)], 0xffffffff);
+                ok = true;
+            }
+        }
+        [branch]
+        if (ok && to_f) {
+            xr[XR_F + rd] = val;
+            wr = false;
+        }
 #endif
     } else {
         [forcecase]
@@ -1166,11 +1178,7 @@ bool fast_exec_l1(L1P uint w) {
     if (!ok) {
         return false;
     }
-#ifdef FPU
-    xr[to_f ? XR_F + rd : (wr && rd != 0) ? rd : 32] = val;
-#else
     xr[(wr && rd != 0) ? rd : 32] = val;   // branch-free: discarded writes go to the scratch slot
-#endif
     cpu.debug_last_ins = w;
     // cpu.clint.mtime and cpu.debug_do_tick already hold this pass's values: the first tick of
     // every pass takes the general path (irq_quiet starts false), which sets both.

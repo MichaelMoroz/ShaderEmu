@@ -13,3 +13,7 @@ for %%P in (raytrace raycast gears rects blend sound) do (
     "%LLVM_BIN%\llvm-objcopy.exe" -O binary build\%%P.elf bin\%%P.bin || exit /b 1
     echo built bin\%%P.bin
 )
+rem fpcheck uses the F extension (the full machine has it)
+"%LLVM_BIN%\clang.exe" %CFLAGS:rv32ima=rv32imaf% common\start.S fpcheck\fpcheck.c -o build\fpcheck.elf || exit /b 1
+"%LLVM_BIN%\llvm-objcopy.exe" -O binary build\fpcheck.elf bin\fpcheck.bin || exit /b 1
+echo built bin\fpcheck.bin

@@ -357,8 +357,8 @@ how much a change helps. Rank variants with it, then confirm with FXC.
 
 This section is the history of the cache of words (upstream's, 512 sets of four, sized by
 `L1_SET_BITS` and `L1_SLICES`, which no longer exist). The cache is of RAM texels now, see
-"Texels instead of words" at its end; `L1_TABLE_BITS` and `L1_WAYS` (6 and 4 by default: two tables of 64
-buckets of four texels) are its size. Any geometry stalls at different times, so state
+"Texels instead of words" at its end; `L1_TABLE_BITS` and `L1_WAYS` (6 and 3 by default: two tables of 64
+buckets of three texels) are its size. Any geometry stalls at different times, so state
 hashes differ between them and guest output is what is compared.
 
 | Geometry | Texels | Busy loop IPS (instr/frame) | Shell session IPS (instr/frame) |
@@ -401,8 +401,8 @@ to look there too), and one texel a lookup (1,024 sets of two) doubles them.
 Both of those hashes are of a cache of words, and both are replaced: the cache now holds RAM
 texels, four words to an entry. Stores come in runs (a register save, a structure, a copy),
 and a run that took four entries, in four sets, takes one. A bucket is a texel of tags and
-the RAM texels they name: 128 buckets of four by default, 512 texels (2,048 words) in 640
-state texels, where the word cache took 1,024. The buckets are two
+the RAM texels they name: 128 buckets of three by default, 384 texels (1,536 words) in 512
+state texels, where the word cache took 1,024 (why not more is at the end of this section). The buckets are two
 tables of 64 with different hashes (the texel number's low bits; those bits shifted and
 xor-ed with higher ones), and a texel goes to the second table only when its bucket in the
 first is full, so most lookups read one bucket. An entry is made from the texel as RAM has
@@ -420,8 +420,8 @@ full cache ended:
 | words, two tables of 512 x 2, second when the first is full | | 8,356, 50% | |
 | words, any 2,048 (no hash can do better) | 12,820, 13% | 10,738, 8% | |
 | texels, two tables of 128 x 3 | 12,257, 18% | 10,573, 18% | 9,677, 8% |
-| texels, two tables of 64 x 4 (the default) | 11,276, 32% | 9,411, 39% | 9,311, 17% |
-| texels, two tables of 64 x 3 | 9,486, 50% | 7,184, 62% | 8,028, 42% |
+| texels, two tables of 64 x 4 | 11,276, 32% | 9,411, 39% | 9,311, 17% |
+| texels, two tables of 64 x 3 (the default) | 9,486, 50% | 7,184, 62% | 8,028, 42% |
 | texels, any 819 | 12,967, 7% | 11,035, 5% | 9,913, 0% |
 
 Measured, D3D11 + fxc2, 16,384 instructions a frame at most (the replay is pessimistic: it
@@ -446,13 +446,34 @@ A store costs more than it did (a texture read when a texel enters the cache), w
 fewer frames are not less time in the third run; where a pass costs more than in the harness
 or their number is capped, the frames are what counts.
 
-`L1_TABLE_BITS` and `L1_WAYS` size it. 512 texels (6 and 4, the default) run as many
-instructions a frame as 768 (7 and 3) with arrays of 640 elements in the tick instead of
-1,024. 384 (6 and 3) is the one size that is also faster, 7% an instruction, and it stalls
-three times as often. Why is not known: it is not the declared size of the array (384 texels
-in an array padded to 1,024 are as fast) and not the number of arrays (512 texels with their
-tags in the same array are as slow as with an array of their own); the TLB's arrays, halved
-or quartered, change nothing either.
+`L1_TABLE_BITS` and `L1_WAYS` size it. 512 texels (6 and 4) run as many instructions a frame
+as 768 (7 and 3). 384 (6 and 3) is the default all the same: it stalls three times as often
+as 512 and is still 5% more instructions a second on D3D11 (Linux bench: 3,163k against
+3,000k at 2,048 a frame, 3,454k against 3,274k at 16,384), because every instruction is
+cheaper with it. Two things make it so, found by adding pixels and arrays that do nothing:
+
+- Four entries a bucket cost about 3.5% whatever the cache's size (256 texels in buckets of
+  four are slower than 384 in buckets of three).
+- Every state texel is a pixel that runs the whole tick, and beyond about 1,000 of them
+  every instruction costs more: the tick pass for 2,048 instructions took 0.486 ms with 965
+  such pixels, 0.490 with 997, 0.512 with 1,029 and 0.54 with 1,093, wherever the extra ones
+  were. 512 texels are 640 of them and put the machine at 1,101; 384 are 512, and 973.
+
+The declared size of the array costs nothing (384 texels in an array padded to 1,024 are as
+fast), nor does one more array beside it.
+
+26. **The F extension out of the integer instructions' way** (`emu.h`, `fast_exec`): float
+    support chose each operand register between two sets, carried `flw` and `fsw` in the
+    integer load and store and a float destination in the common register write, and every
+    instruction was 8% slower for it (0.531 ms against 0.492 without `FPU` for 2,048
+    instructions). It is one branch of the chain now, after the jumps, with its own operand
+    reads, its own load and store and its own register write: 0.504 ms. `--image fpcheck`
+    prints the same sum before and after, on both backends.
+
+With that and the cache of 384, D3D11 + fxc2, runs of the two builds in turn: the Linux bench
+3,000k to 3,328k IPS at 2,048 instructions a frame and 3,299k to 3,658k at 16,384 (10.5% and
+10.9%); upstream's image to its login shell in 10.9 s instead of 11.9 s (3,139k to 3,435k
+IPS), ours in 8.2 s instead of 8.5 s (3,228k to 3,361k).
 
 ## RAM texel layout
 

@@ -403,6 +403,7 @@ const BootImage kImages[] = {
     {"sound", "Sound test card: every kind of voice for half a second (bare metal C)", nullptr, "sound", "none", "none", 2},
     {"raycast", "Raycaster: walk a textured maze on the display (bare metal C)", nullptr, "raycast", "none", "none", 2},
     {"raytrace", "Raytracer drawing to the display (bare metal C)", nullptr, "raytrace", "none", "none", 2},
+    {"fpcheck", "Float instructions on the fast path: prints a sum to compare between shader builds (bare metal C)", nullptr, "fpcheck", "none", "none", 0},
     {"rvc-raytrace", "rvc's Rust raytracer, drawing into raw memory", "data", "rust_raytrace", "none", "dts", 1},
     {"bare", "C bare-metal test (no firmware)", "data", "bare", "none", "dts", 1},
 };
@@ -915,7 +916,7 @@ int main(int argc, char** argv) {
             // texel's address: which of its four words were written is not kept anywhere.
             size_t at = l1Samples.size();
             l1Samples.insert(l1Samples.end(), {lastInstructions, lastStall, 0u});
-            unsigned ways = 4, tableBits = 6;   // the shader's defaults (L1_WAYS, L1_TABLE_BITS)
+            unsigned ways = 3, tableBits = 6;   // the shader's defaults (L1_WAYS, L1_TABLE_BITS)
             for (auto& d : opt.defines) {
                 if (d.rfind("L1_WAYS=", 0) == 0) ways = (unsigned)atoi(d.c_str() + 8);
                 if (d.rfind("L1_TABLE_BITS=", 0) == 0) tableBits = (unsigned)atoi(d.c_str() + 14);
