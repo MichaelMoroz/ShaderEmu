@@ -102,5 +102,5 @@ for f in MAP1 WIN1; do ln -sf /usr/share/tdawn-$f.AUD $f.AUD; done
 HOME=/tmp/tdawn exec ./game "$@"
 EOF
 chmod +x "$OUT/usr/bin/tdawn"
-echo "Tiberian Dawn=tdawn" > "$OUT/usr/share/nxapps.60-tdawn"
+echo "Games/Tiberian Dawn=tdawn" > "$OUT/usr/share/nxapps.60-tdawn"
 ls -l "$OUT/usr/bin/tdawn.bin" "$OUT/usr/share"/tdawn-*.MIX

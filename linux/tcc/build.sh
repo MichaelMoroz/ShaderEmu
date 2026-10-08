@@ -73,4 +73,4 @@ tr -d '\r' < "$HERE/cc" > "$ROOT/usr/bin/cc"
 tr -d '\r' < "$HERE/example" > "$ROOT/usr/bin/example"
 chmod +x "$ROOT/usr/bin/cc" "$ROOT/usr/bin/example"
 for f in "$HERE"/examples/*.c; do cp "$f" "$ROOT/usr/share/example-$(basename "$f")"; done
-printf '%s\n' "Cube (C, built here)=example cube" "Home (C, built here)=example home" > "$ROOT/usr/share/nxapps.30-examples"
+printf '%s\n' "Other/Cube (C, built here)=example cube" "Other/Home (C, built here)=example home" > "$ROOT/usr/share/nxapps.30-examples"

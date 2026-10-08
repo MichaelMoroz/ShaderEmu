@@ -123,5 +123,5 @@ PY
 fi
 cp "$WORK/src/doom1.wad" "$OUT/usr/share/doom1.wad"
 # the Start menu lists what the nxapps.* files name (nxbar.c)
-echo "Doom=doom" > "$OUT/usr/share/nxapps.50-doom"
+echo "Games/Doom=doom" > "$OUT/usr/share/nxapps.50-doom"
 ls -l "$OUT/usr/bin/doom.bin" "$OUT/usr/share/doom1.wad"

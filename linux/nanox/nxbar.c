@@ -2,9 +2,9 @@
  * nxbar: a bar along the bottom of the screen with a Start button and its menu of programs,
  * a button for every open window, and a clock.
  *
- * The menu is whatever the files /usr/share/nxapps.* list, one "Label=command" a line: a
- * program's build adds itself by putting such a file in the image (linux/nanox/build.sh,
- * doom.sh). Clicking a window's button brings the window to the front.
+ * The menu is whatever the files /usr/share/nxapps.* list, one "Label=command" a line, or
+ * "Folder/Label=command" for a program in a folder: a program's build adds itself by putting
+ * such a file in the image. Clicking a window's button brings the window to the front.
  */
 #include <dirent.h>
 #include <signal.h>
@@ -22,15 +22,21 @@
 #define MENU_WIDTH 150
 #define CLOCK_WIDTH 52
 #define TASK_WIDTH 96
-#define MAX_ITEMS 20
+#define MAX_ITEMS 48
+#define MAX_FOLDERS 8
 #define MAX_TASKS 12
 #define REGISTRY "/usr/share"
 #define FACE MWRGB(192, 192, 192)
 #define SHADOW MWRGB(128, 128, 128)
 #define SELECTED MWRGB(0, 0, 128)
 
-static struct { char label[32], command[64]; } items[MAX_ITEMS];
+static struct { char label[32], command[64]; int folder; } items[MAX_ITEMS];	/* folder: -1 for none */
 static int item_count;
+static char folders[MAX_FOLDERS][16];
+static int folder_count;
+/* What the menu shows now: the folders and the programs in none, or one folder's programs. */
+static struct { const char *label; int folder, item; } rows[MAX_ITEMS + MAX_FOLDERS + 1];
+static int row_count, shown = -1;
 static struct { GR_WINDOW_ID frame, client; char title[20]; int hidden; } tasks[MAX_TASKS];
 static int task_count;
 
@@ -38,6 +44,24 @@ static GR_WINDOW_ID bar, menu;
 static GR_GC_ID gc;
 static GR_SCREEN_INFO screen;
 static int menu_open, hover = -1;
+
+/* The folder a line names before a slash (made if it is new), or -1. */
+static int
+folder_of(const char *line)
+{
+	const char *slash = strchr(line, '/');
+	int length = slash ? (int)(slash - line) : 0, i;
+
+	if (length < 1 || length >= (int)sizeof folders[0])
+		return -1;
+	for (i = 0; i < folder_count; i++)
+		if ((int)strlen(folders[i]) == length && strncmp(folders[i], line, length) == 0)
+			return i;
+	if (folder_count == MAX_FOLDERS)
+		return -1;
+	memcpy(folders[folder_count], line, length);
+	return folder_count++;
+}
 
 /* The menu: every line of every registry file, files in name order. */
 static void
@@ -61,6 +85,9 @@ load_items(void)
 			if (!command || command == line || !command[1])
 				continue;
 			*command++ = 0;
+			items[item_count].folder = folder_of(line);
+			if (items[item_count].folder >= 0)
+				memmove(line, strchr(line, '/') + 1, strlen(strchr(line, '/')));
 			snprintf(items[item_count].label, sizeof items[0].label, "%s", line);
 			snprintf(items[item_count].command, sizeof items[0].command, "%s", command);
 			item_count++;
@@ -210,16 +237,40 @@ draw_menu(void)
 	int i;
 
 	GrSetGCForeground(gc, FACE);
-	GrFillRect(menu, gc, 0, 0, MENU_WIDTH, item_count * ITEM_HEIGHT + 4);
-	bevel(menu, 0, 0, MENU_WIDTH, item_count * ITEM_HEIGHT + 4, 0);
-	for (i = 0; i < item_count; i++) {
+	GrFillRect(menu, gc, 0, 0, MENU_WIDTH, row_count * ITEM_HEIGHT + 4);
+	bevel(menu, 0, 0, MENU_WIDTH, row_count * ITEM_HEIGHT + 4, 0);
+	for (i = 0; i < row_count; i++) {
 		if (i == hover) {
 			GrSetGCForeground(gc, SELECTED);
 			GrFillRect(menu, gc, 2, 2 + i * ITEM_HEIGHT, MENU_WIDTH - 4, ITEM_HEIGHT);
 		}
 		GrSetGCForeground(gc, i == hover ? WHITE : BLACK);
-		GrText(menu, gc, 10, 5 + i * ITEM_HEIGHT, items[i].label, strlen(items[i].label), GR_TFASCII | GR_TFTOP);
+		GrText(menu, gc, 10, 5 + i * ITEM_HEIGHT, (void *)rows[i].label, strlen(rows[i].label), GR_TFASCII | GR_TFTOP);
+		if (rows[i].folder >= 0 && rows[i].item < 0)	/* a folder */
+			GrText(menu, gc, MENU_WIDTH - 16, 5 + i * ITEM_HEIGHT, (void *)">", 1, GR_TFASCII | GR_TFTOP);
 	}
+}
+
+/* Shows the folders and the programs in none (-1), or a folder's programs and a way back. */
+static void
+show_folder(int folder)
+{
+	int i;
+
+	row_count = 0;
+	shown = folder;
+	for (i = 0; i < folder_count && folder < 0; i++)
+		rows[row_count].label = folders[i], rows[row_count].folder = i, rows[row_count++].item = -1;
+	for (i = 0; i < item_count; i++)
+		if (items[i].folder == folder)
+			rows[row_count].label = items[i].label, rows[row_count].folder = folder, rows[row_count++].item = i;
+	/* the way back is the bottom row: the menu's bottom stays where it is, and the pointer in it */
+	if (folder >= 0)
+		rows[row_count].label = "< Back", rows[row_count].folder = -1, rows[row_count++].item = -1;
+	hover = -1;
+	GrMoveWindow(menu, 0, screen.rows - BAR_HEIGHT - row_count * ITEM_HEIGHT - 4);
+	GrResizeWindow(menu, MENU_WIDTH, row_count * ITEM_HEIGHT + 4);
+	draw_menu();
 }
 
 static void
@@ -228,6 +279,7 @@ show_menu(int open)
 	menu_open = open;
 	hover = -1;
 	if (open) {
+		show_folder(-1);
 		GrMapWindow(menu);
 		GrRaiseWindow(menu);
 	} else
@@ -272,8 +324,7 @@ main(void)
 	bar = GrNewWindowEx(GR_WM_PROPS_NODECORATE | GR_WM_PROPS_NOMOVE | GR_WM_PROPS_NOAUTOMOVE | GR_WM_PROPS_NOFOCUS,
 		"nxbar", GR_ROOT_WINDOW_ID, 0, screen.rows - BAR_HEIGHT, screen.cols, BAR_HEIGHT, FACE);
 	menu = GrNewWindowEx(GR_WM_PROPS_NODECORATE | GR_WM_PROPS_NOMOVE | GR_WM_PROPS_NOAUTOMOVE | GR_WM_PROPS_NOFOCUS,
-		"nxbar menu", GR_ROOT_WINDOW_ID, 0, screen.rows - BAR_HEIGHT - item_count * ITEM_HEIGHT - 4,
-		MENU_WIDTH, item_count * ITEM_HEIGHT + 4, FACE);
+		"nxbar menu", GR_ROOT_WINDOW_ID, 0, screen.rows - BAR_HEIGHT - ITEM_HEIGHT - 4, MENU_WIDTH, ITEM_HEIGHT + 4, FACE);
 	GrSelectEvents(bar, GR_EVENT_MASK_EXPOSURE | GR_EVENT_MASK_BUTTON_DOWN);
 	GrSelectEvents(menu, GR_EVENT_MASK_EXPOSURE | GR_EVENT_MASK_BUTTON_DOWN | GR_EVENT_MASK_MOUSE_MOTION |
 		GR_EVENT_MASK_MOUSE_EXIT);
@@ -281,6 +332,15 @@ main(void)
 	/* the Windows key, whatever window has the keyboard */
 	GrGrabKey(bar, MWKEY_LMETA, GR_GRAB_HOTKEY);
 	GrGrabKey(bar, MWKEY_RMETA, GR_GRAB_HOTKEY);
+	/* NXBAR_SHOW=1 starts with the menu open, NXBAR_SHOW=Folder with that folder: for a test without a pointer */
+	if (getenv("NXBAR_SHOW")) {
+		int i;
+
+		show_menu(1);
+		for (i = 0; i < folder_count; i++)
+			if (strcmp(folders[i], getenv("NXBAR_SHOW")) == 0)
+				show_folder(i);
+	}
 
 	for (;;) {
 		static time_t looked;
@@ -318,9 +378,14 @@ main(void)
 					}
 			} else {
 				i = (event.button.y - 2) / ITEM_HEIGHT;
-				show_menu(0);
-				if (i >= 0 && i < item_count)
-					launch(items[i].command);
+				if (i < 0 || i >= row_count) {
+					show_menu(0);
+				} else if (rows[i].item < 0) {
+					show_folder(rows[i].folder);	/* a folder, or the way back */
+				} else {
+					show_menu(0);
+					launch(items[rows[i].item].command);
+				}
 			}
 			break;
 		case GR_EVENT_TYPE_MOUSE_MOTION:

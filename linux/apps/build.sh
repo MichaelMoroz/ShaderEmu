@@ -16,7 +16,7 @@ for p in nxedit nxfiles nxpaint nxview nxsettings nxmon nxweb; do
     riscv32-linux-strip -o "$OUT/bin/$p" "$WORK/src/apps/$p"
 done
 # the Start menu lists what the nxapps.* files name (linux/nanox/nxbar.c)
-printf '%s\n' "Editor=nxedit" "Files=nxfiles" "Paint=nxpaint" "Web=nxweb" "Monitor=nxmon" "Settings=nxsettings" > "$OUT/share/nxapps.20-apps"
+printf '%s\n' "Utilities/Editor=nxedit" "Utilities/Files=nxfiles" "Utilities/Paint=nxpaint" "Other/Web=nxweb" "Utilities/Monitor=nxmon" "Utilities/Settings=nxsettings" > "$OUT/share/nxapps.20-apps"
 # the browser's pages: its home lists the sites of web/sites.txt (the VRChat world can ask for
 # no others, so its builder reads the same file)
 # (all in /usr/share: the image builder adds files to folders the ROM has, and makes none)

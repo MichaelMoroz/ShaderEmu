@@ -88,8 +88,12 @@ scratch textures up to `0x87700000`; the last 4 MiB are left to one OpenGL progr
 `nxbar` has the Start menu, a button for every open window (a click brings the window to the
 front) and the clock. The Windows key opens and closes the menu from anywhere (a key the bar
 grabs with `GrGrabKey`). The menu is whatever the files `/usr/share/nxapps.*` list, one
-`Label=command` a line, so a program gets into it by having its build put such a file in the
-image: `linux/nanox/build.sh` writes `nxapps.10-nanox`, `doom.sh` writes `nxapps.50-doom`.
+`Label=command` a line, or `Folder/Label=command` for a program in a folder, so a program gets
+into it by having its build put such a file in the image: `linux/nanox/build.sh` writes
+`nxapps.10-nanox`, `doom.sh` writes `nxapps.50-doom`. The folders are Games, Utilities and
+Other, in the order the files first name them; a click on one shows its programs in the
+menu's place, with a way back as the bottom row. `NXBAR_SHOW=1` (or `=Games`) starts the bar
+with the menu open, for a test without a pointer: the menu is the layer 150 pixels wide.
 
 A window's frame has, left of its close box, a maximise box (the window fills the screen above
 the bar, and goes back on the second click) and a minimise box (the window goes away; its

@@ -54,8 +54,9 @@ rv32-cc -O2 -w -DGL_NANOX -I"$MW/src/include" -idirafter "$GL/linux/include" "$G
 tr -d '\r' < "$HERE/nx" > "$OUT/nx"
 # the Start menu lists what the nxapps.* files name (nxbar.c): a program adds itself with one
 mkdir -p "$OUT/../share"
-printf '%s\n' "Terminal=nxterm" "Calculator=nxcalc" "Clock=nxclock" "Eyes=nxeyes" "Tetris=nxtetris" "Mines=nxmine" \
-    "Gears (OpenGL)=glxgears" > "$OUT/../share/nxapps.10-nanox"
+# (a name before a slash is a folder of the menu; folders come in the order they are first named)
+printf '%s\n' "Games/Tetris=nxtetris" "Games/Mines=nxmine" "Utilities/Terminal=nxterm" "Utilities/Calculator=nxcalc" \
+    "Utilities/Clock=nxclock" "Other/Eyes=nxeyes" "Other/Gears (OpenGL)=glxgears" > "$OUT/../share/nxapps.10-nanox"
 for p in $PROGRAMS; do
     [ -f "$MW/src/bin/$p" ] || { echo "not built: $p"; continue; }
     riscv32-linux-strip -o "$OUT/$p" "$MW/src/bin/$p"
