@@ -642,3 +642,9 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   tagged with a table, points) beats any loop that writes vertices: Quake's models went from
   244k to 93k instructions a fight frame and its particles from 150 each to 70.
 - A bash heredoc does not carry `\n` in a C string into a file even when quoted `'EOF'`.
+- Quake's sound (`linux/quake/snd_shaderemu.c`) is checked like any of the card's: a timedemo
+  with `--fixed-dt 0.004 --sound-capture` and `tools\sound_reference.py ... --rom`. Measure the
+  capture's clipped samples too: at the game's own level a fight clipped 1.5% of them.
+- The Start menu's lines are `Folder/Label=command` (`nxbar.c`, `docs/nanox.md`); a new program's
+  build names its folder. `NXBAR_SHOW=Games nxbar` opens it there for a test, and the menu's
+  window is the layer 150 wide in a snapshot, 20 pixels a row plus 4.
