@@ -457,9 +457,18 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   object, `EmuShareHub` ("Share" in the scene) packs and unpacks. To test with one player, set
   the hub's `selfTest` in play mode, or `ClientSimMain.SpawnRemotePlayer`, write the new
   player's `EmuShare` variables and send it `_onDeserialization`. ClientSim sends a packet a
-  second where VRChat sends five. With two real clients the hub's `netTest` makes them test
+  second where the hub means to send six or seven: watch a change to the stream at both rates (an editor hook
+  that clears the hub's own `EmuShare`'s `sending` each frame gives VRChat's). With two real clients the hub's `netTest` makes them test
   themselves and log `[ShareTest]` lines to VRChat's output logs. "ShaderEmu/Add sharing to the open scene" puts it into a
   scene without building the world again.
+- A rewrite of the display stream (October 2026: 8x8 cells, a DCT for what holds still, a
+  palette for what moves, whole frames) was dropped: watched in the world, the stream as
+  committed looked better. dB against a model of it did not say so. Judge the stream by
+  watching a game through it.
+- The stream's fine level (`docs/share.md`) is checked against a numpy model of its bytes:
+  dump the hub's `storeBytes`, `fineBefore` and `remotePicture` in play mode once `work` is
+  false; every quarter must be the model's bytes (but for a few rounding ties) and the
+  decoder within a level of the model's picture.
 - A shader that packs bytes for Udon uses `SV_Position` and `Load` on both sides (target rows
   are then the readback's rows and `LoadRawTextureData`'s); only where it meets
   `DisplayPicture` does it use the `uv`, as `Display.shader` does. `sample` is a reserved word.
