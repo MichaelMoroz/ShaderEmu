@@ -539,15 +539,15 @@ int main(int argc, char** argv) {
     // The full machine unless a named image is known to need less, or the user said so.
     if (opt.machine < 0) {
         const BootImage* im = opt.loadState.empty() ? findImage(opt.image) : nullptr;
-        opt.machine = im && opt.rvcDir == "experiments/rvc_opt" ? im->machine : 0;
+        opt.machine = im && (opt.rvcDir == "experiments/rvc_opt" || opt.rvcDir == "experiments/rvc_compute") ? im->machine : 0;
     }
     // Our Linux image, and snapshots (which are of it), have no firmware: the machine answers
     // the kernel's calls to it (docs/boot.md).
-    opt.sbi = opt.machine == 0 && opt.rvcDir == "experiments/rvc_opt" && (opt.ourKernel || !opt.loadState.empty());
+    opt.sbi = opt.machine == 0 && (opt.rvcDir == "experiments/rvc_opt" || opt.rvcDir == "experiments/rvc_compute") && (opt.ourKernel || !opt.loadState.empty());
     if (opt.machine == 1) opt.defines.push_back("NO_PAGING");
     if (opt.machine == 2) opt.defines.push_back("M_MODE_ONLY");
     // The full machine has single-precision float instructions (docs/fpu.md).
-    if (opt.machine == 0 && opt.rvcDir == "experiments/rvc_opt" &&
+    if (opt.machine == 0 && (opt.rvcDir == "experiments/rvc_opt" || opt.rvcDir == "experiments/rvc_compute") &&
         std::find(opt.defines.begin(), opt.defines.end(), "FPU") == opt.defines.end())
         opt.defines.push_back("FPU");
     if (opt.machine > 0)

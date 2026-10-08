@@ -268,6 +268,7 @@ void Material::bindStage(ID3D11DeviceContext* ctx, StageLayout& L, int stage, co
         ID3D11Buffer* cb = L.globalsBuffer.Get();
         if (stage == 0) ctx->VSSetConstantBuffers(L.globalsSlot, 1, &cb);
         else if (stage == 1) ctx->GSSetConstantBuffers(L.globalsSlot, 1, &cb);
+        else if (stage == 3) ctx->CSSetConstantBuffers(L.globalsSlot, 1, &cb);
         else ctx->PSSetConstantBuffers(L.globalsSlot, 1, &cb);
     }
     for (auto& t : L.textures) {
@@ -275,6 +276,7 @@ void Material::bindStage(ID3D11DeviceContext* ctx, StageLayout& L, int stage, co
         ID3D11ShaderResourceView* srv = it != textures_.end() && it->second ? it->second.Get() : gpu.blackTexture.Get();
         if (stage == 0) ctx->VSSetShaderResources(t.slot, 1, &srv);
         else if (stage == 1) ctx->GSSetShaderResources(t.slot, 1, &srv);
+        else if (stage == 3) ctx->CSSetShaderResources(t.slot, 1, &srv);
         else ctx->PSSetShaderResources(t.slot, 1, &srv);
     }
     for (auto& s : L.samplers) {
@@ -283,6 +285,7 @@ void Material::bindStage(ID3D11DeviceContext* ctx, StageLayout& L, int stage, co
         ID3D11SamplerState* ss = linear ? gpu.samplerLinear.Get() : gpu.samplerPoint.Get();
         if (stage == 0) ctx->VSSetSamplers(s.slot, 1, &ss);
         else if (stage == 1) ctx->GSSetSamplers(s.slot, 1, &ss);
+        else if (stage == 3) ctx->CSSetSamplers(s.slot, 1, &ss);
         else ctx->PSSetSamplers(s.slot, 1, &ss);
     }
 }
