@@ -36,6 +36,24 @@ int seglWindowTexture(GLuint name, GLfixed* across);
 // holes. Uses the matrices and the depth test in force, and none of the other state.
 void seglQuad(const GLfixed* xyz, const GLfixed* uv, GLuint name, unsigned grey, int alpha, int keyed);
 
+// One bit a pixel for seglTexturePointer (rows of whole bytes, leftmost pixel in the highest
+// bit): where a bit is set the colour is drawn, elsewhere nothing.
+#define SEGL_BITS 0x1F0B1
+// A rectangle of a texture drawn over what the list drew before it, in the list's order: box is
+// x0, y0, x1, y1 as seglQuad's corners are, texels the same corners in 1,024ths of the texture
+// (texels, for one 1,024 wide). The colour is 0xTTRRGGBB, T being transparency; it tints an
+// 8-bit or RGBA texture and is what a SEGL_BITS texture draws.
+void seglSprite(const GLfixed* box, const int* texels, GLuint name, unsigned colour, int keyed);
+// The command and the four vertices the last seglQuad or seglSprite wrote, and the address a
+// command holds for memory from seglMemory(): for changing a list that is drawn again.
+unsigned int* seglLastCommand(void);
+unsigned int* seglLastVertices(void);
+unsigned int seglAddress(const void* memory);
+// Forgets what was drawn since the last swap. seglSwapAgain() has the list of the last swap
+// drawn once more, as its memory (textures, commands, vertices) is now.
+void seglDiscard(void);
+void seglSwapAgain(void);
+
 // Commands that stay (docs/gpu.md): quads of compact vertices in memory from seglMemory(), and
 // a command per run of them with one texture and one grey, at the head of every frame's list.
 // seglKeep(n, quads) says how many (0: none; -1 if they do not fit), before a frame's drawing;

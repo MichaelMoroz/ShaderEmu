@@ -379,6 +379,70 @@ and b7s2 over a scripted shell session).
 - The hash itself is a few shifts and masks; changing it moves stall counts, not per-lookup
   cost. Upstream's mixed hash stalls less than plain low bits once there is only one slice.
 
+The table above is of upstream's hash (address bits 2-8 and 11-12). The set is now bits 2-10
+xor bits 11-19. With upstream's, a frame ended on a full set with a median of 550 of the
+2,048 places taken, and in the set that overflowed the words were 512 bytes apart nine
+times in ten (`--l1-log` and `tools/l1_study.py`, which replays a run's writes through other
+designs). Frames that ended on a full set, D3D12 + DXC, same runs before and after:
+
+| Run | Upstream's hash | Xor | Instructions in such a frame |
+| --- | --- | --- | --- |
+| Tiberian Dawn, mission 3 to frame 300 | 11,040 | 5,408 | 5,624 to 8,416 |
+| Tiberian Dawn, mission 1 to frame 300 | 11,353 | 6,038 | 5,842 to 8,265 |
+| Doom, to its first figures | 5,089 | 2,488 | 3,954 to 6,309 |
+
+The game's state sums are unchanged on both backends. What the replay says is left: 16 words
+of overflow would take most of the remaining stalls (not built: the commit pass would have
+to look there too), and one texel a lookup (1,024 sets of two) doubles them.
+
+### Texels instead of words
+
+Both of those hashes are of a cache of words, and both are replaced: the cache now holds RAM
+texels, four words to an entry. Stores come in runs (a register save, a structure, a copy),
+and a run that took four entries, in four sets, takes one. The same 1,024 state texels hold
+256 buckets of a tag texel and three RAM texels: 768 texels, 3,072 words. The buckets are two
+tables of 128 with different hashes (the texel number's low bits; those bits shifted and
+xor-ed with higher ones), and a texel goes to the second table only when its bucket in the
+first is full, so most lookups read one bucket. An entry is made from the texel as RAM has
+it: a store that changes nothing costs no entry, a partial store needs no second read, and
+the commit copies whole texels (one lookup a RAM texel where the word cache did eight).
+
+Replaying recorded stores (`tools/l1_sim.py`; a store log taken 32 instructions a record so
+that its order is known) through the layouts, instructions a frame and the share of frames a
+full cache ended:
+
+| Layout | Linux boot | desktop, glxgears | shell (`ls -lR`, `find`, md5sum) |
+| --- | --- | --- | --- |
+| words, upstream's set | 8,196, 60% | 5,395, 72% | 7,165, 49% |
+| words, set from xor-ed bits | 10,045, 47% | 6,975, 68% | 8,305, 35% |
+| words, two tables of 512 x 2, second when the first is full | | 8,356, 50% | |
+| words, any 2,048 (no hash can do better) | 12,820, 13% | 10,738, 8% | |
+| texels, two tables of 128 x 3 (this) | 12,257, 18% | 10,573, 18% | 9,677, 8% |
+| texels, two tables of 64 x 3 | 9,486, 50% | 7,184, 62% | 8,028, 42% |
+| texels, any 819 | 12,967, 7% | 11,035, 5% | 9,913, 0% |
+
+Measured, D3D11 + fxc2, 16,384 instructions a frame at most:
+
+| | words, upstream's set | words, xor | texels |
+| --- | --- | --- | --- |
+| frames to the login shell (upstream's image) | 4,517 | 3,538 | 2,800 |
+| desktop with glxgears, 12,000 frames: frames a full cache ended | 8,237 | 8,065 | 39 |
+| the same: instructions a frame | 5,869 | 6,579 | 11,679 |
+| boot, checksums of three programs, `ls -lR`, 300 KB of `dd`: frames | 50,014 | 42,798 | 39,084 |
+| the same: seconds | 186.1 | 184.6 | 186.6 |
+| Linux bench, 16,384 a frame, fxc2's bytecode on D3D12 | 3,456k IPS | | 3,893k IPS |
+
+The console output and every checksum of that third run are the same with all three, and on
+D3D12 + DXC; our raytracer ends with the same RAM but for its first word, which the word
+cache's commit zeroed (it took a free entry, address 0, for a store to address 0).
+
+A store costs more than it did (a texture read when a texel enters the cache), which is why
+fewer frames are not less time in the third run; where a pass costs more than in the harness
+or their number is capped, the frames are what counts. `L1_TABLE_BITS=6` halves the cache:
+every instruction is then about 7% cheaper in the tick pass (0.455 ms against 0.488 for
+2,048), stalls return (4,101 frames of that desktop run) and the harness's wall time is the
+same.
+
 ## RAM texel layout
 
 `RAM_TILE_BITS=b` places RAM in square tiles of 2^b x 2^b texels instead of upstream's

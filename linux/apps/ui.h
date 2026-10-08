@@ -1,6 +1,7 @@
 /*
- * What the desktop's small programs share: the grey button look, the two fonts, starting
- * another program, and putting a picture or a colour on the desktop.
+ * What the desktop's small programs share: the grey button look, the two fonts, a list and a
+ * slider, starting another program, and putting a picture or a colour on the desktop.
+ * ui_files.h adds a window to choose a file in.
  */
 #ifndef SHADEREMU_APPS_UI_H
 #define SHADEREMU_APPS_UI_H
@@ -138,6 +139,124 @@ ui_scroll_to(int py, int y, int height, int total, int shown)
 		return 0;
 	top = (py - y - thumb / 2) * (total - shown) / (height - thumb);
 	return top < 0 ? 0 : top > total - shown ? total - shown : top;
+}
+
+/* Text cut to what fits in `width` pixels. */
+static void
+ui_text_fit(GR_DRAW_ID w, int x, int y, int width, const char *text, GR_COLOR colour)
+{
+	int count = (int)strlen(text), tw, th, tb;
+
+	GrSetGCFont(ui_gc, ui_var);
+	/* asking the server how wide costs a round trip: only when it may not fit */
+	while (count > 0 && count * 4 > width) {
+		GrGetGCTextSize(ui_gc, (void *)text, count, GR_TFASCII, &tw, &th, &tb);
+		if (tw <= width)
+			break;
+		count -= count > 8 ? 4 : 1;
+	}
+	ui_text(w, x, y, text, count, colour, 0);
+}
+
+/*
+ * A list of rows, one of them selected, with a scroll bar when they do not all fit. The
+ * program keeps the struct and says what a row reads; the list keeps `top` and `selected`.
+ */
+#define UI_ROW 18
+
+struct ui_list {
+	int x, y, width, height;
+	int count, top, selected;	/* selected: -1 for none */
+};
+
+static int
+ui_list_rows(const struct ui_list *l)
+{
+	return (l->height - 4) / UI_ROW;
+}
+
+static void
+ui_list_draw(GR_DRAW_ID w, const struct ui_list *l, const char *(*label)(int row))
+{
+	int rows = ui_list_rows(l), bar = l->count > rows ? UI_SCROLL_W : 0, i;
+
+	ui_fill(w, l->x, l->y, l->width, l->height, WHITE);
+	for (i = 0; i < rows && l->top + i < l->count; i++) {
+		int n = l->top + i, y = l->y + 2 + i * UI_ROW;
+
+		if (n == l->selected)
+			ui_fill(w, l->x + 2, y, l->width - 4 - bar, UI_ROW, UI_SELECTED);
+		ui_text_fit(w, l->x + 6, y + 3, l->width - 12 - bar, label(n), n == l->selected ? WHITE : BLACK);
+	}
+	if (bar)
+		ui_scrollbar(w, l->x + l->width - 2 - UI_SCROLL_W, l->y + 2, l->height - 4, l->count, rows, l->top);
+	ui_bevel(w, l->x, l->y, l->width, l->height, 1);
+}
+
+/* Keeps the selected row in view, after the program has moved the selection itself. */
+static void
+ui_list_show(struct ui_list *l)
+{
+	int rows = ui_list_rows(l);
+
+	if (l->selected >= 0 && l->selected < l->top)
+		l->top = l->selected;
+	if (l->selected >= l->top + rows)
+		l->top = l->selected - rows + 1;
+}
+
+/* What an event does to a list: 0 nothing, 1 it changed (draw it again), 2 the selected row
+ * was clicked again (open it). With mouse motion events selected the scroll bar can be dragged. */
+static int
+ui_list_event(struct ui_list *l, const GR_EVENT *event)
+{
+	int rows = ui_list_rows(l), most = l->count > rows ? l->count - rows : 0, turn = ui_wheel(event);
+	int down = event->type == GR_EVENT_TYPE_BUTTON_DOWN;
+	int held = event->type == GR_EVENT_TYPE_MOUSE_MOTION && (event->mouse.buttons & GR_BUTTON_L);
+	int px = down ? event->button.x : event->mouse.x, py = down ? event->button.y : event->mouse.y, top = l->top, n;
+
+	if ((!down && !held) || !ui_inside(px, py, l->x, l->y, l->width, l->height))
+		return 0;
+	if (turn) {
+		top += turn * 3;
+	} else if (most && px >= l->x + l->width - 2 - UI_SCROLL_W) {
+		top = ui_scroll_to(py, l->y + 2, l->height - 4, l->count, rows);
+	} else if (down) {
+		n = l->top + (py - l->y - 2) / UI_ROW;
+		if (n < 0 || n >= l->count)
+			return 0;
+		if (n == l->selected)
+			return 2;
+		l->selected = n;
+		return 1;
+	}
+	top = top < 0 ? 0 : top > most ? most : top;
+	if (top == l->top)
+		return 0;
+	l->top = top;
+	return 1;
+}
+
+/* A slider: a track with a knob at `value` of `most`. */
+static void
+ui_slider(GR_DRAW_ID w, int x, int y, int width, int value, int most)
+{
+	int at = x + 4 + (width - 16) * value / (most > 0 ? most : 1);
+
+	ui_fill(w, x, y, width, 18, UI_FACE);
+	ui_fill(w, x + 4, y + 7, width - 8, 4, UI_SHADOW);
+	ui_bevel(w, x + 4, y + 7, width - 8, 4, 1);
+	ui_fill(w, at, y + 1, 8, 16, UI_FACE);
+	ui_bevel(w, at, y + 1, 8, 16, 0);
+}
+
+/* The value a click or a drag at px on that slider asks for. */
+static int
+ui_slider_value(int px, int x, int width, int most)
+{
+	int value = (px - x - 8) * most / (width - 16 > 0 ? width - 16 : 1);
+
+	return value < 0 ? 0 : value > most ? most : value;
 }
 
 /* Starts a program with one argument (or none), without a shell. */

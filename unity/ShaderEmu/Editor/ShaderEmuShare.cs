@@ -35,8 +35,10 @@ public static partial class ShaderEmuBuilder
         for (int i = panel.childCount - 1; i >= 0; i--)
             if (panel.GetChild(i).name.StartsWith("Share ")) Object.DestroyImmediate(panel.GetChild(i).gameObject);
 
-        const int tiles = 300, rowTexels = 128;
-        Texture2D store = LoadOrCreate(Generated + "/ShareStore.asset", () => new Texture2D(rowTexels, tiles, TextureFormat.RGBA32, false, true));
+        // a row a tile, then a row a quarter of a tile at the fine level
+        const int tiles = 300, rowTexels = 128, rowCount = tiles * 5;
+        Texture2D store = LoadOrCreate(Generated + "/ShareStore.asset", () => new Texture2D(rowTexels, rowCount, TextureFormat.RGBA32, false, true));
+        if (store.width != rowTexels || store.height != rowCount) store.Reinitialize(rowTexels, rowCount);
         store.filterMode = FilterMode.Point;
         store.wrapMode = TextureWrapMode.Clamp;
         Material decodeMat = Mat("ShareDecode", "ShaderEmu/ShareDecode");
@@ -51,10 +53,15 @@ public static partial class ShaderEmuBuilder
         hub.encodeMaterial = Mat("ShareEncode", "ShaderEmu/ShareEncode");
         hub.captureA = MipTarget("ShareCaptureA", 640, 480);
         hub.captureB = MipTarget("ShareCaptureB", 640, 480);
-        hub.atlas = Target("ShareAtlas", rowTexels, tiles, 0);
+        hub.atlas = Target("ShareAtlas", rowTexels, rowCount, 0);
+        // the fine level: the display's own pixels, which tiles changed, and its blocks
+        hub.fineA = Target("ShareFineA", 1280, 960, 0);
+        hub.fineB = Target("ShareFineB", 1280, 960, 0);
+        hub.changed = Target("ShareChanged", 20, 15, 0);
+        hub.fineBlocks = Target("ShareFineBlocks", 640, 240, 0);
         hub.decodeMaterial = decodeMat;
         hub.store = store;
-        hub.remotePicture = PictureTexture("RemotePicture", 1024, 512);
+        hub.remotePicture = PictureTexture("RemotePicture", 2048, 1024);
         hub.displayShowMaterial = machine.displayShowMaterial;
 
         Color dim = new Color(0.62f, 0.68f, 0.76f);

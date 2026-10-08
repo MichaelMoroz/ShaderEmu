@@ -18,9 +18,12 @@ public class EmuShareHub : UdonSharpBehaviour
     public EmuKeyboard consoleKeyboard, gpuKeyboard;
     public Material encodeMaterial;         // ShareEncode.shader
     public RenderTexture captureA, captureB;   // 640 x 480 with mipmaps: this capture and the last
-    public RenderTexture atlas;             // 128 x 300: a row a tile
+    public RenderTexture atlas;             // 128 x 1500: a row a tile, then a row a quarter of a tile at the fine level
+    public RenderTexture fineA, fineB;      // 1280 x 960: this capture and the last at the display's own size
+    public RenderTexture changed;           // 20 x 15: which tiles changed
+    public RenderTexture fineBlocks;        // 640 x 240: the fine level's blocks
     public Material decodeMaterial;         // ShareDecode.shader
-    public Texture2D store;                 // 128 x 300: the tiles received
+    public Texture2D store;                 // 128 x 1500: the tiles received, laid out as the atlas
     public RenderTexture remotePicture;     // the watched display, decoded
     public Material displayShowMaterial;    // the wall
     public TextMeshProUGUI watchLabel, allowLabel;
@@ -34,9 +37,14 @@ public class EmuShareHub : UdonSharpBehaviour
     public bool netTest;                    // two clients test themselves and log (docs/share.md)
 
     private const int TileCols = 20, TileCount = 300, RowBytes = 512;
-    private const int ChangedAt = 504, FlatAt = 505, LevelAt = 508;   // bytes of a tile's row
-    private const int PacketMost = 1400, ConsoleMost = 800, HeaderBytes = 13;
-    private const float TickSeconds = 0.1f;   // input every tick, a packet every second one
+    private const int ChangedAt = 504, FlatAt = 505, LevelAt = 508, StampAt = 509;   // bytes of a tile's row
+    // The fine level: the display's own pixels, where the stream is half its size. A row a
+    // quarter of a tile from row 300: its length, (in the store) present and stamp, its bytes.
+    private const int FineAt = 300, FineRows = 1200, FineMost = 400, PresentAt = 2, FineStampAt = 3;
+    // Two ticks of three carry a packet: 8.3 KB/s, of the 8 to 10 a client gets out in
+    // practice for everything it sends (VRChat's limit is a client's, not an object's).
+    private const int PacketMost = 1250, ConsoleMost = 800, HeaderBytes = 13;
+    private const float TickSeconds = 0.1f;   // input every tick, a packet on two of three
 
     private EmuShare mine;
     private EmuShare[] shares = new EmuShare[100];   // the other players'
@@ -53,9 +61,11 @@ public class EmuShareHub : UdonSharpBehaviour
     private int viewers;
 
     // sending
-    private RenderTexture now, before;
-    private byte[] atlasBytes = new byte[TileCount * RowBytes];
+    private RenderTexture now, before, fineNow, fineBefore;
+    private byte[] atlasBytes = new byte[(TileCount + FineRows) * RowBytes];
     private int[] have = new int[TileCount];   // the level each tile was last sent at; 3: stale
+    private int[] fineHave = new int[TileCount];   // a bit a quarter of the tile sent at the fine level
+    private bool fineOn, codeAll = true;
     private bool reading, haveAtlas, work, headerSent;
     private int asked, done, validFrom;
     private int sendW, sendH, cursor;
@@ -69,7 +79,8 @@ public class EmuShareHub : UdonSharpBehaviour
     private float pointerSentAt;
 
     // receiving
-    private byte[] storeBytes = new byte[TileCount * RowBytes];
+    private byte[] storeBytes = new byte[(TileCount + FineRows) * RowBytes];
+    private int gotScale = 1, stamp;
     private Color32[] remoteGrid;
     private int cols, rows;
     private bool haveSeq;
@@ -90,6 +101,8 @@ public class EmuShareHub : UdonSharpBehaviour
         remoteGrid = new Color32[cols * rows];
         now = captureA;
         before = captureB;
+        fineNow = fineA;
+        fineBefore = fineB;
         for (int t = 0; t < TileCount; t++) have[t] = 3;
         WallShowsOwn();   // the material is an asset: it keeps whatever the last session left
         ShowLabels();
@@ -251,11 +264,11 @@ public class EmuShareHub : UdonSharpBehaviour
         {
             Color32 blank = new Color32(32, 7, 0, 255);
             for (int i = 0; i < remoteGrid.Length; i++) remoteGrid[i] = blank;
-            for (int t = 0; t < TileCount; t++) storeBytes[t * RowBytes + LevelAt] = 3;
+            ForgetStore();
             terminal.ShowRemote(remoteGrid, 0, 0, 0);
             machine.shownWidth = 0;
             machine.shownHeight = 0;
-            ShowStore();
+            ShowStore(true);
             displayShowMaterial.SetTexture("_MainTex", remotePicture);
             displayShowMaterial.SetVector("_TexSize", new Vector4(remotePicture.width, remotePicture.height, 0, 0));
             displayShowMaterial.SetVector("_Size", Vector4.zero);
@@ -342,7 +355,7 @@ public class EmuShareHub : UdonSharpBehaviour
         if (mine.Busy() || Networking.IsClogged) return;
 
         int length = 0;
-        if ((ticks & 1) == 0 && viewers > 0)
+        if (ticks % 3 != 0 && viewers > 0)
         {
             if (on && !reading) Capture();
             length = Build(on);
@@ -417,7 +430,11 @@ public class EmuShareHub : UdonSharpBehaviour
     private void FullRefresh()
     {
         terminal.MarkAll();
-        for (int t = 0; t < TileCount; t++) have[t] = 3;
+        for (int t = 0; t < TileCount; t++)
+        {
+            have[t] = 3;
+            fineHave[t] = 0;
+        }
         work = true;
         headerSent = false;
     }
@@ -436,26 +453,55 @@ public class EmuShareHub : UdonSharpBehaviour
         }
         int scale = 1;
         while (w > 640 * scale || h > 480 * scale) scale++;
-        if (w / scale != sendW || h / scale != sendH)
+        if (w / scale != sendW || h / scale != sendH || (scale == 2) != fineOn)
         {
             sendW = w / scale;
             sendH = h / scale;
-            for (int t = 0; t < TileCount; t++) have[t] = 3;
+            fineOn = scale == 2;
+            for (int t = 0; t < TileCount; t++)
+            {
+                have[t] = 3;
+                fineHave[t] = 0;
+            }
             haveAtlas = false;
             validFrom = asked + 1;
+            codeAll = true;
         }
-        encodeMaterial.SetVector("_Src", new Vector4(w, h, scale, 0));
-        encodeMaterial.SetVector("_TexSize", new Vector4(machine.displayTexture.width, machine.displayTexture.height, 0, 0));
-        VRCGraphics.Blit(machine.displayTexture, now, encodeMaterial, 0);
-        encodeMaterial.SetTexture("_Now", now);
-        encodeMaterial.SetTexture("_Before", before);
-        VRCGraphics.Blit(now, atlas, encodeMaterial, 1);
+        Material m = encodeMaterial;
+        m.SetVector("_TexSize", new Vector4(machine.displayTexture.width, machine.displayTexture.height, 0, 0));
+        m.SetVector("_Src", new Vector4(w, h, scale, 0));
+        VRCGraphics.Blit(machine.displayTexture, now, m, 0);
+        if (fineOn)
+        {
+            // the display's own pixels, for the level a still tile ends at
+            m.SetVector("_Src", new Vector4(w, h, 1, 0));
+            VRCGraphics.Blit(machine.displayTexture, fineNow, m, 0);
+        }
+        m.SetTexture("_Now", now);
+        m.SetTexture("_Before", before);
+        m.SetTexture("_FineNow", fineNow);
+        m.SetTexture("_FineBefore", fineBefore);
+        m.SetVector("_Fine", new Vector4(fineOn ? 1 : 0, codeAll ? 1 : 0, 0, 0));
+        codeAll = false;
+        VRCGraphics.Blit(now, changed, m, 2);
+        m.SetTexture("_Changed", changed);
+        VRCGraphics.Blit(now, atlas, m, 1);
+        if (fineOn)
+        {
+            // only of the tiles that changed: the rest of the target keeps its bytes
+            VRCGraphics.Blit(now, fineBlocks, m, 3);
+            m.SetTexture("_FineBlocks", fineBlocks);
+            VRCGraphics.Blit(now, atlas, m, 4);
+        }
         VRCAsyncGPUReadback.Request(atlas, 0, (IUdonEventReceiver)this);
         asked++;
         reading = true;
         RenderTexture t2 = now;
         now = before;
         before = t2;
+        t2 = fineNow;
+        fineNow = fineBefore;
+        fineBefore = t2;
     }
 
     public override void OnAsyncGpuReadbackComplete(VRCAsyncGPUReadbackRequest request)
@@ -476,6 +522,7 @@ public class EmuShareHub : UdonSharpBehaviour
             int t = (i / across) * TileCols + i % across;
             if (atlasBytes[t * RowBytes + ChangedAt] == 0) continue;
             have[t] = 3;
+            fineHave[t] = 0;
             work = true;
         }
     }
@@ -493,8 +540,30 @@ public class EmuShareHub : UdonSharpBehaviour
         return at + 2 + size;
     }
 
-    // Stale tiles first, as sharp as two packets can carry them all; with none left, the
-    // coarsest of the rest a level sharper. A flat tile is never sent sharper than it needs.
+    // A quarter of a tile at the fine level, if it fits: the tile's number and 4 + the
+    // quarter, its length, its bytes.
+    private int PutFine(byte[] b, int at, int t, int part)
+    {
+        int row = (FineAt + t * 4 + part) * RowBytes, size = atlasBytes[row] | atlasBytes[row + 1] << 8;
+        if (size < 16 || size > FineMost)
+        {
+            fineHave[t] |= 1 << part;   // not made: nothing to wait for
+            return at;
+        }
+        if (at + 4 + size > PacketMost) return at;
+        int v = t | (4 + part) << 12;
+        b[at] = (byte)(v & 255);
+        b[at + 1] = (byte)(v >> 8);
+        b[at + 2] = (byte)(size & 255);
+        b[at + 3] = (byte)(size >> 8);
+        System.Buffer.BlockCopy(atlasBytes, row + 4, b, at + 4, size);
+        fineHave[t] |= 1 << part;
+        return at + 4 + size;
+    }
+
+    // Stale tiles first, as sharp as two packets can carry them all; in what room they leave,
+    // the coarsest of the rest a level sharper, and then tiles that are as sharp as the
+    // stream gets, at the fine level. A flat tile is never sent sharper than it needs.
     private int PutTiles(byte[] b, int at)
     {
         int across = (sendW + 31) / 32, used = across * ((sendH + 31) / 32);
@@ -519,9 +588,11 @@ public class EmuShareHub : UdonSharpBehaviour
                 }
                 at = next;
             }
-            return at;
+            if (at + 26 > PacketMost) return at;
         }
-        for (int from = 2; from >= 1 && at == start; from--)
+        int mark = at;
+        bool full = false;
+        for (int from = 2; from >= 1 && at == mark; from--)
         {
             for (int i = 0; i < used; i++)
             {
@@ -533,7 +604,24 @@ public class EmuShareHub : UdonSharpBehaviour
                 if (next == at)
                 {
                     cursor = index;
+                    full = true;
                     break;
+                }
+                at = next;
+            }
+        }
+        for (int i = 0; fineOn && !full && i < used; i++)
+        {
+            int index = (cursor + i) % used, t = (index / across) * TileCols + index % across;
+            if (have[t] != 0 || fineHave[t] == 15 || atlasBytes[t * RowBytes + FlatAt] != 0) continue;
+            for (int part = 0; part < 4 && !full; part++)
+            {
+                if ((fineHave[t] >> part & 1) != 0) continue;
+                int next = PutFine(b, at, t, part);
+                if (next == at && (fineHave[t] >> part & 1) == 0)
+                {
+                    cursor = index;
+                    full = true;
                 }
                 at = next;
             }
@@ -670,11 +758,22 @@ public class EmuShareHub : UdonSharpBehaviour
         else if (pointerFrom == share.ownerId) DropPointer();
     }
 
-    private void ShowStore()
+    // Nothing of the watched display is held.
+    private void ForgetStore()
+    {
+        for (int t = 0; t < TileCount; t++) storeBytes[t * RowBytes + LevelAt] = 3;
+        for (int r = 0; r < FineRows; r++) storeBytes[(FineAt + r) * RowBytes + PresentAt] = 0;
+    }
+
+    // Draws the tiles the last packet brought, or all of them.
+    private void ShowStore(bool all)
     {
         store.LoadRawTextureData(storeBytes);
         store.Apply(false);
         decodeMaterial.SetTexture("_Store", store);
+        decodeMaterial.SetFloat("_Scale", gotScale);
+        decodeMaterial.SetFloat("_Stamp", stamp);
+        decodeMaterial.SetFloat("_All", all ? 1 : 0);
         decodeMaterial.SetVector("_Stream", new Vector4(gotW, gotH, 0, 0));
         decodeMaterial.SetVector("_TargetSize", new Vector4(remotePicture.width, remotePicture.height, 0, 0));
         VRCGraphics.Blit(store, remotePicture, decodeMaterial);
@@ -699,15 +798,19 @@ public class EmuShareHub : UdonSharpBehaviour
         gotPackets++;
         gotBytes += p.Length;
 
-        bool on = p[0] != 0, redraw = false;
+        bool on = p[0] != 0, redraw = false, all = false;
         int w = p[4] | p[5] << 8, h = p[6] | p[7] << 8;
-        if (w != gotW || h != gotH)
+        // where the stream is half the display's size, tiles come at the fine level too
+        int scale = w > 0 && (p[8] | p[9] << 8) / w == 2 ? 2 : 1;
+        if (w != gotW || h != gotH || scale != gotScale)
         {
             gotW = w;
             gotH = h;
-            for (int t = 0; t < TileCount; t++) storeBytes[t * RowBytes + LevelAt] = 3;
-            redraw = true;
+            gotScale = scale;
+            ForgetStore();
+            all = true;
         }
+        stamp = stamp % 255 + 1;
         int at = HeaderBytes, count = p[12];
         Color32 blank = new Color32(32, 7, 0, 255);
         for (int i = 0; i < count; i++)
@@ -732,15 +835,32 @@ public class EmuShareHub : UdonSharpBehaviour
         while (at + 2 <= p.Length)
         {
             int v = p[at] | p[at + 1] << 8, t = v & 0xfff, level = v >> 12;
+            if (t >= TileCount) break;
+            if (level >= 4)
+            {
+                // a quarter of the tile at the fine level: its length, its bytes
+                if (level > 7 || at + 4 > p.Length) break;
+                int length = p[at + 2] | p[at + 3] << 8, row = (FineAt + t * 4 + level - 4) * RowBytes;
+                if (length < 16 || length > FineMost || at + 4 + length > p.Length) break;
+                System.Buffer.BlockCopy(p, at + 4, storeBytes, row + 4, length);
+                storeBytes[row + PresentAt] = 1;
+                storeBytes[row + FineStampAt] = (byte)stamp;
+                at += 4 + length;
+                redraw = true;
+                continue;
+            }
             int size = level == 0 ? 384 : level == 1 ? 96 : 24;
-            if (t >= TileCount || level > 2 || at + 2 + size > p.Length) break;
+            if (level > 2 || at + 2 + size > p.Length) break;
             System.Buffer.BlockCopy(p, at + 2, storeBytes, t * RowBytes + (level == 0 ? 0 : level == 1 ? 384 : 480), size);
             storeBytes[t * RowBytes + LevelAt] = (byte)level;
+            storeBytes[t * RowBytes + StampAt] = (byte)stamp;
+            // the tile changed: what came of it at the fine level is of the old picture
+            for (int k = 0; k < 4; k++) storeBytes[(FineAt + t * 4 + k) * RowBytes + PresentAt] = 0;
             at += 2 + size;
             redraw = true;
         }
-        if (redraw) ShowStore();
-        displayShowMaterial.SetVector("_Size", new Vector4(on ? w : 0, on ? h : 0, 0, 0));
+        if (redraw || all) ShowStore(all);
+        displayShowMaterial.SetVector("_Size", new Vector4(on ? w * scale : 0, on ? h * scale : 0, 0, 0));
         machine.shownWidth = on && w > 0 ? p[8] | p[9] << 8 : 0;
         machine.shownHeight = on && w > 0 ? p[10] | p[11] << 8 : 0;
     }

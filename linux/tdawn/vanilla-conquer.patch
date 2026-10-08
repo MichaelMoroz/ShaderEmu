@@ -92,6 +92,32 @@ index 2a46e07..de9ec8e 100644
      }
  }
 +#endif
+diff --git a/common/graphicsviewport.cpp b/common/graphicsviewport.cpp
+index 1dda825..c77c3fc 100644
+--- a/common/graphicsviewport.cpp
++++ b/common/graphicsviewport.cpp
+@@ -44,6 +44,9 @@
+  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ 
+ #include "graphicsviewport.h"
++#ifdef SHADEREMU
++bool ShaderEmu_GL_Stamp(void const* set, int icon, int x, int y, void const* remap, int window);
++#endif
+ 
+ #include "buffer.h"
+ #include "drawbuff.h"
+@@ -847,6 +850,11 @@ void GraphicViewPortClass::Draw_Stamp(void const* icondata,
+                                       void const* remap,
+                                       int clip_window)
+ {
++#ifdef SHADEREMU
++    if (ShaderEmu_GL_Stamp(icondata, icon, x_pixel, y_pixel, remap, clip_window)) {
++        return;
++    }
++#endif
+     if (Lock()) {
+         Buffer_Draw_Stamp_Clip(this,
+                                icondata,
 diff --git a/common/timer.cpp b/common/timer.cpp
 index ea6a5c0..31c6e4b 100644
 --- a/common/timer.cpp
@@ -124,11 +150,112 @@ index ea6a5c0..31c6e4b 100644
      return duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
  }
  
+diff --git a/tiberiandawn/CMakeLists.txt b/tiberiandawn/CMakeLists.txt
+index a26cf46..e489e91 100644
+--- a/tiberiandawn/CMakeLists.txt
++++ b/tiberiandawn/CMakeLists.txt
+@@ -27,6 +27,7 @@ set(TIBDAWN_SRC
+     dial8.cpp
+     dialog.cpp
+     display.cpp
++    gl.cpp
+     door.cpp
+     drive.cpp
+     drop.cpp
+diff --git a/tiberiandawn/cell.cpp b/tiberiandawn/cell.cpp
+index c7ad7f4..eb74a2e 100644
+--- a/tiberiandawn/cell.cpp
++++ b/tiberiandawn/cell.cpp
+@@ -367,6 +367,18 @@ void CellClass::Redraw_Objects(bool forced)
+     Validate();
+     CELL cell = Cell_Number();
+ 
++#ifdef SHADEREMU
++    /*
++    ** Where the GPU draws the map (gl.cpp), drawing a cell again paints over nothing: the
++    ** objects in it and over it need not be drawn again for it.
++    */
++    extern bool ShaderEmu_GL_Live;
++    void ShaderEmu_GL_Cell(CELL cell);
++    if (ShaderEmu_GL_Live) {
++        ShaderEmu_GL_Cell(cell);
++        return;
++    }
++#endif
+     if (Map.In_View(cell) && (forced || !Map.Is_Cell_Flagged(cell))) {
+ 
+         /*
+@@ -1860,11 +1872,57 @@ CellClass const* CellClass::Adjacent_Cell(FacingType face) const
+  * HISTORY:                                                                *
+  *   04/24/1995 PWG : Created.                                             *
+  *=========================================================================*/
++#ifdef SHADEREMU
++/*
++** A unit that steps is lifted and put down again, nearly always in the same region, and the two
++** changes of threat undo each other. A lifting is kept back until what follows it is known;
++** whoever reads threat settles it first (Cell_Threat, and the main loop once a frame).
++*/
++static int held_region = -1, held_threat;
++static HousesType held_house;
++
++static void Threat_To_Houses(int region, HousesType house, int threat_value)
++{
++    for (HousesType lp = HOUSE_FIRST; lp < HOUSE_COUNT; lp++) {
++        if (lp == house)
++            continue;
++
++        HouseClass* house_ptr = HouseClass::As_Pointer(lp);
++        if (house_ptr && (!house_ptr->IsHuman || !house_ptr->Is_Ally(house))) {
++            house_ptr->Adjust_Threat(region, threat_value);
++        }
++    }
++}
++
++void ShaderEmu_Threat_Settle(void)
++{
++    if (held_region >= 0) {
++        int region = held_region;
++        held_region = -1;
++        Threat_To_Houses(region, held_house, held_threat);
++    }
++}
++#endif
++
+ void CellClass::Adjust_Threat(HousesType house, int threat_value)
+ {
+     Validate();
+     int region = Map.Cell_Region(Cell_Number());
+ 
++#ifdef SHADEREMU
++    if (held_region == region && held_house == house && held_threat == -threat_value) {
++        held_region = -1;
++        return;
++    }
++    ShaderEmu_Threat_Settle();
++    if (threat_value < 0 && !Debug_Threat) {
++        held_region = region;
++        held_house = house;
++        held_threat = threat_value;
++        return;
++    }
++    Threat_To_Houses(region, house, threat_value);
++#else
+     for (HousesType lp = HOUSE_FIRST; lp < HOUSE_COUNT; lp++) {
+         if (lp == house)
+             continue;
+@@ -1874,6 +1932,7 @@ void CellClass::Adjust_Threat(HousesType house, int threat_value)
+             house_ptr->Adjust_Threat(region, threat_value);
+         }
+     }
++#endif
+     if (Debug_Threat) {
+         Map.Flag_To_Redraw(true);
+     }
 diff --git a/tiberiandawn/conquer.cpp b/tiberiandawn/conquer.cpp
-index a8aebd8..9beebd2 100644
+index a8aebd8..5cb387c 100644
 --- a/tiberiandawn/conquer.cpp
 +++ b/tiberiandawn/conquer.cpp
-@@ -98,6 +98,264 @@ extern void Send_Statistics_Packet(void);
+@@ -98,6 +98,280 @@ extern void Send_Statistics_Packet(void);
  extern char* __nheapbeg;
  bool InMainLoop = false;
  
@@ -140,6 +267,9 @@ index a8aebd8..9beebd2 100644
 +**   TDAWN_STOP_FRAME=N hold the picture of game frame N (for comparing pictures)
 +*/
 +void Video_Render_Frame();
++bool ShaderEmu_GL_Shape(void const* file, int frame, int x, int y, int window, int flags, void const* fade, void const* ghost);
++extern unsigned ShaderEmu_GL_Quads, ShaderEmu_GL_Shroud, ShaderEmu_GL_Shadows, ShaderEmu_GL_Cycles;
++extern unsigned ShaderEmu_GL_Parts[3], ShaderEmu_GL_Objects[3];
 +#include "common/host.h"
 +extern unsigned ShaderEmu_Show_Cycles, ShaderEmu_Shows, ShaderEmu_Page_Flips, ShaderEmu_Page_Copies;
 +static unsigned ShaderEmu_Logic_Cycles, ShaderEmu_Draw_Cycles;
@@ -190,7 +320,7 @@ index a8aebd8..9beebd2 100644
 +/*
 +** A frame that took too long leaves a debt, which shortens the next frames' waits and, while
 +** it is over half a frame, leaves their drawing out: the game keeps its speed and draws less
-+** often. TDAWN_SKIP=N: how many frames in a row may go undrawn (2; 0 for none).
++** often. TDAWN_SKIP=N: how many frames in a row may go undrawn (none unless asked).
 +*/
 +bool ShaderEmu_Scrolled;
 +static unsigned ShaderEmu_Skipped;
@@ -204,7 +334,7 @@ index a8aebd8..9beebd2 100644
 +
 +    if (most < 0) {
 +        const char* text = getenv("TDAWN_SKIP");
-+        most = text ? atoi(text) : 2;
++        most = text ? atoi(text) : 0;
 +        if (getenv("TDAWN_FRAMES") || getenv("TDAWN_NO_DELAY")) {
 +            most = 0;
 +        }
@@ -344,7 +474,7 @@ index a8aebd8..9beebd2 100644
 +
 +        fprintf(stderr,
 +                "tdstat: frame %d: %d.%d game frames/s of %d, %uk instructions/s; a frame %uk = logic %uk + draw %uk + "
-+                "show %uk (%u.%u shows) + rest %uk; %d objects; %u page copies of %u; %u undrawn\n",
++                "show %uk (%u.%u shows) + rest %uk; %d objects; %u page copies of %u; %u undrawn; the map %uk (cells %uk, objects %uk: %u kept, %u away, %u drawn; shroud %uk), %u quads (%u shroud, %u shadows)\n",
 +                Frame,
 +                frames * 1000 / span,
 +                frames * 10000 / span % 10,
@@ -361,8 +491,21 @@ index a8aebd8..9beebd2 100644
 +                    + Anims.Count(),
 +                ShaderEmu_Page_Copies,
 +                ShaderEmu_Page_Flips,
-+                ShaderEmu_Skipped);
-+        ShaderEmu_Page_Copies = ShaderEmu_Page_Flips = ShaderEmu_Skipped = 0;
++                ShaderEmu_Skipped,
++                ShaderEmu_GL_Cycles / frames / 1000,
++                ShaderEmu_GL_Parts[0] / frames / 1000,
++                ShaderEmu_GL_Parts[1] / frames / 1000,
++                ShaderEmu_GL_Objects[0] / frames,
++                ShaderEmu_GL_Objects[1] / frames,
++                ShaderEmu_GL_Objects[2] / frames,
++                ShaderEmu_GL_Parts[2] / frames / 1000,
++                ShaderEmu_GL_Quads / frames,
++                ShaderEmu_GL_Shroud / frames,
++                ShaderEmu_GL_Shadows / frames);
++        ShaderEmu_Page_Copies = ShaderEmu_Page_Flips = ShaderEmu_Skipped = ShaderEmu_GL_Quads = 0;
++        ShaderEmu_GL_Shroud = ShaderEmu_GL_Shadows = ShaderEmu_GL_Cycles = 0;
++        ShaderEmu_GL_Parts[0] = ShaderEmu_GL_Parts[1] = ShaderEmu_GL_Parts[2] = 0;
++        ShaderEmu_GL_Objects[0] = ShaderEmu_GL_Objects[1] = ShaderEmu_GL_Objects[2] = 0;
 +        ms_then = ms;
 +        cycles_then = cycles;
 +        frame_then = Frame;
@@ -393,7 +536,49 @@ index a8aebd8..9beebd2 100644
  #ifndef ARRAY_SIZE
  #define ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
  #endif
-@@ -1222,6 +1480,20 @@ void Call_Back(void)
+@@ -1126,12 +1400,31 @@ bool Color_Cycle(void)
+     static CountDownTimerClass _ftimer(BT_SYSTEM, 0);
+     static bool _up = false;
+     bool changed = false;
++    bool pulse = !_ftimer.Time(), turn = !_timer.Time();
++#ifdef SHADEREMU
++    /*
++    ** A run with no delays cycles by the game's frames, not by the clock: its pictures repeat.
++    */
++    static int by_frame = -1;
++    static unsigned at_frame = ~0u;
++    if (by_frame < 0) {
++        by_frame = getenv("TDAWN_NO_DELAY") != NULL;
++    }
++    if (by_frame) {
++        pulse = turn = false;
++        if (at_frame != (unsigned)Frame) {
++            at_frame = (unsigned)Frame;
++            pulse = Frame % 2 == 0;
++            turn = Frame % 4 == 0;
++        }
++    }
++#endif
+ 
+     /*
+     **	Process the fading white color. It is used for the radar box and other glowing
+     **	game interface elements.
+     */
+-    if (!_ftimer.Time()) {
++    if (pulse) {
+         _ftimer.Set(TIMER_SECOND / 8);
+ 
+ /*
+@@ -1165,7 +1458,7 @@ bool Color_Cycle(void)
+     /*
+     **	Process the color cycling effects -- water.
+     */
+-    if (!_timer.Time()) {
++    if (turn) {
+         unsigned char colors[3];
+ 
+         _timer.Set(TIMER_SECOND / 4);
+@@ -1222,6 +1515,20 @@ void Call_Back(void)
      if (SampleType) {
          Theme.AI();
          Speak_AI();
@@ -414,7 +599,7 @@ index a8aebd8..9beebd2 100644
      }
  
  #ifdef NETWORKING
-@@ -1516,7 +1788,7 @@ static void Sync_Delay(void)
+@@ -1516,7 +1823,7 @@ static void Sync_Delay(void)
              if (input) {
                  Keyboard_Process(input);
              }
@@ -423,7 +608,7 @@ index a8aebd8..9beebd2 100644
          }
  
          Frame_Limiter(FL_NONE);
-@@ -1611,6 +1883,9 @@ bool Main_Loop()
+@@ -1611,6 +1918,9 @@ bool Main_Loop()
      } else {
          FrameTimer.Set(Options.GameSpeed);
      }
@@ -433,7 +618,7 @@ index a8aebd8..9beebd2 100644
  
      /*
      **	Update the display, unless we're inside a dialog.
-@@ -1624,7 +1899,10 @@ bool Main_Loop()
+@@ -1624,7 +1934,10 @@ bool Main_Loop()
                  Keyboard_Process(input);
              }
              //			HidPage.Lock();
@@ -445,20 +630,252 @@ index a8aebd8..9beebd2 100644
              //			HidPage.Unlock();
          }
      }
-@@ -1650,7 +1928,7 @@ bool Main_Loop()
+@@ -1650,7 +1963,11 @@ bool Main_Loop()
      /*
      **	AI logic operations are performed here.
      */
 -    Logic.AI();
 +    SHADEREMU_COUNT(ShaderEmu_Logic_Cycles, Logic.AI());
++#ifdef SHADEREMU
++    void ShaderEmu_Threat_Settle(void);
++    ShaderEmu_Threat_Settle();
++#endif
  
      //	Heap_Dump_Check( "After Logic.AI" );
  
+@@ -1710,6 +2027,9 @@ bool Main_Loop()
+         PlayerRestarts = false;
+         Map.Help_Text(TXT_NONE);
+         Set_Video_Cursor_Clip(false);
++#ifdef SHADEREMU
++        host_scene_drop();
++#endif
+         Do_Win();
+         Set_Video_Cursor_Clip(true);
+     }
+@@ -1726,6 +2046,9 @@ bool Main_Loop()
+         PlayerRestarts = false;
+         Map.Help_Text(TXT_NONE);
+         Set_Video_Cursor_Clip(false);
++#ifdef SHADEREMU
++        host_scene_drop();
++#endif
+         Do_Lose();
+         Set_Video_Cursor_Clip(true);
+     }
+@@ -1736,6 +2059,9 @@ bool Main_Loop()
+         PlayerRestarts = false;
+         Map.Help_Text(TXT_NONE);
+         Set_Video_Cursor_Clip(false);
++#ifdef SHADEREMU
++        host_scene_drop();
++#endif
+         Do_Restart();
+         Set_Video_Cursor_Clip(true);
+     }
+@@ -2656,6 +2982,11 @@ void CC_Draw_Shape(void const* shapefile,
+     char* shape_pointer;
+     uintptr_t shape_size;
+ 
++#ifdef SHADEREMU
++    if (ShaderEmu_GL_Shape(shapefile, shapenum, x, y, window, flags, fadingdata, ghostdata)) {
++        return;
++    }
++#endif
+     if (shapefile && shapenum != -1) {
+ 
+         /*
+diff --git a/tiberiandawn/display.cpp b/tiberiandawn/display.cpp
+index 20ff4f6..719e623 100644
+--- a/tiberiandawn/display.cpp
++++ b/tiberiandawn/display.cpp
+@@ -76,6 +76,12 @@
+  *   DisplayClass::Prev_Object -- Searches for the previous object on the map.                 *
+  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ #include "function.h"
++#ifdef SHADEREMU
++#include "common/host.h"
++bool ShaderEmu_GL_On(int cells);
++bool ShaderEmu_GL_Changed(void);
++unsigned ShaderEmu_GL_Cycles; /* what the map's scene cost, for the figures (conquer.cpp) */
++#endif
+ #include "common/fading.h"
+ #include "ccini.h"
+ 
+@@ -1598,6 +1604,18 @@ bool DisplayClass::Scroll_Map(DirType facing, int& distance, bool really)
+  *=============================================================================================*/
+ void DisplayClass::Refresh_Cells(CELL cell, short const* list)
+ {
++#ifdef SHADEREMU
++    /*
++    ** Where the GPU draws the map nothing is painted over, so no cell has anything to draw
++    ** again: it is enough that the scene is made again, if this is in it or near it.
++    */
++    extern bool ShaderEmu_GL_Live;
++    void ShaderEmu_GL_Near(CELL cell);
++    if (ShaderEmu_GL_Live) {
++        ShaderEmu_GL_Near(cell);
++        return;
++    }
++#endif
+     if (*list == REFRESH_SIDEBAR) {
+         list++;
+     }
+@@ -2092,6 +2110,15 @@ void DisplayClass::Draw_It(bool forced)
+ 
+     MapClass::Draw_It(forced);
+ 
++#ifdef SHADEREMU
++    /*
++    ** An object that changed says so to the screen, not to the map: the GPU's scene is made
++    ** again for one that is in the view or near it, and for nothing that is far away.
++    */
++    if (!IsToRedraw && !forced && ShaderEmu_GL_Changed()) {
++        IsToRedraw = true;
++    }
++#endif
+     if (IsToRedraw || forced) {
+         IsToRedraw = false;
+ 
+@@ -2146,6 +2173,26 @@ void DisplayClass::Draw_It(bool forced)
+         **	Check for a movement of the tactical map. If there has been some
+         **	movement, then part (or all) of the icons must be redrawn.
+         */
++#ifdef SHADEREMU
++        /*
++        ** The machine's GPU draws the map (gl.cpp): whole every time, wherever the view is.
++        */
++        if (ShaderEmu_GL_On((MapCellWidth + 2) * (MapCellHeight + 2))) {
++            ScenarioInit++;
++            if (DesiredTacticalCoord != TacticalCoord) {
++                Set_Tactical_Position(DesiredTacticalCoord);
++            }
++            ScenarioInit--;
++            unsigned began = host_cycles();
++            ShaderEmu_GL_Draw(forced);
++            ShaderEmu_GL_Cycles += host_cycles() - began;
++            if (IsRubberBand) {
++                LogicPage->Draw_Rect(BandX + TacPixelX, BandY + TacPixelY, NewX + TacPixelX, NewY + TacPixelY, WHITE);
++            }
++            CellRedraw.Reset();
++            return;
++        }
++#endif
+         if (Lepton_To_Pixel(Coord_X(DesiredTacticalCoord)) != Lepton_To_Pixel(Coord_X(TacticalCoord))
+             || Lepton_To_Pixel(Coord_Y(DesiredTacticalCoord)) != Lepton_To_Pixel(Coord_Y(TacticalCoord))) {
+ 
+diff --git a/tiberiandawn/display.h b/tiberiandawn/display.h
+index 42d052d..837c926 100644
+--- a/tiberiandawn/display.h
++++ b/tiberiandawn/display.h
+@@ -145,6 +145,9 @@ public:
+     */
+     virtual void AI(KeyNumType& input, int x, int y);
+     virtual void Draw_It(bool complete = false);
++#ifdef SHADEREMU
++    void ShaderEmu_GL_Draw(bool forced);
++#endif
+ 
+     /*
+     **	Added functionality.
+diff --git a/tiberiandawn/flasher.cpp b/tiberiandawn/flasher.cpp
+index 05e581f..9685b10 100644
+--- a/tiberiandawn/flasher.cpp
++++ b/tiberiandawn/flasher.cpp
+@@ -78,11 +78,19 @@ void FlasherClass::Debug_Dump(MonoClass* mono) const
+ bool FlasherClass::Process(void)
+ {
+     // 2019/09/20 JAS - Flashing info needs to exist per player
++#ifdef SHADEREMU
++    /* (nearly always none of them is counting: found out without a branch for each) */
++    unsigned any = 0;
+     for (int i = 0; i < HOUSE_COUNT; i++) {
+-        if (FlashCountPerPlayer[i]) {
+-            FlashCountPerPlayer[i]--;
+-        }
++        any |= FlashCountPerPlayer[i];
+     }
++    if (any)
++#endif
++        for (int i = 0; i < HOUSE_COUNT; i++) {
++            if (FlashCountPerPlayer[i]) {
++                FlashCountPerPlayer[i]--;
++            }
++        }
+ 
+     if (FlashCount) {
+         FlashCount--;
+diff --git a/tiberiandawn/help.cpp b/tiberiandawn/help.cpp
+index eb7bece..e7a4ef0 100644
+--- a/tiberiandawn/help.cpp
++++ b/tiberiandawn/help.cpp
+@@ -263,6 +263,11 @@ void HelpClass::Draw_It(bool forced)
+     TabClass::Draw_It(forced);
+ 
+     if (Text != TXT_NONE && (forced || !CountDownTimer.Time())) {
++#ifdef SHADEREMU
++        /* the map's page gets more than holes here (gl.cpp) */
++        extern void ShaderEmu_GL_Mark(int x0, int y0, int x1, int y1);
++        ShaderEmu_GL_Mark(DrawX - 1, DrawY - 1, DrawX + MAX(Width, 64) + 2, DrawY + 2 * FontHeight + 1);
++#endif
+ 
+         if (LogicPage->Lock()) {
+ 
+diff --git a/tiberiandawn/house.cpp b/tiberiandawn/house.cpp
+index 7e9f27c..da0d5c5 100644
+--- a/tiberiandawn/house.cpp
++++ b/tiberiandawn/house.cpp
+@@ -179,6 +179,35 @@ HouseClass::operator HousesType(void) const
+  *=============================================================================================*/
+ HouseClass* HouseClass::As_Pointer(HousesType house)
+ {
++#ifdef SHADEREMU
++    /*
++    ** Asked thousands of times a frame, mostly for houses that are not in the game: where each
++    ** was found is remembered (and checked), and which are missing, while the count is the same.
++    */
++    static int count = -1;
++    static unsigned missing;
++    static unsigned char where[32];
++    if (count != Houses.Count()) {
++        count = Houses.Count();
++        missing = 0;
++    }
++    if ((unsigned)house < 32) {
++        if (missing & (1u << house)) {
++            return (0);
++        }
++        if (where[house] < count && Houses.Ptr(where[house])->Class->House == house) {
++            return (Houses.Ptr(where[house]));
++        }
++        for (int index = 0; index < count; index++) {
++            if (Houses.Ptr(index)->Class->House == house) {
++                where[house] = (unsigned char)index;
++                return (Houses.Ptr(index));
++            }
++        }
++        missing |= 1u << house;
++        return (0);
++    }
++#endif
+     for (int index = 0; index < Houses.Count(); index++) {
+         if (Houses.Ptr(index)->Class->House == house) {
+             return (Houses.Ptr(index));
 diff --git a/tiberiandawn/init.cpp b/tiberiandawn/init.cpp
-index 8ae9955..08538a1 100644
+index 8ae9955..d03bedc 100644
 --- a/tiberiandawn/init.cpp
 +++ b/tiberiandawn/init.cpp
-@@ -412,6 +412,11 @@ bool Init_Game(int, char*[])
+@@ -42,6 +42,9 @@
+ 
+ #include "function.h"
+ #include "loaddlg.h"
++#ifdef SHADEREMU
++#include "common/host.h"
++#endif
+ #include "common/gitinfo.h"
+ #include "common/vqaconfig.h"
+ #include "common/wspudp.h"
+@@ -412,6 +415,11 @@ bool Init_Game(int, char*[])
              ScoresPresent = true;
              ThemeClass::Scan();
          }
@@ -470,7 +887,17 @@ index 8ae9955..08538a1 100644
      } else {
          CCDebugString("C&C95 - About to register CONQUER.MIX\n");
          new MFCD("CONQUER.MIX"); // Cached.
-@@ -1016,6 +1021,13 @@ bool Select_Game(bool fade)
+@@ -727,6 +735,9 @@ bool Select_Game(bool fade)
+         display = false;
+         Show_Mouse();
+     }
++#ifdef SHADEREMU
++    host_scene_drop(); /* menus: the page is all there is to show */
++#endif
+ 
+     /*
+     **	[Re]set any globals that need it, in preparation for a new scenario
+@@ -1016,6 +1027,13 @@ bool Select_Game(bool fade)
  
                      Scen.Scenario = 1;
                      BuildLevel = 1;
@@ -484,7 +911,7 @@ index 8ae9955..08538a1 100644
  
                      ScenPlayer = SCEN_PLAYER_GDI;
                      ScenDir = SCEN_DIR_EAST;
-@@ -2533,6 +2545,12 @@ void Init_Random(void)
+@@ -2533,6 +2551,12 @@ void Init_Random(void)
          /*
          ** Set the optional user-specified seed
          */
@@ -497,6 +924,81 @@ index 8ae9955..08538a1 100644
          if (CustomSeed != 0) {
              Seed = CustomSeed;
          } else {
+diff --git a/tiberiandawn/layer.cpp b/tiberiandawn/layer.cpp
+index bb688bc..01baf5a 100644
+--- a/tiberiandawn/layer.cpp
++++ b/tiberiandawn/layer.cpp
+@@ -86,6 +86,28 @@ bool LayerClass::Submit(ObjectClass const* object, bool sort)
+  *=============================================================================================*/
+ void LayerClass::Sort(void)
+ {
++#ifdef SHADEREMU
++    /*
++    ** The same pass, asking each object where it sorts once and not twice (a building works
++    ** that out from its type's size every time).
++    */
++    if (Count() > 1) {
++        ObjectClass* lower = (*this)[0];
++        COORDINATE lower_y = lower->Sort_Y();
++        for (int index = 0; index < Count() - 1; index++) {
++            ObjectClass* next = (*this)[index + 1];
++            COORDINATE next_y = next->Sort_Y();
++            if (next_y < lower_y) {
++                (*this)[index + 1] = lower;
++                (*this)[index] = next;
++            } else {
++                lower = next;
++                lower_y = next_y;
++            }
++        }
++    }
++    return;
++#endif
+     for (int index = 0; index < Count() - 1; index++) {
+         if (*(*this)[index + 1] < *(*this)[index]) {
+             ObjectClass* temp;
+diff --git a/tiberiandawn/map.cpp b/tiberiandawn/map.cpp
+index 4d484e7..1258628 100644
+--- a/tiberiandawn/map.cpp
++++ b/tiberiandawn/map.cpp
+@@ -1536,6 +1536,10 @@ int MapClass::Cell_Region(CELL cell)
+  *=========================================================================*/
+ int MapClass::Cell_Threat(CELL cell, HousesType house)
+ {
++#ifdef SHADEREMU
++    void ShaderEmu_Threat_Settle(void);
++    ShaderEmu_Threat_Settle();
++#endif
+     int threat = HouseClass::As_Pointer(house)->Regions[Map.Cell_Region(Map[cell].Cell_Number())].Threat_Value();
+     // using function for IsVisible so we have different results for different players - JAS 2019/09/30
+     if (!threat && Map[cell].Is_Visible(house)) {
+diff --git a/tiberiandawn/options.cpp b/tiberiandawn/options.cpp
+index c4206a0..0a6f5a4 100644
+--- a/tiberiandawn/options.cpp
++++ b/tiberiandawn/options.cpp
+@@ -133,6 +133,9 @@ OptionsClass::OptionsClass(void)
+     , KeyTeam10(KN_0)
+ {
+     GameSpeed = TIMER_SECOND / TICKS_PER_SECOND;
++#ifdef SHADEREMU
++    GameSpeed = 3; /* 20 steps a second (Load_Settings) */
++#endif
+     ScrollRate = TIMER_SECOND / TICKS_PER_SECOND;
+     Volume = 0xE0;
+     ScoreVolume = 0x90;
+@@ -564,7 +567,12 @@ void OptionsClass::Load_Settings(void)
+     **	Read in the Options values
+     */
+     static char const* const OPTIONS = "Options";
++#ifdef SHADEREMU
++    /* 20 steps a second where nothing says otherwise: units move in steps of the game's speed */
++    GameSpeed = ini.Get_Int(OPTIONS, "GameSpeed", 3);
++#else
+     GameSpeed = ini.Get_Int(OPTIONS, "GameSpeed", 4);
++#endif
+     ScrollRate = ini.Get_Int(OPTIONS, "ScrollRate", 4);
+     Set_Brightness(ini.Get_Int(OPTIONS, "Brightness", 0x80));
+     Set_Sound_Volume(ini.Get_Int(OPTIONS, "Volume", 0xA0), false);
 diff --git a/tiberiandawn/scroll.cpp b/tiberiandawn/scroll.cpp
 index 596a8f7..e7e549e 100644
 --- a/tiberiandawn/scroll.cpp
@@ -521,6 +1023,63 @@ index 596a8f7..e7e549e 100644
  
                  if (!Scroll_Map(direction, distance, false)) {
                      Override_Mouse_Shape((MouseType)(MOUSE_NO_N + control), false);
+diff --git a/tiberiandawn/techno.cpp b/tiberiandawn/techno.cpp
+index 07b96eb..7af75e1 100644
+--- a/tiberiandawn/techno.cpp
++++ b/tiberiandawn/techno.cpp
+@@ -1598,6 +1598,16 @@ bool TechnoClass::Evaluate_Cell(ThreatType method,
+  *   11/14/1994 JLB : Created.                                                                 *
+  *   06/20/1995 JLB : Greatly optimized scan method.                                           *
+  *=============================================================================================*/
++#ifdef SHADEREMU
++/*
++** A cell nobody stands in holds no threat, which Evaluate_Cell finds out after a call, a
++** bounds check and two more calls. Most cells of a scan are such: ask the cell first.
++*/
++#define SHADEREMU_OCCUPIED(cell) (Map[cell].OccupierPtr != NULL)
++#else
++#define SHADEREMU_OCCUPIED(cell) true
++#endif
++
+ TARGET TechnoClass::Greatest_Threat(ThreatType method) const
+ {
+     ObjectClass const* bestobject = NULL;
+@@ -1696,7 +1706,7 @@ TARGET TechnoClass::Greatest_Threat(ThreatType method) const
+ 
+                 if ((Cell_Y(cell) - radius) >= Map.MapCellY) {
+                     newcell = XY_Cell(Cell_X(cell) + x, Cell_Y(cell) - radius);
+-                    if (Evaluate_Cell(method, mask, newcell, range, &object, value)) {
++                    if (SHADEREMU_OCCUPIED(newcell) && Evaluate_Cell(method, mask, newcell, range, &object, value)) {
+                         if (bestval < value) {
+                             bestobject = object;
+                         }
+@@ -1705,7 +1715,7 @@ TARGET TechnoClass::Greatest_Threat(ThreatType method) const
+ 
+                 if ((Cell_Y(cell) + radius) < (Map.MapCellY + Map.MapCellHeight)) {
+                     newcell = XY_Cell(Cell_X(cell) + x, Cell_Y(cell) + radius);
+-                    if (Evaluate_Cell(method, mask, newcell, range, &object, value)) {
++                    if (SHADEREMU_OCCUPIED(newcell) && Evaluate_Cell(method, mask, newcell, range, &object, value)) {
+                         if (bestval < value) {
+                             bestobject = object;
+                         }
+@@ -1726,7 +1736,7 @@ TARGET TechnoClass::Greatest_Threat(ThreatType method) const
+ 
+                 if ((Cell_X(cell) - radius) >= Map.MapCellX) {
+                     newcell = XY_Cell(Cell_X(cell) - radius, Cell_Y(cell) + y);
+-                    if (Evaluate_Cell(method, mask, newcell, range, &object, value)) {
++                    if (SHADEREMU_OCCUPIED(newcell) && Evaluate_Cell(method, mask, newcell, range, &object, value)) {
+                         if (bestval < value) {
+                             bestobject = object;
+                         }
+@@ -1735,7 +1745,7 @@ TARGET TechnoClass::Greatest_Threat(ThreatType method) const
+ 
+                 if ((Cell_X(cell) + radius) < (Map.MapCellX + Map.MapCellWidth)) {
+                     newcell = XY_Cell(Cell_X(cell) + radius, Cell_Y(cell) + y);
+-                    if (Evaluate_Cell(method, mask, newcell, range, &object, value)) {
++                    if (SHADEREMU_OCCUPIED(newcell) && Evaluate_Cell(method, mask, newcell, range, &object, value)) {
+                         if (bestval < value) {
+                             bestobject = object;
+                         }
 diff --git a/tiberiandawn/theme.cpp b/tiberiandawn/theme.cpp
 index 972a6dc..2e1a5ab 100644
 --- a/tiberiandawn/theme.cpp

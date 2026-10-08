@@ -416,9 +416,25 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
 - `rdcycle` costs a user program one instruction and counts the machine's instructions: put
   two around anything to know what it costs. `gettimeofday` is 416; the clock word at
   0x87000034 (milliseconds, a machine frame old at most) is a load.
-- Stores a power of two apart fill the write cache early: its set comes from address bits 2-8
-  and 11-12, so a field of records 64 bytes apart lands in 32 sets of four. Doom's line marks
-  did that. Keep such marks in an array of their own.
+- The write cache holds RAM texels (four words), not words: 768 of them in buckets of three,
+  two tables of 128 buckets with different hashes, a texel going to the second table only
+  when its bucket in the first is full (the same block in five headers; `l1_find` and
+  `mem_set_ram` in `mem.h`, `l1_state_find` in `types.h` for the commit). An entry is made
+  from the texel as RAM has it, so a store that changes nothing costs none. Frames a full
+  cache ended, desktop with glxgears, 12,000 frames: 8,237 with upstream's word cache, 8,065
+  with its set from xor-ed address bits, 39 with this. Tag 0 is a free entry and a texel's
+  tag its number plus one: the word cache's commit took a free entry for address 0 and wrote
+  0 over the first word of RAM.
+- `L1_TABLE_BITS` is the cache's size (7: 768 texels; 6: 384). The smaller one makes every
+  instruction about 7% cheaper in the tick pass (the array is the cost) and brings the stalls
+  back (4,101 such frames on that desktop run). Wall time in the harness is about the same
+  for both; where a pass is expensive or their number is capped, as in Unity, keep 7.
+- To study a change to it, record a run with `--l1-log FILE` (D3D12) and `--ticks 32
+  --fixed-dt 0.0000625`, and run `python tools\l1_sim.py FILE` (texels) or `tools\l1_study.py`
+  (words); then count "write cache full" frames with `--frame-log` and
+  `tools\boot_profile.py`. Stalls move, so state hashes change: check the guest's own sums
+  (Tiberian Dawn's, file checksums in Linux) and the final RAM of a bare-metal program, and
+  re-make the snapshots.
 - A 64-bit division is a library call of some 400 instructions (`__divdi3`); a 32-bit one is
   an instruction. In the fast path of anything, make the operands fit.
 - musl's `qsort` with a comparison function cost 1,500 instructions an element on 2,500
@@ -465,9 +481,18 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   object, `EmuShareHub` ("Share" in the scene) packs and unpacks. To test with one player, set
   the hub's `selfTest` in play mode, or `ClientSimMain.SpawnRemotePlayer`, write the new
   player's `EmuShare` variables and send it `_onDeserialization`. ClientSim sends a packet a
-  second where VRChat sends five. With two real clients the hub's `netTest` makes them test
+  second where the hub means to send six or seven: watch a change to the stream at both rates (an editor hook
+  that clears the hub's own `EmuShare`'s `sending` each frame gives VRChat's). With two real clients the hub's `netTest` makes them test
   themselves and log `[ShareTest]` lines to VRChat's output logs. "ShaderEmu/Add sharing to the open scene" puts it into a
   scene without building the world again.
+- A rewrite of the display stream (October 2026: 8x8 cells, a DCT for what holds still, a
+  palette for what moves, whole frames) was dropped: watched in the world, the stream as
+  committed looked better. dB against a model of it did not say so. Judge the stream by
+  watching a game through it.
+- The stream's fine level (`docs/share.md`) is checked against a numpy model of its bytes:
+  dump the hub's `storeBytes`, `fineBefore` and `remotePicture` in play mode once `work` is
+  false; every quarter must be the model's bytes (but for a few rounding ties) and the
+  decoder within a level of the model's picture.
 - A shader that packs bytes for Udon uses `SV_Position` and `Load` on both sides (target rows
   are then the readback's rows and `LoadRawTextureData`'s); only where it meets
   `DisplayPicture` does it use the `uv`, as `Display.shader` does. `sample` is a reserved word.
@@ -513,9 +538,42 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
 - In Unity the audio thread runs `EmuSoundOut._onAudioFilterRead` (`docs/sound.md`). Play mode
   that is paused, or paused by an error, leaves the audio clock running: the card's clock
   jumps when it resumes. "ShaderEmu/Add sound to the open scene" installs it without a bake.
+- The world's speed has two modes (the panel's button by "Speed", `EmuMachine.SpeedMode`): fixed,
+  so many instructions a frame, and steady, so many a second. Steady counts a round for what
+  rounds really ran lately (no less than a quarter of 8,192: an idle guest gets no more), and
+  lowers the most rounds a frame may have while frames come slower than `minFrameRate` (45).
+  To check it, read `totalInstructions` twice in play mode, and `roundCap` with the slider at 7.
+- The memory screen has three pictures (`EmuScope`, `Scope.shader`): RAM with a legend of whose
+  each part is (the colours are `owner()` in `MemView.shader`, the names a canvas over the
+  screen), the ROM, and the sound ring as two traces. The CPU's 64 x 64 state texels have a
+  small screen of their own to its right, always on.
+  "ShaderEmu/Add the memory screen's views and speed modes to the open scene" installs them
+  without a bake. A change to the memory map moves `owner()` and the names in `ShaderEmuScope.cs`.
+- The desktop's programs share a list, a slider and a file chooser (`linux/apps/ui.h`,
+  `ui_files.h`: `ui_list_draw` / `ui_list_event`, `ui_choose_file`). A list's program selects
+  mouse motion events if its scroll bar is to be dragged.
+- Settings (`nxsettings`) changes the screen's size by writing `/tmp/nxsize` and running
+  `nx restart` detached (`setsid`): the window system and every program on it go, Settings too.
+  The host's flags word (0x8700003c) says the largest screen it shows, in 16s of pixels (bits
+  8-15 width, 16-23 height): 1280 x 720 in the world, 2048 x 2048 in the harness. Settings lists
+  only what fits and the window system falls back to its default for anything larger.
+  To check it without a pointer: `nx & sleep 8; nxsettings size 800x600`, then the display's
+  words in a snapshot; `NXSETTINGS_TAB=N nxsettings` opens on a tab, `nxsettings volume 30`
+  must leave 76 at 0x87000224. Its settings last until power-off: nothing is written to the ROM.
+- The sound card's master volume is set to full once, when the driver starts, not at every
+  open: it is the system's volume, which Settings changes.
 - Doom's window is the largest of 1x to 3x the display has room for (`doom_window_scale` in
   `doom_video.c`); a test that compares its pictures with older ones passes `-1`.
-- Tiberian Dawn leaves frames undrawn when it is late (`TDAWN_SKIP=0` for none) and sizes
-  scroll steps by time; neither happens with `TDAWN_NO_DELAY=1` or `TDAWN_FRAMES`, which is
-  what makes those runs repeat. `TDAWN_SCROLL=96 TDAWN_CHECK_REDRAW=1` with a held frame must
+- Tiberian Dawn sizes scroll steps by time and cycles its palette by the clock (and leaves
+  frames undrawn when late, with `TDAWN_SKIP=N`); none of it happens with `TDAWN_NO_DELAY=1`
+  or `TDAWN_FRAMES`, which is what makes those runs and their pictures repeat. `TDAWN_SCROLL=96 TDAWN_CHECK_REDRAW=1` with a held frame must
   print `0 of 64000 pixels differ from a full redraw`.
+- Tiberian Dawn's map is drawn by the GPU (`linux/tdawn/gl.cpp`, `docs/tdawn.md`); the game's
+  own drawing is `TDAWN_RENDER=soft`, and what the native reference build does. To check a
+  change, hold both at one frame and compare the pictures: only shadows and the shroud's
+  edges may differ, by a few levels (`>32` levels: the pointer and nothing else).
+- A texture coordinate of a compact vertex is a 1,024th of the texture: a rectangle of part of
+  a texture is exact only where its edges are whole 1,024ths. Make atlases 1,024 wide, and
+  give a texture a height of 256 or 512 even when fewer rows are used.
+- GPU memory left to one program is 3.25 MB (`TEXTURES_AT` in `gles.c`). Tiberian Dawn uses
+  2.9 MB of it; a build with MEGAMAPS has 16,384 cells, and only 4,096 get a kept quad.

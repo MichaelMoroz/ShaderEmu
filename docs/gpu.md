@@ -43,7 +43,7 @@ colour fragments. The CPU shader has no GPU code.
 | `0x8700001c` | lists drawn so far; it changes when a submitted list has been drawn |
 | `0x87000034` | the host's clock in milliseconds, updated once per frame |
 | `0x87000038` | copies made so far |
-| `0x8700003c` | host flags, written every frame. Bit 0: the guest should start its desktop when it boots |
+| `0x8700003c` | host flags, written every frame. Bit 0: the guest should start its desktop when it boots. Bits 8-15 and 16-23: the largest screen the host shows, width and height in 16s of pixels (0: it does not say) |
 | `0x87000100` | a request for a page from the host, and its answer (`docs/fetch.md`) |
 | `0x87000300` | a 3D program's last whole frame, for a host that shows it in space (`docs/volume.md`) |
 | `0x87000060` | a lock for programs that share the GPU: take it with an atomic swap around looking at the submit word and writing a list's registers |
@@ -185,6 +185,12 @@ way: `GLfixed` is what the device reads.
   not map the pointer by the size it asked for. `seglPicturePoint()` turns an event's x, y
   into a pixel of such a picture at the window's size now; `seglWindowChanged()` (on a
   `GR_UPDATE_SIZE` event) has the library learn the new size at once, not at the next swap.
+- `seglSprite()` is a rectangle of a texture over what the list drew before it: always the
+  blended pass with no depth, so that many small pictures and their shadows keep their
+  order. A texture of `SEGL_BITS` is one bit a pixel, drawn in the call's colour.
+- `seglSwapAgain()` draws the last list once more. Its textures, and the commands and vertices
+  `seglLastCommand()` and `seglLastVertices()` pointed at, are the program's memory: a
+  pointer that moved or a picture that changed needs no new list (`docs/tdawn.md`).
 - A set holds 3,072 commands, 256 matrix blocks and 10,240 compact vertices of a frame's own.
 
 ## From Linux

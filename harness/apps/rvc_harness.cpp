@@ -82,6 +82,7 @@ struct Options {
     std::string gpuCapture;   // BMP of the GPU device's colour target, written at exit
     std::string pcLog;        // per frame: the guest's pc and the instructions it ran, as two uint32
     std::string frameLog;     // per frame, four uint32: pc, instructions, last stall, microseconds since start
+    std::string l1Log;        // per frame: instructions, last stall, a count, then the RAM texels its write cache held
     double statsAfter = -1;   // >= 0: print a STATS line for the part of the run after this many seconds
     bool noDoubles = false;
     bool noBands = false;     // --no-bands: the commit rewrites all of RAM, as a CustomRenderTexture does
@@ -158,6 +159,7 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
   --sound-capture FILE save what it mixed as a WAV at exit, and FILE.frames for tools/sound_reference.py
   --pc-log FILE        sample the guest's pc once a frame, for tools/pc_profile.py
   --frame-log FILE     per frame: pc, instructions, last stall and time, for tools/boot_profile.py
+  --l1-log FILE        per frame: the addresses in the write cache, for tools/l1_study.py (D3D12)
   --stats-after S      print instructions/s and frames/s for the run after its first S seconds
                        (and start the pc log there)
   --no-desktop         terminal mode: boot to the shell only (by default the guest starts its desktop);
@@ -288,6 +290,7 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--sound-capture") o.soundCapture = next("--sound-capture");
         else if (a == "--pc-log") o.pcLog = next("--pc-log");
         else if (a == "--frame-log") o.frameLog = next("--frame-log");
+        else if (a == "--l1-log") o.l1Log = next("--l1-log");
         else if (a == "--stats-after") o.statsAfter = atof(next("--stats-after").c_str());
         else if (a == "--define") o.defines.push_back(next("--define"));
         else if (a == "--no-bands") o.noBands = true;
@@ -577,6 +580,7 @@ int main(int argc, char** argv) {
     bo.verbose = opt.verbose;
     bo.gpu = opt.gpu;
     bo.profile = opt.profile;
+    bo.stateLog = !opt.l1Log.empty();
     bo.present = opt.present;
     bo.dxcOpt = opt.dxcOpt;
     bo.dxcSm = opt.dxcSm;
@@ -721,6 +725,8 @@ int main(int argc, char** argv) {
 
     std::vector<uint32_t> pcSamples;
     std::vector<uint32_t> frameSamples;
+    std::vector<uint32_t> l1Samples;
+    uint32_t lastInstructions = 0, lastStall = 0;
     bool statsStarted = false;
     double timeSum[3] = {0, 0, 0};
     int timeSamples = 0;
@@ -861,6 +867,8 @@ int main(int argc, char** argv) {
             double us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();
             frameSamples.insert(frameSamples.end(), {texel(36, 3), (uint32_t)(clock - lastClock), texel(40, 2), (uint32_t)us});
         }
+        lastInstructions = haveClock ? (uint32_t)(clock - lastClock) : 0;
+        lastStall = texel(40, 2);
         lastClock = clock;
         haveClock = true;
 
@@ -891,12 +899,25 @@ int main(int argc, char** argv) {
         }
     };
 
-    std::vector<uint8_t> row, mix;
+    std::vector<uint8_t> row, mix, zone;
     // The oldest frame's row, and its mix when it drew one.
     auto takeRow = [&]() {
         uint64_t f;
         if (!backend.popRow(row, f)) return false;
         processRow(row, f);
+        if (backend.takeState(zone)) {
+            // the write cache is 1,024 texels from 1068 on: buckets of four, the first holding the
+            // tags of three RAM texels (texel number + 1, 0 when free). The log gets each cached
+            // texel's address: which of its four words were written is not kept anywhere.
+            size_t at = l1Samples.size();
+            l1Samples.insert(l1Samples.end(), {lastInstructions, lastStall, 0u});
+            for (size_t t = 1068; t < 1068 + 1024; t += 4) {
+                const uint32_t* w = (const uint32_t*)(zone.data() + t * 16);
+                for (int e = 0; e < 3; ++e)
+                    if (w[e]) l1Samples.push_back((w[e] - 1) << 4);
+            }
+            l1Samples[at + 2] = (uint32_t)(l1Samples.size() - at - 3);
+        }
         if (backend.takeSound(mix) && !soundFrames.empty() && soundFrames.front().first == f) {
             uint32_t cursor = soundFrames.front().second;
             soundFrames.pop_front();
@@ -973,7 +994,8 @@ int main(int argc, char** argv) {
             mat.setVector("_InputPointer", pointer.x, pointer.y, pointer.panelW, pointer.panelH);
             mat.setInt("_InputButtons", pointer.buttons);
             mat.setInt("_HostMs", (int64_t)(uint32_t)(t * 1000.0));   // a clock programs read without a system call
-            mat.setInt("_HostFlags", opt.desktop ? 1 : 0);
+            // bit 0: start the desktop at boot; then the largest screen this host shows, in 16s of pixels
+            mat.setInt("_HostFlags", (opt.desktop ? 1 : 0) | (kGpuTarget / 16) << 8 | (kGpuTarget / 16) << 16);
             mat.setInt("_InputKeySeq", keySeq);
             mat.setInt("_InputKeyCount", n);
             mat.setInt("_InputKey0", batch[0]);
@@ -1258,6 +1280,7 @@ int main(int argc, char** argv) {
                     timeSum[1] / timeSamples, timeSum[2] / timeSamples, 1000.0 * secs / (double)frames);
     }
     if (!opt.frameLog.empty()) writeFileBinary(opt.frameLog, (const uint8_t*)frameSamples.data(), frameSamples.size() * 4);
+    if (!opt.l1Log.empty()) writeFileBinary(opt.l1Log, (const uint8_t*)l1Samples.data(), l1Samples.size() * 4);
     if (!opt.pcLog.empty()) writeFileBinary(opt.pcLog, (const uint8_t*)pcSamples.data(), pcSamples.size() * 4);
     if (!opt.soundCapture.empty() && exitCode != 1)
         fprintf(stderr, "\n[harness] sound (%u mixes) %s %s\n", soundMixes, soundCapture.write(opt.soundCapture) ? "written to" : "capture FAILED:",

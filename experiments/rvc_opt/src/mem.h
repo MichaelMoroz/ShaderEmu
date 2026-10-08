@@ -239,6 +239,19 @@ void mem_set_ram_l1(L1P uint word_addr, uint bits, uint mask) {
     uint at = e0 != 0 ? b0 * 4 + e0 : e1 != 0 ? b1 * 4 + e1 : 0;
     uint4 texel;
     [branch]
+    if (at != 0 && mask == 0xffffffff) {
+        // A whole word into a texel the cache has (the rest of a register save, of a copy):
+        // what was there does not matter, so the texel is not read, only one of its words written.
+        PROF(PROF_ram_write_store)
+        mem_cache_bloom |= word_addr;
+        [branch]
+        if (wi < 2) {
+            if (wi == 0) { l1_cache[at].x = bits; } else { l1_cache[at].y = bits; }
+        } else {
+            if (wi == 2) { l1_cache[at].z = bits; } else { l1_cache[at].w = bits; }
+        }
+    } else {
+    [branch]
     if (at != 0) {
         texel = l1_cache[at];
     } else {
@@ -255,9 +268,8 @@ void mem_set_ram_l1(L1P uint word_addr, uint bits, uint mask) {
         cur_val = cpu.cache.ram_l1_last_val;
     }
     uint val = (cur_val & ~mask) | (bits & mask);
-    if (val == cur_val) {
-        return;
-    }
+    [branch]
+    if (val != cur_val) {
     PROF(PROF_ram_write_store)
     mem_cache_bloom |= word_addr;
     mem_dirty |= 1u << ((word_addr >> 22) & 31);
@@ -280,6 +292,8 @@ void mem_set_ram_l1(L1P uint word_addr, uint bits, uint mask) {
         cpu.cache.ram_l1_last_addr = word_addr;
         cpu.cache.ram_l1_last_val = val;
         cpu.stall = STALL_MEM_CACHE_L1;
+    }
+    }
     }
 }
 

@@ -61,6 +61,7 @@ public:
             check(dx_.dev->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocs_[s])), "allocator");
             rowBuf_[s] = readbackBuffer(rowFootprint_, kControlTexels, 2, kStateFormat);   // row 0, then the control texels
             if (soundPso_) soundBuf_[s] = readbackBuffer(soundFootprint_, kSoundSide, kSoundSide, kSoundFormat);
+            if (opt.stateLog) zoneBuf_[s] = readbackBuffer(zoneFootprint_, 64, 64, kStateFormat);
         }
         check(dx_.dev->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocs_[0].Get(), nullptr, IID_PPV_ARGS(&cl_)), "command list");
         cl_->Close();
@@ -336,6 +337,13 @@ public:
         cl_->CopyTextureRegion(&rdst, 0, 0, 0, &rsrc, &rowBox);
         D3D12_BOX controlBox{0, kControlRow, 0, kControlTexels, kControlRow + 1, 1};
         cl_->CopyTextureRegion(&rdst, 0, 1, 0, &rsrc, &controlBox);
+        if (zoneBuf_[slot]) {
+            D3D12_TEXTURE_COPY_LOCATION zdst = rdst;
+            zdst.pResource = zoneBuf_[slot].Get();
+            zdst.PlacedFootprint = zoneFootprint_;
+            D3D12_BOX zoneBox{0, 0, 0, 64, 64, 1};
+            cl_->CopyTextureRegion(&zdst, 0, 0, 0, &rsrc, &zoneBox);
+        }
         D3D12_RESOURCE_BARRIER swapStates[2] = {
             transition(state_[dst].Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE),
             transition(state_[cur].Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET)};
@@ -368,6 +376,13 @@ public:
         out.insert(out.end(), base + rowFootprint_.Footprint.RowPitch, base + rowFootprint_.Footprint.RowPitch + kControlTexels * 16);
         rowBuf_[r.slot]->Unmap(0, nullptr);
         tag = r.tag;
+        lastZone_.clear();
+        if (zoneBuf_[r.slot] && SUCCEEDED(zoneBuf_[r.slot]->Map(0, nullptr, (void**)&p))) {
+            lastZone_.resize(64 * 64 * 16);
+            for (UINT y = 0; y < 64; ++y)
+                memcpy(lastZone_.data() + y * 64 * 16, p + zoneFootprint_.Offset + (size_t)y * zoneFootprint_.Footprint.RowPitch, 64 * 16);
+            zoneBuf_[r.slot]->Unmap(0, nullptr);
+        }
         lastSound_.clear();
         if (r.sound && SUCCEEDED(soundBuf_[r.slot]->Map(0, nullptr, (void**)&p))) {
             const size_t pitch = (size_t)kSoundSide * 8;
@@ -376,6 +391,12 @@ public:
                 memcpy(lastSound_.data() + y * pitch, p + soundFootprint_.Offset + (size_t)y * soundFootprint_.Footprint.RowPitch, pitch);
             soundBuf_[r.slot]->Unmap(0, nullptr);
         }
+        return true;
+    }
+    bool takeState(std::vector<uint8_t>& out) override {
+        if (lastZone_.empty()) return false;
+        out.swap(lastZone_);
+        lastZone_.clear();
         return true;
     }
     bool takeSound(std::vector<uint8_t>& out) override {
@@ -718,6 +739,9 @@ private:
     ComPtr<ID3D12DescriptorHeap> soundRtvHeap_;
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT soundFootprint_{};
     std::vector<uint8_t> lastSound_;
+    ComPtr<ID3D12Resource> zoneBuf_[kSlots];   // --l1-log: the CPU's state texels of each frame
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT zoneFootprint_{};
+    std::vector<uint8_t> lastZone_;
 
     ComPtr<ID3D12RootSignature> gpuRoot_;
     ComPtr<ID3D12PipelineState> gpuPso_[8];

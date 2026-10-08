@@ -30,6 +30,8 @@ public class EmuMachine : UdonSharpBehaviour
     public RenderTexture displayTexture;    // the decoded picture, a pixel a texel, with mipmaps
     public Material displayShowMaterial;    // DisplayShow.shader, on the wall
     public Material heatMaterial;           // the memory view's
+    public Material stateViewMaterial;      // Scope.shader showing the CPU's state texels
+    public Material romViewMaterial;        // and the ROM
     public Material readbackMaterial;
     public RenderTexture readbackTexture;   // 448 x 1, one pixel per word
 
@@ -59,6 +61,8 @@ public class EmuMachine : UdonSharpBehaviour
     public TextMeshProUGUI powerLabel;
     public TextMeshProUGUI pauseLabel;
     public Slider speedSlider;         // whole steps: 2,048 instructions a frame, doubled per step
+    public TextMeshProUGUI modeLabel;  // on the button that picks how the slider is read
+    public float minFrameRate = 45f;   // "steady" gives up instructions before frames come slower than this
     public bool powerOnAtStart;        // off until someone presses Power
 
     [HideInInspector] public int displayMode, displayWidth, displayHeight;
@@ -83,6 +87,12 @@ public class EmuMachine : UdonSharpBehaviour
     private bool powered, paused;
     private int budget = 32768;        // instructions a frame
     private int rounds = 4, ticks = TicksPerRound;
+    // Steady: so many instructions a second, however long a frame is, as far as the frame rate allows.
+    private bool steady;
+    private float targetIps = 2000000f;
+    private int roundCap = MaxRounds, guardWait, steadyRounds = 1;
+    private float smoothDt = 0.011f, carry;
+    private float perRound = TicksPerRound;   // instructions a round really ran, lately: many end early
     private RenderTexture current, other;
     private int initLeft;
     private int requestsSent, requestsDone, ignoreUntil;
@@ -165,8 +175,47 @@ public class EmuMachine : UdonSharpBehaviour
 
     public void SpeedChanged()
     {
-        SetBudget(2048 << (int)speedSlider.value);
+        // the same eight steps: instructions a frame from 2,048, or a second from 125,000
+        if (steady) targetIps = 125000f * (1 << (int)speedSlider.value);
+        else SetBudget(2048 << (int)speedSlider.value);
         ShowLabels();
+    }
+
+    public void SpeedMode()
+    {
+        steady = !steady;
+        roundCap = MaxRounds;
+        carry = 0f;
+        SpeedChanged();
+    }
+
+    // How many rounds this frame gets in steady mode. The target times the frame's length is
+    // what is owed, and a round counts for what rounds have really run lately (but no less than
+    // a quarter of what it may: an idle guest is not worth more rounds). When frames come slower
+    // than minFrameRate the most rounds a frame may have comes down, and creeps back up after.
+    private int SteadyRounds()
+    {
+        float dt = Mathf.Min(Time.unscaledDeltaTime, 0.1f);
+        smoothDt += (dt - smoothDt) * 0.1f;
+        float limit = 1f / minFrameRate;
+        if (--guardWait <= 0)
+        {
+            guardWait = 6;
+            if (smoothDt > limit) roundCap = Mathf.Max(1, roundCap - 1 - roundCap / 8);
+            else if (smoothDt < limit * 0.8f && roundCap < MaxRounds) roundCap++;
+        }
+        float owed = targetIps * dt + carry;
+        float worth = Mathf.Clamp(perRound, TicksPerRound / 4, TicksPerRound);
+        int n = Mathf.Clamp((int)(owed / worth), 1, roundCap);
+        int each = owed < TicksPerRound / 2 ? Mathf.Clamp((int)owed, 512, TicksPerRound) : TicksPerRound;
+        carry = Mathf.Clamp(owed - n * Mathf.Min(worth, each), -TicksPerRound, TicksPerRound);
+        if (each != ticks)
+        {
+            ticks = each;
+            tickMaterial.SetInt("_Ticks", ticks);
+        }
+        steadyRounds = n;
+        return n;
     }
 
     private void SetBudget(int instructionsPerFrame)
@@ -179,7 +228,10 @@ public class EmuMachine : UdonSharpBehaviour
 
     private void ShowLabels()
     {
-        if (speedLabel != null) speedLabel.text = "up to " + (rounds * ticks).ToString("N0") + " instructions a frame";
+        if (speedLabel != null)
+            speedLabel.text = steady ? targetIps.ToString("N0") + " a second, while frames keep to " + minFrameRate.ToString("F0") + " a second"
+                                     : "up to " + (rounds * ticks).ToString("N0") + " instructions a frame";
+        if (modeLabel != null) modeLabel.text = steady ? "Steady: per second" : "Fixed: per frame";
         if (powerLabel != null) powerLabel.text = powered ? "Power off" : "Power on";
         if (pauseLabel != null) pauseLabel.text = paused ? "Resume" : "Pause";
         displayMaterial.SetFloat("_Power", powered ? 1f : 0f);
@@ -228,6 +280,7 @@ public class EmuMachine : UdonSharpBehaviour
         gpuMaterial.SetTexture("_Data_MTD_G", Pick(5));
         gpuMaterial.SetTexture("_Data_MTD_B", Pick(6));
         gpuMaterial.SetTexture("_Data_MTD_A", Pick(7));
+        if (romViewMaterial != null) romViewMaterial.SetTexture("_Data_MTD_R", Pick(4));
         if (sound != null)
         {
             // samples are played from where they lie in the ROM
@@ -267,6 +320,10 @@ public class EmuMachine : UdonSharpBehaviour
         tickMaterial.SetInt("_UartInHi", 0);
         tickMaterial.SetInt("_UdonUARTInTag", 0);
         machineMaterial.SetInt("_InputKeyCount", 0);
+        // the host flags: the desktop at boot, and the largest screen the GPU's target can show
+        // (in 16s of pixels: the word must stay within what a material's number holds exactly)
+        RenderTexture target = gpuCamera.targetTexture;
+        machineMaterial.SetInt("_HostFlags", 1 | (target.width / 16) << 8 | (target.height / 16) << 16);
         VRCPlayerApi player = Networking.LocalPlayer;
         tickMaterial.SetInt("_PlayerID", player != null ? player.playerId : 0);
         if (consoleKeyboard != null) consoleKeyboard.Flush();
@@ -588,7 +645,7 @@ public class EmuMachine : UdonSharpBehaviour
         bool running = initLeft == 0;
         if (running) Inputs();
         if (running) FetchStep();
-        int n = running ? rounds : 1;
+        int n = !running ? 1 : steady ? SteadyRounds() : rounds;
         machineMaterial.SetInt("_SoundMixed", 0);
         for (int i = 0; i < n; i++)
         {
@@ -628,6 +685,7 @@ public class EmuMachine : UdonSharpBehaviour
         gpuMaterial.SetTexture("_State", current);
         ShowDisplay();
         heatMaterial.SetTexture("_State", current);
+        if (stateViewMaterial != null) stateViewMaterial.SetTexture("_State", current);
         volumeMaterial.SetTexture("_State", current);
 
         if (Time.time - statsAt >= 0.5f) ShowStats();
@@ -757,6 +815,7 @@ public class EmuMachine : UdonSharpBehaviour
         if (haveClock)
         {
             uint ran = clock - lastClock;
+            if (steady && ticks == TicksPerRound) perRound += (Mathf.Min(ran, TicksPerRound) - perRound) * 0.05f;
             instructions += ran;
             totalInstructions += ran;
         }
@@ -789,7 +848,8 @@ public class EmuMachine : UdonSharpBehaviour
         if (statsText == null) return;
         string display = displayWidth > 0 ? "mode " + displayMode + ", " + displayWidth + " x " + displayHeight : "off";
         statsText.text =
-            (paused ? "paused" : "running") + ", " + rounds + " x " + ticks + " instructions a frame at most\n" +
+            (paused ? "paused" : "running") + ", " + (steady ? steadyRounds + " x " + ticks + " this frame (steady, at most " + roundCap + " rounds)"
+                                                             : rounds + " x " + ticks + " instructions a frame at most") + "\n" +
             speedLine + "\n" +
             "pc " + pc.ToString("x8") + "   stall " + lastStall + "   commits " + lastCommits + "\n" +
             "instructions " + totalInstructions.ToString("N0") + "\n" +

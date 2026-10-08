@@ -43,6 +43,7 @@
 #define REG_BUFFERS	25		/* goes up when a window gets another buffer: programs that draw into
 					 * their window themselves ask where it is again */
 #define REG_COPY	28		/* nonzero: the list drawn last has a copy still to be made */
+#define REG_HOST	15		/* the host's flags: bit 0 the desktop at boot, then its largest screen */
 #define REG_KEYBOARD	12		/* KEYBOARD_OWNED while a program reads the keyboard device */
 #define REG_COPIES	14		/* copies of a drawn picture into RAM made so far */
 #define REG_CURSOR	16		/* x, y, on, address of a 32x32 image */
@@ -902,8 +903,10 @@ gpu_open(PSD psd)
 		height = atoi(x + 1);
 	}
 	if (width < 64 || height < 64 || width > 2048 || (unsigned)(width * height * 4) > POOL_SIZE / 2) {
+		/* not a reason to have no desktop: the usual size instead */
 		EPRINTF("NANOX_SIZE: %dx%d does not fit the display\n", width, height);
-		return NULL;
+		width = SCREEN_WIDTH;
+		height = SCREEN_HEIGHT;
 	}
 	accelerate = getenv("NANOX_SOFTWARE") == NULL;
 	for (f = 0; f < NUMBER_FONTS; f++) {
@@ -927,6 +930,14 @@ gpu_open(PSD psd)
 		return NULL;
 	}
 	regs = (volatile uint32_t *)(gpu + REGS_OFFSET);
+	/* the host says the largest screen it shows, in 16s of pixels (0: it does not say) */
+	f = regs[REG_HOST];
+	if ((f >> 8 & 255) && (width > (int)(f >> 8 & 255) * 16 || height > (int)(f >> 16 & 255) * 16)) {
+		EPRINTF("NANOX_SIZE: %dx%d is more than this host shows (%dx%d)\n", width, height, (int)(f >> 8 & 255) * 16,
+			(int)(f >> 16 & 255) * 16);
+		width = SCREEN_WIDTH;
+		height = SCREEN_HEIGHT;
+	}
 	blocks[0].at = 0;
 	blocks[0].bytes = POOL_SIZE;
 	blocks[0].used = 0;

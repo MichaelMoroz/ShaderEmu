@@ -52,7 +52,7 @@ Shader "ShaderEmu/Machine"
         _InputKeyCode3 ("Key event 3", Int) = 0
         _HostMsLo ("Host clock in ms, low half", Int) = 0
         _HostMsHi ("Host clock in ms, high half", Int) = 0
-        _HostFlags ("Host flags (1: the guest starts its desktop at boot)", Int) = 1
+        _HostFlags ("Host flags (bit 0: desktop at boot; bits 8-15, 16-23: largest screen / 16)", Int) = 1
         _FetchDeliver ("An answer to the guest's request arrives this frame", Int) = 0
         _FetchSeq ("The request it answers", Int) = 0
         _FetchLength ("Its length in bytes", Int) = 0
