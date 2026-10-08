@@ -1,0 +1,727 @@
+diff --git a/WinQuake/client.h b/WinQuake/client.h
+index 7c59ee9..5dc679f 100644
+--- a/WinQuake/client.h
++++ b/WinQuake/client.h
+@@ -193,11 +193,11 @@ typedef struct
+ 	int			intermission;	// don't change view angle, full screen, etc
+ 	int			completed_time;	// latched at intermission start
+ 	
+-	double		mtime[2];		// the timestamp of last two messages	
+-	double		time;			// clients view of time, should be between
++	float		mtime[2];		// the timestamp of last two messages	
++	float		time;			// clients view of time, should be between
+ 								// servertime and oldservertime to generate
+ 								// a lerp point for other data
+-	double		oldtime;		// previous cl.time, time-oldtime is used
++	float		oldtime;		// previous cl.time, time-oldtime is used
+ 								// to decay light values and smooth step ups
+ 	
+ 
+diff --git a/WinQuake/gl_draw.c b/WinQuake/gl_draw.c
+index 25a8007..d59bc9b 100644
+--- a/WinQuake/gl_draw.c
++++ b/WinQuake/gl_draw.c
+@@ -1124,6 +1124,10 @@ void GL_Upload8_EXT (byte *data, int width, int height,  qboolean mipmap, qboole
+ 	if (scaled_height > gl_max_size.value)
+ 		scaled_height = gl_max_size.value;
+ 
++#ifdef SHADEREMU
++	qglTexImage8 (data, width, height, false);
++	return;
++#endif
+ 	if (scaled_width * scaled_height > sizeof(scaled))
+ 		Sys_Error ("GL_LoadTexture: too big");
+ 
+@@ -1190,6 +1194,17 @@ static	unsigned	trans[640*480];		// FIXME, temporary
+ 	int			p;
+ 
+ 	s = width*height;
++#ifdef SHADEREMU
++	// the GPU looks palette indices up itself: no copy to RGBA, no rescaling, no mipmaps
++	if (alpha)
++	{
++		for (i=0 ; i<s && data[i] != 255 ; i++)
++			;
++		alpha = i < s;
++	}
++	qglTexImage8 (data, width, height, alpha);
++	return;
++#endif
+ 	// if there are no transparent pixels, make it a 3 component
+ 	// texture even if it was specified as otherwise
+ 	if (alpha)
+@@ -1250,10 +1265,10 @@ int GL_LoadTexture (char *identifier, int width, int height, byte *data, qboolea
+ 			}
+ 		}
+ 	}
+-	else {
+-		glt = &gltextures[numgltextures];
+-		numgltextures++;
+-	}
++	if (numgltextures == MAX_GLTEXTURES)
++		Sys_Error ("GL_LoadTexture: out of texture slots");
++	glt = &gltextures[numgltextures];
++	numgltextures++;
+ 
+ 	strcpy (glt->identifier, identifier);
+ 	glt->texnum = texture_extension_number;
+diff --git a/WinQuake/gl_model.c b/WinQuake/gl_model.c
+index 21ef130..cf30bd6 100644
+--- a/WinQuake/gl_model.c
++++ b/WinQuake/gl_model.c
+@@ -170,6 +170,7 @@ void Mod_ClearAll (void)
+ 	int		i;
+ 	model_t	*mod;
+ 	
++	SE_ClearMap ();
+ 	for (i=0 , mod=mod_known ; i<mod_numknown ; i++, mod++)
+ 		if (mod->type != mod_alias)
+ 			mod->needload = true;
+diff --git a/WinQuake/gl_model.h b/WinQuake/gl_model.h
+index ae576b8..359b922 100644
+--- a/WinQuake/gl_model.h
++++ b/WinQuake/gl_model.h
+@@ -118,6 +118,7 @@ typedef struct glpoly_s
+ 	struct	glpoly_s	*chain;
+ 	int		numverts;
+ 	int		flags;			// for SURF_UNDERWATER
++	unsigned	*compact;		// the vertices as the GPU reads them: with the texture, then the light map
+ 	float	verts[4][VERTEXSIZE];	// variable sized (xyz s1t1 s2t2)
+ } glpoly_t;
+ 
+diff --git a/WinQuake/gl_rlight.c b/WinQuake/gl_rlight.c
+index 80ada45..f993733 100644
+--- a/WinQuake/gl_rlight.c
++++ b/WinQuake/gl_rlight.c
+@@ -88,6 +88,47 @@ void R_RenderDlight (dlight_t *light)
+ 		return;
+ 	}
+ 
++#ifdef SHADEREMU
++	{
++		static int	glow;
++		vec3_t		c;
++		float		sx, sy;
++
++		if (!glow)
++		{
++			static byte	data[32][32][4];
++
++			for (i=0 ; i<32 ; i++)
++				for (j=0 ; j<32 ; j++)
++				{
++					int d = 255 - (int)(sqrt ((2*i-31)*(2*i-31) + (2*j-31)*(2*j-31)) * 8.2);
++					data[i][j][0] = data[i][j][1] = data[i][j][2] = d < 0 ? 0 : d;
++					data[i][j][3] = 255;
++				}
++			glow = texture_extension_number++;
++			GL_Bind (glow);
++			glTexImage2D (GL_TEXTURE_2D, 0, 4, 32, 32, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
++		}
++		glEnable (GL_TEXTURE_2D);
++		GL_Bind (glow);
++		glColor3f (0.2,0.1,0.0);
++		for (i=0 ; i<3 ; i++)
++			c[i] = light->origin[i] - vpn[i]*rad;
++		glBegin (GL_QUADS);
++		for (i=0 ; i<4 ; i++)
++		{
++			sx = (i == 1 || i == 2) ? 1 : -1;
++			sy = i >= 2 ? 1 : -1;
++			glTexCoord2f ((sx+1)*0.5, (sy+1)*0.5);
++			for (j=0 ; j<3 ; j++)
++				v[j] = c[j] + vright[j]*sx*rad + vup[j]*sy*rad;
++			glVertex3fv (v);
++		}
++		glEnd ();
++		glDisable (GL_TEXTURE_2D);
++		return;
++	}
++#endif
+ 	glBegin (GL_TRIANGLE_FAN);
+ 	glColor3f (0.2,0.1,0.0);
+ 	for (i=0 ; i<3 ; i++)
+@@ -187,6 +228,7 @@ void R_MarkLights (dlight_t *light, int bit, mnode_t *node)
+ 		{
+ 			surf->dlightbits = 0;
+ 			surf->dlightframe = r_dlightframecount;
++			SE_Lit (surf);
+ 		}
+ 		surf->dlightbits |= bit;
+ 	}
+@@ -254,10 +296,33 @@ int RecursiveLightPoint (mnode_t *node, vec3_t start, vec3_t end)
+ // calculate mid point
+ 
+ // FIXME: optimize for axial
++#ifdef SHADEREMU
++	for (;;)
++	{
++		plane = node->plane;
++		if (plane->type < 3)
++		{
++			front = start[plane->type] - plane->dist;
++			back = end[plane->type] - plane->dist;
++		}
++		else
++		{
++			front = DotProduct (start, plane->normal) - plane->dist;
++			back = DotProduct (end, plane->normal) - plane->dist;
++		}
++		side = front < 0;
++		if ((back < 0) != side)
++			break;
++		node = node->children[side];
++		if (node->contents < 0)
++			return -1;
++	}
++#else
+ 	plane = node->plane;
+ 	front = DotProduct (start, plane->normal) - plane->dist;
+ 	back = DotProduct (end, plane->normal) - plane->dist;
+ 	side = front < 0;
++#endif
+ 	
+ 	if ( (back < 0) == side)
+ 		return RecursiveLightPoint (node->children[side], start, end);
+@@ -288,6 +353,10 @@ int RecursiveLightPoint (mnode_t *node, vec3_t start, vec3_t end)
+ 		tex = surf->texinfo;
+ 		
+ 		s = DotProduct (mid, tex->vecs[0]) + tex->vecs[0][3];
++#ifdef SHADEREMU
++		if (s < surf->texturemins[0] || s - surf->texturemins[0] > surf->extents[0])
++			continue;
++#endif
+ 		t = DotProduct (mid, tex->vecs[1]) + tex->vecs[1][3];;
+ 
+ 		if (s < surf->texturemins[0] ||
+@@ -336,6 +405,18 @@ int R_LightPoint (vec3_t p)
+ {
+ 	vec3_t		end;
+ 	int			r;
++#ifdef SHADEREMU
++	static struct { vec3_t at, spot; mplane_t *plane; model_t *world; int when, light; } was[64], *w;
++	int			when = (int)(cl.time * 10) + 1;
++
++	w = &was[((int)p[0] ^ (int)p[1] * 7 ^ (int)p[2] * 31) & 63];
++	if (w->when == when && w->world == cl.worldmodel && w->at[0] == p[0] && w->at[1] == p[1] && w->at[2] == p[2])
++	{
++		VectorCopy (w->spot, lightspot);
++		lightplane = w->plane;
++		return w->light;
++	}
++#endif
+ 	
+ 	if (!cl.worldmodel->lightdata)
+ 		return 255;
+@@ -348,6 +429,11 @@ int R_LightPoint (vec3_t p)
+ 	
+ 	if (r == -1)
+ 		r = 0;
++#ifdef SHADEREMU
++	VectorCopy (p, w->at);
++	VectorCopy (lightspot, w->spot);
++	w->plane = lightplane, w->world = cl.worldmodel, w->when = when, w->light = r;
++#endif
+ 
+ 	return r;
+ }
+diff --git a/WinQuake/gl_rmain.c b/WinQuake/gl_rmain.c
+index d9bf41e..ae7484c 100644
+--- a/WinQuake/gl_rmain.c
++++ b/WinQuake/gl_rmain.c
+@@ -123,9 +123,12 @@ void R_RotateForEntity (entity_t *e)
+ {
+     glTranslatef (e->origin[0],  e->origin[1],  e->origin[2]);
+ 
+-    glRotatef (e->angles[1],  0, 0, 1);
+-    glRotatef (-e->angles[0],  0, 1, 0);
+-    glRotatef (e->angles[2],  1, 0, 0);
++    if (e->angles[1])
++        glRotatef (e->angles[1],  0, 0, 1);
++    if (e->angles[0])
++        glRotatef (-e->angles[0],  0, 1, 0);
++    if (e->angles[2])
++        glRotatef (e->angles[2],  1, 0, 0);
+ }
+ 
+ /*
+@@ -301,6 +304,10 @@ void GL_DrawAliasFrame (aliashdr_t *paliashdr, int posenum)
+ 
+ lastposenum = posenum;
+ 
++#ifdef SHADEREMU
++	SE_DrawAliasFrame (paliashdr, posenum);
++	return;
++#endif
+ 	verts = (trivertx_t *)((byte *)paliashdr + paliashdr->posedata);
+ 	verts += posenum * paliashdr->poseverts;
+ 	order = (int *)((byte *)paliashdr + paliashdr->commands);
+@@ -346,6 +353,9 @@ extern	vec3_t			lightspot;
+ 
+ void GL_DrawAliasShadow (aliashdr_t *paliashdr, int posenum)
+ {
++#ifdef SHADEREMU
++	return;		// the draw list has no strips to make a shadow of
++#endif
+ 	float	s, t, l;
+ 	int		i, j;
+ 	int		index;
+@@ -948,6 +958,7 @@ r_refdef must be set before the first call
+ */
+ void R_RenderScene (void)
+ {
++	VID_Phase (2);
+ 	R_SetupFrame ();
+ 
+ 	R_SetFrustum ();
+@@ -960,7 +971,9 @@ void R_RenderScene (void)
+ 
+ 	S_ExtraUpdate ();	// don't let sound get messed up if going slow
+ 
++	VID_Phase (4);
+ 	R_DrawEntitiesOnList ();
++	VID_Phase (5);
+ 
+ 	GL_DisableMultitexture();
+ 
+diff --git a/WinQuake/gl_rmisc.c b/WinQuake/gl_rmisc.c
+index c9719b5..f389322 100644
+--- a/WinQuake/gl_rmisc.c
++++ b/WinQuake/gl_rmisc.c
+@@ -77,6 +77,17 @@ void R_InitParticleTexture (void)
+ 	//
+ 	particletexture = texture_extension_number++;
+     GL_Bind(particletexture);
++#ifdef SHADEREMU
++	{
++		// every palette index once: a particle's colour is a place in this picture
++		byte	indices[256];
++
++		for (x=0 ; x<256 ; x++)
++			indices[x] = x;
++		qglTexImage8 (indices, 16, 16, false);
++		return;
++	}
++#endif
+ 
+ 	for (x=0 ; x<8 ; x++)
+ 	{
+diff --git a/WinQuake/gl_rsurf.c b/WinQuake/gl_rsurf.c
+index 11b5a01..3d27e94 100644
+--- a/WinQuake/gl_rsurf.c
++++ b/WinQuake/gl_rsurf.c
+@@ -183,6 +183,10 @@ void R_BuildLightMap (msurface_t *surf, byte *dest, int stride)
+ 
+ // bound, invert, and shift
+ store:
++#ifdef SHADEREMU
++	qglLight (lightmap_textures + surf->lightmaptexturenum, surf->light_s, surf->light_t, smax, tmax, blocklights);
++	return;
++#endif
+ 	switch (gl_lightmap_format)
+ 	{
+ 	case GL_RGBA:
+@@ -718,19 +722,7 @@ void R_BlendLightmaps (void)
+ 		}
+ 		for ( ; p ; p=p->chain)
+ 		{
+-			if (p->flags & SURF_UNDERWATER)
+-				DrawGLWaterPolyLightmap (p);
+-			else
+-			{
+-				glBegin (GL_POLYGON);
+-				v = p->verts[0];
+-				for (j=0 ; j<p->numverts ; j++, v+= VERTEXSIZE)
+-				{
+-					glTexCoord2f (v[5], v[6]);
+-					glVertex3fv (v);
+-				}
+-				glEnd ();
+-			}
++			SE_DrawPoly (p, 1);
+ 		}
+ 	}
+ 
+@@ -776,10 +768,7 @@ void R_RenderBrushPoly (msurface_t *fa)
+ 		return;
+ 	}
+ 
+-	if (fa->flags & SURF_UNDERWATER)
+-		DrawGLWaterPoly (fa->polys);
+-	else
+-		DrawGLPoly (fa->polys);
++	SE_DrawPoly (fa->polys, 0);
+ 
+ 	// add the poly to the proper lightmap chain
+ 
+@@ -1329,8 +1318,9 @@ void R_DrawWorld (void)
+ 	R_ClearSkyBox ();
+ #endif
+ 
+-	R_RecursiveWorldNode (cl.worldmodel->nodes);
++	SE_MarkWorld ();	// in place of R_RecursiveWorldNode (cl.worldmodel->nodes)
+ 
++	VID_Phase (3);
+ 	DrawTextureChains ();
+ 
+ 	R_BlendLightmaps ();
+@@ -1396,6 +1386,8 @@ void R_MarkLeaves (void)
+ =============================================================================
+ */
+ 
++static int lightmap_first;	// the first block still looked at for room
++
+ // returns a texture number and the position inside it
+ int AllocBlock (int w, int h, int *x, int *y)
+ {
+@@ -1404,7 +1396,7 @@ int AllocBlock (int w, int h, int *x, int *y)
+ 	int		bestx;
+ 	int		texnum;
+ 
+-	for (texnum=0 ; texnum<MAX_LIGHTMAPS ; texnum++)
++	for (texnum=lightmap_first ; texnum<MAX_LIGHTMAPS ; texnum++)
+ 	{
+ 		best = BLOCK_HEIGHT;
+ 
+@@ -1432,6 +1424,8 @@ int AllocBlock (int w, int h, int *x, int *y)
+ 		for (i=0 ; i<w ; i++)
+ 			allocated[texnum][*x + i] = best + h;
+ 
++		if (texnum > lightmap_first + 1)
++			lightmap_first = texnum - 1;
+ 		return texnum;
+ 	}
+ 
+@@ -1561,7 +1555,7 @@ void BuildSurfaceDisplayList (msurface_t *fa)
+ 		}
+ 	}
+ 	poly->numverts = lnumverts;
+-
++	SE_BuildPoly (poly);
+ }
+ 
+ /*
+@@ -1602,6 +1596,7 @@ void GL_BuildLightmaps (void)
+ 	extern qboolean isPermedia;
+ 
+ 	memset (allocated, 0, sizeof(allocated));
++	lightmap_first = 0;
+ 
+ 	r_framecount = 1;		// no dlightcache
+ 
+@@ -1690,5 +1685,6 @@ void GL_BuildLightmaps (void)
+  	if (!gl_texsort.value)
+  		GL_SelectTexture(TEXTURE0_SGIS);
+ 
++	SE_NewMap ();
+ }
+ 
+diff --git a/WinQuake/gl_screen.c b/WinQuake/gl_screen.c
+index 8a0c096..b7c5c07 100644
+--- a/WinQuake/gl_screen.c
++++ b/WinQuake/gl_screen.c
+@@ -873,6 +873,7 @@ void SCR_UpdateScreen (void)
+ 	
+ 	V_RenderView ();
+ 
++	VID_Phase (6);
+ 	GL_Set2D ();
+ 
+ 	//
+diff --git a/WinQuake/gl_warp.c b/WinQuake/gl_warp.c
+index e8b96af..be3039b 100644
+--- a/WinQuake/gl_warp.c
++++ b/WinQuake/gl_warp.c
+@@ -198,6 +198,10 @@ void EmitWaterPolys (msurface_t *fa)
+ 	int			i;
+ 	float		s, t, os, ot;
+ 
++#ifdef SHADEREMU
++	SE_Water (fa);
++	return;
++#endif
+ 
+ 	for (p=fa->polys ; p ; p=p->next)
+ 	{
+@@ -207,10 +211,10 @@ void EmitWaterPolys (msurface_t *fa)
+ 			os = v[3];
+ 			ot = v[4];
+ 
+-			s = os + turbsin[(int)((ot*0.125+realtime) * TURBSCALE) & 255];
++			s = os + turbsin[(int)((ot*0.125+se_warp_time) * TURBSCALE) & 255];
+ 			s *= (1.0/64);
+ 
+-			t = ot + turbsin[(int)((os*0.125+realtime) * TURBSCALE) & 255];
++			t = ot + turbsin[(int)((os*0.125+se_warp_time) * TURBSCALE) & 255];
+ 			t *= (1.0/64);
+ 
+ 			glTexCoord2f (s, t);
+@@ -305,6 +309,10 @@ void R_DrawSkyChain (msurface_t *s)
+ {
+ 	msurface_t	*fa;
+ 
++#ifdef SHADEREMU
++	SE_Sky (s);
++	return;
++#endif
+ 	GL_DisableMultitexture();
+ 
+ 	// used when gl_texsort is on
+diff --git a/WinQuake/glquake.h b/WinQuake/glquake.h
+index f3c253c..66ef6ee 100644
+--- a/WinQuake/glquake.h
++++ b/WinQuake/glquake.h
+@@ -232,6 +232,30 @@ extern	const char *gl_extensions;
+ void R_TranslatePlayerSkin (int playernum);
+ void GL_Bind (int texnum);
+ 
++// linux/quake: the level and the models as this machine's GPU takes them, and a frame's parts
++void SE_BuildPoly (struct glpoly_s *poly);
++void SE_NewMap (void);
++void SE_MarkWorld (void);
++void SE_DrawPoly (struct glpoly_s *poly, int lightmap);
++void SE_DrawAliasFrame (aliashdr_t *hdr, int pose);
++void SE_Lit (struct msurface_s *surf);
++int SE_SamePlace (int number, const float *origin);
++extern float se_warp_time;
++void SE_Water (struct msurface_s *fa);
++void SE_Sky (struct msurface_s *chain);
++void qglParticle (const float *origin, int colour);
++void qglMultMatrixf (const float *m);
++#ifdef SE_COUNT
++extern unsigned se_count[10];
++#define SE_COUNTED(n) (se_count[n]++)
++#else
++#define SE_COUNTED(n)
++#endif
++void SE_ClearMap (void);
++void SE_FrameEnd (void);
++void R_BuildLightMap (struct msurface_s *surf, byte *dest, int stride);
++void VID_Phase (int next);
++
+ // Multitexture
+ #define    TEXTURE0_SGIS				0x835E
+ #define    TEXTURE1_SGIS				0x835F
+diff --git a/WinQuake/host.c b/WinQuake/host.c
+index 603f6b3..e605bd5 100644
+--- a/WinQuake/host.c
++++ b/WinQuake/host.c
+@@ -37,8 +37,8 @@ quakeparms_t host_parms;
+ 
+ qboolean	host_initialized;		// true if into command execution
+ 
+-double		host_frametime;
+-double		host_time;
++float		host_frametime;
++float		host_time;
+ double		realtime;				// without any filtering or bounding
+ double		oldrealtime;			// last frame run
+ int			host_framecount;
+@@ -672,7 +672,11 @@ void _Host_Frame (float time)
+ 	Host_GetConsoleCommands ();
+ 	
+ 	if (sv.active)
++	{
++		VID_Phase (1);
+ 		Host_ServerFrame ();
++		VID_Phase (0);
++	}
+ 
+ //-------------------
+ //
+diff --git a/WinQuake/mathlib.c b/WinQuake/mathlib.c
+index 9f5d644..8db04e2 100644
+--- a/WinQuake/mathlib.c
++++ b/WinQuake/mathlib.c
+@@ -367,7 +367,9 @@ void CrossProduct (vec3_t v1, vec3_t v2, vec3_t cross)
+ 	cross[2] = v1[0]*v2[1] - v1[1]*v2[0];
+ }
+ 
++#ifndef SHADEREMU
+ double sqrt(double x);
++#endif
+ 
+ vec_t Length(vec3_t v)
+ {
+diff --git a/WinQuake/pr_cmds.c b/WinQuake/pr_cmds.c
+index 3593bb9..b6a125b 100644
+--- a/WinQuake/pr_cmds.c
++++ b/WinQuake/pr_cmds.c
+@@ -775,7 +775,23 @@ void PF_checkclient (void)
+ // if current entity can't possibly see the check entity, return 0
+ 	self = PROG_TO_EDICT(pr_global_struct->self);
+ 	VectorAdd (self->v.origin, self->v.view_ofs, view);
++#ifdef SHADEREMU
++	{
++		static struct { vec3_t at; mleaf_t *leaf; int serial; } was[MAX_EDICTS], *w;
++		extern int se_map_serial;
++
++		w = &was[NUM_FOR_EDICT(self)];
++		if (w->serial != se_map_serial + 1 || w->at[0] != view[0] || w->at[1] != view[1] || w->at[2] != view[2])
++		{
++			w->leaf = Mod_PointInLeaf (view, sv.worldmodel);
++			VectorCopy (view, w->at);
++			w->serial = se_map_serial + 1;
++		}
++		leaf = w->leaf;
++	}
++#else
+ 	leaf = Mod_PointInLeaf (view, sv.worldmodel);
++#endif
+ 	l = (leaf - sv.worldmodel->leafs) - 1;
+ 	if ( (l<0) || !(checkpvs[l>>3] & (1<<(l&7)) ) )
+ 	{
+diff --git a/WinQuake/pr_exec.c b/WinQuake/pr_exec.c
+index 4f2aa36..9111320 100644
+--- a/WinQuake/pr_exec.c
++++ b/WinQuake/pr_exec.c
+@@ -380,6 +380,7 @@ void PR_ExecuteProgram (func_t fnum)
+ 	f = &pr_functions[fnum];
+ 
+ 	runaway = 100000;
++	SE_COUNTED (5);
+ 	pr_trace = false;
+ 
+ // make a stack frame
+@@ -396,11 +397,14 @@ while (1)
+ 	b = (eval_t *)&pr_globals[st->b];
+ 	c = (eval_t *)&pr_globals[st->c];
+ 	
++	SE_COUNTED (6);
+ 	if (!--runaway)
+ 		PR_RunError ("runaway loop error");
+ 		
++#ifndef SHADEREMU
+ 	pr_xfunction->profile++;
+ 	pr_xstatement = s;
++#endif
+ 	
+ 	if (pr_trace)
+ 		PR_PrintStatement (st);
+@@ -617,6 +621,7 @@ while (1)
+ 	case OP_CALL6:
+ 	case OP_CALL7:
+ 	case OP_CALL8:
++		pr_xstatement = s;
+ 		pr_argc = st->op - OP_CALL0;
+ 		if (!a->function)
+ 			PR_RunError ("NULL function");
+diff --git a/WinQuake/quakedef.h b/WinQuake/quakedef.h
+index e451827..4d79178 100644
+--- a/WinQuake/quakedef.h
++++ b/WinQuake/quakedef.h
+@@ -296,7 +296,7 @@ extern	cvar_t		sys_nostdout;
+ extern	cvar_t		developer;
+ 
+ extern	qboolean	host_initialized;		// true if into command execution
+-extern	double		host_frametime;
++extern	float		host_frametime;
+ extern	byte		*host_basepal;
+ extern	byte		*host_colormap;
+ extern	int			host_framecount;	// incremented every frame, never reset
+diff --git a/WinQuake/r_part.c b/WinQuake/r_part.c
+index 3db22ab..75b0b9e 100644
+--- a/WinQuake/r_part.c
++++ b/WinQuake/r_part.c
+@@ -661,7 +661,9 @@ void R_DrawParticles (void)
+ 	float			scale;
+ 
+     GL_Bind(particletexture);
++#ifndef SHADEREMU
+ 	glEnable (GL_BLEND);
++#endif
+ 	glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+ 	glBegin (GL_TRIANGLES);
+ 
+@@ -709,7 +711,9 @@ void R_DrawParticles (void)
+ 			break;
+ 		}
+ 
+-#ifdef GLQUAKE
++#ifdef SHADEREMU
++		qglParticle (p->org, (int)p->color);	/* (the GPU makes its triangle, and that size) */
++#elif defined(GLQUAKE)
+ 		// hack a scale up to keep particles from disapearing
+ 		scale = (p->org[0] - r_origin[0])*vpn[0] + (p->org[1] - r_origin[1])*vpn[1]
+ 			+ (p->org[2] - r_origin[2])*vpn[2];
+diff --git a/WinQuake/server.h b/WinQuake/server.h
+index 2d4dfeb..e8c3887 100644
+--- a/WinQuake/server.h
++++ b/WinQuake/server.h
+@@ -39,7 +39,7 @@ typedef struct
+ 	qboolean	paused;
+ 	qboolean	loadgame;			// handle connections specially
+ 
+-	double		time;
++	float		time;
+ 	
+ 	int			lastcheck;			// used by PF_checkclient
+ 	double		lastchecktime;
+@@ -209,7 +209,7 @@ extern	client_t	*host_client;
+ 
+ extern	jmp_buf 	host_abortserver;
+ 
+-extern	double		host_time;
++extern	float		host_time;
+ 
+ extern	edict_t		*sv_player;
+ 
+diff --git a/WinQuake/sv_phys.c b/WinQuake/sv_phys.c
+index e13c0e4..c4459d3 100644
+--- a/WinQuake/sv_phys.c
++++ b/WinQuake/sv_phys.c
+@@ -1198,6 +1198,9 @@ SV_CheckWaterTransition
+ void SV_CheckWaterTransition (edict_t *ent)
+ {
+ 	int		cont;
++
++	if (ent->v.watertype && SE_SamePlace (NUM_FOR_EDICT(ent), ent->v.origin))
++		return;
+ #ifdef QUAKE2
+ 	vec3_t	point;
+ 	
+diff --git a/WinQuake/world.c b/WinQuake/world.c
+index e1acfea..f755b41 100644
+--- a/WinQuake/world.c
++++ b/WinQuake/world.c
+@@ -373,6 +373,8 @@ void SV_LinkEdict (edict_t *ent, qboolean touch_triggers)
+ {
+ 	areanode_t	*node;
+ 
++	SE_COUNTED (4);
++
+ 	if (ent->area.prev)
+ 		SV_UnlinkEdict (ent);	// unlink from old position
+ 		
+@@ -494,10 +496,14 @@ int SV_HullPointContents (hull_t *hull, int num, vec3_t p)
+ 	dclipnode_t	*node;
+ 	mplane_t	*plane;
+ 
++	SE_COUNTED (0);
+ 	while (num >= 0)
+ 	{
++		SE_COUNTED (1);
++#ifndef SHADEREMU
+ 		if (num < hull->firstclipnode || num > hull->lastclipnode)
+ 			Sys_Error ("SV_HullPointContents: bad node number");
++#endif
+ 	
+ 		node = hull->clipnodes + num;
+ 		plane = hull->planes + node->planenum;
+@@ -526,6 +532,7 @@ SV_PointContents
+ */
+ int SV_PointContents (vec3_t p)
+ {
++	SE_COUNTED (3);
+ 	int		cont;
+ 
+ 	cont = SV_HullPointContents (&sv.worldmodel->hulls[0], 0, p);
+@@ -925,6 +932,8 @@ trace_t SV_Move (vec3_t start, vec3_t mins, vec3_t maxs, vec3_t end, int type, e
+ 	moveclip_t	clip;
+ 	int			i;
+ 
++	SE_COUNTED (2);
++
+ 	memset ( &clip, 0, sizeof ( moveclip_t ) );
+ 
+ // clip to world
