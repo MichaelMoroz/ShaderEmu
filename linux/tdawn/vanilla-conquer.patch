@@ -252,10 +252,10 @@ index c7ad7f4..eb74a2e 100644
          Map.Flag_To_Redraw(true);
      }
 diff --git a/tiberiandawn/conquer.cpp b/tiberiandawn/conquer.cpp
-index a8aebd8..5cb387c 100644
+index a8aebd8..beaf143 100644
 --- a/tiberiandawn/conquer.cpp
 +++ b/tiberiandawn/conquer.cpp
-@@ -98,6 +98,280 @@ extern void Send_Statistics_Packet(void);
+@@ -98,6 +98,301 @@ extern void Send_Statistics_Packet(void);
  extern char* __nheapbeg;
  bool InMainLoop = false;
  
@@ -269,7 +269,8 @@ index a8aebd8..5cb387c 100644
 +void Video_Render_Frame();
 +bool ShaderEmu_GL_Shape(void const* file, int frame, int x, int y, int window, int flags, void const* fade, void const* ghost);
 +extern unsigned ShaderEmu_GL_Quads, ShaderEmu_GL_Shroud, ShaderEmu_GL_Shadows, ShaderEmu_GL_Cycles;
-+extern unsigned ShaderEmu_GL_Parts[3], ShaderEmu_GL_Objects[3];
++extern unsigned ShaderEmu_GL_Parts[3], ShaderEmu_GL_Objects[3], ShaderEmu_GL_Put[2];
++extern unsigned ShaderEmu_Logic_Parts[4], ShaderEmu_Logic_Worst[3];
 +#include "common/host.h"
 +extern unsigned ShaderEmu_Show_Cycles, ShaderEmu_Shows, ShaderEmu_Page_Flips, ShaderEmu_Page_Copies;
 +static unsigned ShaderEmu_Logic_Cycles, ShaderEmu_Draw_Cycles;
@@ -463,6 +464,26 @@ index a8aebd8..5cb387c 100644
 +        ShaderEmu_Logic_Cycles = ShaderEmu_Draw_Cycles = ShaderEmu_Show_Cycles = ShaderEmu_Shows = 0;
 +        return;
 +    }
++    {
++        /* TDAWN_SLOW=N (with TDAWN_STATS_MS=0): each frame of more than N thousand instructions, and where they went */
++        static int slow = -1;
++        static unsigned was[7];
++        unsigned now[7] = {cycles, ShaderEmu_Logic_Cycles, ShaderEmu_Draw_Cycles, ShaderEmu_GL_Cycles,
++                           ShaderEmu_GL_Put[0], ShaderEmu_GL_Put[1], ShaderEmu_GL_Objects[2]};
++        if (slow < 0) {
++            slow = getenv("TDAWN_SLOW") ? atoi(getenv("TDAWN_SLOW")) : 0;
++        } else if (slow && now[0] - was[0] > (unsigned)slow * 1000) {
++            fprintf(stderr,
++                    "tdslow: frame %d at %u ms: %uk = logic %uk + draw %uk (the map %uk: %u objects drawn, %u shapes put, %uk "
++                    "pixels) + rest %uk; logic: teams %uk, objects %uk (one of kind %u took %uk from instruction %u), the map %uk; now %u\n",
++                    (int)Frame, ms, (now[0] - was[0]) / 1000, (now[1] - was[1]) / 1000, (now[2] - was[2]) / 1000,
++                    (now[3] - was[3]) / 1000, now[6] - was[6], now[4] - was[4], (now[5] - was[5]) / 1000,
++                    (now[0] - was[0] - (now[1] - was[1]) - (now[2] - was[2])) / 1000, ShaderEmu_Logic_Parts[0] / 1000,
++                    ShaderEmu_Logic_Parts[1] / 1000, ShaderEmu_Logic_Worst[1], ShaderEmu_Logic_Worst[0] / 1000,
++                    ShaderEmu_Logic_Worst[2], ShaderEmu_Logic_Parts[2] / 1000, host_cycles());
++        }
++        memcpy(was, now, sizeof(was));
++    }
 +    if (cap || (stop && getenv("TDAWN_NO_DELAY"))) {
 +        FrameTimer.Set(0);
 +    }
@@ -536,7 +557,7 @@ index a8aebd8..5cb387c 100644
  #ifndef ARRAY_SIZE
  #define ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
  #endif
-@@ -1126,12 +1400,31 @@ bool Color_Cycle(void)
+@@ -1126,12 +1421,31 @@ bool Color_Cycle(void)
      static CountDownTimerClass _ftimer(BT_SYSTEM, 0);
      static bool _up = false;
      bool changed = false;
@@ -569,7 +590,7 @@ index a8aebd8..5cb387c 100644
          _ftimer.Set(TIMER_SECOND / 8);
  
  /*
-@@ -1165,7 +1458,7 @@ bool Color_Cycle(void)
+@@ -1165,7 +1479,7 @@ bool Color_Cycle(void)
      /*
      **	Process the color cycling effects -- water.
      */
@@ -578,7 +599,7 @@ index a8aebd8..5cb387c 100644
          unsigned char colors[3];
  
          _timer.Set(TIMER_SECOND / 4);
-@@ -1222,6 +1515,20 @@ void Call_Back(void)
+@@ -1222,6 +1536,20 @@ void Call_Back(void)
      if (SampleType) {
          Theme.AI();
          Speak_AI();
@@ -599,7 +620,7 @@ index a8aebd8..5cb387c 100644
      }
  
  #ifdef NETWORKING
-@@ -1516,7 +1823,7 @@ static void Sync_Delay(void)
+@@ -1516,7 +1844,7 @@ static void Sync_Delay(void)
              if (input) {
                  Keyboard_Process(input);
              }
@@ -608,7 +629,7 @@ index a8aebd8..5cb387c 100644
          }
  
          Frame_Limiter(FL_NONE);
-@@ -1611,6 +1918,9 @@ bool Main_Loop()
+@@ -1611,6 +1939,9 @@ bool Main_Loop()
      } else {
          FrameTimer.Set(Options.GameSpeed);
      }
@@ -618,7 +639,7 @@ index a8aebd8..5cb387c 100644
  
      /*
      **	Update the display, unless we're inside a dialog.
-@@ -1624,7 +1934,10 @@ bool Main_Loop()
+@@ -1624,7 +1955,10 @@ bool Main_Loop()
                  Keyboard_Process(input);
              }
              //			HidPage.Lock();
@@ -630,7 +651,7 @@ index a8aebd8..5cb387c 100644
              //			HidPage.Unlock();
          }
      }
-@@ -1650,7 +1963,11 @@ bool Main_Loop()
+@@ -1650,7 +1984,11 @@ bool Main_Loop()
      /*
      **	AI logic operations are performed here.
      */
@@ -643,7 +664,7 @@ index a8aebd8..5cb387c 100644
  
      //	Heap_Dump_Check( "After Logic.AI" );
  
-@@ -1710,6 +2027,9 @@ bool Main_Loop()
+@@ -1710,6 +2048,9 @@ bool Main_Loop()
          PlayerRestarts = false;
          Map.Help_Text(TXT_NONE);
          Set_Video_Cursor_Clip(false);
@@ -653,7 +674,7 @@ index a8aebd8..5cb387c 100644
          Do_Win();
          Set_Video_Cursor_Clip(true);
      }
-@@ -1726,6 +2046,9 @@ bool Main_Loop()
+@@ -1726,6 +2067,9 @@ bool Main_Loop()
          PlayerRestarts = false;
          Map.Help_Text(TXT_NONE);
          Set_Video_Cursor_Clip(false);
@@ -663,7 +684,7 @@ index a8aebd8..5cb387c 100644
          Do_Lose();
          Set_Video_Cursor_Clip(true);
      }
-@@ -1736,6 +2059,9 @@ bool Main_Loop()
+@@ -1736,6 +2080,9 @@ bool Main_Loop()
          PlayerRestarts = false;
          Map.Help_Text(TXT_NONE);
          Set_Video_Cursor_Clip(false);
@@ -673,7 +694,7 @@ index a8aebd8..5cb387c 100644
          Do_Restart();
          Set_Video_Cursor_Clip(true);
      }
-@@ -2656,6 +2982,11 @@ void CC_Draw_Shape(void const* shapefile,
+@@ -2656,6 +3003,11 @@ void CC_Draw_Shape(void const* shapefile,
      char* shape_pointer;
      uintptr_t shape_size;
  
@@ -957,6 +978,74 @@ index bb688bc..01baf5a 100644
      for (int index = 0; index < Count() - 1; index++) {
          if (*(*this)[index + 1] < *(*this)[index]) {
              ObjectClass* temp;
+diff --git a/tiberiandawn/logic.cpp b/tiberiandawn/logic.cpp
+index 3b894e4..4f5e38b 100644
+--- a/tiberiandawn/logic.cpp
++++ b/tiberiandawn/logic.cpp
+@@ -175,9 +175,22 @@ void LogicClass::Debug_Dump(MonoClass* mono) const
+  *   12/17/1994 JLB : Must perform one complete pass rather than bailing early.                *
+  *   12/23/1994 JLB : Esures that no object gets skipped if it was deleted.                    *
+  *=============================================================================================*/
++#ifdef SHADEREMU
++#include "common/host.h"
++/* For TDAWN_SLOW: this frame's teams, objects, map and the rest; the dearest object and its kind. */
++unsigned ShaderEmu_Logic_Parts[4], ShaderEmu_Logic_Worst[3];
++#define SHADEREMU_MARK(n) ShaderEmu_Logic_Parts[n] = host_cycles() - mark, mark = host_cycles()
++#else
++#define SHADEREMU_MARK(n)
++#endif
++
+ void LogicClass::AI(void)
+ {
+     int index;
++#ifdef SHADEREMU
++    unsigned mark = host_cycles();
++    ShaderEmu_Logic_Worst[0] = ShaderEmu_Logic_Worst[1] = 0;
++#endif
+ 
+     FramesPerSecond++;
+ 
+@@ -201,11 +214,22 @@ void LogicClass::AI(void)
+     /*
+     **	AI for all sentient objects is processed.
+     */
++    SHADEREMU_MARK(0);
+     for (index = 0; index < Count(); index++) {
+         ObjectClass* obj = (*this)[index];
+         int count = Count();
+ 
++#ifdef SHADEREMU
++        unsigned began = host_cycles(), kind = (unsigned)obj->What_Am_I();
+         obj->AI();
++        if (host_cycles() - began > ShaderEmu_Logic_Worst[0]) {
++            ShaderEmu_Logic_Worst[0] = host_cycles() - began;
++            ShaderEmu_Logic_Worst[1] = kind;
++            ShaderEmu_Logic_Worst[2] = began;
++        }
++#else
++        obj->AI();
++#endif
+ 
+         /*
+         **	If the object was destroyed in the process of performing its AI, then
+@@ -218,6 +242,7 @@ void LogicClass::AI(void)
+     }
+ 
+     //	Heap_Dump_Check( "After Object AI" );
++    SHADEREMU_MARK(1);
+ 
+     /*
+     **	A second pass through the sentient objects is required so that the appropriate scan
+@@ -271,7 +296,9 @@ void LogicClass::AI(void)
+     /*
+     **	Map related logic is performed.
+     */
++    SHADEREMU_MARK(3);
+     Map.Logic();
++    SHADEREMU_MARK(2);
+ 
+     //	Heap_Dump_Check( "After Map.Logic" );
+ 
 diff --git a/tiberiandawn/map.cpp b/tiberiandawn/map.cpp
 index 4d484e7..1258628 100644
 --- a/tiberiandawn/map.cpp

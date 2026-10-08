@@ -174,6 +174,7 @@ Each run prints these figures (`tdstat:` lines, every five seconds):
     TDAWN_SKIP=N        how many frames in a row may go undrawn (0)
     TDAWN_RENDER=soft   the game draws the map itself, as before
     TDAWN_REFRESH=N     make every Nth scene from nothing (32; 0: never)
+    TDAWN_SLOW=N        with TDAWN_STATS_MS=0: say each frame of more than N thousand instructions, and where they went
 
 ## Checking it
 
@@ -195,6 +196,10 @@ game's frames in a run with `TDAWN_NO_DELAY`, or two runs' pictures would differ
 
 - The cloak effect on the GPU (the game draws such a shape itself, over everything), and the
   sidebar, radar and text, which are still pixels.
+- Path finding in one piece. A unit whose way is blocked follows the obstacle's edge both ways, up
+  to 400 cells each, and tries again with other rules: 500k to 1.4M instructions in the one
+  frame, 19 times in mission 3's first 700 frames (`TDAWN_SLOW=350`). These are the hitches.
+  Keeping the answers about cells for the length of a search did not help: few are asked twice.
 - Text that stays: a tooltip is printed again every frame it is up, 13k.
 - A soldier that walks is drawn anew every step, some 2,000 instructions through the game's
   own `Draw_It`: the larger part of a scene with many of them moving.

@@ -85,6 +85,7 @@ unsigned ShaderEmu_GL_Quads;      // all of them, and of those the shroud's and 
 unsigned ShaderEmu_GL_Shroud, ShaderEmu_GL_Shadows;
 unsigned ShaderEmu_GL_Parts[3]; // instructions in the cells, the objects and the shroud
 unsigned ShaderEmu_GL_Objects[3]; // objects shown as they were, found out of the view again, and drawn anew
+unsigned ShaderEmu_GL_Put[2];     // shapes put into an atlas, and the pixels of their frames
 
 static Shape shapes[SLOTS];
 static Icon icons[SLOTS];
@@ -272,6 +273,9 @@ static void put(Shape* s, const unsigned char* pixels)
     const unsigned char* fade = (const unsigned char*)s->fade;
     const unsigned char* ghost = (const unsigned char*)s->ghost;
     int x, y;
+
+    ShaderEmu_GL_Put[0]++;
+    ShaderEmu_GL_Put[1] += s->w * s->h;
 
     if (ghost && ghost == shroud_table) {
         // the shroud: every level of dark in one picture of words
