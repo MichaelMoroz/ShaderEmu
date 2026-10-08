@@ -32,18 +32,25 @@
 
 
 /* shift by two to ignore byte offset */
-// Write-cache geometry: 2^L1_SET_BITS sets per slice, L1_SLICES slices, two entries per set.
-// Upstream is 9 bits x 2 slices (1024 texels). L1_HASH_LOW picks sets from the low word
-// bits only instead of mixing in address bits 11-12.
-#ifndef L1_SET_BITS
-#define L1_SET_BITS 9
+// The write cache holds RAM texels (four words), not words: stores come in runs (a register
+// save, a structure, a copy), and a run then takes one entry. A bucket is four state texels:
+// the tags of three entries (texel number + 1; 0 is free) and their three texels. There are
+// two tables of 2^L1_TABLE_BITS buckets with different hashes; a texel goes to the second only
+// when its bucket in the first is full, so most lookups read one bucket. Entries are filled in
+// order and never freed within a pass.
+#ifndef L1_BUCKETS
+#ifndef L1_TABLE_BITS
+#define L1_TABLE_BITS 7
 #endif
-#ifndef L1_SLICES
-#define L1_SLICES 2
+#define L1_TABLE (1 << L1_TABLE_BITS)
+#define L1_BUCKETS (2 * L1_TABLE)
+#define L1_ENTRIES (L1_BUCKETS * 4)
+#define L1_B0(t) ((t) & (L1_TABLE - 1))
+#define L1_B1(t) (L1_TABLE + ((((t) >> 3) ^ ((t) << (L1_TABLE_BITS - 3)) ^ ((t) >> L1_TABLE_BITS)) & (L1_TABLE - 1)))
 #endif
-#define L1_SETS (1 << L1_SET_BITS)
-#define L1_ENTRIES (L1_SETS * L1_SLICES)
-#define RAM_L1_ARRAY_IDX(a) (((a >> 2) & ((L1_SETS >> 2) - 1)) | (((a >> 11) & 0x3) << (L1_SET_BITS - 2)))
+uint l1_slot(uint4 tags, uint tag) {
+    return tags.x == tag ? 1 : tags.y == tag ? 2 : tags.z == tag ? 3 : 0;
+}
 
 
 #define STALL_EXIT_CALL 1
@@ -250,9 +257,9 @@ static cpu_t cpu;
 #ifndef L1_LOCAL
 static uint4 l1_cache[L1_ENTRIES];
 #endif
-static uint l1_occ[(L1_ENTRIES + 31) / 32];
-#define L1_OCC_POS(idx) ((((idx) & (L1_SETS - 1)) * L1_SLICES) + ((idx) >> L1_SET_BITS))
-#define L1_OCC(idx) (((l1_occ[L1_OCC_POS(idx) >> 5] >> (L1_OCC_POS(idx) & 31)) & 1) != 0)
+static uint l1_occ[L1_BUCKETS / 32];   // buckets whose tags have been written this pass
+#define L1_OCC(b) (((l1_occ[(b) >> 5] >> ((b) & 31)) & 1) != 0)
+#define L1_OCC_SET(b) l1_occ[(b) >> 5] |= 1u << ((b) & 31);
 #endif
 
 // TYPE HELPERS
@@ -718,9 +725,12 @@ uint4 encode_l1(L1P uint2 pos) {
     uint s_lin = pos.x + pos.y * 64;
     if (s_lin >= 1068 && s_lin < 1068 + L1_ENTRIES) {
         uint offset = s_lin - 1068;
-#ifdef L1_LOCAL
-        if (!L1_OCC(offset)) return 0;
-#endif
+        // a bucket that was not used, and an entry of it that was not, are zeros (the array
+        // itself starts undefined with L1_LOCAL)
+        if (!L1_OCC(offset >> 2)) return 0;
+        uint4 tags = l1_cache[offset & ~3u];
+        if ((offset & 3) == 0) return tags;
+        if (idx_uint4(tags, (offset & 3) - 1) == 0) return 0;
         return l1_cache[offset];
     }
 
@@ -998,15 +1008,33 @@ uint tex_get_csr(uint addr) {
 }
 #endif
 
-uint mem_get_cached_or_tex_from_state_cache(uint addr) {
-    // array-style L1 (direct texture access)
-    for (uint i = 0; i < L1_SLICES; i++) {
-        uint arr_idx = RAM_L1_ARRAY_IDX(addr) + i * L1_SETS;
-        uint lin = 1068 + arr_idx;
-        uint4 cur = STATE_TEX_HART(uint2(lin % 64, lin / 64), 0);
-             if (cur.x == addr) return cur.y;
-        else if (cur.z == addr) return cur.w;
+uint4 l1_state_texel(uint lin) {
+    lin += 1068;
+    return STATE_TEX_HART(uint2(lin % 64, lin / 64), 0);
+}
+
+// The cache's copy of RAM texel t from the state texture, if it has one.
+bool l1_state_find(uint t, out uint4 texel) {
+    texel = 0;
+    uint b = L1_B0(t);
+    uint4 tags = l1_state_texel(b * 4);
+    uint e = l1_slot(tags, t + 1);
+    [branch]
+    if (e == 0 && tags.z != 0) {
+        b = L1_B1(t);
+        tags = l1_state_texel(b * 4);
+        e = l1_slot(tags, t + 1);
     }
+    [branch]
+    if (e != 0) {
+        texel = l1_state_texel(b * 4 + e);
+    }
+    return e != 0;
+}
+
+uint mem_get_cached_or_tex_from_state_cache(uint addr) {
+    uint4 cached;
+    if (l1_state_find(addr >> 4, cached)) return idx_uint4(cached, (addr >> 2) & 0x3);
 
     // query RAM texture
     uint idx = (addr >> 2) & 0x3;
@@ -1215,17 +1243,9 @@ uint4 commit(uint2 pos) {
             } else {
                 // write back L1 cache
                 [branch]
-                if ((lin & c_bloom) == lin)
-                [loop]
-                for (uint offset = 0; offset < 4; offset++) {
-                    uint addr_off = lin + (offset << 2);
-                    for (uint slice = 0; slice < L1_SLICES; slice++) {
-                        uint cache_idx = RAM_L1_ARRAY_IDX(addr_off) + slice * L1_SETS;
-                        uint lin = 1068 + cache_idx;
-                        uint4 cur = STATE_TEX_HART(uint2(lin % 64, lin / 64), 0);
-                             if (cur.x == addr_off) { set_idx_uint4(ret, cur.y, offset); }
-                        else if (cur.z == addr_off) { set_idx_uint4(ret, cur.w, offset); }
-                    }
+                if ((lin & c_bloom) == lin) {
+                    uint4 cached;
+                    if (l1_state_find(lin >> 4, cached)) ret = cached;
                 }
 
                      if (cpu.cache.ram_l1_last_addr == lin           ) { ret.r = cpu.cache.ram_l1_last_val; }

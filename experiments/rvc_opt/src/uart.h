@@ -7,18 +7,22 @@
 
 
 /* shift by two to ignore byte offset */
-// Write-cache geometry: 2^L1_SET_BITS sets per slice, L1_SLICES slices, two entries per set.
-// Upstream is 9 bits x 2 slices (1024 texels). L1_HASH_LOW picks sets from the low word
-// bits only instead of mixing in address bits 11-12.
-#ifndef L1_SET_BITS
-#define L1_SET_BITS 9
+// The write cache holds RAM texels (four words), not words: stores come in runs (a register
+// save, a structure, a copy), and a run then takes one entry. A bucket is four state texels:
+// the tags of three entries (texel number + 1; 0 is free) and their three texels. There are
+// two tables of 2^L1_TABLE_BITS buckets with different hashes; a texel goes to the second only
+// when its bucket in the first is full, so most lookups read one bucket. Entries are filled in
+// order and never freed within a pass.
+#ifndef L1_BUCKETS
+#ifndef L1_TABLE_BITS
+#define L1_TABLE_BITS 7
 #endif
-#ifndef L1_SLICES
-#define L1_SLICES 2
+#define L1_TABLE (1 << L1_TABLE_BITS)
+#define L1_BUCKETS (2 * L1_TABLE)
+#define L1_ENTRIES (L1_BUCKETS * 4)
+#define L1_B0(t) ((t) & (L1_TABLE - 1))
+#define L1_B1(t) (L1_TABLE + ((((t) >> 3) ^ ((t) << (L1_TABLE_BITS - 3)) ^ ((t) >> L1_TABLE_BITS)) & (L1_TABLE - 1)))
 #endif
-#define L1_SETS (1 << L1_SET_BITS)
-#define L1_ENTRIES (L1_SETS * L1_SLICES)
-#define RAM_L1_ARRAY_IDX(a) (((a >> 2) & ((L1_SETS >> 2) - 1)) | (((a >> 11) & 0x3) << (L1_SET_BITS - 2)))
 
 
 #define SHIFT_RBR 0

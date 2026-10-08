@@ -7,18 +7,22 @@
 
 
 /* shift by two to ignore byte offset */
-// Write-cache geometry: 2^L1_SET_BITS sets per slice, L1_SLICES slices, two entries per set.
-// Upstream is 9 bits x 2 slices (1024 texels). L1_HASH_LOW picks sets from the low word
-// bits only instead of mixing in address bits 11-12.
-#ifndef L1_SET_BITS
-#define L1_SET_BITS 9
+// The write cache holds RAM texels (four words), not words: stores come in runs (a register
+// save, a structure, a copy), and a run then takes one entry. A bucket is four state texels:
+// the tags of three entries (texel number + 1; 0 is free) and their three texels. There are
+// two tables of 2^L1_TABLE_BITS buckets with different hashes; a texel goes to the second only
+// when its bucket in the first is full, so most lookups read one bucket. Entries are filled in
+// order and never freed within a pass.
+#ifndef L1_BUCKETS
+#ifndef L1_TABLE_BITS
+#define L1_TABLE_BITS 7
 #endif
-#ifndef L1_SLICES
-#define L1_SLICES 2
+#define L1_TABLE (1 << L1_TABLE_BITS)
+#define L1_BUCKETS (2 * L1_TABLE)
+#define L1_ENTRIES (L1_BUCKETS * 4)
+#define L1_B0(t) ((t) & (L1_TABLE - 1))
+#define L1_B1(t) (L1_TABLE + ((((t) >> 3) ^ ((t) << (L1_TABLE_BITS - 3)) ^ ((t) >> L1_TABLE_BITS)) & (L1_TABLE - 1)))
 #endif
-#define L1_SETS (1 << L1_SET_BITS)
-#define L1_ENTRIES (L1_SETS * L1_SLICES)
-#define RAM_L1_ARRAY_IDX(a) (((a >> 2) & ((L1_SETS >> 2) - 1)) | (((a >> 11) & 0x3) << (L1_SET_BITS - 2)))
 
 
 #define WORD_SIZE_NONE 0
@@ -38,44 +42,50 @@ uint mem_get_instruction(uint addr) {
 
 // Basic bloom filter to slightly optimize memory caching (declared in types.h)
 
-// One bit per write-cache entry written this pass. An entry that was never written is all
-// zeros, so its array read (slow: the array is far larger than the small bitmap) can be skipped.
-// The bits of a set's slices are neighbours, so one read of the bitmap answers for the set.
-#define L1_OCC_SET(idx) l1_occ[L1_OCC_POS(idx) >> 5] |= 1u << (L1_OCC_POS(idx) & 31);
-#define L1_OCC_SLICES(set) ((l1_occ[((set) * L1_SLICES) >> 5] >> (((set) * L1_SLICES) & 31)) & ((1u << L1_SLICES) - 1))
-
-
 static uint dr_addr = 0xffffffff;   // the last RAM texel read for data, and its number
 static uint4 dr_tex;
 
 // addr must be aligned to word boundary (4 byte)
+// Where RAM texel t is in the cache: the index of its copy in l1_cache, or 0 (never a copy's).
+uint l1_find_l1(L1P uint t) {
+    uint found = 0;
+    uint b = L1_B0(t);
+    bool more = false;
+    // An array read costs as much as a dozen additions: the tags of one bucket, and those of
+    // the second table's only when the first one's is full.
+    [branch]
+    if (L1_OCC(b)) {
+        uint4 tags = l1_cache[b * 4];
+        uint e = l1_slot(tags, t + 1);
+        found = e != 0 ? b * 4 + e : 0;
+        more = e == 0 && tags.z != 0;
+    }
+    [branch]
+    if (more) {
+        b = L1_B1(t);
+        [branch]
+        if (L1_OCC(b)) {
+            uint e = l1_slot(l1_cache[b * 4], t + 1);
+            found = e != 0 ? b * 4 + e : 0;
+        }
+    }
+    return found;
+}
+
 uint mem_get_cached_or_tex_l1(L1P uint addr) {
     PROF(PROF_ram_read)
     // query L1 cache
     if ((addr & mem_cache_bloom) == addr) {
         PROF(PROF_ram_read_bloom_pass)
-        // array-style L1: most words that pass the filter are in no slice of their set
-        uint set = RAM_L1_ARRAY_IDX(addr);
-        uint occ = L1_OCC_SLICES(set);
-        // An array read costs as much as a dozen additions: read the two addresses of an
-        // entry, then only the value that matched.
+        uint at = l1_find(addr >> 4);
         [branch]
-        if (occ & 1) {
-            [branch] if (l1_cache[set].x == addr) { PROF(PROF_ram_read_l1_hit) return l1_cache[set].y; }
-            [branch] if (l1_cache[set].z == addr) { PROF(PROF_ram_read_l1_hit) return l1_cache[set].w; }
+        if (at != 0) {
+            PROF(PROF_ram_read_l1_hit)
+            return idx_uint4(l1_cache[at], (addr >> 2) & 0x3);
         }
-#if L1_SLICES > 1
-        [branch]
-        if (occ & 2) {
-            [branch] if (l1_cache[set + L1_SETS].x == addr) { PROF(PROF_ram_read_l1_hit) return l1_cache[set + L1_SETS].y; }
-            [branch] if (l1_cache[set + L1_SETS].z == addr) { PROF(PROF_ram_read_l1_hit) return l1_cache[set + L1_SETS].w; }
-        }
-#endif
 
         if (cpu.cache.ram_l1_last_addr == addr) {
-            // this may seem unnecessary, but is required for multi-byte write instructions
-            // which fill the 'last' buffer initially and then need it to be read back correctly
-            // to intertwine the new value into the cached word
+            // the word the cache had no room for (the store that ended the pass)
             return cpu.cache.ram_l1_last_val;
         }
     }
@@ -200,6 +210,79 @@ uint mem_get_word_l1(L1P uint addr) {
     return mem_get_cached_or_tex(addr);
 }
 
+// A store that lies within one RAM word: `bits` replace the word's under `mask`. The cache
+// keeps the whole RAM texel around the word, read from the texture when its entry is made, so
+// a store that changes nothing costs no entry and a partial one needs no second read.
+void mem_set_ram_l1(L1P uint word_addr, uint bits, uint mask) {
+    if (word_addr >= RAM_MAX) {
+        return;
+    }
+    PROF(PROF_ram_write_byte)
+    uint t = word_addr >> 4, tag = t + 1, wi = (word_addr >> 2) & 0x3;
+    uint b0 = L1_B0(t), b1 = L1_B1(t);
+    uint4 tags0 = 0, tags1 = 0;
+    [branch]
+    if (L1_OCC(b0)) {
+        tags0 = l1_cache[b0 * 4];
+    }
+    uint e0 = l1_slot(tags0, tag), e1 = 0;
+    uint f0 = l1_slot(tags0, 0), f1 = 0;       // the first free entry: they fill in order
+    [branch]
+    if (e0 == 0 && f0 == 0) {
+        [branch]
+        if (L1_OCC(b1)) {
+            tags1 = l1_cache[b1 * 4];
+        }
+        e1 = l1_slot(tags1, tag);
+        f1 = l1_slot(tags1, 0);
+    }
+    uint at = e0 != 0 ? b0 * 4 + e0 : e1 != 0 ? b1 * 4 + e1 : 0;
+    uint4 texel;
+    [branch]
+    if (at != 0) {
+        texel = l1_cache[at];
+    } else {
+        [branch]
+        if (t != dr_addr) {
+            PROF(PROF_ram_read_tex)
+            dr_tex = STATE_TEX(RAM_ADDR(t));
+            dr_addr = t;
+        }
+        texel = dr_tex;
+    }
+    uint cur_val = idx_uint4(texel, wi);
+    if (at == 0 && cpu.cache.ram_l1_last_addr == word_addr && (word_addr & mem_cache_bloom) == word_addr) {
+        cur_val = cpu.cache.ram_l1_last_val;
+    }
+    uint val = (cur_val & ~mask) | (bits & mask);
+    if (val == cur_val) {
+        return;
+    }
+    PROF(PROF_ram_write_store)
+    mem_cache_bloom |= word_addr;
+    mem_dirty |= 1u << ((word_addr >> 22) & 31);
+    set_idx_uint4(texel, val, wi);
+    [branch]
+    if (at != 0) {
+        l1_cache[at] = texel;
+    } else if (f0 != 0) {
+        set_idx_uint4(tags0, tag, f0 - 1);
+        l1_cache[b0 * 4] = tags0;
+        l1_cache[b0 * 4 + f0] = texel;
+        L1_OCC_SET(b0)
+    } else if (f1 != 0) {
+        set_idx_uint4(tags1, tag, f1 - 1);
+        l1_cache[b1 * 4] = tags1;
+        l1_cache[b1 * 4 + f1] = texel;
+        L1_OCC_SET(b1)
+    } else {
+        PROF(PROF_l1_stall)
+        cpu.cache.ram_l1_last_addr = word_addr;
+        cpu.cache.ram_l1_last_val = val;
+        cpu.stall = STALL_MEM_CACHE_L1;
+    }
+}
+
 // whole_word: addr is a word-aligned RAM address and val is the full 32-bit value.
 void mem_set_byte_l1(L1P uint addr, uint val, bool whole_word) {
     if ((addr & 0x80000000) == 0) {
@@ -244,152 +327,9 @@ void mem_set_byte_l1(L1P uint addr, uint val, bool whole_word) {
         return;
     }
 
-    PROF(PROF_ram_write_byte)
-    // caching can cause stalls, so check for same value before storing
     uint word_addr = addr & (~0x3);
-    uint byte_offset = (addr & 0x3)*8;
-    uint cur_val = mem_get_cached_or_tex(word_addr);
-    uint mask = whole_word ? 0xffffffff : (0xff << byte_offset);
-    val = (cur_val & ~mask) | (whole_word ? val : (val << byte_offset));
-    if (val != cur_val) {
-        // put written value into L1 cache
-        PROF(PROF_ram_write_store)
-        mem_cache_bloom |= word_addr;
-        mem_dirty |= 1u << ((word_addr >> 22) & 31);
-
-        if (word_addr == 0) {
-            // very special case
-            cpu.cache.ram_l1_last_addr = word_addr;
-            cpu.cache.ram_l1_last_val = val;
-            cpu.stall = STALL_MEM_CACHE_L1;
-            return;
-        }
-
-        uint arr_idx = RAM_L1_ARRAY_IDX(word_addr);
-        uint4 cur = 0;
-        [branch]
-        if (L1_OCC(arr_idx)) {
-            cur = l1_cache[arr_idx];
-        }
-        if (cur.x == 0 || cur.x == word_addr) {
-            l1_cache[arr_idx] = uint4(word_addr, val, cur.zw);
-            L1_OCC_SET(arr_idx)
-        } else if (cur.z == 0 || cur.z == word_addr) {
-            l1_cache[arr_idx].z = word_addr;
-            l1_cache[arr_idx].w = val;
-            L1_OCC_SET(arr_idx)
-        } else {
-#if L1_SLICES > 1
-            arr_idx += L1_SETS;
-            uint4 cur = 0;
-            [branch]
-            if (L1_OCC(arr_idx)) {
-                cur = l1_cache[arr_idx];
-            }
-            if (cur.x == 0 || cur.x == word_addr) {
-                l1_cache[arr_idx] = uint4(word_addr, val, cur.zw);
-                L1_OCC_SET(arr_idx)
-            } else if (cur.z == 0 || cur.z == word_addr) {
-                l1_cache[arr_idx].z = word_addr;
-                l1_cache[arr_idx].w = val;
-                L1_OCC_SET(arr_idx)
-            } else
-#endif
-            {
-                PROF(PROF_l1_stall)
-                cpu.cache.ram_l1_last_addr = word_addr;
-                cpu.cache.ram_l1_last_val = val;
-                cpu.stall = STALL_MEM_CACHE_L1;
-            }
-        }
-    }
-}
-
-// A store that lies within one RAM word: `bits` replace the word's under `mask`. Each cache set
-// is read once, for the lookup and the insertion both. A whole-word store never needs the old
-// value from the texture; it is only compared (to skip a store that changes nothing) when the
-// word is already in the cache.
-void mem_set_ram_l1(L1P uint word_addr, uint bits, uint mask) {
-    if (word_addr >= RAM_MAX) {
-        return;
-    }
-    PROF(PROF_ram_write_byte)
-    uint i0 = RAM_L1_ARRAY_IDX(word_addr);
-    uint i1 = i0 + L1_SETS;
-    uint occ = L1_OCC_SLICES(i0);
-    // Only the addresses are read (an array read is costly); a value only when part of a word
-    // is stored, and the second entry only when the first does not hold the word.
-    bool real = word_addr != 0;   // address 0 is never cached (0 marks an empty entry)
-    uint a0x = 0, a0z = 0, a1x = 0, a1z = 0;
-    [branch]
-    if (occ & 1) {
-        a0x = l1_cache[i0].x;
-        a0z = l1_cache[i0].z;
-    }
-    bool h0x = real && a0x == word_addr, h0z = real && a0z == word_addr;
-#if L1_SLICES > 1
-    [branch]
-    if ((occ & 2) && !(h0x || h0z)) {
-        a1x = l1_cache[i1].x;
-        a1z = l1_cache[i1].z;
-    }
-#endif
-    bool h1x = real && a1x == word_addr, h1z = real && a1z == word_addr;
-    bool last = cpu.cache.ram_l1_last_addr == word_addr && (word_addr & mem_cache_bloom) == word_addr;
-    bool known = h0x || h0z || h1x || h1z || last;
-    uint val = bits;
-    [branch]
-    if (mask != 0xffffffff) {
-        uint cur_val;
-        [branch]
-        if (known) {
-            if (h0x) { cur_val = l1_cache[i0].y; }
-            else if (h0z) { cur_val = l1_cache[i0].w; }
-            else if (h1x) { cur_val = l1_cache[i1].y; }
-            else if (h1z) { cur_val = l1_cache[i1].w; }
-            else { cur_val = cpu.cache.ram_l1_last_val; }
-        } else {
-            PROF(PROF_ram_read_tex)
-            cur_val = idx_uint4(STATE_TEX(RAM_ADDR(word_addr >> 4)), (word_addr >> 2) & 0x3);
-        }
-        val = (cur_val & ~mask) | (bits & mask);
-        // a store that changes nothing in a word not yet cached is not worth an entry
-        if (!known && val == cur_val) {
-            return;
-        }
-    }
-    PROF(PROF_ram_write_store)
-    mem_cache_bloom |= word_addr;
-    mem_dirty |= 1u << ((word_addr >> 22) & 31);
-    // the entry that already is this word's, else the first free one in the order lookups search
-    if (h0x) {
-        l1_cache[i0].y = val;
-    } else if (h0z) {
-        l1_cache[i0].w = val;
-    } else if (h1x) {
-        l1_cache[i1].y = val;
-    } else if (h1z) {
-        l1_cache[i1].w = val;
-    } else if (real && (occ & 1) == 0) {
-        l1_cache[i0] = uint4(word_addr, val, 0, 0);
-        L1_OCC_SET(i0)
-    } else if (real && a0z == 0) {
-        l1_cache[i0].z = word_addr;
-        l1_cache[i0].w = val;
-#if L1_SLICES > 1
-    } else if (real && (occ & 2) == 0) {
-        l1_cache[i1] = uint4(word_addr, val, 0, 0);
-        L1_OCC_SET(i1)
-    } else if (real && a1z == 0) {
-        l1_cache[i1].z = word_addr;
-        l1_cache[i1].w = val;
-#endif
-    } else {
-        PROF(PROF_l1_stall)
-        cpu.cache.ram_l1_last_addr = word_addr;
-        cpu.cache.ram_l1_last_val = val;
-        cpu.stall = STALL_MEM_CACHE_L1;
-    }
+    uint byte_offset = (addr & 0x3) * 8;
+    mem_set_ram(word_addr, whole_word ? val : (val << byte_offset), whole_word ? 0xffffffff : (0xffu << byte_offset));
 }
 
 void mem_set_l1(L1P uint addr, uint val, uint word_size) {
