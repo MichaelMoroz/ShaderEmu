@@ -18,6 +18,7 @@ shader at all.
 | (none) | the tick as it is, write cache and all; it writes the pass's texels into a 64 x 64 texture that the harness copies over the CPU zone |
 | `L1_SHARED` | the write cache and the second-level TLB in thread group shared memory instead of local arrays |
 | `XR_SHARED` | the registers too |
+| `RAM_BUFFER` | RAM is a byte address buffer of the tick's own, filled from the state texture once (`ram_import_cs`): a load is one word or four, a store one word, no write cache. Nothing but the tick sees that RAM, so only a program that needs no device but the console runs (the raytracer) |
 | `RAM_DIRECT` | the whole state texture is the shader's UAV, read and written in place: a store goes to RAM there and then. No write cache, so no frame ends on a full one; the Commit pass still runs for what else it does (memory operations, the UART, the devices) and copies the bands that were written into the other buffer |
 
 ## What it measures
@@ -42,9 +43,14 @@ what the fragment tick's prints.
 So not an order of magnitude. An emulated instruction is some 120 operations of decode and
 execution and four or five branches wherever it runs, and those are what take the 160 to
 250 ns; the memory it touches is a small part (about one texture or array access in eight
-instructions for the raytracer). The same reasoning says a structured or byte address buffer
-in place of the texture would move this by a few percent at most; it was not built, because
-every other pass (Commit, the GPU device, the display) reads RAM from the texture.
+instructions for the raytracer).
+
+A byte address buffer in place of the texture (`RAM_BUFFER`) is the same speed: the
+raytracer's tick pass took 2.42 to 2.52 ms a frame with it and 2.46 to 2.51 ms with
+`RAM_DIRECT` in three runs of each, one after the other, and the run ends after the same
+73,669,730 instructions. It was measured on the raytracer only: every other pass (Commit and
+its memory operations, the GPU device, the display) reads RAM from the texture, so Linux
+does not run on it.
 
 The compute shader compiles in 1 to 3 seconds under fxc2. `RAM_DIRECT` loads from a
 four-component UAV, which D3D11 allows only on hardware with

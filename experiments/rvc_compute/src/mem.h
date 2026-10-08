@@ -43,7 +43,7 @@ uint mem_get_instruction(uint addr) {
     addr = addr >> 4;
 
     PROF(PROF_fetch_tex)
-    uint4 raw = STATE_TEX(RAM_ADDR(addr));
+    uint4 raw = RAM_TEXEL(addr);
     return idx_uint4(raw, idx);
 }
 
@@ -81,6 +81,9 @@ uint l1_find_l1(L1P uint t) {
 
 uint mem_get_cached_or_tex_l1(L1P uint addr) {
     PROF(PROF_ram_read)
+#ifdef RAM_BUFFER_ON
+    return _RamB.Load(addr);
+#endif
 #ifndef RAM_DIRECT_ON
     // query L1 cache
     if ((addr & mem_cache_bloom) == addr) {
@@ -106,7 +109,7 @@ uint mem_get_cached_or_tex_l1(L1P uint addr) {
     [branch]
     if (t != dr_addr) {
         PROF(PROF_ram_read_tex)
-        dr_tex = STATE_TEX(RAM_ADDR(t));
+        dr_tex = RAM_TEXEL(t);
         dr_addr = t;
     }
     return idx_uint4(dr_tex, (addr >> 2) & 0x3);
@@ -227,7 +230,23 @@ void mem_set_ram_l1(L1P uint word_addr, uint bits, uint mask) {
         return;
     }
     PROF(PROF_ram_write_byte)
-#ifdef RAM_DIRECT_ON
+#ifdef RAM_BUFFER_ON
+    {
+        uint val = bits;
+        [branch]
+        if (mask != 0xffffffff) {
+            val = (_RamB.Load(word_addr) & ~mask) | (bits & mask);
+        }
+        _RamB.Store(word_addr, val);
+        // the instruction window's two texels are copies: keep them right
+        uint t = word_addr >> 4;
+        [branch]
+        if (t == fw_addr0 || t == fw_addr1) {
+            if (t == fw_addr0) { fw_tex0 = RAM_TEXEL(t); }
+            if (t == fw_addr1) { fw_tex1 = RAM_TEXEL(t); }
+        }
+    }
+#elif defined(RAM_DIRECT_ON)
     // RAM is written where it is. dr_tex, the last texel read, is the texel being written while
     // stores stay in it; the instruction window's two texels are kept right as well.
     {
@@ -235,7 +254,7 @@ void mem_set_ram_l1(L1P uint word_addr, uint bits, uint mask) {
         [branch]
         if (t != dr_addr) {
             PROF(PROF_ram_read_tex)
-            dr_tex = STATE_TEX(RAM_ADDR(t));
+            dr_tex = RAM_TEXEL(t);
             dr_addr = t;
         }
         uint cur_val = idx_uint4(dr_tex, wi);
@@ -291,7 +310,7 @@ void mem_set_ram_l1(L1P uint word_addr, uint bits, uint mask) {
         [branch]
         if (t != dr_addr) {
             PROF(PROF_ram_read_tex)
-            dr_tex = STATE_TEX(RAM_ADDR(t));
+            dr_tex = RAM_TEXEL(t);
             dr_addr = t;
         }
         texel = dr_tex;

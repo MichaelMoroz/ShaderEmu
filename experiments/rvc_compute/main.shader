@@ -90,6 +90,18 @@
             static uint hart = 0;
             static uint2 hart_offset = uint2(0, 0);
 
+#if defined(SHADER_STAGE_COMPUTE) && defined(RAM_BUFFER)
+            // RAM_BUFFER: RAM is a byte address buffer of the compute tick's (imported from the
+            // state texture once, by ram_import_cs): a load is one word or four, a store one
+            // word, and there is no write cache. Nothing but the tick sees this RAM, so only
+            // programs that need no device but the console run.
+            #define RAM_BUFFER_ON
+            RWByteAddressBuffer _RamB : register(u1);
+            #define RAM_TEXEL(t) (_RamB.Load4((t) << 4))
+#endif
+#ifndef RAM_BUFFER_ON
+            #define RAM_TEXEL(t) STATE_TEX(RAM_ADDR(t))
+#endif
 #if defined(SHADER_STAGE_COMPUTE) && defined(RAM_DIRECT)
             // RAM_DIRECT: the compute tick has the whole state texture as a UAV. It reads it and
             // writes it: a store goes to RAM there and then, and there is no write cache.
@@ -204,7 +216,18 @@
 #ifdef RAM_DIRECT_ON
             #define _TickOut _Ram
 #else
-            RWTexture2D<uint4> _TickOut;
+            RWTexture2D<uint4> _TickOut : register(u0);
+#endif
+
+#ifdef RAM_BUFFER_ON
+            // 64 threads a group, 65,536 texels a row of groups: every RAM texel into the buffer
+            [numthreads(64, 1, 1)]
+            void ram_import_cs(uint3 thread : SV_DispatchThreadID) {
+                uint t = thread.x + thread.y * 65536;
+                if (t < RAM_MAX / 16) {
+                    _RamB.Store4(t << 4, _SelfTexture2D[RAM_ADDR(t)]);
+                }
+            }
 #endif
 
             [numthreads(1, 1, 1)]
