@@ -2,8 +2,8 @@ Shader "ShaderEmu/GpuVolume"
 {
     // The volume display (docs/volume.md): a flat screen that is a window onto the guest's 3D
     // frame. The screen is a plane of the guest camera's view, the near plane unless _Plane
-    // moves it out, with the picture's rectangle there fitted to it; the scene is drawn about
-    // it as the visitor's own eyes see it, wherever VolumeMask.shader has marked the stencil.
+    // moves it out, with the picture's rectangle there fitted to it; the scene behind it is
+    // drawn as the visitor's own eyes see it, wherever VolumeMask.shader has marked the stencil.
     Properties
     {
         _State ("Machine state texture", 2D) = "black" {}
@@ -46,6 +46,7 @@ Shader "ShaderEmu/GpuVolume"
             };
             struct volume_out {
                 gpu_varyings v;
+                float behind : SV_ClipDistance0;   // how far behind the screen: what is before it is cut away
                 UNITY_VERTEX_OUTPUT_STEREO
             };
 
@@ -76,9 +77,10 @@ Shader "ShaderEmu/GpuVolume"
                     // across, fits the screen
                     float scale = min(_ScreenSize.x * focal.x, _ScreenSize.y * focal.y) / (2.0 * at);
                     // the camera stands that far before the screen, on the visitor's side; what
-                    // is nearer to it than the screen comes out of the wall
+                    // is nearer to it than the screen is cut at the screen: nothing is before a window
                     float3 local = float3(eye.x, eye.y, -eye.z - at) * scale;
                     o.v.position = UnityObjectToClipPos(float4(local, 1.0));
+                    o.behind = local.z;
                     UNITY_TRANSFER_VERTEX_OUTPUT_STEREO(i[0], o);
                     stream.Append(o);
                 }

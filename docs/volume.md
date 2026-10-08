@@ -39,7 +39,8 @@ program's camera space (`volume_vertex` in `src/gpu.h`), and from there behind t
 - **The slider** under the screen moves that plane from near (the default) towards far, in
   equal ratios. A near plane is often tiny, which makes the scene huge and far behind the
   wall: glxgears' is 2 units wide, 35 units in front of gears 8 units across. With the plane
-  among the gears they are at the wall, and what is nearer than the plane comes out of it.
+  among the gears they are at the wall, and what is nearer than the plane is cut away at it
+  (a clip distance in `GpuVolume.shader`): the screen is a window, and nothing is before it.
 - One pass. Every command is drawn solid, with depth, whatever pass it asked for: blended and
   added surfaces are opaque here. Textures, keyed texels and lit colours are as the GPU's.
 - **Stencil.** `VolumeMask.shader` on the screen's quad marks the stencil where it is in view
