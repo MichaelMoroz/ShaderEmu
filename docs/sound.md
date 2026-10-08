@@ -95,6 +95,10 @@ so its samples can be played where they lie.
   event of that name, VRChat's runtime does) and copies from the ring. It must have no
   `Update`. The panel has the switch and the volume; the shader applies the volume.
   Only the player whose machine it is hears it.
+  A mix's cursor is never before the last one (`lastCursor` in `EmuSound`): the lead comes down
+  eight samples at a time while the audio thread's place stands still for a frame, and a
+  cursor that went back made the card move its voices by a negative count, which put every
+  voice that does not loop past its end. A looping tone does not show it; test with one that ends.
 
 ## Checking it
 

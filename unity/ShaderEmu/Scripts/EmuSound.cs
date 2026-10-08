@@ -33,6 +33,7 @@ public class EmuSound : UdonSharpBehaviour
     private bool enabledBefore;
     private int shift;                 // the card's clock minus the audio thread's offset
     private int lead = 4096;           // how far the cursor is ahead of the audio thread: the readback's delay
+    private int lastCursor;            // of the mix before: the card's clock must not go back
 
     void Start()
     {
@@ -95,8 +96,14 @@ public class EmuSound : UdonSharpBehaviour
             // apart, so that a sample has the same place in the card's ring and in ours
             shift = ((int)clock - output.offset - lead + Ring - 1) & ~(Ring - 1);
             enabledBefore = true;
+            lastCursor = output.offset + lead + shift;
         }
+        // The lead comes down a little at a time while the audio thread's place stands still for
+        // a frame or two: never back past the last cursor, or the card moves its voices by a
+        // negative count, which ends every one that does not loop.
         int cursor = output.offset + lead + shift;
+        if (cursor - lastCursor < 0) cursor = lastCursor;
+        lastCursor = cursor;
         machine.SetInt("_SoundCursorLo", cursor & 0xffff);
         machine.SetInt("_SoundCursorHi", (cursor >> 16) & 0xffff);
         machine.SetInt("_SoundMixed", 1);
