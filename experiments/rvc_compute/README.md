@@ -47,7 +47,7 @@ instructions for the raytracer).
 
 ## Linux
 
-Upstream's image (`--payload rvc\_Nixvc\data-net`), which runs on all four; same session,
+Upstream's image (`--payload rvc\_Nix\rvc\data-net`), which runs on all four; same session,
 runs interleaved. With RAM written directly a run is the same frames and instructions whether
 RAM is the texture or the buffer.
 
