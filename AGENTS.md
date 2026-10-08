@@ -249,6 +249,15 @@ A cold boot to the `/ #` prompt takes about 80 s on an RTX 5090 with upstream on
   and store, and what a pair saves (fetch, decode, the loop) is the cheap part of a memory
   instruction. `tools\pc_ngrams.py` prints which sequences a guest runs, `tools\pc_hot.py`
   how few places its instructions are in (sample with `--ticks 29 --fixed-dt 0.00005664`).
+- The same was tried again on the cache of texels, where it should cost least: the next
+  `lw` served from the RAM texel the first one read, the next `sw` written straight into the
+  cache entry the first one used, up to three of them, no lookup at all. It runs for 4.3% of
+  the instructions of a Linux boot (2.3% stores, 2.0% loads) and the tick pass is 2% slower
+  at 2,048 instructions a frame, 0.6% at 16,384; as a loop instead of nested tests, 3.6%
+  slower. The test runs on every load and store (28% of instructions) and costs about what
+  the pairs it finds save. A sequence has to be known without looking for it at run time.
+- The number of state texels (the pixels that run the whole tick) does not set the tick's
+  speed: 1,093 and 901 of them (`TLB2_N=128`) take the same time.
 - Both backends commit in bands now; a state hash taken without them needs `--no-bands`.
 - D3D11 starts a frame's GPU work at `Flush` or at the readback's `Map`, whichever comes
   first. The harness flushes at the end of `frame()`; without it the GPU idled through the
