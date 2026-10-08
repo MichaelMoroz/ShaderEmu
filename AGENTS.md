@@ -241,6 +241,14 @@ A cold boot to the `/ #` prompt takes about 80 s on an RTX 5090 with upstream on
 - `RVC12_DXBC=1` with `--dxc` runs the D3D12 backend on bytecode from `d3dcompiler_47.dll`
   (fxc2) instead of DXC's. Its timings repeat within 0.002 ms where D3D11's wander by 0.015,
   so compare compiler changes there first. The same bytecode is about 10% slower on D3D11.
+- Running the next instruction in the same trip of the fast loop when it matches the one
+  just run was tried for `lw` after `lw` and `sw` after `sw` off one base register on one
+  page (16% of the kernel's instructions start such a pair; the window already holds the
+  word, and the second shares the translation). Same state hash, and the tick pass was 1%
+  slower at 2,048 instructions a frame, level at 16,384: the test is a branch on every load
+  and store, and what a pair saves (fetch, decode, the loop) is the cheap part of a memory
+  instruction. `tools\pc_ngrams.py` prints which sequences a guest runs, `tools\pc_hot.py`
+  how few places its instructions are in (sample with `--ticks 29 --fixed-dt 0.00005664`).
 - Both backends commit in bands now; a state hash taken without them needs `--no-bands`.
 - D3D11 starts a frame's GPU work at `Flush` or at the readback's `Map`, whichever comes
   first. The harness flushes at the end of `frame()`; without it the GPU idled through the
