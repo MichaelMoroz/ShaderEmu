@@ -17,7 +17,7 @@ Only these remain in the source:
 | `M_MODE_ONLY` | machine mode only, includes `NO_PAGING` (below) |
 | `NO_DOUBLES` | timer value from the host instead of double math (needed on D3D12) |
 | `PROFILE` | `PROF()` event counters through a UAV |
-| `L1_SET_BITS`, `L1_SLICES`, `TLB2_N`, `RAM_TILE_BITS` | cache, TLB and layout sizes |
+| `L1_TABLE_BITS`, `TLB2_N`, `RAM_TILE_BITS` | cache, TLB and layout sizes |
 | `L1_LOCAL`, `L1_STATIC` | the big arrays as locals of the pass (23 below): on with fxc2, off with FXC |
 
 Everything else named in this document (`OPT_BASELINE`, the `OPT_*` experiments, `XREG_*`,
@@ -354,11 +354,11 @@ how much a change helps. Rank variants with it, then confirm with FXC.
 
 ## Write-cache geometry
 
-`L1_SET_BITS` (sets per slice, default 9), `L1_SLICES` (default 2) and `L1_HASH_LOW` (pick the
-set from low word bits only) are build defines, e.g. `--define L1_SLICES=1`. The defaults are
-upstream's geometry. Other geometries stall at different times, so their state hash differs
-from upstream; guest output was checked against upstream instead (identical for b9s1, b10s1
-and b7s2 over a scripted shell session).
+This section is the history of the cache of words (upstream's, 512 sets of four, sized by
+`L1_SET_BITS` and `L1_SLICES`, which no longer exist). The cache is of RAM texels now, see
+"Texels instead of words" at its end; `L1_TABLE_BITS` (7 by default: two tables of 128
+buckets of three texels) is its one size. Any geometry stalls at different times, so state
+hashes differ between them and guest output is what is compared.
 
 | Geometry | Texels | Busy loop IPS (instr/frame) | Shell session IPS (instr/frame) |
 | --- | --- | --- | --- |
