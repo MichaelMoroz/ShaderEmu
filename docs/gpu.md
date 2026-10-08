@@ -82,7 +82,7 @@ of each character's rectangle from those, so a line of text costs the program a 
 character, not a command.
 
 A vertex is 64 bytes: position, normal, texture coordinates, colour, four numbers each.
-Numbers are 16.16 fixed point. A colour given as one word is `0xTTRRGGBB`, T being
+Numbers are 16.16 fixed point, or floats when the draw says so (the float flag below). A colour given as one word is `0xTTRRGGBB`, T being
 transparency, so that `0x00RRGGBB` is opaque; a vertex colour's fourth number is its alpha.
 Vertex buffers and uniform vectors must be 16-byte aligned, because the GPU reads them a RAM
 texel at a time.
@@ -102,6 +102,11 @@ Flags added to the vertex mode:
 | `0x100` modelview | uniforms 0-3 are the projection alone and 4-6 the modelview's rows; the GPU multiplies |
 | `0x200` quads | the buffer holds four corners per quad, in order round it, for every six vertices drawn |
 | `0x400` compact | a vertex is one texel: x, y, z, then u in the low and v in the high 16 bits, in 1/1024ths (so within 32 repeats). All of the command's vertices take the colour in its word 11 |
+| `0x800` float | the draw's numbers are IEEE single-precision floats, not 16.16: its vertices (a compact vertex's x, y and z; its fourth word stays 1/1024ths), its uniforms, and a laid texture's four words. A program built for the machine's float instructions (`docs/fpu.md`) then converts nothing |
+| `0x1000` tagged | a compact vertex's fourth word is u in bits 0-11 and v in bits 12-23 (1/1024ths, so within 4 repeats) and a tag in bits 24-31 |
+| `0x2000` table | with tagged: word 11 is not a colour but the address of a table of them, a word each, and a vertex has the colour its tag names. A model whose vertices carry their normal's number is shaded by a table of the light at each normal, with no vertex written |
+| `0x4000` packed | with tagged: a vertex is one word, x, y and z a byte each (whole numbers 0 to 255, which the matrix scales) and the tag in the top byte; u and v are a word a vertex in a second buffer, whose address is word 12. Quake's models are this in their files |
+| `0x8000` points | with compact and the modelview flag: the buffer has a vertex a triangle, which faces the eye. Its corners are the point, then `s` above it and `s` to its right as the eye sees it; `s` is word 12, times 1 + word 13 x depth when the point is word 14 or more in front of the eye. All three corners have the vertex's texture coordinates |
 
 A textured quad is then 16 words of vertices instead of 96.
 
@@ -156,10 +161,19 @@ rectangles in one list, written back.
 
 ## OpenGL for Nano-X programs
 
-`programs/linux/gles.c` (`include/GLES/gl.h`, `segl.h`) is a fixed-point OpenGL in the manner of
-OpenGL ES 1.x: `GLfixed` everywhere, vertex arrays and `glDrawArrays`, matrices, paletted and
-RGBA textures, blending, depth and alpha test. Nothing is converted to floating point on the
-way: `GLfixed` is what the device reads.
+`programs/linux/gles.c` (`include/GLES/gl.h`, `segl.h`) is an OpenGL in the manner of OpenGL ES
+1.x: vertex arrays and `glDrawArrays`, matrices, paletted and RGBA textures, blending, depth
+and alpha test. It is built one of two ways, and a number inside it (a matrix's, a vertex's)
+is then that kind:
+
+- **fixed point** (the default): `GLfixed` is what the device reads and nothing is converted.
+  Doom and Tiberian Dawn, integers throughout, are built with this.
+- **floats** (`-DSEGL_FLOAT`): matrices and vertices are floats and every draw has the float
+  flag. Quake and the guest compiler's `libgles.a` are built with this.
+
+Either build takes both kinds of call (`glTranslatex` and `glTranslatef`) and of array
+(`GL_FIXED` and `GL_FLOAT`) and converts the other kind. `glRotatef` is about any axis in the
+float build, about an axis of the coordinate system in the other.
 
 - `GL_QUADS` and triangles go into GPU memory as compact vertices; calls with the same state
   join one command. Blending and the depth test choose the pass, so a program may set state
@@ -188,6 +202,15 @@ way: `GLfixed` is what the device reads.
 - `seglSprite()` is a rectangle of a texture over what the list drew before it: always the
   blended pass with no depth, so that many small pictures and their shadows keep their
   order. A texture of `SEGL_BITS` is one bit a pixel, drawn in the call's colour.
+- `seglKeptBlend()` puts a kept command into a blended pass, with a texture of words: Quake's
+  light maps are kept commands that multiply (`docs/quake.md`).
+- `seglCompact()` draws vertices the program made compact itself; `seglCompactSpace()` gives it
+  room in the frame to write them in place, and `seglCompactAt()` draws ones that already are in
+  GPU memory, where they are, in any later frame too. `seglCompactTrim()` gives back room.
+- `seglTagged()` and `seglPacked()` draw tagged and packed vertices, with a table of colours
+  or without; `seglPoints()` gives room for points (`docs/quake.md`: models and particles).
+- `seglMemorySpare()` is 3.9 MB more for one program: the display's own framebuffer
+  (`docs/display.md`), which nothing reads while the desktop is layers.
 - `seglSwapAgain()` draws the last list once more. Its textures, and the commands and vertices
   `seglLastCommand()` and `seglLastVertices()` pointed at, are the program's memory: a
   pointer that moved or a picture that changed needs no new list (`docs/tdawn.md`).

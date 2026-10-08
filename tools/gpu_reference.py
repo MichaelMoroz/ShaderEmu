@@ -4,7 +4,7 @@ Reads a harness snapshot taken while the guest is paused (so the command list in
 one last drawn) and the GPU's colour target saved by --gpu-capture, redraws the list in
 software and compares.
 
-    python tools/gpu_reference.py SNAPSHOT TARGET.bmp [--png PREFIX]
+    python tools/gpu_reference.py SNAPSHOT TARGET.bmp [--png PREFIX] [--size WIDTHxHEIGHT]
 
 The real picture comes from the graphics card's rasteriser, so this is not bit-exact: pixels
 on triangle edges can fall either way, and colours can differ by a rounding step. The report
@@ -38,6 +38,10 @@ class Machine:
     def fixed(self, addr, n):
         return (self.w(addr, n).view(np.int32) / f32(65536.0)).astype(f32)
 
+    def numbers(self, addr, n, floats):
+        """A draw's numbers: floats as they are (VERTEX_FLOAT), or 16.16 fixed point."""
+        return self.w(addr, n).view(f32).copy() if floats else self.fixed(addr, n)
+
 
 def colour_of(v):
     """0xTTRRGGBB as red, green, blue, alpha: T is transparency, so 0x00RRGGBB is opaque."""
@@ -57,6 +61,8 @@ def place_pixels(p, depth):
 def vertices(m):
     """Every command's vertices, in mesh order: clip position, colour, uv, and per-vertex state."""
     mode, width, height = (int(v) for v in m.w(0x87000000, 3))
+    if '--size' in sys.argv:   # a list drawn into a window: the picture has the window's size
+        width, height = (int(v) for v in sys.argv[sys.argv.index('--size') + 1].split('x'))
     list_addr, count = (int(v) for v in m.w(0x87000014, 2))
     size = np.array([width, height], f32)
     out = []
@@ -79,30 +85,55 @@ def vertices(m):
                             tex=tuple(int(v) for v in w[8:12]), key=int(w[2])))
         elif op == 3:
             n = int(w[2])
-            vmode, modelview = int(w[4]) & 0xff, int(w[4]) & 0x100
+            vmode, modelview, floats = int(w[4]) & 0xff, int(w[4]) & 0x100, bool(int(w[4]) & 0x800)
             # with the quads flag every six vertices drawn are four stored corners: 0 1 2, 0 2 3
             which = np.arange(n)
             if int(w[4]) & 0x200:
                 which = (which // 6) * 4 + np.array([0, 1, 2, 0, 2, 3])[which % 6]
+            corner = which % 3
+            if int(w[4]) & 0x8000:   # points: a stored vertex a triangle
+                which = which // 3
             stored = int(which.max()) + 1 if n else 0
             if int(w[4]) & 0x400:
                 # compact: one texel a vertex (x, y, z, packed uv), the colour from the command
-                t = m.w(int(w[1]), stored * 4).reshape(stored, 4)[which]
-                pos = np.concatenate([(t[:, :3].view(np.int32) / f32(65536.0)).astype(f32), np.ones((n, 1), f32)], axis=1)
+                if int(w[4]) & 0x4000:
+                    # packed: a word a vertex (x, y, z bytes and a tag), u and v in a buffer of their own
+                    p, c = m.w(int(w[1]), stored)[which].astype(np.uint32), m.w(int(w[12]), stored)[which].astype(np.uint32)
+                    t = np.stack([p & 0xff, p >> 8 & 0xff, p >> 16 & 0xff, (c & 0xffffff) | (p & 0xff000000)], axis=1)
+                    xyz = t[:, :3].astype(f32)
+                else:
+                    t = m.w(int(w[1]), stored * 4).reshape(stored, 4)[which]
+                    xyz = np.ascontiguousarray(t[:, :3])
+                    xyz = xyz.view(f32) if floats else (xyz.view(np.int32) / f32(65536.0)).astype(f32)
+                pos = np.concatenate([xyz, np.ones((n, 1), f32)], axis=1)
                 packed = t[:, 3].astype(np.uint32)
                 uv = np.stack([(packed & 0xffff).astype(np.int16), (packed >> 16).astype(np.uint16).astype(np.int16)], axis=1).astype(f32) / f32(1024.0)
                 v = np.zeros((n, 4, 4), f32)
-                v[:, 0], v[:, 2, :2], v[:, 3] = pos, uv, colour_of(w[11])
+                v[:, 0], v[:, 3] = pos, colour_of(w[11])
+                if int(w[4]) & 0x1000:
+                    # tagged: 12 bits each of u and v, and a tag, which with 0x2000 names a colour in the table at word 11
+                    uv = np.stack([packed & 0xfff, packed >> 12 & 0xfff], axis=1).astype(f32) / f32(1024.0)
+                    if int(w[4]) & 0x2000 and n:
+                        table = m.w(int(w[11]), 256)
+                        v[:, 3] = np.stack([colour_of(table[int(tag)]) for tag in packed >> 24])
+                v[:, 2, :2] = uv
             else:
-                v = m.fixed(int(w[1]), stored * 16).reshape(stored, 4, 4)[which]
+                v = m.numbers(int(w[1]), stored * 16, floats).reshape(stored, 4, 4)[which]
             pos, normal = v[:, 0], v[:, 1]
             colour = v[:, 3].copy()
             if vmode == 0:
                 clip = place_pixels(pos[:, :2], pos[:, 2])
             else:
-                u = m.fixed(int(w[6]), 40).reshape(10, 4)
+                u = m.numbers(int(w[6]), 40, floats).reshape(10, 4)
                 if modelview:   # rows 4-6 are the modelview, applied before the projection
                     pos = np.concatenate([(pos @ u[4:7].T).astype(f32), pos[:, 3:4]], axis=1)
+                if int(w[4]) & 0x8000:
+                    # a point's triangle: the point, then `s` above it and `s` to its right as the eye sees it
+                    how = w[12:15].view(f32).copy() if floats else w[12:15].astype(np.int32).astype(f32) / f32(65536.0)
+                    depth = -pos[:, 2]
+                    s = (how[0] * np.where(depth < how[2], f32(1.0), f32(1.0) + how[1] * depth)).astype(f32)
+                    pos[:, 1] += np.where(corner == 1, s, f32(0.0))
+                    pos[:, 0] += np.where(corner == 2, s, f32(0.0))
                 cl = (pos @ u[0:4].T).astype(f32)
                 part = size / f32(TARGET)
                 clip = np.stack([(cl[:, 0] + cl[:, 3]) * part[0] - cl[:, 3], cl[:, 3] - (cl[:, 3] - cl[:, 1]) * part[1],
@@ -114,7 +145,7 @@ def vertices(m):
             uv = v[:, 2, :2].copy()
             if int(w[5]) & 0x200:
                 # laid on the picture: words 12-15 are the corner's coordinates and their change in 1,024 pixels
-                lay = w[12:16].astype(np.int32).astype(f32) / f32(65536.0)
+                lay = w[12:16].view(f32).copy() if floats else w[12:16].astype(np.int32).astype(f32) / f32(65536.0)
                 uv = np.repeat(lay[None, :2], n, 0)
                 colour = np.repeat(np.array([[lay[2], lay[3], 0, 1]], f32), n, 0)
             out.append(dict(op=op, pos=clip, colour=colour.astype(f32), uv=uv,

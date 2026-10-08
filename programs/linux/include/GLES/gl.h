@@ -1,7 +1,7 @@
-// The fixed-point OpenGL that programs/linux/gles.c implements on the machine's GPU device
-// (docs/gpu.md): the OpenGL ES 1.x "common lite" way of working (GLfixed everywhere, vertex
-// arrays, no glBegin), plus GL_QUADS and paletted textures, which the device draws directly.
-// What is not declared here does not exist. segl.h has the calls that tie it to a window.
+// The OpenGL that programs/linux/gles.c implements on the machine's GPU device (docs/gpu.md):
+// OpenGL ES 1.x's way of working (vertex arrays, no glBegin), with numbers as floats or as
+// GLfixed, plus GL_QUADS and paletted textures, which the device draws directly. What is not
+// declared here does not exist. segl.h has the calls that tie it to a window.
 #ifndef SHADEREMU_GLES_GL_H
 #define SHADEREMU_GLES_GL_H
 
@@ -13,6 +13,7 @@ typedef unsigned int GLbitfield;
 typedef int GLint;
 typedef int GLsizei;
 typedef int32_t GLfixed;   // 16.16
+typedef float GLfloat;
 typedef unsigned char GLubyte;
 typedef unsigned char GLboolean;
 typedef void GLvoid;
@@ -42,6 +43,7 @@ typedef void GLvoid;
 #define GL_TEXTURE_2D 0x0DE1
 
 #define GL_UNSIGNED_BYTE 0x1401
+#define GL_FLOAT 0x1406
 #define GL_FIXED 0x140C
 
 #define GL_MODELVIEW 0x1700
@@ -71,6 +73,17 @@ void glOrthox(GLfixed left, GLfixed right, GLfixed bottom, GLfixed top, GLfixed 
 void glTranslatex(GLfixed x, GLfixed y, GLfixed z);
 void glScalex(GLfixed x, GLfixed y, GLfixed z);
 void glRotatex(GLfixed degrees, GLfixed x, GLfixed y, GLfixed z);   // about an axis of the coordinate system
+// The same with floats. (In the library's fixed-point build these convert, and glRotatef is
+// about an axis of the coordinate system only; in its float build the calls above convert.)
+void glClearColor(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha);
+void glLoadMatrixf(const GLfloat* m);
+void glMultMatrixf(const GLfloat* m);
+void glFrustumf(GLfloat left, GLfloat right, GLfloat bottom, GLfloat top, GLfloat near_plane, GLfloat far_plane);
+void glOrthof(GLfloat left, GLfloat right, GLfloat bottom, GLfloat top, GLfloat near_plane, GLfloat far_plane);
+void glTranslatef(GLfloat x, GLfloat y, GLfloat z);
+void glScalef(GLfloat x, GLfloat y, GLfloat z);
+void glRotatef(GLfloat degrees, GLfloat x, GLfloat y, GLfloat z);
+void glColor4f(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha);
 
 void glEnable(GLenum what);
 void glDisable(GLenum what);
@@ -87,8 +100,8 @@ void glColor4ub(GLubyte red, GLubyte green, GLubyte blue, GLubyte alpha);
 // Vertices take the current colour: there is no colour array.
 void glEnableClientState(GLenum array);
 void glDisableClientState(GLenum array);
-void glVertexPointer(GLint size, GLenum type, GLsizei stride, const GLvoid* pointer);     // 2 or 3 of GL_FIXED
-void glTexCoordPointer(GLint size, GLenum type, GLsizei stride, const GLvoid* pointer);   // 2 of GL_FIXED
+void glVertexPointer(GLint size, GLenum type, GLsizei stride, const GLvoid* pointer);     // 2 or 3 of GL_FLOAT or GL_FIXED
+void glTexCoordPointer(GLint size, GLenum type, GLsizei stride, const GLvoid* pointer);   // 2 of GL_FLOAT or GL_FIXED
 void glDrawArrays(GLenum mode, GLint first, GLsizei count);
 
 void glGenTextures(GLsizei n, GLuint* textures);

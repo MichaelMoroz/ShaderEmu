@@ -25,6 +25,41 @@ void* seglMemory(unsigned int bytes);
 void seglTexturePointer(const void* pixels, GLsizei width, GLsizei height, GLenum internal);
 // The 256-word palette of paletted textures (0x00RRGGBB), for writing directly.
 unsigned int* seglPalette(void);
+// How many bytes seglMemory() still has to give.
+unsigned int seglMemoryLeft(void);
+// More GPU memory for a program that needs it, below seglMemory()'s: the display's unused
+// framebuffer while the desktop is drawn as layers. NULL (and 0 bytes) when there is none.
+// One program may have it at a time; nothing hands it out or takes it back.
+void* seglMemorySpare(unsigned int* bytes);
+
+// Vertices the program has made compact itself (docs/gpu.md: x, y, z, then u | v << 16 in
+// 1,024ths), drawn as glDrawArrays draws: GL_TRIANGLES, a strip, a fan or GL_QUADS. x, y and z
+// are the kind of number the library was built for: floats with SEGL_FLOAT, else 16.16.
+void seglCompact(GLenum mode, const unsigned int* vertices, GLsizei count);
+// The same for triangles the program writes in place: room for `count` vertices (a multiple
+// of three) of a draw made now, or NULL when the frame has none left.
+unsigned int* seglCompactSpace(GLsizei count);
+// Gives back the last `unused` vertices of the room seglCompactSpace() or seglPoints() just gave.
+void seglCompactTrim(GLsizei unused);
+// Room for `count` points, a compact vertex each, drawn as triangles that face the eye: the
+// point, and corners `size` above it and to its right, times 1 + growth x depth from depth
+// `from` on. Those three are the library's own numbers. NULL when the frame has no room.
+unsigned int* seglPoints(GLsizei count, const void* size_growth_from);
+// And for triangles that are in memory from seglMemory() already: a draw of them where they
+// are, which the program may ask for again in any later frame. -1 when the frame is full.
+int seglCompactAt(const void* vertices, GLsizei count);
+// Triangles of tagged vertices (docs/gpu.md): the fourth word is u | v << 12 | tag << 24. With
+// a `table` (256 words in memory from seglMemory()) a vertex's colour is the word its tag
+// names. `vertices` are where they are, as seglCompactAt()'s, or NULL for room in the frame.
+// Returns where the vertices are (to be written, when the room is the frame's), NULL for none.
+unsigned int* seglTagged(const void* vertices, GLsizei count, const unsigned int* table);
+// The same from packed vertices, a word each (x | y << 8 | z << 16 | tag << 24, whole numbers)
+// with u | v << 12 a word each in `coords`; all of it in memory from seglMemory(). -1: frame full.
+int seglPacked(const void* vertices, const void* coords, GLsizei count, const unsigned int* table);
+// The matrix on top of the GL_MODELVIEW or GL_PROJECTION stack as sixteen of the library's
+// own numbers, and the current matrix set from sixteen such: a copy, with no conversion.
+void seglGetMatrix(GLenum mode, void* matrix);
+void seglSetMatrix(const void* matrix);
 
 // Makes a texture name the window's own pixels, as the last frame left them (no copy), and
 // says how far across that texture the window's width reaches (its rows may be longer).
@@ -60,6 +95,10 @@ void seglSwapAgain(void);
 // seglKeptMatrices() gives them the matrices in force, once a frame before anything is drawn.
 int seglKeep(int count, int quads);
 void seglKeptQuads(int index, const void* vertices, int first_quad, int quads, GLuint name, unsigned grey, int keyed);
+// A kept command is drawn with no blending and a paletted texture unless this says otherwise:
+// the kind of blending as glBlendFunc has them (1 by alpha, 2 added, 3 multiplied; all with
+// the depth test), and whether its texture is words (0xTTRRGGBB) instead of palette indices.
+void seglKeptBlend(int index, int kind, int words);
 void seglKeptShown(int index, int quads);   // how many of its quads are drawn: 0 hides it
 void seglKeptGrey(int index, unsigned grey);
 // The same in one of the two sets only (seglSet() is the one the frame being built is in): a

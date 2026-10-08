@@ -42,6 +42,11 @@
 #define VERTEX_MODELVIEW 0x100   // flag: c0-c3 is the projection alone and c4-c6 the modelview's rows
 #define VERTEX_QUADS 0x200       // flag: the buffer holds four corners per quad, in order round it, for every six vertices drawn
 #define VERTEX_COMPACT 0x400     // flag: a vertex is one texel: x, y, z, then u | v << 16 in 1/1024ths; the colour is the command's word 11
+#define VERTEX_FLOAT 0x800       // flag: the draw's numbers (vertices, uniforms, a laid texture's four) are floats, not 16.16
+#define VERTEX_TAGGED 0x1000     // flag (compact): the fourth word is u | v << 12 | tag << 24, u and v 12 bits of 1/1024ths
+#define VERTEX_TABLE 0x2000      // flag (tagged): word 11 is the address of a table of colours, and a vertex has its tag's
+#define VERTEX_PACKED 0x4000     // flag (tagged): a vertex is a word, x | y << 8 | z << 16 | tag << 24; u and v are a word each at word 12's address
+#define VERTEX_POINTS 0x8000     // flag (compact, modelview): a vertex a triangle, which faces the eye; words 12-14 its size, growth and from where
 
 // How fragments are coloured (low byte), plus flags.
 #define FRAGMENT_COLOUR 0     // interpolated colour
@@ -94,8 +99,45 @@ float4 from_fixed(uint4 t) {
     return float4(asint(t)) / 65536.0;
 }
 // A colour word is 0xTTRRGGBB: T is transparency, so that the usual 0x00RRGGBB is opaque.
+// A texel of numbers as a draw has them: floats as they are, or 16.16 fixed point.
+float4 gpu_number(bool floats, uint4 t) {
+    return floats ? asfloat(t) : from_fixed(t);
+}
+
 float4 colour_of(uint v) {
     return float4((v >> 16) & 0xff, (v >> 8) & 0xff, v & 0xff, 255 - (v >> 24)) / 255.0;
+}
+
+// A compact vertex's texture coordinates and colour, from its fourth word and the command's word 11.
+void gpu_compact(uint how, uint fourth, uint word, out float2 uv, out float4 colour) {
+    if (how & VERTEX_TAGGED) {
+        uv = float2(fourth & 0xfff, (fourth >> 12) & 0xfff) / 1024.0;
+        if (how & VERTEX_TABLE) word = ram_word(word + 4 * (fourth >> 24));
+    } else {
+        uv = float2(asint(fourth << 16) >> 16, asint(fourth) >> 16) / 1024.0;
+    }
+    colour = colour_of(word);
+}
+
+// Vertex k of a compact draw: its position, texture coordinates and colour.
+void gpu_compact_vertex(uint base, uint4 head, uint4 how, uint4 more, uint k, out float4 pos, out float2 uv, out float4 colour) {
+    uint4 t;
+    if (how.r & VERTEX_PACKED) {
+        uint p = ram_word(head.g + 4 * k);
+        t = uint4(p & 0xff, (p >> 8) & 0xff, (p >> 16) & 0xff, (ram_word(ram(base + 3).r + 4 * k) & 0xffffff) | (p & 0xff000000));
+        pos = float4(float3(t.xyz), 1.0);
+    } else {
+        t = ram(texel_of(head.g) + k);
+        pos = float4(gpu_number((how.r & VERTEX_FLOAT) != 0, t).xyz, 1.0);
+    }
+    gpu_compact(how.r, t.a, more.a, uv, colour);
+}
+
+// How far corner 1 (up) or 2 (right) of a point's triangle is from the point, which is `depth`
+// in front of the eye. `how` is the command's words 12-14: size, growth with depth, from what depth.
+float2 gpu_corner(float4 how, uint corner, float depth) {
+    float s = how.x * (depth < how.z ? 1.0 : 1.0 + how.y * depth);
+    return corner == 1 ? float2(0.0, s) : corner == 2 ? float2(s, 0.0) : float2(0.0, 0.0);
 }
 
 struct gpu_varyings {
@@ -199,31 +241,31 @@ gpu_varyings gpu_vertex_of(uint id, uint base, uint4 head) {
             // texture address; width, height, key
             uint4 how = ram(base + 1), more = ram(base + 2);
             uint u = texel_of(how.b);
+            bool fl = (how.r & VERTEX_FLOAT) != 0;
             if (how.r & VERTEX_QUADS) {
                 // triangles 0 1 2 and 0 2 3 of each quad's corners
                 uint part = k % 6;
                 k = (k / 6) * 4 + (part < 3 ? part : part == 3 ? 0 : part - 2);
             }
             float4 pos, normal = 0;
+            uint corner = 0;
+            if (how.r & VERTEX_POINTS) { corner = k % 3; k = k / 3; }
             [branch]
             if (how.r & VERTEX_COMPACT) {
-                uint4 t = ram(texel_of(head.g) + k);
-                pos = float4(from_fixed(t).xyz, 1.0);
-                o.uv = float2(asint(t.a << 16) >> 16, asint(t.a) >> 16) / 1024.0;
-                o.colour = colour_of(more.a);
+                gpu_compact_vertex(base, head, how, more, k, pos, o.uv, o.colour);
             } else {
                 uint v = texel_of(head.g) + 4 * k;
-                pos = from_fixed(ram(v));
-                normal = from_fixed(ram(v + 1));
-                o.uv = from_fixed(ram(v + 2)).xy;
-                o.colour = from_fixed(ram(v + 3));
+                pos = gpu_number(fl, ram(v));
+                normal = gpu_number(fl, ram(v + 1));
+                o.uv = gpu_number(fl, ram(v + 2)).xy;
+                o.colour = gpu_number(fl, ram(v + 3));
             }
             o.texture_info = uint4(how.g, how.a, more.r, more.g);
             o.key = more.b;
             if (how.g & FRAGMENT_LAID) {
                 // words 12-15: the texture coordinates of the picture's corner, and how far
                 // they go in 1,024 pixels. The colour carries the second pair to the fragments.
-                float4 lay = from_fixed(ram(base + 3));
+                float4 lay = gpu_number(fl, ram(base + 3));
                 o.uv = lay.xy;
                 o.colour = float4(lay.zw, 0.0, 1.0);
             }
@@ -234,20 +276,21 @@ gpu_varyings gpu_vertex_of(uint id, uint base, uint4 head) {
             } else {
                 // with VERTEX_MODELVIEW the GPU does the matrix product the program would have done
                 if (how.r & VERTEX_MODELVIEW)
-                    pos = float4(dot(from_fixed(ram(u + 4)), pos), dot(from_fixed(ram(u + 5)), pos),
-                                 dot(from_fixed(ram(u + 6)), pos), pos.w);
-                float4 clip = float4(dot(from_fixed(ram(u)), pos), dot(from_fixed(ram(u + 1)), pos),
-                                     dot(from_fixed(ram(u + 2)), pos), dot(from_fixed(ram(u + 3)), pos));
+                    pos = float4(dot(gpu_number(fl, ram(u + 4)), pos), dot(gpu_number(fl, ram(u + 5)), pos),
+                                 dot(gpu_number(fl, ram(u + 6)), pos), pos.w);
+                if (how.r & VERTEX_POINTS) pos.xy += gpu_corner(gpu_number(fl, ram(base + 3)), corner, -pos.z);
+                float4 clip = float4(dot(gpu_number(fl, ram(u)), pos), dot(gpu_number(fl, ram(u + 1)), pos),
+                                     dot(gpu_number(fl, ram(u + 2)), pos), dot(gpu_number(fl, ram(u + 3)), pos));
                 // The picture is the top-left size.x by size.y pixels of the target; clip z
                 // arrives as -w..w (the OpenGL convention) and leaves as 0..w.
                 float2 part = size / float2(GPU_TARGET_W, GPU_TARGET_H);
                 o.position = float4((clip.x + clip.w) * part.x - clip.w, clip.w - (clip.w - clip.y) * part.y,
                                     (clip.z + clip.w) * 0.5, clip.w);
                 if (vertex_mode == VERTEX_LIT) {
-                    float3 n = float3(dot(from_fixed(ram(u + 4)).xyz, normal.xyz), dot(from_fixed(ram(u + 5)).xyz, normal.xyz),
-                                      dot(from_fixed(ram(u + 6)).xyz, normal.xyz));
-                    float facing = max(dot(n, from_fixed(ram(u + 7)).xyz), 0.0);
-                    o.colour = float4(facing * from_fixed(ram(u + 8)).rgb + from_fixed(ram(u + 9)).rgb, 1.0);
+                    float3 n = float3(dot(gpu_number(fl, ram(u + 4)).xyz, normal.xyz), dot(gpu_number(fl, ram(u + 5)).xyz, normal.xyz),
+                                      dot(gpu_number(fl, ram(u + 6)).xyz, normal.xyz));
+                    float facing = max(dot(n, gpu_number(fl, ram(u + 7)).xyz), 0.0);
+                    o.colour = float4(facing * gpu_number(fl, ram(u + 8)).rgb + gpu_number(fl, ram(u + 9)).rgb, 1.0);
                 }
             }
         }
@@ -349,37 +392,38 @@ gpu_varyings volume_vertex(uint id, uint base, uint4 head, out float3 eye, out f
     o.texture_info = 0;
     uint4 how = ram(base + 1), more = ram(base + 2);
     uint u = texel_of(how.b), k = id - head.a;
+    bool fl = (how.r & VERTEX_FLOAT) != 0;
     if (how.r & VERTEX_QUADS) {
         uint part = k % 6;
         k = (k / 6) * 4 + (part < 3 ? part : part == 3 ? 0 : part - 2);
     }
     float4 pos, normal = 0;
+    uint corner = 0;
+    if (how.r & VERTEX_POINTS) { corner = k % 3; k = k / 3; }
     [branch]
     if (how.r & VERTEX_COMPACT) {
-        uint4 t = ram(texel_of(head.g) + k);
-        pos = float4(from_fixed(t).xyz, 1.0);
-        o.uv = float2(asint(t.a << 16) >> 16, asint(t.a) >> 16) / 1024.0;
-        o.colour = colour_of(more.a);
+        gpu_compact_vertex(base, head, how, more, k, pos, o.uv, o.colour);
     } else {
         uint v = texel_of(head.g) + 4 * k;
-        pos = from_fixed(ram(v));
-        normal = from_fixed(ram(v + 1));
-        o.uv = from_fixed(ram(v + 2)).xy;
-        o.colour = from_fixed(ram(v + 3));
+        pos = gpu_number(fl, ram(v));
+        normal = gpu_number(fl, ram(v + 1));
+        o.uv = gpu_number(fl, ram(v + 2)).xy;
+        o.colour = gpu_number(fl, ram(v + 3));
     }
     // every pass is drawn as pass 0: what blends there is solid here
     o.texture_info = uint4(how.g, how.a, more.r, more.g);
     o.key = more.b;
-    float4 mx = from_fixed(ram(u + 4)), my = from_fixed(ram(u + 5)), mz = from_fixed(ram(u + 6));
+    float4 mx = gpu_number(fl, ram(u + 4)), my = gpu_number(fl, ram(u + 5)), mz = gpu_number(fl, ram(u + 6));
     eye = float3(dot(mx, pos), dot(my, pos), dot(mz, pos));
+    if (how.r & VERTEX_POINTS) eye.xy += gpu_corner(gpu_number(fl, ram(base + 3)), corner, -eye.z);
     if ((how.r & 0xff) == VERTEX_LIT) {
         float3 n = float3(dot(mx.xyz, normal.xyz), dot(my.xyz, normal.xyz), dot(mz.xyz, normal.xyz));
-        float facing = max(dot(n, from_fixed(ram(u + 7)).xyz), 0.0);
-        o.colour = float4(facing * from_fixed(ram(u + 8)).rgb + from_fixed(ram(u + 9)).rgb, 1.0);
+        float facing = max(dot(n, gpu_number(fl, ram(u + 7)).xyz), 0.0);
+        o.colour = float4(facing * gpu_number(fl, ram(u + 8)).rgb + gpu_number(fl, ram(u + 9)).rgb, 1.0);
     }
-    float4 depth = from_fixed(ram(u + 2));   // OpenGL's third row: 0, 0, -(f+n)/(f-n), -2fn/(f-n)
+    float4 depth = gpu_number(fl, ram(u + 2));   // OpenGL's third row: 0, 0, -(f+n)/(f-n), -2fn/(f-n)
     planes = float2(depth.w / (depth.z - 1.0), depth.w / (depth.z + 1.0));
-    focal = float2(from_fixed(ram(u)).x, from_fixed(ram(u + 1)).y);
+    focal = float2(gpu_number(fl, ram(u)).x, gpu_number(fl, ram(u + 1)).y);
     return o;
 }
 #endif
