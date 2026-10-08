@@ -242,6 +242,12 @@ A cold boot to the `/ #` prompt takes about 80 s on an RTX 5090 with upstream on
   (fxc2) instead of DXC's. Its timings repeat within 0.002 ms where D3D11's wander by 0.015,
   so compare compiler changes there first. The same bytecode is about 10% slower on D3D11.
 - Both backends commit in bands now; a state hash taken without them needs `--no-bands`.
+- D3D11 starts a frame's GPU work at `Flush` or at the readback's `Map`, whichever comes
+  first. The harness flushes at the end of `frame()`; without it the GPU idled through the
+  host's own work, 7% at 2,048 instructions a frame. Anything that draws and then waits
+  should do the same.
+- The D3D11 build's timer value comes from doubles in the shader, D3D12's from the host: at
+  65,536 instructions a frame their state hashes differ unless D3D11 runs with `--no-doubles`.
 - An array of scalars declared one component wide in the bytecode (as FXC does) ran 3.5%
   slower than four wide; fxc2 keeps four.
 - Upstream rvc's own shader compiles with the fxc2 in `tools\fxc2` (older builds had a syntax

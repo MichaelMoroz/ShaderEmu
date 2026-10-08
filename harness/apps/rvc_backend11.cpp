@@ -124,6 +124,9 @@ public:
         }
         rows_.request(gpu_.ctx.Get(), crt_.current(), 0, 0, tag);
         control_.request(gpu_.ctx.Get(), crt_.current(), 0, kControlRow, tag);
+        // hand the frame to the GPU now, as ExecuteCommandLists does on D3D12: without this it
+        // starts when the readback's Map asks for it, after the host's own work for the frame
+        if (!getenv("RVC11_NO_FLUSH")) gpu_.ctx->Flush();
         return true;
     }
     bool rowFull() const override { return rows_.full(); }

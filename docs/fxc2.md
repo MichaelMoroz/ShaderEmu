@@ -47,30 +47,43 @@ numbers from one session only.
 ## Against DXC on D3D12
 
 D3D12 with DXC was the fast backend: 16% more instructions a second on the Linux bench and a
-cold boot 1.5 s shorter. Three things closed most of that (8 October 2026, same session for
-each row, `--fixed-dt 0.004`, state hashes equal between the two backends):
+cold boot 1.5 s shorter. D3D11 with fxc2 is level with it or ahead now (8 October 2026, same
+session for each row, `--fixed-dt 0.004`; the state hash and the instruction count are the same
+on both backends in every row that prints them):
 
 | | D3D11 + fxc2 before | D3D11 + fxc2 | D3D12 + DXC |
 |---|---|---|---|
-| fixed cost of a frame (`--ticks 2`) | 0.37 ms | 0.091 ms | 0.091 ms |
-| Linux bench, 2,048 instructions a frame | 2,759k IPS | 3,106k IPS | 3,227k IPS |
-| the same at 16,384 | 3,187k IPS | 3,627k IPS | 3,640k IPS |
-| Linux cold boot, 21,000 frames | 16.1 s | 14.55 s | 14.21 s |
-| raytracer, tick pass for 2,048 instructions | 0.444 ms | 0.365 ms | 0.348 ms |
+| fixed cost of a frame (`--ticks 2`) | 0.37 ms | 0.083 ms | 0.091 ms |
+| Linux bench, 2,048 instructions a frame | 2,759k IPS | 3,280k IPS | 3,256k IPS |
+| the same at 16,384 | 3,187k IPS | 3,660k IPS | 3,651k IPS |
+| the same at 65,536 | | 3,440k IPS | 3,432k IPS |
+| Linux cold boot, 21,000 frames | 16.1 s | 13.74 s | 14.24 s |
+| raytracer, 40,000 frames (machine mode) | | 4,198k IPS | 4,046k IPS |
+| gears, 12,000 frames (the GPU device) | | 3,786k IPS | 3,566k IPS |
+| raycast's demo walk, 16,384 a frame | | 2,143k IPS | 2,099k IPS |
 
-- The D3D11 harness commits in bands now, as D3D12 did (`COMMIT_BANDS`, one quad per 4 MiB
-  band something wrote to). Rewriting all of RAM was 0.28 ms of every frame. `--no-bands`
-  turns it off on either backend; hashes taken without bands need it.
+Four things did it:
+
+- The D3D11 harness commits in bands, as D3D12 did (`COMMIT_BANDS`, one quad per 4 MiB band
+  something wrote to). Rewriting all of RAM was 0.28 ms of every frame. `--no-bands` turns it
+  off on either backend; hashes taken without bands need it.
 - The fast loop leaves from where a thing is found out (item 25 in
-  `experiments/rvc_opt/README.md`).
+  `experiments/rvc_opt/README.md`): 0.444 ms to 0.365 ms for the raytracer's tick pass.
 - fxc2 puts the code behind a test of a flag where the flag was set, when both sides of the
   branch before it leave a constant there: what is left of `if (!step()) break;` is one test.
+- The D3D11 harness flushes at the end of a frame. Before, the GPU was handed the frame when
+  the readback's `Map` asked for it, after the host's own work: 0.02 ms a frame of a GPU with
+  nothing to do, 7% at 2,048 instructions a frame. `RVC11_NO_FLUSH=1` brings that back.
 
-What remains is not the bytecode. The harness can hand fxc2's bytecode to D3D12
-(`set RVC12_DXBC=1` with `--dxc`: every shader is then compiled by `d3dcompiler_47.dll`), and
-there the same tick takes 0.331 ms, less than DXC's 0.348. On D3D11 that bytecode takes 0.365:
-the driver runs it about 10% slower through that API, and its timings vary more from run to
-run (0.363 to 0.380 over six runs; D3D12's stay within 0.002).
+The tick pass itself is still slower through D3D11. The harness can hand fxc2's bytecode to
+D3D12 (`set RVC12_DXBC=1` with `--dxc`: every shader is then compiled by
+`d3dcompiler_47.dll`): there the raytracer's tick takes 0.331 ms, DXC's DXIL 0.348, and the
+same bytecode on D3D11 0.355 to 0.365. D3D11 makes that up in the commit (0.038 ms against
+0.077).
+
+At 65,536 the two backends end in different states: the D3D11 build computes the timer value
+in the shader with doubles, the D3D12 build takes it from the host. With `--no-doubles` on
+D3D11 the hashes are equal there too.
 
 ## What the shader uses from it
 
