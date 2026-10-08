@@ -33,24 +33,50 @@
 
 /* shift by two to ignore byte offset */
 // The write cache holds RAM texels (four words), not words: stores come in runs (a register
-// save, a structure, a copy), and a run then takes one entry. A bucket is four state texels:
-// the tags of three entries (texel number + 1; 0 is free) and their three texels. There are
-// two tables of 2^L1_TABLE_BITS buckets with different hashes; a texel goes to the second only
-// when its bucket in the first is full, so most lookups read one bucket. Entries are filled in
-// order and never freed within a pass.
+// save, a structure, a copy), and a run then takes one entry. A bucket is the tags of its
+// L1_WAYS entries in one state texel (texel number + 1; 0 is free) and then their texels.
+// There are two tables of 2^L1_TABLE_BITS buckets with different hashes; a texel goes to the
+// second only when its bucket in the first is full, so most lookups read one bucket. Entries
+// are filled in order and never freed within a pass.
+//   L1_TABLE_BITS 6, L1_WAYS 4 (the default): 512 texels, arrays of 512 and 128 in the tick
+//   L1_TABLE_BITS 7, L1_WAYS 3:               768 texels, an array of 1,024
+//   L1_TABLE_BITS 6, L1_WAYS 3:               384 texels, an array of 512
 #ifndef L1_BUCKETS
 #ifndef L1_TABLE_BITS
-#define L1_TABLE_BITS 7
+#define L1_TABLE_BITS 6
+#endif
+#ifndef L1_WAYS
+#define L1_WAYS 4
 #endif
 #define L1_TABLE (1 << L1_TABLE_BITS)
 #define L1_BUCKETS (2 * L1_TABLE)
-#define L1_ENTRIES (L1_BUCKETS * 4)
+#define L1_STRIDE (L1_WAYS + 1)
+#define L1_ENTRIES (L1_BUCKETS * L1_STRIDE)
 #define L1_B0(t) ((t) & (L1_TABLE - 1))
 #define L1_B1(t) (L1_TABLE + ((((t) >> 3) ^ ((t) << (L1_TABLE_BITS - 3)) ^ ((t) >> L1_TABLE_BITS)) & (L1_TABLE - 1)))
 #endif
 uint l1_slot(uint4 tags, uint tag) {
+#if L1_WAYS == 4
+    return tags.x == tag ? 1 : tags.y == tag ? 2 : tags.z == tag ? 3 : tags.w == tag ? 4 : 0;
+#else
     return tags.x == tag ? 1 : tags.y == tag ? 2 : tags.z == tag ? 3 : 0;
+#endif
 }
+// the last tag of a bucket: entries fill in order, so the bucket is full when it is taken
+// In the tick the cache is an array of L1_DATA_N: with three entries a bucket its tags are
+// element 4b and its texels the three after; with four the texels fill the array and the tags
+// have one of their own. Entry e (from 1) of bucket b
+// is "at" 4b + e either way, and the state texture has a bucket's tags and texels in a row.
+#define L1_DATA_N (L1_BUCKETS * 4)
+#if L1_WAYS == 4
+#define L1_LAST(tags) ((tags).w)
+#define L1_TAGS(b) l1_tag[b]
+#define L1_DATA(at) l1_cache[(at) - 1]
+#else
+#define L1_LAST(tags) ((tags).z)
+#define L1_TAGS(b) l1_cache[(b) * 4]
+#define L1_DATA(at) l1_cache[at]
+#endif
 
 
 #define STALL_EXIT_CALL 1
@@ -255,7 +281,10 @@ static cpu_t cpu;
 // With L1_LOCAL the array is a local of the tick's main and starts undefined (zeroing a static
 // one costs every tick): an entry may only be read when its occupancy bit is set.
 #ifndef L1_LOCAL
-static uint4 l1_cache[L1_ENTRIES];
+static uint4 l1_cache[L1_DATA_N];
+#if L1_WAYS == 4
+static uint4 l1_tag[L1_BUCKETS];
+#endif
 #endif
 static uint l1_occ[L1_BUCKETS / 32];   // buckets whose tags have been written this pass
 #define L1_OCC(b) (((l1_occ[(b) >> 5] >> ((b) & 31)) & 1) != 0)
@@ -727,11 +756,12 @@ uint4 encode_l1(L1P uint2 pos) {
         uint offset = s_lin - 1068;
         // a bucket that was not used, and an entry of it that was not, are zeros (the array
         // itself starts undefined with L1_LOCAL)
-        if (!L1_OCC(offset >> 2)) return 0;
-        uint4 tags = l1_cache[offset & ~3u];
-        if ((offset & 3) == 0) return tags;
-        if (idx_uint4(tags, (offset & 3) - 1) == 0) return 0;
-        return l1_cache[offset];
+        uint bucket = offset / L1_STRIDE, entry = offset % L1_STRIDE;
+        if (!L1_OCC(bucket)) return 0;
+        uint4 tags = L1_TAGS(bucket);
+        if (entry == 0) return tags;
+        if (idx_uint4(tags, entry - 1) == 0) return 0;
+        return L1_DATA(bucket * 4 + entry);
     }
 
     // fallback is passthrough
@@ -1017,17 +1047,17 @@ uint4 l1_state_texel(uint lin) {
 bool l1_state_find(uint t, out uint4 texel) {
     texel = 0;
     uint b = L1_B0(t);
-    uint4 tags = l1_state_texel(b * 4);
+    uint4 tags = l1_state_texel(b * L1_STRIDE);
     uint e = l1_slot(tags, t + 1);
     [branch]
-    if (e == 0 && tags.z != 0) {
+    if (e == 0 && L1_LAST(tags) != 0) {
         b = L1_B1(t);
-        tags = l1_state_texel(b * 4);
+        tags = l1_state_texel(b * L1_STRIDE);
         e = l1_slot(tags, t + 1);
     }
     [branch]
     if (e != 0) {
-        texel = l1_state_texel(b * 4 + e);
+        texel = l1_state_texel(b * L1_STRIDE + e);
     }
     return e != 0;
 }

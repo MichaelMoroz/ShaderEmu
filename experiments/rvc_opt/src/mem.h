@@ -8,18 +8,25 @@
 
 /* shift by two to ignore byte offset */
 // The write cache holds RAM texels (four words), not words: stores come in runs (a register
-// save, a structure, a copy), and a run then takes one entry. A bucket is four state texels:
-// the tags of three entries (texel number + 1; 0 is free) and their three texels. There are
-// two tables of 2^L1_TABLE_BITS buckets with different hashes; a texel goes to the second only
-// when its bucket in the first is full, so most lookups read one bucket. Entries are filled in
-// order and never freed within a pass.
+// save, a structure, a copy), and a run then takes one entry. A bucket is the tags of its
+// L1_WAYS entries in one state texel (texel number + 1; 0 is free) and then their texels.
+// There are two tables of 2^L1_TABLE_BITS buckets with different hashes; a texel goes to the
+// second only when its bucket in the first is full, so most lookups read one bucket. Entries
+// are filled in order and never freed within a pass.
+//   L1_TABLE_BITS 6, L1_WAYS 4 (the default): 512 texels, arrays of 512 and 128 in the tick
+//   L1_TABLE_BITS 7, L1_WAYS 3:               768 texels, an array of 1,024
+//   L1_TABLE_BITS 6, L1_WAYS 3:               384 texels, an array of 512
 #ifndef L1_BUCKETS
 #ifndef L1_TABLE_BITS
-#define L1_TABLE_BITS 7
+#define L1_TABLE_BITS 6
+#endif
+#ifndef L1_WAYS
+#define L1_WAYS 4
 #endif
 #define L1_TABLE (1 << L1_TABLE_BITS)
 #define L1_BUCKETS (2 * L1_TABLE)
-#define L1_ENTRIES (L1_BUCKETS * 4)
+#define L1_STRIDE (L1_WAYS + 1)
+#define L1_ENTRIES (L1_BUCKETS * L1_STRIDE)
 #define L1_B0(t) ((t) & (L1_TABLE - 1))
 #define L1_B1(t) (L1_TABLE + ((((t) >> 3) ^ ((t) << (L1_TABLE_BITS - 3)) ^ ((t) >> L1_TABLE_BITS)) & (L1_TABLE - 1)))
 #endif
@@ -46,7 +53,7 @@ static uint dr_addr = 0xffffffff;   // the last RAM texel read for data, and its
 static uint4 dr_tex;
 
 // addr must be aligned to word boundary (4 byte)
-// Where RAM texel t is in the cache: the index of its copy in l1_cache, or 0 (never a copy's).
+// Where RAM texel t is in the cache: its entry as 4 * bucket + entry (from 1), for L1_DATA(), or 0.
 uint l1_find_l1(L1P uint t) {
     uint found = 0;
     uint b = L1_B0(t);
@@ -55,17 +62,17 @@ uint l1_find_l1(L1P uint t) {
     // the second table's only when the first one's is full.
     [branch]
     if (L1_OCC(b)) {
-        uint4 tags = l1_cache[b * 4];
+        uint4 tags = L1_TAGS(b);
         uint e = l1_slot(tags, t + 1);
         found = e != 0 ? b * 4 + e : 0;
-        more = e == 0 && tags.z != 0;
+        more = e == 0 && L1_LAST(tags) != 0;
     }
     [branch]
     if (more) {
         b = L1_B1(t);
         [branch]
         if (L1_OCC(b)) {
-            uint e = l1_slot(l1_cache[b * 4], t + 1);
+            uint e = l1_slot(L1_TAGS(b), t + 1);
             found = e != 0 ? b * 4 + e : 0;
         }
     }
@@ -81,7 +88,7 @@ uint mem_get_cached_or_tex_l1(L1P uint addr) {
         [branch]
         if (at != 0) {
             PROF(PROF_ram_read_l1_hit)
-            return idx_uint4(l1_cache[at], (addr >> 2) & 0x3);
+            return idx_uint4(L1_DATA(at), (addr >> 2) & 0x3);
         }
 
         if (cpu.cache.ram_l1_last_addr == addr) {
@@ -223,7 +230,7 @@ void mem_set_ram_l1(L1P uint word_addr, uint bits, uint mask) {
     uint4 tags0 = 0, tags1 = 0;
     [branch]
     if (L1_OCC(b0)) {
-        tags0 = l1_cache[b0 * 4];
+        tags0 = L1_TAGS(b0);
     }
     uint e0 = l1_slot(tags0, tag), e1 = 0;
     uint f0 = l1_slot(tags0, 0), f1 = 0;       // the first free entry: they fill in order
@@ -231,7 +238,7 @@ void mem_set_ram_l1(L1P uint word_addr, uint bits, uint mask) {
     if (e0 == 0 && f0 == 0) {
         [branch]
         if (L1_OCC(b1)) {
-            tags1 = l1_cache[b1 * 4];
+            tags1 = L1_TAGS(b1);
         }
         e1 = l1_slot(tags1, tag);
         f1 = l1_slot(tags1, 0);
@@ -246,14 +253,14 @@ void mem_set_ram_l1(L1P uint word_addr, uint bits, uint mask) {
         mem_cache_bloom |= word_addr;
         [branch]
         if (wi < 2) {
-            if (wi == 0) { l1_cache[at].x = bits; } else { l1_cache[at].y = bits; }
+            if (wi == 0) { L1_DATA(at).x = bits; } else { L1_DATA(at).y = bits; }
         } else {
-            if (wi == 2) { l1_cache[at].z = bits; } else { l1_cache[at].w = bits; }
+            if (wi == 2) { L1_DATA(at).z = bits; } else { L1_DATA(at).w = bits; }
         }
     } else {
     [branch]
     if (at != 0) {
-        texel = l1_cache[at];
+        texel = L1_DATA(at);
     } else {
         [branch]
         if (t != dr_addr) {
@@ -276,16 +283,16 @@ void mem_set_ram_l1(L1P uint word_addr, uint bits, uint mask) {
     set_idx_uint4(texel, val, wi);
     [branch]
     if (at != 0) {
-        l1_cache[at] = texel;
+        L1_DATA(at) = texel;
     } else if (f0 != 0) {
         set_idx_uint4(tags0, tag, f0 - 1);
-        l1_cache[b0 * 4] = tags0;
-        l1_cache[b0 * 4 + f0] = texel;
+        L1_TAGS(b0) = tags0;
+        L1_DATA(b0 * 4 + f0) = texel;
         L1_OCC_SET(b0)
     } else if (f1 != 0) {
         set_idx_uint4(tags1, tag, f1 - 1);
-        l1_cache[b1 * 4] = tags1;
-        l1_cache[b1 * 4 + f1] = texel;
+        L1_TAGS(b1) = tags1;
+        L1_DATA(b1 * 4 + f1) = texel;
         L1_OCC_SET(b1)
     } else {
         PROF(PROF_l1_stall)

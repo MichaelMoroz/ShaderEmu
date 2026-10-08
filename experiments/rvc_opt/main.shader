@@ -111,7 +111,10 @@
 
                 uint2 pos = i.globalTexcoord.xy * s_dim;
 #ifdef L1_LOCAL
-                uint4 l1_cache[L1_ENTRIES];
+                uint4 l1_cache[L1_DATA_N];
+#if L1_WAYS == 4
+                uint4 l1_tag[L1_BUCKETS];
+#endif
 #ifndef NO_PAGING
                 uint tlb2_tag[3 * TLB2_N];
                 uint tlb2_pg[3 * TLB2_N];

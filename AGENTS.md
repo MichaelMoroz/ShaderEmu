@@ -416,19 +416,21 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
 - `rdcycle` costs a user program one instruction and counts the machine's instructions: put
   two around anything to know what it costs. `gettimeofday` is 416; the clock word at
   0x87000034 (milliseconds, a machine frame old at most) is a load.
-- The write cache holds RAM texels (four words), not words: 768 of them in buckets of three,
-  two tables of 128 buckets with different hashes, a texel going to the second table only
+- The write cache holds RAM texels (four words), not words: 512 of them in buckets of four,
+  two tables of 64 buckets with different hashes, a texel going to the second table only
   when its bucket in the first is full (the same block in five headers; `l1_find` and
   `mem_set_ram` in `mem.h`, `l1_state_find` in `types.h` for the commit). An entry is made
   from the texel as RAM has it, so a store that changes nothing costs none. Frames a full
   cache ended, desktop with glxgears, 12,000 frames: 8,237 with upstream's word cache, 8,065
-  with its set from xor-ed address bits, 39 with this. Tag 0 is a free entry and a texel's
-  tag its number plus one: the word cache's commit took a free entry for address 0 and wrote
-  0 over the first word of RAM.
-- `L1_TABLE_BITS` is the cache's size (7: 768 texels; 6: 384). The smaller one makes every
-  instruction about 7% cheaper in the tick pass (the array is the cost) and brings the stalls
-  back (4,101 such frames on that desktop run). Wall time in the harness is about the same
-  for both; where a pass is expensive or their number is capped, as in Unity, keep 7.
+  with its set from xor-ed address bits, 1,324 with this. Tag 0 is a free entry and a
+  texel's tag its number plus one: the word cache's commit took a free entry for address 0
+  and wrote 0 over the first word of RAM.
+- `L1_TABLE_BITS` and `L1_WAYS` are the cache's size: 6 and 4 by default (512 texels; in the
+  tick an array of 512 texels and one of 128 for the tags), 7 and 3 for 768 texels in an
+  array of 1,024 (39 such frames on that desktop run, and no more instructions a frame),
+  6 and 3 for 384 in an array of 512 (4,101). Only the last is faster for it: every
+  instruction about 7% cheaper in the tick pass. It is not the declared size that costs (the
+  same cache in an array padded to 1,024 is as fast), and the TLB's arrays cost nothing.
 - To study a change to it, record a run with `--l1-log FILE` (D3D12) and `--ticks 32
   --fixed-dt 0.0000625`, and run `python tools\l1_sim.py FILE` (texels) or `tools\l1_study.py`
   (words); then count "write cache full" frames with `--frame-log` and

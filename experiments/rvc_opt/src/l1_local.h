@@ -15,12 +15,19 @@
 #define L1_LOCAL
 #endif
 #if defined(L1_LOCAL) && defined(PASS_TICK)
-#if defined(NO_PAGING) || defined(M_MODE_ONLY)
-#define L1_ARRAYS_P inout uint4 l1_cache[L1_ENTRIES]
-#define L1_ARRAYS_A l1_cache
+#if L1_WAYS == 4
+#define L1_CACHE_P inout uint4 l1_cache[L1_DATA_N], inout uint4 l1_tag[L1_BUCKETS]
+#define L1_CACHE_A l1_cache, l1_tag
 #else
-#define L1_ARRAYS_P inout uint4 l1_cache[L1_ENTRIES], inout uint tlb2_tag[3 * TLB2_N], inout uint tlb2_pg[3 * TLB2_N]
-#define L1_ARRAYS_A l1_cache, tlb2_tag, tlb2_pg
+#define L1_CACHE_P inout uint4 l1_cache[L1_DATA_N]
+#define L1_CACHE_A l1_cache
+#endif
+#if defined(NO_PAGING) || defined(M_MODE_ONLY)
+#define L1_ARRAYS_P L1_CACHE_P
+#define L1_ARRAYS_A L1_CACHE_A
+#else
+#define L1_ARRAYS_P L1_CACHE_P, inout uint tlb2_tag[3 * TLB2_N], inout uint tlb2_pg[3 * TLB2_N]
+#define L1_ARRAYS_A L1_CACHE_A, tlb2_tag, tlb2_pg
 #endif
 #define L1P L1_ARRAYS_P,
 #define L1P0 L1_ARRAYS_P

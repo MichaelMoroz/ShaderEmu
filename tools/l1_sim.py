@@ -123,6 +123,7 @@ def layouts():
     out.append(Layout('texel, 2 x 128 x 3 = 768, low then rotated', 16, 7, 3, [h_low, h_rot], first=True))
     out.append(Layout('texel, 2 x 256 x 2 = 1024, low then rotated', 16, 8, 2, [h_low, h_rot], first=True))
     out.append(Layout('texel, 2 x 64 x 3 = 384, low then rotated', 16, 6, 3, [h_low, h_rot], first=True))
+    out.append(Layout('texel, 2 x 64 x 4 = 512, low then rotated', 16, 6, 4, [h_low, h_rot], first=True))
     out.append(Layout('texel, 2 x 32 x 3 = 192, low then rotated', 16, 5, 3, [h_low, h_rot], first=True))
     out.append(Layout('texel, 2 x 16 x 3 = 96, low then rotated', 16, 4, 3, [h_low, h_rot], first=True))
     out.append(Layout('texel, 2 x 256 x 1 = 512, low | rotated', 16, 8, 1, [h_low, h_rot]))

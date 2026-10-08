@@ -906,14 +906,19 @@ int main(int argc, char** argv) {
         if (!backend.popRow(row, f)) return false;
         processRow(row, f);
         if (backend.takeState(zone)) {
-            // the write cache is 1,024 texels from 1068 on: buckets of four, the first holding the
-            // tags of three RAM texels (texel number + 1, 0 when free). The log gets each cached
+            // the write cache is state texels from 1068 on: buckets of a texel of tags (RAM texel
+            // number + 1, 0 when free) and then that many RAM texels. The log gets each cached
             // texel's address: which of its four words were written is not kept anywhere.
             size_t at = l1Samples.size();
             l1Samples.insert(l1Samples.end(), {lastInstructions, lastStall, 0u});
-            for (size_t t = 1068; t < 1068 + 1024; t += 4) {
-                const uint32_t* w = (const uint32_t*)(zone.data() + t * 16);
-                for (int e = 0; e < 3; ++e)
+            unsigned ways = 4, tableBits = 6;   // the shader's defaults (L1_WAYS, L1_TABLE_BITS)
+            for (auto& d : opt.defines) {
+                if (d.rfind("L1_WAYS=", 0) == 0) ways = (unsigned)atoi(d.c_str() + 8);
+                if (d.rfind("L1_TABLE_BITS=", 0) == 0) tableBits = (unsigned)atoi(d.c_str() + 14);
+            }
+            for (size_t b = 0; b < (2u << tableBits); ++b) {
+                const uint32_t* w = (const uint32_t*)(zone.data() + (1068 + b * (ways + 1)) * 16);
+                for (unsigned e = 0; e < ways; ++e)
                     if (w[e]) l1Samples.push_back((w[e] - 1) << 4);
             }
             l1Samples[at + 2] = (uint32_t)(l1Samples.size() - at - 3);

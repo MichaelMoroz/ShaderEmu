@@ -17,7 +17,7 @@ Only these remain in the source:
 | `M_MODE_ONLY` | machine mode only, includes `NO_PAGING` (below) |
 | `NO_DOUBLES` | timer value from the host instead of double math (needed on D3D12) |
 | `PROFILE` | `PROF()` event counters through a UAV |
-| `L1_TABLE_BITS`, `TLB2_N`, `RAM_TILE_BITS` | cache, TLB and layout sizes |
+| `L1_TABLE_BITS`, `L1_WAYS`, `TLB2_N`, `RAM_TILE_BITS` | cache, TLB and layout sizes |
 | `L1_LOCAL`, `L1_STATIC` | the big arrays as locals of the pass (23 below): on with fxc2, off with FXC |
 
 Everything else named in this document (`OPT_BASELINE`, the `OPT_*` experiments, `XREG_*`,
@@ -356,8 +356,8 @@ how much a change helps. Rank variants with it, then confirm with FXC.
 
 This section is the history of the cache of words (upstream's, 512 sets of four, sized by
 `L1_SET_BITS` and `L1_SLICES`, which no longer exist). The cache is of RAM texels now, see
-"Texels instead of words" at its end; `L1_TABLE_BITS` (7 by default: two tables of 128
-buckets of three texels) is its one size. Any geometry stalls at different times, so state
+"Texels instead of words" at its end; `L1_TABLE_BITS` and `L1_WAYS` (6 and 4 by default: two tables of 64
+buckets of four texels) are its size. Any geometry stalls at different times, so state
 hashes differ between them and guest output is what is compared.
 
 | Geometry | Texels | Busy loop IPS (instr/frame) | Shell session IPS (instr/frame) |
@@ -399,9 +399,10 @@ to look there too), and one texel a lookup (1,024 sets of two) doubles them.
 
 Both of those hashes are of a cache of words, and both are replaced: the cache now holds RAM
 texels, four words to an entry. Stores come in runs (a register save, a structure, a copy),
-and a run that took four entries, in four sets, takes one. The same 1,024 state texels hold
-256 buckets of a tag texel and three RAM texels: 768 texels, 3,072 words. The buckets are two
-tables of 128 with different hashes (the texel number's low bits; those bits shifted and
+and a run that took four entries, in four sets, takes one. A bucket is a texel of tags and
+the RAM texels they name: 128 buckets of four by default, 512 texels (2,048 words) in 640
+state texels, where the word cache took 1,024. The buckets are two
+tables of 64 with different hashes (the texel number's low bits; those bits shifted and
 xor-ed with higher ones), and a texel goes to the second table only when its bucket in the
 first is full, so most lookups read one bucket. An entry is made from the texel as RAM has
 it: a store that changes nothing costs no entry, a partial store needs no second read, and
@@ -417,20 +418,24 @@ full cache ended:
 | words, set from xor-ed bits | 10,045, 47% | 6,975, 68% | 8,305, 35% |
 | words, two tables of 512 x 2, second when the first is full | | 8,356, 50% | |
 | words, any 2,048 (no hash can do better) | 12,820, 13% | 10,738, 8% | |
-| texels, two tables of 128 x 3 (this) | 12,257, 18% | 10,573, 18% | 9,677, 8% |
+| texels, two tables of 128 x 3 | 12,257, 18% | 10,573, 18% | 9,677, 8% |
+| texels, two tables of 64 x 4 (the default) | 11,276, 32% | 9,411, 39% | 9,311, 17% |
 | texels, two tables of 64 x 3 | 9,486, 50% | 7,184, 62% | 8,028, 42% |
 | texels, any 819 | 12,967, 7% | 11,035, 5% | 9,913, 0% |
 
-Measured, D3D11 + fxc2, 16,384 instructions a frame at most:
+Measured, D3D11 + fxc2, 16,384 instructions a frame at most (the replay is pessimistic: it
+does not know which stores changed nothing):
 
-| | words, upstream's set | words, xor | texels |
-| --- | --- | --- | --- |
-| frames to the login shell (upstream's image) | 4,517 | 3,538 | 2,800 |
-| desktop with glxgears, 12,000 frames: frames a full cache ended | 8,237 | 8,065 | 39 |
-| the same: instructions a frame | 5,869 | 6,579 | 11,679 |
-| boot, checksums of three programs, `ls -lR`, 300 KB of `dd`: frames | 50,014 | 42,798 | 39,084 |
-| the same: seconds | 186.1 | 184.6 | 186.6 |
-| Linux bench, 16,384 a frame, fxc2's bytecode on D3D12 | 3,456k IPS | | 3,893k IPS |
+| | words, upstream's set | words, xor | 512 texels | 768 texels | 384 texels |
+| --- | --- | --- | --- | --- | --- |
+| frames to the login shell (upstream's image) | 4,517 | 3,538 | 2,862 | 2,800 | 3,105 |
+| desktop with glxgears, 12,000 frames: frames a full cache ended | 8,237 | 8,065 | 1,324 | 39 | 4,101 |
+| the same: instructions a frame | 5,869 | 6,579 | 11,647 | 11,679 | 9,666 |
+| boot, checksums of three programs, `ls -lR`, 300 KB of `dd`: frames | 50,014 | 42,798 | 39,167 | 39,084 | 40,420 |
+| the same: seconds | 186.1 | 184.6 | 191.9 | 186.6 | 193.6 |
+| tick pass for 2,048 instructions, fxc2's bytecode on D3D12 | 0.505 ms | | 0.492 ms | 0.487 ms | 0.455 ms |
+
+The seconds of the fifth row are one run each on a machine that drifts by a few percent.
 
 The console output and every checksum of that third run are the same with all three, and on
 D3D12 + DXC; our raytracer ends with the same RAM but for its first word, which the word
@@ -438,10 +443,15 @@ cache's commit zeroed (it took a free entry, address 0, for a store to address 0
 
 A store costs more than it did (a texture read when a texel enters the cache), which is why
 fewer frames are not less time in the third run; where a pass costs more than in the harness
-or their number is capped, the frames are what counts. `L1_TABLE_BITS=6` halves the cache:
-every instruction is then about 7% cheaper in the tick pass (0.455 ms against 0.488 for
-2,048), stalls return (4,101 frames of that desktop run) and the harness's wall time is the
-same.
+or their number is capped, the frames are what counts.
+
+`L1_TABLE_BITS` and `L1_WAYS` size it. 512 texels (6 and 4, the default) run as many
+instructions a frame as 768 (7 and 3) with arrays of 640 elements in the tick instead of
+1,024. 384 (6 and 3) is the one size that is also faster, 7% an instruction, and it stalls
+three times as often. Why is not known: it is not the declared size of the array (384 texels
+in an array padded to 1,024 are as fast) and not the number of arrays (512 texels with their
+tags in the same array are as slow as with an array of their own); the TLB's arrays, halved
+or quartered, change nothing either.
 
 ## RAM texel layout
 
