@@ -78,6 +78,9 @@ so its samples can be played where they lie.
 - **Doom** (`linux/nanox/doom_sound.c`): an effect is a voice pointed at its lump in the WAD.
   Music: a MUS score becomes tracks for twelve FM voices when the game registers it, with the
   WAD's own OPL instruments (GENMIDI). The pitch wheel is not followed.
+- **Quake** (`linux/quake/snd_shaderemu.c`, `docs/quake.md`): a sound is a voice pointed at its
+  WAV in the pak file in the ROM, looped where the WAV says; 28 voices (8 for things, 2 for
+  water and sky, 18 for the loudest of a level's own).
 - **Tiberian Dawn** (`linux/tdawn/soundio_shaderemu.cpp`): `tools/make_tdawn_sound.py` turns the
   game's AUD files into ADPCM with checkpoints when the image is built (3.8 MB). The game's
   sounds are found in that pack by a hash of how their AUD file begins. A sound out of view

@@ -8,10 +8,12 @@ in the build. The machine's float instructions (`docs/fpu.md`) were added for it
     wsl -- bash /mnt/c/Development/ShaderX86/linux/quake/build.sh     (3 s; the first time it also fetches)
     python tools\make_linux_image.py                                  (then a new shell snapshot)
 
-In the guest: `nano-X -p & quake` at the console, or Quake in the desktop's Start menu (not
-tried from there). With no arguments it plays its three demos in turn; `quake +map e1m1`
-starts the first level. The data is the shareware episode's `pak0.pak` (version 1.06), which
-the build fetches and the repository does not keep. There is no sound yet.
+In the guest: `nano-X -p & quake` at the console, or Quake in the Start menu's Games (not
+tried from there by hand). With no arguments it plays its three demos in turn, as Quake does,
+and Escape brings its menu up, where New Game is; the Start menu starts it with the menu up
+already (`quake +menu_main`). `quake +map e1m1` starts the first level. The data is the
+shareware episode's `pak0.pak` (version 1.06), which the build fetches and the repository
+does not keep.
 
 Lines typed at the terminal it was started from are console commands (`map e1m2`,
 `timedemo demo1`, `hold`), which is also how a test drives it through the machine's serial
@@ -33,6 +35,24 @@ by hand yet, only the terminal's commands.
 - `fmath.h`, `fmath_shaderemu.c`: sine, cosine, tangent and arctangent in floats. The source
   calls C's double functions, and the C library's float ones work in doubles inside.
 - `vid_shaderemu.c` is the window, the frame and the input; `sys_shaderemu.c` the system.
+- `snd_shaderemu.c` is the sound (below), in place of the game's mixer.
+
+## Sound
+
+The machine's sound card plays it (`docs/sound.md`): a sound is a voice pointed at its WAV
+where the pak file lies in the ROM, with the WAV's own loop point, and nothing is loaded or
+mixed by the CPU. The game's rules stay: which of eight channels a thing's sound takes, and
+how loud it is in each ear by distance and side, worked out once a frame.
+
+- A level's own sounds (torches, hums) are loops with a place. The 18 loudest that are heard
+  have a voice each; one that is out of hearing gives its voice up.
+- Water and sky are two more voices, as loud as the viewer's leaf says.
+- Its level is half the game's own: a fight's mix ran into the limit in 1.5% of its samples
+  at the game's level, and does in 0.1% at this. `volume` is the game's setting, as before.
+- No music: the game's was a CD's tracks.
+- To check it: `--fixed-dt 0.004 --sound-capture F.wav --save-state F.snap` on a timedemo and
+  `python tools\sound_reference.py F.wav F.snap --rom build\images\linux\rootfs.bin`. A minute
+  of demo1 is 3,072,768 samples, every one the model's.
 
 ## How it is drawn
 
@@ -127,7 +147,7 @@ half is its light maps being placed (`AllocBlock`, a third) and the kept level b
 
 ## Not done
 
-- Sound (the game's mixer is software; the sound card's voices would take its effects).
+- Music, and hearing the sound by ear: it was checked against the card's model only.
 - Playing it: keys and the pointer by hand, in the harness's window and in the VRChat world.
 - The server: a busy level is 350k instructions a frame before anything is drawn.
 - Loading: the light maps' placement is a search of every block for every surface.

@@ -30,8 +30,8 @@ git -C "$Q" apply "$HERE/quake.patch"
 SOURCES="cl_demo cl_input cl_main cl_parse cl_tent chase cmd common console crc cvar
     gl_draw gl_model gl_refrag gl_rlight gl_rmain gl_rmisc gl_rsurf gl_screen gl_warp
     host host_cmd keys menu mathlib net_loop net_main net_vcr net_none pr_cmds pr_edict pr_exec r_part sbar
-    sv_main sv_phys sv_move sv_user zone view wad world cd_null snd_null"
-OURS="vid_shaderemu sys_shaderemu mesh_shaderemu world_shaderemu fmath_shaderemu"
+    sv_main sv_phys sv_move sv_user zone view wad world cd_null"
+OURS="vid_shaderemu sys_shaderemu mesh_shaderemu world_shaderemu fmath_shaderemu snd_shaderemu"
 # gles.c in its float build. (Texture names from 3,072 up are qgl.c's own, for models' poses.)
 GLES="-DSEGL_FLOAT -DMAX_TEXTURES=4096"
 GLINC="-I$HERE/include -idirafter $REPO/programs/linux/include -I$MW/src/include"
@@ -80,5 +80,6 @@ ln -sf /usr/share/quake-pak0.pak id1/pak0.pak
 exec quake.bin "$@"
 EOF
 chmod +x "$OUT/usr/bin/quake"
-echo "Quake=quake" > "$OUT/usr/share/nxapps.70-quake"
+# (from the menu Quake opens with its own menu up, over the demos it plays)
+echo "Games/Quake=quake +menu_main" > "$OUT/usr/share/nxapps.70-quake"
 ls -l "$OUT/usr/bin/quake.bin" "$OUT/usr/share/quake-pak0.pak"
