@@ -249,6 +249,15 @@ A cold boot to the `/ #` prompt takes about 80 s on an RTX 5090 with upstream on
   and store, and what a pair saves (fetch, decode, the loop) is the cheap part of a memory
   instruction. `tools\pc_ngrams.py` prints which sequences a guest runs, `tools\pc_hot.py`
   how few places its instructions are in (sample with `--ticks 29 --fixed-dt 0.00005664`).
+- The same was tried again on the cache of texels, where it should cost least: the next
+  `lw` served from the RAM texel the first one read, the next `sw` written straight into the
+  cache entry the first one used, up to three of them, no lookup at all. It runs for 4.3% of
+  the instructions of a Linux boot (2.3% stores, 2.0% loads) and the tick pass is 2% slower
+  at 2,048 instructions a frame, 0.6% at 16,384; as a loop instead of nested tests, 3.6%
+  slower. The test runs on every load and store (28% of instructions) and costs about what
+  the pairs it finds save. A sequence has to be known without looking for it at run time.
+- The number of state texels (the pixels that run the whole tick) does not set the tick's
+  speed: 1,093 and 901 of them (`TLB2_N=128`) take the same time.
 - Both backends commit in bands now; a state hash taken without them needs `--no-bands`.
 - D3D11 starts a frame's GPU work at `Flush` or at the readback's `Map`, whichever comes
   first. The harness flushes at the end of `frame()`; without it the GPU idled through the
@@ -416,7 +425,7 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
 - `rdcycle` costs a user program one instruction and counts the machine's instructions: put
   two around anything to know what it costs. `gettimeofday` is 416; the clock word at
   0x87000034 (milliseconds, a machine frame old at most) is a load.
-- The write cache holds RAM texels (four words), not words: 512 of them in buckets of four,
+- The write cache holds RAM texels (four words), not words: 384 of them in buckets of three,
   two tables of 64 buckets with different hashes, a texel going to the second table only
   when its bucket in the first is full (the same block in five headers; `l1_find` and
   `mem_set_ram` in `mem.h`, `l1_state_find` in `types.h` for the commit). An entry is made
@@ -425,12 +434,50 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   with its set from xor-ed address bits, 1,324 with this. Tag 0 is a free entry and a
   texel's tag its number plus one: the word cache's commit took a free entry for address 0
   and wrote 0 over the first word of RAM.
-- `L1_TABLE_BITS` and `L1_WAYS` are the cache's size: 6 and 4 by default (512 texels; in the
-  tick an array of 512 texels and one of 128 for the tags), 7 and 3 for 768 texels in an
-  array of 1,024 (39 such frames on that desktop run, and no more instructions a frame),
-  6 and 3 for 384 in an array of 512 (4,101). Only the last is faster for it: every
-  instruction about 7% cheaper in the tick pass. It is not the declared size that costs (the
-  same cache in an array padded to 1,024 is as fast), and the TLB's arrays cost nothing.
+- `L1_TABLE_BITS` and `L1_WAYS` are the cache's size: 6 and 3 by default (384 texels in an
+  array of 512; 4,101 frames of that desktop run end on a full cache), 6 and 4 for 512 texels
+  (1,324 such frames), 7 and 3 for 768 (39). The smallest is the default because it is 5%
+  more instructions a second on D3D11 in spite of its stalls, for two reasons that were
+  found by adding pixels and arrays that do nothing: four entries a bucket cost every load
+  and store about 3.5% whatever the size, and every state texel is a pixel that runs the
+  whole tick, of which more than about 1,000 cost every instruction (965: 0.486 ms for 2,048
+  instructions; 1,029: 0.512; 1,093: 0.54). The declared size of an array costs nothing, nor
+  does one more array. Count the pixels before adding state texels: 44 + the cache's + the
+  TLBs' 409 + the float registers' 8 is 973 now.
+- Tried on the fast path after that and not kept (tick pass for 2,048 instructions of the
+  Linux bench, fxc2's bytecode on D3D12, 0.451 ms as it is): the cache's occupancy bits in
+  four registers instead of an array of four, 0.454; no read-ahead of the next instruction
+  texel, 0.471 (the read-ahead is worth 4.6%: a texture read is slow to arrive and cheap to
+  have asked for early); the second source register read only by instructions that have one,
+  0.460; the 32 registers as eight vectors chosen by conditional moves instead of an array,
+  0.645; the first-level TLBs in two arrays instead of 24 registers, 0.457; `csrrci`,
+  `csrrsi`, `csrrs` and `csrrc` on sstatus done in the fast loop when only SIE changes (they
+  are 60% of the general ticks of a desktop), 0.460 to 0.464 in two designs and 3 to 5%
+  slower on a shell workload, though they did leave the general path. A value the loop
+  carries and changes in some rare branch costs about 0.2% of every instruction (8, 16 and
+  32 of them: 0.460, 0.466, 0.485).
+- Hot traces of the kernel translated ahead of time into the tick (`tools/rv_trace.py`: a
+  straight-line trace with side exits, registers in locals) emulate correctly, same frames
+  and instructions, and are a loss: one 74-instruction trace that is 8% of a shell workload
+  made the run 11 to 17% slower, in the fast loop or after it. The trace's code being there
+  costs every instruction (0.545 ms against 0.451 for 2,048 on a workload that never runs
+  it; four tests of pc at the top of the loop alone, 0.485), while 14,000 lines of
+  unrelated dead code cost nothing and the compiler's register allocation changes nothing.
+- One test instead of two at the end of a fast instruction ("not ours" folded into the
+  loop's end test, the writes made conditional): 0.460 against 0.453.
+- A general tick costs about 560 ns where a fast one costs 170, not the microseconds older
+  notes say: (0.158 - 0.015) ms for 256 of them with the fast run switched off. They are
+  1.4% of a Linux boot's instructions, 0.65% of a desktop's and 0.2% of a shell loop's.
+- The D3D11 harness's wall time a frame is 0.25 ms more than its three passes' GPU time at
+  16,384 instructions a frame (0.06 ms at 2,048). It is not the readback's `Map` waiting:
+  asking without waiting in a loop changes nothing.
+- A feature for few instructions must not sit in the path of all of them. The F extension
+  did (operand registers chosen between two sets for every instruction, flw and fsw inside
+  the integer load and store, a float destination in the common register write) and every
+  instruction was 8% slower for it. All of it is one branch of the fast path's chain now,
+  after the jumps, and costs 3%. `fpcheck` (`--image fpcheck`, bare metal, the full machine)
+  prints a sum over 20,000 float operations, loads and stores: it must not change
+  (`cf9c7697`), and `fptest` in the guest checks the values themselves.
 - To study a change to it, record a run with `--l1-log FILE` (D3D12) and `--ticks 32
   --fixed-dt 0.0000625`, and run `python tools\l1_sim.py FILE` (texels) or `tools\l1_study.py`
   (words); then count "write cache full" frames with `--frame-log` and

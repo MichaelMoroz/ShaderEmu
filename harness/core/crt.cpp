@@ -16,11 +16,12 @@ bool CustomRenderTexture::init(ID3D11Device* dev, UINT width, UINT height, DXGI_
     td.Format = format;
     td.SampleDesc.Count = 1;
     td.Usage = D3D11_USAGE_DEFAULT;
-    td.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+    td.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET | D3D11_BIND_UNORDERED_ACCESS;
     for (int i = 0; i < 2; ++i) {
         HRESULT hr = dev->CreateTexture2D(&td, nullptr, &tex_[i]);
         if (SUCCEEDED(hr)) hr = dev->CreateShaderResourceView(tex_[i].Get(), nullptr, &srv_[i]);
         if (SUCCEEDED(hr)) hr = dev->CreateRenderTargetView(tex_[i].Get(), nullptr, &rtv_[i]);
+        if (SUCCEEDED(hr)) hr = dev->CreateUnorderedAccessView(tex_[i].Get(), nullptr, &uav_[i]);
         if (FAILED(hr)) {
             err = "creating CRT buffer failed: " + hrToString(hr);
             return false;

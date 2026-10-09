@@ -13,18 +13,15 @@
 // There are two tables of 2^L1_TABLE_BITS buckets with different hashes; a texel goes to the
 // second only when its bucket in the first is full, so most lookups read one bucket. Entries
 // are filled in order and never freed within a pass.
-//   L1_TABLE_BITS 6, L1_WAYS 3 (the default): 384 texels, an array of 512 in the tick
-//   L1_TABLE_BITS 6, L1_WAYS 4:               512 texels, arrays of 512 and 128
+//   L1_TABLE_BITS 6, L1_WAYS 4 (the default): 512 texels, arrays of 512 and 128 in the tick
 //   L1_TABLE_BITS 7, L1_WAYS 3:               768 texels, an array of 1,024
-// The first is 5% more instructions a second than the second in spite of its stalls: four
-// entries a bucket cost every load and store, and more than about 1,000 state texels (each is
-// a pixel that runs the whole tick) cost every instruction.
+//   L1_TABLE_BITS 6, L1_WAYS 3:               384 texels, an array of 512
 #ifndef L1_BUCKETS
 #ifndef L1_TABLE_BITS
 #define L1_TABLE_BITS 6
 #endif
 #ifndef L1_WAYS
-#define L1_WAYS 3
+#define L1_WAYS 4
 #endif
 #define L1_TABLE (1 << L1_TABLE_BITS)
 #define L1_BUCKETS (2 * L1_TABLE)
@@ -46,7 +43,7 @@ uint mem_get_instruction(uint addr) {
     addr = addr >> 4;
 
     PROF(PROF_fetch_tex)
-    uint4 raw = STATE_TEX(RAM_ADDR(addr));
+    uint4 raw = RAM_TEXEL(addr);
     return idx_uint4(raw, idx);
 }
 
@@ -84,6 +81,10 @@ uint l1_find_l1(L1P uint t) {
 
 uint mem_get_cached_or_tex_l1(L1P uint addr) {
     PROF(PROF_ram_read)
+#ifdef RAM_BUFFER_ON
+    return _RamB.Load(addr);
+#endif
+#ifndef RAM_DIRECT_ON
     // query L1 cache
     if ((addr & mem_cache_bloom) == addr) {
         PROF(PROF_ram_read_bloom_pass)
@@ -99,6 +100,7 @@ uint mem_get_cached_or_tex_l1(L1P uint addr) {
             return cpu.cache.ram_l1_last_val;
         }
     }
+#endif
 
     // Not in the cache: the RAM texture, whose texels hold four words. The texture does not
     // change during a pass, so the last texel read stays good, and data next to what was just
@@ -107,7 +109,7 @@ uint mem_get_cached_or_tex_l1(L1P uint addr) {
     [branch]
     if (t != dr_addr) {
         PROF(PROF_ram_read_tex)
-        dr_tex = STATE_TEX(RAM_ADDR(t));
+        dr_tex = RAM_TEXEL(t);
         dr_addr = t;
     }
     return idx_uint4(dr_tex, (addr >> 2) & 0x3);
@@ -228,6 +230,46 @@ void mem_set_ram_l1(L1P uint word_addr, uint bits, uint mask) {
         return;
     }
     PROF(PROF_ram_write_byte)
+#ifdef RAM_BUFFER_ON
+    {
+        uint val = bits;
+        [branch]
+        if (mask != 0xffffffff) {
+            val = (_RamB.Load(word_addr) & ~mask) | (bits & mask);
+        }
+        _RamB.Store(word_addr, val);
+        // the instruction window's two texels are copies: keep them right
+        uint t = word_addr >> 4;
+        [branch]
+        if (t == fw_addr0 || t == fw_addr1) {
+            if (t == fw_addr0) { fw_tex0 = RAM_TEXEL(t); }
+            if (t == fw_addr1) { fw_tex1 = RAM_TEXEL(t); }
+        }
+    }
+#elif defined(RAM_DIRECT_ON)
+    // RAM is written where it is. dr_tex, the last texel read, is the texel being written while
+    // stores stay in it; the instruction window's two texels are kept right as well.
+    {
+        uint t = word_addr >> 4, wi = (word_addr >> 2) & 0x3;
+        [branch]
+        if (t != dr_addr) {
+            PROF(PROF_ram_read_tex)
+            dr_tex = RAM_TEXEL(t);
+            dr_addr = t;
+        }
+        uint cur_val = idx_uint4(dr_tex, wi);
+        uint val = (cur_val & ~mask) | (bits & mask);
+        [branch]
+        if (val != cur_val) {
+            PROF(PROF_ram_write_store)
+            mem_dirty |= 1u << ((word_addr >> 22) & 31);
+            set_idx_uint4(dr_tex, val, wi);
+            _Ram[RAM_ADDR(t)] = dr_tex;
+            if (t == fw_addr0) { fw_tex0 = dr_tex; }
+            if (t == fw_addr1) { fw_tex1 = dr_tex; }
+        }
+    }
+#else
     uint t = word_addr >> 4, tag = t + 1, wi = (word_addr >> 2) & 0x3;
     uint b0 = L1_B0(t), b1 = L1_B1(t);
     uint4 tags0 = 0, tags1 = 0;
@@ -268,7 +310,7 @@ void mem_set_ram_l1(L1P uint word_addr, uint bits, uint mask) {
         [branch]
         if (t != dr_addr) {
             PROF(PROF_ram_read_tex)
-            dr_tex = STATE_TEX(RAM_ADDR(t));
+            dr_tex = RAM_TEXEL(t);
             dr_addr = t;
         }
         texel = dr_tex;
@@ -305,6 +347,7 @@ void mem_set_ram_l1(L1P uint word_addr, uint bits, uint mask) {
     }
     }
     }
+#endif
 }
 
 // whole_word: addr is a word-aligned RAM address and val is the full 32-bit value.

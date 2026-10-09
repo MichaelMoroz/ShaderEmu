@@ -13,18 +13,15 @@
 // There are two tables of 2^L1_TABLE_BITS buckets with different hashes; a texel goes to the
 // second only when its bucket in the first is full, so most lookups read one bucket. Entries
 // are filled in order and never freed within a pass.
-//   L1_TABLE_BITS 6, L1_WAYS 3 (the default): 384 texels, an array of 512 in the tick
-//   L1_TABLE_BITS 6, L1_WAYS 4:               512 texels, arrays of 512 and 128
+//   L1_TABLE_BITS 6, L1_WAYS 4 (the default): 512 texels, arrays of 512 and 128 in the tick
 //   L1_TABLE_BITS 7, L1_WAYS 3:               768 texels, an array of 1,024
-// The first is 5% more instructions a second than the second in spite of its stalls: four
-// entries a bucket cost every load and store, and more than about 1,000 state texels (each is
-// a pixel that runs the whole tick) cost every instruction.
+//   L1_TABLE_BITS 6, L1_WAYS 3:               384 texels, an array of 512
 #ifndef L1_BUCKETS
 #ifndef L1_TABLE_BITS
 #define L1_TABLE_BITS 6
 #endif
 #ifndef L1_WAYS
-#define L1_WAYS 3
+#define L1_WAYS 4
 #endif
 #define L1_TABLE (1 << L1_TABLE_BITS)
 #define L1_BUCKETS (2 * L1_TABLE)

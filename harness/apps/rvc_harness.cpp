@@ -406,6 +406,7 @@ const BootImage kImages[] = {
     {"sound", "Sound test card: every kind of voice for half a second (bare metal C)", nullptr, "sound", "none", "none", 2},
     {"raycast", "Raycaster: walk a textured maze on the display (bare metal C)", nullptr, "raycast", "none", "none", 2},
     {"raytrace", "Raytracer drawing to the display (bare metal C)", nullptr, "raytrace", "none", "none", 2},
+    {"fpcheck", "Float instructions on the fast path: prints a sum to compare between shader builds (bare metal C)", nullptr, "fpcheck", "none", "none", 0},
     {"rvc-raytrace", "rvc's Rust raytracer, drawing into raw memory", "data", "rust_raytrace", "none", "dts", 1},
     {"bare", "C bare-metal test (no firmware)", "data", "bare", "none", "dts", 1},
 };
@@ -542,15 +543,15 @@ int main(int argc, char** argv) {
     // The full machine unless a named image is known to need less, or the user said so.
     if (opt.machine < 0) {
         const BootImage* im = opt.loadState.empty() ? findImage(opt.image) : nullptr;
-        opt.machine = im && opt.rvcDir == "experiments/rvc_opt" ? im->machine : 0;
+        opt.machine = im && (opt.rvcDir == "experiments/rvc_opt" || opt.rvcDir == "experiments/rvc_compute") ? im->machine : 0;
     }
     // Our Linux image, and snapshots (which are of it), have no firmware: the machine answers
     // the kernel's calls to it (docs/boot.md).
-    opt.sbi = opt.machine == 0 && opt.rvcDir == "experiments/rvc_opt" && (opt.ourKernel || !opt.loadState.empty());
+    opt.sbi = opt.machine == 0 && (opt.rvcDir == "experiments/rvc_opt" || opt.rvcDir == "experiments/rvc_compute") && (opt.ourKernel || !opt.loadState.empty());
     if (opt.machine == 1) opt.defines.push_back("NO_PAGING");
     if (opt.machine == 2) opt.defines.push_back("M_MODE_ONLY");
     // The full machine has single-precision float instructions (docs/fpu.md).
-    if (opt.machine == 0 && opt.rvcDir == "experiments/rvc_opt" &&
+    if (opt.machine == 0 && (opt.rvcDir == "experiments/rvc_opt" || opt.rvcDir == "experiments/rvc_compute") &&
         std::find(opt.defines.begin(), opt.defines.end(), "FPU") == opt.defines.end())
         opt.defines.push_back("FPU");
     if (opt.machine > 0)
@@ -918,7 +919,7 @@ int main(int argc, char** argv) {
             // texel's address: which of its four words were written is not kept anywhere.
             size_t at = l1Samples.size();
             l1Samples.insert(l1Samples.end(), {lastInstructions, lastStall, 0u});
-            unsigned ways = 4, tableBits = 6;   // the shader's defaults (L1_WAYS, L1_TABLE_BITS)
+            unsigned ways = 3, tableBits = 6;   // the shader's defaults (L1_WAYS, L1_TABLE_BITS)
             for (auto& d : opt.defines) {
                 if (d.rfind("L1_WAYS=", 0) == 0) ways = (unsigned)atoi(d.c_str() + 8);
                 if (d.rfind("L1_TABLE_BITS=", 0) == 0) tableBits = (unsigned)atoi(d.c_str() + 14);

@@ -81,6 +81,8 @@ public:
     void setLinearSampler(const std::string& samplerName, bool linear) { linearSamplers_[samplerName] = linear; }
 
     void bind(ID3D11DeviceContext* ctx, GpuPass& pass, const Gpu& gpu);
+    // The same for a compute shader's layout (the caller sets the shader and its UAVs).
+    void bindCompute(ID3D11DeviceContext* ctx, StageLayout& L, const Gpu& gpu) { bindStage(ctx, L, 3, gpu); }
     // Writes the current values into L.scratch in the stage's $Globals layout (no GPU calls).
     void fillGlobals(StageLayout& L) const;
 

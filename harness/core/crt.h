@@ -35,6 +35,7 @@ public:
 
     ID3D11Texture2D* current() const { return tex_[cur_].Get(); }
     ID3D11ShaderResourceView* currentSRV() const { return srv_[cur_].Get(); }
+    ID3D11UnorderedAccessView* currentUAV() const { return uav_[cur_].Get(); }   // for a compute pass that works in place
     // The other buffer: RAM as it was before the last full-texture zone ran.
     ID3D11ShaderResourceView* previousSRV() const { return srv_[1 - cur_].Get(); }
     UINT width() const { return width_; }
@@ -44,6 +45,7 @@ private:
     ComPtr<ID3D11Texture2D> tex_[2];
     ComPtr<ID3D11ShaderResourceView> srv_[2];
     ComPtr<ID3D11RenderTargetView> rtv_[2];
+    ComPtr<ID3D11UnorderedAccessView> uav_[2];
     int cur_ = 0;
     UINT width_ = 0, height_ = 0;
 };

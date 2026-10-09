@@ -38,18 +38,15 @@
 // There are two tables of 2^L1_TABLE_BITS buckets with different hashes; a texel goes to the
 // second only when its bucket in the first is full, so most lookups read one bucket. Entries
 // are filled in order and never freed within a pass.
-//   L1_TABLE_BITS 6, L1_WAYS 3 (the default): 384 texels, an array of 512 in the tick
-//   L1_TABLE_BITS 6, L1_WAYS 4:               512 texels, arrays of 512 and 128
+//   L1_TABLE_BITS 6, L1_WAYS 4 (the default): 512 texels, arrays of 512 and 128 in the tick
 //   L1_TABLE_BITS 7, L1_WAYS 3:               768 texels, an array of 1,024
-// The first is 5% more instructions a second than the second in spite of its stalls: four
-// entries a bucket cost every load and store, and more than about 1,000 state texels (each is
-// a pixel that runs the whole tick) cost every instruction.
+//   L1_TABLE_BITS 6, L1_WAYS 3:               384 texels, an array of 512
 #ifndef L1_BUCKETS
 #ifndef L1_TABLE_BITS
 #define L1_TABLE_BITS 6
 #endif
 #ifndef L1_WAYS
-#define L1_WAYS 3
+#define L1_WAYS 4
 #endif
 #define L1_TABLE (1 << L1_TABLE_BITS)
 #define L1_BUCKETS (2 * L1_TABLE)
@@ -284,9 +281,9 @@ static cpu_t cpu;
 // With L1_LOCAL the array is a local of the tick's main and starts undefined (zeroing a static
 // one costs every tick): an entry may only be read when its occupancy bit is set.
 #ifndef L1_LOCAL
-static uint4 l1_cache[L1_DATA_N];
+L1_STORAGE uint4 l1_cache[L1_DATA_N];
 #if L1_WAYS == 4
-static uint4 l1_tag[L1_BUCKETS];
+L1_STORAGE uint4 l1_tag[L1_BUCKETS];
 #endif
 #endif
 static uint l1_occ[L1_BUCKETS / 32];   // buckets whose tags have been written this pass
@@ -342,7 +339,7 @@ bool fp_state_texel(uint2 pos, out uint4 t) {
     return true;
 }
 #else
-static uint xr[33];  // [32] is a scratch slot for writes that must not land (x0, no result)
+XR_STORAGE uint xr[33];  // [32] is a scratch slot for writes that must not land (x0, no result)
 #endif
 uint xreg(uint i) {
     return xr[i];

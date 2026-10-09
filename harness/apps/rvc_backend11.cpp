@@ -27,6 +27,11 @@ public:
         for (auto& d : opt.compile.defines)
             if (d.first == "COMMIT_BANDS") bands_ = true;
         if (!buildPasses(gpu_, shader, {"CPUTick", "Commit"}, bo, passes_, err)) return false;
+        for (auto& d : opt.compile.defines)
+            if (d.first == "RAM_DIRECT") csDirect_ = true;
+        for (auto& d : opt.compile.defines)
+            if (d.first == "RAM_BUFFER") csBuffer_ = true;
+        if (getenv("RVC11_COMPUTE") && !buildComputeTick(shader, bo, err)) return false;
         std::string gpuErr;
         if (opt.gpuShader && (!buildPasses(gpu_, *opt.gpuShader, {"GPUDraw", "GPUControl"}, bo, gpuPasses_, gpuErr) ||
                               !createGpuTarget(gpuErr))) {
@@ -93,7 +98,8 @@ public:
             gpu_.ctx->Begin(tsDisjoint_.Get());
             gpu_.ctx->End(tsQuery_[0].Get());
         }
-        crt_.runZone(gpu_, passes_[0], mat, UpdateZone{32, 4064, 64, 64, 0});
+        if (cs_ && mat.getFloat("_Init") == 0) runComputeTick(mat);
+        else crt_.runZone(gpu_, passes_[0], mat, UpdateZone{32, 4064, 64, 64, 0});
         if (timeIt) gpu_.ctx->End(tsQuery_[1].Get());
         if (!gpuPasses_.empty()) mat.setTexture("_GpuTarget", gpuSrv_.Get(), kGpuTarget, kGpuTarget);   // Commit copies it back
         // With COMMIT_BANDS the vertex shader draws the state rows and the bands of RAM that changed;
@@ -416,6 +422,91 @@ private:
     std::vector<ComPtr<ID3D11ShaderResourceView>> keep_;
     CustomRenderTexture crt_;
     RegionReadback rows_, control_;
+
+    // RVC11_COMPUTE=1 (experiments/rvc_compute): the tick as one thread of a compute shader, the
+    // pass's entry tick_cs. It writes the CPU zone's texels into a 64 x 64 texture of its own,
+    // which holds the zone before the dispatch and is copied back after it.
+    ComPtr<ID3D11ComputeShader> cs_;
+    bool csDirect_ = false, csBuffer_ = false, ramImported_ = false;
+    static const UINT kRamTexels = 2048 * (4096 - 64);
+    ComPtr<ID3D11ComputeShader> csImport_;
+    StageLayout csImportLayout_;
+    ComPtr<ID3D11Buffer> ramBuf_;
+    ComPtr<ID3D11UnorderedAccessView> ramUav_;
+    StageLayout csLayout_;
+    ComPtr<ID3D11Texture2D> tickTex_;
+    ComPtr<ID3D11UnorderedAccessView> tickUav_;
+    bool buildComputeTick(const SLShader& shader, const ShaderBuildOptions& bo, std::string& err) {
+        const SLPass* p = shader.findPass("CPUTick");
+        if (!p) { err = "no CPUTick pass"; return false; }
+        std::string rootDir = std::filesystem::u8path(shader.path).parent_path().u8string();
+        Defines extra = {{"SHADER_STAGE_COMPUTE", "1"}};
+        StageResult r = compileStage(p->code, shader.path, rootDir, "tick_cs", "cs_5_0", extra, bo.settings);
+        if (!r.ok) { err = "tick_cs: " + r.log; return false; }
+        fprintf(stderr, "[harness] compute tick: %s in %.1fs (%zu bytes)\n", r.fromCache ? "cache hit" : "compiled", r.seconds,
+                (size_t)r.bytecode->GetBufferSize());
+        HRESULT hr = gpu_.device->CreateComputeShader(r.bytecode->GetBufferPointer(), r.bytecode->GetBufferSize(), nullptr, &cs_);
+        if (FAILED(hr)) { err = "CreateComputeShader: " + hrToString(hr); return false; }
+        if (!csLayout_.reflect(gpu_.device.Get(), r.bytecode.Get(), err)) return false;
+        D3D11_TEXTURE2D_DESC td{};
+        td.Width = 64; td.Height = 64; td.MipLevels = 1; td.ArraySize = 1;
+        td.Format = DXGI_FORMAT_R32G32B32A32_UINT; td.SampleDesc.Count = 1;
+        td.Usage = D3D11_USAGE_DEFAULT; td.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+        hr = gpu_.device->CreateTexture2D(&td, nullptr, &tickTex_);
+        if (SUCCEEDED(hr)) hr = gpu_.device->CreateUnorderedAccessView(tickTex_.Get(), nullptr, &tickUav_);
+        if (FAILED(hr)) { err = "compute tick target: " + hrToString(hr); return false; }
+        if (csBuffer_) {
+            // RAM_BUFFER: RAM as a raw buffer (u1), filled from the state texture by ram_import_cs
+            // before the first compute tick
+            StageResult ri = compileStage(p->code, shader.path, rootDir, "ram_import_cs", "cs_5_0", extra, bo.settings);
+            if (!ri.ok) { err = "ram_import_cs: " + ri.log; return false; }
+            hr = gpu_.device->CreateComputeShader(ri.bytecode->GetBufferPointer(), ri.bytecode->GetBufferSize(), nullptr, &csImport_);
+            if (FAILED(hr)) { err = "CreateComputeShader (import): " + hrToString(hr); return false; }
+            if (!csImportLayout_.reflect(gpu_.device.Get(), ri.bytecode.Get(), err)) return false;
+            D3D11_BUFFER_DESC bd{};
+            bd.ByteWidth = kRamTexels * 16;
+            bd.Usage = D3D11_USAGE_DEFAULT;
+            bd.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+            bd.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
+            hr = gpu_.device->CreateBuffer(&bd, nullptr, &ramBuf_);
+            D3D11_UNORDERED_ACCESS_VIEW_DESC ud{};
+            ud.Format = DXGI_FORMAT_R32_TYPELESS;
+            ud.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+            ud.Buffer.NumElements = kRamTexels * 4;
+            ud.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
+            if (SUCCEEDED(hr)) hr = gpu_.device->CreateUnorderedAccessView(ramBuf_.Get(), &ud, &ramUav_);
+            if (FAILED(hr)) { err = "RAM buffer: " + hrToString(hr); return false; }
+        }
+        return true;
+    }
+    void runComputeTick(Material& mat) {
+        ID3D11DeviceContext* ctx = gpu_.ctx.Get();
+        mat.setVector("_CustomRenderTextureInfo", crt_.width(), crt_.height(), 1, 0);
+        mat.setTexture("_SelfTexture2D", crt_.currentSRV(), crt_.width(), crt_.height());
+        D3D11_BOX box{0, 0, 0, 64, 64, 1};
+        // RAM_DIRECT: the shader has the state texture itself, to read and to write
+        if (!csDirect_) ctx->CopySubresourceRegion(tickTex_.Get(), 0, 0, 0, 0, crt_.current(), 0, &box);
+        ctx->CSSetShader(cs_.Get(), nullptr, 0);
+        mat.bindCompute(ctx, csLayout_, gpu_);
+        ID3D11UnorderedAccessView* uavs[2] = {csDirect_ ? crt_.currentUAV() : tickUav_.Get(), ramUav_.Get()};
+        if (csBuffer_ && !ramImported_) {
+            // every RAM texel of the state texture into the buffer: 65,536 a row of thread groups
+            ctx->CSSetShader(csImport_.Get(), nullptr, 0);
+            mat.bindCompute(ctx, csImportLayout_, gpu_);
+            ctx->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
+            ctx->Dispatch(1024, (kRamTexels + 65535) / 65536, 1);
+            ctx->CSSetShader(cs_.Get(), nullptr, 0);
+            mat.bindCompute(ctx, csLayout_, gpu_);
+            ramImported_ = true;
+        }
+        ctx->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
+        ctx->Dispatch(1, 1, 1);
+        ID3D11UnorderedAccessView* none[2] = {};
+        ctx->CSSetUnorderedAccessViews(0, 2, none, nullptr);
+        ID3D11ShaderResourceView* nulls[16] = {};
+        ctx->CSSetShaderResources(0, 16, nulls);
+        if (!csDirect_) ctx->CopySubresourceRegion(crt_.current(), 0, 0, 0, 0, tickTex_.Get(), 0, &box);
+    }
     ComPtr<ID3D11ShaderResourceView> hostData_;
     bool deliver_ = false;   // the fetch zone is drawn in the next frame
     ComPtr<IDXGISwapChain> swapChain_;
