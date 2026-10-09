@@ -74,6 +74,11 @@ a pass (its write cache: `docs/multicore.md`).
   that. The movie's codebooks and pointers are allocated in whole 16 bytes with their pages
   already there (`workers_alloc`), so that no core stores beside another's and no worker
   stops at a new page; the picture is GPU memory, which a worker has as the game has it.
+- A frame's palette starts on the 16 byte boundary after its pointers: a worker stores whole
+  16 bytes to the pointers' very end. (The palette used to follow the pointers as they lay
+  before they were moved to a boundary, and its first colours were pointers: a second of
+  blue at the movie's start, on four cores only. `RALERT_MOVIE_CHECK` did not see it: it
+  compares pictures, and both decodings were right.)
 - `RALERT_MOVIE_SOFT=1` is the game's own way, `RALERT_WORKERS=N` uses no more than N workers,
   and `RALERT_MOVIE_CHECK=1` decodes every shared frame on core 0 as well and compares: 0 of
   156 differ. Each movie prints a line (`ralert: movie ...`).
