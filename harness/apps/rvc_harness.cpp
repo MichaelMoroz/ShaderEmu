@@ -89,6 +89,7 @@ struct Options {
     int corePitch = 256;      // --core-pitch N: the cores' blocks of state are N texels apart
     int cores = 1;            // --cores N: core 0 and N - 1 worker cores (docs/multicore.md; D3D11)
     bool noBands = false;     // --no-bands: the commit rewrites all of RAM, as a CustomRenderTexture does
+    int readbackBatch = 1;    // --readback-batch N: D3D11 maps the rows of N frames at once
     bool ourKernel = false;   // the RAM image is this project's (kernel at +4 MiB, device tree at +34 MiB)
     bool sbi = false;         // compile with SBI_HLE
     bool noGpu = false;       // --no-gpu: leave out the GPU device's passes (gpu.shader)
@@ -154,6 +155,8 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
                          auto      (default) the smallest one the chosen image runs on
   --no-gpu             leave out the GPU device (the passes in <rvc>/gpu.shader, docs/gpu.md)
   --no-bands           have the commit rewrite all of RAM instead of only the bands written to
+  --readback-batch N   D3D11: read the rows of N frames back with one Map (1); the console's
+                       output and typed input then come N frames later
   --gpu-capture FILE   save the GPU device's whole colour target as a BMP at exit
   --no-sound           leave out the sound card (<rvc>/sound.shader, docs/sound.md)
   --sound              play what the sound card mixes (the terminal mode does; other runs are silent)
@@ -300,6 +303,7 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--stats-after") o.statsAfter = atof(next("--stats-after").c_str());
         else if (a == "--define") o.defines.push_back(next("--define"));
         else if (a == "--no-bands") o.noBands = true;
+        else if (a == "--readback-batch") o.readbackBatch = atoi(next("--readback-batch").c_str());
         else if (a == "--cores") { o.cores = (std::max)(1, (std::min)(16, atoi(next("--cores").c_str()))); if (o.cores > 1) o.defines.push_back("CORES=" + std::to_string(o.cores)); }
         else if (a == "--core-pitch") { o.corePitch = (std::max)(64, (std::min)(1024, atoi(next("--core-pitch").c_str()))); o.defines.push_back("CORE_PITCH=" + std::to_string(o.corePitch)); }
         else { fprintf(stderr, "unknown option %s\n", a.c_str()); usage(); return false; }
@@ -607,6 +611,7 @@ int main(int argc, char** argv) {
         bo.workerTailWidth = (std::min)(64u, ((tail + 3) / 4 + 7) & ~7u);
     }
     bo.present = opt.present;
+    bo.readbackBatch = opt.readbackBatch;
     bo.dxcOpt = opt.dxcOpt;
     bo.dxcSm = opt.dxcSm;
     bo.dxcDir = opt.dxcDir;

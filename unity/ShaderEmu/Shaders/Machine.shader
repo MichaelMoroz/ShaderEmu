@@ -82,11 +82,13 @@ Shader "ShaderEmu/Machine"
             CGPROGRAM
             #pragma target 5.0
             #pragma vertex blit_vert
+            #pragma geometry blit_bands_geom
             #pragma fragment frag
             #pragma editor_sync_compilation
 
             #define PASS_COMMIT
             #define GPU_DEVICE
+            #define BLIT_BANDS
 
             #include "UnityCG.cginc"
             #include "MachineBlit.cginc"
@@ -122,6 +124,25 @@ Shader "ShaderEmu/Machine"
             #define GPU_WRITEBACK
             #include "src/gpu.cginc"
 
+            // The bands this commit changes (commit_bands_changed in the harness's main.shader).
+            uint commit_bands_changed() {
+                if (_Init) return 0xffffffff;
+                uint stalled = STATE_TEX_HART(uint2(28, 0), 0).r;
+                uint changed = STATE_TEX_HART(uint2(41, 0), 0).g;   // the tick's writes
+                if (stalled == STALL_MEMOP_COPY || stalled == STALL_MEMOP_FILL) {
+                    // a parallel copy or fill: the bands from its destination to its end
+                    uint4 op = STATE_TEX_HART(uint2(38, 0), 0);
+                    uint lo = (op.g >> 22) & 31, hi = min((op.g + op.b - 1) >> 22, 31u);
+                    if (op.b != 0 && hi >= lo) changed |= ((2u << hi) - 1) & ~((1u << lo) - 1);
+                }
+                return changed | gpu_copy_bands();
+            }
+            // Those, the ones of the commit before (the first commit after the start draws all)
+            // and what the control pass changed since.
+            uint blit_bands() {
+                return commit_bands_changed() | STATE_TEX_HART(uint2(41, 0), 0).b | CONTROL_BANDS;
+            }
+
             uint4 frag(blit_v2f i) : SV_Target {
                 _SelfTexture2D.GetDimensions(s_dim.x, s_dim.y);
                 _Data_MTD_R.GetDimensions(m_dim.x, m_dim.y);
@@ -139,7 +160,9 @@ Shader "ShaderEmu/Machine"
                 uint4 picture;
                 if (!_Init && gpu_writeback(pos, picture)) return picture;
                 decode_for_commit();
-                return commit(pos, STATE_TEX_HART(pos, 0));
+                uint4 result = commit(pos, STATE_TEX_HART(pos, 0));
+                if (pos.x == 41 && pos.y == 0) result.b = commit_bands_changed();   // for the control pass and the next commit
+                return result;
             }
             ENDCG
         }
@@ -151,11 +174,19 @@ Shader "ShaderEmu/Machine"
             CGPROGRAM
             #pragma target 5.0
             #pragma vertex blit_vert
+            #pragma geometry blit_bands_geom
             #pragma fragment frag
             #pragma editor_sync_compilation
 
+            #define BLIT_BANDS
             #include "UnityCG.cginc"
             #include "MachineBlit.cginc"
+
+            // Its own bands, and the ones the commit just changed: the texture this pass draws
+            // into is the one the commit read.
+            uint blit_bands() {
+                return _SelfTexture2D[uint2(41, 0)].b | CONTROL_BANDS;
+            }
 
             uniform float4 _InputPointer;
             uniform uint _InputButtons, _InputKeySeq, _InputKeyCount;

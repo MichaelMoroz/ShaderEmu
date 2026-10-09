@@ -1,10 +1,12 @@
 Shader "ShaderEmu/Readback"
 {
     // Blit target for the script's readback: state row 0 (64 texels) and the 48 control texels
-    // at RAM 0x87000000, one output pixel per 32-bit word, its bytes in r, g, b, a.
+    // at RAM 0x87000000, one output pixel per 32-bit word, its bytes in r, g, b, a. A round of
+    // a frame writes row _Row of the target, and the script reads all of a frame's rows at once.
     Properties
     {
         _State ("Machine state texture", 2D) = "black" {}
+        _Row ("The row of the target this round writes", Int) = 0
     }
     SubShader
     {
@@ -24,9 +26,12 @@ Shader "ShaderEmu/Readback"
             Texture2D<uint4> _State;
 
             static const uint Words = 448, ControlRow = 64 + 0x700000 / 2048;
+            static const float Rows = 32;   // the target's height: EmuMachine's MaxRounds
+            uniform uint _Row;
 
+            // Blit's rectangle put on one row: clip space as the card has it, row 0 at y = 1.
             float4 vert(appdata_img v) : SV_Position {
-                return UnityObjectToClipPos(v.vertex);
+                return float4(v.texcoord.x * 2.0 - 1.0, 1.0 - 2.0 * (_Row + v.texcoord.y) / Rows, 0.5, 1.0);
             }
 
             float4 frag(float4 at : SV_Position) : SV_Target {

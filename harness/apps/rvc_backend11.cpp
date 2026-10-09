@@ -55,8 +55,8 @@ public:
 
         if (!crt_.init(gpu_.device.Get(), kWidth, kHeight, DXGI_FORMAT_R32G32B32A32_UINT, err)) return false;
         crt_.clear(gpu_.ctx.Get());
-        return rows_.init(gpu_.device.Get(), DXGI_FORMAT_R32G32B32A32_UINT, 16, 64, 1, 3, err) &&
-               control_.init(gpu_.device.Get(), DXGI_FORMAT_R32G32B32A32_UINT, 16, kControlTexels, 1, 3, err);
+        return rows_.init(gpu_.device.Get(), DXGI_FORMAT_R32G32B32A32_UINT, 16, 64, 1, 3, err, opt.readbackBatch) &&
+               control_.init(gpu_.device.Get(), DXGI_FORMAT_R32G32B32A32_UINT, 16, kControlTexels, 1, 3, err, opt.readbackBatch);
     }
 
     bool loadPayload(Material& mat, const std::string& dir, const std::string& prefix, const std::string& propBase,

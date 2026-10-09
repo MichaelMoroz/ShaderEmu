@@ -277,6 +277,36 @@ A cold boot to the `/ #` prompt takes about 80 s on an RTX 5090 with upstream on
   `fxc2_d3dcompiler.dll` copied beside it). Unity preprocesses shaders itself, so
   `MachineTick.shader` defines `__FXC2__` by hand: a stock editor needs that line out. The
   stock compiler's cache is `Library\ShaderCache.fxc`.
+- The Unity editor must compile with fxc2 (here it is in the install itself: the stub
+  `D3DCompiler_47.dll` and `fxc2_d3dcompiler.dll` in the editor's `Data\Tools`). An editor with
+  Microsoft's compiler fails on `mulhi` and Unity keeps that failure in
+  `Library\ShaderCache\shader\MachineTick*` (files of about 1 KB), after which no editor
+  compiles the tick and the machine runs no instructions: delete those files and re-import
+  `MachineTick.shader` (5 s). A shader made in editor code that calls `mulhi` tells which
+  compiler is there.
+- In Unity the commit and the control pass draw the 64 state rows and the bands of RAM that
+  changed, not the whole texture: a geometry shader in `MachineBlit.cginc` puts those rectangles
+  in place of Blit's two triangles (no tessellation; if one is ever added, its factor stays at 8
+  or under). Each pass also draws what the pass before it changed, because the texture it draws
+  into lacks that: the commit takes the control pass's bands 28 and 29, the control pass the
+  commit's, from state texel (41,0).b. A round went from 2.22 ms to 2.03 ms, the harness's.
+- To check that no band is missed, pause the machine (`paused`) and compare `current` with
+  `other` in a shader made in editor code (`any(a != b)` into an ARGB32 target, read with
+  `ReadPixels`; a state texture cannot be read back itself): no texel may differ outside
+  bands 28 and 29. An error logged in play mode pauses the editor ("Error Pause"): the
+  machine then runs nothing until `EditorApplication.isPaused` is false again.
+- In Unity a frame's rounds are read back together: each round's Blit writes its 448 words
+  into its own row of the 448 x 32 readback texture (`_Row`), and one request a frame fetches
+  them; only the console's output needs every round, the rest is the last row's. It took 0.03
+  ms a round off the main thread and nothing off the GPU.
+- The harness can do the like across frames (`--readback-batch N`: N frames' rows in one
+  staging texture, one Map): the same state hash, typed input no slower, and a gain inside the
+  noise (4% of a 2-instruction frame, 1 to 3% at 8,192 with N = 16), for output N frames
+  later. It is 1 unless asked for.
+- To time rounds in play mode, take the frame cap off (`Application.targetFrameRate = -1`), set
+  `rounds` to 8, 16 and 32 with a busy guest (`while :; do :; done` typed at the console
+  keyboard) and read frames and `totalInstructions` from an `EditorApplication.update` callback
+  that writes a file: the slope is a round, and what is left is Unity's own frame.
 - Skipping pixels in the commit with `discard` saves little: rasterising the whole texture is
   0.06 ms even when every pixel is discarded. Its vertex shader (`commit_vert`) reads the band
   list from the state instead and draws one quad per band; the harness binds the state texture

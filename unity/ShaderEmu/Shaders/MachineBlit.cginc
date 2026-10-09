@@ -15,6 +15,36 @@ blit_v2f blit_vert(appdata_base v) {
     return o;
 }
 
+#ifdef BLIT_BANDS
+// The control pass writes the device's words and a page the host fetched: RAM bands 28 and 29.
+#define CONTROL_BANDS (3u << 28)
+// The bands of RAM (4 MB, 128 rows; bit b is the one from row 64 + 128 b) the pass has to
+// draw: what it changes, and what the pass before it changed, which the texture drawn into
+// lacks. The other texels there are right already, so they are not drawn at all.
+uint blit_bands();
+
+// In place of Blit's two triangles: the 64 state rows and a rectangle for each of those bands.
+[maxvertexcount(132)]
+void blit_bands_geom(triangle blit_v2f corners[3], uint which : SV_PrimitiveID, inout TriangleStream<blit_v2f> stream) {
+    if (which != 0) return;
+    uint width, height;
+    _SelfTexture2D.GetDimensions(width, height);
+    uint bands = blit_bands();
+    for (uint quad = 0; quad < 33; quad++) {
+        if (quad != 0 && ((bands >> (quad - 1)) & 1) == 0) continue;
+        float top = quad == 0 ? 0.0 : 64.0 + (quad - 1) * 128.0, rows = quad == 0 ? 64.0 : 128.0;
+        // clip space as the card has it: row 0 of the texture is y = 1
+        float y0 = 1.0 - 2.0 * top / height, y1 = 1.0 - 2.0 * (top + rows) / height;
+        blit_v2f o;
+        o.vertex = float4(-1.0, y0, 0.5, 1.0); stream.Append(o);
+        o.vertex = float4(1.0, y0, 0.5, 1.0); stream.Append(o);
+        o.vertex = float4(-1.0, y1, 0.5, 1.0); stream.Append(o);
+        o.vertex = float4(1.0, y1, 0.5, 1.0); stream.Append(o);
+        stream.RestartStrip();
+    }
+}
+#endif
+
 uint4 state_after_tick(uint2 p) {
     [branch]
     if (p.x < 64 && p.y < TICK_STATE_ROWS) return _TickState[p];

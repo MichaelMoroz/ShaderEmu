@@ -34,7 +34,7 @@ public class EmuMachine : UdonSharpBehaviour
     public Material stateViewMaterial;      // Scope.shader showing the CPU's state texels
     public Material romViewMaterial;        // and the ROM
     public Material readbackMaterial;
-    public RenderTexture readbackTexture;   // 448 x 1, one pixel per word
+    public RenderTexture readbackTexture;   // 448 x 32: one pixel per word, a row for each round of a frame
 
     public EmuSound sound;                  // the sound card's host side, if the world has one
     public EmuTerminal terminal;
@@ -101,7 +101,9 @@ public class EmuMachine : UdonSharpBehaviour
     private int initLeft;
     private int requestsSent, requestsDone, ignoreUntil;
     private bool live;                 // rows read back are of the running machine
-    private Color32[] row = new Color32[Words];
+    private Color32[] row = new Color32[Words * MaxRounds];
+    private int rowAt;                 // where in it the round being taken starts
+    private int[] roundsOf = new int[64];   // how many rounds each readback on its way has
 
     private uint sentTag, consumedTag;
     private uint keySeq;
@@ -668,11 +670,11 @@ public class EmuMachine : UdonSharpBehaviour
             tickMaterial.SetTexture("_SelfTexture2D", current);
             VRCGraphics.Blit(current, tickState, tickMaterial, 0);
             Pass(PassCommit);
-            // What that round left: the console's output is only there until the next tick.
+            // What that round left, into its own row: the console's output is only there
+            // until the next tick. The rows are read back together when the frame's rounds are done.
             readbackMaterial.SetTexture("_State", current);
+            readbackMaterial.SetInt("_Row", i);
             VRCGraphics.Blit(current, readbackTexture, readbackMaterial);
-            VRCAsyncGPUReadback.Request(readbackTexture, 0, (IUdonEventReceiver)this);
-            requestsSent++;
             if (running)
             {
                 // The GPU: draw the list the guest has submitted, if any; the control pass
@@ -685,6 +687,9 @@ public class EmuMachine : UdonSharpBehaviour
                 Pass(PassControl);
             }
         }
+        roundsOf[requestsSent & 63] = n;
+        VRCAsyncGPUReadback.Request(readbackTexture, 0, (IUdonEventReceiver)this);
+        requestsSent++;
         if (initLeft > 0)
         {
             initLeft--;
@@ -796,17 +801,28 @@ public class EmuMachine : UdonSharpBehaviour
 
     private uint Word(int texel, int k)
     {
-        Color32 p = row[texel * 4 + k];
+        Color32 p = row[rowAt + texel * 4 + k];
         return (uint)p.r | (uint)p.g << 8 | (uint)p.b << 16 | (uint)p.a << 24;
     }
 
-    // Readbacks complete in the order they were asked for.
+    // Readbacks complete in the order they were asked for: a frame's rounds, a row each.
     public override void OnAsyncGpuReadbackComplete(VRCAsyncGPUReadbackRequest request)
     {
+        int n = roundsOf[requestsDone & 63];
         requestsDone++;
         if (request.hasError || !request.TryGetData(row)) return;
         if (requestsDone <= ignoreUntil) return;
         live = true;
+        for (int i = 0; i < n; i++)
+        {
+            rowAt = i * Words;
+            TakeRound();
+        }
+    }
+
+    // What one round left in the row at rowAt.
+    private void TakeRound()
+    {
 
         // state row 0, as rvc_harness.cpp reads it
         uint clock = Word(28, 1), commits = Word(28, 2);

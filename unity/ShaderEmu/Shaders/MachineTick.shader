@@ -77,6 +77,8 @@ Shader "ShaderEmu/MachineTick"
             #define __FXC2__
             // Single-precision float instructions (docs/fpu.md), as the harness's full machine has.
             #define FPU
+            // The tick says which 4 MB bands of RAM it wrote: Machine.shader draws only those.
+            #define COMMIT_BANDS
 
             #define PASS_TICK
 
