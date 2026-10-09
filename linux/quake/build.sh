@@ -31,7 +31,7 @@ SOURCES="cl_demo cl_input cl_main cl_parse cl_tent chase cmd common console crc 
     gl_draw gl_model gl_refrag gl_rlight gl_rmain gl_rmisc gl_rsurf gl_screen gl_warp
     host host_cmd keys menu mathlib net_loop net_main net_vcr net_none pr_cmds pr_edict pr_exec r_part sbar
     sv_main sv_phys sv_move sv_user zone view wad world cd_null"
-OURS="vid_shaderemu sys_shaderemu mesh_shaderemu world_shaderemu fmath_shaderemu snd_shaderemu"
+OURS="vid_shaderemu sys_shaderemu mesh_shaderemu world_shaderemu fmath_shaderemu snd_shaderemu server_shaderemu"
 # gles.c in its float build. (Texture names from 3,072 up are qgl.c's own, for models' poses.)
 GLES="-DSEGL_FLOAT -DMAX_TEXTURES=4096"
 GLINC="-I$HERE/include -idirafter $REPO/programs/linux/include -I$MW/src/include"
@@ -40,18 +40,31 @@ GLINC="-I$HERE/include -idirafter $REPO/programs/linux/include -I$MW/src/include
 # too. As a double, as C has it, every "x * 0.5" in the source was a library call for a double
 # multiply and two conversions.
 FPU="-fno-math-errno -fsingle-precision-constant"
-# -fcommon: the source defines some variables in more than one file. -fsigned-char: it was
-# written for x86, and reads floats as integers where it pleases (-fno-strict-aliasing). -fno-pie: a use of a global costs a load from a table otherwise.
+# -fsigned-char: it was written for x86, and reads floats as integers where it pleases
+# (-fno-strict-aliasing).
+# -fno-common -fdata-sections: a variable is a section of its own, which ALIGN16 below starts on
+# 16 bytes. The server's frame runs on a worker core (server_shaderemu.c, docs/multicore.md),
+# and two cores must not store to the same 16 bytes: no variable of the server's shares them
+# with one of the client's then. -fno-pie: a use of a global costs a load from a table otherwise.
 # fmath.h before every file: the game's sin, cos, tan and atan in floats
 # (QUAKE_DEFINES=-DSE_COUNT counts what the server does in a frame, for the quakestat: lines)
-CFLAGS="-O2 $FPU -fno-pie -fcommon -fsigned-char -fno-strict-aliasing -w -DGLQUAKE -DSHADEREMU -include $HERE/fmath.h $GLINC -I$Q/WinQuake ${QUAKE_DEFINES:-}"
-export CFLAGS Q HERE BUILD
+CFLAGS="-O2 $FPU -fno-pie -fno-common -fdata-sections -fsigned-char -fno-strict-aliasing -w -DGLQUAKE -DSHADEREMU -include $HERE/fmath.h $GLINC -I$Q/WinQuake -I$REPO/programs/mc ${QUAKE_DEFINES:-}"
+ALIGN16="--set-section-alignment .data*=16 --set-section-alignment .sdata*=16 --set-section-alignment .bss*=16 --set-section-alignment .sbss*=16"
+export CFLAGS Q HERE BUILD ALIGN16
 mkdir -p "$BUILD" && cd "$BUILD"
 { for f in $SOURCES; do echo "$Q/WinQuake/$f.c"; done; for f in $OURS; do echo "$HERE/$f.c"; done; } |
-    xargs -P "$(nproc)" -I{} sh -c 'o=$(basename {} .c).o; [ "$o" -nt {} ] && [ "$o" -nt "$HERE/quake.patch" ] && [ "$o" -nt "$HERE/include/GL/gl.h" ] && [ "$o" -nt "$HERE/build.sh" ] && [ "$o" -nt "$HERE/fmath.h" ] || rv32-cc $CFLAGS -c {} -o "$o"'
-rv32-cc -O2 $FPU -fno-pie -Wall -c $GLINC "$HERE/qgl.c" -o qgl.o
-rv32-cc -O2 -fno-pie -Wall -c $GLES $GLINC "$REPO/programs/linux/gles.c" -o gles.o
-rv32-cc -O2 $FPU -w *.o "$MW/src/lib/libnano-X.a" -lm -o quake
+    xargs -P "$(nproc)" -I{} sh -c 'o=$(basename {} .c).o; [ "$o" -nt {} ] && [ "$o" -nt "$HERE/quake.patch" ] && [ "$o" -nt "$HERE/include/GL/gl.h" ] && [ "$o" -nt "$HERE/build.sh" ] && [ "$o" -nt "$HERE/fmath.h" ] || { rv32-cc $CFLAGS -c {} -o "$o" && riscv32-linux-objcopy $ALIGN16 "$o"; }'
+rv32-cc -O2 $FPU -fno-pie -fno-common -fdata-sections -Wall -c $GLINC "$HERE/qgl.c" -o qgl.o
+rv32-cc -O2 -fno-pie -fno-common -fdata-sections -Wall -c $GLES $GLINC "$REPO/programs/linux/gles.c" -o gles.o
+# the worker cores' library, the same for every program (programs/mc)
+rv32-cc -O2 -fno-pie -fno-common -fdata-sections -Wall -c -I"$REPO/programs/mc" "$REPO/programs/mc/mcw.c" -o mcw.o
+# and 16 bytes of nothing after our variables in each kind of section: the libraries' follow
+printf 'char se_pad_d[16] __attribute__((aligned(16))) = {1}; char se_pad_b[16] __attribute__((aligned(16)));\n' > zz_pad.c
+rv32-cc -O2 -fno-pie -fno-common -fdata-sections -msmall-data-limit=0 -c zz_pad.c -o zz_pad_large.o
+sed 's/se_pad_/se_pad_s/g' zz_pad.c > zz_pads.c
+rv32-cc -O2 -fno-pie -fno-common -fdata-sections -msmall-data-limit=64 -c zz_pads.c -o zz_pad_small.o
+for o in qgl.o gles.o mcw.o zz_pad_large.o zz_pad_small.o; do riscv32-linux-objcopy $ALIGN16 "$o"; done
+rv32-cc -O2 $FPU -w $(ls *.o | grep -v '^zz_') zz_pad_large.o zz_pad_small.o "$MW/src/lib/libnano-X.a" -lm -o quake
 mkdir -p "$OUT/usr/bin" "$OUT/usr/share"
 riscv32-linux-strip -o "$OUT/usr/bin/quake.bin" quake
 riscv32-linux-nm -n quake > "$WORK/src/quake.nm"

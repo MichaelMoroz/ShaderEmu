@@ -59,6 +59,9 @@ void Sys_Error (char *error, ...)
 	va_start (argptr, error);
 	vsnprintf (string, sizeof string, error, argptr);
 	va_end (argptr);
+	if (SE_ServerOnWorker ())
+		SE_ServerWorkerError (string);	/* the server's frame on a worker core: this core raises it */
+	SE_ServerSettle ();
 	fprintf (stderr, "quake: error: %s\n", string);
 	Host_Shutdown ();
 	exit (1);

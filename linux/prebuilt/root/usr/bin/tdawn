@@ -1,0 +1,7 @@
+#!/bin/sh
+mkdir -p /tmp/tdawn && cd /tmp/tdawn || exit 1
+for f in DEMO DEMOL SOUNDS SPEECH; do ln -sf /usr/share/tdawn-$f.MIX $f.MIX; done
+for f in MAP1 WIN1; do ln -sf /usr/share/tdawn-$f.AUD $f.AUD; done
+# the game reads the whole of its program's folder for every file it looks for: not /usr/bin
+[ -x game ] || cp /usr/bin/tdawn.bin game
+HOME=/tmp/tdawn exec ./game "$@"

@@ -1,3 +1,35 @@
+diff --git a/WinQuake/cl_main.c b/WinQuake/cl_main.c
+index 5812143..6864a6a 100644
+--- a/WinQuake/cl_main.c
++++ b/WinQuake/cl_main.c
+@@ -394,7 +394,7 @@ float	CL_LerpPoint (void)
+ 
+ 	f = cl.mtime[0] - cl.mtime[1];
+ 	
+-	if (!f || cl_nolerp.value || cls.timedemo || sv.active)
++	if (!f || cl_nolerp.value || cls.timedemo || (sv.active && !SE_ServerApart ()))
+ 	{
+ 		cl.time = cl.mtime[0];
+ 		return 1;
+@@ -417,6 +417,8 @@ SetPal(1);
+ 		}
+ 		frac = 0;
+ 	}
++	else if (frac < 1)
++		SE_ServerBetween ();	// a frame drawn between two of the server's: counted
+ 	else if (frac > 1)
+ 	{
+ 		if (frac > 1.01)
+@@ -636,7 +638,8 @@ int CL_ReadFromServer (void)
+ 	int		ret;
+ 
+ 	cl.oldtime = cl.time;
+-	cl.time += host_frametime;
++	// (the server's time may go slower than the clock: server_shaderemu.c)
++	cl.time += host_frametime * SE_ServerRate ();
+ 	
+ 	do
+ 	{
 diff --git a/WinQuake/client.h b/WinQuake/client.h
 index 7c59ee9..5dc679f 100644
 --- a/WinQuake/client.h
@@ -17,6 +49,70 @@ index 7c59ee9..5dc679f 100644
  								// to decay light values and smooth step ups
  	
  
+diff --git a/WinQuake/cmd.c b/WinQuake/cmd.c
+index 0778c5e..34d4f39 100644
+--- a/WinQuake/cmd.c
++++ b/WinQuake/cmd.c
+@@ -86,7 +86,13 @@ Adds command text at the end of the buffer
+ void Cbuf_AddText (char *text)
+ {
+ 	int		l;
+-	
++
++	if (SE_ServerOnWorker ())
++	{
++		SE_ServerKeepCommand (text);
++		return;
++	}
++
+ 	l = Q_strlen (text);
+ 
+ 	if (cmd_text.cursize + l >= cmd_text.maxsize)
+@@ -628,6 +634,7 @@ void	Cmd_ExecuteString (char *text, cmd_source_t src)
+ 	{
+ 		if (!Q_strcasecmp (cmd_argv[0],cmd->name))
+ 		{
++			SE_ServerCommand (cmd->name);
+ 			cmd->function ();
+ 			return;
+ 		}
+diff --git a/WinQuake/console.c b/WinQuake/console.c
+index cad58f8..f84e862 100644
+--- a/WinQuake/console.c
++++ b/WinQuake/console.c
+@@ -383,7 +383,13 @@ void Con_Printf (char *fmt, ...)
+ 	va_start (argptr,fmt);
+ 	vsprintf (msg,fmt,argptr);
+ 	va_end (argptr);
+-	
++
++	if (SE_ServerOnWorker ())
++	{
++		SE_ServerKeepPrint (msg);
++		return;
++	}
++
+ // also echo to debugging console
+ 	Sys_Printf ("%s", msg);	// also echo to debugging console
+ 
+diff --git a/WinQuake/cvar.c b/WinQuake/cvar.c
+index 07a761a..62e9938 100644
+--- a/WinQuake/cvar.c
++++ b/WinQuake/cvar.c
+@@ -105,7 +105,12 @@ void Cvar_Set (char *var_name, char *value)
+ {
+ 	cvar_t	*var;
+ 	qboolean changed;
+-	
++
++	if (SE_ServerOnWorker ())
++	{
++		SE_ServerKeepCvar (var_name, value);
++		return;
++	}
+ 	var = Cvar_FindVar (var_name);
+ 	if (!var)
+ 	{	// there is an error in C code if this happens
 diff --git a/WinQuake/gl_draw.c b/WinQuake/gl_draw.c
 index 25a8007..d59bc9b 100644
 --- a/WinQuake/gl_draw.c
@@ -417,9 +513,18 @@ index 11b5a01..3d27e94 100644
  }
  
 diff --git a/WinQuake/gl_screen.c b/WinQuake/gl_screen.c
-index 8a0c096..b7c5c07 100644
+index 8a0c096..1749fae 100644
 --- a/WinQuake/gl_screen.c
 +++ b/WinQuake/gl_screen.c
+@@ -103,7 +103,7 @@ int			scr_fullupdate;
+ int			clearconsole;
+ int			clearnotify;
+ 
+-int			sb_lines;
++extern int		sb_lines;
+ 
+ viddef_t	vid;				// global video state
+ 
 @@ -873,6 +873,7 @@ void SCR_UpdateScreen (void)
  	
  	V_RenderView ();
@@ -429,9 +534,18 @@ index 8a0c096..b7c5c07 100644
  
  	//
 diff --git a/WinQuake/gl_warp.c b/WinQuake/gl_warp.c
-index e8b96af..be3039b 100644
+index e8b96af..645174c 100644
 --- a/WinQuake/gl_warp.c
 +++ b/WinQuake/gl_warp.c
+@@ -23,7 +23,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+ 
+ extern	model_t	*loadmodel;
+ 
+-int		skytexturenum;
++extern int	skytexturenum;
+ 
+ int		solidskytexture;
+ int		alphaskytexture;
 @@ -198,6 +198,10 @@ void EmitWaterPolys (msurface_t *fa)
  	int			i;
  	float		s, t, os, ot;
@@ -503,7 +617,7 @@ index f3c253c..66ef6ee 100644
  #define    TEXTURE0_SGIS				0x835E
  #define    TEXTURE1_SGIS				0x835F
 diff --git a/WinQuake/host.c b/WinQuake/host.c
-index 603f6b3..e605bd5 100644
+index 603f6b3..6719f60 100644
 --- a/WinQuake/host.c
 +++ b/WinQuake/host.c
 @@ -37,8 +37,8 @@ quakeparms_t host_parms;
@@ -517,9 +631,84 @@ index 603f6b3..e605bd5 100644
  double		realtime;				// without any filtering or bounding
  double		oldrealtime;			// last frame run
  int			host_framecount;
-@@ -672,7 +672,11 @@ void _Host_Frame (float time)
+@@ -92,6 +92,7 @@ void Host_EndGame (char *message, ...)
+ 	va_list		argptr;
+ 	char		string[1024];
+ 	
++	SE_ServerSettle ();
+ 	va_start (argptr,message);
+ 	vsprintf (string,message,argptr);
+ 	va_end (argptr);
+@@ -123,7 +124,15 @@ void Host_Error (char *error, ...)
+ 	va_list		argptr;
+ 	char		string[1024];
+ 	static	qboolean inerror = false;
+-	
++
++	if (SE_ServerOnWorker ())
++	{
++		va_start (argptr,error);
++		vsprintf (string,error,argptr);
++		va_end (argptr);
++		SE_ServerWorkerError (string);
++	}
++	SE_ServerSettle ();
+ 	if (inerror)
+ 		Sys_Error ("Host_Error: recursively entered");
+ 	inerror = true;
+@@ -410,6 +419,7 @@ void Host_ShutdownServer(qboolean crash)
+ 	char		message[4];
+ 	double	start;
+ 
++	SE_ServerDrop ();
+ 	if (!sv.active)
+ 		return;
+ 
+@@ -599,12 +609,23 @@ void Host_ServerFrame (void)
+ 
+ void Host_ServerFrame (void)
+ {
+-// run the world state	
+-	pr_global_struct->frametime = host_frametime;
++	int		was;
++
++// a worker core may still have the last frame (server_shaderemu.c): the client goes
++// on without this one. Or the last frame has ended, and its messages go now
++	was = SE_ServerTake ();
++	if (was == 2)
++		return;
++	if (was == 1)
++		SV_SendClientMessages ();
++
++// run the world state, over the time since it last ran
++	sv_frametime = SE_ServerFrameTime ();
++	pr_global_struct->frametime = sv_frametime;
+ 
+ // set the time and clear the general datagram
+ 	SV_ClearDatagram ();
+-	
++
+ // check for new clients
+ 	SV_CheckForNewClients ();
+ 
+@@ -613,8 +634,11 @@ void Host_ServerFrame (void)
+ 	
+ // move things around and think
+ // always pause in single player if in console or menus
++// (on a worker core when the machine has one: server_shaderemu.c. The messages go
++// at the end of the frame then, when it has finished)
+ 	if (!sv.paused && (svs.maxclients > 1 || key_dest == key_game) )
+-		SV_Physics ();
++		if (SE_ServerPhysics ())
++			return;
+ 
+ // send all messages to the clients
+ 	SV_SendClientMessages ();
+@@ -671,8 +695,13 @@ void _Host_Frame (float time)
+ // check for commands typed to the host
  	Host_GetConsoleCommands ();
  	
++	SE_ServerClock (host_frametime);
  	if (sv.active)
 +	{
 +		VID_Phase (1);
@@ -529,6 +718,21 @@ index 603f6b3..e605bd5 100644
  
  //-------------------
  //
+@@ -713,9 +742,13 @@ void _Host_Frame (float time)
+ 	
+ 	CDAudio_Update();
+ 
++// the server's frame, if a worker core had it
++	if (SE_ServerFinish () && sv.active)
++		SV_SendClientMessages ();
++
+ 	if (host_speeds.value)
+ 	{
+-		pass1 = (time1 - time3)*1000;
++		pass1= (time1 - time3)*1000;
+ 		time3 = Sys_FloatTime ();
+ 		pass2 = (time2 - time1)*1000;
+ 		pass3 = (time3 - time2)*1000;
 diff --git a/WinQuake/mathlib.c b/WinQuake/mathlib.c
 index 9f5d644..8db04e2 100644
 --- a/WinQuake/mathlib.c
@@ -544,10 +748,19 @@ index 9f5d644..8db04e2 100644
  vec_t Length(vec3_t v)
  {
 diff --git a/WinQuake/pr_cmds.c b/WinQuake/pr_cmds.c
-index 3593bb9..b6a125b 100644
+index 3593bb9..e914c14 100644
 --- a/WinQuake/pr_cmds.c
 +++ b/WinQuake/pr_cmds.c
-@@ -775,7 +775,23 @@ void PF_checkclient (void)
+@@ -19,6 +19,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+ */
+ 
+ #include "quakedef.h"
++#define rand SE_ServerRand	// its own: the client's is the C library's, on another core
++#define host_frametime sv_frametime	// the server's frame is not the client's (server_shaderemu.c)
+ 
+ #define	RETURN_EDICT(e) (((int *)pr_globals)[OFS_RETURN] = EDICT_TO_PROG(e))
+ 
+@@ -775,7 +777,23 @@ void PF_checkclient (void)
  // if current entity can't possibly see the check entity, return 0
  	self = PROG_TO_EDICT(pr_global_struct->self);
  	VectorAdd (self->v.origin, self->v.view_ofs, view);
@@ -607,10 +820,38 @@ index 4f2aa36..9111320 100644
  		if (!a->function)
  			PR_RunError ("NULL function");
 diff --git a/WinQuake/quakedef.h b/WinQuake/quakedef.h
-index e451827..4d79178 100644
+index e451827..1f654a3 100644
 --- a/WinQuake/quakedef.h
 +++ b/WinQuake/quakedef.h
-@@ -296,7 +296,7 @@ extern	cvar_t		sys_nostdout;
+@@ -285,6 +285,27 @@ typedef struct
+ 
+ extern qboolean noclip_anglehack;
+ 
++// server_shaderemu.c: the server's frame on a worker core
++int SE_ServerPhysics (void);
++int SE_ServerFinish (void);
++void SE_ServerSettle (void);
++void SE_ServerDrop (void);
++int SE_ServerTake (void);
++int SE_ServerApart (void);
++void SE_ServerClock (float seconds);
++float SE_ServerFrameTime (void);
++float SE_ServerRate (void);
++void SE_ServerBetween (void);
++void SE_ServerCommand (const char *name);
++extern float sv_frametime;
++void SE_ServerPoll (void);
++int SE_ServerOnWorker (void);
++int SE_ServerRand (void);
++void SE_ServerKeepPrint (const char *text);
++void SE_ServerKeepCommand (const char *text);
++void SE_ServerKeepCvar (const char *name, const char *value);
++void SE_ServerWorkerError (const char *text);
++
+ 
+ //
+ // host
+@@ -296,7 +317,7 @@ extern	cvar_t		sys_nostdout;
  extern	cvar_t		developer;
  
  extern	qboolean	host_initialized;		// true if into command execution
@@ -666,11 +907,52 @@ index 2d4dfeb..e8c3887 100644
  
  extern	edict_t		*sv_player;
  
+diff --git a/WinQuake/sv_main.c b/WinQuake/sv_main.c
+index deda690..8572437 100644
+--- a/WinQuake/sv_main.c
++++ b/WinQuake/sv_main.c
+@@ -20,6 +20,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+ // sv_main.c -- server main program
+ 
+ #include "quakedef.h"
++#define host_frametime sv_frametime	// the server's frame is not the client's (server_shaderemu.c)
+ 
+ server_t		sv;
+ server_static_t	svs;
+@@ -1050,6 +1051,8 @@ void SV_SpawnServer (char *server)
+ 	edict_t		*ent;
+ 	int			i;
+ 
++	SE_ServerDrop ();	// a worker core may have a frame of the level that is going
++
+ 	// let's not have any servers with no name
+ 	if (hostname.string[0] == 0)
+ 		Cvar_Set ("hostname", "UNNAMED");
+diff --git a/WinQuake/sv_move.c b/WinQuake/sv_move.c
+index a0078b9..75a4363 100644
+--- a/WinQuake/sv_move.c
++++ b/WinQuake/sv_move.c
+@@ -20,6 +20,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+ // sv_move.c -- monster movement
+ 
+ #include "quakedef.h"
++#define rand SE_ServerRand	// its own: the client's is the C library's, on another core
+ 
+ #define	STEPSIZE	18
+ 
 diff --git a/WinQuake/sv_phys.c b/WinQuake/sv_phys.c
-index e13c0e4..c4459d3 100644
+index e13c0e4..c0acf63 100644
 --- a/WinQuake/sv_phys.c
 +++ b/WinQuake/sv_phys.c
-@@ -1198,6 +1198,9 @@ SV_CheckWaterTransition
+@@ -20,6 +20,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+ // sv_phys.c
+ 
+ #include "quakedef.h"
++#define host_frametime sv_frametime	// the server's frame is not the client's (server_shaderemu.c)
+ 
+ /*
+ 
+@@ -1198,6 +1199,9 @@ SV_CheckWaterTransition
  void SV_CheckWaterTransition (edict_t *ent)
  {
  	int		cont;
@@ -680,6 +962,18 @@ index e13c0e4..c4459d3 100644
  #ifdef QUAKE2
  	vec3_t	point;
  	
+diff --git a/WinQuake/sv_user.c b/WinQuake/sv_user.c
+index 1163949..876613d 100644
+--- a/WinQuake/sv_user.c
++++ b/WinQuake/sv_user.c
+@@ -20,6 +20,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+ // sv_user.c -- server code for moving users
+ 
+ #include "quakedef.h"
++#define host_frametime sv_frametime	// the server's frame is not the client's (server_shaderemu.c)
+ 
+ edict_t	*sv_player;
+ 
 diff --git a/WinQuake/world.c b/WinQuake/world.c
 index e1acfea..f755b41 100644
 --- a/WinQuake/world.c

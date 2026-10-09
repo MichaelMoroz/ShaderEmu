@@ -64,6 +64,7 @@ workers and checks them (`programs\mc\build.bat`, then `python tools\make_linux_
 | stripe | three workers fill one buffer, every third 16 bytes each: no store undoes a neighbour's |
 | sum | each worker reads what the other two wrote |
 | pages | a worker writes and reads 64 pages nobody has touched: 64 stops, each answered by core 0 in two passes |
+| floats | float arithmetic kept in registers over many passes gives what it gives on core 0 |
 | park | `ebreak` parks them; the next run starts them again |
 
 All pass. With four cores and the workers parked, Linux boots in the same number of
@@ -313,6 +314,24 @@ core 0 and three workers into a picture the GPU shows, and played in 18.6 s wher
 41.4. It is the kind of work the workers are for: every pixel stored once, and a core keeps
 only 6 KB of stores a pass. The window system's pool of window buffers ends below the
 mailbox page (`POOL_SIZE` in `linux/nanox/scr_shaderemu.c`).
+
+## A use: Quake's server
+
+`docs/quake.md` ("The server on a worker core"; `linux/quake/server_shaderemu.c`): a part of
+a program's own logic on a worker, which only a worker in the program's memory can have. The
+server's physics and QuakeC run on a worker as the function they are, and the client draws at
+its own pace from what the server last sent: 12.6 frames a second where the game drew 4.85.
+What it took is the list of what two cores have in common in a program written for one:
+
+- console output, commands and settings made by the server's code (kept, and done by core 0);
+- errors that leave by `longjmp` (caught on the worker, raised on core 0);
+- the C library's `rand` (the server has its own);
+- a time step both sides read (the server has its own);
+- variables side by side in one 16 bytes (every variable its own section, aligned to 16);
+- commands typed at the console that reach into the server (they wait for its frame).
+
+And a way to know it is right: the same job run on core 0 in the same order (`QUAKE_SERVER=late`)
+gives the same sums over the server's state as on the worker.
 
 ## What the cores did, for the guest and the host
 

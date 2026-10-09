@@ -697,6 +697,16 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   `nano-X -p &` and `QUAKE_HOLD=120 quake +map e1m1` and wait for `quake: holding`: about a
   minute, with `quakestat:` lines that split a frame's instructions by what they were for.
   Lines typed at its terminal are console commands.
+- Quake's server runs on a worker core when the machine has one (`docs/quake.md`, "The server
+  on a worker core"): after a change to the server's side or to the workers, run
+  `QUAKE_SUM=10 QUAKE_HOLD=130 quake +host_framerate 0.05 +map e1m5` with `--cores 2 --fixed-dt
+  0.004` three times, with `QUAKE_SERVER=inline`, `late` and `wait`: the sums must be the
+  same. Server code that a worker runs must not print, run commands, set cvars or use the C
+  library's `rand` except through what `server_shaderemu.c` gives it.
+- A sum over a game's state must leave out pointers and what depends on them: an offset from
+  the heap to a global moved with the environment's size (one more variable set), and two
+  runs that did the same looked different from their first frame.
+- Never more than three harness runs at once: four took 264 s where one takes 70.
 - Its changes to id's source are `linux/quake/quake.patch`: edit a clean clone at the commit
   `build.sh` names and save `git diff -- WinQuake`. The build puts the tree back each time.
 - A window's own pixels are in a snapshot: the display's layer table (address in

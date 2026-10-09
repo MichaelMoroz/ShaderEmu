@@ -131,6 +131,57 @@ half is its light maps being placed (`AllocBlock`, a third) and the kept level b
     -nokeep             draw the level a polygon at a time, as before it was kept
     QUAKE_DEFINES=-DSE_COUNT    (to build.sh) counts of the server's work in the quakestat: lines
 
+## The server on a worker core
+
+A frame of a single-player game is the server's (physics, the monsters' QuakeC) and then the
+client's (the picture). On e1m5 the server's part was 355 of a frame's 515 thousand
+instructions. On a machine with worker cores (`docs/multicore.md`; `--cores 2` in the harness)
+the server's physics runs on one, as a function of the game in the game's own memory
+(`linux/quake/server_shaderemu.c`), and the two go at their own pace:
+
+- **The client does not wait.** When the server's frame is still out, the client's frame goes
+  on without one: it draws from the server's last two answers, moving things between them,
+  which is what Quake's client does in a network game (the game only switched that off for a
+  server in the same program). When the server's frame has ended its messages are sent, and
+  the next is begun with the moves the client made meanwhile.
+- **The server's frame has its own length** (`sv_frametime`: the time since its last one began,
+  0.1 s of the game at most, as a frame of the game always was). Where that limit holds, the
+  game's time goes slower than the clock, as it did before, and the client's time goes at
+  the same rate between the server's frames.
+- **The server keeps to its own data.** Console lines, commands and cvar changes that QuakeC
+  makes on the worker are kept and done by the first core afterwards; an error there ends
+  the job and is raised on the first core; the server's random numbers are its own (the C
+  library's have one state, which the client uses too). A console command that may be the
+  server's (anything but the keys' and the like) waits for the server's frame to end.
+  Loading, leaving and demos are on the first core, as they were.
+- **Every variable has its own 16 bytes** (`-fno-common -fdata-sections`, and the sections
+  aligned by `objcopy` in `build.sh`): two cores must not store to the same 16 bytes in one
+  pass of the machine, and a variable of the server's beside one of the client's would be
+  that.
+
+On e1m5, standing where the level starts, in real time (RTX 5090, harness, D3D11):
+
+| | Frames a second | Server frames a second | The first core's frame |
+|---|---|---|---|
+| server on the first core (`QUAKE_SERVER=inline`, or no worker cores) | 4.85 | 4.85 | 515 thousand instructions |
+| server on a worker, the client waiting for it (`QUAKE_SERVER=wait`) | 6.3 | 6.3 | 211 thousand, and 9 passes of waiting |
+| server on a worker, each at its own pace (the default) | 12.6 | 5.6 | 169 thousand |
+
+Of 50 frames drawn, 47 are between two of the server's. A pass of the machine with a busy
+worker costs about 5% more than without, which those figures include.
+
+    QUAKE_SERVER=inline   the server on the first core
+    QUAKE_SERVER=late     on the first core, its messages sent at the end of the client's frame
+    QUAKE_SERVER=wait     on a worker, the client's frame waiting for it at its end
+    QUAKE_SUM=N           a sum over every entity's fields each N frames of the server
+
+`late` and `wait` do the same things in the same order, one on a core and one on two. With
+`+host_framerate 0.05` (a frame's length is then not the machine's speed) and `--fixed-dt
+0.004`, `QUAKE_SUM=10` must print the same sums with `inline`, `late` and `wait`: that is the
+check that the server on a worker computes what it computed on the first core. The default
+cannot be checked so (how many frames the client draws to one of the server's is the
+machine's speed); it runs the same job.
+
 ## Checking it
 
 - The GPU against its model: hold a frame, pass `--save-state` and `--gpu-capture`, and run

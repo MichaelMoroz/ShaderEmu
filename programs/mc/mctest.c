@@ -5,6 +5,7 @@
 //   fill     each worker fills a buffer of its own; core 0 checks every word
 //   stripe   three workers fill one buffer between them, every third 16 bytes each
 //   sum      the workers read back what the others wrote
+//   floats   float arithmetic over many passes gives what it gives on core 0
 //   pages    a worker reads and writes memory the program has never touched: every page of it
 //            stops the worker, and the library brings the page and lets it go on
 //
@@ -79,6 +80,20 @@ static uint32_t pages(uint32_t bytes_at, uint32_t bytes) {
     for (uint32_t i = 0; i < bytes / 4; i += 1024) p[i] = i + 7;
     for (uint32_t i = 0; i < bytes / 4; i += 1024) total += p[i] + p[i + 1];
     return total;
+}
+
+// Floats kept in registers over many passes; the sum's bits.
+static uint32_t floats(uint32_t count, uint32_t seed) {
+    float a = (float)seed, b = 0.5f, c = 1.0f;
+    union { float f; uint32_t u; } bits;
+    for (uint32_t i = 0; i < count; i++) {
+        a = a * 0.99999f + b;
+        b = b * 1.0001f + c * 0.001f;
+        c = c + a * 0.000001f;
+        if (b > 100.0f) b -= 99.5f;
+    }
+    bits.f = a + b + c;
+    return bits.u;
 }
 
 // ---- core 0 ----
@@ -210,6 +225,21 @@ int main(int argc, char** argv) {
         int passes = mcw_wait(1);
         printf("mctest: pages: %u of them brought for the worker in %d passes\n", mcw_faults - before, passes);
         check("pages", fresh != MAP_FAILED && mcw_result(1) == expect && mcw_faults - before >= 64);
+    }
+
+    // ---- floats: a worker's float registers are its own, and last from pass to pass ----
+    {
+        int ok = 1;
+        for (int k = 1; k <= workers; k++) mcw_post(k, floats, limit * 4, (uint32_t)k);
+        for (int k = 1; k <= workers; k++) {
+            uint32_t here = floats(limit * 4, (uint32_t)k);
+            mcw_wait(k);
+            if (mcw_result(k) != here) {
+                printf("mctest: floats: worker %d has %08x, core 0 %08x\n", k, mcw_result(k), here);
+                ok = 0;
+            }
+        }
+        check("floats", ok);
     }
 
     mcw_close();   // parked: the next program starts them again

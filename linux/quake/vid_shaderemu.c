@@ -101,6 +101,7 @@ static unsigned cycles (void)
  * is in view, 3 drawing it, 4 models, 5 particles and the weapon, 6 the 2D screen and the swap.
  */
 static unsigned phase, phase_since, phase_cycles[7];
+extern unsigned se_server_cycles, se_server_frames, se_server_passes, se_server_between;	/* server_shaderemu.c */
 #ifdef SE_COUNT
 unsigned se_count[10];	/* what the server did, counted where it does it (quake.patch) */
 #endif
@@ -109,6 +110,7 @@ void VID_Phase (int next)
 {
 	unsigned now = cycles ();
 
+	SE_ServerPoll ();	/* a worker core with the server's frame may want a page */
 	phase_cycles[phase] += now - phase_since;
 	phase = next;
 	phase_since = now;
@@ -149,6 +151,11 @@ void GL_EndRendering (void)
 			printf ("quakestat: a frame in thousands: server %u, in view %u, level %u, models %u, particles and weapon %u, 2D and swap %u, rest %u\n",
 				c[1] / n / 1000, c[2] / n / 1000, c[3] / n / 1000, c[4] / n / 1000, c[5] / n / 1000, c[6] / n / 1000, c[0] / n / 1000);
 			memset (phase_cycles, 0, sizeof phase_cycles);
+			if (se_server_frames) {
+				printf ("quakestat: the server on a worker core: %u frames of its own to these %u (%u drawn between two of them), %u thousand instructions each, %u.%u passes waited for one\n",
+					se_server_frames, n, se_server_between, se_server_cycles / se_server_frames / 1000, se_server_passes / se_server_frames, se_server_passes * 10 / se_server_frames % 10);
+				se_server_cycles = se_server_frames = se_server_passes = se_server_between = 0;
+			}
 #ifdef SE_COUNT
 			printf ("quakestat: a frame's server: %u point tests of %u nodes, %u moves, %u point contents, %u links, %u QuakeC calls of %u statements; %u water and %u sky vertices\n",
 				se_count[0] / n, se_count[1] / n, se_count[2] / n, se_count[3] / n, se_count[4] / n, se_count[5] / n, se_count[6] / n,
