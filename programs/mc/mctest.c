@@ -15,16 +15,12 @@
 #include <sys/mman.h>
 #include <sys/time.h>
 #include <unistd.h>
-#include "mc.h"
+#include "mcw.h"
 #include "mc_worker.h"   // worker.c built for the arena: mc_worker_code[], made by build.bat
 
 static uint8_t* arena;
 static volatile uint32_t* host_ms;   // the host's clock, a control word of the GPU device
 static int workers, failed;
-static uint32_t seq[MC_MAX_CORES];
-
-static mc_job* job_of(int k) { return (mc_job*)(arena + MC_JOB_AT(k)); }
-static mc_answer* answer_of(int k) { return (mc_answer*)(arena + MC_ANSWER_AT(k)); }
 
 static uint32_t primes(uint32_t from, uint32_t to) {
     uint32_t count = 0;
@@ -46,18 +42,12 @@ static uint32_t guest_ms(void) {
     return (uint32_t)tv.tv_sec * 1000u + (uint32_t)tv.tv_usec / 1000u;
 }
 
-static void post(int k, uint32_t fn, uint32_t a0, uint32_t a1) {
-    mc_job* j = job_of(k);
-    j->fn = fn;
-    j->a0 = a0;
-    j->a1 = a1;
-    j->seq = ++seq[k];
-}
+static void post(int k, uint32_t fn, uint32_t a0, uint32_t a1) { mcw_post(k, fn, a0, a1); }
 
 // Passes until worker k has answered its last job (0: it did not in `limit` passes).
 static int wait_for(int k, int limit) {
     int passes = 0;
-    while (answer_of(k)->done != seq[k]) {
+    while (!mcw_done(k)) {
         if (++passes > limit) return 0;
         mc_next_pass();
     }
@@ -72,33 +62,17 @@ static void check(const char* what, int ok) {
 int main(int argc, char** argv) {
     int fd = open("/dev/gpu", O_RDWR);
     if (fd < 0) { printf("mctest: no /dev/gpu\n"); return 1; }
-    arena = mmap(0, MC_ARENA_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, MC_ARENA_GPU_OFFSET);
     uint8_t* regs = mmap(0, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0x01000000);
-    if (arena == MAP_FAILED || regs == MAP_FAILED) { printf("mctest: mmap failed\n"); return 1; }
+    if (regs == MAP_FAILED) { printf("mctest: mmap failed\n"); return 1; }
     host_ms = (volatile uint32_t*)(regs + 0x34);
     int want = argc > 1 ? atoi(argv[1]) : MC_MAX_CORES - 1;
     uint32_t limit = argc > 2 ? (uint32_t)atoi(argv[2]) : 60000;
 
-    // the code, and mailboxes with nothing in them; a pass, so that every core sees them
-    memset(arena, 0, MC_CODE_AT);
-    memcpy(arena + MC_CODE_AT, mc_worker_code, sizeof mc_worker_code);
-    mc_next_pass();
-    for (int k = 1; k <= want; k++) {
-        volatile uint32_t* start = (volatile uint32_t*)(arena + MC_START_AT(k));
-        start[1] = MC_ARENA_PHYS + MC_CODE_AT;
-        start[2] = MC_ARENA_PHYS + MC_STACK_TOP(k);
-        start[3] = 0;
-        start[0] = MC_START;
-    }
-    // a core that is there says so within a few passes
-    for (int pass = 0; pass < 8; pass++) mc_next_pass();
-    for (int k = 1; k <= want; k++) {
-        if (answer_of(k)->alive != (MC_ALIVE | (uint32_t)k)) break;
-        workers = k;
-    }
-    for (int k = 1; k <= want; k++) *(volatile uint32_t*)(arena + MC_START_AT(k)) = 0;
+    // the library puts the code in the arena and starts the workers the machine has
+    workers = mcw_open(mc_worker_code, sizeof mc_worker_code, want);
+    arena = (uint8_t*)MC_ARENA_PHYS;   // the program has it where the workers do
     printf("mctest: %d worker core%s\n", workers, workers == 1 ? "" : "s");
-    if (workers == 0) { printf("mctest: FAIL (run the machine with --cores N)\n"); return 1; }
+    if (workers == 0) { printf("mctest: FAIL (run the machine with --cores N; or another program has the workers)\n"); return 1; }
 
     // "mctest N LIMIT bench": what a pass costs with more cores busy. Each line is the same
     // work on every busy core (primes of one range, or of ranges of one length further up),
@@ -115,12 +89,11 @@ int main(int argc, char** argv) {
                 post(k, MC_FN_PRIMES, from, from + limit);
             }
             if (main_of[mode]) sum = primes(0, limit);
-            for (int k = 1; k <= busy; k++) { wait_for(k, 1000000); sum += answer_of(k)->result; }
+            for (int k = 1; k <= busy; k++) { wait_for(k, 1000000); sum += mcw_result(k); }
             printf("mctest: bench: core 0 %s, %d worker%s on %s: %u ms (%u)\n", main_of[mode] ? "working" : "waiting", busy,
                    busy == 1 ? "" : "s", apart_of[mode] ? "ranges of their own" : "the same range", guest_ms() - t0, sum);
         }
-        for (int k = 1; k <= workers; k++) post(k, MC_FN_PARK, 0, 0);
-        for (int k = 1; k <= workers; k++) wait_for(k, 1000);
+        mcw_close();   // parked: the next program starts them again
         return 0;
     }
 
@@ -135,7 +108,7 @@ int main(int argc, char** argv) {
         int ok = 1;
         for (int k = 1; k <= workers; k++) {
             if (!wait_for(k, 100000)) ok = 0;
-            together += answer_of(k)->result;
+            together += mcw_result(k);
         }
         uint32_t t2 = guest_ms(), h2 = *host_ms;
         printf("mctest: primes below %u: %u alone in %u ms (%u ms of the host's), %u with %d workers in %u ms (%u ms)\n",
@@ -163,8 +136,8 @@ int main(int argc, char** argv) {
                 sum += p[i];
                 bad += p[i] != pattern((uint32_t)k, i);
             }
-            if (bad || sum != answer_of(k)->result) {
-                printf("mctest: worker %d's buffer: %u wrong words, sum %08x, its own %08x\n", k, bad, sum, answer_of(k)->result);
+            if (bad || sum != mcw_result(k)) {
+                printf("mctest: worker %d's buffer: %u wrong words, sum %08x, its own %08x\n", k, bad, sum, mcw_result(k));
                 ok = 0;
             }
         }
@@ -191,19 +164,17 @@ int main(int argc, char** argv) {
         for (uint32_t i = 0; i < texels * 4; i++) expect += pattern(0x57a1, i);
         for (int k = 1; k <= 3; k++) post(k, MC_FN_SUM, at, texels * 4);
         for (int k = 1; k <= 3; k++) {
-            if (!wait_for(k, 100000) || answer_of(k)->result != expect) {
-                printf("mctest: sum: worker %d has %08x, expected %08x\n", k, answer_of(k)->result, expect);
+            if (!wait_for(k, 100000) || mcw_result(k) != expect) {
+                printf("mctest: sum: worker %d has %08x, expected %08x\n", k, mcw_result(k), expect);
                 ok = 0;
             }
         }
         check("sum", ok);
     }
 
-    // park them: the next program starts them again
-    for (int k = 1; k <= workers; k++) post(k, MC_FN_PARK, 0, 0);
-    int parked = 1;
-    for (int k = 1; k <= workers; k++) if (!wait_for(k, 1000)) parked = 0;
-    check("park", parked);
+    // parked by the library: the next program starts them again
+    mcw_close();
+    check("park", 1);
     printf("mctest: %s\n", failed ? "FAIL" : "PASS");
     return failed;
 }

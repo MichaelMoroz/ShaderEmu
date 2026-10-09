@@ -67,8 +67,9 @@ a pass (its write cache: `docs/multicore.md`).
   `linux/tdawn/host.c`): decoded once, into GPU memory, and drawn from there, stretched over
   the window if it is one of the small movies. No copy and no doubling by the game.
 - **The worker cores decode it** when the machine has any (`--cores 4` in the harness;
-  `linux/ralert/workers.c` is the game's side, `worker.c` what the workers run, built bare for
-  the arena and carried in the game as bytes). A frame's block rows are shared between the
+  `linux/ralert/workers.c` is the game's jobs over the library every program has for them,
+  `programs/mc/mcw.c`, and `worker.c` what the workers run, built bare for the arena and
+  carried in the game as bytes). A frame's block rows are shared between the
   cores, each writing its own rows of the picture, and the last worker unpacks the next
   frame's block pointers (LCW) while this one is drawn: the player loads a frame ahead for
   that. The movie's codebooks and pointers are allocated in the arena, which the game maps
@@ -90,6 +91,26 @@ the workers; the whole 300-frame check 123 s to 106 s, with the same state sum. 
 a frame now is stores, not instructions: 16,000 texels of picture and 2,000 of pointers a
 frame, 384 a pass a core. In the mission itself the workers do nothing yet, and their being
 there costs it 4 to 8% (14.1 game frames a second where one core has 14.5).
+
+## The mission's frame
+
+Found with a profile of the mission alone (a snapshot at `ralert: begun`, resumed with
+`--pc-log` and `--ra-log`; `tools/pc_profile.py`, `tools/pc_callers.py` for who calls a leaf
+function, `tools/pc_hot_in.py` for where in a function):
+
+- **A house whose teams can want nothing does not count its units for them.** Every house,
+  twenty of them, counted its infantry, units and vessels against what its teams want, every
+  frame: a thousand instructions a kind a house. What the team types that are built ahead
+  ask for is found once a scenario (they do not change), and a house with none of those and
+  no team in play skips the counting. 600 frames of the Soviet mission were 512M
+  instructions from the command and are 493M: 30k a game frame, a tenth of it. The state
+  sums are the same (`01e0dd60` and `ea72a5d1` at frame 300, `fdfd5447` for the Soviet
+  mission at frame 600).
+
+What the profile shows after that, of a frame of some 275k: the map's scene a quarter (the
+cells' loop 10%, a rectangle's way into the list another 10%), shapes drawn into the atlas
+the first time they are seen 7% (it falls as the atlas fills), the kernel's clock tick 7%,
+looking for targets 5%, and nothing else above 2%.
 
 ## Speed
 

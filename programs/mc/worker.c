@@ -1,6 +1,5 @@
-// What a worker core runs (docs/multicore.md): bare metal, linked at the arena's MC_CODE_AT,
-// started by the machine at mc_worker with its stack set and its core number in a1. It takes
-// jobs from its mailbox and ends its pass with wfi when there is none.
+// What mctest's worker cores run (docs/multicore.md): the jobs, around which mcw_worker.h puts
+// the entry and the loop every program's workers have. Bare metal, linked at the arena's MC_CODE_AT.
 #include "mc.h"
 
 #define ARENA(at) ((void*)(MC_ARENA_PHYS + (at)))
@@ -51,30 +50,12 @@ uint32_t mc_stripe(uint32_t at, uint32_t texels, uint32_t which) {
     return sum;
 }
 
-__attribute__((section(".text.start"), noreturn)) void mc_worker(uint32_t arg, uint32_t core) {
-    mc_job* job = ARENA(MC_JOB_AT(core));
-    mc_answer* answer = ARENA(MC_ANSWER_AT(core));
-    uint32_t last = job->seq;
-    (void)arg;
-    answer->done = last;
-    answer->alive = MC_ALIVE | core;
-    for (;;) {
-        uint32_t seq = job->seq;
-        if (seq != last) {
-            uint32_t fn = job->fn, a0 = job->a0, a1 = job->a1, result = 0;
-            if (fn == MC_FN_PARK) {
-                answer->alive = 0;
-                answer->done = seq;
-                __asm__ volatile("ebreak");   // the machine parks this core; its stores are kept
-            }
-            else if (fn == MC_FN_PRIMES) result = mc_primes(a0, a1);
-            else if (fn == MC_FN_FILL) result = mc_fill(a0, a1, core);
-            else if (fn == MC_FN_SUM) result = mc_sum(a0, a1);
-            else if (fn == MC_FN_STRIPE) result = mc_stripe(a0, a1, core - 1);
-            answer->result = result;
-            answer->done = seq;
-            last = seq;
-        }
-        __asm__ volatile("wfi");   // nothing changes until the next pass
-    }
+static uint32_t worker_job(uint32_t fn, uint32_t a0, uint32_t a1, uint32_t core) {
+    if (fn == MC_FN_PRIMES) return mc_primes(a0, a1);
+    if (fn == MC_FN_FILL) return mc_fill(a0, a1, core);
+    if (fn == MC_FN_SUM) return mc_sum(a0, a1);
+    if (fn == MC_FN_STRIPE) return mc_stripe(a0, a1, core - 1);
+    return 0;
 }
+
+#include "mcw_worker.h"   // the entry and the loop that takes jobs

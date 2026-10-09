@@ -341,15 +341,16 @@ index 28f9dc5..76a18eb 100644
              if (config->DrawFlags & 2) {
                  data->Flags |= VQA_DATA_FLAG_8;
 diff --git a/redalert/CMakeLists.txt b/redalert/CMakeLists.txt
-index 60a3e85..60b099e 100644
+index 60a3e85..1bfb5f2 100644
 --- a/redalert/CMakeLists.txt
 +++ b/redalert/CMakeLists.txt
-@@ -35,6 +35,8 @@ set(REDALERT_SRC
+@@ -35,6 +35,9 @@ set(REDALERT_SRC
      dibfile.cpp
      dibutil.cpp
      display.cpp
 +    gl.cpp
 +    workers.c
++    mcw.c
      door.cpp
      drive.cpp
      drop.cpp

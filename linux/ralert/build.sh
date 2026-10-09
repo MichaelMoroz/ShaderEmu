@@ -24,9 +24,10 @@ git -C "$VC" apply "$TD/vanilla-conquer.patch"
 [ ! -s "$HERE/vanilla-conquer.patch" ] || git -C "$VC" apply "$HERE/vanilla-conquer.patch"
 cp "$TD/cxxrt.cpp" "$TD/shaderemu.cpp" "$TD/soundio_shaderemu.cpp" "$TD/host.c" "$TD/host.h" "$VC/common/"
 cp "$HERE/gl.cpp" "$VC/redalert/"
-# The worker cores' side (docs/multicore.md): workers.c is the game's, worker.c what the workers
+# The worker cores' side (docs/multicore.md): mcw.c is the library every program has for them,
+# workers.c the game's jobs over it, worker.c what the workers
 # run, built bare for the arena's address and carried in the game as bytes.
-cp "$HERE/workers.c" "$HERE/workers.h" "$REPO/programs/mc/mc.h" "$VC/redalert/"
+cp "$HERE/workers.c" "$HERE/workers.h" "$REPO/programs/mc/mc.h" "$REPO/programs/mc/mcw.h" "$REPO/programs/mc/mcw.c" "$VC/redalert/"
 riscv32-linux-gcc -march=rv32ima -mabi=ilp32 -O2 -ffreestanding -fno-builtin -fno-pie -no-pie -nostdlib -static \
     -fno-stack-protector -Wl,--build-id=none -Wl,-T,"$REPO/programs/mc/worker.ld" -I"$REPO/programs/mc" -I"$HERE" \
     "$HERE/worker.c" -o "$WORK/src/ralert-worker.elf"

@@ -745,6 +745,13 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   and save `git diff` as `linux\ralert\vanilla-conquer.patch`.
   (`linux\ralert\build.sh` puts the tree back without that `git add`: a `git diff` saved after
   a build has Tiberian Dawn's patch in it too, and the next build fails on it.)
+- A program that uses the worker cores links `programs/mc/mcw.c` and gives it its jobs as a
+  bare file built around `mcw_worker.h` (`docs/multicore.md`, "Using the workers from a
+  program"): do not copy the start and the mailboxes into a program again. `mctest` is the
+  library's test: it must print `mctest: PASS` before and after any other program that used
+  the workers in the same boot.
+- To see where a guest's leaf functions are called from, `--ra-log FILE` and
+  `python tools\pc_callers.py FILE game=prog.nm`; where inside a function, `tools\pc_hot_in.py`.
 - Red Alert uses the machine's worker cores for its movies when there are any (`--cores 4`;
   `docs/ralert.md`, `docs/multicore.md`): `RALERT_MOVIE_CHECK=1` must say `0 of N shared frames
   differ`, and the state sums above hold with and without them. Run a timing both ways: the

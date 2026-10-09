@@ -1,8 +1,9 @@
 /*
- * What Red Alert's worker cores run (docs/ralert.md, docs/multicore.md): bare metal, linked at
- * the arena's MC_CODE_AT, started by the machine at mc_worker with a stack and its core number.
- * A worker has no paging: everything it touches is in the arena, which the game maps at the
- * address it has here. One job so far: a share of a movie frame's blocks.
+ * What Red Alert's worker cores run (docs/ralert.md, docs/multicore.md): its jobs, around which
+ * programs/mc/mcw_worker.h puts the entry and the loop. Bare metal, linked at the arena's
+ * MC_CODE_AT. A worker has no paging: everything it touches is in the arena, which the game
+ * has at the address it has here, or is given by its physical address. The jobs: a share of
+ * a movie frame's blocks, and a frame's block pointers unpacked.
  */
 #include "mc.h"
 #include "workers.h"
@@ -85,31 +86,14 @@ static void lcw(const struct workers_lcw *job)
 	}
 }
 
-__attribute__((section(".text.start"), noreturn)) void mc_worker(uint32_t arg, uint32_t core)
+static uint32_t worker_job(uint32_t fn, uint32_t a0, uint32_t a1, uint32_t core)
 {
-	mc_job *job = (mc_job *)(MC_ARENA_PHYS + MC_JOB_AT(core));
-	mc_answer *answer = (mc_answer *)(MC_ARENA_PHYS + MC_ANSWER_AT(core));
-	uint32_t last = job->seq;
-
-	(void)arg;
-	answer->done = last;
-	answer->alive = MC_ALIVE | core;
-	for (;;) {
-		uint32_t seq = job->seq;
-		if (seq != last) {
-			uint32_t fn = job->fn, a0 = job->a0, a1 = job->a1;
-			if (fn == MC_FN_PARK) {
-				answer->alive = 0;
-				answer->done = seq;
-				__asm__ volatile("ebreak");	/* the machine parks this core */
-			} else if (fn == WORKERS_FN_UNVQ) {
-				unvq_rows((const struct workers_unvq *)a0, a1 >> 16, a1 & 0xffff);
-			} else if (fn == WORKERS_FN_LCW) {
-				lcw((const struct workers_lcw *)a0);
-			}
-			answer->done = seq;
-			last = seq;
-		}
-		__asm__ volatile("wfi");	/* nothing changes until the next pass */
-	}
+	(void)core;
+	if (fn == WORKERS_FN_UNVQ)
+		unvq_rows((const struct workers_unvq *)a0, a1 >> 16, a1 & 0xffff);
+	else if (fn == WORKERS_FN_LCW)
+		lcw((const struct workers_lcw *)a0);
+	return 0;
 }
+
+#include "mcw_worker.h"	/* the entry and the loop that takes jobs: every program's workers have it */

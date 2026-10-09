@@ -41,8 +41,8 @@ parked it.
 
 ## The test (`programs/mc`)
 
-`worker.c` is what a worker runs, linked at the arena; `mctest.c` is a Linux program that
-carries it, starts the workers and checks them (`programs\mc\build.bat`, then
+`worker.c` is the test's jobs, linked at the arena; `mctest.c` is a Linux program that
+carries them, has the library start the workers and checks them (`programs\mc\build.bat`, then
 `python tools\make_linux_image.py`):
 
 | Test | What it shows |
@@ -207,9 +207,83 @@ and waiting, and at about 3,900k on one core.
 pass does not draw is two passes old in the buffer it draws into, here and in Unity: the
 copy back, or the commit that reads it, would have to know.)
 
+## Using the workers from a program
+
+`programs/mc` is everything a Linux program needs, and is the same for every program:
+
+| File | What it is |
+|---|---|
+| `mc.h` | the arena's layout and the mailboxes: what the machine, the library and a worker agree on |
+| `mcw.h`, `mcw.c` | the library a program links: the arena, the workers' start, jobs, the wait |
+| `mcw_worker.h` | the entry and the loop a worker runs, around the program's own jobs |
+| `worker.ld` | links a worker's code to run in the arena |
+| `worker.c`, `mctest.c` | the test: its jobs, and the program that gives them out |
+
+A program supplies two things. Its **jobs**, in a file of its own that is built bare (no
+library, no paging, no float instructions, `-march=rv32ima`) and carried in the program as
+bytes:
+
+    #include "mc.h"
+    static uint32_t worker_job(uint32_t fn, uint32_t a0, uint32_t a1, uint32_t core) {
+        if (fn == MY_SUM) return sum((const uint32_t *)a0, a1);
+        return 0;
+    }
+    #include "mcw_worker.h"
+
+and the **calls** that give them out:
+
+    int n = mcw_open(worker_code, sizeof worker_code, 3);    // how many workers there are: 0 without --cores
+    uint32_t *data = mcw_alloc(bytes);                        // arena memory: the same address for a worker
+    ...fill data...
+    for (k = 1; k <= n; k++) mcw_post(k, MY_SUM, (uint32_t)part(k), words(k));
+    ...this core's own share...
+    for (k = 1; k <= n; k++) { mcw_wait(k); total += mcw_result(k); }
+    mcw_close();                                              // before leaving: atexit(mcw_close) will do
+
+`programs/mc/build.bat` and `linux/ralert/build.sh` show the two builds (clang with the small
+runtime, and the image's toolchain).
+
+What a program has to keep to:
+
+- **A worker sees only the arena and what it is given by physical address.** It has no paging:
+  a pointer into the program's own memory means nothing to it. What a job reads or writes is
+  allocated with `mcw_alloc()` (4 MiB in all, less the first megabyte), or is GPU memory, whose
+  physical address the program passes (`seglAddress()`: a picture, a texture).
+- **A store is seen by the other cores one pass later.** `mcw_post()` followed by this core's
+  own work is the usual order: the pass that ends next carries the job and its data over
+  together. `mcw_wait()` ends passes until the worker has answered.
+- **Sixteen bytes, one writer a pass.** Give each core whole texels: rows of a picture whose
+  width is a multiple of 16, buffers from `mcw_alloc()` (they are 16 bytes aligned). A header
+  that this core writes must not share its last 16 bytes with data a worker writes.
+- **A worker keeps 6 KB of stores a pass**, as core 0 does, and runs on until its job is done
+  however many passes that takes. For work that is all stores, the cores' number is the gain.
+- **One program at a time.** The arena carries its owner's process number; `mcw_open()` gives 0
+  while another program that is still alive has it, and a program that gets 0 does the work
+  itself.
+- **No workers is the common case**: Unity runs one core, and so does the harness without
+  `--cores`. Every use has to fall back on the program doing the job itself.
+
+What it is good for, and what not:
+
+- **Work that is the same for many pieces of data and writes much**: decoding, unpacking,
+  filling, scaling, mixing. Red Alert's movies are the example (below): rows of a frame to each
+  core, and the next frame unpacked ahead on a worker of its own.
+- **A pipeline a frame ahead**: what the next step needs is begun on a worker while this core
+  does the present one, and waited for only when it is needed (`workers_lcw` in
+  `linux/ralert/workers.c`).
+- **Not a program's own logic as it stands.** A game's objects are in its own memory, which a
+  worker cannot reach, and its code expects to see its own stores at once. To give a worker
+  such work its data has to be moved into the arena, or copied there for the job.
+- **Not small jobs.** Giving a job out and taking the answer costs a pass or two (some
+  milliseconds): below some tens of thousands of instructions the core does it sooner itself.
+
+What it costs: nothing to speak of while the workers sleep; 5% of a pass for the first busy
+one and 17% for three; and the commit pass looks a RAM texel up in each busy core's cache.
+
 ## A use: Red Alert's movies
 
-`docs/ralert.md` ("Movies, and the worker cores"): the opening movie's frames are decoded by
+`docs/ralert.md` ("Movies, and the worker cores"; `linux/ralert/workers.c` and `worker.c` over the
+library above): the opening movie's frames are decoded by
 core 0 and three workers into a picture the GPU shows, and played in 18.6 s where they took
 41.4. It is the kind of work the workers are for: every pixel stored once, and a core keeps
 only 6 KB of stores a pass. The window system's pool of window buffers ends 4 MiB lower for
