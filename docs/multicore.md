@@ -123,10 +123,40 @@ The earlier figure that 4,096 pixels of one block running the whole tick cost on
 more than 973 does not fit this and is not to be relied on: those extra pixels' results were
 thrown away, and the driver may have dropped most of their work.
 
+## The state as one rectangle (`--define STATE_PACK`)
+
+Idle pixels of a warp take their share: in `warpbench --live 64 --only shape`, 4,096 busy
+pixels as four 32 x 32 blocks, 128 x 8 strips or 8 x 128 columns cost 1.13 times one block,
+as four lines of 1,024 x 1 they cost 2.17 times. And the tick's 973 texels are four bands of
+a 64 x 64 block (the first 44, the write cache from row 16, the TLBs from row 33, the float
+registers in row 39), which the pass drew all 4,096 pixels of.
+
+With `STATE_PACK` (`src/pack.h`) they are kept as one 64 x 16 rectangle, with the CSR area in
+the sixteen rows under it, and the tick pass draws the rectangle only. The rest of the shader
+still names a texel by its old place: `STATE_TEX` looks it up through `state_pack()`, and a
+pass turns the pixel it draws back into that place with `state_unpack()`. The first 44 texels
+do not move, so the harness reads what it read. (A snapshot made without it does not load
+with it, and the Unity side and the D3D12 backend do not know of it: it is off unless asked.)
+
+| | As it was | One rectangle |
+|---|---|---|
+| One core: tick at 2,048 instructions a pass | 0.539 to 0.548 ms | 0.494 to 0.515 ms |
+| One core: a Linux boot and the checksum run (606,105,379 instructions) | 3,259k a second | 3,534k |
+| Core 0 busy, of four | 3.2 to 3.5 ms a pass | 3.08 |
+| Core 0 and one worker busy | 6.4 to 6.9 | 3.66 |
+| Core 0 and three workers busy | 10.2 to 10.5 | 6.60 |
+| `mctest 3 240000`, primes alone and with three workers | 12.3 s, 9.4 s (1.3 times) | 11.7 s, 6.0 s (1.9 times) |
+
+The same instructions run and the guest's checksums are the same. So the one core is 5 to 9%
+faster for it, a second core now comes almost free, and four cores do nearly twice the work
+of one. What limits it from there is the number of pixels a core has: a worker without the
+TLBs' 409 texels and with a smaller write cache would be half the size or less.
+
 ## Switches
 
     --cores N          N cores (1 to 16)
     --core-pitch N     the blocks are N texels apart (256)
     --core-y N         the workers' blocks are N rows down, in rows of RAM nothing uses (an experiment; with RVC_MC_QUADS)
+    --define STATE_PACK   a core's texels as one 64 x 16 rectangle (above)
     RVC_MC_QUADS=1     one draw, a quad a core
     RVC_MC_ONE_ZONE=1  one zone over every block

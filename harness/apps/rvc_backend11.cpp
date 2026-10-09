@@ -32,6 +32,8 @@ public:
             if (d.first == "CORE_PITCH") pitch_ = (float)atoi(d.second.c_str());
         for (auto& d : opt.compile.defines)
             if (d.first == "CORE_Y") coreY_ = (float)atoi(d.second.c_str());
+        for (auto& d : opt.compile.defines)
+            if (d.first == "STATE_PACK") tickRows_ = 16;   // the tick's texels are a 64 x 16 rectangle (src/pack.h)
         if (!buildPasses(gpu_, shader, {"CPUTick", "Commit"}, bo, passes_, err)) return false;
         for (auto& d : opt.compile.defines)
             if (d.first == "RAM_DIRECT") csDirect_ = true;
@@ -114,8 +116,8 @@ public:
         }
         else {
             // a zone a core: pixels of two cores in one draw are run side by side and wait for each other
-            for (float c = 0; c < cores_; c += 1) crt_.runZone(gpu_, passes_[0], mat, UpdateZone{pitch_ * c + 32, 4064, 64, 64, 0}, 6, cores_ == 1);
-            for (float c = 0; c < cores_ && cores_ > 1; c += 1) crt_.copyZone(gpu_, UpdateZone{pitch_ * c + 32, 4064, 64, 64, 0});
+            for (float c = 0; c < cores_; c += 1) crt_.runZone(gpu_, passes_[0], mat, UpdateZone{pitch_ * c + 32, 4096 - tickRows_ / 2, 64, tickRows_, 0}, 6, cores_ == 1);
+            for (float c = 0; c < cores_ && cores_ > 1; c += 1) crt_.copyZone(gpu_, UpdateZone{pitch_ * c + 32, 4096 - tickRows_ / 2, 64, tickRows_, 0});
         }
         if (timeIt) gpu_.ctx->End(tsQuery_[1].Get());
         if (!gpuPasses_.empty()) mat.setTexture("_GpuTarget", gpuSrv_.Get(), kGpuTarget, kGpuTarget);   // Commit copies it back
@@ -534,6 +536,7 @@ private:
     bool tsPending_ = false;
     double tickMs_ = -1, commitMs_ = -1, deviceMs_ = 0;
     bool bands_ = false;   // the commit draws only the bands of RAM that changed
+    float tickRows_ = 64;      // rows of a core's block that the tick draws
     float coreY_ = 0;      // CORE_Y: the workers' blocks are that many rows down (an experiment)
     float pitch_ = 256;    // CORE_PITCH: how far apart the blocks are
     float cores_ = 1;      // CORES: the tick's zone is that many 64 x 64 blocks side by side (docs/multicore.md)
