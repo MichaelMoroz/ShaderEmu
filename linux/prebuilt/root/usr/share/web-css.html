@@ -1,0 +1,45 @@
+<html><head><title>Style sheets</title>
+<link rel="stylesheet" href="/usr/share/web-css.css">
+<link rel="stylesheet" media="print" href="/usr/share/web-none.css">
+<style>
+:root { --accent: #b03060; --pale: rgba(0, 0, 128, 0.1); }
+body { background: #f4f1ea; color: #222; }
+.card { background: var(--pale); border: 1px solid var(--accent); padding: 8px 12px; margin: 10px 0; }
+.card h2 { color: var(--accent); text-decoration: none; margin: 0; }
+#lead { text-align: center; font-weight: bold; }
+.right { text-align: right; }
+nav ul { list-style: none; padding: 0; }
+nav li { display: inline; }
+nav a { color: #060; text-decoration: none; }
+.gone, .sr-only { display: none; }
+.narrow { max-width: 60%; margin: 0 auto; background: #ffe; border-bottom: 2px solid #c90; }
+.dark { background: #223; color: #eee; padding: 6px; }
+.dark a { color: #9cf; }
+div > .direct { color: #c00; }
+p.missing { color: var(--nowhere); }
+@media (max-width: 300px) { .wide-only { display: none; } }
+@media (min-width: 300px) { .small-only { display: none; } }
+@media print { p { display: none; } }
+.important { color: green !important; }
+</style>
+</head><body>
+<nav><ul><li><a href="/usr/share/web-index.html">Home</a></li><li><a href="/usr/share/web-about.html">About</a></li><li><a href="/usr/share/web-test.html">Test</a></li></ul></nav>
+<h1>Style sheets</h1>
+<p id="lead">This line is bold and centred.</p>
+<p class="right">This one is at the right edge.</p>
+<div class="card"><h2>A card</h2><p>Pale blue behind, a frame around, and a heading in the accent colour
+without its underline. The text wraps inside the card's padding when it is long enough to need a
+second line, which this sentence is.</p></div>
+<p class="gone">NOT SHOWN: display none from a class.</p>
+<ul><li class="gone">NOT SHOWN: an item left open<li>Shown: the item after a hidden one that was left open</ul>
+<p class="gone">NOT SHOWN: a paragraph left open<div>Shown: what ends a hidden paragraph.</div>
+<p class="small-only">NOT SHOWN: only for narrow windows.</p>
+<p class="wide-only">Shown: this window is wide enough.</p>
+<div class="narrow"><p>A column 60% wide, centred, with a line under it.</p></div>
+<div class="dark"><p>Light on dark, with <a href="/usr/share/web-index.html">a pale link</a>.</p></div>
+<div><p class="direct">Red: a direct child.</p><section><p class="direct">Black: not a direct child.</p></section></div>
+<p class="missing">Black: its colour names a property nobody set.</p>
+<p class="important" style="color: red">Green: the sheet said important.</p>
+<p class="linked">Purple and bold: from the linked file.</p>
+<p style="color: #06c; margin-left: 40px">Blue and indented: its own style.</p>
+</body></html>

@@ -1,0 +1,7 @@
+#!/bin/sh
+# cc: the machine's own C compiler (TinyCC), with the C library, Nano-X and OpenGL ES.
+#   cc cube.c -o cube
+# Headers and libraries are unpacked the first time: they live in the ROM as one archive.
+[ -f /usr/lib/libc.a ] || tar -xf /usr/share/cc-sysroot.tar -C /
+# -mfpu: float arithmetic as the machine's instructions (a double is still a library call)
+exec tcc -static -mfpu "$@" -lgles -lnano-X

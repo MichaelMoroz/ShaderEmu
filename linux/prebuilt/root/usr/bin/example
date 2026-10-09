@@ -1,0 +1,11 @@
+#!/bin/sh
+# example NAME: compiles /usr/share/example-NAME.c here, in the machine, and runs it.
+# The source is yours to change: copy it, edit it (nxedit), and `cc` it again.
+name=${1:-cube}
+src=/usr/share/example-$name.c
+[ -f "$src" ] || { echo "example: no $src"; ls /usr/share/example-*.c; exit 1; }
+if [ ! -x /tmp/example-$name ] || [ "$src" -nt /tmp/example-$name ]; then
+    echo "example: compiling $src"
+    cc "$src" -o /tmp/example-$name || exit 1
+fi
+exec /tmp/example-$name

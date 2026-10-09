@@ -1,0 +1,20 @@
+<html><head><title>About this machine</title></head><body>
+<h1>About this machine</h1>
+<p>You are reading this on a 32-bit RISC-V computer that exists only as a pixel shader. Its
+processor, its memory and its graphics card are textures that fragment shaders rewrite every
+frame. It boots Linux, and this browser is an ordinary Linux program.</p>
+<h2>How a page gets here</h2>
+<ol>
+<li>The browser writes an address into a few words of memory.</li>
+<li>The host, which is the program running the shader, sees them and fetches the page.</li>
+<li>The host puts the page into the machine's memory in one shader pass.</li>
+<li>The browser reads it and lays it out.</li>
+</ol>
+<p>The processor runs about three million instructions a second, so <b>everything that can be
+done in parallel is done by hardware</b>: drawing, windows, text, copies of memory, pictures.</p>
+<img src="/usr/share/wallpaper-fox.ppm" alt="The desktop's fox">
+<p>That picture is not decoded or copied by the processor at all: the graphics card samples
+it from the file where it lies in the ROM.</p>
+<hr>
+<p><a href="web-index.html">Home</a></p>
+</body></html>

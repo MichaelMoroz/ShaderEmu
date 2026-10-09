@@ -1,0 +1,7 @@
+#!/bin/sh
+mkdir -p /tmp/classicube/texpacks && cd /tmp/classicube || exit 1
+ln -sf /usr/share/classicube-default.zip texpacks/default.zip
+# (the frame rate in the corner is a line of text drawn again every second: 7% of the machine)
+[ -f options.txt ] || echo "gui-showfps=false" > options.txt
+[ $# = 0 ] && set -- --singleplayer
+exec classicube.bin "$@"

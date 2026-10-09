@@ -178,18 +178,6 @@ def main():
         os.remove(payload)
 
 
-# The games' data (id's shareware episode, the Command & Conquer demos, and the sound packs made
-# from them) is fetched by the games' build scripts and is not this repository's to keep.
-GAME_DATA = ('.pak', '.mix', '.aud', '.wad')
-left_out = set()
-
-
-def not_ours(folder, names):
-    skip = [n for n in names if n.lower().endswith(GAME_DATA)]
-    left_out.update(skip)
-    return skip
-
-
 def save_prebuilt():
     """Replaces the checked-in kernel and programs with the ones built into OUT."""
     for name in ('Image', 'root'):
@@ -198,8 +186,8 @@ def save_prebuilt():
     os.makedirs(PREBUILT, exist_ok=True)
     shutil.copyfile(os.path.join(OUT, 'Image'), os.path.join(PREBUILT, 'Image'))
     shutil.rmtree(os.path.join(PREBUILT, 'root'), ignore_errors=True)
-    shutil.copytree(os.path.join(OUT, 'root'), os.path.join(PREBUILT, 'root'), ignore=not_ours)
-    print('linux/prebuilt now holds this build (without the games' + "'" + ' data: ' + ', '.join(sorted(left_out)) + ')')
+    shutil.copytree(os.path.join(OUT, 'root'), os.path.join(PREBUILT, 'root'))
+    print('linux/prebuilt now holds this build')
 
 
 if __name__ == '__main__':

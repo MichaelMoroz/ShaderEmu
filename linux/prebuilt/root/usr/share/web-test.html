@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html><head><title>Test page</title>
+<style>body { color: black; } /* the text of a sheet must not show */</style>
+<script>document.write("must not show");</script>
+</head><body>
+<!-- a comment that must not show -->
+<h1>Heading one</h1>
+<p>A paragraph with <b>bold words</b>, a <a href="web-about.html">link to a page here</a>, and
+enough text to wrap: the quick brown fox jumps over the lazy dog, again and again, until the
+line is full and the next one begins.</p>
+<h2>Entities and letters</h2>
+<p>&lt;tag&gt; &amp; &quot;quoted&quot; &#65;&#66;&#67; caf&eacute; na&iuml;ve — “curly” ‘quotes’ … done.</p>
+<h2>Lists</h2>
+<ul><li>First</li><li>Second, with a <a href="web-index.html">link home</a></li>
+<li>Nested:<ul><li>Inner one</li><li>Inner two</li></ul></li></ul>
+<ol><li>Step</li><li>Another step</li></ol>
+<h2>Preformatted</h2>
+<pre>
+int main(void)
+{
+    return 0;
+}
+</pre>
+<h2>A table, as rows of text</h2>
+<table><tr><th>Name</th><th>Speed</th></tr><tr><td>FXC</td><td>2.7M</td></tr><tr><td>DXC</td><td>3.4M</td></tr></table>
+<hr>
+<p>A picture that is not in the computer shows its description: <img src="https://example.com/x.png" alt="a missing picture"></p>
+<p><a href="web-index.html">Home</a> <a href="web-nowhere.html">A link to nothing</a></p>
+</body></html>

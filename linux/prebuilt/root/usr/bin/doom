@@ -1,0 +1,2 @@
+#!/bin/sh
+DOOMWADDIR=/usr/share exec doom.bin "$@"
