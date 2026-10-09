@@ -137,8 +137,7 @@ registers in row 39), which the pass drew all 4,096 pixels of.
 They are now one 64 x 16 rectangle at the top of the block, with the CSR area in the rows
 under it, and the tick pass draws the rectangle only (`STATE_ROWS` and the layout at the top
 of `src/types.h`). The first 44 texels did not move. There is no other layout: a snapshot
-from before does not load, and the Unity side's tick texture is 64 x 16 (changed with it, and
-not run since: there is no Unity on the machine this was done on).
+from before does not load, and the Unity side's tick texture has the same rows ("In Unity").
 
 | | Four bands of 64 x 64 | One rectangle |
 |---|---|---|
@@ -215,6 +214,47 @@ core 0 and three workers into a picture the GPU shows, and played in 18.6 s wher
 41.4. It is the kind of work the workers are for: every pixel stored once, and a core keeps
 only 6 KB of stores a pass. The window system's pool of window buffers ends 4 MiB lower for
 it (`POOL_SIZE` in `linux/nanox/scr_shaderemu.c`): the arena is above it.
+
+## What the cores did, for the guest and the host
+
+The control pass publishes each core's count of instructions among the machine's control
+words (`MC_STATS` in `src/gpu.h`), where a program reads them through `/dev/gpu` like any
+other:
+
+| Address | Contents |
+|---|---|
+| `0x87000380 + 4 k` | core k's instructions so far (k from 0 to 15; 0 for a core the machine lacks) |
+| `0x870003c0` | how many cores the machine has (0 on a machine built for one) |
+| `0x870003c4` | a bit a core: it runs (a worker that was started and has not parked) |
+| `0x870003c8` | a bit a core: it is asleep on its job word |
+
+`nxmon` reads them: the workers' instructions a second are stacked on the processor's plot
+and each worker has a figure, or "asleep", "parked" or "idle", in the line under the busiest
+programs. The harness adds them up from the rows it reads back anyway: with `--cores` its
+`STATS` and closing lines say what the workers ran and the rate of all cores together.
+
+## In Unity
+
+The VRChat machine has four cores (`CORES` in `MachineBlit.cginc`, for all three passes).
+
+- **The tick's texture** is 832 x 16: the state rows' own places, core k's block 256 texels
+  right of the one before. A geometry shader puts core 0's 64 x 16 and a worker's 64 x 8 and
+  16 x 4 in place of Blit's two triangles, so the pixels between are not run.
+- **The commit** takes a texel of a core's block from that texture where the tick drew it
+  (`state_after_tick`) and merges every core's writes into RAM, as the harness's does; the
+  bands it draws are every core's.
+- **The readback** has the first 64 control texels (it had 48), which is where the counts
+  are: the panel's statistics have a line for the workers and for all cores together.
+
+`mctest` passes there. On an RTX 5090, frame cap off, 8 to 16 rounds of 8,192 a frame:
+
+| | A round | Core 0 | Workers | All cores |
+|---|---|---|---|---|
+| core 0 busy, three workers asleep (`mctest 3 900000 bench 0`) | 1.61 to 1.76 ms | 4.7 to 4.9M a second | | |
+| core 0 and three workers busy (`bench 2`) | 1.78 to 1.81 ms | 4.5 to 4.6M | 13.6 to 13.8M | 18.1 to 18.4M |
+
+A program killed while its workers run leaves them running: the next `mctest` finds no
+worker to start ("0 worker cores") until the machine is switched off and on.
 
 ## Switches
 

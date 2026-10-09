@@ -521,6 +521,18 @@ bool gpu_writeback(uint2 pos, out uint4 result) {
 #define INPUT_KEYS  0x700008u   // ring of the last 32 key events, one word each
 #define FETCH_REPLY 0x700011u   // requests the host has answered, bytes, status (docs/fetch.md)
 #define FETCH_DATA  0x76c000u   // what the host fetched: 0x4000 texels
+// What the cores did, for a guest to show (docs/multicore.md): 16 words, core k's count of
+// instructions in word k; then a texel of how many cores, which run and which are asleep (a bit each).
+#define MC_STATS    0x700038u
+
+#if defined(CORES) && CORES > 1
+#ifndef CORE_PITCH
+#define CORE_PITCH 256
+#endif
+uint mc_stat_count(uint core) {
+    return core < CORES ? GPU_STATE[uint2(core * CORE_PITCH + 28, 0)].g : 0;
+}
+#endif
 
 #ifdef GPU_INPUT
 // A word of what the host fetched: its texture holds one byte a channel, one word a texel.
@@ -571,6 +583,22 @@ uint4 gpu_control(uint2 pos) {
         if (!served || (ctrl.r & SUBMIT_DRAW) == 0 || (ctrl.r & SUBMIT_COPIES) == 0) return keep;
         return uint4(ctrl.r & SUBMIT_COPIES, into.r, (into.g & 0xffff) | (into.b << 16), into.a);
     }
+#if defined(CORES) && CORES > 1
+    if (index >= MC_STATS && index < MC_STATS + 4) {
+        uint first = (index - MC_STATS) * 4;
+        return uint4(mc_stat_count(first), mc_stat_count(first + 1), mc_stat_count(first + 2), mc_stat_count(first + 3));
+    }
+    if (index == MC_STATS + 4) {
+        // a worker's state word (41,0).a: bit 0 while it runs, bit 1 while it sleeps on its job word
+        uint running = 1, asleep = 0;
+        for (uint core = 1; core < CORES; core++) {
+            uint word = GPU_STATE[uint2(core * CORE_PITCH + 41, 0)].a;
+            running |= (word & 1) << core;
+            asleep |= ((word >> 1) & 1) << core;
+        }
+        return uint4(CORES, running, asleep, 0);
+    }
+#endif
 #ifdef GPU_INPUT
     if (index == GPU_CLOCK) return uint4(keep.r, _HostMs, keep.b, _HostFlags);
     if (index == INPUT_STATE) {

@@ -20,7 +20,7 @@ using VRC.Udon.Common.Interfaces;
 public class EmuMachine : UdonSharpBehaviour
 {
     public RenderTexture stateA, stateB;    // 2048 x 4096, four 32-bit words a texel
-    public RenderTexture tickState;         // 64 x 16: what the tick keeps of the CPU's state area, after a tick
+    public RenderTexture tickState;         // 832 x 16: what the tick keeps of each core's state area, after a tick
     public Material tickMaterial;           // MachineTick.shader: CPUTick
     public Material machineMaterial;        // Machine.shader: passes Commit and GPUControl
     public Material gpuMaterial;            // the GPU mesh's material
@@ -34,7 +34,7 @@ public class EmuMachine : UdonSharpBehaviour
     public Material stateViewMaterial;      // Scope.shader showing the CPU's state texels
     public Material romViewMaterial;        // and the ROM
     public Material readbackMaterial;
-    public RenderTexture readbackTexture;   // 448 x 32: one pixel per word, a row for each round of a frame
+    public RenderTexture readbackTexture;   // 512 x 32: one pixel per word, a row for each round of a frame
 
     public EmuSound sound;                  // the sound card's host side, if the world has one
     public EmuTerminal terminal;
@@ -79,7 +79,7 @@ public class EmuMachine : UdonSharpBehaviour
     [HideInInspector] public int pointerX, pointerY, pointerButtons;
     [HideInInspector] public bool pointerOn;            // a beam is on the display
 
-    private const int Words = 448;
+    private const int Words = 512;      // state row 0's 64 texels and the first 64 control texels
     private const int FetchMost = 262144;
     private const int FetchIdle = 0, FetchLoading = 1, FetchPacking = 2, FetchReady = 3, FetchDelivering = 4;
     private const int UartBurst = 4;
@@ -132,6 +132,13 @@ public class EmuMachine : UdonSharpBehaviour
     private bool haveClock;
     private uint lastClock, lastCommits, pc, lastStall, gpuFrames;
     private float instructions;        // since the last stats line
+    // the worker cores (docs/multicore.md): how many cores, which run, and what the workers ran
+    private int cores = 1;
+    private uint coresRunning;         // a bit a core that is at work
+    private uint[] workerClock = new uint[16];
+    private bool haveWorkerClock;
+    private float workerInstructions;  // since the last stats line
+    private double totalWorkerInstructions;
     private int frames;
     private float statsAt;
     private double totalInstructions;
@@ -322,6 +329,8 @@ public class EmuMachine : UdonSharpBehaviour
         consumedTag = 0;
         charHead = charTail = keyHead = keyTail = 0;
         totalInstructions = 0;
+        totalWorkerInstructions = 0;
+        haveWorkerClock = false;
         displayMode = 0;
         displayWidth = 0;
         displayHeight = 0;
@@ -852,6 +861,21 @@ public class EmuMachine : UdonSharpBehaviour
         }
         haveClock = true;
         lastClock = clock;
+        // the cores' counts of instructions, which the control pass publishes at 0x87000380
+        cores = Mathf.Clamp((int)Word(64 + 0x3c, 0), 1, 16);
+        coresRunning = Word(64 + 0x3c, 1) & ~Word(64 + 0x3c, 2);   // started, and not asleep on its job word
+        for (int c = 1; c < cores; c++)
+        {
+            uint now = Word(64 + 0x38 + c / 4, c % 4);
+            if (haveWorkerClock)
+            {
+                uint more = now - workerClock[c];
+                workerInstructions += more;
+                totalWorkerInstructions += more;
+            }
+            workerClock[c] = now;
+        }
+        haveWorkerClock = cores > 1;
         lastCommits = commits;
         pc = Word(36, 3);
         lastStall = Word(40, 2);
@@ -871,17 +895,23 @@ public class EmuMachine : UdonSharpBehaviour
     {
         float dt = Time.time - statsAt;
         statsAt = Time.time;
-        float ips = instructions / dt, fps = frames / dt;
+        float ips = instructions / dt, fps = frames / dt, workerIps = workerInstructions / dt;
         instructions = 0;
+        workerInstructions = 0;
         frames = 0;
         speedLine = ips.ToString("N0") + " instructions/s   " + fps.ToString("F0") + " frames/s   "
                     + (fps > 0 ? (ips / fps).ToString("N0") : "0") + " a frame";
+        int busy = 0;
+        for (int c = 1; c < cores; c++) if ((coresRunning >> c & 1) != 0) busy++;
+        string workerLine = cores < 2 ? "one core" :
+            (cores - 1) + " workers (" + busy + " running): " + workerIps.ToString("N0") + " instructions/s, all cores " + (ips + workerIps).ToString("N0");
         if (statsText == null) return;
         string display = displayWidth > 0 ? "mode " + displayMode + ", " + displayWidth + " x " + displayHeight : "off";
         statsText.text =
             (paused ? "paused" : "running") + ", " + (steady ? steadyRounds + " x " + ticks + " this frame (steady, at most " + roundCap + " rounds)"
                                                              : rounds + " x " + ticks + " instructions a frame at most") + "\n" +
             speedLine + "\n" +
+            workerLine + "\n" +
             "pc " + pc.ToString("x8") + "   stall " + lastStall + "   commits " + lastCommits + "\n" +
             "instructions " + totalInstructions.ToString("N0") + "\n" +
             "display " + display + "   GPU lists drawn " + gpuFrames + "\n" +

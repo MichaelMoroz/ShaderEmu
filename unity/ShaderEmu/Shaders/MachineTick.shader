@@ -66,8 +66,10 @@ Shader "ShaderEmu/MachineTick"
             CGPROGRAM
             #pragma target 5.0
             #pragma vertex blit_vert
+            #pragma geometry blit_tick_geom
             #pragma fragment frag
             #pragma editor_sync_compilation
+            #define BLIT_TICK
             // One permutation only: the full machine, started in the kernel with no firmware
             // (docs/boot.md). Images that need machine-mode start-up do not boot on it.
             #define SBI_HLE
@@ -106,9 +108,13 @@ Shader "ShaderEmu/MachineTick"
             static uint hart = 0;
             static uint2 hart_offset = uint2(0, 0);
 
-            #define CORES 1   // one core here (docs/multicore.md)
-            #define STATE_TEX_HART(pos, hartidx) (_SelfTexture2D[uint2(pos) + uint2(hartidx % 2, hartidx / 2)])
-            #define STATE_TEX(pos) (_SelfTexture2D[pos])
+            // Core k's state is the block at x = CORE_PITCH * k of the state rows (docs/multicore.md;
+            // CORES is in MachineBlit.cginc), and state_off is where this pixel's core's starts.
+            #define MC_BLOCK(k) uint2((k) * CORE_PITCH, 0)
+            static uint2 state_off = uint2(0, 0);
+            static uint mc_core = 0;
+            #define STATE_TEX_HART(pos, hartidx) (_SelfTexture2D[uint2(pos) + state_off])
+            #define STATE_TEX(pos) (_SelfTexture2D[uint2(pos) + state_off])
             #define RAM_TEX(pos) (_SelfTexture2D[pos])
 
             static uint2 s_dim;
@@ -129,6 +135,15 @@ Shader "ShaderEmu/MachineTick"
                 _Data_MTD_R.GetDimensions(m_dim.x, m_dim.y);
 
                 uint2 pos = (uint2)i.vertex.xy;
+                // a zone or two a core: this pixel's core, and which texel of its block it keeps
+                uint2 own = pos;
+                hart = min(pos.x / CORE_PITCH, CORES - 1);
+                mc_core = hart;
+                state_off = MC_BLOCK(hart);
+                pos -= state_off;
+                if (pos.x >= 64 || pos.y >= 64) return (uint4)0;   // between two blocks
+                if (!_Init && mc_idle()) return RAM_TEX(own);      // a worker with nothing to do
+                pos = mc_texel_of(pos);
 #ifdef L1_LOCAL
                 uint4 l1_cache[L1_DATA_N];
 #if L1_WAYS == 4
@@ -145,17 +160,18 @@ Shader "ShaderEmu/MachineTick"
 
                 if (_Init) {
                     if (_InitRaw) {
-                        return _SelfTexture2D[pos];
+                        return STATE_TEX(pos);
                     } else {
                         cpu = cpu_init();
                     }
                 } else {
                     if (!pixel_has_state(pos)) {
-                        return STATE_TEX(pos);
+                        return RAM_TEX(own);
                     }
 
                     decode();
                     time_prepare();
+                    mc_enter();
                     xreg_load();
 #ifdef FPU
                     fp_state_load();

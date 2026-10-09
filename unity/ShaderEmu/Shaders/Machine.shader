@@ -106,11 +106,14 @@ Shader "ShaderEmu/Machine"
             Texture2D<float4> _Data_MTD_B;
             Texture2D<float4> _Data_MTD_A;
 
-            // the CPU's state area as the tick left it; everything else as it was
-            #define STATE_TEX_HART(pos, hartidx) (state_after_tick(uint2(pos) + uint2(hartidx % 2, hartidx / 2)))
-            #define STATE_TEX(pos) (state_after_tick(pos))
+            // A core's state area as the tick left it (state_off is where the core's block
+            // starts: docs/multicore.md); everything else as it was.
+            #define MC_BLOCK(k) uint2((k) * CORE_PITCH, 0)
+            static uint2 state_off = uint2(0, 0);
+            static uint mc_core = 0;
+            #define STATE_TEX_HART(pos, hartidx) (state_after_tick(uint2(pos) + state_off))
+            #define STATE_TEX(pos) (state_after_tick(uint2(pos) + state_off))
             #define RAM_TEX(pos) (_SelfTexture2D[pos])   // the tick does not write RAM
-            #define CORES 1
 
             static uint2 s_dim;
             static uint2 m_dim;
@@ -124,18 +127,24 @@ Shader "ShaderEmu/Machine"
             #define GPU_WRITEBACK
             #include "src/gpu.cginc"
 
-            // The bands this commit changes (commit_bands_changed in the harness's main.shader).
+            // The bands this commit changes (commit_bands_changed in the harness's main.shader):
+            // every core's writes.
             uint commit_bands_changed() {
                 if (_Init) return 0xffffffff;
-                uint stalled = STATE_TEX_HART(uint2(28, 0), 0).r;
-                uint changed = STATE_TEX_HART(uint2(41, 0), 0).g;   // the tick's writes
-                if (stalled == STALL_MEMOP_COPY || stalled == STALL_MEMOP_FILL) {
-                    // a parallel copy or fill: the bands from its destination to its end
-                    uint4 op = STATE_TEX_HART(uint2(38, 0), 0);
-                    uint lo = (op.g >> 22) & 31, hi = min((op.g + op.b - 1) >> 22, 31u);
-                    if (op.b != 0 && hi >= lo) changed |= ((2u << hi) - 1) & ~((1u << lo) - 1);
+                uint changed = gpu_copy_bands();
+                for (uint core = 0; core < CORES; core++) {
+                    state_off = MC_BLOCK(core);
+                    uint stalled = STATE_TEX(uint2(28, 0)).r;
+                    changed |= STATE_TEX(uint2(41, 0)).g;   // the tick's writes
+                    if (stalled == STALL_MEMOP_COPY || stalled == STALL_MEMOP_FILL) {
+                        // a parallel copy or fill: the bands from its destination to its end
+                        uint4 op = STATE_TEX(uint2(38, 0));
+                        uint lo = (op.g >> 22) & 31, hi = min((op.g + op.b - 1) >> 22, 31u);
+                        if (op.b != 0 && hi >= lo) changed |= ((2u << hi) - 1) & ~((1u << lo) - 1);
+                    }
                 }
-                return changed | gpu_copy_bands();
+                state_off = uint2(0, 0);
+                return changed;
             }
             // Those, the ones of the commit before (the first commit after the start draws all)
             // and what the control pass changed since.
@@ -159,9 +168,32 @@ Shader "ShaderEmu/Machine"
 
                 uint4 picture;
                 if (!_Init && gpu_writeback(pos, picture)) return picture;
-                decode_for_commit();
-                uint4 result = commit(pos, STATE_TEX_HART(pos, 0));
-                if (pos.x == 41 && pos.y == 0) result.b = commit_bands_changed();   // for the control pass and the next commit
+                uint4 result;
+                if (pos.y < 64) {
+                    // a core's own block: its state
+                    uint core = pos.x / CORE_PITCH;
+                    if (core >= CORES || pos.x % CORE_PITCH >= 64) return (uint4)0;
+                    uint4 own = state_after_tick(pos);
+                    mc_core = core;
+                    state_off = MC_BLOCK(core);
+                    pos = mc_texel_of(pos - state_off);
+                    decode_for_commit();
+                    result = commit(pos, own);
+                    // A worker's one store that found its cache full is in its state until its next
+                    // pass rewrites it: gone now, or the commits of a worker asleep would store it again.
+                    if (core != 0 && pos.x == 8 && pos.y == 0) result.r = 0xffffffff;
+                    if (core == 0 && pos.x == 41 && pos.y == 0) result.b = commit_bands_changed();   // for the control pass and the next commit
+                } else {
+                    // RAM: every core's writes, the highest core's last
+                    result = RAM_TEX(pos);
+                    for (uint core = 0; core < CORES; core++) {
+                        mc_core = core;
+                        state_off = MC_BLOCK(core);
+                        if (core != 0 && STATE_TEX(uint2(41, 0)).r == 0) continue;   // a worker that stored nothing
+                        decode_for_commit();
+                        result = commit(pos, result);
+                    }
+                }
                 return result;
             }
             ENDCG

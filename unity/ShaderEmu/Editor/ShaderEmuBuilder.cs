@@ -734,10 +734,10 @@ public static partial class ShaderEmuBuilder
 
         RenderTexture state = StateTexture("StateA", 2048, 4096);
         RenderTexture stateB = StateTexture("StateB", 2048, 4096);
-        RenderTexture tickState = StateTexture("TickState", 64, 16);   // STATE_ROWS: what the tick draws
+        RenderTexture tickState = StateTexture("TickState", 832, 16);   // what the tick draws: STATE_ROWS, and CORE_PITCH * 3 + 64 for four cores
         AssetDatabase.DeleteAsset(Generated + "/MachineState.asset");
         RenderTexture gpuTarget = Target("GpuTarget", 1280, 720, 32);   // the picture is 720p at most
-        RenderTexture readback = Target("Readback", 448, 32, 0);   // a row a round: EmuMachine's MaxRounds
+        RenderTexture readback = Target("Readback", 512, 32, 0);   // a row a round: EmuMachine's MaxRounds
         RenderTexture picture = PictureTexture("DisplayPicture", 2048, 1024);
         showMat.mainTexture = picture;
         showMat.SetVector("_TexSize", new Vector4(picture.width, picture.height, 0, 0));

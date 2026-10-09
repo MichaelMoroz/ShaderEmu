@@ -1,8 +1,10 @@
 /* nxmon: a system monitor. Three plots of the last two minutes, a sample a second: how fast
- * the emulated processor runs (its cycle counter counts instructions), how busy Linux is, and
- * the memory in use; under them the load, the processes and the busiest programs. */
+ * the emulated processor runs (its cycle counter counts instructions; the worker cores'
+ * share on top, docs/multicore.md), how busy Linux is, and the memory in use; under them
+ * the load, the processes, the busiest programs and what each worker core is doing. */
 #include <dirent.h>
 #include <fcntl.h>
+#include <sys/mman.h>
 #include <sys/sysinfo.h>
 #include <sys/time.h>
 #include "ui.h"
@@ -14,11 +16,13 @@
 #define BLOCK (PLOT_H + 24)	/* a plot with its line of text */
 #define WIDTH (PLOT_W + 18)
 #define STATS_Y (3 * BLOCK + 6)
-#define HEIGHT (STATS_Y + 5 * 15 + 6)
+#define HEIGHT (STATS_Y + 6 * 15 + 6)
+#define MAX_CORES 16
 #define MAX_PROGRAMS 48
 #define BUSIEST 3
 
 #define SPEED_COLOUR MWRGB(80, 220, 100)
+#define WORKER_COLOUR MWRGB(60, 200, 220)
 #define KERNEL_COLOUR MWRGB(240, 150, 40)
 #define PROGRAM_COLOUR MWRGB(90, 150, 255)
 #define MEMORY_COLOUR MWRGB(200, 110, 230)
@@ -28,7 +32,7 @@
 struct plot { unsigned low[HISTORY], high[HISTORY], top; GR_COLOR low_colour, high_colour; };
 enum { SPEED, BUSY, MEMORY, PLOTS };
 static struct plot plots[PLOTS] = {
-	{ {0}, {0}, 1000000, SPEED_COLOUR, 0 },
+	{ {0}, {0}, 1000000, SPEED_COLOUR, WORKER_COLOUR },
 	{ {0}, {0}, 100, KERNEL_COLOUR, PROGRAM_COLOUR },
 	{ {0}, {0}, 1, MEMORY_COLOUR, FILES_COLOUR },
 };
@@ -38,6 +42,10 @@ static long memory_total, memory_used, memory_files, memory_cached;	/* kB */
 static long switches, interrupts;	/* a second */
 static struct { int pid, seen, share; unsigned long ticks; char name[16]; } programs[MAX_PROGRAMS];
 static int program_count;
+/* The cores, from the machine's control words (0x87000380): a count of instructions each, then
+ * how many there are and a bit a core for running and for asleep. No words: one core. */
+static const volatile unsigned *core_words;
+static unsigned core_count = 1, core_before[MAX_CORES], core_rate[MAX_CORES], cores_running, cores_asleep;
 
 /* The processor's count of instructions run (its low 32 bits; it wraps every few minutes). */
 static unsigned
@@ -98,6 +106,26 @@ sample_linux(long ms)
 	interrupts = (now_interrupts - before_interrupts) * 1000 / ms;
 	before_switches = now_switches;
 	before_interrupts = now_interrupts;
+}
+
+/* What each worker core ran since the last sample, a second's worth; the sum of them. */
+static unsigned
+sample_cores(long ms)
+{
+	unsigned c, now, sum = 0;
+
+	if (!core_words)
+		return 0;
+	core_count = core_words[0x3c0 / 4] < 1 ? 1 : core_words[0x3c0 / 4] > MAX_CORES ? MAX_CORES : core_words[0x3c0 / 4];
+	cores_running = core_words[0x3c4 / 4];
+	cores_asleep = core_words[0x3c8 / 4];
+	for (c = 1; c < core_count; c++) {
+		now = core_words[0x380 / 4 + c];
+		core_rate[c] = (unsigned)((unsigned long long)(now - core_before[c]) * 1000 / ms);
+		core_before[c] = now;
+		sum += core_rate[c];
+	}
+	return sum;
 }
 
 static void
@@ -225,8 +253,13 @@ draw_line(int which)
 	ui_fill(window, 0, y, WIDTH, 15, UI_FACE);
 	switch (which) {
 	case SPEED:
-		snprintf(text, sizeof text, "Processor: %u.%02u million instructions a second", now / 1000000, now % 1000000 / 10000);
+		snprintf(text, sizeof text, core_count > 1 ? "Processor: %u.%02u million/s" : "Processor: %u.%02u million instructions a second",
+			 now / 1000000, now % 1000000 / 10000);
 		ui_text(window, 8, y, text, -1, BLACK, 0);
+		if (core_count > 1) {
+			snprintf(text, sizeof text, "%u workers %u.%02u", core_count - 1, more / 1000000, more % 1000000 / 10000);
+			legend(160, y, WORKER_COLOUR, text);
+		}
 		snprintf(text, sizeof text, "top: %u million", plots[SPEED].top / 1000000);
 		ui_text(window, WIDTH - 90, y, text, -1, UI_SHADOW, 0);
 		break;
@@ -283,6 +316,15 @@ draw_stats(void)
 	}
 	ui_text(window, 8, STATS_Y + 50, "Busiest:", -1, BLACK, 0);
 	ui_text(window, 60, STATS_Y + 50, n ? text : "nothing", -1, BLACK, 0);
+	/* each worker core: millions of instructions a second, or why it runs none */
+	for (i = 1, n = 0; i < (int)core_count && n < (int)sizeof text - 24; i++) {
+		if (core_rate[i] >= 10000)
+			n += snprintf(text + n, sizeof text - n, "%s%u.%02u", n ? "  " : "", core_rate[i] / 1000000, core_rate[i] % 1000000 / 10000);
+		else
+			n += snprintf(text + n, sizeof text - n, "%s%s", n ? "  " : "", (cores_asleep >> i & 1) ? "asleep" : (cores_running >> i & 1) ? "idle" : "parked");
+	}
+	ui_text(window, 8, STATS_Y + 68, "Workers:", -1, BLACK, 0);
+	ui_text(window, 60, STATS_Y + 68, core_count > 1 ? text : "none (the machine has one core)", -1, core_count > 1 ? BLACK : UI_SHADOW, 0);
 }
 
 static void
@@ -310,11 +352,12 @@ sample(unsigned speed, long ms)
 		memmove(plots[i].high, plots[i].high + 1, (HISTORY - 1) * sizeof plots[i].high[0]);
 	}
 	plots[SPEED].low[HISTORY - 1] = speed;
+	plots[SPEED].high[HISTORY - 1] = sample_cores(ms);
 	sample_linux(ms);
 	sample_memory();
 	/* the speed's plot is as tall as the fastest second in it needs, in doublings */
 	for (i = 0; i < HISTORY; i++)
-		while (plots[SPEED].low[i] > top)
+		while (plots[SPEED].low[i] + plots[SPEED].high[i] > top)
 			top *= 2;
 	for (i = 0; i < PLOTS; i++) {
 		if (i == SPEED && top != plots[SPEED].top) {
@@ -334,9 +377,15 @@ main(void)
 	struct timeval then, now, looked;
 	unsigned count_then = instructions();
 
+	int gpu = open("/dev/gpu", O_RDWR);
+	void *words = gpu < 0 ? MAP_FAILED : mmap(NULL, 4096, PROT_READ, MAP_SHARED, gpu, 0x01000000);
+
+	if (words != MAP_FAILED)
+		core_words = words;
 	if (GrOpen() < 0)
 		return 1;
 	ui_init();
+	sample_cores(1000);
 	gettimeofday(&then, NULL);
 	looked = then;
 	sample_linux(1000);

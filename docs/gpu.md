@@ -46,6 +46,7 @@ colour fragments. The CPU shader has no GPU code.
 | `0x8700003c` | host flags, written every frame. Bit 0: the guest should start its desktop when it boots. Bit 1: the host shows the console as four terminals (`docs/console.md`). Bits 8-15 and 16-23: the largest screen the host shows, width and height in 16s of pixels (0: it does not say) |
 | `0x87000100` | a request for a page from the host, and its answer (`docs/fetch.md`) |
 | `0x87000300` | a 3D program's last whole frame, for a host that shows it in space (`docs/volume.md`) |
+| `0x87000380` | what each core ran, and how many cores there are (`docs/multicore.md`) |
 | `0x87000060` | a lock for programs that share the GPU: take it with an atomic swap around looking at the submit word and writing a list's registers |
 | `0x87000070` | the copy still to be made for the list drawn last (0: none), then its address, width and height, row length |
 | `0x87000050` | for bit 2: address of the rectangle's first pixel (a multiple of 4), its width, its height, and the length of a row in pixels (0: the width) |

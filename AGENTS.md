@@ -303,6 +303,15 @@ A cold boot to the `/ #` prompt takes about 80 s on an RTX 5090 with upstream on
   staging texture, one Map): the same state hash, typed input no slower, and a gain inside the
   noise (4% of a 2-instruction frame, 1 to 3% at 8,192 with N = 16), for output N frames
   later. It is 1 unless asked for.
+- The Unity machine has four cores (`docs/multicore.md`, "In Unity"): `CORES` in
+  `MachineBlit.cginc`, a tick texture 832 x 16, the commit of every core. A change to the cores'
+  number or pitch moves `TickState`'s size (the builder, and the asset in `Generated`) with it.
+  To test: `mctest 3 120000` at the console must end in `PASS`; `mctest 3 400000 bench 2`
+  keeps all four busy for a sweep. Never end `mctest` with Ctrl+C: its workers stay running
+  and the next one finds none, until the machine is switched off and on.
+- What each core ran is among the control words (0x87000380, `MC_STATS`): `nxmon`, the
+  harness's `STATS workers` line and the Unity panel all read it there. The Unity readback is
+  512 words a row for it (the first 64 control texels).
 - To time rounds in play mode, take the frame cap off (`Application.targetFrameRate = -1`), set
   `rounds` to 8, 16 and 32 with a busy guest (`while :; do :; done` typed at the console
   keyboard) and read frames and `totalInstructions` from an `EditorApplication.update` callback

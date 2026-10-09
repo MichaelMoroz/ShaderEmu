@@ -746,6 +746,10 @@ int main(int argc, char** argv) {
     bool haveClock = false;
     uint32_t lastClock = 0, commits = 0;
     uint64_t guestInstructions = 0;
+    // with worker cores (--cores): what they ran, from the counts the control pass publishes
+    uint64_t workerInstructions = 0, workerInstr0 = 0;
+    uint32_t workerClock[16] = {};
+    bool haveWorkerClock = false;
 
     auto t0 = std::chrono::steady_clock::now();
     double lastStats = 0;
@@ -889,6 +893,14 @@ int main(int argc, char** argv) {
         consumedTag = texel(9, 3);
         if (rowFrame < (uint64_t)opt.initFrames) return;  // cpu_init leaves junk in the UART buffer
         if (haveClock) guestInstructions += (uint32_t)(clock - lastClock);
+        if (opt.cores > 1 && raw.size() >= (64 + 0x3c) * 16) {
+            for (int c = 1; c < opt.cores; ++c) {
+                uint32_t now = texel(64 + 0x38 + c / 4, c % 4);
+                if (haveWorkerClock) workerInstructions += (uint32_t)(now - workerClock[c]);
+                workerClock[c] = now;
+            }
+            haveWorkerClock = true;
+        }
         if (haveClock && !opt.pcLog.empty() && (opt.statsAfter < 0 || statsStarted)) {
             pcSamples.push_back(texel(36, 3));
             pcSamples.push_back((uint32_t)(clock - lastClock));
@@ -972,6 +984,7 @@ int main(int argc, char** argv) {
         if (opt.statsAfter >= 0 && !statsStarted && wall >= opt.statsAfter) {
             statsStarted = true;
             statsInstr0 = guestInstructions;
+            workerInstr0 = workerInstructions;
             statsFrame0 = frame;
             statsT0 = std::chrono::steady_clock::now();
         }
@@ -1310,6 +1323,9 @@ int main(int argc, char** argv) {
         uint64_t instr = guestInstructions - statsInstr0, frames = frame - statsFrame0;
         fprintf(stderr, "\nSTATS seconds=%.2f instructions=%llu ips=%.0f frames=%llu fps=%.1f per_frame=%.1f\n", secs,
                 (unsigned long long)instr, instr / secs, (unsigned long long)frames, frames / secs, (double)instr / (double)frames);
+        if (opt.cores > 1)
+            fprintf(stderr, "STATS workers: instructions=%llu ips=%.0f; all cores ips=%.0f\n", (unsigned long long)(workerInstructions - workerInstr0),
+                    (workerInstructions - workerInstr0) / secs, (instr + workerInstructions - workerInstr0) / secs);
         if (timeSamples > 0)
             fprintf(stderr, "STATS gpu per frame: tick %.3f ms, commit %.3f ms, device %.3f ms; wall %.3f ms\n", timeSum[0] / timeSamples,
                     timeSum[1] / timeSamples, timeSum[2] / timeSamples, 1000.0 * secs / (double)frames);
@@ -1350,6 +1366,9 @@ int main(int argc, char** argv) {
             (unsigned long long)frame, wall, (unsigned long long)guestInstructions,
             wall > 0 ? guestInstructions / wall / 1000.0 : 0.0, commits,
             untilHit ? ", --until matched" : (exitCode == 3 ? ", --until NOT matched" : ""));
+    if (opt.cores > 1)
+        fprintf(stderr, "[harness] %d workers: %llu instructions more, all cores avg %.1fk IPS\n", opt.cores - 1,
+                (unsigned long long)workerInstructions, wall > 0 ? (guestInstructions + workerInstructions) / wall / 1000.0 : 0.0);
     if (uartLog) fclose(uartLog);
     fflush(stdout);
     // The stdin thread may be blocked in getchar(); exit without joining it.
