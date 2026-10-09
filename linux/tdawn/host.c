@@ -392,6 +392,44 @@ page_part(int page, int x, int y, int width, int height, int keyed)
 		seglSprite(box, texels, page_texture[page & 1], 0x00ffffff, keyed);
 }
 
+/* ---- a picture stretched over the window ---- */
+
+static unsigned char *picture;
+static int picture_w, picture_h;
+static GLuint picture_texture;
+
+unsigned char *
+host_picture(int width, int height, unsigned int *physical)
+{
+	if (!screen || width <= 0 || height <= 0)
+		return NULL;
+	if (!picture || width * height > picture_w * picture_h) {
+		if (!(picture = big_memory(width * height)))
+			return NULL;
+		if (!picture_texture)
+			glGenTextures(1, &picture_texture);
+	}
+	picture_w = width;
+	picture_h = height;
+	glBindTexture(GL_TEXTURE_2D, picture_texture);
+	seglTexturePointer(picture, width, height, GL_COLOR_INDEX8_EXT);
+	if (physical)
+		*physical = seglAddress(picture);
+	return picture;
+}
+
+void
+host_show_picture(void)
+{
+	if (!picture)
+		return;
+	host_scene_drop();
+	whole_window(0, 0);
+	glColorKeySE(0);
+	quad(picture_texture, 0, 0, screen_w, screen_h, 0);
+	seglSwap();
+}
+
 /* The pointer's rectangle as four corners, or nothing at all. */
 static void
 cursor_corners(unsigned int *to, int shown)

@@ -55,6 +55,42 @@ In Red Alert's own:
   a unit that steps, houses found from a table, the layer's sort, and the computer's count of
   units no team has (a unit is asked whether it could join only when one is wanted).
 
+## Movies, and the worker cores
+
+The demo's opening movie (ENGLISH.VQA, 640 x 400, 156 frames of it before `TDAWN_AUTO`'s Return
+ends it) was 41 of the 100 seconds from the command to a mission's first frame: a million
+instructions a frame, and more than that in stores. A frame was decoded into a buffer and
+copied to the screen, half a megabyte of stores, and the machine's core keeps 6 KB of stores
+a pass (its write cache: `docs/multicore.md`).
+
+- **The frame is a picture the GPU shows** (`host_picture`, `host_show_picture` in
+  `linux/tdawn/host.c`): decoded once, into GPU memory, and drawn from there, stretched over
+  the window if it is one of the small movies. No copy and no doubling by the game.
+- **The worker cores decode it** when the machine has any (`--cores 4` in the harness;
+  `linux/ralert/workers.c` is the game's side, `worker.c` what the workers run, built bare for
+  the arena and carried in the game as bytes). A frame's block rows are shared between the
+  cores, each writing its own rows of the picture, and the last worker unpacks the next
+  frame's block pointers (LCW) while this one is drawn: the player loads a frame ahead for
+  that. The movie's codebooks and pointers are allocated in the arena, which the game maps
+  at the address the workers know it by; the picture is GPU memory, which the workers are
+  given by its physical address.
+- `RALERT_MOVIE_SOFT=1` is the game's own way, `RALERT_WORKERS=N` uses no more than N workers,
+  and `RALERT_MOVIE_CHECK=1` decodes every shared frame on core 0 as well and compares: 0 of
+  156 differ. Each movie prints a line (`ralert: movie ...`).
+
+| The opening movie, 156 frames | Time | Core 0's instructions a frame |
+|---|---|---|
+| As the game does it | 41.4 s | 1,033k |
+| The frame shown by the GPU | 30.5 s | 821k |
+| and three workers decoding | 19.3 s | 443k |
+| and one of them unpacking a frame ahead | 18.6 s | 234k |
+
+From the command to the mission's first frame: 101.9 s, 87.8 s with the picture, 80 s with
+the workers; the whole 300-frame check 123 s to 106 s, with the same state sum. What limits
+a frame now is stores, not instructions: 16,000 texels of picture and 2,000 of pointers a
+frame, 384 a pass a core. In the mission itself the workers do nothing yet, and their being
+there costs it 4 to 8% (14.1 game frames a second where one core has 14.5).
+
 ## Speed
 
 On D3D11 with fxc2 (3.5M to 4.1M instructions a second), no delay between frames, nobody

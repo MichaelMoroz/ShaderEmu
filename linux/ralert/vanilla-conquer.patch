@@ -124,15 +124,232 @@ index 109c35f..29e2ec5 100644
              char digest1[20];
              char digest2[20];
              sha.Result(digest2);
+diff --git a/common/vqadrawer.cpp b/common/vqadrawer.cpp
+index cd3b404..d589282 100644
+--- a/common/vqadrawer.cpp
++++ b/common/vqadrawer.cpp
+@@ -9,6 +9,12 @@
+ // distributed with this program. You should have received a copy of the
+ // GNU General Public License along with permitted additional restrictions
+ // with this program. If not, see https://github.com/electronicarts/CnC_Remastered_Collection
++#ifdef SHADEREMU_RA
++#include "../redalert/workers.h"
++#include <stdio.h>
++#include <stdlib.h>
++unsigned workers_checked, workers_wrong;
++#endif
+ #include "vqadrawer.h"
+ //#include "dialog.h"
+ #include "lcw.h"
+@@ -53,12 +59,50 @@ int VQA_DrawFrame_Buffer(VQAHandle* handle)
+         vqabuf->Drawer.Flags &= ~1;
+     }
+ 
+-    vqabuf->UnVQ(curframe->Codebook->Buffer,
+-                 curframe->Pointers,
+-                 vqabuf->Drawer.ScreenOffset + vqabuf->Drawer.ImageBuf,
+-                 vqabuf->Drawer.BlocksPerRow,
+-                 vqabuf->Drawer.NumRows,
+-                 vqabuf->Drawer.ImageWidth);
++#ifdef SHADEREMU_RA
++    /* the frame's block rows shared between the machine's cores, when it has more than one */
++    if (vqabuf->UnVQ == UnVQ_4x4
++        && workers_unvq(curframe->Codebook->Buffer,
++                        curframe->Pointers,
++                        vqabuf->Drawer.ScreenOffset + vqabuf->Drawer.ImageBuf,
++                        vqabuf->Drawer.BlocksPerRow,
++                        vqabuf->Drawer.NumRows,
++                        vqabuf->Drawer.ImageWidth)) {
++        /* RALERT_MOVIE_CHECK=1: the same frame decoded here as well, and the two compared */
++        static const char* check = getenv("RALERT_MOVIE_CHECK");
++        if (check) {
++            unsigned bytes = vqabuf->Drawer.NumRows * 4 * vqabuf->Drawer.ImageWidth, wrong = 0;
++            static uint8_t* own;
++            static unsigned own_bytes;
++            if (own_bytes < bytes) {
++                own = (uint8_t*)realloc(own, bytes);
++                own_bytes = bytes;
++            }
++            UnVQ_4x4(curframe->Codebook->Buffer,
++                     curframe->Pointers,
++                     own,
++                     vqabuf->Drawer.BlocksPerRow,
++                     vqabuf->Drawer.NumRows,
++                     vqabuf->Drawer.ImageWidth);
++            const uint8_t* shown = vqabuf->Drawer.ScreenOffset + vqabuf->Drawer.ImageBuf;
++            for (unsigned i = 0; i < bytes; i++) {
++                wrong += own[i] != shown[i];
++            }
++            workers_checked++;
++            if (wrong) {
++                workers_wrong++;
++                fprintf(stderr, "ralert: movie frame %d: %u of %u bytes differ from this core's own decoding\n",
++                        curframe->FrameNum, wrong, bytes);
++            }
++        }
++    } else
++#endif
++        vqabuf->UnVQ(curframe->Codebook->Buffer,
++                     curframe->Pointers,
++                     vqabuf->Drawer.ScreenOffset + vqabuf->Drawer.ImageBuf,
++                     vqabuf->Drawer.BlocksPerRow,
++                     vqabuf->Drawer.NumRows,
++                     vqabuf->Drawer.ImageWidth);
+ 
+     vqabuf->Drawer.LastFrameNum = curframe->FrameNum;
+     vqabuf->Flipper.CurFrame = curframe;
+@@ -342,4 +386,10 @@ void VQA_PrepareFrame(VQAData* vqabuf)
+         LCW_Uncompress(&curframe->Pointers[curframe->PtrOffset], curframe->Pointers, vqabuf->MaxPtrSize);
+         curframe->Flags &= ~0x10;
+     }
++#ifdef SHADEREMU_RA
++    if (curframe->Flags & 0x20) {
++        workers_lcw_wait();
++        curframe->Flags &= ~0x20;
++    }
++#endif
+ }
+diff --git a/common/vqaloader.cpp b/common/vqaloader.cpp
+index 752619e..419e2c3 100644
+--- a/common/vqaloader.cpp
++++ b/common/vqaloader.cpp
+@@ -9,6 +9,9 @@
+ // distributed with this program. You should have received a copy of the
+ // GNU General Public License along with permitted additional restrictions
+ // with this program. If not, see https://github.com/electronicarts/CnC_Remastered_Collection
++#ifdef SHADEREMU_RA
++#include "../redalert/workers.h"
++#endif
+ #include "vqaloader.h"
+ #include "soscomp.h"
+ #include "auduncmp.h"
+@@ -237,6 +240,12 @@ int VQA_Load_VPTZ(VQAHandle* handle, unsigned iffsize)
+ 
+     curframe->Flags |= 0x10;
+     curframe->PtrOffset = lcwoffset;
++#ifdef SHADEREMU_RA
++    /* a worker core unpacks them while the frame before this one is drawn (flag 0x20: wait for it) */
++    if (workers_lcw(&curframe->Pointers[lcwoffset], curframe->Pointers, handle->VQABuf->MaxPtrSize)) {
++        curframe->Flags = (curframe->Flags & ~0x10) | 0x20;
++    }
++#endif
+ 
+     return VQAERR_NONE;
+ }
+@@ -1243,7 +1252,12 @@ VQAData* VQA_AllocBuffers(VQAHeader* header, VQAConfig* config)
+ 
+     // Make a linked list of nodes.
+     for (int index = 0; index < config->NumCBBufs; ++index) {
+-        cbnode = (VQACBNode*)malloc(data->MaxCBSize + sizeof(VQACBNode));
++#ifdef SHADEREMU_RA
++        /* where the worker cores can read it (redalert/workers.h), when the machine has any */
++        cbnode = (VQACBNode*)workers_alloc(data->MaxCBSize + sizeof(VQACBNode));
++        if (cbnode == nullptr)
++#endif
++            cbnode = (VQACBNode*)malloc(data->MaxCBSize + sizeof(VQACBNode));
+ 
+         if (cbnode == nullptr) {
+             VQA_FreeBuffers(data, config, header);
+@@ -1272,7 +1286,13 @@ VQAData* VQA_AllocBuffers(VQAHeader* header, VQAConfig* config)
+ 
+     // Make linked list of framenodes.
+     for (int index = 0; index < config->NumFrameBufs; ++index) {
+-        framenode = (VQAFrameNode*)calloc(data->MaxPalSize + data->MaxPtrSize + sizeof(VQAFrameNode), 1);
++#ifdef SHADEREMU_RA
++        framenode = (VQAFrameNode*)workers_alloc(data->MaxPalSize + data->MaxPtrSize + sizeof(VQAFrameNode) + 16);
++        if (framenode != nullptr) {
++            memset(framenode, 0, data->MaxPalSize + data->MaxPtrSize + sizeof(VQAFrameNode) + 16);
++        } else
++#endif
++            framenode = (VQAFrameNode*)calloc(data->MaxPalSize + data->MaxPtrSize + sizeof(VQAFrameNode), 1);
+ 
+         if (!framenode) {
+             VQA_FreeBuffers(data, config, header);
+@@ -1281,6 +1301,12 @@ VQAData* VQA_AllocBuffers(VQAHeader* header, VQAConfig* config)
+ 
+         data->MemUsed += data->MaxPalSize + data->MaxPtrSize + sizeof(VQAFrameNode);
+         framenode->Pointers = reinterpret_cast<uint8_t*>(&framenode[1]);
++#ifdef SHADEREMU_RA
++        /* from a 16 byte boundary: a worker core unpacks into it, and what is before it is this core's */
++        if (workers_owns(framenode)) {
++            framenode->Pointers = reinterpret_cast<uint8_t*>(framenode) + ((sizeof(VQAFrameNode) + 15) & ~15u);
++        }
++#endif
+         framenode->Palette = reinterpret_cast<uint8_t*>(&framenode[1]) + data->MaxPtrSize;
+         framenode->Codebook = data->CBData;
+ 
+@@ -1438,7 +1464,12 @@ void VQA_FreeBuffers(VQAData* data, VQAConfig* config, VQAHeader* header)
+ 
+     for (int index = 0; index < config->NumFrameBufs && frame_this; ++index) {
+         VQAFrameNode* frame_next = frame_this->Next;
+-        free(frame_this);
++#ifdef SHADEREMU_RA
++        if (workers_owns(frame_this)) {
++            workers_release(frame_this);
++        } else
++#endif
++            free(frame_this);
+         frame_this = frame_next;
+     }
+ 
+@@ -1447,7 +1478,12 @@ void VQA_FreeBuffers(VQAData* data, VQAConfig* config, VQAHeader* header)
+ 
+     for (int index = 0; index < config->NumCBBufs && cb_this; ++index) {
+         VQACBNode* cb_next = cb_this->Next;
+-        free(cb_this);
++#ifdef SHADEREMU_RA
++        if (workers_owns(cb_this)) {
++            workers_release(cb_this);
++        } else
++#endif
++            free(cb_this);
+         cb_this = cb_next;
+     }
+ 
+diff --git a/common/vqatask.cpp b/common/vqatask.cpp
+index 28f9dc5..76a18eb 100644
+--- a/common/vqatask.cpp
++++ b/common/vqatask.cpp
+@@ -9,6 +9,9 @@
+ // distributed with this program. You should have received a copy of the
+ // GNU General Public License along with permitted additional restrictions
+ // with this program. If not, see https://github.com/electronicarts/CnC_Remastered_Collection
++#ifdef SHADEREMU_RA
++#include "../redalert/workers.h"
++#endif
+ #include "vqatask.h"
+ #include "vqaaudio.h"
+ #include "vqaconfig.h"
+@@ -131,6 +134,19 @@ VQAErrorType VQA_Play(VQAHandle* handle, VQAPlayMode mode)
+                     ++data->LoadedFrames;
+                 }
+             }
++#ifdef SHADEREMU_RA
++            /* a frame ahead of the one drawn: a worker core unpacks its pointers meanwhile */
++            if (workers_count() > 1 && !(data->Flags & VQA_DATA_FLAG_VIDEO_MEMORY_SET)
++                && data->LoadedFrames - data->DrawnFrames < 2) {
++                VQAErrorType more = (VQAErrorType)VQA_LoadFrame(handle);
++
++                if (more == VQAERR_NONE) {
++                    ++data->LoadedFrames;
++                } else if (more != VQAERR_NOBUFFER && more != VQAERR_SLEEPING) {
++                    data->Flags |= VQA_DATA_FLAG_VIDEO_MEMORY_SET;
++                }
++            }
++#endif
+ 
+             if (config->DrawFlags & 2) {
+                 data->Flags |= VQA_DATA_FLAG_8;
 diff --git a/redalert/CMakeLists.txt b/redalert/CMakeLists.txt
-index 60a3e85..c5c13b4 100644
+index 60a3e85..60b099e 100644
 --- a/redalert/CMakeLists.txt
 +++ b/redalert/CMakeLists.txt
-@@ -35,6 +35,7 @@ set(REDALERT_SRC
+@@ -35,6 +35,8 @@ set(REDALERT_SRC
      dibfile.cpp
      dibutil.cpp
      display.cpp
 +    gl.cpp
++    workers.c
      door.cpp
      drive.cpp
      drop.cpp
@@ -241,10 +458,10 @@ index 3f1c7f1..2c71953 100644
          Map.Flag_To_Redraw(true);
      }
 diff --git a/redalert/conquer.cpp b/redalert/conquer.cpp
-index 4825ba4..e28feed 100644
+index 4825ba4..1b71c70 100644
 --- a/redalert/conquer.cpp
 +++ b/redalert/conquer.cpp
-@@ -125,6 +125,135 @@ bool Map_Edit_Loop(void);
+@@ -125,6 +125,139 @@ bool Map_Edit_Loop(void);
  
  bool UseOldShapeDraw = false;
  
@@ -258,6 +475,10 @@ index 4825ba4..e28feed 100644
 +void Video_Render_Frame();
 +extern bool InMainLoop;
 +#include "common/host.h"
++#include "workers.h"
++static unsigned char* ShaderEmu_Movie; /* the movie frame the GPU shows, while one plays */
++static unsigned ShaderEmu_Movie_Frames;
++extern unsigned workers_checked, workers_wrong; /* common/vqadrawer.cpp: RALERT_MOVIE_CHECK */
 +extern unsigned ShaderEmu_Show_Cycles, ShaderEmu_Shows, ShaderEmu_Page_Flips, ShaderEmu_Page_Copies;
 +extern unsigned ShaderEmu_GL_Quads, ShaderEmu_GL_Shroud, ShaderEmu_GL_Shadows, ShaderEmu_GL_Cycles;
 +extern unsigned ShaderEmu_GL_Parts[3], ShaderEmu_GL_Objects[3], ShaderEmu_GL_Put[2], ShaderEmu_GL_Refused;
@@ -380,7 +601,7 @@ index 4825ba4..e28feed 100644
  #ifdef CHEAT_KEYS
  void Dump_Heap_Pointers(void);
  void Error_In_Heap_Pointers(char* string);
-@@ -1759,7 +1888,12 @@ bool Main_Loop()
+@@ -1759,7 +1892,12 @@ bool Main_Loop()
      **	If there is no theme playing, but it looks like one is required, then start one
      **	playing. This is usually the symptom of there being no transition score.
      */
@@ -393,7 +614,7 @@ index 4825ba4..e28feed 100644
          Theme.Queue_Song(THEME_PICK_ANOTHER);
      }
  
-@@ -1790,6 +1924,10 @@ bool Main_Loop()
+@@ -1790,6 +1928,10 @@ bool Main_Loop()
              FrameTimer = Options.GameSpeed + (PlayerPtr->Difficulty == DIFF_EASY ? 1 : 0);
          }
      }
@@ -404,7 +625,7 @@ index 4825ba4..e28feed 100644
  
      /*
      **	Update the display, unless we're inside a dialog.
-@@ -1801,7 +1939,7 @@ bool Main_Loop()
+@@ -1801,7 +1943,7 @@ bool Main_Loop()
              if (input) {
                  Keyboard_Process(input);
              }
@@ -413,7 +634,7 @@ index 4825ba4..e28feed 100644
          }
      }
  
-@@ -1826,7 +1964,13 @@ bool Main_Loop()
+@@ -1826,7 +1968,13 @@ bool Main_Loop()
      /*
      **	AI logic operations are performed here.
      */
@@ -428,7 +649,7 @@ index 4825ba4..e28feed 100644
      TimeQuake = false;
  #ifdef FIXIT_CSII //	checked - ajw 9/28/98
      if (!PendingTimeQuake) {
-@@ -1893,6 +2037,9 @@ bool Main_Loop()
+@@ -1893,6 +2041,9 @@ bool Main_Loop()
          PlayerRestarts = false;
          Map.Help_Text(TXT_NONE);
          Set_Video_Cursor_Clip(false);
@@ -438,7 +659,64 @@ index 4825ba4..e28feed 100644
          Do_Restart();
          Set_Video_Cursor_Clip(true);
          return (!GameActive);
-@@ -2885,6 +3032,14 @@ void CC_Draw_Shape(void const* shapefile,
+@@ -2442,6 +2593,25 @@ void Play_Movie(char const* name, ThemeType theme, bool clrscrn, bool immediate)
+             AnimControl.ImageBuf = (unsigned char*)SysMemPage.Get_Offset();
+         }
+ #endif
++#ifdef SHADEREMU_RA
++        /*
++        ** The frame as the GPU shows it, stretched over the window if it is the small kind: the
++        ** game copied each large frame to the screen, and doubled each small one into it, a
++        ** quarter of a megabyte of stores either way. It is GPU memory, which the worker cores
++        ** are given to decode into as well (workers.h). RALERT_MOVIE_SOFT=1: as the game does it.
++        */
++        ShaderEmu_Movie = NULL;
++        if (!getenv("RALERT_MOVIE_SOFT")) {
++            unsigned physical = 0;
++            int width = IsVQ640 ? 640 : 320, height = IsVQ640 ? 400 : 200;
++            ShaderEmu_Movie = host_picture(width, height, &physical);
++            if (ShaderEmu_Movie) {
++                memset(ShaderEmu_Movie, 0, width * height);
++                AnimControl.ImageBuf = ShaderEmu_Movie;
++                workers_target(ShaderEmu_Movie, physical, width * height);
++            }
++        }
++#endif
+ 
+         if (!Debug_Quiet && Get_Digi_Handle() != -1) {
+             AnimControl.OptionFlags |= VQAOPTF_AUDIO;
+@@ -2465,8 +2635,30 @@ void Play_Movie(char const* name, ThemeType theme, bool clrscrn, bool immediate)
+                 // Set_Palette(BlackPalette);
+                 SysMemPage.Clear();
+                 InMovie = true;
++#ifdef SHADEREMU_RA
++                unsigned movie_began = host_ms(), movie_cycles = host_cycles(), movie_shared = workers_frames;
++                ShaderEmu_Movie_Frames = 0;
++#endif
+                 VQA_Play(vqa, VQAMODE_RUN);
+                 VQA_Close(vqa);
++#ifdef SHADEREMU_RA
++                if (getenv("RALERT_FRAMES") || getenv("RALERT_STATS_MS")) {
++                    fprintf(stderr,
++                            "ralert: movie %s: %u frames in %u ms, %uk instructions a frame on this core; %s, %u frames shared with %d worker cores\n",
++                            fullname,
++                            ShaderEmu_Movie_Frames,
++                            host_ms() - movie_began,
++                            (host_cycles() - movie_cycles) / 1000 / (ShaderEmu_Movie_Frames ? ShaderEmu_Movie_Frames : 1),
++                            ShaderEmu_Movie ? "shown by the GPU" : "copied to the screen",
++                            workers_frames - movie_shared,
++                            workers_count());
++                    if (workers_checked) {
++                        fprintf(stderr, "ralert: movie check: %u of %u shared frames differ\n", workers_wrong, workers_checked);
++                    }
++                }
++                ShaderEmu_Movie = NULL;
++                workers_target(NULL, 0, 0);
++#endif
+                 // Resume_Audio_Thread();
+                 InMovie = false;
+ #ifdef MOVIE640
+@@ -2885,6 +3077,14 @@ void CC_Draw_Shape(void const* shapefile,
      if ((flags & SHAPE_FADING) && (!fadingdata)) {
          fadingdata = DisplayClass::FadingShade;
      }
@@ -453,6 +731,38 @@ index 4825ba4..e28feed 100644
  
      static unsigned char* _xbuffer = 0;
  
+@@ -3185,6 +3385,9 @@ extern GraphicBufferClass VQ640;
+ extern bool IsVQ640;
+ int VQ_Call_Back(unsigned char*, int)
+ {
++#ifdef SHADEREMU_RA
++    ShaderEmu_Movie_Frames++;
++#endif
+ #ifdef REMASTER_BUILD
+     return 0;
+ #else
+@@ -3194,6 +3397,11 @@ int VQ_Call_Back(unsigned char*, int)
+         Keyboard->Clear();
+     }
+     Check_VQ_Palette_Set();
++#ifdef SHADEREMU_RA
++    if (ShaderEmu_Movie) {
++        host_show_picture(); /* and the machine's frame ends: nothing else is shown meanwhile */
++    } else {
++#endif
+ #ifdef MOVIE640
+     if (IsVQ640) {
+         VQ640.Blit(SeenBuff);
+@@ -3204,6 +3412,9 @@ int VQ_Call_Back(unsigned char*, int)
+     Interpolate_2X_Scale(&SysMemPage, &SeenBuff, NULL);
+ #endif
+     Frame_Limiter();
++#ifdef SHADEREMU_RA
++    }
++#endif
+ 
+     if ((BreakoutAllowed || Debug_Flag) && key == KN_ESC) {
+         Keyboard->Clear();
 diff --git a/redalert/display.cpp b/redalert/display.cpp
 index d328d82..652e595 100644
 --- a/redalert/display.cpp

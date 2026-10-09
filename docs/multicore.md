@@ -193,6 +193,14 @@ and the parked ones cost core 0 a little (31 to 35 s alone: the commit pass look
 up in every core's write cache). With more than eight cores the blocks have to be closer
 than 256 texels: `--core-pitch 128`.
 
+## A use: Red Alert's movies
+
+`docs/ralert.md` ("Movies, and the worker cores"): the opening movie's frames are decoded by
+core 0 and three workers into a picture the GPU shows, and played in 18.6 s where they took
+41.4. It is the kind of work the workers are for: every pixel stored once, and a core keeps
+only 6 KB of stores a pass. The window system's pool of window buffers ends 4 MiB lower for
+it (`POOL_SIZE` in `linux/nanox/scr_shaderemu.c`): the arena is above it.
+
 ## Switches
 
     --cores N          N cores (1 to 16)

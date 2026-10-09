@@ -734,6 +734,12 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   `host.c`, `shaderemu.cpp` or `soundio_shaderemu.cpp` build and check both games.
 - Its patch is a diff over Tiberian Dawn's: apply that to a clean tree, `git add -A`, edit,
   and save `git diff` as `linux\ralert\vanilla-conquer.patch`.
+  (`linux\ralert\build.sh` puts the tree back without that `git add`: a `git diff` saved after
+  a build has Tiberian Dawn's patch in it too, and the next build fails on it.)
+- Red Alert uses the machine's worker cores for its movies when there are any (`--cores 4`;
+  `docs/ralert.md`, `docs/multicore.md`): `RALERT_MOVIE_CHECK=1` must say `0 of N shared frames
+  differ`, and the state sums above hold with and without them. Run a timing both ways: the
+  workers cost the mission itself 4 to 8% while they have nothing to do there.
 - In Red Alert a cell is "mapped" when any of it shows and "visible" when all of it does; in
   Tiberian Dawn it is the other way round. A renderer carried over with the names swapped
   draws the shroud's edge solid black: compare with the game's own drawing at a held frame.
