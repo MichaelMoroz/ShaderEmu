@@ -98,6 +98,15 @@ void tlb2_flush() {
 // an entry they lack is looked up where the last pass left it (tlb2_saved).
 void tlb_state_load() {
     uint k;
+#if CORES > 1
+    if (hart != 0) {
+        // a worker core keeps none: it starts a pass with every TLB empty (docs/multicore.md)
+        for (k = 0; k < 3 * TLBM_N; k++) { tlbm_tag[k] = 0; tlbm_pg[k] = 0; }
+        tlb_wiped = true;
+        tlb2_gen = 1;
+        return;
+    }
+#endif
     for (k = 0; k < 3 * TLBM_N / 2; k++) {
         uint at = TLB_STATE_AT + 3 * TLB2_N / 2 + k;
         uint4 t = STATE_TEX(uint2(at & 63, at >> 6));

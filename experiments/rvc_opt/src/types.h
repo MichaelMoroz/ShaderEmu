@@ -83,25 +83,31 @@
 #define CSR_STATE_TEXELS 1024
 
 #if CORES > 1
-// A worker core (docs/multicore.md) keeps the CPU's texels and the write cache and nothing
-// else: it has no paging and no float registers, so no TLBs to keep. That is 556 texels, and
-// they are kept as whole tiles of pixels, which is how the GPU runs them: the first 512 where
-// they are (64 x 8), and the last 44 of the cache in a block of 11 x 4 under those, four to a
-// column, for which the pass draws 16 x 4. In a row of their own they were a line a pixel
-// high, which costs the warps of two rows.
+// A worker core (docs/multicore.md) keeps the CPU's texels, the write cache and the float
+// registers, and no TLBs: one that runs with paging starts every pass with none, which costs
+// nothing that can be measured. That is 564 texels, and they are kept as whole tiles of
+// pixels, which is how the GPU runs them: the first 512 where they are (64 x 8), and under
+// those, four to a column, the last 44 of the cache and the eight of the float registers,
+// for which the pass draws 16 x 4. In a row of their own they were a line a pixel high,
+// which costs the warps of two rows.
 #define MC_ROWS 8
 #define MC_TAIL_AT (MC_ROWS * 64)
+#define MC_TAIL_CACHE (L1_STATE_AT + L1_ENTRIES - MC_TAIL_AT)
 // Where texel lin of this core's block is.
 uint2 mc_state_at(uint lin) {
-    if (mc_core != 0 && lin >= MC_TAIL_AT) return uint2((lin - MC_TAIL_AT) >> 2, MC_ROWS + ((lin - MC_TAIL_AT) & 3));
+    if (mc_core != 0 && lin >= MC_TAIL_AT && lin < FP_STATE_AT + 8) {
+        uint slot = lin >= FP_STATE_AT ? MC_TAIL_CACHE + (lin - FP_STATE_AT) : lin - MC_TAIL_AT;
+        return uint2(slot >> 2, MC_ROWS + (slot & 3));
+    }
     return uint2(lin % 64, lin / 64);
 }
 // Which texel the pixel at `pos` of this core's block keeps, as the place it has in core 0's
 // layout; (63, 63), which is nobody's, for a pixel of the padding.
 uint2 mc_texel_of(uint2 pos) {
-    if (mc_core == 0 || pos.y < MC_ROWS) return pos;
-    uint lin = MC_TAIL_AT + pos.x * 4 + (pos.y - MC_ROWS);
-    return pos.y < MC_ROWS + 4 && lin < L1_STATE_AT + L1_ENTRIES ? uint2(lin % 64, lin / 64) : uint2(63, 63);
+    if (mc_core == 0 || pos.y < MC_ROWS || pos.y >= STATE_ROWS) return pos;
+    uint slot = pos.x * 4 + (pos.y - MC_ROWS);
+    uint lin = slot < MC_TAIL_CACHE ? MC_TAIL_AT + slot : FP_STATE_AT + (slot - MC_TAIL_CACHE);
+    return pos.y < MC_ROWS + 4 && slot < MC_TAIL_CACHE + 8 ? uint2(lin % 64, lin / 64) : uint2(63, 63);
 }
 #endif
 uint l1_slot(uint4 tags, uint tag) {
@@ -378,7 +384,11 @@ static uint xr[XR_F + 32];
 // They are kept from pass to pass in eight texels of the state zone, after the TLBs' (FP_STATE_AT).
 void fp_state_load() {
     for (uint k = 0; k < 8; k++) {
+#if CORES > 1
+        uint4 t = STATE_TEX(mc_state_at(FP_STATE_AT + k));
+#else
         uint4 t = STATE_TEX(uint2((FP_STATE_AT + k) & 63, (FP_STATE_AT + k) >> 6));
+#endif
         xr[XR_F + 4 * k] = t.r; xr[XR_F + 4 * k + 1] = t.g; xr[XR_F + 4 * k + 2] = t.b; xr[XR_F + 4 * k + 3] = t.a;
     }
 }
@@ -812,7 +822,12 @@ bool pixel_has_state(uint2 pos) {
     // CSR data area and FB are not "state", they're only touched by commit
     uint lin = pos.x + 64 * pos.y;
 #if CORES > 1
-    if (hart != 0) return lin < L1_STATE_AT + L1_ENTRIES;   // a worker: no TLBs, no float registers
+    if (hart != 0) {   // a worker: no TLBs
+#ifdef FPU
+        if (lin >= FP_STATE_AT && lin < FP_STATE_AT + 8) return true;
+#endif
+        return lin < L1_STATE_AT + L1_ENTRIES;
+    }
 #endif
 #ifndef NO_PAGING
     if (lin >= TLB_STATE_AT && lin < TLB_STATE_AT + TLB_STATE_TEXELS) return true;

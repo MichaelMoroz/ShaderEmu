@@ -38,11 +38,23 @@ struct shaderemu_gpu_submit {
 };
 #define SHADEREMU_GPU_SUBMIT	_IOW('G', 2, struct shaderemu_gpu_submit)
 
+/* returns the number of the first page of the caller's page table: what a program hands a
+ * worker core for it to run in the program's memory (docs/multicore.md) */
+#define SHADEREMU_GPU_ROOT	_IO('G', 3)
+#define WORKERS_PHYS	0x86C00000UL	/* the worker cores' mailboxes */
+#define WORKERS_STOP	0x5453434d	/* in a core's start word: park it */
+#define WORKERS_MOST	16
+
 static void __iomem *gpu_regs;
+static void __iomem *workers;
 static DEFINE_MUTEX(gpu_lock);
 
 static long shaderemu_gpu_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
+	if (cmd == SHADEREMU_GPU_ROOT) {
+		file->private_data = workers;	/* this one has them: see release */
+		return csr_read(CSR_SATP) & 0x3fffff;
+	}
 	if (cmd == SHADEREMU_GPU_SUBMIT) {
 		struct shaderemu_gpu_submit s;
 		u32 frames;
@@ -96,6 +108,13 @@ static int shaderemu_gpu_release(struct inode *inode, struct file *file)
 	writel(0, gpu_regs + DISPLAY_CURSOR);
 	writel(0, gpu_regs + VOLUME_LIST + 4);
 	writel(0, gpu_regs + VOLUME_LIST);
+	/* and its worker cores run in memory that is going away: park them */
+	if (file->private_data) {
+		int k;
+
+		for (k = 1; k < WORKERS_MOST; k++)
+			writel(WORKERS_STOP, workers + 16 * k);
+	}
 	return 0;
 }
 
@@ -121,7 +140,8 @@ static int __init shaderemu_gpu_init(void)
 		return -ENODEV;
 	}
 	gpu_regs = ioremap(GPU_REGS, PAGE_SIZE);
-	if (!gpu_regs)
+	workers = ioremap(WORKERS_PHYS, PAGE_SIZE);
+	if (!gpu_regs || !workers)
 		return -ENOMEM;
 	pr_info("shaderemu_gpu: /dev/gpu at 0x%lx, %lu KiB\n", GPU_PHYS, GPU_SIZE >> 10);
 	return misc_register(&shaderemu_gpu_dev);

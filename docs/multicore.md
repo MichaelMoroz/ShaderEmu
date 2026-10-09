@@ -28,29 +28,42 @@ the Linux checksums are as before).
   carries the texel's other three as it read them, and would undo another core's store to them
   in the same pass. What changes hands is therefore 16 bytes with one writer a pass. There are
   no atomic instructions between cores and no locks; `mc.h` (programs/mc) is the convention.
-- **Workers** have no devices, no paging and no float registers, and take no traps. A worker is parked until core 0 writes its
-  mailbox, the texel at `0x86C00000 + 16 k`: `{ "MCST", pc, sp, a0 }`. It starts there in machine
-  mode with paging off and its number in `a1`. `wfi` ends its pass; `ebreak` parks it again, and
-  so does any trap, with the cause in its state word, texel (41,0).a. `mhartid` is the core.
-- **The arena** is 4 MiB of the GPU device's memory at `0x86C00000`, which `/dev/gpu` maps: a
-  Linux program and a worker with paging off see the same bytes there, and no kernel change
-  was needed. (Nothing keeps a GPU client from using that range too; this is a prototype.)
+- **Workers** have no devices and take no traps; they have the float registers and paging.
+  A worker is a thread of a Linux program that the kernel does not know of: it runs in user
+  mode on the program's own page table, so the program's functions and pointers are its own.
+  It is parked until core 0 writes its start word, the texel at `0x86C00000 + 16 k`:
+  `{ "MCSU", pc, sp, root }`, the page table's first page being number `root` (the kernel
+  tells a program its own: an ioctl of `/dev/gpu`). It starts there with its number in `a0`.
+  `pause` is its sleep until the first word of its job changes, and `ebreak` parks it again.
+- **A trap stops a worker where it is.** There is no kernel on a worker to take one, so the
+  machine writes `{ count, cause, address, pc }` into the worker's mailbox and the worker
+  waits. A page the program has not touched yet is the usual cause: the library, on core 0,
+  touches the page (which the kernel answers as it would for the program itself) and writes
+  the count back, and the worker runs the instruction again. So a job cannot make a system
+  call, and anything else that traps ends the program with a line saying where.
+- **No TLB kept.** A worker starts every pass with empty TLBs and walks the page table for
+  each page it uses in the pass ("What paging costs a worker", below).
+- **The mailboxes** are one page of the GPU device's memory at `0x86C00000`, which `/dev/gpu`
+  maps: the start words, and 64 bytes a core (its job, its answer, its fault and the word
+  that lets it go on). `programs/mc/mc.h` is the layout.
+- **A program that ends** has its workers parked by the kernel (the driver's release writes
+  "MCST" into every start word): a worker must not go on in memory that is being given away.
 
 At exit the harness prints a line a core: its pc, instructions and whether it runs or what
 parked it.
 
 ## The test (`programs/mc`)
 
-`worker.c` is the test's jobs, linked at the arena; `mctest.c` is a Linux program that
-carries them, has the library start the workers and checks them (`programs\mc\build.bat`, then
-`python tools\make_linux_image.py`):
+`mctest.c` is a Linux program whose own functions are the jobs: it has the library start the
+workers and checks them (`programs\mc\build.bat`, then `python tools\make_linux_image.py`):
 
 | Test | What it shows |
 |---|---|
 | primes | a count split four ways equals the count on core 0 alone |
-| fill | each worker fills 64 KiB of its own; core 0 reads every word (13 passes: the write cache is 6 KiB) |
+| fill | each worker fills 64 KiB of its own; core 0 reads every word (18 passes: the write cache is 6 KiB, and the buffer's pages are new) |
 | stripe | three workers fill one buffer, every third 16 bytes each: no store undoes a neighbour's |
 | sum | each worker reads what the other two wrote |
+| pages | a worker writes and reads 64 pages nobody has touched: 64 stops, each answered by core 0 in two passes |
 | park | `ebreak` parks them; the next run starts them again |
 
 All pass. With four cores and the workers parked, Linux boots in the same number of
@@ -157,11 +170,11 @@ without the TLBs' 409 texels and with a smaller write cache would be half the si
 
 ## Workers that keep only what they need
 
-A worker has no paging and no float registers, so the 409 texels of the TLBs and the 8 of the
-float registers were 43% of its pixels running the whole tick to write back what never
-changes. It keeps the CPU's 44 texels and the write cache's 512 and nothing else, and they
-are laid out as whole tiles, which is how the GPU runs pixels: the first 512 where they are
-(64 x 8), and the cache's last 44 in a block of 11 x 4 under those, four to a column
+A worker keeps no TLBs from one pass to the next, so the 409 texels of the TLBs were 42% of
+its pixels running the whole tick to write back what it does not need. It keeps the CPU's 44
+texels, the write cache's 512 and the float registers' 8 and nothing else, and they are
+laid out as whole tiles, which is how the GPU runs pixels: the first 512 where they are
+(64 x 8), and the cache's last 44 and the float registers in a block of 13 x 4 under those, four to a column
 (`MC_ROWS`, `mc_state_at()` in `src/types.h`). The pass draws two zones for a worker, 64 x 8
 and 16 x 4: 576 pixels for 556 texels. (As a row of their own the 44 would be a line one
 pixel high, which the shape sweep above says costs twice its pixels.)
@@ -213,55 +226,52 @@ copy back, or the commit that reads it, would have to know.)
 
 | File | What it is |
 |---|---|
-| `mc.h` | the arena's layout and the mailboxes: what the machine, the library and a worker agree on |
-| `mcw.h`, `mcw.c` | the library a program links: the arena, the workers' start, jobs, the wait |
-| `mcw_worker.h` | the entry and the loop a worker runs, around the program's own jobs |
-| `worker.ld` | links a worker's code to run in the arena |
-| `worker.c`, `mctest.c` | the test: its jobs, and the program that gives them out |
+| `mc.h` | the mailboxes: what the machine, the library and a worker agree on |
+| `mcw.h`, `mcw.c` | the library a program links: the workers' start and stacks, jobs, the wait, the pages a worker stops at |
+| `mctest.c` | the test |
 
-A program supplies two things. Its **jobs**, in a file of its own that is built bare (no
-library, no paging, no float instructions, `-march=rv32ima`) and carried in the program as
-bytes:
+A job is a function of the program and two words for it:
 
-    #include "mc.h"
-    static uint32_t worker_job(uint32_t fn, uint32_t a0, uint32_t a1, uint32_t core) {
-        if (fn == MY_SUM) return sum((const uint32_t *)a0, a1);
-        return 0;
+    static uint32_t sum(uint32_t words_at, uint32_t count) {
+        const uint32_t *p = (const uint32_t *)words_at;      // the program's own memory
+        ...
     }
-    #include "mcw_worker.h"
 
-and the **calls** that give them out:
-
-    int n = mcw_open(worker_code, sizeof worker_code, 3);    // how many workers there are: 0 without --cores
-    uint32_t *data = mcw_alloc(bytes);                        // arena memory: the same address for a worker
-    ...fill data...
-    for (k = 1; k <= n; k++) mcw_post(k, MY_SUM, (uint32_t)part(k), words(k));
+    int n = mcw_open(3);                                      // how many workers there are: 0 without --cores
+    for (k = 1; k <= n; k++) mcw_post(k, sum, (uint32_t)part(k), words(k));
     ...this core's own share...
     for (k = 1; k <= n; k++) { mcw_wait(k); total += mcw_result(k); }
     mcw_close();                                              // before leaving: atexit(mcw_close) will do
 
-`programs/mc/build.bat` and `linux/ralert/build.sh` show the two builds (clang with the small
-runtime, and the image's toolchain).
+`mcw.c` uses nothing of the C library (it makes its system calls itself), so it links into a
+program with any runtime: `programs/mc/build.bat` and `linux/ralert/build.sh` show two (clang
+with the small runtime, and the image's toolchain with musl).
 
 What a program has to keep to:
 
-- **A worker sees only the arena and what it is given by physical address.** It has no paging:
-  a pointer into the program's own memory means nothing to it. What a job reads or writes is
-  allocated with `mcw_alloc()` (4 MiB in all, less the first megabyte), or is GPU memory, whose
-  physical address the program passes (`seglAddress()`: a picture, a texture).
+- **A job computes, reads and writes memory, and returns.** No system calls, and nothing
+  that makes one: `printf`, file reading, a `malloc` that has to ask the kernel for more. The
+  C library is not made for a second thread it does not know of either (its thread pointer
+  is shared): allocate before the job, print after it.
 - **A store is seen by the other cores one pass later.** `mcw_post()` followed by this core's
   own work is the usual order: the pass that ends next carries the job and its data over
-  together. `mcw_wait()` ends passes until the worker has answered.
-- **Sixteen bytes, one writer a pass.** Give each core whole texels: rows of a picture whose
-  width is a multiple of 16, buffers from `mcw_alloc()` (they are 16 bytes aligned). A header
-  that this core writes must not share its last 16 bytes with data a worker writes.
+  together. `mcw_wait()` ends passes until the worker has answered. Code that both cores run
+  at once must not expect to see the other's stores at all.
+- **Sixteen bytes, one writer a pass**, and this holds for all of the program's memory now:
+  two variables side by side are one texel. Give a worker whole texels to write: rows of a
+  picture whose width is a multiple of 16, buffers from `mcw_alloc()` or `posix_memalign(16)`
+  rounded up to 16, its own stack. Globals that a job writes want `aligned(16)` and a size
+  of whole 16s.
+- **Memory the program has not touched yet stops a worker** until core 0 looks
+  (`mcw_wait()`, `mcw_done()`): two passes a page. Touch a job's buffers first where that
+  matters (`workers_alloc` in `linux/ralert/workers.c`).
 - **A worker keeps 6 KB of stores a pass**, as core 0 does, and runs on until its job is done
   however many passes that takes. For work that is all stores, the cores' number is the gain.
-- **One program at a time.** The arena carries its owner's process number; `mcw_open()` gives 0
-  while another program that is still alive has it, and a program that gets 0 does the work
-  itself.
-- **No workers is the common case**: Unity runs one core, and so does the harness without
-  `--cores`. Every use has to fall back on the program doing the job itself.
+- **One program at a time.** The mailbox page carries its owner's process number; `mcw_open()`
+  gives 0 while another program that is still alive has it, and a program that gets 0 does
+  the work itself.
+- **No workers is the common case to allow for**: the harness without `--cores` has one core.
+  Every use has to fall back on the program doing the job itself.
 
 What it is good for, and what not:
 
@@ -271,16 +281,15 @@ What it is good for, and what not:
 - **A pipeline a frame ahead**: what the next step needs is begun on a worker while this core
   does the present one, and waited for only when it is needed (`workers_lcw` in
   `linux/ralert/workers.c`).
-- **Not a program's own logic as it stands.** A game's objects are in its own memory, which a
-  worker cannot reach, and its code expects to see its own stores at once. To give a worker
-  such work its data has to be moved into the arena, or copied there for the job.
+- **A part of a program's own logic**, since a worker has the program's memory: a step that
+  can run a frame behind or ahead of the rest, on data the rest leaves alone meanwhile.
 - **Not small jobs.** Giving a job out and taking the answer costs a pass or two (some
   milliseconds): below some tens of thousands of instructions the core does it sooner itself.
 
 What it costs: nothing to speak of while the workers sleep; 5% of a pass for the first busy
 one and 17% for three; and the commit pass looks a RAM texel up in each busy core's cache.
 
-## What paging would cost a worker
+## What paging costs a worker
 
 Nothing in pixels. A worker that runs a program's own code needs the program's page table,
 and the question was whether it then needs core 0's 409 texels of TLBs, which would make it
@@ -290,18 +299,20 @@ experiment, not kept: the second level ignored and the megapage entries cleared 
 `tlb_state_load`) runs a Linux boot no slower, 0.476 ms against 0.548 and 0.625 for 2,048
 instructions a pass and 2.91 ms against 3.01 and 3.06 for 16,384, with the same instructions
 a pass. A page's first use in a pass is a walk of two table entries, and a pass touches few
-pages. So a worker with paging keeps the CPU's texels, the write cache and the eight texels
-of float registers, 564 in the 576 pixels a thin worker has now, and starts every pass with
-empty TLBs.
+pages. So a worker keeps the CPU's texels, the write cache and the eight texels of float
+registers, 564 in the 576 pixels of its two zones, and starts every pass with empty TLBs
+(`tlb_state_load` in `src/mmu.h`). There was a kind of worker without paging before this
+one, which ran bare code in an arena of its own; it is gone, and nothing was lost in speed:
+`mctest`'s figures and Red Alert's movie are the same.
 
 ## A use: Red Alert's movies
 
-`docs/ralert.md` ("Movies, and the worker cores"; `linux/ralert/workers.c` and `worker.c` over the
+`docs/ralert.md` ("Movies, and the worker cores"; `linux/ralert/workers.c` over the
 library above): the opening movie's frames are decoded by
 core 0 and three workers into a picture the GPU shows, and played in 18.6 s where they took
 41.4. It is the kind of work the workers are for: every pixel stored once, and a core keeps
-only 6 KB of stores a pass. The window system's pool of window buffers ends 4 MiB lower for
-it (`POOL_SIZE` in `linux/nanox/scr_shaderemu.c`): the arena is above it.
+only 6 KB of stores a pass. The window system's pool of window buffers ends below the
+mailbox page (`POOL_SIZE` in `linux/nanox/scr_shaderemu.c`).
 
 ## What the cores did, for the guest and the host
 
@@ -341,8 +352,8 @@ The VRChat machine has four cores (`CORES` in `MachineBlit.cginc`, for all three
 | core 0 busy, three workers asleep (`mctest 3 900000 bench 0`) | 1.61 to 1.76 ms | 4.7 to 4.9M a second | | |
 | core 0 and three workers busy (`bench 2`) | 1.78 to 1.81 ms | 4.5 to 4.6M | 13.6 to 13.8M | 18.1 to 18.4M |
 
-A program killed while its workers run leaves them running: the next `mctest` finds no
-worker to start ("0 worker cores") until the machine is switched off and on.
+(Those figures are of the workers before they had paging; the world's shader sources and
+boot images have to be synced and imported again for the kind described here.)
 
 ## Switches
 

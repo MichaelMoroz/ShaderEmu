@@ -25,19 +25,8 @@ git -C "$VC" apply "$TD/vanilla-conquer.patch"
 cp "$TD/cxxrt.cpp" "$TD/shaderemu.cpp" "$TD/soundio_shaderemu.cpp" "$TD/host.c" "$TD/host.h" "$VC/common/"
 cp "$HERE/gl.cpp" "$VC/redalert/"
 # The worker cores' side (docs/multicore.md): mcw.c is the library every program has for them,
-# workers.c the game's jobs over it, worker.c what the workers
-# run, built bare for the arena's address and carried in the game as bytes.
+# workers.c the game's jobs over it.
 cp "$HERE/workers.c" "$HERE/workers.h" "$REPO/programs/mc/mc.h" "$REPO/programs/mc/mcw.h" "$REPO/programs/mc/mcw.c" "$VC/redalert/"
-riscv32-linux-gcc -march=rv32ima -mabi=ilp32 -O2 -ffreestanding -fno-builtin -fno-pie -no-pie -nostdlib -static \
-    -fno-stack-protector -Wl,--build-id=none -Wl,-T,"$REPO/programs/mc/worker.ld" -I"$REPO/programs/mc" -I"$HERE" \
-    "$HERE/worker.c" -o "$WORK/src/ralert-worker.elf"
-riscv32-linux-objcopy -O binary "$WORK/src/ralert-worker.elf" "$WORK/src/ralert-worker.bin"
-python3 - "$WORK/src/ralert-worker.bin" "$VC/redalert/worker_code.h" <<'PY'
-import sys
-d = open(sys.argv[1], 'rb').read()
-d += bytes(-len(d) % 4)
-open(sys.argv[2], 'w').write('static const unsigned char worker_code[] __attribute__((aligned(4))) = {' + ','.join(map(str, d)) + '};\n')
-PY
 
 GLINC="-idirafter $REPO/programs/linux/include -I$MW/src/include -I$REPO/linux/userland"
 # (the flags are Tiberian Dawn's: docs/tdawn.md)

@@ -745,11 +745,15 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   and save `git diff` as `linux\ralert\vanilla-conquer.patch`.
   (`linux\ralert\build.sh` puts the tree back without that `git add`: a `git diff` saved after
   a build has Tiberian Dawn's patch in it too, and the next build fails on it.)
-- A program that uses the worker cores links `programs/mc/mcw.c` and gives it its jobs as a
-  bare file built around `mcw_worker.h` (`docs/multicore.md`, "Using the workers from a
-  program"): do not copy the start and the mailboxes into a program again. `mctest` is the
+- A program that uses the worker cores links `programs/mc/mcw.c` and posts its own functions
+  as jobs (`docs/multicore.md`, "Using the workers from a program"): a worker is a thread of
+  the program in user mode, on its page table. There is one kind of worker; do not add
+  another, and do not copy the start and the mailboxes into a program. A job makes no system
+  call and writes only 16-byte pieces of memory that nobody else writes. `mctest` is the
   library's test: it must print `mctest: PASS` before and after any other program that used
-  the workers in the same boot.
+  the workers in the same boot, and after one that was killed (`kill -9`) while they ran.
+- A worker's start needs the kernel's `SHADEREMU_GPU_ROOT` ioctl (`linux/kernel/shaderemu_gpu.c`):
+  with a kernel from before it `mcw_open()` gives 0 and everything runs on core 0.
 - To see where a guest's leaf functions are called from, `--ra-log FILE` and
   `python tools\pc_callers.py FILE game=prog.nm`; where inside a function, `tools\pc_hot_in.py`.
 - Red Alert uses the machine's worker cores for its movies when there are any (`--cores 4`;

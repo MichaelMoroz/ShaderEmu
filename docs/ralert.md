@@ -67,14 +67,13 @@ a pass (its write cache: `docs/multicore.md`).
   `linux/tdawn/host.c`): decoded once, into GPU memory, and drawn from there, stretched over
   the window if it is one of the small movies. No copy and no doubling by the game.
 - **The worker cores decode it** when the machine has any (`--cores 4` in the harness;
-  `linux/ralert/workers.c` is the game's jobs over the library every program has for them,
-  `programs/mc/mcw.c`, and `worker.c` what the workers run, built bare for the arena and
-  carried in the game as bytes). A frame's block rows are shared between the
+  `linux/ralert/workers.c` is the game's jobs, functions a worker calls in the game's own
+  memory, over the library every program has for them, `programs/mc/mcw.c`). A frame's block rows are shared between the
   cores, each writing its own rows of the picture, and the last worker unpacks the next
   frame's block pointers (LCW) while this one is drawn: the player loads a frame ahead for
-  that. The movie's codebooks and pointers are allocated in the arena, which the game maps
-  at the address the workers know it by; the picture is GPU memory, which the workers are
-  given by its physical address.
+  that. The movie's codebooks and pointers are allocated in whole 16 bytes with their pages
+  already there (`workers_alloc`), so that no core stores beside another's and no worker
+  stops at a new page; the picture is GPU memory, which a worker has as the game has it.
 - `RALERT_MOVIE_SOFT=1` is the game's own way, `RALERT_WORKERS=N` uses no more than N workers,
   and `RALERT_MOVIE_CHECK=1` decodes every shared frame on core 0 as well and compares: 0 of
   156 differ. Each movie prints a line (`ralert: movie ...`).

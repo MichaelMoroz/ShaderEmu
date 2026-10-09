@@ -21,7 +21,7 @@
 /* /dev/gpu maps GPU memory from GPU_PHYS; offsets below are from there */
 #define GPU_PHYS	0x86000000u
 #define GPU_SIZE	0x01b00000u
-#define POOL_SIZE	0x00c00000u	/* window buffers, from offset 0; the 4 MiB above are the worker cores' arena (programs/mc/mc.h) */
+#define POOL_SIZE	0x00c00000u	/* window buffers, from offset 0; the worker cores' mailbox page is right above (programs/mc/mc.h) */
 #define REGS_OFFSET	0x01000000u	/* the machine's control words (physical 0x87000000) */
 #define LAYERS_OFFSET	0x01001000u	/* the display's layer table: count, then x, y, w, h, address */
 #define LIST_OFFSET	0x01400000u	/* our command list: 4096 commands of 64 bytes */

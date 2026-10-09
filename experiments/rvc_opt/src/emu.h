@@ -171,7 +171,7 @@ DEF(divu, FormatR, { // rv32m
     WR_RD(result)
 })
 DEF(ebreak, FormatEmpty, { // system
-    // unnecessary? (a worker core's way to park itself: mc.h)
+    // unnecessary? (a worker core's way to park itself until its next start: mc.h)
     MC_PARK(MC_PARKED_EBREAK)
 })
 #ifdef SBI_HLE
@@ -486,7 +486,6 @@ DEF(wfi, FormatEmpty, { // system
     // Ends this pass's run of instructions: interrupts, input and the GPU device can only
     // change anything between passes, so there is nothing to wait for inside one.
     cpu.stall = STALL_WFI;
-    MC_SLEEP   // (a worker core: until its job word changes, mc.h)
 })
 DEF(xor, FormatR, { // rv32i
     WR_RD(xreg(ins.rs1) ^ xreg(ins.rs2))
@@ -1223,6 +1222,7 @@ void emulate_l1(L1P0) {
             // something only another pass can bring, and unlike wfi it may say so in any mode
             if (ins_word == 0x0100000f) {
                 cpu.stall = STALL_WFI;
+                MC_SLEEP   // (a worker core: until its job word changes, mc.h)
             }
 
             if (ret.csr_write && !ret.trap.en) {
@@ -1307,12 +1307,11 @@ void emulate_l1(L1P0) {
     /*     cpu.trap_count = cpu.pc; */
     /* } */
 
+    MC_FAULT(ret)   // (a worker core in user mode stops where it is: mc.h)
     bool e_no_trap = !ret.trap.en;
 
     // will write CSR_MIP if necessary
     handle_irq_and_trap(ret, mip_override);
-    // a worker core has nothing to handle a trap with: it parks, and says why
-    if (!e_no_trap) { MC_PARK(MC_PARKED_TRAP | (ret.trap.type << 8)) }
 
     // If this step took no trap, repeating it with the same inputs does nothing: either no
     // interrupt is pending-and-enabled, or one is pending but masked, in which case the only

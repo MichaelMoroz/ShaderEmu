@@ -1,14 +1,19 @@
 /*
- * The worker cores for a Linux program (docs/multicore.md): one library for every program
- * that uses them. The program gives it the code its workers run (a file built bare for the
- * arena around mcw_worker.h) and then posts jobs; what the jobs are is the program's.
+ * The worker cores for a Linux program (docs/multicore.md): threads of the program that the
+ * kernel does not know of. A job is a function of the program and two words for it; a worker
+ * runs it on a stack of its own, in the program's memory as the program has it.
  *
- * The arena is 4 MiB that the program has at the address the workers know it by, so a
- * pointer into it means the same on both sides. A core sees another's stores one pass of the
- * machine later, and two cores must not store to the same 16 bytes in one pass.
+ * What a job may do: compute, read and write the program's memory. What it may not: make a
+ * system call (nor call anything that does: printf, malloc that asks for more memory, file
+ * reading) or leave the function any other way than by returning.
  *
- * One program at a time: the arena carries its owner's process number, and mcw_open() gives
- * 0 while another program that is still alive has it.
+ * What both sides have to keep to: a core sees another's stores one pass of the machine
+ * later, and two cores must not store to the same 16 bytes in one pass (addresses that differ
+ * only in their last four bits). Give a job memory of its own to write: rows of a buffer
+ * whose width is a multiple of 16, allocations from mcw_alloc(), its own stack.
+ *
+ * One program at a time has the workers: mcw_open() gives 0 while another that is still alive
+ * does, and where the machine has none. A program does the work itself then.
  */
 #ifndef MCW_H
 #define MCW_H
@@ -20,22 +25,29 @@
 extern "C" {
 #endif
 
-/* Starts up to `limit` workers on `code`; how many there are (0: none, or not ours to use). */
-int mcw_open(const unsigned char *code, unsigned bytes, int limit);
+typedef uint32_t (*mcw_fn)(uint32_t a0, uint32_t a1);
+
+/* Starts up to `limit` workers; how many there are. */
+int mcw_open(int limit);
 int mcw_count(void);
-/* Parks them and gives the arena up. A program calls it before it leaves (atexit will do). */
+/* Parks them and gives them up. A program calls it before it leaves (atexit will do). */
 void mcw_close(void);
-/* Memory of the arena, 16 bytes aligned, or NULL; mcw_free_all() takes all of it back. */
+/* Memory that begins and ends on 16 bytes, for a core of its own to write; never freed. */
 void *mcw_alloc(unsigned bytes);
-void mcw_free_all(void);
-int mcw_owns(const void *memory);
-/* A job for worker k (1 to mcw_count()): the worker's code is called with fn, a0, a1. */
-void mcw_post(int k, uint32_t fn, uint32_t a0, uint32_t a1);
-/* Whether worker k has finished what it was posted last; its answer. */
+/* A job for worker k (1 to mcw_count()): it calls fn(a0, a1). */
+void mcw_post(int k, mcw_fn fn, uint32_t a0, uint32_t a1);
+/* Whether worker k has finished what it was posted last; what the function returned. */
 int mcw_done(int k);
 uint32_t mcw_result(int k);
-/* Ends this core's passes until it has. How many passes that took. */
+/*
+ * Ends this core's passes until it has; how many passes that took. A worker that stops at a
+ * page the program has not touched yet is helped on from here (and from mcw_done()): the
+ * page is touched, which the kernel answers, and the worker goes on. Any other stop ends the
+ * program with a line saying where.
+ */
 int mcw_wait(int k);
+/* Whether the code that asks is running on a worker. */
+int mcw_on_worker(void);
 
 #ifdef __cplusplus
 }
