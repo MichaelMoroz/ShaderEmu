@@ -366,6 +366,13 @@ instructions in the harness (8,192 in the world).
 | ClassiCube | 60 thousand, 48 frames a second | none while playing. Its start is 133 million instructions, of which making the world is 40 and building its meshes 40: jobs for workers, not done (the mesh builder has one set of buffers, and the world's maker allocates as it goes) |
 | The window system | | none: see below |
 
+Loading is where the long jobs are. Quake's start to a level's first frame is 160 million
+instructions (55 s), with no piece that is the server's or the client's alone: the models'
+skins filled round their edges 10%, places found for the light maps 9%, the models' triangle
+strips 7%, the level made for the GPU 5.5%. The first two are loops to make cheaper on one
+core before any is shared out; a model's skin and strips are a job a worker could have while
+the next file is read.
+
 **The window system.** Composition is the GPU's already, and a drawing request is mostly not
 computing: of the frames of the machine while `nxbench` draws (25 fills, 100 lines of text, 15
 scrolls, 200 buttons: 14 million instructions in 6.4 s), 46% are the processor idle, waiting
