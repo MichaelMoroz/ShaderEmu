@@ -47,7 +47,11 @@ the Linux checksums are as before).
   maps: the start words, and 64 bytes a core (its job, its answer, its fault and the word
   that lets it go on). `programs/mc/mc.h` is the layout.
 - **A program that ends** has its workers parked by the kernel (the driver's release writes
-  "MCST" into every start word): a worker must not go on in memory that is being given away.
+  "MCST" into the start words of the cores it had): a worker must not go on in memory that is
+  being given away.
+- **The kernel hands the cores out** (an ioctl of `/dev/gpu`: so many wanted, a bit a core
+  given, and the page table's root): several programs can have workers at once, a game one
+  and the window system another, and a core is free again when its program closes it or ends.
 
 At exit the harness prints a line a core: its pc, instructions and whether it runs or what
 parked it.
@@ -268,9 +272,10 @@ What a program has to keep to:
   matters (`workers_alloc` in `linux/ralert/workers.c`).
 - **A worker keeps 6 KB of stores a pass**, as core 0 does, and runs on until its job is done
   however many passes that takes. For work that is all stores, the cores' number is the gain.
-- **One program at a time.** The mailbox page carries its owner's process number; `mcw_open()`
-  gives 0 while another program that is still alive has it, and a program that gets 0 does
-  the work itself.
+- **Ask for what is needed, not for all.** `mcw_open(n)` gives up to n of the cores no other
+  program has, and they are that program's until it closes them: a program that takes every
+  core leaves none for the next. It may get fewer than it asked for, or none, and does the
+  work itself then.
 - **No workers is the common case to allow for**: the harness without `--cores` has one core.
   Every use has to fall back on the program doing the job itself.
 

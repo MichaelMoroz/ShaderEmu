@@ -12,8 +12,9 @@
  * only in their last four bits). Give a job memory of its own to write: rows of a buffer
  * whose width is a multiple of 16, allocations from mcw_alloc(), its own stack.
  *
- * One program at a time has the workers: mcw_open() gives 0 while another that is still alive
- * does, and where the machine has none. A program does the work itself then.
+ * The kernel hands the cores out: mcw_open() gives as many as are wanted of those no other
+ * program has, which may be none, and where the machine has none. A program does the work
+ * itself then. They are free again when the program closes them or ends.
  */
 #ifndef MCW_H
 #define MCW_H

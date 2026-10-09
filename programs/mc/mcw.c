@@ -10,16 +10,17 @@
 static uint8_t *page;		/* the mailboxes */
 static uint8_t *stacks;
 static int device = -1;		/* kept open: the kernel parks the workers when it closes */
-static int count;
+static int count, stack_count;
+static int core_of[MC_MAX_CORES];	/* worker k of this program (1 to count) is that core */
 static uint32_t seq[MC_MAX_CORES];
 static uint8_t *chunk;
 static uint32_t chunk_left;
 unsigned mcw_faults;		/* pages touched for a worker so far */
 
-static mc_job *job_of(int k) { return (mc_job *)(page + MC_JOB_AT(k)); }
-static mc_answer *answer_of(int k) { return (mc_answer *)(page + MC_ANSWER_AT(k)); }
-static mc_fault *fault_of(int k) { return (mc_fault *)(page + MC_FAULT_AT(k)); }
-static volatile uint32_t *resume_of(int k) { return (volatile uint32_t *)(page + MC_RESUME_AT(k)); }
+static mc_job *job_of(int k) { return (mc_job *)(page + MC_JOB_AT(core_of[k])); }
+static mc_answer *answer_of(int k) { return (mc_answer *)(page + MC_ANSWER_AT(core_of[k])); }
+static mc_fault *fault_of(int k) { return (mc_fault *)(page + MC_FAULT_AT(core_of[k])); }
+static volatile uint32_t *resume_of(int k) { return (volatile uint32_t *)(page + MC_RESUME_AT(core_of[k])); }
 
 static long call6(long number, long a, long b, long c, long d, long e, long f)
 {
@@ -33,8 +34,6 @@ static long call6(long number, long a, long b, long c, long d, long e, long f)
 	__asm__ volatile("ecall" : "+r"(a0) : "r"(a7), "r"(a1), "r"(a2), "r"(a3), "r"(a4), "r"(a5) : "memory");
 	return a0;
 }
-static long own_pid(void) { return call6(172, 0, 0, 0, 0, 0, 0); }
-static int alive(long pid) { return pid > 0 && call6(129, pid, 0, 0, 0, 0, 0) == 0; }	/* kill(pid, 0) */
 static void *map(long bytes, int fd, long offset)
 {
 	/* mmap2: shared and of the file, or private and of nothing; the offset is in pages */
@@ -73,8 +72,8 @@ __asm__(".text\n"
 
 uint32_t mcw_loop(uint32_t core)
 {
-	mc_job *job = job_of((int)core);
-	mc_answer *answer = answer_of((int)core);
+	mc_job *job = (mc_job *)(page + MC_JOB_AT(core));
+	mc_answer *answer = (mc_answer *)(page + MC_ANSWER_AT(core));
 	uint32_t last = job->seq;
 
 	answer->done = last;
@@ -128,63 +127,58 @@ int mcw_count(void) { return count; }
 
 int mcw_open(int limit)
 {
-	volatile uint32_t *owner;
-	uint32_t own_tp;
-	long root;
-	int fd, k, pass;
-	uint32_t i;
+	uint32_t claim[3], own_tp, i;
+	int fd, k, pass, got = 0;
 
 	if (page) return count;
 	if (limit > MC_MAX_CORES - 1) limit = MC_MAX_CORES - 1;
 	if (limit <= 0 || (fd = (int)call6(56, -100, (long)"/dev/gpu", 2, 0, 0, 0)) < 0) return 0;
-	page = map(MC_PAGE_SIZE, fd, MC_PAGE_GPU_OFFSET);
 	device = fd;
-	if (!page) goto none;
-	owner = (volatile uint32_t *)(page + MC_OWNER_AT);
-	if (*owner && (long)*owner != own_pid() && alive((long)*owner)) goto none;
-	/* this program's page table; and from here the kernel parks the workers when it ends */
-	if ((root = call6(29, fd, MC_ROOT, 0, 0, 0, 0)) <= 0) goto none;
-	if (!(stacks = map((long)limit * STACK_BYTES, -1, 0))) goto none;
-	/* the stacks' pages there before a worker steps on one (a zero stored over a zero is no store) */
-	for (i = 0; i < (uint32_t)limit * STACK_BYTES; i += 4096) stacks[i] = 0;
-	for (i = 0; i < MC_PAGE_SIZE; i += 4) *(volatile uint32_t *)(page + i) = 0;
-	*owner = (uint32_t)own_pid();
-	for (k = 0; k < MC_MAX_CORES; k++) seq[k] = 0;
-	mc_next_pass();
+	/* the cores nobody has, as many as are wanted, and this program's page table; from here
+	 * the kernel parks them when the program ends */
+	claim[0] = (uint32_t)limit;
+	claim[1] = claim[2] = 0;
+	if (call6(29, fd, MC_WORKERS, (long)claim, 0, 0, 0) != 0 || !claim[1]) goto none;
+	for (k = 1; k < MC_MAX_CORES; k++)
+		if (claim[1] >> k & 1) core_of[++got] = k;
+	if (!(page = map(MC_PAGE_SIZE, fd, MC_PAGE_GPU_OFFSET))) goto none;
+	if (!(stacks = map((long)got * STACK_BYTES, -1, 0))) goto none;
+	stack_count = got;
+	/* the stacks' pages there before a worker steps on one */
+	for (i = 0; i < (uint32_t)got * STACK_BYTES; i += 4096) stacks[i] = 0;
 	__asm__ volatile("mv %0, tp" : "=r"(own_tp));
-	for (k = 1; k <= limit; k++) {
-		volatile uint32_t *start = (volatile uint32_t *)(page + MC_START_AT(k));
+	for (k = 1; k <= got; k++) {
+		volatile uint32_t *start = (volatile uint32_t *)(page + MC_START_AT(core_of[k]));
+		volatile uint32_t *box = (volatile uint32_t *)(page + MC_JOB_AT(core_of[k]));
 		uint32_t *top = (uint32_t *)(stacks + (uint32_t)k * STACK_BYTES - 16);
+		for (i = 0; i < 16; i++) box[i] = 0;	/* its mailbox as new */
+		seq[k] = 0;
 		top[0] = own_tp;
 		start[1] = (uint32_t)mcw_entry;
 		start[2] = (uint32_t)top;
-		start[3] = (uint32_t)root;
+		start[3] = claim[2];
 		start[0] = MC_START;
 	}
 	/* a core that is there says so within a few passes; its first steps may want pages */
-	count = limit;
+	count = got;
 	for (pass = 0; pass < 48; pass++) {
 		int all = 1;
-		for (k = 1; k <= limit; k++) {
+		for (k = 1; k <= got; k++) {
 			serve(k);
-			if (answer_of(k)->alive != (MC_ALIVE | (uint32_t)k)) all = 0;
+			if (answer_of(k)->alive != (MC_ALIVE | (uint32_t)core_of[k])) all = 0;
 		}
 		if (all) break;
 		mc_next_pass();
 	}
 	count = 0;
-	for (k = 1; k <= limit && answer_of(k)->alive == (MC_ALIVE | (uint32_t)k); k++) count = k;
-	for (k = 1; k <= limit; k++) *(volatile uint32_t *)(page + MC_START_AT(k)) = 0;
+	for (k = 1; k <= got && answer_of(k)->alive == (MC_ALIVE | (uint32_t)core_of[k]); k++) count = k;
+	for (k = 1; k <= got; k++) *(volatile uint32_t *)(page + MC_START_AT(core_of[k])) = 0;
 	mc_next_pass();
-	if (count == 0) {
-		*owner = 0;
-		goto none;
-	}
-	return count;
+	if (count) return count;
 none:
-	if (stacks) call6(215, (long)stacks, (long)limit * STACK_BYTES, 0, 0, 0, 0);
+	if (stacks) call6(215, (long)stacks, (long)got * STACK_BYTES, 0, 0, 0, 0);
 	if (page) call6(215, (long)page, MC_PAGE_SIZE, 0, 0, 0, 0);
-	call6(57, device, 0, 0, 0, 0, 0);
+	call6(57, device, 0, 0, 0, 0, 0);	/* and the kernel has the cores back */
 	device = -1;
 	page = 0;
 	stacks = 0;
@@ -199,7 +193,6 @@ void mcw_close(void)
 	for (k = 1; k <= count; k++) mcw_post(k, 0, 0, 0);
 	for (k = 1; k <= count; k++)
 		for (passes = 0; !mcw_done(k) && passes < 1000; passes++) mc_next_pass();
-	*(volatile uint32_t *)(page + MC_OWNER_AT) = 0;
 	mc_next_pass();
 	call6(215, (long)page, MC_PAGE_SIZE, 0, 0, 0, 0);
 	call6(57, device, 0, 0, 0, 0, 0);
@@ -259,5 +252,5 @@ int mcw_on_worker(void)
 {
 	uint8_t here;
 
-	return stacks && &here >= stacks && &here < stacks + (uint32_t)MC_MAX_CORES * STACK_BYTES;
+	return stacks && &here >= stacks && &here < stacks + (uint32_t)stack_count * STACK_BYTES;
 }

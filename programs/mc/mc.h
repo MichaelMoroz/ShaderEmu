@@ -16,18 +16,18 @@
 #define MC_MAX_CORES 16
 
 // { MC_START, pc, sp, root } starts core k there in user mode with k in a0, on the page table
-// whose first page is number `root`: a program's own is what MC_ROOT answers on /dev/gpu
+// whose first page is number `root`. A program gets its cores and its root from the kernel:
+// MC_WORKERS on /dev/gpu, with { how many it wants, a bit a core it got, its root }
 #define MC_START 0x5553434du
 #define MC_STOP 0x5453434du   // there instead: the core parks (the kernel's, when the program is gone)
 #define MC_START_AT(k) (16u * (k))
-#define MC_ROOT 0x4703u   // _IO('G', 3)
+#define MC_WORKERS 0xc00c4704u   // _IOWR('G', 4, three words)
 // core k's 64 bytes: a job (core 0 writes it), its answer (the worker's), a fault (the
 // worker's, written by the machine) and the word that lets it go on (core 0's)
 #define MC_JOB_AT(k) (0x400u + 64u * (k))
 #define MC_ANSWER_AT(k) (0x400u + 64u * (k) + 16u)
 #define MC_FAULT_AT(k) (0x400u + 64u * (k) + 32u)
 #define MC_RESUME_AT(k) (0x400u + 64u * (k) + 48u)
-#define MC_OWNER_AT 0x3f0u   // the process number of the program that has the workers
 
 #define MC_ALIVE 0x600d0000u
 

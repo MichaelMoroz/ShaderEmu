@@ -38,22 +38,49 @@ struct shaderemu_gpu_submit {
 };
 #define SHADEREMU_GPU_SUBMIT	_IOW('G', 2, struct shaderemu_gpu_submit)
 
-/* returns the number of the first page of the caller's page table: what a program hands a
- * worker core for it to run in the program's memory (docs/multicore.md) */
-#define SHADEREMU_GPU_ROOT	_IO('G', 3)
+/*
+ * A program asks for worker cores (docs/multicore.md): up to `want` of those nobody has are
+ * its own from here on, a bit each in `mask`, and `root` is the number of the first page of
+ * its page table, which it hands them to run in its memory. They are parked and free again
+ * when the program closes this file, or ends.
+ */
+struct shaderemu_gpu_workers {
+	__u32 want, mask, root;
+};
+#define SHADEREMU_GPU_WORKERS	_IOWR('G', 4, struct shaderemu_gpu_workers)
+#define WORKERS_CORES	0x3c0	/* control word: how many cores the machine has */
 #define WORKERS_PHYS	0x86C00000UL	/* the worker cores' mailboxes */
 #define WORKERS_STOP	0x5453434d	/* in a core's start word: park it */
 #define WORKERS_MOST	16
 
 static void __iomem *gpu_regs;
 static void __iomem *workers;
+static struct file *worker_owner[WORKERS_MOST];
+static DEFINE_MUTEX(workers_lock);
 static DEFINE_MUTEX(gpu_lock);
 
 static long shaderemu_gpu_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
-	if (cmd == SHADEREMU_GPU_ROOT) {
-		file->private_data = workers;	/* this one has them: see release */
-		return csr_read(CSR_SATP) & 0x3fffff;
+	if (cmd == SHADEREMU_GPU_WORKERS) {
+		struct shaderemu_gpu_workers w;
+		u32 cores, k, got = 0;
+
+		if (copy_from_user(&w, (void __user *)arg, sizeof(w)))
+			return -EFAULT;
+		cores = readl(gpu_regs + WORKERS_CORES);
+		if (cores > WORKERS_MOST)
+			cores = WORKERS_MOST;
+		w.mask = 0;
+		w.root = csr_read(CSR_SATP) & 0x3fffff;
+		mutex_lock(&workers_lock);
+		for (k = 1; k < cores && got < w.want; k++)
+			if (!worker_owner[k]) {
+				worker_owner[k] = file;
+				w.mask |= 1u << k;
+				got++;
+			}
+		mutex_unlock(&workers_lock);
+		return copy_to_user((void __user *)arg, &w, sizeof(w)) ? -EFAULT : 0;
 	}
 	if (cmd == SHADEREMU_GPU_SUBMIT) {
 		struct shaderemu_gpu_submit s;
@@ -109,11 +136,16 @@ static int shaderemu_gpu_release(struct inode *inode, struct file *file)
 	writel(0, gpu_regs + VOLUME_LIST + 4);
 	writel(0, gpu_regs + VOLUME_LIST);
 	/* and its worker cores run in memory that is going away: park them */
-	if (file->private_data) {
+	{
 		int k;
 
+		mutex_lock(&workers_lock);
 		for (k = 1; k < WORKERS_MOST; k++)
-			writel(WORKERS_STOP, workers + 16 * k);
+			if (worker_owner[k] == file) {
+				writel(WORKERS_STOP, workers + 16 * k);
+				worker_owner[k] = NULL;
+			}
+		mutex_unlock(&workers_lock);
 	}
 	return 0;
 }
