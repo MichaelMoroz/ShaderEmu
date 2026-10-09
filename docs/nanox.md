@@ -151,7 +151,7 @@ A program that takes clicks must check `ui_wheel` first, or a notch is a click t
 | `nxpaint [FILE]` | pen, eraser, line, box, filled box in sixteen colours and three sizes; Save writes a PPM file (`/root/picture.ppm` unless a file was named). Keys: a tool's first letter, 1 to 3 for the size, [ and ] for the colour, Ctrl+S |
 | `nxview FILE` | shows a picture as large as fits its window: PPM through the GPU, PGM, BMP, GIF and XPM through the engine's decoders. Escape or q closes it |
 | `nxsettings` | the settings, a tab each: the desktop's picture (the image's, any PPM file through the file chooser, or a colour), the screen's size (only those the host says it can show, in its flags word; the desktop is taken down whole and started again with it: `nx restart`), the sound card's volume, and what the machine is. From a script: `nxsettings apply` (the chosen desktop, as the `nx` script runs it), `size WxH`, `volume 0-100`, `choose [FOLDER]` (the file chooser alone; prints the path). Keys: Tab goes round the row of tabs and the tab's controls, arrows change the tab, the list's row or the slider; in the file chooser arrows, a letter, Enter, Backspace for the folder above, Escape |
-| `nxmon` | instructions a second over the last minute (from `rdcycle`), how busy Linux is, memory in use. Escape or q closes it |
+| `nxmon` | three plots of the last two minutes, a sample a second: instructions a second (from `rdcycle`; the plot's top doubles as needed), how busy Linux is (kernel and programs stacked), memory in use (with the files written since the start, which live in memory). Under them: time running, load, processes, files kept in memory, task switches and interrupts a second, and the three busiest programs (looked at every third second). A plot is moved left by a copy and one column drawn, so a second costs about 30 drawing requests. Escape or q closes it |
 | `nxterm` | Microwindows' terminal, patched: it follows its window's size, and Shift+Page Up and Down or the wheel look back through the last 400 lines, with a mark at the right edge for how far |
 
 **Pictures for the desktop** are `/usr/share/wallpaper-NAME.ppm`, made on the host by
@@ -198,6 +198,10 @@ the program that puts up the desktop's picture is the first to come and go.
   tells the program inside (`TIOCSWINSZ`) when its window changes size.
 - **A driver may draw a picture file itself** (`gd_drawpicture`, asked first by
   `GdDrawImageFromFile`).
+- **A new window's frame is painted when it is made.** The window manager lives in the
+  server but works from each program's own event queue, so a frame was painted when its
+  program first asked for events: a game that takes a minute to start showed what the last
+  window left in the buffer it was given, the other game's caption included.
 - **The keyboard always has a window** ("The keyboard" above): a press anywhere in a framed
   window activates it (stock Nano-X did so only on the caption), the keyboard passes on when
   its window goes (it went to the desktop, where no key did anything until a caption was

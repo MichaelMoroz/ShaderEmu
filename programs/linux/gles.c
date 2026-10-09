@@ -897,6 +897,30 @@ static __attribute__((noinline)) void sprite_command(const GLfixed* box, const i
     vertex_top += 64;
 }
 
+// Whole vertices in screen pixels (segl.h): the frame's room is what compact vertices use too.
+void* seglScreenSpace(GLsizei* room) {
+    uint32_t fit = gpu ? (set_at + SET_SIZE - vertex_top) / 64 : 0, mesh = MAX_MESH - mesh_vertices;
+    *room = (GLsizei)((fit < mesh ? fit : mesh) / 3 * 3);
+    return gpu ? gpu + vertex_top : 0;
+}
+void seglScreenUsed(GLsizei count, GLuint name) {
+    const texture* x = &textures[name < MAX_TEXTURES ? name : 0];
+    uint32_t* c = count > 0 ? command(CMD_DRAW, (uint32_t)count) : 0;
+    if (!c) return;
+    c[1] = GPU_PHYS + vertex_top;
+    c[2] = (uint32_t)count;
+    c[4] = NUM_FORMAT;   // vertex mode 0: positions are pixels
+    c[5] = (x->address ? FRAGMENT_TEXTURE : FRAGMENT_COLOUR) | 5u << 16;
+    c[6] = 0;
+    c[7] = GPU_PHYS + x->address;
+    c[8] = x->width;
+    c[9] = x->height;
+    c[10] = c[11] = 0;
+    passes_used |= 1u << 5;
+    last_draw = 0;
+    vertex_top += (uint32_t)count * 64;
+}
+
 uint32_t* seglLastCommand(void) { return last_draw; }
 uint32_t* seglLastVertices(void) { return (uint32_t*)(gpu + vertex_top - 64); }
 uint32_t seglAddress(const void* memory) { return GPU_PHYS + (uint32_t)((const uint8_t*)memory - gpu); }

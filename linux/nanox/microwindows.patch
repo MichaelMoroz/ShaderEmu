@@ -1300,7 +1300,7 @@ index 27dcbe8..a9e1776 100644
  	if(window->active) {
  #if OUTLINE_MOVE
 diff --git a/src/nanox/wmclients.c b/src/nanox/wmclients.c
-index 9214904..28ecfad 100644
+index 9214904..d067774 100644
 --- a/src/nanox/wmclients.c
 +++ b/src/nanox/wmclients.c
 @@ -94,7 +94,7 @@ int wm_new_client_window(GR_WINDOW_ID wid)
@@ -1331,6 +1331,16 @@ index 9214904..28ecfad 100644
  		lasty = y;
  	}
  #endif
+@@ -162,6 +163,9 @@ int wm_new_client_window(GR_WINDOW_ID wid)
+ 	GrMapWindow(pid);
+ 
+ 	GrSetFocus(wid);	/* force fixed focus*/
++	/* the frame now: its exposure waits in the program's queue, and a program slow to start
++	 * would show what the last window left in this buffer */
++	wm_redraw_ncarea(wm_find_window(pid));
+ 
+ #if 0000
+ 	/* add system utility button*/
 diff --git a/src/nanox/wmutil.c b/src/nanox/wmutil.c
 index 5af65d6..5397774 100644
 --- a/src/nanox/wmutil.c

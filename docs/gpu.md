@@ -204,6 +204,9 @@ float build, about an axis of the coordinate system in the other.
   order. A texture of `SEGL_BITS` is one bit a pixel, drawn in the call's colour.
 - `seglKeptBlend()` puts a kept command into a blended pass, with a texture of words: Quake's
   light maps are kept commands that multiply (`docs/quake.md`).
+- `seglScreenSpace()` and `seglScreenUsed()` draw triangles of whole vertices in the window's
+  pixels, each with its own colour, blended over the frame in the order given: a user
+  interface (`docs/imgui.md`).
 - `seglCompact()` draws vertices the program made compact itself; `seglCompactSpace()` gives it
   room in the frame to write them in place, and `seglCompactAt()` draws ones that already are in
   GPU memory, where they are, in any later frame too. `seglCompactTrim()` gives back room.

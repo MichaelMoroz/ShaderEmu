@@ -84,6 +84,13 @@ void seglSprite(const GLfixed* box, const int* texels, GLuint name, unsigned col
 unsigned int* seglLastCommand(void);
 unsigned int* seglLastVertices(void);
 unsigned int seglAddress(const void* memory);
+// Triangles in the window's own pixels (x right, y down), drawn over the frame in the order
+// given and blended by alpha: a user interface. A vertex is sixteen of the library's numbers
+// (docs/gpu.md): x, y at 0-1, texture coordinates at 8-9, red, green, blue, alpha (0 to 1) at
+// 12-15. Room for vertices, and in *room how many fit; then how many were written of them.
+void* seglScreenSpace(GLsizei* room);
+void seglScreenUsed(GLsizei count, GLuint name);   // (a multiple of three; a texture of words, or 0)
+
 // Forgets what was drawn since the last swap. seglSwapAgain() has the list of the last swap
 // drawn once more, as its memory (textures, commands, vertices) is now.
 void seglDiscard(void);

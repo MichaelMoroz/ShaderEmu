@@ -729,6 +729,12 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   (the host takes them): the same keys work with Ctrl.
 - The guest shell's `sleep` ends early when a background job finishes: `nx & sleep 25` slept
   two seconds. Run `nx` in the foreground (it returns once the desktop's programs are started).
+- Dear ImGui (`docs/imgui.md`): `linux\imgui\build.sh` after Tiberian Dawn's (12 s the first
+  time), then the image and snapshot. To measure it, `nx; sleep 8; imdemo & sleep 9; sleep 9`
+  and read the `imstat:` lines; `nxkey down down down down down down space` opens ImGui's own
+  demo window. A click from `nxkey` does not press an ImGui button (it acts on release).
+- A window's frame is painted when the window is made; its later repaints (the caption's
+  colour when it gains the keyboard) still wait for its program to ask for events.
 - The Start menu's lines are `Folder/Label=command` (`nxbar.c`, `docs/nanox.md`); a new program's
   build names its folder. `NXBAR_SHOW=Games nxbar` opens it there for a test, and the menu's
   window is the layer 150 wide in a snapshot, 20 pixels a row plus 4.
