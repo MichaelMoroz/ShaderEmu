@@ -171,7 +171,8 @@ DEF(divu, FormatR, { // rv32m
     WR_RD(result)
 })
 DEF(ebreak, FormatEmpty, { // system
-    // unnecessary?
+    // unnecessary? (a worker core's way to park itself: mc.h)
+    MC_PARK(MC_PARKED_EBREAK)
 })
 #ifdef SBI_HLE
 // The supervisor's calls to firmware (SBI), answered by the machine itself: with SBI_HLE it
@@ -1309,6 +1310,8 @@ void emulate_l1(L1P0) {
 
     // will write CSR_MIP if necessary
     handle_irq_and_trap(ret, mip_override);
+    // a worker core has nothing to handle a trap with: it parks, and says why
+    if (!e_no_trap) { MC_PARK(MC_PARKED_TRAP | (ret.trap.type << 8)) }
 
     // If this step took no trap, repeating it with the same inputs does nothing: either no
     // interrupt is pending-and-enabled, or one is pending but masked, in which case the only

@@ -100,11 +100,11 @@ uint fast_run_l1(L1P uint room) {
                     fw_tex0 = fw_tex1;
                 } else {
                     PROF(PROF_fetch_tex)
-                    fw_tex0 = STATE_TEX(RAM_ADDR(f_t));
+                    fw_tex0 = RAM_TEX(RAM_ADDR(f_t));
                 }
                 fw_addr0 = f_t;
                 fw_addr1 = f_t + 1;
-                fw_tex1 = STATE_TEX(RAM_ADDR(f_t + 1));
+                fw_tex1 = RAM_TEX(RAM_ADDR(f_t + 1));
             }
             }
             pre_word = idx_uint4(fw_tex0, (cpu.pc >> 2) & 0x3);

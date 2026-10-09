@@ -111,7 +111,11 @@ uint read_csr_raw(uint address) {
         case CSR_TIME: return cpu.clint.mtime_lo;
         case CSR_MCYCLE: return cpu.clock;
         case CSR_CYCLE: return cpu.clock;
+#if CORES > 1
+        case CSR_MHARTID: return hart;
+#else
         case CSR_MHARTID: return 0;
+#endif
         case CSR_SATP: return (cpu.mmu.mode << 31) | cpu.mmu.ppn;
         case CSR_RNG: return xorshift(asuint(_Time.w));
         case CSR_PLAYER_ID: return _PlayerID;
