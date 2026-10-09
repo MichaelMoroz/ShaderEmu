@@ -95,6 +95,31 @@ Other, in the order the files first name them; a click on one shows its programs
 menu's place, with a way back as the bottom row. `NXBAR_SHOW=1` (or `=Games`) starts the bar
 with the menu open, for a test without a pointer: the menu is the layer 150 pixels wide.
 
+## The keyboard
+
+Everything on the desktop can be worked without a pointer.
+
+- **One window has the keyboard**, and its caption is the coloured one: a new window, the
+  window a button is pressed in (anywhere in it, which also brings it to the front), or the
+  one its button on the bar names. When that window closes or is minimised, the keyboard
+  passes to the window then in front; it is never left with no window while one is shown.
+- **The window manager's keys**, with Alt or Ctrl held (the harness's host takes Alt+Tab and
+  Alt+F4 for itself, so use Ctrl there): Tab is the next window (the one in front goes to the
+  back; with Shift the one at the back comes forward; a minimised window is shown again), F4
+  closes the window, F9 minimises it, F10 maximises it and puts it back. These keys reach no
+  program.
+- **The Start menu** has the keyboard while it is open, and opened by the Windows key it has
+  its first row picked out: Up, Down, Home and End move, a letter goes to the next row that
+  starts with it, Enter or Right opens a folder or starts a program, Left or Backspace leaves
+  a folder, Escape leaves a folder and then closes the menu.
+- **In a program** Tab and Shift+Tab go round its controls where it has several (a line round
+  the one that has the keyboard: `ui_focus`, `ui_tab` in `ui.h`), Enter or Space presses a
+  button, and a list takes the arrows, Page Up and Down, Home and End (`ui_list_key`).
+
+`nxkey` presses keys for a test, through the keyboard's evdev device: `nxkey meta down enter
+500 ctrl+tab` (names or characters, `ctrl+`, `alt+`, `shift+` before one, a number to wait
+that many milliseconds, `X,Y` for a click of the left button there).
+
 A window's frame has, left of its close box, a maximise box (the window fills the screen above
 the bar, and goes back on the second click) and a minimise box (the window goes away; its
 button on the bar, greyed meanwhile, brings it back).
@@ -121,12 +146,12 @@ A program that takes clicks must check `ui_wheel` first, or a notch is a click t
 | Program | What it does |
 |---|---|
 | `nxedit FILE` | a text editor: arrows, Home, End, Page Up and Down, a click places the cursor, the wheel and a scroll bar move through the text; Ctrl+S saves, Ctrl+Q quits |
-| `nxfiles [FOLDER]` | a file manager, a tile with an icon for every entry: a click selects, a second click (or Enter) opens: a folder, a picture in the viewer, a page in the browser, a program, anything else in the editor. Wheel and scroll bar. Up, Open, Edit, New file, Delete, Refresh |
-| `nxweb [ADDRESS]` | a browser for HTML and the plainer part of CSS (`docs/fetch.md`): Back, Home, Reload, an address to type, wheel and scroll bar |
-| `nxpaint [FILE]` | pen, eraser, line, box, filled box in sixteen colours and three sizes; Save writes a PPM file (`/root/picture.ppm` unless a file was named) |
-| `nxview FILE` | shows a picture as large as fits its window: PPM through the GPU, PGM, BMP, GIF and XPM through the engine's decoders |
-| `nxsettings` | the settings, a tab each: the desktop's picture (the image's, any PPM file through the file chooser, or a colour), the screen's size (only those the host says it can show, in its flags word; the desktop is taken down whole and started again with it: `nx restart`), the sound card's volume, and what the machine is. From a script: `nxsettings apply` (the chosen desktop, as the `nx` script runs it), `size WxH`, `volume 0-100`, `choose [FOLDER]` (the file chooser alone; prints the path) |
-| `nxmon` | instructions a second over the last minute (from `rdcycle`), how busy Linux is, memory in use |
+| `nxfiles [FOLDER]` | a file manager, a tile with an icon for every entry: a click selects, a second click (or Enter) opens: a folder, a picture in the viewer, a page in the browser, a program, anything else in the editor. Wheel and scroll bar. Up, Open, Edit, New file, Delete, Refresh. Keys: arrows, Page Up and Down, Home, End, a letter for the next name that starts with it, Backspace for the folder above, Delete, F5; Tab goes to the buttons and back |
+| `nxweb [ADDRESS]` | a browser for HTML and the plainer part of CSS (`docs/fetch.md`): Back, Home, Reload, an address to type, wheel and scroll bar. Keys: arrows and the paging keys scroll, Tab goes from link to link (its address in the status line) and Enter follows, Backspace goes back, F5 reloads, Ctrl+L opens the address |
+| `nxpaint [FILE]` | pen, eraser, line, box, filled box in sixteen colours and three sizes; Save writes a PPM file (`/root/picture.ppm` unless a file was named). Keys: a tool's first letter, 1 to 3 for the size, [ and ] for the colour, Ctrl+S |
+| `nxview FILE` | shows a picture as large as fits its window: PPM through the GPU, PGM, BMP, GIF and XPM through the engine's decoders. Escape or q closes it |
+| `nxsettings` | the settings, a tab each: the desktop's picture (the image's, any PPM file through the file chooser, or a colour), the screen's size (only those the host says it can show, in its flags word; the desktop is taken down whole and started again with it: `nx restart`), the sound card's volume, and what the machine is. From a script: `nxsettings apply` (the chosen desktop, as the `nx` script runs it), `size WxH`, `volume 0-100`, `choose [FOLDER]` (the file chooser alone; prints the path). Keys: Tab goes round the row of tabs and the tab's controls, arrows change the tab, the list's row or the slider; in the file chooser arrows, a letter, Enter, Backspace for the folder above, Escape |
+| `nxmon` | instructions a second over the last minute (from `rdcycle`), how busy Linux is, memory in use. Escape or q closes it |
 | `nxterm` | Microwindows' terminal, patched: it follows its window's size, and Shift+Page Up and Down or the wheel look back through the last 400 lines, with a mark at the right edge for how far |
 
 **Pictures for the desktop** are `/usr/share/wallpaper-NAME.ppm`, made on the host by
@@ -173,6 +198,11 @@ the program that puts up the desktop's picture is the first to come and go.
   tells the program inside (`TIOCSWINSZ`) when its window changes size.
 - **A driver may draw a picture file itself** (`gd_drawpicture`, asked first by
   `GdDrawImageFromFile`).
+- **The keyboard always has a window** ("The keyboard" above): a press anywhere in a framed
+  window activates it (stock Nano-X did so only on the caption), the keyboard passes on when
+  its window goes (it went to the desktop, where no key did anything until a caption was
+  clicked), and the server takes the window manager's keys before any program sees them
+  (`window_key` in `srvevent.c`; stock `wm_key_down` is a FIXME).
 
 ## Checking it
 

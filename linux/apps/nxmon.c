@@ -105,13 +105,15 @@ main(void)
 	ui_init();
 	gettimeofday(&then, NULL);
 	window = GrNewWindowEx(GR_WM_PROPS_APPWINDOW, "Monitor", GR_ROOT_WINDOW_ID, -1, -1, WIDTH, HEIGHT, UI_FACE);
-	GrSelectEvents(window, GR_EVENT_MASK_EXPOSURE | GR_EVENT_MASK_CLOSE_REQ);
+	GrSelectEvents(window, GR_EVENT_MASK_EXPOSURE | GR_EVENT_MASK_KEY_DOWN | GR_EVENT_MASK_CLOSE_REQ);
 	GrMapWindow(window);
 	for (;;) {
 		long ms;
 
 		GrGetNextEventTimeout(&event, 1000);
-		if (event.type == GR_EVENT_TYPE_CLOSE_REQ) {
+		/* Escape and q close it */
+		if (event.type == GR_EVENT_TYPE_CLOSE_REQ || (event.type == GR_EVENT_TYPE_KEY_DOWN &&
+		    (event.keystroke.ch == MWKEY_ESCAPE || event.keystroke.ch == 'q'))) {
 			GrClose();
 			return 0;
 		}

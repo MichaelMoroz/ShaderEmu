@@ -26,6 +26,7 @@ static const char *sizes[] = { "640x480", "800x600", "1024x576", "1024x768", "12
 static struct ui_list screens = { 8, TOP + 20, 170, SIZES * UI_ROW + 4, 0, 0, -1 };
 static int fits[SIZES], most_w = 1280, most_h = 720;	/* the sizes this host can show, and its largest */
 static int tab, have_sound = -1;	/* have_sound: not asked yet */
+static int focus;	/* what the keyboard works: 0 the row of tabs, 1 and 2 the tab's controls in order */
 static GR_WINDOW_ID window;
 
 static void
@@ -168,11 +169,17 @@ draw(void)
 	ui_fill(window, 0, 0, WIDTH, HEIGHT, UI_FACE);
 	for (i = 0; i < TABS; i++)
 		ui_button(window, 8 + i * (TAB_W + 2), 6, TAB_W, 22, tab_names[i], i == tab);
+	if (focus == 0)
+		ui_focus(window, 8 + tab * (TAB_W + 2) + 4, 6 + 4, TAB_W - 8, 22 - 8);
 	GrGetScreenInfo(&screen);
 	switch (tab) {
 	case TAB_DESKTOP:
 		ui_list_draw(window, &pictures, picture_label);
 		ui_button(window, 8, TOP + 204, 180, 22, "Choose a picture file...", 0);
+		if (focus == 1)
+			ui_focus(window, pictures.x, pictures.y, pictures.width, pictures.height);
+		else if (focus == 2)
+			ui_focus(window, 8 + 4, TOP + 204 + 4, 180 - 8, 22 - 8);
 		ui_text(window, 8, HEIGHT - 26, "A picture is a PPM file; others can be made into one on the host.", -1, UI_SHADOW, 0);
 		break;
 	case TAB_SCREEN:
@@ -180,6 +187,10 @@ draw(void)
 		ui_text(window, 8, TOP, text, -1, BLACK, 0);
 		ui_list_draw(window, &screens, size_label);
 		ui_button(window, 190, TOP + 20, 180, 22, "Use the selected size", 0);
+		if (focus == 1)
+			ui_focus(window, screens.x, screens.y, screens.width, screens.height);
+		else if (focus == 2)
+			ui_focus(window, 190 + 4, TOP + 20 + 4, 180 - 8, 22 - 8);
 		ui_text(window, 190, TOP + 52, "The desktop starts again:", -1, BLACK, 0);
 		ui_text(window, 190, TOP + 68, "every open program closes.", -1, BLACK, 0);
 		snprintf(text, sizeof text, "This machine's display shows %d x %d at most.", most_w, most_h);
@@ -194,6 +205,10 @@ draw(void)
 		ui_text(window, 8, TOP, text, -1, BLACK, 0);
 		ui_slider(window, 8, TOP + 22, WIDTH - 16, (int)SND_MASTER, 256);
 		ui_button(window, 8, TOP + 52, 90, 22, "Play a tone", 0);
+		if (focus == 1)
+			ui_focus(window, 8, TOP + 22, WIDTH - 16, 18);
+		else if (focus == 2)
+			ui_focus(window, 8 + 4, TOP + 52 + 4, 90 - 8, 22 - 8);
 		snprintf(text, sizeof text, "The card plays %u samples a second.", (unsigned)SND_RATE);
 		ui_text(window, 8, TOP + 90, text, -1, UI_SHADOW, 0);
 		ui_text(window, 8, TOP + 106, "How loud the host plays it is set on the host.", -1, UI_SHADOW, 0);
@@ -242,6 +257,71 @@ choose_picture(void)
 	ui_wallpaper(path, 1);
 }
 
+/* Shows a tab; the keyboard stays on the row of tabs, or goes there. */
+static void
+show_tab(int which)
+{
+	tab = which;
+	focus = 0;
+	if (tab == TAB_SOUND && have_sound < 0)
+		have_sound = snd_open() == 0;
+	draw();
+}
+
+/* How many places the keyboard can be on the tab shown: the row of tabs, then its controls. */
+static int
+controls(void)
+{
+	return tab == TAB_SYSTEM || (tab == TAB_SOUND && have_sound <= 0) ? 1 : 3;
+}
+
+/* Tab goes round the row of tabs and the controls of the tab shown; arrows change the tab,
+ * the list's row or the slider; Enter or Space presses a button. */
+static void
+key(const GR_EVENT *event)
+{
+	int ch = event->keystroke.ch, value;
+
+	if (ui_tab(event, &focus, controls())) {
+		draw();
+		return;
+	}
+	if (focus == 0) {
+		if (ch == MWKEY_LEFT || ch == MWKEY_RIGHT)
+			show_tab((tab + (ch == MWKEY_LEFT ? TABS - 1 : 1)) % TABS);
+		return;
+	}
+	switch (tab) {
+	case TAB_DESKTOP:
+		if (focus == 2 && ui_press_key(ch))
+			choose_picture();
+		else if (focus == 1 && (ui_list_key(&pictures, ch) || ui_press_key(ch)) && pictures.selected >= 0)
+			ui_wallpaper(choices[pictures.selected].value, 1);
+		else
+			break;
+		draw();
+		break;
+	case TAB_SCREEN:
+		if (ui_press_key(ch) && screens.selected >= 0)
+			restart_desktop(sizes[fits[screens.selected]]);
+		else if (focus == 1 && ui_list_key(&screens, ch))
+			draw();
+		break;
+	case TAB_SOUND:
+		if (focus == 2 && ui_press_key(ch)) {
+			beep();
+			break;
+		}
+		value = (int)SND_MASTER;
+		value = ch == MWKEY_LEFT ? value - 8 : ch == MWKEY_RIGHT ? value + 8 : ch == MWKEY_HOME ? 0 : ch == MWKEY_END ? 256 : -1;
+		if (focus == 1 && value != -1) {
+			SND_MASTER = value < 0 ? 0 : value > 256 ? 256 : value;
+			draw();
+		}
+		break;
+	}
+}
+
 static void
 press(GR_EVENT *event)
 {
@@ -249,10 +329,7 @@ press(GR_EVENT *event)
 	int x = down ? event->button.x : event->mouse.x, y = down ? event->button.y : event->mouse.y, how;
 
 	if (down && y >= 6 && y < 28 && x >= 8 && (x - 8) / (TAB_W + 2) < TABS) {
-		tab = (x - 8) / (TAB_W + 2);
-		if (tab == TAB_SOUND && have_sound < 0)
-			have_sound = snd_open() == 0;
-		draw();
+		show_tab((x - 8) / (TAB_W + 2));
 		return;
 	}
 	switch (tab) {
@@ -261,17 +338,19 @@ press(GR_EVENT *event)
 		if (how == 1 && event->type == GR_EVENT_TYPE_BUTTON_DOWN && !ui_wheel(event) && pictures.selected >= 0 &&
 		    x < pictures.x + pictures.width - UI_SCROLL_W - 2)
 			ui_wallpaper(choices[pictures.selected].value, 1);
-		if (how)
+		if (how) {
+			focus = 1;
 			draw();
-		else if (down && ui_inside(x, y, 8, TOP + 204, 180, 22)) {
+		} else if (down && ui_inside(x, y, 8, TOP + 204, 180, 22)) {
 			choose_picture();
 			draw();
 		}
 		break;
 	case TAB_SCREEN:
-		if (ui_list_event(&screens, event))
+		if (ui_list_event(&screens, event)) {
+			focus = 1;
 			draw();
-		else if (down && ui_inside(x, y, 190, TOP + 20, 180, 22) && screens.selected >= 0)
+		} else if (down && ui_inside(x, y, 190, TOP + 20, 180, 22) && screens.selected >= 0)
 			restart_desktop(sizes[fits[screens.selected]]);
 		break;
 	case TAB_SOUND:
@@ -331,7 +410,8 @@ main(int argc, char **argv)
 			have_sound = snd_open() == 0;
 	}
 	window = GrNewWindowEx(GR_WM_PROPS_APPWINDOW, "Settings", GR_ROOT_WINDOW_ID, -1, -1, WIDTH, HEIGHT, UI_FACE);
-	GrSelectEvents(window, GR_EVENT_MASK_EXPOSURE | GR_EVENT_MASK_BUTTON_DOWN | GR_EVENT_MASK_MOUSE_MOTION | GR_EVENT_MASK_CLOSE_REQ);
+	GrSelectEvents(window, GR_EVENT_MASK_EXPOSURE | GR_EVENT_MASK_BUTTON_DOWN | GR_EVENT_MASK_MOUSE_MOTION |
+		GR_EVENT_MASK_KEY_DOWN | GR_EVENT_MASK_CLOSE_REQ);
 	GrMapWindow(window);
 	for (;;) {
 		GrGetNextEvent(&event);
@@ -342,6 +422,9 @@ main(int argc, char **argv)
 		case GR_EVENT_TYPE_BUTTON_DOWN:
 		case GR_EVENT_TYPE_MOUSE_MOTION:
 			press(&event);
+			break;
+		case GR_EVENT_TYPE_KEY_DOWN:
+			key(&event);
 			break;
 		case GR_EVENT_TYPE_CLOSE_REQ:
 			GrClose();

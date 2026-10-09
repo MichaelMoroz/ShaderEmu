@@ -722,6 +722,13 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
 - Quake's sound (`linux/quake/snd_shaderemu.c`) is checked like any of the card's: a timedemo
   with `--fixed-dt 0.004 --sound-capture` and `tools\sound_reference.py ... --rom`. Measure the
   capture's clipped samples too: at the game's own level a fight clipped 1.5% of them.
+- The desktop is worked from the keyboard too (`docs/nanox.md`, "The keyboard"). To test it
+  without one, `nxkey` presses keys in the guest: `nx; sleep 8; nxkey meta down enter; sleep 2`,
+  then compose the screen from a snapshot's layers: the window with the keyboard has the
+  coloured caption and is the last layer. Alt+Tab and Alt+F4 never reach the harness window
+  (the host takes them): the same keys work with Ctrl.
+- The guest shell's `sleep` ends early when a background job finishes: `nx & sleep 25` slept
+  two seconds. Run `nx` in the foreground (it returns once the desktop's programs are started).
 - The Start menu's lines are `Folder/Label=command` (`nxbar.c`, `docs/nanox.md`); a new program's
   build names its folder. `NXBAR_SHOW=Games nxbar` opens it there for a test, and the menu's
   window is the layer 150 wide in a snapshot, 20 pixels a row plus 4.

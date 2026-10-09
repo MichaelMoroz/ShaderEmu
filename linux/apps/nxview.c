@@ -68,7 +68,7 @@ main(int argc, char **argv)
 	}
 	snprintf(title, sizeof title, "%s - Viewer", argc > 1 ? argv[1] : "no file");
 	window = GrNewWindowEx(GR_WM_PROPS_APPWINDOW, title, GR_ROOT_WINDOW_ID, -1, -1, width, height, MWRGB(40, 40, 40));
-	GrSelectEvents(window, GR_EVENT_MASK_EXPOSURE | GR_EVENT_MASK_UPDATE | GR_EVENT_MASK_CLOSE_REQ);
+	GrSelectEvents(window, GR_EVENT_MASK_EXPOSURE | GR_EVENT_MASK_UPDATE | GR_EVENT_MASK_KEY_DOWN | GR_EVENT_MASK_CLOSE_REQ);
 	GrMapWindow(window);
 	for (;;) {
 		GrGetNextEvent(&event);
@@ -83,6 +83,10 @@ main(int argc, char **argv)
 				draw();
 			}
 			break;
+		case GR_EVENT_TYPE_KEY_DOWN:
+			if (event.keystroke.ch != MWKEY_ESCAPE && event.keystroke.ch != 'q')
+				break;
+			/* Escape and q close it */
 		case GR_EVENT_TYPE_CLOSE_REQ:
 			GrClose();
 			return 0;

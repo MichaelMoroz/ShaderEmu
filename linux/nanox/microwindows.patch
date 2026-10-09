@@ -621,7 +621,7 @@ index 409290c..828a708 100644
  
  /**
 diff --git a/src/include/nanowm.h b/src/include/nanowm.h
-index 5f31f08..d18531f 100644
+index 5f31f08..3d0164e 100644
 --- a/src/include/nanowm.h
 +++ b/src/include/nanowm.h
 @@ -44,9 +44,9 @@
@@ -659,6 +659,14 @@ index 5f31f08..d18531f 100644
  };
  typedef struct windowlist win;
  
+@@ -139,6 +147,7 @@ void wm_client_window_destroy(win *window);
+ void wm_client_window_remap(win *window);
+ void wm_client_window_unmap(win *window);
+ void wm_redraw_ncarea(win *window);
++void wm_toggle_maximize(win *window);
+ 
+ int wm_exposure(GR_EVENT_EXPOSURE *event);
+ int wm_button_down(GR_EVENT_BUTTON *event);
 diff --git a/src/nanox/nxpaintnc.c b/src/nanox/nxpaintnc.c
 index 9e40afe..56ce572 100644
 --- a/src/nanox/nxpaintnc.c
@@ -710,7 +718,7 @@ index 9e40afe..56ce572 100644
  	}
  
 diff --git a/src/nanox/serv.h b/src/nanox/serv.h
-index 4a9efee..2e33007 100644
+index 4a9efee..0f17883 100644
 --- a/src/nanox/serv.h
 +++ b/src/nanox/serv.h
 @@ -451,6 +451,8 @@ void		GsDestroyPixmap(GR_PIXMAP *pp);
@@ -722,6 +730,15 @@ index 4a9efee..2e33007 100644
  void		GsHandleMouseStatus(GR_COORD newx, GR_COORD newy, int newbuttons);
  void		GsFreePositionEvent(GR_CLIENT *client, GR_WINDOW_ID wid, GR_WINDOW_ID subwid);
  void		GsDeliverButtonEvent(GR_EVENT_TYPE type, int buttons, int changebuttons, int modifiers);
+@@ -477,6 +479,8 @@ void		GsDeliverTimerEvent(GR_CLIENT *client, GR_WINDOW_ID wid, GR_TIMER_ID tid);
+ 
+ void		GsCheckMouseWindow(void);
+ void		GsCheckFocusWindow(void);
++GR_WINDOW	*GsFrameClient(GR_WINDOW *top);
++GR_WINDOW	*GsNextFocusWindow(void);
+ GR_DRAW_TYPE GsPrepareDrawing(GR_DRAW_ID id, GR_GC_ID gcid, GR_DRAWABLE **retdp);
+ GR_BOOL		GsCheckOverlap(GR_WINDOW *topwp, GR_WINDOW *botwp);
+ GR_EVENT	*GsAllocEvent(GR_CLIENT *client);
 diff --git a/src/nanox/srvclip2.c b/src/nanox/srvclip2.c
 index 0679f9f..29d2087 100644
 --- a/src/nanox/srvclip2.c
@@ -767,6 +784,112 @@ index 0679f9f..29d2087 100644
  
  		for (; sibwp != wp; sibwp = sibwp->siblings) {
  			if (!sibwp->realized || !sibwp->output)
+diff --git a/src/nanox/srvevent.c b/src/nanox/srvevent.c
+index bc31c08..6cb411e 100644
+--- a/src/nanox/srvevent.c
++++ b/src/nanox/srvevent.c
+@@ -7,8 +7,80 @@
+ #include <stdlib.h>
+ #include <string.h>
+ #include "serv.h"
++#include "nanowm.h"
+ #include "osdep.h"
+ 
++/* The top-level window wp is in, or NULL for the root. */
++static GR_WINDOW *
++top_level(GR_WINDOW *wp)
++{
++	while (wp != rootwp && wp->parent != rootwp)
++		wp = wp->parent;
++	return wp == rootwp ? NULL : wp;
++}
++
++/* Brings a framed window to the front (shown again if minimised) and gives it the keyboard. */
++static void
++activate_frame(GR_WINDOW *top)
++{
++	GR_WINDOW *cp = GsFrameClient(top), *fp;
++
++	if (!cp)
++		return;
++	GrMapWindow(top->id);
++	if (!(top->props & GR_WM_PROPS_NORAISE))
++		GrRaiseWindow(top->id);
++	/* a window inside the program's own may hold the keyboard: leave it there */
++	for (fp = focuswp; fp != rootwp && fp != cp; fp = fp->parent)
++		;
++	if (fp != cp)
++		GrSetFocus(cp->id);
++}
++
++/*
++ * The window manager's keys, with Alt or Ctrl held: Tab the next window (Shift: the one
++ * before), F4 close, F9 minimise, F10 maximise and back. True if the key was one of them.
++ */
++static GR_BOOL
++window_key(MWKEY key, MWKEYMOD modifiers)
++{
++	GR_WINDOW *top = top_level(focuswp), *wp, *next = NULL;
++	win *frame = top && GsFrameClient(top) ? wm_find_window(top->id) : NULL;
++
++	switch (key) {
++	case MWKEY_TAB:
++		if (modifiers & MWKMOD_SHIFT) {
++			/* the window at the back comes forward */
++			for (wp = rootwp->children; wp; wp = wp->siblings)
++				if (GsFrameClient(wp))
++					next = wp;
++		} else {
++			/* the window in front goes to the back, and the one then in front is next */
++			if (frame)
++				GrLowerWindow(top->id);
++			for (wp = rootwp->children; wp && !next; wp = wp->siblings)
++				if (GsFrameClient(wp))
++					next = wp;
++		}
++		if (next)
++			activate_frame(next);
++		return GR_TRUE;
++	case MWKEY_F4:
++		if (frame)
++			GrCloseWindow(frame->clientid);
++		return GR_TRUE;
++	case MWKEY_F9:
++		if (frame)
++			GrUnmapWindow(top->id);
++		return GR_TRUE;
++	case MWKEY_F10:
++		if (frame)
++			wm_toggle_maximize(frame);
++		return GR_TRUE;
++	}
++	return GR_FALSE;
++}
++
+ /* these were required for VNC event mutex */
+ #define EVENT_LOCK_DECLARE(m)
+ #define EVENT_LOCK(m)
+@@ -187,6 +259,10 @@ GR_BOOL GsCheckKeyboardEvent(void)
+ #endif
+ 	}
+ 
++	/* the window manager's own keys go no further */
++	if (keystatus == KBD_KEYPRESS && (modifiers & (MWKMOD_ALT | MWKMOD_CTRL)) && window_key(mwkey, modifiers))
++		return TRUE;
++
+ 	/* Deliver events as appropriate*/
+ 	GsDeliverKeyboardEvent(0, (keystatus == KBD_KEYPRESS?
+ 		GR_EVENT_TYPE_KEY_DOWN: GR_EVENT_TYPE_KEY_UP),
+@@ -245,6 +321,9 @@ void GsHandleMouseStatus(GR_COORD newx, GR_COORD newy, int newbuttons)
+ 	if (changebuttons) {
+ 		GsResetScreenSaver();
+ 		GsCheckMouseWindow();	/* fixes occasional lost window move when mousewp=root*/
++		/* a press anywhere in a window, not only on its caption, makes it the active one */
++		if (changebuttons & (GR_BUTTON_L | GR_BUTTON_M | GR_BUTTON_R))
++			activate_frame(top_level(mousewp));
+ 		GsDeliverButtonEvent(GR_EVENT_TYPE_BUTTON_DOWN, newbuttons,
+ 			changebuttons, modifiers);
+ 	}
 diff --git a/src/nanox/srvfunc.c b/src/nanox/srvfunc.c
 index 3455994..97f239e 100644
 --- a/src/nanox/srvfunc.c
@@ -949,10 +1072,18 @@ index 1f106c0..a19f4b5 100644
 +	} while (rpos < rhave && GsFindClient(fd) != NULL && curclient && curclient->id == fd);
  }
 diff --git a/src/nanox/srvutil.c b/src/nanox/srvutil.c
-index fae5bfa..a073ebb 100644
+index fae5bfa..bd46971 100644
 --- a/src/nanox/srvutil.c
 +++ b/src/nanox/srvutil.c
-@@ -58,6 +58,47 @@ GsResetScreenSaver(void)
+@@ -9,6 +9,7 @@
+ #include <stdlib.h>
+ #include "uni_std.h"
+ #include "serv.h"
++#include "nanowm.h"
+ #include "../drivers/fb.h"	/* for set_data_formatex()*/
+ #if HAVE_MMAP
+ #include <fcntl.h>
+@@ -58,6 +59,47 @@ GsResetScreenSaver(void)
  #endif
  }
  
@@ -1000,7 +1131,18 @@ index fae5bfa..a073ebb 100644
  /*
   * Unmap the window to make it and its children invisible on the screen.
   * This is a recursive routine which unrealizes this window and all of its
-@@ -116,6 +157,10 @@ GsUnrealizeWindow(GR_WINDOW *wp, GR_BOOL temp_unmap)
+@@ -98,8 +140,8 @@ GsUnrealizeWindow(GR_WINDOW *wp, GR_BOOL temp_unmap)
+ 
+ 	if (!temp_unmap && wp == focuswp) {
+ 		if (focusfixed)
+-			/* don't revert to mouse enter/leave focus if fixed*/
+-			focuswp = rootwp;
++			/* the keyboard passes to the window now in front */
++			GsSetFocus(GsNextFocusWindow());
+ 		else {
+ 			focusfixed = GR_FALSE;
+ 			GsCheckFocusWindow();
+@@ -116,6 +158,10 @@ GsUnrealizeWindow(GR_WINDOW *wp, GR_BOOL temp_unmap)
  	if (!wp->parent->realized || !wp->output)
  		return;
  
@@ -1011,7 +1153,7 @@ index fae5bfa..a073ebb 100644
  	/*
  	 * Clear the area in the parent for this window, causing an
  	 * exposure event for it.  Take into account the border size.
-@@ -326,6 +371,8 @@ GsDestroyWindow(GR_WINDOW *wp)
+@@ -326,6 +372,8 @@ GsDestroyWindow(GR_WINDOW *wp)
  		GsDestroyPixmap(wp->bgpixmap);
  	if (wp->buffer)
  		GsFreeWindowBuffer(wp);
@@ -1020,7 +1162,7 @@ index fae5bfa..a073ebb 100644
  #if DYNAMICREGIONS
  	if (wp->clipregion)
  		GdDestroyRegion(wp->clipregion);
-@@ -733,8 +780,15 @@ GsClearWindow(GR_WINDOW *wp, GR_COORD x, GR_COORD y, GR_SIZE width, GR_SIZE  hei
+@@ -733,8 +781,15 @@ GsClearWindow(GR_WINDOW *wp, GR_COORD x, GR_COORD y, GR_SIZE width, GR_SIZE  hei
  	 * with buffered windows, all drawing is postponed until the application
  	 * is finished by calling GrClearWindow(..., 2), ie. GrFlushWindow()
  	 */
@@ -1037,8 +1179,42 @@ index fae5bfa..a073ebb 100644
  
  	if (wp->props & GR_WM_PROPS_BUFFERED) {
  
+@@ -1442,6 +1497,33 @@ GsCheckFocusWindow(void)
+ 	}
+ }
+ 
++/* The program's window inside a frame the window manager made, if it may have the keyboard. */
++GR_WINDOW *
++GsFrameClient(GR_WINDOW *top)
++{
++	win *frame = top ? wm_find_window(top->id) : NULL;
++	GR_WINDOW *cp = frame && frame->type == WINDOW_TYPE_CONTAINER ? GsFindWindow(frame->clientid) : NULL;
++
++	return cp && cp->mapped && !(cp->props & GR_WM_PROPS_NOFOCUS) ? cp : NULL;
++}
++
++/* Who gets the keyboard when its window goes: the front-most window shown that takes it. */
++GR_WINDOW *
++GsNextFocusWindow(void)
++{
++	GR_WINDOW *wp, *cp;
++
++	for (wp = rootwp->children; wp; wp = wp->siblings) {
++		if (!wp->realized || (wp->props & GR_WM_PROPS_NOFOCUS))
++			continue;
++		if (!wm_find_window(wp->id))
++			return wp;
++		if ((cp = GsFrameClient(wp)) != NULL && cp->realized)
++			return cp;
++	}
++	return rootwp;
++}
++
+ /* Send an update activate event to top level window of passed window*/
+ void
+ GsNotifyActivate(GR_WINDOW *wp)
 diff --git a/src/nanox/wmaction.c b/src/nanox/wmaction.c
-index 27dcbe8..ce3f2ad 100644
+index 27dcbe8..a9e1776 100644
 --- a/src/nanox/wmaction.c
 +++ b/src/nanox/wmaction.c
 @@ -138,6 +138,18 @@ void wm_container_buttondown(win *window, GR_EVENT_BUTTON *event)
@@ -1060,39 +1236,53 @@ index 27dcbe8..ce3f2ad 100644
  	}
  
  	/* 
-@@ -299,8 +311,48 @@ void wm_container_buttonup(win *window, GR_EVENT_BUTTON *event)
+@@ -255,6 +267,37 @@ void wm_container_buttondown(win *window, GR_EVENT_BUTTON *event)
+ 	window->active = GR_TRUE;
+ }
+ 
++/* A framed window fills the screen above the bar, or goes back to where it was. */
++void wm_toggle_maximize(win *window)
++{
++	GR_WINDOW_INFO info, cinfo;
++	GR_SCREEN_INFO si;
++	int nx, ny, nw, nh;
++
++	GrGetWindowInfo(window->wid, &info);
++	GrGetWindowInfo(window->clientid, &cinfo);
++	GrGetScreenInfo(&si);
++	if (!window->maximized) {
++		window->restore_x = info.x;
++		window->restore_y = info.y;
++		window->restore_w = info.width;
++		window->restore_h = info.height;
++		nx = ny = 0;
++		nw = si.cols;
++		nh = si.rows - WM_BAR_HEIGHT;
++	} else {
++		nx = window->restore_x;
++		ny = window->restore_y;
++		nw = window->restore_w;
++		nh = window->restore_h;
++	}
++	window->maximized = !window->maximized;
++	GrMoveWindow(window->wid, nx, ny);
++	GrResizeWindow(window->wid, nw, nh);
++	/* the program's window keeps its margins inside the frame */
++	GrResizeWindow(window->clientid, nw - (info.width - cinfo.width), nh - (info.height - cinfo.height));
++}
++
+ void wm_container_buttonup(win *window, GR_EVENT_BUTTON *event)
+ {
+ 	GR_RECT		r;
+@@ -299,8 +342,24 @@ void wm_container_buttonup(win *window, GR_EVENT_BUTTON *event)
          		return;
        		}
  		}
 +		/* the maximise box: fill the screen above the bar, or go back to where it was */
 +		r.x -= CXCLOSEBOX + 2;
 +		if (PtInRect(&r, event->x, event->y) && window->maximize) {
-+			GR_WINDOW_INFO cinfo;
-+			GR_SCREEN_INFO si;
-+			int nx, ny, nw, nh;
-+
-+			GrGetWindowInfo(window->clientid, &cinfo);
-+			GrGetScreenInfo(&si);
-+			if (!window->maximized) {
-+				window->restore_x = info.x;
-+				window->restore_y = info.y;
-+				window->restore_w = info.width;
-+				window->restore_h = info.height;
-+				nx = ny = 0;
-+				nw = si.cols;
-+				nh = si.rows - WM_BAR_HEIGHT;
-+			} else {
-+				nx = window->restore_x;
-+				ny = window->restore_y;
-+				nw = window->restore_w;
-+				nh = window->restore_h;
-+			}
-+			window->maximized = !window->maximized;
 +			window->maximize = GR_FALSE;
-+			GrMoveWindow(window->wid, nx, ny);
-+			GrResizeWindow(window->wid, nw, nh);
-+			/* the program's window keeps its margins inside the frame */
-+			GrResizeWindow(window->clientid, nw - (info.width - cinfo.width), nh - (info.height - cinfo.height));
++			wm_toggle_maximize(window);
 +			return;
 +		}
 +		/* the minimise box: the window goes away until something maps it again (the bar's button) */

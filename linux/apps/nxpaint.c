@@ -1,6 +1,7 @@
 /*
  * nxpaint: a paint program. Pick a tool, a size and a colour on the left and draw on the
  * canvas; Save writes the picture as a PPM file (nxpaint FILE opens one and saves to it).
+ * Keys: a tool's first letter picks it, 1 to 3 the size, [ and ] the colour, Ctrl+S saves.
  */
 #include "ui.h"
 
@@ -139,6 +140,24 @@ panel_click(int x, int y)
 	draw_panel();
 }
 
+static void
+key(int ch)
+{
+	int i;
+
+	notice = "";
+	for (i = 0; i < TOOL_COUNT; i++)
+		if (ui_starts(tool_names[i], ch))
+			tool = i;
+	if (ch >= '1' && ch <= '3')
+		size_index = ch - '1';
+	else if (ch == '[' || ch == ']')
+		colour = (colour + (ch == '[' ? 15 : 1)) % 16;
+	else if (ch == ('s' & 0x1f))
+		save();
+	draw_panel();
+}
+
 int
 main(int argc, char **argv)
 {
@@ -152,7 +171,7 @@ main(int argc, char **argv)
 		snprintf(path, sizeof path, "%s", argv[1]);
 	window = GrNewWindowEx(GR_WM_PROPS_APPWINDOW, "Paint", GR_ROOT_WINDOW_ID, -1, -1, TOOLS + CANVAS_W, CANVAS_H, UI_FACE);
 	canvas = GrNewWindow(window, TOOLS, 0, CANVAS_W, CANVAS_H, 0, WHITE, BLACK);
-	GrSelectEvents(window, GR_EVENT_MASK_EXPOSURE | GR_EVENT_MASK_BUTTON_DOWN | GR_EVENT_MASK_CLOSE_REQ);
+	GrSelectEvents(window, GR_EVENT_MASK_EXPOSURE | GR_EVENT_MASK_BUTTON_DOWN | GR_EVENT_MASK_KEY_DOWN | GR_EVENT_MASK_CLOSE_REQ);
 	GrSelectEvents(canvas, GR_EVENT_MASK_EXPOSURE | GR_EVENT_MASK_BUTTON_DOWN | GR_EVENT_MASK_BUTTON_UP |
 		GR_EVENT_MASK_MOUSE_POSITION);
 	GrMapWindow(canvas);
@@ -194,6 +213,9 @@ main(int argc, char **argv)
 			if (drawing && tool != PEN && tool != ERASER)
 				shape(from_x, from_y, event.button.x, event.button.y);
 			drawing = 0;
+			break;
+		case GR_EVENT_TYPE_KEY_DOWN:
+			key(event.keystroke.ch);
 			break;
 		case GR_EVENT_TYPE_CLOSE_REQ:
 			GrClose();

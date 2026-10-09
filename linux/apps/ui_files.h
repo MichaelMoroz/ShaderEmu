@@ -87,6 +87,23 @@ ui_files_label(int row)
 	return text;
 }
 
+/* Selects the next entry whose name starts with the letter typed; true if there is one. */
+static int
+ui_files_find(int ch)
+{
+	int i, n;
+
+	for (i = 1; i <= ui_files_list.count; i++) {
+		n = (ui_files_list.selected + i) % ui_files_list.count;
+		if (ui_starts(ui_files_entries[n].name, ch)) {
+			ui_files_list.selected = n;
+			ui_list_show(&ui_files_list);
+			return 1;
+		}
+	}
+	return 0;
+}
+
 static void
 ui_files_draw(GR_WINDOW_ID w)
 {
@@ -161,12 +178,8 @@ ui_choose_file(const char *title, const char *start, const char *kinds, char *pa
 				done = 1;
 			else if (event.keystroke.ch == MWKEY_BACKSPACE)
 				open = -1;
-			else if ((event.keystroke.ch == MWKEY_UP && ui_files_list.selected > 0) ||
-				 (event.keystroke.ch == MWKEY_DOWN && ui_files_list.selected + 1 < ui_files_list.count)) {
-				ui_files_list.selected += event.keystroke.ch == MWKEY_UP ? -1 : 1;
-				ui_list_show(&ui_files_list);
+			else if (ui_list_key(&ui_files_list, event.keystroke.ch) || ui_files_find(event.keystroke.ch))
 				ui_files_draw(w);
-			}
 			break;
 		case GR_EVENT_TYPE_BUTTON_DOWN:
 		case GR_EVENT_TYPE_MOUSE_MOTION:

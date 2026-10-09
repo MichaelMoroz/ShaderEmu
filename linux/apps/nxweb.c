@@ -41,6 +41,7 @@ static char *page;		/* the HTML as it came */
 static int page_length;
 static char address[256], typed[256], status[200], title[80];
 static int editing;		/* the address field has the keyboard */
+static int picked = -1;		/* the link the keyboard is on (Tab): its place in `links`, or -1 */
 static char history[16][256];
 static int history_count;
 
@@ -1047,6 +1048,10 @@ draw_page(void)
 				ui_text(window, r->x + 1, y, pool + r->text, r->length, colour, r->style & FIXED);
 			if (r->style & UNDER)
 				ui_fill(window, r->x, y + line_h - 2, r->width, 1, colour);
+			if ((r->style & LINK) && r->link == picked) {
+				GrSetGCForeground(ui_gc, colour);
+				GrRect(window, ui_gc, r->x - 2, y - 1, r->width + 4, line_h + 1);
+			}
 		}
 	}
 	/* what was drawn over the edges of the view */
@@ -1138,6 +1143,7 @@ go(const char *where, int remember)
 	}
 	snprintf(address, sizeof address, "%s", strncmp(where, "file://", 7) ? where : where + 7);
 	editing = loading = by_hand = 0;
+	picked = -1;
 	if (address[0] == '/') {
 		FILE *file = fopen(address, "rb");
 		char *text;
@@ -1398,13 +1404,61 @@ click(int x, int y)
 	}
 }
 
+static int
+is_link(const struct run *r)
+{
+	return (r->style & (LINK | PICTURE | BOX)) == LINK;
+}
+
+/* Moves the keyboard to the page's next link, or the one before, and brings it into view.
+ * Past the last one no link has it, and the next press starts over. */
 static void
-key(int ch)
+pick_link(int back)
+{
+	int i, first = run_count, last = -1, was = top, view = view_height();
+
+	for (i = 0; i < run_count; i++)
+		if (is_link(&runs[i]) && runs[i].link == picked) {
+			first = i < first ? i : first;
+			last = i;
+		}
+	if (back)
+		for (i = first - 1; i >= 0 && !is_link(&runs[i]); i--)
+			;
+	else
+		for (i = last + 1; i < run_count && !is_link(&runs[i]); i++)
+			;
+	picked = i >= 0 && i < run_count ? runs[i].link : -1;
+	if (picked >= 0) {
+		snprintf(status, sizeof status, "%.190s", links + picked);
+		if (runs[i].y < top || runs[i].y + line_h > top + view)
+			scroll_to(runs[i].y - view / 3);
+	}
+	if (top == was)
+		draw_page();
+}
+
+/* Keys: with the address field open they are typed into it. Otherwise arrows and the paging
+ * keys scroll, Tab goes from link to link and Enter follows, Backspace goes back, F5 loads
+ * the page again, and Ctrl+L opens the address field. */
+static void
+key(int ch, int modifiers)
 {
 	int n = strlen(typed), view = view_height();
 
 	if (!editing) {
 		switch (ch) {
+		case MWKEY_TAB: pick_link(modifiers & MWKMOD_SHIFT); break;
+		case MWKEY_ENTER:
+			if (picked >= 0) {
+				char href[256];
+
+				snprintf(href, sizeof href, "%s", links + picked);
+				follow(href);
+			}
+			break;
+		case MWKEY_F5: click(120, 10); break;
+		case 'l' & 0x1f: click(width - 20, 10); break;
 		case MWKEY_UP: scroll_to(top - line_h); break;
 		case MWKEY_DOWN: scroll_to(top + line_h); break;
 		case MWKEY_PAGEUP: scroll_to(top - view + line_h); break;
@@ -1494,7 +1548,7 @@ main(int argc, char **argv)
 				dragging = 0;
 			break;
 		case GR_EVENT_TYPE_KEY_DOWN:
-			key(event.keystroke.ch);
+			key(event.keystroke.ch, event.keystroke.modifiers);
 			break;
 		case GR_EVENT_TYPE_CLOSE_REQ:
 			GrClose();

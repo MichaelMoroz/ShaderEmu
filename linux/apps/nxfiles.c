@@ -22,6 +22,7 @@ enum { FILE_UNKNOWN, FILE_OTHER, FILE_FOLDER, FILE_PROGRAM, FILE_PICTURE, FILE_P
 static struct entry { char name[64]; long size; int kind; } entries[MAX_ENTRIES];
 static int count, selected = -1, top, rows, columns, width = WIDTH, height = HEIGHT;
 static int dragging;	/* the scroll bar's thumb is held */
+static int focus;	/* what the keyboard works: 0 the tiles, 1 + n button n */
 static char where[512];
 static GR_WINDOW_ID window;
 static const char *buttons[] = { "Up", "Open", "Edit", "New file", "Delete", "Refresh" };
@@ -184,6 +185,8 @@ draw_all(void)
 	ui_fill(window, 0, 0, width, BAR, UI_FACE);
 	for (i = 0; i < BUTTONS; i++)
 		ui_button(window, 3 + i * (BUTTON_W + 3), 3, BUTTON_W, BAR - 6, buttons[i], 0);
+	if (focus)
+		ui_focus(window, 3 + (focus - 1) * (BUTTON_W + 3) + 4, 3 + 4, BUTTON_W - 8, BAR - 6 - 8);
 	ui_fill(window, 0, BAR, width - UI_SCROLL_W, area, WHITE);
 	ui_bevel(window, 0, BAR, width - UI_SCROLL_W, area, 1);
 	for (i = top * columns; i < (top + rows) * columns; i++)
@@ -303,6 +306,54 @@ press(int button)
 	draw_all();
 }
 
+/* Arrows and the paging keys choose a tile, a letter the next name it starts, Backspace the
+ * folder above, Delete, F5; Tab goes to the buttons (arrows, Enter) and back to the tiles. */
+static void
+key(const GR_EVENT *event)
+{
+	int ch = event->keystroke.ch, i;
+
+	if (ui_tab(event, &focus, 1 + BUTTONS)) {
+		draw_all();
+		return;
+	}
+	if (focus) {
+		/* on the buttons */
+		if (ch == MWKEY_LEFT || ch == MWKEY_RIGHT)
+			focus = 1 + (focus - 1 + (ch == MWKEY_LEFT ? BUTTONS - 1 : 1)) % BUTTONS;
+		else if (ch == MWKEY_ESCAPE || ch == MWKEY_DOWN)
+			focus = 0;
+		else if (ui_press_key(ch)) {
+			press(focus - 1);
+			return;
+		} else
+			return;
+		draw_all();
+		return;
+	}
+	switch (ch) {
+	case MWKEY_LEFT: select_tile(selected - 1); break;
+	case MWKEY_RIGHT: select_tile(selected + 1); break;
+	case MWKEY_UP: select_tile(selected < 0 ? 0 : selected >= columns ? selected - columns : selected); break;
+	case MWKEY_DOWN: select_tile(selected < 0 ? 0 : selected + columns < count ? selected + columns : selected); break;
+	case MWKEY_PAGEUP: select_tile(selected - rows * columns); break;
+	case MWKEY_PAGEDOWN: select_tile(selected + rows * columns); break;
+	case MWKEY_HOME: select_tile(0); break;
+	case MWKEY_END: select_tile(count - 1); break;
+	case MWKEY_ENTER: open_entry(selected, 0); break;
+	case MWKEY_BACKSPACE: press(0); break;
+	case MWKEY_DELETE: press(4); break;
+	case MWKEY_F5: press(5); break;
+	default:
+		/* a letter: the next entry that starts with it */
+		for (i = 1; i <= count; i++)
+			if (ui_starts(entries[(selected + i) % count].name, ch)) {
+				select_tile((selected + i) % count);
+				break;
+			}
+	}
+}
+
 int
 main(int argc, char **argv)
 {
@@ -371,16 +422,7 @@ main(int argc, char **argv)
 				dragging = 0;
 			break;
 		case GR_EVENT_TYPE_KEY_DOWN:
-			switch (event.keystroke.ch) {
-			case MWKEY_LEFT: select_tile(selected - 1); break;
-			case MWKEY_RIGHT: select_tile(selected + 1); break;
-			case MWKEY_UP: select_tile(selected < 0 ? 0 : selected >= columns ? selected - columns : selected); break;
-			case MWKEY_DOWN: select_tile(selected < 0 ? 0 : selected + columns < count ? selected + columns : selected); break;
-			case MWKEY_PAGEUP: select_tile(selected - rows * columns); break;
-			case MWKEY_PAGEDOWN: select_tile(selected + rows * columns); break;
-			case MWKEY_ENTER: open_entry(selected, 0); break;
-			case MWKEY_BACKSPACE: press(0); break;
-			}
+			key(&event);
 			break;
 		case GR_EVENT_TYPE_CLOSE_REQ:
 			GrClose();

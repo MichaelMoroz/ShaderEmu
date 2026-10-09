@@ -1,11 +1,12 @@
 /*
  * What the desktop's small programs share: the grey button look, the two fonts, a list and a
- * slider, starting another program, and putting a picture or a colour on the desktop.
- * ui_files.h adds a window to choose a file in.
+ * slider and their keys, starting another program, and putting a picture or a colour on the
+ * desktop. ui_files.h adds a window to choose a file in.
  */
 #ifndef SHADEREMU_APPS_UI_H
 #define SHADEREMU_APPS_UI_H
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -71,6 +72,38 @@ ui_button(GR_DRAW_ID w, int x, int y, int width, int height, const char *label, 
 	ui_fill(w, x, y, width, height, UI_FACE);
 	ui_bevel(w, x, y, width, height, pressed);
 	ui_text(w, x + 6, y + (height - 12) / 2, label, -1, BLACK, 0);
+}
+
+/* A line round the control the keyboard works now, just outside the rectangle given. */
+static void
+ui_focus(GR_DRAW_ID w, int x, int y, int width, int height)
+{
+	GrSetGCForeground(ui_gc, BLACK);
+	GrRect(w, ui_gc, x - 2, y - 2, width + 4, height + 4);
+}
+
+/* Tab and Shift+Tab move the keyboard among a window's `count` controls; true if it was one. */
+static int
+ui_tab(const GR_EVENT *event, int *focus, int count)
+{
+	if (event->keystroke.ch != MWKEY_TAB)
+		return 0;
+	*focus = (*focus + ((event->keystroke.modifiers & MWKMOD_SHIFT) ? count - 1 : 1)) % count;
+	return 1;
+}
+
+/* The keys that press the button the keyboard is on. */
+static int
+ui_press_key(int ch)
+{
+	return ch == MWKEY_ENTER || ch == ' ';
+}
+
+/* True if a name starts with the letter typed, in either case. */
+static int
+ui_starts(const char *name, int ch)
+{
+	return ch > ' ' && ch < 127 && tolower((unsigned char)name[0]) == tolower(ch);
 }
 
 static int
@@ -234,6 +267,29 @@ ui_list_event(struct ui_list *l, const GR_EVENT *event)
 	if (top == l->top)
 		return 0;
 	l->top = top;
+	return 1;
+}
+
+/* What a key does to a list: true if it moved the selection (draw the list again). */
+static int
+ui_list_key(struct ui_list *l, int ch)
+{
+	int rows = ui_list_rows(l), to = l->selected;
+
+	switch (ch) {
+	case MWKEY_UP: to--; break;
+	case MWKEY_DOWN: to++; break;
+	case MWKEY_PAGEUP: to -= rows - 1; break;
+	case MWKEY_PAGEDOWN: to += rows - 1; break;
+	case MWKEY_HOME: to = 0; break;
+	case MWKEY_END: to = l->count - 1; break;
+	default: return 0;
+	}
+	to = to >= l->count ? l->count - 1 : to < 0 ? 0 : to;
+	if (to == l->selected || l->count == 0)
+		return 0;
+	l->selected = to;
+	ui_list_show(l);
 	return 1;
 }
 

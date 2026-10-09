@@ -6,6 +6,7 @@
  * "Folder/Label=command" for a program in a folder: a program's build adds itself by putting
  * such a file in the image. Clicking a window's button brings the window to the front.
  */
+#include <ctype.h>
 #include <dirent.h>
 #include <signal.h>
 #include <stdio.h>
@@ -251,9 +252,10 @@ draw_menu(void)
 	}
 }
 
-/* Shows the folders and the programs in none (-1), or a folder's programs and a way back. */
+/* Shows the folders and the programs in none (-1), or a folder's programs and a way back,
+ * with row `chosen` picked out (-1: none, as when the pointer is what chooses). */
 static void
-show_folder(int folder)
+show_folder(int folder, int chosen)
 {
 	int i;
 
@@ -267,21 +269,24 @@ show_folder(int folder)
 	/* the way back is the bottom row: the menu's bottom stays where it is, and the pointer in it */
 	if (folder >= 0)
 		rows[row_count].label = "< Back", rows[row_count].folder = -1, rows[row_count++].item = -1;
-	hover = -1;
+	hover = chosen < row_count ? chosen : -1;
 	GrMoveWindow(menu, 0, screen.rows - BAR_HEIGHT - row_count * ITEM_HEIGHT - 4);
 	GrResizeWindow(menu, MENU_WIDTH, row_count * ITEM_HEIGHT + 4);
 	draw_menu();
 }
 
+/* Opens the menu with a row picked out (-1: none), or closes it. Open, it has the keyboard;
+ * closed, the window system hands that back to the window in front. */
 static void
-show_menu(int open)
+show_menu(int open, int chosen)
 {
 	menu_open = open;
 	hover = -1;
 	if (open) {
-		show_folder(-1);
+		show_folder(-1, chosen);
 		GrMapWindow(menu);
 		GrRaiseWindow(menu);
+		GrSetFocus(menu);
 	} else
 		GrUnmapWindow(menu);
 	draw_bar();
@@ -305,6 +310,59 @@ launch(const char *command)
 	_exit(127);
 }
 
+/* Opens a row: a folder (or the way back, to the row of the folder left), or a program. */
+static void
+choose(int row, int keyboard)
+{
+	if (row < 0 || row >= row_count) {
+		show_menu(0, -1);
+	} else if (rows[row].item < 0) {
+		show_folder(rows[row].folder, !keyboard ? -1 : rows[row].folder < 0 ? shown : 0);
+	} else {
+		show_menu(0, -1);
+		launch(items[rows[row].item].command);
+	}
+}
+
+/* The open menu's keys: arrows, Enter, Escape, and a letter for the next row it starts. */
+static void
+menu_key(int ch)
+{
+	int i, to = hover;
+
+	switch (ch) {
+	case MWKEY_UP: to = hover <= 0 ? row_count - 1 : hover - 1; break;
+	case MWKEY_DOWN: to = hover + 1 >= row_count ? 0 : hover + 1; break;
+	case MWKEY_HOME: case MWKEY_PAGEUP: to = 0; break;
+	case MWKEY_END: case MWKEY_PAGEDOWN: to = row_count - 1; break;
+	case MWKEY_ENTER: case ' ':
+		if (hover >= 0)
+			choose(hover, 1);
+		return;
+	case MWKEY_RIGHT:
+		if (hover >= 0 && rows[hover].item < 0 && rows[hover].folder >= 0)
+			choose(hover, 1);
+		return;
+	case MWKEY_LEFT: case MWKEY_BACKSPACE: case MWKEY_ESCAPE:
+		if (shown >= 0)
+			show_folder(-1, shown);
+		else if (ch == MWKEY_ESCAPE)
+			show_menu(0, -1);
+		return;
+	default:
+		/* a letter: the next row that starts with it */
+		for (i = 1; i <= row_count && ch > ' ' && ch < 127; i++)
+			if (tolower(rows[(hover + i) % row_count].label[0]) == tolower(ch)) {
+				to = (hover + i) % row_count;
+				break;
+			}
+	}
+	if (to != hover && row_count) {
+		hover = to;
+		draw_menu();
+	}
+}
+
 int
 main(void)
 {
@@ -323,11 +381,11 @@ main(void)
 
 	bar = GrNewWindowEx(GR_WM_PROPS_NODECORATE | GR_WM_PROPS_NOMOVE | GR_WM_PROPS_NOAUTOMOVE | GR_WM_PROPS_NOFOCUS,
 		"nxbar", GR_ROOT_WINDOW_ID, 0, screen.rows - BAR_HEIGHT, screen.cols, BAR_HEIGHT, FACE);
-	menu = GrNewWindowEx(GR_WM_PROPS_NODECORATE | GR_WM_PROPS_NOMOVE | GR_WM_PROPS_NOAUTOMOVE | GR_WM_PROPS_NOFOCUS,
+	menu = GrNewWindowEx(GR_WM_PROPS_NODECORATE | GR_WM_PROPS_NOMOVE | GR_WM_PROPS_NOAUTOMOVE,
 		"nxbar menu", GR_ROOT_WINDOW_ID, 0, screen.rows - BAR_HEIGHT - ITEM_HEIGHT - 4, MENU_WIDTH, ITEM_HEIGHT + 4, FACE);
 	GrSelectEvents(bar, GR_EVENT_MASK_EXPOSURE | GR_EVENT_MASK_BUTTON_DOWN);
 	GrSelectEvents(menu, GR_EVENT_MASK_EXPOSURE | GR_EVENT_MASK_BUTTON_DOWN | GR_EVENT_MASK_MOUSE_MOTION |
-		GR_EVENT_MASK_MOUSE_EXIT);
+		GR_EVENT_MASK_MOUSE_EXIT | GR_EVENT_MASK_KEY_DOWN);
 	GrMapWindow(bar);
 	/* the Windows key, whatever window has the keyboard */
 	GrGrabKey(bar, MWKEY_LMETA, GR_GRAB_HOTKEY);
@@ -336,10 +394,10 @@ main(void)
 	if (getenv("NXBAR_SHOW")) {
 		int i;
 
-		show_menu(1);
+		show_menu(1, -1);
 		for (i = 0; i < folder_count; i++)
 			if (strcmp(folders[i], getenv("NXBAR_SHOW")) == 0)
-				show_folder(i);
+				show_folder(i, -1);
 	}
 
 	for (;;) {
@@ -357,18 +415,20 @@ main(void)
 			break;
 		case GR_EVENT_TYPE_KEY_DOWN:
 			if (event.keystroke.hotkey)
-				show_menu(!menu_open);
+				show_menu(!menu_open, 0);	/* opened by a key: the first row is picked out */
+			else if (menu_open && event.keystroke.wid == menu)
+				menu_key(event.keystroke.ch);
 			break;
 		case GR_EVENT_TYPE_BUTTON_DOWN:
 			if (event.button.buttons & (GR_BUTTON_SCROLLUP | GR_BUTTON_SCROLLDN))
 				break;
 			if (event.button.wid == bar) {
 				if (event.button.x < START_WIDTH + 6) {
-					show_menu(!menu_open);
+					show_menu(!menu_open, -1);
 					break;
 				}
 				if (menu_open)
-					show_menu(0);
+					show_menu(0, -1);
 				for (i = 0; i < task_count; i++)
 					if (event.button.x >= task_x(i) && event.button.x < task_x(i) + task_width()) {
 						if (tasks[i].hidden)
@@ -377,15 +437,7 @@ main(void)
 						GrSetFocus(tasks[i].client);
 					}
 			} else {
-				i = (event.button.y - 2) / ITEM_HEIGHT;
-				if (i < 0 || i >= row_count) {
-					show_menu(0);
-				} else if (rows[i].item < 0) {
-					show_folder(rows[i].folder);	/* a folder, or the way back */
-				} else {
-					show_menu(0);
-					launch(items[rows[i].item].command);
-				}
+				choose((event.button.y - 2) / ITEM_HEIGHT, 0);
 			}
 			break;
 		case GR_EVENT_TYPE_MOUSE_MOTION:
@@ -396,7 +448,7 @@ main(void)
 			break;
 		case GR_EVENT_TYPE_MOUSE_EXIT:
 			if (menu_open && event.general.wid == menu)
-				show_menu(0);
+				show_menu(0, -1);
 			break;
 		case GR_EVENT_TYPE_CLOSE_REQ:
 			GrClose();
