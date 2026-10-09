@@ -55,7 +55,7 @@
 
             CGPROGRAM
             #pragma target 5.0
-            #pragma vertex tick_vert
+            #pragma vertex CustomRenderTextureVertexShader
             #pragma fragment frag
 
             #define PASS_TICK
@@ -72,7 +72,6 @@
             uniform uint _PlayerID;
             uniform uint _RTC0, _RTC1;
             uniform uint _DoTick;
-            uniform uint _McQuads;   // CORES > 1: the pass is drawn as a quad a core (tick_vert)
             /* uniform uint _BreakpointLow, _BreakpointHigh; */
             /* uniform uint _BreakpointLowClock, _BreakpointHighClock; */
             /* uniform uint _CheckCSR; //, _CheckMEM, _CheckMEMraw; */
@@ -91,24 +90,19 @@
             static uint hart = 0;
             static uint2 hart_offset = uint2(0, 0);
 
-            // CORES > 1 (docs/multicore.md): core k's state is the 64 x 64 block at x = CORE_PITCH * k
-            // of the state rows, and state_off is where the block of this pixel's core starts. RAM
-            // is read with RAM_TEX, which no core's block moves. The blocks are apart: pixels of
-            // two cores that the GPU runs side by side wait for each other.
+            // CORES > 1 (docs/multicore.md): core k's state is the block at x = CORE_PITCH * k of the
+            // state rows, and state_off is where the block of this pixel's core starts (mc_core is
+            // the core). RAM is read with RAM_TEX, which no core's block moves.
             #ifndef CORES
             #define CORES 1
             #endif
             #ifndef CORE_PITCH
             #define CORE_PITCH 256
             #endif
-            // CORE_Y (an experiment): the workers' blocks in rows of their own, CORE_Y down, which
-            // must be rows of RAM nothing uses
-            #ifndef CORE_Y
-            #define CORE_Y 0
-            #endif
-            #define MC_BLOCK(k) uint2((k) * CORE_PITCH, (k) == 0 ? 0 : CORE_Y)
+            #define MC_BLOCK(k) uint2((k) * CORE_PITCH, 0)
             #if CORES > 1
             static uint2 state_off = uint2(0, 0);
+            static uint mc_core = 0;
             #define STATE_TEX_HART(pos, hartidx) (_SelfTexture2D[uint2(pos) + state_off])
             #define STATE_TEX(pos) (_SelfTexture2D[uint2(pos) + state_off])
             #else
@@ -130,39 +124,20 @@
             #include "src/emu.h" // includes mmu.h, csr.h, mem.h, trap.h
             #include "src/cpu.h"
 
-            // The update zone, or with CORES > 1 and more than six vertices a quad a core: its
-            // block of state and nothing between the blocks.
-            v2f_customrendertexture tick_vert(appdata_customrendertexture IN) {
-#if CORES > 1
-                if (_McQuads != 0) {
-                    static const float2 corners[6] = {{0, 0}, {0, 1}, {1, 1}, {1, 0}, {0, 0}, {1, 1}};
-                    uint core = IN.vertexID / 6;
-                    float2 corner = corners[IN.vertexID % 6];
-                    float2 uv = (float2(MC_BLOCK(core)) + corner * float2(64.0, STATE_ROWS)) / _CustomRenderTextureInfo.xy;
-                    v2f_customrendertexture OUT;
-                    OUT.vertex = float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0);
-                    OUT.localTexcoord = float3(uv, 0);
-                    OUT.globalTexcoord = float3(uv, 0);
-                    OUT.primitiveID = 0;
-                    OUT.direction = 0;
-                    return OUT;
-                }
-#endif
-                return CustomRenderTextureVertexShader(IN);
-            }
-
             uint4 frag(v2f_customrendertexture i) : SV_Target {
                 _SelfTexture2D.GetDimensions(s_dim.x, s_dim.y);
                 _Data_MTD_R.GetDimensions(m_dim.x, m_dim.y);
 
                 uint2 pos = i.globalTexcoord.xy * s_dim;
 #if CORES > 1
-                // the pass draws CORES blocks side by side: this pixel's core, and where in its block
+                // a zone or two a core: this pixel's core, and which texel of its block it keeps
+                uint2 own = pos;
                 hart = min(pos.x / CORE_PITCH, CORES - 1);
-                if (pos.y < 64 && CORE_Y != 0) hart = 0;
+                mc_core = hart;
                 state_off = MC_BLOCK(hart);
                 pos -= state_off;
                 if (pos.x >= 64 || pos.y >= 64) return (uint4)0;   // between two blocks
+                pos = mc_texel_of(pos);
 #endif
 #ifdef L1_LOCAL
                 uint4 l1_cache[L1_DATA_N];
@@ -200,7 +175,11 @@
                     }
                 } else {
                     if (!pixel_has_state(pos)) {
+#if CORES > 1
+                        return RAM_TEX(own);
+#else
                         return STATE_TEX(pos);
+#endif
                     }
 
                     decode();
@@ -278,24 +257,19 @@
             Texture2D<float4> _Data_MTD_B;
             Texture2D<float4> _Data_MTD_A;
 
-            // CORES > 1 (docs/multicore.md): core k's state is the 64 x 64 block at x = CORE_PITCH * k
-            // of the state rows, and state_off is where the block of this pixel's core starts. RAM
-            // is read with RAM_TEX, which no core's block moves. The blocks are apart: pixels of
-            // two cores that the GPU runs side by side wait for each other.
+            // CORES > 1 (docs/multicore.md): core k's state is the block at x = CORE_PITCH * k of the
+            // state rows, and state_off is where the block of this pixel's core starts (mc_core is
+            // the core). RAM is read with RAM_TEX, which no core's block moves.
             #ifndef CORES
             #define CORES 1
             #endif
             #ifndef CORE_PITCH
             #define CORE_PITCH 256
             #endif
-            // CORE_Y (an experiment): the workers' blocks in rows of their own, CORE_Y down, which
-            // must be rows of RAM nothing uses
-            #ifndef CORE_Y
-            #define CORE_Y 0
-            #endif
-            #define MC_BLOCK(k) uint2((k) * CORE_PITCH, (k) == 0 ? 0 : CORE_Y)
+            #define MC_BLOCK(k) uint2((k) * CORE_PITCH, 0)
             #if CORES > 1
             static uint2 state_off = uint2(0, 0);
+            static uint mc_core = 0;
             #define STATE_TEX_HART(pos, hartidx) (_SelfTexture2D[uint2(pos) + state_off])
             #define STATE_TEX(pos) (_SelfTexture2D[uint2(pos) + state_off])
             #else
@@ -335,9 +309,6 @@
                     changed |= commit_bands_changed_core();
                 }
                 state_off = uint2(0, 0);
-#if CORE_Y != 0
-                changed |= 1u << ((CORE_Y - 64) / 128);   // the band the workers' blocks are in
-#endif
                 return changed;
             }
             uint commit_bands_changed_core() {
@@ -403,23 +374,26 @@
 #endif
 #if CORES > 1
                 uint4 result;
-                if (pos.y < 64 || (CORE_Y != 0 && pos.y >= CORE_Y && pos.y < CORE_Y + 64 && pos.x >= CORE_PITCH && pos.x < CORE_PITCH * CORES && pos.x % CORE_PITCH < 64)) {
+                if (pos.y < 64) {
                     // a core's own block: its state, as with one core
                     uint hb = pos.x / CORE_PITCH;
-                    if (hb >= CORES || pos.x % CORE_PITCH >= 64 || MC_BLOCK(hb).y != pos.y - pos.y % 64 && pos.y < 64) return (uint4)0;
-                    if (pos.y < 64 && CORE_Y != 0 && hb != 0) return (uint4)0;
+                    if (hb >= CORES || pos.x % CORE_PITCH >= 64) return (uint4)0;
+                    uint4 own = RAM_TEX(pos);
+                    mc_core = hb;
                     state_off = MC_BLOCK(hb);
-                    pos -= state_off;
+                    pos = mc_texel_of(pos - state_off);
                     decode_for_commit();
-                    result = commit(pos, STATE_TEX(pos));
+                    result = commit(pos, own);
                 } else {
                     // RAM: every core's writes, the highest core's last
                     result = RAM_TEX(pos);
                     for (uint h = 0; h < CORES; h++) {
+                        mc_core = h;
                         state_off = MC_BLOCK(h);
                         decode_for_commit();
                         result = commit(pos, result);
                     }
+                    mc_core = 0;
                     state_off = uint2(0, 0);
                 }
 #else

@@ -86,7 +86,6 @@ struct Options {
     std::string l1Log;        // per frame: instructions, last stall, a count, then the RAM texels its write cache held
     double statsAfter = -1;   // >= 0: print a STATS line for the part of the run after this many seconds
     bool noDoubles = false;
-    int coreY = 0;            // --core-y N: the workers' blocks are N rows down (an experiment)
     int corePitch = 256;      // --core-pitch N: the cores' blocks of state are N texels apart
     int cores = 1;            // --cores N: core 0 and N - 1 worker cores (docs/multicore.md; D3D11)
     bool noBands = false;     // --no-bands: the commit rewrites all of RAM, as a CustomRenderTexture does
@@ -302,7 +301,6 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--define") o.defines.push_back(next("--define"));
         else if (a == "--no-bands") o.noBands = true;
         else if (a == "--cores") { o.cores = (std::max)(1, (std::min)(16, atoi(next("--cores").c_str()))); if (o.cores > 1) o.defines.push_back("CORES=" + std::to_string(o.cores)); }
-        else if (a == "--core-y") { o.coreY = atoi(next("--core-y").c_str()); o.defines.push_back("CORE_Y=" + std::to_string(o.coreY)); }
         else if (a == "--core-pitch") { o.corePitch = (std::max)(64, (std::min)(1024, atoi(next("--core-pitch").c_str()))); o.defines.push_back("CORE_PITCH=" + std::to_string(o.corePitch)); }
         else { fprintf(stderr, "unknown option %s\n", a.c_str()); usage(); return false; }
     }
@@ -604,6 +602,9 @@ int main(int argc, char** argv) {
             if (d.rfind("L1_TABLE_BITS=", 0) == 0) tableBits = (unsigned)atoi(d.c_str() + 14);
         }
         bo.tickRows = ways == 3 && tableBits == 6 ? 16 : 32;
+        // a worker's texels past its first 512, four to a column, to a whole number of 8-pixel tiles
+        unsigned tail = 44 + (2u << tableBits) * (ways + 1) - 512;
+        bo.workerTailWidth = (std::min)(64u, ((tail + 3) / 4 + 7) & ~7u);
     }
     bo.present = opt.present;
     bo.dxcOpt = opt.dxcOpt;
@@ -1311,11 +1312,10 @@ int main(int argc, char** argv) {
     if (opt.cores > 1) {
         // each core's block of state: what it is doing as the run ends
         std::vector<uint8_t> blocks;
-        const size_t rowWords = (size_t)opt.corePitch * opt.cores * 4;
-        if (backend.readState(opt.corePitch * opt.cores, opt.coreY + 64, blocks) && blocks.size() >= rowWords * 4 * (opt.coreY + 64)) {
+        if (backend.readState(opt.corePitch * opt.cores, 64, blocks) && blocks.size() >= (size_t)opt.corePitch * opt.cores * 64 * 16) {
             const uint32_t* row0 = (const uint32_t*)blocks.data();
             for (int c = 0; c < opt.cores; ++c) {
-                const uint32_t* t = row0 + (size_t)c * opt.corePitch * 4 + (c == 0 ? 0 : rowWords * opt.coreY);
+                const uint32_t* t = row0 + (size_t)c * opt.corePitch * 4;
                 uint32_t word = t[41 * 4 + 3];
                 fprintf(stderr, "CORE %d: pc %08x, %u instructions, %u commits, %s (state word %08x)\n", c, t[36 * 4 + 3], t[28 * 4 + 1],
                         t[28 * 4 + 2], c == 0 ? "the machine" : (word & 1) ? "running" : (word >> 8) == 0 ? "parked, never started" :

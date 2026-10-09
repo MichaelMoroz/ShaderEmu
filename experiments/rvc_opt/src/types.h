@@ -81,6 +81,29 @@
 #endif
 #define CSR_STATE_AT (STATE_ROWS * 64)
 #define CSR_STATE_TEXELS 1024
+
+#if CORES > 1
+// A worker core (docs/multicore.md) keeps the CPU's texels and the write cache and nothing
+// else: it has no paging and no float registers, so no TLBs to keep. That is 556 texels, and
+// they are kept as whole tiles of pixels, which is how the GPU runs them: the first 512 where
+// they are (64 x 8), and the last 44 of the cache in a block of 11 x 4 under those, four to a
+// column, for which the pass draws 16 x 4. In a row of their own they were a line a pixel
+// high, which costs the warps of two rows.
+#define MC_ROWS 8
+#define MC_TAIL_AT (MC_ROWS * 64)
+// Where texel lin of this core's block is.
+uint2 mc_state_at(uint lin) {
+    if (mc_core != 0 && lin >= MC_TAIL_AT) return uint2((lin - MC_TAIL_AT) >> 2, MC_ROWS + ((lin - MC_TAIL_AT) & 3));
+    return uint2(lin % 64, lin / 64);
+}
+// Which texel the pixel at `pos` of this core's block keeps, as the place it has in core 0's
+// layout; (63, 63), which is nobody's, for a pixel of the padding.
+uint2 mc_texel_of(uint2 pos) {
+    if (mc_core == 0 || pos.y < MC_ROWS) return pos;
+    uint lin = MC_TAIL_AT + pos.x * 4 + (pos.y - MC_ROWS);
+    return pos.y < MC_ROWS + 4 && lin < L1_STATE_AT + L1_ENTRIES ? uint2(lin % 64, lin / 64) : uint2(63, 63);
+}
+#endif
 uint l1_slot(uint4 tags, uint tag) {
 #if L1_WAYS == 4
     return tags.x == tag ? 1 : tags.y == tag ? 2 : tags.z == tag ? 3 : tags.w == tag ? 4 : 0;
@@ -788,6 +811,9 @@ void decode_for_commit() {
 bool pixel_has_state(uint2 pos) {
     // CSR data area and FB are not "state", they're only touched by commit
     uint lin = pos.x + 64 * pos.y;
+#if CORES > 1
+    if (hart != 0) return lin < L1_STATE_AT + L1_ENTRIES;   // a worker: no TLBs, no float registers
+#endif
 #ifndef NO_PAGING
     if (lin >= TLB_STATE_AT && lin < TLB_STATE_AT + TLB_STATE_TEXELS) return true;
 #endif
@@ -1091,7 +1117,11 @@ uint tex_get_csr(uint addr) {
 
 uint4 l1_state_texel(uint lin) {
     lin += L1_STATE_AT;
+#if CORES > 1
+    return STATE_TEX_HART(mc_state_at(lin), 0);
+#else
     return STATE_TEX_HART(uint2(lin % 64, lin / 64), 0);
+#endif
 }
 
 // The cache's copy of RAM texel t from the state texture, if it has one.

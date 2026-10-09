@@ -2,7 +2,8 @@
 #define MC_H
 
 // More than one core (CORES > 1, docs/multicore.md). Core 0 is the machine as it always was.
-// The others are workers: a block of state each, no devices, the same RAM. A worker reads RAM
+// The others are workers: a block of state each (the CPU's texels and the write cache: no TLBs,
+// no float registers, so no paging and no F), no devices, the same RAM. A worker reads RAM
 // as the last commit left it and its own writes; the commit pass merges every core's writes,
 // the highest core last. So a core sees another's writes one pass later, and two cores must
 // not write the same 16 bytes in one pass.

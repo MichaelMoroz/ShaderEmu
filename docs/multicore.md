@@ -1,9 +1,11 @@
 # More than one core
 
-An experiment: the machine with worker cores beside it, all run by the one tick pass. It works
-(Linux on core 0 starts three workers and gives them work, and every result is right). On the
-GPU it was measured on it buys little: a pass costs about as much as the cores that are busy
-in it put together, so four cores do 1.3 to 1.4 times the work of one, not four times.
+The machine with worker cores beside it, all run by the one tick pass. Linux on core 0 starts
+the workers and gives them work, and every result is right. Core 0 and three workers cost
+1.17 times the pass of core 0 alone, so four cores do 3.4 times the work of one; past that a
+pass grows with the cores (eight: 2.1 times, sixteen: 3.2 times). It took two things to get
+there, both about how the GPU runs pixels: the state as full tiles of pixels, and workers that
+keep no more than they need ("What a pass costs" and the sections after it).
 
     bin\rvc_harness.exe --d3d11 --image linux-net --cores 4
     / # mctest            (3 workers; "mctest N LIMIT" for other numbers, "mctest N LIMIT bench" for the cost of a pass)
@@ -15,9 +17,10 @@ the Linux checksums are as before).
 ## How it is made
 
 - **A block of state a core.** Core 0's state is the 64 texels wide block it always was. Core k's is
-  the same block `CORE_PITCH` (256) texels further right in the state rows, which were empty
-  there. `STATE_TEX` adds the block's place (`state_off`); RAM is read with `RAM_TEX`, which
-  nothing moves. The tick pass draws a zone a core.
+  a block `CORE_PITCH` (256) texels further right in the state rows, which were empty there.
+  `STATE_TEX` adds the block's place (`state_off`); RAM is read with `RAM_TEX`, which nothing
+  moves. The tick pass draws core 0's rectangle and two small zones a worker (below), all
+  before any is copied back.
 - **The same RAM.** Every core reads RAM as the last commit left it, plus its own writes (its
   write cache). The commit pass looks a RAM texel up in every core's cache, the highest core
   last. So a core sees another's stores one pass later.
@@ -25,7 +28,7 @@ the Linux checksums are as before).
   carries the texel's other three as it read them, and would undo another core's store to them
   in the same pass. What changes hands is therefore 16 bytes with one writer a pass. There are
   no atomic instructions between cores and no locks; `mc.h` (programs/mc) is the convention.
-- **Workers** have no devices and take no traps. A worker is parked until core 0 writes its
+- **Workers** have no devices, no paging and no float registers, and take no traps. A worker is parked until core 0 writes its
   mailbox, the texel at `0x86C00000 + 16 k`: `{ "MCST", pc, sp, a0 }`. It starts there in machine
   mode with paging off and its number in `a1`. `wfi` ends its pass; `ebreak` parks it again, and
   so does any trap, with the cause in its state word, texel (41,0).a. `mhartid` is the core.
@@ -153,10 +156,45 @@ free; a third and a fourth cost a pass between them again, so **two cores are wh
 sense as things are**. What limits it from there is the number of pixels a core has: a worker
 without the TLBs' 409 texels and with a smaller write cache would be half the size or less.
 
+## Workers that keep only what they need
+
+A worker has no paging and no float registers, so the 409 texels of the TLBs and the 8 of the
+float registers were 43% of its pixels running the whole tick to write back what never
+changes. It keeps the CPU's 44 texels and the write cache's 512 and nothing else, and they
+are laid out as whole tiles, which is how the GPU runs pixels: the first 512 where they are
+(64 x 8), and the cache's last 44 in a block of 11 x 4 under those, four to a column
+(`MC_ROWS`, `mc_state_at()` in `src/types.h`). The pass draws two zones for a worker, 64 x 8
+and 16 x 4: 576 pixels for 556 texels. (As a row of their own the 44 would be a line one
+pixel high, which the shape sweep above says costs twice its pixels.)
+
+The tick pass's GPU time at 16,384 instructions a pass, the workers on one job:
+
+| Busy | Workers as 64 x 16 | Workers as 64 x 8 and 16 x 4 |
+|---|---|---|
+| core 0 | 3.08 ms | 3.22 |
+| core 0 and one worker | 3.66 | 3.38 |
+| core 0 and three workers | 6.60 | 3.76 |
+| one worker (core 0 waiting) | | 3.23 |
+| three workers | | 3.67 |
+| seven workers | | 6.90 |
+| fifteen workers | | 10.34 |
+
+And `mctest N 480000` in real time, the primes below 480,000 on core 0 alone and then shared
+(the shares are of numbers, not of work: the last one is the longest):
+
+| Workers | Alone | Shared | |
+|---|---|---|---|
+| 3 | 31.1 s | 11.3 s | 2.7 times |
+| 7 | 32.4 s | 9.6 s | 3.4 times |
+| 15 | 35.3 s | 7.6 s | 4.7 times |
+
+So three workers come almost free and are the place to be; more still gain, less and less,
+and the parked ones cost core 0 a little (31 to 35 s alone: the commit pass looks a RAM texel
+up in every core's write cache). With more than eight cores the blocks have to be closer
+than 256 texels: `--core-pitch 128`.
+
 ## Switches
 
     --cores N          N cores (1 to 16)
     --core-pitch N     the blocks are N texels apart (256)
-    --core-y N         the workers' blocks are N rows down, in rows of RAM nothing uses (an experiment; with RVC_MC_QUADS)
-    RVC_MC_QUADS=1     one draw, a quad a core
-    RVC_MC_ONE_ZONE=1  one zone over every block
+    RVC_MC_FULL=1      draw a worker's whole 64 x 16, as before (to compare)
