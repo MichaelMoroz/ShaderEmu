@@ -1,4 +1,0 @@
-#!/bin/sh
-mkdir -p /tmp/quake/id1 && cd /tmp/quake || exit 1
-ln -sf /usr/share/quake-pak0.pak id1/pak0.pak
-exec quake.bin "$@"
