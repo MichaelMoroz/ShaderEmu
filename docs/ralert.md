@@ -79,6 +79,9 @@ a pass (its write cache: `docs/multicore.md`).
   before they were moved to a boundary, and its first colours were pointers: a second of
   blue at the movie's start, on four cores only. `RALERT_MOVIE_CHECK` did not see it: it
   compares pictures, and both decodings were right.)
+- The workers are the game's while a movie plays and no longer: it asks for them when a
+  movie's buffers are made and gives them back when it ends, so that another program (Quake,
+  whose server is on one) has them during a mission, where this game has no use for them.
 - `RALERT_MOVIE_SOFT=1` is the game's own way, `RALERT_WORKERS=N` uses no more than N workers,
   and `RALERT_MOVIE_CHECK=1` decodes every shared frame on core 0 as well and compares: 0 of
   156 differ. Each movie prints a line (`ralert: movie ...`).

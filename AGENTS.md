@@ -715,6 +715,11 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   `linux/classicube/build.sh`, `linux/imgui/build.sh`, `tools/make_wallpaper.py`): the save
   replaces the folder with what `build/images/linux/root` has, and what is missing there
   goes from the repository. A new program or data file needs a line in its `README.md`.
+- Before giving a worker a piece of a frame, read "Where workers pay, and where they do not" in
+  `docs/multicore.md`: a job waited for costs about two passes, so only work that needs no
+  answer within the frame gains. The window system has none to give (it waits for the GPU).
+- Builds carry one date (`SOURCE_DATE_EPOCH`, `KBUILD_BUILD_TIMESTAMP`): do not put the time of
+  a build into a program, or `linux/prebuilt` grows by it at every save.
 - Never more than three harness runs at once: four took 264 s where one takes 70.
 - Its changes to id's source are `linux/quake/quake.patch`: edit a clean clone at the commit
   `build.sh` names and save `git diff -- WinQuake`. The build puts the tree back each time.

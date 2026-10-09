@@ -338,6 +338,41 @@ What it took is the list of what two cores have in common in a program written f
 And a way to know it is right: the same job run on core 0 in the same order (`QUAKE_SERVER=late`)
 gives the same sums over the server's state as on the worker.
 
+## Where workers pay, and where they do not
+
+Every program of the image was looked at for work a worker could take (October 2026). What
+decides it is the pass: a core sees another's stores one pass later, and a pass is 16,384
+instructions in the harness (8,192 in the world).
+
+- **A job given out and waited for costs about a pass at each end.** The worker begins in
+  the pass after the one the job was posted in, and the core that waits sees the answer in
+  the pass after the one it was finished in. Splitting a piece of a frame between cores
+  ("this half of the map's cells on a worker") gains the piece less up to two passes: for a
+  game whose whole frame is ten passes that is nothing. Shorter passes would mend it and
+  cost everything else: at 4,096 instructions a pass one busy core is 12% slower and four
+  are 8% slower than at 16,384.
+- **What pays is work that needs no answer in the same frame.** Two parts of a program each
+  at its own pace (Quake's server and client), work begun ahead of its use (the next movie
+  frame unpacked), or one long job shared out (a movie frame's rows; loading).
+- **And the two sides must have their own data.** A game whose drawing reads and marks the
+  objects its logic moves cannot have the two on different cores.
+
+| Program | A frame | What a worker has, or why none |
+|---|---|---|
+| Quake (e1m5) | 515 thousand instructions, 4.85 frames a second | the server: 13.3 frames a second (`docs/quake.md`) |
+| Red Alert | 220 to 240 thousand: logic 110 to 127, drawing 88 | its movies (three workers, given back when the movie ends). In a mission the drawing is the game's own, object by object, and clears the marks the logic sets; the profile has no single piece over 12% |
+| Tiberian Dawn | 170 to 230 thousand: logic 100 to 145, drawing 45 to 70 | none: the same game |
+| Doom | a tic 33 to 39 thousand, 35 a second; a frame 45 to 55 thousand | none: the renderer walks the things and sectors the tics change, and writes into them |
+| ClassiCube | 60 thousand, 48 frames a second | none while playing. Its start is 133 million instructions, of which making the world is 40 and building its meshes 40: jobs for workers, not done (the mesh builder has one set of buffers, and the world's maker allocates as it goes) |
+| The window system | | none: see below |
+
+**The window system.** Composition is the GPU's already, and a drawing request is mostly not
+computing: of the frames of the machine while `nxbench` draws (25 fills, 100 lines of text, 15
+scrolls, 200 buttons: 14 million instructions in 6.4 s), 46% are the processor idle, waiting
+for the GPU to have drawn a list; the kernel is 26% (sockets, the scheduler, timers) and the
+server and the program together 28%. A worker makes no system calls, so the kernel's part
+is not its to take, and the wait is a pass of the machine whoever waits.
+
 ## What the cores did, for the guest and the host
 
 The control pass publishes each core's count of instructions among the machine's control

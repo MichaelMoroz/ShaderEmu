@@ -10,6 +10,9 @@ MUSL=1.2.5
 LLVM=18.1.8
 GCC=releases/gcc-13.3.0
 export PATH="$WORK/bin:$WORK/tools/usr/bin:$WORK/toolchain/bin:$PATH"
+# One date for every build (__DATE__, busybox's banner): a program whose sources did not change
+# is then the same file again, and linux/prebuilt does not grow by it at every save.
+export SOURCE_DATE_EPOCH=1704067200
 # No stack guard: the compiler's default costs a stored and checked word in most functions.
 # (Position-independent code stays the default: the guest's own linker, TinyCC's, needs the
 # libraries that way. A program that wants its globals without a table asks with -fno-pie.)

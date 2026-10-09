@@ -53,6 +53,15 @@ compiler runtime it uses.
 The build scripts named above fetch exactly these sources and reproduce the binaries; that
 is the corresponding source for the GPL and MPL parts.
 
+## Size
+
+The build scripts give every program one build date (`SOURCE_DATE_EPOCH` in
+`linux/userland/toolchain.sh`, `KBUILD_BUILD_TIMESTAMP` for the kernel), so a program whose
+sources did not change is the same file after a rebuild and adds nothing to the repository
+when this folder is saved again. The files are kept as they are, not packed: git packs them
+itself (the 100 MB here are 60 in the repository), and packing them better by hand (xz: 51)
+would only save anything in a history written again without the files as they are now.
+
 ## The games' data
 
 Not free software, and here as their owners gave it out to be passed on: the shareware

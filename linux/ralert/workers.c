@@ -12,7 +12,7 @@
 
 unsigned workers_frames, workers_passes;
 
-static int count = -1;
+static int count = -1, at_exit;
 static struct workers_unvq shared __attribute__((aligned(16)));
 static struct workers_lcw unpacking __attribute__((aligned(16)));
 static int unpacker_busy;
@@ -125,7 +125,10 @@ int workers_count(void)
 
 	if (count >= 0) return count;
 	count = mcw_open(limit ? atoi(limit) : MC_MAX_CORES - 1);
-	if (count > 0) atexit(mcw_close);
+	if (count > 0 && !at_exit) {
+		at_exit = 1;
+		atexit(mcw_close);
+	}
 	if (getenv("RALERT_STATS_MS") || getenv("RALERT_FRAMES")) fprintf(stderr, "ralert: %d worker cores\n", count);
 	return count;
 }
@@ -193,6 +196,12 @@ void workers_target(void *memory, unsigned physical, unsigned bytes)
 	(void)physical;
 	target = memory;
 	target_bytes = memory ? bytes : 0;
+	/* the movie is over: the cores are another program's to have until the next one */
+	if (!memory && count > 0) {
+		workers_lcw_wait();
+		mcw_close();
+		count = -1;
+	}
 }
 
 int workers_unvq(uint8_t *codebook, uint8_t *pointers, uint8_t *buffer, unsigned blocks_per_row, unsigned num_rows,
