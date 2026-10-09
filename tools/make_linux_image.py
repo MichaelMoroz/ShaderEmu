@@ -26,7 +26,7 @@ from PIL import Image
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = os.path.join(ROOT, 'rvc', '_Nix', 'rvc', 'data-net')
 OUT = os.path.join(ROOT, 'build', 'images', 'linux')
-PROGRAMS = [('glxgears', '/usr/bin')]
+PROGRAMS = [('glxgears', '/usr/bin'), ('mctest', '/usr/bin')]   # mctest: programs/mc (docs/multicore.md)
 PREBUILT = os.path.join(ROOT, 'linux', 'prebuilt')   # checked-in copies of Image and root/
 
 

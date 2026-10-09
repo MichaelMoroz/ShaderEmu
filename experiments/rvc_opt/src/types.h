@@ -314,6 +314,10 @@ uint sign_extend(uint x, uint b) {
 static uint mem_cache_bloom = 0;
 // one bit per 4 MB of RAM this tick wrote to, for a commit that skips the rest (COMMIT_BANDS)
 static uint mem_dirty = 0;
+#if CORES > 1
+// a worker core's word (41,0).a: 1 while it runs, else what parked it (mc.h)
+static uint mc_word = 0;
+#endif
 #endif
 
 // Guest registers in an indexable array (one store per write) unless OPT_BASELINE.
@@ -798,6 +802,9 @@ uint4 encode_l1(L1P uint2 pos) {
 
     if (pos.x == 41 && pos.y == 0) {
         ret.r = mem_cache_bloom;
+#if CORES > 1
+        ret.a = mc_word;
+#endif
 #ifdef COMMIT_BANDS
         ret.g = mem_dirty;
 #endif
@@ -1098,7 +1105,7 @@ uint mem_get_cached_or_tex_from_state_cache(uint addr) {
     // query RAM texture
     uint idx = (addr >> 2) & 0x3;
     addr >>= 4;
-    uint4 raw = STATE_TEX_HART(RAM_ADDR(addr), 0);
+    uint4 raw = RAM_TEX(RAM_ADDR(addr));
     return idx_uint4(raw, idx);
 }
 
@@ -1135,13 +1142,11 @@ uint mem_get_cached_or_tex_from_state_cache_or_mtd(uint addr) {
     return 0;
 }
 
-uint4 commit(uint2 pos) {
+// `ret` is the texel as it is (with CORES > 1, a RAM texel as the cores before this one leave it)
+uint4 commit(uint2 pos, uint4 ret) {
     if (pos.y < 64 && pos.x >= 64) {
         return (uint4)0;
     }
-
-    // fallback is passthrough
-    uint4 ret = STATE_TEX_HART(pos, 0);
 
     uint pos_id = pos.x | ((pos.y) << 16);
 

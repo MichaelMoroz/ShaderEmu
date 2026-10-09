@@ -26,6 +26,12 @@ public:
         bo.settings = opt.compile;
         for (auto& d : opt.compile.defines)
             if (d.first == "COMMIT_BANDS") bands_ = true;
+        for (auto& d : opt.compile.defines)
+            if (d.first == "CORES") cores_ = (float)(std::max)(1, (std::min)(16, atoi(d.second.c_str())));
+        for (auto& d : opt.compile.defines)
+            if (d.first == "CORE_PITCH") pitch_ = (float)atoi(d.second.c_str());
+        for (auto& d : opt.compile.defines)
+            if (d.first == "CORE_Y") coreY_ = (float)atoi(d.second.c_str());
         if (!buildPasses(gpu_, shader, {"CPUTick", "Commit"}, bo, passes_, err)) return false;
         for (auto& d : opt.compile.defines)
             if (d.first == "RAM_DIRECT") csDirect_ = true;
@@ -99,7 +105,18 @@ public:
             gpu_.ctx->End(tsQuery_[0].Get());
         }
         if (cs_ && mat.getFloat("_Init") == 0) runComputeTick(mat);
-        else crt_.runZone(gpu_, passes_[0], mat, UpdateZone{32, 4064, 64, 64, 0});
+        else if (getenv("RVC_MC_ONE_ZONE")) crt_.runZone(gpu_, passes_[0], mat, UpdateZone{(pitch_ * (cores_ - 1) + 64) / 2, 4064, pitch_ * (cores_ - 1) + 64, 64, 0});
+        else if (getenv("RVC_MC_QUADS")) {
+            // one draw, a quad a core (the pass's vertex shader places them)
+            mat.setFloat("_McQuads", 1);
+            crt_.runZone(gpu_, passes_[0], mat, UpdateZone{32, 4064, 64, 64, 0}, 6 * (UINT)cores_, false);
+            for (float c = 0; c < cores_; c += 1) crt_.copyZone(gpu_, UpdateZone{pitch_ * c + 32, 4064 - (c == 0 ? 0 : coreY_), 64, 64, 0});
+        }
+        else {
+            // a zone a core: pixels of two cores in one draw are run side by side and wait for each other
+            for (float c = 0; c < cores_; c += 1) crt_.runZone(gpu_, passes_[0], mat, UpdateZone{pitch_ * c + 32, 4064, 64, 64, 0}, 6, cores_ == 1);
+            for (float c = 0; c < cores_ && cores_ > 1; c += 1) crt_.copyZone(gpu_, UpdateZone{pitch_ * c + 32, 4064, 64, 64, 0});
+        }
         if (timeIt) gpu_.ctx->End(tsQuery_[1].Get());
         if (!gpuPasses_.empty()) mat.setTexture("_GpuTarget", gpuSrv_.Get(), kGpuTarget, kGpuTarget);   // Commit copies it back
         // With COMMIT_BANDS the vertex shader draws the state rows and the bands of RAM that changed;
@@ -517,6 +534,9 @@ private:
     bool tsPending_ = false;
     double tickMs_ = -1, commitMs_ = -1, deviceMs_ = 0;
     bool bands_ = false;   // the commit draws only the bands of RAM that changed
+    float coreY_ = 0;      // CORE_Y: the workers' blocks are that many rows down (an experiment)
+    float pitch_ = 256;    // CORE_PITCH: how far apart the blocks are
+    float cores_ = 1;      // CORES: the tick's zone is that many 64 x 64 blocks side by side (docs/multicore.md)
     MemoryView view_;
 };
 

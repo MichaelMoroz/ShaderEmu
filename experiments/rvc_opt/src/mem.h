@@ -46,7 +46,7 @@ uint mem_get_instruction(uint addr) {
     addr = addr >> 4;
 
     PROF(PROF_fetch_tex)
-    uint4 raw = STATE_TEX(RAM_ADDR(addr));
+    uint4 raw = RAM_TEX(RAM_ADDR(addr));
     return idx_uint4(raw, idx);
 }
 
@@ -107,7 +107,7 @@ uint mem_get_cached_or_tex_l1(L1P uint addr) {
     [branch]
     if (t != dr_addr) {
         PROF(PROF_ram_read_tex)
-        dr_tex = STATE_TEX(RAM_ADDR(t));
+        dr_tex = RAM_TEX(RAM_ADDR(t));
         dr_addr = t;
     }
     return idx_uint4(dr_tex, (addr >> 2) & 0x3);
@@ -268,7 +268,7 @@ void mem_set_ram_l1(L1P uint word_addr, uint bits, uint mask) {
         [branch]
         if (t != dr_addr) {
             PROF(PROF_ram_read_tex)
-            dr_tex = STATE_TEX(RAM_ADDR(t));
+            dr_tex = RAM_TEX(RAM_ADDR(t));
             dr_addr = t;
         }
         texel = dr_tex;

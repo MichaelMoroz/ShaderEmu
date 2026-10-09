@@ -40,7 +40,19 @@ void CustomRenderTexture::load(ID3D11DeviceContext* ctx, const void* data, UINT 
     for (int i = 0; i < 2; ++i) ctx->UpdateSubresource(tex_[i].Get(), 0, nullptr, data, rowPitch, 0);
 }
 
-void CustomRenderTexture::runZone(Gpu& gpu, GpuPass& pass, Material& mat, const UpdateZone& z, UINT vertices) {
+void CustomRenderTexture::copyZone(Gpu& gpu, const UpdateZone& z) {
+    LONG x0 = (LONG)std::lround(z.centerX - z.width * 0.5f);
+    LONG y0 = (LONG)std::lround((float)height_ - (z.centerY + z.height * 0.5f));
+    LONG x1 = x0 + (LONG)std::lround(z.width);
+    LONG y1 = y0 + (LONG)std::lround(z.height);
+    x0 = (std::max)(x0, 0L); y0 = (std::max)(y0, 0L);
+    x1 = (std::min)(x1, (LONG)width_); y1 = (std::min)(y1, (LONG)height_);
+    if (x1 <= x0 || y1 <= y0) return;
+    D3D11_BOX box{(UINT)x0, (UINT)y0, 0, (UINT)x1, (UINT)y1, 1};
+    gpu.ctx->CopySubresourceRegion(tex_[cur_].Get(), 0, (UINT)x0, (UINT)y0, 0, tex_[1 - cur_].Get(), 0, &box);
+}
+
+void CustomRenderTexture::runZone(Gpu& gpu, GpuPass& pass, Material& mat, const UpdateZone& z, UINT vertices, bool copyBack) {
     ID3D11DeviceContext* ctx = gpu.ctx.Get();
 
     // Region in memory coordinates (row 0 = top), for the copy-back of partial zones.
@@ -86,7 +98,9 @@ void CustomRenderTexture::runZone(Gpu& gpu, GpuPass& pass, Material& mat, const 
     ctx->Draw(vertices, 0);
 
     ctx->OMSetRenderTargets(0, nullptr, nullptr);
-    if (full) {
+    if (!copyBack) {
+        // the caller copies (copyZone)
+    } else if (full) {
         cur_ = dst;
     } else if (x1 > x0 && y1 > y0) {
         D3D11_BOX box{(UINT)x0, (UINT)y0, 0, (UINT)x1, (UINT)y1, 1};
