@@ -23,9 +23,9 @@ public static partial class ShaderEmuBuilder
     const string PanelTextures = Root + "/Textures/Panels";
     const int CaptureLayer = 31;
     static readonly Color Ink = new Color(0.05f, 0.05f, 0.06f), InkDim = new Color(0.27f, 0.27f, 0.29f);
-    static readonly Color Printed = new Color(0.93f, 0.90f, 0.80f), PrintedDim = new Color(0.62f, 0.60f, 0.54f);
+    static readonly Color Printed = new Color(0.93f, 0.90f, 0.80f), PrintedDim = new Color(0.93f, 0.90f, 0.80f);
     static readonly Color Amber = new Color(1f, 0.70f, 0.20f), Phosphor = new Color(0.35f, 1f, 0.45f);
-    static readonly Color Faceplate = new Color(0.17f, 0.17f, 0.18f), CapColour = new Color(0.86f, 0.83f, 0.74f);
+    static readonly Color Faceplate = new Color(0.07f, 0.07f, 0.08f), CapColour = new Color(0.86f, 0.83f, 0.74f);
     static readonly Color Liquid = new Color(0.62f, 0.68f, 0.56f);
     static readonly Color Over = new Color(1f, 0.95f, 0.55f, 0.30f), Held = new Color(0f, 0f, 0f, 0.45f), LitUp = new Color(1f, 0.62f, 0.10f, 0.50f);
 
@@ -235,10 +235,10 @@ public static partial class ShaderEmuBuilder
         importer.alphaIsTransparency = false;
         importer.maxTextureSize = 4096;
         importer.npotScale = TextureImporterNPOTScale.None;
-        importer.anisoLevel = kind == 1 ? 0 : 8;
+        importer.anisoLevel = kind == 1 ? 0 : 16;
         importer.mipmapEnabled = kind == 0;
         importer.sRGBTexture = kind == 0;
-        importer.filterMode = kind == 1 ? FilterMode.Point : FilterMode.Bilinear;
+        importer.filterMode = kind == 1 ? FilterMode.Point : FilterMode.Trilinear;
         if (kind != 0) importer.textureCompression = TextureImporterCompression.Uncompressed;
         TextureImporterPlatformSettings pc = importer.GetPlatformTextureSettings("Standalone");
         pc.overridden = kind != 0;
@@ -447,8 +447,14 @@ public static partial class ShaderEmuBuilder
         material.SetTexture("_MainTex", Kept(name, picture, 0));
         material.SetFloat("_Cutoff", holes ? 0.5f : 0f);
         // print shines a little on a matt plate; on paper it is as dull as the paper
-        material.SetFloat("_Glossiness", name == "About" ? 0.12f : 0.3f);
-        material.SetFloat("_InkGlossiness", name == "About" ? 0.2f : 0.7f);
+        // a panel is to be read, not admired: nearly all of it shown as drawn, a little left to the room's light
+        bool paper = name == "About";
+        material.SetFloat("_Glossiness", 0.08f);
+        material.SetFloat("_InkGlossiness", 0.08f);
+        material.SetFloat("_InkMetallic", 0f);
+        material.SetFloat("_InkGlow", paper ? 0f : 0.2f);   // a little over the plate, short of glowing
+        material.SetFloat("_Flat", paper ? 0.5f : 0.8f);
+        material.SetFloat("_Bold", paper ? 0.07f : 0.05f);   // thin strokes were hard to read across the room
         Lettering(canvas, name, print, material);
         if (print != null) foreach (Graphic graphic in print) graphic.enabled = false;
 

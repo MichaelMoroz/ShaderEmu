@@ -27,7 +27,7 @@ public static partial class ShaderEmuBuilder
         pc.machine = machine;
         pc.running = Sound(root, "Running", at, AssetDatabase.LoadAssetAtPath<AudioClip>(sounds + "PcRun.wav"), 0f, 2f, 40f, true);   // heard all over the den, nearer louder
         pc.running.playOnAwake = false;
-        pc.voice = Sound(root, "Voice", at, null, 0.8f, 2f, 40f, false);
+        pc.voice = Sound(root, "Voice", at, null, 0.2f, 2f, 40f, false);   // a fifth of the recording's level
         pc.boot = AssetDatabase.LoadAssetAtPath<AudioClip>(sounds + "PcBoot.wav");
         pc.off = AssetDatabase.LoadAssetAtPath<AudioClip>(sounds + "PcOff.wav");
         pc.seeks = new AudioClip[4];

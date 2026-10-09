@@ -696,6 +696,10 @@ public static partial class ShaderEmuBuilder
     [MenuItem("ShaderEmu/Bake lighting")]
     public static void BakeLighting()
     {
+#if BAKERY_INCLUDED
+        BakeWithBakery();   // ShaderEmuBakery.cs
+        return;
+#else
         LightingSettings settings = LoadOrCreate(Generated + "/Lighting.lighting", () => new LightingSettings());
         settings.bakedGI = true;
         settings.realtimeGI = false;
@@ -706,16 +710,16 @@ public static partial class ShaderEmuBuilder
         settings.mixedBakeMode = MixedLightingMode.Subtractive;
         settings.directionalityMode = LightmapsMode.NonDirectional;
         settings.lightmapResolution = 60f;   // texels a metre
-        settings.lightmapMaxSize = 4096;
+        settings.lightmapMaxSize = 2048;   // a page of 4096 failed to render on the card ("Failed to render lightmap") and the bake hung
         settings.lightmapPadding = 4;
-        settings.directSampleCount = 64;
-        settings.indirectSampleCount = 512;
+        settings.directSampleCount = 256;   // the lamps are soft: fewer samples left their shadows' edges in blots
+        settings.indirectSampleCount = 1024;
         settings.environmentSampleCount = 128;
         settings.maxBounces = 3;
-        settings.ao = true;
-        settings.aoMaxDistance = 0.5f;
-        settings.aoExponentIndirect = 1.6f;
-        settings.aoExponentDirect = 0.7f;   // direct light too: shelves and racks get their depth from it
+        settings.ao = true;   // what stands on the floor needs it: lit from straight above, a pot had no shadow and floated
+        settings.aoMaxDistance = 0.3f;
+        settings.aoExponentIndirect = 1.4f;
+        settings.aoExponentDirect = 0.5f;
         settings.filteringMode = LightingSettings.FilterMode.Auto;
         EditorUtility.SetDirty(settings);
         Lightmapping.lightingSettings = settings;
@@ -733,6 +737,7 @@ public static partial class ShaderEmuBuilder
         Lightmapping.bakeCompleted += Baked;
         Lightmapping.BakeAsync();
         Debug.Log("[ShaderEmu] lighting bake started");
+#endif
     }
 
     static List<Light> RoomLights()

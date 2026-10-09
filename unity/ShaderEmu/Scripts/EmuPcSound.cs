@@ -1,9 +1,9 @@
 using UdonSharp;
 using UnityEngine;
 
-// The computer's own sounds (world/sounds.py): switched on, its fan and disk come up to speed,
-// the memory is counted, the floppy's head goes home and the loudspeaker beeps once; then the
-// fan runs and the disk knocks now and then; switched off, it all runs down.
+// The computer's own sounds, cut from a recording of one (world/sounds.py): switched on, its
+// fans and disk come up and the loudspeaker beeps once; then it runs, the disk working now and
+// then; switched off, it runs down.
 [UdonBehaviourSyncMode(BehaviourSyncMode.None)]
 public class EmuPcSound : UdonSharpBehaviour
 {
@@ -12,7 +12,7 @@ public class EmuPcSound : UdonSharpBehaviour
     public AudioSource voice;     // everything that happens once
     public AudioClip boot, off;
     public AudioClip[] seeks;
-    public float level = 0.3f;
+    public float level = 0.2f;    // the loop and the voice at one level: both are cut from one recording
 
     private bool was;
     private float since, nextSeek;
@@ -31,18 +31,18 @@ public class EmuPcSound : UdonSharpBehaviour
             {
                 running.volume = 0f;
                 running.Play();
-                nextSeek = now + 9f;
+                nextSeek = now + 13f;
             }
         }
         float age = now - since;
         if (on)
         {
-            // the first seconds of the fan are in the starting sound, which hands over to the loop
-            running.volume = level * Mathf.Clamp01((age - 4f) / 3f);
+            // the starting sound is the recording's first twelve seconds, fading over its last three: the loop comes in under them
+            running.volume = level * Mathf.Clamp01((age - 9f) / 3f);
             if (now >= nextSeek)
             {
                 voice.PlayOneShot(seeks[Random.Range(0, seeks.Length)], Random.Range(0.35f, 0.9f));
-                nextSeek = now + (age < 60f ? Random.Range(0.6f, 3f) : Random.Range(3f, 14f));   // busy while it starts
+                nextSeek = now + (age < 60f ? Random.Range(2f, 6f) : Random.Range(5f, 20f));   // busy while it starts
             }
         }
         else if (running.isPlaying)

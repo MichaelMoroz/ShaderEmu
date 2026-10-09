@@ -1,5 +1,5 @@
-# The weather's sounds, computed (python world/sounds.py): rain against the window as a loop
-# that joins itself exactly, three rolls of thunder, and the computer's own sounds. Unity gets Sounds/*.wav.
+# The world's sounds (python world/sounds.py): rain against the window, computed, as a loop that
+# joins itself exactly; thunder and the computer's own sounds, cut from recordings. Unity gets Sounds/*.wav.
 import os
 import wave
 
@@ -58,160 +58,113 @@ def rain():
     write("Rain", np.array(channels), 0.35)
 
 
-def slow(count, seed, rate):
-    """A value that wanders between 0 and 1 about `rate` times a second."""
-    rng = np.random.default_rng(seed)
-    knots = rng.random(int(count / RATE * rate) + 3)
-    at = np.arange(count) / RATE * rate
-    i = at.astype(int)
-    f = at - i
-    f = f * f * (3 - 2 * f)
-    return knots[i] * (1 - f) + knots[i + 1] * f
+# ---------------------------------------------------------------- recordings
+# Thunder and the computer are recordings from freesound.org, all given to the public domain
+# (CC0) by the people named. Freesound gives the whole file only to a member; its own preview
+# of each (an MP3) is what is fetched, into build/sounds, and ffmpeg makes a WAV of it.
+SOURCES = {
+    "computer": ("273/273736_1149179", "computer startup.wav, by squashy555"),          # switch, a beep, disk and fans, switch off
+    "thunder_near": ("534/534023_9395330", "Thunderclap, by Fission9"),
+    "thunder_peal": ("243/243778_997601", "peal of thunder close, by bastipictures"),
+    "thunder_far": ("397/397952_2247456", "Thunder Clap And Rumble #1, by Kinoton"),
+}
+CACHE = os.path.join(HERE, "..", "build", "sounds")
 
 
-def thunder(name, seed, length, near):
-    """Thunder from a stroke `near` (1 overhead, 0 far off). The channel is kilometres long, so its
-    sound arrives over seconds: nothing starts at once but a near stroke's crackle, and the roll
-    is many arrivals, each swelling and dying, under a level that wanders."""
-    count = int(RATE * length)
-    rng = np.random.default_rng(seed)
-    t = np.arange(count) / RATE
-    channels = []
-    spread = 1.2 + 3.5 * (1 - near)                      # how long the arrivals go on coming
-    arrivals = [(rng.uniform(0, spread) ** 1.0 + (0.0 if near > 0.5 else 0.6), rng.uniform(0.3, 1.0),
-                 rng.uniform(0.05, 0.2) + 0.3 * (1 - near), rng.uniform(0.25, 1.1)) for _ in range(40)]
-    cracks = [(rng.uniform(0.0, 0.45), rng.uniform(0.3, 1.0), rng.uniform(0.012, 0.05)) for _ in range(int(14 * near))]
-    top = 90 + 240 * near                                # air takes the high sound out of a far one
-    for side in range(2):
-        rumble = shaped(count, seed * 10 + side, lambda f: band(f, 24, top, 1.5) / f ** 0.7)
-        body = shaped(count, seed * 10 + 3 + side, lambda f: band(f, 140, 500 + 900 * near, 1.0) / f ** 0.6)
-        tear = shaped(count, seed * 10 + 6 + side, lambda f: band(f, 500, 7000, 1.0) / f ** 0.35)
-        low, mid, high = np.zeros(count), np.zeros(count), np.zeros(count)
-        for at, size, rise, fall in arrivals:
-            after = np.clip(t - at, 0, None)
-            swell = (t >= at) * (1 - np.exp(-after / rise)) * np.exp(-after / fall)
-            low += size * swell
-            mid += size * swell * np.exp(-after / (0.25 + 0.3 * rise))
-        for at, size, fall in cracks:
-            after = np.clip(t - at, 0, None)
-            high += size * (t >= at) * (1 - np.exp(-after / 0.0015)) * np.exp(-after / fall)
-        roll = (0.25 + 0.75 * slow(count, seed * 7 + side, 3.5)) * (0.35 + 0.65 * slow(count, seed * 9 + side, 11.0))   # it rattles as it rolls
-        fade = np.clip((length - t) / 2.5, 0, 1) ** 1.5
-        channels.append((rumble * low * roll * 0.9 + body * low * roll * (0.5 + 0.5 * near) + body * mid * (0.4 + 0.6 * near) + tear * high * 0.9 * near) * fade)
-    write(name, np.array(channels), 0.8)
+def source(name):
+    """A source recording as samples (two channels, RATE), fetched once."""
+    import subprocess
+    import urllib.request
+    os.makedirs(CACHE, exist_ok=True)
+    wav = os.path.join(CACHE, name + ".wav")
+    if not os.path.exists(wav):
+        mp3 = os.path.join(CACHE, name + ".mp3")
+        request = urllib.request.Request("https://cdn.freesound.org/previews/%s-hq.mp3" % SOURCES[name][0], headers={"User-Agent": "Mozilla/5.0"})
+        open(mp3, "wb").write(urllib.request.urlopen(request).read())
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", mp3, "-ar", str(RATE), "-ac", "2", wav], check=True)
+    with wave.open(wav, "rb") as w:
+        data = np.frombuffer(w.readframes(w.getnframes()), dtype="<i2").reshape(-1, 2).astype(float) / 32768
+    return data.T.copy()
 
 
-# ---------------------------------------------------------------- the computer's own sounds
-def mono(name, signal, peak):
-    write(name, np.array([signal, signal]), peak)
+def piece(sound, start, end, fade_in=0.01, fade_out=0.05):
+    """Seconds `start` to `end` of a recording, its ends faded."""
+    cut = sound[:, int(start * RATE):int(end * RATE)].copy()
+    t = np.arange(cut.shape[1]) / RATE
+    return cut * np.clip(t / max(fade_in, 1e-6), 0, 1) * np.clip((t[-1] - t) / max(fade_out, 1e-6), 0, 1)
 
 
-def tick(rng, pitch, ring):
-    """A head's arm stopping: a knock in the drive's case that rings a moment."""
-    length = int(0.03 * RATE)
-    t = np.arange(length) / RATE
-    return (np.sin(2 * np.pi * pitch * t) * np.exp(-t / ring) + 0.5 * np.sin(2 * np.pi * pitch * 0.31 * t) * np.exp(-t / (ring * 2.5))
-            + 0.3 * rng.standard_normal(length) * np.exp(-t / 0.0012))
+def limited(sound, gain, ceiling=0.9):
+    """Louder by `gain`; what would pass the ceiling is bent under it, not cut off."""
+    return np.tanh(sound * gain / ceiling) * ceiling
 
 
-def seeks(rng, length, busy):
-    """A disk at work: runs of the arm's knocks, a few at a time."""
-    out = np.zeros(int(length * RATE))
-    at = rng.uniform(0.0, 0.05)
-    while at < length - 0.05:
-        for _ in range(rng.integers(1, 6)):
-            knock = tick(rng, rng.uniform(1700, 3300), rng.uniform(0.002, 0.005)) * rng.uniform(0.35, 1.0)
-            start = int(at * RATE)
-            end = min(out.size, start + knock.size)
-            out[start:end] += knock[:end - start]
-            at += rng.uniform(0.012, 0.045)
-            if at >= length - 0.05:
-                break
-        at += rng.uniform(0.03, 0.4) / busy
+def save(name, stereo):
+    data = (np.clip(stereo, -1, 1).T * 32767).astype("<i2")
+    with wave.open(os.path.join(OUT, name + ".wav"), "wb") as out:
+        out.setnchannels(2)
+        out.setsampwidth(2)
+        out.setframerate(RATE)
+        out.writeframes(data.tobytes())
+    print("%-10s %5.1f s  rms %6.1f dBFS  peak %5.1f dBFS" % (name, stereo.shape[1] / RATE, 20 * np.log10(np.sqrt((stereo ** 2).mean()) + 1e-9),
+                                                             20 * np.log10(np.abs(stereo).max() + 1e-9)))
+
+
+def without(sound, idle):
+    """A piece of the recording less the machine's steady sound (taken from `idle`): what is
+    left is what happened in it. Each band keeps what it has over the idle's level."""
+    n, hop = 2048, 512
+    window = np.hanning(n)
+    floor = np.zeros(n // 2 + 1)
+    frames = 0
+    for i in range(0, idle.shape[1] - n, hop):
+        floor += np.abs(np.fft.rfft(idle.mean(0)[i:i + n] * window))
+        frames += 1
+    floor /= frames
+    out = np.zeros_like(sound)
+    for c in range(2):
+        for i in range(0, sound.shape[1] - n, hop):
+            spectrum = np.fft.rfft(sound[c, i:i + n] * window)
+            size = np.abs(spectrum)
+            keep = np.clip(1 - 1.6 * floor / (size + 1e-12), 0, 1)
+            out[c, i:i + n] += np.fft.irfft(spectrum * keep, n) * window * (hop / n) * 2.67   # a Hann window overlapped four times
     return out
 
 
-def whine(count, start, end, seconds):
-    """A drive's spindle and its bearings, from one speed to another over `seconds`."""
-    t = np.arange(count) / RATE
-    speed = start + (end - start) * (1 - np.exp(-t / (seconds / 3.5)))   # revolutions a second
-    phase = 2 * np.pi * np.cumsum(speed) / RATE
-    out = np.zeros(count)
-    for harmonic, level in ((1, 0.25), (2, 0.12), (8, 0.5), (16, 0.22), (24, 0.3), (48, 0.12)):   # the motor's poles and the bearings' balls
-        out += level * np.sin(harmonic * phase + harmonic)
-    return out * (speed / max(start, end)) ** 1.5
-
-
-def beep(seconds, pitch=1000.0):
-    """The loudspeaker in the case: a square wave through a paper cone of 6 cm."""
-    count = int(seconds * RATE)
-    t = np.arange(count) / RATE
-    wave_ = np.sign(np.sin(2 * np.pi * pitch * t))
-    spectrum = np.fft.rfft(wave_)
-    f = np.maximum(np.fft.rfftfreq(count, 1.0 / RATE), 1.0)
-    out = np.fft.irfft(spectrum * band(f, 600, 4500, 1.0), count)
-    edge = np.clip(np.minimum(t, seconds - t) / 0.003, 0, 1)
-    return out / np.abs(out).max() * edge
-
-
-def put(track, at, sound, level=1.0):
-    start = int(at * RATE)
-    end = min(track.size, start + sound.size)
-    track[start:end] += sound[:end - start] * level
-
-
 def computer():
-    rng = np.random.default_rng(486)
-    # running: the supply's fan and the air through the case, the mains' hum, the disk's spindle (3,600 rpm)
-    count = RATE * 8
-    t = np.arange(count) / RATE
-    air = shaped(count, 71, lambda f: band(f, 120, 2600, 1.0) / f ** 0.75)
-    blades = sum(level * np.sin(2 * np.pi * pitch * t) for pitch, level in ((50, 0.05), (100, 0.07), (245, 0.05), (490, 0.025)))   # 2,100 rpm, seven blades
-    spindle = whine(count, 60, 60, 1.0)
-    mono("PcRun", air * 0.9 + blades + spindle * 0.022, 0.25)
+    """One recording of one computer, cut up (the times are from tools of measurement, not
+    from listening: scan a new source for its beep and its busy half seconds before changing them)."""
+    pc = source("computer")
+    beep = np.abs(pc[:, int(5.7 * RATE):int(6.0 * RATE)]).max()
+    gain = 0.8 / beep   # its beep is the loudest thing it does, bar the switch
+    # switched on: the switch at 0.5 s, the beep at 5.75 s, and on to where the loop takes over
+    save("PcBoot", limited(piece(pc, 0.3, 12.3, 0.02, 3.0), gain))
+    # running: eight quiet seconds, the end laid over the start
+    run, lap = piece(pc, 24.0, 33.0, 0.0, 0.0), RATE
+    mix = np.linspace(0, 1, lap)
+    run[:, :lap] = run[:, :lap] * np.sqrt(mix) + run[:, -lap:] * np.sqrt(1 - mix)
+    save("PcRun", limited(run[:, :-lap], gain))
+    # the disk at work: the recording's own busy moments, with the steady sound taken out
+    idle = pc[:, int(24.0 * RATE):int(33.0 * RATE)]
+    for i, (start, end) in enumerate(((41.2, 42.3), (48.8, 49.9), (59.3, 60.4), (63.3, 64.7))):
+        save("PcSeek%d" % (i + 1), limited(without(piece(pc, start, end, 0.05, 0.1), idle), gain))
+    # switched off: the switch and the run-down, to the recording's end
+    save("PcOff", limited(piece(pc, 72.2, 76.1, 0.02, 0.3), gain))
 
-    # switched on: the switch, the fan and the disk coming up to speed, the memory counted on the
-    # loudspeaker, the floppy drive's head sent home, one beep, and the disk read
-    length = 8.0
-    count = int(length * RATE)
-    t = np.arange(count) / RATE
-    boot = np.zeros(count)
-    clunk = tick(rng, 900, 0.003) + 0.6 * tick(rng, 2400, 0.002)   # a rocker switch: a snap, not a knock
-    put(boot, 0.02, clunk, 0.35)
-    rise = 1 - np.exp(-t / 0.9)
-    boot += shaped(count, 72, lambda f: band(f, 120, 2600, 1.0) / f ** 0.75) * 0.5 * rise * np.clip((length - t) / 1.5, 0, 1)   # hands over to the running sound
-    put(boot, 0.25, whine(int(4.2 * RATE), 2, 60, 3.6) * 0.06 * np.clip((4.2 - np.arange(int(4.2 * RATE)) / RATE) / 1.2, 0, 1))
-    for i in range(46):   # the memory test ticks as it counts
-        put(boot, 1.9 + i * 0.03, beep(0.004, 1600), 0.2)
-    step = np.zeros(int(0.5 * RATE))   # the floppy's stepper: 80 tracks out and back, a buzz of steps
-    for i in range(40):
-        put(step, i * 0.006, tick(rng, 900, 0.0025), 0.5)
-    put(boot, 3.5, step, 0.55)
-    put(boot, 4.0, step[::-1].copy(), 0.45)
-    put(boot, 4.75, beep(0.25), 1.0)
-    put(boot, 5.2, seeks(rng, 2.6, 2.5), 0.5)
-    mono("PcBoot", boot, 0.7)
 
-    # the disk at work, a few ways
-    for i in range(4):
-        mono("PcSeek%d" % (i + 1), seeks(rng, rng.uniform(0.25, 0.9), rng.uniform(1.0, 2.5)), 0.45)
-
-    # switched off: the switch, and everything running down
-    length = 4.0
-    count = int(length * RATE)
-    t = np.arange(count) / RATE
-    off = shaped(count, 73, lambda f: band(f, 120, 2600, 1.0) / f ** 0.75) * 0.5 * np.exp(-t / 0.7)
-    off += whine(count, 60, 1, 3.2) * 0.05 * np.clip((length - t) / 1.0, 0, 1)
-    put(off, 0.01, clunk, 0.35)
-    mono("PcOff", off, 0.6)
+def thunder():
+    for name, key, most in (("Thunder1", "thunder_near", 13.0), ("Thunder2", "thunder_peal", 20.0), ("Thunder3", "thunder_far", 19.0)):
+        sound = source(key)
+        level = np.abs(sound).max(0)
+        first = max(0, int(np.argmax(level > 0.03 * level.max())) - RATE // 20)   # it starts when the file does
+        cut = piece(sound, first / RATE, min(first / RATE + most, sound.shape[1] / RATE), 0.01, 2.5)
+        save(name, cut / np.abs(cut).max() * 0.9)
 
 
 def main():
     os.makedirs(OUT, exist_ok=True)
     rain()
-    thunder("Thunder1", 1, 10.0, 1.0)   # close
-    thunder("Thunder2", 2, 13.0, 0.45)  # further off
-    thunder("Thunder3", 3, 14.0, 0.1)   # a long way away: only the roll
+    thunder()
     computer()
 
 

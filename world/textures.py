@@ -1,6 +1,7 @@
 # The room's textures, computed (python world/textures.py). Tiling ones repeat exactly:
 # their noise is made in the frequency domain. Albedo alpha is the Standard shader's smoothness.
 import json
+import glob
 import os
 
 import numpy as np
@@ -818,6 +819,25 @@ def carpet():
     save("Carpet_n", normal_map(pile, 0.0005))
 
 
+def frame_art():
+    """The corridor's upright picture frame comes with its maker's card in it: a print of plain
+    shapes on cream paper goes in instead. The frame shows the middle two thirds of its square
+    picture, undistorted: the print is drawn there."""
+    size, left, wide = 1024, 171, 682
+    img = Image.new("RGB", (size, size), (232, 224, 204))
+    d = ImageDraw.Draw(img)
+    x0, x1, y0, y1 = left + 70, left + wide - 70, 90, 820
+    d.ellipse((x0 + 70, y0 + 90, x0 + 370, y0 + 390), fill=(196, 74, 48))                # a low sun
+    d.rectangle((x0, 520, x1, y1), fill=(38, 62, 96))                                    # the sea under it
+    for i in range(5):
+        y = 560 + i * 52
+        d.line((x0 + 30 + i * 16, y, x1 - 30 - i * 16, y), fill=(232, 224, 204), width=5)
+    d.polygon(((x0 + 250, 520), (x0 + 420, 250), (x1, 400), (x1, 520)), fill=(214, 168, 72))   # a hill before the sun
+    d.rectangle((x0, y0, x1, y1), outline=(60, 56, 50), width=4)
+    d.text((left + wide / 2, 900), "EXPOSITION  1996", fill=(60, 56, 50), anchor="mm", font=font("arialbd.ttf", 40))
+    img.convert("RGBA").save(os.path.join(OUT, "..", "Assets", "PH_hanging_picture_frame_01_artwork_d.png"))
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     # walls, floor, wood and cloth are Poly Haven's (world/fetch.py)
@@ -827,6 +847,7 @@ def main():
     city_windows("CityFlats", 101, "flats")
     city_windows("CityGlass", 102, "glass")
     save("White", np.ones((8, 8, 3)))
+    frame_art()
 
 
 if __name__ == "__main__":

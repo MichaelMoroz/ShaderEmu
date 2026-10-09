@@ -202,7 +202,7 @@ public static partial class ShaderEmuBuilder
             Texture normal = f[3] == "1" ? ImportedTexture(stem + "_n.jpg", false, true, 4) : null;
             Texture packed = File.Exists(stem + "_p.jpg") ? ImportedTexture(stem + "_p.jpg", false, false, 4) : null;
             bool leaves = f[1] == "1" || name.Contains("leaves");
-            if (name.EndsWith("_light"))   // a lamp's bulb
+            if (name.EndsWith("_light") || name.EndsWith("_globe"))   // a lamp's bulb
             {
                 made[name] = Emitter(name, new Color(1f, 0.74f, 0.42f), 9f, true);
                 continue;
@@ -324,6 +324,10 @@ public static partial class ShaderEmuBuilder
         return 1f;
     }
 
+    // models whose lightmap islands overlap (Unity's bake lists them): lit by the volume instead
+    static readonly string[] ProbeLit = { "wicker_basket", "korean_public_payphone", "ornate_mirror", "boombox", "industrial_wall_sconce",
+                                          "korean_fire_extinguisher", "desk_lamp_arm", "modern_ceiling_lamp", "alarm_clock", "fire_alarm" };
+
     static void Remodel(Transform world)
     {
         Dictionary<string, Material> materials = ModelMaterials();
@@ -372,6 +376,15 @@ public static partial class ShaderEmuBuilder
                                                            StaticEditorFlags.OccludeeStatic | StaticEditorFlags.ReflectionProbeStatic);
                 renderer.receiveGI = ReceiveGI.Lightmaps;
                 renderer.scaleInLightmap = LightmapScale(go.name);
+                // A downloaded thing whose lightmap islands overlap (Unity's bake lists them) is in
+                // the bake, and throws its shadow, but is lit by the room's volume: its own
+                // lightmap came out specked.
+                bool plant = go.name.StartsWith("pachira") || go.name.StartsWith("potted_plant");
+#if BAKERY_INCLUDED
+                if (plant) renderer.receiveGI = ReceiveGI.LightProbes;   // Bakery lays out a lightmap of its own for the rest
+#else
+                if (plant || System.Array.Exists(ProbeLit, word => go.name.StartsWith(word))) renderer.receiveGI = ReceiveGI.LightProbes;
+#endif
             }
         }
 

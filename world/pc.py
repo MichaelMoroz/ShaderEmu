@@ -642,7 +642,10 @@ def station(b, which="all"):
     b.box((strip, floor + 0.02, edge + 0.07), (0.3, 0.04, 0.055), "PlasticBeige", bevel=0.004, segs=2)
     b.box((strip + 0.125, floor + 0.041, edge + 0.07), (0.022, 0.004, 0.014), "RedPaint", bevel=0.001, segs=1)   # its lit switch
     b.tube([(strip - 0.15, floor + 0.02, edge + 0.07), (strip - 0.22, floor + 0.006, edge + 0.07), (strip - 0.3, floor + 0.005, edge + 0.03),
-            (strip - 0.32, floor + 0.005, edge - 0.3)], 0.004, "Rubber", segs=8, smooth=4)
+            (strip - 0.32, floor + 0.005, edge - 0.22), (strip - 0.32, floor + 0.03, edge - 0.3), (strip - 0.32, floor + 0.022, edge - 0.3)], 0.004, "Rubber", segs=8, smooth=4)
+    # and ends in a socket let into the floor under the table: a steel plate, the plug in it
+    b.box((strip - 0.32, floor + 0.002, edge - 0.3), (0.12, 0.004, 0.12), "MetalSteel", bevel=0.001, segs=1)
+    b.box((strip - 0.32, floor + 0.016, edge - 0.3), (0.036, 0.026, 0.036), "Rubber", bevel=0.006, segs=2)
     for x, y, z, socket in ((SET_X - 0.14, plug_y - BOARD_DOWN, back, strip - 0.07), (TOWER_X + at["inlet"][0], at["inlet"][1], behind, strip + 0.04)):
         b.tube([(x, y, z), (x, y - 0.012, z + 0.035), (x, y * 0.45, z + 0.055), (x, 0.012, min(z + 0.075, edge - 0.02)), (x, 0.008, edge - 0.008),
                 (x, -0.03, edge + 0.012), (x, -0.4, edge + 0.014), (x, floor + 0.14, edge + 0.016), (x * 0.7 + socket * 0.3, floor + 0.01, edge + 0.03),

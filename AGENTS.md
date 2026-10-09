@@ -720,3 +720,14 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   between the chairs and the wall's screens needs no collider unless it should stop beams.
 - "Look at the room without a bake" takes each reflection probe's picture with a camera
   (`ProbePictures`) and lets 16 pixel lights light a surface; "Bake lighting" undoes both.
+- The room's light is baked by Bakery when the Unity project has it (`ShaderEmuBakery.cs`,
+  `BAKERY_INCLUDED`): "ShaderEmu/Bake lighting" is one Bakery render (lightmap, light volumes,
+  light probes in L1 mode), then Unity's own bake of each reflection probe into a file the probe
+  uses as a Custom texture (a Baked probe's picture is in the lighting data, which every Bakery
+  render replaces). Never copy a script into the project or refresh it while a bake runs: the
+  reload drops what is left of the bake. Unity's GPU lightmapper hung on a 4096 page here.
+- A sound of the world is cut from a recording (`world/sounds.py`, `SOURCES`), not computed:
+  thunder and the computer's sounds were tried computed three times and were wrong each time.
+- A panel (`Plate.shader`) is shown mostly as drawn (`_Flat`), and its far-off lettering takes
+  the glyph's own ink: the kept picture of the lettering is taken in the room's light, and a
+  line seen aslant changed colour along its length, which read as a sheen.

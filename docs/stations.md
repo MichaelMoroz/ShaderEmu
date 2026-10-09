@@ -52,10 +52,13 @@ DIN 13.2; IEC C14 and C13). The den's own tower is the same case: the bake write
 alone as `pc_tower`, which `world/computer.py` places. The key in the tower's spare bay says
 whose the place is and, under it, what a press does (`EmuStations.modes`).
 
-The computer by the desk has sounds of its own (`EmuPcSound`, `world/sounds.py`'s `computer()`):
-switched on, fan and disk run up, the memory test ticks, the floppy's head goes home, one beep,
-then the disk is read; a fan loop while it runs, with the disk's knocks now and then; a
-run-down when it is switched off. They are computed, as the rain and thunder are.
+The computer by the desk has sounds of its own (`EmuPcSound`, `computer()` in `world/sounds.py`),
+all cut from one recording of a computer being started and stopped: its first twelve seconds
+when it is switched on (the switch, and its loudspeaker's beep five seconds in), eight quiet
+seconds as a loop while it runs, four of its busy moments with the steady sound taken out for
+the disk at work, and its end when it is switched off. The cuts were placed by measurement
+(where the tone is, which half seconds have knocks in them). Computed sounds were tried first
+and were wrong: for a sound, find a recording.
 
 Where the sizes are from: the drive bays (146.1 x 41.3 mm, and 101.6 x 26.1 mm) from
 Wikipedia's "Drive bay"; the power supply's 150 x 86 mm from Corsair's and Advantech's PS/2

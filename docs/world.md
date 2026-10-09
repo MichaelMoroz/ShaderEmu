@@ -21,7 +21,9 @@ in Blender by scripts in `world/`; furniture, plants and the main surfaces come 
   in `Textures/Assets`, and `Models/materials.txt`.
 - `textures.py` computes the rest (plastic, metal, rugs, book spines, the atlas of small printed
   things, the city's windows and streets, the sky, clouds, rain) and `world/atlas.json` (20 s).
-- `sounds.py` computes the rain's loop and three rolls of thunder (`Sounds/*.wav`, 2 s).
+- `sounds.py` computes the rain's loop, and cuts thunder and the computer's own sounds from
+  recordings (`SOURCES`: Freesound, CC0; fetched once into `build/sounds`, which needs ffmpeg)
+  (`Sounds/*.wav`, 3 s).
 - `build.py` writes `Models/{Room,Computer,Furniture,City,Gamepad}.fbx` and `build/world.blend`
   (8 s). Name parts after `--` to build only those.
 
