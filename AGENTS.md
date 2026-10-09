@@ -706,6 +706,9 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
 - A sum over a game's state must leave out pointers and what depends on them: an offset from
   the heap to a global moved with the environment's size (one more variable set), and two
   runs that did the same looked different from their first frame.
+- `make_linux_image.py --save-prebuilt` copies everything in `build/images/linux/root`, the
+  games' data files too (Quake's pak, the Command & Conquer demos' MIX files: 70 MB that this
+  repository does not keep). Look at `git status` before committing after it.
 - Never more than three harness runs at once: four took 264 s where one takes 70.
 - Its changes to id's source are `linux/quake/quake.patch`: edit a clean clone at the commit
   `build.sh` names and save `git diff -- WinQuake`. The build puts the tree back each time.
