@@ -63,7 +63,9 @@ if [ ! -f "$DATA/id1/pak0.pak" ]; then
     if [ ! -x lhasa/src/lha ]; then
         curl -sSfL "$LHASA" -o lhasa.tar.gz
         mkdir -p lhasa && tar -xf lhasa.tar.gz -C lhasa --strip-components=1 && rm lhasa.tar.gz
-        (cd lhasa && ./configure -q --disable-shared >/dev/null && make -s -j"$(nproc)" >/dev/null 2>&1)
+        # (without the flags exported above for the game: they are another machine's, and configure
+        # then says it "cannot run C compiled programs")
+        (cd lhasa && env -u CFLAGS ./configure -q --disable-shared >/dev/null && env -u CFLAGS make -s -j"$(nproc)" >/dev/null 2>&1)
     fi
     [ -f quake106.zip ] || curl -sSfL "$SHAREWARE" -o quake106.zip
     python3 -c "import zipfile; open('resource.1', 'wb').write(zipfile.ZipFile('quake106.zip').read('resource.1'))"
