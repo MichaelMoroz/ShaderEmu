@@ -30,8 +30,7 @@ public:
             if (d.first == "CORES") cores_ = (float)(std::max)(1, (std::min)(16, atoi(d.second.c_str())));
         for (auto& d : opt.compile.defines)
             if (d.first == "CORE_PITCH") pitch_ = (float)atoi(d.second.c_str());
-        for (auto& d : opt.compile.defines)
-            if (d.first == "CORE_Y") coreY_ = (float)atoi(d.second.c_str());
+        tailWidth_ = (float)opt.workerTailWidth;
         tickRows_ = (float)opt.tickRows;
         if (!buildPasses(gpu_, shader, {"CPUTick", "Commit"}, bo, passes_, err)) return false;
         for (auto& d : opt.compile.defines)
@@ -106,17 +105,19 @@ public:
             gpu_.ctx->End(tsQuery_[0].Get());
         }
         if (cs_ && mat.getFloat("_Init") == 0) runComputeTick(mat);
-        else if (getenv("RVC_MC_ONE_ZONE")) crt_.runZone(gpu_, passes_[0], mat, UpdateZone{(pitch_ * (cores_ - 1) + 64) / 2, 4096 - tickRows_ / 2, pitch_ * (cores_ - 1) + 64, tickRows_, 0});
-        else if (getenv("RVC_MC_QUADS")) {
-            // one draw, a quad a core (the pass's vertex shader places them)
-            mat.setFloat("_McQuads", 1);
-            crt_.runZone(gpu_, passes_[0], mat, UpdateZone{32, 4096 - tickRows_ / 2, 64, tickRows_, 0}, 6 * (UINT)cores_, false);
-            for (float c = 0; c < cores_; c += 1) crt_.copyZone(gpu_, UpdateZone{pitch_ * c + 32, 4096 - tickRows_ / 2 - (c == 0 ? 0 : coreY_), 64, tickRows_, 0});
-        }
+        else if (cores_ == 1) crt_.runZone(gpu_, passes_[0], mat, UpdateZone{32, 4096 - tickRows_ / 2, 64, tickRows_, 0});
         else {
-            // a zone a core: pixels of two cores in one draw are run side by side and wait for each other
-            for (float c = 0; c < cores_; c += 1) crt_.runZone(gpu_, passes_[0], mat, UpdateZone{pitch_ * c + 32, 4096 - tickRows_ / 2, 64, tickRows_, 0}, 6, cores_ == 1);
-            for (float c = 0; c < cores_ && cores_ > 1; c += 1) crt_.copyZone(gpu_, UpdateZone{pitch_ * c + 32, 4096 - tickRows_ / 2, 64, tickRows_, 0});
+            // Core 0's rectangle, then two for each worker: its first 512 texels (64 x 8) and the
+            // 16 x 4 under them that holds the rest of its write cache (MC_ROWS in src/types.h).
+            // Every zone is drawn before any is copied back, or each would wait for the last.
+            std::vector<UpdateZone> zones{UpdateZone{32, 4096 - tickRows_ / 2, 64, tickRows_, 0}};
+            for (float c = 1; c < cores_; c += 1) {
+                if (getenv("RVC_MC_FULL")) { zones.push_back(UpdateZone{pitch_ * c + 32, 4096 - tickRows_ / 2, 64, tickRows_, 0}); continue; }
+                zones.push_back(UpdateZone{pitch_ * c + 32, 4096 - 4, 64, 8, 0});
+                zones.push_back(UpdateZone{pitch_ * c + tailWidth_ / 2, 4096 - 10, tailWidth_, 4, 0});
+            }
+            for (auto& z : zones) crt_.runZone(gpu_, passes_[0], mat, z, 6, false);
+            for (auto& z : zones) crt_.copyZone(gpu_, z);
         }
         if (timeIt) gpu_.ctx->End(tsQuery_[1].Get());
         if (!gpuPasses_.empty()) mat.setTexture("_GpuTarget", gpuSrv_.Get(), kGpuTarget, kGpuTarget);   // Commit copies it back
@@ -536,7 +537,7 @@ private:
     double tickMs_ = -1, commitMs_ = -1, deviceMs_ = 0;
     bool bands_ = false;   // the commit draws only the bands of RAM that changed
     float tickRows_ = 64;  // BackendOptions::tickRows
-    float coreY_ = 0;      // CORE_Y: the workers' blocks are that many rows down (an experiment)
+    float tailWidth_ = 16; // BackendOptions::workerTailWidth
     float pitch_ = 256;    // CORE_PITCH: how far apart the blocks are
     float cores_ = 1;      // CORES: the tick's zone is that many 64 x 64 blocks side by side (docs/multicore.md)
     MemoryView view_;

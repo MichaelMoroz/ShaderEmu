@@ -23,6 +23,7 @@ struct BackendOptions {
     std::string dxcOpt = "-O3", dxcSm = "6_6", dxcDir;
     const SLShader* gpuShader = nullptr;   // the GPU device's passes (gpu.shader), if the machine has one
     const SLShader* soundShader = nullptr; // the sound card's mix pass (sound.shader); needs the GPU device
+    unsigned workerTailWidth = 16;   // texels across of the 4 rows under a worker core's first 8 (docs/multicore.md)
     unsigned tickRows = 64;       // rows of the 64 texels wide state block that the tick pass draws (16: rvc_opt)
     bool stateLog = false;        // D3D12 only: read the CPU's 64 x 64 state texels back every frame (--l1-log)
 };
