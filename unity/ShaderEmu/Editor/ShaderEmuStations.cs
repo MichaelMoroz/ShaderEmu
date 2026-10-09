@@ -42,7 +42,8 @@ public static partial class ShaderEmuBuilder
         consoleMat.CopyPropertiesFromMaterial(terminalMat);   // the font, the columns and rows
         stations.consoleMaterial = consoleMat;
         int cols = stations.terminal.cols, rows = stations.terminal.rows;
-        Button[] take = new Button[count];
+        Button[] take = new Button[count], keys = new Button[count];
+        TextMeshProUGUI[] captions = new TextMeshProUGUI[count];
         // a place's keyboard is the console's own layout at the model's size, and its tube a pointer's plate
         EmuMachine theMachine = null;
         foreach (EmuMachine machine in world.GetComponentsInChildren<EmuMachine>(true)) theMachine = machine;
@@ -98,12 +99,13 @@ public static partial class ShaderEmuBuilder
                 // whose it is, on a key in the tower's spare bay
                 RectTransform panel = Panel(root, "Station " + s + " panel", at + new Vector3(TowerX, TowerBlankBay, TowerFront - 0.003f), Vector3.zero,
                                             144, 38, new Color(0.05f, 0.055f, 0.07f));
-                take[s] = MakeButton(panel, "Take", "FREE", 2, 2, 140, 34, 18, out stations.labels[s]);
+                take[s] = MakeButton(panel, "Take", "FREE", 2, 2, 96, 34, 18, out stations.labels[s]);
+                keys[s] = MakeButton(panel, "Keys", "Use my\nkeyboard", 100, 2, 42, 34, 7, out captions[s]);
                 // the name above, what a press does below it, both the key's own lettering
                 stations.labels[s].alignment = TextAlignmentOptions.Top;
                 stations.labels[s].fontSize = 14;
                 stations.labels[s].margin = new Vector4(0, 3, 0, 0);
-                stations.modes[s] = Label((RectTransform)take[s].transform, "Mode", "press to sit here", 0, 21, 140, 11, 7, TextAnchor.MiddleCenter, stations.labels[s].color);
+                stations.modes[s] = Label((RectTransform)take[s].transform, "Mode", "press to sit here", 0, 21, 96, 11, 6, TextAnchor.MiddleCenter, stations.labels[s].color);
                 stations.modes[s].raycastTarget = false;
 
                 // its keys: the layout's rectangles over the caps' tops, a beam's plate, a mark a hand
@@ -127,10 +129,12 @@ public static partial class ShaderEmuBuilder
                 keyboard.keyLinux = real.ConvertAll(i => layout.keyLinux[i]).ToArray();
                 keyboard.keyNormal = real.ConvertAll(i => layout.keyNormal[i]).ToArray();
                 keyboard.keyShifted = real.ConvertAll(i => layout.keyShifted[i]).ToArray();
-                keyboard.hostKeys = new int[0];
-                keyboard.hostLinux = new int[0];
-                keyboard.hostNormal = new int[0];
-                keyboard.hostShifted = new int[0];
+                keyboard.hostKeys = layout.hostKeys;      // the visitor's real keyboard, while "Use my keyboard" is on
+                keyboard.hostLinux = layout.hostLinux;
+                keyboard.hostNormal = layout.hostNormal;
+                keyboard.hostShifted = layout.hostShifted;
+                keyboard.captureLabel = captions[s];
+                keyboard.other = layout;                  // only one keyboard has the real one
                 keyboard.marks = new Transform[2];
                 keyboard.markRenderers = new Renderer[2];
                 keyboard.markOver = over;
@@ -200,10 +204,13 @@ public static partial class ShaderEmuBuilder
             pointer.stationKeysFrom = kept;
             pointer.tubes = tubes;
             pointer.tubeAspect = StationGlassWide / StationGlassHigh;
+            pointer.tubeBulge = 1.8f;      // world/pc.py's BULGE
+            pointer.tubeGap = 0.024f;      // the plate is 12 mm before the glass's rim, the glass's middle 12 mm behind that
             Apply(pointer);
             stations.pointer = pointer;
         }
         Apply(stations);
         for (int s = 0; s < count; s++) OnClick(take[s], stations, "Take" + s);
+        for (int s = 0; s < count; s++) OnClick(keys[s], stations, "Keys" + s);
     }
 }

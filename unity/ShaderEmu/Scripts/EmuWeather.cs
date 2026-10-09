@@ -1,5 +1,6 @@
 using UdonSharp;
 using UnityEngine;
+using TMPro;
 using VRC.SDKBase;
 
 // The storm outside the window: now and then lightning, which the sky, the city and the rain
@@ -12,6 +13,11 @@ public class EmuWeather : UdonSharpBehaviour
     public float[] clapDelay;          // seconds from the flash to the sound
     public float[] clapFlash;          // how bright the flash of each is
     public float minGap = 30f, maxGap = 80f;
+    // the room's two switches (a plate on the right wall): the storm, and the light volumes
+    public GameObject[] rainThings;       // the rain outside and its sound
+    public GameObject lightVolumes;       // the light volumes' manager: off, things are lit by light probes alone
+    public TextMeshProUGUI rainLabel, volumesLabel;
+    private bool raining = true;
 
     private int flashId;
     private float next, flash, struck;
@@ -27,7 +33,7 @@ public class EmuWeather : UdonSharpBehaviour
     void Update()
     {
         float now = Time.time;
-        if (now >= next)
+        if (now >= next && raining)
         {
             next = now + Random.Range(minGap, maxGap);
             pending = Random.Range(0, claps.Length);
@@ -44,6 +50,28 @@ public class EmuWeather : UdonSharpBehaviour
 
     public void _Clap()
     {
-        thunder.PlayOneShot(claps[pending]);
+        if (raining) thunder.PlayOneShot(claps[pending]);
+    }
+
+    public void ToggleRain()
+    {
+        raining = !raining;
+        for (int i = 0; i < rainThings.Length; i++)
+            if (rainThings[i] != null) rainThings[i].SetActive(raining);
+        if (!raining)
+        {
+            thunder.Stop();
+            flash = 0f;
+            VRCShader.SetGlobalFloat(flashId, 0f);
+        }
+        else next = Time.time + Random.Range(10f, 25f);
+        if (rainLabel != null) rainLabel.text = raining ? "Rain: on" : "Rain: off";
+    }
+
+    public void ToggleVolumes()
+    {
+        if (lightVolumes == null) return;
+        lightVolumes.SetActive(!lightVolumes.activeSelf);
+        if (volumesLabel != null) volumesLabel.text = lightVolumes.activeSelf ? "Light volumes: on" : "Light volumes: off";
     }
 }

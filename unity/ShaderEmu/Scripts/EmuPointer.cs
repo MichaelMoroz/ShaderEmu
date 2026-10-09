@@ -27,6 +27,8 @@ public class EmuPointer : UdonSharpBehaviour
     // The classroom (EmuStations): a keyboard and a tube a place. Only this visitor's own answer.
     public Collider[] tubes;           // a unit quad over each tube's glass
     public float tubeAspect = 1.3333334f;
+    public float tubeBulge = 1.8f;     // the glass is part of a ball of this radius (world/pc.py's BULGE)
+    public float tubeGap = 0.024f;     // from a tube's plate to the middle of its glass
     public int stationKeysFrom = -1;   // where the classroom's keyboards start in `keyboards`
     [HideInInspector] public int ownStation = -1;
     [HideInInspector] public bool ownDisplay;   // its tube shows the display, not the console
@@ -142,7 +144,26 @@ public class EmuPointer : UdonSharpBehaviour
             int w = machine.OwnWidth(), ht = machine.OwnHeight();
             if (w > 0 && ht > 0)
             {
-                Vector3 local = tubes[ownStation].transform.InverseTransformPoint(hit.point);
+                // The plate is flat and the glass behind it is part of a ball: the beam goes on from
+                // the plate to the glass, and it is the glass's place that is the picture's.
+                Transform tube = tubes[ownStation].transform;
+                Vector3 from = hit.point - tube.position;
+                float gx = Vector3.Dot(from, tube.right), gy = Vector3.Dot(from, tube.up), gz = 0f;
+                float dx = Vector3.Dot(direction, tube.right), dy = Vector3.Dot(direction, tube.up), dz = Vector3.Dot(direction, tube.forward);
+                if (dz > 0.05f)
+                {
+                    for (int step = 0; step < 3; step++)
+                    {
+                        float glass = tubeGap + tubeBulge - Mathf.Sqrt(Mathf.Max(0f, tubeBulge * tubeBulge - gx * gx - gy * gy));
+                        float t = (glass - gz) / dz;
+                        gx += dx * t;
+                        gy += dy * t;
+                        gz += dz * t;
+                    }
+                    at = tube.position + tube.right * gx + tube.up * gy + tube.forward * gz;
+                }
+                Vector3 size = tube.lossyScale;
+                Vector3 local = new Vector3(gx / size.x, gy / size.y, 0f);
                 float shape = (float)w / ht;
                 float x = local.x * Mathf.Max(1f, tubeAspect / shape) + 0.5f;
                 float y = -local.y * Mathf.Max(1f, shape / tubeAspect) + 0.5f;

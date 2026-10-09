@@ -3,6 +3,7 @@ using pi.LTCGI;
 using UdonSharpEditor;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.UI;
 using UnityEngine.Rendering;
 using VRCLightVolumes;
 
@@ -85,6 +86,36 @@ public static partial class ShaderEmuBuilder
         return source;
     }
 
+    // A plate of two switches on the right wall, towards the front: the storm, and the light volumes.
+    static void RoomSwitches(Transform world, Transform weather, EmuWeather storm)
+    {
+        Gone(world, "Room switches");
+        Transform rain = world.Find("Models/City/Rain");
+        Transform sound = weather.Find("Rain");
+        storm.rainThings = new[] { rain != null ? rain.gameObject : null, sound != null ? sound.gameObject : null };
+        foreach (VRCLightVolumes.LightVolumeManager manager in Object.FindObjectsOfType<VRCLightVolumes.LightVolumeManager>(true))
+            storm.lightVolumes = manager.gameObject;
+        RectTransform plate = Panel(world, "Room switches", new Vector3(4.44f, 1.35f, 2.4f), new Vector3(0, 90, 0), 300, 150, new Color(0.05f, 0.055f, 0.07f));
+        Label(plate, "Title", "The room", 10, 6, 280, 30, 20, TextAnchor.MiddleLeft, Color.white);
+        Button rainKey = MakeButton(plate, "Rain", "Rain: on", 10, 42, 280, 46, 20, out storm.rainLabel);
+        Button volumesKey = MakeButton(plate, "Volumes", "Light volumes: on", 10, 94, 280, 46, 20, out storm.volumesLabel);
+        Apply(storm);
+        OnClick(rainKey, storm, "ToggleRain");
+        OnClick(volumesKey, storm, "ToggleVolumes");
+    }
+
+    [MenuItem("ShaderEmu/Add the room's switches to the open scene")]
+    public static void AddRoomSwitches()
+    {
+        GameObject world = GameObject.Find("ShaderEmu");
+        EmuWeather storm = Object.FindObjectOfType<EmuWeather>();
+        if (world == null || storm == null) throw new System.Exception("no weather in the open scene: run ShaderEmu/Put the modelled room into the open scene");
+        UdonSharpEditorUtility.CopyUdonToProxy(storm);
+        storm.thunder.volume = 0.3f;
+        RoomSwitches(world.transform, storm.transform, storm);
+        UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(world.scene);
+    }
+
     static void Weather(Transform world, Transform computer)
     {
         // ---- the sky: a panorama under drifting cloud
@@ -102,7 +133,7 @@ public static partial class ShaderEmuBuilder
         weather.SetParent(world, false);
         string sounds = Root + "/Sounds/";
         Sound(weather, "Rain", new Vector3(4.3f, WindowY, WindowZ), AssetDatabase.LoadAssetAtPath<AudioClip>(sounds + "Rain.wav"), 0.22f, 4f, 45f, true);
-        AudioSource thunder = Sound(weather, "Thunder", new Vector3(12f, 6f, WindowZ), null, 0.8f, 40f, 200f, false);   // the whole world hears it
+        AudioSource thunder = Sound(weather, "Thunder", new Vector3(12f, 6f, WindowZ), null, 0.3f, 40f, 200f, false);   // the whole world hears it, under the room's own sounds
         if (UdonSharpEditorUtility.GetUdonSharpProgramAsset(typeof(EmuWeather)) == null)
         {
             CreateProgramAssets();
@@ -116,6 +147,7 @@ public static partial class ShaderEmuBuilder
                                   AssetDatabase.LoadAssetAtPath<AudioClip>(sounds + "Thunder3.wav") };
             storm.clapDelay = new[] { 0.7f, 2.4f, 5.0f };
             storm.clapFlash = new[] { 1.0f, 0.6f, 0.3f };
+            RoomSwitches(world, weather, storm);
             Apply(storm);
         }
 
@@ -142,7 +174,7 @@ public static partial class ShaderEmuBuilder
         Transform display = computer.Find("Display screen");
         LTCGI_Screen screen = display.GetComponent<LTCGI_Screen>();
         if (screen == null) screen = display.gameObject.AddComponent<LTCGI_Screen>();
-        screen.ColorMode = ColorMode.Texture;
+        screen.ColorMode = pi.LTCGI.ColorMode.Texture;
         screen.TextureIndex = 0;   // the video texture
         screen.Color = Color.white * 2f;   // a wall of light two metres wide
         screen.Diffuse = true;

@@ -82,6 +82,22 @@ public class EmuStations : UdonSharpBehaviour
     public void Take6() { Take(6); }
     public void Take7() { Take(7); }
 
+    public void Keys0() { Keys(0); }
+    public void Keys1() { Keys(1); }
+    public void Keys2() { Keys(2); }
+    public void Keys3() { Keys(3); }
+    public void Keys4() { Keys(4); }
+    public void Keys5() { Keys(5); }
+    public void Keys6() { Keys(6); }
+    public void Keys7() { Keys(7); }
+
+    // "Use my keyboard" at a place: its owner's real keyboard types there, as at the console.
+    private void Keys(int s)
+    {
+        if (s >= count || owner[s] != hub.MyId() || keyboards == null || s >= keyboards.Length) return;
+        keyboards[s].ToggleCapture();
+    }
+
     // A visitor sits down at a place nobody has; at their own, the key turns the tube between
     // the display and the console.
     private void Take(int s)
