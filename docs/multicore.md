@@ -70,15 +70,58 @@ Laptop, D3D11 + fxc2):
   blocks are, in which rows, and whether they are one draw or several makes no difference, so
   it is not pixels of two cores sharing a warp (a block is 64 x 64 and the nearest other one
   64 to 512 pixels away).
-- **Pixels that do the same thing are nearly free.** Making every pixel of core 0's block run
-  the whole tick (4,096 instead of 973) cost 4 to 8%, and three workers on the same work cost
-  two passes, not three. What the GPU cannot do at no cost is run different work.
+- **Cores that do the same work add up too**: one, two, four and seven workers on one job
+  (core 0 waiting) are 3.8, 7.4, 11.8 and 17.1 ms a pass. It is not what the cores do that
+  costs, it is that there are more of them.
 - **One wide zone over every block is worse**: a lone worker then costs 6.85 ms, twice core 0
   alone, and blocks 256 apart 5.1 ms with only core 0 busy (`RVC_MC_ONE_ZONE=1`).
 - The commit pass grows from 0.12 to 0.23 ms with four busy cores.
 
 So in wall time the primes test is 12.3 s on core 0 alone and 9.4 s with three workers, where
-the count of passes says 3.2 times fewer. Why different work adds up on this GPU is not known.
+the count of passes says 3.2 times fewer.
+
+## Why: how many pixels the GPU runs at once (`tools/warpbench`)
+
+A program of its own, with no emulator in it: one pixel shader with two unrelated loops (an
+interpreter of sorts on integers, with registers, a local array and a branch every step; an
+iteration on floats), drawn as rectangles with a kind and a seed each, sized so that one
+64 x 64 rectangle takes 3 ms. Same seed: the same work; another seed: the same code on other
+data; the other kind: other code. `tools\warpbench\build.bat`, then `bin\warpbench.exe`
+(`--only size|pair|count|shape`, `--live N`, `--arr N`). On the RTX 5070 Laptop:
+
+- **What the rectangles do does not matter, once they are 8 pixels apart.** Two 64 x 64
+  rectangles cost 1.04 to 1.28 times one, whether the second has the same seed, another, or is
+  the float loop; right, down, diagonal, 8 or 2,048 pixels away, one draw or two. Only two
+  8 x 8 rectangles of different kinds that touch cost the sum (2.4 times): there pixels of both
+  are in one warp. A seed a pixel, every pixel on its own path, costs 1.6 times.
+- **There is a number of pixels the GPU runs at full speed, and past it the time is the
+  pixels'.** One rectangle is flat to 64 x 64 (4,096 pixels); 128 x 128 is 1.9 times, 256 x 256
+  5.6 times, 1,024 x 1,024 72 times. Eight 64 x 64 rectangles are 3 times one, thirty-two 9
+  times. Sixty-four 8 x 8 rectangles (4,096 pixels) are 1.6 times one.
+- **The number falls with what a pixel keeps in registers.** `--live N` gives the interpreter
+  N more values of four words that every step may change:
+
+  | Live values more | Two 64 x 64 | Four | Eight | One 128 x 128 |
+  |---|---|---|---|---|
+  | 0 | 1.24x | 1.77x | 3.14x | 1.85x |
+  | 16 | 1.30x | 2.05x | 3.91x | 2.43x |
+  | 64 | 1.90x | 3.06x | 6.01x | 3.05x |
+  | 128 | 2.15x | 3.50x | 6.41x | |
+
+  With 64 of them a second rectangle costs a second pass, which is what a second core costs
+  the emulator: its tick keeps some hundreds of values and two write caches' worth of local
+  arrays in a pixel.
+- **The size of the local array does not matter** (16 to 2,048 words: the same figures).
+
+So the tick's pixels are too heavy for the GPU to run two cores' worth of them at once, and
+no placing of the blocks changes that. What would: a worker whose shader keeps little (no
+paging, no CSRs, no float registers, a small write cache), in a pass of its own beside core
+0's. Two draws do run side by side (the pairs above, "a draw each"); whether a light draw
+runs beside a heavy one at no cost to it is the next thing to measure.
+
+The earlier figure that 4,096 pixels of one block running the whole tick cost only 4 to 8%
+more than 973 does not fit this and is not to be relied on: those extra pixels' results were
+thrown away, and the driver may have dropped most of their work.
 
 ## Switches
 

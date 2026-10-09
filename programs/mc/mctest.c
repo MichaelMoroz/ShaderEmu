@@ -107,7 +107,7 @@ int main(int argc, char** argv) {
         for (int mode = 0; mode < 6; mode++) {
             if (argc > 4 && atoi(argv[4]) != mode) continue;   // one line only
             // busy workers; whether core 0 works too; whether the workers' ranges differ
-            static const int busy_of[6] = {0, 1, 3, 3, 3, 1}, main_of[6] = {1, 1, 1, 1, 0, 0}, apart_of[6] = {0, 0, 0, 1, 0, 0};
+            static const int busy_of[6] = {0, 1, 3, 3, MC_MAX_CORES, 1}, main_of[6] = {1, 1, 1, 1, 0, 0}, apart_of[6] = {0, 0, 0, 1, 0, 0};
             int busy = busy_of[mode] < workers ? busy_of[mode] : workers;
             uint32_t t0 = guest_ms(), sum = 0;
             for (int k = 1; k <= busy; k++) {
