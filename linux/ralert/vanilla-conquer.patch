@@ -915,7 +915,7 @@ index 42a2df9..9a85eb7 100644
          if (LogicPage->Lock()) {
              Plain_Text_Print(Text, DrawX, DrawY, Color, BLACK, TPF_MAP | TPF_NOSHADOW);
 diff --git a/redalert/house.cpp b/redalert/house.cpp
-index f1fd2c8..e9bf368 100644
+index f1fd2c8..07a3a87 100644
 --- a/redalert/house.cpp
 +++ b/redalert/house.cpp
 @@ -228,6 +228,35 @@ fixed HouseClass::Tiberium_Fraction(void) const
@@ -954,7 +954,7 @@ index f1fd2c8..e9bf368 100644
      if (house != HOUSE_NONE) {
          for (int index = 0; index < Houses.Count(); index++) {
              if (Houses.Ptr(index)->Class->House == house) {
-@@ -6059,6 +6088,100 @@ int HouseClass::AI_Building(void)
+@@ -6059,6 +6088,104 @@ int HouseClass::AI_Building(void)
   * HISTORY:                                                                                    *
   *   09/29/1995 JLB : Created.                                                                 *
   *=============================================================================================*/
@@ -979,8 +979,12 @@ index f1fd2c8..e9bf368 100644
 +    static ShaderEmu_Prebuilt table[HOUSE_COUNT];
 +    static char scenario[sizeof(Scen.ScenarioName)];
 +    static int types = -1;
-+    static unsigned last_frame;
++    static unsigned last_frame = ~0u;
 +
++    /* (asked sixty times a frame: whether it is still the same scenario is looked at once a frame) */
++    if ((unsigned)Frame == last_frame && types == TeamTypes.Count()) {
++        return table[house];
++    }
 +    if (types != TeamTypes.Count() || (unsigned)Frame < last_frame
 +        || strncmp(scenario, Scen.ScenarioName, sizeof(scenario) - 1)) {
 +        strncpy(scenario, Scen.ScenarioName, sizeof(scenario) - 1);
@@ -1055,7 +1059,7 @@ index f1fd2c8..e9bf368 100644
  int HouseClass::AI_Unit(void)
  {
      assert(Houses.ID(this) == ID);
-@@ -6080,7 +6203,12 @@ int HouseClass::AI_Unit(void)
+@@ -6080,7 +6207,12 @@ int HouseClass::AI_Unit(void)
          }
      }
  
@@ -1068,7 +1072,7 @@ index f1fd2c8..e9bf368 100644
  
          int counter[UNIT_COUNT];
          memset(counter, 0x00, sizeof(counter));
-@@ -6094,9 +6222,9 @@ int HouseClass::AI_Unit(void)
+@@ -6094,9 +6226,9 @@ int HouseClass::AI_Unit(void)
              TeamClass* tptr = Teams.Ptr(index);
              if (tptr != NULL) {
                  TeamTypeClass const* team = tptr->Class;
@@ -1081,7 +1085,7 @@ index f1fd2c8..e9bf368 100644
                      for (int subindex = 0; subindex < team->ClassCount; subindex++) {
                          TechnoTypeClass const* memtype = team->Members[subindex].Class;
                          if (memtype->What_Am_I() == RTTI_UNITTYPE) {
-@@ -6112,6 +6240,16 @@ int HouseClass::AI_Unit(void)
+@@ -6112,6 +6244,16 @@ int HouseClass::AI_Unit(void)
          **	to fill one team of this type regardless of whether there is a team active
          **	of that type.
          */
@@ -1098,7 +1102,7 @@ index f1fd2c8..e9bf368 100644
          for (index = 0; index < TeamTypes.Count(); index++) {
              TeamTypeClass const* team = TeamTypes.Ptr(index);
              if (team != NULL && team->House == Class->House && team->IsPrebuilt && (!team->IsAutocreate || IsAlerted)) {
-@@ -6125,6 +6263,7 @@ int HouseClass::AI_Unit(void)
+@@ -6125,6 +6267,7 @@ int HouseClass::AI_Unit(void)
                  }
              }
          }
@@ -1106,7 +1110,7 @@ index f1fd2c8..e9bf368 100644
  
          /*
          **	Reduce the theoretical maximum by the actual number of objects currently
-@@ -6132,7 +6271,7 @@ int HouseClass::AI_Unit(void)
+@@ -6132,7 +6275,7 @@ int HouseClass::AI_Unit(void)
          */
          for (int uindex = 0; uindex < Units.Count(); uindex++) {
              UnitClass* unit = Units.Ptr(uindex);
@@ -1115,7 +1119,7 @@ index f1fd2c8..e9bf368 100644
                  counter[unit->Class->Type]--;
              }
          }
-@@ -6207,7 +6346,12 @@ int HouseClass::AI_Vessel(void)
+@@ -6207,7 +6350,12 @@ int HouseClass::AI_Vessel(void)
          return (TICKS_PER_SECOND);
      }
  
@@ -1128,7 +1132,7 @@ index f1fd2c8..e9bf368 100644
  
          int counter[VESSEL_COUNT];
          if (Session.Type == GAME_NORMAL) {
-@@ -6233,9 +6377,9 @@ int HouseClass::AI_Vessel(void)
+@@ -6233,9 +6381,9 @@ int HouseClass::AI_Vessel(void)
              if (tptr) {
                  TeamTypeClass const* team = tptr->Class;
  
@@ -1141,7 +1145,7 @@ index f1fd2c8..e9bf368 100644
                      for (int subindex = 0; subindex < team->ClassCount; subindex++) {
                          if (team->Members[subindex].Class->What_Am_I() == RTTI_VESSELTYPE) {
                              counter[((VesselTypeClass const*)(team->Members[subindex].Class))->Type] = 1;
-@@ -6250,6 +6394,16 @@ int HouseClass::AI_Vessel(void)
+@@ -6250,6 +6398,16 @@ int HouseClass::AI_Vessel(void)
          **	to fill one team of this type regardless of whether there is a team active
          **	of that type.
          */
@@ -1158,7 +1162,7 @@ index f1fd2c8..e9bf368 100644
          for (index = 0; index < TeamTypes.Count(); index++) {
              TeamTypeClass const* team = TeamTypes.Ptr(index);
              if (team) {
-@@ -6263,6 +6417,7 @@ int HouseClass::AI_Vessel(void)
+@@ -6263,6 +6421,7 @@ int HouseClass::AI_Vessel(void)
                  }
              }
          }
@@ -1166,7 +1170,7 @@ index f1fd2c8..e9bf368 100644
  
          /*
          **	Reduce the theoretical maximum by the actual number of objects currently
-@@ -6270,7 +6425,7 @@ int HouseClass::AI_Vessel(void)
+@@ -6270,7 +6429,7 @@ int HouseClass::AI_Vessel(void)
          */
          for (int vindex = 0; vindex < Vessels.Count(); vindex++) {
              VesselClass* unit = Vessels.Ptr(vindex);
@@ -1175,7 +1179,7 @@ index f1fd2c8..e9bf368 100644
                  counter[unit->Class->Type]--;
              }
          }
-@@ -6332,7 +6487,12 @@ int HouseClass::AI_Infantry(void)
+@@ -6332,7 +6491,12 @@ int HouseClass::AI_Infantry(void)
      if (CurInfantry >= Control.MaxInfantry)
          return (TICKS_PER_SECOND);
  
@@ -1188,7 +1192,7 @@ index f1fd2c8..e9bf368 100644
          TechnoTypeClass const* techno = 0;
          int counter[INFANTRY_COUNT];
          memset(counter, 0x00, sizeof(counter));
-@@ -6347,9 +6507,9 @@ int HouseClass::AI_Infantry(void)
+@@ -6347,9 +6511,9 @@ int HouseClass::AI_Infantry(void)
              if (tptr != NULL) {
                  TeamTypeClass const* team = tptr->Class;
  
@@ -1201,7 +1205,7 @@ index f1fd2c8..e9bf368 100644
                      for (int subindex = 0; subindex < team->ClassCount; subindex++) {
                          if (team->Members[subindex].Class->What_Am_I() == RTTI_INFANTRYTYPE) {
                              counter[((InfantryTypeClass const*)(team->Members[subindex].Class))->Type] +=
-@@ -6365,6 +6525,17 @@ int HouseClass::AI_Infantry(void)
+@@ -6365,6 +6529,17 @@ int HouseClass::AI_Infantry(void)
          **	to fill one team of this type regardless of whether there is a team active
          **	of that type.
          */
@@ -1219,7 +1223,7 @@ index f1fd2c8..e9bf368 100644
          for (index = 0; index < TeamTypes.Count(); index++) {
              TeamTypeClass const* team = TeamTypes.Ptr(index);
              if (team != NULL) {
-@@ -6380,6 +6551,7 @@ int HouseClass::AI_Infantry(void)
+@@ -6380,6 +6555,7 @@ int HouseClass::AI_Infantry(void)
                  }
              }
          }
@@ -1227,7 +1231,7 @@ index f1fd2c8..e9bf368 100644
  
          /*
          **	Reduce the theoretical maximum by the actual number of objects currently
-@@ -6387,7 +6559,7 @@ int HouseClass::AI_Infantry(void)
+@@ -6387,7 +6563,7 @@ int HouseClass::AI_Infantry(void)
          */
          for (int uindex = 0; uindex < Infantry.Count(); uindex++) {
              InfantryClass* infantry = Infantry.Ptr(uindex);
