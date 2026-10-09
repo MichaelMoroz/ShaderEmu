@@ -81,6 +81,7 @@ struct Options {
     bool desktop = false;     // ask the guest to start its desktop: the terminal mode, unless --no-desktop
     std::string vizCapture;   // BMP of the memory view, written at exit
     std::string gpuCapture;   // BMP of the GPU device's colour target, written at exit
+    std::string raLog;        // per frame: pc, the return address register (who called a leaf function) and instructions
     std::string pcLog;        // per frame: the guest's pc and the instructions it ran, as two uint32
     std::string frameLog;     // per frame, four uint32: pc, instructions, last stall, microseconds since start
     std::string l1Log;        // per frame: instructions, last stall, a count, then the RAM texels its write cache held
@@ -163,6 +164,7 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
   --volume P           how loud the host plays it, 0 to 100 (default 10). In the window Ctrl+F11 and
                        Ctrl+F12 change it and Ctrl+F9 turns the sound card off and on
   --sound-capture FILE save what it mixed as a WAV at exit, and FILE.frames for tools/sound_reference.py
+  --ra-log FILE        per frame: pc, return address and instructions, for tools/pc_callers.py
   --pc-log FILE        sample the guest's pc once a frame, for tools/pc_profile.py
   --frame-log FILE     per frame: pc, instructions, last stall and time, for tools/boot_profile.py
   --cores N            core 0 and N - 1 worker cores in one tick pass (docs/multicore.md; D3D11)
@@ -298,6 +300,7 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--volume") o.volume = (std::max)(0, (std::min)(100, atoi(next("--volume").c_str())));
         else if (a == "--sound-capture") o.soundCapture = next("--sound-capture");
         else if (a == "--pc-log") o.pcLog = next("--pc-log");
+        else if (a == "--ra-log") o.raLog = next("--ra-log");
         else if (a == "--frame-log") o.frameLog = next("--frame-log");
         else if (a == "--l1-log") o.l1Log = next("--l1-log");
         else if (a == "--stats-after") o.statsAfter = atof(next("--stats-after").c_str());
@@ -753,7 +756,7 @@ int main(int argc, char** argv) {
     uint64_t frame = 0;
     double guestTime = timeBase;
 
-    std::vector<uint32_t> pcSamples;
+    std::vector<uint32_t> pcSamples, raSamples;
     std::vector<uint32_t> frameSamples;
     std::vector<uint32_t> l1Samples;
     uint32_t lastInstructions = 0, lastStall = 0;
@@ -892,6 +895,11 @@ int main(int argc, char** argv) {
         if (haveClock && !opt.pcLog.empty() && (opt.statsAfter < 0 || statsStarted)) {
             pcSamples.push_back(texel(36, 3));
             pcSamples.push_back((uint32_t)(clock - lastClock));
+        }
+        if (haveClock && !opt.raLog.empty() && (opt.statsAfter < 0 || statsStarted)) {
+            raSamples.push_back(texel(36, 3));
+            raSamples.push_back(texel(29, 0));   // x1
+            raSamples.push_back((uint32_t)(clock - lastClock));
         }
         if (haveClock && !opt.frameLog.empty()) {
             double us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();
@@ -1331,6 +1339,7 @@ int main(int argc, char** argv) {
     if (!opt.frameLog.empty()) writeFileBinary(opt.frameLog, (const uint8_t*)frameSamples.data(), frameSamples.size() * 4);
     if (!opt.l1Log.empty()) writeFileBinary(opt.l1Log, (const uint8_t*)l1Samples.data(), l1Samples.size() * 4);
     if (!opt.pcLog.empty()) writeFileBinary(opt.pcLog, (const uint8_t*)pcSamples.data(), pcSamples.size() * 4);
+    if (!opt.raLog.empty()) writeFileBinary(opt.raLog, (const uint8_t*)raSamples.data(), raSamples.size() * 4);
     if (!opt.soundCapture.empty() && exitCode != 1)
         fprintf(stderr, "\n[harness] sound (%u mixes) %s %s\n", soundMixes, soundCapture.write(opt.soundCapture) ? "written to" : "capture FAILED:",
                 opt.soundCapture.c_str());
