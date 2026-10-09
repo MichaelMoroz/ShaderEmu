@@ -280,6 +280,20 @@ What it is good for, and what not:
 What it costs: nothing to speak of while the workers sleep; 5% of a pass for the first busy
 one and 17% for three; and the commit pass looks a RAM texel up in each busy core's cache.
 
+## What paging would cost a worker
+
+Nothing in pixels. A worker that runs a program's own code needs the program's page table,
+and the question was whether it then needs core 0's 409 texels of TLBs, which would make it
+a full-size core again (17% of a pass for three thin workers, a second pass for three full
+ones). It does not: core 0 itself made to forget its TLBs at the start of every pass (an
+experiment, not kept: the second level ignored and the megapage entries cleared in
+`tlb_state_load`) runs a Linux boot no slower, 0.476 ms against 0.548 and 0.625 for 2,048
+instructions a pass and 2.91 ms against 3.01 and 3.06 for 16,384, with the same instructions
+a pass. A page's first use in a pass is a walk of two table entries, and a pass touches few
+pages. So a worker with paging keeps the CPU's texels, the write cache and the eight texels
+of float registers, 564 in the 576 pixels a thin worker has now, and starts every pass with
+empty TLBs.
+
 ## A use: Red Alert's movies
 
 `docs/ralert.md` ("Movies, and the worker cores"; `linux/ralert/workers.c` and `worker.c` over the
