@@ -9,3 +9,5 @@
 *.cso
 .vs/
 __pycache__/
+imgui.ini
+.vscode/settings.json
