@@ -36,6 +36,9 @@ static struct {
 	unsigned used, lost, failed, seed;
 	char error[240];
 	char kept[4096];	/* a kind, then text ending in 0 (a cvar: its name, 0, its value, 0) */
+	unsigned sent;		/* the frame's messages were made there too: they are in `sends` */
+	unsigned sends_used, reliable_out;
+	unsigned sends[(NET_MAXMESSAGE + MAX_DATAGRAM + 64) / 4];	/* reliable?, socket, bytes, then the bytes */
 } work __attribute__ ((aligned (16)));
 static jmp_buf job_abort;
 static int mode = MODE_UNSET, out;
@@ -112,6 +115,52 @@ void SE_ServerWorkerError (const char *text)
 	longjmp (job_abort, 1);
 }
 
+/*
+ * NET_SendMessage and NET_SendUnreliableMessage on the worker: the message is kept, and goes
+ * from this core when the frame is taken (the client reads its end of the connection
+ * meanwhile). One reliable message a frame, as the connection allows.
+ */
+int SE_ServerKeepSend (int reliable, void *sock, const void *data, int bytes)
+{
+	unsigned words = 3 + ((unsigned)bytes + 3) / 4;
+
+	if (work.sends_used + words > sizeof work.sends / 4)
+		return -1;
+	work.sends[work.sends_used] = (unsigned)reliable;
+	work.sends[work.sends_used + 1] = (unsigned)sock;
+	work.sends[work.sends_used + 2] = (unsigned)bytes;
+	memcpy (&work.sends[work.sends_used + 3], data, bytes);
+	work.sends_used += words;
+	if (reliable)
+		work.reliable_out = 1;
+	return 1;
+}
+
+int SE_ServerCanSend (qsocket_t *sock) { return !work.reliable_out && sock->canSend && sock->driverdata; }
+
+/* The messages of a frame that has ended. */
+void SE_ServerSend (void)
+{
+	unsigned at;
+
+	if (!work.sent) {
+		SV_SendClientMessages ();
+		return;
+	}
+	for (at = 0; at < work.sends_used; at += 3 + (work.sends[at + 2] + 3) / 4) {
+		sizebuf_t message;
+
+		memset (&message, 0, sizeof message);
+		message.data = (byte *)&work.sends[at + 3];
+		message.cursize = message.maxsize = (int)work.sends[at + 2];
+		if (work.sends[at])
+			NET_SendMessage ((qsocket_t *)work.sends[at + 1], &message);
+		else
+			NET_SendUnreliableMessage ((qsocket_t *)work.sends[at + 1], &message);
+	}
+	work.sent = work.sends_used = work.reliable_out = 0;
+}
+
 static unsigned cycles (void)
 {
 	unsigned v;
@@ -120,12 +169,19 @@ static unsigned cycles (void)
 	return v;
 }
 
-static uint32_t physics_job (uint32_t unused, uint32_t unused2)
+static uint32_t physics_job (uint32_t and_send, uint32_t unused)
 {
 	unsigned began = cycles ();
 
-	if (!setjmp (job_abort))
+	if (!setjmp (job_abort)) {
 		SV_Physics ();
+		/* and what the client is told of it, when that is the everyday kind */
+		if (and_send && svs.clients->active && svs.clients->spawned && !svs.clients->sendsignon
+		    && !svs.clients->dropasap && !svs.clients->message.overflowed) {
+			SV_SendClientMessages ();
+			work.sent = 1;
+		}
+	}
 	return cycles () - began;
 }
 
@@ -156,11 +212,22 @@ static void sum_frame (void)
 	Sys_Printf ("quake: server frame %u: %u entities, time %u ms, state %08x\n", frames, sv.num_edicts, (unsigned)(sv.time * 1000), sum);
 }
 
-/* A worker stopped at a page nobody has touched is helped on from here. */
+/* Called a few times in a frame of the client's (VID_Phase): a worker stopped at a page nobody
+ * has touched is helped on from here. */
 void SE_ServerPoll (void)
 {
-	if (out == OUT_RUNNING)
-		mcw_done (1);
+	static int inside;
+	extern void Host_ServerFrame (void);
+
+	if (out != OUT_RUNNING || !mcw_done (1))
+		return;
+	/* and one whose frame has ended is given its next now, not at the client's next frame:
+	 * the worker would stand still for half a frame of the client's, on average */
+	if (mode == MODE_APART && sv.active && !inside) {
+		inside = 1;
+		Host_ServerFrame ();
+		inside = 0;
+	}
 }
 
 /* The client's frame took this long. */
@@ -257,7 +324,7 @@ int SE_ServerPhysics (void)
 		sum_frame ();
 		out = OUT_DONE;
 	} else {
-		mcw_post (1, physics_job, 0, 0);
+		mcw_post (1, physics_job, mode == MODE_APART, 0);
 		out = OUT_RUNNING;
 	}
 	return 1;
@@ -282,6 +349,7 @@ void SE_ServerDrop (void)
 	settle (0);
 	out = OUT_NONE;
 	since = 0;
+	work.sent = work.sends_used = work.reliable_out = 0;
 }
 
 /* A console command is about to run. Most are the client's; any other may be the server's. */

@@ -617,7 +617,7 @@ index f3c253c..66ef6ee 100644
  #define    TEXTURE0_SGIS				0x835E
  #define    TEXTURE1_SGIS				0x835F
 diff --git a/WinQuake/host.c b/WinQuake/host.c
-index 603f6b3..6719f60 100644
+index 603f6b3..ffe6414 100644
 --- a/WinQuake/host.c
 +++ b/WinQuake/host.c
 @@ -37,8 +37,8 @@ quakeparms_t host_parms;
@@ -656,7 +656,16 @@ index 603f6b3..6719f60 100644
  	if (inerror)
  		Sys_Error ("Host_Error: recursively entered");
  	inerror = true;
-@@ -410,6 +419,7 @@ void Host_ShutdownServer(qboolean crash)
+@@ -342,6 +351,8 @@ if (crash = true), don't bother sending signofs
+ */
+ void SV_DropClient (qboolean crash)
+ {
++	if (SE_ServerOnWorker ())	// not from a worker core: the first one hears of it
++		SE_ServerWorkerError ("the client was dropped");
+ 	int		saveSelf;
+ 	int		i;
+ 	client_t *client;
+@@ -410,6 +421,7 @@ void Host_ShutdownServer(qboolean crash)
  	char		message[4];
  	double	start;
  
@@ -664,7 +673,7 @@ index 603f6b3..6719f60 100644
  	if (!sv.active)
  		return;
  
-@@ -599,12 +609,23 @@ void Host_ServerFrame (void)
+@@ -599,12 +611,23 @@ void Host_ServerFrame (void)
  
  void Host_ServerFrame (void)
  {
@@ -678,7 +687,7 @@ index 603f6b3..6719f60 100644
 +	if (was == 2)
 +		return;
 +	if (was == 1)
-+		SV_SendClientMessages ();
++		SE_ServerSend ();
 +
 +// run the world state, over the time since it last ran
 +	sv_frametime = SE_ServerFrameTime ();
@@ -691,7 +700,7 @@ index 603f6b3..6719f60 100644
  // check for new clients
  	SV_CheckForNewClients ();
  
-@@ -613,8 +634,11 @@ void Host_ServerFrame (void)
+@@ -613,8 +636,11 @@ void Host_ServerFrame (void)
  	
  // move things around and think
  // always pause in single player if in console or menus
@@ -704,7 +713,7 @@ index 603f6b3..6719f60 100644
  
  // send all messages to the clients
  	SV_SendClientMessages ();
-@@ -671,8 +695,13 @@ void _Host_Frame (float time)
+@@ -671,8 +697,13 @@ void _Host_Frame (float time)
  // check for commands typed to the host
  	Host_GetConsoleCommands ();
  	
@@ -718,7 +727,7 @@ index 603f6b3..6719f60 100644
  
  //-------------------
  //
-@@ -713,9 +742,13 @@ void _Host_Frame (float time)
+@@ -713,9 +744,13 @@ void _Host_Frame (float time)
  	
  	CDAudio_Update();
  
@@ -747,6 +756,55 @@ index 9f5d644..8db04e2 100644
  
  vec_t Length(vec3_t v)
  {
+diff --git a/WinQuake/net_main.c b/WinQuake/net_main.c
+index 5f5d2cf..2bc8b5b 100644
+--- a/WinQuake/net_main.c
++++ b/WinQuake/net_main.c
+@@ -625,10 +625,13 @@ struct
+ int NET_SendMessage (qsocket_t *sock, sizebuf_t *data)
+ {
+ 	int		r;
+-	
++
+ 	if (!sock)
+ 		return -1;
+ 
++	if (SE_ServerOnWorker ())	// kept, and sent by the first core (server_shaderemu.c)
++		return SE_ServerKeepSend (1, sock, data->data, data->cursize);
++
+ 	if (sock->disconnected)
+ 	{
+ 		Con_Printf("NET_SendMessage: disconnected socket\n");
+@@ -656,10 +659,13 @@ int NET_SendMessage (qsocket_t *sock, sizebuf_t *data)
+ int NET_SendUnreliableMessage (qsocket_t *sock, sizebuf_t *data)
+ {
+ 	int		r;
+-	
++
+ 	if (!sock)
+ 		return -1;
+ 
++	if (SE_ServerOnWorker ())
++		return SE_ServerKeepSend (0, sock, data->data, data->cursize);
++
+ 	if (sock->disconnected)
+ 	{
+ 		Con_Printf("NET_SendMessage: disconnected socket\n");
+@@ -695,10 +701,13 @@ message to be transmitted.
+ qboolean NET_CanSendMessage (qsocket_t *sock)
+ {
+ 	int		r;
+-	
++
+ 	if (!sock)
+ 		return false;
+ 
++	if (SE_ServerOnWorker ())
++		return SE_ServerCanSend (sock);
++
+ 	if (sock->disconnected)
+ 		return false;
+ 
 diff --git a/WinQuake/pr_cmds.c b/WinQuake/pr_cmds.c
 index 3593bb9..e914c14 100644
 --- a/WinQuake/pr_cmds.c
@@ -820,10 +878,10 @@ index 4f2aa36..9111320 100644
  		if (!a->function)
  			PR_RunError ("NULL function");
 diff --git a/WinQuake/quakedef.h b/WinQuake/quakedef.h
-index e451827..1f654a3 100644
+index e451827..afff962 100644
 --- a/WinQuake/quakedef.h
 +++ b/WinQuake/quakedef.h
-@@ -285,6 +285,27 @@ typedef struct
+@@ -285,6 +285,30 @@ typedef struct
  
  extern qboolean noclip_anglehack;
  
@@ -839,6 +897,9 @@ index e451827..1f654a3 100644
 +float SE_ServerRate (void);
 +void SE_ServerBetween (void);
 +void SE_ServerCommand (const char *name);
++int SE_ServerKeepSend (int reliable, void *sock, const void *data, int bytes);
++int SE_ServerCanSend (struct qsocket_s *sock);
++void SE_ServerSend (void);
 +extern float sv_frametime;
 +void SE_ServerPoll (void);
 +int SE_ServerOnWorker (void);
@@ -851,7 +912,7 @@ index e451827..1f654a3 100644
  
  //
  // host
-@@ -296,7 +317,7 @@ extern	cvar_t		sys_nostdout;
+@@ -296,7 +320,7 @@ extern	cvar_t		sys_nostdout;
  extern	cvar_t		developer;
  
  extern	qboolean	host_initialized;		// true if into command execution

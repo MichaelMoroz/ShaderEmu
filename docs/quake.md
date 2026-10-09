@@ -143,7 +143,11 @@ the server's physics runs on one, as a function of the game in the game's own me
   on without one: it draws from the server's last two answers, moving things between them,
   which is what Quake's client does in a network game (the game only switched that off for a
   server in the same program). When the server's frame has ended its messages are sent, and
-  the next is begun with the moves the client made meanwhile.
+  the next is begun with the moves the client made meanwhile: at once, from a few places in
+  the client's frame (`SE_ServerPoll`), not at the client's next frame.
+- **The frame's messages are made on the worker too** (what the client is told: the entities
+  it can see, 40 thousand instructions). They are kept there, and the first core puts them
+  into the connection when it takes the frame, because the client reads its end meanwhile.
 - **The server's frame has its own length** (`sv_frametime`: the time since its last one began,
   0.1 s of the game at most, as a frame of the game always was). Where that limit holds, the
   game's time goes slower than the clock, as it did before, and the client's time goes at
@@ -165,9 +169,12 @@ On e1m5, standing where the level starts, in real time (RTX 5090, harness, D3D11
 |---|---|---|---|
 | server on the first core (`QUAKE_SERVER=inline`, or no worker cores) | 4.85 | 4.85 | 515 thousand instructions |
 | server on a worker, the client waiting for it (`QUAKE_SERVER=wait`) | 6.3 | 6.3 | 211 thousand, and 9 passes of waiting |
-| server on a worker, each at its own pace (the default) | 12.6 | 5.6 | 169 thousand |
+| server on a worker, each at its own pace (the default) | 13.3 | 5.9 | 153 thousand |
 
-Of 50 frames drawn, 47 are between two of the server's. A pass of the machine with a busy
+Of 54 frames drawn, 47 are between two of the server's. The server's frame is the 330
+thousand instructions it was and decides how fast the game's time goes (0.1 s a frame at
+most: 0.59 of the clock's rate here, 0.49 with the server on the first core). A pass of the
+machine takes 6.5 ms while Quake runs, against 5 for integer code: floats, loads and stores. A pass of the machine with a busy
 worker costs about 5% more than without, which those figures include.
 
     QUAKE_SERVER=inline   the server on the first core
