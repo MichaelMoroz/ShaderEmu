@@ -915,7 +915,7 @@ index 42a2df9..9a85eb7 100644
          if (LogicPage->Lock()) {
              Plain_Text_Print(Text, DrawX, DrawY, Color, BLACK, TPF_MAP | TPF_NOSHADOW);
 diff --git a/redalert/house.cpp b/redalert/house.cpp
-index f1fd2c8..4dc74f1 100644
+index f1fd2c8..e9bf368 100644
 --- a/redalert/house.cpp
 +++ b/redalert/house.cpp
 @@ -228,6 +228,35 @@ fixed HouseClass::Tiberium_Fraction(void) const
@@ -954,7 +954,159 @@ index f1fd2c8..4dc74f1 100644
      if (house != HOUSE_NONE) {
          for (int index = 0; index < Houses.Count(); index++) {
              if (Houses.Ptr(index)->Class->House == house) {
-@@ -6132,7 +6161,7 @@ int HouseClass::AI_Unit(void)
+@@ -6059,6 +6088,100 @@ int HouseClass::AI_Building(void)
+  * HISTORY:                                                                                    *
+  *   09/29/1995 JLB : Created.                                                                 *
+  *=============================================================================================*/
++#ifdef SHADEREMU
++/*
++** What a house's team types that are built ahead (IsPrebuilt) ask for of each kind of object,
++** while it is alerted and while it is not. AI_Unit, AI_Vessel and AI_Infantry went through
++** every team type and its members for this, each of them, for every house, every frame; a
++** team type does not change during a scenario. (For a kind, the largest quantity any such
++** team type has of it: what the loops' max() over the members comes to. Infantry's loop also
++** held each count to 5 as it went, which is the same as holding the largest to 5.)
++*/
++struct ShaderEmu_Prebuilt
++{
++    bool HasUnit[2][UNIT_COUNT], HasVessel[2][VESSEL_COUNT], HasInfantry[2][INFANTRY_COUNT];
++    bool AnyUnit[2], AnyVessel[2], AnyInfantry[2];
++    int Unit[2][UNIT_COUNT], Vessel[2][VESSEL_COUNT], Infantry[2][INFANTRY_COUNT];
++};
++
++static const ShaderEmu_Prebuilt& ShaderEmu_Prebuilt_Of(HousesType house)
++{
++    static ShaderEmu_Prebuilt table[HOUSE_COUNT];
++    static char scenario[sizeof(Scen.ScenarioName)];
++    static int types = -1;
++    static unsigned last_frame;
++
++    if (types != TeamTypes.Count() || (unsigned)Frame < last_frame
++        || strncmp(scenario, Scen.ScenarioName, sizeof(scenario) - 1)) {
++        strncpy(scenario, Scen.ScenarioName, sizeof(scenario) - 1);
++        types = TeamTypes.Count();
++        memset(table, 0, sizeof(table));
++        for (int index = 0; index < TeamTypes.Count(); index++) {
++            TeamTypeClass const* team = TeamTypes.Ptr(index);
++            if (team == NULL || !team->IsPrebuilt || (unsigned)team->House >= HOUSE_COUNT) {
++                continue;
++            }
++            ShaderEmu_Prebuilt& t = table[team->House];
++            for (int alerted = team->IsAutocreate ? 1 : 0; alerted < 2; alerted++) {
++                for (int subindex = 0; subindex < team->ClassCount; subindex++) {
++                    TechnoTypeClass const* memtype = team->Members[subindex].Class;
++                    int quantity = team->Members[subindex].Quantity;
++                    switch (memtype->What_Am_I()) {
++                    case RTTI_UNITTYPE: {
++                        int type = ((UnitTypeClass const*)memtype)->Type;
++                        t.Unit[alerted][type] = t.HasUnit[alerted][type] ? max(t.Unit[alerted][type], quantity) : quantity;
++                        t.HasUnit[alerted][type] = true;
++                        t.AnyUnit[alerted] = true;
++                        break;
++                    }
++                    case RTTI_VESSELTYPE: {
++                        int type = ((VesselTypeClass const*)memtype)->Type;
++                        t.Vessel[alerted][type] =
++                            t.HasVessel[alerted][type] ? max(t.Vessel[alerted][type], quantity) : quantity;
++                        t.HasVessel[alerted][type] = true;
++                        t.AnyVessel[alerted] = true;
++                        break;
++                    }
++                    case RTTI_INFANTRYTYPE: {
++                        int type = ((InfantryTypeClass const*)memtype)->Type;
++                        t.Infantry[alerted][type] =
++                            t.HasInfantry[alerted][type] ? max(t.Infantry[alerted][type], quantity) : quantity;
++                        t.HasInfantry[alerted][type] = true;
++                        t.AnyInfantry[alerted] = true;
++                        break;
++                    }
++                    default:
++                        break;
++                    }
++                }
++            }
++        }
++    }
++    last_frame = Frame;
++    return table[house];
++}
++
++/*
++** Whether a house's teams could want any object of a kind at all: a team type built ahead
++** has one, or the house has a team in play. Most houses of a scenario have neither (the
++** player's own, and the dozen that take no part), and for them the counting that follows
++** counted nothing, a thousand instructions a kind a house a frame.
++*/
++static bool ShaderEmu_Teams_Want(HousesType house, const bool* any, bool alerted)
++{
++    if (any[alerted ? 1 : 0]) {
++        return true;
++    }
++    for (int index = 0; index < Teams.Count(); index++) {
++        TeamClass const* tptr = Teams.Ptr(index);
++        if (tptr != NULL && tptr->Class->House == house) {
++            return true;
++        }
++    }
++    return false;
++}
++#endif
++
+ int HouseClass::AI_Unit(void)
+ {
+     assert(Houses.ID(this) == ID);
+@@ -6080,7 +6203,12 @@ int HouseClass::AI_Unit(void)
+         }
+     }
+ 
++#ifdef SHADEREMU
++    if (Session.Type == GAME_NORMAL
++        && ShaderEmu_Teams_Want(Class->House, ShaderEmu_Prebuilt_Of(Class->House).AnyUnit, IsAlerted)) {
++#else
+     if (Session.Type == GAME_NORMAL) {
++#endif
+ 
+         int counter[UNIT_COUNT];
+         memset(counter, 0x00, sizeof(counter));
+@@ -6094,9 +6222,9 @@ int HouseClass::AI_Unit(void)
+             TeamClass* tptr = Teams.Ptr(index);
+             if (tptr != NULL) {
+                 TeamTypeClass const* team = tptr->Class;
+-                if (((team->IsReinforcable && !tptr->IsFullStrength)
+-                     || (!tptr->IsForcedActive && !tptr->IsHasBeen && !tptr->JustAltered))
+-                    && team->House == Class->House) {
++                if (team->House == Class->House
++                    && ((team->IsReinforcable && !tptr->IsFullStrength)
++                        || (!tptr->IsForcedActive && !tptr->IsHasBeen && !tptr->JustAltered))) {
+                     for (int subindex = 0; subindex < team->ClassCount; subindex++) {
+                         TechnoTypeClass const* memtype = team->Members[subindex].Class;
+                         if (memtype->What_Am_I() == RTTI_UNITTYPE) {
+@@ -6112,6 +6240,16 @@ int HouseClass::AI_Unit(void)
+         **	to fill one team of this type regardless of whether there is a team active
+         **	of that type.
+         */
++#ifdef SHADEREMU
++        {
++            const ShaderEmu_Prebuilt& ahead = ShaderEmu_Prebuilt_Of(Class->House);
++            for (int subtype = 0; subtype < UNIT_COUNT; subtype++) {
++                if (ahead.HasUnit[IsAlerted ? 1 : 0][subtype]) {
++                    counter[subtype] = max(counter[subtype], ahead.Unit[IsAlerted ? 1 : 0][subtype]);
++                }
++            }
++        }
++#else
+         for (index = 0; index < TeamTypes.Count(); index++) {
+             TeamTypeClass const* team = TeamTypes.Ptr(index);
+             if (team != NULL && team->House == Class->House && team->IsPrebuilt && (!team->IsAutocreate || IsAlerted)) {
+@@ -6125,6 +6263,7 @@ int HouseClass::AI_Unit(void)
+                 }
+             }
+         }
++#endif
+ 
+         /*
+         **	Reduce the theoretical maximum by the actual number of objects currently
+@@ -6132,7 +6271,7 @@ int HouseClass::AI_Unit(void)
          */
          for (int uindex = 0; uindex < Units.Count(); uindex++) {
              UnitClass* unit = Units.Ptr(uindex);
@@ -963,7 +1115,58 @@ index f1fd2c8..4dc74f1 100644
                  counter[unit->Class->Type]--;
              }
          }
-@@ -6270,7 +6299,7 @@ int HouseClass::AI_Vessel(void)
+@@ -6207,7 +6346,12 @@ int HouseClass::AI_Vessel(void)
+         return (TICKS_PER_SECOND);
+     }
+ 
++#ifdef SHADEREMU
++    if (Session.Type == GAME_NORMAL
++        && ShaderEmu_Teams_Want(Class->House, ShaderEmu_Prebuilt_Of(Class->House).AnyVessel, IsAlerted)) {
++#else
+     if (Session.Type == GAME_NORMAL) {
++#endif
+ 
+         int counter[VESSEL_COUNT];
+         if (Session.Type == GAME_NORMAL) {
+@@ -6233,9 +6377,9 @@ int HouseClass::AI_Vessel(void)
+             if (tptr) {
+                 TeamTypeClass const* team = tptr->Class;
+ 
+-                if (((team->IsReinforcable && !tptr->IsFullStrength)
+-                     || (!tptr->IsForcedActive && !tptr->IsHasBeen && !tptr->JustAltered))
+-                    && team->House == Class->House) {
++                if (team->House == Class->House
++                    && ((team->IsReinforcable && !tptr->IsFullStrength)
++                        || (!tptr->IsForcedActive && !tptr->IsHasBeen && !tptr->JustAltered))) {
+                     for (int subindex = 0; subindex < team->ClassCount; subindex++) {
+                         if (team->Members[subindex].Class->What_Am_I() == RTTI_VESSELTYPE) {
+                             counter[((VesselTypeClass const*)(team->Members[subindex].Class))->Type] = 1;
+@@ -6250,6 +6394,16 @@ int HouseClass::AI_Vessel(void)
+         **	to fill one team of this type regardless of whether there is a team active
+         **	of that type.
+         */
++#ifdef SHADEREMU
++        {
++            const ShaderEmu_Prebuilt& ahead = ShaderEmu_Prebuilt_Of(Class->House);
++            for (int subtype = 0; subtype < VESSEL_COUNT; subtype++) {
++                if (ahead.HasVessel[IsAlerted ? 1 : 0][subtype]) {
++                    counter[subtype] = max(counter[subtype], ahead.Vessel[IsAlerted ? 1 : 0][subtype]);
++                }
++            }
++        }
++#else
+         for (index = 0; index < TeamTypes.Count(); index++) {
+             TeamTypeClass const* team = TeamTypes.Ptr(index);
+             if (team) {
+@@ -6263,6 +6417,7 @@ int HouseClass::AI_Vessel(void)
+                 }
+             }
+         }
++#endif
+ 
+         /*
+         **	Reduce the theoretical maximum by the actual number of objects currently
+@@ -6270,7 +6425,7 @@ int HouseClass::AI_Vessel(void)
          */
          for (int vindex = 0; vindex < Vessels.Count(); vindex++) {
              VesselClass* unit = Vessels.Ptr(vindex);
@@ -972,7 +1175,59 @@ index f1fd2c8..4dc74f1 100644
                  counter[unit->Class->Type]--;
              }
          }
-@@ -6387,7 +6416,7 @@ int HouseClass::AI_Infantry(void)
+@@ -6332,7 +6487,12 @@ int HouseClass::AI_Infantry(void)
+     if (CurInfantry >= Control.MaxInfantry)
+         return (TICKS_PER_SECOND);
+ 
++#ifdef SHADEREMU
++    if (Session.Type == GAME_NORMAL
++        && ShaderEmu_Teams_Want(Class->House, ShaderEmu_Prebuilt_Of(Class->House).AnyInfantry, IsAlerted)) {
++#else
+     if (Session.Type == GAME_NORMAL) {
++#endif
+         TechnoTypeClass const* techno = 0;
+         int counter[INFANTRY_COUNT];
+         memset(counter, 0x00, sizeof(counter));
+@@ -6347,9 +6507,9 @@ int HouseClass::AI_Infantry(void)
+             if (tptr != NULL) {
+                 TeamTypeClass const* team = tptr->Class;
+ 
+-                if (((team->IsReinforcable && !tptr->IsFullStrength)
+-                     || (!tptr->IsForcedActive && !tptr->IsHasBeen && !tptr->JustAltered))
+-                    && team->House == Class->House) {
++                if (team->House == Class->House
++                    && ((team->IsReinforcable && !tptr->IsFullStrength)
++                        || (!tptr->IsForcedActive && !tptr->IsHasBeen && !tptr->JustAltered))) {
+                     for (int subindex = 0; subindex < team->ClassCount; subindex++) {
+                         if (team->Members[subindex].Class->What_Am_I() == RTTI_INFANTRYTYPE) {
+                             counter[((InfantryTypeClass const*)(team->Members[subindex].Class))->Type] +=
+@@ -6365,6 +6525,17 @@ int HouseClass::AI_Infantry(void)
+         **	to fill one team of this type regardless of whether there is a team active
+         **	of that type.
+         */
++#ifdef SHADEREMU
++        {
++            const ShaderEmu_Prebuilt& ahead = ShaderEmu_Prebuilt_Of(Class->House);
++            for (int subtype = 0; subtype < INFANTRY_COUNT; subtype++) {
++                if (ahead.HasInfantry[IsAlerted ? 1 : 0][subtype]) {
++                    counter[subtype] = max(counter[subtype], ahead.Infantry[IsAlerted ? 1 : 0][subtype]);
++                    counter[subtype] = min(counter[subtype], 5);
++                }
++            }
++        }
++#else
+         for (index = 0; index < TeamTypes.Count(); index++) {
+             TeamTypeClass const* team = TeamTypes.Ptr(index);
+             if (team != NULL) {
+@@ -6380,6 +6551,7 @@ int HouseClass::AI_Infantry(void)
+                 }
+             }
+         }
++#endif
+ 
+         /*
+         **	Reduce the theoretical maximum by the actual number of objects currently
+@@ -6387,7 +6559,7 @@ int HouseClass::AI_Infantry(void)
          */
          for (int uindex = 0; uindex < Infantry.Count(); uindex++) {
              InfantryClass* infantry = Infantry.Ptr(uindex);
