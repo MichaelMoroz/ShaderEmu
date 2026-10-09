@@ -1,6 +1,6 @@
 #!/bin/sh
 # Starts the Nano-X window system with its bar and a terminal. NANOX_SIZE=WIDTHxHEIGHT picks
-# the screen size (1280x720 by default); NANOX_SOFTWARE=1 draws without the GPU.
+# the screen size (800x600 by default); NANOX_SOFTWARE=1 draws without the GPU.
 # nx restart: the desktop over again (Settings does this for a new screen size). First it is
 # taken down whole: its own programs are asked to go, then the window system, and nothing is
 # started until that has really gone. Any other program on it goes with it.

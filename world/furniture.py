@@ -4,7 +4,7 @@ import math
 
 from bookdesigns import CELLS, CELL_H, CELL_W, DESIGNS, size as book_size
 from room import HALF_D, HALF_W, frame, on_wall
-from pc import office_chair, station
+from pc import office_chair
 
 
 def book(b, at, cell, deep, rot=(0, 0, 0)):
@@ -37,12 +37,43 @@ def mug(b, at, mat="Ceramic", turn=0):
         b.tube([(0.04, 0.075, 0), (0.062, 0.07, 0), (0.066, 0.045, 0), (0.058, 0.022, 0), (0.04, 0.02, 0)], 0.006, mat, segs=8, smooth=4)
 
 
+def cushion(b, at, side, thick, rot):
+    """A stuffed square cushion standing in its own xy plane: fullest round a button sewn through
+    its middle, creased towards its corners, piped along its seam, its corners drawn out into ears."""
+    n, vertices, faces, uvs, normals, seam = 20, [], [], [], [], []
+
+    def ear(u, v):   # sides drawn in, corners out
+        return 1 + 0.07 * (u * v) ** 2 - 0.05 * (1 - (u * v) ** 2) * (u * u + v * v) / 2
+    for face in (1, -1):
+        first = len(vertices)
+        for j in range(n + 1):
+            for i in range(n + 1):
+                u, v = 2 * i / n - 1, 2 * j / n - 1
+                full = ((1 - u ** 4) * (1 - v ** 4)) ** 0.42
+                full *= 1 - 0.5 * math.exp(-(u * u + v * v) / 0.012)                                  # the button pulls it in
+                full *= 1 - 0.1 * (u * v) ** 2 * (0.5 + 0.5 * math.cos(9 * math.atan2(v, u)))          # creases run to the corners
+                vertices.append((u * side / 2 * ear(u, v), v * side / 2 * ear(u, v), face * thick / 2 * full))
+        for j in range(n):
+            for i in range(n):
+                a = first + j * (n + 1) + i
+                faces.append((a, a + 1, a + n + 2, a + n + 1))
+                uvs.append([(vertices[k][0] / 0.28, vertices[k][1] / 0.28) for k in faces[-1]])
+                normals.append((0, 0, face))
+    for u, v in [(2 * i / n - 1, -1) for i in range(n)] + [(1, 2 * i / n - 1) for i in range(n)] + [(1 - 2 * i / n, 1) for i in range(n)] + [(-1, 1 - 2 * i / n) for i in range(n + 1)]:
+        seam.append((u * side / 2 * ear(u, v), v * side / 2 * ear(u, v), 0))
+    with b.at(at, rot):
+        b.mesh(vertices, faces, uvs, "FabricCushion", normal=normals)
+        b.tube(seam, 0.0045, "FabricCushion", segs=6, smooth=0)
+        for face in (1, -1):
+            b.cyl((0, 0, face * thick * 0.24), 0.012, 0.004, "FabricCushion", segs=12, bevel=0.0015, rot=(90, 0, 0))
+
+
 def sofa(b):
     b.asset("sofa_02", (-0.4, 0, -HALF_D + 0.63), size=(2.26, None, None))   # its back clear of the panelling's cap
     b.obj("Cushions")
     with b.at((-0.4, 0, -HALF_D + 0.63)):
-        b.box((-0.74, 0.60, 0.0), (0.42, 0.42, 0.13), "FabricCushion", bevel=0.06, segs=5, rot=(-24, 16, 8))
-        b.box((0.76, 0.59, 0.0), (0.40, 0.40, 0.13), "FabricCushion", bevel=0.06, segs=5, rot=(-22, -22, -6))
+        cushion(b, (-0.74, 0.60, 0.0), 0.44, 0.15, (-24, 16, 8))
+        cushion(b, (0.76, 0.59, 0.0), 0.42, 0.15, (-22, -22, -6))
 
 
 def low_table(b):
@@ -70,7 +101,7 @@ def low_table(b):
 ROWS_Z = (1.5, -0.9)
 PLACES_X = (-1.5, -0.5, 0.5, 1.5)
 TABLE_TOP = 0.765   # as the main desk's
-STATION_Z = 0.06    # a place's computer, behind its table's middle
+STATION_Z = 0.0     # a place's computer: the monitor is as deep as the table allows
 
 
 def table(b, x, z):
@@ -95,11 +126,10 @@ def classroom(b):
         for x in PLACES_X:
             with b.at((x + b.rand(-0.05, 0.05), 0, z - 0.95 + b.rand(-0.08, 0.05)), (0, b.rand(-25, 25), 0)):
                 office_chair(b)
-    for row, z in enumerate(ROWS_Z):
-        for place, x in enumerate(PLACES_X):
-            b.obj("Station %d" % (row * len(PLACES_X) + place))   # one object a place: each has a tube of its own
-            with b.at((x, TABLE_TOP, z + STATION_Z)):
-                station(b)
+    # the computers are world/bake_pc.py's set: shells with their detail baked into their pictures
+    for z in ROWS_Z:
+        for x in PLACES_X:
+            b.asset("pc_station", (x, TABLE_TOP, z + STATION_Z), scale=1.0)   # one object a place: each has a tube of its own
 
 
 def floor_lamp(b):

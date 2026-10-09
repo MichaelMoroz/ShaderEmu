@@ -24,6 +24,12 @@ public class EmuPointer : UdonSharpBehaviour
     public Material solidMaterial;     // a beam whose trigger or grip is held
     public float pitch;                // degrees the beam is tipped towards the palm
     public TextMeshProUGUI pitchLabel;
+    // The classroom (EmuStations): a keyboard and a tube a place. Only this visitor's own answer.
+    public Collider[] tubes;           // a unit quad over each tube's glass
+    public float tubeAspect = 1.3333334f;
+    public int stationKeysFrom = -1;   // where the classroom's keyboards start in `keyboards`
+    [HideInInspector] public int ownStation = -1;
+    [HideInInspector] public bool ownDisplay;   // its tube shows the display, not the console
     [HideInInspector] public bool away;   // the game controller is in the player's hands: no beams (EmuGamepad)
 
     private const int Nothing = -1, Display = 0;   // a target; 1 and up: keyboard number + 1
@@ -127,8 +133,30 @@ public class EmuPointer : UdonSharpBehaviour
                 }
             }
         }
+        if (ownStation >= 0 && ownDisplay && tubes != null && ownStation < tubes.Length && tubes[ownStation].Raycast(ray, out hit, best))
+        {
+            landed = true;
+            best = hit.distance;
+            at = hit.point;
+            found = Nothing;
+            int w = machine.OwnWidth(), ht = machine.OwnHeight();
+            if (w > 0 && ht > 0)
+            {
+                Vector3 local = tubes[ownStation].transform.InverseTransformPoint(hit.point);
+                float shape = (float)w / ht;
+                float x = local.x * Mathf.Max(1f, tubeAspect / shape) + 0.5f;
+                float y = -local.y * Mathf.Max(1f, shape / tubeAspect) + 0.5f;
+                if (x >= 0f && y >= 0f && x < 1f && y < 1f)
+                {
+                    px[h] = (int)(x * w);
+                    py[h] = (int)(y * ht);
+                    found = Display;
+                }
+            }
+        }
         for (int k = 0; k < keyboardPlates.Length; k++)
         {
+            if (stationKeysFrom >= 0 && k >= stationKeysFrom && k - stationKeysFrom != ownStation) continue;
             if (!keyboardPlates[k].Raycast(ray, out hit, best)) continue;
             landed = true;
             best = hit.distance;

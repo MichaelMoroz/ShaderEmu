@@ -6,7 +6,7 @@ import bmesh
 import bpy
 from mathutils import Matrix, Vector
 
-from lib import C
+from lib import C, MATERIALS, blender_material
 
 CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "build", "polyhaven")
 _loaded = {}
@@ -52,6 +52,10 @@ def load(asset, limit=None, parts=None):
     mesh = ob.data
     for slot, material in enumerate(mesh.materials):
         if material.name.startswith("PH_"):
+            continue
+        own = material.name.rsplit(".", 1)[0] if material.name[-4:-3] == "." and material.name[-3:].isdigit() else material.name
+        if own in MATERIALS:   # one of the room's own (a model world/bake_pc.py made): the room's material of that name
+            mesh.materials[slot] = blender_material(own)
             continue
         name = "PH_" + material.name.rsplit(".", 1)[0] if material.name[-4:-3] == "." and material.name[-3:].isdigit() else "PH_" + material.name
         known = bpy.data.materials.get(name)   # a file imported twice brings its materials twice

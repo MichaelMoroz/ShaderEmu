@@ -122,7 +122,7 @@ public static partial class ShaderEmuBuilder
         EmuTerminal terminal = Object.FindObjectOfType<EmuTerminal>();
         EmuKeyboard keys = null;
         foreach (EmuKeyboard k in Object.FindObjectsOfType<EmuKeyboard>())
-            if (!k.rawKeys) keys = k;
+            if (k.name == "Console keyboard") keys = k;
         if (terminal == null || keys == null) throw new System.Exception("no console in the open scene: run ShaderEmu/Build world");
         CreateProgramAssets();
         Console(terminal.transform.parent, terminal, keys);

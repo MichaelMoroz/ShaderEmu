@@ -51,7 +51,7 @@ public static partial class ShaderEmuBuilder
         S("MetalBlack", "Metal", 0.15f, 0.15f, 0.16f, 1f, true, false, 0.4f),
         S("Brass", "Metal", 0.80f, 0.62f, 0.30f, 1f, true, false, 1f),
         S("RackSteel", "Metal", 0.21f, 0.22f, 0.24f, 1f),   // painted, not bare: its shading shows
-        S("FabricCushion", "Velvet", 1f, 1f, 1f, 1f, true, true),
+        S("FabricCushion", "Velvet", 0.72f, 0.60f, 0.62f, 1f, true, true),
         S("FabricChair", "Linen", 0.45f, 0.45f, 0.50f, 1f, true, true),
         S("Cardboard", "Cardboard", 1f, 1f, 1f, 1f, true, true),
         S("Terracotta", "Plaster", 0.70f, 0.40f, 0.28f, 1f, true, true),
@@ -74,8 +74,9 @@ public static partial class ShaderEmuBuilder
         TextureImporter importer = AssetImporter.GetAtPath(path) as TextureImporter;
         if (importer == null) throw new System.Exception(path + " is missing: run world/textures.py and world/fetch.py, and copy unity/ShaderEmu over");
         TextureImporterType type = normal ? TextureImporterType.NormalMap : TextureImporterType.Default;
-        if (importer.textureType != type || importer.anisoLevel != aniso || importer.alphaIsTransparency || importer.sRGBTexture != colour)
+        if (importer.textureType != type || importer.anisoLevel != aniso || importer.alphaIsTransparency || importer.sRGBTexture != colour || importer.maxTextureSize < 4096)
         {
+            importer.maxTextureSize = 4096;   // a baked picture may be that large (world/bake_pc.py)
             importer.textureType = type;
             importer.sRGBTexture = colour;   // a packed map's numbers are not colours
             importer.anisoLevel = aniso;
@@ -207,7 +208,9 @@ public static partial class ShaderEmuBuilder
                 continue;
             }
             // world/assets.py gives leaves a second face turned over, so culling stays on
-            made[name] = Surfaced(name, Color.white, albedo, normal, packed, packed != null ? 1f : number(2), 0.6f, false, f[1] == "1", false);
+            // a model with lamps of its own has a picture of their light (world/bake_pc.py)
+            Texture light = File.Exists(stem + "_e.png") ? ImportedTexture(stem + "_e.png", true, false, 4) : null;
+            made[name] = Surfaced(name, Color.white, albedo, normal, packed, packed != null ? 1f : number(2), 0.6f, false, f[1] == "1", false, light, light != null ? 5f : 0f);
             if (leaves) made[name].SetInt("_LTCGI", 0);
             if (leaves) made[name].DisableKeyword("LTCGI");
         }
@@ -386,6 +389,7 @@ public static partial class ShaderEmuBuilder
         Weather(world, computer);   // the storm, the screens' light, the light volume (ShaderEmuWeather.cs)
         Annex(world, models.Find("Annex"));   // the holodeck and the corridor (ShaderEmuHolodeck.cs)
         Stations(world);                      // the classroom's computers (ShaderEmuStations.cs)
+        PcSounds(world);                      // the computer's own sounds (ShaderEmuPcSound.cs)
     }
 
     // A controller's shape (world/gamepad.py), in place of the builder's boxes. It moves: no lightmap.

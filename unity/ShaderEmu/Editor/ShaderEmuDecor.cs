@@ -723,6 +723,7 @@ public static partial class ShaderEmuBuilder
         if (decor != null) Mood(decor.transform);   // the lamps as the bake wants them (the look without a bake changes them)
         Batched(true);
         QualitySettings.pixelLightCount = 8;
+        foreach (ReflectionProbe probe in Object.FindObjectsOfType<ReflectionProbe>(true)) probe.mode = ReflectionProbeMode.Baked;
         foreach (Light light in RoomLights())
         {
             light.lightmapBakeType = LightmapBakeType.Baked;
@@ -765,6 +766,7 @@ public static partial class ShaderEmuBuilder
         }
         Batched(false);
         QualitySettings.pixelLightCount = 16;   // three rooms' lamps: with 8 the ones a surface drops are vertex lights, and dim
+        ProbePictures();
         RenderSettings.ambientLight = new Color(0.28f, 0.27f, 0.26f);
         UnityEngine.Rendering.SphericalHarmonicsL2 flat = new UnityEngine.Rendering.SphericalHarmonicsL2();
         flat.AddAmbientLight(RenderSettings.ambientLight.linear);
@@ -772,6 +774,34 @@ public static partial class ShaderEmuBuilder
         UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(UnityEngine.SceneManagement.SceneManager.GetActiveScene());
         SceneView.RepaintAll();
         Debug.Log("[ShaderEmu] no lightmap: the lamps are real-time, for looking only. Bake before a build.");
+    }
+
+    // Without a bake a reflection probe is empty, and glass and varnish reflect nothing. This takes
+    // each probe's picture of its room as it is lit now (a camera, six faces: under a second) and
+    // gives it to the probe as its own. A bake makes the probes baked ones again.
+    static void ProbePictures()
+    {
+        foreach (ReflectionProbe probe in Object.FindObjectsOfType<ReflectionProbe>(true))
+        {
+            string path = Generated + "/" + probe.name + " preview.cubemap";
+            Cubemap picture = AssetDatabase.LoadAssetAtPath<Cubemap>(path);
+            if (picture == null)
+            {
+                picture = new Cubemap(256, TextureFormat.RGBAHalf, true);
+                AssetDatabase.CreateAsset(picture, path);
+            }
+            Camera camera = new GameObject("probe camera").AddComponent<Camera>();
+            camera.transform.position = probe.transform.position;
+            camera.allowHDR = true;
+            camera.nearClipPlane = 0.05f;
+            camera.farClipPlane = 600f;
+            camera.RenderToCubemap(picture);
+            Object.DestroyImmediate(camera.gameObject);
+            picture.Apply(true);
+            EditorUtility.SetDirty(picture);
+            probe.mode = ReflectionProbeMode.Custom;
+            probe.customBakedTexture = picture;
+        }
     }
 
     // In play mode a statically batched model was dark under real-time lamps (the room's walls: a

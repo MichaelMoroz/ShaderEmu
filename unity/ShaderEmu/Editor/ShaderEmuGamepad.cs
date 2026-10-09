@@ -149,7 +149,7 @@ public static partial class ShaderEmuBuilder
         GameObject computer = GameObject.Find("Computer");
         EmuKeyboard keys = null;
         foreach (EmuKeyboard k in Object.FindObjectsOfType<EmuKeyboard>())
-            if (k.rawKeys) keys = k;
+            if (k.name == "Display keyboard") keys = k;
         if (machine == null || pointer == null || computer == null || keys == null)
             throw new System.Exception("no machine in the open scene: run ShaderEmu/Build world");
         CreateProgramAssets();

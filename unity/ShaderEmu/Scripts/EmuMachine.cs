@@ -246,6 +246,7 @@ public class EmuMachine : UdonSharpBehaviour
     }
 
     // This machine's own display: its size, 0 while it is off.
+    public bool Powered() { return powered; }
     public int OwnWidth() { return powered ? displayWidth : 0; }
     public int OwnHeight() { return powered ? displayHeight : 0; }
 

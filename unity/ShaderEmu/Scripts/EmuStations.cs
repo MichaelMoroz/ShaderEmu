@@ -21,6 +21,10 @@ public class EmuStations : UdonSharpBehaviour
     public Material consoleMaterial;   // Terminal.shader, this behaviour's own
     public Material decodeMaterial;    // ShareDecode.shader, this behaviour's own
     public TextMeshProUGUI[] labels;   // whose it is
+    public TextMeshProUGUI[] modes;    // what its tube shows, and what a press does
+    public EmuPointer pointer;         // the beams: this visitor's own keyboard and tube answer them
+    public EmuKeyboard[] keyboards;    // a place's own
+    public EmuKeyboard consoleKeys, displayKeys;   // the machine's two, which a place's keys go into
 
     // as EmuShareHub's
     private const int TileCount = 300, RowBytes = 512, LevelAt = 508, StampAt = 509;
@@ -114,6 +118,15 @@ public class EmuStations : UdonSharpBehaviour
             if (free >= 0) claimed[free] = myId;
             hub.StateOut();
         }
+        // this visitor types and points at their own place: its keys go where its tube looks
+        int own = mine.station >= 0 && mine.station < count && claimed[mine.station] == myId ? mine.station : -1;
+        if (pointer != null)
+        {
+            pointer.ownStation = own;
+            pointer.ownDisplay = mine.stationMode == 0;
+        }
+        if (own >= 0 && keyboards != null && own < keyboards.Length)
+            keyboards[own].Feed(mine.stationMode == 0 ? displayKeys : consoleKeys, mine.stationMode == 0);
         for (int s = 0; s < count; s++)
         {
             int wants = claimed[s] == myId ? mine.stationMode : claimed[s] > 0 ? ShareOf(claimed[s]).stationMode : 0;
@@ -123,7 +136,6 @@ public class EmuStations : UdonSharpBehaviour
                 haveSeq[s] = false;
                 Forget(s);
                 mode[s] = -1;
-                if (labels[s] != null) labels[s].text = owner[s] == 0 ? "FREE" : owner[s] == myId ? Networking.LocalPlayer.displayName : NameOf(owner[s]);
             }
             if (owner[s] == myId)
             {
@@ -136,6 +148,10 @@ public class EmuStations : UdonSharpBehaviour
             if (wants != mode[s])
             {
                 mode[s] = wants;
+                // the key says whose the place is, what its tube shows, and to its owner that it switches
+                if (labels[s] != null) labels[s].text = owner[s] == 0 ? "FREE" : owner[s] == myId ? Networking.LocalPlayer.displayName : NameOf(owner[s]);
+                if (modes != null && modes[s] != null)
+                    modes[s].text = owner[s] == 0 ? "press to sit here" : (wants == 1 ? "CONSOLE" : "DISPLAY") + (owner[s] == myId ? " - press to switch" : "");
                 Texture shown = wants == 1 ? (Texture)consoles[s] : owner[s] == myId ? (Texture)machine.displayTexture : (Texture)pictures[s];
                 screen.SetTexture("_MainTex", shown);
                 screen.SetVector("_TexSize", new Vector4(shown.width, shown.height, 0, 0));

@@ -33,6 +33,13 @@ public class EmuKeyboard : UdonSharpBehaviour
     public Color plateColour, hoverColour, pressedColour, latchedColour;
     public Color[] keyColour;   // a key's own colour at rest, where a keyboard has caps of two colours
 
+    // A classroom keyboard (EmuStations): no plates, a mark a hand over the key its beam is on,
+    // and its keys go into the keyboard its place's tube is showing.
+    public Transform[] marks;
+    public Renderer[] markRenderers;
+    public Material markOver, markHeld;
+    [HideInInspector] public EmuKeyboard sink;
+
     public const int KeyUp = 256, KeyDown = 257, KeyRight = 258, KeyLeft = 259, KeyHome = 260,
                      KeyEnd = 261, KeyDelete = 262, KeyPageUp = 263, KeyPageDown = 264, KeyNone = 511;
     public const int LinuxCapture = 1000;   // not a key: the "Use my keyboard" plate
@@ -85,6 +92,11 @@ public class EmuKeyboard : UdonSharpBehaviour
 
     private void Push(int v)
     {
+        if (sink != null)
+        {
+            sink.PushEvent(v);
+            return;
+        }
         int next = (tail + 1) & 1023;
         if (next == head) return;   // full: the key is dropped
         queue[tail] = v;
@@ -100,6 +112,20 @@ public class EmuKeyboard : UdonSharpBehaviour
     public void Flush()
     {
         head = tail;
+    }
+
+    // Whose keys these are from now on, and of which kind. Keys still down come up first.
+    public void Feed(EmuKeyboard to, bool raw)
+    {
+        Init();
+        if (to == sink && raw == rawKeys) return;
+        Release(0);
+        Release(1);
+        for (int m = 0; m < 3; m++) Unlatch(m);
+        repeatScreen = -1;
+        sink = to;
+        rawKeys = raw;
+        Paint();
     }
 
     // Types text at the console, as if on this keyboard.
@@ -269,6 +295,18 @@ public class EmuKeyboard : UdonSharpBehaviour
 
     private void Paint()
     {
+        if (marks != null)
+        {
+            for (int h = 0; h < marks.Length && h < 2; h++)
+            {
+                int k = held[h] >= 0 ? held[h] : hover[h];
+                marks[h].gameObject.SetActive(k >= 0);
+                if (k < 0) continue;
+                marks[h].localPosition = new Vector3(keyX[k] + keyW[k] * 0.5f - panelWidth * 0.5f, panelHeight * 0.5f - keyY[k] - keyH[k] * 0.5f, -1f);
+                marks[h].localScale = new Vector3(keyW[k], keyH[k], 1f);
+                markRenderers[h].sharedMaterial = held[h] >= 0 ? markHeld : markOver;
+            }
+        }
         if (keyPlate == null) return;
         for (int i = 0; i < keyPlate.Length; i++)
         {

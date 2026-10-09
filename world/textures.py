@@ -4,7 +4,7 @@ import json
 import os
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, "..", "unity", "ShaderEmu", "Textures", "World")
@@ -392,8 +392,55 @@ def game_box(title, sub, colours, seed):
     return img
 
 
+def printed(lines, size, w, h, paper=(212, 202, 172), ink=(60, 58, 54), face="arialbd.ttf", centre=True, frame=None):
+    """Lettering as it is printed on a computer's plastic, or on a plate or label of `paper`."""
+    img = Image.new("RGB", (w, h), paper)
+    d = ImageDraw.Draw(img)
+    if frame is not None:
+        d.rectangle((1, 1, w - 2, h - 2), outline=frame, width=2)
+    f = font(face, size)
+    pitch = size * 1.25
+    y = (h - pitch * len(lines)) / 2
+    for line in lines:
+        wide = d.textlength(line, font=f)
+        d.text(((w - wide) / 2 if centre else 8, y), line, fill=ink, font=f)
+        y += pitch
+    return img
+
+
+def pc_lettering(a):
+    """What is printed on the classroom's computers (world/pc.py): drive and key legends in the
+    plastic's own colour, badges, and the rating labels behind."""
+    a.add("pc_cd", printed(["COMPACT DISC  8X"], 13, 150, 20))
+    a.add("pc_badge", printed(["RVC 486", "DX2-66"], 15, 120, 48, paper=(28, 48, 110), ink=(232, 232, 236), frame=(190, 192, 198)))
+    a.add("crt_brand", printed(["SHADERVISION  21"], 20, 220, 36, paper=(186, 188, 192), ink=(40, 42, 50), frame=(120, 122, 128)))
+    a.add("crt_osd", printed(["RGB2/+   RGB1/-   VIDEO2   VIDEO1    EXIT   PROCEED"], 9, 290, 14))
+    a.add("crt_rear", printed(["SHADERVISION 21  COLOUR MONITOR", "MODEL SV-2196   100-240 V~  2.0 A  50/60 Hz", "SERIAL 96-1017-00428", "",
+                               "CAUTION: HIGH VOLTAGE INSIDE.", "NO USER SERVICEABLE PARTS.", "MADE IN TAIWAN"], 12, 330, 180,
+                              paper=(214, 214, 208), ink=(30, 30, 30), centre=False, frame=(60, 60, 60)))
+    a.add("kb_lamps", printed(["Num      Caps     Scroll"], 9, 110, 14))
+    # a loudspeaker's grille: holes punched in the moulding over an oval speaker of 9 x 5.5 cm
+    img = Image.new("RGB", (216, 132), (212, 202, 172))
+    d = ImageDraw.Draw(img)
+    for row in range(16):
+        for col in range(27):
+            x, y = 4 + col * 8 + (4 if row % 2 else 0), 6 + row * 8
+            if ((x - 108) / 104.0) ** 2 + ((y - 66) / 62.0) ** 2 < 1:
+                d.ellipse((x - 2.4, y - 2.4, x + 2.4, y + 2.4), fill=(34, 32, 30))
+    a.add("crt_speaker", img)
+    # a legend a control or socket (world/pc_faces.py): pc.py puts each at its own control's place
+    import pc_faces
+    f = font("arialbd.ttf", pc_faces.LEGEND_PX)
+    for name, (text, tone) in pc_faces.LEGENDS.items():
+        paper, ink = pc_faces.TONES[tone]
+        wide = int(ImageDraw.Draw(Image.new("RGB", (4, 4))).textlength(text, font=f)) + 6
+        img = Image.new("RGB", (wide, pc_faces.LEGEND_PX + 6), paper)
+        ImageDraw.Draw(img).text((wide / 2, pc_faces.LEGEND_PX / 2 + 3), text, fill=ink, anchor="mm", font=f)
+        a.add("lg_" + name, img)
+
+
 def atlas():
-    a = Atlas(2048, 1024)
+    a = Atlas(2048, 2048)
     a.add("keyboard", keyboard_top())
     a.add("rack_drives", rack_unit("drives", 1))
     a.add("rack_switch", rack_unit("switch", 2))
@@ -483,6 +530,7 @@ def atlas():
     d.rectangle((4, 4, 135, 111), outline=(240, 240, 240), width=2)
     d.text((70, 58), "RISC-V", fill=(240, 200, 60), anchor="mm", font=font("impact.ttf", 30))
     a.add("mousepad", img)
+    pc_lettering(a)
     arr = np.asarray(a.img).astype(float) / 255
     save("Details", arr, 0.25)
     # what is a lamp in those pictures: the LEDs and lit read-outs of the rack and the drives
@@ -728,6 +776,22 @@ def keyboard():
     save("Keyboard", a * (0.96 + 0.04 * np.random.default_rng(500).random(a.shape[:2]))[..., None], 0.32)
 
 
+def smudges():
+    """The film on a tube's glass, for CRT.shader: dust wiped in streaks over the whole face. It is
+    the television's own (Poly Haven's television_02, CC0): its screen's patch of its colour map,
+    and in alpha that patch of its roughness (0 its smoothest, 1 its dullest)."""
+    folder = os.path.join(HERE, "..", "build", "polyhaven", "television_02", "textures")
+    box = (722, 28, 996, 228)   # the screen, in from its bezel
+    colour = Image.open(os.path.join(folder, "television_02_diff_1k.jpg")).convert("RGB").crop(box)
+    rough = np.asarray(Image.open(os.path.join(folder, "television_02_arm_1k.jpg")).crop(box))[..., 1].astype(float) / 255
+    low, high = np.percentile(rough, 1), np.percentile(rough, 99.5)
+    print("smudges: the television's screen is rough %.2f to %.2f (mean %.2f)" % (low, high, rough.mean()))
+    alpha = Image.fromarray((np.clip((rough - low) / (high - low), 0, 1) * 255 + 0.5).astype(np.uint8))
+    film = colour.resize((1024, 768), Image.BICUBIC)
+    film.putalpha(alpha.resize((1024, 768), Image.BICUBIC))
+    film.save(os.path.join(OUT, "Smudges.png"))
+
+
 def holo_grid():
     """A metre of the holodeck's wall: black, with a bright line along its edges (half of it on each tile)."""
     n = 256
@@ -757,7 +821,7 @@ def carpet():
 def main():
     os.makedirs(OUT, exist_ok=True)
     # walls, floor, wood and cloth are Poly Haven's (world/fetch.py)
-    for make in (plastic, metal, cardboard, rug, round_rug, books, atlas, prop_screen, city_street, night_sky, cloud_noise, rain_streaks, ui, keyboard, holo_grid, carpet):
+    for make in (plastic, metal, cardboard, rug, round_rug, books, atlas, prop_screen, city_street, night_sky, cloud_noise, rain_streaks, ui, keyboard, holo_grid, carpet, smudges):
         make()
     city_windows("CityOffice", 100, "office")
     city_windows("CityFlats", 101, "flats")

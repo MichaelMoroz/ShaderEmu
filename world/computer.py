@@ -6,17 +6,18 @@ import math
 import os
 
 import furniture
+import pc
 from pc import mouse_body, office_chair
 from room import HALF_D, HALF_W, frame, on_wall
 
 SCREEN_Z = HALF_D - 0.09
-TERMINAL = (-2.35, 1.80, 1.5, 0.9375)
-DISPLAY = (0.0, 1.82, 1.92, 1.08)
+TERMINAL = (-2.35, 1.80, 1.36, 1.02)
+DISPLAY = (0.0, 1.82, 1.6, 1.2)
 MEMORY = (2.45, 2.13, 1.7, 0.85)
 CONTROL = (2.45, 1.22, 1.7, 0.76)
 PLAYERS = (1.28, 1.82, 0.5, 1.0)
 CPU = (1.28, 2.54, 0.38, 0.38)
-LINKS = (-1.13, 1.40, 0.22, 0.22)
+LINKS = (DISPLAY[0] - DISPLAY[2] / 2 - 0.17, DISPLAY[1] - DISPLAY[3] / 2 + 0.12, 0.22, 0.22)   # as the builder's WebLinks puts its button
 KEYBOARDS = (-2.35, 0.0)
 DESK_TOP = 0.765
 TOWER = (1.55, 0.26, HALF_D - 0.4)
@@ -148,28 +149,13 @@ def desk(b):
         console(b, x)
 
 
+TOWER_BACK = 0.17   # the tower's back behind TOWER: the classroom's case (world/pc.py), its front where the old one's was
+
+
 def tower(b):
-    b.obj("Tower")
+    """The classroom's own case (world/bake_pc.py's tower alone), on the floor by the desk."""
     x, y, z = TOWER
-    with b.at((x, 0, z)):
-        b.box((0, 0.265, 0.01), (0.24, 0.51, 0.50), "PlasticBeige", bevel=0.008)
-        for fx in (-0.09, 0.09):
-            for fz in (-0.2, 0.2):
-                b.cyl((fx, 0.005, fz), 0.018, 0.01, "Rubber", segs=10)
-        f = -0.25   # the front panel
-        b.box((0, 0.265, f), (0.236, 0.506, 0.02), "PlasticBeige", bevel=0.01, segs=3)
-        face = f - 0.0102
-        for i, bay in enumerate(("bay_cd", "bay_floppy", "bay_blank")):
-            b.quad((0, 0.465 - i * 0.06, face), (0.2, 0.056), "Details", decal=bay)
-        b.quad((0, 0.105, face), (0.16, 0.16), "Details", decal="vent")
-        b.quad((-0.035, 0.235, face), (0.10, 0.0325), "Details", decal="badge")
-        for i, (bx, r, mat) in enumerate(((0.07, 0.014, "PlasticGrey"), (0.07, 0.008, "PlasticGrey"), (0.03, 0.006, "PlasticGrey"))):
-            b.lathe((bx, 0.275 - i * 0.03 if i else 0.28, f - 0.01), [(r, 0), (r, 0.004), (r * 0.8, 0.006), (0, 0.006)], mat, segs=12, rot=(-90, 0, 0))
-        b.box((0.065, 0.21, face), (0.012, 0.006, 0.003), "Led")
-        b.box((0.085, 0.21, face), (0.012, 0.006, 0.003), "Amber")
-        for sy in (0.12, 0.2, 0.28, 0.36, 0.44):   # stamped lines down the side
-            for side in (-1, 1):
-                b.box((side * 0.1205, sy, 0.03), (0.002, 0.004, 0.34), "PlasticGrey")
+    b.asset("pc_tower", (x, 0, z + TOWER_BACK - (pc.FRONT + pc.TOWER_DEEP)), scale=1.0)
     cables(b)
 
 
@@ -193,18 +179,25 @@ def cables(b):
     """Leads run together along the skirting, held by clips, and drop in smooth curves."""
     b.obj("Cables")
     x, _, z = TOWER
-    back, wall = z + 0.262, HALF_D - 0.045
+    back, wall = z + TOWER_BACK, HALF_D - 0.045
+    at = pc.tower_back()   # where its sockets are, from its middle and the floor
     # the tower: power to a strip beside it, two leads up through the wall, one along the floor to the rack
     strip(b, x + 0.42, HALF_D - 0.16)
     plug(b, x + 0.28, HALF_D - 0.16)
-    cable(b, [(x + 0.06, 0.42, back), (x + 0.07, 0.41, back + 0.05), (x + 0.10, 0.26, back + 0.08), (x + 0.20, 0.13, HALF_D - 0.13),
+    ix, iy = x + at["inlet"][0], at["inlet"][1]
+    b.box((ix, iy, back + 0.014), (0.03, 0.022, 0.028), "Rubber", bevel=0.004, segs=2)   # the mains lead's moulded plug
+    cable(b, [(ix, iy, back + 0.02), (ix, iy - 0.01, back + 0.05), (ix + 0.06, 0.2, back + 0.08), (x + 0.20, 0.13, HALF_D - 0.13),
               (x + 0.28, 0.085, HALF_D - 0.16)], 0.006)
-    for dx in (-0.06, -0.035):
-        cable(b, [(x + dx, 0.30, back), (x + dx, 0.31, back + 0.045), (x + dx, 0.50, back + 0.085), (x + dx, 0.72, wall - 0.012),
-                  (x + dx, 0.80, wall + 0.004)], 0.005, "PlasticGrey")
-        b.lathe((x + dx, 0.80, wall), [(0.011, 0), (0.014, 0.003), (0.014, 0.006), (0.008, 0.008)], "PlasticDark", segs=12, rot=(-90, 0, 0))
+    # the two screens' leads: from the video card's socket and the second serial one, up through the wall
+    for (sx, sy), up in ((at["video"], x - 0.06), (at["com2"], x - 0.035)):
+        pc.dsub_plug(b, x + sx, sy, back, 0.032)
+        cable(b, [(x + sx, sy, back + pc.PLUG_LONG - 0.01), (x + sx, sy, back + pc.PLUG_LONG + 0.012), (x + sx, sy + 0.04, back + pc.PLUG_LONG + 0.035),
+                  (up, 0.50, back + 0.085), (up, 0.72, wall - 0.012), (up, 0.80, wall + 0.004)], 0.005, "PlasticGrey")
+        b.lathe((up, 0.80, wall), [(0.011, 0), (0.014, 0.003), (0.014, 0.006), (0.008, 0.008)], "PlasticDark", segs=12, rot=(-90, 0, 0))
     run = HALF_D - 0.06   # the floor run, behind the strip
-    cable(b, [(x + 0.02, 0.18, back), (x + 0.03, 0.16, back + 0.04), (x + 0.06, 0.04, back + 0.08), (x + 0.20, 0.006, run),
+    ny = at["first"] - 5 * pc.SLOT_PITCH   # the network card, in the sixth slot
+    b.box((x + 0.02, ny, back + 0.008), (0.014, 0.011, 0.016), "PlasticGrey", bevel=0.002, segs=1)
+    cable(b, [(x + 0.02, ny, back + 0.012), (x + 0.03, ny - 0.01, back + 0.04), (x + 0.06, 0.04, back + 0.08), (x + 0.20, 0.006, run),
               (x + 0.9, 0.006, run), (RACK[0] - 0.5, 0.006, run), (RACK[0] - 0.33, 0.006, run - 0.10), (RACK[0] - 0.30, 0.03, RACK[2] + 0.2)],
           0.005, "CableBlue")
     cable(b, [(x + 0.62, 0.03, HALF_D - 0.16), (x + 0.70, 0.008, HALF_D - 0.12), (x + 0.9, 0.007, run - 0.012), (RACK[0] - 0.5, 0.007, run - 0.012),

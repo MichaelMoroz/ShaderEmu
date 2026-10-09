@@ -360,25 +360,30 @@ def blender_material(name):
     if mat is not None:
         return mat
     tile, colour, texture, emit = MATERIALS[name]
+    # a tint is written as Unity shows it (sRGB); Blender's shader wants light
+    light = tuple(c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in colour)
     mat = bpy.data.materials.new(name)
     mat.use_nodes = True
     shader = mat.node_tree.nodes.get("Principled BSDF")
-    shader.inputs["Base Color"].default_value = (*colour, 1.0)
-    mat.diffuse_color = (*colour, 1.0)
+    shader.inputs["Base Color"].default_value = (*light, 1.0)
+    mat.diffuse_color = (*light, 1.0)
     if emit > 0:
-        shader.inputs["Emission Color"].default_value = (*colour, 1.0)
+        shader.inputs["Emission Color"].default_value = (*light, 1.0)
         shader.inputs["Emission Strength"].default_value = emit
     path = os.path.join(TEXTURES, texture + ".png") if texture else None
     if path and os.path.exists(path):
         image = mat.node_tree.nodes.new("ShaderNodeTexImage")
         image.image = bpy.data.images.load(os.path.abspath(path), check_existing=True)
+        image.image.alpha_mode = 'CHANNEL_PACKED'   # a texture's alpha is its smoothness, not its cover
         mix = mat.node_tree.nodes.new("ShaderNodeMix")
         mix.data_type = 'RGBA'
         mix.blend_type = 'MULTIPLY'
-        mix.inputs["Factor"].default_value = 1.0
-        mix.inputs["B"].default_value = (*colour, 1.0)
-        mat.node_tree.links.new(image.outputs["Color"], mix.inputs["A"])
-        mat.node_tree.links.new(mix.outputs["Result"], shader.inputs["Base Color"])
+        mix.inputs[0].default_value = 1.0
+        # a colour mix's A, B and result are the node's seventh, eighth and third sockets: by
+        # name it is the number ones that answer, and the tint was a grey of 0.5
+        mix.inputs[7].default_value = (*light, 1.0)
+        mat.node_tree.links.new(image.outputs["Color"], mix.inputs[6])
+        mat.node_tree.links.new(mix.outputs[2], shader.inputs["Base Color"])
     return mat
 
 

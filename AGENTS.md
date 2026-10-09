@@ -517,8 +517,8 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   compiler drops those stores at some optimisation levels, and nothing reports it.
 - A program that looks for its files in any spelling lists whole folders: listing `/` or
   `/usr/bin` reads the ROM each time. Give such a program a small folder of its own.
-- Nano-X's screen is 1280x720 unless `NANOX_SIZE` says otherwise (`linux/nanox/config`; it was
-  640x480). A change to that file needs Nano-X's build, the image, a new snapshot and Unity's
+- Nano-X's screen is 800x600 unless `NANOX_SIZE` says otherwise (`linux/nanox/config`; it was
+  1280x720, and 640x480 before). The world's display and console are 4:3 for it. A change to that file needs Nano-X's build, the image, a new snapshot and Unity's
   "Import boot images". To see the guest's screen as a picture, compose the display's layers
   from a snapshot: the table at the address in `0x8700000c` is a count, three unused words,
   then eight words a layer (x, y, width, height, address).
@@ -708,4 +708,15 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   panels" after anything that makes or changes a panel, or its labels are unlit canvas text.
 - Udon's variables are empty outside play mode (`GetProgramVariable` gives null): read a
   behaviour's fields from its C# proxy in the editor, and from Udon while playing.
-
+- A classroom place is a terminal of its owner's machine (`docs/stations.md`): its keyboard and
+  tube answer only the owner's beams. `world/bake_pc.py`'s low shell must be of one material:
+  a second one makes its texture a target of the bake, cleared to black for every model using it.
+- The classroom's computers are modelled to the standards' sizes (`world/pc.py`'s header): a
+  29 inch presentation monitor, 5.25 and 3.5 inch drive faces, card slots 20.32 mm apart, a
+  PS/2 power supply's back. Their lettering is decals in `Details.png` (`pc_lettering` in
+  `world/textures.py`), which is 2048 square now.
+- A beam stops at the first collider on layer 0 before what it points at (`Aim` in
+  `EmuPointer.cs`): it reached through a classroom's monitor to the wall's display. A new prop
+  between the chairs and the wall's screens needs no collider unless it should stop beams.
+- "Look at the room without a bake" takes each reflection probe's picture with a camera
+  (`ProbePictures`) and lets 16 pixel lights light a surface; "Bake lighting" undoes both.

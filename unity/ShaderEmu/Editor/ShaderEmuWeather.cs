@@ -101,8 +101,8 @@ public static partial class ShaderEmuBuilder
         Transform weather = new GameObject("Weather").transform;
         weather.SetParent(world, false);
         string sounds = Root + "/Sounds/";
-        Sound(weather, "Rain", new Vector3(4.3f, WindowY, WindowZ), AssetDatabase.LoadAssetAtPath<AudioClip>(sounds + "Rain.wav"), 0.22f, 2.5f, 16f, true);
-        AudioSource thunder = Sound(weather, "Thunder", new Vector3(12f, 6f, WindowZ), null, 0.8f, 14f, 60f, false);
+        Sound(weather, "Rain", new Vector3(4.3f, WindowY, WindowZ), AssetDatabase.LoadAssetAtPath<AudioClip>(sounds + "Rain.wav"), 0.22f, 4f, 45f, true);
+        AudioSource thunder = Sound(weather, "Thunder", new Vector3(12f, 6f, WindowZ), null, 0.8f, 40f, 200f, false);   // the whole world hears it
         if (UdonSharpEditorUtility.GetUdonSharpProgramAsset(typeof(EmuWeather)) == null)
         {
             CreateProgramAssets();

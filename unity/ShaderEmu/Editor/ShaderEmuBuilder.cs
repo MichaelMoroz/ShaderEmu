@@ -842,13 +842,13 @@ public static partial class ShaderEmuBuilder
         Box(computer, "Wall panel", new Vector3(0, 1.75f, halfD - 0.03f), new Vector3(7.6f, 2.0f, 0.06f), panelMat, false);
 
         // console
-        const float termW = 1.5f, termH = 0.9375f;
+        const float termW = 1.36f, termH = 1.02f;   // 4:3, as its 80 x 30 cells of 8 x 16 are
         Vector3 termAt = new Vector3(-2.35f, 1.80f, screenZ);
         Box(computer, "Terminal bezel", termAt + new Vector3(0, 0, 0.025f), new Vector3(termW + 0.08f, termH + 0.08f, 0.04f), plasticMat, false);
         GameObject terminalScreen = Screen(computer, "Terminal screen", termAt, termW, termH, terminalMat);
 
         // display
-        const float dispW = 1.92f, dispH = 1.08f;
+        const float dispW = 1.6f, dispH = 1.2f;     // 4:3: the desktop starts at 800 x 600
         Vector3 dispAt = new Vector3(0f, 1.82f, screenZ);
         Box(computer, "Monitor bezel", dispAt + new Vector3(0, 0, 0.025f), new Vector3(dispW + 0.08f, dispH + 0.08f, 0.04f), plasticMat, false);
         Box(computer, "Monitor neck", new Vector3(0, 1.0075f, halfD - 0.07f), new Vector3(0.12f, 0.465f, 0.05f), metalMat, false);   // ends under the bezel
@@ -868,11 +868,9 @@ public static partial class ShaderEmuBuilder
         foreach (float x in new[] { -3.4f, 1.1f })
             Box(computer, "Desk side", new Vector3(x, 0.36f, halfD - 0.5f), new Vector3(0.05f, 0.72f, 0.95f), woodMat);
         Box(computer, "Desk back", new Vector3(-1.15f, 0.45f, halfD - 0.06f), new Vector3(4.5f, 0.5f, 0.03f), woodMat, false);
-        Vector3 towerAt = new Vector3(1.55f, 0.26f, halfD - 0.4f);
-        Box(computer, "Tower", towerAt, new Vector3(0.24f, 0.52f, 0.52f), plasticMat);
-        Box(computer, "Tower front", towerAt + new Vector3(0, 0, -0.262f), new Vector3(0.2f, 0.46f, 0.006f), metalMat, false);
-        Box(computer, "Tower led", towerAt + new Vector3(0.06f, 0.18f, -0.267f), new Vector3(0.03f, 0.012f, 0.004f), ledMat, false);
-        Box(computer, "Tower vents", towerAt + new Vector3(0, -0.08f, -0.267f), new Vector3(0.14f, 0.16f, 0.004f), plasticMat, false);
+        // the classroom's case (world/pc.py: 184 x 372 x 420 mm), its front where world/computer.py puts it
+        Vector3 towerAt = new Vector3(1.55f, 0.186f, halfD - 0.4f - 0.04f);
+        Box(computer, "Tower", towerAt, new Vector3(0.184f, 0.372f, 0.42f), plasticMat);
 
         // ---- the GPU device: a camera of its own, under the floor, that sees only the mesh
         Transform device = new GameObject("GPU device").transform;
