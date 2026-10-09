@@ -19,11 +19,15 @@ public class EmuShare : UdonSharpBehaviour
     [UdonSynced] public int inputSeq;    // events typed at the watched machine so far
     [UdonSynced] public int[] input = new int[16];     // the last 16 of them
     [UdonSynced] public int pointer;     // x, y (12 bits each), buttons << 24, on the display << 28
+    [UdonSynced] public int station = -1;   // the classroom's computer this player has (docs/stations.md); -1: none
+    [UdonSynced] public int stationMode; // what that computer's tube shows: 0 the display, 1 the console
+    [UdonSynced] public int askFrom;     // the player this one wants a whole display from again, for a station
+    [UdonSynced] public int askCount;    // counted up with each such asking
 
     // what this client's hub knows of the player
     [HideInInspector] public int ownerId;
     [HideInInspector] public string ownerName = "";
-    [HideInInspector] public int seenInput, seenResync;
+    [HideInInspector] public int seenInput, seenResync, seenAsk;
     [HideInInspector] public bool watchedMe;
 
     private bool sending;

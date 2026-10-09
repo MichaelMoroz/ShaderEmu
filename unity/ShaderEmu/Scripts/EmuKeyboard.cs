@@ -31,6 +31,7 @@ public class EmuKeyboard : UdonSharpBehaviour
     public int[] keyLinux, keyNormal, keyShifted;
     public Image[] keyPlate;
     public Color plateColour, hoverColour, pressedColour, latchedColour;
+    public Color[] keyColour;   // a key's own colour at rest, where a keyboard has caps of two colours
 
     public const int KeyUp = 256, KeyDown = 257, KeyRight = 258, KeyLeft = 259, KeyHome = 260,
                      KeyEnd = 261, KeyDelete = 262, KeyPageUp = 263, KeyPageDown = 264, KeyNone = 511;
@@ -276,7 +277,8 @@ public class EmuKeyboard : UdonSharpBehaviour
             bool lit = (which >= 0 && latched[which]) || (keyLinux[i] == LinuxCaps && caps)
                     || (keyLinux[i] == LinuxCapture && capturing);
             keyPlate[i].color = down ? pressedColour : lit ? latchedColour
-                              : (hover[0] == i || hover[1] == i) ? hoverColour : plateColour;
+                              : (hover[0] == i || hover[1] == i) ? hoverColour
+                              : (keyColour != null && i < keyColour.Length) ? keyColour[i] : plateColour;
         }
     }
 

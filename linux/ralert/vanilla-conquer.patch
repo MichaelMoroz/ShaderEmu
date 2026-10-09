@@ -1,0 +1,965 @@
+diff --git a/common/fading.cpp b/common/fading.cpp
+index 690e0d1..5873763 100644
+--- a/common/fading.cpp
++++ b/common/fading.cpp
+@@ -35,6 +35,25 @@ void* Build_Fading_Table(void const* palette, void* dest, int color, int frac)
+     unsigned tableindex = 0;
+     dst[0] = 0;
+ 
++#ifdef SHADEREMU
++    // the palette's colours 1 to 255 listed by their green (6 bits, as a VGA palette's are; else the plain search)
++    unsigned char near_list[256];
++    int near_first[66] = {0};
++    bool near_ok = true;
++    for (int j = 1; j < 256; ++j) {
++        if (pal[j * 3] > 63 || pal[j * 3 + 1] > 63 || pal[j * 3 + 2] > 63) {
++            near_ok = false;
++            break;
++        }
++        near_first[pal[j * 3 + 1] + 2]++;
++    }
++    for (int g = 0; g < 64 && near_ok; g++) {
++        near_first[g + 2] += near_first[g + 1];
++    }
++    for (int j = 1; j < 256 && near_ok; ++j) {
++        near_list[near_first[pal[j * 3 + 1] + 1]++] = (unsigned char)j;
++    }
++#endif
+     // Remap most pal entries to the last 16 entries that are the most faded colours.
+     for (int i = 1; i < 256; ++i) {
+         // Decide what the "perfect" match would be for our adjusted color.
+@@ -49,6 +68,60 @@ void* Build_Fading_Table(void const* palette, void* dest, int color, int frac)
+         tmp = ((original - targetblue) * fraction) << 1;
+         unsigned char idealblue = original - (tmp >> 8);
+ 
++#ifdef SHADEREMU
++        unsigned matchcolor = color;
++        if (near_ok) {
++            // by green outwards from the ideal's, while a colour that far off in green alone could still win or tie
++            unsigned best = (unsigned)(-1);
++            int zero = 0;
++            for (int away = 0; away < 64 && (unsigned)(away * away) <= best && !zero; away++) {
++                for (int side = 0; side < (away ? 2 : 1); side++) {
++                    int green = side ? idealgreen - away : idealgreen + away;
++                    if (green < 0 || green > 63) {
++                        continue;
++                    }
++                    for (int k = near_first[green]; k < near_first[green + 1]; k++) {
++                        int j = near_list[k];
++                        if (j == i) {
++                            continue;
++                        }
++                        int dr = pal[j * 3] - idealred, db = pal[j * 3 + 2] - idealblue;
++                        unsigned value = (unsigned)(dr * dr + away * away + db * db);
++                        if (value == 0) {
++                            zero = !zero || j < zero ? j : zero; // (a perfect match ended the search: the first such)
++                        } else if (value < best || (value == best && j > (int)matchcolor)) {
++                            best = value; // (else the nearest, and of equals the last)
++                            matchcolor = j;
++                        }
++                    }
++                }
++            }
++            if (zero) {
++                matchcolor = zero;
++            }
++        } else {
++            unsigned matchvalue = (unsigned)(-1);
++            const unsigned char* fade = pal + 3;
++            for (int j = 1; j < 256; ++j, fade += 3) {
++                if (i == j) {
++                    continue;
++                }
++                signed char diff = fade[0] - idealred;
++                unsigned value = diff * diff;
++                diff = fade[1] - idealgreen;
++                value += diff * diff;
++                diff = fade[2] - idealblue;
++                value += diff * diff;
++                if (value <= matchvalue) {
++                    matchvalue = value;
++                    matchcolor = j;
++                }
++                if (value == 0) {
++                    break;
++                }
++            }
++        }
++#else
+         const unsigned char* fade = pal + 3; // Skip first entry.
+         unsigned matchcolor = color;
+         unsigned matchvalue = (unsigned)(-1);
+@@ -80,6 +153,7 @@ void* Build_Fading_Table(void const* palette, void* dest, int color, int frac)
+             }
+         }
+ 
++#endif
+         dst[i] = matchcolor;
+     }
+ 
+diff --git a/common/mixfile.h b/common/mixfile.h
+index 109c35f..29e2ec5 100644
+--- a/common/mixfile.h
++++ b/common/mixfile.h
+@@ -620,7 +620,12 @@ template <class T, class TCRC> bool MixFileClass<T, TCRC>::Cache(Buffer const* b
+         **	stream so that the actual SHA can be compared with the attached one.
+         */
+         SHAStraw sha;
+-        if (IsDigest) {
++#ifdef SHADEREMU_RA
++        const bool check = false;
++#else
++        const bool check = IsDigest;
++#endif
++        if (check) {
+             sha.Get_From(fstraw);
+             straw = &sha;
+         }
+@@ -651,7 +656,7 @@ template <class T, class TCRC> bool MixFileClass<T, TCRC>::Cache(Buffer const* b
+         **	compare it to the generated digest. If they don't match, then
+         **	return with the "failure to cache" error code.
+         */
+-        if (IsDigest) {
++        if (check) {
+             char digest1[20];
+             char digest2[20];
+             sha.Result(digest2);
+diff --git a/redalert/CMakeLists.txt b/redalert/CMakeLists.txt
+index 60a3e85..c5c13b4 100644
+--- a/redalert/CMakeLists.txt
++++ b/redalert/CMakeLists.txt
+@@ -35,6 +35,7 @@ set(REDALERT_SRC
+     dibfile.cpp
+     dibutil.cpp
+     display.cpp
++    gl.cpp
+     door.cpp
+     drive.cpp
+     drop.cpp
+diff --git a/redalert/cell.cpp b/redalert/cell.cpp
+index 3f1c7f1..2c71953 100644
+--- a/redalert/cell.cpp
++++ b/redalert/cell.cpp
+@@ -375,6 +375,18 @@ void CellClass::Redraw_Objects(bool forced)
+ 
+     CELL cell = Cell_Number();
+ 
++#ifdef SHADEREMU
++    /*
++    ** Where the GPU draws the map (gl.cpp), drawing a cell again paints over nothing: the
++    ** objects in it and over it need not be drawn again for it.
++    */
++    extern bool ShaderEmu_GL_Live;
++    void ShaderEmu_GL_Cell(CELL cell);
++    if (ShaderEmu_GL_Live) {
++        ShaderEmu_GL_Cell(cell);
++        return;
++    }
++#endif
+     if (Map.In_View(cell) && (forced || !Map.Is_Cell_Flagged(cell))) {
+ 
+         /*
+@@ -1097,7 +1109,13 @@ void CellClass::Draw_It(int x, int y, bool objects) const
+             /*
+             **	This is the underlying terrain icon.
+             */
++#ifdef SHADEREMU
++            /* (in the GPU's scene the terrain is a quad that stays: gl.cpp) */
++            extern bool ShaderEmu_GL_Emitting;
++            if (ttype->Get_Image_Data() && !ShaderEmu_GL_Emitting) {
++#else
+             if (ttype->Get_Image_Data()) {
++#endif
+                 LogicPage->Draw_Stamp(ttype->Get_Image_Data(), icon, x, y, NULL, WINDOW_TACTICAL);
+                 if (remap) {
+                     LogicPage->Remap(x + Map.TacPixelX, y + Map.TacPixelY, ICON_PIXEL_W, ICON_PIXEL_H, remap);
+@@ -2076,12 +2094,58 @@ CellClass const* CellClass::Adjacent_Cell(FacingType face) const
+  * HISTORY:                                                                *
+  *   04/24/1995 PWG : Created.                                             *
+  *=========================================================================*/
++#ifdef SHADEREMU
++/*
++** A unit that steps is lifted and put down again, nearly always in the same region, and the two
++** changes of threat undo each other. A lifting is kept back until what follows it is known;
++** whoever reads threat settles it first (Cell_Threat, and the main loop once a frame).
++*/
++static int held_region = -1, held_threat;
++static HousesType held_house;
++
++static void Threat_To_Houses(int region, HousesType house, int threat_value)
++{
++    for (HousesType lp = HOUSE_FIRST; lp < HOUSE_COUNT; lp++) {
++        if (lp == house)
++            continue;
++
++        HouseClass* house_ptr = HouseClass::As_Pointer(lp);
++        if (house_ptr && (!house_ptr->IsHuman || !house_ptr->Is_Ally(house))) {
++            house_ptr->Adjust_Threat(region, threat_value);
++        }
++    }
++}
++
++void ShaderEmu_Threat_Settle(void)
++{
++    if (held_region >= 0) {
++        int region = held_region;
++        held_region = -1;
++        Threat_To_Houses(region, held_house, held_threat);
++    }
++}
++#endif
++
+ void CellClass::Adjust_Threat(HousesType house, int threat_value)
+ {
+     assert((unsigned)Cell_Number() <= MAP_CELL_TOTAL);
+ 
+     int region = Map.Cell_Region(Cell_Number());
+ 
++#ifdef SHADEREMU
++    if (held_region == region && held_house == house && held_threat == -threat_value) {
++        held_region = -1;
++        return;
++    }
++    ShaderEmu_Threat_Settle();
++    if (threat_value < 0 && !Debug_Threat) {
++        held_region = region;
++        held_house = house;
++        held_threat = threat_value;
++        return;
++    }
++    Threat_To_Houses(region, house, threat_value);
++#else
+     for (HousesType lp = HOUSE_FIRST; lp < HOUSE_COUNT; lp++) {
+         if (lp == house)
+             continue;
+@@ -2091,6 +2155,7 @@ void CellClass::Adjust_Threat(HousesType house, int threat_value)
+             house_ptr->Adjust_Threat(region, threat_value);
+         }
+     }
++#endif
+     if (Debug_Threat) {
+         Map.Flag_To_Redraw(true);
+     }
+diff --git a/redalert/conquer.cpp b/redalert/conquer.cpp
+index 4825ba4..e28feed 100644
+--- a/redalert/conquer.cpp
++++ b/redalert/conquer.cpp
+@@ -125,6 +125,135 @@ bool Map_Edit_Loop(void);
+ 
+ bool UseOldShapeDraw = false;
+ 
++#ifdef SHADEREMU
++/*
++** What the game costs on the ShaderEmu machine, in instructions (docs/ralert.md):
++**   RALERT_STATS_MS=N   print the figures every N milliseconds (5000; 0 for never)
++**   RALERT_FRAMES=N     run N game frames with no delay between them, print, and leave
++**   RALERT_STOP_FRAME=N hold the picture of game frame N (RALERT_NO_DELAY=1: get there at once)
++*/
++void Video_Render_Frame();
++extern bool InMainLoop;
++#include "common/host.h"
++extern unsigned ShaderEmu_Show_Cycles, ShaderEmu_Shows, ShaderEmu_Page_Flips, ShaderEmu_Page_Copies;
++extern unsigned ShaderEmu_GL_Quads, ShaderEmu_GL_Shroud, ShaderEmu_GL_Shadows, ShaderEmu_GL_Cycles;
++extern unsigned ShaderEmu_GL_Parts[3], ShaderEmu_GL_Objects[3], ShaderEmu_GL_Put[2], ShaderEmu_GL_Refused;
++static unsigned ShaderEmu_Logic_Cycles, ShaderEmu_Draw_Cycles;
++#define SHADEREMU_COUNT(counter, call)                                                                                 \
++    {                                                                                                                  \
++        unsigned began_ = host_cycles();                                                                               \
++        call;                                                                                                          \
++        counter += host_cycles() - began_;                                                                             \
++    }
++
++/* A sum of the game's state, to see two runs (or two builds) play the same. */
++static void ShaderEmu_State(const char* when)
++{
++    unsigned hash = 2166136261u, overlays = 0;
++    int i;
++#define SHADEREMU_MIX(value) hash = (hash ^ (unsigned)(value)) * 16777619u
++
++    for (i = 0; i < MAP_CELL_TOTAL; i++) {
++        if (Map[(CELL)i].Overlay != OVERLAY_NONE) {
++            overlays++;
++            SHADEREMU_MIX(i * 256 + Map[(CELL)i].Overlay);
++        }
++    }
++    for (i = 0; i < Units.Count(); i++) {
++        SHADEREMU_MIX(Units.Ptr(i)->Coord);
++        SHADEREMU_MIX(Units.Ptr(i)->Strength);
++    }
++    for (i = 0; i < Infantry.Count(); i++) {
++        SHADEREMU_MIX(Infantry.Ptr(i)->Coord);
++        SHADEREMU_MIX(Infantry.Ptr(i)->Strength);
++    }
++    for (i = 0; i < Vessels.Count(); i++) {
++        SHADEREMU_MIX(Vessels.Ptr(i)->Coord);
++        SHADEREMU_MIX(Vessels.Ptr(i)->Strength);
++    }
++    for (i = 0; i < Buildings.Count(); i++) {
++        SHADEREMU_MIX(Buildings.Ptr(i)->Coord);
++        SHADEREMU_MIX(Buildings.Ptr(i)->Strength);
++    }
++    fprintf(stderr,
++            "ralert: %s at frame %d: %s, %d units, %d infantry, %d vessels, %d buildings, %u overlays, state %08x\n",
++            when, (int)Frame, Scen.ScenarioName, Units.Count(), Infantry.Count(), Vessels.Count(), Buildings.Count(),
++            overlays, hash);
++}
++
++static void ShaderEmu_Stats(void)
++{
++    static int every = -1, cap, stop, frame_then;
++    static unsigned ms_then, cycles_then;
++    unsigned ms = host_ms(), cycles = host_cycles();
++    int frames = (int)Frame - frame_then;
++
++    if (every < 0) {
++        const char* text = getenv("RALERT_STATS_MS");
++        every = text ? atoi(text) : 5000;
++        text = getenv("RALERT_FRAMES");
++        cap = text ? atoi(text) : 0;
++        text = getenv("RALERT_STOP_FRAME");
++        stop = text ? atoi(text) : 0;
++        ms_then = ms;
++        cycles_then = cycles;
++        frame_then = (int)Frame;
++        ShaderEmu_Logic_Cycles = ShaderEmu_Draw_Cycles = ShaderEmu_Show_Cycles = ShaderEmu_Shows = 0;
++        ShaderEmu_State("begun");
++        return;
++    }
++    if (cap || (stop && getenv("RALERT_NO_DELAY"))) {
++        FrameTimer = 0;
++    }
++    if (frames > 0 && ((every && ms - ms_then >= (unsigned)every) || (cap && (int)Frame >= cap))) {
++        unsigned all = (cycles - cycles_then) / frames;
++        unsigned logic = ShaderEmu_Logic_Cycles / frames, draw = ShaderEmu_Draw_Cycles / frames;
++        unsigned show = ShaderEmu_Show_Cycles / frames;
++        unsigned span = ms - ms_then ? ms - ms_then : 1;
++
++        fprintf(stderr,
++                "rastat: frame %d: %d.%d game frames/s, %uk instructions/s; a frame %uk = logic %uk + draw %uk + "
++                "show %uk (%u.%u shows) + rest %uk; %d objects; %u page copies of %u; the map %uk (cells %uk, objects %uk: "
++                "%u kept, %u away, %u drawn; shroud %uk), %u quads (%u shroud, %u shadows), %u shapes put, %u left to the game\n",
++                (int)Frame, frames * 1000 / span, frames * 10000 / span % 10, (cycles - cycles_then) / span, all / 1000,
++                logic / 1000, draw / 1000, show / 1000, ShaderEmu_Shows / frames, ShaderEmu_Shows * 10 / frames % 10,
++                (all - logic - draw - show) / 1000,
++                Units.Count() + Infantry.Count() + Vessels.Count() + Buildings.Count() + Aircraft.Count()
++                    + Bullets.Count() + Anims.Count(),
++                ShaderEmu_Page_Copies, ShaderEmu_Page_Flips, ShaderEmu_GL_Cycles / frames / 1000,
++                ShaderEmu_GL_Parts[0] / frames / 1000, ShaderEmu_GL_Parts[1] / frames / 1000, ShaderEmu_GL_Objects[0] / frames,
++                ShaderEmu_GL_Objects[1] / frames, ShaderEmu_GL_Objects[2] / frames, ShaderEmu_GL_Parts[2] / frames / 1000,
++                ShaderEmu_GL_Quads / frames, ShaderEmu_GL_Shroud / frames, ShaderEmu_GL_Shadows / frames, ShaderEmu_GL_Put[0],
++                ShaderEmu_GL_Refused);
++        ShaderEmu_Page_Copies = ShaderEmu_Page_Flips = 0;
++        ShaderEmu_GL_Quads = ShaderEmu_GL_Shroud = ShaderEmu_GL_Shadows = ShaderEmu_GL_Cycles = ShaderEmu_GL_Refused = 0;
++        ShaderEmu_GL_Parts[0] = ShaderEmu_GL_Parts[1] = ShaderEmu_GL_Parts[2] = ShaderEmu_GL_Put[0] = 0;
++        ShaderEmu_GL_Objects[0] = ShaderEmu_GL_Objects[1] = ShaderEmu_GL_Objects[2] = 0;
++        ms_then = ms;
++        cycles_then = cycles;
++        frame_then = (int)Frame;
++        ShaderEmu_Logic_Cycles = ShaderEmu_Draw_Cycles = ShaderEmu_Show_Cycles = ShaderEmu_Shows = 0;
++    }
++    if (cap && (int)Frame >= cap) {
++        ShaderEmu_State("done");
++        exit(0);
++    }
++    if (stop && (int)Frame >= stop) {
++        /* the picture reaches the window a machine frame after it is shown */
++        Video_Render_Frame();
++        for (int wait = 0; wait < 8; wait++) {
++            host_wait();
++        }
++        ShaderEmu_State("stopped");
++        for (;;) {
++            host_wait();
++        }
++    }
++}
++#else
++#define SHADEREMU_COUNT(counter, call) call
++#endif
++
+ #ifdef CHEAT_KEYS
+ void Dump_Heap_Pointers(void);
+ void Error_In_Heap_Pointers(char* string);
+@@ -1759,7 +1888,12 @@ bool Main_Loop()
+     **	If there is no theme playing, but it looks like one is required, then start one
+     **	playing. This is usually the symptom of there being no transition score.
+     */
++#ifdef SHADEREMU
++    extern bool ShaderEmu_No_Tune;
++    if (SampleType && Theme.What_Is_Playing() == THEME_NONE && !ShaderEmu_No_Tune) {
++#else
+     if (SampleType && Theme.What_Is_Playing() == THEME_NONE) {
++#endif
+         Theme.Queue_Song(THEME_PICK_ANOTHER);
+     }
+ 
+@@ -1790,6 +1924,10 @@ bool Main_Loop()
+             FrameTimer = Options.GameSpeed + (PlayerPtr->Difficulty == DIFF_EASY ? 1 : 0);
+         }
+     }
++#ifdef SHADEREMU
++    InMainLoop = true;
++    ShaderEmu_Stats();
++#endif
+ 
+     /*
+     **	Update the display, unless we're inside a dialog.
+@@ -1801,7 +1939,7 @@ bool Main_Loop()
+             if (input) {
+                 Keyboard_Process(input);
+             }
+-            Map.Render();
++            SHADEREMU_COUNT(ShaderEmu_Draw_Cycles, Map.Render());
+         }
+     }
+ 
+@@ -1826,7 +1964,13 @@ bool Main_Loop()
+     /*
+     **	AI logic operations are performed here.
+     */
+-    Logic.AI();
++    SHADEREMU_COUNT(ShaderEmu_Logic_Cycles, Logic.AI());
++#ifdef SHADEREMU
++    {
++        void ShaderEmu_Threat_Settle(void);
++        ShaderEmu_Threat_Settle();
++    }
++#endif
+     TimeQuake = false;
+ #ifdef FIXIT_CSII //	checked - ajw 9/28/98
+     if (!PendingTimeQuake) {
+@@ -1893,6 +2037,9 @@ bool Main_Loop()
+         PlayerRestarts = false;
+         Map.Help_Text(TXT_NONE);
+         Set_Video_Cursor_Clip(false);
++#ifdef SHADEREMU
++        host_scene_drop();
++#endif
+         Do_Restart();
+         Set_Video_Cursor_Clip(true);
+         return (!GameActive);
+@@ -2885,6 +3032,14 @@ void CC_Draw_Shape(void const* shapefile,
+     if ((flags & SHAPE_FADING) && (!fadingdata)) {
+         fadingdata = DisplayClass::FadingShade;
+     }
++#ifdef SHADEREMU
++    {
++        bool ShaderEmu_GL_Shape(void const* file, int frame, int x, int y, int window, int flags, void const* fade, void const* ghost);
++        if (rotation == DIR_N && ShaderEmu_GL_Shape(shapefile, shapenum, x, y, window, flags, fadingdata, ghostdata)) {
++            return;
++        }
++    }
++#endif
+ 
+     static unsigned char* _xbuffer = 0;
+ 
+diff --git a/redalert/display.cpp b/redalert/display.cpp
+index d328d82..652e595 100644
+--- a/redalert/display.cpp
++++ b/redalert/display.cpp
+@@ -115,6 +115,12 @@ unsigned char DisplayClass::UnitShadowAir[(USHADOW_COL_COUNT + 1) * 256];
+ unsigned char DisplayClass::SpecialGhost[2 * 256];
+ 
+ void const* DisplayClass::ShadowShapes;
++#ifdef SHADEREMU
++#include "common/host.h"
++bool ShaderEmu_GL_On(int cells);
++bool ShaderEmu_GL_Changed(void);
++unsigned ShaderEmu_GL_Cycles; /* what the map's scene cost, for the figures (conquer.cpp) */
++#endif
+ unsigned char DisplayClass::ShadowTrans[(SHADOW_COL_COUNT + 1) * 256];
+ 
+ /*
+@@ -1298,6 +1304,18 @@ void DisplayClass::Refresh_Cells(CELL cell, short const* list)
+         list++;
+     }
+ 
++#ifdef SHADEREMU
++    /*
++    ** Where the GPU draws the map nothing is painted over, so no cell has anything to draw
++    ** again: it is enough that the scene is made again, if this is in it or near it.
++    */
++    extern bool ShaderEmu_GL_Live;
++    void ShaderEmu_GL_Near(CELL cell);
++    if (ShaderEmu_GL_Live) {
++        ShaderEmu_GL_Near(cell);
++        return;
++    }
++#endif
+     List_Copy(list, ARRAY_SIZE(tlist), tlist);
+     short* tt = tlist;
+     int count = 0;
+@@ -1606,7 +1624,12 @@ bool DisplayClass::Map_Cell(CELL cell, HouseClass* house, bool check_radar_spied
+     */
+ #if (1)
+     if (cellptr->Is_Mapped(house)) {
++#ifdef SHADEREMU
++        extern bool ShaderEmu_GL_Live;
++        if (!cellptr->Is_Visible(house) && !ShaderEmu_GL_Live) {
++#else
+         if (!cellptr->Is_Visible(house)) {
++#endif
+             cellptr->Redraw_Objects();
+         }
+         return (false);
+@@ -1891,9 +1914,44 @@ void DisplayClass::Draw_It(bool forced)
+ 
+     MapClass::Draw_It(forced);
+ 
++#ifdef SHADEREMU
++    /*
++    ** An object that changed says so to the screen, not to the map: the GPU's scene is made
++    ** again for one that is in the view or near it, and for nothing that is far away.
++    */
++    if (!IsToRedraw && !forced && ShaderEmu_GL_Changed()) {
++        IsToRedraw = true;
++    }
++#endif
+     if (IsToRedraw || forced) {
+         BStart(BENCH_TACTICAL);
+         IsToRedraw = false;
++#ifdef SHADEREMU
++        /*
++        ** The machine's GPU draws the map (gl.cpp): whole every time, wherever the view is.
++        */
++        if (ShaderEmu_GL_On((MapCellWidth + 2) * (MapCellHeight + 2))) {
++            ScenarioInit++;
++            if (DesiredTacticalCoord != TacticalCoord) {
++                Set_Tactical_Position(DesiredTacticalCoord);
++            }
++            ScenarioInit--;
++            unsigned began = host_cycles();
++            ShaderEmu_GL_Draw(forced);
++            ShaderEmu_GL_Cycles += host_cycles() - began;
++            if (IsRubberBand) {
++                LogicPage->Draw_Rect(BandX + TacPixelX, BandY + TacPixelY, NewX + TacPixelX, NewY + TacPixelY, WHITE);
++            }
++#ifdef SORTDRAW
++            for (int index = 0; index < Layer[LAYER_GROUND].Count(); index++) {
++                Layer[LAYER_GROUND][index]->IsToDisplay = false;
++            }
++#endif
++            CellRedraw.Reset();
++            BEnd(BENCH_TACTICAL);
++            return;
++        }
++#endif
+ 
+         /*
+         **	In rubber band mode, mark all cells under the "rubber band" to be
+diff --git a/redalert/display.h b/redalert/display.h
+index c8ed7a3..1b668e5 100644
+--- a/redalert/display.h
++++ b/redalert/display.h
+@@ -142,6 +142,9 @@ public:
+     */
+     virtual void AI(KeyNumType& input, int x, int y);
+     virtual void Draw_It(bool complete = false);
++#ifdef SHADEREMU
++    void ShaderEmu_GL_Draw(bool forced);
++#endif
+ 
+     /*
+     **	Added functionality.
+diff --git a/redalert/flasher.cpp b/redalert/flasher.cpp
+index dfc44b4..20a069d 100644
+--- a/redalert/flasher.cpp
++++ b/redalert/flasher.cpp
+@@ -78,11 +78,19 @@ void FlasherClass::Debug_Dump(MonoClass* mono) const
+ bool FlasherClass::Process(void)
+ {
+     // 2019/09/20 JAS - Flashing info needs to exist per player
++#ifdef SHADEREMU
++    /* (nearly always none of them is counting: found out without a branch for each) */
++    unsigned any = 0;
+     for (int i = 0; i < HOUSE_COUNT; i++) {
+-        if (FlashCountPerPlayer[i]) {
+-            FlashCountPerPlayer[i]--;
+-        }
++        any |= FlashCountPerPlayer[i];
+     }
++    if (any)
++#endif
++        for (int i = 0; i < HOUSE_COUNT; i++) {
++            if (FlashCountPerPlayer[i]) {
++                FlashCountPerPlayer[i]--;
++            }
++        }
+ 
+     if (FlashCount) {
+         FlashCount--;
+diff --git a/redalert/help.cpp b/redalert/help.cpp
+index 42a2df9..9a85eb7 100644
+--- a/redalert/help.cpp
++++ b/redalert/help.cpp
+@@ -265,6 +265,11 @@ void HelpClass::Draw_It(bool forced)
+ 
+     forced = false; // TCTCTCTC
+     if (Text != TXT_NONE && (forced || !CountDownTimer)) {
++#ifdef SHADEREMU
++        /* the map's page gets more than holes here (gl.cpp) */
++        extern void ShaderEmu_GL_Mark(int x0, int y0, int x1, int y1);
++        ShaderEmu_GL_Mark(DrawX - 1, DrawY - 1, DrawX + MAX(Width, 64) + 2, DrawY + 2 * FontHeight + 1);
++#endif
+ 
+         if (LogicPage->Lock()) {
+             Plain_Text_Print(Text, DrawX, DrawY, Color, BLACK, TPF_MAP | TPF_NOSHADOW);
+diff --git a/redalert/house.cpp b/redalert/house.cpp
+index f1fd2c8..4dc74f1 100644
+--- a/redalert/house.cpp
++++ b/redalert/house.cpp
+@@ -228,6 +228,35 @@ fixed HouseClass::Tiberium_Fraction(void) const
+  *=============================================================================================*/
+ HouseClass* HouseClass::As_Pointer(HousesType house)
+ {
++#ifdef SHADEREMU
++    /*
++    ** Asked thousands of times a frame, mostly for houses that are not in the game: where each
++    ** was found is remembered (and checked), and which are missing, while the count is the same.
++    */
++    static int count = -1;
++    static unsigned missing;
++    static unsigned char where[32];
++    if (count != Houses.Count()) {
++        count = Houses.Count();
++        missing = 0;
++    }
++    if ((unsigned)house < 32) {
++        if (missing & (1u << house)) {
++            return (0);
++        }
++        if (where[house] < count && Houses.Ptr(where[house])->Class->House == house) {
++            return (Houses.Ptr(where[house]));
++        }
++        for (int index = 0; index < count; index++) {
++            if (Houses.Ptr(index)->Class->House == house) {
++                where[house] = (unsigned char)index;
++                return (Houses.Ptr(index));
++            }
++        }
++        missing |= 1u << house;
++        return (0);
++    }
++#endif
+     if (house != HOUSE_NONE) {
+         for (int index = 0; index < Houses.Count(); index++) {
+             if (Houses.Ptr(index)->Class->House == house) {
+@@ -6132,7 +6161,7 @@ int HouseClass::AI_Unit(void)
+         */
+         for (int uindex = 0; uindex < Units.Count(); uindex++) {
+             UnitClass* unit = Units.Ptr(uindex);
+-            if (unit != NULL && unit->Is_Recruitable(this) && counter[unit->Class->Type] > 0) {
++            if (unit != NULL && counter[unit->Class->Type] > 0 && unit->Is_Recruitable(this)) {
+                 counter[unit->Class->Type]--;
+             }
+         }
+@@ -6270,7 +6299,7 @@ int HouseClass::AI_Vessel(void)
+         */
+         for (int vindex = 0; vindex < Vessels.Count(); vindex++) {
+             VesselClass* unit = Vessels.Ptr(vindex);
+-            if (unit != NULL && unit->Is_Recruitable(this) && counter[unit->Class->Type] > 0) {
++            if (unit != NULL && counter[unit->Class->Type] > 0 && unit->Is_Recruitable(this)) {
+                 counter[unit->Class->Type]--;
+             }
+         }
+@@ -6387,7 +6416,7 @@ int HouseClass::AI_Infantry(void)
+         */
+         for (int uindex = 0; uindex < Infantry.Count(); uindex++) {
+             InfantryClass* infantry = Infantry.Ptr(uindex);
+-            if (infantry != NULL && infantry->Is_Recruitable(this) && counter[infantry->Class->Type] > 0) {
++            if (infantry != NULL && counter[infantry->Class->Type] > 0 && infantry->Is_Recruitable(this)) {
+                 counter[infantry->Class->Type]--;
+             }
+         }
+diff --git a/redalert/init.cpp b/redalert/init.cpp
+index b6b00d7..d28dac0 100644
+--- a/redalert/init.cpp
++++ b/redalert/init.cpp
+@@ -57,6 +57,9 @@
+  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ 
+ #include "function.h"
++#ifdef SHADEREMU
++#include "common/host.h"
++#endif
+ #include "language.h"
+ #include "msgbox.h"
+ #include "loaddlg.h"
+@@ -600,6 +603,13 @@ bool Select_Game(bool fade)
+             /*
+             **	Display menu and fetch selection from player.
+             */
++#ifdef SHADEREMU
++            {
++                extern bool InMainLoop; /* menus: the shared layer shows the page itself, and TDAWN_AUTO presses Return */
++                InMainLoop = false;
++                host_scene_drop(); /* and the page is all there is to show */
++            }
++#endif
+             if (Special.IsFromInstall)
+                 selection = SEL_START_NEW_GAME;
+ 
+@@ -758,7 +768,13 @@ bool Select_Game(bool fade)
+                     } else {
+ #endif
+ #ifdef FIXIT_VERSION_3
++#ifdef SHADEREMU
++                        /* RALERT_SIDE=allies or soviet: no question (a run nobody is at) */
++                        switch (getenv("RALERT_SIDE") ? (getenv("RALERT_SIDE")[0] == 's' ? 2 : 0)
++                                                      : WWMessageBox().Process(TXT_CHOOSE, TXT_ALLIES, TXT_CANCEL, TXT_SOVIET)) {
++#else
+                         switch (WWMessageBox().Process(TXT_CHOOSE, TXT_ALLIES, TXT_CANCEL, TXT_SOVIET)) {
++#endif
+                         case 2:
+                             Scen.Set_Scenario_Name("SCU01EA.INI");
+                             break;
+@@ -1827,6 +1843,12 @@ void Init_Random(void)
+         /*
+         ** Set the optional user-specified seed
+         */
++#ifdef SHADEREMU
++        /* RALERT_SEED=N: the same game every run, for comparing pictures and timings */
++        if (getenv("RALERT_SEED")) {
++            CustomSeed = atoi(getenv("RALERT_SEED"));
++        }
++#endif
+         if (CustomSeed != 0) {
+             Seed = CustomSeed;
+         } else {
+diff --git a/redalert/map.cpp b/redalert/map.cpp
+index 471bef5..5705be4 100644
+--- a/redalert/map.cpp
++++ b/redalert/map.cpp
+@@ -60,6 +60,18 @@
+  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+ 
+ #include "function.h"
++#ifdef SHADEREMU
++extern bool ShaderEmu_GL_Live;
++void ShaderEmu_GL_Near(CELL cell);
++#define SHADEREMU_MOVED(cell)                                                                                          \
++    if (ShaderEmu_GL_Live) {                                                                                           \
++        ShaderEmu_GL_Near(cell);                                                                                       \
++    } else {                                                                                                           \
++        (*this)[cell].Redraw_Objects();                                                                                \
++    }
++#else
++#define SHADEREMU_MOVED(cell) (*this)[cell].Redraw_Objects()
++#endif
+ #include "lcwpipe.h"
+ #include "lcwstraw.h"
+ #include "common/endianness.h"
+@@ -1019,7 +1031,7 @@ void MapClass::Place_Down(CELL cell, ObjectClass* object)
+             if ((unsigned)newcell < MAP_CELL_TOTAL) {
+                 (*this)[newcell].Occupy_Down(object);
+                 (*this)[newcell].Recalc_Attributes();
+-                (*this)[newcell].Redraw_Objects();
++                SHADEREMU_MOVED(newcell);
+             }
+         }
+ 
+@@ -1029,7 +1041,7 @@ void MapClass::Place_Down(CELL cell, ObjectClass* object)
+             CELL newcell = cell + *list++;
+             if ((unsigned)newcell < MAP_CELL_TOTAL) {
+                 (*this)[newcell].Overlap_Down(object);
+-                (*this)[newcell].Redraw_Objects();
++                SHADEREMU_MOVED(newcell);
+             }
+         }
+     }
+@@ -1067,7 +1079,7 @@ void MapClass::Pick_Up(CELL cell, ObjectClass* object)
+             if ((unsigned)newcell < MAP_CELL_TOTAL) {
+                 (*this)[newcell].Occupy_Up(object);
+                 (*this)[newcell].Recalc_Attributes();
+-                (*this)[newcell].Redraw_Objects();
++                SHADEREMU_MOVED(newcell);
+             }
+         }
+ 
+@@ -1077,7 +1089,7 @@ void MapClass::Pick_Up(CELL cell, ObjectClass* object)
+             CELL newcell = cell + *list++;
+             if ((unsigned)newcell < MAP_CELL_TOTAL) {
+                 (*this)[newcell].Overlap_Up(object);
+-                (*this)[newcell].Redraw_Objects();
++                SHADEREMU_MOVED(newcell);
+             }
+         }
+     }
+@@ -1117,7 +1129,7 @@ void MapClass::Overlap_Down(CELL cell, ObjectClass* object)
+             CELL newcell = cell + *list++;
+             if ((unsigned)newcell < MAP_CELL_TOTAL) {
+                 (*this)[newcell].Overlap_Down(object);
+-                (*this)[newcell].Redraw_Objects();
++                SHADEREMU_MOVED(newcell);
+             }
+         }
+     }
+@@ -1157,7 +1169,7 @@ void MapClass::Overlap_Up(CELL cell, ObjectClass* object)
+             CELL newcell = cell + *list++;
+             if ((unsigned)newcell < MAP_CELL_TOTAL) {
+                 (*this)[newcell].Overlap_Up(object);
+-                (*this)[newcell].Redraw_Objects();
++                SHADEREMU_MOVED(newcell);
+             }
+         }
+     }
+@@ -1466,6 +1478,10 @@ int MapClass::Cell_Region(CELL cell)
+  *=========================================================================*/
+ int MapClass::Cell_Threat(CELL cell, HousesType house)
+ {
++#ifdef SHADEREMU
++    void ShaderEmu_Threat_Settle(void);
++    ShaderEmu_Threat_Settle();
++#endif
+     int threat = HouseClass::As_Pointer(house)->Regions[Map.Cell_Region(Map[cell].Cell_Number())].Threat_Value();
+     // using function for IsVisible so we have different results for different players - JAS 2019/09/30
+     if (!threat && Map[cell].Is_Visible(house)) {
+diff --git a/redalert/radar.cpp b/redalert/radar.cpp
+index 6211ff4..4981582 100644
+--- a/redalert/radar.cpp
++++ b/redalert/radar.cpp
+@@ -595,6 +595,23 @@ void RadarClass::Draw_It(bool forced)
+             **	If the radar is not active, then only draw the cover plate if forced to do so.
+             */
+             int val = (DoesRadarExist) ? MAX_RADAR_FRAMES : 0;
++#ifdef SHADEREMU
++            {
++                /* the same plate as last time, with nothing drawn over it since: it is there */
++                extern unsigned ShaderEmu_Sidebar_Drawn;
++                static int plate = -1;
++                static const void* plate_of;
++                static unsigned plate_after;
++                if (!forced && !FullRedraw && plate == val && plate_of == RadarAnim && plate_after == ShaderEmu_Sidebar_Drawn) {
++                    IsToRedraw = false;
++                    BEnd(BENCH_RADAR);
++                    return;
++                }
++                plate = val;
++                plate_of = RadarAnim;
++                plate_after = ShaderEmu_Sidebar_Drawn;
++            }
++#endif
+             CC_Draw_Shape(RadarAnim, val, RadX, RadY + (1 * RESFACTOR), WINDOW_MAIN, SHAPE_NORMAL);
+             FullRedraw = false;
+             IsToRedraw = false;
+diff --git a/redalert/sidebar.cpp b/redalert/sidebar.cpp
+index 928dc0e..220bfd9 100644
+--- a/redalert/sidebar.cpp
++++ b/redalert/sidebar.cpp
+@@ -497,7 +497,12 @@ bool SidebarClass::Factory_Link(int factory, RTTIType type, int id)
+  *=============================================================================================*/
+ void SidebarClass::Refresh_Cells(CELL cell, short const* list)
+ {
++#ifdef SHADEREMU
++    extern bool ShaderEmu_GL_Live;
++    if (*list == REFRESH_SIDEBAR && !ShaderEmu_GL_Live) {
++#else
+     if (*list == REFRESH_SIDEBAR) {
++#endif
+         IsToRedraw = true;
+         Column[0].IsToRedraw = true;
+         Column[1].IsToRedraw = true;
+@@ -740,6 +745,10 @@ bool SidebarClass::Scroll(bool up, int column)
+  *   10/28/94   JLB : Created.                                                                 *
+  *   12/31/1994 JLB : Split rendering off into the sidebar strip class.                        *
+  *=============================================================================================*/
++#ifdef SHADEREMU
++unsigned ShaderEmu_Sidebar_Drawn;
++#endif
++
+ void SidebarClass::Draw_It(bool complete)
+ {
+     PowerClass::Draw_It(complete);
+@@ -748,6 +757,10 @@ void SidebarClass::Draw_It(bool complete)
+ 
+     if (IsSidebarActive && (IsToRedraw || complete) && !Debug_Map) {
+         IsToRedraw = false;
++#ifdef SHADEREMU
++        extern unsigned ShaderEmu_Sidebar_Drawn; /* (radar.cpp: what was there is painted over) */
++        ShaderEmu_Sidebar_Drawn++;
++#endif
+ 
+         if (LogicPage->Lock()) {
+             /*
+diff --git a/redalert/theme.cpp b/redalert/theme.cpp
+index c7651fe..e64da34 100644
+--- a/redalert/theme.cpp
++++ b/redalert/theme.cpp
+@@ -191,6 +191,10 @@ char const* ThemeClass::Full_Name(ThemeType theme) const
+  *   09/08/1994 JLB : Created.                                                                 *
+  *   01/23/1995 JLB : Picks new song just as it is about to play it.                           *
+  *=============================================================================================*/
++#ifdef SHADEREMU
++bool ShaderEmu_No_Tune; /* (conquer.cpp: the main loop asks for a tune whenever none plays) */
++#endif
++
+ void ThemeClass::AI(void)
+ {
+     if (SampleType && !Debug_Quiet) {
+@@ -208,6 +212,25 @@ void ThemeClass::AI(void)
+             */
+             Play_Song(Pending);
+             Pending = THEME_PICK_ANOTHER;
++#ifdef SHADEREMU
++            /*
++            ** It did not start: a mission may name a tune the data lacks (the demo has two).
++            ** Another is picked while any may play; after four in a row, none is asked for again.
++            */
++            static int failed;
++            if (Still_Playing()) {
++                failed = 0;
++            } else {
++                bool any = false;
++                for (ThemeType t = THEME_FIRST; t < THEME_COUNT && !any; t++) {
++                    any = Is_Allowed(t);
++                }
++                if (!any || ++failed >= 4) {
++                    Pending = THEME_NONE;
++                    ShaderEmu_No_Tune = true;
++                }
++            }
++#endif
+         }
+         Sound_Callback();
+     }
+diff --git a/redalert/vortex.cpp b/redalert/vortex.cpp
+index e1b15cc..cf75749 100644
+--- a/redalert/vortex.cpp
++++ b/redalert/vortex.cpp
+@@ -124,8 +124,20 @@ ChronalVortexClass::~ChronalVortexClass(void)
+  * HISTORY:                                                                                    *
+  *    8/29/96 4:27PM ST : Created                                                              *
+  *=============================================================================================*/
++#ifdef SHADEREMU
++static bool ShaderEmu_Vortex_Pending;
++#endif
++
+ void ChronalVortexClass::Appear(COORDINATE coordinate)
+ {
++#ifdef SHADEREMU
++    if (ShaderEmu_Vortex_Pending) {
++        ShaderEmu_Vortex_Pending = false;
++        for (int i = 0; i < MAX_REMAP_SHADES; i++) {
++            Build_Fading_Table(GamePalette, &VortexRemapTables[i][0], 0, 240 - ((i * 256) / MAX_REMAP_SHADES));
++        }
++    }
++#endif
+     if (Active)
+         return;
+ 
+@@ -1113,11 +1125,15 @@ void ChronalVortexClass::Setup_Remap_Tables(TheaterType theater)
+             file.Read(VortexRemapTables, MAX_REMAP_SHADES * 256);
+         } else {
+ 
++#ifdef SHADEREMU
++            ShaderEmu_Vortex_Pending = true; /* (Appear) */
++#else
+             for (i = 0; i < MAX_REMAP_SHADES; i++) {
+                 Build_Fading_Table(GamePalette, &VortexRemapTables[i][0], 0, 240 - ((i * 256) / MAX_REMAP_SHADES));
+             }
+ 
+             file.Write(VortexRemapTables, MAX_REMAP_SHADES * 256);
++#endif
+         }
+     }
+ 

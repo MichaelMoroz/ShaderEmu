@@ -918,6 +918,7 @@ public static partial class ShaderEmuBuilder
         gpuKeys.other = consoleKeys;
         Apply(consoleKeys);
         Apply(gpuKeys);
+        Console(computer, terminal, consoleKeys);
 
         GameObject machineObject = new GameObject("Machine");
         machineObject.transform.SetParent(world, false);
@@ -1026,6 +1027,8 @@ public static partial class ShaderEmuBuilder
         Apply(machine);
 
         OnClick(power, machine, "Power");
+        PowerSign(computer, machine);
+        Gamepad(world, computer, machine, gpuKeys, pointer);
         OnClick(reset, machine, "ResetMachine");
         OnClick(pause, machine, "Pause");
 
@@ -1052,6 +1055,8 @@ public static partial class ShaderEmuBuilder
         Label(signs, "Display", "DISPLAY", 3500 + dispAt.x * 1000 - 750, 20, 1500, 80, 54, TextAnchor.MiddleCenter, dim);
         Label(signs, "Memory", "MEMORY (writes glow)", 3500 + memAt.x * 1000 - 850, 20, 1700, 80, 54, TextAnchor.MiddleCenter, dim);
         Scope(world, computer, panel, machine);   // after the signs: it renames the memory screen's
+        Remodel(world);   // last: the boxes above are where Blender's models go (ShaderEmuModels.cs)
+        Retro(world);     // and the panels in the manner of the room's decade (ShaderEmuRetro.cs)
 
         AssetDatabase.SaveAssets();
         EditorSceneManager.MarkSceneDirty(scene);

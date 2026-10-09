@@ -70,6 +70,30 @@ host_cycles(void)
 	return v;
 }
 
+#ifdef SHADEREMU_RA
+#define TITLE "Red Alert"	/* (Red Alert is built with this file too: linux/ralert) */
+#else
+#define TITLE "Tiberian Dawn"
+#endif
+
+/* GPU memory for the large pieces: the display's own framebuffer while nothing uses it (segl.h), else our share. */
+static void *
+big_memory(unsigned bytes)
+{
+	static unsigned char *spare;
+	static unsigned left = ~0u;
+
+	if (left == ~0u)
+		spare = seglMemorySpare(&left);
+	bytes = (bytes + 15) & ~15u;
+	if (spare && left >= bytes) {
+		spare += bytes;
+		left -= bytes;
+		return spare - bytes;
+	}
+	return seglMemory(bytes);
+}
+
 int
 host_open(int width, int height)
 {
@@ -90,7 +114,7 @@ host_open(int width, int height)
 		;
 	bare = width * scale + 2 * FRAME > info.cols || height * scale + CAPTION + FRAME > info.rows;
 	window = GrNewWindowEx(bare ? GR_WM_PROPS_NODECORATE | GR_WM_PROPS_NOAUTOMOVE : GR_WM_PROPS_APPWINDOW,
-		"Tiberian Dawn", GR_ROOT_WINDOW_ID, bare ? 0 : -1, bare ? 0 : -1, width * scale, height * scale, 0);
+		TITLE, GR_ROOT_WINDOW_ID, bare ? 0 : -1, bare ? 0 : -1, width * scale, height * scale, 0);
 	GrSelectEvents(window, GR_EVENT_MASK_KEY_DOWN | GR_EVENT_MASK_KEY_UP | GR_EVENT_MASK_BUTTON_DOWN |
 		GR_EVENT_MASK_BUTTON_UP | GR_EVENT_MASK_MOUSE_POSITION | GR_EVENT_MASK_CLOSE_REQ | GR_EVENT_MASK_UPDATE);
 	GrMapWindow(window);
@@ -101,7 +125,7 @@ host_open(int width, int height)
 	}
 	screen_w = width;
 	screen_h = height;
-	screen = seglMemory(2 * width * height);
+	screen = big_memory(2 * width * height);
 	cursor = seglMemory(CURSOR_MAX * CURSOR_MAX);
 	if (!screen || !cursor) {
 		fprintf(stderr, "tdawn: no GPU memory left\n");
@@ -215,7 +239,7 @@ host_scene_open(int cells)
 		return -1;
 	if (tiles)
 		return cells <= tile_count ? 0 : -1;
-	atlas = seglMemory(ATLAS_W * ATLAS_ROWS);
+	atlas = big_memory(ATLAS_W * ATLAS_ROWS);
 	masks = seglMemory(ATLAS_W / 8 * ATLAS_ROWS);
 	shades = seglMemory(SHADE_W * SHADE_H * 4);
 	tiles = seglMemory(cells * 64);

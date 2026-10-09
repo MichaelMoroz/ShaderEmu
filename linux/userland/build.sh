@@ -10,6 +10,10 @@ OUT=$REPO/build/images/linux/root
 mkdir -p "$OUT"
 rv32-cc -Os -Wall ${EMUINIT_FLAGS:-} "$HERE/emuinit.c" -o "$WORK/src/emuinit"
 riscv32-linux-strip -o "$OUT/emuinit" "$WORK/src/emuinit"
+# the console's terminals (docs/console.md)
+mkdir -p "$OUT/usr/bin"
+rv32-cc -Os -Wall "$HERE/emumux.c" -o "$WORK/src/emumux"
+riscv32-linux-strip -o "$OUT/usr/bin/emumux" "$WORK/src/emumux"
 # the sound card's test (docs/sound.md), and a second of 16-bit sound at 22,050 Hz to write to it
 mkdir -p "$OUT/usr/bin" "$OUT/usr/share"
 rv32-cc -O2 -Wall "$HERE/sndtest.c" -o "$WORK/src/sndtest"

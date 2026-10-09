@@ -9,6 +9,7 @@ Shader "ShaderEmu/DisplayShow"
         _TexSize ("Size of that texture", Vector) = (2048, 1024, 0, 0)
         _Size ("Size of the picture in it (0: off)", Vector) = (0, 0, 0, 0)
         _Aspect ("Width / height of the quad", Float) = 1.7777778
+        _Glow ("Brightness (above 1 it blooms)", Float) = 1
         _Off ("Colour while the display is off", Color) = (0.01, 0.011, 0.014, 1)
     }
     SubShader
@@ -25,6 +26,7 @@ Shader "ShaderEmu/DisplayShow"
             sampler2D _MainTex;
             float4 _TexSize, _Size, _Off;
             float _Aspect;
+            float _Glow;
 
             struct v2f {
                 float4 pos : SV_Position;
@@ -54,7 +56,7 @@ Shader "ShaderEmu/DisplayShow"
                 s = clamp(s, 0.5, size - 0.5);
                 float2 scale = float2(1.0, -1.0) / _TexSize.xy;   // row 0 is the texture's top
                 float3 c = tex2Dgrad(_MainTex, float2(0.0, 1.0) + s * scale, dx * scale, dy * scale).rgb;
-                return float4(c, 1);
+                return float4(c * _Glow, 1);
             }
             ENDCG
         }

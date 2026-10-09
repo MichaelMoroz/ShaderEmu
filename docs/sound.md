@@ -81,6 +81,8 @@ so its samples can be played where they lie.
 - **Quake** (`linux/quake/snd_shaderemu.c`, `docs/quake.md`): a sound is a voice pointed at its
   WAV in the pak file in the ROM, looped where the WAV says; 28 voices (8 for things, 2 for
   water and sky, 18 for the loudest of a level's own).
+- **Red Alert** (`docs/ralert.md`): Tiberian Dawn's driver and tool, with a pack of its own
+  (`ralert-sound.pak`: 294 sounds, among them the demo's two tunes, 12.8 MB).
 - **Tiberian Dawn** (`linux/tdawn/soundio_shaderemu.cpp`): `tools/make_tdawn_sound.py` turns the
   game's AUD files into ADPCM with checkpoints when the image is built (3.8 MB). The game's
   sounds are found in that pack by a hash of how their AUD file begins. A sound out of view

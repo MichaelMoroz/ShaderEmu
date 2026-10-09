@@ -77,6 +77,7 @@ struct Options {
     bool viz = false;         // memory view window
     int uartBurst = 0;        // input characters per handshake; 0 = what the shader declares
     bool resume = false;      // with no other arguments: resume the shell snapshot instead of booting
+    bool tabs = false;        // ask the guest for its console as several terminals (docs/console.md)
     bool desktop = false;     // ask the guest to start its desktop: the terminal mode, unless --no-desktop
     std::string vizCapture;   // BMP of the memory view, written at exit
     std::string gpuCapture;   // BMP of the GPU device's colour target, written at exit
@@ -164,6 +165,7 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
                        (and start the pc log there)
   --no-desktop         terminal mode: boot to the shell only (by default the guest starts its desktop);
                        --desktop asks for it in a run with other arguments
+  --tabs               the console as four terminals: 0x1e and a digit, either way, says whose bytes follow
   --dxc / --d3d11      backend: D3D12 with DXC-compiled DXIL, or D3D11 with FXC bytecode (what VRChat
                        runs). rvc_harness_dxc.exe defaults to --dxc. DXC implies NO_DOUBLES and, unless
                        --rvc is given, the experiments/rvc_opt shader (upstream does not compile with DXC).
@@ -280,6 +282,7 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--resume") o.resume = true;
         else if (a == "--no-desktop") o.desktop = false;
         else if (a == "--desktop") o.desktop = true;
+        else if (a == "--tabs") o.tabs = true;
         else if (a == "--viz-capture") { o.vizCapture = next("--viz-capture"); o.viz = true; }
         else if (a == "--no-doubles") o.noDoubles = true;
         else if (a == "--no-gpu") o.noGpu = true;
@@ -1004,7 +1007,7 @@ int main(int argc, char** argv) {
             mat.setInt("_InputButtons", pointer.buttons);
             mat.setInt("_HostMs", (int64_t)(uint32_t)(t * 1000.0));   // a clock programs read without a system call
             // bit 0: start the desktop at boot; then the largest screen this host shows, in 16s of pixels
-            mat.setInt("_HostFlags", (opt.desktop ? 1 : 0) | (kGpuTarget / 16) << 8 | (kGpuTarget / 16) << 16);
+            mat.setInt("_HostFlags", (opt.desktop ? 1 : 0) | (opt.tabs ? 2 : 0) | (kGpuTarget / 16) << 8 | (kGpuTarget / 16) << 16);
             mat.setInt("_InputKeySeq", keySeq);
             mat.setInt("_InputKeyCount", n);
             mat.setInt("_InputKey0", batch[0]);

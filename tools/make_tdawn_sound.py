@@ -1,6 +1,9 @@
 """Tiberian Dawn's sounds in a form the sound card plays where they lie in the ROM (docs/sound.md).
 
-  python3 tools/make_tdawn_sound.py OUT.pak SOUNDS.MIX SPEECH.MIX ... [TUNE.AUD ...]
+  python3 tools/make_tdawn_sound.py OUT.pak SOUNDS.MIX SPEECH.MIX ... [TUNE.AUD ...] [FOLDER ...]
+
+(Red Alert's go through it too, linux/ralert/build.sh: folders of its MIX files' contents,
+every file of which that is an AUD file is taken, whatever its name ends in.)
 
 The game's AUD files are IMA ADPCM in chunks with headers between them. The card's ADPCM
 voice wants the codes alone, and the decoder's state every 32 samples so that any sample can
@@ -13,6 +16,7 @@ The few files in Westwood's own 8-bit coding are stored decoded, as 8-bit PCM.
 
 --check decodes every entry again, the way the device does, and compares with a plain decode.
 """
+import os
 import struct
 import sys
 
@@ -140,8 +144,12 @@ def main():
     args = [a for a in sys.argv[1:] if a != '--check']
     out, sounds = args[0], {}
     for path in args[1:]:
-        # an archive of them, or one AUD file by itself (a tune)
-        for aud in ([open(path, 'rb').read()] if path.upper().endswith('.AUD') else mix_entries(path)):
+        # an archive of them, one AUD file by itself (a tune), or a folder of files
+        if os.path.isdir(path):
+            found = [open(os.path.join(path, name), 'rb').read() for name in sorted(os.listdir(path))]
+        else:
+            found = [open(path, 'rb').read()] if path.upper().endswith('.AUD') else mix_entries(path)
+        for aud in found:
             made = convert(aud)
             if made:
                 key = fnv(aud[:KEY_BYTES])

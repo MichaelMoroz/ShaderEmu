@@ -1,5 +1,8 @@
 # The volume display
 
+The wall screen described here is gone from the world: the holodeck (`docs/holodeck.md`) shows
+the same frame as a room. What a program gives, and the passes, are as below.
+
 A 3D program's picture is one view of its scene. The volume display shows the scene itself: in
 the VRChat world a third screen hangs on the left wall, by the console, and it is a window. Behind it a
 visitor sees the program's geometry from wherever their own eyes are, in stereo, in depth. The
@@ -41,8 +44,12 @@ program's camera space (`volume_vertex` in `src/gpu.h`), and from there behind t
   wall: glxgears' is 2 units wide, 35 units in front of gears 8 units across. With the plane
   among the gears they are at the wall, and what is nearer than the plane is cut away at it
   (a clip distance in `GpuVolume.shader`): the screen is a window, and nothing is before it.
-- One pass. Every command is drawn solid, with depth, whatever pass it asked for: blended and
-  added surfaces are opaque here. Textures, keyed texels and lit colours are as the GPU's.
+- Four passes, the GPU's own (`docs/gpu.md`) in its order: solid, blended, added, multiplied,
+  all with the depth test and only the first writing depth. Quake's light maps multiply its
+  walls here as they do in its picture, and its glows are added. A command for one of the
+  GPU's passes without depth (4 to 7) is drawn in the pass that blends alike. Textures, keyed
+  texels and lit colours are as the GPU's. Blending is in Unity's linear colours, the GPU's is
+  in the picture's own: a product comes out the same, a sum or a mix a little lighter.
 - **Stencil.** `VolumeMask.shader` on the screen's quad marks the stencil where it is in view
   and empties colour and depth there, so the scene shows however far it reaches behind the
   wall; the scene is drawn where the mark is; `VolumeSeal.shader` then gives those pixels the

@@ -33,6 +33,7 @@ public class EmuShareHub : UdonSharpBehaviour
     public TextMeshProUGUI[] rowLabels;
     public GameObject moreButton;
     public Color rowColour, pickedColour;
+    public EmuStations stations;            // the classroom's computers: they show whoever has one (docs/stations.md)
     public bool selfTest;                   // watch this machine through the stream
     public bool netTest;                    // two clients test themselves and log (docs/share.md)
 
@@ -312,7 +313,15 @@ public class EmuShareHub : UdonSharpBehaviour
                 share.watchedMe = false;
                 if (pointerFrom == share.ownerId) DropPointer();
             }
+            // somebody's copy of this player's station wants everything again
+            if (share.askFrom == myId && share.askCount != share.seenAsk)
+            {
+                share.seenAsk = share.askCount;
+                FullRefresh();
+            }
         }
+        // a station is watched by everybody in the room
+        if (count == 0 && stations != null && mine != null && mine.station >= 0 && shareCount > 0) count = 1;
         viewers = count;
         ShowLabels();
     }
@@ -723,10 +732,18 @@ public class EmuShareHub : UdonSharpBehaviour
 
     // ---- receiving ----
 
+    // For EmuStations: this player's own object, the others', and "send my fields".
+    public EmuShare Mine() { return mine; }
+    public int MyId() { return myId; }
+    public int ShareCount() { return shareCount; }
+    public EmuShare ShareAt(int i) { return shares[i]; }
+    public void StateOut() { stateOut = true; }
+
     public void Received(EmuShare share)
     {
         if (share == mine) return;
         stateDirty = true;
+        if (stations != null) stations.Received(share);
         if (target != 0 && share == targetShare) Consume(share);
         if (share.watchedMe && share.watching == myId) TakeInput(share);
     }

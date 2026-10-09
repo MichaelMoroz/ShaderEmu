@@ -24,6 +24,7 @@ public class EmuPointer : UdonSharpBehaviour
     public Material solidMaterial;     // a beam whose trigger or grip is held
     public float pitch;                // degrees the beam is tipped towards the palm
     public TextMeshProUGUI pitchLabel;
+    [HideInInspector] public bool away;   // the game controller is in the player's hands: no beams (EmuGamepad)
 
     private const int Nothing = -1, Display = 0;   // a target; 1 and up: keyboard number + 1
 
@@ -136,6 +137,15 @@ public class EmuPointer : UdonSharpBehaviour
             foundKey = keyboards[k].KeyAt(hit.point);
         }
 
+        // What stands between stops the beam (a classroom's monitor before the wall's display): it
+        // used to reach through, and move the pointer from behind a thing the hand pointed at.
+        if (landed && Physics.Raycast(ray, out hit, best - 0.03f, 1, QueryTriggerInteraction.Ignore))
+        {
+            landed = false;
+            found = Nothing;
+            foundKey = -1;
+        }
+
         // the key under the beam lights up; the one it left goes dark
         int was = target[h];
         if (was >= 1 && was != found) keyboards[was - 1].SetHover(h, -1);
@@ -175,6 +185,12 @@ public class EmuPointer : UdonSharpBehaviour
         Init();
         VRCPlayerApi player = Networking.LocalPlayer;
         if (player == null) return;
+        if (away)
+        {
+            Idle(0);
+            Idle(1);
+            return;
+        }
         if (player.IsUserInVR())
         {
             for (int h = 0; h < 2; h++)
@@ -242,6 +258,7 @@ public class EmuPointer : UdonSharpBehaviour
     public override void InputUse(bool value, UdonInputEventArgs args)
     {
         Init();
+        if (away && value) return;
         int h = Hand(args);
         if (value)
         {
@@ -270,7 +287,7 @@ public class EmuPointer : UdonSharpBehaviour
         VRCPlayerApi player = Networking.LocalPlayer;
         if (player == null || !player.IsUserInVR()) return;
         int h = Hand(args);
-        grip[h] = value && target[h] == Display;
+        grip[h] = value && target[h] == Display && !away;
     }
 
     // ---- the beam's angle (buttons on the control panel) ----

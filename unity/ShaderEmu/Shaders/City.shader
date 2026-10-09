@@ -5,7 +5,9 @@ Shader "ShaderEmu/City"
     Properties
     {
         _MainTex ("Texture", 2D) = "black" {}
-        _Haze ("Haze", Color) = (0.12, 0.09, 0.10, 1)
+        _Haze ("Haze", Color) = (0.035, 0.032, 0.045, 1)
+        _Dark ("Unlit surfaces", Float) = 0.6
+        _Bright ("Lights (above 1 they bloom)", Float) = 5
     }
     SubShader
     {
@@ -20,6 +22,8 @@ Shader "ShaderEmu/City"
 
             sampler2D _MainTex;
             float4 _Haze;
+            float _Dark, _Bright;
+            float _UdonWeatherFlash;   // lightning (EmuWeather)
 
             struct v2f {
                 float4 pos : SV_Position;
@@ -37,7 +41,10 @@ Shader "ShaderEmu/City"
 
             float4 frag(v2f i) : SV_Target {
                 float3 c = tex2D(_MainTex, i.uv).rgb * i.colour.rgb;
-                return float4(lerp(c, _Haze.rgb, i.colour.a), 1);
+                // a lit window is a lamp: many times brighter than the wall round it
+                float3 lit = c * _UdonWeatherFlash * 2.5;
+                c = c * lerp(_Dark, _Bright, smoothstep(0.12, 0.7, max(c.r, max(c.g, c.b)))) + lit;
+                return float4(lerp(c, _Haze.rgb * (1.0 + 10.0 * _UdonWeatherFlash), i.colour.a), 1);
             }
             ENDCG
         }

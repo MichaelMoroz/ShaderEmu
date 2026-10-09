@@ -23,7 +23,11 @@ namespace
 {
 const int kVoices = 16, kKeyBytes = 44;
 const int kGain = 160;   // of 256: room for a fight's sounds on top of each other before the mix clips
+#ifdef SHADEREMU_RA
+const char kPack[] = "/usr/share/ralert-sound.pak";   // (Red Alert is built with this file too: linux/ralert)
+#else
 const char kPack[] = "/usr/share/tdawn-sound.pak";
+#endif
 
 struct Sound {
     uint32_t key, kind, rate, samples, data, marks;
@@ -214,6 +218,10 @@ void Free_Sample(void const* sample)
 int File_Stream_Sample_Vol(char const* filename, int volume, bool real_time_start)
 {
     unsigned char begins[kKeyBytes] = {};
+    if (getenv("TDAWN_SOUND_LOG") != nullptr) {
+        fprintf(stderr, "tdsound: the tune %s%s\n", filename ? filename : "(none)",
+                SampleType == SAMPLE_NONE ? ": no sound" : filename && Find_File(filename) ? "" : ": no such file");
+    }
     if (SampleType == SAMPLE_NONE || filename == nullptr || !Find_File(filename)) {
         return -1;
     }

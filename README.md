@@ -36,6 +36,8 @@ and it is the only way this computer becomes usable.
   asks the host, which fetches the page and writes it into memory in one shader pass.
 - **Doom** (`docs/doom.md`): Microwindows' port, with the level drawn by the machine's GPU
   through OpenGL instead of by its CPU.
+- **Red Alert** (`docs/ralert.md`): the same source tree's Red Alert with the 1996 demo's data
+  (a Soviet and an Allied mission), on Tiberian Dawn's layer: the map on the GPU, sound and music.
 - **Command & Conquer** (`docs/tdawn.md`): Vanilla Conquer's Tiberian Dawn with the 1995 demo's
   missions, drawn in software and shown by the GPU: it plays, at a half to two thirds of its speed.
 - **Quake** (`docs/quake.md`): id's GLQuake with the shareware episode, everything drawn by the
@@ -139,7 +141,7 @@ To rebuild the guest software (WSL, no root; everything goes to `~/shaderemu-lin
   that build the scene.
 - `tools/` – the image builder, a software model of the GPU (`gpu_reference.py`), profilers
   (`pc_profile.py`, `boot_profile.py`, `dxil_path.py`), the speed test and the console viewer.
-- `docs/` – one file per subject: `boot`, `gpu`, `display`, `input`, `fetch`, `volume`, `nanox`, `cc`, `doom`, `tdawn`.
+- `docs/` – one file per subject: `boot`, `gpu`, `display`, `input`, `fetch`, `volume`, `nanox`, `cc`, `doom`, `tdawn`, `ralert`, `console`, `gamepad`.
 - `rvc/` – a clone of upstream rvc (not part of this repository): its boot images and the
   reference shader.
 
@@ -160,7 +162,10 @@ pimaker; Linux; musl; BusyBox; GCC and LLVM; [Microwindows](https://github.com/g
 by Greg Haerr and contributors, with its port of Doom; TinyCC and jrrk2's riscv32 port of it; DOOM and [Quake](https://github.com/id-Software/Quake) by id Software; [Vanilla Conquer](https://github.com/TheAssemblyArmada/Vanilla-Conquer)
 and Command & Conquer by Westwood Studios (source released by Electronic Arts);
 [ClassiCube](https://github.com/ClassiCube/ClassiCube) by UnknownShadow200 and contributors; glxgears from the
-Mesa demos; photographs from Unsplash; VRChat's SDK and UdonSharp;
+Mesa demos; photographs from Unsplash; furniture, plants and surfaces of the VRChat room from
+[Poly Haven](https://polyhaven.com) (CC0); [LTCGI](https://github.com/PiMaker/ltcgi) by pimaker,
+[VRC Light Volumes](https://github.com/REDSIM/VRCLightVolumes) by RED_SIM and
+[Mochie's shaders](https://github.com/MochiesCode/Mochies-Unity-Shaders) for the room's light and rain; VRChat's SDK and UdonSharp;
 [ShaderAudio](https://gitlab.com/lox9973/ShaderAudio) by lox9973, whose way of getting sound out of
 a shader the sound card follows.
 

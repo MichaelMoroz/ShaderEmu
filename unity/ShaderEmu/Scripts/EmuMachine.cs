@@ -24,7 +24,8 @@ public class EmuMachine : UdonSharpBehaviour
     public Material tickMaterial;           // MachineTick.shader: CPUTick
     public Material machineMaterial;        // Machine.shader: passes Commit and GPUControl
     public Material gpuMaterial;            // the GPU mesh's material
-    public Material volumeMaterial;         // the volume display's: the same lists, seen from the room
+    public Material volumeMaterial;         // the holodeck's: the same lists, seen from the room
+    public Material volumeMaskMaterial;     // and what marks where they show, which looks whether there is a frame
     public Camera gpuCamera;                // disabled: rendered from here, once a round
     public Material displayMaterial;        // Display.shader: decodes the display from the state
     public RenderTexture displayTexture;    // the decoded picture, a pixel a texel, with mipmaps
@@ -59,6 +60,9 @@ public class EmuMachine : UdonSharpBehaviour
     public TextMeshProUGUI statsText;
     public TextMeshProUGUI speedLabel;
     public TextMeshProUGUI powerLabel;
+    public TextMeshProUGUI powerSign;  // on the button on the computer itself, and the line under it
+    public Image powerPlate;           // that button: red while off, green while running
+    public TextMeshProUGUI powerSays;
     public TextMeshProUGUI pauseLabel;
     public Slider speedSlider;         // whole steps: 2,048 instructions a frame, doubled per step
     public TextMeshProUGUI modeLabel;  // on the button that picks how the slider is read
@@ -142,7 +146,7 @@ public class EmuMachine : UdonSharpBehaviour
         if (speedSlider != null) SetBudget(2048 << (int)speedSlider.value);
         ShowLabels();
         if (powerOnAtStart) PowerOn();
-        else Say("The computer is off.\r\n\r\nPress \"Power on\" on the panel to the right.\r\n");
+        else Say("The computer is off.\r\n\r\nPress the red POWER button on the computer\r\n(the tower by the desk's right end), or \"Power on\" on the panel.\r\n");
     }
 
     private void Say(string text)
@@ -233,10 +237,17 @@ public class EmuMachine : UdonSharpBehaviour
                                      : "up to " + (rounds * ticks).ToString("N0") + " instructions a frame";
         if (modeLabel != null) modeLabel.text = steady ? "Steady: per second" : "Fixed: per frame";
         if (powerLabel != null) powerLabel.text = powered ? "Power off" : "Power on";
+        if (powerSign != null) powerSign.text = "POWER";
+        if (powerPlate != null) powerPlate.color = powered ? new Color(0.10f, 0.62f, 0.20f) : new Color(0.80f, 0.07f, 0.05f);
+        if (powerSays != null) powerSays.text = powered ? "Running. Press to switch off." : "Off. Press to start.";
         if (pauseLabel != null) pauseLabel.text = paused ? "Resume" : "Pause";
         displayMaterial.SetFloat("_Power", powered ? 1f : 0f);
         ShowDisplay();
     }
+
+    // This machine's own display: its size, 0 while it is off.
+    public int OwnWidth() { return powered ? displayWidth : 0; }
+    public int OwnHeight() { return powered ? displayHeight : 0; }
 
     private void ShowDisplay()
     {
@@ -245,7 +256,9 @@ public class EmuMachine : UdonSharpBehaviour
         bool theirs = UseRemote();
         displayMaterial.SetVector("_HostPointer", new Vector4(theirs ? remoteX : pointerX, theirs ? remoteY : pointerY,
                                                               theirs || (pointerOn && !inputAway) ? 1 : 0, 0));
-        VRCGraphics.Blit(current, displayTexture, displayMaterial);
+        // off: black, as the picture is also the light the display gives the room (LTCGI)
+        if (powered || theirs) VRCGraphics.Blit(current, displayTexture, displayMaterial);
+        else VRCGraphics.Blit(blackTexture, displayTexture);
         if (showRemote) return;
         shownWidth = powered ? displayWidth : 0;
         shownHeight = powered ? displayHeight : 0;
@@ -323,7 +336,7 @@ public class EmuMachine : UdonSharpBehaviour
         // the host flags: the desktop at boot, and the largest screen the GPU's target can show
         // (in 16s of pixels: the word must stay within what a material's number holds exactly)
         RenderTexture target = gpuCamera.targetTexture;
-        machineMaterial.SetInt("_HostFlags", 1 | (target.width / 16) << 8 | (target.height / 16) << 16);
+        machineMaterial.SetInt("_HostFlags", 3 | (target.width / 16) << 8 | (target.height / 16) << 16);
         VRCPlayerApi player = Networking.LocalPlayer;
         tickMaterial.SetInt("_PlayerID", player != null ? player.playerId : 0);
         if (consoleKeyboard != null) consoleKeyboard.Flush();
@@ -687,6 +700,7 @@ public class EmuMachine : UdonSharpBehaviour
         heatMaterial.SetTexture("_State", current);
         if (stateViewMaterial != null) stateViewMaterial.SetTexture("_State", current);
         volumeMaterial.SetTexture("_State", current);
+        if (volumeMaskMaterial != null) volumeMaskMaterial.SetTexture("_State", current);
 
         if (Time.time - statsAt >= 0.5f) ShowStats();
     }

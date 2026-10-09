@@ -642,9 +642,70 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   tagged with a table, points) beats any loop that writes vertices: Quake's models went from
   244k to 93k instructions a fight frame and its particles from 150 each to 70.
 - A bash heredoc does not carry `\n` in a C string into a file even when quoted `'EOF'`.
+- Red Alert (`docs/ralert.md`): `linux\ralert\build.sh` after Tiberian Dawn's (20 s), then the
+  image and snapshot. To measure it: `TDAWN_AUTO=1 RALERT_SIDE=soviet RALERT_SEED=7
+  RALERT_FRAMES=300 ralert` and wait for `ralert: done` (two minutes); `rastat:` lines, and
+  the state sums `01e0dd60` (Soviet) and `ea72a5d1` (Allied) at frame 300, which a change to
+  the game must leave. It is built from `linux\tdawn`'s shared files: after a change to
+  `host.c`, `shaderemu.cpp` or `soundio_shaderemu.cpp` build and check both games.
+- Its patch is a diff over Tiberian Dawn's: apply that to a clean tree, `git add -A`, edit,
+  and save `git diff` as `linux\ralert\vanilla-conquer.patch`.
+- In Red Alert a cell is "mapped" when any of it shows and "visible" when all of it does; in
+  Tiberian Dawn it is the other way round. A renderer carried over with the names swapped
+  draws the shroud's edge solid black: compare with the game's own drawing at a held frame.
+- When a part of a frame is neither logic nor the map, count the game's own shape drawing by
+  window and size before guessing: Red Alert's 160k was one 160 x 141 plate drawn again for
+  every unit that moved, and a million a frame was a tune being looked for that the demo lacks.
+- The ROM is 168 MB now (2048 x 5123 texels); Unity's importer takes textures up to 8,192 high.
+- The console is four terminals in the world (`docs/console.md`): `emumux` in the guest, started
+  by `emuinit` when the host flags' bit 1 is set (`--tabs` in the harness; a run without it is
+  as before). A test of the world's console reads `EmuTerminal`'s `grid` by terminal, and must
+  import the boot images first: tabs with an image that has no `emumux` type `0x1e` at a shell.
+- The volume display draws the frame's commands in four passes, as the GPU blends them
+  (`GpuVolumePass.cginc`, `docs/volume.md`). To check it, run Quake in play mode, render a
+  camera 1.4 m before "Volume display" with "Volume content" on and off, and compare the
+  changed pixels' mean colour with the game's own picture: light maps drawn solid are grey.
+- The game controllers (`docs/gamepad.md`, two `EmuGamepad`s, no menu) are tested in play mode with
+  `RunInputEvent` and the display keyboard's `queue`. Its station and its fit in a hand are
+  untried in a headset. The power button is a small sign on the tower ("Power sign").
+- A new UdonSharp behaviour's program asset must exist and be compiled before an editor script
+  can fill the behaviour in ("outdated script version"): run such a menu command twice.
+- A program built on `linux\tdawn\host.c` and Quake both take the display's spare framebuffer
+  for GPU memory (`seglMemorySpare`): only one of them can run at a time.
 - Quake's sound (`linux/quake/snd_shaderemu.c`) is checked like any of the card's: a timedemo
   with `--fixed-dt 0.004 --sound-capture` and `tools\sound_reference.py ... --rom`. Measure the
   capture's clipped samples too: at the game's own level a fight clipped 1.5% of them.
 - The Start menu's lines are `Folder/Label=command` (`nxbar.c`, `docs/nanox.md`); a new program's
   build names its folder. `NXBAR_SHOW=Games nxbar` opens it there for a test, and the menu's
   window is the layer 150 wide in a snapshot, 20 pixels a row plus 4.
+- The room's models are made by scripts (`docs/world.md`): `python world\textures.py`, then
+  Blender with `-b --python world\build.py` (5 s), copy `unity/ShaderEmu` over, and
+  "ShaderEmu/Put the modelled room into the open scene", then bake. Geometry is written in
+  Unity's coordinates; a screen moved in the builder must be moved in `world/computer.py` too.
+- The room needs three shader packages in the Unity project (`world\install_packages.py`):
+  without them the builder does not compile. LTCGI's own adapter for Light Volumes is left
+  out: it is written for version 3 of them, and with 2.1.3 UdonSharp refuses it and compiles
+  nothing else either.
+- A Poly Haven model may be a kit laid out for show (pens in a row, four trees side by side):
+  list its parts and sizes before placing it (`parts=` in `b.asset`), and never cut its
+  triangles unless it is a box: chairs and leaves came apart.
+- The room's light is baked on the graphics card, once, after everything else is in: a bake
+  on the processor was at 49% after most of half an hour.
+- The builder's boxes for the room are colliders only now (`StripBoxes` in
+  `ShaderEmuModels.cs`): a new prop needs a model in `world/`, and a box in the builder only if
+  it must stop a player.
+- The holodeck (`docs/holodeck.md`) replaces the volume display's wall screen: through the den's
+  left wall, drawn by `GpuHolodeck.shader` wherever the room's own faces are in view. The
+  corridor is behind the back wall and is where a visitor arrives. Both are `world/annex.py`
+  and `Annex()` in `ShaderEmuHolodeck.cs`; a doorway moved in one must move in the other and in
+  `world/room.py`.
+- The classroom's eight computers (`docs/stations.md`) show their owners' displays: a place is
+  a synced number in a visitor's own `EmuShare`. `EmuStations` is a new Udon behaviour: after a
+  change to its fields run "Create Udon program assets" and the room's menu command twice.
+- A model's own objects cannot be moved out of its instance in the scene: copy them and put the
+  model's away (`Annex()` does that for the holodeck's mask and control).
+- A panel's lettering is part of its plate (`Plate.shader`, `docs/world.md`): run "Restyle the
+  panels" after anything that makes or changes a panel, or its labels are unlit canvas text.
+- Udon's variables are empty outside play mode (`GetProgramVariable` gives null): read a
+  behaviour's fields from its C# proxy in the editor, and from Udon while playing.
+

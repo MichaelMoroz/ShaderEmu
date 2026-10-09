@@ -378,8 +378,34 @@ bool volume_command(uint id, out uint base, out uint4 head) {
     if (head.r != CMD_DRAW || id < head.a || id + 3 > head.a + head.b) return false;
     uint4 how = ram(base + 1);
     if ((how.r & VERTEX_MODELVIEW) == 0 || (how.r & 0xff) == VERTEX_SCREEN) return false;
+#ifdef GPU_VOLUME_PASS
+    // the pass being drawn: the command's own, or for passes 4-7 (no depth test) the one that blends alike
+    if ((FRAGMENT_PASS(how.g) & 3) != GPU_VOLUME_PASS) return false;
+#endif
     // a projection whose w does not come from z draws flat on the picture (a status bar)
     return ram(texel_of(how.b) + 3).b != 0;
+}
+
+// The frame's camera: the modelview of its first draw with a place in space, which for a
+// program that draws its world before what moves in it is the view alone. Rows of its
+// rotation and its translation: camera = rows * world + move. False: no such draw.
+bool volume_view(out float3 rx, out float3 ry, out float3 rz, out float3 move) {
+    rx = float3(1, 0, 0); ry = float3(0, 1, 0); rz = float3(0, 0, 1); move = 0;
+    uint4 frame = ram(VOLUME_LIST);
+    uint list = texel_of(frame.r), count = min(frame.g, 24u);
+    if (frame.r == 0) return false;
+    for (uint i = 0; i < count; i++) {
+        uint at = list + 4 * i;
+        uint4 how = ram(at + 1);
+        if (ram(at).r != CMD_DRAW || (how.r & VERTEX_MODELVIEW) == 0 || (how.r & 0xff) == VERTEX_SCREEN) continue;
+        uint u = texel_of(how.b);
+        if (ram(u + 3).b == 0) continue;
+        bool fl = (how.r & VERTEX_FLOAT) != 0;
+        float4 mx = gpu_number(fl, ram(u + 4)), my = gpu_number(fl, ram(u + 5)), mz = gpu_number(fl, ram(u + 6));
+        rx = mx.xyz; ry = my.xyz; rz = mz.xyz; move = float3(mx.w, my.w, mz.w);
+        return true;
+    }
+    return false;
 }
 
 // Mesh vertex `id` of such a command as the program's camera sees it, in the camera's own

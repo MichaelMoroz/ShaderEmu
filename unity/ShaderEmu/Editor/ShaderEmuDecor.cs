@@ -591,8 +591,8 @@ public static partial class ShaderEmuBuilder
         // ---- a chair by the desk, out of the way of the keyboards
         Transform chair = new GameObject("Chair").transform;
         chair.SetParent(decor, false);
-        chair.localPosition = new Vector3(-3.75f, 0, halfD - 1.55f);
-        chair.localEulerAngles = new Vector3(0, 150f, 0);
+        chair.localPosition = new Vector3(3.0f, 0, halfD - 1.7f);   // as world/computer.py: not before the holodeck's door
+        chair.localEulerAngles = new Vector3(0, 205f, 0);
         Prim(chair, PrimitiveType.Cylinder, "Chair base", new Vector3(0, 0.03f, 0), new Vector3(0.5f, 0.04f, 0.5f), metalMat);
         Prim(chair, PrimitiveType.Cylinder, "Chair post", new Vector3(0, 0.25f, 0), new Vector3(0.05f, 0.42f, 0.05f), metalMat);
         RBox(chair, "Chair seat", new Vector3(0, 0.48f, 0), new Vector3(0.46f, 0.08f, 0.46f), sofaMat, 0.035f);
@@ -632,7 +632,7 @@ public static partial class ShaderEmuBuilder
     // stands on. Text only, so nothing on it takes the laser.
     static void About(Transform decor, float halfW, Material frameMat)
     {
-        const float wide = 2.3f, high = 1.7f, centreZ = -0.2f, centreY = 1.72f;
+        const float wide = 2.3f, high = 1.7f, centreZ = -0.2f, centreY = 1.86f;   // its foot clear of the panelling (world/room.py)
         Box(decor, "About frame", new Vector3(-halfW + 0.015f, centreY, centreZ), new Vector3(0.03f, high + 0.08f, wide + 0.08f), frameMat, false);
         RectTransform board = Panel(decor, "About", new Vector3(-halfW + 0.034f, centreY, centreZ), new Vector3(0, -90f, 0),
                                     wide * 1000, high * 1000, new Color(0.05f, 0.055f, 0.07f));
@@ -655,17 +655,7 @@ public static partial class ShaderEmuBuilder
               left, 200, columnWide, 400, 33, TextAnchor.UpperLeft, body);
 
         Label(board, "Do head", "WHAT YOU CAN DO", left, 620, columnWide, 44, 36, TextAnchor.MiddleLeft, head);
-        Label(board, "Do",
-              "Press Power on the control panel. Linux boots in a few seconds and starts the desktop.\n\n" +
-              "DISPLAY: each hand's beam is the mouse (trigger = left, grip = right, right stick = wheel).\n" +
-              "Keyboards on the desk: both hands type, or press 'Use my keyboard' to use your real one.\n" +
-              "Start menu (or the Win key): Terminal, Editor, Files, Web, Paint, Settings, Monitor, " +
-              "Doom, glxgears and games. Web opens only a fixed list of sites, not the links inside " +
-              "them: VRChat lets a world load only addresses it was built with.\n" +
-              "CONSOLE: the machine's serial line, a Linux shell of its own.\n" +
-              "MEMORY: all of the machine's memory at once; what is being written glows.\n" +
-              "Speed: how many instructions the machine runs each frame.",
-              left, 670, columnWide, 578, 33, TextAnchor.UpperLeft, body);
+        Label(board, "Do", DoText, left, 670, columnWide, 578, DoSize, TextAnchor.UpperLeft, body);   // (ShaderEmuGamepad.cs)
 
         Label(board, "How head", "WHY IT IS USABLE AT ALL", left, 1250, columnWide, 44, 36, TextAnchor.MiddleLeft, head);
         Label(board, "How",
@@ -688,6 +678,8 @@ public static partial class ShaderEmuBuilder
               "glxgears by Brian Paul, from the Mesa demos\n" +
               "TinyCC by Fabrice Bellard and contributors, with jrrk2's RISC-V port: the C compiler inside\n" +
               "Desktop photographs from Unsplash, and somebody's cats\n" +
+              "Poly Haven (CC0): this room's furniture, plants and many of its surfaces\n" +
+              "LTCGI by pimaker, VRC Light Volumes by RED_SIM, Mochie's shaders: the room's light and rain\n" +
               "Cascadia Mono by Microsoft: the console's font\n" +
               "ShaderAudio by lox9973: how sound gets out of a shader\n" +
               "VRChat's Worlds SDK, UdonSharp by Merlin, TextMesh Pro and Unity: this room",
@@ -708,23 +700,34 @@ public static partial class ShaderEmuBuilder
         settings.bakedGI = true;
         settings.realtimeGI = false;
         settings.autoGenerate = false;
-        // on the processor: the GPU lightmapper runs out of memory and stalls beside a headset
-        settings.lightmapper = LightingSettings.Lightmapper.ProgressiveCPU;
+        // on the graphics card: minutes where the processor took most of an hour for this room.
+        // It ran out of memory and stalled beside a headset once: close VR before baking.
+        settings.lightmapper = LightingSettings.Lightmapper.ProgressiveGPU;
         settings.mixedBakeMode = MixedLightingMode.Subtractive;
         settings.directionalityMode = LightmapsMode.NonDirectional;
-        settings.lightmapResolution = 24f;   // texels a metre: fewer, and small objects share texels
-        settings.lightmapMaxSize = 2048;
+        settings.lightmapResolution = 60f;   // texels a metre
+        settings.lightmapMaxSize = 4096;
         settings.lightmapPadding = 4;
         settings.directSampleCount = 64;
         settings.indirectSampleCount = 512;
         settings.environmentSampleCount = 128;
         settings.maxBounces = 3;
         settings.ao = true;
-        settings.aoMaxDistance = 0.7f;
+        settings.aoMaxDistance = 0.5f;
+        settings.aoExponentIndirect = 1.6f;
+        settings.aoExponentDirect = 0.7f;   // direct light too: shelves and racks get their depth from it
         settings.filteringMode = LightingSettings.FilterMode.Auto;
         EditorUtility.SetDirty(settings);
         Lightmapping.lightingSettings = settings;
-        foreach (Light light in RoomLights()) light.enabled = true;
+        GameObject decor = GameObject.Find("ShaderEmu/Decor");
+        if (decor != null) Mood(decor.transform);   // the lamps as the bake wants them (the look without a bake changes them)
+        Batched(true);
+        QualitySettings.pixelLightCount = 8;
+        foreach (Light light in RoomLights())
+        {
+            light.lightmapBakeType = LightmapBakeType.Baked;
+            light.enabled = true;
+        }
         Lightmapping.bakeCompleted -= Baked;
         Lightmapping.bakeCompleted += Baked;
         Lightmapping.BakeAsync();
@@ -736,8 +739,51 @@ public static partial class ShaderEmuBuilder
         List<Light> lights = new List<Light>();
         foreach (GameObject root in UnityEngine.SceneManagement.SceneManager.GetActiveScene().GetRootGameObjects())
             foreach (Light light in root.GetComponentsInChildren<Light>(true))
-                if (light.lightmapBakeType == LightmapBakeType.Baked) lights.Add(light);
+                if (light.transform.parent != null && light.transform.parent.name == "Decor") lights.Add(light);   // the builder's lamps
         return lights;
+    }
+
+    // The room without a lightmap, to look at while it is being worked on: the lamps as real-time
+    // lights and some flat light under them. "Bake lighting" undoes it. Not for a build: in a
+    // headset eleven real-time lamps with shadows are far too slow.
+    [MenuItem("ShaderEmu/Look at the room without a bake")]
+    public static void PreviewLighting()
+    {
+        Lightmapping.Clear();
+        Lightmapping.ClearLightingDataAsset();
+        foreach (Light light in RoomLights())
+        {
+            light.lightmapBakeType = LightmapBakeType.Realtime;
+            // Unity remembers that a light was baked, and then does not draw it: clearing the lightmap does not clear that
+            LightBakingOutput output = light.bakingOutput;
+            output.isBaked = false;
+            output.lightmapBakeType = LightmapBakeType.Realtime;
+            light.bakingOutput = output;
+            // a ceiling lamp's point light only helps its glowing panel in the bake: here it is the lamp
+            if (light.name == "Lamp light") light.intensity = light.transform.localPosition.z < 0 ? 2.2f : 1.5f;
+            light.enabled = light.intensity > 0f;
+        }
+        Batched(false);
+        QualitySettings.pixelLightCount = 16;   // three rooms' lamps: with 8 the ones a surface drops are vertex lights, and dim
+        RenderSettings.ambientLight = new Color(0.28f, 0.27f, 0.26f);
+        UnityEngine.Rendering.SphericalHarmonicsL2 flat = new UnityEngine.Rendering.SphericalHarmonicsL2();
+        flat.AddAmbientLight(RenderSettings.ambientLight.linear);
+        RenderSettings.ambientProbe = flat;   // or the ambient light stays what the last bake left
+        UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(UnityEngine.SceneManagement.SceneManager.GetActiveScene());
+        SceneView.RepaintAll();
+        Debug.Log("[ShaderEmu] no lightmap: the lamps are real-time, for looking only. Bake before a build.");
+    }
+
+    // In play mode a statically batched model was dark under real-time lamps (the room's walls: a
+    // fifth of their light in the editor), so the look without a bake has no batches. A bake puts them back.
+    static void Batched(bool batched)
+    {
+        foreach (MeshRenderer renderer in Object.FindObjectsOfType<MeshRenderer>(true))
+        {
+            StaticEditorFlags flags = GameObjectUtility.GetStaticEditorFlags(renderer.gameObject);
+            if ((flags & StaticEditorFlags.ContributeGI) == 0) continue;
+            GameObjectUtility.SetStaticEditorFlags(renderer.gameObject, batched ? flags | StaticEditorFlags.BatchingStatic : flags & ~StaticEditorFlags.BatchingStatic);
+        }
     }
 
     // The lamps have done their work: off again, and the scene saved with its lightmap.
