@@ -14,7 +14,7 @@ the Linux checksums are as before).
 
 ## How it is made
 
-- **A block of state a core.** Core 0's state is the 64 x 64 texels it always was. Core k's is
+- **A block of state a core.** Core 0's state is the 64 texels wide block it always was. Core k's is
   the same block `CORE_PITCH` (256) texels further right in the state rows, which were empty
   there. `STATE_TEX` adds the block's place (`state_off`); RAM is read with `RAM_TEX`, which
   nothing moves. The tick pass draws a zone a core.
@@ -123,40 +123,40 @@ The earlier figure that 4,096 pixels of one block running the whole tick cost on
 more than 973 does not fit this and is not to be relied on: those extra pixels' results were
 thrown away, and the driver may have dropped most of their work.
 
-## The state as one rectangle (`--define STATE_PACK`)
+## The state as one rectangle
 
 Idle pixels of a warp take their share: in `warpbench --live 64 --only shape`, 4,096 busy
 pixels as four 32 x 32 blocks, 128 x 8 strips or 8 x 128 columns cost 1.13 times one block,
-as four lines of 1,024 x 1 they cost 2.17 times. And the tick's 973 texels are four bands of
+as four lines of 1,024 x 1 they cost 2.17 times. And the tick's 973 texels were four bands of
 a 64 x 64 block (the first 44, the write cache from row 16, the TLBs from row 33, the float
 registers in row 39), which the pass drew all 4,096 pixels of.
 
-With `STATE_PACK` (`src/pack.h`) they are kept as one 64 x 16 rectangle, with the CSR area in
-the sixteen rows under it, and the tick pass draws the rectangle only. The rest of the shader
-still names a texel by its old place: `STATE_TEX` looks it up through `state_pack()`, and a
-pass turns the pixel it draws back into that place with `state_unpack()`. The first 44 texels
-do not move, so the harness reads what it read. (A snapshot made without it does not load
-with it, and the Unity side and the D3D12 backend do not know of it: it is off unless asked.)
+They are now one 64 x 16 rectangle at the top of the block, with the CSR area in the rows
+under it, and the tick pass draws the rectangle only (`STATE_ROWS` and the layout at the top
+of `src/types.h`). The first 44 texels did not move. There is no other layout: a snapshot
+from before does not load, and the Unity side's tick texture is 64 x 16 (changed with it, and
+not run since: there is no Unity on the machine this was done on).
 
-| | As it was | One rectangle |
+| | Four bands of 64 x 64 | One rectangle |
 |---|---|---|
 | One core: tick at 2,048 instructions a pass | 0.539 to 0.548 ms | 0.494 to 0.515 ms |
-| One core: a Linux boot and the checksum run (606,105,379 instructions) | 3,259k a second | 3,534k |
+| One core: a Linux boot and the checksum run (606,105,379 instructions) | 3,259k a second | 3,478k to 3,534k |
 | Core 0 busy, of four | 3.2 to 3.5 ms a pass | 3.08 |
 | Core 0 and one worker busy | 6.4 to 6.9 | 3.66 |
 | Core 0 and three workers busy | 10.2 to 10.5 | 6.60 |
 | `mctest 3 240000`, primes alone and with three workers | 12.3 s, 9.4 s (1.3 times) | 11.7 s, 6.0 s (1.9 times) |
+| `mctest 1 240000`, with one worker | | 11.6 s, 7.8 s |
 
-The same instructions run and the guest's checksums are the same. So the one core is 5 to 9%
-faster for it, a second core now comes almost free, and four cores do nearly twice the work
-of one. What limits it from there is the number of pixels a core has: a worker without the
-TLBs' 409 texels and with a smaller write cache would be half the size or less.
+The same instructions run and the guest's checksums are the same, on D3D11 and (from the new
+snapshot) on D3D12. So the one core is 5 to 9% faster for it and a second core comes almost
+free; a third and a fourth cost a pass between them again, so **two cores are what makes
+sense as things are**. What limits it from there is the number of pixels a core has: a worker
+without the TLBs' 409 texels and with a smaller write cache would be half the size or less.
 
 ## Switches
 
     --cores N          N cores (1 to 16)
     --core-pitch N     the blocks are N texels apart (256)
     --core-y N         the workers' blocks are N rows down, in rows of RAM nothing uses (an experiment; with RVC_MC_QUADS)
-    --define STATE_PACK   a core's texels as one 64 x 16 rectangle (above)
     RVC_MC_QUADS=1     one draw, a quad a core
     RVC_MC_ONE_ZONE=1  one zone over every block

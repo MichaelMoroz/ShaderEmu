@@ -596,6 +596,15 @@ int main(int argc, char** argv) {
     bo.gpu = opt.gpu;
     bo.profile = opt.profile;
     bo.stateLog = !opt.l1Log.empty();
+    if (opt.rvcDir == "experiments/rvc_opt") {
+        // its tick keeps one rectangle from the top of the state block (STATE_ROWS in src/types.h)
+        unsigned ways = 3, tableBits = 6;
+        for (auto& d : opt.defines) {
+            if (d.rfind("L1_WAYS=", 0) == 0) ways = (unsigned)atoi(d.c_str() + 8);
+            if (d.rfind("L1_TABLE_BITS=", 0) == 0) tableBits = (unsigned)atoi(d.c_str() + 14);
+        }
+        bo.tickRows = ways == 3 && tableBits == 6 ? 16 : 32;
+    }
     bo.present = opt.present;
     bo.dxcOpt = opt.dxcOpt;
     bo.dxcSm = opt.dxcSm;
@@ -921,7 +930,7 @@ int main(int argc, char** argv) {
         if (!backend.popRow(row, f)) return false;
         processRow(row, f);
         if (backend.takeState(zone)) {
-            // the write cache is state texels from 1068 on: buckets of a texel of tags (RAM texel
+            // the write cache is state texels from 44 on (1068 in upstream's layout): buckets of a texel of tags (RAM texel
             // number + 1, 0 when free) and then that many RAM texels. The log gets each cached
             // texel's address: which of its four words were written is not kept anywhere.
             size_t at = l1Samples.size();
@@ -932,7 +941,7 @@ int main(int argc, char** argv) {
                 if (d.rfind("L1_TABLE_BITS=", 0) == 0) tableBits = (unsigned)atoi(d.c_str() + 14);
             }
             for (size_t b = 0; b < (2u << tableBits); ++b) {
-                const uint32_t* w = (const uint32_t*)(zone.data() + (1068 + b * (ways + 1)) * 16);
+                const uint32_t* w = (const uint32_t*)(zone.data() + ((bo.tickRows == 64 ? 1068 : 44) + b * (ways + 1)) * 16);
                 for (unsigned e = 0; e < ways; ++e)
                     if (w[e]) l1Samples.push_back((w[e] - 1) << 4);
             }

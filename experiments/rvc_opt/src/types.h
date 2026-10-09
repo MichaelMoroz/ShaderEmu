@@ -58,6 +58,29 @@
 #define L1_B0(t) ((t) & (L1_TABLE - 1))
 #define L1_B1(t) (L1_TABLE + ((((t) >> 3) ^ ((t) << (L1_TABLE_BITS - 3)) ^ ((t) >> L1_TABLE_BITS)) & (L1_TABLE - 1)))
 #endif
+
+// Where the state texels are in the 64 texels wide state block (texel lin is at x = lin % 64,
+// y = lin / 64). What the tick pass keeps is one rectangle of STATE_ROWS rows from the top:
+// the CPU's 44 texels, the write cache, the TLBs, the float registers. The pass draws that
+// rectangle and nothing else, so the warps it runs in are full (docs/multicore.md: with the
+// same texels in four bands of a 64 x 64 zone the pass was 5 to 9% slower, and a second core
+// cost a second pass). The CSR area, which only the commit pass writes, is under it.
+#define L1_STATE_AT 44
+#define TLB_STATE_AT (L1_STATE_AT + L1_ENTRIES)
+#ifndef TLB2_N
+#define TLB2_N 256
+#endif
+#define TLB_STATE_TEXELS (3 * TLB2_N / 2 + 3 * 16 / 2 + 1)
+#define FP_STATE_AT (TLB_STATE_AT + TLB_STATE_TEXELS)
+#ifndef STATE_ROWS
+#if L1_TABLE_BITS == 6 && L1_WAYS == 3
+#define STATE_ROWS 16   // 44 + 512 + 409 + 8 = 973 texels
+#else
+#define STATE_ROWS 32   // any larger write cache
+#endif
+#endif
+#define CSR_STATE_AT (STATE_ROWS * 64)
+#define CSR_STATE_TEXELS 1024
 uint l1_slot(uint4 tags, uint tag) {
 #if L1_WAYS == 4
     return tags.x == tag ? 1 : tags.y == tag ? 2 : tags.z == tag ? 3 : tags.w == tag ? 4 : 0;
@@ -329,8 +352,7 @@ static uint mc_word = 0;
 // instruction then reads and writes the one array, and adds nothing the fast loop carries.
 #define XR_F 33
 static uint xr[XR_F + 32];
-// They are kept from pass to pass in eight texels of the state zone, after the TLBs'.
-#define FP_STATE_AT 2528
+// They are kept from pass to pass in eight texels of the state zone, after the TLBs' (FP_STATE_AT).
 void fp_state_load() {
     for (uint k = 0; k < 8; k++) {
         uint4 t = STATE_TEX(uint2((FP_STATE_AT + k) & 63, (FP_STATE_AT + k) >> 6));
@@ -402,9 +424,7 @@ uint xreg(uint i) {
 
 // ENCODE/DECODE LOGIC (state serialization into self texture)
 
-// csr_cache_start = 44 (addr=164)
-// l1_cache_start = 1068 (addr=164)
-// l1_cache_end = 2092 (addr=164)
+// (the write cache is at L1_STATE_AT and the CSR area at CSR_STATE_AT: see the layout above)
 
 
 #define STATE_WIDTH 64
@@ -762,12 +782,7 @@ void decode_for_commit() {
 #endif
 
 // The second-level and megapage TLBs (mmu.h) are kept from pass to pass in the state zone, after
-// the write cache: two entries (tag, page) a texel, then one texel with the generation.
-#define TLB_STATE_AT 2112
-#ifndef TLB2_N
-#define TLB2_N 256
-#endif
-#define TLB_STATE_TEXELS (3 * TLB2_N / 2 + 3 * 16 / 2 + 1)
+// the write cache (TLB_STATE_AT): two entries (tag, page) a texel, then one texel with the generation.
 
 #ifdef PASS_TICK
 bool pixel_has_state(uint2 pos) {
@@ -779,14 +794,14 @@ bool pixel_has_state(uint2 pos) {
 #ifdef FPU
     if (lin >= FP_STATE_AT && lin < FP_STATE_AT + 8) return true;
 #endif
-    return lin < 44 || (lin >= 1068 && lin < 1068 + L1_ENTRIES);
+    return lin < L1_STATE_AT + L1_ENTRIES;
 }
 
 uint4 encode_l1(L1P uint2 pos) {
     // L1 cache
     uint s_lin = pos.x + pos.y * 64;
-    if (s_lin >= 1068 && s_lin < 1068 + L1_ENTRIES) {
-        uint offset = s_lin - 1068;
+    if (s_lin >= L1_STATE_AT && s_lin < L1_STATE_AT + L1_ENTRIES) {
+        uint offset = s_lin - L1_STATE_AT;
         // a bucket that was not used, and an entry of it that was not, are zeros (the array
         // itself starts undefined with L1_LOCAL)
         uint bucket = offset / L1_STRIDE, entry = offset % L1_STRIDE;
@@ -1068,14 +1083,14 @@ uint4 encode_l1(L1P uint2 pos) {
 }
 
 uint tex_get_csr(uint addr) {
-    uint lin = (addr >> 2) + 44;
+    uint lin = (addr >> 2) + CSR_STATE_AT;
     uint idx = addr & 0x3;
     return idx_uint4(STATE_TEX(uint2(lin % 64, lin / 64)), idx);
 }
 #endif
 
 uint4 l1_state_texel(uint lin) {
-    lin += 1068;
+    lin += L1_STATE_AT;
     return STATE_TEX_HART(uint2(lin % 64, lin / 64), 0);
 }
 
@@ -1186,8 +1201,8 @@ uint4 commit(uint2 pos, uint4 ret) {
     uint s_lin = pos.x + pos.y * 64;
 
     // CSR area
-    if (s_lin >= 44 && s_lin < 1068) {
-        uint addr = s_lin - 44;
+    if (s_lin >= CSR_STATE_AT && s_lin < CSR_STATE_AT + CSR_STATE_TEXELS) {
+        uint addr = s_lin - CSR_STATE_AT;
         addr <<= 2;
         if      (cpu.cache.csr_cache_0_addr == addr + 0) { ret.x = cpu.cache.csr_cache_0_val; }
         else if (cpu.cache.csr_cache_0_addr == addr + 1) { ret.y = cpu.cache.csr_cache_0_val; }
@@ -1414,11 +1429,11 @@ C# layout:
     private uint load_debug_last_stall() { return decodePackedData(40, 0, 2); }
     private uint load_debug_arb_0() { return decodePackedData(40, 0, 3); }
     private uint load_csr(int addr) {
-        int lin = (addr >> 2) + 44;
+        int lin = (addr >> 2) + CSR_STATE_AT;   // 1024 with the default write cache
         return decodePackedData(lin % 64, lin / 64, addr & 0x3);
     }
     private uint load_l1_cache(int addr) {
-        int lin = (addr >> 2) + 1068;
+        int lin = (addr >> 2) + 44;
         return decodePackedData(lin % 64, lin / 64, addr & 0x3);
     }
     #endregion

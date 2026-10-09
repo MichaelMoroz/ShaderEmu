@@ -20,7 +20,7 @@ using VRC.Udon.Common.Interfaces;
 public class EmuMachine : UdonSharpBehaviour
 {
     public RenderTexture stateA, stateB;    // 2048 x 4096, four 32-bit words a texel
-    public RenderTexture tickState;         // 64 x 64: the CPU's state area after a tick
+    public RenderTexture tickState;         // 64 x 16: what the tick keeps of the CPU's state area, after a tick
     public Material tickMaterial;           // MachineTick.shader: CPUTick
     public Material machineMaterial;        // Machine.shader: passes Commit and GPUControl
     public Material gpuMaterial;            // the GPU mesh's material
@@ -663,7 +663,7 @@ public class EmuMachine : UdonSharpBehaviour
         machineMaterial.SetInt("_SoundMixed", 0);
         for (int i = 0; i < n; i++)
         {
-            // The tick writes only the CPU's 64 x 64 state area, into a texture of that size;
+            // The tick writes only the 64 x 16 texels it keeps of the CPU's state area, into a texture of that size;
             // the commit reads it from there and writes the whole state.
             tickMaterial.SetTexture("_SelfTexture2D", current);
             VRCGraphics.Blit(current, tickState, tickMaterial, 0);

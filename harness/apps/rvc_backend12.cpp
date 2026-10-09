@@ -19,6 +19,7 @@ public:
             err = "--profile and --present are D3D11 only (use rvc_trace12 for D3D12 profilers)";
             return false;
         }
+        tickRows_ = opt.tickRows;
         if (opt.gpu.debug) {
             ComPtr<ID3D12Debug> dbg;
             if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&dbg)))) dbg->EnableDebugLayer();
@@ -194,7 +195,7 @@ public:
 
         // Zone 1: CPUTick on the 64x64 state area, then copy that area back so `cur` stays complete.
         stamp(0);
-        draw(0, 32, 4064, 64, 64);
+        draw(0, 32, 4096 - (float)tickRows_ / 2, 64, (float)tickRows_);
         stamp(1);
         D3D12_RESOURCE_BARRIER toCopy[2] = {
             transition(state_[dst].Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE),
@@ -203,7 +204,7 @@ public:
         D3D12_TEXTURE_COPY_LOCATION cdst{}, csrc{};
         cdst.pResource = state_[cur].Get();
         csrc.pResource = state_[dst].Get();
-        D3D12_BOX box{0, 0, 0, 64, 64, 1};
+        D3D12_BOX box{0, 0, 0, 64, tickRows_, 1};   // what the pass drew
         cl_->CopyTextureRegion(&cdst, 0, 0, 0, &csrc, &box);
         D3D12_RESOURCE_BARRIER fromCopy[2] = {
             transition(state_[dst].Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET),
@@ -756,6 +757,7 @@ private:
     bool deliver_ = false;   // the fetch zone is drawn in the next frame
     ComPtr<ID3D12DescriptorHeap> rtvHeap_, srvHeap_;
     D3D12_CPU_DESCRIPTOR_HANDLE rtv_[2]{};
+    UINT tickRows_ = 64;   // BackendOptions::tickRows
     UINT srvStep_ = 0;
     ComPtr<ID3D12CommandAllocator> allocs_[kSlots];
     UINT64 slotFence_[kSlots] = {};

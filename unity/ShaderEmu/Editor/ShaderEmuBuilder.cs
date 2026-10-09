@@ -225,6 +225,13 @@ public static partial class ShaderEmuBuilder
     {
         RenderTexture rt = LoadOrCreate(Generated + "/" + name + ".renderTexture",
             () => new RenderTexture(width, height, 0, GraphicsFormat.R32G32B32A32_UInt));
+        if (rt.width != width || rt.height != height)
+        {
+            // an asset from before the size changed
+            rt.Release();
+            rt.width = width;
+            rt.height = height;
+        }
         rt.antiAliasing = 1;
         rt.filterMode = FilterMode.Point;
         rt.wrapMode = TextureWrapMode.Clamp;
@@ -727,7 +734,7 @@ public static partial class ShaderEmuBuilder
 
         RenderTexture state = StateTexture("StateA", 2048, 4096);
         RenderTexture stateB = StateTexture("StateB", 2048, 4096);
-        RenderTexture tickState = StateTexture("TickState", 64, 64);
+        RenderTexture tickState = StateTexture("TickState", 64, 16);   // STATE_ROWS: what the tick draws
         AssetDatabase.DeleteAsset(Generated + "/MachineState.asset");
         RenderTexture gpuTarget = Target("GpuTarget", 1280, 720, 32);   // the picture is 720p at most
         RenderTexture readback = Target("Readback", 448, 1, 0);

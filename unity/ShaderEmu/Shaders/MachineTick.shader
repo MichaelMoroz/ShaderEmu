@@ -104,8 +104,10 @@ Shader "ShaderEmu/MachineTick"
             static uint hart = 0;
             static uint2 hart_offset = uint2(0, 0);
 
+            #define CORES 1   // one core here (docs/multicore.md)
             #define STATE_TEX_HART(pos, hartidx) (_SelfTexture2D[uint2(pos) + uint2(hartidx % 2, hartidx / 2)])
             #define STATE_TEX(pos) (_SelfTexture2D[pos])
+            #define RAM_TEX(pos) (_SelfTexture2D[pos])
 
             static uint2 s_dim;
             static uint2 m_dim;
@@ -114,6 +116,7 @@ Shader "ShaderEmu/MachineTick"
             #include "src/prof.cginc"
 
             #include "src/types.cginc"
+            #include "src/mc.cginc"
             #include "src/ins.cginc"
             #include "src/uart.cginc"
             #include "src/emu.cginc" // includes mmu.h, csr.h, mem.h, trap.h

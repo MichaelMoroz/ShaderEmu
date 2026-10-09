@@ -72,7 +72,7 @@ instruction's two source indices get `XR_F` added when they name float registers
 result goes to one indexed store as before: the fast loop carries nothing more than it did.
 `fp_exec` in `emu.h` works every result out and chooses one, for the fast step and the
 general path alike. Between passes the registers are eight texels of the state zone, from
-texel 2528 (`FP_STATE_AT`): a snapshot from before has zeros there.
+`FP_STATE_AT`, after the TLBs' texels.
 
 An integer-only guest costs 1.1% more with them (D3D11, fxc2: 3,556k to 3,518k instructions a
 second on the shell busy loop, four runs each, alternating) and reaches the same state hash.

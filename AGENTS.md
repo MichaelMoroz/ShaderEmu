@@ -307,11 +307,18 @@ A cold boot to the `/ #` prompt takes about 80 s on an RTX 5090 with upstream on
   without it the root filesystem is upstream's and none of our programs are found.
 - `tools\boot_profile.py` with `rvc_harness --frame-log FILE`: boot time, the median rate and
   why frames ended early.
+- The tick's state is one 64 x 16 rectangle at the top of the state block and the tick pass
+  draws only that (`STATE_ROWS`, the layout at the top of `src/types.h`; `docs/multicore.md`
+  has why: 5 to 9% for one core, and a second core that does not cost a second pass). The
+  write cache is at texel 44, the TLBs after it, the float registers after those, and the CSR
+  area from texel 1024. A snapshot from before this layout does not load (re-make
+  `rvc_shell.snap`), and upstream's shader and `experiments\rvc_compute` keep the old one:
+  the harness draws 64 rows for them (`BackendOptions::tickRows`).
 - A shader edit costs one FXC compile (now 140 s to 290 s for the tick). Compile variants in
   parallel, then benchmark them one at a time. Never compile the tick with FXC's "avoid flow
   control" flag (`--fxc-flags 9200`): the compiler grew past 34 GB of memory.
 - The second-level TLB (256 entries a mode) and the megapage TLB are kept between passes in
-  state texels from 2112 on. A snapshot from before has zeros there, which never match. The
+  state texels after the write cache's (`TLB_STATE_AT`). The
   second level's arrays still start each pass empty: an entry they lack is read from its texel
   on the miss (loading all of them at the start of every pass cost small programs 2%).
 - Doom's frame rate falls faster than the emulator's speed: about 0.9M instructions a second go

@@ -109,14 +109,6 @@
             #define MC_BLOCK(k) uint2((k) * CORE_PITCH, (k) == 0 ? 0 : CORE_Y)
             #if CORES > 1
             static uint2 state_off = uint2(0, 0);
-            #else
-            #define state_off uint2(0, 0)
-            #endif
-            #ifdef STATE_PACK
-            uint2 state_pack(uint2 pos);   // src/pack.h
-            #define STATE_TEX_HART(pos, hartidx) (_SelfTexture2D[state_pack(pos) + state_off])
-            #define STATE_TEX(pos) (_SelfTexture2D[state_pack(pos) + state_off])
-            #elif CORES > 1
             #define STATE_TEX_HART(pos, hartidx) (_SelfTexture2D[uint2(pos) + state_off])
             #define STATE_TEX(pos) (_SelfTexture2D[uint2(pos) + state_off])
             #else
@@ -132,7 +124,6 @@
             #include "src/prof.h"
 
             #include "src/types.h"
-            #include "src/pack.h"
             #include "src/mc.h"
             #include "src/ins.h"
             #include "src/uart.h"
@@ -147,7 +138,7 @@
                     static const float2 corners[6] = {{0, 0}, {0, 1}, {1, 1}, {1, 0}, {0, 0}, {1, 1}};
                     uint core = IN.vertexID / 6;
                     float2 corner = corners[IN.vertexID % 6];
-                    float2 uv = (float2(MC_BLOCK(core)) + corner * 64.0) / _CustomRenderTextureInfo.xy;
+                    float2 uv = (float2(MC_BLOCK(core)) + corner * float2(64.0, STATE_ROWS)) / _CustomRenderTextureInfo.xy;
                     v2f_customrendertexture OUT;
                     OUT.vertex = float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0);
                     OUT.localTexcoord = float3(uv, 0);
@@ -172,9 +163,6 @@
                 state_off = MC_BLOCK(hart);
                 pos -= state_off;
                 if (pos.x >= 64 || pos.y >= 64) return (uint4)0;   // between two blocks
-#endif
-#ifdef STATE_PACK
-                pos = state_unpack(pos);   // the texel this pixel keeps
 #endif
 #ifdef L1_LOCAL
                 uint4 l1_cache[L1_DATA_N];
@@ -308,14 +296,6 @@
             #define MC_BLOCK(k) uint2((k) * CORE_PITCH, (k) == 0 ? 0 : CORE_Y)
             #if CORES > 1
             static uint2 state_off = uint2(0, 0);
-            #else
-            #define state_off uint2(0, 0)
-            #endif
-            #ifdef STATE_PACK
-            uint2 state_pack(uint2 pos);   // src/pack.h
-            #define STATE_TEX_HART(pos, hartidx) (_SelfTexture2D[state_pack(pos) + state_off])
-            #define STATE_TEX(pos) (_SelfTexture2D[state_pack(pos) + state_off])
-            #elif CORES > 1
             #define STATE_TEX_HART(pos, hartidx) (_SelfTexture2D[uint2(pos) + state_off])
             #define STATE_TEX(pos) (_SelfTexture2D[uint2(pos) + state_off])
             #else
@@ -329,7 +309,6 @@
 
             #include "helpers.cginc"
             #include "src/types.h" // includes fb.h
-            #include "src/pack.h"
 
 #ifdef GPU_DEVICE
             // The GPU device's picture, for copying into the RAM framebuffer (docs/gpu.md).
@@ -431,9 +410,6 @@
                     if (pos.y < 64 && CORE_Y != 0 && hb != 0) return (uint4)0;
                     state_off = MC_BLOCK(hb);
                     pos -= state_off;
-#ifdef STATE_PACK
-                    pos = state_unpack(pos);
-#endif
                     decode_for_commit();
                     result = commit(pos, STATE_TEX(pos));
                 } else {
@@ -447,9 +423,6 @@
                     state_off = uint2(0, 0);
                 }
 #else
-#ifdef STATE_PACK
-                pos = state_unpack(pos);
-#endif
                 decode_for_commit();
                 uint4 result = commit(pos, STATE_TEX_HART(pos, 0));
 #endif

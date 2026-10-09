@@ -107,6 +107,8 @@ Shader "ShaderEmu/Machine"
             // the CPU's state area as the tick left it; everything else as it was
             #define STATE_TEX_HART(pos, hartidx) (state_after_tick(uint2(pos) + uint2(hartidx % 2, hartidx / 2)))
             #define STATE_TEX(pos) (state_after_tick(pos))
+            #define RAM_TEX(pos) (_SelfTexture2D[pos])   // the tick does not write RAM
+            #define CORES 1
 
             static uint2 s_dim;
             static uint2 m_dim;
@@ -137,7 +139,7 @@ Shader "ShaderEmu/Machine"
                 uint4 picture;
                 if (!_Init && gpu_writeback(pos, picture)) return picture;
                 decode_for_commit();
-                return commit(pos);
+                return commit(pos, STATE_TEX_HART(pos, 0));
             }
             ENDCG
         }
