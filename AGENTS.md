@@ -456,6 +456,15 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   slower on a shell workload, though they did leave the general path. A value the loop
   carries and changes in some rare branch costs about 0.2% of every instruction (8, 16 and
   32 of them: 0.460, 0.466, 0.485).
+- Hot traces of the kernel translated ahead of time into the tick (`tools/rv_trace.py`: a
+  straight-line trace with side exits, registers in locals) emulate correctly, same frames
+  and instructions, and are a loss: one 74-instruction trace that is 8% of a shell workload
+  made the run 11 to 17% slower, in the fast loop or after it. The trace's code being there
+  costs every instruction (0.545 ms against 0.451 for 2,048 on a workload that never runs
+  it; four tests of pc at the top of the loop alone, 0.485), while 14,000 lines of
+  unrelated dead code cost nothing and the compiler's register allocation changes nothing.
+- One test instead of two at the end of a fast instruction ("not ours" folded into the
+  loop's end test, the writes made conditional): 0.460 against 0.453.
 - A general tick costs about 560 ns where a fast one costs 170, not the microseconds older
   notes say: (0.158 - 0.015) ms for 256 of them with the fast run switched off. They are
   1.4% of a Linux boot's instructions, 0.65% of a desktop's and 0.2% of a shell loop's.
