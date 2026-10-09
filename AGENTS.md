@@ -444,6 +444,24 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   instructions; 1,029: 0.512; 1,093: 0.54). The declared size of an array costs nothing, nor
   does one more array. Count the pixels before adding state texels: 44 + the cache's + the
   TLBs' 409 + the float registers' 8 is 973 now.
+- Tried on the fast path after that and not kept (tick pass for 2,048 instructions of the
+  Linux bench, fxc2's bytecode on D3D12, 0.451 ms as it is): the cache's occupancy bits in
+  four registers instead of an array of four, 0.454; no read-ahead of the next instruction
+  texel, 0.471 (the read-ahead is worth 4.6%: a texture read is slow to arrive and cheap to
+  have asked for early); the second source register read only by instructions that have one,
+  0.460; the 32 registers as eight vectors chosen by conditional moves instead of an array,
+  0.645; the first-level TLBs in two arrays instead of 24 registers, 0.457; `csrrci`,
+  `csrrsi`, `csrrs` and `csrrc` on sstatus done in the fast loop when only SIE changes (they
+  are 60% of the general ticks of a desktop), 0.460 to 0.464 in two designs and 3 to 5%
+  slower on a shell workload, though they did leave the general path. A value the loop
+  carries and changes in some rare branch costs about 0.2% of every instruction (8, 16 and
+  32 of them: 0.460, 0.466, 0.485).
+- A general tick costs about 560 ns where a fast one costs 170, not the microseconds older
+  notes say: (0.158 - 0.015) ms for 256 of them with the fast run switched off. They are
+  1.4% of a Linux boot's instructions, 0.65% of a desktop's and 0.2% of a shell loop's.
+- The D3D11 harness's wall time a frame is 0.25 ms more than its three passes' GPU time at
+  16,384 instructions a frame (0.06 ms at 2,048). It is not the readback's `Map` waiting:
+  asking without waiting in a loop changes nothing.
 - A feature for few instructions must not sit in the path of all of them. The F extension
   did (operand registers chosen between two sets for every instruction, flw and fsw inside
   the integer load and store, a float destination in the common register write) and every
