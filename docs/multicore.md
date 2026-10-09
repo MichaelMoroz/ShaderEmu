@@ -193,6 +193,21 @@ and the parked ones cost core 0 a little (31 to 35 s alone: the commit pass look
 up in every core's write cache). With more than eight cores the blocks have to be closer
 than 256 texels: `--core-pitch 128`.
 
+## Workers with nothing to do
+
+A worker's `wfi` is a sleep until the first word of its job changes, and the machine does not
+run a worker that is asleep or parked: each of its pixels reads its state word and its
+mailbox and returns what it holds, before anything of the CPU is decoded (`mc_idle()` in
+`src/mc.h`), and the commit pass passes over a core that stored nothing. Three parked workers
+were 4.5% of a pass and are now within what two runs differ by (0.505 and 0.519 ms against
+0.502 and 0.505 for one core, 2,048 instructions a pass); Red Alert's mission with its three
+workers asleep runs at 3,826k instructions a second where it ran at 3,576k with them awake
+and waiting, and at about 3,900k on one core.
+
+(A quad a core that the vertex shader throws away would save those pixels too, but what a
+pass does not draw is two passes old in the buffer it draws into, here and in Unity: the
+copy back, or the commit that reads it, would have to know.)
+
 ## A use: Red Alert's movies
 
 `docs/ralert.md` ("Movies, and the worker cores"): the opening movie's frames are decoded by

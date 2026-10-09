@@ -33,6 +33,8 @@ typedef struct { volatile uint32_t done, result, alive, pad; } mc_answer;   // d
 // the jobs worker.c knows
 enum { MC_FN_PRIMES, MC_FN_FILL, MC_FN_SUM, MC_FN_STRIPE };
 
+// (On a worker `wfi` is a sleep until the first word of its job changes: the machine does not
+// run a worker that waits, experiments/rvc_opt/src/mc.h.)
 // The pause hint ends this core's pass: its stores reach the others, and theirs reach it.
 #define mc_next_pass() __asm__ volatile(".word 0x0100000f")
 

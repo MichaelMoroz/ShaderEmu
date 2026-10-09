@@ -486,6 +486,7 @@ DEF(wfi, FormatEmpty, { // system
     // Ends this pass's run of instructions: interrupts, input and the GPU device can only
     // change anything between passes, so there is nothing to wait for inside one.
     cpu.stall = STALL_WFI;
+    MC_SLEEP   // (a worker core: until its job word changes, mc.h)
 })
 DEF(xor, FormatR, { // rv32i
     WR_RD(xreg(ins.rs1) ^ xreg(ins.rs2))

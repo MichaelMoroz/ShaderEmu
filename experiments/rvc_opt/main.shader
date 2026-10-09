@@ -137,6 +137,7 @@
                 state_off = MC_BLOCK(hart);
                 pos -= state_off;
                 if (pos.x >= 64 || pos.y >= 64) return (uint4)0;   // between two blocks
+                if (!_Init && mc_idle()) return RAM_TEX(own);      // a worker with nothing to do
                 pos = mc_texel_of(pos);
 #endif
 #ifdef L1_LOCAL
@@ -384,12 +385,16 @@
                     pos = mc_texel_of(pos - state_off);
                     decode_for_commit();
                     result = commit(pos, own);
+                    // A worker's one store that found its cache full is in its state until its next
+                    // pass rewrites it: gone now, or the commits of a worker asleep would store it again.
+                    if (hb != 0 && pos.x == 8 && pos.y == 0) result.r = 0xffffffff;
                 } else {
                     // RAM: every core's writes, the highest core's last
                     result = RAM_TEX(pos);
                     for (uint h = 0; h < CORES; h++) {
                         mc_core = h;
                         state_off = MC_BLOCK(h);
+                        if (h != 0 && STATE_TEX(uint2(41, 0)).r == 0) continue;   // a worker that stored nothing
                         decode_for_commit();
                         result = commit(pos, result);
                     }
