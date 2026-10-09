@@ -771,8 +771,9 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   call and writes only 16-byte pieces of memory that nobody else writes. `mctest` is the
   library's test: it must print `mctest: PASS` before and after any other program that used
   the workers in the same boot, and after one that was killed (`kill -9`) while they ran.
-- A worker's start needs the kernel's `SHADEREMU_GPU_ROOT` ioctl (`linux/kernel/shaderemu_gpu.c`):
-  with a kernel from before it `mcw_open()` gives 0 and everything runs on core 0.
+- A worker's start needs the kernel's `SHADEREMU_GPU_WORKERS` ioctl (`linux/kernel/shaderemu_gpu.c`),
+  which hands the cores out between programs: with a kernel from before it `mcw_open()` gives
+  0 and everything runs on core 0. A program asks for the workers it uses and no more.
 - To see where a guest's leaf functions are called from, `--ra-log FILE` and
   `python tools\pc_callers.py FILE game=prog.nm`; where inside a function, `tools\pc_hot_in.py`.
 - Red Alert uses the machine's worker cores for its movies when there are any (`--cores 4`;

@@ -115,7 +115,7 @@ int main(int argc, char** argv) {
 
     workers = mcw_open(want);
     printf("mctest: %d worker core%s (%u pages brought for their start)\n", workers, workers == 1 ? "" : "s", mcw_faults);
-    if (workers == 0) { printf("mctest: FAIL (run the machine with --cores N; or another program has the workers)\n"); return 1; }
+    if (workers == 0) { printf("mctest: FAIL (run the machine with --cores N; or other programs have the workers)\n"); return 1; }
 
     // "mctest N LIMIT bench": what a pass costs with more cores busy. Each line is the same
     // work on every busy core (primes of one range, or of ranges of one length further up),
