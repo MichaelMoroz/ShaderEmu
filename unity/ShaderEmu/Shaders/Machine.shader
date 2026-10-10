@@ -93,59 +93,8 @@ Shader "ShaderEmu/Machine"
             #include "UnityCG.cginc"
             #include "MachineBlit.cginc"
 
-            float _Init, _InitRaw;
+            #include "MachineCommit.cginc"
 
-            Texture2D<float4> _Data_RAM_R;
-            Texture2D<float4> _Data_RAM_G;
-            Texture2D<float4> _Data_RAM_B;
-            Texture2D<float4> _Data_RAM_A;
-            Texture2D<float4> _Data_RAM_RAW;
-
-            Texture2D<float4> _Data_MTD_R;
-            Texture2D<float4> _Data_MTD_G;
-            Texture2D<float4> _Data_MTD_B;
-            Texture2D<float4> _Data_MTD_A;
-
-            // A core's state area as the tick left it (state_off is where the core's block
-            // starts: docs/multicore.md); everything else as it was.
-            #define MC_BLOCK(k) uint2((k) * CORE_PITCH, 0)
-            static uint2 state_off = uint2(0, 0);
-            static uint mc_core = 0;
-            #define STATE_TEX_HART(pos, hartidx) (state_after_tick(uint2(pos) + state_off))
-            #define STATE_TEX(pos) (state_after_tick(uint2(pos) + state_off))
-            #define RAM_TEX(pos) (_SelfTexture2D[pos])   // the tick does not write RAM
-
-            static uint2 s_dim;
-            static uint2 m_dim;
-
-            #include "helpers.cginc"
-            #include "src/types.cginc" // includes fb.h
-
-            // The GPU device's picture, for copying into RAM (docs/gpu.md).
-            Texture2D<float4> _GpuTarget;
-            #define GPU_STATE _SelfTexture2D
-            #define GPU_WRITEBACK
-            #include "src/gpu.cginc"
-
-            // The bands this commit changes (commit_bands_changed in the harness's main.shader):
-            // every core's writes.
-            uint commit_bands_changed() {
-                if (_Init) return 0xffffffff;
-                uint changed = gpu_copy_bands();
-                for (uint core = 0; core < CORES; core++) {
-                    state_off = MC_BLOCK(core);
-                    uint stalled = STATE_TEX(uint2(28, 0)).r;
-                    changed |= STATE_TEX(uint2(41, 0)).g;   // the tick's writes
-                    if (stalled == STALL_MEMOP_COPY || stalled == STALL_MEMOP_FILL) {
-                        // a parallel copy or fill: the bands from its destination to its end
-                        uint4 op = STATE_TEX(uint2(38, 0));
-                        uint lo = (op.g >> 22) & 31, hi = min((op.g + op.b - 1) >> 22, 31u);
-                        if (op.b != 0 && hi >= lo) changed |= ((2u << hi) - 1) & ~((1u << lo) - 1);
-                    }
-                }
-                state_off = uint2(0, 0);
-                return changed;
-            }
             // Those, the ones of the commit before (the first commit after the start draws all)
             // and what the control pass changed since.
             uint blit_bands() {
@@ -153,48 +102,7 @@ Shader "ShaderEmu/Machine"
             }
 
             uint4 frag(blit_v2f i) : SV_Target {
-                _SelfTexture2D.GetDimensions(s_dim.x, s_dim.y);
-                _Data_MTD_R.GetDimensions(m_dim.x, m_dim.y);
-                uint2 pos = (uint2)i.vertex.xy;
-
-                if (_Init && _InitRaw) {
-                    float3 raw[6];
-                    for (uint off = 0; off < 6; off++) {
-                        raw[off] = _Data_RAM_RAW[pos + uint2((off * s_dim.x) % (s_dim.x*3), (off / 3) * s_dim.y)].rgb;
-                    }
-                    uint4 data = unpack_uint4(raw);
-                    return data;
-                }
-
-                uint4 picture;
-                if (!_Init && gpu_writeback(pos, picture)) return picture;
-                uint4 result;
-                if (pos.y < 64) {
-                    // a core's own block: its state
-                    uint core = pos.x / CORE_PITCH;
-                    if (core >= CORES || pos.x % CORE_PITCH >= 64) return (uint4)0;
-                    uint4 own = state_after_tick(pos);
-                    mc_core = core;
-                    state_off = MC_BLOCK(core);
-                    pos = mc_texel_of(pos - state_off);
-                    decode_for_commit();
-                    result = commit(pos, own);
-                    // A worker's one store that found its cache full is in its state until its next
-                    // pass rewrites it: gone now, or the commits of a worker asleep would store it again.
-                    if (core != 0 && pos.x == 8 && pos.y == 0) result.r = 0xffffffff;
-                    if (core == 0 && pos.x == 41 && pos.y == 0) result.b = commit_bands_changed();   // for the control pass and the next commit
-                } else {
-                    // RAM: every core's writes, the highest core's last
-                    result = RAM_TEX(pos);
-                    for (uint core = 0; core < CORES; core++) {
-                        mc_core = core;
-                        state_off = MC_BLOCK(core);
-                        if (core != 0 && STATE_TEX(uint2(41, 0)).r == 0) continue;   // a worker that stored nothing
-                        decode_for_commit();
-                        result = commit(pos, result);
-                    }
-                }
-                return result;
+                return commit_texel((uint2)i.vertex.xy);
             }
             ENDCG
         }
@@ -226,9 +134,25 @@ Shader "ShaderEmu/Machine"
             uniform uint _HostMsLo, _HostMsHi;
             uniform uint _HostFlags;   // bit 0: the guest should start its desktop when it boots
             static uint _InputKey0, _InputKey1, _InputKey2, _InputKey3, _HostMs;
+            // Where the machine is shown (docs/holodeck.md): eight words, each in two halves.
+            uniform uint _HostS0, _HostS1, _HostS2, _HostS3, _HostS4, _HostS5, _HostS6, _HostS7;
+            uniform uint _HostS8, _HostS9, _HostS10, _HostS11, _HostS12, _HostS13, _HostS14, _HostS15;
+            uint host_state_word(uint n) {
+                uint lo = n == 0 ? _HostS0 : n == 1 ? _HostS2 : n == 2 ? _HostS4 : n == 3 ? _HostS6 : n == 4 ? _HostS8 : n == 5 ? _HostS10 : n == 6 ? _HostS12 : _HostS14;
+                uint hi = n == 0 ? _HostS1 : n == 1 ? _HostS3 : n == 2 ? _HostS5 : n == 3 ? _HostS7 : n == 4 ? _HostS9 : n == 5 ? _HostS11 : n == 6 ? _HostS13 : _HostS15;
+                return (lo & 0xffff) | (hi << 16);
+            }
+            #define HOST_STATE_WORDS(n) host_state_word(n)
+            // The network (docs/lan.md): what the guest's packets were taken up to, what this pass
+            // delivers (rows of _NetData), and the machine's number. Counts come in two halves.
+            uniform uint _NetId, _NetTxAckLo, _NetTxAckHi, _NetRxSeqLo, _NetRxSeqHi, _NetRxCount;
+            static uint _NetTxAck, _NetRxSeq;
+            Texture2D<float4> _NetData;
+            #define GPU_NET
             // An answer to the guest's request (docs/fetch.md): its bytes, in the frame _FetchDeliver is set.
             uniform uint _FetchDeliver, _FetchSeq, _FetchLength, _FetchStatus;
             uniform uint _FetchInfo, _FetchW, _FetchH;   // a picture's size: one word, or its halves
+            uniform uint _FetchOffset;   // _FetchDeliver 3: where in the file a picture carries this part begins
             Texture2D<float4> _HostData;
             Texture2D<float4> _HostImage;
             // The sound card (docs/sound.md): its words move on in a pass that follows a mix.
@@ -254,7 +178,82 @@ Shader "ShaderEmu/Machine"
                 _InputKey2 = key_event(_InputKeyCode2);
                 _InputKey3 = key_event(_InputKeyCode3);
                 _HostMs = _HostMsLo | (_HostMsHi << 16);
+                _NetTxAck = (_NetTxAckLo & 0xffff) | (_NetTxAckHi << 16);
+                _NetRxSeq = (_NetRxSeqLo & 0xffff) | (_NetRxSeqHi << 16);
                 return gpu_control((uint2)i.vertex.xy);
+            }
+            ENDCG
+        }
+
+        Pass
+        {
+            // The tick's eight targets, into the tick's texture as the state has its rows (as
+            // main.shader's TICK_UNPACK): core 0's rectangle and the workers' band. What the tick
+            // did not draw (a worker with nothing to run) is the state as it was.
+            Name "Unpack"
+
+            CGPROGRAM
+            #pragma target 5.0
+            #pragma vertex blit_vert
+            #pragma fragment frag
+
+            #define PASS_TICK
+            #include "UnityCG.cginc"
+            #include "MachineBlit.cginc"
+
+            float _Init;
+            Texture2D<uint4> _TickOut0, _TickOut1, _TickOut2, _TickOut3, _TickOut4, _TickOut5, _TickOut6, _TickOut7;
+
+            // the state before the tick, as MachineTick.shader reads it
+            static uint hart = 0;
+            static uint2 state_off = uint2(0, 0);
+            static uint mc_core = 0;
+            static uint mc_bits_now = 6;
+            static uint mc_size_now = 4096;
+            static uint mc_tile0 = 0;
+            static uint4 mc_geo, mc_geo1, mc_geo2;
+            uint4 mc_state_read(uint2 pos) {
+                if (mc_core == 0) return _SelfTexture2D[pos + state_off];
+                uint w = pos.y * 64 + pos.x;
+                if (w >= mc_size_now) return (uint4)0;
+                uint t = mc_tile0 + (w >> 6), i = w & 63;
+                return _SelfTexture2D[uint2(64 + (t << 3) + (i & 7), i >> 3)];
+            }
+            #define STATE_TEX_HART(pos, hartidx) mc_state_read(uint2(pos))
+            #define STATE_TEX(pos) mc_state_read(uint2(pos))
+            #define RAM_TEX(pos) (_SelfTexture2D[pos])
+
+            static uint2 s_dim;
+            static uint2 m_dim;
+
+            #include "helpers.cginc"
+            #include "src/types.cginc"
+            #include "src/mc.cginc"
+
+            uint4 tick_out(uint k, uint2 at) {
+                uint3 p = uint3(at, 0);
+                if (k == 0) return _TickOut0.Load(p);
+                if (k == 1) return _TickOut1.Load(p);
+                if (k == 2) return _TickOut2.Load(p);
+                if (k == 3) return _TickOut3.Load(p);
+                if (k == 4) return _TickOut4.Load(p);
+                if (k == 5) return _TickOut5.Load(p);
+                if (k == 6) return _TickOut6.Load(p);
+                return _TickOut7.Load(p);
+            }
+
+            uint4 frag(blit_v2f i) : SV_Target {
+                uint2 pos = (uint2)i.vertex.xy;
+                if (pos.x < 64) return tick_out(pos.x & 7, uint2(pos.x >> 3, pos.y));
+                if (pos.y >= WORKER_BAND_ROWS) return (uint4)0;
+                if (_Init) return _SelfTexture2D[pos];
+                MC_GEO_READ
+                if ((mc_geo.r & 1) != 0) return (uint4)0;   // being laid out anew
+                uint tile = (pos.x - MC_STRIP_X) >> 3;
+                hart = mc_core_at(tile);
+                if (hart == 0 || mc_idle()) return _SelfTexture2D[pos];
+                // a worker's texel: in its block's column for this tile
+                return tick_out(pos.x & 7, uint2((MC_STRIP_X >> 3) + TICK_GAP + mc_col0 + (tile - mc_tile0), pos.y));
             }
             ENDCG
         }

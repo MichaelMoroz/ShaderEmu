@@ -21,6 +21,8 @@ public static partial class ShaderEmuBuilder
     const string Generated = Root + "/Generated";
     const string ScenePath = Root + "/ShaderEmuWorld.unity";
     const int GpuLayer = 22;
+    const int TickLayer = 23, PointsLayer = 24;   // the tick's camera and the commit's points' (MachineCameras)
+    const int MachineCores = 64;                  // CORES in MachineBlit.cginc
     const int GpuTriangles = 65536;
 
     // ---------------------------------------------------------------- keys
@@ -254,6 +256,107 @@ public static partial class ShaderEmuBuilder
         rt.wrapMode = TextureWrapMode.Clamp;
         EditorUtility.SetDirty(rt);
         return rt;
+    }
+
+    // The tick and the commit's points are cameras' passes (docs/multicore.md, "In Unity"): a
+    // pass with several targets, or one of a mesh of points, is a camera's in VRChat. Each
+    // camera sees one mesh on a layer of its own, and EmuMachine renders it.
+    static void MachineCameras(Transform world, EmuMachine machine)
+    {
+        NameLayer(TickLayer, "MachineTick");
+        NameLayer(PointsLayer, "MachineCommit");
+        Transform device = world.Find("GPU device");
+        foreach (string old in new[] { "Tick camera", "Tick mesh", "Points camera", "Points mesh" })
+        {
+            Transform t = device.Find(old);
+            if (t != null) Object.DestroyImmediate(t.gameObject);
+        }
+        Material tickMat = Mat("MachineTick", "ShaderEmu/MachineTick");
+        Material pointsMat = Mat("MachineCommitPoints", "ShaderEmu/MachineCommitPoints");
+        RenderTexture tickState = StateTexture("TickState", 2048, 16);
+        machine.tickState = tickState;
+        machine.tickTargets = new RenderTexture[8];
+        for (int i = 0; i < 8; i++) machine.tickTargets[i] = StateTexture("TickOut" + i, 1024, 16);   // TICK_MRT_W x TICK_STATE_ROWS
+        machine.tickDepth = Target("TickDepth", 1024, 16, 16);
+        machine.readbackTexture = Target("Readback", 768, 32, 0);
+        pointsMat.SetTexture("_TickState", tickState);
+        pointsMat.SetTexture("_GpuTarget", AssetDatabase.LoadAssetAtPath<RenderTexture>(Generated + "/GpuTarget.renderTexture"));
+        machine.machineMaterial.SetTexture("_TickState", tickState);
+
+        // triangles for the tick, one for every sixteen cores (its geometry shader draws the
+        // cores' quads whatever they are, sixteen cores' a primitive)
+        int groups = (MachineCores + 15) / 16;
+        Mesh triangle = LoadOrCreate(Generated + "/TickTriangle.asset", () => new Mesh { name = "TickTriangle" });
+        if (triangle.vertexCount != 3 * groups)
+        {
+            int[] corners = new int[3 * groups];
+            for (int i = 0; i < corners.Length; i++) corners[i] = i;
+            triangle.Clear();
+            triangle.vertices = new Vector3[3 * groups];
+            triangle.SetIndices(corners, MeshTopology.Triangles, 0, false);
+            triangle.bounds = new Bounds(Vector3.zero, Vector3.one);
+            EditorUtility.SetDirty(triangle);
+        }
+        // and a point for every entry of every core's write cache, its last store and its copy
+        int count = 770 + (MachineCores - 1) * 386;
+        Mesh points = LoadOrCreate(Generated + "/CommitPoints.asset", () => new Mesh { name = "CommitPoints" });
+        if (points.vertexCount != count)
+        {
+            int[] indices = new int[count];
+            for (int i = 0; i < count; i++) indices[i] = i;
+            points.Clear();
+            points.vertices = new Vector3[count];
+            points.SetIndices(indices, MeshTopology.Points, 0, false);
+            points.bounds = new Bounds(Vector3.zero, Vector3.one);
+            EditorUtility.SetDirty(points);
+        }
+        machine.tickCamera = PassCamera(device, "Tick", TickLayer, triangle, tickMat);
+        machine.pointsCamera = PassCamera(device, "Points", PointsLayer, points, pointsMat);
+        machine.tickMaterial = tickMat;
+        machine.pointsMaterial = pointsMat;
+    }
+
+    static Camera PassCamera(Transform device, string name, int layer, Mesh mesh, Material material)
+    {
+        Camera camera = new GameObject(name + " camera").AddComponent<Camera>();
+        camera.transform.SetParent(device, false);
+        camera.orthographic = true;
+        camera.orthographicSize = 1f;
+        camera.nearClipPlane = 0.1f;
+        camera.farClipPlane = 4f;
+        camera.cullingMask = 1 << layer;
+        camera.clearFlags = CameraClearFlags.Nothing;   // what it does not draw stays
+        camera.allowHDR = false;
+        camera.allowMSAA = false;
+        camera.useOcclusionCulling = false;
+        camera.depth = -11;
+        camera.enabled = false;   // EmuMachine renders it
+        GameObject meshObject = new GameObject(name + " mesh", typeof(MeshFilter), typeof(MeshRenderer));
+        meshObject.transform.SetParent(device, false);
+        meshObject.transform.localPosition = new Vector3(0, 0, 2f);
+        meshObject.layer = layer;
+        meshObject.GetComponent<MeshFilter>().sharedMesh = mesh;
+        MeshRenderer renderer = meshObject.GetComponent<MeshRenderer>();
+        renderer.sharedMaterial = material;
+        renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        renderer.receiveShadows = false;
+        renderer.lightProbeUsage = UnityEngine.Rendering.LightProbeUsage.Off;
+        renderer.reflectionProbeUsage = UnityEngine.Rendering.ReflectionProbeUsage.Off;
+        return camera;
+    }
+
+    [MenuItem("ShaderEmu/Add the tick's and the commit's cameras to the open scene")]
+    public static void AddMachineCameras()
+    {
+        Transform world = GameObject.Find("ShaderEmu").transform;
+        EmuMachine machine = world.GetComponentInChildren<EmuMachine>(true);
+        UdonSharpEditorUtility.CopyUdonToProxy(machine);
+        MachineCameras(world, machine);
+        Apply(machine);
+        UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(world.gameObject.scene);
+        UnityEditor.SceneManagement.EditorSceneManager.SaveOpenScenes();
+        AssetDatabase.SaveAssets();
+        Debug.Log("[ShaderEmu] the tick's and the commit's cameras are in the scene");
     }
 
     static Mesh GpuMesh()
@@ -734,10 +837,10 @@ public static partial class ShaderEmuBuilder
 
         RenderTexture state = StateTexture("StateA", 2048, 4096);
         RenderTexture stateB = StateTexture("StateB", 2048, 4096);
-        RenderTexture tickState = StateTexture("TickState", 832, 16);   // what the tick draws: STATE_ROWS, and CORE_PITCH * 3 + 64 for four cores
+        RenderTexture tickState = StateTexture("TickState", 2048, 16);   // the state rows after a tick: core 0's 64 x STATE_ROWS and the workers' band of 1984 x 8 beside it
         AssetDatabase.DeleteAsset(Generated + "/MachineState.asset");
         RenderTexture gpuTarget = Target("GpuTarget", 1280, 720, 32);   // the picture is 720p at most
-        RenderTexture readback = Target("Readback", 512, 32, 0);   // a row a round: EmuMachine's MaxRounds
+        RenderTexture readback = Target("Readback", 768, 32, 0);   // a row a round: EmuMachine's MaxRounds
         RenderTexture picture = PictureTexture("DisplayPicture", 2048, 1024);
         showMat.mainTexture = picture;
         showMat.SetVector("_TexSize", new Vector4(picture.width, picture.height, 0, 0));
@@ -936,6 +1039,7 @@ public static partial class ShaderEmuBuilder
         machine.gpuMaterial = gpuMat;
         machine.volumeMaterial = Volume(computer, halfW, state, plasticMat);
         machine.gpuCamera = camera;
+        MachineCameras(world, machine);
         machine.displayMaterial = displayMat;
         machine.displayTexture = picture;
         machine.displayShowMaterial = showMat;

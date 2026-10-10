@@ -277,17 +277,14 @@ workers after the first, which reads the codes: 6.8 s on core 0, 2.4 s with seve
 codes is what the others wait for there.
 
 A program is not told yet which of its workers are small; the kernel hands out the lowest
-numbers first, which are the first in the geometry. Not in Unity yet: the world's shader is
-the one before this, with four cores as blocks side by side (the kernel sees that it cannot
-be laid out and leaves it as it is). **Do not run "Sync shader sources" there until its tick
-texture and the passes that draw it have been changed to match**: the tick's quads come from
-the geometry shader now, and the workers' band is 512 x 8 beside core 0's 64 x 16.
+numbers first, which are the first in the geometry. The VRChat world has the same geometry
+("In Unity", below).
 
 ## Eight texels a pixel
 
 A pixel of the tick need not be one texel of state: with eight render targets it is eight,
 and the pass runs an eighth of the pixels. The D3D11 harness does that (`TICK_MRT`;
-`--no-mrt` for one target, which D3D12 and Unity still have): the tick draws into eight
+`--no-mrt` for one target, which D3D12 still has; Unity's is below, "In Unity"): the tick draws into eight
 targets 264 wide and as high as core 0's rows. Core 0's pixel (x, y) keeps texels 8x to
 8x + 7 of row y. A worker's tile of 8 x 8 is a column of eight pixels, in a block of columns
 that is the worker's own; the quads are the geometry shader's as before. The same pass
@@ -377,8 +374,8 @@ So this card runs some 2,000 to 3,000 pixels of the tick in the time of one, whi
 into every core's cache for every texel it writes: 0.06 ms a pass with one core busy,
 1.1 ms with sixteen), and the geometry's texel, which has room for fifteen.
 
-It is not in Unity yet: there the tick has to become a camera's pass, which is how a pass
-with several targets is drawn in VRChat.
+In Unity the tick is a camera's pass, which is how a pass with several targets is drawn in
+VRChat ("In Unity", below).
 
 ## More than sixteen cores
 
@@ -446,7 +443,7 @@ picture of 640 x 480 with 63 workers of the smallest size is 1.19 s where it was
 (677 thousand rays a second, 58 times core 0 alone), and with 15 workers 4.29 s where it
 was 4.50 s. `nxpath`, 16 cores: 100 thousand rays a second where it was 89.
 
-In Unity this is a mesh of points, so a camera's pass, as the tick in eight targets is.
+In Unity this is a mesh of points, so a camera's pass, as the tick in eight targets is ("In Unity").
 
 ## Workers with nothing to do
 
@@ -648,26 +645,59 @@ programs. The harness adds them up from the rows it reads back anyway: with `--c
 
 ## In Unity
 
-The VRChat machine has four cores (`CORES` in `MachineBlit.cginc`, for all three passes).
+The VRChat machine has the harness's 64 cores, the guest's geometry, the tick in eight
+targets, the commit as points, the shader's own write cache (384 texels) and passes of 8,192
+(`CORES`, `L1_TABLE_BITS` and the sizes in `MachineBlit.cginc`; the tick and the commit are
+`experiments/rvc_opt/main.shader`'s, line for line where they deal with cores).
 
-- **The tick's texture** is 832 x 16: the state rows' own places, core k's block 256 texels
-  right of the one before. A geometry shader puts core 0's 64 x 16 and a worker's 64 x 8 and
-  16 x 4 in place of Blit's two triangles, so the pixels between are not run.
-- **The commit** takes a texel of a core's block from that texture where the tick drew it
-  (`state_after_tick`) and merges every core's writes into RAM, as the harness's does; the
-  bands it draws are every core's.
-- **The readback** has the first 64 control texels (it had 48), which is where the counts
-  are: the panel's statistics have a line for the workers and for all cores together.
+- **The tick is a camera's pass.** `MachineTick.shader` is on a mesh of four triangles (one for every
+  sixteen cores) that only the tick's camera sees (a layer of its own); `EmuMachine` gives the
+  camera eight targets of 1024 x 16 once (`Camera.SetTargetBuffers`, which Udon has) and renders it once a round.
+  `tick_geom` draws core 0's pixels and a block of columns for each worker with something to
+  run, as the harness's does, and draws nothing for any other camera (it looks at the target's
+  size).
+- **The unpack** (`Machine.shader`'s third pass, a Blit into the 2048 x 16 texture the commit
+  reads) puts the targets' texels where the state has its rows, and takes the state as it
+  was for whatever the tick did not draw: a worker with nothing to run, the band at start.
+- **The commit** is three draws: a Blit of the state rows and the bands something else wrote
+  (the control pass, the GPU's picture copied back); then `MachineCommitPoints.shader` on a
+  mesh of 25,088 points that a second camera draws into the same texture, each point the
+  rectangle it stands for and each texel the commit's own (`MachineCommit.cginc`, which both
+  share); and, before the control pass, the same points once more into the other state
+  texture as copies. A copy out of the ROM is a point too: the points' material needs the
+  ROM's textures (without them Linux started and could not read `/emuinit`).
+- **The readback** has the first 64 control texels and 64 of the network's row, where the
+  counts are: the panel's statistics have a line for the workers and for all cores together.
 
-`mctest` passes there. On an RTX 5090, frame cap off, 8 to 16 rounds of 8,192 a frame:
+"ShaderEmu/Add the tick's and the commit's cameras to the open scene" puts the cameras, their
+meshes and the targets into a scene without building the world again.
 
-| | A round | Core 0 | Workers | All cores |
-|---|---|---|---|---|
-| core 0 busy, three workers asleep (`mctest 3 900000 bench 0`) | 1.61 to 1.76 ms | 4.7 to 4.9M a second | | |
-| core 0 and three workers busy (`bench 2`) | 1.78 to 1.81 ms | 4.5 to 4.6M | 13.6 to 13.8M | 18.1 to 18.4M |
+`mctest 15 60000 shape 6,6,6,5,5,4,4,4` passes there, and `mctest 63 20000 shape 3,3,...`. `RAY_FRAMES=1 RAY_STILL=1 nxray` gives the
+sum `69ee69f8` on core 0 alone (18.9 s) and with the kernel's fifteen workers (1.46 s; with
+the tick in one target and the commit in bands, 20.0 s and 2.0 s).
 
-(Those figures are of the workers before they had paging; the world's shader sources and
-boot images have to be synced and imported again for the kind described here.)
+On an RTX 5090, the editor not in front, frame cap off, a shell's `while :; do :; done` on
+core 0 (the slope between two numbers of rounds is a round):
+
+| Instructions a round | A round | Core 0, in rounds alone |
+|---|---|---|
+| 2 (what a round costs with nothing to run) | 1.0 to 1.4 ms | |
+| 4,096 | 1.35 ms | 3.0M a second |
+| 8,192 | 2.6 to 2.8 ms | 2.9 to 3.1M |
+| 16,384 | 4.4 ms | 3.7M |
+| 32,768 | 8.7 to 9.3 ms | 3.5 to 3.8M |
+
+The harness on the same card and the same loop: 3.86M a second (a tick of 8.45 ms, a commit
+of 0.016 ms), and 3.47M with one target, passes of 16,384 and the cache as it was. So a
+round in Unity is the harness's tick and about a millisecond of the script's and the three
+cameras' own work, which a pass of 32,768 hides and a pass of 4,096 does not. The default
+there is 8,192 a round all the same (`TicksPerRound`), as everywhere: one pass length and
+one cache for the harness, `rvc_cpu` and the world. The table above is of the build before
+that (16 cores, 768 texels of cache).
+
+(Before this, with the tick a Blit into one target, a round of 8,192 was 1.65 to 1.72 ms with
+core 0 on `mctest`'s primes, 4.5 to 4.85M a second. That is another load than the shell's
+loop and was not measured again.)
 
 ## Switches
 

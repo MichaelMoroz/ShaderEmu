@@ -322,15 +322,22 @@ A cold boot to the `/ #` prompt takes about 80 s on an RTX 5090 with upstream on
   staging texture, one Map): the same state hash, typed input no slower, and a gain inside the
   noise (4% of a 2-instruction frame, 1 to 3% at 8,192 with N = 16), for output N frames
   later. It is 1 unless asked for.
-- The Unity machine has four cores (`docs/multicore.md`, "In Unity"): `CORES` in
-  `MachineBlit.cginc`, a tick texture 832 x 16, the commit of every core. A change to the cores'
-  number or pitch moves `TickState`'s size (the builder, and the asset in `Generated`) with it.
-  To test: `mctest 3 120000` at the console must end in `PASS`; `mctest 3 400000 bench 2`
-  keeps all four busy for a sweep. Never end `mctest` with Ctrl+C: its workers stay running
+- The Unity machine has the harness's 64 cores and the guest's geometry
+  (`docs/multicore.md`, "In Unity"): `CORES` in `MachineBlit.cginc`, a tick texture 2048 x 16
+  (core 0's 64 x 16 and the workers' band), the state copied into it before each tick, the
+  commit of every core. Where its tick and commit deal with cores they are `main.shader`'s
+  lines: a change there is made in both. A change to the band's size moves `TickState`'s (the
+  builder, and the asset in `Generated`) with it. To test: `mctest 3 120000` and `mctest 15
+  60000 shape 6,6,6,5,5,4,4,4` at the console must end in `PASS`, and `nxray` must print one
+  sum with `RAY_WORKERS=0` and without; `mctest 3 400000 bench 2` keeps four busy for a sweep.
+- A field added to an Udon behaviour that VRChat copies for every player (`EmuShare`) is
+  empty in objects made from a template older than the field: an array there has no
+  elements. Whoever reads it sizes it first (`Roster` in `EmuShareHub`). Never end `mctest` with Ctrl+C: its workers stay running
   and the next one finds none, until the machine is switched off and on.
 - What each core ran is among the control words (0x87000380, `MC_STATS`): `nxmon`, the
   harness's `STATS workers` line and the Unity panel all read it there. The Unity readback is
-  512 words a row for it (the first 64 control texels).
+  768 words a row: state row 0, the first 64 control texels and 64 texels of the network's row,
+  where cores 16 and up are counted (`MC_STATS_MORE`, 0x876b8280).
 - To time rounds in play mode, take the frame cap off (`Application.targetFrameRate = -1`), set
   `rounds` to 8, 16 and 32 with a busy guest (`while :; do :; done` typed at the console
   keyboard) and read frames and `totalInstructions` from an `EditorApplication.update` callback
@@ -1055,3 +1062,16 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   have hands?").
 - Idle Linux runs about 0.2M instructions a second: a test that waits for "enough instructions"
   to know the guest has booted waits for ever. The prompt is there after 10.7M.
+- In Unity the tick and the commit's points are cameras' passes (`docs/multicore.md`, "In
+  Unity"): a camera each, a mesh each on a layer of its own (23 and 24), rendered from
+  `EmuMachine`. Udon has `Camera.SetTargetBuffers` and `RenderTexture.colorBuffer`. A shader on
+  such a mesh must be a file with one pass (a renderer draws every pass of its shader), and
+  must draw nothing for any camera but its own: it looks at `_ScreenParams`.
+- A material that commits must have the ROM's textures (`ApplyImage` in `EmuMachine.cs`): a copy
+  out of the ROM is a commit's. Without them Linux panics with "Requested init /emuinit failed
+  (error -8)", which looks like a bad image.
+- A round in Unity costs about a millisecond besides the tick (the script and three cameras):
+  measure a change there with passes of 2 instructions as well as full ones, and set the pass
+  length on the tick's material (`_Ticks`), not only in the script's `ticks`.
+- After a pull that changes `main.shader`'s tick or commit, the same change is owed in
+  `MachineTick.shader`, `MachineCommit.cginc` and `MachineCommitPoints.shader`.

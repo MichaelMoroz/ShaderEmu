@@ -20,8 +20,15 @@ using VRC.Udon.Common.Interfaces;
 public class EmuMachine : UdonSharpBehaviour
 {
     public RenderTexture stateA, stateB;    // 2048 x 4096, four 32-bit words a texel
-    public RenderTexture tickState;         // 832 x 16: what the tick keeps of each core's state area, after a tick
-    public Material tickMaterial;           // MachineTick.shader: CPUTick
+    public RenderTexture tickState;         // 2048 x 16: core 0's state rectangle and the workers' band, after a tick
+    public Material tickMaterial;           // MachineTick.shader: CPUTick, on the tick camera's mesh
+    // The tick is a camera's pass into eight targets, eight state texels a pixel, and what the
+    // cores stored is committed as points by another camera (docs/multicore.md, "In Unity").
+    public Camera tickCamera;               // disabled: rendered from here, once a round
+    public RenderTexture[] tickTargets;     // eight of 1024 x 16
+    public RenderTexture tickDepth;         // the depth buffer a camera with several targets must be given
+    public Camera pointsCamera;             // disabled: rendered from here, twice a round
+    public Material pointsMaterial;         // MachineCommitPoints.shader, on the points camera's mesh
     public Material machineMaterial;        // Machine.shader: passes Commit and GPUControl
     public Material gpuMaterial;            // the GPU mesh's material
     public Material volumeMaterial;         // the holodeck's: the same lists, seen from the room
@@ -34,7 +41,7 @@ public class EmuMachine : UdonSharpBehaviour
     public Material stateViewMaterial;      // Scope.shader showing the CPU's state texels
     public Material romViewMaterial;        // and the ROM
     public Material readbackMaterial;
-    public RenderTexture readbackTexture;   // 512 x 32: one pixel per word, a row for each round of a frame
+    public RenderTexture readbackTexture;   // 768 x 32: one pixel per word, a row for each round of a frame
 
     public EmuSound sound;                  // the sound card's host side, if the world has one
     public EmuTerminal terminal;
@@ -78,15 +85,29 @@ public class EmuMachine : UdonSharpBehaviour
     [HideInInspector] public int shownWidth, shownHeight;   // the display the pointer is mapped to
     [HideInInspector] public int pointerX, pointerY, pointerButtons;
     [HideInInspector] public bool pointerOn;            // a beam is on the display
+    [HideInInspector] public bool pointerOwn;           // and it is on this player's own classroom tube: this machine's, whatever the wall shows
+    [HideInInspector] public float mipsAll, mipsCore;   // millions of instructions a second: every core, and core 0
 
-    private const int Words = 512;      // state row 0's 64 texels and the first 64 control texels
+    private const int Words = 768;      // state row 0's 64 texels, the first 64 control texels, 64 of the network's row
+    private const int CoresMore = 168;  // what cores 16 and up ran, in texels: thirteen after the network's window
+    // The network (docs/lan.md): the guest's packets out of its window, and packets for it into its ring.
+    private const int NetSlot = 640, NetMost = 576, NetQueue = 32;
+    private byte[] netOut = new byte[NetQueue * NetMost], netIn = new byte[NetQueue * NetMost];
+    private int[] netOutLength = new int[NetQueue], netInLength = new int[NetQueue];
+    private int netOutHead, netOutTail, netInHead, netInTail;
+    private uint netAcked, netTaken, netRxSeq;
+    private int netRxCount, netBad, netId;
+    private bool netSeen;
+    private Color32[] netPixels = new Color32[160 * 4];
+    [HideInInspector] public int netSent, netReceived;   // packets, for whoever watches
     private const int FetchMost = 262144;
     private const int FetchIdle = 0, FetchLoading = 1, FetchPacking = 2, FetchReady = 3, FetchDelivering = 4;
     private const int UartBurst = 4;
     private const int InitFrames = 2;
-    private const int TicksPerRound = 8192;   // more per tick pass only fills the write cache
+    private const int TicksPerRound = 8192;   // instructions a pass, as the harness's
     private const int MaxRounds = 32;
-    private const int PassCommit = 0, PassControl = 1;
+    private const int PassCommit = 0, PassControl = 1, PassUnpack = 2;
+    private bool targetsSet;
 
     private bool powered, paused;
     private int budget = 32768;        // instructions a frame
@@ -134,8 +155,8 @@ public class EmuMachine : UdonSharpBehaviour
     private float instructions;        // since the last stats line
     // the worker cores (docs/multicore.md): how many cores, which run, and what the workers ran
     private int cores = 1;
-    private uint coresRunning;         // a bit a core that is at work
-    private uint[] workerClock = new uint[16];
+    private uint coresRunning, coresRunningMore;   // a bit a core that is at work: the first 32, the rest
+    private uint[] workerClock = new uint[64];
     private bool haveWorkerClock;
     private float workerInstructions;  // since the last stats line
     private double totalWorkerInstructions;
@@ -299,6 +320,11 @@ public class EmuMachine : UdonSharpBehaviour
         tickMaterial.SetTexture("_Data_DTB_G", Pick(9));
         tickMaterial.SetTexture("_Data_DTB_B", Pick(10));
         tickMaterial.SetTexture("_Data_DTB_A", Pick(11));
+        // (a copy out of the ROM is committed as points)
+        pointsMaterial.SetTexture("_Data_MTD_R", Pick(4));
+        pointsMaterial.SetTexture("_Data_MTD_G", Pick(5));
+        pointsMaterial.SetTexture("_Data_MTD_B", Pick(6));
+        pointsMaterial.SetTexture("_Data_MTD_A", Pick(7));
         gpuMaterial.SetTexture("_Data_MTD_R", Pick(4));
         gpuMaterial.SetTexture("_Data_MTD_G", Pick(5));
         gpuMaterial.SetTexture("_Data_MTD_B", Pick(6));
@@ -335,6 +361,19 @@ public class EmuMachine : UdonSharpBehaviour
         displayWidth = 0;
         displayHeight = 0;
         machineMaterial.SetTexture("_TickState", tickState);
+        pointsMaterial.SetTexture("_TickState", tickState);
+        if (!targetsSet)
+        {
+            // the tick camera's eight targets, which the unpack pass then reads
+            targetsSet = true;
+            RenderBuffer[] colours = new RenderBuffer[tickTargets.Length];
+            for (int i = 0; i < tickTargets.Length; i++)
+            {
+                colours[i] = tickTargets[i].colorBuffer;
+                machineMaterial.SetTexture("_TickOut" + i, tickTargets[i]);
+            }
+            tickCamera.SetTargetBuffers(colours, tickDepth.depthBuffer);
+        }
         machineMaterial.SetInt("_Init", 1);
         tickMaterial.SetInt("_Init", 1);
         machineMaterial.SetInt("_InitRaw", 0);
@@ -652,14 +691,28 @@ public class EmuMachine : UdonSharpBehaviour
 
     // ---- one frame ----
 
-    // One pass of the machine's shader from the current state into the other one.
-    private void Pass(int pass)
+    // One pass of the machine's shader from the current state into the other one. With
+    // `points` (the commit, once the machine runs) what the cores stored is then drawn there
+    // as points, each texel by the commit's own shader.
+    private void Pass(int pass, bool points)
     {
         machineMaterial.SetTexture("_SelfTexture2D", current);
         VRCGraphics.Blit(current, other, machineMaterial, pass);
+        if (points) Points(false);
         RenderTexture t = current;
         current = other;
         other = t;
+    }
+
+    // The cores' stores of this round as points into the other state: the commit's (from the
+    // current state and the tick's), or, as copies, the texels the commit made of them, which
+    // the buffer the commit did not draw into still lacks.
+    private void Points(bool copies)
+    {
+        pointsMaterial.SetTexture("_SelfTexture2D", current);
+        pointsMaterial.SetInt("_Copy", copies ? 1 : 0);
+        pointsCamera.targetTexture = other;
+        pointsCamera.Render();
     }
 
     void Update()
@@ -674,11 +727,15 @@ public class EmuMachine : UdonSharpBehaviour
         machineMaterial.SetInt("_SoundMixed", 0);
         for (int i = 0; i < n; i++)
         {
-            // The tick writes only the 64 x 16 texels it keeps of the CPU's state area, into a texture of that size;
+            // The tick camera draws what the cores keep of their state (core 0's pixels, and a
+            // block for each worker with something to run) into its eight targets; the unpack
+            // pass puts that where the state has its rows, with the state as it was for the rest;
             // the commit reads it from there and writes the whole state.
             tickMaterial.SetTexture("_SelfTexture2D", current);
-            VRCGraphics.Blit(current, tickState, tickMaterial, 0);
-            Pass(PassCommit);
+            tickCamera.Render();
+            machineMaterial.SetTexture("_SelfTexture2D", current);
+            VRCGraphics.Blit(current, tickState, machineMaterial, PassUnpack);
+            Pass(PassCommit, running);
             // What that round left, into its own row: the console's output is only there
             // until the next tick. The rows are read back together when the frame's rounds are done.
             readbackMaterial.SetTexture("_State", current);
@@ -693,7 +750,9 @@ public class EmuMachine : UdonSharpBehaviour
                 // The sound card mixes once a frame, before the last control pass, which then
                 // moves its voices up to where the mix began.
                 if (i == n - 1 && sound != null) sound.Mix(current, machineMaterial, soundEnabled, soundClock);
-                Pass(PassControl);
+                // (the points before the control pass, whose bands are newer than they are)
+                Points(true);
+                Pass(PassControl, false);
             }
         }
         roundsOf[requestsSent & 63] = n;
@@ -862,11 +921,12 @@ public class EmuMachine : UdonSharpBehaviour
         haveClock = true;
         lastClock = clock;
         // the cores' counts of instructions, which the control pass publishes at 0x87000380
-        cores = Mathf.Clamp((int)Word(64 + 0x3c, 0), 1, 16);
+        cores = Mathf.Clamp((int)Word(64 + 0x3c, 0), 1, 64);
         coresRunning = Word(64 + 0x3c, 1) & ~Word(64 + 0x3c, 2);   // started, and not asleep on its job word
+        coresRunningMore = Word(CoresMore + 12, 0) & ~Word(CoresMore + 12, 1);
         for (int c = 1; c < cores; c++)
         {
-            uint now = Word(64 + 0x38 + c / 4, c % 4);
+            uint now = c < 16 ? Word(64 + 0x38 + c / 4, c % 4) : Word(CoresMore + (c - 16) / 4, c % 4);
             if (haveWorkerClock)
             {
                 uint more = now - workerClock[c];
@@ -902,7 +962,7 @@ public class EmuMachine : UdonSharpBehaviour
         speedLine = ips.ToString("N0") + " instructions/s   " + fps.ToString("F0") + " frames/s   "
                     + (fps > 0 ? (ips / fps).ToString("N0") : "0") + " a frame";
         int busy = 0;
-        for (int c = 1; c < cores; c++) if ((coresRunning >> c & 1) != 0) busy++;
+        for (int c = 1; c < cores; c++) if (((c < 32 ? coresRunning >> c : coresRunningMore >> (c - 32)) & 1) != 0) busy++;
         string workerLine = cores < 2 ? "one core" :
             (cores - 1) + " workers (" + busy + " running): " + workerIps.ToString("N0") + " instructions/s, all cores " + (ips + workerIps).ToString("N0");
         if (statsText == null) return;

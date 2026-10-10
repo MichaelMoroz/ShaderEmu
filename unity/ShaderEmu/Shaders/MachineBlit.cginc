@@ -1,18 +1,20 @@
 // What Machine.shader's passes share: they are drawn with Blit, one pixel per state texel.
 Texture2D<uint4> _SelfTexture2D;   // the machine's state before the pass
 Texture2D<uint4> _TickState;       // what the tick keeps of the CPU's state area, after the tick
-// The rows of the state area that the tick draws: STATE_ROWS of src/types.cginc (16 with the
-// default write cache; the CSR area under them is the commit's).
+// The write cache is the shader's default (384 texels), which makes the state area's rows that
+// the tick keeps 16 (STATE_ROWS of src/types.cginc).
+#define L1_TABLE_BITS 6
 #define TICK_STATE_ROWS 16
-// Core 0 and three workers (docs/multicore.md), a block of state each, CORE_PITCH texels apart.
-// The tick's texture has the same places: it is CORE_PITCH * (CORES - 1) + 64 wide.
-#define CORES 4
-#define CORE_PITCH 256
-#define TICK_STATE_WIDTH (CORE_PITCH * (CORES - 1) + 64)
-// What a worker keeps (MC_ROWS in src/types.cginc): 64 x 8, and 16 x 4 under that.
-#define WORKER_ROWS 8
-#define WORKER_TAIL_WIDTH 16
-#define WORKER_TAIL_ROWS 4
+// Core 0 and up to 63 workers (docs/multicore.md). The tick's texture is the state rows'
+// own places: core 0's 64 x 16, and beside it the workers' band, 248 tiles of 8 x 8, of which
+// each worker has a strip as the guest's geometry says (src/types.cginc).
+#define CORES 64
+#define TICK_STATE_WIDTH 2048
+#define WORKER_BAND_ROWS 8
+// The tick itself is drawn into eight targets, eight state texels a pixel (MachineTick.shader):
+// core 0's eight columns, TICK_GAP empty ones, then a block of columns for each worker.
+#define TICK_MRT_W 1024
+#define TICK_GAP 8
 
 struct blit_v2f {
     float4 vertex : SV_Position;   // .xy is the texel being written
@@ -23,32 +25,6 @@ blit_v2f blit_vert(appdata_base v) {
     o.vertex = UnityObjectToClipPos(v.vertex);
     return o;
 }
-
-#ifdef BLIT_TICK
-void tick_zone(inout TriangleStream<blit_v2f> stream, float x, float y, float width, float height) {
-    // clip space as the card has it: the texture's top left is (-1, 1)
-    float x0 = 2.0 * x / TICK_STATE_WIDTH - 1.0, x1 = 2.0 * (x + width) / TICK_STATE_WIDTH - 1.0;
-    float y0 = 1.0 - 2.0 * y / TICK_STATE_ROWS, y1 = 1.0 - 2.0 * (y + height) / TICK_STATE_ROWS;
-    blit_v2f o;
-    o.vertex = float4(x0, y0, 0.5, 1.0); stream.Append(o);
-    o.vertex = float4(x1, y0, 0.5, 1.0); stream.Append(o);
-    o.vertex = float4(x0, y1, 0.5, 1.0); stream.Append(o);
-    o.vertex = float4(x1, y1, 0.5, 1.0); stream.Append(o);
-    stream.RestartStrip();
-}
-
-// In place of Blit's two triangles: core 0's rectangle and two small ones a worker. Pixels
-// between them are not drawn: a pixel that runs the tick for nothing costs as one that counts.
-[maxvertexcount(124)]
-void blit_tick_geom(triangle blit_v2f corners[3], uint which : SV_PrimitiveID, inout TriangleStream<blit_v2f> stream) {
-    if (which != 0) return;
-    tick_zone(stream, 0, 0, 64, TICK_STATE_ROWS);
-    for (uint core = 1; core < CORES; core++) {
-        tick_zone(stream, core * CORE_PITCH, 0, 64, WORKER_ROWS);
-        tick_zone(stream, core * CORE_PITCH, WORKER_ROWS, WORKER_TAIL_WIDTH, WORKER_TAIL_ROWS);
-    }
-}
-#endif
 
 #ifdef BLIT_BANDS
 // The control pass writes the device's words and a page the host fetched: RAM bands 28 and 29.
@@ -80,13 +56,11 @@ void blit_bands_geom(triangle blit_v2f corners[3], uint which : SV_PrimitiveID, 
 }
 #endif
 
-// A texel of the state rows as the tick left it: from the tick's texture where the tick drew.
+// A texel of the state rows as the tick left it: from the tick's texture, which holds core 0's
+// rectangle and the workers' band (what the tick did not draw of them was copied in before it).
 uint4 state_after_tick(uint2 p) {
-    uint core = p.x / CORE_PITCH, x = p.x % CORE_PITCH;
-    bool drawn = core == 0 ? x < 64 && p.y < TICK_STATE_ROWS
-                           : core < CORES && ((x < 64 && p.y < WORKER_ROWS) ||
-                                              (x < WORKER_TAIL_WIDTH && p.y >= WORKER_ROWS && p.y < WORKER_ROWS + WORKER_TAIL_ROWS));
+    bool kept = p.x < 64 ? p.y < TICK_STATE_ROWS : p.x < TICK_STATE_WIDTH && p.y < WORKER_BAND_ROWS;
     [branch]
-    if (drawn) return _TickState[p];
+    if (kept) return _TickState[p];
     return _SelfTexture2D[p];
 }
