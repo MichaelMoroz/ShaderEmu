@@ -729,6 +729,11 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   `docs/tdawn.md`): anything added to `host.c` that calls the GPU's library must call
   `scene_finish()` first. `TDAWN_SCENE=inline` is the way it was, for comparing: the state
   sums and a held frame's picture (`--gpu-capture`; the pointer differs) must be the same.
+- The GPU weighs four texels for a texture with fragment flag `0x400` (`docs/gpu.md`; in the
+  library, `GL_TEXTURE_MAG_FILTER` `GL_LINEAR`). Quake uses it; a change to it is checked with
+  `QUAKE_HOLD=60 quake +map e1m1`, `--save-state`, `--gpu-capture` and `tools\gpu_reference.py
+  SNAP BMP --size 640x480` (every pixel within 2 levels), and needs "Sync shader sources" in
+  Unity, whose GPU shares `gpu.h`.
 - Never more than three harness runs at once: four took 264 s where one takes 70.
 - Its changes to id's source are `linux/quake/quake.patch`: edit a clean clone at the commit
   `build.sh` names and save `git diff -- WinQuake`. The build puts the tree back each time.

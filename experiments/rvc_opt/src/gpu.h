@@ -56,6 +56,7 @@
 #define FRAGMENT_RGB24 4      // texture of three bytes a pixel (red, green, blue), rows with no padding, at any byte address, in RAM or ROM; times colour
 #define FRAGMENT_KEYED 0x100  // flag: texels equal to the key colour (or index) are not drawn
 #define FRAGMENT_LAID 0x200   // flag (draws): the texture lies on the picture, not on the surface (a sky)
+#define FRAGMENT_SMOOTH 0x400 // flag (word and indexed textures): the four texels round the point, weighed (bilinear)
 // Bits 16-18 of the same word: the pass the command is drawn in. Passes are drawn in order, each
 // with fixed blending and depth use; within a pass commands keep the list's order.
 //   0 opaque   1 alpha blend   2 additive   3 multiply     depth tested; only pass 0 writes it
@@ -314,6 +315,21 @@ gpu_varyings gpu_vertex(uint id) {
     return o;
 }
 
+// A texel of an indexed or a word texture as a colour, and whether it is drawn at all (the key
+// colour is not, when the draw is keyed).
+float4 gpu_texel(gpu_varyings i, uint mode, uint x, uint y, uint width, out float there) {
+    uint n = y * width + x, texel;
+    if (mode == FRAGMENT_INDEXED) {
+        texel = (ram_word(i.texture_info.g + (n & ~3u)) >> (8 * (n & 3))) & 0xff;
+        there = (i.texture_info.r & FRAGMENT_KEYED) && texel == i.key ? 0.0 : 1.0;
+        texel = ram_word(0x87000400 + 4 * texel);
+    } else {
+        texel = ram_word(i.texture_info.g + 4 * n);
+        there = (i.texture_info.r & FRAGMENT_KEYED) && texel == i.key ? 0.0 : 1.0;
+    }
+    return colour_of(texel);
+}
+
 float4 gpu_fragment(gpu_varyings i) {
     uint mode = i.texture_info.r & 0xff, width = i.texture_info.b, height = i.texture_info.a;
     float4 c = i.colour;
@@ -321,6 +337,23 @@ float4 gpu_fragment(gpu_varyings i) {
     if (i.texture_info.r & FRAGMENT_LAID) {
         uv += i.position.xy * c.xy / 1024.0;
         c = 1.0;
+    }
+    [branch]
+    if ((i.texture_info.r & FRAGMENT_SMOOTH) && (mode == FRAGMENT_INDEXED || mode == FRAGMENT_TEXTURE) && width != 0 && height != 0) {
+        // the four texels round the point, repeating, each by how near its centre is. A texel
+        // of the key colour counts for nothing; where those are most of the four, nothing is drawn.
+        float2 at = frac(uv) * float2(width, height) - 0.5;
+        float2 low = floor(at), part = at - low;
+        uint x0 = (uint)((int)low.x + (int)width) % width, y0 = (uint)((int)low.y + (int)height) % height;
+        uint x1 = (x0 + 1) % width, y1 = (y0 + 1) % height;
+        float t00, t10, t01, t11;
+        float4 c00 = gpu_texel(i, mode, x0, y0, width, t00), c10 = gpu_texel(i, mode, x1, y0, width, t10);
+        float4 c01 = gpu_texel(i, mode, x0, y1, width, t01), c11 = gpu_texel(i, mode, x1, y1, width, t11);
+        float w00 = (1 - part.x) * (1 - part.y) * t00, w10 = part.x * (1 - part.y) * t10;
+        float w01 = (1 - part.x) * part.y * t01, w11 = part.x * part.y * t11;
+        float all = w00 + w10 + w01 + w11;
+        if (all < 0.5) discard;
+        return saturate(c * (c00 * w00 + c10 * w10 + c01 * w01 + c11 * w11) / all);
     }
     [branch]
     if (mode != FRAGMENT_COLOUR && width != 0 && height != 0) {

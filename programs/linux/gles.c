@@ -67,7 +67,7 @@ static inline uint32_t bits_of(num n) {
     union { num n; uint32_t u; } c = {n};
     return c.u;
 }
-enum { FRAGMENT_COLOUR, FRAGMENT_TEXTURE, FRAGMENT_INDEXED, FRAGMENT_KEYED = 0x100, FRAGMENT_LAID = 0x200 };
+enum { FRAGMENT_COLOUR, FRAGMENT_TEXTURE, FRAGMENT_INDEXED, FRAGMENT_KEYED = 0x100, FRAGMENT_LAID = 0x200, FRAGMENT_SMOOTH = 0x400 };
 
 static uint8_t* gpu;   // GPU memory from GPU_PHYS
 static GR_WINDOW_ID window;
@@ -92,7 +92,7 @@ static int view_x, view_y, view_w, view_h;
 
 static uint32_t colour = 0x00ffffff, clear_colour;
 static int texturing, depth_test, blending, alpha_test, blend_kind = 1, key_index;
-typedef struct { uint32_t address, width, height, indexed, used; } texture;
+typedef struct { uint32_t address, width, height, indexed, used, smooth; } texture;   // smooth: FRAGMENT_SMOOTH or 0
 static texture textures[MAX_TEXTURES];
 static uint32_t bound;
 
@@ -496,6 +496,16 @@ void glBindTexture(GLenum target, GLuint which) {
     (void)target;
     bound = which < MAX_TEXTURES ? which : 0;
 }
+// GL_TEXTURE_MAG_FILTER of the bound texture: GL_LINEAR (or a mipmap kind of it) has the device
+// weigh the four texels round a point, GL_NEAREST take the one it is in, which is how a
+// texture starts. Bits (a font's) are never weighed.
+void glTexParameteri(GLenum target, GLenum name, GLint value) {
+    (void)target;
+    if (name == GL_TEXTURE_MAG_FILTER)
+        textures[bound].smooth = value == GL_LINEAR || value == 0x2701 || value == 0x2703 ? FRAGMENT_SMOOTH : 0;
+}
+void glTexParameterx(GLenum target, GLenum name, GLfixed value) { glTexParameteri(target, name, (GLint)value); }
+
 void seglTexturePointer(const void* pixels, GLsizei width, GLsizei height, GLenum internal) {
     texture* x = &textures[bound];
     x->address = (uint32_t)((const uint8_t*)pixels - gpu);
@@ -603,7 +613,7 @@ void glDrawArrays(GLenum mode, GLint first, GLsizei count) {
     if (!gpu || !vertex_array.enabled || count < 3) return;
     const texture* x = &textures[texturing ? bound : 0];
     uint32_t pass = (blending ? blend_kind : 0) + (depth_test ? 0 : 4);
-    uint32_t fragment = (texturing && x->address ? (x->indexed ? FRAGMENT_INDEXED : FRAGMENT_TEXTURE) : FRAGMENT_COLOUR) | pass << 16;
+    uint32_t fragment = (texturing && x->address ? (x->indexed ? FRAGMENT_INDEXED : FRAGMENT_TEXTURE) | x->smooth : FRAGMENT_COLOUR) | pass << 16;
     if (alpha_test && x->indexed && texturing) fragment |= FRAGMENT_KEYED;
     // a fan goes in as quads, two of its triangles each (the last may have its fourth corner twice)
     int fan = mode == GL_TRIANGLE_FAN, quads = mode == GL_QUADS || fan;
@@ -667,7 +677,7 @@ static uint32_t* compact_begin(GLenum mode, GLsizei count, uint32_t* stored_out,
     if (!gpu || count < 3) return 0;
     const texture* x = &textures[texturing ? bound : 0];
     uint32_t pass = (blending ? blend_kind : 0) + (depth_test ? 0 : 4);
-    uint32_t fragment = (texturing && x->address ? (x->indexed ? FRAGMENT_INDEXED : FRAGMENT_TEXTURE) : FRAGMENT_COLOUR) | pass << 16;
+    uint32_t fragment = (texturing && x->address ? (x->indexed ? FRAGMENT_INDEXED : FRAGMENT_TEXTURE) | x->smooth : FRAGMENT_COLOUR) | pass << 16;
     if (alpha_test && x->indexed && texturing) fragment |= FRAGMENT_KEYED;
     int fan = mode == GL_TRIANGLE_FAN, quads = mode == GL_QUADS || fan;
     uint32_t stored = fan ? ((uint32_t)count - 1) / 2 * 4 : quads ? (uint32_t)count & ~3u :
@@ -791,7 +801,7 @@ int seglWindowTexture(GLuint name, GLfixed* across) {
 void seglQuad(const GLfixed* xyz, const GLfixed* uv, GLuint name, unsigned grey, int alpha, int keyed) {
     const texture* x = &textures[name < MAX_TEXTURES ? name : 0];
     uint32_t pass = (alpha < 255 ? 1u : 0u) + (depth_test ? 0 : 4);
-    uint32_t fragment = (x->indexed ? FRAGMENT_INDEXED : FRAGMENT_TEXTURE) | (keyed ? FRAGMENT_KEYED : 0) | pass << 16;
+    uint32_t fragment = (x->indexed ? FRAGMENT_INDEXED : FRAGMENT_TEXTURE) | x->smooth | (keyed ? FRAGMENT_KEYED : 0) | pass << 16;
     uint32_t vertex = VERTEX_CLIP | VERTEX_MODELVIEW | VERTEX_COMPACT | VERTEX_QUADS | NUM_FORMAT;
     uint32_t tint = (uint32_t)(255 - alpha) << 24 | grey << 16 | grey << 8 | grey;
     if (!gpu || vertex_top + 64 > set_at + SET_SIZE || mesh_vertices + 6 > MAX_MESH) return;
@@ -845,7 +855,7 @@ static void sprite_command(const GLfixed* box, const int* texels, GLuint name, u
 
 void seglSprite(const GLfixed* box, const int* texels, GLuint name, unsigned colour, int keyed) {
     const texture* x = &textures[name < MAX_TEXTURES ? name : 0];
-    uint32_t fragment = (x->indexed == 2 ? 3u : x->indexed ? FRAGMENT_INDEXED : FRAGMENT_TEXTURE) |
+    uint32_t fragment = (x->indexed == 2 ? 3u : (x->indexed ? FRAGMENT_INDEXED : FRAGMENT_TEXTURE) | x->smooth) |
                         (keyed ? FRAGMENT_KEYED : 0) | 5u << 16;
     // a quad more of the command before, which is most of them: nothing is called on this path
     if (last_draw && last_draw == (uint32_t*)(gpu + set_at) + 16 * (commands - 1) && !matrices_dirty && blocks &&
@@ -865,7 +875,7 @@ void seglSprite(const GLfixed* box, const int* texels, GLuint name, unsigned col
 static __attribute__((noinline)) void sprite_command(const GLfixed* box, const int* texels, GLuint name, unsigned colour,
                                                      int keyed) {
     const texture* x = &textures[name < MAX_TEXTURES ? name : 0];
-    uint32_t fragment = (x->indexed == 2 ? 3u : x->indexed ? FRAGMENT_INDEXED : FRAGMENT_TEXTURE) |
+    uint32_t fragment = (x->indexed == 2 ? 3u : (x->indexed ? FRAGMENT_INDEXED : FRAGMENT_TEXTURE) | x->smooth) |
                         (keyed ? FRAGMENT_KEYED : 0) | 5u << 16;
     uint32_t vertex = VERTEX_CLIP | VERTEX_MODELVIEW | VERTEX_COMPACT | VERTEX_QUADS | NUM_FORMAT;
     if (!gpu || vertex_top + 64 > set_at + SET_SIZE || mesh_vertices + 6 > MAX_MESH) return;
@@ -987,7 +997,7 @@ void seglKeptQuads(int index, const void* vertices, int first_quad, int quads, G
         c[2] = (uint32_t)quads * 6;
         c[3] = (uint32_t)first_quad * 6;
         c[4] = VERTEX_CLIP | VERTEX_MODELVIEW | VERTEX_COMPACT | VERTEX_QUADS | NUM_FORMAT;
-        c[5] = FRAGMENT_INDEXED | (keyed ? FRAGMENT_KEYED : 0);
+        c[5] = FRAGMENT_INDEXED | t->smooth | (keyed ? FRAGMENT_KEYED : 0);
         c[6] = GPU_PHYS + SETS_AT + set * SET_SIZE + UNIFORMS_IN;
         c[7] = GPU_PHYS + t->address;
         c[8] = t->width;
@@ -1000,7 +1010,7 @@ void seglKeptBlend(int index, int kind, int words) {
     uint32_t fragment = (words ? FRAGMENT_TEXTURE : FRAGMENT_INDEXED) | (uint32_t)kind << 16;
     for (int set = 0; set < 2; set++) {
         uint32_t* c = kept_command(set, index);
-        c[5] = (c[5] & (FRAGMENT_KEYED | FRAGMENT_LAID)) | fragment;
+        c[5] = (c[5] & (FRAGMENT_KEYED | FRAGMENT_LAID | FRAGMENT_SMOOTH)) | fragment;
     }
     kept_passes |= (1u << kind) & 0xfe;
     passes_used |= kept_passes;
@@ -1017,6 +1027,7 @@ void seglKeptTexture(int index, GLuint name) {
     const texture* t = &textures[name < MAX_TEXTURES ? name : 0];
     for (int set = 0; set < 2; set++) {
         uint32_t* c = kept_command(set, index);
+        c[5] = (c[5] & ~(uint32_t)FRAGMENT_SMOOTH) | t->smooth;
         c[7] = GPU_PHYS + t->address;
         c[8] = t->width;
         c[9] = t->height;

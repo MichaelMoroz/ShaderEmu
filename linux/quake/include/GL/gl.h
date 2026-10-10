@@ -118,7 +118,8 @@ static inline void qglNothing(void) {}
 #define glPolygonMode(a, b) qglNothing()
 #define glShadeModel(a) qglNothing()
 #define glHint(a, b) qglNothing()
-#define glTexParameterf(a, b, c) qglNothing()
+void qglTexParameterf(GLenum target, GLenum name, GLfloat value);
+#define glTexParameterf(a, b, c) qglTexParameterf(a, b, c)
 #define glTexEnvf(a, b, c) qglNothing()
 #define glAlphaFunc(a, b) qglNothing()
 #define glDrawBuffer(a) qglNothing()

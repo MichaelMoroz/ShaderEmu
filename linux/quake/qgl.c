@@ -61,7 +61,7 @@ static inline uint32_t coord_bits(float s, float t) {
 // GPU memory holds the ones being drawn: the one drawn longest ago makes room for a new one.
 enum { NONE, INDEXED, WORDS, POSE };
 #define NOWHERE 0xffffffffu
-typedef struct { uint8_t* host; uint32_t at, bytes, drawn; int width, height, kind, holes, stays; } texture;
+typedef struct { uint8_t* host; uint32_t at, bytes, drawn; int width, height, kind, holes, stays, smooth; } texture;
 typedef struct { uint32_t at, size; int owner; } block;   // of the pool, in order; owner -1: free
 static texture textures[MAX_TEXTURES];
 static struct { const void* model; int pose; } pose_of[POSES];   // whose pose a pose slot holds
@@ -145,8 +145,23 @@ static int resident(int name) {
     memcpy(pool + at, t->host, t->bytes);
     glBindTexture(GL_TEXTURE_2D, name);
     seglTexturePointer(pool + at, t->width, t->height, t->kind == INDEXED ? GL_COLOR_INDEX8_EXT : GL_RGBA);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, t->smooth ? GL_LINEAR : GL_NEAREST);
     glBindTexture(GL_TEXTURE_2D, bound);
     return 1;
+}
+
+// The game's filter for the bound texture: GL_LINEAR for the level, its light, the models and
+// the pictures, GL_NEAREST for the letters. The GPU weighs four texels for the first
+// (docs/gpu.md). QUAKE_FILTER=nearest has every texture as it was before the GPU could.
+void qglTexParameterf(GLenum target, GLenum name, GLfloat value) {
+    static int never = -1;
+    if (never < 0) {
+        const char* how = getenv("QUAKE_FILTER");
+        never = how && !strcmp(how, "nearest");
+    }
+    if (name != GL_TEXTURE_MAG_FILTER || bound >= POSE_FIRST) return;
+    textures[bound].smooth = !never && (int)value != GL_NEAREST;
+    glTexParameteri(target, name, textures[bound].smooth ? GL_LINEAR : GL_NEAREST);
 }
 
 // The bound texture's own memory for pixels of this size and kind.

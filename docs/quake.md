@@ -89,6 +89,18 @@ Not as GLQuake draws: no model shadows, no wobble of the world seen from under w
 depth trick for the weapon (it can poke into a wall), nearest texels everywhere, and a
 model's light in steps of 1/32.
 
+## Smooth textures
+
+The game asks for `GL_LINEAR` of the level's textures, its light maps, the models' skins, the
+sky and its pictures, and for `GL_NEAREST` of the console's letters, and is given both: the GPU
+weighs the four texels round a point for a texture so marked (`docs/gpu.md`, fragment flag
+`0x400`; `qglTexParameterf` in `qgl.c`). The light is what shows most: a light map's texel is
+16 units of wall, and was a square of one brightness. There are no smaller copies of a
+texture for far walls (mipmaps), so those shimmer as they did. It costs the machine nothing
+that can be measured (the same frames a second on e1m5), the picture agrees with
+`tools/gpu_reference.py` within 2 levels at every pixel, and `QUAKE_FILTER=nearest` is the
+picture as it was.
+
 ## Speed
 
 A frame standing still at the start of the first level, in instructions:
@@ -126,6 +138,7 @@ From the command to a level's first frame is about 30 seconds, and of a level's 
 half is its light maps being placed (`AllocBlock`, a third) and the kept level being built.
 
     QUAKE_HOLD=N        keep frame N on the screen and stop there ("quake: holding frame N")
+    QUAKE_FILTER=nearest  every texture's nearest texel, as before the GPU could weigh four
     QUAKE_STATS_MS=N    how often the quakestat: lines come (5000; 0: never)
     hold                the console command: the frame after next stays
     -nokeep             draw the level a polygon at a time, as before it was kept

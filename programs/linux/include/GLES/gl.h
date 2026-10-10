@@ -107,6 +107,15 @@ void glDrawArrays(GLenum mode, GLint first, GLsizei count);
 void glGenTextures(GLsizei n, GLuint* textures);
 void glDeleteTextures(GLsizei n, const GLuint* textures);
 void glBindTexture(GLenum target, GLuint texture);
+/* GL_TEXTURE_MAG_FILTER alone is heeded: GL_LINEAR weighs the four texels round a point */
+#ifndef GL_TEXTURE_MAG_FILTER
+#define GL_TEXTURE_MAG_FILTER 0x2800
+#define GL_TEXTURE_MIN_FILTER 0x2801
+#define GL_NEAREST 0x2600
+#define GL_LINEAR 0x2601
+#endif
+void glTexParameteri(GLenum target, GLenum name, GLint value);
+void glTexParameterx(GLenum target, GLenum name, GLfixed value);
 // GL_COLOR_INDEX8_EXT with GL_COLOR_INDEX bytes, or GL_RGBA with GL_RGBA bytes. Level 0 only.
 void glTexImage2D(GLenum target, GLint level, GLint internal, GLsizei width, GLsizei height, GLint border, GLenum format,
                   GLenum type, const GLvoid* pixels);

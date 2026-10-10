@@ -157,6 +157,31 @@ def shade(m, colour, uv, tex, key):
     """Returns (red, green, blue, alpha 0..1, keep mask)."""
     mode, addr, tw, th = tex[0] & 0xff, tex[1], tex[2], tex[3]
     keep = np.ones(len(colour), bool)
+    if tex[0] & 0x400 and mode in (1, 2) and tw and th:
+        # smooth: the four texels round the point, repeating; a key texel counts for nothing
+        base = (addr & 0x7fffffff) >> 2
+        ax = (uv[:, 0] - np.floor(uv[:, 0])).astype(f32) * f32(tw) - f32(0.5)
+        ay = (uv[:, 1] - np.floor(uv[:, 1])).astype(f32) * f32(th) - f32(0.5)
+        lx, ly = np.floor(ax), np.floor(ay)
+        px, py = (ax - lx).astype(np.float64), (ay - ly).astype(np.float64)
+        x0, y0 = (lx.astype(np.int64) + tw) % tw, (ly.astype(np.int64) + th) % th
+        x1, y1 = (x0 + 1) % tw, (y0 + 1) % th
+        total = np.zeros((len(colour), 4))
+        weight = np.zeros(len(colour))
+        for x, y, w in ((x0, y0, (1 - px) * (1 - py)), (x1, y0, px * (1 - py)), (x0, y1, (1 - px) * py), (x1, y1, px * py)):
+            n = y * tw + x
+            if mode == 2:
+                texel = (m.words[base + n // 4] >> (8 * (n & 3)).astype(np.uint32)) & 0xff
+                there = texel != key if tex[0] & 0x100 else np.ones(len(colour), bool)
+                texel = m.words[(0x07000400 >> 2) + texel]
+            else:
+                texel = m.words[base + n]
+                there = texel != key if tex[0] & 0x100 else np.ones(len(colour), bool)
+            w = w * there
+            total += colour_of(texel) * w[:, None]
+            weight += w
+        keep = weight >= 0.5
+        return np.clip(colour * total / np.maximum(weight, 1e-9)[:, None], 0, 1), keep
     if mode != 0 and tw and th:
         fx, fy = uv[:, 0] - np.floor(uv[:, 0]), uv[:, 1] - np.floor(uv[:, 1])
         x = np.minimum((fx.astype(f32) * f32(tw)).astype(np.int64), tw - 1)
