@@ -184,6 +184,10 @@ public:
             if (mixed) soundDraw(mat, tag);   // before the control zone moves the voices on
             const float* z = kGpuControlZone;
             crt_.runZone(gpu_, gpuPasses_[1], mat, UpdateZone{z[0], z[1], z[2], z[3], 1});
+            if (cores_ > 16) {
+                const float* s = kCoreStatsZone;
+                crt_.runZone(gpu_, gpuPasses_[1], mat, UpdateZone{s[0], s[1], s[2], s[3], 1});
+            }
             if (deliver_) {
                 const float* f = kFetchZone;
                 crt_.runZone(gpu_, gpuPasses_[1], mat, UpdateZone{f[0], f[1], f[2], f[3], 1});

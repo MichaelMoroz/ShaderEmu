@@ -18,7 +18,7 @@ anything that is about instructions: a game's `...stat:` lines, its state sums, 
 program still starts and runs after a change. Red Alert's 300-frame check is 5 s there and
 90 s in `rvc_harness`.
 
-    bin\rvc_cpu.exe --cores 4 --quiet --uart-log logs\ucpu_x.log --expect "/ # " --send "COMMANDS; echo LX-''DONE\n" --until "LX-DONE"
+    bin\rvc_cpu.exe --quiet --uart-log logs\ucpu_x.log --expect "/ # " --send "COMMANDS; echo LX-''DONE\n" --until "LX-DONE"
 
 - `rvc_harness --cpu` is the same interpreter with the harness's window, display, GPU and
   input (the shader's passes, fed from the interpreter's RAM): for trying a thing by hand at
@@ -51,7 +51,7 @@ watch the emulated machine:
   headless; never start the no-argument form from a script and leave it running.
 - An image menu blocks at start when nothing says what to boot and stdin is a console. Scripted
   runs must pass one of `--image NAME`, `--payload`, `--ram`, `--load-state` or `--no-stdin`.
-- `rvc_harness` runs 32,768 instructions per draw by default (it was 16,384; `rvc_cpu` still is).
+- `rvc_harness`, `rvc_cpu` and the world run 8,192 instructions per draw (the harness had 32,768).
   Every reference state hash was taken at 2,048: pass `--ticks 2048` when comparing
   (`perf_test.ps1` and `rvc_trace12` already use 2,048).
 - Our programs live in `programs/`; `programs\build.bat` builds them with clang for rv32ima and
@@ -725,7 +725,7 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   Lines typed at its terminal are console commands.
 - Quake's server runs on a worker core when the machine has one (`docs/quake.md`, "The server
   on a worker core"): after a change to the server's side or to the workers, run
-  `QUAKE_SUM=10 QUAKE_HOLD=130 quake +host_framerate 0.05 +map e1m5` with `--cores 2 --fixed-dt
+  `QUAKE_SUM=10 QUAKE_HOLD=130 quake +host_framerate 0.05 +map e1m5` with `--fixed-dt
   0.004` three times, with `QUAKE_SERVER=inline`, `late` and `wait`: the sums must be the
   same. Server code that a worker runs must not print, run commands, set cvars or use the C
   library's `rand` except through what `server_shaderemu.c` gives it.
@@ -849,19 +849,21 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   harness's `CORE` lines) finds its strip from the geometry texel. A worker's pixels must
   stay whole 8 x 8 tiles.
 - The D3D11 harness draws the tick into eight targets, eight state texels a pixel
-  (`docs/multicore.md`, "Eight texels a pixel"; `--no-mrt` for one), with a write cache twice
-  the shader's default (`L1_TABLE_BITS=7`) and 32,768 instructions a pass. Snapshots from
-  before are of another state layout. D3D12 and Unity have one target still.
-- The harness's machine has up to 64 cores (`--cores 64`; `docs/multicore.md`, "More than
+  (`docs/multicore.md`, "Eight texels a pixel"; `--no-mrt` for one), with the shader's own
+  write cache (384 texels; it had 768) and 8,192 instructions a pass. Snapshots from
+  before are of another state layout. Unity does the same; D3D12 has one target still.
+- The machine has 64 cores everywhere and there is no `--cores` (`docs/multicore.md`, "More than
   sixteen cores"): `RAY_SIZE=640x480 RAY_SHAPE=3,3,... nxray` with 63 threes is its measure
   (1.35 s a picture, sum `fd92a71e`), and `mctest 63 60000 shape 3,3,...` its test (a large
   limit makes the float check slow: core 0 works every worker's sum out again). A shader for
+  another number of cores is another compile. Only what cannot have workers has one core:
+  D3D12, `--no-mrt`, `--profile`, upstream's shader. The 64 cost core 0 about 12% while no
+  worker runs (a shell loop: 4.1M to 3.6M instructions a second).
 - The control row has no free texel: control words to 0x3ff, the display palette from 0x400,
   the sound card's voices from 0x800. The geometry of workers 25 and up is in the mailbox
   page (`MC_GEOMETRY_MORE`, 0x86c00f00) and what cores 16 and up ran in the network's row after
   the guest's window (`MC_STATS_MORE`, 0x876b8280, 13 texels). They were at 0x3e0 and 0x3f0,
   which are the network's.
-  another number of cores is another compile. `rvc_cpu` and Unity have 16 at most.
 - A program that takes every worker asks the library how many there can be (`mcw_most`,
   `mcw_fit`, `mcw_rows`, `mcw_room` in `programs/mc/mcw.h`): no 15 or 16 written into it.
   `nxray`, `nxpath` and `nxview` (a JPEG: one worker for its codes and one a strip of 16 rows
@@ -896,7 +898,7 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   0 and everything runs on core 0. A program asks for the workers it uses and no more.
 - To see where a guest's leaf functions are called from, `--ra-log FILE` and
   `python tools\pc_callers.py FILE game=prog.nm`; where inside a function, `tools\pc_hot_in.py`.
-- Red Alert uses the machine's worker cores for its movies when there are any (`--cores 4`;
+- Red Alert uses the machine's worker cores for its movies (the harness has them;
   `docs/ralert.md`, `docs/multicore.md`): `RALERT_MOVIE_CHECK=1` must say `0 of N shared frames
   differ`, and the state sums above hold with and without them. Run a timing both ways: the
   workers cost the mission itself 4 to 8% while they have nothing to do there.
@@ -997,7 +999,7 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
 - The NES (`docs/nes.md`): `wsl -- bash /mnt/c/Development/ShaderX86/linux/nes/build.sh` (2 s) after
   Nano-X's build, then the image. A change to the emulator must leave the sums the doc lists
   (`NES_SUM=1 NES_PPU=inline NES_FRAMES=120 nes thwaite` under `rvc_cpu`, two seconds), with each
-  of `NES_CPU=interp` and `NES_PLAIN=1`, `2`, `3` too; its speed is `rvc_harness --cores 4`
+  of `NES_CPU=interp` and `NES_PLAIN=1`, `2`, `3` too; its speed is `rvc_harness`'s
   and the `nesstat:` lines. Its changes to Nofrendo are `linux/nes/nofrendo.patch`; the 6502
   recompiled is `linux/nes/rc6502.h`.
 - The GPU has a texture that is a layer of tiles (`docs/gpu.md`, fragment mode 5; `SEGL_TILES` in
@@ -1106,6 +1108,9 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   length on the tick's material (`_Ticks`), not only in the script's `ticks`.
 - After a pull that changes `main.shader`'s tick or commit, the same change is owed in
   `MachineTick.shader`, `MachineCommit.cginc` and `MachineCommitPoints.shader`.
+- To pull over uncommitted work: `git diff --binary` to a file first, `git stash`, `git pull
+  --ff-only`, `git stash pop`, take the pulled side of the binaries in `linux/prebuilt` and
+  build them again, then `git reset -q` (nothing was staged before).
 - A model's skin must be closed where it can be seen into: `blender -b build/world.blend --python
   world/check_watertight.py -- NAME` lists the loops of edges with one face. The classroom's
   shell (`pc_station`) must have none; a sheet of its own (the glass) needs a closed face behind it.

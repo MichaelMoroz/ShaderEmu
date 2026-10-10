@@ -52,10 +52,10 @@ struct Options {
     double seconds = 0;      // of guest time; 0: no limit
     double wall = 0;         // of the host's time
     u64 maxInstr = 0;
-    u32 ticks = 16384;       // instructions a pass
+    u32 ticks = 8192;        // instructions a pass
     double ips = 3700000;    // what the shader machine runs while it runs
     double passMs = 0.25;    // and what a pass costs it besides
-    int cores = 1;
+    int cores = 64;          // core 0 and 63 workers, as the shader machine
     long long sweep = -1;
     bool desktop = false, tabs = false, quiet = false;
     int netPort = 0, netId = 1;          // --net, --net-id: the link to other machines (docs/lan.md)
@@ -700,14 +700,15 @@ static u64 run(Core& c, u64 budget) {
 // for core 0, which answers through the resume texel.
 static const u32 MC_MBOX = 0x86C00000u, MC_START = 0x5553434Du, MC_STOP = 0x5453434Du;
 static inline u32 mc_start_at(int hart) { return MC_MBOX + 16 * hart; }
-static inline u32 mc_job_at(int hart) { return MC_MBOX + 0x400 + 64 * hart; }
-static inline u32 mc_fault_at(int hart) { return MC_MBOX + 0x400 + 64 * hart + 32; }
-static inline u32 mc_resume_at(int hart) { return MC_MBOX + 0x400 + 64 * hart + 48; }
-static inline u32 mc_call_at(int hart) { return MC_MBOX + 0x800 + 32 * hart; }
+// (cores 16 and up have theirs in the two pages after: programs/mc/mc.h)
+static inline u32 mc_job_at(int hart) { return MC_MBOX + (hart < 16 ? 0x400 : 0x1000) + 64 * hart; }
+static inline u32 mc_fault_at(int hart) { return mc_job_at(hart) + 32; }
+static inline u32 mc_resume_at(int hart) { return mc_job_at(hart) + 48; }
+static inline u32 mc_call_at(int hart) { return MC_MBOX + (hart < 16 ? 0x800 : 0x2000) + 32 * hart; }
 enum { MC_PARKED, MC_RUNNING, MC_ASLEEP, MC_FAULTED, MC_CALLING };
 struct Worker { int state = MC_PARKED; u32 seen = 0, start_seen = 0, job_seen = 0; };
 static std::vector<Worker> workers;
-static u32 geometry[16];   // each worker's cache bits as the machine's geometry has them; 0: no such worker
+static u32 geometry[64];   // each worker's cache bits as the machine's geometry has them; 0: no such worker
 
 bool mc_fault(Core& c, const Trap& t) {
     Worker& w = workers[c.hart];
@@ -811,21 +812,26 @@ static void control_pass() {
     dirty(CTRL);
     // what each core ran, how many workers the geometry has (docs/multicore.md: the cores have
     // no write cache here, so their sizes are only counted) and how many there could be
-    for (size_t i = 0; i < cores.size() && i < 16; i++) word(CTRL + 0x380 + 4 * (u32)i) = (u32)cores[i].clock;
+    // (cores 16 and up: MC_STATS_MORE and MC_GEOMETRY_MORE of src/gpu.h and src/types.h)
+    const u32 STATS_MORE = 0x876b8280u, GEOMETRY_MORE = MC_MBOX + 0xf00;
+    for (size_t i = 0; i < cores.size(); i++) word((i < 16 ? CTRL + 0x380 : STATS_MORE - 64) + 4 * (u32)i) = (u32)cores[i].clock;
+    dirty(STATS_MORE);
     if (cores.size() > 1) {
-        u32 running = 1, asleep = 0, count = 1, shaping = word(CTRL + 0x3d0) & 1;
+        u32 running[2] = {1, 0}, asleep[2] = {0, 0}, count = 1, shaping = word(CTRL + 0x3d0) & 1;
         for (size_t i = 1; i < cores.size(); i++) {
-            u32 k = (u32)i - 1, bits = (k < 8 ? word(CTRL + 0x3d4) >> (4 * k) : word(CTRL + 0x3d8) >> (4 * (k - 8))) & 15;
+            u32 k = (u32)i - 1, bits = (word(k < 24 ? CTRL + 0x3d4 + 4 * (k / 8) : GEOMETRY_MORE + 4 * (k / 8 - 3)) >> (4 * (k % 8))) & 15;
             geometry[i] = shaping ? 0 : bits;
             if (!geometry[i]) { workers[i].state = MC_PARKED; cores[i].started = false; continue; }
             count = (u32)i + 1;
-            running |= (workers[i].state != MC_PARKED ? 1u : 0u) << i;
-            asleep |= (workers[i].state == MC_ASLEEP ? 1u : 0u) << i;
+            running[i / 32] |= (workers[i].state != MC_PARKED ? 1u : 0u) << (i % 32);
+            asleep[i / 32] |= (workers[i].state == MC_ASLEEP ? 1u : 0u) << (i % 32);
         }
         word(CTRL + 0x3c0) = count;
-        word(CTRL + 0x3c4) = running;
-        word(CTRL + 0x3c8) = asleep;
+        word(CTRL + 0x3c4) = running[0];
+        word(CTRL + 0x3c8) = asleep[0];
         word(CTRL + 0x3cc) = (u32)cores.size();
+        word(STATS_MORE + 0xc0) = running[1];
+        word(STATS_MORE + 0xc4) = asleep[1];
     }
     if (external_devices) {
         // the shader's control pass keeps the rest; between two of its runs only the clock moves
@@ -872,7 +878,7 @@ static bool machine_boot(const std::string& image, int count) {
     ramw = (u32*)ram.data();
     memcpy(ram.data(), payload.data(), payload.size() < RAM_SIZE ? payload.size() : RAM_SIZE);
     dirty_bands = 0xffffffffu;
-    count = count < 1 ? 1 : count > 16 ? 16 : count;
+    count = count < 1 ? 1 : count > 64 ? 64 : count;
     cores.clear();
     workers.clear();
     cores.resize((size_t)count);
@@ -931,7 +937,6 @@ int main(int argc, char** argv) {
         else if (a == "--ticks") opt.ticks = (u32)atoi(next("--ticks").c_str());
         else if (a == "--ips") opt.ips = atof(next("--ips").c_str());
         else if (a == "--pass-ms") opt.passMs = atof(next("--pass-ms").c_str());
-        else if (a == "--cores") opt.cores = atoi(next("--cores").c_str());
         else if (a == "--pointer-sweep") opt.sweep = atoll(next("--pointer-sweep").c_str());
         else if (a == "--desktop") opt.desktop = true;
         else if (a == "--tabs") opt.tabs = true;
@@ -951,8 +956,7 @@ int main(int argc, char** argv) {
                    "  --wall S               or S of this computer's\n"
                    "  --instructions N       or N instructions of core 0\n"
                    "  --uart-log FILE        the console, added to the file\n"
-                   "  --cores N              core 0 and N - 1 worker cores\n"
-                   "  --ticks N              instructions a pass (16384; the world: 8192)\n"
+                   "  --ticks N              instructions a pass (8192)\n"
                    "  --ips N --pass-ms M    the guest's clock: a pass takes M ms and its instructions 1/N s each\n"
                    "                         (3700000 and 0.25: the harness; the world is about 3100000 and 0.2)\n"
                    "  --pointer-sweep N      the pointer goes round from pass N on\n"

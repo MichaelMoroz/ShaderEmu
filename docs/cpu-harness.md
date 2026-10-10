@@ -9,13 +9,13 @@ instructions a second on one thread: Red Alert's check, from the shell prompt th
 window system's start, the opening movie on three worker cores and 300 frames of a mission,
 is 5 seconds here and 90 in `rvc_harness`, with the same state sum.
 
-    bin\rvc_cpu.exe --cores 4 --quiet --uart-log logs\uart_x.log --expect "/ # " ^
+    bin\rvc_cpu.exe --quiet --uart-log logs\uart_x.log --expect "/ # " ^
         --send "nano-X -p & sleep 2; TDAWN_AUTO=1 RALERT_SIDE=soviet RALERT_SEED=7 RALERT_FRAMES=300 ralert; echo LX-''DONE\n" ^
         --until "LX-DONE"
 
 It boots the image in `build\images\linux` from power-on every time (a boot is 13 million
 instructions, a tenth of a second), takes the harness's `--expect`, `--send`, `--until`,
-`--uart-log`, `--cores`, `--ticks`, `--pointer-sweep`, `--desktop` and `--tabs`, and ends with
+`--uart-log`, `--ticks`, `--pointer-sweep`, `--desktop` and `--tabs`, and ends with
 what each core ran, the firmware calls and the traps by cause. `--seconds` is the guest's
 time, `--wall` this computer's. Start it from PowerShell or cmd: Git Bash turns `"/ # "` into
 a path.
@@ -24,7 +24,7 @@ a path.
 
 The same interpreter inside the harness, for using the machine by hand at that speed:
 
-    bin\rvc_harness.exe --d3d11 --rvc experiments\rvc_opt --image linux-net --cpu --cores 4 --desktop --viz
+    bin\rvc_harness.exe --d3d11 --rvc experiments\rvc_opt --image linux-net --cpu --desktop --viz
 
 Everything the harness has is there: its window with the display and the memory view, the
 keys and the pointer, the console, `--expect`, `--send`, `--until`, `--save-state`,
@@ -51,7 +51,7 @@ a second with the same state sum, and `python tools\snapshot_screen.py SNAPSHOT 
 shows the screen a `--save-state` snapshot holds.
 
 Not there yet in this mode: sound (not tried), pages from the host for the browser, D3D12.
-The shader's own cores are not used (`--cores` is the interpreter's), so nothing here says
+The shader's own cores are not used (the cores are the interpreter's), so nothing here says
 anything about the shader machine's passes.
 
 ## What it is

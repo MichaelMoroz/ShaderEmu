@@ -588,7 +588,11 @@ bool gpu_writeback(uint2 pos, out uint4 result) {
 #define HOST_OPEN_MORE 0x700031u
 // What the cores did, for a guest to show (docs/multicore.md): 16 words, core k's count of
 // instructions in word k; then a texel of how many cores, which run and which are asleep (a bit each).
+// With more than 16 cores: cores 16 to 63's counts in twelve texels at MC_STATS_MORE (the
+// network's row, after the guest's window: 0x876b8280), then one of which of cores 32 to 63
+// run and which are asleep.
 #define MC_STATS    0x700038u
+#define MC_STATS_MORE 0x76b828u
 // What the host says of where the machine is shown (docs/holodeck.md): two texels.
 #define HOST_STATE  0x700036u
 
@@ -746,6 +750,23 @@ uint4 gpu_control(uint2 pos) {
         }
         return uint4(count, running, asleep, CORES);
     }
+#if CORES > 16
+    if (index >= MC_STATS_MORE && index < MC_STATS_MORE + 12) {
+        uint first = 16 + (index - MC_STATS_MORE) * 4;
+        return uint4(mc_stat_count(first), mc_stat_count(first + 1), mc_stat_count(first + 2), mc_stat_count(first + 3));
+    }
+    if (index == MC_STATS_MORE + 12) {
+        uint running = 0, asleep = 0;
+        for (uint core = 32; core < CORES; core++) {
+            uint2 at = mc_place(core);
+            if (at.y == 0xffff) continue;
+            uint word = mc_state_texel(at, 41).a;
+            running |= (word & 1) << (core - 32);
+            asleep |= ((word >> 1) & 1) << (core - 32);
+        }
+        return uint4(running, asleep, 0, 0);
+    }
+#endif
 #endif
 #ifdef GPU_INPUT
     if (index == GPU_CLOCK) return uint4(keep.r, _HostMs, keep.b, _HostFlags);

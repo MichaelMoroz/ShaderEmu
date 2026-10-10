@@ -96,4 +96,4 @@ sum.
 A picture's sum does not depend on which cores traced it, or how many: run one with
 `RAY_WORKERS=0` (or `NXPATH_CORES=3`) and one with all of them. `rvc_harness --cpu` runs both
 at once the speed for looking at them (`cpu-harness.md`); the times above are the shader
-machine's (`rvc_harness --cores 16`).
+machine's (`rvc_harness`).

@@ -75,7 +75,7 @@ struct Options {
     std::string until;
     std::vector<std::string> open;   // --open: addresses or files the guest is told to open (docs/open.md)
     std::string openAfter;           // --open-after: not before the console has shown this
-    int ticks = 32768;
+    int ticks = 8192;
     int initFrames = 2;
     uint64_t maxFrames = 0;
     double maxSeconds = 0;
@@ -106,7 +106,7 @@ struct Options {
     int netPort = 0;          // --net PORT: the network device's link to other machines here (docs/lan.md)
     int netId = 1;            // --net-id N: this machine's number, its address 10.0.0.N
     double netLoss = 0, netDelay = 0;   // --net-loss percent, --net-delay milliseconds: of every packet sent
-    int cores = 1;            // --cores N: core 0 and N - 1 worker cores (docs/multicore.md; D3D11)
+    int cores = 1;            // core 0 and the worker cores: kCores wherever the machine has workers (docs/multicore.md)
     bool noBands = false;     // --no-bands: the commit rewrites all of RAM, as a CustomRenderTexture does
     bool noMrt = false;       // --no-mrt: the tick in one target (D3D11)
     int readbackBatch = 1;    // --readback-batch N: D3D11 maps the rows of N frames at once
@@ -144,7 +144,7 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
   --payload DIR        folder with the payload PNGs (default <rvc>/data-net)
   --ram/--mtd/--dtb P  PNG name prefixes in the payload folder (default linux_payload, rootfs, dts;
                        "none" leaves that texture black)
-  --ticks N            emulated instructions per tick pass (default 32768; upstream uses 2048). Large values on a real
+  --ticks N            emulated instructions per tick pass (default 8192; upstream uses 2048). Large values on a real
                        GPU can trigger a driver timeout (TDR); WARP has no timeout.
   --frames N           stop after N frames          --seconds S   stop after S seconds
   --until TEXT         stop (exit 0) once the UART output contains TEXT; exit 3 if a limit hits first
@@ -190,9 +190,6 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
   --ra-log FILE        per frame: pc, return address and instructions, for tools/pc_callers.py
   --pc-log FILE        sample the guest's pc once a frame, for tools/pc_profile.py
   --frame-log FILE     per frame: pc, instructions, last stall and time, for tools/boot_profile.py
-  --cores N            core 0 and up to N - 1 worker cores in one tick pass (16 at most; D3D11). How many
-                       workers there are and how large each one's write cache is, the guest sets
-                       (docs/multicore.md, "The geometry")
   --cpu                run the instructions on the processor (docs/cpu-harness.md): some thirty times
                        faster; the display, the GPU, the keys and the pointer are the shader's as before
                        (D3D11, the Linux image in build\\images\\linux)
@@ -352,7 +349,6 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--net-delay") o.netDelay = atof(next("--net-delay").c_str());
         else if (a == "--cpu") o.cpu = true;
         else if (a == "--cpu-ips") { o.cpu = true; o.cpuIps = atof(next("--cpu-ips").c_str()); }
-        else if (a == "--cores") { o.cores = (std::max)(1, (std::min)(64, atoi(next("--cores").c_str()))); if (o.cores > 1) o.defines.push_back("CORES=" + std::to_string(o.cores)); }
         else if (a == "--core-pitch" || a == "--small-cores") next(a.c_str());   // (of the layouts before the geometry: taken and ignored)
         else { fprintf(stderr, "unknown option %s\n", a.c_str()); usage(); return false; }
     }
@@ -559,7 +555,7 @@ int main(int argc, char** argv) {
     bool terminalMode = true;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
-        if (a == "--image" || a == "--cores" || a == "--cpu-ips") ++i;
+        if (a == "--image" || a == "--cpu-ips") ++i;
         // (--cpu is the same terminal on the interpreter: its desktop and view come up too)
         else if (a != "--resume" && a != "--no-viz" && a != "--dxc" && a != "--d3d11" && a != "--no-desktop" && a != "--cpu") terminalMode = false;
     }
@@ -651,12 +647,15 @@ int main(int argc, char** argv) {
     bo.stateLog = !opt.l1Log.empty();
     if (opt.rvcDir == "experiments/rvc_opt") {
         // its tick keeps one rectangle from the top of the state block (STATE_ROWS in src/types.h)
-        // The harness's machine: a write cache twice the shader's default, and on D3D11 the
+        // The harness's machine: the shader's own write cache (384 texels), and on D3D11 the
         // tick in eight targets, a pixel for every eight texels of state (docs/multicore.md).
-        bool cacheSet = false;
-        for (auto& d : opt.defines) cacheSet = cacheSet || d.rfind("L1_WAYS=", 0) == 0 || d.rfind("L1_TABLE_BITS=", 0) == 0;
-        if (!cacheSet) opt.defines.push_back("L1_TABLE_BITS=7");
-        if (!opt.dxc && !opt.noMrt && !opt.cpu && !opt.profile && !getenv("RVC11_COMPUTE")) opt.defines.push_back("TICK_MRT");
+        // With the eight targets the machine has all its cores, and so has the interpreter.
+        if (!opt.dxc && !opt.noMrt && !opt.cpu && !opt.profile && !getenv("RVC11_COMPUTE")) {
+            opt.defines.push_back("TICK_MRT");
+            opt.defines.push_back("CORES=" + std::to_string(kCores));
+            opt.cores = kCores;
+        }
+        if (opt.cpu) opt.cores = kCores;
         unsigned ways = 3, tableBits = 6;
         for (auto& d : opt.defines) {
             if (d.rfind("L1_WAYS=", 0) == 0) ways = (unsigned)atoi(d.c_str() + 8);
@@ -806,9 +805,9 @@ int main(int argc, char** argv) {
     bool haveClock = false;
     uint32_t lastClock = 0, commits = 0;
     uint64_t guestInstructions = 0;
-    // with worker cores (--cores): what they ran, from the counts the control pass publishes
+    // with worker cores: what they ran, from the counts the control pass publishes
     uint64_t workerInstructions = 0, workerInstr0 = 0;
-    uint32_t workerClock[16] = {};
+    uint32_t workerClock[kCores] = {};
     bool haveWorkerClock = false;
 
     auto t0 = std::chrono::steady_clock::now();
@@ -1037,9 +1036,9 @@ int main(int argc, char** argv) {
         consumedTag = texel(9, 3);
         if (rowFrame < (uint64_t)opt.initFrames) return;  // cpu_init leaves junk in the UART buffer
         if (haveClock) guestInstructions += (uint32_t)(clock - lastClock);
-        if (opt.cores > 1 && raw.size() >= (64 + 0x3c) * 16) {
-            for (int c = 1; c < opt.cores && c < 16; ++c) {   // (the control words count the first 16)
-                uint32_t now = texel(64 + 0x38 + c / 4, c % 4);
+        if (opt.cores > 1 && raw.size() >= (64 + kControlTexels + kNetRead) * 16) {
+            for (int c = 1; c < opt.cores; ++c) {   // (MC_STATS, and MC_STATS_MORE from core 16)
+                uint32_t now = c < 16 ? texel(64 + 0x38 + c / 4, c % 4) : texel(64 + kControlTexels + kCoreStatsAt + (c - 16) / 4, c % 4);
                 if (haveWorkerClock) workerInstructions += (uint32_t)(now - workerClock[c]);
                 workerClock[c] = now;
             }

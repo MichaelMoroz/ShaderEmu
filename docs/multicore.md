@@ -7,12 +7,14 @@ pass grows with the cores (eight: 2.1 times, sixteen: 3.2 times). It took two th
 there, both about how the GPU runs pixels: the state as full tiles of pixels, and workers that
 keep no more than they need ("What a pass costs" and the sections after it).
 
-    bin\rvc_harness.exe --d3d11 --image linux-net --cores 4
+    bin\rvc_harness.exe --rvc experiments\rvc_opt --image linux-net
     / # mctest            (3 workers; "mctest N LIMIT" for other numbers, "mctest N LIMIT bench" for the cost of a pass)
 
-`--cores N` compiles the shader with `CORES=N` (D3D11 backend). Without it nothing changes: the
-default build is the one-core machine (the code is under `#if CORES > 1`; its tick time and
-the Linux checksums are as before).
+The machine has 64 cores wherever it can have workers: the D3D11 harness with its eight
+targets, `rvc_cpu` and Unity compile `CORES=64`, and there is no switch for fewer (there was
+`--cores N`). The one-core machine is what is left where there are no workers: D3D12,
+`--no-mrt`, `--profile` (the code is under `#if CORES > 1`). The 64 cost core 0 about 12%
+while no worker runs: a shell loop is 3.6M instructions a second, 4.1M on one core.
 
 ## How it is made
 
@@ -245,7 +247,7 @@ refuses with EBUSY while any program has a worker, parks every core, sets the bi
 which every pixel of the band is zero and the commit takes no worker's stores (a worker
 with no state is a parked one), writes the two words and clears the bit. The control pass
 says in `0x870003c0` how many cores there are now, and in the word at `0x870003cc` how many
-there could be (`--cores N` in the harness, 16 at most). Until a program asks, the kernel
+there could be (64). Until a program asks, the kernel
 lays out three workers of the full size and twelve of size 4 the first time workers are
 asked for. `mctest N LIMIT shape 6,6,5,4,4` sets a geometry and runs the tests on it.
 
@@ -379,11 +381,13 @@ VRChat ("In Unity", below).
 
 ## More than sixteen cores
 
-`--cores N` goes to 64 (the D3D11 harness, with the eight targets). What changes above 16:
+The machine has 64 (the D3D11 harness with the eight targets, `rvc_cpu`, Unity). What is
+different above 16:
 
 - the workers' band is the state rows to their end, 248 tiles of 8 x 8 in place of 64;
 - the geometry is eight words, four bits a worker: the geometry texel's second to fourth
-  words and the two control texels after it (`0x870003e0`, `0x870003f0`);
+  words and two texels of the mailbox page (`0x86c00f00`, `0x86c00f10`; they were the two
+  control texels after it, which are the network's);
 - cores 16 to 63 have their mailboxes after the first sixteen's (`programs/mc/mc.h`: three
   pages now), so a program built before knows the first fifteen workers and is not disturbed;
 - the kernel has two more calls on `/dev/gpu` for them (`SHADEREMU_GPU_SHAPE_ALL`, eight
@@ -637,6 +641,8 @@ other:
 | `0x870003c0` | how many cores the machine has (0 on a machine built for one) |
 | `0x870003c4` | a bit a core: it runs (a worker that was started and has not parked) |
 | `0x870003c8` | a bit a core: it is asleep on its job word |
+| `0x876b8280 + 4 (k - 16)` | core k's instructions so far, k from 16 to 63 (`MC_STATS_MORE`: the network's row, after the guest's window) |
+| `0x876b8340`, `0x876b8344` | the two words of bits for cores 32 to 63: runs, asleep |
 
 `nxmon` reads them: the workers' instructions a second are stacked on the processor's plot
 and each worker has a figure, or "asleep", "parked" or "idle", in the line under the busiest
@@ -701,5 +707,4 @@ loop and was not measured again.)
 
 ## Switches
 
-    --cores N          core 0 and up to N - 1 workers (1 to 16); the guest lays them out
     RVC_MC_FULL=1      draw a worker's whole 64 x 16, as before (to compare)
