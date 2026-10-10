@@ -124,8 +124,13 @@ field(const char *path, const char *name)
 static void
 restart_desktop(const char *size)
 {
-	FILE *file = fopen(SIZE_CHOICE, "w");
+	static int asked;
+	FILE *file;
 
+	if (asked)
+		return;		/* (the button pressed again while the desktop is going) */
+	asked = 1;
+	file = fopen(SIZE_CHOICE, "w");
 	if (file) {
 		fputs(size, file);
 		fclose(file);

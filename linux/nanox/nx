@@ -5,6 +5,12 @@
 # taken down whole: its own programs are asked to go, then the window system, and nothing is
 # started until that has really gone. Any other program on it goes with it.
 if [ "$1" = restart ]; then
+    # one restart at a time: a second one (the button pressed twice) would take down the
+    # window system the first is starting, and leave two of everything or none
+    if [ -f /tmp/nxrestart.pid ] && kill -0 "$(cat /tmp/nxrestart.pid)" 2>/dev/null; then
+        exit 0
+    fi
+    echo $$ > /tmp/nxrestart.pid
     killall nxbar nxterm nxsettings 2>/dev/null
     sleep 1
     killall nano-X 2>/dev/null
@@ -23,3 +29,4 @@ sleep 2
 nxsettings apply &    # the desktop's picture
 nxbar &
 nxterm &
+if [ "$1" = restart ]; then sleep 2; rm -f /tmp/nxrestart.pid; fi

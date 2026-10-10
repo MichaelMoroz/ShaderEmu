@@ -66,10 +66,23 @@ static int find_gpu_mtd(void) {
     return atoi(at + 3);
 }
 
+
+// One program at a time draws with the GPU (its memory for programs has fixed places): the
+// kernel says whose it is, and writes that program's number when it is not ours. (A kernel
+// from before this writes nothing: ours.)
+#define SEGL_DRAW_CLAIM 0x80044705u   // _IOR('G', 5, a word)
+static int draw_claim(int fd) {
+    unsigned other = 0;
+    if (ioctl(fd, SEGL_DRAW_CLAIM, &other) == 0 || other == 0) return 0;
+    fprintf(stderr, "the GPU is drawing for another program (process %u): one such program at a time, close it first\n", other);
+    return -1;
+}
+
 static void gpu_open(void) {
     if (gpu_fd >= 0) return;
     gpu_fd = open("/dev/gpu", O_RDWR);
     if (gpu_fd >= 0) {
+        if (draw_claim(gpu_fd) < 0) exit(1);
         void* map = mmap(0, GPU_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, gpu_fd, 0x01000000);   // the device maps from 0x86000000
         if (map == MAP_FAILED) die("cannot map /dev/gpu");
         gpu_map = map;

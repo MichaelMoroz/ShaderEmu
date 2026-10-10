@@ -17,6 +17,8 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <sys/mman.h>
+#include <sys/ioctl.h>
+#include <errno.h>
 #define MWINCLUDECOLORS
 #include <nano-X.h>
 
@@ -41,6 +43,15 @@ uint8_t* SE_Gpu(void) {
 
 	fd = open("/dev/gpu", O_RDWR);
 	if (fd < 0) return NULL;
+	{
+		/* one program at a time draws with the GPU: the kernel says whose it is (programs/linux/gles.c) */
+		unsigned other = 0;
+		if (ioctl(fd, 0x80044705u, &other) < 0 && errno == EBUSY) {
+			fprintf(stderr, "classicube: the GPU is drawing for another program (process %u): close it first\n", other);
+			close(fd);
+			exit(1);
+		}
+	}
 	map = mmap(0, GPU_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0x01000000);
 	if (map == MAP_FAILED) return NULL;
 	return gpu = (uint8_t*)map;

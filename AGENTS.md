@@ -740,6 +740,15 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   sent every one to the general path, at three times the cost. With that mended Quake went
   from 16.7 to 22 frames a second and a float test from 3.3 to 4.8 million instructions a
   second. A new kind of instruction in the fast step: check with the profile that it gets there.
+- One program at a time has the GPU's memory for programs (`SHADEREMU_GPU_DRAW`; `seglInit`,
+  `gl.c` and ClassiCube's window ask): a test that starts a second OpenGL program gets "the GPU
+  is drawing for ..." and exit code 1 from it.
+- `glDeleteTextures` lowers the top of texture memory to the highest texture still used, and
+  counts only textures inside that memory: a texture of a window's own pixels
+  (`seglWindowTexture`) is below it. Counted, it held the top for good, and Doom ran out of
+  texture memory eight levels after its first screen wipe. `DOOM_GL_DEBUG=1` prints what is
+  left at each level's start.
+- `nx restart` is one at a time (`/tmp/nxrestart.pid`), and Settings asks for it once.
 - Never more than three harness runs at once: four took 264 s where one takes 70.
 - Its changes to id's source are `linux/quake/quake.patch`: edit a clean clone at the commit
   `build.sh` names and save `git diff -- WinQuake`. The build puts the tree back each time.

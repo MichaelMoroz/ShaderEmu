@@ -127,9 +127,34 @@ static void multiply(const matrix* m) {
 
 // ---- window ----
 
+// One program at a time draws with the GPU (its memory for programs has fixed places): the
+// kernel says whose it is. 0 when it is ours now; -1 when another program has it, which is
+// then named on the standard error. (A kernel from before this answers nothing: ours.)
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/ioctl.h>
+#define SEGL_DRAW_CLAIM 0x80044705u   // _IOR('G', 5, a word)
+static int draw_claim(int fd) {
+    unsigned other = 0;
+    if (ioctl(fd, SEGL_DRAW_CLAIM, &other) == 0 || errno != EBUSY) return 0;
+    char path[40], name[64] = "another program";
+    snprintf(path, sizeof path, "/proc/%u/comm", other);
+    FILE* f = fopen(path, "r");
+    if (f) {
+        if (fgets(name, sizeof name, f)) name[strcspn(name, "\n")] = 0;
+        fclose(f);
+    }
+    fprintf(stderr, "the GPU is drawing for %s (process %u): one such program at a time, close it first\n", name, other);
+    return -1;
+}
+
 int seglInit(unsigned int nano_x_window) {
     int fd = open("/dev/gpu", O_RDWR);
     if (fd < 0) return -1;
+    // (not "no GPU", which a program may get by without: two programs' drawings in one memory)
+    if (draw_claim(fd) < 0) exit(1);
     void* map = mmap(0, GPU_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0x01000000);   // the device maps from 0x86000000
     if (map == MAP_FAILED) return -1;
     gpu = map;
@@ -488,7 +513,11 @@ void glDeleteTextures(GLsizei n, const GLuint* which) {
     for (uint32_t t = 1; t < MAX_TEXTURES; t++) {
         texture* x = &textures[t];
         uint32_t bytes = x->indexed ? x->width * x->height : x->width * x->height * 4;
-        if (x->used && x->address >= TEXTURES_AT && x->address + bytes > top) top = (x->address + bytes + 15) & ~15u;
+        // (only textures in this memory: one that shows a window's own pixels, seglWindowTexture, is
+        // below it, which as an unsigned offset is far above, and kept the top where it was for good.
+        // Doom has one from its first screen wipe on, and ran out of texture memory after eight levels.)
+        if (x->used && x->address >= TEXTURES_AT && x->address < GPU_SIZE && x->address + bytes > top)
+            top = (x->address + bytes + 15) & ~15u;
     }
     if (top < texture_top) texture_top = top;
 }

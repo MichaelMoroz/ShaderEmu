@@ -1089,8 +1089,8 @@ new_level(void)
 	else
 		doom_gl_kept = 0;
 	if (getenv("DOOM_GL_DEBUG"))
-		fprintf(stderr, "doom_gl: %d segs, %d subsectors, %d polygon corners, %d flats\n", numsegs, numsubsectors,
-			corner_count, flat_count);
+		fprintf(stderr, "doom_gl: %d segs, %d subsectors, %d polygon corners, %d flats; %u KB of texture memory left\n", numsegs,
+			numsubsectors, corner_count, flat_count, seglMemoryLeft() >> 10);
 }
 
 /* ---- drawing ---- */

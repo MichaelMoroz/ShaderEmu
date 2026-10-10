@@ -49,6 +49,14 @@ struct shaderemu_gpu_workers {
 };
 #define SHADEREMU_GPU_WORKERS	_IOWR('G', 4, struct shaderemu_gpu_workers)
 #define WORKERS_CORES	0x3c0	/* control word: how many cores the machine has */
+/*
+ * One program at a time draws with the GPU's memory for programs (its textures, vertices and
+ * lists are at fixed places there): the program asks for it with this, and has it until it
+ * closes the file or ends. While another has it the answer is EBUSY, and that program's
+ * number is in the argument.
+ */
+#define SHADEREMU_GPU_DRAW	_IOR('G', 5, __u32)
+
 #define WORKERS_PHYS	0x86C00000UL	/* the worker cores' mailboxes */
 #define WORKERS_STOP	0x5453434d	/* in a core's start word: park it */
 #define WORKERS_MOST	16
@@ -57,10 +65,29 @@ static void __iomem *gpu_regs;
 static void __iomem *workers;
 static struct file *worker_owner[WORKERS_MOST];
 static DEFINE_MUTEX(workers_lock);
+static struct file *draw_owner;
+static pid_t draw_pid;
 static DEFINE_MUTEX(gpu_lock);
 
 static long shaderemu_gpu_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
+	if (cmd == SHADEREMU_GPU_DRAW) {
+		u32 other = 0;
+		long answer = 0;
+
+		mutex_lock(&workers_lock);
+		if (!draw_owner || draw_owner == file) {
+			draw_owner = file;
+			draw_pid = task_tgid_vnr(current);
+		} else {
+			other = (u32)draw_pid;
+			answer = -EBUSY;
+		}
+		mutex_unlock(&workers_lock);
+		if (answer && put_user(other, (u32 __user *)arg))
+			return -EFAULT;
+		return answer;
+	}
 	if (cmd == SHADEREMU_GPU_WORKERS) {
 		struct shaderemu_gpu_workers w;
 		u32 cores, k, got = 0;
@@ -140,6 +167,8 @@ static int shaderemu_gpu_release(struct inode *inode, struct file *file)
 		int k;
 
 		mutex_lock(&workers_lock);
+		if (draw_owner == file)
+			draw_owner = NULL;
 		for (k = 1; k < WORKERS_MOST; k++)
 			if (worker_owner[k] == file) {
 				writel(WORKERS_STOP, workers + 16 * k);

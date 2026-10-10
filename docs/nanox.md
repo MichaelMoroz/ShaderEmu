@@ -237,4 +237,7 @@ system calls and 20% one software text routine, neither of which was expected.
 
 Still in software: images, and anything blended. Not done: resizing shows no outline (the
 window manager draws it on the desktop, which is now behind the windows), and only one
-OpenGL program can run at a time.
+OpenGL program can run at a time: the GPU's memory for programs has fixed places, the kernel
+gives it to the first that asks (`SHADEREMU_GPU_DRAW` on `/dev/gpu`, kept until the program
+closes or ends), and a second one says whose it is ("the GPU is drawing for doom (process
+41)...") and ends. Before that both drew into the same memory.
