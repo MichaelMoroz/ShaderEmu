@@ -1,0 +1,327 @@
+diff --git a/components/nofrendo/cpu/nes6502.c b/components/nofrendo/cpu/nes6502.c
+index 72be869..842e861 100644
+--- a/components/nofrendo/cpu/nes6502.c
++++ b/components/nofrendo/cpu/nes6502.c
+@@ -279,10 +279,17 @@
+    if (condition) \
+    { \
+       IMMEDIATE_BYTE(btemp); \
++      int turn = 3; \
+       if (((int8) btemp + (PC & 0x00FF)) & 0x100) \
+-         ADD_CYCLES(1); \
+-      ADD_CYCLES(3); \
++         turn = 4; \
++      ADD_CYCLES(turn); \
+       PC += (int8) btemp; \
++      if ((int8) btemp <= -4 && (int8) btemp >= -16 && remaining_cycles > 0 \
++          && idle_never[PC & 63] != (uint16) PC) \
++      { \
++         turn = idle_loop(PC, PC - (int8) btemp, A, X, Y, COMBINE_FLAGS(), remaining_cycles); \
++         ADD_CYCLES(turn); \
++      } \
+    } \
+    else \
+    { \
+@@ -1359,6 +1366,162 @@ uint32 nes6502_getcycles(bool reset_flag)
+ #endif /* !NES6502_JUMPTABLE */
+ 
+ 
++/* A short loop that only looks (loads, compares, tests, branches) and comes round to the
++** registers and flags it began with: the loop a game waits in, for its interrupt or for
++** the PPU's status. Every turn of it is like the last, so the turns left in this slice are
++** counted instead of run. One turn is tried here, with nothing changed, to know.
++*/
++extern int ppu_status_steady(uint32 *cycles);
++
++int nes6502_plain; /* set: every turn of such a loop is run, to compare with */
++static uint16 idle_never[64]; /* loops with something else in them, by their first address */
++
++/* a read that changes nothing (-1: not this time, -2: never); *steady: how long it gives that */
++static int idle_read(uint32 address, uint32 *steady)
++{
++   uint32 cycles;
++   int value;
++
++   if (address < 0x800)
++      return ram[address];
++   if (address >= 0x8000)
++      return bank_readbyte(address);
++   if (0x2002 == address)
++   {
++      value = ppu_status_steady(&cycles);
++      if (value >= 0 && cycles < *steady)
++         *steady = cycles;
++      return value;
++   }
++   return -2;
++}
++
++/* Returns the cycles to pass over: whole turns, leaving the slice at least one cycle. */
++static int idle_loop(uint32 top, uint32 end, uint8 a, uint8 x, uint8 y, uint8 p, int left)
++{
++   const uint8 a0 = a, x0 = x, y0 = y, p0 = p;
++   uint32 pc = top, steady = 0x7FFFFFFF;
++   int turn = 0, steps, value, turns;
++   uint8 op, *reg;
++
++   if (nes6502_plain)
++      return 0;
++
++   /* the commonest, known at sight: lda, ldx, ldy, cmp, cpx, cpy or bit of the zero page */
++   op = bank_readbyte(top);
++   if (end - top == 4 && (0xA5 == op || 0xA6 == op || 0xA4 == op || 0xC5 == op || 0xE4 == op || 0xC4 == op || 0x24 == op))
++   {
++      turn = (((end ^ top) & 0xFF00) ? 4 : 3) + 3;
++      return (left - 1) / turn * turn;
++   }
++
++   for (steps = 0; steps < 12; steps++)
++   {
++      op = bank_readbyte(pc);
++
++      /* a branch: the last one back to the top ends the turn, one forward inside goes on */
++      if (0x10 == (op & 0x1F))
++      {
++         static const uint8 flag_of[4] = { N_FLAG, V_FLAG, C_FLAG, Z_FLAG };
++         int8 offset = (int8) bank_readbyte(pc + 1);
++
++         pc += 2;
++         if (((p & flag_of[op >> 6]) != 0) != ((op >> 5) & 1))
++         {
++            turn += 2;
++            if (pc >= end)
++               return 0; /* the loop is left */
++            continue;
++         }
++         turn += (((int) offset + (int) (pc & 0xFF)) & 0x100) ? 4 : 3;
++         if (pc == end && pc + offset == top)
++            break;
++         pc += offset;
++         if (offset < 0 || pc >= end)
++            return 0;
++         continue;
++      }
++
++      switch (op)
++      {
++      case 0xEA: pc += 1; turn += 2; continue;                          /* nop */
++      case 0x18: p &= ~C_FLAG; pc += 1; turn += 2; continue;            /* clc */
++      case 0x38: p |= C_FLAG; pc += 1; turn += 2; continue;             /* sec */
++      }
++
++      /* the rest: an operation in bits 7-5 and 1-0, how its operand is found in bits 4-2 */
++      switch (op & 0xE3)
++      {
++      case 0x01: case 0x21: case 0x41: case 0xA1: case 0xA2: case 0xA0:
++      case 0xC1: case 0xE0: case 0xC0:
++         break;
++      default:
++         if (0x24 != op && 0x2C != op)
++            goto never;
++      }
++      switch (op & 0x1C)
++      {
++      case 0x00: /* immediate, of ldx, ldy, cpx, cpy */
++         if (0xA2 != op && 0xA0 != op && 0xE0 != op && 0xC0 != op)
++            goto never;
++         value = bank_readbyte(pc + 1); pc += 2; turn += 2;
++         break;
++      case 0x08: /* immediate, of the accumulator's */
++         if (0x01 != (op & 0x03))
++            goto never;
++         value = bank_readbyte(pc + 1); pc += 2; turn += 2;
++         break;
++      case 0x04: /* zero page */
++         value = ram[bank_readbyte(pc + 1)]; pc += 2; turn += 3;
++         break;
++      case 0x0C: /* absolute */
++         value = idle_read(bank_readbyte(pc + 1) | bank_readbyte(pc + 2) << 8, &steady);
++         if (-2 == value)
++            goto never;
++         if (value < 0)
++            return 0; /* not now: this read of the status would change it */
++         pc += 3; turn += 4;
++         break;
++      default:
++         goto never;
++      }
++
++      switch (op & 0xE3)
++      {
++      case 0x01: a |= value; value = a; break;                          /* ora */
++      case 0x21: a &= value; value = a; break;                          /* and */
++      case 0x41: a ^= value; value = a; break;                          /* eor */
++      case 0xA1: a = value; break;                                      /* lda */
++      case 0xA2: x = value; break;                                      /* ldx */
++      case 0xA0: y = value; break;                                      /* ldy */
++      case 0x20:                                                        /* bit */
++         p = (p & ~(N_FLAG | V_FLAG | Z_FLAG)) | (value & (N_FLAG | V_FLAG)) | ((a & value) ? 0 : Z_FLAG);
++         continue;
++      case 0xC1: case 0xE0: case 0xC0:                                  /* cmp, cpx, cpy */
++         reg = (0xC1 == (op & 0xE3)) ? &a : (0xE0 == (op & 0xE3)) ? &x : &y;
++         p = (p & ~C_FLAG) | ((*reg >= value) ? C_FLAG : 0);
++         value = (uint8) (*reg - value);
++         break;
++      }
++      p = (p & ~(N_FLAG | Z_FLAG)) | (value & N_FLAG) | (value ? 0 : Z_FLAG);
++   }
++
++   if (12 == steps)
++      goto never;
++   if (a != a0 || x != x0 || y != y0
++       || ((p ^ p0) & (N_FLAG | V_FLAG | Z_FLAG | C_FLAG)))
++      return 0;
++
++   turns = (left - 1) / turn;
++   if ((steady - 1) / turn < turns)
++      turns = (steady - 1) / turn;
++   return turns * turn;
++
++never:
++   idle_never[top & 63] = (uint16) top;
++   return 0;
++}
++
+ /* Execute instructions until count expires
+ **
+ ** Returns the number of cycles *actually* executed, which will be
+diff --git a/components/nofrendo/nes/nes.c b/components/nofrendo/nes/nes.c
+index 4055d08..9f02c01 100644
+--- a/components/nofrendo/nes/nes.c
++++ b/components/nofrendo/nes/nes.c
+@@ -364,7 +364,7 @@ void nes_emulate(void)
+    osd_setsound(nes.apu->process);
+ 
+    last_ticks = nofrendo_ticks;
+-   frames_to_render = 0;
++   frames_to_render = 1;
+    nes.scanline_cycles = 0;
+    nes.fiq_cycles = (int) NES_FIQ_PERIOD;
+ 
+diff --git a/components/nofrendo/nes/nes_ppu.c b/components/nofrendo/nes/nes_ppu.c
+index 9a6875b..52641a7 100644
+--- a/components/nofrendo/nes/nes_ppu.c
++++ b/components/nofrendo/nes/nes_ppu.c
+@@ -343,6 +343,27 @@ uint8 ppu_readhigh(uint32 address)
+ }
+ 
+ /* Read from $2000-$2007 */
++/* ours, for the 6502's idle loops: what the status reads as now, when reading it would
++** change nothing (-1 when it would), and for how many cycles it will read as that.
++*/
++int ppu_status_steady(uint32 *cycles)
++{
++   uint32 now = nes6502_getcycles(false);
++   int value = (ppu.stat & 0xE0) | (ppu.latch & 0x1F);
++
++   if ((ppu.stat & PPU_STATF_VBLANK) || ppu.flipflop)
++      return -1;
++   *cycles = 0x7FFFFFFF;
++   if (ppu.strikeflag)
++   {
++      if (now >= ppu.strike_cycle)
++         value |= PPU_STATF_STRIKE;
++      else
++         *cycles = ppu.strike_cycle - now;
++   }
++   return value;
++}
++
+ uint8 ppu_read(uint32 address)
+ {
+    uint8 value;
+@@ -693,9 +714,37 @@ INLINE int draw_oamtile(uint8 *surface, uint8 attrib, uint8 pat1,
+    return strike_pixel;
+ }
+ 
++/* ours: four pixels of a background tile are one word looked up, by the tile's palette
++** and by a nibble of each of its two bit planes. Made again when the colours change.
++*/
++static uint32 bg_words[4][256];
++static uint8 bg_words_of[16];
++
++static void bg_words_make(void)
++{
++   uint32 pair[16];
++   int group, i;
++
++   for (group = 0; group < 4; group++)
++   {
++      const uint8 *colors = ppu.palette + group * 4;
++
++      /* two pixels: bits 1 and 3 are the left one's, bits 0 and 2 the right one's */
++      for (i = 0; i < 16; i++)
++         pair[i] = colors[((i >> 1) & 1) | ((i >> 2) & 2)] | colors[(i & 1) | ((i >> 1) & 2)] << 8;
++      for (i = 0; i < 256; i++)
++         bg_words[group][i] = pair[((i >> 2) & 3) | ((i >> 4) & 0xC)] | pair[(i & 3) | ((i >> 2) & 0xC)] << 16;
++   }
++   memcpy(bg_words_of, ppu.palette, 16);
++}
++
+ static void ppu_renderbg(uint8 *vidbuf)
+ {
+-   uint8 *bmp_ptr, *data_ptr, *tile_ptr, *attrib_ptr;
++   uint8 *data_ptr, *tile_ptr, *attrib_ptr;
++   uint32 scratch[66], *out;
++   const uint32 *words;
++   uint8 pat1, pat2;
++   bool beside;
+    uint32 refresh_vaddr, bg_offset, attrib_base;
+    int tile_count;
+    uint8 tile_index, x_tile, y_tile;
+@@ -708,7 +757,12 @@ static void ppu_renderbg(uint8 *vidbuf)
+       return;
+    }
+ 
+-   bmp_ptr = vidbuf - ppu.tile_xofs; /* scroll x */
++   if (0 == bg_words[0][0] || memcmp(bg_words_of, ppu.palette, 16))
++      bg_words_make();
++
++   /* a line that starts inside a tile is drawn beside the picture and copied in */
++   beside = ppu.tile_xofs || ppu.latchfunc;
++   out = beside ? scratch : (uint32 *) vidbuf;
+    refresh_vaddr = 0x2000 + (ppu.vaddr & 0x0FE0); /* mask out x tile */
+    x_tile = ppu.vaddr & 0x1F;
+    y_tile = (ppu.vaddr >> 5) & 0x1F; /* to simplify calculations */
+@@ -720,10 +774,10 @@ static void ppu_renderbg(uint8 *vidbuf)
+    attrib_ptr = &PPU_MEM(attrib_base + (x_tile >> 2));
+    attrib = *attrib_ptr++;
+    attrib_shift = (x_tile & 2) + ((y_tile & 2) << 1);
+-   col_high = ((attrib >> attrib_shift) & 3) << 2;
++   words = bg_words[(attrib >> attrib_shift) & 3];
+ 
+    /* ppu fetches 33 tiles */
+-   tile_count = 33;
++   tile_count = beside ? 33 : 32;
+    while (tile_count--)
+    {
+       /* Tile number from nametable */
+@@ -734,8 +788,11 @@ static void ppu_renderbg(uint8 *vidbuf)
+       if (ppu.latchfunc)
+          ppu.latchfunc(ppu.bg_base, tile_index);
+ 
+-      draw_bgtile(bmp_ptr, data_ptr[0], data_ptr[8], ppu.palette + col_high);
+-      bmp_ptr += 8;
++      pat1 = data_ptr[0];
++      pat2 = data_ptr[8];
++      out[0] = words[(pat1 >> 4) | (pat2 & 0xF0)];
++      out[1] = words[(pat1 & 0x0F) | ((pat2 & 0x0F) << 4)];
++      out += 2;
+ 
+       x_tile++;
+ 
+@@ -759,10 +816,13 @@ static void ppu_renderbg(uint8 *vidbuf)
+          }
+ 
+          attrib_shift ^= 2;
+-         col_high = ((attrib >> attrib_shift) & 3) << 2;
++         words = bg_words[(attrib >> attrib_shift) & 3];
+       }
+    }
+ 
++   if (beside)
++      memcpy(vidbuf, (uint8 *) scratch + ppu.tile_xofs, NES_SCREEN_WIDTH);
++
+    /* Blank left hand column if need be */
+    if (ppu.bg_mask)
+    {

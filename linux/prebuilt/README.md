@@ -20,6 +20,8 @@ started and everything on its desktop run without building anything.
 | `root/usr/bin/tcc`, `cc`, `example`, `root/usr/share/cc-sysroot.tar`, `example-*.c` | `linux/tcc/build.sh` | TinyCC, with musl's headers and libraries for it |
 | `root/usr/bin/classicube.bin`, `root/usr/share/classicube-default.zip` | `linux/classicube/build.sh` | ClassiCube, with `linux/classicube/classicube.patch` |
 | `root/usr/bin/imdemo` | `linux/imgui/build.sh` | Dear ImGui 1.91.5 |
+| `root/usr/bin/nes.bin`, `nes` | `linux/nes/build.sh` | Nofrendo, with `linux/nes/nofrendo.patch` and `osd_shaderemu.c` |
+| `root/usr/share/nes-thwaite.nes`, `nes-nova.nes` | `linux/nes/build.sh` | two NES games (release files) |
 | `root/usr/share/doom1.wad` | `linux/nanox/doom.sh` | Doom's shareware episode |
 | `root/usr/share/quake-pak0.pak` | `linux/quake/build.sh` | Quake's shareware episode (1.06) |
 | `root/usr/share/tdawn-*.MIX`, `tdawn-sound.pak` | `linux/tdawn/build.sh` | the Command & Conquer demo; the pack is its sounds decoded (`tools/make_tdawn_sound.py`) |
@@ -47,6 +49,7 @@ compiler runtime it uses.
 | TinyCC | LGPL-2.1 | https://github.com/jrrk2/tinycc, branch `riscv32`; our changes: `linux/tcc` |
 | ClassiCube | BSD-3-Clause | https://github.com/ClassiCube/ClassiCube, commit `d41c3f7`; our changes: `linux/classicube/classicube.patch` |
 | Dear ImGui 1.91.5 | MIT | https://github.com/ocornut/imgui, tag `v1.91.5` |
+| Nofrendo | LGPL-2.0 | https://github.com/espressif/esp32-nesemu, commit `693e378`; our changes: `linux/nes/nofrendo.patch` |
 | glxgears | MIT (Brian Paul) | https://gitlab.freedesktop.org/mesa/demos, tag `mesa-demos-8.4.0` |
 | Drivers and programs of this repository | MIT (`LICENSE`); the kernel drivers GPL-2.0 | this repository |
 
@@ -74,6 +77,8 @@ Command & Conquer demos, their sounds decoded into a pack beside them).
 |---|---|---|
 | `doom1.wad` | id Software: Doom's shareware episode | https://archive.org/download/DoomsharewareEpisode/doom.ZIP |
 | `quake-pak0.pak` | id Software: Quake's shareware episode, 1.06 | https://ftp.netbsd.org/pub/pkgsrc/distfiles/quake106.zip |
+| `nes-thwaite.nes` | Damian Yerrick: Thwaite 0.04 (GPL-3.0) | https://github.com/pinobatch/thwaite-nes/releases/download/v0.04/thwaite.nes |
+| `nes-nova.nes` | NovaSquirrel: Nova the Squirrel 1.0.6a (GPL-3.0) | https://github.com/NovaSquirrel/NovaTheSquirrel/releases/download/v1.0.6a/nova.nes |
 | `tdawn-*.MIX`, `tdawn-sound.pak` | Electronic Arts (Westwood): the Command & Conquer demo | https://archive.org/download/CommandConquerDemo/cc1demo1.zip |
 | `ralert-*.MIX`, `ralert-sound.pak` | Electronic Arts (Westwood): the Red Alert demo | https://archive.org/download/CommandConquerRedAlert_1020/ra95demo.zip |
 | `classicube-default.zip` | ClassiCube's default texture pack | the game's own site, fetched by `linux/classicube/build.sh` |

@@ -925,3 +925,10 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
 - A panel (`Plate.shader`) is shown mostly as drawn (`_Flat`), and its far-off lettering takes
   the glyph's own ink: the kept picture of the lettering is taken in the room's light, and a
   line seen aslant changed colour along its length, which read as a sheen.
+- The NES (`docs/nes.md`): `wsl -- bash /mnt/c/Development/ShaderX86/linux/nes/build.sh` (2 s) after
+  Nano-X's build, then the image and snapshot. To measure it, resume the snapshot with `nx` and
+  `NES_FRAMES=180 nes thwaite` and wait for `nes: done`: `nesstat:` lines, and a sum of the last
+  picture that a change to the emulator must leave (the doc lists three). Its changes to
+  Nofrendo are `linux/nes/nofrendo.patch`.
+- Two static programs built `-fno-pie` are at the same addresses: `pc_profile.py` given both
+  `.nm` files charges one program's instructions to the other. Name only the one that is busy.
