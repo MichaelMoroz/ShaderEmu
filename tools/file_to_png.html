@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A file as a PNG picture</title>
+<style>
+  body { font: 16px/1.5 system-ui, sans-serif; max-width: 42rem; margin: 2rem auto; padding: 0 1rem; color: #1c1c1c; background: #f6f4ee; }
+  h1 { font-size: 1.3rem; }
+  #drop { border: 2px dashed #8a8572; border-radius: 8px; padding: 2rem 1rem; text-align: center; background: #fffdf6; }
+  #drop.over { background: #efe9d2; }
+  #out { margin-top: 1rem; }
+  a.save { display: inline-block; margin-top: .5rem; padding: .5rem 1rem; background: #2d4b8e; color: #fff; border-radius: 6px; text-decoration: none; }
+  small { color: #5d5a50; }
+</style>
+</head>
+<body>
+<h1>A file as a PNG picture</h1>
+<p>The ShaderEmu world in VRChat can only be handed pictures. This page wraps any file into a PNG
+whose pixels are the file's bytes; put that PNG on a host that serves it <strong>unchanged</strong>
+(no resizing, no conversion to JPEG) and paste its https address into the world's "Open a link"
+field. Nothing leaves this page: the work is done in your browser.</p>
+<div id="drop">Drop a file here, or <input type="file" id="pick"></div>
+<div id="out"></div>
+<p><small>Up to 12 MB (a picture of 2048 x 2048). The format is in docs/fetch.md; tools/file_to_png.py does the same.</small></p>
+<script>
+const MARK = [0x53, 0x48, 0x41, 0x44, 0x45, 0x52, 0x45, 0x4d, 0x55, 0x1a, 0x46, 0x31];   // "SHADEREMU", 0x1a, "F1"
+const HEADER = 256, MOST = 2048;
+
+function crc32(bytes) {
+  let table = crc32.table;
+  if (!table) {
+    table = crc32.table = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+      let c = n;
+      for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+      table[n] = c >>> 0;
+    }
+  }
+  let crc = 0xffffffff;
+  for (let i = 0; i < bytes.length; i++) crc = table[(crc ^ bytes[i]) & 255] ^ (crc >>> 8);
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function wrap(name, data) {
+  const stream = new Uint8Array(HEADER + data.length);
+  stream.set(MARK, 0);
+  const view = new DataView(stream.buffer);
+  view.setUint32(12, data.length, true);
+  view.setUint32(16, crc32(data), true);
+  stream.set(new TextEncoder().encode(name).slice(0, 235), 20);
+  stream.set(data, HEADER);
+  const pixels = Math.ceil(stream.length / 3);
+  let width = 64;
+  while (width < MOST && width * width < pixels) width *= 2;
+  const height = Math.ceil(pixels / width);
+  if (height > MOST) throw new Error("The file is too large: 12 MB at most.");
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  const image = context.createImageData(width, height);
+  // every pixel opaque: a browser multiplies colours by alpha, which would change the bytes
+  for (let p = 0, b = 0; p < width * height; p++) {
+    image.data[p * 4] = b < stream.length ? stream[b++] : 0;
+    image.data[p * 4 + 1] = b < stream.length ? stream[b++] : 0;
+    image.data[p * 4 + 2] = b < stream.length ? stream[b++] : 0;
+    image.data[p * 4 + 3] = 255;
+  }
+  context.putImageData(image, 0, 0);
+  // read back: some browsers add noise to canvases against fingerprinting, which destroys the file
+  const back = context.getImageData(0, 0, width, height).data;
+  for (let p = 0, b = 0; b < stream.length; p++)
+    for (let k = 0; k < 3 && b < stream.length; k++, b++)
+      if (back[p * 4 + k] !== stream[b]) throw new Error("This browser changes canvas pixels (a privacy setting): use another browser or tools/file_to_png.py.");
+  return { canvas, width, height };
+}
+
+async function take(file) {
+  const out = document.getElementById("out");
+  try {
+    const data = new Uint8Array(await file.arrayBuffer());
+    const made = wrap(file.name, data);
+    made.canvas.toBlob(blob => {
+      const link = document.createElement("a");
+      link.className = "save";
+      link.href = URL.createObjectURL(blob);
+      link.download = file.name + ".png";
+      link.textContent = "Save " + file.name + ".png";
+      out.textContent = file.name + ": " + data.length + " bytes as " + made.width + " x " + made.height + " pixels, " + blob.size + " bytes of PNG. ";
+      out.appendChild(document.createElement("br"));
+      out.appendChild(link);
+    }, "image/png");
+  } catch (error) {
+    out.textContent = error.message;
+  }
+}
+
+const drop = document.getElementById("drop");
+document.getElementById("pick").addEventListener("change", event => event.target.files[0] && take(event.target.files[0]));
+drop.addEventListener("dragover", event => { event.preventDefault(); drop.classList.add("over"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+drop.addEventListener("drop", event => { event.preventDefault(); drop.classList.remove("over"); event.dataTransfer.files[0] && take(event.dataTransfer.files[0]); });
+</script>
+</body>
+</html>

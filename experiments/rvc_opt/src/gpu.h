@@ -554,6 +554,10 @@ bool gpu_writeback(uint2 pos, out uint4 result) {
 #define INPUT_KEYS  0x700008u   // ring of the last 32 key events, one word each
 #define FETCH_REPLY 0x700011u   // requests the host has answered, bytes, status (docs/fetch.md)
 #define FETCH_DATA  0x76c000u   // what the host fetched: 0x4000 texels
+// "Open this" from the host (docs/open.md): requests so far and the address's length, then the
+// address, 176 bytes of it in the eleven texels after and 80 more from HOST_OPEN_MORE.
+#define HOST_OPEN      0x700024u
+#define HOST_OPEN_MORE 0x700031u
 // What the cores did, for a guest to show (docs/multicore.md): 16 words, core k's count of
 // instructions in word k; then a texel of how many cores, which run and which are asleep (a bit each).
 #define MC_STATS    0x700038u
@@ -599,9 +603,33 @@ uint mc_stat_count(uint core) {
 // A word of what the host fetched: its texture holds one byte a channel, one word a texel.
 // With _FetchDeliver 2 it is a picture the host still has as a texture of its own (_HostImage,
 // any size, sRGB, rows bottom up): word n is pixel n of it scaled to _FetchW by _FetchH.
+// A file carried by a picture (docs/fetch.md): its bytes are the pixels' red, green and blue,
+// rows from the top (the texture's are bottom up). The first 256 are a header: a mark, the
+// file's length, its CRC-32, its name.
+uint3 packed_pixel(uint p, uint2 size) {
+    float4 c = _HostImage.Load(int3(p % size.x, size.y - 1 - min(p / size.x, size.y - 1), 0));
+    float3 seen = c.rgb <= 0.0031308 ? c.rgb * 12.92 : 1.055 * pow(abs(c.rgb), 1.0 / 2.4) - 0.055;   // the texture is sRGB
+    return (uint3)(saturate(seen) * 255.0 + 0.5);
+}
+uint packed_word(uint at) {
+    uint2 size;
+    uint levels;
+    _HostImage.GetDimensions(0, size.x, size.y, levels);
+    // bytes at to at + 3 are in two pixels: six bytes from the first one's red
+    uint p = at / 3, k = at % 3;
+    uint3 a = packed_pixel(p, size), b = packed_pixel(p + 1, size);
+    uint six[6] = {a.r, a.g, a.b, b.r, b.g, b.b};
+    return six[k] | (six[k + 1] << 8) | (six[k + 2] << 16) | (six[k + 3] << 24);
+}
+bool fetch_packed() {
+    return _FetchDeliver == 3 && packed_word(0) == 0x44414853u && packed_word(4) == 0x4d455245u && packed_word(8) == 0x31461a55u;
+}
+
 uint fetch_word(uint n) {
     [branch]
-    if (_FetchDeliver == 2) {
+    if (fetch_packed()) return packed_word(_FetchOffset + 4 * n);
+    [branch]
+    if (_FetchDeliver == 2 || _FetchDeliver == 3) {
         if (n >= _FetchW * _FetchH) return 0;
         uint2 size;
         uint levels;
@@ -705,9 +733,19 @@ uint4 gpu_control(uint2 pos) {
         }
         return state;
     }
-    if (_FetchDeliver != 0) {
+    if (_FetchDeliver == 4) {
+        // the host has something for the guest to open: _HostData's first 64 words are its address
+        if (index == HOST_OPEN) return uint4(_FetchSeq, _FetchLength, keep.b, keep.a);
+        uint from = index > HOST_OPEN && index < HOST_OPEN + 12 ? (index - HOST_OPEN - 1) * 4
+                  : index >= HOST_OPEN_MORE && index < HOST_OPEN_MORE + 5 ? 44 + (index - HOST_OPEN_MORE) * 4 : 0xffffffff;
+        if (from != 0xffffffff) return uint4(fetch_word(from), fetch_word(from + 1), fetch_word(from + 2), fetch_word(from + 3));
+    } else if (_FetchDeliver != 0) {
         // the host has an answer: its bytes and the words that say so arrive in one pass
-        if (index == FETCH_REPLY) return uint4(_FetchSeq, _FetchLength, _FetchStatus, _FetchInfo | _FetchW | (_FetchH << 16));
+        if (index == FETCH_REPLY) {
+            // (a file a picture carries says its own length; 201 is "a file with its header")
+            if (fetch_packed()) return uint4(_FetchSeq, 256 + packed_word(12), 201, 0);
+            return uint4(_FetchSeq, _FetchLength, _FetchStatus, _FetchInfo | _FetchW | (_FetchH << 16));
+        }
         if (index >= FETCH_DATA && index < FETCH_DATA + 0x4000) {
             uint n = (index - FETCH_DATA) * 4;
             return uint4(fetch_word(n), fetch_word(n + 1), fetch_word(n + 2), fetch_word(n + 3));

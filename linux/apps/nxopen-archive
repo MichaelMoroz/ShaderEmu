@@ -1,0 +1,31 @@
+#!/bin/sh
+# open's: an archive unpacked into a folder of its own, and the file manager on that folder.
+# A .gz of one file is unpacked and opened as what it holds.
+f="$1"
+n=$(basename "$f")
+d="/tmp/open/$n.d"
+kind=${n##*.}
+case "$n" in *.tar.gz) kind=tgz ;; esac
+# (a name with no ending: by its first two bytes)
+case "$kind" in
+zip | tar | tgz | gz) ;;
+*) case "$(head -c 2 "$f" | od -An -tx1 | tr -d ' \n')" in
+    504b) kind=zip ;;
+    1f8b) kind=gz ;;
+    *) kind=tar ;;
+    esac ;;
+esac
+mkdir -p /tmp/open
+case "$kind" in
+zip) mkdir -p "$d" && unzip -o -q "$f" -d "$d" || exit 1 ;;
+tar) mkdir -p "$d" && tar -xf "$f" -C "$d" || exit 1 ;;
+tgz) mkdir -p "$d" && tar -xzf "$f" -C "$d" || exit 1 ;;
+gz)
+    out="/tmp/open/${n%.gz}"
+    [ "$out" = "/tmp/open/$n" ] && out="$out.out"
+    gunzip -c "$f" > "$out" || exit 1
+    exec open "$out"
+    ;;
+esac
+echo "open: $n unpacked into $d"
+exec nxfiles "$d"

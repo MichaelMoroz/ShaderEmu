@@ -73,6 +73,8 @@ struct Options {
     std::vector<std::pair<std::string, std::string>> expectSend;
     std::string initialInput;
     std::string until;
+    std::vector<std::string> open;   // --open: addresses or files the guest is told to open (docs/open.md)
+    std::string openAfter;           // --open-after: not before the console has shown this
     int ticks = 32768;
     int initFrames = 2;
     uint64_t maxFrames = 0;
@@ -320,6 +322,8 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--no-desktop") o.desktop = false;
         else if (a == "--desktop") o.desktop = true;
         else if (a == "--tabs") o.tabs = true;
+        else if (a == "--open") o.open.push_back(next("--open"));
+        else if (a == "--open-after") o.openAfter = unescape(next("--open-after"));
         else if (a == "--viz-capture") { o.vizCapture = next("--viz-capture"); o.viz = true; }
         else if (a == "--no-doubles") o.noDoubles = true;
         else if (a == "--no-gpu") o.noGpu = true;
@@ -825,14 +829,20 @@ int main(int argc, char** argv) {
     uint32_t cpuLow = 0, cpuUploaded = 0, cpuCopy[4] = {}, cpuDisplay[2] = {};
     bool cpuFirst = true;
     // A page the guest asked for (docs/fetch.md): fetched on a thread, handed over in one frame.
+    // The whole answer is kept: one larger than the 256 KB handed over at a time is asked for
+    // again part by part, with an offset.
     struct Fetch {
         std::mutex lock;
         bool busy = false, ready = false;
-        uint32_t seq = 0, status = 0, info = 0;
-        std::string body;
+        uint32_t seq = 0, status = 0, info = 0, offset = 0;
+        std::string body, url;
     } fetch;
     uint32_t fetchAnswered = 0;
     bool fetchDelivering = false;
+    // "Open this" for the guest (--open): one at a time, each a count up of the guest's word.
+    size_t openNext = 0;
+    uint32_t openCount = 0;
+    int openWait = 0;
     // The network device (docs/lan.md): the guest's packets come back with the row, the others'
     // go into its ring in the control pass.
     NetLink net;
@@ -909,28 +919,44 @@ int main(int argc, char** argv) {
             if (!fetch.busy && !fetch.ready) {
                 uint32_t length = (std::min)(texel(64 + 16, 1), 255u);
                 std::string url((const char*)raw.data() + (64 + 18) * 16, length);
-                fetch.busy = true;
+                uint32_t kind = texel(64 + 16, 2), offset = texel(64 + 16, 3);
                 fetch.seq = texel(64 + 16, 0);
-                bool picture = texel(64 + 16, 2) == 1;
-                fprintf(stderr, "[harness] the guest asks for %s\n", url.c_str());
-                std::thread([&fetch, url, picture] {
+                fetch.offset = offset;
+                bool held = offset != 0 && url == fetch.url;   // a further part of what is held
+                (held ? fetch.ready : fetch.busy) = true;
+                bool picture = kind == 1, file = kind == 3;
+                if (!held) fprintf(stderr, "[harness] the guest asks for %s\n", url.c_str());
+                if (!held) std::thread([&fetch, url, picture, file] {
+                    const size_t most = 16u << 20;
                     std::string body;
                     uint32_t status = 0, info = 0;
-                    HINTERNET net = InternetOpenA("ShaderEmu", INTERNET_OPEN_TYPE_PRECONFIG, nullptr, nullptr, 0);
-                    HINTERNET page = net && url.rfind("http", 0) == 0
-                        ? InternetOpenUrlA(net, url.c_str(), nullptr, 0, INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_UI, 0) : nullptr;
-                    if (page) {
-                        DWORD size = sizeof(status), got = 0;
-                        char buf[8192];
-                        HttpQueryInfoA(page, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER, &status, &size, nullptr);
-                        while (body.size() < kFetchSide * kFetchSide * 4 && InternetReadFile(page, buf, sizeof(buf), &got) && got)
-                            body.append(buf, got);
-                        InternetCloseHandle(page);
+                    if (url.rfind("http", 0) != 0) {
+                        // a file of the host's own, for tests: its path, or file:// and its path
+                        std::string path = url.rfind("file://", 0) == 0 ? url.substr(7) : url;
+                        if (FILE* f = fopen(path.c_str(), "rb")) {
+                            char buf[65536];
+                            size_t got;
+                            while (body.size() < most && (got = fread(buf, 1, sizeof(buf), f)) > 0) body.append(buf, got);
+                            fclose(f);
+                            status = 200;
+                        } else status = 404;
+                    } else {
+                        HINTERNET net = InternetOpenA("ShaderEmu", INTERNET_OPEN_TYPE_PRECONFIG, nullptr, nullptr, 0);
+                        HINTERNET page = net ? InternetOpenUrlA(net, url.c_str(), nullptr, 0, INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_UI, 0) : nullptr;
+                        if (page) {
+                            DWORD size = sizeof(status), got = 0;
+                            char buf[8192];
+                            HttpQueryInfoA(page, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER, &status, &size, nullptr);
+                            while (body.size() < most && InternetReadFile(page, buf, sizeof(buf), &got) && got)
+                                body.append(buf, got);
+                            InternetCloseHandle(page);
+                        }
+                        if (net) InternetCloseHandle(net);
                     }
-                    if (net) InternetCloseHandle(net);
-                    if (picture && status == 200) {
-                        // The guest has no decoder: it gets pixels, a word each, of the picture
-                        // scaled to fit the 256 KB it can be handed.
+                    if ((picture || (file && body.compare(0, 8, "\x89PNG\r\n\x1a\n") == 0)) && status == 200) {
+                        // A picture: the guest gets pixels, a word each, scaled to fit the 256 KB
+                        // it can be handed. Or, asked for as a file, a PNG may carry one in its
+                        // pixels (docs/fetch.md): then the guest gets that file, header first.
                         std::string pixels;
                         CoInitializeEx(nullptr, COINIT_MULTITHREADED);
                         ComPtr<IWICImagingFactory> wic;
@@ -945,34 +971,55 @@ int main(int argc, char** argv) {
                             SUCCEEDED(stream->InitializeFromMemory((BYTE*)body.data(), (DWORD)body.size())) &&
                             SUCCEEDED(wic->CreateDecoderFromStream(stream.Get(), nullptr, WICDecodeMetadataCacheOnDemand, &decoder)) &&
                             SUCCEEDED(decoder->GetFrame(0, &frame)) && SUCCEEDED(frame->GetSize(&w, &h)) && w && h) {
-                            UINT tw = w, th = h;
-                            while (tw > 256 || th > 256 || tw * th > 65536) {
-                                tw = (std::max)(1u, tw * 7 / 8);
-                                th = (std::max)(1u, h * tw / w);
-                            }
-                            if (SUCCEEDED(wic->CreateBitmapScaler(&scaler)) &&
-                                SUCCEEDED(scaler->Initialize(frame.Get(), tw, th, WICBitmapInterpolationModeFant)) &&
-                                SUCCEEDED(wic->CreateFormatConverter(&converter)) &&
-                                SUCCEEDED(converter->Initialize(scaler.Get(), GUID_WICPixelFormat32bppBGRA, WICBitmapDitherTypeNone, nullptr, 0,
-                                                                WICBitmapPaletteTypeCustom))) {
-                                pixels.resize((size_t)tw * th * 4);
-                                if (SUCCEEDED(converter->CopyPixels(nullptr, tw * 4, (UINT)pixels.size(), (BYTE*)pixels.data()))) {
-                                    for (size_t i = 0; i < pixels.size(); i += 4) {
-                                        // over white, as the page is; the word is 0x00RRGGBB
-                                        unsigned a = (unsigned char)pixels[i + 3];
-                                        for (int c = 0; c < 3; ++c)
-                                            pixels[i + c] = (char)(((unsigned char)pixels[i + c] * a + 255 * (255 - a)) / 255);
-                                        pixels[i + 3] = 0;
+                            if (file) {
+                                // its pixels as they are, three bytes each: a file if they begin with the mark
+                                std::string packed((size_t)w * h * 3, 0);
+                                if (SUCCEEDED(wic->CreateFormatConverter(&converter)) &&
+                                    SUCCEEDED(converter->Initialize(frame.Get(), GUID_WICPixelFormat24bppRGB, WICBitmapDitherTypeNone, nullptr, 0,
+                                                                    WICBitmapPaletteTypeCustom)) &&
+                                    SUCCEEDED(converter->CopyPixels(nullptr, w * 3, (UINT)packed.size(), (BYTE*)packed.data())) &&
+                                    packed.size() >= 256 && packed.compare(0, 12, "SHADEREMU\x1a" "F1") == 0) {
+                                    uint32_t held = 0;
+                                    memcpy(&held, packed.data() + 12, 4);
+                                    if (256 + (size_t)held <= packed.size()) {
+                                        packed.resize(256 + (size_t)held);
+                                        body.swap(packed);
+                                        status = 201;   // a file with its header
                                     }
-                                    info = tw | th << 16;
+                                }
+                            } else {
+                                UINT tw = w, th = h;
+                                while (tw > 256 || th > 256 || tw * th > 65536) {
+                                    tw = (std::max)(1u, tw * 7 / 8);
+                                    th = (std::max)(1u, h * tw / w);
+                                }
+                                if (SUCCEEDED(wic->CreateBitmapScaler(&scaler)) &&
+                                    SUCCEEDED(scaler->Initialize(frame.Get(), tw, th, WICBitmapInterpolationModeFant)) &&
+                                    SUCCEEDED(wic->CreateFormatConverter(&converter)) &&
+                                    SUCCEEDED(converter->Initialize(scaler.Get(), GUID_WICPixelFormat32bppBGRA, WICBitmapDitherTypeNone, nullptr, 0,
+                                                                    WICBitmapPaletteTypeCustom))) {
+                                    pixels.resize((size_t)tw * th * 4);
+                                    if (SUCCEEDED(converter->CopyPixels(nullptr, tw * 4, (UINT)pixels.size(), (BYTE*)pixels.data()))) {
+                                        for (size_t i = 0; i < pixels.size(); i += 4) {
+                                            // over white, as the page is; the word is 0x00RRGGBB
+                                            unsigned a = (unsigned char)pixels[i + 3];
+                                            for (int c = 0; c < 3; ++c)
+                                                pixels[i + c] = (char)(((unsigned char)pixels[i + c] * a + 255 * (255 - a)) / 255);
+                                            pixels[i + 3] = 0;
+                                        }
+                                        info = tw | th << 16;
+                                    }
                                 }
                             }
                         }
-                        if (info) body.swap(pixels);
-                        else status = 415;   // not a picture this host can read
+                        if (picture) {
+                            if (info) body.swap(pixels);
+                            else status = 415;   // not a picture this host can read
+                        }
                     }
                     std::lock_guard<std::mutex> lock(fetch.lock);
                     fetch.body.swap(body);
+                    fetch.url = url;
                     fetch.status = status;
                     fetch.info = info;
                     fetch.busy = false;
@@ -1231,21 +1278,40 @@ int main(int argc, char** argv) {
         {
             std::lock_guard<std::mutex> lock(fetch.lock);
             if (fetch.ready) {
+                // the part from the offset asked for; the length said is the whole answer's
                 std::vector<uint8_t> bytes((size_t)kFetchSide * kFetchSide * 4, 0);
-                size_t n = (std::min)(fetch.body.size(), bytes.size());
-                memcpy(bytes.data(), fetch.body.data(), n);
+                size_t from = (std::min)((size_t)fetch.offset, fetch.body.size());
+                size_t n = (std::min)(fetch.body.size() - from, bytes.size());
+                memcpy(bytes.data(), fetch.body.data() + from, n);
                 std::string err;
                 if (backend.deliverHostData(mat, bytes.data(), err)) {
                     mat.setInt("_FetchDeliver", 1);
                     mat.setInt("_FetchSeq", fetch.seq);
-                    mat.setInt("_FetchLength", (int64_t)n);
+                    mat.setInt("_FetchLength", (int64_t)fetch.body.size());
                     mat.setInt("_FetchStatus", fetch.status);
                     mat.setInt("_FetchInfo", fetch.info);
                     fetchDelivering = true;
-                    fprintf(stderr, "[harness] answered with %zu bytes, status %u\n", n, fetch.status);
+                    fprintf(stderr, "[harness] answered with %zu bytes from %zu of %zu, status %u\n", n, from, fetch.body.size(), fetch.status);
                 }
                 fetchAnswered = fetch.seq;
                 fetch.ready = false;
+            } else if (!fetchDelivering && openNext < opt.open.size() && frame > (uint64_t)opt.initFrames + 4 && --openWait < 0 &&
+                       (opt.openAfter.empty() || transcript.find(opt.openAfter) != std::string::npos)) {
+                // the next thing to open: its address in the answer's texture, written to the guest's words
+                std::vector<uint8_t> bytes((size_t)kFetchSide * kFetchSide * 4, 0);
+                const std::string& address = opt.open[openNext];
+                size_t n = (std::min)(address.size(), (size_t)255);
+                memcpy(bytes.data(), address.data(), n);
+                std::string err;
+                if (backend.deliverHostData(mat, bytes.data(), err)) {
+                    mat.setInt("_FetchDeliver", 4);
+                    mat.setInt("_FetchSeq", ++openCount);
+                    mat.setInt("_FetchLength", (int64_t)n);
+                    fetchDelivering = true;
+                    fprintf(stderr, "[harness] the guest is told to open %s\n", address.c_str());
+                }
+                ++openNext;
+                openWait = 600;   // the guest takes one at a time
             }
         }
 

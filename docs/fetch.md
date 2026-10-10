@@ -2,16 +2,18 @@
 
 The machine has no network. A program that wants a page asks the host for it through a few
 words of the control block, and the host puts the answer into the machine's memory in one
-pass of the GPU device's control shader. `nxweb`, the browser, is the one user.
+pass of the GPU device's control shader. `nxweb`, the browser, asks for pages; `open`
+(`docs/open.md`) for files.
 
 | Address | Contents |
 |---|---|
 | `0x87000100` | requests made: the guest adds 1 to ask |
 | `0x87000104` | length of the address in bytes |
-| `0x87000108` | kind: 0 for a page's bytes, 1 for a picture's pixels, 2 for a style sheet's bytes |
+| `0x87000108` | kind: 0 for a page's bytes, 1 for a picture's pixels, 2 for a style sheet's bytes, 3 for a file |
+| `0x8700010c` | offset: the part of the answer wanted begins at this byte (0 for the first) |
 | `0x87000110` | requests answered: the host sets it to the request's number |
-| `0x87000114` | bytes of the answer (at most 262,144; a longer page is cut) |
-| `0x87000118` | status: 200 for a page, the HTTP status otherwise; 1: an address this host may not open until its user hands it over (ask again); 3: one it never may; 0 or 2: no answer; 415: a picture the host could not decode |
+| `0x87000114` | bytes of the whole answer; 262,144 of them at most are handed over at a time |
+| `0x87000118` | status: 200 for a page, 201 for a file with its header (below), the HTTP status otherwise; 1: an address this host may not open until its user hands it over (ask again); 3: one it never may; 0 or 2: no answer; 415: a picture the host could not decode |
 | `0x8700011c` | a picture's width, and its height from bit 16 |
 | `0x87000120` | the address, up to 255 bytes |
 | `0x876c0000` | the answer, 256 KB |
@@ -29,16 +31,46 @@ pass of the GPU device's control shader. `nxweb`, the browser, is the one user.
   the control pass does the scaling. The guest decodes nothing.
 - Under Linux a program maps both through `/dev/gpu`: the words at offset `0x01000000`, the
   data at `0x016c0000`. Nano-X's texture area ends below that.
-- One request at a time; there is no lock between programs.
+- One request at a time; there is no lock between programs. A program waits until the
+  request and reply words are equal before it asks.
+
+## Files, and answers longer than 256 KB
+
+- **Kind 3** is whatever the address holds, as bytes, of any length. The reply's length is
+  the whole answer's; the guest takes the first 256 KB and asks again with the same address
+  and the offset of the next part. The host keeps the answer and downloads nothing twice.
+- **A file inside a picture.** A VRChat world gets arbitrary bytes only as a picture, so a
+  file can travel as a PNG whose pixels are its bytes, three a pixel (red, green, blue), rows
+  from the top. The first 256 bytes are a header:
+
+  | Bytes | Contents |
+  |---|---|
+  | 0 to 11 | the mark: `SHADEREMU`, 0x1a, `F1` |
+  | 12 to 15 | the file's length |
+  | 16 to 19 | its CRC-32 |
+  | 20 to 255 | its name, ended by zeros |
+
+  Asked for as a file, a picture with the mark is answered with status 201 and those bytes,
+  header first (256 + the file's length in all). A picture without it is answered as a
+  picture is: pixels, status 200.
+- `python tools\file_to_png.py FILE` makes such a picture (and `--back`, `--check`);
+  `tools\file_to_png.html` does the same in a browser, with no server. Up to 2048 x 2048
+  pixels, 12 MB. The picture must arrive unchanged: a host that scales it or makes a JPEG of
+  it destroys the file, and the CRC says so.
 
 ## Hosts
 
 - The harness fetches with WinINet on a thread (`rvc_harness.cpp`), any `http` or `https`
-  address, and decodes pictures with WIC. Its backends draw a second zone over the data's
+  address or a file of its own (`file://` and a path), up to 16 MB, and decodes pictures with
+  WIC: a PNG asked for as a file is looked into for the mark there. Its backends draw a second zone over the data's
   eight rows in the frame of delivery.
 - The VRChat world (`EmuMachine.cs`) uses `VRCStringDownloader` for pages and
   `VRCImageDownloader` for pictures (VRChat starts one download of each kind every five
-  seconds). A world can only load addresses it was built with, or one a visitor types into a
+  seconds). A file is asked for through the picture loader when its address ends in `.png`,
+  `.jpg` or `.jpeg`, without smaller copies, and the control pass reads the file's bytes out
+  of the texture itself (`packed_word` in `src/gpu.h`, `_FetchDeliver` 3, `_FetchOffset`):
+  no Udon loop touches them. Any other address is a text download, whose bytes Udon packs
+  6,000 a frame; whether VRChat hands a binary file over unchanged that way is not known. A world can only load addresses it was built with, or one a visitor types into a
   `VRCUrlInputField`: so it knows the sites of `linux/apps/web/sites.txt` (the browser's home
   page is made from the same file). Any other address gets status 1 and a slot.
 - There are four slots: slot 0 is the page, 1 to 3 what it wants next, its style sheets before

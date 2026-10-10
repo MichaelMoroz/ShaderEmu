@@ -251,14 +251,11 @@ open_entry(int i, int edit)
 		draw_all();
 	} else if (edit) {
 		ui_run("nxedit", path);
-	} else if (e->kind == FILE_PICTURE) {
-		ui_run("nxview", path);
-	} else if (e->kind == FILE_PAGE) {
-		ui_run("nxweb", path);
 	} else if (e->kind == FILE_PROGRAM) {
 		ui_run(path, NULL);
 	} else {
-		ui_run("nxedit", path);
+		/* whatever is registered for it (docs/open.md); the kinds here are only its icon */
+		ui_run("open", path);
 	}
 }
 

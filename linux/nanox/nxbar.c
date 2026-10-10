@@ -8,10 +8,13 @@
  */
 #include <ctype.h>
 #include <dirent.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <time.h>
 #include <unistd.h>
 #define MWINCLUDECOLORS
@@ -310,6 +313,57 @@ launch(const char *command)
 	_exit(127);
 }
 
+/* "Open this" from the host (docs/open.md): a count among the machine's control words, and an
+ * address in two runs of them. The last count acted on is kept in a file, for a bar started
+ * again, and each new one starts `open` with the address. */
+#define OPEN_COUNT 144		/* word indices: 0x87000240 */
+#define OPEN_FIRST 148		/* 176 bytes of the address */
+#define OPEN_MORE 196		/* and 80 more */
+#define OPEN_SEEN "/tmp/nxopen.count"
+
+static void
+watch_open(void)
+{
+	static volatile uint32_t *regs;
+	static uint32_t seen;
+	static int tried;
+	char address[257];
+	uint32_t count, length;
+	FILE *file;
+
+	if (!tried) {
+		int fd = open("/dev/gpu", O_RDWR);
+
+		tried = 1;
+		if (fd >= 0)
+			regs = mmap(NULL, 4096, PROT_READ, MAP_SHARED, fd, 0x01000000);
+		if (regs == MAP_FAILED)
+			regs = NULL;
+		if ((file = fopen(OPEN_SEEN, "r")) != NULL) {
+			if (fscanf(file, "%u", &seen) != 1)
+				seen = 0;
+			fclose(file);
+		}
+	}
+	if (!regs || (count = regs[OPEN_COUNT]) == seen)
+		return;
+	seen = count;
+	if ((file = fopen(OPEN_SEEN, "w")) != NULL) {
+		fprintf(file, "%u\n", seen);
+		fclose(file);
+	}
+	length = regs[OPEN_COUNT + 1];
+	if (length == 0 || length > 255)
+		return;
+	memcpy(address, (const void *)&regs[OPEN_FIRST], 176);
+	memcpy(address + 176, (const void *)&regs[OPEN_MORE], 80);
+	address[length] = 0;
+	if (fork() == 0) {
+		execlp("open", "open", address, (char *)NULL);
+		_exit(127);
+	}
+}
+
 /* Opens a row: a folder (or the way back, to the row of the folder left), or a program. */
 static void
 choose(int row, int keyboard)
@@ -459,6 +513,7 @@ main(void)
 		if (now == looked)
 			continue;
 		looked = now;
+		watch_open();
 		if (find_tasks() || localtime(&now)->tm_min != minute) {
 			minute = localtime(&now)->tm_min;
 			draw_bar();

@@ -122,6 +122,8 @@ else:
 PY
 fi
 cp "$WORK/src/doom1.wad" "$OUT/usr/share/doom1.wad"
+# a WAD anybody opens is played (docs/open.md): a whole game by itself, a patch over the shareware one
+printf '%s\n' 'doom-game - IWAD doom -iwad %s' 'doom-patch wad PWAD doom -file %s' > "$OUT/usr/share/nxopen.50-doom"
 # the Start menu lists what the nxapps.* files name (nxbar.c)
 echo "Games/Doom=doom" > "$OUT/usr/share/nxapps.50-doom"
 ls -l "$OUT/usr/bin/doom.bin" "$OUT/usr/share/doom1.wad"

@@ -91,6 +91,7 @@ Shader "ShaderEmu/gpu"
             // An answer to the guest's request (docs/fetch.md): its bytes, in the frame _FetchDeliver is set.
             uniform uint _FetchDeliver, _FetchSeq, _FetchLength, _FetchStatus;
             uniform uint _FetchInfo, _FetchW, _FetchH;   // a picture's size: one word, or its halves
+            uniform uint _FetchOffset;   // _FetchDeliver 3: where in the file a picture carries this part begins
             Texture2D<float4> _HostData;
             Texture2D<float4> _HostImage;
             // The sound card (docs/sound.md): the sample the host's ring starts at this frame,

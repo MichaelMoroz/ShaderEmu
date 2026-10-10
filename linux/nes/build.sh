@@ -49,5 +49,7 @@ cat > "$OUT/usr/bin/nes" <<'EOF'
 exec nes.bin "$@"
 EOF
 chmod +x "$OUT/usr/bin/nes"
+# a .nes file anybody opens is this program's (docs/open.md)
+printf '%s\n' 'nes nes NES\x1a nes %s' > "$OUT/usr/share/nxopen.85-nes"
 printf '%s\n' "Games/Thwaite (NES)=nes thwaite" "Games/Nova the Squirrel (NES)=nes nova" > "$OUT/usr/share/nxapps.85-nes"
 ls -l "$OUT/usr/bin/nes.bin" "$OUT/usr/share"/nes-*.nes

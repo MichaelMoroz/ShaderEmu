@@ -1001,6 +1001,17 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   is taken every scanline and needs none of them belongs in a small function in front of it.
 - Two static programs built `-fno-pie` are at the same addresses: `pc_profile.py` given both
   `.nm` files charges one program's instructions to the other. Name only the one that is busy.
+- `open` (`docs/open.md`) starts the program registered for a file's kind; the kinds are the
+  lines of `/usr/share/nxopen.*`, and a program's build adds its own file beside its
+  `nxapps.*` one. To test what it decides: `open --dry FILE` under `rvc_cpu` (0.7 s). The whole
+  way from the host: `rvc_harness ... --desktop --open "file://C:\path\x.png" --open-after "GPU
+  drawing" --until "is nes"` (14 s from power-on).
+- The host tells the guest to open something through control words at 0x87000240 and the
+  desktop's bar starts `open`; the fetch has kind 3 (a file), an offset for answers over
+  256 KB, and a file may travel inside a PNG (`tools\file_to_png.py`, `docs/fetch.md`).
+- An end marker for `--until` typed from PowerShell inside a single-quoted string is
+  `echo LX-''''DONE` (the guest then gets `LX-''DONE`). With `''` alone the guest's shell gets
+  one quote and waits for the other for ever, and the run sits until its limit.
 - The kernel upstream's image is built from has networking in it already (`NET: Registered
   PF_INET`, a device `rvcnet`): look there before adding a stack.
 - The network (`docs/lan.md`): `--net PORT --net-id N` on `rvc_harness` (D3D11) and `rvc_cpu`;

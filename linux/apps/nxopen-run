@@ -1,0 +1,18 @@
+#!/bin/sh
+# open's: a program run in a terminal of its own, which stays when the program has ended.
+f="$1"
+case "$f" in /*) ;; *) f="$PWD/$f" ;; esac
+chmod +x "$f" 2>/dev/null
+mkdir -p /tmp/open
+r="/tmp/open/run.$$"
+{
+    echo '#!/bin/sh'
+    echo "\"$f\""
+    echo 'echo'
+    echo "echo \"[$(basename "$f") ended with \$?: Enter closes this window]\""
+    echo 'read x'
+} > "$r"
+chmod +x "$r"
+# (without a window system: here, and no waiting)
+[ -f /tmp/nano-X.lock ] || exec "$f"
+exec nxterm "$r"

@@ -12,7 +12,7 @@ MW=$WORK/src/microwindows
 OUT=$REPO/build/images/linux/root/usr
 [ -f "$MW/src/lib/libnano-X.a" ] || { echo "run linux/nanox/build.sh first"; exit 1; }
 mkdir -p "$OUT/bin" "$OUT/share" "$WORK/src/apps"
-for p in nxedit nxfiles nxpaint nxview nxsettings nxmon nxweb nxkey; do
+for p in nxedit nxfiles nxpaint nxview nxsettings nxmon nxweb nxkey open; do
     more=""
     # the viewer decodes on the worker cores (ui_image.h): the library every program has for them
     [ $p = nxview ] && more="-I$REPO/programs/mc $REPO/programs/mc/mcw.c"
@@ -27,6 +27,11 @@ cp "$HERE"/pictures/picture-*.png "$HERE"/pictures/picture-*.jpg "$OUT/share/" 2
 printf '%s\n' "System/Restart the desktop=setsid nx restart" "System/Shut down=setsid nxoff" > "$OUT/share/nxapps.90-system"
 cp "$HERE/nxoff" "$OUT/bin/nxoff"
 chmod +x "$OUT/bin/nxoff"
+# what opens what (open.c, docs/open.md): a kind a line, its endings, its first bytes, its program;
+# another program's build adds its own nxopen.* file, as it adds its line to the Start menu
+cp "$HERE/nxopen.conf" "$OUT/share/nxopen.20-apps"
+cp "$HERE/nxopen-archive" "$HERE/nxopen-run" "$OUT/bin/"
+chmod +x "$OUT/bin/nxopen-archive" "$OUT/bin/nxopen-run"
 # the browser's pages: its home lists the sites of web/sites.txt (the VRChat world can ask for
 # no others, so its builder reads the same file)
 # (all in /usr/share: the image builder adds files to folders the ROM has, and makes none)
