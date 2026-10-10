@@ -865,6 +865,25 @@ gpu_cursor(MWCOORD x, MWCOORD y, MWCOORD width, MWCOORD height, int visible,
 		regs[REG_CURSOR + 2] = 0;
 		return;
 	}
+	/*
+	 * A program's own picture of the pointer: a cursor of 32 x 1 whose mask is this mark and
+	 * whose bits are the address of 32 x 32 colours in the GPU's memory, which the display
+	 * shows as it is there (the games: linux/tdawn/host.c). No address: no pointer at all.
+	 */
+	if (width == 32 && height == 1 && mask[0] == 0x5345 && mask[1] == 0x4355) {
+		uint32_t address = (uint32_t)image[0] << 16 | image[1];
+
+		if (!address) {
+			regs[REG_CURSOR + 2] = 0;
+			return;
+		}
+		regs[REG_CURSOR] = x;
+		regs[REG_CURSOR + 1] = y;
+		regs[REG_CURSOR + 3] = address;
+		GdGetCursorPos(&px, &py);
+		regs[REG_CURSOR + 2] = 1 | ((px - x) & 31) << 8 | ((py - y) & 31) << 16;
+		return;
+	}
 	if (width != drawn_width || height != drawn_height || fg != drawn_fg || bg != drawn_bg ||
 	    memcmp(drawn[0], image, bytes) || memcmp(drawn[1], mask, bytes)) {
 		for (r = 0; r < 32; r++)

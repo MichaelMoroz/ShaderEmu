@@ -27,6 +27,13 @@ static unsigned char *screen, *cursor;	/* screen: two pages, one after the other
 static GLuint page_texture[2], cursor_texture;
 static int cursor_w, cursor_h, cursor_hot_x, cursor_hot_y;
 static int pointer_x, pointer_y;	/* in the game's pixels */
+static int pointer_wanted = 1;		/* the game shows its pointer now */
+static void pointer_publish(void);
+static void pointer_read(void);
+static void window_origin(void);
+#define HW_SIDE 32			/* the display's cursor, a side */
+static uint32_t *hw_image;		/* the pointer's picture for the display, when it is the display's cursor */
+static int hw_on, hw_stale;
 static int page_rows;			/* a page's texture is this high: a row is a whole number of 1,024ths */
 
 /*
@@ -135,8 +142,10 @@ host_open(int width, int height)
 	bare = width * scale + 2 * FRAME > info.cols || height * scale + CAPTION + FRAME > info.rows;
 	window = GrNewWindowEx(bare ? GR_WM_PROPS_NODECORATE | GR_WM_PROPS_NOAUTOMOVE : GR_WM_PROPS_APPWINDOW,
 		TITLE, GR_ROOT_WINDOW_ID, bare ? 0 : -1, bare ? 0 : -1, width * scale, height * scale, 0);
+	/* (not the pointer's moves: pointer_read()) */
 	GrSelectEvents(window, GR_EVENT_MASK_KEY_DOWN | GR_EVENT_MASK_KEY_UP | GR_EVENT_MASK_BUTTON_DOWN |
-		GR_EVENT_MASK_BUTTON_UP | GR_EVENT_MASK_MOUSE_POSITION | GR_EVENT_MASK_CLOSE_REQ | GR_EVENT_MASK_UPDATE);
+		GR_EVENT_MASK_BUTTON_UP | GR_EVENT_MASK_MOUSE_ENTER | GR_EVENT_MASK_MOUSE_EXIT | GR_EVENT_MASK_CLOSE_REQ |
+		GR_EVENT_MASK_UPDATE);
 	GrMapWindow(window);
 	GrSetFocus(window);
 	if (seglInit(window) < 0) {
@@ -147,6 +156,7 @@ host_open(int width, int height)
 	screen_h = height;
 	screen = big_memory(2 * width * height);
 	cursor = seglMemory(CURSOR_MAX * CURSOR_MAX);
+	hw_image = seglMemory(HW_SIDE * HW_SIDE * 4);
 	if (!screen || !cursor) {
 		fprintf(stderr, "tdawn: no GPU memory left\n");
 		return -1;
@@ -162,6 +172,7 @@ host_open(int width, int height)
 	}
 	pointer_x = width / 2;
 	pointer_y = height / 2;
+	window_origin();
 	return 0;
 }
 
@@ -177,6 +188,116 @@ host_palette(void)
 	return seglPalette();
 }
 
+/*
+ * The pointer is the display's cursor where it can be (docs/display.md, docs/tdawn.md): a
+ * picture of 32 x 32 colours that whatever shows the display draws at the pointer, at the
+ * display's own rate and not at the game's. The window system owns that cursor, so the
+ * picture is given to it as a window's cursor is: one of 32 x 1 whose mask is a mark the
+ * screen driver knows (linux/nanox/scr_shaderemu.c) and whose bits are the picture's address
+ * in the GPU's memory. A hot spot is the cursor's, so there is one cursor for each the game
+ * has used; the picture is changed where it lies. Where it cannot be (a pointer over 32
+ * pixels, a window the picture is stretched over) the pointer is a rectangle of the scene, as
+ * it was, under the window system's arrow. TDAWN_POINTER=drawn is that everywhere.
+ */
+static GR_CURSOR_ID hw_set = (GR_CURSOR_ID)-1, hw_none;
+static struct { int hot_x, hot_y; GR_CURSOR_ID id; } hw_cursors[16];
+static int hw_cursor_count;
+static struct { unsigned char index; unsigned int colour; } hw_used[24];	/* the picture's first colours, as they were */
+static int hw_used_count;
+
+static GR_CURSOR_ID
+hw_cursor(uint32_t address, int hot_x, int hot_y)
+{
+	GR_BITMAP bits[2] = {(GR_BITMAP)(address >> 16), (GR_BITMAP)address}, mark[2] = {0x5345, 0x4355};
+
+	return GrNewCursor(HW_SIDE, 1, hot_x, hot_y, 0, 0, bits, mark);
+}
+
+static void
+hw_picture(void)
+{
+	const unsigned int *palette = seglPalette();
+	int r, c, i;
+
+	hw_used_count = 0;
+	for (r = 0; r < HW_SIDE; r++)
+		for (c = 0; c < HW_SIDE; c++) {
+			unsigned char index = r < cursor_h && c < cursor_w ? cursor[r * cursor_w + c] : 0;
+
+			hw_image[r * HW_SIDE + c] = index ? 0xff000000u | (palette[index] & 0xffffff) : 0;
+			if (!index || hw_used_count == (int)(sizeof hw_used / sizeof hw_used[0]))
+				continue;
+			for (i = 0; i < hw_used_count && hw_used[i].index != index; i++)
+				;
+			if (i == hw_used_count) {
+				hw_used[i].index = index;
+				hw_used[i].colour = palette[index];
+				hw_used_count++;
+			}
+		}
+	hw_stale = 0;
+}
+
+/* The pointer as it is now, where it is shown: after anything that changes either. */
+static void
+pointer_publish(void)
+{
+	static int drawn = -1;
+	GR_CURSOR_ID id = 0;	/* the window system's own arrow */
+	int width, height, fits, i;
+
+	if (!hw_image)
+		return;
+	if (drawn < 0) {
+		const char *how = getenv("TDAWN_POINTER");
+
+		drawn = how && !strcmp(how, "drawn");
+	}
+	seglSize(&width, &height);
+	fits = !drawn && width == screen_w && height == screen_h && cursor_w > 0 && cursor_w <= HW_SIDE && cursor_h <= HW_SIDE &&
+		cursor_hot_x >= 0 && cursor_hot_x < HW_SIDE && cursor_hot_y >= 0 && cursor_hot_y < HW_SIDE;
+	if (!pointer_wanted) {
+		if (!hw_none)
+			hw_none = hw_cursor(0, 0, 0);
+		id = hw_none;
+	} else if (fits) {
+		for (i = 0; i < hw_cursor_count && (hw_cursors[i].hot_x != cursor_hot_x || hw_cursors[i].hot_y != cursor_hot_y); i++)
+			;
+		if (i == hw_cursor_count && i < (int)(sizeof hw_cursors / sizeof hw_cursors[0])) {
+			hw_cursors[i].hot_x = cursor_hot_x;
+			hw_cursors[i].hot_y = cursor_hot_y;
+			hw_cursors[i].id = hw_cursor(seglAddress(hw_image), cursor_hot_x, cursor_hot_y);
+			hw_cursor_count++;
+		}
+		fits = i < hw_cursor_count && hw_cursors[i].id;
+		if (fits) {
+			id = hw_cursors[i].id;
+			if (hw_stale)
+				hw_picture();
+		}
+	}
+	hw_on = fits;
+	if (id != hw_set) {
+		hw_set = id;
+		GrSetWindowCursor(window, id);
+		GrFlush();
+	}
+}
+
+/* The palette is not the one the display's picture of the pointer was made with: made again. */
+static void
+pointer_colours(void)
+{
+	const unsigned int *palette = seglPalette();
+	int i;
+
+	for (i = 0; i < hw_used_count; i++)
+		if (palette[hw_used[i].index] != hw_used[i].colour) {
+			hw_picture();
+			return;
+		}
+}
+
 void
 host_cursor(const unsigned char *pixels, int width, int height, int hot_x, int hot_y)
 {
@@ -190,6 +311,8 @@ host_cursor(const unsigned char *pixels, int width, int height, int hot_x, int h
 	cursor_hot_y = hot_y;
 	glBindTexture(GL_TEXTURE_2D, cursor_texture);
 	seglTexturePointer(cursor, width, height, GL_COLOR_INDEX8_EXT);
+	hw_stale = 1;
+	pointer_publish();
 }
 
 /* A rectangle of the screen's pixels showing the whole of a texture. */
@@ -572,7 +695,7 @@ cursor_corners(unsigned int *to, int shown)
 	unsigned int x0 = x * ONE / screen_w, y0 = y * ONE / screen_h;
 	unsigned int x1 = (x + cursor_w) * ONE / screen_w, y1 = (y + cursor_h) * ONE / screen_h;
 
-	if (!shown || !cursor_w)
+	if (!shown || !cursor_w || hw_on)
 		x0 = x1 = y0 = y1 = 0;
 	to[0] = x0, to[1] = y0, to[4] = x1, to[5] = y0, to[8] = x1, to[9] = y1, to[12] = x0, to[13] = y1;
 }
@@ -612,6 +735,13 @@ host_present(int page, int with_cursor)
 {
 	if (!screen)
 		return;
+	pointer_read();
+	if (pointer_wanted != (with_cursor != 0)) {
+		pointer_wanted = with_cursor != 0;
+		pointer_publish();
+	}
+	if (hw_on)
+		pointer_colours();
 	if (scene_out) {
 		if (scene_owed || !scene_built) {
 			scene_finish();		/* a second frame before the first is shown: in their order */
@@ -640,16 +770,58 @@ host_present(int page, int with_cursor)
 		whole_window(0, 0);
 		glColorKeySE(0);
 		page_part(page, 0, 0, screen_w, screen_h, 0);
-		if (with_cursor && cursor_w)
+		if (with_cursor && cursor_w && !hw_on)
 			quad(cursor_texture, pointer_x - cursor_hot_x, pointer_y - cursor_hot_y, cursor_w, cursor_h, 1);
 		seglSwap();
 	}
 	resize_for_test();
 }
 
+/*
+ * Where the pointer is comes from the machine's own input words (docs/input.md), not from
+ * the window system: a move it tells of is a message to read and, before that, a question to
+ * ask it, two system calls and two task switches, at every place the game looks for input.
+ * With a pointer that never rests that was a third of a mission's frame and more. The window
+ * system still says when the pointer comes into the window and leaves it (another window may
+ * lie over this one), and a button's own event says where it was pressed.
+ */
+static int origin_x, origin_y;		/* the window's corner on the display */
+static int pointer_inside = 1, pointer_held;
+
+static void
+window_origin(void)
+{
+	GR_WINDOW_INFO info;
+	GR_WINDOW_ID id = window;
+	int x = 0, y = 0, depth;
+
+	for (depth = 0; depth < 8 && id && id != GR_ROOT_WINDOW_ID; depth++) {
+		GrGetWindowInfo(id, &info);
+		x += info.x;
+		y += info.y;
+		id = info.parent;
+	}
+	origin_x = x;
+	origin_y = y;
+}
+
+static void
+pointer_read(void)
+{
+	const volatile uint32_t *input = control(REG_INPUT);
+	int width, height;
+
+	if (!screen || (!pointer_inside && !pointer_held))
+		return;
+	seglSize(&width, &height);
+	if (width > 0 && height > 0)
+		seglPicturePoint((int)input[0] - origin_x, (int)input[1] - origin_y, screen_w, screen_h, &pointer_x, &pointer_y);
+}
+
 void
 host_pointer(int *x, int *y)
 {
+	pointer_read();
 	*x = pointer_x;
 	*y = pointer_y;
 }
@@ -694,7 +866,7 @@ virtual_key(int ch)
 int
 host_event(struct host_event *event)
 {
-	static uint32_t seen[4], asked_ms;
+	static uint32_t seen[4], asked_ms, placed_ms;
 	static int ask = 8, log = -1;
 	const volatile uint32_t *input;
 	GR_EVENT e;
@@ -707,13 +879,20 @@ host_event(struct host_event *event)
 	if (log < 0)
 		log = getenv("TDAWN_INPUT_LOG") != NULL;	/* say what arrives, for tests */
 	input = control(REG_INPUT);
-	for (i = 0; i < 4; i++)
+	for (i = 2; i < 4; i++)		/* the buttons, and the count of keys */
 		if (seen[i] != input[i]) {
 			seen[i] = input[i];
 			ask = 8;
 		}
-	if (!ask && host_ms() - asked_ms >= 250)
+	if (!ask && host_ms() - asked_ms >= 250) {
 		ask = 1;
+		if (host_ms() - placed_ms >= 3000) {
+			/* (a window's frame can be moved without a word to the window) */
+			placed_ms = host_ms();
+			scene_finish();
+			window_origin();
+		}
+	}
 	if (ask)
 		scene_finish();		/* an event may be the window's: the GPU's library is asked about it */
 	while (ask) {
@@ -723,16 +902,22 @@ host_event(struct host_event *event)
 			ask--;
 			asked_ms = host_ms();
 			return 0;
-		case GR_EVENT_TYPE_MOUSE_POSITION:
-			seglPicturePoint(e.mouse.x, e.mouse.y, screen_w, screen_h, &pointer_x, &pointer_y);
+		case GR_EVENT_TYPE_MOUSE_ENTER:
+			pointer_inside = 1;
+			window_origin();
+			break;
+		case GR_EVENT_TYPE_MOUSE_EXIT:
+			pointer_inside = 0;
 			break;
 		case GR_EVENT_TYPE_UPDATE:
 			/* the picture is stretched over the window, whatever size it is given */
 			if (e.update.utype == GR_UPDATE_SIZE) {
 				seglWindowChanged();
+				pointer_publish();
 				if (log)
 					fprintf(stderr, "tdinput: the window is %dx%d now\n", e.update.width, e.update.height);
 			}
+			window_origin();
 			break;
 		case GR_EVENT_TYPE_BUTTON_DOWN:
 		case GR_EVENT_TYPE_BUTTON_UP:
@@ -742,6 +927,7 @@ host_event(struct host_event *event)
 			event->type = HOST_BUTTON;
 			event->key = e.button.changebuttons & GR_BUTTON_L ? 0x01 : 0x02;
 			event->down = e.type == GR_EVENT_TYPE_BUTTON_DOWN;
+			pointer_held = event->down ? pointer_held | event->key : pointer_held & ~event->key;
 			event->x = pointer_x;
 			event->y = pointer_y;
 			if (log) {

@@ -103,6 +103,17 @@ goes over it with holes where the map is (index 0, which the game never draws).
   band being dragged, the placing cursor's cells when the atlas is full) lands in the page
   and shows over the scene. The page's part over the map is made all holes again only after
   something was drawn there.
+- **The pointer is the display's cursor** (`pointer_publish()` in `host.c`,
+  `docs/display.md`): its picture, 32 x 32 colours made from the game's 8-bit one with the
+  palette, is given to the window system as the window's cursor (`docs/nanox.md`), one
+  cursor for each hot spot the game has used, and whatever shows the display draws it at the
+  pointer at its own rate. It used to be a rectangle of the scene, which moved when the game
+  showed a frame: five times a second in a battle. It still is one where the picture is
+  stretched over a larger window or the game's pointer is over 32 pixels, under the window
+  system's arrow; `TDAWN_POINTER=drawn` is that everywhere. The picture is made again when a
+  colour it used has changed in the palette (a fade).
+- **Where the pointer is** comes from the machine's input words, not from the window system
+  (`pointer_read()`, `docs/input.md`).
 - **A frame with nothing new** (the pointer moved, a dialog is open) draws the last list
   again (`seglSwapAgain`): its textures are the page's memory, and the pointer's corners and
   the page it shows are changed in place.

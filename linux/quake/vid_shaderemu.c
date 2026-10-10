@@ -28,7 +28,7 @@ qboolean	gl_mtexable = false;
 static cvar_t	in_mouse = {"in_mouse", "0", true};	/* the pointer turns the view */
 static GR_WINDOW_ID window;
 static int	opened;
-static int	mouse_x, mouse_y, mouse_dx, mouse_dy, mouse_known;
+static int	mouse_x, mouse_y, mouse_dx, mouse_dy, mouse_known, mouse_inside = 1;
 static unsigned	frames, hold_frame, stats_ms = 5000;
 
 void D_BeginDirectRect (int x, int y, byte *pbitmap, int width, int height) {}
@@ -221,7 +221,8 @@ void VID_Init (unsigned char *palette)
 	window = GrNewWindowEx (bare ? GR_WM_PROPS_NODECORATE | GR_WM_PROPS_NOAUTOMOVE : GR_WM_PROPS_APPWINDOW,
 		"Quake", GR_ROOT_WINDOW_ID, bare ? 0 : -1, bare ? 0 : -1, width, height, 0);
 	GrSelectEvents (window, GR_EVENT_MASK_KEY_DOWN | GR_EVENT_MASK_KEY_UP | GR_EVENT_MASK_BUTTON_DOWN |
-		GR_EVENT_MASK_BUTTON_UP | GR_EVENT_MASK_MOUSE_POSITION | GR_EVENT_MASK_CLOSE_REQ | GR_EVENT_MASK_UPDATE);
+		GR_EVENT_MASK_BUTTON_UP | GR_EVENT_MASK_MOUSE_ENTER | GR_EVENT_MASK_MOUSE_EXIT | GR_EVENT_MASK_CLOSE_REQ |
+		GR_EVENT_MASK_UPDATE);
 	GrMapWindow (window);
 	GrSetFocus (window);
 	if (qglOpen (window, palette) < 0)
@@ -289,7 +290,10 @@ static int quake_key (int ch)
 /*
  * Asking the server costs two system calls and two task switches. The machine's own input
  * counters say when there can be anything: ask when they have moved, for a few calls after,
- * and a few times a second.
+ * and a few times a second. The pointer's travel is read from the machine's input words
+ * themselves (docs/input.md): the server's word of every move was a question and an answer
+ * each, in every frame the view was turned in. The server says when the pointer comes over
+ * the window and leaves it.
  */
 void Sys_SendKeyEvents (void)
 {
@@ -302,7 +306,14 @@ void Sys_SendKeyEvents (void)
 	if (!opened)
 		return;
 	input = qglControl (REG_INPUT);
-	for (i = 0; i < 4; i++)
+	if (mouse_inside) {
+		int x = (int)input[0], y = (int)input[1];
+
+		if (mouse_known)
+			mouse_dx += x - mouse_x, mouse_dy += y - mouse_y;
+		mouse_x = x, mouse_y = y, mouse_known = 1;
+	}
+	for (i = 2; i < 4; i++)		/* the buttons, and the count of keys */
 		if (seen[i] != input[i]) {
 			seen[i] = input[i];
 			ask = 8;
@@ -316,10 +327,12 @@ void Sys_SendKeyEvents (void)
 			ask--;
 			asked_ms = VID_Milliseconds ();
 			return;
-		case GR_EVENT_TYPE_MOUSE_POSITION:
-			if (mouse_known)
-				mouse_dx += e.mouse.x - mouse_x, mouse_dy += e.mouse.y - mouse_y;
-			mouse_x = e.mouse.x, mouse_y = e.mouse.y, mouse_known = 1;
+		case GR_EVENT_TYPE_MOUSE_ENTER:
+			mouse_inside = 1;
+			mouse_known = 0;	/* from where it is now */
+			break;
+		case GR_EVENT_TYPE_MOUSE_EXIT:
+			mouse_inside = 0;
 			break;
 		case GR_EVENT_TYPE_UPDATE:
 			if (e.update.utype == GR_UPDATE_SIZE) {

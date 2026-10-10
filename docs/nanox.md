@@ -185,6 +185,12 @@ the program that puts up the desktop's picture is the first to come and go.
   `read` and handles all of it before it waits again.
 - **A cursor the screen driver shows.** With `gd_hwcursor` set the engine never draws, hides
   or saves under the cursor, so drawing no longer stops to step around it.
+- **A program's own picture as the cursor.** A window's cursor of 32 x 1 whose mask is the
+  words `0x5345`, `0x4355` is not a bitmap: its two words of bits are the address of 32 x 32
+  colours (`0xAARRGGBB`) in the GPU's memory, and the driver gives the display that address
+  with the cursor's hot spot (`gpu_cursor`). The picture is shown as it lies there, so the
+  program changes it in place; no address is no cursor at all. Tiberian Dawn and Red Alert
+  show their pointer this way (`docs/tdawn.md`).
 - **Partly hidden rectangles are filled by clip rectangle**, not one row at a time.
 - **Composition** (`gd_compositor`): a window draws on the surface the screen driver gives its
   top-level window; windows no longer clip each other; moving, raising, lowering and

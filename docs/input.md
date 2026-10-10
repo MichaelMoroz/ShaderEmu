@@ -33,7 +33,12 @@ separate and unchanged.
 ## From Linux
 
 This project's kernel (`linux/kernel/shaderemu_input.c`) presents the block as two evdev
-devices, polled every timer tick (100 Hz):
+devices, polled every timer tick (100 Hz). A key or a button is reported in its tick. A
+pointer that only moves is reported 50 times a second while the machine is idle and 10 times
+a second while a program is running: every report wakes the window system, and with a game
+running that was 17 thousand instructions a report of a machine that has three million a
+second. The cursor does not wait for it where the display is drawn under the host's own
+pointer (below), and a program that wants every move reads the words above itself:
 
 | Device | Events |
 |---|---|
@@ -44,6 +49,25 @@ Nano-X's pointer driver turns a notch into one of Microwindows' scroll buttons, 
 report and up in the next; a program sees a button-down event with `GR_BUTTON_SCROLLUP` or
 `GR_BUTTON_SCROLLDN` (`ui_wheel()` in `linux/apps/ui.h`).
 
+## A program's own reading
+
+A game takes its keys and buttons from the window system, which knows whose they are, and
+the pointer's place from the words at `0x87000020`, which cost two loads (`pointer_read()` in
+`linux/tdawn/host.c`, `Sys_SendKeyEvents` in `linux/quake/vid_shaderemu.c`,
+`ReadPointer` in `linux/classicube/Window_ShaderEmu.c`). It asks the window system for events
+only when the button word or the key count has changed, and a few times a second. It does
+not select the pointer's moves: each was a message to read after a question to ask, two
+system calls and two task switches, wherever the game looked for input. What the window
+system is still asked for is the pointer coming over the window and leaving it (another
+window may lie over this one), and where the window is (`GrGetWindowInfo` up to the root:
+when the pointer comes in, at a change of the window, and every three seconds, since a
+frame can be moved without a word to the window in it).
+
+Measured on Red Alert's first Soviet mission with the pointer going round (`--pointer-sweep`
+below): 10 to 11 frames a second with events for every move, 100 a second from the kernel;
+17 as it is now; 19 to 20 with the pointer at rest. The whole run, from the command to frame
+300, was 365 million instructions and is 304 million; it is 300 with the pointer at rest.
+
 ## In the harness
 
 The window's keys and pointer feed the device (`memoryViewTakeInput()` in
@@ -52,6 +76,10 @@ given in window pixels with the size of the display panel; the control pass maps
 pixels with the same scale and centring the view draws with. Keys typed into the window also
 reach the console as characters, unless the keyboard has an owner; the bar under the display
 says which. The harness reads the control words back with row 0 of the state every frame.
+
+`--pointer-sweep N` moves the pointer round the middle of the display from frame N on,
+without a window: what a program pays for a pointer that moves is otherwise only seen by
+hand.
 
 Under Linux the owner word is written by the program through `/dev/gpu` (Nano-X's screen
 driver does), and the kernel clears it, and the cursor, when that file is closed, so a

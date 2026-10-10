@@ -8,6 +8,7 @@
 #include <linux/io.h>
 #include <linux/mm.h>
 #include <linux/module.h>
+#include <linux/sched.h>
 #include <linux/timer.h>
 
 #define INPUT_PHYS	0x87000000UL
@@ -23,6 +24,7 @@ static struct timer_list input_timer;
 static u32 input_tail;
 static bool input_started;
 static u32 pointer_x = ~0u, pointer_y, pointer_buttons;
+static unsigned long pointer_at;
 
 static void shaderemu_input_poll(struct timer_list *t)
 {
@@ -52,8 +54,20 @@ static void shaderemu_input_poll(struct timer_list *t)
 		input_report_rel(pointer_dev, REL_WHEEL, wheel);
 		input_sync(pointer_dev);
 	}
-	/* most ticks nothing moved: reporting it anyway costs more than this poll should */
-	if (x != pointer_x || y != pointer_y || buttons != pointer_buttons) {
+	/*
+	 * Most ticks nothing moved: reporting it anyway costs more than this poll should. And a
+	 * pointer that moves is not reported in every tick: a report wakes the window system,
+	 * which with a game running is some seventeen thousand instructions of a machine that
+	 * has three million a second. So it
+	 * is 50 reports a second while the machine has nothing else to do and 10 while a
+	 * program is running; what shows the display draws the cursor where the host's pointer
+	 * is anyway, and a program that wants every move reads these words itself. A button is
+	 * reported in its own tick, with the place.
+	 */
+	if (buttons != pointer_buttons ||
+	    ((x != pointer_x || y != pointer_y) &&
+	     time_after_eq(jiffies, pointer_at + (idle_cpu(smp_processor_id()) ? HZ / 50 : HZ / 10)))) {
+		pointer_at = jiffies;
 		pointer_x = x;
 		pointer_y = y;
 		pointer_buttons = buttons;
@@ -104,6 +118,7 @@ static int __init shaderemu_input_init(void)
 	if (ret)
 		return ret;
 
+	pointer_at = jiffies;	/* (which does not begin at 0) */
 	timer_setup(&input_timer, shaderemu_input_poll, 0);
 	mod_timer(&input_timer, jiffies + 1);
 	return 0;

@@ -807,6 +807,14 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   and save `git diff` as `linux\ralert\vanilla-conquer.patch`.
   (`linux\ralert\build.sh` puts the tree back without that `git add`: a `git diff` saved after
   a build has Tiberian Dawn's patch in it too, and the next build fails on it.)
+- A pointer that moves is the common case in the world and was never in a harness run:
+  `--pointer-sweep 0` moves it. A game must not select `GR_EVENT_MASK_MOUSE_POSITION` nor ask
+  the window system for events because the pointer's words changed: it reads the pointer
+  from `0x87000020` (`docs/input.md`, "A program's own reading"). Red Alert was at half its
+  frame rate with the pointer moving before that.
+- Kernel time compared with `jiffies` begins five minutes before zero: a static `unsigned
+  long` stamp of 0 is "long ago" only after those five minutes (`pointer_at` in
+  `shaderemu_input.c` was that for a build: no pointer reports at all after boot).
 - A program that uses the worker cores links `programs/mc/mcw.c` and posts its own functions
   as jobs (`docs/multicore.md`, "Using the workers from a program"): a worker is a thread of
   the program in user mode, on its page table. There is one kind of worker; do not add

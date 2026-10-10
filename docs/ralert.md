@@ -81,8 +81,14 @@ a frame is 220 to 265 thousand instructions, of which the game's logic is 155 to
 it has no piece over 3%: threat scans, path finding, the houses' and each object's own turn.
 A played mission in the world was measured at 551 thousand a frame (logic 359, drawing 127,
 the rest 65), 5 frames a second at the world's 2.9 million instructions a second: the logic
-alone would be 8 a second there. The rest's 65 is mostly asking the window system for the
-pointer while it moves, which the machine's input words could answer.
+alone would be 8 a second there. That was with the pointer in use, and a pointer that moves
+was dear in every part of the frame, not only "the rest": the window system woke for each of
+100 reports a second, and the game asked it for the moves wherever it looked for input. The
+quiet mission with the pointer going round was 10 to 11 frames a second where it is 19 to 20
+with the pointer at rest. The game reads the pointer from the machine's input words now, the
+kernel reports a moving pointer 10 times a second while a program runs, and the pointer
+itself is the display's cursor: 17 frames a second with the pointer going round
+(`docs/input.md`, `docs/tdawn.md`).
 
 ## Movies, and the worker cores
 

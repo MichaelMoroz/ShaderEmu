@@ -33,7 +33,9 @@ static GR_WINDOW_ID window;
 static GR_WINDOW_INFO window_info;
 static cc_bool opened;
 static int mouse_x, mouse_y;
-static cc_bool mouse_known;
+static cc_bool mouse_known, mouse_inside = true;
+static int origin_x, origin_y;	/* the window's corner on the display */
+static void WindowOrigin(void);
 
 /* GPU memory from 0x87000000 (the device maps from 0x86000000), or NULL without the device. */
 uint8_t* SE_Gpu(void) {
@@ -110,11 +112,12 @@ static void DoCreateWindow(int width, int height) {
 	window = GrNewWindowEx(bare ? GR_WM_PROPS_NODECORATE | GR_WM_PROPS_NOAUTOMOVE : GR_WM_PROPS_APPWINDOW,
 		"ClassiCube", GR_ROOT_WINDOW_ID, bare ? 0 : -1, bare ? 0 : -1, width, height, 0);
 	GrSelectEvents(window, GR_EVENT_MASK_KEY_DOWN | GR_EVENT_MASK_KEY_UP | GR_EVENT_MASK_BUTTON_DOWN |
-		GR_EVENT_MASK_BUTTON_UP | GR_EVENT_MASK_MOUSE_POSITION | GR_EVENT_MASK_CLOSE_REQ | GR_EVENT_MASK_UPDATE |
-		GR_EVENT_MASK_FOCUS_IN | GR_EVENT_MASK_FOCUS_OUT);
+		GR_EVENT_MASK_BUTTON_UP | GR_EVENT_MASK_MOUSE_ENTER | GR_EVENT_MASK_MOUSE_EXIT | GR_EVENT_MASK_CLOSE_REQ |
+		GR_EVENT_MASK_UPDATE | GR_EVENT_MASK_FOCUS_IN | GR_EVENT_MASK_FOCUS_OUT);
 	GrMapWindow(window);
 	GrSetFocus(window);
 	GrGetWindowInfo(window, &window_info);
+	WindowOrigin();
 	opened = true;
 
 	Window_Main.Width    = width;
@@ -205,15 +208,44 @@ static int MapKey(int ch) {
 	return INPUT_NONE;
 }
 
+/* Where the window is on the display: the pointer is read in the display's pixels. */
+static void WindowOrigin(void) {
+	GR_WINDOW_INFO info;
+	GR_WINDOW_ID id = window;
+	int x = 0, y = 0, depth;
+
+	for (depth = 0; depth < 8 && id && id != GR_ROOT_WINDOW_ID; depth++) {
+		GrGetWindowInfo(id, &info);
+		x += info.x; y += info.y;
+		id = info.parent;
+	}
+	origin_x = x; origin_y = y;
+}
+
+/* The pointer, from the machine's input words themselves (docs/input.md) and not from the
+   server, whose word of every move was a question and an answer each. The server says when
+   the pointer comes over the window and leaves it. */
+static void ReadPointer(const volatile uint32_t* input) {
+	int x = (int)input[0] - origin_x, y = (int)input[1] - origin_y;
+	if (!mouse_inside || (mouse_known && x == mouse_x && y == mouse_y)) return;
+
+	if (mouse_known && Input.RawMode)
+		Event_RaiseRawMove(&PointerEvents.RawMoved, x - mouse_x, y - mouse_y);
+	mouse_x = x; mouse_y = y; mouse_known = true;
+	Pointer_SetPosition(0, mouse_x, mouse_y);
+}
+
 static void HandleEvent(GR_EVENT* e) {
 	int key, down;
 
 	switch (e->type) {
-	case GR_EVENT_TYPE_MOUSE_POSITION:
-		if (mouse_known && Input.RawMode)
-			Event_RaiseRawMove(&PointerEvents.RawMoved, e->mouse.x - mouse_x, e->mouse.y - mouse_y);
-		mouse_x = e->mouse.x; mouse_y = e->mouse.y; mouse_known = true;
-		Pointer_SetPosition(0, mouse_x, mouse_y);
+	case GR_EVENT_TYPE_MOUSE_ENTER:
+		mouse_inside = true;
+		mouse_known  = false; /* from where it is now */
+		WindowOrigin();
+		break;
+	case GR_EVENT_TYPE_MOUSE_EXIT:
+		mouse_inside = false;
 		break;
 
 	case GR_EVENT_TYPE_BUTTON_DOWN:
@@ -236,6 +268,7 @@ static void HandleEvent(GR_EVENT* e) {
 		break;
 
 	case GR_EVENT_TYPE_UPDATE:
+		WindowOrigin();
 		if (e->update.utype != GR_UPDATE_SIZE) break;
 		GrGetWindowInfo(window, &window_info);
 		if (window_info.width == Window_Main.Width && window_info.height == Window_Main.Height) break;
@@ -314,7 +347,7 @@ static void KeysTurn(float delta) {
    counters say when there can be anything: ask when they have moved, for a few calls after,
    and a few times a second. */
 void Window_ProcessEvents(float delta) {
-	static uint32_t seen[4], asked_ms;
+	static uint32_t seen[4], asked_ms, placed_ms;
 	static int ask = 8;
 	const volatile uint32_t* input;
 	GR_EVENT e;
@@ -325,10 +358,15 @@ void Window_ProcessEvents(float delta) {
 
 	if (gpu) {
 		input =(const volatile uint32_t*)(gpu + REG_INPUT);
-		for (i = 0; i < 4; i++) {
+		ReadPointer(input);
+		for (i = 2; i < 4; i++) { /* the buttons, and the count of keys */
 			if (seen[i] != input[i]) { seen[i] = input[i]; ask = 8; }
 		}
-		if (!ask && SE_Milliseconds() - asked_ms >= 250) ask = 1;
+		if (!ask && SE_Milliseconds() - asked_ms >= 250) {
+			ask = 1;
+			/* (a window's frame can be moved without a word to the window) */
+			if (SE_Milliseconds() - placed_ms >= 3000) { placed_ms = SE_Milliseconds(); WindowOrigin(); }
+		}
 	}
 
 	while (ask) {

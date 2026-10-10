@@ -68,6 +68,7 @@ struct Options {
     uint64_t maxFrames = 0;
     double maxSeconds = 0;
     double fixedDt = 0;  // 0 = real time
+    long long pointerSweep = -1;  // from this frame on the pointer goes round the display; -1 = it does not
     double statsInterval = 0;
     int64_t benchWarmup = -1;  // >= 0: benchmark mode, this many unmeasured frames first
     bool readStdin = true;
@@ -131,6 +132,8 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
   --expect A --send B  after output contains A, type B (pairs, processed in order)
   --no-stdin           do not forward console input
   --fixed-dt S         drive _Time as frame*S seconds (deterministic) instead of wall clock
+  --pointer-sweep N    from frame N on the pointer goes round the middle of the display, a pixel
+                       every few frames: what a program pays for a pointer that moves
   --uart-log FILE      append all UART output to FILE
   --dump-state FILE    write the 64x64 state area (raw uint32 RGBA) at exit
   --save-state FILE    write a snapshot of the whole machine (128 MB) at exit
@@ -268,6 +271,7 @@ bool parseArgs(int argc, char** argv, Options& o) {
         }
         else if (a == "--no-stdin") o.readStdin = false;
         else if (a == "--fixed-dt") o.fixedDt = atof(next("--fixed-dt").c_str());
+        else if (a == "--pointer-sweep") o.pointerSweep = atoll(next("--pointer-sweep").c_str());
         else if (a == "--uart-log") o.uartLog = next("--uart-log");
         else if (a == "--dump-state") o.dumpState = next("--dump-state");
         else if (a == "--save-state") o.saveState = next("--save-state");
@@ -1046,6 +1050,12 @@ int main(int argc, char** argv) {
             for (; n < 4 && !keyEvents.empty(); ++n) {
                 batch[n] = keyEvents.front();
                 keyEvents.pop_front();
+            }
+            if (opt.pointerSweep >= 0 && (long long)frame >= opt.pointerSweep) {
+                double turn = (double)(frame - (uint64_t)opt.pointerSweep) * 0.005;
+                pointer.panelW = 800, pointer.panelH = 600;
+                pointer.x = 400 + 80 * (float)cos(turn);
+                pointer.y = 300 + 60 * (float)sin(turn);
             }
             mat.setVector("_InputPointer", pointer.x, pointer.y, pointer.panelW, pointer.panelH);
             mat.setInt("_InputButtons", pointer.buttons);
