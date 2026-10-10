@@ -881,29 +881,36 @@ index c8ed7a3..1b668e5 100644
      /*
      **	Added functionality.
 diff --git a/redalert/flasher.cpp b/redalert/flasher.cpp
-index dfc44b4..20a069d 100644
+index dfc44b4..815e8e0 100644
 --- a/redalert/flasher.cpp
 +++ b/redalert/flasher.cpp
-@@ -78,11 +78,19 @@ void FlasherClass::Debug_Dump(MonoClass* mono) const
+@@ -75,14 +75,25 @@ void FlasherClass::Debug_Dump(MonoClass* mono) const
+  *   05/28/1994 JLB : Created.                                                                 *
+  *   06/20/1994 JLB : Is now independent of object it represents.                              *
+  *=============================================================================================*/
++#ifdef SHADEREMU
++unsigned ShaderEmu_Flash_Until;
++#endif
++
  bool FlasherClass::Process(void)
  {
      // 2019/09/20 JAS - Flashing info needs to exist per player
-+#ifdef SHADEREMU
-+    /* (nearly always none of them is counting: found out without a branch for each) */
-+    unsigned any = 0;
-     for (int i = 0; i < HOUSE_COUNT; i++) {
+-    for (int i = 0; i < HOUSE_COUNT; i++) {
 -        if (FlashCountPerPlayer[i]) {
 -            FlashCountPerPlayer[i]--;
--        }
-+        any |= FlashCountPerPlayer[i];
-     }
-+    if (any)
++#ifdef SHADEREMU
++    /* None of them counts unless something was told to flash lately: TechnoClass::Flash notes
++    ** until which frame one may (ShaderEmu_Flash_Until). Looking at the twenty of every object
++    ** every frame was 4% of a mission's frame. Every 64th frame they are looked at whatever
++    ** the note says (a game loaded from a file has counters and no note). */
++    if ((unsigned)Frame < ShaderEmu_Flash_Until || ((unsigned)Frame & 63) == 0)
 +#endif
 +        for (int i = 0; i < HOUSE_COUNT; i++) {
 +            if (FlashCountPerPlayer[i]) {
 +                FlashCountPerPlayer[i]--;
 +            }
-+        }
+         }
+-    }
  
      if (FlashCount) {
          FlashCount--;
@@ -1459,6 +1466,27 @@ index 928dc0e..220bfd9 100644
  
          if (LogicPage->Lock()) {
              /*
+diff --git a/redalert/techno.cpp b/redalert/techno.cpp
+index 682741b..70bc70c 100644
+--- a/redalert/techno.cpp
++++ b/redalert/techno.cpp
+@@ -2461,6 +2461,16 @@ bool TechnoClass::Evaluate_Object(ThreatType method,
+         assert(IsActive);
+ 
+         FlashCount = count;
++#ifdef SHADEREMU
++        {
++            // (FlasherClass::Process counts the players' counters down only until then)
++            extern unsigned ShaderEmu_Flash_Until;
++            unsigned until = (unsigned)Frame + (unsigned)count + 1;
++            if (until > ShaderEmu_Flash_Until || ShaderEmu_Flash_Until - (unsigned)Frame > 1024) {
++                ShaderEmu_Flash_Until = until;
++            }
++        }
++#endif
+ 
+         // 2019/09/20 JAS - Flashing info needs to exist per player
+         if (house < HOUSE_COUNT) {
 diff --git a/redalert/theme.cpp b/redalert/theme.cpp
 index c7651fe..e64da34 100644
 --- a/redalert/theme.cpp
