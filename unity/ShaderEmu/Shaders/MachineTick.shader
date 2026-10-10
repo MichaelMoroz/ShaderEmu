@@ -73,9 +73,8 @@ Shader "ShaderEmu/MachineTick"
             // One permutation only: the full machine, started in the kernel with no firmware
             // (docs/boot.md). Images that need machine-mode start-up do not boot on it.
             #define SBI_HLE
-            // Built by fxc2 (docs/fxc2.md): the write cache and the TLB as locals, MULH in one
-            // instruction. Unity preprocesses the source itself, so the compiler cannot say
-            // what it is; a stock editor (FXC) needs this line taken out.
+            // Built by fxc2 (docs/fxc2.md): the write cache and the TLB as locals. Unity
+            // preprocesses the source itself, so the compiler cannot say what it is; a stock editor (FXC) needs this line taken out.
             #define __FXC2__
             // Single-precision float instructions (docs/fpu.md), as the harness's full machine has.
             #define FPU

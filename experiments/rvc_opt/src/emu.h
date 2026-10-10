@@ -314,25 +314,21 @@ DEF(mul, FormatR, { // rv32m
 // support cannot be trusted. Upstream's double version rounds once the product needs more
 // than 53 bits, so results differ from it there.
 //
-// The GPU has had the instruction for this all along (umul and imul return both halves of the
-// product), HLSL just cannot ask for it. fxc2 can: mulhi() there is that one instruction.
+//
+// The GPU has an instruction for this (umul and imul return both halves of the product), and
+// fxc2 can be asked for it (mulhi()). It is not used: Microsoft's compiler never writes it
+// with a high result alone, and what turns the bytecode into SPIR-V on Linux (dxbc-spirv, in
+// DXVK and vkd3d-proton) made an invalid module of it, which crashed VRChat there
+// (docs/linux.md). It was worth nothing that could be measured.
 uint mulhu32(uint a, uint b) {
-#ifdef __FXC2__
-    return mulhi(a, b);
-#else
     uint al = a & 0xffff, ah = a >> 16, bl = b & 0xffff, bh = b >> 16;
     uint lh = al * bh, hl = ah * bl;
     uint mid = ((al * bl) >> 16) + (lh & 0xffff) + (hl & 0xffff);
     return ah * bh + (lh >> 16) + (hl >> 16) + (mid >> 16);
-#endif
 }
 // the high word of the signed product
 uint mulhs32(uint a, uint b) {
-#ifdef __FXC2__
-    return AS_UNSIGNED(mulhi(AS_SIGNED(a), AS_SIGNED(b)));
-#else
     return mulhu32(a, b) - ((a >> 31) ? b : 0) - ((b >> 31) ? a : 0);
-#endif
 }
 DEF(mulh, FormatR, { // rv32m
     uint a = xreg(ins.rs1);   // one declaration each: Unity's preprocessor splits macro arguments at this comma
