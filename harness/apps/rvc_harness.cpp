@@ -72,7 +72,7 @@ struct Options {
     std::vector<std::pair<std::string, std::string>> expectSend;
     std::string initialInput;
     std::string until;
-    int ticks = 16384;
+    int ticks = 32768;
     int initFrames = 2;
     uint64_t maxFrames = 0;
     double maxSeconds = 0;
@@ -99,6 +99,7 @@ struct Options {
     bool noDoubles = false;
     int cores = 1;            // --cores N: core 0 and N - 1 worker cores (docs/multicore.md; D3D11)
     bool noBands = false;     // --no-bands: the commit rewrites all of RAM, as a CustomRenderTexture does
+    bool noMrt = false;       // --no-mrt: the tick in one target (D3D11)
     int readbackBatch = 1;    // --readback-batch N: D3D11 maps the rows of N frames at once
     bool ourKernel = false;   // the RAM image is this project's (kernel at +4 MiB, device tree at +34 MiB)
     bool sbi = false;         // compile with SBI_HLE
@@ -134,7 +135,7 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
   --payload DIR        folder with the payload PNGs (default <rvc>/data-net)
   --ram/--mtd/--dtb P  PNG name prefixes in the payload folder (default linux_payload, rootfs, dts;
                        "none" leaves that texture black)
-  --ticks N            emulated instructions per tick pass (default 16384; upstream uses 2048). Large values on a real
+  --ticks N            emulated instructions per tick pass (default 32768; upstream uses 2048). Large values on a real
                        GPU can trigger a driver timeout (TDR); WARP has no timeout.
   --frames N           stop after N frames          --seconds S   stop after S seconds
   --until TEXT         stop (exit 0) once the UART output contains TEXT; exit 3 if a limit hits first
@@ -326,6 +327,7 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--stats-after") o.statsAfter = atof(next("--stats-after").c_str());
         else if (a == "--define") o.defines.push_back(next("--define"));
         else if (a == "--no-bands") o.noBands = true;
+        else if (a == "--no-mrt") o.noMrt = true;
         else if (a == "--readback-batch") o.readbackBatch = atoi(next("--readback-batch").c_str());
         else if (a == "--cpu") o.cpu = true;
         else if (a == "--cpu-ips") { o.cpu = true; o.cpuIps = atof(next("--cpu-ips").c_str()); }
@@ -628,6 +630,12 @@ int main(int argc, char** argv) {
     bo.stateLog = !opt.l1Log.empty();
     if (opt.rvcDir == "experiments/rvc_opt") {
         // its tick keeps one rectangle from the top of the state block (STATE_ROWS in src/types.h)
+        // The harness's machine: a write cache twice the shader's default, and on D3D11 the
+        // tick in eight targets, a pixel for every eight texels of state (docs/multicore.md).
+        bool cacheSet = false;
+        for (auto& d : opt.defines) cacheSet = cacheSet || d.rfind("L1_WAYS=", 0) == 0 || d.rfind("L1_TABLE_BITS=", 0) == 0;
+        if (!cacheSet) opt.defines.push_back("L1_TABLE_BITS=7");
+        if (!opt.dxc && !opt.noMrt && !opt.cpu && !opt.profile && !getenv("RVC11_COMPUTE")) opt.defines.push_back("TICK_MRT");
         unsigned ways = 3, tableBits = 6;
         for (auto& d : opt.defines) {
             if (d.rfind("L1_WAYS=", 0) == 0) ways = (unsigned)atoi(d.c_str() + 8);

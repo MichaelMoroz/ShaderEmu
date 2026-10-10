@@ -283,42 +283,66 @@ be laid out and leaves it as it is). **Do not run "Sync shader sources" there un
 texture and the passes that draw it have been changed to match**: the tick's quads come from
 the geometry shader now, and the workers' band is 512 x 8 beside core 0's 64 x 16.
 
-## Eight texels a pixel (tried: `--define TICK_MRT`)
+## Eight texels a pixel
 
 A pixel of the tick need not be one texel of state: with eight render targets it is eight,
-and the pass runs an eighth of the pixels. `TICK_MRT` (D3D11 harness only) draws the tick
-into eight targets 72 x 16, the two zones an eighth as wide: pixel (x, y) keeps texels 8x to
-8x + 7 of row y, a worker's tile a column of eight pixels, the quads the geometry shader's
-as before. The same pass compiled with `TICK_UNPACK` then draws the same quads into the
-state texture and copies each texel from its target, so the commit, the control pass and
-every reader find the state where it was. `mctest 15 120000` passes with it.
+and the pass runs an eighth of the pixels. The D3D11 harness does that (`TICK_MRT`;
+`--no-mrt` for one target, which D3D12 and Unity still have): the tick draws into eight
+targets 264 wide and as high as core 0's rows. Core 0's pixel (x, y) keeps texels 8x to
+8x + 7 of row y. A worker's tile of 8 x 8 is a column of eight pixels, in a block of columns
+that is the worker's own; the quads are the geometry shader's as before. The same pass
+compiled with `TICK_UNPACK` then draws the state's quads into the state texture and copies
+each texel from its target, so the commit, the control pass and every reader find the state
+where it was.
 
-What it gains, 16,384 instructions a pass:
+Where the pixels are matters more than how many there are. The card runs pixels in groups
+(4 x 8 here), and a group with pixels of two cores takes as long as both together, unless
+the cores happen to run the same instructions: `mctest`'s bench, the same primes on every
+worker, hides all of it, and `nxray`, where no two cores do the same, shows it. One picture
+of `nxray`, 15 workers:
+
+| The workers' pixels | Size 3 | Size 4 |
+|---|---|---|
+| one target, tiles of 8 x 8 | 1.35 s | 2.12 s |
+| eight targets, one column after another | 2.19 s | 2.52 s |
+| a block of 4 columns a worker (`TICK_BLOCK`) | 1.33 s | 2.13 s |
+| the same, and two columns of it or more left empty (`TICK_PAD`) | 1.33 s | 1.33 s |
+
+A worker of size 4 is three columns, and with one empty column beside them it still shared;
+with two (a block of eight) it does not. So a block is the worker's columns and two more,
+rounded up to four: one block for size 3, two for sizes 4 and 5, three for size 6. Core 0's
+pixels need eight empty columns between them and the first worker's (`TICK_GAP`): with four,
+`nxpath`, where core 0 draws a panel while the workers trace, ran 56 passes a second in
+place of 84 (one target: 79).
+
+With that, a larger worker costs no more than a small one: 12 of size 5 trace the picture in
+1.63 s (2.6 s with one target) and 7 of size 6 in 2.56 s (4.1 s). `mctest`'s primes with the
+kernel's 15 workers are 12.5 times core 0 alone (9.3 with one target).
+
+What it gains one core by itself is little, 16,384 instructions a pass:
 
 | | One target | Eight |
 |---|---|---|
-| a shell loop, one core | 3,497k instructions/s | 3,649k (4%) |
-| Doom's timedemo, one core | 3,124k | 3,297k (6%) |
-| Quake's timedemo, one core | 3,288k | 3,342k (2%) |
-| Tiberian Dawn, mission 10, one core | 3,591k | 3,684k (3%) |
-| `mctest 15 300000 bench`: core 0 alone | 17.2 s | 17.2 s |
-| the same, 15 workers busy and core 0 waiting | 16.7 s | 14.6 s (one worker: 14.6 s) |
+| a shell loop | 3,497k instructions/s | 3,649k (4%) |
+| Doom's timedemo | 3,124k | 3,297k (6%) |
+| Quake's timedemo | 3,288k | 3,342k (2%) |
+| Tiberian Dawn, mission 10 | 3,591k | 3,684k (3%) |
 
-So little for one core by itself: a pass is as long as its longest pixel, the instructions
-one after another, and 973 pixels were already about what the card runs side by side for
-nothing. What the eight targets buy is that pixels stop counting, which shows in three
-places.
+A pass is as long as its longest pixel, the instructions one after another, and 973 pixels
+were already about what the card runs side by side for nothing. What the eight targets buy
+is that pixels stop counting, which shows in three places.
 
 Power (an RTX 5070 laptop card, `nvidia-smi`'s reading, 18 W with nothing running): a shell
 loop on one core is 46 W with one target and 37 W with eight, a third of what the machine
 itself draws; fifteen of the smallest workers busy, 55 W and 41 W.
 
-Longer passes with a larger write cache. A pass ends early when the cache is full, so
-passes of 32,768 instructions gain little as it is (Doom's are 14.4k long); with the cache
-twice the size (`L1_TABLE_BITS=7`, 1,485 texels of state, which with one target is over
-what the card runs for nothing) they are 24k long. One core, instructions a second:
+Longer passes with a larger write cache, which are the harness's defaults now (`--ticks`
+32,768; `L1_TABLE_BITS=7`, 1,485 texels of state, which with one target is over what the
+card runs for nothing). A pass ends early when the cache is full, so passes of 32,768
+gained little before (Doom's were 14.4k long); with the cache twice the size they are 24k
+long. One core, instructions a second:
 
-| | One target, 16,384, the cache as it is | One target, 32,768, twice the cache | Eight targets, 32,768, twice the cache |
+| | One target, 16,384, the cache as it was | One target, 32,768, twice the cache | Eight targets, 32,768, twice the cache |
 |---|---|---|---|
 | a shell loop | 3,497k | 3,698k | 3,902k (12%) |
 | Doom's timedemo | 3,124k | 3,369k | 3,694k (18%) |
@@ -326,11 +350,14 @@ what the card runs for nothing) they are 24k long. One core, instructions a seco
 | Tiberian Dawn, mission 10 | 3,591k | 3,719k | 3,971k (11%) |
 
 (65,536 a pass adds nothing to that: Doom's passes are 26.5k long there, a frame of the game
-ending them. A cache four times the size, `L1_TABLE_BITS=8`, is a shader the driver refuses.)
+ending them. A cache four times the size, `L1_TABLE_BITS=8`, is a shader the driver refuses.
+The ray tracers like the longer pass too: 1.34 s a picture at 32,768, 1.50 s at 16,384,
+1.68 s at 8,192.)
 
 More cores. `TICK_LOAD=N` draws every worker's quad N times (the copies under the targets'
 rows, read by nothing): what the tick would cost with N times the busy workers. Fifteen of
-the smallest workers on the same primes, core 0 waiting:
+the smallest workers on the same primes, core 0 waiting, each in two columns (so 15 pixels
+a worker, and the same work on all of them, which does not show what sharing costs):
 
 | Busy workers' quads | Pixels | The same work | The card |
 |---|---|---|---|
@@ -341,12 +368,13 @@ the smallest workers on the same primes, core 0 waiting:
 | 120 | 1,800 | 14.70 s | 58 W |
 | 240 | 3,600 | 16.97 s | 67 W |
 
-So this card runs some 2,000 pixels of the tick in the time of one, which with eight targets
-is 120 of the smallest workers (65 million instructions a second for fifteen of them). The
-tick is not what stands in the way of that many; the commit, which looks into every core's
-cache for every texel it writes, and the geometry's texel, which has room for fifteen, are.
+So this card runs some 2,000 pixels of the tick in the time of one, which is 60 blocks of
+4 x 8. The tick is not what stands in the way of that many workers: the commit is (it looks
+into every core's cache for every texel it writes: 0.06 ms a pass with one core busy,
+1.1 ms with sixteen), and the geometry's texel, which has room for fifteen.
 
-It is not in Unity yet, where a pass with several targets has to be a camera's and not a Blit.
+It is not in Unity yet: there the tick has to become a camera's pass, which is how a pass
+with several targets is drawn in VRChat.
 
 ## Workers with nothing to do
 

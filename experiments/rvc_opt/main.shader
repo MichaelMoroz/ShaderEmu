@@ -143,12 +143,13 @@
             // rectangles of their own, so no two cores' pixels are rasterised together, and a
             // worker that is parked or asleep costs no pixel at all. (The pass is handed one
             // quad, two triangles: the first becomes these, the second nothing.)
-            // TICK_MRT: a pixel of the tick is eight texels of state, one in each of eight targets
-            // 72 x 16 (the state's two zones, an eighth as wide): pixel (x, y) keeps texels 8x to
-            // 8x + 7 of row y, so a worker's tile of 8 x 8 is a column of eight pixels. The same
-            // pass compiled with TICK_UNPACK draws the same quads into the state texture and
-            // only copies each texel from its target.
-            #define TICK_MRT_W 72
+            // TICK_MRT: a pixel of the tick is eight texels of state, one in each of eight
+            // targets: core 0's pixel (x, y) keeps texels 8x to 8x + 7 of row y, and a worker's
+            // tile of 8 x 8 is a column of eight pixels, in the worker's own block of columns
+            // (types.h, TICK_BLOCK) to the right of core 0's eight. The same pass compiled with
+            // TICK_UNPACK draws the state's quads into the state texture and only copies each
+            // texel from its target.
+            #define TICK_MRT_W 264
             #ifdef TICK_MRT
             #define TICK_TEXELS 8
             #else
@@ -161,6 +162,11 @@
             #define TICK_LOAD 1
             #endif
             static uint tick_copy = 0;
+            // columns left empty between core 0's pixels and the first worker's block: with four, a
+            // busy core 0 and busy workers took a third longer a pass (measured: docs/multicore.md)
+            #ifndef TICK_GAP
+            #define TICK_GAP 8
+            #endif
             void tick_rect(inout TriangleStream<v2f_customrendertexture> stream, float x, float y, float w, float h) {
                 for (uint corner = 0; corner < 4; corner++) {
             #if defined(TICK_MRT) && !defined(TICK_UNPACK)
@@ -197,14 +203,19 @@
                     tick_rect(stream, MC_STRIP_X, 0, 8 * MC_STRIP_ROWS, 8);
                     return;
                 }
-                uint tile = 0;
+                uint tile = 0, col = 0;
                 for (uint k = 1; k < CORES; k++) {
                     uint tiles = mc_rows_of(mc_bits_of(k));
                     if (tiles == 0) continue;
                     mc_select(k, tile);
                     hart = k;
+            #if defined(TICK_MRT) && !defined(TICK_UNPACK)
+                    if (!mc_idle()) tick_rect(stream, MC_STRIP_X + 8 * (TICK_GAP + col), 0, 8 * mc_cols_of(tiles), 8);
+            #else
                     if (!mc_idle()) tick_rect(stream, MC_STRIP_X + 8 * tile, 0, 8 * tiles, 8);
+            #endif
                     tile += tiles;
+                    col += mc_cols_of(tiles);
                 }
                 mc_select(0, 0);
                 hart = 0;
@@ -217,6 +228,15 @@
                 uint2 pos = i.vertex.xy;
                 uint3 at = uint3(pos.x >> 3, pos.y, 0);
                 uint k = pos.x & 7;
+#if CORES > 1
+                if (pos.x >= MC_STRIP_X) {
+                    // a worker's texel: in its block's column for this tile
+                    mc_geo = RAM_TEX(RAM_ADDR(MC_GEOMETRY));
+                    uint tile = (pos.x - MC_STRIP_X) >> 3;
+                    if ((mc_geo.r & 1) != 0 || mc_core_at(tile) == 0) return (uint4)0;
+                    at.x = (MC_STRIP_X >> 3) + TICK_GAP + mc_col0 + (tile - mc_tile0);
+                }
+#endif
                 if (k == 0) return _TickOut0.Load(at);
                 if (k == 1) return _TickOut1.Load(at);
                 if (k == 2) return _TickOut2.Load(at);
@@ -265,8 +285,19 @@
                     // the workers' strip: nothing while it is laid out anew, and nothing in rows no worker has
                     if (_Init || pos.y >= 8 || (mc_geo.r & 1) != 0) TICK_ZERO
                     uint tile = (pos.x - MC_STRIP_X) >> 3;
+#ifdef TICK_MRT
+                    // the targets' column: whose block it is in, and which of the worker's tiles it is
+                    if (tile < TICK_GAP) TICK_ZERO
+                    tile -= TICK_GAP;
+                    hart = mc_core_find(tile, true);
+                    if (hart == 0) TICK_ZERO
+                    tile = mc_tile0 + (tile - mc_col0);
+                    if (tile - mc_tile0 >= mc_rows_of(mc_bits_now)) TICK_ZERO
+                    own = uint2(MC_STRIP_X + 8 * tile, pos.y);
+#else
                     hart = mc_core_at(tile);
                     if (hart == 0) TICK_ZERO
+#endif
                     // which texel of the worker's state this pixel is, as a place in its rows of 64
                     uint w = ((tile - mc_tile0) << 6) + ((pos.y & 7) << 3) + (pos.x & 7);
                     pos = uint2(w & 63, w >> 6);

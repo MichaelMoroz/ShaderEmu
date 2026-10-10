@@ -128,6 +128,9 @@ static void serve(int k)
 		say("mcw: a worker core stopped, cause ", cause);
 		say("mcw:   at pc ", fault->pc);
 		say("mcw:   address ", address);
+		say("mcw:   its count ", at);
+		say("mcw:   core 0 had answered ", *resume_of(k));
+		say("mcw:   worker ", (uint32_t)core_of[k]);
 		call6(94, 70, 0, 0, 0, 0, 0);	/* exit_group */
 	}
 	mcw_faults++;

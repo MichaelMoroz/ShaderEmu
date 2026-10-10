@@ -510,7 +510,7 @@ private:
     // TICK_MRT: the tick's eight targets, 72 x 16 (main.shader, TICK_MRT_W)
     bool mrt_ = false;
     UINT mrtLoad_ = 1;   // TICK_LOAD: the workers' quads drawn so many times (a measurement)
-    static const UINT kTickWidth = 72;
+    static const UINT kTickWidth = 264;
     ComPtr<ID3D11Texture2D> mrtTex_[8];
     ComPtr<ID3D11RenderTargetView> mrtRtv_[8];
     ComPtr<ID3D11ShaderResourceView> mrtSrv_[8];

@@ -51,7 +51,7 @@ watch the emulated machine:
   headless; never start the no-argument form from a script and leave it running.
 - An image menu blocks at start when nothing says what to boot and stdin is a console. Scripted
   runs must pass one of `--image NAME`, `--payload`, `--ram`, `--load-state` or `--no-stdin`.
-- `rvc_harness` runs 16,384 instructions per draw by default (about 20% faster than 2,048 on DXC).
+- `rvc_harness` runs 32,768 instructions per draw by default (it was 16,384; `rvc_cpu` still is).
   Every reference state hash was taken at 2,048: pass `--ticks 2048` when comparing
   (`perf_test.ps1` and `rvc_trace12` already use 2,048).
 - Our programs live in `programs/`; `programs\build.bat` builds them with clang for rv32ima and
@@ -841,6 +841,18 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   nothing of the layout. Anything that reads a worker's state (the control pass, the
   harness's `CORE` lines) finds its strip from the geometry texel. A worker's pixels must
   stay whole 8 x 8 tiles.
+- The D3D11 harness draws the tick into eight targets, eight state texels a pixel
+  (`docs/multicore.md`, "Eight texels a pixel"; `--no-mrt` for one), with a write cache twice
+  the shader's default (`L1_TABLE_BITS=7`) and 32,768 instructions a pass. Snapshots from
+  before are of another state layout. D3D12 and Unity have one target still.
+- Pixels of two cores that the card runs as one group cost what both cost, unless the cores
+  run the same instructions: measure anything about the workers' pixels with `nxray` (every
+  core its own work), never with `mctest`'s bench (the same primes on all of them).
+- A store the write cache has no room for is still made, by itself, when the pass ends
+  (`ram_l1_last_addr`). Anything the machine writes as several stores that another core
+  reads as one record must not let its last word be that store: a worker's fault record was
+  read by core 0 as a new count with zeros ("a worker core stopped, cause 0, at pc 0"),
+  now and then, with the smallest caches (`MC_FAULT` in `src/mc.h`).
 - `nxray` and `nxpath` (`docs/raytrace.md`) are the programs that use every core: after a change
   to the workers or the geometry, `RAY_FRAMES=1 RAY_STILL=1 nxray` with `RAY_WORKERS=0` and
   without must print the same sum, and so must `NXPATH_AUTO=1 NXPATH_EXIT=1 NXPATH_SAMPLES=2

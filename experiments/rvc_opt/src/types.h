@@ -128,16 +128,38 @@ void mc_select(uint core, uint row) {
     mc_size_now = L1_STATE_AT + (2u << mc_bits_now) * L1_STRIDE + 8;
     state_off = uint2(0, 0);
 }
-// The worker whose tiles the strip's tile y is one of, selected; 0 when it is nobody's.
-uint mc_core_at(uint y) {
-    uint row = 0, found = 0, at = 0;
+// With the tick in eight targets (TICK_MRT, main.shader) a tile is a column of eight pixels
+// there, and a worker's columns are a block of its own, TICK_BLOCK columns wide or a multiple
+// (4 x 8 pixels is what the card runs as one), with TICK_PAD or more columns of it empty:
+// pixels of two cores that the card runs together cost what both cost, and a block whose
+// quad is full to its last column still shared (measured: docs/multicore.md). mc_col0 is the
+// first column of the worker selected.
+#ifndef TICK_BLOCK
+#define TICK_BLOCK 4
+#endif
+#ifndef TICK_PAD
+#define TICK_PAD 2
+#endif
+static uint mc_col0 = 0;
+uint mc_cols_of(uint rows) {
+    return (rows + TICK_PAD + TICK_BLOCK - 1) / TICK_BLOCK * TICK_BLOCK;
+}
+// The worker whose tiles the strip's tile y is one of (or, by_column, whose block the
+// targets' column y is in), selected; 0 when it is nobody's.
+uint mc_core_find(uint y, bool by_column) {
+    uint row = 0, col = 0, found = 0, at = 0, col_at = 0;
     for (uint k = 1; k < CORES; k++) {
-        uint rows = mc_rows_of(mc_bits_of(k));
-        if (rows != 0 && y >= row && y < row + rows) { found = k; at = row; }
+        uint rows = mc_rows_of(mc_bits_of(k)), cols = mc_cols_of(rows);
+        uint from = by_column ? col : row, n = by_column ? cols : rows;
+        if (rows != 0 && y >= from && y < from + n) { found = k; at = row; col_at = col; }
         row += rows;
+        col += cols;
     }
-    if (found != 0) mc_select(found, at);
+    if (found != 0) { mc_select(found, at); mc_col0 = col_at; }
     return found;
+}
+uint mc_core_at(uint y) {
+    return mc_core_find(y, false);
 }
 #define MC_ENTRIES (mc_core == 0 ? (uint)L1_ENTRIES : (2u << mc_bits_now) * L1_STRIDE)
 // Where texel lin (as core 0 numbers them) of this core's state is, from where its rows begin;

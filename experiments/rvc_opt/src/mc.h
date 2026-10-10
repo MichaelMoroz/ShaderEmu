@@ -96,6 +96,7 @@ void mc_enter() {
     if (hart != 0 && ret.trap.en) { \
         uint seen_ = RAM_TEX(MC_RESUME_TEXEL(hart)).x; \
         bool call_ = ret.trap.type == 8; \
+        bool room_ = cpu.stall == 0; \
         if (call_) { \
             mem_set_ram(MC_CALL_WORD(hart), xreg(17), 0xffffffff); \
             mem_set_ram(MC_CALL_WORD(hart) + 4, xreg(10), 0xffffffff); \
@@ -108,11 +109,16 @@ void mc_enter() {
         mem_set_ram(MC_FAULT_WORD(hart) + 4, ret.trap.type, 0xffffffff); \
         mem_set_ram(MC_FAULT_WORD(hart) + 8, ret.trap.value, 0xffffffff); \
         mem_set_ram(MC_FAULT_WORD(hart) + 12, cpu.pc, 0xffffffff); \
-        /* the count last: with it the record is whole */ \
-        mem_set_ram(MC_FAULT_WORD(hart), seen_ + 1, 0xffffffff); \
+        /* the count last: with it the record is whole. A store the cache has no room for is */ \
+        /* still made, by itself, when the pass ends: were that the count, core 0 would read */ \
+        /* a record of zeros with a new count (a worker "stopped, cause 0, at pc 0"). So no */ \
+        /* count unless the rest went in, and no lone word of a record that did not fit. */ \
+        if (cpu.stall == 0) mem_set_ram(MC_FAULT_WORD(hart), seen_ + 1, 0xffffffff); \
         if (cpu.stall == 0) { \
             mc_word = (call_ ? 9 : 5) | (seen_ << 8); \
             cpu.stall = STALL_WFI; \
+        } else if (room_) { \
+            cpu.cache.ram_l1_last_addr = 0xffffffff; \
         } \
         ret.trap.en = false; \
         ret.pc_val = cpu.pc; \
