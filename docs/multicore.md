@@ -304,12 +304,49 @@ What it gains, 16,384 instructions a pass:
 | `mctest 15 300000 bench`: core 0 alone | 17.2 s | 17.2 s |
 | the same, 15 workers busy and core 0 waiting | 16.7 s | 14.6 s (one worker: 14.6 s) |
 
-So little for one core: a pass is as long as its longest pixel, the instructions one after
-another, and 973 pixels were already about what the card runs side by side for nothing.
-What the eight targets do buy is that pixels stop counting: fifteen busy workers cost what
-one does, and a write cache twice the size (`L1_TABLE_BITS=7`, which Doom likes: 3,475k
-with it, its passes 14.6k instructions long in place of 12.7k) no longer costs pixels. It
-is not in Unity, where a pass with several targets has to be a camera's and not a Blit.
+So little for one core by itself: a pass is as long as its longest pixel, the instructions
+one after another, and 973 pixels were already about what the card runs side by side for
+nothing. What the eight targets buy is that pixels stop counting, which shows in three
+places.
+
+Power (an RTX 5070 laptop card, `nvidia-smi`'s reading, 18 W with nothing running): a shell
+loop on one core is 46 W with one target and 37 W with eight, a third of what the machine
+itself draws; fifteen of the smallest workers busy, 55 W and 41 W.
+
+Longer passes with a larger write cache. A pass ends early when the cache is full, so
+passes of 32,768 instructions gain little as it is (Doom's are 14.4k long); with the cache
+twice the size (`L1_TABLE_BITS=7`, 1,485 texels of state, which with one target is over
+what the card runs for nothing) they are 24k long. One core, instructions a second:
+
+| | One target, 16,384, the cache as it is | One target, 32,768, twice the cache | Eight targets, 32,768, twice the cache |
+|---|---|---|---|
+| a shell loop | 3,497k | 3,698k | 3,902k (12%) |
+| Doom's timedemo | 3,124k | 3,369k | 3,694k (18%) |
+| Quake's timedemo | 3,288k | | 3,575k (9%) |
+| Tiberian Dawn, mission 10 | 3,591k | 3,719k | 3,971k (11%) |
+
+(65,536 a pass adds nothing to that: Doom's passes are 26.5k long there, a frame of the game
+ending them. A cache four times the size, `L1_TABLE_BITS=8`, is a shader the driver refuses.)
+
+More cores. `TICK_LOAD=N` draws every worker's quad N times (the copies under the targets'
+rows, read by nothing): what the tick would cost with N times the busy workers. Fifteen of
+the smallest workers on the same primes, core 0 waiting:
+
+| Busy workers' quads | Pixels | The same work | The card |
+|---|---|---|---|
+| 15 (one target) | 1,740 | 14.67 s | 55 W |
+| 15 | 225 | 14.53 s | 41 W |
+| 30 | 450 | 14.56 s | 44 W |
+| 60 | 900 | 14.62 s | 49 W |
+| 120 | 1,800 | 14.70 s | 58 W |
+| 240 | 3,600 | 16.97 s | 67 W |
+
+So this card runs some 2,000 pixels of the tick in the time of one, which with eight targets
+is 120 of the smallest workers (65 million instructions a second for fifteen of them). The
+tick is not what stands in the way of that many; the commit, which looks into every core's
+cache for every texel it writes, and the geometry's texel, which has room for fifteen, are.
+
+It is not in Unity yet, where a pass with several targets has to be a camera's and not a Blit.
 
 ## Workers with nothing to do
 

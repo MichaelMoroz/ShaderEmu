@@ -34,6 +34,8 @@ public:
         if (!buildPasses(gpu_, shader, {"CPUTick", "Commit"}, bo, passes_, err)) return false;
         for (auto& d : opt.compile.defines)
             if (d.first == "TICK_MRT") mrt_ = true;
+        for (auto& d : opt.compile.defines)
+            if (d.first == "TICK_LOAD") mrtLoad_ = (UINT)(std::max)(1, atoi(d.second.c_str()));
         if (mrt_) {
             // the tick's pass again, as the one that copies its eight targets into the state
             ShaderBuildOptions unpack = bo;
@@ -445,7 +447,7 @@ private:
     bool createTickTargets(std::string& err) {
         D3D11_TEXTURE2D_DESC td{};
         td.Width = kTickWidth;
-        td.Height = (UINT)tickRows_;
+        td.Height = (UINT)tickRows_ * mrtLoad_;
         td.MipLevels = td.ArraySize = 1;
         td.Format = DXGI_FORMAT_R32G32B32A32_UINT;
         td.SampleDesc.Count = 1;
@@ -479,7 +481,7 @@ private:
         ID3D11RenderTargetView* rtvs[8];
         for (int i = 0; i < 8; ++i) rtvs[i] = mrtRtv_[i].Get();
         ctx->OMSetRenderTargets(8, rtvs, nullptr);
-        D3D11_VIEWPORT vp{0, 0, (float)kTickWidth, tickRows_, 0, 1};
+        D3D11_VIEWPORT vp{0, 0, (float)kTickWidth, tickRows_ * mrtLoad_, 0, 1};
         ctx->RSSetViewports(1, &vp);
         ctx->RSSetState(gpu_.rasterNoCull.Get());
         ctx->OMSetBlendState(gpu_.blendOpaque.Get(), nullptr, 0xffffffff);
@@ -487,7 +489,7 @@ private:
         ctx->IASetInputLayout(nullptr);
         ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         mat.bind(ctx, pass, gpu_);
-        ctx->Draw(6, 0);
+        ctx->Draw((std::max)(6u, 3 * mrtLoad_), 0);
         ctx->OMSetRenderTargets(0, nullptr, nullptr);
         static const char* names[8] = {"_TickOut0", "_TickOut1", "_TickOut2", "_TickOut3", "_TickOut4", "_TickOut5", "_TickOut6", "_TickOut7"};
         for (int i = 0; i < 8; ++i) mat.setTexture(names[i], mrtSrv_[i].Get(), kTickWidth, (UINT)tickRows_);
@@ -507,6 +509,7 @@ private:
     std::vector<GpuPass> passes_, gpuPasses_, soundPasses_, unpackPasses_;
     // TICK_MRT: the tick's eight targets, 72 x 16 (main.shader, TICK_MRT_W)
     bool mrt_ = false;
+    UINT mrtLoad_ = 1;   // TICK_LOAD: the workers' quads drawn so many times (a measurement)
     static const UINT kTickWidth = 72;
     ComPtr<ID3D11Texture2D> mrtTex_[8];
     ComPtr<ID3D11RenderTargetView> mrtRtv_[8];

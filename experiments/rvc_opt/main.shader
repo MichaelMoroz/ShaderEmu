@@ -154,10 +154,17 @@
             #else
             #define TICK_TEXELS 1
             #endif
+            // TICK_LOAD=N (a measurement, with TICK_MRT): every worker's quad is drawn N times,
+            // the copies under the targets' 16 rows, where nothing reads them: what a pass
+            // would cost with N times the busy workers.
+            #ifndef TICK_LOAD
+            #define TICK_LOAD 1
+            #endif
+            static uint tick_copy = 0;
             void tick_rect(inout TriangleStream<v2f_customrendertexture> stream, float x, float y, float w, float h) {
                 for (uint corner = 0; corner < 4; corner++) {
             #if defined(TICK_MRT) && !defined(TICK_UNPACK)
-                    float2 p = float2((x + (corner & 1) * w) / 8, y + (corner >> 1) * h) / float2(TICK_MRT_W, STATE_ROWS);
+                    float2 p = float2((x + (corner & 1) * w) / 8, y + (corner >> 1) * h + tick_copy * STATE_ROWS) / float2(TICK_MRT_W, STATE_ROWS * TICK_LOAD);
             #else
                     float2 p = float2(x + (corner & 1) * w, y + (corner >> 1) * h) / (float2)s_dim;
             #endif
@@ -174,9 +181,14 @@
 
             [maxvertexcount(64)]
             void tick_geom(triangle v2f_customrendertexture IN[3], uint primitive : SV_PrimitiveID, inout TriangleStream<v2f_customrendertexture> stream) {
+            #if defined(TICK_MRT) && !defined(TICK_UNPACK)
+                if (primitive >= TICK_LOAD) return;
+                tick_copy = primitive;
+            #else
                 if (primitive != 0) return;
+            #endif
                 _SelfTexture2D.GetDimensions(s_dim.x, s_dim.y);
-                tick_rect(stream, 0, 0, 64, STATE_ROWS);
+                if (tick_copy == 0) tick_rect(stream, 0, 0, 64, STATE_ROWS);
 #if CORES > 1
                 if (_Init) return;
                 mc_geo = RAM_TEX(RAM_ADDR(MC_GEOMETRY));
@@ -237,6 +249,7 @@
 
 #ifdef TICK_MRT
                 uint2 pos = uint2(i.vertex.xy) * uint2(8, 1);
+                pos.y %= STATE_ROWS;
 #else
                 uint2 pos = i.globalTexcoord.xy * s_dim;
 #endif
