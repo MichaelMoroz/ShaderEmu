@@ -5,11 +5,14 @@ case "$f" in /*) ;; *) f="$PWD/$f" ;; esac
 chmod +x "$f" 2>/dev/null
 mkdir -p /tmp/open
 r="/tmp/open/run.$$"
+# (the name between single quotes, whatever is in it)
+q="'$(printf '%s' "$f" | sed "s/'/'\\\\''/g")'"
 {
     echo '#!/bin/sh'
-    echo "\"$f\""
+    printf '%s\n' "$q"
+    echo 's=$?'
     echo 'echo'
-    echo "echo \"[$(basename "$f") ended with \$?: Enter closes this window]\""
+    printf '%s\n' "echo \"[\$(basename $q) ended with \$s: Enter closes this window]\""
     echo 'read x'
 } > "$r"
 chmod +x "$r"

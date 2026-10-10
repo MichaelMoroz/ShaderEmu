@@ -767,6 +767,9 @@ load(const char *path)
 	} else {
 		return "not a WAV, MOD, FLAC or MP3 file";
 	}
+	/* (a piece is half a second of it, and a slot's size comes of that) */
+	if (tune.rate < 1000 || tune.rate > 192000)
+		return "a sample rate this player does not take";
 	if (tune.kind == K_MP3) {
 		workers_open();
 	} else {

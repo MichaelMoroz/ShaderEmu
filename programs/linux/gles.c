@@ -508,6 +508,11 @@ void glGenTextures(GLsizei n, GLuint* out) {
         }
     while (n-- > 0) *out++ = 0;
 }
+// `top` raised to the end of `bytes` at a physical address, if that is texture memory.
+static uint32_t kept_to(uint32_t top, uint32_t address, uint32_t bytes) {
+    uint32_t at = address - GPU_PHYS;
+    return at >= TEXTURES_AT && at < GPU_SIZE && at + bytes > top ? (at + bytes + 15) & ~15u : top;
+}
 // Texture memory is taken in order and given back only from the end: enough for a program
 // that drops all of a level's textures together.
 void glDeleteTextures(GLsizei n, const GLuint* which) {
@@ -520,6 +525,19 @@ void glDeleteTextures(GLsizei n, const GLuint* which) {
         // (only textures in this memory: one that shows a window's own pixels, seglWindowTexture, is
         // below it, which as an unsigned offset is far above, and kept the top where it was for good.
         // Doom has one from its first screen wipe on, and ran out of texture memory after eight levels.)
+        if (x->used && x->indexed == 3 && x->address >= TEXTURES_AT && x->address < GPU_SIZE) {
+            // a layer of tiles is four words; its cells, tiles and palette are memory of their own
+            const uint32_t* layer = (const uint32_t*)(gpu + x->address);
+            uint32_t tile = (layer[3] & 0xff) * (layer[3] >> 8 & 0xff), piece = layer[3] >> 28;
+            uint32_t rows = (layer[3] >> 8 & 0xff) ? x->height / (layer[3] >> 8 & 0xff) + 1 : 1;
+            bytes = 16;
+            top = kept_to(top, layer[0], 2 * (layer[3] >> 16 & 0xfff) * rows);
+            top = kept_to(top, layer[1], piece ? 4 * (1024u >> piece) : 1024 * tile);
+            top = kept_to(top, layer[2], 16 * 16 * 4);
+            uint32_t table = layer[1] - GPU_PHYS;
+            for (uint32_t k = 0; piece && table < GPU_SIZE - 4096 && k < 1024u >> piece; k++)
+                top = kept_to(top, ((const uint32_t*)(gpu + table))[k], tile << piece);
+        }
         if (x->used && x->address >= TEXTURES_AT && x->address < GPU_SIZE && x->address + bytes > top)
             top = (x->address + bytes + 15) & ~15u;
     }

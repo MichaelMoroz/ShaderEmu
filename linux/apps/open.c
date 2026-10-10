@@ -77,7 +77,7 @@ read_kinds(void)
 }
 
 /* True if the bytes begin with one of a kind's marks: a list with commas, \xNN for a byte.
- * Letters are compared in either case. */
+ * A mark that begins with '<' is a page's tag, compared in either case; any other is bytes. */
 static int
 has_magic(const struct kind *k, const unsigned char *head, int n)
 {
@@ -86,7 +86,7 @@ has_magic(const struct kind *k, const unsigned char *head, int n)
 	if (!strcmp(m, "-"))
 		return 0;
 	while (*m) {
-		int at = 0, same = 1;
+		int at = 0, same = 1, tag = *m == '<';
 
 		while (*m && *m != ',') {
 			int c = (unsigned char)*m++;
@@ -98,7 +98,7 @@ has_magic(const struct kind *k, const unsigned char *head, int n)
 				m += 3;
 				if (at >= n || head[at] != c)
 					same = 0;
-			} else if (at >= n || tolower(head[at]) != tolower(c))
+			} else if (at >= n || (tag ? tolower(head[at]) != tolower(c) : head[at] != c))
 				same = 0;
 			at++;
 		}
@@ -232,8 +232,10 @@ fetch(const char *address, char *path, size_t room)
 
 		name_from(address, name, sizeof name - 4);
 		snprintf(path, room, FOLDER "/%s.ppm", name);
-		if (w * h * 4 > FETCH_MOST || (file = fopen(path, "wb")) == NULL)
+		if ((uint64_t)w * h * 4 > FETCH_MOST || (file = fopen(path, "wb")) == NULL) {
+			printf("open: the picture of %s cannot be kept\n", address);
 			return 0;
+		}
 		fprintf(file, "P6\n%u %u\n255\n", (unsigned)w, (unsigned)h);
 		for (i = 0; i < w * h; i++) {
 			uint32_t c = ((const uint32_t *)fetched)[i];
@@ -292,13 +294,54 @@ fetch(const char *address, char *path, size_t room)
 	return 1;
 }
 
+/* A copy of a file in /root, under its own name. */
+static int
+save(const char *path, const char *name)
+{
+	char to[300], block[4096];
+	FILE *in = fopen(path, "rb"), *out;
+	size_t n;
+	int fine = 1;
+
+	snprintf(to, sizeof to, "/root/%.280s", name);
+	if (!in || (out = fopen(to, "wb")) == NULL) {
+		if (in)
+			fclose(in);
+		return 0;
+	}
+	while ((n = fread(block, 1, sizeof block, in)) > 0)
+		fine = fine && fwrite(block, 1, n, out) == n;
+	fclose(in);
+	return fclose(out) == 0 && fine;
+}
+
+/* Text between single quotes for the shell, whatever is in it. */
+static int
+quoted(char *to, int room, const char *text)
+{
+	int o = 0;
+
+	if (room < 3)
+		return 0;
+	to[o++] = '\'';
+	for (; *text && o + 6 < room; text++) {
+		if (*text == '\'')
+			o += snprintf(to + o, room - o, "'\\''");
+		else
+			to[o++] = *text;
+	}
+	to[o++] = '\'';
+	to[o] = 0;
+	return o;
+}
+
 /* A file nobody is registered for: what it is, and two things to do with it. */
 static void
 unknown(const char *path, long size)
 {
 	GR_WINDOW_ID window;
 	GR_EVENT event;
-	char line[300], save[300];
+	char line[300];
 	const char *name = strrchr(path, '/') ? strrchr(path, '/') + 1 : path;
 
 	if (GrOpen() < 0) {
@@ -322,12 +365,12 @@ unknown(const char *path, long size)
 		if (event.type != GR_EVENT_TYPE_BUTTON_DOWN)
 			continue;
 		if (ui_inside(event.button.x, event.button.y, 12, 60, 150, 28)) {
+			GrClose();
 			execlp("nxedit", "nxedit", path, (char *)NULL);
-			break;
+			return;
 		}
 		if (ui_inside(event.button.x, event.button.y, 174, 60, 150, 28)) {
-			snprintf(save, sizeof save, "cp '%.280s' /root/", path);
-			if (system(save) != 0)
+			if (!save(path, name))
 				printf("open: %s was not saved\n", path);
 			break;
 		}
@@ -338,7 +381,7 @@ unknown(const char *path, long size)
 int
 main(int argc, char **argv)
 {
-	char path[300], command[500], address[256] = "";
+	char path[300], command[1500], address[256] = "";
 	unsigned char head[64];
 	const struct kind *k;
 	const char *what, *use;
@@ -363,7 +406,8 @@ main(int argc, char **argv)
 	}
 	if (S_ISDIR(info.st_mode)) {
 		k = NULL;
-		snprintf(command, sizeof command, "nxfiles '%s'", path);
+		o = snprintf(command, sizeof command, "nxfiles ");
+		quoted(command + o, (int)sizeof command - o, path);
 		goto run;
 	}
 	fd = open(path, O_RDONLY);
@@ -389,7 +433,7 @@ main(int argc, char **argv)
 	use = address[0] && !strncmp(address, "http", 4) && !strcmp(k->name, "page") ? address : path;
 	for (i = 0; k->command[i] && o < (int)sizeof command - 1; i++) {
 		if (k->command[i] == '%' && k->command[i + 1] == 's') {
-			o += snprintf(command + o, sizeof command - o, "'%s'", use);
+			o += quoted(command + o, (int)sizeof command - o, use);
 			i++;
 		} else
 			command[o++] = k->command[i];

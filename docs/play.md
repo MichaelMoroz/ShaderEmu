@@ -51,7 +51,7 @@ A step of 0 holds the voice (pause, and while more is decoded).
   frames, and any core can decode any piece: it starts 12 frames early, gives the first ten
   for their bits only and decodes two for the filters' memory, after which its samples are
   those of a decoder that began at the file's start. That costs 5% over decoding in order.
-- The player asks for every worker that is free (`mcw_open(15)`) when an MP3 file is opened
+- The player asks for every worker that is free (`mcw_open(MC_MAX_CORES - 1)`) when an MP3 file is opened
   and gives them back with the tune. A job is one piece (`mp3_job`): its decoder is on the
   worker's stack, its samples go into the piece's own pages, and it says how far it is in 16
   bytes of its own, which is how the speed is known before a piece is finished. The first
@@ -70,7 +70,7 @@ A step of 0 holds the voice (pause, and while more is decoded).
 | `NXPLAY_EXIT=1` | leaves when the tune ends |
 | `NXPLAY_SECONDS=N` | plays only the first N seconds |
 | `NXPLAY_NOWINDOW=1` | no window: plays and leaves |
-| `NXPLAY_WORKERS=N` | asks for N workers (15); 0: this core alone |
+| `NXPLAY_WORKERS=N` | asks for N workers (all that are free); 0: this core alone |
 | `NXPLAY_SUM=1` | prints a sum of every sample in the order played (FNV-1a, a 16-bit sample at a time) |
 | `NXPLAY_HALF=1`, `0` | an MP3 file at half rate from the start, or never |
 | `NXPLAY_SHAPE=6,6,...` | lays the workers out first (`mcw_shape`) |
@@ -146,7 +146,7 @@ Under `rvc_cpu`, a few seconds each (start it from PowerShell):
 - **On the shader machine an MP3 file's sum is another** (`a6c2aba3`, `c1e4a1b9` at half
   rate): its floats are the card's (`fpu.md`). In the first second of the test file 2 of
   88,200 samples differ from the host's, by 1. What must hold there is that the sum with
-  workers is the sum with `NXPLAY_WORKERS=0` (`--cores 4`, `NXPLAY_SECONDS=3`: `45c4a9a9`
+  workers is the sum with `NXPLAY_WORKERS=0` (`NXPLAY_SECONDS=3`: `45c4a9a9`
   without them, and with them after an `nxplay` that had them was ended by `kill -9`).
 - The card: `NXPLAY_SECONDS=1 NXPLAY_EXIT=1 nxplay /usr/share/play-test.wav` with
   `--fixed-dt 0.004 --sound-capture F.wav --save-state F.snap`, then
