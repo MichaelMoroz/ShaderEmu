@@ -368,8 +368,12 @@ a worker, and the same work on all of them, which does not show what sharing cos
 | 120 | 1,800 | 14.70 s | 58 W |
 | 240 | 3,600 | 16.97 s | 67 W |
 
-So this card runs some 2,000 pixels of the tick in the time of one, which is 60 blocks of
-4 x 8. The tick is not what stands in the way of that many workers: the commit is (it looks
+And with work of its own on every core, each worker in its block (`nxray`, 15 workers of size
+3, their blocks drawn N times): 1.32 s a picture for 15 blocks, 1.34 s for 30, 1.36 s for
+60, 1.40 s for 90, 2.21 s for 120.
+
+So this card runs some 2,000 to 3,000 pixels of the tick in the time of one, which is 60 to
+90 blocks of 4 x 8. The tick is not what stands in the way of that many workers: the commit is (it looks
 into every core's cache for every texel it writes: 0.06 ms a pass with one core busy,
 1.1 ms with sixteen), and the geometry's texel, which has room for fifteen.
 
