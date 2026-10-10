@@ -1,7 +1,7 @@
 # The volume display
 
-The wall screen described here is gone from the world: the holodeck (`docs/holodeck.md`) shows
-the same frame as a room. What a program gives, and the passes, are as below.
+The wall screen described here is gone from the world, with `EmuVolume`: the holodecks
+(`docs/holodeck.md`) show the same frame as a room round a seat. What a program gives, and the passes, are as below.
 
 A 3D program's picture is one view of its scene. The volume display shows the scene itself: in
 the VRChat world a third screen hangs on the left wall, by the console, and it is a window. Behind it a
@@ -11,13 +11,14 @@ picture on the machine's display is unchanged; this is a second look at the same
 ## What a program gives
 
 Nothing new is drawn by the guest. A program's last whole frame is a command list
-(`docs/gpu.md`) that stays in memory, and three words say where:
+(`docs/gpu.md`) that stays in memory, and four words say where:
 
 | Address | Contents |
 |---|---|
 | `0x87000300` | address of the frame's command list (0: none) |
 | `0x87000304` | commands in it |
 | `0x87000308` | frames so far |
+| `0x8700030c` | the picture's size: width, and height from bit 16 |
 
 - Both OpenGL libraries write them after each swap (`programs/linux/gl.c`, `gles.c`) and build
   the next frame somewhere else: frames alternate between two places, so the one named here

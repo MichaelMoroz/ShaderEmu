@@ -908,6 +908,7 @@ void Gfx_EndFrame(void) {
 		while (regs[REG_SUBMIT / 4] != 0) next_frame();
 
 		regs[REG_VOLUME / 4 + 1] = commands;
+		regs[REG_VOLUME / 4 + 3] = width | height << 16;
 		regs[REG_VOLUME / 4]     = GPU_PHYS + set_at;
 		regs[REG_VOLUME / 4 + 2]++;
 		set_at = set_at == SETS_AT ? SETS_AT + SET_SIZE : SETS_AT;

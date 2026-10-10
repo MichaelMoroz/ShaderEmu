@@ -100,6 +100,9 @@ struct Options {
     std::string l1Log;        // per frame: instructions, last stall, a count, then the RAM texels its write cache held
     double statsAfter = -1;   // >= 0: print a STATS line for the part of the run after this many seconds
     bool noDoubles = false;
+    bool holodeck = false;    // --holodeck: tell the guest its owner sits in a holodeck's seat (docs/holodeck.md)
+    double holodeckAim = 0;   // --holodeck-aim DEGREES: with it, a tracked right hand that points up by so much
+    bool holodeckHands = false;
     int netPort = 0;          // --net PORT: the network device's link to other machines here (docs/lan.md)
     int netId = 1;            // --net-id N: this machine's number, its address 10.0.0.N
     double netLoss = 0, netDelay = 0;   // --net-loss percent, --net-delay milliseconds: of every packet sent
@@ -341,6 +344,8 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--no-bands") o.noBands = true;
         else if (a == "--no-mrt") o.noMrt = true;
         else if (a == "--readback-batch") o.readbackBatch = atoi(next("--readback-batch").c_str());
+        else if (a == "--holodeck") o.holodeck = true;
+        else if (a == "--holodeck-aim") { o.holodeckAim = atof(next("--holodeck-aim").c_str()); o.holodeckHands = true; }
         else if (a == "--net") o.netPort = atoi(next("--net").c_str());
         else if (a == "--net-id") o.netId = atoi(next("--net-id").c_str());
         else if (a == "--net-loss") o.netLoss = atof(next("--net-loss").c_str());
@@ -1261,6 +1266,12 @@ int main(int argc, char** argv) {
             mat.setInt("_HostMs", (int64_t)(uint32_t)(t * 1000.0));   // a clock programs read without a system call
             // bit 0: start the desktop at boot; then the largest screen this host shows, in 16s of pixels
             mat.setInt("_HostFlags", (opt.desktop ? 1 : 0) | (opt.tabs ? 2 : 0) | (kGpuTarget / 16) << 8 | (kGpuTarget / 16) << 16);
+            // the host's words: the harness, one visitor (number 1); a head that looks straight on from the seat's eye point
+            mat.setInt("_HostState0", 1 | (opt.holodeck ? 16 : 0) | (opt.holodeckHands ? 32 : 0) | 1 << 8 | 1 << 16);
+            mat.setInt("_HostState1", 0);
+            mat.setInt("_HostState7", (int64_t)(((uint32_t)(int32_t)(opt.holodeckAim * 65536.0 / 360.0) & 0xffffu) << 16));
+            mat.setInt("_HostState2", 0);
+            mat.setInt("_HostState3", 0);
             mat.setInt("_InputKeySeq", keySeq);
             mat.setInt("_InputKeyCount", n);
             mat.setInt("_InputKey0", batch[0]);

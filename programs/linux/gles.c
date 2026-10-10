@@ -32,7 +32,7 @@
 #ifndef MAX_TEXTURES
 #define MAX_TEXTURES 512
 #endif
-#define REG_VOLUME 0x300           // the last whole frame: list address, command count, frames so far
+#define REG_VOLUME 0x300           // the last whole frame: list address, command count, frames so far, picture size
 #define MAX_MESH 196608            // vertices the device's mesh has for one list
 #define REG_PALETTE 0x400
 #define REG_SUBMIT 0x10            // submit, list address, command count
@@ -205,6 +205,9 @@ void* seglMemorySpare(unsigned int* bytes) {
     return gpu + SPARE_AT;
 }
 
+#define REG_HOST_STATE 0x360
+const volatile unsigned int* seglHostState(void) { return gpu ? (const volatile unsigned int*)(gpu + REG_HOST_STATE) : 0; }
+
 unsigned int* seglPalette(void) { return (unsigned int*)(gpu + REG_PALETTE); }
 
 void seglSwap(void) {
@@ -234,6 +237,7 @@ void seglSwap(void) {
         // the list and the textures are memory the program goes on to change: wait until drawn
         while (regs[REG_SUBMIT / 4] != 0) next_frame();
         regs[REG_VOLUME / 4 + 1] = commands;
+        regs[REG_VOLUME / 4 + 3] = window_info.width | window_info.height << 16;
         regs[REG_VOLUME / 4] = GPU_PHYS + set_at;
         regs[REG_VOLUME / 4 + 2]++;
         set_at = set_at == SETS_AT ? SETS_AT + SET_SIZE : SETS_AT;

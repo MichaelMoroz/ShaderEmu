@@ -484,10 +484,24 @@ index 80ada45..087e2f2 100644
  	return r;
  }
 diff --git a/WinQuake/gl_rmain.c b/WinQuake/gl_rmain.c
-index d9bf41e..ae7484c 100644
+index d9bf41e..20487ca 100644
 --- a/WinQuake/gl_rmain.c
 +++ b/WinQuake/gl_rmain.c
-@@ -123,9 +123,12 @@ void R_RotateForEntity (entity_t *e)
+@@ -108,10 +108,13 @@ R_CullBox
+ Returns true if the box is completely outside the frustom
+ =================
+ */
++extern int se_all_round;
+ qboolean R_CullBox (vec3_t mins, vec3_t maxs)
+ {
+ 	int		i;
+ 
++	if (se_all_round)	// shaderemu: the host shows the world all round a seat (docs/holodeck.md)
++		return false;
+ 	for (i=0 ; i<4 ; i++)
+ 		if (BoxOnPlaneSide (mins, maxs, &frustum[i]) == 2)
+ 			return true;
+@@ -123,9 +126,12 @@ void R_RotateForEntity (entity_t *e)
  {
      glTranslatef (e->origin[0],  e->origin[1],  e->origin[2]);
  
@@ -503,7 +517,7 @@ index d9bf41e..ae7484c 100644
  }
  
  /*
-@@ -301,6 +304,10 @@ void GL_DrawAliasFrame (aliashdr_t *paliashdr, int posenum)
+@@ -301,6 +307,10 @@ void GL_DrawAliasFrame (aliashdr_t *paliashdr, int posenum)
  
  lastposenum = posenum;
  
@@ -514,7 +528,7 @@ index d9bf41e..ae7484c 100644
  	verts = (trivertx_t *)((byte *)paliashdr + paliashdr->posedata);
  	verts += posenum * paliashdr->poseverts;
  	order = (int *)((byte *)paliashdr + paliashdr->commands);
-@@ -346,6 +353,9 @@ extern	vec3_t			lightspot;
+@@ -346,6 +356,9 @@ extern	vec3_t			lightspot;
  
  void GL_DrawAliasShadow (aliashdr_t *paliashdr, int posenum)
  {
@@ -524,7 +538,7 @@ index d9bf41e..ae7484c 100644
  	float	s, t, l;
  	int		i, j;
  	int		index;
-@@ -948,6 +958,7 @@ r_refdef must be set before the first call
+@@ -948,6 +961,7 @@ r_refdef must be set before the first call
  */
  void R_RenderScene (void)
  {
@@ -532,7 +546,7 @@ index d9bf41e..ae7484c 100644
  	R_SetupFrame ();
  
  	R_SetFrustum ();
-@@ -960,7 +971,9 @@ void R_RenderScene (void)
+@@ -960,7 +974,9 @@ void R_RenderScene (void)
  
  	S_ExtraUpdate ();	// don't let sound get messed up if going slow
  

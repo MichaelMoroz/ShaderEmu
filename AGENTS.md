@@ -1020,6 +1020,11 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   one quote and waits for the other for ever, and the run sits until its limit.
 - The kernel upstream's image is built from has networking in it already (`NET: Registered
   PF_INET`, a device `rvcnet`): look there before adding a stack.
+- A screen in the program's world showing only a game's flat drawing was built and taken out
+  (`docs/holodeck.md` has why). The frame's size is still the fourth word at 0x87000300, and
+  `gpu_vertex_sized` in `gpu.h` still places a vertex for a picture of a given size.
+- The host's words about the room are at 0x87000360 (two texels, `HOST_STATE`), written by the
+  control pass when the host defines `HOST_STATE_WORDS(n)`: Unity does, the harness not yet.
 - The network (`docs/lan.md`): `--net PORT --net-id N` on `rvc_harness` (D3D11) and `rvc_cpu`;
   machine N is `10.0.0.N` on UDP port PORT + N; `--net-loss P --net-delay MS` are the VRChat
   link's part. The guest configures nothing: `lan0` takes its address from the host's number
@@ -1042,5 +1047,11 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   .10.0.0.1`. Doom needs the sound card: under `rvc_cpu` it crashes in its music code.
 - `build.bat` through `cmd /c` from an agent's PowerShell exits at once: build the harness with
   `cmake --build build --config Release` (12 s).
+- Quake draws all round while the host's words say its owner sits in a holodeck (`se_all_round`
+  in `vid_shaderemu.c`, `R_CullBox`; `--holodeck` in the harness): a held frame of e1m1 costs
+  the same there, 52k against 50k "in view".
+  With tracked hands (bit 5 of the host's first word; `--holodeck-aim DEGREES` in the harness)
+  the right hand's rise is the aim's; a head is not aimed with (the developer: "why do you
+  have hands?").
 - Idle Linux runs about 0.2M instructions a second: a test that waits for "enough instructions"
   to know the guest has booted waits for ever. The prompt is there after 10.7M.

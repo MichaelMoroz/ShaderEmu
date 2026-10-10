@@ -85,6 +85,9 @@ Shader "ShaderEmu/gpu"
             uniform uint _HostMs;   // the host's clock, in milliseconds
             // bit 0: the guest should start its desktop when it boots; bits 8-15 and 16-23: the
             // largest screen this host shows, width and height in 16s of pixels (0: it does not say)
+            // What the host says of where the machine is shown (docs/holodeck.md): word 0, the head's three, and where the right hand points.
+            uniform uint _HostState0, _HostState1, _HostState2, _HostState3, _HostState7;
+            #define HOST_STATE_WORDS(n) ((n) == 0 ? _HostState0 : (n) == 1 ? _HostState1 : (n) == 2 ? _HostState2 : (n) == 3 ? _HostState3 : (n) == 7 ? _HostState7 : 0u)
             uniform uint _HostFlags;
             uniform uint _GpuPasses;   // the passes the GPU draw made this frame, one bit each
             uniform uint _InputKey0, _InputKey1, _InputKey2, _InputKey3;

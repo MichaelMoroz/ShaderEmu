@@ -79,12 +79,17 @@ void GL_Init (void)
 	glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 }
 
+/* the host shows the world round a seat: what is beside and behind the camera is drawn too (docs/holodeck.md) */
+int se_all_round;
+
 void GL_BeginRendering (int *x, int *y, int *width, int *height)
 {
 	extern int sb_updates;
+	const volatile unsigned *host = seglHostState ();
 
 	*x = *y = 0;
 	seglSize (width, height);
+	se_all_round = host && SEGL_HOST_HOLODECK (host);
 	sb_updates = 0;		/* every frame is drawn whole: the status bar too */
 }
 
@@ -371,6 +376,19 @@ void IN_Move (usercmd_t *cmd)
 	float mx = mouse_dx * sensitivity.value, my = mouse_dy * sensitivity.value;
 
 	mouse_dx = mouse_dy = 0;
+	if (se_all_round) {
+		/* Seated in a holodeck, where the room keeps the horizon level: the aim's rise is the
+		   right hand's, when the host tracks hands. (Its turn stays the stick's: the room turns
+		   with the game, and a hand's turn would chase itself.) */
+		const volatile unsigned *host = seglHostState ();
+
+		if (SEGL_HOST_HANDS (host)) {
+			float rise = SEGL_HOST_HAND_PITCH (host, 1) * (360.0f / 65536.0f);
+
+			V_StopPitchDrift ();
+			cl.viewangles[PITCH] = rise > 70 ? -70 : rise < -80 ? 80 : -rise;
+		}
+	}
 	if (!in_mouse.value || key_dest != key_game)
 		return;
 	if ((in_strafe.state & 1) || (lookstrafe.value && (in_mlook.state & 1)))

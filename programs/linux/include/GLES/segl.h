@@ -32,6 +32,30 @@ unsigned int seglMemoryLeft(void);
 // One program may have it at a time; nothing hands it out or takes it back.
 void* seglMemorySpare(unsigned int* bytes);
 
+// What the host says of where the machine is shown (docs/holodeck.md): eight words the host
+// writes every frame, or 0 before seglInit. All zero: a host that says nothing.
+const volatile unsigned int* seglHostState(void);
+#define SEGL_HOST_KIND(s)      ((s)[0] & 15)            /* 1 the harness, 2 the world on a desktop, 3 in a headset */
+#define SEGL_HOST_HOLODECK(s)  (((s)[0] >> 4) & 1)      /* its owner sits in a holodeck's seat */
+#define SEGL_HOST_VISITORS(s)  (((s)[0] >> 8) & 255)
+#define SEGL_HOST_NUMBER(s)    (((s)[0] >> 16) & 255)   /* this visitor's */
+#define SEGL_HOST_HEAD_YAW(s)   ((short)((s)[1] & 0xffff))   /* 65,536 to a turn, to the right */
+#define SEGL_HOST_HEAD_PITCH(s) ((short)((s)[1] >> 16))      /* upwards */
+#define SEGL_HOST_HEAD_X(s)     ((short)((s)[2] & 0xffff))   /* millimetres from the seat's eye point: right, */
+#define SEGL_HOST_HEAD_Y(s)     ((short)((s)[2] >> 16))      /* up, */
+#define SEGL_HOST_HEAD_Z(s)     ((short)((s)[3] & 0xffff))   /* forward */
+#define SEGL_HOST_HEAD_ROLL(s)  ((short)((s)[3] >> 16))
+#define SEGL_HOST_HANDS(s)     (((s)[0] >> 5) & 1)      /* the hands are tracked: a program may aim by one */
+/* a hand (0 left, 1 right): its place in units of 4 mm (right, up, forward), its buttons, and
+   where it points: its turn to the right and its rise, 65,536 to a turn as the head's */
+#define SEGL_HOST_HAND_X(s, h)   ((int)((s)[4 + 2 * (h)] << 22) >> 22)
+#define SEGL_HOST_HAND_Y(s, h)   ((int)((s)[4 + 2 * (h)] << 12) >> 22)
+#define SEGL_HOST_HAND_Z(s, h)   ((int)((s)[4 + 2 * (h)] << 2) >> 22)
+#define SEGL_HOST_HAND_YAW(s, h)   ((short)((s)[5 + 2 * (h)] & 0xffff))
+#define SEGL_HOST_HAND_PITCH(s, h) ((short)((s)[5 + 2 * (h)] >> 16))
+#define SEGL_HOST_HAND_TRIGGER(s, h) (((s)[4 + 2 * (h)] >> 30) & 1)
+#define SEGL_HOST_HAND_GRIP(s, h)    (((s)[4 + 2 * (h)] >> 31) & 1)
+
 // Vertices the program has made compact itself (docs/gpu.md: x, y, z, then u | v << 16 in
 // 1,024ths), drawn as glDrawArrays draws: GL_TRIANGLES, a strip, a fan or GL_QUADS. x, y and z
 // are the kind of number the library was built for: floats with SEGL_FLOAT, else 16.16.

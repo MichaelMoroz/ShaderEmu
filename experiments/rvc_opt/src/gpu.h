@@ -189,21 +189,15 @@ bool gpu_command(uint id, uint span, out uint base, out uint4 head) {
     return true;
 }
 
-// Mesh vertex `id`, which the command at `base` claims (gpu_command), placed and coloured.
-gpu_varyings gpu_vertex_of(uint id, uint base, uint4 head) {
+// Mesh vertex `id`, which the command at `base` claims, placed and coloured for a picture of
+// `size` pixels.
+gpu_varyings gpu_vertex_sized(uint id, uint base, uint4 head, float2 size) {
     gpu_varyings o;
     o.position = float4(2, 2, 2, 1);
     o.colour = 0;
     o.uv = 0;
     o.texture_info = 0;
     o.key = 0;
-    uint4 ctrl = ram(GPU_CTRL);
-    uint4 disp = ram(GPU_DISPLAY);
-    float2 size = float2(disp.g, disp.b);
-    if (ctrl.r & SUBMIT_INTO) {
-        uint4 into = ram(GPU_INTO);
-        size = float2(into.g, into.b);
-    }
     {
         uint op = head.r;
         uint k = id - head.a;
@@ -298,6 +292,19 @@ gpu_varyings gpu_vertex_of(uint id, uint base, uint4 head) {
         }
     }
     return o;
+}
+
+// The same for the list that is submitted (gpu_command): its picture is the display's, or the
+// rectangle it is drawn into.
+gpu_varyings gpu_vertex_of(uint id, uint base, uint4 head) {
+    uint4 ctrl = ram(GPU_CTRL);
+    uint4 disp = ram(GPU_DISPLAY);
+    float2 size = float2(disp.g, disp.b);
+    if (ctrl.r & SUBMIT_INTO) {
+        uint4 into = ram(GPU_INTO);
+        size = float2(into.g, into.b);
+    }
+    return gpu_vertex_sized(id, base, head, size);
 }
 
 // The mesh's vertex `id` belongs to whichever command claims that slot. Vertices no command
@@ -409,7 +416,7 @@ float4 gpu_fragment(gpu_varyings i) {
 #ifdef GPU_VOLUME
 // The volume display (docs/volume.md): a host that shows a 3D program's last whole frame from
 // a point of view of its own, instead of the picture the GPU drew of it.
-#define VOLUME_LIST 0x700030u   // that frame's list address, command count, frames so far
+#define VOLUME_LIST 0x700030u   // that frame's list address, command count, frames so far, picture size
 
 // The frame's command that claims mesh vertices id to id + 2, if it is a draw in perspective
 // with its own modelview: the only kind that has a place in space.
@@ -582,6 +589,8 @@ bool gpu_writeback(uint2 pos, out uint4 result) {
 // What the cores did, for a guest to show (docs/multicore.md): 16 words, core k's count of
 // instructions in word k; then a texel of how many cores, which run and which are asleep (a bit each).
 #define MC_STATS    0x700038u
+// What the host says of where the machine is shown (docs/holodeck.md): two texels.
+#define HOST_STATE  0x700036u
 
 #if defined(CORES) && CORES > 1
 // Where worker `core`'s tiles begin in the strip (the geometry: src/types.h has the same), or
@@ -740,6 +749,10 @@ uint4 gpu_control(uint2 pos) {
 #endif
 #ifdef GPU_INPUT
     if (index == GPU_CLOCK) return uint4(keep.r, _HostMs, keep.b, _HostFlags);
+#ifdef HOST_STATE_WORDS
+    if (index == HOST_STATE) return uint4(HOST_STATE_WORDS(0), HOST_STATE_WORDS(1), HOST_STATE_WORDS(2), HOST_STATE_WORDS(3));
+    if (index == HOST_STATE + 1) return uint4(HOST_STATE_WORDS(4), HOST_STATE_WORDS(5), HOST_STATE_WORDS(6), HOST_STATE_WORDS(7));
+#endif
     if (index == INPUT_STATE) {
         uint4 state = uint4(keep.r, keep.g, _InputButtons, _InputKeySeq + _InputKeyCount);
         uint4 disp = ram(GPU_DISPLAY);
