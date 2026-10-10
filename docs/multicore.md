@@ -365,8 +365,8 @@ instructions in the harness (8,192 in the world).
 |---|---|---|
 | Quake (e1m5) | 515 thousand instructions, 4.85 frames a second | the server: 13.3 frames a second (`docs/quake.md`) |
 | Red Alert | 220 to 240 thousand: logic 110 to 127, drawing 88 | its movies (three workers, given back when the movie ends). In a mission the drawing is the game's own, object by object, and clears the marks the logic sets; the profile has no single piece over 12% |
-| Tiberian Dawn | 170 to 230 thousand: logic 100 to 145, drawing 45 to 70 | none: the same game |
-| Doom | a tic 33 to 39 thousand, 35 a second; a frame 45 to 55 thousand | none: the renderer walks the things and sectors the tics change, and writes into them |
+| Tiberian Dawn | 170 to 230 thousand: logic 100 to 145, drawing 45 to 70 | none: the same game, without movies in its demo. Its start was looked at for a long job and had a slow one instead: a table sorted whole for every entry read from a file, 27% of the start, mended on one core (159 to 114 million instructions to a mission's first frame, Red Alert's too) |
+| Doom | a tic 33 to 39 thousand, 35 a second; a frame 45 to 55 thousand | none: the renderer walks the things and sectors the tics change, and writes into them. Its start is 52 million instructions with the machine's own, and no piece of it over 5% |
 | ClassiCube | 60 thousand, 48 frames a second | the meshes of chunks that have none yet: a second copy of the builder on a worker, beside the first core's (`docs/classicube.md`). From the command to the whole world drawn: 40 s where it was 52. Making the world (40 million instructions) is still one core's |
 | The window system | | none: see below |
 
