@@ -43,6 +43,7 @@ static struct {
 static jmp_buf job_abort;
 static int mode = MODE_UNSET, out;
 static float rate = 1;
+static int draining;
 static float since;		/* time the client's frames have taken since the server's last began */
 float sv_frametime;		/* the server's host_frametime */
 unsigned se_server_cycles, se_server_frames, se_server_passes, se_server_between;	/* for the quakestat: lines */
@@ -196,6 +197,36 @@ static void sum_frame (void)
 
 	if (every < 0)
 		every = getenv ("QUAKE_SUM") ? atoi (getenv ("QUAKE_SUM")) : 0;
+	/* QUAKE_TRACK=N: where the player is, each N frames of the server */
+	{
+		static int track = -1;
+		static unsigned tracked;
+
+		if (track < 0)
+			track = getenv ("QUAKE_TRACK") ? atoi (getenv ("QUAKE_TRACK")) : 0;
+		/* QUAKE_TEST_EXIT=F: at frame F of the server the player is put into the level's exit */
+		if (track && getenv ("QUAKE_TEST_EXIT") && tracked + 1 == (unsigned)atoi (getenv ("QUAKE_TEST_EXIT"))) {
+			for (e = 2; e < sv.num_edicts; e++) {
+				edict_t *t = EDICT_NUM (e);
+
+				if (!t->free && !strcmp (pr_strings + t->v.classname, "trigger_changelevel") && t->v.touch) {
+					Sys_Printf ("quake: test: the player touches the exit (entity %u)\n", e);
+					pr_global_struct->time = sv.time;
+					pr_global_struct->self = EDICT_TO_PROG (t);
+					pr_global_struct->other = EDICT_TO_PROG (EDICT_NUM (1));
+					PR_ExecuteProgram (t->v.touch);
+					break;
+				}
+			}
+		}
+		if (track && ++tracked % track == 0 && sv.num_edicts > 1) {
+			edict_t *p = EDICT_NUM (1);
+
+			Sys_Printf ("quake: track %u: time %u ms, at %d %d %d, speed %d %d %d, on ground %d, health %d\n", tracked,
+				(unsigned)(sv.time * 1000), (int)p->v.origin[0], (int)p->v.origin[1], (int)p->v.origin[2],
+				(int)p->v.velocity[0], (int)p->v.velocity[1], (int)p->v.velocity[2], ((int)p->v.flags & FL_ONGROUND) != 0, (int)p->v.health);
+		}
+	}
 	if (!every || ++frames % every)
 		return;
 	for (e = 0; e < sv.num_edicts; e++) {
@@ -350,6 +381,18 @@ void SE_ServerDrop (void)
 	out = OUT_NONE;
 	since = 0;
 	work.sent = work.sends_used = work.reliable_out = 0;
+	/*
+	 * And the client reads what it was last sent. With the server's messages sent late (at
+	 * the end of the client's frame, or when a worker's frame is taken) one may be unread
+	 * here, and the connection takes one reliable message at a time: the "reconnect" of a
+	 * change of level could not be sent, and the client read the new level as if it were
+	 * still in the old one ("i >= cl.maxclients").
+	 */
+	if (mode != MODE_INLINE && mode != MODE_UNSET && sv.active && cls.state == ca_connected && !cls.demoplayback && !draining) {
+		draining = 1;
+		CL_ReadFromServer ();
+		draining = 0;
+	}
 }
 
 /* A console command is about to run. Most are the client's; any other may be the server's. */

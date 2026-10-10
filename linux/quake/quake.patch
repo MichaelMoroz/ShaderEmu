@@ -1024,17 +1024,40 @@ index e13c0e4..c0acf63 100644
  	vec3_t	point;
  	
 diff --git a/WinQuake/sv_user.c b/WinQuake/sv_user.c
-index 1163949..876613d 100644
+index 1163949..a81e198 100644
 --- a/WinQuake/sv_user.c
 +++ b/WinQuake/sv_user.c
-@@ -20,6 +20,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+@@ -20,6 +20,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
  // sv_user.c -- server code for moving users
  
  #include "quakedef.h"
 +#define host_frametime sv_frametime	// the server's frame is not the client's (server_shaderemu.c)
++static int se_buttons;	// the buttons of every move read in this frame of the server's
  
  edict_t	*sv_player;
  
+@@ -459,6 +461,10 @@ void SV_ReadClientMove (usercmd_t *move)
+ 	
+ // read buttons
+ 	bits = MSG_ReadByte ();
++	// (the client may have sent several moves since the server's last frame, which takes the
++	// last: a button down in any of them is down, or a tap between two frames is lost)
++	se_buttons |= bits;
++	bits = se_buttons;
+ 	host_client->edict->v.button0 = bits & 1;
+ 	host_client->edict->v.button2 = (bits & 2)>>1;
+ 
+@@ -600,7 +606,9 @@ SV_RunClients
+ void SV_RunClients (void)
+ {
+ 	int				i;
+-	
++
++	se_buttons = 0;
++
+ 	for (i=0, host_client = svs.clients ; i<svs.maxclients ; i++, host_client++)
+ 	{
+ 		if (!host_client->active)
 diff --git a/WinQuake/world.c b/WinQuake/world.c
 index e1acfea..f755b41 100644
 --- a/WinQuake/world.c
