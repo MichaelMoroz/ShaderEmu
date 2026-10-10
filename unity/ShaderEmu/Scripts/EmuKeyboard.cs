@@ -38,7 +38,9 @@ public class EmuKeyboard : UdonSharpBehaviour
     public Transform[] marks;
     public Renderer[] markRenderers;
     public Material markOver, markHeld;
-    [HideInInspector] public EmuKeyboard sink;
+    public AudioSource click;      // a key going down, and up: only the typist's client plays it
+    public AudioClip[] strokes;
+    [HideInInspector] public EmuMachine sink;   // straight into the machine, past whatever the wall shows
 
     public const int KeyUp = 256, KeyDown = 257, KeyRight = 258, KeyLeft = 259, KeyHome = 260,
                      KeyEnd = 261, KeyDelete = 262, KeyPageUp = 263, KeyPageDown = 264, KeyNone = 511;
@@ -94,7 +96,8 @@ public class EmuKeyboard : UdonSharpBehaviour
     {
         if (sink != null)
         {
-            sink.PushEvent(v);
+            if (rawKeys) sink.RemoteKey(v & 0xffffff);
+            else sink.RemoteChar(v & 0xff);
             return;
         }
         int next = (tail + 1) & 1023;
@@ -115,7 +118,7 @@ public class EmuKeyboard : UdonSharpBehaviour
     }
 
     // Whose keys these are from now on, and of which kind. Keys still down come up first.
-    public void Feed(EmuKeyboard to, bool raw)
+    public void Feed(EmuMachine to, bool raw)
     {
         Init();
         if (to == sink && raw == rawKeys) return;
@@ -132,6 +135,24 @@ public class EmuKeyboard : UdonSharpBehaviour
     public void TypeText(string text)
     {
         for (int i = 0; i < text.Length; i++) Push(text[i] == '\n' ? '\r' : text[i]);
+    }
+
+    // One character as this keyboard's key events (press and release, with Shift round them
+    // where the character needs it). False if no key of the layout gives it.
+    public bool TypeKey(int c)
+    {
+        if (c == '\n') c = 13;
+        for (int i = 0; i < keyLinux.Length; i++)
+        {
+            bool plain = keyNormal[i] == c, shifted = !plain && keyShifted[i] == c;
+            if ((!plain && !shifted) || keyLinux[i] == LinuxCapture || Modifier(keyLinux[i]) >= 0) continue;
+            if (shifted) Push(LinuxShift | Pressed);
+            Push(keyLinux[i] | Pressed);
+            Push(keyLinux[i]);
+            if (shifted) Push(LinuxShift);
+            return true;
+        }
+        return false;
     }
 
     // 0 shift, 1 ctrl, 2 alt; -1 for any other key.
@@ -188,14 +209,29 @@ public class EmuKeyboard : UdonSharpBehaviour
 
     // ---- the on-screen keys ----
 
-    // The key at a point of the world on the panel, or -1.
+    // The key at a point of the world on the panel: the one whose plate is nearest, wherever
+    // on the plate the point is, so that there is no gap between two keys to miss into.
     public int KeyAt(Vector3 point)
     {
         Vector3 local = transform.InverseTransformPoint(point);
-        float x = local.x + panelWidth * 0.5f, y = panelHeight * 0.5f - local.y;
+        float x = local.x + panelWidth * 0.5f, y = panelHeight * 0.5f - local.y, best = float.MaxValue;
+        int found = -1;
         for (int i = 0; i < keyX.Length; i++)
-            if (x >= keyX[i] && y >= keyY[i] && x < keyX[i] + keyW[i] && y < keyY[i] + keyH[i]) return i;
-        return -1;
+        {
+            float dx = Mathf.Max(keyX[i] - x, 0f, x - keyX[i] - keyW[i]), dy = Mathf.Max(keyY[i] - y, 0f, y - keyY[i] - keyH[i]);
+            float apart = dx * dx + dy * dy;
+            if (apart >= best) continue;
+            best = apart;
+            found = i;
+        }
+        return found;
+    }
+
+    private void Click(float loud, float pitch)
+    {
+        if (click == null || strokes == null || strokes.Length == 0) return;
+        click.pitch = pitch * Random.Range(0.94f, 1.06f);
+        click.PlayOneShot(strokes[Random.Range(0, strokes.Length)], loud);
     }
 
     public void SetHover(int hand, int key)
@@ -232,6 +268,7 @@ public class EmuKeyboard : UdonSharpBehaviour
             return;
         }
         held[hand] = key;
+        Click(0.6f, 1f);
         int which = Modifier(linux);
         if (linux == LinuxCaps)
         {
@@ -275,6 +312,7 @@ public class EmuKeyboard : UdonSharpBehaviour
         int key = held[hand];
         if (key < 0) return;
         held[hand] = -1;
+        Click(0.25f, 1.3f);   // (a key coming up is the quieter, higher half of the stroke)
         int linux = keyLinux[key], which = Modifier(linux);
         if (which >= 0)
         {

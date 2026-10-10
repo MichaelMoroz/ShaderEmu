@@ -19,7 +19,8 @@ public class EmuWeather : UdonSharpBehaviour
     public TextMeshProUGUI rainLabel, volumesLabel;
     private bool raining = true;
 
-    private int flashId;
+    private int flashId, clockId;
+    private float clockAt;
     private float next, flash, struck;
     private int pending;
 
@@ -28,11 +29,21 @@ public class EmuWeather : UdonSharpBehaviour
         flashId = VRCShader.PropertyToID("_UdonWeatherFlash");
         VRCShader.SetGlobalFloat(flashId, 0f);
         next = Time.time + Random.Range(10f, 25f);
+        clockId = VRCShader.PropertyToID("_UdonClockDay");
+    }
+
+    // The room's clocks (ClockHand.shader) show the visitor's own time: what their clock said
+    // when the shaders' time was 0, told again now and then so that the two do not drift.
+    private void Clock()
+    {
+        clockAt = Time.time + 20f;
+        VRCShader.SetGlobalFloat(clockId, (float)System.DateTime.Now.TimeOfDay.TotalSeconds - Time.timeSinceLevelLoad);
     }
 
     void Update()
     {
         float now = Time.time;
+        if (now >= clockAt) Clock();
         if (now >= next && raining)
         {
             next = now + Random.Range(minGap, maxGap);

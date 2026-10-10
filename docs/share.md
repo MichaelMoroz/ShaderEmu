@@ -20,29 +20,55 @@ type and point at it. Nothing of the machine itself is shared: only what its scr
 ## How it travels
 
 `EmuShare` is a VRChat player object: one a player, owned by that player, synced by hand
-(`RequestSerialization`). `EmuShareHub` is local, one a client. It fills this player's
-object and reads everyone else's. A player sends console and display only while somebody's
-`watching` names them, on two ticks of three (6.7 packets a second) of at most 1,250 bytes:
-8.3 KB/s. VRChat's limit is for everything a client sends, whatever the object: 11 KB/s on
-paper, 8 to 10 in practice.
+(`RequestSerialization`). `EmuShareHub` is local, one a client: it fills this player's
+object. `EmuStreams`, also one a client, takes what the others' objects bring, for every
+screen that shows a player: the wall, a classroom tube (`docs/stations.md`), a holodeck's
+screen. A player sends console and display only while somebody shows them on some screen,
+on two ticks of three (6.7 packets a second) of at most 1,150 bytes: 7.7 KB/s, and the
+other fields beside it. VRChat's limit is for everything a client sends, whatever the
+object: 11 KB/s on paper, 8 to 10 in practice.
 
 | Synced field | Contents |
 |---|---|
 | `flags` | bit 0: the machine is on; bit 1: watchers may use it |
-| `watching` | the player whose machine this player looks at, 0 for their own |
-| `resync` | counted up to ask the watched player for everything again |
+| `watching` | the player whose machine this player has on the wall, 0 for their own |
 | `seq`, `packet` | a packet's number and its bytes (empty when only the other fields changed) |
 | `inputSeq`, `input` | key events for the watched machine: a count and a ring of the last 16 |
 | `pointer` | x and y in the watched display's pixels (12 bits each), buttons << 24, present << 28 |
+| `station`, `stationMode` | this player's classroom place and what its tube shows |
+| `ask` | twelve words, one for each sender this player shows: the sender's number, and a count << 16 that goes up with each asking |
+| `lost` | beside each: what is asked for again, a packet number's low 16 bits and how many from it << 16; none: everything |
+| `holo`, `holding` | the holodeck this player sits in, and the controller in their hand |
+| `netSeq`, `net` | the network's packets from this player's machine since the last sending (`docs/lan.md`) |
 
-A packet: 13 bytes (on, the console's first row, cursor column and row, the stream's width
-and height, the display's width and height, the number of rows), the console rows, then
-display tiles to the end.
+A packet: 17 bytes (on, the console's first row, cursor column and row, the stream's width
+and height, the display's width and height, the number of rows, and the machine's speed:
+tenths of a million instructions a second for all cores and for core 0, two bytes each),
+the console rows, then display tiles to the end.
 
 - Everything in a packet is state, not a difference: a row or a tile replaces what the
-  receiver had. A receiver that sees a gap in `seq` counts its own `resync` up, and the
-  sender marks every row and tile as not sent. The same happens for a new watcher.
-- A late joiner gets the last packet from VRChat, starts watching, and is a new watcher.
+  receiver had.
+- **A slot a sender.** `EmuStreams` has twelve slots: a store of tiles, a picture, a console.
+  Each screen says whose it wants (`SetWant`); every sender some screen wants has one slot,
+  and is decoded once however many screens show it. A slot nobody wants any more is emptied
+  and its picture made black.
+- **A sender knows who shows it** from the others' `ask`: a word that names it is a viewer.
+  A new word is a new screen, and the sender sends everything (at most once in five seconds,
+  whoever asks).
+- **A lost packet is repaired, not the whole picture.** A receiver that sees a gap in `seq`
+  names the missing numbers in `lost` and counts its word up. The sender keeps what each of
+  its last 32 packets carried (tiles and console rows) and marks only those as not sent. A
+  gap older than that is everything again.
+- A slot whose sender is on and has brought nothing two seconds after it was made asks for
+  everything, and again every five seconds: so a screen never waits for its owner's picture
+  to change.
+- A late joiner gets the last packet from VRChat, makes its slots, and is a new screen.
+- A player's object is destroyed with the player. The hub takes it off its list in
+  `OnPlayerLeft` and again (`Prune`) before anything reads the list: reading a destroyed
+  object halts an Udon behaviour for the rest of the session, which is what froze the
+  classroom's tubes in October 2026.
+- `EmuStreams` writes a line a minute to VRChat's log (`[Streams]`): packets, gaps, repairs,
+  refreshes, and each slot's sender, last packet and how long ago it was heard.
 
 ## Console
 
@@ -95,11 +121,11 @@ only copies bytes.
   the rest one size sharper, then quarters at the fine level of tiles that are at the
   stream's sharpest. A still 1280x720 desktop sent from nothing is at the stream's sharpest after 15 s and all there after 43 s (281 KB), at 36.7 dB
   from the display; the display at half size, however exact, is 30.4 dB from it there (21 to 29 dB on other screens).
-- The receiver copies each tile into the same layout (`ShareStore`, with the size it came
-  at in the row's last texel) and `ShareDecode.shader` draws the picture from it into
-  `RemotePicture`, which the wall shows in place of the machine's own: two texels a stream
-  pixel where there is a fine level, and only the tiles the last packet brought (each row
-  has the packet's stamp).
+- The receiver copies each tile into the same layout (a slot's store, with the size it came
+  at in the row's last texel) and `ShareDecode.shader` draws the picture from it into the
+  slot's picture (1280 x 960), which the wall shows in place of the machine's own: two texels
+  a stream pixel where there is a fine level, and only the tiles the last packet brought
+  (each row has the packet's stamp).
 
 ## Using the watched machine
 
@@ -114,8 +140,16 @@ the display and dropped by the owner after two seconds of silence.
 ## Testing
 
 - `selfTest` on the hub ("Share" in the scene) shows this player's own machine through the
-  stream: set it in play mode with `SetProgramVariable`. Compare `RemotePicture` with
-  `ShareCaptureA`/`B`, and the hub's `remoteGrid` with the terminal's `grid`.
+  stream: set it in play mode with `SetProgramVariable`. Compare the slot's picture
+  (`StreamPicture0`) with `ShareCaptureA`/`B`, and its cells with the terminal's `grid`.
+- Several players with one client: `ClientSimMain.SpawnRemotePlayer`, and an editor hook
+  that gives each new `EmuShare` a `station`, copies this player's `seq` and `packet` into
+  it when `seq` changes, mirrors this player's own `ask` and `lost` words back (with this
+  player's number in place of the sender's) and sends it `_onDeserialization`. `dropTest`
+  on `EmuStreams` loses every tenth packet: its `repairs` and the hub's `repaired` must go
+  up and the hub's `refreshed` must not.
+- Destroy a spawned player's "Share player" object before its `OnPlayerLeft`: no behaviour
+  may halt (`enabled` stays true), and the place reads FREE with a black picture.
 - ClientSim never raises `OnPostSerialization` for these objects, so `EmuShare.Busy()` runs
   out its one-second limit there: a packet a second in the editor, six or seven in VRChat.
 - Two real clients: set the hub's `netTest` in the scene, set the SDK's number of clients

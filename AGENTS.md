@@ -1025,6 +1025,9 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
 - An end marker for `--until` typed from PowerShell inside a single-quoted string is
   `echo LX-''''DONE` (the guest then gets `LX-''DONE`). With `''` alone the guest's shell gets
   one quote and waits for the other for ever, and the run sits until its limit.
+- A panel added to a baked scene is styled by itself (`RetroNewPanels` in `ShaderEmuRetro.cs`,
+  which every "Add ... to the open scene" command that makes one calls): "Restyle the panels"
+  makes every plate again, and a plate made again has lost its place in the lightmap.
 - The kernel upstream's image is built from has networking in it already (`NET: Registered
   PF_INET`, a device `rvcnet`): look there before adding a stack.
 - A screen in the program's world showing only a game's flat drawing was built and taken out
@@ -1039,6 +1042,8 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   mesh a shader turns in its own space must not be static, or batching moves it to the world's.
 - `world/bake_pc.py` (53 s) writes the keyboard too: a change to anything of `pc.py`'s set
   needs it before `build.py`, not only a change to the shells.
+- `KeyAt` of a classroom keyboard takes the nearest key anywhere on the plate; 3% of the plate
+  (between the blocks of keys) had answered no key when the search stopped at half a key.
 - The network (`docs/lan.md`): `--net PORT --net-id N` on `rvc_harness` (D3D11) and `rvc_cpu`;
   machine N is `10.0.0.N` on UDP port PORT + N; `--net-loss P --net-delay MS` are the VRChat
   link's part. The guest configures nothing: `lan0` takes its address from the host's number
@@ -1067,6 +1072,9 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   With tracked hands (bit 5 of the host's first word; `--holodeck-aim DEGREES` in the harness)
   the right hand's rise is the aim's; a head is not aimed with (the developer: "why do you
   have hands?").
+- "Build & Test" from editor code: show the SDK's panel in one call and ask its builder in the
+  next; asked in the same call it says "Open the SDK panel". The hub's `lanTest` makes two
+  clients ping each other and then play Doom over the network, and log `[LanTest]` lines.
 - A colour times a coloured texture can be black (a blue tint on the den's red carpet): give a
   new surface a neutral texture, or one of its own.
 - Idle Linux runs about 0.2M instructions a second: a test that waits for "enough instructions"

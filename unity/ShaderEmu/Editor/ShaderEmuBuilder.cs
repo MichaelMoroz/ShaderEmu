@@ -864,6 +864,10 @@ public static partial class ShaderEmuBuilder
         // an answer to the guest's browser: 256 KB, four bytes a texel (docs/fetch.md)
         Texture2D hostData = LoadOrCreate(Generated + "/HostData.asset", () => new Texture2D(256, 256, TextureFormat.RGBA32, false, true));
         hostData.filterMode = FilterMode.Point;
+        // the network's packets for the guest: a row a packet, four bytes a texel (docs/lan.md)
+        Texture2D netData = LoadOrCreate(Generated + "/NetData.asset", () => new Texture2D(160, 4, TextureFormat.RGBA32, false, true));
+        netData.filterMode = FilterMode.Point;
+        netData.wrapMode = TextureWrapMode.Clamp;
         hostData.wrapMode = TextureWrapMode.Clamp;
         Texture2D black = LoadOrCreate(Generated + "/Black.asset", () =>
         {
@@ -1051,6 +1055,7 @@ public static partial class ShaderEmuBuilder
         machine.gpuKeyboard = gpuKeys;
         machine.blackTexture = black;
         machine.hostData = hostData;
+        machine.netData = netData;
         // the sites the browser's home page lists: a world can load no address it was not built with
         List<string> sites = new List<string>();
         foreach (string line in File.ReadAllLines(ShaderEmuImages.Repo + "/linux/apps/web/sites.txt"))
@@ -1137,7 +1142,7 @@ public static partial class ShaderEmuBuilder
 
         OnClick(power, machine, "Power");
         PowerSign(computer, machine);
-        Gamepad(world, computer, machine, gpuKeys, pointer);
+        DisplayFields(computer, machine, gpuKeys);   // a paste field and "open this link" (ShaderEmuConsole.cs)
         OnClick(reset, machine, "ResetMachine");
         OnClick(pause, machine, "Pause");
 

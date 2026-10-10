@@ -2,8 +2,9 @@ using UdonSharp;
 using UnityEngine;
 using UnityEngine.UI;
 
-// Text for the console from a field a visitor types or pastes into (docs/console.md): it goes
-// to the console's keyboard as if typed there, a little at a time, as the guest takes it.
+// Text from a field a visitor types or pastes into (docs/console.md): it goes to a keyboard as
+// if typed there, a little at a time, as the guest takes it. At the console's as characters,
+// at the display's as key events, where a character no key gives is left out and counted.
 [UdonBehaviourSyncMode(BehaviourSyncMode.None)]
 public class EmuPaste : UdonSharpBehaviour
 {
@@ -12,7 +13,7 @@ public class EmuPaste : UdonSharpBehaviour
     public Text status;
 
     private string pending = "";
-    private int sent;
+    private int sent, skipped;
 
     private void Queue(string text)
     {
@@ -45,6 +46,7 @@ public class EmuPaste : UdonSharpBehaviour
     {
         pending = "";
         sent = 0;
+        skipped = 0;
         field.text = "";
         Show();
     }
@@ -56,12 +58,21 @@ public class EmuPaste : UdonSharpBehaviour
 
     private void Show()
     {
-        if (status != null) status.text = Waiting() > 0 ? Waiting() + " to type" : "";
+        if (status != null) status.text = (Waiting() > 0 ? Waiting() + " to type" : "") + (skipped > 0 ? "  " + skipped + " left out" : "");
     }
 
     void Update()
     {
         if (sent >= pending.Length || keyboard == null) return;
+        if (keyboard.rawKeys)
+        {
+            // key events: four a frame reach the guest, so a character a frame, two where no Shift is in the way
+            if (keyboard.Count() > 8) return;
+            for (int i = 0; i < 2 && sent < pending.Length; i++)
+                if (!keyboard.TypeKey(pending[sent++])) skipped++;
+            Show();
+            return;
+        }
         // the keyboard's queue holds 1,024: it is kept under a quarter of that, for the keys pressed meanwhile
         int room = 256 - keyboard.Count();
         if (room <= 0) return;

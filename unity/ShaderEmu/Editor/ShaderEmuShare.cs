@@ -26,23 +26,52 @@ public static partial class ShaderEmuBuilder
         return rt;
     }
 
+    // What arrives, for every screen that shows a player: a slot a sender (EmuStreams).
+    static EmuStreams MakeStreams(Transform world, EmuMachine machine)
+    {
+        if (world.Find("Streams") != null) Object.DestroyImmediate(world.Find("Streams").gameObject);
+        const int tiles = 300, rowTexels = 128, rowCount = tiles * 5;   // a row a tile, then a row a quarter of a tile at the fine level
+        EmuStreams streams = Udon<EmuStreams>(new GameObject("Streams"));
+        streams.transform.SetParent(world, false);
+        streams.terminal = machine.terminal;
+        streams.decodeMaterial = Mat("ShareDecode", "ShaderEmu/ShareDecode");
+        Material consoleMat = Mat("StreamConsole", "ShaderEmu/Terminal");
+        consoleMat.CopyPropertiesFromMaterial(AssetDatabase.LoadAssetAtPath<Material>(Generated + "/Terminal.mat"));   // the font, the columns and rows
+        streams.consoleMaterial = consoleMat;
+        streams.blackTexture = machine.blackTexture;
+        const int slots = 12;   // as EmuShare's `ask`
+        streams.stores = new Texture2D[slots];
+        streams.pictures = new RenderTexture[slots];
+        streams.grids = new Texture2D[slots];
+        streams.consoles = new RenderTexture[slots];
+        for (int s = 0; s < slots; s++)
+        {
+            Texture2D store = LoadOrCreate(Generated + "/StreamStore" + s + ".asset", () => new Texture2D(rowTexels, rowCount, TextureFormat.RGBA32, false, true));
+            store.filterMode = FilterMode.Point;
+            store.wrapMode = TextureWrapMode.Clamp;
+            streams.stores[s] = store;
+            streams.pictures[s] = PictureTexture("StreamPicture" + s, 1280, 960);
+            int cols = machine.terminal.cols, rows = machine.terminal.rows;
+            Texture2D grid = LoadOrCreate(Generated + "/StreamGrid" + s + ".asset", () => new Texture2D(cols, rows, TextureFormat.RGBA32, false, true));
+            grid.filterMode = FilterMode.Point;
+            grid.wrapMode = TextureWrapMode.Clamp;
+            streams.grids[s] = grid;
+            streams.consoles[s] = PictureTexture("StreamConsole" + s, 640, 480);
+        }
+        return streams;
+    }
+
     // `at`: the middle of the players' panel, between the display and the memory view.
     static void Sharing(Transform world, Transform computer, RectTransform panel, EmuMachine machine, Vector3 at)
     {
         if (computer.Find("Players panel") != null) Object.DestroyImmediate(computer.Find("Players panel").gameObject);
-        foreach (string old in new[] { "Share", "Share player" })
+        foreach (string old in new[] { "Share", "Share player", "Streams" })
             if (world.Find(old) != null) Object.DestroyImmediate(world.Find(old).gameObject);
         for (int i = panel.childCount - 1; i >= 0; i--)
             if (panel.GetChild(i).name.StartsWith("Share ")) Object.DestroyImmediate(panel.GetChild(i).gameObject);
 
-        // a row a tile, then a row a quarter of a tile at the fine level
         const int tiles = 300, rowTexels = 128, rowCount = tiles * 5;
-        Texture2D store = LoadOrCreate(Generated + "/ShareStore.asset", () => new Texture2D(rowTexels, rowCount, TextureFormat.RGBA32, false, true));
-        if (store.width != rowTexels || store.height != rowCount) store.Reinitialize(rowTexels, rowCount);
-        store.filterMode = FilterMode.Point;
-        store.wrapMode = TextureWrapMode.Clamp;
-        Material decodeMat = Mat("ShareDecode", "ShaderEmu/ShareDecode");
-        decodeMat.SetTexture("_Store", store);
+        EmuStreams streams = MakeStreams(world, machine);
 
         EmuShareHub hub = Udon<EmuShareHub>(new GameObject("Share"));
         hub.transform.SetParent(world, false);
@@ -59,9 +88,9 @@ public static partial class ShaderEmuBuilder
         hub.fineB = Target("ShareFineB", 1280, 960, 0);
         hub.changed = Target("ShareChanged", 20, 15, 0);
         hub.fineBlocks = Target("ShareFineBlocks", 640, 240, 0);
-        hub.decodeMaterial = decodeMat;
-        hub.store = store;
-        hub.remotePicture = PictureTexture("RemotePicture", 2048, 1024);
+        hub.streams = streams;
+        streams.hub = hub;
+        Apply(streams);
         hub.displayShowMaterial = machine.displayShowMaterial;
 
         Color dim = new Color(0.62f, 0.68f, 0.76f);
@@ -113,6 +142,8 @@ public static partial class ShaderEmuBuilder
         GameObject panel = GameObject.Find("Control panel");
         if (machine == null || panel == null) throw new System.Exception("no machine in the open scene: run ShaderEmu/Build world");
         Transform computer = GameObject.Find("Computer").transform;
+        CreateProgramAssets();
+        UdonSharpEditor.UdonSharpEditorUtility.CopyUdonToProxy(machine);
         Sharing(machine.transform.parent, computer, panel.GetComponent<RectTransform>(), machine,
                 new Vector3(1.28f, 1.82f, panel.transform.localPosition.z));
         foreach (TextMeshProUGUI label in panel.GetComponentsInChildren<TextMeshProUGUI>())
@@ -121,5 +152,39 @@ public static partial class ShaderEmuBuilder
         EditorSceneManager.MarkSceneDirty(machine.gameObject.scene);
         EditorSceneManager.SaveScene(machine.gameObject.scene);
         Debug.Log("[ShaderEmu] sharing added");
+    }
+
+    // The receiver alone, into a scene that has sharing and the classroom: no panel is made
+    // again, so none loses its plate or its place in the lightmap.
+    [MenuItem("ShaderEmu/Update the streams in the open scene")]
+    public static void UpdateStreams()
+    {
+        EmuMachine machine = Object.FindObjectOfType<EmuMachine>();
+        EmuShareHub hub = Object.FindObjectOfType<EmuShareHub>();
+        EmuStations stations = Object.FindObjectOfType<EmuStations>();
+        if (machine == null || hub == null || stations == null) throw new System.Exception("no machine, sharing or classroom in the open scene");
+        CreateProgramAssets();
+        UdonSharpEditor.UdonSharpEditorUtility.CopyUdonToProxy(machine);
+        EmuStreams streams = MakeStreams(machine.transform.parent, machine);
+        UdonSharpEditor.UdonSharpEditorUtility.CopyUdonToProxy(hub);
+        hub.streams = streams;
+        Apply(hub);
+        streams.hub = hub;
+        Apply(streams);
+        UdonSharpEditor.UdonSharpEditorUtility.CopyUdonToProxy(stations);
+        stations.streams = streams;
+        stations.blackTexture = machine.blackTexture;
+        stations.ownConsole = PictureTexture("StationOwnConsole", 640, 480);
+        Apply(stations);
+        foreach (string old in new[] { "ShareStore.asset", "RemotePicture.renderTexture", "StationDecode.mat", "StationConsole.mat" })
+            AssetDatabase.DeleteAsset(Generated + "/" + old);
+        for (int s = 0; s < 8; s++)
+            foreach (string old in new[] { "StationStore" + s + ".asset", "StationPicture" + s + ".renderTexture", "StationGrid" + s + ".asset",
+                                           "StationConsole" + s + ".renderTexture" })
+                AssetDatabase.DeleteAsset(Generated + "/" + old);
+        AssetDatabase.SaveAssets();
+        EditorSceneManager.MarkSceneDirty(machine.gameObject.scene);
+        EditorSceneManager.SaveScene(machine.gameObject.scene);
+        Debug.Log("[ShaderEmu] streams updated");
     }
 }

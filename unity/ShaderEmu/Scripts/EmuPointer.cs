@@ -30,6 +30,10 @@ public class EmuPointer : UdonSharpBehaviour
     public float tubeBulge = 1.8f;     // the glass is part of a ball of this radius (world/pc.py's BULGE)
     public float tubeGap = 0.024f;     // from a tube's plate to the middle of its glass
     public int stationKeysFrom = -1;   // where the classroom's keyboards start in `keyboards`
+    // The holodecks (EmuHolodeck): a screen a room, a unit quad. Only the sitter's own answers.
+    public Collider[] holoScreens;
+    public float holoAspect = 1.3333334f;
+    [HideInInspector] public int ownHolo = -1;
     [HideInInspector] public int ownStation = -1;
     [HideInInspector] public bool ownDisplay;   // its tube shows the display, not the console
     [HideInInspector] public bool away;   // the game controller is in the player's hands: no beams (EmuGamepad)
@@ -43,6 +47,7 @@ public class EmuPointer : UdonSharpBehaviour
     private bool[] trigger = new bool[2];
     private bool[] grip = new bool[2];
     private int[] pressedOn = new int[2];   // the keyboard a hand holds a key on, or -1
+    private bool[] onTube = new bool[2];    // the display it points at is its own classroom tube
     private int owner = 1;                  // the hand the machine's pointer follows
     private float stick;                    // the right stick, up positive
     private float turned;                   // notches of the wheel not sent yet
@@ -110,7 +115,7 @@ public class EmuPointer : UdonSharpBehaviour
         RaycastHit hit;
         float best = maxDistance;
         int found = Nothing, foundKey = -1;
-        bool landed = false;
+        bool landed = false, tube = false;
         Vector3 at = origin;
         // a beam that meets the open links panel is VRChat's to use, not the machine's pointer
         bool covered = linksPlate != null && machine.linksPanel.activeSelf && linksPlate.Raycast(ray, out hit, best);
@@ -146,10 +151,10 @@ public class EmuPointer : UdonSharpBehaviour
             {
                 // The plate is flat and the glass behind it is part of a ball: the beam goes on from
                 // the plate to the glass, and it is the glass's place that is the picture's.
-                Transform tube = tubes[ownStation].transform;
-                Vector3 from = hit.point - tube.position;
-                float gx = Vector3.Dot(from, tube.right), gy = Vector3.Dot(from, tube.up), gz = 0f;
-                float dx = Vector3.Dot(direction, tube.right), dy = Vector3.Dot(direction, tube.up), dz = Vector3.Dot(direction, tube.forward);
+                Transform plate = tubes[ownStation].transform;
+                Vector3 from = hit.point - plate.position;
+                float gx = Vector3.Dot(from, plate.right), gy = Vector3.Dot(from, plate.up), gz = 0f;
+                float dx = Vector3.Dot(direction, plate.right), dy = Vector3.Dot(direction, plate.up), dz = Vector3.Dot(direction, plate.forward);
                 if (dz > 0.05f)
                 {
                     for (int step = 0; step < 3; step++)
@@ -160,9 +165,9 @@ public class EmuPointer : UdonSharpBehaviour
                         gy += dy * t;
                         gz += dz * t;
                     }
-                    at = tube.position + tube.right * gx + tube.up * gy + tube.forward * gz;
+                    at = plate.position + plate.right * gx + plate.up * gy + plate.forward * gz;
                 }
-                Vector3 size = tube.lossyScale;
+                Vector3 size = plate.lossyScale;
                 Vector3 local = new Vector3(gx / size.x, gy / size.y, 0f);
                 float shape = (float)w / ht;
                 float x = local.x * Mathf.Max(1f, tubeAspect / shape) + 0.5f;
@@ -172,6 +177,30 @@ public class EmuPointer : UdonSharpBehaviour
                     px[h] = (int)(x * w);
                     py[h] = (int)(y * ht);
                     found = Display;
+                    tube = true;
+                }
+            }
+        }
+        if (ownHolo >= 0 && holoScreens != null && ownHolo < holoScreens.Length && holoScreens[ownHolo].Raycast(ray, out hit, best))
+        {
+            landed = true;
+            best = hit.distance;
+            at = hit.point;
+            found = Nothing;
+            int w = machine.OwnWidth(), ht = machine.OwnHeight();
+            if (w > 0 && ht > 0)
+            {
+                // the picture sits centred in the quad, as large as fits, as on the den's wall
+                Vector3 local = holoScreens[ownHolo].transform.InverseTransformPoint(hit.point);
+                float shape = (float)w / ht;
+                float x = local.x * Mathf.Max(1f, holoAspect / shape) + 0.5f;
+                float y = -local.y * Mathf.Max(1f, shape / holoAspect) + 0.5f;
+                if (x >= 0f && y >= 0f && x < 1f && y < 1f)
+                {
+                    px[h] = (int)(x * w);
+                    py[h] = (int)(y * ht);
+                    found = Display;
+                    tube = true;   // this visitor's own machine's, as a classroom tube is
                 }
             }
         }
@@ -201,6 +230,7 @@ public class EmuPointer : UdonSharpBehaviour
         if (found >= 1) keyboards[found - 1].SetHover(h, foundKey);
         target[h] = found;
         key[h] = foundKey;
+        onTube[h] = tube && found == Display;
 
         // nothing is drawn for a hand that points at neither
         beams[h].enabled = drawBeam && landed;
@@ -273,6 +303,7 @@ public class EmuPointer : UdonSharpBehaviour
         if (target[owner] == Display)
         {
             machine.SetPointer(px[owner], py[owner], (trigger[owner] ? 1 : 0) | (grip[owner] ? 2 : 0));
+            machine.pointerOwn = onTube[owner];
             // the wheel: the mouse's on desktop, the right stick in VR at up to 12 notches a second
             if (player.IsUserInVR()) turned += stick * 12f * Time.deltaTime;
             else turned += Input.GetAxis("Mouse ScrollWheel") * 10f;

@@ -316,6 +316,12 @@ public static partial class ShaderEmuBuilder
                 label.enabled = true;
                 label.ForceMeshUpdate(true, true);
                 TMP_TextInfo text = label.textInfo;
+                if (text == null || text.characterInfo == null)
+                {
+                    // (a label that has never been awake has no glyphs to give: one such stopped every panel after it)
+                    Debug.LogWarning("[ShaderEmu] " + name + ": the label " + label.name + " has no text laid out; its lettering is left out");
+                    continue;
+                }
                 for (int c = 0; c < text.characterCount; c++)
                 {
                     TMP_CharacterInfo info = text.characterInfo[c];
@@ -688,7 +694,10 @@ public static partial class ShaderEmuBuilder
         foreach (Graphic graphic in still) graphic.enabled = false;
     }
 
-    static void Retro(Transform world)
+    // onlyNew: just the panels that have no plate yet. A plate made again loses its place in the
+    // baked lightmap, so a panel added to a baked scene is styled alone, and its plate takes
+    // the probes' light until the next bake.
+    static void Retro(Transform world, bool onlyNew = false)
     {
         Sprite raised = UiSprite("Raised", 6), sunken = UiSprite("Sunken", 6), cap = UiSprite("Keycap", 16, true), paper = UiSprite("Paper", 0);
         TMP_FontAsset sans = RetroFont("IBMPlexSansCondensed-Medium"), bold = RetroFont("IBMPlexSansCondensed-Bold");
@@ -699,8 +708,11 @@ public static partial class ShaderEmuBuilder
         foreach (Canvas canvas in world.GetComponentsInChildren<Canvas>(true))
         {
             if (canvas.transform.parent != null && canvas.transform.parent.GetComponentInParent<Canvas>() != null) continue;   // a slider's own
-            bool shown = canvas.gameObject.activeSelf;
-            Hidden[canvas] = !shown;
+            if (canvas.name.EndsWith(" hot") || canvas.name == "Controller notice") continue;   // keys with nothing to show over a model's own; a notice that moves
+            bool shown = canvas.gameObject.activeSelf, plain = canvas.GetComponent<EmuKeyboard>() == null && canvas.name != "About" &&
+                 canvas.name != "Signs" && !canvas.name.EndsWith(" name") && canvas.name != "Memory legend" && canvas.name != "CPU sign";
+            if (onlyNew && (!plain || canvas.transform.Find(canvas.name + " plate") != null)) continue;
+            Hidden[canvas] = onlyNew || !shown;
             canvas.gameObject.SetActive(true);   // one that opens later is drawn as it will be
             EmuKeyboard keyboard = canvas.GetComponent<EmuKeyboard>();
             if (keyboard != null) KeyboardLook(keyboard, bold, monoBold);
@@ -711,6 +723,7 @@ public static partial class ShaderEmuBuilder
             else PanelLook(canvas, raised, sunken, cap, sans, bold, mono, changing, painted);
             canvas.gameObject.SetActive(shown);
         }
+        if (onlyNew) return;
         // what the behaviours paint their own buttons with: nothing, or lit from within
         foreach (EmuScope scope in world.GetComponentsInChildren<EmuScope>(true))
         {
@@ -731,6 +744,16 @@ public static partial class ShaderEmuBuilder
             terminal.tabNewsColour = new Color(0.45f, 1f, 0.45f, 0.40f);
             Apply(terminal);
         }
+    }
+
+    // For whatever adds a panel to a scene that is baked: the room's look for it, at once.
+    public static void RetroNewPanels()
+    {
+        GameObject world = GameObject.Find("ShaderEmu");
+        if (world == null) return;
+        Retro(world.transform, true);
+        AssetDatabase.SaveAssets();
+        EditorSceneManager.MarkSceneDirty(world.scene);
     }
 
     [MenuItem("ShaderEmu/Restyle the panels in the open scene")]

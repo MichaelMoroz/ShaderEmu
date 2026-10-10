@@ -682,6 +682,7 @@ public static partial class ShaderEmuBuilder
               "LTCGI by pimaker, VRC Light Volumes by RED_SIM, Mochie's shaders: the room's light and rain\n" +
               "Cascadia Mono by Microsoft: the console's font\n" +
               "ShaderAudio by lox9973: how sound gets out of a shader\n" +
+              "minimp3 by lieff and dr_flac by David Reid: the music player's decoders\n" +
               "VRChat's Worlds SDK, UdonSharp by Merlin, TextMesh Pro and Unity: this room",
               right, 200, rightWide, 1100, 33, TextAnchor.UpperLeft, body);
 

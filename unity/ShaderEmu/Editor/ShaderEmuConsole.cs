@@ -78,6 +78,90 @@ public static partial class ShaderEmuBuilder
         Apply(paste);
     }
 
+    // Along the display keyboard's far edge, the size of the console's strip there (the desk's
+    // model has room for that and no more): a row for an address the machine is told to open
+    // (docs/open.md), and a row whose text is typed at the display as key events.
+    static void DisplayFields(Transform computer, EmuMachine machine, EmuKeyboard keys)
+    {
+        if (computer.Find("Display paste") != null) Object.DestroyImmediate(computer.Find("Display paste").gameObject);
+        Color back = new Color(0.05f, 0.055f, 0.07f), dim = new Color(0.62f, 0.68f, 0.76f), amber = new Color(1f, 0.8f, 0.3f);
+        TextMeshProUGUI unused;
+        RectTransform board = keys.GetComponent<RectTransform>();
+        const float height = 150f, row = 62f, name = 150f, key = 150f;
+        float width = board.sizeDelta.x;
+        Vector3 at = board.localPosition + board.localRotation * new Vector3(0, (board.sizeDelta.y / 2 + height / 2 + 14f) * 0.001f, 0);
+        RectTransform panel = Panel(computer, "Display paste", at, board.localEulerAngles, width, height, back);
+        Font font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        float fieldX = 10 + name + 10, fieldWidth = width - fieldX - 3 * (key + 10) - 10;
+
+        // the link: an https address, and the key that hands it to the machine
+        Label(panel, "Link title", "Open a link", 12, 8, name, 30, 22, TextAnchor.MiddleLeft, dim);
+        machine.openLabel = Label(panel, "Link says", "", 12, 38, name, 30, 14, TextAnchor.MiddleLeft, amber);
+        RectTransform linkBox = Child(panel, "Link", fieldX, 8, fieldWidth + key + 10, row);
+        Plate(linkBox, new Color(0.14f, 0.16f, 0.22f));
+        Text linkText = Child(linkBox, "Text", 10, 6, fieldWidth + key - 10, row - 12).gameObject.AddComponent<Text>();
+        linkText.font = font;
+        linkText.fontSize = 22;
+        linkText.color = Color.white;
+        linkText.alignment = TextAnchor.MiddleLeft;
+        linkText.supportRichText = false;
+        VRC.SDK3.Components.VRCUrlInputField link = linkBox.gameObject.AddComponent<VRC.SDK3.Components.VRCUrlInputField>();
+        link.textComponent = linkText;
+        link.targetGraphic = linkBox.GetComponent<Image>();
+        machine.openField = link;
+        OnClick(MakeButton(panel, "Open", "Open", width - 2 * (key + 10), 8, 2 * key + 10, row, 24, out unused), machine, "OpenLink");
+
+        // the text: typed at the display, key by key
+        Label(panel, "Title", "Type text", 12, 80, name, 30, 22, TextAnchor.MiddleLeft, dim);
+        RectTransform box = Child(panel, "Field", fieldX, 80, fieldWidth, row);
+        Plate(box, new Color(0.14f, 0.16f, 0.22f));
+        Text text = Child(box, "Text", 10, 6, fieldWidth - 20, row - 12).gameObject.AddComponent<Text>();
+        text.font = font;
+        text.fontSize = 22;
+        text.color = Color.white;
+        text.alignment = TextAnchor.UpperLeft;
+        text.supportRichText = false;
+        InputField field = box.gameObject.AddComponent<InputField>();
+        field.textComponent = text;
+        field.targetGraphic = box.GetComponent<Image>();
+        field.lineType = InputField.LineType.MultiLineNewline;
+        field.characterLimit = 0;
+        EmuPaste paste = Udon<EmuPaste>(panel.gameObject);
+        paste.field = field;
+        paste.keyboard = keys;
+        float x = fieldX + fieldWidth + 10;
+        OnClick(MakeButton(panel, "Type", "Type it", x, 80, key, row, 22, out unused), paste, "Send");
+        OnClick(MakeButton(panel, "Type line", "+ Enter", x + key + 10, 80, key, row, 22, out unused), paste, "SendLine");
+        OnClick(MakeButton(panel, "Drop", "Clear", x + 2 * (key + 10), 80, key, row, 22, out unused), paste, "Drop");
+        Text status = Child(panel, "Status", 12, 110, name, 30).gameObject.AddComponent<Text>();
+        status.font = font;
+        status.fontSize = 14;
+        status.color = amber;
+        status.alignment = TextAnchor.MiddleLeft;
+        status.raycastTarget = false;
+        paste.status = status;
+        Apply(paste);
+        Apply(machine);
+    }
+
+    [MenuItem("ShaderEmu/Add the display's paste and link fields to the open scene")]
+    public static void AddDisplayFields()
+    {
+        EmuMachine machine = Object.FindObjectOfType<EmuMachine>();
+        EmuKeyboard keys = null;
+        foreach (EmuKeyboard k in Object.FindObjectsOfType<EmuKeyboard>())
+            if (k.name == "Display keyboard") keys = k;
+        if (machine == null || keys == null) throw new System.Exception("no machine in the open scene: run ShaderEmu/Build world");
+        CreateProgramAssets();
+        UdonSharpEditor.UdonSharpEditorUtility.CopyUdonToProxy(machine);
+        DisplayFields(keys.transform.parent, machine, keys);
+        RetroNewPanels();   // never left as a bare canvas
+        AssetDatabase.SaveAssets();
+        EditorSceneManager.MarkSceneDirty(machine.gameObject.scene);
+        EditorSceneManager.SaveScene(machine.gameObject.scene);
+        Debug.Log("[ShaderEmu] the display's paste and link fields added");
+    }
+
     // The switch where a visitor looks for it: a small sign standing on the computer's tower,
     // leaning back, with a button that is red while the computer is off and green while it runs.
     // (The control panel's own button stays.)

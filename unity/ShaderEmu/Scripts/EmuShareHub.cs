@@ -8,23 +8,22 @@ using VRC.Udon.Common.Interfaces;
 
 // Players see each other's machines (docs/share.md). This is local, one a client: it fills
 // this player's EmuShare with the console's changed rows and the display's changed tiles
-// while somebody watches, and puts the watched player's console and display on the screens
-// here. A watcher's keys and pointer go the other way, when the owner allows it.
+// while somebody shows them, and puts the watched player's console and display on the wall
+// here (EmuStreams receives them). A watcher's keys and pointer go the other way, when the
+// owner allows it.
 [UdonBehaviourSyncMode(BehaviourSyncMode.None)]
 public class EmuShareHub : UdonSharpBehaviour
 {
     public EmuMachine machine;
     public EmuTerminal terminal;
     public EmuKeyboard consoleKeyboard, gpuKeyboard;
+    public EmuStreams streams;              // what arrives, for every screen that shows a player
     public Material encodeMaterial;         // ShareEncode.shader
     public RenderTexture captureA, captureB;   // 640 x 480 with mipmaps: this capture and the last
     public RenderTexture atlas;             // 128 x 1500: a row a tile, then a row a quarter of a tile at the fine level
     public RenderTexture fineA, fineB;      // 1280 x 960: this capture and the last at the display's own size
     public RenderTexture changed;           // 20 x 15: which tiles changed
     public RenderTexture fineBlocks;        // 640 x 240: the fine level's blocks
-    public Material decodeMaterial;         // ShareDecode.shader
-    public Texture2D store;                 // 128 x 1500: the tiles received, laid out as the atlas
-    public RenderTexture remotePicture;     // the watched display, decoded
     public Material displayShowMaterial;    // the wall
     public TextMeshProUGUI watchLabel, allowLabel;
     // The panel by the display: "Automatic", "My own", then a page of the other players.
@@ -33,19 +32,23 @@ public class EmuShareHub : UdonSharpBehaviour
     public TextMeshProUGUI[] rowLabels;
     public GameObject moreButton;
     public Color rowColour, pickedColour;
-    public EmuStations stations;            // the classroom's computers: they show whoever has one (docs/stations.md)
     public bool selfTest;                   // watch this machine through the stream
     public bool netTest;                    // two clients test themselves and log (docs/share.md)
 
     private const int TileCols = 20, TileCount = 300, RowBytes = 512;
-    private const int ChangedAt = 504, FlatAt = 505, LevelAt = 508, StampAt = 509;   // bytes of a tile's row
+    private const int ChangedAt = 504, FlatAt = 505;   // bytes of a tile's row
     // The fine level: the display's own pixels, where the stream is half its size. A row a
     // quarter of a tile from row 300: its length, (in the store) present and stamp, its bytes.
-    private const int FineAt = 300, FineRows = 1200, FineMost = 400, PresentAt = 2, FineStampAt = 3;
-    // Two ticks of three carry a packet: 8.3 KB/s, of the 8 to 10 a client gets out in
-    // practice for everything it sends (VRChat's limit is a client's, not an object's).
-    private const int PacketMost = 1250, ConsoleMost = 800, HeaderBytes = 13;
+    private const int FineAt = 300, FineMost = 400;
+    // Two ticks of three carry a packet: 7.7 KB/s with the fields beside it, of the 8 to 10 a
+    // client gets out in practice for everything it sends (VRChat's limit is a client's).
+    private const int PacketMost = 1150, ConsoleMost = 800, HeaderBytes = 17;
+    private const int NetBatchMost = 600;   // a sending's share for the network: one full packet, or several small
+    private byte[] netScratch = new byte[NetBatchMost + 600];
+    [HideInInspector] public int netBatches, netTaken;
     private const float TickSeconds = 0.1f;   // input every tick, a packet on two of three
+    // What each of the last packets carried, to send again when a receiver says one was lost.
+    private const int Kept = 32, KeptMost = 96;
 
     private EmuShare mine;
     private EmuShare[] shares = new EmuShare[100];   // the other players'
@@ -63,7 +66,7 @@ public class EmuShareHub : UdonSharpBehaviour
 
     // sending
     private RenderTexture now, before, fineNow, fineBefore;
-    private byte[] atlasBytes = new byte[(TileCount + FineRows) * RowBytes];
+    private byte[] atlasBytes = new byte[(TileCount + 1200) * RowBytes];
     private int[] have = new int[TileCount];   // the level each tile was last sent at; 3: stale
     private int[] fineHave = new int[TileCount];   // a bit a quarter of the tile sent at the fine level
     private bool fineOn, codeAll = true;
@@ -78,33 +81,36 @@ public class EmuShareHub : UdonSharpBehaviour
     private int pointerNow;
     private bool pointerDue;
     private float pointerSentAt;
+    private int[] keptSeq = new int[Kept];
+    private int[] keptCount = new int[Kept];
+    private int[] keptWhat = new int[Kept * KeptMost];   // a tile and its level << 12; 0x10000 + a console row
+    private int building;             // the place in the ring of the packet being built
+    private bool refreshDue;
+    private float refreshedAt = -10f, speedAt;
+    private int speedAll, speedCore;
 
-    // receiving
-    private byte[] storeBytes = new byte[(TileCount + FineRows) * RowBytes];
-    private int gotScale = 1, stamp;
-    private Color32[] remoteGrid;
-    private int cols, rows;
-    private bool haveSeq;
-    private int lastSeq, gotW, gotH;
-    private float askedAt;
+    // the wall
+    private int wallSlot = -1, wallVersion = -1;
+    private Color32[] blankGrid;
     private int pointerFrom;          // the watcher whose pointer the machine follows
     private float pointerAt;
 
     private int page;                 // of the players' rows
-    private int sentPackets, sentBytes, gotPackets, gotBytes, gaps, tookEvents;
+    private int sentPackets, sentBytes, tookEvents, repaired, refreshed;
     private float testAt, testTypeAt;
     private bool testStarted, testTyped;
 
     void Start()
     {
-        cols = terminal.cols;
-        rows = terminal.rows;
-        remoteGrid = new Color32[cols * rows];
+        blankGrid = new Color32[terminal.cols * terminal.rows];
+        Color32 blank = new Color32(32, 7, 0, 255);
+        for (int i = 0; i < blankGrid.Length; i++) blankGrid[i] = blank;
         now = captureA;
         before = captureB;
         fineNow = fineA;
         fineBefore = fineB;
         for (int t = 0; t < TileCount; t++) have[t] = 3;
+        for (int k = 0; k < Kept; k++) keptSeq[k] = -1;
         WallShowsOwn();   // the material is an asset: it keeps whatever the last session left
         ShowLabels();
     }
@@ -130,6 +136,7 @@ public class EmuShareHub : UdonSharpBehaviour
 
     private void PickRow(int row)
     {
+        Prune();
         int index = page * 8 + row;
         if (index < shareCount) Pick(shares[index].ownerId);
     }
@@ -156,10 +163,11 @@ public class EmuShareHub : UdonSharpBehaviour
 
     private void ShowLabels()
     {
+        Prune();
         if (allowLabel != null) allowLabel.text = "Others may use my computer: " + (allow ? "yes" : "no");
         if (watchLabel == null) return;
         string text = "Showing your own computer";
-        if (target != 0 && targetShare != null)
+        if (target != 0 && Utilities.IsValid(targetShare))
             text = "Showing " + (target == myId ? "your own, as others see it" : targetShare.ownerName + "'s computer")
                  + ((targetShare.flags & 1) == 0 ? ", which is off" : (targetShare.flags & 2) != 0 ? ": you may use it" : ": look only");
         watchLabel.text = text + "\n" + (viewers == 0 ? "Nobody is watching yours" : viewers + " watching yours");
@@ -182,7 +190,43 @@ public class EmuShareHub : UdonSharpBehaviour
     // ---- who is here ----
 
     public override void OnPlayerJoined(VRCPlayerApi player) { rosterDirty = true; }
-    public override void OnPlayerLeft(VRCPlayerApi player) { rosterDirty = true; }
+
+    // Their object is destroyed with them: it leaves the list now, before anything reads it.
+    public override void OnPlayerLeft(VRCPlayerApi player)
+    {
+        rosterDirty = true;
+        if (Utilities.IsValid(player)) Forget(player.playerId);
+        Prune();
+    }
+
+    private void Forget(int id)
+    {
+        for (int i = 0; i < shareCount; i++)
+        {
+            if (Utilities.IsValid(shares[i]) && shares[i].ownerId != id) continue;
+            shares[i] = shares[--shareCount];
+            shares[shareCount] = null;
+            i--;
+        }
+        if (target == id) targetShare = null;
+        if (pointerFrom == id) DropPointer();
+        stateDirty = true;
+    }
+
+    // No object in the list is a destroyed one: called by whoever is about to read the list.
+    public void Prune()
+    {
+        for (int i = 0; i < shareCount; i++)
+        {
+            if (Utilities.IsValid(shares[i])) continue;
+            shares[i] = shares[--shareCount];
+            shares[shareCount] = null;
+            i--;
+            stateDirty = true;
+        }
+        if (!Utilities.IsValid(targetShare)) targetShare = null;
+        if (!Utilities.IsValid(mine)) mine = null;
+    }
 
     // A player's object may arrive after the player: asked again while one is missing.
     private void Roster()
@@ -206,7 +250,7 @@ public class EmuShareHub : UdonSharpBehaviour
                 {
                     if (!Utilities.IsValid(objects[k])) continue;
                     EmuShare share = objects[k].GetComponent<EmuShare>();
-                    if (share != null) found = share;
+                    if (Utilities.IsValid(share)) found = share;
                 }
             }
             if (found == null)
@@ -214,6 +258,8 @@ public class EmuShareHub : UdonSharpBehaviour
                 incomplete = true;
                 continue;
             }
+            // (an object made from a template older than a field has that field empty)
+            if (found.seenAsk == null || found.seenAsk.Length != found.ask.Length) found.seenAsk = new int[found.ask.Length];
             found.ownerId = player.playerId;
             found.ownerName = player.displayName;
             if (player.isLocal) mine = found;
@@ -225,14 +271,15 @@ public class EmuShareHub : UdonSharpBehaviour
     {
         if (id == myId) return mine;
         for (int i = 0; i < shareCount; i++)
-            if (shares[i].ownerId == id) return shares[i];
+            if (Utilities.IsValid(shares[i]) && shares[i].ownerId == id) return shares[i];
         return null;
     }
 
-    // Whose machine the screens show: the one picked; left to itself this player's own while
+    // Whose machine the wall shows: the one picked; left to itself this player's own while
     // it is on, else the first other player's that is.
     private void Choose()
     {
+        Prune();
         int want = 0;
         if (selfTest) want = myId;
         else if (picked > 0)
@@ -255,25 +302,18 @@ public class EmuShareHub : UdonSharpBehaviour
         targetShare = to == 0 ? null : Find(to);
         machine.showRemote = to != 0;
         machine.inputAway = to != 0 && to != myId;
-        haveSeq = false;
-        gotW = 0;
-        gotH = 0;
         outHead = outTail;
         pointerNow = 0;
         pointerDue = true;
+        streams.SetWant(0, to);
+        wallSlot = -1;
+        wallVersion = -1;
         if (to != 0)
         {
-            Color32 blank = new Color32(32, 7, 0, 255);
-            for (int i = 0; i < remoteGrid.Length; i++) remoteGrid[i] = blank;
-            ForgetStore();
-            terminal.ShowRemote(remoteGrid, 0, 0, 0);
+            terminal.ShowRemote(blankGrid, 0, 0, 0);
             machine.shownWidth = 0;
             machine.shownHeight = 0;
-            ShowStore(true);
-            displayShowMaterial.SetTexture("_MainTex", remotePicture);
-            displayShowMaterial.SetVector("_TexSize", new Vector4(remotePicture.width, remotePicture.height, 0, 0));
             displayShowMaterial.SetVector("_Size", Vector4.zero);
-            if (to == myId) FullRefresh();
         }
         else
         {
@@ -285,27 +325,61 @@ public class EmuShareHub : UdonSharpBehaviour
         ShowLabels();
     }
 
-    // Who watches this player, who of them is new, and who has asked for everything again.
+    // The wall and the console's screen, from the slot the watched player's stream is in.
+    private void Wall()
+    {
+        if (target == 0) return;
+        int slot = streams.SlotOf(target);
+        if (slot != wallSlot)
+        {
+            wallSlot = slot;
+            wallVersion = -1;
+            if (slot >= 0)
+            {
+                Texture picture = streams.Picture(slot);
+                displayShowMaterial.SetTexture("_MainTex", picture);
+                displayShowMaterial.SetVector("_TexSize", new Vector4(picture.width, picture.height, 0, 0));
+            }
+        }
+        if (slot < 0 || streams.Version(slot) == wallVersion) return;
+        wallVersion = streams.Version(slot);
+        terminal.ShowRemote(streams.Cells(slot), streams.Top(slot), streams.CursorX(slot), streams.CursorY(slot));
+        displayShowMaterial.SetVector("_Size", new Vector4(streams.Width(slot), streams.Height(slot), 0, 0));
+        machine.shownWidth = streams.DisplayWidth(slot);
+        machine.shownHeight = streams.DisplayHeight(slot);
+    }
+
+    // Who shows this player on some screen, who of them is new or lost a packet, and who
+    // watches on the wall (whose keys and pointer may come).
     private void Scan()
     {
-        int count = selfTest ? 1 : 0;
+        int count = selfTest ? 1 : 0, me = myId & 0xffff;
         for (int i = 0; i < shareCount; i++)
         {
             EmuShare share = shares[i];
+            bool shows = false;
+            int[] ask = share.ask, lost = share.lost, seen = share.seenAsk;
+            for (int k = 0; k < ask.Length && k < seen.Length; k++)
+            {
+                int word = ask[k];
+                if ((word & 0xffff) != me || word == 0)
+                {
+                    seen[k] = word;
+                    continue;
+                }
+                shows = true;
+                if (word == seen[k]) continue;
+                seen[k] = word;
+                int from = lost[k] & 0xffff, n = (lost[k] >> 16) & 255;
+                if (n == 0 || !Repair(from, n)) refreshDue = true;
+            }
+            if (shows) count++;
             if (share.watching == myId)
             {
-                count++;
                 if (!share.watchedMe)
                 {
                     share.watchedMe = true;
                     share.seenInput = share.inputSeq;
-                    share.seenResync = share.resync;
-                    FullRefresh();
-                }
-                else if (share.resync != share.seenResync)
-                {
-                    share.seenResync = share.resync;
-                    FullRefresh();
                 }
             }
             else if (share.watchedMe)
@@ -313,17 +387,49 @@ public class EmuShareHub : UdonSharpBehaviour
                 share.watchedMe = false;
                 if (pointerFrom == share.ownerId) DropPointer();
             }
-            // somebody's copy of this player's station wants everything again
-            if (share.askFrom == myId && share.askCount != share.seenAsk)
-            {
-                share.seenAsk = share.askCount;
-                FullRefresh();
-            }
         }
-        // a station is watched by everybody in the room
-        if (count == 0 && stations != null && mine != null && mine.station >= 0 && shareCount > 0) count = 1;
         viewers = count;
         ShowLabels();
+    }
+
+    // What packets `from` to `from + n - 1` (their numbers' low 16 bits) carried goes out again.
+    // False when one of them is no longer kept.
+    private bool Repair(int from, int n)
+    {
+        if (n > Kept) return false;
+        for (int i = 0; i < n; i++)
+        {
+            int k = -1;
+            for (int j = 0; j < Kept; j++)
+                if (keptSeq[j] >= 0 && (keptSeq[j] & 0xffff) == ((from + i) & 0xffff)) k = j;
+            if (k < 0) return false;
+            for (int e = 0; e < keptCount[k]; e++)
+            {
+                int what = keptWhat[k * KeptMost + e];
+                if (what >= 0x10000) terminal.rowChanged[(what - 0x10000) % terminal.rows] = true;
+                else
+                {
+                    int t = what & 0xfff, level = what >> 12;
+                    if (level >= 4) fineHave[t] &= ~(1 << (level - 4));
+                    else
+                    {
+                        have[t] = 3;
+                        fineHave[t] = 0;
+                    }
+                }
+            }
+            if (keptCount[k] >= KeptMost) return false;   // more than is kept of one packet
+        }
+        work = true;
+        headerSent = false;
+        repaired++;
+        return true;
+    }
+
+    private void Keep(int what)
+    {
+        if (keptCount[building] < KeptMost) keptWhat[building * KeptMost + keptCount[building]] = what;
+        if (keptCount[building] < KeptMost) keptCount[building]++;
     }
 
     private void DropPointer()
@@ -342,16 +448,18 @@ public class EmuShareHub : UdonSharpBehaviour
         VRCPlayerApi me = Networking.LocalPlayer;
         if (me == null) return;
         myId = me.playerId;
+        Prune();
         if (rosterDirty || (incomplete && Time.time >= retryAt)) Roster();
         if (mine == null) return;
         if (netTest) NetTest();
+        if (lanTest) LanTest();
 
         bool on = machine.IsOn();
         if (on != wasOn)
         {
             wasOn = on;
             stateOut = true;
-            FullRefresh();
+            refreshDue = true;
         }
         if (stateDirty)
         {
@@ -359,24 +467,37 @@ public class EmuShareHub : UdonSharpBehaviour
             Scan();
         }
         Choose();
+        Wall();
+        // everything again, for a new screen or one that lost too much: not more often than
+        // every five seconds, whoever asks
+        if (refreshDue && Time.time - refreshedAt >= 5f)
+        {
+            refreshDue = false;
+            refreshedAt = Time.time;
+            refreshed++;
+            FullRefresh();
+        }
         if (pointerFrom != 0 && Time.time - pointerAt > 2f) DropPointer();
         if (machine.inputAway) Drain();
         if (mine.Busy() || Networking.IsClogged) return;
 
+        // the network's packets go ahead of the display, which while they flow is sent half as often
+        bool net = MoveNet();
         int length = 0;
-        if (ticks % 3 != 0 && viewers > 0)
+        if (ticks % 3 != 0 && viewers > 0 && !(net && (ticks & 1) == 0))
         {
             if (on && !reading) Capture();
             length = Build(on);
         }
         bool typed = MoveInput();
-        if (length == 0 && !typed && !stateOut) return;
+        if (length == 0 && !typed && !stateOut && !net) return;
         if (length > 0)
         {
             byte[] packet = new byte[length];
             System.Buffer.BlockCopy(scratch, 0, packet, 0, length);
             mine.packet = packet;
             mine.seq++;
+            keptSeq[building] = mine.seq;
             sentPackets++;
             sentBytes += length;
         }
@@ -385,7 +506,7 @@ public class EmuShareHub : UdonSharpBehaviour
         mine.watching = target == myId ? 0 : target;
         mine.Send();
         stateOut = false;
-        if (selfTest && length > 0) Consume(mine);
+        if (selfTest && length > 0) streams.Received(mine);
     }
 
     // The first player in the instance turns their machine on and lets it be used; the others
@@ -402,7 +523,7 @@ public class EmuShareHub : UdonSharpBehaviour
                 stateOut = true;
             }
         }
-        bool drive = target != 0 && targetShare != null && (targetShare.flags & 3) == 3;
+        bool drive = target != 0 && Utilities.IsValid(targetShare) && (targetShare.flags & 3) == 3;
         if (!drive) testTypeAt = Time.time + 45f;
         else if (!testTyped && Time.time >= testTypeAt)
         {
@@ -412,30 +533,81 @@ public class EmuShareHub : UdonSharpBehaviour
         if (Time.time < testAt) return;
         testAt = Time.time + 2f;
         int[] levels = new int[4];
-        for (int t = 0; t < TileCount; t++) levels[target != 0 ? storeBytes[t * RowBytes + LevelAt] : have[t]]++;
+        if (target != 0 && wallSlot >= 0) levels = streams.Levels(wallSlot);
+        else for (int t = 0; t < TileCount; t++) levels[have[t]]++;
         string found = "";
-        for (int r = 0; r < rows; r++)
+        int cols = terminal.cols;
+        for (int r = 0; r < terminal.rows; r++)
         {
             string line = "";
             if (target != 0)
-                for (int x = 0; x < 12; x++) line += (char)remoteGrid[r * cols + x].r;
+            {
+                if (wallSlot < 0) continue;
+                Color32[] grid = streams.Cells(wallSlot);
+                for (int x = 0; x < 12; x++) line += (char)grid[r * cols + x].r;
+            }
             else line = terminal.LineText(r).Substring(0, 12);
             if (line.StartsWith("NET-")) found += line.Trim() + " ";
         }
         Debug.Log("[ShareTest] t=" + Time.time.ToString("F0") + " me=" + myId + " master=" + Networking.IsMaster + " players=" + (shareCount + 1)
                   + " on=" + machine.IsOn() + " target=" + target + " viewers=" + viewers + " sent=" + sentPackets + "/" + sentBytes
-                  + " got=" + gotPackets + "/" + gotBytes + " gaps=" + gaps + " stream=" + (target != 0 ? gotW + "x" + gotH : sendW + "x" + sendH)
+                  + " got=" + streams.Packets() + " gaps=" + streams.Gaps() + " repaired=" + repaired + " refreshed=" + refreshed
+                  + " stream=" + (target != 0 && wallSlot >= 0 ? streams.Width(wallSlot) + "x" + streams.Height(wallSlot) : sendW + "x" + sendH)
                   + " tiles=" + levels[0] + "/" + levels[1] + "/" + levels[2] + "/" + levels[3] + " events=" + tookEvents
                   + " clogged=" + Networking.IsClogged + " wall=" + displayShowMaterial.GetTexture("_MainTex").name + ":"
                   + displayShowMaterial.GetVector("_Size").x + " lines=[" + found + "]");
     }
 
-    public void SendFailed()
+    // Two real clients test the network (docs/lan.md): each switches its machine on, pings the
+    // other's a while after both are there, then starts a two-player game of Doom with it,
+    // and logs what its machine sent, got and printed.
+    public bool lanTest;
+    private float lanAt, lanPingAt, lanGameAt;
+    private bool lanStarted, lanPinged, lanGame;
+
+    private void LanTest()
     {
-        FullRefresh();
+        if (!lanStarted)
+        {
+            lanStarted = true;
+            machine.PowerOn();
+        }
+        int other = shareCount > 0 && Utilities.IsValid(shares[0]) ? shares[0].ownerId : 0;
+        if (other == 0 || !IsOn(other)) lanPingAt = Time.time + 40f;
+        else if (!lanPinged && Time.time >= lanPingAt)
+        {
+            lanPinged = true;
+            consoleKeyboard.TypeText("ping -c 5 10.0." + (other >> 8) + "." + (other & 255) + " | tail -2\n");
+        }
+        if (Time.time < lanAt) return;
+        lanAt = Time.time + 5f;
+        string found = "", last = "";
+        bool answered = false;
+        for (int r = 0; r < terminal.rows; r++)
+        {
+            string line = terminal.LineText(r);
+            if (line.Contains("packets transmitted")) answered = true;
+            if (line.Trim().Length > 0) last = line.Trim();
+            if (line.Contains("packets transmitted") || line.Contains("nodes)") || line.Contains("doomstat: ") && line.Contains("tics")) found += line.Trim() + " | ";
+        }
+        // the game after the ping: the lower number is player 1, and each names the other's address
+        if (!answered) lanGameAt = Time.time + 5f;
+        else if (!lanGame && Time.time >= lanGameAt)
+        {
+            lanGame = true;
+            consoleKeyboard.TypeText("doom -net " + (myId < other ? 1 : 2) + " .10.0." + (other >> 8) + "." + (other & 255) + "\n");
+        }
+        Debug.Log("[LanTest] t=" + Time.time.ToString("F0") + " me=" + myId + " other=" + other + " on=" + machine.IsOn() + " pinged=" + lanPinged + " game=" + lanGame
+                  + " sent=" + machine.netSent + " received=" + machine.netReceived + " batches=" + netBatches + " taken=" + netTaken
+                  + " lines=[" + found + "] last=[" + last + "]");
     }
 
-    // Everything goes out again: someone started watching, or lost a packet.
+    public void SendFailed()
+    {
+        refreshDue = true;
+    }
+
+    // Everything goes out again.
     private void FullRefresh()
     {
         terminal.MarkAll();
@@ -546,6 +718,7 @@ public class EmuShareHub : UdonSharpBehaviour
         b[at + 1] = (byte)(v >> 8);
         System.Buffer.BlockCopy(atlasBytes, t * RowBytes + (level == 0 ? 0 : level == 1 ? 384 : 480), b, at + 2, size);
         have[t] = level;
+        Keep(v);
         return at + 2 + size;
     }
 
@@ -567,6 +740,7 @@ public class EmuShareHub : UdonSharpBehaviour
         b[at + 3] = (byte)(size >> 8);
         System.Buffer.BlockCopy(atlasBytes, row + 4, b, at + 4, size);
         fineHave[t] |= 1 << part;
+        Keep(v);
         return at + 4 + size;
     }
 
@@ -646,6 +820,13 @@ public class EmuShareHub : UdonSharpBehaviour
     {
         byte[] b = scratch;
         int w = on ? sendW : 0, h = on ? sendH : 0;
+        // the machine's speed, for whoever reads it off its tower: not more often than every two seconds
+        if (Time.time - speedAt >= 2f)
+        {
+            speedAt = Time.time;
+            speedAll = on ? Mathf.Clamp(Mathf.RoundToInt(machine.mipsAll * 10f), 0, 9999) : 0;
+            speedCore = on ? Mathf.Clamp(Mathf.RoundToInt(machine.mipsCore * 10f), 0, 9999) : 0;
+        }
         b[0] = (byte)(on ? 1 : 0);
         b[1] = (byte)terminal.Top();
         b[2] = (byte)terminal.CursorColumn();
@@ -658,21 +839,29 @@ public class EmuShareHub : UdonSharpBehaviour
         b[9] = (byte)(machine.displayWidth >> 8);
         b[10] = (byte)(machine.displayHeight & 255);
         b[11] = (byte)(machine.displayHeight >> 8);
+        b[13] = (byte)(speedAll & 255);
+        b[14] = (byte)(speedAll >> 8);
+        b[15] = (byte)(speedCore & 255);
+        b[16] = (byte)(speedCore >> 8);
+        building = (mine.seq + 1) & (Kept - 1);
+        keptSeq[building] = -1;
+        keptCount[building] = 0;
         int at = HeaderBytes, count = 0;
         bool[] changed = terminal.rowChanged;
-        for (int r = 0; r < rows && at + 3 + 2 * cols <= ConsoleMost; r++)
+        for (int r = 0; r < terminal.rows && at + 3 + 2 * terminal.cols <= ConsoleMost; r++)
         {
             if (!changed[r]) continue;
             changed[r] = false;
             at = terminal.PackRow(r, b, at);
+            Keep(0x10000 + r);
             count++;
         }
         b[12] = (byte)count;
         int tilesAt = at;
         if (w > 0 && haveAtlas && work) at = PutTiles(b, at);
         bool header = !headerSent;
-        for (int i = 0; i < HeaderBytes - 1; i++)
-            if (b[i] != lastHeader[i]) header = true;
+        for (int i = 0; i < HeaderBytes; i++)
+            if (i != 12 && b[i] != lastHeader[i]) header = true;
         if (count == 0 && at == tilesAt && !header) return 0;
         System.Buffer.BlockCopy(b, 0, lastHeader, 0, HeaderBytes);
         headerSent = true;
@@ -690,10 +879,11 @@ public class EmuShareHub : UdonSharpBehaviour
     }
 
     // The keyboards and the pointer are not the local machine's while another is shown: to
-    // its owner if they allow it, else nowhere.
+    // its owner if they allow it, else nowhere. (A classroom place's are its owner's machine's
+    // whatever the wall shows, and never come this way.)
     private void Drain()
     {
-        bool drive = targetShare != null && (targetShare.flags & 3) == 3;
+        bool drive = Utilities.IsValid(targetShare) && (targetShare.flags & 3) == 3;
         while (consoleKeyboard.Count() > 0)
         {
             int c = consoleKeyboard.Pop() & 0xff;
@@ -705,7 +895,7 @@ public class EmuShareHub : UdonSharpBehaviour
             if (drive) Queue(2 << 24 | e);
         }
         int p = 0;
-        if (drive && machine.pointerOn)
+        if (drive && machine.pointerOn && !machine.pointerOwn)
             p = (machine.pointerX & 0xfff) | (machine.pointerY & 0xfff) << 12 | (machine.pointerButtons & 7) << 24 | 1 << 28;
         // said again twice a second while it is there: the owner drops a pointer gone quiet
         if (p == pointerNow && (p == 0 || Time.time - pointerSentAt < 0.5f)) return;
@@ -730,21 +920,71 @@ public class EmuShareHub : UdonSharpBehaviour
         return any;
     }
 
+    // The machine's packets for the others (docs/lan.md): as many as fit a sending's share.
+    private bool MoveNet()
+    {
+        int at = 0;
+        while (machine.NetWaiting() > 0 && at + 2 + machine.NetNextLength() <= NetBatchMost)
+        {
+            int length = machine.NetPop(netScratch, at + 2);
+            netScratch[at] = (byte)(length & 255);
+            netScratch[at + 1] = (byte)(length >> 8);
+            at += 2 + length;
+        }
+        if (at == 0)
+        {
+            if (mine.net == null || mine.net.Length != 0) mine.net = empty;
+            return false;
+        }
+        byte[] batch = new byte[at];
+        System.Buffer.BlockCopy(netScratch, 0, batch, 0, at);
+        mine.net = batch;
+        mine.netSeq++;
+        netBatches++;
+        return true;
+    }
+
+    // Another machine's packets: each is the local machine's if its address says so.
+    private void TakeNet(EmuShare share)
+    {
+        byte[] batch = share.net;
+        if (share.netSeq == share.seenNet) return;
+        share.seenNet = share.netSeq;
+        if (batch == null) return;
+        int at = 0;
+        while (at + 2 <= batch.Length)
+        {
+            int length = batch[at] | batch[at + 1] << 8;
+            if (length < 20 || at + 2 + length > batch.Length) break;
+            machine.NetIn(batch, at + 2, length);
+            netTaken++;
+            at += 2 + length;
+        }
+    }
+
     // ---- receiving ----
 
-    // For EmuStations: this player's own object, the others', and "send my fields".
+    // For EmuStreams and the screens' own behaviours: this player's object, the others'
+    // (after Prune, in the same frame), and "send my fields".
     public EmuShare Mine() { return mine; }
     public int MyId() { return myId; }
     public int ShareCount() { return shareCount; }
     public EmuShare ShareAt(int i) { return shares[i]; }
     public void StateOut() { stateOut = true; }
+    public bool Known(int id) { return Find(id) != null; }
+
+    public bool IsOn(int id)
+    {
+        EmuShare share = Find(id);
+        return share != null && (share.flags & 1) != 0;
+    }
 
     public void Received(EmuShare share)
     {
-        if (share == mine) return;
+        if (!Utilities.IsValid(share) || share == mine) return;
         stateDirty = true;
-        if (stations != null) stations.Received(share);
-        if (target != 0 && share == targetShare) Consume(share);
+        streams.Received(share);
+        TakeNet(share);
         if (share.watchedMe && share.watching == myId) TakeInput(share);
     }
 
@@ -773,112 +1013,5 @@ public class EmuShareHub : UdonSharpBehaviour
             machine.SetRemotePointer(p & 0xfff, (p >> 12) & 0xfff, (p >> 24) & 7, true);
         }
         else if (pointerFrom == share.ownerId) DropPointer();
-    }
-
-    // Nothing of the watched display is held.
-    private void ForgetStore()
-    {
-        for (int t = 0; t < TileCount; t++) storeBytes[t * RowBytes + LevelAt] = 3;
-        for (int r = 0; r < FineRows; r++) storeBytes[(FineAt + r) * RowBytes + PresentAt] = 0;
-    }
-
-    // Draws the tiles the last packet brought, or all of them.
-    private void ShowStore(bool all)
-    {
-        store.LoadRawTextureData(storeBytes);
-        store.Apply(false);
-        decodeMaterial.SetTexture("_Store", store);
-        decodeMaterial.SetFloat("_Scale", gotScale);
-        decodeMaterial.SetFloat("_Stamp", stamp);
-        decodeMaterial.SetFloat("_All", all ? 1 : 0);
-        decodeMaterial.SetVector("_Stream", new Vector4(gotW, gotH, 0, 0));
-        decodeMaterial.SetVector("_TargetSize", new Vector4(remotePicture.width, remotePicture.height, 0, 0));
-        VRCGraphics.Blit(store, remotePicture, decodeMaterial);
-    }
-
-    // A packet of the watched player's: rows into the console's grid, tiles into the store.
-    private void Consume(EmuShare share)
-    {
-        byte[] p = share.packet;
-        if (p == null || p.Length < HeaderBytes) return;
-        if (haveSeq && share.seq == lastSeq) return;
-        if (haveSeq && share.seq != lastSeq + 1 && Time.time - askedAt > 2f)
-        {
-            // one was lost: ask for everything again
-            gaps++;
-            askedAt = Time.time;
-            mine.resync++;
-            stateOut = true;
-        }
-        haveSeq = true;
-        lastSeq = share.seq;
-        gotPackets++;
-        gotBytes += p.Length;
-
-        bool on = p[0] != 0, redraw = false, all = false;
-        int w = p[4] | p[5] << 8, h = p[6] | p[7] << 8;
-        // where the stream is half the display's size, tiles come at the fine level too
-        int scale = w > 0 && (p[8] | p[9] << 8) / w == 2 ? 2 : 1;
-        if (w != gotW || h != gotH || scale != gotScale)
-        {
-            gotW = w;
-            gotH = h;
-            gotScale = scale;
-            ForgetStore();
-            all = true;
-        }
-        stamp = stamp % 255 + 1;
-        int at = HeaderBytes, count = p[12];
-        Color32 blank = new Color32(32, 7, 0, 255);
-        for (int i = 0; i < count; i++)
-        {
-            if (at + 3 > p.Length) return;
-            int r = p[at], length = p[at + 1], cells = at + 2;
-            if (r >= rows || length > cols || cells + length + 1 > p.Length) return;
-            bool coloured = p[cells + length] != 0;
-            at = cells + length + 1;
-            if (coloured && at + length > p.Length) return;
-            int g = r * cols;
-            for (int x = 0; x < length; x++)
-            {
-                int a = coloured ? p[at + x] : 7;
-                remoteGrid[g + x] = new Color32(p[cells + x], (byte)(a & 15), (byte)(a >> 4), 255);
-            }
-            for (int x = length; x < cols; x++) remoteGrid[g + x] = blank;
-            if (coloured) at += length;
-        }
-        terminal.ShowRemote(remoteGrid, p[1], p[2], p[3]);
-
-        while (at + 2 <= p.Length)
-        {
-            int v = p[at] | p[at + 1] << 8, t = v & 0xfff, level = v >> 12;
-            if (t >= TileCount) break;
-            if (level >= 4)
-            {
-                // a quarter of the tile at the fine level: its length, its bytes
-                if (level > 7 || at + 4 > p.Length) break;
-                int length = p[at + 2] | p[at + 3] << 8, row = (FineAt + t * 4 + level - 4) * RowBytes;
-                if (length < 16 || length > FineMost || at + 4 + length > p.Length) break;
-                System.Buffer.BlockCopy(p, at + 4, storeBytes, row + 4, length);
-                storeBytes[row + PresentAt] = 1;
-                storeBytes[row + FineStampAt] = (byte)stamp;
-                at += 4 + length;
-                redraw = true;
-                continue;
-            }
-            int size = level == 0 ? 384 : level == 1 ? 96 : 24;
-            if (level > 2 || at + 2 + size > p.Length) break;
-            System.Buffer.BlockCopy(p, at + 2, storeBytes, t * RowBytes + (level == 0 ? 0 : level == 1 ? 384 : 480), size);
-            storeBytes[t * RowBytes + LevelAt] = (byte)level;
-            storeBytes[t * RowBytes + StampAt] = (byte)stamp;
-            // the tile changed: what came of it at the fine level is of the old picture
-            for (int k = 0; k < 4; k++) storeBytes[(FineAt + t * 4 + k) * RowBytes + PresentAt] = 0;
-            at += 2 + size;
-            redraw = true;
-        }
-        if (redraw || all) ShowStore(all);
-        displayShowMaterial.SetVector("_Size", new Vector4(on ? w * scale : 0, on ? h * scale : 0, 0, 0));
-        machine.shownWidth = on && w > 0 ? p[8] | p[9] << 8 : 0;
-        machine.shownHeight = on && w > 0 ? p[10] | p[11] << 8 : 0;
     }
 }

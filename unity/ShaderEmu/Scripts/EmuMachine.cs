@@ -61,7 +61,10 @@ public class EmuMachine : UdonSharpBehaviour
     public VRCUrlInputField[] typedUrls;   // and four fields to paste them into
     public GameObject linksButton;         // by the display, while something is wanted
     public GameObject linksPanel;          // the eight fields, in front of the display
+    public VRCUrlInputField openField;     // an address for the machine to open (docs/open.md)
+    public TextMeshProUGUI openLabel;
     public Texture2D hostData;         // 256 x 256: an answer's bytes, four a texel
+    public Texture2D netData;          // 160 x 4: the network's packets for the guest, a row each (docs/lan.md)
     public TextMeshProUGUI fetchLabel;
 
     public TextMeshProUGUI statsText;
@@ -101,7 +104,8 @@ public class EmuMachine : UdonSharpBehaviour
     private Color32[] netPixels = new Color32[160 * 4];
     [HideInInspector] public int netSent, netReceived;   // packets, for whoever watches
     private const int FetchMost = 262144;
-    private const int FetchIdle = 0, FetchLoading = 1, FetchPacking = 2, FetchReady = 3, FetchDelivering = 4;
+    private const int FetchIdle = 0, FetchLoading = 1, FetchPacking = 2, FetchReady = 3, FetchDelivering = 4, FetchOpening = 5;
+    private const int KindFile = 3;     // a request for whatever an address holds, as a file
     private const int UartBurst = 4;
     private const int InitFrames = 2;
     private const int TicksPerRound = 8192;   // instructions a pass, as the harness's
@@ -141,6 +145,14 @@ public class EmuMachine : UdonSharpBehaviour
     private int fetchLength, fetchStatus, fetchPacked;
     private float fetchStarted;
     private int fetchKind, fetchW, fetchH;
+    private int fetchOffset;           // the part of the answer asked for begins here
+    private string heldAddress = "";   // what the answer that is kept is of
+    private bool heldImage;            // and whether it is a picture's texture or bytes
+    private Vector3 linksAt, linksSize;   // the links panel's own place, before the wall's display
+    private Quaternion linksTurn;
+    private bool linksHome;
+    private string openDue = "";       // an address the visitor gave, not handed to the guest yet
+    private int openCount;
     private VRCImageDownloader imageLoader;
     private Texture2D hostImage;
     private string[] wanted = new string[4];
@@ -286,7 +298,7 @@ public class EmuMachine : UdonSharpBehaviour
         displayMaterial.SetTexture("_State", current);
         bool theirs = UseRemote();
         displayMaterial.SetVector("_HostPointer", new Vector4(theirs ? remoteX : pointerX, theirs ? remoteY : pointerY,
-                                                              theirs || (pointerOn && !inputAway) ? 1 : 0, 0));
+                                                              theirs || (pointerOn && (!inputAway || pointerOwn)) ? 1 : 0, 0));
         // off: black, as the picture is also the light the display gives the room (LTCGI)
         if (powered || theirs) VRCGraphics.Blit(current, displayTexture, displayMaterial);
         else VRCGraphics.Blit(blackTexture, displayTexture);
@@ -395,7 +407,17 @@ public class EmuMachine : UdonSharpBehaviour
         if (terminal != null) terminal.Clear();
         fetchState = FetchIdle;
         fetchAnswered = 0;
+        heldAddress = "";
+        openDue = "";
+        openCount = 0;
         machineMaterial.SetInt("_FetchDeliver", 0);
+        // the network: a new machine counts from nothing, and so does its host
+        netOutHead = netOutTail = netInHead = netInTail = 0;
+        netAcked = netTaken = netRxSeq = 0;
+        netRxCount = netBad = 0;
+        netSeen = false;
+        netId = player != null ? player.playerId & 0xffff : 0;
+        NetUniforms();
         ShowLabels();
     }
 
@@ -408,6 +430,8 @@ public class EmuMachine : UdonSharpBehaviour
         ShowLabels();
         Say("The computer is off.\r\n");
         if (statsText != null) statsText.text = "off";
+        mipsAll = 0f;
+        mipsCore = 0f;
     }
 
     public bool IsOn()
@@ -415,7 +439,7 @@ public class EmuMachine : UdonSharpBehaviour
         return powered;
     }
 
-    // ---- a watching player's hands (EmuShareHub) ----
+    // ---- a watching player's hands (EmuShareHub), and this player's own at their classroom place ----
 
     public void RemoteChar(int c)
     {
@@ -449,6 +473,7 @@ public class EmuMachine : UdonSharpBehaviour
     private bool UseRemote()
     {
         if (!remoteOn) return false;
+        if (pointerOn && pointerOwn) return false;
         if (!pointerOn || inputAway) return true;
         if (pointerButtons != 0) return false;
         return remoteButtons != 0 || remoteMovedAt > ownMovedAt;
@@ -468,6 +493,7 @@ public class EmuMachine : UdonSharpBehaviour
     {
         pointerButtons = buttons;
         pointerOn = false;
+        pointerOwn = false;
     }
 
     // Notches of the wheel, up positive: events of their own in the keyboard's ring.
@@ -487,13 +513,30 @@ public class EmuMachine : UdonSharpBehaviour
         string address = "";
         for (int i = 0; i < length; i++) address += (char)((Word(64 + 18 + i / 16, (i / 4) % 4) >> (8 * (i % 4))) & 0xff);
         fetchSeq = seq;
-        fetchLength = 0;
         fetchKind = (int)Word(64 + 16, 2);
+        fetchOffset = (int)Mathf.Min(Word(64 + 16, 3), 0xffffff);
+        if (fetchOffset != 0 && address == heldAddress)
+        {
+            // a further part of the answer that is kept: no asking again
+            fetchStatus = 200;
+            fetchPacked = fetchOffset;
+            fetchState = heldImage ? FetchReady : FetchPacking;
+            return;
+        }
+        fetchLength = 0;
+        heldAddress = "";
+        if (imageLoader != null)
+        {
+            // the picture kept for its parts is done with: VRChat keeps every one until told
+            imageLoader.Dispose();
+            imageLoader = null;
+        }
         VRCUrl url = null;
         // an address a visitor has put into one of the fields is theirs to open: the very one
-        // the browser asks for, or the first field's for "world:typed"
+        // the guest asks for, or the first field's for "world:typed"
         for (int i = 0; i < typedUrls.Length; i++)
             if (typedUrls[i].GetUrl().Get() == address || (i == 0 && address == "world:typed")) url = typedUrls[i].GetUrl();
+        if (openField != null && openField.GetUrl().Get() == address) url = openField.GetUrl();
         for (int i = 0; i < siteAddresses.Length; i++)
             if (siteAddresses[i] == address) url = siteUrls[i];
         // VRChat throws on an address that is not https, and then calls neither event below
@@ -515,19 +558,50 @@ public class EmuMachine : UdonSharpBehaviour
         fetchState = FetchLoading;
         fetchStarted = Time.time;
         if (fetchLabel != null) fetchLabel.text = "Loading " + address;
-        if (fetchKind == 1)
+        heldAddress = address;
+        heldImage = fetchKind == 1 || (fetchKind == KindFile && IsPicture(address));
+        if (heldImage)
         {
             // a picture: VRChat fetches and decodes it into a texture, which the control pass
-            // scales into the guest's memory as pixels
+            // scales into the guest's memory as pixels. Asked for as a file it may carry one in
+            // its pixels (docs/fetch.md), which have to arrive as they are: no smaller copies.
             if (imageLoader == null) imageLoader = new VRCImageDownloader();
             TextureInfo info = new TextureInfo();
-            info.GenerateMipMaps = true;
+            info.GenerateMipMaps = fetchKind == 1;
             imageLoader.DownloadImage(url, null, (IUdonEventReceiver)this, info);
         }
         else
         {
             VRCStringDownloader.LoadUrl(url, (IUdonEventReceiver)this);
         }
+    }
+
+    // VRChat gives a world a picture only through its picture loader: by the address's ending.
+    private bool IsPicture(string address)
+    {
+        int cut = address.IndexOf('?');
+        string path = (cut < 0 ? address : address.Substring(0, cut)).ToLower();
+        return path.EndsWith(".png") || path.EndsWith(".jpg") || path.EndsWith(".jpeg");
+    }
+
+    // The button by the link field: the machine is told to open the address in it.
+    public void OpenLink()
+    {
+        if (openField == null) return;
+        string address = openField.GetUrl().Get();
+        if (address == null || address.Length == 0 || !powered)
+        {
+            if (openLabel != null) openLabel.text = powered ? "paste an address" : "computer is off";
+            return;
+        }
+        if (!address.StartsWith("https://"))
+        {
+            if (openLabel != null) openLabel.text = "https only";
+            return;
+        }
+        openDue = address.Length > 255 ? address.Substring(0, 255) : address;
+        if (openLabel != null) openLabel.text = address.Length > 255 ? "too long (255)" : "opening...";
+        if (address.Length > 255) openDue = "";
     }
 
     // ---- addresses the visitor has to hand over ----
@@ -580,7 +654,39 @@ public class EmuMachine : UdonSharpBehaviour
     // The button by the display, and the panel's Close.
     public void ToggleLinks()
     {
-        linksPanel.SetActive(!linksPanel.activeSelf);
+        PlaceLinks(!linksPanel.activeSelf, null);
+    }
+
+    public bool LinksWanted()
+    {
+        for (int i = 0; i < 4; i++)
+            if (wanted[i] != "") return true;
+        return false;
+    }
+
+    // The links panel, open or shut: before the wall's display, or (at) before a classroom
+    // place's tube, small enough for it.
+    public void PlaceLinks(bool open, Transform at)
+    {
+        Transform panel = linksPanel.transform;
+        if (!linksHome)
+        {
+            linksHome = true;
+            linksAt = panel.position;
+            linksTurn = panel.rotation;
+            linksSize = panel.localScale;
+        }
+        if (at != null)
+        {
+            panel.SetPositionAndRotation(at.position, at.rotation);
+            panel.localScale = linksSize * 0.32f;
+        }
+        else
+        {
+            panel.SetPositionAndRotation(linksAt, linksTurn);
+            panel.localScale = linksSize;
+        }
+        linksPanel.SetActive(open);
         ShowLinks();
     }
 
@@ -615,10 +721,12 @@ public class EmuMachine : UdonSharpBehaviour
     public override void OnStringLoadSuccess(IVRCStringDownload result)
     {
         if (fetchState != FetchLoading) return;
+        // (a page is cut to what the browser takes at once; a file is handed over in parts)
         fetchBytes = result.ResultBytes;
-        fetchLength = Mathf.Min(fetchBytes.Length, FetchMost);
+        fetchLength = fetchKind == KindFile ? fetchBytes.Length : Mathf.Min(fetchBytes.Length, FetchMost);
         fetchStatus = 200;
         fetchPacked = 0;
+        fetchOffset = 0;
         fetchState = FetchPacking;
         if (fetchLabel != null) fetchLabel.text = "Loaded " + fetchLength.ToString("N0") + " bytes";
     }
@@ -639,16 +747,43 @@ public class EmuMachine : UdonSharpBehaviour
         // an address nobody has asked for in a while is no longer wanted
         for (int i = 0; i < 4; i++)
             if (wanted[i] != "" && Time.time - wantedAt[i] > 8f) Unwant(wanted[i]);
-        if (fetchState == FetchDelivering)
+        if (fetchState == FetchOpening)
+        {
+            machineMaterial.SetInt("_FetchDeliver", 0);
+            fetchState = FetchIdle;
+        }
+        else if (fetchState == FetchIdle && openDue.Length > 0)
+        {
+            // "open this": the address into the answer's texture, and from there into the guest's words
+            for (int i = 0; i < 64; i++)
+            {
+                int at = i * 4;
+                fetchPixels[i] = new Color32(at < openDue.Length ? (byte)openDue[at] : (byte)0, at + 1 < openDue.Length ? (byte)openDue[at + 1] : (byte)0,
+                                             at + 2 < openDue.Length ? (byte)openDue[at + 2] : (byte)0, at + 3 < openDue.Length ? (byte)openDue[at + 3] : (byte)0);
+            }
+            hostData.SetPixels32(fetchPixels);
+            hostData.Apply(false);
+            openCount++;
+            machineMaterial.SetTexture("_HostData", hostData);
+            machineMaterial.SetInt("_FetchSeq", openCount);
+            machineMaterial.SetInt("_FetchLength", openDue.Length);
+            machineMaterial.SetInt("_FetchDeliver", 4);
+            if (openLabel != null) openLabel.text = "sent";
+            openDue = "";
+            fetchState = FetchOpening;
+        }
+        else if (fetchState == FetchDelivering)
         {
             machineMaterial.SetInt("_FetchDeliver", 0);
             fetchAnswered = fetchSeq;
             fetchState = FetchIdle;
-            // the picture's texture has been copied: VRChat keeps every one until told
-            if (imageLoader != null)
+            // a picture's texture has been copied: VRChat keeps every one until told. (One asked
+            // for as a file is kept, for its further parts, until something else is asked for.)
+            if (imageLoader != null && fetchKind != KindFile)
             {
                 imageLoader.Dispose();
                 imageLoader = null;
+                heldAddress = "";
             }
         }
         else if (fetchState == FetchLoading && Time.time - fetchStarted > 20f)
@@ -661,30 +796,35 @@ public class EmuMachine : UdonSharpBehaviour
         }
         else if (fetchState == FetchPacking)
         {
-            int end = Mathf.Min(fetchPacked + 6000, fetchLength);
+            // the part from the offset asked for: 256 KB of it at most
+            int partEnd = Mathf.Min(fetchOffset + FetchMost, fetchLength);
+            int end = Mathf.Min(fetchPacked + 6000, partEnd);
             for (int at = fetchPacked; at < end; at += 4)
             {
-                fetchPixels[at >> 2] = new Color32(fetchBytes[at], at + 1 < fetchLength ? fetchBytes[at + 1] : (byte)0,
-                                                   at + 2 < fetchLength ? fetchBytes[at + 2] : (byte)0,
-                                                   at + 3 < fetchLength ? fetchBytes[at + 3] : (byte)0);
+                fetchPixels[(at - fetchOffset) >> 2] = new Color32(fetchBytes[at], at + 1 < fetchLength ? fetchBytes[at + 1] : (byte)0,
+                                                                   at + 2 < fetchLength ? fetchBytes[at + 2] : (byte)0,
+                                                                   at + 3 < fetchLength ? fetchBytes[at + 3] : (byte)0);
             }
             fetchPacked = end + 3 & ~3;
-            if (end < fetchLength) return;
+            if (end < partEnd) return;
             hostData.SetPixels32(fetchPixels);
             hostData.Apply(false);
             fetchState = FetchReady;
         }
         else if (fetchState == FetchReady)
         {
-            bool picture = fetchKind == 1 && fetchStatus == 200;
+            // a picture's pixels (2), or what a picture asked for as a file holds (3: the control
+            // pass looks for the mark, and hands over pixels when there is none)
+            bool picture = heldImage && fetchStatus == 200;
             machineMaterial.SetTexture("_HostData", hostData);
             if (picture) machineMaterial.SetTexture("_HostImage", hostImage);
+            machineMaterial.SetInt("_FetchOffset", fetchOffset);
             machineMaterial.SetInt("_FetchSeq", (int)(fetchSeq & 0xffffff));
             machineMaterial.SetInt("_FetchLength", fetchLength);
             machineMaterial.SetInt("_FetchStatus", fetchStatus);
             machineMaterial.SetInt("_FetchW", picture ? fetchW : 0);
             machineMaterial.SetInt("_FetchH", picture ? fetchH : 0);
-            machineMaterial.SetInt("_FetchDeliver", picture ? 2 : 1);
+            machineMaterial.SetInt("_FetchDeliver", !picture ? 1 : fetchKind == KindFile ? 3 : 2);
             fetchState = FetchDelivering;
         }
     }
@@ -723,6 +863,7 @@ public class EmuMachine : UdonSharpBehaviour
         bool running = initLeft == 0;
         if (running) Inputs();
         if (running) FetchStep();
+        if (running) NetFrame();
         int n = !running ? 1 : steady ? SteadyRounds() : rounds;
         machineMaterial.SetInt("_SoundMixed", 0);
         for (int i = 0; i < n; i++)
@@ -843,7 +984,7 @@ public class EmuMachine : UdonSharpBehaviour
         bool theirs = UseRemote();
         machineMaterial.SetVector("_InputPointer", new Vector4((theirs ? remoteX : pointerX) + 8, (theirs ? remoteY : pointerY) + 8,
                                                                displayWidth + 16, displayHeight + 16));
-        machineMaterial.SetInt("_InputButtons", theirs ? remoteButtons : inputAway ? 0 : pointerButtons);
+        machineMaterial.SetInt("_InputButtons", theirs ? remoteButtons : inputAway && !pointerOwn ? 0 : pointerButtons);
 
         uint ms = (uint)(Time.timeSinceLevelLoad * 1000f);
         machineMaterial.SetInt("_HostMsLo", (int)(ms & 0xffff));
@@ -871,6 +1012,138 @@ public class EmuMachine : UdonSharpBehaviour
     {
         Color32 p = row[rowAt + texel * 4 + k];
         return (uint)p.r | (uint)p.g << 8 | (uint)p.b << 16 | (uint)p.a << 24;
+    }
+
+    // ---- the network (docs/lan.md) ----
+
+    private void NetUniforms()
+    {
+        machineMaterial.SetInt("_NetId", netId);
+        machineMaterial.SetInt("_NetTxAckLo", (int)(netAcked & 0xffff));
+        machineMaterial.SetInt("_NetTxAckHi", (int)(netAcked >> 16));
+        machineMaterial.SetInt("_NetRxSeqLo", (int)(netRxSeq & 0xffff));
+        machineMaterial.SetInt("_NetRxSeqHi", (int)(netRxSeq >> 16));
+        machineMaterial.SetInt("_NetRxCount", netRxCount);
+    }
+
+    // Before a frame's rounds: what the last frame delivered is delivered; up to four more
+    // packets go into the ring, never more than the guest has room for.
+    private void NetFrame()
+    {
+        netRxSeq += (uint)netRxCount;
+        netRxCount = 0;
+        uint waiting = netRxSeq - netTaken;
+        int queued = (netInTail - netInHead) & (NetQueue - 1);
+        if (queued > 0 && netSeen && waiting <= 8)
+        {
+            int n = Mathf.Min(Mathf.Min(queued, 4), 8 - (int)waiting);
+            for (int e = 0; e < n; e++)
+            {
+                int from = netInHead * NetMost, length = netInLength[netInHead], at = e * 160;
+                uint number = netRxSeq + (uint)e + 1;
+                netPixels[at] = new Color32((byte)(length & 255), (byte)(length >> 8), 0, 0);
+                netPixels[at + 1] = new Color32((byte)(number & 255), (byte)((number >> 8) & 255), (byte)((number >> 16) & 255), (byte)(number >> 24));
+                netPixels[at + 2] = new Color32(0, 0, 0, 0);
+                netPixels[at + 3] = new Color32(0, 0, 0, 0);
+                for (int i = 0; i < length; i += 4)
+                    netPixels[at + 4 + i / 4] = new Color32(netIn[from + i], netIn[from + i + 1], netIn[from + i + 2], netIn[from + i + 3]);
+                netInHead = (netInHead + 1) & (NetQueue - 1);
+            }
+            if (n > 0)
+            {
+                netData.SetPixels32(netPixels);
+                netData.Apply(false);
+                machineMaterial.SetTexture("_NetData", netData);
+                netRxCount = n;
+                netReceived += n;
+            }
+        }
+        NetUniforms();
+    }
+
+    // A byte of the guest's window, as this round's row has it.
+    private int NetByte(int i)
+    {
+        Color32 p = row[rowAt + 512 + (i >> 2)];
+        int k = i & 3;
+        return k == 0 ? p.r : k == 1 ? p.g : k == 2 ? p.b : p.a;
+    }
+
+    // What a round's readback says of the device: the guest's counts, and the packets in its
+    // window that have not been taken, which are then acked.
+    private void NetWindow()
+    {
+        uint sent = Word(64 + 0x3e, 0);
+        netTaken = Word(64 + 0x3e, 1);
+        if (!netSeen)
+        {
+            // (a machine that was running already: nothing from before is sent on)
+            netSeen = true;
+            netAcked = sent;
+            return;
+        }
+        if (sent == netAcked) return;
+        int at = 0, found = 0;
+        bool whole = false;
+        int[] starts = new int[40], lengths = new int[40];
+        while (at + 16 <= NetSlot && found < 40)
+        {
+            int length = NetByte(at) | NetByte(at + 1) << 8 | NetByte(at + 2) << 16 | NetByte(at + 3) << 24;
+            uint number = (uint)(NetByte(at + 4) | NetByte(at + 5) << 8 | NetByte(at + 6) << 16 | NetByte(at + 7) << 24);
+            if (length < 20 || length > NetMost || at + 16 + length > NetSlot) break;
+            uint ahead = number - netAcked;
+            if (ahead >= 1 && ahead <= 64) { starts[found] = at + 16; lengths[found] = length; found++; }
+            if (number == sent) { whole = true; break; }
+            at += 16 + ((length + 15) & ~15);
+        }
+        if (!whole)
+        {
+            // half written, or not this run's: wait, but never for ever
+            if (++netBad < 200) return;
+            found = 0;
+        }
+        netBad = 0;
+        for (int k = 0; k < found; k++)
+        {
+            int next = (netOutTail + 1) & (NetQueue - 1);
+            if (next == netOutHead) break;   // nobody takes them: dropped, as a full wire drops
+            int to = netOutTail * NetMost;
+            for (int i = 0; i < lengths[k]; i++) netOut[to + i] = (byte)NetByte(starts[k] + i);
+            netOutLength[netOutTail] = lengths[k];
+            netOutTail = next;
+            netSent++;
+        }
+        netAcked = sent;
+    }
+
+    // The machine's number on the network, and its packets for the others (EmuShareHub takes them).
+    public int NetId() { return powered ? netId : 0; }
+    public int NetWaiting() { return (netOutTail - netOutHead) & (NetQueue - 1); }
+    public int NetNextLength() { return netOutHead == netOutTail ? 0 : netOutLength[netOutHead]; }
+
+    public int NetPop(byte[] into, int at)
+    {
+        if (netOutHead == netOutTail) return 0;
+        int length = netOutLength[netOutHead];
+        System.Buffer.BlockCopy(netOut, netOutHead * NetMost, into, at, length);
+        netOutHead = (netOutHead + 1) & (NetQueue - 1);
+        return length;
+    }
+
+    // A packet from another machine: this one's if it is addressed to it or to everybody.
+    public void NetIn(byte[] from, int at, int length)
+    {
+        if (!powered || netId == 0 || length < 20 || length > NetMost) return;
+        int a = from[at + 16], b = from[at + 17], c = from[at + 18], d = from[at + 19];
+        bool mine = a == 10 && b == 0 && c == (netId >> 8) && d == (netId & 255);
+        bool all = (a == 10 && b == 0 && c == 255 && d == 255) || (a == 255 && b == 255 && c == 255 && d == 255);
+        if (!mine && !all) return;
+        int next = (netInTail + 1) & (NetQueue - 1);
+        if (next == netInHead) netInHead = (netInHead + 1) & (NetQueue - 1);   // full: the oldest goes
+        System.Buffer.BlockCopy(from, at, netIn, netInTail * NetMost, length);
+        for (int i = length; i < ((length + 3) & ~3); i++) netIn[netInTail * NetMost + i] = 0;
+        netInLength[netInTail] = length;
+        netInTail = next;
     }
 
     // Readbacks complete in the order they were asked for: a frame's rounds, a row each.
@@ -908,6 +1181,7 @@ public class EmuMachine : UdonSharpBehaviour
         keyboardOwned = Word(67, 0) == 0x6b657973u;
         soundEnabled = Word(64 + 0x22, 0) != 0;
         soundClock = Word(64 + 0x23, 0);
+        NetWindow();
         uint asked = Word(64 + 16, 0);
         if (fetchState == FetchIdle && asked != Word(64 + 17, 0) && asked != fetchAnswered) FetchAsked(asked);
 
@@ -959,6 +1233,8 @@ public class EmuMachine : UdonSharpBehaviour
         instructions = 0;
         workerInstructions = 0;
         frames = 0;
+        mipsCore = ips / 1000000f;
+        mipsAll = (ips + workerIps) / 1000000f;
         speedLine = ips.ToString("N0") + " instructions/s   " + fps.ToString("F0") + " frames/s   "
                     + (fps > 0 ? (ips / fps).ToString("N0") : "0") + " a frame";
         int busy = 0;

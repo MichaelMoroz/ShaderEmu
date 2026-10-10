@@ -10,10 +10,10 @@ using VRC.Udon.Common;
 public class EmuShare : UdonSharpBehaviour
 {
     public EmuShareHub hub;
+    public Transform[] pads;             // the two controllers' models, for this player's hand (EmuHolodeck)
 
     [UdonSynced] public int flags;       // bit 0: the machine is on; bit 1: watchers may use it
-    [UdonSynced] public int watching;    // the player whose machine this one looks at; 0: their own
-    [UdonSynced] public int resync;      // counted up to ask the watched player for everything again
+    [UdonSynced] public int watching;    // the player whose machine this one looks at on the wall; 0: their own
     [UdonSynced] public int seq;         // of the packet
     [UdonSynced] public byte[] packet = new byte[0];   // console rows and display tiles
     [UdonSynced] public int inputSeq;    // events typed at the watched machine so far
@@ -21,13 +21,24 @@ public class EmuShare : UdonSharpBehaviour
     [UdonSynced] public int pointer;     // x, y (12 bits each), buttons << 24, on the display << 28
     [UdonSynced] public int station = -1;   // the classroom's computer this player has (docs/stations.md); -1: none
     [UdonSynced] public int stationMode; // what that computer's tube shows: 0 the display, 1 the console
-    [UdonSynced] public int askFrom;     // the player this one wants a whole display from again, for a station
-    [UdonSynced] public int askCount;    // counted up with each such asking
+    // The senders this player shows on some screen (EmuStreams), one a slot: the sender's number
+    // (16 bits) and a count << 16 that goes up with each asking; and what is asked for again:
+    // a packet number's low 16 bits and how many from it << 16 (none: everything).
+    [UdonSynced] public int[] ask = new int[12];
+    [UdonSynced] public int[] lost = new int[12];
+    [UdonSynced] public int holo = -1;   // the holodeck whose seat this player sits in (docs/holodeck.md); -1: none
+    [UdonSynced] public int holding;     // the game controller in their hand: 0 none, 1 shooter, 2 strategy
+    // The network (docs/lan.md): this player's machine's packets since the last sending, each
+    // after two bytes of its length; netSeq goes up with every such batch.
+    [UdonSynced] public int netSeq;
+    [UdonSynced] public byte[] net = new byte[0];
 
     // what this client's hub knows of the player
     [HideInInspector] public int ownerId;
     [HideInInspector] public string ownerName = "";
-    [HideInInspector] public int seenInput, seenResync, seenAsk;
+    [HideInInspector] public int seenInput;
+    [HideInInspector] public int seenNet;
+    [HideInInspector] public int[] seenAsk = new int[12];
     [HideInInspector] public bool watchedMe;
 
     private bool sending;

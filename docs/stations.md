@@ -37,8 +37,52 @@ keyboards and tubes are skipped (`ownStation`).
 To test it in play mode: press a key by the keyboard's program variables (`__1_hand__param`,
 `__1_key__param`, `__0_Press`; `__2_hand__param`, `__0_Release`) and read the tube; for the
 pointer, `TeleportTo` before the place, turn "PlayerCamera" at a point of "Station N tube" and
-read the machine's `pointerX`, `pointerY` (a quarter in from the corner of 800 x 600 gave
-200, 147). Untried in a headset.
+read `EmuPointer`'s `px`, `py`: they must be where the head's ray meets the glass's ball
+(centre `tubeGap + tubeBulge` behind the plate), in the plate's own right and up. At a place
+turned 3 degrees, from the side and above, that gave 574, 396 for 574, 398. Untried in a headset.
+
+## How the places lie, and their own keys
+
+No two places lie alike (`classroom` in `world/furniture.py`, its own `random.Random(11)`): a
+place is up to 15 mm off its spot and turned up to 3.5 degrees, its keyboard up to 2.5, its mat
+6 and its mouse 20. The script writes what it chose to `Models/stations.json`, and
+`ShaderEmuStations.cs` puts each place's tube, keyboard and keys there ("Station N" is a frame
+of the place; everything of it is a child). There are no seats: the chairs are furniture.
+
+The keyboard is 1.3 times a real one (`KEY_SCALE` in `world/pc.py`), for beams. A beam anywhere
+on its plate presses the nearest key (`EmuKeyboard.KeyAt`), so there is no gap between keys to
+miss into, and a key going down and up clicks (`Sounds/Key1-4.wav`, `keys()` in
+`world/sounds.py`, cut from a recording; only the typist's client plays it).
+
+The modelled keys of a place work, for its owner alone (`EmuPlace` on a plate over each group
+sends the press to `EmuStations.Act` with the place's number):
+
+| Key | Does |
+|---|---|
+| tower: POWER, RESET, TURBO | the owner's machine on and off, its reset, its speed mode |
+| monitor: RGB 2/+, RGB 1/- | the next and the last of the console's four terminals |
+| monitor: VIDEO 2, VIDEO 1 | the tube shows the console, the display |
+| monitor: PROCEED, EXIT | the links panel (`docs/fetch.md`) before this tube, small; away again |
+
+A lamp over PROCEED is lit while the owner's browser wants addresses pasted.
+
+A monitor's lamp and its tower's power lamp are lit while the place's owner's machine is on, and
+dark on a place nobody has: they are objects the builder puts before the model's lenses
+(`PowerLamps`, `EmuStations.powerLamps`; the den's own tower has one too). The bake leaves every
+lamp of the set dark (`world/bake_pc.py`): baked into its picture of light, they glowed on
+machines that were off.
+
+**The speed window** on each tower (`SevenSeg.shader`) has two rows of three digits: MIPS ALL,
+what all the machine's cores ran in the last second, and MIPS CPU, core 0 alone, in millions
+of instructions a second with one decimal. It is its owner's machine's speed, to everybody:
+the two numbers travel in the display stream's header (`docs/share.md`), and a place nobody
+has, or whose machine is off, is dark. The den's own tower shows this visitor's. The DX2-66
+badge stays.
+
+To test in play mode: `SendCustomEvent("Turbo")` and the like on "Station N tower hot" and
+"Station N monitor hot" of one's own place and of another; only one's own may change
+anything (`EmuMachine`'s speed mode, `EmuTerminal.Shown()`, `stationMode`, the links panel's
+place). `speeds[N]`'s `_All` and `_Core` are ten times the machine's `mipsAll` and `mipsCore`.
 
 ## What is where on the cases
 
@@ -80,19 +124,22 @@ states it; the keys' 19.05 mm is ISO 1091's 19 mm +- 1 (0.75 inch), per Deskthor
   free place; the key under a tube takes that place if it is free, and at a visitor's own
   turns the tube between display and console (`stationMode`, synced the same way). Two who name one place: the
   visitor with the lower player number has it, and the other looks for a free one.
-- Whoever has a place sends their display as for a watcher (`docs/share.md`): the hub counts
-  the room as one. `EmuStations.Received` puts a packet's tiles into that place's own store and
-  decodes it into that place's picture; a visitor's own tube shows their machine itself.
-- A client that is new to a place, or lost a packet, sets `askFrom` and counts `askCount` up
-  in its own share; the place's owner sends everything again (at most every 3 s a place).
-- A place's console is the rows the same packets carry, kept in a grid of its own and drawn by
-  `Terminal.shader` into a 640 x 480 picture; a visitor's own is their terminal's.
+- Whoever has a place sends their display as for any screen that shows them
+  (`docs/share.md`). `EmuStations` tells `EmuStreams` whose each place is (surfaces 1 to 8),
+  and puts that sender's slot's picture or console on the tube; a visitor's own tube shows
+  their machine itself. Asking for what was lost, and for everything when a place is new to
+  a client, is `EmuStreams`'s.
+- A place that is given up is FREE and black at once: its slot is emptied.
+- **A place's keys and pointer are its owner's machine's, whatever the wall shows.** Its
+  keyboard goes straight into the machine (`EmuKeyboard.sink`, the queues a watcher's keys
+  use), and a beam on its tube is marked as the place's own (`pointerOwn`): neither is sent
+  to a player the wall happens to show.
 - `CRT.shader`: the picture behind bulging glass, the beam's lines (one a row of the picture)
   and stripes of three phosphors. Lines and stripes are waves of mean one, each weakened by how
   much of its period a screen pixel spans: close up they show, further off they are their mean,
   and there is no moire between.
 
-To test with one player: `ClientSimMain.SpawnRemotePlayer`, set the new `EmuShare`'s `station`,
-copy this player's `flags`, `seq` and `packet` into it each time `seq` changes, and send
-`EmuStations` the event `__0_Received` with `__1_share__param` set to it. The place's picture
-must come to within a few levels of the machine's own display.
+To test with one player: `docs/share.md`'s hook for several players. The place's picture
+(the slot's, `StreamPicture`N) must come to within a few levels of the machine's own display.
+With the hub's `picked` set to a spawned player, a key pressed at this visitor's own place
+must move the machine's `keyTail` and leave the hub's `outTail` alone.
