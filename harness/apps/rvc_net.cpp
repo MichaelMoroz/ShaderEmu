@@ -74,7 +74,8 @@ void NetLink::pump() {
         sockaddr_in at{};
         at.sin_family = AF_INET;
         at.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-        for (unsigned m = to == 0xffff ? 1 : to; m <= (to == 0xffff ? kBroadcastTo : to); ++m) {
+        // (an address that is no machine's goes nowhere)
+        for (unsigned m = to == 0xffff ? 1 : to; m <= (to == 0xffff ? kBroadcastTo : to) && m <= kBroadcastTo; ++m) {
             if (m == id_ || m == 0 || port_ + (int)m > 65535) continue;
             at.sin_port = htons((u_short)(port_ + (int)m));
             sendto(s, (const char*)p.data(), (int)p.size(), 0, (sockaddr*)&at, sizeof at);
@@ -85,8 +86,10 @@ void NetLink::pump() {
         uint8_t buf[2048];
         int n = recv(s, (char*)buf, sizeof buf, 0);
         if (n == SOCKET_ERROR) {
-            if (WSAGetLastError() == WSAEWOULDBLOCK) break;
-            continue;
+            // (a packet too long or a port nobody hears is passed over; anything else ends the pass)
+            int why = WSAGetLastError();
+            if (why == WSAEMSGSIZE || why == WSAECONNRESET) continue;
+            break;
         }
         unsigned to = n >= 20 && n <= (int)kMtu ? target(buf) : 0;
         if (to != 0xffff && to != id_) continue;

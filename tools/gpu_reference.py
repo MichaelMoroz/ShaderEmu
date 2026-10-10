@@ -194,7 +194,8 @@ def shade(m, colour, uv, tex, key):
             return np.clip(colour, 0, 1), ((texel << (x & 7).astype(np.uint32)) & 0x80) != 0
         if mode == 5:
             # a layer of tiles: the address is four words (cells, tiles, palette, sizes)
-            cells, tiles, palette, sizes = (int(v) & 0x7fffffff for v in m.words[base:base + 4])
+            cells, tiles, palette = (int(v) & 0x7fffffff for v in m.words[base:base + 3])
+            sizes = int(m.words[base + 3])   # (all 32 bits: the pieces' size is the top four)
             tile_w, tile_h, across, piece = max(sizes & 0xff, 1), max((sizes >> 8) & 0xff, 1), (sizes >> 16) & 0xfff, sizes >> 28
             at = cells + 2 * ((y // tile_h) * across + x // tile_w)
             cell = (m.words[at // 4] >> (8 * (at & 3)).astype(np.uint32)) & 0xffff

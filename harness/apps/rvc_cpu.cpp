@@ -814,8 +814,13 @@ static void control_pass() {
     // no write cache here, so their sizes are only counted) and how many there could be
     // (cores 16 and up: MC_STATS_MORE and MC_GEOMETRY_MORE of src/gpu.h and src/types.h)
     const u32 STATS_MORE = 0x876b8280u, GEOMETRY_MORE = MC_MBOX + 0xf00;
-    for (size_t i = 0; i < cores.size(); i++) word((i < 16 ? CTRL + 0x380 : STATS_MORE - 64) + 4 * (u32)i) = (u32)cores[i].clock;
-    dirty(STATS_MORE);
+    // (their band is marked only when a word of it changes: the harness uploads what is marked)
+    bool more = false;
+    for (size_t i = 0; i < cores.size(); i++) {
+        u32& count = word((i < 16 ? CTRL + 0x380 : STATS_MORE - 64) + 4 * (u32)i);
+        more = more || (i >= 16 && count != (u32)cores[i].clock);
+        count = (u32)cores[i].clock;
+    }
     if (cores.size() > 1) {
         u32 running[2] = {1, 0}, asleep[2] = {0, 0}, count = 1, shaping = word(CTRL + 0x3d0) & 1;
         for (size_t i = 1; i < cores.size(); i++) {
@@ -830,9 +835,11 @@ static void control_pass() {
         word(CTRL + 0x3c4) = running[0];
         word(CTRL + 0x3c8) = asleep[0];
         word(CTRL + 0x3cc) = (u32)cores.size();
+        more = more || word(STATS_MORE + 0xc0) != running[1] || word(STATS_MORE + 0xc4) != asleep[1];
         word(STATS_MORE + 0xc0) = running[1];
         word(STATS_MORE + 0xc4) = asleep[1];
     }
+    if (more) dirty(STATS_MORE);
     if (external_devices) {
         // the shader's control pass keeps the rest; between two of its runs only the clock moves
         word(CTRL + 0x34) = (u32)(guest_seconds * 1000.0);

@@ -61,7 +61,7 @@ pass of the GPU device's control shader. `nxweb`, the browser, asks for pages; `
 ## Hosts
 
 - The harness fetches with WinINet on a thread (`rvc_harness.cpp`), any `http` or `https`
-  address or a file of its own (`file://` and a path), up to 16 MB, and decodes pictures with
+  address or a file of its own that `--open` named (`file://` and a path; any other gets status 3), up to 16 MB, and decodes pictures with
   WIC: a PNG asked for as a file is looked into for the mark there. Its backends draw a second zone over the data's
   eight rows in the frame of delivery.
 - The VRChat world (`EmuMachine.cs`) uses `VRCStringDownloader` for pages and

@@ -148,7 +148,7 @@ half is its light maps being placed (`AllocBlock`, a third) and the kept level b
 
 A frame of a single-player game is the server's (physics, the monsters' QuakeC) and then the
 client's (the picture). On e1m5 the server's part was 355 of a frame's 515 thousand
-instructions. On a machine with worker cores (`docs/multicore.md`; `--cores 2` in the harness)
+instructions. On a machine with worker cores (`docs/multicore.md`; the D3D11 harness has them)
 the server's physics runs on one, as a function of the game in the game's own memory
 (`linux/quake/server_shaderemu.c`), and the two go at their own pace:
 

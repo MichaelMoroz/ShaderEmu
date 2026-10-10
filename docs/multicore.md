@@ -481,7 +481,7 @@ A job is a function of the program and two words for it:
         ...
     }
 
-    int n = mcw_open(3);                                      // how many workers there are: 0 without --cores
+    int n = mcw_open(3);                                      // how many workers there are: 0 on a machine of one core
     for (k = 1; k <= n; k++) mcw_post(k, sum, (uint32_t)part(k), words(k));
     ...this core's own share...
     for (k = 1; k <= n; k++) { mcw_wait(k); total += mcw_result(k); }
@@ -515,7 +515,7 @@ What a program has to keep to:
   program has, and they are that program's until it closes them: a program that takes every
   core leaves none for the next. It may get fewer than it asked for, or none, and does the
   work itself then.
-- **No workers is the common case to allow for**: the harness without `--cores` has one core.
+- **No workers is the common case to allow for**: D3D12, `--no-mrt` and `--profile` have one core.
   Every use has to fall back on the program doing the job itself.
 
 What it is good for, and what not:

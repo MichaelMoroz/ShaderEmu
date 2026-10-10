@@ -30,7 +30,7 @@ balls over a chequered ground, one light, shadows and three mirrorings, turning;
 `RAY_SIZE=WxH` the picture, `RAY_STILL=1` keeps the scene where it is. Each picture's line
 (`raystat:`) has its time, its rays and a sum of its pixels.
 
-One picture (201,460 rays) on the shader machine, `--cores 16`, the same sum every time:
+One picture (201,460 rays) on the shader machine with 16 cores (it had `--cores 16` then), the same sum every time:
 
 | The cores | A picture | Against core 0 alone |
 |---|---|---|
@@ -45,7 +45,7 @@ One picture (201,460 rays) on the shader machine, `--cores 16`, the same sum eve
 (Those are the tick in one target. In eight, each worker's pixels a block of its own, a
 large worker costs no more than a small one: `multicore.md`, "Eight texels a pixel".)
 
-On a machine of 64 cores (`--cores 64`), the program's own choices:
+On the machine's 64 cores, the program's own choices:
 
 | | 16 cores | 64 cores |
 |---|---|---|

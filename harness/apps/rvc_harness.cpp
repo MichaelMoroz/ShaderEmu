@@ -194,6 +194,11 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
                        faster; the display, the GPU, the keys and the pointer are the shader's as before
                        (D3D11, the Linux image in build\\images\\linux)
   --cpu-ips N          the same, at no more than N instructions a second (3000000: the world's speed)
+  --open ADDRESS       tell the guest to open an address, or a file of this computer (file:// and its path);
+                       several are told ten seconds apart (docs/open.md)
+  --open-after TEXT    not before the console has shown TEXT
+  --holodeck           tell the guest its owner sits in a holodeck's seat (docs/holodeck.md)
+  --holodeck-aim D     and has tracked hands, the right one pointing up by D degrees
   --net PORT           the network (docs/lan.md): this machine is 10.0.0.N and hears UDP port PORT + N of
                        this computer, where the other machines started with the same PORT send (D3D11)
   --net-id N           its number N, 1 to 16 (default 1)
@@ -846,7 +851,8 @@ int main(int argc, char** argv) {
     // "Open this" for the guest (--open): one at a time, each a count up of the guest's word.
     size_t openNext = 0;
     uint32_t openCount = 0;
-    int openWait = 0;
+    double openDue = 0;       // the guest's bar looks once a second and takes one at a time
+    uint32_t openWord = 0;    // the guest's count as the control row has it (a snapshot's may not be 0)
     // The network device (docs/lan.md): the guest's packets come back with the row, the others'
     // go into its ring in the control pass.
     NetLink net;
@@ -918,6 +924,7 @@ int main(int argc, char** argv) {
                 if ((texel(64 + 1, 0) >> (8 + p)) & 1) gpuPassLife[p] = 600;
         if (net.on() && raw.size() >= (64 + kControlTexels + kNetSlot) * 16)
             net.fromGuest(texel(64 + 0x3e, 0), texel(64 + 0x3e, 1), t + (64 + kControlTexels) * 4);
+        if (raw.size() >= (64 + 0x25) * 16) openWord = texel(64 + 0x24, 0);
         if (raw.size() >= (64 + 34) * 16 && texel(64 + 16, 0) != texel(64 + 17, 0) && texel(64 + 16, 0) != fetchAnswered) {
             std::lock_guard<std::mutex> lock(fetch.lock);
             if (!fetch.busy && !fetch.ready) {
@@ -930,12 +937,15 @@ int main(int argc, char** argv) {
                 (held ? fetch.ready : fetch.busy) = true;
                 bool picture = kind == 1, file = kind == 3;
                 if (!held) fprintf(stderr, "[harness] the guest asks for %s\n", url.c_str());
-                if (!held) std::thread([&fetch, url, picture, file] {
+                // (a file of the host's own only if this run was told to have the guest open it)
+                bool own = std::find(opt.open.begin(), opt.open.end(), url) != opt.open.end();
+                if (!held) std::thread([&fetch, url, picture, file, own] {
                     const size_t most = 16u << 20;
                     std::string body;
                     uint32_t status = 0, info = 0;
-                    if (url.rfind("http", 0) != 0) {
-                        // a file of the host's own, for tests: its path, or file:// and its path
+                    if (url.rfind("http", 0) != 0 && !own) status = 3;   // never: docs/fetch.md
+                    else if (url.rfind("http", 0) != 0) {
+                        // a file of the host's own (--open): its path, or file:// and its path
                         std::string path = url.rfind("file://", 0) == 0 ? url.substr(7) : url;
                         if (FILE* f = fopen(path.c_str(), "rb")) {
                             char buf[65536];
@@ -1306,7 +1316,7 @@ int main(int argc, char** argv) {
                 }
                 fetchAnswered = fetch.seq;
                 fetch.ready = false;
-            } else if (!fetchDelivering && openNext < opt.open.size() && frame > (uint64_t)opt.initFrames + 4 && --openWait < 0 &&
+            } else if (!fetchDelivering && openNext < opt.open.size() && frame > (uint64_t)opt.initFrames + 4 && t >= openDue &&
                        (opt.openAfter.empty() || transcript.find(opt.openAfter) != std::string::npos)) {
                 // the next thing to open: its address in the answer's texture, written to the guest's words
                 std::vector<uint8_t> bytes((size_t)kFetchSide * kFetchSide * 4, 0);
@@ -1316,13 +1326,14 @@ int main(int argc, char** argv) {
                 std::string err;
                 if (backend.deliverHostData(mat, bytes.data(), err)) {
                     mat.setInt("_FetchDeliver", 4);
-                    mat.setInt("_FetchSeq", ++openCount);
+                    openCount = (std::max)(openCount, openWord) + 1;
+                    mat.setInt("_FetchSeq", openCount);
                     mat.setInt("_FetchLength", (int64_t)n);
                     fetchDelivering = true;
                     fprintf(stderr, "[harness] the guest is told to open %s\n", address.c_str());
                 }
                 ++openNext;
-                openWait = 600;   // the guest takes one at a time
+                openDue = t + 10;
             }
         }
 

@@ -22,7 +22,9 @@ program registered for what it is. The file manager opens a file the same way.
   started again does not open the same thing twice. One request at a time: a second one
   made before the bar has seen the first replaces it.
 - The harness: `--open ADDRESS` (several, ten seconds apart), not before the console has shown
-  the text of `--open-after TEXT`. An address may be a file of the host's (`file://C:\...`).
+  the text of `--open-after TEXT`. An address may be a file of the host's (`file://C:\...`):
+  the harness hands the guest only those of its files that an `--open` named. Its count goes
+  on from the guest's own word, so an `--open` after a snapshot that had one is seen.
 - The world: the field and the Open key over the display's keyboard (`EmuMachine.OpenLink`).
 
 ## What `open` does (`linux/apps/open.c`)

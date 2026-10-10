@@ -124,7 +124,7 @@ a pass (its write cache: `docs/multicore.md`).
 - **The frame is a picture the GPU shows** (`host_picture`, `host_show_picture` in
   `linux/tdawn/host.c`): decoded once, into GPU memory, and drawn from there, stretched over
   the window if it is one of the small movies. No copy and no doubling by the game.
-- **The worker cores decode it** when the machine has any (`--cores 4` in the harness;
+- **The worker cores decode it** when the machine has any (the D3D11 harness has;
   `linux/ralert/workers.c` is the game's jobs, functions a worker calls in the game's own
   memory, over the library every program has for them, `programs/mc/mcw.c`). A frame's block rows are shared between the
   cores, each writing its own rows of the picture, and the last worker unpacks the next
