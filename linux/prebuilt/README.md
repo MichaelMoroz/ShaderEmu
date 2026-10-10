@@ -61,6 +61,8 @@ sources did not change is the same file after a rebuild and adds nothing to the 
 when this folder is saved again. The files are kept as they are, not packed: git packs them
 itself (the 100 MB here are 60 in the repository), and packing them better by hand (xz: 51)
 would only save anything in a history written again without the files as they are now.
+(The games' data as one solid archive would be 33 MB where git keeps 53; that was weighed in
+October 2026 and the files were left as they are.)
 
 ## The games' data
 
