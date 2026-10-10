@@ -1487,10 +1487,91 @@ index 928dc0e..220bfd9 100644
          if (LogicPage->Lock()) {
              /*
 diff --git a/redalert/techno.cpp b/redalert/techno.cpp
-index 682741b..70bc70c 100644
+index 682741b..22b7f55 100644
 --- a/redalert/techno.cpp
 +++ b/redalert/techno.cpp
-@@ -2461,6 +2461,16 @@ bool TechnoClass::Evaluate_Object(ThreatType method,
+@@ -2246,6 +2246,20 @@ bool TechnoClass::Evaluate_Object(ThreatType method,
+             int bestcellvalue = 0;
+             TechnoClass const* object;
+             int value;
++#ifdef SHADEREMU
++            /*
++            ** A scan is some hundreds of cells, nearly all of them empty, and each was two
++            ** calls that found that out: 25 thousand instructions a scan, a sixth of a battle's
++            ** logic. What those calls answer for an empty cell is known here: Evaluate_Cell()
++            ** says no for a cell nothing stands in, and Evaluate_Just_Cell() says 0 to anyone
++            ** who does not shoot walls down.
++            */
++            bool walls = What_Am_I() != RTTI_VESSEL && !House->IsHuman && Rule.Diff[House->Difficulty].IsWallDestroyer;
++#define SHADEREMU_OCCUPIED(c) ((unsigned)(c) <= MAP_CELL_TOTAL && Map[c].Cell_Occupier() != NULL)
++#else
++            bool walls = true;
++#define SHADEREMU_OCCUPIED(c) true
++#endif
+             //		int rad = 1;
+ 
+             // BG: Medics need to be able to look in their own cell too.
+@@ -2268,12 +2282,12 @@ bool TechnoClass::Evaluate_Object(ThreatType method,
+ 
+                     if ((Cell_Y(cell) - radius) >= Map.MapCellY) {
+                         newcell = XY_Cell(Cell_X(cell) + x, Cell_Y(cell) - radius);
+-                        if (Evaluate_Cell(method, mask, newcell, range, &object, value, zone)) {
++                        if (SHADEREMU_OCCUPIED(newcell) && Evaluate_Cell(method, mask, newcell, range, &object, value, zone)) {
+                             if (bestval < value) {
+                                 bestobject = object;
+                             }
+                         }
+-                        if (bestobject == NULL) {
++                        if (bestobject == NULL && walls) {
+                             value = Evaluate_Just_Cell(newcell);
+                             if (bestcellvalue < value) {
+                                 bestcellvalue = value;
+@@ -2284,12 +2298,12 @@ bool TechnoClass::Evaluate_Object(ThreatType method,
+ 
+                     if ((Cell_Y(cell) + radius) < (Map.MapCellY + Map.MapCellHeight)) {
+                         newcell = XY_Cell(Cell_X(cell) + x, Cell_Y(cell) + radius);
+-                        if (Evaluate_Cell(method, mask, newcell, range, &object, value, zone)) {
++                        if (SHADEREMU_OCCUPIED(newcell) && Evaluate_Cell(method, mask, newcell, range, &object, value, zone)) {
+                             if (bestval < value) {
+                                 bestobject = object;
+                             }
+                         }
+-                        if (bestobject == NULL) {
++                        if (bestobject == NULL && walls) {
+                             value = Evaluate_Just_Cell(newcell);
+                             if (bestcellvalue < value) {
+                                 bestcellvalue = value;
+@@ -2312,12 +2326,12 @@ bool TechnoClass::Evaluate_Object(ThreatType method,
+ 
+                     if ((Cell_X(cell) - radius) >= Map.MapCellX) {
+                         newcell = XY_Cell(Cell_X(cell) - radius, Cell_Y(cell) + y);
+-                        if (Evaluate_Cell(method, mask, newcell, range, &object, value, zone)) {
++                        if (SHADEREMU_OCCUPIED(newcell) && Evaluate_Cell(method, mask, newcell, range, &object, value, zone)) {
+                             if (bestval < value) {
+                                 bestobject = object;
+                             }
+                         }
+-                        if (bestobject == NULL) {
++                        if (bestobject == NULL && walls) {
+                             value = Evaluate_Just_Cell(newcell);
+                             if (bestcellvalue < value) {
+                                 bestcellvalue = value;
+@@ -2328,12 +2342,12 @@ bool TechnoClass::Evaluate_Object(ThreatType method,
+ 
+                     if ((Cell_X(cell) + radius) < (Map.MapCellX + Map.MapCellWidth)) {
+                         newcell = XY_Cell(Cell_X(cell) + radius, Cell_Y(cell) + y);
+-                        if (Evaluate_Cell(method, mask, newcell, range, &object, value, zone)) {
++                        if (SHADEREMU_OCCUPIED(newcell) && Evaluate_Cell(method, mask, newcell, range, &object, value, zone)) {
+                             if (bestval < value) {
+                                 bestobject = object;
+                             }
+                         }
+-                        if (bestobject == NULL) {
++                        if (bestobject == NULL && walls) {
+                             value = Evaluate_Just_Cell(newcell);
+                             if (bestcellvalue < value) {
+                                 bestcellvalue = value;
+@@ -2461,6 +2475,16 @@ bool TechnoClass::Evaluate_Object(ThreatType method,
          assert(IsActive);
  
          FlashCount = count;

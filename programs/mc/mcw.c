@@ -59,7 +59,7 @@ static void say(const char *text, uint32_t value)
  * shared, then: a job does not use it).
  */
 void mcw_entry(void);
-uint32_t mcw_loop(uint32_t core);
+uint32_t mcw_loop(uint32_t core) __attribute__((used));	/* (called from the lines below only) */
 __asm__(".text\n"
 	".globl mcw_entry\n"
 	"mcw_entry:\n"

@@ -99,7 +99,15 @@ turn of each frame (`turned()` in `linux/ralert/gl.cpp`): those frames are 255 t
 instructions and 14 a second, and the state sum at frame 640 is the same (`52fa1019`). Its
 picture was not compared with the game's own: the aircraft does not cross the view in that
 run. `ralogic`-style counters put round an object's turn said where the logic goes there:
-40 soldiers 100 thousand, 5 vehicles 35, 45 buildings 20, the houses 17.
+40 soldiers 100 thousand, 5 vehicles 35, 45 buildings 20, the houses 17. A soldier's 2,500
+are its ordinary stages (the base class's turn 1,000 to 1,300, moving 600 to 800, firing
+350): nothing in them is waste to be taken out in one place. A scan for a target was 25
+thousand instructions, some hundreds of cells in rings at two calls each; an empty cell is
+passed over without them now (`SHADEREMU_OCCUPIED` in `TechnoClass::Greatest_Threat`), 5 to
+8% of the battle's logic, with the sums as they were. Building the game with link-time
+optimisation (`-flto`) made a program a tenth smaller that ends with "out of memory" at its
+start: the source depends on what a whole-program optimiser may take away, and it was not
+looked into further.
 
 ## Movies, and the worker cores
 
