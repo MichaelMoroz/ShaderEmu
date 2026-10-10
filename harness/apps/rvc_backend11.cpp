@@ -31,9 +31,25 @@ public:
         for (auto& d : opt.compile.defines)
             if (d.first == "CORE_PITCH") {}   // (no more: the workers are one strip)
         tickRows_ = (float)opt.tickRows;
-        if (!buildPasses(gpu_, shader, {"CPUTick", "Commit"}, bo, passes_, err)) return false;
         for (auto& d : opt.compile.defines)
             if (d.first == "TICK_MRT") mrt_ = true;
+        for (auto& d : opt.compile.defines)
+            if (d.first == "NO_SCATTER") scatter_ = false;
+        scatter_ = scatter_ && mrt_ && bands_;
+        // the commit draws whole only the bands the cores' stores are not what changed (they are points)
+        if (scatter_) bo.settings.defines.push_back({"COMMIT_SCATTER", "1"});
+        if (!buildPasses(gpu_, shader, {"CPUTick", "Commit"}, bo, passes_, err)) return false;
+        if (scatter_) {
+            // the commit's pass twice more: its points, and the same points as copies
+            SLShader withPoints = shader;
+            for (auto& p : withPoints.passes)
+                if (p.name == "Commit") p.geometryEntry = "commit_geom";
+            ShaderBuildOptions points = bo;
+            points.settings.defines.push_back({"COMMIT_POINTS", "1"});
+            if (!buildPasses(gpu_, withPoints, {"Commit"}, points, pointPasses_, err)) return false;
+            points.settings.defines.push_back({"COMMIT_COPY", "1"});
+            if (!buildPasses(gpu_, withPoints, {"Commit"}, points, copyPasses_, err)) return false;
+        }
         for (auto& d : opt.compile.defines)
             if (d.first == "TICK_LOAD") mrtLoad_ = (UINT)(std::max)(1, atoi(d.second.c_str()));
         if (mrt_) {
@@ -136,6 +152,17 @@ public:
         if (!gpuPasses_.empty()) mat.setTexture("_GpuTarget", gpuSrv_.Get(), kGpuTarget, kGpuTarget);   // Commit copies it back
         // With COMMIT_BANDS the vertex shader draws the state rows and the bands of RAM that changed;
         // the buffer drawn into holds the state of two commits ago, as on D3D12.
+        if (scatter_ && mat.getFloat("_Init") == 0) {
+            // the state rows and the bands other things wrote, then what the cores stored as
+            // points (a geometry shader makes each the rectangle it stands for); and the same
+            // points into the other buffer, as copies, so that both have them
+            UpdateZone all{1024, 2048, 2048, 4096, 1};
+            UINT points = 770 + ((UINT)cores_ - 1) * 386;
+            crt_.runZone(gpu_, passes_[1], mat, all, 6 * kCommitQuads, false);
+            crt_.runZone(gpu_, pointPasses_[0], mat, all, points, false, D3D11_PRIMITIVE_TOPOLOGY_POINTLIST);
+            crt_.swap();
+            crt_.runZone(gpu_, copyPasses_[0], mat, all, points, false, D3D11_PRIMITIVE_TOPOLOGY_POINTLIST);
+        } else
         crt_.runZone(gpu_, passes_[1], mat, UpdateZone{1024, 2048, 2048, 4096, 1}, bands_ ? 6 * kCommitQuads : 6);
         if (timeIt) gpu_.ctx->End(tsQuery_[2].Get());
         if (gpuPasses_.size() == 2) {
@@ -509,7 +536,8 @@ private:
     }
 
     Gpu gpu_;
-    std::vector<GpuPass> passes_, gpuPasses_, soundPasses_, unpackPasses_;
+    std::vector<GpuPass> passes_, gpuPasses_, soundPasses_, unpackPasses_, pointPasses_, copyPasses_;
+    bool scatter_ = true;   // the cores' stores committed as points (with the tick in eight targets; --define NO_SCATTER: as bands)
     // TICK_MRT: the tick's eight targets, 72 x 16 (main.shader, TICK_MRT_W)
     bool mrt_ = false;
     UINT mrtLoad_ = 1;   // TICK_LOAD: the workers' quads drawn so many times (a measurement)

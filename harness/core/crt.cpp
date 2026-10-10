@@ -67,7 +67,8 @@ void CustomRenderTexture::copyIn(Gpu& gpu, const UpdateZone& z) {
     gpu.ctx->CopySubresourceRegion(tex_[1 - cur_].Get(), 0, (UINT)x0, (UINT)y0, 0, tex_[cur_].Get(), 0, &box);
 }
 
-void CustomRenderTexture::runZone(Gpu& gpu, GpuPass& pass, Material& mat, const UpdateZone& z, UINT vertices, bool copyBack) {
+void CustomRenderTexture::runZone(Gpu& gpu, GpuPass& pass, Material& mat, const UpdateZone& z, UINT vertices, bool copyBack,
+                                  D3D11_PRIMITIVE_TOPOLOGY topology) {
     ID3D11DeviceContext* ctx = gpu.ctx.Get();
 
     // Region in memory coordinates (row 0 = top), for the copy-back of partial zones.
@@ -107,7 +108,7 @@ void CustomRenderTexture::runZone(Gpu& gpu, GpuPass& pass, Material& mat, const 
     ctx->OMSetBlendState(gpu.blendOpaque.Get(), nullptr, 0xffffffff);
     ctx->OMSetDepthStencilState(gpu.depthOff.Get(), 0);
     ctx->IASetInputLayout(nullptr);
-    ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    ctx->IASetPrimitiveTopology(topology);
 
     mat.bind(ctx, pass, gpu);
     ctx->Draw(vertices, 0);

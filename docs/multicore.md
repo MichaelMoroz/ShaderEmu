@@ -416,6 +416,38 @@ of tick, as with 15, and 2.2 ms of commit. `mctest`'s primes below 480,000: 45.3
 alone, 0.79 s with 63 workers, 57 times. `mctest 63 60000 shape 3,3,...` passes, and so does
 a mixed geometry of 40.
 
+## The commit as points
+
+The commit drew whole every 4 MB band of RAM a core had stored to, and looked for every
+texel of it in every core's write cache. With the tick in eight targets (D3D11 harness;
+`--define NO_SCATTER` for the bands) what the cores stored is drawn as points instead, a
+list of them in one draw, and a geometry shader (`commit_geom`) makes each point the
+rectangle it stands for:
+
+- an entry of a write cache: the texel its tag names, 1 x 1;
+- the store a full cache had no room for: its texel;
+- a copy or a fill, which is megabytes at a time: the rows of its destination, three
+  rectangles at most (a first row from where it begins, whole rows, a last row to where it ends).
+
+Point n is core 0's entry n (768 of them, then its last store and its copy), and from 770 on
+386 a worker: 770 points for one core, 6,560 for 16, 25,088 for 64, most of which are no
+entry and come to nothing. Where the stores are is read from the tick's targets. The pixel
+shader is the commit's own, so a texel is what it always was, whichever cores stored to it
+and in what order. The state rows and the bands that something else wrote (the GPU's
+control words and its picture copied back) are still drawn whole, in the draw before.
+
+RAM is still two buffers, which a copy needs (it reads RAM and writes RAM), so the buffer
+not drawn into must be given the same texels: the same points are drawn once more into it
+as plain copies of what the commit made them. (A worker that did not run has its last
+pass's stores in the targets: those texels are written again as they are.)
+
+A pass's commit on the graphics card, one core busy: 0.024 ms where it was 0.062. `nxray`'s
+picture of 640 x 480 with 63 workers of the smallest size is 1.19 s where it was 1.35 s
+(677 thousand rays a second, 58 times core 0 alone), and with 15 workers 4.29 s where it
+was 4.50 s. `nxpath`, 16 cores: 100 thousand rays a second where it was 89.
+
+In Unity this is a mesh of points, so a camera's pass, as the tick in eight targets is.
+
 ## Workers with nothing to do
 
 A worker's `wfi` is a sleep until the first word of its job changes, and the machine does not

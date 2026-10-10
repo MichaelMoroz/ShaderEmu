@@ -517,8 +517,13 @@
 #endif
                 uint stalled = STATE_TEX_HART(uint2(28, 0), 0).r;
                 if (_Init) return 0xffffffff;
+#ifdef COMMIT_SCATTER
+                uint changed = 1u << 28;   // the GPU's control words; what the cores stored is drawn as points (COMMIT_POINTS)
+                if (false) {
+#else
                 uint changed = STATE_TEX_HART(uint2(41, 0), 0).g | (1u << 28);   // the tick's writes; GPU control words
                 if (stalled == STALL_MEMOP_COPY || stalled == STALL_MEMOP_FILL) {
+#endif
                     // a parallel copy or fill: the bands from its destination to its end
                     uint4 op = STATE_TEX_HART(uint2(38, 0), 0);
                     uint lo = (op.g >> 22) & 31, hi = min((op.g + op.b - 1) >> 22, 31u);
@@ -533,8 +538,107 @@
 
             // One quad for the whole texture, or with COMMIT_BANDS (33 quads) the state rows and
             // each band of RAM that has to be drawn.
+            // COMMIT_POINTS (the D3D11 harness with the tick in eight targets, docs/multicore.md):
+            // what the cores stored is drawn as points, each made the rectangle it stands for
+            // by commit_geom: a texel for an entry of a write cache and for the store a full
+            // cache had no room for, the rows of its destination for a copy or a fill. Point
+            // n is core 0's entry n (768 of them, then its last store and its copy), and from
+            // 770 on 386 a worker (384 entries). Where the stores are is read from the tick's
+            // targets, as the tick left them: a worker that did not run has its last pass's
+            // there, whose texels are then written again as they are, which is harmless. The
+            // bands the commit draws whole are then only those something else wrote.
+#ifdef COMMIT_POINTS
+            Texture2D<uint4> _TickOut0, _TickOut1, _TickOut2, _TickOut3, _TickOut4, _TickOut5, _TickOut6, _TickOut7;
+            #ifndef TICK_GAP
+            #define TICK_GAP 8
+            #endif
+            uint4 tick_out(uint k, uint2 at) {
+                uint3 p = uint3(at, 0);
+                if (k == 0) return _TickOut0.Load(p);
+                if (k == 1) return _TickOut1.Load(p);
+                if (k == 2) return _TickOut2.Load(p);
+                if (k == 3) return _TickOut3.Load(p);
+                if (k == 4) return _TickOut4.Load(p);
+                if (k == 5) return _TickOut5.Load(p);
+                if (k == 6) return _TickOut6.Load(p);
+                return _TickOut7.Load(p);
+            }
+            // texel w of a core's state as the tick left it (a worker's block begins at column col0)
+            uint4 tick_state(uint core, uint col0, uint w) {
+                if (core == 0) return tick_out(w & 7, uint2((w & 63) >> 3, w >> 6));
+                return tick_out(w & 7, uint2((64 >> 3) + TICK_GAP + col0 + (w >> 6), (w & 63) >> 3));
+            }
+            void commit_quad(inout TriangleStream<v2f_customrendertexture> stream, uint x, uint y, uint w, uint h) {
+                for (uint corner = 0; corner < 4; corner++) {
+                    float2 p = float2(x + (corner & 1) * w, y + (corner >> 1) * h) / (float2)s_dim;
+                    v2f_customrendertexture o;
+                    o.vertex = float4(p.x * 2.0 - 1.0, 1.0 - p.y * 2.0, 0.0, 1.0);
+                    o.localTexcoord = float3(p, 0);
+                    o.globalTexcoord = float3(p, 0);
+                    o.primitiveID = 0;
+                    o.direction = 0;
+                    stream.Append(o);
+                }
+                stream.RestartStrip();
+            }
+            #define COMMIT_RAM_TEXELS (2048u * (4096u - 64u))
+            [maxvertexcount(12)]
+            void commit_geom(point v2f_customrendertexture IN[1], inout TriangleStream<v2f_customrendertexture> stream) {
+                _SelfTexture2D.GetDimensions(s_dim.x, s_dim.y);
+                uint id = IN[0].primitiveID, core = 0, e = id, col0 = 0, bits = L1_TABLE_BITS;
+#if CORES > 1
+                if (id >= 770) {
+                    core = 1 + (id - 770) / 386;
+                    e = (id - 770) % 386;
+                    if (core >= CORES) return;
+                    MC_GEO_READ
+                    if ((mc_geo.r & 1) != 0) return;
+                    for (uint k = 1; k < core; k++) col0 += mc_cols_of(mc_rows_of(mc_bits_of(k)));
+                    bits = mc_bits_of(core);
+                    if (bits == 0) return;
+                }
+#else
+                if (id >= 770) return;
+#endif
+                uint last = core == 0 ? 768 : 384;
+                if (e < last) {
+                    // an entry of the cache: its tag is the texel's number and one
+                    if (e >= (2u << bits) * 3) return;
+                    uint tag = idx_uint4(tick_state(core, col0, L1_STATE_AT + (e / 3) * 4), e % 3);
+                    if (tag != 0 && tag - 1 < COMMIT_RAM_TEXELS) commit_quad(stream, (tag - 1) % 2048, 64 + (tag - 1) / 2048, 1, 1);
+                } else if (e == last) {
+                    // the store a full cache had no room for
+                    uint addr = tick_state(core, col0, 8).r;
+                    if ((addr >> 4) < COMMIT_RAM_TEXELS) commit_quad(stream, (addr >> 4) % 2048, 64 + (addr >> 4) / 2048, 1, 1);
+                } else {
+                    // a copy or a fill: the texels from its destination to its end, row by row
+                    uint stalled = tick_state(core, col0, 28).r;
+                    uint4 op = tick_state(core, col0, 38);
+                    if ((stalled != STALL_MEMOP_COPY && stalled != STALL_MEMOP_FILL) || op.b == 0) return;
+                    uint t0 = op.g >> 4, t1 = min((op.g + op.b - 1) >> 4, COMMIT_RAM_TEXELS - 1);
+                    if (t0 > t1) return;
+                    uint y0 = t0 / 2048, y1 = t1 / 2048, x0 = t0 % 2048, x1 = t1 % 2048;
+                    if (y0 == y1) {
+                        commit_quad(stream, x0, 64 + y0, x1 - x0 + 1, 1);
+                    } else {
+                        commit_quad(stream, x0, 64 + y0, 2048 - x0, 1);
+                        commit_quad(stream, 0, 64 + y1, x1 + 1, 1);
+                        if (y1 > y0 + 1) commit_quad(stream, 0, 64 + y0 + 1, 2048, y1 - y0 - 1);
+                    }
+                }
+            }
+#endif
+
             v2f_customrendertexture commit_vert(appdata_customrendertexture IN) {
-#ifdef COMMIT_BANDS
+#ifdef COMMIT_POINTS
+                v2f_customrendertexture OUT;
+                OUT.vertex = float4(0, 0, 0, 1);
+                OUT.localTexcoord = 0;
+                OUT.globalTexcoord = 0;
+                OUT.primitiveID = IN.vertexID;
+                OUT.direction = 0;
+                return OUT;
+#elif defined(COMMIT_BANDS)
                 static const float2 corners[6] = {{0, 0}, {0, 1}, {1, 1}, {1, 0}, {0, 0}, {1, 1}};
                 uint quad = IN.vertexID / 6;
                 float2 corner = corners[IN.vertexID % 6];
@@ -558,6 +662,11 @@
                 _SelfTexture2D.GetDimensions(s_dim.x, s_dim.y);
                 _Data_MTD_R.GetDimensions(m_dim.x, m_dim.y);
                 uint2 pos = i.globalTexcoord.xy * s_dim;
+#ifdef COMMIT_COPY
+                // the same points once more, into the buffer the commit did not draw into: its
+                // texels there are what the commit made them
+                return _SelfTexture2D[pos];
+#endif
 
                 if (_Init && _InitRaw) {
                     float3 raw[6];

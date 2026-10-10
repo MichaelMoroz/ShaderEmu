@@ -31,7 +31,10 @@ public:
     void load(ID3D11DeviceContext* ctx, const void* data, UINT rowPitch);
     // `vertices` is 6 for the zone's quad; a pass whose vertex shader places quads of its own
     // (the banded commit) asks for more.
-    void runZone(Gpu& gpu, GpuPass& pass, Material& mat, const UpdateZone& zone, UINT vertices = 6, bool copyBack = true);
+    void runZone(Gpu& gpu, GpuPass& pass, Material& mat, const UpdateZone& zone, UINT vertices = 6, bool copyBack = true,
+                 D3D11_PRIMITIVE_TOPOLOGY topology = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    // The buffer drawn into (with copyBack false) becomes the current one.
+    void swap() { cur_ = 1 - cur_; }
     // For zones drawn with copyBack false: they all read the texture as it was, and none waits
     // for another's copy. Copies what such a zone drew into the current buffer.
     void copyZone(Gpu& gpu, const UpdateZone& zone);

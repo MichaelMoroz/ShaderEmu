@@ -854,6 +854,12 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   `mcw_fit`, `mcw_rows`, `mcw_room` in `programs/mc/mcw.h`): no 15 or 16 written into it.
   `nxray`, `nxpath` and `nxview` (a JPEG: one worker for its codes and one a strip of 16 rows
   at most) do; Quake, the two Command & Conquer games and the NES ask for the few they use.
+- The D3D11 harness commits what the cores stored as points (`docs/multicore.md`, "The commit as
+  points"; `--define NO_SCATTER` for whole bands, to compare). Anything new that writes RAM
+  in the commit and is not a cache entry, a core's last store or a copy must add its band to
+  `commit_bands_changed_core` or its own point to `commit_geom`, or the write is not drawn.
+  With `--stats-after` (the timed frames) a guest's own times came out twice as long with
+  the points: take a program's times from a run without it.
 - Pixels of two cores that the card runs as one group cost what both cost, unless the cores
   run the same instructions: measure anything about the workers' pixels with `nxray` (every
   core its own work), never with `mctest`'s bench (the same primes on all of them).
