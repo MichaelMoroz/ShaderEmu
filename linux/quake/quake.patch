@@ -173,7 +173,7 @@ index 25a8007..d59bc9b 100644
  	strcpy (glt->identifier, identifier);
  	glt->texnum = texture_extension_number;
 diff --git a/WinQuake/gl_model.c b/WinQuake/gl_model.c
-index 21ef130..cf30bd6 100644
+index 21ef130..13d8c9e 100644
 --- a/WinQuake/gl_model.c
 +++ b/WinQuake/gl_model.c
 @@ -170,6 +170,7 @@ void Mod_ClearAll (void)
@@ -184,6 +184,101 @@ index 21ef130..cf30bd6 100644
  	for (i=0 , mod=mod_known ; i<mod_numknown ; i++, mod++)
  		if (mod->type != mod_alias)
  			mod->needload = true;
+@@ -1408,6 +1409,18 @@ void Mod_FloodFillSkin( byte *skin, int skinwidth, int skinheight )
+ Mod_LoadAllSkins
+ ===============
+ */
++// (ShaderEmu) A model's first skin is filled by a worker core, when one is free, while this
++// core reads the rest of the model and builds its strips (server_shaderemu.c). The skins are
++// then gone through twice: se_skins_walk only finds where they end, and the second time
++// (se_skins_filled: the fill has been done) they are copied and made textures as before.
++static int se_skins_walk, se_skins_filled;
++static daliasskintype_t *se_skins_from;
++static unsigned se_fill_job (unsigned skin, unsigned size)
++{
++	Mod_FloodFillSkin ((byte *)skin, (int)(size >> 16), (int)(size & 0xffff));
++	return 0;
++}
++
+ void *Mod_LoadAllSkins (int numskins, daliasskintype_t *pskintype)
+ {
+ 	int		i, j, k;
+@@ -1430,7 +1443,12 @@ void *Mod_LoadAllSkins (int numskins, daliasskintype_t *pskintype)
+ 	for (i=0 ; i<numskins ; i++)
+ 	{
+ 		if (pskintype->type == ALIAS_SKIN_SINGLE) {
+-			Mod_FloodFillSkin( skin, pheader->skinwidth, pheader->skinheight );
++			if (se_skins_walk) {
++				pskintype = (daliasskintype_t *)((byte *)(pskintype+1) + s);
++				continue;
++			}
++			if (!se_skins_filled)
++				Mod_FloodFillSkin( skin, pheader->skinwidth, pheader->skinheight );
+ 
+ 			// save 8 bit texels for the player model to remap
+ 	//		if (!strcmp(loadmodel->name,"progs/player.mdl")) {
+@@ -1455,9 +1473,14 @@ void *Mod_LoadAllSkins (int numskins, daliasskintype_t *pskintype)
+ 
+ 			pskintype = (void *)(pinskinintervals + groupskins);
+ 
++			if (se_skins_walk) {
++				pskintype = (daliasskintype_t *)((byte *)(pskintype) + groupskins * s);
++				continue;
++			}
+ 			for (j=0 ; j<groupskins ; j++)
+ 			{
+-					Mod_FloodFillSkin( skin, pheader->skinwidth, pheader->skinheight );
++					if (!se_skins_filled)
++						Mod_FloodFillSkin( skin, pheader->skinwidth, pheader->skinheight );
+ 					if (j == 0) {
+ 						texels = Hunk_AllocName(s, loadname);
+ 						pheader->texels[i] = texels - (byte *)pheader;
+@@ -1564,7 +1587,24 @@ void Mod_LoadAliasModel (model_t *mod, void *buffer)
+ // load the skins
+ //
+ 	pskintype = (daliasskintype_t *)&pinmodel[1];
+-	pskintype = Mod_LoadAllSkins (pheader->numskins, pskintype);
++	{
++		// (only when the first skin is a single one: of a group the game fills what is its
++		// header, which is read here meanwhile)
++		daliasskintype_t *skins = pskintype;
++		int filling = pheader->numskins >= 1 && pheader->numskins <= MAX_SKINS && skins->type == ALIAS_SKIN_SINGLE
++			&& pheader->skinwidth < 65536 && pheader->skinheight < 65536
++			&& SE_JobBegin (se_fill_job, (unsigned)(skins + 1), (unsigned)pheader->skinwidth << 16 | (unsigned)pheader->skinheight);
++
++		if (filling) {
++			se_skins_walk = 1;
++			pskintype = Mod_LoadAllSkins (pheader->numskins, pskintype);
++			se_skins_walk = 0;
++			se_skins_from = skins;
++		} else {
++			se_skins_from = NULL;
++			pskintype = Mod_LoadAllSkins (pheader->numskins, pskintype);
++		}
++	}
+ 
+ //
+ // load base s and t vertices
+@@ -1631,9 +1671,18 @@ void Mod_LoadAliasModel (model_t *mod, void *buffer)
+ 	//
+ 	GL_MakeAliasModelDisplayLists (mod, pheader);
+ 
++	if (se_skins_from)
++	{	// the worker core has filled the skin by now, or is waited for: the skins themselves
++		SE_JobEnd ();
++		se_skins_filled = 1;
++		Mod_LoadAllSkins (pheader->numskins, se_skins_from);
++		se_skins_filled = 0;
++		se_skins_from = NULL;
++	}
++
+ //
+ // move the complete, relocatable alias model to the cache
+-//	
++//
+ 	end = Hunk_LowMark ();
+ 	total = end - start;
+ 	
 diff --git a/WinQuake/gl_model.h b/WinQuake/gl_model.h
 index ae576b8..359b922 100644
 --- a/WinQuake/gl_model.h
@@ -889,10 +984,10 @@ index 4f2aa36..9111320 100644
  		if (!a->function)
  			PR_RunError ("NULL function");
 diff --git a/WinQuake/quakedef.h b/WinQuake/quakedef.h
-index e451827..25a2d91 100644
+index e451827..df46f85 100644
 --- a/WinQuake/quakedef.h
 +++ b/WinQuake/quakedef.h
-@@ -285,6 +285,30 @@ typedef struct
+@@ -285,6 +285,32 @@ typedef struct
  
  extern qboolean noclip_anglehack;
  
@@ -911,6 +1006,8 @@ index e451827..25a2d91 100644
 +int SE_ServerKeepSend (int reliable, void *sock, const void *data, int bytes);
 +int SE_ServerCanSend (struct qsocket_s *sock);
 +void SE_ServerSend (void);
++int SE_JobBegin (unsigned (*job) (unsigned, unsigned), unsigned a0, unsigned a1);
++void SE_JobEnd (void);
 +extern float sv_frametime;
 +void SE_ServerPoll (void);
 +int SE_ServerOnWorker (void);
@@ -923,7 +1020,7 @@ index e451827..25a2d91 100644
  
  //
  // host
-@@ -296,7 +320,7 @@ extern	cvar_t		sys_nostdout;
+@@ -296,7 +322,7 @@ extern	cvar_t		sys_nostdout;
  extern	cvar_t		developer;
  
  extern	qboolean	host_initialized;		// true if into command execution

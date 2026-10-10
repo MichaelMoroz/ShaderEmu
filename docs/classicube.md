@@ -65,8 +65,15 @@ machine with worker cores (`docs/multicore.md`) a second builder runs on one:
   of its data once before the first job (`mcw_touch`), or the worker would stop at each page
   of its own buffers until the next frame.
 
-From the command to the whole world drawn: 40.3 s, 51.9 s with `CLASSICUBE_MESH=inline` (the
-first core alone); the finished world is the same 83 commands and 6,980 quads.
+The world's making has two steps that are noise by the column, a third of it: the height
+map and the strata. Both are shared out by rows of z between the first core and up to three
+workers (`SE_GenShare` in `Generator.c`; the game asks for the workers on its own thread
+before the generator's begins). The rest of the making draws from one run of random numbers
+and stays in order.
+
+From the command to the whole world drawn: 38.0 s on four cores (40.3 s on two, where only
+the meshes have a worker), 52 s with `CLASSICUBE_MESH=inline` (the first core alone); the
+finished world is the same 83 commands and 6,980 quads.
 
 ## How it is drawn
 

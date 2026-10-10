@@ -46,6 +46,7 @@ static float rate = 1;
 static int draining;
 static float since;		/* time the client's frames have taken since the server's last began */
 float sv_frametime;		/* the server's host_frametime */
+unsigned se_load_jobs;
 unsigned se_server_cycles, se_server_frames, se_server_passes, se_server_between, se_server_held, se_server_behind;	/* for the quakestat: lines */
 
 static void setup (void)
@@ -416,6 +417,22 @@ void SE_ServerDrop (void)
 		draining = 0;
 	}
 }
+
+/*
+ * A job of the loader's for the worker core, when it has none of the server's (which is so
+ * while a level is loaded): 1 if it was given out, and SE_JobEnd() waits for it.
+ */
+int SE_JobBegin (unsigned (*job) (unsigned, unsigned), unsigned a0, unsigned a1)
+{
+	setup ();
+	if (mode < MODE_WAIT || out == OUT_RUNNING)
+		return 0;
+	mcw_post (1, (mcw_fn)job, a0, a1);
+	se_load_jobs++;
+	return 1;
+}
+
+void SE_JobEnd (void) { mcw_wait (1); }
 
 /* A console command is about to run. Most are the client's; any other may be the server's. */
 void SE_ServerCommand (const char *name)
