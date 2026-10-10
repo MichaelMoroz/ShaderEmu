@@ -6,13 +6,14 @@
 extern "C" {
 #endif
 
-#define PT_TILE 32
+#define PT_TILE pt.tile
 enum { PT_DIFFUSE, PT_MIRROR, PT_GLASS };
 
 /* What a picture is traced with: written between two pictures by the core that hands the
  * tiles out, only read by the ones that trace. */
 struct pt_scene {
 	int width, height;	/* the width a multiple of four */
+	int tile;		/* a tile's side: 32 pixels, or 16 when that leaves a worker fewer than four tiles */
 	int bounces;		/* how many times a path may turn */
 	int material[2];	/* the two balls: PT_DIFFUSE, PT_MIRROR or PT_GLASS */
 	int owners;		/* each tile framed in its core's colour */

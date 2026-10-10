@@ -29,7 +29,7 @@ static const char *
 decode(const char *from, const char *to, int *pw, int *ph)
 {
 	const char *asked = getenv("NXVIEW_WORKERS"), *why;
-	int workers = asked ? atoi(asked) : 3;
+	int workers = asked ? atoi(asked) : mcw_most() > 3 ? mcw_most() : 3;	/* as many as the machine has (and the picture has work for) */
 	struct timeval then, now;
 	unsigned then_n, now_n;
 

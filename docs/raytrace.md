@@ -5,9 +5,14 @@ above all: a pixel of a traced picture is a few thousand instructions of float a
 and a handful of bytes stored, so a core needs next to no write cache for it, and the
 machine's geometry lets a program have fifteen such cores in place of three large ones.
 
-Both work the same way. Core 0 traces nothing: it lays the cores out (`mcw_shape`), hands a
-tile of 32 x 32 pixels to every worker that has none (`mcw_post`, `mcw_done`), and shows the
-picture as it fills. The picture is words in GPU memory that the display draws where they
+Both work the same way. Core 0 traces nothing: it lays the cores out (`mcw_shape`), as many
+workers of a size as the machine has room for (`mcw_fit`: 15 of the smaller sizes and 7 of
+the largest on a machine of 16 cores, 63 and 27 on one of 64), hands a tile to every worker
+that has none (`mcw_post`, `mcw_done`), and shows the picture as it fills. A tile is 32 x 32
+pixels, or 16 x 16 when that would leave a worker fewer than four tiles of the picture: with
+63 workers a picture of 320 x 240 in tiles of 32 is 80 tiles, hardly more than one each
+(0.57 s; 0.48 s in tiles of 16), and in tiles of 16 where 32 would do, the handing out
+costs (640 x 480: 1.76 s against 1.40 s). The sum is the same either way. The picture is words in GPU memory that the display draws where they
 lie (`seglTexturePointer`), and a tile's rows begin and end on 16 bytes of it (a tile is 32
 pixels of four bytes across, the picture's width a multiple of four), so no two cores store
 to the same 16 bytes. Everything else a job writes is its own stack; the scene is only read.
@@ -18,7 +23,7 @@ to the same 16 bytes. Everything else a job writes is its own stack; the scene i
 balls over a chequered ground, one light, shadows and three mirrorings, turning; 320 x 240.
 
     a   all the workers the geometry has      1   one worker      0   core 0 alone
-    s   the next geometry (15 small, 3 large and 12 small, 7 large, 15 of the smallest)
+    s   the next geometry (small, 3 large and the rest small, large, the smallest: as many as fit)
     w   each tile framed in its core's colour  space  stop and go   q, Escape  leave
 
 `RAY_FRAMES=N` leaves after N pictures, `RAY_WORKERS=N` and `RAY_SHAPE=4,4,...` set the start,
@@ -37,8 +42,20 @@ One picture (201,460 rays) on the shader machine, `--cores 16`, the same sum eve
 | 3 large and 12 small (the kernel's default) | 2.2 s | 7.7 |
 | 15 of the smallest (size 3) | 1.3 to 1.5 s | 12 |
 
-The smallest cores are the fastest: what a busy core costs the pass is its pixels, and this
-work never fills even their cache.
+(Those are the tick in one target. In eight, each worker's pixels a block of its own, a
+large worker costs no more than a small one: `multicore.md`, "Eight texels a pixel".)
+
+On a machine of 64 cores (`--cores 64`), the program's own choices:
+
+| | 16 cores | 64 cores |
+|---|---|---|
+| `nxray`, 320 x 240 | 1.21 s with 15 workers | 0.48 s with 63 |
+| `nxray`, 640 x 480 (`RAY_SIZE`) | 4.72 s | 1.62 s (1.35 s with 63 of the smallest, `RAY_SHAPE`) |
+| `nxpath`, 160 x 120, 8 samples | 11.4 s, 89 thousand rays a second | 6.9 s, 148 thousand |
+| `nxpath`, 320 x 240, 4 samples | 18.7 s, 109 thousand | 9.4 s, 217 thousand |
+
+The path tracer gains less: core 0 draws its panel seven times a second and hands the tiles
+out in between.
 
 ## `nxpath`: a path tracer, with a panel
 
@@ -54,7 +71,8 @@ lamp by a mirror or through glass and would be a white speck for good.
 
 `nxpath.cpp` is the panel, Dear ImGui (`imgui.md`): the picture's size, samples a pixel,
 turns of a path, the lamp, the two balls' kinds, which core traced what, and how the cores
-are laid out (15 of the smallest, 15 small, 7 large, or this core alone); Render, Stop, how
+are laid out (the smallest, small or large workers, as many as the machine has room for, or
+this core alone); Render, Stop, how
 far it is and how many rays a second. The panel is drawn seven times a second while a
 picture is traced (it is some 200 thousand instructions of core 0) and the tiles are handed
 out in between.

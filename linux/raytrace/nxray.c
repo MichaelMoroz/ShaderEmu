@@ -24,7 +24,10 @@
 #include "mcw.h"
 
 #define ONE 65536
-#define TILE 32
+/* A tile is 32 pixels square, or 16 when that leaves a worker fewer than four tiles of the
+ * picture (63 workers and 320 x 240): set between two pictures, read by the cores that trace. */
+static int tile_px = 32;
+#define TILE tile_px
 #define SPHERES 6
 #define DEPTH 3
 
@@ -189,13 +192,29 @@ trace_tile(uint32_t tile, uint32_t core)
 static GR_WINDOW_ID window;
 static int workers, wanted = 99, stopped, frames_left = -1, still;
 static int shape_now;
-static const char *const shape_names[] = {"15 small", "3 large and 12 small", "7 large", "15 of the smallest", "the machine's own"};
-static const unsigned char shapes[4][64] = {
-	{4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4},
-	{6, 6, 6, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4},
-	{6, 6, 6, 6, 6, 6, 6, 0, 0, 0, 0, 0, 0, 0, 0},
-	{3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3},
-};
+/* The geometries offered, as many workers of each as this machine has room for (15 on a
+ * machine of 16 cores, 63 on one of 64): small, three large and the rest small, large, the
+ * smallest. */
+static char shape_names[5][40] = {"", "", "", "", "the machine's own"};
+static unsigned char shapes[4][64];
+
+static void
+make_shapes(void)
+{
+	int n, k, rest;
+
+	for (n = mcw_fit(4), k = 0; k < n; k++) shapes[0][k] = 4;
+	snprintf(shape_names[0], sizeof shape_names[0], "%d small", n);
+	rest = (mcw_room() - 3 * mcw_rows(6)) / mcw_rows(4);
+	if (rest > mcw_most() - 3) rest = mcw_most() - 3;
+	if (rest < 0) rest = 0;
+	for (k = 0; k < 3 + rest && k < mcw_most(); k++) shapes[1][k] = k < 3 ? 6 : 4;
+	snprintf(shape_names[1], sizeof shape_names[1], "3 large and %d small", rest);
+	for (n = mcw_fit(6), k = 0; k < n; k++) shapes[2][k] = 6;
+	snprintf(shape_names[2], sizeof shape_names[2], "%d large", n);
+	for (n = mcw_fit(3), k = 0; k < n; k++) shapes[3][k] = 3;
+	snprintf(shape_names[3], sizeof shape_names[3], "%d of the smallest", n);
+}
 
 static unsigned
 now_ms(void)
@@ -351,6 +370,7 @@ main(void)
 	seglSwap();
 
 	atexit(mcw_close);
+	make_shapes();
 	if ((text = getenv("RAY_SHAPE")) != NULL) {
 		unsigned char bits[64] = {0};	/* (a machine of 64 cores has 63 workers) */
 
@@ -369,6 +389,8 @@ main(void)
 		char title[120];
 
 		set_scene(t);
+		tile_px = ((width + 31) / 32) * ((height + 31) / 32) >= 4 * workers ? 32 : 16;
+		tiles = ((width + TILE - 1) / TILE) * ((height + TILE - 1) / TILE);
 		for (k = 0; k < 64; k++)
 			busy[k] = -1;
 		while (done < tiles && !again) {

@@ -35,11 +35,18 @@ typedef uint32_t (*mcw_fn)(uint32_t a0, uint32_t a1);
  * tables of 2^bits[k - 1] buckets (3 to 6: 0.75, 1.5, 3 or 6 KB of new stores a pass). They
  * share 64 rows of the machine's state and a worker takes 2, 3, 5 or 9 of them, so it is
  * few workers that store much or many that store little: 7 of the largest, 21 of size 4
- * (the machine has 15 at most). Only while no program has a worker: 0 when it was done, the
+ * (a machine of 16 cores has 15 at most; mcw_fit says how many of a size fit). Only while no program has a worker: 0 when it was done, the
  * kernel's error otherwise (-16: someone has workers; -22: more than fits; -19: a machine
  * whose cores are as they are). Until someone asks, there are 3 of the largest and 12 of size 4.
  */
 int mcw_shape(const unsigned char *bits, int workers);
+/* What a geometry may be on this machine: how many workers it can have at most (15, or up
+ * to 63 on a machine of more than 16 cores), how many rows they share (64, or 248 there),
+ * how many rows a worker of a size takes, and so how many workers of one size fit. */
+int mcw_most(void);
+int mcw_room(void);
+int mcw_rows(int bits);
+int mcw_fit(int bits);
 /* Starts up to `limit` workers; how many there are. */
 int mcw_open(int limit);
 int mcw_count(void);

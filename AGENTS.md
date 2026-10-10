@@ -850,6 +850,10 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   (1.35 s a picture, sum `fd92a71e`), and `mctest 63 60000 shape 3,3,...` its test (a large
   limit makes the float check slow: core 0 works every worker's sum out again). A shader for
   another number of cores is another compile. `rvc_cpu` and Unity have 16 at most.
+- A program that takes every worker asks the library how many there can be (`mcw_most`,
+  `mcw_fit`, `mcw_rows`, `mcw_room` in `programs/mc/mcw.h`): no 15 or 16 written into it.
+  `nxray`, `nxpath` and `nxview` (a JPEG: one worker for its codes and one a strip of 16 rows
+  at most) do; Quake, the two Command & Conquer games and the NES ask for the few they use.
 - Pixels of two cores that the card runs as one group cost what both cost, unless the cores
   run the same instructions: measure anything about the workers' pixels with `nxray` (every
   core its own work), never with `mctest`'s bench (the same primes on all of them).

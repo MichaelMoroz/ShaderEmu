@@ -139,6 +139,37 @@ static void serve(int k)
 
 int mcw_count(void) { return count; }
 
+int mcw_most(void)
+{
+	static int most = -1;
+	volatile uint32_t *words;
+	int fd;
+
+	if (most >= 0) return most;
+	most = 0;
+	if ((fd = (int)call6(56, -100, (long)"/dev/gpu", 2, 0, 0, 0)) < 0) return 0;
+	/* the machine's control words: how many cores it could have, or (a machine whose cores are as they are) has */
+	if ((words = map(4096, fd, 0x01000000)) != 0) {
+		uint32_t cores = words[0x3cc / 4] ? words[0x3cc / 4] : words[0x3c0 / 4];
+
+		most = cores > MC_MAX_CORES ? MC_MAX_CORES - 1 : cores > 0 ? (int)cores - 1 : 0;
+		call6(215, (long)words, 4096, 0, 0, 0, 0);
+	}
+	call6(57, fd, 0, 0, 0, 0, 0);
+	return most;
+}
+
+int mcw_room(void) { return mcw_most() > 15 ? 248 : 64; }
+
+int mcw_rows(int bits) { return bits < 3 || bits > 6 ? 0 : (44 + 8 + (2 << bits) * 4 + 63) / 64; }
+
+int mcw_fit(int bits)
+{
+	int rows = mcw_rows(bits), n = rows ? mcw_room() / rows : 0;
+
+	return n < mcw_most() ? n : mcw_most();
+}
+
 int mcw_shape(const unsigned char *bits, int workers)
 {
 	uint32_t shape[8] = {0, 0, 0, 0, 0, 0, 0, 0};

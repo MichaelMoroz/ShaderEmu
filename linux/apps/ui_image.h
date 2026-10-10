@@ -992,6 +992,9 @@ ui_image_to_ppm(const char *path, const char *ppm_path, int *pw, int *ph, int wo
 	mcw_touch(map, mapped);
 	j->failed = mcw_alloc(16);
 	*j->failed = 0;
+	/* no more than there is work for: a PNG is three steps, a JPEG its codes and its strips of 16 rows */
+	if (workers > (png ? 3 : (j->h + 15) / 16 + 1))
+		workers = png ? 3 : (j->h + 15) / 16 + 1;
 	if (workers > 0)
 		got = mcw_open(workers);
 	if (png) {

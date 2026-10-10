@@ -37,13 +37,20 @@ static void pass()
 }
 
 // The layouts of the cores the panel offers (the machine's geometry: docs/multicore.md).
-static const char* const layout_names[] = {"15 of the smallest", "15 small", "7 large", "this core alone"};
+// As many workers of each as this machine has room for: 15, 15 and 7 with 16 cores, 63, 63 and 27 with 64.
+static char layout_names[4][40] = {"", "", "", "this core alone"};
 static const char* const layout_notes[] = {"0.75 KB of stores a pass each", "1.5 KB each", "6 KB each, as a program's workers are", "no worker cores"};
-static const unsigned char layouts[3][15] = {
-    {3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3},
-    {4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4},
-    {6, 6, 6, 6, 6, 6, 6, 0, 0, 0, 0, 0, 0, 0, 0},
-};
+static unsigned char layouts[3][64];
+static void make_layouts()
+{
+    static const int bits[3] = {3, 4, 6};
+    static const char* const what[3] = {"of the smallest", "small", "large"};
+    for (int i = 0; i < 3; i++) {
+        int n = mcw_fit(bits[i]);
+        for (int k = 0; k < n; k++) layouts[i][k] = (unsigned char)bits[i];
+        snprintf(layout_names[i], sizeof layout_names[i], "%d %s", n, what[i]);
+    }
+}
 static int workers = 0, layout_set = -1;
 
 // The workers given back, the cores laid out, and as many taken as there are.
@@ -55,7 +62,7 @@ static void take_workers(int layout)
     layout_set = layout;
     if (layout >= 3) return;
     int n = 0;
-    while (n < 15 && layouts[layout][n]) n++;
+    while (n < 63 && layouts[layout][n]) n++;
     mcw_shape(layouts[layout], n);   // (a machine that cannot be laid out keeps the cores it has)
     workers = mcw_open(n);
     if (workers) mcw_touch(__DATA_BEGIN__, (unsigned)(_end - __DATA_BEGIN__));
@@ -113,9 +120,10 @@ int main()
 
     // the picture being traced
     bool tracing = false, drawn_once = false;
-    int tiles = 0, sample = 0, next = 0, out = 0, busy[16], pictures = 0, shown_w = 160, shown_h = 120, of_samples = 0;
+    int tiles = 0, sample = 0, next = 0, out = 0, busy[64], pictures = 0, shown_w = 160, shown_h = 120, of_samples = 0;
     unsigned began = 0, took = 0, rays = 0, drew = 0;
-    for (int k = 0; k < 16; k++) busy[k] = -1;
+    for (int k = 0; k < 64; k++) busy[k] = -1;
+    make_layouts();
 
     for (;;) {
         // ---- the tiles: every core that has none gets the next ----
@@ -248,6 +256,7 @@ int main()
             glBindTexture(GL_TEXTURE_2D, texture);
             seglTexturePointer(pt.pixels, pt.width, pt.height, GL_RGBA);
             memset(pt.pixels, 0, (size_t)(pt.width * pt.height * 4));
+            pt.tile = ((pt.width + 31) / 32) * ((pt.height + 31) / 32) >= 4 * workers ? 32 : 16;
             tiles = ((pt.width + PT_TILE - 1) / PT_TILE) * ((pt.height + PT_TILE - 1) / PT_TILE);
             of_samples = samples;
             sample = next = out = 0;
