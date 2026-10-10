@@ -77,6 +77,10 @@ Shader "ShaderEmu/MachineTick"
             // instruction. Unity preprocesses the source itself, so the compiler cannot say
             // what it is; a stock editor (FXC) needs this line taken out.
             #define __FXC2__
+            // But not MULH in one instruction (docs/linux.md): on Linux the layer that turns
+            // this bytecode into SPIR-V makes an invalid module of that instruction, and
+            // VRChat crashes there when the world's shader is compiled.
+            #define NO_MULHI
             // Single-precision float instructions (docs/fpu.md), as the harness's full machine has.
             #define FPU
             // The tick says which 4 MB bands of RAM it wrote: Machine.shader draws only those.

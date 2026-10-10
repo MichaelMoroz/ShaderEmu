@@ -860,6 +860,10 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   `commit_bands_changed_core` or its own point to `commit_geom`, or the write is not drawn.
   With `--stats-after` (the timed frames) a guest's own times came out twice as long with
   the points: take a program's times from a run without it.
+- A shader that ships to players must go through what Linux turns its bytecode into SPIR-V
+  with (`docs/linux.md`, `tools/linux_spirv`): fxc2 can write instructions Microsoft's
+  compiler never does, and the one-instruction MULH (`imul`/`umul` with a high result) made
+  an invalid module there and crashed VRChat on every card. The world's tick has `NO_MULHI`.
 - Pixels of two cores that the card runs as one group cost what both cost, unless the cores
   run the same instructions: measure anything about the workers' pixels with `nxray` (every
   core its own work), never with `mctest`'s bench (the same primes on all of them).

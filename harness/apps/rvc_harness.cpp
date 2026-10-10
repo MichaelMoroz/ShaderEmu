@@ -95,6 +95,7 @@ struct Options {
     std::string pcLog;        // per frame: the guest's pc and the instructions it ran, as two uint32
     std::string frameLog;     // per frame, four uint32: pc, instructions, last stall, microseconds since start
     std::string l1Log;        // per frame: instructions, last stall, a count, then the RAM texels its write cache held
+    std::string statsFrom;    // --stats-from TEXT: the STATS line is for the run from where the console says TEXT (no GPU timing)
     double statsAfter = -1;   // >= 0: print a STATS line for the part of the run after this many seconds
     bool noDoubles = false;
     int cores = 1;            // --cores N: core 0 and N - 1 worker cores (docs/multicore.md; D3D11)
@@ -325,6 +326,7 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--frame-log") o.frameLog = next("--frame-log");
         else if (a == "--l1-log") o.l1Log = next("--l1-log");
         else if (a == "--stats-after") o.statsAfter = atof(next("--stats-after").c_str());
+        else if (a == "--stats-from") o.statsFrom = unescape(next("--stats-from"));
         else if (a == "--define") o.defines.push_back(next("--define"));
         else if (a == "--no-bands") o.noBands = true;
         else if (a == "--no-mrt") o.noMrt = true;
@@ -781,7 +783,7 @@ int main(int argc, char** argv) {
     };
     size_t expectIdx = 0, expectScanFrom = 0;
     std::string transcript;
-    bool untilHit = false;
+    bool untilHit = false, statsFromHit = false;
     bool haveClock = false;
     uint32_t lastClock = 0, commits = 0;
     uint64_t guestInstructions = 0;
@@ -849,6 +851,10 @@ int main(int argc, char** argv) {
         if (!opt.until.empty() && !untilHit) {
             size_t from = before >= opt.until.size() ? before - opt.until.size() + 1 : 0;
             if (transcript.find(opt.until, from) != std::string::npos) untilHit = true;
+        }
+        if (!opt.statsFrom.empty() && !statsFromHit) {
+            size_t from = before >= opt.statsFrom.size() ? before - opt.statsFrom.size() + 1 : 0;
+            if (transcript.find(opt.statsFrom, from) != std::string::npos) statsFromHit = true;
         }
         while (expectIdx < opt.expectSend.size()) {
             size_t p = transcript.find(opt.expectSend[expectIdx].first, expectScanFrom);
@@ -1036,7 +1042,7 @@ int main(int argc, char** argv) {
         double wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
         double t = timeBase + (opt.fixedDt > 0 ? (double)frame * opt.fixedDt : wall);
         guestTime = t;
-        if (opt.statsAfter >= 0 && !statsStarted && wall >= opt.statsAfter) {
+        if (!statsStarted && ((opt.statsAfter >= 0 && wall >= opt.statsAfter) || statsFromHit)) {
             statsStarted = true;
             statsInstr0 = guestInstructions;
             workerInstr0 = workerInstructions;
@@ -1254,7 +1260,7 @@ int main(int argc, char** argv) {
         }
         // The GPU times the two draws of one frame per refresh of the text box.
         // with --stats-after, one frame in 64 is timed on the GPU and the times are averaged
-        bool sampleTimes = statsStarted && (frame & 63) == 0;
+        bool sampleTimes = statsStarted && opt.statsFrom.empty() && (frame & 63) == 0;
         if (sampleTimes && backend.gpuTimes(gpuTickMs, gpuCommitMs, gpuDeviceMs)) {
             timeSum[0] += gpuTickMs;
             timeSum[1] += gpuCommitMs;

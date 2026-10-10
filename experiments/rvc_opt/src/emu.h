@@ -316,8 +316,16 @@ DEF(mul, FormatR, { // rv32m
 //
 // The GPU has had the instruction for this all along (umul and imul return both halves of the
 // product), HLSL just cannot ask for it. fxc2 can: mulhi() there is that one instruction.
+//
+// NO_MULHI keeps the partial products all the same. The instruction is one Microsoft's
+// compiler never writes with a high result alone, and what turns the bytecode into SPIR-V on
+// Linux (dxbc-spirv, in DXVK and vkd3d-proton) makes an invalid module of it, which crashes
+// the game there (docs/linux.md). A shader that ships to players has NO_MULHI.
+#if defined(__FXC2__) && !defined(NO_MULHI)
+#define HAVE_MULHI
+#endif
 uint mulhu32(uint a, uint b) {
-#ifdef __FXC2__
+#ifdef HAVE_MULHI
     return mulhi(a, b);
 #else
     uint al = a & 0xffff, ah = a >> 16, bl = b & 0xffff, bh = b >> 16;
@@ -328,7 +336,7 @@ uint mulhu32(uint a, uint b) {
 }
 // the high word of the signed product
 uint mulhs32(uint a, uint b) {
-#ifdef __FXC2__
+#ifdef HAVE_MULHI
     return AS_UNSIGNED(mulhi(AS_SIGNED(a), AS_SIGNED(b)));
 #else
     return mulhu32(a, b) - ((a >> 31) ? b : 0) - ((b >> 31) ? a : 0);
