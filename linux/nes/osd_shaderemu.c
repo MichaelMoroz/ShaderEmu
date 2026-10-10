@@ -267,96 +267,156 @@ frame_counted(int emulated, int step, const unsigned char *shown)
 }
 
 /* ---- the picture drawn elsewhere (docs/nes.md): no frame is drawn by this core; of the
- * frames it can, the PPU keeps a record, and worker cores draw a third of the picture each
- * from it into the texture not shown, while this core goes on with the next frames ---- */
+ * frames it can, the PPU keeps a record, and worker cores draw the picture from it into a
+ * texture not shown, while this core goes on with the next frames. The workers are in
+ * teams, a frame a team: giving a frame out and hearing it is done cost two passes of the
+ * machine whoever draws, so several frames under way at once show more of them ---- */
 
-static ppu_frame_t *records[2];
-static ppu_drawjob_t jobs[3];
-static unsigned char *pictures[2];
-static GLuint textures[2];
-static int drawers, inline_draw, back, recording, drawing, drawn_from;
+#define TEAMS_MOST 6
+
+static struct team {
+	int first, count;		/* its workers: jobs[first] on */
+	int busy, record, picture;	/* what it draws from, and into */
+} teams[TEAMS_MOST];
+static int team_count, team_order[TEAMS_MOST], teams_busy;	/* the busy ones, the oldest first */
+static int team_most, team_wanted = 1;	/* as many teams as leave the game its speed, when no team is busy */
+static ppu_frame_t *records[TEAMS_MOST + 1];
+static ppu_drawjob_t jobs[MC_MAX_CORES];
+static unsigned char *pictures[TEAMS_MOST + 1];
+static GLuint textures[TEAMS_MOST + 1];
+static int drawers, inline_draw, front, recording;
+
+/* A record, or a picture, that no busy team has (and that is not the one on show). */
+static int
+spare(int of_pictures)
+{
+	int n, t;
+
+	for (n = 0; n <= team_most; n++) {
+		if (of_pictures && n == front)
+			continue;
+		for (t = 0; t < team_count; t++)
+			if (teams[t].busy && (of_pictures ? teams[t].picture : teams[t].record) == n)
+				break;
+		if (t == team_count)
+			return n;
+	}
+	return -1;
+}
 
 static void
-drawing_post(int from)
+team_post(struct team *team, int record)
 {
 	int k;
 
-	drawn_from = from;
-	for (k = 0; k < drawers; k++) {
-		jobs[k].frame = records[from];
-		jobs[k].rows = pictures[back];
-		jobs[k].first = HEIGHT * k / drawers;
-		jobs[k].count = HEIGHT * (k + 1) / drawers - jobs[k].first;
+	team->record = record;
+	team->picture = spare(1);
+	team->busy = 1;
+	team_order[teams_busy++] = (int)(team - teams);
+	for (k = 0; k < team->count; k++) {
+		ppu_drawjob_t *job = &jobs[team->first + k];
+
+		job->frame = records[record];
+		job->rows = pictures[team->picture];
+		job->first = HEIGHT * k / team->count;
+		job->count = HEIGHT * (k + 1) / team->count - job->first;
 		if (inline_draw)
-			ppu_draw((uint32)&jobs[k], 0);
+			ppu_draw((uint32)job, 0);
 		else
-			mcw_post(k + 1, ppu_draw, (uint32_t)&jobs[k], 0);
+			mcw_post(team->first + k + 1, ppu_draw, (uint32_t)job, 0);
 	}
-	drawing = 1;
 }
 
-/* Whether the picture is drawn; with `wait`, not before it is. Then it is shown. */
+/* Whether a team's picture is drawn; with `wait`, not before it is. */
 static int
-drawing_done(int wait)
+team_done(struct team *team, int wait)
 {
 	int k, done = 1;
 
-	for (k = 1; k <= drawers && !inline_draw; k++) {
+	for (k = team->first + 1; k <= team->first + team->count && !inline_draw; k++) {
 		if (wait)
 			mcw_wait(k);
 		else if (!mcw_done(k))
 			done = 0;	/* (and the rest are still asked: a worker stopped at a page goes on) */
 	}
-	if (!done)
-		return 0;
-	window_draw(textures[back]);
-	back ^= 1;
-	drawing = 0;
-	frames_drawn++;
-	return 1;
+	return done;
 }
 
-/* Before and after each frame. A frame is recorded while the one before it is drawn, and
- * given to the drawers when they are free: every frame is drawn if they keep up. */
+/* The pictures that are drawn, in the order their frames were: the newest of them is shown. */
+static void
+teams_show(int wait)
+{
+	int shown = -1, n;
+
+	while (teams_busy && team_done(&teams[team_order[0]], wait)) {
+		struct team *team = &teams[team_order[0]];
+
+		team->busy = 0;
+		shown = team->picture;
+		for (n = 1; n < teams_busy; n++)
+			team_order[n - 1] = team_order[n];
+		teams_busy--;
+	}
+	/* (the others are asked too: a worker of theirs stopped at a page goes on) */
+	for (n = 1; n < teams_busy; n++)
+		team_done(&teams[team_order[n]], 0);
+	if (shown >= 0) {
+		front = shown;
+		window_draw(textures[front]);
+		frames_drawn++;
+	}
+}
+
+/* The workers shared out between so many teams. */
+static void
+teams_of(int count)
+{
+	int k;
+
+	team_count = count;
+	for (k = 0; k < count; k++) {
+		teams[k].first = drawers * k / count;
+		teams[k].count = drawers * (k + 1) / count - teams[k].first;
+		teams[k].busy = 0;
+	}
+}
+
+/* Before and after each frame. A frame is recorded when a team is free to draw it. */
 static void
 frame_elsewhere(int after)
 {
-	static int recorded = -1;	/* a record made and not yet given out */
-	static int posted_at, took = 1;	/* when the drawers were last given a frame, and how many frames they took */
 	int last = (frames_hold && frames_emulated + 1 >= frames_hold) || (frames_most && frames_emulated + 1 >= frames_most);
+	int t;
 
 	if (!after) {
 		/* a test's last frame is the one it sees, whatever was being drawn */
-		if (last && drawing)
-			drawing_done(1);
-		/* (not while the drawers are busy for longer yet: as long as the last picture took them) */
+		if (last)
+			teams_show(1);
 		recording = -1;
-		if (!drawing || frames_emulated - posted_at >= took - 1 || last) {
-			recording = drawing ? !drawn_from : 0;
-			recorded = -1;
+		if (!teams_busy && team_wanted != team_count)
+			teams_of(team_wanted);
+		/* (teams of another number wanted: no more is given out until these have done) */
+		if (teams_busy < team_count && (team_wanted == team_count || last)) {
+			recording = spare(0);
 			if (!ppu_capture(records[recording]))
 				recording = -1;
 		}
 		return;
 	}
 	frames_emulated++;
+	teams_show(0);
 	if (recording >= 0) {
 		ppu_capture_end();
-		recorded = recording;
-	}
-	if (drawing && drawing_done(0))
-		took = frames_emulated - posted_at;
-	if (!drawing && recorded >= 0) {
-		drawing_post(recorded);
-		posted_at = frames_emulated;
-		recorded = -1;
-		if (last)
-			drawing_done(1);
+		for (t = 0; teams[t].busy; t++)
+			;
+		team_post(&teams[t], recording);
+		if (last || inline_draw)
+			teams_show(1);
 	}
 	/* (the pad every fourth frame: asking the window system is thousands of instructions) */
 	if (!(frames_emulated & 3))
 		osd_getinput();
-	frame_counted(frames_emulated, 1, pictures[back ^ 1]);
+	frame_counted(frames_emulated, 1, pictures[front]);
 	frame_paced();
 }
 
@@ -372,10 +432,43 @@ frame_paced(void)
 	if (unlimited)
 		return;
 	due += 16 + (frames_emulated % 3 != 0);		/* 16.67 ms */
+	/* busy workers make every pass of the machine longer: a team more while the game is ahead
+	 * of its time, one fewer when it falls behind (looked at four times a second) */
+	if (!(frames_emulated & 15)) {
+		if ((int)(now - due) > 8 && team_wanted > 1)
+			team_wanted--;
+		else if ((int)(due - now) > 4 && team_wanted < team_most)
+			team_wanted++;
+	}
 	if ((int)(now - due) > 50 || (int)(due - now) > 200)
 		due = now;
 	else if ((int)(due - now) > 0)
 		usleep((due - now) * 1000);
+}
+
+/* As many workers as the machine will give, of a size NES_SHAPE names (5: 3 KB of new stores
+ * a pass; a line is 16 texels of the picture and a worker draws eight or so in a pass).
+ * NES_WORKERS=N asks for fewer than all that fit. */
+static int
+drawers_open(void)
+{
+	static const int fit[7] = {0, 0, 0, 15, 15, 12, 7};	/* by size: how many the machine has room for */
+	unsigned char sizes[MC_MAX_CORES];
+	const char *most = getenv("NES_WORKERS"), *shape = getenv("NES_SHAPE");
+	int size = shape ? atoi(shape) : 5, wanted, k;
+
+	if (size < 3 || size > 6)
+		size = 5;
+	wanted = most ? atoi(most) : fit[size];
+	if (wanted > fit[size])
+		wanted = fit[size];
+	for (k = 0; k < wanted; k++)
+		sizes[k] = (unsigned char)size;
+	/* (refused when another program has workers, or on a machine whose cores are as they are:
+	 * then it is the workers there are) */
+	if (wanted > 0)
+		mcw_shape(sizes, wanted);
+	return mcw_open(wanted);
 }
 
 /* Called once the cartridge is in: who draws, and their memory. */
@@ -389,25 +482,37 @@ elsewhere_start(void)
 	if (how && !strcmp(how, "here"))
 		return;
 	inline_draw = how && !strcmp(how, "inline");
-	drawers = inline_draw ? 1 : mcw_open(3);
+	drawers = inline_draw ? 1 : drawers_open();
 	if (drawers <= 0)
 		return;
 	if (!inline_draw)
 		atexit(mcw_close);
-	for (k = 0; k < 2; k++)
-		records[k] = ppu_frame_create(rom->vram, rom->vram ? 0x2000 * rom->vram_banks : 0);
-	pictures[0] = picture;
-	textures[0] = texture;
-	pictures[1] = seglMemory(WIDTH * HEIGHT);
-	if (!records[0] || !records[1] || !pictures[1]) {
-		drawers = 0;
-		return;
+	/* at most a team to two workers; a test has as many as NES_TEAMS says, or one */
+	team_most = drawers / 2 > TEAMS_MOST ? TEAMS_MOST : drawers / 2 ? drawers / 2 : 1;
+	if (getenv("NES_TEAMS") || unlimited) {
+		team_wanted = getenv("NES_TEAMS") ? atoi(getenv("NES_TEAMS")) : 1;
+		if (team_wanted < 1 || team_wanted > team_most)
+			team_wanted = 1;
+		team_most = team_wanted;
 	}
-	memset(pictures[1], 0, WIDTH * HEIGHT);
-	glGenTextures(1, &textures[1]);
-	glBindTexture(GL_TEXTURE_2D, textures[1]);
-	seglTexturePointer(pictures[1], WIDTH, HEIGHT, GL_COLOR_INDEX8_EXT);
-	back = 1;
+	teams_of(team_wanted);
+	/* a record and a picture a team, and one more: the frame being recorded, the picture on show */
+	for (k = 0; k <= team_most; k++) {
+		records[k] = ppu_frame_create(rom->vram, rom->vram ? 0x2000 * rom->vram_banks : 0);
+		pictures[k] = k ? seglMemory(WIDTH * HEIGHT) : picture;
+		if (!records[k] || !pictures[k]) {
+			drawers = 0;
+			return;
+		}
+		if (k) {
+			memset(pictures[k], 0, WIDTH * HEIGHT);
+			glGenTextures(1, &textures[k]);
+			glBindTexture(GL_TEXTURE_2D, textures[k]);
+			seglTexturePointer(pictures[k], WIDTH, HEIGHT, GL_COLOR_INDEX8_EXT);
+		} else
+			textures[0] = texture;
+	}
+	front = 0;
 	for (k = 0; k < drawers; k++) {
 		/* a drawer's own PPU: whole 16s of memory nobody else writes, there before it starts */
 		jobs[k].context = inline_draw ? malloc(sizeof(ppu_t)) : mcw_alloc(sizeof(ppu_t));
@@ -421,8 +526,10 @@ elsewhere_start(void)
 	}
 	ppu_capture_end();
 	nes_frame_elsewhere = frame_elsewhere;
-	fprintf(stderr, "nes: the picture is drawn by %s\n", inline_draw ? "this core, from the frame's record" :
-		drawers == 3 ? "three worker cores" : drawers == 2 ? "two worker cores" : "a worker core");
+	if (inline_draw)
+		fprintf(stderr, "nes: the picture is drawn by this core, from the frame's record\n");
+	else
+		fprintf(stderr, "nes: the picture is drawn by %d worker core%s, in up to %d team%s\n", drawers, drawers == 1 ? "" : "s", team_most, team_most == 1 ? "" : "s");
 }
 
 static viddriver_t driver = {

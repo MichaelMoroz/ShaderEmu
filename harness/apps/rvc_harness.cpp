@@ -536,17 +536,20 @@ int main(int argc, char** argv) {
     bool terminalMode = true;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
-        if (a == "--image") ++i;
-        else if (a != "--resume" && a != "--no-viz" && a != "--dxc" && a != "--d3d11" && a != "--no-desktop") terminalMode = false;
+        if (a == "--image" || a == "--cores" || a == "--cpu-ips") ++i;
+        // (--cpu is the same terminal on the interpreter: its desktop and view come up too)
+        else if (a != "--resume" && a != "--no-viz" && a != "--dxc" && a != "--d3d11" && a != "--no-desktop" && a != "--cpu") terminalMode = false;
     }
     std::error_code ec;
     bool haveOpt = fs::exists("experiments/rvc_opt/main.shader", ec);
-    if ((terminalMode || opt.dxc) && !opt.rvcDirSet && haveOpt) opt.rvcDir = "experiments/rvc_opt";
+    // (--cpu needs the shader with the GPU device and the display: upstream's has neither)
+    if ((terminalMode || opt.dxc || opt.cpu) && !opt.rvcDirSet && haveOpt) opt.rvcDir = "experiments/rvc_opt";
     const char* shellSnap = "build/snapshots/rvc_shell.snap";
     bool canResume = terminalMode && fs::exists(shellSnap, ec);
     // Nothing on the command line says what to boot: ask, if there is someone to ask.
     DWORD conMode = 0;
     bool interactive = opt.readStdin && GetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), &conMode) != 0;
+    if (opt.cpu && opt.image.empty()) opt.image = "linux-net";   // (the interpreter boots that one: nothing to ask)
     bool chosen = !opt.image.empty() || opt.payloadSet || !opt.loadState.empty() || opt.resume;
     if (!chosen && interactive && !chooseImage(opt, canResume)) return 0;
     if (terminalMode) {
@@ -1064,6 +1067,9 @@ int main(int argc, char** argv) {
                     break;
                 }
                 external_devices = true;
+                // (the host's flags at once: the guest's init asks for them a tenth of a second in,
+                // which can be before the control pass's first row has come back)
+                word(CTRL + 0x3c) = (opt.desktop ? 1u : 0u) | (opt.tabs ? 2u : 0u) | (uint32_t)(kGpuTarget / 16) << 8 | (uint32_t)(kGpuTarget / 16) << 16;
                 console_hook = cpuConsoleHook;
                 cpuRunning = true;
                 backend.cpuMode = true;

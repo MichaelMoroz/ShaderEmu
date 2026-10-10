@@ -65,14 +65,24 @@ What each step is:
   `osd_shaderemu.c`, `ppu_capture` and `ppu_draw` in `nes_ppu.c`). The first core draws
   nothing: it emulates every frame and, for the frames the workers are free for, the PPU
   keeps a record: its memory as the frame began (the name tables and pattern RAM copied only
-  when written since) and each line's registers. Three workers draw a third of the lines
-  each from the record, into the texture not shown, and the window turns to it when they are
-  done. Sprite 0's hit stays the first core's to find (as nofrendo does for a frame it
-  skips). What is lost: a write to the name tables in mid-frame shows a frame late.
+  when written since) and each line's registers. The workers draw the lines from the
+  record, each a share of them, into a texture not shown, and the window turns to it when
+  they are done. Sprite 0's hit stays the first core's to find (as nofrendo does for a frame
+  it skips). What is lost: a write to the name tables in mid-frame shows a frame late.
   A cartridge whose pattern pages turn as they are drawn (MMC2) is drawn by the first core.
-  At full speed the workers draw 11 to 17 frames a second: a picture is ten passes of the
-  machine, a frame of the first core three or four. A frame is recorded only when the
-  drawers will be free for it (as long after the last as that one took them).
+- **As many workers as fit, in teams.** The NES asks the machine for twelve workers of size 5
+  (`mcw_shape`, `docs/multicore.md`: 3 KB of new stores a pass, which holds the eight or so
+  lines one draws in a pass; `NES_SHAPE`, `NES_WORKERS` for others), and takes the workers
+  there are where it is refused (three on a machine of four cores). A frame given out and
+  heard done costs two passes whoever draws, so one frame at a time is at most a picture
+  every five passes: the workers are in teams, a frame a team, as many teams as the game's
+  pace allows (`frame_paced`: one more while it is ahead of its sixtieth of a second, one
+  fewer when it falls behind; `NES_TEAMS` in a test). It has to be so because busy workers
+  make every pass of the machine longer: of 60 frames of Thwaite's title, twelve workers as
+  one team showed 22 with the game at 99% of its speed, three teams 43 at 57% and six 55 at
+  44% (the graphics card 39% busy with other work meanwhile). The pictures shown a second
+  stay near 22 to 25 however they are shared out: what bounds them is the machine's
+  instructions a second on all its cores together, not the number of cores.
 - **The 6502 is recompiled on the machine** (`rc6502.h`): the cartridge's code is translated
   to RISC-V instructions when it is first reached (everything jumps reach from there:
   Thwaite's 3,950 instructions in one go, 140 KB of code), with the 6502's registers and
