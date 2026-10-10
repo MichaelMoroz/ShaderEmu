@@ -54,6 +54,10 @@ void host_block(int x, int y, int width, int height, int atlas_x, int atlas_y, u
 void host_scene_end(int x, int y, int width, int height, int key);
 /* No scene any more: the page is all there is to show. */
 void host_scene_drop(void);
+/* The scene's rectangles are made by a worker core when the machine has one (host.c). This
+ * gives the cores back, for another use of them in the program; and how many scenes one made. */
+void host_workers_close(void);
+extern unsigned int host_scene_jobs;
 /* The next event, or 0 when there is none. Asks the server only when input has moved. */
 int host_event(struct host_event *event);
 void host_pointer(int *x, int *y);

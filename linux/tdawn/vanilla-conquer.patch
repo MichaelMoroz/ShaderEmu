@@ -22,7 +22,7 @@ index eada872..a3e9b31 100644
 +if(SHADEREMU)
 +    # the sound card plays the game's sounds (soundio_shaderemu.cpp), not the null backend chosen above
 +    list(REMOVE_ITEM COMMONV_SRC soundio_null.cpp)
-+    list(APPEND COMMONV_SRC shaderemu.cpp soundio_shaderemu.cpp host.c cxxrt.cpp ${SHADEREMU_GLES})
++    list(APPEND COMMONV_SRC shaderemu.cpp soundio_shaderemu.cpp host.c mcw.c cxxrt.cpp ${SHADEREMU_GLES})
 +    list(APPEND VANILLA_LIBS ${SHADEREMU_NANOX})
 +elseif(DDRAW)
      list(APPEND COMMONV_SRC video_ddraw.cpp wwkeyboard_win32.cpp)

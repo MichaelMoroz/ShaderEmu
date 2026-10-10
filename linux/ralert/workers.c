@@ -9,6 +9,7 @@
 
 #include "mcw.h"
 #include "workers.h"
+#include "host.h"	/* linux/tdawn: the scene has a worker core between movies */
 
 unsigned workers_frames, workers_passes;
 
@@ -124,6 +125,7 @@ int workers_count(void)
 	const char *limit = getenv("RALERT_WORKERS");
 
 	if (count >= 0) return count;
+	host_workers_close();	/* the mission's scene had one: a movie has them all */
 	count = mcw_open(limit ? atoi(limit) : MC_MAX_CORES - 1);
 	if (count > 0 && !at_exit) {
 		at_exit = 1;

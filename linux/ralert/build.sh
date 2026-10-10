@@ -23,6 +23,7 @@ git -C "$VC" checkout -q -f "$COMMIT" && git -C "$VC" clean -q -fd
 git -C "$VC" apply "$TD/vanilla-conquer.patch"
 [ ! -s "$HERE/vanilla-conquer.patch" ] || git -C "$VC" apply "$HERE/vanilla-conquer.patch"
 cp "$TD/cxxrt.cpp" "$TD/shaderemu.cpp" "$TD/soundio_shaderemu.cpp" "$TD/host.c" "$TD/host.h" "$VC/common/"
+cp "$REPO/programs/mc/mc.h" "$REPO/programs/mc/mcw.h" "$REPO/programs/mc/mcw.c" "$VC/common/"
 cp "$HERE/gl.cpp" "$VC/redalert/"
 # The worker cores' side (docs/multicore.md): mcw.c is the library every program has for them,
 # workers.c the game's jobs over it.
@@ -32,7 +33,7 @@ GLINC="-idirafter $REPO/programs/linux/include -I$MW/src/include -I$REPO/linux/u
 # (the flags are Tiberian Dawn's: docs/tdawn.md)
 cmake -S "$VC" -B "$BUILD" -DCMAKE_TOOLCHAIN_FILE="$WORK/src/tdawn-toolchain.cmake" -DCMAKE_BUILD_TYPE=Release \
     -DSDL2=OFF -DOPENAL=OFF -DNETWORKING=OFF -DBUILD_VANILLATD=OFF -DSHADEREMU=ON \
-    -DSHADEREMU_GLES="$REPO/programs/linux/gles.c" -DSHADEREMU_NANOX="$MW/src/lib/libnano-X.a" \
+    -DSHADEREMU_GLES="$WORK/src/tdawn-gles.o" -DSHADEREMU_NANOX="$MW/src/lib/libnano-X.a" \
     -DCMAKE_CXX_FLAGS="-O2 -fno-pie -fno-lifetime-dse -w -DSHADEREMU -DSHADEREMU_RA $GLINC" -DCMAKE_CXX_FLAGS_RELEASE="-DNDEBUG" \
     -DCMAKE_C_FLAGS="-O2 -fno-pie -w -DSHADEREMU -DSHADEREMU_RA $GLINC" -DCMAKE_C_FLAGS_RELEASE="-DNDEBUG" > "$WORK/src/ralert-configure.log" 2>&1 \
     || { tail -20 "$WORK/src/ralert-configure.log"; exit 1; }

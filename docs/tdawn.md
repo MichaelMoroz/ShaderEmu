@@ -192,6 +192,33 @@ only where real time shows: the pointer, a tooltip under it and the credits coun
 The palette's cycling (water, the selection colour) goes by the clock in play and by the
 game's frames in a run with `TDAWN_NO_DELAY`, or two runs' pictures would differ in it.
 
+## The scene on a worker core
+
+Making a frame's rectangles (some two hundred: shapes, shadows, the shroud's edges) into GPU
+commands was an eighth of a mission's frame, and it is the one part of the frame nothing else
+waits for until the frame is shown. On a machine with worker cores (`docs/multicore.md`) it
+is a worker's (`linux/tdawn/host.c`, which Red Alert shares):
+
+- `host_sprite()` and `host_block()` note what was asked, 32 bytes each;
+  `host_scene_end()` gives the notes to the worker, which makes the commands as this core
+  did (`scene_job`).
+- `host_present()` of that scene is put off while the worker has it. The game goes on to
+  its next frame's logic, and the frame is shown when the worker has done: from
+  `host_event()`, which the game asks every frame, or before the next scene begins at the
+  latest. A pass or two of the machine later than before; nothing is drawn into the page in
+  between.
+- The GPU's library has one state, so nothing of `host.c` calls it while the worker has the
+  scene (`scene_finish()` first: the pointer's picture, a movie's, an event of the window's).
+  It is compiled with a section a variable, each starting on 16 bytes (`build.sh`), because
+  two cores must not store to the same 16.
+- A waited-for job would cost more than it saves (a pass or two at each end): the putting
+  off is what makes it pay. A scene of fewer than 32 rectangles is made here as before.
+
+Mission 10, drawing: 51 to 43 thousand instructions a frame (Red Alert's first Soviet
+mission: 91 to 67 thousand, 16.4 to 17.8 frames a second). The state sums are the same and
+so is a held frame's picture but for the pointer, which is drawn by the clock.
+`TDAWN_SCENE=inline` is the way it was.
+
 ## Not done
 
 - The cloak effect on the GPU (the game draws such a shape itself, over everything), and the

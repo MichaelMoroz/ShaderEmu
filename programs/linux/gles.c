@@ -1040,3 +1040,10 @@ void seglKeptMatrices(void) {
 void glFlush(void) {}
 void glFinish(void) {}
 GLenum glGetError(void) { return GL_NO_ERROR; }
+
+// A program that has a worker core call this library (linux/tdawn/host.c) compiles it with a
+// section a variable, each starting on 16 bytes: two cores must not store to the same 16
+// (docs/multicore.md). These are the last, so that no other file's variable follows ours in
+// the same 16 bytes.
+char segl_end_data[16] __attribute__((aligned(16), used)) = {1};
+char segl_end_bss[16] __attribute__((aligned(16), used));

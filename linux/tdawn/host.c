@@ -11,6 +11,7 @@
 #include <GLES/segl.h>
 #include "nano-X.h"
 #include "host.h"
+#include "mcw.h"	/* programs/mc: the machine's worker cores (docs/multicore.md) */
 
 #define ONE		65536
 #define CURSOR_MAX	128		/* the largest pointer picture, a side */
@@ -27,6 +28,24 @@ static GLuint page_texture[2], cursor_texture;
 static int cursor_w, cursor_h, cursor_hot_x, cursor_hot_y;
 static int pointer_x, pointer_y;	/* in the game's pixels */
 static int page_rows;			/* a page's texture is this high: a row is a whole number of 1,024ths */
+
+/*
+ * A scene's rectangles on a worker core (docs/tdawn.md, docs/multicore.md). Making a frame's
+ * two hundred rectangles into GPU commands is an eighth of a mission's frame, and nothing of
+ * it is needed before the frame is shown. So host_sprite() and host_block() only note what
+ * was asked, host_scene_end() gives the notes to a worker, and host_present() of that scene
+ * is put off until the worker has done: the game goes on to its next frame's logic meanwhile,
+ * and the frame is shown from host_event() or, at the latest, before the next scene begins.
+ * The GPU's library has one state: nothing here calls it while the worker has the scene
+ * (scene_finish() first). TDAWN_SCENE=inline is the way it was.
+ */
+#define SCENE_MOST 4096
+struct scene_note { int kind, x, y, width, height, atlas_x, atlas_y; unsigned int colour; };	/* 32 bytes: two texels */
+static struct scene_note scene_notes[SCENE_MOST] __attribute__((aligned(16)));
+static int scene_noted, scene_noting, scene_out, scene_owed, scene_owed_page, scene_owed_cursor;
+static int scene_cores = -1;	/* -1: not asked yet; 0: none */
+unsigned int host_scene_jobs;	/* scenes a worker made, for the games' figures */
+static void scene_finish(void);
 
 static const volatile uint32_t *
 control(int offset)
@@ -58,6 +77,7 @@ host_ms(void)
 void
 host_wait(void)
 {
+	scene_finish();	/* (a frame that waits for a worker core is shown first) */
 	__asm__ volatile(".word 0x0100000f");	/* pause */
 }
 
@@ -162,6 +182,7 @@ host_cursor(const unsigned char *pixels, int width, int height, int hot_x, int h
 {
 	if (!cursor || width <= 0 || height <= 0 || width > CURSOR_MAX || height > CURSOR_MAX)
 		return;
+	scene_finish();
 	memcpy(cursor, pixels, width * height);
 	cursor_w = width;
 	cursor_h = height;
@@ -320,6 +341,22 @@ host_tiles_clear(void)
 void
 host_scene_begin(int origin_x, int origin_y)
 {
+	scene_finish();		/* the frame before is shown by now */
+	if (scene_cores < 0 || (scene_cores > 0 && mcw_count() == 0)) {
+		const char *how = getenv("TDAWN_SCENE");
+		static int at_exit;
+
+		scene_cores = how && !strcmp(how, "inline") ? 0 : mcw_open(1);
+		if (scene_cores > 0 && !at_exit) {
+			extern char __DATA_BEGIN__[], _end[];
+
+			at_exit = 1;
+			atexit(host_workers_close);
+			mcw_touch(__DATA_BEGIN__, (unsigned)(_end - __DATA_BEGIN__));
+		}
+	}
+	scene_noting = scene_cores > 0;
+	scene_noted = 0;
 	if (scene_built)
 		seglDiscard();		/* one nobody showed */
 	whole_window(origin_x, origin_y);
@@ -332,8 +369,8 @@ host_scene_begin(int origin_x, int origin_y)
 }
 
 /* A rectangle of the screen from an atlas, over what the scene has so far. */
-void
-host_sprite(int kind, int x, int y, int width, int height, int atlas_x, int atlas_y, unsigned int colour)
+static void
+sprite_now(int kind, int x, int y, int width, int height, int atlas_x, int atlas_y, unsigned int colour)
 {
 	GLfixed box[4] = {x * ONE / screen_w, y * ONE / screen_h, (x + width) * ONE / screen_w, (y + height) * ONE / screen_h};
 	int texels[4];
@@ -355,8 +392,8 @@ host_sprite(int kind, int x, int y, int width, int height, int atlas_x, int atla
 }
 
 /* A rectangle of one colour: the middle of 24 x 24 set bits in the masks, as large as wanted. */
-void
-host_block(int x, int y, int width, int height, int atlas_x, int atlas_y, unsigned int colour)
+static void
+block_now(int x, int y, int width, int height, int atlas_x, int atlas_y, unsigned int colour)
 {
 	GLfixed box[4] = {x * ONE / screen_w, y * ONE / screen_h, (x + width) * ONE / screen_w, (y + height) * ONE / screen_h};
 	int view = atlas_y + 24 <= VIEW_ROWS + 512 ? 1 : 2;
@@ -365,17 +402,113 @@ host_block(int x, int y, int width, int height, int atlas_x, int atlas_y, unsign
 	seglSprite(box, texels, mask_texture[view - 1], colour, 0);
 }
 
+/* ---- the same on a worker core ---- */
+
+#define NOTE_BLOCK 3
+
+static uint32_t
+scene_job(uint32_t count, uint32_t unused)
+{
+	const struct scene_note *n = scene_notes;
+	uint32_t i;
+
+	(void)unused;
+	for (i = 0; i < count; i++, n++)
+		if (n->kind == NOTE_BLOCK)
+			block_now(n->x, n->y, n->width, n->height, n->atlas_x, n->atlas_y, n->colour);
+		else
+			sprite_now(n->kind, n->x, n->y, n->width, n->height, n->atlas_x, n->atlas_y, n->colour);
+	return count;
+}
+
+static void
+scene_note(int kind, int x, int y, int width, int height, int atlas_x, int atlas_y, unsigned int colour)
+{
+	struct scene_note *n;
+
+	if (scene_noted == SCENE_MOST) {
+		/* more than there is room to note: these are made here, in their order, and the rest too */
+		scene_job(scene_noted, 0);
+		scene_noted = 0;
+		scene_noting = 0;
+		if (kind == NOTE_BLOCK)
+			block_now(x, y, width, height, atlas_x, atlas_y, colour);
+		else
+			sprite_now(kind, x, y, width, height, atlas_x, atlas_y, colour);
+		return;
+	}
+	n = &scene_notes[scene_noted++];
+	n->kind = kind, n->x = x, n->y = y, n->width = width, n->height = height;
+	n->atlas_x = atlas_x, n->atlas_y = atlas_y, n->colour = colour;
+}
+
+void
+host_sprite(int kind, int x, int y, int width, int height, int atlas_x, int atlas_y, unsigned int colour)
+{
+	if (scene_noting)
+		scene_note(kind, x, y, width, height, atlas_x, atlas_y, colour);
+	else
+		sprite_now(kind, x, y, width, height, atlas_x, atlas_y, colour);
+}
+
+void
+host_block(int x, int y, int width, int height, int atlas_x, int atlas_y, unsigned int colour)
+{
+	if (scene_noting)
+		scene_note(NOTE_BLOCK, x, y, width, height, atlas_x, atlas_y, colour);
+	else
+		block_now(x, y, width, height, atlas_x, atlas_y, colour);
+}
+
+/* The worker's scene is waited for, and the frame that was put off for it is shown. */
+static void
+scene_finish(void)
+{
+	if (!scene_out)
+		return;
+	mcw_wait(1);
+	scene_out = 0;
+	if (scene_owed) {
+		scene_owed = 0;
+		host_present(scene_owed_page, scene_owed_cursor);
+	}
+}
+
+/* Gives the worker cores back (another use of them in this program: Red Alert's movies). */
+void
+host_workers_close(void)
+{
+	scene_finish();
+	scene_noting = 0;
+	if (scene_cores > 0)
+		mcw_close();
+	scene_cores = -1;
+}
+
 /* The scene is whole. The page goes over it, with holes of this index inside this rectangle. */
 void
 host_scene_end(int x, int y, int width, int height, int key)
 {
 	scene_rect[0] = x, scene_rect[1] = y, scene_rect[2] = width, scene_rect[3] = height;
 	scene_key = key;
+	if (scene_noting) {
+		scene_noting = 0;
+		if (scene_noted >= 32) {
+			mcw_post(1, scene_job, (uint32_t)scene_noted, 0);
+			scene_out = 1;
+			host_scene_jobs++;
+		} else {
+			scene_job((uint32_t)scene_noted, 0);	/* not worth a pass or two of waiting */
+		}
+		scene_noted = 0;
+	}
 }
 
 void
 host_scene_drop(void)
 {
+	scene_finish();
+	scene_noting = 0;
 	if (scene_built)
 		seglDiscard();
 	scene_built = scene_shown = 0;
@@ -403,6 +536,7 @@ host_picture(int width, int height, unsigned int *physical)
 {
 	if (!screen || width <= 0 || height <= 0)
 		return NULL;
+	scene_finish();
 	if (!picture || width * height > picture_w * picture_h) {
 		if (!(picture = big_memory(width * height)))
 			return NULL;
@@ -478,6 +612,19 @@ host_present(int page, int with_cursor)
 {
 	if (!screen)
 		return;
+	if (scene_out) {
+		if (scene_owed || !scene_built) {
+			scene_finish();		/* a second frame before the first is shown: in their order */
+		} else if (!mcw_done(1)) {
+			/* this scene's frame, and the worker still has it: shown when it has done */
+			scene_owed = 1;
+			scene_owed_page = page;
+			scene_owed_cursor = with_cursor;
+			return;
+		} else {
+			scene_out = 0;
+		}
+	}
 	if (scene_built) {
 		present_scene(page, with_cursor);
 	} else if (scene_shown) {
@@ -555,6 +702,8 @@ host_event(struct host_event *event)
 
 	if (!screen)
 		return 0;
+	if (scene_out && mcw_done(1))
+		scene_finish();		/* the worker has made the scene: its frame is shown */
 	if (log < 0)
 		log = getenv("TDAWN_INPUT_LOG") != NULL;	/* say what arrives, for tests */
 	input = control(REG_INPUT);
@@ -565,6 +714,8 @@ host_event(struct host_event *event)
 		}
 	if (!ask && host_ms() - asked_ms >= 250)
 		ask = 1;
+	if (ask)
+		scene_finish();		/* an event may be the window's: the GPU's library is asked about it */
 	while (ask) {
 		GrCheckNextEvent(&e);
 		switch (e.type) {

@@ -725,6 +725,10 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   first version passed every sum and crashed at the first level's exit.
 - A harness run's `--uart-log` is added to, not replaced: give a run a new name, or lines of
   the run before are read as this one's.
+- The two Command & Conquer games give a mission's scene to a worker core (`linux/tdawn/host.c`,
+  `docs/tdawn.md`): anything added to `host.c` that calls the GPU's library must call
+  `scene_finish()` first. `TDAWN_SCENE=inline` is the way it was, for comparing: the state
+  sums and a held frame's picture (`--gpu-capture`; the pointer differs) must be the same.
 - Never more than three harness runs at once: four took 264 s where one takes 70.
 - Its changes to id's source are `linux/quake/quake.patch`: edit a clean clone at the commit
   `build.sh` names and save `git diff -- WinQuake`. The build puts the tree back each time.

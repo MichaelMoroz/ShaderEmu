@@ -40,6 +40,8 @@ fi
 git -C "$VC" checkout -q -f "$COMMIT" && git -C "$VC" clean -q -fd
 git -C "$VC" apply "$HERE/vanilla-conquer.patch"
 cp "$HERE/cxxrt.cpp" "$HERE/shaderemu.cpp" "$HERE/soundio_shaderemu.cpp" "$HERE/host.c" "$HERE/host.h" "$VC/common/"
+# the worker cores' library, the same for every program (programs/mc): host.c gives a core the scene
+cp "$REPO/programs/mc/mc.h" "$REPO/programs/mc/mcw.h" "$REPO/programs/mc/mcw.c" "$VC/common/"
 cp "$HERE/gl.cpp" "$VC/tiberiandawn/"
 
 cat > "$WORK/src/tdawn-toolchain.cmake" <<EOF
@@ -52,12 +54,16 @@ set(CMAKE_RANLIB $(command -v riscv32-linux-ranlib))
 set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
 EOF
 GLINC="-idirafter $REPO/programs/linux/include -I$MW/src/include -I$REPO/linux/userland"
+# The GPU's library with a section a variable, each starting on 16 bytes: a worker core makes
+# the scene's commands with it (host.c), and two cores must not store to the same 16 bytes.
+rv32-cc -O2 -fno-pie -w -DNDEBUG -DSHADEREMU $GLINC -fno-common -fdata-sections -fno-toplevel-reorder -msmall-data-limit=0     -c "$REPO/programs/linux/gles.c" -o "$WORK/src/tdawn-gles.o"
+riscv32-linux-objcopy --set-section-alignment '.data*=16' --set-section-alignment '.bss*=16' "$WORK/src/tdawn-gles.o"
 # -fno-pie: a use of a global costs a load from a table otherwise (docs/doom.md)
 # -fno-lifetime-dse: the game's operator new marks an object active before its constructor
 # runs, a store the compiler may otherwise drop (a native -O3 build then has no overlays)
 cmake -S "$VC" -B "$BUILD" -DCMAKE_TOOLCHAIN_FILE="$WORK/src/tdawn-toolchain.cmake" -DCMAKE_BUILD_TYPE=Release \
     -DSDL2=OFF -DOPENAL=OFF -DNETWORKING=OFF -DBUILD_VANILLARA=OFF -DSHADEREMU=ON \
-    -DSHADEREMU_GLES="$REPO/programs/linux/gles.c" -DSHADEREMU_NANOX="$MW/src/lib/libnano-X.a" \
+    -DSHADEREMU_GLES="$WORK/src/tdawn-gles.o" -DSHADEREMU_NANOX="$MW/src/lib/libnano-X.a" \
     -DCMAKE_CXX_FLAGS="-O2 -fno-pie -fno-lifetime-dse -w -DSHADEREMU $GLINC" -DCMAKE_CXX_FLAGS_RELEASE="-DNDEBUG" \
     -DCMAKE_C_FLAGS="-O2 -fno-pie -w -DSHADEREMU $GLINC" -DCMAKE_C_FLAGS_RELEASE="-DNDEBUG" > "$WORK/src/tdawn-configure.log" 2>&1 \
     || { tail -20 "$WORK/src/tdawn-configure.log"; exit 1; }
