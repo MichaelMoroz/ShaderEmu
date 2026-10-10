@@ -1,5 +1,6 @@
 # The world's sounds (python world/sounds.py): rain against the window, computed, as a loop that
-# joins itself exactly; thunder and the computer's own sounds, cut from recordings. Unity gets Sounds/*.wav.
+# joins itself exactly; thunder, the computer's own sounds and the keys' strokes, cut from recordings.
+# Unity gets Sounds/*.wav.
 import os
 import wave
 
@@ -67,6 +68,7 @@ SOURCES = {
     "thunder_near": ("534/534023_9395330", "Thunderclap, by Fission9"),
     "thunder_peal": ("243/243778_997601", "peal of thunder close, by bastipictures"),
     "thunder_far": ("397/397952_2247456", "Thunder Clap And Rumble #1, by Kinoton"),
+    "keyboard": ("859/859264_9839964", "CMPTKey_Mechanical Computer Keyboard Typing, Fast Typing, by harrisonlace"),   # an old Dell's keys
 }
 CACHE = os.path.join(HERE, "..", "build", "sounds")
 
@@ -152,6 +154,26 @@ def computer():
     save("PcOff", limited(piece(pc, 72.2, 76.1, 0.02, 0.3), gain))
 
 
+def keys():
+    """Four single strokes out of a recording of typing, for the keyboards' keys: the four
+    loudest that begin out of quiet, found by measurement (the level in steps of 2 ms)."""
+    typing = source("keyboard")
+    hop = RATE // 500
+    level = np.abs(typing).max(0)
+    steps = level[:len(level) // hop * hop].reshape(-1, hop).max(1)
+    found = []
+    for i in range(20, len(steps) - 45):
+        # a stroke: a step much louder than the 30 ms before it, and the loudest for 16 ms either way
+        if steps[i] > 3.0 * steps[i - 15:i - 1].max() and steps[i] == steps[i - 8:i + 9].max():
+            found.append((steps[i], i))
+    found = sorted(sorted(found, reverse=True)[:4], key=lambda stroke: stroke[1])
+    for n, (peak, i) in enumerate(found):
+        start = (i - 2) * hop / RATE
+        cut = piece(typing, start, start + 0.085, 0.002, 0.04)
+        save("Key%d" % (n + 1), cut / np.abs(cut).max() * 0.8)
+    print("keys: %d strokes found out of quiet, the four loudest kept (at %s s)" % (len(found), ", ".join("%.2f" % (i * hop / RATE) for _, i in found)))
+
+
 def thunder():
     for name, key, most in (("Thunder1", "thunder_near", 13.0), ("Thunder2", "thunder_peal", 20.0), ("Thunder3", "thunder_far", 19.0)):
         sound = source(key)
@@ -166,6 +188,7 @@ def main():
     rain()
     thunder()
     computer()
+    keys()
 
 
 if __name__ == "__main__":

@@ -265,14 +265,16 @@ public static partial class ShaderEmuBuilder
         return made;
     }
 
-    static GameObject ImportModel(string name, Dictionary<string, Material> materials, bool lightmapped)
+    // unwrap: Unity lays out the lightmap's coordinates. Not for the shell, which brings its own
+    // (world/shell.py: one chart a surface, so no line shows where two pieces of a wall met).
+    static GameObject ImportModel(string name, Dictionary<string, Material> materials, bool unwrap)
     {
         string path = ModelsPath + "/" + name + ".fbx";
         ModelImporter importer = AssetImporter.GetAtPath(path) as ModelImporter;
         if (importer == null) throw new System.Exception(path + " is missing: run world/build.py and copy unity/ShaderEmu over");
         importer.importNormals = ModelImporterNormals.Import;
         importer.importTangents = ModelImporterTangents.CalculateMikk;
-        importer.generateSecondaryUV = lightmapped;
+        importer.generateSecondaryUV = unwrap;
         importer.secondaryUVPackMargin = 8f;
         importer.importCameras = false;
         importer.importLights = false;
@@ -347,10 +349,10 @@ public static partial class ShaderEmuBuilder
         if (old != null) Object.DestroyImmediate(old.gameObject);
         Transform models = new GameObject("Models").transform;
         models.SetParent(world, false);
-        foreach (string name in new[] { "Room", "Computer", "Furniture", "Annex", "City" })
+        foreach (string name in new[] { "Room", "Shell", "Computer", "Furniture", "Annex", "City" })
         {
             bool city = name == "City";
-            GameObject instance = (GameObject)PrefabUtility.InstantiatePrefab(ImportModel(name, materials, !city));
+            GameObject instance = (GameObject)PrefabUtility.InstantiatePrefab(ImportModel(name, materials, !city && name != "Shell"));
             instance.transform.SetParent(models, false);
             foreach (MeshRenderer renderer in instance.GetComponentsInChildren<MeshRenderer>())
             {

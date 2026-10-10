@@ -165,7 +165,7 @@ and Command & Conquer by Westwood Studios (source released by Electronic Arts);
 Mesa demos; photographs from Unsplash; furniture, plants and surfaces of the VRChat room from
 [Poly Haven](https://polyhaven.com) (CC0); [LTCGI](https://github.com/PiMaker/ltcgi) by pimaker,
 [VRC Light Volumes](https://github.com/REDSIM/VRCLightVolumes) by RED_SIM and
-[Mochie's shaders](https://github.com/MochiesCode/Mochies-Unity-Shaders) for the room's light and rain; recordings from [Freesound](https://freesound.org) given to the public domain: a computer by squashy555, thunder by Fission9, bastipictures and Kinoton; VRChat's SDK and UdonSharp;
+[Mochie's shaders](https://github.com/MochiesCode/Mochies-Unity-Shaders) for the room's light and rain; recordings from [Freesound](https://freesound.org) given to the public domain: a computer by squashy555, a keyboard by harrisonlace, thunder by Fission9, bastipictures and Kinoton; VRChat's SDK and UdonSharp;
 [ShaderAudio](https://gitlab.com/lox9973/ShaderAudio) by lox9973, whose way of getting sound out of
 a shader the sound card follows.
 

@@ -21,6 +21,7 @@ OUT_W, OUT_H = 0.645, 0.533
 LOW = 0.07                                # the case's underside, on its foot
 OUT_Y = LOW + OUT_H / 2
 CHIN = (LOW + GLASS[2] - GLASS[1] / 2 - 0.012) / 2
+LED_X = 0.155   # the monitor's lamp, by its power key
 BAY_525, BAY_35 = (0.1461, 0.0413), (0.1016, 0.0261)
 SLOT_PITCH, BRACKET = 0.02032, (0.1207, 0.01842)
 
@@ -99,9 +100,11 @@ def monitor(b):
     loft(b, [at_z(rrect(w + 0.024, h + 0.024, 0.03, 0, mid), front), at_z(rrect(OUT_W - 0.014, OUT_H - 0.014, 0.01, 0, OUT_Y), front),
              at_z(rrect(OUT_W, OUT_H, 0.012, 0, OUT_Y), front + 0.009), at_z(rrect(OUT_W, OUT_H, 0.012, 0, OUT_Y), front + block),
              at_z(rrect(OUT_W - 0.03, OUT_H - 0.03, 0.01, 0, OUT_Y), front + block)], skin("PlasticBeige"), last=MODE != "low")   # (the shell has no use for a face nobody sees)
-    # what shows in the seam
-    loft(b, [at_z(rrect(OUT_W - 0.02, OUT_H - 0.02, 0.01, 0, OUT_Y), front + block - 0.004),
-             at_z(rrect(OUT_W - 0.02, OUT_H - 0.02, 0.01, 0, OUT_Y), z0 + 0.004)], "PlasticDark")   # (not of the baked skin: it is in the gap)
+    if MODE == "low":   # the shell is one closed skin: the seam has a floor, which the bake finds dark
+        loft(b, [at_z(rrect(OUT_W - 0.03, OUT_H - 0.03, 0.01, 0, OUT_Y), front + block), at_z(rrect(OUT_W - 0.03, OUT_H - 0.03, 0.01, 0, OUT_Y), z0)], skin("PlasticBeige"))
+    else:   # what shows in the seam
+        loft(b, [at_z(rrect(OUT_W - 0.02, OUT_H - 0.02, 0.01, 0, OUT_Y), front + block - 0.004),
+                 at_z(rrect(OUT_W - 0.02, OUT_H - 0.02, 0.01, 0, OUT_Y), z0 + 0.004)], "PlasticDark")
     # the housing
     loft(b, [at_z(rrect(OUT_W - 0.03, OUT_H - 0.03, 0.01, 0, OUT_Y), z0), at_z(rrect(OUT_W - 0.006, OUT_H - 0.006, 0.012, 0, OUT_Y), z0),
              at_z(rrect(OUT_W - 0.006, OUT_H - 0.006, 0.012, 0, OUT_Y), z0 + run), at_z(rrect(back_w, back_h, 0.012, 0, back_y), z0 + run + taper),
@@ -136,8 +139,11 @@ def monitor(b):
     # the opening's own slope, down to the glass
     def on_glass(outline):   # an outline laid on the tube's own surface, a hair before it
         return [(x, y, front + 0.0115 + BULGE - math.sqrt(BULGE * BULGE - x * x - (y - mid) ** 2)) for x, y in outline]
-    loft(b, [at_z(rrect(w + 0.024, h + 0.024, 0.03, 0, mid), front), at_z(rrect(w + 0.008, h + 0.008, 0.025, 0, mid), front + 0.014),
-             on_glass(rrect(w, h, 0.022, 0, mid))], skin("PlasticGrey"), normal=(0, 0, -1))
+    opening = [at_z(rrect(w + 0.024, h + 0.024, 0.03, 0, mid), front), at_z(rrect(w + 0.008, h + 0.008, 0.025, 0, mid), front + 0.014),
+               on_glass(rrect(w, h, 0.022, 0, mid))]
+    if MODE == "low":   # closed behind the glass, which is a sheet of the place's own
+        opening.append(at_z(rrect(w - 0.03, h - 0.03, 0.02, 0, mid), front + 0.06))
+    loft(b, opening, skin("PlasticGrey"), last=MODE == "low", normal=(0, 0, -1))
     if MODE == "full":
         # the tube: a patch of a ball, a little larger than what shows, its middle the nearest
         nx, ny, gw, gh = 24, 18, w + 0.012, h + 0.012
@@ -158,9 +164,9 @@ def monitor(b):
         # the remote's window, and six keys (RGB 2/+, RGB 1/-, VIDEO 2, VIDEO 1, EXIT, PROCEED); and
         # behind grilles in the chin's corners, its two oval loudspeakers of 9 x 5.5 cm
         round_button(b, 0.18, CHIN, front, 0.011, "PlasticBeige")
-        b.cyl((0.155, CHIN, front - 0.0005), 0.0035, 0.003, "Led", segs=10, rot=(90, 0, 0))
+        b.cyl((LED_X, CHIN, front - 0.0005), 0.0035, 0.003, "Led", segs=10, rot=(90, 0, 0))
         for i in range(6):
-            b.box((0.02 + i * 0.022, CHIN, front - 0.0012), (0.016, 0.008, 0.0036), "PlasticGrey", bevel=0.0014, segs=2)
+            b.box((OSD_X + i * OSD_PITCH, CHIN, front - 0.0012), (0.016, 0.008, 0.0036), "PlasticGrey", bevel=0.0014, segs=2)
         b.quad((0.075, CHIN - 0.011, front - 0.0002), (0.145, 0.007), "Details", decal="crt_osd")
         b.box((-0.06, CHIN, front - 0.0008), (0.124, 0.022, 0.0016), "MetalSteel", bevel=0.0006, segs=1)   # the maker's plate
         b.quad((-0.06, CHIN, front - 0.0018), (0.12, 0.0196), "Details", decal="crt_brand")
@@ -312,14 +318,17 @@ def terminal_board(b, x, y, z):
     legend(b, "speaker", x - (BOARD["lm"][0] + BOARD["rp"][0]) / 2, y + ROW_LOW + LABEL + 0.0068, face + 0.0002)
 
 
+# The speed's window on the tower's front: two rows of three digits, which Unity lights
+# (SevenSeg.shader: millions of instructions a second, every core over core 0). Its middle from
+# the tower's own, and its size: ShaderEmuStations.cs reads them from Models/stations.json.
+SPEED_X, SPEED_DOWN, SPEED_W, SPEED_H = 0.052, 0.176, 0.044, 0.026
+
+
 def speed_display(b, x, y):
-    """A 486's case shows its speed in megahertz on two digits of seven bars each: 66."""
-    b.box((x, y, FRONT - 0.0008), (0.034, 0.022, 0.0016), "PlasticDark", bevel=0.0006, segs=1)
-    bars = {"top": (0, 0.0062, 0.0058, 0.0012), "mid": (0, 0, 0.0058, 0.0012), "low": (0, -0.0062, 0.0058, 0.0012),
-            "upper left": (-0.0034, 0.0031, 0.0012, 0.005), "lower left": (-0.0034, -0.0031, 0.0012, 0.005), "lower right": (0.0034, -0.0031, 0.0012, 0.005)}
-    for digit in (-0.0075, 0.0075):   # a 6 lights all but the upper right bar
-        for dx, dy, w, h in bars.values():
-            b.box((x + digit + dx, y + dy, FRONT - 0.0018), (w, h, 0.0006), "Amber")
+    """The window alone, dark, with a legend a row: the digits are not the model's."""
+    b.box((x, y, FRONT - 0.0008), (SPEED_W + 0.004, SPEED_H + 0.004, 0.0016), "PlasticDark", bevel=0.0006, segs=1)
+    legend(b, "mips_all", x, y + SPEED_H / 2 + 0.0055, FRONT - 0.0011, back=False)
+    legend(b, "mips_cpu", x, y - SPEED_H / 2 - 0.0055, FRONT - 0.0011, back=False)
 
 
 def drive_gap(b, x, y, w, h):
@@ -422,6 +431,13 @@ def rear(b, w, h, back):
             b.cyl((x, y, z + 0.0006), 0.0038, 0.0022, "MetalSteel", segs=8, rot=(90, 0, 0))
 
 
+# the tower's keys a visitor presses, from its middle line (and the power key's depth below its top)
+TURBO_X, RESET_X, POWER_KEY = 0.004, 0.020, (0.045, 0.226)
+LAMPS_X = (-0.041, -0.027, -0.013)   # the tower's lamps: power, turbo, disk
+# the monitor's six keys under the glass, left to right as their legend names them
+OSD_X, OSD_PITCH = 0.02, 0.022
+
+
 def tower(b):
     """The computer itself, standing on the floor: its foot at the frame's origin, its front at FRONT."""
     w, h, deep = 0.18, TOWER_HIGH, TOWER_DEEP
@@ -446,19 +462,19 @@ def tower(b):
     b.box((0, h - 0.088, FRONT - 0.0006), (BAY_525[0], BAY_525[1] - 0.001, 0.0016), "PlasticBeige", bevel=0.0008, segs=1)
     floppy_drive(b, 0, h - 0.132)
     # the panel: the lock, three lamps over their names, turbo and reset over theirs, the speed
-    cy = h - 0.175
-    b.box((0, cy, FRONT - 0.0004), (0.156, 0.034, 0.001), "PlasticCase", bevel=0.0004, segs=1)
+    cy = h - SPEED_DOWN
+    b.box((0, cy, FRONT - 0.0004), (0.156, 0.046, 0.001), "PlasticCase", bevel=0.0004, segs=1)
     b.cyl((-0.06, cy, FRONT - 0.002), 0.008, 0.004, "MetalSteel", segs=20, bevel=0.001, rot=(90, 0, 0))
     b.box((-0.06, cy, FRONT - 0.0042), (0.002, 0.008, 0.0006), "PlasticDark")
-    for x, mat, name in ((-0.034, "Led", "power"), (-0.018, "Amber", "turbo"), (-0.002, "Led", "hdd")):
+    for x, mat, name in ((LAMPS_X[0], "Led", "power"), (LAMPS_X[1], "Amber", "turbo"), (LAMPS_X[2], "Led", "hdd")):
         b.box((x, cy + 0.005, FRONT - 0.0016), (0.007, 0.003, 0.002), mat, bevel=0.0006, segs=1)
         legend(b, name, x, cy - 0.005, FRONT - 0.0011, back=False)
-    for x, name in ((0.016, "turbo"), (0.034, "reset")):
+    for x, name in (TURBO_X, "turbo"), (RESET_X, "reset"):
         b.box((x, cy + 0.004, FRONT - 0.003), (0.013, 0.008, 0.004), "PlasticBeige", bevel=0.0016, segs=2)
         legend(b, name, x, cy - 0.007, FRONT - 0.0011, back=False)
-    speed_display(b, 0.059, cy)
+    speed_display(b, SPEED_X, cy)
     # under it the power key in its well, at the right, over its name; the badge at the left
-    px, py = 0.045, h - 0.222
+    px, py = POWER_KEY[0], h - POWER_KEY[1]
     b.box((px, py, FRONT - 0.0004), (0.04, 0.03, 0.001), "PlasticCase", bevel=0.0004, segs=1)
     b.box((px, py, FRONT - 0.004), (0.034, 0.024, 0.006), "PlasticBeige", bevel=0.003, segs=3)
     b.box((px, py, FRONT - 0.0072), (0.016, 0.0016, 0.0006), "PlasticGrey")
@@ -470,11 +486,15 @@ def tower(b):
             b.box((-0.06375 + i * 0.0085, 0.04 + row * 0.038, FRONT - 0.0002), (0.0045, 0.028, 0.0012), "PlasticDark", bevel=0.0004, segs=1)
 
 
+KEY_SCALE = 1.3          # the keyboard against a real one (keys 19.05 mm apart): 25 mm, for a beam from a chair
+KEYBOARD_Z = -0.31       # its middle, from the place's
+
+
 def keyboard(b):
-    """The keyboard: world/keyboard.json's layout at a real keyboard's size, caps that
-    narrow to their tops, in a tray that slopes."""
+    """The keyboard: world/keyboard.json's layout at KEY_SCALE times a real keyboard's size,
+    caps that narrow to their tops, in a tray that slopes."""
     layout = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "keyboard.json"), encoding="utf-8"))
-    wide, tall, s = layout["width"], layout["height"], 0.01905 / 60   # the layout's keys are 60 apart: 19.05 mm, the standard pitch
+    wide, tall, s = layout["width"], layout["height"], KEY_SCALE * 0.01905 / 60   # the layout's keys are 60 apart: 19.05 mm, the standard pitch
     vertices, faces, uvs, normals = [], [], [], []
 
     def ring(x0, y0, x1, y1, z):
@@ -501,18 +521,18 @@ def keyboard(b):
             for k, normal in enumerate(((0, -1, 0), (1, 0, 0), (0, 1, 0), (-1, 0, 0))):
                 face((lower + k, lower + (k + 1) % 4, upper + (k + 1) % 4, upper + k), normal)
     kw, kh = wide * s, tall * s
-    with b.at((0, 0.016, -0.31), (90 - 7, 0, 0)):   # -z of this frame is up from the keys
+    with b.at((0, 0.016, KEYBOARD_Z), (90 - 7, 0, 0)):   # -z of this frame is up from the keys
         with b.at((0, 0, -0.012)):
             b.mesh(vertices, faces, uvs, "Keyboard", normal=normals)
         loft(b, [at_z(rrect(kw + 0.03, kh + 0.03, 0.01), 0.012), at_z(rrect(kw + 0.03, kh + 0.03, 0.012), -0.006),
                  at_z(rrect(kw + 0.022, kh + 0.022, 0.012), -0.0105), at_z(rrect(kw + 0.008, kh + 0.008, 0.006), -0.0105)], "PlasticBeige",
              first=True, normal='out')
         b.quad((0, 0, -0.0104), (kw + 0.008, kh + 0.008), "PlasticCase")   # the well the keys stand in
-        for i, mat in enumerate(("Led", "PlasticDark", "PlasticDark")):
+        for i, mat in enumerate(("LampGreen", "PlasticDark", "PlasticDark")):   # (unlit: a lamp that glowed on a machine that was off)
             b.box((kw / 2 - 0.02 - i * 0.012, kh / 2 + 0.006, -0.0108), (0.006, 0.002, 0.0008), mat)
         b.quad((kw / 2 - 0.032, kh / 2 + 0.0105, -0.0106), (0.04, 0.005), "Details", decal="kb_lamps")
-    for x in (-0.18, 0.18):   # the feet that fold out behind
-        b.box((x, 0.008, -0.242), (0.03, 0.016, 0.008), "PlasticCase", bevel=0.002, segs=1)
+    for x in (-0.18 * KEY_SCALE, 0.18 * KEY_SCALE):   # the feet that fold out behind
+        b.box((x, 0.008, KEYBOARD_Z + kh / 2 - 0.004), (0.03, 0.016, 0.008), "PlasticCase", bevel=0.002, segs=1)
 
 
 def mouse(b):
@@ -606,10 +626,15 @@ TABLE_HIGH = 0.765   # the classroom's table top over the floor (furniture.TABLE
 SET_X, TOWER_X, TOWER_Z = -0.11, 0.38, 0.05   # the monitor and keyboard a little left, the tower at their right
 
 
-def station(b, which="all"):
+def station(b, which="all", lie=None):
     """A whole place on the table at the frame's origin: the monitor and keyboard, the tower
     beside them, the mouse before the tower, and their leads. which: "shell" is the monitor and
-    the tower alone, "rest" all but them (with the tube's glass, which no mode but "full" gives)."""
+    the tower alone, "rest" all but them (with the tube's glass, which no mode but "full" gives).
+    lie: how this place's keyboard, mouse and mat lie off their places, each (x, z, turn)."""
+    lie = lie or {"keyboard": (0, 0, 0), "mouse": (0, 0, 0), "mat": (0, 0, 0)}
+    kx, kz, kturn = lie["keyboard"]
+    mx, mz, mturn = lie["mouse"]
+    px, pz, pturn = lie["mat"]
     block, run, taper = 0.11 + 0.003, 0.09, 0.305
     back, plug_y = GLASS[3] + block + run + taper + 0.011, OUT_Y - 0.012   # the monitor's back, as monitor() builds it
     if which != "rest":
@@ -622,9 +647,16 @@ def station(b, which="all"):
     with b.at((SET_X, 0, 0)):
         if MODE != "full":
             tube_glass(b)
-        keyboard(b)
-    with b.at((TOWER_X - 0.01, 0, -0.31)):
-        mouse(b)
+        with b.at((kx, 0, KEYBOARD_Z + kz)):
+            with b.at((0, 0, 0), (0, kturn, 0)):
+                with b.at((0, 0, -KEYBOARD_Z)):
+                    keyboard(b)
+    mat_at = (TOWER_X - 0.01 + px, 0, -0.31 + pz)
+    with b.at(mat_at, (0, pturn, 0)):
+        b.box((0, 0.0015, 0), (0.21, 0.003, 0.25), "Rubber", bevel=0.001, segs=1)   # the mat, lying flat
+    mouse_at = (mat_at[0] + mx, 0, mat_at[2] + mz)
+    with b.at(mouse_at, (0, mturn, 0)):
+        mouse_body(b)
     behind = TOWER_Z + FRONT + TOWER_DEEP   # the tower's back
     edge = 0.445                            # the table's, behind
     at = tower_back()
@@ -654,14 +686,15 @@ def station(b, which="all"):
         b.box((x, y, z + 0.014), (0.03, 0.022, 0.028), "Rubber", bevel=0.004, segs=2)   # its moulded plug (IEC C13)
     # the keyboard's lead round the monitor's foot to the DIN socket, the mouse's round the tower to COM 1
     kx, ky = TOWER_X + at["keyboard"][0], at["keyboard"][1]
-    b.tube([(SET_X + 0.12, 0.02, -0.24), (SET_X + 0.2, 0.006, -0.2), (0.25, 0.004, -0.05), (0.262, 0.004, behind - 0.05),
+    key_back = KEYBOARD_Z + 0.5 * KEY_SCALE * 437 * 0.01905 / 60 + 0.012   # the tray's far edge
+    b.tube([(SET_X + kx + 0.12, 0.02, key_back + kz), (SET_X + kx + 0.2, 0.006, key_back + kz + 0.04), (0.25, 0.004, -0.05), (0.262, 0.004, behind - 0.05),
             (kx, 0.012, behind + 0.07), (kx, ky - 0.06, behind + 0.07), (kx, ky - 0.006, behind + 0.062), (kx, ky, behind + 0.046), (kx, ky, behind + 0.02)],
            0.0028, "PlasticCase", segs=6, smooth=5)
     b.cyl((kx, ky, behind + 0.004), 0.0062, 0.008, "MetalSteel", segs=14, rot=(90, 0, 0))                    # the DIN plug: its shell in the socket,
     b.cyl((kx, ky, behind + 0.02), 0.0078, 0.026, "PlasticCase", segs=14, bevel=0.002, rot=(90, 0, 0))     # its grip,
     b.cyl((kx, ky, behind + 0.038), 0.0045, 0.012, "PlasticCase", segs=10, rot=(90, 0, 0))                 # and its sleeve
     cx, cy = TOWER_X + at["com1"][0], at["com1"][1]
-    b.tube([(TOWER_X - 0.0, 0.014, -0.258), (TOWER_X + 0.01, 0.006, -0.22), (TOWER_X + 0.1, 0.004, -0.15), (TOWER_X + 0.108, 0.004, behind - 0.05),
+    b.tube([(mouse_at[0], 0.014, mouse_at[2] + 0.052), (mouse_at[0] + 0.01, 0.006, mouse_at[2] + 0.09), (TOWER_X + 0.1, 0.004, -0.15), (TOWER_X + 0.108, 0.004, behind - 0.05),
             (cx + 0.05, 0.012, behind + PLUG_LONG + 0.03), (cx, cy - 0.06, behind + PLUG_LONG + 0.035), (cx, cy - 0.006, behind + PLUG_LONG + 0.028),
             (cx, cy, behind + PLUG_LONG + 0.012), (cx, cy, behind + PLUG_LONG - 0.01)], 0.0022, "PlasticCase", segs=6, smooth=5)
     dsub_plug(b, cx, cy, behind, 0.031, sleeve=0.004)

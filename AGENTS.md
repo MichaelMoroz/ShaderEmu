@@ -1032,6 +1032,13 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   `gpu_vertex_sized` in `gpu.h` still places a vertex for a picture of a given size.
 - The host's words about the room are at 0x87000360 (two texels, `HOST_STATE`), written by the
   control pass when the host defines `HOST_STATE_WORDS(n)`: Unity does, the harness not yet.
+- A lamp of a model that should follow a machine must not be in a baked picture of light:
+  `world/bake_pc.py` bakes the set's lamps dark and `PowerLamps` in `ShaderEmuStations.cs`
+  puts lit ones before them.
+- A clock's hands are objects of their own turned by `ClockHand.shader` (`docs/world.md`); a
+  mesh a shader turns in its own space must not be static, or batching moves it to the world's.
+- `world/bake_pc.py` (53 s) writes the keyboard too: a change to anything of `pc.py`'s set
+  needs it before `build.py`, not only a change to the shells.
 - The network (`docs/lan.md`): `--net PORT --net-id N` on `rvc_harness` (D3D11) and `rvc_cpu`;
   machine N is `10.0.0.N` on UDP port PORT + N; `--net-loss P --net-delay MS` are the VRChat
   link's part. The guest configures nothing: `lan0` takes its address from the host's number
@@ -1060,6 +1067,8 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   With tracked hands (bit 5 of the host's first word; `--holodeck-aim DEGREES` in the harness)
   the right hand's rise is the aim's; a head is not aimed with (the developer: "why do you
   have hands?").
+- A colour times a coloured texture can be black (a blue tint on the den's red carpet): give a
+  new surface a neutral texture, or one of its own.
 - Idle Linux runs about 0.2M instructions a second: a test that waits for "enough instructions"
   to know the guest has booted waits for ever. The prompt is there after 10.7M.
 - In Unity the tick and the commit's points are cameras' passes (`docs/multicore.md`, "In
@@ -1075,3 +1084,6 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   length on the tick's material (`_Ticks`), not only in the script's `ticks`.
 - After a pull that changes `main.shader`'s tick or commit, the same change is owed in
   `MachineTick.shader`, `MachineCommit.cginc` and `MachineCommitPoints.shader`.
+- A model's skin must be closed where it can be seen into: `blender -b build/world.blend --python
+  world/check_watertight.py -- NAME` lists the loops of edges with one face. The classroom's
+  shell (`pc_station`) must have none; a sheet of its own (the glass) needs a closed face behind it.

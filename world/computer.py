@@ -289,7 +289,8 @@ def clutter(b):
         b.quad((x, y + 0.0026, z), (0.088, 0.092), "Details", rot=(90, turn, 0), decal=decal)
     # at the desk's left end: a lamp on an arm, magazines, a listing
     b.asset("desk_lamp_arm_01", (-3.33, top, HALF_D - 0.2), rot=(0, 160, 0), scale=0.7)   # its own origin on the desk: below it is the clamp
-    b.asset("alarm_clock_01", (-1.3, top, 5.2), rot=(0, 190, 0), size=(None, 0.13, None))
+    b.asset("alarm_clock_01", (-1.3, top, 5.2), rot=(0, 190, 0), size=(None, 0.13, None), parts=("=alarm_clock_01",),
+            hands=((0, 0, 0.065), ("hour", "houd_hand"), ("minute", "minute_hand"), ("second", "second_hand")))
     for i, turn in enumerate((-10, 4, -3)):   # clear of the console, whose cheek is at -3.10
         b.box((-3.29, top + 0.004 + i * 0.008, 4.80), (0.21, 0.007, 0.28), "Paper", rot=(0, turn, 0))
     b.quad((-3.29, top + 0.0245, 4.80), (0.21, 0.276), "Details", rot=(90, -3, 0), decal="magazine_0")

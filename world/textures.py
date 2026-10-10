@@ -794,13 +794,15 @@ def smudges():
 
 
 def holo_grid():
-    """A metre of the holodeck's wall: black, with a bright line along its edges (half of it on each tile)."""
+    """A metre of the holodeck's wall: a grey-blue plate, darker in a band inside its rim, with a
+    bright line along its edges (half of it on each tile). It was black, and so was the room."""
     n = 256
     y, x = np.mgrid[0:n, 0:n]
     edge = np.minimum(np.minimum(x, n - 1 - x), np.minimum(y, n - 1 - y))
     line = np.clip(1.5 - edge / 2.0, 0, 1)
-    base = 0.035 + 0.01 * unit(noise(n, 1.5, 81))
-    rgb = base[..., None] * np.array([1.0, 1.0, 1.05]) * (1 - line[..., None]) + line[..., None] * np.array([0.95, 0.72, 0.12])
+    rim = np.clip((edge - 3.0) / 3.0, 0, 1) * np.clip((16.0 - edge) / 3.0, 0, 1)
+    base = (0.34 + 0.03 * unit(noise(n, 1.5, 81))) * (1 - 0.35 * rim)
+    rgb = base[..., None] * np.array([0.88, 0.94, 1.05]) * (1 - line[..., None]) + line[..., None] * np.array([0.95, 0.72, 0.12])
     save("HoloGrid", rgb, 0.55 - 0.25 * line)
     save("HoloGrid_e", line[..., None] * np.array([1.0, 0.72, 0.10]))
 

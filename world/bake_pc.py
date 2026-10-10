@@ -183,6 +183,10 @@ def main():
 
     normal = bake('NORMAL', False, 4, normal_space='TANGENT')
     rough = bake('ROUGHNESS', False, 4)
+    # the lamps are dark in the picture: each place's are lit by its own machine (ShaderEmuStations.cs)
+    for used in high.data.materials:
+        if used.name.split('.')[0] in ("Led", "Amber"):
+            used.node_tree.nodes["Principled BSDF"].inputs["Emission Strength"].default_value = 0.0
     light = bake('EMIT', True, 4)
     shade = bake('AO', False, 48)
     # the colour last, as light: each material gives out its own colour and nothing else, so the
@@ -195,6 +199,8 @@ def main():
             tree.links.new(base.links[0].from_socket, shader.inputs["Emission Color"])
         else:
             shader.inputs["Emission Color"].default_value = base.default_value
+        if used.name.split('.')[0] in ("Led", "Amber"):   # an unlit lamp's lens is dull
+            shader.inputs["Emission Color"].default_value = [0.22 * c for c in base.default_value[:3]] + [1.0]
         shader.inputs["Emission Strength"].default_value = 1.0
     colour = bake('EMIT', True, 4)
     print("BAKE colour: %.0f%% of the picture is the shell's" % (100 * (colour[..., :3].sum(2) > 0).mean()))

@@ -24,8 +24,8 @@ in Blender by scripts in `world/`; furniture, plants and the main surfaces come 
 - `sounds.py` computes the rain's loop, and cuts thunder and the computer's own sounds from
   recordings (`SOURCES`: Freesound, CC0; fetched once into `build/sounds`, which needs ffmpeg)
   (`Sounds/*.wav`, 3 s).
-- `build.py` writes `Models/{Room,Computer,Furniture,City,Gamepad}.fbx` and `build/world.blend`
-  (8 s). Name parts after `--` to build only those.
+- `build.py` writes `Models/{Shell,Room,Computer,Furniture,Annex,City,Gamepad}.fbx` and
+  `build/world.blend` (11 s). Name parts after `--` to build only those.
 
 Then copy `unity/ShaderEmu` over the Unity project's `Assets/ShaderEmu` and run
 "ShaderEmu/Put the modelled room into the open scene" (twice the first time: the storm's Udon
@@ -33,9 +33,33 @@ program has to exist before it can be filled in), "ShaderEmu/Restyle the panels 
 scene", then "ShaderEmu/Bake lighting". "Build world" does the first two itself. Putting the
 models in again drops their lightmaps: the room is unlit until the next bake.
 
-After a build, `blender -b build/world.blend --python world/check_overlap.py` (3 s) lists faces
+After a change to `world/pc.py`, `blender -b --python world/bake_pc.py` (53 s) comes before
+`build.py` (`docs/stations.md`).
+
+After a build, `blender -b build/world.blend --python world/check_shell.py` (3 s) must print
+`SHELL ok` (below), and `blender -b build/world.blend --python world/check_overlap.py` (3 s) lists faces
 that lie in one plane, face one way and overlap: those flicker. Most of what it lists is pressed
 against a wall and never seen; a pair in the open is a fault.
+
+## The shell
+
+Floors, ceilings and walls of every room are a model of their own, `Shell.fbx`
+(`world/shell.py`): the den, both corridors and the eight holodecks. It is made for the
+lightmap, which showed a line wherever two pieces of a wall met and at every corner.
+
+- **A surface is one mesh.** `sheet()` in `world/lib.py` takes a rectangle and its openings
+  (a doorway, the window) and cuts it along every opening's edges from side to side, so that
+  all its pieces share whole edges and are welded.
+- **Its lightmap coordinates are written by the script**, not unwrapped. A room's walls are one
+  strip, unrolled round the room, so its corners are inside a chart; a floor is a chart, a
+  ceiling a chart, a reveal a chart beside its wall. Charts' edges are on whole texels at 60
+  texels a metre, with eight texels between charts.
+- Unity imports it with `generateSecondaryUV` off (the switch is a whole file's, which is why
+  the shell is a file). Panelling, mouldings and beams stay in `Room.fbx` and are unwrapped.
+- `check_shell.py` tests the layout: every object has second coordinates, none of them outside
+  the square, no two faces overlapping there, and one scale from metres to the layout.
+
+What it does to the baked seams has not been measured: that needs a bake before and after.
 
 ## The panels
 
@@ -94,6 +118,12 @@ against a wall and never seen; a pair in the open is a fault.
 - The city (`world/city.py`) is boxes with windows from three tiling textures, roofs, lights and
   the river in a white one tinted by vertex colour, and streets from four kinds of block in one
   texture. Only faces the window can see are made. A vertex's alpha is its haze.
+- The room's two clocks run (the wall's by the door, the alarm clock on the desk). `hands=` of
+  `b.asset` makes each hand an object of its own, its origin the dial's middle and its mesh
+  pointing at twelve (`spawn_hands` in `world/assets.py`); the builder gives it
+  `ClockHand.shader`, which turns it about its own z by the time of day: the visitor's own
+  clock, which `EmuWeather` tells the shaders as `_UdonClockDay`. A hand is not static and has
+  no lightmap. Its second hand steps; the others sweep.
 - The controllers are `world/gamepad.py`; `GamepadModel` hangs each on the object the builder
   makes for it.
 

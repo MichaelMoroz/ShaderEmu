@@ -125,9 +125,10 @@ class Builder:
         bmesh.ops.bevel(bm, geom=pick, offset=bevel, offset_type='OFFSET', segments=segs, profile=0.5,
                         affect='EDGES', clamp_overlap=True)
 
-    def asset(self, asset, at, rot=(0, 0, 0), size=(None, None, None), limit=None, parts=None, scale=None):
-        """One of Poly Haven's models (assets.py), standing on `at` and facing local +z."""
-        self.assets.append((asset, self.stack[-1] @ place(at, rot), size, limit, parts, scale))
+    def asset(self, asset, at, rot=(0, 0, 0), size=(None, None, None), limit=None, parts=None, scale=None, hands=None):
+        """One of Poly Haven's models (assets.py), standing on `at` and facing local +z. `hands`: a
+        clock's (assets.spawn_hands), which become objects of their own."""
+        self.assets.append((asset, self.stack[-1] @ place(at, rot), size, limit, parts, scale, hands))
 
     # ---- primitives
     def box(self, at, size, mat, bevel=0.0, segs=2, rot=(0, 0, 0), grain='auto', edges='all', wuv=False):
@@ -309,6 +310,35 @@ class Builder:
                 loop[uv].uv = (x / tu, y / tv)
         self._emit(bm, mat, at, rot, normal=(0, 0, -1))
 
+    def sheet(self, rect, mat, holes=(), light=(0.0, 0.0), extent=1.0, uv_from=(0.0, 0.0), flip=False):
+        """A rectangle (x0, y0, x1, y1) in the local xy plane, seen from -z, with rectangular
+        openings: one surface, cut along every opening's edges from side to side so that all its
+        pieces share whole edges. Its place in the lightmap is written here ("UV2"): its lower
+        left corner at `light` metres of a layout `extent` metres square. flip: seen from +z."""
+        x0, y0, x1, y1 = rect
+        xs = sorted({x0, x1} | {min(max(x, x0), x1) for h in holes for x in (h[0], h[2])})
+        ys = sorted({y0, y1} | {min(max(y, y0), y1) for h in holes for y in (h[1], h[3])})
+        bm = bmesh.new()
+        uv = bm.loops.layers.uv.verify()
+        uv2 = bm.loops.layers.uv.new("UV2")
+        tu, tv = self._tile(mat)
+        corner = {}
+        for j in range(len(ys) - 1):
+            for i in range(len(xs) - 1):
+                cx, cy = (xs[i] + xs[i + 1]) / 2, (ys[j] + ys[j + 1]) / 2
+                if any(h[0] < cx < h[2] and h[1] < cy < h[3] for h in holes):
+                    continue
+                face = []
+                for a, c in ((i, j), (i + 1, j), (i + 1, j + 1), (i, j + 1)):
+                    if (a, c) not in corner:
+                        corner[(a, c)] = bm.verts.new((xs[a], ys[c], 0))
+                    face.append(corner[(a, c)])
+                for loop in bm.faces.new(face).loops:
+                    x, y = loop.vert.co.x, loop.vert.co.y
+                    loop[uv].uv = ((x - uv_from[0]) / tu, (y - uv_from[1]) / tv)
+                    loop[uv2].uv = ((light[0] + x - x0) / extent, (light[1] + y - y0) / extent)
+        self._emit(bm, mat, (0, 0, 0), (0, 0, 0), normal=(0, 0, 1) if flip else (0, 0, -1))
+
     def mesh(self, vertices, faces, uvs, mat, at=(0, 0, 0), rot=(0, 0, 0), normal=None, colours=None):
         """Raw geometry: faces index `vertices`; `uvs` (and `colours`) are per face corner."""
         bm = bmesh.new()
@@ -349,8 +379,10 @@ class Builder:
             made.append(ob)
         if self.assets:
             import assets
-            for index, (asset, world, size, limit, parts, scale) in enumerate(self.assets):
+            for index, (asset, world, size, limit, parts, scale, hands) in enumerate(self.assets):
                 made.append(assets.spawn("%s %d" % (asset, index), asset, world, size, limit, parts, scale, collection))
+                if hands:
+                    made.extend(assets.spawn_hands(made[-1], asset, hands, collection))
         self.objects, self.assets = {}, []
         return made
 

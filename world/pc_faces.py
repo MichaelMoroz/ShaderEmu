@@ -7,6 +7,7 @@ LEGEND_M = 0.0002       # a texel of a legend on the model: letters 3.2 mm high
 LEGENDS = {
     # the tower's front
     "power": ("POWER", "front"), "turbo": ("TURBO", "front"), "hdd": ("H.D.D.", "front"), "reset": ("RESET", "front"),
+    "mips_all": ("MIPS ALL", "front"), "mips_cpu": ("MIPS CPU", "front"),
     # the tower's back, stamped on a strip of foil
     "keyboard": ("KEYBOARD", "steel"), "com1": ("COM 1", "steel"), "com2": ("COM 2", "steel"), "printer": ("PRINTER", "steel"),
     "volts": ("115/230V", "steel"),

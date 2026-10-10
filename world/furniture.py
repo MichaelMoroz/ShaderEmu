@@ -1,9 +1,11 @@
 # What stands in the room. The sofa, tables, stools, plants, laptop, television, boxes and
 # some of the books are Poly Haven's models (assets.py); the rest is modelled here.
 import math
+import os
 
 from bookdesigns import CELLS, CELL_H, CELL_W, DESIGNS, size as book_size
 from room import HALF_D, HALF_W, frame, on_wall
+import pc
 from pc import office_chair
 
 
@@ -126,10 +128,34 @@ def classroom(b):
         for x in PLACES_X:
             with b.at((x + b.rand(-0.05, 0.05), 0, z - 0.95 + b.rand(-0.08, 0.05)), (0, b.rand(-25, 25), 0)):
                 office_chair(b)
-    # the computers are world/bake_pc.py's set: shells with their detail baked into their pictures
-    for z in ROWS_Z:
-        for x in PLACES_X:
-            b.asset("pc_station", (x, TABLE_TOP, z + STATION_Z), scale=1.0)   # one object a place: each has a tube of its own
+    # The computers: world/bake_pc.py's shells (monitor and tower, their detail baked into their
+    # pictures), and at each place its own glass, keyboard, mouse and leads. No two places lie
+    # alike: the set a little off and turned, the keyboard and the mouse as a hand left them.
+    # Models/stations.json says where, for ShaderEmuStations.cs.
+    import json
+    import random
+    lay = random.Random(11)   # (its own: the room's other chances stay what they were)
+    places = []
+    for row, z in enumerate(ROWS_Z):
+        for column, x in enumerate(PLACES_X):
+            at = (x + lay.uniform(-0.015, 0.015), TABLE_TOP, z + STATION_Z + lay.uniform(-0.015, 0.015))
+            turn = lay.uniform(-3.5, 3.5)
+            lie = {"keyboard": (lay.uniform(-0.01, 0.01), lay.uniform(-0.01, 0.01), lay.uniform(-2.5, 2.5)),
+                   "mat": (lay.uniform(-0.01, 0.01), lay.uniform(-0.01, 0.01), lay.uniform(-6, 6)),
+                   "mouse": (lay.uniform(-0.03, 0.03), lay.uniform(-0.03, 0.03), lay.uniform(-20, 20))}
+            b.asset("pc_station", at, rot=(0, turn, 0), scale=1.0, parts=("=pc_station",))
+            b.obj("Station %d rest" % (row * len(PLACES_X) + column))   # one object a place: each has a tube of its own
+            pc.MODE = "low"   # (the glass alone, as the baked set has it)
+            with b.at(at, (0, turn, 0)):
+                pc.station(b, "rest", lie)
+            pc.MODE = "full"
+            places.append({"x": at[0], "z": at[2], "turn": turn, "keyboard": list(lie["keyboard"])})
+    here = os.path.dirname(os.path.abspath(__file__))
+    json.dump({"places": places, "table": TABLE_TOP, "keyScale": pc.KEY_SCALE, "keyboardZ": pc.KEYBOARD_Z, "setX": pc.SET_X,
+               "glass": list(pc.GLASS), "tower": [pc.TOWER_X, pc.TOWER_Z, pc.FRONT, pc.TOWER_HIGH],
+               "speed": [pc.SPEED_X, pc.SPEED_DOWN, pc.SPEED_W, pc.SPEED_H], "turbo": pc.TURBO_X, "reset": pc.RESET_X,
+               "power": list(pc.POWER_KEY), "osd": [pc.OSD_X, pc.OSD_PITCH, pc.CHIN], "led": pc.LED_X, "lamps": list(pc.LAMPS_X)},
+              open(os.path.join(here, "..", "unity", "ShaderEmu", "Models", "stations.json"), "w"), indent=1)
 
 
 def floor_lamp(b):

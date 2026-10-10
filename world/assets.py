@@ -106,3 +106,24 @@ def spawn(name, asset, world, size, limit, parts, scale, collection):
     ob.matrix_world = C @ world @ fit @ C.inverted()
     collection.objects.link(ob)
     return ob
+
+
+def spawn_hands(body, asset, hands, collection):
+    """A clock's hands as objects of their own, for ClockHand.shader to turn: `hands` is the dial's
+    middle in the file (Blender's axes, the dial facing -y) and then (name, part) pairs. A hand's
+    origin is that middle and its mesh points at twelve, whatever time the file showed."""
+    import math
+    pivot = Vector(hands[0])
+    made = []
+    for label, part in hands[1:]:
+        mesh = load(asset, None, ("=" + part,))[0].copy()
+        tip = max((v.co - pivot for v in mesh.vertices), key=lambda p: p.x * p.x + p.z * p.z)
+        turn = Matrix.Rotation(-math.atan2(tip.x, tip.z), 4, 'Y') @ Matrix.Translation(-pivot)
+        mesh.transform(turn)
+        up = max((v.co for v in mesh.vertices), key=lambda p: p.x * p.x + p.z * p.z)
+        print("HAND %s %s points to (%.3f, %.3f) of the dial" % (asset, label, up.x, up.z))
+        ob = bpy.data.objects.new("Clock hand %s %s" % (label, body.name), mesh)
+        ob.matrix_world = body.matrix_world @ Matrix.Translation(pivot)
+        collection.objects.link(ob)
+        made.append(ob)
+    return made

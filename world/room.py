@@ -70,31 +70,7 @@ def wainscot(b, x0, x1):
 
 
 def shell(b):
-    b.obj("Floor")
-    b.quad((0, 0, 0), (HALF_W * 2, HALF_D * 2), "Parquet", rot=(90, 0, 0))
-    b.obj("Ceiling")
-    b.quad((0, HEIGHT, 0), (HALF_W * 2, HALF_D * 2), "Ceiling", rot=(-90, 0, 0))
-
-    b.obj("Walls")
-    with on_wall(b, "front"):
-        b.quad((0, HEIGHT / 2, 0), (HALF_W * 2, HEIGHT), "Wall")
-    with on_wall(b, "back"):    # the door to the corridor stands open
-        wall_with_door(b, HALF_W * 2, HEIGHT, -DOOR_X - DOOR_WIDE / 2, -DOOR_X + DOOR_WIDE / 2, DOOR_HIGH, "Wall")
-    with on_wall(b, "left"):    # the holodeck's doorway
-        wall_with_door(b, HALF_D * 2, HEIGHT, HOLO_Z - HOLO_WIDE / 2, HOLO_Z + HOLO_WIDE / 2, HOLO_HIGH, "Wall")
-    with on_wall(b, "right"):
-        # round the window's opening: its centre is at x = -WINDOW_Z in this wall's space
-        cx, w, y0, y1 = -WINDOW_Z, WINDOW_WIDE / 2, WINDOW_Y - WINDOW_HIGH / 2, WINDOW_Y + WINDOW_HIGH / 2
-        b.quad((0, y0 / 2, 0), (HALF_D * 2, y0), "Wall")
-        b.quad((0, (y1 + HEIGHT) / 2, 0), (HALF_D * 2, HEIGHT - y1), "Wall")
-        b.quad(((-HALF_D + cx - w) / 2, WINDOW_Y, 0), (cx - w + HALF_D, WINDOW_HIGH), "Wall")
-        b.quad(((HALF_D + cx + w) / 2, WINDOW_Y, 0), (HALF_D - cx - w, WINDOW_HIGH), "Wall")
-        # the reveal, 0.2 deep
-        b.quad((cx, y0, 0.1), (WINDOW_WIDE, 0.2), "Wall", rot=(90, 0, 0))
-        b.quad((cx, y1, 0.1), (WINDOW_WIDE, 0.2), "Wall", rot=(-90, 0, 0))
-        b.quad((cx - w, WINDOW_Y, 0.1), (0.2, WINDOW_HIGH), "Wall", rot=(0, -90, 0))
-        b.quad((cx + w, WINDOW_Y, 0.1), (0.2, WINDOW_HIGH), "Wall", rot=(0, 90, 0))
-
+    # (the floor, the ceiling and the walls are world/shell.py's: one mesh a surface)
     b.obj("Panelling")
     with on_wall(b, "front"):   # not behind the screens' wall of boards
         wainscot(b, -HALF_W, -3.87)
@@ -220,8 +196,6 @@ def holo_door(b):
             b.prism((0, h, -0.06), [(-w / 2 - 0.2, 0), (w / 2 + 0.2, 0), (w / 2 + 0.06, 0.3), (-w / 2 - 0.06, 0.3)], 0.12, "RackSteel",
                     plane='xy', bevel=0.012)
             b.box((0, h + 0.13, -0.123), (w - 0.3, 0.05, 0.008), "Amber", bevel=0.002, segs=1)
-            # where the entrance's controls are: a plate let into the wall beside the door
-            b.box((-w / 2 - 0.7, 1.45, -0.008), (0.78, 0.5, 0.016), "RackSteel", bevel=0.006)
 
 
 def door(b):
@@ -238,7 +212,8 @@ def door(b):
         b.box((-DOOR_X + 0.72, 1.25, -0.004), (0.075, 0.115, 0.008), "TrimWhite", bevel=0.003, segs=1)
         b.quad((-DOOR_X + 0.72, 1.25, -0.0085), (0.072, 0.108), "Details", decal="switch")
         # a clock and a calendar by the door
-        b.asset("wall_clock", (-2.45, 2.26, -0.024), rot=(0, 180, 0))
+        b.asset("wall_clock", (-2.45, 2.26, -0.024), rot=(0, 180, 0), parts=("=wall_clock",),
+                hands=((0, 0, 0), ("hour", "wall_clock_hours_hand"), ("minute", "wall_clock_minute_hand"), ("second", "wall_clock_second_hand")))
         b.box((-2.45, 1.62, -0.003), (0.30, 0.375, 0.004), "Paper")
         b.quad((-2.45, 1.62, -0.007), (0.296, 0.371), "Details", decal="calendar")
     for wall, x in (("front", 4.2), ("left", -4.6), ("right", 4.6), ("back", 1.8)):

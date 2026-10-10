@@ -1,5 +1,5 @@
 # Builds the room's models and writes them as FBX for Unity:
-#   blender -b --python world/build.py -- [Room Computer Furniture Annex City Gamepad]
+#   blender -b --python world/build.py -- [Room Shell Computer Furniture Annex City Gamepad]
 # In a Blender that is open, run it from the text editor to look at the result.
 import json
 import os
@@ -10,7 +10,7 @@ import bpy
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-for name in ("lib", "materials", "assets", "bookdesigns", "room", "computer", "pc", "furniture", "annex", "city", "gamepad"):
+for name in ("lib", "materials", "assets", "bookdesigns", "room", "computer", "pc", "furniture", "annex", "shell", "city", "gamepad"):
     sys.modules.pop(name, None)   # so a second run in an open Blender picks up edits
 
 import lib          # noqa: E402
@@ -19,10 +19,11 @@ import room         # noqa: E402
 import computer     # noqa: E402
 import furniture    # noqa: E402
 import annex        # noqa: E402
+import shell        # noqa: E402
 import city         # noqa: E402
 import gamepad      # noqa: E402
 
-PARTS = {"Room": room, "Computer": computer, "Furniture": furniture, "Annex": annex, "City": city, "Gamepad": gamepad}
+PARTS = {"Room": room, "Shell": shell, "Computer": computer, "Furniture": furniture, "Annex": annex, "City": city, "Gamepad": gamepad}
 OUT = os.path.join(HERE, "..", "unity", "ShaderEmu", "Models")
 
 
