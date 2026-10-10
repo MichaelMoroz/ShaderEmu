@@ -1,0 +1,2 @@
+doom-game - IWAD doom -iwad %s
+doom-patch wad PWAD doom -file %s

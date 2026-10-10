@@ -14,14 +14,16 @@ started and everything on its desktop run without building anything.
 | `root/usr/bin/nx` | | the script `linux/nanox/nx` |
 | `root/emuinit`, `root/usr/bin/emumux`, `fptest`, `sndtest` | `linux/userland/build.sh` | this repository |
 | `root/bin/busybox` | `linux/userland/busybox.sh` | BusyBox 1.36.1 |
-| `root/usr/bin/nxfiles`, `nxweb`, `nxedit`, `nxpaint`, `nxview`, `nxmon`, `nxsettings`, `nxkey`, `nxoff`, `root/usr/share/web-*`, `nxapps.90-system`, `picture-fox.png`, `picture-fox.jpg` (cut from the desktop's picture by `tools/make_test_pictures.py`) | `linux/apps/build.sh` | this repository |
+| `root/usr/bin/nc`, `telnetd` | `linux/userland/build.sh` | two-line scripts that start BusyBox's applets of those names (`docs/lan.md`) |
+| `root/usr/bin/nxfiles`, `nxweb`, `nxedit`, `nxpaint`, `nxview`, `nxmon`, `nxsettings`, `nxkey`, `nxoff`, `root/usr/share/web-*`, `nxapps.90-system`, `open`, `nxopen-archive`, `nxopen-run`, `nxopen.20-apps` (what opens which kind of file, `docs/open.md`), `picture-fox.png`, `picture-fox.jpg` (cut from the desktop's picture by `tools/make_test_pictures.py`) | `linux/apps/build.sh` | this repository |
 | `root/usr/bin/nxray`, `nxpath`, `root/usr/share/nxapps.82-raytrace`, `nxapps.83-pathtrace` | `linux/raytrace/build.sh`, `linux/pathtrace/build.sh` | this repository; `nxpath` with Dear ImGui (below) |
+| `root/usr/bin/nxplay`, `root/usr/share/play-test.wav`, `.mp3`, `.flac`, `.mod` (made by `linux/play/make_test.py`), `nxapps.84-play`, `nxopen.84-play` | `linux/play/build.sh` | this repository, with minimp3 and dr_flac (below) |
 | `root/usr/share/wallpaper-*.ppm` | `tools/make_wallpaper.py` | photographs from Unsplash |
-| `root/usr/bin/doom.bin` | `linux/nanox/doom.sh` | the Doom in Microwindows' `contrib`, with the files in `linux/nanox` |
+| `root/usr/bin/doom.bin`, `root/usr/share/nxopen.50-doom` | `linux/nanox/doom.sh` | the Doom in Microwindows' `contrib`, with the files in `linux/nanox` |
 | `root/usr/bin/tcc`, `cc`, `example`, `root/usr/share/cc-sysroot.tar`, `example-*.c` | `linux/tcc/build.sh` | TinyCC, with musl's headers and libraries for it |
 | `root/usr/bin/classicube.bin`, `root/usr/share/classicube-default.zip` | `linux/classicube/build.sh` | ClassiCube, with `linux/classicube/classicube.patch` |
 | `root/usr/bin/imdemo` | `linux/imgui/build.sh` | Dear ImGui 1.91.5 |
-| `root/usr/bin/nes.bin`, `nes` | `linux/nes/build.sh` | Nofrendo, with `linux/nes/nofrendo.patch` and `osd_shaderemu.c` |
+| `root/usr/bin/nes.bin`, `nes`, `root/usr/share/nxopen.85-nes` | `linux/nes/build.sh` | Nofrendo, with `linux/nes/nofrendo.patch` and `osd_shaderemu.c` |
 | `root/usr/share/nes-thwaite.nes`, `nes-nova.nes` | `linux/nes/build.sh` | two NES games (release files) |
 | `root/usr/share/doom1.wad` | `linux/nanox/doom.sh` | Doom's shareware episode |
 | `root/usr/share/quake-pak0.pak` | `linux/quake/build.sh` | Quake's shareware episode (1.06) |
@@ -51,6 +53,8 @@ compiler runtime it uses.
 | ClassiCube | BSD-3-Clause | https://github.com/ClassiCube/ClassiCube, commit `d41c3f7`; our changes: `linux/classicube/classicube.patch` |
 | Dear ImGui 1.91.5 | MIT | https://github.com/ocornut/imgui, tag `v1.91.5` |
 | Nofrendo | LGPL-2.0 | https://github.com/espressif/esp32-nesemu, commit `693e378`; our changes: `linux/nes/nofrendo.patch` |
+| minimp3 | CC0-1.0 | https://github.com/lieff/minimp3, commit `ea99364`; our changes: `linux/play/minimp3.patch` |
+| dr_flac 0.13.4 | public domain (Unlicense) or MIT No Attribution | https://github.com/mackron/dr_libs, commit `dfe8377` |
 | glxgears | MIT (Brian Paul) | https://gitlab.freedesktop.org/mesa/demos, tag `mesa-demos-8.4.0` |
 | Drivers and programs of this repository | MIT (`LICENSE`); the kernel drivers GPL-2.0 | this repository |
 

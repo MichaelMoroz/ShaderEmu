@@ -1,0 +1,7 @@
+# What `open` starts for a file (docs/open.md): kind, endings, first bytes, command.
+# "-" is none; \xNN is a byte; %s is the file. First bytes are looked at before endings.
+page     html,htm                          <!doctype,<html                   nxweb %s
+picture  png,jpg,jpeg,gif,bmp,ppm,pgm,xpm  \x89PNG,\xff\xd8\xff,GIF8,BM,P6,P5  nxview %s
+archive  zip,tar,gz,tgz                    PK\x03\x04,\x1f\x8b               nxopen-archive %s
+program  -                                 \x7fELF,#!                        nxopen-run %s
+text     txt,c,h,sh,md,conf,log,cfg,ini    -                                 nxedit %s
