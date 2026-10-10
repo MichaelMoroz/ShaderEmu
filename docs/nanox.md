@@ -149,10 +149,36 @@ A program that takes clicks must check `ui_wheel` first, or a notch is a click t
 | `nxfiles [FOLDER]` | a file manager, a tile with an icon for every entry: a click selects, a second click (or Enter) opens: a folder, a picture in the viewer, a page in the browser, a program, anything else in the editor. Wheel and scroll bar. Up, Open, Edit, New (a file) and Folder, which ask for the new entry's name in the status line, Rename (F2), Copy, Cut and Paste (Ctrl+C, Ctrl+X, Ctrl+V: the entry is remembered in `/tmp/clipboard.files`, so it can be pasted in another Files window, under a free name: `name-2.txt`), Delete (a folder only when it is empty). Keys: arrows, Page Up and Down, Home, End, a letter for the next name that starts with it, Backspace for the folder above, Delete, F5 reads the folder again; Tab goes to the buttons and back |
 | `nxweb [ADDRESS]` | a browser for HTML and the plainer part of CSS (`docs/fetch.md`): Back, Home, Reload, an address to type, wheel and scroll bar. Keys: arrows and the paging keys scroll, Tab goes from link to link (its address in the status line) and Enter follows, Backspace goes back, F5 reloads, Ctrl+L opens the address |
 | `nxpaint [FILE]` | pen, eraser, line, box, filled box in sixteen colours and three sizes; Save writes a PPM file (`/root/picture.ppm` unless a file was named). Keys: a tool's first letter, 1 to 3 for the size, [ and ] for the colour, Ctrl+S |
-| `nxview FILE` | shows a picture as large as fits its window: PPM through the GPU, PGM, BMP, GIF and XPM through the engine's decoders. Escape or q closes it |
+| `nxview FILE` | shows a picture as large as fits its window: PPM through the GPU; PNG and JPEG decoded on the worker cores into a PPM file in memory, which is then shown the same way (below); PGM, BMP, GIF and XPM through the engine's decoders. Escape or q closes it. `nxview --decode FILE OUT.ppm` decodes without a window and says what it took; `NXVIEW_WORKERS=N` asks for N workers (3), `NXVIEW_SUM=1` prints a sum of the result |
 | `nxsettings` | the settings, a tab each: the desktop's picture (the image's, any PPM file through the file chooser, or a colour), the screen's size (only those the host says it can show, in its flags word; the desktop is taken down whole and started again with it: `nx restart`), the sound card's volume, and what the machine is. From a script: `nxsettings apply` (the chosen desktop, as the `nx` script runs it), `size WxH`, `volume 0-100`, `choose [FOLDER]` (the file chooser alone; prints the path). Keys: Tab goes round the row of tabs and the tab's controls, arrows change the tab, the list's row or the slider; in the file chooser arrows, a letter, Enter, Backspace for the folder above, Escape |
 | `nxmon` | three plots of the last two minutes, a sample a second: instructions a second (from `rdcycle`; the plot's top doubles as needed), how busy Linux is (kernel and programs stacked), memory in use (with the files written since the start, which live in memory). On a machine with worker cores (`docs/multicore.md`) what they run is stacked on the first plot, and a line says what each is doing. Under them: time running, load, processes, files kept in memory, task switches and interrupts a second, and the three busiest programs (looked at every third second). A plot is moved left by a copy and one column drawn, so a second costs about 30 drawing requests. Under that a list of the programs, busiest first: a click or the arrows choose one, and End program (or Delete) asks it to go; pressed again for the same program it is made to (`SIGTERM`, then `SIGKILL`). The first program and the monitor itself are not in the list. Escape or q closes it |
 | `nxterm` | Microwindows' terminal, patched: it follows its window's size, and Shift+Page Up and Down or the wheel look back through the last 400 lines, with a mark at the right edge for how far. The pointer held down selects text, from the cell it went down on to the cell it is over, and letting go copies it to the clipboard; the right button, Shift+Insert and Ctrl+Shift+V type the clipboard's text |
+
+**PNG and JPEG pictures** (`linux/apps/ui_image.h`) are decoded by the program that shows
+them, on the machine's worker cores (`docs/multicore.md`), into a PPM file the display then
+draws. What costs is not the arithmetic but the writing: a core keeps about 6 KB of new
+stores a pass and a picture is megabytes, so each stage writes memory of its own and the
+pixels are written once, into the file's own pages, by as many cores as there are. For a
+PNG, three workers follow each other: one inflates the stream, one takes the filters off
+the rows that are there, one writes those rows as pixels. For a JPEG the first worker reads
+the Huffman codes into a list of the coefficients that are not zero (three bytes each, where
+a block would be 128 written), and the others take strips of 16 rows, do the transform and
+the colours on their stacks and write only pixels; a strip begins and ends on 16 bytes of
+the picture whatever its width, so two cores never write the same 16.
+
+| 640 x 480 | Instructions, on one core | One core | Three workers | Seven (four of them small) |
+|---|---|---|---|---|
+| a photograph as PNG (308 KB) | 53 million | 11.5 s | 8.6 s | |
+| the same as JPEG (33 KB) | 31 million | 6.5 s | 3.6 s | 2.0 s |
+
+A PNG gains least: more than half of it is the inflating, which is one stream. Not read:
+interlaced PNG, progressive and arithmetic JPEG, four-colour JPEG; the viewer says which.
+The JPEG's colours at half size are repeated, not smoothed, so its picture differs from
+other decoders' at coloured edges (4% of its bytes by more than two levels); the PNG is
+exact. `python tools/make_test_pictures.py --check` builds the same decoder for the host,
+compares both with Pillow and prints the sums the guest must print
+(`NXVIEW_SUM=1 nxview --decode /usr/share/picture-fox.png /tmp/a.ppm`: `72ae6c0d`; the JPEG:
+`95b8fd40`), with any number of workers.
 
 **The clipboard** is a file, `/tmp/clipboard` (`ui_clip_set` and `ui_clip_get` in `ui.h`; the
 terminal reads and writes the same file): one piece of text that is there after the program

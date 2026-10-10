@@ -13,11 +13,16 @@ OUT=$REPO/build/images/linux/root/usr
 [ -f "$MW/src/lib/libnano-X.a" ] || { echo "run linux/nanox/build.sh first"; exit 1; }
 mkdir -p "$OUT/bin" "$OUT/share" "$WORK/src/apps"
 for p in nxedit nxfiles nxpaint nxview nxsettings nxmon nxweb nxkey; do
-    rv32-cc -O2 -Wall -Wno-unused-function -I"$MW/src/include" -I"$HERE/../userland" "$HERE/$p.c" "$MW/src/lib/libnano-X.a" -o "$WORK/src/apps/$p"
+    more=""
+    # the viewer decodes on the worker cores (ui_image.h): the library every program has for them
+    [ $p = nxview ] && more="-I$REPO/programs/mc $REPO/programs/mc/mcw.c"
+    rv32-cc -O2 -Wall -Wno-unused-function -I"$MW/src/include" -I"$HERE/../userland" "$HERE/$p.c" $more "$MW/src/lib/libnano-X.a" -o "$WORK/src/apps/$p"
     riscv32-linux-strip -o "$OUT/bin/$p" "$WORK/src/apps/$p"
 done
 # the Start menu lists what the nxapps.* files name (linux/nanox/nxbar.c)
 printf '%s\n' "Utilities/Editor=nxedit" "Utilities/Files=nxfiles" "Utilities/Paint=nxpaint" "Other/Web=nxweb" "Utilities/Monitor=nxmon" "Utilities/Settings=nxsettings" > "$OUT/share/nxapps.20-apps"
+# two pictures for the viewer and for its test (tools/make_test_pictures.py made them)
+cp "$HERE"/pictures/picture-*.png "$HERE"/pictures/picture-*.jpg "$OUT/share/" 2>/dev/null || true
 # the Start menu's last folder: the desktop over again, and the machine stopped
 printf '%s\n' "System/Restart the desktop=setsid nx restart" "System/Shut down=setsid nxoff" > "$OUT/share/nxapps.90-system"
 cp "$HERE/nxoff" "$OUT/bin/nxoff"

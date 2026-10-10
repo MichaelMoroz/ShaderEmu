@@ -55,8 +55,21 @@
 #define L1_BUCKETS (2 * L1_TABLE)
 #define L1_STRIDE (L1_WAYS + 1)
 #define L1_ENTRIES (L1_BUCKETS * L1_STRIDE)
+#if defined(MC_L1_BITS) && defined(CORES)
+// Small worker cores (docs/multicore.md, "Efficiency cores"): the cores from MC_SMALL_FROM on
+// have tables of 2^MC_L1_BITS buckets, in the first buckets of the same arrays. mc_core is the
+// core whose cache is being looked at, in the tick and in the commit.
+#ifndef MC_SMALL_FROM
+#define MC_SMALL_FROM 4
+#endif
+#define L1_NOW_BITS (mc_core < MC_SMALL_FROM ? (uint)L1_TABLE_BITS : (uint)MC_L1_BITS)
+#define L1_NOW_TABLE (1u << L1_NOW_BITS)
+#define L1_B0(t) ((t) & (L1_NOW_TABLE - 1))
+#define L1_B1(t) (L1_NOW_TABLE + ((((t) >> 3) ^ ((t) << (L1_NOW_BITS - 3)) ^ ((t) >> L1_NOW_BITS)) & (L1_NOW_TABLE - 1)))
+#else
 #define L1_B0(t) ((t) & (L1_TABLE - 1))
 #define L1_B1(t) (L1_TABLE + ((((t) >> 3) ^ ((t) << (L1_TABLE_BITS - 3)) ^ ((t) >> L1_TABLE_BITS)) & (L1_TABLE - 1)))
+#endif
 #endif
 
 // Where the state texels are in the 64 texels wide state block (texel lin is at x = lin % 64,
@@ -90,12 +103,22 @@
 // those, four to a column, the last 44 of the cache and the eight of the float registers,
 // for which the pass draws 16 x 4. In a row of their own they were a line a pixel high,
 // which costs the warps of two rows.
-#define MC_ROWS 8
+// A small worker core (MC_L1_BITS, from core MC_SMALL_FROM on) keeps as many rows as its
+// smaller cache fills, and the same block under them: 64 x 2 and 16 x 4 for tables of 16
+// buckets, 180 texels where a worker has 564.
+#if defined(MC_L1_BITS)
+#define MC_ENTRIES (mc_core < MC_SMALL_FROM ? (uint)L1_ENTRIES : (2u << MC_L1_BITS) * L1_STRIDE)
+#else
+#define MC_ENTRIES ((uint)L1_ENTRIES)
+#endif
+#define MC_ROWS (MC_ENTRIES / 64)
 #define MC_TAIL_AT (MC_ROWS * 64)
-#define MC_TAIL_CACHE (L1_STATE_AT + L1_ENTRIES - MC_TAIL_AT)
-// Where texel lin of this core's block is.
+#define MC_TAIL_CACHE (L1_STATE_AT + MC_ENTRIES - MC_TAIL_AT)
+// Where texel lin of this core's block is; (63, 63), which is nobody's, for the part of the
+// cache a small core does not have.
 uint2 mc_state_at(uint lin) {
     if (mc_core != 0 && lin >= MC_TAIL_AT && lin < FP_STATE_AT + 8) {
+        if (lin >= L1_STATE_AT + MC_ENTRIES && lin < FP_STATE_AT) return uint2(63, 63);
         uint slot = lin >= FP_STATE_AT ? MC_TAIL_CACHE + (lin - FP_STATE_AT) : lin - MC_TAIL_AT;
         return uint2(slot >> 2, MC_ROWS + (slot & 3));
     }

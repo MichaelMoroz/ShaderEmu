@@ -171,6 +171,8 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
   --pc-log FILE        sample the guest's pc once a frame, for tools/pc_profile.py
   --frame-log FILE     per frame: pc, instructions, last stall and time, for tools/boot_profile.py
   --cores N            core 0 and N - 1 worker cores in one tick pass (docs/multicore.md; D3D11)
+  --small-cores F,B    the cores from F on are small: write cache tables of 2^B buckets (4: 1.5 KB of
+                       stores a pass where a worker has 6), a third of a worker's pixels
   --l1-log FILE        per frame: the addresses in the write cache, for tools/l1_study.py (D3D12)
   --stats-after S      print instructions/s and frames/s for the run after its first S seconds
                        (and start the pc log there)
@@ -312,6 +314,13 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--no-bands") o.noBands = true;
         else if (a == "--readback-batch") o.readbackBatch = atoi(next("--readback-batch").c_str());
         else if (a == "--cores") { o.cores = (std::max)(1, (std::min)(16, atoi(next("--cores").c_str()))); if (o.cores > 1) o.defines.push_back("CORES=" + std::to_string(o.cores)); }
+        else if (a == "--small-cores") {
+            // FROM,BITS: the cores from FROM on are small ones, with write cache tables of 2^BITS buckets
+            std::string v = next("--small-cores");
+            size_t comma = v.find(',');
+            o.defines.push_back("MC_SMALL_FROM=" + v.substr(0, comma));
+            o.defines.push_back("MC_L1_BITS=" + (comma == std::string::npos ? std::string("4") : v.substr(comma + 1)));
+        }
         else if (a == "--core-pitch") { o.corePitch = (std::max)(64, (std::min)(1024, atoi(next("--core-pitch").c_str()))); o.defines.push_back("CORE_PITCH=" + std::to_string(o.corePitch)); }
         else { fprintf(stderr, "unknown option %s\n", a.c_str()); usage(); return false; }
     }
@@ -616,6 +625,11 @@ int main(int argc, char** argv) {
         // a worker's texels past its first 512, four to a column, to a whole number of 8-pixel tiles
         unsigned tail = 44 + (2u << tableBits) * (ways + 1) - 512;
         bo.workerTailWidth = (std::min)(64u, ((tail + 3) / 4 + 7) & ~7u);
+        // small worker cores (--small-cores FROM,BITS): the rows their smaller cache fills
+        for (auto& d : opt.defines) {
+            if (d.rfind("MC_L1_BITS=", 0) == 0) bo.smallRows = ((2u << atoi(d.c_str() + 11)) * (ways + 1)) / 64;
+            if (d.rfind("MC_SMALL_FROM=", 0) == 0) bo.smallFrom = (unsigned)atoi(d.c_str() + 14);
+        }
     }
     bo.present = opt.present;
     bo.readbackBatch = opt.readbackBatch;

@@ -216,6 +216,35 @@ and the parked ones cost core 0 a little (31 to 35 s alone: the commit pass look
 up in every core's write cache). With more than eight cores the blocks have to be closer
 than 256 texels: `--core-pitch 128`.
 
+## Small cores
+
+A worker's pixels are nearly all write cache (512 of its 564 texels), and what a pass costs
+is the pixels that run it. So there is a third kind of core, for work that computes much and
+stores little: from core `MC_SMALL_FROM` on (4: after core 0 and three workers as above) a
+core's write cache has tables of 2^`MC_L1_BITS` buckets in place of 64. With 16 buckets
+that is 128 texels of cache, 96 of them usable: 1.5 KB of new stores a pass where a worker
+has 6, and 180 texels a core, drawn as 64 x 2 and 16 x 4 (192 pixels where a worker is 576).
+A small core that fills its cache ends its pass there, as any core does, and goes on in the
+next. In the harness: `--cores 16 --core-pitch 128 --small-cores 4,4` (the first small core,
+the bits). The cache is the same arrays with fewer buckets used (`L1_B0`, `L1_B1` and
+`MC_ENTRIES` take the core being looked at, in the tick and in the commit), so a machine
+without the switch is what it was.
+
+`mctest 15 120000` passes on it (every test runs on the small cores too), and the primes
+below 120,000 are 4.5 s on core 0 alone and 0.57 s shared between 15 workers, 7.9 times;
+fifteen workers of the full size made it 4.7 times. A JPEG picture of 640 x 480
+(`docs/nanox.md`, the viewer), whose strips of pixels are shared out between the workers
+after the first, which reads the codes:
+
+| Workers asked for | 0 | 3 | 7 (3 and 4 small) | 15 (3 and 12 small) |
+|---|---|---|---|---|
+| Decoded in | 6.8 s | 3.5 s | 2.0 s | 2.6 s |
+
+Seven is the place to be for that job: with fifteen the one core that reads the codes is
+what the others wait for, and every busy core still adds to the pass. A program is not told
+yet which of its workers are small; the kernel hands out the full-size ones first (they are
+the lowest numbers). Not in Unity yet: its tick texture and `CORES` are still four cores'.
+
 ## Workers with nothing to do
 
 A worker's `wfi` is a sleep until the first word of its job changes, and the machine does not
@@ -441,4 +470,5 @@ boot images have to be synced and imported again for the kind described here.)
 
     --cores N          N cores (1 to 16)
     --core-pitch N     the blocks are N texels apart (256)
+    --small-cores F,B  the cores from F on are small: write cache tables of 2^B buckets
     RVC_MC_FULL=1      draw a worker's whole 64 x 16, as before (to compare)

@@ -31,6 +31,8 @@ public:
         for (auto& d : opt.compile.defines)
             if (d.first == "CORE_PITCH") pitch_ = (float)atoi(d.second.c_str());
         tailWidth_ = (float)opt.workerTailWidth;
+        smallRows_ = (float)opt.smallRows;
+        smallFrom_ = (float)opt.smallFrom;
         tickRows_ = (float)opt.tickRows;
         if (!buildPasses(gpu_, shader, {"CPUTick", "Commit"}, bo, passes_, err)) return false;
         for (auto& d : opt.compile.defines)
@@ -113,8 +115,9 @@ public:
             std::vector<UpdateZone> zones{UpdateZone{32, 4096 - tickRows_ / 2, 64, tickRows_, 0}};
             for (float c = 1; c < cores_; c += 1) {
                 if (getenv("RVC_MC_FULL")) { zones.push_back(UpdateZone{pitch_ * c + 32, 4096 - tickRows_ / 2, 64, tickRows_, 0}); continue; }
-                zones.push_back(UpdateZone{pitch_ * c + 32, 4096 - 4, 64, 8, 0});
-                zones.push_back(UpdateZone{pitch_ * c + tailWidth_ / 2, 4096 - 10, tailWidth_, 4, 0});
+                float rows = c >= smallFrom_ ? smallRows_ : 8;   // (a small core's cache fills fewer)
+                zones.push_back(UpdateZone{pitch_ * c + 32, 4096 - rows / 2, 64, rows, 0});
+                zones.push_back(UpdateZone{pitch_ * c + tailWidth_ / 2, 4096 - rows - 2, tailWidth_, 4, 0});
             }
             for (auto& z : zones) crt_.runZone(gpu_, passes_[0], mat, z, 6, false);
             for (auto& z : zones) crt_.copyZone(gpu_, z);
@@ -538,6 +541,7 @@ private:
     bool bands_ = false;   // the commit draws only the bands of RAM that changed
     float tickRows_ = 64;  // BackendOptions::tickRows
     float tailWidth_ = 16; // BackendOptions::workerTailWidth
+    float smallRows_ = 8, smallFrom_ = 1000;
     float pitch_ = 256;    // CORE_PITCH: how far apart the blocks are
     float cores_ = 1;      // CORES: the tick's zone is that many 64 x 64 blocks side by side (docs/multicore.md)
     MemoryView view_;
