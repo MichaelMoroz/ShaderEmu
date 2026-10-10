@@ -36,6 +36,8 @@ static GLuint texture;
 static void (*tick)(void);		/* nofrendo's 60 Hz timer: counts the frames owed */
 static int skip = 2;			/* emulated frames not drawn for each one that is */
 static int frames_most, frames_hold, frames_drawn, frames_emulated;
+static unsigned gd_spent[5], gd_swap_at;	/* instructions: following the game's writes, the quads, the swap */
+static int gpu_every = 1;		/* the GPU draws a frame in so many: more than one when the game is late */
 static const char *script;		/* NES_PRESS: frames and the buttons to press at them */
 static unsigned cycles_then, ms_then;
 extern void nes6502_recompile(uint8 *prg, int bytes, int fixed);
@@ -230,6 +232,10 @@ frame_counted(int emulated, int step, const unsigned char *shown)
 		fprintf(stderr, "nesstat: %d frames of the NES in %u ms (%d drawn): %u thousand instructions each, %u%% of its speed\n",
 			since, ms - ms_then, frames_drawn - drawn_then, (now - cycles_then) / 1000 / since,
 			ms > ms_then ? since * 100000 / 60 / (ms - ms_then) : 0);
+		if (gd_spent[1])
+			fprintf(stderr, "nesgpu: a frame's %u instructions to follow the game's writes, %u for %u quads in %u runs of lines, %u for the swap\n",
+				gd_spent[0] / since, gd_spent[1] / since, gd_spent[4] / since, gd_spent[3] / since, gd_spent[2] / since);
+		gd_spent[0] = gd_spent[1] = gd_spent[2] = gd_spent[3] = gd_spent[4] = 0;
 		cycles_then = now;
 		ms_then = ms;
 		drawn_then = frames_drawn;
@@ -439,11 +445,439 @@ frame_paced(void)
 			team_wanted--;
 		else if ((int)(due - now) > 4 && team_wanted < team_most)
 			team_wanted++;
+		/* (and the GPU's frames: every one while the game keeps its time, one in two to four when it does not) */
+		if ((int)(now - due) > 8 && gpu_every < 4)
+			gpu_every++;
+		else if ((int)(due - now) > 2 && gpu_every > 1)
+			gpu_every--;
 	}
 	if ((int)(now - due) > 50 || (int)(due - now) > 200)
 		due = now;
-	else if ((int)(due - now) > 0)
-		usleep((due - now) * 1000);
+	else {
+		/* (the kernel's sleeps are whole hundredths of a second: the last of the wait is passes
+		 * of the machine ended early, which the clock word counts) */
+		if ((int)(due - now) > 20)
+			usleep((due - now - 12) * 1000);
+		while ((int)(due - *clock) > 0)
+			__asm__ volatile(".word 0x0100000f");
+	}
+}
+
+/* ---- the picture drawn by the GPU (docs/nes.md): the background is a layer of tiles
+ * (docs/gpu.md), the four name tables two by two as its cells; the sprites are another, a
+ * cell or two a sprite; and a frame is a few quads of them for every run of lines the PPU's
+ * registers stayed the same in. The pattern tables are kept as a byte a pixel in GPU
+ * memory, and the cells follow what the game writes ---- */
+
+#define SETS_MOST 24		/* different pages or colours in a frame; lines past that are drawn with the last */
+#define SET_WORDS 176		/* a set: 144 colours, 12 words of pieces, four layers' four words */
+
+static struct {
+	ppu_frame_t *record;
+	ppu_t *context;			/* for the picture a test compares with, drawn by this core */
+	unsigned char *chr, *atlas;	/* the cartridge's patterns, and four bytes for each of theirs */
+	unsigned chr_bytes;
+	int chr_ram;
+	unsigned short *cells, *sprite_cells, *plain_cell;
+	unsigned char *plain_tile;	/* a tile of ones: the colour behind everything */
+	unsigned int *sets;
+	int sets_used, set_pages, set_colours;
+	GLuint name;
+	unsigned int *layer;		/* the layer the library's texture is, at the moment */
+	unsigned char shown[2][64];	/* the sprites on the picture in front of the background and behind it, the last first */
+	int shown_count[2];
+	unsigned short lines[64];	/* a sprite's lines that are drawn, a bit each from its top: all but where it is a ninth */
+	/* the frame drawn last, to know one that is the same: its runs, their pages and colours, the sprites */
+	int was_runs, alike;
+	ppu_lineinfo_t was_run[8];
+	uint8 was_end[8], was_colours[8][32], was_oam[256];
+	uint8 *was_pages[8][16];
+} gd;
+
+/* A tile of the cartridge's (16 bytes, two planes) as 64, a pixel each. */
+static void
+gd_tile(unsigned tile)
+{
+	static unsigned spread[16];	/* a nibble's bits, a byte each, the leftmost pixel first */
+	const unsigned char *from = gd.chr + tile * 16;
+	unsigned int *to = (unsigned int *)(gd.atlas + tile * 64);
+	int row, n;
+
+	if (!spread[1])
+		for (n = 0; n < 16; n++)
+			spread[n] = (n >> 3 & 1) | (n >> 2 & 1) << 8 | (n >> 1 & 1) << 16 | (n & 1) << 24;
+	for (row = 0; row < 8; row++) {
+		unsigned a = from[row], b = from[row + 8];
+
+		to[2 * row] = spread[a >> 4] | spread[b >> 4] << 1;
+		to[2 * row + 1] = spread[a & 15] | spread[b & 15] << 1;
+	}
+}
+
+/* The cell of name table `table` at `at` from the table's bytes. The layer has the tables two
+ * by two, 30 rows each, and under them two rows a pair for a table's rows 30 and 31: its
+ * attribute bytes, which the PPU shows as tiles when a game scrolls into them. */
+static void
+gd_cell(int table, int at)
+{
+	const unsigned char *bytes = ppu_getpage(8 + table) + 0x2000 + table * 0x400;
+	int cx = at & 31, cy = at >> 5;
+	unsigned attribute = bytes[0x3C0 + (cy >> 2) * 8 + (cx >> 2)];
+	unsigned bank = attribute >> ((cy & 2) << 1 | (cx & 2)) & 3;
+
+	int row = cy < 30 ? (table >> 1) * 30 + cy : 60 + (table >> 1) * 2 + cy - 30;
+
+	gd.cells[row * 64 + (table & 1) * 32 + cx] = (unsigned short)(bytes[at] | bank << 12);
+}
+
+/* What the game wrote since the last frame: the cells of those name table bytes (in every
+ * table that is the same memory), and the tiles of pattern RAM. */
+static int
+gd_follow(void)
+{
+	uint16 written[256];
+	unsigned char tiles[64];
+	int count = ppu_written_cells(written, 256), n, table, at, changed = count != 0;
+
+	if (count < 0) {
+		for (table = 0; table < 4; table++)
+			for (at = 0; at < 1024; at++)
+				gd_cell(table, at);
+	}
+	for (n = 0; n < count; n++) {
+		int home = (written[n] >> 10) & 3, offset = written[n] & 0x3FF;
+		const unsigned char *memory = ppu_getpage(8 + home) + 0x2000 + home * 0x400;
+
+		for (table = 0; table < 4; table++) {
+			if (ppu_getpage(8 + table) + 0x2000 + table * 0x400 != memory)
+				continue;
+			gd_cell(table, offset);
+			if (offset >= 0x3C0) {
+				/* a byte of attributes: the sixteen cells it colours */
+				int cx = (offset & 7) * 4, cy = ((offset - 0x3C0) >> 3) * 4, i;
+
+				for (i = 0; i < 16; i++)
+					gd_cell(table, (cy + (i >> 2)) * 32 + cx + (i & 3));
+			}
+		}
+	}
+	if (gd.chr_ram && ppu_written_tiles(tiles)) {
+		changed = 1;
+		for (n = 0; n < 512 && n < (int)(gd.chr_bytes / 16); n++)
+			if (tiles[n >> 3] >> (n & 7) & 1)
+				gd_tile(n);
+	}
+	return changed;
+}
+
+/* The set for a line's pages and colours: its palette (a bank of 16 a palette of the NES's
+ * four colours, the background's then the sprites', and one for the colour behind), where
+ * the tiles' eight pieces are, and the layers. The same as the last line's, mostly. */
+static unsigned int *
+gd_set(const ppu_lineinfo_t *line)
+{
+	unsigned int *set = gd.sets + SET_WORDS * (gd.sets_used ? gd.sets_used - 1 : 0);
+	const unsigned char *colours;
+	uint8 *const *pages;
+	const unsigned int *rgb = seglPalette();	/* (the NES's 64 colours are the display palette's first) */
+	unsigned sizes = 8 | 8 << 8 | 6u << 28;
+	int n;
+
+	if (gd.sets_used && ((line->pages == gd.set_pages && line->colours == gd.set_colours) || gd.sets_used == SETS_MOST))
+		return set;
+	set = gd.sets + SET_WORDS * gd.sets_used++;
+	gd.set_pages = line->pages;
+	gd.set_colours = line->colours;
+	colours = ppu_frame_colours(gd.record, line->colours);
+	pages = ppu_frame_pages(gd.record, line->pages);
+	for (n = 0; n < 32; n++)
+		set[(n >> 2) * 16 + (n & 3)] = rgb[colours[n] & 63];
+	set[8 * 16 + 1] = rgb[colours[0] & 63];
+	for (n = 0; n < 8; n++) {
+		unsigned at = (unsigned)(pages[n] + n * 0x400 - gd.chr);
+
+		set[144 + n] = seglAddress(at < gd.chr_bytes ? gd.atlas + at * 4 : gd.plain_tile);
+	}
+	set[144 + 8] = seglAddress(gd.plain_tile);
+	/* the layers, four words each: the background with the first or the second 256 tiles, the sprites, the plain one */
+	for (n = 0; n < 4; n++) {
+		unsigned int *layer = set + 160 + 4 * n;
+
+		layer[0] = seglAddress(n < 2 ? gd.cells : n == 2 ? gd.sprite_cells : gd.plain_cell);
+		layer[1] = seglAddress(set + 144 + (n == 1 ? 4 : 0));
+		layer[2] = seglAddress(set);
+		layer[3] = sizes | (n == 3 ? 1u : 64u) << 16;
+	}
+	return set;
+}
+
+/* A rectangle of the picture (in the NES's pixels) from a layer, whose pixel (u, v) is at its top left. */
+static void
+gd_quad(unsigned int *layer, int layer_w, int layer_h, int x0, int y0, int x1, int y1, int u, int v, int keyed)
+{
+	GLfixed box[4];
+	int texels[4];
+
+	if (x1 <= x0 || y1 <= y0)
+		return;
+	if (layer != gd.layer) {
+		glBindTexture(GL_TEXTURE_2D, gd.name);
+		seglTexturePointer(layer, layer_w, layer_h, SEGL_TILES);
+		gd.layer = layer;
+	}
+	box[0] = x0 * (ONE / WIDTH);
+	box[1] = (y0 * ONE + HEIGHT / 2) / HEIGHT;
+	box[2] = x1 * (ONE / WIDTH);
+	box[3] = (y1 * ONE + HEIGHT / 2) / HEIGHT;
+	/* (1,024ths of the layer: whole numbers, its sizes being powers of two) */
+	texels[0] = u * (1024 / layer_w);
+	texels[1] = v * (1024 / layer_h);
+	texels[2] = (u + x1 - x0) * (1024 / layer_w);
+	texels[3] = (v + y1 - y0) * (1024 / layer_h);
+	seglSprite(box, texels, gd.name, 0xFFFFFF, keyed);
+	gd_spent[4]++;
+}
+
+/* The sprites of lines y0 to y1 that are behind the background, or those in front: the
+ * later ones first, so that the earlier are on top. */
+static void
+gd_sprites(unsigned int *set, const ppu_lineinfo_t *line, int y0, int y1, int behind)
+{
+	const unsigned char *oam = ppu_frame_oam(gd.record);
+	int height = line->flags & PPU_LINE_TALL ? 16 : 8, left = line->flags & PPU_LINE_OBJMASK ? 8 : 0, k;
+
+	for (k = 0; k < gd.shown_count[behind]; k++) {
+		int n = gd.shown[behind][k], top = oam[4 * n] + 1, x = oam[4 * n + 3];
+		int from = top > y0 ? top : y0, to = top + height < y1 ? top + height : y1;
+		int x0 = x > left ? x : left, x1 = x + 8 < WIDTH ? x + 8 : WIDTH;
+
+		/* (a quad for each stretch of its lines that are drawn: one, but where it is a ninth on a line) */
+		while (from < to) {
+			int until;
+
+			while (from < to && !(gd.lines[n] >> (from - top) & 1))
+				from++;
+			for (until = from; until < to && (gd.lines[n] >> (until - top) & 1); until++)
+				;
+			gd_quad(set + 168, 512, 16, x0, from, x1, until, n * 8 + x0 - x, from - top, 1);
+			from = until;
+		}
+	}
+}
+
+/* Whether so many words are the same in two places. */
+static int
+words_same(const void *a, const void *b, int words)
+{
+	const unsigned int *x = a, *y = b;
+
+	while (words-- > 0)
+		if (*x++ != *y++)
+			return 0;
+	return 1;
+}
+
+/* Whether the record is of a frame like the one drawn last (and keeps what it is, if not). */
+static int
+gd_same(const ppu_lineinfo_t *runs, const uint8 *ends, int count)
+{
+	const unsigned char *oam = ppu_frame_oam(gd.record);
+	int same = count == gd.was_runs && count <= 8 && words_same(oam, gd.was_oam, 64), run;
+
+	for (run = 0; run < count && same; run++)
+		same = !memcmp(&runs[run], &gd.was_run[run], sizeof runs[run]) && ends[run] == gd.was_end[run]
+		       && words_same(ppu_frame_colours(gd.record, runs[run].colours), gd.was_colours[run], 8)
+		       && words_same(ppu_frame_pages(gd.record, runs[run].pages), gd.was_pages[run], 16);
+	if (same)
+		return 1;
+	gd.was_runs = count;
+	memcpy(gd.was_oam, oam, 256);
+	for (run = 0; run < count && run < 8; run++) {
+		gd.was_run[run] = runs[run];
+		gd.was_end[run] = ends[run];
+		memcpy(gd.was_colours[run], ppu_frame_colours(gd.record, runs[run].colours), 32);
+		memcpy(gd.was_pages[run], ppu_frame_pages(gd.record, runs[run].pages), sizeof gd.was_pages[run]);
+	}
+	return 0;
+}
+
+/* The frame the record is of, as quads; and shown. `written`: the game wrote cells or tiles. */
+static void
+gd_draw(int written)
+{
+	static const GLfixed whole[16] = {2 * ONE, 0, 0, 0, 0, -2 * ONE, 0, 0, 0, 0, -ONE, 0, -ONE, ONE, 0, ONE};
+	const unsigned char *oam = ppu_frame_oam(gd.record);
+	const ppu_lineinfo_t *runs;
+	const uint8 *ends;
+	int width, height, count = ppu_frame_runs(gd.record, &runs, &ends), run, start = 0, n, tall = 0, high = 0;
+
+	/* a frame like the last is on the window already (but twice a second it is drawn all the
+	 * same: the window may have been made, or uncovered, since) */
+	gd_swap_at = cycles();
+	if (gd_same(runs, ends, count) && !written && ++gd.alike < 30)
+		return;
+	gd.alike = 0;
+
+	/* the sprites' cells: a tile each, or two for a tall one, mirrored as the sprite is */
+	for (run = 0; run < count; run++) {
+		if (runs[run].flags & PPU_LINE_OBJ) {
+			tall = runs[run].flags & PPU_LINE_TALL;
+			high = runs[run].flags & PPU_LINE_OBJHIGH;
+			break;
+		}
+	}
+	/* the PPU draws eight sprites a line, the first eight of them that are on it */
+	{
+		static unsigned char on_line[HEIGHT + 16];
+		int sprites = 0, tall_by = tall ? 16 : 8, y;
+
+		for (n = 0; n < 64; n++)
+			sprites += oam[4 * n] < 239;
+		for (n = 0; n < 64; n++)
+			gd.lines[n] = 0xFFFF;
+		if (sprites > 8) {
+			memset(on_line, 0, sizeof on_line);
+			for (n = 0; n < 64; n++) {
+				if (oam[4 * n] >= 239)
+					continue;
+				for (y = 0; y < tall_by; y++)
+					if (on_line[oam[4 * n] + 1 + y]++ >= 8)
+						gd.lines[n] &= ~(1u << y);
+			}
+		}
+	}
+	gd.shown_count[0] = gd.shown_count[1] = 0;
+	for (n = 63; n >= 0; n--) {
+		unsigned tile = oam[4 * n + 1], how = oam[4 * n + 2];
+		unsigned cell = (4 + (how & 3)) << 12 | (how & 0x40 ? 0x400 : 0) | (how & 0x80 ? 0x800 : 0);
+		unsigned upper = tall ? (tile & 1) << 8 | (tile & 0xFE) : tile + (high ? 256 : 0);
+
+		if (oam[4 * n] >= 239)
+			continue;	/* (below the picture: where a game puts the ones it does not use) */
+		gd.shown[how >> 5 & 1][gd.shown_count[how >> 5 & 1]++] = (unsigned char)n;
+		gd.sprite_cells[n] = (unsigned short)(cell | (tall && (how & 0x80) ? upper + 1 : upper));
+		gd.sprite_cells[64 + n] = (unsigned short)(cell | (how & 0x80 ? upper : upper + 1));
+	}
+
+	seglSize(&width, &height);
+	glViewport(0, 0, width, height);
+	glMatrixMode(GL_PROJECTION);
+	glLoadMatrixx(whole);
+	glMatrixMode(GL_MODELVIEW);
+	glLoadIdentity();
+	glDisable(GL_DEPTH_TEST);
+	gd.sets_used = 0;
+	gd.layer = NULL;
+	gd_spent[3] += count;
+	for (run = 0; run < count; start = ends[run++]) {
+		ppu_lineinfo_t first = runs[run];
+		unsigned int *set = gd_set(&first);
+		int y = ends[run];
+
+		gd_quad(set + 172, 8, 8, 0, start, WIDTH, y, 0, 0, 0);
+		if ((first.flags & (PPU_LINE_OBJ | PPU_LINE_SPRITES)) == (PPU_LINE_OBJ | PPU_LINE_SPRITES))
+			gd_sprites(set, &first, start, y, 1);
+		if (first.flags & PPU_LINE_BG) {
+			int left = first.flags & PPU_LINE_BGMASK ? 8 : 0, lower = first.y >> 8, row = first.y & 255, line = start;
+			unsigned int *layer = set + (first.flags & PPU_LINE_BGHIGH ? 164 : 160);
+
+			/* down the tables as the PPU goes: from row 29 into the other pair's top, from 31 (the
+			 * attribute bytes) to the same pair's */
+			while (line < y) {
+				int rows = (row < 240 ? 240 : 256) - row, from = row < 240 ? lower * 240 + row : 480 + lower * 16 + row - 240;
+
+				if (rows > y - line)
+					rows = y - line;
+				gd_quad(layer, 512, 512, left, line, WIDTH, line + rows, first.x + left, from, 1);
+				line += rows;
+				if (row < 240)
+					lower ^= 1;
+				row = 0;
+			}
+		}
+		if ((first.flags & (PPU_LINE_OBJ | PPU_LINE_SPRITES)) == (PPU_LINE_OBJ | PPU_LINE_SPRITES))
+			gd_sprites(set, &first, start, y, 0);
+	}
+	gd_swap_at = cycles();
+	seglSwap();
+	frames_drawn++;
+}
+
+/* Before and after each frame: every frame is recorded and drawn. */
+static void
+frame_gpu(int after)
+{
+	int last = (frames_hold && frames_emulated + 1 >= frames_hold) || (frames_most && frames_emulated + 1 >= frames_most);
+
+	static int drawn;
+
+	if (!after) {
+		/* (a test's last frame is drawn by this core too, which wants the record's copies of memory) */
+		ppu_capture_copies = last;
+		drawn = last || frames_emulated % gpu_every == 0;
+		if (drawn)
+			ppu_capture(gd.record);
+		return;
+	}
+	frames_emulated++;
+	if (drawn)
+		ppu_capture_end();
+	if (drawn) {
+		unsigned t0 = cycles(), t1;
+		int written = gd_follow();
+
+		t1 = cycles();
+		gd_draw(written);
+		gd_spent[0] += t1 - t0;
+		gd_spent[1] += gd_swap_at - t1;
+		gd_spent[2] += cycles() - gd_swap_at;
+	}
+	if (last) {
+		ppu_drawjob_t job = {gd.record, gd.context, picture, 0, HEIGHT};
+
+		ppu_draw((uint32)&job, 0);
+	}
+	if (!(frames_emulated & 3))
+		osd_getinput();
+	frame_counted(frames_emulated, 1, picture);
+	frame_paced();
+}
+
+/* Whether the GPU draws: the memory it takes (four bytes a byte of patterns), and a cartridge that can be recorded. */
+static int
+gpu_start(void)
+{
+	rominfo_t *rom = nes_getcontextptr()->rominfo;
+	unsigned n;
+
+	gd.chr_ram = rom->vram != NULL && rom->vrom_banks == 0;
+	gd.chr = gd.chr_ram ? rom->vram : rom->vrom;
+	gd.chr_bytes = gd.chr_ram ? 0x2000u * rom->vram_banks : 0x2000u * rom->vrom_banks;
+	if (!gd.chr || !gd.chr_bytes || seglMemoryLeft() < gd.chr_bytes * 4 + 0x10000)
+		return 0;
+	gd.record = ppu_frame_create(rom->vram, rom->vram ? 0x2000 * rom->vram_banks : 0);
+	gd.context = calloc(1, sizeof(ppu_t));
+	gd.atlas = seglMemory(gd.chr_bytes * 4);
+	gd.cells = seglMemory(64 * 64 * 2);
+	gd.sprite_cells = seglMemory(64 * 2 * 2 + 16);
+	gd.plain_tile = seglMemory(64 * 64);
+	gd.sets = seglMemory(SETS_MOST * SET_WORDS * 4);
+	if (!gd.record || !gd.context || !gd.sets || !ppu_capture(gd.record))
+		return 0;
+	ppu_capture_end();
+	gd.plain_cell = gd.sprite_cells + 128;
+	gd.plain_cell[0] = 8 << 12 | 512;	/* the ninth piece's first tile, in the ninth bank */
+	memset(gd.plain_tile, 1, 64 * 64);
+	memset(gd.cells, 0, 64 * 64 * 2);
+	for (n = 0; n < gd.chr_bytes / 16; n++)
+		gd_tile(n);
+	glGenTextures(1, &gd.name);
+	gd.was_runs = -1;
+	if (getenv("NES_EVERY"))
+		gpu_every = atoi(getenv("NES_EVERY")) > 0 ? atoi(getenv("NES_EVERY")) : 1;
+	nes_frame_elsewhere = frame_gpu;
+	fprintf(stderr, "nes: the picture is drawn by the GPU\n");
+	return 1;
 }
 
 /* As many workers as the machine will give, of a size NES_SHAPE names (5: 3 KB of new stores
@@ -480,6 +914,9 @@ elsewhere_start(void)
 	int k;
 
 	if (how && !strcmp(how, "here"))
+		return;
+	/* the GPU, unless NES_PPU says who (workers, inline, here) or it cannot */
+	if ((!how || !strcmp(how, "gpu")) && gpu_start())
 		return;
 	inline_draw = how && !strcmp(how, "inline");
 	drawers = inline_draw ? 1 : drawers_open();

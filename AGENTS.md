@@ -993,6 +993,12 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   of `NES_CPU=interp` and `NES_PLAIN=1`, `2`, `3` too; its speed is `rvc_harness --cores 4`
   and the `nesstat:` lines. Its changes to Nofrendo are `linux/nes/nofrendo.patch`; the 6502
   recompiled is `linux/nes/rc6502.h`.
+- The GPU has a texture that is a layer of tiles (`docs/gpu.md`, fragment mode 5; `SEGL_TILES` in
+  the OpenGL library): the NES's picture is quads of it (`docs/nes.md`). A change to it is checked
+  with a held NES frame against `tools\gpu_reference.py` and against the first core's own
+  drawing of the same frame, and needs "Sync shader sources" in Unity when that is allowed again.
+- The kernel's sleeps are whole hundredths of a second: a program that paces frames sleeps the
+  long part and ends passes (`pause`) for the rest, by the clock word (`frame_paced` in the NES).
 - A sum of a program's last picture can stay the same through a mistake: sum its state at every
   frame. The NES's pictures matched while its RAM had gone another way for a while.
 - Code a program writes for itself to run (the NES's recompiler) is fetched as it was until the

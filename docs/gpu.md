@@ -120,11 +120,28 @@ A textured quad is then 16 words of vertices instead of 96.
 | 2 | a texture of bytes looked up in the display palette (`0x87000400`), times the colour |
 | 3 | a texture of single bits, each row a whole number of bytes, leftmost pixel in the highest bit: set bits take the colour, clear bits are not drawn |
 | 4 | a texture of three bytes a pixel (red, green, blue, as in a PPM file), rows not padded, starting at any byte, times the colour. Its address may be in the ROM (from `0x40000000`): the draw pass has the ROM's four textures (`_Data_MTD_R/G/B/A`) as well as the state |
+| 5 | a layer of tiles (below): the texture's address is four words that say where its cells, its tiles and its palette are |
 | +0x100 | texels equal to the key (a colour, or an index in mode 2) are not drawn |
 | +0x200 | (draws) the texture is laid on the picture, not on the surface: a pixel at (x, y) of the picture takes the texel at words 12-13 plus (x, y) / 1024 times words 14-15 (16.16), and the colour is not applied. The surface still writes depth: a sky that hides what is behind it |
 | +0x400 | smooth (modes 1 and 2): the four texels round the point are weighed by how near their centres are (bilinear), the texture repeating. A texel of the key counts for nothing, and where such are most of the four nothing is drawn. `glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)` asks for it of the bound texture; a texture starts as `GL_NEAREST` |
 
 Textures are anywhere in RAM, sampled nearest and repeating, with coordinates 0..1 across.
+
+**A layer of tiles** (fragment mode 5) is a texture whose pixels come from a grid of cells,
+each naming a tile: a console's background, a map, a screen of characters. Its address is a
+texel of four words: the address of the cells, of the tiles, of the palette, and tile width |
+tile height << 8 | cells in a row << 16 | n << 28. A cell is 16 bits, as the Game Boy
+Advance has them: a tile's number in bits 0-9, bit 10 mirrors it across and bit 11 down, and
+bits 12-15 are a bank of 16 colours. A tile is width x height bytes, a tile after another;
+the palette is words of `0x00RRGGBB`, and a pixel's colour is the palette's entry 16 x bank +
+the tile's byte. With n not 0 the tiles are in pieces of 2^n tiles and their address is a
+table of the pieces' addresses (a cartridge whose tiles are pages that turn). The texture's
+width and height are the layer's in pixels; everything else is any texture's: a rectangle or
+a draw of any part of it, repeating (which is a scroll that wraps), keyed on the tile's byte
+(0x100), in any pass. It is not weighed (0x400). In the OpenGL library it is
+`seglTexturePointer(four_words, width, height, SEGL_TILES)`, drawn by `seglQuad` or
+`seglSprite`. The NES draws its picture so (`docs/nes.md`), which is its test: a held frame
+against `tools\gpu_reference.py`, every pixel away from an edge the same.
 
 **Passes.** Bits 16-18 of the fragment mode word say which pass a command is drawn in. The
 passes are drawn in order, each as one draw of the whole mesh with fixed blending and depth

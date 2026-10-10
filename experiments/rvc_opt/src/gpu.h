@@ -54,6 +54,7 @@
 #define FRAGMENT_INDEXED 2    // 8-bit texture through the display palette, times colour
 #define FRAGMENT_MASK 3       // 1-bit texture, rows of whole bytes, leftmost bit highest: set bits take the colour
 #define FRAGMENT_RGB24 4      // texture of three bytes a pixel (red, green, blue), rows with no padding, at any byte address, in RAM or ROM; times colour
+#define FRAGMENT_TILES 5      // a layer of tiles: the address is a texel of four words (cells, tiles, palette, sizes; docs/gpu.md)
 #define FRAGMENT_KEYED 0x100  // flag: texels equal to the key colour (or index) are not drawn
 #define FRAGMENT_LAID 0x200   // flag (draws): the texture lies on the picture, not on the surface (a sky)
 #define FRAGMENT_SMOOTH 0x400 // flag (word and indexed textures): the four texels round the point, weighed (bilinear)
@@ -366,7 +367,27 @@ float4 gpu_fragment(gpu_varyings i) {
             if (((texel << (x & 7)) & 0x80) == 0) discard;
             return saturate(c);
         }
-        if (mode == FRAGMENT_INDEXED) {
+        if (mode == FRAGMENT_TILES) {
+            // the pixel's cell (16 bits: a tile, mirrored across at bit 10 and down at bit 11, a
+            // palette bank), that tile's byte for the pixel, and the bank's colour of that number
+            uint4 layer = ram(texel_of(i.texture_info.g));
+            uint tile_w = max(layer.a & 0xff, 1), tile_h = max((layer.a >> 8) & 0xff, 1);
+            uint cell_at = layer.r + 2 * ((y / tile_h) * ((layer.a >> 16) & 0xfff) + x / tile_w);
+            uint cell = (ram_word(cell_at & ~3u) >> (8 * (cell_at & 3))) & 0xffff;
+            uint px = x % tile_w, py = y % tile_h;
+            if (cell & 0x400) px = tile_w - 1 - px;
+            if (cell & 0x800) py = tile_h - 1 - py;
+            // (tiles in pieces of 2^n: then the tiles' address is a table of the pieces')
+            uint tile = cell & 0x3ff, piece = layer.a >> 28, tiles = layer.g;
+            if (piece != 0) {
+                tiles = ram_word(layer.g + 4 * (tile >> piece));
+                tile &= (1u << piece) - 1;
+            }
+            uint at = tiles + (tile * tile_h + py) * tile_w + px;
+            texel = (ram_word(at & ~3u) >> (8 * (at & 3))) & 0xff;
+            if ((i.texture_info.r & FRAGMENT_KEYED) && texel == i.key) discard;
+            texel = ram_word(layer.b + 4 * (texel + 16 * (cell >> 12)));
+        } else if (mode == FRAGMENT_INDEXED) {
             texel = (ram_word(i.texture_info.g + (n & ~3u)) >> (8 * (n & 3))) & 0xff;
             if ((i.texture_info.r & FRAGMENT_KEYED) && texel == i.key) discard;
             texel = ram_word(0x87000400 + 4 * texel);

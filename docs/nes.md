@@ -37,9 +37,12 @@ is of a NES's 60 frames a second at about 4M instructions a second:
 | idle loops counted, the background by table | 292k (22%) | 380k (17%) | 274k (24%) |
 | the picture by three worker cores | 162k (39%) | 185k to 215k (26 to 31%) | 153k (42%) |
 | the 6502 recompiled, asleep in its idle loops | 49k (116%) | 70k (80%) | 31k (172%) |
+| the GPU draws: every frame that differs is shown | 51k (134%) | 87k (80%) | 34k (212%) |
 
-One core today (the 6502 recompiled, the picture drawn by it, a frame in three): 205k to
-215k, a third of a NES. A game is held to 60 frames a second (`frame_paced`; a test with
+With the limiter on, the two titles hold 60 frames in 1,000 ms and a Thwaite game 60 in
+1,035 to 1,070 ms with 30 of them drawn. The GPU needs no worker cores, so this is what
+one core does too. Nofrendo's own drawing on one core (`NES_PPU=here`, a frame in three)
+is 205k to 215k, a third of a NES. A game is held to 60 frames a second (`frame_paced`; a test with
 `NES_FRAMES`, or `NES_FAST=1`, runs as fast as it goes).
 
 What each step is:
@@ -83,6 +86,23 @@ What each step is:
   44% (the graphics card 39% busy with other work meanwhile). The pictures shown a second
   stay near 22 to 25 however they are shared out: what bounds them is the machine's
   instructions a second on all its cores together, not the number of cores.
+- **The GPU draws the picture** (`gd_...` in `osd_shaderemu.c`; `docs/gpu.md`, "A layer of
+  tiles"), unless `NES_PPU` says workers, inline or here. The background is a layer of
+  tiles whose cells are the four name tables two by two (and, under them, each pair's rows
+  30 and 31, the attribute bytes a game shows when it scrolls up past the top); the sprites
+  are another, a cell or two a sprite; the pattern tables are kept a byte a pixel in GPU
+  memory, in pieces of a page so that a cartridge may turn them; a palette is a bank of 16
+  for each of the NES's eight of four. The record of a frame is runs of lines: a new run
+  only where the game wrote a register of the PPU, so a frame is a few quads a run (the
+  colour behind, the sprites behind the background, the background, the sprites in front)
+  and a game that scrolls every line is 240 short runs. The cells follow what the game
+  writes to the name tables (a log of the addresses), the tiles what it writes to pattern
+  RAM. Every frame is drawn, but one like the last is not (twice a second all the same),
+  and one in two to four when the game is behind its time. Eight sprites a line are kept to,
+  as the PPU does. What differs from nofrendo's own drawing: a sprite in front is not hidden
+  by an earlier sprite that is behind the background (8 pixels of a Thwaite game frame),
+  and a write to the name tables in mid-frame shows in the whole frame.
+  A Thwaite game frame is 30 quads and 14 thousand instructions (`nesgpu:` lines say).
 - **The 6502 is recompiled on the machine** (`rc6502.h`): the cartridge's code is translated
   to RISC-V instructions when it is first reached (everything jumps reach from there:
   Thwaite's 3,950 instructions in one go, 140 KB of code), with the 6502's registers and
@@ -117,14 +137,19 @@ the record, which would let it skip more frames.
   `NES_FRAMES=120 nes nova` RAM `3a2e5c47`, picture `d8a04406`.
 - Each of these must give the same: `NES_CPU=interp` (no recompiler), `NES_PLAIN=1` (every
   turn of an idle loop run), `NES_PLAIN=2` (loops passed over, nothing asleep), `NES_PLAIN=3`
-  (asleep, no quiet lines). `NES_PPU=here` is nofrendo's own drawing, a frame in three: its
+  (asleep, no quiet lines), `NES_PPU=workers`, `NES_PPU=inline`. `NES_PPU=here` is nofrendo's own drawing, a frame in three: its
   frames are counted otherwise, so it has sums of its own (`b6f2e9ee`, `451f1f1d`,
   `70810528`), the same with each switch.
 - All of that is instructions, so `rvc_cpu` does it (`docs/cpu-harness.md`), workers and
   all: the three runs in two seconds, with the same instructions a frame as `rvc_harness`.
-  Speed in real seconds and pictures are `rvc_harness --cores 4`'s.
+  Speed in real seconds and pictures are `rvc_harness`'s.
+- The GPU's drawing is checked at a held frame, where the first core draws the same record
+  too: the window against that picture (`NES_HOLD`, below: no pixel different in the two
+  titles and in Nova scrolled; the 8 above in a Thwaite game), and the GPU's target against
+  its software model (`--gpu-capture`, `tools\gpu_reference.py SNAP BMP --size 512x480`:
+  every pixel away from a triangle's edge the same).
 - `NES_HOLD=N` stops at frame N with the window up and prints where the picture is in GPU
-  memory (bytes past the palette at 0x87000400): in a snapshot from `rvc_harness --cores 4`,
+  memory (bytes past the palette at 0x87000400): in a snapshot from `rvc_harness`,
   the window's layer must be that picture through the palette, each pixel twice, and the
   workers' picture the same as `NES_PPU=inline`'s, with no pixel different.
 - `mctest 3 120000` must print `PASS` before and after `nes` in one boot.

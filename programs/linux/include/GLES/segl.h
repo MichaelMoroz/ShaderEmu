@@ -74,6 +74,14 @@ void seglQuad(const GLfixed* xyz, const GLfixed* uv, GLuint name, unsigned grey,
 // One bit a pixel for seglTexturePointer (rows of whole bytes, leftmost pixel in the highest
 // bit): where a bit is set the colour is drawn, elsewhere nothing.
 #define SEGL_BITS 0x1F0B1
+// A layer of tiles for seglTexturePointer (docs/gpu.md, fragment mode 5): `pixels` is four
+// words in memory from seglMemory(), the addresses (seglAddress()) of its cells, its tiles
+// and its palette, and tile width | height << 8 | cells in a row << 16 | n << 28 (n not 0:
+// the tiles are in pieces of 2^n, and their address is a table of the pieces'). A cell is 16 bits:
+// a tile's number, bit 10 mirrors it across and bit 11 down, bits 12-15 a bank of 16 colours.
+// A tile is width x height bytes; the palette is words of 0x00RRGGBB. The texture's width and
+// height are the layer's in pixels; seglQuad draws it, keyed on a tile's byte.
+#define SEGL_TILES 0x1F0B2
 // A rectangle of a texture drawn over what the list drew before it, in the list's order: box is
 // x0, y0, x1, y1 as seglQuad's corners are, texels the same corners in 1,024ths of the texture
 // (texels, for one 1,024 wide). The colour is 0xTTRRGGBB, T being transparency; it tints an

@@ -521,13 +521,20 @@ index 4055d08..9e77da1 100644
        {
           int tick_diff = nofrendo_ticks - last_ticks;
 diff --git a/components/nofrendo/nes/nes_ppu.c b/components/nofrendo/nes/nes_ppu.c
-index 9a6875b..b84b4f0 100644
+index 9a6875b..d2cd025 100644
 --- a/components/nofrendo/nes/nes_ppu.c
 +++ b/components/nofrendo/nes/nes_ppu.c
-@@ -54,15 +54,123 @@
- 
+@@ -55,14 +55,211 @@
  /* the NES PPU */
  static ppu_t ppu;
+ 
++/* ours: what the game wrote of the name tables and of pattern RAM, for ppu_written_...() */
++bool ppu_capture_copies = true;
++static uint16 cells_log[256];
++static int cells_logged = -1;
++static uint8 tiles_log[64];
++static bool tiles_logged = true;
++
 +static int line_flags;
 +
 +/* ours: the record of a frame (nes_ppu.h) */
@@ -554,6 +561,9 @@ index 9a6875b..b84b4f0 100644
 +   uint8 *pages[FRAME_SETS][16];    /* the pages as they were, each time they changed */
 +   uint8 colours[FRAME_SETS][32];
 +   int page_sets, colour_sets;
++   ppu_lineinfo_t runs[240];        /* each run of lines alike: its first line */
++   uint8 ends[240];                 /* and the line after its last */
++   int run_count;
 +   uint8 nametab[0x1000], oam[256];
 +   const uint8 *nametab_live;
 +   uint8 *vram, *vram_live;         /* the cartridge's pattern RAM, if it has any */
@@ -563,6 +573,7 @@ index 9a6875b..b84b4f0 100644
 +
 +static ppu_frame_t *capture;
 +static bool pages_changed, colours_changed;
++static bool line_dirty = true;
 +static int line_flags = -1;   /* (declared above) a line's flags as last worked out, or -1: work them out */
 +static uint32 nametab_written = 1, vram_written = 1;   /* counted up by a write to either */
 +
@@ -590,18 +601,19 @@ index 9a6875b..b84b4f0 100644
 +   if (ppu.latchfunc)
 +      return false;
 +   frame->nametab_live = ppu.nametab;
-+   if (frame->nametab_as_of != nametab_written)
++   if (ppu_capture_copies && frame->nametab_as_of != nametab_written)
 +   {
 +      memcpy(frame->nametab, ppu.nametab, sizeof(ppu.nametab));
 +      frame->nametab_as_of = nametab_written;
 +   }
 +   memcpy(frame->oam, ppu.oam, sizeof(ppu.oam));
-+   if (frame->vram && frame->vram_as_of != vram_written)
++   if (ppu_capture_copies && frame->vram && frame->vram_as_of != vram_written)
 +   {
 +      memcpy(frame->vram, frame->vram_live, frame->vram_bytes);
 +      frame->vram_as_of = vram_written;
 +   }
 +   frame->page_sets = frame->colour_sets = 0;
++   frame->run_count = 0;
 +   line_flags = -1;
 +   capture = frame;
 +   return true;
@@ -609,32 +621,108 @@ index 9a6875b..b84b4f0 100644
 +
 +void ppu_capture_end(void)
 +{
++   if (capture && capture->run_count)
++      capture->ends[capture->run_count - 1] = 240;
 +   capture = NULL;
++}
++
++void ppu_frame_line(const ppu_frame_t *frame, int scanline, ppu_lineinfo_t *info)
++{
++   const frame_line_t *line = &frame->line[scanline];
++
++   info->x = ((line->vaddr >> 10) & 1) * 256 + (line->vaddr & 31) * 8 + line->tile_xofs;
++   info->y = ((line->vaddr >> 11) & 1) * 256 + ((line->vaddr >> 5) & 31) * 8 + ((line->vaddr >> 12) & 7);
++   info->flags = line->flags;
++   info->pages = line->pages;
++   info->colours = line->colours;
++}
++
++int ppu_frame_runs(const ppu_frame_t *frame, const ppu_lineinfo_t **runs, const uint8 **ends)
++{
++   *runs = frame->runs;
++   *ends = frame->ends;
++   return frame->run_count;
++}
++
++const uint8 *ppu_frame_colours(const ppu_frame_t *frame, int set)
++{
++   return frame->colours[set];
++}
++
++uint8 *const *ppu_frame_pages(const ppu_frame_t *frame, int set)
++{
++   return frame->pages[set];
++}
++
++const uint8 *ppu_frame_oam(const ppu_frame_t *frame)
++{
++   return frame->oam;
++}
++
++int ppu_written_cells(uint16 *addresses, int most)
++{
++   int count = cells_logged;
++
++   if (count > most)
++      count = -1;
++   if (count > 0)
++      memcpy(addresses, cells_log, count * sizeof(uint16));
++   cells_logged = 0;
++   return count;
++}
++
++bool ppu_written_tiles(uint8 *bits)
++{
++   bool any = tiles_logged;
++
++   memcpy(bits, tiles_log, sizeof(tiles_log));
++   memset(tiles_log, 0, sizeof(tiles_log));
++   tiles_logged = false;
++   return any;
 +}
 +
 +static inline __attribute__((always_inline)) void capture_line(int scanline)
 +{
 +   ppu_frame_t *frame = capture;
-+   frame_line_t *line = &frame->line[scanline];
 +
-+   if (0 == frame->page_sets || (pages_changed && frame->page_sets < FRAME_SETS))
-+      memcpy(frame->pages[frame->page_sets++], ppu.page, sizeof(ppu.page));
-+   if (0 == frame->colour_sets || (colours_changed && frame->colour_sets < FRAME_SETS))
-+      memcpy(frame->colours[frame->colour_sets++], ppu.palette, sizeof(ppu.palette));
-+   pages_changed = colours_changed = false;
++   /* a new run of lines when the game has written a register, pages or colours since the last line */
++   if (0 == scanline || line_dirty || line_flags < 0 || pages_changed || colours_changed)
++   {
++      ppu_lineinfo_t *run;
 +
-+   if (line_flags < 0)
-+      line_flags = (ppu.bg_on ? LINE_BG : 0) | (ppu.obj_on ? LINE_OBJ : 0)
-+                   | (ppu.bg_mask ? LINE_BGMASK : 0) | (ppu.obj_mask ? LINE_OBJMASK : 0)
-+                   | (16 == ppu.obj_height ? LINE_TALL : 0) | (ppu.bg_base ? LINE_BGHIGH : 0)
-+                   | (ppu.obj_base ? LINE_OBJHIGH : 0) | (ppu.drawsprites ? LINE_SPRITES : 0);
-+   line->vaddr = ppu.vaddr;
-+   line->tile_xofs = ppu.tile_xofs;
-+   line->flags = line_flags;
-+   line->pages = frame->page_sets - 1;
-+   line->colours = frame->colour_sets - 1;
++      if (0 == frame->page_sets || (pages_changed && frame->page_sets < FRAME_SETS))
++         memcpy(frame->pages[frame->page_sets++], ppu.page, sizeof(ppu.page));
++      if (0 == frame->colour_sets || (colours_changed && frame->colour_sets < FRAME_SETS))
++         memcpy(frame->colours[frame->colour_sets++], ppu.palette, sizeof(ppu.palette));
++      pages_changed = colours_changed = line_dirty = false;
++      if (line_flags < 0)
++         line_flags = (ppu.bg_on ? LINE_BG : 0) | (ppu.obj_on ? LINE_OBJ : 0)
++                      | (ppu.bg_mask ? LINE_BGMASK : 0) | (ppu.obj_mask ? LINE_OBJMASK : 0)
++                      | (16 == ppu.obj_height ? LINE_TALL : 0) | (ppu.bg_base ? LINE_BGHIGH : 0)
++                      | (ppu.obj_base ? LINE_OBJHIGH : 0) | (ppu.drawsprites ? LINE_SPRITES : 0);
++      if (frame->run_count)
++         frame->ends[frame->run_count - 1] = scanline;
++      run = &frame->runs[frame->run_count++];
++      run->x = ((ppu.vaddr >> 10) & 1) * 256 + (ppu.vaddr & 31) * 8 + ppu.tile_xofs;
++      run->y = ((ppu.vaddr >> 11) & 1) * 256 + ((ppu.vaddr >> 5) & 31) * 8 + ((ppu.vaddr >> 12) & 7);
++      run->flags = line_flags;
++      run->pages = frame->page_sets - 1;
++      run->colours = frame->colour_sets - 1;
++   }
++
++   /* (each line's own registers are for a drawer that goes by lines: ppu_draw) */
++   if (ppu_capture_copies)
++   {
++      frame_line_t *line = &frame->line[scanline];
++
++      line->vaddr = ppu.vaddr;
++      line->tile_xofs = ppu.tile_xofs;
++      line->flags = line_flags;
++      line->pages = frame->page_sets - 1;
++      line->colours = frame->colour_sets - 1;
++   }
 +}
- 
++
  
  void ppu_displaysprites(bool display)
  {
@@ -648,15 +736,17 @@ index 9a6875b..b84b4f0 100644
     int nametab[4];
     ASSERT(src_ppu);
     ppu = *src_ppu;
-@@ -159,6 +267,7 @@ void ppu_destroy(ppu_t **src_ppu)
+@@ -159,6 +356,9 @@ void ppu_destroy(ppu_t **src_ppu)
  
  void ppu_setpage(int size, int page_num, uint8 *location)
  {
 +   pages_changed = true;
++   if (page_num + size > 8)
++      cells_logged = -1;   /* (the name tables are other memory now) */
     /* deliberately fall through */
     switch (size)
     {
-@@ -181,6 +290,7 @@ void ppu_setpage(int size, int page_num, uint8 *location)
+@@ -181,6 +381,7 @@ void ppu_setpage(int size, int page_num, uint8 *location)
  /* make sure $3000-$3F00 mirrors $2000-$2F00 */
  void ppu_mirrorhipages(void)
  {
@@ -664,15 +754,16 @@ index 9a6875b..b84b4f0 100644
     ppu.page[12] = ppu.page[8] - 0x1000;
     ppu.page[13] = ppu.page[9] - 0x1000;
     ppu.page[14] = ppu.page[10] - 0x1000;
-@@ -189,6 +299,7 @@ void ppu_mirrorhipages(void)
+@@ -189,6 +390,8 @@ void ppu_mirrorhipages(void)
  
  void ppu_mirror(int nt1, int nt2, int nt3, int nt4)
  {
 +   pages_changed = true;
++   cells_logged = -1;
     ppu.page[8] = ppu.nametab + (nt1 << 10) - 0x2000;
     ppu.page[9] = ppu.nametab + (nt2 << 10) - 0x2400;
     ppu.page[10] = ppu.nametab + (nt3 << 10) - 0x2800;
-@@ -254,12 +365,16 @@ static void ppu_oamdma(uint8 value)
+@@ -254,12 +457,16 @@ static void ppu_oamdma(uint8 value)
     cpu_address = (uint32) (value << 8);
  
     /* Sprite DMA starts at the current SPRRAM address */
@@ -693,7 +784,7 @@ index 9a6875b..b84b4f0 100644
  
     /* TODO: enough with houdini */
     cpu_address -= 256;
-@@ -343,6 +458,27 @@ uint8 ppu_readhigh(uint32 address)
+@@ -343,6 +550,27 @@ uint8 ppu_readhigh(uint32 address)
  }
  
  /* Read from $2000-$2007 */
@@ -721,7 +812,13 @@ index 9a6875b..b84b4f0 100644
  uint8 ppu_read(uint32 address)
  {
     uint8 value;
-@@ -411,6 +547,7 @@ void ppu_write(uint32 address, uint8 value)
+@@ -406,11 +634,13 @@ void ppu_write(uint32 address, uint8 value)
+ {
+    /* write goes into ppu latch... */
+    ppu.latch = value;
++   line_dirty = true;   /* (ours: the lines from here on are another run of a record) */
+    
+    switch (address & 0x2007)
     {
     case PPU_CTRL0:
        ppu.ctrl0 = value;
@@ -729,7 +826,7 @@ index 9a6875b..b84b4f0 100644
  
        ppu.obj_height = (value & PPU_CTRL0F_OBJ16) ? 16 : 8;
        ppu.bg_base = (value & PPU_CTRL0F_BGADDR) ? 0x1000 : 0;
-@@ -425,6 +562,7 @@ void ppu_write(uint32 address, uint8 value)
+@@ -425,6 +655,7 @@ void ppu_write(uint32 address, uint8 value)
  
     case PPU_CTRL1:
        ppu.ctrl1 = value;
@@ -737,19 +834,29 @@ index 9a6875b..b84b4f0 100644
  
        ppu.obj_on = (value & PPU_CTRL1F_OBJON) ? true : false;
        ppu.bg_on = (value & PPU_CTRL1F_BGON) ? true : false;
-@@ -482,6 +620,11 @@ void ppu_write(uint32 address, uint8 value)
+@@ -482,6 +713,21 @@ void ppu_write(uint32 address, uint8 value)
     case PPU_VDATA:
        if (ppu.vaddr < 0x3F00)
        {
 +         if (ppu.vaddr < 0x2000)
++         {
 +            vram_written++;
++            tiles_log[ppu.vaddr >> 7] |= 1 << ((ppu.vaddr >> 4) & 7);
++            tiles_logged = true;
++         }
 +         else
++         {
 +            nametab_written++;
++            if (cells_logged >= 0 && cells_logged < 256)
++               cells_log[cells_logged++] = 0x2000 | (ppu.vaddr & 0x0FFF);
++            else
++               cells_logged = -1;
++         }
 +
           /* VRAM only accessible during scanlines 241-260 */
           if ((ppu.bg_on || ppu.obj_on) && !ppu.vram_accessible)
           {
-@@ -507,10 +650,12 @@ void ppu_write(uint32 address, uint8 value)
+@@ -507,10 +753,12 @@ void ppu_write(uint32 address, uint8 value)
  
              for (i = 0; i < 8; i ++)
                 ppu.palette[i << 2] = (value & 0x3F) | BG_TRANS;
@@ -762,7 +869,7 @@ index 9a6875b..b84b4f0 100644
           }
        }
  
-@@ -693,9 +838,39 @@ INLINE int draw_oamtile(uint8 *surface, uint8 attrib, uint8 pat1,
+@@ -693,9 +941,39 @@ INLINE int draw_oamtile(uint8 *surface, uint8 attrib, uint8 pat1,
     return strike_pixel;
  }
  
@@ -776,7 +883,8 @@ index 9a6875b..b84b4f0 100644
 +#define  ppu   (*pp)
 +
 +static void bg_words_make(ppu_t *pp)
-+{
+ {
+-   uint8 *bmp_ptr, *data_ptr, *tile_ptr, *attrib_ptr;
 +   uint32 pair[16];
 +   int group, i;
 +
@@ -794,8 +902,7 @@ index 9a6875b..b84b4f0 100644
 +}
 +
 +static void ppu_renderbg(ppu_t *pp, uint8 *vidbuf)
- {
--   uint8 *bmp_ptr, *data_ptr, *tile_ptr, *attrib_ptr;
++{
 +   uint8 *data_ptr, *tile_ptr, *attrib_ptr;
 +   uint32 scratch[66], *out;
 +   const uint32 *words;
@@ -804,7 +911,7 @@ index 9a6875b..b84b4f0 100644
     uint32 refresh_vaddr, bg_offset, attrib_base;
     int tile_count;
     uint8 tile_index, x_tile, y_tile;
-@@ -708,7 +883,12 @@ static void ppu_renderbg(uint8 *vidbuf)
+@@ -708,7 +986,12 @@ static void ppu_renderbg(uint8 *vidbuf)
        return;
     }
  
@@ -818,7 +925,7 @@ index 9a6875b..b84b4f0 100644
     refresh_vaddr = 0x2000 + (ppu.vaddr & 0x0FE0); /* mask out x tile */
     x_tile = ppu.vaddr & 0x1F;
     y_tile = (ppu.vaddr >> 5) & 0x1F; /* to simplify calculations */
-@@ -720,10 +900,10 @@ static void ppu_renderbg(uint8 *vidbuf)
+@@ -720,10 +1003,10 @@ static void ppu_renderbg(uint8 *vidbuf)
     attrib_ptr = &PPU_MEM(attrib_base + (x_tile >> 2));
     attrib = *attrib_ptr++;
     attrib_shift = (x_tile & 2) + ((y_tile & 2) << 1);
@@ -831,7 +938,7 @@ index 9a6875b..b84b4f0 100644
     while (tile_count--)
     {
        /* Tile number from nametable */
-@@ -734,8 +914,11 @@ static void ppu_renderbg(uint8 *vidbuf)
+@@ -734,8 +1017,11 @@ static void ppu_renderbg(uint8 *vidbuf)
        if (ppu.latchfunc)
           ppu.latchfunc(ppu.bg_base, tile_index);
  
@@ -845,7 +952,7 @@ index 9a6875b..b84b4f0 100644
  
        x_tile++;
  
-@@ -759,10 +942,13 @@ static void ppu_renderbg(uint8 *vidbuf)
+@@ -759,10 +1045,13 @@ static void ppu_renderbg(uint8 *vidbuf)
           }
  
           attrib_shift ^= 2;
@@ -860,7 +967,7 @@ index 9a6875b..b84b4f0 100644
     /* Blank left hand column if need be */
     if (ppu.bg_mask)
     {
-@@ -784,7 +970,7 @@ typedef struct obj_s
+@@ -784,7 +1073,7 @@ typedef struct obj_s
  } obj_t;
  
  /* TODO: fetch valid OAM a scanline before, like the Real Thing */
@@ -869,7 +976,7 @@ index 9a6875b..b84b4f0 100644
  {
     uint8 *buf_ptr;
     uint32 vram_offset, savecol[2];
-@@ -894,6 +1080,67 @@ static void ppu_renderoam(uint8 *vidbuf, int scanline)
+@@ -894,6 +1183,67 @@ static void ppu_renderoam(uint8 *vidbuf, int scanline)
     }
  }
  
@@ -937,7 +1044,7 @@ index 9a6875b..b84b4f0 100644
  /* Fake rendering a line */
  /* This is needed for sprite 0 hits when we're skipping drawing a frame */
  static void ppu_fakeoam(int scanline)
-@@ -1027,21 +1274,25 @@ static void ppu_renderscanline(bitmap_t *bmp, int scanline, bool draw_flag)
+@@ -1027,21 +1377,25 @@ static void ppu_renderscanline(bitmap_t *bmp, int scanline, bool draw_flag)
        }
     }
  
@@ -967,7 +1074,7 @@ index 9a6875b..b84b4f0 100644
     {
        int ytile;
  
-@@ -1072,6 +1323,89 @@ void ppu_endscanline(int scanline)
+@@ -1072,6 +1426,192 @@ void ppu_endscanline(int scanline)
     }
  }
  
@@ -977,7 +1084,8 @@ index 9a6875b..b84b4f0 100644
 +      line_end();
 +}
 +
-+int ppu_quiet_lines(int scanline, float line_cycles, float *scanline_cycles, int *fiq_cycles)
++/* (the lines one by one, each with its own look at everything: for a record that keeps every line's registers) */
++static int quiet_lines_each(int scanline, float line_cycles, float *scanline_cycles, int *fiq_cycles)
 +{
 +   nes6502_idle_t *idle = &nes6502_idle;
 +   const obj_t *first = (const obj_t *) ppu.oam;
@@ -1054,10 +1162,112 @@ index 9a6875b..b84b4f0 100644
 +   return scanline - began;
 +}
 +
++int ppu_quiet_lines(int scanline, float line_cycles, float *scanline_cycles, int *fiq_cycles)
++{
++   extern int nes6502_plain;
++   nes6502_idle_t *idle = &nes6502_idle;
++   const obj_t *first = (const obj_t *) ppu.oam;
++   const uint8 *cycles = idle->cycles;
++   const int turn = idle->turn, count = idle->count, began = scanline;
++   const bool rendering = ppu.bg_on || ppu.obj_on;
++   const uint32 latch = ppu.vaddr_latch;
++   int hit_from = 1000, hit_to = 0;   /* the lines sprite 0 might be hit in: the PPU has to look there */
++   int slept = 0, at = idle->at, fiq = *fiq_cycles;
++   uint32 vaddr = ppu.vaddr;
++   float left = *scanline_cycles;
++
++   if (2 != idle->state || 3 == nes6502_plain || scanline >= 240)
++      return 0;
++   if (capture && ppu_capture_copies)
++      return quiet_lines_each(scanline, line_cycles, scanline_cycles, fiq_cycles);
++
++   /* what cannot change while the 6502 sleeps, looked at once: the status as the loop reads
++   ** it (when it does), and where sprite 0 is */
++   ppu.stat &= ~PPU_STATF_MAXSPRITE;
++   if (idle->status >= 0)
++   {
++      int value = (ppu.stat & 0xE0) | (ppu.latch & 0x1F);
++
++      if ((ppu.stat & PPU_STATF_VBLANK) || ppu.flipflop)
++         return 0;
++      if (ppu.strikeflag)
++      {
++         if (nes6502_getcycles(false) < ppu.strike_cycle)
++            return 0;
++         value |= PPU_STATF_STRIKE;
++      }
++      if (value != idle->status)
++         return 0;
++   }
++   if (ppu.obj_on && false == ppu.strikeflag && first->y_loc < 240)
++   {
++      hit_from = first->y_loc + 1;
++      hit_to = first->y_loc + ppu.obj_height;
++   }
++
++   /* (a line is not quiet when the frame interrupt could come in it) */
++   while (scanline < 240 && fiq > 128 && (scanline < hit_from || scanline > hit_to))
++   {
++      int budget, elapsed = 0;
++
++      /* the line's start, as ppu_scanline has it; a record's run begins at the first, if at all */
++      if (rendering)
++         vaddr = (0 == scanline) ? latch : ((vaddr & ~0x041F) | (latch & 0x041F));
++      if (capture && scanline == began)
++      {
++         ppu.vaddr = vaddr;
++         capture_line(scanline);
++      }
++
++      /* the 6502's slice, as nes6502_execute has it asleep */
++      left += line_cycles;
++      budget = (int) left;
++      while (elapsed < budget)
++      {
++         if (0 == at)
++            elapsed += (budget - elapsed - 1) / turn * turn;
++         elapsed += cycles[at];
++         if (++at == count)
++            at = 0;
++      }
++      left -= (float) elapsed;
++      fiq -= elapsed;
++      slept += elapsed;
++
++      /* the line's end, as ppu_endscanline has it */
++      if (rendering)
++      {
++         if (7 == (vaddr >> 12))
++         {
++            int ytile = (vaddr >> 5) & 0x1F;
++
++            vaddr &= ~0x7000;
++            if (29 == ytile)
++               vaddr = (vaddr & ~0x03E0) ^ 0x0800;
++            else if (31 == ytile)
++               vaddr &= ~0x03E0;
++            else
++               vaddr += 0x20;
++         }
++         else
++            vaddr += 0x1000;
++      }
++      scanline++;
++   }
++   if (scanline != began)
++   {
++      ppu.vaddr = vaddr;
++      *scanline_cycles = left;
++      *fiq_cycles = fiq;
++      nes6502_slept(slept, at);
++   }
++   return scanline - began;
++}
++
  void ppu_checknmi(void)
  {
     if (ppu.ctrl0 & PPU_CTRL0F_NMI)
-@@ -1080,7 +1414,23 @@ void ppu_checknmi(void)
+@@ -1080,7 +1620,23 @@ void ppu_checknmi(void)
  
  void ppu_scanline(bitmap_t *bmp, int scanline, bool draw_flag)
  {
@@ -1083,10 +1293,10 @@ index 9a6875b..b84b4f0 100644
        /* Lower the Max Sprite per scanline flag */
        ppu.stat &= ~PPU_STATF_MAXSPRITE;
 diff --git a/components/nofrendo/nes/nes_ppu.h b/components/nofrendo/nes/nes_ppu.h
-index ab020f3..7406a38 100644
+index ab020f3..a12c843 100644
 --- a/components/nofrendo/nes/nes_ppu.h
 +++ b/components/nofrendo/nes/nes_ppu.h
-@@ -111,8 +111,36 @@ typedef struct ppu_s
+@@ -111,8 +111,72 @@ typedef struct ppu_s
  
     bool vram_present;
     bool drawsprites;
@@ -1115,6 +1325,42 @@ index ab020f3..7406a38 100644
 +extern bool ppu_capture(ppu_frame_t *frame);   /* before a frame; false: this cartridge cannot */
 +extern void ppu_capture_end(void);
 +extern uint32 ppu_draw(uint32 job, uint32 unused);
++
++/* ours: for a drawer that is not ppu_draw() (the GPU: osd_shaderemu.c). A line of a record:
++** where in the four name tables (two by two) its left end is, x in pixels across both and
++** y as 256 for the lower pair plus the row of 32 times 8 plus the line of it (rows 30 and
++** 31 are a table's attribute bytes, which the PPU shows as tiles when scrolled into); how
++** it is drawn (PPU_LINE_...), and which of the record's sets of pages and colours it has.
++*/
++#define  PPU_LINE_BG        0x01
++#define  PPU_LINE_OBJ       0x02
++#define  PPU_LINE_BGMASK    0x04   /* the eight pixels at the left without background */
++#define  PPU_LINE_OBJMASK   0x08   /* and without sprites */
++#define  PPU_LINE_TALL      0x10   /* sprites of 8 x 16 */
++#define  PPU_LINE_BGHIGH    0x20   /* the background's tiles are the second 256 */
++#define  PPU_LINE_OBJHIGH   0x40
++#define  PPU_LINE_SPRITES   0x80
++
++typedef struct
++{
++   uint16 x, y;
++   uint8 flags, pages, colours;
++} ppu_lineinfo_t;
++
++extern void ppu_frame_line(const ppu_frame_t *frame, int scanline, ppu_lineinfo_t *info);
++/* the record as runs of lines: between the lines the game wrote a register of the PPU at,
++** the picture goes on a line down the name tables with all else the same. Each run's first
++** line, and the line after its last; how many runs */
++extern int ppu_frame_runs(const ppu_frame_t *frame, const ppu_lineinfo_t **runs, const uint8 **ends);
++extern const uint8 *ppu_frame_colours(const ppu_frame_t *frame, int set);  /* 32 of them */
++extern uint8 *const *ppu_frame_pages(const ppu_frame_t *frame, int set);   /* 16, each less its address */
++extern const uint8 *ppu_frame_oam(const ppu_frame_t *frame);
++/* what the game wrote since this was last asked: addresses in the name tables (-1: all of
++** them may have changed), and a bit a tile of pattern RAM (512 of them); the latter's result
++** is whether any was */
++extern int ppu_written_cells(uint16 *addresses, int most);
++extern bool ppu_written_tiles(uint8 *bits);
++extern bool ppu_capture_copies;   /* false: a record does without its copies of memory */
 +
 +/* ours: does the lines from `scanline` on that pass with the 6502 asleep and nothing for the
 +** PPU to find, each as nes_renderframe would; how many it did */

@@ -540,7 +540,7 @@ void seglTexturePointer(const void* pixels, GLsizei width, GLsizei height, GLenu
     x->address = (uint32_t)((const uint8_t*)pixels - gpu);
     x->width = width;
     x->height = height;
-    x->indexed = internal == GL_COLOR_INDEX8_EXT ? 1 : internal == SEGL_BITS ? 2 : 0;
+    x->indexed = internal == GL_COLOR_INDEX8_EXT ? 1 : internal == SEGL_BITS ? 2 : internal == SEGL_TILES ? 3 : 0;
 }
 void glTexImage2D(GLenum target, GLint level, GLint internal, GLsizei width, GLsizei height, GLint border, GLenum format,
                   GLenum type, const GLvoid* pixels) {
@@ -830,7 +830,7 @@ int seglWindowTexture(GLuint name, GLfixed* across) {
 void seglQuad(const GLfixed* xyz, const GLfixed* uv, GLuint name, unsigned grey, int alpha, int keyed) {
     const texture* x = &textures[name < MAX_TEXTURES ? name : 0];
     uint32_t pass = (alpha < 255 ? 1u : 0u) + (depth_test ? 0 : 4);
-    uint32_t fragment = (x->indexed ? FRAGMENT_INDEXED : FRAGMENT_TEXTURE) | x->smooth | (keyed ? FRAGMENT_KEYED : 0) | pass << 16;
+    uint32_t fragment = (x->indexed == 3 ? 5u : (x->indexed ? FRAGMENT_INDEXED : FRAGMENT_TEXTURE) | x->smooth) | (keyed ? FRAGMENT_KEYED : 0) | pass << 16;
     uint32_t vertex = VERTEX_CLIP | VERTEX_MODELVIEW | VERTEX_COMPACT | VERTEX_QUADS | NUM_FORMAT;
     uint32_t tint = (uint32_t)(255 - alpha) << 24 | grey << 16 | grey << 8 | grey;
     if (!gpu || vertex_top + 64 > set_at + SET_SIZE || mesh_vertices + 6 > MAX_MESH) return;
@@ -884,7 +884,7 @@ static void sprite_command(const GLfixed* box, const int* texels, GLuint name, u
 
 void seglSprite(const GLfixed* box, const int* texels, GLuint name, unsigned colour, int keyed) {
     const texture* x = &textures[name < MAX_TEXTURES ? name : 0];
-    uint32_t fragment = (x->indexed == 2 ? 3u : (x->indexed ? FRAGMENT_INDEXED : FRAGMENT_TEXTURE) | x->smooth) |
+    uint32_t fragment = (x->indexed == 2 ? 3u : x->indexed == 3 ? 5u : (x->indexed ? FRAGMENT_INDEXED : FRAGMENT_TEXTURE) | x->smooth) |
                         (keyed ? FRAGMENT_KEYED : 0) | 5u << 16;
     // a quad more of the command before, which is most of them: nothing is called on this path
     if (last_draw && last_draw == (uint32_t*)(gpu + set_at) + 16 * (commands - 1) && !matrices_dirty && blocks &&
@@ -904,7 +904,7 @@ void seglSprite(const GLfixed* box, const int* texels, GLuint name, unsigned col
 static __attribute__((noinline)) void sprite_command(const GLfixed* box, const int* texels, GLuint name, unsigned colour,
                                                      int keyed) {
     const texture* x = &textures[name < MAX_TEXTURES ? name : 0];
-    uint32_t fragment = (x->indexed == 2 ? 3u : (x->indexed ? FRAGMENT_INDEXED : FRAGMENT_TEXTURE) | x->smooth) |
+    uint32_t fragment = (x->indexed == 2 ? 3u : x->indexed == 3 ? 5u : (x->indexed ? FRAGMENT_INDEXED : FRAGMENT_TEXTURE) | x->smooth) |
                         (keyed ? FRAGMENT_KEYED : 0) | 5u << 16;
     uint32_t vertex = VERTEX_CLIP | VERTEX_MODELVIEW | VERTEX_COMPACT | VERTEX_QUADS | NUM_FORMAT;
     if (!gpu || vertex_top + 64 > set_at + SET_SIZE || mesh_vertices + 6 > MAX_MESH) return;

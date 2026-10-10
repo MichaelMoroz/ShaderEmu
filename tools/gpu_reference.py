@@ -192,7 +192,26 @@ def shade(m, colour, uv, tex, key):
             n = y * ((tw + 7) >> 3) + (x >> 3)
             texel = (m.words[base + n // 4] >> (8 * (n & 3)).astype(np.uint32)) & 0xff
             return np.clip(colour, 0, 1), ((texel << (x & 7).astype(np.uint32)) & 0x80) != 0
-        if mode == 2:
+        if mode == 5:
+            # a layer of tiles: the address is four words (cells, tiles, palette, sizes)
+            cells, tiles, palette, sizes = (int(v) & 0x7fffffff for v in m.words[base:base + 4])
+            tile_w, tile_h, across, piece = max(sizes & 0xff, 1), max((sizes >> 8) & 0xff, 1), (sizes >> 16) & 0xfff, sizes >> 28
+            at = cells + 2 * ((y // tile_h) * across + x // tile_w)
+            cell = (m.words[at // 4] >> (8 * (at & 3)).astype(np.uint32)) & 0xffff
+            px, py = x % tile_w, y % tile_h
+            px = np.where(cell & 0x400, tile_w - 1 - px, px)
+            py = np.where(cell & 0x800, tile_h - 1 - py, py)
+            tile = (cell & 0x3ff).astype(np.int64)
+            if piece:
+                # tiles in pieces of 2^piece: the tiles' address is a table of the pieces'
+                tiles = (m.words[tiles // 4 + (tile >> piece)] & 0x7fffffff).astype(np.int64)
+                tile &= (1 << piece) - 1
+            at = tiles + (tile * tile_h + py) * tile_w + px
+            texel = (m.words[at // 4] >> (8 * (at & 3)).astype(np.uint32)) & 0xff
+            if tex[0] & 0x100:
+                keep = texel != key
+            texel = m.words[palette // 4 + texel + 16 * (cell >> 12)]
+        elif mode == 2:
             texel = (m.words[base + n // 4] >> (8 * (n & 3)).astype(np.uint32)) & 0xff
             if tex[0] & 0x100:
                 keep = texel != key
