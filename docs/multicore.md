@@ -283,6 +283,34 @@ be laid out and leaves it as it is). **Do not run "Sync shader sources" there un
 texture and the passes that draw it have been changed to match**: the tick's quads come from
 the geometry shader now, and the workers' band is 512 x 8 beside core 0's 64 x 16.
 
+## Eight texels a pixel (tried: `--define TICK_MRT`)
+
+A pixel of the tick need not be one texel of state: with eight render targets it is eight,
+and the pass runs an eighth of the pixels. `TICK_MRT` (D3D11 harness only) draws the tick
+into eight targets 72 x 16, the two zones an eighth as wide: pixel (x, y) keeps texels 8x to
+8x + 7 of row y, a worker's tile a column of eight pixels, the quads the geometry shader's
+as before. The same pass compiled with `TICK_UNPACK` then draws the same quads into the
+state texture and copies each texel from its target, so the commit, the control pass and
+every reader find the state where it was. `mctest 15 120000` passes with it.
+
+What it gains, 16,384 instructions a pass:
+
+| | One target | Eight |
+|---|---|---|
+| a shell loop, one core | 3,497k instructions/s | 3,649k (4%) |
+| Doom's timedemo, one core | 3,124k | 3,297k (6%) |
+| Quake's timedemo, one core | 3,288k | 3,342k (2%) |
+| Tiberian Dawn, mission 10, one core | 3,591k | 3,684k (3%) |
+| `mctest 15 300000 bench`: core 0 alone | 17.2 s | 17.2 s |
+| the same, 15 workers busy and core 0 waiting | 16.7 s | 14.6 s (one worker: 14.6 s) |
+
+So little for one core: a pass is as long as its longest pixel, the instructions one after
+another, and 973 pixels were already about what the card runs side by side for nothing.
+What the eight targets do buy is that pixels stop counting: fifteen busy workers cost what
+one does, and a write cache twice the size (`L1_TABLE_BITS=7`, which Doom likes: 3,475k
+with it, its passes 14.6k instructions long in place of 12.7k) no longer costs pixels. It
+is not in Unity, where a pass with several targets has to be a camera's and not a Blit.
+
 ## Workers with nothing to do
 
 A worker's `wfi` is a sleep until the first word of its job changes, and the machine does not

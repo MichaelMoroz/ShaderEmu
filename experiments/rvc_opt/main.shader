@@ -143,9 +143,24 @@
             // rectangles of their own, so no two cores' pixels are rasterised together, and a
             // worker that is parked or asleep costs no pixel at all. (The pass is handed one
             // quad, two triangles: the first becomes these, the second nothing.)
+            // TICK_MRT: a pixel of the tick is eight texels of state, one in each of eight targets
+            // 72 x 16 (the state's two zones, an eighth as wide): pixel (x, y) keeps texels 8x to
+            // 8x + 7 of row y, so a worker's tile of 8 x 8 is a column of eight pixels. The same
+            // pass compiled with TICK_UNPACK draws the same quads into the state texture and
+            // only copies each texel from its target.
+            #define TICK_MRT_W 72
+            #ifdef TICK_MRT
+            #define TICK_TEXELS 8
+            #else
+            #define TICK_TEXELS 1
+            #endif
             void tick_rect(inout TriangleStream<v2f_customrendertexture> stream, float x, float y, float w, float h) {
                 for (uint corner = 0; corner < 4; corner++) {
+            #if defined(TICK_MRT) && !defined(TICK_UNPACK)
+                    float2 p = float2((x + (corner & 1) * w) / 8, y + (corner >> 1) * h) / float2(TICK_MRT_W, STATE_ROWS);
+            #else
                     float2 p = float2(x + (corner & 1) * w, y + (corner >> 1) * h) / (float2)s_dim;
+            #endif
                     v2f_customrendertexture o;
                     o.vertex = float4(p.x * 2.0 - 1.0, 1.0 - p.y * 2.0, 0.0, 1.0);
                     o.localTexcoord = float3(p, 0);
@@ -184,30 +199,70 @@
 #endif
             }
 
+            #ifdef TICK_UNPACK
+            Texture2D<uint4> _TickOut0, _TickOut1, _TickOut2, _TickOut3, _TickOut4, _TickOut5, _TickOut6, _TickOut7;
             uint4 frag(v2f_customrendertexture i) : SV_Target {
+                uint2 pos = i.vertex.xy;
+                uint3 at = uint3(pos.x >> 3, pos.y, 0);
+                uint k = pos.x & 7;
+                if (k == 0) return _TickOut0.Load(at);
+                if (k == 1) return _TickOut1.Load(at);
+                if (k == 2) return _TickOut2.Load(at);
+                if (k == 3) return _TickOut3.Load(at);
+                if (k == 4) return _TickOut4.Load(at);
+                if (k == 5) return _TickOut5.Load(at);
+                if (k == 6) return _TickOut6.Load(at);
+                return _TickOut7.Load(at);
+            }
+#else
+#ifdef TICK_MRT
+            struct tick_out {
+                uint4 t0 : SV_Target0; uint4 t1 : SV_Target1; uint4 t2 : SV_Target2; uint4 t3 : SV_Target3;
+                uint4 t4 : SV_Target4; uint4 t5 : SV_Target5; uint4 t6 : SV_Target6; uint4 t7 : SV_Target7;
+            };
+            #define TICK_EACH(k) for (k = 0; k < 8; k++)
+            #define TICK_DONE { tick_out r; r.t0 = o[0]; r.t1 = o[1]; r.t2 = o[2]; r.t3 = o[3]; r.t4 = o[4]; r.t5 = o[5]; r.t6 = o[6]; r.t7 = o[7]; return r; }
+            tick_out frag(v2f_customrendertexture i) {
+#else
+            #define TICK_EACH(k) k = 0;
+            #define TICK_DONE return o[0];
+            uint4 frag(v2f_customrendertexture i) : SV_Target {
+#endif
+                // o[k]: what the pixel's texels are after this pass (one, or eight with TICK_MRT)
+                uint4 o[TICK_TEXELS];
+                uint k;
+                #define TICK_ZERO { TICK_EACH(k) o[k] = (uint4)0; TICK_DONE }
                 _SelfTexture2D.GetDimensions(s_dim.x, s_dim.y);
                 _Data_MTD_R.GetDimensions(m_dim.x, m_dim.y);
 
+#ifdef TICK_MRT
+                uint2 pos = uint2(i.vertex.xy) * uint2(8, 1);
+#else
                 uint2 pos = i.globalTexcoord.xy * s_dim;
+#endif
 #if CORES > 1
                 // this pixel's core, and which texel of its state it keeps
                 uint2 own = pos;
+                #define TICK_KEEP(k) RAM_TEX(own + uint2(k, 0))
+                #define TICK_AT(k) mc_texel_of(pos + uint2(k, 0))
                 mc_geo = RAM_TEX(RAM_ADDR(MC_GEOMETRY));
                 mc_select(0, 0);
                 hart = 0;
                 if (pos.x >= MC_STRIP_X) {
                     // the workers' strip: nothing while it is laid out anew, and nothing in rows no worker has
-                    if (_Init || pos.y >= 8 || (mc_geo.r & 1) != 0) return (uint4)0;
+                    if (_Init || pos.y >= 8 || (mc_geo.r & 1) != 0) TICK_ZERO
                     uint tile = (pos.x - MC_STRIP_X) >> 3;
                     hart = mc_core_at(tile);
-                    if (hart == 0) return (uint4)0;
+                    if (hart == 0) TICK_ZERO
                     // which texel of the worker's state this pixel is, as a place in its rows of 64
                     uint w = ((tile - mc_tile0) << 6) + ((pos.y & 7) << 3) + (pos.x & 7);
                     pos = uint2(w & 63, w >> 6);
                 }
-                if (pos.y >= 64) return (uint4)0;
-                if (!_Init && mc_idle()) return RAM_TEX(own);      // a worker with nothing to do
-                pos = mc_texel_of(pos);
+                if (pos.y >= 64) TICK_ZERO
+                if (!_Init && mc_idle()) { TICK_EACH(k) o[k] = TICK_KEEP(k); TICK_DONE }      // a worker with nothing to do
+#else
+                #define TICK_KEEP(k) STATE_TEX(pos + uint2(k, 0))
+                #define TICK_AT(k) (pos + uint2(k, 0))
 #endif
 #ifdef L1_LOCAL
                 uint4 l1_cache[L1_DATA_N];
@@ -239,18 +294,15 @@
 
                 if (_Init) {
                     if (_InitRaw) {
-                        return STATE_TEX(pos);
+                        TICK_EACH(k) o[k] = STATE_TEX(TICK_AT(k));
+                        TICK_DONE
                     } else {
                         cpu = cpu_init();
                     }
                 } else {
-                    if (!pixel_has_state(pos)) {
-#if CORES > 1
-                        return RAM_TEX(own);
-#else
-                        return STATE_TEX(pos);
-#endif
-                    }
+                    bool has_state = false;
+                    TICK_EACH(k) has_state = has_state || pixel_has_state(TICK_AT(k));
+                    if (!has_state) { TICK_EACH(k) o[k] = TICK_KEEP(k); TICK_DONE }
 
                     decode();
                     time_prepare();
@@ -277,23 +329,32 @@
                     }
                     xreg_store();
                     #ifdef PROFILE
-                    prof_flush(pos);
+                    prof_flush(TICK_AT(0));
                     #endif
                 }
 
                 /* cpu.debug_csr_val = read_csr_raw(_CheckCSR); */
                 /* cpu.debug_mem_val = mem_get_word(_CheckMEM | (_CheckMEMraw ? 0 : 0x80000000)); */
 
+                TICK_EACH(k) {
+                    uint2 at = TICK_AT(k);
+                    uint4 texel;
+                    bool have = false;
+#ifdef TICK_MRT
+                    if (!_Init && !pixel_has_state(at)) { texel = TICK_KEEP(k); have = true; }
+#endif
 #ifndef NO_PAGING
-                uint4 tlb_texel;
-                if (!_Init && tlb_state_texel(pos, tlb_texel)) return tlb_texel;
+                    if (!have && !_Init && tlb_state_texel(at, texel)) have = true;
 #endif
 #ifdef FPU
-                uint4 fp_texel;
-                if (!_Init && fp_state_texel(pos, fp_texel)) return fp_texel;
+                    if (!have && !_Init && fp_state_texel(at, texel)) have = true;
 #endif
-                return encode(pos);
+                    if (!have) texel = encode(at);
+                    o[k] = texel;
+                }
+                TICK_DONE
             }
+#endif
             ENDCG
         }
 

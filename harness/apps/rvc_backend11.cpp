@@ -33,6 +33,14 @@ public:
         tickRows_ = (float)opt.tickRows;
         if (!buildPasses(gpu_, shader, {"CPUTick", "Commit"}, bo, passes_, err)) return false;
         for (auto& d : opt.compile.defines)
+            if (d.first == "TICK_MRT") mrt_ = true;
+        if (mrt_) {
+            // the tick's pass again, as the one that copies its eight targets into the state
+            ShaderBuildOptions unpack = bo;
+            unpack.settings.defines.push_back({"TICK_UNPACK", "1"});
+            if (!buildPasses(gpu_, shader, {"CPUTick"}, unpack, unpackPasses_, err) || !createTickTargets(err)) return false;
+        }
+        for (auto& d : opt.compile.defines)
             if (d.first == "RAM_DIRECT") csDirect_ = true;
         for (auto& d : opt.compile.defines)
             if (d.first == "RAM_BUFFER") csBuffer_ = true;
@@ -112,8 +120,11 @@ public:
             // was: they are copied into the buffer drawn into first, and back afterwards.
             std::vector<UpdateZone> zones{UpdateZone{32, 4096 - tickRows_ / 2, 64, tickRows_, 0}};
             if (cores_ > 1) zones.push_back(UpdateZone{64 + 256, 4096 - 4, 512, 8, 0});
+            // TICK_MRT: the tick draws a pixel for every eight texels, into eight targets of its
+            // own, and the pass that follows puts them where the state has them
+            if (mrt_) tickDraw(mat, zones[0]);
             for (auto& z : zones) crt_.copyIn(gpu_, z);
-            crt_.runZone(gpu_, passes_[0], mat, zones[0], 6, false);
+            crt_.runZone(gpu_, mrt_ ? unpackPasses_[0] : passes_[0], mat, zones[0], 6, false);
             for (auto& z : zones) crt_.copyZone(gpu_, z);
         }
         if (timeIt) gpu_.ctx->End(tsQuery_[1].Get());
@@ -431,6 +442,57 @@ private:
         soundTags_.push_back(tag);
     }
 
+    bool createTickTargets(std::string& err) {
+        D3D11_TEXTURE2D_DESC td{};
+        td.Width = kTickWidth;
+        td.Height = (UINT)tickRows_;
+        td.MipLevels = td.ArraySize = 1;
+        td.Format = DXGI_FORMAT_R32G32B32A32_UINT;
+        td.SampleDesc.Count = 1;
+        td.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+        for (int i = 0; i < 8; ++i) {
+            HRESULT hr = gpu_.device->CreateTexture2D(&td, nullptr, &mrtTex_[i]);
+            if (SUCCEEDED(hr)) hr = gpu_.device->CreateRenderTargetView(mrtTex_[i].Get(), nullptr, &mrtRtv_[i]);
+            if (SUCCEEDED(hr)) hr = gpu_.device->CreateShaderResourceView(mrtTex_[i].Get(), nullptr, &mrtSrv_[i]);
+            if (FAILED(hr)) {
+                err = "tick targets: " + hrToString(hr);
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // The tick with eight targets: the state is read where it is, as ever.
+    void tickDraw(Material& mat, const UpdateZone& z) {
+        ID3D11DeviceContext* ctx = gpu_.ctx.Get();
+        GpuPass& pass = passes_[0];
+        mat.setVector("CustomRenderTextureCenters", z.centerX, z.centerY, 0.5, 0);
+        mat.setVector("CustomRenderTextureSizesAndRotations", z.width, z.height, 1, 0);
+        mat.setFloat("CustomRenderTexturePrimitiveIDs", 0);
+        mat.setVector("CustomRenderTextureParameters", 1, 0, 0, 0);
+        mat.setVector("_CustomRenderTextureInfo", kWidth, kHeight, 1, 0);
+        mat.setTexture("_SelfTexture2D", crt_.currentSRV(), kWidth, kHeight);
+        ID3D11ShaderResourceView* nulls[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT] = {};
+        ctx->VSSetShaderResources(0, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT, nulls);
+        ctx->GSSetShaderResources(0, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT, nulls);
+        ctx->PSSetShaderResources(0, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT, nulls);
+        ID3D11RenderTargetView* rtvs[8];
+        for (int i = 0; i < 8; ++i) rtvs[i] = mrtRtv_[i].Get();
+        ctx->OMSetRenderTargets(8, rtvs, nullptr);
+        D3D11_VIEWPORT vp{0, 0, (float)kTickWidth, tickRows_, 0, 1};
+        ctx->RSSetViewports(1, &vp);
+        ctx->RSSetState(gpu_.rasterNoCull.Get());
+        ctx->OMSetBlendState(gpu_.blendOpaque.Get(), nullptr, 0xffffffff);
+        ctx->OMSetDepthStencilState(gpu_.depthOff.Get(), 0);
+        ctx->IASetInputLayout(nullptr);
+        ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        mat.bind(ctx, pass, gpu_);
+        ctx->Draw(6, 0);
+        ctx->OMSetRenderTargets(0, nullptr, nullptr);
+        static const char* names[8] = {"_TickOut0", "_TickOut1", "_TickOut2", "_TickOut3", "_TickOut4", "_TickOut5", "_TickOut6", "_TickOut7"};
+        for (int i = 0; i < 8; ++i) mat.setTexture(names[i], mrtSrv_[i].Get(), kTickWidth, (UINT)tickRows_);
+    }
+
     bool ensureQueries() {
         if (!tsDisjoint_) {
             D3D11_QUERY_DESC qd{D3D11_QUERY_TIMESTAMP_DISJOINT, 0};
@@ -442,7 +504,13 @@ private:
     }
 
     Gpu gpu_;
-    std::vector<GpuPass> passes_, gpuPasses_, soundPasses_;
+    std::vector<GpuPass> passes_, gpuPasses_, soundPasses_, unpackPasses_;
+    // TICK_MRT: the tick's eight targets, 72 x 16 (main.shader, TICK_MRT_W)
+    bool mrt_ = false;
+    static const UINT kTickWidth = 72;
+    ComPtr<ID3D11Texture2D> mrtTex_[8];
+    ComPtr<ID3D11RenderTargetView> mrtRtv_[8];
+    ComPtr<ID3D11ShaderResourceView> mrtSrv_[8];
     ComPtr<ID3D11Texture2D> soundTex_;
     ComPtr<ID3D11RenderTargetView> soundRtv_;
     RegionReadback sound_;
