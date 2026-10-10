@@ -380,6 +380,42 @@ into every core's cache for every texel it writes: 0.06 ms a pass with one core 
 It is not in Unity yet: there the tick has to become a camera's pass, which is how a pass
 with several targets is drawn in VRChat.
 
+## More than sixteen cores
+
+`--cores N` goes to 64 (the D3D11 harness, with the eight targets). What changes above 16:
+
+- the workers' band is the state rows to their end, 248 tiles of 8 x 8 in place of 64;
+- the geometry is eight words, four bits a worker: the geometry texel's second to fourth
+  words and the two control texels after it (`0x870003e0`, `0x870003f0`);
+- cores 16 to 63 have their mailboxes after the first sixteen's (`programs/mc/mc.h`: three
+  pages now), so a program built before knows the first fifteen workers and is not disturbed;
+- the kernel has two more calls on `/dev/gpu` for them (`SHADEREMU_GPU_SHAPE_ALL`, eight
+  words; `SHADEREMU_GPU_WORKERS_ALL`, the cores it gives as two words of bits). The older
+  calls give out the first fifteen. The library (`mcw.c`) uses whichever the kernel has;
+- the tick's geometry shader draws sixteen cores' quads a primitive (a primitive is 64
+  vertices at most), and the pass is given a primitive for every sixteen cores.
+
+The commit looks into a core's cache for every texel of RAM it writes, which with 64 cores
+was 4.5 ms a pass (1.2 ms with 16). A worker keeps all the addresses it stored to or-ed
+together in one word (it is how a load knows the cache has nothing for it); the commit now
+passes over a worker for a texel whose address has a bit that word lacks: 2.2 ms.
+
+`nxray`, one picture of 640 x 480 (807,158 rays, 300 tiles; the same sum every time),
+workers of the smallest size, an RTX 5070 laptop card:
+
+| Workers | A picture | Rays a second | Against core 0 alone |
+|---|---|---|---|
+| none | 69.0 s | 11 thousand | |
+| 15 | 4.50 s | 179 thousand | 15 times |
+| 31 | 2.38 s | 336 thousand | 29 |
+| 47 | 1.72 s | 467 thousand | 40 |
+| 63 | 1.35 s | 594 thousand | 51 |
+
+(63 of the next size up, with twice the write cache each: 1.40 s.) With 63 a pass is 9.5 ms
+of tick, as with 15, and 2.2 ms of commit. `mctest`'s primes below 480,000: 45.3 s on core 0
+alone, 0.79 s with 63 workers, 57 times. `mctest 63 60000 shape 3,3,...` passes, and so does
+a mixed geometry of 40.
+
 ## Workers with nothing to do
 
 A worker's `wfi` is a sleep until the first word of its job changes, and the machine does not

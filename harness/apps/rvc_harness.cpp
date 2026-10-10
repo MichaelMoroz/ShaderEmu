@@ -331,7 +331,7 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--readback-batch") o.readbackBatch = atoi(next("--readback-batch").c_str());
         else if (a == "--cpu") o.cpu = true;
         else if (a == "--cpu-ips") { o.cpu = true; o.cpuIps = atof(next("--cpu-ips").c_str()); }
-        else if (a == "--cores") { o.cores = (std::max)(1, (std::min)(16, atoi(next("--cores").c_str()))); if (o.cores > 1) o.defines.push_back("CORES=" + std::to_string(o.cores)); }
+        else if (a == "--cores") { o.cores = (std::max)(1, (std::min)(64, atoi(next("--cores").c_str()))); if (o.cores > 1) o.defines.push_back("CORES=" + std::to_string(o.cores)); }
         else if (a == "--core-pitch" || a == "--small-cores") next(a.c_str());   // (of the layouts before the geometry: taken and ignored)
         else { fprintf(stderr, "unknown option %s\n", a.c_str()); usage(); return false; }
     }
@@ -960,7 +960,7 @@ int main(int argc, char** argv) {
         if (rowFrame < (uint64_t)opt.initFrames) return;  // cpu_init leaves junk in the UART buffer
         if (haveClock) guestInstructions += (uint32_t)(clock - lastClock);
         if (opt.cores > 1 && raw.size() >= (64 + 0x3c) * 16) {
-            for (int c = 1; c < opt.cores; ++c) {
+            for (int c = 1; c < opt.cores && c < 16; ++c) {   // (the control words count the first 16)
                 uint32_t now = texel(64 + 0x38 + c / 4, c % 4);
                 if (haveWorkerClock) workerInstructions += (uint32_t)(now - workerClock[c]);
                 workerClock[c] = now;
@@ -1502,22 +1502,28 @@ int main(int argc, char** argv) {
         // each core's state: what it is doing as the run ends. Core 0's is at the left; a
         // worker's rows of the strip beside it are where the geometry (control texel 0x3d) puts them.
         std::vector<uint8_t> blocks;
-        if (backend.readState(640, 64, blocks) && blocks.size() >= (size_t)640 * 64 * 16 && row.size() >= (64 + 0x3e) * 16) {
+        if (backend.readState(2048, 64, blocks) && blocks.size() >= (size_t)2048 * 64 * 16 && row.size() >= (64 + 0x40) * 16) {
             const uint32_t* all = (const uint32_t*)blocks.data();
             const uint32_t* geo = (const uint32_t*)row.data() + (64 + 0x3d) * 4;
             unsigned at = 0;
+            uint64_t workersRan = 0;
             for (int c = 0; c < opt.cores; ++c) {
-                unsigned k = (unsigned)c - 1, bits = c == 0 ? 6 : ((k < 8 ? geo[1] >> (4 * k) : geo[2] >> (4 * (k - 8))) & 15);
+                // four bits a worker: the geometry texel's words 1 to 3, then the next texels' (more than 16 cores)
+                unsigned k = (unsigned)c - 1, bits = c == 0 ? 6 : ((geo[1 + k / 8] >> (4 * (k % 8))) & 15);
                 unsigned rows = c == 0 ? 0 : bits ? (44 + 8 + (2u << bits) * 4 + 63) / 64 : 0;
                 if (c != 0 && !rows) continue;
                 // texel w (below 64) of the core's state: a worker's is in the first 8 x 8 tile of its strip
                 auto texel = [&](unsigned w) {
                     size_t x = c == 0 ? w : 64 + at * 8 + (w & 7), y = c == 0 ? 0 : (w >> 3);
-                    return all + (y * 640 + x) * 4;
+                    return all + (y * 2048 + x) * 4;
                 };
                 uint32_t word = texel(41)[3];
                 const uint32_t pc = texel(36)[3], ran = texel(28)[1], committed = texel(28)[2];
                 at += rows;
+                if (c != 0) workersRan += ran;
+                if (c == opt.cores - 1 && opt.cores > 16)
+                    fprintf(stderr, "CORES: the workers ran %llu instructions in all\n", (unsigned long long)workersRan);
+                if (c >= 4 && c < opt.cores - 1 && opt.cores > 16) continue;   // (the first few and the last say enough)
                 fprintf(stderr, "CORE %d: pc %08x, %u instructions, %u commits, %s (state word %08x%s)\n", c, pc, ran,
                         committed, c == 0 ? "the machine" : (word & 8) ? "waiting for a system call" : (word & 4) ? "stopped by a fault" : (word & 2) ? "asleep" :
                         (word & 1) ? "running" : (word >> 8) == 0 ? "parked, never started" : (word >> 8) == 2 ? "parked by the kernel" : "parked by ebreak", word,

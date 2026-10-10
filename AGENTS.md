@@ -845,6 +845,11 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   (`docs/multicore.md`, "Eight texels a pixel"; `--no-mrt` for one), with a write cache twice
   the shader's default (`L1_TABLE_BITS=7`) and 32,768 instructions a pass. Snapshots from
   before are of another state layout. D3D12 and Unity have one target still.
+- The harness's machine has up to 64 cores (`--cores 64`; `docs/multicore.md`, "More than
+  sixteen cores"): `RAY_SIZE=640x480 RAY_SHAPE=3,3,... nxray` with 63 threes is its measure
+  (1.35 s a picture, sum `fd92a71e`), and `mctest 63 60000 shape 3,3,...` its test (a large
+  limit makes the float check slow: core 0 works every worker's sum out again). A shader for
+  another number of cores is another compile. `rvc_cpu` and Unity have 16 at most.
 - Pixels of two cores that the card runs as one group cost what both cost, unless the cores
   run the same instructions: measure anything about the workers' pixels with `nxray` (every
   core its own work), never with `mctest`'s bench (the same primes on all of them).

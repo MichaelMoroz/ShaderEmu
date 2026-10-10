@@ -141,22 +141,23 @@ int mcw_count(void) { return count; }
 
 int mcw_shape(const unsigned char *bits, int workers)
 {
-	uint32_t shape[2] = {0, 0};
+	uint32_t shape[8] = {0, 0, 0, 0, 0, 0, 0, 0};
 	long answer;
 	int fd, k;
 
 	if (page) return -16;	/* this program has workers itself */
 	for (k = 1; k <= workers && k < MC_MAX_CORES; k++)
-		shape[k > 8] |= (uint32_t)(bits[k - 1] & 15) << (4 * (k <= 8 ? k - 1 : k - 9));
+		shape[(k - 1) / 8] |= (uint32_t)(bits[k - 1] & 15) << (4 * ((k - 1) % 8));
 	if ((fd = (int)call6(56, -100, (long)"/dev/gpu", 2, 0, 0, 0)) < 0) return fd;
-	answer = call6(29, fd, MC_SHAPE, (long)shape, 0, 0, 0);
+	/* more than fifteen workers: a machine of more than 16 cores, and the kernel that knows of them */
+	answer = call6(29, fd, workers > 15 ? MC_SHAPE_ALL : MC_SHAPE, (long)shape, 0, 0, 0);
 	call6(57, fd, 0, 0, 0, 0, 0);
 	return (int)answer;
 }
 
 int mcw_open(int limit)
 {
-	uint32_t claim[3], own_tp, i;
+	uint32_t claim[4], own_tp, i;
 	int fd, k, pass, got = 0;
 
 	if (page) return count;
@@ -166,10 +167,18 @@ int mcw_open(int limit)
 	/* the cores nobody has, as many as are wanted, and this program's page table; from here
 	 * the kernel parks them when the program ends */
 	claim[0] = (uint32_t)limit;
-	claim[1] = claim[2] = 0;
-	if (call6(29, fd, MC_WORKERS, (long)claim, 0, 0, 0) != 0 || !claim[1]) goto none;
+	claim[1] = claim[2] = claim[3] = 0;
+	if (call6(29, fd, MC_WORKERS_ALL, (long)claim, 0, 0, 0) != 0) {
+		/* a kernel from before machines of more than 16 cores: { how many, the cores, the root } */
+		uint32_t old[3] = {(uint32_t)limit, 0, 0};
+
+		if (call6(29, fd, MC_WORKERS, (long)old, 0, 0, 0) != 0) goto none;
+		claim[1] = old[2];
+		claim[2] = old[1];
+	}
+	if (!claim[2] && !claim[3]) goto none;
 	for (k = 1; k < MC_MAX_CORES; k++)
-		if (claim[1] >> k & 1) core_of[++got] = k;
+		if (claim[2 + k / 32] >> (k % 32) & 1) core_of[++got] = k;
 	if (!(page = map(MC_PAGE_SIZE, fd, MC_PAGE_GPU_OFFSET))) goto none;
 	if (!(stacks = map((long)got * STACK_BYTES, -1, 0))) goto none;
 	stack_count = got;
@@ -185,7 +194,7 @@ int mcw_open(int limit)
 		top[0] = own_tp;
 		start[1] = (uint32_t)mcw_entry;
 		start[2] = (uint32_t)top;
-		start[3] = claim[2];
+		start[3] = claim[1];
 		start[0] = MC_START;
 	}
 	/* a core that is there says so within a few passes; its first steps may want pages */

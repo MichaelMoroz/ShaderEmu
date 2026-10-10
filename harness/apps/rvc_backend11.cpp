@@ -27,7 +27,7 @@ public:
         for (auto& d : opt.compile.defines)
             if (d.first == "COMMIT_BANDS") bands_ = true;
         for (auto& d : opt.compile.defines)
-            if (d.first == "CORES") cores_ = (float)(std::max)(1, (std::min)(16, atoi(d.second.c_str())));
+            if (d.first == "CORES") cores_ = (float)(std::max)(1, (std::min)(64, atoi(d.second.c_str())));
         for (auto& d : opt.compile.defines)
             if (d.first == "CORE_PITCH") {}   // (no more: the workers are one strip)
         tickRows_ = (float)opt.tickRows;
@@ -121,12 +121,15 @@ public:
             // (main.shader, tick_geom). What it does not draw of the two zones stays what it
             // was: they are copied into the buffer drawn into first, and back afterwards.
             std::vector<UpdateZone> zones{UpdateZone{32, 4096 - tickRows_ / 2, 64, tickRows_, 0}};
-            if (cores_ > 1) zones.push_back(UpdateZone{64 + 256, 4096 - 4, 512, 8, 0});
+            // the workers' band: 64 tiles of 8 x 8, or with more than 16 cores the rows to their end, 248
+            float band = cores_ > 16 ? 1984.0f : 512.0f;
+            UINT groups = ((UINT)cores_ + 15) / 16;   // a primitive of the pass draws 16 cores' quads
+            if (cores_ > 1) zones.push_back(UpdateZone{64 + band / 2, 4096 - 4, band, 8, 0});
             // TICK_MRT: the tick draws a pixel for every eight texels, into eight targets of its
             // own, and the pass that follows puts them where the state has them
             if (mrt_) tickDraw(mat, zones[0]);
             for (auto& z : zones) crt_.copyIn(gpu_, z);
-            crt_.runZone(gpu_, mrt_ ? unpackPasses_[0] : passes_[0], mat, zones[0], 6, false);
+            crt_.runZone(gpu_, mrt_ ? unpackPasses_[0] : passes_[0], mat, zones[0], (std::max)(6u, 3 * groups), false);
             for (auto& z : zones) crt_.copyZone(gpu_, z);
         }
         if (timeIt) gpu_.ctx->End(tsQuery_[1].Get());
@@ -446,7 +449,7 @@ private:
 
     bool createTickTargets(std::string& err) {
         D3D11_TEXTURE2D_DESC td{};
-        td.Width = kTickWidth;
+        td.Width = tickWidth();
         td.Height = (UINT)tickRows_ * mrtLoad_;
         td.MipLevels = td.ArraySize = 1;
         td.Format = DXGI_FORMAT_R32G32B32A32_UINT;
@@ -481,7 +484,7 @@ private:
         ID3D11RenderTargetView* rtvs[8];
         for (int i = 0; i < 8; ++i) rtvs[i] = mrtRtv_[i].Get();
         ctx->OMSetRenderTargets(8, rtvs, nullptr);
-        D3D11_VIEWPORT vp{0, 0, (float)kTickWidth, tickRows_ * mrtLoad_, 0, 1};
+        D3D11_VIEWPORT vp{0, 0, (float)tickWidth(), tickRows_ * mrtLoad_, 0, 1};
         ctx->RSSetViewports(1, &vp);
         ctx->RSSetState(gpu_.rasterNoCull.Get());
         ctx->OMSetBlendState(gpu_.blendOpaque.Get(), nullptr, 0xffffffff);
@@ -489,10 +492,10 @@ private:
         ctx->IASetInputLayout(nullptr);
         ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         mat.bind(ctx, pass, gpu_);
-        ctx->Draw((std::max)(6u, 3 * mrtLoad_), 0);
+        ctx->Draw((std::max)(6u, 3 * mrtLoad_ * (((UINT)cores_ + 15) / 16)), 0);
         ctx->OMSetRenderTargets(0, nullptr, nullptr);
         static const char* names[8] = {"_TickOut0", "_TickOut1", "_TickOut2", "_TickOut3", "_TickOut4", "_TickOut5", "_TickOut6", "_TickOut7"};
-        for (int i = 0; i < 8; ++i) mat.setTexture(names[i], mrtSrv_[i].Get(), kTickWidth, (UINT)tickRows_);
+        for (int i = 0; i < 8; ++i) mat.setTexture(names[i], mrtSrv_[i].Get(), tickWidth(), (UINT)tickRows_);
     }
 
     bool ensureQueries() {
@@ -510,7 +513,7 @@ private:
     // TICK_MRT: the tick's eight targets, 72 x 16 (main.shader, TICK_MRT_W)
     bool mrt_ = false;
     UINT mrtLoad_ = 1;   // TICK_LOAD: the workers' quads drawn so many times (a measurement)
-    static const UINT kTickWidth = 264;
+    UINT tickWidth() const { return cores_ > 16 ? 1024 : 264; }   // TICK_MRT_W
     ComPtr<ID3D11Texture2D> mrtTex_[8];
     ComPtr<ID3D11RenderTargetView> mrtRtv_[8];
     ComPtr<ID3D11ShaderResourceView> mrtSrv_[8];

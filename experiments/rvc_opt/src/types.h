@@ -108,14 +108,29 @@
 // of the control words that core 0 writes while every worker is parked:
 //   .r  bit 0: the strip is being laid out anew (every pixel of it is zero meanwhile)
 //   .g  four bits a worker for workers 1 to 8: its cache's tables are 2^bits buckets (3 to 6); 0: no such worker
-//   .b  the same for workers 9 to 15
+//   .b  the same for workers 9 to 16, and .a for 17 to 24
+// and, on a machine of more than 16 cores (CORES > 16), the two texels after it: workers 25
+// to 56 in the next one's four words, 57 to 63 in the first word of the one after. There the
+// band is 248 tiles long (the state rows to their right end) in place of 64.
 // A worker keeps the CPU's 44 texels, its cache and the float registers' 8, in that order.
 #define MC_GEOMETRY 0x70003du
 #define MC_STRIP_X 64
+#if CORES > 16
+#define MC_STRIP_ROWS 248
+#define MC_GEO_READ mc_geo = RAM_TEX(RAM_ADDR(MC_GEOMETRY)); mc_geo1 = RAM_TEX(RAM_ADDR(MC_GEOMETRY + 1)); mc_geo2 = RAM_TEX(RAM_ADDR(MC_GEOMETRY + 2));
+#else
 #define MC_STRIP_ROWS 64
+#define MC_GEO_READ mc_geo = RAM_TEX(RAM_ADDR(MC_GEOMETRY));
+#endif
 uint mc_bits_of(uint core) {
     uint k = core - 1;
-    return core == 0 ? (uint)L1_TABLE_BITS : (((k < 8 ? mc_geo.g >> (4 * k) : mc_geo.b >> (4 * (k - 8))) & 15));
+    if (core == 0) return (uint)L1_TABLE_BITS;
+#if CORES > 16
+    uint word = k < 8 ? mc_geo.g : k < 16 ? mc_geo.b : k < 24 ? mc_geo.a : k < 32 ? mc_geo1.r : k < 40 ? mc_geo1.g : k < 48 ? mc_geo1.b : k < 56 ? mc_geo1.a : mc_geo2.r;
+    return (word >> (4 * (k & 7))) & 15;
+#else
+    return ((k < 8 ? mc_geo.g >> (4 * k) : mc_geo.b >> (4 * (k - 8))) & 15);
+#endif
 }
 uint mc_rows_of(uint bits) {
     return bits == 0 ? 0 : (L1_STATE_AT + 8 + ((2u << bits) * L1_STRIDE) + 63) / 64;

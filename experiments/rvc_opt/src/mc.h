@@ -45,10 +45,12 @@
 #define MC_PARKED_STOP 2
 #define MC_PARKED_EBREAK 1
 #define MC_START_TEXEL(core) RAM_ADDR(((MC_MBOX & 0x7fffffff) >> 4) + (core))
-#define MC_JOB_TEXEL(core) RAM_ADDR(((MC_MBOX & 0x7fffffff) >> 4) + 0x40 + 4 * (core))
-#define MC_RESUME_TEXEL(core) RAM_ADDR(((MC_MBOX & 0x7fffffff) >> 4) + 0x43 + 4 * (core))
-#define MC_FAULT_WORD(core) ((MC_MBOX & 0x7fffffff) + 0x400 + 64 * (core) + 32)
-#define MC_CALL_WORD(core) ((MC_MBOX & 0x7fffffff) + 0x800 + 32 * (core))
+// (cores 16 and up have theirs further on: programs/mc/mc.h)
+#define MC_BOX_OF(core) ((core) < 16 ? 0x400 + 64 * (core) : 0x1000 + 64 * (core))
+#define MC_JOB_TEXEL(core) RAM_ADDR(((MC_MBOX & 0x7fffffff) >> 4) + (MC_BOX_OF(core) >> 4))
+#define MC_RESUME_TEXEL(core) RAM_ADDR(((MC_MBOX & 0x7fffffff) >> 4) + (MC_BOX_OF(core) >> 4) + 3)
+#define MC_FAULT_WORD(core) ((MC_MBOX & 0x7fffffff) + MC_BOX_OF(core) + 32)
+#define MC_CALL_WORD(core) ((MC_MBOX & 0x7fffffff) + ((core) < 16 ? 0x800 + 32 * (core) : 0x2000 + 32 * (core)))
 
 #ifdef PASS_TICK
 // Whether this pixel's core is a worker with nothing to do in this pass.

@@ -60,8 +60,19 @@ struct shaderemu_gpu_workers {
  * set while no program has a worker: EBUSY otherwise.
  */
 #define SHADEREMU_GPU_SHAPE	_IOW('G', 6, __u32[2])
-#define WORKERS_SHAPE	0x3d0	/* control words: bit 0 while it is laid out anew; the two words */
+/*
+ * A machine of more than 16 cores (up to 64): the geometry is eight words, workers 1 to 8 in
+ * the first and so on, and its workers share 248 rows. A program that knows of them asks
+ * for its workers with { how many, its root (the answer), a bit a core in two words (the
+ * answer) }; the three-word call above gives out the first fifteen only, whose mailboxes
+ * are where they always were.
+ */
+#define SHADEREMU_GPU_SHAPE_ALL	_IOW('G', 7, __u32[8])
+#define SHADEREMU_GPU_WORKERS_ALL	_IOWR('G', 8, __u32[4])
+#define WORKERS_SHAPE	0x3d0	/* control words: bit 0 while it is laid out anew; the words after it */
 #define WORKERS_ROWS	64
+#define WORKERS_ROWS_MANY	248	/* a machine of more than 16 cores */
+#define WORKERS_WORDS	8
 /*
  * One program at a time draws with the GPU's memory for programs (its textures, vertices and
  * lists are at fixed places there): the program asks for it with this, and has it until it
@@ -72,7 +83,7 @@ struct shaderemu_gpu_workers {
 
 #define WORKERS_PHYS	0x86C00000UL	/* the worker cores' mailboxes */
 #define WORKERS_STOP	0x5453434d	/* in a core's start word: park it */
-#define WORKERS_MOST	16
+#define WORKERS_MOST	64
 
 static void __iomem *gpu_regs;
 static void __iomem *workers;
@@ -88,16 +99,17 @@ static u32 workers_rows(u32 bits)
 }
 
 /* Lays the workers out: called with workers_lock held and no worker anyone's. */
-static long workers_shape(u32 first, u32 second)
+static long workers_shape(const u32 *shape)
 {
 	u32 most = readl(gpu_regs + WORKERS_MOST_NOW), k, rows = 0, ended = 0;
+	u32 room = most > 16 ? WORKERS_ROWS_MANY : WORKERS_ROWS;
 
 	if (most < 2)
 		return -ENODEV;
 	if (most > WORKERS_MOST)
 		most = WORKERS_MOST;
 	for (k = 1; k < WORKERS_MOST; k++) {
-		u32 bits = (k <= 8 ? first >> (4 * (k - 1)) : second >> (4 * (k - 9))) & 15;
+		u32 bits = (shape[(k - 1) / 8] >> (4 * ((k - 1) % 8))) & 15;
 
 		if (!bits) {
 			ended = 1;
@@ -107,7 +119,7 @@ static long workers_shape(u32 first, u32 second)
 			return -EINVAL;
 		rows += workers_rows(bits);
 	}
-	if (rows > WORKERS_ROWS)
+	if (rows > room)
 		return -EINVAL;
 	/*
 	 * Every worker parked, then the strip is nothing but zeros for some passes (a worker
@@ -117,8 +129,9 @@ static long workers_shape(u32 first, u32 second)
 		writel(WORKERS_STOP, workers + 16 * k);
 	writel(1, gpu_regs + WORKERS_SHAPE);
 	msleep(60);
-	writel(first, gpu_regs + WORKERS_SHAPE + 4);
-	writel(second, gpu_regs + WORKERS_SHAPE + 8);
+	/* (a machine of 16 cores or fewer has the first two words, and the others are none of its) */
+	for (k = 0; k < (most > 16 ? WORKERS_WORDS : 2); k++)
+		writel(shape[k], gpu_regs + WORKERS_SHAPE + 4 + 4 * k);
 	msleep(60);
 	writel(0, gpu_regs + WORKERS_SHAPE);
 	msleep(60);
@@ -129,10 +142,11 @@ static long workers_shape(u32 first, u32 second)
  * and as many of the smallest kept for work that stores little as there is room for. */
 static void workers_default_shape(void)
 {
-	u32 most = readl(gpu_regs + WORKERS_MOST_NOW), shape[2] = {0, 0}, k, rows = 0;
+	u32 most = readl(gpu_regs + WORKERS_MOST_NOW), shape[WORKERS_WORDS] = {0}, k, rows = 0;
 
-	if (most > WORKERS_MOST)
-		most = WORKERS_MOST;
+	/* fifteen at most: what a program that knows nothing of more can be given */
+	if (most > 16)
+		most = 16;
 	for (k = 1; k < most; k++) {
 		u32 bits = k <= 3 ? 6 : 4;
 
@@ -142,23 +156,23 @@ static void workers_default_shape(void)
 		shape[k > 8] |= bits << (4 * (k <= 8 ? k - 1 : k - 9));
 	}
 	if (shape[0])
-		workers_shape(shape[0], shape[1]);
+		workers_shape(shape);
 }
 
 static long shaderemu_gpu_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
-	if (cmd == SHADEREMU_GPU_SHAPE) {
-		u32 shape[2], k;
+	if (cmd == SHADEREMU_GPU_SHAPE || cmd == SHADEREMU_GPU_SHAPE_ALL) {
+		u32 shape[WORKERS_WORDS] = {0}, k;
 		long answer = 0;
 
-		if (copy_from_user(shape, (void __user *)arg, sizeof(shape)))
+		if (copy_from_user(shape, (void __user *)arg, cmd == SHADEREMU_GPU_SHAPE ? 2 * sizeof(u32) : sizeof(shape)))
 			return -EFAULT;
 		mutex_lock(&workers_lock);
 		for (k = 1; k < WORKERS_MOST; k++)
 			if (worker_owner[k])
 				answer = -EBUSY;
 		if (!answer)
-			answer = workers_shape(shape[0], shape[1]);
+			answer = workers_shape(shape);
 		mutex_unlock(&workers_lock);
 		return answer;
 	}
@@ -179,6 +193,28 @@ static long shaderemu_gpu_ioctl(struct file *file, unsigned int cmd, unsigned lo
 			return -EFAULT;
 		return answer;
 	}
+	if (cmd == SHADEREMU_GPU_WORKERS_ALL) {
+		u32 w[4], cores, k, got = 0;
+
+		if (copy_from_user(w, (void __user *)arg, sizeof(w)))
+			return -EFAULT;
+		w[1] = csr_read(CSR_SATP) & 0x3fffff;
+		w[2] = w[3] = 0;
+		mutex_lock(&workers_lock);
+		if (readl(gpu_regs + WORKERS_MOST_NOW) > 1 && !readl(gpu_regs + WORKERS_SHAPE + 4))
+			workers_default_shape();
+		cores = readl(gpu_regs + WORKERS_CORES);
+		if (cores > WORKERS_MOST)
+			cores = WORKERS_MOST;
+		for (k = 1; k < cores && got < w[0]; k++)
+			if (!worker_owner[k]) {
+				worker_owner[k] = file;
+				w[2 + k / 32] |= 1u << (k % 32);
+				got++;
+			}
+		mutex_unlock(&workers_lock);
+		return copy_to_user((void __user *)arg, w, sizeof(w)) ? -EFAULT : 0;
+	}
 	if (cmd == SHADEREMU_GPU_WORKERS) {
 		struct shaderemu_gpu_workers w;
 		u32 cores, k, got = 0;
@@ -192,8 +228,8 @@ static long shaderemu_gpu_ioctl(struct file *file, unsigned int cmd, unsigned lo
 		if (readl(gpu_regs + WORKERS_MOST_NOW) > 1 && !readl(gpu_regs + WORKERS_SHAPE + 4))
 			workers_default_shape();
 		cores = readl(gpu_regs + WORKERS_CORES);
-		if (cores > WORKERS_MOST)
-			cores = WORKERS_MOST;
+		if (cores > 16)
+			cores = 16;
 		for (k = 1; k < cores && got < w.want; k++)
 			if (!worker_owner[k]) {
 				worker_owner[k] = file;

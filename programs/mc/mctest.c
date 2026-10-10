@@ -144,9 +144,9 @@ int main(int argc, char** argv) {
     uint32_t limit = argc > 2 ? (uint32_t)atoi(argv[2]) : 60000;
     // mctest N LIMIT shape 6,6,5,4,4: the machine's geometry first (docs/multicore.md)
     if (argc > 4 && !strcmp(argv[3], "shape")) {
-        unsigned char bits[16];
+        unsigned char bits[64];
         int n = 0, answer;
-        for (const char* at = argv[4]; *at && n < 15; at++)
+        for (const char* at = argv[4]; *at && n < 63; at++)
             if (*at >= '0' && *at <= '9') bits[n++] = (unsigned char)(*at - '0');
         answer = mcw_shape(bits, n);
         printf("mctest: the geometry: %d workers (%s): %s%c", n, argv[4], answer == 0 ? "set" : "refused", 10);

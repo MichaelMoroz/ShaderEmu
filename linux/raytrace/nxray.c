@@ -190,7 +190,7 @@ static GR_WINDOW_ID window;
 static int workers, wanted = 99, stopped, frames_left = -1, still;
 static int shape_now;
 static const char *const shape_names[] = {"15 small", "3 large and 12 small", "7 large", "15 of the smallest", "the machine's own"};
-static const unsigned char shapes[4][15] = {
+static const unsigned char shapes[4][64] = {
 	{4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4},
 	{6, 6, 6, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4},
 	{6, 6, 6, 6, 6, 6, 6, 0, 0, 0, 0, 0, 0, 0, 0},
@@ -215,12 +215,12 @@ take_workers(const unsigned char *shape)
 
 	mcw_close();
 	if (shape) {
-		for (n = 0; n < 15 && shape[n]; n++)
+		for (n = 0; n < 63 && shape[n]; n++)
 			;
 		if (mcw_shape(shape, n) != 0)
 			shape_now = 4;	/* a machine that is as it is, or workers someone else has */
 	}
-	workers = wanted > 0 ? mcw_open(wanted > 15 ? 15 : wanted) : 0;
+	workers = wanted > 0 ? mcw_open(wanted > 63 ? 63 : wanted) : 0;
 	if (workers)
 		mcw_touch(__DATA_BEGIN__, (unsigned)(_end - __DATA_BEGIN__));
 }
@@ -352,9 +352,9 @@ main(void)
 
 	atexit(mcw_close);
 	if ((text = getenv("RAY_SHAPE")) != NULL) {
-		unsigned char bits[15] = {0};
+		unsigned char bits[64] = {0};	/* (a machine of 64 cores has 63 workers) */
 
-		for (i = 0; *text && i < 15; text++)
+		for (i = 0; *text && i < 63; text++)
 			if (*text >= '0' && *text <= '9')
 				bits[i++] = (unsigned char)(*text - '0');
 		shape_now = 4;
@@ -364,12 +364,12 @@ main(void)
 	}
 	tiles = ((width + TILE - 1) / TILE) * ((height + TILE - 1) / TILE);
 	while (frames_left != 0) {
-		int busy[16], next = 0, done = 0, k, again = 0;
+		int busy[64], next = 0, done = 0, k, again = 0;
 		unsigned began = now_ms(), shown = began, rays = 0, sum = 0, took;
 		char title[120];
 
 		set_scene(t);
-		for (k = 0; k < 16; k++)
+		for (k = 0; k < 64; k++)
 			busy[k] = -1;
 		while (done < tiles && !again) {
 			int idle = 1;

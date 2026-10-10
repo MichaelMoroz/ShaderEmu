@@ -567,9 +567,18 @@ uint mc_rows_of_bits(uint bits) {
 uint2 mc_place(uint core) {
     if (core == 0) return uint2(0, 0);
     uint4 geo = ram(0x70003du);
+#if CORES > 16
+    uint4 geo1 = ram(0x70003eu), geo2 = ram(0x70003fu);
+#endif
     uint row = 0, at = 0xffff;
     for (uint k = 1; k < CORES; k++) {
-        uint j = k - 1, bits = ((j < 8 ? geo.g >> (4 * j) : geo.b >> (4 * (j - 8))) & 15);
+        uint j = k - 1;
+#if CORES > 16
+        uint word = j < 8 ? geo.g : j < 16 ? geo.b : j < 24 ? geo.a : j < 32 ? geo1.r : j < 40 ? geo1.g : j < 48 ? geo1.b : j < 56 ? geo1.a : geo2.r;
+        uint bits = (word >> (4 * (j & 7))) & 15;
+#else
+        uint bits = ((j < 8 ? geo.g >> (4 * j) : geo.b >> (4 * (j - 8))) & 15);
+#endif
         if (k == core && bits != 0 && (geo.r & 1) == 0) at = row;
         row += mc_rows_of_bits(bits);
     }
@@ -648,8 +657,10 @@ uint4 gpu_control(uint2 pos) {
             uint2 at = mc_place(core);
             if (at.y == 0xffff) continue;
             uint word = mc_state_texel(at, 41).a;
-            running |= (word & 1) << core;
-            asleep |= ((word >> 1) & 1) << core;
+            if (core < 32) {   // (a bit each for the first 32)
+                running |= (word & 1) << core;
+                asleep |= ((word >> 1) & 1) << core;
+            }
             count = core + 1;
         }
         return uint4(count, running, asleep, CORES);
