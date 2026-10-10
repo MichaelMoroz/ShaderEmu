@@ -1,3 +1,0 @@
-#!/bin/sh
-[ -f "/usr/share/nes-$1.nes" ] && exec nes.bin "/usr/share/nes-$1.nes"
-exec nes.bin "$@"

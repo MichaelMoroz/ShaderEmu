@@ -1331,6 +1331,42 @@ index b6b00d7..d28dac0 100644
          if (CustomSeed != 0) {
              Seed = CustomSeed;
          } else {
+diff --git a/redalert/layer.cpp b/redalert/layer.cpp
+index db1ccf6..707c6b7 100644
+--- a/redalert/layer.cpp
++++ b/redalert/layer.cpp
+@@ -86,6 +86,31 @@ bool LayerClass::Submit(ObjectClass const* object, bool sort)
+  *=============================================================================================*/
+ void LayerClass::Sort(void)
+ {
++#ifdef SHADEREMU
++    /*
++    ** The same pass, with each object asked for its place once: it was asked twice, as the
++    ** right of one pair and the left of the next, and asking is a virtual call. This was half
++    ** of what a frame cost outside its logic and its drawing.
++    */
++    int count = Count();
++    if (count < 2) {
++        return;
++    }
++    ObjectClass* left = (*this)[0];
++    COORDINATE left_y = left->Sort_Y();
++    for (int index = 0; index < count - 1; index++) {
++        ObjectClass* right = (*this)[index + 1];
++        COORDINATE right_y = right->Sort_Y();
++        if (right_y < left_y) {
++            (*this)[index + 1] = left; // which is the next pair's left, as it was
++            (*this)[index] = right;
++        } else {
++            left = right;
++            left_y = right_y;
++        }
++    }
++    return;
++#endif
+     for (int index = 0; index < Count() - 1; index++) {
+         if (*(*this)[index + 1] < *(*this)[index]) {
+             ObjectClass* temp;
 diff --git a/redalert/map.cpp b/redalert/map.cpp
 index 471bef5..5705be4 100644
 --- a/redalert/map.cpp

@@ -109,6 +109,10 @@ optimisation (`-flto`) made a program a tenth smaller that ends with "out of mem
 start: the source depends on what a whole-program optimiser may take away, and it was not
 looked into further.
 
+What a frame costs outside its logic and its drawing ("rest", 25 thousand there) was half
+the ground layer's sort, which asked every object for its place twice, by a virtual call:
+once now, as in Tiberian Dawn (`LayerClass::Sort`), and the rest is 18.
+
 ## Movies, and the worker cores
 
 The demo's opening movie (ENGLISH.VQA, 640 x 400, 156 frames of it before `TDAWN_AUTO`'s Return
