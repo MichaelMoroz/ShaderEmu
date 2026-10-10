@@ -1,5 +1,5 @@
 diff --git a/WinQuake/cl_main.c b/WinQuake/cl_main.c
-index 5812143..6864a6a 100644
+index 5812143..f0cd3b9 100644
 --- a/WinQuake/cl_main.c
 +++ b/WinQuake/cl_main.c
 @@ -394,7 +394,7 @@ float	CL_LerpPoint (void)
@@ -11,16 +11,27 @@ index 5812143..6864a6a 100644
  	{
  		cl.time = cl.mtime[0];
  		return 1;
-@@ -417,6 +417,8 @@ SetPal(1);
+@@ -409,6 +409,7 @@ float	CL_LerpPoint (void)
+ //Con_Printf ("frac: %f\n",frac);
+ 	if (frac < 0)
+ 	{
++		SE_ServerLerp (-1);	// behind the older of the two: it is taken up to it
+ 		if (frac < -0.01)
+ 		{
+ SetPal(1);
+@@ -417,8 +418,11 @@ SetPal(1);
  		}
  		frac = 0;
  	}
 +	else if (frac < 1)
-+		SE_ServerBetween ();	// a frame drawn between two of the server's: counted
++		SE_ServerLerp (0);	// a frame drawn between two of the server's
  	else if (frac > 1)
  	{
++		SE_ServerLerp (1);	// at the newer one already: nothing moves until the next
  		if (frac > 1.01)
-@@ -636,7 +638,8 @@ int CL_ReadFromServer (void)
+ 		{
+ SetPal(2);
+@@ -636,7 +640,8 @@ int CL_ReadFromServer (void)
  	int		ret;
  
  	cl.oldtime = cl.time;
@@ -878,7 +889,7 @@ index 4f2aa36..9111320 100644
  		if (!a->function)
  			PR_RunError ("NULL function");
 diff --git a/WinQuake/quakedef.h b/WinQuake/quakedef.h
-index e451827..afff962 100644
+index e451827..25a2d91 100644
 --- a/WinQuake/quakedef.h
 +++ b/WinQuake/quakedef.h
 @@ -285,6 +285,30 @@ typedef struct
@@ -895,7 +906,7 @@ index e451827..afff962 100644
 +void SE_ServerClock (float seconds);
 +float SE_ServerFrameTime (void);
 +float SE_ServerRate (void);
-+void SE_ServerBetween (void);
++void SE_ServerLerp (int where);
 +void SE_ServerCommand (const char *name);
 +int SE_ServerKeepSend (int reliable, void *sock, const void *data, int bytes);
 +int SE_ServerCanSend (struct qsocket_s *sock);

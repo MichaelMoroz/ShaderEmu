@@ -151,7 +151,12 @@ the server's physics runs on one, as a function of the game in the game's own me
 - **The server's frame has its own length** (`sv_frametime`: the time since its last one began,
   0.1 s of the game at most, as a frame of the game always was). Where that limit holds, the
   game's time goes slower than the clock, as it did before, and the client's time goes at
-  the same rate between the server's frames.
+  that rate between the server's frames: at the slower of the last two frames' rates and a
+  tenth slower still. At the rate of the last frame alone the client was at the newer
+  frame's time early whenever the next took longer, and in one frame of eight nothing it
+  drew moved, the player's own view included, which in play looked like being stuck for a
+  moment. Now no frame stands still (the quakestat: line counts them); the client is a
+  little behind when the next frame comes instead, and is taken up to it.
 - **The server keeps to its own data.** Console lines, commands and cvar changes that QuakeC
   makes on the worker are kept and done by the first core afterwards; an error there ends
   the job and is raised on the first core; the server's random numbers are its own (the C

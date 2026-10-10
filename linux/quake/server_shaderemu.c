@@ -46,7 +46,7 @@ static float rate = 1;
 static int draining;
 static float since;		/* time the client's frames have taken since the server's last began */
 float sv_frametime;		/* the server's host_frametime */
-unsigned se_server_cycles, se_server_frames, se_server_passes, se_server_between;	/* for the quakestat: lines */
+unsigned se_server_cycles, se_server_frames, se_server_passes, se_server_between, se_server_held, se_server_behind;	/* for the quakestat: lines */
 
 static void setup (void)
 {
@@ -271,7 +271,20 @@ float SE_ServerFrameTime (void)
 
 	since = 0;
 	length = length > 0.1f ? 0.1f : length < 0.001f ? 0.001f : length;
-	rate = mode == MODE_APART && real > length ? length / real : 1;
+	if (mode == MODE_APART) {
+		/*
+		 * The client's time goes at the slower of the server's last two frames' rates, and a
+		 * tenth slower still: a frame of the server's that takes longer than the one before
+		 * would have the client at its end early, and what it draws standing still until
+		 * the next (the player's own view too: it looked like being stuck).
+		 */
+		static float before = 1;
+		float now = real > length ? length / real : 1;
+
+		rate = 0.9f * (now < before ? now : before);
+		before = now;
+	} else
+		rate = 1;
 	return length;
 }
 
@@ -280,8 +293,17 @@ float SE_ServerFrameTime (void)
  * the server's frames, or it would be at the next one before that has come. */
 float SE_ServerRate (void) { return rate; }
 
-/* The client drew a frame between two of the server's. */
-void SE_ServerBetween (void) { se_server_between++; }
+/* Where the client's time was for a frame it drew: between the server's last two frames (0),
+ * at the newer already (1: what it draws stands still), or behind the older (-1). */
+void SE_ServerLerp (int where)
+{
+	if (where == 0)
+		se_server_between++;
+	else if (where > 0)
+		se_server_held++;
+	else
+		se_server_behind++;
+}
 
 /* Waits for the worker, if it has a frame, and does what it kept for this core. */
 static void settle (int raise)
