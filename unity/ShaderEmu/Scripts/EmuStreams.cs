@@ -19,7 +19,7 @@ public class EmuStreams : UdonSharpBehaviour
     public Material decodeMaterial;    // ShareDecode.shader, this behaviour's own
     public Texture2D blackTexture;
     public bool dropTest;              // every tenth packet is treated as lost
-    public bool log = true;            // a line a minute in the output log
+    public bool log;                   // a line a minute in the output log
 
     public const int Surfaces = 24;    // 0: the wall; 1 to 8: the classroom; 9 to 16: the holodecks
     public const int HeaderBytes = 17;
@@ -33,7 +33,7 @@ public class EmuStreams : UdonSharpBehaviour
     private byte[][] bytes;
     private Color32[][] cells;
     private int[] lastSeq, gotW, gotH, gotScale, stamp, shownW, shownH, top, cursorX, cursorY, version, mipsAll, mipsCore, askCount;
-    private bool[] haveSeq, on;
+    private bool[] haveSeq, on, fresh;
     private float[] since, askedAt, heardAt;
     private int cols, rows;
     private float nextAt, logAt;
@@ -63,6 +63,7 @@ public class EmuStreams : UdonSharpBehaviour
         mipsCore = new int[count];
         askCount = new int[count];
         haveSeq = new bool[count];
+        fresh = new bool[count];
         on = new bool[count];
         since = new float[count];
         askedAt = new float[count];
@@ -173,6 +174,7 @@ public class EmuStreams : UdonSharpBehaviour
                 askedAt[s] = Time.time;
                 heardAt[s] = Time.time;
                 askCount[s] = (askCount[s] + 1) & 255;   // a new entry: its sender sends everything
+                fresh[s] = true;
                 changed = true;
                 break;
             }
@@ -186,6 +188,15 @@ public class EmuStreams : UdonSharpBehaviour
     {
         EmuShare mine = hub.Mine();
         if (mine == null) return;
+        // (an object made from a template older than these fields has them empty)
+        if (mine.ask == null || mine.ask.Length != count) mine.ask = new int[count];
+        if (mine.lost == null || mine.lost.Length != count) mine.lost = new int[count];
+        // (a slot's new sender is not asked for what was lost of the one before)
+        for (int s = 0; s < count; s++)
+        {
+            if (fresh[s]) mine.lost[s] = 0;
+            fresh[s] = false;
+        }
         if (slot >= 0)
         {
             askCount[slot] = (askCount[slot] + 1) & 255;

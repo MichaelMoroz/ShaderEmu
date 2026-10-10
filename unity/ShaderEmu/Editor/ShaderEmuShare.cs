@@ -65,6 +65,14 @@ public static partial class ShaderEmuBuilder
     static void Sharing(Transform world, Transform computer, RectTransform panel, EmuMachine machine, Vector3 at)
     {
         if (computer.Find("Players panel") != null) Object.DestroyImmediate(computer.Find("Players panel").gameObject);
+        // (the controllers' models the player's object carries are kept for the new one: Annex() made them)
+        Transform before = world.Find("Share player");
+        Transform[] pads = new Transform[before != null ? before.childCount : 0];
+        for (int i = pads.Length - 1; i >= 0; i--)
+        {
+            pads[i] = before.GetChild(i);
+            pads[i].SetParent(world, false);
+        }
         foreach (string old in new[] { "Share", "Share player", "Streams" })
             if (world.Find(old) != null) Object.DestroyImmediate(world.Find(old).gameObject);
         for (int i = panel.childCount - 1; i >= 0; i--)
@@ -131,7 +139,38 @@ public static partial class ShaderEmuBuilder
         template.AddComponent<VRC.SDK3.Components.VRCPlayerObject>();
         EmuShare share = Udon<EmuShare>(template);
         share.hub = hub;
+        foreach (Transform pad in pads) pad.SetParent(template.transform, false);
+        if (pads.Length == 2) share.pads = pads;
         Apply(share);
+        ShareUsers(hub, streams);
+    }
+
+    // Whatever else in the scene uses the hub and the receiver is told of the new ones.
+    static void ShareUsers(EmuShareHub hub, EmuStreams streams)
+    {
+        EmuHolodeck deck = Object.FindObjectOfType<EmuHolodeck>();
+        EmuGamepad gamepad = Object.FindObjectOfType<EmuGamepad>();
+        EmuStations stations = Object.FindObjectOfType<EmuStations>();
+        if (deck != null)
+        {
+            UdonSharpEditor.UdonSharpEditorUtility.CopyUdonToProxy(deck);
+            deck.hub = hub;
+            deck.streams = streams;
+            Apply(deck);
+        }
+        if (gamepad != null)
+        {
+            UdonSharpEditor.UdonSharpEditorUtility.CopyUdonToProxy(gamepad);
+            gamepad.hub = hub;
+            Apply(gamepad);
+        }
+        if (stations != null)
+        {
+            UdonSharpEditor.UdonSharpEditorUtility.CopyUdonToProxy(stations);
+            stations.hub = hub;
+            stations.streams = streams;
+            Apply(stations);
+        }
     }
 
     // Into the scene as it is, without building the world again (which would need a bake).
@@ -176,6 +215,7 @@ public static partial class ShaderEmuBuilder
         stations.blackTexture = machine.blackTexture;
         stations.ownConsole = PictureTexture("StationOwnConsole", 640, 480);
         Apply(stations);
+        ShareUsers(hub, streams);
         foreach (string old in new[] { "ShareStore.asset", "RemotePicture.renderTexture", "StationDecode.mat", "StationConsole.mat" })
             AssetDatabase.DeleteAsset(Generated + "/" + old);
         for (int s = 0; s < 8; s++)

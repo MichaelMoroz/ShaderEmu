@@ -3,8 +3,8 @@ using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 
-// The game controllers (docs/gamepad.md) are in the holodecks, one pair a room, on the stand by
-// its seat (ShaderEmuHolodeck.cs makes them). Here: what the board on the wall says of them,
+// The game controllers (docs/gamepad.md) are taken with the keys of a holodeck's console
+// (ShaderEmuHolodeck.cs). Here: what the board on the wall says of them,
 // and the clearing away of the two that lay on the den's desk.
 public static partial class ShaderEmuBuilder
 {
@@ -23,8 +23,9 @@ public static partial class ShaderEmuBuilder
         "keyboard to paste text into.\n" +
         "MEMORY: all of the machine's memory at once; what is being written glows.\n\n" +
         "HOLODECKS, through the doorway in the left wall: eight rooms, a seat each. Sit down and a 3D game's " +
-        "world is round you, with its own screen before you; others see your display there. On the stand by " +
-        "the seat: two GAME CONTROLLERS. Hold BOTH GRIPS for a second to put one back (desktop: G).\n" +
+        "world is round you; the console at your right hand has the room's keys and a screen, where others " +
+        "see your display. Its Shooter and Strategy keys put a GAME CONTROLLER in your hand; Put back, or " +
+        "BOTH GRIPS held for a second, takes it away.\n" +
         "White, SHOOTER (Quake, Doom): left stick walks and steps aside, right stick turns and looks, right " +
         "trigger fires, left trigger jumps or opens, right grip next weapon, left grip Esc, jump Enter.\n" +
         "Blue, STRATEGY (Red Alert, Command & Conquer): right stick moves the pointer, the triggers are the " +

@@ -500,7 +500,12 @@ public class EmuMachine : UdonSharpBehaviour
     public void Wheel(int notches)
     {
         if (gpuKeyboard == null) return;
-        for (int i = 0; i < Mathf.Min(Mathf.Abs(notches), 8); i++) gpuKeyboard.PushEvent((notches > 0 ? 0x3fe : 0x3ff) | 65536);
+        for (int i = 0; i < Mathf.Min(Mathf.Abs(notches), 8); i++)
+        {
+            // (over this visitor's own tube or holodeck screen it is their machine's, as the pointer is)
+            if (inputAway && pointerOwn) RemoteKey((notches > 0 ? 0x3fe : 0x3ff) | 65536);
+            else gpuKeyboard.PushEvent((notches > 0 ? 0x3fe : 0x3ff) | 65536);
+        }
     }
 
     // ---- pages for the guest (docs/fetch.md) ----
@@ -725,8 +730,9 @@ public class EmuMachine : UdonSharpBehaviour
         fetchBytes = result.ResultBytes;
         fetchLength = fetchKind == KindFile ? fetchBytes.Length : Mathf.Min(fetchBytes.Length, FetchMost);
         fetchStatus = 200;
-        fetchPacked = 0;
-        fetchOffset = 0;
+        // (the part asked for, when a file's later part had to be loaded again)
+        fetchOffset = fetchKind == KindFile ? Mathf.Min(fetchOffset, fetchLength) & ~3 : 0;
+        fetchPacked = fetchOffset;
         fetchState = FetchPacking;
         if (fetchLabel != null) fetchLabel.text = "Loaded " + fetchLength.ToString("N0") + " bytes";
     }

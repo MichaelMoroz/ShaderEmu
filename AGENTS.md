@@ -601,13 +601,13 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   with shadows, and a build made then is very slow in VR.
 - The machine starts off; in play mode press the panel's Power button
   (`Button.onClick.Invoke()` from editor code).
-- The volume display (`docs/volume.md`): a third screen, on the left wall by the console, that draws a 3D
-  program's last frame behind itself from the visitor's eyes. It reads the frame's list from
-  0x87000300, which both OpenGL libraries publish; a program that builds frames in place must
-  alternate between two places. To test it in play mode, type `glxgears &` or `doom &` at the
-  console (Doom's own demo starts after its title) and render a camera aimed at "Volume
-  display", with "Volume content" on and off. From the side glxgears shows nothing until the
-  slider (`_Plane`) is near 0.84: with the screen at its near plane the gears are 20 m behind.
+- The volume display (`docs/volume.md`) is the holodecks' now (`docs/holodeck.md`): a 3D
+  program's last frame drawn round a seat. It reads the frame's list from 0x87000300, which
+  both OpenGL libraries publish; a program that builds frames in place must alternate
+  between two places. To test it in play mode, type `glxgears &` or `doom &` at the console
+  (Doom's own demo starts after its title), sit down (`stations[k].UseStation` on "Holodeck")
+  and render a camera at `eyes[k]` with `scene` on and off. glxgears is far off until the
+  scene material's `_Plane` is near 0.84.
 - Outside the window is real geometry (`City()` in `ShaderEmuDecor.cs`: two meshes, an unlit
   shader, haze in vertex alpha) and a panoramic skybox made by `NightSky()`. The wall is four
   boxes round the opening, with a collider in it.
@@ -934,10 +934,11 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   import the boot images first: tabs with an image that has no `emumux` type `0x1e` at a shell.
 - The volume display draws the frame's commands in four passes, as the GPU blends them
   (`GpuVolumePass.cginc`, `docs/volume.md`). To check it, run Quake in play mode, render a
-  camera 1.4 m before "Volume display" with "Volume content" on and off, and compare the
+  camera at a holodeck's `eyes[k]` with `EmuHolodeck`'s `scene` on and off, and compare the
   changed pixels' mean colour with the game's own picture: light maps drawn solid are grey.
-- The game controllers (`docs/gamepad.md`, two `EmuGamepad`s, no menu) are tested in play mode with
-  `RunInputEvent` and the display keyboard's `queue`. Its station and its fit in a hand are
+- The game controllers (`docs/gamepad.md`, one `EmuGamepad` under "Holodeck", no menu) are tested in play mode with
+  `RunInputEvent` and the display keyboard's `queue` (the machine's `keyTail` while the wall
+  shows another player's machine). The seat and the fit in a hand are
   untried in a headset. The power button is a small sign on the tower ("Power sign").
 - A new UdonSharp behaviour's program asset must exist and be compiled before an editor script
   can fill the behaviour in ("outdated script version"): run such a menu command twice.

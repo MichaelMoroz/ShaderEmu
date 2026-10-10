@@ -74,7 +74,8 @@ machines that were off.
 
 **The speed window** on each tower (`SevenSeg.shader`) has two rows of three digits: MIPS ALL,
 what all the machine's cores ran in the last second, and MIPS CPU, core 0 alone, in millions
-of instructions a second with one decimal. It is its owner's machine's speed, to everybody:
+of instructions a second with one decimal (from 100 on, whole millions and no point: the
+workers take a machine past 99.9). It is its owner's machine's speed, to everybody:
 the two numbers travel in the display stream's header (`docs/share.md`), and a place nobody
 has, or whose machine is off, is dark. The den's own tower shows this visitor's. The DX2-66
 badge stays.

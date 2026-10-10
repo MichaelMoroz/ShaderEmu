@@ -685,14 +685,14 @@ def station(b, which="all", lie=None):
         b.box((socket, floor + 0.052, edge + 0.07), (0.036, 0.03, 0.036), "Rubber", bevel=0.006, segs=2)   # its plug, in the strip
         b.box((x, y, z + 0.014), (0.03, 0.022, 0.028), "Rubber", bevel=0.004, segs=2)   # its moulded plug (IEC C13)
     # the keyboard's lead round the monitor's foot to the DIN socket, the mouse's round the tower to COM 1
-    kx, ky = TOWER_X + at["keyboard"][0], at["keyboard"][1]
+    din_x, din_y = TOWER_X + at["keyboard"][0], at["keyboard"][1]
     key_back = KEYBOARD_Z + 0.5 * KEY_SCALE * 437 * 0.01905 / 60 + 0.012   # the tray's far edge
     b.tube([(SET_X + kx + 0.12, 0.02, key_back + kz), (SET_X + kx + 0.2, 0.006, key_back + kz + 0.04), (0.25, 0.004, -0.05), (0.262, 0.004, behind - 0.05),
-            (kx, 0.012, behind + 0.07), (kx, ky - 0.06, behind + 0.07), (kx, ky - 0.006, behind + 0.062), (kx, ky, behind + 0.046), (kx, ky, behind + 0.02)],
+            (din_x, 0.012, behind + 0.07), (din_x, din_y - 0.06, behind + 0.07), (din_x, din_y - 0.006, behind + 0.062), (din_x, din_y, behind + 0.046), (din_x, din_y, behind + 0.02)],
            0.0028, "PlasticCase", segs=6, smooth=5)
-    b.cyl((kx, ky, behind + 0.004), 0.0062, 0.008, "MetalSteel", segs=14, rot=(90, 0, 0))                    # the DIN plug: its shell in the socket,
-    b.cyl((kx, ky, behind + 0.02), 0.0078, 0.026, "PlasticCase", segs=14, bevel=0.002, rot=(90, 0, 0))     # its grip,
-    b.cyl((kx, ky, behind + 0.038), 0.0045, 0.012, "PlasticCase", segs=10, rot=(90, 0, 0))                 # and its sleeve
+    b.cyl((din_x, din_y, behind + 0.004), 0.0062, 0.008, "MetalSteel", segs=14, rot=(90, 0, 0))                    # the DIN plug: its shell in the socket,
+    b.cyl((din_x, din_y, behind + 0.02), 0.0078, 0.026, "PlasticCase", segs=14, bevel=0.002, rot=(90, 0, 0))     # its grip,
+    b.cyl((din_x, din_y, behind + 0.038), 0.0045, 0.012, "PlasticCase", segs=10, rot=(90, 0, 0))                 # and its sleeve
     cx, cy = TOWER_X + at["com1"][0], at["com1"][1]
     b.tube([(mouse_at[0], 0.014, mouse_at[2] + 0.052), (mouse_at[0] + 0.01, 0.006, mouse_at[2] + 0.09), (TOWER_X + 0.1, 0.004, -0.15), (TOWER_X + 0.108, 0.004, behind - 0.05),
             (cx + 0.05, 0.012, behind + PLUG_LONG + 0.03), (cx, cy - 0.06, behind + PLUG_LONG + 0.035), (cx, cy - 0.006, behind + PLUG_LONG + 0.028),

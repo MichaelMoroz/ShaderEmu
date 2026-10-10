@@ -116,7 +116,9 @@ public class EmuGamepad : UdonSharpBehaviour
     {
         if (down[which] == on) return;
         down[which] = on;
-        keys.PushEvent(on ? code[which] | Pressed : code[which]);
+        // (this visitor's own machine's, whatever the den's wall shows: as the pointer is)
+        if (machine.inputAway) machine.RemoteKey(on ? code[which] | Pressed : code[which]);
+        else keys.PushEvent(on ? code[which] | Pressed : code[which]);
     }
 
     private void ReleaseAll()

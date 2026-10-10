@@ -3,6 +3,7 @@ Shader "ShaderEmu/SevenSeg"
     // The speed's window on a computer's tower (docs/stations.md): two rows of three digits of
     // seven bars each, with a point before the last. The upper row is every core's millions of
     // instructions a second, the lower core 0's. A row's number is in tenths; below zero it is dark.
+    // From 100.0 on a row shows whole millions and no point (to 999).
     Properties
     {
         _All ("Upper row, in tenths (below 0: dark)", Float) = -1
@@ -57,7 +58,9 @@ Shader "ShaderEmu/SevenSeg"
                 float soft = max(fwidth(i.uv.x) * 3.0, 0.004);
                 bool upper = i.uv.y > 0.5;
                 float value = upper ? _All : _Core;
-                int tenths = (int)clamp(value + 0.5, 0, 999);
+                int tenths = (int)clamp(value + 0.5, 0, 9999);
+                bool whole = tenths > 999;
+                if (whole) tenths = min((tenths + 5) / 10, 999);
                 // a row: three cells across, a margin round them
                 float2 p = float2(i.uv.x, frac(i.uv.y * 2.0));
                 p = (p - float2(0.06, 0.14)) / float2(0.88, 0.72);
@@ -80,7 +83,7 @@ Shader "ShaderEmu/SevenSeg"
                 }
                 // the point, before the last digit
                 float dot_ = 1.0 - smoothstep(0.05, 0.05 + soft * 3.0, length((q - float2(0.9, 0.05)) * float2(1.0, 1.6)));
-                if (cell == 1) { if (value >= 0.0) on = max(on, dot_); else off = max(off, dot_); }
+                if (cell == 1) { if (value >= 0.0 && !whole) on = max(on, dot_); else off = max(off, dot_); }
                 float3 c3 = _Back.rgb;
                 if (there) c3 = lerp(lerp(c3, _Dark.rgb, off), _Lit.rgb * _Glow, on);
                 return float4(c3, 1.0);
