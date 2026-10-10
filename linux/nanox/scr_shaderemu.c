@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/file.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -917,6 +918,18 @@ gpu_open(PSD psd)
 		font_bits[f].hi = font_bits[f].lo + font->size * font->height * ((font->maxwidth + 15) >> 4) * 2;
 	}
 
+	{
+		/* one window system at a time: a second one would take the display, the pointer and
+		 * the keyboard from under the first. The lock is this process's while it lives. */
+		static int lock = -1;
+
+		if (lock < 0)
+			lock = open("/tmp/nano-X.lock", O_RDWR | O_CREAT, 0600);
+		if (lock < 0 || flock(lock, LOCK_EX | LOCK_NB) < 0) {
+			EPRINTF("nano-X: a window system is running already (one at a time)\n");
+			return NULL;
+		}
+	}
 	gpu_fd = open("/dev/gpu", O_RDWR);
 	if (gpu_fd < 0) {
 		EPRINTF("Error opening /dev/gpu: %m\n");

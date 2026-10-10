@@ -567,8 +567,14 @@ void DisplayClass::ShaderEmu_GL_Draw(bool forced)
     if (again || ShaderEmu_GL_Touched) {
         LogicPage->Fill_Rect(TacPixelX, TacPixelY, TacPixelX + wide - 1, TacPixelY + high - 1, KEY);
     } else if (box[0] <= box[2]) {
-        LogicPage->Fill_Rect(MAX(box[0], TacPixelX), MAX(box[1], TacPixelY), MIN(box[2], TacPixelX + wide - 1),
-                             MIN(box[3], TacPixelY + high - 1), KEY);
+        // (only what of it is over the map, and nothing if none of it is: the game's fill takes a
+        // right edge left of the left one as a width below nothing, and its memset then went from
+        // the page through all of the GPU's memory. Something drawn over the sidebar did that.)
+        int fx0 = MAX(box[0], TacPixelX), fy0 = MAX(box[1], TacPixelY);
+        int fx1 = MIN(box[2], TacPixelX + wide - 1), fy1 = MIN(box[3], TacPixelY + high - 1);
+        if (fx0 <= fx1 && fy0 <= fy1) {
+            LogicPage->Fill_Rect(fx0, fy0, fx1, fy1, KEY);
+        }
     }
     ShaderEmu_GL_Touched = false;
     stale = false;

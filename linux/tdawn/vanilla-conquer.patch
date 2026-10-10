@@ -11,7 +11,7 @@ index 8d094fa..d6d9a66 100644
  option(BUILD_TESTS "Build unit tests." OFF)
  option(BUILD_TOOLS "Build modding utilities." OFF)
 diff --git a/common/CMakeLists.txt b/common/CMakeLists.txt
-index eada872..a3e9b31 100644
+index eada872..d01df08 100644
 --- a/common/CMakeLists.txt
 +++ b/common/CMakeLists.txt
 @@ -140,7 +140,12 @@ else()
@@ -38,6 +38,22 @@ index eada872..a3e9b31 100644
      if(SDL2)
          target_compile_definitions(commonv PUBLIC SDL_BUILD SDL2_BUILD NEW_VIDEO_BUILD)
      endif()
+diff --git a/common/drawbuff.cpp b/common/drawbuff.cpp
+index 3dc5acd..f5a66ee 100644
+--- a/common/drawbuff.cpp
++++ b/common/drawbuff.cpp
+@@ -62,6 +62,11 @@ void Buffer_Fill_Rect(void* thisptr, int sx, int sy, int dx, int dy, unsigned ch
+     int height = dy - sy + 1;
+     int width = dx - sx + 1;
+ 
++    // (ShaderEmu) nothing of it: a width below nothing is a memset of four gigabytes
++    if (width <= 0 || height <= 0) {
++        return;
++    }
++
+     for (int i = 0; i < height; ++i) {
+         memset(offset, color, width);
+         offset += (vp.Get_Pitch() + vp.Get_XAdd() + vp.Get_Width());
 diff --git a/common/file.cpp b/common/file.cpp
 index d2e727d..f7dbec5 100644
 --- a/common/file.cpp

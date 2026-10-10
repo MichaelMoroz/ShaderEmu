@@ -21,6 +21,11 @@ if [ "$1" = restart ]; then
     # the size comes from what Settings wrote, not from what the last desktop's programs inherited
     unset NANOX_SIZE
 fi
+# one desktop at a time (the window system itself refuses a second, too)
+if pidof nano-X >/dev/null; then
+    echo "nx: the desktop is running already (nx restart starts it over)"
+    exit 0
+fi
 # the size Settings last chose, unless this start names one
 [ -z "$NANOX_SIZE" ] && [ -f /tmp/nxsize ] && export NANOX_SIZE="$(cat /tmp/nxsize)"
 [ -d /dev/pts ] || { mkdir /dev/pts && mount -t devpts devpts /dev/pts; }

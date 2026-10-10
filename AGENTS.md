@@ -749,6 +749,15 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   texture memory eight levels after its first screen wipe. `DOOM_GL_DEBUG=1` prints what is
   left at each level's start.
 - `nx restart` is one at a time (`/tmp/nxrestart.pid`), and Settings asks for it once.
+- A crash of a game in the world comes with the kernel's register dump on the console: `epc`,
+  `ra` and `badaddr` are enough. Red Alert's (October 2026) was `badaddr` at the end of the
+  GPU's memory map (0xb00000 long), a2 a small negative number in `memset`: the game's
+  `Buffer_Fill_Rect` given a right edge left of its left edge by `gl.cpp` (something drawn over
+  the sidebar), which filled from the page to the end of the GPU's memory and took the
+  window system's command list with it. A rectangle from the game's own arithmetic is
+  clipped and checked before it is filled.
+- One window system at a time: `nano-X` holds a lock (`/tmp/nano-X.lock`) and a second one ends
+  with "a window system is running already"; `nx` says so and starts nothing.
 - Never more than three harness runs at once: four took 264 s where one takes 70.
 - Its changes to id's source are `linux/quake/quake.patch`: edit a clean clone at the commit
   `build.sh` names and save `git diff -- WinQuake`. The build puts the tree back each time.
