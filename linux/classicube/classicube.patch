@@ -649,10 +649,20 @@ index ccfee098e..70760c534 100644
      #define DEFAULT_VIEWDIST 192
  #else
 diff --git a/src/Generator.c b/src/Generator.c
-index d0331911e..4e31738ef 100644
+index d0331911e..38170fe02 100644
 --- a/src/Generator.c
 +++ b/src/Generator.c
-@@ -9,6 +9,11 @@
+@@ -1,4 +1,9 @@
+ #include "Generator.h"
++#ifdef CC_BUILD_SHADEREMU
++#include <stdlib.h>
++#include <string.h>
++#include "mcw.h"
++#endif
+ #include "BlockID.h"
+ #include "ExtMath.h"
+ #include "Funcs.h"
+@@ -9,6 +14,11 @@
  #include "Screens.h"
  #include "Window.h"
  
@@ -663,6 +673,136 @@ index d0331911e..4e31738ef 100644
 +
  static const struct MapGenerator* gen_active;
  BlockRaw* Gen_Blocks;
+ 
+@@ -91,6 +101,15 @@ void Gen_Start(const struct MapGenerator* gen, int seed,
+ 
+ 	gen_active = gen;
+ 	Gen_Reset();
++#ifdef CC_BUILD_SHADEREMU
++	/* the worker cores, for the world's making and then its meshes (MapRenderer.c): asked for
++	   here, on the game's own thread */
++	if (!(getenv("CLASSICUBE_MESH") && !strcmp(getenv("CLASSICUBE_MESH"), "inline")) && mcw_open(3) > 0) {
++		static cc_bool once;
++		extern char __DATA_BEGIN__[], _end[];
++		if (!once) { once = true; atexit(mcw_close); mcw_touch(__DATA_BEGIN__, (unsigned)(_end - __DATA_BEGIN__)); }
++	}
++#endif
+ 	Gen_Blocks = (BlockRaw*)Mem_TryAlloc(World.Volume, 1);
+ 
+ 	if (!Gen_Blocks || !gen->Prepare(seed)) {
+@@ -314,6 +333,89 @@ static void NotchyGen_FloodFill(int index, BlockRaw block) {
+ }
+ 
+ 
++#ifdef CC_BUILD_SHADEREMU
++/* The two steps that are noise by the column, a third of the world's making, are shared out
++   between the machine's cores when it has more than one (docs/multicore.md): rows of z to each,
++   which are whole 16 bytes of the height map and of every layer of blocks when the world's
++   width is a multiple of 16. The noise tables are only read; the lowest height comes back
++   as the job's answer. */
++static struct { struct CombinedNoise* n1; struct CombinedNoise* n2; struct OctaveNoise* n3; struct OctaveNoise* strata; int minStoneY; } se_gen;
++
++static int SE_HeightmapRows(int z0, int z1) {
++	float hLow, hHigh, height;
++	int hIndex = z0 * World.Width, adjHeight, lowest = World.Height;
++	int x, z;
++
++	for (z = z0; z < z1; z++) {
++		for (x = 0; x < World.Width; x++) {
++			hLow   = CombinedNoise_Calc(se_gen.n1, x * 1.3f, z * 1.3f) / 6 - 4;
++			height = hLow;
++
++			if (OctaveNoise_Calc(se_gen.n3, (float)x, (float)z) <= 0) {
++				hHigh = CombinedNoise_Calc(se_gen.n2, x * 1.3f, z * 1.3f) / 5 + 6;
++				height = max(hLow, hHigh);
++			}
++
++			height *= 0.5f;
++			if (height < 0) height *= 0.8f;
++
++			adjHeight = (int)(height + waterLevel);
++			lowest    = min(adjHeight, lowest);
++			heightmap[hIndex++] = adjHeight;
++		}
++	}
++	return lowest;
++}
++static unsigned SE_HeightmapJob(unsigned z0, unsigned z1) { return (unsigned)SE_HeightmapRows((int)z0, (int)z1); }
++
++static void SE_StrataRows(int z0, int z1) {
++	int dirtThickness, dirtHeight, stoneHeight;
++	int hIndex = z0 * World.Width, maxY = World.MaxY, index;
++	int x, y, z;
++
++	for (z = z0; z < z1; z++) {
++		for (x = 0; x < World.Width; x++) {
++			dirtThickness = (int)(OctaveNoise_Calc(se_gen.strata, (float)x, (float)z) / 24 - 4);
++			dirtHeight    = heightmap[hIndex++];
++			stoneHeight   = dirtHeight + dirtThickness;
++
++			stoneHeight = min(stoneHeight, maxY);
++			dirtHeight  = min(dirtHeight,  maxY);
++
++			index = World_Pack(x, se_gen.minStoneY, z);
++			for (y = se_gen.minStoneY; y <= stoneHeight; y++) {
++				Gen_Blocks[index] = BLOCK_STONE; index += World.OneY;
++			}
++
++			stoneHeight = max(stoneHeight, 0);
++			index = World_Pack(x, (stoneHeight + 1), z);
++			for (y = stoneHeight + 1; y <= dirtHeight; y++) {
++				Gen_Blocks[index] = BLOCK_DIRT; index += World.OneY;
++			}
++		}
++	}
++}
++static unsigned SE_StrataJob(unsigned z0, unsigned z1) { SE_StrataRows((int)z0, (int)z1); return 0; }
++
++/* Rows 0 to World.Length to this core and the workers; the least of what they answer. */
++static cc_bool SE_GenShare(mcw_fn job, int (*rows)(int, int), void (*rowsVoid)(int, int), int* least) {
++	int cores = mcw_count() + 1, share, k, z;
++
++	if (cores < 2 || (World.Width & 15) || World.Length < cores * 4) return false;
++	share = (World.Length + cores - 1) / cores;
++	for (k = 1, z = share; k < cores && z < World.Length; k++, z += share) {
++		mcw_post(k, job, (unsigned)z, (unsigned)min(z + share, World.Length));
++	}
++	cores = k;
++	if (rows) { z = rows(0, share); if (least) *least = min(*least, z); } else rowsVoid(0, share);
++	for (k = 1; k < cores; k++) {
++		mcw_wait(k);
++		if (least) *least = min(*least, (int)mcw_result(k));
++	}
++	return true;
++}
++#endif
++
+ static void NotchyGen_CreateHeightmap(void) {
+ 	float hLow, hHigh, height;
+ 	int hIndex = 0, adjHeight;
+@@ -341,6 +443,11 @@ static void NotchyGen_CreateHeightmap(void) {
+ 	OctaveNoise_Init(n3,   &rnd, 6);
+ 
+ 	Gen_CurrentState = "Building heightmap";
++#ifdef CC_BUILD_SHADEREMU
++	se_gen.n1 = n1; se_gen.n2 = n2; se_gen.n3 = n3;
++	mcw_touch(heightmap, World.Width * World.Length * 2);
++	if (SE_GenShare(SE_HeightmapJob, SE_HeightmapRows, NULL, &minHeight)) return;
++#endif
+ 	for (z = 0; z < World.Length; z++) {
+ 		Gen_CurrentProgress = (float)z / World.Length;
+ 
+@@ -404,6 +511,11 @@ static void NotchyGen_CreateStrata(void) {
+ 	OctaveNoise_Init(&n, &rnd, 8);
+ 
+ 	Gen_CurrentState = "Creating strata";
++#ifdef CC_BUILD_SHADEREMU
++	se_gen.strata = &n; se_gen.minStoneY = minStoneY;
++	mcw_touch(Gen_Blocks, World.Volume);
++	if (SE_GenShare(SE_StrataJob, NULL, SE_StrataRows, NULL)) return;
++#endif
+ 	for (z = 0; z < World.Length; z++) {
+ 		Gen_CurrentProgress = (float)z / World.Length;
  
 diff --git a/src/Launcher.c b/src/Launcher.c
 index 084b97498..b1d404a41 100644
