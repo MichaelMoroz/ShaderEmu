@@ -219,14 +219,14 @@ than 256 texels: `--core-pitch 128`.
 ## The geometry
 
 Which pixel of the tick is which texel of which core is only a function, so how many workers
-there are and how large each is need not be compiled in. The workers' state is one square of
-the state rows, 64 texels a side beside core 0's block, and it is 64 tiles of 8 x 8; each
-worker has whole tiles of it, one worker after another as a page is read (`mc_core_at()`,
+there are and how large each is need not be compiled in. The workers' state is a band of the
+state rows beside core 0's block, 8 texels high and 64 tiles of 8 x 8 long; each worker has
+a strip of whole tiles of it, one worker's after another's (`mc_core_at()`,
 `mc_state_read()`, `mc_texel_of()` in `src/types.h` and `main.shader`). A worker keeps the
 CPU's 44 texels, its write cache and the float registers' 8, and nearly all of that is the
 cache, so the cache's size is the worker's size:
 
-| Tables of 2^bits buckets | New stores a pass | Texels | Tiles | Fit in the square |
+| Tables of 2^bits buckets | New stores a pass | Texels | Tiles | Fit in the band |
 |---|---|---|---|---|
 | 6 (core 0's, and a worker's until now) | 6 KB | 564 | 9 | 7 |
 | 5 | 3 KB | 308 | 5 | 12 |
@@ -242,27 +242,35 @@ bits; 0 ends the list). **It is set while every worker is parked, and at no othe
 worker's registers and cache are those pixels. The kernel does it (`SHADEREMU_GPU_SHAPE`,
 `workers_shape()` in `linux/kernel/shaderemu_gpu.c`; `mcw_shape()` in the library): it
 refuses with EBUSY while any program has a worker, parks every core, sets the bit, during
-which every pixel of the square is zero and the commit takes no worker's stores (a worker
+which every pixel of the band is zero and the commit takes no worker's stores (a worker
 with no state is a parked one), writes the two words and clears the bit. The control pass
 says in `0x870003c0` how many cores there are now, and in the word at `0x870003cc` how many
 there could be (`--cores N` in the harness, 16 at most). Until a program asks, the kernel
 lays out three workers of the full size and twelve of size 4 the first time workers are
 asked for. `mctest N LIMIT shape 6,6,5,4,4` sets a geometry and runs the tests on it.
 
-The host knows none of this: it draws the whole square every pass, and a pixel of a worker
-that is parked, or of no worker, returns before it has done anything. A machine with every
-worker parked runs as fast as one compiled for one core (3,350k, 3,247k and 3,498k
-instructions a second with 1, 4 and 16 cores compiled in: what two runs differ by).
+**The tick's geometry shader draws the strips** (`tick_geom` in `main.shader`). The pass is
+handed one quad; the shader reads the geometry and puts out a quad for core 0's rectangle
+and one for the strip of each worker that has something to run. A worker that is parked,
+asleep or stopped gets none (`mc_idle()`, asked there), so it costs no pixel, and every
+core's pixels are a rectangle of their own. While the band is laid out anew the shader
+draws all of it, as zeros. The host knows none of this: before the pass it copies core 0's
+rectangle and the band into the buffer the pass draws into, so that what is not drawn stays
+what it was, and copies both back afterwards (`CustomRenderTexture::copyIn`,
+`rvc_backend11.cpp`). A machine with every worker parked runs as fast as one compiled for
+one core (3,378k instructions a second with one core compiled in, 3,229k with sixteen:
+what two runs differ by). The D3D12 backend, which runs one core, draws core 0's rectangle
+itself and does not use the shader.
 
-Why tiles and not rows: pixels of two cores in one 8 x 8 tile cost the GPU both cores' work
-for each ("Why", above). Laid out as rows of 64 (3, 5 or 9 of them a worker, so that
-neighbours shared tiles) the same seven workers decoded the JPEG below in 3.4 s; in tiles,
-2.4 s.
+Why whole tiles: pixels of two cores in one 8 x 8 tile cost the GPU both cores' work for
+each ("Why", above). Laid out as rows of 64 in a square (3, 5 or 9 rows a worker, so that
+neighbours shared tiles) seven workers decoded the JPEG below in 3.4 s; as tiles, 2.4 s.
 
 `mctest` passes on every geometry tried (three of size 6 and twelve of 4; seven of 6; four
 of 5, eight of 4 and three of 3), changed between runs without a restart. The primes below
-120,000, shared: 4.8 s on core 0 alone, 0.51 s with the default fifteen (9.4 times; fifteen
-workers of the full size, each a block of its own, made it 4.7 times). A JPEG picture of
+120,000, shared: 5.2 s on core 0 alone, 0.56 s with the default fifteen (9.3 times; fifteen
+workers of the full size, each a block of its own, made it 4.7 times) and 1.06 s with seven
+of the full size (4.9 times). A JPEG picture of
 640 x 480 (`docs/nanox.md`, the viewer), whose strips of pixels are shared out between the
 workers after the first, which reads the codes: 6.8 s on core 0, 2.4 s with seven workers
 (three of 6, four of 4), 2.2 s with eleven (one of 6, ten of 5); the one core that reads the
@@ -272,7 +280,8 @@ A program is not told yet which of its workers are small; the kernel hands out t
 numbers first, which are the first in the geometry. Not in Unity yet: the world's shader is
 the one before this, with four cores as blocks side by side (the kernel sees that it cannot
 be laid out and leaves it as it is). **Do not run "Sync shader sources" there until its tick
-texture and the passes that draw it have been changed to match.**
+texture and the passes that draw it have been changed to match**: the tick's quads come from
+the geometry shader now, and the workers' band is 512 x 8 beside core 0's 64 x 16.
 
 ## Workers with nothing to do
 

@@ -1485,7 +1485,7 @@ int main(int argc, char** argv) {
         // each core's state: what it is doing as the run ends. Core 0's is at the left; a
         // worker's rows of the strip beside it are where the geometry (control texel 0x3d) puts them.
         std::vector<uint8_t> blocks;
-        if (backend.readState(128, 64, blocks) && blocks.size() >= (size_t)128 * 64 * 16 && row.size() >= (64 + 0x3e) * 16) {
+        if (backend.readState(640, 64, blocks) && blocks.size() >= (size_t)640 * 64 * 16 && row.size() >= (64 + 0x3e) * 16) {
             const uint32_t* all = (const uint32_t*)blocks.data();
             const uint32_t* geo = (const uint32_t*)row.data() + (64 + 0x3d) * 4;
             unsigned at = 0;
@@ -1493,10 +1493,10 @@ int main(int argc, char** argv) {
                 unsigned k = (unsigned)c - 1, bits = c == 0 ? 6 : ((k < 8 ? geo[1] >> (4 * k) : geo[2] >> (4 * (k - 8))) & 15);
                 unsigned rows = c == 0 ? 0 : bits ? (44 + 8 + (2u << bits) * 4 + 63) / 64 : 0;
                 if (c != 0 && !rows) continue;
-                // texel w (below 64) of the core's state: a worker's is in the first of its 8 x 8 tiles
+                // texel w (below 64) of the core's state: a worker's is in the first 8 x 8 tile of its strip
                 auto texel = [&](unsigned w) {
-                    size_t x = c == 0 ? w : 64 + (at & 7) * 8 + (w & 7), y = c == 0 ? 0 : (at >> 3) * 8 + (w >> 3);
-                    return all + (y * 128 + x) * 4;
+                    size_t x = c == 0 ? w : 64 + at * 8 + (w & 7), y = c == 0 ? 0 : (w >> 3);
+                    return all + (y * 640 + x) * 4;
                 };
                 uint32_t word = texel(41)[3];
                 const uint32_t pc = texel(36)[3], ran = texel(28)[1], committed = texel(28)[2];

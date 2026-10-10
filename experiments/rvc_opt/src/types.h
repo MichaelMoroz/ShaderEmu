@@ -101,10 +101,10 @@
 // those, four to a column, the last 44 of the cache and the eight of the float registers,
 // for which the pass draws 16 x 4. In a row of their own they were a line a pixel high,
 // which costs the warps of two rows.
-// The geometry (docs/multicore.md): the workers' state is one square of the state rows, 64
-// texels a side beside core 0's block, and each worker has whole 8 x 8 tiles of it, one
-// worker after another as a page is read (the functions below count them as rows of 64
-// texels, which is what a tile holds). How many workers there are and how large each one's write cache is, is a texel
+// The geometry (docs/multicore.md): the workers' state is a band of the state rows beside
+// core 0's block, 8 texels high and 64 tiles of 8 x 8 long, and each worker has a strip of
+// whole tiles of it, one worker's after another's (the functions below count them as rows
+// of 64 texels, which is what a tile holds). How many workers there are and how large each one's write cache is, is a texel
 // of the control words that core 0 writes while every worker is parked:
 //   .r  bit 0: the strip is being laid out anew (every pixel of it is zero meanwhile)
 //   .g  four bits a worker for workers 1 to 8: its cache's tables are 2^bits buckets (3 to 6); 0: no such worker

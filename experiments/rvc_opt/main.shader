@@ -56,6 +56,7 @@
             CGPROGRAM
             #pragma target 5.0
             #pragma vertex CustomRenderTextureVertexShader
+            #pragma geometry tick_geom
             #pragma fragment frag
 
             #define PASS_TICK
@@ -104,17 +105,17 @@
             static uint mc_size_now = 4096; // and how many texels of state it has
             static uint mc_tile0 = 0;      // and, a worker's, the first of its tiles
             static uint4 mc_geo;           // the geometry's texel, read once a pixel
-            // A worker's state is whole 8 x 8 tiles of the strip beside core 0's block, one after
-            // another as a page is read (types.h): texel w of it is in its tile w / 64. Pixels
-            // of two cores in one tile would cost the GPU both cores' work for each. What lies
-            // past a worker's last texel is another worker's, and reads as the zeros it used
-            // to be (a control register a worker never wrote).
+            // A worker's state is a strip of whole 8 x 8 tiles in the band beside core 0's block,
+            // one worker's after another's (types.h): texel w of it is in its tile w / 64. The
+            // tick draws a strip as a quad of its own. What lies past a worker's last texel is
+            // another worker's, and reads as the zeros it used to be (a control register a
+            // worker never wrote).
             uint4 mc_state_read(uint2 pos) {
                 if (mc_core == 0) return _SelfTexture2D[pos + state_off];
                 uint w = pos.y * 64 + pos.x;
                 if (w >= mc_size_now) return (uint4)0;
                 uint t = mc_tile0 + (w >> 6), i = w & 63;
-                return _SelfTexture2D[uint2(64 + ((t & 7) << 3) + (i & 7), ((t >> 3) << 3) + (i >> 3))];
+                return _SelfTexture2D[uint2(64 + (t << 3) + (i & 7), i >> 3)];
             }
             #define STATE_TEX_HART(pos, hartidx) mc_state_read(uint2(pos))
             #define STATE_TEX(pos) mc_state_read(uint2(pos))
@@ -137,6 +138,52 @@
             #include "src/emu.h" // includes mmu.h, csr.h, mem.h, trap.h
             #include "src/cpu.h"
 
+            // What the tick draws: a quad for core 0's rectangle, and one for each worker that
+            // has something to run, where the machine's geometry puts its strip. They are
+            // rectangles of their own, so no two cores' pixels are rasterised together, and a
+            // worker that is parked or asleep costs no pixel at all. (The pass is handed one
+            // quad, two triangles: the first becomes these, the second nothing.)
+            void tick_rect(inout TriangleStream<v2f_customrendertexture> stream, float x, float y, float w, float h) {
+                for (uint corner = 0; corner < 4; corner++) {
+                    float2 p = float2(x + (corner & 1) * w, y + (corner >> 1) * h) / (float2)s_dim;
+                    v2f_customrendertexture o;
+                    o.vertex = float4(p.x * 2.0 - 1.0, 1.0 - p.y * 2.0, 0.0, 1.0);
+                    o.localTexcoord = float3(p, 0);
+                    o.globalTexcoord = float3(p, 0);
+                    o.primitiveID = 0;
+                    o.direction = 0;
+                    stream.Append(o);
+                }
+                stream.RestartStrip();
+            }
+
+            [maxvertexcount(64)]
+            void tick_geom(triangle v2f_customrendertexture IN[3], uint primitive : SV_PrimitiveID, inout TriangleStream<v2f_customrendertexture> stream) {
+                if (primitive != 0) return;
+                _SelfTexture2D.GetDimensions(s_dim.x, s_dim.y);
+                tick_rect(stream, 0, 0, 64, STATE_ROWS);
+#if CORES > 1
+                if (_Init) return;
+                mc_geo = RAM_TEX(RAM_ADDR(MC_GEOMETRY));
+                if ((mc_geo.r & 1) != 0) {
+                    // being laid out anew: the whole band, whose pixels are all zeros meanwhile
+                    tick_rect(stream, MC_STRIP_X, 0, 8 * MC_STRIP_ROWS, 8);
+                    return;
+                }
+                uint tile = 0;
+                for (uint k = 1; k < CORES; k++) {
+                    uint tiles = mc_rows_of(mc_bits_of(k));
+                    if (tiles == 0) continue;
+                    mc_select(k, tile);
+                    hart = k;
+                    if (!mc_idle()) tick_rect(stream, MC_STRIP_X + 8 * tile, 0, 8 * tiles, 8);
+                    tile += tiles;
+                }
+                mc_select(0, 0);
+                hart = 0;
+#endif
+            }
+
             uint4 frag(v2f_customrendertexture i) : SV_Target {
                 _SelfTexture2D.GetDimensions(s_dim.x, s_dim.y);
                 _Data_MTD_R.GetDimensions(m_dim.x, m_dim.y);
@@ -150,8 +197,8 @@
                 hart = 0;
                 if (pos.x >= MC_STRIP_X) {
                     // the workers' strip: nothing while it is laid out anew, and nothing in rows no worker has
-                    if (_Init || pos.x >= MC_STRIP_X + 64 || pos.y >= MC_STRIP_ROWS || (mc_geo.r & 1) != 0) return (uint4)0;
-                    uint tile = ((pos.y >> 3) << 3) + ((pos.x - MC_STRIP_X) >> 3);
+                    if (_Init || pos.y >= 8 || (mc_geo.r & 1) != 0) return (uint4)0;
+                    uint tile = (pos.x - MC_STRIP_X) >> 3;
                     hart = mc_core_at(tile);
                     if (hart == 0) return (uint4)0;
                     // which texel of the worker's state this pixel is, as a place in its rows of 64
@@ -294,17 +341,17 @@
             static uint mc_size_now = 4096; // and how many texels of state it has
             static uint mc_tile0 = 0;      // and, a worker's, the first of its tiles
             static uint4 mc_geo;           // the geometry's texel, read once a pixel
-            // A worker's state is whole 8 x 8 tiles of the strip beside core 0's block, one after
-            // another as a page is read (types.h): texel w of it is in its tile w / 64. Pixels
-            // of two cores in one tile would cost the GPU both cores' work for each. What lies
-            // past a worker's last texel is another worker's, and reads as the zeros it used
-            // to be (a control register a worker never wrote).
+            // A worker's state is a strip of whole 8 x 8 tiles in the band beside core 0's block,
+            // one worker's after another's (types.h): texel w of it is in its tile w / 64. The
+            // tick draws a strip as a quad of its own. What lies past a worker's last texel is
+            // another worker's, and reads as the zeros it used to be (a control register a
+            // worker never wrote).
             uint4 mc_state_read(uint2 pos) {
                 if (mc_core == 0) return _SelfTexture2D[pos + state_off];
                 uint w = pos.y * 64 + pos.x;
                 if (w >= mc_size_now) return (uint4)0;
                 uint t = mc_tile0 + (w >> 6), i = w & 63;
-                return _SelfTexture2D[uint2(64 + ((t & 7) << 3) + (i & 7), ((t >> 3) << 3) + (i >> 3))];
+                return _SelfTexture2D[uint2(64 + (t << 3) + (i & 7), i >> 3)];
             }
             #define STATE_TEX_HART(pos, hartidx) mc_state_read(uint2(pos))
             #define STATE_TEX(pos) mc_state_read(uint2(pos))
@@ -421,8 +468,8 @@
                     uint4 own = RAM_TEX(pos);
                     mc_select(0, 0);
                     if (pos.x >= MC_STRIP_X) {
-                        if (pos.x >= MC_STRIP_X + 64 || (mc_geo.r & 1) != 0) return (uint4)0;
-                        uint tile = ((pos.y >> 3) << 3) + ((pos.x - MC_STRIP_X) >> 3);
+                        if (pos.y >= 8 || (mc_geo.r & 1) != 0) return (uint4)0;
+                        uint tile = (pos.x - MC_STRIP_X) >> 3;
                         hb = mc_core_at(tile);
                         if (hb == 0) return (uint4)0;
                         uint w = ((tile - mc_tile0) << 6) + ((pos.y & 7) << 3) + (pos.x & 7);

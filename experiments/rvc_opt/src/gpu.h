@@ -578,7 +578,7 @@ uint2 mc_place(uint core) {
 // Texel w (below 64) of a core's state: a worker's is in the first of its tiles, eight to a row.
 uint4 mc_state_texel(uint2 at, uint w) {
     if (at.x == 0) return GPU_STATE[uint2(w, 0)];
-    return GPU_STATE[uint2(64 + ((at.y & 7) << 3) + (w & 7), ((at.y >> 3) << 3) + (w >> 3))];
+    return GPU_STATE[uint2(64 + (at.y << 3) + (w & 7), w >> 3)];
 }
 uint mc_stat_count(uint core) {
     uint2 at = mc_place(core);

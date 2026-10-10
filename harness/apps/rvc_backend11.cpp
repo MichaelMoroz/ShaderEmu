@@ -105,14 +105,15 @@ public:
         }
         if (cpuMode && mat.getFloat("_Init") == 0) {}   // the processor ran the instructions
         else if (cs_ && mat.getFloat("_Init") == 0) runComputeTick(mat);
-        else if (cores_ == 1) crt_.runZone(gpu_, passes_[0], mat, UpdateZone{32, 4096 - tickRows_ / 2, 64, tickRows_, 0});
         else {
-            // Core 0's rectangle, and the workers' strip beside it, whole: which rows of it are
-            // whose is the machine's geometry (src/types.h), and a pixel of a worker that is
-            // parked, or of no worker, returns before it has done anything.
-            // Both are drawn before either is copied back, or each would wait for the other.
-            std::vector<UpdateZone> zones{UpdateZone{32, 4096 - tickRows_ / 2, 64, tickRows_, 0}, UpdateZone{64 + 32, 4096 - 32, 64, 64, 0}};
-            for (auto& z : zones) crt_.runZone(gpu_, passes_[0], mat, z, 6, false);
+            // The tick's geometry shader draws the quads: core 0's rectangle, and a strip for
+            // each worker that has something to run, where the machine's geometry puts it
+            // (main.shader, tick_geom). What it does not draw of the two zones stays what it
+            // was: they are copied into the buffer drawn into first, and back afterwards.
+            std::vector<UpdateZone> zones{UpdateZone{32, 4096 - tickRows_ / 2, 64, tickRows_, 0}};
+            if (cores_ > 1) zones.push_back(UpdateZone{64 + 256, 4096 - 4, 512, 8, 0});
+            for (auto& z : zones) crt_.copyIn(gpu_, z);
+            crt_.runZone(gpu_, passes_[0], mat, zones[0], 6, false);
             for (auto& z : zones) crt_.copyZone(gpu_, z);
         }
         if (timeIt) gpu_.ctx->End(tsQuery_[1].Get());

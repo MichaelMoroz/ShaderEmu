@@ -35,6 +35,9 @@ public:
     // For zones drawn with copyBack false: they all read the texture as it was, and none waits
     // for another's copy. Copies what such a zone drew into the current buffer.
     void copyZone(Gpu& gpu, const UpdateZone& zone);
+    // The other way, before the draw: for a pass that draws only part of a zone (the tick's
+    // quads, a worker that has nothing to do drawing none), the rest of it is then what it was.
+    void copyIn(Gpu& gpu, const UpdateZone& zone);
 
     ID3D11Texture2D* current() const { return tex_[cur_].Get(); }
     ID3D11ShaderResourceView* currentSRV() const { return srv_[cur_].Get(); }
