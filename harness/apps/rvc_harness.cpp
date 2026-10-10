@@ -1263,7 +1263,10 @@ int main(int argc, char** argv) {
             // the devices' answer, before the processor goes on: the control words as the control
             // pass left them, and the picture the commit copied back for the list drawn last
             using namespace cpuemu;
-            while (backend.rowPending() > 0 && !takeRow()) Sleep(0);
+            // (every row still on its way, to the last: an older frame's words would undo what
+            // the processor has written since)
+            while (backend.rowPending() > 0)
+                if (!takeRow()) Sleep(0);
             if (row.size() >= (64 + kControlTexels) * 16) memcpy(&word(CTRL), row.data() + 64 * 16, kControlTexels * 16);
             if (cpuCopy[0]) {
                 uint32_t address = CTRL + 0x1000, bytes = cpuDisplay[0] * cpuDisplay[1] * 4;

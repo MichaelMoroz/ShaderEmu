@@ -15,6 +15,7 @@ started and everything on its desktop run without building anything.
 | `root/emuinit`, `root/usr/bin/emumux`, `fptest`, `sndtest` | `linux/userland/build.sh` | this repository |
 | `root/bin/busybox` | `linux/userland/busybox.sh` | BusyBox 1.36.1 |
 | `root/usr/bin/nxfiles`, `nxweb`, `nxedit`, `nxpaint`, `nxview`, `nxmon`, `nxsettings`, `nxkey`, `nxoff`, `root/usr/share/web-*`, `nxapps.90-system`, `picture-fox.png`, `picture-fox.jpg` (cut from the desktop's picture by `tools/make_test_pictures.py`) | `linux/apps/build.sh` | this repository |
+| `root/usr/bin/nxray`, `nxpath`, `root/usr/share/nxapps.82-raytrace`, `nxapps.83-pathtrace` | `linux/raytrace/build.sh`, `linux/pathtrace/build.sh` | this repository; `nxpath` with Dear ImGui (below) |
 | `root/usr/share/wallpaper-*.ppm` | `tools/make_wallpaper.py` | photographs from Unsplash |
 | `root/usr/bin/doom.bin` | `linux/nanox/doom.sh` | the Doom in Microwindows' `contrib`, with the files in `linux/nanox` |
 | `root/usr/bin/tcc`, `cc`, `example`, `root/usr/share/cc-sysroot.tar`, `example-*.c` | `linux/tcc/build.sh` | TinyCC, with musl's headers and libraries for it |

@@ -841,6 +841,10 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   nothing of the layout. Anything that reads a worker's state (the control pass, the
   harness's `CORE` lines) finds its strip from the geometry texel. A worker's pixels must
   stay whole 8 x 8 tiles.
+- `nxray` and `nxpath` (`docs/raytrace.md`) are the programs that use every core: after a change
+  to the workers or the geometry, `RAY_FRAMES=1 RAY_STILL=1 nxray` with `RAY_WORKERS=0` and
+  without must print the same sum, and so must `NXPATH_AUTO=1 NXPATH_EXIT=1 NXPATH_SAMPLES=2
+  nxpath` with `NXPATH_CORES=3` and `0`.
 - A program that uses the worker cores links `programs/mc/mcw.c` and posts its own functions
   as jobs (`docs/multicore.md`, "Using the workers from a program"): a worker is a thread of
   the program in user mode, on its page table. There is one kind of worker; do not add
