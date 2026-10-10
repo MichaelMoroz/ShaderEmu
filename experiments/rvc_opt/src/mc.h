@@ -26,10 +26,14 @@
 //           word. A page the program has not touched yet is the usual cause.
 //   resume  its fourth texel, core 0's: when its first word is the fault's count the worker
 //           runs the same instruction again.
+//   call    a system call (ecall) is a stop of its own kind: the eight words at MC_MBOX + 0x800
+//           + 32 * core take a7 and a0 to a5, the fault's cause is 8, and when the resume
+//           word is the count the worker goes on after the ecall with the resume texel's
+//           second word in a0. Core 0 makes the call for it, in the program they share.
 //
 // `ebreak` parks a worker until its next start. The state word (41,0).a says what it does: 1
-// running, 3 asleep and 5 stopped by a fault (with the word waited on, as it was, in bits 8
-// and up), an even number parked.
+// running, 3 asleep, 5 stopped by a fault and 9 waiting for a system call's answer (with the
+// word waited on, as it was, in bits 8 and up), an even number parked.
 //
 // A worker that is parked, asleep or stopped costs next to nothing: each of its pixels reads
 // its state word and its mailbox and returns what it holds (mc_idle(), before anything of the
@@ -44,6 +48,7 @@
 #define MC_JOB_TEXEL(core) RAM_ADDR(((MC_MBOX & 0x7fffffff) >> 4) + 0x40 + 4 * (core))
 #define MC_RESUME_TEXEL(core) RAM_ADDR(((MC_MBOX & 0x7fffffff) >> 4) + 0x43 + 4 * (core))
 #define MC_FAULT_WORD(core) ((MC_MBOX & 0x7fffffff) + 0x400 + 64 * (core) + 32)
+#define MC_CALL_WORD(core) ((MC_MBOX & 0x7fffffff) + 0x800 + 32 * (core))
 
 #ifdef PASS_TICK
 // Whether this pixel's core is a worker with nothing to do in this pass.
@@ -54,14 +59,15 @@ bool mc_idle() {
     uint word = STATE_TEX(uint2(41, 0)).a;
     if (start == MC_STOP && (word & 1) != 0) return false;                                      // it is to park
     if ((word & 1) == 0) return true;                                                           // parked
-    if (word & 4) return (RAM_TEX(MC_RESUME_TEXEL(hart)).x & 0xffffff) == (word >> 8);          // stopped by a fault
+    if (word & 12) return (RAM_TEX(MC_RESUME_TEXEL(hart)).x & 0xffffff) == (word >> 8);         // stopped by a fault, or a call
     return (word & 2) != 0 && (RAM_TEX(MC_JOB_TEXEL(hart)).x & 0xffffff) == (word >> 8);       // asleep
 }
 
 void mc_enter() {
     mc_word = STATE_TEX(uint2(41, 0)).a;
     if (hart == 0) return;
-    if (mc_word & 6) mc_word = 1;   // its job word changed, or core 0 says go on: awake
+    bool called = (mc_word & 9) == 9;   // it waited for a system call's answer, which is there now
+    if (mc_word & 14) mc_word = 1;      // its job word changed, or core 0 says go on: awake
     uint4 box = RAM_TEX(MC_START_TEXEL(hart));
     if (box.x == MC_START) {
         cpu.pc = box.y;
@@ -75,6 +81,9 @@ void mc_enter() {
     } else if (box.x == MC_STOP || (mc_word & 1) == 0) {
         if (mc_word & 1) mc_word = MC_PARKED_STOP << 8;
         cpu.stall = STALL_WFI;   // nothing runs; the commit pass clears it
+    } else if (called) {
+        cpu.xreg[10] = RAM_TEX(MC_RESUME_TEXEL(hart)).y;
+        cpu.pc += 4;
     }
 }
 
@@ -86,12 +95,23 @@ void mc_enter() {
 #define MC_FAULT(ret) \
     if (hart != 0 && ret.trap.en) { \
         uint seen_ = RAM_TEX(MC_RESUME_TEXEL(hart)).x; \
+        bool call_ = ret.trap.type == 8; \
+        if (call_) { \
+            mem_set_ram(MC_CALL_WORD(hart), xreg(17), 0xffffffff); \
+            mem_set_ram(MC_CALL_WORD(hart) + 4, xreg(10), 0xffffffff); \
+            mem_set_ram(MC_CALL_WORD(hart) + 8, xreg(11), 0xffffffff); \
+            mem_set_ram(MC_CALL_WORD(hart) + 12, xreg(12), 0xffffffff); \
+            mem_set_ram(MC_CALL_WORD(hart) + 16, xreg(13), 0xffffffff); \
+            mem_set_ram(MC_CALL_WORD(hart) + 20, xreg(14), 0xffffffff); \
+            mem_set_ram(MC_CALL_WORD(hart) + 24, xreg(15), 0xffffffff); \
+        } \
         mem_set_ram(MC_FAULT_WORD(hart) + 4, ret.trap.type, 0xffffffff); \
+        mem_set_ram(MC_FAULT_WORD(hart) + 8, ret.trap.value, 0xffffffff); \
+        mem_set_ram(MC_FAULT_WORD(hart) + 12, cpu.pc, 0xffffffff); \
+        /* the count last: with it the record is whole */ \
+        mem_set_ram(MC_FAULT_WORD(hart), seen_ + 1, 0xffffffff); \
         if (cpu.stall == 0) { \
-            mem_set_ram(MC_FAULT_WORD(hart) + 8, ret.trap.value, 0xffffffff); \
-            mem_set_ram(MC_FAULT_WORD(hart) + 12, cpu.pc, 0xffffffff); \
-            mem_set_ram(MC_FAULT_WORD(hart), seen_ + 1, 0xffffffff); \
-            mc_word = 5 | (seen_ << 8); \
+            mc_word = (call_ ? 9 : 5) | (seen_ << 8); \
             cpu.stall = STALL_WFI; \
         } \
         ret.trap.en = false; \

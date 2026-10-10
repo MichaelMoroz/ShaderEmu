@@ -39,8 +39,13 @@ the Linux checksums are as before).
   machine writes `{ count, cause, address, pc }` into the worker's mailbox and the worker
   waits. A page the program has not touched yet is the usual cause: the library, on core 0,
   touches the page (which the kernel answers as it would for the program itself) and writes
-  the count back, and the worker runs the instruction again. So a job cannot make a system
-  call, and anything else that traps ends the program with a line saying where.
+  the count back, and the worker runs the instruction again. Anything else that traps ends
+  the program with a line saying where.
+- **A system call is such a stop too.** The machine puts the call's number and arguments in
+  the mailbox (cause 8), core 0 makes the call in the program they share and writes the
+  answer back, and the worker goes on after its `ecall` with the answer in `a0`: memory from
+  the kernel, a file read, a line printed. Two passes each, when core 0 next looks. Not the
+  calls that are about which thread is calling (a new thread, a new program).
 - **No TLB kept.** A worker starts every pass with empty TLBs and walks the page table for
   each page it uses in the pass ("What paging costs a worker", below).
 - **The mailboxes** are one page of the GPU device's memory at `0x86C00000`, which `/dev/gpu`
@@ -68,6 +73,7 @@ workers and checks them (`programs\mc\build.bat`, then `python tools\make_linux_
 | stripe | three workers fill one buffer, every third 16 bytes each: no store undoes a neighbour's |
 | sum | each worker reads what the other two wrote |
 | pages | a worker writes and reads 64 pages nobody has touched: 64 stops, each answered by core 0 in two passes |
+| calls | a worker asks the kernel for memory, fills it, writes a line and gives the memory back |
 | floats | float arithmetic kept in registers over many passes gives what it gives on core 0 |
 | park | `ebreak` parks them; the next run starts them again |
 
@@ -254,10 +260,10 @@ with the small runtime, and the image's toolchain with musl).
 
 What a program has to keep to:
 
-- **A job computes, reads and writes memory, and returns.** No system calls, and nothing
-  that makes one: `printf`, file reading, a `malloc` that has to ask the kernel for more. The
-  C library is not made for a second thread it does not know of either (its thread pointer
-  is shared): allocate before the job, print after it.
+- **A job computes, reads and writes memory, and returns.** It may make system calls, which
+  core 0 makes for it (two passes each). What it may not is use what the C library keeps one
+  of for the whole program while core 0 uses it too: `malloc`'s heap, `stdio`'s buffers. One
+  side at a time: a job may allocate and print while core 0 only waits for it.
 - **A store is seen by the other cores one pass later.** `mcw_post()` followed by this core's
   own work is the usual order: the pass that ends next carries the job and its data over
   together. `mcw_wait()` ends passes until the worker has answered. Code that both cores run

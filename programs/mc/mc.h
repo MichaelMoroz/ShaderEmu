@@ -28,6 +28,9 @@
 #define MC_ANSWER_AT(k) (0x400u + 64u * (k) + 16u)
 #define MC_FAULT_AT(k) (0x400u + 64u * (k) + 32u)
 #define MC_RESUME_AT(k) (0x400u + 64u * (k) + 48u)
+// a worker's system call, for core 0 to make: a7 and a0 to a5 (the fault's cause is 8); the
+// answer goes in the resume texel's second word before its first
+#define MC_CALL_AT(k) (0x800u + 32u * (k))
 
 #define MC_ALIVE 0x600d0000u
 

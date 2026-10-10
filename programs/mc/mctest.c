@@ -5,6 +5,8 @@
 //   fill     each worker fills a buffer of its own; core 0 checks every word
 //   stripe   three workers fill one buffer between them, every third 16 bytes each
 //   sum      the workers read back what the others wrote
+//   calls    a worker asks the kernel for memory, writes a line and gives the memory back:
+//            core 0 makes its system calls for it
 //   floats   float arithmetic over many passes gives what it gives on core 0
 //   pages    a worker reads and writes memory the program has never touched: every page of it
 //            stops the worker, and the library brings the page and lets it go on
@@ -94,6 +96,34 @@ static uint32_t floats(uint32_t count, uint32_t seed) {
     }
     bits.f = a + b + c;
     return bits.u;
+}
+
+// A system call, as a job makes one: the machine stops the worker at the ecall and core 0 makes
+// the call for it (mcw.c).
+static long call3(long number, long a, long b, long c, long d, long e, long f) {
+    register long a7 __asm__("a7") = number;
+    register long a0 __asm__("a0") = a;
+    register long a1 __asm__("a1") = b;
+    register long a2 __asm__("a2") = c;
+    register long a3 __asm__("a3") = d;
+    register long a4 __asm__("a4") = e;
+    register long a5 __asm__("a5") = f;
+    __asm__ volatile("ecall" : "+r"(a0) : "r"(a7), "r"(a1), "r"(a2), "r"(a3), "r"(a4), "r"(a5) : "memory");
+    return a0;
+}
+
+// Asks the kernel for memory, fills it, says a line, gives the memory back; the words' sum.
+static uint32_t calls(uint32_t words, uint32_t seed) {
+    static const char line[] = {'m', 'c', 't', 'e', 's', 't', ':', ' ', 'a', ' ', 'l', 'i', 'n', 'e', ' ', 'f', 'r', 'o', 'm', ' ', 'a',
+                                ' ', 'w', 'o', 'r', 'k', 'e', 'r', 10};
+    uint32_t* p = (uint32_t*)call3(222, 0, (long)words * 4, 3, 0x22, -1, 0);   // mmap2: private, of no file
+    uint32_t total = 0;
+    if ((long)p < 0 && (long)p > -4096) return 0xdead0000u;
+    for (uint32_t i = 0; i < words; i++) p[i] = pattern(seed, i);
+    for (uint32_t i = 0; i < words; i++) total += p[i];
+    if (seed == 1) call3(64, 1, (long)line, sizeof line, 0, 0, 0);            // write
+    call3(215, (long)p, (long)words * 4, 0, 0, 0, 0);                          // munmap
+    return total;
 }
 
 // ---- core 0 ----
@@ -225,6 +255,22 @@ int main(int argc, char** argv) {
         int passes = mcw_wait(1);
         printf("mctest: pages: %u of them brought for the worker in %d passes\n", mcw_faults - before, passes);
         check("pages", fresh != MAP_FAILED && mcw_result(1) == expect && mcw_faults - before >= 64);
+    }
+
+    // ---- calls: a worker's system calls are made by core 0 ----
+    {
+        int ok = 1;
+        for (int k = 1; k <= workers; k++) mcw_post(k, calls, 4096, (uint32_t)k);
+        for (int k = 1; k <= workers; k++) {
+            uint32_t expect = 0;
+            for (uint32_t i = 0; i < 4096; i++) expect += pattern((uint32_t)k, i);
+            mcw_wait(k);
+            if (mcw_result(k) != expect) {
+                printf("mctest: calls: worker %d has %08x, expected %08x%c", k, mcw_result(k), expect, 10);
+                ok = 0;
+            }
+        }
+        check("calls", ok);
     }
 
     // ---- floats: a worker's float registers are its own, and last from pass to pass ----

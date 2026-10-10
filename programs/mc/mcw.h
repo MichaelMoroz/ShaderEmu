@@ -3,9 +3,11 @@
  * kernel does not know of. A job is a function of the program and two words for it; a worker
  * runs it on a stack of its own, in the program's memory as the program has it.
  *
- * What a job may do: compute, read and write the program's memory. What it may not: make a
- * system call (nor call anything that does: printf, malloc that asks for more memory, file
- * reading) or leave the function any other way than by returning.
+ * What a job may do: compute, read and write the program's memory, and make system calls,
+ * which this core makes for it when it next looks (mcw_wait(), mcw_done()): two passes of the
+ * machine each, so not many. What it may not: use what the C library keeps one of for the
+ * program while this core uses it too (malloc, stdio: one side at a time), or leave the
+ * function any other way than by returning.
  *
  * What both sides have to keep to: a core sees another's stores one pass of the machine
  * later, and two cores must not store to the same 16 bytes in one pass (addresses that differ

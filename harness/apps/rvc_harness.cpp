@@ -1347,7 +1347,7 @@ int main(int argc, char** argv) {
                 const uint32_t* t = row0 + (size_t)c * opt.corePitch * 4;
                 uint32_t word = t[41 * 4 + 3];
                 fprintf(stderr, "CORE %d: pc %08x, %u instructions, %u commits, %s (state word %08x)\n", c, t[36 * 4 + 3], t[28 * 4 + 1],
-                        t[28 * 4 + 2], c == 0 ? "the machine" : (word & 4) ? "stopped by a fault" : (word & 2) ? "asleep" :
+                        t[28 * 4 + 2], c == 0 ? "the machine" : (word & 8) ? "waiting for a system call" : (word & 4) ? "stopped by a fault" : (word & 2) ? "asleep" :
                         (word & 1) ? "running" : (word >> 8) == 0 ? "parked, never started" : (word >> 8) == 2 ? "parked by the kernel" : "parked by ebreak", word);
             }
         }

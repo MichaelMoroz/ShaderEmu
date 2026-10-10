@@ -16,6 +16,7 @@ static uint32_t seq[MC_MAX_CORES];
 static uint8_t *chunk;
 static uint32_t chunk_left;
 unsigned mcw_faults;		/* pages touched for a worker so far */
+unsigned mcw_calls;		/* and system calls made for one */
 
 static mc_job *job_of(int k) { return (mc_job *)(page + MC_JOB_AT(core_of[k])); }
 static mc_answer *answer_of(int k) { return (mc_answer *)(page + MC_ANSWER_AT(core_of[k])); }
@@ -113,6 +114,16 @@ static void serve(int k)
 		 * (the machine keeps no store that changes nothing, so no other core's is undone) */
 		volatile uint8_t *byte = (volatile uint8_t *)address;
 		*byte = *byte;
+	} else if (cause == 8) {
+		/* a system call: made here for it, in the program and the files they share. (Not
+		 * the ones that are about which thread calls: a new thread, a new program.) */
+		const volatile uint32_t *c = (const volatile uint32_t *)(page + MC_CALL_AT(core_of[k]));
+		long number = (long)c[0], result = -38;	/* ENOSYS */
+
+		if (number != 220 && number != 221 && number != 435)	/* clone, execve, clone3 */
+			result = call6(number, (long)c[1], (long)c[2], (long)c[3], (long)c[4], (long)c[5], (long)c[6]);
+		resume_of(k)[1] = (uint32_t)result;
+		mcw_calls++;
 	} else {
 		say("mcw: a worker core stopped, cause ", cause);
 		say("mcw:   at pc ", fault->pc);
