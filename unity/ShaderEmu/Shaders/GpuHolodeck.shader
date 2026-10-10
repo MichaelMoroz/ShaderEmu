@@ -1,8 +1,8 @@
 Shader "ShaderEmu/GpuHolodeck"
 {
     // The holodeck (docs/holodeck.md): the guest's 3D frame as a world round the visitor, drawn
-    // wherever VolumeMask.shader has marked the room's own faces. This renderer's object is the
-    // control a visitor carries: the frame's world, or its camera, stands where that is.
+    // wherever HolodeckMask.shader has marked the faces of the room in use. This renderer's object
+    // is at the seat's eye point: the frame's camera stands there, its horizon the room's.
     // One pass for each way the GPU blends, in the GPU's order, twice: through the room's faces
     // (the stencil's mark, depth emptied), and inside the room before whatever else is seen.
     Properties
@@ -10,11 +10,8 @@ Shader "ShaderEmu/GpuHolodeck"
         _State ("Machine state texture", 2D) = "black" {}
         _ScreenSize ("The near plane's picture at the largest scale, in metres", Vector) = (1.28, 0.8, 0, 0)
         _Plane ("Scale: that plane from the near plane (0) to the far plane (1)", Range(0, 1)) = 0
-        _Anchor ("At the control: the player, the world unturned (0); the world's origin (1); the camera (2)", Float) = 1
-        [NoScaleOffset] _Origin ("The world's middle (one texel)", 2D) = "black" {}
         _RoomMin ("The room's low corner, in the world", Vector) = (-12.7, 0, -0.1, 0)
         _RoomMax ("The room's high corner", Vector) = (-4.7, 4, 7.9, 0)
-        _UpAxis ("The program's up: found from its camera (0), y (1) or z (2)", Float) = 0
     }
     SubShader
     {
@@ -95,7 +92,7 @@ Shader "ShaderEmu/GpuHolodeck"
             Name "INSIDE0"
             Blend One Zero
             ZWrite On
-            Stencil { Ref 87 Comp NotEqual }   // before anything else (the doorway, a visitor): only what is in the room
+            Stencil { Ref 87 ReadMask 127 Comp NotEqual }   // not on the room's faces (87), nor on the room's own things (HoloGuard.shader: 87 + 128)
             CGPROGRAM
             #pragma target 5.0
             #pragma vertex vert
@@ -113,7 +110,7 @@ Shader "ShaderEmu/GpuHolodeck"
             Name "INSIDE1"
             Blend SrcAlpha OneMinusSrcAlpha, Zero One
             ZWrite Off
-            Stencil { Ref 87 Comp NotEqual }   // before anything else (the doorway, a visitor): only what is in the room
+            Stencil { Ref 87 ReadMask 127 Comp NotEqual }   // not on the room's faces (87), nor on the room's own things (HoloGuard.shader: 87 + 128)
             CGPROGRAM
             #pragma target 5.0
             #pragma vertex vert
@@ -131,7 +128,7 @@ Shader "ShaderEmu/GpuHolodeck"
             Name "INSIDE2"
             Blend SrcAlpha One, Zero One
             ZWrite Off
-            Stencil { Ref 87 Comp NotEqual }   // before anything else (the doorway, a visitor): only what is in the room
+            Stencil { Ref 87 ReadMask 127 Comp NotEqual }   // not on the room's faces (87), nor on the room's own things (HoloGuard.shader: 87 + 128)
             CGPROGRAM
             #pragma target 5.0
             #pragma vertex vert
@@ -149,7 +146,7 @@ Shader "ShaderEmu/GpuHolodeck"
             Name "INSIDE3"
             Blend DstColor Zero, Zero One
             ZWrite Off
-            Stencil { Ref 87 Comp NotEqual }   // before anything else (the doorway, a visitor): only what is in the room
+            Stencil { Ref 87 ReadMask 127 Comp NotEqual }   // not on the room's faces (87), nor on the room's own things (HoloGuard.shader: 87 + 128)
             CGPROGRAM
             #pragma target 5.0
             #pragma vertex vert

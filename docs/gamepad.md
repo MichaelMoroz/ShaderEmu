@@ -2,26 +2,34 @@
 
 The display's keyboard and the beams are a poor way to play: a shooter wants two sticks, and a
 strategy game a pointer that does not have to be aimed with a whole arm. In the VRChat world
-two controllers lie on the desk, to the right of the display's keyboard, a white one for
-shooters and a blue one for strategy games. A visitor who takes one plays with their own
-sticks, triggers and grips (`EmuGamepad.cs`, one behaviour a controller).
+the console beside every holodeck's seat (`docs/holodeck.md`) has a key for each of two
+controllers, a white one for shooters and a blue one for strategy games; none lies there.
+Whoever sits there and takes one plays with their own sticks, triggers and grips
+(`EmuGamepad.cs`, one behaviour a client).
 
 Nothing in the guest knows of them: a controller presses the keys and moves the pointer the
-games already read (`docs/input.md`). There is no menu; what the controls do is on the board
-on the left wall (`DoText` in `ShaderEmuGamepad.cs`), and each controller's name lies flat on
-the desk before it.
+games already read (`docs/input.md`). What the controls do is on the board on the den's left
+wall (`DoText` in `ShaderEmuGamepad.cs`).
+
+There are none at the den's desk or in the classroom, and no seats there: a controller that
+anybody could take anywhere held its player in an unsynced station, which others could not
+see and which went wrong when two took it.
 
 ## Taking one and putting it back
 
-- Click a controller. Its model goes to the right hand (before the chest on a desktop), the
-  beams rest, and the visitor stands where they are: a station holds them, so that the
-  sticks are the game's and not their legs', and they are told to stand still besides.
-- Both grips held for a second puts it back on the desk. Held for a second again, from
-  anywhere in the room, they bring the one held last back into the hand (the shooter's, to
-  begin with). After either, both grips have to be let go before they count again.
-- On a desktop, which has no grips, the drop key (G) puts it back.
-- Taking one while holding the other puts the other back. A respawn puts back whichever is held.
-- Only whoever took it has it; nothing of it is sent to other players.
+- Only from the seat: the stand's Shooter and Strategy keys are the sitter's. The model goes to
+  the right hand (before the chest on a desktop), the beams
+  rest, and the seat keeps its sitter (`disableStationExit`), so that the left stick is the
+  game's and does not stand them up.
+- Everybody sees it: which one a visitor holds is a synced number in their own `EmuShare`
+  (`holding`), and each player's object carries the two models, which `EmuHolodeck` puts in
+  that player's right hand on every client.
+- A notice hangs over the holder's hand, for them alone, for ten seconds after taking it and
+  whenever a grip is held: what it is, and that both grips held for a second put it back. A
+  bar fills while they are held.
+- The stand's Put back key does the same, and is the way on a desktop, which has no grips.
+- Taking one while holding the other puts the other back. Getting up, a respawn and leaving
+  put back whichever is held.
 
 ## The white one: shooters (Quake, Doom, by their own default keys)
 
@@ -57,20 +65,16 @@ the mouse's movement, its two buttons, Space.
 
 ## Checking it
 
-In play mode: `SendCustomEvent("Take")` on "Shooter controller" or "Strategy controller", then
-`RunInputEvent("_inputMoveVertical", new UdonInputEventArgs(0.9f, HandType.LEFT))` and the
-like, and read the display keyboard's `queue` (a key code, plus 65536 while pressed) and the
-machine's `pointerX`. The editor is a desktop: the grips are tested by setting each
-behaviour's `grip` to two trues for a second. ClientSim logs "Cannot exit station that the
-player is not in" when one is put back, and the editor pauses on it if told to pause on errors.
-
-"ShaderEmu/Add the game controllers to the open scene" puts them, and the board's text, into
-a scene without building the world again.
+In play mode: `stations[k].UseStation(Networking.LocalPlayer)` on "Holodeck", then its
+`TakeShooter` or `TakeStrategy` event, then `RunInputEvent("_inputMoveVertical", new
+UdonInputEventArgs(0.9f, HandType.LEFT))` and the like on "Gamepad", and read the display
+keyboard's `queue` (a key code, plus 65536 while pressed) and the machine's `pointerX`. `held`
+on "Gamepad" and `holding` in the player's `EmuShare` must agree, the seat's
+`disableStationExit` be set, and after `ExitStation` all of it be undone.
 
 ## Not known yet
 
-- None of it has been in a headset. Whether a station stops the right stick from turning
-  the visitor in VR is what the station is there for and is untried (in the editor the
-  station does not seem to take the player at all); if it does not, the view turns with the game.
+- None of it has been in a headset. Whether a seat stops the right stick from turning the
+  visitor in VR is untried; if it does not, the view turns with the game.
 - How the model sits in a hand: it is placed at the tracked hand with one fixed turn.
 - Doom has no key for looking up, and neither game a second stick's analogue turn.

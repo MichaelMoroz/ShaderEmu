@@ -641,102 +641,13 @@ public static partial class ShaderEmuBuilder
         return rt;
     }
 
-    // The volume display (docs/volume.md): a third screen, on the left wall by the console, that is a window
-    // onto the guest's 3D frame, drawn behind it as the visitor's own eyes see it.
-    static Material Volume(Transform parent, float halfW, RenderTexture state, Material frameMat)
+    // The volume display's material (docs/volume.md): the guest's 3D frame as geometry. Its wall
+    // screen is gone; the holodecks draw the same lists (ShaderEmuHolodeck.cs takes the state from here).
+    static Material Volume(RenderTexture state)
     {
-        const float wide = 1.28f, high = 0.8f;
-        Transform root = new GameObject("Volume display").transform;
-        root.SetParent(parent, false);
-        root.localPosition = new Vector3(-halfW + 0.04f, 1.65f, 3.9f);
-        root.localEulerAngles = new Vector3(0, -90f, 0);   // its face towards the room
-        Box(root, "Volume bezel", new Vector3(0, 0, 0.02f), new Vector3(wide + 0.08f, high + 0.08f, 0.03f), frameMat, false);
-
-        Material maskMat = Mat("VolumeMask", "ShaderEmu/VolumeMask");
-        Material sealMat = Mat("VolumeSeal", "ShaderEmu/VolumeSeal");
         Material sceneMat = Mat("GpuVolume", "ShaderEmu/GpuVolume");
-        Material darkMat = Mat("VolumeOff", "Unlit/Color");
-        darkMat.color = new Color(0.01f, 0.011f, 0.014f);
         sceneMat.SetTexture("_State", state);
-        sceneMat.SetVector("_ScreenSize", new Vector4(wide, high, 0, 0));
-        Transform content = new GameObject("Volume content").transform;
-        content.SetParent(root, false);
-        System.Func<string, Material, Transform, GameObject> face = (name, material, under) =>
-        {
-            GameObject go = GameObject.CreatePrimitive(PrimitiveType.Quad);
-            go.name = name;
-            go.transform.SetParent(under, false);
-            go.transform.localScale = new Vector3(wide, high, 1f);
-            Object.DestroyImmediate(go.GetComponent<Collider>());
-            MeshRenderer r = go.GetComponent<MeshRenderer>();
-            r.sharedMaterial = material;
-            r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-            r.receiveShadows = false;
-            r.lightProbeUsage = UnityEngine.Rendering.LightProbeUsage.Off;
-            r.reflectionProbeUsage = UnityEngine.Rendering.ReflectionProbeUsage.Off;
-            return go;
-        };
-        face("Volume mask", maskMat, content);
-        face("Volume seal", sealMat, content);
-        GameObject dark = face("Volume off", darkMat, root);
-        // one point a triangle, as the GPU's own mesh; its bounds are the screen, so it is
-        // drawn whenever the screen is in view
-        Mesh points = LoadOrCreate(Generated + "/VolumePoints.asset", () =>
-        {
-            int[] indices = new int[GpuTriangles];
-            for (int i = 0; i < GpuTriangles; i++) indices[i] = i;
-            Mesh mesh = new Mesh { name = "VolumePoints", indexFormat = UnityEngine.Rendering.IndexFormat.UInt32 };
-            mesh.vertices = new Vector3[GpuTriangles];
-            mesh.SetIndices(indices, MeshTopology.Points, 0, false);
-            return mesh;
-        });
-        points.bounds = new Bounds(Vector3.zero, new Vector3(wide, high, 0.1f));
-        EditorUtility.SetDirty(points);
-        GameObject scene = new GameObject("Volume scene", typeof(MeshFilter), typeof(MeshRenderer));
-        scene.transform.SetParent(content, false);
-        scene.GetComponent<MeshFilter>().sharedMesh = points;
-        MeshRenderer sceneRenderer = scene.GetComponent<MeshRenderer>();
-        sceneRenderer.sharedMaterial = sceneMat;
-        sceneRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-        sceneRenderer.receiveShadows = false;
-        sceneRenderer.lightProbeUsage = UnityEngine.Rendering.LightProbeUsage.Off;
-        sceneRenderer.reflectionProbeUsage = UnityEngine.Rendering.ReflectionProbeUsage.Off;
-
-        // its switch, under the screen
-        RectTransform panel = Panel(root, "Volume panel", new Vector3(0, -high / 2 - 0.15f, 0.03f), Vector3.zero, 900, 180,
-                                    new Color(0.05f, 0.055f, 0.07f));
-        EmuVolume volume = Udon<EmuVolume>(panel.gameObject);
-        volume.content = content.gameObject;
-        volume.dark = dark;
-        volume.sceneMaterial = sceneMat;
-        Button power = MakeButton(panel, "Power", "3D screen: on", 14, 14, 260, 76, 26, out volume.powerLabel);
-        Label(panel, "Hint", "A window onto 3D programs: what glxgears or Doom draws, seen in depth from where you stand. Start one from the Start menu.",
-              290, 10, 596, 84, 20, TextAnchor.MiddleLeft, new Color(0.62f, 0.68f, 0.76f));
-        // where the screen lies in the program's view: its near plane, or further out
-        Label(panel, "Plane title", "Screen plane: near ... far", 14, 104, 270, 60, 20, TextAnchor.MiddleLeft, Color.white);
-        GameObject planeObject = DefaultControls.CreateSlider(new DefaultControls.Resources());
-        RectTransform planeRect = planeObject.GetComponent<RectTransform>();
-        planeRect.SetParent(panel, false);
-        planeRect.anchorMin = planeRect.anchorMax = new Vector2(0, 1);
-        planeRect.pivot = new Vector2(0, 1);
-        planeRect.anchoredPosition = new Vector2(290, -110);
-        planeRect.sizeDelta = new Vector2(596, 48);
-        Slider plane = planeObject.GetComponent<Slider>();
-        plane.minValue = 0;
-        plane.maxValue = 1;
-        plane.value = 0;
-        foreach (Image part in planeObject.GetComponentsInChildren<Image>())
-        {
-            part.material = UiMaterial();
-            part.color = part.name == "Handle" ? Color.white : part.name == "Fill" ? new Color(0.3f, 0.65f, 1f) : new Color(0.2f, 0.21f, 0.25f);
-        }
-        plane.handleRect.sizeDelta = new Vector2(36, 0);
-        DeafToWalking(plane);
-        volume.planeSlider = plane;
-        Apply(volume);
-        OnClick(power, volume, "Toggle");
-        UnityEventTools.AddStringPersistentListener(plane.onValueChanged,
-            UdonSharpEditorUtility.GetBackingUdonBehaviour(volume).SendCustomEvent, "PlaneChanged");
+        sceneMat.SetVector("_ScreenSize", new Vector4(1.28f, 0.8f, 0, 0));
         return sceneMat;
     }
 
@@ -1041,7 +952,7 @@ public static partial class ShaderEmuBuilder
         machine.tickMaterial = tickMat;
         machine.machineMaterial = machineMat;
         machine.gpuMaterial = gpuMat;
-        machine.volumeMaterial = Volume(computer, halfW, state, plasticMat);
+        machine.volumeMaterial = Volume(state);
         machine.gpuCamera = camera;
         MachineCameras(world, machine);
         machine.displayMaterial = displayMat;

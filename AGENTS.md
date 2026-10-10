@@ -1030,9 +1030,21 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   makes every plate again, and a plate made again has lost its place in the lightmap.
 - The kernel upstream's image is built from has networking in it already (`NET: Registered
   PF_INET`, a device `rvcnet`): look there before adding a stack.
+- The holodecks (`docs/holodeck.md`) are eight rooms with a seat each; games and controllers are
+  only there. To test in play mode: `stations[k].UseStation(Networking.LocalPlayer)` on
+  "Holodeck", then its `TakeShooter` event; `ClientSimMain.SpawnRemotePlayer(name)` gives
+  nothing back (find the new player with `VRCPlayerApi.GetPlayers`). A camera made in editor
+  code at `eyes[k]` sees the sitter's own avatar as grey shapes: that is not the scene.
+- A holodeck's seat, console, keys and screen are before the program's world, and nothing
+  else is: copies of them mark the stencil (`HoloGuard.shader`, `HoloGuards`), and
+  `GpuHolodeck.shader` draws on no marked pixel. A thing added to a room that the world must
+  not cover needs a guard; "ShaderEmu/Add the holodecks' guards to the open scene" makes them.
 - A screen in the program's world showing only a game's flat drawing was built and taken out
   (`docs/holodeck.md` has why). The frame's size is still the fourth word at 0x87000300, and
   `gpu_vertex_sized` in `gpu.h` still places a vertex for a picture of a given size.
+- Bakery cancels a bake without a word in the console's last lines when Unity cannot unwrap a
+  mesh at its padding ("Unity failed unwrapping some models", further up): eight consoles in
+  one object with the seats did it. Give a new thing of many pieces an object of its own.
 - The host's words about the room are at 0x87000360 (two texels, `HOST_STATE`), written by the
   control pass when the host defines `HOST_STATE_WORDS(n)`: Unity does, the harness not yet.
 - A lamp of a model that should follow a machine must not be in a baked picture of light:
@@ -1066,6 +1078,8 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   .10.0.0.1`. Doom needs the sound card: under `rvc_cpu` it crashes in its music code.
 - `build.bat` through `cmd /c` from an agent's PowerShell exits at once: build the harness with
   `cmake --build build --config Release` (12 s).
+- A room's lamps must be children of "Decor" to be baked (`RoomLights`): under their rooms'
+  frames the holodecks' were left out and the rooms came out black.
 - Quake draws all round while the host's words say its owner sits in a holodeck (`se_all_round`
   in `vid_shaderemu.c`, `R_CullBox`; `--holodeck` in the harness): a held frame of e1m1 costs
   the same there, 52k against 50k "in view".

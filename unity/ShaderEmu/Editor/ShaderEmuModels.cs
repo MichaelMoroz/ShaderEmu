@@ -67,6 +67,11 @@ public static partial class ShaderEmuBuilder
         S("Carpet", "Carpet", 1f, 1f, 1f, 1f, true, true),
         S("RedPaint", null, 0.62f, 0.05f, 0.04f, 0.35f),
         S("PlasticCase", "Plastic", 0.74f, 0.71f, 0.62f, 1f),
+        // the holodecks' corridor and seats
+        S("SciPanel", "Plastic", 0.70f, 0.68f, 0.63f, 1f),
+        S("SciTrim", "Plastic", 0.30f, 0.31f, 0.34f, 1f),
+        S("SciCarpet", "Linen", 0.47f, 0.51f, 0.64f, 1f, true, true),
+        S("SciSeat", "Linen", 0.15f, 0.14f, 0.15f, 1f, true, true),
     };
 
     static Texture2D ImportedTexture(string path, bool colour, bool normal, int aniso)
@@ -368,7 +373,21 @@ public static partial class ShaderEmuBuilder
                     }
                     continue;
                 }
-                if (go.name == "Holodeck mask" || go.name == "Holodeck control")   // Annex() takes them
+                if (go.name.StartsWith("Clock hand "))
+                {
+                    // (ClockHand.shader turns it about its own middle: it must stay an object of its own)
+                    string hand = go.name.Split(' ')[2];
+                    Material body = renderer.sharedMaterial, turning = Mat("Clock " + hand + " " + (body != null ? body.name : ""), "ShaderEmu/ClockHand");
+                    if (body != null && body.HasProperty("_MainTex")) turning.SetTexture("_MainTex", body.GetTexture("_MainTex"));
+                    if (body != null && body.HasProperty("_BumpMap")) turning.SetTexture("_BumpMap", body.GetTexture("_BumpMap"));
+                    turning.SetFloat("_Period", hand == "hour" ? 43200f : hand == "minute" ? 3600f : 60f);
+                    turning.SetFloat("_Steps", hand == "second" ? 60f : 0f);
+                    renderer.sharedMaterial = turning;
+                    renderer.shadowCastingMode = ShadowCastingMode.Off;
+                    GameObjectUtility.SetStaticEditorFlags(go, 0);
+                    continue;
+                }
+                if (go.name == "Holodeck mask")   // Annex() takes it
                 {
                     renderer.shadowCastingMode = ShadowCastingMode.Off;
                     continue;
@@ -399,10 +418,9 @@ public static partial class ShaderEmuBuilder
             if (m != null && m.HasProperty("_Glow")) m.SetFloat("_Glow", 1.35f);
         }
         PostProcessing(world);
-        foreach (string pad in new[] { "Shooter controller", "Strategy controller" })
-            if (world.Find(pad) != null) GamepadModel(world.Find(pad), pad.StartsWith("Shooter") ? "Gamepad shooter" : "Gamepad strategy", materials);
+        NoDeskControllers(world, computer);   // they are in the holodecks now (ShaderEmuGamepad.cs)
         Weather(world, computer);   // the storm, the screens' light, the light volume (ShaderEmuWeather.cs)
-        Annex(world, models.Find("Annex"));   // the holodeck and the corridor (ShaderEmuHolodeck.cs)
+        Annex(world, models.Find("Annex"), materials);   // the holodecks and the corridor (ShaderEmuHolodeck.cs)
         Stations(world);                      // the classroom's computers (ShaderEmuStations.cs)
         PcSounds(world);                      // the computer's own sounds (ShaderEmuPcSound.cs)
     }

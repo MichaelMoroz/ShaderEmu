@@ -7,9 +7,7 @@ Texture2D<uint4> _State;
 float4 _ScreenSize;
 float _Plane;
 #ifdef HOLODECK
-float _Anchor, _UpAxis;
-float4 _RoomMin, _RoomMax;   // the holodeck itself, in the world
-Texture2D<float4> _Origin;   // where the world's middle is, in the program's own world (HolodeckOrigin.shader)
+float4 _RoomMin, _RoomMax;   // the holodeck in use, in the world
 #endif
 #define GPU_STATE _State
 #define GPU_VOLUME
@@ -49,13 +47,18 @@ void geom(point volume_point i[1], inout TriangleStream<volume_out> stream) {
     uint4 head;
     if (!volume_command(first, base, head)) return;
 #ifdef HOLODECK
+    // The program's camera stands at this object (the seat's eye point) and the horizon is the
+    // room's: of the camera's turn only what is about the world's up is followed, so whoever
+    // sits there faces the way the camera faces and the floor stays the floor.
     float3 rx, ry, rz, move;
-    bool placed = _Anchor < 1.5 && volume_view(rx, ry, rz, move);
-    // which of the program's axes is up (0: x, 1: y, 2: z): as set, or the one the camera's own up
-    // is nearest to and its right is square to (a camera does not roll)
+    bool placed = volume_view(rx, ry, rz, move);
+    // which of the program's axes is up (0: x, 1: y, 2: z): the one the camera's own up is
+    // nearest to and its right is square to (a camera does not roll)
     float3 upright = ry - 2.0 * abs(rx);
-    float3 middle = _Origin.Load(int3(0, 0, 0)).xyz;
-    int up = _UpAxis > 1.5 ? 2 : _UpAxis > 0.5 ? 1 : upright.z > max(upright.x, upright.y) ? 2 : upright.y >= upright.x ? 1 : 0;
+    int up = upright.z > max(upright.x, upright.y) ? 2 : upright.y >= upright.x ? 1 : 0;
+    // the camera's right, level in the room: its turn about the room's up
+    float3 right = up == 1 ? float3(rx.x, rx.y, -rx.z) : up == 2 ? float3(rx.x, rx.z, rx.y) : float3(rx.y, rx.x, rx.z);
+    float2 level = length(right.xz) > 1e-4 ? normalize(right.xz) : float2(1, 0);
 #endif
     for (uint k = 0; k < 3; k++) {
         float3 eye;
@@ -64,17 +67,16 @@ void geom(point volume_point i[1], inout TriangleStream<volume_out> stream) {
         UNITY_INITIALIZE_OUTPUT(volume_out, o);
         o.v = volume_vertex(first + k, base, head, eye, planes, focal);
 #ifdef HOLODECK
-        // out of the camera's turn, back into the world's: the room does not swing when the
-        // player looks about. With the world's own place too, or (anchor 0) the player's.
-        float3 from = _Anchor > 0.5 ? eye - move : eye;
-        float3 p = placed ? rx * from.x + ry * from.y + rz * from.z : eye;
-        if (placed && _Anchor > 0.5) p -= middle;
+        // out of the camera's turn, back into the world's, the camera where it is
+        float3 p = placed ? rx * eye.x + ry * eye.y + rz * eye.z : eye;
         // metres a unit, as the volume display's: at its largest the picture's rectangle on the
         // near plane is _ScreenSize, and _Plane moves that plane out towards the far one
         float near = max(planes.x, 1e-4), at = near * pow(max(planes.y, near) / near, _Plane);
         float scale = min(_ScreenSize.x * focal.x, _ScreenSize.y * focal.y) / (2.0 * at);
         // right-handed to Unity's left-handed, the program's up to this room's
         float3 local = (!placed || up == 1 ? float3(p.x, p.y, -p.z) : up == 2 ? float3(p.x, p.z, p.y) : float3(p.y, p.x, p.z)) * scale;
+        // and turned about the room's up until the camera's right is the seat's
+        if (placed) local.xz = float2(local.x * level.x + local.z * level.y, local.z * level.x - local.x * level.y);
         // a sky is laid on the program's picture: here it is a panorama round the visitor, and
         // its colour carries the way from the eye to this place
         if (o.v.texture_info.r & FRAGMENT_LAID)
