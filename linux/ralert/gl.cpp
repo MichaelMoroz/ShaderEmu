@@ -42,6 +42,7 @@ struct Shape
     const void* fade;
     const void* ghost;
     unsigned short frame;
+    unsigned char turn;   // the shape turned by this much of a circle's 256 (an aircraft, a missile); 0: as it is
     short x, y, w, h;     // where it is in its atlas: only the part of it that has pixels
     short left, top;      // where that part is in the whole shape
     short full_w, full_h; // and how large that is
@@ -428,9 +429,9 @@ static void put(Shape* s, const unsigned char* pixels)
     }
 }
 
-static Shape* shape_of(const void* file, int frame, const void* fade, const void* ghost)
+static Shape* shape_of(const void* file, int frame, const void* fade, const void* ghost, int turn)
 {
-    unsigned at = ((uintptr_t)file * 31u + (unsigned)frame * 131u + (uintptr_t)fade * 7u + (uintptr_t)ghost) % SLOTS;
+    unsigned at = ((uintptr_t)file * 31u + (unsigned)frame * 131u + (uintptr_t)fade * 7u + (uintptr_t)ghost + (unsigned)turn * 977u) % SLOTS;
 
     for (int tries = 0; tries < 64; tries++, at = (at + 1) % SLOTS) {
         Shape* s = &shapes[at];
@@ -439,17 +440,41 @@ static Shape* shape_of(const void* file, int frame, const void* fade, const void
             s->frame = (unsigned short)frame;
             s->fade = fade;
             s->ghost = ghost;
+            s->turn = (unsigned char)turn;
             return s;
         }
-        if (s->file == file && s->frame == frame && s->fade == fade && s->ghost == ghost) {
+        if (s->file == file && s->frame == frame && s->fade == fade && s->ghost == ghost && s->turn == turn) {
             return s;
         }
     }
     return NULL;
 }
 
+// A shape turned as the game turns one (CC_Draw_Shape: twice the size, about its middle), for
+// put() to take as a shape's pixels. The game does this at every drawing of the shape: an
+// aircraft that flies over was 250 thousand instructions a frame, more than everything else.
+// Here it is done once for each turn of each frame, and kept in the atlas like any shape.
+void* Get_Shape_Header_Data(void* ptr);
+static unsigned char* turned(const void* built, int w, int h, int turn)
+{
+    static unsigned char* buffer;
+    static int size;
+
+    if (4 * w * h > size) {
+        delete[] buffer;
+        size = 4 * w * h;
+        buffer = new unsigned char[size];
+    }
+    memset(buffer, 0, 4 * w * h);
+    BitmapClass bm(w, h, (unsigned char*)Get_Shape_Header_Data((void*)built));
+    GraphicBufferClass gb(2 * w, 2 * h, buffer);
+    TPoint2D pt(w, h);
+    gb.Scale_Rotate(bm, pt, 0x0100, (256 - (turn - 64)));
+    return buffer;
+}
+
 // A shape of the map, as CC_Draw_Shape was asked for it. False: the game is to draw it.
-bool ShaderEmu_GL_Shape(void const* file, int frame, int x, int y, int window, int flags, void const* fade, void const* ghost)
+bool ShaderEmu_GL_Shape(void const* file, int frame, int x, int y, int window, int flags, void const* fade, void const* ghost, int turn)
 {
     if (!ShaderEmu_GL_Emitting || window != WINDOW_TACTICAL || !file || frame == -1) {
         return false;
@@ -463,7 +488,7 @@ bool ShaderEmu_GL_Shape(void const* file, int frame, int x, int y, int window, i
         ShaderEmu_GL_Refused++;
         return false;
     }
-    Shape* s = shape_of(file, frame, flags & SHAPE_FADING ? fade : NULL, flags & SHAPE_GHOST ? ghost : NULL);
+    Shape* s = shape_of(file, frame, flags & SHAPE_FADING ? fade : NULL, flags & SHAPE_GHOST ? ghost : NULL, turn & 255);
     if (!s) {
         return false;
     }
@@ -474,6 +499,11 @@ bool ShaderEmu_GL_Shape(void const* file, int frame, int x, int y, int window, i
         s->left = s->top = 0;
         if (!built) {
             s->kind = EMPTY;
+        } else if (s->turn) {
+            unsigned char* pixels = turned((void*)built, s->w, s->h, s->turn);
+            s->w = s->full_w = (short)(2 * s->w);
+            s->h = s->full_h = (short)(2 * s->h);
+            put(s, pixels);
         } else if (UseBigShapeBuffer) {
             ShapeHeader* header = (ShapeHeader*)built;
             put(s, (unsigned char*)(header->shape_buffer ? TheaterShapeBufferStart : BigShapeBufferStart) + (uintptr_t)header->shape_data);
@@ -864,7 +894,7 @@ void DisplayClass::ShaderEmu_GL_Draw(bool forced)
             // the first time by the game's own call, which puts the shape in the shades
             CC_Draw_Shape(ShadowShapes, edge, shroud[i].x, shroud[i].y, WINDOW_TACTICAL, SHAPE_GHOST, NULL, ShadowTrans);
             if (edge < 64) {
-                edge_shape[edge] = shape_of(ShadowShapes, edge, NULL, ShadowTrans);
+                edge_shape[edge] = shape_of(ShadowShapes, edge, NULL, ShadowTrans, 0);
             }
         }
     }

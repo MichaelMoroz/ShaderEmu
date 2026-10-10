@@ -90,6 +90,17 @@ kernel reports a moving pointer 10 times a second while a program runs, and the 
 itself is the display's cursor: 17 frames a second with the pointer going round
 (`docs/input.md`, `docs/tdawn.md`).
 
+A shape the game turns (an aircraft, a missile: `CC_Draw_Shape` with a rotation) was not the
+GPU's: the game cleared a buffer, turned the shape into it at twice the size and drew that
+on the page, at every drawing. The bomber that flies over that mission was 250 thousand
+instructions a frame by itself while it flew, 6 frames a second where the frames around it
+were 14. A turned shape is a shape of the atlas like any other now, turned once for each
+turn of each frame (`turned()` in `linux/ralert/gl.cpp`): those frames are 255 thousand
+instructions and 14 a second, and the state sum at frame 640 is the same (`52fa1019`). Its
+picture was not compared with the game's own: the aircraft does not cross the view in that
+run. `ralogic`-style counters put round an object's turn said where the logic goes there:
+40 soldiers 100 thousand, 5 vehicles 35, 45 buildings 20, the houses 17.
+
 ## Movies, and the worker cores
 
 The demo's opening movie (ENGLISH.VQA, 640 x 400, 156 frames of it before `TDAWN_AUTO`'s Return

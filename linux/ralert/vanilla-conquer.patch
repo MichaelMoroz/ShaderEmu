@@ -467,7 +467,7 @@ index 3f1c7f1..2c71953 100644
          Map.Flag_To_Redraw(true);
      }
 diff --git a/redalert/conquer.cpp b/redalert/conquer.cpp
-index 4825ba4..8b22800 100644
+index 4825ba4..f636cc0 100644
 --- a/redalert/conquer.cpp
 +++ b/redalert/conquer.cpp
 @@ -125,6 +125,159 @@ bool Map_Edit_Loop(void);
@@ -751,8 +751,8 @@ index 4825ba4..8b22800 100644
      }
 +#ifdef SHADEREMU
 +    {
-+        bool ShaderEmu_GL_Shape(void const* file, int frame, int x, int y, int window, int flags, void const* fade, void const* ghost);
-+        if (rotation == DIR_N && ShaderEmu_GL_Shape(shapefile, shapenum, x, y, window, flags, fadingdata, ghostdata)) {
++        bool ShaderEmu_GL_Shape(void const* file, int frame, int x, int y, int window, int flags, void const* fade, void const* ghost, int turn);
++        if (ShaderEmu_GL_Shape(shapefile, shapenum, x, y, window, flags, fadingdata, ghostdata, (int)rotation)) {
 +            return;
 +        }
 +    }
