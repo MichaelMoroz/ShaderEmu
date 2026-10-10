@@ -113,7 +113,9 @@ pass-local (`static`), never stored in the texture.
     with loop attribute"), so under FXC the arrays stay static. `L1_STATIC` keeps them static
     under fxc2 too.
 
-24. **MULH in one instruction** (`emu.h`): the GPU's `umul` and `imul` return both halves of a
+24. **MULH in one instruction** (`emu.h`; taken out again in October 2026, `docs/linux.md`: VRChat
+    crashed on Linux, where the layer under Direct3D makes an invalid SPIR-V module of the
+    instruction): the GPU's `umul` and `imul` return both halves of a
     32 x 32 bit product, which HLSL cannot ask for. fxc2 adds `mulhi()` (and `umulExtended()`,
     `imulExtended()`), so with `__FXC2__` `mulhu32()` is that one instruction instead of four
     multiplications and a carry chain, and `mulh` needs no sign corrections. Our raytracer

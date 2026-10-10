@@ -315,23 +315,16 @@ DEF(mul, FormatR, { // rv32m
 //
 // The GPU has had the instruction for this all along (umul and imul return both halves of the
 // product), HLSL just cannot ask for it. fxc2 can: mulhi() there is that one instruction.
+// (Not used any more: docs/linux.md.)
 uint mulhu32(uint a, uint b) {
-#ifdef __FXC2__
-    return mulhi(a, b);
-#else
     uint al = a & 0xffff, ah = a >> 16, bl = b & 0xffff, bh = b >> 16;
     uint lh = al * bh, hl = ah * bl;
     uint mid = ((al * bl) >> 16) + (lh & 0xffff) + (hl & 0xffff);
     return ah * bh + (lh >> 16) + (hl >> 16) + (mid >> 16);
-#endif
 }
 // the high word of the signed product
 uint mulhs32(uint a, uint b) {
-#ifdef __FXC2__
-    return AS_UNSIGNED(mulhi(AS_SIGNED(a), AS_SIGNED(b)));
-#else
     return mulhu32(a, b) - ((a >> 31) ? b : 0) - ((b >> 31) ? a : 0);
-#endif
 }
 DEF(mulh, FormatR, { // rv32m
     uint a = xreg(ins.rs1);   // one declaration each: Unity's preprocessor splits macro arguments at this comma

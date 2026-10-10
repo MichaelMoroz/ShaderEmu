@@ -90,7 +90,7 @@ D3D11 the hashes are equal there too.
 | | in the shader | under FXC |
 |---|---|---|
 | `inout` arrays worked on in place | `L1_LOCAL`: `l1_cache`, `tlb2_tag`, `tlb2_pg` are locals of `frag` handed down as arguments (`src/l1_local.h`) | static arrays, zeroed every pass. FXC fails on the local form: "can't unroll loops marked with loop attribute" |
-| `mulhi(a, b)` | `mulhu32()` and `mulhs32()` in `src/emu.h`: one `umul` or `imul` | four multiplications and a carry chain |
+| `mulhi(a, b)` | not used any more (`linux.md`): `mulhu32()` and `mulhs32()` in `src/emu.h` were one `umul` or `imul`, which the layers that run Direct3D on Linux turn into an invalid SPIR-V module | four multiplications and a carry chain, which is what the shader has under both compilers now |
 
 fxc2 also has `umulExtended(a, b, hi, lo)` and `imulExtended` (both halves of the product from
 one instruction), and struct member functions; nothing here needs those yet.

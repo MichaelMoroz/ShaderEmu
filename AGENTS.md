@@ -251,8 +251,7 @@ A cold boot to the `/ #` prompt takes about 80 s on an RTX 5090 with upstream on
   (`tlb2_tag`, `tlb2_pg`) go the same way, with `tlb2_occ` as their occupancy bitmap.
 - The D3D11 compiler is fxc2 (`docs/fxc2.md`, `tools\fxc2`): the build puts its
   `d3dcompiler_47.dll` beside the harness, the tick compiles in about 6 s (FXC: 3 to 9
-  minutes), and the shader switches on `L1_LOCAL` and the one-instruction MULH when `__FXC2__`
-  is defined. The banner says which compiler was loaded, and the cache keeps their blobs apart.
+  minutes), and the shader switches on `L1_LOCAL` when `__FXC2__` is defined. The banner says which compiler was loaded, and the cache keeps their blobs apart.
   Delete `bin\d3dcompiler_47.dll` to compile with Microsoft's FXC again.
 - In D3D11 bytecode a function's return value is a flag that is written, copied and tested.
   In the fast loop, leave with `break` from the place that finds a thing out instead of
@@ -298,11 +297,11 @@ A cold boot to the `/ #` prompt takes about 80 s on an RTX 5090 with upstream on
   stock compiler's cache is `Library\ShaderCache.fxc`.
 - The Unity editor must compile with fxc2 (here it is in the install itself: the stub
   `D3DCompiler_47.dll` and `fxc2_d3dcompiler.dll` in the editor's `Data\Tools`). An editor with
-  Microsoft's compiler fails on `mulhi` and Unity keeps that failure in
+  Microsoft's compiler fails on the tick (its arrays as locals: "can't unroll loops") and Unity keeps that failure in
   `Library\ShaderCache\shader\MachineTick*` (files of about 1 KB), after which no editor
   compiles the tick and the machine runs no instructions: delete those files and re-import
   `MachineTick.shader` (5 s). A shader made in editor code that calls `mulhi` tells which
-  compiler is there.
+  compiler is there (only fxc2 has it; the machine's own shaders no longer call it).
 - In Unity the commit and the control pass draw the 64 state rows and the bands of RAM that
   changed, not the whole texture: a geometry shader in `MachineBlit.cginc` puts those rectangles
   in place of Blit's two triangles (no tessellation; if one is ever added, its factor stays at 8
@@ -862,8 +861,9 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   the points: take a program's times from a run without it.
 - A shader that ships to players must go through what Linux turns its bytecode into SPIR-V
   with (`docs/linux.md`, `tools/linux_spirv`): fxc2 can write instructions Microsoft's
-  compiler never does, and the one-instruction MULH (`imul`/`umul` with a high result) made
-  an invalid module there and crashed VRChat on every card. The world's tick has `NO_MULHI`.
+  compiler never does, and the one-instruction MULH (`mulhi()`: `imul`/`umul` with a high
+  result) made an invalid module there and crashed VRChat on every card. No shader of the
+  machine calls `mulhi()`, `umulExtended()` or `imulExtended()` any more: do not bring them back.
 - Pixels of two cores that the card runs as one group cost what both cost, unless the cores
   run the same instructions: measure anything about the workers' pixels with `nxray` (every
   core its own work), never with `mctest`'s bench (the same primes on all of them).

@@ -40,15 +40,15 @@ not tested either.
 
 ## What was done
 
-`NO_MULHI` keeps the high word from 16-bit partial products, as Microsoft's compiler gets
-it, under fxc2 too. `MachineTick.shader` defines it. With it all eleven stages the machine
-has (tick, commit, GPU, sound) go through the library with assertions on and pass
-`spirv-val`; without it the tick is the one that does not. It costs nothing that can be
-measured (Doom's demo: 3.60M instructions a second with it, 3.67M without, the same state
-sum; MULH is a rare instruction).
+The instruction is out of the shader for good: `mulhu32()` and `mulhs32()` are the 16-bit
+partial products under both compilers, as they always were under Microsoft's. With that all
+eleven stages the machine has (tick, commit, GPU, sound) go through the library with
+assertions on and pass `spirv-val`; with the instruction the tick was the one that did not.
+It cost nothing that can be measured (Doom's demo: 3.60M instructions a second without the
+instruction, 3.67M with it, the same state sum; MULH is a rare instruction).
 
-The harness still uses the one instruction (Direct3D on Windows has no such trouble):
-`--define NO_MULHI` builds what the world has.
+fxc2 still has `mulhi()`, `umulExtended()` and `imulExtended()`. Nothing of the machine's
+calls them, and nothing that ships to players should.
 
 ## Checking a shader before it ships
 
@@ -61,7 +61,7 @@ The harness still uses the one instruction (Direct3D on Windows has no such trou
 
 Compile the machine into an empty cache folder first, with the world's switches:
 
-    bin\rvc_harness.exe --d3d11 --rvc experiments\rvc_opt --image linux-net --no-stdin --no-mrt --define L1_TABLE_BITS=6 --define NO_MULHI --cache build\cache_vrc --until "/ # " --seconds 60
+    bin\rvc_harness.exe --d3d11 --rvc experiments\rvc_opt --image linux-net --no-stdin --no-mrt --define L1_TABLE_BITS=6 --cache build\cache_vrc --until "/ # " --seconds 60
 
 and `check_cache.sh` must end in "0 do not". Anything new that fxc2 can write and
 Microsoft's compiler cannot is a thing to run through this before a world is uploaded.
