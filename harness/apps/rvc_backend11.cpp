@@ -81,7 +81,8 @@ public:
         if (!crt_.init(gpu_.device.Get(), kWidth, kHeight, DXGI_FORMAT_R32G32B32A32_UINT, err)) return false;
         crt_.clear(gpu_.ctx.Get());
         return rows_.init(gpu_.device.Get(), DXGI_FORMAT_R32G32B32A32_UINT, 16, 64, 1, 3, err, opt.readbackBatch) &&
-               control_.init(gpu_.device.Get(), DXGI_FORMAT_R32G32B32A32_UINT, 16, kControlTexels, 1, 3, err, opt.readbackBatch);
+               control_.init(gpu_.device.Get(), DXGI_FORMAT_R32G32B32A32_UINT, 16, kControlTexels, 1, 3, err, opt.readbackBatch) &&
+               net_.init(gpu_.device.Get(), DXGI_FORMAT_R32G32B32A32_UINT, 16, kNetRead, 1, 3, err, opt.readbackBatch);
     }
 
     bool loadPayload(Material& mat, const std::string& dir, const std::string& prefix, const std::string& propBase,
@@ -114,6 +115,18 @@ public:
         if (!hostData_) return false;
         mat.setTexture("_HostData", hostData_.Get(), kFetchSide, kFetchSide);
         deliver_ = true;
+        return true;
+    }
+
+    bool deliverNet(Material& mat, const uint8_t* rgba, std::string& err) override {
+        ImageRGBA8 img;
+        img.width = kNetSlot * 4;
+        img.height = kNetMost;
+        img.pixels.assign(rgba, rgba + (size_t)img.width * img.height * 4);
+        netData_ = createTextureRGBA8(gpu_.device.Get(), img, /*flipY=*/false, err);
+        if (!netData_) return false;
+        mat.setTexture("_NetData", netData_.Get(), img.width, img.height);
+        deliverNet_ = true;
         return true;
     }
 
@@ -176,6 +189,11 @@ public:
                 crt_.runZone(gpu_, gpuPasses_[1], mat, UpdateZone{f[0], f[1], f[2], f[3], 1});
                 deliver_ = false;
             }
+            if (deliverNet_) {
+                const float* n = kNetZone;
+                crt_.runZone(gpu_, gpuPasses_[1], mat, UpdateZone{n[0], n[1], n[2], n[3], 1});
+                deliverNet_ = false;
+            }
         }
         if (timeIt) {
             gpu_.ctx->End(tsQuery_[3].Get());
@@ -189,6 +207,7 @@ public:
         }
         rows_.request(gpu_.ctx.Get(), crt_.current(), 0, 0, tag);
         control_.request(gpu_.ctx.Get(), crt_.current(), 0, kControlRow, tag);
+        net_.request(gpu_.ctx.Get(), crt_.current(), 0, kNetRow, tag);
         // hand the frame to the GPU now, as ExecuteCommandLists does on D3D12: without this it
         // starts when the readback's Map asks for it, after the host's own work for the frame
         if (!getenv("RVC11_NO_FLUSH")) gpu_.ctx->Flush();
@@ -200,6 +219,8 @@ public:
         std::vector<uint8_t> control;
         uint64_t controlTag;
         if (!rows_.pop(gpu_.ctx.Get(), out, tag) || !control_.pop(gpu_.ctx.Get(), control, controlTag)) return false;
+        out.insert(out.end(), control.begin(), control.end());
+        if (!net_.pop(gpu_.ctx.Get(), control, controlTag)) return false;
         out.insert(out.end(), control.begin(), control.end());
         lastSound_.clear();
         if (!soundTags_.empty() && soundTags_.front() == tag) {
@@ -558,7 +579,9 @@ private:
     ComPtr<ID3D11BlendState> gpuBlend_[4];
     std::vector<ComPtr<ID3D11ShaderResourceView>> keep_;
     CustomRenderTexture crt_;
-    RegionReadback rows_, control_;
+    RegionReadback rows_, control_, net_;
+    ComPtr<ID3D11ShaderResourceView> netData_;
+    bool deliverNet_ = false;   // the ring's zone is drawn in the next frame
 
     // RVC11_COMPUTE=1 (experiments/rvc_compute): the tick as one thread of a compute shader, the
     // pass's entry tick_cs. It writes the CPU zone's texels into a 64 x 64 texture of its own,

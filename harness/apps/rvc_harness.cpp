@@ -19,6 +19,7 @@
 #include "memview.h"
 #include "rvc_audio.h"
 #include "rvc_backend.h"
+#include "rvc_net.h"
 #include "rvc_time.h"
 #include "shaderlab.h"
 
@@ -97,6 +98,9 @@ struct Options {
     std::string l1Log;        // per frame: instructions, last stall, a count, then the RAM texels its write cache held
     double statsAfter = -1;   // >= 0: print a STATS line for the part of the run after this many seconds
     bool noDoubles = false;
+    int netPort = 0;          // --net PORT: the network device's link to other machines here (docs/lan.md)
+    int netId = 1;            // --net-id N: this machine's number, its address 10.0.0.N
+    double netLoss = 0, netDelay = 0;   // --net-loss percent, --net-delay milliseconds: of every packet sent
     int cores = 1;            // --cores N: core 0 and N - 1 worker cores (docs/multicore.md; D3D11)
     bool noBands = false;     // --no-bands: the commit rewrites all of RAM, as a CustomRenderTexture does
     bool noMrt = false;       // --no-mrt: the tick in one target (D3D11)
@@ -188,6 +192,10 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
                        faster; the display, the GPU, the keys and the pointer are the shader's as before
                        (D3D11, the Linux image in build\\images\\linux)
   --cpu-ips N          the same, at no more than N instructions a second (3000000: the world's speed)
+  --net PORT           the network (docs/lan.md): this machine is 10.0.0.N and hears UDP port PORT + N of
+                       this computer, where the other machines started with the same PORT send (D3D11)
+  --net-id N           its number N, 1 to 16 (default 1)
+  --net-loss P         lose P percent of the packets it sends   --net-delay MS   and hold the rest back MS ms
   --l1-log FILE        per frame: the addresses in the write cache, for tools/l1_study.py (D3D12)
   --stats-after S      print instructions/s and frames/s for the run after its first S seconds
                        (and start the pc log there)
@@ -329,6 +337,10 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--no-bands") o.noBands = true;
         else if (a == "--no-mrt") o.noMrt = true;
         else if (a == "--readback-batch") o.readbackBatch = atoi(next("--readback-batch").c_str());
+        else if (a == "--net") o.netPort = atoi(next("--net").c_str());
+        else if (a == "--net-id") o.netId = atoi(next("--net-id").c_str());
+        else if (a == "--net-loss") o.netLoss = atof(next("--net-loss").c_str());
+        else if (a == "--net-delay") o.netDelay = atof(next("--net-delay").c_str());
         else if (a == "--cpu") o.cpu = true;
         else if (a == "--cpu-ips") { o.cpu = true; o.cpuIps = atof(next("--cpu-ips").c_str()); }
         else if (a == "--cores") { o.cores = (std::max)(1, (std::min)(64, atoi(next("--cores").c_str()))); if (o.cores > 1) o.defines.push_back("CORES=" + std::to_string(o.cores)); }
@@ -821,6 +833,18 @@ int main(int argc, char** argv) {
     } fetch;
     uint32_t fetchAnswered = 0;
     bool fetchDelivering = false;
+    // The network device (docs/lan.md): the guest's packets come back with the row, the others'
+    // go into its ring in the control pass.
+    NetLink net;
+    if (opt.netPort) {
+        std::string why;
+        if (opt.netId < 1 || opt.netId > (int)NetLink::kBroadcastTo) why = "--net-id is 1 to 16";
+        else if (opt.dxc || !bo.gpuShader) why = "it needs the GPU device on D3D11";
+        else net.open(opt.netPort, (unsigned)opt.netId, opt.netLoss, opt.netDelay, why);
+        if (!net.on()) { fprintf(stderr, "[harness] no network: %s\n", why.c_str()); return 1; }
+        fprintf(stderr, "[harness] network: this machine is 10.0.0.%d, UDP port %d\n", opt.netId, opt.netPort + opt.netId);
+    }
+    bool netDelivered = false;
     int gpuPassLife[8] = {};      // frames each of the GPU's passes 1-7 is still drawn for
     // The sound card (docs/sound.md). While the guest has it enabled the host mixes: it names a
     // cursor, the device draws the samples from there on and moves its voices up to it.
@@ -878,6 +902,8 @@ int main(int argc, char** argv) {
         if (raw.size() >= (64 + 2) * 16)
             for (int p = 1; p < 8; ++p)
                 if ((texel(64 + 1, 0) >> (8 + p)) & 1) gpuPassLife[p] = 600;
+        if (net.on() && raw.size() >= (64 + kControlTexels + kNetSlot) * 16)
+            net.fromGuest(texel(64 + 0x3e, 0), texel(64 + 0x3e, 1), t + (64 + kControlTexels) * 4);
         if (raw.size() >= (64 + 34) * 16 && texel(64 + 16, 0) != texel(64 + 17, 0) && texel(64 + 16, 0) != fetchAnswered) {
             std::lock_guard<std::mutex> lock(fetch.lock);
             if (!fetch.busy && !fetch.ready) {
@@ -1223,6 +1249,20 @@ int main(int argc, char** argv) {
             }
         }
 
+        netDelivered = false;
+        if (net.on()) {
+            uint8_t places[NetLink::kMost * NetLink::kSlotBytes];
+            uint32_t before = 0;
+            unsigned n = net.toGuest(places, before);
+            std::string err;
+            if (n && !backend.deliverNet(mat, places, err)) n = 0;   // (those packets are lost)
+            netDelivered = n != 0;
+            mat.setInt("_NetRxSeq", before);
+            mat.setInt("_NetRxCount", n);
+            mat.setInt("_NetTxAck", net.txAck());
+            mat.setInt("_NetId", net.id());
+        }
+
         if (opt.benchWarmup >= 0 && frame == (uint64_t)opt.benchWarmup) {
             // Start the measurement from an idle GPU with every earlier frame accounted for.
             while (backend.rowPending() > 0 && takeRow()) {}
@@ -1282,6 +1322,13 @@ int main(int argc, char** argv) {
             while (backend.rowPending() > 0)
                 if (!takeRow()) Sleep(0);
             if (row.size() >= (64 + kControlTexels) * 16) memcpy(&word(CTRL), row.data() + 64 * 16, kControlTexels * 16);
+            if (netDelivered) {
+                // the ring as the control pass left it
+                std::vector<uint8_t> rows;
+                size_t ring = (size_t)kNetRing * 16, bytes = (size_t)kNetSlot * kNetSlots * 16;
+                if (backend.readRows(kNetRow, 1, rows) && rows.size() >= ring + bytes)
+                    memcpy(ram.data() + (size_t)(kNetRow - 64) * 32768 + ring, rows.data() + ring, bytes);
+            }
             if (cpuCopy[0]) {
                 uint32_t address = CTRL + 0x1000, bytes = cpuDisplay[0] * cpuDisplay[1] * 4;
                 if (cpuCopy[0] & 4) {
@@ -1502,14 +1549,17 @@ int main(int argc, char** argv) {
         // each core's state: what it is doing as the run ends. Core 0's is at the left; a
         // worker's rows of the strip beside it are where the geometry (control texel 0x3d) puts them.
         std::vector<uint8_t> blocks;
-        if (backend.readState(2048, 64, blocks) && blocks.size() >= (size_t)2048 * 64 * 16 && row.size() >= (64 + 0x40) * 16) {
+        std::vector<uint8_t> mailboxes;   // (MC_GEOMETRY_MORE is in their page, 0x86c00f00)
+        if (backend.readState(2048, 64, blocks) && blocks.size() >= (size_t)2048 * 64 * 16 && row.size() >= (64 + 0x40) * 16 &&
+            backend.readRows(64 + 0x6c0000 / 2048, 1, mailboxes) && mailboxes.size() >= 0xf2 * 16) {
             const uint32_t* all = (const uint32_t*)blocks.data();
             const uint32_t* geo = (const uint32_t*)row.data() + (64 + 0x3d) * 4;
+            const uint32_t* geoMore = (const uint32_t*)mailboxes.data() + 0xf0 * 4;
             unsigned at = 0;
             uint64_t workersRan = 0;
             for (int c = 0; c < opt.cores; ++c) {
-                // four bits a worker: the geometry texel's words 1 to 3, then the next texels' (more than 16 cores)
-                unsigned k = (unsigned)c - 1, bits = c == 0 ? 6 : ((geo[1 + k / 8] >> (4 * (k % 8))) & 15);
+                // four bits a worker: the geometry texel's words 1 to 3, then MC_GEOMETRY_MORE's
+                unsigned k = (unsigned)c - 1, bits = c == 0 ? 6 : (((k < 24 ? geo[1 + k / 8] : geoMore[k / 8 - 3]) >> (4 * (k % 8))) & 15);
                 unsigned rows = c == 0 ? 0 : bits ? (44 + 8 + (2u << bits) * 4 + 63) / 64 : 0;
                 if (c != 0 && !rows) continue;
                 // texel w (below 64) of the core's state: a worker's is in the first 8 x 8 tile of its strip
@@ -1557,6 +1607,9 @@ int main(int argc, char** argv) {
     if (opt.cores > 1)
         fprintf(stderr, "[harness] %d workers: %llu instructions more, all cores avg %.1fk IPS\n", opt.cores - 1,
                 (unsigned long long)workerInstructions, wall > 0 ? (guestInstructions + workerInstructions) / wall / 1000.0 : 0.0);
+    if (net.on())
+        fprintf(stderr, "[harness] network: %llu packets sent, %llu lost on the way (--net-loss), %llu received, %llu never taken\n",
+                (unsigned long long)net.sent, (unsigned long long)net.lost, (unsigned long long)net.received, (unsigned long long)net.dropped);
     if (uartLog) fclose(uartLog);
     fflush(stdout);
     // The stdin thread may be blocked in getchar(); exit without joining it.

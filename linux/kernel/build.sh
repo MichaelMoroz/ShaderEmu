@@ -41,7 +41,7 @@ echo "== configure and build"
 export KBUILD_BUILD_TIMESTAMP="Mon Jan  1 00:00:00 UTC 2024" KBUILD_BUILD_USER=shaderemu KBUILD_BUILD_HOST=shaderemu KBUILD_BUILD_VERSION=1
 MAKE="make -C linux ARCH=riscv CROSS_COMPILE=riscv32-linux- -j$(nproc)"
 $MAKE KCONFIG_ALLCONFIG="$WORK/all.config" allnoconfig >/dev/null
-for symbol in SHADEREMU_GPU SHADEREMU_SOUND FB_SHADEREMU INPUT_SHADEREMU INPUT_EVDEV HZ_100 FPU; do
+for symbol in SHADEREMU_GPU SHADEREMU_SOUND FB_SHADEREMU INPUT_SHADEREMU INPUT_EVDEV HZ_100 FPU SHADEREMU_NET; do
     grep -q "^CONFIG_$symbol=y" linux/.config || { echo "CONFIG_$symbol is not set in .config"; exit 1; }
 done
 $MAKE Image 2>&1 | grep -E "error|warning: .*shaderemu|Image is ready" || true

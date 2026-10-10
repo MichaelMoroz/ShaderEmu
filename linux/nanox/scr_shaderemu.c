@@ -30,7 +30,7 @@
 #define FONTS_OFFSET	0x01441000u	/* the built-in fonts' glyph tables and bitmaps, kept for good */
 #define CACHE_OFFSET	0x01481000u	/* single glyphs the engine asked for one at a time, kept between lists */
 #define DATA_OFFSET	0x01541000u	/* other textures for the commands in the list */
-#define DATA_END	0x016c0000u	/* beyond: what the host fetched (docs/fetch.md), then an OpenGL program's */
+#define DATA_END	0x016b8000u	/* beyond: the network's packets (docs/lan.md), what the host fetched (docs/fetch.md), then an OpenGL program's */
 #define REG_MODE	0		/* word indices from REGS_OFFSET */
 #define REG_WIDTH	1
 #define REG_HEIGHT	2

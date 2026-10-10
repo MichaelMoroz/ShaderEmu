@@ -69,7 +69,8 @@ struct shaderemu_gpu_workers {
  */
 #define SHADEREMU_GPU_SHAPE_ALL	_IOW('G', 7, __u32[8])
 #define SHADEREMU_GPU_WORKERS_ALL	_IOWR('G', 8, __u32[4])
-#define WORKERS_SHAPE	0x3d0	/* control words: bit 0 while it is laid out anew; the words after it */
+#define WORKERS_SHAPE	0x3d0	/* control words: bit 0 while it is laid out anew; three words after it */
+#define WORKERS_SHAPE_MORE	0xf00	/* the other five, of a machine of more than 16 cores: in the mailbox page */
 #define WORKERS_ROWS	64
 #define WORKERS_ROWS_MANY	248	/* a machine of more than 16 cores */
 #define WORKERS_WORDS	8
@@ -131,7 +132,7 @@ static long workers_shape(const u32 *shape)
 	msleep(60);
 	/* (a machine of 16 cores or fewer has the first two words, and the others are none of its) */
 	for (k = 0; k < (most > 16 ? WORKERS_WORDS : 2); k++)
-		writel(shape[k], gpu_regs + WORKERS_SHAPE + 4 + 4 * k);
+		writel(shape[k], k < 3 ? gpu_regs + WORKERS_SHAPE + 4 + 4 * k : workers + WORKERS_SHAPE_MORE + 4 * (k - 3));
 	msleep(60);
 	writel(0, gpu_regs + WORKERS_SHAPE);
 	msleep(60);

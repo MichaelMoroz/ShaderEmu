@@ -568,7 +568,7 @@ uint2 mc_place(uint core) {
     if (core == 0) return uint2(0, 0);
     uint4 geo = ram(0x70003du);
 #if CORES > 16
-    uint4 geo1 = ram(0x70003eu), geo2 = ram(0x70003fu);
+    uint4 geo1 = ram(0x6c00f0u), geo2 = ram(0x6c00f1u);   // MC_GEOMETRY_MORE
 #endif
     uint row = 0, at = 0xffff;
     for (uint k = 1; k < CORES; k++) {
@@ -617,6 +617,29 @@ uint fetch_word(uint n) {
     }
     uint4 b = (uint4)(_HostData.Load(int3(n & 255, n >> 8, 0)) * 255.0 + 0.5);
     return b.r | (b.g << 8) | (b.b << 16) | (b.a << 24);
+}
+#endif
+
+#ifdef GPU_NET
+// The network device (docs/lan.md). The guest sends one packet at a time through a slot the
+// host reads back, and takes packets from a ring this pass fills from the host's texture.
+#define NET_GUEST 0x70003eu   // the guest's: packets sent, packets taken from the ring
+#define NET_HOST  0x70003fu   // the host's: packets it took, packets delivered, the machine's number
+#define NET_RX    0x76b840u   // the ring: NET_SLOTS places of NET_SLOT texels (length, number, 8 bytes, the packet)
+#define NET_SLOT  40u
+#define NET_SLOTS 8u
+// Texel k of the ring's place `slot`, if a packet arrives there in this pass: row e of _NetData
+// is the place's 640 bytes, four to a texel in memory order.
+uint net_word(uint x, uint e) {
+    uint4 b = (uint4)(_NetData.Load(int3(x, e, 0)) * 255.0 + 0.5);
+    return b.r | (b.g << 8) | (b.b << 16) | (b.a << 24);
+}
+bool net_arrives(uint slot, uint k, out uint4 texel) {
+    texel = 0;
+    uint e = (slot - _NetRxSeq) & (NET_SLOTS - 1);
+    if (e >= _NetRxCount) return false;
+    texel = uint4(net_word(4 * k, e), net_word(4 * k + 1, e), net_word(4 * k + 2, e), net_word(4 * k + 3, e));
+    return true;
 }
 #endif
 
@@ -690,6 +713,15 @@ uint4 gpu_control(uint2 pos) {
             return uint4(fetch_word(n), fetch_word(n + 1), fetch_word(n + 2), fetch_word(n + 3));
         }
     }
+#ifdef GPU_NET
+    if (index == NET_HOST) return uint4(_NetTxAck, _NetRxSeq + _NetRxCount, _NetId, 0);
+    if (index >= NET_RX && index < NET_RX + NET_SLOT * NET_SLOTS) {
+        uint4 packet;
+        [branch]
+        if (net_arrives((index - NET_RX) / NET_SLOT, (index - NET_RX) % NET_SLOT, packet)) return packet;
+        return keep;
+    }
+#endif
     if (index >= INPUT_KEYS && index < INPUT_KEYS + 8) {
         // up to four new events a frame, at ring positions (sequence number) mod 32
         uint4 ring = keep;

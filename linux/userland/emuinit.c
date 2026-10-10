@@ -87,6 +87,9 @@ int main(void) {
     say("> Entered overlay chroot, mounting /proc & /sys\n");
     must(mount("proc", "/proc", "proc", 0, NULL), "mount /proc");
     must(mount("sys", "/sys", "sysfs", 0, NULL), "mount /sys");
+    /* pseudo-terminals by name, for telnetd (docs/lan.md) */
+    mkdir("/dev/pts", 0755);
+    must(mount("devpts", "/dev/pts", "devpts", 0, NULL), "mount /dev/pts");
 
     fd = open("/proc/uptime", O_RDONLY);
     n = fd < 0 ? 0 : read(fd, line, sizeof line - 1);

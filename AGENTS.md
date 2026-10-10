@@ -849,6 +849,11 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   sixteen cores"): `RAY_SIZE=640x480 RAY_SHAPE=3,3,... nxray` with 63 threes is its measure
   (1.35 s a picture, sum `fd92a71e`), and `mctest 63 60000 shape 3,3,...` its test (a large
   limit makes the float check slow: core 0 works every worker's sum out again). A shader for
+- The control row has no free texel: control words to 0x3ff, the display palette from 0x400,
+  the sound card's voices from 0x800. The geometry of workers 25 and up is in the mailbox
+  page (`MC_GEOMETRY_MORE`, 0x86c00f00) and what cores 16 and up ran in the network's row after
+  the guest's window (`MC_STATS_MORE`, 0x876b8280, 13 texels). They were at 0x3e0 and 0x3f0,
+  which are the network's.
   another number of cores is another compile. `rvc_cpu` and Unity have 16 at most.
 - A program that takes every worker asks the library how many there can be (`mcw_most`,
   `mcw_fit`, `mcw_rows`, `mcw_room` in `programs/mc/mcw.h`): no 15 or 16 written into it.
@@ -996,3 +1001,29 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   is taken every scanline and needs none of them belongs in a small function in front of it.
 - Two static programs built `-fno-pie` are at the same addresses: `pc_profile.py` given both
   `.nm` files charges one program's instructions to the other. Name only the one that is busy.
+- The kernel upstream's image is built from has networking in it already (`NET: Registered
+  PF_INET`, a device `rvcnet`): look there before adding a stack.
+- The network (`docs/lan.md`): `--net PORT --net-id N` on `rvc_harness` (D3D11) and `rvc_cpu`;
+  machine N is `10.0.0.N` on UDP port PORT + N; `--net-loss P --net-delay MS` are the VRChat
+  link's part. The guest configures nothing: `lan0` takes its address from the host's number
+  (0x870003f8). In the world the number is the visitor's player number and packets travel in
+  `EmuShare.net`.
+- The kernel has had TCP/IP all along; the fork's `rvcnet` is left out of the build and
+  `shaderemu_net.c` is the device: control texels 0x3e and 0x3f, a row of RAM at 0x876b8000
+  (window at 0, ring at 0x400). Nano-X's `DATA_END` ends below it. No control texel is free now.
+- The guest sends one 640-byte window per readback round trip, several small packets to a
+  window. One packet per ack made Doom run at 2 tics a second.
+- `nc -l -p PORT < /dev/null > FILE` ends with the connection; without `< /dev/null` it waits
+  for the console. `nc` and `telnetd` are scripts over BusyBox; `ping` is upstream's.
+- Two machines at once: give each its own `--uart-log`; two shader harnesses run at half speed
+  each. For a long game start put one side on `rvc_cpu`, which with `--net` runs in real time.
+- Quake over the network: `quake -listen 4 +map e1m1` and `quake +connect NAME` (found by
+  broadcast; a server's name is its address unless `+hostname`). The client must start after
+  the server has its level. `QUAKE_NET=1` prints packet costs. `QUAKE_SUM` leaves the players'
+  names out: sums noted before 10 October 2026 are not this build's.
+- Doom's network game is the port's own `i_net.c`: `doom -net 1 .10.0.0.2`, `doom -net 2
+  .10.0.0.1`. Doom needs the sound card: under `rvc_cpu` it crashes in its music code.
+- `build.bat` through `cmd /c` from an agent's PowerShell exits at once: build the harness with
+  `cmake --build build --config Release` (12 s).
+- Idle Linux runs about 0.2M instructions a second: a test that waits for "enough instructions"
+  to know the guest has booted waits for ever. The prompt is there after 10.7M.

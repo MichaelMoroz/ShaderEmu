@@ -40,7 +40,7 @@ target_compile_definitions(harness_core PUBLIC
 target_link_libraries(harness_core PUBLIC d3d11 dxgi d3dcompiler dxguid windowscodecs ole32 gdi32)
 
 # One frontend, two backends (D3D11 + FXC, D3D12 + DXC). rvc_harness_dxc only differs in its default.
-set(RVC_HARNESS_SOURCES harness/apps/rvc_harness.cpp harness/apps/rvc_backend11.cpp harness/apps/rvc_backend12.cpp)
+set(RVC_HARNESS_SOURCES harness/apps/rvc_harness.cpp harness/apps/rvc_backend11.cpp harness/apps/rvc_backend12.cpp harness/apps/rvc_net.cpp)
 add_executable(rvc_harness ${RVC_HARNESS_SOURCES})
 target_link_libraries(rvc_harness PRIVATE harness_core d3d12 xaudio2)
 add_executable(rvc_harness_dxc ${RVC_HARNESS_SOURCES})
@@ -60,7 +60,7 @@ target_link_libraries(rvc_trace12 PRIVATE harness_core d3d12)
 
 # The machine as an interpreter on the processor, for work that only counts instructions
 # (docs/cpu-harness.md): no graphics card, no shader.
-add_executable(rvc_cpu harness/apps/rvc_cpu.cpp)
+add_executable(rvc_cpu harness/apps/rvc_cpu.cpp harness/apps/rvc_net.cpp)
 target_compile_definitions(rvc_cpu PRIVATE _CRT_SECURE_NO_WARNINGS NOMINMAX)
 if(MSVC)
   target_compile_options(rvc_cpu PRIVATE /O2 /fp:strict)

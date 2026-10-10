@@ -14,6 +14,7 @@ Shader "ShaderEmu/gpu"
         _FetchStatus ("Its status (200: fine)", Int) = 0
         _HostData ("Its bytes", 2D) = "black" {}
         _HostImage ("Or a picture, with _FetchDeliver 2", 2D) = "black" {}
+        _NetData ("Packets for the guest, a row each", 2D) = "black" {}
         _FetchInfo ("A picture's width | height << 16", Int) = 0
         _FetchW ("or its width", Int) = 0
         _FetchH ("and its height", Int) = 0
@@ -95,6 +96,12 @@ Shader "ShaderEmu/gpu"
             // The sound card (docs/sound.md): the sample the host's ring starts at this frame,
             // whether it mixed (the device's words move only then), and its output rate.
             uniform uint _SoundCursor, _SoundMixed, _SoundRate;
+            // The network (docs/lan.md): the guest's packets the host has taken, the packets it
+            // delivered before this frame and how many arrive in it (rows of _NetData, 160 x 4,
+            // four bytes a texel), and the machine's number (0: no link).
+            uniform uint _NetTxAck, _NetRxSeq, _NetRxCount, _NetId;
+            Texture2D<float4> _NetData;
+            #define GPU_NET
             #define GPU_SOUND
             #define GPU_STATE _SelfTexture2D
             #define GPU_INPUT

@@ -14,6 +14,11 @@ riscv32-linux-strip -o "$OUT/emuinit" "$WORK/src/emuinit"
 mkdir -p "$OUT/usr/bin"
 rv32-cc -Os -Wall "$HERE/emumux.c" -o "$WORK/src/emumux"
 riscv32-linux-strip -o "$OUT/usr/bin/emumux" "$WORK/src/emumux"
+# busybox's network tools the ROM has no name for (docs/lan.md)
+for applet in nc telnetd; do
+    printf '#!/bin/sh\nexec busybox %s "$@"\n' "$applet" > "$OUT/usr/bin/$applet"
+    chmod +x "$OUT/usr/bin/$applet"
+done
 # the sound card's test (docs/sound.md), and a second of 16-bit sound at 22,050 Hz to write to it
 mkdir -p "$OUT/usr/bin" "$OUT/usr/share"
 rv32-cc -O2 -Wall "$HERE/sndtest.c" -o "$WORK/src/sndtest"

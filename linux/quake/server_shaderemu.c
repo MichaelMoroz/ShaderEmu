@@ -235,10 +235,12 @@ static void sum_frame (void)
 
 		if (EDICT_NUM (e)->free)
 			continue;
-		/* (but for the world's model: its name is not among QuakeC's strings, and where it
-		 * is from them depends on where the heap is, which the environment's size moves) */
+		/* (but for the world's model and a player's name: they are not among QuakeC's strings,
+		 * and where they are from them depends on where the heap is and what was put there
+		 * before the level: the environment's size, a console command more in the program) */
 		for (i = 0; i < words; i++)
-			if (e != 0 || i != (unsigned)((const unsigned *)&EDICT_NUM (0)->v.model - (const unsigned *)&EDICT_NUM (0)->v))
+			if ((e != 0 || i != (unsigned)((const unsigned *)&EDICT_NUM (0)->v.model - (const unsigned *)&EDICT_NUM (0)->v)) &&
+			    (e == 0 || e > (unsigned)svs.maxclients || i != (unsigned)((const unsigned *)&EDICT_NUM (0)->v.netname - (const unsigned *)&EDICT_NUM (0)->v)))
 				sum = (sum << 5 | sum >> 27) + v[i];
 	}
 	Sys_Printf ("quake: server frame %u: %u entities, time %u ms, state %08x\n", frames, sv.num_edicts, (unsigned)(sv.time * 1000), sum);

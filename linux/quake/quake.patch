@@ -967,6 +967,115 @@ index 5f5d2cf..2bc8b5b 100644
  	if (sock->disconnected)
  		return false;
  
+diff --git a/WinQuake/net_udp.c b/WinQuake/net_udp.c
+index 3eded99..3bf66d2 100644
+--- a/WinQuake/net_udp.c
++++ b/WinQuake/net_udp.c
+@@ -28,6 +28,34 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+ #include <sys/param.h>
+ #include <sys/ioctl.h>
+ #include <errno.h>
++#ifdef SHADEREMU
++#include <net/if.h>
++// QUAKE_NET=1: what a packet costs in instructions (rdcycle counts the machine's), every 200 sent.
++static unsigned net_cost[3], net_count[3];	// sent, received, reads that found nothing
++static unsigned net_cycles (void)
++{
++	unsigned c;
++	__asm__ volatile ("rdcycle %0" : "=r" (c));
++	return c;
++}
++static void net_counted (int kind, unsigned began)
++{
++	static int wanted = -1;
++
++	if (wanted < 0)
++		wanted = getenv ("QUAKE_NET") != NULL;
++	if (!wanted)
++		return;
++	net_cost[kind] += net_cycles () - began;
++	net_count[kind]++;
++	if (kind == 0 && net_count[0] % 200 == 0)
++	{
++		Sys_Printf ("quakestat: network: %u packets sent at %u instructions each, %u received at %u, %u reads of nothing at %u\n",
++			net_count[0], net_cost[0] / net_count[0], net_count[1], net_count[1] ? net_cost[1] / net_count[1] : 0,
++			net_count[2], net_count[2] ? net_cost[2] / net_count[2] : 0);
++	}
++}
++#endif
+ 
+ #ifdef __sun__
+ #include <sys/filio.h>
+@@ -64,6 +92,29 @@ int UDP_Init (void)
+ 		return -1;
+ 
+ 	// determine my name & address
++#ifdef SHADEREMU
++	// The machine's address and everybody's are the link's own (docs/lan.md): there are no
++	// names to look up. Without a link the address is the loopback's, and the name stays.
++	struct ifreq link;
++	unsigned everybody = INADDR_BROADCAST;
++
++	if ((net_controlsocket = UDP_OpenSocket (0)) == -1)
++		Sys_Error("UDP_Init: Unable to open control socket\n");
++	myAddr = htonl(INADDR_LOOPBACK);
++	memset (&link, 0, sizeof(link));
++	strcpy (link.ifr_name, "lan0");
++	if (ioctl (net_controlsocket, SIOCGIFADDR, &link) == 0)
++	{
++		myAddr = ((struct sockaddr_in *)&link.ifr_addr)->sin_addr.s_addr;
++		if (Q_strcmp(hostname.string, "UNNAMED") == 0)
++			Cvar_Set ("hostname", inet_ntoa(((struct sockaddr_in *)&link.ifr_addr)->sin_addr));
++		if (ioctl (net_controlsocket, SIOCGIFBRDADDR, &link) == 0)
++			everybody = ((struct sockaddr_in *)&link.ifr_broadaddr)->sin_addr.s_addr;
++	}
++
++	((struct sockaddr_in *)&broadcastaddr)->sin_family = AF_INET;
++	((struct sockaddr_in *)&broadcastaddr)->sin_addr.s_addr = everybody;
++#else
+ 	gethostname(buff, MAXHOSTNAMELEN);
+ 	local = gethostbyname(buff);
+ 	myAddr = *(int *)local->h_addr_list[0];
+@@ -80,6 +131,7 @@ int UDP_Init (void)
+ 
+ 	((struct sockaddr_in *)&broadcastaddr)->sin_family = AF_INET;
+ 	((struct sockaddr_in *)&broadcastaddr)->sin_addr.s_addr = INADDR_BROADCAST;
++#endif
+ 	((struct sockaddr_in *)&broadcastaddr)->sin_port = htons(net_hostport);
+ 
+ 	UDP_GetSocketAddr (net_controlsocket, &addr);
+@@ -246,8 +298,15 @@ int UDP_Read (int socket, byte *buf, int len, struct qsockaddr *addr)
+ {
+ 	int addrlen = sizeof (struct qsockaddr);
+ 	int ret;
++#ifdef SHADEREMU
++	unsigned began = net_cycles ();
+ 
+ 	ret = recvfrom (socket, buf, len, 0, (struct sockaddr *)addr, &addrlen);
++	net_counted (ret > 0 ? 1 : 2, began);
++#else
++
++	ret = recvfrom (socket, buf, len, 0, (struct sockaddr *)addr, &addrlen);
++#endif
+ 	if (ret == -1 && (errno == EWOULDBLOCK || errno == ECONNREFUSED))
+ 		return 0;
+ 	return ret;
+@@ -293,8 +352,15 @@ int UDP_Broadcast (int socket, byte *buf, int len)
+ int UDP_Write (int socket, byte *buf, int len, struct qsockaddr *addr)
+ {
+ 	int ret;
++#ifdef SHADEREMU
++	unsigned began = net_cycles ();
+ 
+ 	ret = sendto (socket, buf, len, 0, (struct sockaddr *)addr, sizeof(struct qsockaddr));
++	net_counted (0, began);
++#else
++
++	ret = sendto (socket, buf, len, 0, (struct sockaddr *)addr, sizeof(struct qsockaddr));
++#endif
+ 	if (ret == -1 && errno == EWOULDBLOCK)
+ 		return 0;
+ 	return ret;
 diff --git a/WinQuake/pr_cmds.c b/WinQuake/pr_cmds.c
 index 3593bb9..e914c14 100644
 --- a/WinQuake/pr_cmds.c

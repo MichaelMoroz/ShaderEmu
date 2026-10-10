@@ -17,7 +17,10 @@
 #include <cstring>
 #include <deque>
 #include <string>
+#include <thread>
 #include <vector>
+
+#include "rvc_net.h"
 
 typedef uint32_t u32;
 typedef int32_t i32;
@@ -55,6 +58,8 @@ struct Options {
     int cores = 1;
     long long sweep = -1;
     bool desktop = false, tabs = false, quiet = false;
+    int netPort = 0, netId = 1;          // --net, --net-id: the link to other machines (docs/lan.md)
+    double netLoss = 0, netDelay = 0;
 };
 static Options opt;
 
@@ -785,6 +790,23 @@ static u64 run_worker(Core& c, u64 budget) {
 static u32 key_seq = 0;
 static u64 frame_no = 0;
 
+// The network device (docs/lan.md), as the shader's control pass keeps it: the guest's slot
+// goes out, and what came for it goes into its ring with the host's three words.
+static NetLink net;
+static void net_pass() {
+    const u32 NET = 0x876b8000u, RING = NET + 0x400;
+    uint8_t places[NetLink::kMost * NetLink::kSlotBytes];
+    u32 before = 0;
+    net.fromGuest(word(CTRL + 0x3e0), word(CTRL + 0x3e4), &word(NET));
+    unsigned n = net.toGuest(places, before);
+    for (unsigned e = 0; e < n; e++)
+        memcpy(&ram[RING - RAM_BASE + NetLink::kSlotBytes * ((before + e) % NetLink::kSlots)], places + NetLink::kSlotBytes * e, NetLink::kSlotBytes);
+    word(CTRL + 0x3f0) = net.txAck();
+    word(CTRL + 0x3f4) = before + n;
+    word(CTRL + 0x3f8) = net.id();
+    dirty(NET);
+}
+
 static void control_pass() {
     dirty(CTRL);
     // what each core ran, how many workers the geometry has (docs/multicore.md: the cores have
@@ -827,6 +849,7 @@ static void control_pass() {
         word(CTRL + 0x24) = (u32)(height / 2 + height / 10 * sin(turn));
     }
     word(CTRL + 0x2c) = key_seq;
+    if (net.on()) net_pass();
 }
 
 static bool read_file(const std::string& path, std::vector<uint8_t>& to) {
@@ -913,6 +936,10 @@ int main(int argc, char** argv) {
         else if (a == "--desktop") opt.desktop = true;
         else if (a == "--tabs") opt.tabs = true;
         else if (a == "--quiet") opt.quiet = true;
+        else if (a == "--net") opt.netPort = atoi(next("--net").c_str());
+        else if (a == "--net-id") opt.netId = atoi(next("--net-id").c_str());
+        else if (a == "--net-loss") opt.netLoss = atof(next("--net-loss").c_str());
+        else if (a == "--net-delay") opt.netDelay = atof(next("--net-delay").c_str());
         else if (a == "--no-stdin" || a == "--d3d11" || a == "--dxc") {}
         else if (a == "--rvc" || a == "--fixed-dt") next(a.c_str());   // (the shader machine's: taken and ignored)
         else if (a == "--help" || a == "-h") {
@@ -930,7 +957,10 @@ int main(int argc, char** argv) {
                    "                         (3700000 and 0.25: the harness; the world is about 3100000 and 0.2)\n"
                    "  --pointer-sweep N      the pointer goes round from pass N on\n"
                    "  --desktop --tabs       the host flags of those names\n"
-                   "  --quiet                do not print the console\n");
+                   "  --quiet                do not print the console\n"
+                   "  --net PORT --net-id N  the network: this machine is 10.0.0.N (1 to 16) and hears UDP port\n"
+                   "                         PORT + N; its clock then keeps to this computer's (docs/lan.md)\n"
+                   "  --net-loss P --net-delay MS   lose P percent of what it sends, hold the rest back MS ms\n");
             return 0;
         } else { fprintf(stderr, "rvc_cpu: unknown option %s\n", a.c_str()); return 2; }
     }
@@ -943,6 +973,13 @@ int main(int argc, char** argv) {
         if (uart_log) fprintf(uart_log, "\n=== rvc_cpu ===\n");
     }
     Core& c0 = cores[0];
+    if (opt.netPort) {
+        std::string why = "--net-id is 1 to 16";
+        if (opt.netId < 1 || opt.netId > (int)NetLink::kBroadcastTo || !net.open(opt.netPort, (unsigned)opt.netId, opt.netLoss, opt.netDelay, why)) {
+            fprintf(stderr, "rvc_cpu: no network: %s\n", why.c_str());
+            return 2;
+        }
+    }
 
     auto t0 = std::chrono::steady_clock::now();
     u64 idle_passes = 0;
@@ -958,6 +995,9 @@ int main(int argc, char** argv) {
                 if (until > guest_seconds && until < guest_seconds + 1.0) guest_seconds = until;
             }
         }
+        // (machines that talk to each other share one clock: this computer's)
+        while (net.on() && guest_seconds > std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count())
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
         if (until_hit) break;
         if (opt.seconds > 0 && guest_seconds >= opt.seconds) { exit_code = opt.until.empty() ? 0 : 3; break; }
         if (opt.maxInstr && c0.clock >= opt.maxInstr) { exit_code = opt.until.empty() ? 0 : 3; break; }
@@ -978,6 +1018,9 @@ int main(int argc, char** argv) {
         for (int i = 0; i < 16; i++)
             if (trap_counts[k][i]) fprintf(stderr, " %s%d x %llu", k ? "interrupt " : "", i, (unsigned long long)trap_counts[k][i]);
     fprintf(stderr, "; sstatus %08x sie %x sip %x, timer at %llu of %llu\n", c0.mstatus, c0.mie, c0.mip, (unsigned long long)c0.timecmp, (unsigned long long)mtime_now);
+    if (net.on())
+        fprintf(stderr, "[cpu] network: %llu packets sent, %llu lost on the way (--net-loss), %llu received, %llu never taken\n",
+                (unsigned long long)net.sent, (unsigned long long)net.lost, (unsigned long long)net.received, (unsigned long long)net.dropped);
     if (getenv("RVC_CPU_LAST"))
         for (u64 k = 1; k <= 32; k++)
             fprintf(stderr, "  %08x: %08x\n", last_pc[(c0.clock + k) & 31], last_ins[(c0.clock + k) & 31]);

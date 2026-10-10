@@ -200,6 +200,8 @@ worker costs about 5% more than without, which those figures include.
     QUAKE_SERVER=late     on the first core, its messages sent at the end of the client's frame
     QUAKE_SERVER=wait     on a worker, the client's frame waiting for it at its end
     QUAKE_SUM=N           a sum over every entity's fields each N frames of the server
+                          (but the world's model and the players' names, whose places depend on the heap)
+    QUAKE_NET=1           what a packet costs, every 200 sent (the game has its UDP driver: docs/lan.md)
     QUAKE_TRACK=N         where the player is and how fast, each N frames of the server
     QUAKE_TEST_EXIT=F     (with QUAKE_TRACK) at frame F the player is put into the level's exit
 

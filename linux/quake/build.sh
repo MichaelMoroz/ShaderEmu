@@ -25,11 +25,12 @@ fi
 git -C "$Q" checkout -q -f "$COMMIT" && git -C "$Q" clean -q -fd
 git -C "$Q" apply "$HERE/quake.patch"
 
-# GLQuake without the x86 assembly, with the null sound, CD and network drivers, and ours for
+# GLQuake without the x86 assembly, with the null CD driver, the game's own network drivers
+# (the loopback and UDP: docs/lan.md), and ours for
 # the window, the system and the models' triangles.
 SOURCES="cl_demo cl_input cl_main cl_parse cl_tent chase cmd common console crc cvar
     gl_draw gl_model gl_refrag gl_rlight gl_rmain gl_rmisc gl_rsurf gl_screen gl_warp
-    host host_cmd keys menu mathlib net_loop net_main net_vcr net_none pr_cmds pr_edict pr_exec r_part sbar
+    host host_cmd keys menu mathlib net_loop net_main net_vcr net_bsd net_dgrm net_udp pr_cmds pr_edict pr_exec r_part sbar
     sv_main sv_phys sv_move sv_user zone view wad world cd_null"
 OURS="vid_shaderemu sys_shaderemu mesh_shaderemu world_shaderemu fmath_shaderemu snd_shaderemu server_shaderemu"
 # gles.c in its float build. (Texture names from 3,072 up are qgl.c's own, for models' poses.)
@@ -52,6 +53,7 @@ CFLAGS="-O2 $FPU -fno-pie -fno-common -fdata-sections -fsigned-char -fno-strict-
 ALIGN16="--set-section-alignment .data*=16 --set-section-alignment .sdata*=16 --set-section-alignment .bss*=16 --set-section-alignment .sbss*=16"
 export CFLAGS Q HERE BUILD ALIGN16
 mkdir -p "$BUILD" && cd "$BUILD"
+rm -f net_none.o   # (of a build before the network: the link takes every object here)
 { for f in $SOURCES; do echo "$Q/WinQuake/$f.c"; done; for f in $OURS; do echo "$HERE/$f.c"; done; } |
     xargs -P "$(nproc)" -I{} sh -c 'o=$(basename {} .c).o; [ "$o" -nt {} ] && [ "$o" -nt "$HERE/quake.patch" ] && [ "$o" -nt "$HERE/include/GL/gl.h" ] && [ "$o" -nt "$HERE/build.sh" ] && [ "$o" -nt "$HERE/fmath.h" ] || { rv32-cc $CFLAGS -c {} -o "$o" && riscv32-linux-objcopy $ALIGN16 "$o"; }'
 rv32-cc -O2 $FPU -fno-pie -fno-common -fdata-sections -Wall -c $GLINC "$HERE/qgl.c" -o qgl.o

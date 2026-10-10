@@ -39,6 +39,15 @@ const UINT kSoundSide = 128;
 // The rows of RAM an answer to the guest's request is written to (docs/fetch.md), as a zone.
 const float kFetchZone[4] = {1024, 4096 - (64 + 0x76c000 / 2048) - 4, 2048, 8};
 const UINT kFetchSide = 256;   // the answer's texture: one word a texel, 256 KB
+// The network device (docs/lan.md): a row of RAM at 0x876b8000. Its first kNetSlot texels are the
+// packet the guest sends, which popRow() returns after the control words; from kNetRing on is
+// the ring of kNetSlots packets for the guest, written as a zone when deliverNet() was called.
+const unsigned kNetRow = 64 + 0x76b800 / 2048, kNetSlot = 40, kNetRing = 64, kNetSlots = 8, kNetMost = 4;
+// What cores 16 and up ran (MC_STATS_MORE in src/gpu.h): 13 texels after the window, which the
+// control pass writes every frame. kNetRead texels of the row are read back: the window and those.
+const unsigned kCoreStatsAt = 40, kNetRead = 64;
+const float kCoreStatsZone[4] = {kCoreStatsAt + 6.5f, 4096 - (64 + 0x76b800 / 2048) - 0.5f, 13, 1};
+const float kNetZone[4] = {kNetRing + kNetSlot * kNetSlots / 2.0f, 4096 - kNetRow - 0.5f, (float)(kNetSlot * kNetSlots), 1};
 // Quads the Commit pass draws when its vertex shader chooses them: the state rows and 32 bands of RAM.
 const unsigned kCommitQuads = 33;
 // The machine's control words (display, GPU, input, sound: RAM from 0x87000000) as a row of the
@@ -73,6 +82,10 @@ public:
     // An answer for the guest: kFetchSide squared RGBA8 texels, row 0 first. The next frame's
     // control pass writes them into RAM; set the _Fetch uniforms for that frame.
     virtual bool deliverHostData(Material& mat, const uint8_t* rgba, std::string& err) = 0;
+
+    // Packets for the guest: kNetMost rows of kNetSlot * 4 RGBA8 texels, a ring place each (four
+    // bytes a texel). The next frame's control pass writes the rows _NetRxCount says.
+    virtual bool deliverNet(Material& mat, const uint8_t* rgba, std::string& err) { (void)mat; (void)rgba; (void)err; return false; }
 
     // One emulator frame; also queues a readback of state row 0 tagged `tag`. Pop first if rowFull().
     virtual bool frame(Material& mat, uint64_t tag, bool timeIt) = 0;

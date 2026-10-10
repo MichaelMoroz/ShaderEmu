@@ -9,6 +9,7 @@ DRIVERS = [  # source, directory, config symbol, prompt, extra Kconfig lines
     ('shaderemu_fb.c', 'drivers/video/fbdev', 'FB_SHADEREMU', 'ShaderEmu display',
      ['depends on FB', 'select FB_CFB_FILLRECT', 'select FB_CFB_COPYAREA', 'select FB_CFB_IMAGEBLIT']),
     ('shaderemu_input.c', 'drivers/input/misc', 'INPUT_SHADEREMU', 'ShaderEmu keyboard and pointer', []),
+    ('shaderemu_net.c', 'drivers/net', 'SHADEREMU_NET', 'ShaderEmu network device', ['depends on INET']),
 ]
 for source, directory, symbol, prompt, extra in DRIVERS:
     shutil.copy(os.path.join(here, source), os.path.join(tree, directory))
@@ -29,3 +30,8 @@ for source, directory, symbol, prompt, extra in DRIVERS:
         else:
             text = body + '\n\n' + entry
         open(kconfig, 'w').write(text)
+# The fork's own network card is registers this machine lacks: ours takes its place (docs/lan.md).
+makefile = os.path.join(tree, 'drivers/net/Makefile')
+lines = open(makefile).read().splitlines(True)
+if any('rvcnet.o' in line for line in lines):
+    open(makefile, 'w').write(''.join(line for line in lines if 'rvcnet.o' not in line))

@@ -109,15 +109,17 @@
 //   .r  bit 0: the strip is being laid out anew (every pixel of it is zero meanwhile)
 //   .g  four bits a worker for workers 1 to 8: its cache's tables are 2^bits buckets (3 to 6); 0: no such worker
 //   .b  the same for workers 9 to 16, and .a for 17 to 24
-// and, on a machine of more than 16 cores (CORES > 16), the two texels after it: workers 25
-// to 56 in the next one's four words, 57 to 63 in the first word of the one after. There the
+// and, on a machine of more than 16 cores (CORES > 16), two texels of the mailbox page
+// (MC_GEOMETRY_MORE, 0x86c00f00): workers 25 to 56 in the first one's four words, 57 to 63 in
+// the first word of the second. There the
 // band is 248 tiles long (the state rows to their right end) in place of 64.
 // A worker keeps the CPU's 44 texels, its cache and the float registers' 8, in that order.
 #define MC_GEOMETRY 0x70003du
+#define MC_GEOMETRY_MORE 0x6c00f0u
 #define MC_STRIP_X 64
 #if CORES > 16
 #define MC_STRIP_ROWS 248
-#define MC_GEO_READ mc_geo = RAM_TEX(RAM_ADDR(MC_GEOMETRY)); mc_geo1 = RAM_TEX(RAM_ADDR(MC_GEOMETRY + 1)); mc_geo2 = RAM_TEX(RAM_ADDR(MC_GEOMETRY + 2));
+#define MC_GEO_READ mc_geo = RAM_TEX(RAM_ADDR(MC_GEOMETRY)); mc_geo1 = RAM_TEX(RAM_ADDR(MC_GEOMETRY_MORE)); mc_geo2 = RAM_TEX(RAM_ADDR(MC_GEOMETRY_MORE + 1));
 #else
 #define MC_STRIP_ROWS 64
 #define MC_GEO_READ mc_geo = RAM_TEX(RAM_ADDR(MC_GEOMETRY));
