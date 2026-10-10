@@ -449,7 +449,11 @@ static u64 run(Core& c, u64 budget) {
         for (u64 k = 0; k < chunk && !c.end_pass; k++) {
             u32 pc = c.pc, phys, ins;
             t.on = false;
-            if (!page_of(c, pc, FETCH, phys, t)) { take_trap(c, t.cause, t.value, pc); done++; c.clock++; break; }
+            if (!page_of(c, pc, FETCH, phys, t)) {
+                // (a worker stops at code its program has not touched yet, as at any other page)
+                if (c.hart == 0 || !mc_fault(c, t)) take_trap(c, t.cause, t.value, pc);
+                done++; c.clock++; break;
+            }
             if (phys - RAM_BASE >= RAM_SIZE) { take_trap(c, 1, pc, pc); done++; c.clock++; break; }
             memcpy(&ins, &ram[phys - RAM_BASE], 4);
             done++;

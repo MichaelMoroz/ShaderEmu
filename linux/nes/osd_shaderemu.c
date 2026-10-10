@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/time.h>
+#include <unistd.h>
 #include <noftypes.h>
 #include <nofconfig.h>
 #include <bitmap.h>
@@ -16,7 +17,10 @@
 #include <nesinput.h>
 #include <nofrendo.h>
 #include <osd.h>
+#include <nes_ppu.h>
+#include <nes_rom.h>
 #include <GLES/segl.h>
+#include "mcw.h"
 #define MWINCLUDECOLORS
 #include "nano-X.h"
 
@@ -31,9 +35,20 @@ static unsigned char *picture;		/* WIDTH x HEIGHT bytes of GPU memory */
 static GLuint texture;
 static void (*tick)(void);		/* nofrendo's 60 Hz timer: counts the frames owed */
 static int skip = 2;			/* emulated frames not drawn for each one that is */
-static int frames_most, frames_hold, frames_drawn;
+static int frames_most, frames_hold, frames_drawn, frames_emulated;
 static const char *script;		/* NES_PRESS: frames and the buttons to press at them */
 static unsigned cycles_then, ms_then;
+extern void nes6502_recompile(uint8 *prg, int bytes, int fixed);
+extern void nes6502_recompiled(unsigned *instructions, unsigned *bytes, unsigned *runs, unsigned *entries);
+extern void (*nes_frame_elsewhere)(int after);
+extern int nes_sum_on;			/* ours, in nofrendo's frame: NES_SUM, for tests */
+extern uint32 nes_sum;	/* ours, in nofrendo's loop: see frame_elsewhere */
+extern char __DATA_BEGIN__[], _end[];
+static void window_draw(GLuint of);
+static void frame_counted(int emulated, int step, const unsigned char *shown);
+static void elsewhere_start(void);
+static void frame_paced(void);
+static int unlimited;			/* NES_FAST: as fast as it goes, for measuring */
 extern int nes6502_plain;		/* ours, in nofrendo's 6502: idle loops run turn by turn */
 
 static unsigned
@@ -91,9 +106,17 @@ osd_installtimer(int frequency, void *func, int funcsize, void *counter, int cou
 
 /* ---- sound: none yet ---- */
 
+/* (also where nofrendo says the cartridge is in and its loop about to start) */
 void
 osd_setsound(void (*playfunc)(void *buffer, int length))
 {
+	const char *cpu = getenv("NES_CPU");
+	rominfo_t *rom = nes_getcontextptr()->rominfo;
+
+	/* the 6502 translated as it goes (rc6502.h), unless NES_CPU=interp */
+	if (!cpu || strcmp(cpu, "interp"))
+		nes6502_recompile(rom->rom, rom->rom_banks * 0x4000, rom->mapper_number == 0);
+	elsewhere_start();
 }
 
 void
@@ -161,10 +184,28 @@ video_show(bitmap_t *bmp, int num_dirties, rect_t *dirty_rects)
 {
 	static const GLfixed whole[16] = {2 * ONE, 0, 0, 0, 0, -2 * ONE, 0, 0, 0, 0, -ONE, 0, -ONE, ONE, 0, ONE};
 	static const GLfixed xyz[12] = {0, 0, 0, ONE, 0, 0, ONE, ONE, 0, 0, ONE, 0}, uv[8] = {0, 0, ONE, 0, ONE, ONE, 0, ONE};
-	int y, width, height, emulated;
+	int y;
 
 	for (y = 0; y < HEIGHT && y < bmp->height; y++)
 		memcpy(picture + y * WIDTH, bmp->line[y], WIDTH);
+	window_draw(texture);
+
+	/* the frames to emulate before the next one is drawn */
+	for (y = 0; y < skip + 1 && tick; y++)
+		tick();
+	frames_drawn++;
+	frames_emulated = frames_drawn * (skip + 1);
+	frame_counted(frames_emulated, skip + 1, picture);
+}
+
+/* The GPU draws a picture over the whole window. */
+static void
+window_draw(GLuint of)
+{
+	static const GLfixed whole[16] = {2 * ONE, 0, 0, 0, 0, -2 * ONE, 0, 0, 0, 0, -ONE, 0, -ONE, ONE, 0, ONE};
+	static const GLfixed xyz[12] = {0, 0, 0, ONE, 0, 0, ONE, ONE, 0, 0, ONE, 0}, uv[8] = {0, 0, ONE, 0, ONE, ONE, 0, ONE};
+	int width, height;
+
 	seglSize(&width, &height);
 	glViewport(0, 0, width, height);
 	glMatrixMode(GL_PROJECTION);
@@ -172,28 +213,33 @@ video_show(bitmap_t *bmp, int num_dirties, rect_t *dirty_rects)
 	glMatrixMode(GL_MODELVIEW);
 	glLoadIdentity();
 	glDisable(GL_DEPTH_TEST);
-	seglQuad(xyz, uv, texture, 255, 255, 0);
+	seglQuad(xyz, uv, of, 255, 255, 0);
 	seglSwap();
+}
 
-	/* the frames to emulate before the next one is drawn */
-	for (y = 0; y < skip + 1 && tick; y++)
-		tick();
-	frames_drawn++;
-	emulated = frames_drawn * (skip + 1);
-	if (frames_drawn % 20 == 0) {
+/* After `step` more frames, `emulated` in all: the figures, and a test's end at `shown`. */
+static void
+frame_counted(int emulated, int step, const unsigned char *shown)
+{
+	static int since, drawn_then;
+
+	since += step;
+	if (since >= 60) {
 		unsigned now = cycles(), ms = milliseconds();
 
 		fprintf(stderr, "nesstat: %d frames of the NES in %u ms (%d drawn): %u thousand instructions each, %u%% of its speed\n",
-			20 * (skip + 1), ms - ms_then, 20, (now - cycles_then) / 1000 / (20 * (skip + 1)),
-			ms > ms_then ? 20 * (skip + 1) * 100000 / 60 / (ms - ms_then) : 0);
+			since, ms - ms_then, frames_drawn - drawn_then, (now - cycles_then) / 1000 / since,
+			ms > ms_then ? since * 100000 / 60 / (ms - ms_then) : 0);
 		cycles_then = now;
 		ms_then = ms;
+		drawn_then = frames_drawn;
+		since = 0;
 	}
 	if (frames_hold && emulated >= frames_hold) {
 		GR_EVENT event;
 
 		/* (for a test: the picture stays, and a snapshot has it in GPU memory) */
-		fprintf(stderr, "nes: holding, picture %d bytes past the palette\n", (int)(picture - (unsigned char *)seglPalette()));
+		fprintf(stderr, "nes: holding, picture %d bytes past the palette\n", (int)(shown - (unsigned char *)seglPalette()));
 		do
 			GrGetNextEvent(&event);
 		while (event.type != GR_EVENT_TYPE_CLOSE_REQ);
@@ -205,10 +251,178 @@ video_show(bitmap_t *bmp, int num_dirties, rect_t *dirty_rects)
 
 		/* (a sum of the last picture: what a change to the emulator must leave) */
 		for (i = 0; i < WIDTH * HEIGHT; i++)
-			sum = sum * 31 + picture[i];
+			sum = sum * 31 + shown[i];
+		{
+			unsigned instructions, bytes, runs, entries;
+
+			nes6502_recompiled(&instructions, &bytes, &runs, &entries);
+			fprintf(stderr, "nes: %u instructions of the 6502 translated in %u goes, into %u bytes; entered %u times\n",
+				instructions, runs, bytes, entries);
+		}
+		if (nes_sum_on)
+			fprintf(stderr, "nes: every frame's RAM %08x\n", nes_sum);
 		fprintf(stderr, "nes: done, picture %08x\n", sum);
 		exit(0);
 	}
+}
+
+/* ---- the picture drawn elsewhere (docs/nes.md): no frame is drawn by this core; of the
+ * frames it can, the PPU keeps a record, and worker cores draw a third of the picture each
+ * from it into the texture not shown, while this core goes on with the next frames ---- */
+
+static ppu_frame_t *records[2];
+static ppu_drawjob_t jobs[3];
+static unsigned char *pictures[2];
+static GLuint textures[2];
+static int drawers, inline_draw, back, recording, drawing, drawn_from;
+
+static void
+drawing_post(int from)
+{
+	int k;
+
+	drawn_from = from;
+	for (k = 0; k < drawers; k++) {
+		jobs[k].frame = records[from];
+		jobs[k].rows = pictures[back];
+		jobs[k].first = HEIGHT * k / drawers;
+		jobs[k].count = HEIGHT * (k + 1) / drawers - jobs[k].first;
+		if (inline_draw)
+			ppu_draw((uint32)&jobs[k], 0);
+		else
+			mcw_post(k + 1, ppu_draw, (uint32_t)&jobs[k], 0);
+	}
+	drawing = 1;
+}
+
+/* Whether the picture is drawn; with `wait`, not before it is. Then it is shown. */
+static int
+drawing_done(int wait)
+{
+	int k, done = 1;
+
+	for (k = 1; k <= drawers && !inline_draw; k++) {
+		if (wait)
+			mcw_wait(k);
+		else if (!mcw_done(k))
+			done = 0;	/* (and the rest are still asked: a worker stopped at a page goes on) */
+	}
+	if (!done)
+		return 0;
+	window_draw(textures[back]);
+	back ^= 1;
+	drawing = 0;
+	frames_drawn++;
+	return 1;
+}
+
+/* Before and after each frame. A frame is recorded while the one before it is drawn, and
+ * given to the drawers when they are free: every frame is drawn if they keep up. */
+static void
+frame_elsewhere(int after)
+{
+	static int recorded = -1;	/* a record made and not yet given out */
+	static int posted_at, took = 1;	/* when the drawers were last given a frame, and how many frames they took */
+	int last = (frames_hold && frames_emulated + 1 >= frames_hold) || (frames_most && frames_emulated + 1 >= frames_most);
+
+	if (!after) {
+		/* a test's last frame is the one it sees, whatever was being drawn */
+		if (last && drawing)
+			drawing_done(1);
+		/* (not while the drawers are busy for longer yet: as long as the last picture took them) */
+		recording = -1;
+		if (!drawing || frames_emulated - posted_at >= took - 1 || last) {
+			recording = drawing ? !drawn_from : 0;
+			recorded = -1;
+			if (!ppu_capture(records[recording]))
+				recording = -1;
+		}
+		return;
+	}
+	frames_emulated++;
+	if (recording >= 0) {
+		ppu_capture_end();
+		recorded = recording;
+	}
+	if (drawing && drawing_done(0))
+		took = frames_emulated - posted_at;
+	if (!drawing && recorded >= 0) {
+		drawing_post(recorded);
+		posted_at = frames_emulated;
+		recorded = -1;
+		if (last)
+			drawing_done(1);
+	}
+	/* (the pad every fourth frame: asking the window system is thousands of instructions) */
+	if (!(frames_emulated & 3))
+		osd_getinput();
+	frame_counted(frames_emulated, 1, pictures[back ^ 1]);
+	frame_paced();
+}
+
+/* No faster than a NES: sixty frames a second by the machine's clock (a word of the GPU's
+ * memory: reading it is a load). A game that is late is not owed the time back. */
+static void
+frame_paced(void)
+{
+	static unsigned due;
+	const volatile unsigned *clock = (const volatile unsigned *)((char *)seglPalette() - 0x400 + 0x34);
+	unsigned now = *clock;
+
+	if (unlimited)
+		return;
+	due += 16 + (frames_emulated % 3 != 0);		/* 16.67 ms */
+	if ((int)(now - due) > 50 || (int)(due - now) > 200)
+		due = now;
+	else if ((int)(due - now) > 0)
+		usleep((due - now) * 1000);
+}
+
+/* Called once the cartridge is in: who draws, and their memory. */
+static void
+elsewhere_start(void)
+{
+	const char *how = getenv("NES_PPU");
+	rominfo_t *rom = nes_getcontextptr()->rominfo;
+	int k;
+
+	if (how && !strcmp(how, "here"))
+		return;
+	inline_draw = how && !strcmp(how, "inline");
+	drawers = inline_draw ? 1 : mcw_open(3);
+	if (drawers <= 0)
+		return;
+	if (!inline_draw)
+		atexit(mcw_close);
+	for (k = 0; k < 2; k++)
+		records[k] = ppu_frame_create(rom->vram, rom->vram ? 0x2000 * rom->vram_banks : 0);
+	pictures[0] = picture;
+	textures[0] = texture;
+	pictures[1] = seglMemory(WIDTH * HEIGHT);
+	if (!records[0] || !records[1] || !pictures[1]) {
+		drawers = 0;
+		return;
+	}
+	memset(pictures[1], 0, WIDTH * HEIGHT);
+	glGenTextures(1, &textures[1]);
+	glBindTexture(GL_TEXTURE_2D, textures[1]);
+	seglTexturePointer(pictures[1], WIDTH, HEIGHT, GL_COLOR_INDEX8_EXT);
+	back = 1;
+	for (k = 0; k < drawers; k++) {
+		/* a drawer's own PPU: whole 16s of memory nobody else writes, there before it starts */
+		jobs[k].context = inline_draw ? malloc(sizeof(ppu_t)) : mcw_alloc(sizeof(ppu_t));
+		memset(jobs[k].context, 0, sizeof(ppu_t));
+	}
+	if (!inline_draw)
+		mcw_touch(__DATA_BEGIN__, _end - __DATA_BEGIN__);
+	if (!ppu_capture(records[0])) {
+		drawers = 0;	/* (a cartridge whose pattern pages turn as they are drawn) */
+		return;
+	}
+	ppu_capture_end();
+	nes_frame_elsewhere = frame_elsewhere;
+	fprintf(stderr, "nes: the picture is drawn by %s\n", inline_draw ? "this core, from the frame's record" :
+		drawers == 3 ? "three worker cores" : drawers == 2 ? "two worker cores" : "a worker core");
 }
 
 static viddriver_t driver = {
@@ -276,7 +490,7 @@ osd_getinput(void)
 		char name[8];
 		int frame, used = 0;
 
-		if (sscanf(script, "%d %7s%n", &frame, name, &used) < 2 || frame > frames_drawn * (skip + 1))
+		if (sscanf(script, "%d %7s%n", &frame, name, &used) < 2 || frame > frames_emulated)
 			break;
 		script += used;
 		for (button = 0; button < 8; button++)
@@ -400,7 +614,9 @@ main(int argc, char **argv)
 	script = getenv("NES_PRESS");
 	if (getenv("NES_HOLD"))
 		frames_hold = atoi(getenv("NES_HOLD"));
+	unlimited = getenv("NES_FAST") != NULL || getenv("NES_FRAMES") != NULL;
+	nes_sum_on = getenv("NES_SUM") != NULL;
 	if (getenv("NES_PLAIN"))
-		nes6502_plain = 1;
+		nes6502_plain = atoi(getenv("NES_PLAIN"));
 	return nofrendo_main(argc, argv);
 }

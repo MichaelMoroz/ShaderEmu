@@ -27,14 +27,14 @@ mkdir -p "$ROMS"
 N=$SRC/components/nofrendo
 # ours: the first frame owed at the start, and the loop a game waits in counted, not run
 git -C "$SRC" apply "$HERE/nofrendo.patch"
-INC="-I$N -I$N/cpu -I$N/nes -I$N/sndhrdw -I$N/libsnss -I$N/mappers -I$MW/src/include -idirafter $REPO/programs/linux/include"
+INC="-I$HERE -I$N -I$N/cpu -I$N/nes -I$N/sndhrdw -I$N/libsnss -I$N/mappers -I$MW/src/include -I$REPO/programs/mc -idirafter $REPO/programs/linux/include"
 # (asm: the one line of the ESP32's own in these sources, a breakpoint where an assertion fails;
 # 240: the PPU draws every line into a picture the sources make 224 high)
 CFLAGS="-O2 -fno-pie -std=gnu99 -fgnu89-inline -fcommon -w -Dasm(x)=abort() -DNES_VISIBLE_HEIGHT=240 -DHOST_LITTLE_ENDIAN -DNES6502_JUMPTABLE $INC"
 export CFLAGS BUILD HERE
 mkdir -p "$BUILD" && cd "$BUILD"
-{ find "$N" -name '*.c'; ls "$HERE"/*.c "$REPO/programs/linux/gles.c"; } |
-    xargs -P "$(nproc)" -I{} sh -c 'o=$(basename {} .c).o; [ "$o" -nt {} ] && [ "$o" -nt "$HERE/build.sh" ] && [ "$o" -nt "$HERE/nofrendo.patch" ] || rv32-cc $CFLAGS -c {} -o "$o"'
+{ find "$N" -name '*.c'; ls "$HERE"/*.c "$REPO/programs/linux/gles.c" "$REPO/programs/mc/mcw.c"; } |
+    xargs -P "$(nproc)" -I{} sh -c 'o=$(basename {} .c).o; [ "$o" -nt {} ] && [ "$o" -nt "$HERE/build.sh" ] && [ "$o" -nt "$HERE/nofrendo.patch" ] && [ "$o" -nt "$HERE/rc6502.h" ] || rv32-cc $CFLAGS -c {} -o "$o"'
 rv32-cc -O2 *.o "$MW/src/lib/libnano-X.a" -lm -o nes
 mkdir -p "$OUT/usr/bin" "$OUT/usr/share"
 riscv32-linux-strip -o "$OUT/usr/bin/nes.bin" nes

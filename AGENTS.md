@@ -945,9 +945,16 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   the glyph's own ink: the kept picture of the lettering is taken in the room's light, and a
   line seen aslant changed colour along its length, which read as a sheen.
 - The NES (`docs/nes.md`): `wsl -- bash /mnt/c/Development/ShaderX86/linux/nes/build.sh` (2 s) after
-  Nano-X's build, then the image and snapshot. To measure it, resume the snapshot with `nx` and
-  `NES_FRAMES=180 nes thwaite` and wait for `nes: done`: `nesstat:` lines, and a sum of the last
-  picture that a change to the emulator must leave (the doc lists three). Its changes to
-  Nofrendo are `linux/nes/nofrendo.patch`.
+  Nano-X's build, then the image. A change to the emulator must leave the sums the doc lists
+  (`NES_SUM=1 NES_PPU=inline NES_FRAMES=120 nes thwaite` under `rvc_cpu`, two seconds), with each
+  of `NES_CPU=interp` and `NES_PLAIN=1`, `2`, `3` too; its speed is `rvc_harness --cores 4`
+  and the `nesstat:` lines. Its changes to Nofrendo are `linux/nes/nofrendo.patch`; the 6502
+  recompiled is `linux/nes/rc6502.h`.
+- A sum of a program's last picture can stay the same through a mistake: sum its state at every
+  frame. The NES's pictures matched while its RAM had gone another way for a while.
+- Code a program writes for itself to run (the NES's recompiler) is fetched as it was until the
+  machine's pass ends: `fence.i` after writing it, a user instruction here, ends the pass.
+- A function with a hundred locals saves a dozen registers on its way in: a path through it that
+  is taken every scanline and needs none of them belongs in a small function in front of it.
 - Two static programs built `-fno-pie` are at the same addresses: `pc_profile.py` given both
   `.nm` files charges one program's instructions to the other. Name only the one that is busy.
