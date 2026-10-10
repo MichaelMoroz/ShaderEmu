@@ -97,7 +97,6 @@ struct Options {
     std::string l1Log;        // per frame: instructions, last stall, a count, then the RAM texels its write cache held
     double statsAfter = -1;   // >= 0: print a STATS line for the part of the run after this many seconds
     bool noDoubles = false;
-    int corePitch = 256;      // --core-pitch N: the cores' blocks of state are N texels apart
     int cores = 1;            // --cores N: core 0 and N - 1 worker cores (docs/multicore.md; D3D11)
     bool noBands = false;     // --no-bands: the commit rewrites all of RAM, as a CustomRenderTexture does
     int readbackBatch = 1;    // --readback-batch N: D3D11 maps the rows of N frames at once
@@ -181,13 +180,13 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
   --ra-log FILE        per frame: pc, return address and instructions, for tools/pc_callers.py
   --pc-log FILE        sample the guest's pc once a frame, for tools/pc_profile.py
   --frame-log FILE     per frame: pc, instructions, last stall and time, for tools/boot_profile.py
-  --cores N            core 0 and N - 1 worker cores in one tick pass (docs/multicore.md; D3D11)
+  --cores N            core 0 and up to N - 1 worker cores in one tick pass (16 at most; D3D11). How many
+                       workers there are and how large each one's write cache is, the guest sets
+                       (docs/multicore.md, "The geometry")
   --cpu                run the instructions on the processor (docs/cpu-harness.md): some thirty times
                        faster; the display, the GPU, the keys and the pointer are the shader's as before
                        (D3D11, the Linux image in build\\images\\linux)
   --cpu-ips N          the same, at no more than N instructions a second (3000000: the world's speed)
-  --small-cores F,B    the cores from F on are small: write cache tables of 2^B buckets (4: 1.5 KB of
-                       stores a pass where a worker has 6), a third of a worker's pixels
   --l1-log FILE        per frame: the addresses in the write cache, for tools/l1_study.py (D3D12)
   --stats-after S      print instructions/s and frames/s for the run after its first S seconds
                        (and start the pc log there)
@@ -331,14 +330,7 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--cpu") o.cpu = true;
         else if (a == "--cpu-ips") { o.cpu = true; o.cpuIps = atof(next("--cpu-ips").c_str()); }
         else if (a == "--cores") { o.cores = (std::max)(1, (std::min)(16, atoi(next("--cores").c_str()))); if (o.cores > 1) o.defines.push_back("CORES=" + std::to_string(o.cores)); }
-        else if (a == "--small-cores") {
-            // FROM,BITS: the cores from FROM on are small ones, with write cache tables of 2^BITS buckets
-            std::string v = next("--small-cores");
-            size_t comma = v.find(',');
-            o.defines.push_back("MC_SMALL_FROM=" + v.substr(0, comma));
-            o.defines.push_back("MC_L1_BITS=" + (comma == std::string::npos ? std::string("4") : v.substr(comma + 1)));
-        }
-        else if (a == "--core-pitch") { o.corePitch = (std::max)(64, (std::min)(1024, atoi(next("--core-pitch").c_str()))); o.defines.push_back("CORE_PITCH=" + std::to_string(o.corePitch)); }
+        else if (a == "--core-pitch" || a == "--small-cores") next(a.c_str());   // (of the layouts before the geometry: taken and ignored)
         else { fprintf(stderr, "unknown option %s\n", a.c_str()); usage(); return false; }
     }
     if (havePendingExpect) { fprintf(stderr, "--expect without --send\n"); return false; }
@@ -639,14 +631,6 @@ int main(int argc, char** argv) {
             if (d.rfind("L1_TABLE_BITS=", 0) == 0) tableBits = (unsigned)atoi(d.c_str() + 14);
         }
         bo.tickRows = ways == 3 && tableBits == 6 ? 16 : 32;
-        // a worker's texels past its first 512, four to a column, to a whole number of 8-pixel tiles
-        unsigned tail = 44 + (2u << tableBits) * (ways + 1) - 512;
-        bo.workerTailWidth = (std::min)(64u, ((tail + 3) / 4 + 7) & ~7u);
-        // small worker cores (--small-cores FROM,BITS): the rows their smaller cache fills
-        for (auto& d : opt.defines) {
-            if (d.rfind("MC_L1_BITS=", 0) == 0) bo.smallRows = ((2u << atoi(d.c_str() + 11)) * (ways + 1)) / 64;
-            if (d.rfind("MC_SMALL_FROM=", 0) == 0) bo.smallFrom = (unsigned)atoi(d.c_str() + 14);
-        }
     }
     bo.present = opt.present;
     bo.readbackBatch = opt.readbackBatch;
@@ -1498,16 +1482,29 @@ int main(int argc, char** argv) {
                     timeSum[1] / timeSamples, timeSum[2] / timeSamples, 1000.0 * secs / (double)frames);
     }
     if (opt.cores > 1) {
-        // each core's block of state: what it is doing as the run ends
+        // each core's state: what it is doing as the run ends. Core 0's is at the left; a
+        // worker's rows of the strip beside it are where the geometry (control texel 0x3d) puts them.
         std::vector<uint8_t> blocks;
-        if (backend.readState(opt.corePitch * opt.cores, 64, blocks) && blocks.size() >= (size_t)opt.corePitch * opt.cores * 64 * 16) {
-            const uint32_t* row0 = (const uint32_t*)blocks.data();
+        if (backend.readState(128, 64, blocks) && blocks.size() >= (size_t)128 * 64 * 16 && row.size() >= (64 + 0x3e) * 16) {
+            const uint32_t* all = (const uint32_t*)blocks.data();
+            const uint32_t* geo = (const uint32_t*)row.data() + (64 + 0x3d) * 4;
+            unsigned at = 0;
             for (int c = 0; c < opt.cores; ++c) {
-                const uint32_t* t = row0 + (size_t)c * opt.corePitch * 4;
-                uint32_t word = t[41 * 4 + 3];
-                fprintf(stderr, "CORE %d: pc %08x, %u instructions, %u commits, %s (state word %08x)\n", c, t[36 * 4 + 3], t[28 * 4 + 1],
-                        t[28 * 4 + 2], c == 0 ? "the machine" : (word & 8) ? "waiting for a system call" : (word & 4) ? "stopped by a fault" : (word & 2) ? "asleep" :
-                        (word & 1) ? "running" : (word >> 8) == 0 ? "parked, never started" : (word >> 8) == 2 ? "parked by the kernel" : "parked by ebreak", word);
+                unsigned k = (unsigned)c - 1, bits = c == 0 ? 6 : ((k < 8 ? geo[1] >> (4 * k) : geo[2] >> (4 * (k - 8))) & 15);
+                unsigned rows = c == 0 ? 0 : bits ? (44 + 8 + (2u << bits) * 4 + 63) / 64 : 0;
+                if (c != 0 && !rows) continue;
+                // texel w (below 64) of the core's state: a worker's is in the first of its 8 x 8 tiles
+                auto texel = [&](unsigned w) {
+                    size_t x = c == 0 ? w : 64 + (at & 7) * 8 + (w & 7), y = c == 0 ? 0 : (at >> 3) * 8 + (w >> 3);
+                    return all + (y * 128 + x) * 4;
+                };
+                uint32_t word = texel(41)[3];
+                const uint32_t pc = texel(36)[3], ran = texel(28)[1], committed = texel(28)[2];
+                at += rows;
+                fprintf(stderr, "CORE %d: pc %08x, %u instructions, %u commits, %s (state word %08x%s)\n", c, pc, ran,
+                        committed, c == 0 ? "the machine" : (word & 8) ? "waiting for a system call" : (word & 4) ? "stopped by a fault" : (word & 2) ? "asleep" :
+                        (word & 1) ? "running" : (word >> 8) == 0 ? "parked, never started" : (word >> 8) == 2 ? "parked by the kernel" : "parked by ebreak", word,
+                        c == 0 ? "" : bits == 6 ? "; 6 KB of stores a pass" : bits == 5 ? "; 3 KB of stores a pass" : bits == 4 ? "; 1.5 KB of stores a pass" : "; 0.75 KB of stores a pass");
             }
         }
     }

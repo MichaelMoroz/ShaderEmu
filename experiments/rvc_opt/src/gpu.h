@@ -559,11 +559,30 @@ bool gpu_writeback(uint2 pos, out uint4 result) {
 #define MC_STATS    0x700038u
 
 #if defined(CORES) && CORES > 1
-#ifndef CORE_PITCH
-#define CORE_PITCH 256
-#endif
+// Where worker `core`'s tiles begin in the strip (the geometry: src/types.h has the same), or
+// 0xffff when there is no such worker; core 0's state is at the left.
+uint mc_rows_of_bits(uint bits) {
+    return bits == 0 ? 0 : (44 + 8 + (2u << bits) * 4 + 63) / 64;
+}
+uint2 mc_place(uint core) {
+    if (core == 0) return uint2(0, 0);
+    uint4 geo = ram(0x70003du);
+    uint row = 0, at = 0xffff;
+    for (uint k = 1; k < CORES; k++) {
+        uint j = k - 1, bits = ((j < 8 ? geo.g >> (4 * j) : geo.b >> (4 * (j - 8))) & 15);
+        if (k == core && bits != 0 && (geo.r & 1) == 0) at = row;
+        row += mc_rows_of_bits(bits);
+    }
+    return uint2(64, at);
+}
+// Texel w (below 64) of a core's state: a worker's is in the first of its tiles, eight to a row.
+uint4 mc_state_texel(uint2 at, uint w) {
+    if (at.x == 0) return GPU_STATE[uint2(w, 0)];
+    return GPU_STATE[uint2(64 + ((at.y & 7) << 3) + (w & 7), ((at.y >> 3) << 3) + (w >> 3))];
+}
 uint mc_stat_count(uint core) {
-    return core < CORES ? GPU_STATE[uint2(core * CORE_PITCH + 28, 0)].g : 0;
+    uint2 at = mc_place(core);
+    return core < CORES && at.y != 0xffff ? mc_state_texel(at, 28).g : 0;
 }
 #endif
 
@@ -623,13 +642,17 @@ uint4 gpu_control(uint2 pos) {
     }
     if (index == MC_STATS + 4) {
         // a worker's state word (41,0).a: bit 0 while it runs, bit 1 while it sleeps on its job word
-        uint running = 1, asleep = 0;
+        // how many cores there are as the geometry has them now, and how many there could be
+        uint running = 1, asleep = 0, count = 1;
         for (uint core = 1; core < CORES; core++) {
-            uint word = GPU_STATE[uint2(core * CORE_PITCH + 41, 0)].a;
+            uint2 at = mc_place(core);
+            if (at.y == 0xffff) continue;
+            uint word = mc_state_texel(at, 41).a;
             running |= (word & 1) << core;
             asleep |= ((word >> 1) & 1) << core;
+            count = core + 1;
         }
-        return uint4(CORES, running, asleep, 0);
+        return uint4(count, running, asleep, CORES);
     }
 #endif
 #ifdef GPU_INPUT

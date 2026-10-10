@@ -23,8 +23,6 @@ struct BackendOptions {
     std::string dxcOpt = "-O3", dxcSm = "6_6", dxcDir;
     const SLShader* gpuShader = nullptr;   // the GPU device's passes (gpu.shader), if the machine has one
     const SLShader* soundShader = nullptr; // the sound card's mix pass (sound.shader); needs the GPU device
-    unsigned smallRows = 8, smallFrom = 1000;   // small worker cores: the rows of their first zone, and the first of them
-    unsigned workerTailWidth = 16;   // texels across of the 4 rows under a worker core's first 8 (docs/multicore.md)
     unsigned tickRows = 64;       // rows of the 64 texels wide state block that the tick pass draws (16: rvc_opt)
     int readbackBatch = 1;        // D3D11: frames whose rows are read back with one Map (--readback-batch)
     bool stateLog = false;        // D3D12 only: read the CPU's 64 x 64 state texels back every frame (--l1-log)

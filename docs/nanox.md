@@ -169,7 +169,7 @@ the picture whatever its width, so two cores never write the same 16.
 | 640 x 480 | Instructions, on one core | One core | Three workers | Seven (four of them small) |
 |---|---|---|---|---|
 | a photograph as PNG (308 KB) | 53 million | 11.5 s | 8.6 s | |
-| the same as JPEG (33 KB) | 31 million | 6.5 s | 3.6 s | 2.0 s |
+| the same as JPEG (33 KB) | 31 million | 6.5 s | 3.6 s | 2.4 s |
 
 A PNG gains least: more than half of it is the inflating, which is one stream. Not read:
 interlaced PNG, progressive and arithmetic JPEG, four-colour JPEG; the viewer says which.

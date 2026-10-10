@@ -90,21 +90,34 @@
             static uint hart = 0;
             static uint2 hart_offset = uint2(0, 0);
 
-            // CORES > 1 (docs/multicore.md): core k's state is the block at x = CORE_PITCH * k of the
-            // state rows, and state_off is where the block of this pixel's core starts (mc_core is
-            // the core). RAM is read with RAM_TEX, which no core's block moves.
+            // CORES > 1 (docs/multicore.md): core 0's state is the block at the left of the state
+            // rows and the workers' is the strip beside it, each worker some rows of it, as the
+            // geometry says (types.h); state_off is where the state of the core looked at begins
+            // (mc_core is the core). RAM is read with RAM_TEX, which no core's block moves.
             #ifndef CORES
             #define CORES 1
             #endif
-            #ifndef CORE_PITCH
-            #define CORE_PITCH 256
-            #endif
-            #define MC_BLOCK(k) uint2((k) * CORE_PITCH, 0)
             #if CORES > 1
             static uint2 state_off = uint2(0, 0);
             static uint mc_core = 0;
-            #define STATE_TEX_HART(pos, hartidx) (_SelfTexture2D[uint2(pos) + state_off])
-            #define STATE_TEX(pos) (_SelfTexture2D[uint2(pos) + state_off])
+            static uint mc_bits_now = 6;   // the write cache's size of the core looked at (types.h)
+            static uint mc_size_now = 4096; // and how many texels of state it has
+            static uint mc_tile0 = 0;      // and, a worker's, the first of its tiles
+            static uint4 mc_geo;           // the geometry's texel, read once a pixel
+            // A worker's state is whole 8 x 8 tiles of the strip beside core 0's block, one after
+            // another as a page is read (types.h): texel w of it is in its tile w / 64. Pixels
+            // of two cores in one tile would cost the GPU both cores' work for each. What lies
+            // past a worker's last texel is another worker's, and reads as the zeros it used
+            // to be (a control register a worker never wrote).
+            uint4 mc_state_read(uint2 pos) {
+                if (mc_core == 0) return _SelfTexture2D[pos + state_off];
+                uint w = pos.y * 64 + pos.x;
+                if (w >= mc_size_now) return (uint4)0;
+                uint t = mc_tile0 + (w >> 6), i = w & 63;
+                return _SelfTexture2D[uint2(64 + ((t & 7) << 3) + (i & 7), ((t >> 3) << 3) + (i >> 3))];
+            }
+            #define STATE_TEX_HART(pos, hartidx) mc_state_read(uint2(pos))
+            #define STATE_TEX(pos) mc_state_read(uint2(pos))
             #else
             #define STATE_TEX_HART(pos, hartidx) (_SelfTexture2D[uint2(pos) + uint2(hartidx % 2, hartidx / 2)])
             #define STATE_TEX(pos) (_SelfTexture2D[pos])
@@ -130,13 +143,22 @@
 
                 uint2 pos = i.globalTexcoord.xy * s_dim;
 #if CORES > 1
-                // a zone or two a core: this pixel's core, and which texel of its block it keeps
+                // this pixel's core, and which texel of its state it keeps
                 uint2 own = pos;
-                hart = min(pos.x / CORE_PITCH, CORES - 1);
-                mc_core = hart;
-                state_off = MC_BLOCK(hart);
-                pos -= state_off;
-                if (pos.x >= 64 || pos.y >= 64) return (uint4)0;   // between two blocks
+                mc_geo = RAM_TEX(RAM_ADDR(MC_GEOMETRY));
+                mc_select(0, 0);
+                hart = 0;
+                if (pos.x >= MC_STRIP_X) {
+                    // the workers' strip: nothing while it is laid out anew, and nothing in rows no worker has
+                    if (_Init || pos.x >= MC_STRIP_X + 64 || pos.y >= MC_STRIP_ROWS || (mc_geo.r & 1) != 0) return (uint4)0;
+                    uint tile = ((pos.y >> 3) << 3) + ((pos.x - MC_STRIP_X) >> 3);
+                    hart = mc_core_at(tile);
+                    if (hart == 0) return (uint4)0;
+                    // which texel of the worker's state this pixel is, as a place in its rows of 64
+                    uint w = ((tile - mc_tile0) << 6) + ((pos.y & 7) << 3) + (pos.x & 7);
+                    pos = uint2(w & 63, w >> 6);
+                }
+                if (pos.y >= 64) return (uint4)0;
                 if (!_Init && mc_idle()) return RAM_TEX(own);      // a worker with nothing to do
                 pos = mc_texel_of(pos);
 #endif
@@ -258,21 +280,34 @@
             Texture2D<float4> _Data_MTD_B;
             Texture2D<float4> _Data_MTD_A;
 
-            // CORES > 1 (docs/multicore.md): core k's state is the block at x = CORE_PITCH * k of the
-            // state rows, and state_off is where the block of this pixel's core starts (mc_core is
-            // the core). RAM is read with RAM_TEX, which no core's block moves.
+            // CORES > 1 (docs/multicore.md): core 0's state is the block at the left of the state
+            // rows and the workers' is the strip beside it, each worker some rows of it, as the
+            // geometry says (types.h); state_off is where the state of the core looked at begins
+            // (mc_core is the core). RAM is read with RAM_TEX, which no core's block moves.
             #ifndef CORES
             #define CORES 1
             #endif
-            #ifndef CORE_PITCH
-            #define CORE_PITCH 256
-            #endif
-            #define MC_BLOCK(k) uint2((k) * CORE_PITCH, 0)
             #if CORES > 1
             static uint2 state_off = uint2(0, 0);
             static uint mc_core = 0;
-            #define STATE_TEX_HART(pos, hartidx) (_SelfTexture2D[uint2(pos) + state_off])
-            #define STATE_TEX(pos) (_SelfTexture2D[uint2(pos) + state_off])
+            static uint mc_bits_now = 6;   // the write cache's size of the core looked at (types.h)
+            static uint mc_size_now = 4096; // and how many texels of state it has
+            static uint mc_tile0 = 0;      // and, a worker's, the first of its tiles
+            static uint4 mc_geo;           // the geometry's texel, read once a pixel
+            // A worker's state is whole 8 x 8 tiles of the strip beside core 0's block, one after
+            // another as a page is read (types.h): texel w of it is in its tile w / 64. Pixels
+            // of two cores in one tile would cost the GPU both cores' work for each. What lies
+            // past a worker's last texel is another worker's, and reads as the zeros it used
+            // to be (a control register a worker never wrote).
+            uint4 mc_state_read(uint2 pos) {
+                if (mc_core == 0) return _SelfTexture2D[pos + state_off];
+                uint w = pos.y * 64 + pos.x;
+                if (w >= mc_size_now) return (uint4)0;
+                uint t = mc_tile0 + (w >> 6), i = w & 63;
+                return _SelfTexture2D[uint2(64 + ((t & 7) << 3) + (i & 7), ((t >> 3) << 3) + (i >> 3))];
+            }
+            #define STATE_TEX_HART(pos, hartidx) mc_state_read(uint2(pos))
+            #define STATE_TEX(pos) mc_state_read(uint2(pos))
             #else
             #define STATE_TEX_HART(pos, hartidx) (_SelfTexture2D[uint2(pos) + uint2(hartidx % 2, hartidx / 2)])
             #define STATE_TEX(pos) (_SelfTexture2D[pos])
@@ -304,12 +339,16 @@
             uint commit_bands_changed_core();
             // every core's writes
             uint commit_bands_changed() {
-                uint changed = 0;
+                uint changed = 0, row = 0;
+                mc_geo = RAM_TEX(RAM_ADDR(MC_GEOMETRY));
                 for (uint h = 0; h < CORES; h++) {
-                    state_off = MC_BLOCK(h);
+                    uint rows = h == 0 ? 0 : mc_rows_of(mc_bits_of(h));
+                    if (h != 0 && (rows == 0 || (mc_geo.r & 1) != 0)) continue;
+                    mc_select(h, row);
+                    row += rows;
                     changed |= commit_bands_changed_core();
                 }
-                state_off = uint2(0, 0);
+                mc_select(0, 0);
                 return changed;
             }
             uint commit_bands_changed_core() {
@@ -375,14 +414,21 @@
 #endif
 #if CORES > 1
                 uint4 result;
+                mc_geo = RAM_TEX(RAM_ADDR(MC_GEOMETRY));
                 if (pos.y < 64) {
-                    // a core's own block: its state, as with one core
-                    uint hb = pos.x / CORE_PITCH;
-                    if (hb >= CORES || pos.x % CORE_PITCH >= 64) return (uint4)0;
+                    // a core's own state, as with one core
+                    uint hb = 0;
                     uint4 own = RAM_TEX(pos);
-                    mc_core = hb;
-                    state_off = MC_BLOCK(hb);
-                    pos = mc_texel_of(pos - state_off);
+                    mc_select(0, 0);
+                    if (pos.x >= MC_STRIP_X) {
+                        if (pos.x >= MC_STRIP_X + 64 || (mc_geo.r & 1) != 0) return (uint4)0;
+                        uint tile = ((pos.y >> 3) << 3) + ((pos.x - MC_STRIP_X) >> 3);
+                        hb = mc_core_at(tile);
+                        if (hb == 0) return (uint4)0;
+                        uint w = ((tile - mc_tile0) << 6) + ((pos.y & 7) << 3) + (pos.x & 7);
+                        pos = uint2(w & 63, w >> 6);
+                    }
+                    pos = mc_texel_of(pos);
                     decode_for_commit();
                     result = commit(pos, own);
                     // A worker's one store that found its cache full is in its state until its next
@@ -391,15 +437,17 @@
                 } else {
                     // RAM: every core's writes, the highest core's last
                     result = RAM_TEX(pos);
+                    uint row = 0;
                     for (uint h = 0; h < CORES; h++) {
-                        mc_core = h;
-                        state_off = MC_BLOCK(h);
+                        uint rows = h == 0 ? 0 : mc_rows_of(mc_bits_of(h));
+                        if (h != 0 && (rows == 0 || (mc_geo.r & 1) != 0)) continue;
+                        mc_select(h, row);
+                        row += rows;
                         if (h != 0 && STATE_TEX(uint2(41, 0)).r == 0) continue;   // a worker that stored nothing
                         decode_for_commit();
                         result = commit(pos, result);
                     }
-                    mc_core = 0;
-                    state_off = uint2(0, 0);
+                    mc_select(0, 0);
                 }
 #else
                 decode_for_commit();

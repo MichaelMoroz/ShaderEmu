@@ -834,6 +834,11 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
 - Kernel time compared with `jiffies` begins five minutes before zero: a static `unsigned
   long` stamp of 0 is "long ago" only after those five minutes (`pointer_at` in
   `shaderemu_input.c` was that for a build: no pointer reports at all after boot).
+- The workers' number and sizes are the guest's to set (`docs/multicore.md`, "The geometry"):
+  `mctest 15 60000 shape 6,6,6,5,5,4,4,4` must pass for any shape that fits. The harness
+  draws the whole 64 x 64 square of workers every pass and knows nothing of the layout;
+  anything that reads a worker's state (the control pass, the harness's `CORE` lines) finds
+  its tiles from the geometry texel. A worker's pixels must stay whole 8 x 8 tiles.
 - A program that uses the worker cores links `programs/mc/mcw.c` and posts its own functions
   as jobs (`docs/multicore.md`, "Using the workers from a program"): a worker is a thread of
   the program in user mode, on its page table. There is one kind of worker; do not add

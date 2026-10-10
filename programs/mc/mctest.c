@@ -142,6 +142,17 @@ static void check(const char* what, int ok) {
 int main(int argc, char** argv) {
     int want = argc > 1 ? atoi(argv[1]) : MC_MAX_CORES - 1;
     uint32_t limit = argc > 2 ? (uint32_t)atoi(argv[2]) : 60000;
+    // mctest N LIMIT shape 6,6,5,4,4: the machine's geometry first (docs/multicore.md)
+    if (argc > 4 && !strcmp(argv[3], "shape")) {
+        unsigned char bits[16];
+        int n = 0, answer;
+        for (const char* at = argv[4]; *at && n < 15; at++)
+            if (*at >= '0' && *at <= '9') bits[n++] = (unsigned char)(*at - '0');
+        answer = mcw_shape(bits, n);
+        printf("mctest: the geometry: %d workers (%s): %s%c", n, argv[4], answer == 0 ? "set" : "refused", 10);
+        if (answer != 0) return 1;
+        argc = 3;
+    }
 
     workers = mcw_open(want);
     printf("mctest: %d worker core%s (%u pages brought for their start)\n", workers, workers == 1 ? "" : "s", mcw_faults);

@@ -3,6 +3,7 @@
  * ShaderEmu GPU device (docs/gpu.md in the ShaderEmu repository): mmap of the GPU's memory,
  * and an ioctl that sleeps with wfi until the submitted list has been drawn.
  */
+#include <linux/delay.h>
 #include <linux/fs.h>
 #include <linux/init.h>
 #include <linux/io.h>
@@ -49,6 +50,18 @@ struct shaderemu_gpu_workers {
 };
 #define SHADEREMU_GPU_WORKERS	_IOWR('G', 4, struct shaderemu_gpu_workers)
 #define WORKERS_CORES	0x3c0	/* control word: how many cores the machine has */
+#define WORKERS_MOST_NOW	0x3cc	/* and how many it could have (0: a machine whose cores are as they are) */
+/*
+ * The geometry (docs/multicore.md): how many worker cores there are and how large each one's
+ * write cache is, four bits a worker (the tables' 2^bits buckets, 3 to 6; 0 ends the list),
+ * workers 1 to 8 in the first word and 9 to 15 in the second. The workers share 64 rows of the
+ * machine's state, and a worker's rows are what its cache needs, so a program chooses
+ * between few cores that store much in a pass and many that store little. It can only be
+ * set while no program has a worker: EBUSY otherwise.
+ */
+#define SHADEREMU_GPU_SHAPE	_IOW('G', 6, __u32[2])
+#define WORKERS_SHAPE	0x3d0	/* control words: bit 0 while it is laid out anew; the two words */
+#define WORKERS_ROWS	64
 /*
  * One program at a time draws with the GPU's memory for programs (its textures, vertices and
  * lists are at fixed places there): the program asks for it with this, and has it until it
@@ -69,8 +82,86 @@ static struct file *draw_owner;
 static pid_t draw_pid;
 static DEFINE_MUTEX(gpu_lock);
 
+static u32 workers_rows(u32 bits)
+{
+	return bits ? (44 + 8 + (2u << bits) * 4 + 63) / 64 : 0;
+}
+
+/* Lays the workers out: called with workers_lock held and no worker anyone's. */
+static long workers_shape(u32 first, u32 second)
+{
+	u32 most = readl(gpu_regs + WORKERS_MOST_NOW), k, rows = 0, ended = 0;
+
+	if (most < 2)
+		return -ENODEV;
+	if (most > WORKERS_MOST)
+		most = WORKERS_MOST;
+	for (k = 1; k < WORKERS_MOST; k++) {
+		u32 bits = (k <= 8 ? first >> (4 * (k - 1)) : second >> (4 * (k - 9))) & 15;
+
+		if (!bits) {
+			ended = 1;
+			continue;
+		}
+		if (ended || bits < 3 || bits > 6 || k >= most)
+			return -EINVAL;
+		rows += workers_rows(bits);
+	}
+	if (rows > WORKERS_ROWS)
+		return -EINVAL;
+	/*
+	 * Every worker parked, then the strip is nothing but zeros for some passes (a worker
+	 * with no state is a parked one), and then it is the new workers' rows.
+	 */
+	for (k = 1; k < WORKERS_MOST; k++)
+		writel(WORKERS_STOP, workers + 16 * k);
+	writel(1, gpu_regs + WORKERS_SHAPE);
+	msleep(60);
+	writel(first, gpu_regs + WORKERS_SHAPE + 4);
+	writel(second, gpu_regs + WORKERS_SHAPE + 8);
+	msleep(60);
+	writel(0, gpu_regs + WORKERS_SHAPE);
+	msleep(60);
+	return 0;
+}
+
+/* The shape a machine has until a program asks for another: three workers of the full size,
+ * and as many of the smallest kept for work that stores little as there is room for. */
+static void workers_default_shape(void)
+{
+	u32 most = readl(gpu_regs + WORKERS_MOST_NOW), shape[2] = {0, 0}, k, rows = 0;
+
+	if (most > WORKERS_MOST)
+		most = WORKERS_MOST;
+	for (k = 1; k < most; k++) {
+		u32 bits = k <= 3 ? 6 : 4;
+
+		if (rows + workers_rows(bits) > WORKERS_ROWS)
+			break;
+		rows += workers_rows(bits);
+		shape[k > 8] |= bits << (4 * (k <= 8 ? k - 1 : k - 9));
+	}
+	if (shape[0])
+		workers_shape(shape[0], shape[1]);
+}
+
 static long shaderemu_gpu_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
+	if (cmd == SHADEREMU_GPU_SHAPE) {
+		u32 shape[2], k;
+		long answer = 0;
+
+		if (copy_from_user(shape, (void __user *)arg, sizeof(shape)))
+			return -EFAULT;
+		mutex_lock(&workers_lock);
+		for (k = 1; k < WORKERS_MOST; k++)
+			if (worker_owner[k])
+				answer = -EBUSY;
+		if (!answer)
+			answer = workers_shape(shape[0], shape[1]);
+		mutex_unlock(&workers_lock);
+		return answer;
+	}
 	if (cmd == SHADEREMU_GPU_DRAW) {
 		u32 other = 0;
 		long answer = 0;
@@ -94,12 +185,15 @@ static long shaderemu_gpu_ioctl(struct file *file, unsigned int cmd, unsigned lo
 
 		if (copy_from_user(&w, (void __user *)arg, sizeof(w)))
 			return -EFAULT;
-		cores = readl(gpu_regs + WORKERS_CORES);
-		if (cores > WORKERS_MOST)
-			cores = WORKERS_MOST;
 		w.mask = 0;
 		w.root = csr_read(CSR_SATP) & 0x3fffff;
 		mutex_lock(&workers_lock);
+		/* a machine that lays its workers out and has not been told how yet */
+		if (readl(gpu_regs + WORKERS_MOST_NOW) > 1 && !readl(gpu_regs + WORKERS_SHAPE + 4))
+			workers_default_shape();
+		cores = readl(gpu_regs + WORKERS_CORES);
+		if (cores > WORKERS_MOST)
+			cores = WORKERS_MOST;
 		for (k = 1; k < cores && got < w.want; k++)
 			if (!worker_owner[k]) {
 				worker_owner[k] = file;

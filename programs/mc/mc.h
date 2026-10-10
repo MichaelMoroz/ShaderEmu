@@ -22,6 +22,7 @@
 #define MC_STOP 0x5453434du   // there instead: the core parks (the kernel's, when the program is gone)
 #define MC_START_AT(k) (16u * (k))
 #define MC_WORKERS 0xc00c4704u   // _IOWR('G', 4, three words)
+#define MC_SHAPE 0x40084706u     // _IOW('G', 6, two words): the geometry, four bits a worker
 // core k's 64 bytes: a job (core 0 writes it), its answer (the worker's), a fault (the
 // worker's, written by the machine) and the word that lets it go on (core 0's)
 #define MC_JOB_AT(k) (0x400u + 64u * (k))

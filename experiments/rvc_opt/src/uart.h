@@ -30,14 +30,12 @@
 #define L1_BUCKETS (2 * L1_TABLE)
 #define L1_STRIDE (L1_WAYS + 1)
 #define L1_ENTRIES (L1_BUCKETS * L1_STRIDE)
-#if defined(MC_L1_BITS) && defined(CORES)
-// Small worker cores (docs/multicore.md, "Efficiency cores"): the cores from MC_SMALL_FROM on
-// have tables of 2^MC_L1_BITS buckets, in the first buckets of the same arrays. mc_core is the
-// core whose cache is being looked at, in the tick and in the commit.
-#ifndef MC_SMALL_FROM
-#define MC_SMALL_FROM 4
-#endif
-#define L1_NOW_BITS (mc_core < MC_SMALL_FROM ? (uint)L1_TABLE_BITS : (uint)MC_L1_BITS)
+#if defined(CORES) && CORES > 1
+// A worker core's write cache is as large as the machine's geometry says (docs/multicore.md,
+// "The geometry"): tables of 2^mc_bits_now buckets, in the first buckets of the same arrays.
+// mc_bits_now is the size of the core whose cache is being looked at, in the tick and in
+// the commit.
+#define L1_NOW_BITS mc_bits_now
 #define L1_NOW_TABLE (1u << L1_NOW_BITS)
 #define L1_B0(t) ((t) & (L1_NOW_TABLE - 1))
 #define L1_B1(t) (L1_NOW_TABLE + ((((t) >> 3) ^ ((t) << (L1_NOW_BITS - 3)) ^ ((t) >> L1_NOW_BITS)) & (L1_NOW_TABLE - 1)))

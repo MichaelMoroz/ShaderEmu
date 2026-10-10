@@ -29,10 +29,7 @@ public:
         for (auto& d : opt.compile.defines)
             if (d.first == "CORES") cores_ = (float)(std::max)(1, (std::min)(16, atoi(d.second.c_str())));
         for (auto& d : opt.compile.defines)
-            if (d.first == "CORE_PITCH") pitch_ = (float)atoi(d.second.c_str());
-        tailWidth_ = (float)opt.workerTailWidth;
-        smallRows_ = (float)opt.smallRows;
-        smallFrom_ = (float)opt.smallFrom;
+            if (d.first == "CORE_PITCH") {}   // (no more: the workers are one strip)
         tickRows_ = (float)opt.tickRows;
         if (!buildPasses(gpu_, shader, {"CPUTick", "Commit"}, bo, passes_, err)) return false;
         for (auto& d : opt.compile.defines)
@@ -110,16 +107,11 @@ public:
         else if (cs_ && mat.getFloat("_Init") == 0) runComputeTick(mat);
         else if (cores_ == 1) crt_.runZone(gpu_, passes_[0], mat, UpdateZone{32, 4096 - tickRows_ / 2, 64, tickRows_, 0});
         else {
-            // Core 0's rectangle, then two for each worker: its first 512 texels (64 x 8) and the
-            // 16 x 4 under them that holds the rest of its write cache (MC_ROWS in src/types.h).
-            // Every zone is drawn before any is copied back, or each would wait for the last.
-            std::vector<UpdateZone> zones{UpdateZone{32, 4096 - tickRows_ / 2, 64, tickRows_, 0}};
-            for (float c = 1; c < cores_; c += 1) {
-                if (getenv("RVC_MC_FULL")) { zones.push_back(UpdateZone{pitch_ * c + 32, 4096 - tickRows_ / 2, 64, tickRows_, 0}); continue; }
-                float rows = c >= smallFrom_ ? smallRows_ : 8;   // (a small core's cache fills fewer)
-                zones.push_back(UpdateZone{pitch_ * c + 32, 4096 - rows / 2, 64, rows, 0});
-                zones.push_back(UpdateZone{pitch_ * c + tailWidth_ / 2, 4096 - rows - 2, tailWidth_, 4, 0});
-            }
+            // Core 0's rectangle, and the workers' strip beside it, whole: which rows of it are
+            // whose is the machine's geometry (src/types.h), and a pixel of a worker that is
+            // parked, or of no worker, returns before it has done anything.
+            // Both are drawn before either is copied back, or each would wait for the other.
+            std::vector<UpdateZone> zones{UpdateZone{32, 4096 - tickRows_ / 2, 64, tickRows_, 0}, UpdateZone{64 + 32, 4096 - 32, 64, 64, 0}};
             for (auto& z : zones) crt_.runZone(gpu_, passes_[0], mat, z, 6, false);
             for (auto& z : zones) crt_.copyZone(gpu_, z);
         }
@@ -560,10 +552,7 @@ private:
     double tickMs_ = -1, commitMs_ = -1, deviceMs_ = 0;
     bool bands_ = false;   // the commit draws only the bands of RAM that changed
     float tickRows_ = 64;  // BackendOptions::tickRows
-    float tailWidth_ = 16; // BackendOptions::workerTailWidth
-    float smallRows_ = 8, smallFrom_ = 1000;
-    float pitch_ = 256;    // CORE_PITCH: how far apart the blocks are
-    float cores_ = 1;      // CORES: the tick's zone is that many 64 x 64 blocks side by side (docs/multicore.md)
+    float cores_ = 1;      // CORES: more than one, and the tick draws the workers' strip too (docs/multicore.md)
     MemoryView view_;
 };
 

@@ -702,6 +702,7 @@ static inline u32 mc_call_at(int hart) { return MC_MBOX + 0x800 + 32 * hart; }
 enum { MC_PARKED, MC_RUNNING, MC_ASLEEP, MC_FAULTED, MC_CALLING };
 struct Worker { int state = MC_PARKED; u32 seen = 0, start_seen = 0, job_seen = 0; };
 static std::vector<Worker> workers;
+static u32 geometry[16];   // each worker's cache bits as the machine's geometry has them; 0: no such worker
 
 bool mc_fault(Core& c, const Trap& t) {
     Worker& w = workers[c.hart];
@@ -724,6 +725,7 @@ bool mc_fault(Core& c, const Trap& t) {
 
 static u64 run_worker(Core& c, u64 budget) {
     Worker& w = workers[c.hart];
+    if (!geometry[c.hart]) return 0;
     u32 start = word(mc_start_at(c.hart));
     if (start == MC_STOP) { w.state = MC_PARKED; c.started = false; return 0; }
     if (w.state == MC_PARKED) {
@@ -785,8 +787,26 @@ static u64 frame_no = 0;
 
 static void control_pass() {
     dirty(CTRL);
+    // what each core ran, how many workers the geometry has (docs/multicore.md: the cores have
+    // no write cache here, so their sizes are only counted) and how many there could be
+    for (size_t i = 0; i < cores.size() && i < 16; i++) word(CTRL + 0x380 + 4 * (u32)i) = (u32)cores[i].clock;
+    if (cores.size() > 1) {
+        u32 running = 1, asleep = 0, count = 1, shaping = word(CTRL + 0x3d0) & 1;
+        for (size_t i = 1; i < cores.size(); i++) {
+            u32 k = (u32)i - 1, bits = (k < 8 ? word(CTRL + 0x3d4) >> (4 * k) : word(CTRL + 0x3d8) >> (4 * (k - 8))) & 15;
+            geometry[i] = shaping ? 0 : bits;
+            if (!geometry[i]) { workers[i].state = MC_PARKED; cores[i].started = false; continue; }
+            count = (u32)i + 1;
+            running |= (workers[i].state != MC_PARKED ? 1u : 0u) << i;
+            asleep |= (workers[i].state == MC_ASLEEP ? 1u : 0u) << i;
+        }
+        word(CTRL + 0x3c0) = count;
+        word(CTRL + 0x3c4) = running;
+        word(CTRL + 0x3c8) = asleep;
+        word(CTRL + 0x3cc) = (u32)cores.size();
+    }
     if (external_devices) {
-        // the shader's control pass keeps these words; between two of its runs only the clock moves
+        // the shader's control pass keeps the rest; between two of its runs only the clock moves
         word(CTRL + 0x34) = (u32)(guest_seconds * 1000.0);
         return;
     }
@@ -807,18 +827,6 @@ static void control_pass() {
         word(CTRL + 0x24) = (u32)(height / 2 + height / 10 * sin(turn));
     }
     word(CTRL + 0x2c) = key_seq;
-    // what each core ran, and how many there are (docs/multicore.md)
-    for (size_t i = 0; i < cores.size() && i < 16; i++) word(CTRL + 0x380 + 4 * (u32)i) = (u32)cores[i].clock;
-    if (cores.size() > 1) {
-        u32 running = 1, asleep = 0;
-        for (size_t i = 1; i < cores.size(); i++) {
-            running |= (workers[i].state != MC_PARKED ? 1u : 0u) << i;
-            asleep |= (workers[i].state == MC_ASLEEP ? 1u : 0u) << i;
-        }
-        word(CTRL + 0x3c0) = (u32)cores.size();
-        word(CTRL + 0x3c4) = running;
-        word(CTRL + 0x3c8) = asleep;
-    }
 }
 
 static bool read_file(const std::string& path, std::vector<uint8_t>& to) {

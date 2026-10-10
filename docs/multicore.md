@@ -216,34 +216,63 @@ and the parked ones cost core 0 a little (31 to 35 s alone: the commit pass look
 up in every core's write cache). With more than eight cores the blocks have to be closer
 than 256 texels: `--core-pitch 128`.
 
-## Small cores
+## The geometry
 
-A worker's pixels are nearly all write cache (512 of its 564 texels), and what a pass costs
-is the pixels that run it. So there is a third kind of core, for work that computes much and
-stores little: from core `MC_SMALL_FROM` on (4: after core 0 and three workers as above) a
-core's write cache has tables of 2^`MC_L1_BITS` buckets in place of 64. With 16 buckets
-that is 128 texels of cache, 96 of them usable: 1.5 KB of new stores a pass where a worker
-has 6, and 180 texels a core, drawn as 64 x 2 and 16 x 4 (192 pixels where a worker is 576).
-A small core that fills its cache ends its pass there, as any core does, and goes on in the
-next. In the harness: `--cores 16 --core-pitch 128 --small-cores 4,4` (the first small core,
-the bits). The cache is the same arrays with fewer buckets used (`L1_B0`, `L1_B1` and
-`MC_ENTRIES` take the core being looked at, in the tick and in the commit), so a machine
-without the switch is what it was.
+Which pixel of the tick is which texel of which core is only a function, so how many workers
+there are and how large each is need not be compiled in. The workers' state is one square of
+the state rows, 64 texels a side beside core 0's block, and it is 64 tiles of 8 x 8; each
+worker has whole tiles of it, one worker after another as a page is read (`mc_core_at()`,
+`mc_state_read()`, `mc_texel_of()` in `src/types.h` and `main.shader`). A worker keeps the
+CPU's 44 texels, its write cache and the float registers' 8, and nearly all of that is the
+cache, so the cache's size is the worker's size:
 
-`mctest 15 120000` passes on it (every test runs on the small cores too), and the primes
-below 120,000 are 4.5 s on core 0 alone and 0.57 s shared between 15 workers, 7.9 times;
-fifteen workers of the full size made it 4.7 times. A JPEG picture of 640 x 480
-(`docs/nanox.md`, the viewer), whose strips of pixels are shared out between the workers
-after the first, which reads the codes:
-
-| Workers asked for | 0 | 3 | 7 (3 and 4 small) | 15 (3 and 12 small) |
+| Tables of 2^bits buckets | New stores a pass | Texels | Tiles | Fit in the square |
 |---|---|---|---|---|
-| Decoded in | 6.8 s | 3.5 s | 2.0 s | 2.6 s |
+| 6 (core 0's, and a worker's until now) | 6 KB | 564 | 9 | 7 |
+| 5 | 3 KB | 308 | 5 | 12 |
+| 4 | 1.5 KB | 180 | 3 | 21 (the machine has 15 workers at most) |
+| 3 | 0.75 KB | 116 | 2 | 32 |
 
-Seven is the place to be for that job: with fifteen the one core that reads the codes is
-what the others wait for, and every busy core still adds to the pass. A program is not told
-yet which of its workers are small; the kernel hands out the full-size ones first (they are
-the lowest numbers). Not in Unity yet: its tick texture and `CORES` are still four cores'.
+So it is few workers that store much in a pass or many that store little, or any mix. A
+worker whose cache is full ends its pass there, as any core does, and goes on in the next.
+
+The geometry is a texel of the control words (`0x870003d0`): a word with bit 0 set while the
+square is laid out anew, then four bits a worker for workers 1 to 8 and for 9 to 15 (its
+bits; 0 ends the list). **It is set while every worker is parked, and at no other time**: a
+worker's registers and cache are those pixels. The kernel does it (`SHADEREMU_GPU_SHAPE`,
+`workers_shape()` in `linux/kernel/shaderemu_gpu.c`; `mcw_shape()` in the library): it
+refuses with EBUSY while any program has a worker, parks every core, sets the bit, during
+which every pixel of the square is zero and the commit takes no worker's stores (a worker
+with no state is a parked one), writes the two words and clears the bit. The control pass
+says in `0x870003c0` how many cores there are now, and in the word at `0x870003cc` how many
+there could be (`--cores N` in the harness, 16 at most). Until a program asks, the kernel
+lays out three workers of the full size and twelve of size 4 the first time workers are
+asked for. `mctest N LIMIT shape 6,6,5,4,4` sets a geometry and runs the tests on it.
+
+The host knows none of this: it draws the whole square every pass, and a pixel of a worker
+that is parked, or of no worker, returns before it has done anything. A machine with every
+worker parked runs as fast as one compiled for one core (3,350k, 3,247k and 3,498k
+instructions a second with 1, 4 and 16 cores compiled in: what two runs differ by).
+
+Why tiles and not rows: pixels of two cores in one 8 x 8 tile cost the GPU both cores' work
+for each ("Why", above). Laid out as rows of 64 (3, 5 or 9 of them a worker, so that
+neighbours shared tiles) the same seven workers decoded the JPEG below in 3.4 s; in tiles,
+2.4 s.
+
+`mctest` passes on every geometry tried (three of size 6 and twelve of 4; seven of 6; four
+of 5, eight of 4 and three of 3), changed between runs without a restart. The primes below
+120,000, shared: 4.8 s on core 0 alone, 0.51 s with the default fifteen (9.4 times; fifteen
+workers of the full size, each a block of its own, made it 4.7 times). A JPEG picture of
+640 x 480 (`docs/nanox.md`, the viewer), whose strips of pixels are shared out between the
+workers after the first, which reads the codes: 6.8 s on core 0, 2.4 s with seven workers
+(three of 6, four of 4), 2.2 s with eleven (one of 6, ten of 5); the one core that reads the
+codes is what the others wait for there.
+
+A program is not told yet which of its workers are small; the kernel hands out the lowest
+numbers first, which are the first in the geometry. Not in Unity yet: the world's shader is
+the one before this, with four cores as blocks side by side (the kernel sees that it cannot
+be laid out and leaves it as it is). **Do not run "Sync shader sources" there until its tick
+texture and the passes that draw it have been changed to match.**
 
 ## Workers with nothing to do
 
@@ -468,7 +497,5 @@ boot images have to be synced and imported again for the kind described here.)
 
 ## Switches
 
-    --cores N          N cores (1 to 16)
-    --core-pitch N     the blocks are N texels apart (256)
-    --small-cores F,B  the cores from F on are small: write cache tables of 2^B buckets
+    --cores N          core 0 and up to N - 1 workers (1 to 16); the guest lays them out
     RVC_MC_FULL=1      draw a worker's whole 64 x 16, as before (to compare)

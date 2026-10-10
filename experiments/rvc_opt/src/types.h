@@ -55,14 +55,12 @@
 #define L1_BUCKETS (2 * L1_TABLE)
 #define L1_STRIDE (L1_WAYS + 1)
 #define L1_ENTRIES (L1_BUCKETS * L1_STRIDE)
-#if defined(MC_L1_BITS) && defined(CORES)
-// Small worker cores (docs/multicore.md, "Efficiency cores"): the cores from MC_SMALL_FROM on
-// have tables of 2^MC_L1_BITS buckets, in the first buckets of the same arrays. mc_core is the
-// core whose cache is being looked at, in the tick and in the commit.
-#ifndef MC_SMALL_FROM
-#define MC_SMALL_FROM 4
-#endif
-#define L1_NOW_BITS (mc_core < MC_SMALL_FROM ? (uint)L1_TABLE_BITS : (uint)MC_L1_BITS)
+#if defined(CORES) && CORES > 1
+// A worker core's write cache is as large as the machine's geometry says (docs/multicore.md,
+// "The geometry"): tables of 2^mc_bits_now buckets, in the first buckets of the same arrays.
+// mc_bits_now is the size of the core whose cache is being looked at, in the tick and in
+// the commit.
+#define L1_NOW_BITS mc_bits_now
 #define L1_NOW_TABLE (1u << L1_NOW_BITS)
 #define L1_B0(t) ((t) & (L1_NOW_TABLE - 1))
 #define L1_B1(t) (L1_NOW_TABLE + ((((t) >> 3) ^ ((t) << (L1_NOW_BITS - 3)) ^ ((t) >> L1_NOW_BITS)) & (L1_NOW_TABLE - 1)))
@@ -103,34 +101,63 @@
 // those, four to a column, the last 44 of the cache and the eight of the float registers,
 // for which the pass draws 16 x 4. In a row of their own they were a line a pixel high,
 // which costs the warps of two rows.
-// A small worker core (MC_L1_BITS, from core MC_SMALL_FROM on) keeps as many rows as its
-// smaller cache fills, and the same block under them: 64 x 2 and 16 x 4 for tables of 16
-// buckets, 180 texels where a worker has 564.
-#if defined(MC_L1_BITS)
-#define MC_ENTRIES (mc_core < MC_SMALL_FROM ? (uint)L1_ENTRIES : (2u << MC_L1_BITS) * L1_STRIDE)
-#else
-#define MC_ENTRIES ((uint)L1_ENTRIES)
-#endif
-#define MC_ROWS (MC_ENTRIES / 64)
-#define MC_TAIL_AT (MC_ROWS * 64)
-#define MC_TAIL_CACHE (L1_STATE_AT + MC_ENTRIES - MC_TAIL_AT)
-// Where texel lin of this core's block is; (63, 63), which is nobody's, for the part of the
-// cache a small core does not have.
+// The geometry (docs/multicore.md): the workers' state is one square of the state rows, 64
+// texels a side beside core 0's block, and each worker has whole 8 x 8 tiles of it, one
+// worker after another as a page is read (the functions below count them as rows of 64
+// texels, which is what a tile holds). How many workers there are and how large each one's write cache is, is a texel
+// of the control words that core 0 writes while every worker is parked:
+//   .r  bit 0: the strip is being laid out anew (every pixel of it is zero meanwhile)
+//   .g  four bits a worker for workers 1 to 8: its cache's tables are 2^bits buckets (3 to 6); 0: no such worker
+//   .b  the same for workers 9 to 15
+// A worker keeps the CPU's 44 texels, its cache and the float registers' 8, in that order.
+#define MC_GEOMETRY 0x70003du
+#define MC_STRIP_X 64
+#define MC_STRIP_ROWS 64
+uint mc_bits_of(uint core) {
+    uint k = core - 1;
+    return core == 0 ? (uint)L1_TABLE_BITS : (((k < 8 ? mc_geo.g >> (4 * k) : mc_geo.b >> (4 * (k - 8))) & 15));
+}
+uint mc_rows_of(uint bits) {
+    return bits == 0 ? 0 : (L1_STATE_AT + 8 + ((2u << bits) * L1_STRIDE) + 63) / 64;
+}
+// Makes `core` the one whose state is read: a worker's begins at tile `row` of the strip.
+void mc_select(uint core, uint row) {
+    mc_tile0 = row;
+    mc_core = core;
+    mc_bits_now = mc_bits_of(core);
+    mc_size_now = L1_STATE_AT + (2u << mc_bits_now) * L1_STRIDE + 8;
+    state_off = uint2(0, 0);
+}
+// The worker whose tiles the strip's tile y is one of, selected; 0 when it is nobody's.
+uint mc_core_at(uint y) {
+    uint row = 0, found = 0, at = 0;
+    for (uint k = 1; k < CORES; k++) {
+        uint rows = mc_rows_of(mc_bits_of(k));
+        if (rows != 0 && y >= row && y < row + rows) { found = k; at = row; }
+        row += rows;
+    }
+    if (found != 0) mc_select(found, at);
+    return found;
+}
+#define MC_ENTRIES (mc_core == 0 ? (uint)L1_ENTRIES : (2u << mc_bits_now) * L1_STRIDE)
+// Where texel lin (as core 0 numbers them) of this core's state is, from where its rows begin;
+// far outside the texture, which reads as zeros, for what a worker does not keep.
 uint2 mc_state_at(uint lin) {
-    if (mc_core != 0 && lin >= MC_TAIL_AT && lin < FP_STATE_AT + 8) {
-        if (lin >= L1_STATE_AT + MC_ENTRIES && lin < FP_STATE_AT) return uint2(63, 63);
-        uint slot = lin >= FP_STATE_AT ? MC_TAIL_CACHE + (lin - FP_STATE_AT) : lin - MC_TAIL_AT;
-        return uint2(slot >> 2, MC_ROWS + (slot & 3));
+    if (mc_core != 0) {
+        uint cache_end = L1_STATE_AT + MC_ENTRIES;
+        if (lin >= FP_STATE_AT && lin < FP_STATE_AT + 8) lin = cache_end + (lin - FP_STATE_AT);
+        else if (lin >= cache_end) return uint2(0, 0x4000);
     }
     return uint2(lin % 64, lin / 64);
 }
-// Which texel the pixel at `pos` of this core's block keeps, as the place it has in core 0's
-// layout; (63, 63), which is nobody's, for a pixel of the padding.
+// Which texel the pixel at `pos` of this core's rows keeps, as the place it has in core 0's
+// layout; (63, 63), which is nobody's, for a pixel past a worker's last texel.
 uint2 mc_texel_of(uint2 pos) {
-    if (mc_core == 0 || pos.y < MC_ROWS || pos.y >= STATE_ROWS) return pos;
-    uint slot = pos.x * 4 + (pos.y - MC_ROWS);
-    uint lin = slot < MC_TAIL_CACHE ? MC_TAIL_AT + slot : FP_STATE_AT + (slot - MC_TAIL_CACHE);
-    return pos.y < MC_ROWS + 4 && slot < MC_TAIL_CACHE + 8 ? uint2(lin % 64, lin / 64) : uint2(63, 63);
+    if (mc_core == 0) return pos;
+    uint w = pos.y * 64 + pos.x, cache_end = L1_STATE_AT + MC_ENTRIES;
+    if (w >= cache_end + 8) return uint2(63, 63);
+    uint lin = w < cache_end ? w : FP_STATE_AT + (w - cache_end);
+    return uint2(lin % 64, lin / 64);
 }
 #endif
 uint l1_slot(uint4 tags, uint tag) {

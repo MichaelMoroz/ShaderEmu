@@ -136,6 +136,21 @@ static void serve(int k)
 
 int mcw_count(void) { return count; }
 
+int mcw_shape(const unsigned char *bits, int workers)
+{
+	uint32_t shape[2] = {0, 0};
+	long answer;
+	int fd, k;
+
+	if (page) return -16;	/* this program has workers itself */
+	for (k = 1; k <= workers && k < MC_MAX_CORES; k++)
+		shape[k > 8] |= (uint32_t)(bits[k - 1] & 15) << (4 * (k <= 8 ? k - 1 : k - 9));
+	if ((fd = (int)call6(56, -100, (long)"/dev/gpu", 2, 0, 0, 0)) < 0) return fd;
+	answer = call6(29, fd, MC_SHAPE, (long)shape, 0, 0, 0);
+	call6(57, fd, 0, 0, 0, 0, 0);
+	return (int)answer;
+}
+
 int mcw_open(int limit)
 {
 	uint32_t claim[3], own_tp, i;
