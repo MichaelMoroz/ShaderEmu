@@ -72,6 +72,18 @@ anew (`RALERT_REFRESH=1`) but for trees below the map's last row, which differed
 first Soviet mission: 16 to 18 frames a second in its first 300 frames where it was 15 to
 17, 24 to 32 later; its logic is 105 to 130 thousand instructions of a frame's 180 to 200.
 
+## A battle
+
+`RALERT_HUNT=N` sends everything the player has after the enemy at frame N, which is the only
+way a mission left alone comes to a battle. The Allied first mission with `RALERT_HUNT=50`:
+a frame is 220 to 265 thousand instructions, of which the game's logic is 155 to 190 (it is
+105 to 130 in the quiet mission), 14 to 17 frames a second in the harness. The profile of
+it has no piece over 3%: threat scans, path finding, the houses' and each object's own turn.
+A played mission in the world was measured at 551 thousand a frame (logic 359, drawing 127,
+the rest 65), 5 frames a second at the world's 2.9 million instructions a second: the logic
+alone would be 8 a second there. The rest's 65 is mostly asking the window system for the
+pointer while it moves, which the machine's input words could answer.
+
 ## Movies, and the worker cores
 
 The demo's opening movie (ENGLISH.VQA, 640 x 400, 156 frames of it before `TDAWN_AUTO`'s Return

@@ -467,10 +467,10 @@ index 3f1c7f1..2c71953 100644
          Map.Flag_To_Redraw(true);
      }
 diff --git a/redalert/conquer.cpp b/redalert/conquer.cpp
-index 4825ba4..1b71c70 100644
+index 4825ba4..8b22800 100644
 --- a/redalert/conquer.cpp
 +++ b/redalert/conquer.cpp
-@@ -125,6 +125,139 @@ bool Map_Edit_Loop(void);
+@@ -125,6 +125,159 @@ bool Map_Edit_Loop(void);
  
  bool UseOldShapeDraw = false;
  
@@ -555,6 +555,26 @@ index 4825ba4..1b71c70 100644
 +        ShaderEmu_State("begun");
 +        return;
 +    }
++    {
++        /* RALERT_HUNT=N: at frame N everything the player has goes after the enemy by itself: a
++        ** battle to measure, which a mission left alone never has */
++        static int hunt = -1;
++        if (hunt < 0) {
++            hunt = getenv("RALERT_HUNT") ? atoi(getenv("RALERT_HUNT")) : 0;
++        }
++        if (hunt && (int)Frame == hunt) {
++            for (int i = 0; i < Units.Count(); i++) {
++                if (Units.Ptr(i)->House == PlayerPtr) {
++                    Units.Ptr(i)->Assign_Mission(MISSION_HUNT);
++                }
++            }
++            for (int i = 0; i < Infantry.Count(); i++) {
++                if (Infantry.Ptr(i)->House == PlayerPtr) {
++                    Infantry.Ptr(i)->Assign_Mission(MISSION_HUNT);
++                }
++            }
++        }
++    }
 +    if (cap || (stop && getenv("RALERT_NO_DELAY"))) {
 +        FrameTimer = 0;
 +    }
@@ -610,7 +630,7 @@ index 4825ba4..1b71c70 100644
  #ifdef CHEAT_KEYS
  void Dump_Heap_Pointers(void);
  void Error_In_Heap_Pointers(char* string);
-@@ -1759,7 +1892,12 @@ bool Main_Loop()
+@@ -1759,7 +1912,12 @@ bool Main_Loop()
      **	If there is no theme playing, but it looks like one is required, then start one
      **	playing. This is usually the symptom of there being no transition score.
      */
@@ -623,7 +643,7 @@ index 4825ba4..1b71c70 100644
          Theme.Queue_Song(THEME_PICK_ANOTHER);
      }
  
-@@ -1790,6 +1928,10 @@ bool Main_Loop()
+@@ -1790,6 +1948,10 @@ bool Main_Loop()
              FrameTimer = Options.GameSpeed + (PlayerPtr->Difficulty == DIFF_EASY ? 1 : 0);
          }
      }
@@ -634,7 +654,7 @@ index 4825ba4..1b71c70 100644
  
      /*
      **	Update the display, unless we're inside a dialog.
-@@ -1801,7 +1943,7 @@ bool Main_Loop()
+@@ -1801,7 +1963,7 @@ bool Main_Loop()
              if (input) {
                  Keyboard_Process(input);
              }
@@ -643,7 +663,7 @@ index 4825ba4..1b71c70 100644
          }
      }
  
-@@ -1826,7 +1968,13 @@ bool Main_Loop()
+@@ -1826,7 +1988,13 @@ bool Main_Loop()
      /*
      **	AI logic operations are performed here.
      */
@@ -658,7 +678,7 @@ index 4825ba4..1b71c70 100644
      TimeQuake = false;
  #ifdef FIXIT_CSII //	checked - ajw 9/28/98
      if (!PendingTimeQuake) {
-@@ -1893,6 +2041,9 @@ bool Main_Loop()
+@@ -1893,6 +2061,9 @@ bool Main_Loop()
          PlayerRestarts = false;
          Map.Help_Text(TXT_NONE);
          Set_Video_Cursor_Clip(false);
@@ -668,7 +688,7 @@ index 4825ba4..1b71c70 100644
          Do_Restart();
          Set_Video_Cursor_Clip(true);
          return (!GameActive);
-@@ -2442,6 +2593,25 @@ void Play_Movie(char const* name, ThemeType theme, bool clrscrn, bool immediate)
+@@ -2442,6 +2613,25 @@ void Play_Movie(char const* name, ThemeType theme, bool clrscrn, bool immediate)
              AnimControl.ImageBuf = (unsigned char*)SysMemPage.Get_Offset();
          }
  #endif
@@ -694,7 +714,7 @@ index 4825ba4..1b71c70 100644
  
          if (!Debug_Quiet && Get_Digi_Handle() != -1) {
              AnimControl.OptionFlags |= VQAOPTF_AUDIO;
-@@ -2465,8 +2635,30 @@ void Play_Movie(char const* name, ThemeType theme, bool clrscrn, bool immediate)
+@@ -2465,8 +2655,30 @@ void Play_Movie(char const* name, ThemeType theme, bool clrscrn, bool immediate)
                  // Set_Palette(BlackPalette);
                  SysMemPage.Clear();
                  InMovie = true;
@@ -725,7 +745,7 @@ index 4825ba4..1b71c70 100644
                  // Resume_Audio_Thread();
                  InMovie = false;
  #ifdef MOVIE640
-@@ -2885,6 +3077,14 @@ void CC_Draw_Shape(void const* shapefile,
+@@ -2885,6 +3097,14 @@ void CC_Draw_Shape(void const* shapefile,
      if ((flags & SHAPE_FADING) && (!fadingdata)) {
          fadingdata = DisplayClass::FadingShade;
      }
@@ -740,7 +760,7 @@ index 4825ba4..1b71c70 100644
  
      static unsigned char* _xbuffer = 0;
  
-@@ -3185,6 +3385,9 @@ extern GraphicBufferClass VQ640;
+@@ -3185,6 +3405,9 @@ extern GraphicBufferClass VQ640;
  extern bool IsVQ640;
  int VQ_Call_Back(unsigned char*, int)
  {
@@ -750,7 +770,7 @@ index 4825ba4..1b71c70 100644
  #ifdef REMASTER_BUILD
      return 0;
  #else
-@@ -3194,6 +3397,11 @@ int VQ_Call_Back(unsigned char*, int)
+@@ -3194,6 +3417,11 @@ int VQ_Call_Back(unsigned char*, int)
          Keyboard->Clear();
      }
      Check_VQ_Palette_Set();
@@ -762,7 +782,7 @@ index 4825ba4..1b71c70 100644
  #ifdef MOVIE640
      if (IsVQ640) {
          VQ640.Blit(SeenBuff);
-@@ -3204,6 +3412,9 @@ int VQ_Call_Back(unsigned char*, int)
+@@ -3204,6 +3432,9 @@ int VQ_Call_Back(unsigned char*, int)
      Interpolate_2X_Scale(&SysMemPage, &SeenBuff, NULL);
  #endif
      Frame_Limiter();
