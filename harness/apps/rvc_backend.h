@@ -57,6 +57,13 @@ public:
     static const UINT kWidth = 2048, kHeight = 4096;   // rvc's vm_state_crt.asset
     static const UINT kProfCount = 256;
 
+    // --cpu (docs/cpu-harness.md): the instructions run on the processor. The tick pass is not
+    // drawn; RAM comes from the host before a frame and the devices' part of it goes back after.
+    bool cpuMode = false;
+    virtual bool uploadRows(UINT row, UINT rows, const void* texels) { (void)row; (void)rows; (void)texels; return false; }
+    virtual bool uploadTexel(UINT x, UINT y, const uint32_t* words) { (void)x; (void)y; (void)words; return false; }
+    virtual bool readRows(UINT row, UINT rows, std::vector<uint8_t>& out) { (void)row; (void)rows; (void)out; return false; }
+
     virtual ~RvcBackend() {}
     // Creates the device and compiles both passes. Prints its own progress lines.
     virtual bool init(const BackendOptions& opt, const SLShader& shader, Material& mat, std::string& err) = 0;

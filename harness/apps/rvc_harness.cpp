@@ -46,6 +46,15 @@
 
 namespace fs = std::filesystem;
 
+// The machine as an interpreter (rvc_cpu.cpp, docs/cpu-harness.md), for --cpu: the same file
+// that is bin\\rvc_cpu.exe, without its main().
+#define RVC_CPU_LIBRARY
+namespace cpuemu {
+#include "rvc_cpu.cpp"
+}
+static std::string g_cpuConsole;   // what the interpreter's console said since it was last looked at
+static void cpuConsoleHook(char c) { g_cpuConsole.push_back(c); }
+
 #ifndef SHADEREMU_UNITY_INCLUDE_DIR
 #define SHADEREMU_UNITY_INCLUDE_DIR "harness/unity_include"
 #endif
@@ -94,6 +103,8 @@ struct Options {
     int readbackBatch = 1;    // --readback-batch N: D3D11 maps the rows of N frames at once
     bool ourKernel = false;   // the RAM image is this project's (kernel at +4 MiB, device tree at +34 MiB)
     bool sbi = false;         // compile with SBI_HLE
+    bool cpu = false;         // --cpu: the instructions run on the processor, the devices on the graphics card
+    double cpuIps = 0;        // --cpu-ips N: no more than N instructions a second (0: as fast as it goes)
     bool noGpu = false;       // --no-gpu: leave out the GPU device's passes (gpu.shader)
     bool noSound = false;     // --no-sound: leave out the sound card (sound.shader)
     bool sound = false;       // play the sound card: the terminal mode, or --sound
@@ -171,6 +182,10 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
   --pc-log FILE        sample the guest's pc once a frame, for tools/pc_profile.py
   --frame-log FILE     per frame: pc, instructions, last stall and time, for tools/boot_profile.py
   --cores N            core 0 and N - 1 worker cores in one tick pass (docs/multicore.md; D3D11)
+  --cpu                run the instructions on the processor (docs/cpu-harness.md): some thirty times
+                       faster; the display, the GPU, the keys and the pointer are the shader's as before
+                       (D3D11, the Linux image in build\\images\\linux)
+  --cpu-ips N          the same, at no more than N instructions a second (3000000: the world's speed)
   --small-cores F,B    the cores from F on are small: write cache tables of 2^B buckets (4: 1.5 KB of
                        stores a pass where a worker has 6), a third of a worker's pixels
   --l1-log FILE        per frame: the addresses in the write cache, for tools/l1_study.py (D3D12)
@@ -313,6 +328,8 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--define") o.defines.push_back(next("--define"));
         else if (a == "--no-bands") o.noBands = true;
         else if (a == "--readback-batch") o.readbackBatch = atoi(next("--readback-batch").c_str());
+        else if (a == "--cpu") o.cpu = true;
+        else if (a == "--cpu-ips") { o.cpu = true; o.cpuIps = atof(next("--cpu-ips").c_str()); }
         else if (a == "--cores") { o.cores = (std::max)(1, (std::min)(16, atoi(next("--cores").c_str()))); if (o.cores > 1) o.defines.push_back("CORES=" + std::to_string(o.cores)); }
         else if (a == "--small-cores") {
             // FROM,BITS: the cores from FROM on are small ones, with write cache tables of 2^BITS buckets
@@ -659,6 +676,12 @@ int main(int argc, char** argv) {
     }
     // both backends keep two state buffers, which is what lets the commit skip unwritten bands
     if (opt.sbi) opt.defines.push_back("SBI_HLE");
+    if (opt.cpu) {
+        // the interpreter has the cores: the shader is one core's, and runs none
+        opt.defines.erase(std::remove_if(opt.defines.begin(), opt.defines.end(), [](const std::string& d) {
+            return d.rfind("CORES=", 0) == 0 || d.rfind("CORE_PITCH=", 0) == 0 || d.rfind("MC_", 0) == 0; }), opt.defines.end());
+        if (opt.dxc) { fprintf(stderr, "[harness] --cpu is for the D3D11 backend\n"); return 2; }
+    }
     if (!opt.noBands) opt.defines.push_back("COMMIT_BANDS");
     // under DXC a local array is not zeroed at the start of every tick, a static one is
     if (opt.dxc) opt.defines.push_back("L1_LOCAL");
@@ -788,6 +811,12 @@ int main(int argc, char** argv) {
     uint64_t statsInstr0 = 0, statsFrame0 = 0;
     auto statsT0 = t0;
     bool keyboardOwned = false;   // a guest program reads the keyboard device (docs/input.md)
+    // --cpu: when the interpreter started, its passes, the bands of Linux's RAM still to show,
+    // the bands sent with the last frame, and the copy the commit of this frame makes
+    double cpuT0 = 0, cpuLowAt = 0;
+    uint64_t cpuPasses = 0;
+    uint32_t cpuLow = 0, cpuUploaded = 0, cpuCopy[4] = {}, cpuDisplay[2] = {};
+    bool cpuFirst = true;
     // A page the guest asked for (docs/fetch.md): fetched on a thread, handed over in one frame.
     struct Fetch {
         std::mutex lock;
@@ -814,6 +843,26 @@ int main(int argc, char** argv) {
     uint32_t soundCursor = 0, soundBase = 0, soundMixes = 0;
     double soundT0 = 0;
     std::deque<std::pair<uint64_t, uint32_t>> soundFrames;   // frames whose mix is on its way back, and their cursors
+    bool cpuRunning = false;   // --cpu, past the frames that set the state texture up
+    auto consoleOut = [&](const std::string& out) {
+        if (out.empty()) return;
+        fwrite(out.data(), 1, out.size(), stdout);
+        fflush(stdout);
+        if (uartLog) { fwrite(out.data(), 1, out.size(), uartLog); fflush(uartLog); }
+        size_t before = transcript.size();
+        transcript += out;
+        if (!opt.until.empty() && !untilHit) {
+            size_t from = before >= opt.until.size() ? before - opt.until.size() + 1 : 0;
+            if (transcript.find(opt.until, from) != std::string::npos) untilHit = true;
+        }
+        while (expectIdx < opt.expectSend.size()) {
+            size_t p = transcript.find(opt.expectSend[expectIdx].first, expectScanFrom);
+            if (p == std::string::npos) break;
+            expectScanFrom = p + opt.expectSend[expectIdx].first.size();
+            for (char c : opt.expectSend[expectIdx].second) scriptQueue.push_back(c);
+            ++expectIdx;
+        }
+    };
     auto processRow = [&](const std::vector<uint8_t>& raw, uint64_t rowFrame) {
         const uint32_t* t = (const uint32_t*)raw.data();
         auto texel = [&](int x, int c) { return t[x * 4 + c]; };
@@ -910,6 +959,7 @@ int main(int argc, char** argv) {
                 }).detach();
             }
         }
+        if (cpuRunning) return;   // (the rest is the shader's processor, which is not running)
         commits = texel(28, 2);
         consumedTag = texel(9, 3);
         if (rowFrame < (uint64_t)opt.initFrames) return;  // cpu_init leaves junk in the UART buffer
@@ -948,23 +998,7 @@ int main(int argc, char** argv) {
             char c = (char)(texel(12 + i / 4, i % 4) & 0xFF);
             if (c) out += c;
         }
-        if (out.empty()) return;
-        fwrite(out.data(), 1, out.size(), stdout);
-        fflush(stdout);
-        if (uartLog) { fwrite(out.data(), 1, out.size(), uartLog); fflush(uartLog); }
-        size_t before = transcript.size();
-        transcript += out;
-        if (!opt.until.empty() && !untilHit) {
-            size_t from = before >= opt.until.size() ? before - opt.until.size() + 1 : 0;
-            if (transcript.find(opt.until, from) != std::string::npos) untilHit = true;
-        }
-        while (expectIdx < opt.expectSend.size()) {
-            size_t p = transcript.find(opt.expectSend[expectIdx].first, expectScanFrom);
-            if (p == std::string::npos) break;
-            expectScanFrom = p + opt.expectSend[expectIdx].first.size();
-            for (char c : opt.expectSend[expectIdx].second) scriptQueue.push_back(c);
-            ++expectIdx;
-        }
+        consoleOut(out);
     };
 
     std::vector<uint8_t> row, mix, zone;
@@ -1034,8 +1068,88 @@ int main(int argc, char** argv) {
         mat.setVector("_CosTime", cos(t / 8), cos(t / 4), cos(t / 2), cos(t));
         mat.setInt("_Init", frame < (uint64_t)opt.initFrames ? 1 : 0);
 
+        // --cpu: the processor runs passes until the devices have something to do (a list to
+        // draw, a picture to copy back) or a sixtieth of a second is over, and what it wrote of
+        // RAM goes into the state texture, where the shader's devices and the view read it.
+        if (opt.cpu && frame >= (uint64_t)opt.initFrames) {
+            using namespace cpuemu;
+            if (!cpuRunning) {
+                if (!machine_boot("build/images/linux", opt.cores)) {
+                    fprintf(stderr, "[harness] --cpu: no image in build\\images\\linux\n");
+                    exitCode = 1;
+                    break;
+                }
+                external_devices = true;
+                console_hook = cpuConsoleHook;
+                cpuRunning = true;
+                backend.cpuMode = true;
+                cpuT0 = wall;
+            }
+            {
+                std::lock_guard<std::mutex> lock(g_inputMutex);
+                // a few characters a frame, as a keyboard would: a shell that sets its terminal
+                // up throws away what was typed before it had
+                int typed = 0;
+                for (std::deque<char>* q : {&scriptQueue, &g_stdinQueue})
+                    while (!q->empty() && typed < 2 && console_in.size() < 8) {
+                        unsigned char c = (unsigned char)q->front();
+                        q->pop_front();
+                        if (c) { console_in.push_back(c); lastKey = c; typed++; }
+                    }
+            }
+            {
+                // the clock chip, as the shader machine is given it
+                auto bcd = [](int v) { return (uint32_t)((v / 10) << 4 | (v % 10)); };
+                time_t clock = time(nullptr);
+                struct tm lt{};
+                localtime_s(&lt, &clock);
+                int year = lt.tm_year + 1900;
+                rtc0 = bcd(year / 100) | bcd(lt.tm_sec) << 8 | bcd(lt.tm_min) << 16 | bcd(lt.tm_hour) << 24;
+                rtc1 = bcd(lt.tm_wday + 1) | bcd(lt.tm_mday) << 8 | bcd(lt.tm_mon + 1) << 16 | bcd(year % 100) << 24;
+            }
+            double due = wall + 1.0 / 60;
+            for (;;) {
+                double now = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+                guest_seconds = now - cpuT0;
+                uint64_t most = machine_pass((uint32_t)opt.ticks);
+                cpuPasses++;
+                if (word(CTRL + 0x10) || word(CTRL + 0x70) || now >= due) break;
+                if (most == 0 && cores[0].waiting) Sleep(1);   // an idle machine
+                else if (opt.cpuIps > 0 && (double)(cores[0].clock + worker_instr) / opt.cpuIps > now - cpuT0) Sleep(1);
+            }
+            guestInstructions = cores[0].clock;
+            workerInstructions = worker_instr;
+            commits = (uint32_t)cpuPasses;
+            consoleOut(g_cpuConsole);
+            g_cpuConsole.clear();
+            // RAM: the GPU's memory and the control words whenever they were written, Linux's own
+            // (which only the memory view shows) four times a second
+            uint32_t upload = dirty_bands & 0xff000000u;
+            cpuLow |= dirty_bands & 0x00ffffffu;
+            dirty_bands = 0;
+            if (cpuFirst || (backend.viewOpen() && wall - cpuLowAt >= 0.25)) {
+                upload |= cpuLow;
+                cpuLow = 0;
+                cpuLowAt = wall;
+            }
+            if (cpuFirst) upload = 0xffffffffu;
+            cpuFirst = false;
+            for (unsigned b = 0; b < 32; ++b)
+                if (upload >> b & 1) {
+                    unsigned rows = b == 31 ? 64 : 128;   // (the texture ends 2 MB before the 128th)
+                    backend.uploadRows(64 + 128 * b, rows, ram.data() + (size_t)b * 0x400000);
+                }
+            // which bands the commit is to carry over into the buffer it draws: these, and for
+            // the buffer of two frames ago the last ones (the GPU's always)
+            uint32_t bands[4] = {1, upload, cpuUploaded | 0xff000000u, 0};
+            backend.uploadTexel(41, 0, bands);
+            cpuUploaded = upload;
+            memcpy(cpuCopy, &word(CTRL + 0x70), sizeof cpuCopy);
+            cpuDisplay[0] = word(CTRL + 4), cpuDisplay[1] = word(CTRL + 8);
+        }
+
         // Feed one input character per handshake.
-        if (frame >= (uint64_t)opt.initFrames && sentTag == consumedTag) {
+        if (frame >= (uint64_t)opt.initFrames && sentTag == consumedTag && !cpuRunning) {
             // Up to uartBurst characters per handshake, first one in the low byte. NUL cannot be
             // sent (the guest treats 0 as "no character") and is dropped.
             uint32_t group = 0;
@@ -1161,6 +1275,27 @@ int main(int argc, char** argv) {
         }
         backend.frame(mat, frame, sampleTimes || (backend.viewOpen() && wall - ovLast >= 0.2));
         ++frame;
+        if (cpuRunning) {
+            // the devices' answer, before the processor goes on: the control words as the control
+            // pass left them, and the picture the commit copied back for the list drawn last
+            using namespace cpuemu;
+            while (backend.rowPending() > 0 && !takeRow()) Sleep(0);
+            if (row.size() >= (64 + kControlTexels) * 16) memcpy(&word(CTRL), row.data() + 64 * 16, kControlTexels * 16);
+            if (cpuCopy[0]) {
+                uint32_t address = CTRL + 0x1000, bytes = cpuDisplay[0] * cpuDisplay[1] * 4;
+                if (cpuCopy[0] & 4) {
+                    uint32_t width = cpuCopy[2] & 0xffff, height = cpuCopy[2] >> 16;
+                    address = (cpuCopy[1] & 0x7ffffffcu) | 0x80000000u;
+                    bytes = (std::max)(cpuCopy[3], width) * height * 4;
+                }
+                if (address >= 0x86000000u && bytes && address + bytes <= RAM_BASE + 2048u * (4096 - 64) * 16) {
+                    uint32_t offset = address - RAM_BASE, first = offset / 32768, last = (offset + bytes - 1) / 32768;
+                    std::vector<uint8_t> rows;
+                    if (backend.readRows(64 + first, last - first + 1, rows) && rows.size() >= (size_t)(last - first + 1) * 32768)
+                        memcpy(ram.data() + offset, rows.data() + (offset - first * 32768), bytes);
+                }
+            }
+        }
 
         std::string removed = backend.deviceRemoved();
         if (!removed.empty()) {

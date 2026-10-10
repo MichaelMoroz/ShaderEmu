@@ -20,7 +20,10 @@ program still starts and runs after a change. Red Alert's 300-frame check is 5 s
 
     bin\rvc_cpu.exe --cores 4 --quiet --uart-log logs\ucpu_x.log --expect "/ # " --send "COMMANDS; echo LX-''DONE\n" --until "LX-DONE"
 
-- It has no GPU, display or sound: a submitted list counts as drawn and nothing is drawn.
+- `rvc_harness --cpu` is the same interpreter with the harness's window, display, GPU and
+  input (the shader's passes, fed from the interpreter's RAM): for trying a thing by hand at
+  that speed, or `--cpu-ips 3000000` for the world's.
+- `rvc_cpu.exe` itself has no GPU, display or sound: a submitted list counts as drawn and nothing is drawn.
   Pictures, sound, `mctest`, anything about the shader machine's own limits (its write cache,
   one writer to 16 bytes among workers) and frame rates in real seconds are `rvc_harness`'s.
 - Start it from PowerShell or cmd, as the harness: Git Bash rewrites `"/ # "`.

@@ -106,7 +106,8 @@ public:
             gpu_.ctx->Begin(tsDisjoint_.Get());
             gpu_.ctx->End(tsQuery_[0].Get());
         }
-        if (cs_ && mat.getFloat("_Init") == 0) runComputeTick(mat);
+        if (cpuMode && mat.getFloat("_Init") == 0) {}   // the processor ran the instructions
+        else if (cs_ && mat.getFloat("_Init") == 0) runComputeTick(mat);
         else if (cores_ == 1) crt_.runZone(gpu_, passes_[0], mat, UpdateZone{32, 4096 - tickRows_ / 2, 64, tickRows_, 0});
         else {
             // Core 0's rectangle, then two for each worker: its first 512 texels (64 x 8) and the
@@ -176,6 +177,25 @@ public:
         out.swap(lastSound_);
         lastSound_.clear();
         return true;
+    }
+
+    bool uploadRows(UINT row, UINT rows, const void* texels) override {
+        D3D11_BOX box{0, row, 0, kWidth, row + rows, 1};
+        gpu_.ctx->UpdateSubresource(crt_.current(), 0, &box, texels, kWidth * 16, 0);
+        return true;
+    }
+    bool uploadTexel(UINT x, UINT y, const uint32_t* words) override {
+        D3D11_BOX box{x, y, 0, x + 1, y + 1, 1};
+        gpu_.ctx->UpdateSubresource(crt_.current(), 0, &box, words, 16, 0);
+        return true;
+    }
+    bool readRows(UINT row, UINT rows, std::vector<uint8_t>& out) override {
+        RegionReadback rb;
+        std::string err;
+        uint64_t tag;
+        if (!rb.init(gpu_.device.Get(), DXGI_FORMAT_R32G32B32A32_UINT, 16, kWidth, rows, 1, err)) return false;
+        rb.request(gpu_.ctx.Get(), crt_.current(), 0, row, 0);
+        return rb.pop(gpu_.ctx.Get(), out, tag);
     }
 
     bool readState(UINT w, UINT h, std::vector<uint8_t>& out) override {

@@ -33,6 +33,14 @@ static u32* ramw;   // the same bytes as words
 
 static inline u32& word(u32 phys) { return ramw[(phys - RAM_BASE) >> 2]; }
 
+// For a host that shows the machine (rvc_harness --cpu): the 4 MB bands of RAM written since
+// it last looked, one bit each; whether the GPU's and the input's control words are its own
+// to keep (the shader's control pass, not control_pass() here); and where the console goes.
+static u32 dirty_bands = 0;
+static bool external_devices = false;
+static void (*console_hook)(char) = nullptr;
+static inline void dirty(u32 phys) { dirty_bands |= 1u << (((phys - RAM_BASE) >> 22) & 31); }
+
 // ---- options and the console ----
 
 struct Options {
@@ -58,6 +66,7 @@ static bool until_hit = false;
 
 static void console_put(u32 c) {
     char ch = (char)c;
+    if (console_hook) { console_hook(ch); return; }
     console_text.push_back(ch);
     if (!opt.quiet) fputc(ch, stdout);
     if (uart_log) fputc(ch, uart_log);
@@ -137,7 +146,7 @@ static bool walk(Core& c, u32 va, int access, u32& phys, Trap& t) {
             if (c.priv == PRIV_U ? !user : (user && (access == FETCH || !sum))) break;
             if (access == FETCH ? !(pte & 8) : access == READ ? !((pte & 2) || (mxr && (pte & 8))) : !(pte & 4)) break;
             u32 want = 0x40 | (access == WRITE ? 0x80 : 0);
-            if ((pte & want) != want) word(at) = pte | want;
+            if ((pte & want) != want) { word(at) = pte | want; dirty(at); }
             u32 ppn = pte >> 10;
             phys = level == 1 ? ((ppn << 12) | (va & 0x3fffff)) : ((ppn << 12) | (va & 0xfff));
             return true;
@@ -224,6 +233,7 @@ static inline bool store(Core& c, u32 va, int size, u32 value, Trap& t) {
     if (!page_of(c, va, WRITE, phys, t)) return false;
     if (phys - RAM_BASE < RAM_SIZE) {
         uint8_t* p = &ram[phys - RAM_BASE];
+        dirty(phys);
         if (size == 4) memcpy(p, &value, 4);
         else if (size == 2) { uint16_t h = (uint16_t)value; memcpy(p, &h, 2); }
         else *p = (uint8_t)value;
@@ -345,6 +355,7 @@ static void memop(Core& c, u32 what, Trap& t) {
             else value = rom_word(from - ROM_BASE);
         }
         memcpy(&ram[to - RAM_BASE], &value, 4);
+        dirty(to);
     }
     c.end_pass = true;
 }
@@ -700,6 +711,7 @@ bool mc_fault(Core& c, const Trap& t) {
     word(mc_fault_at(c.hart) + 8) = t.value;
     word(mc_fault_at(c.hart) + 12) = c.pc;
     word(mc_fault_at(c.hart)) = seen + 1;
+    dirty(MC_MBOX);
     w.state = call ? MC_CALLING : MC_FAULTED;
     w.seen = seen;
     c.end_pass = true;
@@ -768,6 +780,12 @@ static u32 key_seq = 0;
 static u64 frame_no = 0;
 
 static void control_pass() {
+    dirty(CTRL);
+    if (external_devices) {
+        // the shader's control pass keeps these words; between two of its runs only the clock moves
+        word(CTRL + 0x34) = (u32)(guest_seconds * 1000.0);
+        return;
+    }
     // a submitted list has been drawn: the GPU is free, and the copy it asked for is counted
     u32 submit = word(CTRL + 0x10);
     if (submit) {
@@ -811,6 +829,42 @@ static bool read_file(const std::string& path, std::vector<uint8_t>& to) {
     return got == (size_t)n;
 }
 
+// The machine at power-on: the image's RAM and ROM, core 0 at the kernel.
+static bool machine_boot(const std::string& image, int count) {
+    std::vector<uint8_t> payload;
+    if (!read_file(image + "/linux_payload.bin", payload) || !read_file(image + "/rootfs.bin", rom)) return false;
+    ram.assign(RAM_SIZE, 0);
+    ramw = (u32*)ram.data();
+    memcpy(ram.data(), payload.data(), payload.size() < RAM_SIZE ? payload.size() : RAM_SIZE);
+    dirty_bands = 0xffffffffu;
+    count = count < 1 ? 1 : count > 16 ? 16 : count;
+    cores.clear();
+    workers.clear();
+    cores.resize((size_t)count);
+    workers.resize((size_t)count);
+    for (int i = 0; i < count; i++) cores[(size_t)i].hart = i;
+    cores[0].pc = 0x80400000;      // the kernel, in supervisor mode, with the device tree in a1
+    cores[0].x[11] = 0x82200000;
+    cores[0].priv = PRIV_S;
+    return true;
+}
+
+// One pass of every core, after the host's part of it; the most instructions a core ran.
+static u64 worker_instr = 0;
+static u64 machine_pass(u32 ticks) {
+    control_pass();
+    mtime_now = (u64)(guest_seconds * 5000.0);
+    u64 most = run(cores[0], ticks);
+    for (size_t i = 1; i < cores.size(); i++) {
+        u64 n = run_worker(cores[i], ticks);
+        worker_instr += n;
+        if (n > most) most = n;
+    }
+    frame_no++;
+    return most;
+}
+
+#ifndef RVC_CPU_LIBRARY
 static std::string unescape(const std::string& s) {
     std::string out;
     for (size_t i = 0; i < s.size(); i++) {
@@ -868,41 +922,21 @@ int main(int argc, char** argv) {
             return 0;
         } else { fprintf(stderr, "rvc_cpu: unknown option %s\n", a.c_str()); return 2; }
     }
-    std::vector<uint8_t> payload;
-    if (!read_file(opt.image + "/linux_payload.bin", payload) || !read_file(opt.image + "/rootfs.bin", rom)) {
+    if (!machine_boot(opt.image, opt.cores)) {
         fprintf(stderr, "rvc_cpu: no image in %s (python tools\\make_linux_image.py)\n", opt.image.c_str());
         return 2;
     }
-    ram.assign(RAM_SIZE, 0);
-    ramw = (u32*)ram.data();
-    memcpy(ram.data(), payload.data(), payload.size() < RAM_SIZE ? payload.size() : RAM_SIZE);
     if (!opt.uartLog.empty()) {
         uart_log = fopen(opt.uartLog.c_str(), "ab");
         if (uart_log) fprintf(uart_log, "\n=== rvc_cpu ===\n");
     }
-    if (opt.cores < 1) opt.cores = 1;
-    if (opt.cores > 16) opt.cores = 16;
-    cores.resize((size_t)opt.cores);
-    workers.resize((size_t)opt.cores);
-    for (int i = 0; i < opt.cores; i++) cores[(size_t)i].hart = i;
     Core& c0 = cores[0];
-    c0.pc = 0x80400000;      // the kernel, in supervisor mode, with the device tree in a1
-    c0.x[11] = 0x82200000;
-    c0.priv = PRIV_S;
 
     auto t0 = std::chrono::steady_clock::now();
-    u64 worker_instr = 0, idle_passes = 0;
+    u64 idle_passes = 0;
     int exit_code = 0;
-    for (;; frame_no++) {
-        control_pass();
-        mtime_now = (u64)(guest_seconds * 5000.0);
-        u64 done = run(c0, opt.ticks);
-        u64 most = done;
-        for (size_t i = 1; i < cores.size(); i++) {
-            u64 n = run_worker(cores[i], opt.ticks);
-            worker_instr += n;
-            if (n > most) most = n;
-        }
+    for (;;) {
+        u64 most = machine_pass(opt.ticks);
         guest_seconds += opt.passMs / 1000.0 + (double)most / opt.ips;
         if (most == 0 && c0.waiting && console_in.empty()) {
             // nothing to run: on to the timer's deadline (an idle machine's passes are all alike)
@@ -938,3 +972,4 @@ int main(int argc, char** argv) {
     if (uart_log) fclose(uart_log);
     return exit_code;
 }
+#endif

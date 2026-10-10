@@ -20,6 +20,40 @@ what each core ran, the firmware calls and the traps by cause. `--seconds` is th
 time, `--wall` this computer's. Start it from PowerShell or cmd: Git Bash turns `"/ # "` into
 a path.
 
+## With the window: `rvc_harness --cpu`
+
+The same interpreter inside the harness, for using the machine by hand at that speed:
+
+    bin\rvc_harness.exe --d3d11 --rvc experiments\rvc_opt --image linux-net --cpu --cores 4 --desktop --viz
+
+Everything the harness has is there: its window with the display and the memory view, the
+keys and the pointer, the console, `--expect`, `--send`, `--until`, `--save-state`,
+`--gpu-capture`. The instructions run on the processor; the display, the GPU device, the
+input and the control words stay the shader's passes, which is where they are cheap:
+
+- The processor runs passes until the devices have something to do (a list submitted, a
+  picture to copy back) or a sixtieth of a second is over.
+- What it wrote of RAM since the last time goes into the state texture, in 4 MB bands: the
+  GPU's memory and the control words every time they changed, Linux's own RAM (which only
+  the memory view shows) four times a second. The commit pass is told those bands (state
+  texel (41, 0), where the tick pass says which it wrote) and carries them into the buffer it
+  draws, as it does the tick's.
+- The frame is then the harness's own without the tick: the commit (which copies a drawn
+  picture back into RAM), the GPU's draw, the control pass.
+- The control words come back with the frame's row, as they always did, and are the
+  processor's again; and when the commit copied a picture into a window's buffer, those rows
+  of the texture are read back into the processor's RAM.
+
+The guest's clock is this computer's, so a game runs at its own speed with a processor
+thirty times the shader machine's: `--cpu-ips 3000000` holds it to the world's speed, to see
+what a thing feels like there. Tiberian Dawn's check runs in it at the game's full 20 frames
+a second with the same state sum, and `python tools\snapshot_screen.py SNAPSHOT OUT.png`
+shows the screen a `--save-state` snapshot holds.
+
+Not there yet in this mode: sound (not tried), pages from the host for the browser, D3D12.
+The shader's own cores are not used (`--cores` is the interpreter's), so nothing here says
+anything about the shader machine's passes.
+
 ## What it is
 
 - **The processor**: RV32IMA with the float instructions (the host's own floats, which are
@@ -48,11 +82,10 @@ a path.
 
 ## What it is not
 
-- **No GPU, no display, no sound card.** A submitted list is taken as drawn (the submit word
-  cleared, the counters counted), and a picture a program asked to have copied back into its
-  window is not there. Those devices are cheap on the graphics card and stay there: pictures
-  and sound are checked with `rvc_harness`. (Running them from this program's memory, as the
-  harness's passes, is the plan for when a picture is wanted at this speed.)
+- **`rvc_cpu.exe` has no GPU, no display, no sound card.** A submitted list is taken as drawn
+  (the submit word cleared, the counters counted), and a picture a program asked to have
+  copied back into its window is not there. Those devices are cheap on the graphics card and
+  stay there: `rvc_harness --cpu` (above) runs them as the shader's passes.
 - No keys or pointer buttons yet (only `--pointer-sweep`), no pages from the host
   (`docs/fetch.md`), no snapshots.
 - Not a model of the shader machine's limits: no write cache that fills, no one-writer-per-16
