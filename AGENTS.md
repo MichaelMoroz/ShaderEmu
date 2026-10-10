@@ -10,6 +10,22 @@ passes of its own (the GPU, window composition, parallel copies, pictures sample
 ROM). The machine boots Linux to a desktop and runs Doom on its GPU; the VRChat world
 (`unity/ShaderEmu`) is the target. x86 is dropped (`docs/original-x86-plan.md`).
 
+## Count instructions on the processor, look at pictures on the graphics card
+
+`bin\rvc_cpu.exe` (`docs/cpu-harness.md`) is the same machine as an interpreter: no graphics
+card, a hundred million instructions a second, a cold boot in a tenth of a second. Use it for
+anything that is about instructions: a game's `...stat:` lines, its state sums, whether a
+program still starts and runs after a change. Red Alert's 300-frame check is 5 s there and
+90 s in `rvc_harness`.
+
+    bin\rvc_cpu.exe --cores 4 --quiet --uart-log logs\ucpu_x.log --expect "/ # " --send "COMMANDS; echo LX-''DONE\n" --until "LX-DONE"
+
+- It has no GPU, display or sound: a submitted list counts as drawn and nothing is drawn.
+  Pictures, sound, `mctest`, anything about the shader machine's own limits (its write cache,
+  one writer to 16 bytes among workers) and frame rates in real seconds are `rvc_harness`'s.
+- Start it from PowerShell or cmd, as the harness: Git Bash rewrites `"/ # "`.
+- Its guest clock is counted from instructions (`--ips`, `--pass-ms`), so a run repeats exactly.
+
 ## Show the live console whenever the emulator runs
 
 Before starting `rvc_harness`, make sure the console viewer window is open so the developer can

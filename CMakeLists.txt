@@ -57,3 +57,11 @@ endforeach()
 # D3D12 runner for the same FXC bytecode, so D3D12-only profilers (Nsight GPU Trace) can attach.
 add_executable(rvc_trace12 harness/apps/rvc_trace12.cpp)
 target_link_libraries(rvc_trace12 PRIVATE harness_core d3d12)
+
+# The machine as an interpreter on the processor, for work that only counts instructions
+# (docs/cpu-harness.md): no graphics card, no shader.
+add_executable(rvc_cpu harness/apps/rvc_cpu.cpp)
+target_compile_definitions(rvc_cpu PRIVATE _CRT_SECURE_NO_WARNINGS NOMINMAX)
+if(MSVC)
+  target_compile_options(rvc_cpu PRIVATE /O2 /fp:strict)
+endif()
