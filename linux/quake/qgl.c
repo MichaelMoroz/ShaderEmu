@@ -543,6 +543,15 @@ void qglFan(const unsigned int* vertices, int n) {
     frame_vertices += n;
 }
 
+// Quads, four corners each: many polygons of one surface in one go (a draw costs some 200
+// instructions before its first vertex).
+void qglQuads(const unsigned int* vertices, int n) {
+    shade_flush();
+    state(0);
+    seglCompact(GL_QUADS, vertices, n & ~3);
+    frame_vertices += n;
+}
+
 // Where `bytes` of a model's are kept in the pool (a pose's vertices, or with pose COORDS its
 // texture coordinates), or NULL when they cannot be; `fresh` when they are still to be written there.
 #define COORDS 0x7fffffff

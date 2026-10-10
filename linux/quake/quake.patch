@@ -173,10 +173,22 @@ index 25a8007..d59bc9b 100644
  	strcpy (glt->identifier, identifier);
  	glt->texnum = texture_extension_number;
 diff --git a/WinQuake/gl_model.c b/WinQuake/gl_model.c
-index 21ef130..13d8c9e 100644
+index 21ef130..6163189 100644
 --- a/WinQuake/gl_model.c
 +++ b/WinQuake/gl_model.c
-@@ -170,6 +170,7 @@ void Mod_ClearAll (void)
+@@ -38,7 +38,10 @@ byte	mod_novis[MAX_MAP_LEAFS/8];
+ model_t	mod_known[MAX_MOD_KNOWN];
+ int		mod_numknown;
+ 
+-cvar_t gl_subdivide_size = {"gl_subdivide_size", "128", true};
++// (ShaderEmu: 256. Water's and sky's polygons are cut to this size and every vertex of water
++// in view is rippled every frame: at 128 that was a fifth of a frame by a pool. The ripple
++// is 50 units long, coarser than either size shows.)
++cvar_t gl_subdivide_size = {"gl_subdivide_size", "256", true};
+ 
+ /*
+ ===============
+@@ -170,6 +173,7 @@ void Mod_ClearAll (void)
  	int		i;
  	model_t	*mod;
  	
@@ -184,7 +196,7 @@ index 21ef130..13d8c9e 100644
  	for (i=0 , mod=mod_known ; i<mod_numknown ; i++, mod++)
  		if (mod->type != mod_alias)
  			mod->needload = true;
-@@ -1408,6 +1409,18 @@ void Mod_FloodFillSkin( byte *skin, int skinwidth, int skinheight )
+@@ -1408,6 +1412,18 @@ void Mod_FloodFillSkin( byte *skin, int skinwidth, int skinheight )
  Mod_LoadAllSkins
  ===============
  */
@@ -203,7 +215,7 @@ index 21ef130..13d8c9e 100644
  void *Mod_LoadAllSkins (int numskins, daliasskintype_t *pskintype)
  {
  	int		i, j, k;
-@@ -1430,7 +1443,12 @@ void *Mod_LoadAllSkins (int numskins, daliasskintype_t *pskintype)
+@@ -1430,7 +1446,12 @@ void *Mod_LoadAllSkins (int numskins, daliasskintype_t *pskintype)
  	for (i=0 ; i<numskins ; i++)
  	{
  		if (pskintype->type == ALIAS_SKIN_SINGLE) {
@@ -217,7 +229,7 @@ index 21ef130..13d8c9e 100644
  
  			// save 8 bit texels for the player model to remap
  	//		if (!strcmp(loadmodel->name,"progs/player.mdl")) {
-@@ -1455,9 +1473,14 @@ void *Mod_LoadAllSkins (int numskins, daliasskintype_t *pskintype)
+@@ -1455,9 +1476,14 @@ void *Mod_LoadAllSkins (int numskins, daliasskintype_t *pskintype)
  
  			pskintype = (void *)(pinskinintervals + groupskins);
  
@@ -233,7 +245,7 @@ index 21ef130..13d8c9e 100644
  					if (j == 0) {
  						texels = Hunk_AllocName(s, loadname);
  						pheader->texels[i] = texels - (byte *)pheader;
-@@ -1564,7 +1587,24 @@ void Mod_LoadAliasModel (model_t *mod, void *buffer)
+@@ -1564,7 +1590,24 @@ void Mod_LoadAliasModel (model_t *mod, void *buffer)
  // load the skins
  //
  	pskintype = (daliasskintype_t *)&pinmodel[1];
@@ -259,7 +271,7 @@ index 21ef130..13d8c9e 100644
  
  //
  // load base s and t vertices
-@@ -1631,9 +1671,18 @@ void Mod_LoadAliasModel (model_t *mod, void *buffer)
+@@ -1631,9 +1674,18 @@ void Mod_LoadAliasModel (model_t *mod, void *buffer)
  	//
  	GL_MakeAliasModelDisplayLists (mod, pheader);
  
@@ -292,7 +304,7 @@ index ae576b8..359b922 100644
  } glpoly_t;
  
 diff --git a/WinQuake/gl_rlight.c b/WinQuake/gl_rlight.c
-index 80ada45..f993733 100644
+index 80ada45..087e2f2 100644
 --- a/WinQuake/gl_rlight.c
 +++ b/WinQuake/gl_rlight.c
 @@ -88,6 +88,47 @@ void R_RenderDlight (dlight_t *light)
@@ -351,7 +363,22 @@ index 80ada45..f993733 100644
  		}
  		surf->dlightbits |= bit;
  	}
-@@ -254,10 +296,33 @@ int RecursiveLightPoint (mnode_t *node, vec3_t start, vec3_t end)
+@@ -233,6 +275,14 @@ LIGHT SAMPLING
+ mplane_t		*lightplane;
+ vec3_t			lightspot;
+ 
++#ifdef SHADEREMU
++// The surface under a point and the sample of its light map there, as RecursiveLightPoint last
++// found them. For a thing that has not moved (a torch, a monster standing) the walk down the
++// level is not made again when the lights flicker, ten times a second: the sample is read anew.
++static msurface_t	*se_light_surf;
++static byte		*se_light_at;
++#endif
++
+ int RecursiveLightPoint (mnode_t *node, vec3_t start, vec3_t end)
+ {
+ 	int			r;
+@@ -254,10 +304,33 @@ int RecursiveLightPoint (mnode_t *node, vec3_t start, vec3_t end)
  // calculate mid point
  
  // FIXME: optimize for axial
@@ -385,7 +412,7 @@ index 80ada45..f993733 100644
  	
  	if ( (back < 0) == side)
  		return RecursiveLightPoint (node->children[side], start, end);
-@@ -288,6 +353,10 @@ int RecursiveLightPoint (mnode_t *node, vec3_t start, vec3_t end)
+@@ -288,6 +361,10 @@ int RecursiveLightPoint (mnode_t *node, vec3_t start, vec3_t end)
  		tex = surf->texinfo;
  		
  		s = DotProduct (mid, tex->vecs[0]) + tex->vecs[0][3];
@@ -396,26 +423,54 @@ index 80ada45..f993733 100644
  		t = DotProduct (mid, tex->vecs[1]) + tex->vecs[1][3];;
  
  		if (s < surf->texturemins[0] ||
-@@ -336,6 +405,18 @@ int R_LightPoint (vec3_t p)
+@@ -312,6 +389,10 @@ int RecursiveLightPoint (mnode_t *node, vec3_t start, vec3_t end)
+ 		{
+ 
+ 			lightmap += dt * ((surf->extents[0]>>4)+1) + ds;
++#ifdef SHADEREMU
++			se_light_surf = surf;	// where the light is: R_LightPoint remembers it
++			se_light_at = lightmap;
++#endif
+ 
+ 			for (maps = 0 ; maps < MAXLIGHTMAPS && surf->styles[maps] != 255 ;
+ 					maps++)
+@@ -336,6 +417,35 @@ int R_LightPoint (vec3_t p)
  {
  	vec3_t		end;
  	int			r;
 +#ifdef SHADEREMU
-+	static struct { vec3_t at, spot; mplane_t *plane; model_t *world; int when, light; } was[64], *w;
++	static struct { vec3_t at, spot; mplane_t *plane; model_t *world; int when, light, serial; msurface_t *surf; byte *sample; } was[64], *w;
++	extern int se_map_serial;	// (world_shaderemu.c: goes up when the models go)
 +	int			when = (int)(cl.time * 10) + 1;
 +
 +	w = &was[((int)p[0] ^ (int)p[1] * 7 ^ (int)p[2] * 31) & 63];
-+	if (w->when == when && w->world == cl.worldmodel && w->at[0] == p[0] && w->at[1] == p[1] && w->at[2] == p[2])
++	if (w->when && w->serial == se_map_serial && w->world == cl.worldmodel && w->at[0] == p[0] && w->at[1] == p[1] && w->at[2] == p[2])
 +	{
 +		VectorCopy (w->spot, lightspot);
 +		lightplane = w->plane;
-+		return w->light;
++		if (w->when != when && w->surf)
++		{	// the lights have changed since: the same sample by the styles as they are now
++			msurface_t	*surf = w->surf;
++			byte		*lightmap = w->sample;
++			int			maps, light = 0;
++
++			for (maps = 0 ; maps < MAXLIGHTMAPS && surf->styles[maps] != 255 ; maps++)
++			{
++				light += *lightmap * d_lightstylevalue[surf->styles[maps]];
++				lightmap += ((surf->extents[0]>>4)+1) * ((surf->extents[1]>>4)+1);
++			}
++			w->light = light >> 8;
++			w->when = when;
++		}
++		if (w->when == when)
++			return w->light;
 +	}
++	se_light_surf = NULL;
 +#endif
  	
  	if (!cl.worldmodel->lightdata)
  		return 255;
-@@ -348,6 +429,11 @@ int R_LightPoint (vec3_t p)
+@@ -348,6 +458,12 @@ int R_LightPoint (vec3_t p)
  	
  	if (r == -1)
  		r = 0;
@@ -423,6 +478,7 @@ index 80ada45..f993733 100644
 +	VectorCopy (p, w->at);
 +	VectorCopy (lightspot, w->spot);
 +	w->plane = lightplane, w->world = cl.worldmodel, w->when = when, w->light = r;
++	w->surf = se_light_surf, w->sample = se_light_at, w->serial = se_map_serial;
 +#endif
  
  	return r;

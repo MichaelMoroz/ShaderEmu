@@ -20,6 +20,8 @@ static box_i	*leaf_boxes;
 static mleaf_t	**seen;			/* the leaves the viewer's leaf sees */
 static int	seen_count;
 static mleaf_t	*seen_from;
+static byte	*seen_out;		/* by place in `seen`: the view's plane the leaf was last outside of */
+static int	seen_statics, seen_kept;	/* what the list was made with: it leaves out leaves with nothing to do */
 static model_t	*made_for;
 
 /* ---- when a level loads ---- */
@@ -85,6 +87,8 @@ static byte	*styled;		/* by surface: its light flickers or switches */
 static int	styled_count;
 static msurface_t *lit[2][MAX_LIT];	/* surfaces a moving light reaches: this frame's, the last one's */
 static int	lit_count[2], lit_now;
+static msurface_t **special_marks;	/* the surfaces of leaves with something special that are it */
+static int	*special_first;		/* by leaf: where its are in that, and how many */
 static byte	*leaf_special;		/* a leaf has water or sky in it (1), surfaces that flicker (2) */
 
 static int kept_surface (const msurface_t *s)
@@ -348,6 +352,7 @@ void SE_NewMap (void)
 	surface_planes = Hunk_AllocName (world->numsurfaces * sizeof (plane_i), "planes_i");
 	leaf_boxes = Hunk_AllocName ((world->numleafs + 1) * sizeof (box_i), "boxes_i");
 	seen = Hunk_AllocName ((world->numleafs + 1) * sizeof (mleaf_t *), "seen");
+	seen_out = Hunk_AllocName (world->numleafs + 1, "seen_out");
 	for (i = 0; i < world->numsurfaces; i++) {
 		const msurface_t *s = &world->surfaces[i];
 		int back = s->flags & SURF_PLANEBACK ? -1 : 1;
@@ -366,6 +371,29 @@ void SE_NewMap (void)
 				leaf_special[i] |= 1;
 	made_for = world;
 	kept_build (world);
+	/* of a leaf with water, sky or flickering light, the surfaces that are any of those: a
+	 * frame went through all of such a leaf's surfaces to find them, 640 of them at a level's
+	 * start, 25 instructions each */
+	{
+		int total = 0, at = 0;
+
+		for (i = 0; i <= world->numleafs; i++)
+			if (leaf_special[i])
+				total += world->leafs[i].nummarksurfaces;
+		special_marks = Hunk_AllocName ((total + 1) * sizeof (msurface_t *), "marks");
+		special_first = Hunk_AllocName ((world->numleafs + 1) * 2 * sizeof (int), "marks");
+		for (i = 0; i <= world->numleafs; i++) {
+			special_first[2 * i] = at;
+			if (leaf_special[i] && styled)
+				for (j = 0; j < world->leafs[i].nummarksurfaces; j++) {
+					msurface_t *surf = world->leafs[i].firstmarksurface[j];
+
+					if ((surf->flags & KEPT_SPECIAL) || styled[surf - world->surfaces])
+						special_marks[at++] = surf;
+				}
+			special_first[2 * i + 1] = at - special_first[2 * i];
+		}
+	}
 }
 
 /* ---- a frame ---- */
@@ -384,14 +412,20 @@ void SE_MarkWorld (void)
 	se_warp_time = cl.time;
 	if (kept_on)
 		kept_frame ();
-	if (seen_from != r_viewleaf || r_novis.value) {
+	if (seen_from != r_viewleaf || r_novis.value || seen_statics != cl.num_statics || seen_kept != kept_on) {
 		byte *vis = Mod_LeafPVS (r_viewleaf, world);
 
 		seen_count = 0;
+		/* (of a kept level a leaf has something to do each frame only if it has water, sky or
+		 * lights that flicker in it, or a torch or the like standing in it: the others, which
+		 * are most, are not looked at at all) */
 		for (i = 0; i < world->numleafs; i++)
-			if (r_novis.value || (vis[i >> 3] & (1 << (i & 7))))
+			if ((r_novis.value || (vis[i >> 3] & (1 << (i & 7))))
+			    && (!kept_on || leaf_special[i + 1] || world->leafs[i + 1].efrags))
 				seen[seen_count++] = &world->leafs[i + 1];
 		seen_from = r_viewleaf;
+		seen_statics = cl.num_statics;
+		seen_kept = kept_on;
 	}
 	for (i = 0; i < 4; i++) {
 		for (j = 0; j < 3; j++)
@@ -405,18 +439,35 @@ void SE_MarkWorld (void)
 		mleaf_t		*leaf = seen[i];
 		const short	*box = leaf_boxes[leaf - world->leafs].box;
 		msurface_t	**mark = leaf->firstmarksurface;
+		int		marks = leaf->nummarksurfaces;
 
-		/* outside one of the view's planes: its corner furthest along the plane is behind it */
+		/* outside one of the view's planes: its corner furthest along the plane is behind it.
+		 * (The plane it was outside of last frame first: it mostly still is, and most leaves
+		 * that can be seen from here are outside the view.) */
+		{
+			const int *n = view[k = seen_out[i]].normal;
+
+			if (n[0] * box[n[0] < 0 ? 0 : 3] + n[1] * box[n[1] < 0 ? 1 : 4] + n[2] * box[n[2] < 0 ? 2 : 5] < view[k].dist)
+				continue;
+		}
 		for (k = 0; k < 4; k++) {
 			const int *n = view[k].normal;
 
 			if (n[0] * box[n[0] < 0 ? 0 : 3] + n[1] * box[n[1] < 0 ? 1 : 4] + n[2] * box[n[2] < 0 ? 2 : 5] < view[k].dist)
 				break;
 		}
-		if (k < 4)
+		if (k < 4) {
+			seen_out[i] = (byte)k;
 			continue;
+		}
 		/* of a kept level only water and sky are put on the chains */
-		for (j = kept_on && !leaf_special[leaf - world->leafs] ? 0 : leaf->nummarksurfaces; j > 0; j--, mark++) {
+		if (kept_on) {
+			int at = (int)(leaf - world->leafs);
+
+			mark = special_marks + special_first[2 * at];
+			marks = leaf_special[at] ? special_first[2 * at + 1] : 0;
+		}
+		for (j = marks; j > 0; j--, mark++) {
 			msurface_t	*surf = *mark;
 			const plane_i	*p;
 
@@ -468,9 +519,13 @@ extern float	turbsin[];
 extern int	solidskytexture, alphaskytexture;
 
 /* GLQuake's EmitWaterPolys: each vertex's texture coordinates ripple by a table of sines. */
+#define WATER_QUADS	96		/* of one surface, drawn together */
+void qglQuads (const unsigned int *vertices, int n);
+
 void SE_Water (msurface_t *fa)
 {
-	unsigned	out[MAX_WARP * 4];
+	static unsigned	quads[WATER_QUADS * 16];
+	unsigned	out[MAX_WARP * 4], *to = quads;
 	glpoly_t	*p;
 	const float	*v;
 	float		s, t, base_s = 0, base_t = 0, clock = se_warp_time, step = 256 / (2 * 3.14159265f);
@@ -489,22 +544,41 @@ void SE_Water (msurface_t *fa)
 			out[4 * i + 3] = coord_bits (s - base_s, t - base_t);
 		}
 		se_count_add (8, n);
-		qglFan (out, n);
+		/* the polygon as a fan of quads (what the GPU's library makes of a fan), with the
+		 * surface's other polygons: one draw for them all */
+		for (i = 1; i + 1 < n; i += 2) {
+			int last = i + 2 < n ? i + 2 : n - 1;
+
+			if (to == quads + WATER_QUADS * 16) {
+				qglQuads (quads, WATER_QUADS * 4);
+				to = quads;
+			}
+			{
+				const unsigned *a = out, *b = out + 4 * i, *c = out + 4 * (i + 1), *d = out + 4 * last;
+
+				to[0] = a[0], to[1] = a[1], to[2] = a[2], to[3] = a[3];
+				to[4] = b[0], to[5] = b[1], to[6] = b[2], to[7] = b[3];
+				to[8] = c[0], to[9] = c[1], to[10] = c[2], to[11] = c[3];
+				to[12] = d[0], to[13] = d[1], to[14] = d[2], to[15] = d[3];
+			}
+			to += 16;
+		}
 	}
+	if (to != quads)
+		qglQuads (quads, (int)(to - quads) / 4);
 }
 
 /* GLQuake's sky: two layers of one picture sliding at two speeds, as if on a flattened dome. */
 void SE_Sky (msurface_t *chain)
 {
-	static unsigned	second[MAX_SKY * 4];
-	static short	sizes[MAX_SKY / 3];
-	unsigned	out[MAX_WARP * 4], *later = second;
+	static unsigned	first[MAX_SKY * 4], second[MAX_SKY * 4];	/* quads: the sky, and the clouds over it */
+	unsigned	out[MAX_WARP * 4], over[MAX_WARP], *to = first, *later = second;
 	msurface_t	*fa;
 	glpoly_t	*p;
 	const float	*v;
 	float		dir[3], length, s, t, base_s = 0, base_t = 0;
 	float		slow = cl.time * 8, fast = cl.time * 16;
-	int		i, n, polys = 0;
+	int		i, n;
 
 	slow -= (int)slow & ~127;
 	fast -= (int)fast & ~127;
@@ -512,30 +586,45 @@ void SE_Sky (msurface_t *chain)
 	for (fa = chain; fa; fa = fa->texturechain)
 		for (p = fa->polys; p; p = p->next) {
 			n = p->numverts < MAX_WARP ? p->numverts : MAX_WARP;
-			if (polys == MAX_SKY / 3 || later + 4 * n > second + MAX_SKY * 4)
+			if (to + 16 * (n / 2 + 1) > first + MAX_SKY * 4)
 				break;
-			for (i = 0, v = p->verts[0]; i < n; i++, v += VERTEXSIZE, later += 4) {
+			for (i = 0, v = p->verts[0]; i < n; i++, v += VERTEXSIZE) {
 				dir[0] = v[0] - r_origin[0], dir[1] = v[1] - r_origin[1];
 				dir[2] = (v[2] - r_origin[2]) * 3;	/* flatten the sphere */
 				length = 6 * 63 / sqrtf (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]);
 				s = dir[0] * length * (1.0f / 128), t = dir[1] * length * (1.0f / 128);
 				if (!i)
 					base_s = floorf (s) - 2, base_t = floorf (t) - 2;
-				out[4 * i] = later[0] = ((const unsigned *)v)[0];
-				out[4 * i + 1] = later[1] = ((const unsigned *)v)[1];
-				out[4 * i + 2] = later[2] = ((const unsigned *)v)[2];
+				out[4 * i] = ((const unsigned *)v)[0];
+				out[4 * i + 1] = ((const unsigned *)v)[1];
+				out[4 * i + 2] = ((const unsigned *)v)[2];
 				out[4 * i + 3] = coord_bits (s + slow * (1.0f / 128) - base_s, t + slow * (1.0f / 128) - base_t);
-				later[3] = coord_bits (s + fast * (1.0f / 128) - base_s, t + fast * (1.0f / 128) - base_t);
+				over[i] = coord_bits (s + fast * (1.0f / 128) - base_s, t + fast * (1.0f / 128) - base_t);
 			}
-			sizes[polys++] = n;
 			se_count_add (9, n);
-			qglFan (out, n);
+			/* the polygon as a fan of quads, in both layers (a draw a polygon was two hundred
+			 * instructions before its first vertex, twice) */
+			for (i = 1; i + 1 < n; i += 2, to += 16, later += 16) {
+				int last = i + 2 < n ? i + 2 : n - 1, k;
+
+				for (k = 0; k < 4; k++) {
+					int from = k == 0 ? 0 : k == 1 ? i : k == 2 ? i + 1 : last;
+
+					to[4 * k] = later[4 * k] = out[4 * from];
+					to[4 * k + 1] = later[4 * k + 1] = out[4 * from + 1];
+					to[4 * k + 2] = later[4 * k + 2] = out[4 * from + 2];
+					to[4 * k + 3] = out[4 * from + 3];
+					later[4 * k + 3] = over[from];
+				}
+			}
 		}
+	if (to == first)
+		return;
+	qglQuads (first, (int)(to - first) / 4);
 	/* the clouds in front, over the same polygons */
 	glEnable (GL_BLEND);
 	GL_Bind (alphaskytexture);
-	for (i = 0, later = second; i < polys; later += 4 * sizes[i], i++)
-		qglFan (later, sizes[i]);
+	qglQuads (second, (int)(later - second) / 4);
 	glDisable (GL_BLEND);
 }
 
