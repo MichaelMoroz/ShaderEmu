@@ -55,6 +55,23 @@ In Red Alert's own:
   a unit that steps, houses found from a table, the layer's sort, and the computer's count of
   units no team has (a unit is asked whether it could join only when one is wanted).
 
+## The map's cells, a frame
+
+Going through the cells in view was 35 thousand instructions of a frame early in a mission,
+when most of the map is under the shroud, and is 19 now (`linux/ralert/gl.cpp`):
+
+- a run of settled cells in a row, or of cells never seen, is passed over or made one black
+  rectangle without asking the game about each cell;
+- a cell with ore, a wall or a scorch mark keeps the rectangles it drew, as an object does,
+  and they are put again until the game says the cell changed;
+- a plain cell at the shroud's edge keeps its edge and is asked nothing unless the game has
+  flagged it.
+
+The state sums are the same, and a held frame is the same picture as with everything drawn
+anew (`RALERT_REFRESH=1`) but for trees below the map's last row, which differed before. The
+first Soviet mission: 16 to 18 frames a second in its first 300 frames where it was 15 to
+17, 24 to 32 later; its logic is 105 to 130 thousand instructions of a frame's 180 to 200.
+
 ## Movies, and the worker cores
 
 The demo's opening movie (ENGLISH.VQA, 640 x 400, 156 frames of it before `TDAWN_AUTO`'s Return

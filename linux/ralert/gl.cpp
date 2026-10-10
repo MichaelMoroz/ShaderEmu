@@ -88,6 +88,20 @@ enum { KEPT = 1024 };
 static Kept kept[KEPT];
 static int kept_count;
 static Kept* recording;
+// A cell's own rectangles (its ore, wall or scorch mark) as it drew them last, the same way: a
+// cell with such a thing never settles, and drew it anew every frame, a quarter of the map's
+// instructions. Drawn again as they are until the game says the cell changed (ShaderEmu_GL_Cell).
+struct CellKept
+{
+    int tile; // + 1; 0: nothing kept here
+    unsigned char count;
+    Quad quad[2];
+};
+enum { CELLS_KEPT = 1024 };
+static CellKept cell_kept[CELLS_KEPT];
+static unsigned char edged[TILES / 8]; // a plain cell at the shroud's edge, its edge worked out: only that is put again
+static unsigned char overlaid[TILES / 8]; // a cell in full view whose rectangles are kept: they are put again and no more asked
+static Kept cell_recording;
 static int origin_x, origin_y, view_w, view_h; // where the map's corner is on the screen, and the view's size
 unsigned ShaderEmu_GL_Quads;      // all of them, and of those the shroud's and the shadows'
 unsigned ShaderEmu_GL_Shroud, ShaderEmu_GL_Shadows;
@@ -147,6 +161,9 @@ static void forget(void)
     host_tiles_clear();
     memset(host_masks(), 0, ATLAS_W / 8 * ATLAS_ROWS);
     memset(kept, 0, sizeof(kept));
+    memset(cell_kept, 0, sizeof(cell_kept));
+    memset(overlaid, 0, sizeof(overlaid));
+    memset(edged, 0, sizeof(edged));
     memset(edge_of, -2, sizeof(edge_of));
     memset(edge_shape, 0, sizeof(edge_shape));
     kept_count = 0;
@@ -161,6 +178,11 @@ void ShaderEmu_GL_Cell(CELL cell)
 
     if (tx >= 0 && ty >= 0 && tx < tile_w && ty < tile_h) {
         edge_of[ty * tile_w + tx] = -2;
+        if (cell_kept[(ty * tile_w + tx) % CELLS_KEPT].tile == ty * tile_w + tx + 1) {
+            cell_kept[(ty * tile_w + tx) % CELLS_KEPT].tile = 0;
+        }
+        overlaid[(ty * tile_w + tx) >> 3] &= ~(1 << ((ty * tile_w + tx) & 7));
+        edged[(ty * tile_w + tx) >> 3] &= ~(1 << ((ty * tile_w + tx) & 7));
         settled[(ty * tile_w + tx) >> 3] &= ~(1 << ((ty * tile_w + tx) & 7));
         unseen[(ty * tile_w + tx) >> 3] &= ~(1 << ((ty * tile_w + tx) & 7));
     }
@@ -626,10 +648,69 @@ void DisplayClass::ShaderEmu_GL_Draw(bool forced)
             int tx = cx - tile_x, ty = cy - tile_y;
             int tile = tx >= 0 && ty >= 0 && tx < tile_w && ty < tile_h ? ty * tile_w + tx : -1;
             if (tile >= 0 && !again && (settled[tile >> 3] & (1 << (tile & 7)))) {
+                // and the settled cells after it in the row, which are most of a row: a cell
+                // looked at one by one above is forty instructions, here it is ten
+                int last = tile + (tile_w - 1 - tx), more = cx + 1;
+                while (tile < last && more < MAP_CELL_W && base_x + more * 24 < wide
+                       && (settled[(tile + 1) >> 3] & (1 << ((tile + 1) & 7)))) {
+                    tile++;
+                    more++;
+                }
+                cx = more - 1;
+                run = -1;
+                continue;
+            }
+            if (tile >= 0 && !again && (unseen[tile >> 3] & (1 << (tile & 7)))) {
+                // a run of cells not seen yet, which early in a mission is most of the map: one
+                // black rectangle however long, found without asking the game about each
+                int last = tile + (tile_w - 1 - tx), more = cx + 1, t = tile;
+                while (t < last && more < MAP_CELL_W && base_x + more * 24 < wide
+                       && (unseen[(t + 1) >> 3] & (1 << ((t + 1) & 7)))) {
+                    t++;
+                    more++;
+                }
+                if (shrouded >= 512) {
+                    run = -1;
+                } else if (run >= 0) {
+                    shroud[run].w += (short)(24 * (more - cx));
+                } else {
+                    run = shrouded;
+                    shroud[shrouded].cell = -1;
+                    shroud[shrouded].x = (short)x;
+                    shroud[shrouded].y = (short)y;
+                    shroud[shrouded++].w = (short)(24 * (more - cx));
+                }
+                cx = more - 1;
+                continue;
+            }
+            if (tile >= 0 && !again && (overlaid[tile >> 3] & (1 << (tile & 7)))) {
+                const CellKept* ck = &cell_kept[tile % CELLS_KEPT];
+                if (ck->tile == tile + 1) {
+                    for (int i = 0; i < ck->count; i++) {
+                        const Quad& q = ck->quad[i];
+                        host_sprite(q.kind, q.x + origin_x, q.y + origin_y, q.w, q.h, q.ax, q.ay, q.colour);
+                        ShaderEmu_GL_Quads++;
+                    }
+                    run = -1;
+                    continue;
+                }
+                overlaid[tile >> 3] &= ~(1 << (tile & 7)); // (another cell's rectangles took its place)
+            }
+            if (tile >= 0 && !again && (edged[tile >> 3] & (1 << (tile & 7))) && !Is_Cell_Flagged(cell)) {
+                // a cell half under the shroud with nothing of its own to draw: its edge as it was
+                // (the game flags the cell when that may have changed)
+                int edge = edge_of[tile];
+                if (edge >= 0 && shrouded < 512) {
+                    shroud[shrouded].cell = cell;
+                    shroud[shrouded].x = (short)x;
+                    shroud[shrouded].y = (short)y;
+                    shroud[shrouded++].w = (short)edge;
+                }
                 run = -1;
                 continue;
             }
             CellClass* cellptr = &(*this)[cell];
+            bool plain = false;
             bool seen = false;
             if (tile < 0 || again || !(unseen[tile >> 3] & (1 << (tile & 7)))) {
                 seen = cellptr->Is_Mapped(PlayerPtr) || Debug_Unshroud; // (some of it shows; visible: all of it)
@@ -651,9 +732,40 @@ void DisplayClass::ShaderEmu_GL_Draw(bool forced)
                     tile_done[tile >> 3] |= 1 << (tile & 7);
                 }
                 if (cellptr->Smudge != SMUDGE_NONE || cellptr->Overlay != OVERLAY_NONE || cellptr->IsCursorHere) {
-                    cellptr->Draw_It(x, y, false); // (its terrain is left out while this is on: cell.cpp)
+                    CellKept* ck = tile >= 0 && !cellptr->IsCursorHere ? &cell_kept[tile % CELLS_KEPT] : NULL;
+                    if (ck && !again && ck->tile == tile + 1) {
+                        for (int i = 0; i < ck->count; i++) {
+                            const Quad& q = ck->quad[i];
+                            host_sprite(q.kind, q.x + origin_x, q.y + origin_y, q.w, q.h, q.ax, q.ay, q.colour);
+                            ShaderEmu_GL_Quads++;
+                        }
+                        if (cellptr->Is_Visible(PlayerPtr) || Debug_Unshroud) {
+                            overlaid[tile >> 3] |= 1 << (tile & 7); // all of it shows: no shroud to ask about either
+                        }
+                    } else {
+                        bool touched = ShaderEmu_GL_Touched;
+                        ShaderEmu_GL_Touched = false;
+                        cell_recording.count = 0;
+                        cell_recording.whole = true;
+                        recording = ck ? &cell_recording : NULL;
+                        cellptr->Draw_It(x, y, false); // (its terrain is left out while this is on: cell.cpp)
+                        recording = NULL;
+                        if (ck) {
+                            // kept if these are all of it: nothing the game drew itself, and no more than fit
+                            ck->tile = 0;
+                            if (cell_recording.whole && !ShaderEmu_GL_Touched && cell_recording.count <= 2) {
+                                ck->tile = tile + 1;
+                                ck->count = cell_recording.count;
+                                ck->quad[0] = cell_recording.quad[0];
+                                ck->quad[1] = cell_recording.quad[1];
+                            }
+                        }
+                        ShaderEmu_GL_Touched |= touched;
+                    }
                 } else if (tile >= 0 && (cellptr->Is_Visible(PlayerPtr) || Debug_Unshroud)) {
                     settled[tile >> 3] |= 1 << (tile & 7);
+                } else {
+                    plain = tile >= 0;
                 }
             }
             if (seen || run < 0 || shrouded >= 512) {
@@ -674,6 +786,11 @@ void DisplayClass::ShaderEmu_GL_Draw(bool forced)
                                : edge_of[tile];
                 if (tile >= 0) {
                     edge_of[tile] = (signed char)edge;
+                    if (plain) {
+                        edged[tile >> 3] |= 1 << (tile & 7);
+                    } else {
+                        edged[tile >> 3] &= ~(1 << (tile & 7));
+                    }
                 }
                 if (edge >= 0) {
                     shroud[shrouded].cell = cell;
