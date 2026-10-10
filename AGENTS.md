@@ -734,6 +734,12 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   `QUAKE_HOLD=60 quake +map e1m1`, `--save-state`, `--gpu-capture` and `tools\gpu_reference.py
   SNAP BMP --size 640x480` (every pixel within 2 levels), and needs "Sync shader sources" in
   Unity, whose GPU shares `gpu.h`.
+- `rvc_harness --profile` on a snapshot of a program says how many of its instructions leave the
+  fast step (`fast_step` under 0.98 of `tick` is worth a look). Quake's were 10%: `flw` and
+  `fsw` have opcode bit 2, as the jumps have, and the fast step's test for those came first and
+  sent every one to the general path, at three times the cost. With that mended Quake went
+  from 16.7 to 22 frames a second and a float test from 3.3 to 4.8 million instructions a
+  second. A new kind of instruction in the fast step: check with the profile that it gets there.
 - Never more than three harness runs at once: four took 264 s where one takes 70.
 - Its changes to id's source are `linux/quake/quake.patch`: edit a clean clone at the commit
   `build.sh` names and save `git diff -- WinQuake`. The build puts the tree back each time.

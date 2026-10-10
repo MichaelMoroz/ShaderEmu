@@ -1065,7 +1065,13 @@ bool fast_exec_l1(L1P uint w) {
         ok = low_ok && f3 != 2 && f3 != 3;
         wr = false;
         if (taken) { npc = pc + br.imm; }
+#ifdef FPU
+    } else if ((w & 0x04) != 0 && ((w & 0x08) == 0 || (w & 0x40) != 0) && (w & 0x5f) != 0x07) {
+        // (flw and fsw, 0x07 and 0x27, have bit 2 as well and are the F extension's below: taken
+        // here they were sent to the general path, every one, three times the cost)
+#else
     } else if ((w & 0x04) != 0 && ((w & 0x08) == 0 || (w & 0x40) != 0)) {
+#endif
         // lui, auipc, jal and jalr share opcode bit 2 (fence and the atomics, which also have
         // it, are excluded above); bit 6 is a jump, then bit 3 says jal and bit 5 says lui
         bool jump = (w & 0x40) != 0, jal = (w & 0x08) != 0;

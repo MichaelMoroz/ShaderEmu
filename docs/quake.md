@@ -188,6 +188,7 @@ On e1m5, standing where the level starts, in real time (RTX 5090, harness, D3D11
 | server on the first core (`QUAKE_SERVER=inline`, or no worker cores) | 4.85 | 4.85 | 515 thousand instructions |
 | server on a worker, the client waiting for it (`QUAKE_SERVER=wait`) | 6.3 | 6.3 | 211 thousand, and 9 passes of waiting |
 | server on a worker, each at its own pace (the default) | 13.3 | 5.9 | 153 thousand |
+| the same after the client's frame was gone through (water, sky, leaves, models' light: 117 thousand) and the machine's float loads and stores were put on its fast step | 22.2 | 7.5 | 115 thousand |
 
 Of 54 frames drawn, 47 are between two of the server's. The server's frame is the 330
 thousand instructions it was and decides how fast the game's time goes (0.1 s a frame at
