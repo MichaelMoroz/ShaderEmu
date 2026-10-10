@@ -161,7 +161,7 @@ the design notes are kept in `docs/original-x86-plan.md`.
 pimaker; Linux; musl; BusyBox; GCC and LLVM; [Microwindows](https://github.com/ghaerr/microwindows)
 by Greg Haerr and contributors, with its port of Doom; TinyCC and jrrk2's riscv32 port of it; DOOM and [Quake](https://github.com/id-Software/Quake) by id Software; [Vanilla Conquer](https://github.com/TheAssemblyArmada/Vanilla-Conquer)
 and Command & Conquer by Westwood Studios (source released by Electronic Arts);
-[ClassiCube](https://github.com/ClassiCube/ClassiCube) by UnknownShadow200 and contributors; [Dear ImGui](https://github.com/ocornut/imgui) by Omar Cornut and contributors; [Nofrendo](https://github.com/espressif/esp32-nesemu) by Matthew Conte, with [Thwaite](https://github.com/pinobatch/thwaite-nes) by Damian Yerrick and [Nova the Squirrel](https://github.com/NovaSquirrel/NovaTheSquirrel) by NovaSquirrel; glxgears from the
+[ClassiCube](https://github.com/ClassiCube/ClassiCube) by UnknownShadow200 and contributors; [Dear ImGui](https://github.com/ocornut/imgui) by Omar Cornut and contributors; [Nofrendo](https://github.com/espressif/esp32-nesemu) by Matthew Conte, with [Thwaite](https://github.com/pinobatch/thwaite-nes) by Damian Yerrick and [Nova the Squirrel](https://github.com/NovaSquirrel/NovaTheSquirrel) by NovaSquirrel; [minimp3](https://github.com/lieff/minimp3) by lieff and [dr_flac](https://github.com/mackron/dr_libs) by David Reid in the music player; glxgears from the
 Mesa demos; photographs from Unsplash; furniture, plants and surfaces of the VRChat room from
 [Poly Haven](https://polyhaven.com) (CC0); [LTCGI](https://github.com/PiMaker/ltcgi) by pimaker,
 [VRC Light Volumes](https://github.com/REDSIM/VRCLightVolumes) by RED_SIM and

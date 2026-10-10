@@ -1,0 +1,167 @@
+--- a/minimp3.h	2026-10-10 11:17:00.787085071 +0200
++++ b/minimp3.h	2026-10-10 11:17:00.841597611 +0200
+@@ -9,6 +9,8 @@
+ #include <stdint.h>
+ 
+ #define MINIMP3_MAX_SAMPLES_PER_FRAME (1152*2)
++/* given as pcm: the frame is not decoded, it only fills the bit reservoir (nxplay) */
++#define MP3D_SKIP ((mp3d_sample_t *)1)
+ 
+ typedef struct
+ {
+@@ -1191,6 +1193,14 @@
+             grbuf[i] = -grbuf[i];
+ }
+ 
++/* MP3D_HALF (nxplay): the lower 16 bands only and every second sample, half the rate */
++#ifdef MP3D_HALF
++#define MP3D_BANDS 16
++#define MP3D_AT(p) ((p)/2)
++#else
++#define MP3D_BANDS 32
++#define MP3D_AT(p) (p)
++#endif
+ static void L3_imdct_gr(float *grbuf, float *overlap, unsigned block_type, unsigned n_long_bands)
+ {
+     static const float g_mdct_window[2][18] = {
+@@ -1204,9 +1214,9 @@
+         overlap += 9*n_long_bands;
+     }
+     if (block_type == SHORT_BLOCK_TYPE)
+-        L3_imdct_short(grbuf, overlap, 32 - n_long_bands);
++        L3_imdct_short(grbuf, overlap, MP3D_BANDS - n_long_bands);
+     else
+-        L3_imdct36(grbuf, overlap, g_mdct_window[block_type == STOP_BLOCK_TYPE], 32 - n_long_bands);
++        L3_imdct36(grbuf, overlap, g_mdct_window[block_type == STOP_BLOCK_TYPE], MP3D_BANDS - n_long_bands);
+ }
+ 
+ static void L3_save_reservoir(mp3dec_t *h, mp3dec_scratch_t *s)
+@@ -1256,7 +1266,7 @@
+ 
+     for (ch = 0; ch < nch; ch++, gr_info++)
+     {
+-        int aa_bands = 31;
++        int aa_bands = MP3D_BANDS < 32 ? MP3D_BANDS : 31;
+         int n_long_bands = (gr_info->mixed_block_flag ? 2 : 0) << (int)(HDR_GET_MY_SAMPLE_RATE(h->header) == 2);
+ 
+         if (gr_info->n_short_sfb)
+@@ -1470,7 +1480,7 @@
+     a += z[ 4*64] * -45;
+     a += z[ 2*64] * 146;
+     a += z[ 0*64] * -5;
+-    pcm[16*nch] = mp3d_scale_pcm(a);
++    pcm[MP3D_BANDS/2*nch] = mp3d_scale_pcm(a);
+ }
+ 
+ static void mp3d_synth(float *xl, mp3d_sample_t *dstl, int nch, float *lins)
+@@ -1510,9 +1520,9 @@
+     zlin[4*31 + 3] = xr[1];
+ 
+     mp3d_synth_pair(dstr, nch, lins + 4*15 + 1);
+-    mp3d_synth_pair(dstr + 32*nch, nch, lins + 4*15 + 64 + 1);
++    mp3d_synth_pair(dstr + MP3D_BANDS*nch, nch, lins + 4*15 + 64 + 1);
+     mp3d_synth_pair(dstl, nch, lins + 4*15);
+-    mp3d_synth_pair(dstl + 32*nch, nch, lins + 4*15 + 64);
++    mp3d_synth_pair(dstl + MP3D_BANDS*nch, nch, lins + 4*15 + 64);
+ 
+ #if HAVE_SIMD
+     if (have_simd()) for (i = 14; i >= 0; i--)
+@@ -1611,17 +1621,20 @@
+         zlin[4*(i + 16) + 1] = xr[1 + 18*(1 + i)];
+         zlin[4*(i - 16) + 2] = xl[18*(1 + i)];
+         zlin[4*(i - 16) + 3] = xr[18*(1 + i)];
++#ifdef MP3D_HALF
++        if (!(i & 1)) { w += 16; continue; }
++#endif
+ 
+         S0(0) S2(1) S1(2) S2(3) S1(4) S2(5) S1(6) S2(7)
+ 
+-        dstr[(15 - i)*nch] = mp3d_scale_pcm(a[1]);
+-        dstr[(17 + i)*nch] = mp3d_scale_pcm(b[1]);
+-        dstl[(15 - i)*nch] = mp3d_scale_pcm(a[0]);
+-        dstl[(17 + i)*nch] = mp3d_scale_pcm(b[0]);
+-        dstr[(47 - i)*nch] = mp3d_scale_pcm(a[3]);
+-        dstr[(49 + i)*nch] = mp3d_scale_pcm(b[3]);
+-        dstl[(47 - i)*nch] = mp3d_scale_pcm(a[2]);
+-        dstl[(49 + i)*nch] = mp3d_scale_pcm(b[2]);
++        dstr[MP3D_AT(15 - i)*nch] = mp3d_scale_pcm(a[1]);
++        dstr[MP3D_AT(17 + i)*nch] = mp3d_scale_pcm(b[1]);
++        dstl[MP3D_AT(15 - i)*nch] = mp3d_scale_pcm(a[0]);
++        dstl[MP3D_AT(17 + i)*nch] = mp3d_scale_pcm(b[0]);
++        dstr[MP3D_AT(47 - i)*nch] = mp3d_scale_pcm(a[3]);
++        dstr[MP3D_AT(49 + i)*nch] = mp3d_scale_pcm(b[3]);
++        dstl[MP3D_AT(47 - i)*nch] = mp3d_scale_pcm(a[2]);
++        dstl[MP3D_AT(49 + i)*nch] = mp3d_scale_pcm(b[2]);
+     }
+ #endif /* MINIMP3_ONLY_SIMD */
+ }
+@@ -1629,6 +1642,12 @@
+ static void mp3d_synth_granule(float *qmf_state, float *grbuf, int nbands, int nch, mp3d_sample_t *pcm, float *lins)
+ {
+     int i;
++#ifdef MP3D_HALF
++    for (i = 0; i < nch; i++)
++    {
++        memset(grbuf + 576*i + 18*16, 0, 18*16*sizeof(float));
++    }
++#endif
+     for (i = 0; i < nch; i++)
+     {
+         mp3d_DCT_II(grbuf + 576*i, nbands);
+@@ -1638,7 +1657,7 @@
+ 
+     for (i = 0; i < nbands; i += 2)
+     {
+-        mp3d_synth(grbuf + i, pcm + 32*nch*i, nch, lins + i*64);
++        mp3d_synth(grbuf + i, pcm + MP3D_BANDS*nch*i, nch, lins + i*64);
+     }
+ #ifndef MINIMP3_NONSTANDARD_BUT_LOGICAL
+     if (nch == 1)
+@@ -1765,9 +1784,16 @@
+             return 0;
+         }
+         success = L3_restore_reservoir(dec, bs_frame, &scratch, main_data_begin);
+-        if (success)
++        if (success && pcm == MP3D_SKIP)
++        {
++            /* the bits its granules would have read */
++            for (i = 0; i < (HDR_TEST_MPEG1(hdr) ? 2 : 1)*info->channels; i++)
++            {
++                scratch.bs.pos += scratch.gr_info[i].part_23_length;
++            }
++        } else if (success)
+         {
+-            for (igr = 0; igr < (HDR_TEST_MPEG1(hdr) ? 2 : 1); igr++, pcm += 576*info->channels)
++            for (igr = 0; igr < (HDR_TEST_MPEG1(hdr) ? 2 : 1); igr++, pcm += 18*MP3D_BANDS*info->channels)
+             {
+                 memset(scratch.grbuf[0], 0, 576*2*sizeof(float));
+                 L3_decode(dec, &scratch, scratch.gr_info + igr*info->channels, info->channels);
+@@ -1781,6 +1807,10 @@
+         return 0;
+ #else /* MINIMP3_ONLY_MP3 */
+         L12_scale_info sci[1];
++        if (pcm == MP3D_SKIP)
++        {
++            return hdr_frame_samples(hdr);
++        }
+         L12_read_scale_info(hdr, bs_frame, sci);
+ 
+         memset(scratch.grbuf[0], 0, 576*2*sizeof(float));
+@@ -1792,7 +1822,7 @@
+                 L12_apply_scf_384(sci, sci->scf + igr, scratch.grbuf[0]);
+                 mp3d_synth_granule(dec->qmf_state, scratch.grbuf[0], 12, info->channels, pcm, scratch.syn[0]);
+                 memset(scratch.grbuf[0], 0, 576*2*sizeof(float));
+-                pcm += 384*info->channels;
++                pcm += 12*MP3D_BANDS*info->channels;
+             }
+             if (bs_frame->pos > bs_frame->limit)
+             {
+@@ -1802,7 +1832,7 @@
+         }
+ #endif /* MINIMP3_ONLY_MP3 */
+     }
+-    return success*hdr_frame_samples(dec->header);
++    return success*hdr_frame_samples(dec->header)*MP3D_BANDS/32;
+ }
+ 
+ #ifdef MINIMP3_FLOAT_OUTPUT
