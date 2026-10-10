@@ -118,6 +118,57 @@ index 1dda825..c77c3fc 100644
      if (Lock()) {
          Buffer_Draw_Stamp_Clip(this,
                                 icondata,
+diff --git a/common/search.h b/common/search.h
+index 53f0a1a..f1887e5 100644
+--- a/common/search.h
++++ b/common/search.h
+@@ -51,6 +51,7 @@
+ #define SEARCH_H
+ 
+ #include <stdlib.h>
++#include <string.h>
+ 
+ /*
+ **	This class is used to create and maintain an index. It does this by assigning a unique
+@@ -633,7 +634,37 @@ template <class T> typename IndexClass<T>::NodeElement const* IndexClass<T>::Sea
+     **	the list to be sorted.
+     */
+     if (!IsSorted) {
+-        qsort(&IndexTable[0], IndexCount, sizeof(IndexTable[0]), search_compfunc);
++        /*
++        **	(ShaderEmu) The table is in order but for what was added since it last was, which
++        **	is one entry when a file is read (each is looked for before it is added): those are
++        **	put in their places. A sort of the whole table for every entry was a quarter of
++        **	the game's start on that machine.
++        */
++        int astray = 0;
++        for (int i = 1; i < IndexCount && astray <= 32; i++) {
++            astray += IndexTable[i - 1].ID > IndexTable[i].ID;
++        }
++        if (astray > 32) {
++            qsort(&IndexTable[0], IndexCount, sizeof(IndexTable[0]), search_compfunc);
++        } else if (astray) {
++            for (int i = 1; i < IndexCount; i++) {
++                if (IndexTable[i - 1].ID <= IndexTable[i].ID) {
++                    continue;
++                }
++                NodeElement moved = IndexTable[i];
++                int lo = 0, hi = i - 1; // the first entry after which it would not be in order
++                while (lo < hi) {
++                    int mid = (lo + hi) / 2;
++                    if (IndexTable[mid].ID > moved.ID) {
++                        hi = mid;
++                    } else {
++                        lo = mid + 1;
++                    }
++                }
++                memmove((void*)&IndexTable[lo + 1], (void const*)&IndexTable[lo], (i - lo) * sizeof(IndexTable[0]));
++                IndexTable[lo] = moved;
++            }
++        }
+         ((IndexClass<T>*)this)->Invalidate_Archive();
+         ((IndexClass<T>*)this)->IsSorted = true;
+     }
 diff --git a/common/timer.cpp b/common/timer.cpp
 index ea6a5c0..31c6e4b 100644
 --- a/common/timer.cpp
