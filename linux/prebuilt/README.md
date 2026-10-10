@@ -14,7 +14,7 @@ started and everything on its desktop run without building anything.
 | `root/usr/bin/nx` | | the script `linux/nanox/nx` |
 | `root/emuinit`, `root/usr/bin/emumux`, `fptest`, `sndtest` | `linux/userland/build.sh` | this repository |
 | `root/bin/busybox` | `linux/userland/busybox.sh` | BusyBox 1.36.1 |
-| `root/usr/bin/nxfiles`, `nxweb`, `nxedit`, `nxpaint`, `nxview`, `nxmon`, `nxsettings`, `nxkey`, `root/usr/share/web-*` | `linux/apps/build.sh` | this repository |
+| `root/usr/bin/nxfiles`, `nxweb`, `nxedit`, `nxpaint`, `nxview`, `nxmon`, `nxsettings`, `nxkey`, `nxoff`, `root/usr/share/web-*`, `nxapps.90-system` | `linux/apps/build.sh` | this repository |
 | `root/usr/share/wallpaper-*.ppm` | `tools/make_wallpaper.py` | photographs from Unsplash |
 | `root/usr/bin/doom.bin` | `linux/nanox/doom.sh` | the Doom in Microwindows' `contrib`, with the files in `linux/nanox` |
 | `root/usr/bin/tcc`, `cc`, `example`, `root/usr/share/cc-sysroot.tar`, `example-*.c` | `linux/tcc/build.sh` | TinyCC, with musl's headers and libraries for it |

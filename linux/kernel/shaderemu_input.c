@@ -8,6 +8,8 @@
 #include <linux/io.h>
 #include <linux/mm.h>
 #include <linux/module.h>
+#include <linux/pm.h>
+#include <asm/processor.h>
 #include <linux/sched.h>
 #include <linux/timer.h>
 
@@ -81,6 +83,18 @@ static void shaderemu_input_poll(struct timer_list *t)
 	mod_timer(&input_timer, jiffies + 1);
 }
 
+/*
+ * Power off. The machine has no firmware to ask (its answer to the call is "not supported",
+ * after which Linux carried on with a shell that still ran): it stands still here, waiting
+ * for interrupts that are switched off, until it is switched off where it is shown.
+ */
+static void shaderemu_power_off(void)
+{
+	local_irq_disable();
+	for (;;)
+		wait_for_interrupt();
+}
+
 static int __init shaderemu_input_init(void)
 {
 	int key, ret;
@@ -119,6 +133,7 @@ static int __init shaderemu_input_init(void)
 		return ret;
 
 	pointer_at = jiffies;	/* (which does not begin at 0) */
+	pm_power_off = shaderemu_power_off;
 	timer_setup(&input_timer, shaderemu_input_poll, 0);
 	mod_timer(&input_timer, jiffies + 1);
 	return 0;

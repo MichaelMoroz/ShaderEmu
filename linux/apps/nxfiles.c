@@ -2,18 +2,25 @@
  * nxfiles: a file manager, a tile for every entry. A click selects, a click on the selected
  * tile (or Enter, or Open) opens it: a folder is entered, a picture goes to the viewer, a page
  * to the browser, a program is started, anything else goes to the editor. nxfiles DIRECTORY.
+ * New and Folder make an entry and ask for its name; Rename (F2) asks for another; Copy and
+ * Cut (Ctrl+C, Ctrl+X) remember the selected entry for every Files window, and Paste (Ctrl+V)
+ * puts it, or moves it, into the folder shown.
  */
 #include <dirent.h>
+#include <errno.h>
 #include <signal.h>
 #include <strings.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include "ui.h"
+
+#define CARRIED "/tmp/clipboard.files"	/* "copy" or "cut", then the entry's path, a line each */
 
 #define BAR 26
 #define STATUS 18
 #define TILE_W 78
 #define TILE_H 60
-#define WIDTH 420
+#define WIDTH 516
 #define HEIGHT 330
 #define MAX_ENTRIES 512
 
@@ -25,9 +32,12 @@ static int dragging;	/* the scroll bar's thumb is held */
 static int focus;	/* what the keyboard works: 0 the tiles, 1 + n button n */
 static char where[512];
 static GR_WINDOW_ID window;
-static const char *buttons[] = { "Up", "Open", "Edit", "New file", "Delete", "Refresh" };
-#define BUTTONS 6
-#define BUTTON_W 62
+static const char *buttons[] = { "Up", "Open", "Edit", "New", "Folder", "Rename", "Copy", "Cut", "Paste", "Delete" };
+enum { B_UP, B_OPEN, B_EDIT, B_NEW, B_FOLDER, B_RENAME, B_COPY, B_CUT, B_PASTE, B_DELETE, BUTTONS };
+#define BUTTON_W 48
+static int renaming;		/* the selected entry's new name is being typed, in the status line */
+static char typed[64];
+static const char *notice = "";
 
 static int
 ends_with(const char *name, const char *end)
@@ -63,7 +73,8 @@ kind_of(int i)
 	if (S_ISDIR(info.st_mode))
 		e->kind = FILE_FOLDER;
 	else if (ends_with(e->name, ".ppm") || ends_with(e->name, ".pgm") || ends_with(e->name, ".bmp") ||
-		 ends_with(e->name, ".gif") || ends_with(e->name, ".xpm"))
+		 ends_with(e->name, ".gif") || ends_with(e->name, ".xpm") || ends_with(e->name, ".png") ||
+		 ends_with(e->name, ".jpg") || ends_with(e->name, ".jpeg"))
 		e->kind = FILE_PICTURE;
 	else if (ends_with(e->name, ".html") || ends_with(e->name, ".htm"))
 		e->kind = FILE_PAGE;
@@ -169,7 +180,11 @@ draw_status(void)
 {
 	char text[640];
 
-	if (selected >= 0 && kind_of(selected) != FILE_FOLDER)
+	if (renaming)
+		snprintf(text, sizeof text, "Name: %s_   (Enter names it, Escape leaves it)", typed);
+	else if (notice[0])
+		snprintf(text, sizeof text, "%s", notice);
+	else if (selected >= 0 && kind_of(selected) != FILE_FOLDER)
 		snprintf(text, sizeof text, "%s   %ld bytes", entries[selected].name, entries[selected].size);
 	else
 		snprintf(text, sizeof text, "%s   %d items", where, count);
@@ -267,6 +282,109 @@ select_tile(int i)
 	}
 }
 
+/* The entry of that name is the selected one, and in view. */
+static void
+select_name(const char *name)
+{
+	int i;
+
+	for (i = 0; i < count; i++)
+		if (!strcmp(entries[i].name, name)) {
+			selected = i;
+			if (i / columns < top || i / columns >= top + rows)
+				top = i / columns;
+			return;
+		}
+}
+
+/* Runs a program to its end; true if it said all went well. */
+static int
+run_wait(const char *program, const char *option, const char *from, const char *to)
+{
+	pid_t child;
+	int status = 0;
+
+	signal(SIGCHLD, SIG_DFL);	/* (ignored, a child leaves nothing to wait for) */
+	child = fork();
+	if (child == 0) {
+		execlp(program, program, option, from, to, (char *)NULL);
+		_exit(127);
+	}
+	if (child < 0 || waitpid(child, &status, 0) < 0)
+		status = -1;
+	signal(SIGCHLD, SIG_IGN);
+	return status == 0;
+}
+
+/* Remembers the selected entry for a Paste, in this window or another. */
+static void
+carry(const char *how)
+{
+	FILE *file;
+
+	if (selected < 0) {
+		notice = "nothing is selected";
+		return;
+	}
+	if ((file = fopen(CARRIED, "w")) == NULL)
+		return;
+	fprintf(file, "%s\n%s/%s\n", how, strcmp(where, "/") ? where : "", entries[selected].name);
+	fclose(file);
+	notice = how[1] == 'o' ? "copied: Paste puts it in the folder shown" : "cut: Paste moves it to the folder shown";
+}
+
+/* Puts what was copied or cut into this folder, under a name that is free here. */
+static void
+paste(void)
+{
+	char how[8] = "", from[600] = "", name[80];
+	const char *base, *dot;
+	FILE *file = fopen(CARRIED, "r");
+	int n, stem;
+
+	if (file) {
+		if (fgets(how, sizeof how, file) && fgets(from, sizeof from, file))
+			from[strcspn(from, "\r\n")] = 0;
+		fclose(file);
+	}
+	if (!from[0] || access(from, F_OK) != 0) {
+		notice = "nothing was copied or cut";
+		return;
+	}
+	base = strrchr(from, '/') ? strrchr(from, '/') + 1 : from;
+	dot = strrchr(base, '.');
+	stem = dot && dot != base ? (int)(dot - base) : (int)strlen(base);
+	for (n = 0; n < 100; n++) {
+		if (n == 0)
+			snprintf(name, sizeof name, "%.60s", base);
+		else
+			snprintf(name, sizeof name, "%.*s-%d%.12s", stem > 44 ? 44 : stem, base, n + 1, base + stem);
+		if (access(name, F_OK) != 0)
+			break;
+	}
+	if (how[1] == 'u' ? run_wait("mv", "--", from, name) : run_wait("cp", "-a", from, name)) {
+		if (how[1] == 'u')
+			unlink(CARRIED);
+		notice = "";
+	} else {
+		notice = "that could not be put here";
+	}
+	read_folder();
+	select_name(name);
+}
+
+/* Begins the typing of a name for the selected entry. */
+static void
+rename_begin(void)
+{
+	if (selected < 0) {
+		notice = "nothing is selected";
+		return;
+	}
+	snprintf(typed, sizeof typed, "%s", entries[selected].name);
+	renaming = 1;
+}
+
 static void
 press(int button)
 {
@@ -274,36 +392,95 @@ press(int button)
 	FILE *file;
 	int n;
 
+	notice = "";
 	switch (button) {
-	case 0:
+	case B_UP:
 		if (chdir("..") == 0)
 			read_folder();
 		break;
-	case 1:
-	case 2:
-		open_entry(selected, button == 2);
+	case B_OPEN:
+	case B_EDIT:
+		open_entry(selected, button == B_EDIT);
 		return;
-	case 3:
-		/* the first of new.txt, new1.txt, ... that is not there yet */
+	case B_NEW:
+	case B_FOLDER:
+		/* the first of new.txt, new1.txt, ... that is not there yet; then its name is asked for */
 		for (n = 0; n < 100; n++) {
-			snprintf(name, sizeof name, n ? "new%d.txt" : "new.txt", n);
+			if (button == B_NEW)
+				snprintf(name, sizeof name, n ? "new%d.txt" : "new.txt", n);
+			else
+				snprintf(name, sizeof name, n ? "folder%d" : "folder", n);
 			if (access(name, F_OK) != 0)
 				break;
 		}
-		if ((file = fopen(name, "w")) != NULL)
+		if (button == B_FOLDER) {
+			if (mkdir(name, 0755) != 0)
+				notice = "a folder cannot be made here";
+		} else if ((file = fopen(name, "w")) != NULL) {
 			fclose(file);
+		} else {
+			notice = "a file cannot be made here";
+		}
 		read_folder();
+		select_name(name);
+		if (!notice[0])
+			rename_begin();
 		break;
-	case 4:
-		if (selected >= 0 && (kind_of(selected) == FILE_FOLDER ? rmdir(entries[selected].name)
-									   : unlink(entries[selected].name)) == 0)
+	case B_RENAME:
+		rename_begin();
+		break;
+	case B_COPY:
+		carry("copy");
+		break;
+	case B_CUT:
+		carry("cut");
+		break;
+	case B_PASTE:
+		paste();
+		break;
+	case B_DELETE:
+		if (selected < 0)
+			notice = "nothing is selected";
+		else if ((kind_of(selected) == FILE_FOLDER ? rmdir(entries[selected].name) : unlink(entries[selected].name)) == 0)
 			read_folder();
-		break;
-	case 5:
-		read_folder();
+		else
+			notice = errno == ENOTEMPTY || errno == EEXIST ? "the folder is not empty" : "that cannot be deleted";
 		break;
 	}
 	draw_all();
+}
+
+/* A key of the name being typed in the status line. */
+static void
+rename_key(int ch)
+{
+	int n = strlen(typed);
+
+	if (ch == MWKEY_ESCAPE) {
+		renaming = 0;
+	} else if (ch == MWKEY_ENTER || ch == '\n') {
+		renaming = 0;
+		if (n && strcmp(typed, entries[selected].name)) {
+			if (access(typed, F_OK) == 0) {
+				notice = "there is one of that name already";
+			} else if (rename(entries[selected].name, typed) != 0) {
+				notice = "it cannot have that name";
+			} else {
+				read_folder();
+				select_name(typed);
+			}
+		}
+		draw_all();
+		return;
+	} else if (ch == MWKEY_BACKSPACE || ch == 127) {
+		if (n)
+			typed[n - 1] = 0;
+	} else if (ch > 32 && ch < 127 && ch != '/' && n < (int)sizeof typed - 1) {
+		typed[n] = ch, typed[n + 1] = 0;
+	} else if (ch == ' ' && n && n < (int)sizeof typed - 1) {
+		typed[n] = ' ', typed[n + 1] = 0;
+	}
+	draw_status();
 }
 
 /* Arrows and the paging keys choose a tile, a letter the next name it starts, Backspace the
@@ -311,8 +488,23 @@ press(int button)
 static void
 key(const GR_EVENT *event)
 {
-	int ch = event->keystroke.ch, i;
+	int ch = event->keystroke.ch, i, command = 0;
 
+	if (renaming) {
+		rename_key(ch);
+		return;
+	}
+	/* a letter with Ctrl comes as the letter with the modifier, or as its control code */
+	if ((event->keystroke.modifiers & MWKMOD_CTRL) && ch < 128 && isalpha(ch))
+		command = tolower(ch);
+	else if (ch == 3 || ch == 22 || ch == 24)
+		command = 'a' + ch - 1;
+	if (command == 'c' || command == 'x' || command == 'v') {
+		press(command == 'c' ? B_COPY : command == 'x' ? B_CUT : B_PASTE);
+		return;
+	}
+	if (command)
+		return;
 	if (ui_tab(event, &focus, 1 + BUTTONS)) {
 		draw_all();
 		return;
@@ -341,9 +533,13 @@ key(const GR_EVENT *event)
 	case MWKEY_HOME: select_tile(0); break;
 	case MWKEY_END: select_tile(count - 1); break;
 	case MWKEY_ENTER: open_entry(selected, 0); break;
-	case MWKEY_BACKSPACE: press(0); break;
-	case MWKEY_DELETE: press(4); break;
-	case MWKEY_F5: press(5); break;
+	case MWKEY_BACKSPACE: press(B_UP); break;
+	case MWKEY_DELETE: press(B_DELETE); break;
+	case MWKEY_F2: press(B_RENAME); break;
+	case MWKEY_F5:
+		read_folder();
+		draw_all();
+		break;
 	default:
 		/* a letter: the next entry that starts with it */
 		for (i = 1; i <= count; i++)
@@ -391,6 +587,14 @@ main(int argc, char **argv)
 			}
 			break;
 		case GR_EVENT_TYPE_BUTTON_DOWN:
+			if (renaming) {
+				renaming = 0;	/* a click elsewhere leaves the name as it was */
+				draw_status();
+			}
+			if (notice[0]) {
+				notice = "";
+				draw_status();
+			}
 			if (ui_wheel(&event)) {
 				scroll_to(top + ui_wheel_sum(&event));
 			} else if (event.button.y < BAR) {

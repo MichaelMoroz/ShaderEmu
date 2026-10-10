@@ -1,0 +1,2 @@
+System/Restart the desktop=setsid nx restart
+System/Shut down=setsid nxoff

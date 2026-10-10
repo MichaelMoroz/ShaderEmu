@@ -315,6 +315,50 @@ ui_slider_value(int px, int x, int width, int most)
 	return value < 0 ? 0 : value > most ? most : value;
 }
 
+/*
+ * The desktop's clipboard: one piece of text every program can leave and take, a file in
+ * memory. (The window system's own selections are a conversation between two programs that
+ * both have to be running and listening; a file is there after its program has gone.) The
+ * terminal uses the same file (linux/nanox/microwindows.patch).
+ */
+#define UI_CLIPBOARD "/tmp/clipboard"
+
+static void
+ui_clip_set(const char *text, int length)
+{
+	FILE *file = fopen(UI_CLIPBOARD ".new", "wb");
+
+	if (!file)
+		return;
+	fwrite(text, 1, length, file);
+	fclose(file);
+	rename(UI_CLIPBOARD ".new", UI_CLIPBOARD);
+}
+
+/* The clipboard's text, for the caller to free, or NULL when it has none. */
+static char *
+ui_clip_get(int *length)
+{
+	FILE *file = fopen(UI_CLIPBOARD, "rb");
+	char *text;
+	long size;
+
+	if (!file)
+		return NULL;
+	fseek(file, 0, SEEK_END);
+	size = ftell(file);
+	rewind(file);
+	if (size <= 0 || size > 1 << 20 || !(text = malloc(size + 1))) {
+		fclose(file);
+		return NULL;
+	}
+	size = fread(text, 1, size, file);
+	fclose(file);
+	text[size] = 0;
+	*length = (int)size;
+	return text;
+}
+
 /* Starts a program with one argument (or none), without a shell. */
 static void
 ui_run(const char *program, const char *argument)

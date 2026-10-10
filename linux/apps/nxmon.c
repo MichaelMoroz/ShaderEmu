@@ -1,9 +1,12 @@
 /* nxmon: a system monitor. Three plots of the last two minutes, a sample a second: how fast
  * the emulated processor runs (its cycle counter counts instructions; the worker cores'
  * share on top, docs/multicore.md), how busy Linux is, and the memory in use; under them
- * the load, the processes, the busiest programs and what each worker core is doing. */
+ * the load, the processes, the busiest programs and what each worker core is doing; and a list
+ * of the programs, busiest first, with a button that ends the selected one (asked to go the
+ * first time, made to the second). */
 #include <dirent.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <sys/mman.h>
 #include <sys/sysinfo.h>
 #include <sys/time.h>
@@ -16,7 +19,11 @@
 #define BLOCK (PLOT_H + 24)	/* a plot with its line of text */
 #define WIDTH (PLOT_W + 18)
 #define STATS_Y (3 * BLOCK + 6)
-#define HEIGHT (STATS_Y + 6 * 15 + 6)
+#define LIST_Y (STATS_Y + 6 * 15)
+#define LIST_ROWS 6
+#define LIST_H (LIST_ROWS * UI_ROW + 4)
+#define END_W 110
+#define HEIGHT (LIST_Y + LIST_H + 34)
 #define MAX_CORES 16
 #define MAX_PROGRAMS 48
 #define BUSIEST 3
@@ -42,6 +49,10 @@ static long memory_total, memory_used, memory_files, memory_cached;	/* kB */
 static long switches, interrupts;	/* a second */
 static struct { int pid, seen, share; unsigned long ticks; char name[16]; } programs[MAX_PROGRAMS];
 static int program_count;
+static struct ui_list list = { 8, LIST_Y, WIDTH - 16, LIST_H, 0, 0, -1 };
+static int listed[MAX_PROGRAMS];	/* the list's rows: programs, busiest first */
+static int chosen_pid, asked_pid;	/* the row selected, and the one already asked to go */
+static const char *said = "";
 /* The cores, from the machine's control words (0x87000380): a count of instructions each, then
  * how many there are and a bit a core for running and for asleep. No words: one core. */
 static const volatile unsigned *core_words;
@@ -327,6 +338,71 @@ draw_stats(void)
 	ui_text(window, 60, STATS_Y + 68, core_count > 1 ? text : "none (the machine has one core)", -1, core_count > 1 ? BLACK : UI_SHADOW, 0);
 }
 
+static const char *
+list_label(int row)
+{
+	static char text[64];
+	const int i = listed[row];
+
+	snprintf(text, sizeof text, "%-16s  process %d,  %d%%", programs[i].name, programs[i].pid, programs[i].share);
+	return text;
+}
+
+/* The programs in the list's order, the selected one still selected if it is still there. */
+static void
+list_programs(void)
+{
+	int i, k;
+
+	list.count = 0;
+	for (i = 0; i < program_count; i++) {
+		if (programs[i].pid == 1 || programs[i].pid == getpid())
+			continue;	/* (not the first program, without which there is no machine; not this one) */
+		for (k = list.count++; k > 0 && (programs[listed[k - 1]].share < programs[i].share ||
+		     (programs[listed[k - 1]].share == programs[i].share && programs[listed[k - 1]].pid < programs[i].pid)); k--)
+			listed[k] = listed[k - 1];
+		listed[k] = i;
+	}
+	list.selected = -1;
+	for (k = 0; k < list.count; k++)
+		if (programs[listed[k]].pid == chosen_pid)
+			list.selected = k;
+	if (list.selected < 0)
+		chosen_pid = 0;
+	if (list.top > list.count - LIST_ROWS)
+		list.top = list.count > LIST_ROWS ? list.count - LIST_ROWS : 0;
+}
+
+static void
+draw_list(void)
+{
+	int y = LIST_Y + LIST_H + 6;
+
+	ui_list_draw(window, &list, list_label);
+	ui_fill(window, 0, y - 2, WIDTH, 26, UI_FACE);
+	ui_button(window, 8, y, END_W, 22, chosen_pid && chosen_pid == asked_pid ? "End it now" : "End program", 0);
+	ui_text(window, END_W + 18, y + 5, said, -1, BLACK, 0);
+}
+
+/* The button: the selected program is asked to go, and made to if it is pressed again. */
+static void
+end_program(void)
+{
+	if (!chosen_pid) {
+		said = "Choose a program in the list first.";
+	} else if (chosen_pid == asked_pid) {
+		kill(chosen_pid, SIGKILL);
+		said = "Ended.";
+		asked_pid = 0;
+	} else if (kill(chosen_pid, SIGTERM) == 0) {
+		asked_pid = chosen_pid;
+		said = "Asked to end. Still there? Press again.";
+	} else {
+		said = "That one cannot be ended.";
+	}
+	draw_list();
+}
+
 static void
 draw(void)
 {
@@ -338,6 +414,7 @@ draw(void)
 		draw_plot(i);
 	}
 	draw_stats();
+	draw_list();
 }
 
 /* A second's samples taken and shown: the plots move left, the text is written again. */
@@ -392,7 +469,9 @@ main(void)
 	sample_memory();
 	sample_programs(1000);
 	window = GrNewWindowEx(GR_WM_PROPS_APPWINDOW, "Monitor", GR_ROOT_WINDOW_ID, -1, -1, WIDTH, HEIGHT, UI_FACE);
-	GrSelectEvents(window, GR_EVENT_MASK_EXPOSURE | GR_EVENT_MASK_KEY_DOWN | GR_EVENT_MASK_CLOSE_REQ);
+	GrSelectEvents(window, GR_EVENT_MASK_EXPOSURE | GR_EVENT_MASK_KEY_DOWN | GR_EVENT_MASK_CLOSE_REQ |
+		GR_EVENT_MASK_BUTTON_DOWN | GR_EVENT_MASK_MOUSE_MOTION);
+	list_programs();
 	GrMapWindow(window);
 	for (;;) {
 		long ms;
@@ -406,6 +485,21 @@ main(void)
 		}
 		if (event.type == GR_EVENT_TYPE_EXPOSURE)
 			draw();
+		/* the list: a click or the arrows choose a program, the button or Delete ends it */
+		if (event.type == GR_EVENT_TYPE_BUTTON_DOWN || event.type == GR_EVENT_TYPE_MOUSE_MOTION ||
+		    event.type == GR_EVENT_TYPE_KEY_DOWN) {
+			int changed = event.type == GR_EVENT_TYPE_KEY_DOWN ? ui_list_key(&list, event.keystroke.ch) : ui_list_event(&list, &event);
+
+			if (changed) {
+				chosen_pid = list.selected >= 0 ? programs[listed[list.selected]].pid : 0;
+				said = "";
+				draw_list();
+			}
+			if ((event.type == GR_EVENT_TYPE_BUTTON_DOWN && !ui_wheel(&event) &&
+			     ui_inside(event.button.x, event.button.y, 8, LIST_Y + LIST_H + 6, END_W, 22)) ||
+			    (event.type == GR_EVENT_TYPE_KEY_DOWN && event.keystroke.ch == MWKEY_DELETE))
+				end_program();
+		}
 		gettimeofday(&now, NULL);
 		ms = (now.tv_sec - then.tv_sec) * 1000L + (now.tv_usec - then.tv_usec) / 1000;
 		if (ms < 1000)
@@ -422,6 +516,8 @@ main(void)
 		if (ms >= 3000) {
 			sample_programs(ms);
 			looked = now;
+			list_programs();
+			draw_list();
 		}
 		draw_stats();
 	}

@@ -15,7 +15,7 @@ index 5f7f002..ed85cbe 100644
  		if(ev->buttons & GR_BUTTON_L) {
  			state->button_down = 1;
 diff --git a/src/demos/nanox/nxterm.c b/src/demos/nanox/nxterm.c
-index 91ec808..baabb30 100755
+index 91ec808..c7fd754 100755
 --- a/src/demos/nanox/nxterm.c
 +++ b/src/demos/nanox/nxterm.c
 @@ -74,13 +74,22 @@
@@ -44,7 +44,7 @@ index 91ec808..baabb30 100755
  //#define stdbackground GR_COLOR_GAINSBORO
  //#define stdbackground BLUE
  #define	LINEBUF         stdcol
-@@ -160,6 +169,131 @@ void rendition(int escvalue);
+@@ -160,6 +169,239 @@ void rendition(int escvalue);
  
  /* **************************************************************************/
  
@@ -168,6 +168,114 @@ index 91ec808..baabb30 100755
 +	GrSetGCForeground(gc1, gi.foreground);
 +}
 +
++/*
++ * The desktop's clipboard, a file every program of the desktop reads and writes
++ * (linux/apps/ui.h). Text is selected with the pointer held down, from the cell it went down
++ * on to the cell it is over, row after row as text reads, and is copied when the button is
++ * let go; the right button, Shift+Insert and Ctrl+Shift+V type the clipboard's text. What is
++ * selected is drawn dark on light from the cells kept above, and drawn plain again by the
++ * next key or the next output (its colours, if it had any, are the plain ones after that).
++ */
++#define CLIPBOARD "/tmp/clipboard"
++static int sel_on, sel_held, sel_r0, sel_c0, sel_r1, sel_c1;
++
++/* The cells row r of the window shows now, scrolled back or not; NULL for none. */
++static const char *row_cells(int r)
++{
++	int line = r - back, kept = history_count < HISTORY_ROWS ? history_count : HISTORY_ROWS;
++
++	if (line >= 0)
++		return line < CELL_ROWS ? cells[line] : NULL;
++	return -line <= kept ? history[(history_count + line) % HISTORY_ROWS] : NULL;
++}
++
++/* The selection's ends in reading order. */
++static void sel_ends(int *r0, int *c0, int *r1, int *c1)
++{
++	int forward = sel_r0 < sel_r1 || (sel_r0 == sel_r1 && sel_c0 <= sel_c1);
++
++	*r0 = forward ? sel_r0 : sel_r1, *c0 = forward ? sel_c0 : sel_c1;
++	*r1 = forward ? sel_r1 : sel_r0, *c1 = forward ? sel_c1 : sel_c0;
++}
++
++/* The selected cells drawn as selected, or as plain text again. */
++static void sel_draw(int shown)
++{
++	int r0, c0, r1, c1, r, n;
++	char text[CELL_COLS];
++
++	sel_ends(&r0, &c0, &r1, &c1);
++	for (r = r0; r <= r1; r++) {
++		const char *cellrow = row_cells(r);
++		int from = r == r0 ? c0 : 0, to = r == r1 ? c1 : col - 1;
++
++		if (!cellrow || to < from || from >= CELL_COLS)
++			continue;
++		if (to >= CELL_COLS)
++			to = CELL_COLS - 1;
++		for (n = from; n <= to; n++)
++			text[n - from] = cellrow[n] ? cellrow[n] : ' ';
++		GrSetGCForeground(gc1, shown ? stdforeground : stdbackground);
++		GrFillRect(w1, gc1, from * fonw, r * fonh, (to - from + 1) * fonw, fonh);
++		GrSetGCForeground(gc1, shown ? stdbackground : stdforeground);
++		GrSetGCBackground(gc1, shown ? stdforeground : stdbackground);
++		GrText(w1, gc1, from * fonw, r * fonh, text, to - from + 1, GR_TFTOP);
++	}
++	GrSetGCForeground(gc1, gi.foreground);
++	GrSetGCBackground(gc1, gi.background);
++}
++
++static void sel_drop(void)
++{
++	if (sel_on)
++		sel_draw(0);
++	sel_on = sel_held = 0;
++}
++
++/* The selected text to the clipboard: rows without the blanks at their ends, a newline between. */
++static void sel_copy(void)
++{
++	int r0, c0, r1, c1, r, n;
++	FILE *file = fopen(CLIPBOARD ".new", "wb");
++
++	if (!file)
++		return;
++	sel_ends(&r0, &c0, &r1, &c1);
++	for (r = r0; r <= r1; r++) {
++		const char *cellrow = row_cells(r);
++		int from = r == r0 ? c0 : 0, to = r == r1 ? c1 : col - 1;
++
++		if (to >= CELL_COLS)
++			to = CELL_COLS - 1;
++		while (cellrow && to >= from && (cellrow[to] == 0 || cellrow[to] == ' '))
++			to--;
++		for (n = from; cellrow && n <= to; n++)
++			fputc(cellrow[n] ? cellrow[n] : ' ', file);
++		if (r < r1)
++			fputc('\n', file);
++	}
++	fclose(file);
++	rename(CLIPBOARD ".new", CLIPBOARD);
++}
++
++/* The clipboard's text, typed. */
++static void clip_paste(void)
++{
++	static char text[16384];
++	FILE *file = fopen(CLIPBOARD, "rb");
++	int n, i;
++
++	if (!file)
++		return;
++	n = (int)fread(text, 1, sizeof text, file);
++	fclose(file);
++	for (i = 0; i < n; i++)
++		if (text[i] == '\n')
++			text[i] = '\r';
++	if (n > 0)
++		write(termfd, text, n);
++}
++
 +#define GrText cell_text
 +#define GrFillRect cell_fill
 +#define GrCopyArea cell_copy
@@ -176,7 +284,7 @@ index 91ec808..baabb30 100755
  void sflush(void)
  {
  	if (sbufcnt) {
-@@ -194,17 +328,19 @@ void sadd(char c)
+@@ -194,17 +436,19 @@ void sadd(char c)
  
  void show_cursor(void)
  {
@@ -197,7 +305,7 @@ index 91ec808..baabb30 100755
  		if(!curvis) {
  			curvis = 1;
  			show_cursor();
-@@ -549,28 +685,28 @@ void rendition(int escvalue) {
+@@ -549,28 +793,28 @@ void rendition(int escvalue) {
  		} else if ((escvalue>29) && (escvalue<38)){
      		switch(escvalue) {
  		    case 30:
@@ -234,7 +342,7 @@ index 91ec808..baabb30 100755
      			break;
  		    case 39:
      			GrSetGCForeground(gc1, stdforeground); //default color
-@@ -579,28 +715,28 @@ void rendition(int escvalue) {
+@@ -579,28 +823,28 @@ void rendition(int escvalue) {
  		} else if ((escvalue>39) && (escvalue<49)){
      		switch(escvalue) {
  		    case 40:
@@ -271,21 +379,69 @@ index 91ec808..baabb30 100755
      			break;
  		    case 49:
      			GrSetGCBackground(gc1, stdbackground); //default color
-@@ -1155,9 +1291,23 @@ term(void)
+@@ -1155,9 +1399,71 @@ term(void)
  			exit(0);
  			break;
  
 +		case GR_EVENT_TYPE_BUTTON_DOWN:
 +			/* the wheel looks back three rows a notch */
++			if (wevent.button.buttons & (GR_BUTTON_SCROLLUP | GR_BUTTON_SCROLLDN))
++				sel_drop();
 +			if (wevent.button.buttons & GR_BUTTON_SCROLLUP)
 +				scroll_back(3);
 +			else if (wevent.button.buttons & GR_BUTTON_SCROLLDN)
 +				scroll_back(-3);
++			else if (wevent.button.changebuttons & GR_BUTTON_R) {
++				sel_drop();
++				scroll_back(-back);
++				clip_paste();
++			} else if (wevent.button.changebuttons & GR_BUTTON_L) {
++				/* a selection begins under the pointer */
++				hide_cursor();
++				sel_drop();
++				sel_r0 = sel_r1 = wevent.button.y / fonh;
++				sel_c0 = sel_c1 = wevent.button.x / fonw;
++				sel_held = 1;
++			}
++			break;
++
++		case GR_EVENT_TYPE_MOUSE_MOTION:
++			if (sel_held && (wevent.mouse.buttons & GR_BUTTON_L)) {
++				int r = wevent.mouse.y / fonh, c = wevent.mouse.x / fonw;
++
++				r = r < 0 ? 0 : r >= row ? row - 1 : r;
++				c = c < 0 ? 0 : c >= col ? col - 1 : c;
++				if (r != sel_r1 || c != sel_c1) {
++					if (sel_on)
++						sel_draw(0);
++					sel_r1 = r, sel_c1 = c;
++					sel_on = 1;
++					sel_draw(1);
++				}
++			} else {
++				sel_held = 0;
++			}
++			break;
++
++		case GR_EVENT_TYPE_BUTTON_UP:
++			if (sel_held && sel_on)
++				sel_copy();	/* it stays shown until the next key or output */
++			sel_held = 0;
 +			break;
 +
  		case GR_EVENT_TYPE_KEY_DOWN:
  		  /* deal with special keys*/
  			kp = (GR_EVENT_KEYSTROKE *)&wevent;
++			if (kp->ch == MWKEY_LSHIFT || kp->ch == MWKEY_RSHIFT || kp->ch == MWKEY_LCTRL || kp->ch == MWKEY_RCTRL)
++				break;	/* (a modifier by itself is no key: what is selected stays) */
++			sel_drop();
++			/* Shift+Insert and Ctrl+Shift+V type the clipboard */
++			if ((kp->modifiers & MWKMOD_SHIFT) && (kp->ch == MWKEY_INSERT ||
++			    ((kp->modifiers & MWKMOD_CTRL) && (kp->ch == 'V' || kp->ch == 'v' || kp->ch == 22)))) {
++				scroll_back(-back);
++				clip_paste();
++				break;
++			}
 +			/* Shift+Page Up and Down look back; any other key returns to the present */
 +			if ((kp->modifiers & MWKMOD_SHIFT) && (kp->ch == MWKEY_PAGEUP || kp->ch == MWKEY_PAGEDOWN)) {
 +				scroll_back(kp->ch == MWKEY_PAGEUP ? row - 1 : 1 - row);
@@ -295,7 +451,7 @@ index 91ec808..baabb30 100755
  			if (kp->ch & MWKEY_NONASCII_MASK)
  				if (termtype == ANSI){
  				bufflen = do_special_key_ansi(buf,kp->ch,kp->modifiers);
-@@ -1188,6 +1338,28 @@ term(void)
+@@ -1188,6 +1494,28 @@ term(void)
  			 */
  			if (wevent.update.utype == GR_UPDATE_UNMAPTEMP)
  				hide_cursor();
@@ -324,14 +480,24 @@ index 91ec808..baabb30 100755
  			break;
  
  		case GR_EVENT_TYPE_EXPOSURE:
-@@ -1199,6 +1371,7 @@ term(void)
+@@ -1199,6 +1527,8 @@ term(void)
  
  		case GR_EVENT_TYPE_FDINPUT:
  			if (!gotexpose) break;	/* wait until mapped before reading */
++			sel_drop();
 +			scroll_back(-back);
  			hide_cursor();
  			if ((in = read(termfd, buf, sizeof(buf))) > 0) {
  				for (l=0; l<in; l++) {
+@@ -1683,7 +2013,7 @@ int main(int argc, char **argv)
+     w1 = GrNewWindowEx(GR_WM_PROPS_APPWINDOW, TITLE, GR_ROOT_WINDOW_ID, -1,-1,winw,winh,
+ 		stdbackground);
+ 
+-    GrSelectEvents(w1, GR_EVENT_MASK_BUTTON_DOWN | GR_EVENT_MASK_EXPOSURE |
++    GrSelectEvents(w1, GR_EVENT_MASK_BUTTON_DOWN | GR_EVENT_MASK_BUTTON_UP | GR_EVENT_MASK_MOUSE_MOTION | GR_EVENT_MASK_EXPOSURE |
+ 		   GR_EVENT_MASK_KEY_DOWN | 
+ 		   GR_EVENT_MASK_FOCUS_IN | GR_EVENT_MASK_FOCUS_OUT |
+ 		   GR_EVENT_MASK_UPDATE | GR_EVENT_MASK_CLOSE_REQ);
 diff --git a/src/engine/devdraw.c b/src/engine/devdraw.c
 index c389e46..b528bb5 100644
 --- a/src/engine/devdraw.c

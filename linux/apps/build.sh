@@ -18,6 +18,10 @@ for p in nxedit nxfiles nxpaint nxview nxsettings nxmon nxweb nxkey; do
 done
 # the Start menu lists what the nxapps.* files name (linux/nanox/nxbar.c)
 printf '%s\n' "Utilities/Editor=nxedit" "Utilities/Files=nxfiles" "Utilities/Paint=nxpaint" "Other/Web=nxweb" "Utilities/Monitor=nxmon" "Utilities/Settings=nxsettings" > "$OUT/share/nxapps.20-apps"
+# the Start menu's last folder: the desktop over again, and the machine stopped
+printf '%s\n' "System/Restart the desktop=setsid nx restart" "System/Shut down=setsid nxoff" > "$OUT/share/nxapps.90-system"
+cp "$HERE/nxoff" "$OUT/bin/nxoff"
+chmod +x "$OUT/bin/nxoff"
 # the browser's pages: its home lists the sites of web/sites.txt (the VRChat world can ask for
 # no others, so its builder reads the same file)
 # (all in /usr/share: the image builder adds files to folders the ROM has, and makes none)

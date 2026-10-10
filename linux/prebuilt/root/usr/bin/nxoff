@@ -1,0 +1,13 @@
+#!/bin/sh
+# Shut down: the desktop's programs are asked to go, then the window system, what was written
+# is put where it is kept, and Linux stops. (The machine has no switch a program can reach:
+# it stands still until it is switched off where it is shown.)
+killall nxbar nxterm 2>/dev/null
+sleep 1
+killall nano-X 2>/dev/null
+n=0
+while pidof nano-X >/dev/null && [ $n -lt 5 ]; do sleep 1; n=$((n + 1)); done
+killall -9 nano-X 2>/dev/null
+sync
+echo "The machine has stopped: it can be switched off." > /dev/console
+exec poweroff -f
