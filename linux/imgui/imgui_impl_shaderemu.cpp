@@ -125,24 +125,52 @@ bool ImGui_ImplShaderEmu_NewFrame()
 // A corner as ImGui has it (ImDrawVert's layout).
 struct corner { float x, y, u, v; ImU32 colour; };
 
-static ImU32 known;      // the colour written last, and
-static float shade[4];   // the device's four numbers for it: most vertices repeat the last one's
+// A vertex goes to the GPU as four words (docs/gpu.md, a tagged vertex): ImGui's x and y as
+// the floats they are, 0, and the texture coordinates in 1,024ths with a tag, which is the
+// number of the vertex's colour in a table of the colours the frame has used. A sixteenth of
+// a kilobyte a quad where the device's whole vertices were six times that: on this machine it
+// is the stores that cost (docs/imgui.md).
+static ImU32* table;                    // the table being filled: 256 words in the frame
+static int colours;                     // how many it has
+static ImU32 known, known_tag;          // the colour looked up last, and its tag
+static ImU32 slot_colour[256];          // the table's colours by a hash of them
+static unsigned char slot_tag[256], slot_used[256];
 
-// Sixteen numbers a vertex: position, an unused four, texture coordinates, colour. The first
-// two pairs are ImGui's floats as they are, so they go over as words.
-static inline ImU32* put(ImU32* to, const ImU32* from)
+static bool new_table()
 {
-    if (from[4] != known) {
-        known = from[4];
-        for (int k = 0; k < 4; k++) shade[k] = (float)(known >> (8 * k) & 255) * (1.0f / 255);
-    }
-    const ImU32* tint = (const ImU32*)shade;
-    to[0] = from[0], to[1] = from[1], to[2] = 0;
-    to[8] = from[2], to[9] = from[3];
-    to[12] = tint[0], to[13] = tint[1], to[14] = tint[2], to[15] = tint[3];
-    return to + 16;
+    table = (ImU32*)seglScreenTable();
+    colours = 0;
+    known = known_tag = 0;
+    memset(slot_used, 0, sizeof slot_used);
+    return table != nullptr;
 }
-static inline ImU32* put(ImU32* to, const corner& c) { return put(to, (const ImU32*)&c); }
+
+// The tag of a colour, or -1 when the table is full.
+static inline int tag_of(ImU32 colour)
+{
+    if (colours && colour == known) return (int)known_tag;
+    unsigned at = (colour * 2654435761u) >> 24;
+    while (slot_used[at] && slot_colour[at] != colour) at = (at + 1) & 255;
+    if (!slot_used[at]) {
+        if (colours == 256) return -1;
+        slot_used[at] = 1;
+        slot_colour[at] = colour;
+        slot_tag[at] = (unsigned char)colours;
+        // ImGui's is alpha, blue, green, red from the top; the device's transparency, red, green, blue
+        table[colours++] = (255 - (colour >> 24)) << 24 | (colour & 255) << 16 | (colour & 0xff00) | (colour >> 16 & 255);
+    }
+    known = colour;
+    known_tag = slot_tag[at];
+    return (int)known_tag;
+}
+
+static inline ImU32* put(ImU32* to, const ImU32* from, ImU32 tag)
+{
+    const float* f = (const float*)from;
+    to[0] = from[0], to[1] = from[1], to[2] = 0;
+    to[3] = (ImU32)(int)(f[2] * 1024.0f + 0.5f) | (ImU32)(int)(f[3] * 1024.0f + 0.5f) << 12 | tag << 24;
+    return to + 4;
+}
 
 static corner between(const corner& a, const corner& b, float t)
 {
@@ -181,8 +209,10 @@ static inline float least(float a, float b, float c)
 void ImGui_ImplShaderEmu_RenderDrawData(ImDrawData* draw_data)
 {
     GLsizei room = 0, used = 0;
-    ImU32* to = (ImU32*)seglScreenSpace(&room);
+    int quads = 0;      // the run being written: four corners a quad, or three a triangle
     static_assert(sizeof(ImDrawVert) == sizeof(corner), "a corner is an ImDrawVert");
+    if (!new_table()) return;
+    ImU32* to = (ImU32*)seglScreenCompactSpace(&room);
     for (int n = 0; n < draw_data->CmdListsCount && to; n++) {
         const ImDrawList* list = draw_data->CmdLists[n];
         const ImDrawVert* vertices = list->VtxBuffer.Data;
@@ -194,32 +224,82 @@ void ImGui_ImplShaderEmu_RenderDrawData(ImDrawData* draw_data)
             const ImVec4 clip = cmd.ClipRect;
             const ImDrawIdx* index = list->IdxBuffer.Data + cmd.IdxOffset;
             const ImDrawVert* base = vertices + cmd.VtxOffset;
-            for (unsigned i = 0; i + 2 < cmd.ElemCount && used + 21 <= room; i += 3) {
+            const GLuint name = (GLuint)cmd.TextureId;
+            // what is written so far becomes a command of the device's, and there is room again
+            auto flush = [&](int next_quads) {
+                seglScreenCompactUsed(used, quads, name, (const unsigned int*)table);
+                used = 0;
+                quads = next_quads;
+                to = (ImU32*)seglScreenCompactSpace(&room);
+            };
+            auto full_table = [&]() {
+                flush(quads);
+                if (!new_table()) return false;
+                to = (ImU32*)seglScreenCompactSpace(&room);
+                return true;
+            };
+            for (unsigned i = 0; i + 2 < cmd.ElemCount && used + 24 <= room;) {
                 const corner *p = (const corner*)&base[index[i]], *q = (const corner*)&base[index[i + 1]],
                              *r = (const corner*)&base[index[i + 2]];
                 // the triangle's box against the clip rectangle: nearly every one is all inside
                 float x0 = least(p->x, q->x, r->x), x1 = -least(-p->x, -q->x, -r->x);
                 float y0 = least(p->y, q->y, r->y), y1 = -least(-p->y, -q->y, -r->y);
+                // two triangles on corners 0 1 2 and 0 2 3, as ImGui makes its rectangles and letters: a quad
+                if (i + 5 < cmd.ElemCount && index[i + 3] == index[i] && index[i + 4] == index[i + 2]) {
+                    const corner* s4 = (const corner*)&base[index[i + 5]];
+                    float qx0 = x0 < s4->x ? x0 : s4->x, qx1 = x1 > s4->x ? x1 : s4->x;
+                    float qy0 = y0 < s4->y ? y0 : s4->y, qy1 = y1 > s4->y ? y1 : s4->y;
+                    if (qx0 >= clip.x && qx1 <= clip.z && qy0 >= clip.y && qy1 <= clip.w) {
+                        int a = tag_of(p->colour), b = tag_of(q->colour), c = tag_of(r->colour), d = tag_of(s4->colour);
+                        if ((a | b | c | d) < 0) {
+                            if (!full_table()) return;
+                            continue;   // (the same quad again, with the new table)
+                        }
+                        if (!quads) flush(1);
+                        to = put(put(put(put(to, (const ImU32*)p, a), (const ImU32*)q, b), (const ImU32*)r, c), (const ImU32*)s4, d);
+                        used += 4;
+                        i += 6;
+                        continue;
+                    }
+                    if (!(qx1 >= clip.x && qx0 <= clip.z && qy1 >= clip.y && qy0 <= clip.w)) {
+                        i += 6;
+                        continue;
+                    }
+                    // (crossing an edge: its two triangles, one by one)
+                }
                 if (x0 >= clip.x && x1 <= clip.z && y0 >= clip.y && y1 <= clip.w) {
-                    to = put(put(put(to, *p), *q), *r);
+                    int a = tag_of(p->colour), b = tag_of(q->colour), c = tag_of(r->colour);
+                    if ((a | b | c) < 0) {
+                        if (!full_table()) return;
+                        continue;
+                    }
+                    if (quads) flush(0);
+                    to = put(put(put(to, (const ImU32*)p, a), (const ImU32*)q, b), (const ImU32*)r, c);
                     used += 3;
                 } else if (x1 >= clip.x && x0 <= clip.z && y1 >= clip.y && y0 <= clip.w) {
                     // cut by each edge in turn: up to seven corners, drawn as a fan
                     corner tri[3] = {*p, *q, *r}, a[8], b[8];
-                    int count = cut(tri, 3, a, false, true, clip.x);
+                    int count = cut(tri, 3, a, false, true, clip.x), tags[8];
+                    bool fits = true;
                     count = cut(a, count, b, false, false, clip.z);
                     count = cut(b, count, a, true, true, clip.y);
                     count = cut(a, count, b, true, false, clip.w);
+                    for (int k = 0; k < count; k++) fits &= (tags[k] = tag_of(b[k].colour)) >= 0;
+                    if (!fits) {
+                        if (!full_table()) return;
+                        continue;
+                    }
+                    if (quads) flush(0);
                     for (int k = 1; k + 1 < count; k++) {
-                        to = put(put(put(to, b[0]), b[k]), b[k + 1]);
+                        to = put(put(put(to, (const ImU32*)&b[0], tags[0]), (const ImU32*)&b[k], tags[k]), (const ImU32*)&b[k + 1], tags[k + 1]);
                         used += 3;
                     }
                 }
+                i += 3;
             }
             // a command of the device's for every one of ImGui's that drew: each has one texture
-            seglScreenUsed(used, (GLuint)cmd.TextureId);
-            if (used) to = (ImU32*)seglScreenSpace(&room);
-            used = 0;
+            flush(quads);
+            to = (ImU32*)seglScreenCompactSpace(&room);
         }
     }
 }

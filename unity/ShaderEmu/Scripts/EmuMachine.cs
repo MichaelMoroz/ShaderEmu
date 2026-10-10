@@ -1203,7 +1203,8 @@ public class EmuMachine : UdonSharpBehaviour
             uint now = c < 16 ? Word(64 + 0x38 + c / 4, c % 4) : Word(CoresMore + (c - 16) / 4, c % 4);
             if (haveWorkerClock)
             {
-                uint more = now - workerClock[c];
+                // (a geometry laid out anew starts the counts again: one that went down is all new)
+                uint more = now < workerClock[c] ? now : now - workerClock[c];
                 workerInstructions += more;
                 totalWorkerInstructions += more;
             }

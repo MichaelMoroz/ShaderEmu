@@ -122,6 +122,15 @@ unsigned int seglAddress(const void* memory);
 // 12-15. Room for vertices, and in *room how many fit; then how many were written of them.
 void* seglScreenSpace(GLsizei* room);
 void seglScreenUsed(GLsizei count, GLuint name);   // (a multiple of three; a texture of words, or 0)
+// The same in a quarter of the memory, as tagged vertices with a table (docs/gpu.md): a vertex
+// is four words, x and y in pixels (the library's numbers), 0, and u | v << 12 | tag << 24 in
+// 1,024ths of the texture; its colour is the table's word for its tag, transparency << 24 |
+// red << 16 | green << 8 | blue. seglScreenTable() gives a table of 256 words in the frame
+// (NULL: no room); then room and what was written, as above, `quads` for four corners a quad
+// (drawn as corners 0 1 2 and 0 2 3) in place of three a triangle.
+unsigned int* seglScreenTable(void);
+unsigned int* seglScreenCompactSpace(GLsizei* room);
+void seglScreenCompactUsed(GLsizei count, int quads, GLuint name, const unsigned int* table);
 
 // Forgets what was drawn since the last swap. seglSwapAgain() has the list of the last swap
 // drawn once more, as its memory (textures, commands, vertices) is now.

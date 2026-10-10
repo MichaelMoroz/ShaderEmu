@@ -644,9 +644,29 @@ other:
 | `0x876b8280 + 4 (k - 16)` | core k's instructions so far, k from 16 to 63 (`MC_STATS_MORE`: the network's row, after the guest's window) |
 | `0x876b8340`, `0x876b8344` | the two words of bits for cores 32 to 63: runs, asleep |
 
-`nxmon` reads them: the workers' instructions a second are stacked on the processor's plot
-and each worker has a figure, or "asleep", "parked" or "idle", in the line under the busiest
-programs. The harness adds them up from the rows it reads back anyway: with `--cores` its
+`nxmon` reads them: the workers' instructions a second, all 63 of them, are stacked on the
+processor's plot, and the line under the busiest programs says how many work, sleep, are
+idle and are parked, and what the busiest runs (`NXMON_PRINT=1 nxmon` prints that line at
+every sample, for a test). Its plots are the workers' own work, as a graphics card's pixel
+shader would do them: it keeps eight workers while it runs, and some sixteen times a second
+each writes some rows of the plots from the samples (`shade` in `nxmon.c`) straight into
+the window's own buffer in GPU memory, mapped through `/dev/gpu` (`GrGetWindowInfo` says
+where it is). The display shows that buffer as it is, so the plots slide between samples
+and no drawing request is made for them. A busy core 0 loses 3% to it (3.23M to 3.14M
+instructions a second). Sent through the window system instead (`GrArea`, 207 KB a second)
+the same picture cost core 0 1.5M instructions a second. What stands in the way of more
+of this: the window system draws by taking the whole buffer to the GPU and copying it back
+(`docs/nanox.md`), which undoes what a worker wrote meanwhile; the monitor asks for
+something with an answer after each of its own drawing requests and only then posts a
+frame. `NXMON_CHECK=1` shades every frame again on core 0 and must print `0 of 51840
+pixels differ`; `NXMON_WORKERS=0` leaves the workers alone (core 0 then shades the newest
+columns once a second). The monitor's workers are only lent to it (`mcw_lend()` before
+`mcw_open()`; the kernel's `SHADEREMU_GPU_LENT`): when another program asks for workers
+that are not free, or for another geometry, the kernel counts it in the mailbox page
+(`0x86c00f20`) and keeps that program waiting, half a second at most; the monitor sees the
+count (`mcw_asked()`), closes its workers and shades on core 0, and takes workers again
+when some have been nobody's for five seconds. So a path tracer started beside the
+monitor has all 63. The harness adds them up from the rows it reads back anyway: its
 `STATS` and closing lines say what the workers ran and the rate of all cores together.
 
 ## In Unity

@@ -186,6 +186,16 @@ int mcw_shape(const unsigned char *bits, int workers)
 	return (int)answer;
 }
 
+static int lent;
+static uint32_t asked_then;
+
+void mcw_lend(void) { lent = 1; }
+
+int mcw_asked(void)
+{
+	return page && lent && *(volatile uint32_t *)(page + MC_ASKED_AT) != asked_then;
+}
+
 int mcw_open(int limit)
 {
 	uint32_t claim[4], own_tp, i;
@@ -199,6 +209,7 @@ int mcw_open(int limit)
 	 * the kernel parks them when the program ends */
 	claim[0] = (uint32_t)limit;
 	claim[1] = claim[2] = claim[3] = 0;
+	if (lent) call6(29, fd, MC_LENT, 0, 0, 0, 0);
 	if (call6(29, fd, MC_WORKERS_ALL, (long)claim, 0, 0, 0) != 0) {
 		/* a kernel from before machines of more than 16 cores: { how many, the cores, the root } */
 		uint32_t old[3] = {(uint32_t)limit, 0, 0};
@@ -211,8 +222,12 @@ int mcw_open(int limit)
 	for (k = 1; k < MC_MAX_CORES; k++)
 		if (claim[2 + k / 32] >> (k % 32) & 1) core_of[++got] = k;
 	if (!(page = map(MC_PAGE_SIZE, fd, MC_PAGE_GPU_OFFSET))) goto none;
-	if (!(stacks = map((long)got * STACK_BYTES, -1, 0))) goto none;
-	stack_count = got;
+	asked_then = *(volatile uint32_t *)(page + MC_ASKED_AT);
+	/* (the stacks of an earlier open serve again when they are enough) */
+	if (stack_count < got) {
+		if (!(stacks = map((long)got * STACK_BYTES, -1, 0))) goto none;
+		stack_count = got;
+	}
 	/* the stacks' pages there before a worker steps on one */
 	for (i = 0; i < (uint32_t)got * STACK_BYTES; i += 4096) stacks[i] = 0;
 	__asm__ volatile("mv %0, tp" : "=r"(own_tp));
@@ -245,7 +260,8 @@ int mcw_open(int limit)
 	mc_next_pass();
 	if (count) return count;
 none:
-	if (stacks) call6(215, (long)stacks, (long)got * STACK_BYTES, 0, 0, 0, 0);
+	if (stacks) call6(215, (long)stacks, (long)stack_count * STACK_BYTES, 0, 0, 0, 0);
+	stack_count = 0;
 	if (page) call6(215, (long)page, MC_PAGE_SIZE, 0, 0, 0, 0);
 	call6(57, device, 0, 0, 0, 0, 0);	/* and the kernel has the cores back */
 	device = -1;

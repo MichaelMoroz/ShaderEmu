@@ -21,8 +21,9 @@ extern "C" {
 extern char __DATA_BEGIN__[], _end[];
 }
 
-#define MOST_W 320
-#define MOST_H 240
+#define MOST_W 640
+#define MOST_H 480
+#define SIZES 6
 
 static unsigned now_ms()
 {
@@ -104,8 +105,8 @@ int main()
     atexit(mcw_close);
 
     // the panel's settings
-    static const int sizes[3][2] = {{160, 120}, {240, 180}, {320, 240}};
-    static const char* const size_names[] = {"160 x 120", "240 x 180", "320 x 240"};
+    static const int sizes[SIZES][2] = {{160, 120}, {240, 180}, {320, 240}, {400, 300}, {480, 360}, {640, 480}};
+    static const char* const size_names[] = {"160 x 120", "240 x 180", "320 x 240", "400 x 300", "480 x 360", "640 x 480"};
     static const char* const materials[] = {"matt", "mirror", "glass"};
     int size = 0, samples = 16, bounces = 5, layout = 0, ball[2] = {PT_MIRROR, PT_GLASS};
     float light = 12.0f;
@@ -115,7 +116,7 @@ int main()
     if ((text = getenv("NXPATH_BOUNCES")) != nullptr) bounces = atoi(text);
     if ((text = getenv("NXPATH_CORES")) != nullptr) layout = atoi(text) & 3;
     if ((text = getenv("NXPATH_SIZE")) != nullptr)
-        for (int i = 0; i < 3; i++)
+        for (int i = 0; i < SIZES; i++)
             if (atoi(text) == sizes[i][0]) size = i;
 
     // the picture being traced
@@ -179,7 +180,7 @@ int main()
         ImGui::TextWrapped("A Cornell box, traced by every worker core of the machine.");
         ImGui::Separator();
         ImGui::BeginDisabled(tracing);
-        ImGui::Combo("picture", &size, size_names, 3);
+        ImGui::Combo("picture", &size, size_names, SIZES);
         ImGui::SliderInt("samples", &samples, 1, 256, "%d a pixel", ImGuiSliderFlags_Logarithmic);
         ImGui::SliderInt("turns", &bounces, 1, 8, "%d of a path");
         ImGui::SliderFloat("lamp", &light, 2.0f, 30.0f, "%.0f");
@@ -212,10 +213,10 @@ int main()
         ImGui::SetNextWindowSize(ImVec2(486, 500), ImGuiCond_FirstUseEver);
         ImGui::Begin("Picture");
         {
-            // as large as fits
+            // as large as fits: whole pixels when there is room for more than one, smaller when not for one
             ImVec2 room = ImGui::GetContentRegionAvail();
             float by = room.x / (float)shown_w < room.y / (float)shown_h ? room.x / (float)shown_w : room.y / (float)shown_h;
-            if (by < 1.0f) by = 1.0f;
+            if (by >= 1.0f) by = (float)(int)by;
             if (pictures || tracing) ImGui::Image((ImTextureID)(intptr_t)texture, ImVec2((float)shown_w * by, (float)shown_h * by));
             else ImGui::TextUnformatted("Render traces it.");
         }

@@ -49,6 +49,13 @@ int mcw_rows(int bits);
 int mcw_fit(int bits);
 /* Starts up to `limit` workers; how many there are. */
 int mcw_open(int limit);
+/*
+ * For a program that can do without (a monitor that draws with them): called before
+ * mcw_open(), the workers it gets are only lent. mcw_asked() says when another program is
+ * waiting for them, half a second at most: mcw_close() then, and that program has them.
+ */
+void mcw_lend(void);
+int mcw_asked(void);
 int mcw_count(void);
 /* Parks them and gives them up. A program calls it before it leaves (atexit will do). */
 void mcw_close(void);

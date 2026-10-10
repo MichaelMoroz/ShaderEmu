@@ -1,9 +1,14 @@
 /* nxmon: a system monitor. Three plots of the last two minutes, a sample a second: how fast
  * the emulated processor runs (its cycle counter counts instructions; the worker cores'
  * share on top, docs/multicore.md), how busy Linux is, and the memory in use; under them
- * the load, the processes, the busiest programs and what each worker core is doing; and a list
+ * the load, the processes, the busiest programs and what the worker cores are doing; and a list
  * of the programs, busiest first, with a button that ends the selected one (asked to go the
- * first time, made to the second). */
+ * first time, made to the second).
+ * The plots are pixels the worker cores shade, as a graphics card's pixel shader would
+ * (docs/multicore.md): some fifteen times a second each of eight workers writes some rows of
+ * them from the samples, straight into the window's own buffer in GPU memory, which the
+ * display shows as it is. So the plots slide, and no drawing request is made for them. With
+ * no workers to be had, this core shades the newest sample's columns once a second. */
 #include <dirent.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -11,6 +16,7 @@
 #include <sys/sysinfo.h>
 #include <sys/time.h>
 #include "ui.h"
+#include "mcw.h"
 
 #define HISTORY 120
 #define STEP 3			/* pixels a sample */
@@ -24,7 +30,7 @@
 #define LIST_H (LIST_ROWS * UI_ROW + 4)
 #define END_W 110
 #define HEIGHT (LIST_Y + LIST_H + 34)
-#define MAX_CORES 16
+#define MAX_CORES 64
 #define MAX_PROGRAMS 48
 #define BUSIEST 3
 
@@ -36,7 +42,10 @@
 #define FILES_COLOUR MWRGB(240, 220, 90)
 
 /* A plot: two values a sample, the second stacked on the first, `top` at the plot's top. */
-struct plot { unsigned low[HISTORY], high[HISTORY], top; GR_COLOR low_colour, high_colour; };
+struct plot {
+	unsigned low[HISTORY], high[HISTORY], top; GR_COLOR low_colour, high_colour;
+	unsigned short low_px[HISTORY], high_px[HISTORY];	/* the same as heights, in 256ths of a pixel */
+};
 enum { SPEED, BUSY, MEMORY, PLOTS };
 static struct plot plots[PLOTS] = {
 	{ {0}, {0}, 1000000, SPEED_COLOUR, WORKER_COLOUR },
@@ -45,6 +54,23 @@ static struct plot plots[PLOTS] = {
 };
 
 static GR_WINDOW_ID window;
+/* The plots are in the window's own buffer (docs/nanox.md: every window has one in GPU memory,
+ * which GrGetWindowInfo locates). Workers given different rows of it never store to the same
+ * 16 bytes: a row is far longer than that. */
+#define SHADERS 8
+#define ROWS (PLOTS * PLOT_H)
+#define FRAME_MS 60
+static int gpu = -1;
+static uint32_t *surface;	/* the window's first pixel; 0 until it is known */
+static int surface_row;		/* pixels from one row of it to the next */
+static uint32_t *checked;
+static const uint32_t shades[PLOTS][2] = { {0x50dc64, 0x3cc8dc}, {0xf09628, 0x5a96ff}, {0xc86ee6, 0xf0dc5a} };
+static int workers;		/* lent to this program: another that asks has them (mcw_asked) */
+static int wait_samples;	/* without them: samples to go before they are asked for again */
+static int shading, shade_shift;	/* they are at a frame; how far between two samples it is, in 256ths */
+static int whole = 1;		/* without workers: the plots have to be shaded whole */
+static int no_workers, check, print;
+static unsigned frames_shaded;
 static long memory_total, memory_used, memory_files, memory_cached;	/* kB */
 static long switches, interrupts;	/* a second */
 static struct { int pid, seen, share; unsigned long ticks; char name[16]; } programs[MAX_PROGRAMS];
@@ -54,9 +80,11 @@ static int listed[MAX_PROGRAMS];	/* the list's rows: programs, busiest first */
 static int chosen_pid, asked_pid;	/* the row selected, and the one already asked to go */
 static const char *said = "";
 /* The cores, from the machine's control words (0x87000380): a count of instructions each, then
- * how many there are and a bit a core for running and for asleep. No words: one core. */
-static const volatile unsigned *core_words;
-static unsigned core_count = 1, core_before[MAX_CORES], core_rate[MAX_CORES], cores_running, cores_asleep;
+ * how many there are and a bit a core for running and for asleep; cores 16 and up have
+ * theirs in the network's row (0x876b8280, docs/multicore.md). No words: one core. */
+static const volatile unsigned *core_words, *core_more;
+static unsigned core_count = 1, core_before[MAX_CORES], core_rate[MAX_CORES];
+static unsigned cores_working, cores_idle, cores_asleep, core_busiest;
 
 /* The processor's count of instructions run (its low 32 bits; it wraps every few minutes). */
 static unsigned
@@ -119,7 +147,8 @@ sample_linux(long ms)
 	before_interrupts = now_interrupts;
 }
 
-/* What each worker core ran since the last sample, a second's worth; the sum of them. */
+/* What each worker core ran since the last sample, a second's worth; the sum of them, and
+ * how many of them work (10,000 instructions a second or more), wait or sleep. */
 static unsigned
 sample_cores(long ms)
 {
@@ -128,13 +157,26 @@ sample_cores(long ms)
 	if (!core_words)
 		return 0;
 	core_count = core_words[0x3c0 / 4] < 1 ? 1 : core_words[0x3c0 / 4] > MAX_CORES ? MAX_CORES : core_words[0x3c0 / 4];
-	cores_running = core_words[0x3c4 / 4];
-	cores_asleep = core_words[0x3c8 / 4];
+	if (core_count > 16 && !core_more)
+		core_count = 16;
+	cores_working = cores_idle = cores_asleep = core_busiest = 0;
 	for (c = 1; c < core_count; c++) {
-		now = core_words[0x380 / 4 + c];
-		core_rate[c] = (unsigned)((unsigned long long)(now - core_before[c]) * 1000 / ms);
+		unsigned runs = c < 32 ? core_words[0x3c4 / 4] >> c : core_more[0x340 / 4] >> (c - 32);
+		unsigned sleeps = c < 32 ? core_words[0x3c8 / 4] >> c : core_more[0x344 / 4] >> (c - 32);
+
+		now = c < 16 ? core_words[0x380 / 4 + c] : core_more[0x280 / 4 + c - 16];
+		/* (a geometry laid out anew starts the counts again: one that went down is all new) */
+		core_rate[c] = (unsigned)((unsigned long long)(now < core_before[c] ? now : now - core_before[c]) * 1000 / ms);
 		core_before[c] = now;
 		sum += core_rate[c];
+		if (core_rate[c] > core_busiest)
+			core_busiest = core_rate[c];
+		if (core_rate[c] >= 10000)
+			cores_working++;
+		else if (sleeps & 1)
+			cores_asleep++;
+		else if (runs & 1)
+			cores_idle++;
 	}
 	return sum;
 }
@@ -208,41 +250,224 @@ plot_y(int which)
 	return which * BLOCK + 22;
 }
 
-/* One sample's column: the first value from the bottom, the second on top of it. */
+/* Sample i's two values as heights: the first from the bottom, the second on top of it. */
 static void
-draw_column(int which, int i)
+scale_sample(int which, int i)
 {
 	struct plot *p = &plots[which];
-	int x = 9 + i * STEP, bottom = plot_y(which) + 1 + PLOT_H;
-	int low = (int)((unsigned long long)p->low[i] * PLOT_H / p->top), high = (int)((unsigned long long)p->high[i] * PLOT_H / p->top);
+	unsigned low = (unsigned)((unsigned long long)p->low[i] * (PLOT_H * 256) / p->top);
+	unsigned high = (unsigned)((unsigned long long)p->high[i] * (PLOT_H * 256) / p->top);
 
-	low = low > PLOT_H ? PLOT_H : low;
-	high = low + high > PLOT_H ? PLOT_H - low : high;
-	if (low)
-		ui_fill(window, x, bottom - low, STEP - 1, low, p->low_colour);
-	if (high)
-		ui_fill(window, x, bottom - low - high, STEP - 1, high, p->high_colour);
+	low = low > PLOT_H * 256 ? PLOT_H * 256 : low;
+	high = low + high > PLOT_H * 256 ? PLOT_H * 256 - low : high;
+	p->low_px[i] = (unsigned short)low;
+	p->high_px[i] = (unsigned short)high;
 }
 
-static void
-draw_plot(int which)
+/* Colour b over colour a, k 256ths of it. */
+static uint32_t
+blend(uint32_t a, uint32_t b, unsigned k)
 {
-	int i;
+	uint32_t rb = ((a & 0xff00ff) * (256 - k) + (b & 0xff00ff) * k) >> 8 & 0xff00ff;
+	uint32_t g = ((a & 0x00ff00) * (256 - k) + (b & 0x00ff00) * k) >> 8 & 0x00ff00;
 
-	ui_fill(window, 8, plot_y(which), PLOT_W + 2, PLOT_H + 2, BLACK);
-	for (i = 0; i < HISTORY; i++)
-		draw_column(which, i);
+	return 0xff000000u | rb | g;
 }
 
-/* A plot moved a sample to the left with the newest drawn in the room made. */
-static void
-scroll_plot(int which)
+/* Where a plot's first pixel is in the window's buffer. */
+static uint32_t *
+plot_at(int which)
 {
-	int y = plot_y(which) + 1;
+	return surface + (plot_y(which) + 1) * surface_row + 9;
+}
 
-	GrCopyArea(window, ui_gc, 9, y, PLOT_W - STEP, PLOT_H, window, 9 + STEP, y, MWROP_COPY);
-	ui_fill(window, 9 + PLOT_W - STEP, y, STEP, PLOT_H, BLACK);
-	draw_column(which, HISTORY - 1);
+/* The pixel shader: a rectangle of one plot from its samples, into rows `stride` pixels apart.
+ * The heights run straight from one sample to the next, the plot `shift` 256ths of the way
+ * from the last sample to the one before it sliding in; the edge of an area covers its last
+ * pixel in part, the areas are brighter towards the top, and behind them are lines. */
+static void
+shade(int which, int x0, int x1, int y0, int y1, int shift, uint32_t *to, int stride)
+{
+	const struct plot *p = &plots[which];
+	unsigned short low_at[PLOT_W], all_at[PLOT_W];
+	int x, y;
+
+	for (x = x0; x < x1; x++) {
+		int u = (x + 1) * 256 / STEP + shift - 512, i, f;
+
+		u = u < 0 ? 0 : u > (HISTORY - 1) * 256 ? (HISTORY - 1) * 256 : u;
+		i = u >> 8;
+		f = u & 255;
+		if (i > HISTORY - 2) {
+			i = HISTORY - 2;
+			f = 256;
+		}
+		low_at[x] = (unsigned short)((p->low_px[i] * (256 - f) + p->low_px[i + 1] * f) >> 8);
+		all_at[x] = (unsigned short)(low_at[x] + ((p->high_px[i] * (256 - f) + p->high_px[i + 1] * f) >> 8));
+	}
+	for (y = y0; y < y1; y++) {
+		uint32_t *row = to + y * stride;
+		int base = (PLOT_H - 1 - y) * 256;
+		unsigned light = 150 + 105 * (PLOT_H - y) / PLOT_H;
+		uint32_t low = blend(0, shades[which][0], light), high = blend(0, shades[which][1], light);
+		uint32_t behind = y % 12 == 11 ? 0xff242424u : 0xff000000u;
+
+		for (x = x0; x < x1; x++) {
+			int below = low_at[x] - base, under = all_at[x] - base;
+			uint32_t c = behind;
+
+			if (under >= 256)
+				c = high;
+			else if (under > 0)
+				c = blend(c, high, (unsigned)under);
+			if (below >= 256)
+				c = low;
+			else if (below > 0)
+				c = blend(c, low, (unsigned)below);
+			row[x] = c;
+		}
+	}
+}
+
+/* A worker's job: rows `first` up to `last` (two bytes of `rows`) of the three plots. */
+static uint32_t
+shade_rows(uint32_t rows, uint32_t shift)
+{
+	uint32_t r = rows & 255, last = rows >> 8;
+
+	while (r < last) {
+		uint32_t which = r / PLOT_H, end = (which + 1) * PLOT_H < last ? (which + 1) * PLOT_H : last;
+
+		shade((int)which, 0, PLOT_W, (int)(r % PLOT_H), (int)(end - which * PLOT_H), (int)shift, plot_at((int)which), surface_row);
+		r = end;
+	}
+	return last - (rows & 255);
+}
+
+/* Finds the window's buffer and maps it, and takes the workers: once the window is there. */
+static void
+locate(void)
+{
+	GR_WINDOW_INFO info;
+	uint32_t offset, bytes;
+	void *memory;
+
+	if (surface || gpu < 0)
+		return;
+	GrGetWindowInfo(window, &info);
+	if (!info.surface_address)
+		return;
+	surface_row = info.surface_row ? (int)info.surface_row : (int)info.width;
+	offset = info.surface_address - 0x86000000u;
+	bytes = (offset & 4095) + (uint32_t)surface_row * STATS_Y * 4;
+	memory = mmap(NULL, bytes, PROT_READ | PROT_WRITE, MAP_SHARED, gpu, offset & ~4095u);
+	if (memory == MAP_FAILED)
+		return;
+	surface = (uint32_t *)((char *)memory + (offset & 4095));
+	mcw_touch(memory, bytes);
+	mcw_lend();
+	workers = no_workers ? 0 : mcw_open(SHADERS);
+}
+
+/* Another program is waiting for the workers: it has them, and this core shades meanwhile. */
+static void
+give_workers(void)
+{
+	int k;
+
+	for (k = 1; k <= workers; k++)
+		mcw_wait(k);	/* (a frame they are at is finished first) */
+	mcw_close();
+	workers = shading = 0;
+	whole = 1;
+	wait_samples = 5;
+	if (print)
+		puts("nxmon: the workers are given to a program that asked");
+}
+
+/* Without workers, at a sample: they are taken again once some have been nobody's for a while. */
+static void
+take_workers(void)
+{
+	unsigned nobodys = core_count - 1 - cores_working - cores_asleep - cores_idle;
+
+	if (no_workers || !surface)
+		return;
+	if (!nobodys)
+		wait_samples = 5;
+	else if (--wait_samples <= 0)
+		workers = mcw_open(SHADERS);
+}
+
+/* Whether the workers are between two frames. */
+static int
+frame_done(void)
+{
+	int k;
+
+	for (k = 1; k <= workers; k++)
+		if (!mcw_done(k))
+			return 0;
+	return 1;
+}
+
+/* What the workers have just shaded, shaded again on this core and compared (a test). */
+static void
+check_frame(void)
+{
+	int i, x, y, differ = 0;
+
+	for (i = 0; i < PLOTS; i++) {
+		shade(i, 0, PLOT_W, 0, PLOT_H, shade_shift, checked + i * PLOT_H * PLOT_W, PLOT_W);
+		for (y = 0; y < PLOT_H; y++)
+			for (x = 0; x < PLOT_W; x++)
+				differ += checked[(i * PLOT_H + y) * PLOT_W + x] != plot_at(i)[y * surface_row + x];
+	}
+	printf("nxmon: %d of %d pixels differ from this core's\n", differ, ROWS * PLOT_W);
+}
+
+/* The window system draws by taking the window's buffer to the GPU and copying it back whole
+ * (docs/nanox.md), which would undo what the workers wrote meanwhile: after asking it to draw,
+ * a request with an answer, by which time it has drawn. */
+static void
+settle(void)
+{
+	GR_WINDOW_INFO info;
+
+	GrGetWindowInfo(window, &info);
+}
+
+/* A frame for the workers: each some rows of the plots, `shift` 256ths of a sample on. */
+static void
+post_frame(int shift)
+{
+	int k;
+
+	shade_shift = shift > 256 ? 256 : shift;
+	for (k = 1; k <= workers; k++)
+		mcw_post(k, shade_rows, (uint32_t)(ROWS * (k - 1) / workers) | (uint32_t)(ROWS * k / workers) << 8, (uint32_t)shade_shift);
+	shading = 1;
+}
+
+/* Without workers, after a sample: the plots moved a sample to the left and the newest
+ * columns shaded by this core; all of a plot when its scale changed or the window was cleared. */
+static void
+shade_here(int rescaled)
+{
+	int i, y;
+
+	if (!surface)
+		return;
+	for (i = 0; i < PLOTS; i++) {
+		if (whole || (i == SPEED && rescaled)) {
+			shade(i, 0, PLOT_W, 0, PLOT_H, 256, plot_at(i), surface_row);
+			continue;
+		}
+		for (y = 0; y < PLOT_H; y++)
+			memmove(plot_at(i) + y * surface_row, plot_at(i) + y * surface_row + STEP, (PLOT_W - STEP) * sizeof surface[0]);
+		shade(i, PLOT_W - STEP, PLOT_W, 0, PLOT_H, 256, plot_at(i), surface_row);
+	}
+	whole = 0;
 }
 
 /* A small square of a plot's colour and what it stands for. */
@@ -327,13 +552,13 @@ draw_stats(void)
 	}
 	ui_text(window, 8, STATS_Y + 50, "Busiest:", -1, BLACK, 0);
 	ui_text(window, 60, STATS_Y + 50, n ? text : "nothing", -1, BLACK, 0);
-	/* each worker core: millions of instructions a second, or why it runs none */
-	for (i = 1, n = 0; i < (int)core_count && n < (int)sizeof text - 24; i++) {
-		if (core_rate[i] >= 10000)
-			n += snprintf(text + n, sizeof text - n, "%s%u.%02u", n ? "  " : "", core_rate[i] / 1000000, core_rate[i] % 1000000 / 10000);
-		else
-			n += snprintf(text + n, sizeof text - n, "%s%s", n ? "  " : "", (cores_asleep >> i & 1) ? "asleep" : (cores_running >> i & 1) ? "idle" : "parked");
-	}
+	/* the worker cores together: there may be 63 of them */
+	n = snprintf(text, sizeof text, "%u working, %u asleep, %u idle, %u parked", cores_working, cores_asleep, cores_idle,
+		     core_count - 1 - cores_working - cores_asleep - cores_idle);
+	if (cores_working)
+		snprintf(text + n, sizeof text - n, ";  busiest %u.%02u million/s", core_busiest / 1000000, core_busiest % 1000000 / 10000);
+	if (core_count > 1 && print)	/* (for a test: the line as it is drawn) */
+		puts(text);
 	ui_text(window, 8, STATS_Y + 68, "Workers:", -1, BLACK, 0);
 	ui_text(window, 60, STATS_Y + 68, core_count > 1 ? text : "none (the machine has one core)", -1, core_count > 1 ? BLACK : UI_SHADOW, 0);
 }
@@ -411,8 +636,12 @@ draw(void)
 	ui_fill(window, 0, 0, WIDTH, HEIGHT, UI_FACE);
 	for (i = 0; i < PLOTS; i++) {
 		draw_line(i);
-		draw_plot(i);
+		ui_fill(window, 8, plot_y(i), PLOT_W + 2, PLOT_H + 2, BLACK);
 	}
+	/* (the plots themselves are not the window system's to draw: the next frame has them again) */
+	GrFlush();
+	locate();
+	whole = 1;	/* (without workers: at the next sample, when the window system has cleared them) */
 	draw_stats();
 	draw_list();
 }
@@ -422,11 +651,13 @@ static void
 sample(unsigned speed, long ms)
 {
 	unsigned top = 1000000;
-	int i;
+	int i, k, rescaled;
 
 	for (i = 0; i < PLOTS; i++) {
 		memmove(plots[i].low, plots[i].low + 1, (HISTORY - 1) * sizeof plots[i].low[0]);
 		memmove(plots[i].high, plots[i].high + 1, (HISTORY - 1) * sizeof plots[i].high[0]);
+		memmove(plots[i].low_px, plots[i].low_px + 1, (HISTORY - 1) * sizeof plots[i].low_px[0]);
+		memmove(plots[i].high_px, plots[i].high_px + 1, (HISTORY - 1) * sizeof plots[i].high_px[0]);
 	}
 	plots[SPEED].low[HISTORY - 1] = speed;
 	plots[SPEED].high[HISTORY - 1] = sample_cores(ms);
@@ -436,15 +667,20 @@ sample(unsigned speed, long ms)
 	for (i = 0; i < HISTORY; i++)
 		while (plots[SPEED].low[i] + plots[SPEED].high[i] > top)
 			top *= 2;
+	rescaled = top != plots[SPEED].top;
+	plots[SPEED].top = top;
 	for (i = 0; i < PLOTS; i++) {
-		if (i == SPEED && top != plots[SPEED].top) {
-			plots[SPEED].top = top;
-			draw_plot(i);
-		} else {
-			scroll_plot(i);
-		}
+		for (k = (i == SPEED && rescaled) ? 0 : HISTORY - 1; k < HISTORY; k++)
+			scale_sample(i, k);
 		draw_line(i);
 	}
+	if (!workers)
+		take_workers();
+	if (!workers)
+		shade_here(rescaled);
+	if (print && workers)
+		printf("nxmon: %u frames of the plots from %d workers\n", frames_shaded, workers);
+	frames_shaded = 0;
 }
 
 int
@@ -454,14 +690,28 @@ main(void)
 	struct timeval then, now, looked;
 	unsigned count_then = instructions();
 
-	int gpu = open("/dev/gpu", O_RDWR);
-	void *words = gpu < 0 ? MAP_FAILED : mmap(NULL, 4096, PROT_READ, MAP_SHARED, gpu, 0x01000000);
+	void *words = (gpu = open("/dev/gpu", O_RDWR)) < 0 ? MAP_FAILED : mmap(NULL, 4096, PROT_READ, MAP_SHARED, gpu, 0x01000000);
 
 	if (words != MAP_FAILED)
 		core_words = words;
+	words = gpu < 0 ? MAP_FAILED : mmap(NULL, 4096, PROT_READ, MAP_SHARED, gpu, 0x01000000 + 0x6b8000);
+	if (words != MAP_FAILED)
+		core_more = words;
 	if (GrOpen() < 0)
 		return 1;
 	ui_init();
+	{
+		extern char __DATA_BEGIN__[], _end[];
+
+		/* (NXMON_WORKERS=0: this core shades; NXMON_CHECK=1: it shades what the workers did again and compares) */
+		no_workers = getenv("NXMON_WORKERS") && atoi(getenv("NXMON_WORKERS")) == 0;
+		check = getenv("NXMON_CHECK") != NULL;
+		print = getenv("NXMON_PRINT") != NULL;
+		checked = check ? malloc(ROWS * PLOT_W * sizeof checked[0]) : NULL;
+		/* what a worker reads, there before it steps on it */
+		mcw_touch(__DATA_BEGIN__, (unsigned)(_end - __DATA_BEGIN__));
+		atexit(mcw_close);
+	}
 	sample_cores(1000);
 	gettimeofday(&then, NULL);
 	looked = then;
@@ -476,7 +726,8 @@ main(void)
 	for (;;) {
 		long ms;
 
-		GrGetNextEventTimeout(&event, 1000);
+		/* (with workers, a frame of the plots at every look; this core sleeps between) */
+		GrGetNextEventTimeout(&event, workers ? FRAME_MS : 1000);
 		/* Escape and q close it */
 		if (event.type == GR_EVENT_TYPE_CLOSE_REQ || (event.type == GR_EVENT_TYPE_KEY_DOWN &&
 		    (event.keystroke.ch == MWKEY_ESCAPE || event.keystroke.ch == 'q'))) {
@@ -502,8 +753,25 @@ main(void)
 		}
 		gettimeofday(&now, NULL);
 		ms = (now.tv_sec - then.tv_sec) * 1000L + (now.tv_usec - then.tv_usec) / 1000;
-		if (ms < 1000)
+		if (workers && mcw_asked())
+			give_workers();
+		/* the workers read the samples: a new one is taken between two of their frames */
+		if (workers && !frame_done())
 			continue;
+		if (shading) {
+			shading = 0;
+			frames_shaded++;
+			if (check)
+				check_frame();
+		}
+		if (ms < 1000) {
+			if (workers) {
+				if (event.type != GR_EVENT_TYPE_TIMEOUT)
+					settle();
+				post_frame((int)(ms * 256 / 1000));
+			}
+			continue;
+		}
 		{
 			unsigned count_now = instructions();
 
@@ -520,5 +788,9 @@ main(void)
 			draw_list();
 		}
 		draw_stats();
+		if (workers) {
+			settle();
+			post_frame(0);
+		}
 	}
 }

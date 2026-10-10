@@ -964,6 +964,37 @@ void seglScreenUsed(GLsizei count, GLuint name) {
     vertex_top += (uint32_t)count * 64;
 }
 
+unsigned int* seglScreenTable(void) {
+    if (!gpu || vertex_top + 1024 > set_at + SET_SIZE) return 0;
+    unsigned int* table = (unsigned int*)(gpu + vertex_top);
+    vertex_top += 1024;
+    return table;
+}
+unsigned int* seglScreenCompactSpace(GLsizei* room) {
+    uint32_t fit = gpu ? (set_at + SET_SIZE - vertex_top) / 16 : 0, mesh = (MAX_MESH - mesh_vertices) / 6 * 4;
+    *room = (GLsizei)(fit < mesh ? fit : mesh);
+    return gpu ? (unsigned int*)(gpu + vertex_top) : 0;
+}
+void seglScreenCompactUsed(GLsizei count, int quads, GLuint name, const unsigned int* table) {
+    const texture* x = &textures[name < MAX_TEXTURES ? name : 0];
+    uint32_t mesh = quads ? (uint32_t)count / 4 * 6 : (uint32_t)count;
+    uint32_t* c = count > 0 ? command(CMD_DRAW, mesh) : 0;
+    if (!c) return;
+    c[1] = GPU_PHYS + vertex_top;
+    c[2] = mesh;
+    c[4] = NUM_FORMAT | VERTEX_COMPACT | VERTEX_TAGGED | VERTEX_TABLE | (quads ? VERTEX_QUADS : 0);   // vertex mode 0: pixels
+    c[5] = (x->address ? FRAGMENT_TEXTURE : FRAGMENT_COLOUR) | 5u << 16;
+    c[6] = 0;
+    c[7] = GPU_PHYS + x->address;
+    c[8] = x->width;
+    c[9] = x->height;
+    c[10] = 0;
+    c[11] = GPU_PHYS + (uint32_t)((const uint8_t*)table - gpu);
+    passes_used |= 1u << 5;
+    last_draw = 0;
+    vertex_top += (uint32_t)count * 16;
+}
+
 uint32_t* seglLastCommand(void) { return last_draw; }
 uint32_t* seglLastVertices(void) { return (uint32_t*)(gpu + vertex_top - 64); }
 uint32_t seglAddress(const void* memory) { return GPU_PHYS + (uint32_t)((const uint8_t*)memory - gpu); }

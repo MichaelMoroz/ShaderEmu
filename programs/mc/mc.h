@@ -27,6 +27,10 @@
 // core in two words } for the workers
 #define MC_SHAPE_ALL 0x40204707u     // _IOW('G', 7, eight words)
 #define MC_WORKERS_ALL 0xc0104708u   // _IOWR('G', 8, four words)
+// A program whose workers are only lent to it says so (mcw_lend) and looks at the count at
+// MC_ASKED_AT: it goes up when another program is waiting for them.
+#define MC_LENT 0x4709u              // _IO('G', 9)
+#define MC_ASKED_AT 0xf20u
 // core k's 64 bytes: a job (core 0 writes it), its answer (the worker's), a fault (the
 // worker's, written by the machine) and the word that lets it go on (core 0's)
 // (cores 16 and up have theirs after the first 16 cores' system calls)

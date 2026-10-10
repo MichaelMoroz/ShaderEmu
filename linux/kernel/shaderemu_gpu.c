@@ -82,6 +82,14 @@ struct shaderemu_gpu_workers {
  */
 #define SHADEREMU_GPU_DRAW	_IOR('G', 5, __u32)
 
+/*
+ * A program that only borrows its workers (a monitor that draws with them) says so with this,
+ * before it asks for any. When another program then asks for workers that are not free, or
+ * for another geometry, the count at WORKERS_ASKED in the mailbox page goes up and that
+ * program is kept waiting, half a second at most, for the borrower to close its file.
+ */
+#define SHADEREMU_GPU_LENT	_IO('G', 9)
+#define WORKERS_ASKED	0xf20
 #define WORKERS_PHYS	0x86C00000UL	/* the worker cores' mailboxes */
 #define WORKERS_STOP	0x5453434d	/* in a core's start word: park it */
 #define WORKERS_MOST	64
@@ -89,6 +97,7 @@ struct shaderemu_gpu_workers {
 static void __iomem *gpu_regs;
 static void __iomem *workers;
 static struct file *worker_owner[WORKERS_MOST];
+static struct file *worker_borrower;	/* the file whose workers are only lent to it */
 static DEFINE_MUTEX(workers_lock);
 static struct file *draw_owner;
 static pid_t draw_pid;
@@ -160,8 +169,47 @@ static void workers_default_shape(void)
 		workers_shape(shape);
 }
 
+/* How many workers the borrower has; with workers_lock held. */
+static u32 workers_lent(void)
+{
+	u32 k, n = 0;
+
+	for (k = 1; k < WORKERS_MOST; k++)
+		n += worker_borrower && worker_owner[k] == worker_borrower;
+	return n;
+}
+
+/*
+ * Calls the lent workers in for `file`, which wants `wanted` of them (0: every one): called
+ * with workers_lock held, which it lets go of while it waits.
+ */
+static void workers_call_in(struct file *file, u32 wanted)
+{
+	u32 k, cores = readl(gpu_regs + WORKERS_CORES), nobodys = 0;
+	int tries;
+
+	if (!worker_borrower || worker_borrower == file || !workers_lent())
+		return;
+	for (k = 1; k < cores && k < WORKERS_MOST; k++)
+		nobodys += !worker_owner[k];
+	if (wanted && nobodys >= wanted)
+		return;
+	writel(readl(workers + WORKERS_ASKED) + 1, workers + WORKERS_ASKED);
+	for (tries = 0; tries < 50 && workers_lent(); tries++) {
+		mutex_unlock(&workers_lock);
+		msleep(10);
+		mutex_lock(&workers_lock);
+	}
+}
+
 static long shaderemu_gpu_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
+	if (cmd == SHADEREMU_GPU_LENT) {
+		mutex_lock(&workers_lock);
+		worker_borrower = file;
+		mutex_unlock(&workers_lock);
+		return 0;
+	}
 	if (cmd == SHADEREMU_GPU_SHAPE || cmd == SHADEREMU_GPU_SHAPE_ALL) {
 		u32 shape[WORKERS_WORDS] = {0}, k;
 		long answer = 0;
@@ -169,6 +217,7 @@ static long shaderemu_gpu_ioctl(struct file *file, unsigned int cmd, unsigned lo
 		if (copy_from_user(shape, (void __user *)arg, cmd == SHADEREMU_GPU_SHAPE ? 2 * sizeof(u32) : sizeof(shape)))
 			return -EFAULT;
 		mutex_lock(&workers_lock);
+		workers_call_in(file, 0);
 		for (k = 1; k < WORKERS_MOST; k++)
 			if (worker_owner[k])
 				answer = -EBUSY;
@@ -202,6 +251,7 @@ static long shaderemu_gpu_ioctl(struct file *file, unsigned int cmd, unsigned lo
 		w[1] = csr_read(CSR_SATP) & 0x3fffff;
 		w[2] = w[3] = 0;
 		mutex_lock(&workers_lock);
+		workers_call_in(file, w[0]);
 		if (readl(gpu_regs + WORKERS_MOST_NOW) > 1 && !readl(gpu_regs + WORKERS_SHAPE + 4))
 			workers_default_shape();
 		cores = readl(gpu_regs + WORKERS_CORES);
@@ -225,6 +275,7 @@ static long shaderemu_gpu_ioctl(struct file *file, unsigned int cmd, unsigned lo
 		w.mask = 0;
 		w.root = csr_read(CSR_SATP) & 0x3fffff;
 		mutex_lock(&workers_lock);
+		workers_call_in(file, w.want);
 		/* a machine that lays its workers out and has not been told how yet */
 		if (readl(gpu_regs + WORKERS_MOST_NOW) > 1 && !readl(gpu_regs + WORKERS_SHAPE + 4))
 			workers_default_shape();
@@ -300,6 +351,8 @@ static int shaderemu_gpu_release(struct inode *inode, struct file *file)
 		mutex_lock(&workers_lock);
 		if (draw_owner == file)
 			draw_owner = NULL;
+		if (worker_borrower == file)
+			worker_borrower = NULL;
 		for (k = 1; k < WORKERS_MOST; k++)
 			if (worker_owner[k] == file) {
 				writel(WORKERS_STOP, workers + 16 * k);

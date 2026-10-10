@@ -1039,7 +1039,8 @@ int main(int argc, char** argv) {
         if (opt.cores > 1 && raw.size() >= (64 + kControlTexels + kNetRead) * 16) {
             for (int c = 1; c < opt.cores; ++c) {   // (MC_STATS, and MC_STATS_MORE from core 16)
                 uint32_t now = c < 16 ? texel(64 + 0x38 + c / 4, c % 4) : texel(64 + kControlTexels + kCoreStatsAt + (c - 16) / 4, c % 4);
-                if (haveWorkerClock) workerInstructions += (uint32_t)(now - workerClock[c]);
+                // (a geometry laid out anew starts the counts again: one that went down is all new)
+                if (haveWorkerClock) workerInstructions += now < workerClock[c] ? now : (uint32_t)(now - workerClock[c]);
                 workerClock[c] = now;
             }
             haveWorkerClock = true;

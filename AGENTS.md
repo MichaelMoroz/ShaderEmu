@@ -334,6 +334,25 @@ A cold boot to the `/ #` prompt takes about 80 s on an RTX 5090 with upstream on
   empty in objects made from a template older than the field: an array there has no
   elements. Whoever reads it sizes it first (`Roster` in `EmuShareHub`). Never end `mctest` with Ctrl+C: its workers stay running
   and the next one finds none, until the machine is switched off and on.
+- `nxmon` shades its plots on the worker cores, into its window's buffer (`docs/multicore.md`):
+  after a change to it, `NXMON_PRINT=1 NXMON_CHECK=1 nxmon` must print `0 of 51840 pixels
+  differ from this core's` at every frame, and `NXMON_PRINT=1 nxmon` about 16 frames a second.
+- A program that can do without its workers borrows them (`mcw_lend()`, `mcw_asked()`:
+  `docs/multicore.md`), as `nxmon` does: `NXMON_PRINT=1 nxmon & sleep 5; mctest 15 20000 shape
+  6,6,6,5,5,4,4,4,4,4,4,4,4,4,4` must say "the workers are given", then 15 worker cores and PASS.
+- In ImGui's renderer fewer stores bought nothing (`docs/imgui.md`): a sixth of the vertex
+  data, a third of the passes ended by a full cache, the same frames a second. Count
+  instructions. Its picture must stay the same pixel for pixel: an idle `nxpath` window from
+  the build before, both composed from snapshots.
+- `tools\pc_profile.py` wants `nm -n` without `-C`: put the top lines through `c++filt` after.
+- The window system copies a window's whole buffer back from the GPU after every list it
+  draws: what a program (or a worker) wrote into the buffer meanwhile is gone. Ask for
+  something with an answer (`GrGetWindowInfo`) after drawing requests, then write.
+- A desktop with nothing on it (`nano-X -p` alone) runs 1.3M instructions a second on core 0;
+  why is not known. It is not a program's cost: measure a program against that.
+  `mcw_open` and `mcw_close` may be called again and again: the stacks are kept.
+- `NXMON_PRINT=1 nxmon` prints its workers line at every sample: with `mctest 63 100000 shape
+  3,3,... bench 20` beside it, "63 working".
 - What each core ran is among the control words (0x87000380, `MC_STATS`): `nxmon`, the
   harness's `STATS workers` line and the Unity panel all read it there. The Unity readback is
   768 words a row: state row 0, the first 64 control texels and 64 texels of the network's row,
