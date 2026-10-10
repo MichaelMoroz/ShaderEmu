@@ -690,6 +690,17 @@ void Gfx_UnlockVb(GfxResourceID vb) {
 	data->staging = NULL;
 }
 
+/* Gfx_LockVb and Gfx_UnlockVb for vertices that are somewhere already: a chunk's, which a worker
+   core made in memory of its own (MapRenderer.c). */
+cc_bool Gfx_SE_UnlockFrom(GfxResourceID vb, void* vertices, VertexFormat fmt, int count) {
+	struct SEVb* data = (struct SEVb*)vb;
+	data->fmt = fmt; data->count = count;
+	data->staging = vertices;
+	data->where   = BuildMesh(data, SpanAlloc) ? 1 : 0;
+	data->staging = NULL;
+	return data->where;
+}
+
 void Gfx_BindDynamicVb(GfxResourceID vb) { se_vb = (struct SEVb*)vb; }
 
 void* Gfx_LockDynamicVb(GfxResourceID vb, VertexFormat fmt, int count) {

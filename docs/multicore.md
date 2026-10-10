@@ -354,6 +354,10 @@ instructions in the harness (8,192 in the world).
 - **What pays is work that needs no answer in the same frame.** Two parts of a program each
   at its own pace (Quake's server and client), work begun ahead of its use (the next movie
   frame unpacked), or one long job shared out (a movie frame's rows; loading).
+- **And memory nobody has touched stops a worker** until the first core looks: a page at a
+  time, a frame of the program each if it only looks once a frame. ClassiCube's worker did
+  3 million instructions in 20 seconds that way, its copy of the builder being variables
+  that begin as zeros. `mcw_touch()` on the program's data before the first job mended it.
 - **And the two sides must have their own data.** A game whose drawing reads and marks the
   objects its logic moves cannot have the two on different cores.
 
@@ -363,7 +367,7 @@ instructions in the harness (8,192 in the world).
 | Red Alert | 220 to 240 thousand: logic 110 to 127, drawing 88 | its movies (three workers, given back when the movie ends). In a mission the drawing is the game's own, object by object, and clears the marks the logic sets; the profile has no single piece over 12% |
 | Tiberian Dawn | 170 to 230 thousand: logic 100 to 145, drawing 45 to 70 | none: the same game |
 | Doom | a tic 33 to 39 thousand, 35 a second; a frame 45 to 55 thousand | none: the renderer walks the things and sectors the tics change, and writes into them |
-| ClassiCube | 60 thousand, 48 frames a second | none while playing. Its start is 133 million instructions, of which making the world is 40 and building its meshes 40: jobs for workers, not done (the mesh builder has one set of buffers, and the world's maker allocates as it goes) |
+| ClassiCube | 60 thousand, 48 frames a second | the meshes of chunks that have none yet: a second copy of the builder on a worker, beside the first core's (`docs/classicube.md`). From the command to the whole world drawn: 40 s where it was 52. Making the world (40 million instructions) is still one core's |
 | The window system | | none: see below |
 
 Loading is where the long jobs are. Quake's start to a level's first frame is 160 million

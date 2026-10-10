@@ -35,6 +35,14 @@ int mcw_count(void);
 void mcw_close(void);
 /* Memory that begins and ends on 16 bytes, for a core of its own to write; never freed. */
 void *mcw_alloc(unsigned bytes);
+/*
+ * Makes memory's pages be there and writable now, on this core. A worker stops at every page
+ * the program has not touched (or not written) yet until this core next looks, which is two
+ * passes when it waits in mcw_wait() and may be a whole frame of a program that only asks
+ * mcw_done() now and then: touch what a job will use first. A program's variables that start
+ * as zeros are such pages (from __DATA_BEGIN__ to _end is all of its data).
+ */
+void mcw_touch(void *memory, unsigned bytes);
 /* A job for worker k (1 to mcw_count()): it calls fn(a0, a1). */
 void mcw_post(int k, mcw_fn fn, uint32_t a0, uint32_t a1);
 /* Whether worker k has finished what it was posted last; what the function returned. */

@@ -181,6 +181,8 @@ worker costs about 5% more than without, which those figures include.
     QUAKE_SERVER=late     on the first core, its messages sent at the end of the client's frame
     QUAKE_SERVER=wait     on a worker, the client's frame waiting for it at its end
     QUAKE_SUM=N           a sum over every entity's fields each N frames of the server
+    QUAKE_TRACK=N         where the player is and how fast, each N frames of the server
+    QUAKE_TEST_EXIT=F     (with QUAKE_TRACK) at frame F the player is put into the level's exit
 
 `late` and `wait` do the same things in the same order, one on a core and one on two. With
 `+host_framerate 0.05` (a frame's length is then not the machine's speed) and `--fixed-dt
@@ -188,6 +190,17 @@ worker costs about 5% more than without, which those figures include.
 check that the server on a worker computes what it computed on the first core. The default
 cannot be checked so (how many frames the client draws to one of the server's is the
 machine's speed); it runs the same job.
+
+Play is checked with keys typed as console commands: `QUAKE_TRACK=5` and `+forward` after
+"track 30:" must take the player the same way in every mode, and `QUAKE_TRACK=5
+QUAKE_TEST_EXIT=40 quake +map e1m1` with `+attack` after "track 80:" must end the level, load
+the next and go on printing where the player is. It did not at first: with the server's
+messages sent late one was still unread when the level changed, the connection takes one
+reliable message at a time, the "reconnect" could not be sent, and the client read the new
+level in the old one's state (`i >= cl.maxclients`). The client now reads what it was sent
+before the server is replaced (`SE_ServerDrop`). And a button counts as down for a frame of
+the server's if any of the client's moves since the last had it down: the server took the
+last move only, and a tap between two of its frames (a jump, a shot) was lost.
 
 ## Checking it
 

@@ -1,5 +1,5 @@
 diff --git a/src/Animations.c b/src/Animations.c
-index f64e11e..73f9f8f 100644
+index f64e11e1e..73f9f8f4a 100644
 --- a/src/Animations.c
 +++ b/src/Animations.c
 @@ -336,7 +336,13 @@ static void Animations_Validate(void) {
@@ -18,7 +18,7 @@ index f64e11e..73f9f8f 100644
  	if (useWaterAnim) WaterAnimation_Tick();
  #endif
 diff --git a/src/BlockPhysics.c b/src/BlockPhysics.c
-index a1602b1..d9af3aa 100644
+index a1602b1a1..d9af3aaf6 100644
 --- a/src/BlockPhysics.c
 +++ b/src/BlockPhysics.c
 @@ -573,5 +573,9 @@ void Physics_Tick(void) {
@@ -32,10 +32,30 @@ index a1602b1..d9af3aa 100644
  	Physics_TickRandomBlocks();
  }
 diff --git a/src/Builder.c b/src/Builder.c
-index dd3f3f2..1135b6e 100644
+index dd3f3f215..5f126f39e 100644
 --- a/src/Builder.c
 +++ b/src/Builder.c
-@@ -77,10 +77,18 @@ static int Builder1DPart_CalcOffsets(struct Builder1DPart* part, int offset) {
+@@ -14,7 +14,19 @@
+ #include "Game.h"
+ #include "Options.h"
+ 
++#ifdef SE_SECOND
++/* The copy of this file a worker core runs: the same code with its own buffers (every static
++   below), which builds into memory of its own and leaves the vertex buffers to the first core. */
++extern int Builder_SidesLevel, Builder_EdgeLevel;
++static CC_BIG_VAR cc_uint8 se_temp[16 + (EXTCHUNK_SIZE_3 * sizeof(BlockID)) + (CHUNK_SIZE_3 * FACE_COUNT) + 16];
++#define TempMem_Alloc(size) ((void*)se_temp)
++#define SE_STAGING_VERTS 16384
++static CC_BIG_VAR struct VertexTextured se_staging[SE_STAGING_VERTS];
++static int se_staged;
++static struct SEMeshOut* se_out;
++#else
+ int Builder_SidesLevel, Builder_EdgeLevel;
++#endif
+ /* Packs an index into the 16x16x16 count array. Coordinates range from 0 to 15. */
+ #define Builder_PackCount(xx, yy, zz) ((((yy) << 8) | ((zz) << 4) | (xx)) * FACE_COUNT)
+ /* Packs an index into the 18x18x18 chunk array. Coordinates range from -1 to 16. */
+@@ -77,10 +89,18 @@ static int Builder1DPart_CalcOffsets(struct Builder1DPart* part, int offset) {
  	return offset;
  }
  
@@ -55,7 +75,7 @@ index dd3f3f2..1135b6e 100644
  	}
  	return count;
  }
-@@ -146,6 +154,42 @@ static cc_bool SetPartInfo(struct Builder1DPart* part, int* offset, struct Chunk
+@@ -146,6 +166,42 @@ static cc_bool SetPartInfo(struct Builder1DPart* part, int* offset, struct Chunk
  }
  
  
@@ -98,7 +118,7 @@ index dd3f3f2..1135b6e 100644
  static void PrepareChunk(int x1, int y1, int z1) {
  	int xMax = min(World.Width,  x1 + CHUNK_SIZE);
  	int yMax = min(World.Height, y1 + CHUNK_SIZE);
-@@ -172,6 +216,9 @@ static void PrepareChunk(int x1, int y1, int z1) {
+@@ -172,6 +228,9 @@ static void PrepareChunk(int x1, int y1, int z1) {
  	for (y = y1, yy = 0; y < yMax; y++, yy++) {
  		for (z = z1, zz = 0; z < zMax; z++, zz++) {
  			cIndex = Builder_PackChunk(0, yy, zz);
@@ -108,7 +128,7 @@ index dd3f3f2..1135b6e 100644
  
  			for (x = x1, xx = 0; x < xMax; x++, xx++, cIndex++) {
  				b = Builder_Chunk[cIndex];
-@@ -181,6 +228,16 @@ static void PrepareChunk(int x1, int y1, int z1) {
+@@ -181,6 +240,16 @@ static void PrepareChunk(int x1, int y1, int z1) {
  				/* Sprites can't be stretched, nor can then be they hidden by other blocks. */
  				/* Note sprites are drawn using DrawSprite and not with any of the DrawXFace. */
  				if (Blocks.Draw[b] == DRAW_SPRITE) { AddSpriteVertices(b); continue; }
@@ -125,7 +145,25 @@ index dd3f3f2..1135b6e 100644
  
  				Builder_X = x; Builder_Y = y; Builder_Z = z;
  				Builder_FullBright = Blocks.Brightness[b];
-@@ -360,6 +417,16 @@ static void OutputChunkPartsMeta(int x, int y, int z, struct ChunkInfo* info) {
+@@ -344,6 +413,17 @@ static void OutputChunkPartsMeta(int x, int y, int z, struct ChunkInfo* info) {
+ 	hasNorm = false;
+ 	hasTran = false;
+ 
++#ifdef SE_SECOND
++	/* (not into the chunk's own parts: the first core may be drawing by them) */
++	for (i = 0; i < MapRenderer_1DUsedCount; i++) {
++		j = i + ATLAS1D_MAX_ATLASES;
++		hasNorm |= SetPartInfo(&Builder_Parts[i], &offset, &se_out->norm[i]);
++		hasTran |= SetPartInfo(&Builder_Parts[j], &offset, &se_out->tran[i]);
++	}
++	se_out->hasNorm = hasNorm;
++	se_out->hasTran = hasTran;
++	return;
++#endif
+ 	for (i = 0; i < MapRenderer_1DUsedCount; i++) {
+ 		j = i + ATLAS1D_MAX_ATLASES;
+ 		curIdx = partsIndex + i * World.ChunksCount;
+@@ -360,6 +440,16 @@ static void OutputChunkPartsMeta(int x, int y, int z, struct ChunkInfo* info) {
  	}
  }
  
@@ -142,7 +180,7 @@ index dd3f3f2..1135b6e 100644
  cc_bool Builder_MakeChunk(struct ChunkInfo* info) {
  #if CC_BUILD_MAXSTACK <= (32 * 1024)
  	void* mem        = TempMem_Alloc((EXTCHUNK_SIZE_3 * sizeof(BlockID)) + (CHUNK_SIZE_3 * FACE_COUNT));
-@@ -384,6 +451,9 @@ cc_bool Builder_MakeChunk(struct ChunkInfo* info) {
+@@ -384,6 +474,9 @@ cc_bool Builder_MakeChunk(struct ChunkInfo* info) {
  	int y1 = info->centreY - HALF_CHUNK_SIZE;
  	int z1 = info->centreZ - HALF_CHUNK_SIZE;
  
@@ -152,7 +190,7 @@ index dd3f3f2..1135b6e 100644
  	Builder_Chunk  = chunk;
  	Builder_Counts = counts;
  	Builder_BitFlags = bitFlags;
-@@ -402,7 +472,11 @@ cc_bool Builder_MakeChunk(struct ChunkInfo* info) {
+@@ -402,7 +495,11 @@ cc_bool Builder_MakeChunk(struct ChunkInfo* info) {
  	}
  
  	info->allAir = allAir;
@@ -164,7 +202,7 @@ index dd3f3f2..1135b6e 100644
  	Lighting.LightHint(x1 - 1, y1 - 1, z1 - 1);
  
  	Mem_Set(counts, 1, CHUNK_SIZE_3 * FACE_COUNT);
-@@ -411,7 +485,9 @@ cc_bool Builder_MakeChunk(struct ChunkInfo* info) {
+@@ -411,7 +508,9 @@ cc_bool Builder_MakeChunk(struct ChunkInfo* info) {
  	zMax = min(World.Length, z1 + CHUNK_SIZE);
  
  	Builder_ChunkEndX = xMax; Builder_ChunkEndZ = zMax;
@@ -174,7 +212,22 @@ index dd3f3f2..1135b6e 100644
  
  	totalVerts = Builder_TotalVerticesCount();
  	if (!totalVerts) return true;
-@@ -434,18 +510,27 @@ cc_bool Builder_MakeChunk(struct ChunkInfo* info) {
+@@ -422,7 +521,13 @@ cc_bool Builder_MakeChunk(struct ChunkInfo* info) {
+ 		info.occlusionFlags = (cc_uint8)ComputeOcclusion();
+ #endif
+ 
+-#if CC_GFX_BACKEND != CC_GFX_BACKEND_GL11
++#ifdef SE_SECOND
++	if (se_staged + totalVerts + 1 > SE_STAGING_VERTS) return false;
++	Builder_Vertices = &se_staging[se_staged];
++	se_out->verts = totalVerts;
++	se_out->at    = Builder_Vertices;
++	se_staged    += totalVerts + 1;
++#elif CC_GFX_BACKEND != CC_GFX_BACKEND_GL11
+ 	/* add an extra element to fix crashing on some GPUs */
+ 	info->vb = Gfx_TryCreateStaticVb(VERTEX_FORMAT_TEXTURED, totalVerts + 1);
+ 	if (!info->vb) return false;
+@@ -434,18 +539,27 @@ cc_bool Builder_MakeChunk(struct ChunkInfo* info) {
  	Builder_Vertices = (struct VertexTextured*)Gfx_LockVb(0, 
  													VERTEX_FORMAT_TEXTURED, totalVerts + 1);
  #endif
@@ -202,17 +255,19 @@ index dd3f3f2..1135b6e 100644
  				Builder_ChunkIndex = cIndex;
  				Builder_RenderBlock(index, x, y, z);
  			}
-@@ -462,7 +547,9 @@ cc_bool Builder_MakeChunk(struct ChunkInfo* info) {
+@@ -462,7 +576,11 @@ cc_bool Builder_MakeChunk(struct ChunkInfo* info) {
  		BuildPartVbs(&MapRenderer_PartsTranslucent[curIdx]);
  	}
  #else
 +	SE_PHASE(6)
++#ifndef SE_SECOND
  	Gfx_UnlockVb(info->vb);
++#endif
 +	SE_PHASE(7)
  #endif
  	return true;
  }
-@@ -478,13 +565,19 @@ static cc_bool Builder_OccludedLiquid(int chunkIndex) {
+@@ -478,13 +596,19 @@ static cc_bool Builder_OccludedLiquid(int chunkIndex) {
  }
  
  static void DefaultPrePrepateChunk(void) {
@@ -233,8 +288,47 @@ index dd3f3f2..1135b6e 100644
  		j = i + ATLAS1D_MAX_ATLASES;
  
  		offset = Builder1DPart_CalcOffsets(&Builder_Parts[i], offset);
+@@ -1633,8 +1757,16 @@ static void ModernBuilder_SetActive(void) { NormalBuilder_SetActive(); }
+ /*########################################################################################################################*
+ *---------------------------------------------------Builder interface-----------------------------------------------------*
+ *#########################################################################################################################*/
++#ifdef SE_SECOND
++extern cc_bool Builder_SmoothLighting;
++#else
+ cc_bool Builder_SmoothLighting;
++#endif
+ void Builder_ApplyActive(void) {
++#if defined CC_BUILD_SHADEREMU && !defined SE_SECOND
++	MapRenderer_SE_Settle();
++	Builder_ApplyActive_w(); /* the worker core's copy of this file */
++#endif
+ 	if (Builder_SmoothLighting) {
+ 		if (Lighting_Mode != LIGHTING_MODE_CLASSIC) {
+ 			ModernBuilder_SetActive();
+@@ -1671,3 +1803,21 @@ struct IGameComponent Builder_Component = {
+ 	NULL, /* OnNewMap */
+ 	OnNewMapLoaded /* OnNewMapLoaded */
+ };
++
++#ifdef SE_SECOND
++/* A worker core's job: the meshes of a few chunks, into this copy's own memory. */
++unsigned Builder_Job_w(unsigned job_at, unsigned unused) {
++	struct SEMeshJob* job = (struct SEMeshJob*)job_at;
++	int i;
++
++	se_staged = 0;
++	for (i = 0; i < job->count; i++) {
++		se_out = &job->out[i];
++		se_out->verts = 0; se_out->hasNorm = 0; se_out->hasTran = 0; se_out->at = NULL;
++		se_out->made  = Builder_MakeChunk(&job->copy[i]);
++		if (!se_out->made) break; /* no room for it: the rest are for another time */
++	}
++	for (; i < job->count; i++) job->out[i].made = 0;
++	return 0;
++}
++#endif
 diff --git a/src/Core.h b/src/Core.h
-index 95be4ac..4eb41c2 100644
+index 95be4acfa..4eb41c21b 100644
 --- a/src/Core.h
 +++ b/src/Core.h
 @@ -189,7 +189,25 @@ typedef cc_uint8  cc_bool;
@@ -460,7 +554,7 @@ index 95be4ac..4eb41c2 100644
  	#undef  CC_BUILD_FILESYSTEM
  	#undef  CC_BUILD_COMPRESSION
 diff --git a/src/EnvRenderer.c b/src/EnvRenderer.c
-index 5e7cf6a..7edc2ed 100644
+index 5e7cf6a4c..7edc2ed4f 100644
 --- a/src/EnvRenderer.c
 +++ b/src/EnvRenderer.c
 @@ -22,7 +22,13 @@
@@ -527,8 +621,22 @@ index 5e7cf6a..7edc2ed 100644
  }
  
  static void RenderBorders(BlockID block, GfxResourceID vb, GfxResourceID tex, int count) {
+diff --git a/src/Game.c b/src/Game.c
+index acf955441..5511d5b06 100644
+--- a/src/Game.c
++++ b/src/Game.c
+@@ -425,6 +425,9 @@ static void Game_Load(void) {
+ 	Game_AddComponent(&Animations_Component);
+ 	Game_AddComponent(&Inventory_Component);
+ 	Game_AddComponent(&Builder_Component);
++#ifdef CC_BUILD_SHADEREMU
++	Game_AddComponent(&Builder_Component_w); /* Builder.c again, for a worker core (MapRenderer.h) */
++#endif
+ 	Game_AddComponent(&MapRenderer_Component);
+ 	Game_AddComponent(&EnvRenderer_Component);
+ 	Game_AddComponent(&Server_Component);
 diff --git a/src/Game.h b/src/Game.h
-index ccfee09..70760c5 100644
+index ccfee098e..70760c534 100644
 --- a/src/Game.h
 +++ b/src/Game.h
 @@ -41,6 +41,8 @@ extern cc_string Game_Mppass;
@@ -541,7 +649,7 @@ index ccfee09..70760c5 100644
      #define DEFAULT_VIEWDIST 192
  #else
 diff --git a/src/Generator.c b/src/Generator.c
-index d033191..4e31738 100644
+index d0331911e..4e31738ef 100644
 --- a/src/Generator.c
 +++ b/src/Generator.c
 @@ -9,6 +9,11 @@
@@ -557,7 +665,7 @@ index d033191..4e31738 100644
  BlockRaw* Gen_Blocks;
  
 diff --git a/src/Launcher.c b/src/Launcher.c
-index 084b974..b1d404a 100644
+index 084b97498..b1d404a41 100644
 --- a/src/Launcher.c
 +++ b/src/Launcher.c
 @@ -1,5 +1,5 @@
@@ -568,10 +676,57 @@ index 084b974..b1d404a 100644
  #include "LScreens.h"
  #include "LWidgets.h"
 diff --git a/src/MapRenderer.c b/src/MapRenderer.c
-index fbe36dd..18add3a 100644
+index fbe36dd58..a6debcb66 100644
 --- a/src/MapRenderer.c
 +++ b/src/MapRenderer.c
-@@ -535,7 +535,15 @@ static void RefreshBorderChunks(int maxHeight) {
+@@ -60,6 +60,9 @@ static void ChunkInfo_Init(struct ChunkInfo* chunk, int x, int y, int z) {
+ 	chunk->noData   = true;
+ 	chunk->dirty    = true;
+ 	chunk->skipClip = false;
++#ifdef CC_BUILD_SHADEREMU
++	chunk->building = false;
++#endif
+ 
+ 	chunk->drawXMin = false; chunk->drawXMax = false; chunk->drawZMin = false;
+ 	chunk->drawZMax = false; chunk->drawYMin = false; chunk->drawYMax = false;
+@@ -68,7 +71,13 @@ static void ChunkInfo_Init(struct ChunkInfo* chunk, int x, int y, int z) {
+ 	chunk->translucentParts = NULL;
+ }
+ 
++#ifdef CC_BUILD_SHADEREMU
++static int se_mesh_serial; /* goes up when a chunk is to be made again: what a worker has is stale */
++#endif
+ static CC_INLINE void ChunkInfo_Refresh(struct ChunkInfo* chunk) {
++#ifdef CC_BUILD_SHADEREMU
++	se_mesh_serial++;
++#endif
+ 	if (chunk->allAir) return; /* do not recreate chunks completely air */
+ 
+ 	chunk->empty = false;
+@@ -404,12 +413,14 @@ static void BuildChunk(struct ChunkInfo* chunk, int* chunkUpdates) {
+ *----------------------------------------------------Chunks mangagement---------------------------------------------------*
+ *#########################################################################################################################*/
+ static void FreeParts(void) {
++	MapRenderer_SE_Settle();
+ 	Mem_Free(MapRenderer_PartsNormal);
+ 	MapRenderer_PartsNormal      = NULL;
+ 	MapRenderer_PartsTranslucent = NULL;
+ }
+ 
+ static void FreeChunks(void) {
++	MapRenderer_SE_Settle();
+ 	Mem_Free(mapChunks);
+ 	Mem_Free(sortedChunks);
+ 	Mem_Free(renderChunks);
+@@ -482,6 +493,7 @@ static void RefreshChunks(void) {
+ 
+ static void DeleteChunks(void) {
+ 	int i;
++	MapRenderer_SE_Settle();
+ 	if (!mapChunks) return;
+ 
+ 	for (i = 0; i < chunksCount; i++) 
+@@ -535,7 +547,15 @@ static void RefreshBorderChunks(int maxHeight) {
  *--------------------------------------------------Chunks updating/sorting------------------------------------------------*
  *#########################################################################################################################*/
  #define CHUNK_TARGET_TIME ((1.0f/30) + 0.01f)
@@ -588,7 +743,148 @@ index fbe36dd..18add3a 100644
  static Vec3 lastCamPos;
  static float lastYaw, lastPitch;
  /* Max distance from camera that chunks are rendered within */
-@@ -638,7 +646,7 @@ static void UpdateChunks(float delta) {
+@@ -556,6 +576,122 @@ static void CalcViewDists(void) {
+ 	renderDistSquared = AdjustDist(Game_ViewDistance);
+ }
+ 
++#ifdef CC_BUILD_SHADEREMU
++/*########################################################################################################################*
++*------------------------------------------------Meshes from a worker core-----------------------------------------------*
++*#########################################################################################################################*/
++#include <stdlib.h>
++#include <string.h>
++#include "mcw.h"
++cc_bool Gfx_SE_UnlockFrom(GfxResourceID vb, void* vertices, VertexFormat fmt, int count);
++
++static struct SEMeshJob se_job __attribute__((aligned(16)));
++static struct ChunkInfo* se_chunks[SE_MESH_MOST];
++static int se_workers = -1, se_out_serial;
++static cc_bool se_running;
++unsigned se_mesh_chunks, se_mesh_jobs; /* for the ccstat: lines */
++
++void MapRenderer_SE_Settle(void) {
++	int i;
++	if (!se_running) return;
++	mcw_wait(1);
++	se_running = false;
++	if (mapChunks) {
++		for (i = 0; i < se_job.count; i++) se_chunks[i]->building = false;
++	}
++}
++
++/* What the worker made becomes the chunks' own. True if any chunk has a mesh from it. */
++static cc_bool SE_Mesh_Collect(void) {
++	struct ChunkInfo* chunk;
++	struct ChunkPartInfo* ptr;
++	struct SEMeshOut* out;
++	cc_bool any = false;
++	int i, k, partsIndex;
++
++	if (!se_running || !mcw_done(1)) return false;
++	se_running = false;
++	for (k = 0; k < se_job.count; k++) {
++		chunk = se_chunks[k];
++		out   = &se_job.out[k];
++		chunk->building = false;
++		/* (a chunk changed since, or one there was no room for, is made another time) */
++		if (!out->made || se_out_serial != se_mesh_serial || !chunk->dirty) continue;
++
++		chunk->allAir = se_job.copy[k].allAir;
++		if (out->verts) {
++			chunk->vb = Gfx_TryCreateStaticVb(VERTEX_FORMAT_TEXTURED, out->verts + 1);
++			if (!chunk->vb) continue;
++			partsIndex = (int)(chunk - mapChunks);
++			for (i = 0; i < MapRenderer_1DUsedCount; i++) {
++				MapRenderer_PartsNormal[partsIndex + i * chunksCount]      = out->norm[i];
++				MapRenderer_PartsTranslucent[partsIndex + i * chunksCount] = out->tran[i];
++			}
++			if (out->hasNorm) chunk->normalParts      = &MapRenderer_PartsNormal[partsIndex];
++			if (out->hasTran) chunk->translucentParts = &MapRenderer_PartsTranslucent[partsIndex];
++			Gfx_SE_UnlockFrom(chunk->vb, out->at, VERTEX_FORMAT_TEXTURED, out->verts + 1);
++		}
++		/* (and BuildChunk's own end) */
++		Game.ChunkUpdates++;
++		se_mesh_chunks++;
++		chunk->dirty  = false;
++		chunk->noData = !chunk->normalParts && !chunk->translucentParts;
++		chunk->empty  = chunk->noData;
++		if (chunk->empty) continue;
++		any = true;
++
++		if (chunk->normalParts) {
++			ptr = chunk->normalParts;
++			for (i = 0; i < MapRenderer_1DUsedCount; i++, ptr += chunksCount) {
++				if (ptr->offset >= 0) normPartsCount[i]++;
++			}
++		}
++		if (chunk->translucentParts) {
++			ptr = chunk->translucentParts;
++			for (i = 0; i < MapRenderer_1DUsedCount; i++, ptr += chunksCount) {
++				if (ptr->offset >= 0) tranPartsCount[i]++;
++			}
++		}
++	}
++	return any;
++}
++
++/* The next chunks that have never had a mesh go to the worker (one that is made again stays
++   the first core's: it is drawn by its old mesh until the new one is there). */
++static void SE_Mesh_Post(void) {
++	struct ChunkInfo* chunk;
++	int i, n = 0;
++
++	if (se_running || !mapChunks || !World.Blocks) return;
++	if (se_workers < 0) {
++		se_workers = getenv("CLASSICUBE_MESH") && !strcmp(getenv("CLASSICUBE_MESH"), "inline") ? 0 : mcw_open(1);
++		if (se_workers > 0) {
++			extern char __DATA_BEGIN__[], _end[];
++			atexit(mcw_close);
++			/* (the worker's copy of the builder is variables nobody has touched: see mcw.h) */
++			mcw_touch(__DATA_BEGIN__, (unsigned)(_end - __DATA_BEGIN__));
++		}
++	}
++	if (se_workers <= 0) return;
++
++	for (i = 0; i < chunksCount && n < SE_MESH_MOST; i++) {
++		chunk = sortedChunks[i];
++		if (chunk->empty || !chunk->dirty || !chunk->noData || distances[i] > (cc_uint32)buildDistSquared) continue;
++		chunk->building = true;
++		se_chunks[n]    = chunk;
++		se_job.copy[n]  = *chunk;
++		se_job.copy[n].normalParts = NULL; se_job.copy[n].translucentParts = NULL;
++		n++;
++	}
++	if (!n) return;
++	se_job.count  = n;
++	se_out_serial = se_mesh_serial;
++	se_running    = true;
++	se_mesh_jobs++;
++	mcw_post(1, Builder_Job_w, (unsigned)&se_job, 0);
++}
++#endif
++
+ static int UpdateChunksAndVisibility(int* chunkUpdates) {
+ 	int renderDistSqr = renderDistSquared;
+ 	int buildDistSqr  = buildDistSquared;
+@@ -574,7 +710,7 @@ static int UpdateChunksAndVisibility(int* chunkUpdates) {
+ 			DeleteChunk(chunk); continue;
+ 		}
+ 
+-		if (chunk->dirty && distSqr <= buildDistSqr && *chunkUpdates < chunksTarget) {
++		if (chunk->dirty && !chunk->building && distSqr <= buildDistSqr && *chunkUpdates < chunksTarget) {
+ 			DeleteChunk(chunk);
+ 			BuildChunk(chunk, chunkUpdates);
+ 		}
+@@ -610,7 +746,7 @@ static int UpdateChunksStill(int* chunkUpdates) {
+ 			DeleteChunk(chunk); continue;
+ 		}
+ 
+-		if (chunk->dirty && distSqr <= buildDistSqr && *chunkUpdates < chunksTarget) {
++		if (chunk->dirty && !chunk->building && distSqr <= buildDistSqr && *chunkUpdates < chunksTarget) {
+ 			DeleteChunk(chunk);
+ 			BuildChunk(chunk, chunkUpdates);
+ 
+@@ -638,11 +774,15 @@ static void UpdateChunks(float delta) {
  
  	/* Build more chunks if 30 FPS or over, otherwise slowdown */
  	chunksTarget += delta < CHUNK_TARGET_TIME ? 1 : -1; 
@@ -597,7 +893,25 @@ index fbe36dd..18add3a 100644
  
  	p = Entities.CurPlayer;
  	samePos = Vec3_Equals(&Camera.CurrentPos, &lastCamPos)
-@@ -818,7 +826,7 @@ static void OnInit(void) {
+ 		&& p->Base.Pitch == lastPitch && p->Base.Yaw == lastYaw;
++#ifdef CC_BUILD_SHADEREMU
++	/* chunks a worker core has made are new to the list of what is drawn */
++	if (SE_Mesh_Collect()) samePos = false;
++#endif
+ 
+ 	renderChunksCount = samePos ?
+ 		UpdateChunksStill(&chunkUpdates) :
+@@ -651,6 +791,9 @@ static void UpdateChunks(float delta) {
+ 	lastCamPos = Camera.CurrentPos;
+ 	lastPitch  = p->Base.Pitch;
+ 	lastYaw    = p->Base.Yaw;
++#ifdef CC_BUILD_SHADEREMU
++	SE_Mesh_Post();
++#endif
+ 
+ 	if (!samePos || chunkUpdates) ResetPartFlags();
+ }
+@@ -818,7 +961,7 @@ static void OnInit(void) {
  	/* This = 87 fixes map being invisible when no textures */
  	MapRenderer_1DUsedCount = 87; /* Atlas1D_UsedAtlasesCount(); */
  	chunkPos   = IVec3_MaxValue();
@@ -606,8 +920,58 @@ index fbe36dd..18add3a 100644
  	CalcViewDists();
  }
  
+diff --git a/src/MapRenderer.h b/src/MapRenderer.h
+index cf715b942..bcbb51146 100644
+--- a/src/MapRenderer.h
++++ b/src/MapRenderer.h
+@@ -2,6 +2,7 @@
+ #define CC_MAPRENDERER_H
+ #include "Core.h"
+ #include "Constants.h"
++#include "TexturePack.h"
+ CC_BEGIN_HEADER
+ 
+ /* Renders the blocks of the world by subdividing it into chunks.
+@@ -42,6 +43,7 @@ struct ChunkInfo {
+ 	cc_uint8 allAir  : 1; /* Whether chunk is completely air */
+ 	cc_uint8 noData  : 1; /* Whether chunk is currently empty of data, but may have data if built */
+ 	cc_uint8 skipClip: 1; /* Whether chunk can skip GPU backend clipping (see CC_CLIPPING_FLAGS) */
++	cc_uint8 building: 1; /* (ShaderEmu) a worker core has its mesh to build */
+ 	cc_uint8 : 0;         /* pad to next byte*/
+ 
+ 	cc_uint8 drawXMin : 1;
+@@ -62,6 +64,29 @@ struct ChunkInfo {
+ 	struct ChunkPartInfo* translucentParts;
+ };
+ 
++#ifdef CC_BUILD_SHADEREMU
++/* Chunk meshes built on a worker core (docs/classicube.md, docs/multicore.md): Builder.c is
++   compiled a second time (SE_SECOND) with buffers of its own, and that copy builds a few chunks
++   at a time into them, while the first core builds others and draws. What a chunk came to is
++   in SEMeshOut, which the first core makes the chunk's own when the job has ended. */
++#define SE_MESH_MOST 8
++struct SEMeshOut {
++	int made, hasNorm, hasTran, verts;
++	void* at; /* the vertices, in the worker's buffer */
++	struct ChunkPartInfo norm[ATLAS1D_MAX_ATLASES], tran[ATLAS1D_MAX_ATLASES];
++};
++struct SEMeshJob {
++	int count, used;
++	struct ChunkInfo copy[SE_MESH_MOST];
++	struct SEMeshOut out[SE_MESH_MOST];
++};
++unsigned Builder_Job_w(unsigned job, unsigned unused);
++void Builder_ApplyActive_w(void);
++extern struct IGameComponent Builder_Component_w;
++/* Waits for the worker's job and forgets it: before anything it reads is freed or changed whole */
++void MapRenderer_SE_Settle(void);
++#endif
++
+ /* Renders the meshes of non-translucent blocks in visible chunks. */
+ void MapRenderer_RenderNormal(float delta);
+ /* Renders the meshes of translucent blocks in visible chunks. */
 diff --git a/src/PackedCol.h b/src/PackedCol.h
-index 0646e39..be5e3b4 100644
+index 0646e3916..be5e3b428 100644
 --- a/src/PackedCol.h
 +++ b/src/PackedCol.h
 @@ -8,7 +8,7 @@ CC_BEGIN_HEADER
@@ -620,7 +984,7 @@ index 0646e39..be5e3b4 100644
  	#define PACKEDCOL_G_SHIFT  8
  	#define PACKEDCOL_R_SHIFT 16
 diff --git a/src/Server.c b/src/Server.c
-index 761927b..85e8ec1 100644
+index 761927b03..85e8ec121 100644
 --- a/src/Server.c
 +++ b/src/Server.c
 @@ -150,6 +150,12 @@ static void SPConnection_BeginConnect(void) {
@@ -636,8 +1000,24 @@ index 761927b..85e8ec1 100644
  
  	Gen_Start(gen, seed, horSize, verSize, horSize);
  }
+diff --git a/src/World.c b/src/World.c
+index e9b33346c..6a6b99ae5 100644
+--- a/src/World.c
++++ b/src/World.c
+@@ -37,7 +37,11 @@ static void GenerateNewUuid(void) {
+ 	World.Uuid[8] |= 0x80; /* variant 2*/
+ }
+ 
++void MapRenderer_SE_Settle(void);
+ void World_Reset(void) {
++#ifdef CC_BUILD_SHADEREMU
++	MapRenderer_SE_Settle(); /* a worker core may be reading the blocks */
++#endif
+ #ifdef EXTENDED_BLOCKS
+ 	if (World.Blocks != World.Blocks2) Mem_Free(World.Blocks2);
+ 	World.Blocks2 = NULL;
 diff --git a/src/main_impl.h b/src/main_impl.h
-index 21c7255..0960c06 100644
+index 21c7255d4..0960c0618 100644
 --- a/src/main_impl.h
 +++ b/src/main_impl.h
 @@ -85,7 +85,7 @@ static void RunGame(void) {

@@ -202,6 +202,15 @@ void mcw_close(void)
 	/* (the stacks stay: a worker is on one until the machine has parked it) */
 }
 
+void mcw_touch(void *memory, unsigned bytes)
+{
+	volatile uint8_t *at = (volatile uint8_t *)((uintptr_t)memory & ~4095u);
+	volatile uint8_t *end = (volatile uint8_t *)memory + bytes;
+
+	/* a byte stored as it is: the page is there and this program's to write, and nothing changes */
+	for (; at < end; at += 4096) *at = *at;
+}
+
 void *mcw_alloc(unsigned bytes)
 {
 	void *memory;

@@ -43,6 +43,31 @@ through the machine's serial console:
   block ticks at a quarter of the rate, the map's borders in quads of 16 blocks, a view
   distance of 128 and a seed from `CLASSICUBE_SEED`.
 
+
+## Meshes from a worker core
+
+A chunk's mesh is some 100 to 200 thousand instructions, and the game builds one a frame
+while it has any to build: 15 seconds at 4 frames a second after the world is made. On a
+machine with worker cores (`docs/multicore.md`) a second builder runs on one:
+
+- `Builder.c` is compiled twice (`build.sh`: `-DSE_SECOND`, its three public names renamed).
+  The second copy has every buffer of the first as its own, takes eight chunks at a time
+  that have never had a mesh, and builds them into memory of its own; it makes no vertex
+  buffer and writes nothing of the chunks'.
+- The first core goes on building the nearest chunk each frame, and when the worker's eight
+  are done makes them the chunks' own (`SE_Mesh_Collect` in `MapRenderer.c`): the parts'
+  counts, and the vertices packed into GPU memory as any chunk's are (`Gfx_SE_UnlockFrom`).
+- A chunk that is made again (a block changed) stays the first core's, which draws it by its
+  old mesh until the new one is there. Anything that makes chunks stale while the worker has
+  some (`se_mesh_serial`) throws its eight away, and whatever frees the chunks or the blocks
+  waits for it first (`MapRenderer_SE_Settle`).
+- The build gives every variable its own 16 bytes, as Quake's does, and the game touches all
+  of its data once before the first job (`mcw_touch`), or the worker would stop at each page
+  of its own buffers until the next frame.
+
+From the command to the whole world drawn: 40.3 s, 51.9 s with `CLASSICUBE_MESH=inline` (the
+first core alone); the finished world is the same 83 commands and 6,980 quads.
+
 ## How it is drawn
 
 - **A chunk is packed vertices** (`VERTEX_PACKED`): a word a vertex, bytes of x, y and z in

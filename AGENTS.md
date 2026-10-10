@@ -720,6 +720,11 @@ project's `Assets/ShaderEmu`; after changing anything there, copy it back here.
   answer within the frame gains. The window system has none to give (it waits for the GPU).
 - Builds carry one date (`SOURCE_DATE_EPOCH`, `KBUILD_BUILD_TIMESTAMP`): do not put the time of
   a build into a program, or `linux/prebuilt` grows by it at every save.
+- A change to how Quake's server and client take turns is tested with play, not only with the
+  sums of a player standing still: `QUAKE_TRACK` and `QUAKE_TEST_EXIT` (`docs/quake.md`). The
+  first version passed every sum and crashed at the first level's exit.
+- A harness run's `--uart-log` is added to, not replaced: give a run a new name, or lines of
+  the run before are read as this one's.
 - Never more than three harness runs at once: four took 264 s where one takes 70.
 - Its changes to id's source are `linux/quake/quake.patch`: edit a clean clone at the commit
   `build.sh` names and save `git diff -- WinQuake`. The build puts the tree back each time.
