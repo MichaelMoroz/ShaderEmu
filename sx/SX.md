@@ -161,5 +161,9 @@ independent: every absolute word, a long immediate included, is a bFLT relocatio
 4. Linux 5.17 arch/sx (no MMU): entry, traps, timer, signals, uaccess, the shaderemu drivers.
 5. busybox and the benchmarks; boot to a shell on `sx_cpu`.
 6. The tick (`sx/tick`): bundles, the classes, a faster write cache; the commit's operations and
-   the moved device window; the harness's SX mode. Time against `rvc_lean` on the card.
+   the moved device window; the harness's SX mode. Time against `rvc_lean` on the card. Start from
+   `experiments/isa_proto/steps/s21.hlsl` and what `steps/README.md` measured on the way (s18 and s21
+   ran the same loops 2.2 to 3.1 times as fast as the lean tick; code and data in one RAM of
+   16-byte texels; a write cache of words, committed in four draws; register and cache arrays
+   declared 64; a second op fed by selects, not after the write).
 7. Workers on SX; then the rest of the programs.
