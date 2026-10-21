@@ -33,6 +33,7 @@
 
 #include "rvc_net.h"
 #include "rvc_persist.h"
+#include "../../experiments/isa_proto/isa.h"
 
 typedef uint32_t u32;
 typedef int32_t i32;
@@ -103,8 +104,10 @@ static u64 count_pass = 0;
 static double count_seconds = 0;
 
 static void count_mark();
+static bool console_mute = false;   // (RVC_NATIVE_CHECK's second machine says nothing)
 static void console_put(u32 c) {
     char ch = (char)c;
+    if (console_mute) return;
     if (console_hook) { console_hook(ch); return; }
     console_text.push_back(ch);
     if (!opt.quiet) fputc(ch, stdout);
@@ -624,6 +627,9 @@ static u64 trap_counts[2][16];   // exceptions and interrupts, by cause
 
 static void take_trap(Core& c, u32 cause, u32 value, u32 pc) {
     _InterlockedIncrement64((volatile long long*)&trap_counts[cause >> 31][cause & 15]);
+    static int trap_log = getenv("RVC_TRAP_LOG") ? atoi(getenv("RVC_TRAP_LOG")) : 0;   // (the first N traps, said)
+    if (trap_log > 0 && !(cause >> 31) && trap_log--)
+        fprintf(stderr, "[trap] core %d cause %u value %08x at %08x, instruction %llu\n", c.hart, cause, value, pc, (unsigned long long)c.clock);
     c.scause = cause;
     c.stval = value;
     c.sepc = pc;
@@ -694,7 +700,7 @@ static void note_stop(Core& c, const Trap& t) {
         fprintf(stderr, "[adfault] core %d, cause %u at %08x, pc %08x, its instruction %llu%s\n", c.hart, t.cause, t.value, c.pc,
                 (unsigned long long)c.clock, c.ad_miss ? "" : " (not the bit)");
 }
-static u32 last_pc[32], last_ins[32];   // core 0's last instructions, for the summary of a run that stopped oddly
+static u32 last_pc[32], last_ins[32], last_at = 0;   // core 0's last instructions (slots), for the summary of a run that stopped oddly
 
 // ---- RVC_CALLS=FILE: what core 0's calls cost, its own instructions in each (tools/mc_candidates.py) ----
 //
@@ -1465,6 +1471,358 @@ static int run_some(Core& c, u64 n, const uint8_t* kinds) {
 #undef SET
 #undef FLOATS_ON
 
+// ---- the machine's own instructions (--native): a slot of 16 bytes, a main op and a second one ----
+//
+// experiments/isa_proto/isa.h is the encoding, ISA.md the description. A slot's memory accesses are made
+// before any register is written, so a slot that faults is made again whole; its clock counts the
+// RISC-V instructions it stands for (X's top two bits).
+static bool native_on = getenv("RVC_NATIVE") && atoi(getenv("RVC_NATIVE")) != 0;
+
+static inline void nput(Core& c, u32 r, u32 v) { if (r - 1 < 31) c.x[r] = v; }
+
+static u32 alu(u32 sel, bool neg, u32 a, u32 b) {
+    switch (sel) {
+    case SEL_SUM: return neg ? a - b : a + b;
+    case SEL_AND: return a & b;
+    case SEL_OR: return a | b;
+    case SEL_XOR: return a ^ b;
+    case SEL_SLL: return a << (b & 31);
+    case SEL_SRL: return a >> (b & 31);
+    case SEL_SRA: return (u32)((i32)a >> (b & 31));
+    }
+    return a - b;   // (the second unit's 7: sub)
+}
+
+// A general op (K_GEN): what general_step does for the RISC-V instruction it stands for.
+template <bool W>
+static int native_gen(Core& c, u32 X, u32 Y, u32 Z, u32 Wd, u32 pc, Trap& t, u32& next) {
+    u32 ra = Y_RA(Y), rd = Z_RD(Z), rb = Z_RB(Z), rc = Z_RC(Z), a = c.x[ra], b = c.x[rb], result = 0, v;
+    bool write = true, illegal = false;
+    u32 g = Z_OPG(Z);
+    (void)X;
+    switch (g) {
+    case G_MUL: result = a * b; break;
+    case G_MULH: result = (u32)(((i64)(i32)a * (i64)(i32)b) >> 32); break;
+    case G_MULHSU: result = (u32)(((i64)(i32)a * (i64)(u64)b) >> 32); break;
+    case G_MULHU: result = (u32)(((u64)a * (u64)b) >> 32); break;
+    case G_DIV: result = b == 0 ? 0xffffffffu : (a == 0x80000000u && b == 0xffffffffu) ? a : (u32)((i32)a / (i32)b); break;
+    case G_DIVU: result = b == 0 ? 0xffffffffu : a / b; break;
+    case G_REM: result = b == 0 ? a : (a == 0x80000000u && b == 0xffffffffu) ? 0 : (u32)((i32)a % (i32)b); break;
+    case G_REMU: result = b == 0 ? a : a % b; break;
+    case G_LR: case G_SC: case G_AMOSWAP: case G_AMOADD: case G_AMOXOR: case G_AMOAND: case G_AMOOR:
+    case G_AMOMIN: case G_AMOMAX: case G_AMOMINU: case G_AMOMAXU: {
+        static const u32 kinds[] = {2, 3, 1, 0, 4, 12, 8, 16, 20, 24, 28};
+        u32 kind = kinds[g - G_LR];
+        if (c.hart && workers_threaded && amo_threaded(c, kind, a, b, result, t, illegal)) break;
+        if (kind == 2) {
+            if (!load(c, a, 4, v, t)) break;
+            c.reserved = true, c.reservation = a, c.reserved_value = v;
+            result = v;
+        } else if (kind == 3) {
+            if (c.reserved && c.reservation == a) {
+                if (!store(c, a, 4, b, t)) break;
+                result = 0;
+            } else result = 1;
+            c.reserved = false;
+        } else {
+            if (!load(c, a, 4, v, t)) break;
+            u32 n = kind == 1 ? b : kind == 0 ? v + b : kind == 4 ? v ^ b : kind == 12 ? v & b : kind == 8 ? v | b
+                  : kind == 16 ? ((i32)v < (i32)b ? v : b) : kind == 20 ? ((i32)v > (i32)b ? v : b)
+                  : kind == 24 ? (v < b ? v : b) : (v > b ? v : b);
+            if (!store(c, a, 4, n, t)) break;
+            result = v;
+        }
+        break;
+    }
+    case G_CSRRW: case G_CSRRS: case G_CSRRC: case G_CSRRWI: case G_CSRRSI: case G_CSRRCI: {
+        u32 n = Wd, old = 0, how = (g - G_CSRRW) % 3 + 1, src = g >= G_CSRRWI ? ra : a;
+        if (((n >> 8) & 3) > c.priv || !csr_read(c, n, old)) {
+            if (!(n >= 0xc00 && n <= 0xc82 && csr_read(c, n, old)) && !((n & 0xff0) == 0x0b0 && csr_read(c, n, old))) { illegal = true; break; }
+        }
+        if (how == 1 || ra != 0) {
+            u32 nv = how == 1 ? src : how == 2 ? old | src : old & ~src;
+            if ((n >> 10) == 3 || !csr_write(c, n, nv, t)) { illegal = true; break; }
+        }
+        result = old;
+        break;
+    }
+    case G_ECALL:
+        write = false;
+        if (c.priv == PRIV_S) sbi_call(c);
+        else t.on = true, t.cause = 8, t.value = 0;
+        break;
+    case G_EBREAK:
+        if (W) { workers[c.hart].state = MC_PARKED; c.clock -= isa_cnt(X); return STEP_OUT; }   // (parks; not counted)
+        write = false, t.on = true, t.cause = 3, t.value = pc;
+        break;
+    case G_SRET:
+        write = false;
+        if (c.priv != PRIV_S) { illegal = true; break; }
+        {
+            u32 spie = (c.mstatus >> 5) & 1, spp = (c.mstatus >> 8) & 1;
+            c.mstatus = (c.mstatus & ~0x122u) | (spie << 1) | 0x20;
+            c.priv = spp;
+            next = c.sepc;
+            c.reserved = false;
+            c.recheck = true;
+        }
+        break;
+    case G_WFI:
+        write = false;
+        if (c.priv != PRIV_S) { illegal = true; break; }
+        c.waiting = true, c.end_pass = true;
+        break;
+    case G_SFENCE:
+        write = false;
+        if (c.priv == PRIV_S) c.flush();
+        break;
+    case G_FENCEI: write = false; break;
+    case G_PAUSE:
+        write = false;
+        if (W) {   // asleep until the job word changes (h_general)
+            Worker& w = workers[c.hart];
+            w.job_seen = w.job_was, w.state = MC_ASLEEP;
+            c.clock -= isa_cnt(X);
+            c.pc = pc + ISA_SLOT;
+            return STEP_OUT;
+        }
+        c.end_pass = true;
+        break;
+    case G_JMAP: {   // a RISC-V address through the map at pc + W; any other is a slot's
+        u32 at = pc + Wd, lo = 0, n = 0, off = 0;
+        write = false;
+        if (!load(c, at, 4, lo, t) || !load(c, at + 4, 4, n, t)) break;
+        if (a - lo < 4 * n && !(a & 3)) {
+            if (!load(c, at + 8 + (a - lo), 4, off, t)) break;
+            next = at + off;
+        } else next = a & ~15u;
+        break;
+    }
+    default: {
+        if (g < G_FLW || g >= G_JMAP || !(c.mstatus & 0x6000)) { illegal = true; break; }
+        u32* f = c.f;
+        u32 fa = f[ra], fb = f[rb], rm = Wd == 7 ? (c.fcsr >> 5) & 7 : Wd;
+        float x = fl(fa), y = fl(fb);
+        write = false;
+        switch (g) {
+        case G_FLW: if (load(c, a + Wd, 4, v, t)) f[rd] = v; break;
+        case G_FSW: store(c, a + Wd, 4, f[rb], t); break;
+        case G_FADD: f[rd] = canon(x + y); break;
+        case G_FSUB: f[rd] = canon(x - y); break;
+        case G_FMUL: f[rd] = canon(x * y); break;
+        case G_FDIV: f[rd] = canon(x / y); break;
+        case G_FSQRT: f[rd] = canon(sqrtf(x)); break;
+        case G_FSGNJ: f[rd] = (fa & 0x7fffffff) | (fb & 0x80000000); break;
+        case G_FSGNJN: f[rd] = (fa & 0x7fffffff) | (~fb & 0x80000000); break;
+        case G_FSGNJX: f[rd] = fa ^ (fb & 0x80000000); break;
+        case G_FMIN: case G_FMAX: {
+            bool an = is_nan(fa), bn = is_nan(fb), mn = g == G_FMIN;
+            if (an && bn) f[rd] = 0x7fc00000;
+            else if (an) f[rd] = fb;
+            else if (bn) f[rd] = fa;
+            else if (x == y) f[rd] = mn ? (fa | fb) : (fa & fb);
+            else f[rd] = mn == (x < y) ? fa : fb;
+            break;
+        }
+        case G_FCVTWS: case G_FCVTWUS: {
+            bool u = g == G_FCVTWUS;
+            result = is_nan(fa) ? (u ? 0xffffffffu : 0x7fffffffu) : to_int(bits(round_mode(x, rm)), u);
+            write = true;
+            break;
+        }
+        case G_FCVTSW: f[rd] = bits((float)(i32)a); break;
+        case G_FCVTSWU: f[rd] = bits((float)a); break;
+        case G_FMVXW: result = fa, write = true; break;
+        case G_FCLASS: result = fclass(fa), write = true; break;
+        case G_FMVWX: f[rd] = a; break;
+        case G_FEQ: result = x == y, write = true; break;
+        case G_FLT: result = x < y, write = true; break;
+        case G_FLE: result = x <= y, write = true; break;
+        case G_FMADD: case G_FMSUB: case G_FNMSUB: case G_FNMADD: {
+            float z = fl(f[rc]);
+            float r = g == G_FMADD ? fmaf(x, y, z) : g == G_FMSUB ? fmaf(x, y, -z) : g == G_FNMSUB ? fmaf(-x, y, z) : fmaf(-x, y, -z);
+            f[rd] = canon(r);
+            break;
+        }
+        }
+    }
+    }
+    if (c.wc_full) {   // (the slot is the next pass's)
+        c.clock -= isa_cnt(X);
+        if (W) c.wc_full = false;
+        return W ? STEP_OUT : STEP_BREAK;
+    }
+    if (illegal) t.on = true, t.cause = 2, t.value = X;
+    if (t.on) return -1;
+    if (write) nput(c, rd, result);
+    return STEP_ON;
+}
+
+// RVC_NATIVE_CHECK=PAYLOAD,WORDS: core 0 beside the same kernel's RISC-V build (PAYLOAD, with RAM of its own),
+// compared at every slot that ends a block, its registers and pc through WORDS (each code word's slot,
+// xlat kernel's MAP.words). Until the first difference, trap or interrupt, which it says.
+static bool read_file(const std::string& path, std::vector<uint8_t>& to);
+static struct NativeCheck {
+    bool on = false;
+    Core a;
+    std::vector<uint8_t> ram;
+    std::vector<u32> native;
+    u32 lo = 0, last = 0, nlo = ~0u, nhi = 0;   // (nlo, nhi: where the slots lie)
+    u64 owed = 0, checks = 0;
+} nc;
+static u32 nc_map(u32 v);
+// (a register an auipc set for a later offset is near code on one side and among the slots on the other)
+static bool nc_alike(u32 slots, u32 riscv) {
+    u32 span = 4 * (u32)nc.native.size();
+    return slots == riscv || slots == nc_map(riscv) || (riscv - nc.lo + 4096 < span + 8192 && slots - nc.nlo < nc.nhi - nc.nlo);
+}
+static u32 nc_map(u32 v) {
+    u32 k = (v - nc.lo) >> 2;
+    return !(v & 3) && k < nc.native.size() && nc.native[k] ? nc.native[k] : v;
+}
+static void native_check_init() {
+    const char* v = getenv("RVC_NATIVE_CHECK");
+    if (!v || !*v || !native_on) return;
+    std::string s = v;
+    size_t comma = s.find(',');
+    std::vector<uint8_t> payload, words;
+    if (comma == std::string::npos || !read_file(s.substr(0, comma), payload) || !read_file(s.substr(comma + 1), words) || words.size() < 8) {
+        fprintf(stderr, "[check] RVC_NATIVE_CHECK=PAYLOAD,WORDS: cannot read them\n");
+        return;
+    }
+    nc.ram.assign(RAM_SIZE, 0);
+    memcpy(nc.ram.data(), payload.data(), std::min<size_t>(payload.size(), RAM_SIZE));
+    u32 head[2];
+    memcpy(head, words.data(), 8);
+    nc.lo = head[0];
+    nc.native.resize(head[1]);
+    memcpy(nc.native.data(), words.data() + 8, std::min<size_t>(4ull * head[1], words.size() - 8));
+    for (u32 v : nc.native)
+        if (v) nc.nlo = std::min(nc.nlo, v), nc.nhi = std::max(nc.nhi, v + 16);
+    nc.a.pc = 0x80400000, nc.a.x[11] = 0x82200000, nc.a.priv = PRIV_S;
+    nc.owed = ~0ull;   // (the boot slot has no RISC-V instruction of its own)
+    nc.on = true;
+}
+static void native_check_stop(const char* why, const Core& c) {
+    if (!nc.on) return;
+    fprintf(stderr, "[check] %s at slot %08x (RISC-V %08x) after %llu blocks alike\n", why, c.pc, nc.a.pc, (unsigned long long)nc.checks);
+    nc.on = false;
+}
+static void native_check(Core& c, u32 pc, u32 X, u32 Z, u32 cnt) {
+    nc.owed += cnt;
+    u32 g = Z_OPG(Z);   // (where a block ends: a branch, a system op, a mapped jump; not a mul inside one)
+    if ((X & X_KIND) == K_GEN ? !((g >= G_CSRRW && g <= G_SFENCE) || g == G_JMAP) : !(X & X_BR)) return;
+    std::swap(ram, nc.ram);
+    ramp = ram.data(), ramw = (u32*)ram.data();
+    console_mute = true;
+    for (; nc.owed; nc.owed--) {
+        u32 ins = 0;
+        if (nc.a.pc - RAM_BASE < RAM_SIZE) memcpy(&ins, &ram[nc.a.pc - RAM_BASE], 4);
+        nc.a.clock = c.clock - nc.owed + 1;
+        general_step<false>(nc.a, ins);
+    }
+    console_mute = false;
+    std::swap(ram, nc.ram);
+    ramp = ram.data(), ramw = (u32*)ram.data();
+    bool same = nc_map(nc.a.pc) == c.pc;
+    for (int r = 1; r < 32; r++) same = same && nc_alike(c.x[r], nc.a.x[r]);
+    for (int r = 0; r < 32; r++) same = same && c.f[r] == nc.a.f[r];
+    if (same) { nc.checks++, nc.last = pc; return; }
+    fprintf(stderr, "[check] differs after the block that ended at slot %08x (the one before ended at %08x): slot pc %08x, RISC-V pc %08x (its slot %08x)\n",
+            pc, nc.last, c.pc, nc.a.pc, nc_map(nc.a.pc));
+    for (int r = 1; r < 32; r++)
+        if (!nc_alike(c.x[r], nc.a.x[r])) fprintf(stderr, "[check]   x%d: slots %08x, RISC-V %08x\n", r, c.x[r], nc.a.x[r]);
+    for (int r = 0; r < 32; r++)
+        if (c.f[r] != nc.a.f[r]) fprintf(stderr, "[check]   f%d: slots %08x, RISC-V %08x\n", r, c.f[r], nc.a.f[r]);
+    native_check_stop("stopped", c);
+}
+
+// One slot of a core: fetched, made, counted.
+template <bool W>
+static int native_step(Core& c) {
+    Trap t;
+    u32 pc = c.pc;
+    if ((pc >> 12) != c.fetch_vpn) {
+        int r = fetch_page<W>(c);
+        if (r != STEP_ON) return r;
+    }
+    const u32* s = (const u32*)(c.fetch_host + (pc & 0xff0));
+    u32 X = s[0], Y = s[1], Z = s[2], Wd = s[3], cnt = isa_cnt(X), kind = X & X_KIND, next = pc + ISA_SLOT;
+    if (!W && c.hart == 0 && keep_last) { last_pc[last_at & 31] = pc; last_ins[last_at++ & 31] = X; }
+    c.clock += cnt ? cnt : 1;
+    u32* x = c.x;
+    if ((pc & 15) || !cnt || kind == 3) {
+        t.on = true, t.cause = pc & 15 ? 0 : 2, t.value = pc & 15 ? pc : X;
+    } else if (kind == K_GEN) {
+        int r = native_gen<W>(c, X, Y, Z, Wd, pc, t, next);
+        if (r > 0) return r;
+    } else {
+        u32 ra = Y_RA(Y), rd = Z_RD(Z), rb = Z_RB(Z), a = X & X_PCA ? pc : x[ra], res = 0, v2 = 0;
+        bool wr = false;
+        if (kind == K_INT) {
+            u32 b = x[rb] + (X & (X_BR | X_BIG) ? 0 : Wd);
+            if (X & X_BR) {
+                bool take = true;
+                if (X & X_STEP) a += (u32)Z_STEP(Z), res = a, wr = true;
+                if (!(X & X_ALW)) take = ((X & X_EQ) ? a == b : (X & X_UNS) ? a < b : (i32)a < (i32)b) != !!(X & X_INV);
+                if (X & X_LINK) res = pc + ISA_SLOT, wr = true;
+                if (take) next = X & X_IND ? (a + Wd) & ~15u : pc + Wd;
+            } else {
+                u32 sel = (X & X_SEL) >> X_SEL_SHIFT;
+                res = sel == SEL_CMP ? (((X & X_EQ) ? a == b : (X & X_UNS) ? a < b : (i32)a < (i32)b) != !!(X & X_INV))
+                                     : alu(sel, (X & X_NEG) != 0, a, b);
+                wr = true;
+            }
+        } else {   // K_MEM
+            u32 at = a + Wd, mw = (X & X_MW) >> X_MW_SHIFT, size = mw == 1 ? 1 : mw == 2 ? 2 : 4;
+            if (X & X_STORE) {
+                if (store(c, at, (int)size, x[rd], t) && (X & X_ST2)) store(c, at + 4, 4, x[(X >> X_RG_SHIFT) & 31], t);
+            } else if (load(c, at, (int)size, res, t)) {
+                if (!(X & X_MU)) res = size == 1 ? (u32)(i32)(int8_t)res : size == 2 ? (u32)(i32)(int16_t)res : res;
+                wr = true;
+            }
+        }
+        if (!t.on && (X & X_LD2)) load(c, x[Y_RF(Y)] + x[(X >> X_RG_SHIFT) & 31] + (u32)Y_IMM8(Y), 4, v2, t);
+        if (c.wc_full) {
+            c.clock -= cnt;
+            if (W) c.wc_full = false;
+            return W ? STEP_OUT : STEP_BREAK;
+        }
+        if (!t.on) {
+            if (wr) nput(c, rd, res);
+            u32 re = Y_RE(Y);
+            if (X & X_LD2) nput(c, re, v2);
+            else if (!(X & X_ST2) && re != ISA_SINK) {
+                u32 f = x[Y_RF(Y)], g = x[(X >> X_RG_SHIFT) & 31];
+                nput(c, re, X & X_ADDAND ? (f + (u32)Y_IMM8(Y)) & g
+                                         : alu((X & X_SEL2) >> X_SEL2_SHIFT, false, f, g + (X & X_BIG ? Wd : (u32)Y_IMM8(Y))));
+            }
+        }
+    }
+    if (t.on) {
+        if (!W && c.hart == 0) note_stop(c, t), native_check_stop("a trap", c);
+        if ((!W && c.hart == 0) || !mc_fault(c, t)) take_trap(c, t.cause, t.value, pc);
+        return STEP_BREAK;
+    }
+    c.pc = next;
+    if (!W && nc.on && c.hart == 0) native_check(c, pc, X, Z, cnt);
+    if (c.recheck) { c.recheck = false; return STEP_BREAK; }
+    if (W && kind == K_GEN && Z_OPG(Z) == G_FENCEI) return STEP_OUT;   // (ends its pass, as fence.i)
+    return STEP_ON;
+}
+
+// Up to n instructions of slots: how it ended (STEP_*).
+template <bool W>
+static int native_run(Core& c, u64 n) {
+    u64 limit = c.clock + n;
+    while (c.clock < limit) {
+        int r = native_step<W>(c);
+        if (r != STEP_ON) return r;
+        if (!W && c.end_pass) return STEP_BREAK;
+    }
+    return STEP_ON;
+}
+
 // The instructions that are always the general step's: with RVC_CALLS, RVC_PROF or RVC_CPU_LAST
 // every instruction is, for their tables.
 static const uint8_t* step_kinds() {
@@ -1482,6 +1840,7 @@ static u64 run(Core& c, u64 budget) {
         if (irq) {
             c.waiting = false;
             c.mip &= irq == 0x80000005u ? ~0u : ~(1u << (irq & 31));   // (the timer's stays until a new deadline)
+            if (c.hart == 0) native_check_stop("an interrupt", c);
             take_trap(c, irq, 0, c.pc);
         }
         // wfi ends when an interrupt is pending and enabled, taken or not (Linux waits with
@@ -1491,7 +1850,8 @@ static u64 run(Core& c, u64 budget) {
         // a run with no interrupt check: until the timer could fire, at most
         u64 chunk = budget - done, before = c.clock;
         if (chunk > 256) chunk = 256;
-        run_some<false>(c, chunk, kinds);
+        if (native_on) native_run<false>(c, chunk);
+        else run_some<false>(c, chunk, kinds);
         done += c.clock - before;
     }
     return done;
@@ -1503,6 +1863,12 @@ static u64 worker_exec(Core& c, u64 budget) {
     const uint8_t* kinds = step_kinds();
     Worker& w = workers[c.hart];
     u64 done = 0;
+    while (native_on && done < budget && w.state == MC_RUNNING) {
+        u64 before = c.clock;
+        int r = c.priv == PRIV_U ? native_run<true>(c, budget - done) : native_run<false>(c, 1);
+        done += c.clock - before;
+        if (r == STEP_OUT || c.wc_full) { c.wc_full = false; break; }
+    }
     while (done < budget && w.state == MC_RUNNING) {
         if (c.priv == PRIV_U) {
             u64 before = c.clock;
@@ -1599,7 +1965,7 @@ static bool worker_wake(Core& c) {
         if ((mbox(c.hart, 5, word(mc_resume_at(c.hart))) & 0xffffff) == (w.seen & 0xffffff)) return false;
         if (w.state == MC_CALLING) {
             c.x[10] = mbox(c.hart, 6, word(mc_resume_at(c.hart) + 4));
-            c.pc += 4;
+            c.pc += native_on ? ISA_SLOT : 4;
         }
         c.flush();   // core 0 has put a page there
         w.state = MC_RUNNING;
@@ -2133,6 +2499,7 @@ int main(int argc, char** argv) {
         else if (a == "--net-loss") opt.netLoss = atof(next("--net-loss").c_str());
         else if (a == "--net-delay") opt.netDelay = atof(next("--net-delay").c_str());
         else if (a == "--persist") opt.persist = next("--persist");
+        else if (a == "--native") native_on = true;
         else if (a == "--threads") pool_size = std::max(1, std::min(64, atoi(next("--threads").c_str())));
         else if (a == "--no-stdin" || a == "--d3d11" || a == "--dxc") {}
         else if (a == "--rvc" || a == "--fixed-dt") next(a.c_str());   // (the shader machine's: taken and ignored)
@@ -2167,6 +2534,8 @@ int main(int argc, char** argv) {
                    "                         PORT + N; its clock then keeps to this computer's (docs/system/lan.md)\n"
                    "  --net-loss P --net-delay MS   lose P percent of what it sends, hold the rest back MS ms\n"
                    "  --persist FILE         the file the guest's /persistence is kept in (docs/system/persist.md)\n"
+                   "  --native               the machine's own instructions (experiments/isa_proto/ISA.md): an image made\n"
+                   "                         by experiments/isa_proto/image.py; RVC_NATIVE=1 too\n"
                    "  --threads N            host threads for the worker cores (RVC_THREADS; default half this computer's,\n"
                    "                         at most 8; 1: one after another, the same every run)\n");
             return 0;
@@ -2182,6 +2551,7 @@ int main(int argc, char** argv) {
         fprintf(stderr, "rvc_cpu: no image in %s (python tools\\make_linux_image.py)\n", opt.image.c_str());
         return 2;
     }
+    native_check_init();
     if (!opt.uartLog.empty()) {
         uart_log = fopen(opt.uartLog.c_str(), "ab");
         if (uart_log) fprintf(uart_log, "\n=== rvc_cpu ===\n");
@@ -2255,7 +2625,7 @@ int main(int argc, char** argv) {
                 (unsigned long long)net.sent, (unsigned long long)net.lost, (unsigned long long)net.received, (unsigned long long)net.dropped);
     if (getenv("RVC_CPU_LAST"))
         for (u64 k = 1; k <= 32; k++)
-            fprintf(stderr, "  %08x: %08x\n", last_pc[(c0.clock + k) & 31], last_ins[(c0.clock + k) & 31]);
+            fprintf(stderr, "  %08x: %08x\n", last_pc[((native_on ? last_at : c0.clock) + k) & 31], last_ins[((native_on ? last_at : c0.clock) + k) & 31]);
     if (count_marked) {
         u64 all = 0, c0n = cores[0].clock - count_at[0];
         int ran = 0;
