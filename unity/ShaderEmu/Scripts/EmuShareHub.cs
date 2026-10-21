@@ -41,19 +41,25 @@ public class EmuShareHub : UdonSharpBehaviour
     // client gets out in practice for everything it sends (VRChat's limit is a client's).
     private const int PacketMost = 1150, ConsoleMost = 800, HeaderBytes = 19;
     private const int StatusFixed = 130, StatusTextMost = 560;   // as EmuStreams'
-    // A sending's share for the network: a full packet and more, or many small ones. While a
-    // game's packets flow the display has one sending in six (below), so this is most of
-    // what a client gets out: some 7 KB a second at eight sendings.
+    // A batch of the network's packets: a full packet and more, or many small ones. They go as a
+    // network event of their own object (EmuNet.Packets), at most one a frame and 95 a second;
+    // while they flow the display has one sending in six (below).
     private const int NetBatchMost = 1000;
     private float netFlowAt = -10f;   // when the machine last had packets to send
     private byte[] netScratch = new byte[NetBatchMost + 600];
     [HideInInspector] public int netBatches, netTaken;
+    public bool netEvents = true;   // false: batches as EmuNet's serializations (a round trip some 70 ms longer)
+    private float netSentAt = -10f;
+    // (for the [Lan] lines: from the asking to VRChat's sending, and on the way, summed since the last line)
+    [HideInInspector] public float netPostSum;
+    [HideInInspector] public int netPostCount, netOutCount, netWaySum, netWayCount, netWayMost;
     private const float TickSeconds = 0.1f;   // input every tick, a packet on two of three
-    private const float ExpressSeconds = 0.05f;   // the network's and the keys' sendings, at most this often
+    private const float ExpressSeconds = 0.05f;   // the keys' sendings, at most this often
     // What each of the last packets carried, to send again when a receiver says one was lost.
     private const int Kept = 32, KeptMost = 96;
 
     private EmuShare mine;
+    private EmuNet mineNet;
     private EmuShare[] shares = new EmuShare[100];   // the other players'
     private int shareCount;
     private VRCPlayerApi[] players = new VRCPlayerApi[100];
@@ -280,6 +286,7 @@ public class EmuShareHub : UdonSharpBehaviour
         }
         if (!Utilities.IsValid(targetShare)) targetShare = null;
         if (!Utilities.IsValid(mine)) mine = null;
+        if (!Utilities.IsValid(mineNet)) mineNet = null;
     }
 
     // A player's object may arrive after the player: asked again while one is missing.
@@ -297,6 +304,7 @@ public class EmuShareHub : UdonSharpBehaviour
             VRCPlayerApi player = players[i];
             if (!Utilities.IsValid(player)) continue;
             EmuShare found = null;
+            EmuNet foundNet = null;
             GameObject[] objects = Networking.GetPlayerObjects(player);
             if (objects != null)
             {
@@ -305,6 +313,8 @@ public class EmuShareHub : UdonSharpBehaviour
                     if (!Utilities.IsValid(objects[k])) continue;
                     EmuShare share = objects[k].GetComponent<EmuShare>();
                     if (Utilities.IsValid(share)) found = share;
+                    EmuNet net = objects[k].GetComponent<EmuNet>();
+                    if (Utilities.IsValid(net)) foundNet = net;
                 }
             }
             if (found == null)
@@ -316,7 +326,9 @@ public class EmuShareHub : UdonSharpBehaviour
             if (found.seenAsk == null || found.seenAsk.Length != found.ask.Length) found.seenAsk = new int[found.ask.Length];
             found.ownerId = player.playerId;
             found.ownerName = player.displayName;
-            if (player.isLocal) mine = found;
+            if (foundNet != null) foundNet.share = found;
+            else incomplete = true;
+            if (player.isLocal) { mine = found; mineNet = foundNet; }
             else shares[shareCount++] = found;
         }
     }
@@ -501,6 +513,7 @@ public class EmuShareHub : UdonSharpBehaviour
 
     void Update()
     {
+        SendNet();
         // Units do not wait for a tick: a tick that may carry the display allows one packet, which
         // is asked for the frame the link is free and goes the frame it has been read back. What
         // it shows is then a few frames old, not one or two tenths of a second (or a second,
@@ -534,15 +547,12 @@ public class EmuShareHub : UdonSharpBehaviour
                 }
             }
         }
-        // The network's packets and typed keys do not wait for a tick either: they go the frame the
-        // link is free, half a tick after the last sending at the soonest (docs/system/lan.md)
+        // Typed keys do not wait for a tick either: they go the frame the link is free, half a
+        // tick after the last sending at the soonest
         if (mine != null && !mine.Busy() && !Networking.IsClogged && !(unitsActive && unitsPending)
-            && Time.time - sentAt >= ExpressSeconds
-            && (machine.NetWaiting() > 0 || outHead != outTail || pointerDue))
+            && Time.time - sentAt >= ExpressSeconds && (outHead != outTail || pointerDue))
         {
-            bool sent = MoveNet();
-            if (sent) netFlowAt = Time.time;
-            if (MoveInput() || sent) SendPacket(0, wasOn);
+            if (MoveInput()) SendPacket(0, wasOn);
         }
         if (Time.time < nextTick) return;
         nextTick = Time.time + TickSeconds;
@@ -555,6 +565,7 @@ public class EmuShareHub : UdonSharpBehaviour
         if (mine == null) return;
         if (netTest) NetTest();
         if (lanTest) LanTest();
+        if (Time.time >= lanTimesAt) LanTimes();
 
         bool on = machine.IsOn();
         if (on != wasOn)
@@ -586,11 +597,8 @@ public class EmuShareHub : UdonSharpBehaviour
         if (unitsActive && ticks % 3 != 0 && !(Time.time - netFlowAt < 1f && ticks % 6 != 1)) unitsCredit = true;
         if (mine.Busy() || Networking.IsClogged) return;
 
-        // the network's packets go ahead of the display, which while they flow (a game) has one
-        // sending in six: a picture of the game a second and a half apart, and the game's
-        // packets nearly all of the link
-        bool net = MoveNet();
-        if (net) netFlowAt = Time.time;
+        // while the network's packets flow (a game) the display has one sending in six: a picture
+        // of the game a second and a half apart, and the game's packets nearly all of the link
         bool flowing = Time.time - netFlowAt < 1f;
         int length = 0;
         bool slot = ticks % 3 != 0 && wanted && !(flowing && ticks % 6 != 1);
@@ -612,10 +620,10 @@ public class EmuShareHub : UdonSharpBehaviour
         bool typed = MoveInput();
         if (waits)
         {
-            unitsCarry = unitsCarry || typed || stateOut || net;
+            unitsCarry = unitsCarry || typed || stateOut;
             return;
         }
-        if (length == 0 && !typed && !stateOut && !net) return;
+        if (length == 0 && !typed && !stateOut) return;
         SendPacket(length, on);
     }
 
@@ -718,22 +726,37 @@ public class EmuShareHub : UdonSharpBehaviour
     // its Home, a picture fetched and compared), or with lanDoom or lanQuake starts that game
     // with it as the desktop's shortcuts do (nxgame); and logs what its machine sent, got and printed.
     public bool lanTest, lanDoom, lanQuake;
-    private float lanAt, lanPingAt, lanGameAt, lanDetailAt;
-    private bool lanStarted, lanPinged, lanGame;
+    private float lanAt, lanGameAt, lanDetailAt, lanBothAt = -1f;
+    private bool lanStarted, lanPinged, lanPinged2, lanGame;
 
     private void LanTest()
     {
         if (!lanStarted)
         {
             lanStarted = true;
+            netEvents = false;   // the first ping over serializations, the second over events
             machine.PowerOn();
         }
         int other = shareCount > 0 && Utilities.IsValid(shares[0]) ? shares[0].ownerId : 0;
-        if (other == 0 || !IsOn(other)) lanPingAt = Time.time + 40f;
-        else if (!lanPinged && Time.time >= lanPingAt)
+        // (one ping after the other, and the fetches after both: each ping on a quiet link)
+        if (other == 0 || !IsOn(other)) lanBothAt = -1f;
+        else if (lanBothAt < 0f) lanBothAt = Time.time;
+        if (lanBothAt >= 0f && !lanPinged && Time.time >= lanBothAt + (myId < other ? 60f : 85f))
         {
             lanPinged = true;
-            consoleKeyboard.TypeText("ping -c 5 10.0." + (other >> 8) + "." + (other & 255) + " | tail -2\n");
+            consoleKeyboard.TypeText("ping -c 20 10.0." + (other >> 8) + "." + (other & 255) + " | tail -2\n");
+        }
+        // then the same over network events (the default)
+        if (lanPinged && !lanPinged2 && Time.time >= lanBothAt + 110f && !netEvents)
+        {
+            netEvents = true;
+            Debug.Log("[LanTest] batches go as network events from now on");
+        }
+        if (lanPinged && !lanPinged2 && Time.time >= lanBothAt + (myId < other ? 115f : 140f))
+        {
+            lanPinged2 = true;
+            lanGameAt = Time.time + 30f;   // (the first ping's summary is on the screen until the clear)
+            consoleKeyboard.TypeText("clear; ping -c 20 10.0." + (other >> 8) + "." + (other & 255) + " | tail -2\n");
         }
         if (Time.time < lanAt) return;
         lanAt = Time.time + 5f;
@@ -751,13 +774,13 @@ public class EmuShareHub : UdonSharpBehaviour
             string line = terminal.LineText(r);
             if (line.Contains("packets transmitted")) answered = true;
             if (line.Trim().Length > 0) last = line.Trim();
-            if (line.Contains("packets transmitted") || line.Contains("nodes)") || line.Contains("doomstat: ") && line.Contains("tics")
+            if (line.Contains("packets transmitted") || line.Contains("round-trip") || line.Contains("nodes)") || line.Contains("doomstat: ") && line.Contains("tics")
                 || line.Contains("NXNET") || line.Contains("computers answer") || line.Contains("nxnet:") || line.Contains(" Computer ")
                 || line.Contains("nxgame:") || line.Contains("entered the game") || line.Contains("Connection accepted") || line.Contains("TAG=") || line.Contains("TIME=")) found += line.Trim() + " | ";
         }
         // the game after the ping: the lower number is player 1, and each names the other's address
-        if (!answered) lanGameAt = Time.time + 5f;
-        else if (!lanGame && Time.time >= lanGameAt)
+        if (!answered) lanGameAt = Mathf.Max(lanGameAt, Time.time + (myId < other ? 35f : 10f));
+        else if (!lanGame && lanPinged2 && Time.time >= lanGameAt)
         {
             lanGame = true;
             string its = "10.0." + (other >> 8) + "." + (other & 255);
@@ -1066,9 +1089,20 @@ public class EmuShareHub : UdonSharpBehaviour
         return any;
     }
 
-    // The machine's packets for the others (docs/system/lan.md): as many as fit a sending's share.
-    private bool MoveNet()
+    // The machine's packets for the others (docs/system/lan.md): as many as fit a batch, the
+    // frame its object is free. Late in the frame too: for a readback that came after Update.
+    void LateUpdate() { SendNet(); }
+
+    private void SendNet()
     {
+        if (mineNet == null || machine.NetWaiting() == 0) return;
+        if (netEvents ? Networking.IsClogged || Time.time - netSentAt < 0.0105f : mineNet.Busy()) return;
+        if (mineNet.lastPostSeconds > 0f)
+        {
+            netPostSum += mineNet.lastPostSeconds;
+            netPostCount++;
+            mineNet.lastPostSeconds = 0f;
+        }
         int at = 0;
         while (machine.NetWaiting() > 0 && at + 2 + machine.NetNextLength() <= NetBatchMost)
         {
@@ -1077,37 +1111,61 @@ public class EmuShareHub : UdonSharpBehaviour
             netScratch[at + 1] = (byte)(length >> 8);
             at += 2 + length;
         }
-        if (at == 0)
-        {
-            if (mine.net == null || mine.net.Length != 0) mine.net = empty;
-            return false;
-        }
         byte[] batch = new byte[at];
         System.Buffer.BlockCopy(netScratch, 0, batch, 0, at);
-        mine.net = batch;
-        mine.netSeq++;
+        mineNet.packets = batch;
+        mineNet.seq++;
+        mineNet.sentMs = Networking.GetServerTimeInMilliseconds();
+        if (netEvents) mineNet.SendCustomNetworkEvent(NetworkEventTarget.Others, nameof(EmuNet.Packets), batch, mineNet.seq, mineNet.sentMs);
+        else mineNet.Send();
+        netSentAt = Time.time;
+        netOutCount++;
+        if (mine != null) mine.netSeq = mineNet.seq;
         netBatches++;
-        if (lanBatches < 40) { lanBatches++; Debug.Log("[Lan] batch " + mine.netSeq + " out to the others: " + at + " bytes"); }
-        return true;
+        netFlowAt = Time.time;
+        if (lanBatches < 40) { lanBatches++; Debug.Log("[Lan] batch " + mineNet.seq + " out to the others: " + at + " bytes"); }
     }
 
     private int lanBatches, lanMissed;   // [Lan] lines written: the first of them, not all for ever
+    private float lanTimesAt;
+
+    // Every five seconds in which batches moved: how long they took (docs/system/lan.md, "What the world writes").
+    private void LanTimes()
+    {
+        lanTimesAt = Time.time + 5f;
+        if (netOutCount == 0 && netWayCount == 0) return;
+        Debug.Log("[Lan] times: " + netOutCount + " batches out" + (netEvents ? " as events" : ", " + (netPostCount > 0 ? Mathf.RoundToInt(netPostSum * 1000f / netPostCount) : 0)
+                  + " ms from asking to VRChat's sending") + "; " + netWayCount + " in, " + (netWayCount > 0 ? netWaySum / netWayCount : 0)
+                  + " ms on the way (most " + netWayMost + ")");
+        netPostSum = 0f;
+        netPostCount = netOutCount = netWaySum = netWayCount = netWayMost = 0;
+    }
 
     // Another machine's packets: each is the local machine's if its address says so.
-    private void TakeNet(EmuShare share)
+    public void ReceivedNet(EmuNet from)
     {
-        byte[] batch = share.net;
-        if (share.netSeq == share.seenNet) return;
+        if (!Utilities.IsValid(from) || from == mineNet || from.seq == from.seen) return;
+        EmuShare share = from.share;
+        int owner = share != null ? share.ownerId : 0;
         // (a batch is whatever its sender put last: one that came and went between two looks is lost)
-        int missed = share.netSeq - share.seenNet - 1;
-        if (missed > 0 && share.seenNet != 0 && lanMissed < 60)
+        int missed = from.seq - from.seen - 1;
+        if (missed > 0 && from.seen != 0 && lanMissed < 60)
         {
             lanMissed++;
-            Debug.Log("[Lan] player " + share.ownerId + ": " + missed + " batch" + (missed > 1 ? "es" : "") + " never seen before batch " + share.netSeq);
+            Debug.Log("[Lan] player " + owner + ": " + missed + " batch" + (missed > 1 ? "es" : "") + " never seen before batch " + from.seq);
         }
-        share.seenNet = share.netSeq;
+        from.seen = from.seq;
+        if (share != null) share.netSeq = from.seq;
+        byte[] batch = from.packets;
         if (batch == null) return;
-        if (batch.Length > 0 && lanBatches < 40) { lanBatches++; Debug.Log("[Lan] batch " + share.netSeq + " in from player " + share.ownerId + ": " + batch.Length + " bytes"); }
+        int way = Networking.GetServerTimeInMilliseconds() - from.sentMs;
+        if (way >= 0 && way < 10000)
+        {
+            netWaySum += way;
+            netWayCount++;
+            if (way > netWayMost) netWayMost = way;
+        }
+        if (batch.Length > 0 && lanBatches < 40) { lanBatches++; Debug.Log("[Lan] batch " + from.seq + " in from player " + owner + ": " + batch.Length + " bytes, " + way + " ms on the way"); }
         int at = 0;
         while (at + 2 <= batch.Length)
         {
@@ -1141,7 +1199,6 @@ public class EmuShareHub : UdonSharpBehaviour
         if (!Utilities.IsValid(share) || share == mine) return;
         stateDirty = true;
         streams.Received(share);
-        TakeNet(share);
         if (share.watchedMe && share.watching == myId) TakeInput(share);
     }
 

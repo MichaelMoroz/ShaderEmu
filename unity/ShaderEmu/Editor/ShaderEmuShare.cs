@@ -102,8 +102,34 @@ public static partial class ShaderEmuBuilder
         EmuShare share = Udon<EmuShare>(template);
         share.hub = hub;
         Apply(share);
+        NetPlayer(world, hub);
         ShareProbe(hub, streams);
         ShareUsers(hub, streams);
+    }
+
+    // The network's packets go in a player object of their own (EmuNet, docs/system/lan.md).
+    static void NetPlayer(Transform world, EmuShareHub hub)
+    {
+        if (world.Find("Net player") != null) Object.DestroyImmediate(world.Find("Net player").gameObject);
+        GameObject template = new GameObject("Net player");
+        template.transform.SetParent(world, false);
+        template.AddComponent<VRC.SDK3.Components.VRCPlayerObject>();
+        EmuNet net = Udon<EmuNet>(template);
+        net.hub = hub;
+        Apply(net);
+        UdonSharpEditor.UdonSharpEditorUtility.GetBackingUdonBehaviour(net).SyncMethod = VRC.SDKBase.Networking.SyncType.Manual;
+        template.SetActive(false);   // (as the SDK leaves "Share player")
+    }
+
+    [MenuItem("ShaderEmu/Add the network's player object to the open scene")]
+    public static void AddNetPlayer()
+    {
+        EmuShareHub hub = Object.FindObjectOfType<EmuShareHub>();
+        if (hub == null) throw new System.Exception("no sharing in the open scene");
+        NetPlayer(hub.transform.parent, hub);
+        EditorSceneManager.MarkSceneDirty(hub.gameObject.scene);
+        EditorSceneManager.SaveScene(hub.gameObject.scene);
+        Debug.Log("[ShaderEmu] the network's player object added");
     }
 
     // The display as units the GPU picks (docs/world/share.md, "Display"): the captures and the

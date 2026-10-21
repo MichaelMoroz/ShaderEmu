@@ -28,16 +28,11 @@ public class EmuShare : UdonSharpBehaviour
     [UdonSynced] public int[] lost = new int[16];
     [UdonSynced] public int holo = -1;   // the holodeck whose seat this player sits in (docs/world/holodeck.md); -1: none
     [UdonSynced] public int holding;     // the game controller is in their hands (EmuGamepad): 0 no, else yes
-    // The network (docs/system/lan.md): this player's machine's packets since the last sending, each
-    // after two bytes of its length; netSeq goes up with every such batch.
-    [UdonSynced] public int netSeq;
-    [UdonSynced] public byte[] net = new byte[0];
-
     // what this client's hub knows of the player
     [HideInInspector] public int ownerId;
     [HideInInspector] public string ownerName = "";
     [HideInInspector] public int seenInput;
-    [HideInInspector] public int seenNet;
+    [HideInInspector] public int netSeq;   // their machine's network batches (EmuNet, docs/system/lan.md)
     [HideInInspector] public int[] seenAsk = new int[16];
     [HideInInspector] public bool watchedMe;
 

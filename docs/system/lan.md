@@ -90,7 +90,7 @@ each direction; packet k of a direction is the one that made the count k.
 
 - The host puts packet k (k from 1) into place (k - 1) mod 8, whole: its length, its number
   k, two zero words and its bytes; then `delivered` is k. Both arrive in one control pass.
-- The guest reads the places from `taken` up to `delivered` in the timer tick and sets
+- The guest reads the places from `taken` up to `delivered` in the kernel's tick and sets
   `taken`. A place whose number is not the one expected, or whose length is under 20 or over
   576, is counted as an error and skipped.
 - The host puts in no more than fit: `delivered` - `taken` (as last read back, which may be
@@ -157,29 +157,63 @@ pass defines `GPU_NET`).
   what the cores ran and which of them are asleep, then the console's 18) after state row 0 and the control texels (`Readback.shader`). `NetWindow` walks it at every round's row and acks; `NetFrame` puts up
   to four waiting packets into `_NetData` before a frame's rounds, which all draw the same
   delivery. The ring's row is in band 29, which the control pass draws anyway.
-- Between visitors a packet travels in its sender's own synced object (`EmuShare.net`): the
-  packets taken since the last sending, each after two bytes of its length, up to 1,000 bytes a
-  sending (`NetBatchMost`) (one full packet, or several small ones), and a count (`netSeq`) that tells a new
-  batch from one seen. Every other client's hub hands each packet to its own machine, which
-  keeps it if its address is the machine's or everybody's. Nothing is repeated: TCP repeats
-  what it loses, and the games' UDP expects loss.
-- Packets and typed keys do not wait for the hub's tick (0.1 s): they go the frame the link
-  is free, 50 ms after the last sending at the soonest (`ExpressSeconds`, `Update` in
-  `EmuShareHub`). In a model of the hub (90 frames a second, the display's sendings as above, a
-  sending busy 50 ms; 18 October 2026) the wait from the machine to VRChat was, mean and 9 in
-  10: a ping a second 46.9 and 74 ms to 11.5 and 30, keys at 5 a second 53.1 and 94 to 12.7 and
-  38, a game's 35 packets a second 53.7 and 95 to 26.2 and 49, at 6.2 to 6.3 KB/s (each sending
-  carries some 240 bytes of the other fields, and the display has fewer sendings while packets
-  flow). Not yet measured between two clients.
-- A sending with packets goes out whether or not anybody watches the display, and while
-  packets flow the display goes with one sending in six only (below, "A game has most of the
-  world's link").
-- Checked in play mode with one visitor: `ifconfig lan0` says `10.0.0.1`; `ping -c 3 10.0.0.2`
+- Between visitors a packet travels through its sender's own player object for the network
+  (`EmuNet`, the template "Net player"): the packets taken since the last batch, each after two
+  bytes of its length, up to 1,000 bytes a batch (`NetBatchMost`) (one full packet, or several
+  small ones), a count (`seq`) that tells a new batch from one seen, and the instance's clock
+  when it was sent (`sentMs`). A batch is a network event, `EmuNet.Packets` (`[NetworkCallable(100)]`,
+  to the others), sent the frame there are packets, at most every 10.5 ms and not while VRChat
+  says the link is clogged (`SendNet`, in `Update` and again in `LateUpdate` for a readback that
+  came in between). With the hub's `netEvents` off the same fields are serialized instead (manual
+  sync, one batch in flight). Every other client's hub hands each packet to its own machine,
+  which keeps it if its address is the machine's or everybody's. Nothing is repeated: TCP
+  repeats what it loses, and the games' UDP expects loss.
+- Until 21 October 2026 the packets rode in the share object (`EmuShare`) with the display, the
+  input and some 240 bytes of other fields every sending, and waited for that object's last
+  sending to go out and 50 ms after it. Measured that day between two real clients on one
+  computer (the hub's `lanTest`, below), `ping -c 20` each way one after the other on an
+  otherwise quiet link, round trip min / mean / max in ms, each client's:
+
+  | Session | in `EmuShare` (before) | `EmuNet` serialized | `EmuNet` events |
+  |---|---|---|---|
+  | 1 | 216 / 302 / 417, 250 / 308 / 377 | | |
+  | 2 | | 243 / 300 / 357, 239 / 282 / 395 | |
+  | 3 (both in one) | | 250 / 307 / 362, 238 / 297 / 363 | 198 / 231 / 280, 199 / 229 / 271 |
+  | 4 (both in one) | | 214 / 299 / 353, 192 / 330 / 822 | 201 / 226 / 278, 183 / 241 / 630 |
+
+  With both machines pinging at once and a fetch beside (the test before it was staggered),
+  the client that was not hit by the hold below had 279 / 505 / 1,158 and 235 / 394 / 887 in
+  `EmuShare`, 267 / 364 / 1,053 and 239 / 318 / 604 in `EmuNet` serialized.
+
+  A batch's time on the way (`sentMs` to its arrival) was 100 to 120 ms serialized, of which
+  some 40 is the wait for VRChat's next sending (`OnPostSerialization`), and 50 to 90 ms as an
+  event; the rest of a round trip, some 80 ms, is the two machines' readbacks, frames and ticks.
+  Under a fetch of a picture (TCP, full packets) either way had batches 0.4 to 1.2 s on the way.
+  Some 50 s after the clients start, VRChat once held everything 2 to 3 s (both clients at
+  once, either carrier): a ping then has seconds-long round trips.
+- A batch goes out whether or not anybody watches the display, and while packets flow the
+  display goes with one sending in six only (below, "A game has most of the world's link").
+- Checked in play mode with one visitor (before 21 October 2026, the packets then in `EmuShare`): `ifconfig lan0` says `10.0.0.1`; `ping -c 3 10.0.0.2`
   leaves three packets of 84 bytes in the machine's queue (`netSent`), acked, and three
   batches in the visitor's object; an echo request written into a spawned player's `net` (with
   `netSeq` raised and `_onDeserialization` sent) is taken by the guest (`taken` 1) and its
   36-byte reply comes out. `EmuMachine`'s `netSent`, `netReceived`, `netBad` and the hub's
   `netBatches`, `netTaken` are there to read.
+
+## The guest's driver
+
+`linux/kernel/shaderemu_net.c` polls the device from the kernel's tick (`shaderemu_net_tick`,
+put into `update_process_times` by `tick_input_hook.py`, as the input's poll is), not from a
+timer of its own: a timer that expired every tick cost a running program some 320 instructions
+a tick in the timer wheel. An idle machine wakes at the next tick (`shaderemu_net_idle`, from
+the idle loop) for five seconds after a packet went or came (`NET_AWAKE`), and after that polls
+on the ticks it has anyway (the input's, every fourth tick on a machine nobody touches): the
+first packet to a machine idle that long waits up to 40 ms of its time. A kernel without the
+hook polls from the timer as before. Measured on 21 October 2026 on `rvc_cpu` with the link up
+(`--net`, as every machine in the world has): an idle shell 229 thousand instructions a second
+to 157 (2,184 passes in 20 s to 1,277), a shell loop 628.67 million instructions to 622.66
+(-0.96%), the same count every run; ping and a file through `nc` on a clean link and on a bad
+one (5% loss, 250 ms each way) as before, the sums equal.
 
 ## Programs
 
@@ -300,6 +334,15 @@ machine with its own `--uart-log`. Start them from PowerShell.
 - **Doom** (two `rvc_harness`, 60 s; it needs the sound card, which `rvc_cpu` lacks): both
   must print `player N of 2 (2 nodes)` and then `doomstat:` lines with about 170 tics each
   (five seconds at 35 a second).
+- **Two real clients**: set the hub's `lanTest` and the gate's `testOpen` (`EmuGate`: a test
+  client never walks out of the corridor, so the world's parts come on 5 s after it arrives),
+  the SDK's number of clients to 2, and "Build & Test". Both machines go on; 60 and 85 s after
+  both are on, the lower and the higher player pings the other 20 times over serializations,
+  then (from 110 s) both send batches as events and ping again at 115 and 140 s; then each finds
+  the other with `nxnet`, lists its Home and fetches a picture. Each client's log has the
+  `round-trip` lines and the `[Lan] times` lines. Turn both switches off and the clients back to
+  1 before saving the scene. A scene from before 21 October 2026 gets the network's player
+  object from "ShaderEmu/Add the network's player object to the open scene".
 - The single-player sums of `docs/games/quake.md` are as they were. `QUAKE_SUM` leaves a player's
   name out now, as it left the world's model out: its place is counted from QuakeC's
   strings and moved when the network drivers put console commands of their own on the heap.
@@ -377,9 +420,13 @@ one: lit while the place's machine is on, flickering in a half second in which i
   its length, what it is (ICMP ping or answer, UDP, TCP with SYN, SYN+ACK, RST or FIN), its
   addresses and ports, and for one heard what became of it: `for this machine`, `not for
   this machine`, or `dropped, this machine is off`.
-- The first 40 batches, each way: `batch K out to the others` and `batch K in from player P`,
-  and `player P: N batches never seen before batch K` when a sender's count skipped (a batch
-  is whatever its sender put last: one that came and went between two looks is lost).
+- The first 40 batches, each way: `batch K out to the others` and `batch K in from player P:
+  N bytes, T ms on the way` (the instance's clock at arrival less `sentMs`), and `player P: N
+  batches never seen before batch K` when a sender's count skipped (a batch is whatever its
+  sender put last: one that came and went between two looks is lost).
+- `[Lan] times:` every five seconds in which batches moved (`EmuShareHub.LanTimes`): how many
+  went out (`as events`, or serialized with the mean time from asking VRChat to send one to its
+  `OnPostSerialization`); how many came in and their mean and longest time on the way.
 - Every five seconds in which something happened, the counts since power-on: sent by the
   guest; heard for this machine, for others, while off; given to the guest and taken by it;
   waiting to go out and in; dropped for a full queue.

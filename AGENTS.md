@@ -257,6 +257,12 @@
   `RVC_RACES` 0 undone), and its patch keeps the game state the build computer's: after a change to `openttd.patch`,
   `tools/test_all.py openttd` must give `linux/openttd/host_sum.sh`'s sums. A start is measured with `-v null:ticks=1 -g`
   under `tools/prof.py` (350 million instructions on 20 October 2026); the title screen's game is `make_title.sh`'s.
+- The world's LAN carries a machine's packets as network events of a player object of their own
+  (`EmuNet.Packets`, `docs/system/lan.md`), not in `EmuShare` with the display: a ping's round trip
+  between two clients 300 ms to 230. It is measured by the hub's `lanTest` with `EmuGate.testOpen`
+  (a test client never leaves the corridor) and two Build & Test clients; `[Lan] times` lines
+  say how long batches were on the way. The guest's driver polls from the kernel's tick
+  (`tick_input_hook.py`), not a timer of its own.
 - Lanes (`docs/machine/lanes.md`, lean tick only): a worker's pixels each run `fn(index, ctx)`
   (`mcw_lanes`), and a field of 3,968 lanes of no core's takes a job from a program's first core and
   does not wait for it (`mcw_field_begin`/`_ready`; `mcw_shade` in `mcwx.h` for a picture). An index

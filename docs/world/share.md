@@ -46,7 +46,9 @@ object: 11 KB/s on paper, 8 to 10 in practice.
 | `ask` | sixteen words, one for each sender this player keeps: the sender's number, and a count << 16 that goes up with each asking |
 | `lost` | beside each: what is asked for again, a packet number's low 16 bits and how many from it << 16; none: everything |
 | `holo`, `holding` | the holodeck this player sits in, and whether the controller is in their hands |
-| `netSeq`, `net` | the network's packets from this player's machine since the last sending (`docs/system/lan.md`) |
+
+The network's packets go in a player object of their own, `EmuNet` (`docs/system/lan.md`); the
+hub keeps the count of a player's batches in their `EmuShare.netSeq`, which is not synced.
 
 A packet: 19 bytes (on, the console's first row, cursor column and row, the stream's width
 and height, the display's width and height, the number of rows, the machine's speed:

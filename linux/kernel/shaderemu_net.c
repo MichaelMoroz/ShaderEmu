@@ -2,7 +2,7 @@
 /*
  * ShaderEmu network device (docs/system/lan.md in the ShaderEmu repository): bare IP packets between
  * machines. Packets leave through a window of plain memory that the host reads, and arrive in
- * a ring the host fills; both are polled in the timer tick. There is no hardware address and
+ * a ring the host fills; both are polled in the kernel's tick. There is no hardware address and
  * no ARP: the host gives the machine a number, and the address is 10.0.H.L of it.
  */
 #include <linux/if_arp.h>
@@ -32,12 +32,17 @@
 #define NET_NETWORK	0x0a000000	/* 10.0.0.0/16 */
 #define NET_MASK	0xffff0000
 
+/* An idle machine polls every tick for this long after a packet moved, then on the ticks it has anyway */
+#define NET_AWAKE	(5 * HZ)
+
 static void __iomem *net_regs, *net_mem;
 static struct net_device *net_dev;
 static struct timer_list net_timer;
 static struct work_struct net_work;
 static u32 net_tail, net_id, net_fill;
-static bool net_lo_up;
+static bool net_lo_up, net_ready;
+static bool net_ticked;	/* the tick calls the poll (a kernel without the hook: the timer does, always) */
+static unsigned long net_moved_at;
 
 static netdev_tx_t shaderemu_net_xmit(struct sk_buff *skb, struct net_device *dev)
 {
@@ -66,6 +71,7 @@ static netdev_tx_t shaderemu_net_xmit(struct sk_buff *skb, struct net_device *de
 	writel(sent + 1, place + 4);
 	writel(sent + 1, net_regs + NET_GUEST);
 	net_fill += need;
+	net_moved_at = jiffies;
 	dev->stats.tx_packets++;
 	dev->stats.tx_bytes += skb->len;
 	dev_kfree_skb(skb);
@@ -77,6 +83,7 @@ static int shaderemu_net_open(struct net_device *dev)
 	/* what the ring holds from before is not ours to read */
 	net_tail = readl(net_regs + NET_HOST + 4);
 	writel(net_tail, net_regs + NET_GUEST + 4);
+	net_moved_at = jiffies;
 	netif_start_queue(dev);
 	mod_timer(&net_timer, jiffies + 1);
 	return 0;
@@ -158,50 +165,76 @@ static void shaderemu_net_configure(struct work_struct *work)
 	pr_info("shaderemu_net: %s is %s, 10.0.%u.%u\n", net_dev->name, id ? "up" : "down", id >> 8, id & 255);
 }
 
-static void shaderemu_net_poll(struct timer_list *t)
+static void shaderemu_net_poll(void)
 {
 	struct net_device *dev = net_dev;
 	u32 head;
 
 	if ((readl(net_regs + NET_HOST + 8) & 0xffff) != net_id)
 		schedule_work(&net_work);
-	if (!netif_running(dev)) {
-		mod_timer(&net_timer, jiffies + HZ / 4);
+	if (!netif_running(dev))
 		return;
-	}
 	if (netif_queue_stopped(dev) && readl(net_regs + NET_HOST) == readl(net_regs + NET_GUEST))
 		netif_wake_queue(dev);
 	head = readl(net_regs + NET_HOST + 4);
+	if (net_tail == head)
+		return;
 	/* a host that started again counts from 0: there is nothing of its to read yet */
 	if (head - net_tail > NET_SLOTS) {
 		net_tail = head;
 		writel(net_tail, net_regs + NET_GUEST + 4);
+		return;
 	}
-	if (net_tail != head) {
-		for (; net_tail != head; net_tail++) {
-			void __iomem *slot = net_mem + NET_RING + NET_SLOT * (net_tail % NET_SLOTS);
-			u32 len = readl(slot);
-			struct sk_buff *skb;
+	for (; net_tail != head; net_tail++) {
+		void __iomem *slot = net_mem + NET_RING + NET_SLOT * (net_tail % NET_SLOTS);
+		u32 len = readl(slot);
+		struct sk_buff *skb;
 
-			if (len < sizeof(struct iphdr) || len > NET_MTU || readl(slot + 4) != net_tail + 1) {
-				dev->stats.rx_errors++;
-				continue;
-			}
-			skb = netdev_alloc_skb(dev, len);
-			if (!skb) {
-				dev->stats.rx_dropped++;
-				continue;
-			}
-			memcpy_fromio(skb_put(skb, len), slot + 16, len);
-			skb_reset_mac_header(skb);
-			skb->protocol = htons(ETH_P_IP);
-			dev->stats.rx_packets++;
-			dev->stats.rx_bytes += len;
-			netif_rx(skb);
+		if (len < sizeof(struct iphdr) || len > NET_MTU || readl(slot + 4) != net_tail + 1) {
+			dev->stats.rx_errors++;
+			continue;
 		}
-		writel(net_tail, net_regs + NET_GUEST + 4);
+		skb = netdev_alloc_skb(dev, len);
+		if (!skb) {
+			dev->stats.rx_dropped++;
+			continue;
+		}
+		memcpy_fromio(skb_put(skb, len), slot + 16, len);
+		skb_reset_mac_header(skb);
+		skb->protocol = htons(ETH_P_IP);
+		dev->stats.rx_packets++;
+		dev->stats.rx_bytes += len;
+		netif_rx(skb);
 	}
-	mod_timer(&net_timer, jiffies + 1);
+	writel(net_tail, net_regs + NET_GUEST + 4);
+	net_moved_at = jiffies;
+}
+
+/* Every tick, from the timer interrupt (update_process_times; tick_input_hook.py). */
+void shaderemu_net_tick(void)
+{
+	net_ticked = true;
+	if (net_ready)
+		shaderemu_net_poll();
+}
+
+/* The idle loop, before it decides how long to sleep: while packets move, it wakes at the next tick. */
+void shaderemu_net_idle(void)
+{
+	if (net_ready && netif_running(net_dev) && time_before(jiffies, net_moved_at + NET_AWAKE) &&
+	    !timer_pending(&net_timer))
+		mod_timer(&net_timer, jiffies + 1);
+}
+
+static void shaderemu_net_timer(struct timer_list *t)
+{
+	unsigned long flags;
+
+	local_irq_save(flags);		/* (the tick's poll must not come in the middle of this one) */
+	shaderemu_net_poll();
+	local_irq_restore(flags);
+	if (!net_ticked)
+		mod_timer(&net_timer, jiffies + (netif_running(net_dev) ? 1 : HZ / 4));
 }
 
 static int __init shaderemu_net_init(void)
@@ -219,8 +252,9 @@ static int __init shaderemu_net_init(void)
 	if (ret)
 		return ret;
 	INIT_WORK(&net_work, shaderemu_net_configure);
-	timer_setup(&net_timer, shaderemu_net_poll, 0);
+	timer_setup(&net_timer, shaderemu_net_timer, 0);
 	schedule_work(&net_work);
+	net_ready = true;
 	mod_timer(&net_timer, jiffies + HZ / 4);
 	return 0;
 }
