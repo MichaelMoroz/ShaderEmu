@@ -35,8 +35,9 @@ index.
 | CSR | |
 |---|---|
 | `0x0b8` write | a worker: start a job, the value its descriptor's address. Its pass ends; its passes are its lanes' until the job is through, and it goes on after the write |
-| `0x0b8` read | bit 31 where the tick has lanes, this core's lanes in bits 8-15 (0 on the first core), how its last job ended in bits 0-7 (1 whole, 2 a lane stuck) |
+| `0x0b8` read | bit 31 where the tick has lanes, this core's lanes in bits 8-15 (0 on the first core), how its last job ended in bits 0-7 (1 whole, 2 a lane stuck, 4 an index not through: "Steps") |
 | `0x0b9` read | the field's lanes where the host draws it (3,968), else 0 |
+| `0x0ba` read | in a lane, the instructions its pass has left; elsewhere `0xffffffff` (no end) |
 
 ## A lane's pass
 
@@ -124,6 +125,47 @@ compiled in the machine by `tcc` and linked with its `libmcw.a`.
 `mcw_for`'s wait (`round_through`) asks one worker a pass, the first not through, and every one
 at every eighth: asking all 255 every pass was most of the first core's time in a round.
 
+## Steps
+
+An index that may need more than a pass is written as **steps** (21 October 2026): the function
+does what fits, stores in its output what it needs to go on, and says it is not through; the job is
+posted again, a **round**, until every index is. Nothing of a lane outlives its pass, so the
+program decides what its state is: no registers are saved for it.
+
+- `mcw_step_fn(index, ctx, round)` returns 0 when its index is through. Round 0 is its first call;
+  in a later one it reads its output back, and one through in an earlier round returns at once
+  (some 40 instructions).
+- `mcw_steps_left()` is CSR `0x0ba`: how many of the pass's 8,192 instructions the lane has left.
+  A step looks at it where it can stop, and stops while what is left still covers the longest
+  stretch to its next such place. Off the lanes it is `0xffffffff` and a step never stops.
+- `mcw_field_steps(fn, ctx, first, count, out, T)` posts the field's job in steps; `mcw_field_ready()`
+  posts the next round itself until no index is left. `mcw_lanes_steps(..., &report)` is the same on
+  a worker's lanes, returned when through. A plain call (the first core, `rvc_cpu`) calls the step
+  until it is through. `mcw_field_steps_report()` says how many rounds a job took and how many of
+  its steps no lane could make (`too_long`), which a core made: not 0, the steps are too long for
+  the lanes, and the program should say so.
+- A round waits for its slowest lane, so a job's last few indices cost a round each.
+  `mcw_field_steps_rounds(n)` ends the field's jobs after n rounds (0: when all are through; it may be
+  changed while a job is out, and counts at the next round's end); the report's `left` then says some
+  indices are not through, and the program calls the step itself on those (any round but 0), on its
+  workers for instance, while the field makes the next job.
+- An index takes as many of a lane's six output texels as it **wrote** (the tick counts the texels
+  of its output in the lane's cache): one through that writes nothing takes none, so a lane goes on
+  past the done indices of later rounds. A step that writes six ends its lane's pass, and one that
+  does not fit in what the lane has left of the six is lost and made again as the next pass's first.
+- `mcw_steps_probe(fn, ctx, first, count, budget)` is the self-test: on a worker (the first core's
+  counts take interrupts in), every index made in steps, each step given the budget as a lane is,
+  timed by the instruction clock: steps, the most rounds, a step's mean and longest, and how many
+  went over. Give it the worst cases the program has.
+
+In the tick: a step's job is marked by bit 0 of its stuck texels' address; a step that returns not
+through sets bit 29 of its lane's place (a lane's order goes on, so the bit is only "some index of
+mine is not through"); the group's leader gathers it into bit 31 of its third word, and a worker's
+lanes into bit 2 of the job's end. The lane's clock starts at 0 for `0x0ba`. `steptest` (index i is
+up to a few hundred thousand instructions of hashing, one in 997 with a first stretch longer than a
+pass) checks the field, the workers' lanes and the self-test: 20,000 indices in 20 rounds on the
+field, the 21 long ones made by the first core and said so, every index right.
+
 ## Rules for an index
 
 - Its stores: its stack and its output; no two lanes into one texel (the output's place is the
@@ -132,8 +174,9 @@ at every eighth: asking all 255 every pass was most of the first core's time in 
   them): about 2,000 instructions a pixel is what four pixels of a texel can have. Code that `tcc`
   compiles is much longer than GCC's: the shader example's floor thrown back once more took its
   texels over a pass there. An index that takes longer costs its lane a pass and is made by the core
-  that asked, or by the workers it gives them to: a few in a hundred is what the field bears
-  (`nxpath`'s path of a pixel: 1,465 instructions on average, 2.5% over a pass, the longest 48 thousand).
+  that asked, or by the workers it gives them to: work that can be longer is written in steps
+  ("Steps"; `nxpath`'s path of a pixel was 1,465 instructions on average, 2.5% over a pass, the longest
+  48 thousand, and 22% to 57% of a scene's instructions were in paths over a pass).
 - A page of the program's code no core has run stops a lane as it stops a worker: the library reads
   the function's first page, and a program reads the rest of its code first (`take_workers` in
   `nxray.c`).
@@ -211,6 +254,9 @@ the IDE's cases), and `cc-bytes` is `716cecf0` now.
 - geotune still lays out its small workers of 2^3 on this card, where a worker has 6 lanes: lanes
   gain more from large caches than the small ones' capacity gave. With the field, programs need
   not care.
-- An index longer than a pass: a lane's registers and stack do not outlive its pass. It is skipped
-  and made elsewhere, which is right but costs; a path through a scene splits no further.
+- An index longer than a pass that is not written in steps: a lane's registers and stack do not
+  outlive its pass. It is skipped and made elsewhere, which is right but costs.
+- A round is the whole job posted again: a lane walks past the done indices of its order (some 40
+  instructions each) to find the ones not through. A job with few indices left could be posted as
+  those alone.
 - `rvc_cpu` has no lanes: a program's output is checked there, its speed only on the card.

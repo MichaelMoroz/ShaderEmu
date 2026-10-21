@@ -645,7 +645,9 @@ static unsigned stuck_made(volatile uint32_t (*s)[4], uint32_t K, uint32_t tag, 
 	return made;
 }
 
-int mcw_lanes(mcw_lane_fn fn, void *ctx, uint32_t first, uint32_t count, void *out, uint32_t texels)
+/* The job on this worker's lanes; *how: how it ended (lanes_word's bits 0-7: 4 an index not through),
+ * the indices made here after it in bits 8 up; 0 for plain calls. */
+static int lanes_run(mcw_lane_fn fn, void *ctx, uint32_t first, uint32_t count, void *out, uint32_t texels, int steps, uint32_t *how)
 {
 	/* the job as the machine reads it, three texels on this core's stack; then a lane's stuck texel
 	 * (stuck_made) */
@@ -655,6 +657,7 @@ int mcw_lanes(mcw_lane_fn fn, void *ctx, uint32_t first, uint32_t count, void *o
 	} __attribute__((aligned(16))) job;
 	uint32_t lanes = (uint32_t)mcw_lanes_here(), i, j, L, sp, v;
 
+	*how = 0;
 	if (!count) return 0;
 	if (!lanes || lanes > LANES_MOST || texels < 1 || texels > 6 || ((uint32_t)out & 15)) {
 		for (i = 0; i < count; i++) fn(first + i, ctx);
@@ -672,7 +675,7 @@ int mcw_lanes(mcw_lane_fn fn, void *ctx, uint32_t first, uint32_t count, void *o
 	job.sp = (sp - 64) & ~15u;	/* every lane's stack: under this core's, which nothing else uses */
 	job.ctx = (uint32_t)ctx;
 	job.stub = (uint32_t)mcw_lane_stub;
-	job.status = (uint32_t)job.stuck;
+	job.status = (uint32_t)job.stuck | (steps ? 1u : 0u);	/* (bit 0: a job in steps, its indices' answers looked at) */
 	job.pad[0] = job.pad[1] = 0;
 	job.pad[2] = 1;	/* (K: a texel of skipped indices a lane, then where it stopped) */
 	for (L = 0; L < 2 * lanes; L++) job.stuck[L][0] = 0;
@@ -680,11 +683,19 @@ int mcw_lanes(mcw_lane_fn fn, void *ctx, uint32_t first, uint32_t count, void *o
 	 * memory by then: this pass ends here) */
 	__asm__ volatile("csrw 0x0b8, %0" : : "r"(&job) : "memory");
 	v = lanes_word();
-	if ((v & 0xff) == 2)
+	*how = v & 0xff;
+	if (v & 2)
 		for (L = 0; L < lanes; L++)
-			stuck_made((volatile uint32_t (*)[4])job.stuck[2 * L], 1, 0x80000000u, fn, ctx, first + L, lanes, count - L);
+			*how += stuck_made((volatile uint32_t (*)[4])job.stuck[2 * L], 1, 0x80000000u, fn, ctx, first + L, lanes, count - L) << 8;
 	(void)j;
 	return (int)lanes;
+}
+
+int mcw_lanes(mcw_lane_fn fn, void *ctx, uint32_t first, uint32_t count, void *out, uint32_t texels)
+{
+	uint32_t how;
+
+	return lanes_run(fn, ctx, first, count, out, texels, 0, &how);
 }
 
 /* ---- the lanes' field (docs/machine/lanes.md, "The field") ---- */
@@ -715,6 +726,16 @@ static struct mcw_field_skips field_skips[2];
 static mcw_lane_fn field_fn;
 unsigned mcw_field_stuck;	/* indices the field's lanes could not make, made here so far */
 static void *field_ctx;
+/* a job in steps (mcw_field_steps): what its lanes call, read by them as the round found it */
+struct steps_desc {
+	mcw_step_fn fn;
+	void *ctx;
+	uint32_t round, pad;
+} __attribute__((aligned(16)));
+static struct steps_desc field_steps_desc;
+static int field_steps_on;
+static uint32_t field_steps_most;	/* (rounds a job at most: mcw_field_steps_rounds) */
+static struct mcw_steps_report field_steps_rep;
 
 int mcw_field_lanes(void)
 {
@@ -752,6 +773,18 @@ static int field_map(void)
 	return 1;
 }
 
+/* The job (again: a round of steps) under a new number, its stuck texels the set's (the descriptor is in
+ * memory by the next pass, as the job's texel is: both are this pass's stores) */
+static void field_post(void)
+{
+	volatile uint32_t *job = field_page + FIELD_JOB_AT / 4;
+
+	field_skips[field_set].any = 0;
+	field_job.stuck = (uint32_t)field_stuck[field_set] | (field_steps_on ? 1u : 0u);	/* (bit 0: a job in steps) */
+	field_seq = job[1] + 1;
+	job[1] = field_seq;
+}
+
 void mcw_field_begin(mcw_lane_fn fn, void *ctx, uint32_t first, uint32_t count, void *out, uint32_t texels)
 {
 	volatile uint32_t *job;
@@ -781,18 +814,15 @@ void mcw_field_begin(mcw_lane_fn fn, void *ctx, uint32_t first, uint32_t count, 
 	field_job.sp = (sp - 256) & ~15u;	/* every lane's stack, under this core's: nothing of it is stored */
 	field_job.ctx = (uint32_t)ctx;
 	field_job.stub = (uint32_t)mcw_lane_stub;
-	field_job.stuck = (uint32_t)field_stuck[field_set];
 	field_job.gp = gp;
 	field_job.tp = tp;
 	field_job.K = FIELD_K;
 	field_fn = fn, field_ctx = ctx;
 	/* every lane drawn for every job: a lane's state says which job it is at, by the number's last byte */
 	field_lanes_n = lanes - (lanes + 63) / 64;
-	field_seq = job[1] + 1;
-	/* (the descriptor is in memory by the next pass, as the job's texel is: both are this pass's stores) */
 	job[2] = lanes;
 	job[3] = (uint32_t)call6(172, 0, 0, 0, 0, 0, 0);	/* getpid: the kernel takes the job back if this program dies with it out */
-	job[1] = field_seq;
+	field_post();
 	job[0] = (uint32_t)&field_job;
 	field_out = 1;
 }
@@ -801,13 +831,14 @@ int mcw_field_ready(void)
 {
 	volatile uint32_t *status;
 	struct mcw_field_skips *k = &field_skips[field_set];
-	uint32_t g, stuck = 0;
+	uint32_t g, stuck = 0, more = 0;
 
 	if (!field_out) return 1;
 	status = field_page + FIELD_STATUS_AT / 4;
 	for (g = 0; g < FIELD_GROUPS; g++) {
 		if (status[4 * g] != field_seq || (status[4 * g + 1] & 1)) return 0;
 		stuck |= (status[4 * g + 1] & ~1u) | status[4 * g + 3];
+		more |= status[4 * g + 2] >> 31;
 	}
 	/* the lanes each group says left indices (lanes 0 to 30 in bits 1 to 31 of its second word, 31 to 62
 	 * in its fourth), and the job's own: for the workers (mcw_field_apart), or made here */
@@ -816,9 +847,20 @@ int mcw_field_ready(void)
 	k->tag = 0x80000000u | field_seq, k->any = stuck != 0;
 	for (g = 0; g < FIELD_GROUPS && stuck; g++)
 		k->lanes[g][0] = status[4 * g + 1] >> 1, k->lanes[g][1] = status[4 * g + 3];
+	field_set ^= 1;
+	if (field_steps_on) {
+		/* (what the lanes skipped made here first: the next round's lanes read those outputs) */
+		if (stuck) field_steps_rep.too_long += mcw_field_skips_make(k, 0, 1);
+		k->any = 0;
+		if (more && !(field_steps_most && field_steps_rep.rounds >= field_steps_most)) {
+			field_steps_desc.round++, field_steps_rep.rounds++;
+			field_post();
+			return 0;
+		}
+		field_steps_rep.left = more, field_steps_on = 0;
+	}
 	field_page[FIELD_JOB_AT / 4] = 0;	/* (the machine draws the field no more) */
 	field_out = 0;
-	field_set ^= 1;
 	if (stuck && !field_apart) mcw_field_stuck += mcw_field_skips_make(k, 0, 1);
 	return 1;
 }
@@ -852,6 +894,94 @@ unsigned mcw_field_skips_make(const struct mcw_field_skips *k, int part, int par
 void mcw_field_wait(void)
 {
 	while (!mcw_field_ready()) mcw_rest();
+}
+
+/* ---- steps (docs/machine/lanes.md, "Steps") ---- */
+
+static int probe_on;
+static uint32_t probe_t0, probe_budget;
+
+static inline uint32_t clock_now(void)
+{
+	uint32_t v;
+
+	__asm__ volatile("csrr %0, 0xc00" : "=r"(v));
+	return v;
+}
+
+/* (0 too is no end: a machine from before the CSR) */
+uint32_t mcw_steps_left(void)
+{
+	uint32_t v, d;
+
+	__asm__ volatile("csrr %0, 0x0ba" : "=r"(v));
+	if (v != 0 && v != 0xffffffffu) return v;
+	if (!probe_on) return 0xffffffffu;
+	d = clock_now() - probe_t0;
+	return d < probe_budget ? probe_budget - d : 0;
+}
+
+/* What a lane calls: a step of the index; a plain call (on a core) goes on until the index is through. */
+static uint32_t steps_lane(uint32_t i, void *p)
+{
+	const struct steps_desc *d = p;
+	uint32_t r = d->round, more = d->fn(i, d->ctx, r);
+
+	while (more && !probe_on && mcw_steps_left() == 0xffffffffu) more = d->fn(i, d->ctx, ++r);
+	return more;
+}
+
+void mcw_field_steps(mcw_step_fn fn, void *ctx, uint32_t first, uint32_t count, void *out, uint32_t texels)
+{
+	if (field_out) mcw_field_wait();
+	field_steps_desc.fn = fn, field_steps_desc.ctx = ctx, field_steps_desc.round = 0;
+	field_steps_rep.rounds = 1, field_steps_rep.too_long = 0, field_steps_rep.left = 0;
+	field_steps_on = 1;
+	mcw_field_begin((mcw_lane_fn)steps_lane, &field_steps_desc, first, count, out, texels);
+	if (!field_out) field_steps_on = 0;	/* (no field: made here, every index through) */
+}
+
+struct mcw_steps_report mcw_field_steps_report(void) { return field_steps_rep; }
+void mcw_field_steps_rounds(uint32_t most) { field_steps_most = most; }
+
+int mcw_lanes_steps(mcw_step_fn fn, void *ctx, uint32_t first, uint32_t count, void *out, uint32_t texels, struct mcw_steps_report *report)
+{
+	struct steps_desc d;
+	uint32_t how, made = 0, rounds = 0;
+	int lanes;
+
+	d.fn = fn, d.ctx = ctx, d.round = 0;
+	do {
+		lanes = lanes_run((mcw_lane_fn)steps_lane, &d, first, count, out, texels, 1, &how);
+		made += how >> 8, rounds++, d.round++;
+	} while (lanes && (how & 4));
+	if (report) report->rounds = rounds, report->too_long = made, report->left = 0;
+	return lanes;
+}
+
+struct mcw_steps_probe mcw_steps_probe(mcw_step_fn fn, void *ctx, uint32_t first, uint32_t count, uint32_t budget)
+{
+	struct mcw_steps_probe p = {0, 0, 0, 0, 0};
+	uint64_t sum = 0;
+	uint32_t i, r, d, more;
+
+	probe_budget = budget ? budget : 8192;
+	probe_on = 1;
+	for (i = first; i < first + count; i++) {
+		r = 0;
+		do {
+			probe_t0 = clock_now();
+			more = fn(i, ctx, r);
+			d = clock_now() - probe_t0;
+			p.steps++, sum += d, r++;
+			if (d > p.longest) p.longest = d;
+			if (d > probe_budget) p.over++;
+		} while (more && r < 100000);
+		if (r > p.rounds) p.rounds = r;
+	}
+	probe_on = 0;
+	p.mean = p.steps ? (uint32_t)(sum / p.steps) : 0;
+	return p;
 }
 
 /* The first page of the table workers run on: 0 on a kernel without an MMU. */

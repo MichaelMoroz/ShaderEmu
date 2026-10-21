@@ -489,7 +489,8 @@ static bool csr_read(Core& c, u32 n, u32& v) {
     case 0x0bf: rng_state ^= rng_state << 13; rng_state ^= rng_state >> 17; rng_state ^= rng_state << 5; v = rng_state; return true;
     case 0x0be: v = 0; return true;
     // (lanes, docs/machine/lanes.md: the lean tick's; here none, and mcw_lanes() makes plain calls)
-    case 0x0b4: case 0x0b5: case 0x0b6: case 0x0b7: case 0x0b8: case 0x0b9: case 0x0ba: case 0x0bb: case 0x0bc: case 0x0bd: v = 0; return true;
+    case 0x0b4: case 0x0b5: case 0x0b6: case 0x0b7: case 0x0b8: case 0x0b9: case 0x0bb: case 0x0bc: case 0x0bd: v = 0; return true;
+    case 0x0ba: v = 0xffffffff; return true;   // (a lane's instructions left: no lane here, no end)
     case 0x0c0: case 0x0c1: case 0x0c2: case 0x0c3: v = 0; return true;   // the network card: none
     }
     return false;

@@ -287,6 +287,13 @@
   for stuck). The field needs the host's primitive and points (`BackendOptions::laneField`; in Unity the
   tick mesh's 17th triangle and `_FieldPoints`, wired but not yet run in the world). geotune's small workers (2^3) have 6 lanes
   each: lanes gain from large caches, the field from neither.
+- Work longer than a pass goes on the lanes in steps (`docs/machine/lanes.md`, "Steps"; `mcw_field_steps`,
+  `mcw_steps_left` is CSR `0x0ba`): a step keeps what it needs in its output, no registers are saved. A
+  step stops only where what the pass has left covers the longest stretch to its next stop: run the
+  program's self-test on a worker of `rvc_cpu` (`mcw_steps_probe`; `NXPATH_PROBE=3000` on every scene
+  of `nxpath`), which must say 0 over a pass and 0 paths not as traced whole. `steptest` must PASS. A
+  change there must leave the plain path's instructions as they were (`NXPATH_FIELD=0` on `rvc_cpu`):
+  the lane's copy of a search is its own branch (`limited`), so the workers pay nothing for it.
 - Half-Life's state made per core (`x_of[3]` behind a macro, `SE_Who()`) must be made on every core that
   uses it, not once at start on core 0: the studio hit hulls were core 0's only, and every bullet of the
   server's worker went through monsters (`docs/games/halflife.md`). Decals are pulled toward the eye for

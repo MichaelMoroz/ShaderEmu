@@ -13,6 +13,9 @@ riscv32-linux-strip -o "$RT/usr/bin/mctest" "$NM/mctest" && echo "mctest built"
 # the lanes' test (docs/machine/lanes.md)
 rv32-cc -O2 -w -I"$R/programs/mc" "$R/programs/mc/lanetest.c" "$R/programs/mc/mcw.c" -o "$NM/lanetest" 2>&1 | head -5
 riscv32-linux-strip -o "$RT/usr/bin/lanetest" "$NM/lanetest" && echo "lanetest built"
+# and of jobs in steps (docs/machine/lanes.md, "Steps")
+rv32-cc -O2 -w -I"$R/programs/mc" "$R/programs/mc/steptest.c" "$R/programs/mc/mcw.c" -o "$NM/steptest" 2>&1 | head -5
+riscv32-linux-strip -o "$RT/usr/bin/steptest" "$NM/steptest" && echo "steptest built"
 # the HLSL compiler, compiling and drawing a shader in the machine (docs/system/hlsl.md)
 rv32-cc -O2 -w -fno-math-errno -I"$R/programs/hlsl" -I"$R/programs/mc" "$R/programs/hlsl/test/hlsl_bench.c" \
     "$R"/programs/hlsl/{hlsl,hlsl_parse,hlsl_gen,hlsl_back,hlsl_draw}.c "$R/programs/mc/mcw.c" "$R/programs/mc/mcwx.c" -o "$NM/hlsl_bench" 2>&1 | head -5

@@ -1,6 +1,6 @@
 /* The path tracer's own part (docs/apps/raytrace.md): the scene's world under its lights and its
  * sky (scene.h), and one sample of every pixel of a tile as a job for a worker core, or of one pixel as a
- * lane's index (pt_batch_index). A job writes its tile's sums and pixels and its stack: a tile is 32 across, the
+ * lane's index in steps (pt_batch_step). A job writes its tile's sums and pixels and its stack: a tile is 32 across, the
  * width a multiple of four and a pixel's sum 16 bytes, so no two cores store to the same 16 bytes. The
  * scene is only read. */
 #include <stdlib.h>
@@ -27,6 +27,10 @@ static inline struct vec of(const float *p) { return v(p[0], p[1], p[2]); }
 
 /* The most light a sample may bring: a light itself, seen in a mirror or through glass. */
 #define PT_MOST 2.5f
+/* What a lane's step keeps for (pt_batch_step): the place between two boxes, and a turn's shading
+ * after its search (a light's ray through the world is not stopped in) */
+#define PT_LEAF_LEFT 2500
+#define PT_SHADE_LEFT 2500
 
 /* (a product and a sum; chance() takes the upper bits, which are the good ones) */
 static inline uint32_t
@@ -97,19 +101,23 @@ triangle_met(const struct sc_triangle *tri, struct vec from, struct vec way, flo
 
 /* The nearest triangle of the world a ray meets nearer than *nearest: down the tree of boxes,
  * the nearer of two first, so that the farther is mostly not looked into. `over` is one over
- * the ray's way (a ray along an axis has an infinity there, which leaves it in a box or out). */
-static inline int
-world_nearest(struct vec from, struct vec way, struct vec over, float *nearest, struct met *met)
+ * the ray's way (a ray along an axis has an infinity there, which leaves it in a box or out).
+ * `limited` (a lane's step): -1 where the pass runs low, *trail the turns to the next box, *nearest
+ * and *met kept; a search resumed from them goes down those turns again (Laine's restart trail). */
+static inline __attribute__((always_inline)) int
+world_nearest(struct vec from, struct vec way, struct vec over, uint64_t *trail, float *nearest, struct met *met, int limited)
 {
 	const struct sc_node *nodes = sc_world.nodes;
-	const struct sc_triangle *triangles = sc_world.triangles, *found = 0;
+	const struct sc_triangle *triangles = sc_world.triangles, *found = met->triangle;
 	uint32_t stack[64], at = 0;
 	float entered[64];	/* where the ray comes into each box put by */
-	int held = 0;
-	float fu = 0.0f, fw = 0.0f, enter, best = *nearest;
+	uint8_t level[64];	/* and the depth of the turn it was put by at */
+	uint64_t back = *trail, turns = 0;	/* a bit a depth: 1 the farther child, or the only one */
+	int held = 0, depth = 0, top = back ? 63 - __builtin_clzll(back) : -1;
+	float fu = met->u, fw = met->w, enter, best = *nearest;
 
 	if (!box_met(&nodes[0], from, over, best, &enter))
-		return 0;
+		goto done;
 	for (;;) {
 		const struct sc_node *node = &nodes[at];
 
@@ -122,7 +130,7 @@ world_nearest(struct vec from, struct vec way, struct vec over, float *nearest, 
 				if (triangle_met(tri, from, way, &t, &u, &w) && t > 0.0005f && t < best)
 					best = t, found = tri, fu = u, fw = w;
 			}
-		} else {
+		} else if (!limited) {
 			float t0, t1;
 			int in0 = box_met(&nodes[node->a], from, over, best, &t0), in1 = box_met(&nodes[node->a + 1], from, over, best, &t1);
 
@@ -136,6 +144,35 @@ world_nearest(struct vec from, struct vec way, struct vec over, float *nearest, 
 				at = in0 ? node->a : node->a + 1;
 				continue;
 			}
+		} else {
+			/* (as above, and the turns taken kept: bit d of `turns` the turn at depth d) */
+			float t0, t1;
+			int in0 = box_met(&nodes[node->a], from, over, best, &t0), in1 = box_met(&nodes[node->a + 1], from, over, best, &t1);
+			uint32_t near = t0 <= t1 ? node->a : node->a + 1, far = 2 * node->a + 1 - near;
+			int far_in = t0 <= t1 ? in1 : in0, near_in = in0 + in1 - far_in;
+
+			if (depth <= top && (back >> depth & 1)) {
+				/* (resumed: the near child was searched; one the ray no longer meets is let be) */
+				if (in0 || in1) {
+					turns |= 1ull << depth++;
+					at = far_in ? far : near;
+					continue;
+				}
+			} else if (near_in) {
+				if (far_in) {
+					entered[held] = t0 <= t1 ? t1 : t0, level[held] = (uint8_t)depth;
+					stack[held++] = far;
+					turns &= ~(1ull << depth);
+				} else
+					turns |= 1ull << depth;
+				depth++, at = near;
+				continue;
+			} else if (far_in) {
+				top = -1;	/* (a resumed search's near child behind what it found) */
+				turns |= 1ull << depth++;
+				at = far;
+				continue;
+			}
 		}
 		/* (a box put by may be behind what was found since: only one the ray enters nearer is taken) */
 		do {
@@ -143,6 +180,17 @@ world_nearest(struct vec from, struct vec way, struct vec over, float *nearest, 
 				goto done;
 			at = stack[--held];
 		} while (!(entered[held] < best));
+		if (limited) {
+			depth = level[held], top = -1;	/* (a resumed search is past its turns) */
+			turns = (turns & ((1ull << depth) - 1)) | 1ull << depth;
+			/* (a lane's step stops between boxes) */
+			if (mcw_steps_left() < PT_LEAF_LEFT) {
+				*trail = turns, *nearest = best;
+				met->triangle = found, met->u = fu, met->w = fw;
+				return -1;
+			}
+			depth++;
+		}
 	}
 done:
 	if (!found)
@@ -207,12 +255,105 @@ world_between(struct vec from, struct vec way, struct vec over, float far, struc
 	}
 }
 
-/* The nearest thing a ray meets (MET_NONE: the sky) and how far; *met: where in the world. */
+/* A light's ray in a lane's step (world_between in turns): where it stopped, and the glass it had met. */
+struct pt_shadow {
+	uint64_t trail;		/* the turns to the next box (0: from the start) */
+	struct vec through;
+	int crossed, stopped;
+};
+
+/* world_between() that stops where the pass runs low (-1, sh->stopped) and goes on from sh->trail:
+ * a box's two in their order, so a search resumed goes down the same turns. */
+static int
+world_between_steps(struct vec from, struct vec way, struct vec over, float far, struct pt_shadow *sh)
+{
+	const struct sc_node *nodes = sc_world.nodes;
+	const struct sc_triangle *triangles = sc_world.triangles;
+	uint32_t stack[64], at = 0;
+	uint8_t level[64];
+	uint64_t back = sh->trail, turns = 0;
+	int held = 0, depth = 0, top = back ? 63 - __builtin_clzll(back) : -1;
+	float enter;
+
+	if (!box_met(&nodes[0], from, over, far, &enter))
+		return 0;
+	for (;;) {
+		const struct sc_node *node = &nodes[at];
+
+		if (node->b) {
+			const struct sc_triangle *tri = triangles + node->a, *end = tri + node->b;
+
+			for (; tri < end; tri++) {
+				float t, u, w;
+
+				if (triangle_met(tri, from, way, &t, &u, &w) && t > 0.0005f && t < far) {
+					const struct sc_object *glass = &sc.objects[tri->object];
+					struct vec flat = cross(of(tri->edge1), of(tri->edge2));
+					float out = dot(way, flat);
+
+					if (glass->glass < 0.5f)
+						return 1;
+					t = (dot(flat, of(tri->normal[0])) < 0.0f ? -out : out) > 0.0f ? t * glass->density : -t * glass->density;
+					sh->through = add(sh->through, v(t * (1.0f - glass->colour[0]), t * (1.0f - glass->colour[1]), t * (1.0f - glass->colour[2])));
+					sh->crossed++;
+				}
+			}
+		} else {
+			int in0 = box_met(&nodes[node->a], from, over, far, &enter), in1 = box_met(&nodes[node->a + 1], from, over, far, &enter);
+
+			if (depth <= top && (back >> depth & 1)) {
+				/* (resumed: the first was searched) */
+				if (in0 || in1) {
+					turns |= 1ull << depth++;
+					at = in1 ? node->a + 1 : node->a;
+					continue;
+				}
+			} else if (in0 && in1) {
+				level[held] = (uint8_t)depth;
+				stack[held++] = node->a + 1;
+				turns &= ~(1ull << depth++);
+				at = node->a;
+				continue;
+			} else if (in0 || in1) {
+				turns |= 1ull << depth++;
+				at = in0 ? node->a : node->a + 1;
+				continue;
+			}
+		}
+		if (!held)
+			return 0;
+		at = stack[--held];
+		depth = level[held], top = -1;
+		turns = (turns & ((1ull << depth) - 1)) | 1ull << depth;
+		if (mcw_steps_left() < PT_LEAF_LEFT) {
+			sh->trail = turns, sh->stopped = 1;
+			return -1;
+		}
+		depth++;
+	}
+}
+
+/* Whether the world is in a light's ray before `far`, and the glass it crosses (sh: in a lane's step). */
+static inline int
+light_blocked(struct vec at, struct vec to, float far, struct vec *through, int *crossed, struct pt_shadow *sh)
+{
+	struct vec over = v(1.0f / to.x, 1.0f / to.y, 1.0f / to.z);
+	int r;
+
+	if (!sh)
+		return world_between(at, to, over, far, through, crossed);
+	r = world_between_steps(at, to, over, far, sh);
+	*through = sh->through, *crossed = sh->crossed;
+	return r != 0;
+}
+
+/* The nearest thing a ray meets (MET_NONE: the sky) and how far; *met: where in the world. A search
+ * resumed (world_nearest) by *trail, *met and *distance what it had found; -1 where it stopped. */
 static inline __attribute__((always_inline)) int
-nearest(struct vec from, struct vec way, float *distance, struct met *met)
+nearest_from(struct vec from, struct vec way, uint64_t *trail, float *distance, struct met *met, int limited)
 {
 	struct vec over = v(1.0f / way.x, 1.0f / way.y, 1.0f / way.z);
-	int i, lights = sc.light_count, what = MET_NONE;
+	int i, lights = sc.light_count, what = MET_NONE, world;
 	float best = 1e30f, t;
 
 	/* (the lights first: the tree is then looked into no farther than the nearest of them) */
@@ -230,10 +371,27 @@ nearest(struct vec from, struct vec way, float *distance, struct met *met)
 				best = t, what = MET_LIGHT + i;
 		}
 	}
-	if (world_nearest(from, way, over, &best, met))
+	/* (a triangle found before is nearer than any light: it was found nearer than them) */
+	if (met->triangle)
+		best = *distance;
+	world = world_nearest(from, way, over, trail, &best, met, limited);
+	if (world < 0) {
+		*distance = best;
+		return -1;
+	}
+	if (world)
 		what = MET_WORLD;
 	*distance = best;
 	return what;
+}
+
+static inline __attribute__((always_inline)) int
+nearest(struct vec from, struct vec way, float *distance, struct met *met)
+{
+	uint64_t trail = 0;
+
+	met->triangle = 0;
+	return nearest_from(from, way, &trail, distance, met, 0);
 }
 
 /* The way from the eye through a point of a picture `width` by `height`, x and y in pixels. */
@@ -303,7 +461,7 @@ through_glass(struct vec comes, struct vec through, int crossed)
 /* The glowing things' light at a point: a point of a glowing triangle, picked by its area, and
  * a ray to it. `picks`: how many lights the one stands for. */
 static struct vec
-glow_at(struct vec at, uint32_t *state, uint32_t *rays, struct vec *to, float picks)
+glow_at(struct vec at, uint32_t *state, uint32_t *rays, struct vec *to, float picks, struct pt_shadow *sh)
 {
 	const float *upto = pt.glow_upto;
 	int low = 0, high = pt.glowing_count - 1;
@@ -334,7 +492,7 @@ glow_at(struct vec at, uint32_t *state, uint32_t *rays, struct vec *to, float pi
 	flat = cross(of(tri->edge1), of(tri->edge2));
 	facing = __builtin_fabsf(dot(flat, *to)) / __builtin_sqrtf(dot(flat, flat));
 	(*rays)++;
-	if (world_between(at, *to, v(1.0f / to->x, 1.0f / to->y, 1.0f / to->z), d - 0.002f, &through, &crossed))
+	if (light_blocked(at, *to, d - 0.002f, &through, &crossed, sh))
 		return v(0, 0, 0);
 	/* (one over the chance of that way: the area of them all, turned, over the distance squared) */
 	return through_glass(scale(of(object->colour), object->glow * facing * upto[pt.glowing_count - 1] / d2 * picks), through, crossed);
@@ -344,7 +502,7 @@ glow_at(struct vec at, uint32_t *state, uint32_t *rays, struct vec *to, float pi
  * from there, evenly by solid angle, or to a glowing thing. *to: the way taken. Nothing when
  * something is between. */
 static inline struct vec
-light_at(struct vec at, uint32_t *state, uint32_t *rays, struct vec *to)
+light_at(struct vec at, uint32_t *state, uint32_t *rays, struct vec *to, struct pt_shadow *sh)
 {
 	int lights = sc.light_count + (pt.glowing_count > 0), pick = (int)(chance(state) * (float)lights);
 	const struct sc_light *light = &sc.lights[pick];
@@ -354,7 +512,7 @@ light_at(struct vec at, uint32_t *state, uint32_t *rays, struct vec *to)
 	int crossed = 0;
 
 	if (pick >= sc.light_count)
-		return glow_at(at, state, rays, to, (float)lights);
+		return glow_at(at, state, rays, to, (float)lights, sh);
 	axis = sub(of(light->place), at);
 	d2 = dot(axis, axis), r2 = light->radius * light->radius;
 	*to = v(0, 0, 0);
@@ -375,39 +533,74 @@ light_at(struct vec at, uint32_t *state, uint32_t *rays, struct vec *to)
 	reach = r2 - d2 * s * s;
 	reach = d * c - __builtin_sqrtf(reach > 0.0f ? reach : 0.0f);
 	(*rays)++;
-	if (world_between(at, *to, v(1.0f / to->x, 1.0f / to->y, 1.0f / to->z), reach - 0.002f, &through, &crossed))
+	if (light_blocked(at, *to, reach - 0.002f, &through, &crossed, sh))
 		return v(0, 0, 0);
 	/* (the cone's solid angle, and the one light stands for them all) */
 	comes = scale(of(light->colour), shine(light) * 6.2831853f * less * (float)lights);
 	return through_glass(comes, through, crossed);
 }
 
-/* The light one path brings back; *rays counts its rays. */
-static inline __attribute__((always_inline)) struct vec
-path(struct vec from, struct vec way, uint32_t *state, uint32_t *rays)
+/* A path where it is (a lane's step stops and goes on: pt_batch_step): its ray, the light it has
+ * brought and what it still carries, its random numbers and rays, and its nearest search so far. */
+struct pt_path {
+	struct vec from, way, seen, weight;
+	uint32_t state, rays;
+	int bounce, straight, matt;	/* straight: the last turn asked no light for its light, one met now is seen; matt: but not after a matt surface (such a path is one in thousands, and a speck) */
+	uint64_t trail;		/* where its search goes on (0: a new turn's), or when shading its light's ray */
+	int shading;		/* its search through, its hit kept */
+	struct vec through;	/* (the glass the light's ray had met) */
+	int crossed;
+	float best;
+	int tri;		/* and what it found: a triangle of the world (-1 none), how far, where in it */
+	float u, w;
+};
+
+static inline void
+path_begin(struct pt_path *p, struct vec from, struct vec way, uint32_t state)
 {
-	struct vec seen = v(0, 0, 0), weight = v(1, 1, 1);
-	int bounce, straight = 1;	/* the last turn asked no light for its light: one met now is seen */
-	int matt = 0;			/* but not after a matt surface: such a path is one in thousands, and a speck */
+	p->from = from, p->way = way, p->seen = v(0, 0, 0), p->weight = v(1, 1, 1);
+	p->state = state, p->rays = 1;
+	p->bounce = 0, p->straight = 1, p->matt = 0;
+	p->trail = 0, p->shading = 0, p->through = v(0, 0, 0), p->crossed = 0;
+	p->best = 1e30f, p->tri = -1, p->u = p->w = 0.0f;
+}
+
+/* The light one path brings back into p->seen, *rays its rays, *state its random numbers (apart from p,
+ * so that a plain path's p stays in registers); `limited` (a lane): 0 where its pass runs low, p kept. */
+static inline __attribute__((always_inline)) int
+path_run(struct pt_path *p, uint32_t *state, uint32_t *rays, int limited)
+{
 	int lights = sc.light_count + (pt.glowing_count > 0);
 
-	for (bounce = 0; bounce < pt.bounces; bounce++) {
+	while (p->bounce < pt.bounces) {
 		const struct sc_object *object;
-		struct met met = {0, 0.0f, 0.0f};
-		struct vec at, normal, flat, colour, to, got, mirror;
-		float t, facing, c, keep;
-		int what, back, shiny = 0;
+		struct met met = {p->tri >= 0 ? sc_world.triangles + p->tri : 0, p->u, p->w};
+		struct vec at, normal, flat, colour, to, got, mirror, from = p->from, way = p->way, seen = p->seen, weight = p->weight;
+		float t = p->best, facing, c, keep;
+		int what, back, shiny = 0, straight = p->straight, matt = p->matt;
 
-		(*rays)++;
-		what = nearest(from, way, &t, &met);
+		if (!p->shading) {
+			uint64_t trail = p->trail;
+
+			what = nearest_from(from, way, &trail, &t, &met, limited);
+			if (what < 0 || (limited && what == MET_WORLD && mcw_steps_left() < PT_SHADE_LEFT)) {
+				p->trail = what < 0 ? trail : 0, p->shading = what >= 0, p->best = t;
+				p->tri = met.triangle ? (int)(met.triangle - sc_world.triangles) : -1, p->u = met.u, p->w = met.w;
+				return 0;
+			}
+		} else
+			what = MET_WORLD;	/* (searched in an earlier step: its hit) */
+		/* (a light's ray stopped: the turn is shaded again from here, with the same random numbers) */
+		uint32_t state0 = *state, rays0 = *rays;
+		struct pt_shadow sh = {p->shading ? p->trail : 0, p->through, p->crossed, 0}, *shp = limited ? &sh : 0;
 		if (what == MET_NONE) {
-			seen = add(seen, mul(weight, scale(of(sc.sky), sc.sky_power)));
-			break;
+			p->seen = add(seen, mul(weight, scale(of(sc.sky), sc.sky_power)));
+			return 1;
 		}
 		if (what >= MET_LIGHT) {
 			if (straight && !matt)
-				seen = add(seen, mul(weight, scale(of(sc.lights[what - MET_LIGHT].colour), shine(&sc.lights[what - MET_LIGHT]))));
-			break;
+				p->seen = add(seen, mul(weight, scale(of(sc.lights[what - MET_LIGHT].colour), shine(&sc.lights[what - MET_LIGHT]))));
+			return 1;
 		}
 		at = add(from, scale(way, t));
 		object = &sc.objects[met.triangle->object];
@@ -416,7 +609,8 @@ path(struct vec from, struct vec way, uint32_t *state, uint32_t *rays)
 			/* (after a matt surface its light was asked for: light_at) */
 			if (straight && !matt)
 				seen = add(seen, mul(weight, scale(colour, object->glow)));
-			break;
+			p->seen = seen;
+			return 1;
 		}
 		/* the surface there: towards the mean of the triangle's corners' normals; which side the
 		 * ray is on is the flat triangle's to say, turned the way its normals are */
@@ -466,7 +660,9 @@ path(struct vec from, struct vec way, uint32_t *state, uint32_t *rays)
 				/* a rough shine: a light's light by how near the mirrored way it comes */
 				mirror = add(way, scale(normal, 2.0f * c));
 				if (lights) {
-					got = light_at(at, state, rays, &to);
+					got = light_at(at, state, rays, &to, shp);
+					if (limited && sh.stopped)
+						goto shade_stopped;
 					facing = dot(normal, to);
 					keep = dot(mirror, to);
 					if (facing > 0.0f && keep > 0.0f) {
@@ -484,7 +680,9 @@ path(struct vec from, struct vec way, uint32_t *state, uint32_t *rays)
 				/* a matt surface: one light's light on it, then on in a way that favours the surface's own */
 				weight = mul(weight, colour);
 				if (lights) {
-					got = light_at(at, state, rays, &to);
+					got = light_at(at, state, rays, &to, shp);
+					if (limited && sh.stopped)
+						goto shade_stopped;
 					facing = dot(normal, to);
 					if (facing > 0.0f)
 						seen = add(seen, mul(weight, scale(got, facing * 0.31830989f)));
@@ -493,18 +691,44 @@ path(struct vec from, struct vec way, uint32_t *state, uint32_t *rays)
 				straight = 0, matt = 1;
 			}
 		}
-		from = at;
-		if (bounce >= 2) {
+		/* the next turn: its search from the start */
+		p->from = at, p->way = way, p->seen = seen, p->straight = straight, p->matt = matt;
+		p->trail = 0, p->shading = 0, p->through = v(0, 0, 0), p->crossed = 0;
+		p->best = 1e30f, p->tri = -1;
+		if (p->bounce >= 2) {
 			/* a path that carries little ends by chance, and the others count for it */
 			keep = weight.x > weight.y ? (weight.x > weight.z ? weight.x : weight.z) : (weight.y > weight.z ? weight.y : weight.z);
 			if (keep < 1.0f) {
 				if (chance(state) >= keep)
-					break;
+					return 1;
 				weight = scale(weight, 1.0f / keep);
 			}
 		}
+		p->weight = weight;
+		if (++p->bounce < pt.bounces)
+			(*rays)++;
+		if (limited && p->bounce < pt.bounces && mcw_steps_left() < PT_LEAF_LEFT)
+			return 0;	/* (between two turns: p is all there is) */
+		continue;
+shade_stopped:
+		*state = state0, *rays = rays0, p->shading = 1;
+		p->trail = sh.trail, p->through = sh.through, p->crossed = sh.crossed, p->best = t;
+		p->tri = (int)(met.triangle - sc_world.triangles), p->u = met.u, p->w = met.w;
+		return 0;
 	}
-	return seen;
+	return 1;
+}
+
+/* The light one path brings back; *rays counts its rays. */
+static inline __attribute__((always_inline)) struct vec
+path(struct vec from, struct vec way, uint32_t *state, uint32_t *rays)
+{
+	struct pt_path p;
+
+	path_begin(&p, from, way, 0);
+	(*rays)++;
+	path_run(&p, state, rays, 0);
+	return p.seen;
 }
 
 static inline uint32_t
@@ -613,7 +837,7 @@ void
 pt_read_all(void)
 {
 	extern char __executable_start[], etext[];
-	uintptr_t at[5] = {(uintptr_t)pt_tile, (uintptr_t)pt_share, (uintptr_t)world_between, (uintptr_t)pt_batch_index, (uintptr_t)pt_batch_fold}, low = at[0], high = at[0], page;
+	uintptr_t at[5] = {(uintptr_t)pt_tile, (uintptr_t)pt_share, (uintptr_t)world_between, (uintptr_t)pt_batch_step, (uintptr_t)pt_batch_fold}, low = at[0], high = at[0], page;
 	const volatile char *part[4] = {(const char *)sc_world.nodes, (const char *)sc_world.triangles, (const char *)pt.glowing, (const char *)pt.glow_upto};
 	uint32_t bytes[4] = {(uint32_t)sc_world.node_count * sizeof(struct sc_node), (uint32_t)sc_world.triangle_count * sizeof(struct sc_triangle),
 			     (uint32_t)pt.glowing_count * 4, (uint32_t)pt.glowing_count * 4}, i;
@@ -708,21 +932,77 @@ pt_share(uint32_t which, uint32_t how)
 
 /* ---- on lanes (docs/machine/lanes.md): a sample of the whole picture one job, a pixel an index ---- */
 
-/* Index i of a batch: pixel i % pixels of sample s0 + i / pixels, its light and its rays into the
- * batch's 16 bytes for it (nothing else is written: the lanes' rule). */
-void
-pt_batch_index(uint32_t i, void *ctx)
+/* A step of index i of a batch: pixel i % pixels of sample s0 + i / pixels. Through: its light and its
+ * rays in the first of its PT_STEP_TEXELS (nothing else written); not through: where its path is in all
+ * five, the first's last word a NaN (PT_GOING) with its rays, flags and turn, the fifth what its search
+ * found (not found again from the triangle: an inlined test may round otherwise). */
+#define PT_GOING 0xffc00000u
+uint32_t
+pt_batch_step(uint32_t i, void *ctx, uint32_t round)
 {
 	const struct pt_batch *b = ctx;
-	uint32_t p = i % b->pixels, rays = 0;
-	float *v = b->vals + 4 * i;
-	struct vec c = pixel_light((int)(p % (uint32_t)pt.width), (int)(p / (uint32_t)pt.width), b->s0 + i / b->pixels, &rays);
+	uint32_t p = i % b->pixels, *o = (uint32_t *)b->vals + 4 * PT_STEP_TEXELS * i, w;
+	float *f = (float *)o;
+	struct pt_path path;
 
-	v[0] = c.x, v[1] = c.y, v[2] = c.z, v[3] = (float)rays;
+	if (round == 0) {
+		int x = (int)(p % (uint32_t)pt.width), y = (int)(p / (uint32_t)pt.width);
+		uint32_t state = ((uint32_t)(y * pt.width + x) * 9781u + (b->s0 + i / b->pixels) * 6271u + pt.seed) * 2654435761u | 1u;
+		float px, py;
+
+		/* (as pixel_light() begins) */
+		state ^= state >> 15, state *= 0x2c1b3c6du, state ^= state >> 12;
+		px = (float)x + chance(&state);
+		py = (float)y + chance(&state);
+		path_begin(&path, of(sc.camera.eye), eye_way(px, py, (float)pt.width, (float)pt.height), state);
+	} else {
+		if ((o[3] & PT_GOING) != PT_GOING)
+			return 0;	/* (through in an earlier round) */
+		w = o[3];
+		path.shading = (w >> 21) & 1, path.through = v(0, 0, 0), path.crossed = 0;
+		if (w & 1u << 20)
+			path.through = v(f[20], f[21], f[22]), path.crossed = (int)o[23];
+		path.from = v(f[0], f[1], f[2]), path.way = v(f[4], f[5], f[6]), path.state = o[7];
+		path.seen = v(f[8], f[9], f[10]), path.tri = (int)o[11];
+		path.weight = v(f[12], f[13], f[14]), path.trail = (uint64_t)o[15] << 32 | o[19];
+		path.bounce = (int)(w & 31), path.straight = (w >> 5) & 1, path.matt = (w >> 6) & 1, path.rays = (w >> 7) & 0x1fff;
+		path.best = f[16], path.u = f[17], path.w = f[18];
+	}
+	if (!path_run(&path, &path.state, &path.rays, 1)) {
+		f[0] = path.from.x, f[1] = path.from.y, f[2] = path.from.z;
+		o[3] = PT_GOING | (uint32_t)path.shading << 21 | (path.crossed ? 1u << 20 : 0) | path.rays << 7 | (uint32_t)path.matt << 6 | (uint32_t)path.straight << 5 | (uint32_t)path.bounce;
+		f[4] = path.way.x, f[5] = path.way.y, f[6] = path.way.z, o[7] = path.state;
+		f[8] = path.seen.x, f[9] = path.seen.y, f[10] = path.seen.z, o[11] = (uint32_t)path.tri;
+		f[12] = path.weight.x, f[13] = path.weight.y, f[14] = path.weight.z, o[15] = (uint32_t)(path.trail >> 32);
+		f[16] = path.best, f[17] = path.u, f[18] = path.w, o[19] = (uint32_t)path.trail;
+		if (path.crossed)
+			f[20] = path.through.x, f[21] = path.through.y, f[22] = path.through.z, o[23] = (uint32_t)path.crossed;
+		return 1;
+	}
+	/* (held to PT_MOST, as pixel_light() holds it) */
+	f[0] = __builtin_fminf(path.seen.x, PT_MOST), f[1] = __builtin_fminf(path.seen.y, PT_MOST), f[2] = __builtin_fminf(path.seen.z, PT_MOST);
+	f[3] = (float)path.rays;
+	return 0;
+}
+
+/* How many of indices first.. of a batch made (in steps) are not what pixel_light() makes of them. */
+uint32_t
+pt_batch_check(const struct pt_batch *b, uint32_t first, uint32_t count)
+{
+	uint32_t i, wrong = 0;
+
+	for (i = first; i < first + count; i++) {
+		uint32_t p = i % b->pixels, rays = 0;
+		const float *f = b->vals + 4 * PT_STEP_TEXELS * i;
+		struct vec c = pixel_light((int)(p % (uint32_t)pt.width), (int)(p / (uint32_t)pt.width), b->s0 + i / b->pixels, &rays);
+
+		wrong += f[0] != c.x || f[1] != c.y || f[2] != c.z || f[3] != (float)rays;
+	}
+	return wrong;
 }
 
 /* Pixels p0 to p1 of a batch made: into their sums in the samples' order (as a worker's tile adds
- * them), and the picture of them when `show` */
+ * them), and the picture of them when `show`; a path the field left going is finished here first */
 void
 pt_batch_fold(const struct pt_batch *b, uint32_t p0, uint32_t p1, int show)
 {
@@ -731,13 +1011,18 @@ pt_batch_fold(const struct pt_batch *b, uint32_t p0, uint32_t p1, int show)
 
 	for (p = p0; p < p1; p++) {
 		float *sum = pt.sums + 4 * p;
-		const float *v = b->vals + 4 * p;
+		const float *v = b->vals + 4 * PT_STEP_TEXELS * p;
 
-		for (k = 0; k < b->count; k++, v += 4 * b->pixels)
+		for (k = 0; k < b->count; k++, v += 4 * PT_STEP_TEXELS * b->pixels) {
+			uint32_t r = 1;
+
+			while ((((const uint32_t *)v)[3] & PT_GOING) == PT_GOING && pt_batch_step(k * b->pixels + p, (void *)b, r))
+				r++;
 			if (b->s0 + k == 0)
 				sum[0] = v[0], sum[1] = v[1], sum[2] = v[2], sum[3] = v[3];
 			else
 				sum[0] += v[0], sum[1] += v[1], sum[2] += v[2], sum[3] += v[3];
+		}
 		if (show)
 			pt.pixels[p] = shown(sum[0], samples) << 16 | shown(sum[1], samples) << 8 | shown(sum[2], samples);
 	}

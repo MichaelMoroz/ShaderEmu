@@ -138,14 +138,16 @@ uint32_t pt_tile(uint32_t tile, uint32_t how);
  * below that how many samples at most (0: all). Ends early when its core is wanted back. */
 uint32_t pt_share(uint32_t which, uint32_t how);
 /* On lanes (docs/machine/lanes.md): a batch of `count` samples from s0 of every pixel, one index a
- * pixel's sample (pt_batch_index, the batch its context), into vals, 16 bytes an index, sample after
- * sample; then pixels p0 to p1 of it folded into the sums in order, and shown (pt_batch_fold); and
- * whether the picture is made after a sample. */
+ * pixel's sample, made in steps (pt_batch_step, the batch its context: "Steps") into vals, PT_STEP_TEXELS
+ * an index, sample after sample; then pixels p0 to p1 of it folded into the sums in order, and shown
+ * (pt_batch_fold); and whether the picture is made after a sample. */
+#define PT_STEP_TEXELS 6
 struct pt_batch {
 	float *vals;
 	uint32_t s0, count, pixels;
 };
-void pt_batch_index(uint32_t i, void *batch);
+uint32_t pt_batch_step(uint32_t i, void *batch, uint32_t round);
+uint32_t pt_batch_check(const struct pt_batch *b, uint32_t first, uint32_t count);
 void pt_batch_fold(const struct pt_batch *b, uint32_t p0, uint32_t p1, int show);
 int pt_shown_after(uint32_t sample);
 /* The world's glowing triangles, which a matt surface asks for their light as it does a

@@ -387,39 +387,66 @@ machine's own pointer words, which `nxkey` does not move: a drag is tested with 
 --pointer-circle` and `--pointer-button`, and was, in a test of `gizmo.cpp` alone, not in
 this program. Nothing of it has run on the shader machine.
 
-### On the field (20 October 2026)
+### On the field (20 October 2026; in steps since 21 October)
 
 Where the machine has the lanes' field (`docs/machine/lanes.md`) `nxpath` traces on it, and its
-workers build the tree and finish what the field leaves; `NXPATH_FIELD=0` is the workers' shares of
-before. A picture's samples go in **batches** (`pt_batch_index`, `pt_batch_fold` in `tracer.c`): a
-batch is one job of the field, an index a pixel's sample, which writes its light and rays into the
-batch's 16 bytes for it and nothing else; up to 4 samples a batch, up to the next sample whose
-picture is shown, and 2 x 640 x 480 values at most. The workers then make what the lanes skipped,
-each a path longer than a pass (`mcw_field_apart`, the lanes that left some dealt out in turn), and
-fold the batch into the sums in the samples' order, making the picture when it is shown. Two batches,
-so the field makes one while the workers finish the other.
+workers build the tree and fold what the field makes; `NXPATH_FIELD=0` is the workers' shares of
+before. A picture's samples go in **batches** (`pt_batch_step`, `pt_batch_fold` in `tracer.c`): a
+batch is one job of the field in steps, an index a pixel's sample; up to 4 samples a batch, up to the
+next sample whose picture is shown. The workers fold a batch into the sums in the samples' order, every
+n-th texel a worker, making the picture when it is shown; two batches, so the field makes one while the
+workers fold the other.
 
-- A path is 1,465 instructions on average at 160 x 120 (2,743 pixels measured, the scene it starts
-  with), 5% over 4,096, 2.5% over a pass's 8,192, the longest 48 thousand: 2% of every sample is
-  left to the workers.
-- The sums are added as a worker's tile adds them, sample after sample: a picture's sum is the same
-  on the field as on the workers, and the batches' sizes do not move it.
-- Before the batches a sample was one job and its picture another, and the field waited for the
-  workers; and before the library looked only at the lanes that left some, finding them took the
-  first core 290 ms a sample (`docs/machine/lanes.md`, "The field").
+**A path in steps.** A path is longer than a pass in a fifth to a half of a scene's instructions
+(22% of the teapot's, 57% of the Cornell box's), so a lane makes it in steps (`docs/machine/lanes.md`,
+"Steps"): a step goes on while the pass has 2,500 instructions left (`PT_LEAF_LEFT`, `PT_SHADE_LEFT`),
+and stops where the path can be taken up again:
 
-On the RTX 5070 laptop (geotune's layout), the scene it starts with, the tree 330 to 360 ms apart:
+- **In a turn's search** (`world_nearest` with `limited`): between two boxes, the turns the search took
+  kept as a bit a depth (Laine's restart trail, 64 bits: the tree is at most 60 deep), with what it found.
+  Taken up again, the search goes down those turns from the top, the boxes it put by put by again, to
+  the box it would have gone into next; the tree's order is the same for the same ray, so nothing is
+  searched twice. (A resume from the nearest place no box left has, the first way tried, could not stop
+  while a box put by held the ray's start, which near a surface is most of the time.)
+- **In a light's ray** (`world_between_steps`): the same, the boxes' two in their order, with the glass
+  it had crossed. The turn's shading is done again from its start with the same random numbers up to
+  that ray, which is cheap and comes out the same.
+- **Between two turns**, and after a search before its shading.
 
-| | 255 workers | the field and the workers |
-|---|---|---|
-| 160 x 120, 8 samples | 657 ms | 410 ms |
-| 320 x 240, 8 samples | 1,583 ms | 899 ms |
-| 640 x 480, 4 samples | 3,516 ms | 1,413 ms |
-| 640 x 480, 16 samples | 13,761 ms | 5,193 ms |
+A path not through is six texels: where it is, its way, its light and weight, its random numbers, the
+triangle and place found and how far, the trail, the glass crossed; through, its light and rays in the
+first. The batches are 59 MB (two of 640 x 480 values), made when the field is first used.
 
-`NXPATH_PRINT=1` adds what the field's jobs took and how many paths they left. The lanes run about a
-billion instructions a second here against `nxray`'s 2.3 to 3.4: a path's way through the tree is
-another in every lane. On `rvc_cpu`, which has no field, the sums are as before (`02f213e9`).
+**Rounds.** A round waits for its slowest lane, and the last of a batch's paths cost a round each. The
+field goes on round after round while the workers fold, and when they have nothing to do it ends at the
+next round's end and leaves them the paths still going (`mcw_field_steps_rounds`), which the fold makes
+from where they are (`NXPATH_ROUNDS=N`: N rounds a batch, fixed).
+
+**The self-test** (`NXPATH_PROBE=N`, with workers, `rvc_cpu` too): N paths from the picture's middle row
+made in steps on a worker, each step given a pass, then traced whole: steps, the most rounds, a step's
+instructions, how many went over a pass, and how many paths came out other than whole. At 160 x 120 with
+3,000 paths, every scene: 0 over a pass, 0 other, the longest step 7,144 to 8,162 instructions. A step that
+went over a pass on the card is made by the first core and counted: `NXPATH_PRINT=1` says how many, and
+the picture's line says "steps too long for the lanes".
+
+On the RTX 5070 laptop, 260 x 243, 64 samples, every scene the same sum on the field as on the workers:
+
+| scene | the field, in steps | 255 workers | the field before steps (long paths skipped) |
+|---|---|---|---|
+| teapot | 6.5 s | 8.0 s | 4.8 s |
+| cornell | 24.6 s | 27.3 s | 25.6 s |
+| cornell-balls | 24.1 s | 28.0 s | 24.6 s |
+| balls | 15.0 s | 14.6 s | 13.4 s |
+| materials | 12.2 s | 12.8 s | 9.0 s |
+| beer | 7.2 s | 9.5 s | 6.4 s |
+| mirrors | 16.8 s | 20.9 s | 14.1 s |
+| glow | 17.8 s | 16.4 s | 11.3 s |
+
+The field is ahead of the workers in six scenes of eight, and behind the field of before in all but
+the Cornell boxes: there the long paths were the workers' at once, beside the field, and a lane's step
+leaves up to 2,500 of its pass's 8,192 instructions unused where it stops. The workers' column is a few percent over the earlier
+table's; on `rvc_cpu` the workers' instructions are as before (teapot 1% fewer, cornell and glow level). On
+`rvc_cpu`, which has no field, the sums are as before (`02f213e9`).
 
 ## The path tracer of before (to 13 October 2026)
 

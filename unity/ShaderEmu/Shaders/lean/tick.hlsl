@@ -194,15 +194,15 @@ static uint tcmp_lo, tcmp_hi, now_lo, now_hi, res_en, res_addr, msrc, mdst, mn, 
 static bool quiet;            // nothing the general step looks at after an instruction has changed
 static bool trapped;
 static uint tcause, tval;
-static uint lane_word = 0;    // texel 28.w: a lanes job's descriptor while it runs, then how it ended (1 whole, 2 a lane stuck)
+static uint lane_word = 0;    // texel 28.w: a lanes job's descriptor while it runs, then how it ended (1 whole, 2 a lane stuck, 4 an index not through)
 static bool lane_mode = false;   // this pixel runs a lane's indices
 static bool lane_pixel = false;  // this pixel's texels are a lane's two buckets in this pass
 // a lane's job: its number, of how many, its first index's place in its sequence and how many it made
-// in this pass; the function, the stub it returns to, the stack's top, the context, the first index
-// and the count, the output's first RAM texel and texels an index, the stuck lanes' texels
-// (lane_j: the lane's place in its order; bit 30 once it has skipped an index of the job, kept there and
-// not in a static of its own, which every core's loop would carry; bit 31 when it stopped)
-static uint lane_L, lanes_n, lane_j, lane_k, lane_kmax, lane_fn, lane_stub, lane_sp, lane_ctx, lane_first, lane_count;
+// in this pass, and the texels they wrote; the function, the stub it returns to, the stack's top, the
+// context, the first index and the count, the output's first RAM texel and texels an index, the stuck lanes' texels
+// (lane_j: the lane's place in its order; bit 29 once an index of the job returned not through, bit 30 once it
+// skipped one, kept there and not in statics of their own, which every core's loop would carry; bit 31 when it stopped)
+static uint lane_L, lanes_n, lane_j, lane_k, lane_used, lane_fn, lane_stub, lane_sp, lane_ctx, lane_first, lane_count;
 static uint lane_out, lane_T, lane_status, lane_ran;
 static uint lane_job = 0;   // the field's job's number, in a stuck lane's word (a worker's lanes: 0)
 static bool lane_stuck = false;
@@ -452,6 +452,8 @@ uint fp_all(uint w, uint ra, uint rb, out bool to_f, out bool ok) {
 uint lanes_of(uint b) { return b < 3 ? 0 : (L1_AT + BUCKETS(b) * 4 - 56) / 8 + 1; }
 // CSR 0x0b8 read: lanes are built (bit 31), this core's lanes (bits 8-15), how its last job ended
 uint lanes_csr() { return 0x80000000u | ((core == 0 ? 0 : lanes_of(bits)) << 8) | (lane_word < 16 ? lane_word : 0); }
+// CSR 0x0ba read: in a lane, the instructions left of its pass (its clock counts them from 0); elsewhere no end
+uint lane_left() { uint most = max(_Ticks / max(_TicksDivisor, 1), 2); return lane_mode ? most - min(clock, most) : 0xffffffff; }
 // The CSRs Linux uses, as fields; the machine's own read as zeros, a write to one not kept goes nowhere.
 uint csr_read(uint n) {
     uint fs = (mstatus & 0x6000) != 0 ? 0x80006000 : 0, r = asuint(_Time.w);   // FS reads dirty whenever it is on
@@ -461,7 +463,7 @@ uint csr_read(uint n) {
            n == 0x144 ? mip & 0x222 : n == 0x344 ? mip : n == 0x105 ? stvec : n == 0x106 ? scounteren :
            n == 0x140 ? sscratch : n == 0x141 ? sepc : n == 0x142 ? scause : n == 0x143 ? stval :
            n == 0xc01 ? now_lo : n == 0xb00 || n == 0xc00 ? clock : n == 0xf14 ? core :
-           n == 0x0bf ? r : n == 0x0be ? _PlayerID : n == 0x0b8 ? lanes_csr() :
+           n == 0x0bf ? r : n == 0x0be ? _PlayerID : n == 0x0b8 ? lanes_csr() : n == 0x0ba ? lane_left() :
 #ifdef LANE_FIELD
            n == 0x0b9 ? (_LaneField != 0 ? (uint)FIELD_MAX : 0) :   // the field's lanes, where the host draws it
 #endif
@@ -851,7 +853,7 @@ uint4 state_out(inout uint4 c[C_N], uint lin) {
 
 // The lane's next index: its registers as a call of the function with the index and the context
 void lane_go() {
-    xr[10] = lane_first + lane_L + lanes_n * ((lane_j & 0xbfffffff) + lane_k); xr[11] = lane_ctx; xr[2] = lane_sp; xr[1] = lane_stub;
+    xr[10] = lane_first + lane_L + lanes_n * ((lane_j & 0x9fffffff) + lane_k); xr[11] = lane_ctx; xr[2] = lane_sp; xr[1] = lane_stub;
     pc = lane_fn; stall = 0; quiet = true; pre_valid = false; trapped = false;
 }
 // A lanes pass, before anything runs: the job's descriptor (three texels of RAM: the function, the
@@ -861,7 +863,7 @@ void lane_go() {
 void lanes_begin(uint w0) {
     uint end = L1_AT + BUCKETS(bits) * 4, d = (lane_word & 0x7fffffff) >> 4, L, sum = 0;
     uint4 d0 = TEX(RAM_ADDR(d)), d1 = TEX(RAM_ADDR(d + 1));
-    bool start = stall == STALL_LANES_START, all = true, stuck = false;
+    bool start = stall == STALL_LANES_START, all = true, stuck = false, more = false;
     lanes_n = lanes_of(bits);
     lane_fn = d0.x; lane_first = d0.y; lane_count = d0.z; lane_out = (d0.w & 0x7fffffff) >> 4;
     lane_T = clamp(d1.x, 1, 6); lane_sp = d1.y; lane_ctx = d1.z; lane_stub = d1.w;
@@ -871,28 +873,36 @@ void lanes_begin(uint w0) {
         sum += st(52 + 8 * L).w;
         bool gone = (cur >> 31) != 0;
         stuck = stuck || (cur >> 30) != 0;
-        all = all && (gone || L + lanes_n * (cur & 0x3fffffff) >= lane_count);
+        more = more || ((cur >> 29) & 1) != 0;
+        all = all && (gone || L + lanes_n * (cur & 0x1fffffff) >= lane_count);
     }
     clock += sum;
     if (start) all = lane_count == 0;
-    if (all) { stall = 0; lane_word = stuck ? 2 : 1; return; }
+    if (all) { stall = 0; lane_word = (stuck ? 2 : 1) | (more ? 4 : 0); return; }
     stall = STALL_LANES; bloom = 0xffffffff; dirty = 0xffffffff;
     lane_pixel = w0 >= 48 && w0 + 8 <= end;
     if (!lane_pixel) return;
     lane_L = (w0 - 48) >> 3;
     lane_j = start ? 0 : st(w0).w;
-    lane_k = 0; lane_ran = 0; lane_kmax = 6 / lane_T; lane_stuck = false;
-    if ((lane_j >> 31) != 0 || lane_L + lanes_n * (lane_j & 0xbfffffff) >= lane_count) return;
+    lane_k = 0; lane_ran = 0; lane_used = 0; lane_stuck = false;
+    if ((lane_j >> 31) != 0 || lane_L + lanes_n * (lane_j & 0x9fffffff) >= lane_count) return;
     lane_mode = true; mie = 0; bits = 6;   // (the whole local array its cache)
+    clock = 0;   // (a lane pixel writes no clock: from 0, its instructions in the pass, CSR 0x0ba)
     lane_go();
 }
 // After a lane's run ended at n instructions of `most`: whether it goes on with its next index
-// (an index that returned, room in its texels, and instructions for another by those made so far)
-bool lane_next(uint n, uint most) {
+// (an index that returned, room in its texels, and instructions for another by those made so far).
+// An index takes the texels it wrote; one that does not fit them is made again in the next pass.
+bool lane_next(inout uint4 c[C_N], uint n, uint most) {
     lane_ran = n;
     [branch] if (stall == STALL_LANE_RET) {
+        uint t0 = lane_out + lane_T * (lane_L + lanes_n * ((lane_j & 0x9fffffff) + lane_k)), q, w = 0;
+        [loop] for (q = 0; q < lane_T; q++) w += find(c, t0 + q) != 0 ? 1u : 0u;
+        if (lane_used + w > 6) return false;
+        lane_used += w;
+        if ((lane_status & 1) != 0 && xr[10] != 0) lane_j |= 0x20000000;   // (a job in steps, bit 0 of its stuck texels' address: this one not through)
         lane_k++;
-        if (lane_k < lane_kmax && lane_L + lanes_n * ((lane_j & 0xbfffffff) + lane_k) < lane_count && (most - n) * lane_k * 2 >= n) { lane_go(); return true; }
+        if (lane_used < 6 && lane_L + lanes_n * ((lane_j & 0x9fffffff) + lane_k) < lane_count && (most - n) * lane_k * 2 >= n) { lane_go(); return true; }
     } else {
         lane_stuck = lane_k == 0;   // (its first in a whole pass did not end: it never will here)
     }
@@ -908,9 +918,9 @@ void lane_put(inout uint4 o[8], inout uint e, uint t, uint4 v) {
 // A lane pixel's eight texels: the output texels of the indices it made, as its cache has them
 // (one an index never stored to is as RAM has it), its place in its order and its instructions
 void lane_output(inout uint4 c[C_N], inout uint4 o[8]) {
-    uint e = 0, i, q, j = lane_j & 0xbfffffff;
+    uint e = 0, i, q, j = lane_j & 0x9fffffff;
     for (i = 0; i < 8; i++) o[i] = 0;
-    [loop] for (i = 0; i < lane_k; i++) {
+    [loop] for (i = 0; i < lane_k && e < lane_used; i++) {
         uint t0 = lane_out + lane_T * (lane_L + lanes_n * (j + i));
         [loop] for (q = 0; q < lane_T; q++) {
             uint at = find(c, t0 + q);
@@ -936,7 +946,7 @@ void lane_output(inout uint4 c[C_N], inout uint4 o[8]) {
         else s.w |= 1u << (b - 64);
         lane_put(o, e, at, s);
     }
-    o[0].w = skip ? (j + 1) | 0x40000000u : lane_stuck ? 0x80000000u | j : (j + lane_k) | (lane_j & 0x40000000);
+    o[0].w = (skip ? (j + 1) | 0x40000000u : lane_stuck ? 0x80000000u | j : (j + lane_k) | (lane_j & 0x40000000)) | (lane_j & 0x20000000);
     o[4].w = lane_ran;
 }
 
@@ -955,7 +965,7 @@ void field_begin(uint F) {
     uint N = min(job.z, (uint)FIELD_MAX), groups = (N + 63) >> 6, i;
     field_F = F; field_N = N; field_seq = job.y & 0xff; lane_job = job.y;
     core = 0xffff; ovf_addr = 0xffffffff; stall = STALL_LANES;   // (no core's: a trap is the lane's)
-    lane_k = 0; lane_ran = 0; lane_stuck = false;
+    lane_k = 0; lane_ran = 0; lane_used = 0; lane_stuck = false;
     field_was_a = field_st(8 * F); field_was_b = field_st(8 * F + 4);
     bool same = (field_was_b.w >> 24) == field_seq;
     lane_j = same ? field_was_a.w : 0;
@@ -973,23 +983,24 @@ void field_begin(uint F) {
         // how its 63 lanes left the last pass: all through this job's order, stuck, and their instructions
         // (and which of them left indices to the first core: lanes 0 to 30 in bits 1 to 31 of the second
         // word, 31 to 62 in the fourth)
-        bool busy = false;
+        bool busy = false, more = false;
         uint sum = 0, m0 = 0, m1 = 0;
         [loop] for (i = 1; i < 64 && F + i < N; i++) {
             uint ai = field_st(8 * (F + i)).w, bi = field_st(8 * (F + i) + 4).w, li = F + i - (F >> 6) - 1;
             bool here = (bi >> 24) == field_seq;
-            busy = busy || !here || ((ai >> 31) == 0 && li + lanes_n * (ai & 0x3fffffff) < lane_count);
+            busy = busy || !here || ((ai >> 31) == 0 && li + lanes_n * (ai & 0x1fffffff) < lane_count);
             [flatten] if (here && (ai >> 30) != 0) { if (i <= 31) m0 |= 1u << i; else m1 |= 1u << (i - 32); }
+            more = more || (here && ((ai >> 29) & 1) != 0);
             sum += here ? bi & 0xffffff : 0;
         }
-        field_status = uint4(job.y, (busy ? 1u : 0u) | m0, sum, m1);
+        field_status = uint4(job.y, (busy ? 1u : 0u) | m0, sum | (more ? 0x80000000u : 0u), m1);   // (bit 31: an index not through)
         return;
     }
-    if ((lane_j >> 31) != 0 || lane_L + lanes_n * (lane_j & 0xbfffffff) >= lane_count) return;
+    if ((lane_j >> 31) != 0 || lane_L + lanes_n * (lane_j & 0x9fffffff) >= lane_count) return;
     for (i = 0; i < 65; i++) xr[i] = 0;
     xr[3] = d2.y; xr[4] = d2.z;
     priv = 0; mie = 0; mip = 0; fcsr = 0; res_en = 0; mstatus = 0x6000;
-    lane_kmax = 6 / lane_T; lane_mode = true; bits = 6;
+    lane_mode = true; bits = 6;
     lane_go();
 }
 // Pixel F's eight texels: a leader's group word, a lane's output and place, or as they were
@@ -1159,7 +1170,7 @@ tick_out frag(v2f i) {
                     n++;
                 }
                 if (!lane_mode) break;   // (two tests: HLSL makes both sides of an ||, and lane_next changes what it looks at)
-                if (!lane_next(n, most)) break;
+                if (!lane_next(c, n, most)) break;
             }
             used += n;
             early = n < most;

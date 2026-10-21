@@ -47,6 +47,7 @@ CASES = [
     # lanes (docs/machine/lanes.md): none on rvc_cpu, so plain calls on every worker, compared with themselves;
     # one index a share longer than a pass, which a lane would leave to its worker
     case('lanetest', 'machine', 'lanetest 255 50 1 40; lanetest 31 40 3 20', True, count=[(r'^lanetest: PASS', 2)]),
+    case('steptest', 'machine', 'steptest 31 3000', True, count=[(r'^steptest: PASS', 1)]),
     # the HLSL compiler in the machine (docs/system/hlsl.md): the fractal example compiled there and drawn on 31 workers'
     # lanes in steps, the host's sum (programs/hlsl/test/hlsl_test.c with the same arguments)
     case('hlsl', 'machine', 'HLSL_WORKERS=31 hlsl_bench /usr/share/example-fractal.hlsl 160 120 1 eye=1.9095,1.2344,-2.7911 '
@@ -502,7 +503,7 @@ def zerotail_nommu():
 # (16-byte romfs packing): what the pool hands out is checked on copies in tmpfs
 ZERO_TAIL_NOMMU = ('zerotest 12 4; mkdir -p /tmp/t; find /usr/share /usr/bin /etc -maxdepth 1 -type f -size -256k | '
                    'while read f; do cp "$f" /tmp/t/; done; tailtest /tmp/t/*')
-CC_BYTES_NOMMU = '706fc1d3'   # libmcw.a's field job carries its poster's pid, mcw_close waits for it (21 October 2026)
+CC_BYTES_NOMMU = '11ce9639'   # libmcw.a has jobs in steps (mcw_field_steps, mcw_steps_probe; 21 October 2026)
 
 
 def without_mmu(image):
