@@ -6,6 +6,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
+#include <unistd.h>
 #include "gpu_shaderemu.h"
 #include "mcw.h"
 
@@ -508,7 +510,7 @@ static inline uint32_t colour_of(void) {
 // ---- drawing ----
 
 typedef struct { float x, y, z, s, t; uint32_t colour; } vertex;
-static vertex prim[MAX_PRIMITIVE];
+static vertex prim[MAX_PRIMITIVE] __attribute__((aligned(16)));
 static int prim_mode = -1, prim_count;
 static float coord_s, coord_t;
 static uint32_t drawn_vertices;
@@ -539,11 +541,11 @@ static int triangles_of(int mode, int n, uint16_t* out, int room) {
     return t;
 }
 
-static uint16_t order[MAX_PRIMITIVE * 3];
+static uint16_t order[MAX_PRIMITIVE * 3] __attribute__((aligned(16)));   // the drawing's (texels of its own)
 
 // The vertices moved towards the eye by offset_pull of their distance (the modelview's inverse).
 static const vertex* pulled(const vertex* v, int n) {
-    static vertex out[MAX_PRIMITIVE];
+    static vertex out[MAX_PRIMITIVE] __attribute__((aligned(16)));   // the drawing's
     float m[16], e[3];
     seglGetMatrix(GL_MODELVIEW, m);	// (columns)
     float a = m[0], b = m[4], c = m[8], d = m[1], f = m[5], g = m[9], h = m[2], i = m[6], j = m[10];
@@ -820,6 +822,16 @@ void hlglRingsStop(void) {
 void hlglRingsServe(void) {
     for (int k = 1; rings.on && k <= workers; k++) if (posted[k] == 3) mcw_done(k);
 }
+int hlglRingsOn(void) { return rings.on; }
+// A line to stderr by a write of its own: the drawing's worker prints too, and stdio's state is core 0's.
+void hlglSay(const char* fmt, ...) {
+    char line[512];
+    va_list v;
+    va_start(v, fmt);
+    int n = vsnprintf(line, sizeof line, fmt, v);
+    va_end(v);
+    if (n > 0) write(2, line, n < (int)sizeof line ? n : (int)sizeof line - 1);
+}
 
 // A worker that has nothing to do now, waited for if need be; 0 when there are none.
 int hlglWorker(void) {
@@ -885,6 +897,12 @@ static void jobs_wait(void) {
         if (posted[k] == 1) { unsigned w = mcw_wait(k); dbg_swapwait[k] += w, posted[k] = 0; if (w > 1 && (swaps & 255) == 7) fprintf(stderr, "swapwait %d %u fn %x\n", k, w, dbg_fn[k]); }
 }
 void hlglJobsWait(void) { jobs_wait(); }
+// Every job out done, the late ones too.
+void hlglJobsWaitAll(void) {
+    jobs_wait();
+    for (int k = 1; k <= workers; k++)
+        if (posted[k] == 1 || posted[k] == 2) mcw_wait(k), posted[k] = 0;
+}
 static uint32_t job_memory_0(void* bytes) { return (uint32_t)hlglJobMemory(*(unsigned*)bytes); }
 void* hlglJobMemory(unsigned bytes) {
     if (SE_RenderWho()) return (void*)SE_RenderOnCore0(job_memory_0, &bytes);
@@ -1236,9 +1254,10 @@ void hlglSwap(void) {
     picsum = 0;
     if (log_frames && ++frame % 64 == 0) fprintf(stderr, "hlgl: frame %u\n", frame);
     if (log_frames && frame % 256 == 0) {	// DEBUG
-        extern unsigned se_asks[64], se_asks_n;
-        fprintf(stderr, "hlgl waits (passes a frame): server %.1f, asks %.1f (last %x %x);", se_settle_passes / 256.0, se_asks_n / 256.0, se_asks[(se_asks_n - 1) & 63], se_asks[(se_asks_n - 2) & 63]);
-        se_asks_n = 0;
+        extern struct se_asks_t { unsigned fn[64], n, unused[3]; } se_asks;   // the server's worker's
+        static unsigned asks_seen;
+        fprintf(stderr, "hlgl waits (passes a frame): server %.1f, asks %.1f (last %x %x);", se_settle_passes / 256.0, (se_asks.n - asks_seen) / 256.0, se_asks.fn[(se_asks.n - 1) & 63], se_asks.fn[(se_asks.n - 2) & 63]);
+        asks_seen = se_asks.n;
         for (int k = 1; k <= workers; k++) fprintf(stderr, " %d:%.1f/%.1f", k, dbg_waited[k] / 256.0, dbg_swapwait[k] / 256.0), dbg_waited[k] = dbg_swapwait[k] = 0;
         fprintf(stderr, "\n");
         se_settle_passes = 0;

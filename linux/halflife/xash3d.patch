@@ -1959,8 +1959,8 @@ index 50ebab64..4ad667e7 100644
  #endif	// DEBUG
  
 +#if XASH_SHADEREMU
-+static struct SE_APART { int v; } idum_of[3];	// (the server's worker draws its own)
-+#define idum idum_of[SE_OnServer()].v
++static struct SE_APART { int v; } idum_of[3];	// (the server's worker and the drawing's draw their own)
++#define idum idum_of[SE_Who()].v
 +#else
  static int idum = 0;
 +#endif
@@ -1973,7 +1973,7 @@ index 50ebab64..4ad667e7 100644
  {
 +#if XASH_SHADEREMU
 +	static struct SE_APART { int iy, iv[NTAB]; } ran_of[3];
-+	int core = SE_OnServer();
++	int core = SE_Who();
 +#define iy ran_of[core].iy
 +#define iv ran_of[core].iv
 +#else
@@ -2230,6 +2230,24 @@ index f04c5f9b..6f280d0c 100644
  			Cbuf_Execute();
  		}
  
+diff --git a/engine/common/host_state.c b/engine/common/host_state.c
+index a10185a9..0dbbd839 100644
+--- a/engine/common/host_state.c
++++ b/engine/common/host_state.c
+@@ -202,6 +202,13 @@ void COM_Frame( double time )
+ 	{
+ 		int oldState = GameState->curstate;
+ 
++#if XASH_SHADEREMU
++		if( GameState->curstate != STATE_RUNFRAME )
++		{
++			void SE_LevelSettle( void );
++			SE_LevelSettle();	// (rnd_shaderemu.c: no frame of the old level still out on a worker)
++		}
++#endif
+ 		// execute the current state (and transition to the next state if not in STATE_RUNFRAME)
+ 		switch( GameState->curstate )
+ 		{
 diff --git a/engine/common/imagelib/img_bmp.c b/engine/common/imagelib/img_bmp.c
 index e7c3ec35..3f00c368 100644
 --- a/engine/common/imagelib/img_bmp.c
@@ -2417,11 +2435,51 @@ index 7179ca46..9f3a5e6e 100644
  		numcolors = pal[0] | (pal[1] << 8);
  		if( numcolors != 256 ) pal = NULL; // corrupted mip ?
  		else pal += sizeof( short ); // skip colorsize
+diff --git a/engine/common/infostring.c b/engine/common/infostring.c
+--- a/engine/common/infostring.c
++++ b/engine/common/infostring.c
+@@ -183,12 +183,22 @@ Searches the string for the given
+ key and returns the associated value, or an empty string.
+ ===============
+ */
++#if XASH_SHADEREMU
++#include "se_server.h"
++#endif
+ const char *GAME_EXPORT Info_ValueForKey( const char *s, const char *key )
+ {
+ 	char	pkey[MAX_KV_SIZE];
++#if XASH_SHADEREMU
++	static struct SE_APART { char v[4][MAX_KV_SIZE]; int index; } value_of[3];	// each core's: the server's worker reads them too
++	char	( *value )[MAX_KV_SIZE] = value_of[SE_Who()].v;
++	int	*index = &value_of[SE_Who()].index;
++#define valueindex ( *index )
++#else
+ 	static	char value[4][MAX_KV_SIZE]; // use two buffers so compares work without stomping on each other
+ 	static	int valueindex;
++#endif
+ 	int	count;
+ 	char	*o;
+ 
+ 	valueindex = (valueindex + 1) % 4;
 diff --git a/engine/common/mod_bmodel.c b/engine/common/mod_bmodel.c
 index d1fe48e2..7612f687 100644
 --- a/engine/common/mod_bmodel.c
 +++ b/engine/common/mod_bmodel.c
-@@ -652,6 +652,9 @@ static int Mod_LoadTextureFromWadList( wadentry_t *list, int count, const char *
+@@ -347,7 +347,13 @@ le_struct_end();
+ world_static_t     world;
+ static loadstat_t  loadstat;
+ static model_t     *worldmodel;
++#if XASH_SHADEREMU
++#include "se_server.h"
++static byte        g_visdata_of[3][(MAX_MAP_LEAFS+7)/8] SE_APART;	// each core's: the server's and the drawing's too
++#define g_visdata g_visdata_of[SE_Who()]
++#else
+ static byte        g_visdata[(MAX_MAP_LEAFS+7)/8];	// intermediate buffer
++#endif
+ static const mlumpinfo_t srclumps[HEADER_LUMPS] =
+ {
+ 	{
+@@ -652,6 +658,9 @@ static int Mod_LoadTextureFromWadList( wadentry_t *list, int count, const char *
  
  			// tell imagelib to directly load this texture to save time
  			Q_snprintf( file, sizeof( file ), "#%s/%s.mip", list[i].name, name );
@@ -2431,7 +2489,7 @@ index d1fe48e2..7612f687 100644
  			*pic = FS_LoadImage( file, buf, len );
  			Mem_Free( buf );
  			return i; // if file is corrupted, it's fine, we want to tell the user about it
-@@ -1589,8 +1592,25 @@ volatile forces rounding of every sum to double and result to float,
+@@ -1589,8 +1598,25 @@ volatile forces rounding of every sum to double and result to float,
  same as compilers did it, otherwise x87 or FMA give different extents
  =================
  */
@@ -2458,7 +2516,7 @@ index d1fe48e2..7612f687 100644
  	volatile double val = 0.0;
  	volatile float res;
  
-@@ -2140,6 +2160,45 @@ duplicate the basic information
+@@ -2140,6 +2166,45 @@ duplicate the basic information
  for embedded submodels
  =================
  */
@@ -2504,7 +2562,7 @@ index d1fe48e2..7612f687 100644
  static void Mod_SetupSubmodels( model_t *mod, dbspmodel_t *bmod )
  {
  	const qboolean colored = FBitSet( mod->flags, MODEL_COLORED_LIGHTING ) ? true : false;
-@@ -2148,6 +2207,9 @@ static void Mod_SetupSubmodels( model_t *mod, dbspmodel_t *bmod )
+@@ -2148,6 +2213,9 @@ static void Mod_SetupSubmodels( model_t *mod, dbspmodel_t *bmod )
  	model_t *world = mod; // submodels might want to share hulls
  
  	mod->numframes = 2;	// regular and alternate animation
@@ -2514,7 +2572,7 @@ index d1fe48e2..7612f687 100644
  
  	// set up the submodels
  	for( int i = 0; i < mod->numsubmodels; i++ )
-@@ -2187,7 +2249,9 @@ static void Mod_SetupSubmodels( model_t *mod, dbspmodel_t *bmod )
+@@ -2187,7 +2255,9 @@ static void Mod_SetupSubmodels( model_t *mod, dbspmodel_t *bmod )
  			char temp[MAX_VA_STRING];
  
  			Q_snprintf( temp, sizeof( temp ), "*%i", i );
@@ -2525,7 +2583,7 @@ index d1fe48e2..7612f687 100644
  			// mark models that have origin brushes
  			if( !VectorIsNull( bm->origin ))
 diff --git a/engine/common/mod_studio.c b/engine/common/mod_studio.c
-index 520ab7f4..47b8e657 100644
+index 520ab7f4..b499a88a 100644
 --- a/engine/common/mod_studio.c
 +++ b/engine/common/mod_studio.c
 @@ -14,6 +14,9 @@ GNU General Public License for more details.
@@ -2594,7 +2652,31 @@ index 520ab7f4..47b8e657 100644
  	*numhitboxes = 0; // assume error
  
  	if( mod_studiocache.value )
-@@ -771,6 +809,47 @@ void Mod_StudioGetAttachment( const edict_t *e, int iAtt, float *origin, float *
+@@ -576,12 +614,23 @@ StudioGetAnim
+ 
+ ====================
+ */
++#if XASH_SHADEREMU
++int mcw_on_worker( void );
++#endif
+ void *R_StudioGetAnim( studiohdr_t *m_pStudioHeader, model_t *m_pSubModel, mstudioseqdesc_t *pseqdesc )
+ {
+ 	if( pseqdesc->seqgroup == 0 )
+ 		return ((byte *)m_pStudioHeader + pseqdesc->animindex);
+ 
+ 	cache_user_t *paSequences = (cache_user_t *)m_pSubModel->submodels;
++#if XASH_SHADEREMU
++	// the drawing's worker and a job never load a file: a group not loaded gives the first pose
++	if(( !paSequences || !paSequences[pseqdesc->seqgroup].data ) && ( SE_OnRender( ) || mcw_on_worker( )))
++	{
++		Con_Printf( "a worker wanted %s's group %d\n", m_pSubModel->name, pseqdesc->seqgroup );
++		return (byte *)m_pStudioHeader + ((mstudioseqdesc_t *)((byte *)m_pStudioHeader + m_pStudioHeader->seqindex ))->animindex;
++	}
++#endif
+ 	if( paSequences == NULL )
+ 	{
+ 		paSequences = (cache_user_t *)Mem_Calloc( com_studiocache, MAXSTUDIOGROUPS * sizeof( cache_user_t ));
+@@ -771,6 +820,71 @@ void Mod_StudioGetAttachment( const edict_t *e, int iAtt, float *origin, float *
  		Matrix3x4_AnglesFromMatrix( worldPose, angles );
  }
  
@@ -2637,16 +2719,50 @@ index 520ab7f4..47b8e657 100644
 +	Matrix3x4_OriginFromMatrix( world, out );
 +	return true;
 +}
++
++// A studio model's sequence groups all loaded by core 0 (Mod_ForName): R_StudioGetAnim would load
++// one where it is first played, on the server's or the drawing's worker too.
++int mcw_on_worker( void );
++void SE_StudioGroupsLoad( model_t *mod )
++{
++	studiohdr_t *hdr = mod && mod->type == mod_studio ? mod->cache.data : NULL;
++	uint done = 1;
++
++	if( !hdr || hdr->numseqgroups <= 1 || SE_OffCore0( ) || mcw_on_worker( ))
++		return;
++	mstudioseqdesc_t *d = (mstudioseqdesc_t *)((byte *)hdr + hdr->seqindex);
++	for( int i = 0; i < hdr->numseq; i++ )
++	{
++		int g = d[i].seqgroup;
++		cache_user_t *groups = mod->submodels;
++		if( g > 0 && g < MAXSTUDIOGROUPS && !( done & ( 1u << g )))
++		{
++			done |= 1u << g;
++			if( !groups || !groups[g].data )
++				R_StudioGetAnim( hdr, mod, &d[i] );
++		}
++	}
++}
 +#endif
 +
  /*
  ====================
  GetBonePosition
 diff --git a/engine/common/model.c b/engine/common/model.c
-index b93b896a..1691172d 100644
+index b93b896a..6f901ca0 100644
 --- a/engine/common/model.c
 +++ b/engine/common/model.c
-@@ -243,6 +243,12 @@ Mod_FindName
+@@ -23,6 +23,9 @@ GNU General Public License for more details.
+ #include "enginefeatures.h"
+ #include "client.h"
+ #include "server.h"
++#if XASH_SHADEREMU
++#include "se_server.h"
++#endif
+ 
+ static model_info_t	mod_crcinfo[MAX_MODELS];
+ static model_t	mod_known[MAX_MODELS];
+@@ -243,6 +246,12 @@ Mod_FindName
  never return NULL
  ==================
  */
@@ -2659,7 +2775,7 @@ index b93b896a..1691172d 100644
  model_t *Mod_FindName( const char *filename, qboolean trackCRC )
  {
  	char	modname[MAX_QPATH];
-@@ -254,7 +260,7 @@ model_t *Mod_FindName( const char *filename, qboolean trackCRC )
+@@ -254,7 +263,7 @@ model_t *Mod_FindName( const char *filename, qboolean trackCRC )
  	// search the currently loaded models
  	for( i = 0, mod = mod_known; i < mod_numknown; i++, mod++ )
  	{
@@ -2668,7 +2784,7 @@ index b93b896a..1691172d 100644
  		{
  			if( mod->mempool || mod->name[0] == '*' )
  				mod->needload = NL_PRESENT;
-@@ -408,7 +414,7 @@ static model_t *Mod_LoadModel( model_t *mod, qboolean crash )
+@@ -408,7 +417,7 @@ static model_t *Mod_LoadModel( model_t *mod, qboolean crash )
  	model_info_t *p = &mod_crcinfo[mod - mod_known];
  	mod->needload = NL_PRESENT;
  
@@ -2677,6 +2793,41 @@ index b93b896a..1691172d 100644
  	{
  		uint32_t currentCRC;
  
+@@ -439,13 +448,22 @@ Mod_ForName
+ Loads in a model for the given name
+ ==================
+ */
++#if XASH_SHADEREMU
++void SE_StudioGroupsLoad( model_t *mod );
++#endif
+ model_t *Mod_ForName( const char *name, qboolean crash, qboolean trackCRC )
+ {
+ 	if( COM_StringEmptyOrNULL( name ))
+ 		return NULL;
+ 
+ 	model_t *mod = Mod_FindName( name, trackCRC );
++#if XASH_SHADEREMU
++	mod = Mod_LoadModel( mod, crash );
++	SE_StudioGroupsLoad( mod );	// (mod_studio.c)
++	return mod;
++#else
+ 	return Mod_LoadModel( mod, crash );
++#endif
+ }
+ 
+ /*
+@@ -566,6 +584,11 @@ void *GAME_EXPORT Mod_CacheCheck( cache_user_t *c )
+ {
+ 	if( !c->data )
+ 		return NULL;
++#if XASH_SHADEREMU
++	int mcw_on_worker( void );
++	if( SE_OffCore0( ) || mcw_on_worker( ))
++		return c->data;	// (core 0 may be moving the pool list; only a level's purge clears a group, settled first)
++#endif
+ 
+ 	if( !Mem_IsAllocatedExt( com_studiocache, c->data ))
+ 		return NULL;
 diff --git a/engine/common/net_buffer.c b/engine/common/net_buffer.c
 index 287ef3b2..534d799c 100644
 --- a/engine/common/net_buffer.c
@@ -2891,7 +3042,7 @@ index d139dff7..e951cf7d 100644
  
  	if( NET_GetLoopPacket( sock, from, data, length ))
 diff --git a/engine/common/pm_trace.c b/engine/common/pm_trace.c
-index b1e8e57b..985c3163 100644
+index b1e8e57b..b37e9b30 100644
 --- a/engine/common/pm_trace.c
 +++ b/engine/common/pm_trace.c
 @@ -14,6 +14,9 @@ GNU General Public License for more details.
@@ -2904,14 +3055,15 @@ index b1e8e57b..985c3163 100644
  #include "xash3d_mathlib.h"
  #include "mod_local.h"
  #include "pm_local.h"
-@@ -23,8 +26,14 @@ GNU General Public License for more details.
+@@ -23,8 +26,15 @@ GNU General Public License for more details.
  
  #define PM_AllowHitBoxTrace( model, hull ) ( model && model->type == mod_studio && ( FBitSet( model->flags, STUDIO_TRACE_HITBOX ) || hull == 2 ))
  
 +#if XASH_SHADEREMU
-+static struct SE_APART { mplane_t planes[6]; hull_t hull; } box_of[3];	// (the server's worker has its own)
-+#define pm_boxplanes box_of[SE_Who()].planes
-+#define pm_boxhull box_of[SE_Who()].hull
++int mcw_on_worker( void );
++static struct SE_APART box_s { mplane_t planes[6]; hull_t hull; } box_of[4];	// (the server's worker has its own, the glows' worker too)
++#define pm_boxplanes box->planes	// (PM_HullForBox's)
++#define pm_boxhull box->hull
 +#else
  static mplane_t	pm_boxplanes[6];
  static hull_t pm_boxhull;
@@ -2919,12 +3071,12 @@ index b1e8e57b..985c3163 100644
  
  // default hullmins
  static const vec3_t pm_hullmins[MAX_MAP_HULLS] =
-@@ -63,6 +72,21 @@ can just be stored out and get a proper hull_t structure.
+@@ -63,6 +73,21 @@ can just be stored out and get a proper hull_t structure.
  */
  void PM_InitBoxHull( void )
  {
 +#if XASH_SHADEREMU
-+	for( int c = 0; c < 3; c++ )	// (every core's copy, the drawing's worker too)
++	for( int c = 0; c < 4; c++ )	// (every core's copy, the drawing's worker and a job's too)
 +	{
 +		box_of[c].hull.clipnodes16 = (mclipnode16_t *)box_clipnodes16;
 +		box_of[c].hull.planes = box_of[c].planes;
@@ -2941,7 +3093,7 @@ index b1e8e57b..985c3163 100644
  	pm_boxhull.clipnodes16 = (mclipnode16_t *)box_clipnodes16;
  	pm_boxhull.planes = pm_boxplanes;
  	pm_boxhull.firstclipnode = 0;
-@@ -74,6 +98,7 @@ void PM_InitBoxHull( void )
+@@ -74,6 +99,7 @@ void PM_InitBoxHull( void )
  		pm_boxplanes[i].normal[i>>1] = 1.0f;
  		pm_boxplanes[i].signbits = 0;
  	}
@@ -2949,7 +3101,18 @@ index b1e8e57b..985c3163 100644
  
  }
  
-@@ -225,6 +250,35 @@ qboolean PM_RecursiveHullCheck( hull_t *hull, int num, float p1f, float p2f, vec
+@@ -87,6 +113,10 @@ BSP trees instead of being compared directly.
+ */
+ static hull_t *PM_HullForBox( const vec3_t mins, const vec3_t maxs )
+ {
++#if XASH_SHADEREMU
++	int who = SE_Who( );
++	struct box_s *box = &box_of[who ? who : mcw_on_worker( ) ? 3 : 0];
++#endif
+ 	pm_boxplanes[0].dist = maxs[0];
+ 	pm_boxplanes[1].dist = mins[0];
+ 	pm_boxplanes[2].dist = maxs[1];
+@@ -225,6 +255,35 @@ qboolean PM_RecursiveHullCheck( hull_t *hull, int num, float p1f, float p2f, vec
  	if( num < hull->firstclipnode || num > hull->lastclipnode )
  		Host_Error( "%s: bad node number %i\n", __func__, num );
  
@@ -2985,7 +3148,7 @@ index b1e8e57b..985c3163 100644
  	// find the point distances
  	if( world.version == QBSP2_VERSION )
  	{
-@@ -239,6 +293,10 @@ qboolean PM_RecursiveHullCheck( hull_t *hull, int num, float p1f, float p2f, vec
+@@ -239,6 +298,10 @@ qboolean PM_RecursiveHullCheck( hull_t *hull, int num, float p1f, float p2f, vec
  		plane = hull->planes + hull->clipnodes16[num].planenum;
  	}
  
@@ -2996,7 +3159,7 @@ index b1e8e57b..985c3163 100644
  	t1 = PlaneDiff( p1, plane );
  	t2 = PlaneDiff( p2, plane );
  
-@@ -253,6 +311,7 @@ qboolean PM_RecursiveHullCheck( hull_t *hull, int num, float p1f, float p2f, vec
+@@ -253,6 +316,7 @@ qboolean PM_RecursiveHullCheck( hull_t *hull, int num, float p1f, float p2f, vec
  		num = children[1];
  		goto loc0;
  	}
@@ -3004,7 +3167,7 @@ index b1e8e57b..985c3163 100644
  
  	// put the crosspoint DIST_EPSILON pixels on the near side
  	side = (t1 < 0.0f);
-@@ -320,6 +379,26 @@ qboolean PM_RecursiveHullCheck( hull_t *hull, int num, float p1f, float p2f, vec
+@@ -320,6 +384,26 @@ qboolean PM_RecursiveHullCheck( hull_t *hull, int num, float p1f, float p2f, vec
  	return false;
  }
  
@@ -3031,7 +3194,7 @@ index b1e8e57b..985c3163 100644
  pmtrace_t PM_PlayerTraceExt( playermove_t *pmove, vec3_t start, vec3_t end, int flags, int numents, physent_t *ents, int ignore_pe, pfnIgnore pmFilter )
  {
  	pmtrace_t trace_total;
-@@ -363,6 +442,10 @@ pmtrace_t PM_PlayerTraceExt( playermove_t *pmove, vec3_t start, vec3_t end, int
+@@ -363,6 +447,10 @@ pmtrace_t PM_PlayerTraceExt( playermove_t *pmove, vec3_t start, vec3_t end, int
  		if(( flags & PM_CUSTOM_IGNORE ) && pe->solid == SOLID_CUSTOM )
  			continue;
  
@@ -3042,7 +3205,7 @@ index b1e8e57b..985c3163 100644
  		hullcount = 1;
  
  		if( pe->solid == SOLID_CUSTOM )
-@@ -552,6 +635,10 @@ int PM_TestPlayerPosition( playermove_t *pmove, vec3_t pos, pmtrace_t *ptrace, p
+@@ -552,6 +640,10 @@ int PM_TestPlayerPosition( playermove_t *pmove, vec3_t pos, pmtrace_t *ptrace, p
  		if( pe->model != NULL && pe->solid == SOLID_NOT && pe->skin != CONTENTS_NONE )
  			continue;
  
@@ -4546,7 +4709,7 @@ index 302c3238..f988b944 100644
  
  #ifdef XASH_REDUCE_FD
  	// will reopen when needed
-@@ -199,9 +233,57 @@ FS_OpenPackedFile
+@@ -199,9 +233,69 @@ FS_OpenPackedFile
  Open a packed file using its package file descriptor
  ===========
  */
@@ -4557,8 +4720,11 @@ index 302c3238..f988b944 100644
 +
 +// A file in deflate segments (linux/halflife/repack.py) inflated on the workers when it is opened.
 +#define FS_REFUSED ((file_t *)-1)	// (packed, on a worker: not opened, its packed bytes are no file)
-+static file_t *FS_OpenInflated( searchpath_t *search, const dpackfile_t *pfile )
++typedef struct { searchpath_t *search; const dpackfile_t *pfile; } fs_inflate_t;
++static uint32_t FS_InflateHere( void *args )
 +{
++	searchpath_t *search = (( fs_inflate_t *)args )->search;
++	const dpackfile_t *pfile = (( fs_inflate_t *)args )->pfile;
 +	int fd = search->pack->handle->handle;
 +	byte head[16], *packed, *out;
 +	uint32_t total;
@@ -4566,11 +4732,11 @@ index 302c3238..f988b944 100644
 +	const char *why = NULL;
 +
 +	if( pfile->filelen < 16 || pread( fd, head, 16, pfile->filepos ) != 16 || !( total = media_inflated_size( head, 16 )))
-+		return NULL;
++		return 0;
 +	if( mcw_on_worker( ))
 +	{
 +		Con_Printf( S_ERROR "%s: %s is packed and this is a worker\n", __func__, pfile->name );
-+		return FS_REFUSED;
++		return (uint32_t)FS_REFUSED;
 +	}
 +	packed = malloc( pfile->filelen );
 +	if( posix_memalign( (void **)&out, 16, ( total + 15 ) & ~15u ))
@@ -4586,10 +4752,19 @@ index 302c3238..f988b944 100644
 +	{
 +		Con_Printf( S_ERROR "%s: %s: %s\n", __func__, pfile->name, why ? why : "no handle" );
 +		free( out );
-+		return NULL;
++		return 0;
 +	}
 +	file->memory = out;
-+	return file;
++	return (uint32_t)file;
++}
++
++// The server's and the drawing's workers run on stacks of their own, no worker's to mcw_on_worker:
++// core 0 opens a file for them (a model's sequence group the drawing first plays, its inflate inline).
++uint32_t SE_ServerOnCore0( uint32_t ( *fn )( void * ), void *args );
++static file_t *FS_OpenInflated( searchpath_t *search, const dpackfile_t *pfile )
++{
++	fs_inflate_t args = { search, pfile };
++	return (file_t *)SE_ServerOnCore0( FS_InflateHere, &args );
 +}
 +#endif
 +

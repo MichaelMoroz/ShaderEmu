@@ -315,6 +315,16 @@
   `test_all.py hlsl`: `rvc_cpu`'s picture must be the host's to the byte (sum `3614e8bb`). Each loop that is not
   unrolled stops by its own measured longest step; on the card `hlsl_bench` must say 0 steps too long.
   The IDE checks and builds a `.hlsl` with `hlslc` and runs it in `hlslview` (the example): `test_all.py nxide-hlsl`.
+- Half-Life's server and drawing workers run on stacks of their own (`se_server_stack`, `se_render_stack`), where
+  `mcw_on_worker()` is false: code they reach must not load or inflate a file or start workers itself. A packed file
+  they open is opened by core 0 (`FS_OpenInflated` through `SE_ServerOnCore0`), `SE_MediaWorkers` is 0 off core 0
+  and while the rings hold the workers, and a model's sequence groups load with it (`SE_StudioGroupsLoad`): one first
+  played on the drawing's worker froze hldemo1's first corridor (`docs/games/halflife.md`). A static both may write
+  is indexed by `SE_Who()`. A change to the game is also walked: `HL_SCRIPT` with `+forward`, turns and shots for
+  1,200 s of the guest's on the desktop with `RVC_RACES` (standing in the fight never played a sequence group).
+  A level that goes settles the server, the drawing and every job first (`SE_LevelSettle`), and off core 0 a group
+  is loaded when its pointer is set (`Mod_CacheCheck` walked pools core 0 moves): a change to either is run through
+  the elevator and `changelevel`s, with the default and `HL_RENDER=core` (docs/games/halflife.md, "A level that goes").
 - OpenTTD's game tick runs on a worker while the first core draws (`docs/games/openttd.md`, "The tick on a worker";
   `OPENTTD_TICK=slices|whole` on the first core, "The tick in slices"): it yields at `TickYieldPoint()`, and what the
   drawing does while it is held must change no game state; a new path from the GUI into the game (a command, a save)

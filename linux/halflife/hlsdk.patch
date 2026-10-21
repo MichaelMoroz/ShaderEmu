@@ -42,20 +42,37 @@ index 3a720ff3..66cf5450 100644
  
  // The simple drawing interface we'll pass back to the engine
 diff --git a/cl_dll/StudioModelRenderer.cpp b/cl_dll/StudioModelRenderer.cpp
-index 53d320a4..6cc2d263 100644
+index 53d320a4..e9b92786 100644
 --- a/cl_dll/StudioModelRenderer.cpp
 +++ b/cl_dll/StudioModelRenderer.cpp
-@@ -27,6 +27,9 @@
+@@ -27,6 +27,11 @@
  
  #include "StudioModelRenderer.h"
  #include "GameStudioModelRenderer.h"
 +#if XASH_SHADEREMU
 +extern "C" int SE_RenderWho( void );
++extern "C" int mcw_on_worker( void );
++extern "C" void hlglSay( const char *fmt, ... );
 +#endif
  
  // Global engine <-> studio model rendering code interface
  engine_studio_api_t IEngineStudio;
-@@ -797,6 +800,18 @@ void CStudioModelRenderer::StudioSetupBones( void )
+@@ -396,6 +401,14 @@ mstudioanim_t *CStudioModelRenderer::StudioGetAnim( model_t *m_pSubModel, mstudi
+ 	}
+ 
+ 	paSequences = (cache_user_t *)m_pSubModel->submodels;
++#if XASH_SHADEREMU
++	// a worker never loads a file: a group core 0 has not loaded (SE_StudioGroupsLoad) gives the first pose
++	if( ( !paSequences || !paSequences[pseqdesc->seqgroup].data ) && ( SE_RenderWho( ) || mcw_on_worker( )))
++	{
++		gEngfuncs.Con_Printf( "a worker wanted %s\n", pseqgroup->name );
++		return (mstudioanim_t *)( (byte *)m_pStudioHeader + ( (mstudioseqdesc_t *)( (byte *)m_pStudioHeader + m_pStudioHeader->seqindex ))->animindex );
++	}
++#endif
+ 
+ 	if( paSequences == NULL )
+ 	{
+@@ -797,6 +810,18 @@ void CStudioModelRenderer::StudioSetupBones( void )
  	mstudioseqdesc_t *pseqdesc;
  	mstudioanim_t *panim;
  
@@ -74,7 +91,7 @@ index 53d320a4..6cc2d263 100644
  	static float pos[MAXSTUDIOBONES][3];
  	static vec4_t q[MAXSTUDIOBONES];
  	float bonematrix[3][4];
-@@ -807,6 +822,7 @@ void CStudioModelRenderer::StudioSetupBones( void )
+@@ -807,6 +832,7 @@ void CStudioModelRenderer::StudioSetupBones( void )
  	static vec4_t q3[MAXSTUDIOBONES];
  	static float pos4[MAXSTUDIOBONES][3];
  	static vec4_t q4[MAXSTUDIOBONES];
@@ -82,7 +99,7 @@ index 53d320a4..6cc2d263 100644
  
  	if( m_pCurrentEntity->curstate.sequence >=  m_pStudioHeader->numseq )
  	{
-@@ -859,8 +875,13 @@ void CStudioModelRenderer::StudioSetupBones( void )
+@@ -859,8 +885,13 @@ void CStudioModelRenderer::StudioSetupBones( void )
  		( m_pCurrentEntity->latched.prevsequence < m_pStudioHeader->numseq ) )
  	{
  		// blend from last sequence
@@ -96,7 +113,7 @@ index 53d320a4..6cc2d263 100644
  		float s;
  
  		pseqdesc = (mstudioseqdesc_t *)( (byte *)m_pStudioHeader + m_pStudioHeader->seqindex ) + m_pCurrentEntity->latched.prevsequence;
-@@ -898,6 +919,11 @@ void CStudioModelRenderer::StudioSetupBones( void )
+@@ -898,6 +929,11 @@ void CStudioModelRenderer::StudioSetupBones( void )
  	else
  	{
  		//Con_DPrintf("prevframe = %4.2f\n", f);
@@ -108,7 +125,7 @@ index 53d320a4..6cc2d263 100644
  		m_pCurrentEntity->latched.prevframe = f;
  	}
  
-@@ -968,6 +994,47 @@ void CStudioModelRenderer::StudioSetupBones( void )
+@@ -968,6 +1004,47 @@ void CStudioModelRenderer::StudioSetupBones( void )
  	}
  }
  
@@ -156,7 +173,7 @@ index 53d320a4..6cc2d263 100644
  /*
  ====================
  StudioSaveBones
-@@ -982,7 +1049,6 @@ void CStudioModelRenderer::StudioSaveBones( void )
+@@ -982,7 +1059,6 @@ void CStudioModelRenderer::StudioSaveBones( void )
  	pbones = (mstudiobone_t *)( (byte *)m_pStudioHeader + m_pStudioHeader->boneindex );
  
  	m_nCachedBones = m_pStudioHeader->numbones;
@@ -164,7 +181,7 @@ index 53d320a4..6cc2d263 100644
  	for( i = 0; i < m_pStudioHeader->numbones; i++ )
  	{
  		strcpy( m_nCachedBoneNames[i], pbones[i].name );
-@@ -1130,6 +1196,26 @@ int CStudioModelRenderer::StudioDrawModel( int flags )
+@@ -1130,6 +1206,26 @@ int CStudioModelRenderer::StudioDrawModel( int flags )
  	IEngineStudio.StudioSetHeader( m_pStudioHeader );
  	IEngineStudio.SetRenderModel( m_pRenderModel );
  
@@ -174,7 +191,7 @@ index 53d320a4..6cc2d263 100644
 +	if( rot_check < 0 )
 +		rot_check = getenv( "HL_ROTATION" ) && !strcmp( getenv( "HL_ROTATION" ), "check" );
 +	if( rot_check && ++rot_draws % 500 == 0 )
-+		fprintf( stderr, "rotation: %d draws, %d taken, %d of them wrong\n", rot_draws, rot_checked, rot_wrong );
++		hlglSay( "rotation: %d draws, %d taken, %d of them wrong\n", rot_draws, rot_checked, rot_wrong );	// (stdio is core 0's)
 +	if( SE_StudioRotationTaken && SE_StudioRotationTaken( m_pCurrentEntity, m_clTime, (float *)m_protationmatrix ))
 +	{
 +		if( rot_check )
@@ -191,7 +208,7 @@ index 53d320a4..6cc2d263 100644
  	StudioSetUpTransform( 0 );
  
  	if( flags & STUDIO_RENDER )
-@@ -1151,8 +1237,15 @@ int CStudioModelRenderer::StudioDrawModel( int flags )
+@@ -1151,8 +1247,15 @@ int CStudioModelRenderer::StudioDrawModel( int flags )
  	}
  	else
  	{
@@ -207,7 +224,7 @@ index 53d320a4..6cc2d263 100644
  	StudioSaveBones();
  
  	if( flags & STUDIO_EVENTS )
-@@ -1160,7 +1253,11 @@ int CStudioModelRenderer::StudioDrawModel( int flags )
+@@ -1160,7 +1263,11 @@ int CStudioModelRenderer::StudioDrawModel( int flags )
  		StudioCalcAttachments();
  		IEngineStudio.StudioClientEvents();
  		// copy attachments into global entity array
@@ -219,7 +236,7 @@ index 53d320a4..6cc2d263 100644
  		{
  			cl_entity_t *ent = gEngfuncs.GetEntityByIndex( m_pCurrentEntity->index );
  
-@@ -1451,7 +1548,11 @@ int CStudioModelRenderer::StudioDrawPlayer( int flags, entity_state_t *pplayer )
+@@ -1451,7 +1558,11 @@ int CStudioModelRenderer::StudioDrawPlayer( int flags, entity_state_t *pplayer )
  		StudioCalcAttachments();
  		IEngineStudio.StudioClientEvents();
  		// copy attachments into global entity array

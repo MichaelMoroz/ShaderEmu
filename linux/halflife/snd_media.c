@@ -6,16 +6,22 @@ worker cores when a whole sound is loaded. Opus has no decoder there.
 #include "common.h"
 #include "soundlib.h"
 #include "media.h"
+#include "se_server.h"
 
 #define LOAD_WORKERS 64
 int hlglServerWorker( void );
 void hlglJobsWait( void );
+int hlglRingsOn( void ), SE_ServerServing( void );
 
 // The workers a decode may have: the studio models' wait first, and the server's is not one (sv_shaderemu.c).
 int SE_MediaWorkers( void )
 {
 	int server = hlglServerWorker();
 
+	// (none on the server's or the drawing's worker, while the rings hold the workers, or while this
+	// core makes the server's ask: its jobs may be out)
+	if( SE_OffCore0( ) || hlglRingsOn( ) || SE_ServerServing( ))
+		return 0;
 	hlglJobsWait();
 	return server > 1 ? server - 1 : server ? 0 : LOAD_WORKERS;
 }
