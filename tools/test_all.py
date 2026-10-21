@@ -204,6 +204,12 @@ CASES = [
     case('openttd', 'games', 'cp /usr/share/openttd/test.cfg /tmp/t.cfg; OPENTTD_SUM=1 openttd.bin -v null:ticks=500 -s null -m null -g -G 1 -c /tmp/t.cfg; '
          'OPENTTD_SUM=1 openttd.bin -v null:ticks=2000 -s null -m null -g -G 2 -c /tmp/t.cfg',
          sums=[(r'openttd: \d+ ticks, .* sum ([0-9a-f]+)', ['9d6fc0a0', '66880c87'])]),
+    # the viewport on worker cores (docs/games/openttd.md, "Checking a picture"): the play script paused, every picture
+    # against one drawn whole, not a pixel apart; with the way back an odd move, and on the first core alone
+    case('openttd-scroll', 'games openttd', X + 'OPENTTD_PLAY=1 OPENTTD_PLAY_ODD=1 OPENTTD_PAUSE=1 OPENTTD_CHECK=1 openttd -g /usr/share/openttd/busy.sav',
+         True, wall=400, has=[r'openttd: play round 1: .*checked (19\d|200), 0 differ \(0 pixels']),
+    case('openttd-scroll-serial', 'games openttd', X + 'OPENTTD_PLAY=1 OPENTTD_PAUSE=1 OPENTTD_CHECK=1 OPENTTD_WORKERS=0 openttd -g /usr/share/openttd/busy.sav',
+         True, wall=400, has=[r'openttd: play round 1: .*checked (19\d|200), 0 differ \(0 pixels']),
     # nxray and nxpath (docs/apps/raytrace.md)
     # (the scene's sines in floats since 20 October 2026: docs/apps/raytrace.md, "Lanes"; rvc_cpu has no lanes, the same sums plain)
     case('nxray', 'workers', X + 'RAY_FRAMES=4 nxray', True, sums=[(r'raystat: picture \d.* sum ([0-9a-f]+)', ['53ea472d', '226b5e92', '37366b32', '3ffdbe63'])],

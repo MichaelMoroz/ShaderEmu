@@ -110,6 +110,7 @@ riscv32-linux-musl-strip -o "$OUT/usr/bin/openttd.bin" "$BUILD/openttd" 2>/dev/n
 cp "$BUILD/lang/english.lng" "$OUT$D/lang/"
 cp -r "$BUILD/baseset/." "$OUT$D/baseset/"
 cp "$HERE/opntitle.dat" "$OUT$D/baseset/"	# (make_title.sh's small title game over upstream's)
+cp "$SRC/media/baseset/opntitle.dat" "$OUT$D/busy.sav"	# upstream's, busy: OPENTTD_PLAY's game (docs/games/openttd.md, "Speed")
 # no FreeType here, and the original game's sets, which are not open, are never there to describe
 rm -f "$OUT$D/baseset/"*.ttf "$OUT$D/baseset/orig_"*.ob?
 cp -r "$BUILD/ai" "$BUILD/game" "$OUT$D/"

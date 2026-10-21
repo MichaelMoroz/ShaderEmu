@@ -14,7 +14,16 @@
 #include "../window_func.h"
 #include "../timer/timer_game_tick.h"
 #include "../network/network.h"
+#include "../window_gui.h"
+#include "../viewport_func.h"
+#include "../vehicle_gui.h"
+#include "../station_func.h"
+#include "../station_base.h"
+#include "../train.h"
+#include "../zoom_func.h"
+#include "../settings_type.h"
 #include "shaderemu_v.h"
+#include <unistd.h>
 extern "C" {
 #include <GLES/segl.h>
 #include <nano-X.h>
@@ -137,6 +146,82 @@ bool VideoDriver_ShaderEmu::LockVideoBuffer()
 
 void VideoDriver_ShaderEmu::UnlockVideoBuffer() {}
 
+/* OPENTTD_CHECK=1: every picture is drawn again whole and the pixels where the two differ are
+ * counted (a scroll or a band left wrong). OPENTTD_HOLD=N|bad|big: the program stops at picture N
+ * of the play script, or at the first that differs (by over 1,000 pixels), and says where both
+ * pictures are in memory. */
+static int _play_frame = -1;     ///< pictures of OPENTTD_PLAY's script so far, -1 before it
+static int _checked, _check_bad, _check_line, _check_part_line;
+static long long _check_pixels;
+
+static int Number(const char *s)
+{
+	if (s == nullptr || *s < '0' || *s > '9') return -2;
+	int n = 0;
+	for (; *s >= '0' && *s <= '9'; s++) n = n * 10 + (*s - '0');
+	return n;
+}
+
+static void HoldHere(const uint8_t *shown, int w, int h)
+{
+	fmt::print(stderr, "openttd: hold at picture {}: picture {:x} shown {:x} {}x{} palette {:x}\n", _play_frame,
+			reinterpret_cast<uintptr_t>(_picture), reinterpret_cast<uintptr_t>(shown), w, h, reinterpret_cast<uintptr_t>(seglPalette()));
+	for (;;) usleep(1000000);
+}
+
+static void CheckPicture()
+{
+	static const char *check_how = getenv("OPENTTD_CHECK");
+	static const bool check = check_how != nullptr;
+	static const bool keep = check && std::string_view(check_how) == "keep"; /* the picture as drawn is shown on, its errors kept */
+	static const char *hold = getenv("OPENTTD_HOLD");
+	int w = _screen.width, h = _screen.height;
+	if (!check || _game_mode != GM_NORMAL) {
+		if (hold != nullptr && _play_frame == Number(hold)) HoldHere(_picture, w, h);
+		return;
+	}
+	UndrawMouseCursor();
+	static std::vector<uint8_t> shown;
+	shown.assign(_picture, _picture + w * h);
+	MarkWholeScreenDirty();
+	DrawDirtyBlocks();
+	int bad = 0, l = w, t = h, r = -1, b = -1, line = 0;
+	static std::vector<int> down; /* differing pixels in a column so far, ending at this row */
+	down.assign(w, 0);
+	for (int y = 0; y < h; y++) {
+		int across = 0;
+		for (int x = 0; x < w; x++) {
+			if (shown[y * w + x] == _picture[y * w + x]) {
+				across = down[x] = 0;
+				continue;
+			}
+			bad++;
+			line = std::max({ line, ++across, ++down[x] });
+			l = std::min(l, x), r = std::max(r, x), t = std::min(t, y), b = std::max(b, y);
+		}
+	}
+	_checked++;
+	if (bad != 0) {
+		_check_bad++;
+		_check_pixels += bad;
+		_check_line = std::max(_check_line, line);
+		if (_play_frame >= 2) _check_part_line = std::max(_check_part_line, line); /* (the first shows "paused") */
+		fmt::print(stderr, "openttd: check: picture {} (play {}): {} pixels differ, in {},{} to {},{}, longest line {}\n",
+				_checked, _play_frame, bad, l, t, r, b, line);
+		if (std::string_view(check_how) == "list") { /* where, and the colour shown and drawn whole */
+			int n = 0;
+			for (int i = 0; i < w * h && n < 12; i++) {
+				if (shown[i] != _picture[i]) fmt::print(stderr, "  {},{} {} {}", i % w, i / w, shown[i], _picture[i]), n++;
+			}
+			fmt::print(stderr, "\n");
+		}
+	}
+	if (hold != nullptr && (_play_frame == Number(hold) || (bad != 0 && _play_frame >= 0 && std::string_view(hold) == "bad") ||
+			(bad > 1000 && _play_frame >= 0 && std::string_view(hold) == "big"))) HoldHere(shown.data(), w, h);
+	if (keep) std::copy(shown.begin(), shown.end(), _picture);
+	DrawMouseCursor();
+}
+
 /** The picture over the whole window, submitted and not waited for: the next lock settles. */
 void VideoDriver_ShaderEmu::Paint()
 {
@@ -146,9 +231,11 @@ void VideoDriver_ShaderEmu::Paint()
 	static const GLfixed xyz[12] = { 0, 0, 0, ONE, 0, 0, ONE, ONE, 0, 0, ONE, 0 };
 	static const GLfixed uv[8] = { 0, 0, ONE, 0, ONE, ONE, 0, ONE };
 
-	if (IsEmptyRect(this->dirty_rect) && this->local_palette.count_dirty == 0) return;
+	static const bool check_all = getenv("OPENTTD_CHECK") != nullptr; /* (a picture with nothing drawn checked too) */
+	if (IsEmptyRect(this->dirty_rect) && this->local_palette.count_dirty == 0 && !(check_all && _play_frame >= 0)) return;
 	if (_drawn) seglSettle(), _drawn = false;
 	_draws++;
+	CheckPicture();
 
 	if (this->local_palette.count_dirty != 0) {
 		unsigned *words = seglPalette();
@@ -359,6 +446,118 @@ bool VideoDriver_ShaderEmu::PollEvent()
 	return true;
 }
 
+/* OPENTTD_PLAY=1, for measuring play: a script of pictures once a game is up, the same views at any
+ * speed (docs/games/openttd.md, "Speed"): scrolling, zooming out and in, then three trains' windows
+ * and a station's open with the main view following a train. It prints each part's pictures a
+ * second and exits; OPENTTD_PLAY=N repeats the script N times. OPENTTD_PLAY_SHORT=1: 30 pictures
+ * scrolling, 20 zoomed out and 20 with the windows, for a run on the card. */
+static const int PLAY_SHORT[] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44,
+		60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 80, 81, 82, 83, 84, 85, 86, 87, 88, 100,
+		110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 199 };
+extern uint32_t _vp_stat_jobs, _vp_stat_pieces, _vp_stat_again, _vp_stat_redrawn, _vp_stat_loaded; /* viewport.cpp */
+
+struct PlayPart {
+	const char *name;
+	int from;
+	std::chrono::steady_clock::time_point start;
+	uint64_t ticks;
+};
+
+static void PlayScroll(int dx, int dy)
+{
+	Window *w = GetMainWindow();
+	if (w == nullptr || w->viewport == nullptr) return;
+	w->viewport->follow_vehicle = VehicleID::Invalid();
+	w->viewport->dest_scrollpos_x += ScaleByZoom(dx, w->viewport->zoom);
+	w->viewport->dest_scrollpos_y += ScaleByZoom(dy, w->viewport->zoom);
+}
+
+static void PlayStep()
+{
+	static const char *play = getenv("OPENTTD_PLAY");
+	static int rounds = play != nullptr ? std::max(1, Number(play)) : 0;
+	static PlayPart cur;
+	static bool in_part = false;
+	static int waited = 0;
+	static std::chrono::steady_clock::time_point began;
+	static uint64_t began_ticks;
+	if (rounds == 0 || _game_mode != GM_NORMAL) return;
+	if (_play_frame < 0) {
+		if (++waited < 5) return; /* the first pictures of a loaded game draw everything */
+		_play_frame = 0;
+		/* OPENTTD_PAUSE=1: the game paused, so that two builds draw the same views */
+		if (getenv("OPENTTD_PAUSE") != nullptr) {
+			_pause_mode.Set(PauseMode::Normal);
+			MarkWholeScreenDirty(); /* (the status bar says so) */
+		}
+		/* no autosave: one is minutes of LZMA at 2 MIPS, in whichever part it falls */
+		_settings_client.gui.autosave_interval = 0;
+		ChangeAutosaveFrequency(true);
+	}
+	static const bool short_play = getenv("OPENTTD_PLAY_SHORT") != nullptr;
+	const int len = short_play ? std::size(PLAY_SHORT) : 200;
+	int f = _play_frame++ % len;
+	if (short_play) f = PLAY_SHORT[f];
+	if (f == 0) {
+		/* the rounds before the last warm the sprite cache and the ships' water regions */
+		if (_play_frame / len + 1 == rounds) fmt::print(stderr, "openttd: play PL-GO\n");
+		began = std::chrono::steady_clock::now();
+		began_ticks = TimerGameTick::counter;
+		_checked = _check_bad = _check_line = 0, _check_pixels = 0;
+	}
+	auto begin_part = [&](const char *name) {
+		auto now = std::chrono::steady_clock::now();
+		if (in_part) {
+			const PlayPart &p = cur;
+			double s = std::chrono::duration<double>(now - p.start).count();
+			fmt::print(stderr, "openttd: play {}: {} pictures in {:.2f} s, {:.2f} a second, {} ticks; viewport {} parts in {} pieces, "
+					"{} made again by workers ({} sprites loaded), {} by the first core; longest line differing {}\n",
+					p.name, _play_frame - 1 - p.from, s, (_play_frame - 1 - p.from) / s, TimerGameTick::counter - p.ticks,
+					_vp_stat_jobs, _vp_stat_pieces, _vp_stat_again, _vp_stat_loaded, _vp_stat_redrawn, _check_part_line);
+		}
+		_check_part_line = 0;
+		_vp_stat_jobs = _vp_stat_pieces = _vp_stat_again = _vp_stat_redrawn = _vp_stat_loaded = 0;
+		in_part = name != nullptr;
+		if (in_part) cur = { name, _play_frame - 1, now, TimerGameTick::counter };
+	};
+	Window *main = GetMainWindow();
+	static std::vector<VehicleID> trains;
+	if (f == 0) begin_part("scroll");
+	/* OPENTTD_PLAY_ODD=1: the way back a pixel longer a step, a move the machine's copy does not make */
+	static const int odd = getenv("OPENTTD_PLAY_ODD") != nullptr;
+	if (f < 60) PlayScroll(f < 30 ? 24 : -24 - odd, f < 30 ? 12 : -12);
+	if (f == 60) begin_part("zoomed out"), DoZoomInOutWindow(ZOOM_OUT, main);
+	if (f == 80) DoZoomInOutWindow(ZOOM_OUT, main);
+	if (f >= 60 && f < 100) PlayScroll(f < 80 ? 16 : -16, f < 80 ? -8 : 8);
+	if (f == 100) DoZoomInOutWindow(ZOOM_IN, main), DoZoomInOutWindow(ZOOM_IN, main);
+	if (f == 110) {
+		begin_part("windows");
+		trains.clear();
+		for (const Train *t : Train::Iterate()) {
+			if (t->IsFrontEngine() && trains.size() < 3) trains.push_back(t->index);
+		}
+		for (VehicleID id : trains) ShowVehicleViewWindow(Vehicle::Get(id));
+		for (const Station *st : Station::Iterate()) { ShowStationViewWindow(st->index); break; }
+		if (!trains.empty() && main != nullptr && main->viewport != nullptr) main->viewport->follow_vehicle = trains[0];
+	}
+	if (f == 170) {
+		begin_part("windows closed");
+		CloseAllNonVitalWindows();
+		if (main != nullptr && main->viewport != nullptr) main->viewport->follow_vehicle = VehicleID::Invalid();
+	}
+	if (f >= 170) PlayScroll(f < 185 ? -24 : 24, 0);
+	if (f == 199) {
+		begin_part(nullptr);
+		double s = std::chrono::duration<double>(std::chrono::steady_clock::now() - began).count();
+		fmt::print(stderr, "openttd: play round {}: {} pictures in {:.2f} s, {:.2f} a second, {} ticks; checked {}, {} differ ({} pixels, longest line {})\n",
+				_play_frame / len, len, s, len / s, TimerGameTick::counter - began_ticks, _checked, _check_bad, _check_pixels, _check_line);
+		if (short_play) CloseAllNonVitalWindows(); /* (the next round opens them again) */
+		if (_play_frame / len < rounds) return;
+		fmt::print(stderr, "openttd: play PL-DONE\n");
+		_exit_game = true;
+	}
+}
+
 void VideoDriver_ShaderEmu::InputLoop()
 {
 	bool old_ctrl_pressed = _ctrl_pressed;
@@ -381,6 +580,7 @@ void VideoDriver_ShaderEmu::InputLoop()
 		hosting = nullptr;
 	}
 
+	PlayStep();
 	if (old_ctrl_pressed != _ctrl_pressed) HandleCtrlChanged();
 }
 

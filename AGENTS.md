@@ -256,10 +256,16 @@
   is 256 KB a pass, in `rvc_cpu` too (`copy_pass`). `programs\copytest` must say `sum 0e7f76c3` on both; `--ping-pong`
   is the two textures of before (and `--lazy`, D3D12).
 - OpenTTD (`docs/games/openttd.md`) is compiled by its own GCC with all of libstdc++ (`linux/openttd/toolchain.sh`), runs on
-  the first core but for a viewport's blits (`ViewportBlitsEnd` in its `gfx.cpp`: workers blit bands of rows,
-  `RVC_RACES` 0 undone), and its patch keeps the game state the build computer's: after a change to `openttd.patch`,
-  `tools/test_all.py openttd` must give `linux/openttd/host_sum.sh`'s sums. A start is measured with `-v null:ticks=1 -g`
-  under `tools/prof.py` (350 million instructions on 20 October 2026); the title screen's game is `make_title.sh`'s.
+  the first core but for its viewports (`ViewportFlush` in its `viewport.cpp`: the parts of a picture cut in pieces, each
+  found, sorted and drawn by a core into a buffer of its own), and its patch keeps the game state the build computer's: after
+  a change to `openttd.patch`, `tools/test_all.py openttd` must give `linux/openttd/host_sum.sh`'s sums. A start is measured
+  with `-v null:ticks=1 -g` under `tools/prof.py` (350 million instructions on 20 October 2026); the title screen's game is
+  `make_title.sh`'s. Play is measured by `OPENTTD_PLAY=2 openttd -g /usr/share/openttd/busy.sav` on `rvc_cpu` at 2 MIPS,
+  the second round (757.8 s upstream's drawing, 368.9 on 31 workers, 21 October 2026). What a worker draws may store only to
+  its core's state (`VpCore()`; a vehicle's colour map is made by the first core first) or it is wrong on the card:
+  `RVC_RACES` 0 undone, and `test_all.py openttd-scroll` and `openttd-scroll-serial` (`OPENTTD_CHECK=1`: every picture
+  against one drawn whole) must say 0 pixels after every change to the drawing: the sprites are sorted in one order
+  whatever the part ("One order"), and the machine's copy moves only whole words (texels of the destination, "Scrolls").
 - The world's LAN carries a machine's packets as network events of a player object of their own
   (`EmuNet.Packets`, `docs/system/lan.md`), not in `EmuShare` with the display: a ping's round trip
   between two clients 300 ms to 230. It is measured by the hub's `lanTest` with `EmuGate.testOpen`

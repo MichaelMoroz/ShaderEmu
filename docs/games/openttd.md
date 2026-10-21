@@ -14,6 +14,7 @@ music is its FM voices.
     / # openttd -g /persistence/openttd/save/NAME.sav   # a saved game
     / # OPENTTD_RATE=1 openttd                          # every 10 s: pictures drawn, game ticks run
     / # OPENTTD_SCROLL=1 OPENTTD_RATE=1 openttd -g      # the map scrolled to and fro, 2 s each way
+    / # OPENTTD_PLAY=2 openttd -g /usr/share/openttd/busy.sav   # the play benchmark ("Speed")
 
     wsl -- bash /mnt/c/.../linux/openttd/build.sh   # after Nano-X's build; the first time builds GCC as well
 
@@ -72,9 +73,9 @@ too:
 - Without a game thread `GameLoopPause` draws a world being made, once a second: a picture is
   some 400,000 instructions, and four a second were a third of the making.
 
-- A viewport's blits are made by worker cores (below), and a scroll as wide as the screen is
+- A viewport is drawn by worker cores (below), and a scroll as wide as the screen is
   one move by the machine's copy (CSRs `0xb0` to `0xb3`, `docs/machine/gpu.md`) in place of a
-  `memmove` a row: what wraps round a row's end lands in the strips drawn anew.
+  `memmove` a row: what wraps round a row's end lands in the strips drawn anew ("Scrolls").
   `OPENTTD_MEMOP=0` moves it row by row, `=check` compares the two at every scroll.
 
 ## Music
@@ -90,28 +91,104 @@ unpacked into the base set folder: music sets are not looked for in tars.
 
 ## The viewport on worker cores
 
-A scroll draws the strips it exposed, about 400,000 instructions a picture at keyboard speed:
-some 40% the blits, the rest finding and sorting the sprites. The finding loads sprites into
-the cache (allocating and reading files), so it stays the first core's; the blits only read.
-Between `ViewportBlitsBegin()` and `ViewportBlitsEnd()` (`gfx.cpp`, round the tile and parent
-sprites of `ViewportDoDraw`) the first core keeps each blit (the sprite, its place, clip, mode,
-and its remap, a text remap copied), and then every core blits the whole list into a band of
-the part's rows (`mcw_for`), a sprite skipped at once when its rows miss the band. Bands meet
-where no 16 bytes are in both. Strings and the cargo overlay are drawn after, by the first core.
-`OPENTTD_WORKERS=N` asks for N workers (7 by default, 0 draws as upstream).
+While a `ViewportKeep` lives (round a frame's dirty blocks and viewport scrolls in
+`UpdateWindows`, round `DrawDirtyBlocks` and a scroll's strips), each part `ViewportDoDraw` is
+asked for is kept with the clip it had (`ViewportKept`). At the flush (`ViewportFlush`: the last
+keep's end, a scroll whose rectangle holds a kept part (`ViewportFlushOver`), the mouse pointer
+drawn, round a viewport drawn without transparency or shaded, and a part asked for over one
+kept, which must be drawn after it, its texts too) the parts are cut in pieces and every core
+finds, sorts and draws pieces (`mcw_for`, the dearest first):
 
-Scrolling a 640 by 480 window (`OPENTTD_SCROLL=1`, `rvc_cpu` at 2 MIPS), pictures in 10 s:
+- A piece's tiles reach 128 pixels to its sides and 250 below it (buildings stand above their
+  tile; at normal zoom), so a piece costs (width + 128) x (height + 250). The dearest piece of the
+  flush is cut again, in columns or in rows, while the flush gets shorter, the flush being its
+  dearest piece or all the work over the cores. A strip a scroll exposed, 24 pixels by 458, is so
+  cut in rows: as one column it was one core's.
+- A piece is drawn into a buffer of its own (copied from the screen first); then all cores copy
+  the buffers to the screen by 16 rows each, so no two write the same 16 bytes in a pass. Before,
+  pieces of two parts that shared 16 bytes of the screen were one core's, and a chain of them
+  (parts cut round a window) was a third of a flush.
+- Each core has its own drawer (`_vd`), `_cur_dpi`, `_cur_ti`, colour remaps and NewGRF
+  registers; `VpCore()` tells the cores by their stack (`gfx_func.h`).
+- A worker may not allocate: its lists get room before a round (`_vp_room`), and one that fills
+  gives its piece up and doubles. It may not load a sprite: the sprites it lacked are loaded by
+  the first core with the rest of their eight (`VpLoadWanted`) and the piece is drawn again by
+  the workers; given up twice, by the first core. It may resolve canals and rivers (OpenTTD's own
+  water sprites are a NewGRF's: `WorkerSafe`), no other NewGRF chain. A vehicle's sprites made
+  anew when drawn and its colour map, which it keeps, are made by the first core over the whole
+  part before the round (`ViewportRevalidateVehicles`).
+- Signs, text effects, the cargo overlay and strings are the first core's, after the copy.
 
-| | Pictures |
+`OPENTTD_WORKERS=N` asks for N workers (31 by default, `VP_CORES` - 1; 0 draws as upstream).
+`RVC_RACES` over two rounds of the play script (below): 0 undone; the reads as they were are the
+team's round word. Before the colour maps were made first, two workers drawing one vehicle
+both wrote its colour map (29 undone).
+
+### Lines left behind
+
+The blitter rounds a sprite's ends up to whole pixels, so a sprite whose box ends up to two
+pixels before a part's top or left still draws its last row or column in it, but
+`AddSortableSpriteToDraw`, `AddCombinedSprite` and `ViewportAddVehicles` dropped it: the part
+showed a row of pixels missing where it met the next. Upstream's dirty rectangles meet where they
+meet; bands of rows cut every scrolled strip, so the rows lined up across the screen as it
+scrolled. They now keep a sprite ending up to 2 x (`ScaleByZoom(1)` - 1) before the part. A
+parent sprite outside the part was dropped with its children, which can draw in it: a parent is
+kept within 128 pixels (`VP_REACH`; children reach up to 68 in the play script) and dropped at the sort
+when it and its children miss the part.
+
+### One order
+
+Upstream's sorter orders two sprites by the others of the rectangle drawn: it compares every two
+whose boxes do not lie apart, takes them in the order the tiles were visited, and two whose boxes
+lie apart on two axes the opposite way round (one behind on x, the other on y) are in no order of
+their own. A scrolled strip and the whole screen sorted the same two sprites differently: single
+pixels apart, 96 in the scroll part on the first core alone, 904 on workers. The sort
+(`ViewportSortParentSpritesKept`) is upstream's search with three changes: the sprites are first
+put in an order of their own (by x + y of the box, then the rest of it and the sprite), only two
+that meet on the screen (with their children, two pixels wider) are compared, and the shortcut for
+a sprite with one before it is gone. Breaking upstream's "no order" by a key of each sprite made
+it worse (cycles: a pole above and behind a wagon by the key, the wagon under a roof under the
+pole by the boxes, and the cycle broken differently in each part). In the checks below every
+picture is now the same as one drawn whole; it is not proved for every scene: three sprites whose
+boxes order them round in a circle can still come out by the part.
+
+### Scrolls
+
+The machine's copy writes whole texels of the destination from words of the source
+(`harness/apps/rvc_cpu.cpp`, `memop`): a move by a number of bytes not a multiple of 4 came out
+shifted, a pixel in four. The play script scrolls by 24 and 16 pixels; when the view stopped
+following a train it jumped by whatever it took (609 by -209 in one run), and the part the jump
+kept was a pixel off (6,000 to 16,000 pixels, once in a few runs). A move now is row by row unless
+it is whole words, and the copy is of the destination's whole texels, the ends by the processor.
+`OPENTTD_PLAY_ODD=1` makes the play script's way back a pixel longer a step, an odd move.
+
+### Checking a picture
+
+`OPENTTD_CHECK=1`: at every picture of the play script the screen is drawn again whole and the
+two compared (a picture with nothing drawn too); `openttd: check:` says how many pixels differ,
+where, and the longest line of them in a row or a column; `=keep` shows the picture as drawn, its
+errors kept, `=list` names the first differing pixels with both colours. `OPENTTD_HOLD=N|bad|big`
+stops at picture N of the play script, at the first that differs or the first by over 1,000
+pixels, and says where both pictures are in memory (`rvc_cpu --save-ram`). The round's line says
+how many differ. Over the paused play script (`OPENTTD_PAUSE=1`, which draws the screen again
+for the status bar's "paused"):
+
+| | Pictures differing, pixels |
 |---|---|
-| upstream's `memmove` a row, no workers (`rvc_harness --cpu`) | 22 |
-| the machine's copy, no workers | 34 to 36 |
-| and 3 workers | 42 to 49 |
-| and 7 workers | 49 to 51 |
+| upstream's sort, 31 workers (20 October) | 127 of 132, 27,323 |
+| upstream's sort, the first core alone | 74 of 132, 1,855 |
+| one order, 31 workers or the first core alone, `OPENTTD_PLAY_ODD` too | 0 of 199, 0 |
+| one order, the card (`rvc_harness --d3d11`, `rvc_lean`, the scroll part, odd way back) | 0 of 60 |
 
-`RVC_RACES` with 7 workers: 0 undone; the reads as they were are the team's round word.
-A per-line table in the sprites (to skip a band's first rows) was tried on the first core
-alone and did nothing measurable.
+`tools/test_all.py openttd-scroll` (with workers and the odd way back) and `openttd-scroll-serial`
+(the first core alone) run it and want 0 pixels.
+
+When the windows closed, station names could stay on the screen with workers (3,814 pixels, in
+`=keep` to the end of the script): the closed windows' rectangles were kept, the view then jumped
+too far to scroll, and the whole view drawn again was kept over them in the same flush; the
+pieces of both were copied out, then the texts of both, the old rectangles' station names last.
+A part asked for over a kept one now flushes first (`ViewportKept`), as upstream draws one after
+the other.
 
 ## Is it the same game
 
@@ -133,8 +210,52 @@ button is not read meanwhile). A game on that map then runs at full speed, every
 asks for, with 28 pictures a second; zoomed all the
 way out about 20. Making a world of 128 by 128 takes about four times as long, 256 by 256 sixteen.
 
+Play is measured on upstream's title game (`busy.sav`: towns, trains, ships and canals) with
+`OPENTTD_PLAY=N`: a script of 200 pictures run N times, the same views at any speed, the game
+running: 60 scrolling, 50 zoomed out twice and scrolling, 60 with three trains' and a station's
+windows open and the view following a train, 29 after they close. Each part prints its pictures
+a second; the first round warms the sprite cache, the second is the one read. The autosave is
+off under it (one is 358 million instructions of LZMA, a third of a round where it fell).
+`rvc_cpu --ips 2000000`, the second of two rounds, seconds of the machine's time:
+
+| Part | Upstream's drawing | Viewport on 31 workers |
+|---|---|---|
+| scroll, 60 pictures | 116.2 (0.52 a second) | 73.0 (0.82) |
+| zoomed out, 50 | 352.8 (0.14) | 109.1 (0.46) |
+| windows, 60 | 251.3 (0.24) | 149.5 (0.40) |
+| windows closed, 29 | 37.4 (0.78) | 37.3 (0.78) |
+| the round, 200 | 757.8 (0.26) | 368.9 (0.54) |
+
+The first core's instructions in the round went from 1,361 million to 550 million, all cores'
+from 1,613 to 2,232 million. On the way: whole pieces on 7 workers 619 s, canals on workers 543,
+15 workers 484, columns and rows cut together 418, 31 workers 384; the parts of a picture flushed
+together with pieces sharing 16 bytes one core's 411, in buffers of their own 347; one order,
+parents kept within a reach and a part over a kept one flushing first 368.9 (21 October).
+What is left of the first core's (`RVC_PROF`, the same two rounds): the game's tick, 0.98 million
+instructions a tick (vehicles' ticks 0.92), is 36%; the windows' widgets and texts 14%; keeping,
+cutting and flushing the viewport's parts and waiting for the workers, with the scrolls'
+copies, most of the rest of `UpdateWindows`' 45%.
+
+On the card the whole round does not fit a run of five minutes. `OPENTTD_PLAY_SHORT=1` is 30 of the
+scroll's pictures, 20 zoomed out and 20 with the windows; one round, the sprite cache cold, so the
+first pictures load sprites. Upstream's drawing (the patch before the viewport on workers, its
+blits on them) against 31 workers, run before, after, after, before (`rvc_harness --d3d11`, the
+lean tick of b935841), seconds, against `rvc_cpu` at 2 MIPS (the same, and its second round, warm):
+
+| Part | Card, upstream's | Card, workers | `rvc_cpu`, cold | `rvc_cpu`, warm |
+|---|---|---|---|---|
+| scroll, 30 | 29.8, 30.0 | 25.1, 25.1 (1.19 times) | 93.8 against 76.8 (1.22) | 53.3 against 33.0 (1.62) |
+| zoomed out, 20 | 77.2, 78.6 | 36.2, 36.3 (2.15) | 234.8 against 113.5 (2.07) | 174.7 against 48.8 (3.58) |
+| windows, 20 | 30.7, 30.4 | 18.0, 18.0 (1.70) | 91.3 against 55.5 (1.64) | 80.3 against 53.1 (1.51) |
+| the round, 71 | 137.7, 139.0 | 79.3, 79.4 (1.74) | 419.9 against 245.9 (1.71) | 308.4 against 134.9 (2.29) |
+
+The card gives the cold round's gain `rvc_cpu` gives, about 3 times as fast.
+
 ## Not done
 
 - Pitch bend and other controllers in the music.
-- Finding the viewport's sprites on workers: it loads sprites and writes the drawer's globals.
+- The game's tick, signs, texts and windows' widgets are the first core's.
+- A NewGRF chain other than canals' is resolved by the first core: only canals' resolver was
+  read through for stores outside a core's own registers (`WorkerSafe` in `newgrf_spritegroup.h`).
+- One order is not proved for every scene: sprites whose boxes order them in a circle ("One order").
 - Online content, the network game and screenshots in PNG (no libpng) are not built.

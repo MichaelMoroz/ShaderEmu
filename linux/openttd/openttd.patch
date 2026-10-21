@@ -54,7 +54,7 @@ index 16215e7..01f800e 100644
 +    CONDITION SHADEREMU
 +)
 diff --git a/src/blitter/8bpp_base.cpp b/src/blitter/8bpp_base.cpp
-index b32f98b..d6781f9 100644
+index b32f98b..847f06c 100644
 --- a/src/blitter/8bpp_base.cpp
 +++ b/src/blitter/8bpp_base.cpp
 @@ -11,6 +11,7 @@
@@ -65,7 +65,7 @@ index b32f98b..d6781f9 100644
  
  #include "../safeguards.h"
  
-@@ -86,10 +87,54 @@ void Blitter_8bppBase::CopyImageToBuffer(const void *video, void *dst, int width
+@@ -86,10 +87,73 @@ void Blitter_8bppBase::CopyImageToBuffer(const void *video, void *dst, int width
  	}
  }
  
@@ -81,15 +81,22 @@ index b32f98b..d6781f9 100644
 +
 +/**
 + * A part as wide as the screen moved as one block (OPENTTD_MEMOP=0: row by row, =check: and compared):
-+ * what wraps round a row's end lands in the strips the caller draws anew.
++ * what wraps round a row's end lands in the strips the caller draws anew. The machine copies whole
++ * texels of the destination from words of the source: a move by other than whole words is row by row,
++ * and the part texels at the ends are the processor's (docs/games/openttd.md, "Scrolls").
 + */
 +static bool ScrollAsBlock(void *video, int left, int top, int width, int height, int scroll_x, int scroll_y)
 +{
 +	static const char *how = getenv("OPENTTD_MEMOP");
-+	if (left != 0 || width != _screen.pitch || (how != nullptr && how[0] == '0')) return false;
++	ptrdiff_t d = static_cast<ptrdiff_t>(scroll_y) * _screen.pitch + scroll_x;
++	if (left != 0 || width != _screen.pitch || (how != nullptr && how[0] == '0') || d % 4 != 0 || std::abs(d) < 64) return false;
 +	uint8_t *base = static_cast<uint8_t *>(video) + top * _screen.pitch;
 +	size_t total = static_cast<size_t>(height) * _screen.pitch;
-+	ptrdiff_t d = static_cast<ptrdiff_t>(scroll_y) * _screen.pitch + scroll_x;
++	/* the destination [to, end), its texels [a, b) */
++	uint8_t *to = d > 0 ? base + d : base, *end = d > 0 ? base + total : base + total + d;
++	uint8_t *a = reinterpret_cast<uint8_t *>((reinterpret_cast<uintptr_t>(to) + 15) & ~uintptr_t{15});
++	uint8_t *b = reinterpret_cast<uint8_t *>(reinterpret_cast<uintptr_t>(end) & ~uintptr_t{15});
++	if (b - a < 1024) return false;
 +	std::vector<uint8_t> want;
 +	bool check = how != nullptr && how[0] == 'c';
 +	if (check) {
@@ -97,8 +104,20 @@ index b32f98b..d6781f9 100644
 +		if (d > 0) std::copy_backward(want.begin(), want.end() - d, want.end());
 +		else std::copy(want.begin() - d, want.end(), want.begin());
 +	}
-+	if (d > 0) MachineCopy(base + d, base, static_cast<uint32_t>(total - d));
-+	else MachineCopy(base, base - d, static_cast<uint32_t>(total + d));
++	auto move = [d](uint8_t *from, uint8_t *until) {
++		if (until <= from) return;
++		if (d > 0) std::copy_backward(from - d, until - d, until);
++		else std::copy(from - d, until - d, from);
++	};
++	if (d > 0) { /* (ahead: the end first) */
++		move(b, end);
++		MachineCopy(a, a - d, static_cast<uint32_t>(b - a));
++		move(to, a);
++	} else {
++		move(to, a);
++		MachineCopy(a, a - d, static_cast<uint32_t>(b - a));
++		move(b, end);
++	}
 +	if (check) {
 +		size_t wrong = 0;
 +		for (size_t i = 0; i < total; i++) wrong += base[i] != want[i];
@@ -120,7 +139,7 @@ index b32f98b..d6781f9 100644
  
  	if (scroll_y > 0) {
  		/* Calculate pointers */
-@@ -111,7 +156,7 @@ void Blitter_8bppBase::ScrollBuffer(void *video, int &left, int &top, int &width
+@@ -111,7 +175,7 @@ void Blitter_8bppBase::ScrollBuffer(void *video, int &left, int &top, int &width
  			width += scroll_x;
  		}
  
@@ -129,7 +148,7 @@ index b32f98b..d6781f9 100644
  	} else {
  		/* Calculate pointers */
  		dst = (uint8_t *)video + left + top * _screen.pitch;
-@@ -131,7 +176,7 @@ void Blitter_8bppBase::ScrollBuffer(void *video, int &left, int &top, int &width
+@@ -131,7 +195,7 @@ void Blitter_8bppBase::ScrollBuffer(void *video, int &left, int &top, int &width
  			width += scroll_x;
  		}
  
@@ -160,141 +179,118 @@ index d1148b7..37aab8b 100644
  					break;
  			}
 diff --git a/src/gfx.cpp b/src/gfx.cpp
-index 2cae30c..bf9d748 100644
+index 2cae30c..233f229 100644
 --- a/src/gfx.cpp
 +++ b/src/gfx.cpp
-@@ -29,6 +29,11 @@
- #include "table/sprites.h"
- #include "table/control_codes.h"
+@@ -51,7 +51,12 @@ PauseModes _pause_mode;
+ GameSessionStats _game_session_stats; ///< Statistics about the current session.
  
+ static uint8_t _stringwidth_table[FS_END][224]; ///< Cache containing width of often used characters. @see GetCharacterWidth()
 +#ifdef WITH_SHADEREMU
-+#include <deque>
-+#include <mcwx.h>
++VpCoreState _vp_core[VP_CORES];
++uintptr_t _vp_stacks, _vp_stacks_bytes;
++#else
+ DrawPixelInfo *_cur_dpi;
 +#endif
-+
- #include "safeguards.h"
  
- uint8_t _dirkeys;        ///< 1 = left, 2 = up, 4 = right, 8 = down
-@@ -1063,7 +1068,7 @@ void DrawSprite(SpriteID img, PaletteID pal, int x, int y, const SubSprite *sub,
-  * @tparam SCALED_XY Whether the X and Y are scaled or unscaled.
+ static void GfxMainBlitterViewport(const Sprite *sprite, int x, int y, BlitterMode mode, const SubSprite *sub = nullptr, SpriteID sprite_id = SPR_CURSOR_MOUSE);
+ static void GfxMainBlitter(const Sprite *sprite, int x, int y, BlitterMode mode, const SubSprite *sub = nullptr, SpriteID sprite_id = SPR_CURSOR_MOUSE, ZoomLevel zoom = ZoomLevel::Min);
+@@ -71,8 +76,13 @@ int _gui_scale_cfg;                         ///< GUI scale in config.
+  * @ingroup dirty
   */
- template <int ZOOM_BASE, bool SCALED_XY>
--static void GfxBlitter(const Sprite * const sprite, int x, int y, BlitterMode mode, const SubSprite * const sub, SpriteID sprite_id, ZoomLevel zoom, const DrawPixelInfo *dst = nullptr)
-+static void GfxBlitter(const Sprite * const sprite, int x, int y, BlitterMode mode, const SubSprite * const sub, SpriteID sprite_id, ZoomLevel zoom, const DrawPixelInfo *dst = nullptr, const uint8_t *remap = nullptr)
- {
- 	const DrawPixelInfo *dpi = (dst != nullptr) ? dst : _cur_dpi;
- 	Blitter::BlitterParams bp;
-@@ -1112,7 +1117,7 @@ static void GfxBlitter(const Sprite * const sprite, int x, int y, BlitterMode mo
+ static Rect _invalid_rect;
++#ifdef WITH_SHADEREMU
++#define _colour_remap_ptr (_vp_core[VpCore()].colour_remap)
++#define _string_colourremap (_vp_core[VpCore()].string_remap)
++#else
+ static const uint8_t *_colour_remap_ptr;
+ static uint8_t _string_colourremap[3]; ///< Recoloursprite for stringdrawing. The grf loader ensures that #SpriteType::Font sprites only use colours 0 to 2.
++#endif
  
- 	bp.dst = dpi->dst_ptr;
- 	bp.pitch = dpi->pitch;
--	bp.remap = _colour_remap_ptr;
-+	bp.remap = remap != nullptr ? remap : _colour_remap_ptr;
+ static const uint DIRTY_BLOCK_HEIGHT   = 8;
+ static const uint DIRTY_BLOCK_WIDTH    = 64;
+@@ -88,6 +98,9 @@ void GfxScroll(int left, int top, int width, int height, int xo, int yo)
  
- 	assert(sprite->width > 0);
- 	assert(sprite->height > 0);
-@@ -1239,8 +1244,101 @@ std::unique_ptr<uint32_t[]> DrawSpriteToRgbaBuffer(SpriteID spriteId, ZoomLevel
- 	return result;
- }
+ 	if (xo == 0 && yo == 0) return;
  
 +#ifdef WITH_SHADEREMU
-+/** A viewport's blit as the first core found it, made later by every core in a band of rows. */
-+struct ViewportBlit {
-+	const Sprite *sprite;
-+	const uint8_t *remap;
-+	int x, y;
-+	SubSprite sub;
-+	bool has_sub;
-+	BlitterMode mode;
-+	SpriteID sprite_id;
-+};
-+static std::vector<ViewportBlit> _vp_blits;
-+static std::deque<std::array<uint8_t, 3>> _vp_text_remaps; ///< _string_colourremap as each blit had it
-+static bool _vp_recording;
-+static int _vp_workers = -1;
-+
-+/** The blits of a viewport's part from here to ViewportBlitsEnd() are kept, not made (OPENTTD_WORKERS=0: made at once). */
-+void ViewportBlitsBegin()
-+{
-+	if (_vp_workers < 0) {
-+		const char *asked = getenv("OPENTTD_WORKERS");
-+		int want = asked != nullptr ? 0 : 7;
-+		for (const char *c = asked; c != nullptr && *c >= '0' && *c <= '9'; c++) want = want * 10 + (*c - '0');
-+		_vp_workers = want > 0 && BlitterFactory::GetCurrentBlitter()->GetScreenDepth() == 8 ? mcw_open(want) : 0;
-+	}
-+	_vp_recording = _vp_workers > 0 && _newgrf_debug_sprite_picker.mode != SPM_REDRAW;
-+}
-+
-+struct ViewportBands {
-+	const DrawPixelInfo *dpi;
-+	int rows[65]; ///< band k is rows[k] to rows[k + 1], in pixels from the part's top
-+	int count;
-+};
-+
-+static void ViewportBlitBand(void *ctx, uint32_t from, uint32_t to)
-+{
-+	const ViewportBands &bands = *static_cast<const ViewportBands *>(ctx);
-+	const DrawPixelInfo &all = *bands.dpi;
-+	for (uint32_t k = from; k < to; k++) {
-+		DrawPixelInfo d = all;
-+		d.top = all.top + ScaleByZoom(bands.rows[k], all.zoom);
-+		d.height = ScaleByZoom(bands.rows[k + 1] - bands.rows[k], all.zoom);
-+		d.dst_ptr = BlitterFactory::GetCurrentBlitter()->MoveTo(all.dst_ptr, 0, bands.rows[k]);
-+		for (const ViewportBlit &b : _vp_blits) {
-+			/* (the sprite's rows against the band's, before its clipping is worked out) */
-+			int top = b.y + b.sprite->y_offs;
-+			if (top >= d.top + d.height || top + b.sprite->height <= d.top) continue;
-+			GfxBlitter<ZOOM_BASE, false>(b.sprite, b.x, b.y, b.mode, b.has_sub ? &b.sub : nullptr, b.sprite_id, d.zoom, &d, b.remap);
-+		}
-+	}
-+}
-+
-+/** The kept blits made into dpi, its rows shared out between the cores; bands meet where no 16 bytes are in both. */
-+void ViewportBlitsEnd(const DrawPixelInfo *dpi)
-+{
-+	if (!_vp_recording) return;
-+	_vp_recording = false;
-+	ViewportBands bands;
-+	bands.dpi = dpi;
-+	int rows = UnScaleByZoom(dpi->height, dpi->zoom);
-+	int width = UnScaleByZoom(dpi->width, dpi->zoom);
-+	int pitch = dpi->pitch;
-+	uintptr_t base = reinterpret_cast<uintptr_t>(dpi->dst_ptr);
-+	int want = std::min({_vp_workers + 1, rows / 2, 64});
-+	if (_vp_blits.size() < 8 || width * rows < 2048) want = 1;
-+	bands.count = 0;
-+	bands.rows[0] = 0;
-+	for (int k = 1; k < want; k++) {
-+		int r = std::max(rows * k / want, bands.rows[bands.count] + 1);
-+		while (r < rows && (base + (r - 1) * pitch + width - 1) / 16 == (base + r * pitch) / 16) r++;
-+		if (r >= rows) break;
-+		bands.rows[++bands.count] = r;
-+	}
-+	bands.rows[++bands.count] = rows;
-+	mcw_for_opts opts = {};
-+	opts.grain = 1;
-+	mcw_for_opt(bands.count, ViewportBlitBand, &bands, &opts);
-+	_vp_blits.clear();
-+	_vp_text_remaps.clear();
-+}
++	ViewportFlushOver(left, top, left + width, top + height);
 +#endif
-+
+ 	if (_cursor.visible) UndrawMouseCursor();
+ 
+ 	if (_networking) NetworkUndrawChatMessage();
+@@ -1241,6 +1254,9 @@ std::unique_ptr<uint32_t[]> DrawSpriteToRgbaBuffer(SpriteID spriteId, ZoomLevel
+ 
  static void GfxMainBlitterViewport(const Sprite *sprite, int x, int y, BlitterMode mode, const SubSprite *sub, SpriteID sprite_id)
  {
 +#ifdef WITH_SHADEREMU
-+	if (_vp_recording) {
-+		const uint8_t *remap = _colour_remap_ptr;
-+		if (remap == _string_colourremap) {
-+			_vp_text_remaps.push_back({_string_colourremap[0], _string_colourremap[1], _string_colourremap[2]});
-+			remap = _vp_text_remaps.back().data();
-+		}
-+		_vp_blits.push_back({sprite, remap, x, y, sub != nullptr ? *sub : SubSprite{}, sub != nullptr, mode, sprite_id});
-+		return;
-+	}
++	if (_vp_core[VpCore()].failed) return; /* (the first core draws it again) */
 +#endif
  	GfxBlitter<ZOOM_BASE, false>(sprite, x, y, mode, sub, sprite_id, _cur_dpi->zoom);
  }
  
+@@ -1361,6 +1377,9 @@ void DrawMouseCursor()
+ 
+ 	/* Redraw mouse cursor but only when it's inside the window */
+ 	if (!_cursor.in_window) return;
++#ifdef WITH_SHADEREMU
++	ViewportFlush();
++#endif
+ 
+ 	/* Don't draw the mouse cursor if it's already drawn */
+ 	if (_cursor.visible) {
+@@ -1451,6 +1470,9 @@ void RedrawScreenRect(int left, int top, int right, int bottom)
+  */
+ void DrawDirtyBlocks()
+ {
++#ifdef WITH_SHADEREMU
++	ViewportKeep keep;
++#endif
+ 	auto is_dirty = [](auto block) -> bool { return block != 0; };
+ 	auto block = _dirty_blocks.begin();
+ 
+diff --git a/src/gfx_func.h b/src/gfx_func.h
+index 4254611..6f66afd 100644
+--- a/src/gfx_func.h
++++ b/src/gfx_func.h
+@@ -184,6 +184,37 @@ std::pair<uint8_t, uint8_t> GetBroadestDigit(FontSize size);
+ 
+ int GetCharacterHeight(FontSize size);
+ 
++#ifdef WITH_SHADEREMU
++/* The viewport is drawn on worker cores too (docs/games/openttd.md): what each core draws with,
++ * in 16 bytes of its own. VpCore() is the core that runs, by its stack: 0 the first. */
++static constexpr int VP_CORES = 32;
++struct alignas(16) VpCoreState {
++	DrawPixelInfo *cur_dpi;
++	const uint8_t *colour_remap;
++	uint8_t string_remap[3];
++	bool failed; ///< what this worker drew is given up, to be drawn again
++	bool full;   ///< and one of its lists had no room
++};
++extern VpCoreState _vp_core[VP_CORES];
++extern uintptr_t _vp_stacks, _vp_stacks_bytes;
++inline int VpCore()
++{
++	uintptr_t sp;
++	asm("mv %0, sp" : "=r"(sp));
++	uintptr_t d = sp - _vp_stacks;
++	return d < _vp_stacks_bytes ? static_cast<int>(d >> 16) + 1 : 0;
++}
++/** On a worker: what it is drawing is given up (true); on the first core: false. */
++inline bool VpRefuse()
++{
++	int k = VpCore();
++	if (k == 0) return false;
++	_vp_core[k].failed = true;
++	return true;
++}
++#define _cur_dpi (_vp_core[VpCore()].cur_dpi)
++#else
+ extern DrawPixelInfo *_cur_dpi;
++#endif
+ 
+ #endif /* GFX_FUNC_H */
 diff --git a/src/gfxinit.cpp b/src/gfxinit.cpp
 index 2cdabb7..a2ebcf5 100644
 --- a/src/gfxinit.cpp
@@ -400,6 +396,87 @@ index cf60e78..81d4d3f 100644
      )
  
      add_files(
+diff --git a/src/newgrf_canal.cpp b/src/newgrf_canal.cpp
+index 480ab51..ea8df23 100644
+--- a/src/newgrf_canal.cpp
++++ b/src/newgrf_canal.cpp
+@@ -50,6 +50,9 @@ struct CanalResolverObject : public ResolverObject {
+ 
+ 	GrfSpecFeature GetFeature() const override;
+ 	uint32_t GetDebugID() const override;
++#ifdef WITH_SHADEREMU
++	bool WorkerSafe() const override { return true; } /* (it reads the map alone) */
++#endif
+ };
+ 
+ /* virtual */ uint32_t CanalScopeResolver::GetRandomBits() const
+diff --git a/src/newgrf_spritegroup.cpp b/src/newgrf_spritegroup.cpp
+index a5c5d07..445276d 100644
+--- a/src/newgrf_spritegroup.cpp
++++ b/src/newgrf_spritegroup.cpp
+@@ -18,7 +18,11 @@
+ SpriteGroupPool _spritegroup_pool("SpriteGroup");
+ INSTANTIATE_POOL_METHODS(SpriteGroup)
+ 
++#ifdef WITH_SHADEREMU
++/* static */ ResolverObject::TempStoreOfCore ResolverObject::temp_stores[VP_CORES];
++#else
+ /* static */ TemporaryStorageArray<int32_t, 0x110> ResolverObject::temp_store;
++#endif
+ 
+ 
+ /**
+diff --git a/src/newgrf_spritegroup.h b/src/newgrf_spritegroup.h
+index dc20f33..61ceb18 100644
+--- a/src/newgrf_spritegroup.h
++++ b/src/newgrf_spritegroup.h
+@@ -20,6 +20,7 @@
+ #include "newgrf_generic.h"
+ #include "newgrf_storage.h"
+ #include "newgrf_commons.h"
++#include "gfx_func.h"
+ 
+ struct SpriteGroup;
+ struct ResultSpriteGroup;
+@@ -287,7 +288,13 @@ struct ScopeResolver {
+  */
+ struct ResolverObject {
+ private:
++#ifdef WITH_SHADEREMU
++	struct alignas(16) TempStoreOfCore { TemporaryStorageArray<int32_t, 0x110> s; };
++	static TempStoreOfCore temp_stores[VP_CORES]; ///< each core resolves with registers of its own
++#define temp_store temp_stores[VpCore()].s
++#else
+ 	static TemporaryStorageArray<int32_t, 0x110> temp_store;
++#endif
+ 
+ public:
+ 	/**
+@@ -306,6 +313,12 @@ public:
+ 
+ 	ResolverResult DoResolve()
+ 	{
++#ifdef WITH_SHADEREMU
++		if (VpCore() != 0 && !this->WorkerSafe()) {
++			VpRefuse();
++			return std::monostate{};
++		}
++#endif
+ 		temp_store.ClearChanges();
+ 		this->last_value = 0;
+ 		this->used_random_triggers = 0;
+@@ -336,6 +349,11 @@ public:
+ 	{
+ 		temp_store.StoreValue(i, value);
+ 	}
++#ifdef WITH_SHADEREMU
++#undef temp_store
++	/** Whether a worker core may resolve this: it reads the game and writes nothing outside itself. */
++	virtual bool WorkerSafe() const { return false; }
++#endif
+ 
+ 	CallbackID callback{}; ///< Callback being resolved.
+ 	uint32_t callback_param1 = 0; ///< First parameter (var 10) of the callback.
 diff --git a/src/openttd.cpp b/src/openttd.cpp
 index 7d585b0..8e450f4 100644
 --- a/src/openttd.cpp
@@ -604,17 +681,40 @@ index 0abd7c0..675f9c3 100644
 +    CONDITION SHADEREMU
 +)
 diff --git a/src/spritecache.cpp b/src/spritecache.cpp
-index f26695a..f64b8ec 100644
+index f26695a..30418c1 100644
 --- a/src/spritecache.cpp
 +++ b/src/spritecache.cpp
-@@ -361,8 +361,31 @@ static bool PadSprites(SpriteLoader::SpriteCollection &sprite, ZoomLevels sprite
+@@ -18,6 +18,7 @@
+ #include "core/math_func.hpp"
+ #include "video/video_driver.hpp"
+ #include "spritecache.h"
++#include "gfx_func.h"
+ #include "spritecache_internal.h"
+ 
+ #include "table/sprites.h"
+@@ -31,6 +32,15 @@ uint _sprite_cache_size = 4;
+ 
+ static std::vector<SpriteCache> _spritecache;
+ static size_t _spritecache_bytes_used = 0;
++#ifdef WITH_SHADEREMU
++/** The sprites a worker found unloaded: how many it was refused, and the first ones (type in the top bits). */
++struct alignas(16) VpWanted {
++	uint32_t refused;
++	uint32_t n;
++	uint32_t ids[30];
++};
++static VpWanted _vp_wanted[VP_CORES];
++#endif
+ static uint32_t _sprite_lru_counter;
+ static std::vector<std::unique_ptr<SpriteFile>> _sprite_files;
+ 
+@@ -361,8 +371,31 @@ static bool PadSprites(SpriteLoader::SpriteCollection &sprite, ZoomLevels sprite
  	return true;
  }
  
 -static bool ResizeSprites(SpriteLoader::SpriteCollection &sprite, ZoomLevels sprite_avail, SpriteEncoder *encoder)
--{
 +static bool ResizeSprites(SpriteLoader::SpriteCollection &sprite, ZoomLevels sprite_avail, SpriteEncoder *encoder, SpriteType sprite_type)
-+{
+ {
 +#ifdef WITH_SHADEREMU
 +	/* A sprite of normal zoom alone, and no closer zoom shown: the levels out are made from it, and the
 +	 * closest level is only a size, with no pixels, which no encoder reads (making it was most of a start). */
@@ -641,7 +741,7 @@ index f26695a..f64b8ec 100644
  	/* Create a fully zoomed image if it does not exist */
  	ZoomLevel first_avail = ZoomLevel::End;
  	for (ZoomLevel zoom = ZoomLevel::Min; zoom <= ZoomLevel::Max; ++zoom) {
-@@ -520,7 +543,7 @@ static void *ReadSprite(const SpriteCache *sc, SpriteID id, SpriteType sprite_ty
+@@ -520,7 +553,7 @@ static void *ReadSprite(const SpriteCache *sc, SpriteID id, SpriteType sprite_ty
  		return s;
  	}
  
@@ -650,7 +750,7 @@ index f26695a..f64b8ec 100644
  		if (id == SPR_IMG_QUERY) UserError("Okay... something went horribly wrong. I couldn't resize the fallback sprite. What should I do?");
  		return (void*)GetRawSprite(SPR_IMG_QUERY, SpriteType::Normal, &allocator, encoder);
  	}
-@@ -539,7 +562,14 @@ struct GrfSpriteOffset {
+@@ -539,7 +572,14 @@ struct GrfSpriteOffset {
  };
  
  /** Map from sprite numbers to position in the GRF file. */
@@ -665,7 +765,7 @@ index f26695a..f64b8ec 100644
  
  /**
   * Get the file offset for a specific sprite in the sprite section of a GRF.
-@@ -557,6 +587,14 @@ size_t GetGRFSpriteOffset(uint32_t id)
+@@ -557,6 +597,14 @@ size_t GetGRFSpriteOffset(uint32_t id)
   */
  void ReadGRFSpriteOffsets(SpriteFile &file)
  {
@@ -680,6 +780,66 @@ index f26695a..f64b8ec 100644
  	_grf_sprite_offsets.clear();
  
  	if (file.GetContainerVersion() >= 2) {
+@@ -854,6 +902,23 @@ static void *HandleInvalidSpriteRequest(SpriteID sprite, SpriteType requested, S
+  */
+ void *GetRawSprite(SpriteID sprite, SpriteType type, SpriteAllocator *allocator, SpriteEncoder *encoder)
+ {
++#ifdef WITH_SHADEREMU
++	if (VpCore() != 0) {
++		/* (a sprite not loaded, or anything but a plain read, is the first core's: it draws the part again) */
++		if (allocator == nullptr && encoder == nullptr && SpriteExists(sprite)) {
++			SpriteCache *sc = GetSpriteCache(sprite);
++			if (sc->type == type && sc->ptr != nullptr) return static_cast<void *>(sc->ptr.get());
++		}
++		VpRefuse();
++		VpWanted &w = _vp_wanted[VpCore()];
++		w.refused++;
++		if (allocator == nullptr && encoder == nullptr && w.n < std::size(w.ids) && sprite < (1U << 28)) {
++			w.ids[w.n++] = sprite | static_cast<uint32_t>(type) << 28;
++		}
++		alignas(16) static const uint8_t none[64] = { 1, 0, 1, 0 }; /* a Sprite of 1 x 1, or a recolour table */
++		return const_cast<uint8_t *>(none);
++	}
++#endif
+ 	assert(type != SpriteType::MapGen || IsMapgenSpriteID(sprite));
+ 	assert(type < SpriteType::Invalid);
+ 
+@@ -894,6 +959,35 @@ void *GetRawSprite(SpriteID sprite, SpriteType type, SpriteAllocator *allocator,
+ 	}
+ }
+ 
++#ifdef WITH_SHADEREMU
++/** How many sprites the worker k has been refused so far. */
++uint32_t VpSpritesRefused(int k)
++{
++	return _vp_wanted[k].refused;
++}
++
++/** The sprites the workers found unloaded, loaded with the rest of their eight; returns how many were loaded. */
++uint32_t VpLoadWanted()
++{
++	uint32_t loaded = 0;
++	for (VpWanted &w : _vp_wanted) {
++		for (uint32_t i = 0; i < w.n; i++) {
++			SpriteType type = static_cast<SpriteType>(w.ids[i] >> 28);
++			SpriteID first = (w.ids[i] & ((1U << 28) - 1)) & ~7U;
++			for (SpriteID id = first; id < first + 8; id++) {
++				if (!SpriteExists(id)) continue;
++				SpriteCache *sc = GetSpriteCache(id);
++				if (sc->type != type || sc->ptr != nullptr) continue;
++				GetRawSprite(id, type, nullptr, nullptr);
++				loaded++;
++			}
++		}
++		w.n = 0;
++	}
++	return loaded;
++}
++#endif
++
+ void GfxInitSpriteMem()
+ {
+ 	/* Reset the spritecache 'pool' */
 diff --git a/src/table/settings/gui_settings.ini b/src/table/settings/gui_settings.ini
 index 6989729..db7cd19 100644
 --- a/src/table/settings/gui_settings.ini
@@ -846,6 +1006,82 @@ index b33a953..d84a33e 100644
  	try {
  		static std::mutex thread_startup_mutex;
  		std::lock_guard<std::mutex> lock(thread_startup_mutex);
+diff --git a/src/vehicle.cpp b/src/vehicle.cpp
+index 91588a6..cbff8e8 100644
+--- a/src/vehicle.cpp
++++ b/src/vehicle.cpp
+@@ -1118,6 +1118,18 @@ static void DoDrawVehicle(const Vehicle *v)
+  * Add the vehicle sprites that should be drawn at a part of the screen.
+  * @param dpi Rectangle being drawn.
+  */
++#ifdef WITH_SHADEREMU
++static bool _vp_revalidate_only; ///< ViewportAddVehicles only makes the sprites that change when drawn
++
++/** What the vehicles in dpi keep of their drawing (sprites made anew, colour maps), made now by the first core. */
++void ViewportRevalidateVehicles(DrawPixelInfo *dpi)
++{
++	_vp_revalidate_only = true;
++	ViewportAddVehicles(dpi);
++	_vp_revalidate_only = false;
++}
++#endif
++
+ void ViewportAddVehicles(DrawPixelInfo *dpi)
+ {
+ 	/* The bounding rectangle */
+@@ -1167,6 +1179,9 @@ void ViewportAddVehicles(DrawPixelInfo *dpi)
+ 					 * This vehicle can potentially be drawn as part of this viewport and
+ 					 * needs to be revalidated, as the sprite may not be correct.
+ 					 */
++#ifdef WITH_SHADEREMU
++					if (v->sprite_cache.revalidate_before_draw && VpRefuse()) return;
++#endif
+ 					if (v->sprite_cache.revalidate_before_draw) {
+ 						VehicleSpriteSeq seq;
+ 						v->GetImage(v->direction, EIT_ON_MAP, &seq);
+@@ -1189,10 +1204,25 @@ void ViewportAddVehicles(DrawPixelInfo *dpi)
+ 						v->sprite_cache.revalidate_before_draw = false;
+ 					}
+ 
+-					if (l <= v->coord.right &&
+-						t <= v->coord.bottom &&
++#ifdef WITH_SHADEREMU
++					const int slack = 2 * (ScaleByZoom(1, dpi->zoom) - 1); /* (as AddSortableSpriteToDraw's) */
++#else
++					const int slack = 0;
++#endif
++					if (l <= v->coord.right + slack &&
++						t <= v->coord.bottom + slack &&
+ 						r >= v->coord.left &&
+-						b >= v->coord.top) DoDrawVehicle(v);
++						b >= v->coord.top) {
++#ifdef WITH_SHADEREMU
++						if (!_vp_revalidate_only) {
++							DoDrawVehicle(v);
++						} else if (v->vehstatus.Test(VehState::DefaultPalette) && !v->vehstatus.Test(VehState::Crashed)) {
++							GetVehiclePalette(v); /* (its colour map is kept in the vehicle: made here, not by a worker) */
++						}
++#else
++						DoDrawVehicle(v);
++#endif
++					}
+ 				}
+ 
+ 				v = v->hash_viewport_next;
+diff --git a/src/vehicle_func.h b/src/vehicle_func.h
+index 9b69b13..4571a5f 100644
+--- a/src/vehicle_func.h
++++ b/src/vehicle_func.h
+@@ -194,6 +194,9 @@ void ResetVehicleColourMap();
+ uint8_t GetBestFittingSubType(Vehicle *v_from, Vehicle *v_for, CargoType dest_cargo_type);
+ 
+ void ViewportAddVehicles(DrawPixelInfo *dpi);
++#ifdef WITH_SHADEREMU
++void ViewportRevalidateVehicles(DrawPixelInfo *dpi);
++#endif
+ 
+ void ShowNewGrfVehicleError(EngineID engine, StringID part1, StringID part2, GRFBug bug_type, bool critical);
+ CommandCost TunnelBridgeIsFree(TileIndex tile, TileIndex endtile, const Vehicle *ignore = nullptr);
 diff --git a/src/video/CMakeLists.txt b/src/video/CMakeLists.txt
 index e09c202..3319032 100644
 --- a/src/video/CMakeLists.txt
@@ -931,41 +1167,888 @@ index 85cc2d5..439e51d 100644
  	if (std::this_thread::get_id() != this->game_thread.get_id()) return;
  
 diff --git a/src/viewport.cpp b/src/viewport.cpp
-index 6427a14..9c4971b 100644
+index 6427a14..0cc5107 100644
 --- a/src/viewport.cpp
 +++ b/src/viewport.cpp
-@@ -1808,6 +1808,11 @@ static void ViewportDrawStrings(ZoomLevel zoom, const StringSpriteToDrawVector *
+@@ -99,6 +99,11 @@
+ #include "table/strings.h"
+ #include "table/string_colours.h"
+ 
++#ifdef WITH_SHADEREMU
++#include <mcwx.h>
++#endif
++
++#include "newgrf_debug.h"
+ #include "safeguards.h"
+ 
+ Point _tile_fract_coords;
+@@ -158,10 +163,28 @@ enum SpriteCombineMode : uint8_t {
+ 	SPRITE_COMBINE_ACTIVE,   ///< %Sprite combining is active. #AddSortableSpriteToDraw outputs child sprites.
+ };
+ 
++#ifdef WITH_SHADEREMU
++/** Memory of whole 64 bytes: no other core's data shares 16 bytes with what a worker writes. */
++template <class T>
++struct VpAllocator {
++	using value_type = T;
++	VpAllocator() = default;
++	template <class U> VpAllocator(const VpAllocator<U> &) {}
++	T *allocate(size_t n) { return static_cast<T *>(::operator new((n * sizeof(T) + 63) & ~size_t{63}, std::align_val_t{64})); }
++	void deallocate(T *p, size_t) { ::operator delete(p, std::align_val_t{64}); }
++	template <class U> bool operator==(const VpAllocator<U> &) const { return true; }
++};
++template <class T> using VpVector = std::vector<T, VpAllocator<T>>;
++typedef VpVector<TileSpriteToDraw> TileSpriteToDrawVector;
++typedef std::vector<StringSpriteToDraw> StringSpriteToDrawVector;
++typedef VpVector<ParentSpriteToDraw> ParentSpriteToDrawVector;
++typedef VpVector<ChildScreenSpriteToDraw> ChildScreenSpriteToDrawVector;
++#else
+ typedef std::vector<TileSpriteToDraw> TileSpriteToDrawVector;
+ typedef std::vector<StringSpriteToDraw> StringSpriteToDrawVector;
+ typedef std::vector<ParentSpriteToDraw> ParentSpriteToDrawVector;
+ typedef std::vector<ChildScreenSpriteToDraw> ChildScreenSpriteToDrawVector;
++#endif
+ 
+ constexpr int LAST_CHILD_NONE = -1; ///< There is no last_child to fill.
+ constexpr int LAST_CHILD_PARENT = -2; ///< Fill last_child of the most recent parent sprite.
+@@ -173,7 +196,11 @@ struct ViewportDrawer {
+ 	StringSpriteToDrawVector string_sprites_to_draw;
+ 	TileSpriteToDrawVector tile_sprites_to_draw;
+ 	ParentSpriteToDrawVector parent_sprites_to_draw;
++#ifdef WITH_SHADEREMU
++	VpVector<ParentSpriteToDraw *> parent_sprites_to_sort; ///< Parent sprite pointer array used for sorting
++#else
+ 	ParentSpriteToSortVector parent_sprites_to_sort; ///< Parent sprite pointer array used for sorting
++#endif
+ 	ChildScreenSpriteToDrawVector child_screen_sprites_to_draw;
+ 
+ 	int last_child;
+@@ -184,14 +211,39 @@ struct ViewportDrawer {
+ 	FoundationPart foundation_part;                  ///< Currently active foundation for ground sprite drawing.
+ 	int last_foundation_child[FOUNDATION_PART_END];  ///< Tail of ChildSprite list of the foundations. (index into child_screen_sprites_to_draw)
+ 	Point foundation_offset[FOUNDATION_PART_END];    ///< Pixel offset for ground sprites on the foundations.
++#ifdef WITH_SHADEREMU
++	TileInfo cur_ti;
++	VpVector<std::pair<int64_t, ParentSpriteToDraw *>> sort_list; ///< the sorter's list by xmin + ymin, linked by sort_next
++	VpVector<int> sort_next;
++	VpVector<ParentSpriteToDraw *> sort_stack, sort_preceding;
++#endif
+ };
+ 
+ static bool MarkViewportDirty(const Viewport &vp, int left, int top, int right, int bottom);
+ 
++#ifdef WITH_SHADEREMU
++struct alignas(64) VpDrawerOfCore : ViewportDrawer {};
++static VpDrawerOfCore _vd_of[VP_CORES];
++#define _vd (_vd_of[VpCore()])
++#define _cur_ti (_vd.cur_ti)
++
++/** On a worker, whether v has room for one more (else the part is given up and the lists grow). */
++template <class V>
++static inline bool VpRoom(V &v)
++{
++	if (v.size() < v.capacity() || VpCore() == 0) return true;
++	_vp_core[VpCore()].full = true;
++	VpRefuse();
++	return false;
++}
++#else
+ static ViewportDrawer _vd;
++#endif
+ 
+ TileHighlightData _thd;
++#ifndef WITH_SHADEREMU
+ static TileInfo _cur_ti;
++#endif
+ bool _draw_bounding_boxes = false;
+ bool _draw_dirty_blocks = false;
+ uint _dirty_block_colour = 0;
+@@ -392,6 +444,9 @@ static void SetViewportPosition(Window *w, int x, int y)
+ 		if (height > 0) {
+ 			Window::IteratorToFront it(w);
+ 			++it;
++#ifdef WITH_SHADEREMU
++			ViewportKeep keep;
++#endif
+ 			DoSetViewportPosition(it, left, top, width, height);
+ 		}
+ 	}
+@@ -508,6 +563,9 @@ static void AddTileSpriteToDraw(SpriteID image, PaletteID pal, int32_t x, int32_
+ {
+ 	assert((image & SPRITE_MASK) < MAX_SPRITES);
+ 
++#ifdef WITH_SHADEREMU
++	if (!VpRoom(_vd.tile_sprites_to_draw)) return;
++#endif
+ 	TileSpriteToDraw &ts = _vd.tile_sprites_to_draw.emplace_back();
+ 	ts.image = image;
+ 	ts.pal = pal;
+@@ -624,11 +682,16 @@ static void AddCombinedSprite(SpriteID image, PaletteID pal, int x, int y, int z
+ {
+ 	Point pt = RemapCoords(x, y, z);
+ 	const Sprite *spr = GetSprite(image & SPRITE_MASK, SpriteType::Normal);
++#ifdef WITH_SHADEREMU
++	const int slack = 2 * (ScaleByZoom(1, _vd.dpi.zoom) - 1); /* (as for a parent) */
++#else
++	const int slack = 0;
++#endif
+ 
+ 	if (pt.x + spr->x_offs >= _vd.dpi.left + _vd.dpi.width ||
+-			pt.x + spr->x_offs + spr->width <= _vd.dpi.left ||
++			pt.x + spr->x_offs + spr->width + slack <= _vd.dpi.left ||
+ 			pt.y + spr->y_offs >= _vd.dpi.top + _vd.dpi.height ||
+-			pt.y + spr->y_offs + spr->height <= _vd.dpi.top)
++			pt.y + spr->y_offs + spr->height + slack <= _vd.dpi.top)
+ 		return;
+ 
+ 	const ParentSpriteToDraw &pstd = _vd.parent_sprites_to_draw.back();
+@@ -660,6 +723,9 @@ static void AddCombinedSprite(SpriteID image, PaletteID pal, int x, int y, int z
+  * @param bb_offset_z bounding box extent towards negative Z (world)
+  * @param sub Only draw a part of the sprite.
+  */
++#ifdef WITH_SHADEREMU
++static const int VP_REACH = 128 * ZOOM_BASE; /* how far a parent's children may draw from it */
++#endif
+ void AddSortableSpriteToDraw(SpriteID image, PaletteID pal, int x, int y, int z, const SpriteBounds &bounds, bool transparent, const SubSprite *sub)
+ {
+ 	int32_t left, right, top, bottom;
+@@ -709,20 +775,32 @@ void AddSortableSpriteToDraw(SpriteID image, PaletteID pal, int x, int y, int z,
+ 		bottom = std::max(bottom, RemapCoords(x + bounds.extent.x, y + bounds.extent.y, z).y + 1);
+ 	}
+ 
++#ifdef WITH_SHADEREMU
++	/* (its children may draw in the part when it does not: it is kept within a reach, the sort drops it) */
++	const int slack = VP_REACH, lead = VP_REACH;
++#else
++	const int slack = 0, lead = 0;
++#endif
+ 	/* Do not add the sprite to the viewport, if it is outside */
+-	if (left   >= _vd.dpi.left + _vd.dpi.width ||
+-	    right  <= _vd.dpi.left                 ||
+-	    top    >= _vd.dpi.top + _vd.dpi.height ||
+-	    bottom <= _vd.dpi.top) {
++	if (left - lead >= _vd.dpi.left + _vd.dpi.width ||
++	    right + slack <= _vd.dpi.left          ||
++	    top - lead >= _vd.dpi.top + _vd.dpi.height ||
++	    bottom + slack <= _vd.dpi.top) {
+ 		return;
+ 	}
+ 
++#ifdef WITH_SHADEREMU
++	if (!VpRoom(_vd.parent_sprites_to_draw)) return;
++#endif
+ 	ParentSpriteToDraw &ps = _vd.parent_sprites_to_draw.emplace_back();
+ 	ps.x = tmp_x;
+ 	ps.y = tmp_y;
+ 
+ 	ps.left = tmp_left;
+ 	ps.top  = tmp_top;
++#ifdef WITH_SHADEREMU
++	ps.sl = left, ps.st = top, ps.sr = right, ps.sb = bottom;
++#endif
+ 
+ 	ps.image = image;
+ 	ps.pal = pal;
+@@ -834,6 +912,9 @@ void AddChildSpriteScreen(SpriteID image, PaletteID pal, int x, int y, bool tran
+ 		pal = PALETTE_TO_TRANSPARENT;
+ 	}
+ 
++#ifdef WITH_SHADEREMU
++	if (!VpRoom(_vd.child_screen_sprites_to_draw)) return;
++#endif
+ 	int32_t child_id = static_cast<int32_t>(_vd.child_screen_sprites_to_draw.size());
+ 	if (_vd.last_child != LAST_CHILD_PARENT) {
+ 		_vd.child_screen_sprites_to_draw[_vd.last_child].next = child_id;
+@@ -870,6 +951,9 @@ void AddChildSpriteScreen(SpriteID image, PaletteID pal, int x, int y, bool tran
+ static std::string &AddStringToDraw(int x, int y, Colours colour, ViewportStringFlags flags, uint16_t width)
+ {
+ 	assert(width != 0);
++#ifdef WITH_SHADEREMU
++	assert(VpCore() == 0);
++#endif
+ 	StringSpriteToDraw &ss = _vd.string_sprites_to_draw.emplace_back();
+ 	ss.colour = colour;
+ 	ss.flags = flags;
+@@ -1713,7 +1797,136 @@ static void ViewportSortParentSprites(ParentSpriteToSortVector *psdv)
+ }
+ 
+ 
+-static void ViewportDrawParentSprites(const ParentSpriteToSortVector *psd, const ChildScreenSpriteToDrawVector *csstdv)
++#ifdef WITH_SHADEREMU
++/** Upstream's test: p is drawn before s. */
++static bool VpPrecedes(const ParentSpriteToDraw *p, const ParentSpriteToDraw *s)
++{
++	if (s->xmax < p->xmin || s->ymax < p->ymin || s->zmax < p->zmin) return false;
++	if (s->xmin <= p->xmax && s->ymin <= p->ymax && s->zmin <= p->zmax) {
++		return s->xmin + s->xmax + s->ymin + s->ymax + s->zmin + s->zmax >
++				p->xmin + p->xmax + p->ymin + p->ymax + p->zmin + p->zmax;
++	}
++	return true;
++}
++
++/** A parent's screen extent with its children's, two pixels wider each way; false when it misses the part. */
++static bool VpScreenExtent(ParentSpriteToDraw *ps, int pad)
++{
++	int l = ps->sl, t = ps->st, r = ps->sr, b = ps->sb;
++	for (int i = ps->first_child; i >= 0;) {
++		const ChildScreenSpriteToDraw &cs = _vd.child_screen_sprites_to_draw[i];
++		i = cs.next;
++		const Sprite *spr = GetSprite(cs.image & SPRITE_MASK, SpriteType::Normal);
++		int x = (cs.relative ? ps->left : ps->x) + cs.x + spr->x_offs;
++		int y = (cs.relative ? ps->top : ps->y) + cs.y + spr->y_offs;
++		l = std::min(l, x), t = std::min(t, y), r = std::max(r, x + spr->width), b = std::max(b, y + spr->height);
++	}
++	ps->sl = l - pad, ps->st = t - pad, ps->sr = r + pad, ps->sb = b + pad;
++	const int slack = pad - 2; /* (the blitter rounds a sprite's ends up to whole pixels) */
++	return l < _vd.dpi.left + _vd.dpi.width && r + slack > _vd.dpi.left && t < _vd.dpi.top + _vd.dpi.height && b + slack > _vd.dpi.top;
++}
++
++/**
++ * ViewportSortParentSprites' order made the same in any part (docs/games/openttd.md, "One order"): the
++ * sprites that miss the part are dropped, the rest taken in an order of their own, and only two that
++ * meet on the screen compared. Made without allocating: a worker whose lists are full gives up its piece.
++ */
++static void ViewportSortParentSpritesKept(VpVector<ParentSpriteToDraw *> *psdv)
++{
++	const int pad = 2 * ScaleByZoom(1, _vd.dpi.zoom);
++	psdv->erase(std::remove_if(psdv->begin(), psdv->end(), [&](ParentSpriteToDraw *p) { return !VpScreenExtent(p, pad); }), psdv->end());
++	const size_t n = psdv->size();
++	if (n < 2) return;
++	std::sort(psdv->begin(), psdv->end(), [](const ParentSpriteToDraw *a, const ParentSpriteToDraw *b) {
++		return std::make_tuple(a->xmin + a->ymin, a->xmin, a->zmin, a->xmax, a->ymax, a->zmax, a->image, a->pal, a->x, a->y) <
++				std::make_tuple(b->xmin + b->ymin, b->xmin, b->zmin, b->xmax, b->ymax, b->zmax, b->image, b->pal, b->x, b->y);
++	});
++	auto &list = _vd.sort_list;
++	auto &next = _vd.sort_next;
++	auto &stack = _vd.sort_stack;
++	auto &preceding = _vd.sort_preceding;
++	const bool worker = VpCore() != 0;
++	if (worker && (list.capacity() < n || next.capacity() < n || stack.capacity() < n || preceding.capacity() < n)) {
++		_vp_core[VpCore()].full = true;
++		VpRefuse();
++		return;
++	}
++	const uint32_t ORDER_COMPARED = UINT32_MAX;
++	const uint32_t ORDER_RETURNED = UINT32_MAX - 1;
++	list.clear();
++	next.clear();
++	stack.clear();
++	uint32_t next_order = 0;
++	for (auto p = psdv->rbegin(); p != psdv->rend(); p++) {
++		list.emplace_back((*p)->xmin + (*p)->ymin, *p);
++		stack.push_back(*p);
++		(*p)->order = next_order++;
++	}
++	std::sort(list.begin(), list.end(), [](const auto &a, const auto &b) { return a.first < b.first; });
++	for (size_t i = 0; i < n; i++) next.push_back(static_cast<int>(i + 1));
++	const int end = static_cast<int>(n);
++	int head = 0;
++	auto unlink_after = [&](int prev) {
++		int x = prev < 0 ? head : next[prev];
++		if (prev < 0) head = next[x]; else next[prev] = next[x];
++		return next[x];
++	};
++
++	auto out = psdv->begin();
++	while (!stack.empty()) {
++		auto s = stack.back();
++		stack.pop_back();
++		if (s->order == ORDER_RETURNED) continue;
++		if (s->order == ORDER_COMPARED) {
++			*(out++) = s;
++			s->order = ORDER_RETURNED;
++			continue;
++		}
++
++		preceding.clear();
++		auto ssum = std::max(s->xmax, s->xmin) + std::max(s->ymax, s->ymin);
++		int prev = -1;
++		int x = head;
++		while (x != end && list[x].first <= ssum) {
++			auto p = list[x].second;
++			if (p == s) {
++				x = unlink_after(prev);
++				continue;
++			}
++			prev = x;
++			x = next[x];
++
++			if (s->sr <= p->sl || p->sr <= s->sl || s->sb <= p->st || p->sb <= s->st) continue;
++			if (VpPrecedes(p, s)) preceding.push_back(p);
++		}
++
++		if (preceding.empty()) {
++			*(out++) = s;
++			s->order = ORDER_RETURNED;
++			continue;
++		}
++
++		std::sort(preceding.begin(), preceding.end(), [](const ParentSpriteToDraw *a, const ParentSpriteToDraw *b) {
++			return a->order > b->order;
++		});
++
++		if (worker && stack.size() + preceding.size() + 1 > stack.capacity()) {
++			_vp_core[VpCore()].full = true;
++			VpRefuse();
++			return;
++		}
++		s->order = ORDER_COMPARED;
++		stack.push_back(s);
++		for (auto p : preceding) {
++			p->order = next_order++;
++			stack.push_back(p);
++		}
++	}
++}
++#endif
++
++template <class SortVector>
++static void ViewportDrawParentSprites(const SortVector *psd, const ChildScreenSpriteToDrawVector *csstdv)
+ {
+ 	for (const ParentSpriteToDraw *ps : *psd) {
+ 		if (ps->image != SPR_EMPTY_BOUNDING_BOX) DrawSpriteViewport(ps->image, ps->pal, ps->x, ps->y, ps->sub);
+@@ -1735,7 +1948,8 @@ static void ViewportDrawParentSprites(const ParentSpriteToSortVector *psd, const
+  * Draws the bounding boxes of all ParentSprites
+  * @param psd Array of ParentSprites
+  */
+-static void ViewportDrawBoundingBoxes(const ParentSpriteToSortVector *psd)
++template <class SortVector>
++static void ViewportDrawBoundingBoxes(const SortVector *psd)
+ {
+ 	for (const ParentSpriteToDraw *ps : *psd) {
+ 		Point pt1 = RemapCoords(ps->xmax + 1, ps->ymax + 1, ps->zmax + 1); // top front corner
+@@ -1808,8 +2022,15 @@ static void ViewportDrawStrings(ZoomLevel zoom, const StringSpriteToDrawVector *
  	}
  }
  
 +#ifdef WITH_SHADEREMU
-+void ViewportBlitsBegin();
-+void ViewportBlitsEnd(const DrawPixelInfo *dpi);
++static bool ViewportKept(const Viewport &vp, int left, int top, int right, int bottom);
 +#endif
 +
  void ViewportDoDraw(const Viewport &vp, int left, int top, int right, int bottom)
  {
++#ifdef WITH_SHADEREMU
++	if (ViewportKept(vp, left, top, right, bottom)) return;
++#endif
  	_vd.dpi.zoom = vp.zoom;
-@@ -1835,6 +1840,9 @@ void ViewportDoDraw(const Viewport &vp, int left, int top, int right, int bottom
+ 	int mask = ScaleByZoom(-1, vp.zoom);
  
- 	DrawTextEffects(&_vd.dpi);
+@@ -1841,7 +2062,11 @@ void ViewportDoDraw(const Viewport &vp, int left, int top, int right, int bottom
+ 		_vd.parent_sprites_to_sort.push_back(&psd);
+ 	}
  
 +#ifdef WITH_SHADEREMU
-+	ViewportBlitsBegin();
-+#endif
- 	if (!_vd.tile_sprites_to_draw.empty()) ViewportDrawTileSprites(&_vd.tile_sprites_to_draw);
- 
- 	for (auto &psd : _vd.parent_sprites_to_draw) {
-@@ -1843,6 +1851,9 @@ void ViewportDoDraw(const Viewport &vp, int left, int top, int right, int bottom
- 
++	ViewportSortParentSpritesKept(&_vd.parent_sprites_to_sort);
++#else
  	_vp_sprite_sorter(&_vd.parent_sprites_to_sort);
- 	ViewportDrawParentSprites(&_vd.parent_sprites_to_sort, &_vd.child_screen_sprites_to_draw);
-+#ifdef WITH_SHADEREMU
-+	ViewportBlitsEnd(&_vd.dpi);
 +#endif
+ 	ViewportDrawParentSprites(&_vd.parent_sprites_to_sort, &_vd.child_screen_sprites_to_draw);
  
  	if (_draw_bounding_boxes) ViewportDrawBoundingBoxes(&_vd.parent_sprites_to_sort);
- 	if (_draw_dirty_blocks) ViewportDrawDirtyBlocks();
+@@ -1897,6 +2122,415 @@ static inline void ViewportDraw(const Viewport &vp, int left, int top, int right
+ 	);
+ }
+ 
++#ifdef WITH_SHADEREMU
++/*
++ * The viewport on worker cores (docs/games/openttd.md, "The viewport on worker cores"): the parts
++ * asked for while a ViewportKeep lives are cut in pieces at the flush, every core draws pieces into
++ * buffers of their own, the buffers go to the screen by rows, then the first core draws the texts.
++ */
++struct VpJob {
++	Viewport vp;
++	DrawPixelInfo outer; ///< _cur_dpi as it was when the part was asked for
++	int left, top, right, bottom;
++};
++
++struct alignas(16) VpPiece {
++	int job;
++	int left, right;  ///< virtual
++	int top, bottom;  ///< virtual
++	int row0, row1;   ///< screen rows
++	int width;        ///< pixels
++	int cost;
++	uint8_t *screen;  ///< its first pixel
++	uint8_t *buf;     ///< where it is drawn, 16-aligned
++	int pitch;        ///< of buf
++	uint32_t refused; ///< sprites its core was refused while making it
++	bool failed;
++	bool full;        ///< its core's lists had no room
++};
++
++static std::vector<VpJob> _vp_jobs;
++static VpVector<VpPiece> _vp_pieces;
++static std::vector<int> _vp_order; ///< pieces of a round, the dearest first
++static VpVector<uint8_t> _vp_buffers;
++static int _vp_keep_depth;
++static int _vp_workers = -1;
++static size_t _vp_room[VP_CORES];
++uint32_t _vp_stat_jobs, _vp_stat_pieces, _vp_stat_again, _vp_stat_redrawn, _vp_stat_loaded; ///< for OPENTTD_PLAY's report
++uint32_t VpSpritesRefused(int k);
++uint32_t VpLoadWanted();
++
++struct alignas(16) VpProbe {
++	uintptr_t sp;
++	int self;
++};
++static VpProbe _vp_probes[VP_CORES];
++
++static void VpProbeStack(void *, uint32_t from, uint32_t to)
++{
++	for (uint32_t i = from; i < to; i++) {
++		int k = mcw_self();
++		uintptr_t sp;
++		asm volatile("mv %0, sp" : "=r"(sp));
++		if (k > 0 && k < VP_CORES) _vp_probes[k] = { sp, k };
++	}
++}
++
++/** The worker cores asked for (OPENTTD_WORKERS, 31 by default, 0 draws as upstream), opened once. */
++static int VpWorkers()
++{
++	if (_vp_workers >= 0) return _vp_workers;
++	const char *asked = getenv("OPENTTD_WORKERS");
++	int want = asked != nullptr ? 0 : VP_CORES - 1;
++	for (const char *c = asked; c != nullptr && *c >= '0' && *c <= '9'; c++) want = want * 10 + (*c - '0');
++	want = std::min(want, VP_CORES - 1);
++	_vp_workers = 0;
++	if (want <= 0 || BlitterFactory::GetCurrentBlitter()->GetScreenDepth() != 8) return 0;
++	int got = mcw_open(want);
++	if (got <= 0) return 0;
++	/* A worker's stack is the k-th 64 KB from the first, its top on a page: its sp says where they begin. */
++	mcw_for_opts opts = {};
++	opts.grain = 1;
++	mcw_for_opt(64, VpProbeStack, nullptr, &opts);
++	uintptr_t stacks = 0;
++	for (int k = 1; k < VP_CORES; k++) {
++		if (_vp_probes[k].self != k) continue;
++		uintptr_t base = ((_vp_probes[k].sp + 4095) & ~uintptr_t{4095}) - static_cast<uintptr_t>(k) * 0x10000;
++		if (stacks != 0 && base != stacks) return 0;
++		stacks = base;
++	}
++	if (stacks == 0) return 0;
++	_vp_stacks = stacks;
++	_vp_stacks_bytes = static_cast<uintptr_t>(got) * 0x10000;
++	for (int k = 1; k <= got; k++) _vp_room[k] = 2048;
++	_vp_workers = got;
++	return got;
++}
++
++/** A part asked for while parts are kept: kept, to be made at the flush. */
++static void VpJobPlace(const VpJob &job, int &row, int &col, int &w, int &h);
++
++static bool ViewportKept(const Viewport &vp, int left, int top, int right, int bottom)
++{
++	if (_vp_keep_depth == 0 || VpCore() != 0 || _draw_bounding_boxes || _draw_dirty_blocks) return false;
++	if (_newgrf_debug_sprite_picker.mode == SPM_REDRAW || VpWorkers() == 0) return false;
++	/* a part over one kept is drawn after it, its texts too: the kept ones are made first */
++	VpJob job{ vp, *_cur_dpi, left, top, right, bottom };
++	int row, col, w, h;
++	VpJobPlace(job, row, col, w, h);
++	ViewportFlushOver(col, row, col + w, row + h);
++	_vp_jobs.push_back(job);
++	return true;
++}
++
++ViewportKeep::ViewportKeep() { _vp_keep_depth++; }
++ViewportKeep::~ViewportKeep()
++{
++	if (--_vp_keep_depth == 0) ViewportFlush();
++}
++
++/** What ViewportDoDraw draws of sprites, into this core's lists and dst (its first pixel): no signs or texts. */
++static void VpDrawSprites(const Viewport &vp, int left, int top, int right, int bottom, uint8_t *dst, int pitch)
++{
++	VpCoreState &me = _vp_core[VpCore()];
++	_vd.dpi.zoom = vp.zoom;
++	int mask = ScaleByZoom(-1, vp.zoom);
++	_vd.combine_sprites = SPRITE_COMBINE_NONE;
++	_vd.dpi.width = (right - left) & mask;
++	_vd.dpi.height = (bottom - top) & mask;
++	_vd.dpi.left = left & mask;
++	_vd.dpi.top = top & mask;
++	_vd.dpi.pitch = pitch;
++	_vd.last_child = LAST_CHILD_NONE;
++	_vd.dpi.dst_ptr = dst;
++	AutoRestoreBackup dpi_backup(_cur_dpi, &_vd.dpi);
++
++	ViewportAddLandscape();
++	ViewportAddVehicles(&_vd.dpi);
++	/* (a failed piece goes on blitting nothing, so that it asks for every sprite it lacks) */
++	if (!_vd.tile_sprites_to_draw.empty()) ViewportDrawTileSprites(&_vd.tile_sprites_to_draw);
++	for (auto &psd : _vd.parent_sprites_to_draw) {
++		if (!VpRoom(_vd.parent_sprites_to_sort)) break;
++		_vd.parent_sprites_to_sort.push_back(&psd);
++	}
++	if (!me.full) ViewportSortParentSpritesKept(&_vd.parent_sprites_to_sort);
++	if (!me.full) ViewportDrawParentSprites(&_vd.parent_sprites_to_sort, &_vd.child_screen_sprites_to_draw);
++	_vd.tile_sprites_to_draw.clear();
++	_vd.parent_sprites_to_draw.clear();
++	_vd.parent_sprites_to_sort.clear();
++	_vd.child_screen_sprites_to_draw.clear();
++}
++
++/** A piece of a part, into its buffer, on whichever core runs it. */
++static void VpDrawPiece(VpPiece &piece)
++{
++	int k = VpCore();
++	if (k != 0 && k != mcw_self()) {
++		piece.failed = true;
++		return;
++	}
++	VpCoreState &me = _vp_core[k];
++	me.failed = false;
++	const uint32_t refused = k != 0 ? VpSpritesRefused(k) : 0;
++	const VpJob &job = _vp_jobs[piece.job];
++	/* (what no sprite covers stays as the screen was) */
++	for (int r = 0; r < piece.row1 - piece.row0; r++) {
++		std::copy_n(piece.screen + r * _screen.pitch, piece.width, piece.buf + r * piece.pitch);
++	}
++	DrawPixelInfo outer = job.outer;
++	DrawPixelInfo *was = me.cur_dpi;
++	me.cur_dpi = &outer;
++	VpDrawSprites(job.vp, piece.left, piece.top, piece.right, piece.bottom, piece.buf, piece.pitch);
++	me.cur_dpi = was;
++	piece.failed = me.failed;
++	piece.full = me.full;
++	piece.refused = k != 0 ? VpSpritesRefused(k) - refused : 0;
++	me.failed = false;
++}
++
++static void VpDrawPieces(void *, uint32_t from, uint32_t to)
++{
++	for (uint32_t i = from; i < to; i++) VpDrawPiece(_vp_pieces[_vp_order[i]]);
++}
++
++/** The pieces' buffers to the screen, 16 rows an item: no two cores write the same 16 bytes. */
++static void VpCopyOut(void *, uint32_t from, uint32_t to)
++{
++	const int top = static_cast<int>(from) * 16, bottom = static_cast<int>(to) * 16;
++	for (const VpPiece &p : _vp_pieces) {
++		int r0 = std::max(top, p.row0), r1 = std::min(bottom, p.row1);
++		for (int r = r0; r < r1; r++) {
++			std::copy_n(p.buf + (r - p.row0) * p.pitch, p.width, p.screen + (r - p.row0) * _screen.pitch);
++		}
++	}
++}
++
++/** A part's signs, texts and overlay over its sprites, by the first core (they format strings and load glyphs). */
++static void VpDrawTexts(const VpJob &job)
++{
++	const Viewport &vp = job.vp;
++	DrawPixelInfo outer = job.outer;
++	AutoRestoreBackup outer_backup(_cur_dpi, &outer);
++	_vd.dpi.zoom = vp.zoom;
++	int mask = ScaleByZoom(-1, vp.zoom);
++	_vd.dpi.width = (job.right - job.left) & mask;
++	_vd.dpi.height = (job.bottom - job.top) & mask;
++	_vd.dpi.left = job.left & mask;
++	_vd.dpi.top = job.top & mask;
++	_vd.dpi.pitch = _cur_dpi->pitch;
++	int x = UnScaleByZoom(_vd.dpi.left - (vp.virtual_left & mask), vp.zoom) + vp.left;
++	int y = UnScaleByZoom(_vd.dpi.top - (vp.virtual_top & mask), vp.zoom) + vp.top;
++	_vd.dpi.dst_ptr = BlitterFactory::GetCurrentBlitter()->MoveTo(_cur_dpi->dst_ptr, x - _cur_dpi->left, y - _cur_dpi->top);
++	AutoRestoreBackup dpi_backup(_cur_dpi, &_vd.dpi);
++
++	ViewportAddKdtreeSigns(&_vd.dpi);
++	DrawTextEffects(&_vd.dpi);
++
++	DrawPixelInfo dp = _vd.dpi;
++	ZoomLevel zoom = _vd.dpi.zoom;
++	dp.zoom = ZoomLevel::Min;
++	dp.width = UnScaleByZoom(dp.width, zoom);
++	dp.height = UnScaleByZoom(dp.height, zoom);
++	AutoRestoreBackup cur_dpi(_cur_dpi, &dp);
++
++	if (vp.overlay != nullptr && vp.overlay->GetCargoMask() != 0 && vp.overlay->GetCompanyMask().Any()) {
++		dp.left = x;
++		dp.top = y;
++		vp.overlay->Draw(&dp);
++	}
++	if (!_vd.string_sprites_to_draw.empty()) {
++		dp.left = UnScaleByZoom(_vd.dpi.left, zoom);
++		dp.top = UnScaleByZoom(_vd.dpi.top, zoom);
++		ViewportDrawStrings(zoom, &_vd.string_sprites_to_draw);
++	}
++	_vd.string_sprites_to_draw.clear();
++}
++
++/** The worker k's lists made room for _vp_room[k] sprites, before a round (a worker may not allocate). */
++static void VpMakeRoom(int k)
++{
++	ViewportDrawer &d = _vd_of[k];
++	size_t n = _vp_room[k];
++	d.tile_sprites_to_draw.reserve(n);
++	d.parent_sprites_to_draw.reserve(n);
++	d.parent_sprites_to_sort.reserve(n);
++	d.child_screen_sprites_to_draw.reserve(n);
++	d.sort_list.reserve(n);
++	d.sort_next.reserve(n);
++	d.sort_preceding.reserve(n);
++	d.sort_stack.reserve(4 * n);
++}
++
++/** Where a part lies on the screen: its first pixel's row and column, and its size in pixels. */
++static void VpJobPlace(const VpJob &job, int &row, int &col, int &w, int &h)
++{
++	const Viewport &vp = job.vp;
++	ZoomLevel z = vp.zoom;
++	int mask = ScaleByZoom(-1, z);
++	w = UnScaleByZoom((job.right - job.left) & mask, z);
++	h = UnScaleByZoom((job.bottom - job.top) & mask, z);
++	int x = UnScaleByZoom((job.left & mask) - (vp.virtual_left & mask), z) + vp.left;
++	int y = UnScaleByZoom((job.top & mask) - (vp.virtual_top & mask), z) + vp.top;
++	uintptr_t at = reinterpret_cast<uintptr_t>(BlitterFactory::GetCurrentBlitter()->MoveTo(job.outer.dst_ptr, x - job.outer.left, y - job.outer.top));
++	uintptr_t screen = reinterpret_cast<uintptr_t>(_screen.dst_ptr);
++	row = static_cast<int>((at - screen) / _screen.pitch);
++	col = static_cast<int>((at - screen) % _screen.pitch);
++}
++
++/** The parts kept made now if any of them lies in the screen's rectangle (right and bottom excluded). */
++void ViewportFlushOver(int left, int top, int right, int bottom)
++{
++	for (const VpJob &job : _vp_jobs) {
++		int row, col, w, h;
++		VpJobPlace(job, row, col, w, h);
++		if (col < right && col + w > left && row < bottom && row + h > top) {
++			ViewportFlush();
++			return;
++		}
++	}
++}
++
++void ViewportFlush()
++{
++	if (_vp_jobs.empty()) return;
++	assert(VpCore() == 0);
++	const int cores = _vp_workers + 1;
++	_vp_pieces.clear();
++
++	/* how each part is cut: the dearest piece of all is cut again (in columns or rows) while the flush, the
++	 * dearest piece or all work over the cores, gets shorter; a column's tiles reach 128 pixels to its sides
++	 * and a row's 250 below it, at normal zoom */
++	struct Cut { int w, h, mh, mv, cols, rows; int64_t Cost(int c, int r) const { return int64_t{w / c + mh} * (h / r + mv); } };
++	std::vector<Cut> cuts(_vp_jobs.size());
++	int64_t total = 0;
++	for (size_t j = 0; j < _vp_jobs.size(); j++) {
++		ZoomLevel z = _vp_jobs[j].vp.zoom;
++		int row, col;
++		Cut &c = cuts[j];
++		VpJobPlace(_vp_jobs[j], row, col, c.w, c.h);
++		c.mh = 128 * 4 / ScaleByZoom(1, z);
++		c.mv = 250 * 4 / ScaleByZoom(1, z);
++		c.cols = c.rows = 1;
++		if (c.w > 0 && c.h > 0) total += c.Cost(1, 1);
++	}
++	for (;;) {
++		size_t worst = 0;
++		int64_t worst_cost = -1;
++		for (size_t j = 0; j < cuts.size(); j++) {
++			const Cut &c = cuts[j];
++			if (c.w > 0 && c.h > 0 && c.Cost(c.cols, c.rows) > worst_cost) worst = j, worst_cost = c.Cost(c.cols, c.rows);
++		}
++		if (worst_cost < 0) break;
++		Cut &c = cuts[worst];
++		const int64_t was = std::max(worst_cost, total / cores);
++		int64_t best = INT64_MAX;
++		int bc = 0, br = 0;
++		if ((c.cols + 1) * c.rows <= cores && c.w / (c.cols + 1) >= 16 && c.Cost(c.cols + 1, c.rows) < best) best = c.Cost(c.cols + 1, c.rows), bc = c.cols + 1, br = c.rows;
++		if (c.cols * (c.rows + 1) <= cores && c.h / (c.rows + 1) >= 8 && c.Cost(c.cols, c.rows + 1) < best) best = c.Cost(c.cols, c.rows + 1), bc = c.cols, br = c.rows + 1;
++		if (bc == 0) break;
++		int64_t now_total = total - c.Cost(c.cols, c.rows) * c.cols * c.rows + best * bc * br;
++		int64_t next_worst = best;
++		for (size_t j = 0; j < cuts.size(); j++) {
++			if (j != worst && cuts[j].w > 0 && cuts[j].h > 0) next_worst = std::max(next_worst, cuts[j].Cost(cuts[j].cols, cuts[j].rows));
++		}
++		if (std::max(next_worst, now_total / cores) >= was) break;
++		c.cols = bc, c.rows = br, total = now_total;
++	}
++
++	size_t buffer_bytes = 0;
++	for (size_t j = 0; j < _vp_jobs.size(); j++) {
++		const VpJob &job = _vp_jobs[j];
++		const Viewport &vp = job.vp;
++		ZoomLevel z = vp.zoom;
++		int mask = ScaleByZoom(-1, z);
++		int vl = job.left & mask, vt = job.top & mask;
++		int row0, col0, w, h;
++		VpJobPlace(job, row0, col0, w, h);
++		if (w <= 0 || h <= 0) continue;
++		uint8_t *at = static_cast<uint8_t *>(_screen.dst_ptr) + row0 * _screen.pitch + col0;
++
++		/* sprites of vehicles that change when drawn are made here, not on the workers */
++		DrawPixelInfo whole = {};
++		whole.left = vl;
++		whole.top = vt;
++		whole.width = ScaleByZoom(w, z);
++		whole.height = ScaleByZoom(h, z);
++		whole.zoom = z;
++		ViewportRevalidateVehicles(&whole);
++
++		const int cols = cuts[j].cols, rows = cuts[j].rows, mh = cuts[j].mh, mv = cuts[j].mv;
++		for (int p = 0; p < cols; p++) {
++			int a = w * p / cols, b = w * (p + 1) / cols;
++			for (int q = 0; q < rows; q++) {
++				int r0 = h * q / rows, r1 = h * (q + 1) / rows;
++				VpPiece piece = {};
++				piece.job = static_cast<int>(j);
++				piece.left = vl + ScaleByZoom(a, z);
++				piece.right = vl + ScaleByZoom(b, z);
++				piece.top = vt + ScaleByZoom(r0, z);
++				piece.bottom = vt + ScaleByZoom(r1, z);
++				piece.row0 = row0 + r0;
++				piece.row1 = row0 + r1;
++				piece.width = b - a;
++				piece.cost = (b - a + mh) * (r1 - r0 + mv);
++				piece.screen = at + r0 * _screen.pitch + a;
++				piece.pitch = (b - a + 15) & ~15;
++				buffer_bytes += static_cast<size_t>(piece.pitch) * (r1 - r0);
++				_vp_pieces.push_back(piece);
++			}
++		}
++	}
++	/* (the buffers grow on the first core, so that their pages are there before a worker writes them) */
++	if (_vp_buffers.size() < buffer_bytes) _vp_buffers.resize(buffer_bytes * 2);
++	uint8_t *buf = _vp_buffers.data();
++	for (VpPiece &p : _vp_pieces) p.buf = buf, buf += static_cast<size_t>(p.pitch) * (p.row1 - p.row0);
++
++	const int n = static_cast<int>(_vp_pieces.size());
++	_vp_order.resize(n);
++	for (int i = 0; i < n; i++) _vp_order[i] = i;
++	std::sort(_vp_order.begin(), _vp_order.end(), [](int a, int b) { return _vp_pieces[a].cost > _vp_pieces[b].cost; });
++
++	for (int k = 1; k <= _vp_workers; k++) VpMakeRoom(k);
++	mcw_for_opts opts = {};
++	opts.grain = 1;
++	mcw_for_opt(static_cast<uint32_t>(n), VpDrawPieces, nullptr, &opts);
++
++	/* pieces that lacked sprites or room are made again by the workers once those are loaded and made */
++	for (int k = 1; k <= _vp_workers; k++) {
++		if (_vp_core[k].full) _vp_room[k] *= 2, _vp_core[k].full = false;
++	}
++	_vp_stat_loaded += VpLoadWanted();
++	std::vector<int> again;
++	for (int i : _vp_order) {
++		const VpPiece &p = _vp_pieces[i];
++		if (p.failed && (p.refused != 0 || p.full)) again.push_back(i);
++	}
++	if (!again.empty()) {
++		_vp_order.swap(again);
++		for (int k = 1; k <= _vp_workers; k++) VpMakeRoom(k);
++		mcw_for_opt(static_cast<uint32_t>(_vp_order.size()), VpDrawPieces, nullptr, &opts);
++		_vp_stat_again += static_cast<uint32_t>(_vp_order.size());
++		for (int k = 1; k <= _vp_workers; k++) {
++			if (_vp_core[k].full) _vp_room[k] *= 2, _vp_core[k].full = false;
++		}
++		VpLoadWanted();
++	}
++
++	/* what a worker gave up twice, then the buffers to the screen, then the texts */
++	for (VpPiece &p : _vp_pieces) {
++		if (!p.failed) continue;
++		VpDrawPiece(p);
++		_vp_stat_redrawn++;
++	}
++	mcw_for_opt(static_cast<uint32_t>((_screen.height + 15) / 16), VpCopyOut, nullptr, &opts);
++	for (const VpJob &job : _vp_jobs) VpDrawTexts(job);
++	_vp_stat_jobs += static_cast<uint32_t>(_vp_jobs.size());
++	_vp_stat_pieces += static_cast<uint32_t>(n);
++	_vp_jobs.clear();
++}
++#endif
++
++
+ /**
+  * Draw the viewport of this window.
+  */
+diff --git a/src/viewport_func.h b/src/viewport_func.h
+index 05acc3f..0a48e83 100644
+--- a/src/viewport_func.h
++++ b/src/viewport_func.h
+@@ -31,6 +31,16 @@ void UpdateViewportPosition(Window *w, uint32_t delta_ms);
+ bool MarkAllViewportsDirty(int left, int top, int right, int bottom);
+ 
+ bool DoZoomInOutWindow(ZoomStateChange how, Window *w);
++
++#ifdef WITH_SHADEREMU
++void ViewportFlush();
++void ViewportFlushOver(int left, int top, int right, int bottom);
++/** While one lives, the viewport's parts asked for are kept and made at once by every core when the last one goes. */
++struct ViewportKeep {
++	ViewportKeep();
++	~ViewportKeep();
++};
++#endif
+ void ZoomInOrOutToCursorWindow(bool in, Window * w);
+ void ConstrainAllViewportsZoom();
+ Point GetTileZoomCenterWindow(bool in, Window * w);
+diff --git a/src/viewport_sprite_sorter.h b/src/viewport_sprite_sorter.h
+index 591ecfb..1137828 100644
+--- a/src/viewport_sprite_sorter.h
++++ b/src/viewport_sprite_sorter.h
+@@ -35,6 +35,9 @@ struct ParentSpriteToDraw {
+ 
+ 	int32_t first_child;              ///< the first child to draw.
+ 	uint32_t order;                   ///< Used during sprite sorting
++#ifdef WITH_SHADEREMU
++	int32_t sl, st, sr, sb;           ///< screen extent with the children, for the sort
++#endif
+ };
+ 
+ typedef std::vector<ParentSpriteToDraw*> ParentSpriteToSortVector;
+diff --git a/src/widget.cpp b/src/widget.cpp
+index daf0172..9f144b4 100644
+--- a/src/widget.cpp
++++ b/src/widget.cpp
+@@ -2397,8 +2397,14 @@ void NWidgetViewport::Draw(const Window *w)
+ 
+ 	if (this->disp_flags.Test(NWidgetDisplayFlag::NoTransparency)) {
+ 		TransparencyOptionBits to_backup = _transparency_opt;
++#ifdef WITH_SHADEREMU
++		ViewportFlush(); /* (parts kept are made with the transparency they were asked with) */
++#endif
+ 		_transparency_opt &= (1 << TO_SIGNS) | (1 << TO_TEXT); // Disable all transparency, except textual stuff
+ 		w->DrawViewport();
++#ifdef WITH_SHADEREMU
++		ViewportFlush();
++#endif
+ 		_transparency_opt = to_backup;
+ 	} else {
+ 		w->DrawViewport();
+@@ -2406,6 +2412,9 @@ void NWidgetViewport::Draw(const Window *w)
+ 
+ 	/* Optionally shade the viewport. */
+ 	if (this->disp_flags.Any({NWidgetDisplayFlag::ShadeGrey, NWidgetDisplayFlag::ShadeDimmed})) {
++#ifdef WITH_SHADEREMU
++		ViewportFlush();
++#endif
+ 		GfxFillRect(this->GetCurrentRect(), this->disp_flags.Test(NWidgetDisplayFlag::ShadeDimmed) ? PALETTE_TO_TRANSPARENT : PALETTE_NEWSPAPER, FILLRECT_RECOLOUR);
+ 	}
+ 
+diff --git a/src/window.cpp b/src/window.cpp
+index ea6dc5b..8e8484f 100644
+--- a/src/window.cpp
++++ b/src/window.cpp
+@@ -3153,12 +3153,19 @@ void UpdateWindows()
+ 	 * But still empty the invalidation queues above. */
+ 	if (_network_dedicated) return;
+ 
++#ifdef WITH_SHADEREMU
++	{
++		ViewportKeep keep; /* (the parts of dirty blocks and of scrolls made in one go) */
++#endif
+ 	DrawDirtyBlocks();
+ 
+ 	for (Window *w : Window::Iterate()) {
+ 		/* Update viewport only if window is not shaded. */
+ 		if (w->viewport != nullptr && !w->IsShaded()) UpdateViewportPosition(w, delta_ms.count());
+ 	}
++#ifdef WITH_SHADEREMU
++	}
++#endif
+ 	NetworkDrawChatMessage();
+ 	/* Redraw mouse cursor in case it was hidden */
+ 	DrawMouseCursor();
 diff --git a/src/zoom_type.h b/src/zoom_type.h
 index 3d07ff3..b8911ba 100644
 --- a/src/zoom_type.h
