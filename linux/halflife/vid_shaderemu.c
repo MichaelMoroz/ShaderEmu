@@ -36,6 +36,9 @@ static int dragging;	// the left button is held on the game: the pointer's trave
    `body`; the aim is the hand's from there. */
 static int seated;
 static float body, aimed;
+static float seat_unit;	// the game's units in 4 mm of the room (SE_SeatView)
+int se_seat_aiming;	// the right hand aims: the gun is se_seat_gun from the eye (hlsdk.patch's EV_GetGunPosition)
+float se_seat_gun[3];
 static unsigned mouse_count;
 
 void Platform_Minimize_f( void ) { }
@@ -318,9 +321,46 @@ static void pitch_to( float pitch )
 
 /* After the client made its move: from a seat with tracked hands the right hand aims and the walk
  * stays the body's; with a mouse its travel turns and the head's tilt is the aim's rise. */
+// HL_SCRIPT="T:command|T:command": console commands at the level's seconds T; "look P Y" sets the view's angles
+static void script( usercmd_t *cmd )
+{
+	static char *s;
+	static int read;
+	static float turning;	// "turn D": D degrees a second from then on
+
+	if( !read++ && getenv( "HL_SCRIPT" ))
+		s = strdup( getenv( "HL_SCRIPT" ));
+	if( !s || cls.state != ca_active )
+		return;
+	if( turning )
+		cl.viewangles[YAW] = anglemod( cl.viewangles[YAW] + turning * host.frametime ), VectorCopy( cl.viewangles, cmd->viewangles );
+	for( char *p = s; p && *p; )
+	{
+		char *bar = strchr( p, '|' ), *colon = strchr( p, ':' );
+		double t = atof( p );
+		if( bar ) *bar = 0;
+		if( colon && *p != '#' && t <= cl.time )
+		{
+			*p = '#';	// (done)
+			float pitch, yaw;
+			fprintf( stderr, "script %.2f: %s\n", cl.time, colon + 1 );
+			int n = sscanf( colon + 1, "look %f %f", &pitch, &yaw );
+			if( sscanf( colon + 1, "turn %f", &turning ) == 1 )
+				;
+			else if( n >= 1 )
+				cl.viewangles[PITCH] = pitch, cl.viewangles[YAW] = n == 2 ? yaw : cl.viewangles[YAW], VectorCopy( cl.viewangles, cmd->viewangles );
+			else
+				Cbuf_AddText( colon + 1 ), Cbuf_AddText( "\n" );
+		}
+		if( bar ) *bar = '|';
+		p = bar ? bar + 1 : NULL;
+	}
+}
+
 void SE_SeatMove( usercmd_t *cmd, qboolean active )
 {
 	const volatile unsigned *hw = seglHostState();
+	script( cmd );
 	int now = !hw || !SEGL_HOST_HOLODECK( hw ) ? 0 : SEGL_HOST_HANDS( hw ) ? 1 : SEGL_HOST_KIND( hw ) == 2 ? 2 : 0;
 	int play = active && playing( );
 
@@ -333,7 +373,10 @@ void SE_SeatMove( usercmd_t *cmd, qboolean active )
 		Cvar_SetValue( "r_nocull", seated ? 1.0f : 0.0f );	// (the room shows what is beside and behind the camera too)
 	}
 	if( !seated )
+	{
+		se_seat_aiming = 0;
 		return;
+	}
 	if( seated == 1 )
 	{
 		float turn = SEGL_HOST_HAND_YAW( hw, 1 ) * ( 360.0f / 65536.0f ), forward = cmd->forwardmove, side = cmd->sidemove;
@@ -368,6 +411,18 @@ void SE_SeatMove( usercmd_t *cmd, qboolean active )
 		pitch_to( -SEGL_HOST_HEAD_PITCH( hw ) * ( 360.0f / 65536.0f ));
 	}
 	VectorCopy( cl.viewangles, cmd->viewangles );
+	// with tracked hands the shot leaves the hand along its beam: where the hand is from the eye, to the
+	// server in impact_index 1 and impact_position (hlsdk.patch's CmdStart), to the client's events here
+	se_seat_aiming = seated == 1 && seat_unit > 0;
+	if( se_seat_aiming )
+	{
+		vec3_t level = { 0, body, 0 }, f, r, u;
+		AngleVectors( level, f, r, u );
+		for( int i = 0; i < 3; i++ )
+			se_seat_gun[i] = ( f[i] * SEGL_HOST_HAND_Z( hw, 1 ) + r[i] * SEGL_HOST_HAND_X( hw, 1 ) + u[i] * SEGL_HOST_HAND_Y( hw, 1 )) * seat_unit;
+		cmd->reserved[0] = 1;	// (the game's impact_index and impact_position)
+		memcpy( &cmd->reserved[1], se_seat_gun, sizeof( se_seat_gun ));
+	}
 	// fire and the secondary fire by the triggers, use by the right grip, jump by the jump button
 	// (a desktop's keys for them)
 	if( play && SEGL_HOST_HAND_TRIGGER( hw, 1 )) SetBits( cmd->buttons, IN_ATTACK );
@@ -430,7 +485,7 @@ void SE_SeatView( ref_viewpass_t *rvp )
 		return;
 	VectorCopy( level, rvp->viewangles );
 	metre = seat_metre( hw, znear, zfar, rvp->fov_x, rvp->fov_y );
-	unit = 0.004f * metre;
+	unit = seat_unit = 0.004f * metre;
 	AngleVectors( level, forward, right, up );
 	for( int i = 0; i < 3; i++ )
 		hand[i] = rvp->vieworigin[i] + ( forward[i] * SEGL_HOST_HAND_Z( hw, 1 ) + right[i] * SEGL_HOST_HAND_X( hw, 1 )
@@ -438,23 +493,45 @@ void SE_SeatView( ref_viewpass_t *rvp )
 	VectorCopy( hand, view->origin );
 	if( view->model && view->model->type == mod_studio )
 	{
-		// held a third of its length from its back end, at its middle (the box of its sequence)
+		// pointing the aim's way (none of the client's bob, sway or autoaim), held a third of its length
+		// from its back end with its muzzle on the hand's beam (else the middle of its first sequence's box)
+		static model_t *of;
+		static vec3_t lo, hi, muzzle;
+		static int has_muzzle;
 		studiohdr_t *hdr = (studiohdr_t *)Mod_StudioExtradata( view->model );
-		vec3_t lo, hi, aim = { cl.viewangles[PITCH], cl.viewangles[YAW], 0 };
+		vec3_t aim = { cl.viewangles[PITCH], cl.viewangles[YAW], 0 };
+		qboolean SE_StudioAttachmentRest( model_t *mod, int sequence, int att, vec3_t out );
 
-		if( hdr && view->curstate.sequence >= 0 && view->curstate.sequence < hdr->numseq )
+		if( of != view->model )
 		{
-			mstudioseqdesc_t *seq = (mstudioseqdesc_t *)((byte *)hdr + hdr->seqindex ) + view->curstate.sequence;
-			VectorCopy( seq->bbmin, lo ), VectorCopy( seq->bbmax, hi );
+			of = view->model;
+			if( hdr && hdr->numseq > 0 )
+			{
+				mstudioseqdesc_t *seq = (mstudioseqdesc_t *)((byte *)hdr + hdr->seqindex );
+				VectorCopy( seq->bbmin, lo ), VectorCopy( seq->bbmax, hi );
+			}
+			else VectorClear( lo ), VectorClear( hi );
+			has_muzzle = SE_StudioAttachmentRest( view->model, 0, 0, muzzle );
 		}
-		else VectorClear( lo ), VectorClear( hi );
-		float gx = lo[0] + ( hi[0] - lo[0] ) * 0.33f, gy = ( lo[1] + hi[1] ) * 0.5f, gz = ( lo[2] + hi[2] ) * 0.5f;
+		float gx = lo[0] + ( hi[0] - lo[0] ) * 0.33f, gy = has_muzzle ? muzzle[1] : ( lo[1] + hi[1] ) * 0.5f;
+		float gz = has_muzzle ? muzzle[2] : ( lo[2] + hi[2] ) * 0.5f;
 		AngleVectors( aim, forward, right, up );
 		for( int i = 0; i < 3; i++ )
 			view->origin[i] -= forward[i] * gx - right[i] * gy + up[i] * gz;
+		VectorSet( view->angles, -aim[PITCH], aim[YAW], 0 );	// (a studio model's pitch is the other way)
+		VectorCopy( view->angles, view->curstate.angles ), VectorCopy( view->angles, view->latched.prevangles );
 		if( said && said % 20 == 0 )
-			Con_Printf( "seat: gun %.1f %.1f %.1f from the eye, a metre %.1f\n", view->origin[0] - rvp->vieworigin[0],
-				view->origin[1] - rvp->vieworigin[1], view->origin[2] - rvp->vieworigin[2], metre );
+		{
+			vec3_t m, d;	// the muzzle in the world, and how far it is from the beam's line
+			for( int i = 0; i < 3; i++ )
+				m[i] = view->origin[i] + forward[i] * muzzle[0] - right[i] * muzzle[1] + up[i] * muzzle[2], d[i] = m[i] - hand[i];
+			float along = DotProduct( d, forward );
+			for( int i = 0; i < 3; i++ )
+				d[i] -= forward[i] * along;
+			Con_Printf( "seat: gun %.1f %.1f %.1f from the eye, a metre %.1f, muzzle %d %.1f %.1f %.1f; hand %.1f %.1f %.1f way %.3f %.3f %.3f, muzzle %.2f off the beam\n",
+				view->origin[0] - rvp->vieworigin[0], view->origin[1] - rvp->vieworigin[1], view->origin[2] - rvp->vieworigin[2], metre,
+				has_muzzle, muzzle[0], muzzle[1], muzzle[2], hand[0], hand[1], hand[2], forward[0], forward[1], forward[2], VectorLength( d ));
+		}
 	}
 }
 #endif

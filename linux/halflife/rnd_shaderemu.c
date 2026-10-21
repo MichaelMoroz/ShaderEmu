@@ -1,9 +1,10 @@
 /*
 rnd_shaderemu.c - the frame's 3D drawing on a worker core (docs/games/halflife.md)
 
-HL_RENDER=worker: frame n's GL_RenderFrame runs on a worker of its own while this core makes frame
-n + 1, from copies of what it draws (gl_kept.c); frame n is shown with frame n + 1's 2D.
-HL_RENDER=wait: on the worker, this core waiting for it. Otherwise the drawing is this core's.
+The default (HL_RENDER=worker): frame n's GL_RenderFrame runs on a worker of its own while this core
+makes frame n + 1, from copies of what it draws (gl_kept.c), then frame n's 2D that this core
+recorded (HL_2D=core: this core draws it at the settle, and frame n is shown with frame n + 1's 2D).
+HL_RENDER=wait: on the worker, this core waiting for it. HL_RENDER=core: the drawing is this core's.
 */
 #include <setjmp.h>
 #include <stddef.h>
@@ -30,7 +31,17 @@ static struct { volatile uint seq; uint32_t result; uint unused[2]; } answer __a
 static struct { uint used, lost, failed, sum; char error[1024]; char kept[4096]; } work __attribute__(( aligned( 16 )));	// the worker's
 static struct SE_APART { int count, unused[3]; struct { mstudioevent_t event; const cl_entity_t *e; } kept[32]; } events;	// the worker's
 static struct SE_APART { jmp_buf at; } abort_of;
-static struct SE_APART { ref_viewpass_t rvp; lightstyle_t *styles; } given;	// this core's, read by the worker
+void *se_render_pm, *SE_VisTraceOwn( void );	// the drawing's playermove for CL_VisTraceLine (cl_pmove.c)
+int se_render_light_level[4] SE_APART = { -1 };	// the player's light the drawing found (ref_common.c), a texel of its own
+// Calls of the renderer made when the drawing is settled, in order: a0 to a7 and the caller's first
+// four stack words (ilp32: floats too), replayed by se_ref_replay.
+#define LATER 1024	// (the opening titles record some 140 a frame)
+typedef struct SE_APART { int count, unused[3]; struct { uint32_t w[12]; uint8_t fn; } at[LATER]; } later_t;
+void se_ref_replay( void *fn, const uint32_t *w );
+extern void *se_ref_real[];
+static later_t later_of[2], *rec = later_of;	// this core records into one while the drawing plays the other
+static int play_2d, hand_2d;	// the frame's 2D drawn by its own drawing, after its 3D (HL_2D=core: by this core at the settle)
+static struct SE_APART { ref_viewpass_t rvp; lightstyle_t *styles; later_t *play; } given;	// this core's, read by the worker
 static struct SE_APART { ref_viewpass_t rvp; lightstyle_t *styles; int have; } next;	// this core's
 static int mode = -1, worker, out, piped, sums = -1;
 static uint settles;
@@ -48,17 +59,20 @@ int SE_RenderPiped( void ) { return piped; }
 
 static void setup( void )
 {
-	const char *how = getenv( "HL_RENDER" );
+	const char *how = getenv( "HL_RENDER" ) ? getenv( "HL_RENDER" ) : "worker";
 
 	mode = 0;
 	sums = getenv( "HLGL_SUM" ) && atoi( getenv( "HLGL_SUM" )) == 2;
-	if( !how || ( Q_strcmp( how, "worker" ) && Q_strcmp( how, "wait" )) || ( worker = hlglRenderWorker( )) <= 0 )
+	if(( Q_strcmp( how, "worker" ) && Q_strcmp( how, "wait" )) || ( worker = hlglRenderWorker( )) <= 0 )
 		return;
 	mcw_touch( se_render_stack, SE_RENDER_STACK );
 	mcw_touch( &work, sizeof( work ));
 	mcw_touch( &ask, sizeof( ask ));
 	mcw_touch( &events, sizeof( events ));
+	if(( se_render_pm = SE_VisTraceOwn( )))
+		mcw_touch( se_render_pm, sizeof( playermove_t ));
 	mode = Q_strcmp( how, "wait" ) ? 2 : 1;
+	play_2d = mode == 2 && !( getenv( "HL_2D" ) && !Q_strcmp( getenv( "HL_2D" ), "core" ));
 	Con_Printf( "the frame's drawing is on worker core %d%s\n", worker, mode == 2 ? ", a frame behind" : "" );
 }
 
@@ -136,17 +150,14 @@ static uint32_t job_body( uint32_t unused )
 			SE_LightAhead();
 	}
 	ref.dllFuncs.GL_RenderFrame( &given.rvp );
+	for( int i = 0; given.play && i < given.play->count; i++ )
+		se_ref_replay( se_ref_real[given.play->at[i].fn], given.play->at[i].w );
 	if( sums )	// (else this core's ring jobs are waited for by the frame's swap)
 		hlglRenderJobsWait(), work.sum = hlglRenderSum();
 	job_tl.ins = rd_ins() - job_tl.ins, job_tl.end = rd_time(), job_tl.waits = hlglRingWaits( &job_tl.most );
 	return 0;
 }
 
-extern void *se_ref_real[];
-// Calls of the renderer made when the drawing is settled, in order: a0 to a7 and the caller's first
-// four stack words (ilp32: floats too), replayed by se_ref_replay.
-#define LATER 128
-static struct { int count; struct { uint32_t w[12]; uint8_t fn; } at[LATER]; } later;
 void se_ref_replay( void *fn, const uint32_t *w );
 __asm__( ".text\n.balign 4\n.globl se_ref_replay\nse_ref_replay:\n"
 	"	addi sp, sp, -32\n	sw ra, 28(sp)\n	mv t0, a0\n	mv t1, a1\n"
@@ -176,9 +187,14 @@ void SE_RenderSettle( void )
 		mcw_rest();
 	}
 	out = 0;
-	for( int i = 0; i < later.count; i++ )
-		se_ref_replay( se_ref_real[later.at[i].fn], later.at[i].w );
-	later.count = 0;
+	if( se_render_light_level[0] >= 0 )
+		cl.local.light_level = se_render_light_level[0], se_render_light_level[0] = -1;
+	if( !hand_2d )
+	{
+		for( int i = 0; i < rec->count; i++ )
+			se_ref_replay( se_ref_real[rec->at[i].fn], rec->at[i].w );
+		rec->count = 0;
+	}
 	if( tl.give )
 		tl.sum[0] += job_tl.start - tl.give, tl.sum[1] += job_tl.end - tl.give, tl.sum[2] += settle - tl.give, tl.sum[3] += rd_time() - tl.give, tl.sum[6] += job_tl.ins, tl.n++;
 	{ uint32_t now = rd_time( ), end = job_tl.end;
@@ -221,6 +237,9 @@ void SE_RenderGive( void )
 	SE_EfxGive();
 	se_render_time = cl.time, se_render_oldtime = cl.oldtime;
 	given.rvp = next.rvp, given.styles = next.styles, next.styles = NULL;
+	given.play = hand_2d && rec->count ? rec : NULL, hand_2d = 0;
+	if( given.play )
+		rec = &later_of[rec == later_of], rec->count = 0;
 	if( tl.give && tl.n ) tl.sum[7] += rd_time() - tl.give;
 	tl.give = rd_time();
 	mcw_post( worker, render_job, 0, 0 );
@@ -234,6 +253,8 @@ void SE_RenderStop( void )
 	if( piped )
 		SE_ScenePipe( 0 ), piped = 0;
 	next.have = 0, next.styles = NULL;
+	if( hand_2d )
+		hand_2d = 0, rec->count = 0;	// (the swap's 2D is not drawn: no frame was given)
 	hlglRingsStop();
 }
 
@@ -297,35 +318,60 @@ __asm__( ".text\n"
 
 // What this core calls of the renderer while the frame before is drawn: the scene's additions go
 // to its own list, the light styles to the next drawing, and anything else waits for it first.
+enum { REF_SETTLE, REF_THROUGH, REF_LATER, REF_STYLES };
+static uint8_t ref_kind[REF_THUNKS];	// (SE_RefGuard's)
+
 int se_ref_guard( int i, void *a0, const uint32_t *frame )
 {
-	static int later_2d = -1;	// HL_LATER=0: the 2D drawn after the drawing is settled
-	if( later_2d < 0 ) later_2d = !getenv( "HL_LATER" ) || atoi( getenv( "HL_LATER" ));
-	if( SE_OffCore0( ))
+	int kind = ref_kind[i];
+
+	if( !piped || kind == REF_THROUGH )
+	{
+		if( ref_window && !SE_OffCore0( ) && !mcw_on_worker( ))
+			ref_calls[i]++;
+		return 1;
+	}
+	if( SE_OffCore0( ) || mcw_on_worker( ))
 		return 1;
 	if( ref_window )
 		ref_calls[i]++;
-	if( !piped )
-		return 1;
-	if( i == REF_INDEX( CL_RunLightStyles ))
+	if( kind == REF_STYLES )
 	{
 		next.styles = a0;
 		return 0;
 	}
-	if( out && later.count < LATER && ( i == REF_INDEX( R_BeginFrame ) || i == REF_INDEX( R_Set2DMode ) || i == REF_INDEX( GL_BackendStartFrame )
-		|| i == REF_INDEX( GL_BackendEndFrame ) || i == REF_INDEX( R_ClearScreen ) || ( later_2d && ( i == REF_INDEX( R_AllowFog ) || i == REF_INDEX( GL_SetRenderMode )
-		|| i == REF_INDEX( R_Set2DOffset ) || i == REF_INDEX( R_DrawStretchPic ) || i == REF_INDEX( FillRGBA ) || i == REF_INDEX( Color4ub )
-		|| i == REF_INDEX( R_ShowTextures )))))
+	if( !out )
+		return 1;
+	if( kind == REF_LATER && rec->count < LATER )
 	{
-		memcpy( later.at[later.count].w, frame, 32 ), memcpy( later.at[later.count].w + 8, frame + 12, 16 );
-		later.at[later.count++].fn = i;
+		// a render mode or colour the same as the last recorded, with no other state call between, is left out
+		static int mode_at = -1, colour_at = -1;
+		if( !rec->count )
+			mode_at = colour_at = -1;
+		if( i == REF_INDEX( GL_SetRenderMode ))
+		{
+			if( mode_at >= 0 && rec->at[mode_at].w[0] == frame[0] )
+				return 0;
+			mode_at = rec->count, colour_at = -1;
+		}
+		else if( i == REF_INDEX( Color4ub ))
+		{
+			const uint32_t *c = colour_at >= 0 ? rec->at[colour_at].w : NULL;
+			if( c && c[0] == frame[0] && c[1] == frame[1] && c[2] == frame[2] && c[3] == frame[3] )
+				return 0;
+			colour_at = rec->count;
+		}
+		else if( i != REF_INDEX( R_DrawStretchPic ))
+			mode_at = colour_at = -1;
+		uint32_t *w = rec->at[rec->count].w;
+		w[0] = frame[0], w[1] = frame[1], w[2] = frame[2], w[3] = frame[3], w[4] = frame[4], w[5] = frame[5];
+		w[6] = frame[6], w[7] = frame[7], w[8] = frame[12], w[9] = frame[13], w[10] = frame[14], w[11] = frame[15];
+		rec->at[rec->count++].fn = i;
 		return 0;
 	}
-	if( i == REF_INDEX( RefGetParm ))
-		return 1;	// (it reads)
-	if( !out || i == REF_INDEX( R_AddEntity ) || i == REF_INDEX( R_ClearScene ) || i == REF_INDEX( Mod_GetCurrentVis ))
-		return 1;
 	settles++, settled_by[i]++;
+	if( i == REF_INDEX( R_EndFrame ) && play_2d && next.have )
+		hand_2d = 1;	// (left for the frame's own drawing, given next)
 	SE_RenderSettle();
 	return 1;
 }
@@ -344,6 +390,18 @@ void SE_RefGuard( void *table, size_t bytes )
 	for( int i = 0; i < n; i++ )
 		if(( se_ref_real[i] = fn[i] ))
 			fn[i] = se_ref_thunks[i];
+	// what of it is recorded while the drawing is out, or read, or made the next drawing's; the rest settles
+	int later_2d = !getenv( "HL_LATER" ) || atoi( getenv( "HL_LATER" ));	// HL_LATER=0: the 2D drawn after a settle
+	static const int later[] = { REF_INDEX( R_BeginFrame ), REF_INDEX( R_Set2DMode ), REF_INDEX( GL_BackendStartFrame ),
+		REF_INDEX( GL_BackendEndFrame ), REF_INDEX( R_ClearScreen ) };
+	static const int later2d[] = { REF_INDEX( R_AllowFog ), REF_INDEX( GL_SetRenderMode ), REF_INDEX( R_Set2DOffset ),
+		REF_INDEX( R_DrawStretchPic ), REF_INDEX( FillRGBA ), REF_INDEX( Color4ub ), REF_INDEX( R_ShowTextures ) };
+	static const int through[] = { REF_INDEX( RefGetParm ), REF_INDEX( R_AddEntity ), REF_INDEX( R_ClearScene ), REF_INDEX( Mod_GetCurrentVis ) };
+	memset( ref_kind, REF_SETTLE, sizeof( ref_kind ));
+	for( int k = 0; k < (int)ARRAYSIZE( later ); k++ ) ref_kind[later[k]] = REF_LATER;
+	for( int k = 0; later_2d && k < (int)ARRAYSIZE( later2d ); k++ ) ref_kind[later2d[k]] = REF_LATER;
+	for( int k = 0; k < (int)ARRAYSIZE( through ); k++ ) ref_kind[through[k]] = REF_THROUGH;
+	ref_kind[REF_INDEX( CL_RunLightStyles )] = REF_STYLES;
 }
 
 // Between a frame's end and the next's drawing: HL_RENDER_CALLS=1 counts what this core calls of

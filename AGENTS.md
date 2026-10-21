@@ -281,6 +281,15 @@
   for stuck). The field needs the host's primitive and points (`BackendOptions::laneField`; in Unity the
   tick mesh's 17th triangle and `_FieldPoints`, wired but not yet run in the world). geotune's small workers (2^3) have 6 lanes
   each: lanes gain from large caches, the field from neither.
+- Half-Life's state made per core (`x_of[3]` behind a macro, `SE_Who()`) must be made on every core that
+  uses it, not once at start on core 0: the studio hit hulls were core 0's only, and every bullet of the
+  server's worker went through monsters (`docs/games/halflife.md`). Decals are pulled toward the eye for
+  `glPolygonOffset` (`gl_shaderemu.c`); a seated hand's shots leave the hand (`hlsdk.patch`, `impact_index` 1).
+- Half-Life draws its 3D on a worker a frame behind by default (`HL_RENDER=core` is core 0's drawing;
+  `docs/games/halflife.md`, "The drawing a frame behind"): what the drawing's worker writes is its own
+  (`SE_RenderWho()`), and a renderer function core 0 calls has a kind in `ref_kind` (`rnd_shaderemu.c`):
+  a new one settles unless listed; the 2D core 0 records is replayed by the frame's own drawing after its
+  3D (`HL_2D=core`: by core 0 at the swap). Measure with `python tools/game_par.py halflife`: 0 undone, both ways.
 - Quake III's server skips what is as it was (`docs/games/quake3.md`, "The server's frame told and linked
   cheaper"): a snapshot entity equal to the old frame's (`se_snap`), a link with the box of the last
   (`se_boxed`: clear it if anything else changes an entity's leaves), a view's look at an entity

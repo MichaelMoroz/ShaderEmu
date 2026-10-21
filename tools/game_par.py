@@ -25,6 +25,8 @@ import argparse, os, re, subprocess, sys, time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DONE = "echo LX-''DONE"   # (the quotes keep the echo of the command from matching --until)
+# the card's image: Linux without the MMU once made (linux/nommu/image.py), else the MMU's
+DEFAULT_IMAGE = os.path.join(ROOT, 'build', 'images', 'nommu' if os.path.exists(os.path.join(ROOT, 'build', 'images', 'nommu', 'linux_payload.bin')) else 'linux')
 
 
 def doom_frames(log):
@@ -116,6 +118,10 @@ GAMES = {
         cmd='nano-X -p & sleep 2; NES_LIST=worker NES_SOUND=0 NES_MARK=100 NES_FRAMES=1000 NES_PRESS="20 start 50 start '
             '80 a 100 left 110 a 200 a 210 +right 300 a 400 a 420 +up 500 a 800 a 900 -right 1000 a 1100 +left 1300 a" nes thwaite',
         mark='nesmark', frames=lambda log: 900),
+    'halflife': dict(
+        what='hldemo1, standing where it starts, the fight at 31 to 45 s of the level (docs/games/halflife.md, "Speed")',
+        cmd='nano-X -p & sleep 2; HL_MARK=${HL_MARK:-31,45} halflife +map hldemo1', wall=600,
+        mark='hlmark: begins', until='hlmark: ends', frames=lambda log: int(re.search(r'hlmark: ends, (\d+) frames', log)[1])),
     'nxphys': dict(
         what='the wall (scene 1), 120 substeps; a frame here is a substep',
         cmd='nano-X -p & sleep 2; PHYS_SCENE=1 PHYS_STEPS=120 nxphys',
@@ -198,12 +204,13 @@ def vr_running():
 
 
 def card_folder(image):
-    """The harness boots build/images/linux of its working folder: a folder of junctions a image."""
-    image = os.path.abspath(image or os.path.join(ROOT, 'build', 'images', 'linux'))
+    """The harness boots build/images/nommu of its working folder (build/images/linux without it, the MMU's):
+    a folder of junctions, both to the image."""
+    image = os.path.abspath(image or DEFAULT_IMAGE)
     work = os.path.join(ROOT, 'build', 'game_par', 'card_' + os.path.basename(image))
     links = [('experiments', os.path.join(ROOT, 'experiments')), ('harness', os.path.join(ROOT, 'harness')),
              (os.path.join('build', 'shadercache'), os.path.join(ROOT, 'build', 'shadercache')),
-             (os.path.join('build', 'images', 'linux'), image)]
+             (os.path.join('build', 'images', 'linux'), image), (os.path.join('build', 'images', 'nommu'), image)]
     os.makedirs(os.path.join(work, 'build', 'images'), exist_ok=True)
     for link, target in links:
         if not os.path.exists(os.path.join(work, link)):
@@ -211,7 +218,7 @@ def card_folder(image):
     return work
 
 
-def run_card(name, g, image, log, show, limit):
+def run_card(name, g, image, log, show, limit, rvc='experiments/rvc_opt'):
     if vr_running():
         print(f'{name}: not run on the card, {" and ".join(vr_running())} running')
         return None
@@ -220,7 +227,7 @@ def run_card(name, g, image, log, show, limit):
     if os.path.exists(log):
         os.remove(log)
     args = ['pwsh', '-NoProfile', '-File', os.path.join(ROOT, 'tools', 'gpu_queue.ps1'), os.path.join(ROOT, 'bin', 'rvc_harness.exe'),
-            '--d3d11', '--rvc', 'experiments/rvc_opt', '--image', 'linux-net', '--no-desktop', '--no-stdin', '--uart-log', log,
+            '--d3d11', '--rvc', rvc, '--image', 'linux-net', '--no-desktop', '--no-stdin', '--uart-log', log,
             '--seconds', str(limit), '--expect', '/ # ', '--send', 'md5sum /usr/bin/*.bin /usr/bin/nxphys; ' + c['cmd'] + '; ' + DONE + '\\n',
             '--until', c.get('until', 'LX-DONE'), '--stats-from', c['mark']] + more
     if show:
@@ -261,14 +268,14 @@ def run_card(name, g, image, log, show, limit):
 
 def card_main(a):
     names = list(GAMES) if a.game == 'all' else a.game.split(',')
-    images = a.image or [os.path.join(ROOT, 'build', 'images', 'linux')]
+    images = a.image or [DEFAULT_IMAGE]
     rows = []
     for n in names:   # each game on every image in turn, so that the images' runs are close in time
         if n not in GAMES:
             sys.exit(f'no game {n}: ' + ', '.join(GAMES))
         for im in images:
             log = os.path.join(ROOT, 'build', 'game_par', f'card_{n}_{os.path.basename(os.path.abspath(im))}.log')
-            r = run_card(n, GAMES[n], im, log, a.show, a.limit)
+            r = run_card(n, GAMES[n], im, log, a.show, a.limit, a.rvc)
             if r:
                 rows.append(dict(r, image=os.path.basename(os.path.abspath(im))))
     print('\n| Game | Image | Frames a second | Passes a second | Passes a frame | Core 0 M/s | Workers M/s | All cores M/s |')
@@ -292,6 +299,7 @@ def main():
     ap.add_argument('--plain', action='store_true', help='rvc_cpu without RVC_SOUND, RVC_WCACHE, RVC_ADFAULT and RVC_RACES (the counts before 15 October 2026)')
     ap.add_argument('--card', action='store_true', help='on the graphics card in real time, through tools/gpu_queue.ps1')
     ap.add_argument('--limit', type=int, default=240, help='with --card: seconds a run may take at most')
+    ap.add_argument('--rvc', default='experiments/rvc_opt', help='with --card: the processor folder (e.g. a copy of experiments/rvc_lean)')
     a = ap.parse_args()
     if a.card:
         return card_main(a)

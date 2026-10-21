@@ -590,9 +590,10 @@ static void R_Relight( surflist_t *l, relit_t *r )
 	}
 }
 
-static struct __attribute__(( aligned( 16 ))) { uint32_t walk, sort, unused[2]; } wdbg;	// DEBUG
+static struct __attribute__(( aligned( 16 ))) { uint32_t walk, sort, unused[2]; } wdbg, wdbg_said;	// DEBUG: the world worker's, this core's copy
 static inline uint32_t wd_now( void ) { uint32_t v; __asm__ volatile( "rdinstret %0" : "=r"( v )); return v; }
-static struct __attribute__(( aligned( 16 ))) { uint32_t walk, light, write, ents, ewrite, n, unused[2]; } rdbg;	// DEBUG
+static struct __attribute__(( aligned( 16 ))) { uint32_t walk, light, write, ents, ewrite, unused[3]; } rdbg, rdbg_said;	// DEBUG: the relight worker's, this core's copy
+static struct __attribute__(( aligned( 16 ))) { uint32_t n, draw, world, unused; } rdbg0;	// DEBUG: this core's
 static uint R_WorldJob( uint clipflags, uint unused )
 {
 	int n = 0;
@@ -1081,11 +1082,12 @@ void R_KeptEntsFinish( void )
 	if( !world_out || ents_done )
 		return;
 	tl.sum[7] += tl_now( ) - tl.give;
-	rdbg.n += hlglWait( ents_worker ) * 1000;
+	rdbg0.n += hlglWait( ents_worker ) * 1000;
 	ents_done = 1;
 	if( !( tr.framecount & 255 ))
-		fprintf( stderr, "hl ents job a frame: entities %u (%u, %u surfaces), lights %u; world walk %u sort %u mark %u nodes %u\n", edbg.ents / 256, edbg.n / 256, edbg.surfs / 256, edbg.light / 256, wdbg.walk / 256, wdbg.sort / 256, wdbg.unused[0] / 256, wdbg.unused[1] / 256 ), memset( &edbg, 0, sizeof( edbg )), memset( &wdbg, 0, sizeof( wdbg )),
-		fprintf( stderr, "hl relight a frame: walk %u light %u (%u) write %u ents %u write %u; ents %u draw %u world %u\n", rdbg.walk / 256, rdbg.light / 256, 0, rdbg.write / 256, rdbg.ents / 256, rdbg.ewrite / 256, rdbg.n / 256, rdbg.unused[0] / 256, rdbg.unused[1] / 256 ), memset( &rdbg, 0, sizeof( rdbg ));
+		fprintf( stderr, "hl ents job a frame: entities %u (%u, %u surfaces), lights %u; world walk %u sort %u mark %u nodes %u\n", edbg.ents / 256, edbg.n / 256, edbg.surfs / 256, edbg.light / 256, ( wdbg.walk - wdbg_said.walk ) / 256, ( wdbg.sort - wdbg_said.sort ) / 256, ( wdbg.unused[0] - wdbg_said.unused[0] ) / 256, ( wdbg.unused[1] - wdbg_said.unused[1] ) / 256 ), memset( &edbg, 0, sizeof( edbg )), wdbg_said = wdbg,
+		fprintf( stderr, "hl relight a frame: walk %u light %u (%u) write %u ents %u write %u; ents %u draw %u world %u\n", ( rdbg.walk - rdbg_said.walk ) / 256, ( rdbg.light - rdbg_said.light ) / 256, 0,
+			( rdbg.write - rdbg_said.write ) / 256, ( rdbg.ents - rdbg_said.ents ) / 256, ( rdbg.ewrite - rdbg_said.ewrite ) / 256, rdbg0.n / 256, rdbg0.draw / 256, rdbg0.world / 256 ), rdbg_said = rdbg, memset( &rdbg0, 0, sizeof( rdbg0 ));
 	world_finishing = 1;
 	R_EntsDrawOnWorker( );
 	for( int n = 0; n < went.numents; n++ )
@@ -1118,7 +1120,7 @@ void R_KeptWorldFinish( void )
 		return;
 	tl.sum[8] += tl_now( ) - tl.give;
 	R_KeptEntsFinish( );
-	rdbg.unused[0] += hlglWait( ents_worker ) * 1000, rdbg.unused[1] += hlglWait( world_worker ) * 1000;
+	rdbg0.draw += hlglWait( ents_worker ) * 1000, rdbg0.world += hlglWait( world_worker ) * 1000;
 	R_WorldJobsWait( );
 
 	memset( gl_lms.lightmap_surfaces, 0, sizeof( gl_lms.lightmap_surfaces ));

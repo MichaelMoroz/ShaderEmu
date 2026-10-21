@@ -42,10 +42,20 @@ index 3a720ff3..66cf5450 100644
  
  // The simple drawing interface we'll pass back to the engine
 diff --git a/cl_dll/StudioModelRenderer.cpp b/cl_dll/StudioModelRenderer.cpp
-index 53d320a4..3d6a8896 100644
+index 53d320a4..6cc2d263 100644
 --- a/cl_dll/StudioModelRenderer.cpp
 +++ b/cl_dll/StudioModelRenderer.cpp
-@@ -797,6 +797,18 @@ void CStudioModelRenderer::StudioSetupBones( void )
+@@ -27,6 +27,9 @@
+ 
+ #include "StudioModelRenderer.h"
+ #include "GameStudioModelRenderer.h"
++#if XASH_SHADEREMU
++extern "C" int SE_RenderWho( void );
++#endif
+ 
+ // Global engine <-> studio model rendering code interface
+ engine_studio_api_t IEngineStudio;
+@@ -797,6 +800,18 @@ void CStudioModelRenderer::StudioSetupBones( void )
  	mstudioseqdesc_t *pseqdesc;
  	mstudioanim_t *panim;
  
@@ -64,7 +74,7 @@ index 53d320a4..3d6a8896 100644
  	static float pos[MAXSTUDIOBONES][3];
  	static vec4_t q[MAXSTUDIOBONES];
  	float bonematrix[3][4];
-@@ -807,6 +819,7 @@ void CStudioModelRenderer::StudioSetupBones( void )
+@@ -807,6 +822,7 @@ void CStudioModelRenderer::StudioSetupBones( void )
  	static vec4_t q3[MAXSTUDIOBONES];
  	static float pos4[MAXSTUDIOBONES][3];
  	static vec4_t q4[MAXSTUDIOBONES];
@@ -72,7 +82,7 @@ index 53d320a4..3d6a8896 100644
  
  	if( m_pCurrentEntity->curstate.sequence >=  m_pStudioHeader->numseq )
  	{
-@@ -859,8 +872,13 @@ void CStudioModelRenderer::StudioSetupBones( void )
+@@ -859,8 +875,13 @@ void CStudioModelRenderer::StudioSetupBones( void )
  		( m_pCurrentEntity->latched.prevsequence < m_pStudioHeader->numseq ) )
  	{
  		// blend from last sequence
@@ -86,7 +96,7 @@ index 53d320a4..3d6a8896 100644
  		float s;
  
  		pseqdesc = (mstudioseqdesc_t *)( (byte *)m_pStudioHeader + m_pStudioHeader->seqindex ) + m_pCurrentEntity->latched.prevsequence;
-@@ -898,6 +916,11 @@ void CStudioModelRenderer::StudioSetupBones( void )
+@@ -898,6 +919,11 @@ void CStudioModelRenderer::StudioSetupBones( void )
  	else
  	{
  		//Con_DPrintf("prevframe = %4.2f\n", f);
@@ -98,7 +108,7 @@ index 53d320a4..3d6a8896 100644
  		m_pCurrentEntity->latched.prevframe = f;
  	}
  
-@@ -968,6 +991,47 @@ void CStudioModelRenderer::StudioSetupBones( void )
+@@ -968,6 +994,47 @@ void CStudioModelRenderer::StudioSetupBones( void )
  	}
  }
  
@@ -146,7 +156,7 @@ index 53d320a4..3d6a8896 100644
  /*
  ====================
  StudioSaveBones
-@@ -982,7 +1046,6 @@ void CStudioModelRenderer::StudioSaveBones( void )
+@@ -982,7 +1049,6 @@ void CStudioModelRenderer::StudioSaveBones( void )
  	pbones = (mstudiobone_t *)( (byte *)m_pStudioHeader + m_pStudioHeader->boneindex );
  
  	m_nCachedBones = m_pStudioHeader->numbones;
@@ -154,7 +164,7 @@ index 53d320a4..3d6a8896 100644
  	for( i = 0; i < m_pStudioHeader->numbones; i++ )
  	{
  		strcpy( m_nCachedBoneNames[i], pbones[i].name );
-@@ -1130,6 +1193,26 @@ int CStudioModelRenderer::StudioDrawModel( int flags )
+@@ -1130,6 +1196,26 @@ int CStudioModelRenderer::StudioDrawModel( int flags )
  	IEngineStudio.StudioSetHeader( m_pStudioHeader );
  	IEngineStudio.SetRenderModel( m_pRenderModel );
  
@@ -181,7 +191,7 @@ index 53d320a4..3d6a8896 100644
  	StudioSetUpTransform( 0 );
  
  	if( flags & STUDIO_RENDER )
-@@ -1151,8 +1234,15 @@ int CStudioModelRenderer::StudioDrawModel( int flags )
+@@ -1151,8 +1237,15 @@ int CStudioModelRenderer::StudioDrawModel( int flags )
  	}
  	else
  	{
@@ -197,6 +207,30 @@ index 53d320a4..3d6a8896 100644
  	StudioSaveBones();
  
  	if( flags & STUDIO_EVENTS )
+@@ -1160,7 +1253,11 @@ int CStudioModelRenderer::StudioDrawModel( int flags )
+ 		StudioCalcAttachments();
+ 		IEngineStudio.StudioClientEvents();
+ 		// copy attachments into global entity array
++#if XASH_SHADEREMU
++		if( m_pCurrentEntity->index > 0 && !SE_RenderWho( ))	// (the drawing's worker draws a copy: its attachments go back when it is settled)
++#else
+ 		if( m_pCurrentEntity->index > 0 )
++#endif
+ 		{
+ 			cl_entity_t *ent = gEngfuncs.GetEntityByIndex( m_pCurrentEntity->index );
+ 
+@@ -1451,7 +1548,11 @@ int CStudioModelRenderer::StudioDrawPlayer( int flags, entity_state_t *pplayer )
+ 		StudioCalcAttachments();
+ 		IEngineStudio.StudioClientEvents();
+ 		// copy attachments into global entity array
++#if XASH_SHADEREMU
++		if( m_pCurrentEntity->index > 0 && !SE_RenderWho( ))	// (the drawing's worker draws a copy: its attachments go back when it is settled)
++#else
+ 		if( m_pCurrentEntity->index > 0 )
++#endif
+ 		{
+ 			cl_entity_t *ent = gEngfuncs.GetEntityByIndex( m_pCurrentEntity->index );
+ 
 diff --git a/cl_dll/StudioModelRenderer.h b/cl_dll/StudioModelRenderer.h
 index 69d28a1e..e8825459 100644
 --- a/cl_dll/StudioModelRenderer.h
@@ -217,6 +251,33 @@ index 69d28a1e..e8825459 100644
  public:
  	// Public Interfaces
  	virtual int StudioDrawModel( int flags );
+diff --git a/cl_dll/ev_common.cpp b/cl_dll/ev_common.cpp
+index ebba9cb2..64f794dc 100644
+--- a/cl_dll/ev_common.cpp
++++ b/cl_dll/ev_common.cpp
+@@ -101,6 +101,10 @@ EV_GetGunPosition
+ Figure out the height of the gun
+ =================
+ */
++#if XASH_SHADEREMU
++extern "C" int se_seat_aiming;
++extern "C" float se_seat_gun[3];
++#endif
+ void EV_GetGunPosition( event_args_t *args, float *pos, float *origin )
+ {
+ 	int idx;
+@@ -126,6 +130,11 @@ void EV_GetGunPosition( event_args_t *args, float *pos, float *origin )
+ 	}
+ 
+ 	VectorAdd( origin, view_ofs, pos );
++#if XASH_SHADEREMU
++	// the local player aimed by a hand in a holodeck's seat: the shot leaves the hand (the engine's vid_shaderemu.c)
++	if( se_seat_aiming && EV_IsPlayer( idx ) && EV_IsLocal( idx ))
++		VectorAdd( pos, se_seat_gun, pos );
++#endif
+ }
+ 
+ /*
 diff --git a/dlls/animation.cpp b/dlls/animation.cpp
 index 4b4818d2..58b4ea95 100644
 --- a/dlls/animation.cpp
@@ -262,6 +323,71 @@ index 4b4818d2..58b4ea95 100644
  	return -1;
  }
  
+diff --git a/dlls/client.cpp b/dlls/client.cpp
+index da2e9e1d..6233d39d 100644
+--- a/dlls/client.cpp
++++ b/dlls/client.cpp
+@@ -1826,6 +1826,13 @@ void CmdStart( const edict_t *player, const struct usercmd_s *cmd, unsigned int
+ 	}
+ 
+ 	pl->random_seed = random_seed;
++#if XASH_SHADEREMU
++	// the engine's seat (vid_shaderemu.c) tells a hand's aim in impact_index 1, the gun's place in impact_position
++	pl->m_fSeatAim = cmd->impact_index == 1;
++	pl->m_vecSeatGun = pl->m_fSeatAim ? Vector( cmd->impact_position ) : g_vecZero;
++	if( pl->m_fSeatAim )
++		pl->pev->punchangle = g_vecZero;	// (the hand is the aim: no kick moves the shot off it)
++#endif
+ }
+ 
+ /*
+diff --git a/dlls/player.cpp b/dlls/player.cpp
+index bbb68ea6..60dad7d4 100644
+--- a/dlls/player.cpp
++++ b/dlls/player.cpp
+@@ -369,6 +369,9 @@ Vector CBasePlayer::GetGunPosition()
+ 	Vector origin;
+ 
+ 	origin = pev->origin + pev->view_ofs;
++#if XASH_SHADEREMU
++	origin = origin + m_vecSeatGun;	// (the hand's beam, in a holodeck's seat)
++#endif
+ 
+ 	return origin;
+ }
+@@ -4324,6 +4327,16 @@ void CBasePlayer::EnableControl( BOOL fControl )
+ //=========================================================
+ Vector CBasePlayer::GetAutoaimVector( float flDelta )
+ {
++#if XASH_SHADEREMU
++	if( m_fSeatAim )	// along the hand's beam, no autoaim
++	{
++		if( m_lastx || m_lasty )
++			SET_CROSSHAIRANGLE( edict(), 0, 0 ), m_lastx = m_lasty = 0;
++		m_vecAutoAim = g_vecZero;
++		UTIL_MakeVectors( pev->v_angle );
++		return gpGlobals->v_forward;
++	}
++#endif
+ 	if( g_iSkillLevel == SKILL_HARD )
+ 	{
+ 		UTIL_MakeVectors( pev->v_angle + pev->punchangle );
+diff --git a/dlls/player.h b/dlls/player.h
+index 90dd62e1..8973287c 100644
+--- a/dlls/player.h
++++ b/dlls/player.h
+@@ -191,6 +191,11 @@ public:
+ 	float				m_flRespawnTimer;	// used in PlayerDeathThink() to make sure players can always respawn
+ 
+ 	int m_lastx, m_lasty;  // These are the previous update's crosshair angles, DON"T SAVE/RESTORE
++#if XASH_SHADEREMU
++	// aimed by a hand in a holodeck's seat (CmdStart): the gun is there from the eye, and shoots straight
++	BOOL m_fSeatAim;
++	Vector m_vecSeatGun;
++#endif
+ 
+ 	int m_nCustomSprayFrames;// Custom clan logo frames for this player
+ 	float	m_flNextDecalTime;// next time this player can spray a decal
 diff --git a/dlls/util.cpp b/dlls/util.cpp
 index 27c7ffe8..93e56678 100644
 --- a/dlls/util.cpp

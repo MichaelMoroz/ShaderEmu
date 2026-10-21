@@ -39,7 +39,7 @@ enum {
     GL_QUAD_STRIP, GL_POLYGON,
     GL_ZERO = 0, GL_ONE = 1, GL_SRC_COLOR = 0x0300, GL_ONE_MINUS_SRC_COLOR, GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
     GL_DST_ALPHA, GL_ONE_MINUS_DST_ALPHA, GL_DST_COLOR, GL_ONE_MINUS_DST_COLOR,
-    GL_CULL_FACE = 0x0B44, GL_DEPTH_TEST = 0x0B71, GL_ALPHA_TEST = 0x0BC0, GL_BLEND = 0x0BE2, GL_TEXTURE_2D = 0x0DE1,
+    GL_CULL_FACE = 0x0B44, GL_DEPTH_TEST = 0x0B71, GL_POLYGON_OFFSET_FILL = 0x8037, GL_ALPHA_TEST = 0x0BC0, GL_BLEND = 0x0BE2, GL_TEXTURE_2D = 0x0DE1,
     GL_COLOR_BUFFER_BIT = 0x4000, GL_MODELVIEW = 0x1700, GL_PROJECTION = 0x1701,
     GL_MODELVIEW_MATRIX = 0x0BA6, GL_PROJECTION_MATRIX = 0x0BA7, GL_VIEWPORT = 0x0BA2, GL_MAX_TEXTURE_SIZE = 0x0D33,
     GL_VENDOR = 0x1F00, GL_RENDERER, GL_VERSION, GL_EXTENSIONS,
@@ -411,7 +411,8 @@ int hlglTexIndexed(unsigned name, int width, int height, const uint8_t* bytes, c
 
 // ---- state ----
 
-static int texturing, blending, alpha_test, depth_test = 0, replace;
+static int texturing, blending, alpha_test, depth_test = 0, replace, offsetting;
+static float offset_pull;	// glPolygonOffset as a share of the eye's distance its vertices are moved towards it
 static unsigned blend_src = GL_ONE, blend_dst = GL_ZERO;
 static float colour[4] = {1, 1, 1, 1};
 static uint32_t colour_now;
@@ -423,9 +424,13 @@ static int* flag(unsigned what) {
         case GL_BLEND: return &blending;
         case GL_ALPHA_TEST: return &alpha_test;
         case GL_DEPTH_TEST: return &depth_test;
+        case GL_POLYGON_OFFSET_FILL: return &offsetting;
     }
     return 0;
 }
+// The GPU's depth has no bias: a surface offset towards the eye (a decal, -1 and -2) is drawn nearer
+// along the eye's rays, which leaves its pixels where they were.
+static void s_glPolygonOffset(float factor, float units) { offset_pull = -(factor + units) * 4e-4f; }
 static void s_glEnable(unsigned what) {
     int* f = flag(what);
     if (f) *f = 1;
@@ -536,12 +541,33 @@ static int triangles_of(int mode, int n, uint16_t* out, int room) {
 
 static uint16_t order[MAX_PRIMITIVE * 3];
 
+// The vertices moved towards the eye by offset_pull of their distance (the modelview's inverse).
+static const vertex* pulled(const vertex* v, int n) {
+    static vertex out[MAX_PRIMITIVE];
+    float m[16], e[3];
+    seglGetMatrix(GL_MODELVIEW, m);	// (columns)
+    float a = m[0], b = m[4], c = m[8], d = m[1], f = m[5], g = m[9], h = m[2], i = m[6], j = m[10];
+    float c0 = f * j - g * i, c1 = g * h - d * j, c2 = d * i - f * h, det = a * c0 + b * c1 + c * c2;
+    if (det == 0 || n > MAX_PRIMITIVE) return v;
+    float tx = -m[12] / det, ty = -m[13] / det, tz = -m[14] / det;	// the eye: the inverse times -translation
+    e[0] = c0 * tx + (c * i - b * j) * ty + (b * g - c * f) * tz;
+    e[1] = c1 * tx + (a * j - c * h) * ty + (c * d - a * g) * tz;
+    e[2] = c2 * tx + (b * h - a * i) * ty + (a * f - b * d) * tz;
+    float keep = 1 - offset_pull;
+    for (int k = 0; k < n; k++) {
+        out[k] = v[k];
+        out[k].x = e[0] + (v[k].x - e[0]) * keep, out[k].y = e[1] + (v[k].y - e[1]) * keep, out[k].z = e[2] + (v[k].z - e[2]) * keep;
+    }
+    return out;
+}
+
 // The primitive drawn: one colour for all of it as compact vertices, or each vertex its own
 // as tagged ones with a table of 256 colours a draw (texture coordinates then within 4 repeats).
 static void draw_vertices(int mode, const vertex* v, int n) {
     if (n < 3 || mode < GL_TRIANGLES) return;
     gpu_state s;
     if (!draw_state(&s)) return;
+    if (offsetting && offset_pull != 0) v = pulled(v, n);
     int textured = (s.fragment & 0xff) != GPU_COLOUR;
     int count = triangles_of(mode, n, order, MAX_PRIMITIVE * 3);
     // whole repeats off all coordinates, which changes nothing a repeating texture shows
@@ -738,7 +764,8 @@ static unsigned ring_loop(unsigned k, unsigned unused) {
 #define CORE0_WORKERS 2	// the last studio workers: this core's own while the drawing is out
 static int core0_worker(int k) { return k > studio_workers() - CORE0_WORKERS && k <= studio_workers(); }
 static int ring_worker(int k) { return k != hlglServerWorker() && k != hlglServerHelper() && k != hlglRenderWorker() && !core0_worker(k) && (k < hlglServerPacker(0) || k > hlglServerPacker(2)); }
-static int core0_next;
+static struct __attribute__((aligned(16))) { int next, unused[3]; } core0_turn;   // this core's, apart from the drawing's statics
+#define core0_next core0_turn.next
 // Whether this core may not post now: the drawing's worker is out and posts.
 static int ring_closed(void) { return !SE_RenderWho() && SE_RenderOut(); }
 static struct __attribute__((aligned(16))) { unsigned waits[66]; } rw;   // the drawing's worker's: DEBUG
@@ -1246,7 +1273,7 @@ static const struct { const char* name; void* fn; } table[] = {
     F(glTexParameterf), F(glTexParameterfv), F(glTexParameteri), NOP(glHint), NOP(glPixelStoref), NOP(glPixelStorei),
     F(glGenTextures), F(glDeleteTextures), F(glBindTexture), NOP(glTexImage1D), F(glTexImage2D), NOP(glTexSubImage1D),
     F(glTexSubImage2D), NOP(glCopyTexImage1D), NOP(glCopyTexImage2D), NOP(glCopyTexSubImage1D), NOP(glCopyTexSubImage2D),
-    NOP(glScissor), NOP(glGetTexImage), NOP(glGetTexEnviv), NOP(glPolygonOffset), NOP(glPolygonMode),
+    NOP(glScissor), NOP(glGetTexImage), NOP(glGetTexEnviv), F(glPolygonOffset), NOP(glPolygonMode),
     NOP(glPolygonStipple), NOP(glClipPlane), NOP(glGetClipPlane), NOP(glShadeModel), NOP(glGetTexLevelParameteriv),
     NOP(glGetTexLevelParameterfv), NOP(glFogfv), NOP(glFogf), NOP(glFogi), F(glDrawRangeElements),
 };

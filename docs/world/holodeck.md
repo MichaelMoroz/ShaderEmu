@@ -212,7 +212,8 @@ Doom, Quake, Quake III, ClassiCube and Half-Life read those words, each in its o
   the way the head looks (the move is turned from the aim's way to the head's); the right
   one turns the body, 140 degrees a second pushed home, slower near the middle.
 - **The weapon is in the right hand**, where the beam starts, pointing as it points, at the
-  room's scale (word 0's `plane`): Quake's and Half-Life's view models held a third from their back end,
+  room's scale (word 0's `plane`): Quake's and Half-Life's view models held a third from their back end
+  (Half-Life's with its muzzle on the beam, and its shots leave the hand along it, no autoaim),
   Quake III's by its own origin, ClassiCube's held block (and no arm when nothing is
   held), Doom's weapon pictures standing in the world at 4 mm a pixel. Quake's axe keeps its
   first pose: the arm that holds it swings it. Guns animate as they do. Not done: Quake's

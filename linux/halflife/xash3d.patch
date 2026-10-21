@@ -517,10 +517,45 @@ index 7352c3a5..bc735b8d 100644
 +}
 +#endif
 diff --git a/engine/client/cl_font.c b/engine/client/cl_font.c
-index 35c2939c..ab13dd80 100644
+index 35c2939c..0896df2e 100644
 --- a/engine/client/cl_font.c
 +++ b/engine/client/cl_font.c
-@@ -238,14 +238,105 @@ int CL_DrawCharacter( float x, float y, int number, const rgba_t color, cl_font_
+@@ -212,15 +212,31 @@ int CL_DrawCharacter( float x, float y, int number, const rgba_t color, cl_font_
+ 		return 0;
+ 
+ 	int texw, texh;
++	wrect_t *rc = &font->fontRc[number];
++	float half = 0.5f;
++#if XASH_SHADEREMU	// (the font's texture asked once: each ask goes through the renderer's thunks)
++	static struct { int texture, w, h, filtering; } said[4];
++	static uint asks;
++	int slot = font->hFontTexture & 3;
++	if( said[slot].texture != font->hFontTexture || !said[slot].w || !( ++asks & 255 ))	// (asked again now and then: a texture may be made anew)
++	{
++		R_GetTextureParms( &said[slot].w, &said[slot].h, font->hFontTexture );
++		said[slot].filtering = REF_GET_PARM( PARM_TEX_FILTERING, font->hFontTexture );
++		said[slot].texture = font->hFontTexture;
++	}
++	texw = said[slot].w, texh = said[slot].h;
++	if( !texw || !texh )
++		return font->charWidths[number];
++	if( font->scale <= 1.f || !said[slot].filtering )
++		half = 0;
++#else
+ 	R_GetTextureParms( &texw, &texh, font->hFontTexture );
+ 	if( !texw || !texh )
+ 		return font->charWidths[number];
+ 
+-	wrect_t *rc = &font->fontRc[number];
+-	float half = 0.5f;
+-
+ 	if( font->scale <= 1.f || !REF_GET_PARM( PARM_TEX_FILTERING, font->hFontTexture ))
+ 		half = 0;
++#endif
+ 
+ 	float s1 = ((float)rc->left + half ) / texw;
+ 	float t1 = ((float)rc->top + half ) / texh;
+@@ -238,14 +254,106 @@ int CL_DrawCharacter( float x, float y, int number, const rgba_t color, cl_font_
  	if( !FBitSet( flags, FONT_DRAW_NOCOLOR ))
  		CL_SetFontColor( font, color );
  
@@ -541,6 +576,7 @@ index 35c2939c..ab13dd80 100644
 +void hlglCaptureTo( void *to, int most );
 +int hlglCaptured( void );
 +void hlglDrawQuads( const void *quads, int count );
++int SE_RenderPiped( void );
 +#define TEXT_CHARS 96
 +typedef struct
 +{
@@ -559,7 +595,7 @@ index 35c2939c..ab13dd80 100644
 +	int len = 0;
 +
 +	if( off < 0 ) off = ( getenv( "HL_TEXT" ) && !Q_strcmp( getenv( "HL_TEXT" ), "now" )) || hlglQuadBytes( ) != 35 * 4;
-+	if( off || !font || !font->valid || !color || hlglCapturing( ))	// (inside a capture of mainui's)
++	if( off || !font || !font->valid || !color || hlglCapturing( ) || SE_RenderPiped( ))	// (mainui's capture, or a drawing out: its quads are recorded)
 +		return CL_DrawStringNow( x, y, s, color, font, flags, NULL );
 +	for( ; s[len]; len++ )
 +		if( len >= TEXT_CHARS - 1 || (byte)s[len] >= 0x80 || s[len] == '\n' || s[len] == '^' || s[len] == '\t' )
@@ -626,7 +662,7 @@ index 35c2939c..ab13dd80 100644
  
  	if( !font || !font->valid )
  		return 0;
-@@ -292,7 +383,19 @@ int CL_DrawString( float x, float y, const char *s, const rgba_t color, cl_font_
+@@ -292,7 +400,19 @@ int CL_DrawString( float x, float y, const char *s, const rgba_t color, cl_font_
  		}
  
  		// skip setting rendermode, it was changed for this string already
@@ -647,7 +683,7 @@ index 35c2939c..ab13dd80 100644
  		s++;
  	}
 diff --git a/engine/client/cl_frame.c b/engine/client/cl_frame.c
-index aace8cff..b66dfc93 100644
+index aace8cff..1153cc8f 100644
 --- a/engine/client/cl_frame.c
 +++ b/engine/client/cl_frame.c
 @@ -359,14 +359,28 @@ static qboolean CL_FindInterpolationUpdates( cl_entity_t *ent, double targettime
@@ -881,8 +917,8 @@ index aace8cff..b66dfc93 100644
 +void SE_LightStylesGive( void )
 +{
 +	int SE_RenderPiped( void ), SE_RenderWho( void );
-+	if( SE_RenderPiped( ) && !SE_RenderWho( ))
-+		return;	// (made by the drawing's worker: rnd_shaderemu.c)
++	if( SE_RenderPiped( ))
++		return;	// (made by the drawing's worker at its start: rnd_shaderemu.c)
 +	SE_LightStylesTaken();
 +	if( cl.paused || cls.state != ca_active || !cl.validsequence || !cl.frames[cl.parsecountmod].valid || ( styles_worker = hlglLightWorker()) <= 0 )
 +	{
@@ -1211,10 +1247,20 @@ index 993304fa..28c92a20 100644
  	return tx;
  }
 diff --git a/engine/client/dll_int/cl_pmove.c b/engine/client/dll_int/cl_pmove.c
-index 9ca1f797..9d97c597 100644
+index 9ca1f797..216532d5 100644
 --- a/engine/client/dll_int/cl_pmove.c
 +++ b/engine/client/dll_int/cl_pmove.c
-@@ -108,6 +108,14 @@ void CL_SetIdealPitch( void )
+@@ -19,6 +19,9 @@ GNU General Public License for more details.
+ #include "cl_tent.h"
+ #include "pm_local.h"
+ #include "studio.h"
++#if XASH_SHADEREMU
++#include "se_server.h"
++#endif
+ 
+ #define MAX_FORWARD			6	// forward probes for set idealpitch
+ #define MIN_CORRECTION_DISTANCE	0.25f	// use smoothing if error is > this
+@@ -108,6 +111,14 @@ void CL_SetIdealPitch( void )
  	if( cl.local.onground == -1 )
  		return;
  
@@ -1229,7 +1275,7 @@ index 9ca1f797..9d97c597 100644
  	angleval = cl.viewangles[YAW] * M_PI2 / 360.0f;
  	SinCos( angleval, &sinval, &cosval );
  
-@@ -319,7 +327,11 @@ static void CL_CopyEntityToPhysEnt( physent_t *pe, entity_state_t *state, qboole
+@@ -319,7 +330,11 @@ static void CL_CopyEntityToPhysEnt( physent_t *pe, entity_state_t *state, qboole
  	else if( mod != NULL )
  	{
  		// otherwise copy the modelname
@@ -1241,7 +1287,7 @@ index 9ca1f797..9d97c597 100644
  	}
  	else
  	{
-@@ -467,6 +479,18 @@ Builds all the pmove physents for the current frame
+@@ -467,6 +482,18 @@ Builds all the pmove physents for the current frame
  void CL_SetSolidEntities( void )
  {
  	physent_t	*pe = clgame.pmove->physents;
@@ -1260,7 +1306,7 @@ index 9ca1f797..9d97c597 100644
  
  	// setup physents
  	clgame.pmove->numvisent = 1;
-@@ -486,6 +510,11 @@ void CL_SetSolidEntities( void )
+@@ -486,6 +513,11 @@ void CL_SetSolidEntities( void )
  
  	// add all other entities exlucde players
  	CL_AddLinksToPmove( &cl.frames[cl.parsecountmod] );
@@ -1272,7 +1318,7 @@ index 9ca1f797..9d97c597 100644
  }
  
  /*
-@@ -624,6 +653,24 @@ CL_VisTraceLine
+@@ -624,10 +656,40 @@ CL_VisTraceLine
  trace by visible objects (thats can be non-solid)
  =============
  */
@@ -1297,7 +1343,23 @@ index 9ca1f797..9d97c597 100644
  pmtrace_t *CL_VisTraceLine( vec3_t start, vec3_t end, int flags )
  {
  	int		old_usehull;
-@@ -901,7 +948,11 @@ static void CL_RunUsercmd( local_state_t *from, local_state_t *to, usercmd_t *u,
+ 	static pmtrace_t	tr;
++#if XASH_SHADEREMU
++	extern void *se_render_pm;	// (the drawing's worker's own playermove: this core's predicts meanwhile)
++	static struct { pmtrace_t tr; } __attribute__(( aligned( 16 ))) render_tr;
++	if( SE_OnRender( ) && se_render_pm )
++	{
++		playermove_t *pm = se_render_pm;
++		pm->usehull = 2;
++		pm->server = false;
++		render_tr.tr = PM_PlayerTraceExt( pm, start, end, flags, clgame.pmove->numvisent, clgame.pmove->visents, -1, NULL );
++		return &render_tr.tr;
++	}
++#endif
+ 
+ 	old_usehull = clgame.pmove->usehull;
+ 	clgame.pmove->usehull = 2;
+@@ -901,7 +963,11 @@ static void CL_RunUsercmd( local_state_t *from, local_state_t *to, usercmd_t *u,
  {
  	usercmd_t		cmd;
  
@@ -1309,7 +1371,7 @@ index 9ca1f797..9d97c597 100644
  	{
  		local_state_t	temp;
  		usercmd_t		split;
-@@ -972,12 +1023,37 @@ CL_PredictMovement
+@@ -972,12 +1038,37 @@ CL_PredictMovement
  Sets cl.predicted.origin and cl.predicted.angles
  =================
  */
@@ -1347,7 +1409,7 @@ index 9ca1f797..9d97c597 100644
  	double		f = 1.0;
  	double		time;
  
-@@ -1025,7 +1101,9 @@ void CL_PredictMovement( qboolean repredicting )
+@@ -1025,7 +1116,9 @@ void CL_PredictMovement( qboolean repredicting )
  	if( !frame->valid ) return;
  
  	time = frame->time;
@@ -1357,7 +1419,7 @@ index 9ca1f797..9d97c597 100644
  	cl.local.repredicting = repredicting;
  	cl.local.onground = -1;
  
-@@ -1059,7 +1137,11 @@ void CL_PredictMovement( qboolean repredicting )
+@@ -1059,7 +1152,11 @@ void CL_PredictMovement( qboolean repredicting )
  
  	CL_PopPMStates();
  
@@ -1369,7 +1431,7 @@ index 9ca1f797..9d97c597 100644
  	{
  		cl.local.repredicting = false;
  		return; // net hasn't deliver packets in a long time...
-@@ -1099,12 +1181,17 @@ void CL_PredictMovement( qboolean repredicting )
+@@ -1099,12 +1196,17 @@ void CL_PredictMovement( qboolean repredicting )
  	}
  	else
  	{
@@ -1392,7 +1454,7 @@ index 9ca1f797..9d97c597 100644
  	}
  
 diff --git a/engine/client/dll_int/ref_common.c b/engine/client/dll_int/ref_common.c
-index 8ea38dc5..f700f926 100644
+index 8ea38dc5..834cd066 100644
 --- a/engine/client/dll_int/ref_common.c
 +++ b/engine/client/dll_int/ref_common.c
 @@ -14,6 +14,9 @@ GNU General Public License for more details.
@@ -1428,7 +1490,22 @@ index 8ea38dc5..f700f926 100644
  	clgame.dllFuncs.IN_Accumulate();
  	S_ExtraUpdate();
  }
-@@ -578,6 +590,10 @@ static qboolean R_LoadProgs( const char *name )
+@@ -249,6 +261,14 @@ static void pfnCL_GetScreenInfo( int *width, int *height ) // clgame.scrInfo, pt
+ 
+ static void pfnSetLocalLightLevel( int level )
+ {
++#if XASH_SHADEREMU
++	extern int se_render_light_level[4];	// (the drawing's worker's, made the client's when it is settled)
++	if( SE_OnRender( ))
++	{
++		se_render_light_level[0] = level;
++		return;
++	}
++#endif
+ 	cl.local.light_level = level;
+ }
+ 
+@@ -578,6 +598,10 @@ static qboolean R_LoadProgs( const char *name )
  	}
  
  	refState.developer = host_developer.value;
@@ -2448,7 +2525,7 @@ index d1fe48e2..7612f687 100644
  			// mark models that have origin brushes
  			if( !VectorIsNull( bm->origin ))
 diff --git a/engine/common/mod_studio.c b/engine/common/mod_studio.c
-index 520ab7f4..df3ab7e8 100644
+index 520ab7f4..47b8e657 100644
 --- a/engine/common/mod_studio.c
 +++ b/engine/common/mod_studio.c
 @@ -14,6 +14,9 @@ GNU General Public License for more details.
@@ -2507,6 +2584,64 @@ index 520ab7f4..df3ab7e8 100644
  
  le_struct_begin( studiohdr_swap )
  	le_struct_field( studiohdr_t, ident )
+@@ -372,6 +407,9 @@ hull_t *Mod_HullForStudio( model_t *model, float frame, int sequence, vec3_t ang
+ {
+ 	qboolean	bSkipShield = false;
+ 
++#if XASH_SHADEREMU
++	Mod_InitStudioHull( );	// (this core's own hulls, studio_of: Mod_Init made only core 0's)
++#endif
+ 	*numhitboxes = 0; // assume error
+ 
+ 	if( mod_studiocache.value )
+@@ -771,6 +809,47 @@ void Mod_StudioGetAttachment( const edict_t *e, int iAtt, float *origin, float *
+ 		Matrix3x4_AnglesFromMatrix( worldPose, angles );
+ }
+ 
++#if XASH_SHADEREMU
++// Attachment `att` in the model's own space at the first frame of `sequence` (vid_shaderemu.c's seat):
++// false when there is none. Its own arrays: SV_StudioSetupBones' statics are the server worker's too.
++qboolean SE_StudioAttachmentRest( model_t *mod, int sequence, int att, vec3_t out )
++{
++	float pos[MAXSTUDIOBONES][3];
++	vec4_t q[MAXSTUDIOBONES];
++	matrix3x4 bones[MAXSTUDIOBONES], m, local, world;
++	int used[MAXSTUDIOBONES], n = 0;
++	const byte controller[4] = { 0x7f, 0x7f, 0x7f, 0x7f };
++
++	mod_studiohdr = (studiohdr_t *)Mod_StudioExtradata( mod );
++	if( !mod_studiohdr || att < 0 || att >= mod_studiohdr->numattachments || mod_studiohdr->numseq <= 0 )
++		return false;
++	if( sequence < 0 || sequence >= mod_studiohdr->numseq )
++		sequence = 0;
++	mstudioseqdesc_t *pseqdesc = (mstudioseqdesc_t *)((byte *)mod_studiohdr + mod_studiohdr->seqindex) + sequence;
++	mstudiobone_t *pbones = (mstudiobone_t *)((byte *)mod_studiohdr + mod_studiohdr->boneindex);
++	mstudioattachment_t *pAtt = (mstudioattachment_t *)((byte *)mod_studiohdr + mod_studiohdr->attachmentindex) + att;
++	mstudioanim_t *panim = R_StudioGetAnim( mod_studiohdr, mod, pseqdesc );
++	if( !panim )
++		return false;
++	for( int i = pAtt->bone; i != -1 && n < MAXSTUDIOBONES; i = pbones[i].parent )
++		used[n++] = i;
++	Mod_StudioCalcRotations( used, n, controller, pos, q, pseqdesc, panim, 0.0f );
++	for( int j = n - 1; j >= 0; j-- )
++	{
++		int i = used[j];
++		Matrix3x4_FromOriginQuat( m, q[i], pos[i] );
++		if( pbones[i].parent == -1 )
++			memcpy( bones[i], m, sizeof( m ));
++		else Matrix3x4_ConcatTransforms( bones[i], bones[pbones[i].parent], m );
++	}
++	Matrix3x4_LoadIdentity( local );
++	Matrix3x4_SetOrigin( local, pAtt->org[0], pAtt->org[1], pAtt->org[2] );
++	Matrix3x4_ConcatTransforms( world, bones[pAtt->bone], local );
++	Matrix3x4_OriginFromMatrix( world, out );
++	return true;
++}
++#endif
++
+ /*
+ ====================
+ GetBonePosition
 diff --git a/engine/common/model.c b/engine/common/model.c
 index b93b896a..1691172d 100644
 --- a/engine/common/model.c
@@ -2756,7 +2891,7 @@ index d139dff7..e951cf7d 100644
  
  	if( NET_GetLoopPacket( sock, from, data, length ))
 diff --git a/engine/common/pm_trace.c b/engine/common/pm_trace.c
-index b1e8e57b..aef399ca 100644
+index b1e8e57b..985c3163 100644
 --- a/engine/common/pm_trace.c
 +++ b/engine/common/pm_trace.c
 @@ -14,6 +14,9 @@ GNU General Public License for more details.
@@ -2789,7 +2924,7 @@ index b1e8e57b..aef399ca 100644
  void PM_InitBoxHull( void )
  {
 +#if XASH_SHADEREMU
-+	for( int c = 0; c < 2; c++ )
++	for( int c = 0; c < 3; c++ )	// (every core's copy, the drawing's worker too)
 +	{
 +		box_of[c].hull.clipnodes16 = (mclipnode16_t *)box_clipnodes16;
 +		box_of[c].hull.planes = box_of[c].planes;
@@ -4587,7 +4722,7 @@ index 32fa7991..59a6b8cc 100644
  extern struct movevars_s *gp_movevars;
  extern const ref_interface_t gReffuncs;
 diff --git a/ref/common/ref_light.c b/ref/common/ref_light.c
-index dd01c0fa..c10d7099 100644
+index dd01c0fa..271819f8 100644
 --- a/ref/common/ref_light.c
 +++ b/ref/common/ref_light.c
 @@ -27,10 +27,33 @@ CL_RunLightStyles
@@ -4712,8 +4847,8 @@ index dd01c0fa..c10d7099 100644
 +#if XASH_SHADEREMU
 +int mcw_on_worker( void ), SE_RenderWho( void );
 +typedef struct __attribute__(( aligned( 16 ))) { vec3_t lightspot, lightvec; float fraction; uint64_t styles; } trace_state_t;
-+static trace_state_t trace_of[3];	// (a worker's own: R_LevelLightAt)
-+#define TRACE_STATE trace_state_t *ts = &trace_of[mcw_on_worker() + SE_RenderWho()]
++static trace_state_t trace_of[3];	// this core's, a worker's (R_LevelLightAt), the drawing's (its stack is no worker's)
++#define TRACE_STATE trace_state_t *ts = &trace_of[SE_RenderWho() ? 2 : mcw_on_worker()]
 +#define g_trace_lightspot ( ts->lightspot )
 +#define g_trace_lightvec ( ts->lightvec )
 +#define g_trace_fraction ( ts->fraction )
@@ -5239,7 +5374,7 @@ index f05a3ddf..dd1e205d 100644
  CVAR_DEFINE_AUTO( gl_litwater_force, "0", FCVAR_GLCONFIG, "force enable lightmapped water, even if support not declared in the map" );
  CVAR_DEFINE_AUTO( r_lighting_ambient, "0.3", FCVAR_GLCONFIG, "map ambient lighting scale" );
 diff --git a/ref/gl/gl_rmain.c b/ref/gl/gl_rmain.c
-index 97b12119..ddd4408e 100644
+index 97b12119..28a81867 100644
 --- a/ref/gl/gl_rmain.c
 +++ b/ref/gl/gl_rmain.c
 @@ -126,6 +126,36 @@ static int R_TransEntityCompare( const void *a, const void *b )
@@ -5310,6 +5445,15 @@ index 97b12119..ddd4408e 100644
  	if( !r_drawentities->value )
  		return false; // not allow to drawing
  
+@@ -242,7 +281,7 @@ qboolean R_AddEntity( struct cl_entity_s *clent, int type )
+ 	if( !R_ModelOpaque( clent->curstate.rendermode ) && CL_FxBlend( clent ) <= 0 )
+ 		return true; // invisible
+ 
+-	switch( type )
++	switch( list == tr.draw_list ? type : -1 )	// (r_stats is the drawing's while it is on its worker)
+ 	{
+ 	case ET_FRAGMENTED:
+ 		r_stats.c_client_ents++;
 @@ -254,34 +293,34 @@ qboolean R_AddEntity( struct cl_entity_s *clent, int type )
  
  	if( type == ET_BEAM )
@@ -6046,7 +6190,7 @@ index 5ae3bc3a..5555ee34 100644
  
  	if( renderfx == kRenderFxNoDissipation )
 diff --git a/ref/gl/gl_studio.c b/ref/gl/gl_studio.c
-index 39873fb4..5ed31918 100644
+index 39873fb4..ab7c0793 100644
 --- a/ref/gl/gl_studio.c
 +++ b/ref/gl/gl_studio.c
 @@ -127,6 +127,9 @@ static cvar_t			*cl_righthand = NULL;
@@ -6214,7 +6358,38 @@ index 39873fb4..5ed31918 100644
  
  	g_studio.numverts = g_studio.numelems = 0;
  
-@@ -2452,7 +2539,7 @@ static void R_StudioClientEvents( void )
+@@ -2385,17 +2472,25 @@ int R_GetEntityRenderMode( cl_entity_t *ent )
+ {
+ 	model_t *model = NULL;
+ 
+-	cl_entity_t *oldent = RI.currententity;
+-	RI.currententity = ent;
+-
+ 	if( ent->player ) // check it for real playermodel
++	{
++#if XASH_SHADEREMU
++		// (RI is the drawing's when it is on its worker: only a model it would load needs the entity)
++		if( !gpGlobals->developer && ENGINE_GET_PARM( PARM_SINGLEPLAYER_GAME ) && FBitSet( RI.rvp.flags, RF_DRAW_WORLD ))
++			model = NULL;
++		else
++#endif
++		{
++		cl_entity_t *oldent = RI.currententity;
++		RI.currententity = ent;
+ 		model = R_StudioSetupPlayerModel( ent->curstate.number - 1 );
++		RI.currententity = oldent;
++		}
++	}
+ 
+ 	if( !model )
+ 		model = ent->model;
+ 
+-	RI.currententity = oldent;
+-
+ 	studiohdr_t *phdr;
+ 	if(( phdr = gEngfuncs.Mod_Extradata( mod_studio, model )) == NULL )
+ 	{
+@@ -2452,7 +2547,7 @@ static void R_StudioClientEvents( void )
  
  		ClearBits( e->curstate.effects, EF_MUZZLEFLASH );
  		VectorCopy( e->attachment[0], el->origin );
@@ -6223,7 +6398,7 @@ index 39873fb4..5ed31918 100644
  		el->color.r = 255;
  		el->color.g = 192;
  		el->color.b = 64;
-@@ -3205,6 +3292,10 @@ R_StudioDrawModelInternal
+@@ -3205,6 +3300,10 @@ R_StudioDrawModelInternal
  */
  static void R_StudioDrawModelInternal( cl_entity_t *e, int flags )
  {
@@ -6234,7 +6409,7 @@ index 39873fb4..5ed31918 100644
  	if( !FBitSet( RI.rvp.flags, RF_DRAW_WORLD ))
  	{
  		if( e->player )
-@@ -3567,3 +3658,7 @@ void R_StudioSetDrawInterface( r_studio_interface_t *pDraw )
+@@ -3567,3 +3666,7 @@ void R_StudioSetDrawInterface( r_studio_interface_t *pDraw )
  {
  	pStudioDraw = pDraw;
  }

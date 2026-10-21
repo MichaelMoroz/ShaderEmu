@@ -110,7 +110,9 @@ the last time (`UI_DrawString` in `mainui.patch`, `CL_DrawString` in `xash3d.pat
 `hlglCaptureTo` and `hlglDrawQuads`): the first character is drawn and compared, the last drawn
 to leave the engine's state as it was; `HL_MENU_TEXT=now` and `HL_TEXT=now` draw it as before.
 `HLGL_PICSUM=1` prints a sum of the frame's 2D quads every 64 frames: the menu's must be the
-same both ways (`8ffbd714`).
+same both ways (`8ffbd714`). While a level's drawing is on its worker (`SE_RenderPiped`) a text is drawn as it is:
+its quads are recorded, not made, so there was nothing to keep, and before 21 October 2026 a
+`say` line lost its name's first letters ("root:" drawn "t:").
 
 A studio model's bones are set up ahead on four workers when the entities are emitted
 (`R_BonesAheadGive` in `gl_kept.c`), and the draw takes its rotation from there too
@@ -122,17 +124,30 @@ emission 42k. A frame of 15 there needs the studio draws off core 0 whole, with 
 
 ### The drawing a frame behind
 
-`HL_RENDER=worker` draws frame n's 3D on a worker core of its own (`rnd_shaderemu.c`, worker
-`workers - 8`) from copies of its entities (`R_SceneGive` in `gl_kept.c`) while core 0 makes
-frame n + 1; frame n is shown with frame n + 1's 2D. `HL_RENDER=wait` puts the drawing on the
-worker with core 0 waiting; the default draws on core 0. Every renderer function core 0 calls
-goes through a thunk (`se_ref_guard`): the scene's additions go to core 0's own list, and the
-frame's start and its 2D (`R_BeginFrame`, `R_Set2DMode`, `R_DrawStretchPic`, `FillRGBA`,
-`Color4ub` and a few more, all void with values for arguments) are recorded while the drawing
-is out and replayed in order when it is settled, at the swap (`se_ref_replay`: a0 to a7 and
-the caller's first four stack words, floats too under ilp32). Any other call settles first.
-`HL_LATER=0` draws the 2D after a settle instead. `HL_RENDER_CALLS=1` prints what core 0 calls
-of the renderer between frames, what made it settle, and the job's timeline every 32 frames.
+Since 21 October 2026 the game draws frame n's 3D on a worker core of its own (`rnd_shaderemu.c`,
+worker `workers - 8`) from copies of its entities (`R_SceneGive` in `gl_kept.c`) while core 0
+makes frame n + 1, then frame n's 2D. `HL_RENDER=wait` puts the drawing on
+the worker with core 0 waiting, `HL_RENDER=core` draws on core 0 (the default before). Every
+renderer function core 0 calls goes through a thunk (`se_ref_guard`, its kind of call in
+`ref_kind`): the scene's additions go to core 0's own list, and the frame's start and its 2D
+(`R_BeginFrame`, `R_Set2DMode`, `R_DrawStretchPic`, `FillRGBA`, `Color4ub` and a few more, all
+void with values for arguments) are recorded while the drawing is out, in one of two lists, and
+the frame's own drawing replays them in order after its 3D (`se_ref_replay`: a0 to a7 and the
+caller's first four stack words, floats too under ilp32): core 0 only waits for it at the swap
+(`R_EndFrame`) and gives it the list with the next frame. A render mode or colour the same as the
+last recorded is not recorded again. Any other call settles first, and core 0 replays what it had
+recorded then; a call from a worker (core 0's own while the drawing is out) goes through.
+`HL_2D=core` replays the 2D on core 0 at the swap, over the frame before's 3D (before 21 October
+2026: frame n was shown with frame n + 1's 2D). `HL_LATER=0` draws the 2D after a settle instead. `HL_RENDER_CALLS=1` prints
+what core 0 calls of the renderer between frames, what made it settle, and the job's timeline
+every 32 frames.
+
+What the drawing's worker writes that core 0 also writes is its own: the light's trace state
+(`trace_of[2]`), its line-of-sight traces (`CL_VisTraceLine` with a playermove of its own,
+`se_render_pm`), the local light level (kept in `se_render_light_level` until the settle), and it
+neither counts `r_stats` nor copies a live entity's attachments. `RVC_RACES` says 0 undone in
+the fight with it and with `HL_RENDER=core`. Its traces still read the client's physents as they
+are while core 0 makes the next frame's ("as it was" reads, a frame's lag at most).
 
 The studio models' points go to ring jobs on the other workers (`ring_post` in
 `gl_shaderemu.c`); the job takes a ring that is free before waiting on one, and its ring jobs
@@ -163,6 +178,20 @@ hldemo1's elevator) is therefore a `changelevel2` command for core 0 (`pfnChange
 reads the next map with the server settled. Before 19 October 2026 the worker read the packed
 bytes as the map and its frame never ended: the game stood in the elevator.
 
+The studio models' hit boxes are hulls of each core's own (`studio_hull`, `studio_of[3]` in
+`mod_studio.c`), made by the core that first traces against one (`Mod_HullForStudio`); the box
+hulls of `pm_trace.c` are each core's too. Before 21 October 2026 only core 0's were made: the
+server's worker traced its bullets against hulls with no planes and every shot went through a
+monster (a headcrab after the glock in hldemo2 could not be killed; the crowbar hit through the
+hull's other test). Now two glock shots of 8 kill it (`HL_SCRIPT`, `ent_info 530`: health -3).
+
+Decals and brush models ask for `glPolygonOffset`, which the GPU has no state for: with
+`GL_POLYGON_OFFSET_FILL` on `gl_shaderemu.c` moves each point toward the eye along its own ray,
+by (factor + units) times 4e-4 of its distance (a decal's (-1, -2) is 0.12%), so it covers the
+same pixels and only its depth changes. Before 21 October 2026 the call did nothing and decals
+fought the wall: in a decal's 65 x 50 pixels over 16 frames its dark pixels went 54 to 149
+(a change of 21.5 a frame), now 165 to 181 (2.7).
+
 On 18 October 2026 (`rvc_cpu`, the card's model: `RVC_SOUND`, `RVC_WCACHE`, `RVC_ADFAULT`):
 
 | | start, 3 to 25 s | the fight, 31 to 45 s |
@@ -174,9 +203,23 @@ On 18 October 2026 (`rvc_cpu`, the card's model: `RVC_SOUND`, `RVC_WCACHE`, `RVC
 In the fight the drawing's worker is the bound (25 busy passes of 155k instructions, 22
 studio models at 4.8k each), then core 0 from the settle to the give (the scene's copy 18k,
 the replay 18k). At the start core 0 is: recording the HUD's text and replaying it costs 30k
-more than drawing it. `HL_RENDER=worker` is not the default: `RVC_RACES` finds stores of core 0
-and the drawing's worker to the same words in one pass (`RI`, `r_stats`, the light's
-`trace_of`), which must be 0 first.
+more than drawing it.
+
+On 21 October 2026, the same way, with `RVC_RACES` (`python tools/game_par.py halflife`, and
+`--guest HL_MARK=3,25` for the start; the fight is its default span):
+
+| | start, 3 to 25 s | the fight, 31 to 45 s |
+|---|---|---|
+| `HL_RENDER=core`, before this day | 26.99 passes a frame, 15.1 fps (core 0 210k) | 55.43, 7.3 (444k) |
+| drawn on a worker, its 2D replayed by core 0 (`HL_2D=core`) | 22.23, 18.3 (182k) | 34.83, 11.7 (279k) |
+| the default, the 2D replayed by the drawing's worker | 18.14, 22.4 (148k) | 33.93, 12.0 (267k) |
+
+What is left on core 0 in the fight is the player's prediction (`CL_PredictSent`, 84k: 19k a
+move, three moves a frame), the HUD (54k), the entities' emission (45k), the settle and the give,
+and the server's messages (21k); at the start the opening titles' text (`CHudMessage`, 26k) and
+its recording (some 40 characters a frame, three calls each). The replay was 28k of core 0's frame
+there (700 instructions a character). A text character asks the font texture's size once in 256
+calls (`CL_DrawCharacter`). The titles' and the HUD's pixels at 12 s are the same as before.
 
 ## The controls
 
@@ -198,3 +241,18 @@ fire, the right grip (E on a desktop) is use, Space jumps; with tracked hands th
 a mouse it turns the view, 0.066 degrees a count. The picture drawn round the seat leaves no
 surface out (`r_nocull`). `HALFLIFE_SEAT=1` prints how it is seated every 20 frames, and
 `rvc_cpu --host 00000112,0,0,0,0,00007f00,0,0` walks a desktop's sitter forward.
+
+With tracked hands the shot leaves the hand along its beam: `SE_SeatMove` sends where the hand
+is from the eye in the command's `impact_index` (1) and `impact_position`, the game's
+`GetGunPosition` adds it and `GetAutoaimVector` gives the view's way with no autoaim and no
+punch, and the client's events start from the same place (`EV_GetGunPosition`, `hlsdk.patch`).
+The view model points the aim's way, none of the client's bob, sway or autoaim on it, held a
+third of its length from its back with its muzzle (attachment 0 at rest,
+`SE_StudioAttachmentRest`) on the beam. Before 21 October 2026 the shot left the eye with
+autoaim and the model tilted with the bob: 9 shots of the glock from
+`--host 80000033,0,0,0,0,0,064ed44b,0e391555` now leave the hand, 0.18 to 0.37 degrees off its
+way (the glock's spread is 1), and `HALFLIFE_SEAT=1` says the muzzle is 0.00 off the beam.
+
+`HL_SCRIPT="T:command|T:command"` runs console commands at a level's second T (`script` in
+`vid_shaderemu.c`), `look P Y` sets the view's angles and `turn D` turns D degrees a second:
+with `rvc_cpu` it is how a fight is played again, run after run.
