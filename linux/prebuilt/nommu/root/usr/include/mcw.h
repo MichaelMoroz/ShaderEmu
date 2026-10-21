@@ -131,6 +131,38 @@ void mcw_field_apart(int on);
 const struct mcw_field_skips *mcw_field_skips(void);
 unsigned mcw_field_skips_make(const struct mcw_field_skips *skips, int part, int parts);
 
+/*
+ * Steps (docs/machine/lanes.md, "Steps"): an index that may need more than a pass. fn returns 0 when
+ * its index is through; else it has stored in its output what it needs to go on, and is called again
+ * with round + 1 in the job's next round (round 0: its first call, its output as it was). An index
+ * takes as many of a lane's six texels as it wrote: one through that writes nothing costs a few instructions.
+ */
+typedef uint32_t (*mcw_step_fn)(uint32_t index, void *ctx, uint32_t round);
+/* The instructions this lane's pass has left; 0xffffffff off the lanes (no end). */
+uint32_t mcw_steps_left(void);
+/* The field's job in steps: mcw_field_ready() posts round after round until no index is left. */
+void mcw_field_steps(mcw_step_fn fn, void *ctx, uint32_t first, uint32_t count, void *out, uint32_t texels);
+/* The same on this worker's lanes, returned when through; plain calls where it has none. */
+struct mcw_steps_report {
+	uint32_t rounds;	/* rounds the job took */
+	uint32_t too_long;	/* steps no lane could make in a pass, made by a core: not 0, the steps are too long for the lanes */
+	uint32_t left;		/* the field's rounds ran out (mcw_field_steps_rounds): some indices are not through */
+};
+int mcw_lanes_steps(mcw_step_fn fn, void *ctx, uint32_t first, uint32_t count, void *out, uint32_t texels, struct mcw_steps_report *report);
+struct mcw_steps_report mcw_field_steps_report(void);	/* the field's last job in steps, once through */
+/* The field's jobs in steps from now on end after `most` rounds (0: when every index is through): a
+ * round waits for its slowest lane, so the last few paths of a job cost a round each. With `left`
+ * set, the program calls fn itself (any round but 0) on what is not through, as a plain call does. */
+void mcw_field_steps_rounds(uint32_t most);
+/* A self-test on this core (a worker's: the first core's counts take interrupts in): every index made in
+ * steps, each step given `budget` instructions (0: 8,192), as a lane does. Give it the worst cases. */
+struct mcw_steps_probe {
+	uint32_t steps, rounds;	/* steps made, and the most an index took */
+	uint32_t mean, longest;	/* a step's instructions */
+	uint32_t over;		/* steps longer than the budget: a lane would leave them to a core */
+};
+struct mcw_steps_probe mcw_steps_probe(mcw_step_fn fn, void *ctx, uint32_t first, uint32_t count, uint32_t budget);
+
 #ifdef __cplusplus
 }
 #endif
