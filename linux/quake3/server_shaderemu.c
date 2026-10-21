@@ -245,6 +245,8 @@ void SE_ServerSum (void)
 /* The bots' library as the game calls it directly (g_syscalls.c in quake3.patch), as SV_GameSystemCalls would */
 extern botlib_export_t	*botlib_export;
 int SE_GameBotLibUpdateEntity (int ent, void *bue) { return botlib_export->BotLibUpdateEntity (ent, bue); }
+int AAS_SE_SeenAgain (int entnum);	/* be_aas_entity.c */
+int SE_GameBotLibSeenAgain (int ent) { return AAS_SE_SeenAgain (ent); }
 float SE_GameAASTime (void) { return botlib_export->aas.AAS_Time (); }
 int SE_GameAASPointContents (vec3_t point) { return botlib_export->aas.AAS_PointContents (point); }
 void SE_GameEAGetInput (int client, float thinktime, void *input) { botlib_export->ea.EA_GetInput (client, thinktime, input); }

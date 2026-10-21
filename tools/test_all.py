@@ -96,9 +96,10 @@ CASES = [
     case('quake3-server', 'games quake3', X + 'QUAKE3_SEED=7 QUAKE3_SERVER=inline QUAKE3_CLIENT=inline QUAKE3_SCENE=inline QUAKE3_SUM=1 ' + Q3 +
          ' +addbot sarge 3 +wait 100 +setviewpos 488 -968 378 90', True, until='q3stat: frame 700:', count=[(r'^q3srvsum: ', 223)],
          digest=[(r'^(q3srvsum: .*)', 'aaa1379a')]),
-    case('quake3-bots-serial', 'games quake3 long', X + 'QUAKE3_BOTS=serial QUAKE3_SUM=1 QUAKE3_SEED=7 QUAKE3_SERVER=inline ' + Q3 + ' +addbot sarge 3' * 3,
+    # QUAKE3_ENTER: the player enters at 1000 ms of the game, not when its load ends (docs/games/quake3.md)
+    case('quake3-bots-serial', 'games quake3 long', X + 'QUAKE3_ENTER=1000 QUAKE3_BOTS=serial QUAKE3_SUM=1 QUAKE3_SEED=7 QUAKE3_SERVER=inline ' + Q3 + ' +addbot sarge 3' * 3,
          True, until='q3stat: frame 700:', wall=400, count=[(r'^q3srvsum: ', 223)]),
-    case('quake3-bots', 'games quake3 long', X + 'QUAKE3_BOTX=serial QUAKE3_SUM=1 QUAKE3_SEED=7 QUAKE3_SERVER=inline ' + Q3 + ' +addbot sarge 3' * 3,
+    case('quake3-bots', 'games quake3 long', X + 'QUAKE3_ENTER=1000 QUAKE3_BOTX=serial QUAKE3_SUM=1 QUAKE3_SEED=7 QUAKE3_SERVER=inline ' + Q3 + ' +addbot sarge 3' * 3,
          True, until='q3stat: frame 700:', wall=400, same=[(r'^(q3srvsum: .*)', 'quake3-bots-serial')]),
     # ClassiCube (docs/games/classicube.md, "Checking it"): 52 meshes, 68,964 vertices at the start; the pack's sums the raw pack's
     case('classicube-meshes', 'games classicube', CC + 'CLASSICUBE_MESH=inline CLASSICUBE_MESH_SUM=1 CLASSICUBE_SEED=7 CLASSICUBE_STATS_MS=2000 classicube',

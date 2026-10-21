@@ -281,6 +281,12 @@
   for stuck). The field needs the host's primitive and points (`BackendOptions::laneField`; in Unity the
   tick mesh's 17th triangle and `_FieldPoints`, wired but not yet run in the world). geotune's small workers (2^3) have 6 lanes
   each: lanes gain from large caches, the field from neither.
+- Quake III's server skips what is as it was (`docs/games/quake3.md`, "The server's frame told and linked
+  cheaper"): a snapshot entity equal to the old frame's (`se_snap`), a link with the box of the last
+  (`se_boxed`: clear it if anything else changes an entity's leaves), a view's look at an entity
+  whose leaves are as they were (`se_seen`, `se_gen`: anything else that changes an entity's areas or
+  clusters raises `se_gen`), the bots' library told an unchanged state (`SE_BotLibTell`). Three bots'
+  server sums are compared with `QUAKE3_ENTER=1000`: otherwise they go by the client's load time.
 - HLSL shaders are compiled in the machine at run time (`programs/hlsl`, `hlsl.h`, `docs/system/hlsl.md`) to
   steps on the lanes; `linux/tcc/examples/fractal.c` is its example. After a change to the compiler run
   `programs/hlsl/test/hlsl_test.c` on the host (PASS, steps under random budgets the same as whole calls), and

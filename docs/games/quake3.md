@@ -150,6 +150,7 @@ machine and 156.5 on the CPU harness.
     QUAKE3_ROUTES=all     the routes to every area made ahead (426 million instructions, 1,984 KB)
     QUAKE3_SEED=N         the first core's random numbers from N, not the kernel's (two builds compared)
     QUAKE3_BOTS=serial    bots that think in the same frame think one after another on the server's core
+    QUAKE3_ENTER=MS       the player enters the game at that time of it, not when its load ends (sums compared)
     QUAKE3_TRACES=all     the server asks the level every trace again
     QUAKE3_SERVER_LOG=1   a q3srv: line for every job of the server's worker ("The server's pace")
     QUAKE3_CLIENT=inline  the client's game on the first core, drawn as it is made
@@ -786,7 +787,14 @@ Found on the way:
   to frame 700: 2 of 223 the same; in others 222 of 222). It goes by the length of the line
   typed: the build before the cheaper traces parted at 3 of 8 lengths (a variable of 1 to 8
   letters before the command), and a build whose helpers thought one after another at 4 of 8.
-  `RVC_RACES` found only reads as they were. Not found.
+  `RVC_RACES` found only reads as they were. Found on 21 October 2026 (`QUAKE3_SUM=2`): it is not
+  the bots. The player enters the game at 564 or at 633 ms of it (entity 3's `pos.trTime`), by how
+  long the client's game took to load (`CL_InitCGame` 6.12 or 6.26 s), and everything after
+  follows. Two sums only, in every build: the build of that day parts at lengths 2, 4 and 6, the
+  one before at 6, and `quake3-bots` as `test_all.py` types it fails on that day's. The game's seed fixed (a
+  build of its own) gave the same two sums. `QUAKE3_ENTER=1000` now has the player enter at
+  1000 ms of the game, whenever its load ended (`SV_UserMove`): the thinks at once and one after
+  another the same at all eight lengths (223 of 223), and the 16 runs the same as each other.
 - With three bots two builds' `q3srvsum:` lines part from the game's second frame on, also this
   build's and the same with two prints added: the game's random numbers are seeded from the clock
   as the level starts (`GAME_INIT`'s `Com_Milliseconds`). Builds are compared with one bot.
@@ -873,6 +881,76 @@ a program (its decoders keep their state in statics, and map their memory with s
 a worker cannot decode a picture of its own beside another); a JPEG whose markers are unevenly
 spread posts to busy workers (above); its PNG encoder wrote a 128 x 1312 sheet of three bytes a
 texel that neither it nor Pillow reads back (the all-PNG bake leaves it as texels).
+
+## The server's frame told and linked cheaper
+
+Where the server's frame went (21 October 2026, `prof.py` on `QUAKE3_SEED=7` with everything on the
+first core and no sums): a snapshot of the player's wrote every entity's delta field by field
+though most had not changed since the frame it is told against, the bots' library was told every
+entity again each think, and a link looked up the same leaves for an entity that had not moved.
+Each gives the answer it gave (`quake3.patch`, `server_shaderemu.c`):
+
+- **An entity the same as in the frame the snapshot is told against is not compared again**
+  (`se_snap` in `sv_snapshot.c`): `SV_BuildClientSnapshot` copies its state into the ring and
+  compares it with the old frame's in one loop, and `SV_EmitPacketEntities` writes nothing for it
+  where `MSG_WriteDeltaEntity` would have written nothing: that function 15 thousand instructions a
+  frame less, the copy 9 more.
+- **The entities linked and not hidden from all are listed once a time** (`se_sent`): the first
+  snapshot of a `SV_SendClientMessages` walks them all, the others walk that list, and the area
+  test is inline on the flood numbers (`CM_SE_Floods`).
+- **A link of an entity whose box is as last time keeps its leaves** (`se_boxed`, `se_absmin`,
+  `se_absmax` in `svEntity_t`); `SV_AreaEntities` walks the sector tree without recursion, in the
+  same order.
+- **The bots' library is told an entity whole only when its state changed** (`SE_BotLibTell` in
+  `ai_main.c`); one unchanged is only seen again (`AAS_SE_SeenAgain`, what `AAS_UpdateEntity`
+  does for the same state). The level's name for the map scripts is read once, not every think.
+
+A second round the same day:
+
+- **Each client's view keeps what it found of an entity's areas and clusters** (`se_seen` in
+  `sv_snapshot.c`) while the view's cluster, its area, the level and the areas' flood numbers
+  (`CM_SE_FloodGen`) are as they were and the entity's leaves were not made again (`se_gen`,
+  raised by `SV_LinkEntity` before it makes them): the flags are still tested every time.
+- **A list of entity numbers found in order is not sorted** (`SV_BuildClientSnapshot`): without
+  portals the walk finds them in order, and the bits that sorted them cost more than the walk. A
+  bot's numbers go into the ring without a remainder each.
+- `BotAIStartFrame` no longer clears a state it sets whole; the Pmove's kept ground and water and
+  `SV_Trace`'s kept traces compare words, not `memcmp`.
+
+| Everything on the first core, frames 300 to 1000 (231 frames of the game) | Instructions a frame (bots, game, telling) |
+|---|---|
+| one bot, before | 166.6k (70.3, 28.6, 67.7) |
+| one bot, first round | 152.0k (65.4, 27.9, 58.7), -8.8% |
+| one bot, second round | 140.1k (63.1, 27.3, 49.7), -15.9% |
+| three bots, before | 304.1k (96.9, 80.7, 126.6) |
+| three bots, first round | 278.7k (90.9, 79.3, 108.6), -8.4% |
+| three bots, second round | 252.4k (88.7, 77.0, 86.7), -17.0% |
+
+| The server's worker, `game_par.py`, seven typings, frames 300 to 700 | Instructions a frame: mean, median, 90th, worst | Its core's ms a frame: mean, worst | Frames a second |
+|---|---|---|---|
+| one bot, before | 141.8k, 133.4k, 180.1k, 482.7k | 43.6, 148 | 18.6 to 21.2 |
+| one bot, first round | 132.6k, 123.3k, 170.4k, 470.9k | 40.1, 143 | 19.6 to 22.1 (20.7) |
+| one bot, second round | 130.0k, 122.2k, 167.3k, 453.6k | 39.9, 136 | 20.3 to 23.8 (21.6) |
+| three bots, before | 224.9k, 221.6k, 304.6k, 387.9k | 80.0, 155 | 11.2 to 13.6 |
+| three bots, first round | 213.7k, 208.4k, 269.3k, 328.6k | 73.4, 145 | 11.6 to 13.3 (12.7) |
+| three bots, second round | 194.1k, 190.9k, 222.8k, 323.2k | 71.2, 142 | 12.6 to 14.0 (13.4) |
+
+On the worker the fights go by the typing, so its numbers move more than the first core's, and
+there a bot is told once a frame of the game where with everything on the first core it is told
+at every frame of the client's too: the second round cut that telling most. Tried and not kept:
+the list of entities to look at as a pass of its own before the walk, and the copy and the
+comparison as two loops (both slower); `se_visible` not inlined once it grew (the view's cache
+then saved nothing). Left: the bots' thinks and moves are traces, AAS and the level's, about 25
+nodes a trace at 27 instructions a node (`BotGapDistance` 13 traces a call, `BotEntityVisible`,
+the Pmoves), and the copy of the player's snapshot, 5 instructions a word of 52 an entity.
+
+**Checking it.** The one bot's sums (`QUAKE3_SUM=1`, everything on the first core, the server's
+and the client's game's) the same as before both rounds: 223 of 223 and 673 of 673; three bots'
+server sums with `QUAKE3_ENTER=1000` the same as the first round's, 223 of 223 (the client's
+game's sums with three bots part in 13 of 658 frames by the line typed alone, the same build
+too). Held frames 400 and 700 with the bot (`QUAKE3_HOLD`, `rvc_cpu --save-ram`, drawn by
+`gpu_reference.py`'s model): every pixel the same as before. `tools/test_all.py quake3 --long` 5
+of 5, with `--races` 5 of 5 and nothing undone.
 
 ## Checking it
 
