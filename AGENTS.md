@@ -315,3 +315,13 @@
   `test_all.py hlsl`: `rvc_cpu`'s picture must be the host's to the byte (sum `3614e8bb`). Each loop that is not
   unrolled stops by its own measured longest step; on the card `hlsl_bench` must say 0 steps too long.
   The IDE checks and builds a `.hlsl` with `hlslc` and runs it in `hlslview` (the example): `test_all.py nxide-hlsl`.
+- OpenTTD's game tick runs on a worker while the first core draws (`docs/games/openttd.md`, "The tick on a worker";
+  `OPENTTD_TICK=slices|whole` on the first core, "The tick in slices"): it yields at `TickYieldPoint()`, and what the
+  drawing does while it is held must change no game state; a new path from the GUI into the game (a command, a save)
+  calls `TickFinish()` first. A change the tick makes to what a vehicle looks like goes through `UpdateViewport` or
+  `MarkAllViewportsDirty` (its drawn copy is made from that); what reads or writes the screen calls `VpFlushFinish()`
+  first, as a picture's last flush is still being drawn. A per-core array a worker writes is 16 bytes a core
+  (`WaterRegionCheck`: 12-byte vectors were undone under `RVC_RACES`). `OPENTTD_SUM_AT=36` on the scroll must give
+  `d4e04e63`/`26aae0d5` on the worker, whole and sliced; `OPENTTD_CHECK=1` is 0 pixels paused (a running game can
+  differ by "One order"). A scroll is measured with `OPENTTD_PLAY_PART=scroll|follow` and the card's model
+  (`RVC_ADFAULT`, `RVC_WCACHE`), pictures and game ticks a second both.
