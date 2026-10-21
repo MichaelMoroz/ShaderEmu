@@ -20,7 +20,8 @@ Nano-X's build.
   `libgles.a` with `GLES/gl.h` and `GLES/segl.h` (`programs/linux/gles.c` in its float build:
   OpenGL ES 1 on the machine's GPU, `docs/machine/gpu.md`), and `libmcw.a` with `mcw.h` and `mcwx.h`: the worker
   cores (`docs/machine/multicore.md`, "Using the workers from a program", and "The second layer"), for a program that shares
-  its work out as `example shader` does.
+  its work out as `example shader` does; and `libhlsl.a` with `hlsl.h`, which compiles an HLSL
+  fragment shader for the lanes while the program runs (`docs/system/hlsl.md`, `example fractal`).
 - `cc -g` writes stabs, which the IDE's debugger reads (`docs/apps/ide.md`).
 - The C library's `sinf`, `cosf` and their like work in doubles, which are library calls
   here: a program that calls them for every pixel is seconds a picture. Write the few floats

@@ -47,6 +47,11 @@ CASES = [
     # lanes (docs/machine/lanes.md): none on rvc_cpu, so plain calls on every worker, compared with themselves;
     # one index a share longer than a pass, which a lane would leave to its worker
     case('lanetest', 'machine', 'lanetest 255 50 1 40; lanetest 31 40 3 20', True, count=[(r'^lanetest: PASS', 2)]),
+    # the HLSL compiler in the machine (docs/system/hlsl.md): the fractal example compiled there and drawn on 31 workers'
+    # lanes in steps, the host's sum (programs/hlsl/test/hlsl_test.c with the same arguments)
+    case('hlsl', 'machine', 'HLSL_WORKERS=31 hlsl_bench /usr/share/example-fractal.hlsl 160 120 1 eye=1.9095,1.2344,-2.7911 '
+         'forward=-0.53042,-0.3429,0.77531 right=0.82534,0,0.56464 up=-0.19362,0.9394,0.28301 size=160,120 turn=1,0,0,0,1,0,0,0,1',
+         True, has=[r'hlsl_bench: compiled in \d+ ms: .* 0 spilled', r'hlsl_bench: sum 3614e8bb']),
     case('fptest', 'machine', 'fptest', has=[r'fptest: done, 0 of 15 instructions wrong']),   # docs/machine/fpu.md
     # zerotest and tailtest are in no image: --long builds them into build/images/test_all (docs/machine/boot.md)
     case('zero-tail', 'machine long', 'zerotest 12 4; tailtest /usr/share/* /usr/bin/* /etc/*', wall=400, image='zerotail',
@@ -371,6 +376,11 @@ CASES = [
          "problems line:3 type:( wait wait problems quit quit quit' nxide",
          has=[r"^nxide: problem: line 118: ReferenceError: 'nowhere' is not defined", r"^nxide: problem: line 118: SyntaxError: expecting '\)'",
               r"^nxide: problem: line 18: NameError: name 'nowhere' isn't defined", r'^nxide: problem: line 3: SyntaxError: invalid syntax']),
+    # a shader in the IDE (docs/apps/ide.md): hlslc's mistake marked at its line, and Run starts hlslview with it
+    case('nxide-hlsl', 'desktop ide', X + "NXIDE_PRINT=1 NXIDE_SCRIPT='example:fractal.hlsl line:36 type:nowhere();| wait wait problems "
+         "quit quit quit' nxide; (sleep 15; killall hlslview) & NXIDE_PRINT=1 NXIDE_SCRIPT='example:fractal.hlsl run quit quit' nxide", True,
+         has=[r'^nxide: problem: line 36: error: no function nowhere', r'^nxide: fractal\.hlsl: nothing wrong found',
+              r'^nxide\| fractal: 20 pictures in', r'^nxide: the program was ended by signal 15']),
     case('nxide-tree', 'desktop ide', X + "mkdir -p /tmp/p/sub; echo 'print(1)' > /tmp/p/a_file_with_a_rather_long_name.py; echo x > /tmp/p/sub/b.js; "
          "NXIDE_PRINT=1 NXIDE_SCRIPT='project:/tmp/p noproject quit quit' nxide; NXIDE_PRINT=1 NXIDE_SCRIPT='tabs quit quit' nxide /tmp/p",
          has=[r'^nxide: project /tmp/p: 2 rows in its tree', r'^nxide: no project: no tree',

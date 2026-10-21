@@ -1,4 +1,4 @@
-/* syntax.h: what each character of a line of C, JavaScript or Python is, for its colour (docs/apps/ide.md).
+/* syntax.h: what each character of a line of C, JavaScript, Python or HLSL is, for its colour (docs/apps/ide.md).
  * A lexer, not a compiler: it knows words, numbers, strings, comments and lines for the
  * preprocessor, and the one thing a line needs from the lines before it, the state it begins in:
  * inside a comment, a JavaScript template or a Python string of three quotes. */
@@ -8,7 +8,7 @@
 #include <string.h>
 
 enum { SX_PLAIN, SX_KEYWORD, SX_TYPE, SX_DIRECTIVE, SX_STRING, SX_NUMBER, SX_COMMENT, SX_CALL, SX_KINDS };
-enum { SX_C, SX_JS, SX_PY, SX_LANGS };
+enum { SX_C, SX_JS, SX_PY, SX_HLSL, SX_LANGS };
 /* what a line begins inside: nothing, a comment, a template (`...`), a string of ''' or of """ */
 enum { SX_IN_NONE, SX_IN_COMMENT, SX_IN_TEMPLATE, SX_IN_SINGLES, SX_IN_DOUBLES };
 
@@ -34,8 +34,14 @@ static const char *const sx_py_types[] = { "int", "float", "str", "bool", "list"
 	"object", "range", "len", "print", "type", "isinstance", "enumerate", "zip", "map", "filter", "sorted", "reversed", "min",
 	"max", "sum", "abs", "open", "super", "self", "repr", "round", "input", "iter", "next", "any", "all", "hex", "ord", "chr",
 	"divmod", "pow", "Exception", "ValueError", "TypeError", "KeyError", "IndexError", "StopIteration", NULL };
+static const char *const sx_hlsl_keywords[] = { "if", "else", "for", "while", "do", "return", "break", "continue", "switch",
+	"case", "default", "discard", "struct", "static", "const", "uniform", "in", "out", "inout", "cbuffer", "register",
+	"packoffset", "typedef", "inline", "true", "false", NULL };
+static const char *const sx_hlsl_types[] = { "void", "bool", "bool2", "bool3", "bool4", "int", "int2", "int3", "int4", "uint",
+	"uint2", "uint3", "uint4", "float", "float2", "float3", "float4", "float2x2", "float3x3", "float4x4", "float2x3", "float3x2",
+	"float3x4", "float4x3", "half", "half2", "half3", "half4", "matrix", "vector", "SV_Position", "SV_Target", NULL };
 static const char *const *const sx_lists[SX_LANGS][2] = {
-	{ sx_c_keywords, sx_c_types }, { sx_js_keywords, sx_js_types }, { sx_py_keywords, sx_py_types },
+	{ sx_c_keywords, sx_c_types }, { sx_js_keywords, sx_js_types }, { sx_py_keywords, sx_py_types }, { sx_hlsl_keywords, sx_hlsl_types },
 };
 
 /* What a character may be part of: a name's letters, digits, the underscore (and in
@@ -182,7 +188,7 @@ sx_line(const char *text, int state, unsigned char *kinds)
 			j = j < n ? j + 1 : n;
 			while (i < j)
 				kinds[i++] = SX_STRING;
-		} else if ((ch == '#' && !directive && sx_lang == SX_C) || (py && ch == '@' && !directive)) {
+		} else if ((ch == '#' && !directive && (sx_lang == SX_C || sx_lang == SX_HLSL)) || (py && ch == '@' && !directive)) {
 			/* the directive's own word (a decorator's name); what follows is code again (but for #include's name) */
 			for (j = i + 1; j < n && text[j] == ' '; j++)
 				continue;
@@ -192,7 +198,7 @@ sx_line(const char *text, int state, unsigned char *kinds)
 			while (i < j)
 				kinds[i++] = SX_DIRECTIVE;
 		} else if ((is & SX_DIGIT) || (ch == '.' && (sx_class[(unsigned char)text[i + 1]] & SX_DIGIT))) {
-			for (; (sx_class[(unsigned char)text[i]] & (SX_ALPHA | SX_DIGIT | (sx_lang ? SX_UNDER : 0))) || text[i] == '.'; i++)
+			for (; (sx_class[(unsigned char)text[i]] & (SX_ALPHA | SX_DIGIT | (sx_lang == SX_JS || sx_lang == SX_PY ? SX_UNDER : 0))) || text[i] == '.'; i++)
 				kinds[i] = SX_NUMBER;
 		} else {
 			directive = directive ? directive : -1;	/* a # further on is not a directive */

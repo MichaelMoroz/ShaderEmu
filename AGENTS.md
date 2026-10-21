@@ -1,3 +1,6 @@
+- Linux with the MMU is no longer supported or developed for (21 October 2026): build, test, measure and document the
+  no-MMU machine only (`linux/nommu`, `build/images/nommu`). Do not fix, rebuild, test or keep in step anything that only
+  the MMU image uses, and do not add MMU paths to new work.
 - `tools\make_image.ps1` passes its arguments on to `make_linux_image.py` (at first it did not: `$args` inside a `Measure-Command` block is the block's own): `pwsh tools\make_image.ps1 --save-prebuilt` saves the prebuilt folder under the lock. It makes the
   no-MMU image after the shared one (`linux/nommu/image.py`, from `build/nommu` or
   `linux/prebuilt/nommu`), and with `--save-prebuilt` keeps that build too: Linux without the MMU
@@ -278,3 +281,9 @@
   for stuck). The field needs the host's primitive and points (`BackendOptions::laneField`; in Unity the
   tick mesh's 17th triangle and `_FieldPoints`, wired but not yet run in the world). geotune's small workers (2^3) have 6 lanes
   each: lanes gain from large caches, the field from neither.
+- HLSL shaders are compiled in the machine at run time (`programs/hlsl`, `hlsl.h`, `docs/system/hlsl.md`) to
+  steps on the lanes; `linux/tcc/examples/fractal.c` is its example. After a change to the compiler run
+  `programs/hlsl/test/hlsl_test.c` on the host (PASS, steps under random budgets the same as whole calls), and
+  `test_all.py hlsl`: `rvc_cpu`'s picture must be the host's to the byte (sum `3614e8bb`). Each loop that is not
+  unrolled stops by its own measured longest step; on the card `hlsl_bench` must say 0 steps too long.
+  The IDE checks and builds a `.hlsl` with `hlslc` and runs it in `hlslview` (the example): `test_all.py nxide-hlsl`.

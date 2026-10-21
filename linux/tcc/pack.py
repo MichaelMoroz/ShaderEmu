@@ -91,7 +91,7 @@ def packed(data, tiers):
 
 def main():
     tcc, stage, examples, header = sys.argv[1:5]
-    libs = [stage + '/usr/lib/' + l for l in ('libgles.a', 'libnano-X.a', 'libmcw.a', 'libc.a', 'tcc/libtcc1.a')]
+    libs = [stage + '/usr/lib/' + l for l in ('libgles.a', 'libnano-X.a', 'libhlsl.a', 'libmcw.a', 'libc.a', 'tcc/libtcc1.a')]
     sources = sorted(os.path.join(examples, f) for f in os.listdir(examples) if f.endswith('.c'))
     with tempfile.TemporaryDirectory() as tmp:
         for l in libs:

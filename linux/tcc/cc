@@ -1,7 +1,7 @@
 #!/bin/sh
 # cc: the machine's own C compiler (TinyCC), with the C library, Nano-X, OpenGL ES and the
-# worker cores' library (mcw.h).
+# worker cores' library (mcw.h) and the HLSL compiler (hlsl.h).
 #   cc cube.c -o cube
 # Its headers and libraries are in the ROM, in /usr/include and /usr/lib.
 # -mfpu: float arithmetic as the machine's instructions (a double is still a library call)
-exec tcc -static -mfpu "$@" -lgles -lnano-X -lmcw
+exec tcc -static -mfpu "$@" -lgles -lnano-X -lhlsl -lmcw

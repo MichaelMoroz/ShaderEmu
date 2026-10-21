@@ -25,7 +25,7 @@ fi
 # the examples in the other languages beside tcc's (example-NAME.js, .py), and the Python debugger
 for f in "$HERE"/examples/*.js "$HERE"/examples/*.py; do cp "$f" "$OUT/share/example-$(basename "$f")"; done
 cp "$HERE/pydbg.py" "$OUT/share/ide-pydbg.py"
-# the Start menu, and whose a C, JavaScript or Python file is (docs/system/open.md: before the editor's line for text)
+# the Start menu, and whose a C, JavaScript, Python or HLSL file is (docs/system/open.md: before the editor's line for text)
 printf '%s\n' "Programming/IDE=nxide" > "$OUT/share/nxapps.28-ide"
-printf '%s\n' "source   c,h,js,py   -   nxide %s" > "$OUT/share/nxopen.15-ide"
+printf '%s\n' "source   c,h,js,py,hlsl   -   nxide %s" > "$OUT/share/nxopen.15-ide"
 ls -l "$OUT/bin/nxide"

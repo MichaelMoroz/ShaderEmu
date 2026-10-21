@@ -63,6 +63,16 @@ rv32-cc -O2 -Wall -c -I"$REPO/programs/mc" "$REPO/programs/mc/mcwx.c" -o "$WORK/
 rm -f "$STAGE/usr/lib/libmcw.a"
 riscv32-linux-ar rcs "$STAGE/usr/lib/libmcw.a" "$WORK/build/mcw.o" "$WORK/build/mcwx.o"
 cp "$REPO/programs/mc/mcw.h" "$REPO/programs/mc/mcwx.h" "$REPO/programs/mc/mc.h" "$STAGE/usr/include/"
+# the HLSL compiler, which makes a shader the lanes' code at run time (docs/system/hlsl.md)
+bash "$REPO/programs/hlsl/build.sh" "$WORK/build/hlsl" > /dev/null
+cp "$WORK/build/hlsl/libhlsl.a" "$STAGE/usr/lib/" && cp "$REPO/programs/hlsl/hlsl.h" "$STAGE/usr/include/"
+# and the IDE's for a .hlsl file (docs/apps/ide.md): hlslc checks it, hlslview (the fractal example) runs it
+mkdir -p "$ROOT/usr/bin"
+rv32-cc -O2 -Wall -I"$REPO/programs/hlsl" "$REPO/programs/hlsl/hlslc.c" -L"$STAGE/usr/lib" -lhlsl -lmcw -o "$WORK/build/hlsl/hlslc"
+rv32-cc -O2 -Wall -idirafter "$STAGE/usr/include" "$HERE/examples/fractal.c" -L"$STAGE/usr/lib" -lgles -lnano-X -lhlsl -lmcw -lm \
+    -o "$WORK/build/hlsl/hlslview"
+riscv32-linux-strip -o "$ROOT/usr/bin/hlslc" "$WORK/build/hlsl/hlslc"
+riscv32-linux-strip -o "$ROOT/usr/bin/hlslview" "$WORK/build/hlsl/hlslview"
 # libmedia's (linux/libmedia/build.sh, run before): kept, since usr/lib and usr/include are replaced below
 if [ -f "$WORK/src/libmedia/libmedia.a" ]; then
     cp "$WORK/src/libmedia/libmedia.a" "$STAGE/usr/lib/" && cp "$REPO/linux/libmedia/media.h" "$STAGE/usr/include/"
@@ -100,7 +110,8 @@ ls -l "$ROOT/usr/bin/tcc"; echo "$(find "$ROOT/usr/include" "$ROOT/usr/lib" -typ
 tr -d '\r' < "$HERE/cc" > "$ROOT/usr/bin/cc"
 tr -d '\r' < "$HERE/example" > "$ROOT/usr/bin/example"
 chmod +x "$ROOT/usr/bin/cc" "$ROOT/usr/bin/example"
-for f in "$HERE"/examples/*.c; do cp "$f" "$ROOT/usr/share/example-$(basename "$f")"; done
+for f in "$HERE"/examples/*.c "$HERE"/examples/*.hlsl; do cp "$f" "$ROOT/usr/share/example-$(basename "$f")"; done
 # (each opens in the IDE, to be read, changed and run from there; `example NAME` still builds and runs one)
 printf '%s\n' "Programming/Cube (C example)=nxide /usr/share/example-cube.c" "Programming/Home (C example)=nxide /usr/share/example-home.c" \
-    "Programming/Shader on 255 cores (C example)=nxide /usr/share/example-shader.c" > "$ROOT/usr/share/nxapps.30-examples"
+    "Programming/Shader on 255 cores (C example)=nxide /usr/share/example-shader.c" \
+    "Programming/Fractal in HLSL (C example)=nxide /usr/share/example-fractal.c" > "$ROOT/usr/share/nxapps.30-examples"

@@ -24,6 +24,7 @@ One file per subject. A doc names another by its file name, which is unique acro
 - [nanox.md](system/nanox.md) – Nano-X
 - [fonts.md](system/fonts.md) – Fonts
 - [cc.md](system/cc.md) – A C compiler in the machine
+- [hlsl.md](system/hlsl.md) – HLSL in the machine: shaders compiled for the lanes
 - [scripts.md](system/scripts.md) – Scripts: JavaScript and Python
 - [terminal.md](system/terminal.md) – Terminal programs
 - [ports.md](system/ports.md) – Ports: upstream's network and system programs

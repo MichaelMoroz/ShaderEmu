@@ -2,8 +2,9 @@
 
 `nxide` is a place to write C in the machine, build it with the machine's own compiler
 (`docs/system/cc.md`) and run it, with a debugger; and JavaScript and Python, run by QuickJS
-and MicroPython (`docs/system/scripts.md`), Python with a debugger too. Start menu, Programming;
-a `.c`, `.h`, `.js` or `.py` file opened anywhere is its (`/usr/share/nxopen.15-ide`,
+and MicroPython (`docs/system/scripts.md`), Python with a debugger too; and HLSL shaders, compiled
+in the machine for the lanes (`docs/system/hlsl.md`). Start menu, Programming;
+a `.c`, `.h`, `.js`, `.py` or `.hlsl` file opened anywhere is its (`/usr/share/nxopen.15-ide`,
 `docs/system/open.md`), and so is the explorer's Edit of one. A file's language is its ending.
 
     / # nxide                   # the project of last time, else the hello example
@@ -77,6 +78,15 @@ or `micropython FILE`. A script that ends with an error has its line marked and 
 the interpreter's trace back (QuickJS's `at ... (FILE:LINE:COLUMN)`, MicroPython's
 `File "FILE", line N`), the innermost line of the file itself.
 
+A shader (`.hlsl`, `.hlsli`, `.fx`) is checked while typing and built by `hlslc`, the HLSL
+compiler as a program (`programs/hlsl/hlslc.c`), which says a mistake as tcc does
+(`FILE:LINE: error: what`), so it is marked as C's are. Run starts `hlslview FILE`: the
+`fractal` example built at image time (`linux/tcc/build.sh`), which compiles the file when
+it starts and sets whichever of its uniforms the shader has (`eye`, `forward`, `right`,
+`up`, `size`, `turn`, `time`), so a shader of `float4 main(float4 pos : SV_Position) :
+SV_Target` and those uniforms runs as it is. A shader has no debugger. Its colours are
+C's lexer with HLSL's words (`syntax.h`). The program's link has `-lhlsl` as `cc`'s has.
+
 ## The debugger
 
 Without an MMU (the default machine) `cc` makes a flat program and deletes the ELF that has
@@ -144,9 +154,10 @@ runs it only.
 
 ## The examples
 
-File, Examples lists `/usr/share/example-*.c` (`linux/tcc/examples`) and then the scripts'
-`example-*.js` and `.py` (`linux/ide/examples`). One is opened as the user's own copy,
-`/root/NAME.c` (`.js`, `.py`), which is written at the first Save or Build.
+File, Examples lists `/usr/share/example-*.c` (`linux/tcc/examples`), then the scripts'
+`example-*.js` and `.py` (`linux/ide/examples`), then the shaders' `.hlsl`. One is opened as the
+user's own copy, `/root/NAME.c` (`.js`, `.py`, `.hlsl`), which is written at the first Save or
+Build. The script word `example:NAME.ENDING` picks one of two of a name.
 
 | | |
 |---|---|
@@ -154,6 +165,8 @@ File, Examples lists `/usr/share/example-*.c` (`linux/tcc/examples`) and then th
 | `cube` | the smallest OpenGL program |
 | `home` | a place to walk round |
 | `shader` | a picture every pixel of which is one function's, on the worker cores |
+| `fractal` | C: a ray marched Sierpinski pyramid, its shader compiled in the machine (`docs/system/hlsl.md`) |
+| `fractal` (HLSL) | that shader: change it and Run |
 | `pi` | JavaScript: pi to 200 digits with BigInt (upstream's `/examples/pi.js`, Bellard's) |
 | `primes` | Python: a sieve, with a function to step into |
 

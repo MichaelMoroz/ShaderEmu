@@ -1,7 +1,7 @@
-/* nxide: a small place to write C, JavaScript and Python in, build it and run it (docs/apps/ide.md): the
- * text coloured by a lexer (syntax.h), every change kept (text.h), the machine's own compiler (or
- * qjsc, MicroPython) with its complaints marked at their lines, and the program run below or under
- * the debugger (debug.h; ide-pydbg.py for Python). */
+/* nxide: a small place to write C, JavaScript, Python and HLSL in, build it and run it (docs/apps/ide.md):
+ * the text coloured by a lexer (syntax.h), every change kept (text.h), the machine's own compiler (or
+ * qjsc, MicroPython, hlslc) with its complaints marked at their lines, and the program run below or
+ * under the debugger (debug.h; ide-pydbg.py for Python; a shader runs in hlslview). */
 #define _GNU_SOURCE
 #include "ui.h"
 #include "ui_files.h"
@@ -110,7 +110,7 @@ static void doc_show(int i);
 static char variables[48][160], stack[16][160];
 static int variable_count, variable_top, stack_count;
 
-static char examples[12][40], example_ends[12][4], example_labels[12][56];	/* a name, its ending, its menu's line */
+static char examples[12][40], example_ends[12][6], example_labels[12][56];	/* a name, its ending, its menu's line */
 static int example_count;
 /* the Python debugger: its state as debug.h's, the line it stopped at, and its two pipes */
 static int py_state = DBG_GONE, py_line, py_tell = -1, py_hear = -1, py_heard;
@@ -176,7 +176,8 @@ lang_of(const char *file)
 {
 	const char *dot = strrchr(file, '.');
 
-	return !dot || strchr(dot, '/') ? SX_C : !strcmp(dot, ".js") || !strcmp(dot, ".mjs") ? SX_JS : !strcmp(dot, ".py") ? SX_PY : SX_C;
+	return !dot || strchr(dot, '/') ? SX_C : !strcmp(dot, ".js") || !strcmp(dot, ".mjs") ? SX_JS : !strcmp(dot, ".py") ? SX_PY :
+	       !strcmp(dot, ".hlsl") || !strcmp(dot, ".hlsli") || !strcmp(dot, ".fx") ? SX_HLSL : SX_C;
 }
 
 /* A text cut to `room` pixels of the look's font, with "..." at its end when it was cut. */
@@ -794,7 +795,7 @@ can(int id)
 	case C_UNDO: return tx_done_count > 0;
 	case C_REDO: return tx_undone_count > 0;
 	case C_BUILD: case C_RUN: return idle;
-	case C_DEBUG: return (idle && sx_lang != SX_JS) || held();	/* (QuickJS cannot stop at a line) */
+	case C_DEBUG: return (idle && sx_lang != SX_JS && sx_lang != SX_HLSL) || held();	/* (QuickJS cannot stop at a line, nor a lane) */
 	case C_STOP: return !idle;
 	case C_OVER: case C_INTO: case C_OUT: return held();
 	case C_PROJECT_CLOSE: return project[0] != 0;
@@ -1138,7 +1139,7 @@ draw_tree(void)
 		else if (tree[k].folder)
 			ui_glyph_point(window, x + 1, ry + 9, 3, 1);
 		cell = tree[k].folder ? cells[tree[k].open] : dot && !strcmp(dot, ".c") ? cells[2] : dot && !strcmp(dot, ".h") ? cells[3] :
-		       dot && !strcmp(dot, ".js") ? cells[5] : dot && !strcmp(dot, ".py") ? cells[6] : cells[4];
+		       dot && !strcmp(dot, ".js") ? cells[5] : dot && !strcmp(dot, ".py") ? cells[6] : dot && !strcmp(dot, ".hlsl") ? cells[2] : cells[4];
 		ui_icon(window, ui_gc, x + 9, ry + 1, cell, 16);
 		ui_text(window, x + 28, ry + 3, fitted(name, TREE_W - 8 - bar - x - 28), -1, chosen ? WHITE : BLACK, 0);
 	}
@@ -1475,7 +1476,8 @@ out_bytes(const char *bytes, int count)
 static int
 ours(const char *name, int length)
 {
-	const char *check = sx_lang == SX_JS ? "/tmp/ide-check.js" : sx_lang == SX_PY ? "/tmp/ide-check.py" : "/tmp/ide-check.c";
+	const char *check = sx_lang == SX_JS ? "/tmp/ide-check.js" : sx_lang == SX_PY ? "/tmp/ide-check.py" :
+			    sx_lang == SX_HLSL ? "/tmp/ide-check.hlsl" : "/tmp/ide-check.c";
 
 	return (length == (int)strlen(path) && !strncmp(name, path, (size_t)length)) ||
 	       (length == (int)strlen(check) && !strncmp(name, check, (size_t)length));
@@ -1527,11 +1529,11 @@ script_problems(const char *text)
 	problem_count = 1;
 }
 
-/* The compiler's lines ("file:LINE: error: what") as problems at their lines. */
+/* The compiler's lines ("file:LINE: error: what", hlslc's too) as problems at their lines. */
 static void
 problems_from(const char *text)
 {
-	if (sx_lang != SX_C) {
+	if (sx_lang == SX_JS || sx_lang == SX_PY) {
 		script_problems(text);
 		return;
 	}
@@ -1554,7 +1556,7 @@ problems_from(const char *text)
 				if (!p->error && !memmem(what, (size_t)(text + length - what), "warning", 7))
 					break;
 				/* another file's (a header's): at no line of this one, its whole line said */
-				if (!((name == (int)strlen(path) && !strncmp(text, path, (size_t)name)) || (name == 16 && !strncmp(text, "/tmp/ide-check.c", 16))))
+				if (!ours(text, name))
 					p->line = 0, what = text;
 				n = (int)(text + length - what) < (int)sizeof p->text - 1 ? (int)(text + length - what) : (int)sizeof p->text - 1;
 				memcpy(p->text, what, (size_t)n);
@@ -1930,12 +1932,13 @@ built_ok(void)
 	say(text);
 	if (then_do == C_RUN) {
 		char *const words[] = { program, NULL }, *const js[] = { "qjs", "--std", path, NULL }, *const py[] = { "micropython", path, NULL };
+		char *const shader[] = { "hlslview", path, NULL };
 
 		if (sx_lang != SX_C) {
-			snprintf(text, sizeof text, "%s '%.120s'", sx_lang == SX_JS ? "qjs --std" : "micropython", path);
+			snprintf(text, sizeof text, "%s '%.120s'", sx_lang == SX_JS ? "qjs --std" : sx_lang == SX_PY ? "micropython" : "hlslview", path);
 			out_line(text);
 		}
-		job_start(J_RUN, sx_lang == SX_JS ? js : sx_lang == SX_PY ? py : words);
+		job_start(J_RUN, sx_lang == SX_JS ? js : sx_lang == SX_PY ? py : sx_lang == SX_HLSL ? shader : words);
 		say("running");
 		panel = P_OUTPUT;
 	} else if (then_do == C_DEBUG && sx_lang == SX_PY)
@@ -2072,8 +2075,9 @@ poll_all(void)
 		static char *const check[] = { "tcc", "-static", "-mfpu", "-I", folder, "-c", "/tmp/ide-check.c", "-o", "/tmp/ide-check.o", NULL };
 		static char *const check_js[] = { "qjsc", "-c", "-o", "/tmp/ide-check.out", "/tmp/ide-check.js", NULL };
 		static char *const check_py[] = { "micropython", "-c", PY_COMPILE, "/tmp/ide-check.py", NULL };
-		static const char *const checked[SX_LANGS] = { "/tmp/ide-check.c", "/tmp/ide-check.js", "/tmp/ide-check.py" };
-		static int files[SX_LANGS] = { -1, -1, -1 }, room;
+		static char *const check_hlsl[] = { "hlslc", "/tmp/ide-check.hlsl", NULL };
+		static const char *const checked[SX_LANGS] = { "/tmp/ide-check.c", "/tmp/ide-check.js", "/tmp/ide-check.py", "/tmp/ide-check.hlsl" };
+		static int files[SX_LANGS] = { -1, -1, -1, -1 }, room;
 		int *file = &files[sx_lang];
 		static char *text;
 		struct stat is;
@@ -2107,7 +2111,7 @@ poll_all(void)
 			*file = open(checked[sx_lang], O_WRONLY | O_CREAT | O_CLOEXEC, 0644);
 		if (*file < 0 || pwrite(*file, text, (size_t)n, 0) != n || ftruncate(*file, n) != 0)
 			return;
-		job_start(J_CHECK, sx_lang == SX_JS ? check_js : sx_lang == SX_PY ? check_py : check);
+		job_start(J_CHECK, sx_lang == SX_JS ? check_js : sx_lang == SX_PY ? check_py : sx_lang == SX_HLSL ? check_hlsl : check);
 	}
 }
 
@@ -2305,7 +2309,7 @@ doc_close(int i)
 		fresh_doc();
 }
 
-/* An example is the user's copy of it once there is one: /root/NAME.c (.js, .py). */
+/* An example is the user's copy of it once there is one: /root/NAME.c (.js, .py, .hlsl). */
 static void
 open_example(int n)
 {
@@ -2645,24 +2649,26 @@ build(int then)
 		job_stop();
 	static char elf[340];
 	char *const linked[] = { "tcc", "-shared", "-nostdlib", "-mfpu", "/usr/lib/flatcrt.o", "/usr/lib/crti.o", "-g", path, "-lgles", "-lnano-X",
-				 "-lmcw", "-lc", "/usr/lib/tcc/libtcc1.a", "/usr/lib/crtn.o", "-o", elf, NULL };
+				 "-lhlsl", "-lmcw", "-lc", "/usr/lib/tcc/libtcc1.a", "/usr/lib/crtn.o", "-o", elf, NULL };
 
 	if (tx_modified && !tx_save(path)) {	/* (a file as it was opened is not written again) */
 		say("cannot write the file");
 		return;
 	}
 	if (sx_lang != SX_C) {
-		/* a script's build is its interpreter's look at it: qjsc compiles it, MicroPython's compile() */
+		/* a script's build is its interpreter's look at it: qjsc compiles it, MicroPython's compile(); a shader's is hlslc */
 		char *const js[] = { "qjsc", "-c", "-o", "/tmp/ide-build.out", path, NULL };
 		char *const py[] = { "micropython", "-c", (char *)PY_COMPILE, path, NULL };
+		char *const shader[] = { "hlslc", path, NULL };
 
 		run_doc = doc_now;
 		then_do = then;
 		problem_count = 0;
 		out_line("");
-		snprintf(shell, sizeof shell, sx_lang == SX_JS ? "qjsc -c '%s' (is it JavaScript?)" : "micropython: compile '%s' (is it Python?)", path);
+		snprintf(shell, sizeof shell, sx_lang == SX_JS ? "qjsc -c '%s' (is it JavaScript?)" : sx_lang == SX_PY ? "micropython: compile '%s' (is it Python?)" :
+			 "hlslc '%s' (compiled for the lanes, not run)", path);
 		out_line(shell);
-		job_start(J_BUILD, sx_lang == SX_JS ? js : py);
+		job_start(J_BUILD, sx_lang == SX_JS ? js : sx_lang == SX_PY ? py : shader);
 		say("looking at it...");
 		panel = P_OUTPUT;
 		unchecked = 0;
@@ -2694,8 +2700,8 @@ help(int about)
 		"A red bar before a line is the compiler's error there, an orange one its warning: Problems below says what, a click goes there.",
 	};
 	static const char *const what[] = {
-		"nxide: an editor for C, JavaScript and Python, the machine's own C compiler (TinyCC), QuickJS, MicroPython and a debugger.",
-		"The colours are a lexer's; the compiler (qjsc, MicroPython) checks the text a moment after you stop typing. File > Examples has programs to begin from.",
+		"nxide: an editor for C, JavaScript, Python and HLSL, the machine's own C compiler (TinyCC), QuickJS, MicroPython, an HLSL compiler and a debugger.",
+		"The colours are a lexer's; the compiler (qjsc, MicroPython, hlslc) checks the text a moment after you stop typing. A .hlsl file runs in hlslview. File > Examples has programs to begin from.",
 	};
 	int i;
 
@@ -2737,7 +2743,7 @@ command_done(int id)
 		/* from the project's folder, or else the shown file's */
 		snprintf(where, sizeof where, "%.*s", project[0] ? (int)strlen(project) : strrchr(path, '/') && strrchr(path, '/') != path ? (int)(strrchr(path, '/') - path) : 5,
 			 project[0] ? project : strrchr(path, '/') && strrchr(path, '/') != path ? path : "/root");
-		if (ui_choose_file("Open", where, ".c .h .js .py .txt", chosen, sizeof chosen, others))
+		if (ui_choose_file("Open", where, ".c .h .js .py .hlsl .txt", chosen, sizeof chosen, others))
 			open_file(chosen);
 		draw_all();
 		return;
@@ -3534,9 +3540,15 @@ scripted(void)
 	} else if (!strncmp(word, "line:", 5)) {
 		go_to_line(atoi(word + 5));
 	} else if (!strncmp(word, "example:", 8)) {
-		for (i = 0; i < example_count; i++)
-			if (!strcmp(examples[i], word + 8))
+		for (i = 0; i < example_count; i++) {
+			char named_as[48];
+
+			snprintf(named_as, sizeof named_as, "%.39s.%.5s", examples[i], example_ends[i]);
+			if (!strcmp(examples[i], word + 8) || !strcmp(named_as, word + 8)) {
 				command(C_EXAMPLE + i);
+				break;
+			}
+		}
 		printf("nxide: opened %s: %d lines, cursor %d,%d\n", path, tx_count, tx_x, tx_y);
 	} else if (!strncmp(word, "project:", 8)) {
 		project_open(word + 8, 0);
@@ -3672,12 +3684,13 @@ main(int argc, char **argv)
 	if (getenv("NXIDE_SCRIPT"))
 		snprintf(script, sizeof script, "%s", getenv("NXIDE_SCRIPT"));
 	scripted_run = script[0] != 0;
-	/* the examples: example-NAME.c, .js and .py, C's first, each language's by name */
+	/* the examples: example-NAME.c, .js, .py and .hlsl, C's first, each language's by name */
 	while (share && (entry = readdir(share)) != NULL && example_count < 12) {
 		const char *dot = strrchr(entry->d_name, '.');
 
-		if (!strncmp(entry->d_name, "example-", 8) && strlen(entry->d_name) < 40 && dot && (!strcmp(dot, ".c") || !strcmp(dot, ".js") || !strcmp(dot, ".py")))
-			snprintf(examples[example_count++], sizeof examples[0], "%d%s", dot[1] == 'c' ? 0 : dot[1] == 'j' ? 1 : 2, entry->d_name + 8);
+		if (!strncmp(entry->d_name, "example-", 8) && strlen(entry->d_name) < 40 && dot && (!strcmp(dot, ".c") || !strcmp(dot, ".js") || !strcmp(dot, ".py") || !strcmp(dot, ".hlsl")))
+			snprintf(examples[example_count++], sizeof examples[0], "%d%s", dot[1] == 'c' ? 0 : dot[1] == 'j' ? 1 : dot[1] == 'p' ? 2 : 3,
+				 entry->d_name + 8);
 	}
 	if (share)
 		closedir(share);
@@ -3689,7 +3702,7 @@ main(int argc, char **argv)
 		*dot = 0;
 		memmove(examples[i], examples[i] + 1, strlen(examples[i]));
 		snprintf(example_labels[i], sizeof example_labels[0], "%s%s", examples[i],
-			 example_ends[i][0] == 'j' ? " (JavaScript)" : example_ends[i][0] == 'p' ? " (Python)" : "");
+			 example_ends[i][0] == 'j' ? " (JavaScript)" : example_ends[i][0] == 'p' ? " (Python)" : example_ends[i][0] == 'h' ? " (HLSL)" : "");
 		example_items[i].label = example_labels[i];
 		example_items[i].icon = -1;
 		example_items[i].id = C_EXAMPLE + i;
@@ -3718,7 +3731,7 @@ main(int argc, char **argv)
 	for (i = 0; project[0] && !doc_count && i < tree_count; i++) {
 		const char *dot = strrchr(tree[i].path, '.');
 
-		if (!tree[i].folder && !tree[i].depth && dot && (!strcmp(dot, ".c") || !strcmp(dot, ".js") || !strcmp(dot, ".py")))
+		if (!tree[i].folder && !tree[i].depth && dot && (!strcmp(dot, ".c") || !strcmp(dot, ".js") || !strcmp(dot, ".py") || !strcmp(dot, ".hlsl")))
 			open_file(tree[i].path);
 	}
 	if (!doc_count) {
