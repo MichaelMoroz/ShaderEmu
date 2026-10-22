@@ -436,3 +436,20 @@ def : Pat<(setoge (f32 GPR:$a), (f32 GPR:$b)), (FLE GPR:$b, GPR:$a)>;
 def : Pat<(setuo (f32 GPR:$a), (f32 GPR:$b)), (FUNORD GPR:$a, GPR:$b)>;
 def : Pat<(setne (f32 GPR:$a), (f32 GPR:$b)),
           (XORI (FEQ GPR:$a, GPR:$b), 1)>;
+
+// The card's special functions: what reaches selection is afn's (the others
+// became libm calls, GPUVMTargetLowering::lowerApproxFunc).
+def : Pat<(fsin (f32 GPR:$a)), (FSIN GPR:$a)>;
+def : Pat<(fcos (f32 GPR:$a)), (FCOS GPR:$a)>;
+def : Pat<(fexp2 (f32 GPR:$a)), (FEXP2 GPR:$a)>;
+def : Pat<(flog2 (f32 GPR:$a)), (FLOG2 GPR:$a)>;
+// 1 / x and 1 / sqrt(x) approximately (afn or arcp)
+def fpimm_one : FPImmLeaf<f32, [{ return Imm.isExactlyValue(1.0); }]>;
+def fdiv_approx : PatFrag<(ops node:$a, node:$b), (fdiv node:$a, node:$b), [{
+  return N->getFlags().hasApproximateFuncs() ||
+         N->getFlags().hasAllowReciprocal();
+}]>;
+let AddedComplexity = 2 in {
+def : Pat<(fdiv_approx fpimm_one, (fsqrt (f32 GPR:$a))), (FRSQRT GPR:$a)>;
+def : Pat<(fdiv_approx fpimm_one, (f32 GPR:$a)), (FRCP GPR:$a)>;
+}

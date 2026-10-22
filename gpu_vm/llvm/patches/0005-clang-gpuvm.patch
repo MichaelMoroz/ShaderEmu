@@ -79,6 +79,21 @@ index 5828aae48..3108144e5 100644
  
  } // end namespace clang.
  
+diff --git a/clang/include/clang/Driver/ToolChain.h b/clang/include/clang/Driver/ToolChain.h
+index 863ba1084..5fa08e594 100644
+--- a/clang/include/clang/Driver/ToolChain.h
++++ b/clang/include/clang/Driver/ToolChain.h
+@@ -897,6 +897,10 @@ public:
+   virtual llvm::DenormalMode getDefaultDenormalModeForType(
+       const llvm::opt::ArgList &DriverArgs, const JobAction &JA,
+       const llvm::fltSemantics *FPType = nullptr) const {
++    // gpu_vm's float ops flush denormals (double is software, IEEE).
++    if (getTriple().getArch() == llvm::Triple::gpuvm &&
++        FPType == &llvm::APFloat::IEEEsingle())
++      return llvm::DenormalMode::getPreserveSign();
+     return llvm::DenormalMode::getIEEE();
+   }
+ 
 diff --git a/clang/lib/Basic/CMakeLists.txt b/clang/lib/Basic/CMakeLists.txt
 index 21851e79b..393abd972 100644
 --- a/clang/lib/Basic/CMakeLists.txt

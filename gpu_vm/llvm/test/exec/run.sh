@@ -50,7 +50,8 @@ for t in "${tests[@]}"; do
     for o in $LEVELS; do
         exe="$OUT/$t-O$o.elf"
         log="$OUT/$t-O$o.log"
-        if ! $CC -O$o -c -o "$OUT/$t-O$o.o" "$HERE/$t.c" > "$log" 2>&1; then
+        flags=$(sed -n 's|^// FLAGS: *||p' "$HERE/$t.c")
+        if ! $CC -O$o $flags -c -o "$OUT/$t-O$o.o" "$HERE/$t.c" > "$log" 2>&1; then
             fail=$((fail + 1)); failed+=("$t-O$o(compile)"); continue
         fi
         if ! "$BIN/ld.lld" -e _start -o "$exe" "$OUT/crt0.o" "$OUT/$t-O$o.o" "$RT" >> "$log" 2>&1; then

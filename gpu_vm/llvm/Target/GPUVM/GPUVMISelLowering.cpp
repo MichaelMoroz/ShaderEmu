@@ -113,6 +113,11 @@ GPUVMTargetLowering::GPUVMTargetLowering(const TargetMachine &TM,
                       ISD::FASIN, ISD::FACOS, ISD::FATAN, ISD::FATAN2,
                       ISD::FSINH, ISD::FCOSH, ISD::FTANH, ISD::FCANONICALIZE},
                      MVT::f32, Expand);
+  // The card's approximate special functions under afn (-ffast-math), libm
+  // otherwise.
+  setOperationAction({ISD::FSIN, ISD::FCOS, ISD::FEXP2, ISD::FLOG2, ISD::FEXP,
+                      ISD::FEXP10, ISD::FLOG, ISD::FLOG10},
+                     MVT::f32, Custom);
   setOperationAction({ISD::FMAD, ISD::FMINNUM, ISD::FMAXNUM,
                       ISD::FMINIMUMNUM, ISD::FMAXIMUMNUM, ISD::FSQRT,
                       ISD::FFLOOR, ISD::FCEIL, ISD::FTRUNC, ISD::FROUNDEVEN,
@@ -594,6 +599,15 @@ SDValue GPUVMTargetLowering::LowerOperation(SDValue Op,
     return lowerFRAMEADDR(Op, DAG);
   case ISD::RETURNADDR:
     return lowerRETURNADDR(Op, DAG);
+  case ISD::FSIN:
+  case ISD::FCOS:
+  case ISD::FEXP2:
+  case ISD::FLOG2:
+  case ISD::FEXP:
+  case ISD::FEXP10:
+  case ISD::FLOG:
+  case ISD::FLOG10:
+    return lowerApproxFunc(Op, DAG);
   case ISD::INTRINSIC_VOID:
     return lowerINTRINSIC_VOID(Op, DAG);
   default:
@@ -740,5 +754,33 @@ SDValue GPUVMTargetLowering::lowerINTRINSIC_VOID(SDValue Op,
                          Op.getOperand(2), Op.getOperand(3), Op.getOperand(4));
   default:
     return SDValue();
+  }
+}
+
+// sin, cos, exp2, log2 are the card's (approximate) ops under afn; exp, exp10,
+// log, log10 through exp2 and log2. Without afn: libm.
+SDValue GPUVMTargetLowering::lowerApproxFunc(SDValue Op,
+                                             SelectionDAG &DAG) const {
+  SDNodeFlags Flags = Op->getFlags();
+  if (!Flags.hasApproximateFuncs())
+    return SDValue();
+  SDLoc DL(Op);
+  EVT VT = Op.getValueType();
+  SDValue X = Op.getOperand(0);
+  auto Mul = [&](SDValue V, double K) {
+    return DAG.getNode(ISD::FMUL, DL, VT, V, DAG.getConstantFP(K, DL, VT),
+                       Flags);
+  };
+  switch (Op.getOpcode()) {
+  case ISD::FEXP: // e^x = 2^(x log2 e)
+    return DAG.getNode(ISD::FEXP2, DL, VT, Mul(X, 1.4426950408889634), Flags);
+  case ISD::FEXP10: // 10^x = 2^(x log2 10)
+    return DAG.getNode(ISD::FEXP2, DL, VT, Mul(X, 3.3219280948873622), Flags);
+  case ISD::FLOG: // ln x = log2 x ln 2
+    return Mul(DAG.getNode(ISD::FLOG2, DL, VT, X, Flags), 0.6931471805599453);
+  case ISD::FLOG10: // log10 x = log2 x log10 2
+    return Mul(DAG.getNode(ISD::FLOG2, DL, VT, X, Flags), 0.3010299956639812);
+  default:
+    return Op; // the op itself
   }
 }
