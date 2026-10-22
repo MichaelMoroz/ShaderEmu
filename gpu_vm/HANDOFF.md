@@ -22,6 +22,10 @@ Rules the user gave along the way:
   LLVM folders are `~/gpu_vm/...`; `~/sx` is a link to it, kept because the build tree has the old absolute paths
   (remove it with the next clean LLVM configure). The lean baseline image is `build/images/lean_isaloops`. The machine is
   not x86: the name ShaderX86 found in the tree (the GPU queue's mutex, the porting skill) means nothing for it.
+- **GPU safety** (22 October 2026: the machine crashed with a GPU fault during an unchecked tick variant's batch,
+  x18e, and the drivers had to be reinstalled): every new tick variant passes the full check on WARP first (a hang
+  there is harmless); never time a variant on the card with `--nocheck` unless that source passed WARP's checks; every
+  loop of the tick has a hard iteration cap independent of the budget logic.
 - **Performance first** (the user, 22 October 2026): an ISA change that makes the tick faster, or keeps it 2-3x the
   lean RISC-V tick, takes priority over what it costs the toolchain and the built programs (the reference, the
   assembler, LLVM's MC layer and lld, the rebuilt runtimes, userland and kernel follow it).
