@@ -65,7 +65,7 @@ static struct {
     uint32_t ncores = 1, budget = 8192, pass_time = 20, ram_end = 0, batch = 32, rounds = 2, check_ram = 4096;
     uint64_t max_bundles = 0;
     bool stats = false, strace = false, console = true, console_in = true, check = false, trace_pass = false, warp = false;
-    std::string shader;
+    std::string shader, until;
 } O;
 static std::vector<uint32_t> g_ram;   // the image (address 0 up), RAM's words
 static std::vector<uint8_t> g_rom;
@@ -737,6 +737,8 @@ static void dump_core(const std::vector<uint32_t>& s) {
 
 // ---- The console
 static uint32_t g_con_printed = 0;
+static std::string g_con_tail;   // the output's last bytes, for --until
+static bool g_until = false;
 static int stdin_ready(uint8_t* buf, int max) {
     HANDLE h = GetStdHandle(STD_INPUT_HANDLE);
     DWORD type = GetFileType(h), avail = 0;
@@ -759,7 +761,15 @@ static void console_print(const uint32_t* con) {
     uint32_t n = written - g_con_printed;
     if (n > 256) { fprintf(stderr, "gvm_gpu: console: %u bytes lost\n", n - 256); g_con_printed = written - 256; }
     const uint8_t* ring = (const uint8_t*)(con + CON_RING);
-    for (; g_con_printed != written; g_con_printed++) fputc(ring[g_con_printed & 255], stdout);
+    for (; g_con_printed != written; g_con_printed++) {
+        char ch = (char)ring[g_con_printed & 255];
+        fputc(ch, stdout);
+        if (!O.until.empty()) {
+            g_con_tail += ch;
+            if (g_con_tail.size() > 4 * O.until.size() + 256) g_con_tail.erase(0, g_con_tail.size() - O.until.size());
+            if (g_con_tail.find(O.until) != std::string::npos) g_until = true;
+        }
+    }
     fflush(stdout);
 }
 // input after a batch, once the guest has used the console; true when some was delivered
@@ -901,6 +911,7 @@ static void usage() {
         "  --op-rounds N       the operations' rounds a pass (default 2)\n"
         "  --check             the reference beside the card: every pass compared (exit 4 on a difference)\n"
         "  --check-ram N       --check: all of RAM compared every N passes (default 4096; 0 at the end only)\n"
+        "  --until TEXT        stop (exit 0) when the console's output has TEXT\n"
         "  --trace-pass        each pass on stderr: core 0's pc, bundles and why it ended\n");
     exit(EXIT_USAGE);
 }
@@ -921,6 +932,7 @@ int main(int argc, char** argv) {
         else if (!strcmp(a, "--check")) O.check = true;
         else if (!strcmp(a, "--trace-pass")) O.trace_pass = true;
         else if (!strcmp(a, "--warp")) O.warp = true;
+        else if (!strcmp(a, "--until") && more) O.until = argv[++i];
         else if (!strcmp(a, "--ram") && more) ram_mb = num(argv[++i]);
         else if (!strcmp(a, "--rom") && more) rom = argv[++i];
         else if (!strcmp(a, "--dtb") && more) dtb = argv[++i];
@@ -1031,7 +1043,7 @@ int main(int argc, char** argv) {
     std::vector<uint64_t> times(O.batch);
     std::vector<std::vector<uint32_t>> prev = state;
     std::vector<uint32_t> last_st(O.ncores, GVM_ST_S), last_epc(O.ncores), last_cause(O.ncores), last_tval(O.ncores);
-    uint64_t passes = 0, bundles = 0, ops = 0, readbacks = 0, again = 0;
+    uint64_t passes = 0, bundles = 0, ops = 0, readbacks = 0, again = 0, ram_checked = 0, ends[6] = {0, 0, 0, 0, 0, 0};
     uint32_t K = 1;
     int code = -1;
     while (code < 0) {
@@ -1052,6 +1064,7 @@ int main(int argc, char** argv) {
                 const std::vector<uint32_t>& s = now[c];
                 if (s[V_FLAGS] & F_AGAIN) { again++; continue; }
                 bundles += s[V_LAST];
+                if (!(s[V_FLAGS] & F_HALT)) ends[s[V_END] < 6 ? s[V_END] : 4]++;
                 ops += (uint32_t)(s[V_OPS] - prev[c][V_OPS]);
                 if (s[V_PC] >= 16) { last_st[c] = s[V_ST]; last_epc[c] = s[V_EPC]; last_cause[c] = s[V_CAUSE]; last_tval[c] = s[V_TVAL]; }
             }
@@ -1061,15 +1074,27 @@ int main(int argc, char** argv) {
                         (unsigned long long)times[p], s[V_PC], s[V_FLAGS] & F_AGAIN ? 0 : s[V_LAST], s[V_FLAGS] & F_AGAIN ? "again" : s[V_END] < 6 ? end_name[s[V_END]] : "?", s[V_FLAGS], s[V_QN]);
             }
             if (O.console) console_print(cons[p].data());
+            if (g_until && code < 0) {
+                QueryPerformanceCounter(&f1);
+                out_flush();
+                fprintf(stderr, "gvm_gpu: \"%s\" on the console after %.3f s, pass %llu, %llu bundles\n", O.until.c_str(),
+                        double(f1.QuadPart - f0.QuadPart) / fq.QuadPart, (unsigned long long)passes, (unsigned long long)bundles);
+                code = 0;
+            }
             if (O.check) {
                 if (!ref_pass(passes, times[p], prev, now)) { code = EXIT_CHECK; break; }
-                bool idle = true;
-                for (uint32_t c = 0; c < O.ncores; c++) idle = idle && now[c][V_QN] == 0;
-                if (O.check_ram && passes % O.check_ram == 0 && idle && !ref_ram_compare(passes)) { code = EXIT_CHECK; break; }
             }
             prev = now;
         }
         if (code >= 0) break;
+        if (O.check && O.check_ram && passes - ram_checked >= O.check_ram) {   // all of RAM, as the batch's last pass left it
+            bool idle = true;
+            for (uint32_t c = 0; c < O.ncores; c++) idle = idle && prev[c][V_QN] == 0;
+            if (idle) {
+                ram_checked = passes;
+                if (!ref_ram_compare(passes)) { code = EXIT_CHECK; break; }
+            }
+        }
         const std::vector<std::vector<uint32_t>>& last = views[K - 1];
         // cores in the stub: a trap while TVEC was 0 (a semihosted call, or the report)
         bool all_halted = true, all_waiting = true;
@@ -1150,6 +1175,9 @@ int main(int argc, char** argv) {
         fprintf(stderr, "gvm_gpu: %llu bundles, %llu ops (%.2f a bundle), %llu passes (%llu made again), %llu readbacks, time %llu (100 kHz)\n",
                 (unsigned long long)bundles, (unsigned long long)ops, bundles ? (double)ops / (double)bundles : 0.0, (unsigned long long)passes,
                 (unsigned long long)again, (unsigned long long)readbacks, (unsigned long long)g_time);
+        fprintf(stderr, "gvm_gpu: core passes ended by: budget %llu, sync %llu, wait %llu, a full write cache %llu, halt %llu\n",
+                (unsigned long long)ends[E_BUDGET], (unsigned long long)ends[E_SYNC], (unsigned long long)ends[E_WAIT],
+                (unsigned long long)ends[E_FULL], (unsigned long long)ends[E_HALT]);
         fprintf(stderr, "gvm_gpu: %.3f s on %s: %.2f M bundles/s, %.0f passes/s\n", wall, O.warp ? "WARP" : "the card", bundles / wall / 1e6, passes / wall);
     }
     return code;
