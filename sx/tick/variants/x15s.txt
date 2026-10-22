@@ -1,0 +1,10 @@
+x15  sx/tick/steps/x15.hlsl
+# x15s: the loops' structure and stores (sx/tick/steps/x15s.hlsl's switches), against x15
+s_sw        sx/tick/steps/x15s.hlsl -D S_SW=1
+s_stl       sx/tick/steps/x15s.hlsl -D S_STL=1
+s_stlsw     sx/tick/steps/x15s.hlsl -D S_STL=1 -D S_SW=1
+s_stlflat   sx/tick/steps/x15s.hlsl -D S_STL=1 -D S_STFLAT=1
+s_stlswflat sx/tick/steps/x15s.hlsl -D S_STL=1 -D S_SW=1 -D S_STFLAT=1
+s_ilstlsw   sx/tick/steps/x15s.hlsl -D S_ILOOP=1 -D S_STL=1 -D S_SW=1
+s_cls       sx/tick/steps/x15s.hlsl -D S_CLS=1
+s_clsswflat sx/tick/steps/x15s.hlsl -D S_CLS=1 -D S_SW=1 -D S_STFLAT=1

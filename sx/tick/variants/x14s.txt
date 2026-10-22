@@ -1,0 +1,11 @@
+x14  sx/tick/steps/x14.hlsl
+# x14s: the loops' structure (sx/tick/steps/x14s.hlsl's switches), against x14
+s_tk        sx/tick/steps/x14s.hlsl -D S_TK=1 -D S_COND=1
+s_switch    sx/tick/steps/x14s.hlsl -D S_TK=1 -D S_COND=1 -D S_SWITCH=1
+s_tail3     sx/tick/steps/x14s.hlsl -D S_TK=1 -D S_COND=1 -D S_TAIL3=1
+s_unr2      sx/tick/steps/x14s.hlsl -D S_TK=1 -D S_COND=1 -D S_LOOP=4
+s_cls       sx/tick/steps/x14s.hlsl -D S_TK=1 -D S_COND=1 -D S_LOOP=1
+s_clsflat   sx/tick/steps/x14s.hlsl -D S_TK=1 -D S_COND=1 -D S_LOOP=1 -D S_STFLAT=1
+s_clsn      sx/tick/steps/x14s.hlsl -D S_TK=1 -D S_LOOP=5
+s_int       sx/tick/steps/x14s.hlsl -D S_TK=1 -D S_COND=1 -D S_LOOP=2
+s_disp      sx/tick/steps/x14s.hlsl -D S_TK=1 -D S_COND=1 -D S_LOOP=3
