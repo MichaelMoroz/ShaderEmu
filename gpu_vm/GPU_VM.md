@@ -77,8 +77,9 @@ R only: shadd (ra + (rb << rc)), sel (x[rc] != 0 ? ra : rb), addcy, carry, subby
 
 **Memory** 0x80 + mode * 8 + w. Modes: 0 load [ra + imm], 1 store [ra + imm] (value rd), 2 load
 [ra + (rb << rc)], 3 store indexed, 4 atomic [ra] with rb (swap add and or xor min max cas), 5 atomic
-(minu maxu). Widths: b h w d(rd, rd+1) bu hu q(rd..rd+3). Any alignment (aligned is fast; atomics
-must be on a word). cas: rd in the expected word, out the old one; rb the new.
+(minu maxu). Widths: b h w d(rd, rd+1) bu hu q(rd..rd+3). A b, h or w stays in its address's word (x17:
+the bytes past it are not touched, a load's read 0; the compiler splits what it cannot prove inside
+one word); d and q any alignment; atomics on a word. cas: rd in the expected word, out the old one; rb the new.
 
 **Float** 0xc0 + f (R), 0xe0 + f (I: B is imm12 << 20 as a float's bits, or the long immediate):
 fadd fsub fmul fdiv fmin fmax, fmad fmsb fnmsb (R: with rc, each product and sum rounded), feq flt fle
