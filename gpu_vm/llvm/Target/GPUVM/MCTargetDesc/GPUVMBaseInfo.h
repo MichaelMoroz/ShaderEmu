@@ -72,8 +72,8 @@ namespace GPUVM {
 constexpr unsigned BundleSize = 16;
 
 // Control word
-constexpr unsigned PathGeneral = 0, PathALU = 1, PathMemF = 2, PathInt = 3,
-                   PathLoad = 4, PathLoad2 = 5, PathStore = 6, PathMem2 = 7;
+constexpr unsigned PathGeneral = 0, PathALU = 1, PathMemF = 2, PathLoad = 3,
+                   PathLoad2 = 4, PathStore = 5, PathMem2 = 6, PathInt = 7;
 constexpr unsigned CCSpecial = 0, CCAddBnz = 1, CCBEq = 4, CCBNe = 5;
 constexpr unsigned SubNone = 1, SubJR = 2, SubCallR = 3, SubEret = 4, SubJ = 5,
                    SubCall = 6, SubAdd = 7;

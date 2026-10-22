@@ -177,10 +177,12 @@ bool GPUVMTargetLowering::isTruncateFree(EVT VT1, EVT VT2) const {
 bool GPUVMTargetLowering::allowsMisalignedMemoryAccesses(
     EVT VT, unsigned AddrSpace, Align Alignment, MachineMemOperand::Flags Flags,
     unsigned *Fast) const {
-  // Any alignment works (two texels when a word straddles them).
+  // A byte, half or word access stays in its address's word (isa.h, since
+  // x17): one not known to be in one word is split by its alignment. (d and q
+  // take any alignment, but the code generator makes them only aligned.)
   if (Fast)
-    *Fast = 1;
-  return true;
+    *Fast = 0;
+  return false;
 }
 
 static cl::opt<unsigned> OpThreshold(

@@ -115,7 +115,8 @@ code generator's job toward bundles is the order of its ops.
   9.8%); `-gpuvm-general-ops` makes bfe, bfes and shadd instead.
 - **Selection** (`GPUVMPatterns.td`, `GPUVMISelDAGToDAG.cpp`): every constant and symbol is one op (`li`/`la`: addi
   from zero; any 32-bit immediate); an address folds into a load's or store's immediate (`lw a0, sym+8(t0)`), and
-  base + (index << s) is `lwx`/`swx`...; compares (`slt`... with any immediate; a > k as a >= k + 1), `sel`,
+  base + (index << s) is `lwx`/`swx`... A byte, half or word access stays in its word (x17): one not known to be
+  aligned (packed structs, unaligned memcpy) is split into halves or bytes by its alignment; compares (`slt`... with any immediate; a > k as a >= k + 1), `sel`,
   compare-and-branch in the control word (registers; imm6 forms; `bbs`/`bbc` for a bit), `andn`/`orn`/`xnor`,
   min/max, abs, mul/mulh/mulhu,
   div/rem (the ISA's; division by zero is UB in C), clz/ctz/popc/bswap/brev, rotates. i64: `add`+`carry`+`addcy`,

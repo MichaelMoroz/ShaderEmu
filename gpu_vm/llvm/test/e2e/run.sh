@@ -21,7 +21,7 @@ done
 "$BIN/llvm-mc" -triple=gpuvm -filetype=obj -o "$OUT/xref2.o" "$HERE/xref2.s"
 "$BIN/ld.lld" -Ttext=0x02000000 -o "$OUT/xref.elf" "$OUT/xref1.o" "$OUT/xref2.o"
 "$BIN/llvm-objdump" -d -z "$OUT/xref.elf" > "$OUT/xref.dis"
-for want in "beq a0, a1, 0x2000040 ;;" "lpc a2, 0x2000040; call 0x2000040 ;;" "lw a3, 4(tp); li a7, 93 ;;"             "00 00 00 00 00 00 00 00 00 00 00 00 03 2a 08 18" "c0 e1 00 00 00 00 00 00 30 00 00 00 28 f0 00 00"; do
+for want in "beq a0, a1, 0x2000040 ;;" "lpc a2, 0x2000040; call 0x2000040 ;;" "lw a3, 4(tp); li a7, 93 ;;"             "00 00 00 00 00 00 00 00 00 00 00 00 07 2a 08 18" "c0 e1 00 00 00 00 00 00 30 00 00 00 28 f0 00 00"; do
     grep -qF "$want" "$OUT/xref.dis" || { echo "xref: no '$want' in the disassembly"; fail=1; }
 done
 [ $fail = 0 ] && echo "xref: ld.lld's relocations as expected"

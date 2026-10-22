@@ -175,3 +175,62 @@ declare void @llvm.memmove.p0.p0.i32(ptr, ptr, i32, i1)
 declare void @llvm.memset.p0.i32(ptr, i8, i32, i1)
 declare void @llvm.gpuvm.copy(ptr, ptr, i32)
 declare void @llvm.gpuvm.fill(ptr, i32, i32)
+
+; A byte, half or word access stays in its word: one not known to be aligned
+; is split by its alignment.
+define i32 @load_unaligned(ptr %p) {
+; CHECK-LABEL: load_unaligned:
+; CHECK: lbu t0, 1(a0)
+; CHECK: lbu t1, 0(a0)
+; CHECK: lbu t2, 2(a0)
+; CHECK: lbu t3, 3(a0)
+; CHECK: slli t0, t0, 8
+; CHECK: or t0, t0, t1
+; CHECK: slli t1, t2, 16
+; CHECK: slli t2, t3, 24
+; CHECK: or t1, t2, t1
+; CHECK: or a0, t1, t0
+; CHECK: ret
+  %v = load i32, ptr %p, align 1
+  ret i32 %v
+}
+
+define i32 @load_half_aligned(ptr %p) {
+; CHECK-LABEL: load_half_aligned:
+; CHECK: lhu t0, 2(a0)
+; CHECK: lhu t1, 0(a0)
+; CHECK: slli t0, t0, 16
+; CHECK: or a0, t0, t1
+; CHECK: ret
+  %v = load i32, ptr %p, align 2
+  ret i32 %v
+}
+
+define void @store_unaligned(ptr %p, i16 %v) {
+; CHECK-LABEL: store_unaligned:
+; CHECK: sb a1, 0(a0)
+; CHECK: srli t0, a1, 8
+; CHECK: sb t0, 1(a0)
+; CHECK: ret
+  store i16 %v, ptr %p, align 1
+  ret void
+}
+
+define void @memcpy_unaligned(ptr %d, ptr %s) {
+; CHECK-LABEL: memcpy_unaligned:
+; CHECK: lbu t0, 5(a1)
+; CHECK: sb t0, 5(a0)
+; CHECK: lbu t0, 4(a1)
+; CHECK: sb t0, 4(a0)
+; CHECK: lbu t0, 3(a1)
+; CHECK: sb t0, 3(a0)
+; CHECK: lbu t0, 2(a1)
+; CHECK: sb t0, 2(a0)
+; CHECK: lbu t0, 1(a1)
+; CHECK: sb t0, 1(a0)
+; CHECK: lbu t0, 0(a1)
+; CHECK: sb t0, 0(a0)
+; CHECK: ret
+  call void @llvm.memcpy.p0.p0.i32(ptr align 1 %d, ptr align 2 %s, i32 6, i1 false)
+  ret void
+}

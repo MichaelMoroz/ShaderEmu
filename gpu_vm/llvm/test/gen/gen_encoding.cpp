@@ -121,23 +121,23 @@ int main() {
     op("srclr a0, ien, a1", [](GvmAsm &a) { a.xi(GVM_X_SRCLR, A0, A1, GVM_SR_IEN); });
     op("mfsr a0, 100", [](GvmAsm &a) { a.mfsr(A0, 100); });
 
-    // control ops alone (n 0; path 3, or 0 for cc 0); a target is a byte offset from the bundle (at address 0)
-    ctl("beq a0, a1, 32", "beq a0, a1, 0x{{[0-9a-f]+}}", br(GVM_CC_BEQ, A0, A1, 32), 3);
-    ctl("bne a0, zero, -16", "bne a0, zero, 0x{{[0-9a-f]+}}", br(GVM_CC_BNE, A0, 0, -16), 3);
-    ctl("blt a0, a1, 16", "blt a0, a1, 0x{{[0-9a-f]+}}", br(GVM_CC_BLT, A0, A1, 16), 3);
-    ctl("bge a0, a1, 16", "bge a0, a1, 0x{{[0-9a-f]+}}", br(GVM_CC_BGE, A0, A1, 16), 3);
-    ctl("bltu a0, a1, 16", "bltu a0, a1, 0x{{[0-9a-f]+}}", br(GVM_CC_BLTU, A0, A1, 16), 3);
-    ctl("bgeu a0, a1, 4080", "bgeu a0, a1, 0x{{[0-9a-f]+}}", br(GVM_CC_BGEU, A0, A1, 4080), 3);
-    ctl("bbs a0, 31, 16", "bbs a0, 31, 0x{{[0-9a-f]+}}", br(GVM_CC_BBS, A0, 31, 16), 3);
-    ctl("bbc a0, 0, 16", "bbc a0, 0, 0x{{[0-9a-f]+}}", br(GVM_CC_BBC, A0, 0, 16), 3);
-    ctl("beqi a0, -3, 16", "beqi a0, -3, 0x{{[0-9a-f]+}}", br(GVM_CC_BEQI, A0, (uint32_t)-3, 16), 3);
-    ctl("bnei a0, 31, 16", "bnei a0, 31, 0x{{[0-9a-f]+}}", br(GVM_CC_BNEI, A0, 31, 16), 3);
-    ctl("blti a0, -32, 16", "blti a0, -32, 0x{{[0-9a-f]+}}", br(GVM_CC_BLTI, A0, (uint32_t)-32, 16), 3);
-    ctl("bgei a0, 0, 16", "bgei a0, 0, 0x{{[0-9a-f]+}}", br(GVM_CC_BGEI, A0, 0, 16), 3);
-    ctl("bltui a0, 5, 16", "bltui a0, 5, 0x{{[0-9a-f]+}}", br(GVM_CC_BLTUI, A0, 5, 16), 3);
-    ctl("bgeui a0, 5, 16", "bgeui a0, 5, 0x{{[0-9a-f]+}}", br(GVM_CC_BGEUI, A0, 5, 16), 3);
-    ctl("addbnz t1, -1, -4096", "addbnz t1, -1, 0x{{[0-9a-f]+}}", br(GVM_CC_ADDBNZ, T1, (uint32_t)-1, -4096), 3);
-    ctl("j 32", "j 0x{{[0-9a-f]+}}", GVM_CTRL_J | 2u << 17, 3);
+    // control ops alone (n 0; the integer path, or 0 for cc 0); a target is a byte offset from the bundle (at address 0)
+    ctl("beq a0, a1, 32", "beq a0, a1, 0x{{[0-9a-f]+}}", br(GVM_CC_BEQ, A0, A1, 32), GVM_PATH_INT);
+    ctl("bne a0, zero, -16", "bne a0, zero, 0x{{[0-9a-f]+}}", br(GVM_CC_BNE, A0, 0, -16), GVM_PATH_INT);
+    ctl("blt a0, a1, 16", "blt a0, a1, 0x{{[0-9a-f]+}}", br(GVM_CC_BLT, A0, A1, 16), GVM_PATH_INT);
+    ctl("bge a0, a1, 16", "bge a0, a1, 0x{{[0-9a-f]+}}", br(GVM_CC_BGE, A0, A1, 16), GVM_PATH_INT);
+    ctl("bltu a0, a1, 16", "bltu a0, a1, 0x{{[0-9a-f]+}}", br(GVM_CC_BLTU, A0, A1, 16), GVM_PATH_INT);
+    ctl("bgeu a0, a1, 4080", "bgeu a0, a1, 0x{{[0-9a-f]+}}", br(GVM_CC_BGEU, A0, A1, 4080), GVM_PATH_INT);
+    ctl("bbs a0, 31, 16", "bbs a0, 31, 0x{{[0-9a-f]+}}", br(GVM_CC_BBS, A0, 31, 16), GVM_PATH_INT);
+    ctl("bbc a0, 0, 16", "bbc a0, 0, 0x{{[0-9a-f]+}}", br(GVM_CC_BBC, A0, 0, 16), GVM_PATH_INT);
+    ctl("beqi a0, -3, 16", "beqi a0, -3, 0x{{[0-9a-f]+}}", br(GVM_CC_BEQI, A0, (uint32_t)-3, 16), GVM_PATH_INT);
+    ctl("bnei a0, 31, 16", "bnei a0, 31, 0x{{[0-9a-f]+}}", br(GVM_CC_BNEI, A0, 31, 16), GVM_PATH_INT);
+    ctl("blti a0, -32, 16", "blti a0, -32, 0x{{[0-9a-f]+}}", br(GVM_CC_BLTI, A0, (uint32_t)-32, 16), GVM_PATH_INT);
+    ctl("bgei a0, 0, 16", "bgei a0, 0, 0x{{[0-9a-f]+}}", br(GVM_CC_BGEI, A0, 0, 16), GVM_PATH_INT);
+    ctl("bltui a0, 5, 16", "bltui a0, 5, 0x{{[0-9a-f]+}}", br(GVM_CC_BLTUI, A0, 5, 16), GVM_PATH_INT);
+    ctl("bgeui a0, 5, 16", "bgeui a0, 5, 0x{{[0-9a-f]+}}", br(GVM_CC_BGEUI, A0, 5, 16), GVM_PATH_INT);
+    ctl("addbnz t1, -1, -4096", "addbnz t1, -1, 0x{{[0-9a-f]+}}", br(GVM_CC_ADDBNZ, T1, (uint32_t)-1, -4096), GVM_PATH_INT);
+    ctl("j 32", "j 0x{{[0-9a-f]+}}", GVM_CTRL_J | 2u << 17, GVM_PATH_INT);
     ctl("j 8192", "j 0x{{[0-9a-f]+}}", GVM_CTRL_SPECIAL(GVM_SUB_J) | 512u << 14, 0);
     ctl("call -64", "call 0x{{[0-9a-f]+}}", GVM_CTRL_SPECIAL(GVM_SUB_CALL) | (uint32_t)(-4 * (1 << 14)), 0);
     ctl("jr a0", "jr a0", GVM_CTRL_SPECIAL(GVM_SUB_JR) | A0 << 14, 0);
