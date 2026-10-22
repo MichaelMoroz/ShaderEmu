@@ -298,7 +298,7 @@ static bool check_case(Gpu& gpu, const Case& cs, uint32_t seed, bool verbose) {
         std::vector<uint32_t> os = read_tex(gpu.ops[gpu.oc]);
         for (uint32_t c = 0; c < cs.cores; c++) {
             std::vector<uint32_t> st = gpu.core_state(c);
-            printf("  core %u: pc %08x flags %x end %u queue %u %u %u %u op0 %08x %08x %08x %08x op1 %08x %08x %08x %08x progress %u %u %u %u\n", c, st[64], st[74], st[79],
+            printf("  core %u: epc %08x cause %x tval %08x pc %08x flags %x end %u queue %u %u %u %u op0 %08x %08x %08x %08x op1 %08x %08x %08x %08x progress %u %u %u %u\n", c, st[64], st[74], st[79],
                    st[88], st[89], st[90], st[91], st[96], st[97], st[98], st[99], st[104], st[105], st[106], st[107], os[4 * c], os[4 * c + 1], os[4 * c + 2], os[4 * c + 3]);
         }
     }

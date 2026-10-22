@@ -1,0 +1,3 @@
+# x17f: x16 full step for paths 1 and 2 in x17 (step12): floats 3.78 to 7.51, fmix 6.19 to 9.82 (x16 8.05, 10.41)
+x16       gpu_vm/tick/steps/x16.hlsl
+x17       gpu_vm/tick/steps/x17.hlsl

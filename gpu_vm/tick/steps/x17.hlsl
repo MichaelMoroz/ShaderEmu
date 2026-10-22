@@ -257,6 +257,42 @@ void fstep(inout uint budget) {
     ops8 += n8;
 }
 
+// ---- Paths 1 and 2 (an op of the whole integer unit or a float op, then lite or float lite; a load or store and a float
+// lite op), a whole bundle: x16's full step, both ops' registers read first. A load or store is noted as the fast loop's.
+uint fb(uint w, uint imm, bool L, uint b) { return (w & op_bit(32)) ? (L ? imm : (w >> 20) << 20) : b; }
+uint step12(uint budget) {   // the budget left: 0 when a store found no room (nothing made; the bundle again next pass)
+    uint4 t = cur;
+    uint base = pc & ~15u, ctl = t.w, n = GVM_N(ctl), path = ctl & 7;
+    uint tg = base + asuint(GVM_OFF9(ctl)) * 16;
+    bool L0 = (ctl & 0x20) != 0, L1 = (ctl & 0x40) != 0, ok = true;
+    uint i0 = L0 ? t.z : simm12(t.x), i1 = L1 ? t.z : simm12(t.y);
+    uint d0 = GVM_RD(t.x), d1 = GVM_RD(t.y), ra1 = GVM_RA(t.y), rb1 = GVM_RB(t.y);
+    uint A0 = r[GVM_RA(t.x)], B0 = r[GVM_RB(t.x)], A1 = r[ra1], B1 = r[rb1], CA = r[GVM_CRA(ctl)], CB = r[GVM_CRB(ctl)], v0 = 0;
+    bool fl1 = path == GVM_PATH_MEMF || (t.y & op_bit(0xc0)) == op_bit(0xc0);   // (op 1 of class 3: a float)
+    [branch] if (path == GVM_PATH_MEMF) {   // a load or a store into its word as this core sees it, then a float sum
+        mop m = mread(t.x, i0, A0, B0);
+        bool stv = (t.x & op_bit(8)) != 0;
+        smax = max(smax, stv ? m.ad - GVM_DEV : 0); lmax = max(lmax, stv ? 0 : m.ad & ~GVM_ROM);
+        uint word = seen(m), sl = slot(m);
+        v0 = extend(t.x, word, m.ad);
+        ok = !stv || sl != NONE;
+        wc[stv && ok ? sl : WCN] = uint2(m.tag, merge(t.x, word, m.ad, r[d0]));
+        d0 = stv ? 0 : d0;
+    } else v0 = (t.x & op_bit(0xc0)) == op_bit(0x40) ? alu(t.x, i0, A0, B0) : fpu(t.x, A0, fb(t.x, i0, L0, B0), r[GVM_RC(t.x)]);
+    [branch] if (!ok) return 0;
+    r[d0 == 0 ? 64 : d0] = v0;
+    A1 = (d0 != 0 && ra1 == d0) ? v0 : A1; B1 = (d0 != 0 && rb1 == d0) ? v0 : B1;
+    uint v1 = fl1 ? fsum(fn(t.y), A1, fb(t.y, i1, L1, B1), r[GVM_RC(t.y)]) : alu_lite(t.y, i1, A1, B1);
+    r[d1 == 0 ? 64 : d1] = v1;
+    uint i6 = asuint(GVM_CIMM6(ctl)), sum = CA + i6;
+    r[GVM_CC(ctl) != GVM_CC_ADDBNZ ? 64 : GVM_CRA(ctl)] = sum;   // after the ops' writes: it wins
+    pc = taken(ctl, CA, CB, i6, sum) != 0 ? tg : base + 16;
+    cur = ram(pc >> 4);
+    cycle++;
+    opsrun += n;
+    return budget - 1;
+}
+
 // ---- Traps, special registers, interrupts
 uint ipend() {
     bool due = (tcmp_lo | tcmp_hi) != 0 && (_TimeHi > tcmp_hi || (_TimeHi == tcmp_hi && _TimeLo >= tcmp_lo));
@@ -530,7 +566,9 @@ void run(uint budget) {
         cycle += b0 - budget;
         opsrun += ops8 >> 3;
         pc = b0 != budget ? tp << 4 : pc;
-        [branch] if (budget > 0) budget = general(budget);
+        uint path = cur.w & 7;   // (HLSL makes both sides of ?: : an if)
+        [branch] if (budget > 0 && (path == GVM_PATH_ALU || path == GVM_PATH_MEMF) && thr == GVM_PATH_FAST) budget = step12(budget);
+        else [branch] if (budget > 0) budget = general(budget);
     }
 }
 
