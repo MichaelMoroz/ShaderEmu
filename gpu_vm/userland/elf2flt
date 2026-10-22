@@ -115,6 +115,10 @@ def main(argv):
         fail('%s: no __gvm_data_start: link with gpu_vm/userland/flat.ld' % src)
     if (HDR + data_va) % 32:
         fail('%s: data at %#x: the file\'s data must start on 32 bytes' % (src, data_va))
+    # binfmt_flat writes the data's start into the word below it (its shared-library table): nothing may lie there
+    for k, s in enumerate(secs):
+        if s[2] & SHF_ALLOC and s[5] and not s[2] & SHF_TLS and s[3] < data_va and s[3] + s[5] > data_va - 4:
+            fail('%s: %s reaches the word below __gvm_data_start, which the kernel overwrites (flat.ld)' % (src, names[k]))
     if len(img) < data_va:                # no data: the image reaches data's start (the bss follows it)
         img += bytes(data_va - len(img))
         bss_end = max(bss_end, len(img))

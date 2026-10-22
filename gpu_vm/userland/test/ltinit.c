@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mount.h>
+#include <sys/stat.h>
 #include <sys/reboot.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -24,6 +25,9 @@ int main(void)
 	int n = 0, passed = 0;
 	mount("proc", "/proc", "proc", 0, 0);
 	mount("tmpfs", "/tmp", "tmpfs", 0, 0);
+	mount("devtmpfs", "/dev", "devtmpfs", 0, 0);
+	mkdir("/dev/shm", 01777);
+	mount("tmpfs", "/dev/shm", "tmpfs", 0, 0);
 	setvbuf(stdout, 0, _IOLBF, 0);
 	DIR *d = opendir("/t");
 	struct dirent *e;

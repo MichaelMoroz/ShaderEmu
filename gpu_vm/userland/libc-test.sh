@@ -55,8 +55,9 @@ DEFCONFIG="$ROOT/gpu_vm/linux/arch/gpuvm/configs/gpuvm_defconfig"
 OUT="$KOUT" INIT="$T/init" INITRAMFS_EXTRA="$T/extra.list" bash "$ROOT/gpu_vm/linux/build.sh" $steps > "$T/kernel.log" 2>&1 \
     || { tail -30 "$T/kernel.log"; exit 1; }
 
-make -s -C "$ROOT/gpu_vm/cpu" CC=gcc > /dev/null
-timeout 3600 "$ROOT/build/gvm_cpu/gvm_cpu" --no-stdin --stats --dtb "$KOUT/arch/gpuvm/boot/dts/gvm.dtb" \
+GVM_CPU="${GVM_CPU:-$ROOT/build/gvm_cpu/gvm_cpu}"
+[ -n "${GVM_CPU_KEEP:-}" ] || [ "$GVM_CPU" != "$ROOT/build/gvm_cpu/gvm_cpu" ] || make -s -C "$ROOT/gpu_vm/cpu" CC=gcc > /dev/null
+timeout 3600 "$GVM_CPU" --no-stdin --stats --dtb "$KOUT/arch/gpuvm/boot/dts/gvm.dtb" \
     "$KOUT/vmlinux" > "$T/boot.log" 2>&1 || true
 sed -n '/Run \/init/,$p' "$T/boot.log" | grep -v '^\[ *[0-9]*\.[0-9]*\] ' > "$T/libc-test.log" || true
 grep -E '^FAIL|^libc-test:' "$T/libc-test.log" || true

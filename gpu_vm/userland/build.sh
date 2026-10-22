@@ -7,7 +7,7 @@
 #                crtn.o and the headers installed into $SYSROOT
 #     builtins   compiler-rt's generic builtins as $SYSROOT/lib/libclang_rt.builtins-gpuvm.a
 #
-# SYSROOT (~/gpu_vm/sysroot), MUSL the tree musl is built in (~/gpu_vm/musl), DL the downloads (~/gpu_vm/dl),
+# MUSL_CFLAGS (-O2) musl's optimization. SYSROOT (~/gpu_vm/sysroot), MUSL the tree musl is built in (~/gpu_vm/musl), DL the downloads (~/gpu_vm/dl),
 # LLVM_BIN (~/gpu_vm/llvm-build/bin), LLVM_SRC (~/gpu_vm/llvm-project), KHDR the kernel's installed headers
 # (~/gpu_vm/linux-build/usr/include), JOBS.
 #
@@ -76,7 +76,7 @@ musl() {
     grep -q 'ARCH=gpuvm' "$MUSL/configure"
     cd "$MUSL"
     ./configure --target=gpuvm --prefix="$SYSROOT" --syslibdir="$SYSROOT/lib" --disable-shared --enable-static \
-        CC="$CC" AR="$LLVM_BIN/llvm-ar" RANLIB="$LLVM_BIN/llvm-ranlib" CFLAGS="-O2 -fno-pic" > configure.log
+        CC="$CC" AR="$LLVM_BIN/llvm-ar" RANLIB="$LLVM_BIN/llvm-ranlib" CFLAGS="${MUSL_CFLAGS:--O2} -fno-pic" > configure.log
     make -j"$JOBS" > make.log 2>&1 || { tail -30 make.log; exit 1; }
     make install > install.log 2>&1 || { tail -30 install.log; exit 1; }
     # the kernel's headers (linux/, asm/, asm-generic/) beside libc's, for programs that include them

@@ -4,7 +4,8 @@
 # Builds test/*.c with gpuvm-linux-cc into $T, an initramfs with them in /bin and test/init.c as /init, a kernel in a
 # build folder of its own ($KOUT: the first run configures and builds it whole, later ones relink), boots it on
 # gvm_cpu and looks for init's summary: every program passed. The console's output is $T/boot.log.
-# Needs build.sh's sysroot (musl, builtins). T (~/gpu_vm/userland-test), KOUT (~/gpu_vm/linux-build-ut).
+# Needs build.sh's sysroot (musl, builtins). T (~/gpu_vm/userland-test), KOUT (~/gpu_vm/linux-build-ut), GVM_CPU (the
+# tree's gvm_cpu, made first).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
@@ -40,8 +41,9 @@ DEFCONFIG="$ROOT/gpu_vm/linux/arch/gpuvm/configs/gpuvm_defconfig"
 OUT="$KOUT" INIT="$T/init" INITRAMFS_EXTRA="$T/extra.list" bash "$ROOT/gpu_vm/linux/build.sh" $steps > "$T/kernel.log" 2>&1 \
     || { tail -30 "$T/kernel.log"; exit 1; }
 
-make -s -C "$ROOT/gpu_vm/cpu" CC=gcc > /dev/null
-timeout 600 "$ROOT/build/gvm_cpu/gvm_cpu" --no-stdin --stats --dtb "$KOUT/arch/gpuvm/boot/dts/gvm.dtb" "$KOUT/vmlinux" \
+GVM_CPU="${GVM_CPU:-$ROOT/build/gvm_cpu/gvm_cpu}"
+[ -n "${GVM_CPU_KEEP:-}" ] || [ "$GVM_CPU" != "$ROOT/build/gvm_cpu/gvm_cpu" ] || make -s -C "$ROOT/gpu_vm/cpu" CC=gcc > /dev/null
+timeout 600 "$GVM_CPU" --no-stdin --stats --dtb "$KOUT/arch/gpuvm/boot/dts/gvm.dtb" "$KOUT/vmlinux" \
     > "$T/boot.log" 2>&1 || true
 sed -n '/Run \/init/,$p' "$T/boot.log"
 n=$(echo $progs | wc -w); n=$((n - 1))

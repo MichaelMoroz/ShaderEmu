@@ -19,6 +19,9 @@ SECTIONS
 	.tdata : { *(.tdata .tdata.*) }
 	.tbss : { *(.tbss .tbss.*) }
 
+	/* binfmt_flat (5.17, shared-library support even with BINFMT_FLAT_NO_DATA_START_OFFSET) stores the data's start in
+	   the word just below it: a word of nothing there, or it lands on the last of .rodata */
+	. += 4;
 	. = ALIGN(64);
 	__gvm_data_start = .;
 	.data : {
