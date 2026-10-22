@@ -26,6 +26,14 @@ static cl::opt<unsigned>
                cl::desc("gpu_vm: the largest unrolled loop body (TTI's "
                         "instruction cost)"));
 
+static cl::opt<unsigned>
+    InlineMultiplier("gpuvm-inline-multiplier", cl::Hidden, cl::init(3),
+                     cl::desc("gpu_vm: the inlining threshold's multiplier"));
+
+unsigned GPUVMTTIImpl::getInliningThresholdMultiplier() const {
+  return InlineMultiplier;
+}
+
 void GPUVMTTIImpl::getUnrollingPreferences(
     Loop *L, ScalarEvolution &SE, TTI::UnrollingPreferences &UP,
     OptimizationRemarkEmitter *ORE) const {

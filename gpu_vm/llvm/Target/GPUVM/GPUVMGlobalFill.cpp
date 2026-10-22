@@ -257,7 +257,7 @@ private:
                  SmallVectorImpl<Plan> &Out);
   void rotatePlans(MachineLoop &L, SmallVectorImpl<Plan> &Out);
   bool search(function_ref<void(SmallVectorImpl<Plan> &)> Enumerate,
-              ArrayRef<MachineBasicBlock *> Blocks);
+              ArrayRef<MachineBasicBlock *> Blocks, double Slack = 0);
   bool fill(MachineBasicBlock &B);
   bool rotate(MachineLoop &L);
 };
@@ -953,7 +953,7 @@ void GPUVMGlobalFill::rotatePlans(MachineLoop &L, SmallVectorImpl<Plan> &Out) {
 // after the first is made), by the bundles of Blocks; made when it gains.
 bool GPUVMGlobalFill::search(
     function_ref<void(SmallVectorImpl<Plan> &)> Enumerate,
-    ArrayRef<MachineBasicBlock *> Blocks) {
+    ArrayRef<MachineBasicBlock *> Blocks, double Slack) {
   double Base = cost(Blocks);
   double Best = -1e-9;
   Plan Best1, Best2;
@@ -973,7 +973,7 @@ bool GPUVMGlobalFill::search(
       Best1 = P1;
       Two = false;
     }
-    if (Pairs && C1 <= 1e-9) {
+    if (Pairs && C1 <= Slack + 1e-9) {
       SmallVector<Plan, 16> Second;
       Enumerate(Second);
       for (const Plan &P2 : Second) {
@@ -1049,8 +1049,10 @@ bool GPUVMGlobalFill::rotate(MachineLoop &L) {
          I != B->end(); ++I)
       if (I->isIndirectBranch() || I->isReturn() || I->isCall())
         return false;
+  // a first op whose copies cost the entering blocks a bundle may still open
+  // the way for a second that takes one from the header
   return search([&](SmallVectorImpl<Plan> &Out) { rotatePlans(L, Out); },
-                Blocks);
+                Blocks, 0.999 * freq(H));
 }
 
 bool GPUVMGlobalFill::runOnMachineFunction(MachineFunction &Fn) {

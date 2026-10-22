@@ -41,6 +41,13 @@ public:
       : BaseT(TM, F.getDataLayout()), ST(TM->getSubtargetImpl(F)),
         TLI(ST->getTargetLowering()) {}
 
+  // A call and its return are cc 0 bundles, off the tick's fast loop (x18:
+  // 330-440 ns against 103 for an integer bundle), with the arguments' moves
+  // and the callee's setup besides: inline more (the threshold times 3;
+  // CoreMark's state machine called in a loop: 124.8k bundles an iteration
+  // to 117.5k, the text 6% larger).
+  unsigned getInliningThresholdMultiplier() const override;
+
   void getUnrollingPreferences(Loop *L, ScalarEvolution &SE,
                                TTI::UnrollingPreferences &UP,
                                OptimizationRemarkEmitter *ORE) const override;
