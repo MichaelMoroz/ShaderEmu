@@ -1096,7 +1096,7 @@ diff --git a/common/rawfile.cpp b/common/rawfile.cpp
 index b0e0525..76b572b 100644
 --- a/common/rawfile.cpp
 +++ b/common/rawfile.cpp
-@@ -55,6 +55,59 @@
+@@ -55,6 +55,65 @@
  
  #include "debugstring.h"
  #include "rawfile.h"
@@ -1121,7 +1121,13 @@ index b0e0525..76b572b 100644
 +
 +    for (int i = 0; i < 16; i++) {
 +        if (ShaderEmu_Maps[i].data == NULL) {
++#ifdef __gpuvm__
++            /* (gpu_vm: a store to the ROM is a fault, where the RISC-V machine's ROM takes none: mapped writable,
++            ** the no-MMU kernel gives the mapping pages of its own, the file's bytes copied) */
++            void* base = mmap(NULL, length, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_POPULATE, fileno(file), page);
++#else
 +            void* base = mmap(NULL, length, PROT_READ, MAP_PRIVATE | MAP_POPULATE, fileno(file), page);
++#endif
 +            if (base == MAP_FAILED) {
 +                return (NULL);
 +            }
