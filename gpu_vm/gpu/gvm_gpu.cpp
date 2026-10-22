@@ -64,7 +64,7 @@ static const uint32_t STUB[4] = {GVM_X_SYNC << 12, 0, 0, 1u << 3 | GVM_CTRL_J};
 static struct {
     uint32_t ncores = 1, budget = 8192, pass_time = 20, ram_end = 0, batch = 32, rounds = 2, check_ram = 4096;
     uint64_t max_bundles = 0;
-    bool stats = false, strace = false, console = true, console_in = true, check = false, trace_pass = false, warp = false;
+    bool stats = false, strace = false, console = true, console_in = true, check = false, trace_pass = false, warp = false, profile = false;
     std::string shader, until;
 } O;
 static std::vector<uint32_t> g_ram;   // the image (address 0 up), RAM's words
@@ -346,7 +346,16 @@ struct Gpu {
         ctx->VSSetShaderResources(0, 12, s);
     }
     void viewport(UINT w, UINT h) { D3D11_VIEWPORT v = {0, 0, (float)w, (float)h, 0, 1}; ctx->RSSetViewports(1, &v); }
+    // --profile: GPU timestamps before the tick and after it, the commit, the operations and the readback copies
+    std::vector<ID3D11Query*> qs;
+    uint32_t nq = 0;
+    void stamp() {
+        if (!O.profile) return;
+        if (nq == qs.size()) { D3D11_QUERY_DESC qd = {D3D11_QUERY_TIMESTAMP, 0}; ID3D11Query* q; check(dev->CreateQuery(&qd, &q), "query"); qs.push_back(q); }
+        ctx->End(qs[nq++]);
+    }
     void run_pass() {
+        stamp();
         ctx->UpdateSubresource(cb, 0, nullptr, &pass, 0, 0);
         ID3D11Buffer* cbs[2] = {cb, ccb[0]};
         ctx->VSSetConstantBuffers(0, 2, cbs);
@@ -362,6 +371,7 @@ struct Gpu {
         ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         ctx->VSSetShader(tick.vs, nullptr, 0); ctx->PSSetShader(tick.ps, nullptr, 0);
         ctx->Draw(3, 0);
+        stamp();
         // the commit: four draws, a component each
         clear_srv();
         ctx->OMSetRenderTargets(1, &ram.rtv, nullptr);
@@ -376,6 +386,7 @@ struct Gpu {
             ctx->Draw(cores * WCN, 0);
         }
         ctx->OMSetBlendState(nullptr, nullptr, 0xffffffff);
+        stamp();
         // the operations: rounds of stage, write, progress; _OpState ping-pongs a round
         for (uint32_t round = 0; round < O.rounds; round++) {
             clear_srv();
@@ -404,10 +415,13 @@ struct Gpu {
         cur ^= 1;
     }
     // after a pass: its state (the set just drawn) and the console's texels into snapshot i
-    void snapshot(uint32_t i) {
+    // (full: every texel; else texels 18 and 19 alone, the flags and the counters: a pass inside a batch)
+    void snapshot(uint32_t i, bool full) {
         while (snaps.size() <= i) snaps.push_back(make_staging(snapW, snapH));
-        D3D11_BOX b = {0, 0, 0, SPIX, cores, 1};
-        for (uint32_t t = 0; t < 8; t++) ctx->CopySubresourceRegion(snaps[i], 0, 0, t * cores, 0, set[cur ^ 1][t].t, 0, &b);
+        D3D11_BOX b = {0, 0, 0, SPIX, cores, 1}, b2 = {2, 0, 0, 3, cores, 1};
+        for (uint32_t t = 0; t < 8; t++)
+            if (full) ctx->CopySubresourceRegion(snaps[i], 0, 0, t * cores, 0, set[cur ^ 1][t].t, 0, &b);
+            else if (t == 2 || t == 3) ctx->CopySubresourceRegion(snaps[i], 0, 2, t * cores, 0, set[cur ^ 1][t].t, 0, &b2);
         if (O.console) {
             uint32_t ct = CON_BASE >> 4;
             D3D11_BOX cbx = {ct % RAM_W, ct / RAM_W, 0, ct % RAM_W + CON_TEXELS, ct / RAM_W + 1, 1};
@@ -415,13 +429,13 @@ struct Gpu {
         }
     }
     // snapshot i decoded: each core's NTEX texels, and the console's words
-    void read_snapshot(uint32_t i, std::vector<std::vector<uint32_t>>& st, uint32_t con[CON_TEXELS * 4]) {
+    void read_snapshot(uint32_t i, bool full, std::vector<std::vector<uint32_t>>& st, uint32_t con[CON_TEXELS * 4]) {
         D3D11_MAPPED_SUBRESOURCE m;
         check(ctx->Map(snaps[i], 0, D3D11_MAP_READ, 0, &m), "Map (a pass's state)");
         st.resize(cores);
         for (uint32_t c = 0; c < cores; c++) {
             st[c].resize(NTEX * 4);
-            for (uint32_t T = 0; T < NTEX; T++)
+            for (uint32_t T = full ? 0 : 18; T < (full ? NTEX : 20); T++)
                 memcpy(&st[c][T * 4], (char*)m.pData + (size_t)((T & 7) * cores + c) * m.RowPitch + (T >> 3) * 16, 16);
         }
         if (O.console) memcpy(con, (char*)m.pData + (size_t)8 * cores * m.RowPitch, CON_TEXELS * 16);
@@ -889,6 +903,9 @@ static uint64_t fdt_memory_size(const uint8_t* f, uint32_t size) {
     return 0;
 }
 
+// a pass whose whole state is read back: a batch's last, and every one for --check and --trace-pass
+static bool full_view(uint32_t p, uint32_t K) { return p + 1 == K || O.check || O.trace_pass; }
+
 static void usage() {
     fprintf(stderr,
         "usage: gvm_gpu [options] PROGRAM.elf [ARGS...]\n"
@@ -912,6 +929,7 @@ static void usage() {
         "  --check             the reference beside the card: every pass compared (exit 4 on a difference)\n"
         "  --check-ram N       --check: all of RAM compared every N passes (default 4096; 0 at the end only)\n"
         "  --until TEXT        stop (exit 0) when the console's output has TEXT\n"
+        "  --profile           --stats and a pass's time on the card by its draws (GPU timestamps)\n"
         "  --trace-pass        each pass on stderr: core 0's pc, bundles and why it ended\n");
     exit(EXIT_USAGE);
 }
@@ -932,6 +950,7 @@ int main(int argc, char** argv) {
         else if (!strcmp(a, "--check")) O.check = true;
         else if (!strcmp(a, "--trace-pass")) O.trace_pass = true;
         else if (!strcmp(a, "--warp")) O.warp = true;
+        else if (!strcmp(a, "--profile")) { O.profile = true; O.stats = true; }
         else if (!strcmp(a, "--until") && more) O.until = argv[++i];
         else if (!strcmp(a, "--ram") && more) ram_mb = num(argv[++i]);
         else if (!strcmp(a, "--rom") && more) rom = argv[++i];
@@ -1046,26 +1065,35 @@ int main(int argc, char** argv) {
     uint64_t passes = 0, bundles = 0, ops = 0, readbacks = 0, again = 0, ram_checked = 0, ends[6] = {0, 0, 0, 0, 0, 0};
     uint32_t K = 1;
     int code = -1;
+    double prof[5] = {0, 0, 0, 0, 0};
+    uint64_t prof_passes = 0;
+    ID3D11Query* prof_dis = nullptr;
+    if (O.profile) { D3D11_QUERY_DESC qd = {D3D11_QUERY_TIMESTAMP_DISJOINT, 0}; check(dev->CreateQuery(&qd, &prof_dis), "query"); }
     while (code < 0) {
+        if (O.profile) { G.nq = 0; ctx->Begin(prof_dis); }
         for (uint32_t p = 0; p < K; p++) {
             G.pass.timeLo = (uint32_t)g_time; G.pass.timeHi = (uint32_t)(g_time >> 32);
             times[p] = g_time;
             G.run_pass();
-            G.snapshot(p);
+            G.stamp();
+            G.snapshot(p, full_view(p, K));
+            G.stamp();
             g_time += O.pass_time;
         }
         readbacks++;
+        if (O.profile) ctx->End(prof_dis);
         bool event = false;
         for (uint32_t p = 0; p < K && code < 0; p++) {
-            G.read_snapshot(p, views[p], cons[p].data());
+            views[p] = p ? views[p - 1] : prev;
+            G.read_snapshot(p, full_view(p, K), views[p], cons[p].data());
             const std::vector<std::vector<uint32_t>>& now = views[p];
             passes++;
             for (uint32_t c = 0; c < O.ncores; c++) {
                 const std::vector<uint32_t>& s = now[c];
-                if (s[V_FLAGS] & F_AGAIN) { again++; continue; }
-                bundles += s[V_LAST];
-                if (!(s[V_FLAGS] & F_HALT)) ends[s[V_END] < 6 ? s[V_END] : 4]++;
+                bundles += (uint32_t)(s[V_CYCLE] - prev[c][V_CYCLE]);
                 ops += (uint32_t)(s[V_OPS] - prev[c][V_OPS]);
+                if (s[V_FLAGS] & F_AGAIN) { again++; continue; }
+                if (!(s[V_FLAGS] & F_HALT)) ends[s[V_END] < 6 ? s[V_END] : 4]++;
                 if (s[V_PC] >= 16) { last_st[c] = s[V_ST]; last_epc[c] = s[V_EPC]; last_cause[c] = s[V_CAUSE]; last_tval[c] = s[V_TVAL]; }
             }
             if (O.trace_pass) {
@@ -1085,6 +1113,20 @@ int main(int argc, char** argv) {
                 if (!ref_pass(passes, times[p], prev, now)) { code = EXIT_CHECK; break; }
             }
             prev = now;
+        }
+        if (O.profile && code < 0) {   // per pass: tick, commit, operations, (stamp), copies
+            D3D11_QUERY_DATA_TIMESTAMP_DISJOINT dj;
+            while (ctx->GetData(prof_dis, &dj, sizeof dj, 0) != S_OK) Sleep(0);
+            std::vector<UINT64> t(G.nq);
+            for (uint32_t q = 0; q < G.nq; q++) while (ctx->GetData(G.qs[q], &t[q], sizeof t[q], 0) != S_OK) Sleep(0);
+            if (!dj.Disjoint)
+                for (uint32_t p = 0; p < K; p++) {
+                    const UINT64* u = &t[p * 5];
+                    prof[0] += double(u[1] - u[0]) / dj.Frequency; prof[1] += double(u[2] - u[1]) / dj.Frequency;
+                    prof[2] += double(u[3] - u[2]) / dj.Frequency; prof[3] += double(u[4] - u[3]) / dj.Frequency;
+                    if (p + 1 < K) prof[4] += double(u[5] - u[4]) / dj.Frequency;
+                    prof_passes++;
+                }
         }
         if (code >= 0) break;
         if (O.check && O.check_ram && passes - ram_checked >= O.check_ram) {   // all of RAM, as the batch's last pass left it
@@ -1178,6 +1220,10 @@ int main(int argc, char** argv) {
         fprintf(stderr, "gvm_gpu: core passes ended by: budget %llu, sync %llu, wait %llu, a full write cache %llu, halt %llu\n",
                 (unsigned long long)ends[E_BUDGET], (unsigned long long)ends[E_SYNC], (unsigned long long)ends[E_WAIT],
                 (unsigned long long)ends[E_FULL], (unsigned long long)ends[E_HALT]);
+        if (O.profile && prof_passes)
+            fprintf(stderr, "gvm_gpu: a pass on the card (%llu timed): tick %.1f us, commit %.1f us, operations %.1f us, readback copies %.1f us, between passes %.1f us\n",
+                    (unsigned long long)prof_passes, prof[0] / prof_passes * 1e6, prof[1] / prof_passes * 1e6, prof[2] / prof_passes * 1e6,
+                    prof[3] / prof_passes * 1e6, prof[4] / prof_passes * 1e6);
         fprintf(stderr, "gvm_gpu: %.3f s on %s: %.2f M bundles/s, %.0f passes/s\n", wall, O.warp ? "WARP" : "the card", bundles / wall / 1e6, passes / wall);
     }
     return code;
