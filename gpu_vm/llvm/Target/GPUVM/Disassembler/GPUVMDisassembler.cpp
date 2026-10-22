@@ -52,7 +52,9 @@ public:
     for (unsigned I = 0, E = MII->getNumOpcodes(); I < E; ++I) {
       uint64_t TS = MII->get(I).TSFlags;
       GPUVMII::Form F = GPUVMII::getForm(TS);
-      if (F == GPUVMII::FrmPseudo || GPUVMII::isControl(TS))
+      // the codegen's own (lq/sq on register quads) share their opcode bytes
+      if (F == GPUVMII::FrmPseudo || GPUVMII::isControl(TS) ||
+          I == GPUVM::LQ_Q || I == GPUVM::SQ_Q || I == GPUVM::SQ_OP)
         continue;
       if (GPUVMII::isVariant(TS))
         BFESOpcode = I;
@@ -60,7 +62,8 @@ public:
         OpOf[GPUVMII::getOpc(TS)] = I;
     }
     const MCRegisterInfo *MRI = Ctx.getRegisterInfo();
-    for (unsigned R = 1, E = MRI->getNumRegs(); R < E; ++R)
+    // the GPRs alone (a quad tuple has its first register's encoding)
+    for (MCRegister R : MRI->getRegClass(GPUVM::GPRRegClassID))
       RegOf[MRI->getEncodingValue(R) & 63] = R;
   }
 
