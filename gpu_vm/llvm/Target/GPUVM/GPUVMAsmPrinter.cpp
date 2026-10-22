@@ -51,6 +51,7 @@ public:
   void emitInstruction(const MachineInstr *MI) override;
   void emitStartOfAsmFile(Module &M) override;
   void emitBasicBlockStart(const MachineBasicBlock &MBB) override;
+  void emitFunctionBodyEnd() override;
   bool PrintAsmOperand(const MachineInstr *MI, unsigned OpNo,
                        const char *ExtraCode, raw_ostream &OS) override;
   bool PrintAsmMemoryOperand(const MachineInstr *MI, unsigned OpNo,
@@ -258,4 +259,13 @@ void GPUVMAsmPrinter::emitBasicBlockStart(const MachineBasicBlock &MBB) {
     if (GPUVMTargetStreamer *TS = targetStreamer(*OutStreamer))
       TS->emitBlockStart();
   AsmPrinter::emitBasicBlockStart(MBB);
+}
+
+// A function whose last bundle has no control op (one ending in `break`, an
+// abstract class's deleting destructor) leaves its bundle open: close it, so
+// that the labels after the body (debug info's, the function's end) are placed
+// in the section before debug info asks for them.
+void GPUVMAsmPrinter::emitFunctionBodyEnd() {
+  if (GPUVMTargetStreamer *TS = targetStreamer(*OutStreamer))
+    TS->emitBlockStart();
 }

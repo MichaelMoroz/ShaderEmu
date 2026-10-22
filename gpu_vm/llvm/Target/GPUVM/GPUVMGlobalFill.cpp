@@ -408,19 +408,11 @@ bool GPUVMGlobalFill::nearOnPaths(
     if (Budget == 0)
       return false;
     --Budget;
-    unsigned F = GPUVMII::getForm(I->getDesc().TSFlags);
-    if ((F == GPUVMII::FrmLoad || F == GPUVMII::FrmStore) &&
-        I->mayLoadOrStore() && !I->hasOrderedMemoryRef()) {
-      const MachineOperand &BO = I->getOperand(1);
-      const MachineOperand &OO = I->getOperand(2);
-      if (BO.isReg() && BO.getReg() == Base && OO.isImm()) {
-        int64_t A = OO.getImm() - Delta;
-        if (std::abs(A - Off) <= (int64_t)SpecWindow)
-          return true;
-      }
-    }
     if (I->isCall())
       return false;
+    // An instruction that writes Base: what it accessed went through Base's
+    // value before it (`lw p, 0(p)`), another value than the load's
+    // (spec_load.c, QuickJS): only a step or a copy is followed.
     if (I->modifiesRegister(Base, TRI)) {
       // Base = V + k (a step of it, or a copy of another register): on with
       // V
@@ -432,6 +424,17 @@ bool GPUVMGlobalFill::nearOnPaths(
         continue;
       }
       return false;
+    }
+    unsigned F = GPUVMII::getForm(I->getDesc().TSFlags);
+    if ((F == GPUVMII::FrmLoad || F == GPUVMII::FrmStore) &&
+        I->mayLoadOrStore() && !I->hasOrderedMemoryRef()) {
+      const MachineOperand &BO = I->getOperand(1);
+      const MachineOperand &OO = I->getOperand(2);
+      if (BO.isReg() && BO.getReg() == Base && OO.isImm()) {
+        int64_t A = OO.getImm() - Delta;
+        if (std::abs(A - Off) <= (int64_t)SpecWindow)
+          return true;
+      }
     }
   }
   if (MBB->pred_empty() || !OnPath.insert(MBB).second)
