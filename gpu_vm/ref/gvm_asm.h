@@ -9,6 +9,9 @@
 #include <vector>
 #include "../isa.h"
 
+// x18's paths 1 and 2 (gpu_vm/isa.h), while the tick bench tries them beside x17's: 1 makes them
+inline int g_gvm_path12 = 0;
+
 struct GvmAsm {
     uint32_t base;                    // the first bundle's address
     std::vector<uint32_t> w;          // four words a bundle
@@ -39,13 +42,34 @@ struct GvmAsm {
     static bool madlike(uint32_t f) { return f == GVM_F_MAD || f == GVM_F_MSB || f == GVM_F_NMSB; }
     static bool float_op(uint32_t op) { uint32_t o = GVM_OPC(op); return GVM_CLASS(o) == 3 && !(GVM_IFORM(o) && madlike(o & 31)); }
     static bool flite(uint32_t op) { return float_op(op) && fn(op) <= GVM_F_MAX; }
+    // x18: path 1's op 0 is any integer op (shadd, sel, the carries, bfe too) or an extended one of a and b alone (mulh-brev)
+    static bool int_any(uint32_t op) {
+        uint32_t o = GVM_OPC(op), f = o & 31;
+        if (g_gvm_path12 == 2) return false;   // (probes: 2 cc 0 alone, 3 cc 0 and sel)
+        if (g_gvm_path12 == 3) return o == GVM_OP_I(GVM_I_SEL);
+        if (GVM_CLASS(o) == 1) return GVM_IFORM(o) ? (f <= GVM_I_COMMON_LAST || f == GVM_I_BFE) : f <= GVM_I_BORROW;
+        return GVM_CLASS(o) == 0 && o >= GVM_X_MULH && o <= GVM_X_BREV;
+    }
+    // x18: the path of a cc 0 bundle (jr, callr, j, call, the add: step12's, paths 1 and 2), or 0
+    static uint32_t path12_of(uint32_t ctl, uint32_t w0, uint32_t w1) {
+        uint32_t sub = GVM_SUB(ctl), n = GVM_N(ctl);
+        bool ok = sub == GVM_SUB_J || sub == GVM_SUB_CALL || sub == GVM_SUB_JR || sub == GVM_SUB_CALLR || (sub == GVM_SUB_ADD && GVM_CRS(ctl) != 0);
+        if (!ok || n == 3) return GVM_PATH_GENERAL;
+        GvmAsm a(0);
+        if (n > 0) a.cur.push_back(w0);
+        if (n > 1) a.cur.push_back(w1);
+        uint32_t p = a.path();
+        if (p == GVM_PATH_INT) return GVM_PATH_ALU;
+        if (p == GVM_PATH_LOAD || p == GVM_PATH_STORE) return GVM_PATH_MEMF;
+        return p == GVM_PATH_ALU || p == GVM_PATH_MEMF ? p : GVM_PATH_GENERAL;
+    }
     uint32_t path() const {
         if (cur.empty()) return GVM_PATH_INT;
         uint32_t a = cur[0];
         bool one = cur.size() == 1;
         uint32_t b = one ? 0 : cur[1];
         if (mid(a) && (one || lite(b))) return GVM_PATH_INT;
-        if ((int_op(a) || float_op(a)) && (one || lite(b) || flite(b))) return GVM_PATH_ALU;
+        if ((int_op(a) || float_op(a) || (g_gvm_path12 && int_any(a))) && (one || lite(b) || flite(b))) return GVM_PATH_ALU;
         if (mem_op(a) && (one || lite(b))) return store_op(a) ? GVM_PATH_STORE : GVM_PATH_LOAD;
         if (mem_op(a) && mem_op(b)) return store_op(a) ? GVM_PATH_MEM2 : store_op(b) ? GVM_PATH_GENERAL : GVM_PATH_LOAD2;
         if (mem_op(a)) return flite(b) ? GVM_PATH_MEMF : GVM_PATH_GENERAL;
@@ -61,7 +85,7 @@ struct GvmAsm {
         uint32_t L = long_of < 0 ? 0u : long_of == 1 ? 0x40u : 0x20u;
         // cc 0 (jr, callr, call, eret, a far j, the add): the general step's (isa.h). A j's path is the ops' until
         // finish() finds it far.
-        uint32_t p = GVM_CC(ctl) != GVM_CC_SPECIAL ? path() : GVM_PATH_GENERAL;
+        uint32_t p = GVM_CC(ctl) != GVM_CC_SPECIAL ? path() : g_gvm_path12 ? path12_of(ctl | n << 3, n > 0 ? cur[0] : 0, n > 1 ? cur[1] : 0) : GVM_PATH_GENERAL;
         w.push_back(n > 0 ? cur[0] : 0);
         w.push_back(n > 1 ? cur[1] : 0);
         w.push_back(long_of < 0 ? 0 : long_imm);
@@ -82,8 +106,13 @@ struct GvmAsm {
     // an op that names a register in any field (conservatively: rd, ra, rb, rc)
     static bool touches(uint32_t op, uint32_t r) { return GVM_RD(op) == r || GVM_RA(op) == r || GVM_RB(op) == r || GVM_RC(op) == r; }
     static bool store_op(uint32_t op) { uint32_t o = GVM_OPC(op); return GVM_CLASS(o) == 2 && (((o >> 3) & 7) == GVM_M_STORE || ((o >> 3) & 7) == GVM_M_STOREX); }
-    bool writes(uint32_t r) const {   // an op of the open bundle that writes r (a store's rd is its value: read); wide ones by rd's group
-        for (uint32_t op : cur) if (!store_op(op) && (GVM_RD(op) == r || (GVM_CLASS(GVM_OPC(op)) == 2 && (r - GVM_RD(op)) < 4))) return true;
+    static uint32_t span(uint32_t op) {   // the registers a memory op writes from rd: d two, q four (modes 0-3), else one
+        uint32_t o = GVM_OPC(op);
+        if (GVM_CLASS(o) != 2 || ((o >> 3) & 7) > 3) return 1;
+        return (o & 7) == GVM_W_Q ? 4 : (o & 7) == GVM_W_D ? 2 : 1;
+    }
+    bool writes(uint32_t r) const {   // an op of the open bundle that writes r (a store's rd is its value: read); d and q by rd's group
+        for (uint32_t op : cur) if (!store_op(op) && (r - GVM_RD(op)) < span(op)) return true;
         return false;
     }
     void put(uint32_t op) {
@@ -186,8 +215,10 @@ struct GvmAsm {
             if (labels[f.label] < 0) { fprintf(stderr, "gvm_asm: label %d not bound\n", f.label); exit(1); }
             int64_t off = labels[f.label] - (int64_t)f.bundle;
             uint32_t& ctl = w[f.bundle * 4 + 3];
-            if (f.kind == 3 && (off < -256 || off > 255))   // a far j: cc 0, the general step's
-                ctl = (ctl & 0x78u) | GVM_PATH_GENERAL | GVM_CTRL_SPECIAL(GVM_SUB_J) | (uint32_t)(off << 14);
+            if (f.kind == 3 && (off < -256 || off > 255)) {   // a far j: cc 0, the general step's (x18: step12's when its ops fit)
+                ctl = (ctl & 0x78u) | GVM_CTRL_SPECIAL(GVM_SUB_J) | (uint32_t)(off << 14);
+                ctl |= g_gvm_path12 ? path12_of(ctl, w[f.bundle * 4], w[f.bundle * 4 + 1]) : GVM_PATH_GENERAL;
+            }
             else if (f.kind == 0 || f.kind == 3) {
                 if (off < -256 || off > 255) { fprintf(stderr, "gvm_asm: a branch of %lld bundles\n", (long long)off); exit(1); }
                 ctl = (ctl & ~(0x1ffu << 17)) | ((uint32_t)off & 0x1ffu) << 17;

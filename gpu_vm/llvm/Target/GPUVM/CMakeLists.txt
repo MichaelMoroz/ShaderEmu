@@ -29,6 +29,7 @@ add_llvm_target(GPUVMCodeGen
   GPUVMSelectionDAGInfo.cpp
   GPUVMSubtarget.cpp
   GPUVMTargetMachine.cpp
+  GPUVMZeroExt.cpp
 
   LINK_COMPONENTS
   Analysis

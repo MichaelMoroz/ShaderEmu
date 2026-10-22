@@ -92,6 +92,8 @@ public:
   }
   void addPreRegAlloc() override {
     if (getOptLevel() != CodeGenOptLevel::None)
+      addPass(createGPUVMZeroExtPass());
+    if (getOptLevel() != CodeGenOptLevel::None)
       addPass(createGPUVMHoistConstantsPass());
   }
   void addPreSched2() override {

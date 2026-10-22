@@ -51,6 +51,7 @@
 #include "llvm/CodeGen/TargetFrameLowering.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
+#include <cmath>
 
 using namespace llvm;
 
@@ -84,6 +85,10 @@ static cl::opt<double>
     OpWaste("gpuvm-fill-op-waste", cl::Hidden, cl::init(0.15),
             cl::desc("gpu_vm: what another op run for nothing costs, in "
                      "bundles"));
+static cl::opt<double>
+    LoopWeight("gpuvm-fill-loop-weight", cl::Hidden, cl::init(1.0),
+               cl::desc("gpu_vm: a block's weight in a loop, a level, over "
+                        "its static frequency"));
 static cl::opt<unsigned>
     ScanOps("gpuvm-fill-scan", cl::Hidden, cl::init(6),
             cl::desc("gpu_vm: how deep into a block to look for an op to "
@@ -113,7 +118,14 @@ struct Trial {
     Renamed.push_back({&MO, MO.getReg()});
     MO.setReg(R);
   }
+  SmallVector<std::pair<MachineOperand *, int64_t>, 2> Adjusted;
+  void adjust(MachineOperand &MO, int64_t K) {
+    Adjusted.push_back({&MO, MO.getImm()});
+    MO.setImm(MO.getImm() + K);
+  }
   void undo() {
+    for (auto &[MO, V] : reverse(Adjusted))
+      MO->setImm(V);
     for (MachineInstr *MI : reverse(Added))
       MI->eraseFromParent();
     for (auto &[MO, R] : reverse(Renamed))
@@ -129,6 +141,7 @@ struct Trial {
     Moves.clear();
     Renamed.clear();
     Added.clear();
+    Adjusted.clear();
   }
 };
 
@@ -140,17 +153,37 @@ struct Place {
   MachineBasicBlock *Into = nullptr;
   MachineInstr *Before = nullptr;
   Substs Subst;
+  int64_t Adj = 0; // added to X's immediate (an `addi base, base, k` passed)
+  // the block's own last value of X's result register, used only by its
+  // terminators, renamed out of the way
+  MachineInstr *RenDef = nullptr;
+  Register RenTo;
+  SmallVector<MachineBasicBlock *, 4> RenChain; // RenDef's block .. Into
 };
 
 // One way to move an op.
+struct Plan;
+static SmallVector<Register, 4> planRegs(const Plan &P);
 struct Plan {
   MachineInstr *X = nullptr;
   Place At;
   Register To;   // the new register of X's result, or none
   int MvAt = -1; // -1 no mv; 0 at the end of X's block; 1 at X's place
-  Place At2;     // rotation: a copy in the block that enters the loop
+  SmallVector<Place, 2> Enter; // rotation: a copy in each block entering the loop
   double Waste = 0;
 };
+
+// The fresh registers a plan takes
+static SmallVector<Register, 4> planRegs(const Plan &P) {
+  SmallVector<Register, 4> R;
+  for (Register X : {P.To, P.At.RenTo})
+    if (X)
+      R.push_back(X);
+  for (const Place &E : P.Enter)
+    if (E.RenTo)
+      R.push_back(E.RenTo);
+  return R;
+}
 
 class GPUVMGlobalFill : public MachineFunctionPass {
 public:
@@ -179,8 +212,11 @@ private:
   BitVector Used; // registers some operand names (renames go elsewhere)
   DenseMap<const MachineBasicBlock *, MachineBasicBlock *> Head;
 
+  // The static estimate takes a loop with several exits for one of few
+  // iterations: a block in a loop weighs LoopWeight times more a level.
   double freq(const MachineBasicBlock *B) const {
-    return MBFI->getBlockFreqRelativeToEntryBlock(B);
+    return MBFI->getBlockFreqRelativeToEntryBlock(B) *
+           std::pow((double)LoopWeight, (double)MLI->getLoopDepth(B));
   }
   double edgeFreq(const MachineBasicBlock *B,
                   const MachineBasicBlock *S) const {
@@ -201,14 +237,18 @@ private:
                    MachineBasicBlock::iterator I, int64_t Delta,
                    unsigned &Budget,
                    SmallPtrSetImpl<MachineBasicBlock *> &OnPath) const;
+  bool nearAhead(Register Base, int64_t Off, MachineBasicBlock *O) const;
   bool nullTested(Register Base, int64_t Off, const MachineBasicBlock &B,
                   const MachineBasicBlock *To) const;
   bool hoistsInBlock(const MachineInstr &X) const;
   bool fitsAfter(const MachineInstr &X, MachineBasicBlock::iterator At,
-                 MachineBasicBlock &B, Register Def, Substs &Subst) const;
+                 MachineBasicBlock &B, Register Def, Substs &Subst,
+                 int64_t &Adj, bool DefRenamed = false) const;
   void places(const MachineInstr &X, MachineBasicBlock &B, Register Def,
-              SmallVectorImpl<Place> &Out) const;
-  Register freshReg() const;
+              SmallVectorImpl<Place> &Out, Register Avoid = Register()) const;
+  void localRename(const MachineInstr &X, MachineBasicBlock &B, Register Def,
+                   SmallVectorImpl<Place> &Out, Register Avoid) const;
+  Register freshReg(Register Avoid = Register()) const;
   bool renameRange(MachineInstr &X, Register Def, Register N,
                    SmallVectorImpl<MachineOperand *> &Uses,
                    bool &NeedMv) const;
@@ -418,7 +458,58 @@ bool GPUVMGlobalFill::speculable(const MachineInstr &X, const Place &P,
   SmallPtrSet<MachineBasicBlock *, 8> OnPath;
   MachineBasicBlock::iterator I =
       P.Before ? P.Before->getIterator() : B.end();
-  return nearOnPaths(Base, Off, &B, I, 0, Budget, OnPath);
+  if (nearOnPaths(Base, Off + P.Adj, &B, I, 0, Budget, OnPath))
+    return true;
+  // or every other way out of B makes such an access before long (X's base
+  // at B's end is its own register: what follows the place does not write
+  // it, or a mv gives it the value X reads)
+  Register Orig = X.getOperand(1).getReg();
+  for (MachineBasicBlock *O : B.successors())
+    if (O != To && !nearAhead(Orig, Off, O))
+      return false;
+  return true;
+}
+
+// The path into O makes an access through Base near Base + Off (Base as it
+// is on entering O) before anything else could leave it.
+bool GPUVMGlobalFill::nearAhead(Register Base, int64_t Off,
+                                MachineBasicBlock *O) const {
+  int64_t Delta = 0; // Base here - Base on entering O
+  unsigned Budget = 30;
+  SmallPtrSet<MachineBasicBlock *, 4> Seen;
+  while (Seen.insert(O).second) {
+    for (MachineInstr &I : *O) {
+      if (I.isDebugInstr() || I.isMetaInstruction())
+        continue;
+      if (Budget == 0 || I.isCall() || I.isTerminator())
+        break;
+      --Budget;
+      unsigned F = GPUVMII::getForm(I.getDesc().TSFlags);
+      if ((F == GPUVMII::FrmLoad || F == GPUVMII::FrmStore) &&
+          I.mayLoadOrStore() && !I.hasOrderedMemoryRef() &&
+          I.getOperand(1).isReg() && I.getOperand(1).getReg() == Base &&
+          I.getOperand(2).isImm() &&
+          std::abs(I.getOperand(2).getImm() + Delta - Off) <=
+              (int64_t)SpecWindow)
+        return true;
+      if (I.modifiesRegister(Base, TRI)) {
+        if (I.getOpcode() == GPUVM::ADDI && I.getOperand(1).isReg() &&
+            I.getOperand(1).getReg() == Base && I.getOperand(2).isImm()) {
+          Delta += I.getOperand(2).getImm();
+          continue;
+        }
+        return false;
+      }
+    }
+    // on through a block with one way out (no branch taken before it)
+    if (O->succ_size() != 1 || Budget == 0)
+      return false;
+    for (MachineInstr &T : O->terminators())
+      if (T.isConditionalBranch() || T.isIndirectBranch())
+        return false;
+    O = *O->succ_begin();
+  }
+  return false;
 }
 
 // X can go to the top of its block: nothing above it there conflicts.
@@ -453,8 +544,15 @@ bool GPUVMGlobalFill::hoistsInBlock(const MachineInstr &X) const {
 bool GPUVMGlobalFill::fitsAfter(const MachineInstr &X,
                                 MachineBasicBlock::iterator At,
                                 MachineBasicBlock &B, Register Def,
-                                Substs &Subst) const {
+                                Substs &Subst, int64_t &Adj,
+                                bool DefRenamed) const {
   Subst.clear();
+  Adj = 0;
+  // X reads its base (operand 1) and an immediate: a load or an addi
+  unsigned F = GPUVMII::getForm(X.getDesc().TSFlags);
+  bool Based = (F == GPUVMII::FrmLoad || X.getOpcode() == GPUVM::ADDI) &&
+               X.getOperand(1).isReg() && X.getOperand(2).isImm();
+  Register AdjReg;
   SmallVector<std::pair<unsigned, Register>, 3> Uses; // operand, register
   for (unsigned K = 0; K < X.getNumOperands(); ++K) {
     const MachineOperand &MO = X.getOperand(K);
@@ -468,7 +566,8 @@ bool GPUVMGlobalFill::fitsAfter(const MachineInstr &X,
     if (I->isCall() || I->isInlineAsm() ||
         (X.mayLoad() && (I->mayStore() || I->hasUnmodeledSideEffects())))
       return false;
-    if (I->readsRegister(Def, TRI) || I->modifiesRegister(Def, TRI))
+    if ((!DefRenamed && I->readsRegister(Def, TRI)) ||
+        I->modifiesRegister(Def, TRI))
       return false;
     for (auto &[K, R] : Uses) {
       if (!R || !I->modifiesRegister(R, TRI))
@@ -479,7 +578,23 @@ bool GPUVMGlobalFill::fitsAfter(const MachineInstr &X,
                  I->getOperand(0).getReg() == R &&
                  I->getOperand(1).isReg() && I->getOperand(2).isImm() &&
                  I->getOperand(2).getImm() == 0;
-      if (!Fwd)
+      // an addi R, R, k when R is X's base alone: X's immediate takes k
+      if (Based && K == 1 && I->getOpcode() == GPUVM::ADDI &&
+          I->getOperand(0).getReg() == R && I->getOperand(1).isReg() &&
+          I->getOperand(1).getReg() == R && I->getOperand(2).isImm() &&
+          !X.getOperand(2).isImm() == false) {
+        bool Only = true;
+        for (unsigned J = 0; J < X.getNumOperands(); ++J)
+          if (J != 1 && X.getOperand(J).isReg() &&
+              X.getOperand(J).getReg() == R)
+            Only = false;
+        if (Only) {
+          Adj += I->getOperand(2).getImm();
+          AdjReg = R;
+          continue;
+        }
+      }
+      if (!Fwd || AdjReg == R)
         return false;
       Register V = I->getOperand(1).getReg();
       if (V == Def || llvm::is_contained(Written, V))
@@ -507,14 +622,21 @@ bool GPUVMGlobalFill::fitsAfter(const MachineInstr &X,
 // Where in B X may go: before its first terminator, and earlier while it
 // still fits (up to a few ops back).
 void GPUVMGlobalFill::places(const MachineInstr &X, MachineBasicBlock &B,
-                             Register Def, SmallVectorImpl<Place> &Out) const {
+                             Register Def, SmallVectorImpl<Place> &Out,
+                             Register Avoid) const {
   MachineBasicBlock::iterator I = B.getFirstTerminator();
   for (unsigned N = 0; N < 6; ++N) {
     Place P;
     P.Into = &B;
     P.Before = I == B.end() ? nullptr : &*I;
-    if (!fitsAfter(X, I, B, Def, P.Subst))
+    if (!fitsAfter(X, I, B, Def, P.Subst, P.Adj) ||
+        !isInt<32>(X.getNumOperands() > 2 && X.getOperand(2).isImm()
+                       ? X.getOperand(2).getImm() + P.Adj
+                       : 0)) {
+      if (N == 0)
+        localRename(X, B, Def, Out, Avoid);
       return;
+    }
     Out.push_back(P);
     // the place before the previous op
     do {
@@ -525,12 +647,99 @@ void GPUVMGlobalFill::places(const MachineInstr &X, MachineBasicBlock &B,
   }
 }
 
-Register GPUVMGlobalFill::freshReg() const {
+// X at B's end, where B's terminators read B's own last value of Def: that
+// value goes to a fresh register (its def and its reads in B), X reads it
+// there if it reads Def.
+void GPUVMGlobalFill::localRename(const MachineInstr &X, MachineBasicBlock &B,
+                                  Register Def, SmallVectorImpl<Place> &Out,
+                                  Register Avoid) const {
+  MachineBasicBlock::iterator T = B.getFirstTerminator();
+  for (MachineBasicBlock::iterator I = T; I != B.end(); ++I)
+    if (I->modifiesRegister(Def, TRI) || I->isCall() ||
+        I->isIndirectBranch())
+      return;
+    else
+      for (const MachineOperand &MO : X.operands())
+        if (MO.isReg() && MO.isUse() && MO.getReg() &&
+            I->modifiesRegister(MO.getReg(), TRI))
+          return;
+  // the last def of Def: in B or up the blocks that alone lead to it (whose
+  // other ways out do not read Def)
+  MachineInstr *D = nullptr;
+  SmallVector<MachineBasicBlock *, 4> Chain{&B};
+  MachineBasicBlock *Cur = &B;
+  MachineBasicBlock::iterator I = T;
+  while (!D) {
+    while (I != Cur->begin()) {
+      --I;
+      if (I->isDebugInstr())
+        continue;
+      if (I->modifiesRegister(Def, TRI)) {
+        D = &*I;
+        break;
+      }
+    }
+    if (D)
+      break;
+    if (Cur->pred_size() != 1 || Chain.size() == 4)
+      return;
+    MachineBasicBlock *P = *Cur->pred_begin();
+    if (P == &B || llvm::is_contained(Chain, P) || liveInOthers(*P, Cur, Def))
+      return;
+    Chain.push_back(P);
+    Cur = P;
+    I = P->end();
+  }
+  std::reverse(Chain.begin(), Chain.end()); // D's block first
+  if (D == &X || D->isCall() || D->isInlineAsm() || singleDef(*D) != Def ||
+      D->getNumImplicitOperands() != 0)
+    return;
+  Register N = freshReg(Avoid);
+  if (!N)
+    return;
+  for (MachineBasicBlock *C : Chain)
+    for (MachineBasicBlock::iterator J =
+             C == D->getParent() ? std::next(D->getIterator()) : C->begin();
+         J != C->end(); ++J)
+      for (const MachineOperand &MO : J->operands())
+        if ((MO.isReg() && MO.getReg() && MO.getReg() != Def &&
+             TRI->regsOverlap(MO.getReg(), Def)) ||
+            (MO.isReg() && MO.getReg() == Def && MO.isImplicit()) ||
+            (MO.isRegMask() && MO.clobbersPhysReg(N)))
+          return;
+  // X before the terminators, and earlier while it fits (after D)
+  MachineBasicBlock::iterator At = T;
+  for (unsigned K = 0; K < 6; ++K) {
+    Place P;
+    P.Into = &B;
+    P.Before = At == B.end() ? nullptr : &*At;
+    P.RenDef = D;
+    P.RenTo = N;
+    P.RenChain.assign(Chain.begin(), Chain.end());
+    if (!fitsAfter(X, At, B, Def, P.Subst, P.Adj, true))
+      return;
+    for (unsigned J = 0; J < X.getNumOperands(); ++J) {
+      const MachineOperand &MO = X.getOperand(J);
+      if (MO.isReg() && MO.isUse() && MO.getReg() == Def)
+        P.Subst.push_back({J, N});
+    }
+    Out.push_back(P);
+    do {
+      if (At == B.begin())
+        return;
+      --At;
+    } while (At->isDebugInstr() || At->isMetaInstruction() || &*At == &X);
+    if (&*At == D)
+      return;
+  }
+}
+
+Register GPUVMGlobalFill::freshReg(Register Avoid) const {
   const MCPhysReg *CSR = TRI->getCalleeSavedRegs(MF);
   for (MCPhysReg R : GPUVM::GPRRegClass) {
     unsigned E = TRI->getEncodingValue(R);
     // not zero, ra, sp, gp, tp, nor t26 (lld's thunks)
-    if (E < 5 || E == 63 || Used.test(R) || MRI->isReserved(R))
+    if (E < 5 || E == 63 || Used.test(R) || MRI->isReserved(R) || R == Avoid)
       continue;
     bool Saved = false;
     for (const MCPhysReg *C = CSR; *C; ++C)
@@ -578,17 +787,33 @@ bool GPUVMGlobalFill::renameRange(MachineInstr &X, Register Def, Register N,
 }
 
 void GPUVMGlobalFill::apply(const Plan &P, Trial &T) {
+  SmallVector<const Place *, 3> All{&P.At};
+  for (const Place &E : P.Enter)
+    All.push_back(&E);
+  for (const Place *Pl : All)
+    if (Pl->RenDef) {
+      Register Def = singleDef(*Pl->RenDef);
+      for (MachineBasicBlock *C : Pl->RenChain)
+        for (MachineBasicBlock::iterator I =
+                 C == Pl->RenDef->getParent() ? Pl->RenDef->getIterator()
+                                              : C->begin();
+             I != C->end(); ++I)
+          for (MachineOperand &MO : I->operands())
+            if (MO.isReg() && MO.getReg() == Def &&
+                (&*I == Pl->RenDef ? MO.isDef() : MO.isUse()))
+              T.rename(MO, Pl->RenTo);
+    }
   MachineInstr *X = P.X;
   MachineBasicBlock *S = X->getParent();
   MachineBasicBlock::iterator XAt = std::next(X->getIterator());
   Register Def = singleDef(*X);
-  if (P.At2.Into) {
+  for (const Place &E : P.Enter) {
     MachineInstr *C = MF->CloneMachineInstr(X);
-    for (auto &[K, R] : P.At2.Subst)
+    for (auto &[K, R] : E.Subst)
       C->getOperand(K).setReg(R);
-    P.At2.Into->insert(P.At2.Before ? P.At2.Before->getIterator()
-                                    : P.At2.Into->end(),
-                       C);
+    if (E.Adj)
+      C->getOperand(2).setImm(C->getOperand(2).getImm() + E.Adj);
+    E.Into->insert(E.Before ? E.Before->getIterator() : E.Into->end(), C);
     T.Added.push_back(C);
   }
   if (P.To) {
@@ -603,6 +828,8 @@ void GPUVMGlobalFill::apply(const Plan &P, Trial &T) {
   }
   for (auto &[K, R] : P.At.Subst)
     T.rename(X->getOperand(K), R);
+  if (P.At.Adj)
+    T.adjust(X->getOperand(2), P.At.Adj);
   // (moved before the mv is added: the undo puts it back before XAt)
   T.move(X, *P.At.Into,
          P.At.Before ? P.At.Before->getIterator() : P.At.Into->end());
@@ -643,7 +870,7 @@ void GPUVMGlobalFill::fillPlans(MachineBasicBlock &B, MachineBasicBlock &S,
         continue;
       }
       SmallVector<Place, 6> Ps;
-      places(X, B, Ren ? N : Def, Ps);
+      places(X, B, Ren ? N : Def, Ps, N);
       for (Place &At : Ps) {
         if (!speculable(X, At, &S))
           continue;
@@ -666,9 +893,13 @@ void GPUVMGlobalFill::fillPlans(MachineBasicBlock &B, MachineBasicBlock &S,
 void GPUVMGlobalFill::rotatePlans(MachineLoop &L, SmallVectorImpl<Plan> &Out) {
   MachineBasicBlock *H = L.getHeader();
   MachineBasicBlock *Latch = L.getLoopLatch();
-  MachineBasicBlock *P = L.getLoopPredecessor();
-  double Wasted = std::max(0.0, freq(Latch) - edgeFreq(Latch, H)) +
-                  std::max(0.0, freq(P) - edgeFreq(P, H));
+  SmallVector<MachineBasicBlock *, 2> Ins;
+  for (MachineBasicBlock *P : H->predecessors())
+    if (P != Latch)
+      Ins.push_back(P);
+  double Wasted = std::max(0.0, freq(Latch) - edgeFreq(Latch, H));
+  for (MachineBasicBlock *P : Ins)
+    Wasted += std::max(0.0, freq(P) - edgeFreq(P, H));
   unsigned Scanned = 0;
   for (MachineInstr &X : *H) {
     if (X.isDebugInstr() || X.isMetaInstruction())
@@ -678,25 +909,38 @@ void GPUVMGlobalFill::rotatePlans(MachineLoop &L, SmallVectorImpl<Plan> &Out) {
     if (!movableOp(X) || !hoistsInBlock(X))
       continue;
     Register Def = singleDef(X);
-    if (liveInOthers(*Latch, H, Def) || liveInOthers(*P, H, Def))
+    bool Live = liveInOthers(*Latch, H, Def);
+    for (MachineBasicBlock *P : Ins)
+      Live |= liveInOthers(*P, H, Def);
+    if (Live)
       continue;
-    SmallVector<Place, 6> AtL, AtP;
+    SmallVector<Place, 6> AtL;
     places(X, *Latch, Def, AtL);
-    places(X, *P, Def, AtP);
+    // each entering block: its first safe place
+    SmallVector<Place, 2> Enter;
+    for (MachineBasicBlock *P : Ins) {
+      SmallVector<Place, 6> AtP;
+      places(X, *P, Def, AtP, AtL.empty() ? Register() : AtL[0].RenTo);
+      for (Place &A2 : AtP)
+        if (speculable(X, A2, H)) {
+          Enter.push_back(A2);
+          break;
+        }
+    }
+    LLVM_DEBUG(dbgs() << "rotate? " << X << "  " << AtL.size() << " places in "
+                      << printMBBReference(*Latch) << ", " << Enter.size()
+                      << " of " << Ins.size() << " entering\n");
+    if (Enter.size() != Ins.size())
+      continue;
     for (Place &A : AtL) {
       if (!speculable(X, A, H))
         continue;
-      for (Place &A2 : AtP) {
-        if (!speculable(X, A2, H))
-          continue;
-        Plan Pl;
-        Pl.X = &X;
-        Pl.At = A;
-        Pl.At2 = A2;
-        Pl.Waste = Wasted * (X.mayLoad() ? LoadWaste : OpWaste);
-        Out.push_back(Pl);
-        break; // the first place in the entering block that is safe
-      }
+      Plan Pl;
+      Pl.X = &X;
+      Pl.At = A;
+      Pl.Enter = Enter;
+      Pl.Waste = Wasted * (X.mayLoad() ? LoadWaste : OpWaste);
+      Out.push_back(Pl);
     }
   }
 }
@@ -715,9 +959,11 @@ bool GPUVMGlobalFill::search(
   for (const Plan &P1 : First) {
     Trial T1;
     apply(P1, T1);
-    if (P1.To)
-      Used.set(P1.To);
+    for (Register R : planRegs(P1))
+      Used.set(R);
     double C1 = cost(Blocks) - Base;
+    LLVM_DEBUG(dbgs() << "  try " << *P1.X << "    bundles " << C1
+                      << " waste " << P1.Waste << "\n");
     if (C1 + P1.Waste < Best) {
       Best = C1 + P1.Waste;
       Best1 = P1;
@@ -739,8 +985,8 @@ bool GPUVMGlobalFill::search(
         }
       }
     }
-    if (P1.To)
-      Used.reset(P1.To);
+    for (Register R : planRegs(P1))
+      Used.reset(R);
     T1.undo();
   }
   if (!Best1.X)
@@ -751,12 +997,12 @@ bool GPUVMGlobalFill::search(
              dbgs() << "  gain " << -Best << "\n");
   Trial T;
   apply(Best1, T);
-  if (Best1.To)
-    Used.set(Best1.To);
+  for (Register R : planRegs(Best1))
+    Used.set(R);
   if (Two) {
     apply(Best2, T);
-    if (Best2.To)
-      Used.set(Best2.To);
+    for (Register R : planRegs(Best2))
+      Used.set(R);
   }
   SmallVector<MachineBasicBlock *, 4> Bs(Blocks.begin(), Blocks.end());
   fullyRecomputeLiveIns(Bs);
@@ -784,17 +1030,23 @@ bool GPUVMGlobalFill::fill(MachineBasicBlock &B) {
 bool GPUVMGlobalFill::rotate(MachineLoop &L) {
   MachineBasicBlock *H = L.getHeader();
   MachineBasicBlock *Latch = L.getLoopLatch();
-  MachineBasicBlock *P = L.getLoopPredecessor();
-  if (!Latch || !P || H->pred_size() != 2 || H->isEHPad() ||
-      H->hasAddressTaken() || P == Latch)
+  if (!Latch || H->isEHPad() || H->hasAddressTaken() || H->pred_size() > 4)
     return false;
-  for (MachineBasicBlock *B : {Latch, P})
+  SmallVector<MachineBasicBlock *, 4> Blocks{Latch, H};
+  for (MachineBasicBlock *P : H->predecessors()) {
+    if (P == Latch)
+      continue;
+    if (L.contains(P))
+      return false;
+    Blocks.push_back(P);
+  }
+  for (MachineBasicBlock *B : Blocks)
     for (MachineBasicBlock::iterator I = B->getFirstTerminator();
          I != B->end(); ++I)
       if (I->isIndirectBranch() || I->isReturn() || I->isCall())
         return false;
   return search([&](SmallVectorImpl<Plan> &Out) { rotatePlans(L, Out); },
-                {P, Latch, H});
+                Blocks);
 }
 
 bool GPUVMGlobalFill::runOnMachineFunction(MachineFunction &Fn) {

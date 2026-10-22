@@ -189,12 +189,18 @@ inline bool touches(uint32_t Op, unsigned R) {
   return opRD(Op) == R || opRA(Op) == R || opRB(Op) == R || opRC(Op) == R;
 }
 
-// An op of Ops writes R (a store's rd is read); wide memory ops by rd's group.
+// The registers a memory op writes from rd: d two, q four, else one.
+inline unsigned span(uint32_t Op) {
+  unsigned O = opOpc(Op);
+  if (opClass(O) != 2 || ((O >> 3) & 7) > 3)
+    return 1;
+  return (O & 7) == 4 ? 4 : (O & 7) == 1 ? 2 : 1;
+}
+
+// An op of Ops writes R (a store's rd is read); d and q by rd's group.
 inline bool writes(ArrayRef<uint32_t> Ops, unsigned R) {
   for (uint32_t Op : Ops)
-    if (!storeOp(Op) &&
-        (opRD(Op) == R ||
-         (opClass(opOpc(Op)) == 2 && (R - opRD(Op)) < 4)))
+    if (!storeOp(Op) && (R - opRD(Op)) < span(Op))
       return true;
   return false;
 }
