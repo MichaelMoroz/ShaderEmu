@@ -26,6 +26,9 @@ Rules the user gave along the way:
   x18e, and the drivers had to be reinstalled): every new tick variant passes the full check on WARP first (a hang
   there is harmless); never time a variant on the card with `--nocheck` unless that source passed WARP's checks; every
   loop of the tick has a hard iteration cap independent of the budget logic.
+- **Floats: close enough** (the user, 22 October 2026): float results may differ between the card and gvm_cpu as
+  long as they are close; programs use the card's special functions (-fapprox-func) and fmad where faster, and their
+  checks compare with tolerances (pixels, relative error), exact sums only where logic must stay deterministic.
 - **Performance first** (the user, 22 October 2026): an ISA change that makes the tick faster, or keeps it 2-3x the
   lean RISC-V tick, takes priority over what it costs the toolchain and the built programs (the reference, the
   assembler, LLVM's MC layer and lld, the rebuilt runtimes, userland and kernel follow it).
