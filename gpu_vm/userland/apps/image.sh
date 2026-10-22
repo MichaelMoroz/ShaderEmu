@@ -16,11 +16,14 @@ W=${W:-$ROOT/build/gvm_apps/img}
 K=${K:-$ROOT/build/gvm_apps/kernel}
 KOUT=${KOUT:-$HOME/gpu_vm/linux-build-apps}
 RAM_MB=${RAM_MB:-192}
+# the RISC-V image's data out of its ROM (romfs_extract.py of the main checkout's build/images/nommu/rootfs.bin):
+# terminal descriptions, file's magic, QuickJS's examples, the desktop's media; last, under everything else
+RVDATA=${RVDATA:-$HOME/gpu_vm/riscv-rom-data}
 [ -f "$R/initramfs.list" ] || { echo "image.sh: no $R/initramfs.list (rootfs.sh)" >&2; exit 1; }
 [ -f "$K/vmlinux" ] || { echo "image.sh: no $K/vmlinux (romroot.sh)" >&2; exit 1; }
 mkdir -p "$W"
 L=$W/rootfs.list
-python3 - "$R/initramfs.list" "$HERE/rcS" "$APPS" "${DATA:-1}" "$ROOT/linux/prebuilt/nommu/root" "$ROOT/linux/prebuilt/root" > "$L" <<'EOF'
+python3 - "$R/initramfs.list" "$HERE/rcS" "$APPS" "${DATA:-1}" "$ROOT/linux/prebuilt/nommu/root" "$ROOT/linux/prebuilt/root"     $( [ -d "$RVDATA" ] && echo "$RVDATA" ) > "$L" <<'EOF'
 import os, sys
 base, rcs, apps, data = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4] == '1'
 extra = sys.argv[5:]
