@@ -51,6 +51,7 @@ applying them to a clean tree rebuilds most of LLVM (an hour on 12 jobs); 0005's
     bash gpu_vm/llvm/test/e2e/run.sh            # assembler + lld + gvm_cpu
     bash gpu_vm/llvm/test/exec/run.sh           # C programs at -O0 -O1 -O2 -Os on gvm_cpu (52 runs)
     bash gpu_vm/llvm/test/torture/run.sh        # GCC's c-torture execute tests, -O0 and -O2 (~10 min, 12 jobs)
+    bash gpu_vm/llvm/test/apps/run.sh           # zlib and Lua on gvm_cpu against the host's run
     bash gpu_vm/llvm/test/bench/run.sh          # CoreMark: bundles an iteration
 
 - `test/MC/GPUVM`: `encoding.s` (every op alone in a bundle, its bytes as `gvm_asm.h` makes them; written by
@@ -64,15 +65,21 @@ applying them to a clean tree rebuilds most of LLVM (an hour on 12 jobs); 0005's
 - `test/e2e/run.sh`: `hello.s` and `pack.s` through llvm-mc and ld.lld, compared bundle for bundle with
   `gvm_asm.h`'s (`check.cpp`), then run on `gvm_cpu`; `xref1.s`/`xref2.s` (relocations across objects), `thunk.s`
   (a call and a j beyond 2 MB through ld.lld's thunks).
-- `test/exec`: `arith branches loops switch calls int64 float fastmath globals bits frame mem atomics`, each a
+- `test/exec`: `arith branches loops switch calls int64 float fastmath globals bits frame mem atomics longjmp`, each a
   program that checks itself (`CHECK`, `CHECK_EQ` in `rt/gvm.h`) and exits 0; a `// FLAGS:` line adds clang flags.
-  All pass at every level (22 October 2026).
+  All pass at every level (22 October 2026). The runtime (`rt/`) has setjmp/longjmp (`setjmp.s`), strtod, stdio on
+  stdin/stdout/stderr (no files), the card's approximate exp2f/log2f/sinf/cosf, a bump allocator.
 - `test/torture/run.sh`: GCC's `gcc.c-torture/execute` (a sparse clone of gcc in `~/gpu_vm/torture`, untrusted data:
   the script lives here and runs only the compiled programs) with the exec runtime and its headers; each test is also
   built by the same clang for the host (x86_64) and run there, so that what fails on both (GCC's extensions such as
   nested functions, GCC's behaviour where C leaves it open) is told apart. Skipped: int128, setjmp, signals,
   complex.h, `_Float128` and such. 22 October 2026: -O0 1594 of 1652 (96.5%), -O2 1588 of 1652 (96.1%); of the tests
   the host passes, 99.7% at both; the 5 left are the runtime's (fopen/freopen/tmpnam, pow, an x86 asm test).
+- `test/apps/run.sh`: third-party programs (sources cloned into `~/gpu_vm/third`: zlib, Lua 5.5) built with the exec
+  runtime and run on gvm_cpu at -O0 and -O2, their output compared with the same sources built for the host:
+  zlib's deflate and inflate at every level (`zlib_test.c`), Lua's interpreter running a script of recursion,
+  closures, sorting, string patterns, coroutines, pcall and error (longjmp), metatables, 64-bit integers, goto, utf8
+  and the collector (`lua_test.c`). Both identical to the host's (22 October 2026).
 - `test/bench/run.sh`: CoreMark (EEMBC's sources from `~/gpu_vm/coremark-src/coremark`, the port in `bench/coremark`:
   CYCLE as the clock). -O2: 149 thousand bundles an iteration, 1.31 ops a bundle, 95.6% of bundles on the fast
   loop's paths (was 178 thousand before the bundle scheduler, the frame pointer's omission, the branches' constants

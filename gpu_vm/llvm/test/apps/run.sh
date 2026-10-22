@@ -31,7 +31,7 @@ app() {
         done
         if [ $ok = 1 ] && "$BIN/ld.lld" -e _start -o "$d/$name.elf" "$RTDIR/crt0.o" "${objs[@]}" "$RTDIR/rt/librt.a" &&
             timeout 300 "$CPU" "$d/$name.elf" > "$d/gvm.out" 2> "$d/gvm.err" &&
-            "$BIN/clang" -O$o $flags -w -o "$d/host" $srcs && "$d/host" > "$d/host.out" &&
+            "$BIN/clang" -O$o $flags -w -o "$d/host" $srcs -lm && "$d/host" > "$d/host.out" &&
             cmp -s "$d/gvm.out" "$d/host.out"; then
             echo "$name -O$o: ok ($(tail -1 "$d/gvm.out"))"
         else
@@ -43,4 +43,10 @@ app() {
 Z=$THIRD/zlib
 app zlib "$Z/adler32.c $Z/compress.c $Z/crc32.c $Z/deflate.c $Z/inffast.c $Z/inflate.c $Z/inftrees.c $Z/trees.c
     $Z/uncompr.c $Z/zutil.c $HERE/zlib_test.c" "-I$Z"
+
+L=$THIRD/lua
+app lua "$L/lapi.c $L/lcode.c $L/lctype.c $L/ldebug.c $L/ldo.c $L/ldump.c $L/lfunc.c $L/lgc.c $L/llex.c $L/lmem.c
+    $L/lobject.c $L/lopcodes.c $L/lparser.c $L/lstate.c $L/lstring.c $L/ltable.c $L/ltm.c $L/lundump.c $L/lvm.c
+    $L/lzio.c $L/lauxlib.c $L/lbaselib.c $L/lcorolib.c $L/lstrlib.c $L/ltablib.c $L/lutf8lib.c $HERE/lua_test.c" \
+    "-I$L"
 exit $fail

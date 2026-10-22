@@ -16,6 +16,8 @@ double ceil(double x);
 double trunc(double x);
 double fmod(double x, double y);
 double ldexp(double x, int e);
+double frexp(double x, int *e);
+double pow(double x, double y);
 double copysign(double x, double y);
 float fabsf(float x);
 float sqrtf(float x);

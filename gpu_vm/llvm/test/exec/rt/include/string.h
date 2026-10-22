@@ -25,4 +25,6 @@ size_t strspn(const char *s, const char *a);
 size_t strcspn(const char *s, const char *r);
 char *strpbrk(const char *s, const char *a);
 char *strdup(const char *s);
+int strcoll(const char *a, const char *b);
+char *strerror(int e);
 #endif

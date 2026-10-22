@@ -253,6 +253,7 @@ int isalnum(int c) { return isalpha(c) || isdigit(c); }
 int isspace(int c) { return c == ' ' || (c >= '\t' && c <= '\r'); }
 int isprint(int c) { return c >= 0x20 && c < 0x7f; }
 int iscntrl(int c) { return (c >= 0 && c < 0x20) || c == 0x7f; }
+int isgraph(int c) { return c > 0x20 && c < 0x7f; }
 int ispunct(int c) { return isprint(c) && !isalnum(c) && c != ' '; }
 int isxdigit(int c) {
   return isdigit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
@@ -789,3 +790,200 @@ int errno;
 int open(const char *path, int flags, ...) { return -1; }
 int close(int fd) { return 0; }
 long lseek(int fd, long off, int whence) { return -1; }
+
+//===-- signal, locale, time -------------------------------------------------===//
+
+#include <locale.h>
+#include <signal.h>
+#include <time.h>
+
+sighandler_t signal(int sig, sighandler_t h) { return SIG_DFL; }
+static char dot[] = ".";
+static struct lconv clocale = {dot};
+struct lconv *localeconv(void) { return &clocale; }
+char *setlocale(int category, const char *locale) { return (char *)"C"; }
+
+static unsigned long long ticks(void) {
+  unsigned lo, hi, hi2;
+  do {
+    __asm__ volatile("mfsr %0, time_hi" : "=r"(hi));
+    __asm__ volatile("mfsr %0, time_lo" : "=r"(lo));
+    __asm__ volatile("mfsr %0, time_hi" : "=r"(hi2));
+  } while (hi != hi2);
+  return (unsigned long long)hi << 32 | lo;
+}
+clock_t clock(void) { return (clock_t)ticks(); }
+time_t time(time_t *t) {
+  time_t s = (time_t)(ticks() / 100000);
+  if (t)
+    *t = s;
+  return s;
+}
+
+//===-- strtod: decimal and hex, correctly rounded for 19 digits or less -----===//
+
+double strtod(const char *s, char **end) {
+  const char *p = s;
+  while (isspace(*p))
+    p++;
+  int neg = 0;
+  if (*p == '+' || *p == '-')
+    neg = *p++ == '-';
+  unsigned long long m = 0;
+  int digits = 0, exp10 = 0, any = 0;
+  if (p[0] == '0' && (p[1] | 32) == 'x') {
+    // hex: mantissa and a binary exponent
+    p += 2;
+    int exp2 = 0;
+    for (; isxdigit(*p); p++, any = 1) {
+      int d = isdigit(*p) ? *p - '0' : (*p | 32) - 'a' + 10;
+      if (m < (1ull << 59))
+        m = m * 16 + d;
+      else
+        exp2 += 4;
+    }
+    if (*p == '.')
+      for (p++; isxdigit(*p); p++, any = 1) {
+        int d = isdigit(*p) ? *p - '0' : (*p | 32) - 'a' + 10;
+        if (m < (1ull << 59))
+          m = m * 16 + d, exp2 -= 4;
+      }
+    if (any && (*p | 32) == 'p') {
+      char *e;
+      long x = strtol(p + 1, &e, 10);
+      if (e != p + 1)
+        exp2 += x, p = e;
+    }
+    if (end)
+      *end = (char *)(any ? p : s);
+    double v = ldexp((double)m, exp2);
+    return neg ? -v : v;
+  }
+  for (; isdigit(*p); p++, any = 1) {
+    if (digits < 19)
+      m = m * 10 + (*p - '0'), digits += m != 0;
+    else
+      exp10++;
+  }
+  if (*p == '.')
+    for (p++; isdigit(*p); p++, any = 1)
+      if (digits < 19)
+        m = m * 10 + (*p - '0'), digits += m != 0, exp10--;
+  if (any && (*p | 32) == 'e') {
+    char *e;
+    long x = strtol(p + 1, &e, 10);
+    if (e != p + 1)
+      exp10 += x, p = e;
+  }
+  if (end)
+    *end = (char *)(any ? p : s);
+  double v = (double)m;
+  double ten = 10;
+  int ex = exp10 < 0 ? -exp10 : exp10;
+  double scale = 1;
+  for (; ex; ex >>= 1, ten *= ten)
+    if (ex & 1)
+      scale *= ten;
+  v = exp10 < 0 ? v / scale : v * scale;
+  return neg ? -v : v;
+}
+
+int strcoll(const char *a, const char *b) { return strcmp(a, b); }
+
+double frexp(double x, int *e) {
+  *e = 0;
+  if (x == 0 || x != x)
+    return x;
+  double a = fabs(x);
+  while (a >= 1)
+    a *= 0.5, ++*e;
+  while (a < 0.5)
+    a *= 2, --*e;
+  return x < 0 ? -a : a;
+}
+
+double pow(double x, double y) {
+  // integer powers exactly; others through exp2 and log2 of floats (approximate)
+  if (y == (double)(long long)y && fabs(y) < 1e18) {
+    long long n = (long long)y;
+    double r = 1, b = x;
+    unsigned long long k = n < 0 ? -(unsigned long long)n : n;
+    for (; k; k >>= 1, b *= b)
+      if (k & 1)
+        r *= b;
+    return n < 0 ? 1 / r : r;
+  }
+  return (double)__builtin_exp2f((float)y * __builtin_log2f((float)x));
+}
+
+float strtof(const char *s, char **end) { return (float)strtod(s, end); }
+
+// The card's approximate special functions as libm's float functions.
+#define CARD_OP(name, op)                                                      \
+  float name(float x) {                                                        \
+    float r;                                                                   \
+    __asm__(op " %0, %1" : "=r"(r) : "r"(x));                                  \
+    return r;                                                                  \
+  }
+CARD_OP(exp2f, "fexp2")
+CARD_OP(log2f, "flog2")
+CARD_OP(sinf, "fsin")
+CARD_OP(cosf, "fcos")
+
+//===-- files: stdin, stdout, stderr ----------------------------------------===//
+
+static int ungot = -1, at_eof;
+FILE *fopen(const char *path, const char *mode) { return 0; }
+FILE *freopen(const char *path, const char *mode, FILE *f) { return 0; }
+int fclose(FILE *f) { return 0; }
+int feof(FILE *f) { return f == stdin && at_eof; }
+int ferror(FILE *f) { return 0; }
+void clearerr(FILE *f) { at_eof = 0; }
+int setvbuf(FILE *f, char *buf, int mode, size_t size) { return 0; }
+int fgetc(FILE *f) {
+  if (f != stdin)
+    return EOF;
+  if (ungot >= 0) {
+    int c = ungot;
+    ungot = -1;
+    return c;
+  }
+  unsigned char c;
+  if (read(0, &c, 1) != 1) {
+    at_eof = 1;
+    return EOF;
+  }
+  return c;
+}
+int getc(FILE *f) { return fgetc(f); }
+int ungetc(int c, FILE *f) {
+  ungot = c;
+  return c;
+}
+size_t fread(void *p, size_t size, size_t n, FILE *f) {
+  unsigned char *b = p;
+  size_t i = 0;
+  for (; i < size * n; i++) {
+    int c = fgetc(f);
+    if (c == EOF)
+      break;
+    b[i] = c;
+  }
+  return size ? i / size : 0;
+}
+char *fgets(char *s, int n, FILE *f) {
+  int i = 0;
+  for (; i + 1 < n; i++) {
+    int c = fgetc(f);
+    if (c == EOF)
+      break;
+    s[i] = c;
+    if (c == '\n') {
+      i++;
+      break;
+    }
+  }
+  s[i] = 0;
+  return i ? s : 0;
+}
+char *strerror(int e) { return (char *)"error"; }

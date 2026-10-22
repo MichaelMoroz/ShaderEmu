@@ -23,6 +23,7 @@ RT="$OUT/rt/librt.a"
 if [ ! -f "$RT" ] || [ "$BIN/clang" -nt "$RT" ] || [ -n "$(find "$HERE/rt" -newer "$RT" -type f)" ]; then
     rm -f "$OUT"/rt/*.o "$RT" "$OUT/crt0.o"
     $CC -c -o "$OUT/crt0.o" "$HERE/rt/crt0.s" || exit 1
+    $CC -c -o "$OUT/rt/setjmp.o" "$HERE/rt/setjmp.s" || exit 1
     $CC -O2 -fno-math-errno -c -o "$OUT/rt/libc.o" "$HERE/rt/libc.c" || exit 1
     # weak: a test may define a function of the same name
     "$BIN/llvm-objcopy" --weaken "$OUT/rt/libc.o" || exit 1

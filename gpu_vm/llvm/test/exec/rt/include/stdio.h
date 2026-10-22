@@ -26,4 +26,23 @@ int putc(int c, FILE *f);
 size_t fwrite(const void *p, size_t size, size_t n, FILE *f);
 int fflush(FILE *f);
 int getchar(void);
+// files: stdin, stdout and stderr only (fopen gives NULL)
+FILE *fopen(const char *path, const char *mode);
+FILE *freopen(const char *path, const char *mode, FILE *f);
+int fclose(FILE *f);
+int feof(FILE *f);
+int ferror(FILE *f);
+int getc(FILE *f);
+int fgetc(FILE *f);
+int ungetc(int c, FILE *f);
+size_t fread(void *p, size_t size, size_t n, FILE *f);
+char *fgets(char *s, int n, FILE *f);
+void clearerr(FILE *f);
+int setvbuf(FILE *f, char *buf, int mode, size_t size);
+#define _IONBF 2
+#define _IOLBF 1
+#define _IOFBF 0
+#define SEEK_SET 0
+#define SEEK_CUR 1
+#define SEEK_END 2
 #endif
