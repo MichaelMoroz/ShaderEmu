@@ -24,6 +24,7 @@
 #include <vector>
 #define GVM_REF_IMPL
 #include "../ref/gvm_ref.h"
+#include "../platform/worker_fw.h"
 
 // exit codes of gvm_gpu itself (a program's exit is its own code), gvm_cpu's and two more
 #define EXIT_USAGE 1   // bad options, a file that cannot be loaded
@@ -988,6 +989,8 @@ int main(int argc, char** argv) {
     O.ram_end = GVM_RAM + ram_mb * (1u << 20);
     g_ram.assign(O.ram_end / 4, 0);
     memcpy(g_ram.data(), STUB, sizeof STUB);
+    // the worker firmware (gpu_vm/platform/worker.S): a worker core starts there when the geometry's words ask for it
+    memcpy((char*)g_ram.data() + GVM_WORKER_FW, gvm_worker_fw, sizeof gvm_worker_fw);
     g_heap_start = GVM_RAM;
     if (rom) {
         uint32_t n;
@@ -1033,7 +1036,7 @@ int main(int argc, char** argv) {
         s[V_PC] = entry;
         s[V_ST] = GVM_ST_S;
         s[V_RND] = 0x9e3779b9u ^ (c * 0x85ebca6bu);
-        if (c) s[V_FLAGS] = F_HALT;   // TODO(workers): parked until a mailbox gives them a job
+        if (c) s[V_FLAGS] = F_HALT;   // (a worker from when the geometry's words ask for it: gpu_vm/platform.md)
     }
     if (dtb) { state[0][5] = GVM_DTB; g_stack_limit = O.ram_end; }
     else setup_stack(state[0], argc - i, argv + i);
@@ -1179,6 +1182,46 @@ int main(int argc, char** argv) {
         }
         if (code >= 0) break;
         if (g_stop) { code = g_exit; break; }
+        if (O.ncores > 1) {
+            static uint32_t workers = 0;
+            uint32_t geo[4];
+            G.ram_read((GVM_CONTROL + 0x3d0) >> 4, 1, geo);
+            uint32_t want = (geo[0] & 1) || geo[2] < 3 || geo[2] > 6 ? 0 : std::min(geo[1], O.ncores - 1);
+            if (want != workers) {
+                for (uint32_t c = 1; c < O.ncores; c++) {
+                    if (c <= want && c > workers) {   // STATE.md's new core at the firmware, r5 its number
+                        std::vector<uint32_t> n(NTEX * 4, 0);
+                        for (uint32_t e = 0; e < WCN; e++) n[(T_WC + e / 2) * 4 + (e & 1) * 2] = 0xffffffffu;
+                        n[V_PC] = GVM_FW_ENTRY;
+                        n[V_ST] = GVM_ST_S;
+                        n[V_RND] = 0x9e3779b9u ^ (c * 0x85ebca6bu);
+                        n[5] = c;
+                        n[V_CYCLE] = prev[c][V_CYCLE];
+                        n[V_OPS] = prev[c][V_OPS];
+                        for (uint32_t T = 0; T < NTEX; T++) G.write_state(c, T, &n[T * 4]);
+                        prev[c] = views[K - 1][c] = n;
+                        if (O.check) {
+                            gvm_core* k = &Rc[c];
+                            uint64_t b = k->bundles_run, o = k->ops_run;
+                            gvm_core_reset(k, c, GVM_FW_ENTRY);
+                            k->x[5] = c;
+                            k->bundles_run = b, k->ops_run = o;
+                            k->host_step = ref_step;
+                            k->host = &Rctl[c];
+                        }
+                    } else if (c > want && c <= workers) {
+                        std::vector<uint32_t>& n = prev[c];
+                        n[V_FLAGS] |= F_HALT;
+                        G.write_state(c, 18, &n[72]);
+                        views[K - 1][c] = n;
+                        if (O.check) Rc[c].halted = 1;
+                    }
+                }
+                fprintf(stderr, "gvm_gpu: %u worker cores (the geometry's words)\n", want);
+                workers = want;
+                event = true;
+            }
+        }
         if (all_halted) { out_flush(); fprintf(stderr, "gvm_gpu: every core halted\n"); code = EXIT_TRAP; break; }
         if (O.console && console_input(cons[K - 1].data())) event = true;
         if (O.max_bundles && bundles >= O.max_bundles) {
