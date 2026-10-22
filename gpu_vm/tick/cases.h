@@ -464,6 +464,172 @@ static std::vector<Case> cases() {
         a.halt();
     }});
     v[v.size() - 2].named = v[v.size() - 1].named = true;
+    // ---- x17's: the whole ISA (gpu_vm/tick/steps/README.md, "x17")
+    v.push_back({"memx", 1, false, [](std::vector<GvmAsm>& p, auto& data, uint32_t seed) {
+        // d and q at any alignment, bytes, halves and words off their alignment (each stays in its word), atomics and
+        // cas, d and q from the ROM, faults (past RAM's end, 0xfffffffc, the boot area, an atomic off its word: the
+        // handler counts them in r40-r42 and goes on past the op), the operations' region read by d and q and latched
+        Rng g{seed * 2246822519ull + 21};
+        for (uint32_t k = 0; k < 2048; k++) data.push_back({DATA + 4 * k, g.next()});
+        GvmAsm& a = p[0];
+        int handler = a.label(), go = a.label();
+        a.lpc(5, handler); a.mtsr(GVM_SR_TVEC, 5);
+        a.j(go);
+        a.bind(handler);
+        a.mfsr(50, GVM_SR_CAUSE); a.mfsr(51, GVM_SR_EPC); a.mfsr(52, GVM_SR_TVAL);
+        a.addi(40, 40, 1); a.add(41, 41, 50); a.op(GVM_I_XOR, 42, 42, 52);
+        a.addi(51, 51, 4); a.mtsr(GVM_SR_EPC, 51);
+        a.eret();
+        a.bind(go);
+        static const uint32_t wds[] = {GVM_W_B, GVM_W_H, GVM_W_W, GVM_W_D, GVM_W_Q, GVM_W_BU, GVM_W_HU};
+        for (int round = 0; round < 24; round++) {
+            seed_regs(a, g, false);
+            a.li(60, (int32_t)DATA); a.li(61, (int32_t)GVM_ROM); a.li(62, (int32_t)GVM_OPS);
+            for (int i = 0; i < 40; i++) {
+                uint32_t wd = wds[g.below(7)], by = wbytes(wd), rd = by >= 8 ? 5 + g.below(16) : rreg(g);
+                int32_t off = (int32_t)g.below(8000);
+                switch (g.below(12)) {
+                case 0: case 1: case 2: a.ld(wd, rd, 60, off); break;
+                case 3: case 4: case 5: a.st(wstore(wd), rd, 60, off); break;
+                case 6:   // indexed, r0 the index: an address off its alignment now and then
+                    a.R(GVM_OP_M(g.below(2) ? GVM_M_LOADX : GVM_M_STOREX, wstore(wd)), rd, 60, 0, 0);
+                    a.addi(60, 60, (int32_t)g.below(7) - 3);
+                    break;
+                case 7: {   // an atomic on a word (now and then off it: a store fault)
+                    a.li(30, (int32_t)((uint32_t)off & (g.below(6) ? ~3u : ~0u))); a.add(30, 30, 60);
+                    if (g.below(4)) a.amo(g.below(8), rd, 30, rreg(g));
+                    else a.R(GVM_OP_M(GVM_M_AMO2, g.below(2)), rd, 30, rreg(g));
+                    break;
+                }
+                case 8: a.ld(g.below(2) ? GVM_W_D : GVM_W_Q, 5 + g.below(16), 61, (int32_t)g.below(2000)); break;
+                case 9: {   // faults
+                    static const uint32_t bad[] = {0x7000000u, 0xfffffffcu, 0x100u, 0x0fffcu, 0x2fffff0u, 0x60000000u};
+                    a.li(30, (int32_t)bad[g.below(6)]);
+                    if (g.below(2)) a.ld(wds[g.below(7)], 5 + g.below(16), 30, 0); else a.st(wstore(wds[g.below(5)]), 5 + g.below(16), 30, 0);
+                    break;
+                }
+                case 10: a.ld(g.below(2) ? GVM_W_D : GVM_W_Q, 5 + g.below(16), 62, 0); break;   // in flight, refused, latched
+                default: a.st(g.below(2) ? GVM_W_D : GVM_W_W, 5 + g.below(16), 62, 8 + 4 * (int32_t)g.below(5)); break;   // latched
+                }
+            }
+        }
+        a.ld(GVM_W_Q, 5, 62, 0); a.ld(GVM_W_Q, 9, 62, 16);
+        a.halt();
+    }});
+    v.push_back({"irq", 1, false, [](std::vector<GvmAsm>& p, auto& data, uint32_t seed) {
+        // TIME is 1000 + the pass. The timer (TCMP a few passes on), the software interrupt, the external line (on in
+        // passes 50-51), a supervisor's wait woken by the timer, the special registers, then user mode (eret with PS
+        // clear): its privileged ops trap, a user's wait ends the pass, a syscall traps, eret traps, and its break halts
+        GvmAsm& a = p[0];
+        int handler = a.label(), go = a.label(), irq = a.label(), back = a.label(), notimer = a.label(), nosoft = a.label();
+        a.lpc(5, handler); a.mtsr(GVM_SR_TVEC, 5);
+        a.j(go);
+        a.bind(handler);   // r40 traps, r41 causes summed, r42-r44 timer, soft, external
+        a.mfsr(50, GVM_SR_CAUSE); a.mfsr(51, GVM_SR_EPC);
+        a.addi(40, 40, 1); a.add(41, 41, 50); a.op(GVM_I_XOR, 45, 45, 51);
+        a.br(GVM_CC_BBS, 50, 31, irq);
+        a.addi(51, 51, 4); a.mtsr(GVM_SR_EPC, 51);
+        a.j(back);
+        a.bind(irq);
+        a.opi(GVM_I_AND, 52, 50, 7);
+        a.bnei(52, 1, notimer);
+        a.addi(42, 42, 1); a.li(53, 0); a.mtsr(GVM_SR_TCMP_LO, 53);   // the timer off
+        a.j(back);
+        a.bind(notimer);
+        a.bnei(52, 0, nosoft);
+        a.addi(43, 43, 1); a.li(53, 0); a.mtsr(GVM_SR_IPEND, 53);    // the software bit cleared
+        a.j(back);
+        a.bind(nosoft);
+        a.addi(44, 44, 1); a.li(53, 4); a.I(GVM_X_SRCLR, 54, 53, GVM_SR_IEN);   // the external line masked
+        a.bind(back);
+        a.eret();
+        a.bind(go);
+        a.li(5, 7); a.mtsr(GVM_SR_IEN, 5); a.li(5, GVM_ST_IE); a.mtsr(GVM_SR_STATUS, 5);
+        // the special registers, into r20-r36
+        a.mfsr(20, GVM_SR_STATUS); a.mfsr(21, GVM_SR_COREID); a.mfsr(22, GVM_SR_PLAYER); a.mfsr(23, GVM_SR_RANDOM);
+        a.mfsr(24, GVM_SR_RANDOM); a.mfsr(25, GVM_SR_CYCLE); a.mfsr(26, GVM_SR_OPS); a.mfsr(27, GVM_SR_LEFT);
+        a.li(6, 0x1234); a.I(GVM_X_XSR, 28, 6, GVM_SR_SCRATCH); a.li(6, 0xf0); a.I(GVM_X_SRSET, 29, 6, GVM_SR_SCRATCH);
+        a.li(6, 0x30); a.I(GVM_X_SRCLR, 30, 6, GVM_SR_SCRATCH); a.mfsr(31, GVM_SR_SCRATCH);
+        a.li(6, 0xffff); a.mtsr(GVM_SR_STATUS, 6); a.mfsr(32, GVM_SR_STATUS);   // (S stays, the rest as written)
+        a.li(6, GVM_ST_IE); a.mtsr(GVM_SR_STATUS, 6);
+        a.mfsr(33, GVM_SR_TIME_LO); a.mfsr(34, GVM_SR_TIME_HI); a.mfsr(35, GVM_SR_IPEND); a.mfsr(36, GVM_SR_IEN);
+        // the timer, 3 passes on, while a loop sums
+        a.addi(7, 33, 3); a.mtsr(GVM_SR_TCMP_LO, 7);
+        a.li(8, 400);
+        int l1 = a.here();
+        a.addi(9, 9, 3); a.op(GVM_I_XOR, 10, 10, 9); a.mfsr(11, GVM_SR_CYCLE); a.add(12, 12, 11);
+        a.addbnz(8, -1, l1);
+        // the software interrupt: taken before the next whole bundle
+        a.li(6, 1); a.mtsr(GVM_SR_IPEND, 6); a.addi(13, 13, 1); a.close();
+        a.addi(13, 13, 1);
+        // a supervisor's wait woken by the timer, 2 passes on
+        a.mfsr(7, GVM_SR_TIME_LO); a.addi(7, 7, 2); a.mtsr(GVM_SR_TCMP_LO, 7);
+        a.x(GVM_X_WAIT); a.mfsr(14, GVM_SR_TIME_LO);
+        // spin until the external line (passes 50-51) has been taken
+        int l2 = a.here();
+        a.addi(15, 15, 1); a.mfsr(16, GVM_SR_LEFT); a.add(17, 17, 16);
+        a.br(GVM_CC_BEQI, 44, 0, l2);
+        // a wait goes on at once with an interrupt pending and enabled, IE clear
+        a.li(6, 0); a.mtsr(GVM_SR_STATUS, 6); a.li(6, 1); a.mtsr(GVM_SR_IPEND, 6); a.x(GVM_X_WAIT); a.addi(18, 18, 1);
+        a.li(6, 0); a.mtsr(GVM_SR_IPEND, 6);
+        // user mode: EPC the user code, PS clear, IE on after eret
+        int user = a.label();
+        a.lpc(6, user); a.mtsr(GVM_SR_EPC, 6); a.li(6, GVM_ST_PIE); a.mtsr(GVM_SR_STATUS, 6);
+        a.eret();
+        a.bind(user);
+        a.mfsr(19, GVM_SR_TIME_LO); a.mfsr(37, GVM_SR_STATUS);   // TIME: user-readable; STATUS: a privilege trap
+        a.li(6, 5); a.mtsr(GVM_SR_SCRATCH, 6);                    // a privilege trap
+        a.x(GVM_X_WAIT); a.addi(38, 38, 1);                         // a user's wait: the pass's end
+        a.x(GVM_X_SYSCALL); a.addi(38, 38, 2);
+        a.eret();                                                   // in user mode: a privilege trap (EPC + 4: the next bundle)
+        a.mfsr(39, GVM_SR_OPS);
+        a.halt();
+    }, 0, 0, 0, 0, false, 50, 52});
+    v.push_back({"opq", 2, false, [](std::vector<GvmAsm>& p, auto& data, uint32_t seed) {
+        // two cores, each with operations in flight and no sync: a fill and a copy of what it fills, other work, a load
+        // of the copy's destination and a store to its source (both wait for them), the count in flight and refused
+        // by ld.d, nine asked at once (the ninth waits), the latched words by ld.q, a blit whose rows overlap (a piece
+        // a round), a copy backwards (its destination after its source), a refused one, and a copy longer than a pass
+        Rng g{seed * 40503 + 17};
+        for (uint32_t k = 0; k < 0x10000; k++) data.push_back({DATA + 4 * k, g.next()});
+        for (uint32_t c = 0; c < 2; c++) {
+            GvmAsm& a = p[c];
+            uint32_t B = DATA + 0x100000 + c * 0x200000;   // this core's region
+            auto ask = [&](uint32_t kind, uint32_t dst, uint32_t src, uint32_t n) {
+                a.li(5, (int32_t)kind); a.li(6, (int32_t)dst); a.li(7, (int32_t)src); a.li(8, (int32_t)n);
+                a.st(GVM_W_Q, 5, 20, 0);
+            };
+            a.li(20, (int32_t)GVM_OPS); a.li(21, (int32_t)B);
+            ask(GVM_OP_FILL, B, 0x01020304u + c, 0x10000);
+            ask(GVM_OP_COPY, B + 0x10003, B + 5, 0x8000);
+            a.ld(GVM_W_D, 22, 20, 0);                     // in flight: 2, refused
+            a.li(9, 300);
+            int l1 = a.here();
+            a.addi(10, 10, 7); a.op(GVM_I_XOR, 11, 11, 10);
+            a.addbnz(9, -1, l1);
+            a.lw(12, 21, 0x10100);                       // the copy's destination: waits for it
+            a.li(13, 77); a.sw(13, 21, 0x40);           // the copy's source (made by now)
+            a.ld(GVM_W_D, 24, 20, 0);
+            for (int k = 0; k < 9; k++) ask(GVM_OP_FILL, B + 0x30000 + 0x1000 * k, 0x11111111u * (k + 1), 0x800 + 3 * k);
+            a.ld(GVM_W_D, 26, 20, 0); a.ld(GVM_W_Q, 28, 20, 0);
+            // a blit of 20 rows of 70 bytes, each row's source the row before's destination (strides 64)
+            a.li(10, 64); a.li(11, 64); a.li(12, 70); a.li(13, 20);
+            a.st(GVM_W_Q, 10, 20, 16);
+            ask(GVM_OP_BLIT, B + 0x40040 + 3, B + 0x40000 + 3, 0);
+            a.x(GVM_X_SYNC);
+            ask(GVM_OP_COPY, B + 0x50000 + 100, B + 0x50000, 10000);   // backwards
+            ask(GVM_OP_COPY, 0x200, B, 16);                              // refused: the boot area
+            a.x(GVM_X_SYNC);
+            a.ld(GVM_W_D, 32, 20, 0);
+            ask(GVM_OP_COPY, B + 0x80000 + 1, DATA + 2, 0xa0000);         // more than a pass's rounds make
+            a.li(9, 100);
+            int l2 = a.here();
+            a.addi(14, 14, 3); a.addbnz(9, -1, l2);
+            a.lw(15, 21, 0x80000 + 0x9fff0);              // waits for all of it
+            a.ld(GVM_W_D, 34, 20, 0);
+            a.halt();
+        }
+    }});
     v.push_back({"cores", 4, false, [](std::vector<GvmAsm>& p, auto& data, uint32_t seed) {
         // four cores: each fills a region of its own, and all store to one word (the highest core's lands)
         for (uint32_t c = 0; c < 4; c++) {

@@ -245,6 +245,7 @@ struct Gpu {
 
 static std::vector<uint32_t> g_rom;
 static uint32_t g_op_rounds = 2;
+static int g_show = env_int("GVM_SHOW") ? env_int("GVM_SHOW") : 4;   // differences a check prints
 static void commit_constants(Gpu& gpu, uint32_t cores) {
     for (int c = 0; c < 4; c++) {
         uint32_t cdata[4] = {(uint32_t)c, cores, 0, 0};
@@ -293,6 +294,14 @@ static bool check_case(Gpu& gpu, const Case& cs, uint32_t seed, bool verbose) {
         for (uint32_t c = 0; c < cs.cores; c++) halted = halted && (gpu.core_state(c)[18 * 4 + 2] & 4);
     }
     int bad = 0;
+    if (getenv("GVM_DEBUG")) {   // (each core's queue and progress texels)
+        std::vector<uint32_t> os = read_tex(gpu.ops[gpu.oc]);
+        for (uint32_t c = 0; c < cs.cores; c++) {
+            std::vector<uint32_t> st = gpu.core_state(c);
+            printf("  core %u: pc %08x flags %x end %u queue %u %u %u %u op0 %08x %08x %08x %08x op1 %08x %08x %08x %08x progress %u %u %u %u\n", c, st[64], st[74], st[79],
+                   st[88], st[89], st[90], st[91], st[96], st[97], st[98], st[99], st[104], st[105], st[106], st[107], os[4 * c], os[4 * c + 1], os[4 * c + 2], os[4 * c + 3]);
+        }
+    }
     if (!halted) { if (verbose) printf("  %s: the tick did not halt in %d passes\n", cs.name, gpuPasses); bad++; }
     for (uint32_t c = 0; c < cs.cores; c++) {
         std::vector<uint32_t> st = gpu.core_state(c);
@@ -302,10 +311,10 @@ static bool check_case(Gpu& gpu, const Case& cs, uint32_t seed, bool verbose) {
                 float x, y; memcpy(&x, &st[k], 4); memcpy(&y, &rc[c].x[k], 4);
                 same = fabsf(x - y) <= (float)cs.tol * fmaxf(1.0f, fabsf(y));
             }
-            if (!same && bad++ < 4 && verbose) printf("  %s: core %u r%d %08x, the reference %08x\n", cs.name, c, k, st[k], rc[c].x[k]);
+            if (!same && bad++ < g_show && verbose) printf("  %s: core %u r%d %08x, the reference %08x\n", cs.name, c, k, st[k], rc[c].x[k]);
         }
-        if (st[16 * 4] != rc[c].pc && bad++ < 4 && verbose) printf("  %s: core %u pc %08x, the reference %08x\n", cs.name, c, st[16 * 4], rc[c].pc);
-        if (st[19 * 4 + 1] != (uint32_t)rc[c].ops_run && bad++ < 4 && verbose)
+        if (st[16 * 4] != rc[c].pc && bad++ < g_show && verbose) printf("  %s: core %u pc %08x, the reference %08x\n", cs.name, c, st[16 * 4], rc[c].pc);
+        if (st[19 * 4 + 1] != (uint32_t)rc[c].ops_run && bad++ < g_show && verbose)
             printf("  %s: core %u ops %u, the reference %u\n", cs.name, c, st[19 * 4 + 1], (uint32_t)rc[c].ops_run);
     }
     std::vector<uint32_t> gram = read_tex(gpu.ram);

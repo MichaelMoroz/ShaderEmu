@@ -272,7 +272,7 @@ uint sr_read(uint n) {
     [branch] if (n == GVM_SR_RANDOM) { rnd ^= rnd << 13; rnd ^= rnd >> 17; rnd ^= rnd << 5; }
     uint4 a = uint4(st, epc, cause, tval), b = uint4(tvec, scratch, ien, ipend()), c = uint4(tcmp_lo, tcmp_hi, _TimeLo, _TimeHi);
     uint4 d = uint4(cycle, core, _Player, rnd);
-    uint v = n < 4 ? pick(a, n) : n < 8 ? pick(b, n) : n < 12 ? pick(c, n) : n < 16 ? pick(d, n) : n == GVM_SR_LEFT ? left : opsrun;
+    uint v = n < 4 ? pick(a, n) : n < 8 ? pick(b, n) : n < 12 ? pick(c, n) : n < 16 ? pick(d, n) : n == GVM_SR_LEFT ? left : opsrun + 1;   // (OPS counts the op reading it)
     return v;
 }
 void sr_write(uint n, uint v) {
@@ -758,7 +758,7 @@ struct p2f { float4 vertex : SV_POSITION; nointerpolation uint4 v : V; };
 p2f op_prog_vert(uint c : SV_VertexID) {
     plan_t P = plan(c, NONE);
     p2f o;
-    o.vertex = float4(((float)c + 0.5) / (float)_NCores * 2 - 1, 0, 0, 1);
+    o.vertex = float4((float)(2 * c + 1) / (float)_NCores - 1, 0, 0, 1);   // (fxc2 took (float)c's bits for c in the loads)
     o.v = uint4(state_any(22, c).z, P.d, P.p, P.rf);
     return o;
 }
