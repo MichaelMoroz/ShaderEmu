@@ -52,6 +52,13 @@ typedef struct gvm_core {
     uint32_t left;           // bundles left in this pass (LEFT)
     uint32_t halted;
     uint64_t ops_run, bundles_run;
+    // The host's hooks (gvm_cpu; NULL by default, as in the tick's bench; gvm_core_reset clears them). host_trap is
+    // called for a trap while TVEC is 0 (no handler) and returns nonzero when it dealt with it (pc set to go on, or
+    // halted): then nothing of the trap is made. host_step is called before each bundle a pass runs (after an
+    // interrupt is taken); nonzero halts the core there.
+    int (*host_trap)(struct gvm_core *c, uint32_t cause, uint32_t epc, uint32_t tval);
+    int (*host_step)(struct gvm_core *c);
+    void *host;
     gvm_wlog wl;
 } gvm_core;
 
@@ -236,6 +243,7 @@ static int gvm__store_ok(const gvm_machine *m, uint32_t a, uint32_t bytes) {
 }
 
 static void gvm__trap(gvm_core *c, uint32_t cause, uint32_t epc, uint32_t tval) {
+    if (c->host_trap && (c->sr[GVM_SR_TVEC] & ~15u) == 0 && c->host_trap(c, cause, epc, tval)) return;
     uint32_t st = c->sr[GVM_SR_STATUS];
     c->sr[GVM_SR_EPC] = epc;
     c->sr[GVM_SR_CAUSE] = cause;
@@ -571,11 +579,14 @@ int gvm_run(gvm_machine *m, gvm_core *c, uint32_t budget) {
             if (p) {
                 uint32_t bit = (p & 4) ? 2 : (p & 2) ? 1 : 0;
                 gvm__trap(c, GVM_CAUSE_IRQ | bit, c->pc, 0);
+                if (c->halted) return GVM_END_HALT;   // (by host_trap)
             }
         }
+        if (c->host_step && c->host_step(c)) { c->halted = 1; return GVM_END_HALT; }
         c->left--;
         int r = gvm_bundle(m, c);
         if (r != GVM_END_BUDGET) return r;
+        if (c->halted) return GVM_END_HALT;   // (by host_trap)
     }
     return GVM_END_BUDGET;
 }
