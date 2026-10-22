@@ -117,6 +117,13 @@ Phases, each one agent's (one writer of the LLVM tree in WSL at a time):
 3. Codegen and clang (`gpuvm-unknown-elf`): ISel, calling convention, frame lowering, branch relaxation.
 4. compiler-rt builtins, a small bare-metal libc and crt0; test apps (hello, isaloops, CoreMark) on gvm_cpu.
 5. Linux 5.17 `arch/gpuvm` (no MMU), `make ARCH=gpuvm LLVM=1`; then boot on gvm_cpu.
+- **State at the end of 22 October 2026: all five phases work.** gvm_cpu (`gpu_vm/cpu`, 19 tests); the LLVM target
+  GPUVM (`gpu_vm/llvm/README.md`): MC layer, codegen and clang (`gpuvm-unknown-elf`, `gpuvm-unknown-linux`); exec
+  tests 56/56, GCC c-torture 96.5% (-O0) and 96.2% (-O2), 99.7% of what the host passes; zlib and Lua as the host's;
+  CoreMark 149k bundles an iteration at -O2, 95.6% of bundles on the fast loop's paths. Linux 5.17.11 `arch/gpuvm`
+  (`gpu_vm/linux/README.md`): vmlinux built by the gpuvm clang and lld, booted on gvm_cpu to a user-mode `/init` (a
+  flat binary in the initramfs) that echoes the console. Next: musl and busybox for gpuvm, an elf2flt with
+  relocations, the ROM disk with a real image, the shaderemu drivers, workers, SMP; then the tick runs it all.
 - The user (22 October 2026): devices stay at the start of the address space below RAM (0x0001_0000-0x01ff_ffff), the
   operations region high (0xf000_0000 up). The compiler knows the commit's copy and fill: a constant-size memcpy,
   memmove or memset from a threshold up (a few KB: an operation ends the pass) is the operation inline (the descriptor
