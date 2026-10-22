@@ -25,6 +25,7 @@ FunctionPass *createGPUVMISelDag(GPUVMTargetMachine &TM);
 FunctionPass *createGPUVMCountedLoopsPass();
 FunctionPass *createGPUVMHoistConstantsPass();
 FunctionPass *createGPUVMBranchFillPass();
+FunctionPass *createGPUVMGlobalFillPass();
 
 void lowerGPUVMMachineInstrToMCInst(const MachineInstr *MI, MCInst &OutMI,
                                     AsmPrinter &AP);

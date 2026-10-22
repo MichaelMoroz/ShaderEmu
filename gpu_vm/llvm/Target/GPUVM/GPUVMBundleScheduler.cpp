@@ -20,6 +20,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "GPUVM.h"
+#include "GPUVMBundleModel.h"
 #include "GPUVMInstrInfo.h"
 #include "GPUVMSubtarget.h"
 #include "MCTargetDesc/GPUVMBaseInfo.h"
@@ -34,16 +35,7 @@ using namespace llvm;
 
 namespace {
 
-// An op's word as the encoder makes it (the fields the packing rules read),
-// and whether it takes the long immediate. Unknown for anything that is not
-// one op (Known false).
-struct OpInfo {
-  bool Known = false;
-  bool Control = false;
-  uint32_t Word = 0;
-  bool Long = false;
-  bool Meta = false; // no op: KILL, IMPLICIT_DEF ...
-};
+using OpInfo = GPUVM::OpDesc;
 
 class GPUVMBundleStrategy : public MachineSchedStrategy {
   ScheduleDAGMI *DAG = nullptr;
@@ -65,15 +57,6 @@ class GPUVMBundleStrategy : public MachineSchedStrategy {
     return false;
   }
   void findBranchRegs();
-
-  unsigned enc(const MachineOperand &MO) const {
-    if (!MO.isReg() || !MO.getReg().isPhysical())
-      return 0;
-    MCRegister R = MO.getReg().asMCReg();
-    if (GPUVM::GPRQRegClass.contains(R))
-      R = TRI->getSubReg(R, GPUVM::sub0);
-    return TRI->getEncodingValue(R) & 63;
-  }
 
   const OpInfo &info(const SUnit *SU);
   bool fits(const OpInfo &I) const {
@@ -139,85 +122,7 @@ const OpInfo &GPUVMBundleStrategy::info(const SUnit *SU) {
   auto It = Infos.find(SU);
   if (It != Infos.end())
     return It->second;
-  OpInfo I;
-  const MachineInstr &MI = *SU->getInstr();
-  uint64_t TSFlags = MI.getDesc().TSFlags;
-  unsigned Opc = GPUVMII::getOpc(TSFlags);
-  auto R = [&](unsigned N) { return enc(MI.getOperand(N)); };
-  auto Imm = [&](unsigned N, bool Float) {
-    const MachineOperand &MO = MI.getOperand(N);
-    if (!MO.isImm())
-      return true; // a symbol: long
-    int64_t V = MO.getImm();
-    return Float ? (static_cast<uint32_t>(V) & 0xfffff) != 0 : !isInt<12>(V);
-  };
-  I.Meta = MI.isMetaInstruction();
-  I.Known = !MI.isPseudo() || MI.getOpcode() == GPUVM::LQ_Q ||
-            MI.getOpcode() == GPUVM::SQ_Q || MI.getOpcode() == GPUVM::SQ_OP;
-  if (GPUVMII::isControl(TSFlags) || MI.isCall() || MI.isTerminator()) {
-    I.Known = true;
-    I.Control = true;
-  } else if (I.Known) {
-    switch (GPUVMII::getForm(TSFlags)) {
-    case GPUVMII::FrmR:
-      I.Word = GPUVM::wordR(Opc, R(0), R(1), R(2), 0);
-      break;
-    case GPUVMII::FrmR4:
-      I.Word = GPUVM::wordR(Opc, R(0), R(1), R(2), R(3));
-      break;
-    case GPUVMII::FrmRSh:
-    case GPUVMII::FrmLoadX:
-    case GPUVMII::FrmStoreX:
-      I.Word = GPUVM::wordR(Opc, R(0), R(1), R(2), 0);
-      break;
-    case GPUVMII::FrmR1:
-      I.Word = GPUVM::wordR(Opc, R(0), R(1), 0, 0);
-      break;
-    case GPUVMII::FrmI:
-    case GPUVMII::FrmLoad:
-    case GPUVMII::FrmStore:
-      I.Word = GPUVM::wordI(Opc, R(0), R(1), 0);
-      I.Long = Imm(2, false);
-      break;
-    case GPUVMII::FrmFI:
-      I.Word = GPUVM::wordI(Opc, R(0), R(1), 0);
-      I.Long = Imm(2, true);
-      break;
-    case GPUVMII::FrmBF:
-      I.Word = GPUVM::wordI(Opc, R(0), R(1), 0);
-      break;
-    case GPUVMII::FrmBFI:
-      I.Word = GPUVM::wordI(Opc, R(0), R(2), 0);
-      break;
-    case GPUVMII::FrmAMO:
-      I.Word = GPUVM::wordR(Opc, R(0), R(2), R(1), 0);
-      break;
-    case GPUVMII::FrmCAS:
-      I.Word = GPUVM::wordR(Opc, R(0), R(3), R(2), 0);
-      break;
-    case GPUVMII::FrmLPC:
-      I.Word = GPUVM::wordI(Opc, R(0), 0, 0);
-      I.Long = true;
-      break;
-    case GPUVMII::FrmMFSR:
-      I.Word = GPUVM::wordI(Opc, R(0), 0, 0);
-      break;
-    case GPUVMII::FrmMTSR:
-      I.Word = GPUVM::wordI(Opc, 0, R(1), 0);
-      break;
-    case GPUVMII::FrmXSR:
-      I.Word = GPUVM::wordI(Opc, R(0), R(2), 0);
-      break;
-    case GPUVMII::FrmNone:
-    case GPUVMII::FrmUnimp:
-      I.Word = GPUVM::wordR(Opc, 0, 0, 0, 0);
-      break;
-    default:
-      I.Known = false;
-      break;
-    }
-  }
-  return Infos[SU] = I;
+  return Infos[SU] = GPUVM::describeOp(*SU->getInstr(), TRI);
 }
 
 SUnit *GPUVMBundleStrategy::pickNode(bool &IsTopNode) {

@@ -16,9 +16,11 @@ add_public_tablegen_target(GPUVMCommonTableGen)
 add_llvm_target(GPUVMCodeGen
   GPUVMAsmPrinter.cpp
   GPUVMBranchFill.cpp
+  GPUVMBundleModel.cpp
   GPUVMBundleScheduler.cpp
   GPUVMCountedLoops.cpp
   GPUVMFrameLowering.cpp
+  GPUVMGlobalFill.cpp
   GPUVMHoistConstants.cpp
   GPUVMInstrInfo.cpp
   GPUVMISelDAGToDAG.cpp
