@@ -22,7 +22,7 @@ def run(c, a):
     a.save_refs = False
     cmd = ['pwsh', os.path.join(ROOT, 'tools', 'gpu_queue.ps1'), os.path.join(ROOT, 'bin', 'rvc_harness.exe'),
            '--gvm', a.image, '--no-viz', '--uart-log', log, '--seconds', str(int(c['wall'] * a.wall_scale)),
-           '--expect', '@gpuvm:~# ', '--send', 'cd /; ' + c['cmd'] + G.output_cmd(c, a) + '; ' + T.DONE + '\\n', '--until', c['until']]
+           '--expect', '@gpuvm:~# ', '--send', 'cd /; export TERM=linux; ' + c['cmd'] + G.output_cmd(c, a) + '; ' + T.DONE + '\\n', '--until', c['until']]
     more = list(c['more'])
     while more:
         k = more.pop(0)

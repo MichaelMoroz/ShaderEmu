@@ -120,6 +120,10 @@ def walk(top, programs):
             mode = '0755' if os.access(src, os.X_OK) or is_program(src) else '0644'
             lines.append(sep.join(('file', p, src, mode, '0', '0'))); have.add(p)
 add_dir('/persistence')
+# (the RISC-V ROM's links to programs of ours: at's atq and atrm, mc's mcedit, mcview and mcdiff)
+for name, to in (('atq', 'at'), ('atrm', 'at'), ('mcedit', 'mc'), ('mcview', 'mc'), ('mcdiff', 'mc')):
+    if os.path.exists(os.path.join(apps, 'usr', 'bin', to)) and '/usr/bin/' + name not in have:
+        lines.append('slink /usr/bin/%s %s 0777 0 0' % (name, to)); have.add('/usr/bin/' + name)
 walk(apps, True)
 walk(desk, True)
 if data:

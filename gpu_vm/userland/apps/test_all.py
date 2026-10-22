@@ -36,6 +36,8 @@ OVERRIDES = {
     # the textures made before "steady" depend on the machine's speed (gvm_cpu makes the world in its first stats
     # period: 8 loading texts fewer); its first 30 are the RISC-V machine's
     'classicube-pack': dict(count=[(r'^cctex: ', (30, 42))], digest=[]),
+    # uname -m says the machine
+    'ports-dropbear': dict(has=[r'^ssh-ok gpuvm$', r'^file-data$', r'^sftp> get /tmp/f2 /tmp/f3']),
 }
 # a line added to a case's command (its program's own switches)
 PREFIX = {
@@ -166,7 +168,7 @@ def run_case(c, a, w):
         if sent == 0 and prompts >= 1:
             p.stdin.write(b'stty -echo\n'); sent = 1
         elif sent == 1 and prompts >= 2:
-            p.stdin.write(b'cd /; ' + c['cmd'].encode() + output_cmd(c, a).encode() + b'; ' + T.DONE.encode() + b'\n'); sent = 2
+            p.stdin.write(b'cd /; export TERM=linux; ' + c['cmd'].encode() + output_cmd(c, a).encode() + b'; ' + T.DONE.encode() + b'\n'); sent = 2
             mark = len(out)
         elif sent == 2:
             for pr in pairs:

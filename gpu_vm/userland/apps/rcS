@@ -13,5 +13,6 @@ for d in root var etc home; do
     mount -t overlay overlay -o lowerdir=/$d,upperdir=/tmp/.over/$d/up,workdir=/tmp/.over/$d/work /$d
 done
 mkdir -p /var/spool/cron/atjobs /var/spool/cron/atspool /var/run /var/log
+: > /var/spool/cron/atjobs/.SEQ   # (at's sequence file, which the RISC-V ROM has)
 hostname -F /etc/hostname
 echo "gpuvm: up in $(cut -d' ' -f1 /proc/uptime) s"
