@@ -1,0 +1,5 @@
+# x19p: the write cache size against many cores (state pixels a core: 14, 22, 38, 70)
+w130      gpu_vm/tick/steps/x19w130.hlsl
+w258      gpu_vm/tick/steps/x19w258.hlsl
+x18       gpu_vm/tick/steps/x18.hlsl
+x19       gpu_vm/tick/steps/x19w1026.hlsl

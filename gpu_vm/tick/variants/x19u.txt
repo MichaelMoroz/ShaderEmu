@@ -1,0 +1,4 @@
+# x19u: x19g (workers' 64 sets on 14 pixels, the commit drawing their 130 entries) against x18 and x19
+x18       gpu_vm/tick/steps/x18.hlsl
+x19       gpu_vm/tick/steps/x19w1026.hlsl
+x19g      gpu_vm/tick/steps/x19g.hlsl

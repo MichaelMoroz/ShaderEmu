@@ -1,0 +1,6 @@
+# x19d: a core's state pixels on LROWS rows (x19l), so that a quad and a warp hold one core's lanes
+x18       gpu_vm/tick/steps/x18.hlsl
+l1        gpu_vm/tick/steps/x19l.hlsl -D LROWS=1
+l2        gpu_vm/tick/steps/x19l.hlsl -D LROWS=2
+l4        gpu_vm/tick/steps/x19l.hlsl -D LROWS=4
+l8        gpu_vm/tick/steps/x19l.hlsl -D LROWS=8

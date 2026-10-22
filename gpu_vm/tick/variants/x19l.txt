@@ -1,0 +1,4 @@
+# x19l (a probe): paths 4 and 6 out of the fast loop (NOPAIR): what the pairs' code costs the other paths
+x18       gpu_vm/tick/steps/x18.hlsl
+v         gpu_vm/tick/steps/x19v.hlsl
+nopair    gpu_vm/tick/steps/x19v.hlsl -D NOPAIR=1

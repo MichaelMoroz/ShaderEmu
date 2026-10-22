@@ -13,7 +13,8 @@
 
 // ---- The bench's machine: RAM to 64 MB (32 MB of it RAM proper: the real programs' runtime has a static heap of 16 MB),
 // 1 MB of ROM
-static const uint32_t RAM_END = 2048 * 2048 * 16, ROM_SIZE = 1u << 20;
+static uint32_t RAM_END = 2048 * 2048 * 16;   // (128 MB for the many-core cases: RAM_MC)
+static const uint32_t ROM_SIZE = 1u << 20;
 static uint32_t g_texw = 2048;   // the RAM's and ROM's textures' width: a step's RAM_W (x16 on: 8192)
 static uint32_t ram_rows() { return RAM_END / 16 / g_texw; }
 static uint32_t rom_rows() { return ROM_SIZE / 16 / g_texw; }
@@ -46,13 +47,19 @@ struct Case {
     double bundles_fused = 0;  // a timed case under g_fused: bundles an iteration of its loop
     bool named = false;        // run only when --case names it (the fused ops: a tick without them is not wrong)
     int ext_from = -1, ext_to = -1;   // core 0's external interrupt line is on in passes [ext_from, ext_to) of a check
+    uint32_t check_ticks = 61;        // a check's bundles a pass (x19: long ones to fill the write cache)
     // a real program (an ELF of build/tick_real, gpu_vm/tick/real/build.sh) in place of build: timed in bundles a second,
     // its words `pokes` set in the image ("symbol=check,timed;..."): a check runs a short piece of it to its first call to
     // the host (a trap, which halts), a timing a long one
     const char* elf = nullptr;
     const char* pokes = "";
     bool ns = false;   // timed in ns a bundle (a real program, a probe of one kind of bundle)
+    // many cores (x19): core c runs a copy of the case named by the c-th name of this list (round robin), each copy
+    // at a place of its own (the real programs built -fPIE, the probes' code), g_mc_cores cores; timed in ns a
+    // bundle of all cores together
+    const char* mc = nullptr;
 };
+static uint32_t g_mc_cores = 32;   // (gvmbench --cores N)
 
 // ---- Random programs: the fuzzer's ops (registers r5-r28 carry values; r29 a base for memory)
 struct Rng { uint64_t s; uint32_t next() { s ^= s << 13; s ^= s >> 7; s ^= s << 17; return (uint32_t)s; } uint32_t below(uint32_t n) { return next() % n; } };
@@ -471,6 +478,29 @@ static std::vector<Case> cases() {
         a.halt();
     }});
     v[v.size() - 2].named = v[v.size() - 1].named = true;
+    // ---- x19: stores at random words of 1 MB in long passes, so that a set's two ways fill and words go to the overflow
+    // list; loads read back the last stores (a store and a load in one bundle, path 6), a byte into a stored word
+    v.push_back({"wcov", 1, false, [](std::vector<GvmAsm>& p, auto& data, uint32_t seed) {
+        GvmAsm& a = p[0];
+        a.li(5, 1500); a.li(4, (int32_t)DATA); a.li(9, 1103515245); a.li(10, 0xffffc); a.li(6, (int32_t)(seed * 2654435761u));
+        a.li(11, (int32_t)DATA); a.li(13, (int32_t)DATA); a.li(12, 0);
+        int top = a.here();
+        a.op(GVM_I_MUL, 6, 6, 9); a.close();
+        a.addi(6, 6, 12345); a.close();
+        a.opi(GVM_I_SRL, 7, 6, 9); a.close();
+        a.op(GVM_I_AND, 7, 7, 10); a.close();
+        a.add(7, 7, 4); a.close();
+        a.sw(6, 7, 0); a.lw(8, 11, 0); a.close();      // (path 6: a store, then a load of the last one's word)
+        a.add(12, 12, 8); a.close();
+        a.st(GVM_W_B, 12, 7, 1); a.lw(14, 13, 0); a.close();   // a byte into this word; a load of the word before the last
+        a.add(12, 12, 14); a.mv(13, 11); a.close();
+        a.mv(11, 7); a.close();
+        a.lw(15, 7, 0); a.close();                     // (path 3: this word, as just stored)
+        a.add(12, 12, 15); a.close();
+        a.addbnz(5, -1, top);
+        a.halt();
+    }});
+    v.back().check_ticks = 3000;
     // ---- x17's: the whole ISA (gpu_vm/tick/steps/README.md, "x17")
     v.push_back({"memx", 1, false, [](std::vector<GvmAsm>& p, auto& data, uint32_t seed) {
         // d and q at any alignment, bytes, halves and words off their alignment (each stays in its word), atomics and
@@ -769,6 +799,10 @@ static std::vector<Case> cases() {
         v.push_back(c);
     };
     probe("p_int", [](GvmAsm& a) { for (int i = 0; i < 16; i++) { a.add(6 + i % 4, 6 + i % 4, 5); a.close(); } });
+    // x19: a bundle's fixed cost and an op's: no op (a branch never taken), two ops apart, op 1 on op 0's result
+    probe("p_nop", [](GvmAsm& a) { for (int i = 0; i < 16; i++) { int l = a.label(); a.br(GVM_CC_BEQI, 5, 63, l); a.bind(l); } });
+    probe("p_int2", [](GvmAsm& a) { for (int i = 0; i < 16; i++) { a.add(6 + i % 4, 6 + i % 4, 5); a.add(10 + i % 4, 10 + i % 4, 5); a.close(); } });
+    probe("p_dep2", [](GvmAsm& a) { for (int i = 0; i < 16; i++) { a.add(6 + i % 4, 6 + i % 4, 5); a.add(10 + i % 4, 6 + i % 4, 5); a.close(); } });
     probe("p_sel", [](GvmAsm& a) { for (int i = 0; i < 16; i++) { a.sel(6 + i % 4, 6 + i % 4, 5, 4); a.close(); } });
     probe("p_load", [](GvmAsm& a) { for (int i = 0; i < 16; i++) { a.lw(6 + i % 4, 4, 4 * i); a.close(); } });
     probe("p_store", [](GvmAsm& a) { for (int i = 0; i < 16; i++) { a.sw(5, 4, 4 * i); a.close(); } });
@@ -799,6 +833,17 @@ static std::vector<Case> cases() {
     real("coremark_pie", "build/tick_real/coremark_pie.elf", "seed4_volatile=1,1000000");   // (-fPIE: globals by lpc; the compiler of 834f68d)
     real("gzip", "build/tick_real/gzloop.elf", "gz_mode=1,1;gz_bytes=6000,262144;gz_rounds=1,1000");
     real("gunzip", "build/tick_real/gzloop.elf", "gz_mode=2,2;gz_rounds=1,1000");
+    // ---- many cores at once (x19): throughput, in ns a bundle of all cores (gvmbench --cores N, 32 by default)
+    auto mc = [&](const char* name, const char* list) {
+        Case c{name, g_mc_cores, true, [](std::vector<GvmAsm>&, std::vector<std::pair<uint32_t, uint32_t>>&, uint32_t) {}};
+        c.mc = list; c.named = true; c.ns = true;
+        v.push_back(c);
+    };
+    mc("mc_int", "p_int");                  // the same integer loop on every core (no divergence)
+    mc("mc_load", "p_load");
+    mc("mc_cm", "coremark");                // CoreMark on every core: the same path (lockstep)
+    mc("mc_cm1", "coremark@");              // the same, one copy (code and data shared: as threads, in lockstep)
+    mc("mc_mix", "coremark,gzip,coremark,gunzip");   // different programs on neighbouring cores
     return v;
 }
 
@@ -873,7 +918,60 @@ static uint32_t load_real(const Case& cs, std::vector<uint32_t>& img) {
     }
     return rd32(24);
 }
+static std::vector<Case> cases();
+static Prepared prepare(const Case& cs, uint32_t seed);
+// Many cores (Case::mc): core c runs a copy of the case named c-th in the list (round robin), each at a place of its
+// own: a real program's copy k is its ELF linked there (build/tick_real/mc, gpu_vm/tick/real/build.sh: CoreMark's
+// cm<k>.elf, gzloop's gz<k>.elf for gzip and gunzip alike), poked as the case; a probe's copy is its code moved (its
+// data at DATA is shared). Each core's stack is 32 KB of its own below RAM's end (RAM_MC: 128 MB).
+static const uint32_t RAM_MC = 128u << 20;
+static Prepared prepare_mc(const Case& cs, uint32_t seed) {
+    Prepared pr;
+    pr.ramImg.assign((size_t)RAM_END / 4, 0);
+    std::vector<std::string> names;
+    for (const char *p = cs.mc, *q; *p; p = *q ? q + 1 : q) { q = strchr(p, ','); if (!q) q = p + strlen(p); names.push_back(std::string(p, q)); }
+    std::vector<Case> all = cases();
+    uint32_t asm_at = GVM_RAM + 0x200000, ncm = 0, ngz = 0;
+    pr.state.assign(cs.cores, {});
+    for (uint32_t c = 0; c < cs.cores; c++) {
+        const Case* sub = nullptr;
+        std::string nm = names[c % names.size()];
+        bool shared = nm.back() == '@';   // name@: every core the first copy (its code and data shared, as threads)
+        if (shared) nm.pop_back();
+        for (auto& x : all) if (nm == x.name) sub = &x;
+        if (!sub) { printf("  %s: no case %s\n", cs.name, nm.c_str()); exit(1); }
+        std::vector<uint32_t> st((size_t)(g_twc + g_wcn / 2 + 8) * 4, 0);
+        uint32_t entry;
+        if (sub->elf) {
+            bool gz = strstr(sub->elf, "gzloop") != nullptr;
+            uint32_t k = shared ? 0 : gz ? ngz++ : ncm++;
+            if (k >= (gz ? 16u : 64u)) { printf("  %s: too many copies of %s\n", cs.name, sub->name); exit(1); }
+            std::string path = std::string("build/tick_real/mc/") + (gz ? "gz" : "cm") + std::to_string(k) + ".elf";
+            Case one = *sub;
+            one.elf = path.c_str();
+            entry = load_real(one, pr.ramImg);
+            if (!entry) exit(1);
+            st[2] = RAM_END - 64 - c * 0x8000;
+            st[17 * 4 + 1] = HALT_STUB;
+        } else {
+            Prepared one = prepare(*sub, seed);
+            if (c == 0) for (size_t k = 0; k < one.ramImg.size(); k++) if (one.ramImg[k]) pr.ramImg[k] = one.ramImg[k];   // (the probe's data)
+            memcpy(&pr.ramImg[asm_at / 4], &one.ramImg[one.bases[0] / 4], 0x10000);
+            st = one.state[0];
+            entry = asm_at;
+            asm_at += 0x10000;
+        }
+        st[16 * 4 + 0] = entry;
+        st[16 * 4 + 1] = GVM_ST_S;
+        st[18 * 4 + 3] = 0x9e3779b9u ^ (c * 0x85ebca6bu);
+        pr.state[c] = st;
+        pr.bases.push_back(entry);
+    }
+    pr.ramImg[HALT_STUB / 4] = GVM_WORD_R(GVM_X_BREAK, 0u, 0u, 0u, 0u); pr.ramImg[HALT_STUB / 4 + 3] = GVM_CTRL_NONE | 1u << 3 | GVM_PATH_GENERAL;
+    return pr;
+}
 static Prepared prepare(const Case& cs, uint32_t seed) {
+    if (cs.mc) return prepare_mc(cs, seed);
     Prepared pr;
     if (cs.elf) {   // a real program: its image, sp at RAM's end, a trap halts
         pr.ramImg.assign((size_t)RAM_END / 4, 0);

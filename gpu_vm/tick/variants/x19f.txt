@@ -1,0 +1,3 @@
+# x19f: the operations' rounds predicated on a core having one queued (x19v's op_any; gvmbench skips them on the GPU)
+x18       gpu_vm/tick/steps/x18.hlsl
+pred      gpu_vm/tick/steps/x19v.hlsl

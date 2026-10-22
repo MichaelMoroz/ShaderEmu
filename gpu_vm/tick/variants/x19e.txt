@@ -1,0 +1,4 @@
+# x19e: the control word's branch after the ops (BAO, the reference's GVM_REF_BRANCH_AFTER): its cost on the loops and probes
+x18       gpu_vm/tick/steps/x18.hlsl
+v0        gpu_vm/tick/steps/x19v.hlsl
+bao       gpu_vm/tick/steps/x19v.hlsl -D BAO=1

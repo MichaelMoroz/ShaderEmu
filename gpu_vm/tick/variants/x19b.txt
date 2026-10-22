@@ -1,0 +1,4 @@
+# x19b: a cache of texels in registers for the one-op memory body (TC=1 one entry, TC=2 two, replaced in turn)
+x18       gpu_vm/tick/steps/x18.hlsl
+tc1       gpu_vm/tick/steps/x19v.hlsl -D TC=1
+tc2       gpu_vm/tick/steps/x19v.hlsl -D TC=2

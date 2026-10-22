@@ -1,0 +1,3 @@
+# x19a: the baseline of the x19 work (x18 against x17)
+x17       gpu_vm/tick/steps/x17.hlsl -D X17PATHS=1
+x18       gpu_vm/tick/steps/x18.hlsl

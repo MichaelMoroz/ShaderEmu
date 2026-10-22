@@ -234,3 +234,15 @@ The card drifts ~5% between sessions: compare within one run (batches do).
 LLVM gpu_vm target; `gvm_cpu` (reference machine as an emulator for Linux); compiler-rt, musl arch/gpuvm, bFLT;
 Linux arch/gpuvm; workers;
 integration into the harness/Unity (RAM row 64, device window moved to 0x10000, mailboxes 0x00c00000).
+
+## x19 (22 October 2026, the ISA and latency agent): no new default
+
+x18 stays the tick; no ISA change. `gpu_vm/tick/steps/README.md`, "x19", has every variant and batch: the bundle's ops
+cost nothing over its fixed work (105 ns with 0, 1 or 2 integer ops); a texel cache, prefetching the next bundle,
+hoisting the data fetch, the branch after the ops (+7.5% a bundle: the LLVM agent's proposal (1) does not pay), one lane
+a core, a core on several rows, an overflow list, predicated operation rounds: none faster. The write cache's 2-way sets
+end a pass after about 80 scattered words (a shell loop's and gzip's passes about 1,000 bundles); 1,026 entries double
+that and make a shell loop in `rvc_harness --gvm` 15-25% faster, but cost many cores (nxray with 255 workers 165 -> 190-207
+ms a picture, more state pixels and commit points a core): `steps/x19w1026.hlsl` is a drop-in step for a harness that
+wants it (STATE.md holds with WCN 1026, 70 state pixels). For the harness: more passes a frame (`--tick-rounds`) is the
+lever on early-ending passes; one operation round a pass instead of two saves about 6 us a pass in the bench.

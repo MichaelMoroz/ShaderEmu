@@ -1,0 +1,4 @@
+# x19r: core 0 with 512 sets, workers 64 sets of the same layout (x19d: their other pixels leave at once)
+x18       gpu_vm/tick/steps/x18.hlsl
+x19       gpu_vm/tick/steps/x19w1026.hlsl
+x19d      gpu_vm/tick/steps/x19d.hlsl

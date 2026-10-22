@@ -467,3 +467,65 @@ afternoon, so only a batch's own rows compare):
   (`HASH`), the second way hashed by the word's 256-word block (`SKEW`: stores a pass on random words +58%, gzip's
   bundles a pass +83%, but the loops -7% and CoreMark +6%); the ROM in RAM's texture (`ROMROWS`: slower); loads apart
   from stores (`ORD` 2, 3, 5, 6); the one-op body's texel read always (`TEX1`); fxc2's other flags (`variants/x18r.txt`).
+
+## x19: the per-bundle cost and the write cache (22 October 2026; no new default)
+
+Goal: real work at 2-3x the lean tick (x18: CoreMark 2.11x, gzip 2.02x, gunzip 1.62x under Linux). Nothing below beat x18
+clearly, so **x18 stays the default**; the variants are kept as copies (`steps/x19*.hlsl`, `variants/x19a-v.txt`) and no
+ISA change was made (the probes that needed one used a reference flag that is not kept).
+
+New in the bench (`gvmbench`, `cases.h`): `--cores N` and the many-core cases `mc_int`, `mc_load` (a probe's code on every
+core), `mc_cm` (CoreMark copies linked apart, `build/tick_real/mc`, `real/build.sh`), `mc_cm1` (one copy shared, as
+threads), `mc_mix` (CoreMark, gzip, CoreMark, gunzip on neighbouring cores), timed in ns a bundle of all cores together;
+probes `p_nop`, `p_int2`, `p_dep2`; the check case `wcov` (random stores in long passes, `Case::check_ticks`);
+`GVM_ENDS=1|2` (why core 0's passes end, bundles and entries used a pass); `GVM_CHECK_SECONDS`; steps with `LROWS`,
+`fragu` (UAV state), `op_any_vert` (predicated rounds), `WCN1` and `WORKER` are understood. `real/memsim.cpp`: a real
+case on the reference with models of the write cache, a texel cache and the paths (WSL: see its head).
+
+What was measured (card, batches against x18 in one run; ns a bundle; x18: p_int 105.6, p_load 167, CoreMark 152,
+gzip 207, gunzip 172):
+
+| Variant | What | Result |
+|---|---|---|
+| `p_nop`, `p_int`, `p_int2`, `p_dep2` | a bundle of 0, 1, 2 integer ops, op 1 on op 0's result | all 105.7: the ops cost nothing over a bundle's fixed work |
+| x19v TC=1, 2 | a load's texel from the last 1 or 2 texels in registers (RAM is constant in a pass) | real code as x18 (2-entry: p_load 159): texture latency is not the memory bundle's cost |
+| x19v PF | the fall-through's bundle fetched an iteration ahead | +15% everywhere (with TC=2: as x18) |
+| x19v HOIST=1, 2 | op 0's (and op 1's) texel fetched before the path's branch | +13% integer bundles, memory no faster |
+| x19v BAO=1, 2 | the branch compares after the ops (forwarded; or registers read again) | +7.5% and +13% a bundle; the LLVM agent's 1.5-9% fewer bundles do not pay for it |
+| x19v LG, LATESEL, NOPAIR | one compare for budget and cap; the next bundle's select after the ops; pairs out of the fast loop | +2%, +1-3%, +4% |
+| x19u | one lane a core, its state written as UAVs | +13% a bundle; many cores alike |
+| x19l LROWS 2, 4, 8 | a core's state pixels on several rows | one core +0, +14, +14%; mc_mix (32 cores) -2, -4, -15% |
+| x19w | the write cache a set a texel (one local read a lookup) | loads loop +7%, CoreMark +3%, gzip -2% |
+| x19o | an overflow list of 30 entries flagged on way 1's tag | gzip passes 1,000 -> 6,190 bundles, but every bundle +13-40% |
+| x19v + op_any | the operations' rounds predicated on a core having one (D3D11 predicate) | no change: the rounds' cost is their render target switches, not their draws |
+| x19w130/258/1026/2050 | 130, 258, 1,026, 2,050 entries (14, 22, 70, 134 state pixels) | below |
+| x19g, x19h | core 0 1,026 entries, workers 130 on 14 pixels (a set's two ways a state texel; x19h compiles a workers' tick apart, `WORKER=1`) | x19g: CoreMark +4%; x19h: one core as 1,026, but its two tick draws run one after the other (many cores -40%) |
+
+The write cache's size (one core: ns a bundle; many: ns a bundle of all cores, `mc_cm1`, CoreMark on every core):
+
+| entries | CoreMark | gzip | gunzip | p_scat | 64 cores mc_int | 128 cores mc_cm1 |
+|---|---|---|---|---|---|---|
+| 130 | 147.3 | 218.3 | 160.4 | 283 | 1.71 | 1.46 |
+| 258 | 151.1 | 213.8 | 168.9 | 208 | 1.73 | 1.63 |
+| 514 (x18) | 152.0 | 207.5 | 171.6 | 169-175 | 1.82-1.94 | 1.78-1.86 |
+| 1,026 | 152.4-153.0 | 197.4-199.5 | 173.1 | 157-164 | 2.77-2.85 | 2.83-2.85 |
+
+Why passes end early: a 2-way set takes a third word only on the next pass, so scattered stores end a pass after about
+80 words (15% of 514 entries): gzip's passes 1,000 bundles in the bench, a shell loop's 913 (`gvm_gpu --trace-pass`, every
+pass "full"). At 1,026 entries: 2,110 and 1,675. A pass's fixed cost in the bench is about 20 us (tick 12, two operation
+rounds 8; one round 6 us less). Under `gvm_gpu` (Linux, batches of 32) the pass count does not show in the wall time (the
+bench's gzip and gunzip under Linux alike with 514 and 1,026). In `rvc_harness --gvm` (a pass a frame) it does: a shell
+loop of 2,000 steps 8.4-8.9 s with x18, 6.7-8.0 s with 1,026 entries; mctest 255 alike; nxray with 255 workers 165 ms a
+picture with x18, 190-207 with 1,026 (more state pixels and commit points a core). So 1,026 trades many cores for one;
+not taken as the default.
+
+What is known about the cost now: the dependent latencies on this card (`gpu_vm/tick/probes/lat.hlsl`, `lat.cpp`, one pixel) are an
+integer op about 0.6-0.9 ns, a local-memory load 6.4, a store then a load 7.1, a texel 45; a single warp issues 32
+independent ops in 6-7 ns. A bundle (about 150 DXBC) takes 105 ns: neither the issue rate nor any one latency chain
+explains it, and every change to the fast loop's shape moves it by a few percent either way. The driver's own numbers
+(Vulkan's pipeline statistics on DXC's SPIR-V of x18, `gpu_vm/tick/probes/vkstats.cpp`): 191 registers, 4.4 KB of local memory
+(the arrays, no spills), 91 KB of code. Kernel bundles are 8.5% of Linux gunzip's (gvm_cpu trace), so its 1.6x is the
+harness and user code, not the kernel.
+
+Many cores: in gvmbench lockstep cores scale nearly linearly to 64 (p_int 8 cores 7.9x, CoreMark one copy 32 cores
+30x); different programs on neighbouring rows (quads hold two cores) or copies at different addresses cost 1.5-2x.

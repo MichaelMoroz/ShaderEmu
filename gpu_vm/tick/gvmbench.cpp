@@ -27,6 +27,8 @@
 
 #include "cases.h"
 static int g_romrows = 0;   // (probe: the ROM in RAM's texture)
+static uint32_t g_wcn1 = 0;    // a step's WCN1 (x19g): a worker's entries, the commit's points for it (0: WCN)
+static uint32_t g_lrows = 1;   // a core's state pixels on this many rows (a step's LROWS, x19): pixel p at (p % spx, core * LROWS + p / spx)
 
 // ---- D3D11
 static ID3D11Device* dev;
@@ -34,17 +36,19 @@ static ID3D11DeviceContext* ctx;
 static void check(HRESULT hr, const char* what) {
     if (FAILED(hr)) { printf("%s failed: %08lx\n", what, (unsigned long)hr); exit(1); }
 }
-struct Tex { ID3D11Texture2D* t = nullptr; ID3D11ShaderResourceView* srv = nullptr; ID3D11RenderTargetView* rtv = nullptr; UINT w = 0, h = 0; };
+struct Tex { ID3D11Texture2D* t = nullptr; ID3D11ShaderResourceView* srv = nullptr; ID3D11RenderTargetView* rtv = nullptr; ID3D11UnorderedAccessView* uav = nullptr; UINT w = 0, h = 0; };
+static bool g_uav_tex = false;   // (x19 probe: the state textures also UAVs, a tick whose one lane writes a core's state)
 static Tex make_tex(UINT w, UINT h, const void* init) {
     Tex t; t.w = w; t.h = h;
-    D3D11_TEXTURE2D_DESC d = {w, h, 1, 1, DXGI_FORMAT_R32G32B32A32_UINT, {1, 0}, D3D11_USAGE_DEFAULT, D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET, 0, 0};
+    D3D11_TEXTURE2D_DESC d = {w, h, 1, 1, DXGI_FORMAT_R32G32B32A32_UINT, {1, 0}, D3D11_USAGE_DEFAULT, D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET | (g_uav_tex ? D3D11_BIND_UNORDERED_ACCESS : 0u), 0, 0};
     D3D11_SUBRESOURCE_DATA sd = {init, w * 16, 0};
     check(dev->CreateTexture2D(&d, init ? &sd : nullptr, &t.t), "CreateTexture2D");
     check(dev->CreateShaderResourceView(t.t, nullptr, &t.srv), "SRV");
     check(dev->CreateRenderTargetView(t.t, nullptr, &t.rtv), "RTV");
+    if (g_uav_tex) check(dev->CreateUnorderedAccessView(t.t, nullptr, &t.uav), "UAV");
     return t;
 }
-static void free_tex(Tex& t) { if (t.t) { t.srv->Release(); t.rtv->Release(); t.t->Release(); t = Tex(); } }
+static void free_tex(Tex& t) { if (t.t) { t.srv->Release(); t.rtv->Release(); if (t.uav) t.uav->Release(); t.t->Release(); t = Tex(); } }
 static std::vector<uint32_t> read_tex(const Tex& t) {
     D3D11_TEXTURE2D_DESC d = {t.w, t.h, 1, 1, DXGI_FORMAT_R32G32B32A32_UINT, {1, 0}, D3D11_USAGE_STAGING, 0, D3D11_CPU_ACCESS_READ, 0};
     ID3D11Texture2D* st;
@@ -129,13 +133,16 @@ static Prog program(const char* path, const char* v, const char* p, const std::v
 
 // ---- The GPU's machine
 struct Gpu {
-    uint32_t cores, statePix;
+    uint32_t cores, statePix, spx;   // (spx: the state textures' width, statePix / LROWS rounded up)
     Tex ram, rom, stage, ops[2], set[2][8];
     ID3D11Buffer* code = nullptr;   // t12: RAM's first image as a StructuredBuffer<uint4> (a probe's code fetched from a buffer)
     ID3D11ShaderResourceView* codeSrv = nullptr;
     int cur = 0, oc = 0;
-    Prog tick, commit, stg, wrt, prog;
-    bool hasCommit = true, hasOps = true;
+    Prog tick, commit, stg, wrt, prog, any, tickW;   // (tickW: the workers' rows' tick, a step's WORKER=1, x19)
+    bool hasCommit = true, hasOps = true, hasAny = false, uavTick = false, hasW = false;   // (uavTick: x19's probe, fragu)   // (hasAny: the step's op_any draw, x19: the rounds predicated on it)
+    ID3D11Predicate* pred = nullptr;   // an occlusion predicate: some core has an operation queued
+    Tex dummy;                         // op_any's 1 x 1 target (nothing is written: its blend state masks every component)
+    ID3D11BlendState* none = nullptr;
     ID3D11Buffer *cb, *ccb[4];
     ID3D11BlendState* mask[4];
     uint32_t opSlots = 32, opSpan = 272, opRounds = 2;   // the operations' stage (a step's OP_SLOTS, OP_SPAN) and rounds a pass
@@ -143,6 +150,7 @@ struct Gpu {
     void make(uint32_t ncores, const std::vector<uint32_t>& ramImg, const std::vector<uint32_t>& romImg, const std::vector<std::vector<uint32_t>>& state) {
         cores = ncores;
         statePix = (g_twc + g_wcn / 2 + 7) / 8;
+        spx = (statePix + g_lrows - 1) / g_lrows;
         if (g_romrows) {   // (probe: the ROM in RAM's texture, rows from RamRows on)
             std::vector<uint32_t> both(ramImg);
             both.insert(both.end(), romImg.begin(), romImg.end());
@@ -161,11 +169,13 @@ struct Gpu {
         for (int k = 0; k < 2; k++) ops[k] = make_tex(cores, 1, oz.data());
         for (int k = 0; k < 2; k++)
             for (int t = 0; t < 8; t++) {
-                std::vector<uint32_t> img((size_t)statePix * cores * 4, 0);
+                g_uav_tex = uavTick;
+                std::vector<uint32_t> img((size_t)spx * g_lrows * cores * 4, 0);
                 for (uint32_t c = 0; c < cores; c++)
                     for (uint32_t tx = t; tx < statePix * 8 && tx < state[c].size() / 4; tx += 8)
-                        memcpy(&img[((size_t)c * statePix + tx / 8) * 4], &state[c][tx * 4], 16);
-                set[k][t] = make_tex(statePix, cores, img.data());
+                        memcpy(&img[((size_t)(c * g_lrows + tx / 8 / spx) * spx + tx / 8 % spx) * 4], &state[c][tx * 4], 16);
+                set[k][t] = make_tex(spx, cores * g_lrows, img.data());
+                g_uav_tex = false;
             }
         cur = 0; oc = 0;
     }
@@ -179,7 +189,7 @@ struct Gpu {
         ID3D11ShaderResourceView* none[13] = {};
         ctx->PSSetShaderResources(0, 13, none);
         ctx->VSSetShaderResources(0, 13, none);
-        ctx->OMSetRenderTargets(0, nullptr, nullptr);
+        ctx->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 0, 0, nullptr, nullptr);
     }
     void bind(const Tex& state0, int which, bool withRam, bool withStage) {   // t0 RAM, t1 ROM, t2-t9 a state set, t10 ops, t11 stage
         ID3D11ShaderResourceView* s[13] = {};
@@ -193,7 +203,7 @@ struct Gpu {
         ctx->VSSetShaderResources(0, 13, s);
         (void)state0;
     }
-    void viewport(UINT w, UINT h) { D3D11_VIEWPORT v = {0, 0, (float)w, (float)h, 0, 1}; ctx->RSSetViewports(1, &v); }
+    void viewport(UINT w, UINT h, UINT y = 0) { D3D11_VIEWPORT v = {0, (float)y, (float)w, (float)h, 0, 1}; ctx->RSSetViewports(1, &v); }
     void run_pass() {
         ctx->UpdateSubresource(cb, 0, nullptr, &pass, 0, 0);
         ID3D11Buffer* cbs[2] = {cb, ccb[0]};
@@ -204,12 +214,24 @@ struct Gpu {
         clear_srv();
         ID3D11RenderTargetView* rt[8];
         for (int t = 0; t < 8; t++) rt[t] = set[cur][t].rtv;
-        ctx->OMSetRenderTargets(8, rt, nullptr);
+        if (uavTick) {   // (one lane a core writes its state as UAVs)
+            ID3D11UnorderedAccessView* u[8];
+            for (int t = 0; t < 8; t++) u[t] = set[cur][t].uav;
+            ctx->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 0, 8, u, nullptr);
+        } else ctx->OMSetRenderTargets(8, rt, nullptr);
         bind(set[cur ^ 1][0], cur ^ 1, true, false);
-        viewport(statePix, cores);
         ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         ctx->VSSetShader(tick.vs, nullptr, 0); ctx->PSSetShader(tick.ps, nullptr, 0);
-        ctx->Draw(3, 0);
+        if (hasW && cores > 1) {   // x19: core 0's row by the tick, the workers' rows by the workers' tick
+            viewport(spx, g_lrows);
+            ctx->Draw(3, 0);
+            viewport(spx, (cores - 1) * g_lrows, g_lrows);
+            ctx->PSSetShader(tickW.ps, nullptr, 0);
+            ctx->Draw(3, 0);
+        } else {
+            viewport(uavTick ? 1 : spx, cores * g_lrows);
+            ctx->Draw(3, 0);
+        }
         if (!hasCommit) { clear_srv(); cur ^= 1; return; }
         // the commit: four draws, a component each
         clear_srv();
@@ -222,10 +244,35 @@ struct Gpu {
             ID3D11Buffer* b2[2] = {cb, ccb[c]};
             ctx->VSSetConstantBuffers(0, 2, b2);
             ctx->OMSetBlendState(mask[c], nullptr, 0xffffffff);
-            ctx->Draw(cores * g_wcn, 0);
+            ctx->Draw(g_wcn1 ? g_wcn + (cores - 1) * g_wcn1 : cores * g_wcn, 0);   // (x19g: a worker's WCN1 entries)
         }
         ctx->OMSetBlendState(nullptr, nullptr, 0xffffffff);
         if (!hasOps) { clear_srv(); cur ^= 1; return; }
+        if (hasAny) {   // x19: no operation queued anywhere, no rounds: the GPU skips them by the predicate (no readback)
+            if (!pred) {
+                D3D11_QUERY_DESC qd = {D3D11_QUERY_OCCLUSION_PREDICATE, 0};
+                check(dev->CreatePredicate(&qd, &pred), "predicate");
+                dummy = make_tex(1, 1, nullptr);
+                D3D11_BLEND_DESC b = {};
+                b.RenderTarget[0].SrcBlend = b.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
+                b.RenderTarget[0].DestBlend = b.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ZERO;
+                b.RenderTarget[0].BlendOp = b.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+                b.RenderTarget[0].RenderTargetWriteMask = 0;
+                check(dev->CreateBlendState(&b, &none), "blend none");
+            }
+            clear_srv();
+            ctx->OMSetRenderTargets(1, &dummy.rtv, nullptr);
+            ctx->OMSetBlendState(none, nullptr, 0xffffffff);
+            bind(set[cur][0], cur, false, false);
+            viewport(1, 1);
+            ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_POINTLIST);
+            ctx->VSSetShader(any.vs, nullptr, 0); ctx->PSSetShader(any.ps, nullptr, 0);
+            ctx->Begin(pred);
+            ctx->Draw(cores, 0);
+            ctx->End(pred);
+            ctx->OMSetBlendState(nullptr, nullptr, 0xffffffff);
+            ctx->SetPredication(pred, FALSE);   // the rounds' draws are skipped when no sample passed
+        }
         // the operations (gpu_vm/tick/STATE.md): rounds of stage, write, progress; _OpState ping-pongs a round
         for (uint32_t round = 0; round < opRounds; round++) {
             clear_srv();
@@ -250,6 +297,7 @@ struct Gpu {
             ctx->Draw(cores, 0);
             oc ^= 1;
         }
+        if (hasAny) ctx->SetPredication(nullptr, FALSE);
         clear_srv();
         cur ^= 1;
     }
@@ -257,7 +305,7 @@ struct Gpu {
         std::vector<uint32_t> out((size_t)statePix * 8 * 4);
         for (int t = 0; t < 8; t++) {
             std::vector<uint32_t> v = read_tex(set[cur ^ 1][t]);
-            for (uint32_t p = 0; p < statePix; p++) memcpy(&out[((size_t)p * 8 + t) * 4], &v[((size_t)c * statePix + p) * 4], 16);
+            for (uint32_t p = 0; p < statePix; p++) memcpy(&out[((size_t)p * 8 + t) * 4], &v[((size_t)(c * g_lrows + p / spx) * spx + p % spx) * 4], 16);
         }
         return out;
     }
@@ -277,6 +325,7 @@ static void commit_constants(Gpu& gpu, uint32_t cores) {
 }
 // Both machines to the halt in passes of 61 bundles; false (and the differences printed) when they disagree
 static bool check_case(Gpu& gpu, const Case& cs, uint32_t seed, bool verbose) {
+    RAM_END = cs.mc ? RAM_MC : 2048 * 2048 * 16;
     Prepared pr = prepare(cs, seed);
     commit_constants(gpu, cs.cores);
     gvm_machine m = {};
@@ -291,7 +340,7 @@ static bool check_case(Gpu& gpu, const Case& cs, uint32_t seed, bool verbose) {
         for (int k = 1; k < 64; k++) rc[c].x[k] = pr.state[c][k];   // (a real program's sp)
     }
     m.cores = rc.data(); m.ncores = cs.cores;
-    const uint32_t T = 61;   // short passes: they end inside bundles and on a full write cache
+    const uint32_t T = cs.check_ticks;   // short passes: they end inside bundles and on a full write cache
     gpu.make(cs.cores, pr.ramImg, g_rom, pr.state);
     gpu.pass = {T, RAM_END, 1000, 0, 0, 1, ram_rows(), 0, cs.cores, {0, 0, 0}, {0}};
     // TIME is 1000 + the pass (both machines), core 0's external line on in passes [ext_from, ext_to)
@@ -304,10 +353,13 @@ static bool check_case(Gpu& gpu, const Case& cs, uint32_t seed, bool verbose) {
         gvm_commit(&m);
         if (!any) break;
     }
+    for (uint32_t c = 0; c < cs.cores && (cs.elf || cs.mc); c++)   // a real program's check ends at its first call to the host
+        if (rc[c].sr[GVM_SR_CAUSE] != 0 && (rc[c].sr[GVM_SR_CAUSE] != GVM_CAUSE_SYSCALL || (rc[c].x[12] == 93 && rc[c].x[5] != 0)))
+            printf("  %s: core %u ended by cause %x at %08x (r12 %u, r5 %u) on the reference\n", cs.name, c, rc[c].sr[GVM_SR_CAUSE], rc[c].sr[GVM_SR_EPC], rc[c].x[12], rc[c].x[5]);
     bool halted = false;
     int gpuPasses = 0;
     ULONGLONG checkStart = GetTickCount64();   // a check gives up after 60 s: every run stays short
-    for (int round = 0; round < 4000 && !halted && GetTickCount64() - checkStart < 60000; round++) {
+    for (int round = 0; round < 4000 && !halted && GetTickCount64() - checkStart < (env_int("GVM_CHECK_SECONDS") ? env_int("GVM_CHECK_SECONDS") : 60) * 1000ull; round++) {
         for (int k = 0; k < 50; k++) {
             gpu.pass.timeLo = 1000 + gpuPasses;
             gpu.pass.ext0 = gpu.pass.ext[0] = ext_on(gpuPasses) ? 1 : 0;
@@ -350,15 +402,37 @@ static bool check_case(Gpu& gpu, const Case& cs, uint32_t seed, bool verbose) {
 static ID3D11Query *g_qDis, *g_q0, *g_q1;
 // A timed case: millions of RISC-V instructions a second (its rv_per_iter), or gpu_vm ops when it has none
 static double time_case(Gpu& gpu, const Case& cs, uint32_t ticks, uint32_t passes) {
+    RAM_END = cs.mc ? RAM_MC : 2048 * 2048 * 16;
     Prepared pr = prepare(cs, 1);
     commit_constants(gpu, cs.cores);
     gpu.make(cs.cores, pr.ramImg, g_rom, pr.state);
     gpu.pass = {ticks, RAM_END, 1000, 0, 0, 1, ram_rows(), 0, cs.cores, {0, 0, 0}, {0}};
-    for (int k = 0; k < 20; k++) gpu.run_pass();
+    for (int k = 0; k < (env_int("GVM_ENDS") > 1 ? 0 : 20); k++) gpu.run_pass();
     int at = (g_fused && cs.bundles_fused > 0) || cs.ns ? 0 : 1;   // fused loops and real programs are counted in bundles (19.x), others in ops (19.y)
-    uint32_t o0 = gpu.core_state(0)[19 * 4 + at];
+    auto count = [&]() {   // core 0's bundles (or ops); many cores (Case::mc): every core's
+        uint32_t n = 0;
+        for (uint32_t c = 0; c < (cs.mc ? cs.cores : 1u); c++) n += gpu.core_state(c)[19 * 4 + at];
+        return n;
+    };
+    uint32_t o0 = count();
     ctx->Begin(g_qDis);
     ctx->End(g_q0);
+    if (env_int("GVM_ENDS")) {   // (not a timing: why core 0's passes end, and their bundles, from a readback after each pass)
+        uint32_t n[8] = {}, b[8] = {};
+        for (uint32_t k = 0; k < passes; k++) {
+            gpu.run_pass();
+            std::vector<uint32_t> st = gpu.core_state(0);
+            n[st[19 * 4 + 3] & 7]++; b[st[19 * 4 + 3] & 7] += st[19 * 4 + 2];
+            if (env_int("GVM_ENDS") > 1) {
+                uint32_t used = 0;
+                for (uint32_t j = 0; j < g_wcn; j++) used += st[(g_twc + j / 2) * 4 + (j & 1) * 2] != 0xffffffffu;
+                printf(" %u/%u/%u/%u", st[19 * 4 + 2], used, st[23 * 4], st[23 * 4 + 1]);
+            }
+        }
+        printf("  %s: passes by why they ended (bundles a pass):", cs.name);
+        for (int e = 0; e < 8; e++) if (n[e]) printf(" %d: %u (%u)", e, n[e], b[e] / n[e]);
+        printf("\n");
+    }
     for (uint32_t k = 0; k < passes; k++) gpu.run_pass();
     ctx->End(g_q1);
     ctx->End(g_qDis);
@@ -367,7 +441,7 @@ static double time_case(Gpu& gpu, const Case& cs, uint32_t ticks, uint32_t passe
     UINT64 t0, t1;
     while (ctx->GetData(g_q0, &t0, sizeof t0, 0) != S_OK) Sleep(1);
     while (ctx->GetData(g_q1, &t1, sizeof t1, 0) != S_OK) Sleep(1);
-    uint32_t o1 = gpu.core_state(0)[19 * 4 + at];
+    uint32_t o1 = count();
     gpu.release();
     double mops = (o1 - o0) / (double(t1 - t0) / dj.Frequency) / 1e6;
     double per = at == 0 ? cs.bundles_fused : cs.ops_per_iter;
@@ -375,11 +449,11 @@ static double time_case(Gpu& gpu, const Case& cs, uint32_t ticks, uint32_t passe
     if (cs.ns) return 1000.0 / mops;   // a real program: ns a bundle
     return cs.rv_per_iter > 0 ? mops / per * cs.rv_per_iter : mops;
 }
-struct Variant { std::string name, shader; std::vector<std::string> defs; Prog tick, commit, stg, wrt, prog; bool hasCommit, hasOps; uint32_t wcn = 128, texw = 2048, twc = 24, slots = 32, span = 272; };
+struct Variant { std::string name, shader; std::vector<std::string> defs; Prog tick, commit, stg, wrt, prog, any, tickW; bool hasCommit, hasOps, hasAny = false, uavTick = false, hasW = false; uint32_t wcn = 128, texw = 2048, twc = 24, slots = 32, span = 272, lrows = 1, wcn1 = 0; };
 static void use(Gpu& gpu, const Variant& v) {
     gpu.tick = v.tick; gpu.commit = v.commit; gpu.stg = v.stg; gpu.wrt = v.wrt; gpu.prog = v.prog;
-    gpu.hasCommit = v.hasCommit; gpu.hasOps = v.hasOps;
-    g_wcn = v.wcn; g_texw = v.texw; g_twc = v.twc;   // (the state's layout, the commit's points and RAM's width are the variant's)
+    gpu.hasCommit = v.hasCommit; gpu.hasOps = v.hasOps; gpu.uavTick = v.uavTick; gpu.hasW = v.hasW; gpu.tickW = v.tickW; gpu.hasAny = v.hasAny && !env_int("GVM_NOPRED"); gpu.any = v.any;
+    g_wcn = v.wcn; g_texw = v.texw; g_twc = v.twc; g_lrows = v.lrows; g_wcn1 = v.wcn1;   // (the state's layout, the commit's points and RAM's width are the variant's)
     gpu.opSlots = v.slots; gpu.opSpan = v.span; gpu.opRounds = g_op_rounds;
     g_romrows = 0; g_x17_paths = 0;   // (probe: the ROM in RAM's texture; x17 on the real programs' own paths)
     for (auto& d : v.defs) { if (d == "ROMROWS=1") g_romrows = 1; if (d == "X17PATHS=1") g_x17_paths = 1; }
@@ -395,13 +469,15 @@ static uint32_t step_size(const std::string& src, const std::vector<std::string>
     }
     return dflt;
 }
-static void step_sizes(const std::string& path, const std::vector<std::string>& defs, uint32_t& wcn, uint32_t& texw, uint32_t& twc, uint32_t& slots, uint32_t& span) {
+static void step_sizes(const std::string& path, const std::vector<std::string>& defs, uint32_t& wcn, uint32_t& texw, uint32_t& twc, uint32_t& slots, uint32_t& span, uint32_t& lrows, uint32_t& wcn1) {
     std::string src = slurp(path);
     wcn = step_size(src, defs, "WCN", 128);
     texw = step_size(src, defs, "RAM_W", 2048);
     twc = step_size(src, defs, "T_WC", 24);
     slots = step_size(src, defs, "OP_SLOTS", 32);
     span = step_size(src, defs, "OP_SPAN", 272);
+    lrows = step_size(src, defs, "LROWS", 1);
+    wcn1 = step_size(src, defs, "WCN1", 0);
 }
 static void build_variant(Variant& v) {
     std::vector<std::string> names, values;
@@ -414,11 +490,21 @@ static void build_variant(Variant& v) {
     for (size_t i = 0; i < names.size(); i++) defs.push_back({names[i].c_str(), values[i].c_str()});
     defs.push_back({nullptr, nullptr});
     const char* path = v.shader.c_str();
-    v.tick = program(path, "vert", "frag", defs);
+    v.uavTick = slurp(v.shader).find("fragu(") != std::string::npos;
+    v.tick = program(path, "vert", v.uavTick ? "fragu" : "frag", defs);
+    v.hasW = slurp(v.shader).find("#ifndef WORKER") != std::string::npos;
+    if (v.hasW) {   // the workers' tick: the same with WORKER=1
+        std::vector<D3D_SHADER_MACRO> dw(defs.begin(), defs.end() - 1);
+        dw.push_back({"WORKER", "1"});
+        dw.push_back({nullptr, nullptr});
+        v.tickW = program(path, "vert", "frag", dw);
+    }
     std::string src = slurp(v.shader);   // a step without stores has no commit, one without the region no operations
     v.hasCommit = src.find("commit_vert") != std::string::npos;
     v.hasOps = src.find("op_stage_vert") != std::string::npos;
     if (v.hasCommit) v.commit = program(path, "commit_vert", "commit_frag", defs);
+    v.hasAny = src.find("op_any_vert") != std::string::npos;
+    if (v.hasAny) v.any = program(path, "op_any_vert", "op_any_frag", defs);
     if (v.hasOps) {
         v.stg = program(path, "op_stage_vert", "op_stage_frag", defs);
         v.wrt = program(path, "op_write_vert", "op_write_frag", defs);
@@ -444,6 +530,7 @@ int main(int argc, char** argv) {
         else if (a == "--rounds" && i + 1 < argc) rounds = (uint32_t)atoi(argv[++i]);
         else if (a == "--op-rounds" && i + 1 < argc) g_op_rounds = (uint32_t)atoi(argv[++i]);   // the operations' rounds a pass
         else if (a == "--seed" && i + 1 < argc) seed = (uint32_t)atoi(argv[++i]);
+        else if (a == "--cores" && i + 1 < argc) g_mc_cores = (uint32_t)atoi(argv[++i]);   // the many-core cases' cores
         else if (a == "-D" && i + 1 < argc) defStore.push_back(argv[++i]);
         else {
             printf("gvmbench [--warp] [--fused 1|2] [--shader F [-D NAME=V]... | --variants FILE] [--case A,B] [--ticks N] [--passes N] [--rounds N] [--seed N]\n"
@@ -484,7 +571,7 @@ int main(int argc, char** argv) {
     QueryPerformanceCounter(&f0);
     for (Variant& v : vars) {
         if (v.shader.empty()) v.shader = dflt;
-        step_sizes(v.shader, v.defs, v.wcn, v.texw, v.twc, v.slots, v.span);
+        step_sizes(v.shader, v.defs, v.wcn, v.texw, v.twc, v.slots, v.span, v.lrows, v.wcn1);
         build_variant(v);
     }
     QueryPerformanceCounter(&f1);

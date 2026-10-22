@@ -1,0 +1,5 @@
+# x19i: the branch after the ops by reading its registers again after the ops' writes (BAO=2), against forwarding (BAO=1)
+x18       gpu_vm/tick/steps/x18.hlsl
+bao1      gpu_vm/tick/steps/x19v.hlsl -D BAO=1
+bao2      gpu_vm/tick/steps/x19v.hlsl -D BAO=2
+bao2tc2   gpu_vm/tick/steps/x19v.hlsl -D BAO=2 -D TC=2
