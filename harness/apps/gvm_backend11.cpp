@@ -156,6 +156,11 @@ public:
             !makeTex(ops_[1], kMaxCores, 1, nullptr, err) || !makeTex(zone_, kRamW, 3, nullptr, err) || !makeTex(ctl_, 256, 1, nullptr, err) ||
             !makeTex(info_, 8, 1, nullptr, err))
             return false;
+        {
+            std::vector<uint32_t> none((size_t)spix_ * 4, 0);
+            for (size_t i = 0; i < none.size(); i += 2) none[i] = 0xffffffffu;   // (an empty write cache entry: word 0xffffffff)
+            if (!makeTex(none_, spix_, 1, none.data(), err)) return false;
+        }
         std::vector<uint32_t> state((size_t)ntex_ * 4, 0);
         state[16 * 4 + 0] = entry;          // pc
         state[16 * 4 + 1] = GVM_ST_S;       // supervisor
@@ -181,6 +186,7 @@ public:
         pass_ = {opt.gvmBudget ? opt.gvmBudget : 8192u, ramEnd_, 0, 0, 0, 0, rows_, 0, 1, {0, 0, 0}, {0}};
         const UINT controlTexels = kControlTexels;
         if (!infoRb_.init(dev, DXGI_FORMAT_R32G32B32A32_UINT, 16, 8, 1, 3, err) ||
+            !mboxRb_.init(dev, DXGI_FORMAT_R32G32B32A32_UINT, 16, 0x800, 1, 3, err) ||
             !controlRb_.init(dev, DXGI_FORMAT_R32G32B32A32_UINT, 16, controlTexels, 1, 3, err) ||
             !netRb_.init(dev, DXGI_FORMAT_R32G32B32A32_UINT, 16, kNetRead, 1, 3, err))
             return false;
@@ -274,18 +280,20 @@ public:
             ctx->CopySubresourceRegion(info_.t.Get(), 0, t, 0, 0, set_[cur_ ^ 1][t].t.Get(), 0, &b);
         }
         infoRb_.request(ctx, info_.t.Get(), 0, 0, tag);
+        mboxRb_.request(ctx, ram_.t.Get(), 0, (GVM_MBOX >> 4) / kRamW, tag);
         uint32_t ct = 0x100000u, nt = 0x16b800u;
         controlRb_.request(ctx, ram_.t.Get(), ct % kRamW, ct / kRamW, tag);
         netRb_.request(ctx, ram_.t.Get(), nt % kRamW, nt / kRamW, tag);
         ctx->Flush();
         return true;
     }
-    bool rowFull() const override { return infoRb_.full() || controlRb_.full() || netRb_.full(); }
+    bool rowFull() const override { return infoRb_.full() || controlRb_.full() || netRb_.full() || mboxRb_.full(); }
     size_t rowPending() const override { return infoRb_.pending(); }
     bool popRow(std::vector<uint8_t>& out, uint64_t& tag) override {
-        std::vector<uint8_t> info, control, net;
-        uint64_t t1, t2;
-        if (!infoRb_.pop(gpu_.ctx.Get(), info, tag) || !controlRb_.pop(gpu_.ctx.Get(), control, t1) || !netRb_.pop(gpu_.ctx.Get(), net, t2))
+        std::vector<uint8_t> info, control, net, mbox;
+        uint64_t t1, t2, t4;
+        if (!infoRb_.pop(gpu_.ctx.Get(), info, tag) || !controlRb_.pop(gpu_.ctx.Get(), control, t1) || !netRb_.pop(gpu_.ctx.Get(), net, t2) ||
+            !mboxRb_.pop(gpu_.ctx.Get(), mbox, t4))
             return false;
         // the RISC-V machine's row 0 as rvc_harness reads it: the instructions (core 0's ops), the commits (passes), the
         // pc; no UART (texel 11's last word 0xffffffff): the console is the network row's words, which both machines have
@@ -295,6 +303,7 @@ public:
         w[28 * 4 + 1] = s[3 * 4 + 1];        // OPS (texel 19.y)
         w[28 * 4 + 2] = (uint32_t)passesDone_;
         w[36 * 4 + 3] = s[0 * 4 + 0];        // pc
+        w[40 * 4 + 2] = s[3 * 4 + 3];        // why its last pass ended (texel 19.w), as the RISC-V machine's last stall
         w[11 * 4 + 3] = 0xffffffffu;
         memcpy(out.data() + 64 * 16, control.data(), (size_t)kControlTexels * 16);
         memcpy(out.data() + (64 + kControlTexels) * 16, net.data(), (size_t)kNetRead * 16);
@@ -310,6 +319,7 @@ public:
         const uint32_t* geo = (const uint32_t*)control.data() + 0x3d * 4;
         uint32_t want = (geo[0] & 1) || geo[2] < 3 || geo[2] > 6 ? 0 : (std::min)(geo[1], kMaxCores - 1);
         if (want != workers_) setWorkers(want);
+        if (workers_) freeze((const uint32_t*)mbox.data(), (const uint32_t*)net.data() + (kCoreStatsAt + 64) * 4);
         return true;
     }
     bool readState(UINT, UINT, std::vector<uint8_t>&) override { return false; }
@@ -440,9 +450,9 @@ private:
     void runPass(bool timed) {
         ID3D11DeviceContext* ctx = gpu_.ctx.Get();
         pass_.timeLo = (uint32_t)time_, pass_.timeHi = (uint32_t)(time_ >> 32);
-        pass_.ncores = ncores_;
+        pass_.ncores = top_;
         ctx->UpdateSubresource(cb_.Get(), 0, nullptr, &pass_, 0, 0);
-        uint32_t cdata[4] = {0, ncores_, 0, 0};
+        uint32_t cdata[4] = {0, top_, 0, 0};
         for (uint32_t c = 0; c < 4; c++) {
             cdata[0] = c;
             ctx->UpdateSubresource(ccb_[c].Get(), 0, nullptr, cdata, 0, 0);
@@ -460,11 +470,13 @@ private:
         for (int t = 0; t < 8; t++) rt[t] = set_[cur_][t].rtv.Get();
         ctx->OMSetRenderTargets(8, rt, nullptr);
         bindTick(cur_ ^ 1, true, false);
-        viewport(spix_, ncores_);
         ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         ctx->VSSetShader(tick_.vs.Get(), nullptr, 0);
         ctx->PSSetShader(tick_.ps.Get(), nullptr, 0);
-        ctx->Draw(3, 0);
+        for (auto& run : runs_) {   // (the triangle over each run's rows: a pixel's row is its core, the viewport's offset kept)
+            viewport(spix_, run.second - run.first, run.first);
+            ctx->Draw(3, 0);
+        }
         if (timed) ctx->End(tsQuery_[1].Get());
         clearSrv();
         ctx->OMSetRenderTargets(1, ram_.rtv.GetAddressOf(), nullptr);
@@ -477,33 +489,33 @@ private:
             ID3D11Buffer* b2[2] = {cb_.Get(), ccb_[c].Get()};
             ctx->VSSetConstantBuffers(0, 2, b2);
             ctx->OMSetBlendState(mask_[c].Get(), nullptr, 0xffffffff);
-            ctx->Draw(ncores_ * wcn_, 0);
+            ctx->Draw(top_ * wcn_, 0);   // (a frozen row's write cache is empty: its points draw nothing)
         }
         ctx->OMSetBlendState(nullptr, nullptr, 0xffffffff);
         for (uint32_t round = 0; round < 2; round++) {
             clearSrv();
             ctx->OMSetRenderTargets(1, stageTex_.rtv.GetAddressOf(), nullptr);
             bindTick(cur_, true, false);
-            viewport(opSpan_, ncores_ * opSlots_);
+            viewport(opSpan_, top_ * opSlots_);
             ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             ctx->VSSetShader(stage_.vs.Get(), nullptr, 0);
             ctx->PSSetShader(stage_.ps.Get(), nullptr, 0);
-            ctx->DrawInstanced(6, ncores_ * opSlots_, 0, 0);
+            ctx->DrawInstanced(6, top_ * opSlots_, 0, 0);
             clearSrv();
             ctx->OMSetRenderTargets(1, ram_.rtv.GetAddressOf(), nullptr);
             bindTick(cur_, false, true);
             viewport(kRamW, rows_);
             ctx->VSSetShader(write_.vs.Get(), nullptr, 0);
             ctx->PSSetShader(write_.ps.Get(), nullptr, 0);
-            ctx->DrawInstanced(12, ncores_ * opSlots_, 0, 0);
+            ctx->DrawInstanced(12, top_ * opSlots_, 0, 0);
             clearSrv();
             ctx->OMSetRenderTargets(1, ops_[oc_ ^ 1].rtv.GetAddressOf(), nullptr);
             bindTick(cur_, false, false);
-            viewport(ncores_, 1);
+            viewport(top_, 1);
             ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_POINTLIST);
             ctx->VSSetShader(progress_.vs.Get(), nullptr, 0);
             ctx->PSSetShader(progress_.ps.Get(), nullptr, 0);
-            ctx->Draw(ncores_, 0);
+            ctx->Draw(top_, 0);
             oc_ ^= 1;
         }
         clearSrv();
@@ -536,6 +548,58 @@ private:
         fprintf(stderr, "[harness] gpu_vm: %u worker cores (the kernel's layout)\n", n);
         workers_ = n;
         ncores_ = 1 + n;
+        for (uint32_t c = 0; c < kMaxCores; c++) frozen_[c] = false, quiet_[c] = 0;
+        makeRuns();
+    }
+    // The runs of rows the tick and the commit draw: core 0 and every worker that is not frozen
+    void makeRuns() {
+        runs_.clear();
+        for (uint32_t c = 0; c < ncores_; c++) {
+            if (c && frozen_[c]) continue;
+            if (!runs_.empty() && runs_.back().second == c) runs_.back().second = c + 1;
+            else runs_.push_back({c, c + 1});
+        }
+        top_ = runs_.back().second;
+        static const bool log = getenv("GVM_FREEZE_LOG") != nullptr;
+        if (log) {
+            uint32_t drawn = 0;
+            for (auto& r : runs_) drawn += r.second - r.first;
+            fprintf(stderr, "[gvm] rows drawn %u in %zu runs, to %u\n", drawn, runs_.size(), top_);
+        }
+    }
+    // Workers with nothing to do are not drawn (as the RISC-V tick's mc_idle: docs/machine/multicore.md, "Workers with
+    // nothing to do"): one parked in the firmware, or asleep (its last pass ended in a user's wait: mcw_loop's), whose
+    // start texel and job word have been as they are for kQuiet readbacks, is frozen: its row is the same state in both
+    // sets (copied from the set the last pass drew, so it goes on as it was whichever it reads) and neither the tick
+    // nor the commit draws it. A change to its start texel or its job word, which wakes it on the RISC-V machine, thaws
+    // it, as does a count that says it runs (the readback is some frames behind what is frozen). `mbox` is RAM from
+    // the mailboxes (0x00c00000, 0x800 texels), `bits` MC_STATS_ALL's texels of which run and which are asleep.
+    static const uint32_t kQuiet = 24;
+    void freeze(const uint32_t* mbox, const uint32_t* bits) {
+        bool changed = false;
+        for (uint32_t k = 1; k <= workers_; k++) {
+            const uint32_t* start = mbox + 4 * k;
+            uint32_t job = mbox[4 * (0x400 + 4 * k)];
+            if (memcmp(start, seenStart_[k], 16) != 0 || job != seenJob_[k]) {
+                memcpy(seenStart_[k], start, 16);
+                seenJob_[k] = job;
+                quiet_[k] = 0;
+            } else if (quiet_[k] < kQuiet) quiet_[k]++;
+            bool runs = (bits[4 * (k / 32)] >> (k % 32)) & 1, asleep = (bits[4 * (k / 32) + 1] >> (k % 32)) & 1;
+            bool idle = !runs || asleep, freeze = idle && quiet_[k] >= kQuiet;
+            if (freeze == frozen_[k]) continue;
+            if (freeze) {   // its row as the last pass left it, into the set the next pass draws, and its write cache empty
+                UINT wc0 = tWc_ / 8;   // (the write cache's first column: texels from T_WC, a multiple of 8)
+                D3D11_BOX b = {0, k, 0, spix_, k + 1, 1}, nb = {wc0, 0, 0, spix_, 1, 1};
+                for (UINT t = 0; t < 8; t++) {
+                    gpu_.ctx->CopySubresourceRegion(set_[cur_][t].t.Get(), 0, 0, k, 0, set_[cur_ ^ 1][t].t.Get(), 0, &b);
+                    for (int w = 0; w < 2; w++) gpu_.ctx->CopySubresourceRegion(set_[w][t].t.Get(), 0, wc0, k, 0, none_.t.Get(), 0, &nb);
+                }
+            }
+            frozen_[k] = freeze;
+            changed = true;
+        }
+        if (changed) makeRuns();
     }
 
     // ---- the devices
@@ -699,12 +763,15 @@ private:
     Gpu gpu_;
     uint32_t ramEnd_ = 0, rows_ = 0, romRows_ = 1, wcn_ = 514, tWc_ = 40, opSlots_ = 32, opSpan_ = 272, ntex_ = 297, spix_ = 38;
     Prog tick_, commit_, stage_, write_, progress_;
-    Tex ram_, rom_, stageTex_, ops_[2], set_[2][8], zone_, ctl_, info_;
+    Tex ram_, rom_, stageTex_, ops_[2], set_[2][8], zone_, ctl_, info_, none_;
     ComPtr<ID3D11Buffer> cb_, ccb_[4];
     ComPtr<ID3D11BlendState> mask_[4];
     PassParams pass_{};
     int cur_ = 0, oc_ = 0;
-    uint32_t ncores_ = 1, workers_ = 0;
+    uint32_t ncores_ = 1, workers_ = 0, top_ = 1;   // (top_: the rows below the highest one drawn: the passes' cores)
+    std::vector<std::pair<uint32_t, uint32_t>> runs_{{0u, 1u}};   // rows [first, end) drawn
+    bool frozen_[kMaxCores] = {};
+    uint32_t quiet_[kMaxCores] = {}, seenStart_[kMaxCores][4] = {}, seenJob_[kMaxCores] = {};
     uint64_t time_ = 0, passes_ = 0, passesDone_ = 0;
     bool devices_ = false, deliver_ = false, deliverNet_ = false;
     std::vector<GpuPass> devPasses_;
@@ -716,7 +783,7 @@ private:
     ComPtr<ID3D11BlendState> gpuBlend_[4];
     ComPtr<ID3D11Texture2D> soundTex_;
     ComPtr<ID3D11RenderTargetView> soundRtv_;
-    RegionReadback sound_, infoRb_, controlRb_, netRb_;
+    RegionReadback sound_, infoRb_, controlRb_, netRb_, mboxRb_;
     std::vector<uint8_t> lastSound_;
     std::deque<uint64_t> soundTags_;
     ComPtr<ID3D11ShaderResourceView> hostData_, netData_;
