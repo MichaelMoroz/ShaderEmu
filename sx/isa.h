@@ -12,8 +12,8 @@
 // as they were when this run of the bundle began (before its ops; after a pass that ended inside it, where it
 // goes on).
 #define SX_N(w) ((w) & 3u)
-#define SX_LONG(w) (((w) >> 2) & 1u)        // word 2 is a long immediate
-#define SX_LONG_OP1(w) (((w) >> 3) & 1u)    // of op 1 (else op 0)
+#define SX_LONG0(w) (((w) >> 2) & 1u)       // word 2 is op 0's long immediate
+#define SX_LONG1(w) (((w) >> 3) & 1u)       // op 1's (both bits set: illegal)
 #define SX_PATH(w) (((w) >> 4) & 7u)
 #define SX_CC(w) (((w) >> 7) & 15u)
 #define SX_SUB(w) (((w) >> 11) & 7u)         // cc 0
@@ -22,15 +22,21 @@
 #define SX_CRB(w) (((w) >> 17) & 63u)        // cc 1-8: the other register; 9-14: imm6
 #define SX_OFF9(w) ((int)(w) >> 23)          // in bundles (a branch: +-4 KB)
 #define SX_OFF18(w) ((int)(w) >> 14)         // in bundles (j, call: +-2 MB)
+#define SX_CIMM12(w) ((int)(w) >> 20)        // cc 0, sub add: the step added to rs
+#define SX_CIMM6(w) ((int)((w) << 9) >> 26)  // cc 9-15: the rb field as a signed imm6
 // The paths: which ops a bundle has, so which body of the tick runs it. "Lite" is the integer functions 0-10;
 // "float lite" the float functions 0-7 (sums, products, min, max).
 #define SX_PATH_GENERAL 0u                   // anything: the general step
+// Memory ops here are loads and stores of bytes, halves and words. In paths 3 and 5 op 1 reads no register op 0
+// writes (the assembler opens a bundle for it), so both ops' addresses and values are known when the bundle starts.
+// An empty slot is a word of 0. A bundle whose control word is jr, callr, call or eret is the general step's (path 0). (Renumbered 22 October 2026, step x14: steps x1-x13 ran the numbering before.)
 #define SX_PATH_INT 1u                       // op 0 an integer op 0-23, op 1 lite
-#define SX_PATH_MEM 2u                       // op 0 a load or store (byte, half, word), op 1 lite
-#define SX_PATH_MEM2 3u                      // both loads or stores
-#define SX_PATH_FLOAT 4u                     // op 0 a float op, op 1 lite
-#define SX_PATH_FLOAT2 5u                    // op 0 a float op, op 1 float lite
-#define SX_PATH_MEMF 6u                      // op 0 a load or store, op 1 float lite
+#define SX_PATH_LOAD 2u                      // op 0 a load, op 1 lite
+#define SX_PATH_LOAD2 3u                     // both loads
+#define SX_PATH_STORE 4u                     // op 0 a store, op 1 lite
+#define SX_PATH_MEM2 5u                      // two memory ops, a store among them
+#define SX_PATH_FLOAT 6u                     // op 0 a float op, op 1 lite or float lite
+#define SX_PATH_MEMF 7u                      // op 0 a memory op, op 1 float lite
 #define SX_CC_SPECIAL 0u
 #define SX_SUB_ILLEGAL 0u
 #define SX_SUB_NONE 1u
@@ -39,6 +45,11 @@
 #define SX_SUB_ERET 4u
 #define SX_SUB_J 5u
 #define SX_SUB_CALL 6u
+// The control word's add (fused, 22 October 2026): rs += imm12 (SX_CRS, SX_CIMM12) after the bundle's ops, from rs as
+// the bundle found it, and the bundle falls through. A pointer's post-increment, a counter, a stack's adjustment in a
+// bundle that does not branch, for no op slot. An op of the same bundle that writes rs: undefined (the add wins). rs 0
+// is illegal (the tick does not look: it trusts the assembler).
+#define SX_SUB_ADD 7u
 #define SX_CC_BEQ 1u
 #define SX_CC_BNE 2u
 #define SX_CC_BLT 3u
@@ -53,6 +64,10 @@
 #define SX_CC_BGEI 12u
 #define SX_CC_BLTUI 13u
 #define SX_CC_BGEUI 14u
+// ra += imm6 (the rb field, signed), from ra as the bundle found it, after the ops; taken when the sum is not 0. A
+// counted loop's decrement and branch in one (bdnz): `addi ra, ra, -1; bnei ra, 0` of the new value. An op of the
+// same bundle that writes ra: undefined (the add wins). ra 0 is illegal.
+#define SX_CC_ADDBNZ 15u
 // the control word of a bundle that only falls through
 #define SX_CTRL_NONE (SX_SUB_NONE << 11)
 

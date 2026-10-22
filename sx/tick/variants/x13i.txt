@@ -1,0 +1,11 @@
+# x13i: the fast loop's fixed work per bundle (decode, bookkeeping, branch condition, the alu) and its loops
+x13             sx/tick/steps/x13.hlsl
+i_alu2          sx/tick/steps/x13i.hlsl -D ALU2=1
+i_fast          sx/tick/steps/x13i.hlsl -D FAST=1
+i_fastalu       sx/tick/steps/x13i.hlsl -D FAST=1 -D ALU2=1
+i_dec           sx/tick/steps/x13i.hlsl -D FAST=1 -D COND2=1 -D DSINK=1 -D IMM2=1
+i_all           sx/tick/steps/x13i.hlsl -D FAST=1 -D ALU2=1 -D COND2=1 -D DSINK=1 -D IMM2=1
+i_il            sx/tick/steps/x13i.hlsl -D FAST=1 -D INT_LOOP=1
+i_ilall         sx/tick/steps/x13i.hlsl -D FAST=1 -D ALU2=1 -D COND2=1 -D DSINK=1 -D IMM2=1 -D INT_LOOP=1
+i_ilunr         sx/tick/steps/x13i.hlsl -D FAST=1 -D ALU2=1 -D COND2=1 -D DSINK=1 -D IMM2=1 -D INT_LOOP=1 -D UNROLL2=1
+i_merge         sx/tick/steps/x13i.hlsl -D FAST=1 -D ALU2=1 -D COND2=1 -D DSINK=1 -D IMM2=1 -D MERGE=1

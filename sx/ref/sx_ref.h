@@ -506,9 +506,9 @@ int sx_bundle(sx_machine *m, sx_core *c) {
     c->bundles_run++;
     if (n == 3) { sx__trap(c, SX_CAUSE_ILLEGAL, base | 12, ctl); return SX_END_BUDGET; }
     // the branch's registers as this run of the bundle begins
-    uint32_t ca0 = c->x[SX_CRA(ctl)], cb0 = c->x[SX_CRB(ctl)];
+    uint32_t ca0 = c->x[SX_CRA(ctl)], cb0 = c->x[SX_CRB(ctl)], cs0 = c->x[SX_CRS(ctl)];
     for (; s < n; s++) {
-        int lu = 0, r = sx__op(m, c, base, s, t, n, SX_LONG(ctl) && SX_LONG_OP1(ctl) == s, &lu, &end);
+        int lu = 0, r = sx__op(m, c, base, s, t, n, ((ctl >> (2 + s)) & 1) != 0, &lu, &end);
         if (r == SX__TRAPPED) return SX_END_BUDGET;
         if (r == SX__END) {
             // the pass ends inside the bundle: pc is where it goes on (past n: the control word)
@@ -536,11 +536,17 @@ int sx_bundle(sx_machine *m, sx_core *c) {
         }
         case SX_SUB_J: next = base + (uint32_t)SX_OFF18(ctl) * 16; break;
         case SX_SUB_CALL: c->x[1] = base + 16; next = base + (uint32_t)SX_OFF18(ctl) * 16; break;
+        case SX_SUB_ADD:   // after the ops: it wins; r0 is illegal
+            if (rs == 0) { sx__trap(c, SX_CAUSE_ILLEGAL, base | 12, ctl); return SX_END_BUDGET; }
+            sx__set(c, rs, cs0 + (uint32_t)SX_CIMM12(ctl));
+            break;
         default: sx__trap(c, SX_CAUSE_ILLEGAL, base | 12, ctl); return SX_END_BUDGET;
         }
-    } else if (cc == 15) {
-        sx__trap(c, SX_CAUSE_ILLEGAL, base | 12, ctl);
-        return SX_END_BUDGET;
+    } else if (cc == SX_CC_ADDBNZ) {   // ra += imm6 after the ops (it wins); taken when the sum is not 0
+        uint32_t v = ca0 + (uint32_t)SX_CIMM6(ctl);
+        if (SX_CRA(ctl) == 0) { sx__trap(c, SX_CAUSE_ILLEGAL, base | 12, ctl); return SX_END_BUDGET; }   // r0: illegal
+        sx__set(c, SX_CRA(ctl), v);
+        if (v != 0) next = base + (uint32_t)SX_OFF9(ctl) * 16;
     } else {
         uint32_t ra = SX_CRA(ctl), bf = SX_CRB(ctl);
         (void)ra;

@@ -1,5 +1,8 @@
 # SX, the machine's own instruction set (draft, 21 October 2026)
 
+Renamed gpu_vm on 22 October 2026: the shader machine's own virtual machine. The files and names here
+still say SX until the rename is made.
+
 A new instruction set for the shader machine, designed for what an iteration of the tick costs, not
 after RISC-V. `isa.h` is the encoding. Nothing is built on it yet; this is the design to build.
 

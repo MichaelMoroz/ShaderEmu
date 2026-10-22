@@ -3,6 +3,7 @@
 #pragma once
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <string>
@@ -15,6 +16,19 @@ static const uint32_t RAM_ROWS = 1536, RAM_END = RAM_ROWS * 2048 * 16, ROM_ROWS 
 static const uint32_t DATA = SX_RAM + 0x100000;   // a case's data
 static uint32_t g_wcn = 128;
 static int g_loop_n = 3000000;   // a timed loop's iterations (a check runs a few thousand)
+// The timed loops with the fused control words (sx/isa.h): 1 addbnz, 2 addbnz and the control word's add; SX_FUSED=N
+// in the environment, or sxbench --fused N. 0, every loop is as it was. The score stays the RISC-V loop's
+// instructions; the loops are counted in bundles then (a loop of addbnz alone has no ops).
+static int env_int(const char* name) {
+#ifdef _MSC_VER
+    char* v = nullptr; size_t len = 0;
+    if (_dupenv_s(&v, &len, name) || !v) return 0;
+    int r = atoi(v); free(v); return r;
+#else
+    const char* v = getenv(name); return v ? atoi(v) : 0;
+#endif
+}
+static int g_fused = env_int("SX_FUSED");
 
 struct Case {
     const char* name;
@@ -24,6 +38,8 @@ struct Case {
     double ops_per_iter = 0;   // for a timed case: SX ops an iteration of its loop
     double rv_per_iter = 0;    // and the RISC-V instructions isaloops.c spends on the same iteration
     double tol = 0;            // registers that may differ by this much, relative (the card's special functions)
+    double bundles_fused = 0;  // a timed case under g_fused: bundles an iteration of its loop
+    bool named = false;        // run only when --case names it (the fused ops: a tick without them is not wrong)
 };
 
 // ---- Random programs: the fuzzer's ops (registers r5-r28 carry values; r29 a base for memory)
@@ -103,6 +119,13 @@ static void fuzz_mem(SxAsm& a, Rng& g, int n, uint32_t window) {   // r29 is the
     }
 }
 
+// a timed loop's count in r5, and its end: `addi r5, -1; bnei r5, 0` (the branch sees r5 as the bundle found it: n + 1
+// iterations), or fused one addbnz (the sum: n + 1 iterations from n + 1)
+static int32_t loop_count(int n) { return g_fused ? n + 1 : n; }
+static void loop_end(SxAsm& a, int top) {
+    if (g_fused) a.addbnz(5, -1, top);
+    else { a.addi(5, 5, -1); a.bnei(5, 0, top); }
+}
 static std::vector<Case> cases() {
     std::vector<Case> v;
     v.push_back({"int", 1, false, [](std::vector<SxAsm>& p, auto& data, uint32_t seed) {
@@ -343,6 +366,73 @@ static std::vector<Case> cases() {
         a.lw(9, 20, 0); a.op(SX_I_ADD, 30, 30, 9);
         a.halt();
     }});
+    for (int adds = 0; adds < 2; adds++) v.push_back({adds ? "fused" : "addbnz", 1, false, [adds](std::vector<SxAsm>& p, auto& data, uint32_t seed) {
+        // the fused control words (sx/isa.h): the control word's add (rs += imm12 after the ops; "fused" only, an
+        // addi in "addbnz") beside integer, memory and float ops, addbnz both ways on random values, counted loops of
+        // loads and stores through bumped pointers, and stores through one past the write cache (passes end inside)
+        Rng g{seed * 6700417 + 13};
+        for (uint32_t k = 0; k < 2048; k++) data.push_back({DATA + 4 * k, g.next()});
+        SxAsm& a = p[0];
+        auto bump = [&](uint32_t r, int32_t i) { if (adds) a.bump(r, i); else a.addi(r, r, i); };
+        for (int round = 0; round < 30; round++) {
+            seed_regs(a, g, round & 1);
+            a.li(29, (int32_t)DATA); a.li(30, (int32_t)(DATA + 4 * g.below(1024)));
+            for (int i = 0; i < 40; i++) {
+                switch (g.below(8)) {
+                case 0: a.op(g.below(SX_I_COMMON_LAST + 1), rreg(g), rreg(g), rreg(g)); break;
+                case 1: a.opi(g.below(SX_I_SRA + 1), rreg(g), rreg(g), rimm(g)); break;
+                case 2: a.lw(rreg(g), 30, 4 * (int32_t)g.below(64)); break;
+                case 3: {   // bytes, halves, words, aligned
+                    static const uint32_t wds[] = {SX_W_B, SX_W_H, SX_W_W, SX_W_BU, SX_W_HU};
+                    uint32_t wd = wds[g.below(5)], by = wd == SX_W_W ? 4 : (wd & 1) ? 2 : 1;
+                    a.ld(wd, rreg(g), 29, (int32_t)(g.below(4000) & ~(by - 1)));
+                    break;
+                }
+                case 4: a.sw(rreg(g), 30, 4 * (int32_t)g.below(64)); break;
+                case 5: a.fop(g.below(SX_F_MAX + 1), rreg(g), rreg(g), rreg(g), rreg(g)); break;
+                case 6: {   // addbnz forward, taken or not: the register sometimes made -imm
+                    uint32_t r = rreg(g);
+                    int32_t im = (int32_t)g.below(64) - 32;
+                    if (g.below(2)) a.li(r, -im + (int32_t)g.below(3) - 1);
+                    int skip = a.label();
+                    a.addbnz(r, im, skip);
+                    a.addi(20, 20, 1); a.opi(SX_I_XOR, 21, 21, i);
+                    a.bind(skip);
+                    break;
+                }
+                default: {   // the control word's add: a pointer, a counter, r0 (an addi: the add has no r0)
+                    uint32_t r = g.below(3) == 0 ? 30 : g.below(10) == 0 ? 0 : rreg(g);
+                    bump(r, r == 30 ? 4 * ((int32_t)g.below(5) - 2) : rimm(g) % 2048);
+                    break;
+                }
+                }
+            }
+            a.li(30, (int32_t)DATA);   // (r30 back in the window)
+        }
+        // a counted loop: sum and copy through two bumped pointers, by addbnz -1 and -3
+        a.li(30, (int32_t)DATA); a.li(31, (int32_t)(DATA + 0x2000)); a.li(32, 37); a.li(21, 0);
+        int l1 = a.here();
+        a.lw(6, 30, 0); a.add(21, 21, 6); bump(30, 4);
+        a.sw(21, 31, 0); a.opi(SX_I_XOR, 22, 22, 6); bump(31, 4);
+        a.addbnz(32, -1, l1);
+        a.li(32, 3 * 25);
+        int l2 = a.here();
+        a.lw(7, 30, 0); a.lw(8, 30, 4); bump(30, 8);
+        a.add(23, 23, 7); a.sub(24, 24, 8);
+        a.addbnz(32, -3, l2);
+        // stores through a bumped pointer, two a bundle and one, past the write cache
+        a.li(33, (int32_t)(DATA + 0x10000)); a.li(34, 1500); a.li(6, 0);
+        int l3 = a.here();
+        a.sw(6, 33, 0); a.sw(34, 33, 4); bump(33, 8);
+        a.addi(6, 6, 3); a.st(SX_W_B, 6, 33, 0x4000);
+        a.addbnz(34, -1, l3);
+        a.li(34, 700);
+        int l4 = a.here();
+        a.sw(34, 33, 0); bump(33, 4);
+        a.addbnz(34, -1, l4);   // (a bundle of no ops)
+        a.halt();
+    }});
+    v[v.size() - 2].named = v[v.size() - 1].named = true;
     v.push_back({"cores", 4, false, [](std::vector<SxAsm>& p, auto& data, uint32_t seed) {
         // four cores: each fills a region of its own, and all store to one word (the highest core's lands)
         for (uint32_t c = 0; c < 4; c++) {
@@ -361,107 +451,100 @@ static std::vector<Case> cases() {
     // loop's instructions (rv_per_iter), the lean tick's measure
     v.push_back({"arith", 1, true, [](std::vector<SxAsm>& p, auto& data, uint32_t) {
         SxAsm& a = p[0];
-        a.li(5, g_loop_n);
+        a.li(5, loop_count(g_loop_n));
         int top = a.here();
         a.addi(6, 6, 1); a.op(SX_I_XOR, 7, 7, 6); a.add(8, 8, 7);
         a.opi(SX_I_SLL, 9, 8, 3); a.sub(10, 9, 6); a.op(SX_I_OR, 11, 10, 7);
         a.opi(SX_I_AND, 6, 6, 0x7ff); a.opi(SX_I_SRL, 7, 11, 2); a.add(8, 8, 10);
         a.opi(SX_I_XOR, 9, 9, 0x55); a.op(SX_I_SLTU, 10, 8, 9); a.add(11, 11, 10);
         a.opi(SX_I_SLL, 6, 6, 1); a.opi(SX_I_SRA, 7, 7, 1); a.op(SX_I_AND, 8, 8, 11);
-        a.addi(5, 5, -1);
-        a.bnei(5, 0, top);
+        loop_end(a, top);
         a.halt();
-    }, 16, 17});
+    }, 16, 17, 0, 8});
     v.push_back({"loads", 1, true, [](std::vector<SxAsm>& p, auto& data, uint32_t) {
         for (uint32_t k = 0; k < 64; k++) data.push_back({DATA + 4 * k, k * 7 + 1});
         SxAsm& a = p[0];
-        a.li(5, g_loop_n); a.li(4, (int32_t)DATA);
+        a.li(5, loop_count(g_loop_n)); a.li(4, (int32_t)DATA);
         int top = a.here();
         for (int i = 0; i < 14; i++) a.lw(6 + i % 6, 4, 4 * i);
-        a.addi(5, 5, -1);
-        a.bnei(5, 0, top);
+        loop_end(a, top);
         a.halt();
-    }, 15, 16});
+    }, 15, 16, 0, 7});
     v.push_back({"stores", 1, true, [](std::vector<SxAsm>& p, auto& data, uint32_t) {
         SxAsm& a = p[0];
-        a.li(5, g_loop_n); a.li(4, (int32_t)DATA);
+        a.li(5, loop_count(g_loop_n)); a.li(4, (int32_t)DATA);
         int top = a.here();
         for (int i = 0; i < 14; i++) a.sw(5, 4, 4 * i);
-        a.addi(5, 5, -1);
-        a.bnei(5, 0, top);
+        loop_end(a, top);
         a.halt();
-    }, 15, 16});
+    }, 15, 16, 0, 7});
     v.push_back({"adds", 1, true, [](std::vector<SxAsm>& p, auto& data, uint32_t) {
         SxAsm& a = p[0];
-        a.li(5, g_loop_n);
+        a.li(5, loop_count(g_loop_n));
         int top = a.here();
         for (int i = 0; i < 14; i++) a.add(6, 6, 5);
-        a.addi(5, 5, -1);
-        a.bnei(5, 0, top);
+        loop_end(a, top);
         a.halt();
-    }, 15, 16});
+    }, 15, 16, 0, 7});
     v.push_back({"tight", 1, true, [](std::vector<SxAsm>& p, auto& data, uint32_t) {
         SxAsm& a = p[0];
-        a.li(5, g_loop_n * 8);
+        a.li(5, loop_count(g_loop_n * 8));
         int top = a.here();
-        a.addi(5, 5, -1);
-        a.bnei(5, 0, top);
+        loop_end(a, top);
         a.halt();
-    }, 1, 2});
+    }, 1, 2, 0, 1});
     v.push_back({"mix", 1, true, [](std::vector<SxAsm>& p, auto& data, uint32_t) {
         for (uint32_t k = 0; k < 2048; k++) data.push_back({DATA + 4 * k, 0x9e3779b9u * (k + 1)});
         SxAsm& a = p[0];
-        a.li(5, g_loop_n); a.li(6, 0); a.li(14, 0); a.li(7, (int32_t)DATA); a.li(8, (int32_t)(DATA + 4096));
+        a.li(5, loop_count(g_loop_n)); a.li(6, 0); a.li(14, 0); a.li(7, (int32_t)DATA); a.li(8, (int32_t)(DATA + 4096));
         int top = a.here();
-        a.R(SX_OP_M(SX_M_LOADX, SX_W_W), 10, 7, 6, 0); a.add(14, 14, 10); a.addi(6, 6, 4);
+        a.R(SX_OP_M(SX_M_LOADX, SX_W_W), 10, 7, 6, 0); a.add(14, 14, 10);
+        if (g_fused >= 2) a.bump(6, 4); else a.addi(6, 6, 4);   // (the load read r6 before the add)
         a.op(SX_I_XOR, 12, 10, 14); a.opi(SX_I_AND, 6, 6, 0x7c); a.R(SX_OP_M(SX_M_STOREX, SX_W_W), 12, 8, 6, 0);
-        a.opi(SX_I_SLL, 13, 12, 1); a.add(14, 14, 13); a.addi(5, 5, -1);
-        a.bnei(5, 0, top);
+        a.opi(SX_I_SLL, 13, 12, 1); a.add(14, 14, 13);
+        loop_end(a, top);
         a.halt();
-    }, 9, 12});
+    }, 9, 12, 0, g_fused >= 2 ? 4.0 : 5.0});
     v.push_back({"stride", 1, true, [](std::vector<SxAsm>& p, auto& data, uint32_t) {
         SxAsm& a = p[0];
-        a.li(5, g_loop_n); a.li(6, 0); a.li(14, 0); a.li(7, (int32_t)(SX_RAM + 0x400000)); a.li(8, 0x3ffffc);
+        a.li(5, loop_count(g_loop_n)); a.li(6, 0); a.li(14, 0); a.li(7, (int32_t)(SX_RAM + 0x400000)); a.li(8, 0x3ffffc);
         int top = a.here();
         a.R(SX_OP_M(SX_M_LOADX, SX_W_W), 10, 7, 6, 0); a.add(14, 14, 10); a.addi(6, 6, 1040);
-        a.op(SX_I_AND, 6, 6, 8); a.addi(5, 5, -1);
-        a.bnei(5, 0, top);
+        a.op(SX_I_AND, 6, 6, 8);
+        loop_end(a, top);
         a.halt();
-    }, 5, 7});
+    }, 5, 7, 0, 2});
     v.push_back({"floats", 1, true, [](std::vector<SxAsm>& p, auto& data, uint32_t) {
         SxAsm& a = p[0];
-        a.li(5, g_loop_n);
+        a.li(5, loop_count(g_loop_n));
         for (int k = 6; k <= 13; k++) a.li(k, 0);
         int top = a.here();
         a.fop(SX_F_ADD, 6, 6, 7); a.fop(SX_F_MUL, 8, 6, 9); a.fop(SX_F_SUB, 10, 8, 7); a.fop(SX_F_ADD, 11, 10, 6);
         a.fop(SX_F_MUL, 12, 11, 9); a.fop(SX_F_MIN, 13, 12, 8); a.fop(SX_F_ADD, 7, 7, 13); a.fop(SX_F_MUL, 6, 6, 9);
         a.fop(SX_F_ADD, 8, 8, 11); a.fop(SX_F_SUB, 9, 9, 10); a.fop(SX_F_MAX, 10, 10, 12); a.fop(SX_F_ADD, 12, 12, 7);
         a.fop(SX_F_MUL, 13, 13, 6); a.fop(SX_F_ADD, 11, 11, 8);
-        a.addi(5, 5, -1);
-        a.bnei(5, 0, top);
+        loop_end(a, top);
         a.halt();
-    }, 15, 16});
+    }, 15, 16, 0, 7});
     v.push_back({"fmix", 1, true, [](std::vector<SxAsm>& p, auto& data, uint32_t) {
         for (uint32_t k = 0; k < 4; k++) data.push_back({DATA + 4 * k, 0x3f800000u + k});
         SxAsm& a = p[0];
-        a.li(5, g_loop_n); a.li(4, (int32_t)DATA);
+        a.li(5, loop_count(g_loop_n)); a.li(4, (int32_t)DATA);
         int top = a.here();
         a.lw(6, 4, 0); a.lw(7, 4, 4); a.fop(SX_F_MUL, 8, 6, 7); a.fop(SX_F_ADD, 9, 9, 8);
         a.sw(9, 4, 8); a.lw(10, 4, 12); a.fop(SX_F_MUL, 11, 10, 8); a.fop(SX_F_ADD, 12, 12, 11);
-        a.addi(5, 5, -1);
-        a.bnei(5, 0, top);
+        loop_end(a, top);
         a.halt();
-    }, 9, 10});
+    }, 9, 10, 0, 4});
     v.push_back({"fmath", 1, true, [](std::vector<SxAsm>& p, auto& data, uint32_t) {
         SxAsm& a = p[0];
-        a.li(5, g_loop_n); a.li(6, 0x3f800000); a.li(7, 0x3f000000); a.li(8, 0);
+        a.li(5, loop_count(g_loop_n)); a.li(6, 0x3f800000); a.li(7, 0x3f000000); a.li(8, 0);
         int top = a.here();
         a.fop(SX_F_MAD, 8, 6, 7, 8); a.fop(SX_F_MUL, 9, 8, 7); a.fop(SX_F_ADD, 10, 9, 6);
         a.fop(SX_F_MIN, 11, 10, 8); a.fop(SX_F_SQRT, 12, 10, 0); a.fop(SX_F_SUB, 8, 8, 12);
-        a.addi(5, 5, -1);
-        a.bnei(5, 0, top);
+        loop_end(a, top);
         a.halt();
-    }, 7, 0});
+    }, 7, 0, 0, 3});
     return v;
 }
 

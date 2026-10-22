@@ -333,7 +333,7 @@ int main(int argc, char** argv) {
     double mops = (double)(o1 - o0) / sec / 1e6;
     printf("%s: %llu passes in %.1f s, %.3f ms a pass (wall), %.2f M ops a second", cs->name, (unsigned long long)passes, sec,
            sec * 1e3 / passes, mops);
-    if (cs->rv_per_iter > 0) printf(", as RISC-V's work %.2f M", mops / cs->ops_per_iter * cs->rv_per_iter);
+    if (cs->rv_per_iter > 0 && !g_fused) printf(", as RISC-V's work %.2f M", mops / cs->ops_per_iter * cs->rv_per_iter);
     printf("\n");
     return 0;
 }

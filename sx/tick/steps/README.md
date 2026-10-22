@@ -8,7 +8,9 @@ bundles, one core. The timed loops are `experiments/isa_proto/lean/isaloops.c`'s
 file's RISC-V instructions a second (the lean tick's measure).
 
 The start is `experiments/isa_proto/steps/s21.hlsl`, the last verified step of the prototype; the target is two
-to three times the lean tick on the same loops.
+to three times the lean tick on the same loops. SX's instruction set is not fixed: an encoding, a field, a path or
+a new op (a fused one too) changes wherever the tick is faster for it, with `sx/isa.h`, the reference and the
+assembler.
 
 ## The two machines it is held against (this card, 22 October 2026)
 
@@ -132,3 +134,50 @@ them. A warp instruction runs 12 of 32 lanes (a core's 11 pixels, the helpers le
 - **A result written a bundle late**, the next bundle's reads taking it by selects (x6 `LATE`): no faster (15.5
   against 15.8): a read does not wait for the store before it.
 - **The card drifts**: x6 measured 16.9 and 15.8 on arith an hour apart. Compare in one session, A then B.
+
+## x13: two loops
+
+x13 is x12 in two loops: the fast loop makes paths 1-3 (integers, loads and stores) and has no float code compiled
+into it; a bundle of another path leaves it for one trip of the full step (x12's), and the fast loop takes over
+again. The write cache's entries are cleared when a pass starts (128 stores a pass), so a tag of 0 is an empty
+slot and x12's bit a slot (`occv`) is gone. `sx/tick/dxbc.py` prints a step's DXBC as fxc2 compiles it, with no card.
+
+| Batch x13a | arith | loads | stores | adds | tight | mix | stride | floats | fmix | x lean |
+|---|---|---|---|---|---|---|---|---|---|---|
+| x12 best | 13.62 | 6.03 | 5.17 | 12.52 | 12.12 | 10.81 | 9.92 | 7.87 | 6.91 | 1.38 |
+| x13 | 14.00 | 6.47 | 5.72 | 13.26 | 13.34 | 12.20 | 10.66 | 6.92 | 6.92 | 1.45 |
+| x13, one loop | 13.42 | 6.15 | 5.42 | 12.63 | 12.64 | 11.21 | 9.87 | 7.84 | 7.04 | 1.40 |
+
+The second loop is worth 4% on the integer and memory loops, and costs the float loops 12% (a trip of the outer
+loop a float bundle). Most of x12's distance from x6 (arith 16.9) and s21 (loads 12.1) is not the float code.
+
+### Round 1 of variants by subagents (x13i, x13m, x13s, x13f; 22 October 2026)
+
+Four subagents each made a copy of x13 with switches (checked on WARP), and the lead ran each batch on the card.
+"x lean" over the seven integer and memory loops (arith, loads, stores, adds, tight, mix, stride), x13 1.53:
+
+| Batch | Best | x lean | What it showed |
+|---|---|---|---|
+| x13i (integers, a bundle's fixed cost) | `i_all`: the fast loop's own step (pc in texels, no halt, a store with no room undone in its branch), a cheaper unit (rsub as a negated difference, shifts by y itself, one compare), cc - 1's bits as the kind, an empty slot's rd 0, whose long immediate by one test | 1.65 | 41 DXBC fewer an integer trip: arith 14.1 to 16.1; an integer-only inner loop (`i_il`) arith 16.25 but loads 6.0 |
+| x13m (memory) | `mflat2w1`: load values flat, a store's work behind one branch, a direct-mapped cache with a victim slot | 1.48 (all ten loops) | loads 6.5 to 7.2; deciding the branch first (`BR_FIRST`) 15% slower |
+| x13s (storage, structure) | `s_combil`: trims and an integer loop | 1.65 | the register file as a local array, the write cache as uint4 pairs: no change |
+| x13f (fused ops) | `addbnz` (cc 15: ra += imm6, taken when not 0) | | free on code without it; loads +4%, adds +15%, stride +29% where loops end in it. The control word's add (cc 0 sub 7) costs every bundle 4% (mix +16%): not taken further |
+
+Probes on x13 (they fail the checks): op 1 reading the registers as the bundle found them, +3% on integers; no
+texel read for data, loads 6.5 to 7.5; no write cache read either, 7.9. A load bundle's cost was its own
+instructions and branches (about 270 DXBC against 130 for an integer bundle), not memory's latency.
+
+## x14: the encoding of 22 October 2026
+
+`sx/isa.h` changed for it (steps x1-x13 ran the encoding before and no longer pass): loads and stores have paths
+of their own (2 a load and lite, 3 two loads, 4 a store and lite, 5 two memory ops with a store), a memory pair's
+op 1 reads nothing op 0 writes (the assembler opens a bundle), the long immediate's bits are one an op, an empty
+slot is a word of 0, a bundle with jr, callr, call or eret is path 0, floats are path 6 (op 1 lite or float lite)
+and 7 (memory and float lite), and cc 15 is addbnz. The fast step is i_all's; loads are s21's form, flat; stores
+know both slots before writing either (no undo; a write cache entry past the end takes a store not made).
+
+| | arith | loads | stores | adds | tight | mix | stride | x lean (7) |
+|---|---|---|---|---|---|---|---|---|
+| x14, loops as before | 15.47 | 9.37 | 7.85 | 14.55 | 14.55 | 13.17 | 11.60 | 1.79 |
+| x14, loops ending in addbnz (`--fused 1`) | 15.42 | 10.26 | 8.39 | 16.58 | 14.52 | 13.15 | 15.21 | 1.93 |
+| two times the lean tick | 16.5 | 11.4 | 9.8 | 16.4 | 14.6 | 14.4 | 12.7 | 2 |

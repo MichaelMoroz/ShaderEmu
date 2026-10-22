@@ -311,7 +311,8 @@ static double time_case(Gpu& gpu, const Case& cs, uint32_t ticks, uint32_t passe
     gpu.make(cs.cores, pr.ramImg, g_rom, pr.state);
     gpu.pass = {ticks, RAM_END, 1000, 0, 0, 1, RAM_ROWS, 0, cs.cores, {0, 0, 0}};
     for (int k = 0; k < 20; k++) gpu.run_pass();
-    uint32_t o0 = gpu.core_state(0)[19 * 4 + 1];
+    int at = g_fused && cs.bundles_fused > 0 ? 0 : 1;   // fused loops are counted in bundles (19.x), others in ops (19.y)
+    uint32_t o0 = gpu.core_state(0)[19 * 4 + at];
     ctx->Begin(g_qDis);
     ctx->End(g_q0);
     for (uint32_t k = 0; k < passes; k++) gpu.run_pass();
@@ -322,10 +323,11 @@ static double time_case(Gpu& gpu, const Case& cs, uint32_t ticks, uint32_t passe
     UINT64 t0, t1;
     while (ctx->GetData(g_q0, &t0, sizeof t0, 0) != S_OK) Sleep(1);
     while (ctx->GetData(g_q1, &t1, sizeof t1, 0) != S_OK) Sleep(1);
-    uint32_t o1 = gpu.core_state(0)[19 * 4 + 1];
+    uint32_t o1 = gpu.core_state(0)[19 * 4 + at];
     gpu.release();
     double mops = (o1 - o0) / (double(t1 - t0) / dj.Frequency) / 1e6;
-    return cs.rv_per_iter > 0 ? mops / cs.ops_per_iter * cs.rv_per_iter : mops;
+    double per = at == 0 ? cs.bundles_fused : cs.ops_per_iter;
+    return cs.rv_per_iter > 0 ? mops / per * cs.rv_per_iter : mops;
 }
 struct Variant { std::string name, shader; std::vector<std::string> defs; Prog tick, commit, stg, wrt, prog; bool hasCommit, hasOps; uint32_t wcn = 128; };
 static void use(Gpu& gpu, const Variant& v) {
@@ -365,6 +367,7 @@ int main(int argc, char** argv) {
         std::string a = argv[i];
         if (a == "--warp") warp = true;
         else if (a == "--nocheck") nocheck = true;
+        else if (a == "--fused" && i + 1 < argc) g_fused = atoi(argv[++i]);   // the timed loops fused (cases.h; or SX_FUSED=N)
         else if (a == "--shader" && i + 1 < argc) shader = argv[++i];
         else if (a == "--variants" && i + 1 < argc) varfile = argv[++i];
         else if (a == "--case" && i + 1 < argc) only = argv[++i];
@@ -374,7 +377,7 @@ int main(int argc, char** argv) {
         else if (a == "--seed" && i + 1 < argc) seed = (uint32_t)atoi(argv[++i]);
         else if (a == "-D" && i + 1 < argc) defStore.push_back(argv[++i]);
         else {
-            printf("sxbench [--warp] [--shader F [-D NAME=V]... | --variants FILE] [--case A,B] [--ticks N] [--passes N] [--rounds N] [--seed N]\n"
+            printf("sxbench [--warp] [--fused 1|2] [--shader F [-D NAME=V]... | --variants FILE] [--case A,B] [--ticks N] [--passes N] [--rounds N] [--seed N]\n"
                    "  FILE: a variant a line, NAME SHADER [-D NAME=V]...; # starts a comment\n");
             return 1;
         }
@@ -417,7 +420,7 @@ int main(int argc, char** argv) {
     }
     QueryPerformanceCounter(&f1);
     QueryPerformanceFrequency(&fq);
-    printf("sxbench: %s, %zu variant%s compiled in %.1f s\n", warp ? "WARP" : "the card", vars.size(), vars.size() == 1 ? "" : "s",
+    printf("sxbench: %s%s, %zu variant%s compiled in %.1f s\n", warp ? "WARP" : "the card", g_fused == 1 ? " (loops fused: addbnz)" : g_fused >= 2 ? " (loops fused: addbnz, the control word's add)" : "", vars.size(), vars.size() == 1 ? "" : "s",
            double(f1.QuadPart - f0.QuadPart) / fq.QuadPart);
     Gpu gpu;
     {
@@ -443,7 +446,7 @@ int main(int argc, char** argv) {
 
     std::vector<Case> all = cases(), picked;
     for (const Case& cs : all)
-        if (only.empty() || ("," + only + ",").find("," + std::string(cs.name) + ",") != std::string::npos) picked.push_back(cs);
+        if ((only.empty() && !cs.named) || ("," + only + ",").find("," + std::string(cs.name) + ",") != std::string::npos) picked.push_back(cs);
     // checks: every picked case on every variant, the timed loops at a few thousand iterations
     std::vector<std::string> wrong(vars.size());
     g_loop_n = 3000;
