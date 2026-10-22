@@ -17,6 +17,45 @@ import test_all as T   # noqa: E402
 
 PROMPT = re.compile(rb'@gpuvm:[^\n]*?# ')
 UNSUPPORTED = ('--host', '--host-from', '--host-wheel', '--fixed-dt', '--pointer-sweep')
+PIC = '/tmp/gvm-picture.ppm'
+
+
+def gpu_vm_case(c):
+    """A case as gpu_vm checks it: where the RISC-V case compares an exact sum of a float picture, the picture itself
+    is taken (base64 to the console) and compared with a reference one by its PSNR (README.md, "Checks")."""
+    c = dict(c)
+    if c['name'].startswith('nxpath') and 'NXPATH_AUTO=1' in (c['cmd'] or '') and any(' sum ' in h or '02f213e9' in h for h in c.get('has', [])):
+        c['cmd'] = c['cmd'].replace('NXPATH_AUTO=1', 'NXPATH_SAVE=%s NXPATH_AUTO=1' % PIC)
+        c['has'] = [h.split(' sum ')[0] if ' sum ' in h else r'^pathstat: ' for h in c['has']]
+        c['picture'] = PIC
+    return c
+
+
+def read_ppm(data):
+    """(width, height, bytes) of a binary PPM"""
+    parts, at = [], 0
+    while len(parts) < 4:
+        while data[at:at + 1].isspace(): at += 1
+        if data[at:at + 1] == b'#':
+            at = data.index(b'\n', at); continue
+        end = at
+        while not data[end:end + 1].isspace(): end += 1
+        parts.append(data[at:end]); at = end
+    return int(parts[1]), int(parts[2]), data[at + 1:]
+
+
+def psnr(a, b):
+    """PSNR in dB and the largest difference of a channel, of two pictures of one size"""
+    import math
+    (wa, ha, pa), (wb, hb, pb) = read_ppm(a), read_ppm(b)
+    if (wa, ha) != (wb, hb) or len(pa) != len(pb):
+        return 0.0, 255
+    se = most = 0
+    for x, y in zip(pa, pb):
+        d = x - y if x > y else y - x
+        se += d * d
+        most = d if d > most else most
+    return (99.0 if se == 0 else 10 * math.log10(255.0 * 255.0 * len(pa) / se)), most
 
 
 def run_case(c, a, w):
@@ -50,7 +89,8 @@ def run_case(c, a, w):
         if sent == 0 and prompts >= 1:
             p.stdin.write(b'stty -echo\n'); sent = 1
         elif sent == 1 and prompts >= 2:
-            p.stdin.write(b'cd /; ' + c['cmd'].encode() + b'; ' + T.DONE.encode() + b'\n'); sent = 2
+            dump = ('; echo PIC-BEGIN; base64 %s; echo PIC-END' % c['picture']).encode() if c.get('picture') else b''
+            p.stdin.write(b'cd /; ' + c['cmd'].encode() + dump + b'; ' + T.DONE.encode() + b'\n'); sent = 2
             mark = len(out)
         elif sent == 2:
             for pr in pairs:
@@ -70,6 +110,21 @@ def run_case(c, a, w):
     text = re.sub(r'(@gpuvm:[^\n]*?# )', lambda m: m.group(1) + chr(10), out.decode('latin-1'))
     with open(os.path.join(a.logs, c['name'] + '.log'), 'w', encoding='latin-1') as f:
         f.write(text)
+    if c.get('picture'):
+        import base64
+        m = re.search(r'PIC-BEGIN\n(.*?)PIC-END', text, re.S)
+        pic = base64.b64decode(re.sub(r'[^A-Za-z0-9+/=]', '', m.group(1))) if m else b''
+        ref = os.path.join(a.refs, c['name'] + '.ppm')
+        if a.save_refs and pic:
+            open(ref, 'wb').write(pic)
+        c['has'] = c['has'] + [r'^picture: [\d.]+ dB, at most \d+ apart$']
+        if not pic:
+            text += '\npicture: none\n'
+        elif os.path.exists(ref):
+            db, most = psnr(pic, open(ref, 'rb').read())
+            text += '\npicture: %.1f dB, at most %d apart%s\n' % (db, most, '' if db >= a.psnr else ' (too far)')
+        else:
+            text += '\npicture: no reference %s\n' % ref
     return text, ('--until matched' if reached else ''), time.time() - t0
 
 
@@ -82,9 +137,12 @@ def main():
     ap.add_argument('--wall-scale', type=float, default=1.0)
     ap.add_argument('--logs', default=os.path.join(ROOT, 'build', 'gvm_apps', 'test_all'))
     ap.add_argument('--list', action='store_true')
+    ap.add_argument('--refs', default=os.path.join(ROOT, 'build', 'gvm_apps', 'refs'), help="reference pictures (gvm_cpu's, libm's exact math)")
+    ap.add_argument('--save-refs', action='store_true', help='keep the pictures taken as the references')
+    ap.add_argument('--psnr', type=float, default=35.0, help='the least PSNR of a picture against its reference')
     a = ap.parse_args()
     w = os.environ.get('W', os.path.join(ROOT, 'build', 'gvm_apps', 'img'))
-    cases = T.CASES
+    cases = [gpu_vm_case(c) for c in T.CASES]
     if a.select:
         cases = [c for c in cases if c['name'] in a.select or c['tags'] & set(a.select)]
     elif not a.long:
@@ -94,6 +152,7 @@ def main():
             print(c['name'])
         return 0
     os.makedirs(a.logs, exist_ok=True)
+    os.makedirs(a.refs, exist_ok=True)
     subprocess.run(['make', '-s', '-C', os.path.join(ROOT, 'gpu_vm', 'cpu'), 'CC=gcc'], check=True)
     done, passed, failed, skipped = {}, [], [], []
     results = []

@@ -14,9 +14,11 @@ SYSROOT=${GVM_SYSROOT:-$HOME/gpu_vm/sysroot}
 LLVM_BIN=${LLVM_BIN:-$HOME/gpu_vm/llvm-build/bin}
 export WORK SYSROOT LLVM_BIN
 export SOURCE_DATE_EPOCH=1704067200
-# the math the programs are compiled with (gpu_vm/llvm/README.md: -ffast-math takes the card's sin, cos, exp2, log2,
-# rcp and rsqrt; a program whose own checks need IEEE results sets GVM_MATH= for itself)
-GVM_MATH=${GVM_MATH:--ffp-contract=fast}
+# the math the programs are compiled with (gpu_vm/llvm/README.md, "Float math"): fmad always, and -fapprox-func, the card's
+# sin, cos, exp2, log2, rcp and rsqrt in place of libm's exact ones (the user, 22 October 2026: faster, and close
+# enough; a float result is checked with a tolerance, an exact sum only where a program's logic must not drift:
+# README.md, "Checks"). GVM_MATH= for a program that must have libm's exact results.
+GVM_MATH=${GVM_MATH--ffp-contract=fast -fapprox-func}
 ARCH_FLAGS="$GVM_MATH"
 # Every function in a section of its own: a call farther than 2 MB inside one section is an error of the assembler
 # (no relocation for lld's thunks: gpu_vm/userland/apps/bugs/far_call.c, QuickJS's quickjs.c); across sections it is
