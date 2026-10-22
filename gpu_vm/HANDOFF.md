@@ -22,6 +22,9 @@ Rules the user gave along the way:
   LLVM folders are `~/gpu_vm/...`; `~/sx` is a link to it, kept because the build tree has the old absolute paths
   (remove it with the next clean LLVM configure). The lean baseline image is `build/images/lean_isaloops`. The machine is
   not x86: the name ShaderX86 found in the tree (the GPU queue's mutex, the porting skill) means nothing for it.
+- **Performance first** (the user, 22 October 2026): an ISA change that makes the tick faster, or keeps it 2-3x the
+  lean RISC-V tick, takes priority over what it costs the toolchain and the built programs (the reference, the
+  assembler, LLVM's MC layer and lld, the rebuilt runtimes, userland and kernel follow it).
 - **The ISA is free to change** (the user, 22 October 2026): encodings, fields, paths, new ops (fused ones too)
   wherever that makes the tick faster. `gpu_vm/isa.h`, `gpu_vm/ref/gvm_ref.h` and `gpu_vm/ref/gvm_asm.h` change with it, and the
   check cases must still agree with the reference.

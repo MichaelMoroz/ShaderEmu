@@ -1,0 +1,205 @@
+#!/usr/bin/env python3
+"""elf2flt: a gpu_vm ELF linked by flat.ld with relocations kept (ld.lld -q) to a bFLT v4 program for gpu_vm's Linux
+(binfmt_flat, FLAT_FLAG_RAM: text, data and bss in one allocation). gpu_vm/userland/README.md, "The flat format".
+
+    elf2flt [-s STACK] [-v] IN.elf OUT
+
+The image is every allocated byte from address 0, after the 64-byte header: file offset = address + 0x40. binfmt_flat
+loads the file whole and relocates a word r of the program (an address of the image) to load + 0x40 + r (the start
+of text plus r below the header's data_start - 0x40, the start of data plus r less that above it, the same place
+when data_start is on 32 bytes). Every absolute word is a relocation: R_GVM_32 (data words) and
+R_GVM_IMM32 (a bundle's long immediate), and the long immediate of each of ld.lld's range thunks. PC-relative and
+thread-pointer-relative relocations need nothing. R_GVM_IMM12 to an address cannot be relocated: an error.
+The ELF's PT_TLS is written into __gvm_phdr (musl's __gvm_flat_start gives it to musl as the program header)."""
+import struct
+import sys
+import time
+
+FLAT_FLAG_RAM = 0x1
+HDR = 0x40
+SHF_WRITE, SHF_ALLOC, SHF_TLS = 0x1, 0x2, 0x400
+SHT_PROGBITS, SHT_SYMTAB, SHT_RELA, SHT_NOBITS, SHT_REL = 1, 2, 4, 8, 9
+SHN_UNDEF, SHN_ABS, SHN_COMMON = 0, 0xfff1, 0xfff2
+PT_TLS = 7
+EM_GVM = 0x4756
+R_NAMES = {0: 'NONE', 1: '32', 2: 'REL32', 3: 'IMM32', 4: 'PCIMM32', 5: 'BR9', 6: 'J18', 7: 'IMM12', 8: 'TPREL32',
+           9: 'RELATIVE'}
+ABSOLUTE = (1, 3)              # R_GVM_32, R_GVM_IMM32
+NO_FIXUP = (0, 2, 4, 5, 6, 8)  # none, or relative to the pc or to tp
+
+
+def fail(msg):
+    sys.stderr.write('elf2flt: %s\n' % msg)
+    sys.exit(1)
+
+
+def main(argv):
+    stack, verbose, args = 0x10000, False, []
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a == '-s':
+            i += 1
+            stack = int(argv[i], 0)
+        elif a == '-v':
+            verbose = True
+        elif a.startswith('-'):
+            fail('unknown option %s' % a)
+        else:
+            args.append(a)
+        i += 1
+    if len(args) != 2:
+        fail('usage: elf2flt [-s STACK] [-v] IN.elf OUT')
+    src, dst = args
+    data = open(src, 'rb').read()
+    if data[:4] != b'\x7fELF' or data[4] != 1 or data[5] != 1:
+        fail('%s: not a little-endian ELF32' % src)
+    e_type, e_machine = struct.unpack_from('<HH', data, 16)
+    e_entry, e_phoff, e_shoff = struct.unpack_from('<III', data, 24)
+    e_phentsize, e_phnum, e_shentsize, e_shnum, e_shstrndx = struct.unpack_from('<HHHHH', data, 42)
+    if e_machine != EM_GVM or e_type != 2:
+        fail('%s: not a gpu_vm executable (machine %#x, type %d)' % (src, e_machine, e_type))
+
+    secs = []
+    for k in range(e_shnum):
+        secs.append(struct.unpack_from('<10I', data, e_shoff + k * e_shentsize))
+    shstr = secs[e_shstrndx]
+
+    def name_at(tab, off):
+        base = tab[4] + off
+        return data[base:data.index(b'\0', base)].decode()
+
+    names = [name_at(shstr, s[0]) for s in secs]
+
+    # symbols
+    syms, symtab_idx = [], None
+    for k, s in enumerate(secs):
+        if s[1] == SHT_SYMTAB:
+            symtab_idx = k
+            strtab = secs[s[6]]
+            for j in range(s[5] // 16):
+                st_name, st_value, st_size, st_info, st_other, st_shndx = struct.unpack_from('<IIIBBH', data, s[4] + 16 * j)
+                syms.append((name_at(strtab, st_name), st_value, st_shndx, st_info))
+    if symtab_idx is None:
+        fail('%s: no symbol table (link without -s; ld.lld -q keeps the relocations)' % src)
+    by_name = {}
+    for n, v, shndx, info in syms:
+        if n and shndx != SHN_UNDEF:
+            by_name.setdefault(n, v)
+
+    # the image: allocated sections with bytes; the bss after them
+    img_end = bss_end = 0
+    for k, s in enumerate(secs):
+        sh_name, sh_type, sh_flags, sh_addr, sh_off, sh_size = s[:6]
+        if not sh_flags & SHF_ALLOC or sh_size == 0:
+            continue
+        if names[k] in ('.got', '.got.plt', '.plt', '.dynamic', '.rela.dyn', '.dynsym'):
+            fail('%s: section %s: a static link at 0 has none (relocations in it are not known)' % (src, names[k]))
+        if sh_flags & SHF_TLS and sh_type == SHT_NOBITS:
+            continue                      # .tbss takes no room in the image
+        if sh_type == SHT_NOBITS:
+            bss_end = max(bss_end, sh_addr + sh_size)
+        else:
+            img_end = max(img_end, sh_addr + sh_size)
+    img = bytearray(img_end)
+    for k, s in enumerate(secs):
+        sh_name, sh_type, sh_flags, sh_addr, sh_off, sh_size = s[:6]
+        if sh_flags & SHF_ALLOC and sh_type != SHT_NOBITS and sh_size:
+            img[sh_addr:sh_addr + sh_size] = data[sh_off:sh_off + sh_size]
+    img += bytes(-len(img) % 16)
+    bss_end = max(bss_end, len(img))
+    bss_end += -bss_end % 16
+
+    data_va = by_name.get('__gvm_data_start')
+    if data_va is None:
+        fail('%s: no __gvm_data_start: link with gpu_vm/userland/flat.ld' % src)
+    if (HDR + data_va) % 32:
+        fail('%s: data at %#x: the file\'s data must start on 32 bytes' % (src, data_va))
+    if len(img) < data_va:                # no data: the image reaches data's start (the bss follows it)
+        img += bytes(data_va - len(img))
+        bss_end = max(bss_end, len(img))
+
+    relocs = []
+
+    def relocate(loc, what):
+        v = struct.unpack_from('<I', img, loc)[0]
+        if v == 0:
+            fail('%s: %s at %#x: an address 0, which binfmt_flat would not relocate' % (src, what, loc))
+        if v > bss_end:
+            fail('%s: %s at %#x: %#x is past the program (%#x)' % (src, what, loc, v, bss_end))
+        struct.pack_into('>I', img, loc, v)     # big-endian until relocated
+        relocs.append(loc)
+
+    counts = {}
+    for k, s in enumerate(secs):
+        sh_type, sh_link, sh_info = s[1], s[6], s[7]
+        if sh_type == SHT_REL:
+            fail('%s: %s: REL relocations (gpu_vm uses RELA)' % (src, names[k]))
+        if sh_type != SHT_RELA:
+            continue
+        target = secs[sh_info]
+        if not target[2] & SHF_ALLOC:
+            continue                      # debug info and the like
+        if sh_link != symtab_idx:
+            fail('%s: %s: relocations against another symbol table' % (src, names[k]))
+        tname = names[sh_info]
+        for j in range(s[5] // 12):
+            r_offset, r_info, r_addend = struct.unpack_from('<IIi', data, s[4] + 12 * j)
+            rtype, rsym = r_info & 0xff, r_info >> 8
+            sname, svalue, sshndx, sinfo = syms[rsym]
+            if rtype in NO_FIXUP:
+                continue
+            if sshndx == SHN_ABS or (sshndx == SHN_UNDEF and rsym != 0):
+                continue                  # a number, or an undefined weak symbol (0 + addend): nothing to add
+            if target[1] == SHT_NOBITS:
+                fail('%s: relocation in %s' % (src, tname))
+            if rtype in ABSOLUTE:
+                if sshndx < len(secs) and secs[sshndx][2] & SHF_TLS:
+                    fail('%s: R_GVM_%s to the TLS symbol %s at %#x (only %%tprel)' % (src, R_NAMES[rtype], sname, r_offset))
+                relocate(r_offset, 'R_GVM_%s to %s' % (R_NAMES[rtype], sname or names[sshndx]))
+                counts[rtype] = counts.get(rtype, 0) + 1
+            else:
+                fail('%s: R_GVM_%s to %s at %#x in %s cannot be relocated in a flat program'
+                     % (src, R_NAMES.get(rtype, str(rtype)), sname or '?', r_offset, tname))
+
+    # ld.lld's range thunks: `addi t26, zero, dest` with dest as the long immediate (word 2), made by the linker,
+    # so no relocation was kept for it
+    thunks = 0
+    for n, v, shndx, info in syms:
+        if n.startswith('__gpuvm_thunk_'):
+            w0 = struct.unpack_from('<I', img, v)[0]
+            if w0 != (0x60 << 12 | 63 << 6):
+                fail('%s: thunk %s at %#x is not `addi t26, zero, imm32`' % (src, n, v))
+            relocate(v + 8, 'thunk %s' % n)
+            thunks += 1
+
+    # the TLS segment, for musl
+    tls = None
+    for k in range(e_phnum):
+        p = struct.unpack_from('<8I', data, e_phoff + k * e_phentsize)
+        if p[0] == PT_TLS and p[5]:
+            tls = p
+    phdr = by_name.get('__gvm_phdr')
+    if tls:
+        if phdr is None:
+            fail('%s: TLS but no __gvm_phdr to give it to the C library' % src)
+        if tls[7] > HDR:
+            fail('%s: TLS aligned to %d: at most %d (the image is placed 0x40 past a page)' % (src, tls[7], HDR))
+        struct.pack_into('<8I', img, phdr, PT_TLS, 0, tls[2], 0, tls[4], tls[5], 4, tls[7])
+        relocate(phdr + 8, 'the TLS header')
+
+    relocs.sort()
+    data_end = HDR + len(img)
+    hdr = struct.pack('>4s11I', b'bFLT', 4, HDR + e_entry, HDR + data_va, data_end, HDR + bss_end, stack, data_end,
+                      len(relocs), FLAT_FLAG_RAM, int(time.time()) & 0xffffffff, 0)
+    hdr += bytes(HDR - len(hdr))
+    out = bytearray(hdr) + img + b''.join(struct.pack('>I', r) for r in relocs)
+    open(dst, 'wb').write(out)
+    if verbose:
+        print('%s: text %#x, data %#x-%#x, bss to %#x, stack %#x, entry %#x; %d relocations (%d R_GVM_32, %d R_GVM_IMM32,'
+              ' %d thunks)%s' % (dst, data_va, data_va, len(img), bss_end, stack, e_entry, len(relocs), counts.get(1, 0),
+                                 counts.get(3, 0), thunks, ', TLS %d bytes' % tls[5] if tls else ''))
+
+
+if __name__ == '__main__':
+    main(sys.argv[1:])

@@ -3,7 +3,9 @@
 #
 #   build.sh [STEP ...]     steps, in order: sync config initramfs image dtbs headers
 #                           (default: sync config initramfs image dtbs)
-#   initramfs: initramfs/init.S as a flat /init (mkflat.py) into $OUT/initramfs, and CONFIG_INITRAMFS_SOURCE set to it
+#   initramfs: initramfs/init.S as a flat /init (mkflat.py) into $OUT/initramfs, and CONFIG_INITRAMFS_SOURCE set to it;
+#              INIT=FILE takes that flat program as /init instead, and INITRAMFS_EXTRA=LIST appends LIST's lines
+#              (gen_init_cpio's: `file /bin/x SRC 0755 0 0`, `dir`, `slink`...) to the list (gpu_vm/userland/test.sh)
 #   build.sh check          sync, config and every C file of the kernel compiled by the stand-in (below)
 #
 # KDIR the tree (~/gpu_vm/linux), OUT the build (~/gpu_vm/linux-build), LLVM_BIN clang's folder
@@ -34,11 +36,16 @@ for s in "${steps[@]}"; do
     initramfs)
         I="$OUT/initramfs"
         mkdir -p "$I"
-        "$LLVM_BIN/clang" --target="$GPUVM_TRIPLE" -c "$HERE/initramfs/init.S" -o "$I/init.o"
-        "$LLVM_BIN/ld.lld" -m elf32gpuvm -e _start --image-base=0 -Ttext=0 -o "$I/init.elf" "$I/init.o"
-        "$LLVM_BIN/llvm-objcopy" -O binary "$I/init.elf" "$I/init.bin"
-        python3 "$HERE/initramfs/mkflat.py" "$I/init.bin"             "0x$("$LLVM_BIN/llvm-nm" "$I/init.elf" | awk '$3 == "_start" { print $1 }')" "$I/init"
+        if [ -n "${INIT:-}" ]; then
+            cp "$INIT" "$I/init"
+        else
+            "$LLVM_BIN/clang" --target="$GPUVM_TRIPLE" -c "$HERE/initramfs/init.S" -o "$I/init.o"
+            "$LLVM_BIN/ld.lld" -m elf32gpuvm -e _start --image-base=0 -Ttext=0 -o "$I/init.elf" "$I/init.o"
+            "$LLVM_BIN/llvm-objcopy" -O binary "$I/init.elf" "$I/init.bin"
+            python3 "$HERE/initramfs/mkflat.py" "$I/init.bin"             "0x$("$LLVM_BIN/llvm-nm" "$I/init.elf" | awk '$3 == "_start" { print $1 }')" "$I/init"
+        fi
         sed "s|INIT|$I/init|" "$HERE/initramfs/initramfs.list" > "$I/initramfs.list"
+        [ -z "${INITRAMFS_EXTRA:-}" ] || cat "$INITRAMFS_EXTRA" >> "$I/initramfs.list"
         "$KDIR/scripts/config" --file "$OUT/.config" --set-str INITRAMFS_SOURCE "$I/initramfs.list"
         mk olddefconfig
         ;;
