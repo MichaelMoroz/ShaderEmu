@@ -37,6 +37,15 @@ OVERRIDES = {
     # period: 8 loading texts fewer); its first 30 are the RISC-V machine's
     'classicube-pack': dict(count=[(r'^cctex: ', (30, 42))], digest=[]),
 }
+# a line added to a case's command (its program's own switches)
+PREFIX = {
+    # the timedemo ends before a stats period of the clock where frames are cheap: a period of frames instead
+    'quake-light': 'QUAKE_STATS_FRAMES=200 ',
+}
+
+# gvm_cpu's clock a pass (100 kHz ticks; its default 20 is 0.2 ms, the card's machine runs fewer bundles a second):
+# Quake's frames are cheap against 0.2 ms, so its timedemo ended before a stats period and typed commands came late
+PASS_TIME = {'quake-': 100}
 
 # float numbers of a line within a tolerance: (regex with groups, the reference values, tolerances: a fraction of the
 # value, or an absolute amount when given as ('abs', n))
@@ -57,6 +66,8 @@ def gpu_vm_case(c):
     """A case as gpu_vm checks it (the module's text)."""
     c = dict(c)
     c.update(OVERRIDES.get(c['name'], {}))
+    if c['name'] in PREFIX and c['cmd']:
+        c['cmd'] = c['cmd'].replace('QUAKE_LIGHTPOINT=', PREFIX[c['name']] + 'QUAKE_LIGHTPOINT=')
     cmd, has, name = c['cmd'] or '', list(c.get('has', [])), c['name']
     # nxpath's pictures (docs/apps/raytrace.md: a sum each), by PSNR
     if name.startswith('nxpath') and 'NXPATH_AUTO=1' in cmd and any(' sum ' in h or '02f213e9' in h for h in has):
@@ -138,7 +149,8 @@ def run_case(c, a, w):
     cores = 256 if re.search(r'\b(mctest|lanetest|steptest) 255|255 workers|with 255', c['cmd'] + ' '.join(c.get('has', []))) else a.cores
     ram = open(os.path.join(w, 'ram_mb')).read().strip()
     emu = os.path.join(ROOT, 'build', 'gvm_cpu', 'gvm_cpu')
-    p = subprocess.Popen([emu, '--cores', str(cores), '--ram', ram, '--rom', os.path.join(w, 'rootfs.romfs'),
+    pt = next((t for k, t in PASS_TIME.items() if c['name'].startswith(k)), a.pass_time)
+    p = subprocess.Popen([emu, '--cores', str(cores), '--pass-time', str(pt), '--ram', ram, '--rom', os.path.join(w, 'rootfs.romfs'),
                           '--dtb', os.path.join(w, 'gvm.dtb'), os.path.join(w, 'vmlinux')],
                          stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=0)
     out, sent, until, t0 = b'', 0, c['until'].encode(), time.time()
@@ -185,6 +197,7 @@ def main():
     ap.add_argument('--jobs', type=int, default=max(2, (os.cpu_count() or 4) // 2))
     ap.add_argument('--cores', type=int, default=32, help='cores of a case that does not ask for 255 workers')
     ap.add_argument('--wall-scale', type=float, default=1.0)
+    ap.add_argument('--pass-time', type=int, default=20, help="gvm_cpu's --pass-time of a case PASS_TIME does not name")
     ap.add_argument('--logs', default=os.path.join(ROOT, 'build', 'gvm_apps', 'test_all'))
     ap.add_argument('--list', action='store_true')
     ap.add_argument('--refs', default=os.path.join(ROOT, 'build', 'gvm_apps', 'refs'), help="the outputs' references (gvm_cpu's)")
