@@ -14,9 +14,9 @@ float sinf(float x)
 {
 	if ((gvm_asu(x) & 0x7fffffffu) >= GVM_TRIG_MAX)
 		return generic_sinf(x);
-	int k;
-	float rl, r = gvm_trig_reduce(x, &k, &rl), z = r * r;
+	int k;   /* sin is odd: |x| reduced, x's sign given to the result (sin(-0) is -0) */
+	float rl, r = gvm_trig_reduce(__builtin_fabsf(x), &k, &rl), z = r * r;
 	float s = gvm_sin_poly(r, rl, z), c = gvm_cos_poly(r, rl, z);
 	float v = (k & 1) ? c : s;
-	return gvm_asf(gvm_asu(v) ^ ((uint32_t)(k & 2) << 30));
+	return gvm_asf(gvm_asu(v) ^ ((uint32_t)(k & 2) << 30) ^ (gvm_asu(x) & 0x80000000u));
 }

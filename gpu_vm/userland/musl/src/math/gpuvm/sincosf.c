@@ -17,10 +17,10 @@ void sincosf(float x, float *sin, float *cos)
 		generic_sincosf(x, sin, cos);
 		return;
 	}
-	int k;
-	float rl, r = gvm_trig_reduce(x, &k, &rl), z = r * r;
+	int k;   /* |x| reduced: sin takes x's sign, as sinf */
+	float rl, r = gvm_trig_reduce(__builtin_fabsf(x), &k, &rl), z = r * r;
 	float s = gvm_sin_poly(r, rl, z), c = gvm_cos_poly(r, rl, z);
 	float vs = (k & 1) ? c : s, vc = (k & 1) ? s : c;
-	*sin = gvm_asf(gvm_asu(vs) ^ ((uint32_t)(k & 2) << 30));
+	*sin = gvm_asf(gvm_asu(vs) ^ ((uint32_t)(k & 2) << 30) ^ (gvm_asu(x) & 0x80000000u));
 	*cos = gvm_asf(gvm_asu(vc) ^ ((uint32_t)((k + 1) & 2) << 30));
 }

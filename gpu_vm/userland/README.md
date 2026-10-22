@@ -5,8 +5,8 @@ compiler-rt's builtins, a flat converter and a compiler driver, all over the gpu
 
 | | |
 |---|---|
-| `build.sh [syscalls musl builtins]` | the sysroot `~/gpu_vm/sysroot`: musl's `libc.a`, `crt1.o`, `crti.o`, `crtn.o` and headers (and the kernel's `linux/`, `asm/`), `lib/libclang_rt.builtins-gpuvm.a` |
-| `musl/` | the port, laid over the release tarball by `build.sh musl`: `arch/gpuvm/**`, `src/*/gpuvm/*` |
+| `build.sh [syscalls musl mfloat builtins]` | the sysroot `~/gpu_vm/sysroot`: musl's `libc.a`, `crt1.o`, `crti.o`, `crtn.o` and headers (and the kernel's `linux/`, `asm/`), `lib/libmfloat.a` ("libm"), `lib/libclang_rt.builtins-gpuvm.a` |
+| `musl/` | the port, laid over the release tarball by `build.sh musl`: `arch/gpuvm/**`, `src/*/gpuvm/*` (`src/math/gpuvm`: the libm), `mfloat/` (`libmfloat.a`) |
 | `flat.ld` | the link: one image from address 0x10, `__gvm_data_start` on 64 bytes |
 | `elf2flt` | the linked ELF (relocations kept) to a bFLT (Python 3) |
 | `bin/gpuvm-linux-cc` | the compiler driver (gcc's options) |
@@ -80,8 +80,77 @@ shared libraries, no GOT (`CONFIG_BINFMT_FLAT_NO_DATA_START_OFFSET`). The header
   SIGCHLD, 0)`), `_Fork` (ENOSYS: the kernel runs a child of clone() without CLONE_VM on the parent's own memory and
   stack, both at once; vfork, posix_spawn, system and popen are the ways), `__gvm_flat_start`. Variadic arguments are
   on the stack in gpu_vm's convention (unlike RISC-V's): `__clone(func, stack, flags, arg, ...)` reads ptid, tls,
-  ctid from 0, 4, 8(sp). Everything else is musl's generic C: math (double in
-  software through compiler-rt, float on the card's ops: denormals flush), string, malloc (mallocng over mmap).
+  ctid from 0, 4, 8(sp). Everything else is musl's generic C: string, malloc (mallocng over mmap), and the math
+  that "libm" below does not replace (double in software through compiler-rt, float on the card's ops: denormals
+  flush).
+
+## libm (22 October 2026)
+
+musl's generic float functions compute in double (`sinf` through `__sindf`, `expf`/`logf`/`powf` through ARM's double
+tables), and double is compiler-rt's software here: 800 to 1,900 bundles a call. `musl/src/math/gpuvm` replaces them
+(musl's build takes `src/math/gpuvm/X.c` for `src/math/X.c`) with code on the card's exact float ops alone: add, sub,
+mul, the multiply-adds (which round the product, as the code's own `a * b + c` does), round, floor, trunc,
+conversions, integer ops, two tables of 64 texels for the logarithms (`__gvm_log_data.c`); never fsin, fcos, fexp2,
+flog2, frcp or frsqrt, which are approximations on the card (gpu_vm/llvm/README.md, "Float math"). Reduction in
+pieces whose products are exact (Cody and Waite: pi/2 in four parts, ln 2 in two), the rounding errors that matter
+carried as a second float (two-sum, Dekker's product without an fma), minimax polynomials fitted for the weights
+the results need (`gpu_vm/llvm/test/libm/fit.c`). `gvm_libm.h` has the shared parts.
+
+| function | max error, ulps (every float) | correctly rounded | bundles a call | musl's generic | the same bits on the card |
+|---|---|---|---|---|---|
+| sinf, cosf (\|x\| < 8192; beyond, musl's) | 0.91, 0.92 | 99.5% | 26, 26 | 989, 985 | yes |
+| sincosf | 0.91, 0.92 | 99.5% | 35 (a call, both) | 1756 | yes |
+| tanf | 1.73 | 98.3% | 26 | 1190 | not in the odd quadrants (a division) |
+| expf, exp2f | 0.98, 1.23 | 99.6% | 16, 14 | 836, 775 | yes |
+| logf, log2f, log10f | 0.50, 0.51, 0.51 | 100.0% | 25, 29, 29 | 871, 868, 25 | yes |
+| powf (10^8 pairs, four kinds) | 1.45 | 89-90% | 58 | 1876 | yes |
+| asinf (musl's with a float root) | 0.98 | 99.9% | 14.5 | 232 | not for \|x\| >= 0.5 (a sqrt, a division) |
+| sqrtf, floorf, ceilf, truncf, rintf, nearbyintf, fminf, fmaxf, fabsf, copysignf | 0 (sqrtf: the card's, 0.9) | | 1-2 | 9-26 | sqrtf not |
+| roundf, lroundf, lrintf | 0 | | 3 | 14 | yes |
+| floor, ceil, trunc, round (double, by the bits) | 0 | | 37 | 571 | yes |
+
+The error is measured over every float (`gpu_vm/llvm/test/libm/run.sh acc`: the same C compiled for the host with the
+card's float semantics, against the host's double libm), the code as compiled on gvm_cpu and on the card
+(`libprobe`: the same bits as the host's run on both, but where the table says not), bundles on gvm_cpu
+(`bench`). Kept from musl: atanf (32 bundles), atan2f (53), acosf (17), sinhf, coshf, tanhf, expm1f, log1pf, cbrtf,
+fmodf (float or integer code already; the divisions and roots in them are the card's: within 1.8 ulps on the card)
+and every double function but the four above (sin 1874 bundles, cos 1899, exp 1363, log 1621, pow 4577, atan2 2156,
+sqrt 134). Results below 2^-126 are 0 and denormal arguments are 0, as the card's float ops have them.
+
+**libmfloat** (`musl/mfloat`, `build.sh mfloat`, link with `-lmfloat`): double sin, cos, tan, asin, acos, atan,
+atan2, exp, exp2, log, log2, log10, pow, sinh, cosh, tanh and sincos at float precision: the argument rounded to a
+float, the float function, the result widened (about an ulp of a float, 2^-24 relative, of the float-rounded
+argument; a double beyond a float's range is inf or 0). 42-99 bundles a call (sin 53, cos 53, tan 54, exp 42, log 51,
+pow 99, atan2 95), the conversions inline, against musl's 1,363-4,577. For a game that calls C's double functions on values a float holds
+(Quake's and Half-Life's angles, distances, colours).
+
+**What a game should use** (with the compiler's flags of gpu_vm/llvm/README.md, "Float math"):
+
+- Plain `-O2`: gpu_vm's libm, about an ulp, and the same bits on gvm_cpu and the card in the functions without a
+  division or a root: a state sum made of them is the same on both machines (not the host's: no two libms agree to
+  the last bit). Multiply-adds are always made; `sqrtf`, `floorf`... are one op inline.
+- `-ffast-math` (or `-fapprox-func`) on the code that only draws (the renderer, the client's effects): sinf and
+  cosf are one op (fsin, fcos: 3.3e-7 absolute in [-pi, pi]), expf two, powf eight, tanf three; a sin and a cos of
+  one angle no call at all. Not for the simulation that a demo or a sum depends on: gvm_cpu computes the card's ops
+  with the host's functions, so the two machines differ, and a small number's sine is noise.
+- `-lmfloat` where the game calls double sin, pow... (Quake 1, Half-Life) and floats are enough.
+- Quake-like kernels (`gpu_vm/llvm/test/libm/qkern.c`, `run.sh kernels`): bundles a call on gpu_vm against the RISC-V
+  machine's instructions (rv32imaf, GCC 13.3 -O2 -fno-math-errno -ffp-contract=off, its musl: qemu-riscv32's trace):
+
+| kernel | gpu_vm, musl's libm | gpu_vm's libm | -ffast-math | RISC-V instructions | RISC-V instr. / gpu_vm bundles (libm, fast) |
+|---|---|---|---|---|---|
+| VectorNormalize (sqrtf, a division) | 14.1 | 14.1 | 14.1 | 31.1 | 2.2 |
+| MatrixMultiply 3x3 (fmad) | 59.1 | 59.1 | 59.1 | 175.2 | 3.0 |
+| AnglesToAxis (3 sinf + 3 cosf) | 4,980 | 137.1 (3 sincosf) | 37.1 | 9,998 | 73, 269 |
+| vectoangles (2 atan2f, sqrtf) | 122.3 | 122.3 | 120.3 | 266.9 | 2.2 |
+| TransformVerts (64 vertices by 3x4) | 651.1 | 651.1 | 651.1 | 3,217.1 | 4.9 |
+| SinTable (1024 sinf) | 856,716 | 29,708 | 3,081 | 1,753,534 | 59, 569 |
+| GammaTable (256 powf) | 476,010 | 16,381 | 2,573 | 951,829 | 58, 370 |
+
+A bundle took 174-198 ns on real code and a lean RISC-V instruction 153-168 (`gpu_vm/bench_real/README.md`): so a
+ratio of about 1.15 is the same time; the float kernels are 2-4 times as fast on gpu_vm, and the special functions 60
+to 60 times with the libm, 270-570 times with -ffast-math. (The RISC-V machine's Quake III avoids libm with sines of
+its own, 44 instructions: gpu_vm's sinf is 26 bundles, fsin one.)
 
 ## Tests
 
@@ -108,7 +177,10 @@ kernel of that day still make unaligned words: the kernel panics at 0.03 s).
 clones libc-test (`~/gpu_vm/dl/libc-test`, only compiled), builds its functional and regression tests (no dlopen or
 shared objects; `functional/tls_local_exec` does not link: TLS aligned to 4096) with `test/ltinit.c` as `/init` (each
 program with a limit of 20 s of the machine's time; /dev, /dev/shm, /tmp and /proc mounted), boots, prints the
-failures. 22 October 2026: 111 of 135 pass. The 24 others: fork (6: ipc_msg, ipc_sem, daemon-failure, fflush-exit,
+failures. With `MATH=1` (and libm's math tests, 22 October 2026 evening): 294 of 334 pass, against 298 with musl's
+generic libm; the four are ceilf and floorf (a denormal argument is 0 to the card's ops), fmaf (the sign of a zero
+below 2^-126: the compiler's inline double-to-float flushes) and j1f (2.25 ulps through sinf and cosf; its limit is
+2); the math tests both fail are denormals, exception flags and long double. 22 October 2026: 111 of 135 pass. The 24 others: fork (6: ipc_msg, ipc_sem, daemon-failure, fflush-exit,
 pthread_exit-dtor, raise-race), no /bin/sh (5: popen, spawn, vfork, execle-env, wordexp), no networking in the
 kernel (socket), allocations the no-MMU kernel's OOM killer answers instead of ENOMEM (5: malloc-brk-fail, malloc-oom,
 pthread_create-oom, setenv-oom, sscanf_long's 8 MB), the root being a ramfs (statvfs), musl 1.2.5's own (strtod and
@@ -255,6 +327,8 @@ the session 28.8 s, 82.9 M bundles. The ROM disk `gvmrom` (a block device) boots
 - No fork: programs must use vfork/posix_spawn (busybox: its NOMMU configuration).
 - memcpy/memset are musl's C: not yet the commit's copy and fill operations (the kernel's string.S uses them from
   4 KB up).
-- float math in libm runs on the card's float ops (denormals flush to zero); double is compiler-rt's software.
+- float math in libm runs on the card's float ops (denormals flush to zero; "libm"); double is compiler-rt's
+  software, but for floor/ceil/trunc/round and `-lmfloat`'s functions at float precision. No `fmaf` faster than
+  musl's (in soft doubles), no rounding modes or exception flags.
 - The kernel config has no networking, epoll, eventfd, timerfd or signalfd; FUTEX was turned on for musl's timed
   waits (`gpuvm_defconfig`).

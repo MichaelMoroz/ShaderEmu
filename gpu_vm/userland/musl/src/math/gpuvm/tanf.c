@@ -25,8 +25,9 @@ float tanf(float x)
 {
 	if ((gvm_asu(x) & 0x7fffffffu) >= GVM_TRIG_MAX)
 		return generic_tanf(x);
-	int k;
-	float rl, r = gvm_trig_reduce(x, &k, &rl), z = r * r;
+	int k;   /* tan is odd: |x| reduced, x's sign given to the result (tan(-0) is -0) */
+	float rl, r = gvm_trig_reduce(__builtin_fabsf(x), &k, &rl), z = r * r;
 	float t = r + ((rl + rl * z) + r * z * (T0 + z * (T1 + z * (T2 + z * (T3 + z * (T4 + z * (T5 + z * T6)))))));
-	return (k & 1) ? -1.0f / t : t;
+	t = (k & 1) ? -1.0f / t : t;
+	return gvm_asf(gvm_asu(t) ^ (gvm_asu(x) & 0x80000000u));
 }

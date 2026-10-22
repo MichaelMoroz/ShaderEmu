@@ -38,8 +38,8 @@ libraries, X86 RISCV and GPUVM). `build.sh` links `Target/GPUVM` into `llvm/lib/
 | `0001-triple-gpuvm.patch` | `Triple::gpuvm` (32-bit, little-endian, ELF) |
 | `0002-elf-em-gvm.patch` | `ELF::EM_GVM`, `ELFRelocs/GPUVM.def` (R_GVM_*, isa.h's numbers), objdump's arch, readelf's name, yaml |
 | `0003-lld-gpuvm.patch` | `lld/ELF/Arch/GPUVM.cpp`: the relocations, TLS variant 1, no PLT or GOT, image base 0x02000000; `Thunks.cpp`: a range thunk for R_GVM_J18 beyond +-2 MB (one bundle: `addi t26, zero, dest; jr t26`) |
-| `0004-gpuvm-intrinsics-libcalls-datalayout-relocs.patch` | `llvm.gpuvm.copy`/`llvm.gpuvm.fill` (`IntrinsicsGPUVM.td`), gpuvm's runtime libcalls (`RuntimeLibcalls.td`: compiler-rt's and libm's), the data layout `e-m:e-p:32:32-i64:64-n32-S128` (`TargetDataLayout.cpp`), R_GVM_32/REL32 for llvm-objdump and llvm-dwarfdump (`RelocationResolver.cpp`) |
-| `0005-clang-gpuvm.patch` | clang: `Basic/Targets/GPUVM.*` (TargetInfo), `CodeGen/Targets/GPUVM.cpp` (the ABI), `BuiltinsGPUVM.td`, the bare-metal driver for `gpuvm-unknown-elf` (ld.lld, no math errno), frame pointer omitted when optimizing, float denormals preserve-sign |
+| `0004-gpuvm-intrinsics-libcalls-datalayout-relocs.patch` | `llvm.gpuvm.copy`/`llvm.gpuvm.fill` (`IntrinsicsGPUVM.td`), gpuvm's runtime libcalls (`RuntimeLibcalls.td`: compiler-rt's and libm's, sincosf and sincos), the data layout `e-m:e-p:32:32-i64:64-n32-S128` (`TargetDataLayout.cpp`), R_GVM_32/REL32 for llvm-objdump and llvm-dwarfdump (`RelocationResolver.cpp`) |
+| `0005-clang-gpuvm.patch` | clang: `Basic/Targets/GPUVM.*` (TargetInfo), `CodeGen/Targets/GPUVM.cpp` (the ABI), `BuiltinsGPUVM.td`, the bare-metal driver for `gpuvm-unknown-elf` (ld.lld, no math errno), no math errno for `gpuvm-unknown-linux` either (`Linux.cpp`: musl), frame pointer omitted when optimizing, float denormals preserve-sign |
 
 A change to a patched LLVM file: edit it in `~/gpu_vm/llvm-project` and write the patch again (0004 and 0005:
 `bash gpu_vm/llvm/patches/regen.sh`; the others `git diff -- PATHS > ...`, new files need `git add -N` first).
@@ -51,32 +51,36 @@ applying them to a clean tree rebuilds most of LLVM (an hour on 12 jobs); 0005's
     L=~/gpu_vm/llvm-build/bin/llvm-lit
     $L -v ~/gpu_vm/llvm-build/test/MC/GPUVM ~/gpu_vm/llvm-build/test/CodeGen/GPUVM   # MC and llc tests
     bash gpu_vm/llvm/test/e2e/run.sh            # assembler + lld + gvm_cpu
-    bash gpu_vm/llvm/test/exec/run.sh           # C programs at -O0 -O1 -O2 -Os on gvm_cpu (52 runs)
+    bash gpu_vm/llvm/test/exec/run.sh           # C programs at -O0 -O1 -O2 -Os on gvm_cpu (60 runs)
     bash gpu_vm/llvm/test/torture/run.sh        # GCC's c-torture execute tests, -O0 and -O2 (~10 min, 12 jobs)
     bash gpu_vm/llvm/test/apps/run.sh           # zlib and Lua on gvm_cpu against the host's run
     bash gpu_vm/llvm/test/bench/run.sh          # CoreMark: bundles an iteration
+    bash gpu_vm/llvm/test/libm/run.sh           # libm: accuracy over every float, bundles a call, Quake-like kernels
 
 - `test/MC/GPUVM`: `encoding.s` (every op alone in a bundle, its bytes as `gvm_asm.h` makes them; written by
   `test/gen/gen_encoding.cpp`), `bundle.s` (the packing rules, path bits, `;;` and `.endbundle`), `reloc.s`,
   `far-branch.s`, `errors.s`, `operands.s`.
 - `test/CodeGen/GPUVM`: llc's output for `alu.ll` (R/I forms, bfe/bfes, shadd, min/max, the extended ops),
   `branch.ll` (compare-and-branch on registers, imm6, bits; addbnz; sel), `calls.ll` (the calling convention,
-  varargs, sret), `mem.ll` (addressing, lq/sq copies, the commit's operations), `float.ll`, `frame.ll` (frames,
-  realignment, TLS, i64, atomics, inline asm). The CHECK lines are llc's output (as update_llc_test_checks.py would
-  write them; it has no gpuvm scrubber): look at a difference, then write them again.
+  varargs, sret), `mem.ll` (addressing, lq/sq copies, the commit's operations), `float.ll`, `fastmath.ll` (the
+  multiply-adds, the special functions under afn and their libcalls without, sincos, round/lround/lrint, frcp for
+  divisions, f32 to i64, f32 to f64 and back), `frame.ll` (frames, realignment, TLS, i64, atomics, inline asm). The
+  CHECK lines are llc's output: `python3 test/CodeGen/GPUVM/update_checks.py TEST.ll ~/gpu_vm/llvm-build/bin/llc`
+  writes them again (update_llc_test_checks.py has no gpuvm scrubber); look at the difference before committing it.
 - `test/e2e/run.sh`: `hello.s` and `pack.s` through llvm-mc and ld.lld, compared bundle for bundle with
   `gvm_asm.h`'s (`check.cpp`), then run on `gvm_cpu`; `xref1.s`/`xref2.s` (relocations across objects), `thunk.s`
   (a call and a j beyond 2 MB through ld.lld's thunks).
-- `test/exec`: `arith branches loops switch calls int64 float fastmath globals bits frame mem atomics longjmp`, each a
+- `test/exec`: `arith branches loops switch calls int64 float fastmath fconv globals bits frame mem atomics longjmp`, each a
   program that checks itself (`CHECK`, `CHECK_EQ` in `rt/gvm.h`) and exits 0; a `// FLAGS:` line adds clang flags.
   All pass at every level (22 October 2026). The runtime (`rt/`) has setjmp/longjmp (`setjmp.s`), strtod, stdio on
-  stdin/stdout/stderr (no files), the card's approximate exp2f/log2f/sinf/cosf, a bump allocator.
+  stdin/stdout/stderr (no files), the card's approximate exp2f/log2f/sinf/cosf (and sincosf), a bump allocator.
+  `fconv`: f32 to f64 and back against compiler-rt's functions called by name, round/lround/lrint, f32 to i64.
 - `test/torture/run.sh`: GCC's `gcc.c-torture/execute` (a sparse clone of gcc in `~/gpu_vm/torture`, untrusted data:
   the script lives here and runs only the compiled programs) with the exec runtime and its headers; each test is also
   built by the same clang for the host (x86_64) and run there, so that what fails on both (GCC's extensions such as
   nested functions, GCC's behaviour where C leaves it open) is told apart. Skipped: int128, setjmp, signals,
-  complex.h, `_Float128` and such. 22 October 2026: -O0 1594 of 1652 (96.5%), -O2 1588 of 1652 (96.1%); of the tests
-  the host passes, 99.7% at both; the 5 left are the runtime's (fopen/freopen/tmpnam, pow, an x86 asm test).
+  complex.h, `_Float128` and such. 22 October 2026: -O0 1595 of 1652 (96.5%), -O2 1589 of 1652 (96.2%); of the tests
+  the host passes, 99.7% at both; the 4 left are the runtime's (fopen/freopen/tmpnam, an x86 asm test).
 - `test/apps/run.sh`: third-party programs (sources cloned into `~/gpu_vm/third`: zlib, Lua 5.5) built with the exec
   runtime and run on gvm_cpu at -O0 and -O2, their output compared with the same sources built for the host:
   zlib's deflate and inflate at every level (`zlib_test.c`), Lua's interpreter running a script of recursion,
@@ -128,10 +132,19 @@ code generator's job toward bundles is the order of its ops.
 - **float** in the integer registers on the card's units: fadd fsub fmul fdiv fmin fmax fsqrt (always: the doc's
   rule), floor ceil trunc round (to even, for rint/nearbyint/roundeven), copysign, neg, abs, compares (unordered ones
   by inversion), conversions with i32/u32 (ftoi/ftou saturate), I forms with the constant's bits; `fmad`/`fmsb`/
-  `fnmsb` for an fmul and an fadd (the ops round the product, as separate ops would: no contraction needed);
-  llvm.fma is libm's `fmaf`. Under `-ffast-math` (afn): fsin fcos fexp2 flog2, exp/exp10/log/log10 through them,
-  frcp/frsqrt for 1/x and 1/sqrt x; otherwise libm. Denormals flush (clang marks float preserve-sign). **double** is
-  software (compiler-rt's `__adddf3`...).
+  `fnmsb` for an fmul and an fadd or fsub, whatever `-ffp-contract` says (the ops round the product, as separate ops
+  would: the same results, so no contraction is needed; llvm.fmuladd is the same); llvm.fma is libm's `fmaf`.
+  `round` (half away from zero) is three exact ops, `trunc(x + copysign(0.5 - 2^-25, x))`, lround its ftoi, lrint
+  `ftoi(fround)`; f32 to i64/u64 a few ops (`ReplaceNodeResults`); f32 to f64 and f64 to f32 by their bits
+  (`PerformDAGCombine`, before the types are legalized: 7 and 12 bundles against compiler-rt's calls of 15 and 24; a
+  float denormal is 0, a double below 2^-126 is 0, as the card's floats are; at -O0, optnone, the combine does not run
+  and compiler-rt's exact conversion is called). Under afn (`-fapprox-func` or `-ffast-math`) the card's special
+  functions: fsin fcos fexp2 flog2; exp, exp10, log, log10 through them; tan as fsin/fcos; pow as
+  `fexp2(y flog2 |x|)` with the sign of a negative x and an odd integer y (`|x|^y` for a negative x and a fraction,
+  pow(0, 0) nan); llvm.sincos as fsin and fcos; frcp/frsqrt for 1/x and 1/sqrt x (or arcp). Without afn libm, and a
+  sin and a cos of one value are one `sincosf` call. Under arcp (`-freciprocal-math`), three divisions by one value or
+  more are one frcp and products (`combineRepeatedFPDivisors`: frcp and an fmul share a bundle, fdiv is no op 1).
+  Denormals flush (clang marks float preserve-sign). **double** is software (compiler-rt's `__adddf3`...).
 - **Memory intrinsics** (`GPUVMSelectionDAGInfo.cpp`): memcpy/memmove/memset of a known size from 4096 bytes up
   (`-gpuvm-op-threshold`) are the commit's operation: the descriptor {1 copy (memmove) or 2 fill (the byte four
   times), dst, src or word, bytes} built in a register quad and stored by one `sq` to 0xf0000000 (`SQ_OP`, which keeps
@@ -219,6 +232,37 @@ arches); the link of vmlinux fails on the port's side: `arch/gpuvm/lib/Makefile`
 `arch/gpuvm/Makefile` wants `lib-y` (no `lib.a`); with that changed, `calibrate_delay` and `lpj_fine` (no
 `GENERIC_CALIBRATE_DELAY`) and `show_unhandled_signals` (traps.c) are undefined.
 
+## Float math: the flags and the libm (22 October 2026)
+
+What a game should be compiled with (the libm is gpu_vm/userland/README.md's "libm"; `test/libm/run.sh` measures it):
+
+| | what it gives |
+|---|---|
+| `-O2` alone | fmad/fmsb/fnmsb always; sqrtf, floorf... one op, roundf three; no math errno on `gpuvm-unknown-linux` (musl never sets it); sinf, expf, powf... calls of gpu_vm's libm: about an ulp, 14-58 bundles, the same bits on gvm_cpu and the card (the functions without a division or a sqrt) |
+| `-fapprox-func` (`-fno-math-errno` is the default here) | the special functions inline on the card's ops: sinf/cosf 1 bundle, expf 2, tanf 3, powf 8; approximate (below), and gvm_cpu (the host's float functions) and the card give different bits |
+| `-ffast-math` | the same and the rest of fast-math (`-freciprocal-math`: 1/x as frcp, three divisions by one value as one frcp; reassociation) |
+| `-ffp-contract=off/on/fast` | no difference: the multiply-adds round the product, so they are formed whatever it says |
+| `-lmfloat` (link) | double sin, cos, pow... at float precision (gpu_vm/userland/README.md, "libm") |
+
+The card's special-function ops measured on the card (RTX 5070 Laptop, D3D11; `test/libm/probe.c`, 16,384 inputs a
+set, against the host's double libm; gvm_cpu computes them with the host's float functions, within about half an ulp):
+
+| op | inputs | max ulps | mean ulps | max absolute error |
+|---|---|---|---|---|
+| fsin, fcos | [-pi, pi] | 42,000 (near the zeros) | 9 | 3.3e-7 (2^-21.5) |
+| fsin, fcos | [-1000, 1000] | | | 1.35e-4 (about \|x\| 2^-23: no range reduction) |
+| fsin | 2^-24 to 2^-2 | 1.7e7 | | 3.3e-7: the sine of a number below about 1e-3 is noise |
+| fexp2 | [-1, 1], [-125, 127], 2^-24 to 2^-4 | 1.8 | 0.53 | |
+| flog2 | [0.5, 2] | 7,355 (near 1) | 7.4 | 2.0e-7 |
+| flog2 | any positive | 69 (near 1) | 0.54 | |
+| fsqrt / frsqrt / frcp | any | 0.9 / 1.3 / 0.9 | 0.29 / 0.32 / 0.28 | |
+| fdiv | any | 1.7 | 0.38 | |
+
+So under afn exp2 is within 2 ulps, exp and pow a few more (the argument's product with log2 e grows the error with
+|x|), log2 good but near 1, and sin and cos within 3.3e-7 absolutely in [-pi, pi] (an angle's sine, not a small
+number's; worse as |x| grows). That is what `-ffast-math` means in a game; code that needs better calls libm
+(compiled without afn, or through a function of its own).
+
 ## Known gaps
 
 - No libc, compiler-rt or crt for gpu_vm yet (the tests' runtime stands in); no C++ runtime.
@@ -226,7 +270,9 @@ arches); the link of vmlinux fails on the port's side: `arch/gpuvm/lib/Makefile`
   (a line entry is a bundle's).
 - No `bump` (the control word's add) and no `ld`/`sd` pairs from the code generator; i64 loads and
   stores are two words.
-- double is software only; `llvm.fma` is a libcall (fmad rounds the product).
+- double is software only (the libm's double floor/ceil/trunc/round are integer ops; `-lmfloat` puts sin, pow... on
+  floats); `llvm.fma` is a libcall (fmad rounds the product); i64 to f32 and double to and from integers are
+  compiler-rt's.
 - TLS is local exec only (static links); PIC is PC-relative addressing alone (no GOT or PLT).
 - A branch to a block more than +-2 MB away inside one function is an error (no indirect branch relaxation).
 - Branch-only bundles: a branch on a register written in its own bundle (a value just loaded or computed) takes a

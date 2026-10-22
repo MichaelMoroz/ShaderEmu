@@ -14,8 +14,8 @@ float cosf(float x)
 {
 	if ((gvm_asu(x) & 0x7fffffffu) >= GVM_TRIG_MAX)
 		return generic_cosf(x);
-	int k;
-	float rl, r = gvm_trig_reduce(x, &k, &rl), z = r * r;
+	int k;   /* cos is even: |x| reduced */
+	float rl, r = gvm_trig_reduce(__builtin_fabsf(x), &k, &rl), z = r * r;
 	float s = gvm_sin_poly(r, rl, z), c = gvm_cos_poly(r, rl, z);
 	float v = (k & 1) ? s : c;
 	return gvm_asf(gvm_asu(v) ^ ((uint32_t)((k + 1) & 2) << 30));
