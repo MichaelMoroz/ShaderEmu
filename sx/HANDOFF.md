@@ -77,6 +77,22 @@ trace.ps1). Not pushed.
   `linux/nommu/elf2bflt.py`; script in the old scratchpad `lean.sh`). Run:
   `bin\rvc_harness.exe --d3d11 --rvc experiments\rvc_lean --image build\images\sxlean --no-stdin --expect "laid out 255" --send "isaloops 16; isaloops 16; echo SX-D''ONE\n" --until "SX-DONE"`.
 
+## State at the end of 22 October 2026 (the goal "2x on the most frequent code" is met)
+
+- **x15m q4ovf** (`sx/tick/steps/x15m.hlsl -D MEM4=1 -D MOP2=1 -D EXT2=1 -D OVF=1 -D WCN=130`) is two times the lean
+  tick on all seven integer and memory loops, the reference's on the card: arith 21.0, loads 12.6, stores 11.7,
+  adds 22.6, tight 19.8, mix 17.6, stride 18.0 (2.21 to 2.83 times; 2.55 overall). q4w1ovf (one way) is 2.65.
+  Timed with `--fused 1` (the loops end in addbnz). History and every batch: `sx/tick/steps/README.md` from "x13".
+- Next: make q4ovf's switches the default of a step x16 (and the overflow slots' `cycle` fix), port round 2's
+  integer inner loop (x14i I_LOOPS=2: arith +15% on x14) and the structure agent's x15s; then the rename to gpu_vm;
+  then `sincos` (rd, rd + 1) and a 64-bit mul (low, high) as ops of two results (the user asked; the full step's);
+  then the LLVM target, sx_cpu and Linux.
+- The encoding is x15's (`sx/isa.h`): x1-x14 no longer compile. `bin\sxbench.exe` must be rebuilt
+  (`cmd /c sx	ickuild.bat`) after any change to isa.h, the reference, the assembler or cases.h; a WARP check of a
+  step against a bench built for another encoding hangs until each case gives up (60 s).
+- `precise` does nothing under fxc2 (byte-identical DXBC; vkd3d drops it); kept for DXC (sxtrace12) and FXC.
+  Float mad, msb and nmsb round the product first (D3D11 promises no fused float FMA): every card gives the same bits.
+
 ## Numbers (RTX 5070 Laptop, fxc2, M RISC-V instructions of work a second)
 
 | | arith | loads | stores | adds | tight | mix | stride | floats | fmix |
