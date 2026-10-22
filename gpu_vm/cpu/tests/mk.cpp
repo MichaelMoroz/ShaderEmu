@@ -75,30 +75,29 @@ int main(int argc, char** argv) {
         if (raw) write_file(path("sum.bin"), words(w));
         else write_elf(path("sum.elf"), CODE, {{CODE, words(w), 0}, {BSS, {}, 4096}});
     }
-    {   // opasync: a fill and a copy asked for with no sync; the core goes on, and stops only where they are at work:
-        // a load of the fill's words, a store to the copy's source (it must copy what was there); exit 7 when all agree
+    {   // opasync: a fill and a copy of what it fills asked for back to back, with no sync: neither waits for the other
+        // (made in the order asked for), and the core stops only where they are at work: a load of the copy's
+        // destination, a store to its source. Exit 7 when all agree.
         GvmAsm a(CODE);
         a.li(29, (int32_t)GVM_OPS); a.li(28, (int32_t)BSS); a.li(27, (int32_t)DATA);
         a.li(20, GVM_OP_FILL); a.li(21, (int32_t)BSS); a.li(22, 0x01010101); a.li(23, 64);
-        a.st(GVM_W_Q, 20, 29, 0);            // the fill, no sync
+        a.st(GVM_W_Q, 20, 29, 0);            // the fill of BSS, no sync
+        a.li(20, GVM_OP_COPY); a.li(21, (int32_t)(BSS + 0x100)); a.li(22, (int32_t)BSS); a.li(23, 64);
+        a.st(GVM_W_Q, 20, 29, 0);            // a copy of what the fill makes, at once
         a.li(10, 0); a.li(11, 50);
         int spin = a.here();
         a.add(10, 10, 11); a.addbnz(11, -1, spin);   // other work meanwhile
-        a.lw(9, 28, 60);                     // in what the fill writes: waits for it
-        a.li(20, GVM_OP_COPY); a.li(21, (int32_t)(BSS + 0x100)); a.li(22, (int32_t)DATA); a.li(23, 64);
-        a.st(GVM_W_Q, 20, 29, 0);            // the copy, no sync
         a.li(8, (int32_t)0xdeadbeef); a.close();
-        a.sw(8, 27, 0);                      // to the copy's source: waits until it is made
-        a.lw(7, 28, 0x100);                  // the copied word: the source's before the store
-        a.lw(6, 29, 0);                      // the operation's word: 0, made
+        a.sw(8, 28, 0);                      // to the copy's source: waits until both are made
+        a.lw(9, 28, 0x13c);                  // the copied word: the fill's
+        a.lw(7, 28, 0x100);                  // and the first: the fill's, not the store's
+        a.lw(6, 29, 0);                      // in flight: 0
         a.li(30, 0);
         a.li(12, 0x01010101); a.op(GVM_I_SEQ, 13, 9, 12); a.add(30, 30, 13);
-        a.li(12, 0x11223344); a.op(GVM_I_SEQ, 13, 7, 12); a.opi(GVM_I_SLL, 13, 13, 1); a.add(30, 30, 13);
+        a.op(GVM_I_SEQ, 13, 7, 12); a.opi(GVM_I_SLL, 13, 13, 1); a.add(30, 30, 13);
         a.op(GVM_I_SEQ, 13, 6, 0); a.opi(GVM_I_SLL, 13, 13, 2); a.add(30, 30, 13);
         exit_with(a, 30);
-        std::vector<uint8_t> d;
-        for (int i = 0; i < 16; i++) put32(d, i == 0 ? 0x11223344u : 0x1000u + i);
-        write_elf(path("opasync.elf"), CODE, {{CODE, words(a.finish()), 0}, {DATA, d, (uint32_t)d.size()}, {BSS, {}, 4096}});
+        write_elf(path("opasync.elf"), CODE, {{CODE, words(a.finish()), 0}, {BSS, {}, 4096}});
     }
     {   // echo: read(0, buf, 64), write(1, buf, n), exit(n)
         GvmAsm a(CODE);

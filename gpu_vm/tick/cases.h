@@ -379,7 +379,7 @@ static std::vector<Case> cases() {
         auto op = [&](uint32_t kind, uint32_t dst, uint32_t src, uint32_t n) {
             a.li(5, (int32_t)kind); a.li(6, (int32_t)dst); a.li(7, (int32_t)src); a.li(8, (int32_t)n);
             a.st(GVM_W_Q, 5, 20, 0); a.x(GVM_X_SYNC);
-            a.lw(9, 20, 0); a.op(GVM_I_ADD, 30, 30, 9);   // 0 through, ~0 refused
+            a.lw(9, 20, 4); a.op(GVM_I_ADD, 30, 30, 9);   // the refused, so far
         };
         op(GVM_OP_COPY, DATA + 0x40003, DATA + 0x1001, 5000);
         op(GVM_OP_COPY, DATA + 0x2008, DATA + 0x2000, 3000);   // overlapping, the destination after the source

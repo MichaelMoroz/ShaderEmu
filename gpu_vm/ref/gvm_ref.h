@@ -19,6 +19,7 @@ extern "C" {
 
 #define GVM_WLOG_BITS 12          // the reference's write log: 4,096 words at most a pass, a core
 #define GVM_WLOG_SIZE (1u << GVM_WLOG_BITS)
+#define GVM_OPQ 8                 // operations a core may ask for in a pass (a ninth waits for the commit)
 
 typedef struct gvm_wlog {
     uint32_t key[GVM_WLOG_SIZE];  // word address + 1 (0: empty)
@@ -44,8 +45,10 @@ typedef struct gvm_core {
     uint32_t sr[GVM_SR_COUNT];
     uint32_t id;
     uint32_t waiting;        // in a supervisor's wait until (IPEND & IEN) != 0
-    uint32_t op[8];          // the operation's descriptor texels, as stored at GVM_OPS; op[0] the kind
-    uint32_t op_pending;     // stored in this pass: the commit makes it
+    uint32_t op[8];          // the descriptor texels as stored at GVM_OPS (op[0] the kind; op[4-7] a blit's second)
+    uint32_t opq[GVM_OPQ][8];   // the operations asked for in this pass, in order: the commit makes them
+    uint32_t nops;
+    uint32_t refused;        // operations the commit refused, ever (GVM_OPS + 4 reads it)
     uint32_t ext;            // the external interrupt line (the host's)
     uint32_t soft;           // the software interrupt's pending bit
     uint32_t rnd;            // RANDOM's state
@@ -203,7 +206,10 @@ static uint32_t gvm__word(gvm_machine *m, gvm_core *c, uint32_t a) {
 
 // A load of `bytes` (1, 2, 4) at any alignment; 0 on a fault
 static int gvm__load(gvm_machine *m, gvm_core *c, uint32_t a, uint32_t bytes, uint32_t *v) {
-    if (a >= GVM_OPS && a + bytes <= GVM_OPS + 32 && !((a | bytes) & 3)) { *v = c->op[(a - GVM_OPS) >> 2]; return 1; }
+    if (a >= GVM_OPS && a + bytes <= GVM_OPS + 32 && !((a | bytes) & 3)) {   // in flight, refused, the latched words
+        *v = a == GVM_OPS ? c->nops : a == GVM_OPS + 4 ? c->refused : c->op[(a - GVM_OPS) >> 2];
+        return 1;
+    }
     if (!gvm__readable(m, a) || !gvm__readable(m, a + bytes - 1)) return 0;
     uint32_t lo = gvm__word(m, c, a & ~3u), sh = (a & 3) * 8;
     uint64_t w = lo;
@@ -223,11 +229,7 @@ static int gvm__room(gvm_core *c, uint32_t a, uint32_t bytes) {
 }
 
 static void gvm__store(gvm_machine *m, gvm_core *c, uint32_t a, uint32_t bytes, uint32_t v) {
-    if (a >= GVM_OPS) {
-        c->op[(a - GVM_OPS) >> 2] = v;
-        c->op_pending |= a == GVM_OPS;   // (the kind's word, stored last of a blit's two texels, asks for it)
-        return;
-    }
+    if (a >= GVM_OPS) { c->op[(a - GVM_OPS) >> 2] = v; return; }   // (latched: a 16-byte store at GVM_OPS asks)
     for (uint32_t i = 0; i < bytes; i++) {
         uint32_t b = a + i, word = b >> 2, sh = (b & 3) * 8;
         uint32_t *e = gvm__wl_find(&c->wl, word, 0);
@@ -237,20 +239,23 @@ static void gvm__store(gvm_machine *m, gvm_core *c, uint32_t a, uint32_t bytes, 
     }
 }
 
-// An operation asked for and not yet made does not stop the core: an access stops it (the pass ends before the op,
-// which runs again) only where the operation is still at work: a load of what it writes; a store to what it writes or
-// reads, or to the descriptors (one operation at a time). Fetches are not looked at: code an operation wrote runs
-// after a sync.
+// Operations asked for and not yet made do not stop the core, nor one another: an access stops it (the pass ends
+// before the op, which runs again) only where one of them is still at work: a load of what it writes, a store to what
+// it writes or reads; and a 16-byte store at GVM_OPS when GVM_OPQ are asked for already. Fetches are not looked at:
+// code an operation wrote runs after a sync, which waits for them all.
 static int gvm__in(uint32_t a, uint32_t bytes, uint32_t lo, uint32_t n) { return n && (a - lo < n || lo - a < bytes); }
 static int gvm__op_waits(const gvm_core *c, uint32_t a, uint32_t bytes, int store) {
-    const uint32_t *d = c->op;
-    uint32_t dn = 0, sn = 0;
-    if (!c->op_pending) return 0;
-    if (a >= GVM_OPS) return store;
-    if (d[0] == GVM_OP_COPY) dn = sn = d[3];
-    else if (d[0] == GVM_OP_FILL) dn = d[3];
-    else if (d[0] == GVM_OP_BLIT && d[7] && d[6]) { dn = d[4] * (d[7] - 1) + d[6]; sn = d[5] * (d[7] - 1) + d[6]; }
-    return gvm__in(a, bytes, d[1], dn) || (store && gvm__in(a, bytes, d[2], sn));
+    uint32_t k;
+    if (a >= GVM_OPS) return store && a == GVM_OPS && bytes == 16 && c->nops == GVM_OPQ;
+    for (k = 0; k < c->nops; k++) {
+        const uint32_t *d = c->opq[k];
+        uint32_t dn = 0, sn = 0;
+        if (d[0] == GVM_OP_COPY) dn = sn = d[3];
+        else if (d[0] == GVM_OP_FILL) dn = d[3];
+        else if (d[0] == GVM_OP_BLIT && d[7] && d[6]) { dn = d[4] * (d[7] - 1) + d[6]; sn = d[5] * (d[7] - 1) + d[6]; }
+        if (gvm__in(a, bytes, d[1], dn) || (store && gvm__in(a, bytes, d[2], sn))) return 1;
+    }
+    return 0;
 }
 
 static int gvm__store_ok(const gvm_machine *m, uint32_t a, uint32_t bytes) {
@@ -425,6 +430,7 @@ static int gvm__op(gvm_machine *m, gvm_core *c, uint32_t base, uint32_t s, const
             if (addr < GVM_OPS && !gvm__room(c, addr, by)) { c->ops_run--; c->pc = epc; *end = GVM_END_FULL; return GVM__END; }
             if (by <= 4) gvm__store(m, c, addr, by, c->x[rd]);
             else for (uint32_t k = 0; k < by / 4; k++) gvm__store(m, c, addr + 4 * k, 4, c->x[(rd + k) & 63]);
+            if (addr == GVM_OPS && by == 16) memcpy(c->opq[c->nops++], c->op, sizeof c->op);   // an operation asked for
             return GVM__GO;
         }
         if (mode == 4 || (mode == 5 && wd <= GVM_AMO2_MAXU)) {
@@ -585,7 +591,6 @@ int gvm_bundle(gvm_machine *m, gvm_core *c) {
 int gvm_run(gvm_machine *m, gvm_core *c, uint32_t budget) {
     c->left = budget;
     if (c->halted) return GVM_END_HALT;
-    if (c->op[0] != 0 && c->op[0] != 0xffffffffu && !c->op_pending) return GVM_END_SYNC;   // (an operation in flight)
     if (c->waiting) {
         if (!(gvm__ipend(m, c) & c->sr[GVM_SR_IEN])) return GVM_END_WAIT;
         c->waiting = 0;
@@ -625,9 +630,9 @@ static int gvm__range(gvm_machine *m, uint32_t a, uint32_t n, int dst) {
     return e < m->ram_end || (a >= GVM_ROM && e < GVM_ROM_END);
 }
 
-// The operation a core asked for, made at once (the tick takes passes; what lands is the same)
-static void gvm__operation(gvm_machine *m, gvm_core *c) {
-    uint32_t *d = c->op, k = d[0], ok = 0;
+// An operation a core asked for, made at once (the tick takes passes; what lands is the same); 0: refused
+static int gvm__operation(gvm_machine *m, const uint32_t *d) {
+    uint32_t k = d[0], ok = 0;
     if (k == GVM_OP_COPY && gvm__range(m, d[1], d[3], 1) && gvm__range(m, d[2], d[3], 0)) {
         uint32_t i, n = d[3];
         if (d[1] <= d[2]) for (i = 0; i < n; i++) gvm__put_byte(m, d[1] + i, gvm__byte(m, d[2] + i));
@@ -643,7 +648,7 @@ static void gvm__operation(gvm_machine *m, gvm_core *c) {
         for (r = 0; ok && r < rows; r++)
             for (uint32_t i = 0; i < row; i++) gvm__put_byte(m, dst + r * ds + i, gvm__byte(m, src + r * ss + i));
     }
-    d[0] = ok ? 0 : 0xffffffffu;
+    return ok;
 }
 
 void gvm_commit(gvm_machine *m) {
@@ -659,7 +664,8 @@ void gvm_commit(gvm_machine *m) {
     }
     for (i = 0; i < m->ncores; i++) {
         gvm_core *c = &m->cores[i];
-        if (c->op_pending) { c->op_pending = 0; gvm__operation(m, c); }
+        for (j = 0; j < c->nops; j++) c->refused += !gvm__operation(m, c->opq[j]);   // in the order asked for
+        c->nops = 0;
     }
 }
 #endif   // GVM_REF_IMPL

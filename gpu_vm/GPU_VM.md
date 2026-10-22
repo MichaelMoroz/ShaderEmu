@@ -124,18 +124,19 @@ work out in the tick.
 
 Stores become visible to the other cores and the devices at the commit, the end of the pass.
 
-**Operations.** A core stores a descriptor texel to 0xf000_0000 (for a blit, 0xf000_0010 first: the
-kind's word asks for it). The descriptor reaches the commit as a write-cache entry like any store; the
-commit sees its address is an operation's and makes it from what the core's pass left (its own stores
-included), over as many passes as it takes. The core does not wait (22 October 2026): it goes on, and
-an access stops it (the pass ends before the op, which runs again) only where the operation is still
-at work: a load of what it writes, a store to what it writes or reads, a store to the descriptors (one
-operation at a time). Fetches are not looked at: code an operation wrote runs after a `sync`, which
-waits for the operation. A load of 0xf000_0000 says how it stands (the kind: at work; 0 made; ~0
-refused). Kinds: 1 copy
-{dst, src, bytes} (memmove), 2 fill {dst, word, bytes}, 3 blit (+ dst stride, src stride, bytes a
-row, rows). One operation in flight a core. The tick has no code for any of it. Other regions can
-be mapped to other system operations the same way.
+**Operations.** A core asks for an operation by a 16-byte store (`st.q`) of its descriptor texel to
+0xf000_0000 (a blit's second texel stored at 0xf000_0010 first; word stores there only latch words).
+Kinds: 1 copy {dst, src, bytes} (memmove), 2 fill {dst, word, bytes}, 3 blit (+ dst stride, src stride,
+bytes a row, rows). The descriptors reach the commit with the pass's stores, and the commit makes the
+operations from what the pass left (the core's own stores included), in the order asked for, over as
+many passes as they take. A core may have several in flight (the reference: 8 asked for in a pass; a
+ninth waits for the commit), and does not wait for them (22 October 2026): it goes on, and an access
+stops it (the pass ends before the op, which runs again) only where one is still at work: a load of
+what one writes, a store to what one writes or reads. The tick checks two ranges, all the destinations'
+and all the sources' (conservative, cheap); the reference each operation's. Fetches are not looked at:
+code an operation wrote runs after a `sync`, which waits for them all. A load of 0xf000_0000 is the
+count still in flight, of 0xf000_0004 the count ever refused. Other regions can be mapped to other
+system operations the same way.
 
 The compiler lowers `memcpy` and `memset` of a known small size to 16-byte loads and stores, and
 calls libc for the rest, which uses an operation from a few KB up (a pass ended early costs about
