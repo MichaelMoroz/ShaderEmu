@@ -122,6 +122,13 @@ Phases, each one agent's (one writer of the LLVM tree in WSL at a time):
   memmove or memset from a threshold up (a few KB: an operation ends the pass) is the operation inline (the descriptor
   texel by st.q to 0xf000_0000, then sync), a small one 16-byte ld.q/st.q, an unknown size libc's (which chooses);
   builtins for code that wants the hardware's (the kernel's ROM reads, page copies and clears).
+- An idea of the user's for later (22 October 2026): a micro-VM on the commit's path. The operations' stage draw
+  (RAM into a small stage texture, then a write draw back: no ping-pong RAM) could run a short program on each texel
+  instead of copying it: an operation "map" {4, dst, src, bytes} + {program, count, constants}, a few dozen micro-ops
+  (word, packed u8x4 / i16x2 with saturation, float4, shuffles, reads at fixed texel offsets), the same for every
+  texel (no divergence), bounded by the stage texture a pass. For format conversion, blending, audio mixing, byte
+  swaps, filters, patterned fills; not reductions. A library call / builtin (`gvm_map`), programs from a tiny
+  assembler or the in-machine HLSL compiler; measured against lanes.
 
 ## Numbers (RTX 5070 Laptop, fxc2, M RISC-V instructions of work a second)
 
