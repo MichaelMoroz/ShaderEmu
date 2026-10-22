@@ -96,7 +96,11 @@ public:
   }
   // A conditional branch reaches +-256 bundles: farther ones branch over a
   // j (+-2 MB).
-  void addPreEmitPass() override { addPass(&BranchRelaxationPassID); }
+  void addPreEmitPass() override {
+    if (getOptLevel() != CodeGenOptLevel::None)
+      addPass(createGPUVMCountedLoopsPass());
+    addPass(&BranchRelaxationPassID);
+  }
 };
 } // namespace
 

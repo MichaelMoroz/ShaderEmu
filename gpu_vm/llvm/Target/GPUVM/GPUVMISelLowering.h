@@ -55,6 +55,8 @@ public:
   bool isLegalAddressingMode(const DataLayout &DL, const AddrMode &AM, Type *Ty,
                              unsigned AS,
                              Instruction *I = nullptr) const override;
+  bool isCheapToSpeculateCttz(Type *Ty) const override { return true; }
+  bool isCheapToSpeculateCtlz(Type *Ty) const override { return true; }
   bool isTruncateFree(Type *Ty1, Type *Ty2) const override;
   bool isTruncateFree(EVT VT1, EVT VT2) const override;
   bool allowsMisalignedMemoryAccesses(

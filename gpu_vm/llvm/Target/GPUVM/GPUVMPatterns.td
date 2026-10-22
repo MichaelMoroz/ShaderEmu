@@ -180,6 +180,7 @@ def : Pat<(sub imm32:$imm, (i32 GPR:$a)),
 def : Pat<(and (i32 GPR:$a), (not (i32 GPR:$b))), (ANDN GPR:$a, GPR:$b)>;
 def : Pat<(or (i32 GPR:$a), (not (i32 GPR:$b))), (ORN GPR:$a, GPR:$b)>;
 def : Pat<(not (xor (i32 GPR:$a), (i32 GPR:$b))), (XNOR GPR:$a, GPR:$b)>;
+let AddedComplexity = 1 in
 def : Pat<(and (i32 GPR:$a), lowmask12:$m), (BFE GPR:$a, 0, (MaskLen $m))>;
 
 // shadd: a + (b << sh)
@@ -262,6 +263,10 @@ def : Pat<(select (i32 GPR:$c), (f32 GPR:$a), (f32 GPR:$b)),
           (SEL GPR:$a, GPR:$b, GPR:$c)>;
 def : Pat<(select (i32 (seteq (i32 GPR:$c), 0)), (i32 GPR:$a), (i32 GPR:$b)),
           (SEL GPR:$b, GPR:$a, GPR:$c)>;
+def : Pat<(select (i32 (setne (i32 GPR:$c), 0)), (i32 GPR:$a), (i32 GPR:$b)),
+          (SEL GPR:$a, GPR:$b, GPR:$c)>;
+def : Pat<(select (i32 (setne (i32 GPR:$c), 0)), (f32 GPR:$a), (f32 GPR:$b)),
+          (SEL GPR:$a, GPR:$b, GPR:$c)>;
 def : Pat<(select (i32 (seteq (i32 GPR:$c), 0)), (f32 GPR:$a), (f32 GPR:$b)),
           (SEL GPR:$b, GPR:$a, GPR:$c)>;
 

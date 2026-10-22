@@ -26,6 +26,9 @@ public:
   void emitEpilogue(MachineFunction &MF, MachineBasicBlock &MBB) const override;
 
   bool hasReservedCallFrame(const MachineFunction &MF) const override;
+  bool enableShrinkWrapping(const MachineFunction &MF) const override {
+    return true;
+  }
   MachineBasicBlock::iterator
   eliminateCallFramePseudoInstr(MachineFunction &MF, MachineBasicBlock &MBB,
                                 MachineBasicBlock::iterator I) const override;

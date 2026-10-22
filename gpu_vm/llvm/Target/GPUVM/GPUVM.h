@@ -22,6 +22,7 @@ class MachineOperand;
 class PassRegistry;
 
 FunctionPass *createGPUVMISelDag(GPUVMTargetMachine &TM);
+FunctionPass *createGPUVMCountedLoopsPass();
 
 void lowerGPUVMMachineInstrToMCInst(const MachineInstr *MI, MCInst &OutMI,
                                     AsmPrinter &AP);
