@@ -37,6 +37,12 @@ config MMU
 config GENERIC_CSUM
 	def_bool y
 
+# No MMU: a program's memory is runs of pages, and the large ones want blocks of up to 32 MB (as the RISC-V machine's
+# no-MMU kernel, linux/nommu/patch_drivers.py; with drivers.py's alloc_pages_run)
+config FORCE_MAX_ZONEORDER
+	int
+	default 14
+
 config GENERIC_CALIBRATE_DELAY
 	def_bool y
 

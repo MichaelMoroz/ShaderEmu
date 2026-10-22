@@ -25,6 +25,7 @@ cbuffer C : register(b0) {
     float Bar;         // height of the info bar under the memory image
     float Split;       // the display is left of this x, the memory image right of it
     float Ui;          // window pixels a 96 dpi pixel: the bar's text and margins
+    uint Gvm;          // gpu_vm's RAM texture (gpu_vm/platform.md): texel t is index t + 0x600000, an address below the ROM gpu_vm's
 };
 
 float4 vs(uint id : SV_VertexID) : SV_Position {
@@ -52,7 +53,17 @@ uint word(uint4 t, uint i) {
 
 // RAM texel by index (physical address - 0x80000000) / 16.
 uint4 ram(uint index) {
+    if (Gvm) index -= 0x600000u;
     return Cur.Load(int3(index % TexWidth, StateRows + index / TexWidth, 0));
+}
+// The index of a guest's address (gpu_vm's below the ROM are the RISC-V machine's less 0x86000000)
+uint index_of(uint a) {
+    return ((Gvm && a < 0x40000000u ? a + 0x86000000u : a) & 0x7fffffff) >> 4;
+}
+uint word_at(uint a) {
+    uint4 t = ram(index_of(a));
+    uint k = (a >> 2) & 3;
+    return k == 0 ? t.r : k == 1 ? t.g : k == 2 ? t.b : t.a;
 }
 
 float3 rgb(uint v) {
@@ -72,20 +83,18 @@ float3 pixelAt(int2 at, uint4 ctrl, float3 c) {
         // drawn over whatever the display shows; image words with a zero top byte are clear
         int2 d = at - int2(asint(cursor.r), asint(cursor.g));
         if (d.x >= 0 && d.y >= 0 && d.x < 32 && d.y < 32) {
-            uint a = (cursor.a & 0x7fffffff) + 4 * (uint)(d.y * 32 + d.x);
-            uint v = word(ram(a >> 4), (a >> 2) & 3);
+            uint v = word_at(cursor.a + 4 * (uint)(d.y * 32 + d.x));
             if ((v >> 24) != 0) return rgb(v);
         }
     }
     if (mode == 4) {
         // layers: a table of rectangles of RAM, the last one on top (docs/machine/display.md)
-        uint table = (ctrl.a & 0x7fffffff) >> 4, count = min(ram(table).r, 16u);
+        uint table = index_of(ctrl.a), count = min(ram(table).r, 16u);
         for (uint n = count; n > 0; n--) {
             uint4 box = ram(table + 2 * n - 1);
             int2 d = at - int2(asint(box.r), asint(box.g));
             if (d.x >= 0 && d.y >= 0 && d.x < (int)box.b && d.y < (int)box.a) {
-                uint word_at = (ram(table + 2 * n).r & 0x7fffffff) + 4 * (uint)(d.y * (int)box.b + d.x);
-                return rgb(word(ram(word_at >> 4), (word_at >> 2) & 3));
+                return rgb(word_at(ram(table + 2 * n).r + 4 * (uint)(d.y * (int)box.b + d.x)));
             }
         }
         return c;
@@ -574,6 +583,7 @@ bool MemoryView::render(ID3D11DeviceContext* ctx, ID3D11ShaderResourceView* cur,
     c.inset = c.bar - 16 * g_ui;
     c.split = memoryViewSplit(width_);
     c.ui = g_ui;
+    c.gvm = gvm_ ? 1u : 0u;
     c.textSize[0] = (float)textW_;
     c.textSize[1] = (float)textH_;
     ctx->UpdateSubresource(cb_.Get(), 0, nullptr, &c, 0, 0);

@@ -62,6 +62,9 @@ static void __init gvm_bootmem(void)
 	early_init_fdt_reserve_self();
 	early_init_fdt_scan_reserved_mem();
 	memblock_dump_all();
+	/* the kernel's early allocations from the bottom: the large blocks at the top stay whole for programs (as the
+	 * RISC-V machine's no-MMU kernel, linux/nommu/patch_drivers.py) */
+	memblock_set_bottom_up(true);
 }
 
 void __init setup_arch(char **cmdline_p)

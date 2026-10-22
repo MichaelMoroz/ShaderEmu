@@ -40,7 +40,7 @@ target_compile_definitions(harness_core PUBLIC
 target_link_libraries(harness_core PUBLIC d3d11 dxgi d3dcompiler dxguid windowscodecs ole32 gdi32)
 
 # One frontend, two backends (D3D11 + FXC, D3D12 + DXC). rvc_harness_dxc only differs in its default.
-set(RVC_HARNESS_SOURCES harness/apps/rvc_harness.cpp harness/apps/rvc_backend11.cpp harness/apps/rvc_backend12.cpp harness/apps/rvc_net.cpp harness/apps/run_lock.cpp)
+set(RVC_HARNESS_SOURCES harness/apps/rvc_harness.cpp harness/apps/rvc_backend11.cpp harness/apps/rvc_backend12.cpp harness/apps/gvm_backend11.cpp harness/apps/rvc_net.cpp harness/apps/run_lock.cpp)
 add_executable(rvc_harness ${RVC_HARNESS_SOURCES})
 target_link_libraries(rvc_harness PRIVATE harness_core d3d12 xaudio2)
 add_executable(rvc_harness_dxc ${RVC_HARNESS_SOURCES})

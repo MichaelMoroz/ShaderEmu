@@ -116,7 +116,7 @@ static long call3(long number, long a, long b, long c, long d, long e, long f) {
     register long a3 __asm__("a3") = d;
     register long a4 __asm__("a4") = e;
     register long a5 __asm__("a5") = f;
-    __asm__ volatile("ecall" : "+r"(a0) : "r"(a7), "r"(a1), "r"(a2), "r"(a3), "r"(a4), "r"(a5) : "memory");
+    __asm__ volatile(MC_ECALL : "+r"(a0) : "r"(a7), "r"(a1), "r"(a2), "r"(a3), "r"(a4), "r"(a5) : "memory");
     return a0;
 }
 

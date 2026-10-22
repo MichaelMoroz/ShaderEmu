@@ -30,6 +30,11 @@ struct BackendOptions {
     bool tickDirect = false;      // --unpack-in-place: the unpack draws into the state texture itself, no zone copied in and back (a tick that does not read the texture there)
     bool ramInplace = false;      // D3D11: RAM in one texture written in place, the commit's passes with RAM_INPLACE (src/ram.h)
     bool laneField = false;       // D3D11, RAM in place: the tick has the lanes' field (LANE_FIELD, experiments/rvc_lean; docs/machine/lanes.md)
+    // --gvm DIR (gpu_vm/platform.md): a gpu_vm machine (gvm_backend11.cpp): its image's folder (vmlinux, gvm.dtb,
+    // rootfs.romfs, ram_mb), its tick (--gvm-tick; gpu_vm/tick/steps/x18.hlsl), RAM in MB (0: the folder's ram_mb, or
+    // 192), bundles a pass (0: 8192)
+    std::string gvmDir, gvmTick;
+    unsigned gvmRamMB = 0, gvmBudget = 0;
 };
 
 // The state texture's rows: 64 of the cores' state, then RAM from 0x80000000 to 0x92000000, 32 KB a
@@ -193,3 +198,4 @@ inline bool loadPayloadLane(const std::string& dir, const std::string& prefix, i
 
 std::unique_ptr<RvcBackend> makeBackend11();
 std::unique_ptr<RvcBackend> makeBackend12();
+std::unique_ptr<RvcBackend> makeBackendGvm();

@@ -97,4 +97,26 @@ for source, directory, symbol, prompt, extra in DRIVERS:
 
 for hook in ('tick_input_hook.py', 'unixwake_hook.py'):
     subprocess.run([sys.executable, os.path.join(kernel, hook), tree], check=True, stdout=subprocess.DEVNULL)
+
+# The RISC-V machine's no-MMU kernel's generic patches (linux/nommu): overlayfs maps a ROM file where it lies, tmpfs
+# renames and removes what comes from the ROM, /proc/PID/maps keeps no lock; and a mapping takes the first run of
+# free pages long enough (patch_drivers.py's alloc_pages_run, from its source: FORCE_MAX_ZONEORDER is in gpuvm's
+# Kconfig, the early allocations from the bottom in setup.c)
+nommu = os.path.join(repo, 'linux', 'nommu')
+src = open(os.path.join(nommu, 'patch_drivers.py')).read()
+RUN = re.search(r"RUN = r'''(.*?)'''", src, re.S).group(1)
+p = os.path.join(tree, 'mm/page_alloc.c')
+s = open(p).read()
+if 'what the run does not need goes back' not in s:
+    open(p, 'w').write(s + RUN)
+p = os.path.join(tree, 'mm/nommu.c')
+s = open(p).read()
+old = '\tbase = alloc_pages_exact(total << PAGE_SHIFT, GFP_KERNEL);\n'
+if 'alloc_pages_run' not in s:
+    assert s.count(old) == 1
+    s = s.replace(old, '\tbase = total >= 16 ? alloc_pages_run(total) : NULL;\n\tif (!base)\n\t\tbase = alloc_pages_exact(total << PAGE_SHIFT, GFP_KERNEL);\n')
+    s = s.replace('static int do_mmap_private(', 'void *alloc_pages_run(unsigned long nr);\n\nstatic int do_mmap_private(', 1)
+    open(p, 'w').write(s)
+for patch in ('patch_ovl.py', 'patch_ramfs.py', 'patch_procmaps.py'):
+    subprocess.run([sys.executable, os.path.join(nommu, patch), tree], check=True, stdout=subprocess.DEVNULL)   # (after alloc_pages_run: patch_ovl.py changes its lines)
 print('drivers.py: the machine\'s drivers in', tree)

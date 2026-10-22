@@ -158,6 +158,10 @@ struct Options {
     std::string dxcOpt = "-O3", dxcSm = "6_6", dxcDir;
     bool rvcDirSet = false, payloadSet = false;
     std::string image;        // --image: a named boot image from kImages
+    // --gvm DIR: a gpu_vm machine (gpu_vm/platform.md, harness/apps/gvm_backend11.cpp) booting the image in DIR
+    // (vmlinux, gvm.dtb, rootfs.romfs); --gvm-tick FILE its tick, --gvm-ram MB its RAM
+    std::string gvm, gvmTick;
+    unsigned gvmRamMB = 0;
     int machine = -1;         // --machine: 0 full, 1 no paging, 2 machine mode only, -1 = most the image allows
     std::vector<std::string> defines;
     GpuOptions gpu;
@@ -208,6 +212,9 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
   --viz                open a window showing memory live (writes glow); --no-viz turns it off
   --viz-capture FILE   save the memory view as a BMP at exit
   --resume             when started without other arguments: resume the shell snapshot instead of booting
+  --gvm DIR            a gpu_vm machine (gpu_vm/platform.md): DIR's vmlinux, gvm.dtb and rootfs.romfs (as
+                       gpu_vm/userland/romroot.sh or apps/image.sh make them), the tick of --gvm-tick FILE
+                       (gpu_vm/tick/steps/x18.hlsl), --gvm-ram MB of RAM (DIR's ram_mb, or 192); --ticks its bundles a pass
   --image NAME|DIR     boot a named image instead of --payload/--ram/--mtd/--dtb; --image list shows them.
                        DIR: a folder of our Linux without an MMU (a private image, build\\images\\NAME)
                        Without it (and without --payload, --ram or --load-state) a menu asks at start
@@ -337,6 +344,9 @@ bool parseArgs(int argc, char** argv, Options& o) {
         }
         else if (a == "--payload") { o.payloadDir = next("--payload"); o.payloadSet = true; }
         else if (a == "--image") o.image = next("--image");
+        else if (a == "--gvm") o.gvm = next("--gvm");
+        else if (a == "--gvm-tick") o.gvmTick = next("--gvm-tick");
+        else if (a == "--gvm-ram") o.gvmRamMB = (unsigned)atoi(next("--gvm-ram").c_str());
         else if (a == "--machine") {
             std::string v = next("--machine");
             const char* names[4] = {"auto", "full", "nopaging", "mmode"};
@@ -719,6 +729,13 @@ int main(int argc, char** argv) {
     }
     std::error_code ec;
     bool haveOpt = fs::exists("experiments/rvc_opt/main.shader", ec);
+    if (!opt.gvm.empty()) {
+        terminalMode = false;
+        if (opt.cpu || !opt.compute.empty() || opt.dxc) { fprintf(stderr, "[harness] --gvm is D3D11's, with no --cpu or --compute\n"); return 2; }
+        opt.rvcDir = "experiments/rvc_opt";
+        opt.rvcDirSet = true;
+        opt.kernel = "nommu";
+    }
     // (--cpu needs the shader with the GPU device and the display: upstream's has neither)
     if ((terminalMode || opt.dxc || opt.cpu || !opt.compute.empty()) && !opt.rvcDirSet && haveOpt) opt.rvcDir = "experiments/rvc_opt";
     const char* shellSnap = "build/snapshots/rvc_shell.snap";
@@ -733,7 +750,7 @@ int main(int argc, char** argv) {
         if (!linuxBuilt(opt)) opt.kernel = "mmu";
     }
     if (terminalMode && opt.image.empty() && !opt.resume && !interactive) opt.image = "linux-net";
-    bool chosen = !opt.image.empty() || opt.payloadSet || !opt.loadState.empty() || opt.resume;
+    bool chosen = !opt.image.empty() || opt.payloadSet || !opt.loadState.empty() || opt.resume || !opt.gvm.empty();
     if (!chosen && interactive && !chooseImage(opt, canResume)) return 0;
     if (terminalMode) {
         if (opt.resume && canResume) {
@@ -932,7 +949,15 @@ int main(int argc, char** argv) {
     // --- Material and backend ---
     Material mat;
     mat.applyDefaults(shader);
-    std::unique_ptr<RvcBackend> backendPtr = opt.dxc ? makeBackend12() : makeBackend11();
+    if (!opt.gvm.empty()) {
+        bo.gvmDir = opt.gvm;
+        bo.gvmTick = opt.gvmTick;
+        bo.gvmRamMB = opt.gvmRamMB;
+        bo.gvmBudget = (unsigned)opt.ticks;
+        opt.cores = kCores;   // (the workers' counts come with the control words)
+        opt.initFrames = 0;
+    }
+    std::unique_ptr<RvcBackend> backendPtr = !opt.gvm.empty() ? makeBackendGvm() : opt.dxc ? makeBackend12() : makeBackend11();
     RvcBackend& backend = *backendPtr;
     if (!backend.init(bo, shader, mat, err)) {
         fprintf(stderr, "[harness] %s\n", err.c_str());
