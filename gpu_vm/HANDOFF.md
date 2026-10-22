@@ -120,6 +120,10 @@ Phases, each one agent's (one writer of the LLVM tree in WSL at a time):
 3. Codegen and clang (`gpuvm-unknown-elf`): ISel, calling convention, frame lowering, branch relaxation.
 4. compiler-rt builtins, a small bare-metal libc and crt0; test apps (hello, isaloops, CoreMark) on gvm_cpu.
 5. Linux 5.17 `arch/gpuvm` (no MMU), `make ARCH=gpuvm LLVM=1`; then boot on gvm_cpu.
+- **Linux boots on the card** (22 October 2026): `gvm_gpu` (`gpu_vm/gpu`) with tick x17 runs vmlinux to init's line in
+  2.1 s of card time (6.2M bundles, 15,148 passes, 2.96M bundles/s), lockstep with the reference clean (`--check`);
+  gvm_cpu's tests, the 56 exec tests and CoreMark (5.7M bundles/s) run on the card. 15,110 of the boot's passes end on
+  a full write cache (~414 bundles a pass): the next speed-up is there and in the kernel's operation threshold.
 - **The kernel and userland on the GPU** (goal set 22 October 2026): tick x17 makes the whole ISA (general step,
   traps, SRs, interrupts, wait/sync, the operations), then a GPU harness boots Linux on the card. A hard requirement
   (the user): the tick stays 2-3x the lean RISC-V tick's effective work a second: every one of the seven loops at 2x
