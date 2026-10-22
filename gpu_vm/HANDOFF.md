@@ -92,8 +92,22 @@ trace.ps1). Not pushed.
   as possible, the same DXBC), sq_sw2's structure, RAM 8192 texels wide, the ROM a read-only texture of its own read by
   every load (bit 30 chooses; free, so kept). 2.62 times the lean tick, the reference's on the card (`rom` case too).
   Variants are tried as copies with switches (x15m, x15sq) and the winner written into the plain step.
-- Next: the general step, traps and SRs in the tick; `sincos` and a 64-bit mul as ops of two results; then the LLVM
-  target, gvm_cpu and Linux.
+- **x17** (`gpu_vm/tick/steps/x17.hlsl`, 800 lines, plain) is the tick that runs everything: x16's fast loop, the general
+  step (every op, any address, d and q, atomics), traps, eret, the special registers, interrupts, wait, sync, the
+  operations' queue (8 in flight a core) and the commit's rounds (stage, write, progress), many cores, x16's full step
+  for paths 1 and 2. Its layout, cbuffers and draws: `gpu_vm/tick/STATE.md` (the GPU harness's contract). Every bench
+  case is the reference's on WARP and on the card, the new `memx`, `irq` and `opq` among them. 2.55 times the lean
+  tick on the seven loops (x16 2.63 in the same batch; the least loads 2.22); floats 7.5 (x16 8.1). The write cache is
+  514 entries since the boot (passes ended on a full cache: init's prompt 2.10 s to 1.71 s). README "x17".
+- x17 changed the ISA twice (`isa.h`, `gvm_ref.h`, gvm_cpu's tests pass): a b, h or w access stays in its address's word
+  (a crossing test cost the memory loops 6-9%; the compiler splits one it does not know to be in a word), and the paths
+  are renumbered (memory 3-6, integers 7: with an operation in flight the fast loop takes path 7 alone, for nothing).
+  A load or store the fast loop does not make (a fault, the boot area, the operations region) is noted and the pass is
+  made again in the next with memory in the general step. Read the operations' counts with ld.d (a plain lw there
+  makes its pass again).
+- Next for the tick: the boot's bundles are 10% path 0 (mostly cc 0 control words: calls, returns, the control word's
+  add), made op by op by the general step; a faster way for them (a step for whole cc 0 bundles, or the fast loop
+  taking calls and returns) is the next lever on real code. `sincos` and a 64-bit mul as ops of two results.
 - Candidate ops the user raised (22 October 2026), to decide by measurement, not added yet:
   - 64-bit integers on register pairs (add, sub, compare, the product's two halves): the kernel's u64 (time, loff_t,
     do_div). Measure libgcc's `__muldi3`, `__udivdi3` and the like under `RVC_PROF` / `tools/prof.py` first.
@@ -172,5 +186,5 @@ The card drifts ~5% between sessions: compare within one run (batches do).
 ## Not started
 
 LLVM gpu_vm target; `gvm_cpu` (reference machine as an emulator for Linux); compiler-rt, musl arch/gpuvm, bFLT;
-Linux arch/gpuvm; the tick's general step, traps/interrupts/SRs, D/Q loads, atomics, the operations region, workers;
+Linux arch/gpuvm; workers;
 integration into the harness/Unity (RAM row 64, device window moved to 0x10000, mailboxes 0x00c00000).
