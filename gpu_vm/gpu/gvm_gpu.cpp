@@ -1065,6 +1065,7 @@ int main(int argc, char** argv) {
     uint64_t passes = 0, bundles = 0, ops = 0, readbacks = 0, again = 0, ram_checked = 0, ends[6] = {0, 0, 0, 0, 0, 0};
     uint32_t K = 1;
     int code = -1;
+    bool until_hit = false;
     double prof[5] = {0, 0, 0, 0, 0};
     uint64_t prof_passes = 0;
     ID3D11Query* prof_dis = nullptr;
@@ -1102,12 +1103,12 @@ int main(int argc, char** argv) {
                         (unsigned long long)times[p], s[V_PC], s[V_FLAGS] & F_AGAIN ? 0 : s[V_LAST], s[V_FLAGS] & F_AGAIN ? "again" : s[V_END] < 6 ? end_name[s[V_END]] : "?", s[V_FLAGS], s[V_QN]);
             }
             if (O.console) console_print(cons[p].data());
-            if (g_until && code < 0) {
+            if (g_until && !until_hit) {   // (the batch's other passes still go through the check: its RAM is the last one's)
+                until_hit = true;
                 QueryPerformanceCounter(&f1);
                 out_flush();
                 fprintf(stderr, "gvm_gpu: \"%s\" on the console after %.3f s, pass %llu, %llu bundles\n", O.until.c_str(),
                         double(f1.QuadPart - f0.QuadPart) / fq.QuadPart, (unsigned long long)passes, (unsigned long long)bundles);
-                code = 0;
             }
             if (O.check) {
                 if (!ref_pass(passes, times[p], prev, now)) { code = EXIT_CHECK; break; }
@@ -1128,6 +1129,7 @@ int main(int argc, char** argv) {
                     prof_passes++;
                 }
         }
+        if (code < 0 && until_hit) code = 0;
         if (code >= 0) break;
         if (O.check && O.check_ram && passes - ram_checked >= O.check_ram) {   // all of RAM, as the batch's last pass left it
             bool idle = true;

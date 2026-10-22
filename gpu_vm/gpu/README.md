@@ -90,3 +90,6 @@ execution tests built in `build/gvm_exec` (`gpu_vm/llvm/test/exec/run.sh`).
   bundles on average: 99.7% end on a full write cache (130 words), and the tick costs 170 us a pass (0.41 us a bundle,
   CoreMark's 0.17). A line typed comes back (the tty's echo and init's). `--check` from the boot through init, the
   typed line and idle: no difference (46,431 passes, RAM too, to 8 M bundles).
+- The tick agent's x17 in progress (paths 1 and 2 in `step12`), with its `run()` choosing `step12` or `general` by
+  `if`/`else` (as `?:` fxc made both calls): the same tests pass with `--check`, the boot is the reference's (RAM too),
+  and Linux reaches init in **2.1 s** (a pass's tick 112 us); CoreMark is unchanged.
