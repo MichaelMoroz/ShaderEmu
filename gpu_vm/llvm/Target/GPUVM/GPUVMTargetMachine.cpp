@@ -103,6 +103,8 @@ public:
   void addPreEmitPass() override {
     if (getOptLevel() != CodeGenOptLevel::None)
       addPass(createGPUVMCountedLoopsPass());
+    if (getOptLevel() != CodeGenOptLevel::None)
+      addPass(createGPUVMBranchFillPass());
     addPass(&BranchRelaxationPassID);
   }
 };
