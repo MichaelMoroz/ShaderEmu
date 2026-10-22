@@ -46,8 +46,16 @@ static struct SE_APART { ref_viewpass_t rvp; lightstyle_t *styles; int have; } n
 static int mode = -1, worker, out, piped, sums = -1;
 static uint settles;
 static int ref_count;
+#ifdef __gpuvm__
+static inline uint32_t rd_time( void ) { uint32_t v; __asm__ volatile( "mfsr %0, time_lo" : "=r"( v )); return v; }
+#else
 static inline uint32_t rd_time( void ) { uint32_t v; __asm__ volatile( "rdtime %0" : "=r"( v )); return v; }
+#endif
+#ifdef __gpuvm__
+static inline uint32_t rd_ins( void ) { uint32_t v; __asm__ volatile( "mfsr %0, cycle" : "=r"( v )); return v; }
+#else
 static inline uint32_t rd_ins( void ) { uint32_t v; __asm__ volatile( "rdinstret %0" : "=r"( v )); return v; }
+#endif
 static struct SE_APART { uint32_t start, end, ins, waits; int most; } job_tl;
 unsigned hlglRingWaits( int *most );	// the worker's
 extern unsigned mcw_faults, mcw_calls;

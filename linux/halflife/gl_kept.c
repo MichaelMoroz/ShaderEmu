@@ -341,8 +341,16 @@ static int world_worker, ents_worker, ents_helper, glow_worker, relight_worker, 
 static struct __attribute__(( aligned( 16 ))) { volatile int walked, marked, unused[2]; } world_walk;	// the world worker's: its lists are made, its nodes found
 
 int mcw_on_worker( void );
+#ifdef __gpuvm__
+#define END_PASS() __asm__ volatile( "sync" )	// (mc.h's mc_end_pass)
+#else
 #define END_PASS() __asm__ volatile( ".word 0x0000100f" )	// (mc.h's mc_end_pass)
+#endif
+#ifdef __gpuvm__
+static inline uint32_t tl_now( void ) { uint32_t v; __asm__ volatile( "mfsr %0, time_lo" : "=r"( v )); return v; }	// DEBUG
+#else
 static inline uint32_t tl_now( void ) { uint32_t v; __asm__ volatile( "rdtime %0" : "=r"( v )); return v; }	// DEBUG
+#endif
 typedef struct __attribute__(( aligned( 16 ))) { volatile uint32_t at, unused[3]; } tl_t;
 static tl_t tl_world, tl_mark, tl_help, tl_ents, tl_enhelp, tl_glow, tl_relight;
 static struct { uint32_t give, sum[12], n; } tl;
@@ -591,7 +599,11 @@ static void R_Relight( surflist_t *l, relit_t *r )
 }
 
 static struct __attribute__(( aligned( 16 ))) { uint32_t walk, sort, unused[2]; } wdbg, wdbg_said;	// DEBUG: the world worker's, this core's copy
+#ifdef __gpuvm__
+static inline uint32_t wd_now( void ) { uint32_t v; __asm__ volatile( "mfsr %0, cycle" : "=r"( v )); return v; }
+#else
 static inline uint32_t wd_now( void ) { uint32_t v; __asm__ volatile( "rdinstret %0" : "=r"( v )); return v; }
+#endif
 static struct __attribute__(( aligned( 16 ))) { uint32_t walk, light, write, ents, ewrite, unused[3]; } rdbg, rdbg_said;	// DEBUG: the relight worker's, this core's copy
 static struct __attribute__(( aligned( 16 ))) { uint32_t n, draw, world, unused; } rdbg0;	// DEBUG: this core's
 static uint R_WorldJob( uint clipflags, uint unused )
@@ -711,7 +723,11 @@ static uint R_RelightJob( uint unused0, uint unused1 )
 }
 
 static struct __attribute__(( aligned( 16 ))) { uint32_t ents, light, surfs, n; } edbg;	// DEBUG
+#ifdef __gpuvm__
+static inline uint32_t ed_now( void ) { uint32_t v; __asm__ volatile( "mfsr %0, cycle" : "=r"( v )); return v; }
+#else
 static inline uint32_t ed_now( void ) { uint32_t v; __asm__ volatile( "rdinstret %0" : "=r"( v )); return v; }
+#endif
 static uint R_EntsJob( uint unused0, uint unused1 )
 {
 	uint32_t t0 = ed_now( );

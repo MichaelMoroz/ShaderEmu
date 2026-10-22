@@ -116,7 +116,11 @@ static unsigned cycles (void)
 {
 	unsigned v;
 
+#ifdef __gpuvm__
+	__asm__ volatile ("mfsr %0, cycle" : "=r"(v));
+#else
 	__asm__ volatile ("rdcycle %0" : "=r"(v));
+#endif
 	return v;
 }
 
@@ -177,10 +181,18 @@ void SE_SceneSwap (void)
 	unsigned at;
 
 	SE_FrameEnd ();
+#ifdef __gpuvm__
+	__asm__ volatile ("mfsr %0, time_lo" : "=r"(at));
+#else
 	__asm__ volatile ("rdtime %0" : "=r"(at));
+#endif
 	qglSwapHand ();
 	se_draw_ticks[1] -= at;
+#ifdef __gpuvm__
+	__asm__ volatile ("mfsr %0, time_lo" : "=r"(at));
+#else
 	__asm__ volatile ("rdtime %0" : "=r"(at));
+#endif
 	se_draw_ticks[1] += at;
 }
 
@@ -206,7 +218,11 @@ static void after_swap (void)
 		printf ("quake: holding frame %u\n", frames);
 		fflush (stdout);
 		for (;;)
+#ifdef __gpuvm__
+			__asm__ volatile ("wait");	/* pause: the machine's frame ends */
+#else
 			__asm__ volatile (".word 0x0100000f");	/* pause: the machine's frame ends */
+#endif
 	}
 	if (!level_shown && stats_ms && cls.signon == SIGNONS) {
 		/* from the program's start to a level's first picture */

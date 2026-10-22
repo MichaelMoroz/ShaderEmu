@@ -52,7 +52,11 @@ int SE_Flat(void);
 #define REG_INTO 0x50
 #define REG_LOCK 0x60
 #define REG_VOLUME 0x300
+#ifdef __gpuvm__
+#define next_frame() __asm__ volatile("wait")
+#else
 #define next_frame() __asm__ volatile(".word 0x0100000f")
+#endif
 
 enum { CMD_CLEAR = 1, CMD_DRAW = 3 };
 enum { VERTEX_CLIP = 1, VERTEX_MODELVIEW = 0x100, VERTEX_QUADS = 0x200, VERTEX_COMPACT = 0x400, VERTEX_FLOAT = 0x800,
@@ -300,7 +304,11 @@ static uint32_t chunk_colours;
 
 uint32_t cycles(void) {
 	uint32_t v;
+#ifdef __gpuvm__
+	__asm__ volatile("mfsr %0, cycle" : "=r"(v));
+#else
 	__asm__ volatile("rdcycle %0" : "=r"(v));
+#endif
 	return v;
 }
 

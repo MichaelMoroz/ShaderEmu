@@ -1903,13 +1903,21 @@ view_take(void)
 	if (segs != level_segs || numsegs != level_count || doom_level_loads != level_made) {
 		unsigned began, now;
 
+#ifdef __gpuvm__
+		__asm__ volatile("mfsr %0, cycle" : "=r"(began));
+#else
 		__asm__ volatile("rdcycle %0" : "=r"(began));
+#endif
 		asked_count = 0;
 		for (i = 0; i < CREW; i++)
 			shares[i].asked_count = 0;
 		new_level();
 		doom_view_inline = 3;
+#ifdef __gpuvm__
+		__asm__ volatile("mfsr %0, cycle" : "=r"(now));
+#else
 		__asm__ volatile("rdcycle %0" : "=r"(now));
+#endif
 		if (getenv("DOOM_GL_DEBUG"))
 			fprintf(stderr, "doom_gl: making the level for the GPU took %uk instructions\n", (now - began) / 1000);
 	}
@@ -2427,7 +2435,11 @@ R_RenderPlayerView(player_t *player)
 	unsigned began, now;
 	int y;
 
+#ifdef __gpuvm__
+	__asm__ volatile("mfsr %0, cycle" : "=r"(began));
+#else
 	__asm__ volatile("rdcycle %0" : "=r"(began));
+#endif
 	if (!doom_gl) {
 		soft_tables();
 		R_RenderPlayerView_soft(player);
@@ -2455,7 +2467,11 @@ R_RenderPlayerView(player_t *player)
 		keyed = 1;
 	}
 	view_take();
+#ifdef __gpuvm__
+	__asm__ volatile("mfsr %0, cycle" : "=r"(now));
+#else
 	__asm__ volatile("rdcycle %0" : "=r"(now));
+#endif
 	doom_view[0] += now - began;
 }
 
@@ -2502,14 +2518,22 @@ doom_view_draw(int share)
 	unsigned began, now;
 	int width, height, y, held;
 
+#ifdef __gpuvm__
+	__asm__ volatile("mfsr %0, cycle" : "=r"(began));
+#else
 	__asm__ volatile("rdcycle %0" : "=r"(began));
+#endif
 	if (share) {
 		if (world_on) {
 			things_told(me);
 			drawn_wait(share);
 			world_things(me);
 		}
+#ifdef __gpuvm__
+		__asm__ volatile("mfsr %0, cycle" : "=r"(now));
+#else
 		__asm__ volatile("rdcycle %0" : "=r"(now));
+#endif
 		me->cost += now - began;
 		return;
 	}
@@ -2588,7 +2612,11 @@ doom_view_draw(int share)
 	if (!held)
 		weapon();
 	glDisable(GL_ALPHA_TEST);
+#ifdef __gpuvm__
+	__asm__ volatile("mfsr %0, cycle" : "=r"(now));
+#else
 	__asm__ volatile("rdcycle %0" : "=r"(now));
+#endif
 	me->cost += now - began;
 }
 

@@ -219,7 +219,11 @@ static unsigned cycles (void)
 {
 	unsigned v;
 
+#ifdef __gpuvm__
+	__asm__ volatile ("mfsr %0, cycle" : "=r"(v));
+#else
 	__asm__ volatile ("rdcycle %0" : "=r"(v));
+#endif
 	return v;
 }
 
@@ -227,7 +231,11 @@ static unsigned ticks (void)
 {
 	unsigned v;
 
+#ifdef __gpuvm__
+	__asm__ volatile ("mfsr %0, time_lo" : "=r"(v));
+#else
 	__asm__ volatile ("rdtime %0" : "=r"(v));
+#endif
 	return v;
 }
 

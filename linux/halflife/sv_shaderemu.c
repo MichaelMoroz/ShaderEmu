@@ -191,8 +191,16 @@ int SE_ServerTakePacket( void *data, size_t *length )
 
 // ---- the job ----
 
+#ifdef __gpuvm__
+static inline uint32_t sv_now( void ) { uint32_t v; __asm__ volatile( "mfsr %0, time_lo" : "=r"( v )); return v; }	// DEBUG
+#else
 static inline uint32_t sv_now( void ) { uint32_t v; __asm__ volatile( "rdtime %0" : "=r"( v )); return v; }	// DEBUG
+#endif
+#ifdef __gpuvm__
+static inline uint32_t sv_ins( void ) { uint32_t v; __asm__ volatile( "mfsr %0, cycle" : "=r"( v )); return v; }
+#else
 static inline uint32_t sv_ins( void ) { uint32_t v; __asm__ volatile( "rdinstret %0" : "=r"( v )); return v; }
+#endif
 static struct __attribute__(( aligned( 16 ))) { volatile uint32_t start, end, ins, unused; } sv_tl;
 static struct { uint32_t give, settle, sum[6], n; unsigned short bins[40]; } sv_tl0;
 static uint32_t job_body( uint32_t unused )

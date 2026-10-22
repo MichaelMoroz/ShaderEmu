@@ -46,12 +46,12 @@ for a in "$@"; do
     -mplt|-mno-plt|-mexplicit-relocs|-mno-explicit-relocs|-msave-restore|-mno-save-restore|-mriscv-attribute|-mno-riscv-attribute|\
     -mno-fdiv|-mfdiv|-mdiv|-mno-div) ;;
     --param|-param) skip=1 ;;
-    --param=*|-fsched-pressure|-fno-sched-pressure|-ffat-lto-objects|-fno-fat-lto-objects|-flto|-flto=*|-fno-lto|\
+    --param=*|-fsched-pressure|-fno-sched-pressure|-ffat-lto-objects|-fno-fat-lto-objects|-flto|-flto=*|-flto-*|-fno-lto|\
     -fuse-linker-plugin|-fno-tree-*|-ftree-*|-fno-ipa-*|-fipa-*|-fno-gcse*|-fgcse*|-fno-schedule-insns*|-fschedule-insns*|\
     -fno-ira-*|-fira-*|-fno-code-hoisting|-fno-early-inlining|-fallow-store-data-races|-fno-allow-store-data-races|\
     -fno-semantic-interposition|-fno-tree-loop-distribute-patterns|-fno-inline-small-functions|-finline-small-functions|\
     -fno-reorder-blocks*|-freorder-blocks*|-fno-split-wide-types|-fno-var-tracking*|-fmerge-all-constants|-fno-peephole2|\
-    -fno-move-loop-invariants|-fno-crossjumping|-fno-shrink-wrap|-fno-guess-branch-probability|-fno-ipa-cp|-fopt-info*|\
+    -fno-toplevel-reorder|-ftoplevel-reorder|-fno-move-loop-invariants|-fno-crossjumping|-fno-shrink-wrap|-fno-guess-branch-probability|-fno-ipa-cp|-fopt-info*|\
     -fno-pie|-fno-PIE|-fno-pic|-fno-PIC|-fpie|-fPIE|-fpic|-fPIC|-ffp-contract=off|-fexcess-precision=*|-fno-stack-clash-protection|\
     -fno-printf-return-value|-fno-isolate-erroneous-paths-*|-fvect-cost-model=*|-fno-ssa-phiopt|\
     -flimit-function-alignment|-falign-functions=*|-falign-loops=*|-falign-jumps=*|-falign-labels=*|-fno-align-*|\

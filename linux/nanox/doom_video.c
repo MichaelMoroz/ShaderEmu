@@ -77,7 +77,11 @@ cycles(void)
 {
 	uint32_t v;
 
+#ifdef __gpuvm__
+	__asm__ volatile("mfsr %0, cycle" : "=r"(v));
+#else
 	__asm__ volatile("rdcycle %0" : "=r"(v));
+#endif
 	return v;
 }
 
@@ -498,7 +502,11 @@ doom_wait(void)
 	uint32_t began = cycles();
 
 	if (gpu)
+#ifdef __gpuvm__
+		__asm__ volatile("wait");
+#else
 		__asm__ volatile(".word 0x0100000f");
+#endif
 	all_wait += cycles() - began;
 }
 
@@ -845,7 +853,11 @@ I_FinishUpdate(void)
 		 * it in a buffer the server has not read yet, and an answer from the server
 		 * means it has drawn everything sent before the question */
 		for (wait = 0; gpu && wait < 4; wait++)
+#ifdef __gpuvm__
+			__asm__ volatile("wait");
+#else
 			__asm__ volatile(".word 0x0100000f");
+#endif
 		GrGetWindowInfo(doom_window(), &info);
 		if (gpu && getenv("DOOM_SUM"))
 			list_sum();
