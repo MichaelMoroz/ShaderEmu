@@ -37,6 +37,7 @@ public:
   void ParseSubtargetFeatures(StringRef CPU, StringRef TuneCPU, StringRef FS);
 
   bool enablePostRAMachineScheduler() const override { return true; }
+  bool enableMachineScheduler() const override { return true; }
 
   const GPUVMInstrInfo *getInstrInfo() const override { return &InstrInfo; }
   const GPUVMFrameLowering *getFrameLowering() const override {

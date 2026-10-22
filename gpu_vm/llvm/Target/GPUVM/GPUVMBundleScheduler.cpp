@@ -42,6 +42,7 @@ struct OpInfo {
   bool Control = false;
   uint32_t Word = 0;
   bool Long = false;
+  bool Meta = false; // no op: KILL, IMPLICIT_DEF ...
 };
 
 class GPUVMBundleStrategy : public MachineSchedStrategy {
@@ -53,6 +54,17 @@ class GPUVMBundleStrategy : public MachineSchedStrategy {
   // The open bundle
   SmallVector<uint32_t, 2> Words;
   bool HasLong = false;
+  // The registers the branch after the region compares: their writers go
+  // early (a branch whose bundle writes one needs a bundle of its own).
+  SmallVector<Register, 2> BranchRegs;
+
+  bool writesBranchReg(const SUnit *SU) const {
+    for (Register R : BranchRegs)
+      if (SU->getInstr()->modifiesRegister(R, TRI))
+        return true;
+    return false;
+  }
+  void findBranchRegs();
 
   unsigned enc(const MachineOperand &MO) const {
     if (!MO.isReg() || !MO.getReg().isPhysical())
@@ -83,6 +95,7 @@ public:
     Infos.clear();
     Words.clear();
     HasLong = false;
+    findBranchRegs();
   }
 
   SUnit *pickNode(bool &IsTopNode) override;
@@ -92,6 +105,35 @@ public:
 };
 
 } // namespace
+
+void GPUVMBundleStrategy::findBranchRegs() {
+  BranchRegs.clear();
+  MachineBasicBlock::iterator E = DAG->end();
+  if (DAG->SUnits.empty() ||
+      E == DAG->SUnits[0].getInstr()->getParent()->end() ||
+      !GPUVMInstrInfo::isCondBranch(E->getOpcode()))
+    return;
+  for (unsigned I = 0; I < 2; ++I) {
+    const MachineOperand &MO = E->getOperand(I);
+    if (MO.isReg() && MO.getReg() != GPUVM::R0)
+      BranchRegs.push_back(MO.getReg());
+  }
+  // `addi r, r, k; bnei r, 0` becomes addbnz (GPUVMCountedLoops): the step
+  // is no op then, and stays the last to touch r.
+  if (!BranchRegs.empty() &&
+      (E->getOpcode() == GPUVM::BNEI || E->getOpcode() == GPUVM::BEQI) &&
+      E->getOperand(1).getImm() == 0)
+    for (const SUnit &SU : DAG->SUnits) {
+      const MachineInstr &MI = *SU.getInstr();
+      if (MI.getOpcode() == GPUVM::ADDI &&
+          MI.getOperand(0).getReg() == BranchRegs[0] &&
+          MI.getOperand(1).getReg() == BranchRegs[0] &&
+          MI.getOperand(2).isImm() && isInt<6>(MI.getOperand(2).getImm())) {
+        BranchRegs.clear();
+        break;
+      }
+    }
+}
 
 const OpInfo &GPUVMBundleStrategy::info(const SUnit *SU) {
   auto It = Infos.find(SU);
@@ -109,6 +151,7 @@ const OpInfo &GPUVMBundleStrategy::info(const SUnit *SU) {
     int64_t V = MO.getImm();
     return Float ? (static_cast<uint32_t>(V) & 0xfffff) != 0 : !isInt<12>(V);
   };
+  I.Meta = MI.isMetaInstruction();
   I.Known = !MI.isPseudo() || MI.getOpcode() == GPUVM::LQ_Q ||
             MI.getOpcode() == GPUVM::SQ_Q || MI.getOpcode() == GPUVM::SQ_OP;
   if (GPUVMII::isControl(TSFlags) || MI.isCall() || MI.isTerminator()) {
@@ -181,15 +224,25 @@ SUnit *GPUVMBundleStrategy::pickNode(bool &IsTopNode) {
   IsTopNode = true;
   if (Ready.empty())
     return nullptr;
-  auto Better = [](const SUnit *A, const SUnit *B) {
-    // the longer path to the region's end, then the original order
+  auto Better = [this](const SUnit *A, const SUnit *B) {
+    // a writer of the branch's registers, the longer path to the region's
+    // end, then the original order
+    bool WA = writesBranchReg(A), WB = writesBranchReg(B);
+    if (WA != WB)
+      return WA;
     if (A->getHeight() != B->getHeight())
       return A->getHeight() > B->getHeight();
     return A->NodeNum < B->NodeNum;
   };
   SUnit *Best = nullptr;
+  // What makes no op goes first: it takes no place.
+  for (SUnit *SU : Ready)
+    if (info(SU).Meta) {
+      Best = SU;
+      break;
+    }
   // One op open: an op that fits as op 1.
-  if (Words.size() == 1) {
+  if (!Best && Words.size() == 1) {
     for (SUnit *SU : Ready)
       if (fits(info(SU)) && (!Best || Better(SU, Best)))
         Best = SU;
@@ -223,7 +276,8 @@ SUnit *GPUVMBundleStrategy::pickNode(bool &IsTopNode) {
               break;
             }
           }
-        Score = (Pair ? 2 : 0) + (GPUVM::bundle::lite(I.Word) ? 0 : 1);
+        Score = (writesBranchReg(SU) ? 4 : 0) + (Pair ? 2 : 0) +
+                (GPUVM::bundle::lite(I.Word) ? 0 : 1);
       }
       if (Score > BestScore || (Score == BestScore && Better(SU, Best))) {
         Best = SU;
@@ -237,6 +291,8 @@ SUnit *GPUVMBundleStrategy::pickNode(bool &IsTopNode) {
 
 void GPUVMBundleStrategy::schedNode(SUnit *SU, bool IsTopNode) {
   const OpInfo &I = info(SU);
+  if (I.Meta)
+    return;
   if (!I.Known || I.Control) {
     Words.clear();
     HasLong = false;

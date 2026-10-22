@@ -475,10 +475,18 @@ index 5e6fb3cca..dda7c6afc 100644
                       const llvm::opt::ArgList &Args);
  
 diff --git a/clang/lib/Driver/ToolChains/CommonArgs.cpp b/clang/lib/Driver/ToolChains/CommonArgs.cpp
-index 08c06951c..2ba66b911 100644
+index 08c06951c..b7c734b2d 100644
 --- a/clang/lib/Driver/ToolChains/CommonArgs.cpp
 +++ b/clang/lib/Driver/ToolChains/CommonArgs.cpp
-@@ -585,6 +585,8 @@ void tools::AddLinkerInputs(const ToolChain &TC, const InputInfoList &Inputs,
+@@ -121,6 +121,7 @@ static bool useFramePointerForTargetByDefault(const llvm::opt::ArgList &Args,
+   case llvm::Triple::mips64el:
+   case llvm::Triple::mips:
+   case llvm::Triple::mipsel:
++  case llvm::Triple::gpuvm:
+     return !clang::driver::tools::areOptimizationsEnabled(Args);
+   default:
+     break;
+@@ -585,6 +586,8 @@ void tools::AddLinkerInputs(const ToolChain &TC, const InputInfoList &Inputs,
  
  const char *tools::getLDMOption(const llvm::Triple &T, const ArgList &Args) {
    switch (T.getArch()) {
