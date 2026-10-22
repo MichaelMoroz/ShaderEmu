@@ -90,7 +90,7 @@ def gpu_vm_case(c):
         c['cmd'] = cmd + '; media_test audio /usr/share/play-test.mp3 %s 63' % OUT
         c['output'] = ('pcm16', 30.0)
     if name == 'nxplay':
-        c['sums'] = [(r'nxplay: sum ([0-9a-f]+ of \d+) samples', ['e5fd8f8c of 141120', '1a14a562 of 176400', '98e66905 of 1354752'])]
+        c['sums'] = [(r'nxplay: sum ([0-9a-f]+ of (?:141120|176400|1354752)) samples', ['e5fd8f8c of 141120', '1a14a562 of 176400', '98e66905 of 1354752'])]
         c['count'] = [(r'nxplay: sum [0-9a-f]+ of 1594368 samples', 2)]
     if name in NEAR:
         c['near'] = NEAR[name]

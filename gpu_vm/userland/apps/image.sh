@@ -107,7 +107,7 @@ def walk(top, programs):
             if n.endswith('.romlink'):   # NAME.romlink: NAME, a link to the path it names (make_linux_image.py's hard link)
                 q = p[:-len('.romlink')]
                 if q not in have:
-                    add_dir(rel or '/'); lines.append('slink %s %s 0777 0 0' % (q, open(src).read().strip())); have.add(q)
+                    add_dir(rel or '/'); lines.append((chr(9) if ' ' in q else ' ').join(('slink', q, open(src).read().strip(), '0777', '0', '0'))); have.add(q)
                 continue
             if p in have or n.endswith('.gdb'): continue
             sep = chr(9) if ' ' in p or ' ' in src else ' '
