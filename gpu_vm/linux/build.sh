@@ -8,6 +8,8 @@
 #              (gen_init_cpio's: `file /bin/x SRC 0755 0 0`, `dir`, `slink`...) to the list (gpu_vm/userland/test.sh);
 #              INITRAMFS_LIST=FILE is the whole list instead, /init and /dev/console too (gpu_vm/userland/rootfs.sh)
 #   build.sh check          sync, config and every C file of the kernel compiled by the stand-in (below)
+#   sync also puts the machine's drivers in (drivers.py); config merges machine.config over gpuvm_defconfig (MACHINE=0:
+#   not), gpu_vm/platform.md
 #
 # KDIR the tree (~/gpu_vm/linux), OUT the build (~/gpu_vm/linux-build), LLVM_BIN clang's folder
 # (~/gpu_vm/llvm-build/bin), GPUVM_TRIPLE the target (gpuvm-unknown-linux), JOBS. `check` takes clang from
@@ -32,8 +34,14 @@ mk() { make -C "$KDIR" O="$OUT" ARCH=gpuvm LLVM=1 CLANG_TARGET_FLAGS_gpuvm="$GPU
 
 for s in "${steps[@]}"; do
     case "$s" in
-    sync) bash "$HERE/sync.sh" ;;
-    config) mk gpuvm_defconfig ;;
+    sync) bash "$HERE/sync.sh"; python3 "$HERE/drivers.py" "$KDIR" ;;
+    config)
+        mk gpuvm_defconfig
+        # the whole machine (gpu_vm/platform.md): its drivers and what its programs use
+        if [ "${MACHINE:-1}" != 0 ]; then
+            KCONFIG_CONFIG="$OUT/.config" "$KDIR/scripts/kconfig/merge_config.sh" -m -O "$OUT" "$OUT/.config" "$HERE/machine.config" > /dev/null
+            mk olddefconfig
+        fi ;;
     initramfs)
         I="$OUT/initramfs"
         mkdir -p "$I"
