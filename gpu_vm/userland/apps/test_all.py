@@ -100,7 +100,7 @@ def judge(c, text, a):
     """The lines the gpu_vm checks add to a console (and the patterns they must have)."""
     extra = ''
     if c.get('output'):
-        c['has'] = c['has'] + [r'^output: [\d.]+ dB, at most \d+ apart$']
+        c['has'] = c.get('has', []) + [r'^output: [\d.]+ dB, at most \d+ apart$']
         if a.save_refs:
             import base64
             m = re.search(r'OUT-BEGIN\n(.*?)OUT-END', text, re.S)
@@ -118,7 +118,7 @@ def judge(c, text, a):
         for k, w in enumerate(want if m else ()):
             got, t = float(m.group(k + 1)), tol[k]
             ok = ok and abs(got - w) <= (t[1] if isinstance(t, tuple) else t * abs(w))
-        c['has'] = c['has'] + [r'^near: as the reference$']
+        c['has'] = c.get('has', []) + [r'^near: as the reference$']
         extra += '\nnear: %s\n' % ('as the reference' if ok else 'not near: %s' % (m.group(0) if m else 'no line'))
     return text + extra
 
