@@ -19,10 +19,10 @@ def run(c, a):
     log = os.path.join(a.logs, c['name'] + '.log')
     if os.path.exists(log):
         os.remove(log)
-    dump = '; echo PIC-BEGIN; base64 %s; echo PIC-END' % c['picture'] if c.get('picture') else ''
+    a.save_refs = False
     cmd = ['pwsh', os.path.join(ROOT, 'tools', 'gpu_queue.ps1'), os.path.join(ROOT, 'bin', 'rvc_harness.exe'),
            '--gvm', a.image, '--no-viz', '--uart-log', log, '--seconds', str(int(c['wall'] * a.wall_scale)),
-           '--expect', '@gpuvm:~# ', '--send', 'cd /; ' + c['cmd'] + dump + '; ' + T.DONE + '\\n', '--until', c['until']]
+           '--expect', '@gpuvm:~# ', '--send', 'cd /; ' + c['cmd'] + G.output_cmd(c, a) + '; ' + T.DONE + '\\n', '--until', c['until']]
     more = list(c['more'])
     while more:
         k = more.pop(0)
@@ -33,17 +33,7 @@ def run(c, a):
     text = open(log, encoding='latin-1').read().replace('\r', '') if os.path.exists(log) else ''
     text = re.sub(r'(@gpuvm:[^\n]*?# )', lambda m: m.group(1) + chr(10), text)
     err = p.stderr   # (the harness says '--until matched' there)
-    if c.get('picture'):
-        import base64
-        m = re.search(r'PIC-BEGIN\n(.*?)PIC-END', text, re.S)
-        pic = base64.b64decode(re.sub(r'[^A-Za-z0-9+/=]', '', m.group(1))) if m else b''
-        ref = os.path.join(a.refs, c['name'] + '.ppm')
-        c['has'] = c['has'] + [r'^picture: [\d.]+ dB, at most \d+ apart$']
-        if pic and os.path.exists(ref):
-            db, most = G.psnr(pic, open(ref, 'rb').read())
-            text += '\npicture: %.1f dB, at most %d apart%s\n' % (db, most, '' if db >= a.psnr else ' (too far)')
-        else:
-            text += '\npicture: none or no reference\n'
+    text = G.judge(c, text, a)
     return text, err, time.time() - t
 
 
@@ -53,7 +43,6 @@ def main():
     ap.add_argument('--image', default=os.path.join(ROOT, 'build', 'gvm_apps', 'img'))
     ap.add_argument('--logs', default=os.path.join(ROOT, 'build', 'gvm_apps', 'card'))
     ap.add_argument('--refs', default=os.path.join(ROOT, 'build', 'gvm_apps', 'refs'))
-    ap.add_argument('--psnr', type=float, default=35.0)
     ap.add_argument('--wall-scale', type=float, default=1.0)
     a = ap.parse_args()
     os.makedirs(a.logs, exist_ok=True)

@@ -26,6 +26,10 @@ L=$W/rootfs.list
 # the desktop as the RISC-V image starts with it (tools/make_linux_image.py's desktop_shortcuts: a shortcut for every
 # program of the Start menu, the places; nxfiles --desktop leaves at once without /root/Desktop), from the apps' menus
 rm -rf "$W/desktop" "$W/icons"; mkdir -p "$W/desktop" "$W/icons"
+# the references test_all.py's outputs are compared with (gvmcmp), in /usr/share/gvm-refs
+REFS=${REFS:-$ROOT/build/gvm_apps/refs}
+mkdir -p "$W/desktop/usr/share/gvm-refs"
+[ -d "$REFS" ] && find "$REFS" -maxdepth 1 -type f -exec cp {} "$W/desktop/usr/share/gvm-refs/" \;
 python3 - "$ROOT/tools" "$APPS" "$W/desktop" <<'PY'
 import os, sys, types
 sys.modules.setdefault('PIL', types.SimpleNamespace(Image=None))   # (the image builder reads PNGs; not here)

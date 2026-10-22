@@ -1168,6 +1168,20 @@ main(void)
 			if (use_field && !(i & 3))
 				rays += sc->pixels[i] >> 24;
 		}
+#ifdef __gpuvm__
+		/* (gpu_vm's test: the picture itself, compared with a reference by its PSNR, the card's special functions
+		 * giving other bits than the reference machine's: gpu_vm/userland/apps/README.md, "Checks") */
+		if (frames_left > 0 && getenv("RAY_SAVE")) {
+			FILE *f = fopen(getenv("RAY_SAVE"), "wb");
+
+			if (f) {
+				fprintf(f, "P6\n%d %d\n255\n", width, height);
+				for (i = 0; i < width * height; i++)
+					fputc(sc->pixels[i] >> 16 & 255, f), fputc(sc->pixels[i] >> 8 & 255, f), fputc(sc->pixels[i] & 255, f);
+				fclose(f);
+			}
+		}
+#endif
 		if (use_field && getenv("RAY_SHARES")) {
 			/* (for a test: what this core's picture took, in instructions, and what the lanes left it) */
 			extern unsigned mcw_field_stuck;	/* (mcw.c: indices the field's lanes left to this core) */

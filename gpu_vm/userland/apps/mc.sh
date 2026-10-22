@@ -12,5 +12,7 @@ M=$REPO/programs/mc
 rv32-cc -O2 -w -I"$M" "$M/mctest.c" "$M/mcw.c" "$M/mcwx.c" -o "$WORK/src/mc/mctest"
 rv32-cc -O2 -w -I"$M" "$M/lanetest.c" "$M/mcw.c" -o "$WORK/src/mc/lanetest"
 rv32-cc -O2 -w -I"$M" "$M/steptest.c" "$M/mcw.c" -o "$WORK/src/mc/steptest"
-for p in mctest lanetest steptest; do riscv32-linux-strip -o "$OUT/$p" "$WORK/src/mc/$p"; done
+# gvmcmp: test_all.py's comparison of a float output with its reference (PSNR, SNR)
+rv32-cc -O2 -Wall "$HERE/gvmcmp.c" -lm -o "$WORK/src/mc/gvmcmp"
+for p in mctest lanetest steptest gvmcmp; do riscv32-linux-strip -o "$OUT/$p" "$WORK/src/mc/$p"; done
 ls -l "$OUT/mctest" "$OUT/lanetest" "$OUT/steptest"

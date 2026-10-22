@@ -1,11 +1,16 @@
 """tools/test_all.py's cases on gpu_vm (gpu_vm/userland/apps/README.md, "Checks"): each case's line typed into
 image.sh's machine on gvm_cpu, its console checked by test_all's own rules (has, sums, digest, same ...). Run in WSL:
 
-    python3 gpu_vm/userland/apps/test_all.py [CASE or TAG ...] [--jobs N] [--cores N] [--list]
+    python3 gpu_vm/userland/apps/test_all.py [CASE or TAG ...] [--jobs N] [--cores N] [--list] [--save-refs]
 
 gvm_cpu has the devices' words but draws no picture (frames are counted, as rvc_cpu does), so a case that types into
 a window or reads the host (`--host`, `--fixed-dt`, `--host-wheel`) is skipped and said so. A case's `--expect`/`--send`
 pairs are typed when their text appears. The kernel, ROM and device tree are image.sh's (W, build/gvm_apps/img).
+
+Float results are not compared bit for bit (the user, 22 October 2026: the card's special functions are close enough):
+where a RISC-V case keeps an exact sum of a float picture or sound, the gpu_vm case has the program write it and
+`gvmcmp` (in the image) compares it with a reference that gvm_cpu made (`--save-refs`: build/gvm_apps/refs, which
+image.sh puts in /usr/share/gvm-refs), by its PSNR or SNR; a float number is compared within a tolerance (NEAR).
 """
 import argparse, os, re, select, subprocess, sys, time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -20,10 +25,10 @@ _spec.loader.exec_module(T)
 
 PROMPT = re.compile(rb'@gpuvm:[^\n]*?# ')
 UNSUPPORTED = ('--host', '--host-from', '--host-wheel', '--fixed-dt', '--pointer-sweep')
-PIC = '/tmp/gvm-picture.ppm'
+OUT = '/tmp/gvm-output'
+REFS_IN_IMAGE = '/usr/share/gvm-refs'
 
-
-# gpu_vm's own expected values where the RISC-V case's differ for a reason that is not a fault (README.md, "Checks")
+# gpu_vm's own expected values where the RISC-V case's differ for a reason that is not a fault
 OVERRIDES = {
     # a game played by itself whose ball runs on floats: gpu_vm's single-precision results (flushed denormals, the
     # card's sqrt) send it another way; the same with libm's exact math and with -fapprox-func
@@ -33,44 +38,89 @@ OVERRIDES = {
     'classicube-pack': dict(count=[(r'^cctex: ', (30, 42))], digest=[]),
 }
 
+# float numbers of a line within a tolerance: (regex with groups, the reference values, tolerances: a fraction of the
+# value, or an absolute amount when given as ('abs', n))
+PHYS = r'highest (\d+) mm, deepest (\d+) mm, fastest (\d+) mm/s, (\d+) without room'
+PHYS_TOL = (0.02, ('abs', 10), 0.15, ('abs', 3))
+NEAR = {
+    'nxphys-wall': [(PHYS, (4758, 7, 4335, 10), PHYS_TOL)],
+    'nxphys-wall-7': [(PHYS, (4758, 7, 4335, 10), PHYS_TOL)],
+    'nxphys-none': [(PHYS, (4758, 7, 4335, 10), PHYS_TOL)],
+    'nxphys-tower': [(PHYS, (6899, 0, 0, 0), (0.01, ('abs', 10), ('abs', 50), ('abs', 1)))],
+    'nxphys-heap': [(PHYS, (1484, 15, 4036, 0), PHYS_TOL)],
+    'nxphys-scene-2': [(PHYS, (6890, 96, 12815, 0), PHYS_TOL)],
+    'nxphys-throw': [(PHYS, (4749, 4, 10484, 9), PHYS_TOL)],
+}
+
 
 def gpu_vm_case(c):
-    """A case as gpu_vm checks it: where the RISC-V case compares an exact sum of a float picture, the picture itself
-    is taken (base64 to the console) and compared with a reference one by its PSNR (README.md, "Checks")."""
+    """A case as gpu_vm checks it (the module's text)."""
     c = dict(c)
     c.update(OVERRIDES.get(c['name'], {}))
-    if c['name'].startswith('nxpath') and 'NXPATH_AUTO=1' in (c['cmd'] or '') and any(' sum ' in h or '02f213e9' in h for h in c.get('has', [])):
-        c['cmd'] = c['cmd'].replace('NXPATH_AUTO=1', 'NXPATH_SAVE=%s NXPATH_AUTO=1' % PIC)
-        c['has'] = [h.split(' sum ')[0] if ' sum ' in h else r'^pathstat: ' for h in c['has']]
-        c['picture'] = PIC
+    cmd, has, name = c['cmd'] or '', list(c.get('has', [])), c['name']
+    # nxpath's pictures (docs/apps/raytrace.md: a sum each), by PSNR
+    if name.startswith('nxpath') and 'NXPATH_AUTO=1' in cmd and any(' sum ' in h or '02f213e9' in h for h in has):
+        c['cmd'] = cmd.replace('NXPATH_AUTO=1', 'NXPATH_SAVE=%s NXPATH_AUTO=1' % OUT)
+        c['has'] = [h.split(' sum ')[0] if ' sum ' in h else r'^pathstat: ' for h in has]
+        c['output'] = ('ppm', 35.0)
+    # nxray's four pictures: the last one (RAY_SAVE, gpu_vm's), and four lines with a sum each
+    if name in ('nxray', 'nxray-none'):
+        c['cmd'] = cmd.replace('RAY_FRAMES=4', 'RAY_SAVE=%s RAY_FRAMES=4' % OUT)
+        c['sums'], c['count'] = [], [(r'raystat: picture \d.* sum ([0-9a-f]+)', 4)]
+        c['output'] = ('ppm', 35.0)
+    # the HLSL compiler's fractal (the IR run with the card's functions)
+    if name == 'hlsl':
+        c['cmd'] = 'HLSL_PPM=%s ' % OUT + cmd
+        c['has'] = [h for h in has if 'sum' not in h] + [r'hlsl_bench: sum [0-9a-f]{8}']
+        c['output'] = ('ppm', 35.0)
+    # libmedia's sounds: FLAC and MOD decoders are integers (their sums), MP3's is floats (SNR)
+    if name == 'media-sound':
+        c['sums'] = [(r'audio /usr/share/play-test\.(?:flac|mod): .* sum ([0-9a-f]+)', ['518c5ac8'] * 2 + ['c714a845'] * 2)]
+        c['cmd'] = cmd + '; media_test audio /usr/share/play-test.mp3 %s 63' % OUT
+        c['output'] = ('pcm16', 30.0)
+    if name == 'nxplay':
+        c['sums'] = [(r'nxplay: sum ([0-9a-f]+ of \d+) samples', ['e5fd8f8c of 141120', '1a14a562 of 176400', '98e66905 of 1354752'])]
+        c['count'] = [(r'nxplay: sum [0-9a-f]+ of 1594368 samples', 2)]
+    if name in NEAR:
+        c['near'] = NEAR[name]
+        c['has'] = [h for h in has if not h.startswith('sum ')]
     return c
 
 
-def read_ppm(data):
-    """(width, height, bytes) of a binary PPM"""
-    parts, at = [], 0
-    while len(parts) < 4:
-        while data[at:at + 1].isspace(): at += 1
-        if data[at:at + 1] == b'#':
-            at = data.index(b'\n', at); continue
-        end = at
-        while not data[end:end + 1].isspace(): end += 1
-        parts.append(data[at:end]); at = end
-    return int(parts[1]), int(parts[2]), data[at + 1:]
+def output_cmd(c, a):
+    """What follows a case's line: its output written to the console (--save-refs) or compared with its reference."""
+    if not c.get('output'):
+        return ''
+    if a.save_refs:
+        return '; echo OUT-BEGIN; base64 %s; echo OUT-END' % OUT
+    return '; gvmcmp %s %s %s/%s' % (c['output'][0], OUT, REFS_IN_IMAGE, c['name'])
 
 
-def psnr(a, b):
-    """PSNR in dB and the largest difference of a channel, of two pictures of one size"""
-    import math
-    (wa, ha, pa), (wb, hb, pb) = read_ppm(a), read_ppm(b)
-    if (wa, ha) != (wb, hb) or len(pa) != len(pb):
-        return 0.0, 255
-    se = most = 0
-    for x, y in zip(pa, pb):
-        d = x - y if x > y else y - x
-        se += d * d
-        most = d if d > most else most
-    return (99.0 if se == 0 else 10 * math.log10(255.0 * 255.0 * len(pa) / se)), most
+def judge(c, text, a):
+    """The lines the gpu_vm checks add to a console (and the patterns they must have)."""
+    extra = ''
+    if c.get('output'):
+        c['has'] = c['has'] + [r'^output: [\d.]+ dB, at most \d+ apart$']
+        if a.save_refs:
+            import base64
+            m = re.search(r'OUT-BEGIN\n(.*?)OUT-END', text, re.S)
+            data = base64.b64decode(re.sub(r'[^A-Za-z0-9+/=]', '', m.group(1))) if m else b''
+            if data:
+                open(os.path.join(a.refs, c['name']), 'wb').write(data)
+                extra += '\noutput: 99.0 dB, at most 0 apart\n'
+        else:
+            m = re.search(r'^gvmcmp: ([\d.]+) dB, at most (\d+) apart', text, re.M)
+            if m:
+                extra += '\noutput: %s dB, at most %s apart%s\n' % (m[1], m[2], '' if float(m[1]) >= c['output'][1] else ' (too far)')
+    for p, want, tol in c.get('near', []):
+        m = re.search(p, text, re.M)
+        ok = bool(m)
+        for k, w in enumerate(want if m else ()):
+            got, t = float(m.group(k + 1)), tol[k]
+            ok = ok and abs(got - w) <= (t[1] if isinstance(t, tuple) else t * abs(w))
+        c['has'] = c['has'] + [r'^near: as the reference$']
+        extra += '\nnear: %s\n' % ('as the reference' if ok else 'not near: %s' % (m.group(0) if m else 'no line'))
+    return text + extra
 
 
 def run_case(c, a, w):
@@ -104,8 +154,7 @@ def run_case(c, a, w):
         if sent == 0 and prompts >= 1:
             p.stdin.write(b'stty -echo\n'); sent = 1
         elif sent == 1 and prompts >= 2:
-            dump = ('; echo PIC-BEGIN; base64 %s; echo PIC-END' % c['picture']).encode() if c.get('picture') else b''
-            p.stdin.write(b'cd /; ' + c['cmd'].encode() + dump + b'; ' + T.DONE.encode() + b'\n'); sent = 2
+            p.stdin.write(b'cd /; ' + c['cmd'].encode() + output_cmd(c, a).encode() + b'; ' + T.DONE.encode() + b'\n'); sent = 2
             mark = len(out)
         elif sent == 2:
             for pr in pairs:
@@ -123,23 +172,9 @@ def run_case(c, a, w):
         p.kill()
     # (with stty -echo a command's output follows its prompt on the line: the RISC-V console's echo ends that line)
     text = re.sub(r'(@gpuvm:[^\n]*?# )', lambda m: m.group(1) + chr(10), out.decode('latin-1'))
+    text = judge(c, text, a)
     with open(os.path.join(a.logs, c['name'] + '.log'), 'w', encoding='latin-1') as f:
         f.write(text)
-    if c.get('picture'):
-        import base64
-        m = re.search(r'PIC-BEGIN\n(.*?)PIC-END', text, re.S)
-        pic = base64.b64decode(re.sub(r'[^A-Za-z0-9+/=]', '', m.group(1))) if m else b''
-        ref = os.path.join(a.refs, c['name'] + '.ppm')
-        if a.save_refs and pic:
-            open(ref, 'wb').write(pic)
-        c['has'] = c['has'] + [r'^picture: [\d.]+ dB, at most \d+ apart$']
-        if not pic:
-            text += '\npicture: none\n'
-        elif os.path.exists(ref):
-            db, most = psnr(pic, open(ref, 'rb').read())
-            text += '\npicture: %.1f dB, at most %d apart%s\n' % (db, most, '' if db >= a.psnr else ' (too far)')
-        else:
-            text += '\npicture: no reference %s\n' % ref
     return text, ('--until matched' if reached else ''), time.time() - t0
 
 
@@ -152,9 +187,8 @@ def main():
     ap.add_argument('--wall-scale', type=float, default=1.0)
     ap.add_argument('--logs', default=os.path.join(ROOT, 'build', 'gvm_apps', 'test_all'))
     ap.add_argument('--list', action='store_true')
-    ap.add_argument('--refs', default=os.path.join(ROOT, 'build', 'gvm_apps', 'refs'), help="reference pictures (gvm_cpu's, libm's exact math)")
-    ap.add_argument('--save-refs', action='store_true', help='keep the pictures taken as the references')
-    ap.add_argument('--psnr', type=float, default=35.0, help='the least PSNR of a picture against its reference')
+    ap.add_argument('--refs', default=os.path.join(ROOT, 'build', 'gvm_apps', 'refs'), help="the outputs' references (gvm_cpu's)")
+    ap.add_argument('--save-refs', action='store_true', help='keep the outputs made as the references (then image.sh again)')
     a = ap.parse_args()
     w = os.environ.get('W', os.path.join(ROOT, 'build', 'gvm_apps', 'img'))
     cases = [gpu_vm_case(c) for c in T.CASES]
