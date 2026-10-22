@@ -1,6 +1,6 @@
 # gvm_gpu
 
-gpu_vm machines on the card: the tick (`gpu_vm/tick/steps/x17.hlsl`; its interface `gpu_vm/tick/STATE.md`) runs the
+gpu_vm machines on the card: the tick (`gpu_vm/tick/steps/x18.hlsl`; its interface `gpu_vm/tick/STATE.md`) runs the
 cores in passes on D3D11, and this host loads the program, gives each pass its TIME, reads the console and the cores'
 state back, makes the semihosted calls and, with `--check`, runs the reference (`gpu_vm/ref/gvm_ref.h`) beside the
 card bundle for bundle. gvm_cpu's twin (`gpu_vm/cpu/README.md`): the same options, devices, semihosting and exit codes.
@@ -20,7 +20,7 @@ a pass, 8192), `--pass-time N` (TIME's ticks a pass, 20), `--cores N` (core 0 ru
 
 | option | |
 |---|---|
-| `--shader FILE` | the tick (default `gpu_vm\tick\steps\x17.hlsl` from the exe's `..`) |
+| `--shader FILE` | the tick (default `gpu_vm\tick\steps\x18.hlsl` from the exe's `..`) |
 | `--warp` | D3D11's WARP instead of the card |
 | `--batch N` | passes at most between two readbacks (32) |
 | `--op-rounds N` | the operations' rounds a pass (2) |

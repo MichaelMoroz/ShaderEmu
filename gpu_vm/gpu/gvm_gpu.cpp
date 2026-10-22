@@ -1,4 +1,4 @@
-// gvm_gpu: gpu_vm machines on the card. The tick (gpu_vm/tick/steps/x17.hlsl, its interface gpu_vm/tick/STATE.md) runs
+// gvm_gpu: gpu_vm machines on the card. The tick (gpu_vm/tick/steps/x18.hlsl, its interface gpu_vm/tick/STATE.md) runs
 // the cores in passes on D3D11; this host loads the program, gives each pass its TIME, reads the console and the cores'
 // state back, makes the semihosted calls, and with --check runs the reference machine (gpu_vm/ref/gvm_ref.h) beside
 // the card, bundle for bundle. gvm_cpu's GPU twin: the same command line where it makes sense (gpu_vm/gpu/README.md).
@@ -922,7 +922,7 @@ static void usage() {
         "  --no-console        no console device\n"
         "  --no-stdin          the console delivers no input\n"
         "the card:\n"
-        "  --shader FILE       the tick (default gpu_vm/tick/steps/x17.hlsl)\n"
+        "  --shader FILE       the tick (default gpu_vm/tick/steps/x18.hlsl)\n"
         "  --warp              D3D11's WARP (on the processor) instead of the card\n"
         "  --batch N           passes at most between two readbacks (default 32)\n"
         "  --op-rounds N       the operations' rounds a pass (default 2)\n"
@@ -979,7 +979,7 @@ int main(int argc, char** argv) {
     GetModuleFileNameA(nullptr, exe, MAX_PATH);
     g_exe_dir = exe;
     g_exe_dir = g_exe_dir.substr(0, g_exe_dir.find_last_of("\\/"));
-    if (O.shader.empty()) O.shader = g_exe_dir + "\\..\\gpu_vm\\tick\\steps\\x17.hlsl";
+    if (O.shader.empty()) O.shader = g_exe_dir + "\\..\\gpu_vm\\tick\\steps\\x18.hlsl";
 
     // the machine: RAM is address 0 up to GVM_RAM + its size (a multiple of the RAM texture's rows: 128 KB)
     if ((uint64_t)GVM_RAM + (uint64_t)ram_mb * (1u << 20) > 0x20000000u) { fprintf(stderr, "gvm_gpu: --ram %u: RAM ends past 0x20000000\n", ram_mb); return EXIT_USAGE; }
