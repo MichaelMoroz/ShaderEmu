@@ -320,3 +320,69 @@ it beside RAM's loads and stores. On the card (`--fused 1`, four rounds):
 The ROM's read costs arith, mix and stride about 1%, and fxc2 schedules the loads and stores better beside it (stores
 +16%): it stays. (Had it cost more, the ROM would have been a part of RAM: copied in by the harness, baked into the
 RAM texture in Unity, and writable.) x16 is the reference's on the card in every case, `rom` among them.
+
+## x17: the whole ISA (22 October 2026)
+
+x17 (`x17.hlsl`, 800 lines, no switch) is x16's fast loop and everything else the reference makes: the general step
+(every op of every class, op by op from pc's word: any address, d and q at any alignment, atomics and cas, the
+operations region), traps and eret, the special registers, interrupts between bundles (the fast loop is not entered
+while one is due, and none can become due inside it), wait (a supervisor's waits across passes, a user's ends the
+pass), sync, the operations' queue (8 in flight a core) and the commit's operation rounds (stage, write, progress).
+Whole bundles of paths 1 and 2 are x16's full step (`step12`). Many cores are rows. The state, the cbuffers and the
+draws of a pass are `gpu_vm/tick/STATE.md`, the GPU harness's contract.
+
+Two changes to the ISA came with it (`isa.h`, `gvm_ref.h`; gvm_cpu's 19 tests pass; the LLVM target, the runtimes and
+the kernel are rebuilt for them):
+- **A byte, a half or a word stays in its address's word**: a b, h, w, bu or hu access reads or writes only the bytes of
+  its word (a load's missing bytes are 0, before its extension). What the fast loop always did; a test of a word
+  crossed costs the memory loops 6 to 9% in any form (x17b `stk` 2.38 against `stknox` 2.60; `stku`, the test as
+  integer arithmetic, 2.44). d and q are any alignment as before. The compiler splits what it does not know to be in
+  one word.
+- **The paths renumbered**: the memory paths 3-6 (load, two loads, store, store and another), the integer path 7.
+  While an operation is in flight the fast loop's test is `path >= 7` against a register, `path >= 3` otherwise: memory
+  bundles go to the general step, which stops at what an operation still holds, at no cost (x17b `stkthr`).
+
+Also fixed in the reference: an access to the operations region at 0xfffffffc wrapped `a + bytes` and read or wrote
+`op[]` far out of its bounds (now `a - GVM_OPS <= 32 - bytes`).
+
+How the fast loop stays exact without a branch: a load outside RAM and the ROM (bit 30 off: `a & ~GVM_ROM >= RamEnd`)
+or a store outside `[GVM_DEV, RamEnd)` (the boot area, the operations) is only noted, the largest address of each kind
+in `lmax` and `smax` (one `max` an op). A pass that noted one leaves the state as it found it (flag 16, no store, its
+operations' progress kept) and the next pass makes it again with every memory bundle in the general step, which traps
+or latches as the reference. A pass is the same each time it is made, so this is exact; it costs a pass and a slow pass
+a fault, which a program meets once. Faster ways tried and dropped, in x16 against x17 batches on the card (`--fused 1`,
+x lean over the seven loops; x16 2.63 in every batch):
+
+| Batch | What | x lean |
+|---|---|---|
+| x17a | a branch out of the fast loop before the memory bodies (`chk1`); by selects into sinks (`chk2`); in the body dispatch (`chk4`); the branch after the texel reads (`chk3`); no check at all (`chk0`, a probe) | 2.38, 2.16, 2.41, 2.42; 2.54-2.58 |
+| x17b | a flag ORed, no branch, with the word crossed (`stk`) and without (`stknox`); the loop test with a register (`stkthr`) or `- 3 <= lim` (`stklim`) | 2.38, 2.60, 2.38, 2.36 |
+| x17c | probes on x17's first form (a loop of two attempts round `run`): one attempt (`once`) 2.56, no general step (`nogen`) 2.47 as x17: the general step's code costs nothing, the loop round `run` did | 2.47-2.56 |
+| x17d | the pass made again inside `run`'s loop (`restart`), or in the next pass (`redo`) | 2.49, 2.49 |
+| x17e | the flag as bools ORed in each body (`flag0`), as the largest address of each kind (`flag1`, x17's) | 2.52, 2.56 |
+| x17g | a word store off its word's start noted (made again) so that its texel is read by the opcode alone (`mis2`) | 2.48 |
+| x17h | the state the fast loop does not use in an indexable array (`sya`) | 2.55 (as x17) |
+
+On the card (`variants/x17f.txt`, four rounds; floats and fmix are not among the seven):
+
+| | arith | loads | stores | adds | tight | mix | stride | x lean (7) | floats | fmix |
+|---|---|---|---|---|---|---|---|---|---|---|
+| x16 | 20.70 | 13.07 | 14.10 | 22.31 | 19.49 | 18.03 | 18.43 | 2.63 | 8.05 | 10.41 |
+| x17 | 20.86 | 12.66 | 12.99 | 22.43 | 19.60 | 16.93 | 17.45 | 2.55 | 7.51 | 9.82 |
+| x17, paths 1-2 op by op in the general step | 20.85 | 12.67 | 12.98 | 22.41 | 19.63 | 16.92 | 17.45 | 2.55 | 3.78 | 6.19 |
+
+x17 against the lean tick: arith 2.53, loads 2.22, stores 2.65, adds 2.74, tight 2.69, mix 2.34, stride 2.74. What is
+left of x17's 3% is the address keys and the texel read of a word store off its word's start (in each memory body).
+HLSL makes both sides of `?:` too: `budget = c ? step12(budget) : general(budget)` ran both steps (an `if` now).
+fxc2 took `(float)c`'s bits for `c` in a vertex shader's texture loads (the progress draw read row 0x3f800000 for core
+1): a position is made from another integer expression.
+
+Checked against the reference on WARP and on the card, every case, seeds 1, 7 and 99 (`--fused 1`) and 3 (without):
+x16's and the new ones, `memx` (d and q at any alignment, b/h/w off their alignment, atomics and cas, d and q from the
+ROM, faults past RAM's end, at 0xfffffffc, in the boot area and of an atomic off its word, the operations region read by
+d and q and latched), `irq` (TIME 1000 + the pass in both machines: the timer, a supervisor's wait woken by it, the
+software interrupt, the external line in passes 50-51, every special register, xsr, srset, srclr, then user mode: its
+privileged ops and eret trap, its wait ends the pass, a syscall) and `opq` (two cores with operations in flight and no
+sync: a load of a destination and a store to a source wait, nine asked at once, the counts by ld.d, the latch by ld.q, a
+blit whose rows overlap, a copy backwards, a refused one, a copy of 640 KB over three passes). `--op-rounds 1` and `4`
+too. `GVM_DEBUG=1` prints each core's EPC, CAUSE, queue and progress texels after a check.

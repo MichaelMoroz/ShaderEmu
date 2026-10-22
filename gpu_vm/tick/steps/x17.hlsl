@@ -208,9 +208,7 @@ void fstep(inout uint budget) {
             mop m0 = mread_entries(t.x, i0, A0, B0), m1 = mread_entries(t.y, i1, A1, B1);
             // the texels only when an op needs the old word (a byte or a half, a word not at its word's start, or a load):
             // a word's store is its value
-            [branch] if (((t.x & op_bit(3)) | ((t.y ^ op_bit(8)) & op_bit(11)) 
-            | ((m0.ad | m1.ad) & 3)
-            ) != 0) { m0.q = data_texel(m0.ad); m1.q = data_texel(m1.ad); }
+            [branch] if (((t.x & op_bit(3)) | ((t.y ^ op_bit(8)) & op_bit(11)) | ((m0.ad | m1.ad) & 3)) != 0) { m0.q = data_texel(m0.ad); m1.q = data_texel(m1.ad); }
             smax = max(smax, max(m0.ad - GVM_DEV, st1 ? m1.ad - GVM_DEV : 0)); lmax = max(lmax, st1 ? 0 : m1.ad & ~GVM_ROM);
             uint w0 = seen(m0), sl0 = slot(m0);
             uint2 e0 = uint2(m0.tag, merge(t.x, w0, m0.ad, r[d0]));
@@ -233,9 +231,7 @@ void fstep(inout uint budget) {
         } else {   // a load or a store, and a lite op
             bool st0 = (t.x & op_bit(8)) != 0;
             mop m0 = mread_entries(t.x, i0, A0, B0);
-            [branch] if ((((t.x ^ op_bit(8)) & op_bit(11)) 
-            | (m0.ad & 3)
-            ) != 0) m0.q = data_texel(m0.ad);   // (a load, a byte or a half, a word not at its start)
+            [branch] if ((((t.x ^ op_bit(8)) & op_bit(11)) | (m0.ad & 3)) != 0) m0.q = data_texel(m0.ad);   // (a load, a byte or a half, a word not at its start)
             smax = max(smax, st0 ? m0.ad - GVM_DEV : 0); lmax = max(lmax, st0 ? 0 : m0.ad & ~GVM_ROM);
             uint w0 = seen(m0), sl0 = slot(m0);
             v0 = extend(t.x, w0, m0.ad);

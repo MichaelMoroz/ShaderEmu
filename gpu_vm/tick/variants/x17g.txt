@@ -1,0 +1,4 @@
+# x17g: a word store off its start noted for the pass made again (x17s.hlsl MIS2)
+x16       gpu_vm/tick/steps/x16.hlsl
+x17       gpu_vm/tick/steps/x17.hlsl
+mis2      gpu_vm/tick/steps/x17s.hlsl -D MIS2=1
