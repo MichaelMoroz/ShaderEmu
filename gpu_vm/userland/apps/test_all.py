@@ -67,8 +67,7 @@ def run_case(c, a, w):
     if p.poll() is None:
         p.kill()
     # (with stty -echo a command's output follows its prompt on the line: the RISC-V console's echo ends that line)
-    text = re.sub(r'(@gpuvm:[^
-]*?# )', lambda m: m.group(1) + chr(10), out.decode('latin-1'))
+    text = re.sub(r'(@gpuvm:[^\n]*?# )', lambda m: m.group(1) + chr(10), out.decode('latin-1'))
     with open(os.path.join(a.logs, c['name'] + '.log'), 'w', encoding='latin-1') as f:
         f.write(text)
     return text, ('--until matched' if reached else ''), time.time() - t0
