@@ -1882,7 +1882,7 @@ index acf9554..ceec131 100644
  	/* No custom resolution has been set */
  	if (width == 0 || height == 0) {
 diff --git a/src/Game.h b/src/Game.h
-index ccfee09..08ce48c 100644
+index ccfee09..c137a5a 100644
 --- a/src/Game.h
 +++ b/src/Game.h
 @@ -24,6 +24,26 @@ CC_VAR extern struct _GameData {
@@ -1922,7 +1922,7 @@ index ccfee09..08ce48c 100644
      #define DEFAULT_VIEWDIST 192
  #else
 diff --git a/src/Generator.c b/src/Generator.c
-index d033191..e965cc8 100644
+index d033191..bc5a2ba 100644
 --- a/src/Generator.c
 +++ b/src/Generator.c
 @@ -1,4 +1,9 @@
@@ -2441,7 +2441,7 @@ index dc4055b..74f5844 100644
  	Mem_Free(classic_heightmap);
  	classic_heightmap = NULL;
 diff --git a/src/MapRenderer.c b/src/MapRenderer.c
-index fbe36dd..d242d45 100644
+index fbe36dd..abf6c9a 100644
 --- a/src/MapRenderer.c
 +++ b/src/MapRenderer.c
 @@ -14,6 +14,9 @@
@@ -3204,7 +3204,7 @@ index fbe36dd..d242d45 100644
  }
  
 diff --git a/src/MapRenderer.h b/src/MapRenderer.h
-index cf715b9..5fbe5e6 100644
+index cf715b9..b22ad19 100644
 --- a/src/MapRenderer.h
 +++ b/src/MapRenderer.h
 @@ -2,6 +2,7 @@
@@ -3720,3 +3720,21 @@ index 21c7255..0960c06 100644
  	Launcher_Setup();
  	/* NOTE: Make sure to keep delay same as hardcoded delay in Launcher_Tick */
  	while (Launcher_Tick()) { Thread_Sleep(10); }
+diff --git a/src/posix/Plat_Linux.inc b/src/posix/Plat_Linux.inc
+index 1409fa7..ca89789 100644
+--- a/src/posix/Plat_Linux.inc
++++ b/src/posix/Plat_Linux.inc
+@@ -126,6 +126,13 @@ void CrashHandler_DumpRegisters(void* ctx, cc_string* str) {
+ 	String_Format4(str, "r20=%x r21=%x r22=%x r23=%x" _NL, RNUM(20), RNUM(21), RNUM(22), RNUM(23));
+ 	String_Format4(str, "r24=%x r25=%x r26=%x r27=%x" _NL, RNUM(24), RNUM(25), RNUM(26), RNUM(27));
+ 	String_Format4(str, "r28=%x r29=%x r30=%x r31=%x" _NL, RNUM(28), RNUM(29), RNUM(30), RNUM(31));
++#elif defined __gpuvm__
++	/* gpu_vm (the machine's own instruction set): the kernel's 64 registers, the pc in word 0 */
++	mcontext_t* r = &((ucontext_t*)ctx)->uc_mcontext;
++	#define RNUM(reg) &r->__gregs[reg]
++
++	String_Format4(str, "pc =%x ra =%x sp =%x tp =%x" _NL, RNUM(0),  RNUM(1),  RNUM(2),  RNUM(4));
++	String_Format4(str, "a0 =%x a1 =%x a2 =%x a3 =%x" _NL, RNUM(5),  RNUM(6),  RNUM(7),  RNUM(8));
+ #elif defined __e2k__
+ 	struct sigcontext* r = &((ucontext_t*)ctx)->uc_mcontext;
+ 	#define RREG(reg) &r->reg

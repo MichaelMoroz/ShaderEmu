@@ -370,6 +370,13 @@ __attribute__((used)) int rc_line(int rem)
    return next;
 }
 
+#ifdef __gpuvm__
+/* gpu_vm: the translated code's routines are RISC-V's; nothing is translated here (nes6502_recompile), so
+** these only stand for the names the translator refers to */
+char rc_rt[4], rc_rt_out[4], rc_rt_read[4], rc_rt_write[4], rc_rt_dispatch[4], rc_rt_direct[4], rc_rt_idle[4];
+char rc_rt_rti[4], rc_rt_vdata[4], rc_rt_pad[4], rc_rt_flag[4], rc_rt_mapper[4];
+void rc_enter(uint32 code, rc_state_t *state, char *routines) { (void) code, (void) state, (void) routines; abort(); }
+#else
 __asm__(
    ".pushsection .text\n"
    ".align 2\n"
@@ -484,6 +491,7 @@ __asm__(
    "   jr t0\n"
    ".popsection\n"
 );
+#endif
 
 /* ---- the assembler ---- */
 
@@ -1657,7 +1665,11 @@ static void rc_translate(uint32 start)
    }
 
    /* what was written is fetched as it was until the machine's pass ends: fence.i ends it */
+#ifdef __gpuvm__
+   __asm__ volatile("sync" ::: "memory");
+#else
    __asm__ volatile(".word 0x0000100f");
+#endif
 }
 
 /* The interpreter asks before every instruction of its own: runs the 6502 in translated code
@@ -1800,6 +1812,11 @@ static int rc_slice(int timeslice_cycles, int *elapsed)
 /* Called once the cartridge is in: its program, and whether its pages ever turn. */
 void nes6502_recompile(uint8 *prg, int bytes, int fixed)
 {
+#ifdef __gpuvm__
+   /* gpu_vm: no translator for its bundles; the interpreter runs every instruction (as NES_CPU=interp) */
+   (void) prg, (void) bytes, (void) fixed;
+   return;
+#endif
    rc_code = mmap(NULL, RC_CODE_BYTES, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
    if (MAP_FAILED == (void *) rc_code)
       return;
