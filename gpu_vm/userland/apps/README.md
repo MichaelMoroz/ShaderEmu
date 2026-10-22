@@ -82,7 +82,7 @@ the tolerance named (`gvmcmp`, `NEAR` in `test_all.py`); an exact sum where the 
 | Nano-X, nxbar, glxgears, demos | yes | nano-X runs (frames counted) | the desktop (platform agent) | (no check of their own) |
 | desktop: nxview, nxpaint, nxask, nxmon, nxfiles, nxweb, open, unarc | yes | PASS (nxview, nxpaint, nxask, nxmon, nxfiles x3, nxweb x4, open-kinds, unarc) | nxview, unarc PASS | exact sums (integer decoders) |
 | nxfiles --kinds | yes | PASS after the nxfiles fix (static `lower`) | - | as RISC-V |
-| libmedia: media_test, nxplay, nxvideo | yes | PASS (media-sound, -mpeg, -avi, nxplay, nxvideo x8) | media-sound, media-avi PASS | FLAC, MOD, WAV, MJPEG exact; MP3 by SNR >= 30 dB |
+| libmedia: media_test, nxplay, nxvideo | yes | PASS (media-sound, -mpeg, -avi, nxplay, nxvideo x8) | media-sound, media-avi PASS; nxplay's WAV, FLAC, MOD sums the RISC-V's (MP3 a6c2aba3: floats) | FLAC, MOD, WAV, MJPEG exact; MP3 by SNR >= 30 dB |
 | nxray | yes | PASS | PASS | last picture PSNR >= 35 dB (RAY_SAVE), 4 sum lines |
 | nxpath (8 scenes) | yes | PASS (all) | nxpath, cornell PASS | pictures PSNR >= 35 dB (NXPATH_SAVE) |
 | nxphys | yes | PASS (6 cases) | wall, tower PASS | heights within 2 %, speeds 15 %, depth 10 mm |
@@ -95,7 +95,7 @@ the tolerance named (`gvmcmp`, `NEAR` in `test_all.py`); an exact sum where the 
 | ClassiCube | yes | meshes, meshes-workers, kept, pack PASS | meshes PASS | pack: 30-42 textures (speed decides how many before "steady") |
 | Micropolis | yes | PASS | PASS | exact sums |
 | Tiberian Dawn | yes | PASS (300, 1300, paths, won) | 300, 1300 PASS | exact state sums |
-| Red Alert | yes | soviet-300, scans, atlas, atlas-forgotten PASS; the others under work (C&C agent) | soviet-300 PASS | exact state sums |
+| Red Alert | yes | every case the RISC-V machine's state sums but ralert-movie (5fed4b4: a mix from the ROM mapped writable, the iconset header read by bytes) | soviet-300 PASS | exact state sums |
 | Quake | yes (-lmfloat) | quake-light PASS (QUAKE_STATS_FRAMES); walk, exit, particles fail on gvm_cpu's clock pacing | quake-light PASS | as RISC-V; walk reaches 480 687 24 with commands typed ahead |
 | Quake III | yes | workers, inline, bots, bots-serial PASS; server: digest by load time | workers/inline: 237 of 237 lines the same, fewer than 500 (load time) | as RISC-V where QUAKE3_ENTER fixes the entry |
 | Half-Life: Uplink | yes (-lmfloat, 1 MB stack) | plays through the fight, HL_ROTATION=check 0 wrong; GVM_RACES 0 or 7 undone (light styles) | not run | HLGL_PICSUM 656aa416 (GPU addresses moved: not RISC-V's) |
@@ -124,7 +124,7 @@ the tolerance named (`gvmcmp`, `NEAR` in `test_all.py`); an exact sum where the 
   `__gpuvm__`): each operation as the RISC-V code makes it, a step whole (no lanes). `hlsl.sh` builds libhlsl,
   `hlslc`, `hlslview` and `hlsl_bench`; the fractal's sum is the host's (`3614e8bb`).
 - Quake's walk, exit and particles cases and Quake III's server case on gvm_cpu depend on the clock's pace against the
-  machine's speed; the card's runs of them are to be made. Red Alert's 1300-frame and other cases: the C&C agent's work.
+  machine's speed; the card's runs of them are to be made. Red Alert's movie check.
 
 ## Checks
 
