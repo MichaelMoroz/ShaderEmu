@@ -172,6 +172,29 @@ static std::vector<Case> cases() {
         }
         a.halt();
     }});
+    v.push_back({"rom", 1, false, [](std::vector<GvmAsm>& p, auto& data, uint32_t seed) {
+        // loads of every width from the ROM (r29 its base) beside loads and stores of RAM (r28), in pairs (step x16 on)
+        Rng g{seed * 6151 + 13};
+        for (uint32_t k = 0; k < 1024; k++) data.push_back({DATA + 4 * k, g.next()});
+        static const uint32_t wds[] = {GVM_W_W, GVM_W_H, GVM_W_B, GVM_W_HU, GVM_W_BU};
+        GvmAsm& a = p[0];
+        for (int round = 0; round < 30; round++) {
+            seed_regs(a, g, false);
+            a.li(29, (int32_t)GVM_ROM); a.li(28, (int32_t)DATA);
+            for (int i = 0; i < 60; i++) {
+                uint32_t wd = wds[g.below(5)], by = wd == GVM_W_W ? 4 : (wd == GVM_W_B || wd == GVM_W_BU) ? 1 : 2;
+                uint32_t rom = g.below(ROM_SIZE / 2) & ~(by - 1);   // (past imm12: through a register)
+                a.li(27, (int32_t)rom); a.add(27, 27, 29);
+                a.ld(wd, 5 + g.below(22), 27, (int32_t)(g.below(64) & ~(by - 1)));
+                switch (g.below(3)) {
+                case 0: a.lw(5 + g.below(22), 28, (int32_t)(4 * g.below(1024))); break;
+                case 1: a.sw(5 + g.below(22), 28, (int32_t)(4 * g.below(1024))); break;
+                default: a.ld(wd, 5 + g.below(22), 29, (int32_t)(g.below(2047) & ~(by - 1))); break;
+                }
+            }
+        }
+        a.halt();
+    }});
     v.push_back({"spillw", 1, false, [](std::vector<GvmAsm>& p, auto& data, uint32_t seed) {
         // more distinct words stored than the write cache holds, words, halves and bytes (step x7 on)
         GvmAsm& a = p[0];

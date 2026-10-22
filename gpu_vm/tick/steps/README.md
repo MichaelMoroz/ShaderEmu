@@ -299,3 +299,24 @@ not waiting for it is worth 4% on stores and 3% on mix. A step or a loop a kind 
 17% again (as round 2's I_LOOPS did), though a loop of two-load bundles is 26% on loads. x14s (never timed): the loop
 test as one compare with the budget saves 1 to 2 DXBC; a tail in each branch, a switch on the class and two steps a
 trip do not pay.
+
+## x16: the tick written plainly, RAM 8192 wide, the ROM read
+
+x16 is sq_sw2 with no switch and no macro (`#include "../../isa.h"` its one line of the preprocessor; constants are
+`static const uint`, the bodies plain code): 2,042 DXBC as sq_sw2 and as fast (2.57 both, in one run). The bench
+reads a step's `WCN` and `RAM_W` from its source (`#define` or `static const uint`).
+
+RAM's texture is 8192 texels wide (texel t at t % 8192, t / 8192; 256 MB is 8192 x 2048): no instruction more. The
+ROM (GVM_ROM, 0x4000_0000 on) is a texture of its own, read only: every load reads RAM's and the ROM's texel at the
+same place and the address's bit 30 chooses (+32 DXBC over the shader). The check case `rom` loads every width from
+it beside RAM's loads and stores. On the card (`--fused 1`, four rounds):
+
+| | arith | loads | stores | adds | tight | mix | stride | x lean (7) |
+|---|---|---|---|---|---|---|---|---|
+| x16 at 2048, no ROM | 20.84 | 12.66 | 11.97 | 22.38 | 19.62 | 18.10 | 18.38 | 2.56 |
+| at 8192, no ROM | 20.86 | 12.68 | 12.08 | 22.42 | 19.62 | 18.14 | 18.23 | 2.57 |
+| at 8192 and the ROM (x16 now) | 20.66 | 13.03 | 14.06 | 22.23 | 19.44 | 17.96 | 18.16 | 2.62 |
+
+The ROM's read costs arith, mix and stride about 1%, and fxc2 schedules the loads and stores better beside it (stores
++16%): it stays. (Had it cost more, the ROM would have been a part of RAM: copied in by the harness, baked into the
+RAM texture in Unity, and writable.) x16 is the reference's on the card in every case, `rom` among them.

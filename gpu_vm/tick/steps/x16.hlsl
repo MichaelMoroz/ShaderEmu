@@ -1,20 +1,30 @@
 // Step x16 (gpu_vm/tick/steps/README.md, "x16"): x15m's q4ovf written plainly, with no switch and no macro: x15's
 // encoding (gpu_vm/isa.h), its fast loop with a body for each kind of bundle (integers; a load or a store and a lite
 // op; two loads; a store and a load or store), a store with no room taking an overflow slot, the pass ending after
-// its bundle, and a store's texel read only when an op needs the old word (x15sq's sq_sw2). Every other bundle is a trip of the full step (ops in order, each seeing the one before).
+// its bundle, and a store's texel read only when an op needs the old word (x15sq's sq_sw2).
+// RAM is a texture 8192 texels wide; the ROM (GVM_ROM on, read only) a texture of its own, read beside RAM's at the
+// same place by every load and chosen by the address's bit 30. Code runs from RAM. Every other bundle is a trip of the
+// full step (ops in order, each seeing the one before).
 #include "../../isa.h"
 
 static const uint WCN = 130;         // write cache entries: two ways of HALF sets, two overflow slots, then a sink
 static const uint WCS = WCN - 2;     // the first overflow slot
 static const uint HALF = WCS / 2;
 static const uint NONE = 0xffffffffu;   // an empty entry's tag, and no slot
-Texture2D<uint4> _Ram : register(t0);
+static const uint RAM_W = 8192;     // RAM's texture's width in texels: texel t is (t % RAM_W, t / RAM_W)
+Texture2D<uint4> _Ram : register(t0), _Rom : register(t1);
 Texture2D<uint4> _S0 : register(t2), _S1 : register(t3), _S2 : register(t4), _S3 : register(t5);
 Texture2D<uint4> _S4 : register(t6), _S5 : register(t7), _S6 : register(t8), _S7 : register(t9);
 cbuffer PassParams : register(b0) {
     uint _Ticks, _RamEnd, _TimeLo, _TimeHi, _Player, _Flags, _RamRows, _Ext, _NCores; uint3 _ppad;
 };
-uint4 ram(uint t) { return _Ram.Load(int3(t & 2047, t >> 11, 0)); }   // texel t of RAM
+uint4 ram(uint t) { return _Ram.Load(int3(t % RAM_W, t / RAM_W, 0)); }   // texel t of RAM
+uint4 data_texel(uint ad) {   // the texel a load reads: RAM's, or the ROM's from GVM_ROM (bit 30), at the same place
+    uint t = ad >> 4;
+    int3 at = int3(t % RAM_W, (t / RAM_W) & 0x1fff, 0);
+    uint4 rom = _Rom.Load(at), ram = _Ram.Load(at);
+    return (ad & GVM_ROM) != 0 ? rom : ram;
+}
 static uint r[65];          // the registers; r[64] takes what is written to r0
 static uint2 wc[WCN + 1];   // the write cache: (word, value), NONE an empty entry; wc[WCN] a sink for a store not made
 static uint pc, tp, cycle, opsrun, flags, ran, ops8;   // (tp: the fast loop's pc, in texels; ops8 its ops times 8)
@@ -133,7 +143,7 @@ struct mop { uint ad, tag, h; uint4 q; uint2 ea, eb; };
 mop mread(uint w, uint imm, uint a, uint b) {
     mop m;
     m.ad = mem_addr(w, imm, a, b); m.tag = m.ad >> 2; m.h = wc_h(m.tag);
-    m.q = ram(m.ad >> 4); m.ea = wc[m.h]; m.eb = wc[m.h + HALF];
+    m.q = data_texel(m.ad); m.ea = wc[m.h]; m.eb = wc[m.h + HALF];
     return m;
 }
 mop mread_entries(uint w, uint imm, uint a, uint b) {   // the same, the texel left 0 (for the caller to read)
@@ -262,7 +272,7 @@ void fstep(inout uint budget) {
         bool st1 = (t.y & op_bit(8)) != 0;
         mop m0 = mread_entries(t.x, i0, A0, B0), m1 = mread_entries(t.y, i1, A1, B1);
         // the texels only when an op needs the old word (a byte or a half, or a load): a word's store is its value
-        [branch] if (((t.x & op_bit(3)) | ((t.y ^ op_bit(8)) & op_bit(11))) != 0) { m0.q = ram(m0.ad >> 4); m1.q = ram(m1.ad >> 4); }
+        [branch] if (((t.x & op_bit(3)) | ((t.y ^ op_bit(8)) & op_bit(11))) != 0) { m0.q = data_texel(m0.ad); m1.q = data_texel(m1.ad); }
         uint w0 = seen(m0), sl0 = slot(m0);
         uint2 e0 = uint2(m0.tag, merge(t.x, w0, m0.ad, r[d0]));
         m1.ea = sl0 == m1.h ? e0 : m1.ea;
@@ -283,7 +293,7 @@ void fstep(inout uint budget) {
     } else {   // a load or a store, and a lite op
         bool st0 = (t.x & op_bit(8)) != 0;
         mop m0 = mread_entries(t.x, i0, A0, B0);
-        [branch] if (((t.x ^ op_bit(8)) & op_bit(11)) != 0) m0.q = ram(m0.ad >> 4);   // (a load, a byte or a half)
+        [branch] if (((t.x ^ op_bit(8)) & op_bit(11)) != 0) m0.q = data_texel(m0.ad);   // (a load, a byte or a half)
         uint w0 = seen(m0), sl0 = slot(m0);
         v0 = extend(t.x, w0, m0.ad);
         bool nr = st0 && sl0 == NONE;
@@ -373,7 +383,7 @@ c2f commit_vert(uint id : SV_VertexID) {
     uint c = id / WCN, j = id % WCN;
     uint4 e = state_any(24 + (j >> 1), c);
     uint word = (j & 1) ? e.z : e.x, tex = word >> 2;
-    float2 at = (float2(tex & 2047, tex >> 11) + 0.5) / float2(2048, _RamRows);
+    float2 at = (float2(tex % RAM_W, tex / RAM_W) + 0.5) / float2(RAM_W, _RamRows);
     c2f o;
     o.vertex = word != NONE && (word & 3) == _Comp ? float4(at.x * 2 - 1, 1 - at.y * 2, 0, 1) : float4(-2, -2, 0, 1);
     o.value = (j & 1) ? e.w : e.y;
