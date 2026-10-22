@@ -4,7 +4,8 @@
 // its bundle, and a store's texel read only when an op needs the old word (x15sq's sq_sw2).
 // RAM is a texture 8192 texels wide; the ROM (GVM_ROM on, read only) a texture of its own, read beside RAM's at the
 // same place by every load and chosen by the address's bit 30. Code runs from RAM. Every other bundle is a trip of the
-// full step (ops in order, each seeing the one before).
+// full step (ops in order, each seeing the one before). (Since x17 the paths are numbered anew: its full step's test
+// of two memory ops names them.)
 #include "../../isa.h"
 
 static const uint WCN = 130;         // write cache entries: two ways of HALF sets, two overflow slots, then a sink
@@ -234,7 +235,7 @@ bool step() {   // false: the pass ends (a halt, or a store with no room)
         A1 = (d0 != 0 && ra1 == d0) ? v0 : A1; B1 = (d0 != 0 && rb1 == d0) ? v0 : B1;
         v1 = fl1 ? fsum(fn(t.y), A1, fb(t.y, i1, L1, B1), r[GVM_RC(t.y)]) : alu_lite(t.y, i1, A1, B1);
     } else if (ok && path != GVM_PATH_ALU) {
-        stop = !body_mem(t, i0, i1, L1, path >= GVM_PATH_LOAD && (path & 1) != 0, fl1, A0, B0, ra1, rb1, A1, B1, d0, d1, v0, v1);
+        stop = !body_mem(t, i0, i1, L1, (path == GVM_PATH_LOAD2 || path == GVM_PATH_MEM2), fl1, A0, B0, ra1, rb1, A1, B1, d0, d1, v0, v1);
     } else if (ok) {
         v0 = fpu(t.x, A0, fb(t.x, i0, L0, B0), r[GVM_RC(t.x)]);
         r[d0 == 0 ? 64 : d0] = v0;

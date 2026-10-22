@@ -26,7 +26,8 @@
 #define GVM_OFF18(w) ((int)(w) >> 14)         // cc 0: j's and call's offset, in bundles (+-2 MB)
 #define GVM_CIMM12(w) ((int)(w) >> 20)        // cc 0: the add's step
 // The paths: which ops a bundle has, so which body of the tick runs it (the assembler's, and trusted). Paths 3-7 are
-// the fast loop's (path >= 3); in 4-7 bit 0 says two memory ops and bit 1 a store among them. "Mid" is the integer
+// the fast loop's (path >= 3): the memory paths 3-6 and the integer path 7 (x17: while an operation is in flight the
+// tick's fast loop takes path 7 alone, path >= 7, at no cost). "Mid" is the integer
 // functions 0-19, "lite" 0-7 and 16-18 (sums, logic, the three shifts), "float lite" the float functions 0-7.
 // Memory ops here are loads and stores of bytes, halves and words. In paths 5 and 7 op 1 reads no register op 0
 // writes (the assembler opens a bundle for it), so both ops' addresses and values are known when the bundle starts.
@@ -35,11 +36,11 @@
 #define GVM_PATH_GENERAL 0u                   // anything: the general step
 #define GVM_PATH_ALU 1u                       // op 0 an integer op 0-23 or a float op, op 1 lite or float lite
 #define GVM_PATH_MEMF 2u                      // op 0 a memory op, op 1 float lite
-#define GVM_PATH_INT 3u                       // op 0 mid, op 1 lite
-#define GVM_PATH_LOAD 4u                      // op 0 a load, op 1 lite
-#define GVM_PATH_LOAD2 5u                     // both loads
-#define GVM_PATH_STORE 6u                     // op 0 a store, op 1 lite
-#define GVM_PATH_MEM2 7u                      // op 0 a store, op 1 a load or a store (a load's store after it: two bundles)
+#define GVM_PATH_LOAD 3u                      // op 0 a load, op 1 lite
+#define GVM_PATH_LOAD2 4u                     // both loads
+#define GVM_PATH_STORE 5u                     // op 0 a store, op 1 lite
+#define GVM_PATH_MEM2 6u                      // op 0 a store, op 1 a load or a store (a load's store after it: two bundles)
+#define GVM_PATH_INT 7u                       // op 0 mid, op 1 lite
 #define GVM_PATH_FAST 3u                      // the first of the fast loop's
 // cc's bits (7-10): 0 the inverse; 1 less; 2 with 1 signed, without it equal; 3 against imm6 (the rb field, signed:
 // the unsigned forms compare with it sign-extended). Neither 1 nor 2: special (cc 0) or addbnz, and with imm6 a bit's
@@ -135,7 +136,10 @@
 #define GVM_OP_I(f) (0x40u + (f))
 #define GVM_OP_II(f) (0x60u + (f))
 
-// ---- Memory class: 0x80 + mode * 8 + w
+// ---- Memory class: 0x80 + mode * 8 + w. A byte, a half or a word (b, h, w, bu, hu; modes 0-3) stays in its address's
+// word (x17): the bytes past the word are not read or written (a load's are 0, before its extension). d and q, and
+// the atomics, are any alignment as before (atomics on a word). The compiler splits a byte, half or word it does not
+// know to be in one word.
 #define GVM_M_LOAD 0u      // [ra + imm]
 #define GVM_M_STORE 1u     // [ra + imm], the value in rd
 #define GVM_M_LOADX 2u     // [ra + (rb << rc)]

@@ -197,7 +197,7 @@ int main(int argc, char** argv) {
             }
             return dflt;
         };
-        g_wcn = size("WCN", 128); g_texw = size("RAM_W", 2048);
+        g_wcn = size("WCN", 128); g_texw = size("RAM_W", 2048); g_twc = size("T_WC", 24);
     }
     const Case* cs = nullptr;
     static std::vector<Case> all = cases();
@@ -211,10 +211,10 @@ int main(int argc, char** argv) {
     check(dev->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, alloc.Get(), nullptr, IID_PPV_ARGS(&list)), "list");
     check(dev->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)), "fence");
 
-    // the root: b0 the pass's constants (12 words), b1 the commit's (4), t0-t11 a table
+    // the root: b0 the pass's constants (20 words: x17's external lines at 12-19), b1 the commit's (4), t0-t11 a table
     D3D12_DESCRIPTOR_RANGE range{D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 12, 0, 0, 0};
     D3D12_ROOT_PARAMETER rp[3] = {};
-    rp[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS; rp[0].Constants = {0, 0, 12};
+    rp[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS; rp[0].Constants = {0, 0, 20};
     rp[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS; rp[1].Constants = {1, 0, 4};
     rp[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE; rp[2].DescriptorTable = {1, &range};
     D3D12_ROOT_SIGNATURE_DESC rsd{3, rp, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_NONE};
@@ -253,7 +253,7 @@ int main(int argc, char** argv) {
 
     // the machine: RAM, the ROM, two sets of eight state targets
     Prepared pr = prepare(*cs, 1);
-    uint32_t statePix = (24 + g_wcn / 2 + 7) / 8;
+    uint32_t statePix = (g_twc + g_wcn / 2 + 7) / 8;
     std::vector<uint32_t> rom((size_t)ROM_SIZE / 4);
     for (size_t k = 0; k < rom.size(); k++) rom[k] = (uint32_t)(k * 0x01000193u) ^ 0x5bd1e995u;
     Tex ram = make_tex(g_texw, ram_rows(), pr.ramImg.data()), romt = make_tex(g_texw, rom_rows(), rom.data()), set[2][8];
@@ -285,14 +285,14 @@ int main(int argc, char** argv) {
             dev->CreateShaderResourceView(r, &sv, h);
         }
     auto table = [&](int k) { D3D12_GPU_DESCRIPTOR_HANDLE h = srvs->GetGPUDescriptorHandleForHeapStart(); h.ptr += (size_t)k * 12 * sinc; return h; };
-    uint32_t pass[12] = {ticks, RAM_END, 1000, 0, 0, 1, ram_rows(), 0, 1, 0, 0, 0};
+    uint32_t pass[20] = {ticks, RAM_END, 1000, 0, 0, 1, ram_rows(), 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
     const D3D12_RESOURCE_STATES SRV = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
     int cur = 0;
     auto record_pass = [&]() {
         ID3D12DescriptorHeap* hs[] = {srvs.Get()};
         list->SetDescriptorHeaps(1, hs);
         list->SetGraphicsRootSignature(root.Get());
-        list->SetGraphicsRoot32BitConstants(0, 12, pass, 0);
+        list->SetGraphicsRoot32BitConstants(0, 20, pass, 0);
         // the tick: set cur from set cur ^ 1
         for (int t = 0; t < 8; t++) { to(set[cur][t], D3D12_RESOURCE_STATE_RENDER_TARGET); to(set[cur ^ 1][t], SRV); }
         to(ram, SRV); to(romt, SRV);

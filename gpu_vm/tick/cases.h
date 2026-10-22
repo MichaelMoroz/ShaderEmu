@@ -18,6 +18,7 @@ static uint32_t ram_rows() { return RAM_END / 16 / g_texw; }
 static uint32_t rom_rows() { return ROM_SIZE / 16 / g_texw; }
 static const uint32_t DATA = GVM_RAM + 0x100000;   // a case's data
 static uint32_t g_wcn = 128;
+static uint32_t g_twc = 24;    // the state's first write cache texel: a step's T_WC (x17 on: 40)
 static int g_loop_n = 3000000;   // a timed loop's iterations (a check runs a few thousand)
 // The timed loops with the fused control words (gpu_vm/isa.h): 1 addbnz, 2 addbnz and the control word's add; GVM_FUSED=N
 // in the environment, or gvmbench --fused N. 0, every loop is as it was. The score stays the RISC-V loop's
@@ -43,6 +44,7 @@ struct Case {
     double tol = 0;            // registers that may differ by this much, relative (the card's special functions)
     double bundles_fused = 0;  // a timed case under g_fused: bundles an iteration of its loop
     bool named = false;        // run only when --case names it (the fused ops: a tick without them is not wrong)
+    int ext_from = -1, ext_to = -1;   // core 0's external interrupt line is on in passes [ext_from, ext_to) of a check
 };
 
 // ---- Random programs: the fuzzer's ops (registers r5-r28 carry values; r29 a base for memory)
@@ -599,7 +601,7 @@ static Prepared prepare(const Case& cs, uint32_t seed) {
     for (auto& d : data) pr.ramImg[d.first / 4] = d.second;
     // a trap nobody asked for halts the core where its handler would be: {break} at HALT_STUB
     pr.ramImg[HALT_STUB / 4] = GVM_WORD_R(GVM_X_BREAK, 0u, 0u, 0u, 0u); pr.ramImg[HALT_STUB / 4 + 3] = GVM_CTRL_NONE | 1u << 3 | GVM_PATH_GENERAL;
-    pr.state.assign(cs.cores, std::vector<uint32_t>((size_t)(24 + g_wcn / 2 + 8) * 4, 0));
+    pr.state.assign(cs.cores, std::vector<uint32_t>((size_t)(g_twc + g_wcn / 2 + 8) * 4, 0));
     for (uint32_t c = 0; c < cs.cores; c++) {
         pr.state[c][16 * 4 + 0] = pr.bases[c];
         pr.state[c][16 * 4 + 1] = GVM_ST_S;

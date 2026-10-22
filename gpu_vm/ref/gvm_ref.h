@@ -206,7 +206,7 @@ static uint32_t gvm__word(gvm_machine *m, gvm_core *c, uint32_t a) {
 
 // A load of `bytes` (1, 2, 4) at any alignment; 0 on a fault
 static int gvm__load(gvm_machine *m, gvm_core *c, uint32_t a, uint32_t bytes, uint32_t *v) {
-    if (a >= GVM_OPS && a + bytes <= GVM_OPS + 32 && !((a | bytes) & 3)) {   // in flight, refused, the latched words
+    if (a >= GVM_OPS && a - GVM_OPS <= 32 - bytes && !((a | bytes) & 3)) {   // in flight, refused, the latched words
         *v = a == GVM_OPS ? c->nops : a == GVM_OPS + 4 ? c->refused : c->op[(a - GVM_OPS) >> 2];
         return 1;
     }
@@ -259,7 +259,7 @@ static int gvm__op_waits(const gvm_core *c, uint32_t a, uint32_t bytes, int stor
 }
 
 static int gvm__store_ok(const gvm_machine *m, uint32_t a, uint32_t bytes) {
-    if (a >= GVM_OPS) return a + bytes <= GVM_OPS + 32 && !((a | bytes) & 3);
+    if (a >= GVM_OPS) return a - GVM_OPS <= 32 - bytes && !((a | bytes) & 3);
     return gvm__writable(m, a) && gvm__writable(m, a + bytes - 1);
 }
 
@@ -415,6 +415,8 @@ static int gvm__op(gvm_machine *m, gvm_core *c, uint32_t base, uint32_t s, const
             uint32_t by = bytes_of[wd];
             if (!by) break;
             uint32_t addr = (mode <= 1) ? a + imm : a + (b << (rc & 31));
+            // a byte, a half or a word stays in its address's word (since x17): the bytes past it are not accessed
+            if (by <= 4 && (addr & 3) + by > 4) by = 4 - (addr & 3);
             if (gvm__op_waits(c, addr, by, mode & 1)) { c->ops_run--; c->pc = epc; *end = GVM_END_SYNC; return GVM__END; }
             if (mode == 0 || mode == 2) {
                 uint32_t v[4] = {0, 0, 0, 0}, k, words = by > 4 ? by / 4 : 1;

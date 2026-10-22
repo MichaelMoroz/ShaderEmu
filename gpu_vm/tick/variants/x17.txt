@@ -1,0 +1,3 @@
+# x17: the whole ISA (gpu_vm/tick/steps/README.md, "x17") against x16, in one batch on the card, --fused 1
+x16       gpu_vm/tick/steps/x16.hlsl
+x17       gpu_vm/tick/steps/x17.hlsl

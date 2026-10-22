@@ -130,14 +130,15 @@ struct Gpu {
     bool hasCommit = true, hasOps = true;
     ID3D11Buffer *cb, *ccb[4];
     ID3D11BlendState* mask[4];
-    struct { uint32_t ticks, ramEnd, timeLo, timeHi, player, flags, ramRows, ext, ncores, pad[3]; } pass;
+    uint32_t opSlots = 32, opSpan = 272, opRounds = 2;   // the operations' stage (a step's OP_SLOTS, OP_SPAN) and rounds a pass
+    struct { uint32_t ticks, ramEnd, timeLo, timeHi, player, flags, ramRows, ext0, ncores, pad[3], ext[8]; } pass;   // (x17's PassParams)
     void make(uint32_t ncores, const std::vector<uint32_t>& ramImg, const std::vector<uint32_t>& romImg, const std::vector<std::vector<uint32_t>>& state) {
         cores = ncores;
-        statePix = (24 + g_wcn / 2 + 7) / 8;
+        statePix = (g_twc + g_wcn / 2 + 7) / 8;
         ram = make_tex(g_texw, ram_rows(), ramImg.data());
         rom = make_tex(g_texw, rom_rows(), romImg.data());
-        std::vector<uint32_t> z((size_t)2048 * cores * 9 * 4, 0);
-        stage = make_tex(2048, cores * 9, z.data());
+        std::vector<uint32_t> z((size_t)opSpan * cores * opSlots * 4, 0);
+        stage = make_tex(opSpan, cores * opSlots, z.data());
         std::vector<uint32_t> oz((size_t)cores * 4, 0);
         for (int k = 0; k < 2; k++) ops[k] = make_tex(cores, 1, oz.data());
         for (int k = 0; k < 2; k++)
@@ -189,7 +190,7 @@ struct Gpu {
         ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         ctx->VSSetShader(tick.vs, nullptr, 0); ctx->PSSetShader(tick.ps, nullptr, 0);
         ctx->Draw(3, 0);
-        if (!hasCommit) { clear_srv(); cur ^= 1; oc ^= 1; return; }
+        if (!hasCommit) { clear_srv(); cur ^= 1; return; }
         // the commit: four draws, a component each
         clear_srv();
         ctx->OMSetRenderTargets(1, &ram.rtv, nullptr);
@@ -204,30 +205,33 @@ struct Gpu {
             ctx->Draw(cores * g_wcn, 0);
         }
         ctx->OMSetBlendState(nullptr, nullptr, 0xffffffff);
-        if (!hasOps) { clear_srv(); cur ^= 1; oc ^= 1; return; }
-        // the operations: stage, write, progress
+        if (!hasOps) { clear_srv(); cur ^= 1; return; }
+        // the operations (gpu_vm/tick/STATE.md): rounds of stage, write, progress; _OpState ping-pongs a round
+        for (uint32_t round = 0; round < opRounds; round++) {
+            clear_srv();
+            ctx->OMSetRenderTargets(1, &stage.rtv, nullptr);
+            bind(set[cur][0], cur, true, false);
+            viewport(opSpan, cores * opSlots);
+            ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            ctx->VSSetShader(stg.vs, nullptr, 0); ctx->PSSetShader(stg.ps, nullptr, 0);
+            ctx->DrawInstanced(6, cores * opSlots, 0, 0);
+            clear_srv();
+            ctx->OMSetRenderTargets(1, &ram.rtv, nullptr);
+            bind(set[cur][0], cur, false, true);
+            viewport(g_texw, ram_rows());
+            ctx->VSSetShader(wrt.vs, nullptr, 0); ctx->PSSetShader(wrt.ps, nullptr, 0);
+            ctx->DrawInstanced(12, cores * opSlots, 0, 0);
+            clear_srv();
+            ctx->OMSetRenderTargets(1, &ops[oc ^ 1].rtv, nullptr);
+            bind(set[cur][0], cur, false, false);
+            viewport(cores, 1);
+            ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_POINTLIST);
+            ctx->VSSetShader(prog.vs, nullptr, 0); ctx->PSSetShader(prog.ps, nullptr, 0);
+            ctx->Draw(cores, 0);
+            oc ^= 1;
+        }
         clear_srv();
-        ctx->OMSetRenderTargets(1, &stage.rtv, nullptr);
-        bind(set[cur][0], cur, true, false);
-        viewport(2048, cores * 9);
-        ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
-        ctx->VSSetShader(stg.vs, nullptr, 0); ctx->PSSetShader(stg.ps, nullptr, 0);
-        ctx->DrawInstanced(4, cores * 64, 0, 0);
-        clear_srv();
-        ctx->OMSetRenderTargets(1, &ram.rtv, nullptr);
-        bind(set[cur][0], cur, false, true);
-        viewport(g_texw, ram_rows());
-        ctx->VSSetShader(wrt.vs, nullptr, 0); ctx->PSSetShader(wrt.ps, nullptr, 0);
-        ctx->DrawInstanced(4, cores * 64, 0, 0);
-        clear_srv();
-        ctx->OMSetRenderTargets(1, &ops[oc ^ 1].rtv, nullptr);
-        bind(set[cur][0], cur, false, false);
-        viewport(cores, 1);
-        ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_POINTLIST);
-        ctx->VSSetShader(prog.vs, nullptr, 0); ctx->PSSetShader(prog.ps, nullptr, 0);
-        ctx->Draw(cores, 0);
-        clear_srv();
-        cur ^= 1; oc ^= 1;
+        cur ^= 1;
     }
     std::vector<uint32_t> core_state(uint32_t c) {   // the last pass's state of core c, texel by texel
         std::vector<uint32_t> out((size_t)statePix * 8 * 4);
@@ -240,6 +244,7 @@ struct Gpu {
 };
 
 static std::vector<uint32_t> g_rom;
+static uint32_t g_op_rounds = 2;
 static void commit_constants(Gpu& gpu, uint32_t cores) {
     for (int c = 0; c < 4; c++) {
         uint32_t cdata[4] = {(uint32_t)c, cores, 0, 0};
@@ -264,10 +269,13 @@ static bool check_case(Gpu& gpu, const Case& cs, uint32_t seed, bool verbose) {
     m.cores = rc.data(); m.ncores = cs.cores;
     const uint32_t T = 61;   // short passes: they end inside bundles and on a full write cache
     gpu.make(cs.cores, pr.ramImg, g_rom, pr.state);
-    gpu.pass = {T, RAM_END, 1000, 0, 0, 1, ram_rows(), 0, cs.cores, {0, 0, 0}};
+    gpu.pass = {T, RAM_END, 1000, 0, 0, 1, ram_rows(), 0, cs.cores, {0, 0, 0}, {0}};
+    // TIME is 1000 + the pass (both machines), core 0's external line on in passes [ext_from, ext_to)
+    auto ext_on = [&](int pass) { return pass >= cs.ext_from && pass < cs.ext_to; };
     for (int refPasses = 0; refPasses < 400000; refPasses++) {
         bool any = false;
-        m.time = 1000;
+        m.time = 1000 + (uint64_t)refPasses;
+        rc[0].ext = ext_on(refPasses);
         for (uint32_t c = 0; c < cs.cores; c++) if (!rc[c].halted) { gvm_run(&m, &rc[c], T); any = true; }
         gvm_commit(&m);
         if (!any) break;
@@ -276,7 +284,11 @@ static bool check_case(Gpu& gpu, const Case& cs, uint32_t seed, bool verbose) {
     int gpuPasses = 0;
     ULONGLONG checkStart = GetTickCount64();   // a check gives up after 60 s: every run stays short
     for (int round = 0; round < 4000 && !halted && GetTickCount64() - checkStart < 60000; round++) {
-        for (int k = 0; k < 50; k++) { gpu.run_pass(); gpuPasses++; }
+        for (int k = 0; k < 50; k++) {
+            gpu.pass.timeLo = 1000 + gpuPasses;
+            gpu.pass.ext0 = gpu.pass.ext[0] = ext_on(gpuPasses) ? 1 : 0;
+            gpu.run_pass(); gpuPasses++;
+        }
         halted = true;
         for (uint32_t c = 0; c < cs.cores; c++) halted = halted && (gpu.core_state(c)[18 * 4 + 2] & 4);
     }
@@ -309,7 +321,7 @@ static double time_case(Gpu& gpu, const Case& cs, uint32_t ticks, uint32_t passe
     Prepared pr = prepare(cs, 1);
     commit_constants(gpu, cs.cores);
     gpu.make(cs.cores, pr.ramImg, g_rom, pr.state);
-    gpu.pass = {ticks, RAM_END, 1000, 0, 0, 1, ram_rows(), 0, cs.cores, {0, 0, 0}};
+    gpu.pass = {ticks, RAM_END, 1000, 0, 0, 1, ram_rows(), 0, cs.cores, {0, 0, 0}, {0}};
     for (int k = 0; k < 20; k++) gpu.run_pass();
     int at = g_fused && cs.bundles_fused > 0 ? 0 : 1;   // fused loops are counted in bundles (19.x), others in ops (19.y)
     uint32_t o0 = gpu.core_state(0)[19 * 4 + at];
@@ -329,11 +341,12 @@ static double time_case(Gpu& gpu, const Case& cs, uint32_t ticks, uint32_t passe
     double per = at == 0 ? cs.bundles_fused : cs.ops_per_iter;
     return cs.rv_per_iter > 0 ? mops / per * cs.rv_per_iter : mops;
 }
-struct Variant { std::string name, shader; std::vector<std::string> defs; Prog tick, commit, stg, wrt, prog; bool hasCommit, hasOps; uint32_t wcn = 128, texw = 2048; };
+struct Variant { std::string name, shader; std::vector<std::string> defs; Prog tick, commit, stg, wrt, prog; bool hasCommit, hasOps; uint32_t wcn = 128, texw = 2048, twc = 24, slots = 32, span = 272; };
 static void use(Gpu& gpu, const Variant& v) {
     gpu.tick = v.tick; gpu.commit = v.commit; gpu.stg = v.stg; gpu.wrt = v.wrt; gpu.prog = v.prog;
     gpu.hasCommit = v.hasCommit; gpu.hasOps = v.hasOps;
-    g_wcn = v.wcn; g_texw = v.texw;   // (the state's layout, the commit's points and RAM's width are the variant's)
+    g_wcn = v.wcn; g_texw = v.texw; g_twc = v.twc;   // (the state's layout, the commit's points and RAM's width are the variant's)
+    gpu.opSlots = v.slots; gpu.opSpan = v.span; gpu.opRounds = g_op_rounds;
 }
 // a step's write cache entries and RAM's width: a -D WCN= or RAM_W= of the variant, else the step's own
 // (`#define WCN 130` or `static const uint WCN = 130;`), else 128 and 2048
@@ -346,10 +359,13 @@ static uint32_t step_size(const std::string& src, const std::vector<std::string>
     }
     return dflt;
 }
-static void step_sizes(const std::string& path, const std::vector<std::string>& defs, uint32_t& wcn, uint32_t& texw) {
+static void step_sizes(const std::string& path, const std::vector<std::string>& defs, uint32_t& wcn, uint32_t& texw, uint32_t& twc, uint32_t& slots, uint32_t& span) {
     std::string src = slurp(path);
     wcn = step_size(src, defs, "WCN", 128);
     texw = step_size(src, defs, "RAM_W", 2048);
+    twc = step_size(src, defs, "T_WC", 24);
+    slots = step_size(src, defs, "OP_SLOTS", 32);
+    span = step_size(src, defs, "OP_SPAN", 272);
 }
 static void build_variant(Variant& v) {
     std::vector<std::string> names, values;
@@ -390,6 +406,7 @@ int main(int argc, char** argv) {
         else if (a == "--ticks" && i + 1 < argc) ticks = (uint32_t)atoi(argv[++i]);
         else if (a == "--passes" && i + 1 < argc) passes = (uint32_t)atoi(argv[++i]);
         else if (a == "--rounds" && i + 1 < argc) rounds = (uint32_t)atoi(argv[++i]);
+        else if (a == "--op-rounds" && i + 1 < argc) g_op_rounds = (uint32_t)atoi(argv[++i]);   // the operations' rounds a pass
         else if (a == "--seed" && i + 1 < argc) seed = (uint32_t)atoi(argv[++i]);
         else if (a == "-D" && i + 1 < argc) defStore.push_back(argv[++i]);
         else {
@@ -431,7 +448,7 @@ int main(int argc, char** argv) {
     QueryPerformanceCounter(&f0);
     for (Variant& v : vars) {
         if (v.shader.empty()) v.shader = dflt;
-        step_sizes(v.shader, v.defs, v.wcn, v.texw);
+        step_sizes(v.shader, v.defs, v.wcn, v.texw, v.twc, v.slots, v.span);
         build_variant(v);
     }
     QueryPerformanceCounter(&f1);
@@ -440,7 +457,7 @@ int main(int argc, char** argv) {
            double(f1.QuadPart - f0.QuadPart) / fq.QuadPart);
     Gpu gpu;
     {
-        D3D11_BUFFER_DESC bd = {48, D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
+        D3D11_BUFFER_DESC bd = {80, D3D11_USAGE_DEFAULT, D3D11_BIND_CONSTANT_BUFFER, 0, 0, 0};
         check(dev->CreateBuffer(&bd, nullptr, &gpu.cb), "cbuffer");
         for (int c = 0; c < 4; c++) {
             D3D11_BLEND_DESC b = {};

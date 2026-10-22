@@ -1,0 +1,6 @@
+# x17a: the fast loop's route-out of a memory op it cannot make (x17s.hlsl CHK), against x16
+x16       gpu_vm/tick/steps/x16.hlsl
+chk0      gpu_vm/tick/steps/x17s.hlsl -D CHK=0
+chk1      gpu_vm/tick/steps/x17s.hlsl -D CHK=1
+chk4      gpu_vm/tick/steps/x17s.hlsl -D CHK=4
+chk4nox   gpu_vm/tick/steps/x17s.hlsl -D CHK=4 -D NOX=1
