@@ -24,6 +24,12 @@ while [ $# -gt 0 ]; do
     esac
 done
 mkdir -p "$OUT"
+if [ ! -d "$TORTURE" ]; then   # a sparse clone of gcc: the testsuite's execute folder alone
+    G=$(cd "$TORTURE/../../../.." 2>/dev/null && pwd || echo "$HOME/gpu_vm/torture/gcc")
+    mkdir -p "$(dirname "$G")"
+    git clone -q --depth 1 --filter=blob:none --sparse https://github.com/gcc-mirror/gcc.git "$G" &&
+        git -C "$G" sparse-checkout set gcc/testsuite/gcc.c-torture/execute || exit 1
+fi
 
 # The runtime: the exec tests' (built by their run.sh)
 bash "$ROOT/gpu_vm/llvm/test/exec/run.sh" -O 0 arith > /dev/null || { echo "the exec runtime does not build"; exit 1; }

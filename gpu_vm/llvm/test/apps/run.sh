@@ -11,7 +11,9 @@ THIRD=${THIRD:-$HOME/gpu_vm/third}
 OUT=${OUT:-$ROOT/build/gvm_apps}
 LEVELS="0 2"
 if [ "${1:-}" = "-O" ]; then LEVELS=$2; shift 2; fi
-mkdir -p "$OUT"
+mkdir -p "$OUT" "$THIRD"
+[ -d "$THIRD/zlib" ] || git clone -q --depth 1 https://github.com/madler/zlib.git "$THIRD/zlib"
+[ -d "$THIRD/lua" ] || git clone -q --depth 1 https://github.com/lua/lua.git "$THIRD/lua"
 bash "$ROOT/gpu_vm/llvm/test/exec/run.sh" -O 0 arith > /dev/null || { echo "the exec runtime does not build"; exit 1; }
 RTDIR=$ROOT/build/gvm_exec
 CPU=$ROOT/build/gvm_cpu/gvm_cpu
