@@ -340,7 +340,7 @@ kind_of(int i)
 {
 	struct entry *e = &entries[i];
 	struct stat info;
-	char lower[128];
+	static char lower[128];	/* (static: kind_icon may be it, and --kinds prints it after the return) */
 	const char *icon = "file", *typed;
 	int k;
 

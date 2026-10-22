@@ -20,6 +20,7 @@ def main():
     vol, n = name_at(16)
     first = 16 + n
     files = links = 0
+    pathof, pending = {}, []   # (a hard link to a program: a link to its path, once every path is known)
     def walk(at, path, seen):
         nonlocal files, links
         while at:
@@ -29,6 +30,7 @@ def main():
             data = at + 16 + n
             if name not in ('.', '..'):
                 p = path + '/' + name
+                pathof.setdefault(at, p)
                 top = p.split('/')[1]
                 if top not in SKIP_TOP:
                     real = at
@@ -42,20 +44,30 @@ def main():
                         walk(spec & ~15, p, seen | {real})
                     elif kind == 2:
                         body = rom[data:data + size]
-                        if body[:4] not in (b'bFLT', b'\x7fELF'):
+                        if body[:4] in (b'bFLT', b'\x7fELF') and real != at:
+                            pending.append((dst, real))
+                        elif body[:4] not in (b'bFLT', b'\x7fELF'):
                             os.makedirs(os.path.dirname(dst), exist_ok=True)
                             with open(dst, 'wb') as f:
                                 f.write(body)
                             if nxt & 8:
                                 os.chmod(dst, 0o755)
                             files += 1
-                    elif kind == 3 and not p.startswith(('/usr/bin/', '/usr/sbin/')):   # (busybox's applets: ours)
-                        os.makedirs(os.path.dirname(dst), exist_ok=True)
-                        if not os.path.lexists(dst):
-                            os.symlink(rom[data:data + size].rstrip(b'\0').decode('latin-1'), dst)
-                        links += 1
+                    elif kind == 3:
+                        to = rom[data:data + size].rstrip(b'\0').decode('latin-1')
+                        if not to.endswith('busybox'):   # (busybox's applets: ours)
+                            os.makedirs(os.path.dirname(dst), exist_ok=True)
+                            if not os.path.lexists(dst):
+                                os.symlink(to, dst)
+                            links += 1
             at = nxt & ~15
     walk(first, '', set())
+    for dst, real in pending:
+        to = pathof.get(real)
+        if to and not to.endswith('busybox') and not os.path.lexists(dst):
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            os.symlink(to, dst)
+            links += 1
     print('romfs_extract: %s: %d files, %d links into %s' % (vol, files, links, out))
 
 
