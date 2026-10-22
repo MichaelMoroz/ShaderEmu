@@ -81,5 +81,24 @@ int main(int argc, char **argv) {
         "   and t0, t0, %2\n addi %0, %0, -1\n bnez %0, 1b\n"
         : "+r"(n) : "r"(f), "r"(0x3ffffc) : "t0", "t1", "t4", "a4");
     report("stride", want / 7, 7, t);
+    // floats: sums, products, a min and a max, every one on the last ones' results
+    n = want / 16; t = now();
+    __asm__ volatile(
+        "   fmv.w.x ft0, zero\n fmv.w.x ft1, zero\n fmv.w.x ft2, zero\n fmv.w.x ft3, zero\n"
+        "   fmv.w.x ft4, zero\n fmv.w.x ft5, zero\n fmv.w.x ft6, zero\n fmv.w.x ft7, zero\n"
+        "1: fadd.s ft0, ft0, ft1\n fmul.s ft2, ft0, ft3\n fsub.s ft4, ft2, ft1\n fadd.s ft5, ft4, ft0\n"
+        "   fmul.s ft6, ft5, ft3\n fmin.s ft7, ft6, ft2\n fadd.s ft1, ft1, ft7\n fmul.s ft0, ft0, ft3\n"
+        "   fadd.s ft2, ft2, ft5\n fsub.s ft3, ft3, ft4\n fmax.s ft4, ft4, ft6\n fadd.s ft6, ft6, ft1\n"
+        "   fmul.s ft7, ft7, ft0\n fadd.s ft5, ft5, ft2\n"
+        "   addi %0, %0, -1\n bnez %0, 1b\n" : "+r"(n) : : "ft0", "ft1", "ft2", "ft3", "ft4", "ft5", "ft6", "ft7");
+    report("floats", want / 16, 16, t);
+
+    // fmix: float loads, products and sums and a store, as a renderer's inner loop has them
+    n = want / 10; t = now();
+    __asm__ volatile(
+        "1: flw ft0, 0(%1)\n flw ft1, 4(%1)\n fmul.s ft2, ft0, ft1\n fadd.s ft3, ft3, ft2\n"
+        "   fsw ft3, 8(%1)\n flw ft4, 12(%1)\n fmul.s ft5, ft4, ft2\n fadd.s ft6, ft6, ft5\n"
+        "   addi %0, %0, -1\n bnez %0, 1b\n" : "+r"(n) : "r"(p) : "ft0", "ft1", "ft2", "ft3", "ft4", "ft5", "ft6", "memory");
+    report("fmix", want / 10, 10, t);
     return 0;
 }

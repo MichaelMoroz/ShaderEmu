@@ -50,6 +50,47 @@ October 2026 on these numbers: `sx/isa.h`).
 The lean tick's loads 5.49, stores 4.63, mix 6.85, stride 6.04: x11 is 1.64 on loads and 1.76 on stride, and its
 integer bundles 1.6. s21's trip of two loads is 166 ns against its integer trip's 103; x11's 222 against 165.
 
+## x12: every fast path, and variants in batches
+
+x12 has integers, loads and stores (s21's form, a store with no room undoing op 0), floats (the float unit
+renumbered for a tree of selects, the special functions behind a branch) and memory with a float sum: paths 1-6
+(`sx/isa.h`, the path now 3 bits; branches 9 bits, j and call 18). Every check case is the reference's: integers,
+conditions, memory, a full write cache, floats exact, floats in every path, and division and the special
+functions within 2e-5 (`sfu`).
+
+The lean tick was measured again in the session of x12 with `isaloops`' two float loops (floats: sums,
+products, min, max; fmix: float loads, products and a store): arith 8.26, loads 5.70, stores 4.91, adds 8.18,
+tight 7.28, mix 7.22, stride 6.37, floats 6.11, fmix 5.31 (5% above the first session on every loop: the card's
+drift). `sxbench --variants FILE` checks each variant on the check cases, then times the loops in rounds,
+forward and backward, and prints the median and the geometric mean against these (`sx/tick/variants/`).
+
+| Batch | What it tried | Best, x lean |
+|---|---|---|
+| x12a (20) | prefetch, write cache 64/128/256, register array 65/72/128, op 1's memory read late, integers tested first, a switch on the path, the assembler's path trusted (`OK_MIN`), r0 cleared after a bundle, stores without a branch, the plain hash, and pairs of them | `OK_MIN` + `INT_FIRST` 1.41 (base 1.30) |
+| x12b (10) | loads apart from stores (x11's form for a bundle with no store) | none better (1.37 to 1.42) |
+| x12c (7) | probes: parts compiled out | loads 6.05 to 7.86 with no store code at all, though `LOADS_APART` runs none of it |
+| x12d (10) | one-trip loops round each body, so the card's compiler cannot run it predicated | none better (1.17 to 1.41) |
+
+## Nsight Graphics (22 October 2026)
+
+`bin\sxtrace12.exe` runs a step on D3D12, compiled by DXC with its debug information in it (`-Zi -Qembed_debug`)
+or as fxc2's DXBC (`--dxbc`): arith 14.8 and 14.6 M a second, as the D3D11 bench. `pwsh sx	ick	race.ps1 -Case
+loads` takes a GPU Trace with the real-time shader profiler (`logs
+sight-sx\...`: the counters exported, the
+`.ngfx-gputrace` for Nsight's UI, where the shader's own code is against the source lines). x12 on loads, the
+tick's warps:
+
+| Warp state | Share |
+|---|---|
+| waiting on a fixed-latency dependency (an ALU chain) | 40.5% |
+| issuing | 35.2% |
+| waiting on texture or local memory | 9.5% |
+| no instruction (fetch, after a branch) | 8.5% |
+| resolving a branch | 5.4% |
+
+Memory's latency is a tenth even of a loop of loads: a bundle's time is its instructions and the chains between
+them. A warp instruction runs 12 of 32 lanes (a core's 11 pixels, the helpers leaving at once).
+
 ## What was measured on the way
 
 - **A core's pixel rows.** A core is a row one pixel high: the quad's second row runs as helpers, reads empty

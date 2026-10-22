@@ -14,18 +14,23 @@
 #define SX_N(w) ((w) & 3u)
 #define SX_LONG(w) (((w) >> 2) & 1u)        // word 2 is a long immediate
 #define SX_LONG_OP1(w) (((w) >> 3) & 1u)    // of op 1 (else op 0)
-#define SX_PATH(w) (((w) >> 4) & 3u)
-#define SX_CC(w) (((w) >> 6) & 15u)
-#define SX_SUB(w) (((w) >> 10) & 7u)         // cc 0
-#define SX_CRS(w) (((w) >> 13) & 63u)        // cc 0, jr and callr: the register
-#define SX_CRA(w) (((w) >> 10) & 63u)        // cc 1-14: the compared register
-#define SX_CRB(w) (((w) >> 16) & 63u)        // cc 1-8: the other register; 9-14: imm6
-#define SX_OFF10(w) ((int)(w) >> 22)         // in bundles
-#define SX_OFF19(w) ((int)(w) >> 13)         // in bundles
+#define SX_PATH(w) (((w) >> 4) & 7u)
+#define SX_CC(w) (((w) >> 7) & 15u)
+#define SX_SUB(w) (((w) >> 11) & 7u)         // cc 0
+#define SX_CRS(w) (((w) >> 14) & 63u)        // cc 0, jr and callr: the register
+#define SX_CRA(w) (((w) >> 11) & 63u)        // cc 1-14: the compared register
+#define SX_CRB(w) (((w) >> 17) & 63u)        // cc 1-8: the other register; 9-14: imm6
+#define SX_OFF9(w) ((int)(w) >> 23)          // in bundles (a branch: +-4 KB)
+#define SX_OFF18(w) ((int)(w) >> 14)         // in bundles (j, call: +-2 MB)
+// The paths: which ops a bundle has, so which body of the tick runs it. "Lite" is the integer functions 0-10;
+// "float lite" the float functions 0-7 (sums, products, min, max).
 #define SX_PATH_GENERAL 0u                   // anything: the general step
-#define SX_PATH_INT 1u                       // integer ops: op 0 any of 0-23, op 1 of 0-10
-#define SX_PATH_MEM 2u                       // op 0 a load or store (byte, half, word), op 1 as path 1's
-#define SX_PATH_MEM2 3u                      // both ops loads or stores
+#define SX_PATH_INT 1u                       // op 0 an integer op 0-23, op 1 lite
+#define SX_PATH_MEM 2u                       // op 0 a load or store (byte, half, word), op 1 lite
+#define SX_PATH_MEM2 3u                      // both loads or stores
+#define SX_PATH_FLOAT 4u                     // op 0 a float op, op 1 lite
+#define SX_PATH_FLOAT2 5u                    // op 0 a float op, op 1 float lite
+#define SX_PATH_MEMF 6u                      // op 0 a load or store, op 1 float lite
 #define SX_CC_SPECIAL 0u
 #define SX_SUB_ILLEGAL 0u
 #define SX_SUB_NONE 1u
@@ -49,7 +54,7 @@
 #define SX_CC_BLTUI 13u
 #define SX_CC_BGEUI 14u
 // the control word of a bundle that only falls through
-#define SX_CTRL_NONE (SX_SUB_NONE << 10)
+#define SX_CTRL_NONE (SX_SUB_NONE << 11)
 
 // Op word: opc, rd, ra, then rb and rc (R form) or imm12 (I form). The op the control word names takes word 2 as
 // its immediate (the long form), and its own imm12 is ignored.
@@ -126,23 +131,24 @@
 #define SX_AMO2_MAXU 1u
 #define SX_OP_M(mode, w) (0x80u + (mode) * 8u + (w))
 
-// ---- Float class: 0xc0 + f (R form), 0xe0 + f (I form: imm12 is a float's top 12 bits)
+// ---- Float class: 0xc0 + f (R form), 0xe0 + f (I form: imm12 is a float's top 12 bits). Numbered for a tree of
+// selects: f[4:3] the group; in 0-7 one product and one sum make the first six; 24-31 the card's special functions.
 #define SX_F_ADD 0u
-#define SX_F_SUB 1u
-#define SX_F_MUL 2u
-#define SX_F_DIV 3u
-#define SX_F_MIN 4u
-#define SX_F_MAX 5u
-#define SX_F_MAD 6u       // R: ra * rb + rc, each rounded
-#define SX_F_MSB 7u       // R: ra * rb - rc
-#define SX_F_NMSB 8u      // R: rc - ra * rb
-#define SX_F_EQ 9u
-#define SX_F_LT 10u
-#define SX_F_LE 11u
+#define SX_F_MUL 1u
+#define SX_F_MAD 2u       // R: ra * rb + rc, each rounded
+#define SX_F_MSB 3u       // R: ra * rb - rc
+#define SX_F_SUB 4u
+#define SX_F_NMSB 5u      // R: rc - ra * rb
+#define SX_F_MIN 6u
+#define SX_F_MAX 7u
+#define SX_F_EQ 8u
+#define SX_F_LT 9u
+#define SX_F_LE 10u
+#define SX_F_UNORD 11u
 #define SX_F_SGNJ 12u
 #define SX_F_SGNJN 13u
 #define SX_F_SGNJX 14u
-#define SX_F_UNORD 15u
+#define SX_F_FRAC 15u
 #define SX_F_ITOF 16u
 #define SX_F_UTOF 17u
 #define SX_F_FTOI 18u
@@ -151,14 +157,14 @@
 #define SX_F_CEIL 21u
 #define SX_F_TRUNC 22u
 #define SX_F_ROUND 23u
-#define SX_F_SQRT 24u
-#define SX_F_RSQRT 25u
-#define SX_F_RCP 26u
-#define SX_F_SIN 27u
-#define SX_F_COS 28u
-#define SX_F_EXP2 29u
-#define SX_F_LOG2 30u
-#define SX_F_FRAC 31u
+#define SX_F_DIV 24u
+#define SX_F_SQRT 25u
+#define SX_F_RSQRT 26u
+#define SX_F_RCP 27u
+#define SX_F_SIN 28u
+#define SX_F_COS 29u
+#define SX_F_EXP2 30u
+#define SX_F_LOG2 31u
 #define SX_OP_F(f) (0xc0u + (f))
 #define SX_OP_FI(f) (0xe0u + (f))
 
@@ -249,8 +255,8 @@
 #define R_SX_REL32 2
 #define R_SX_IMM32 3      // an op's long immediate: S + A
 #define R_SX_PCIMM32 4    // lpc's long immediate: S + A - the bundle
-#define R_SX_BR10 5       // control word [31:22]: (S + A - the bundle) / 16
-#define R_SX_J19 6        // control word [31:13]
+#define R_SX_BR9 5        // control word [31:23]: (S + A - the bundle) / 16
+#define R_SX_J18 6        // control word [31:14]
 #define R_SX_IMM12 7      // op word [31:20]: S + A, which must fit
 #define R_SX_TPREL32 8    // a long immediate: S + A, from the thread pointer
 #define R_SX_RELATIVE 9

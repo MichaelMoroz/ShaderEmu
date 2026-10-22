@@ -25,16 +25,22 @@ struct SxAsm {
     void bind(int l) { close(); labels[l] = (int64_t)(w.size() / 4); }
     int here() { int l = label(); bind(l); return l; }
 
-    // path 1 (sx/tick/steps): op 0 an integer op 0-23, op 1 one of 0-10
+    // the paths (sx/isa.h): lite is the integer functions 0-10, float lite the float functions 0-7
     static bool int_op(uint32_t op) { return SX_CLASS(SX_OPC(op)) == 1 && (op & 31) <= SX_I_COMMON_LAST; }
     static bool lite(uint32_t op) { return SX_CLASS(SX_OPC(op)) == 1 && (op & 31) <= SX_I_SRA; }
-    // path 2: op 0 a load or store of a byte, a half or a word (the tick checks its alignment and place)
     static bool mem_op(uint32_t op) { uint32_t o = SX_OPC(op); return SX_CLASS(o) == 2 && ((o >> 3) & 7) <= 3 && (o & 7) != SX_W_D && (o & 7) <= SX_W_HU; }
+    static bool madlike(uint32_t f) { return f == SX_F_MAD || f == SX_F_MSB || f == SX_F_NMSB; }
+    static bool float_op(uint32_t op) { uint32_t o = SX_OPC(op); return SX_CLASS(o) == 3 && !(SX_IFORM(o) && madlike(o & 31)); }
+    static bool flite(uint32_t op) { return float_op(op) && (op & 31) <= SX_F_MAX; }
     uint32_t path() const {
-        if (cur.size() > 1 && mem_op(cur[0]) && mem_op(cur[1])) return SX_PATH_MEM2;
-        if (cur.size() > 1 && !lite(cur[1])) return SX_PATH_GENERAL;
-        if (cur.empty() || int_op(cur[0])) return SX_PATH_INT;
-        return mem_op(cur[0]) ? SX_PATH_MEM : SX_PATH_GENERAL;
+        if (cur.empty()) return SX_PATH_INT;
+        uint32_t a = cur[0];
+        bool one = cur.size() == 1;
+        uint32_t b = one ? 0 : cur[1];
+        if (int_op(a)) return one || lite(b) ? SX_PATH_INT : SX_PATH_GENERAL;
+        if (mem_op(a)) return one || lite(b) ? SX_PATH_MEM : mem_op(b) ? SX_PATH_MEM2 : flite(b) ? SX_PATH_MEMF : SX_PATH_GENERAL;
+        if (float_op(a)) return one || lite(b) ? SX_PATH_FLOAT : flite(b) ? SX_PATH_FLOAT2 : SX_PATH_GENERAL;
+        return SX_PATH_GENERAL;
     }
     void close(uint32_t ctl = SX_CTRL_NONE) {
         if (cur.empty() && ctl == SX_CTRL_NONE) return;
@@ -49,7 +55,9 @@ struct SxAsm {
         long_of = -1;
     }
     // op 1 takes only path 1's cheap ops: anything else opens a bundle
-    bool fits1(uint32_t op) const { return lite(op) || (mem_op(op) && mem_op(cur[0])); }   // op 1's place
+    bool fits1(uint32_t op) const {   // op 1's place: what some path has after op 0
+        return lite(op) || (mem_op(op) && mem_op(cur[0])) || (flite(op) && (float_op(cur[0]) || mem_op(cur[0])));
+    }
     void put(uint32_t op) {
         if (cur.size() == 2 || (!cur.empty() && !fits1(op))) close();
         cur.push_back(op);
@@ -114,17 +122,17 @@ struct SxAsm {
     // control: closes the bundle
     void br(uint32_t cc, uint32_t ra, uint32_t rb_or_imm, int l) {
         fixes.push_back({w.size() / 4, l, 0, 0});
-        close(cc << 6 | (ra & 63) << 10 | (rb_or_imm & 63) << 16);
+        close(cc << 7 | (ra & 63) << 11 | (rb_or_imm & 63) << 17);
     }
     void beq(uint32_t a, uint32_t b, int l) { br(SX_CC_BEQ, a, b, l); }
     void bne(uint32_t a, uint32_t b, int l) { br(SX_CC_BNE, a, b, l); }
     void blt(uint32_t a, uint32_t b, int l) { br(SX_CC_BLT, a, b, l); }
     void bnei(uint32_t a, int32_t i, int l) { br(SX_CC_BNEI, a, (uint32_t)i & 63, l); }
-    void j(int l) { fixes.push_back({w.size() / 4, l, 1, 0}); close(SX_SUB_J << 10); }
-    void call(int l) { fixes.push_back({w.size() / 4, l, 1, 0}); close(SX_SUB_CALL << 10); }
-    void jr(uint32_t rs) { close(SX_SUB_JR << 10 | (rs & 63) << 13); }
-    void callr(uint32_t rs) { close(SX_SUB_CALLR << 10 | (rs & 63) << 13); }
-    void eret() { close(SX_SUB_ERET << 10); }
+    void j(int l) { fixes.push_back({w.size() / 4, l, 1, 0}); close(SX_SUB_J << 11); }
+    void call(int l) { fixes.push_back({w.size() / 4, l, 1, 0}); close(SX_SUB_CALL << 11); }
+    void jr(uint32_t rs) { close(SX_SUB_JR << 11 | (rs & 63) << 14); }
+    void callr(uint32_t rs) { close(SX_SUB_CALLR << 11 | (rs & 63) << 14); }
+    void eret() { close(SX_SUB_ERET << 11); }
     void ret() { jr(1); }
 
     std::vector<uint32_t> finish() {
@@ -134,9 +142,9 @@ struct SxAsm {
             int64_t off = labels[f.label] - (int64_t)f.bundle;
             uint32_t& ctl = w[f.bundle * 4 + 3];
             if (f.kind == 0) {
-                if (off < -512 || off > 511) { fprintf(stderr, "sx_asm: a branch of %lld bundles\n", (long long)off); exit(1); }
-                ctl = (ctl & 0x3fffffu) | (uint32_t)(off << 22);
-            } else if (f.kind == 1) ctl = (ctl & 0x1fffu) | (uint32_t)(off << 13);
+                if (off < -256 || off > 255) { fprintf(stderr, "sx_asm: a branch of %lld bundles\n", (long long)off); exit(1); }
+                ctl = (ctl & 0x7fffffu) | (uint32_t)(off << 23);
+            } else if (f.kind == 1) ctl = (ctl & 0x3fffu) | (uint32_t)(off << 14);
             else w[f.bundle * 4 + f.word] = (uint32_t)(off * 16);   // lpc: its immediate's word
         }
         return w;

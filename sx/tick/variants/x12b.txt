@@ -1,0 +1,11 @@
+# x12, the second batch: x11's loads apart from stores, on the first batch's best (OK_MIN, INT_FIRST)
+best1        sx/tick/steps/x12.hlsl -D OK_MIN=1 -D INT_FIRST=1
+apart        sx/tick/steps/x12.hlsl -D OK_MIN=1 -D INT_FIRST=1 -D LOADS_APART=1
+apart+wc64   sx/tick/steps/x12.hlsl -D OK_MIN=1 -D INT_FIRST=1 -D LOADS_APART=1 -D WCN=64
+apart+hash   sx/tick/steps/x12.hlsl -D OK_MIN=1 -D INT_FIRST=1 -D LOADS_APART=1 -D HASH=1
+apart+q1late sx/tick/steps/x12.hlsl -D OK_MIN=1 -D INT_FIRST=1 -D LOADS_APART=1 -D Q1_LATE=1
+apart+flat   sx/tick/steps/x12.hlsl -D OK_MIN=1 -D INT_FIRST=1 -D LOADS_APART=1 -D STORE_FLAT=1
+apart+sink0  sx/tick/steps/x12.hlsl -D OK_MIN=1 -D INT_FIRST=1 -D LOADS_APART=1 -D SINK0=1
+apart+all    sx/tick/steps/x12.hlsl -D OK_MIN=1 -D INT_FIRST=1 -D LOADS_APART=1 -D WCN=64 -D HASH=1 -D Q1_LATE=1 -D STORE_FLAT=1
+best1+wc64   sx/tick/steps/x12.hlsl -D OK_MIN=1 -D INT_FIRST=1 -D WCN=64
+best1+hash   sx/tick/steps/x12.hlsl -D OK_MIN=1 -D INT_FIRST=1 -D HASH=1

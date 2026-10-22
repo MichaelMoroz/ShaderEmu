@@ -427,7 +427,7 @@ static int sx__op(sx_machine *m, sx_core *c, uint32_t base, uint32_t s, const ui
     case 3: {   // float
         uint32_t f = opc & 31;
         if (SX_IFORM(opc)) {
-            if (f >= SX_F_MAD && f <= SX_F_NMSB) break;
+            if (f == SX_F_MAD || f == SX_F_MSB || f == SX_F_NMSB) break;
             b = *long_used ? imm : imm << 20;
         }
         sx__set(c, rd, sx_fop(f, a, b, c->x[rc]));
@@ -534,8 +534,8 @@ int sx_bundle(sx_machine *m, sx_core *c) {
             c->sr[SX_SR_STATUS] = st;
             break;
         }
-        case SX_SUB_J: next = base + (uint32_t)SX_OFF19(ctl) * 16; break;
-        case SX_SUB_CALL: c->x[1] = base + 16; next = base + (uint32_t)SX_OFF19(ctl) * 16; break;
+        case SX_SUB_J: next = base + (uint32_t)SX_OFF18(ctl) * 16; break;
+        case SX_SUB_CALL: c->x[1] = base + 16; next = base + (uint32_t)SX_OFF18(ctl) * 16; break;
         default: sx__trap(c, SX_CAUSE_ILLEGAL, base | 12, ctl); return SX_END_BUDGET;
         }
     } else if (cc == 15) {
@@ -544,7 +544,7 @@ int sx_bundle(sx_machine *m, sx_core *c) {
     } else {
         uint32_t ra = SX_CRA(ctl), bf = SX_CRB(ctl);
         (void)ra;
-        if (sx__cond(cc, ca0, bf, cb0)) next = base + (uint32_t)SX_OFF10(ctl) * 16;
+        if (sx__cond(cc, ca0, bf, cb0)) next = base + (uint32_t)SX_OFF9(ctl) * 16;
     }
     c->pc = next;
     return SX_END_BUDGET;

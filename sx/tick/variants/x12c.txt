@@ -1,0 +1,8 @@
+# x12, probes: what x12's load bundles pay for (parts compiled out; timing only)
+best1        sx/tick/steps/x12.hlsl -D OK_MIN=1 -D INT_FIRST=1
+nosfu        sx/tick/steps/x12.hlsl -D OK_MIN=1 -D INT_FIRST=1 -D NO_SFU=1
+noconv       sx/tick/steps/x12.hlsl -D OK_MIN=1 -D INT_FIRST=1 -D NO_CONV=1
+nosfu+conv   sx/tick/steps/x12.hlsl -D OK_MIN=1 -D INT_FIRST=1 -D NO_SFU=1 -D NO_CONV=1
+nofloat      sx/tick/steps/x12.hlsl -D OK_MIN=1 -D INT_FIRST=1 -D NO_FLOAT=1
+nostore      sx/tick/steps/x12.hlsl -D OK_MIN=1 -D INT_FIRST=1 -D NO_STORE=1
+nofl+nost    sx/tick/steps/x12.hlsl -D OK_MIN=1 -D INT_FIRST=1 -D NO_FLOAT=1 -D NO_STORE=1
