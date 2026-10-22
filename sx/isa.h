@@ -3,18 +3,29 @@
 #ifndef SX_ISA_H
 #define SX_ISA_H
 
-// ---- A bundle: four words at a 16-byte boundary. Words 0-2 are op slots, word 3 the control word.
+// ---- A bundle: four words at a 16-byte boundary. Words 0 and 1 are op slots, word 2 a long immediate (for the op
+// the control word names), word 3 the control word.
 #define SX_BUNDLE 16u
 
-// Control word: n (op words used), cc, then by cc.
+// Control word: n (ops, 0-2; 3 is illegal), whether word 2 is a long immediate and whose, the path (which of the
+// tick's bodies runs the bundle: the assembler's, and trusted), cc, then by cc. Its branch compares the registers
+// as they were when this run of the bundle began (before its ops; after a pass that ended inside it, where it
+// goes on).
 #define SX_N(w) ((w) & 3u)
-#define SX_CC(w) (((w) >> 2) & 15u)
-#define SX_SUB(w) (((w) >> 6) & 7u)          // cc 0
-#define SX_CRA(w) (((w) >> 6) & 63u)         // cc 1-14: the compared register
-#define SX_CRB(w) (((w) >> 12) & 63u)        // cc 1-8: the other register; 9-14: imm6
-#define SX_CRS(w) (((w) >> 9) & 63u)         // cc 0, jr and callr: the register
-#define SX_OFF14(w) ((int)(w) >> 18)         // in bundles
-#define SX_OFF23(w) ((int)(w) >> 9)          // in bundles
+#define SX_LONG(w) (((w) >> 2) & 1u)        // word 2 is a long immediate
+#define SX_LONG_OP1(w) (((w) >> 3) & 1u)    // of op 1 (else op 0)
+#define SX_PATH(w) (((w) >> 4) & 3u)
+#define SX_CC(w) (((w) >> 6) & 15u)
+#define SX_SUB(w) (((w) >> 10) & 7u)         // cc 0
+#define SX_CRS(w) (((w) >> 13) & 63u)        // cc 0, jr and callr: the register
+#define SX_CRA(w) (((w) >> 10) & 63u)        // cc 1-14: the compared register
+#define SX_CRB(w) (((w) >> 16) & 63u)        // cc 1-8: the other register; 9-14: imm6
+#define SX_OFF10(w) ((int)(w) >> 22)         // in bundles
+#define SX_OFF19(w) ((int)(w) >> 13)         // in bundles
+#define SX_PATH_GENERAL 0u                   // anything: the general step
+#define SX_PATH_INT 1u                       // integer ops: op 0 any of 0-23, op 1 of 0-10
+#define SX_PATH_MEM 2u                       // op 0 a load or store (byte, half, word), op 1 as path 1's
+#define SX_PATH_MEM2 3u                      // both ops loads or stores
 #define SX_CC_SPECIAL 0u
 #define SX_SUB_ILLEGAL 0u
 #define SX_SUB_NONE 1u
@@ -38,45 +49,47 @@
 #define SX_CC_BLTUI 13u
 #define SX_CC_BGEUI 14u
 // the control word of a bundle that only falls through
-#define SX_CTRL_NONE (SX_SUB_NONE << 6)
+#define SX_CTRL_NONE (SX_SUB_NONE << 10)
 
-// Op word: opc, rd, ra, then rb and rc (R form) or imm12 (I form). imm12 == -2048 (0x800): the
-// next op word is the immediate (the long form).
+// Op word: opc, rd, ra, then rb and rc (R form) or imm12 (I form). The op the control word names takes word 2 as
+// its immediate (the long form), and its own imm12 is ignored.
 #define SX_OPC(w) ((w) & 255u)
 #define SX_RD(w) (((w) >> 8) & 63u)
 #define SX_RA(w) (((w) >> 14) & 63u)
 #define SX_RB(w) (((w) >> 20) & 63u)
 #define SX_RC(w) ((w) >> 26)
 #define SX_IMM12(w) ((int)(w) >> 20)
-#define SX_LONG(w) (((w) >> 20) == 0x800u)
 #define SX_CLASS(opc) ((opc) >> 6)            // 0 extended, 1 integer, 2 memory, 3 float
 #define SX_IFORM(opc) (((opc) >> 5) & 1u)     // integer and float classes: the I form
 
-// ---- Integer class: 0x40 + f (R form), 0x60 + f (I form)
+// ---- Integer class: 0x40 + f (R form), 0x60 + f (I form). Numbered for a tree of selects (sx/tick/steps):
+// f[4:3] the group; in 0-7, f[1:0] sum, and, or, xor and f[2] the other operand inverted (sub, andn, orn, xnor);
+// in 16-23, f[0] unsigned, f[1] the operands swapped (gt), f[2] min or max instead of the comparison.
 #define SX_I_ADD 0u
-#define SX_I_SUB 1u       // I form: rsub, imm - ra
-#define SX_I_AND 2u
-#define SX_I_OR 3u
-#define SX_I_XOR 4u
+#define SX_I_AND 1u
+#define SX_I_OR 2u
+#define SX_I_XOR 3u
+#define SX_I_SUB 4u       // I form: rsub, imm - ra
 #define SX_I_ANDN 5u
 #define SX_I_ORN 6u
 #define SX_I_XNOR 7u
 #define SX_I_SLL 8u
 #define SX_I_SRL 9u
 #define SX_I_SRA 10u
-#define SX_I_ROL 11u
-#define SX_I_ROR 12u
-#define SX_I_SLT 13u
-#define SX_I_SLTU 14u
-#define SX_I_SEQ 15u
-#define SX_I_SNE 16u
-#define SX_I_SGT 17u
-#define SX_I_SGTU 18u
-#define SX_I_MIN 19u
-#define SX_I_MAX 20u
+#define SX_I_ROR 11u
+#define SX_I_ROL 12u
+#define SX_I_MUL 13u
+#define SX_I_SEQ 14u
+#define SX_I_SNE 15u
+#define SX_I_SLT 16u
+#define SX_I_SLTU 17u
+#define SX_I_SGT 18u
+#define SX_I_SGTU 19u
+#define SX_I_MIN 20u
 #define SX_I_MINU 21u
-#define SX_I_MAXU 22u
-#define SX_I_MUL 23u
+#define SX_I_MAX 22u
+#define SX_I_MAXU 23u
+#define SX_I_COMMON_LAST 23u   // 0-23 in both forms
 #define SX_I_SHADD 24u    // R: ra + (rb << rc), rc the shift itself
 #define SX_I_SEL 25u      // R: x[rc] != 0 ? ra : rb
 #define SX_I_ADDCY 26u    // R: ra + rb + (x[rc] & 1)
@@ -236,8 +249,8 @@
 #define R_SX_REL32 2
 #define R_SX_IMM32 3      // an op's long immediate: S + A
 #define R_SX_PCIMM32 4    // lpc's long immediate: S + A - the bundle
-#define R_SX_BR14 5       // control word [31:18]: (S + A - the bundle) / 16
-#define R_SX_J23 6        // control word [31:9]
+#define R_SX_BR10 5       // control word [31:22]: (S + A - the bundle) / 16
+#define R_SX_J19 6        // control word [31:13]
 #define R_SX_IMM12 7      // op word [31:20]: S + A, which must fit
 #define R_SX_TPREL32 8    // a long immediate: S + A, from the thread pointer
 #define R_SX_RELATIVE 9

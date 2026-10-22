@@ -1,0 +1,144 @@
+// A small assembler for SX (sx/SX.md) in C++, for the tick's bench and the reference's tests until
+// LLVM's is there: ops in order, two a bundle and one long immediate; a label or a control op closes one. The
+// control word says whose the long immediate is, and its path is the integer body's when every op suits it.
+#pragma once
+#include <cstdint>
+#include <cstring>
+#include <cstdio>
+#include <cstdlib>
+#include <vector>
+#include "../isa.h"
+
+struct SxAsm {
+    uint32_t base;                    // the first bundle's address
+    std::vector<uint32_t> w;          // four words a bundle
+    std::vector<uint32_t> cur;        // the open bundle's ops (two at most)
+    int long_of = -1;                 // the op whose immediate is word 2, or -1
+    uint32_t long_imm = 0;
+    std::vector<int64_t> labels;      // bundle index of each label, or -1
+    struct Fix { size_t bundle; int label; int kind; int word; };   // kind 0: off10, 1: off19, 2: lpc's long immediate
+    std::vector<Fix> fixes;
+    explicit SxAsm(uint32_t at) : base(at) {}
+
+    uint32_t addr_of(int label) const { return base + (uint32_t)labels[label] * 16; }
+    int label() { labels.push_back(-1); return (int)labels.size() - 1; }
+    void bind(int l) { close(); labels[l] = (int64_t)(w.size() / 4); }
+    int here() { int l = label(); bind(l); return l; }
+
+    // path 1 (sx/tick/steps): op 0 an integer op 0-23, op 1 one of 0-10
+    static bool int_op(uint32_t op) { return SX_CLASS(SX_OPC(op)) == 1 && (op & 31) <= SX_I_COMMON_LAST; }
+    static bool lite(uint32_t op) { return SX_CLASS(SX_OPC(op)) == 1 && (op & 31) <= SX_I_SRA; }
+    // path 2: op 0 a load or store of a byte, a half or a word (the tick checks its alignment and place)
+    static bool mem_op(uint32_t op) { uint32_t o = SX_OPC(op); return SX_CLASS(o) == 2 && ((o >> 3) & 7) <= 3 && (o & 7) != SX_W_D && (o & 7) <= SX_W_HU; }
+    uint32_t path() const {
+        if (cur.size() > 1 && mem_op(cur[0]) && mem_op(cur[1])) return SX_PATH_MEM2;
+        if (cur.size() > 1 && !lite(cur[1])) return SX_PATH_GENERAL;
+        if (cur.empty() || int_op(cur[0])) return SX_PATH_INT;
+        return mem_op(cur[0]) ? SX_PATH_MEM : SX_PATH_GENERAL;
+    }
+    void close(uint32_t ctl = SX_CTRL_NONE) {
+        if (cur.empty() && ctl == SX_CTRL_NONE) return;
+        uint32_t n = (uint32_t)cur.size();
+        uint32_t L = long_of < 0 ? 0u : 4u | (long_of == 1 ? 8u : 0u);
+        uint32_t p = path() << 4;
+        w.push_back(n > 0 ? cur[0] : 0);
+        w.push_back(n > 1 ? cur[1] : 0);
+        w.push_back(long_of < 0 ? 0 : long_imm);
+        w.push_back(ctl | n | L | p);
+        cur.clear();
+        long_of = -1;
+    }
+    // op 1 takes only path 1's cheap ops: anything else opens a bundle
+    bool fits1(uint32_t op) const { return lite(op) || (mem_op(op) && mem_op(cur[0])); }   // op 1's place
+    void put(uint32_t op) {
+        if (cur.size() == 2 || (!cur.empty() && !fits1(op))) close();
+        cur.push_back(op);
+    }
+    void put2(uint32_t op, uint32_t imm) {
+        if (cur.size() == 2 || (!cur.empty() && !fits1(op)) || long_of >= 0) close();
+        long_of = (int)cur.size();
+        long_imm = imm;
+        cur.push_back(op);
+    }
+
+    static bool fits12(int32_t v) { return v >= -2048 && v <= 2047; }
+    void R(uint32_t opc, uint32_t rd, uint32_t ra, uint32_t rb, uint32_t rc = 0) {
+        put(opc | (rd & 63) << 8 | (ra & 63) << 14 | (rb & 63) << 20 | (rc & 63) << 26);
+    }
+    void I(uint32_t opc, uint32_t rd, uint32_t ra, int32_t imm, bool force_long = false) {
+        uint32_t base_w = opc | (rd & 63) << 8 | (ra & 63) << 14;
+        if (fits12(imm) && !force_long) put(base_w | (uint32_t)(imm & 0xfff) << 20);
+        else put2(base_w, (uint32_t)imm);
+    }
+
+    // integer
+    void op(uint32_t f, uint32_t rd, uint32_t ra, uint32_t rb) { R(SX_OP_I(f), rd, ra, rb); }
+    void opi(uint32_t f, uint32_t rd, uint32_t ra, int32_t imm) { I(SX_OP_II(f), rd, ra, imm); }
+    void add(uint32_t rd, uint32_t ra, uint32_t rb) { op(SX_I_ADD, rd, ra, rb); }
+    void sub(uint32_t rd, uint32_t ra, uint32_t rb) { op(SX_I_SUB, rd, ra, rb); }
+    void addi(uint32_t rd, uint32_t ra, int32_t imm) { opi(SX_I_ADD, rd, ra, imm); }
+    void li(uint32_t rd, int32_t imm) { opi(SX_I_ADD, rd, 0, imm); }
+    void mv(uint32_t rd, uint32_t ra) { opi(SX_I_ADD, rd, ra, 0); }
+    void shadd(uint32_t rd, uint32_t ra, uint32_t rb, uint32_t sh) { R(SX_OP_I(SX_I_SHADD), rd, ra, rb, sh); }
+    void sel(uint32_t rd, uint32_t ra, uint32_t rb, uint32_t rc) { R(SX_OP_I(SX_I_SEL), rd, ra, rb, rc); }
+    void bfe(uint32_t rd, uint32_t ra, uint32_t pos, uint32_t len, bool sgn) {
+        I(SX_OP_II(SX_I_BFE), rd, ra, (int32_t)(pos | (len - 1) << 5 | (sgn ? 0x400u : 0)));
+    }
+    // memory
+    void ld(uint32_t wd, uint32_t rd, uint32_t ra, int32_t off) { I(SX_OP_M(SX_M_LOAD, wd), rd, ra, off); }
+    void st(uint32_t wd, uint32_t rs, uint32_t ra, int32_t off) { I(SX_OP_M(SX_M_STORE, wd), rs, ra, off); }
+    void ldx(uint32_t wd, uint32_t rd, uint32_t ra, uint32_t rb, uint32_t sh) { R(SX_OP_M(SX_M_LOADX, wd), rd, ra, rb, sh); }
+    void stx(uint32_t wd, uint32_t rs, uint32_t ra, uint32_t rb, uint32_t sh) { R(SX_OP_M(SX_M_STOREX, wd), rs, ra, rb, sh); }
+    void lw(uint32_t rd, uint32_t ra, int32_t off) { ld(SX_W_W, rd, ra, off); }
+    void sw(uint32_t rs, uint32_t ra, int32_t off) { st(SX_W_W, rs, ra, off); }
+    void amo(uint32_t f, uint32_t rd, uint32_t ra, uint32_t rb) { R(SX_OP_M(SX_M_AMO, f), rd, ra, rb); }
+    // float: the I form's short immediate is a float's top 12 bits
+    void fop(uint32_t f, uint32_t rd, uint32_t ra, uint32_t rb, uint32_t rc = 0) { R(SX_OP_F(f), rd, ra, rb, rc); }
+    void fopi(uint32_t f, uint32_t rd, uint32_t ra, float v) {
+        uint32_t bits; memcpy(&bits, &v, 4);
+        uint32_t base_w = SX_OP_FI(f) | (rd & 63) << 8 | (ra & 63) << 14;
+        if ((bits & 0xfffff) == 0) put(base_w | (bits >> 20) << 20);
+        else put2(base_w, bits);
+    }
+    // extended
+    void x(uint32_t opc, uint32_t rd = 0, uint32_t ra = 0, uint32_t rb = 0) { R(opc, rd, ra, rb); }
+    void xi(uint32_t opc, uint32_t rd, uint32_t ra, int32_t imm) { I(opc, rd, ra, imm); }
+    void mfsr(uint32_t rd, uint32_t n) { I(SX_X_MFSR, rd, 0, (int32_t)n); }
+    void mtsr(uint32_t n, uint32_t ra) { I(SX_X_MTSR, 0, ra, (int32_t)n); }
+    void lpc(uint32_t rd, int l) {   // rd = the label's address (a long immediate, fixed up)
+        put2(SX_X_LPC | (rd & 63) << 8, 0);
+        fixes.push_back({w.size() / 4, l, 2, 2});   // (the bundle this op lands in: the open one; its immediate is word 2)
+    }
+    void halt() { close(); x(SX_X_BREAK); close(); }   // break in a bundle of its own
+
+    // control: closes the bundle
+    void br(uint32_t cc, uint32_t ra, uint32_t rb_or_imm, int l) {
+        fixes.push_back({w.size() / 4, l, 0, 0});
+        close(cc << 6 | (ra & 63) << 10 | (rb_or_imm & 63) << 16);
+    }
+    void beq(uint32_t a, uint32_t b, int l) { br(SX_CC_BEQ, a, b, l); }
+    void bne(uint32_t a, uint32_t b, int l) { br(SX_CC_BNE, a, b, l); }
+    void blt(uint32_t a, uint32_t b, int l) { br(SX_CC_BLT, a, b, l); }
+    void bnei(uint32_t a, int32_t i, int l) { br(SX_CC_BNEI, a, (uint32_t)i & 63, l); }
+    void j(int l) { fixes.push_back({w.size() / 4, l, 1, 0}); close(SX_SUB_J << 10); }
+    void call(int l) { fixes.push_back({w.size() / 4, l, 1, 0}); close(SX_SUB_CALL << 10); }
+    void jr(uint32_t rs) { close(SX_SUB_JR << 10 | (rs & 63) << 13); }
+    void callr(uint32_t rs) { close(SX_SUB_CALLR << 10 | (rs & 63) << 13); }
+    void eret() { close(SX_SUB_ERET << 10); }
+    void ret() { jr(1); }
+
+    std::vector<uint32_t> finish() {
+        close();
+        for (const Fix& f : fixes) {
+            if (labels[f.label] < 0) { fprintf(stderr, "sx_asm: label %d not bound\n", f.label); exit(1); }
+            int64_t off = labels[f.label] - (int64_t)f.bundle;
+            uint32_t& ctl = w[f.bundle * 4 + 3];
+            if (f.kind == 0) {
+                if (off < -512 || off > 511) { fprintf(stderr, "sx_asm: a branch of %lld bundles\n", (long long)off); exit(1); }
+                ctl = (ctl & 0x3fffffu) | (uint32_t)(off << 22);
+            } else if (f.kind == 1) ctl = (ctl & 0x1fffu) | (uint32_t)(off << 13);
+            else w[f.bundle * 4 + f.word] = (uint32_t)(off * 16);   // lpc: its immediate's word
+        }
+        return w;
+    }
+};
