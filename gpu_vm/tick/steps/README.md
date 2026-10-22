@@ -386,3 +386,22 @@ privileged ops and eret trap, its wait ends the pass, a syscall) and `opq` (two 
 sync: a load of a destination and a store to a source wait, nine asked at once, the counts by ld.d, the latch by ld.q, a
 blit whose rows overlap, a copy backwards, a refused one, a copy of 640 KB over three passes). `--op-rounds 1` and `4`
 too. `GVM_DEBUG=1` prints each core's EPC, CAUSE, queue and progress texels after a check.
+
+### x17's write cache under the kernel's boot
+
+Linux's boot on the card (`gvm_gpu --stats --until "comes back"`, one core) ended 14,798 of its 14,847 passes on a full
+write cache, at 414 bundles a pass: streams of stores (memset and copy loops of `sw` and `sq`, the clearing at its start
+two bundles a word) fill it by capacity, not by its sets' conflicts (the bundles a pass grow with the entries). Entries
+(two ways of HALF sets) against the boot's time to init's prompt and the bench (`variants/x17w.txt`):
+
+| WCN | state pixels a core | boot passes | boot | M bundles/s | x lean (7) |
+|---|---|---|---|---|---|
+| 130 | 14 | 14,847 | 2.10 s | 2.92 | 2.55 |
+| 258 | 22 | 7,423 | 1.84 s | 3.21 | 2.54 |
+| 514 (x17 now) | 38 | 3,935 | 1.71 s | 3.38 | 2.55 |
+| 1026 | 70 | 1,951 | 1.61 s | 3.57 | |
+
+514: every pixel of a core's row runs the core, so more state is more lanes a core; 1026 gains 6% more for 70.
+The boot's bundles by path (gvm_cpu's trace, 6.1 M bundles): 7 (integers) 47%, 3-6 (memory) 33%, 1 10% (`step12`), 0
+10% (mostly bundles whose control word is cc 0: calls, returns, the control word's add, made op by op by the general
+step).

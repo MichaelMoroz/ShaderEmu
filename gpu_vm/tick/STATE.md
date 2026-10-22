@@ -3,7 +3,7 @@
 What a harness needs to run gpu_vm's tick (`gpu_vm/tick/steps/x17.hlsl`): the textures, the cbuffers, the draws of a pass
 in order, and where a core's state lies. The semantics are the reference's (`gpu_vm/ref/gvm_ref.h`); `gvmbench.cpp` is a
 working harness (`Gpu::run_pass`). Every texture is `R32G32B32A32_UINT`. The constants named here are the step's
-(`static const uint` in its source): `WCN` 130, `RAM_W` 8192, `T_WC` 40, `STATE_TEXELS` 105, `OP_SLOTS` 32, `OP_SPAN` 272.
+(`static const uint` in its source): `WCN` 514, `RAM_W` 8192, `T_WC` 40 (state texels 40 + WCN / 2 = 297), `OP_SLOTS` 32, `OP_SPAN` 272.
 
 ## Textures
 
@@ -11,7 +11,7 @@ working harness (`Gpu::run_pass`). Every texture is `R32G32B32A32_UINT`. The con
 |---|---|---|---|
 | t0 | `_Ram` | 8192 x RamRows | RAM from address 0: byte address a is texel a >> 4 at (t % 8192, t / 8192), word (a >> 2) & 3. The boot area (0-0xffff, the device tree at 0x1000), the devices (0x10000-0x1ffffff) and RAM proper (0x2000000 to RamEnd) are all texels of it. Rows past RamEnd's must be zeros (a fetch there is path 0: a fetch fault). |
 | t1 | `_Rom` | 8192 x rows | the ROM (0x40000000 on): offset o is texel o >> 4 at the same place. Read only; past its rows reads 0. |
-| t2-t9 | `_S0`-`_S7` | StatePix x cores | a core's state, one row a core (core c is row c): state texel T is texture `T & 7`, column `T >> 3`. StatePix = (STATE_TEXELS + 7) / 8 = 14. Two sets, ping-pong: the tick reads one set and draws the other. |
+| t2-t9 | `_S0`-`_S7` | StatePix x cores | a core's state, one row a core (core c is row c): state texel T is texture `T & 7`, column `T >> 3`. StatePix = (T_WC + WCN / 2 + 7) / 8 = 38. Two sets, ping-pong: the tick reads one set and draws the other. |
 | t10 | `_OpState` | cores x 1 | the operations' progress, a texel a core; two, ping-pong, a round each (below). Start them at zeros. |
 | t11 | `_Stage` | OP_SPAN x (cores * OP_SLOTS) | the operations' stage: a row a slot (core c's slot q is row c * OP_SLOTS + q). Contents need no start. |
 
@@ -31,7 +31,7 @@ RamEnd must be a multiple of 16 and at most 0x20000000 (the fast loop takes `a &
 | 22 | operations in flight (0-8) | segments of the first one already made | the queue's generation | operations refused, ever |
 | 23 | 0 | | | |
 | 24-39 | the queue: operation k is texels 24 + 2k (kind, dst, src, bytes) and 25 + 2k (dst stride, src stride, bytes a row, rows), in the order asked | | | |
-| 40-104 | the write cache: texel 40 + i holds entries 2i (x word address >> 2, y value) and 2i + 1 (z, w); a word of 0xffffffff is an empty entry. Written by the tick, read by the commit. | | | |
+| 40-296 | the write cache: texel 40 + i holds entries 2i (x word address >> 2, y value) and 2i + 1 (z, w); a word of 0xffffffff is an empty entry. Written by the tick, read by the commit. | | | |
 
 Flags (18.z): 1 waiting (a supervisor's `wait` until IPEND & IEN), 2 the software interrupt's pending bit (IPEND bit 0),
 4 halted (`break` with `_Flags` bit 0: the bench's), 8 in a `sync` (the core goes on when no operation is in flight),

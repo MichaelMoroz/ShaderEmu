@@ -7,7 +7,7 @@
 // the commit (four draws) and the operations' rounds (stage, write, progress), as the reference makes them.
 #include "../../isa.h"
 
-static const uint WCN = 130;         // write cache entries: two ways of HALF sets, two overflow slots, then a sink
+static const uint WCN = 514;         // write cache entries: two ways of HALF sets, two overflow slots, then a sink (README "x17", the boot)
 static const uint WCS = WCN - 2;     // the first overflow slot
 static const uint HALF = WCS / 2;
 static const uint NONE = 0xffffffffu;   // an empty entry's tag, and no slot

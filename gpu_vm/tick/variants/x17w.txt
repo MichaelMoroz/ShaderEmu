@@ -1,0 +1,5 @@
+# x17w: the write cache 130 (x17), 258 and 514 entries
+x16       gpu_vm/tick/steps/x16.hlsl
+x17       gpu_vm/tick/steps/x17.hlsl
+w258      gpu_vm/tick/steps/x17w258.hlsl
+w514      gpu_vm/tick/steps/x17w514.hlsl
