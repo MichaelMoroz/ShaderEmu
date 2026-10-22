@@ -87,6 +87,16 @@ trace.ps1). Not pushed.
   integer inner loop (x14i I_LOOPS=2: arith +15% on x14) and the structure agent's x15s; then the rename to gpu_vm;
   then `sincos` (rd, rd + 1) and a 64-bit mul (low, high) as ops of two results (the user asked; the full step's);
   then the LLVM target, sx_cpu and Linux.
+- Candidate ops the user raised (22 October 2026), to decide by measurement, not added yet:
+  - 64-bit integers on register pairs (add, sub, compare, the product's two halves): the kernel's u64 (time, loff_t,
+    do_div). Measure libgcc's `__muldi3`, `__udivdi3` and the like under `RVC_PROF` / `tools/prof.py` first.
+  - Doubles as full-step ops (dadd, dmul, dfma are correctly rounded on D3D11, so exact against the reference;
+    division optional in 11.1): only if `__adddf3`, `__muldf3` and the like are a real share (printf, strtod, math.h,
+    old game code). Removing doubles at the source stays the first choice.
+  - SIMD: v4f32 on register quads (add, sub, mul, mad, min, max, dot4; `ld.q`/`st.q` are one texel already), and
+    packed u8x4 / i16x2 add and sub with saturation and average (audio, blending, libmedia). An op's cost is mostly
+    fixed, so four lanes cost about one op. LLVM's loop vectorizer uses v4f32 well, SLP float3 poorly; our own hot
+    code can use clang's vector types. After the LLVM target exists.
 - The encoding is x15's (`sx/isa.h`): x1-x14 no longer compile. `bin\sxbench.exe` must be rebuilt
   (`cmd /c sx	ickuild.bat`) after any change to isa.h, the reference, the assembler or cases.h; a WARP check of a
   step against a bench built for another encoding hangs until each case gives up (60 s).
