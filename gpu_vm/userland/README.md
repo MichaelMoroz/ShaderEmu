@@ -42,7 +42,10 @@ shared libraries, no GOT (`CONFIG_BINFMT_FLAT_NO_DATA_START_OFFSET`). The header
 - The program is linked at 0 (`flat.ld`: text from 0x10, so that no symbol is 0: binfmt_flat leaves a word of 0
   unrelocated), and its bytes follow the 64-byte header: file offset = address + 0x40. binfmt_flat relocates a word r
   to load + 0x40 + r (text's start plus r below `data_start - 0x40`, data's start plus r less that above; the same
-  when data starts on 32 bytes, which `flat.ld` makes sure of).
+  when data starts on 32 bytes, which `flat.ld` makes sure of). binfmt_flat (5.17) also stores the data's start in
+  the word below it (its shared-library table, even with `NO_DATA_START_OFFSET`): `flat.ld` leaves that word empty
+  and `elf2flt` refuses an image with a section there (it was the last word of `.rodata`, musl's `decfloat.p10s`,
+  and strtod went wrong).
 - Header: `entry` = 0x40 + `_start`, `data_start` = 0x40 + `__gvm_data_start`, `data_end` = the file's image end,
   `bss_end` = 0x40 + the end of `.bss`, `stack_size` (the driver's), `reloc_start` = `data_end`, `reloc_count`,
   `flags` 1 (RAM), `build_date`.
@@ -57,7 +60,7 @@ shared libraries, no GOT (`CONFIG_BINFMT_FLAT_NO_DATA_START_OFFSET`). The header
   `__gvm_flat_start` (`src/env/gpuvm`), which copies them onto its own stack with an auxiliary vector after them
   (`AT_PAGESZ`, the uid and gid, and `AT_PHDR` of one program header) and calls musl's `_start_c`. That header,
   `__gvm_phdr`, is the ELF's `PT_TLS`, written by `elf2flt` (its address relocated), so `__thread` works; its
-  alignment must be at most 64.
+  alignment must be at most 64. The stack: the driver's size; binfmt_flat puts it after the bss and the brk room.
 - `flush_icache_range` (the `sync` that a loaded program's code needs) is the kernel's.
 
 ## musl's port (`musl/`)
@@ -72,7 +75,10 @@ shared libraries, no GOT (`CONFIG_BINFMT_FLAT_NO_DATA_START_OFFSET`). The header
   (variant 1 as lld lays it out, as RISC-V), `MC_PC` word 0. `reloc.h`: only what `dynlink.h` needs (static only).
 - `src/`: `setjmp`/`longjmp` (ra, sp, s0-s23), `sigsetjmp` (as RISC-V's), `__clone` (the kernel's `CLONE_BACKWARDS`
   order), `__syscall_cp_asm`, `__set_thread_area` (mv tp), `__unmapself`, `vfork` (`clone(CLONE_VM | CLONE_VFORK |
-  SIGCHLD, 0)`: no fork without an MMU), `__gvm_flat_start`. Everything else is musl's generic C: math (double in
+  SIGCHLD, 0)`), `_Fork` (ENOSYS: the kernel runs a child of clone() without CLONE_VM on the parent's own memory and
+  stack, both at once; vfork, posix_spawn, system and popen are the ways), `__gvm_flat_start`. Variadic arguments are
+  on the stack in gpu_vm's convention (unlike RISC-V's): `__clone(func, stack, flags, arg, ...)` reads ptid, tls,
+  ctid from 0, 4, 8(sp). Everything else is musl's generic C: math (double in
   software through compiler-rt, float on the card's ops: denormals flush), string, malloc (mallocng over mmap).
 
 ## Tests
@@ -88,3 +94,33 @@ strftime, mktime, 2100, uname; `threads`: create and join, a contended mutex, a 
 keys, detached; `math`: libm in double and float), puts them in an initramfs's `/bin` with `test/init.c` as `/init`
 (`INIT` and `INITRAMFS_EXTRA` of `gpu_vm/linux/build.sh`), builds a kernel in `~/gpu_vm/linux-build-ut` (whole the
 first time, a relink after), boots it on gvm_cpu and looks for init's line `gvm-userland-test: 8 passed, 0 failed`.
+
+`GVM_CPU=PATH` runs another gvm_cpu (the tree's is made and used otherwise). 22 October 2026: all 8 pass at -O2 and
+-O0 (gvm_cpu of commit 6aad9c7: the reference from 44e96df on keeps a b/h/w access in its word, and the compiler and
+kernel of that day still make unaligned words: the kernel panics at 0.03 s).
+
+## libc-test
+
+    bash gpu_vm/userland/libc-test.sh              # MATH=1 adds src/math
+
+clones libc-test (`~/gpu_vm/dl/libc-test`, only compiled), builds its functional and regression tests (no dlopen or
+shared objects; `functional/tls_local_exec` does not link: TLS aligned to 4096) with `test/ltinit.c` as `/init` (each
+program with a limit of 20 s of the machine's time; /dev, /dev/shm, /tmp and /proc mounted), boots, prints the
+failures. 22 October 2026: 111 of 135 pass. The 24 others: fork (6: ipc_msg, ipc_sem, daemon-failure, fflush-exit,
+pthread_exit-dtor, raise-race), no /bin/sh (5: popen, spawn, vfork, execle-env, wordexp), no networking in the
+kernel (socket), allocations the no-MMU kernel's OOM killer answers instead of ENOMEM (5: malloc-brk-fail, malloc-oom,
+pthread_create-oom, setenv-oom, sscanf_long's 8 MB), the root being a ramfs (statvfs), musl 1.2.5's own (strtod and
+strtold of two hex strings rounded at the end of a 53-bit long double, as the host computes the same arithmetic;
+strptime's %F %s %z and mntent, newer than 1.2.5), clocale_mbfuncs (over the 20 s), ipc_shm (shmat on the no-MMU
+kernel: shm_nattch 0, then a fault).
+
+## Gaps
+
+- C only: no C++ runtime (libc++, libunwind; the compiler emits no CFI).
+- No shared libraries or dlopen; TLS local-exec, alignment at most 64.
+- No fork: programs must use vfork/posix_spawn (busybox: its NOMMU configuration).
+- memcpy/memset are musl's C: not yet the commit's copy and fill operations (the kernel's string.S uses them from
+  4 KB up).
+- float math in libm runs on the card's float ops (denormals flush to zero); double is compiler-rt's software.
+- The kernel config has no networking, epoll, eventfd, timerfd or signalfd; FUTEX was turned on for musl's timed
+  waits (`gpuvm_defconfig`).
