@@ -16,10 +16,27 @@ for t in hello pack; do
     "$BIN/ld.lld" -Ttext=0x02000000 -e _start -o "$OUT/$t.elf" "$OUT/$t.o"
     "$OUT/check" $t "$OUT/$t.elf" || fail=1
 done
+# relocations across objects: R_GVM_BR9, R_GVM_PCIMM32, R_GVM_J18, R_GVM_TPREL32
+"$BIN/llvm-mc" -triple=gpuvm -filetype=obj -o "$OUT/xref1.o" "$HERE/xref1.s"
+"$BIN/llvm-mc" -triple=gpuvm -filetype=obj -o "$OUT/xref2.o" "$HERE/xref2.s"
+"$BIN/ld.lld" -Ttext=0x02000000 -o "$OUT/xref.elf" "$OUT/xref1.o" "$OUT/xref2.o"
+"$BIN/llvm-objdump" -d -z "$OUT/xref.elf" > "$OUT/xref.dis"
+for want in "beq a0, a1, 0x2000040 ;;" "lpc a2, 0x2000040; call 0x2000040 ;;" "lw a3, 4(tp); li a7, 93 ;;"             "00 00 00 00 00 00 00 00 00 00 00 00 03 2a 08 18" "c0 e1 00 00 00 00 00 00 30 00 00 00 28 f0 00 00"; do
+    grep -qF "$want" "$OUT/xref.dis" || { echo "xref: no '$want' in the disassembly"; fail=1; }
+done
+[ $fail = 0 ] && echo "xref: ld.lld's relocations as expected"
 out=$("$CPU" "$OUT/hello.elf") || { echo "hello: gvm_cpu exit $?"; fail=1; }
 [ "$out" = "Hello, world!" ] && echo "hello: gvm_cpu prints Hello, world!" || { echo "hello: gvm_cpu printed '$out'"; fail=1; }
 set +e
 "$CPU" "$OUT/pack.elf"; r=$?
 set -e
 [ $r = 68 ] && echo "pack: gvm_cpu exits 68" || { echo "pack: gvm_cpu exit $r, want 68"; fail=1; }
+# a call and a j beyond +-2 MB, through ld.lld's thunks
+"$BIN/llvm-mc" -triple=gpuvm -filetype=obj -o "$OUT/thunk.o" "$HERE/thunk.s"
+"$BIN/ld.lld" -Ttext=0x02000000 --section-start=.far=0x02400000 -o "$OUT/thunk.elf" "$OUT/thunk.o"
+set +e
+"$CPU" --ram 8 --max-bundles 1000 "$OUT/thunk.elf"; r=$?
+set -e
+n=$("$BIN/llvm-nm" "$OUT/thunk.elf" | grep -c __gpuvm_thunk_)
+[ $r = 7 ] && [ "$n" = 2 ] && echo "thunk: 2 thunks, gvm_cpu exits 7" || { echo "thunk: exit $r, $n thunks; want 7, 2"; fail=1; }
 [ $fail = 0 ] && echo PASS || { echo FAIL; exit 1; }

@@ -70,11 +70,18 @@ Any alignment.
 | | |
 |---|---|
 | `lb lh lw ld lq lbu lhu rd, imm(ra)` | load [ra + imm]; `(ra)` is `0(ra)`, `sym(ra)` and `sym` (= `sym(zero)`) a long immediate |
-| `sb sh sw sd sq rs, imm(ra)` | store rs (rs .. rs + 3) |
+| `sb sh sw sd sq rs, imm(ra)` | store rs (sd: rs, rs + 1; sq: rs .. rs + 3) |
 | `lbx lhx lwx ldx lqx lbux lhux rd, ra, rb, sh` | load [ra + (rb << sh)], sh 0-31 |
 | `sbx shx swx sdx sqx rs, ra, rb, sh` | store indexed |
 | `amoswap amoadd amoand amoor amoxor amomin amomax amominu amomaxu rd, rb, (ra)` | rd = [ra], [ra] = [ra] op rb (a word) |
 | `amocas rd, rb, (ra)` | rd in: the expected word, out: what was there; rb the new word |
+
+`lq`/`sq` move a texel (16 bytes) through four consecutive registers named by the first: the commit's operations are
+`sq` of a descriptor {kind, dst, src, bytes} to 0xf0000000 (a blit's second texel `sq` to 0xf0000010), then `sync`:
+
+    li t0, 1 ; mv t1, a0 ; mv t2, a1 ; mv t3, a2     # kind 1 copy (memmove), dst, src, bytes
+    sq t0, 0xf0000000                                 # (a long immediate: one op)
+    sync
 
 ### Float (0xc0 + f R form, 0xe0 + f I form), single precision
 
@@ -115,6 +122,8 @@ word 2 as a whole 32-bit immediate (the long form, one a bundle). The assembler 
 short, anything else long, and any symbol's expression is long (with a relocation). So `addi a0, zero, sym`,
 `lw a0, sym` and `sw a0, sym+8(t0)` are one op each. There is no `%hi`/`%lo`.
 
+An immediate may be any expression, `(1 << 4)` too: `(` followed by a register is a memory operand's base.
+
 Operators, in a long immediate only: `%tprel(sym)` (TLS, from the thread pointer: R_GVM_TPREL32).
 
 ## Control ops
@@ -128,7 +137,7 @@ At most one a bundle, in its control word, after its ops. A control op closes th
 | `bbs bbc ra, bit, label` | bit 0-31 of ra set, clear |
 | `addbnz ra, imm6, label` | ra += imm6, and to label when the sum is not 0 (ra not r0) |
 | `j label` | near (+-4 KB: `beq r0, r0`) or far (+-2 MB): chosen when the label is known; to another section or symbol, far |
-| `call label` | r1 = the next bundle, +-2 MB |
+| `call label` | r1 = the next bundle, +-2 MB (ld.lld adds a thunk beyond: `addi t26, zero, sym; jr t26`, so t26 = r63 is clobbered by any `call` or `j` to another section) |
 | `jr rs` `callr rs` | to rs & ~15 (callr links r1); rs as the bundle's ops left it |
 | `ret` | `jr ra` |
 | `eret` | |

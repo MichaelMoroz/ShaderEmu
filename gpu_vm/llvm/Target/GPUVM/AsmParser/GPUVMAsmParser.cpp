@@ -200,7 +200,6 @@ struct GPUVMOperand : public MCParsedAsmOperand {
 } // namespace
 
 #define GET_REGISTER_MATCHER
-#define GET_SUBTARGET_FEATURE_NAME
 #define GET_MATCHER_IMPLEMENTATION
 #define GET_MNEMONIC_SPELL_CHECKER
 #include "GPUVMGenAsmMatcher.inc"
@@ -278,8 +277,14 @@ bool GPUVMAsmParser::parseOperand(OperandVector &Operands,
     return false;
   }
 
-  // imm(reg), (reg), or imm
-  if (P.getTok().isNot(AsmToken::LParen)) {
+  // imm(reg), (reg), or imm; an imm may start with '(' too: `(1 << 4)`
+  bool BaseOnly = false;
+  if (P.getTok().is(AsmToken::LParen)) {
+    AsmToken Next = getLexer().peekTok();
+    BaseOnly =
+        Next.is(AsmToken::Identifier) && matchRegister(Next.getIdentifier());
+  }
+  if (!BaseOnly) {
     S = getLoc();
     const MCExpr *Ex;
     if (parseImmExpr(Ex, E))

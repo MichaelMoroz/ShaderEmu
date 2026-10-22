@@ -1,9 +1,9 @@
 diff --git a/lld/ELF/Arch/GPUVM.cpp b/lld/ELF/Arch/GPUVM.cpp
 new file mode 100755
-index 000000000..cf2c57165
+index 000000000..1463a8a58
 --- /dev/null
 +++ b/lld/ELF/Arch/GPUVM.cpp
-@@ -0,0 +1,141 @@
+@@ -0,0 +1,174 @@
 +//===- GPUVM.cpp ----------------------------------------------------------===//
 +//
 +// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -42,6 +42,11 @@ index 000000000..cf2c57165
 +  int64_t getImplicitAddend(const uint8_t *buf, RelType type) const override;
 +  void relocate(uint8_t *loc, const Relocation &rel,
 +                uint64_t val) const override;
++  bool needsThunk(RelExpr expr, RelType type, const InputFile *file,
++                  uint64_t branchAddr, const Symbol &s,
++                  int64_t a) const override;
++  bool inBranchRange(RelType type, uint64_t src, uint64_t dst) const override;
++  uint32_t getThunkSectionSpacing() const override;
 +};
 +} // namespace
 +
@@ -52,7 +57,35 @@ index 000000000..cf2c57165
 +  trapInstr = {0, 0, 0, 0};
 +  defaultMaxPageSize = 4096;
 +  defaultCommonPageSize = 4096;
-+  defaultImageBase = 0;
++  defaultImageBase = 0x02000000; // RAM (GVM_RAM)
++  needsThunks = true;
++}
++
++// src is the relocation's place, the control word; offsets are from its
++// bundle.
++bool GPUVM::inBranchRange(RelType type, uint64_t src, uint64_t dst) const {
++  int64_t off = static_cast<int64_t>(dst - (src & ~uint64_t(15)));
++  switch (type) {
++  case R_GVM_J18:
++    return (off & 15) == 0 && isInt<18>(off >> 4);
++  case R_GVM_BR9:
++    return (off & 15) == 0 && isInt<9>(off >> 4);
++  default:
++    return true;
++  }
++}
++
++// A call or far j beyond +-2 MB goes through a thunk (Thunks.cpp, GPUVMThunk).
++bool GPUVM::needsThunk(RelExpr expr, RelType type, const InputFile *file,
++                       uint64_t branchAddr, const Symbol &s, int64_t a) const {
++  if (type != R_GVM_J18 || (s.isUndefined() && !s.isInPlt(ctx)))
++    return false;
++  return !inBranchRange(type, branchAddr, s.getVA(ctx, a));
++}
++
++uint32_t GPUVM::getThunkSectionSpacing() const {
++  // +-2 MB, less room for the thunks.
++  return 0x200000 - 0x20000;
 +}
 +
 +RelExpr GPUVM::getRelExpr(RelType type, const Symbol &s,
@@ -231,3 +264,80 @@ index 50f0cd8a9..e6efbcfb8 100644
  void setHexagonTargetInfo(Ctx &);
  void setLoongArchTargetInfo(Ctx &);
  void setMSP430TargetInfo(Ctx &);
+diff --git a/lld/ELF/Thunks.cpp b/lld/ELF/Thunks.cpp
+index 1f161685f..9b25f9ecc 100644
+--- a/lld/ELF/Thunks.cpp
++++ b/lld/ELF/Thunks.cpp
+@@ -431,6 +431,22 @@ public:
+   void addSymbols(ThunkSection &isec) override;
+ };
+ 
++// gpu_vm: R_GVM_J18 (call, far j) reaches +-2 MB. The thunk is one bundle:
++// `addi t26, zero, dest` (a long immediate) and `jr t26`. t26 (r63) is the
++// linker's scratch register; a call's link (r1) is the caller's already.
++class GPUVMThunk final : public Thunk {
++public:
++  GPUVMThunk(Ctx &ctx, const InputSection &isec, Relocation &rel, Symbol &dest,
++             int64_t addend)
++      : Thunk(ctx, dest, addend), relOffset(rel.offset) {
++    alignment = 16;
++  }
++  uint32_t relOffset;
++  uint32_t size() override { return 16; }
++  void writeTo(uint8_t *buf) override;
++  void addSymbols(ThunkSection &isec) override;
++};
++
+ // MIPS LA25 thunk
+ class MipsThunk final : public Thunk {
+ public:
+@@ -1535,6 +1551,24 @@ bool PPC64LongBranchThunk::isCompatibleWith(const InputSection &isec,
+   return rel.type == R_PPC64_REL24 || rel.type == R_PPC64_REL14;
+ }
+ 
++// gpu_vm Target Thunks
++void GPUVMThunk::writeTo(uint8_t *buf) {
++  uint64_t s = destination.getVA(ctx, addend);
++  support::endian::write32le(buf + 0, 0x60u << 12 | 63u << 6);  // addi t26, zero, (long)
++  support::endian::write32le(buf + 4, 0);
++  support::endian::write32le(buf + 8, static_cast<uint32_t>(s)); // the long immediate
++  // jr t26 (cc 0, sub 2), one op, word 2 op 0's, the general path
++  support::endian::write32le(buf + 12, 2u << 11 | 63u << 14 | 1u << 3 | 0x20u);
++}
++
++void GPUVMThunk::addSymbols(ThunkSection &isec) {
++  Symbol *enclosing = isec.getEnclosingSymbol(relOffset);
++  StringRef src = enclosing ? enclosing->getName() : isec.name;
++  addSymbol(
++      saver().save("__gpuvm_thunk_" + destination.getName() + "_from_" + src),
++      STT_FUNC, 0, isec);
++}
++
+ // Hexagon Target Thunks
+ static uint64_t getHexagonThunkDestVA(Ctx &ctx, const Symbol &s, int64_t a) {
+   uint64_t v = s.isInPlt(ctx) ? s.getPltVA(ctx) : s.getVA(ctx, a);
+@@ -1741,6 +1775,15 @@ static std::unique_ptr<Thunk> addThunkAVR(Ctx &ctx, RelType type, Symbol &s,
+   }
+ }
+ 
++static std::unique_ptr<Thunk> addThunkGPUVM(Ctx &ctx, const InputSection &isec,
++                                            Relocation &rel, Symbol &s,
++                                            int64_t a) {
++  if (rel.type != R_GVM_J18)
++    Fatal(ctx) << "unrecognized relocation " << rel.type << " to " << &s
++               << " for gpu_vm: only R_GVM_J18 has thunks";
++  return std::make_unique<GPUVMThunk>(ctx, isec, rel, s, a);
++}
++
+ static std::unique_ptr<Thunk> addThunkHexagon(Ctx &ctx,
+                                               const InputSection &isec,
+                                               Relocation &rel, Symbol &s) {
+@@ -1830,6 +1873,8 @@ std::unique_ptr<Thunk> elf::addThunk(Ctx &ctx, const InputSection &isec,
+     return addThunkPPC64(ctx, rel.type, s, a);
+   case EM_HEXAGON:
+     return addThunkHexagon(ctx, isec, rel, s);
++  case EM_GVM:
++    return addThunkGPUVM(ctx, isec, rel, s, a);
+   default:
+     llvm_unreachable(
+         "add Thunk only supported for ARM, AVR, Hexagon, Mips and PowerPC");
