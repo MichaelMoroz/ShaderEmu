@@ -23,10 +23,23 @@ RVDATA=${RVDATA:-$HOME/gpu_vm/riscv-rom-data}
 [ -f "$K/vmlinux" ] || { echo "image.sh: no $K/vmlinux (romroot.sh)" >&2; exit 1; }
 mkdir -p "$W"
 L=$W/rootfs.list
-python3 - "$R/initramfs.list" "$HERE/rcS" "$APPS" "${DATA:-1}" "$ROOT/linux/prebuilt/nommu/root" "$ROOT/linux/prebuilt/root"     $( [ -d "$RVDATA" ] && echo "$RVDATA" ) > "$L" <<'EOF'
+# the desktop as the RISC-V image starts with it (tools/make_linux_image.py's desktop_shortcuts: a shortcut for every
+# program of the Start menu, the places; nxfiles --desktop leaves at once without /root/Desktop), from the apps' menus
+rm -rf "$W/desktop"; mkdir -p "$W/desktop"
+python3 - "$ROOT/tools" "$APPS" "$W/desktop" <<'PY'
+import os, sys, types
+sys.modules.setdefault('PIL', types.SimpleNamespace(Image=None))   # (the image builder reads PNGs; not here)
+sys.path.insert(0, sys.argv[1])
+import make_linux_image as m
+for data, folder, name in m.desktop_shortcuts(sys.argv[2]):
+    d = os.path.join(sys.argv[3], folder.lstrip('/'))
+    os.makedirs(d, exist_ok=True)
+    open(os.path.join(d, name), 'wb').write(data)
+PY
+python3 - "$R/initramfs.list" "$HERE/rcS" "$APPS" "${DATA:-1}" "$W/desktop" "$ROOT/linux/prebuilt/nommu/root" "$ROOT/linux/prebuilt/root"     $( [ -d "$RVDATA" ] && echo "$RVDATA" ) > "$L" <<'EOF'
 import os, sys
-base, rcs, apps, data = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4] == '1'
-extra = sys.argv[5:]
+base, rcs, apps, data, desk = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4] == '1', sys.argv[5]
+extra = sys.argv[6:]
 lines, have, dirs = [], set(), set()
 # (a program of both, rootfs.sh's and build.sh's, is build.sh's: QuickJS's newer qjs)
 ours = set()
@@ -67,6 +80,7 @@ def walk(top, programs):
             lines.append(sep.join(('file', p, src, mode, '0', '0'))); have.add(p)
 add_dir('/persistence')
 walk(apps, True)
+walk(desk, True)
 if data:
     for top in extra: walk(top, False)
 print('\n'.join(lines))
