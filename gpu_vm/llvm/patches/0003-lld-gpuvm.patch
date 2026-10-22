@@ -265,7 +265,7 @@ index 50f0cd8a9..e6efbcfb8 100644
  void setLoongArchTargetInfo(Ctx &);
  void setMSP430TargetInfo(Ctx &);
 diff --git a/lld/ELF/Thunks.cpp b/lld/ELF/Thunks.cpp
-index 1f161685f..9b25f9ecc 100644
+index 1f161685f..38316c531 100644
 --- a/lld/ELF/Thunks.cpp
 +++ b/lld/ELF/Thunks.cpp
 @@ -431,6 +431,22 @@ public:
@@ -301,8 +301,8 @@ index 1f161685f..9b25f9ecc 100644
 +  support::endian::write32le(buf + 0, 0x60u << 12 | 63u << 6);  // addi t26, zero, (long)
 +  support::endian::write32le(buf + 4, 0);
 +  support::endian::write32le(buf + 8, static_cast<uint32_t>(s)); // the long immediate
-+  // jr t26 (cc 0, sub 2), one op, word 2 op 0's, the general path
-+  support::endian::write32le(buf + 12, 2u << 11 | 63u << 14 | 1u << 3 | 0x20u);
++  // jr t26 (cc 0, sub 2), one op, word 2 op 0s, path 1 (x18: addi and a jr)
++  support::endian::write32le(buf + 12, 2u << 11 | 63u << 14 | 1u << 3 | 0x20u | 1u);
 +}
 +
 +void GPUVMThunk::addSymbols(ThunkSection &isec) {

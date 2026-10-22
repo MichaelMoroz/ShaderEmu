@@ -246,7 +246,7 @@ DecodeStatus GPUVMDisassembler::getInstruction(MCInst &MI, uint64_t &Size,
     return MCDisassembler::Fail;
   if (!None)
     MI.addOperand(MCOperand::createInst(Ctl));
-  unsigned Want = ctlCC(C) == CCSpecial ? PathGeneral
+  unsigned Want = ctlCC(C) == CCSpecial ? bundle::path12(C, ArrayRef(T, N))
                                         : bundle::path(ArrayRef(T, N));
   if (ctlPath(C) != Want)
     MI.getOperand(0).setImm(ctlPath(C));

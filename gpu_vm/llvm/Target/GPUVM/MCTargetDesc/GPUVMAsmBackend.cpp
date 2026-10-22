@@ -139,7 +139,9 @@ void GPUVMAsmBackend::applyFixup(const MCFragment &F, const MCFixup &Fixup,
   }
   case GPUVM::fixup_gvm_j: {
     // The encoder made a near j (beq r0, r0, the ops' path); a far one is cc
-    // 0's (the general path), as a relocation always is (R_GVM_J18).
+    // 0's (path 1 or 2 by its ops, x18, else the general path), as a
+    // relocation always is (R_GVM_J18). The bundle's ops are the 12 bytes
+    // before its control word.
     uint32_t C = read32le(Data);
     int64_t Off = 0;
     if (IsResolved) {
@@ -155,9 +157,12 @@ void GPUVMAsmBackend::applyFixup(const MCFragment &F, const MCFixup &Fixup,
       if (!isInt<18>(Off))
         Ctx.reportError(Fixup.getLoc(), "jump target out of range");
     }
-    write32le(Data, (C & 0x78u) | GPUVM::PathGeneral |
-                        GPUVM::ctrlSpecial(GPUVM::SubJ) |
-                        static_cast<uint32_t>(Off) << 14);
+    uint32_t NC = (C & 0x78u) | GPUVM::ctrlSpecial(GPUVM::SubJ) |
+                  static_cast<uint32_t>(Off) << 14;
+    SmallVector<uint32_t, 2> Ops;
+    for (unsigned I = 0; I < GPUVM::ctlN(C) && I < 2; ++I)
+      Ops.push_back(read32le(Data - 12 + 4 * I));
+    write32le(Data, NC | GPUVM::bundle::path12(NC, Ops));
     return;
   }
   case GPUVM::fixup_gvm_j18: {

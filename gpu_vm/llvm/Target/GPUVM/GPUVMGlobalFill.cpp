@@ -414,9 +414,13 @@ bool GPUVMGlobalFill::nearOnPaths(
     if (I->isCall())
       return false;
     if (I->modifiesRegister(Base, TRI)) {
+      // Base = V + k (a step of it, or a copy of another register): on with
+      // V
       if (I->getOpcode() == GPUVM::ADDI && I->getOperand(0).getReg() == Base &&
-          I->getOperand(1).getReg() == Base && I->getOperand(2).isImm()) {
+          I->getOperand(1).isReg() && I->getOperand(1).getReg() != GPUVM::R0 &&
+          I->getOperand(2).isImm()) {
         Delta += I->getOperand(2).getImm();
+        Base = I->getOperand(1).getReg();
         continue;
       }
       return false;

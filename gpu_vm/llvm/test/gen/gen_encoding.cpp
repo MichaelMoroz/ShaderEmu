@@ -21,6 +21,7 @@ static void op(const std::string &src, const std::string &dis, const std::functi
 static void op(const std::string &src, const std::function<void(GvmAsm &)> &f) { op(src, src, f); }
 // a control op alone: its word with n 0 and the given path
 static void ctl(const std::string &src, const std::string &dis, uint32_t c, uint32_t path) {
+    if (GVM_CC(c) == GVM_CC_SPECIAL) path = GvmAsm::path12_of(c, 0, 0);   // x18: cc 0 by its ops (none here)
     cases.push_back({src, dis, {0, 0, 0, c | path}});
 }
 static uint32_t br(uint32_t cc, uint32_t ra, uint32_t rb, int off) {

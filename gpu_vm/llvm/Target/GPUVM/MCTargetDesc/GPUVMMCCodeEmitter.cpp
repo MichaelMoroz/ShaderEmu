@@ -221,7 +221,7 @@ void GPUVMMCCodeEmitter::encodeBundle(ArrayRef<const MCInst *> Ops,
     LongBits = 0x40;
   uint32_t C = Ctl ? encodeControl(*Ctl, Fixups) : GPUVM::CtrlNone;
   unsigned Path = GPUVM::ctlCC(C) == GPUVM::CCSpecial
-                      ? GPUVM::PathGeneral
+                      ? GPUVM::bundle::path12(C, Words)
                       : GPUVM::bundle::path(Words);
   C |= std::min<unsigned>(Words.size(), 2) << 3 | LongBits | Path;
   uint32_t Out[4] = {Words.size() > 0 ? Words[0] : 0,

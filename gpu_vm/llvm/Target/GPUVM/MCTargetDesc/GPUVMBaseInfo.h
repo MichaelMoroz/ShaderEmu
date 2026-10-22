@@ -144,6 +144,10 @@ inline bool floatOp(uint32_t Op) {
   return opClass(O) == 3 && !(opIForm(O) && madLike(O & 31));
 }
 inline bool fLite(uint32_t Op) { return floatOp(Op) && fn(Op) <= FMax; }
+// x18: sel (integer R function 25) and lpc (extended 0x0e) are path 1's op 0
+inline bool selLpc(uint32_t Op) {
+  return opOpc(Op) == 0x40 + 25 || opOpc(Op) == 0x0e;
+}
 inline bool storeOp(uint32_t Op) {
   unsigned O = opOpc(Op);
   return opClass(O) == 2 &&
@@ -159,7 +163,7 @@ inline unsigned path(ArrayRef<uint32_t> Ops) {
   uint32_t B = One ? 0 : Ops[1];
   if (mid(A) && (One || lite(B)))
     return PathInt;
-  if ((intOp(A) || floatOp(A)) && (One || lite(B) || fLite(B)))
+  if ((intOp(A) || floatOp(A) || selLpc(A)) && (One || lite(B) || fLite(B)))
     return PathALU;
   if (memOp(A) && (One || lite(B)))
     return storeOp(A) ? PathStore : PathLoad;
@@ -168,6 +172,24 @@ inline unsigned path(ArrayRef<uint32_t> Ops) {
   if (memOp(A))
     return fLite(B) ? PathMemF : PathGeneral;
   return PathGeneral;
+}
+
+// The path of a bundle whose control word is cc 0 (x18, gvm_asm.h's
+// path12_of): jr, callr, call, a far j and the add (its register not r0) take
+// path 1 when their ops would be path 1's or 7's (or there are none), path 2
+// when 2's, 3's or 5's; anything else, eret and the illegal subs path 0.
+inline unsigned path12(uint32_t Ctl, ArrayRef<uint32_t> Ops) {
+  unsigned Sub = ctlSub(Ctl);
+  bool Ok = Sub == SubJ || Sub == SubCall || Sub == SubJR || Sub == SubCallR ||
+            (Sub == SubAdd && ctlRS(Ctl) != 0);
+  if (!Ok || Ops.size() > 2)
+    return PathGeneral;
+  unsigned P = path(Ops);
+  if (P == PathInt)
+    return PathALU;
+  if (P == PathLoad || P == PathStore)
+    return PathMemF;
+  return P == PathALU || P == PathMemF ? P : PathGeneral;
 }
 
 // Op names op 0's result in a field it reads (a store's rd is its value).
