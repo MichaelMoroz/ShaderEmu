@@ -199,8 +199,13 @@ instructions(void)
 {
 	unsigned n;
 
+#ifdef __gpuvm__
+	__asm__ volatile("mfsr %0, cycle" : "=r"(n));
+#else
 	__asm__ volatile("rdcycle %0" : "=r"(n));
+#endif
 	return n;
+
 }
 
 /* A whole small file of /proc; the number of bytes read. */

@@ -25,10 +25,12 @@ machine_runs(int which)
 	volatile int there = 0;
 
 	if (!sigsetjmp(machine_no_instruction, 1)) {
+#ifndef __gpuvm__	/* (gpu_vm has both always) */
 		if (which == 1)
 			__asm__ volatile(".word 0xd0007053");	/* fcvt.s.w ft0, zero */
 		else
 			__asm__ volatile(".word 0x20002033");	/* sh1add zero, zero, zero (Zba) */
+#endif
 		there = 1;
 	}
 	signal(SIGILL, before);
@@ -58,6 +60,10 @@ machine_mmu(void)
 static const char *
 machine_isa(void)
 {
+#ifdef __gpuvm__
+	/* (gpu_vm: bundles of two ops, floats and the card's special functions always: gpu_vm/GPU_VM.md) */
+	return "gpu_vm (integers, floats, special functions)";
+#endif
 	static int known, zb, fl;
 
 	if (!known)

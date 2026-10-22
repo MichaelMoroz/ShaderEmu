@@ -9,10 +9,11 @@ set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/../../.." && pwd)
 G=$HOME/gpu_vm
-mkdir -p "$G"; exec 9>"$G/apps.lock"; flock 9          # one build of the copy at a time
+# (GVM_APPS_REPO, GVM_APPS_WORK, GVM_APPS_LOGS: another copy, work folder and logs, for builds side by side)
 R=${GVM_APPS_REPO:-$G/apps-repo}
 export GVM_APPS_WORK=${GVM_APPS_WORK:-$G/apps-work}
-L=$G/apps-logs; mkdir -p "$L" "$R"
+L=${GVM_APPS_LOGS:-$G/apps-logs}; mkdir -p "$L" "$R"
+exec 9>"$R.lock"; flock 9          # one build of a copy at a time
 rsync -a --delete --exclude /build --exclude /.git --exclude /experiments --exclude /logs --exclude /unity --exclude /rvc \
     --exclude /linux/prebuilt --exclude /bin --exclude /tools/fxc2 "$REPO/" "$R/"
 mkdir -p "$R/build/images/linux/root"
@@ -37,5 +38,6 @@ for s in ${*:-$ALL}; do
     rc=$?
     echo "$s: exit $rc, $(( $(date +%s) - t )) s$( [ $rc = 0 ] || { echo; grep -E 'rror|undefined|cannot|No such' "$log" | head -6 | sed 's/^/    /'; } )"
 done
-mkdir -p "$REPO/build/gvm_apps"
-rsync -a --delete "$R/build/images/linux/root/" "$REPO/build/gvm_apps/root/"
+# (added to what is there: builds in other copies put theirs there too)
+mkdir -p "$REPO/build/gvm_apps/root"
+rsync -a "$R/build/images/linux/root/" "$REPO/build/gvm_apps/root/"

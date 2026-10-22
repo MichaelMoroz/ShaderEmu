@@ -276,7 +276,9 @@ float_unit(void)
 	volatile int there = 0;
 
 	if (!sigsetjmp(no_float, 1)) {
+#ifndef __gpuvm__	/* (gpu_vm's floats are always there) */
 		__asm__ volatile(".word 0xd0007053");	/* fcvt.s.w ft0, zero */
+#endif
 		there = 1;
 	}
 	signal(SIGILL, before);
@@ -288,7 +290,11 @@ cycles_now(void)
 {
 	unsigned n;
 
+#ifdef __gpuvm__
+	__asm__ volatile("mfsr %0, cycle" : "=r"(n));
+#else
 	__asm__ volatile("rdcycle %0" : "=r"(n));
+#endif
 	return n;
 }
 
@@ -597,6 +603,12 @@ device_lines(int which, char lines[][96])
 		long total = atol(file_line("/proc/meminfo", "MemTotal:") + 9), free = atol(file_line("/proc/meminfo", "MemAvailable:") + 13);
 
 		snprintf(lines[n++], 96, "RAM: %ld MB, %ld MB free", total / 1024, free / 1024);
+#ifdef __gpuvm__
+		if (1) {
+			snprintf(lines[n++], 96, "Where: 0x02000000 up, Linux's from its start");
+			snprintf(lines[n++], 96, "No MMU: a program's memory is taken whole as it starts");
+		} else
+#endif
 		if (machine_mmu())
 			snprintf(lines[n++], 96, "Where: 0x80000000 up (Linux from 0x80400000)");
 		else {
@@ -605,7 +617,11 @@ device_lines(int which, char lines[][96])
 		}
 		snprintf(lines[n++], 96, "Kept in: the GPU's state texture, 16 bytes a texel");
 		snprintf(lines[n++], 96, "Page cache: %ld MB", atol(file_line("/proc/meminfo", "Cached:") + 7) / 1024);
+#ifdef __gpuvm__
+		snprintf(lines[n++], 96, "GPU memory: 0x00010000 to 0x01000000, 16 MB (the GPU's)");
+#else
 		snprintf(lines[n++], 96, "GPU memory: 0x86000000 to 0x87000000, 16 MB (the GPU's)");
+#endif
 		break;
 	}
 	case DEV_STORAGE: {
@@ -625,7 +641,11 @@ device_lines(int which, char lines[][96])
 		unsigned mode = dev_words ? dev_words[0] : 0;
 		static const char *modes[] = { "off", "32-bit colour", "8-bit indexed", "the GPU's picture", "layers (the desktop)" };
 
+#ifdef __gpuvm__
+		snprintf(lines[n++], 96, "Device: /dev/gpu, its words at 0x01000000");
+#else
 		snprintf(lines[n++], 96, "Device: /dev/gpu, its words at 0x87000000");
+#endif
 		snprintf(lines[n++], 96, "Draws: triangle lists into pictures in GPU memory");
 		snprintf(lines[n++], 96, "Textures: in GPU memory, or files of the ROM where they lie");
 		snprintf(lines[n++], 96, "Display mode: %s", mode < 5 ? modes[mode] : "?");

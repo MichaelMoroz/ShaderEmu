@@ -7,11 +7,16 @@ ENTRY(_start)
 SECTIONS
 {
 	. = 0x10;
+	PROVIDE(__executable_start = .);
 	.text : {
 		*(.text.unlikely .text.unlikely.*)
 		*(.text.startup .text.startup.*)
 		*(.text .text.*)
 	}
+	/* (GNU ld's names for the text's end, which programs read: linux/libmedia/m_core.c) */
+	PROVIDE(etext = .);
+	PROVIDE(_etext = .);
+	PROVIDE(__etext = .);
 	.rodata : {
 		*(.rodata .rodata.*)
 		*(.srodata .srodata.*)
@@ -24,6 +29,7 @@ SECTIONS
 	. += 4;
 	. = ALIGN(64);
 	__gvm_data_start = .;
+	PROVIDE(__DATA_BEGIN__ = .);	/* (GNU ld's RISC-V name for the data's start: linux/apps/ui_bulk.h) */
 	.data : {
 		*(.data .data.*)
 		*(.sdata .sdata.*)
@@ -42,6 +48,8 @@ SECTIONS
 	}
 	. = ALIGN(16);
 	__gvm_data_end = .;
+	PROVIDE(edata = .);
+	PROVIDE(_edata = .);
 	.bss : {
 		__bss_start = .;
 		*(.sbss .sbss.*)
