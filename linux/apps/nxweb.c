@@ -660,7 +660,11 @@ draw_rows(GR_DRAW_ID to, int dy, int y0, int y1)
 #define REG_INTO 20		/* where the picture is copied: address, width, height, row */
 #define REG_LOCK 24
 #define REG_COPY 28		/* nonzero: the list drawn last has its copy still to be made */
+#ifdef __gpuvm__
+#define GPU_PHYS 0x00000000u	/* gpu_vm: the device window moved down by 0x86000000 */
+#else
 #define GPU_PHYS 0x86000000u
+#endif
 #define PASS_OVER (5u << 16)	/* blends by alpha, as the window system draws text of coverage */
 
 enum { SLOT_EMPTY, SLOT_OUT, SLOT_MADE, SLOT_THERE };	/* nothing; a job makes its list; made; drawn or submitted */

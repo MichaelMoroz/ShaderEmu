@@ -330,7 +330,12 @@ speed_sample(unsigned ms)
 		if (at != MAP_FAILED)
 			more = at;
 	}
+#ifdef __gpuvm__
+	__asm__ volatile("mfsr %0, cycle" : "=r"(first));
+#else
 	__asm__ volatile("rdcycle %0" : "=r"(first));
+#endif
+
 	ran = first - first_before;
 	first_before = first;
 	cores = !words || words[0x3c0 / 4] < 1 ? 1 : words[0x3c0 / 4] > 256 ? 256 : words[0x3c0 / 4];

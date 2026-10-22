@@ -77,11 +77,50 @@ typedef struct { volatile uint32_t seq, fn, a0, a1; } mc_job;                  /
 typedef struct { volatile uint32_t done, result, alive, pad; } mc_answer;      // done == seq: finished
 typedef struct { volatile uint32_t count, cause, address, pc; } mc_fault;      // count != resume: stopped
 
+#ifdef __gpuvm__
+// gpu_vm (gpu_vm/GPU_VM.md, "Workers"; gpu_vm/userland/apps/README.md): a user's `wait` is the pause hint (the
+// core's pass ends; a worker sleeps until the first word of its job changes), `sync` is fence.i (the pass ends
+// here, and the commit's operations are made before it goes on), `break` is ebreak (a worker parks), `syscall` is
+// ecall, the special register `cycle` (bundles run) the cycle counter and `time_lo` the clock (the machine's
+// 100 kHz). The mailboxes are where they were in /dev/gpu (the device window moved down by 0x86000000, so
+// MC_PAGE_GPU_OFFSET is the same).
+#define mc_next_pass() __asm__ volatile("wait" ::: "memory")
+#define mc_end_pass() __asm__ volatile("sync" ::: "memory")
+#define MC_ECALL "syscall"
+#define MC_EBREAK "break"
+static inline uint32_t mc_cycles(void)
+{
+	uint32_t v;
+	__asm__ volatile("mfsr %0, cycle" : "=r"(v));
+	return v;
+}
+static inline uint32_t mc_time(void)
+{
+	uint32_t v;
+	__asm__ volatile("mfsr %0, time_lo" : "=r"(v));
+	return v;
+}
+#else
 // The pause hint ends this core's pass: its stores reach the others, and theirs reach it. On a
 // worker it is a sleep until the first word of its job changes.
 #define mc_next_pass() __asm__ volatile(".word 0x0100000f")
 // For a job that waits for another core's stores: its pass ends here and it goes on in the next
 // (fence.i ends a pass and does no more). Turning in place costs the machine the pass's instructions.
 #define mc_end_pass() __asm__ volatile(".word 0x0000100f")
+#define MC_ECALL "ecall"
+#define MC_EBREAK "ebreak"
+static inline uint32_t mc_cycles(void)
+{
+	uint32_t v;
+	__asm__ volatile("rdcycle %0" : "=r"(v));
+	return v;
+}
+static inline uint32_t mc_time(void)
+{
+	uint32_t v;
+	__asm__ volatile("rdtime %0" : "=r"(v));
+	return v;
+}
+#endif
 
 #endif

@@ -25,7 +25,11 @@ int SE_Flat(void);
 /*########################################################################################################################*
 *------------------------------------------------------GPU memory---------------------------------------------------------*
 *#########################################################################################################################*/
+#ifdef __gpuvm__
+#define GPU_PHYS 0x01000000u /* gpu_vm: the device window moved down by 0x86000000 */
+#else
 #define GPU_PHYS 0x87000000u
+#endif
 #define GPU_END  0x00b00000u
 /* Two sets: a frame is built in one while the other is still shown (docs/world/volume.md). */
 #define SETS_AT 0x00700000u

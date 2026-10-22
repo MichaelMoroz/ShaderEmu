@@ -312,7 +312,11 @@ locate(int ask)
 	if (!info.surface_address)
 		return;
 	surface_row = info.surface_row ? (int)info.surface_row : width;
+#ifdef __gpuvm__
+	offset = info.surface_address;	/* (gpu_vm: the device window starts at 0) */
+#else
 	offset = info.surface_address - 0x86000000u;
+#endif
 	surface_bytes = (offset & 4095) + (uint32_t)surface_row * (uint32_t)height * 4;
 	memory = mmap(NULL, surface_bytes, PROT_READ | PROT_WRITE, MAP_SHARED, gpu, offset & ~4095u);
 	if (memory == MAP_FAILED)

@@ -19,7 +19,7 @@ static long call6(long number, long a, long b, long c, long d, long e, long f)
 	register long a3 __asm__("a3") = d;
 	register long a4 __asm__("a4") = e;
 	register long a5 __asm__("a5") = f;
-	__asm__ volatile("ecall" : "+r"(a0) : "r"(a7), "r"(a1), "r"(a2), "r"(a3), "r"(a4), "r"(a5) : "memory");
+	__asm__ volatile(MC_ECALL : "+r"(a0) : "r"(a7), "r"(a1), "r"(a2), "r"(a3), "r"(a4), "r"(a5) : "memory");
 	return a0;
 }
 
@@ -27,7 +27,13 @@ static long call6(long number, long a, long b, long c, long d, long e, long f)
 
 int mcwx_setjmp(uint32_t *at) __attribute__((returns_twice));
 void mcwx_longjmp(uint32_t *at) __attribute__((noreturn));
-#ifdef __riscv_flen
+#ifdef __gpuvm__
+/* gpu_vm: ra, sp and s0-s23 are what a call keeps (26 words, as RISC-V's 14 and 12 floats) */
+#define FLOAT_SAVES(op) \
+	"	" op " s12, 56(a0)\n	" op " s13, 60(a0)\n	" op " s14, 64(a0)\n	" op " s15, 68(a0)\n" \
+	"	" op " s16, 72(a0)\n	" op " s17, 76(a0)\n	" op " s18, 80(a0)\n	" op " s19, 84(a0)\n" \
+	"	" op " s20, 88(a0)\n	" op " s21, 92(a0)\n	" op " s22, 96(a0)\n	" op " s23, 100(a0)\n"
+#elif defined __riscv_flen
 #define FLOAT_SAVES(op) \
 	"	" op " fs0, 56(a0)\n	" op " fs1, 60(a0)\n	" op " fs2, 64(a0)\n	" op " fs3, 68(a0)\n" \
 	"	" op " fs4, 72(a0)\n	" op " fs5, 76(a0)\n	" op " fs6, 80(a0)\n	" op " fs7, 84(a0)\n" \
@@ -40,6 +46,19 @@ void mcwx_longjmp(uint32_t *at) __attribute__((noreturn));
 	"	" op " s2, 16(a0)\n	" op " s3, 20(a0)\n	" op " s4, 24(a0)\n	" op " s5, 28(a0)\n" \
 	"	" op " s6, 32(a0)\n	" op " s7, 36(a0)\n	" op " s8, 40(a0)\n	" op " s9, 44(a0)\n" \
 	"	" op " s10, 48(a0)\n	" op " s11, 52(a0)\n"
+#ifdef __gpuvm__
+__asm__(".text\n"
+	".globl mcwx_setjmp\n"
+	".p2align 4\n"
+	"mcwx_setjmp:\n" INT_SAVES("sw") FLOAT_SAVES("sw")
+	"	li a0, 0\n"
+	"	ret\n"
+	".globl mcwx_longjmp\n"
+	".p2align 4\n"
+	"mcwx_longjmp:\n" INT_SAVES("lw") FLOAT_SAVES("lw")
+	"	li a0, 1\n"
+	"	ret\n");
+#else
 __asm__(".text\n"
 	".globl mcwx_setjmp\n"
 	"mcwx_setjmp:\n" INT_SAVES("sw") FLOAT_SAVES("fsw")
@@ -49,6 +68,7 @@ __asm__(".text\n"
 	"mcwx_longjmp:\n" INT_SAVES("lw") FLOAT_SAVES("flw")
 	"	li a0, 1\n"
 	"	ret\n");
+#endif
 #define JUMP_WORDS 26
 
 /* ---- what a core keeps of a job's side effects ---- */
@@ -832,7 +852,11 @@ void mcw_add(int i, uint32_t value)
 		return;
 	}
 	k = mcw_self();
+#ifdef __gpuvm__
+	__asm__ volatile("amoadd zero, %1, (%0)" : : "r"(counts + REGION(k) + count_base + i), "r"(value) : "memory");
+#else
 	__asm__ volatile("amoadd.w zero, %1, (%0)" : : "r"(counts + REGION(k) + count_base + i), "r"(value) : "memory");
+#endif
 	head[0] = 1;
 	merges = head[2];
 	own = &since[k][i];

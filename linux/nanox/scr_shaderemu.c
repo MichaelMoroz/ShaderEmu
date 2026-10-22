@@ -21,8 +21,13 @@
 #include "mc.h"
 #include "sef.h"
 
-/* /dev/gpu maps GPU memory from GPU_PHYS; offsets below are from there */
+/* /dev/gpu maps GPU memory from GPU_PHYS; offsets below are from there (gpu_vm: the device window moved down by
+ * 0x86000000, gpu_vm/GPU_VM.md "Memory") */
+#ifdef __gpuvm__
+#define GPU_PHYS	0x00000000u
+#else
 #define GPU_PHYS	0x86000000u
+#endif
 #define GPU_SIZE	0x01b00000u
 #define POOL_SIZE	0x00c00000u	/* window buffers, from offset 0; the worker cores' mailbox page is right above (programs/mc/mc.h) */
 #define REGS_OFFSET	0x01000000u	/* the machine's control words (physical 0x87000000) */
@@ -88,7 +93,7 @@
 #define SUBMIT_DRAW	1
 #define SUBMIT_INTO	4		/* then copy the picture to the given rectangle of RAM */
 /* The pause hint: this machine ends its frame there, which is when the GPU does its work. */
-#define next_frame()	__asm__ volatile(".word 0x0100000f")
+#define next_frame()	mc_next_pass()
 
 /* What a window (and everything inside it) is drawn on: a buffer the size of the window. */
 struct surface {
@@ -199,7 +204,7 @@ wm_job(uint32_t core)
 		if (!core)
 			return 0;
 		if (!w[WM_RUN])
-			__asm__ volatile("ebreak");	/* the window system is leaving: parked */
+			__asm__ volatile(MC_EBREAK);	/* the window system is leaving: parked */
 		if (w[WM_HERE] != w[WM_RUN]) w[WM_HERE] = w[WM_RUN], busy = 1;
 		seen_x = x, seen_y = y, seen_b = b;
 		if (busy)
@@ -207,7 +212,7 @@ wm_job(uint32_t core)
 		/* a tenth of a second after the last change it sleeps, until its job word changes
 		 * (the kernel's tick when the pointer moves, wm_poke()); till then a pass, and on */
 		if (r[REG_CLOCK] - busy_at < 100)
-			__asm__ volatile(".word 0x0000100f");	/* fence.i: the pass ends here */
+			mc_end_pass();	/* fence.i: the pass ends here */
 		else
 			next_frame();
 	}
@@ -216,6 +221,15 @@ wm_job(uint32_t core)
 /* The worker starts here: the machine gives it a stack and its number, the program's global
  * pointer is ours to set. */
 void wm_entry(void);
+#ifdef __gpuvm__
+/* (gpu_vm has no global pointer) */
+__asm__(".text\n"
+	".globl wm_entry\n"
+	".p2align 4\n"
+	"wm_entry:\n"
+	"	call wm_job\n"
+	"	break\n");
+#else
 __asm__(".text\n"
 	".globl wm_entry\n"
 	"wm_entry:\n"
@@ -225,6 +239,7 @@ __asm__(".text\n"
 	".option pop\n"
 	"	call wm_job\n"
 	"	ebreak\n");
+#endif
 
 /* The kernel takes no core of ours while this says we write to one (mc.h): 0 if the worker's
  * core is another's by now. wm_ours(0) when the writing is done. */

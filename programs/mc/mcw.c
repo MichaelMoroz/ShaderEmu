@@ -51,7 +51,7 @@ static long call6(long number, long a, long b, long c, long d, long e, long f)
 	register long a3 __asm__("a3") = d;
 	register long a4 __asm__("a4") = e;
 	register long a5 __asm__("a5") = f;
-	__asm__ volatile("ecall" : "+r"(a0) : "r"(a7), "r"(a1), "r"(a2), "r"(a3), "r"(a4), "r"(a5) : "memory");
+	__asm__ volatile(MC_ECALL : "+r"(a0) : "r"(a7), "r"(a1), "r"(a2), "r"(a3), "r"(a4), "r"(a5) : "memory");
 	return a0;
 }
 static void *map(long bytes, int fd, long offset)
@@ -79,6 +79,16 @@ static void say(const char *text, uint32_t value)
  */
 void mcw_entry(void);
 uint32_t mcw_loop(uint32_t core) __attribute__((used));	/* (called from the lines below only) */
+#ifdef __gpuvm__
+/* (gpu_vm has no global pointer: globals are addressed from the bundle) */
+__asm__(".text\n"
+	".globl mcw_entry\n"
+	".p2align 4\n"
+	"mcw_entry:\n"
+	"	lw tp, 0(sp)\n"
+	"	call mcw_loop\n"
+	"	break\n");
+#else
 __asm__(".text\n"
 	".globl mcw_entry\n"
 	"mcw_entry:\n"
@@ -89,6 +99,7 @@ __asm__(".text\n"
 	"	lw tp, 0(sp)\n"
 	"	call mcw_loop\n"
 	"	ebreak\n");
+#endif
 
 uint32_t mcw_loop(uint32_t core)
 {
@@ -105,7 +116,7 @@ uint32_t mcw_loop(uint32_t core)
 			if (!fn) {
 				answer->alive = 0;
 				answer->done = at;
-				__asm__ volatile("ebreak");	/* the machine parks this core */
+				__asm__ volatile(MC_EBREAK);	/* the machine parks this core */
 			}
 			answer->result = fn(job->a0, job->a1);
 			answer->done = at;
@@ -502,7 +513,11 @@ void mcw_touch(void *memory, unsigned bytes)
 
 	/* a word or-ed with nothing: the page is there and this program's to write, and nothing
 	 * changes. One instruction that stores, so one fault: a load and then a store were two. */
+#ifdef __gpuvm__
+	for (; at < end; at += 4096) __asm__ volatile("amoor zero, zero, (%0)" : : "r"(at) : "memory");
+#else
 	for (; at < end; at += 4096) __asm__ volatile("amoor.w zero, zero, (%0)" : : "r"(at) : "memory");
+#endif
 }
 
 void *mcw_alloc(unsigned bytes)
@@ -599,10 +614,10 @@ int mcw_on_worker(void)
 /* What a lane's index returns to: the machine ends the index there. */
 void mcw_lane_stub(void);
 __asm__(".text\n"
-	".p2align 2\n"
+	".p2align 4\n"
 	".globl mcw_lane_stub\n"
 	"mcw_lane_stub:\n"
-	"	ebreak\n");
+	"	" MC_EBREAK "\n");
 
 /* CSR 0x0b8: bit 31 where the machine has lanes, this core's in bits 8-15, how its last job
  * ended in bits 0-7 (1 whole, 2 a lane stuck). A machine without lanes reads it as 0. */
@@ -610,7 +625,11 @@ static inline uint32_t lanes_word(void)
 {
 	uint32_t v;
 
+#ifdef __gpuvm__
+	v = 0;	/* no lanes on gpu_vm: every job is plain calls, as on rvc_cpu */
+#else
 	__asm__ volatile("csrr %0, 0x0b8" : "=r"(v));
+#endif
 	return v;
 }
 
@@ -681,7 +700,9 @@ static int lanes_run(mcw_lane_fn fn, void *ctx, uint32_t first, uint32_t count, 
 	for (L = 0; L < 2 * lanes; L++) job.stuck[L][0] = 0;
 	/* the job: this core's passes are its lanes' until all are through (the stores above are in
 	 * memory by then: this pass ends here) */
+#ifndef __gpuvm__
 	__asm__ volatile("csrw 0x0b8, %0" : : "r"(&job) : "memory");
+#endif
 	v = lanes_word();
 	*how = v & 0xff;
 	if (v & 2)
@@ -742,7 +763,11 @@ int mcw_field_lanes(void)
 	uint32_t v;
 
 	if (mcw_on_worker()) return 0;
+#ifdef __gpuvm__
+	v = 0;	/* no field on gpu_vm */
+#else
 	__asm__ volatile("csrr %0, 0x0b9" : "=r"(v));
+#endif
 	return v > FIELD_MOST ? 0 : (int)v;
 }
 
@@ -903,10 +928,7 @@ static uint32_t probe_t0, probe_budget;
 
 static inline uint32_t clock_now(void)
 {
-	uint32_t v;
-
-	__asm__ volatile("csrr %0, 0xc00" : "=r"(v));
-	return v;
+	return mc_cycles();
 }
 
 /* (0 too is no end: a machine from before the CSR) */
@@ -914,7 +936,11 @@ uint32_t mcw_steps_left(void)
 {
 	uint32_t v, d;
 
+#ifdef __gpuvm__
+	v = 0;	/* no steps on gpu_vm */
+#else
 	__asm__ volatile("csrr %0, 0x0ba" : "=r"(v));
+#endif
 	if (v != 0 && v != 0xffffffffu) return v;
 	if (!probe_on) return 0xffffffffu;
 	d = clock_now() - probe_t0;

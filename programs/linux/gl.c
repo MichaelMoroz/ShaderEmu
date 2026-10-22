@@ -29,7 +29,11 @@
 
 // ---- GPU memory ----
 
+#ifdef __gpuvm__
+#define GPU_PHYS 0x01000000u   // gpu_vm: the device window moved down by 0x86000000 (gpu_vm/GPU_VM.md, "Memory")
+#else
 #define GPU_PHYS 0x87000000u
+#endif
 #define GPU_SIZE 0x00b00000u
 // This frame's uniform blocks and command list, then the vertex buffers of display lists to
 // the end. Under Nano-X they start higher, in the part of GPU memory its server leaves alone.
@@ -91,7 +95,11 @@ static void gpu_open(void) {
     }
     int n = find_gpu_mtd();
     if (n < 0) {
+#ifdef __gpuvm__
+        const char spec[] = "gpu,0x01000000,0xb00000";
+#else
         const char spec[] = "gpu,0x87000000,0xb00000";
+#endif
         int fd = open("/sys/module/phram/parameters/phram", O_WRONLY);
         if (fd < 0 || write(fd, spec, sizeof spec - 1) < 0) die("cannot create the GPU memory device (phram)");
         close(fd);
@@ -599,7 +607,12 @@ static XVisualInfo the_visual_info = {&the_visual, 0, 0, 24};
 #define REG_CLOCK 0x34           // the host's clock in milliseconds
 #define REG_INPUT 0x20           // the pointer's place (two words), its buttons, the count of keys
 // The pause hint: this machine ends its frame there, which is when the GPU does its work.
+#ifdef __gpuvm__
+#define next_frame() __asm__ volatile("wait" ::: "memory")   // gpu_vm's pause hint: a user's wait
+#else
 #define next_frame() __asm__ volatile(".word 0x0100000f")
+#endif
+
 // Nothing to do until the GPU has drawn another program's list: the kernel is told, which runs
 // that program or ends the pass (docs/machine/multicore.md, "A core that rests"). The pause hint on a
 // kernel from before the call, and with GL_REST=pause.

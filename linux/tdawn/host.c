@@ -1351,7 +1351,11 @@ host_window_picture(int *width, int *height, int *row)
 	GrGetWindowInfo(window, &info);
 	if (!info.surface_address || info.width <= 0)
 		return NULL;
+#ifdef __gpuvm__
+	at = info.surface_address;	/* (the device's memory, from its start: 0 on gpu_vm) */
+#else
 	at = info.surface_address - 0x86000000u;	/* (the device's memory, from its start) */
+#endif
 	if (mapped != (at & ~0xfffu)) {
 		if (map)
 			munmap(map, 4 << 20);

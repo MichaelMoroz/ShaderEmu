@@ -892,7 +892,11 @@ locate(void)
 	if (!info.surface_address)
 		return;
 	surface_row = info.surface_row ? (int)info.surface_row : (int)info.width;
+#ifdef __gpuvm__
+	offset = info.surface_address;	/* (gpu_vm: the device window starts at 0) */
+#else
 	offset = info.surface_address - 0x86000000u;
+#endif
 	size = (offset & 4095) + (uint32_t)surface_row * MAPPED_ROWS * 4;
 	memory = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, gpu, offset & ~4095u);
 	if (memory == MAP_FAILED)
