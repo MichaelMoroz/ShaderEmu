@@ -91,19 +91,12 @@ esac
 IN="$W/systest-$MACHINE.in"
 printf '%s\n' "${cmds[@]}" > "$IN"
 
-# the run: each line of the output with its wall time, and the time each prompt appeared
-STAMP='$| = 1; use Time::HiRes "time"; my $t0 = time; my ($buf, $tail, $bol) = ("", "", 1);
-    open(my $pt, ">", $ARGV[0]) or die;
-    while (sysread(STDIN, $buf, 4096)) {
-        my $t = time - $t0; $buf =~ s/\r//g;
-        $tail .= $buf; while ($tail =~ s/^.*?\@gpuvm:[^\n]*?# //s) { printf $pt "%.3f\n", $t }
-        $tail = substr($tail, -64) if length($tail) > 64;
-        for my $c (split /(?<=\n)/, $buf) { printf "%9.3f ", $t if $bol; print $c; $bol = ($c =~ /\n$/) }
-    }'
+# the run (drive.pl): each line of the output with its wall time, the time each prompt appeared; the first command
+# typed at the first prompt, the rest at the second
 echo "systest.sh: $MACHINE, ${#cmds[@]} commands; the output in $LOG"
 start=$(date +%s.%N)
-"$EMU" --stats "$@" --dtb "$W/gvm.dtb" "$W/vmlinux" < "$IN" 2>&1 | perl -e "$STAMP" "$LOG.prompts" > "$LOG"
-code=${PIPESTATUS[0]}
+perl "$HERE/drive.pl" "$LOG.prompts" "$IN" "$EMU" --stats "$@" --dtb "$W/gvm.dtb" "$W/vmlinux" > "$LOG"
+code=$?
 end=$(date +%s.%N)
 echo "systest.sh: the emulator's exit code $code, $(awk "BEGIN {printf \"%.2f\", $end - $start}") s"
 

@@ -3,8 +3,8 @@
 #   bash gpu_vm/userland/busybox.sh            -> $BB/busybox (a bFLT program) and $BB/busybox.links
 # Downloads the release into ~/gpu_vm/dl/busybox (checked by its sha256), unpacks it into a clean $BB
 # (~/gpu_vm/busybox), applies busybox/*.patch, configures it from defconfig for a machine without an MMU and builds it with gpuvm-linux-cc.
-# Needs build.sh's sysroot. BB_STACK: the program's stack (bytes, default 65536: hush's deepest, measured, is under
-# a third of it; see the README).
+# Needs build.sh's sysroot. BB_STACK: the program's stack (bytes, default 131072: a hush function recursing calls
+# itself about 300 deep in it, 170 in 64 KB; see the README).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VER=1.37.0
@@ -55,7 +55,7 @@ for o in HOSTNAME DNSDOMAINNAME; do on $o; done
 { yes "" || true; } | make -s oldconfig > /dev/null 2>&1 || true
 
 # objects are joined by "ld.lld -r"; the link is the driver's (ld.lld -q, then elf2flt)
-GVM_STACK="${BB_STACK:-65536}" make -s -j"$(nproc)" CROSS_COMPILE=gpuvm-linux- LD=ld.lld HOSTCC=gcc \
+GVM_STACK="${BB_STACK:-131072}" make -s -j"$(nproc)" CROSS_COMPILE=gpuvm-linux- LD=ld.lld HOSTCC=gcc \
     SKIP_STRIP=y busybox 2>&1 | grep -vE "^  (CC|LD|AR|GEN|HOSTCC|SPLIT|HOSTLD|AS)\b" | grep -E "error|undefined|warning: (implicit|incompatible)" || true
 [ -f busybox_unstripped ] || { echo "busybox.sh: busybox was not built"; exit 1; }
 cp busybox_unstripped busybox
