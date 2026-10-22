@@ -1,5 +1,28 @@
 # Handoff: gpu_vm ISA, tick, LLVM, Linux (22 October 2026)
 
+## Where it stands at the end of 22 October 2026 (wrapped up; read this first)
+
+- **The ISA** is gpu_vm (`gpu_vm/isa.h`, the reference `gpu_vm/ref/gvm_ref.h`); **the tick** is x18
+  (`gpu_vm/tick/steps/x18.hlsl`, plain, no switches); x19's experiments found no better default (README "x19").
+- **The toolchain**: LLVM 23.1.4's GPUVM target and clang (`gpu_vm/llvm/README.md`), lld, musl, compiler-rt, a libm
+  on the card's float ops and libmfloat, gpuvm-linux-cc (PIE), elf2flt (`gpu_vm/userland/README.md`). c-torture 99.7%
+  of what the host passes; CoreMark 113k bundles an iteration (2.39 RISC-V instructions a bundle).
+- **Linux 5.17.11 `arch/gpuvm`** (`gpu_vm/linux`), the machine's drivers (fb, gpu with workers, input, sound, net),
+  boots on gvm_cpu, on the card in gvm_gpu, and as a whole machine in `rvc_harness --gvm` (`gpu_vm/platform.md`:
+  devices, up to 255 workers through a firmware, the desktop); busybox userland (`gpu_vm/userland`).
+- **The programs and games** (`gpu_vm/userland/apps/README.md`): everything builds but OpenTTD (no C++ exceptions:
+  no unwind info) and TinyCC (no gpu_vm back end); 102 of 131 test_all cases pass on gvm_cpu (more alone), ~35 on the
+  card (Doom's digests, Micropolis, the C&C games, the NES, workers, ray tracers by PSNR, media).
+- **Speed against the lean RISC-V tick on the card** (`gpu_vm/bench_real`): CoreMark 2.11x and gzip 2.02x against
+  its best flags, gunzip 1.62x; the bench's seven loops 2.24-2.74x. A bundle's fixed cost (~105 ns) is the floor
+  x19 could not move; memory-heavy code ends passes on a full write cache (a bigger cache helps one core and costs
+  many cores).
+- **Open**: the game frame-rate comparison against the RISC-V machine (the games run; not yet timed side by side);
+  gunzip's 1.6x; Red Alert's movie with more than one worker; Half-Life's races (0 or 7 undone); compiler bugs
+  far_call.c (a call over 2 MB in one section: worked around with -ffunction-sections) and weak_undef.c (an
+  undefined weak function's address under PIE); C++ exceptions; TinyCC's back end; exact Newton-refined
+  sqrt/div and real double ops in the ISA (proposed, not done).
+
 ## The task (the user's words, condensed)
 
 Starting from `gpu_vm/GPU_VM.md`: (1) download and build LLVM, then an gpu_vm target for it; (2) meanwhile design the new
