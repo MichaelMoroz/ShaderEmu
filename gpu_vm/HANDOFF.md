@@ -107,6 +107,17 @@ trace.ps1). Not pushed.
 - `precise` does nothing under fxc2 (byte-identical DXBC; vkd3d drops it); kept for DXC (gvmtrace12) and FXC.
   Float mad, msb and nmsb round the product first (D3D11 promises no fused float FMA): every card gives the same bits.
 
+## The toolchain and Linux (goal set 22 October 2026: "the LLVM backend working, Linux compiled with it, bare-metal test apps")
+
+Phases, each one agent's (one writer of the LLVM tree in WSL at a time):
+1. `gpu_vm/cpu/gvm_cpu.c`: the reference machine as a runner of ELF files, with bare-metal semihosting (a syscall with
+   TVEC 0 is the host's: r12 the number, Linux's: 64 write, 63 read, 93 exit; r5-r10 arguments, r5 the result).
+2. The LLVM target GPUVM, MC layer (`gpu_vm/llvm/Target/GPUVM`, patches in `gpu_vm/llvm/patches`, syntax in
+   `gpu_vm/llvm/ASM.md`): bundling in the streamer by `gvm_asm.h`'s rules, ELF, asm parser, disassembler, lld.
+3. Codegen and clang (`gpuvm-unknown-elf`): ISel, calling convention, frame lowering, branch relaxation.
+4. compiler-rt builtins, a small bare-metal libc and crt0; test apps (hello, isaloops, CoreMark) on gvm_cpu.
+5. Linux 5.17 `arch/gpuvm` (no MMU), `make ARCH=gpuvm LLVM=1`; then boot on gvm_cpu.
+
 ## Numbers (RTX 5070 Laptop, fxc2, M RISC-V instructions of work a second)
 
 | | arith | loads | stores | adds | tight | mix | stride | floats | fmix |
