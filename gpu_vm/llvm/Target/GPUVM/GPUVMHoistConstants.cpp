@@ -13,6 +13,10 @@
 // takes it as op 1), and the same constant once for every branch. With 64
 // registers this rarely costs a spill; li is rematerializable, so the
 // register allocator makes it again where one is short rather than spill it.
+// A constant in a loop stays there (-gpuvm-hoist-loops=0): the bundle filling
+// (GPUVMGlobalFill) finds it an empty slot of the loop's branch bundles, where
+// the entry would make it on every call (CoreMark's state machine: 126.1k to
+// 124.7k bundles an iteration).
 //
 //===----------------------------------------------------------------------===//
 
@@ -20,6 +24,8 @@
 #include "GPUVMInstrInfo.h"
 #include "GPUVMSubtarget.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/CodeGen/MachineBlockFrequencyInfo.h"
+#include "llvm/CodeGen/MachineLoopInfo.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/Support/CommandLine.h"
@@ -32,6 +38,14 @@ static cl::opt<unsigned>
     MaxHoisted("gpuvm-hoist-constants", cl::Hidden, cl::init(16),
                cl::desc("gpu_vm: constants of branches made in the entry "
                         "block at most (0: none)"));
+static cl::opt<bool>
+    HoistLoops("gpuvm-hoist-loops", cl::Hidden, cl::init(false),
+               cl::desc("gpu_vm: constants of branches in loops move to the "
+                        "entry too"));
+static cl::opt<double>
+    HoistCold("gpuvm-hoist-cold", cl::Hidden, cl::init(0.3),
+              cl::desc("gpu_vm: a constant of a block that runs less often "
+                       "than this (the entry 1) stays"));
 
 namespace {
 class GPUVMHoistConstants : public MachineFunctionPass {
@@ -42,6 +56,14 @@ public:
     return "gpu_vm branch constants to the entry";
   }
   bool runOnMachineFunction(MachineFunction &MF) override;
+  void getAnalysisUsage(AnalysisUsage &AU) const override {
+    AU.setPreservesCFG();
+    AU.addRequired<MachineLoopInfoWrapperPass>();
+    AU.addPreserved<MachineLoopInfoWrapperPass>();
+    AU.addRequired<MachineBlockFrequencyInfoWrapperPass>();
+    AU.addPreserved<MachineBlockFrequencyInfoWrapperPass>();
+    MachineFunctionPass::getAnalysisUsage(AU);
+  }
 };
 } // namespace
 
@@ -76,6 +98,9 @@ bool GPUVMHoistConstants::runOnMachineFunction(MachineFunction &MF) {
   if (skipFunction(MF.getFunction()) || MaxHoisted == 0 || MF.size() < 2)
     return false;
   MachineRegisterInfo &MRI = MF.getRegInfo();
+  MachineLoopInfo &MLI = getAnalysis<MachineLoopInfoWrapperPass>().getLI();
+  MachineBlockFrequencyInfo &MBFI =
+      getAnalysis<MachineBlockFrequencyInfoWrapperPass>().getMBFI();
   MachineBasicBlock &Entry = MF.front();
   DenseMap<int64_t, Register> InEntry;
   for (MachineInstr &MI : Entry)
@@ -111,7 +136,9 @@ bool GPUVMHoistConstants::runOnMachineFunction(MachineFunction &MF) {
         Changed = true;
         continue;
       }
-      if (Hoisted >= MaxHoisted)
+      if (Hoisted >= MaxHoisted ||
+          (!HoistLoops && MLI.getLoopDepth(&MBB) > 0) ||
+          MBFI.getBlockFreqRelativeToEntryBlock(&MBB) < HoistCold)
         continue;
       MI.removeFromParent();
       Entry.insert(Entry.getFirstTerminator(), &MI);
