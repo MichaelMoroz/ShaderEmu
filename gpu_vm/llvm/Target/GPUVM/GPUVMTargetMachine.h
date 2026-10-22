@@ -32,6 +32,10 @@ public:
 
   TargetPassConfig *createPassConfig(PassManagerBase &PM) override;
 
+  TargetTransformInfo getTargetTransformInfo(const Function &F) const override;
+
+  void registerPassBuilderCallbacks(PassBuilder &PB) override;
+
   // The post-RA machine scheduler orders ops to fill bundles
   // (GPUVMBundleScheduler.cpp); the pass config adds it.
   bool targetSchedulesPostRAScheduling() const override { return true; }

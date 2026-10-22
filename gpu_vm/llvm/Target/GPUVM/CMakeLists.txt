@@ -29,6 +29,8 @@ add_llvm_target(GPUVMCodeGen
   GPUVMSelectionDAGInfo.cpp
   GPUVMSubtarget.cpp
   GPUVMTargetMachine.cpp
+  GPUVMTargetTransformInfo.cpp
+  GPUVMUnrollHint.cpp
   GPUVMZeroExt.cpp
 
   LINK_COMPONENTS
@@ -40,10 +42,13 @@ add_llvm_target(GPUVMCodeGen
   GPUVMDesc
   GPUVMInfo
   MC
+  Passes
+  ScalarOpts
   SelectionDAG
   Support
   Target
   TargetParser
+  TransformUtils
 
   ADD_TO_COMPONENT
   GPUVM

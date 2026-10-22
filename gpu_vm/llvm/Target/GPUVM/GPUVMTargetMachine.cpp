@@ -17,6 +17,9 @@
 #include "GPUVMTargetMachine.h"
 #include "GPUVM.h"
 #include "GPUVMMachineFunctionInfo.h"
+#include "GPUVMTargetTransformInfo.h"
+#include "GPUVMUnrollHint.h"
+#include "llvm/Passes/PassBuilder.h"
 #include "TargetInfo/GPUVMTargetInfo.h"
 #include "llvm/CodeGen/MachineScheduler.h"
 #include "llvm/CodeGen/Passes.h"
@@ -58,6 +61,20 @@ GPUVMTargetMachine::GPUVMTargetMachine(const Target &T, const Triple &TT,
       TLOF(std::make_unique<TargetLoweringObjectFileELF>()),
       Subtarget(TT, CPU, FS, *this) {
   initAsmInfo();
+}
+
+// Small loops of no computable trip count: unrolled by 2 (GPUVMUnrollHint.cpp)
+void GPUVMTargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
+  PB.registerLoopOptimizerEndEPCallback(
+      [](LoopPassManager &LPM, OptimizationLevel Level) {
+        if (Level == OptimizationLevel::O2 || Level == OptimizationLevel::O3)
+          LPM.addPass(GPUVMUnrollHintPass());
+      });
+}
+
+TargetTransformInfo
+GPUVMTargetMachine::getTargetTransformInfo(const Function &F) const {
+  return TargetTransformInfo(std::make_unique<GPUVMTTIImpl>(this, F));
 }
 
 MachineFunctionInfo *GPUVMTargetMachine::createMachineFunctionInfo(
