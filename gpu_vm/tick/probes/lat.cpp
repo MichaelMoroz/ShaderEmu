@@ -13,7 +13,7 @@ int main(int argc, char** argv) {
     D3D_FEATURE_LEVEL fl = D3D_FEATURE_LEVEL_11_0;
     ck(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, &fl, 1, D3D11_SDK_VERSION, &dev, nullptr, &ctx), "dev");
     ID3DBlob *vb, *pb, *err = nullptr;
-    const wchar_t* path = L"build\\x19\\lat.hlsl";
+    const wchar_t* path = L"gpu_vm\\tick\\probes\\lat.hlsl";
     if (FAILED(D3DCompileFromFile(path, nullptr, nullptr, "vert", "vs_5_0", D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &vb, &err))) { printf("%s", (char*)err->GetBufferPointer()); return 1; }
     if (FAILED(D3DCompileFromFile(path, nullptr, nullptr, "frag", "ps_5_0", D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &pb, &err))) { printf("%s", (char*)err->GetBufferPointer()); return 1; }
     ID3D11VertexShader* vs; ID3D11PixelShader* ps;
