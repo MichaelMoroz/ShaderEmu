@@ -165,7 +165,37 @@ void GPUVMELFStreamer::emitBundle(ArrayRef<MCInst> BOps, const MCInst *Ctl) {
   if (Ctl)
     Add(*Ctl);
   MCELFStreamer::emitInstruction(B, *LastSTI);
+  for (MCSymbol *L : PendingLabels)
+    MCELFStreamer::emitLabel(L);
+  PendingLabels.clear();
   Closing = false;
+}
+
+void GPUVMELFStreamer::emitDwarfLocDirective(unsigned FileNo, unsigned Line,
+                                             unsigned Column, unsigned Flags,
+                                             unsigned Isa,
+                                             unsigned Discriminator,
+                                             StringRef FileName,
+                                             StringRef Comment) {
+  // With a bundle open, the line entry of the .loc before would be a label
+  // inside it: only the latest .loc is kept, and the bundle's emission makes
+  // its entry.
+  if (!Ops.empty() || HasBump) {
+    MCStreamer::emitDwarfLocDirective(FileNo, Line, Column, Flags, Isa,
+                                      Discriminator, FileName, Comment);
+    return;
+  }
+  MCELFStreamer::emitDwarfLocDirective(FileNo, Line, Column, Flags, Isa,
+                                       Discriminator, FileName, Comment);
+}
+
+MCSymbol *GPUVMELFStreamer::emitCFILabel() {
+  MCSymbol *L = getContext().createTempSymbol("cfi");
+  if (Ops.empty() && !HasBump)
+    MCELFStreamer::emitLabel(L);
+  else
+    PendingLabels.push_back(L);
+  return L;
 }
 
 void GPUVMELFStreamer::markData() {
@@ -174,6 +204,10 @@ void GPUVMELFStreamer::markData() {
 }
 
 void GPUVMELFStreamer::emitLabel(MCSymbol *Symbol, SMLoc Loc) {
+  if (SoftLabels && !Closing && (!Ops.empty() || HasBump)) {
+    PendingLabels.push_back(Symbol);
+    return;
+  }
   closeBundle();
   MCELFStreamer::emitLabel(Symbol, Loc);
 }
@@ -254,6 +288,10 @@ void GPUVMTargetELFStreamer::finish() {
 
 void GPUVMTargetELFStreamer::emitBundleEnd() {
   static_cast<GPUVMELFStreamer &>(getStreamer()).closeBundle();
+}
+
+void GPUVMTargetELFStreamer::setSoftLabels(bool Soft) {
+  static_cast<GPUVMELFStreamer &>(getStreamer()).setSoftLabels(Soft);
 }
 
 void GPUVMTargetAsmStreamer::emitBundleEnd() { OS << "\t.endbundle\n"; }

@@ -15,6 +15,7 @@
 #include "GPUVM.h"
 #include "GPUVMInstrInfo.h"
 #include "GPUVMTargetMachine.h"
+#include "MCTargetDesc/GPUVMELFStreamer.h"
 #include "MCTargetDesc/GPUVMFixupKinds.h"
 #include "MCTargetDesc/GPUVMInstPrinter.h"
 #include "TargetInfo/GPUVMTargetInfo.h"
@@ -48,6 +49,8 @@ public:
   StringRef getPassName() const override { return "gpu_vm Assembly Printer"; }
 
   void emitInstruction(const MachineInstr *MI) override;
+  void emitStartOfAsmFile(Module &M) override;
+  void emitBasicBlockStart(const MachineBasicBlock &MBB) override;
   bool PrintAsmOperand(const MachineInstr *MI, unsigned OpNo,
                        const char *ExtraCode, raw_ostream &OS) override;
   bool PrintAsmMemoryOperand(const MachineInstr *MI, unsigned OpNo,
@@ -225,4 +228,25 @@ bool GPUVMAsmPrinter::PrintAsmMemoryOperand(const MachineInstr *MI,
 extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void
 LLVMInitializeGPUVMAsmPrinter() {
   RegisterAsmPrinter<GPUVMAsmPrinter> X(getTheGPUVMTarget());
+}
+
+static GPUVMTargetStreamer *targetStreamer(MCStreamer &S) {
+  return static_cast<GPUVMTargetStreamer *>(S.getTargetStreamer());
+}
+
+// Labels of the code generator do not close bundles (debug info's would
+// change the code); a block that is branched to closes the open one.
+void GPUVMAsmPrinter::emitStartOfAsmFile(Module &M) {
+  if (GPUVMTargetStreamer *TS = targetStreamer(*OutStreamer))
+    TS->setSoftLabels(true);
+}
+
+void GPUVMAsmPrinter::emitBasicBlockStart(const MachineBasicBlock &MBB) {
+  bool Labeled = MBB.isEHPad() || MBB.hasAddressTaken() ||
+                 MBB.hasLabelMustBeEmitted() ||
+                 !isBlockOnlyReachableByFallthrough(&MBB);
+  if (Labeled)
+    if (GPUVMTargetStreamer *TS = targetStreamer(*OutStreamer))
+      TS->emitBlockStart();
+  AsmPrinter::emitBasicBlockStart(MBB);
 }

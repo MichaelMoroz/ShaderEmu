@@ -39,6 +39,10 @@ class GPUVMELFStreamer : public MCELFStreamer {
   // Sections where data was emitted since the last bundle: the next bundle
   // is aligned to 16 first.
   DenseSet<const MCSection *> Unaligned;
+  // CFI labels asked for inside the open bundle: placed after it (a label
+  // would close it; an address inside a bundle is no place to resume).
+  SmallVector<MCSymbol *, 2> PendingLabels;
+  bool SoftLabels = false;
 
   void putOp(const MCInst &Inst, const MCSubtargetInfo &STI);
   void putControl(const MCInst &Inst, const MCSubtargetInfo &STI);
@@ -53,9 +57,17 @@ public:
 
   // Closes the open bundle (`;;`, `.endbundle`, and every flush point).
   void closeBundle();
+  void setSoftLabels(bool Soft) { SoftLabels = Soft; }
 
   void emitInstruction(const MCInst &Inst, const MCSubtargetInfo &STI) override;
   void emitLabel(MCSymbol *Symbol, SMLoc Loc = SMLoc()) override;
+  // Debug info and CFI leave the bundles as they are: a line entry is made
+  // for a bundle (with the last .loc in it), a CFI label after the bundle.
+  void emitDwarfLocDirective(unsigned FileNo, unsigned Line, unsigned Column,
+                             unsigned Flags, unsigned Isa,
+                             unsigned Discriminator, StringRef FileName,
+                             StringRef Comment = {}) override;
+  MCSymbol *emitCFILabel() override;
   void changeSection(MCSection *Section, uint32_t Subsection = 0) override;
   void emitBytes(StringRef Data) override;
   void emitValueImpl(const MCExpr *Value, unsigned Size,
@@ -79,6 +91,13 @@ class GPUVMTargetStreamer : public MCTargetStreamer {
 public:
   GPUVMTargetStreamer(MCStreamer &S) : MCTargetStreamer(S) {}
   virtual void emitBundleEnd() {}
+  // The code generator's labels: a label emitted with a bundle open is placed
+  // after it instead of closing it (debug info's, the function's end); the
+  // code generator closes the bundle itself where a label must be exact (a
+  // block that is branched to).
+  virtual void setSoftLabels(bool Soft) {}
+  // Before a block that is branched to: its label must be a bundle's start.
+  virtual void emitBlockStart() {}
 };
 
 class GPUVMTargetELFStreamer : public GPUVMTargetStreamer {
@@ -86,6 +105,8 @@ public:
   GPUVMTargetELFStreamer(MCStreamer &S) : GPUVMTargetStreamer(S) {}
   void emitBundleEnd() override;
   void finish() override; // the last bundle
+  void setSoftLabels(bool Soft) override;
+  void emitBlockStart() override { emitBundleEnd(); }
 };
 
 class GPUVMTargetAsmStreamer : public GPUVMTargetStreamer {
