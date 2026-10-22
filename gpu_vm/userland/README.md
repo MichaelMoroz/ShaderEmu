@@ -12,6 +12,7 @@ compiler-rt's builtins, a flat converter and a compiler driver, all over the gpu
 | `bin/gpuvm-linux-cc` | the compiler driver (gcc's options) |
 | `bin/gpuvm-linux-{ar,ranlib,nm,objdump,objcopy,readelf,strip,size}` | LLVM's tools under target names; `strip` copies a bFLT unchanged |
 | `test.sh`, `test/` | programs run under the kernel on gvm_cpu |
+| `busybox.sh`, `rootfs.sh`, `systest.sh` | busybox, the root file system with the kernel, the system test ("The root file system") |
 
 ## Building
 
@@ -114,7 +115,107 @@ strtold of two hex strings rounded at the end of a 53-bit long double, as the ho
 strptime's %F %s %z and mntent, newer than 1.2.5), clocale_mbfuncs (over the 20 s), ipc_shm (shmat on the no-MMU
 kernel: shm_nattch 0, then a fault).
 
-## Gaps
+## The root file system (busybox, init, a shell; on gvm_cpu and on the card)
+
+    bash gpu_vm/userland/rootfs.sh                 # busybox (when missing), the programs, the kernel with them (WSL)
+    bash gpu_vm/userland/systest.sh cpu            # the system test on gvm_cpu (WSL, or bin\gvm_cpu.exe from Git Bash)
+    pwsh tools\gpu_queue.ps1 "C:\Program Files\Git\bin\bash.exe" gpu_vm/userland/systest.sh gpu [--check]
+    build/gvm_cpu/gvm_cpu --dtb build/gvm_rootfs/gvm.dtb build/gvm_rootfs/vmlinux                    # a shell, by hand
+    pwsh tools\gpu_queue.ps1 bin\gvm_gpu.exe --dtb build\gvm_rootfs\gvm.dtb build\gvm_rootfs\vmlinux   # the same on the card
+
+| | |
+|---|---|
+| `busybox.sh` | busybox 1.37.0 (`~/gpu_vm/dl/busybox`, checked by its sha256) into `~/gpu_vm/busybox`: defconfig with `NOMMU`, hush as `sh`, without networking, modules, the VT, mail, printers, SELinux, PAM, utmp; 286 applets, 2.06 MB, 15,256 relocations, a stack of 128 KB (`BB_STACK`) |
+| `busybox/*.patch` | applied to busybox's sources: `hush-nommu-login.patch` (below) |
+| `rootfs.sh [busybox] [apps] [kernel]` | the programs into `~/gpu_vm/rootfs-build/apps`; the cpio list (`INITRAMFS_LIST` of `gpu_vm/linux/build.sh`) and a kernel with it in `~/gpu_vm/linux-build-rootfs`, the initramfs not compressed (gzip's took the kernel 0.7 s of machine time to unpack); `vmlinux`, `gvm.dtb` and `busybox` copied to `build/gvm_rootfs` |
+| `rootfs/etc` | `inittab`, `init.d/rcS`, `profile`, `passwd`, `group`, `shadow` (root, no password), `hostname` (gpuvm), `motd`, `hosts`, `fstab` |
+| `rootfs/gvm-tests` | `/usr/bin/gvm-tests`: runs `/usr/lib/gvm-tests` (test/'s libc, signals, threads, math, badptr) |
+| `systest.sh`, `drive.pl` | the system test: boots, types a session (46 commands), checks the output, prints each command's wall time |
+
+- **The tree**: `/bin` `/sbin` `/usr/bin` `/usr/sbin` (busybox's links), `/etc`, `/proc`, `/sys`, `/dev` (devtmpfs),
+  `/tmp` (tmpfs, 8 MB), `/root`, `/home`, `/var`, `/mnt`; `/init` is a link to busybox (its `init`).
+- **init**: busybox's, with `/etc/inittab`: `rcS` at sysinit (mounts proc, sysfs, devtmpfs and a tmpfs on /tmp, sets
+  the hostname, prints `gpuvm: up in N s`), then `hvc0::respawn:-/bin/sh` (hvc0 rather than `/dev/console`, which can
+  never be a controlling terminal: so the shell has job control). `poweroff -f` (or `reboot -f`) ends gvm_cpu and
+  gvm_gpu with code 0 (the kernel's power-off: `exit_group` with TVEC 0).
+- **The shell is hush**, not ash: busybox's ash needs `fork`, which a kernel without an MMU has not got. hush runs a
+  subshell, `$(...)` and a pipeline's builtins by executing `/bin/busybox` again (`BUSYBOX_EXEC_PATH`). It has history,
+  tab completion, vi mode, the prompt `root@gpuvm:~# `, job control (`&`, `jobs`, `wait`, `kill %1`), functions and
+  64-bit `$((...))`. Applets run by vfork and exec of busybox (`FEATURE_SH_STANDALONE`; echo, printf, test, kill and the
+  like are hush's builtins).
+- **Other programs**: `lua` (Lua 5.5 from `~/gpu_vm/third/lua`, all its libraries, POSIX), `qjs` (QuickJS 2025-04-26 from
+  `~/gpu_vm/dl/quickjs`; its REPL compiled to bytecode by the host's qjsc), `minigzip` (zlib's), `coremark` (the POSIX
+  port: `coremark 0x0 0x0 0x66 ITERATIONS`; under 10 s it says "Errors detected" for the time alone, the CRCs are
+  checked), `xtime` (test/xtime.c: `xtime exec N PROG`, `xtime read FILE`, in the machine's clock), `hello`.
+- **The stack**: binfmt_flat gives a program `max(bss + stack, relocations x 4)` above its bss, so busybox has at least
+  61 KB whatever its header says. hush's own recursion (a function calling itself) takes about 380 bytes a level: 170
+  deep in 64 KB, 300 in 128 KB (the default), 500 in 256 KB. An overflow runs into the program's data: a SIGSEGV (139)
+  at best; there is no MMU to catch it.
+- **busybox and clang**: busybox declares the pointer to its globals `const` and assigns it once (`SET_PTR_TO_GLOBALS`);
+  clang hoisted the load of it over the store (hush_main stored through NULL + 372): `-DBB_GLOBAL_CONST=` (busybox's
+  own switch for that). `hush-nommu-login.patch`: hush re-executed itself with its argv[0], a login shell's
+  `-/bin/sh`, so every `$(...)` and subshell read /etc/profile again (the motd in `$(...)`'s output, a `cd $HOME` before
+  `(cd /tmp; pwd)` ran): a re-executed hush is never a login shell.
+- **Typing into the console**: the emulators deliver stdin four characters at a time, the kernel polls every tick.
+  `drive.pl` types the session's first line (`stty -echo`) at the first prompt and the rest at the second. Typed
+  earlier, input was echoed by the tty into the boot's output, and what hush's line editor had read past its line was
+  lost when `stty -echo` turned the shell to plain reads. (`-echo` keeps the typed-ahead commands out of the output.)
+
+### The system test and the times (22 October 2026)
+
+`systest.sh` boots, types 46 commands and checks 37 things in the output: `uname -a`, `ls /`, `$((6*7))`, `seq | awk`,
+/proc (cpuinfo, meminfo, version, uptime), `free`, `df`, `mount`, `ps`, `top -b`, `dmesg`, `date`, `id`, gzip and gunzip,
+minigzip both ways, lua, qjs, `md5sum /bin/busybox` (against the host's), sha256sum, sort, uniq, sed, tr, grep, find,
+wc, tar and gzip of /etc, mkdir/cp/mv/ls/rm, du, head, tail, xargs, hexdump, od, diff, cmp, expr, test, env, a hush
+function, a loop, a subshell with `$(...)`, `kill` of a background job (143), `jobs` and `wait`, `time`, gvm-tests (5
+of 5) and 20 CoreMark iterations (CRCs right). All pass on gvm_cpu and on the card (gvm_gpu, tick x17). `--check` with
+`SESSION=short` and with the whole session: the card and the reference the same, RAM too (84,008 passes).
+
+| | gvm_cpu (WSL) | the card (RTX 5070 Laptop, x17) |
+|---|---|---|
+| boot to `Run /init` | 0.39 s | 5.1 s from gvm_gpu's start (the kernel's clock: 1.7 s) |
+| boot to the first prompt | 0.69 s | 8.9 s (rcS's line: 2.6 s of the machine's time) |
+| a command that runs one program (`uname -a`, `cat`, `date`) | 0.03 s | 0.35-0.4 s |
+| `lua -e ...` / `qjs -e ...` | 0.02 / 0.07 s | 0.23 / 0.8 s |
+| `seq 1 5 \| awk ...` (two programs) | 0.06 s | 0.8 s |
+| `md5sum /bin/busybox` (2 MB) | 0.37 s | 4.0 s |
+| tar, gzip, gunzip and md5sum of /etc (7 programs) | 0.29 s | 3.2 s |
+| gvm-tests (5 programs: threads, signals) | 0.43 s | 6.9 s |
+| CoreMark, 20 iterations | 0.07 s | 0.64 s (282 iterations a second of the machine's time) |
+| the whole session | 4.0 s, 153 M bundles | 49 s, 156 M bundles, 84,654 passes |
+
+The card's numbers moved by a quarter between runs of the same day: 6.9 s to the prompt and 0.27 s a command at 2,400
+passes a second, against 1,750 for the table's.
+
+**Where a command's time goes on the card**: an exec of busybox is 100 ms of the machine's time (500 passes), Lua's
+(768 KB) 84 ms, hello's (45 KB) 13 ms (`xtime exec`); reading the 2 MB file is 14 ms of it. Most of the rest is
+binfmt_flat's relocation loop: 15,256 relocations, ~290 passes an exec, each pass ending on a full write cache after
+~55 stores (two ways of 256 sets: scattered words fill some set long before 514 entries), and 37-55 bundles a
+relocation (calc_reloc is a call; get_user and put_user check the range). Freeing the 2 MB at exit is ~50 passes more.
+What would make it faster: code that needs no relocations (globals addressed PC-relative: the compiler makes every
+global's address a long immediate, `R_GVM_IMM32`, even with -fpie), a write cache that takes scattered stores, a
+smaller busybox.
+
+### The kernel's part
+
+- `gpu_vm/linux/build.sh`: `INITRAMFS_LIST=FILE`, a whole cpio list.
+- `arch/gpuvm/include/asm/uaccess.h` (no `UACCESS_MEMCPY` any more): `access_ok` is true for a range in RAM (or of 0
+  bytes), so a system call given a pointer outside RAM (NULL, the boot area, the device window, past RAM's end, the
+  operations region) returns EFAULT instead of faulting in the kernel (an oops that killed the caller, holding whatever
+  it held); `test/badptr.c` tries nine (all EFAULT). get_user and put_user are one load or store on an aligned pointer
+  (asm-generic's made each four byte accesses). test.sh (8 of 8) and libc-test (111 of 135, as before) pass.
+
+### Gaps (the system)
+
+- No ash (hush instead), no `fork` for programs that need it. vi, less and top run, but slowly on the card for
+  interactive use: a key waits for the tick's poll, a redraw goes out 255 bytes a pass.
+- No networking in the kernel (the networking applets are left out), no modules, no swap, no persistent disk: the root
+  is the initramfs, changes are lost at power-off (the ROM disk `gvmrom` is not used yet).
+- A program is loaded into RAM whole (bFLT `FLAT_FLAG_RAM`) and relocated at each exec: 2 MB and 15,000 relocations
+  for every busybox command (above). No shared text (no XIP: the code has absolute addresses).
+- Stack overflows are silent (no MMU).
+
+## Gaps (the toolchain)
 
 - C only: no C++ runtime (libc++, libunwind; the compiler emits no CFI).
 - No shared libraries or dlopen; TLS local-exec, alignment at most 64.

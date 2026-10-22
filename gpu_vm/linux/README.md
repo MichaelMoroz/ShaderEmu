@@ -64,6 +64,8 @@ At **0x016b8280** (`docs/machine/console.md`, "Words in memory"), plain memory r
   CLONE_BACKWARDS); `user_regs_struct` is `gpr[64]` with the pc in `gpr[0]`; `sigcontext` is that; a signal handler
   returns to `__user_rt_sigreturn` in the kernel's text (`ra` is set to it). Programs are bFLT (BINFMT_FLAT, generic
   `asm/flat.h`, `BINFMT_FLAT_NO_DATA_START_OFFSET`).
+- User memory (`asm/uaccess.h`): `access_ok` is true for a range in RAM (or of 0 bytes): a pointer outside RAM given to a
+  system call is EFAULT, not a fault in the kernel; get_user and put_user are one access on an aligned pointer.
 
 ## What the compiler must give
 
