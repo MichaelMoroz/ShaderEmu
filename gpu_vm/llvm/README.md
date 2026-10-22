@@ -83,11 +83,12 @@ applying them to a clean tree rebuilds most of LLVM (an hour on 12 jobs); 0005's
   closures, sorting, string patterns, coroutines, pcall and error (longjmp), metatables, 64-bit integers, goto, utf8
   and the collector (`lua_test.c`). Both identical to the host's (22 October 2026).
 - `test/bench/run.sh`: CoreMark (EEMBC's sources from `~/gpu_vm/coremark-src/coremark`, the port in `bench/coremark`:
-  CYCLE as the clock). -O2: 132 thousand bundles an iteration, 1.53 ops a bundle, 95.7% of bundles on the fast
-  loop's paths (was 178 thousand before the bundle scheduler, the frame pointer's omission, the branches' constants
-  and the branch fill; 149 thousand before the fill across blocks, 22 October 2026). `test/bench/gz.sh`: zlib's
-  gzip and gunzip (level 6, the gzip wrapper, `gzbench.c`) of `gpu_vm/bench_real`'s input in memory, bundles each
-  (19.38 M and 1.910 M before the fill across blocks, 17.25 M and 1.881 M after). `test/bench/profile.sh
+  CYCLE as the clock). -O2: 113 thousand bundles an iteration, 1.51 ops a bundle (was 178 thousand before the
+  bundle scheduler, the frame pointer's omission, the branches' constants and the branch fill; 149 thousand before
+  the work of 22 October 2026 below: the fill across blocks, while loops unrolled by 2, more inlining, the loads
+  hoisted). `test/bench/gz.sh`: zlib's gzip and gunzip (level 6, the gzip wrapper, `gzbench.c`) of
+  `gpu_vm/bench_real`'s input in memory, bundles each: 15.25 M and 1.850 M (19.38 M and 1.910 M before).
+  `test/bench/profile.sh
   PROGRAM.elf` (gvm_cpu --trace): the bundles by their number of ops and by path, and the hottest ones with their
   functions.
 
@@ -165,12 +166,26 @@ code generator's job toward bundles is the order of its ops.
   streamer's packing (`GPUVMBundleModel`) weighed by block frequencies, with a cost for an op run for nothing. An
   op that runs where it did not must be safe: no store or side effect; a load from sp, fp or a global, from a
   pointer the branch tests against 0 (the boot area reads), or within 16 bytes of an access through the same
-  register on every path to it or every other way out (`-gpuvm-spec-window`). `-gpuvm-global-fill=0` turns it off.
+  register on every path to it or every other way out (`-gpuvm-spec-window`; the base followed through copies and
+  steps). The first ops of a block several others lead to move into all of them (join: zlib's hash chain). A
+  renamed result takes a register the function does not use, or else one free there (named nowhere in the block,
+  live into no way out). `-gpuvm-global-fill=0` turns it off.
+- **Loads out of loops** (`GPUVMLoadHoist.cpp`, before register allocation): a load from a loop-invariant base that
+  no store of the loop may write (alias analysis with TBAA) is made before the loop when it cannot fault there (an
+  offset between 0 and an access made through the same value on every way into the loop, or near one); LLVM's LICM
+  leaves one in a block of the loop that does not always run (zlib's INSERT_STRING: six fields of the state).
+- **Unrolling and inlining** (`GPUVMUnrollHint.cpp`, `GPUVMTargetTransformInfo.cpp`): a small innermost loop with no
+  computable trip count (a list to its end, a string to its 0) is unrolled by 2, every exit kept (an unroll count in
+  its metadata; `-gpuvm-unroll-while`): its copies give the fill the next iteration's ops and a chained value two
+  registers. The inlining threshold is 3 times LLVM's (`-gpuvm-inline-multiplier`): a call and its return are cc 0
+  bundles, off the tick's fast loop (x18: 330-440 ns against 103 for an integer bundle).
 - **Masks of zero-extended values** (`GPUVMZeroExt.cpp`, before register allocation): `andi r, x, 2^k - 1` is dropped
   where x's leading zeros are known through PHIs (lbu, lhu, masks, compares): an i8 that crosses blocks is masked
   again by the DAG at each compare.
 - **Constants of branches** (`GPUVMHoistConstants.cpp`): a compare-and-branch's constant beyond imm6 is made once in
-  the entry block (`li` is rematerializable, so the register allocator makes it again where registers are short).
+  the entry block (`li` is rematerializable, so the register allocator makes it again where registers are short),
+  when its block is outside loops and runs at least 0.3 times as often as the entry: in a loop the fill finds it a
+  slot.
 - **Branch relaxation**: a conditional branch reaches +-256 bundles; LLVM's BranchRelaxation with 16 bytes an
   instruction (the streamer never makes more than a bundle of one) branches over a `j` (+-2 MB) when farther. A
   function beyond 2 MB is an error.
@@ -193,7 +208,8 @@ code generator's job toward bundles is the order of its ops.
   `GPUVMTargetMachine`, `GPUVMSubtarget`, `GPUVMISelLowering`, `GPUVMISelDAGToDAG`, `GPUVMSelectionDAGInfo`,
   `GPUVMInstrInfo` (copies, spills incl. quads, branch analysis over the control word's branches), `GPUVMRegisterInfo`,
   `GPUVMFrameLowering`, `GPUVMMachineFunctionInfo.h`, `GPUVMAsmPrinter` (MCInst lowering, inline asm operands),
-  `GPUVMBundleScheduler`, `GPUVMCountedLoops`, `GPUVMHoistConstants`.
+  `GPUVMBundleScheduler`, `GPUVMCountedLoops`, `GPUVMHoistConstants`, `GPUVMBundleModel` (the streamer's packing on
+  machine code), `GPUVMGlobalFill`, `GPUVMZeroExt`, `GPUVMLoadHoist`, `GPUVMUnrollHint`, `GPUVMTargetTransformInfo`.
 
 ## Linux
 
