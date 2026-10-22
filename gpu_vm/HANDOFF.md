@@ -150,6 +150,13 @@ Phases, each one agent's (one writer of the LLVM tree in WSL at a time):
 3. Codegen and clang (`gpuvm-unknown-elf`): ISel, calling convention, frame lowering, branch relaxation.
 4. compiler-rt builtins, a small bare-metal libc and crt0; test apps (hello, isaloops, CoreMark) on gvm_cpu.
 5. Linux 5.17 `arch/gpuvm` (no MMU), `make ARCH=gpuvm LLVM=1`; then boot on gvm_cpu.
+- **All programs, the devices and the games** (the user, 22 October 2026): every user program and game compiled for
+  gpu_vm (with the card's special functions and fused multiply-add), the drivers working (GPU, display, input, sound,
+  ROM, LAN where feasible), and a game comparison against the RISC-V machine. Workers exactly as the RISC-V machine
+  has them (docs/machine/multicore.md, lanes.md): up to 255 worker cores, the mailboxes, lent cores, /dev/gpu's
+  ioctls incl. REST, the mcw/mcwx API unchanged, LANES too, and gvm_cpu running workers (with a race check like
+  RVC_RACES). Agents: platform (harness gpu_vm mode, devices, drivers, workers), apps, math (libm on the card's
+  functions), ISA and latency (x19).
 - **Denser code** (22 October 2026, gpu_vm/llvm: GlobalFill, BundleModel, ZeroExt, LoadHoist, UnrollHint, inlining
   x3, PIE globals): CoreMark 149.3k -> 113.0k bundles an iteration (2.39 RISC-V instructions a bundle), gzip 19.38M ->
   15.25M, busybox's relocations 16,973 -> 758. Fair comparisons give the RISC-V build its best flags too (inlining and
