@@ -1,0 +1,7 @@
+# x18r: x18 compiled by fxc2 with other flags (0x8000 level 3, the default; 0 level 1; 0xc000 level 2; 0x8400 flow control
+# preferred; 0x8200 avoided)
+x18       gpu_vm/tick/steps/x18.hlsl
+l1        gpu_vm/tick/steps/x18.hlsl -D FXC=0
+l2        gpu_vm/tick/steps/x18.hlsl -D FXC=0xc000
+pfc       gpu_vm/tick/steps/x18.hlsl -D FXC=0x8400
+afc       gpu_vm/tick/steps/x18.hlsl -D FXC=0x8200

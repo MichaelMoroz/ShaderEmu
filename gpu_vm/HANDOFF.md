@@ -96,6 +96,18 @@ trace.ps1). Not pushed.
   as possible, the same DXBC), sq_sw2's structure, RAM 8192 texels wide, the ROM a read-only texture of its own read by
   every load (bit 30 chooses; free, so kept). 2.62 times the lean tick, the reference's on the card (`rom` case too).
   Variants are tried as copies with switches (x15m, x15sq) and the winner written into the plain step.
+- **x18** (`gpu_vm/tick/steps/x18.hlsl`, plain, 22 October 2026; README "x18") is x17 made cheaper on real code: the fast
+  loop tests the integer path first and the one-op memory body before the pairs, and step12 (paths 1 and 2) makes cc 0's
+  bundles (calls, returns, far j, the add), sel and lpc, which x17 left to the general step. An ISA change of **paths
+  only** (`isa.h`, `gvm_asm.h`'s `path()` and `path12_of()`; LLVM's MC layer must follow): a cc 0 bundle but eret takes
+  path 1 when its ops are 1's or 7's (or none), 2 when one b/h/w load or store and lite or float lite, else 0; path 1's
+  op 0 may be sel or lpc. Old binaries run as before. On the card's bench (the real programs timed by gvmbench itself:
+  `gpu_vm/tick/real`, cases coremark, coremark_pie, gzip, gunzip): CoreMark 173 -> 150 ns a bundle, PIE CoreMark 188 ->
+  155, gunzip -3%, gzip as before; the seven loops 2.24-2.72x lean (loads the least). Target 138 not reached. What
+  failed: anything added to the fast loop's control path (cc 0 there: -22 to -40% on every loop), sel or lpc in the fast
+  loop, write cache organisations that fill better on scattered stores (four ways, a skewed second way: the loops -7 to
+  -22%). Every variant is checked on WARP before the card; every loop of the tick is capped (free). gvm_gpu still
+  defaults to x17; x18 passes its 19 tests with `--check` on WARP and on the card.
 - **x17** (`gpu_vm/tick/steps/x17.hlsl`, 800 lines, plain) is the tick that runs everything: x16's fast loop, the general
   step (every op, any address, d and q, atomics), traps, eret, the special registers, interrupts, wait, sync, the
   operations' queue (8 in flight a core) and the commit's rounds (stage, write, progress), many cores, x16's full step

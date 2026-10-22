@@ -1,5 +1,7 @@
 # The tick's state, its passes and its draws (step x17 on)
 
+x18 (`gpu_vm/tick/steps/x18.hlsl`) has x17's contract unchanged: everything below holds for both.
+
 What a harness needs to run gpu_vm's tick (`gpu_vm/tick/steps/x17.hlsl`): the textures, the cbuffers, the draws of a pass
 in order, and where a core's state lies. The semantics are the reference's (`gpu_vm/ref/gvm_ref.h`); `gvmbench.cpp` is a
 working harness (`Gpu::run_pass`). Every texture is `R32G32B32A32_UINT`. The constants named here are the step's

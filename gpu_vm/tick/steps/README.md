@@ -405,3 +405,65 @@ two bundles a word) fill it by capacity, not by its sets' conflicts (the bundles
 The boot's bundles by path (gvm_cpu's trace, 6.1 M bundles): 7 (integers) 47%, 3-6 (memory) 33%, 1 10% (`step12`), 0
 10% (mostly bundles whose control word is cc 0: calls, returns, the control word's add, made op by op by the general
 step).
+
+## x18: real code's bundles cheaper (22 October 2026)
+
+On real code a bundle cost more than on the bench's loops: CoreMark 174 ns, gzip 198, gunzip 210 on the card under Linux
+(`gpu_vm/bench_real`), the lean tick 153-174 an instruction. The bench now times real programs itself
+(`gvmbench --case coremark,coremark_pie,gzip,gunzip`, in ns a bundle; `gpu_vm/tick/real/build.sh` makes the ELFs in
+`build/tick_real`: CoreMark at -O2, `gzloop.c` gzip or gunzip over bench_real's input; a check runs a short piece of
+each against the reference), and probes of one kind of bundle (`p_int`, `p_load`, `p_store`, `p_sel`, `p_call`,
+`p_scat`, `p_page`). `GVM_BPP=1` prints a ns case's bundles a pass; `gpu_vm/tick/real/mix.py` a program's mix from
+gvm_cpu's trace. Every variant is checked on WARP on every case before it runs on the card (the lead's rule since a
+GPU fault on 22 October), and every loop of x17 and x18 is capped (a guard on the pass's trips, the queue's counts
+clamped: free, `x18t`).
+
+Where real code's time goes (x17, the card at full clock):
+
+| kind of bundle | ns | CoreMark's share | gzip's |
+|---|---|---|---|
+| integer (path 7) | 103 | 54% | 52% |
+| one load or store and lite (3, 5) | 185-187 | 39% | 31% |
+| pairs (4, 6) | ~180 | 3.5% | 15% |
+| path 0: calls and returns (cc 0) | ~330-440 each, the fast loop left | 2.0% | 0.6% |
+| path 0: sel | 416 | 1.8% | 0.5% |
+
+Nsight (`trace.ps1 -Dxbc`, now with fxc2's code; `GPUTRACE_FRAME.xls` has the warp states) on CoreMark: issuing 39%,
+fixed-latency waits 30%, texture and local memory 13%, branches 9.5%, no instruction 3.5% - as the loops (p_int: 43,
+31, 2, 14): real code is not memory bound; its cost is the mix (memory bodies, the general step) and the instructions.
+The write cache's size (x18b: 130-1026 entries) moves CoreMark by 2%; passes end early only for scattered stores
+(gzip ~2,400 bundles a pass, a pass's fixed cost ~21 us of draws and state).
+
+x18 is x17 with two changes:
+- **The fast loop's order**: `path != 7` first (integers fall to the else), then the one-op memory body (3 and 5), two
+  loads, then a store pair; x17 tested the integer path, then the pairs, then the one-op body (`o4`).
+- **step12 makes cc 0's bundles, sel and lpc** (an ISA change of paths alone, `isa.h`, `gvm_asm.h`): a cc 0 bundle (jr,
+  callr, call, a far j, the add) takes path 1 when its ops are path 1's or 7's, path 2 when one load or store and lite or
+  float lite, else 0 (eret stays 0); path 1's op 0 may be sel or lpc. step12's op 1 is lite or float lite by its class.
+  jr and callr still read rs after the ops. Old binaries run unchanged (those bundles take the general step).
+
+On the card (`variants/x18o.txt`, the clock at ~2.4-2.8 GHz; x18 is o4s3; x17 on the programs as compiled):
+
+| | arith | loads | stores | adds | tight | mix | stride | floats | fmix | CoreMark ns | PIE CoreMark ns | gzip ns | gunzip ns |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| x17 | 20.48 | 12.49 | 12.78 | 22.04 | 19.11 | 16.72 | 15.83 | 7.38 | 9.73 | 172.8 | 188.0 | 207.0 | 165.4 |
+| x18 | 20.19 | 12.78 | 11.45 | 21.38 | 19.00 | 17.98 | 17.30 | 7.07 | 9.42 | 149.7 | 154.9 | 206.9 | 161.2 |
+
+CoreMark -13%, PIE CoreMark -18%, gunzip -3%, gzip as x17 (`variants/x18.txt`, the card at ~2.0 GHz: CoreMark 197 ->
+170, PIE 206 -> 181, gzip 256 -> 246, gunzip 191 -> 183). Every loop at 2x the lean tick or more (the least loads,
+2.24). The target, 138 ns on CoreMark, is not reached: 150.
+
+Tried and not kept (x18v's switches, batches `variants/x18a-t.txt`; the card's clock moved between 1.1 and 2.8 GHz this
+afternoon, so only a batch's own rows compare):
+- Code or data from a StructuredBuffer instead of RAM's texture (x18a): integers 2% slower, loads 5% faster.
+- cc 0 in the fast loop: the jr's target selected before the fetch (`CC0=1`, a field layout moved), by a branch after
+  the ops (`CC0F=1`), or fetched beside the two from rs as found (`CC0F=2`): the seven loops 22-40% slower. Anything
+  added to the fast loop's control path costs every bundle far beyond its instructions.
+- sel as op 0 of the integer path (`SELF`): the loops 5-15% slower. lpc as integer I form 24 in the fast loop (`LPCF`):
+  2.5% on the loops, CoreMark +3%.
+- step12 with every integer op (shadd, the carries, bfe) and mulh-brev (`S12X=1`): as x18 on CoreMark, floats 9% slower.
+- step12 fetching both next bundles first (`S12P`): slower; a call or return costs its exit from the fast loop.
+- The write cache as two arrays of words (`WCSPLIT`), four ways (`WAYS=4`: loads -22%), a multiplicative hash
+  (`HASH`), the second way hashed by the word's 256-word block (`SKEW`: stores a pass on random words +58%, gzip's
+  bundles a pass +83%, but the loops -7% and CoreMark +6%); the ROM in RAM's texture (`ROMROWS`: slower); loads apart
+  from stores (`ORD` 2, 3, 5, 6); the one-op body's texel read always (`TEX1`); fxc2's other flags (`variants/x18r.txt`).

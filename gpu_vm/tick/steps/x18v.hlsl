@@ -6,6 +6,7 @@
 // bundle in the general step. While an operation is in flight the fast loop takes integer bundles alone (path 7). Then
 // the commit (four draws) and the operations' rounds (stage, write, progress), as the reference makes them.
 #include "../../isa.h"
+#define GVM_I_LPC 24u   // (the LPCF probe's integer I form 24: not in isa.h)
 #ifndef ORD
 #define ORD 0
 #endif
@@ -812,7 +813,9 @@ void run(uint budget) {
         guard--;
         tp = pc >> 4;
         ops8 = 0;
-        #if GUARD == 3
+        #if defined(GUARD) && GUARD == 0   // (probe: the inner loop bounded by the budget alone, which every trip lowers)
+        [loop] while (budget > 0 && (cur.w & 7) >= thr) fstep(budget);
+#elif GUARD == 3
         [loop] while (min(budget, guard) > 0 && (cur.w & 7) >= thr) { fstep(budget); guard--; }
 #elif GUARD == 2
         [loop] while (budget - 1 < guard && (cur.w & 7) >= thr) { fstep(budget); guard--; }   // (budget 0, or a guard run out)

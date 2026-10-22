@@ -68,6 +68,11 @@ static std::string slurp(const std::string& path) {
     fclose(f);
     return s;
 }
+// fxc2's flags: D3DCOMPILE_OPTIMIZATION_LEVEL3, or a variant's -D FXC=N (a probe of the compiler's other forms)
+static UINT fxc_flags(const std::vector<D3D_SHADER_MACRO>& defs) {
+    for (auto& d : defs) if (d.Name && !strcmp(d.Name, "FXC")) return (UINT)strtoul(d.Definition, nullptr, 0);
+    return D3DCOMPILE_OPTIMIZATION_LEVEL3;
+}
 // compiled shaders are kept in bin\gvmcache by a hash of the tick, isa.h, the defines and the entry
 static ID3DBlob* compile(const char* path, const char* entry, const char* profile, const std::vector<D3D_SHADER_MACRO>& defs) {
     std::string dir(path);
@@ -94,7 +99,7 @@ static ID3DBlob* compile(const char* path, const char* entry, const char* profil
     mbstowcs(wpath.data(), path, wpath.size());
     ID3DBlob* err = nullptr;
     HRESULT hr = D3DCompileFromFile(wpath.data(), defs.data(), D3D_COMPILE_STANDARD_FILE_INCLUDE, entry, profile,
-                                    D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &code, &err);
+                                    fxc_flags(defs), 0, &code, &err);
     if (err && (FAILED(hr) || getenv("GVM_WARNINGS"))) printf("%s", (const char*)err->GetBufferPointer());
     check(hr, entry);
     if (FILE* f = fopen(cfile.c_str(), "wb")) { fwrite(code->GetBufferPointer(), 1, code->GetBufferSize(), f); fclose(f); }

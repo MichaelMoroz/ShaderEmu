@@ -1,0 +1,4 @@
+# x18t: what the inner loop's guard costs (GUARD=0: the outer loop's guard alone)
+x18       gpu_vm/tick/steps/x18.hlsl
+o4s3      gpu_vm/tick/steps/x18v.hlsl -D ORD=4 -D S12X=3
+o4s3g0    gpu_vm/tick/steps/x18v.hlsl -D ORD=4 -D S12X=3 -D GUARD=0
