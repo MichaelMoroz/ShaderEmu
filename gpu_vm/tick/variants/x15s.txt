@@ -1,0 +1,10 @@
+x15  gpu_vm/tick/steps/x15.hlsl
+# x15s: the loops' structure and stores (gpu_vm/tick/steps/x15s.hlsl's switches), against x15
+s_sw        gpu_vm/tick/steps/x15s.hlsl -D S_SW=1
+s_stl       gpu_vm/tick/steps/x15s.hlsl -D S_STL=1
+s_stlsw     gpu_vm/tick/steps/x15s.hlsl -D S_STL=1 -D S_SW=1
+s_stlflat   gpu_vm/tick/steps/x15s.hlsl -D S_STL=1 -D S_STFLAT=1
+s_stlswflat gpu_vm/tick/steps/x15s.hlsl -D S_STL=1 -D S_SW=1 -D S_STFLAT=1
+s_ilstlsw   gpu_vm/tick/steps/x15s.hlsl -D S_ILOOP=1 -D S_STL=1 -D S_SW=1
+s_cls       gpu_vm/tick/steps/x15s.hlsl -D S_CLS=1
+s_clsswflat gpu_vm/tick/steps/x15s.hlsl -D S_CLS=1 -D S_SW=1 -D S_STFLAT=1

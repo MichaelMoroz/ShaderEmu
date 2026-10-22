@@ -1,0 +1,21 @@
+# x12's switches one at a time and in pairs (gvmbench --variants gpu_vm/tick/variants/x12a.txt)
+base         gpu_vm/tick/steps/x12.hlsl
+noprefetch   gpu_vm/tick/steps/x12.hlsl -D PREFETCH=0
+wc64         gpu_vm/tick/steps/x12.hlsl -D WCN=64
+wc256        gpu_vm/tick/steps/x12.hlsl -D WCN=256
+arr72        gpu_vm/tick/steps/x12.hlsl -D ARR=72
+arr128       gpu_vm/tick/steps/x12.hlsl -D ARR=128
+q1late       gpu_vm/tick/steps/x12.hlsl -D Q1_LATE=1
+intfirst     gpu_vm/tick/steps/x12.hlsl -D INT_FIRST=1
+switch       gpu_vm/tick/steps/x12.hlsl -D DISPATCH_SWITCH=1
+okmin        gpu_vm/tick/steps/x12.hlsl -D OK_MIN=1
+sink0        gpu_vm/tick/steps/x12.hlsl -D SINK0=1
+storeflat    gpu_vm/tick/steps/x12.hlsl -D STORE_FLAT=1
+hash         gpu_vm/tick/steps/x12.hlsl -D HASH=1
+okmin+int1st gpu_vm/tick/steps/x12.hlsl -D OK_MIN=1 -D INT_FIRST=1
+okmin+switch gpu_vm/tick/steps/x12.hlsl -D OK_MIN=1 -D DISPATCH_SWITCH=1
+okmin+sink0  gpu_vm/tick/steps/x12.hlsl -D OK_MIN=1 -D SINK0=1
+okmin+flat   gpu_vm/tick/steps/x12.hlsl -D OK_MIN=1 -D STORE_FLAT=1
+okmin+q1late gpu_vm/tick/steps/x12.hlsl -D OK_MIN=1 -D Q1_LATE=1
+okmin+hash   gpu_vm/tick/steps/x12.hlsl -D OK_MIN=1 -D HASH=1
+okmin+wc64   gpu_vm/tick/steps/x12.hlsl -D OK_MIN=1 -D WCN=64

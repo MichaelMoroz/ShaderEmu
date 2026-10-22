@@ -1,0 +1,10 @@
+x14             gpu_vm/tick/steps/x14.hlsl
+# x14i: the integer bundle and every bundle's fixed cost (gpu_vm/tick/steps/x14i.hlsl's switches), against x14
+i_cc            gpu_vm/tick/steps/x14i.hlsl -D I_CC=1
+i_one           gpu_vm/tick/steps/x14i.hlsl -D I_ONE=1
+i_dec           gpu_vm/tick/steps/x14i.hlsl -D I_CC=1 -D I_ONE=1 -D I_TRIM=1
+i_l1            gpu_vm/tick/steps/x14i.hlsl -D I_LOOPS=1
+i_l2            gpu_vm/tick/steps/x14i.hlsl -D I_LOOPS=2
+i_l1all         gpu_vm/tick/steps/x14i.hlsl -D I_LOOPS=1 -D I_CC=1 -D I_ONE=1 -D I_TRIM=1
+i_l2all         gpu_vm/tick/steps/x14i.hlsl -D I_LOOPS=2 -D I_CC=1 -D I_ONE=1 -D I_TRIM=1
+i_l2cc          gpu_vm/tick/steps/x14i.hlsl -D I_LOOPS=2 -D I_CC=1 -D I_TRIM=1

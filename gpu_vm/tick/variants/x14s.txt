@@ -1,0 +1,11 @@
+x14  gpu_vm/tick/steps/x14.hlsl
+# x14s: the loops' structure (gpu_vm/tick/steps/x14s.hlsl's switches), against x14
+s_tk        gpu_vm/tick/steps/x14s.hlsl -D S_TK=1 -D S_COND=1
+s_switch    gpu_vm/tick/steps/x14s.hlsl -D S_TK=1 -D S_COND=1 -D S_SWITCH=1
+s_tail3     gpu_vm/tick/steps/x14s.hlsl -D S_TK=1 -D S_COND=1 -D S_TAIL3=1
+s_unr2      gpu_vm/tick/steps/x14s.hlsl -D S_TK=1 -D S_COND=1 -D S_LOOP=4
+s_cls       gpu_vm/tick/steps/x14s.hlsl -D S_TK=1 -D S_COND=1 -D S_LOOP=1
+s_clsflat   gpu_vm/tick/steps/x14s.hlsl -D S_TK=1 -D S_COND=1 -D S_LOOP=1 -D S_STFLAT=1
+s_clsn      gpu_vm/tick/steps/x14s.hlsl -D S_TK=1 -D S_LOOP=5
+s_int       gpu_vm/tick/steps/x14s.hlsl -D S_TK=1 -D S_COND=1 -D S_LOOP=2
+s_disp      gpu_vm/tick/steps/x14s.hlsl -D S_TK=1 -D S_COND=1 -D S_LOOP=3
