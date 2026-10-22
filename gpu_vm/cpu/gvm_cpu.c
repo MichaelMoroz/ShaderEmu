@@ -498,9 +498,10 @@ static uint32_t load_elf(const char *path) {
 }
 
 // The initial stack, as Linux's for a program: argc, argv[], 0, envp[] (none), 0, auxv (AT_PAGESZ, AT_NULL); r5 argc,
-// r6 argv, r7 envp too
+// r6 argv, r7 envp too. The argument strings start 64 bytes below RAM's end: the compiler may load up to 16 bytes past
+// an access through the same register, so the last 64 bytes of RAM are never used (the kernel reserves them too).
 static void setup_stack(gvm_core *c, int argc, char **argv) {
-    uint32_t sp = H.m.ram_end - 16, ptr[256], heap = H.heap_start;
+    uint32_t sp = H.m.ram_end - 64, ptr[256], heap = H.heap_start;
     if (argc > 250) argc = 250;
     for (int i = argc - 1; i >= 0; i--) {
         uint32_t len = (uint32_t)strlen(argv[i]) + 1;

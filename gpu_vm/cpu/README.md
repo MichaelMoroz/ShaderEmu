@@ -110,7 +110,8 @@ the kernel sets TVEC a trap is gvm_cpu's trap report; halt and power-off set TVE
 
 ## The program's start (without --dtb)
 
-`r2` (sp) points at Linux's initial stack, 16-aligned, under the argument strings at RAM's top: `argc`, `argv[0..]`
+`r2` (sp) points at Linux's initial stack, 16-aligned, under the argument strings, which start 64 bytes below RAM's end (the last 64 bytes are never used: the
+compiler's speculative loads reach 16 bytes past an access): `argc`, `argv[0..]`
 (argv[0] is the program's path), 0, envp (none) 0, auxv `AT_PAGESZ` 4096, `AT_NULL`. Also `r5` = argc, `r6` = argv,
 `r7` = envp. A megabyte below that is kept for the stack (the mmap area starts under it). Every other register is 0.
 

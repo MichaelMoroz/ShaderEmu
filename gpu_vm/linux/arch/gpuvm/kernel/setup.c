@@ -54,6 +54,11 @@ static void __init gvm_bootmem(void)
 	high_memory = (void *)memory_end;
 
 	memblock_reserve(__pa(_text), _end - _text);
+	/*
+	 * The compiler may load up to 16 bytes past an access through the same register (a speculative load made early,
+	 * gpu_vm/llvm/README.md); gpu_vm faults only beyond RAM's end, so the last 64 bytes of RAM are never used.
+	 */
+	memblock_reserve(memory_end - 64, 64);
 	early_init_fdt_reserve_self();
 	early_init_fdt_scan_reserved_mem();
 	memblock_dump_all();

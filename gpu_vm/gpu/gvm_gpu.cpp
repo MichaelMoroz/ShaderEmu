@@ -852,8 +852,10 @@ static uint32_t load_elf(const char* path) {
     free(p);
     return entry;
 }
+// gvm_cpu's: the arguments from 64 bytes below RAM's end (the last 64 bytes are never used: the compiler's loads may
+// reach 16 bytes past an access)
 static void setup_stack(std::vector<uint32_t>& x, int argc, char** argv) {
-    uint32_t sp = O.ram_end - 16, ptr[256], heap = g_heap_start;
+    uint32_t sp = O.ram_end - 64, ptr[256], heap = g_heap_start;
     if (argc > 250) argc = 250;
     for (int i = argc - 1; i >= 0; i--) {
         uint32_t len = (uint32_t)strlen(argv[i]) + 1;
