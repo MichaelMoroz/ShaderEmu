@@ -5197,7 +5197,7 @@ diff --git a/code/qcommon/vm.c b/code/qcommon/vm.c
 index 9de7e15f..0ca799f6 100644
 --- a/code/qcommon/vm.c
 +++ b/code/qcommon/vm.c
-@@ -335,6 +335,26 @@ Dlls will call this directly
+@@ -335,6 +335,42 @@ Dlls will call this directly
   
  ============
  */
@@ -5211,12 +5211,28 @@ index 9de7e15f..0ca799f6 100644
 + * may be on a worker core while this one is in the client's.
 + */
 +static intptr_t (*se_calls[3])( intptr_t * );
++#ifdef __gpuvm__
++/* (gpu_vm passes the arguments of a "..." function on the stack, not in registers: they are read as such) */
++#define SE_CALLS( n ) \
++static intptr_t SE_DllSyscall##n( intptr_t a0, ... ) { \
++	intptr_t args[MAX_VMSYSCALL_ARGS]; \
++	va_list ap; \
++	int i; \
++	args[0] = a0; \
++	va_start( ap, a0 ); \
++	for ( i = 1; i < 16; i++ ) \
++		args[i] = va_arg( ap, intptr_t ); \
++	va_end( ap ); \
++	return se_calls[n]( args ); \
++}
++#else
 +#define SE_CALLS( n ) \
 +static intptr_t SE_DllSyscall##n( intptr_t a0, intptr_t a1, intptr_t a2, intptr_t a3, intptr_t a4, intptr_t a5, intptr_t a6, intptr_t a7, \
 +	intptr_t a8, intptr_t a9, intptr_t a10, intptr_t a11, intptr_t a12, intptr_t a13, intptr_t a14, intptr_t a15 ) { \
 +	intptr_t args[MAX_VMSYSCALL_ARGS] = { a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15 }; \
 +	return se_calls[n]( args ); \
 +}
++#endif
 +SE_CALLS( 0 ) SE_CALLS( 1 ) SE_CALLS( 2 )
 +#endif
 +
@@ -5224,7 +5240,7 @@ index 9de7e15f..0ca799f6 100644
  intptr_t QDECL VM_DllSyscall( intptr_t arg, ... ) {
  #if !id386 || defined __clang__
    // rcg010206 - see commentary above
-@@ -610,6 +630,22 @@ vm_t *VM_Create( const char *module, intptr_t (*systemCalls)(intptr_t *),
+@@ -610,6 +646,22 @@ vm_t *VM_Create( const char *module, intptr_t (*systemCalls)(intptr_t *),
  
  	Q_strncpyz(vm->name, module, sizeof(vm->name));
  
@@ -5247,7 +5263,7 @@ index 9de7e15f..0ca799f6 100644
  	do
  	{
  		retval = FS_FindVM(&startSearch, filename, sizeof(filename), module, (interpret == VMI_NATIVE));
-@@ -746,6 +782,9 @@ void VM_Forced_Unload_Done(void) {
+@@ -746,6 +798,9 @@ void VM_Forced_Unload_Done(void) {
  }
  
  void *VM_ArgPtr( intptr_t intValue ) {
@@ -5257,7 +5273,7 @@ index 9de7e15f..0ca799f6 100644
  	if ( !intValue ) {
  		return NULL;
  	}
-@@ -762,6 +801,9 @@ void *VM_ArgPtr( intptr_t intValue ) {
+@@ -762,6 +817,9 @@ void *VM_ArgPtr( intptr_t intValue ) {
  }
  
  void *VM_ExplicitArgPtr( vm_t *vm, intptr_t intValue ) {
@@ -5267,7 +5283,7 @@ index 9de7e15f..0ca799f6 100644
  	if ( !intValue ) {
  		return NULL;
  	}
-@@ -813,6 +855,25 @@ intptr_t QDECL VM_Call( vm_t *vm, int callnum, ... )
+@@ -813,6 +871,25 @@ intptr_t QDECL VM_Call( vm_t *vm, int callnum, ... )
  	if(!vm || !vm->name[0])
  		Com_Error(ERR_FATAL, "VM_Call with NULL vm");
  
