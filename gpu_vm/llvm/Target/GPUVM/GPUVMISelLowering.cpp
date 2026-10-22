@@ -404,6 +404,10 @@ SDValue GPUVMTargetLowering::LowerFormalArguments(
       SDValue FIN = DAG.getFrameIndex(FI, MVT::i32);
       V = DAG.getLoad(VA.getLocVT(), DL, Chain, FIN,
                       MachinePointerInfo::getFixedStack(MF, FI));
+      // A part of a vector is not the vector's memory (each part has a slot
+      // of its own): not a load the argument's copy may be elided into.
+      if (Ins[VA.getValNo()].ArgVT.isVector())
+        V = DAG.getFreeze(V);
     }
     InVals.push_back(convertLocToVal(DAG, DL, VA, V));
   }

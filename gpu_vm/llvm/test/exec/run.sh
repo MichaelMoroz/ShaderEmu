@@ -14,7 +14,7 @@ LEVELS="0 1 2 s"
 if [ "${1:-}" = "-O" ]; then LEVELS=$2; shift 2; fi
 mkdir -p "$OUT/rt"
 
-CC="$BIN/clang --target=gpuvm-unknown-elf -ffreestanding -fno-builtin-printf -I$HERE/rt -Wno-everything"
+CC="$BIN/clang --target=gpuvm-unknown-elf -ffreestanding -nostdlibinc -I$HERE/rt/include -I$HERE/rt -Wno-everything"
 make -s -C "$ROOT/gpu_vm/cpu" CC=gcc >/dev/null || exit 1
 CPU=$ROOT/build/gvm_cpu/gvm_cpu
 
@@ -24,6 +24,8 @@ if [ ! -f "$RT" ] || [ "$BIN/clang" -nt "$RT" ] || [ -n "$(find "$HERE/rt" -newe
     rm -f "$OUT"/rt/*.o "$RT" "$OUT/crt0.o"
     $CC -c -o "$OUT/crt0.o" "$HERE/rt/crt0.s" || exit 1
     $CC -O2 -fno-math-errno -c -o "$OUT/rt/libc.o" "$HERE/rt/libc.c" || exit 1
+    # weak: a test may define a function of the same name
+    "$BIN/llvm-objcopy" --weaken "$OUT/rt/libc.o" || exit 1
     B=$SRC/compiler-rt/lib/builtins
     for f in absvdi2 absvsi2 adddf3 addvdi3 addvsi3 ashldi3 ashrdi3 bswapdi2 bswapsi2 clzdi2 clzsi2 cmpdi2 \
              comparedf2 comparesf2 ctzdi2 ctzsi2 divdc3 divdf3 divdi3 divmoddi4 divmodsi4 divsc3 divsi3 \

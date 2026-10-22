@@ -37,6 +37,8 @@ public:
 
   EVT getSetCCResultType(const DataLayout &DL, LLVMContext &Context,
                          EVT VT) const override {
+    if (VT.isVector())
+      return VT.changeVectorElementTypeToInteger();
     return MVT::i32;
   }
 

@@ -327,10 +327,10 @@ index 9405cf012..2e4a6a902 100644
                                   unsigned FLen);
 diff --git a/clang/lib/CodeGen/Targets/GPUVM.cpp b/clang/lib/CodeGen/Targets/GPUVM.cpp
 new file mode 100644
-index 000000000..9fb3a9123
+index 000000000..c35e06f4e
 --- /dev/null
 +++ b/clang/lib/CodeGen/Targets/GPUVM.cpp
-@@ -0,0 +1,99 @@
+@@ -0,0 +1,100 @@
 +//===- GPUVM.cpp ----------------------------------------------------------===//
 +//
 +// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -340,10 +340,10 @@ index 000000000..9fb3a9123
 +//===----------------------------------------------------------------------===//
 +//
 +// gpu_vm's ABI (gpu_vm/GPU_VM.md, "ABI"): integers narrower than 32 bits
-+// extended; aggregates up to 8 bytes in registers (as i32 or i64), larger
-+// ones by reference (a copy the caller makes), returned the same way (larger
-+// ones by a hidden pointer). Variadic arguments are on the stack, 4 bytes a
-+// slot (the backend puts them there).
++// extended; aggregates and vectors up to 8 bytes in registers (as i32 or
++// i64), larger ones by reference (a copy the caller makes), and returned
++// the same way (larger ones by a hidden pointer). Variadic arguments are on
++// the stack, 4 bytes a slot (the backend puts them there).
 +//
 +//===----------------------------------------------------------------------===//
 +
@@ -387,7 +387,7 @@ index 000000000..9fb3a9123
 +    return ABIArgInfo::getIgnore();
 +
 +  uint64_t Size = getContext().getTypeSize(Ty);
-+  if (!isAggregateTypeForABI(Ty)) {
++  if (!isAggregateTypeForABI(Ty) && !Ty->isVectorType()) {
 +    if (const auto *ED = Ty->getAsEnumDecl())
 +      Ty = ED->getIntegerType();
 +    if (const auto *EIT = Ty->getAs<BitIntType>())
@@ -412,7 +412,8 @@ index 000000000..9fb3a9123
 +  if (isEmptyRecord(getContext(), Ty, true))
 +    return Slot.asRValue();
 +  auto TInfo = getContext().getTypeInfoInChars(Ty);
-+  bool IsIndirect = isAggregateTypeForABI(Ty) && TInfo.Width.getQuantity() > 8;
++  bool IsIndirect = (isAggregateTypeForABI(Ty) || Ty->isVectorType()) &&
++                    TInfo.Width.getQuantity() > 8;
 +  return emitVoidPtrVAArg(CGF, VAListAddr, Ty, IsIndirect, TInfo,
 +                          CharUnits::fromQuantity(4),
 +                          /*AllowHigherAlign=*/false, Slot);

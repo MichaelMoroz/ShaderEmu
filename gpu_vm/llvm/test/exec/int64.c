@@ -22,7 +22,7 @@ NI int eq(i64 a, i64 b) { return a == b; }
 NI i64 neg(i64 a) { return -(u64)a; }
 NI i64 sext(int a) { return a; }
 NI u64 zext(unsigned a) { return a; }
-NI int trunc(i64 a) { return (int)a; }
+NI int trunc32(i64 a) { return (int)a; }
 NI u64 mul32(unsigned a, unsigned b) { return (u64)a * b; }
 NI i64 smul32(int a, int b) { return (i64)a * b; }
 NI int clz64(u64 a) { return __builtin_clzll(a); }
@@ -60,7 +60,7 @@ int main(void) {
   CHECK_EQ(neg(0x100000000ll), -0x100000000ll);
   CHECK_EQ(sext(-3), -3ll);
   CHECK_EQ(zext(0xfffffffdu), 0xfffffffdll);
-  CHECK_EQ(trunc(0x123456789ll), 0x23456789);
+  CHECK_EQ(trunc32(0x123456789ll), 0x23456789);
   CHECK_EQ(mul32(0xffffffffu, 0xffffffffu) == 0xfffffffe00000001ull, 1);
   CHECK_EQ(smul32(-2, 0x40000000), -0x80000000ll);
   CHECK_EQ(clz64(1), 63);
