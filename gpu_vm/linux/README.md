@@ -75,11 +75,21 @@ At **0x016b8280** (`docs/machine/console.md`, "Words in memory"), plain memory r
   compiler calls through `la`+`callr` when far). The assembly files here already call out by `la t0, sym; callr t0`.
 - `__builtin_ctz`, `__builtin_clz` (bitops) and `__builtin_bswap32` as the ops.
 
+## Booting it
+
+    bash gpu_vm/linux/build.sh                 # sync config initramfs image dtbs: ~/gpu_vm/linux-build
+    make -C gpu_vm/cpu CC=gcc
+    build/gvm_cpu/gvm_cpu --dtb ~/gpu_vm/linux-build/arch/gpuvm/boot/dts/gvm.dtb ~/gpu_vm/linux-build/vmlinux
+
+The initramfs (`initramfs/`): `/dev/console` and a first `/init` (`init.S`, made flat with no relocations by
+`mkflat.py`) that prints a line and writes back every line typed. On 22 October 2026 the boot reaches it:
+`Run /init as init process`, its line, and a typed line back (the tty's echo, then init's), about 70 million bundles
+to `/init`.
+
 ## State (22 October 2026)
 
-Done without the gpuvm compiler: `gpuvm_defconfig` configures (LLVM=1), `headers_install`, `dtbs`, and `build.sh check`
-(every C file of the defconfig's kernel compiles, 0 errors; the arch's .S files, preprocessed, assemble with
-`llvm-mc -triple=gpuvm`). An immediate that starts with `(` is taken for a memory operand by the assembler: entry.S
-writes `0 + _TIF_...`.
-Not done: building and booting vmlinux (needs clang for gpuvm and lld's gpuvm), SMP (stores reach other cores only at
-the commit, an amo is atomic on its own core only), the shaderemu drivers (GPU, input, sound, net), workers.
+Built with clang for gpuvm (`gpu_vm/llvm`) and booted on gvm_cpu to a user program on the console: traps, syscalls,
+the timer, the console both ways, flat programs. Not done: a libc and busybox for gpuvm (and an elf2flt that writes
+bFLT relocations for long immediates), the ROM disk tried with a real image, SMP (stores reach other cores only at the
+commit, an amo is atomic on its own core only), the shaderemu drivers (GPU, input, sound, net), workers. The
+"console [hvc0] enabled" line shows twice: the boot console and hvc0 both print it into the same ring.
