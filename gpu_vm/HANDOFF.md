@@ -117,6 +117,10 @@ Phases, each one agent's (one writer of the LLVM tree in WSL at a time):
 3. Codegen and clang (`gpuvm-unknown-elf`): ISel, calling convention, frame lowering, branch relaxation.
 4. compiler-rt builtins, a small bare-metal libc and crt0; test apps (hello, isaloops, CoreMark) on gvm_cpu.
 5. Linux 5.17 `arch/gpuvm` (no MMU), `make ARCH=gpuvm LLVM=1`; then boot on gvm_cpu.
+- **The kernel and userland on the GPU** (goal set 22 October 2026): tick x17 makes the whole ISA (general step,
+  traps, SRs, interrupts, wait/sync, the operations), then a GPU harness boots Linux on the card. A hard requirement
+  (the user): the tick stays 2-3x the lean RISC-V tick's effective work a second: every one of the seven loops at 2x
+  or more on the bench, and on real work: CoreMark's iterations a second and a Linux boot on both machines on the card.
 - **State at the end of 22 October 2026: all five phases work.** gvm_cpu (`gpu_vm/cpu`, 19 tests); the LLVM target
   GPUVM (`gpu_vm/llvm/README.md`): MC layer, codegen and clang (`gpuvm-unknown-elf`, `gpuvm-unknown-linux`); exec
   tests 56/56, GCC c-torture 96.5% (-O0) and 96.2% (-O2), 99.7% of what the host passes; zlib and Lua as the host's;
