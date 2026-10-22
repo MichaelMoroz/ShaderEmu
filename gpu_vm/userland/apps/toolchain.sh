@@ -21,7 +21,9 @@ ARCH_FLAGS="$GVM_MATH"
 # Every function in a section of its own: a call farther than 2 MB inside one section is an error of the assembler
 # (no relocation for lld's thunks: gpu_vm/userland/apps/bugs/far_call.c, QuickJS's quickjs.c); across sections it is
 # lld's to reach
-GVM_CFLAGS=${GVM_CFLAGS:--ffunction-sections}
+# No speculative loads by the +-16-byte rule of the fill across blocks: it moves a load above the test that guards
+# it (bugs/spec_load.c: QuickJS faulted at its start)
+GVM_CFLAGS=${GVM_CFLAGS:--ffunction-sections -mllvm -gpuvm-spec-window=0}
 # the C++ library's headers (templates only, as on the RISC-V machine: linux/tdawn/build.sh): libstdc++ 13.3's from
 # the RISC-V toolchain, a 32-bit Linux's bits
 CXXINC=${GVM_CXXINC:-$HOME/nm/work/toolchain/riscv32-buildroot-linux-gnu/include/c++/13.3.0}
