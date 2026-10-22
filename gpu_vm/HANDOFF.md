@@ -138,6 +138,12 @@ Phases, each one agent's (one writer of the LLVM tree in WSL at a time):
 3. Codegen and clang (`gpuvm-unknown-elf`): ISel, calling convention, frame lowering, branch relaxation.
 4. compiler-rt builtins, a small bare-metal libc and crt0; test apps (hello, isaloops, CoreMark) on gvm_cpu.
 5. Linux 5.17 `arch/gpuvm` (no MMU), `make ARCH=gpuvm LLVM=1`; then boot on gvm_cpu.
+- **Userland on the card** (22 October 2026): busybox 1.37 (hush, 286 applets), init, a root file system as the
+  initramfs, Lua, QuickJS, minigzip, CoreMark, gvm-tests (`gpu_vm/userland/README.md`); `systest.sh cpu|gpu` types a
+  46-command session and checks it: PASS on gvm_cpu and on the card, lockstep with the reference clean over whole
+  sessions. On the card: 8.9 s to the prompt, 0.35-0.4 s a command: each exec relocates busybox's 15,256 words (~290
+  passes, each ending on a write cache's set after ~55 scattered stores): PC-relative globals in the compiler and a
+  write cache for scattered stores are the levers.
 - **On real work gpu_vm is 1.59-1.67x the lean RISC-V tick, short of the 2-3x required** (`gpu_vm/bench_real`, 22
   October 2026: CoreMark 38.4 against 24.2 iterations/s under each machine's Linux, gzip 4.01 against 6.70 s, the same
   clang and card). Two levers, an agent each: denser code (1.81 RISC-V instructions a bundle on CoreMark: 18.6% of its
