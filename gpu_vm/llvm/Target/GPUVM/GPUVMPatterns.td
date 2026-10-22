@@ -468,3 +468,16 @@ let AddedComplexity = 2 in {
 def : Pat<(fdiv_approx fpimm_one, (fsqrt (f32 GPR:$a))), (FRSQRT GPR:$a)>;
 def : Pat<(fdiv_approx fpimm_one, (f32 GPR:$a)), (FRCP GPR:$a)>;
 }
+
+// Tail calls: j to the callee (after the epilogue), jr for one in a register
+// the epilogue does not restore.
+def gpuvm_tail : SDNode<"GPUVMISD::TAIL", SDT_GPUVMCall,
+                        [SDNPHasChain, SDNPOptInGlue, SDNPVariadic]>;
+let isCall = 1, isTerminator = 1, isReturn = 1, isBarrier = 1, Uses = [R2],
+    hasSideEffects = 0, mayLoad = 0, mayStore = 0 in {
+def PseudoTAIL : GPUVMPseudo<(outs), (ins calltarget:$dst)>;
+def PseudoTAILR : GPUVMPseudo<(outs), (ins GPRTC:$rs)>;
+}
+def : Pat<(gpuvm_tail tglobaladdr:$f), (PseudoTAIL tglobaladdr:$f)>;
+def : Pat<(gpuvm_tail texternalsym:$f), (PseudoTAIL texternalsym:$f)>;
+def : Pat<(gpuvm_tail (i32 GPRTC:$r)), (PseudoTAILR GPRTC:$r)>;

@@ -111,3 +111,9 @@ def GPRQTuples : RegisterTuples<[sub0, sub1, sub2, sub3],
 def GPRQ : RegisterClass<"GPUVM", [untyped], 128, (add GPRQTuples)> {
   let Size = 128;
 }
+
+// A tail call's register: none the epilogue restores (ra, s0-s23), not t26
+// (a range thunk's).
+def GPRTC : RegisterClass<"GPUVM", [i32], 32,
+    (add (sequence "R%u", 13, 31), (sequence "R%u", 56, 62),
+         (sequence "R%u", 5, 12))>;

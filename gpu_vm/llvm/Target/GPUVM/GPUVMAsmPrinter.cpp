@@ -130,6 +130,15 @@ void llvm::lowerGPUVMMachineInstrToMCInst(const MachineInstr *MI,
     OutMI.setOpcode(GPUVM::JR);
     OutMI.addOperand(MCOperand::createReg(GPUVM::R1));
     return;
+  case GPUVM::PseudoTAIL:
+  case GPUVM::PseudoTAILR: {
+    OutMI.setOpcode(MI->getOpcode() == GPUVM::PseudoTAIL ? GPUVM::J
+                                                         : GPUVM::JR);
+    MCOperand MCOp;
+    lowerGPUVMMachineOperandToMCOperand(MI->getOperand(0), MCOp, AP);
+    OutMI.addOperand(MCOp);
+    return;
+  }
   default:
     break;
   }

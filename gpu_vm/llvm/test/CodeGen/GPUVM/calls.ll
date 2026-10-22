@@ -2,7 +2,7 @@
 ; The calling convention: a0-a7, then 4-byte stack slots; a value of two
 ; parts (i64, double) whole in registers or whole on the stack; variadic
 ; arguments on the stack; results in a0, a1, larger ones by sret; ra and
-; s0-s23 kept.
+; s0-s23 kept; tail calls.
 
 declare i32 @callee(i32, i32, i32, i32, i32, i32, i32, i32, i32, i32)
 declare i64 @callee64(i32, i64, i32, i64, i32, i64, i64)
@@ -184,3 +184,49 @@ define i32 @keep(i32 %a, i32 %b) {
 
 declare void @llvm.va_start.p0(ptr)
 declare void @llvm.va_end.p0(ptr)
+
+; tail calls: j to the callee after the epilogue, jr through a register the
+; epilogue keeps; not with arguments on the stack
+define i32 @tail(i32 %a) {
+; CHECK-LABEL: tail:
+; CHECK: addi sp, sp, -16
+; CHECK: sw ra, 12(sp)
+; CHECK: addi a0, a0, 1
+; CHECK: sw zero, 4(sp)
+; CHECK: li a1, 0
+; CHECK: sw zero, 0(sp)
+; CHECK: li a2, 0
+; CHECK: li a3, 0
+; CHECK: li a4, 0
+; CHECK: li a5, 0
+; CHECK: li a6, 0
+; CHECK: li a7, 0
+; CHECK: call callee
+; CHECK: lw ra, 12(sp)
+; CHECK: addi sp, sp, 16
+; CHECK: ret
+  %b = add i32 %a, 1
+  %r = tail call i32 @callee(i32 %b, i32 0, i32 0, i32 0, i32 0, i32 0, i32 0, i32 0, i32 0, i32 0)
+  ret i32 %r
+}
+
+declare i32 @callee2(i32, i32)
+
+define i32 @tail_regs(i32 %a, i32 %b) {
+; CHECK-LABEL: tail_regs:
+; CHECK: mv t0, a0
+; CHECK: mv a0, a1
+; CHECK: mv a1, t0
+; CHECK: j callee2
+  %r = tail call i32 @callee2(i32 %b, i32 %a)
+  ret i32 %r
+}
+
+define i32 @tail_indirect(ptr %f, i32 %a) {
+; CHECK-LABEL: tail_indirect:
+; CHECK: mv t0, a0
+; CHECK: mv a0, a1
+; CHECK: jr t0
+  %r = tail call i32 %f(i32 %a, i32 %a)
+  ret i32 %r
+}

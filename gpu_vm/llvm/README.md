@@ -153,7 +153,8 @@ code generator's job toward bundles is the order of its ops.
   instruction (the streamer never makes more than a bundle of one) branches over a `j` (+-2 MB) when farther. A
   function beyond 2 MB is an error.
 - **Calls**: `call sym` (R_GVM_J18, +-2 MB; ld.lld's thunks beyond, through t26, which is caller-saved), `callr` for
-  indirect ones, `jr ra` to return. No tail calls.
+  indirect ones, `jr ra` to return. Tail calls (arguments in registers alone): `j sym` after the epilogue, `jr`
+  through a register the epilogue does not restore (`GPRTC`).
 - **Debug info**: `-g` gives the same code: the code generator's labels (debug info's, CFI's, a function's end) are
   placed after the open bundle instead of closing it (`setSoftLabels`); a block that is branched to closes it; a
   line entry is a bundle's (the last `.loc` in it).
@@ -185,7 +186,7 @@ arches); the link of vmlinux fails on the port's side: `arch/gpuvm/lib/Makefile`
 - No libc, compiler-rt or crt for gpu_vm yet (the tests' runtime stands in); no C++ runtime.
 - No unwind information (CFI) for frames, so no C++ exceptions and no unwinding; `-g` line tables and variables work
   (a line entry is a bundle's).
-- No tail calls; no `bump` (the control word's add) and no `ld`/`sd` pairs from the code generator; i64 loads and
+- No `bump` (the control word's add) and no `ld`/`sd` pairs from the code generator; i64 loads and
   stores are two words.
 - double is software only; `llvm.fma` is a libcall (fmad rounds the product).
 - TLS is local exec only (static links); no PIC (`-fPIC` makes the same absolute code).

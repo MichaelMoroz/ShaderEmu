@@ -482,12 +482,33 @@ SDValue GPUVMTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
   MachineFrameInfo &MFI = MF.getFrameInfo();
   EVT PtrVT = getPointerTy(DAG.getDataLayout());
 
-  CLI.IsTailCall = false;
-
   SmallVector<CCValAssign, 16> ArgLocs;
   CCState CCInfo(CallConv, IsVarArg, MF, ArgLocs, *DAG.getContext());
   CCInfo.AnalyzeCallOperands(Outs, CC_GPUVM);
   unsigned NumBytes = CCInfo.getStackSize();
+
+  // A tail call (j to the callee after the epilogue): its arguments in
+  // registers alone, nothing of the caller's frame passed.
+  if (CLI.IsTailCall) {
+    const Function &Caller = MF.getFunction();
+    bool OK = NumBytes == 0 && !IsVarArg && !Caller.isVarArg() &&
+              !Caller.hasStructRetAttr() && CallConv == Caller.getCallingConv() &&
+              !Caller.getFnAttribute("disable-tail-calls").getValueAsBool() &&
+              !(CLI.CB && CLI.CB->isMustTailCall() && NumBytes);
+    for (const ISD::OutputArg &O : Outs)
+      if (O.Flags.isByVal() || O.Flags.isSRet())
+        OK = false;
+    // the results must be where the caller's are
+    SmallVector<CCValAssign, 4> RVLocs;
+    CCState RetCCInfo(CallConv, IsVarArg, MF, RVLocs, *DAG.getContext());
+    RetCCInfo.AnalyzeCallResult(Ins, RetCC_GPUVM);
+    for (const CCValAssign &VA : RVLocs)
+      if (!VA.isRegLoc())
+        OK = false;
+    CLI.IsTailCall = OK;
+  }
+  if (CLI.IsTailCall)
+    MFI.setHasTailCall();
 
   // byval arguments: a copy, passed by its address.
   SmallVector<SDValue, 8> ByValArgs;
@@ -507,7 +528,8 @@ SDValue GPUVMTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
     ByValArgs.push_back(FIPtr);
   }
 
-  Chain = DAG.getCALLSEQ_START(Chain, NumBytes, 0, DL);
+  if (!CLI.IsTailCall)
+    Chain = DAG.getCALLSEQ_START(Chain, NumBytes, 0, DL);
 
   SmallVector<std::pair<Register, SDValue>, 8> RegsToPass;
   SmallVector<SDValue, 8> MemOpChains;
@@ -557,6 +579,9 @@ SDValue GPUVMTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
   Ops.push_back(DAG.getRegisterMask(Mask));
   if (Glue.getNode())
     Ops.push_back(Glue);
+
+  if (CLI.IsTailCall)
+    return DAG.getNode(GPUVMISD::TAIL, DL, MVT::Other, Ops);
 
   SDVTList NodeTys = DAG.getVTList(MVT::Other, MVT::Glue);
   Chain = DAG.getNode(GPUVMISD::CALL, DL, NodeTys, Ops);

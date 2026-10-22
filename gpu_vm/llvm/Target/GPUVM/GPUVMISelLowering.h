@@ -99,7 +99,7 @@ public:
                       SelectionDAG &DAG) const override;
 
   bool mayBeEmittedAsTailCall(const CallInst *CI) const override {
-    return false;
+    return CI->isTailCall();
   }
 
   // The commit's operation: a descriptor {kind, dst, src or word, bytes}
