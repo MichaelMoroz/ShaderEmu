@@ -5,7 +5,9 @@
 //
 //   gvm_cpu [options] PROGRAM.elf [ARGS...]
 //   gvm_cpu [options] --bin FILE --at ADDR [--entry ADDR] [ARGS...]
+//   gvm_cpu [options] --dtb gvm.dtb vmlinux   (Linux: r5 = 0x1000, the device tree; the console device on stdin/stdout)
 #define _CRT_SECURE_NO_WARNINGS
+#define _POSIX_C_SOURCE 200809L
 #define GVM_REF_IMPL
 #include "../ref/gvm_ref.h"
 #include <stdio.h>
@@ -15,9 +17,13 @@
 #ifdef _WIN32
 #include <io.h>
 #include <fcntl.h>
+#include <conio.h>
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
 #define host_read_fd _read
 #else
 #include <unistd.h>
+#include <poll.h>
 #define host_read_fd read
 #endif
 
@@ -42,6 +48,8 @@ static struct {
     uint32_t ncores, budget, pass_time;
     uint64_t max_bundles, bundles, passes;
     int trace, strace, stats;
+    int console, console_in;     // the console device (on unless --no-console), its input (off with --no-stdin)
+    uint32_t con_printed;        // the guest's output bytes printed so far
     int stop, exit_code;
     uint32_t heap_start, brk, mmap_top, stack_limit;
     // the trace: what the bundle being traced found, to print what it wrote
@@ -159,14 +167,14 @@ static void dis_ctl(char *o, size_t sz, uint32_t base, uint32_t ctl) {
         "bgeui", "beqi", "bnei", "blti", "bgei"};
     uint32_t cc = GVM_CC(ctl), to = base + (uint32_t)GVM_OFF9(ctl) * 16;
     if (cc == GVM_CC_SPECIAL) {
-        uint32_t sub = GVM_SUB(ctl), rs = GVM_CRS(ctl), far = base + (uint32_t)GVM_OFF18(ctl) * 16;
+        uint32_t sub = GVM_SUB(ctl), rs = GVM_CRS(ctl), far_to = base + (uint32_t)GVM_OFF18(ctl) * 16;
         switch (sub) {
         case GVM_SUB_NONE: snprintf(o, sz, "-"); return;
         case GVM_SUB_JR: snprintf(o, sz, rs == 1 ? "ret" : "jr r%u", rs); return;
         case GVM_SUB_CALLR: snprintf(o, sz, "callr r%u", rs); return;
         case GVM_SUB_ERET: snprintf(o, sz, "eret"); return;
-        case GVM_SUB_J: snprintf(o, sz, "j %08x", far); return;
-        case GVM_SUB_CALL: snprintf(o, sz, "call %08x", far); return;
+        case GVM_SUB_J: snprintf(o, sz, "j %08x", far_to); return;
+        case GVM_SUB_CALL: snprintf(o, sz, "call %08x", far_to); return;
         case GVM_SUB_ADD: snprintf(o, sz, "add r%u += %d", rs, GVM_CIMM12(ctl)); return;
         }
         snprintf(o, sz, "illegal");
@@ -338,6 +346,100 @@ static int host_trap(gvm_core *c, uint32_t cause, uint32_t epc, uint32_t tval) {
     return 1;
 }
 
+// ---- The console device (gpu_vm/linux/README.md, "Console"): words in the device window, plain memory both sides,
+// read and written by the host after each commit (the RISC-V machine's console words moved down by 0x86000000)
+#define CON_BASE 0x016b8280u
+#define CON_DELIVERED (CON_BASE + 0x00)   // host: characters delivered so far
+#define CON_LAST (CON_BASE + 0x04)        // host: the last delivery, up to 4 characters, the first in the low byte
+#define CON_TAKEN (CON_BASE + 0x10)       // guest: characters taken so far
+#define CON_WRITTEN (CON_BASE + 0x14)     // guest: bytes written so far
+#define CON_RING (CON_BASE + 0x20)        // guest: the output ring, byte n at n mod 256
+
+// Up to max bytes of stdin that are there now (0: none yet; -1: its end)
+static int stdin_ready(uint8_t *buf, int max) {
+#ifdef _WIN32
+    HANDLE h = GetStdHandle(STD_INPUT_HANDLE);
+    DWORD type = GetFileType(h), avail = 0;
+    if (type == FILE_TYPE_CHAR) {   // a console
+        int n = 0;
+        while (n < max && _kbhit()) { int ch = _getch(); buf[n++] = (uint8_t)(ch == '\r' ? '\n' : ch); }
+        return n;
+    }
+    if (type == FILE_TYPE_PIPE) {
+        if (!PeekNamedPipe(h, NULL, 0, NULL, &avail, NULL)) return -1;   // (the writer has gone)
+        if (!avail) return 0;
+        if ((DWORD)max > avail) max = (int)avail;
+    }
+    int got = _read(0, buf, (unsigned)max);
+    return got > 0 ? got : -1;
+#else
+    struct pollfd p = {0, POLLIN, 0};
+    if (poll(&p, 1, 0) <= 0) return 0;
+    ssize_t got = read(0, buf, (size_t)max);
+    return got > 0 ? (int)got : -1;
+#endif
+}
+
+static void console_poll(void) {
+    uint32_t *ram = H.m.ram, written = ram[CON_WRITTEN >> 2];
+    if (written != H.con_printed) {
+        uint32_t n = written - H.con_printed;
+        if (n > 256) {   // more than the ring holds: the oldest are gone
+            fprintf(stderr, "gvm_cpu: console: %u bytes lost\n", n - 256);
+            H.con_printed = written - 256;
+        }
+        for (; H.con_printed != written; H.con_printed++) {
+            uint32_t a = CON_RING + (H.con_printed & 255);
+            fputc((int)(ram[a >> 2] >> ((a & 3) * 8)) & 255, stdout);
+        }
+        fflush(stdout);
+    }
+    // input once the guest has used the console (written or taken): stdin stays the semihosted read's until then
+    if (H.console_in && (written || ram[CON_TAKEN >> 2]) && ram[CON_TAKEN >> 2] == ram[CON_DELIVERED >> 2]) {
+        uint8_t in[4];
+        int n = stdin_ready(in, 4);
+        if (n < 0) H.console_in = 0;   // stdin's end: no more input
+        else if (n > 0) {
+            uint32_t w = 0;
+            for (int k = n - 1; k >= 0; k--) w = w << 8 | in[k];
+            ram[CON_LAST >> 2] = w;
+            ram[CON_DELIVERED >> 2] += (uint32_t)n;
+        }
+    }
+}
+
+// The memory node's size in a flattened device tree (the first "memory" or "memory@..." node under the root: its
+// reg's size, one cell or two), or 0
+static uint32_t be32(const uint8_t *p) { return (uint32_t)p[0] << 24 | p[1] << 16 | p[2] << 8 | p[3]; }
+static uint64_t fdt_memory_size(const uint8_t *f, uint32_t size) {
+    if (size < 40 || be32(f) != 0xd00dfeedu) return 0;
+    uint32_t st = be32(f + 8), strs = be32(f + 12), st_size = be32(f + 36), o = st, depth = 0, in_mem = 0;
+    if ((uint64_t)st + st_size > size || strs >= size) return 0;
+    while (o + 4 <= st + st_size) {
+        uint32_t tok = be32(f + o);
+        o += 4;
+        if (tok == 1) {   // FDT_BEGIN_NODE
+            const char *name = (const char *)f + o;
+            size_t len = 0;
+            while (o + len < size && name[len]) len++;
+            depth++;
+            if (depth == 2 && (!strcmp(name, "memory") || !strncmp(name, "memory@", 7))) in_mem = depth;
+            o += ((uint32_t)len + 4) & ~3u;
+        } else if (tok == 2) {   // FDT_END_NODE
+            if (in_mem == depth) in_mem = 0;
+            depth--;
+        } else if (tok == 3) {   // FDT_PROP
+            if (o + 8 > size) return 0;
+            uint32_t len = be32(f + o), nameoff = be32(f + o + 4);
+            const uint8_t *v = f + o + 8;
+            if (in_mem && in_mem == depth && strs + nameoff < size && !strcmp((const char *)f + strs + nameoff, "reg") && len >= 8 && o + 8 + len <= size)
+                return len == 16 ? (uint64_t)be32(v + 8) << 32 | be32(v + 12) : be32(v + len - 4);
+            o += 8 + ((len + 3) & ~3u);
+        } else if (tok == 9) break;   // FDT_END
+    }
+    return 0;
+}
+
 // ---- Loading
 static uint8_t *slurp(const char *path, uint32_t *size) {
     FILE *f = fopen(path, "rb");
@@ -436,7 +538,9 @@ static void usage(void) {
         "  --max-bundles N     stop with exit code 3 after N bundles\n"
         "  --trace             each bundle on stderr: core, pc, control word, ops, registers written\n"
         "  --strace            each semihosted call on stderr\n"
-        "  --stats             bundles, ops and passes at the end, on stderr\n");
+        "  --stats             bundles, ops and passes at the end, on stderr\n"
+        "  --no-console        no console device (its words at 0x016b8280 are plain RAM)\n"
+        "  --no-stdin          the console delivers no input\n");
     exit(EXIT_USAGE);
 }
 
@@ -446,13 +550,15 @@ int main(int argc, char **argv) {
     const char *elf = NULL, *bin = NULL, *rom = NULL, *dtb = NULL;
     uint32_t at = 0, entry = 0, ram_mb = 64;
     int have_at = 0, have_entry = 0, i;
-    H.budget = 8192; H.pass_time = 20; H.ncores = 1;
+    H.budget = 8192; H.pass_time = 20; H.ncores = 1; H.console = H.console_in = 1;
     for (i = 1; i < argc; i++) {
         const char *a = argv[i];
         int more = i + 1 < argc;
         if (!strcmp(a, "--trace")) H.trace = 1;
         else if (!strcmp(a, "--strace")) H.strace = 1;
         else if (!strcmp(a, "--stats")) H.stats = 1;
+        else if (!strcmp(a, "--no-console")) H.console = 0;
+        else if (!strcmp(a, "--no-stdin")) H.console_in = 0;
         else if (!strcmp(a, "--ram") && more) ram_mb = num(argv[++i]);
         else if (!strcmp(a, "--rom") && more) rom = argv[++i];
         else if (!strcmp(a, "--dtb") && more) dtb = argv[++i];
@@ -492,10 +598,14 @@ int main(int argc, char **argv) {
         place(GVM_ROM, p, n, n, "the ROM");
         free(p);
     }
-    if (dtb) {   // TODO(Linux): the kernel's entry convention for the device tree's address (fixed at GVM_DTB for now)
+    if (dtb) {   // at GVM_DTB; the kernel finds its address in r5
         uint32_t n;
         uint8_t *p = slurp(dtb, &n);
         if (GVM_DTB + n > GVM_DEV) { fprintf(stderr, "gvm_cpu: the device tree does not fit below 0x10000\n"); return EXIT_USAGE; }
+        uint64_t mem = fdt_memory_size(p, n);
+        if (!mem) fprintf(stderr, "gvm_cpu: %s: no memory node found\n", dtb);
+        else if (mem != (uint64_t)ram_mb << 20)
+            fprintf(stderr, "gvm_cpu: %s: the memory node says %llu MB, --ram %u\n", dtb, (unsigned long long)(mem >> 20), ram_mb);
         place(GVM_DTB, p, n, n, "the device tree");
         free(p);
     }
@@ -520,7 +630,10 @@ int main(int argc, char **argv) {
         // TODO(workers): cores past 0 wait parked until a mailbox gives them a job (docs/machine/multicore.md's layout)
         if (c) k->halted = 1;
     }
-    setup_stack(&H.cores[0], argc - i, argv + i);
+    if (dtb) {   // a kernel's boot: r5 the device tree's address, every other register 0 (no argument stack)
+        H.cores[0].x[5] = GVM_DTB;
+        H.stack_limit = H.m.ram_end;
+    } else setup_stack(&H.cores[0], argc - i, argv + i);
     H.heap_start = (H.heap_start + 15) & ~15u;
     H.brk = H.heap_start;
     H.mmap_top = (H.stack_limit - (1u << 20)) & ~4095u;   // a megabyte of stack below the arguments
@@ -540,8 +653,8 @@ int main(int argc, char **argv) {
         trace_flush();
         gvm_commit(&H.m);
         H.passes++;
-        // TODO(Linux): the console device (a word in the device window read after the commit), the external
-        // interrupt line (gvm_core.ext) for input, and the mailboxes for workers go here.
+        if (H.console) console_poll();
+        // TODO: the external interrupt line (gvm_core.ext) and the workers' mailboxes go here.
         if (!running) {   // every core halted with no exit: a break with GVM_REF_BREAK_HALTS, say
             fprintf(stderr, "gvm_cpu: every core halted\n");
             H.exit_code = EXIT_TRAP;

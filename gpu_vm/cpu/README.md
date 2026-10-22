@@ -6,9 +6,10 @@ Runs programs for gpu_vm (`gpu_vm/isa.h`, `gpu_vm/GPU_VM.md`) on the host, aroun
 ## Build and test
 
 - WSL / Linux (gcc or clang): `make -C gpu_vm/cpu` makes `build/gvm_cpu/gvm_cpu`; `make -C gpu_vm/cpu test` also
-  makes the tests' programs (`tests/mk.cpp`, assembled with `gvm_asm.h`) and runs `tests/run.sh` (12 cases: hello, a
+  makes the tests' programs (`tests/mk.cpp`, assembled with `gvm_asm.h`) and runs `tests/run.sh` (19 cases: hello, a
   sum by `addbnz` with a call and the bss, the same as a raw image, the same in passes of one bundle, stdin, argv, a
-  load fault, `break`, a program's own trap handler, the timer's interrupt from `wait`, `--max-bundles`, `--trace`).
+  load fault, `break`, a program's own trap handler, the timer's interrupt from `wait`, `--max-bundles`, operations in
+  flight, the console device's output, input and ring wrap, a kernel's boot with a device tree, `--trace`).
 - Windows (MSVC through vswhere): `gpu_vm\cpu\build.bat` makes `bin\gvm_cpu.exe` and `bin\gvm_cpu_mk.exe`; then
   `bin\gvm_cpu_mk.exe DIR` and `sh gpu_vm/cpu/tests/run.sh bin/gvm_cpu.exe DIR` in Git Bash.
 
@@ -16,12 +17,14 @@ Runs programs for gpu_vm (`gpu_vm/isa.h`, `gpu_vm/GPU_VM.md`) on the host, aroun
 
     gvm_cpu [options] PROGRAM.elf [ARGS...]
     gvm_cpu [options] --bin FILE --at ADDR [--entry ADDR] [ARGS...]
+    gvm_cpu [options] --dtb gvm.dtb vmlinux                       Linux (gpu_vm/linux/README.md)
+    gvm_cpu [options] --dtb gvm.dtb --bin Image --at 0x02000000   the same from a raw Image
 
 | option | |
 |---|---|
 | `--ram MB` | RAM from `0x02000000` (default 64) |
 | `--rom FILE` | the ROM at `0x40000000` (read only) |
-| `--dtb FILE` | a device tree at `0x1000` |
+| `--dtb FILE` | a device tree at `0x1000`, and a kernel's boot (below); warns when its memory node's size is not `--ram`'s |
 | `--budget N` | bundles a pass, a core (default 8192) |
 | `--pass-time N` | TIME's ticks (100 kHz) a pass (default 20, 0.2 ms) |
 | `--cores N` | cores (default 1; the others are made but parked: workers are not done yet) |
@@ -29,6 +32,8 @@ Runs programs for gpu_vm (`gpu_vm/isa.h`, `gpu_vm/GPU_VM.md`) on the host, aroun
 | `--trace` | each bundle on stderr: `[core] pc control-word  ops | control`, then the registers it wrote |
 | `--strace` | each semihosted call on stderr: `[core] syscall N(a0, a1, a2) = result` |
 | `--stats` | bundles, ops, passes and TIME at the end, on stderr |
+| `--no-console` | no console device: its words are plain RAM |
+| `--no-stdin` | the console delivers no input |
 
 Exit code: the program's `exit` code; 1 a bad option or file; 2 an unhandled trap (`break` too: cause, pc, tval,
 the bundle and every register are printed), or every core waiting for an interrupt that cannot come; 3 `--max-bundles`.
@@ -73,7 +78,37 @@ says, and a program (or Linux) handles it itself.
 - The buffers are read as the core sees memory (its write log first), and what `read` and `clock_gettime` store is
   seen by the core at once.
 
-## The program's start
+## The console device
+
+On by default (`--no-console`): the RISC-V machine's console words moved down by 0x86000000, at **0x016b8280** in
+the device window, plain memory to both sides (`gpu_vm/linux/README.md`, "Console").
+
+| address | owner | |
+|---|---|---|
+| 0x016b8280 | host | characters delivered so far |
+| 0x016b8284 | host | the last delivery: up to four characters, the first in the low byte (0 bytes are skipped) |
+| 0x016b8290 | guest | characters taken so far |
+| 0x016b8294 | guest | bytes written so far |
+| 0x016b82a0 | guest | the output ring, 256 bytes: byte n of the output at n mod 256 |
+
+- Output: after each commit gvm_cpu prints to stdout the ring's bytes from its own count to the guest's written count
+  (more than 256 behind: the oldest are lost, and it says so on stderr). A guest's stores reach it at the commit, so a
+  guest writes at most 255 bytes a pass and ends the pass (`sync`) when the ring is full.
+- Input: after a commit, when taken == delivered, gvm_cpu reads up to four characters that stdin has now (it never
+  waits; a console's Enter is a newline), puts them at +4 and adds their number to +0. Only once the guest has used the
+  console (its written or taken count is not 0), so a program that reads stdin by the semihosted `read` keeps it. Ends
+  at stdin's end; `--no-stdin` gives none.
+
+## A kernel's boot
+
+With `--dtb FILE`: the device tree at `0x1000` (`GVM_DTB`), core 0 at the entry (an ELF's `e_entry`; a `vmlinux` linked
+at 0x02000000 starts at `_start`, its first byte; or a raw `Image` by `--bin Image --at 0x02000000`) in supervisor
+mode with TVEC 0, **r5 = 0x1000** and every other register 0: no argument stack. The port's device tree is
+`arch/gpuvm/boot/dts/gvm.dtb` in its build output (`~/gpu_vm/linux-build`), 64 MB: gvm_cpu's default `--ram`. Until
+the kernel sets TVEC a trap is gvm_cpu's trap report; halt and power-off set TVEC to 0 and make `exit_group` (94) by
+`syscall`, which ends gvm_cpu with its code.
+
+## The program's start (without --dtb)
 
 `r2` (sp) points at Linux's initial stack, 16-aligned, under the argument strings at RAM's top: `argc`, `argv[0..]`
 (argv[0] is the program's path), 0, envp (none) 0, auxv `AT_PAGESZ` 4096, `AT_NULL`. Also `r5` = argc, `r6` = argv,
@@ -81,9 +116,7 @@ says, and a program (or Linux) handles it itself.
 
 ## Not done yet (hooks in place)
 
-- Linux: the kernel's entry convention for the device tree's address (`--dtb` loads it at `GVM_DTB`); a console
-  device and input in the device window and the external interrupt line (`gvm_core.ext`) are read after each commit
-  (TODO in the pass loop). The timer interrupt (TCMP) and `wait` work now.
+- The external interrupt line (`gvm_core.ext`): nothing drives it (the console is polled by the kernel).
 - Workers: cores past 0 are made parked; mailboxes at `GVM_MBOX` (docs/machine/multicore.md's layout) are TODO.
 
 ## The reference's hooks

@@ -168,6 +168,76 @@ int main(int argc, char** argv) {
         exit_with(a, 7);
         write_elf(path("timer.elf"), CODE, {{CODE, words(a.finish()), 0}});
     }
+    const int32_t CON = 0x016b8280;   // the console device (gpu_vm/linux/README.md, "Console")
+    {   // console: "hi\n" and "ok\n" through the ring and the written count, a sync after each; then one character
+        // of input (delivered != taken), echoed, taken, and exit(that character)
+        GvmAsm a(CODE);
+        a.li(29, CON);
+        const char* text = "hi\nok\n";
+        for (int k = 0; k < 6; k++) {
+            a.li(5, text[k]); a.st(GVM_W_B, 5, 29, 0x20 + k);
+            if (k == 2 || k == 5) { a.li(6, k + 1); a.sw(6, 29, 0x14); a.x(GVM_X_SYNC); }
+        }
+        int wait = a.here();
+        a.x(GVM_X_SYNC);
+        a.lw(9, 29, 0); a.close();
+        a.br(GVM_CC_BEQI, 9, 0, wait);
+        a.lw(10, 29, 4); a.opi(GVM_I_AND, 10, 10, 255);
+        a.st(GVM_W_B, 10, 29, 0x26); a.li(6, 7); a.sw(6, 29, 0x14); a.sw(9, 29, 0x10);
+        exit_with(a, 10);
+        write_elf(path("console.elf"), CODE, {{CODE, words(a.finish()), 0}});
+    }
+    {   // conwrap: 600 digits ('0' + i % 10) through the ring, the count stored and a sync every 128: the ring wraps
+        GvmAsm a(CODE);
+        int top = a.label(), skip = a.label();
+        a.li(29, CON); a.li(20, 0); a.li(21, 600); a.li(25, 10);
+        a.bind(top);
+        a.opi(GVM_I_AND, 22, 20, 255); a.add(23, 29, 22);
+        a.x(GVM_X_REMU, 24, 20, 25); a.addi(24, 24, '0');
+        a.st(GVM_W_B, 24, 23, 0x20);
+        a.addi(20, 20, 1); a.opi(GVM_I_AND, 26, 20, 127); a.close();
+        a.bnei(26, 0, skip);
+        a.sw(20, 29, 0x14); a.x(GVM_X_SYNC);
+        a.bind(skip);
+        a.addbnz(21, -1, top);
+        a.sw(20, 29, 0x14);
+        exit_with(a, 0);
+        write_elf(path("conwrap.elf"), CODE, {{CODE, words(a.finish()), 0}});
+    }
+    {   // boot.dtb: a device tree of a root and a memory node of 64 MB at GVM_RAM (and mem32.dtb, 32 MB); boot: a
+        // kernel's entry, r5 the device tree (its magic read there) and no stack: exit(42) when so
+        for (uint32_t mb : {64u, 32u}) {
+            std::vector<uint8_t> st, strs = {};
+            auto be = [](std::vector<uint8_t>& v, uint32_t x) { for (int i = 3; i >= 0; i--) v.push_back((uint8_t)(x >> (8 * i))); };
+            auto name = [&](const char* n) { size_t l = strlen(n) + 1; st.insert(st.end(), n, n + l); while (st.size() & 3) st.push_back(0); };
+            auto str = [&](const char* n) { uint32_t o = (uint32_t)strs.size(); strs.insert(strs.end(), n, n + strlen(n) + 1); return o; };
+            auto prop = [&](const char* n, std::vector<uint8_t> v) {
+                be(st, 3); be(st, (uint32_t)v.size()); be(st, str(n));
+                st.insert(st.end(), v.begin(), v.end()); while (st.size() & 3) st.push_back(0);
+            };
+            auto cells = [&](std::initializer_list<uint32_t> c) { std::vector<uint8_t> v; for (uint32_t x : c) be(v, x); return v; };
+            be(st, 1); name("");
+            prop("#address-cells", cells({1})); prop("#size-cells", cells({1}));
+            be(st, 1); name("memory@2000000");
+            prop("device_type", {'m', 'e', 'm', 'o', 'r', 'y', 0});
+            prop("reg", cells({GVM_RAM, mb << 20}));
+            be(st, 2); be(st, 2); be(st, 9);
+            std::vector<uint8_t> f;
+            uint32_t total = 56 + (uint32_t)st.size() + (uint32_t)strs.size();
+            for (uint32_t x : {0xd00dfeedu, total, 56u, 56u + (uint32_t)st.size(), 40u, 17u, 16u, 0u, (uint32_t)strs.size(), (uint32_t)st.size()}) be(f, x);
+            f.resize(56, 0);   // the empty memory reservation map
+            f.insert(f.end(), st.begin(), st.end());
+            f.insert(f.end(), strs.begin(), strs.end());
+            write_file(path(mb == 64 ? "boot.dtb" : "mem32.dtb"), f);
+        }
+        GvmAsm a(CODE);
+        a.lw(8, 5, 0); a.li(9, (int32_t)0xedfe0dd0); a.close();   // 0xd00dfeed, big-endian in memory
+        a.op(GVM_I_SEQ, 10, 8, 9); a.op(GVM_I_SEQ, 11, 2, 0); a.close();
+        a.op(GVM_I_AND, 10, 10, 11); a.li(12, 42); a.close();
+        a.op(GVM_I_MUL, 10, 10, 12);
+        exit_with(a, 10);
+        write_elf(path("boot.elf"), CODE, {{CODE, words(a.finish()), 0}});
+    }
     {   // spin: a loop forever (for --max-bundles)
         GvmAsm a(CODE);
         int top = a.here();

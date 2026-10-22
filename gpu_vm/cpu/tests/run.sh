@@ -20,6 +20,17 @@ check timer 43 "" "$cpu" "$d/timer.elf"
 check max-bundles 3 "" "$cpu" --max-bundles 1000 "$d/spin.elf"
 check opasync 7 "" "$cpu" "$d/opasync.elf"
 check opasync-short 7 "" "$cpu" --budget 3 "$d/opasync.elf"
+check console 120 "hi
+ok
+x" sh -c "printf x | '$cpu' '$d/console.elf'"
+check console-no-stdin 3 "hi
+ok" "$cpu" --no-stdin --max-bundles 100000 "$d/console.elf"
+digits=$(i=0; while [ $i -lt 600 ]; do printf $((i % 10)); i=$((i + 1)); done)
+check conwrap 0 "$digits" "$cpu" "$d/conwrap.elf"
+check boot 42 "" "$cpu" --dtb "$d/boot.dtb" "$d/boot.elf"
+grep -q "memory node" "$d/boot.err" && { echo "FAIL boot: a warning on a matching memory node"; bad=1; }
+check boot-mem32 42 "" "$cpu" --dtb "$d/mem32.dtb" "$d/boot.elf"
+grep -q "the memory node says 32 MB, --ram 64" "$d/boot-mem32.err" || { echo "FAIL boot-mem32: no warning"; bad=1; }
 check trace 0 "Hello from gpu_vm!" "$cpu" --trace --strace --stats "$d/hello.elf"
 grep -q "syscall 64(0x1, 0x2010000, 0x13) = 19" "$d/trace.err" || { echo "FAIL trace: no syscall line"; bad=1; }
 exit $bad
