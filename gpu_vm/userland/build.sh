@@ -76,7 +76,7 @@ musl() {
     grep -q 'ARCH=gpuvm' "$MUSL/configure"
     cd "$MUSL"
     ./configure --target=gpuvm --prefix="$SYSROOT" --syslibdir="$SYSROOT/lib" --disable-shared --enable-static \
-        CC="$CC" AR="$LLVM_BIN/llvm-ar" RANLIB="$LLVM_BIN/llvm-ranlib" CFLAGS="${MUSL_CFLAGS:--O2} -fno-pic" > configure.log
+        CC="$CC" AR="$LLVM_BIN/llvm-ar" RANLIB="$LLVM_BIN/llvm-ranlib" CFLAGS="${MUSL_CFLAGS:--O2} ${GVM_PIC:--fPIE}" > configure.log
     make -j"$JOBS" > make.log 2>&1 || { tail -30 make.log; exit 1; }
     make install > install.log 2>&1 || { tail -30 install.log; exit 1; }
     # the kernel's headers (linux/, asm/, asm-generic/) beside libc's, for programs that include them
@@ -97,7 +97,7 @@ builtins() {
         name=$(basename "$f" .c)
         case "$skip" in *" $name "*) continue ;; esac
         case "$name" in *xf*|*xc3|*bf2|crtbegin|crtend) continue ;; esac   # x87's long double, bfloat16, crt objects
-        if $CC -O2 -fno-pic -fno-builtin -ffreestanding -nostdinc -isystem "$SYSROOT/include" -I"$B" \
+        if $CC -O2 ${GVM_PIC:--fPIE} -fno-builtin -ffreestanding -nostdinc -isystem "$SYSROOT/include" -I"$B" \
                -c "$f" -o "$O/$name.o" 2> "$O/$name.err"; then
             n=$((n + 1))
         else

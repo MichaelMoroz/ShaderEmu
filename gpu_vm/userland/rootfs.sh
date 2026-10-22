@@ -100,7 +100,7 @@ for s in "${steps[@]}"; do
           OUT="$KOUT" INITRAMFS_LIST="$L" bash "$ROOT/gpu_vm/linux/build.sh" image dtbs; } > "$R/kernel.log" 2>&1 \
             || { tail -30 "$R/kernel.log"; exit 1; }
         # a copy where the Windows programs (gvm_gpu, gvm_cpu.exe) find it
-        W="$ROOT/build/gvm_rootfs"; mkdir -p "$W"
+        W="${W:-$ROOT/build/gvm_rootfs}"; mkdir -p "$W"
         cp "$KOUT/vmlinux" "$W/vmlinux"; cp "$KOUT/arch/gpuvm/boot/dts/gvm.dtb" "$W/gvm.dtb"; cp "$BB/busybox" "$W/busybox"
         ls -l "$W/vmlinux"
         echo "rootfs.sh: kernel $W/vmlinux, device tree $W/gvm.dtb (built in $KOUT)" ;;

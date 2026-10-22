@@ -26,7 +26,7 @@ In WSL, with the LLVM build (`gpu_vm/llvm/build.sh`) and the kernel's headers (`
 
 `build.sh musl` unpacks `~/gpu_vm/dl/musl/musl-1.2.5.tar.gz` (downloaded and checked by its sha256 when missing) into a
 clean `~/gpu_vm/musl`, copies `musl/` over it, adds `gpuvm*) ARCH=gpuvm` to `configure`, and builds with
-`clang --target=gpuvm-unknown-linux -O2 -fno-pic`, static only. `build.sh syscalls` writes
+`clang --target=gpuvm-unknown-linux -O2 -fPIE` (globals addressed from the bundle: code with no relocations; `GVM_PIC=-fno-pic` for absolute addresses, here and in `gpuvm-linux-cc`), static only. `build.sh syscalls` writes
 `musl/arch/gpuvm/bits/syscall.h.in` again from the kernel's `asm/unistd.h` (the file is kept in git).
 
 The driver: `-c`/`-S`/`-E` compile with musl's headers (`-nostdinc -isystem $SYSROOT/include -isystem` clang's own);
@@ -193,7 +193,7 @@ binfmt_flat's relocation loop: 15,256 relocations, ~290 passes an exec, each pas
 ~55 stores (two ways of 256 sets: scattered words fill some set long before 514 entries), and 37-55 bundles a
 relocation (calc_reloc is a call; get_user and put_user check the range). Freeing the 2 MB at exit is ~50 passes more.
 What would make it faster: code that needs no relocations (globals addressed PC-relative: the compiler makes every
-global's address a long immediate, `R_GVM_IMM32`, even with -fpie), a write cache that takes scattered stores, a
+global's address a long immediate, `R_GVM_IMM32`; since 22 October 2026 `-fPIE`, `lpc`, the default of `gpuvm-linux-cc`: busybox 758 relocations, a one-program command on gvm_cpu 0.034 s to 0.022 s, once the sysroot and busybox are built again), a write cache that takes scattered stores, a
 smaller busybox.
 
 ### The kernel's part

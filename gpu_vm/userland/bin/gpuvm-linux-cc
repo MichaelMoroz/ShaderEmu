@@ -14,7 +14,7 @@ LLVM_BIN="${LLVM_BIN:-$HOME/gpu_vm/llvm-build/bin}"
 TARGET=gpuvm-unknown-linux
 RES="$("$LLVM_BIN/clang" -print-resource-dir)"
 BUILTINS="$SYSROOT/lib/libclang_rt.builtins-gpuvm.a"
-CFLAGS0=(--target=$TARGET -nostdinc -isystem "$SYSROOT/include" -isystem "$RES/include" -fno-pic -fno-pie)
+CFLAGS0=(--target=$TARGET -nostdinc -isystem "$SYSROOT/include" -isystem "$RES/include" ${GVM_PIC:--fPIE})
 
 mode=link out= stack="${GVM_STACK:-65536}" verbose=0 startfiles=1 stdlibs=1
 compile=()      # arguments for each compilation

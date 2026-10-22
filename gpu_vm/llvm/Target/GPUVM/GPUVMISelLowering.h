@@ -38,6 +38,12 @@ public:
 
   SDValue LowerOperation(SDValue Op, SelectionDAG &DAG) const override;
 
+  // A symbol + offset is one immediate, absolute or from the bundle (no GOT:
+  // static links only).
+  bool isOffsetFoldingLegal(const GlobalAddressSDNode *GA) const override {
+    return true;
+  }
+
   EVT getSetCCResultType(const DataLayout &DL, LLVMContext &Context,
                          EVT VT) const override {
     if (VT.isVector())

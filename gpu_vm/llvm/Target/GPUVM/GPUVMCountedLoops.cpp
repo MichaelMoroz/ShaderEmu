@@ -14,19 +14,35 @@
 // no inverse and is left alone by branch relaxation: only a target within
 // -gpuvm-addbnz-reach instructions (bundles reach +-256).
 //
+// A loop that steps an index i by 1 (or -1) once an iteration and goes on
+// while i != n (n the same through the loop) counts down a register of its
+// own instead, c = n - i made before the loop: `addbnz c, -1, header`. The
+// index stays (it addresses), but the branch no longer compares what an op of
+// its bundle just wrote. Made where the latch takes fewer bundles.
+//
 //===----------------------------------------------------------------------===//
 
 #include "GPUVM.h"
+#include "GPUVMBundleModel.h"
 #include "GPUVMInstrInfo.h"
 #include "GPUVMSubtarget.h"
+#include "llvm/ADT/BitVector.h"
+#include "llvm/ADT/DepthFirstIterator.h"
+#include "llvm/CodeGen/LivePhysRegs.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
+#include "llvm/CodeGen/MachineLoopInfo.h"
+#include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/Support/CommandLine.h"
 
 using namespace llvm;
 
 #define DEBUG_TYPE "gpuvm-counted-loops"
 
+static cl::opt<bool>
+    CountDown("gpuvm-count-down", cl::Hidden, cl::init(true),
+              cl::desc("gpu_vm: a loop to i != n counts down a register of "
+                       "its own (addbnz)"));
 static cl::opt<unsigned>
     AddBnzReach("gpuvm-addbnz-reach", cl::Hidden, cl::init(200),
                 cl::desc("gpu_vm: instructions an addbnz may branch over"));
@@ -37,6 +53,11 @@ public:
   static char ID;
   GPUVMCountedLoops() : MachineFunctionPass(ID) {}
   StringRef getPassName() const override { return "gpu_vm counted loops"; }
+  void getAnalysisUsage(AnalysisUsage &AU) const override {
+    AU.setPreservesCFG();
+    AU.addRequired<MachineLoopInfoWrapperPass>();
+    MachineFunctionPass::getAnalysisUsage(AU);
+  }
   bool runOnMachineFunction(MachineFunction &MF) override;
 
 private:
@@ -44,6 +65,8 @@ private:
   const TargetRegisterInfo *TRI = nullptr;
   bool near(MachineBasicBlock &From, MachineBasicBlock &To) const;
   bool fuse(MachineBasicBlock &MBB);
+  bool countDown(MachineLoop &L, BitVector &Used);
+  unsigned bundles(const MachineBasicBlock &MBB) const;
 };
 } // namespace
 
@@ -147,12 +170,137 @@ bool GPUVMCountedLoops::fuse(MachineBasicBlock &MBB) {
   return true;
 }
 
+unsigned GPUVMCountedLoops::bundles(const MachineBasicBlock &MBB) const {
+  GPUVM::Packer P;
+  unsigned N = 0;
+  for (const MachineInstr &MI : MBB)
+    N += P.put(GPUVM::describeOp(MI, TRI));
+  return N;
+}
+
+bool GPUVMCountedLoops::countDown(MachineLoop &L, BitVector &Used) {
+  MachineBasicBlock *H = L.getHeader();
+  MachineBasicBlock *Latch = L.getLoopLatch();
+  MachineBasicBlock *P = L.getLoopPreheader();
+  if (!Latch || !P)
+    return false;
+  MachineBasicBlock::iterator T = Latch->getFirstTerminator();
+  if (T == Latch->end() || T->getOpcode() != GPUVM::BNE ||
+      T->getOperand(2).getMBB() != H)
+    return false;
+  if (std::next(T) != Latch->end() && std::next(T)->getOpcode() != GPUVM::J)
+    return false;
+  // no call in the loop (c is caller-saved)
+  for (MachineBasicBlock *B : L.blocks())
+    for (MachineInstr &MI : *B)
+      if (MI.isCall() || MI.isInlineAsm())
+        return false;
+  // the index: one def in the loop, a step of 1 or -1 in the header or the
+  // latch (once an iteration); n: no def in the loop
+  Register I, N;
+  int64_t K = 0;
+  for (unsigned Op = 0; Op < 2 && !I; ++Op) {
+    Register X = T->getOperand(Op).getReg(), Y = T->getOperand(1 - Op).getReg();
+    if (X == GPUVM::R0)
+      continue;
+    MachineInstr *Step = nullptr;
+    unsigned Defs = 0, YDefs = 0;
+    for (MachineBasicBlock *B : L.blocks())
+      for (MachineInstr &MI : *B) {
+        if (MI.modifiesRegister(X, TRI)) {
+          ++Defs;
+          Step = &MI;
+        }
+        if (Y != GPUVM::R0 && MI.modifiesRegister(Y, TRI))
+          ++YDefs;
+      }
+    if (Defs != 1 || YDefs != 0 || Step->getOpcode() != GPUVM::ADDI ||
+        Step->getOperand(0).getReg() != X || !Step->getOperand(1).isReg() ||
+        Step->getOperand(1).getReg() != X || !Step->getOperand(2).isImm() ||
+        (Step->getParent() != H && Step->getParent() != Latch))
+      continue;
+    int64_t S = Step->getOperand(2).getImm();
+    if (S != 1 && S != -1)
+      continue;
+    I = X;
+    N = Y;
+    K = S;
+  }
+  if (!I || !near(*Latch, *H))
+    return false;
+  // a register nothing in the function names
+  MachineFunction &MF = *Latch->getParent();
+  const MCPhysReg *CSR = TRI->getCalleeSavedRegs(&MF);
+  Register C;
+  for (MCPhysReg R : GPUVM::GPRRegClass) {
+    unsigned E = TRI->getEncodingValue(R);
+    if (E < 5 || E == 63 || Used.test(R) || MF.getRegInfo().isReserved(R))
+      continue;
+    bool Saved = false;
+    for (const MCPhysReg *Q = CSR; *Q; ++Q)
+      Saved |= *Q == R;
+    if (!Saved) {
+      C = R;
+      break;
+    }
+  }
+  if (!C)
+    return false;
+  // made where the latch takes fewer bundles
+  unsigned Before = bundles(*Latch);
+  DebugLoc DL = T->getDebugLoc();
+  MachineInstr *Br = &*T;
+  MachineInstr *New = BuildMI(*Latch, T, DL, TII->get(GPUVM::ADDBNZ), C)
+                          .addReg(C)
+                          .addImm(-1)
+                          .addMBB(H);
+  Br->removeFromParent();
+  if (bundles(*Latch) >= Before) {
+    Latch->insert(New->getIterator(), Br);
+    New->eraseFromParent();
+    return false;
+  }
+  MF.deleteMachineInstr(Br);
+  // c = n - i (or i - n) before the loop
+  MachineBasicBlock::iterator PT = P->getFirstTerminator();
+  BuildMI(*P, PT, DL, TII->get(GPUVM::SUB), C)
+      .addReg(K > 0 ? N : I)
+      .addReg(K > 0 ? I : N);
+  for (MCRegAliasIterator A(C, TRI, true); A.isValid(); ++A)
+    Used.set(*A);
+  SmallVector<MachineBasicBlock *, 8> Bs(L.blocks().begin(), L.blocks().end());
+  Bs.push_back(P);
+  fullyRecomputeLiveIns(Bs);
+  return true;
+}
+
 bool GPUVMCountedLoops::runOnMachineFunction(MachineFunction &MF) {
   if (skipFunction(MF.getFunction()))
     return false;
   TII = MF.getSubtarget<GPUVMSubtarget>().getInstrInfo();
   TRI = MF.getSubtarget().getRegisterInfo();
   bool Changed = false;
+  if (CountDown && MF.getRegInfo().tracksLiveness()) {
+    BitVector Used(TRI->getNumRegs());
+    for (MachineBasicBlock &MBB : MF) {
+      for (const auto &LI : MBB.liveins())
+        for (MCRegAliasIterator A(LI.PhysReg, TRI, true); A.isValid(); ++A)
+          Used.set(*A);
+      for (MachineInstr &MI : MBB)
+        for (const MachineOperand &MO : MI.operands())
+          if (MO.isReg() && MO.getReg() && MO.getReg().isPhysical())
+            for (MCRegAliasIterator A(MO.getReg(), TRI, true); A.isValid();
+                 ++A)
+              Used.set(*A);
+    }
+    MachineLoopInfo &MLI = getAnalysis<MachineLoopInfoWrapperPass>().getLI();
+    SmallVector<MachineLoop *, 8> Loops;
+    for (MachineLoop *L : MLI)
+      for (MachineLoop *Sub : depth_first(L))
+        Loops.push_back(Sub);
+    for (MachineLoop *L : Loops)
+      Changed |= countDown(*L, Used);
+  }
   for (MachineBasicBlock &MBB : MF)
     Changed |= fuse(MBB);
   return Changed;

@@ -83,10 +83,13 @@ applying them to a clean tree rebuilds most of LLVM (an hour on 12 jobs); 0005's
   closures, sorting, string patterns, coroutines, pcall and error (longjmp), metatables, 64-bit integers, goto, utf8
   and the collector (`lua_test.c`). Both identical to the host's (22 October 2026).
 - `test/bench/run.sh`: CoreMark (EEMBC's sources from `~/gpu_vm/coremark-src/coremark`, the port in `bench/coremark`:
-  CYCLE as the clock). -O2: 149 thousand bundles an iteration, 1.31 ops a bundle, 95.6% of bundles on the fast
+  CYCLE as the clock). -O2: 132 thousand bundles an iteration, 1.53 ops a bundle, 95.7% of bundles on the fast
   loop's paths (was 178 thousand before the bundle scheduler, the frame pointer's omission, the branches' constants
-  and the branch fill). `test/bench/profile.sh PROGRAM.elf` (gvm_cpu --trace): the bundles by their number of ops
-  and by path, and the hottest ones with their functions.
+  and the branch fill; 149 thousand before the fill across blocks, 22 October 2026). `test/bench/gz.sh`: zlib's
+  gzip and gunzip (level 6, the gzip wrapper, `gzbench.c`) of `gpu_vm/bench_real`'s input in memory, bundles each
+  (19.38 M and 1.910 M before the fill across blocks, 17.25 M and 1.881 M after). `test/bench/profile.sh
+  PROGRAM.elf` (gvm_cpu --trace): the bundles by their number of ops and by path, and the hottest ones with their
+  functions.
 
 ## The code generator
 
@@ -139,8 +142,11 @@ code generator's job toward bundles is the order of its ops.
 - **Atomics**: words by the amo ops (`amoadd`... `amocas` for cmpxchg), bytes and halves by AtomicExpand's word
   cmpxchg loops, nand by a loop; i64 atomics by `__atomic_*` libcalls; `fence` for fences; a word's load or store is
   atomic. Lock-free up to 4 bytes (`__GCC_HAVE_SYNC_COMPARE_AND_SWAP_1/2/4`).
-- **Globals and TLS**: absolute addresses (static links; bFLT relocates them); TLS is local exec whatever the model:
-  `lw a0, %tprel(x)(tp)`. Jump tables in .rodata, `lw` and `jr`. Computed goto works.
+- **Globals and TLS**: absolute addresses (static links; bFLT relocates them), folded into a load's or store's
+  immediate; under `-fPIE`/`-fPIC` from the bundle's address, `lpc rd, sym+off` (R_GVM_PCIMM32): the text has no
+  relocation, only data words that hold addresses (`gpuvm-linux-cc` compiles so: busybox 16,973 relocations to 758).
+  TLS is local exec whatever the model: `lw a0, %tprel(x)(tp)`. Jump tables in .rodata, `lw` and `jr`. Computed goto
+  works.
 - **Inline asm**: `r` (`%0` prints `rN`), `i`, `n`, `m` (`off(rN)`), `{a0}`/`{r5}`/`{zero}` register constraints,
   `register int x asm("tp")` for reserved registers, the `z` modifier.
 - **Ordering for bundles** (`GPUVMBundleScheduler.cpp`): the post-RA machine scheduler's strategy simulates the open
@@ -149,7 +155,20 @@ code generator's job toward bundles is the order of its ops.
   bundle of its own). `-gpuvm-bundle-sched=0` turns it off.
 - **Counted loops** (`GPUVMCountedLoops.cpp`): `addi r, r, k; bnei r, 0, L` (k in imm6) becomes `addbnz r, k, L`
   (also `beqi` with a `j`) when L is within 200 instructions (`-gpuvm-addbnz-reach`; addbnz has no inverse for branch
-  relaxation).
+  relaxation). A loop on `i != n` with i stepped by 1 or -1 counts down a register of its own, `c = n - i` made
+  before it, by `addbnz c, -1` where that takes the latch fewer bundles (`-gpuvm-count-down`).
+- **Filling bundles across blocks** (`GPUVMGlobalFill.cpp`, after the counted loops): ops move up into a block's
+  empty slots from a successor with one predecessor (renamed to a register the function does not use, a `mv` back
+  where the old one lives on), and a loop header's first ops into its latch's last bundle and every block entering
+  the loop (rotation); one op or two together; an op placed before `mv u, v` reads v, before `addi b, b, k` takes k
+  in its immediate; the block's own last value of the result is renamed out of the way. Each move is counted by the
+  streamer's packing (`GPUVMBundleModel`) weighed by block frequencies, with a cost for an op run for nothing. An
+  op that runs where it did not must be safe: no store or side effect; a load from sp, fp or a global, from a
+  pointer the branch tests against 0 (the boot area reads), or within 16 bytes of an access through the same
+  register on every path to it or every other way out (`-gpuvm-spec-window`). `-gpuvm-global-fill=0` turns it off.
+- **Masks of zero-extended values** (`GPUVMZeroExt.cpp`, before register allocation): `andi r, x, 2^k - 1` is dropped
+  where x's leading zeros are known through PHIs (lbu, lhu, masks, compares): an i8 that crosses blocks is masked
+  again by the DAG at each compare.
 - **Constants of branches** (`GPUVMHoistConstants.cpp`): a compare-and-branch's constant beyond imm6 is made once in
   the entry block (`li` is rematerializable, so the register allocator makes it again where registers are short).
 - **Branch relaxation**: a conditional branch reaches +-256 bundles; LLVM's BranchRelaxation with 16 bytes an
@@ -192,14 +211,14 @@ arches); the link of vmlinux fails on the port's side: `arch/gpuvm/lib/Makefile`
 - No `bump` (the control word's add) and no `ld`/`sd` pairs from the code generator; i64 loads and
   stores are two words.
 - double is software only; `llvm.fma` is a libcall (fmad rounds the product).
-- TLS is local exec only (static links); no PIC (`-fPIC` makes the same absolute code).
+- TLS is local exec only (static links); PIC is PC-relative addressing alone (no GOT or PLT).
 - A branch to a block more than +-2 MB away inside one function is an error (no indirect branch relaxation).
 - Branch-only bundles: a branch on a register written in its own bundle (a value just loaded or computed) takes a
-  bundle of its own; ops are not moved across blocks to fill them.
+  bundle of its own unless the fill across blocks finds ops for it (6.3% of CoreMark's bundles, 16% of gzip's).
 - Branch relaxation in the assembler: a conditional branch beyond +-4 KB in hand-written assembly is an error;
   R_GVM_BR9 has no thunks in lld (a branch to another section must be within 4 KB).
 - `R_GVM_IMM12` is in lld and the writer but the assembler makes no fixup of it (every symbol is a long immediate).
-- No `%pcrel`/GOT/PLT forms: static links only (bFLT later).
+- No GOT/PLT forms: static links only; lld's range thunks are absolute (`addi t26, zero, dest`: a relocation each).
 - A disassembly prints targets as addresses: it is for reading, not for assembling again. `llvm-objdump -d` skips
   runs of zero bytes (`...`) and then decodes off the bundle grid: use `-z`.
 - `-S` with `-g`: the printed labels close bundles when assembled again, so that object can differ from `-c`'s.

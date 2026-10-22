@@ -351,6 +351,9 @@ unsigned GPUVMInstrInfo::getInstSizeInBytes(const MachineInstr &MI) const {
 }
 
 bool GPUVMInstrInfo::isReMaterializableImpl(const MachineInstr &MI) const {
+  // lpc: a symbol's address from the bundle's, made again where it is used
+  if (MI.getOpcode() == GPUVM::LPC)
+    return TargetInstrInfo::isReMaterializableImpl(MI);
   if (MI.getOpcode() != GPUVM::ADDI || !MI.getOperand(1).isReg() ||
       MI.getOperand(1).getReg() != GPUVM::R0)
     return false;

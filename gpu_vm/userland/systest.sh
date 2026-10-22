@@ -12,7 +12,7 @@
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
-W="$ROOT/build/gvm_rootfs"
+W="${W:-$ROOT/build/gvm_rootfs}"
 MACHINE="${1:-cpu}"; shift || true
 case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) WIN=1 ;; *) WIN=0 ;; esac
 case "$MACHINE" in

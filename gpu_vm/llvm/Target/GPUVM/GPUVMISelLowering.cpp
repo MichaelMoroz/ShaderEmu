@@ -685,6 +685,11 @@ SDValue GPUVMTargetLowering::lowerAddress(SDValue Op, SelectionDAG &DAG) const {
   default:
     llvm_unreachable("not an address");
   }
+  // Position-independent code: from the bundle's address (lpc, R_GVM_PCIMM32),
+  // so that code has no relocation; data words that hold addresses keep
+  // theirs.
+  if (isPositionIndependent())
+    return DAG.getNode(GPUVMISD::PCADDR, DL, VT, T);
   return DAG.getNode(GPUVMISD::ADDR, DL, VT, T);
 }
 

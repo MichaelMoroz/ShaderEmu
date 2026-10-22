@@ -45,6 +45,8 @@ def gpuvm_ret : SDNode<"GPUVMISD::RET_GLUE", SDTNone,
 // A symbol's address (a global, an external symbol, a block address, a jump
 // table, a constant pool entry, a TLS offset): an immediate of an op.
 def gpuvm_addr : SDNode<"GPUVMISD::ADDR", SDTIntUnaryOp>;
+// A symbol's address from the bundle's (position-independent code: lpc)
+def gpuvm_pcaddr : SDNode<"GPUVMISD::PCADDR", SDTIntUnaryOp>;
 // The carry ops (ra, rb, the carry in).
 def gpuvm_addcy : SDNode<"GPUVMISD::ADDCY", SDT_GPUVMCarry>;
 def gpuvm_carry : SDNode<"GPUVMISD::CARRY", SDT_GPUVMCarry>;
@@ -229,6 +231,11 @@ def : Pat<(gpuvm_borrow (i32 GPR:$a), (i32 GPR:$b), (i32 GPR:$c)),
           (BORROW GPR:$a, GPR:$b, GPR:$c)>;
 
 // Addresses
+def : Pat<(gpuvm_pcaddr tglobaladdr:$s), (LPC tglobaladdr:$s)>;
+def : Pat<(gpuvm_pcaddr texternalsym:$s), (LPC texternalsym:$s)>;
+def : Pat<(gpuvm_pcaddr tblockaddress:$s), (LPC tblockaddress:$s)>;
+def : Pat<(gpuvm_pcaddr tjumptable:$s), (LPC tjumptable:$s)>;
+def : Pat<(gpuvm_pcaddr tconstpool:$s), (LPC tconstpool:$s)>;
 def : Pat<(gpuvm_addr tglobaladdr:$s), (ADDI (i32 R0), tglobaladdr:$s)>;
 def : Pat<(gpuvm_addr texternalsym:$s), (ADDI (i32 R0), texternalsym:$s)>;
 def : Pat<(gpuvm_addr tblockaddress:$s), (ADDI (i32 R0), tblockaddress:$s)>;
