@@ -1,5 +1,5 @@
 #!/bin/sh
-# runs the libc tests of gpu_vm/userland/test (libc, signals, threads, math) and says how many passed
+# runs the tests of gpu_vm/userland/test in /usr/lib/gvm-tests (libc, signals, threads, math, badptr) and says how many passed
 pass=0 fail=0
 for t in /usr/lib/gvm-tests/*; do
     if "$t" > /tmp/gvm-test.out 2>&1; then

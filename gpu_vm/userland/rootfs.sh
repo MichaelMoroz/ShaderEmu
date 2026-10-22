@@ -48,12 +48,13 @@ for s in "${steps[@]}"; do
         "$CC" $OPT -w -I"$COREMARK" -I"$COREMARK/posix" -DFLAGS_STR="\"$OPT\"" -DMULTITHREAD=1 -DUSE_CLOCK=0 \
             -o "$A/coremark" "$COREMARK"/core_{list_join,main,matrix,state,util}.c "$COREMARK/posix/core_portme.c"
         # libc tests of test.sh that need no path of their own
-        for p in libc signals threads mathf; do
+        for p in libc signals threads mathf badptr; do
             out=$p; [ $p = mathf ] && out=math
             extra=; [ $p = mathf ] && extra=-lm; [ $p = threads ] && extra=-pthread
             "$CC" $OPT -w $extra "$HERE/test/$p.c" -o "$A/test-$out"
         done
         "$CC" $OPT -w "$HERE/test/hello.c" -o "$A/hello"
+        "$CC" $OPT -w "$HERE/test/xtime.c" -o "$A/xtime"
         ls -l "$A" | grep -v '^d' ;;
     kernel)
         L="$R/initramfs.list"
@@ -75,8 +76,8 @@ for s in "${steps[@]}"; do
                 [ $f = etc/shadow ] && m=0600
                 echo "file /$f $HERE/rootfs/$f $m 0 0"
             done
-            for p in lua minigzip coremark hello; do echo "file /usr/bin/$p $R/apps/$p 0755 0 0"; done
-            for p in libc signals threads math; do echo "file /usr/lib/gvm-tests/$p $R/apps/test-$p 0755 0 0"; done
+            for p in lua minigzip coremark hello xtime; do echo "file /usr/bin/$p $R/apps/$p 0755 0 0"; done
+            for p in libc signals threads math badptr; do echo "file /usr/lib/gvm-tests/$p $R/apps/test-$p 0755 0 0"; done
             echo "file /usr/bin/gvm-tests $HERE/rootfs/gvm-tests 0755 0 0"
         } > "$L"
         ksteps="sync initramfs"

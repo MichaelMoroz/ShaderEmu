@@ -151,7 +151,7 @@ if [ "$SESSION" = full ]; then
     check 'KILLED=143'
     check 'JOBS-DONE'
     check 'real[[:space:]]+[0-9]'
-    check 'gvm-tests: 4 passed, 0 failed'
+    check 'gvm-tests: 5 passed, 0 failed'
     check 'seedcrc +: 0xe9f5'; check 'crcfinal +: 0x'; check 'Iterations/Sec'
     check 'Mem:'
     check 'tmpfs'

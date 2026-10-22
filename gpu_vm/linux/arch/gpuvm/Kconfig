@@ -30,7 +30,6 @@ config GPUVM
 	select OF_EARLY_FLATTREE
 	select OF_IRQ
 	select THREAD_INFO_IN_TASK
-	select UACCESS_MEMCPY
 
 config MMU
 	def_bool n
