@@ -23,10 +23,22 @@ UNSUPPORTED = ('--host', '--host-from', '--host-wheel', '--fixed-dt', '--pointer
 PIC = '/tmp/gvm-picture.ppm'
 
 
+# gpu_vm's own expected values where the RISC-V case's differ for a reason that is not a fault (README.md, "Checks")
+OVERRIDES = {
+    # a game played by itself whose ball runs on floats: gpu_vm's single-precision results (flushed denormals, the
+    # card's sqrt) send it another way; the same with libm's exact math and with -fapprox-func
+    'nxpinball': dict(has=[r'pinball: 1800 frames, 1 games, ball 3, high 0, score 18060 state 51ec1e4b']),
+    # the textures made before "steady" depend on the machine's speed (gvm_cpu makes the world in its first stats
+    # period: 8 loading texts fewer); its first 30 are the RISC-V machine's
+    'classicube-pack': dict(count=[(r'^cctex: ', (30, 42))], digest=[]),
+}
+
+
 def gpu_vm_case(c):
     """A case as gpu_vm checks it: where the RISC-V case compares an exact sum of a float picture, the picture itself
     is taken (base64 to the console) and compared with a reference one by its PSNR (README.md, "Checks")."""
     c = dict(c)
+    c.update(OVERRIDES.get(c['name'], {}))
     if c['name'].startswith('nxpath') and 'NXPATH_AUTO=1' in (c['cmd'] or '') and any(' sum ' in h or '02f213e9' in h for h in c.get('has', [])):
         c['cmd'] = c['cmd'].replace('NXPATH_AUTO=1', 'NXPATH_SAVE=%s NXPATH_AUTO=1' % PIC)
         c['has'] = [h.split(' sum ')[0] if ' sum ' in h else r'^pathstat: ' for h in c['has']]
