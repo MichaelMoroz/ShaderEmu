@@ -35,10 +35,12 @@ for d in pathtrace-data doom1.wad doom-shareware.zip quake-data tdawn-demo tdawn
     done
 done
 for f in "$HERE"/fix/*.sh; do [ -f "$f" ] && R="$R" bash "$f"; done
+# (not here: openttd/build.sh, whose C++ needs exceptions and the whole of libstdc++, which gpu_vm has not; tcc/build.sh,
+# a compiler of RISC-V code; README.md, "Not ported")
 ALL="userland/build.sh nanox/build.sh libmedia/build.sh apps/build.sh play/build.sh video/build.sh
      raytrace/build.sh pathtrace/build.sh physics/build.sh quickjs/build.sh micropython/build.sh ide/build.sh imgui/build.sh
      nanox/doom.sh quake/build.sh quake3/build.sh tdawn/build.sh ralert/build.sh classicube/build.sh nes/build.sh
-     micropolis/build.sh halflife/build.sh terminal/build.sh openttd/build.sh"
+     micropolis/build.sh halflife/build.sh terminal/build.sh ../gpu_vm/userland/apps/mc.sh"
 for s in ${*:-$ALL}; do
     t=$(date +%s)
     log=$L/$(echo "$s" | tr / -).log
