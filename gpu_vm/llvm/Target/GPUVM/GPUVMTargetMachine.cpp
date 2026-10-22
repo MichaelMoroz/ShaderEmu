@@ -90,6 +90,10 @@ public:
     addPass(createGPUVMISelDag(getGPUVMTargetMachine()));
     return false;
   }
+  void addPreRegAlloc() override {
+    if (getOptLevel() != CodeGenOptLevel::None)
+      addPass(createGPUVMHoistConstantsPass());
+  }
   void addPreSched2() override {
     if (getOptLevel() != CodeGenOptLevel::None && BundleSched)
       addPass(&PostMachineSchedulerID);

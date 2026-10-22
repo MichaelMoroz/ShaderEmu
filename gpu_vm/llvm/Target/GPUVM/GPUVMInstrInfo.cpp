@@ -349,3 +349,10 @@ unsigned GPUVMInstrInfo::getInstSizeInBytes(const MachineInstr &MI) const {
   }
   return 16;
 }
+
+bool GPUVMInstrInfo::isReMaterializableImpl(const MachineInstr &MI) const {
+  if (MI.getOpcode() != GPUVM::ADDI || !MI.getOperand(1).isReg() ||
+      MI.getOperand(1).getReg() != GPUVM::R0)
+    return false;
+  return TargetInstrInfo::isReMaterializableImpl(MI);
+}

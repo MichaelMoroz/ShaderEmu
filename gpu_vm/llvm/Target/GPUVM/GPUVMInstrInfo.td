@@ -106,6 +106,10 @@ multiclass GVM_RI<bits<5> f, string opcodestr> {
 
 let hasSideEffects = 0, mayLoad = 0, mayStore = 0 in {
 let isCommutable = 1 in {
+// li is made again where needed rather than spilled
+// (GPUVMInstrInfo::isReMaterializableImpl). Not isAsCheapAsAMove: MachineLICM
+// would keep constants in loops.
+let isReMaterializable = 1 in
 defm ADD   : GVM_RI<0, "add">;
 defm AND   : GVM_RI<1, "and">;
 defm OR    : GVM_RI<2, "or">;

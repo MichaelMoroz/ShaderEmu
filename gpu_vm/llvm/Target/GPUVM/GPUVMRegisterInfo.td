@@ -26,6 +26,7 @@ class GPUVMReg<bits<6> Enc, string n, string alt> : Register<n> {
 }
 
 let Namespace = "GPUVM" in {
+let isConstant = true in // reads 0 always
 def R0 : GPUVMReg<0, "r0", "zero">, DwarfRegNum<[0]>;
 def R1 : GPUVMReg<1, "r1", "ra">, DwarfRegNum<[1]>;
 def R2 : GPUVMReg<2, "r2", "sp">, DwarfRegNum<[2]>;

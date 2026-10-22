@@ -18,6 +18,7 @@ add_llvm_target(GPUVMCodeGen
   GPUVMBundleScheduler.cpp
   GPUVMCountedLoops.cpp
   GPUVMFrameLowering.cpp
+  GPUVMHoistConstants.cpp
   GPUVMInstrInfo.cpp
   GPUVMISelDAGToDAG.cpp
   GPUVMISelLowering.cpp

@@ -76,6 +76,9 @@ public:
 
   MCInst getNop() const override;
 
+  // li (addi rd, zero, imm) alone: made again rather than spilled.
+  bool isReMaterializableImpl(const MachineInstr &MI) const override;
+
   static bool isCondBranch(unsigned Opc);
   static unsigned invertBranch(unsigned Opc);
 };

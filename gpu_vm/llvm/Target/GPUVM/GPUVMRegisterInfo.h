@@ -9,6 +9,7 @@
 #ifndef LLVM_LIB_TARGET_GPUVM_GPUVMREGISTERINFO_H
 #define LLVM_LIB_TARGET_GPUVM_GPUVMREGISTERINFO_H
 
+#include "MCTargetDesc/GPUVMMCTargetDesc.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 
 #define GET_REGINFO_HEADER
@@ -29,6 +30,7 @@ struct GPUVMRegisterInfo : public GPUVMGenRegisterInfo {
                            RegScavenger *RS = nullptr) const override;
 
   Register getFrameRegister(const MachineFunction &MF) const override;
+
 
   // A base pointer: realigned stack with variable sized objects.
   bool hasBasePointer(const MachineFunction &MF) const;
