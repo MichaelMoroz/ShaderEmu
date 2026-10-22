@@ -5053,7 +5053,7 @@ diff --git a/code/qcommon/q_shared.h b/code/qcommon/q_shared.h
 index 1877a42c..e0665b99 100644
 --- a/code/qcommon/q_shared.h
 +++ b/code/qcommon/q_shared.h
-@@ -23,13 +23,58 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+@@ -23,13 +23,62 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  #ifndef __Q_SHARED_H
  #define __Q_SHARED_H
  
@@ -5092,7 +5092,11 @@ index 1877a42c..e0665b99 100644
 +	unsigned	now;
 +	int			was = (int)se_part;
 +
++#ifdef __gpuvm__
++	__asm__ volatile ( "mfsr %0, cycle" : "=r"( now ) );
++#else
 +	__asm__ volatile ( "rdcycle %0" : "=r"( now ) );
++#endif
 +	se_part_cycles[se_part] += now - se_part_since;
 +	se_part = (unsigned)next, se_part_since = now;
 +	return was;
