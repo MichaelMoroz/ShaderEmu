@@ -1,3 +1,4 @@
+# (run against x17s.hlsl as of commit cf132ad; x17s.hlsl has other switches since)
 # x17c: where x17's cost against x16 goes (x17s.hlsl's probes; NOMIS, NOGEN are wrong where they matter)
 x16       gpu_vm/tick/steps/x16.hlsl
 x17       gpu_vm/tick/steps/x17.hlsl

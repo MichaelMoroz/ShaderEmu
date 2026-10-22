@@ -1,3 +1,4 @@
+# (run against x17s.hlsl as of commit cf132ad; x17s.hlsl has other switches since)
 # x17d: where a pass the fast loop raised its flag in is made again: x17 a loop of two attempts round run, restart
 # inside run's loop (x17s.hlsl), redo the next pass from the state the pass found (x17r.hlsl)
 x16       gpu_vm/tick/steps/x16.hlsl
