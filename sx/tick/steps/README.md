@@ -181,3 +181,19 @@ know both slots before writing either (no undo; a write cache entry past the end
 | x14, loops as before | 15.47 | 9.37 | 7.85 | 14.55 | 14.55 | 13.17 | 11.60 | 1.79 |
 | x14, loops ending in addbnz (`--fused 1`) | 15.42 | 10.26 | 8.39 | 16.58 | 14.52 | 13.15 | 15.21 | 1.93 |
 | two times the lean tick | 16.5 | 11.4 | 9.8 | 16.4 | 14.6 | 14.4 | 12.7 | 2 |
+
+### Round 2 (x14i: the integer bundle and a bundle's fixed cost)
+
+| Variant | What | arith | loads | stores | adds | tight | mix | stride | x lean (7) |
+|---|---|---|---|---|---|---|---|---|---|
+| x14 | | 15.41 | 10.26 | 8.38 | 16.57 | 14.50 | 13.13 | 14.88 | 1.93 |
+| i_cc | `taken` as one unsigned compare chosen by bit tables on 1 << cc (fxc had turned x14's bools back into 1 and 0) | 17.56 | 11.38 | 8.83 | 18.91 | 16.52 | 14.41 | 16.14 | 2.14 |
+| i_one | the branch first, one fetch of the next texel | 15.28 | 10.27 | 8.39 | 16.44 | 14.40 | 13.12 | 14.87 | 1.92 |
+| i_dec | I_CC, I_ONE, I_TRIM (rsub by one test, the target's shift chosen) | 17.72 | 11.70 | 9.13 | 19.07 | 16.68 | 14.73 | 16.40 | 2.17 |
+| i_l1 | integers and memory in sibling loops | 14.01 | 10.58 | 8.74 | 15.07 | 13.25 | 11.56 | 13.36 | 1.81 |
+| i_l1all | that and i_dec | 19.48 | 11.38 | 9.39 | 20.94 | 18.33 | 13.60 | 14.86 | 2.21 |
+| i_l2all | an inner do-while of integer bundles, and i_dec | 20.39 | 10.70 | 8.53 | 21.96 | 19.21 | 13.76 | 14.79 | 2.20 |
+
+i_dec and i_l2all are the reference's on the card too (every case, `--fused 1`). i_one alone is no faster but helps
+beside I_CC: 8 DXBC removed from the branch's test were worth 11%. i_dec is two times the lean tick on every loop
+but stores (9.13 against 9.8); i_l2all is faster on integers and slower on mix and stores.
