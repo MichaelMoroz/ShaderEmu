@@ -2086,8 +2086,15 @@ gpu_open(PSD psd)
 		most_w = (f >> 8 & 255) * 16;
 		most_h = (f >> 16 & 255) * 16;
 	}
+#ifdef __gpuvm__
+	/* (gpu_vm: the window's first 64 KB, RISC-V 0x86000000 to 0x86010000, is the boot area, which no core may store
+	 * to: the pool begins after it; gpu_vm/platform.md) */
+	blocks[0].at = 0x10000;
+	blocks[0].bytes = POOL_SIZE - 0x10000;
+#else
 	blocks[0].at = 0;
 	blocks[0].bytes = POOL_SIZE;
+#endif
 	blocks[0].used = 0;
 	block_count = 1;
 

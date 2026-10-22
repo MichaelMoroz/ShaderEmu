@@ -580,9 +580,44 @@ static void workers_pass(void) {
     for (uint32_t n = 0; n < 8; n++) { W(STATS_ALL + 0x400 + 16 * n) = running[n]; W(STATS_ALL + 0x404 + 16 * n) = asleep[n]; }
 }
 
+// GVM_SOUND=1 (rvc_cpu's RVC_SOUND): the sound card's clock and voices move as the card's control pass moves them
+// (experiments/rvc_opt/src/sound.h's sound_control), so that a program's sound code runs as on the card; nothing is
+// mixed. Every 5 ms of TIME, at 48,000 samples a second.
+static void sound_pass(void) {
+    static int on = -1;
+    const uint32_t GUEST = CTRL + 0x220, DEVICE = CTRL + 0x230, RATE = 48000;
+    if (on < 0) on = getenv("GVM_SOUND") && atoi(getenv("GVM_SOUND")) != 0;
+    if (!on || !W(GUEST)) return;
+    uint32_t cursor = (uint32_t)(H.m.time * RATE / 100000), moved = cursor - W(DEVICE);
+    if (W(DEVICE + 4) && moved < 240) return;
+    if (!W(DEVICE + 4)) moved = 0;
+    for (uint32_t n = 0, voices = W(GUEST + 8) < 32 ? W(GUEST + 8) : 32; n < voices; n++) {
+        uint32_t *a = &W(CTRL + 0x800 + 32 * n), *b = a + 4, *c = &W(CTRL + 0xc00 + 32 * n), *d = c + 4;
+        uint32_t on_ = c[1] & 1, kind = c[1] >> 8, address = d[0], length = d[1], restart = d[2], aux = d[3], pos = c[2], frac = c[3], k = moved;
+        if (a[0] != c[0]) on_ = a[0] & 1, kind = a[1], address = a[2], length = a[3], restart = b[0], aux = b[3], pos = frac = 0, k = 0;
+        if ((kind & 0xff) == 3) restart = b[0];
+        if (on_) {
+            uint32_t kl = k & 0xffff, kh = k >> 16, pl = b[1] & 0xffff, ph = b[1] >> 16, low = kl * pl + frac;
+            pos += (low >> 16) + kl * ph + kh * pl + ((kh * ph) << 16);
+            frac = low & 0xffff;
+            if ((kind & 0xff) == 3) {
+                if ((int32_t)(restart - pos) <= 0) pos = restart, frac = 0;
+            } else if (pos >= length) {
+                if ((kind & 0x100) && restart < length) pos = restart + (pos - restart) % (length - restart);
+                else on_ = 0;
+            }
+        }
+        c[0] = a[0], c[1] = (kind << 8) | on_, c[2] = pos, c[3] = frac;
+        d[0] = address, d[1] = length, d[2] = restart, d[3] = aux;
+    }
+    W(DEVICE) = cursor;
+    W(DEVICE + 4) = RATE;
+}
+
 // The rest of rvc_cpu's control pass with no host devices: a submitted list is drawn at once (nothing is drawn: the
 // submit word is taken back, the list counted and its copy counted), the clock, the host's flags, the passes
 static void devices_pass(void) {
+    sound_pass();
     uint32_t submit = W(CTRL + 0x10);
     if (submit) {
         W(CTRL + 0x10) = 0;

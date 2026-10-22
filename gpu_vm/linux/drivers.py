@@ -16,7 +16,8 @@ DRIVERS = [  # source, directory, config symbol, prompt, extra Kconfig lines
     ('shaderemu_gpu.c', 'drivers/misc', 'SHADEREMU_GPU', 'ShaderEmu GPU device', []),
     ('shaderemu_sound.c', 'drivers/misc', 'SHADEREMU_SOUND', 'ShaderEmu sound card', []),
     ('shaderemu_fb.c', 'drivers/video/fbdev', 'FB_SHADEREMU', 'ShaderEmu display',
-     ['depends on FB', 'select FB_CFB_FILLRECT', 'select FB_CFB_COPYAREA', 'select FB_CFB_IMAGEBLIT']),
+     ['depends on FB', 'select FB_CFB_FILLRECT', 'select FB_CFB_COPYAREA', 'select FB_CFB_IMAGEBLIT',
+      'select FB_PROVIDE_GET_FB_UNMAPPED_AREA if !MMU']),   # (no MMU: a mapping of fb0 is the pixels where they are)
     ('shaderemu_input.c', 'drivers/input/misc', 'INPUT_SHADEREMU', 'ShaderEmu keyboard and pointer', []),
     ('shaderemu_net.c', 'drivers/net', 'SHADEREMU_NET', 'ShaderEmu network device', ['depends on INET']),
 ]
@@ -83,8 +84,12 @@ for source, directory, symbol, prompt, extra in DRIVERS:
         open(makefile, 'a').write('obj-$(CONFIG_%s) += %s\n' % (symbol, source.replace('.c', '.o')))
     kconfig = os.path.join(tree, directory, 'Kconfig')
     k = open(kconfig).read()
+    entry = 'config %s\n\tbool "%s"\n%s\n' % (symbol, prompt, ''.join('\t%s\n' % line for line in extra))
+    old = re.search(r'config %s\n(\t.*\n)*\n' % symbol, k)
+    if old and old.group(0) != entry:   # (an entry of an earlier drivers.py: made anew)
+        k = k.replace(old.group(0), entry)
+        open(kconfig, 'w').write(k)
     if symbol not in k:
-        entry = 'config %s\n\tbool "%s"\n%s\n' % (symbol, prompt, ''.join('\t%s\n' % line for line in extra))
         body = k.rstrip()
         for closing in ('endmenu', 'endif'):
             if body.endswith(closing):
@@ -119,4 +124,11 @@ if 'alloc_pages_run' not in s:
     open(p, 'w').write(s)
 for patch in ('patch_ovl.py', 'patch_ramfs.py', 'patch_procmaps.py'):
     subprocess.run([sys.executable, os.path.join(nommu, patch), tree], check=True, stdout=subprocess.DEVNULL)   # (after alloc_pages_run: patch_ovl.py changes its lines)
+# binfmt_flat's copy of a program that lies in memory (patch_ovl.py): the RISC-V machine's copy CSRs there, gpu_vm's
+# memcpy here (one operation of the commit from 4 KB up: arch/gpuvm/lib/string.S)
+p = os.path.join(tree, 'fs/binfmt_flat.c')
+s = open(p).read()
+old = '\tcsr_write(0x0b1, from);\n\tcsr_write(0x0b2, to);\n\tcsr_write(0x0b3, size);\n\tcsr_write(0x0b0, 1);\n'
+if old in s:
+    open(p, 'w').write(s.replace(old, '\tmemcpy((void *)to, (const void *)from, size);\n'))
 print('drivers.py: the machine\'s drivers in', tree)
