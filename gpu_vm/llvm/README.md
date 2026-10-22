@@ -12,8 +12,10 @@ the code generator, and clang's `gpuvm-unknown-elf` (bare metal, gvm_cpu's semih
     $B/ld.lld -e _start -o prog.elf crt0.o prog.o libc.a libclang_rt.builtins.a
     build/gvm_cpu/gvm_cpu prog.elf                 # make -C gpu_vm/cpu CC=gcc
 
-or in one step `clang --target=gpuvm-unknown-elf -O2 prog.c crt0.o ... -nostdlib -o prog.elf` (the bare-metal
-driver links with ld.lld, `-m elf32gpuvm`, image base 0x02000000). There is no libc or compiler-rt for gpu_vm yet:
+or in one step `clang --target=gpuvm-unknown-elf -O2 -nostdlib crt0.o prog.c librt.a -o prog.elf` (the bare-metal
+driver links with `ld.lld -Bstatic -m elf32gpuvm`, entry `_start`, image base 0x02000000; without `-nostdlib` it adds
+`crt0.o`, `-lc` and compiler-rt from `lib/clang-runtimes/gpuvm-unknown-elf/lib` and the resource dir's
+`lib/gpuvm-unknown-unknown-elf`, where a libc and compiler-rt for gpu_vm will go). There is none yet:
 the tests use `test/exec/rt` (below): `crt0.s` (call main, exit with its result), `libc.c` with headers in
 `rt/include` (stdio to gvm_cpu's stdout, string, stdlib with a bump allocator, ctype, a few of math; over
 gvm_cpu's semihosted syscalls: r12 the number, r5-r10 the arguments) and compiler-rt's generic builtins compiled
