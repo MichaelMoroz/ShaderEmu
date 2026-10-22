@@ -26,6 +26,9 @@ constexpr uint32_t OpCopy = 1, OpFill = 2;
 // -gpuvm-op-threshold and -gpuvm-inline-texels
 unsigned getGPUVMOpThreshold();
 unsigned getGPUVMInlineTexels();
+// -gpuvm-general-ops: one op of the general step (bfe, shadd) where two of the
+// fast loop's would do (GPUVMPatterns.td)
+bool gpuvmGeneralOps();
 
 class GPUVMTargetLowering : public TargetLowering {
   const GPUVMSubtarget &Subtarget;

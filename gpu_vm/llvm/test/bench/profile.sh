@@ -10,13 +10,16 @@ BIN=${GVM_LLVM_BIN:-$HOME/gpu_vm/llvm-build/bin}
 "$ROOT/build/gvm_cpu/gvm_cpu" --trace "$ELF" 2>&1 >/dev/null | awk '
     /^\[[0-9]+\] / {
         ctl = strtonum("0x" $3); n = int(ctl / 8) % 4; cc = int(ctl / 128) % 16
-        ops[n]++; total++; pc[$2]++
+        ops[n]++; total++; pc[$2]++; path[ctl % 8]++
         if (n == 0 && cc != 5) branchonly++
     }
     END {
         printf "bundles %d: 0 ops %d (%.1f%%; with a branch or a control op %d), 1 op %d (%.1f%%), 2 ops %d (%.1f%%); %.2f ops a bundle\n",
             total, ops[0], 100 * ops[0] / total, branchonly, ops[1], 100 * ops[1] / total, ops[2], 100 * ops[2] / total,
             (ops[1] + 2 * ops[2]) / total
+        printf "paths: fast (3-7) %.1f%%, 1 (ALU) %.1f%%, 2 (memory and float) %.1f%%, 0 (general) %.1f%%\n",
+            100 * (path[3] + path[4] + path[5] + path[6] + path[7]) / total, 100 * path[1] / total,
+            100 * path[2] / total, 100 * path[0] / total
         for (p in pc) print pc[p], p > "/tmp/gvm_profile_pcs"
     }'
 sort -rn /tmp/gvm_profile_pcs | head -"$TOP" > /tmp/gvm_profile_top

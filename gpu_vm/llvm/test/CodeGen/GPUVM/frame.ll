@@ -37,12 +37,12 @@ define void @dynamic(i32 %n) {
 ; CHECK-LABEL: dynamic:
 ; CHECK: addi sp, sp, -16
 ; CHECK: sw ra, 12(sp)
-; CHECK: li t0, 15
+; CHECK: slli t0, a0, 2
 ; CHECK: sw s0, 8(sp)
-; CHECK: addi s0, sp, 16
-; CHECK: shadd t0, t0, a0, 2
+; CHECK: addi t0, t0, 15
 ; CHECK: andi t0, t0, -16
 ; CHECK: sub a0, sp, t0
+; CHECK: addi s0, sp, 16
 ; CHECK: mv sp, a0
 ; CHECK: call use
 ; CHECK: addi sp, s0, -16
@@ -83,11 +83,11 @@ define void @realigned_dynamic(i32 %n) {
 ; CHECK: sw s2, 48(sp)
 ; CHECK: addi s0, sp, 64
 ; CHECK: andi sp, sp, -64
-; CHECK: li t0, 15
-; CHECK: mv s1, sp
-; CHECK: shadd t0, t0, a0, 2
+; CHECK: slli t0, a0, 2
+; CHECK: addi t0, t0, 15
 ; CHECK: andi t0, t0, -16
 ; CHECK: sub s2, sp, t0
+; CHECK: mv s1, sp
 ; CHECK: mv sp, s2
 ; CHECK: mv a0, s1
 ; CHECK: call use

@@ -195,6 +195,12 @@ static cl::opt<unsigned> InlineTexels(
 unsigned llvm::getGPUVMOpThreshold() { return OpThreshold; }
 unsigned llvm::getGPUVMInlineTexels() { return InlineTexels; }
 
+static cl::opt<bool> GeneralOps(
+    "gpuvm-general-ops", cl::Hidden, cl::init(false),
+    cl::desc("gpu_vm: bfe, bfes and shadd where a shift and a mask or add "
+             "would do (fewer ops, but the tick's general step)"));
+bool llvm::gpuvmGeneralOps() { return GeneralOps; }
+
 bool GPUVMTargetLowering::findOptimalMemOpLowering(
     LLVMContext &Context, std::vector<EVT> &MemOps, unsigned Limit,
     const MemOp &Op, unsigned DstAS, unsigned SrcAS,

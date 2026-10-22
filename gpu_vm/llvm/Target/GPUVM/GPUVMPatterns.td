@@ -180,19 +180,29 @@ def : Pat<(sub imm32:$imm, (i32 GPR:$a)),
 def : Pat<(and (i32 GPR:$a), (not (i32 GPR:$b))), (ANDN GPR:$a, GPR:$b)>;
 def : Pat<(or (i32 GPR:$a), (not (i32 GPR:$b))), (ORN GPR:$a, GPR:$b)>;
 def : Pat<(not (xor (i32 GPR:$a), (i32 GPR:$b))), (XNOR GPR:$a, GPR:$b)>;
-let AddedComplexity = 1 in
+// The tick's fast loop runs bundles whose op 0 is a mid integer op (functions
+// 0-19) or a load or store of a word or less, and op 1 lite (0-7, the three
+// shifts) or such a memory op: two of those ops in a bundle cost less than one
+// op of the general step (shadd, bfe, sel, the carries, the extended class).
+// By default a shift and a mask, a shift and an add, two shifts are made;
+// -gpuvm-general-ops takes the one op instead.
+def GeneralOps : Predicate<"llvm::gpuvmGeneralOps()">;
+def lowmask : ImmLeaf<i32, [{ return isMask_32((uint32_t)Imm); }]>;
+let Predicates = [GeneralOps], AddedComplexity = 1 in {
 def : Pat<(and (i32 GPR:$a), lowmask12:$m), (BFE GPR:$a, 0, (MaskLen $m))>;
-
 // shadd: a + (b << sh)
 def : Pat<(add (i32 GPR:$a), (shl (i32 GPR:$b), uimm5:$sh)),
           (SHADD GPR:$a, GPR:$b, uimm5:$sh)>;
-
-// bfe: a field
-def : Pat<(and (srl (i32 GPR:$a), uimm5:$pos), lowmask12:$m),
+// bfe: a field, one op for the shift and the mask
+def : Pat<(and (srl (i32 GPR:$a), uimm5:$pos), lowmask:$m),
           (BFE GPR:$a, uimm5:$pos, (MaskLen $m))>;
 def : Pat<(sext_inreg (i32 GPR:$a), i1), (BFES GPR:$a, 0, 1)>;
 def : Pat<(sext_inreg (i32 GPR:$a), i8), (BFES GPR:$a, 0, 8)>;
 def : Pat<(sext_inreg (i32 GPR:$a), i16), (BFES GPR:$a, 0, 16)>;
+}
+def : Pat<(sext_inreg (i32 GPR:$a), i1), (SRAI (SLLI GPR:$a, 31), 31)>;
+def : Pat<(sext_inreg (i32 GPR:$a), i8), (SRAI (SLLI GPR:$a, 24), 24)>;
+def : Pat<(sext_inreg (i32 GPR:$a), i16), (SRAI (SLLI GPR:$a, 16), 16)>;
 
 def : Pat<(abs (i32 GPR:$a)), (MAX GPR:$a, (SUB (i32 R0), GPR:$a))>;
 
@@ -236,6 +246,11 @@ def : Pat<(add (i32 GPR:$a), (gpuvm_addr tconstpool:$s)),
 // Comparisons and selects
 //===----------------------------------------------------------------------===//
 
+// x == 0, x != 0: sltu (a mid op) rather than seq/sne (20-23: the full step)
+let AddedComplexity = 1 in {
+def : Pat<(seteq (i32 GPR:$a), 0), (SLTUI GPR:$a, 1)>;
+def : Pat<(setne (i32 GPR:$a), 0), (SLTU (i32 R0), GPR:$a)>;
+}
 def : Pat<(seteq (i32 GPR:$a), (i32 GPR:$b)), (SEQ GPR:$a, GPR:$b)>;
 def : Pat<(seteq (i32 GPR:$a), imm32:$i), (SEQI GPR:$a, imm32:$i)>;
 def : Pat<(setne (i32 GPR:$a), (i32 GPR:$b)), (SNE GPR:$a, GPR:$b)>;

@@ -1,6 +1,8 @@
 ; RUN: llc -mtriple=gpuvm < %s | FileCheck %s
+; RUN: llc -mtriple=gpuvm -gpuvm-general-ops < %s | FileCheck %s --check-prefix=GEN
 ; Integer ops: R and I forms (any 32-bit immediate is one op), the extended
-; ops, and the patterns over them (andn, bfe, bfes, shadd, abs, min/max).
+; ops, and the patterns over them (andn, shifts for fields and sign extension:
+; the fast loop's ops; bfe, bfes, shadd with -gpuvm-general-ops; abs, min/max).
 
 define i32 @add(i32 %a, i32 %b) {
 ; CHECK-LABEL: add:
@@ -71,16 +73,21 @@ define i32 @xnor(i32 %a, i32 %b) {
 }
 
 define i32 @zext16(i32 %a) {
+; GEN-LABEL: zext16:
+; GEN: bfe a0, a0, 0, 16
 ; CHECK-LABEL: zext16:
-; CHECK: bfe a0, a0, 0, 16
+; CHECK: andi a0, a0, 65535
 ; CHECK: ret
   %r = and i32 %a, 65535
   ret i32 %r
 }
 
 define i32 @field(i32 %a) {
+; GEN-LABEL: field:
+; GEN: bfe a0, a0, 7, 13
 ; CHECK-LABEL: field:
-; CHECK: bfe a0, a0, 7, 13
+; CHECK: srli t0, a0, 7
+; CHECK: andi a0, t0, 8191
 ; CHECK: ret
   %s = lshr i32 %a, 7
   %r = and i32 %s, 8191
@@ -88,8 +95,11 @@ define i32 @field(i32 %a) {
 }
 
 define i32 @sext8(i32 %a) {
+; GEN-LABEL: sext8:
+; GEN: bfes a0, a0, 0, 8
 ; CHECK-LABEL: sext8:
-; CHECK: bfes a0, a0, 0, 8
+; CHECK: slli t0, a0, 24
+; CHECK: srai a0, t0, 24
 ; CHECK: ret
   %t = trunc i32 %a to i8
   %r = sext i8 %t to i32
@@ -98,15 +108,19 @@ define i32 @sext8(i32 %a) {
 
 define i32 @sext16(i16 %a) {
 ; CHECK-LABEL: sext16:
-; CHECK: bfes a0, a0, 0, 16
+; CHECK: slli t0, a0, 16
+; CHECK: srai a0, t0, 16
 ; CHECK: ret
   %r = sext i16 %a to i32
   ret i32 %r
 }
 
 define i32 @shadd(i32 %a, i32 %b) {
+; GEN-LABEL: shadd:
+; GEN: shadd a0, a0, a1, 3
 ; CHECK-LABEL: shadd:
-; CHECK: shadd a0, a0, a1, 3
+; CHECK: slli t0, a1, 3
+; CHECK: add a0, a0, t0
 ; CHECK: ret
   %s = shl i32 %b, 3
   %r = add i32 %a, %s

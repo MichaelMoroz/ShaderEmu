@@ -74,8 +74,10 @@ applying them to a clean tree rebuilds most of LLVM (an hour on 12 jobs); 0005's
   complex.h, `_Float128` and such. 22 October 2026: -O0 1594 of 1652 (96.5%), -O2 1588 of 1652 (96.1%); of the tests
   the host passes, 99.7% at both; the 5 left are the runtime's (fopen/freopen/tmpnam, pow, an x86 asm test).
 - `test/bench/run.sh`: CoreMark (EEMBC's sources from `~/gpu_vm/coremark-src/coremark`, the port in `bench/coremark`:
-  CYCLE as the clock). -O2: 152 thousand bundles an iteration, 1.25 ops a bundle (was 178 thousand before the bundle
-  scheduler, the frame pointer's omission and the branches' constants).
+  CYCLE as the clock). -O2: 149 thousand bundles an iteration, 1.31 ops a bundle, 95.6% of bundles on the fast
+  loop's paths (was 178 thousand before the bundle scheduler, the frame pointer's omission, the branches' constants
+  and the branch fill). `test/bench/profile.sh PROGRAM.elf` (gvm_cpu --trace): the bundles by their number of ops
+  and by path, and the hottest ones with their functions.
 
 ## The code generator
 
@@ -96,11 +98,17 @@ code generator's job toward bundles is the order of its ops.
   registers at the frame's top, `addi fp, sp, N` when there is an fp (allocas, realignment, -fno-omit-frame-pointer),
   `andi sp, sp, -align` for over-aligned locals; shrink wrapping. No CFI is emitted for the frame (`.cfi_startproc`
   only): no unwinding.
+- **The fast loop's ops**: the tick runs a bundle in its fast loop when op 0 is a mid integer op (functions 0-19)
+  or a load or store of a word or less and op 1 lite (0-7 and the shifts) or such a memory op (`isa.h`, the paths);
+  shadd, bfe, sel, the carries, ror/rol/seq/sne and the extended class go to the full or general step. So a field is
+  `srli; andi`, a sign extension `slli; srai`, a scaled add `slli; add`, x == 0 `sltui x, 1` (two ops that share a
+  fast bundle rather than one op of the general step: CoreMark has the same bundles, 4.3% of them general against
+  9.8%); `-gpuvm-general-ops` makes bfe, bfes and shadd instead.
 - **Selection** (`GPUVMPatterns.td`, `GPUVMISelDAGToDAG.cpp`): every constant and symbol is one op (`li`/`la`: addi
   from zero; any 32-bit immediate); an address folds into a load's or store's immediate (`lw a0, sym+8(t0)`), and
   base + (index << s) is `lwx`/`swx`...; compares (`slt`... with any immediate; a > k as a >= k + 1), `sel`,
-  compare-and-branch in the control word (registers; imm6 forms; `bbs`/`bbc` for a bit), `shadd`, `bfe`/`bfes`
-  (fields, sign extension, low masks of 12 bits and more), `andn`/`orn`/`xnor`, min/max, abs, mul/mulh/mulhu,
+  compare-and-branch in the control word (registers; imm6 forms; `bbs`/`bbc` for a bit), `andn`/`orn`/`xnor`,
+  min/max, abs, mul/mulh/mulhu,
   div/rem (the ISA's; division by zero is UB in C), clz/ctz/popc/bswap/brev, rotates. i64: `add`+`carry`+`addcy`,
   `sub`+`borrow`+`subby`, products by mulhu, shifts inline, division by compiler-rt (`__divdi3`...).
 - **float** in the integer registers on the card's units: fadd fsub fmul fdiv fmin fmax fsqrt (always: the doc's
