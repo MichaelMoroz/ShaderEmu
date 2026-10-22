@@ -11,8 +11,9 @@
 #include "../ref/gvm_ref.h"
 #include "../ref/gvm_asm.h"
 
-// ---- The bench's machine: RAM to 48 MB (16 MB of it RAM proper), 64 KB of ROM
-static const uint32_t RAM_END = 1536 * 2048 * 16, ROM_SIZE = 1u << 20;
+// ---- The bench's machine: RAM to 64 MB (32 MB of it RAM proper: the real programs' runtime has a static heap of 16 MB),
+// 1 MB of ROM
+static const uint32_t RAM_END = 2048 * 2048 * 16, ROM_SIZE = 1u << 20;
 static uint32_t g_texw = 2048;   // the RAM's and ROM's textures' width: a step's RAM_W (x16 on: 8192)
 static uint32_t ram_rows() { return RAM_END / 16 / g_texw; }
 static uint32_t rom_rows() { return ROM_SIZE / 16 / g_texw; }
@@ -45,6 +46,12 @@ struct Case {
     double bundles_fused = 0;  // a timed case under g_fused: bundles an iteration of its loop
     bool named = false;        // run only when --case names it (the fused ops: a tick without them is not wrong)
     int ext_from = -1, ext_to = -1;   // core 0's external interrupt line is on in passes [ext_from, ext_to) of a check
+    // a real program (an ELF of build/tick_real, gpu_vm/tick/real/build.sh) in place of build: timed in bundles a second,
+    // its words `pokes` set in the image ("symbol=check,timed;..."): a check runs a short piece of it to its first call to
+    // the host (a trap, which halts), a timing a long one
+    const char* elf = nullptr;
+    const char* pokes = "";
+    bool ns = false;   // timed in ns a bundle (a real program, a probe of one kind of bundle)
 };
 
 // ---- Random programs: the fuzzer's ops (registers r5-r28 carry values; r29 a base for memory)
@@ -742,6 +749,41 @@ static std::vector<Case> cases() {
         loop_end(a, top);
         a.halt();
     }, 7, 0, 0, 3});
+    // ---- real programs, compiled by gpu_vm's clang -O2 (gpu_vm/tick/real/build.sh): timed in ns a bundle
+    auto real = [&](const char* name, const char* elf, const char* pokes) {
+        Case c{name, 1, true, [](std::vector<GvmAsm>&, std::vector<std::pair<uint32_t, uint32_t>>&, uint32_t) {}};
+        c.elf = elf; c.pokes = pokes; c.named = true; c.ns = true;
+        v.push_back(c);
+    };
+    // ---- probes of one kind of bundle, in ns a bundle (named): the general step's (sel, path 0), calls and returns
+    auto probe = [&](const char* name, std::function<void(GvmAsm&)> body) {
+        Case c{name, 1, true, [body](std::vector<GvmAsm>& p, auto& data, uint32_t) {
+            GvmAsm& a = p[0];
+            a.li(5, g_loop_n + 1); a.li(4, (int32_t)DATA);
+            int top = a.here();
+            body(a);
+            a.addbnz(5, -1, top);
+            a.halt();
+        }};
+        c.named = true; c.ns = true;
+        v.push_back(c);
+    };
+    probe("p_int", [](GvmAsm& a) { for (int i = 0; i < 16; i++) { a.add(6 + i % 4, 6 + i % 4, 5); a.close(); } });
+    probe("p_sel", [](GvmAsm& a) { for (int i = 0; i < 16; i++) { a.sel(6 + i % 4, 6 + i % 4, 5, 4); a.close(); } });
+    probe("p_load", [](GvmAsm& a) { for (int i = 0; i < 16; i++) { a.lw(6 + i % 4, 4, 4 * i); a.close(); } });
+    probe("p_store", [](GvmAsm& a) { for (int i = 0; i < 16; i++) { a.sw(5, 4, 4 * i); a.close(); } });
+    probe("p_call", [](GvmAsm& a) {   // 16 bundles: a call, a return, 14 integer bundles
+        int f = a.label(), back = a.label();
+        a.call(f); a.bind(back);
+        for (int i = 0; i < 14; i++) { a.add(6 + i % 4, 6 + i % 4, 5); a.close(); }
+        int over = a.label();
+        a.j(over);   // (the function after the loop's body: jumped over)
+        a.bind(f); a.ret();
+        a.bind(over);
+    });
+    real("coremark", "build/tick_real/coremark.elf", "seed4_volatile=1,1000000");
+    real("gzip", "build/tick_real/gzloop.elf", "gz_mode=1,1;gz_bytes=6000,262144;gz_rounds=1,1000");
+    real("gunzip", "build/tick_real/gzloop.elf", "gz_mode=2,2;gz_rounds=1,1000");
     return v;
 }
 
@@ -752,8 +794,91 @@ struct Prepared {
     std::vector<uint32_t> bases;
 };
 static const uint32_t HALT_STUB = GVM_RAM + 0xff0000;
+// a real program's ELF: its segments into the image, its words poked; the entry, or 0 (and why printed)
+static std::vector<uint8_t> slurp_file(const char* path) {
+    std::vector<uint8_t> b;
+    FILE* f = fopen(path, "rb");
+    if (!f) return b;
+    fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);
+    b.resize((size_t)n);
+    if (n > 0 && fread(b.data(), 1, (size_t)n, f) != (size_t)n) b.clear();
+    fclose(f);
+    return b;
+}
+// (a probe of x18's encoding: cc 0's fields moved, and its bundles given their ops' path, as the compiler will make them)
+static int g_cc0 = 0, g_self = 0;
+static void cc0_convert(uint32_t* wv, uint32_t bundles) {
+    for (uint32_t b = 0; b < bundles; b++) {
+        uint32_t* w = wv + 4 * b, ctl = w[3];
+        if (g_self && GVM_OPC(w[0]) == GVM_OP_I(GVM_I_SEL) && GVM_N(ctl) >= 1 && GVM_PATH(ctl) != GVM_PATH_INT &&
+            (GVM_N(ctl) == 1 || GvmAsm::lite(w[1])) && GVM_N(ctl) < 3)   // (probe: sel as op 0 of the integer path)
+            w[3] = ctl = (ctl & ~7u) | GVM_PATH_INT;
+        if (!g_cc0) continue;
+        if (GVM_CC(ctl) != GVM_CC_SPECIAL || ctl == 0) continue;
+        uint32_t sub = (ctl >> 11) & 7, rs = (ctl >> 14) & 63, n = GVM_N(ctl), nc = (ctl & 0x7f8u) | sub << 29;
+        if (sub == GVM_SUB_J || sub == GVM_SUB_CALL) nc |= ((ctl >> 14) & 0x3ffffu) << 11;
+        else if (sub == GVM_SUB_JR || sub == GVM_SUB_CALLR) nc |= rs << 11;
+        else if (sub == GVM_SUB_ADD) nc |= rs << 11 | ((ctl >> 20) & 0xfffu) << 17;
+        GvmAsm a(0);
+        for (uint32_t k = 0; k < n && k < 2; k++) a.cur.push_back(w[k]);
+        bool fast = sub == GVM_SUB_J || sub == GVM_SUB_CALL || sub == GVM_SUB_ADD || sub == GVM_SUB_JR || sub == GVM_SUB_CALLR;
+        if ((sub == GVM_SUB_JR || sub == GVM_SUB_CALLR) && (a.writes(rs) || g_cc0 == 3)) fast = false;   // (jr reads rs as the bundle found it)
+        uint32_t pa = a.path();
+        if (g_self && n >= 1 && GVM_OPC(w[0]) == GVM_OP_I(GVM_I_SEL) && (n == 1 || GvmAsm::lite(w[1]))) pa = GVM_PATH_INT;
+        nc |= fast && n < 3 ? pa : GVM_PATH_GENERAL;
+        w[3] = nc;
+    }
+}
+static uint32_t load_real(const Case& cs, std::vector<uint32_t>& img) {
+    std::string path = cs.elf;
+    std::vector<uint8_t> e = slurp_file(path.c_str());
+    for (int up = 0; up < 3 && e.empty(); up++) { path = "../" + path; e = slurp_file(path.c_str()); }   // (run from bin or gpu_vm)
+    auto rd16 = [&](size_t o) { return (uint32_t)e[o] | (uint32_t)e[o + 1] << 8; };
+    auto rd32 = [&](size_t o) { return rd16(o) | rd16(o + 2) << 16; };
+    if (e.size() < 52 || memcmp(e.data(), "\177ELF", 4)) { printf("  %s: no ELF at %s (gpu_vm/tick/real/build.sh)\n", cs.name, cs.elf); return 0; }
+    uint8_t* bytes = (uint8_t*)img.data();
+    for (uint32_t i = 0, ph = rd32(28); i < rd16(44); i++, ph += rd16(42)) {
+        if (rd32(ph) != 1) continue;
+        uint32_t off = rd32(ph + 4), va = rd32(ph + 8), fs = rd32(ph + 16), ms = rd32(ph + 20);
+        if (va + ms > RAM_END) { printf("  %s: a segment past RAM's end\n", cs.name); return 0; }
+        memcpy(bytes + va, e.data() + off, fs);
+        memset(bytes + va + fs, 0, ms - fs);
+        if ((g_cc0 || g_self) && (rd32(ph + 24) & 1) && !(va & 15)) cc0_convert(&img[va / 4], fs / 16);   // (PF_X)
+    }
+    bool timing = g_loop_n > 100000;
+    std::string pk = cs.pokes;
+    for (size_t at = 0; at < pk.size();) {   // symbol=check,timed
+        size_t end = pk.find(';', at), eq = pk.find('=', at), cm = pk.find(',', at);
+        if (end == std::string::npos) end = pk.size();
+        std::string sym = pk.substr(at, eq - at);
+        uint32_t val = (uint32_t)strtoul(pk.c_str() + (timing ? cm + 1 : eq + 1), nullptr, 0);
+        bool found = false;
+        for (uint32_t i = 0, sh = rd32(32); i < rd16(48) && !found; i++, sh += rd16(46)) {
+            if (rd32(sh + 4) != 2) continue;   // SHT_SYMTAB
+            uint32_t so = rd32(sh + 16), sn = rd32(sh + 20), str = rd32(rd32(32) + rd32(sh + 24) * rd16(46) + 16);
+            for (uint32_t k = so; k + 16 <= so + sn; k += 16)
+                if (!strcmp((const char*)e.data() + str + rd32(k), sym.c_str())) { img[rd32(k + 4) / 4] = val; found = true; break; }
+        }
+        if (!found) printf("  %s: no symbol %s\n", cs.name, sym.c_str());
+        at = end + 1;
+    }
+    return rd32(24);
+}
 static Prepared prepare(const Case& cs, uint32_t seed) {
     Prepared pr;
+    if (cs.elf) {   // a real program: its image, sp at RAM's end, a trap halts
+        pr.ramImg.assign((size_t)RAM_END / 4, 0);
+        uint32_t entry = load_real(cs, pr.ramImg);
+        pr.bases.push_back(entry ? entry : HALT_STUB);
+        pr.ramImg[HALT_STUB / 4] = GVM_WORD_R(GVM_X_BREAK, 0u, 0u, 0u, 0u); pr.ramImg[HALT_STUB / 4 + 3] = GVM_CTRL_NONE | 1u << 3 | GVM_PATH_GENERAL;
+        pr.state.assign(1, std::vector<uint32_t>((size_t)(g_twc + g_wcn / 2 + 8) * 4, 0));
+        pr.state[0][2] = RAM_END - 64;
+        pr.state[0][16 * 4 + 0] = pr.bases[0];
+        pr.state[0][16 * 4 + 1] = GVM_ST_S;
+        pr.state[0][18 * 4 + 3] = 0x9e3779b9u;
+        pr.state[0][17 * 4 + 1] = HALT_STUB;
+        return pr;
+    }
     std::vector<GvmAsm> progs(cs.cores, GvmAsm(GVM_RAM));
     std::vector<std::pair<uint32_t, uint32_t>> data;
     for (uint32_t c = 0; c < cs.cores; c++) progs[c].base = GVM_RAM + c * 0x40000;

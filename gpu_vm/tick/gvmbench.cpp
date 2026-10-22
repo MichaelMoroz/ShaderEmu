@@ -125,6 +125,8 @@ static Prog program(const char* path, const char* v, const char* p, const std::v
 struct Gpu {
     uint32_t cores, statePix;
     Tex ram, rom, stage, ops[2], set[2][8];
+    ID3D11Buffer* code = nullptr;   // t12: RAM's first image as a StructuredBuffer<uint4> (a probe's code fetched from a buffer)
+    ID3D11ShaderResourceView* codeSrv = nullptr;
     int cur = 0, oc = 0;
     Prog tick, commit, stg, wrt, prog;
     bool hasCommit = true, hasOps = true;
@@ -136,6 +138,12 @@ struct Gpu {
         cores = ncores;
         statePix = (g_twc + g_wcn / 2 + 7) / 8;
         ram = make_tex(g_texw, ram_rows(), ramImg.data());
+        {
+            D3D11_BUFFER_DESC bd = {(UINT)(ramImg.size() * 4), D3D11_USAGE_DEFAULT, D3D11_BIND_SHADER_RESOURCE, 0, D3D11_RESOURCE_MISC_BUFFER_STRUCTURED, 16};
+            D3D11_SUBRESOURCE_DATA sd = {ramImg.data(), 0, 0};
+            check(dev->CreateBuffer(&bd, &sd, &code), "code buffer");
+            check(dev->CreateShaderResourceView(code, nullptr, &codeSrv), "code SRV");
+        }
         rom = make_tex(g_texw, rom_rows(), romImg.data());
         std::vector<uint32_t> z((size_t)opSpan * cores * opSlots * 4, 0);
         stage = make_tex(opSpan, cores * opSlots, z.data());
@@ -153,24 +161,26 @@ struct Gpu {
     }
     void release() {
         free_tex(ram); free_tex(rom); free_tex(stage);
+        if (code) { codeSrv->Release(); code->Release(); code = nullptr; codeSrv = nullptr; }
         for (auto& t : ops) free_tex(t);
         for (auto& s : set) for (auto& t : s) free_tex(t);
     }
     void clear_srv() {
-        ID3D11ShaderResourceView* none[12] = {};
-        ctx->PSSetShaderResources(0, 12, none);
-        ctx->VSSetShaderResources(0, 12, none);
+        ID3D11ShaderResourceView* none[13] = {};
+        ctx->PSSetShaderResources(0, 13, none);
+        ctx->VSSetShaderResources(0, 13, none);
         ctx->OMSetRenderTargets(0, nullptr, nullptr);
     }
     void bind(const Tex& state0, int which, bool withRam, bool withStage) {   // t0 RAM, t1 ROM, t2-t9 a state set, t10 ops, t11 stage
-        ID3D11ShaderResourceView* s[12] = {};
+        ID3D11ShaderResourceView* s[13] = {};
         if (withRam) s[0] = ram.srv;
         s[1] = rom.srv;
         for (int t = 0; t < 8; t++) s[2 + t] = set[which][t].srv;
         s[10] = ops[oc].srv;
         if (withStage) s[11] = stage.srv;
-        ctx->PSSetShaderResources(0, 12, s);
-        ctx->VSSetShaderResources(0, 12, s);
+        s[12] = codeSrv;
+        ctx->PSSetShaderResources(0, 13, s);
+        ctx->VSSetShaderResources(0, 13, s);
         (void)state0;
     }
     void viewport(UINT w, UINT h) { D3D11_VIEWPORT v = {0, 0, (float)w, (float)h, 0, 1}; ctx->RSSetViewports(1, &v); }
@@ -266,7 +276,10 @@ static bool check_case(Gpu& gpu, const Case& cs, uint32_t seed, bool verbose) {
     m.ram = refRam.data(); m.ram_end = RAM_END; m.rom = romBytes.data(); m.rom_size = ROM_SIZE;
     m.flags = GVM_REF_BREAK_HALTS;
     std::vector<gvm_core> rc(cs.cores);
-    for (uint32_t c = 0; c < cs.cores; c++) { gvm_core_reset(&rc[c], c, pr.bases[c]); rc[c].sr[GVM_SR_TVEC] = HALT_STUB; }
+    for (uint32_t c = 0; c < cs.cores; c++) {
+        gvm_core_reset(&rc[c], c, pr.bases[c]); rc[c].sr[GVM_SR_TVEC] = HALT_STUB;
+        for (int k = 1; k < 64; k++) rc[c].x[k] = pr.state[c][k];   // (a real program's sp)
+    }
     m.cores = rc.data(); m.ncores = cs.cores;
     const uint32_t T = 61;   // short passes: they end inside bundles and on a full write cache
     gpu.make(cs.cores, pr.ramImg, g_rom, pr.state);
@@ -332,7 +345,7 @@ static double time_case(Gpu& gpu, const Case& cs, uint32_t ticks, uint32_t passe
     gpu.make(cs.cores, pr.ramImg, g_rom, pr.state);
     gpu.pass = {ticks, RAM_END, 1000, 0, 0, 1, ram_rows(), 0, cs.cores, {0, 0, 0}, {0}};
     for (int k = 0; k < 20; k++) gpu.run_pass();
-    int at = g_fused && cs.bundles_fused > 0 ? 0 : 1;   // fused loops are counted in bundles (19.x), others in ops (19.y)
+    int at = (g_fused && cs.bundles_fused > 0) || cs.ns ? 0 : 1;   // fused loops and real programs are counted in bundles (19.x), others in ops (19.y)
     uint32_t o0 = gpu.core_state(0)[19 * 4 + at];
     ctx->Begin(g_qDis);
     ctx->End(g_q0);
@@ -348,6 +361,7 @@ static double time_case(Gpu& gpu, const Case& cs, uint32_t ticks, uint32_t passe
     gpu.release();
     double mops = (o1 - o0) / (double(t1 - t0) / dj.Frequency) / 1e6;
     double per = at == 0 ? cs.bundles_fused : cs.ops_per_iter;
+    if (cs.ns) return 1000.0 / mops;   // a real program: ns a bundle
     return cs.rv_per_iter > 0 ? mops / per * cs.rv_per_iter : mops;
 }
 struct Variant { std::string name, shader; std::vector<std::string> defs; Prog tick, commit, stg, wrt, prog; bool hasCommit, hasOps; uint32_t wcn = 128, texw = 2048, twc = 24, slots = 32, span = 272; };
@@ -356,6 +370,8 @@ static void use(Gpu& gpu, const Variant& v) {
     gpu.hasCommit = v.hasCommit; gpu.hasOps = v.hasOps;
     g_wcn = v.wcn; g_texw = v.texw; g_twc = v.twc;   // (the state's layout, the commit's points and RAM's width are the variant's)
     gpu.opSlots = v.slots; gpu.opSpan = v.span; gpu.opRounds = g_op_rounds;
+    g_cc0 = 0; g_self = 0;   // (probes of x18's cc 0 and sel: the real programs converted on loading)
+    for (auto& d : v.defs) { if (d.rfind("CC0=", 0) == 0) g_cc0 = atoi(d.c_str() + 4); if (d == "SELF=1") g_self = 1; }
 }
 // a step's write cache entries and RAM's width: a -D WCN= or RAM_W= of the variant, else the step's own
 // (`#define WCN 130` or `static const uint WCN = 130;`), else 128 and 2048
@@ -509,7 +525,7 @@ int main(int argc, char** argv) {
             for (size_t ci = 0; ci < timed.size(); ci++) got[vi][ci].push_back(time_case(gpu, *timed[ci], ticks, passes));
         }
     printf("%-16s", "variant");
-    for (auto* cs : timed) printf(" %8s", cs->name);
+    for (auto* cs : timed) printf(" %8s", cs->ns ? (std::string(cs->name).substr(0, 5) + " ns").c_str() : cs->name);
     printf("  x lean  checks\n");
     for (size_t vi = 0; vi < vars.size(); vi++) {
         printf("%-16s", vars[vi].name.c_str());

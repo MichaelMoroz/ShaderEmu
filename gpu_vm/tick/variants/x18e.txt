@@ -1,0 +1,7 @@
+# x18e: cc 0 in the fast loop three ways (1: jr's target selected before the fetch; 2: jr by a branch after the bundle;
+# 3: jr and callr left to the general step), the write cache as two arrays of words
+x17       gpu_vm/tick/steps/x17.hlsl
+cc0_1     gpu_vm/tick/steps/x18v.hlsl -D CC0=1
+cc0_2     gpu_vm/tick/steps/x18v.hlsl -D CC0=2
+cc0_3     gpu_vm/tick/steps/x18v.hlsl -D CC0=3
+wcsplit   gpu_vm/tick/steps/x18v.hlsl -D WCSPLIT=1

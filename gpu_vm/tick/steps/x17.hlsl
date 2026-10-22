@@ -330,7 +330,7 @@ bool in_range(uint a, uint by, uint lo, uint n) { return n != 0 && (a - lo < n |
 bool op_waits(uint a, uint by, bool store) {   // an operation in flight holds it: the pass ends before the op
     [branch] if (a >= GVM_OPS) return store && a == GVM_OPS && by == 16 && qn == QMAX;
     bool w = false;
-    [loop] for (uint k = 0; k < qn; k++) {
+    [loop] for (uint k = 0; k < min(qn, QMAX); k++) {
         opd o = op_of(q[2 * k], q[2 * k + 1]);
         w = w || in_range(a, by, o.dst, o.dn) || (store && in_range(a, by, o.src, o.sn));
     }
@@ -368,7 +368,7 @@ bool store_any(uint a, uint by, uint4 d) {   // by bytes of d at a, into the wri
     uint o = a & 3, nw = (o + by + 3) >> 2, k, sl[5];
     uint2 was[5];
     bool ok = true;
-    [loop] for (k = 0; k < nw && ok; k++) {
+    [loop] for (k = 0; k < min(nw, 5u) && ok; k++) {
         uint tag = (a >> 2) + k, h = wc_h(tag);
         uint2 ea = wc[h], eb = wc[h + HALF];
         uint s = (ea.x == tag || ea.x == NONE) ? h : (eb.x == tag || eb.x == NONE) ? h + HALF : NONE;
@@ -417,16 +417,16 @@ uint mem_any(uint w, uint imm, uint a, uint b, uint epcw, inout uint e, inout bo
         [branch] if (!store) {
             uint4 v = 0;
             bool ok = true;
-            [loop] for (uint k = 0; k < max(by >> 2, 1u) && ok; k++) { uint x; ok = load_any(ad + 4 * k, min(by, 4u), x); v = put(v, k, x); }
+            [loop] for (uint k = 0; k < clamp(by >> 2, 1u, 4u) && ok; k++) { uint x; ok = load_any(ad + 4 * k, min(by, 4u), x); v = put(v, k, x); }
             [branch] if (!ok) { trap(GVM_CAUSE_LOAD, epcw, ad); return 1; }
             v.x = wd == GVM_W_B ? asuint(asint(v.x << 24) >> 24) : wd == GVM_W_H ? asuint(asint(v.x << 16) >> 16) : v.x;
-            [loop] for (uint j = 0; j < max(by >> 2, 1u); j++) { uint x = (rd + j) & 63; r[x == 0 ? 64 : x] = pick(v, j); }
+            [loop] for (uint j = 0; j < clamp(by >> 2, 1u, 4u); j++) { uint x = (rd + j) & 63; r[x == 0 ? 64 : x] = pick(v, j); }
             return 0;
         }
         [branch] if (!store_ok(ad, by)) { trap(GVM_CAUSE_STORE, epcw, ad); return 1; }
         uint4 d = uint4(r[rd], r[(rd + 1) & 63], r[(rd + 2) & 63], r[(rd + 3) & 63]);
         [branch] if (ad >= GVM_OPS) {   // the latched words; a 16-byte store at GVM_OPS asks for the operation
-            [loop] for (uint k = 0; k < (by >> 2); k++) {
+            [loop] for (uint k = 0; k < min(by >> 2, 4u); k++) {
                 uint i = ((ad - GVM_OPS) >> 2) + k;
                 lat0 = i < 4 ? put(lat0, i, pick(d, k)) : lat0; lat1 = i >= 4 ? put(lat1, i & 3, pick(d, k)) : lat1;
             }
@@ -554,11 +554,13 @@ void run(uint budget) {
     irq_due = (st & GVM_ST_IE) != 0 && (ipend() & ien) != 0;
     cur = ram(pc >> 4);
     cur.w &= (pc & 15) != 0 || irq_due ? ~7u : 0xffffffffu;
-    [loop] while (budget > 0) {
+    uint guard = budget + 8;   // a hard cap on the trips of both loops, whatever the budget does
+    [loop] while (budget > 0 && guard > 0) {
         uint b0 = budget;
+        guard--;
         tp = pc >> 4;
         ops8 = 0;
-        [loop] while (budget > 0 && (cur.w & 7) >= thr) fstep(budget);   // paths 3-7 (or 7)
+        [loop] while (budget > 0 && guard > 0 && (cur.w & 7) >= thr) { fstep(budget); guard--; }   // paths 3-7 (or 7)
         cycle += b0 - budget;
         opsrun += ops8 >> 3;
         pc = b0 != budget ? tp << 4 : pc;
@@ -614,7 +616,7 @@ void load_state(uint c) {   // a core's state as the pass found it
     tcmp_lo = s18.x; tcmp_hi = s18.y; flags = s18.z; rnd = s18.w;
     cycle = s19.x; opsrun = s19.y; endr = E_BUDGET;
     lat0 = state_in(20, c); lat1 = state_in(21, c);
-    qn = s22.x; qhead = s22.y; qgen = s22.z; refused = s22.w;
+    qn = min(s22.x, QMAX); qhead = s22.y; qgen = s22.z; refused = s22.w;
     [unroll] for (k = 0; k < 16; k++) q[k] = state_in(T_Q + k, c);
     [branch] if (os.x == qgen) {   // the last pass's rounds: operations through, pieces made of the next, refused
         uint d = min(os.y, qn);
@@ -704,10 +706,10 @@ plan_t plan(uint c, uint want) {   // core c's round: slot want's operation and 
     P.d = fresh ? 0 : os.y; P.p = fresh ? qs.y : os.z; P.rf = fresh ? 0 : os.w; P.k = 0; P.g = 0; P.hit = false;
     uint used = 0, first = P.d;
     bool stop = c >= _NCores;
-    [loop] for (uint k = P.d; k < qs.x && !stop; k++) {
+    [loop] for (uint k = P.d; k < min(qs.x, QMAX) && !stop; k++) {
         opd o = op_at(c, k);
         bool ok = op_ok(o), indep = true;
-        [loop] for (uint i = first; i < k && ok; i++) { opd e = op_at(c, i); indep = indep && !(op_ok(e) && conflict(o, e)); }
+        [loop] for (uint i = first; i < min(k, QMAX) && ok; i++) { opd e = op_at(c, i); indep = indep && !(op_ok(e) && conflict(o, e)); }
         [branch] if (!ok) { P.rf++; P.d = k + 1; P.p = 0; }
         else [branch] if (!indep) stop = true;
         else {

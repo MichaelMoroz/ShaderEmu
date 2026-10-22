@@ -1,0 +1,8 @@
+# x18c: the order of the fast loop's bodies for real code (one memory op and lite first), loads apart from stores
+x17       gpu_vm/tick/steps/x17.hlsl
+o1        gpu_vm/tick/steps/x18v.hlsl -D ORD=1
+o1t       gpu_vm/tick/steps/x18v.hlsl -D ORD=1 -D TEX1=1
+o2        gpu_vm/tick/steps/x18v.hlsl -D ORD=2
+o3        gpu_vm/tick/steps/x18v.hlsl -D ORD=3
+o4        gpu_vm/tick/steps/x18v.hlsl -D ORD=4
+o4t       gpu_vm/tick/steps/x18v.hlsl -D ORD=4 -D TEX1=1
