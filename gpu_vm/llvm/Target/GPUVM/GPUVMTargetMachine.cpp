@@ -109,6 +109,8 @@ public:
   }
   void addPreRegAlloc() override {
     if (getOptLevel() != CodeGenOptLevel::None)
+      addPass(createGPUVMLoadHoistPass());
+    if (getOptLevel() != CodeGenOptLevel::None)
       addPass(createGPUVMZeroExtPass());
     if (getOptLevel() != CodeGenOptLevel::None)
       addPass(createGPUVMHoistConstantsPass());

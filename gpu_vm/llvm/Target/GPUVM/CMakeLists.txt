@@ -24,6 +24,7 @@ add_llvm_target(GPUVMCodeGen
   GPUVMHoistConstants.cpp
   GPUVMInstrInfo.cpp
   GPUVMISelDAGToDAG.cpp
+  GPUVMLoadHoist.cpp
   GPUVMISelLowering.cpp
   GPUVMRegisterInfo.cpp
   GPUVMSelectionDAGInfo.cpp
