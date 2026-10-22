@@ -27,7 +27,10 @@ GVM_CFLAGS=${GVM_CFLAGS:--ffunction-sections}
 CXXINC=${GVM_CXXINC:-$HOME/nm/work/toolchain/riscv32-buildroot-linux-gnu/include/c++/13.3.0}
 # (and the RISC-V machine's own fixes of those headers for musl: linux/tdawn/cxx)
 GVM_CXX_EXTRA=${GVM_CXX_EXTRA:-$(cd "$GVM_UL/../../linux/tdawn/cxx" && pwd)}
-export PATH="$WORK/bin:$GVM_UL/bin:$PATH"
+# (cmake: the RISC-V builds' own, which WSL lacks: Vanilla Conquer)
+export PATH="$WORK/bin:$GVM_UL/bin:$PATH:$HOME/shaderemu-linux/cmake/bin"
+# GVM_LDLIBS: libraries every link of a build adds (build.sh: -lmfloat for the games whose math is double)
+export GVM_LDLIBS=${GVM_LDLIBS:-}
 [ -x "$LLVM_BIN/clang" ] || { echo "no gpu_vm clang in $LLVM_BIN (gpu_vm/llvm/build.sh)"; exit 1; }
 [ -f "$SYSROOT/lib/libc.a" ] || { echo "no gpu_vm sysroot in $SYSROOT (gpu_vm/userland/build.sh)"; exit 1; }
 mkdir -p "$WORK/bin" "$WORK/src"
@@ -69,7 +72,7 @@ cat > "$WORK/bin/rv32-cc" <<EOF
 export GVM_KEEP_ELF=1
 exec "$GVM_UL/bin/gpuvm-linux-cc" -Wno-unknown-warning-option -Wno-ignored-optimization-argument -Qunused-arguments \
     -Wno-unused-command-line-argument -Wno-error=implicit-function-declaration -Wno-error=int-conversion \
-    -Wno-error=incompatible-pointer-types -Wno-error=implicit-int $GVM_MATH $GVM_CFLAGS "\${args[@]+"\${args[@]}"}"
+    -Wno-error=incompatible-pointer-types -Wno-error=implicit-int $GVM_MATH $GVM_CFLAGS "\${args[@]+"\${args[@]}"}" \$GVM_LDLIBS
 EOF
 # rv32-c++: C++ with libstdc++'s headers (templates only), no exceptions or run-time types, as the RISC-V machine's
 # (a program brings its runtime: linux/tdawn/cxxrt.cpp); sources compiled here, the link gpuvm-linux-cc's
@@ -108,7 +111,7 @@ for s in "\${srcs[@]+"\${srcs[@]}"}"; do
     "\${CXX[@]}" "\${copts[@]+"\${copts[@]}"}" -c "\$s" -o "\$o" || exit 1
     objs+=("\$o")
 done
-exec "$GVM_UL/bin/gpuvm-linux-cc" "\${copts[@]+"\${copts[@]}"}" "\${objs[@]+"\${objs[@]}"}" "\${rest[@]+"\${rest[@]}"}"
+exec "$GVM_UL/bin/gpuvm-linux-cc" "\${copts[@]+"\${copts[@]}"}" "\${objs[@]+"\${objs[@]}"}" "\${rest[@]+"\${rest[@]}"}" \$GVM_LDLIBS
 EOF
 for t in gcc cc; do ln -sf rv32-cc "$WORK/bin/riscv32-linux-$t"; done
 for t in g++ c++; do ln -sf rv32-c++ "$WORK/bin/riscv32-linux-$t"; done

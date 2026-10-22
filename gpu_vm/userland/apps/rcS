@@ -1,0 +1,10 @@
+#!/bin/sh
+# the system's start for apps/image.sh's machine: rootfs.sh's (gpu_vm/userland/rootfs/etc/init.d/rcS), and a
+# /persistence in memory (the host keeps nothing here yet: docs/system/persist.md), which the games' starters use
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev 2>/dev/null
+mount -t tmpfs -o mode=1777,size=32m tmpfs /tmp
+mount -t tmpfs -o mode=0755,size=4m tmpfs /persistence
+hostname -F /etc/hostname
+echo "gpuvm: up in $(cut -d' ' -f1 /proc/uptime) s"

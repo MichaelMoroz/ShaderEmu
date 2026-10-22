@@ -42,6 +42,8 @@ ALL="userland/build.sh nanox/build.sh libmedia/build.sh apps/build.sh play/build
 for s in ${*:-$ALL}; do
     t=$(date +%s)
     log=$L/$(echo "$s" | tr / -).log
+    # the games whose math is double take libmfloat's (their double sin, pow... at float precision: gpu_vm/userland/README.md)
+    case $s in quake/*|halflife/*) export GVM_LDLIBS=-lmfloat ;; *) export GVM_LDLIBS= ;; esac
     ( cd "$R" && bash "$R/linux/$s" ) > "$log" 2>&1
     rc=$?
     echo "$s: exit $rc, $(( $(date +%s) - t )) s$( [ $rc = 0 ] || { echo; grep -E 'rror|undefined|cannot|No such' "$log" | head -6 | sed 's/^/    /'; } )"

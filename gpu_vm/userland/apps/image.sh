@@ -13,17 +13,17 @@ ROOT=$(cd "$UL/../.." && pwd)
 R=${R:-$HOME/gpu_vm/rootfs-build}
 APPS=${APPS:-$ROOT/build/gvm_apps/root}
 W=${W:-$ROOT/build/gvm_apps/img}
-K=${K:-$ROOT/build/gvm_romroot}
-KOUT=${KOUT:-$HOME/gpu_vm/linux-build-romroot}
+K=${K:-$ROOT/build/gvm_apps/kernel}
+KOUT=${KOUT:-$HOME/gpu_vm/linux-build-apps}
 RAM_MB=${RAM_MB:-192}
 [ -f "$R/initramfs.list" ] || { echo "image.sh: no $R/initramfs.list (rootfs.sh)" >&2; exit 1; }
 [ -f "$K/vmlinux" ] || { echo "image.sh: no $K/vmlinux (romroot.sh)" >&2; exit 1; }
 mkdir -p "$W"
 L=$W/rootfs.list
-python3 - "$R/initramfs.list" "$APPS" "${DATA:-1}" "$ROOT/linux/prebuilt/nommu/root" "$ROOT/linux/prebuilt/root" > "$L" <<'EOF'
+python3 - "$R/initramfs.list" "$HERE/rcS" "$APPS" "${DATA:-1}" "$ROOT/linux/prebuilt/nommu/root" "$ROOT/linux/prebuilt/root" > "$L" <<'EOF'
 import os, sys
-base, apps, data = sys.argv[1], sys.argv[2], sys.argv[3] == '1'
-extra = sys.argv[4:]
+base, rcs, apps, data = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4] == '1'
+extra = sys.argv[5:]
 lines, have, dirs = [], set(), set()
 # (a program of both, rootfs.sh's and build.sh's, is build.sh's: QuickJS's newer qjs)
 ours = set()
@@ -34,6 +34,7 @@ for line in open(base):
     f = line.split()
     if not f: continue
     if f[0] in ('file', 'slink') and f[1] in ours: continue
+    if f[0] == 'file' and f[1] == '/etc/init.d/rcS': line = 'file /etc/init.d/rcS %s 0755 0 0' % rcs
     lines.append(line.rstrip('\n'))
     if f[0] in ('file', 'slink', 'nod', 'dir'): have.add(f[1])
     if f[0] == 'dir': dirs.add(f[1])
@@ -61,6 +62,7 @@ def walk(top, programs):
             add_dir(rel or '/')
             mode = '0755' if os.access(src, os.X_OK) or is_program(src) else '0644'
             lines.append(sep.join(('file', p, src, mode, '0', '0'))); have.add(p)
+add_dir('/persistence')
 walk(apps, True)
 if data:
     for top in extra: walk(top, False)
