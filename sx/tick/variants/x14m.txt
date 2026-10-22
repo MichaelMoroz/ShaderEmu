@@ -1,0 +1,11 @@
+# x14m: the load and store branches of the fast step (paths 2-5) against x14
+x14             sx/tick/steps/x14.hlsl
+m_micro         sx/tick/steps/x14m.hlsl -D MOP2=1 -D EXT2=1 -D HASH_PLAIN=1
+m_loadbr        sx/tick/steps/x14m.hlsl -D LOAD_BR=1 -D MOP2=1 -D EXT2=1 -D HASH_PLAIN=1
+m4              sx/tick/steps/x14m.hlsl -D MEM4=1 -D MOP2=1 -D EXT2=1 -D HASH_PLAIN=1
+m4ovf           sx/tick/steps/x14m.hlsl -D MEM4=1 -D MOP2=1 -D EXT2=1 -D OVF=1 -D WCN=130
+m4w1ovf         sx/tick/steps/x14m.hlsl -D MEM4=1 -D MOP2=1 -D EXT2=1 -D HASH_PLAIN=1 -D WAYS1=1 -D OVF=1 -D WCN=132
+m4w1nrsel       sx/tick/steps/x14m.hlsl -D MEM4=1 -D MOP2=1 -D EXT2=1 -D HASH_PLAIN=1 -D WAYS1=1 -D NR_SEL=1 -D WCN=130
+m4sw            sx/tick/steps/x14m.hlsl -D MEM4=2 -D MOP2=1 -D EXT2=1 -D HASH_PLAIN=1 -D WAYS1=1 -D OVF=1 -D WCN=132
+m4o3            sx/tick/steps/x14m.hlsl -D MEM4=3 -D MOP2=1 -D EXT2=1 -D HASH_PLAIN=1 -D WAYS1=1 -D OVF=1 -D WCN=132
+m4o4            sx/tick/steps/x14m.hlsl -D MEM4=4 -D MOP2=1 -D EXT2=1 -D HASH_PLAIN=1 -D WAYS1=1 -D OVF=1 -D WCN=132

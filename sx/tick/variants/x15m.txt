@@ -1,0 +1,19 @@
+# x15m: the fast step's memory bodies (paths 4-7) against x15, from x14m (sx/tick/steps/x15m.hlsl's switches).
+# Checked on WARP with --fused 1 (add addbnz to --case) and without, seeds 0 and 7.
+#   q_micro   per op: the tag the word itself (empty NONE), the texel's word by halves, a byte's place as ad << 3, the
+#             merge by xors, h the word's low bits
+#   q4        and a body for each kind: int; a load or store and lite (4, 6); two loads (5); a store and a load or store (7)
+#   q4w1      and one way of 128 sets and a victim slot read at a constant index
+#   q4ovf     q4 with the xor hash and two ways, a store with no room in an overflow slot and the pass ending after it
+#   q4w1ovf   q4w1 with the overflow slots: no branch in the store bodies
+#   q4o3      q4w1ovf, int then paths 4 and 6 first (mix), then 7, then 5
+#   q4sw      q4w1ovf by a switch; q4sw2 q4 (two ways, the no-room branch) by a switch
+x15             sx/tick/steps/x15.hlsl
+q_micro         sx/tick/steps/x15m.hlsl -D MOP2=1 -D EXT2=1 -D HASH_PLAIN=1
+q4              sx/tick/steps/x15m.hlsl -D MEM4=1 -D MOP2=1 -D EXT2=1 -D HASH_PLAIN=1
+q4w1            sx/tick/steps/x15m.hlsl -D MEM4=1 -D MOP2=1 -D EXT2=1 -D HASH_PLAIN=1 -D WAYS1=1 -D WCN=130
+q4ovf           sx/tick/steps/x15m.hlsl -D MEM4=1 -D MOP2=1 -D EXT2=1 -D OVF=1 -D WCN=130
+q4w1ovf         sx/tick/steps/x15m.hlsl -D MEM4=1 -D MOP2=1 -D EXT2=1 -D HASH_PLAIN=1 -D WAYS1=1 -D OVF=1 -D WCN=132
+q4o3            sx/tick/steps/x15m.hlsl -D MEM4=3 -D MOP2=1 -D EXT2=1 -D HASH_PLAIN=1 -D WAYS1=1 -D OVF=1 -D WCN=132
+q4sw            sx/tick/steps/x15m.hlsl -D MEM4=2 -D MOP2=1 -D EXT2=1 -D HASH_PLAIN=1 -D WAYS1=1 -D OVF=1 -D WCN=132
+q4sw2           sx/tick/steps/x15m.hlsl -D MEM4=2 -D MOP2=1 -D EXT2=1 -D HASH_PLAIN=1

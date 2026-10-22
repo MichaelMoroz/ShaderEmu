@@ -249,3 +249,30 @@ On the card (`variants/x15.txt`, `--fused 1`, every case the reference's there t
 | x14 i_dec (round 2, the encoding before) | 17.72 | 11.70 | 9.13 | 19.07 | 16.68 | 14.73 | 16.40 | 2.17 |
 
 Two times the lean tick on every loop but stores (9.62 against 9.82).
+
+### Round 3 on x15 (x15m: the memory path)
+
+`x15m.hlsl`'s switches: MOP2 (a tag is the word itself, an empty slot NONE; the texel's word picked by halves),
+EXT2 (a byte's place `ad << 3`, the shift taking its low 5 bits; the merge as one xor and mask), HASH_PLAIN (the
+word's low bits), WAYS1 (one way and a victim slot), MEM4 (a body a kind of bundle: integers, one memory op and lite,
+two loads, a store and another memory op; 1, 2 and 3 are orders of the tests, 2 a switch), OVF (a store with no room
+goes into one of two overflow slots that no lookup reads, and the pass ends after its bundle: no "bundle again").
+On the card, `--fused 1`:
+
+| Variant | Switches | arith | loads | stores | adds | tight | mix | stride | x lean (7) |
+|---|---|---|---|---|---|---|---|---|---|
+| x15 | | 20.46 | 12.09 | 9.56 | 22.01 | 19.27 | 16.14 | 15.86 | 2.36 |
+| q_micro | MOP2 EXT2 HASH_PLAIN | 20.47 | 12.76 | 10.23 | 21.98 | 19.30 | 16.50 | 17.60 | 2.44 |
+| q4 | MEM4 MOP2 EXT2 HASH_PLAIN | 20.72 | 12.74 | 11.27 | 22.14 | 19.58 | 16.48 | 16.94 | 2.48 |
+| q4w1 | q4 WAYS1 | 20.75 | 14.57 | 11.72 | 22.23 | 19.56 | 16.40 | 16.90 | 2.54 |
+| q4ovf | MEM4 MOP2 EXT2 OVF (two ways, x15's hash) | 21.01 | 12.61 | 11.70 | 22.62 | 19.78 | 17.60 | 18.01 | 2.55 |
+| q4w1ovf | q4 WAYS1 OVF | 20.95 | 14.81 | 14.27 | 22.54 | 19.73 | 16.87 | 17.62 | 2.65 |
+| q4o3 | q4w1ovf, the one-op body tested before the pairs | 20.59 | 14.67 | 13.34 | 22.12 | 19.39 | 18.48 | 18.86 | 2.66 |
+| q4sw | q4w1ovf with a switch on the path | 15.74 | 13.38 | 11.72 | 16.90 | 14.79 | 14.94 | 16.22 | 2.18 |
+
+q4ovf, q4w1ovf and q4o3 are the reference's on the card (every case, `--fused 1`). **q4ovf is two times the lean tick
+on all seven integer and memory loops** (the least loads, 2.21; stores 2.38), with x15's two ways and hash; one way
+(WAYS1) and the plain hash are faster on loads and stores but meet more conflicts on strided stores in real code. A
+switch on the path is a quarter slower than tests in a row. Not kept from x14m: one lite op after the bodies, no-room
+by selects (fxc copied registers in the shared head), one extend for either op. x14 and x15 count `cycle` wrong on a
+store with no room (`budget = 1; cycle--` then `b0 - budget`): the timed loops never meet one; OVF counts it right.
