@@ -64,6 +64,7 @@ for a in "$@"; do
             [[ "${w[$k]}" == -elf2flt* ]] || ldflags+=("${w[$k]}")
             k=$((k + 1))
         done ;;
+    -) inputs+=("src:${xlang:-c}:-") ;;
     -*) compile+=("$a") ;;
     *)
         if [ -n "$xlang" ] && [ "$xlang" != none ]; then inputs+=("src:$xlang:$a"); continue; fi

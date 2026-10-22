@@ -109,7 +109,7 @@ int main(int argc, char **argv)
 	CHECK(WIFSIGNALED(status) && WTERMSIG(status) == SIGTERM);
 
 	/* fork does not exist without an MMU */
-	CHECK(fork() == -1);
+	CHECK(fork() == -1 && errno == ENOSYS);
 
 	CHECK(waitpid(-1, &status, WNOHANG) == -1 && errno == ECHILD);
 	return DONE("proc");

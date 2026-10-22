@@ -35,7 +35,8 @@ done
 echo "a file of the initramfs" > "$T/test.txt"
 
 steps="sync initramfs image dtbs"
-[ -f "$KOUT/.config" ] || steps="sync config initramfs image dtbs"
+DEFCONFIG="$ROOT/gpu_vm/linux/arch/gpuvm/configs/gpuvm_defconfig"
+[ -f "$KOUT/.config" ] && [ "$KOUT/.config" -nt "$DEFCONFIG" ] || steps="sync config initramfs image dtbs"
 OUT="$KOUT" INIT="$T/init" INITRAMFS_EXTRA="$T/extra.list" bash "$ROOT/gpu_vm/linux/build.sh" $steps > "$T/kernel.log" 2>&1 \
     || { tail -30 "$T/kernel.log"; exit 1; }
 

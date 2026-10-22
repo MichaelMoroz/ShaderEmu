@@ -1,9 +1,11 @@
 /* pthreads: create and join, a mutex under contention, a condition variable, thread-local storage, detached threads,
    pthread_once, and thread-specific data. */
+#include <errno.h>
 #include <pthread.h>
 #include <sched.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <time.h>
 #include <unistd.h>
 #include "check.h"
 
@@ -104,6 +106,18 @@ int main(void)
 	CHECK_INT(pthread_create(&d, &at, detached, 0), 0);
 	for (int i = 0; i < 100 && !detached_done; i++) usleep(1000);
 	CHECK(detached_done);
+
+	/* a timed wait that times out (futex with a timeout) */
+	static pthread_cond_t cv2 = PTHREAD_COND_INITIALIZER;
+	struct timespec ts, now;
+	clock_gettime(CLOCK_REALTIME, &ts);
+	ts.tv_nsec += 50000000;
+	if (ts.tv_nsec >= 1000000000) { ts.tv_sec++; ts.tv_nsec -= 1000000000; }
+	pthread_mutex_lock(&mu);
+	CHECK_INT(pthread_cond_timedwait(&cv2, &mu, &ts), ETIMEDOUT);
+	pthread_mutex_unlock(&mu);
+	clock_gettime(CLOCK_REALTIME, &now);
+	CHECK(now.tv_sec > ts.tv_sec || (now.tv_sec == ts.tv_sec && now.tv_nsec >= ts.tv_nsec));
 
 	CHECK(pthread_equal(pthread_self(), pthread_self()));
 	return DONE("threads");

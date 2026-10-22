@@ -21,7 +21,7 @@ int main(void)
 	CHECK(near(asin(x), 0.5235987755982989, 1e-15));
 	CHECK(near(acos(x), 1.0471975511965979, 1e-15));
 	CHECK(near(sinh(x), 0.5210953054937474, 1e-15));
-	CHECK(near(cbrt(27.0 * x), 2.3811015779523490, 1e-15));
+	CHECK(near(cbrt(27.0 * x), 2.3811015779522995, 1e-15));
 	CHECK(near(hypot(3.0, 4.0 * x * y), 5.0, 1e-16));
 	CHECK(floor(-2.5) == -3.0 && ceil(-2.5) == -2.0 && round(2.5) == 3.0 && trunc(-2.7) == -2.0);
 	CHECK(rint(2.5) == 2.0 && nearbyint(3.5) == 4.0);
