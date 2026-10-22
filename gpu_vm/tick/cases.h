@@ -12,7 +12,10 @@
 #include "../ref/gvm_asm.h"
 
 // ---- The bench's machine: RAM to 48 MB (16 MB of it RAM proper), 64 KB of ROM
-static const uint32_t RAM_ROWS = 1536, RAM_END = RAM_ROWS * 2048 * 16, ROM_ROWS = 2, ROM_SIZE = ROM_ROWS * 2048 * 16;
+static const uint32_t RAM_END = 1536 * 2048 * 16, ROM_SIZE = 1u << 20;
+static uint32_t g_texw = 2048;   // the RAM's and ROM's textures' width: a step's RAM_W (x16 on: 8192)
+static uint32_t ram_rows() { return RAM_END / 16 / g_texw; }
+static uint32_t rom_rows() { return ROM_SIZE / 16 / g_texw; }
 static const uint32_t DATA = GVM_RAM + 0x100000;   // a case's data
 static uint32_t g_wcn = 128;
 static int g_loop_n = 3000000;   // a timed loop's iterations (a check runs a few thousand)

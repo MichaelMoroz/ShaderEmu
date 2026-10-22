@@ -187,7 +187,18 @@ int main(int argc, char** argv) {
         else { printf("gvmtrace12 --shader F [-D NAME=V]... [--case NAME] [--seconds S] [--ticks N] [--dxbc]\n"); return 1; }
     }
     g_loop_n = 100000000;   // (a loop that outlasts any trace: the case's program halts at its end)
-    for (auto& d : defs) if (d.rfind("WCN=", 0) == 0) g_wcn = (uint32_t)atoi(d.c_str() + 4);
+    {   // the step's write cache entries and RAM's width (as gvmbench reads them)
+        std::string src = slurp(shader);
+        auto size = [&](const std::string& n, uint32_t dflt) {
+            for (auto& d : defs) if (d.rfind(n + "=", 0) == 0) return (uint32_t)atoi(d.c_str() + n.size() + 1);
+            for (const std::string& form : {"#define " + n + " ", "uint " + n + " = "}) {
+                size_t at = src.find(form);
+                if (at != std::string::npos) return (uint32_t)atoi(src.c_str() + at + form.size());
+            }
+            return dflt;
+        };
+        g_wcn = size("WCN", 128); g_texw = size("RAM_W", 2048);
+    }
     const Case* cs = nullptr;
     static std::vector<Case> all = cases();
     for (auto& c : all) if (name == c.name) cs = &c;
@@ -245,7 +256,7 @@ int main(int argc, char** argv) {
     uint32_t statePix = (24 + g_wcn / 2 + 7) / 8;
     std::vector<uint32_t> rom((size_t)ROM_SIZE / 4);
     for (size_t k = 0; k < rom.size(); k++) rom[k] = (uint32_t)(k * 0x01000193u) ^ 0x5bd1e995u;
-    Tex ram = make_tex(2048, RAM_ROWS, pr.ramImg.data()), romt = make_tex(2048, ROM_ROWS, rom.data()), set[2][8];
+    Tex ram = make_tex(g_texw, ram_rows(), pr.ramImg.data()), romt = make_tex(g_texw, rom_rows(), rom.data()), set[2][8];
     for (int k = 0; k < 2; k++)
         for (int t = 0; t < 8; t++) {
             std::vector<uint32_t> img((size_t)statePix * 4, 0);
@@ -274,7 +285,7 @@ int main(int argc, char** argv) {
             dev->CreateShaderResourceView(r, &sv, h);
         }
     auto table = [&](int k) { D3D12_GPU_DESCRIPTOR_HANDLE h = srvs->GetGPUDescriptorHandleForHeapStart(); h.ptr += (size_t)k * 12 * sinc; return h; };
-    uint32_t pass[12] = {ticks, RAM_END, 1000, 0, 0, 1, RAM_ROWS, 0, 1, 0, 0, 0};
+    uint32_t pass[12] = {ticks, RAM_END, 1000, 0, 0, 1, ram_rows(), 0, 1, 0, 0, 0};
     const D3D12_RESOURCE_STATES SRV = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
     int cur = 0;
     auto record_pass = [&]() {
@@ -301,8 +312,8 @@ int main(int argc, char** argv) {
             to(ram, D3D12_RESOURCE_STATE_RENDER_TARGET);
             D3D12_CPU_DESCRIPTOR_HANDLE r = rtv(16);
             list->OMSetRenderTargets(1, &r, FALSE, nullptr);
-            D3D12_VIEWPORT rv{0, 0, 2048, (float)RAM_ROWS, 0, 1};
-            D3D12_RECT rs{0, 0, 2048, (LONG)RAM_ROWS};
+            D3D12_VIEWPORT rv{0, 0, (float)g_texw, (float)ram_rows(), 0, 1};
+            D3D12_RECT rs{0, 0, (LONG)g_texw, (LONG)ram_rows()};
             list->RSSetViewports(1, &rv);
             list->RSSetScissorRects(1, &rs);
             list->SetGraphicsRootDescriptorTable(2, table(cur));

@@ -134,8 +134,8 @@ struct Gpu {
     void make(uint32_t ncores, const std::vector<uint32_t>& ramImg, const std::vector<uint32_t>& romImg, const std::vector<std::vector<uint32_t>>& state) {
         cores = ncores;
         statePix = (24 + g_wcn / 2 + 7) / 8;
-        ram = make_tex(2048, RAM_ROWS, ramImg.data());
-        rom = make_tex(2048, ROM_ROWS, romImg.data());
+        ram = make_tex(g_texw, ram_rows(), ramImg.data());
+        rom = make_tex(g_texw, rom_rows(), romImg.data());
         std::vector<uint32_t> z((size_t)2048 * cores * 9 * 4, 0);
         stage = make_tex(2048, cores * 9, z.data());
         std::vector<uint32_t> oz((size_t)cores * 4, 0);
@@ -194,7 +194,7 @@ struct Gpu {
         clear_srv();
         ctx->OMSetRenderTargets(1, &ram.rtv, nullptr);
         bind(set[cur][0], cur, false, false);
-        viewport(2048, RAM_ROWS);
+        viewport(g_texw, ram_rows());
         ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_POINTLIST);
         ctx->VSSetShader(commit.vs, nullptr, 0); ctx->PSSetShader(commit.ps, nullptr, 0);
         for (int c = 0; c < 4; c++) {
@@ -216,7 +216,7 @@ struct Gpu {
         clear_srv();
         ctx->OMSetRenderTargets(1, &ram.rtv, nullptr);
         bind(set[cur][0], cur, false, true);
-        viewport(2048, RAM_ROWS);
+        viewport(g_texw, ram_rows());
         ctx->VSSetShader(wrt.vs, nullptr, 0); ctx->PSSetShader(wrt.ps, nullptr, 0);
         ctx->DrawInstanced(4, cores * 64, 0, 0);
         clear_srv();
@@ -264,7 +264,7 @@ static bool check_case(Gpu& gpu, const Case& cs, uint32_t seed, bool verbose) {
     m.cores = rc.data(); m.ncores = cs.cores;
     const uint32_t T = 61;   // short passes: they end inside bundles and on a full write cache
     gpu.make(cs.cores, pr.ramImg, g_rom, pr.state);
-    gpu.pass = {T, RAM_END, 1000, 0, 0, 1, RAM_ROWS, 0, cs.cores, {0, 0, 0}};
+    gpu.pass = {T, RAM_END, 1000, 0, 0, 1, ram_rows(), 0, cs.cores, {0, 0, 0}};
     for (int refPasses = 0; refPasses < 400000; refPasses++) {
         bool any = false;
         m.time = 1000;
@@ -309,7 +309,7 @@ static double time_case(Gpu& gpu, const Case& cs, uint32_t ticks, uint32_t passe
     Prepared pr = prepare(cs, 1);
     commit_constants(gpu, cs.cores);
     gpu.make(cs.cores, pr.ramImg, g_rom, pr.state);
-    gpu.pass = {ticks, RAM_END, 1000, 0, 0, 1, RAM_ROWS, 0, cs.cores, {0, 0, 0}};
+    gpu.pass = {ticks, RAM_END, 1000, 0, 0, 1, ram_rows(), 0, cs.cores, {0, 0, 0}};
     for (int k = 0; k < 20; k++) gpu.run_pass();
     int at = g_fused && cs.bundles_fused > 0 ? 0 : 1;   // fused loops are counted in bundles (19.x), others in ops (19.y)
     uint32_t o0 = gpu.core_state(0)[19 * 4 + at];
@@ -329,11 +329,27 @@ static double time_case(Gpu& gpu, const Case& cs, uint32_t ticks, uint32_t passe
     double per = at == 0 ? cs.bundles_fused : cs.ops_per_iter;
     return cs.rv_per_iter > 0 ? mops / per * cs.rv_per_iter : mops;
 }
-struct Variant { std::string name, shader; std::vector<std::string> defs; Prog tick, commit, stg, wrt, prog; bool hasCommit, hasOps; uint32_t wcn = 128; };
+struct Variant { std::string name, shader; std::vector<std::string> defs; Prog tick, commit, stg, wrt, prog; bool hasCommit, hasOps; uint32_t wcn = 128, texw = 2048; };
 static void use(Gpu& gpu, const Variant& v) {
     gpu.tick = v.tick; gpu.commit = v.commit; gpu.stg = v.stg; gpu.wrt = v.wrt; gpu.prog = v.prog;
     gpu.hasCommit = v.hasCommit; gpu.hasOps = v.hasOps;
-    g_wcn = v.wcn;   // (the state's layout and the commit's points are the variant's)
+    g_wcn = v.wcn; g_texw = v.texw;   // (the state's layout, the commit's points and RAM's width are the variant's)
+}
+// a step's write cache entries and RAM's width: a -D WCN= or RAM_W= of the variant, else the step's own
+// (`#define WCN 130` or `static const uint WCN = 130;`), else 128 and 2048
+static uint32_t step_size(const std::string& src, const std::vector<std::string>& defs, const char* name, uint32_t dflt) {
+    std::string n = name;
+    for (auto& d : defs) if (d.rfind(n + "=", 0) == 0) return (uint32_t)atoi(d.c_str() + n.size() + 1);
+    for (const std::string& form : {"#define " + n + " ", "uint " + n + " = "}) {
+        size_t at = src.find(form);
+        if (at != std::string::npos) return (uint32_t)atoi(src.c_str() + at + form.size());
+    }
+    return dflt;
+}
+static void step_sizes(const std::string& path, const std::vector<std::string>& defs, uint32_t& wcn, uint32_t& texw) {
+    std::string src = slurp(path);
+    wcn = step_size(src, defs, "WCN", 128);
+    texw = step_size(src, defs, "RAM_W", 2048);
 }
 static void build_variant(Variant& v) {
     std::vector<std::string> names, values;
@@ -415,7 +431,7 @@ int main(int argc, char** argv) {
     QueryPerformanceCounter(&f0);
     for (Variant& v : vars) {
         if (v.shader.empty()) v.shader = dflt;
-        for (auto& d : v.defs) if (d.rfind("WCN=", 0) == 0) v.wcn = (uint32_t)atoi(d.c_str() + 4);
+        step_sizes(v.shader, v.defs, v.wcn, v.texw);
         build_variant(v);
     }
     QueryPerformanceCounter(&f1);
