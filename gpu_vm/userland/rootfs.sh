@@ -5,8 +5,8 @@
 # busybox: busybox.sh (BB, ~/gpu_vm/busybox). apps: lua, minigzip, coremark and four of test/'s programs, built with
 # gpuvm-linux-cc into $R (~/gpu_vm/rootfs-build). kernel: the cpio list $R/initramfs.list (rootfs/ for /etc, busybox's
 # links, the programs) and a kernel with it in $KOUT (~/gpu_vm/linux-build-rootfs: the first run configures and builds
-# it whole, later ones relink). Boot it: systest.sh, or
-#   gvm_cpu --dtb $KOUT/arch/gpuvm/boot/dts/gvm.dtb $KOUT/vmlinux
+# it whole, later ones relink), copied with its device tree to build/gvm_rootfs. Boot it: systest.sh, or
+#   build/gvm_cpu/gvm_cpu --dtb build/gvm_rootfs/gvm.dtb build/gvm_rootfs/vmlinux
 # Sources: ~/gpu_vm/third/{lua,zlib} (gpu_vm/llvm/test/apps/run.sh clones them), ~/gpu_vm/coremark-src/coremark
 # (gpu_vm/llvm/test/bench/run.sh). Needs build.sh's sysroot.
 set -euo pipefail
@@ -28,7 +28,7 @@ for s in "${steps[@]}"; do
     busybox)
         if [ ! -f "$BB/busybox" ] || [ "${FORCE:-0}" = 1 ]; then BB="$BB" bash "$HERE/busybox.sh"; fi ;;
     apps)
-        A="$R/apps"; mkdir -p "$A/zlib" "$A/coremark"
+        A="$R/apps"; mkdir -p "$A/zlib"
         [ -d "$THIRD/zlib" ] || git clone -q --depth 1 https://github.com/madler/zlib.git "$THIRD/zlib"
         [ -d "$THIRD/lua" ] || git clone -q --depth 1 https://github.com/lua/lua.git "$THIRD/lua"
         [ -d "$COREMARK" ] || git clone -q --depth 1 https://github.com/eembc/coremark.git "$COREMARK"
@@ -41,7 +41,7 @@ for s in "${steps[@]}"; do
         # zlib's minigzip (the clone may leave test/ out of its checkout: taken from git)
         Z="$THIRD/zlib"
         git -C "$Z" show HEAD:test/minigzip.c > "$A/zlib/minigzip.c"
-        "$CC" $OPT -w -I"$Z" -o "$A/minigzip" "$A/zlib/minigzip.c" \
+        "$CC" $OPT -w -DHAVE_UNISTD_H -I"$Z" -o "$A/minigzip" "$A/zlib/minigzip.c" \
             $(for f in adler32 compress crc32 deflate gzclose gzlib gzread gzwrite infback inffast inflate inftrees \
                        trees uncompr zutil; do echo "$Z/$f.c"; done)
         # CoreMark, the POSIX port: coremark 0x0 0x0 0x66 ITERATIONS
@@ -79,13 +79,20 @@ for s in "${steps[@]}"; do
             for p in libc signals threads math; do echo "file /usr/lib/gvm-tests/$p $R/apps/test-$p 0755 0 0"; done
             echo "file /usr/bin/gvm-tests $HERE/rootfs/gvm-tests 0755 0 0"
         } > "$L"
-        ksteps="sync initramfs image dtbs"
+        ksteps="sync initramfs"
         DEFCONFIG="$ROOT/gpu_vm/linux/arch/gpuvm/configs/gpuvm_defconfig"
-        [ -f "$KOUT/.config" ] && [ "$KOUT/.config" -nt "$DEFCONFIG" ] || ksteps="sync config initramfs image dtbs"
-        OUT="$KOUT" INITRAMFS_LIST="$L" bash "$ROOT/gpu_vm/linux/build.sh" $ksteps > "$R/kernel.log" 2>&1 \
+        [ -f "$KOUT/.config" ] && [ "$KOUT/.config" -nt "$DEFCONFIG" ] || ksteps="sync config initramfs"
+        # the initramfs not compressed: gzip's 1.2 MB took the kernel 0.7 s of the machine's time to unpack
+        { OUT="$KOUT" INITRAMFS_LIST="$L" bash "$ROOT/gpu_vm/linux/build.sh" $ksteps &&
+          "${KDIR:-$HOME/gpu_vm/linux}/scripts/config" --file "$KOUT/.config" -d INITRAMFS_COMPRESSION_GZIP \
+              -e INITRAMFS_COMPRESSION_NONE &&
+          OUT="$KOUT" INITRAMFS_LIST="$L" bash "$ROOT/gpu_vm/linux/build.sh" image dtbs; } > "$R/kernel.log" 2>&1 \
             || { tail -30 "$R/kernel.log"; exit 1; }
-        ls -l "$KOUT/vmlinux"
-        echo "rootfs.sh: kernel $KOUT/vmlinux, device tree $KOUT/arch/gpuvm/boot/dts/gvm.dtb" ;;
+        # a copy where the Windows programs (gvm_gpu, gvm_cpu.exe) find it
+        W="$ROOT/build/gvm_rootfs"; mkdir -p "$W"
+        cp "$KOUT/vmlinux" "$W/vmlinux"; cp "$KOUT/arch/gpuvm/boot/dts/gvm.dtb" "$W/gvm.dtb"; cp "$BB/busybox" "$W/busybox"
+        ls -l "$W/vmlinux"
+        echo "rootfs.sh: kernel $W/vmlinux, device tree $W/gvm.dtb (built in $KOUT)" ;;
     *) echo "rootfs.sh: no step $s" >&2; exit 1 ;;
     esac
 done

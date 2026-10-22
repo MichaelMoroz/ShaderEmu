@@ -1,0 +1,3 @@
+
+  gpu_vm Linux: busybox, hush, lua, minigzip, coremark. `poweroff -f` ends the machine.
+

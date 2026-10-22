@@ -2,7 +2,7 @@
 # busybox for gpu_vm's Linux (gpu_vm/userland/README.md, "The root file system"). In WSL:
 #   bash gpu_vm/userland/busybox.sh            -> $BB/busybox (a bFLT program) and $BB/busybox.links
 # Downloads the release into ~/gpu_vm/dl/busybox (checked by its sha256), unpacks it into a clean $BB
-# (~/gpu_vm/busybox), configures it from defconfig for a machine without an MMU and builds it with gpuvm-linux-cc.
+# (~/gpu_vm/busybox), applies busybox/*.patch, configures it from defconfig for a machine without an MMU and builds it with gpuvm-linux-cc.
 # Needs build.sh's sysroot. BB_STACK: the program's stack (bytes, default 65536: hush's deepest, measured, is under
 # a third of it; see the README).
 set -euo pipefail
@@ -20,6 +20,7 @@ echo "$SHA  $TAR" | sha256sum -c --quiet
 rm -rf "$BB"; mkdir -p "$BB"
 tar -xjf "$TAR" -C "$BB" --strip-components=1
 cd "$BB"
+for p in "$HERE"/busybox/*.patch; do patch -s -p1 < "$p"; done
 
 make -s defconfig > /dev/null
 on()  { sed -i "s/^# CONFIG_$1 is not set\$/CONFIG_$1=y/" .config; grep -q "^CONFIG_$1=" .config || echo "CONFIG_$1=y" >> .config; }
@@ -30,6 +31,8 @@ str() { sed -i "/^CONFIG_$1=/d; /^# CONFIG_$1 is not set/d" .config; echo "CONFI
 on NOMMU; on STATIC
 str CROSS_COMPILER_PREFIX gpuvm-linux-
 str BUSYBOX_EXEC_PATH /bin/busybox
+# clang hoists a load of the "const" pointer to the globals over its one store (hush_main read G as NULL)
+str EXTRA_CFLAGS -DBB_GLOBAL_CONST=
 off SH_IS_ASH; on SH_IS_HUSH; off BASH_IS_ASH; off BASH_IS_HUSH; on BASH_IS_NONE
 for o in HUSH HUSH_BASH_COMPAT HUSH_BRACE_EXPANSION HUSH_INTERACTIVE HUSH_SAVEHISTORY HUSH_JOB HUSH_TICK HUSH_IF \
          HUSH_LOOPS HUSH_CASE HUSH_FUNCTIONS HUSH_LOCAL HUSH_RANDOM_SUPPORT HUSH_MODE_X HUSH_ECHO HUSH_PRINTF \
