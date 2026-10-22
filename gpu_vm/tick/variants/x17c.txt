@@ -1,0 +1,9 @@
+# x17c: where x17's cost against x16 goes (x17s.hlsl's probes; NOMIS, NOGEN are wrong where they matter)
+x16       gpu_vm/tick/steps/x16.hlsl
+x17       gpu_vm/tick/steps/x17.hlsl
+noflt     gpu_vm/tick/steps/x17s.hlsl -D NOFLT=1
+nomis     gpu_vm/tick/steps/x17s.hlsl -D NOMIS=1
+thrc      gpu_vm/tick/steps/x17s.hlsl -D THRC=1
+once      gpu_vm/tick/steps/x17s.hlsl -D ONCE=1
+nogen     gpu_vm/tick/steps/x17s.hlsl -D NOGEN=1
+all       gpu_vm/tick/steps/x17s.hlsl -D NOFLT=1 -D NOMIS=1 -D THRC=1 -D ONCE=1

@@ -34,7 +34,10 @@ RamEnd must be a multiple of 16 and at most 0x20000000 (the fast loop takes `a &
 | 40-104 | the write cache: texel 40 + i holds entries 2i (x word address >> 2, y value) and 2i + 1 (z, w); a word of 0xffffffff is an empty entry. Written by the tick, read by the commit. | | | |
 
 Flags (18.z): 1 waiting (a supervisor's `wait` until IPEND & IEN), 2 the software interrupt's pending bit (IPEND bit 0),
-4 halted (`break` with `_Flags` bit 0: the bench's), 8 in a `sync` (the core goes on when no operation is in flight).
+4 halted (`break` with `_Flags` bit 0: the bench's), 8 in a `sync` (the core goes on when no operation is in flight),
+16 the pass is made again (the last one met a load or store its fast loop does not make: outside RAM and the ROM, a
+store below the devices or to the operations; it left the state as it found it, and this one runs every memory bundle
+in the general step).
 
 Why a pass ended (19.w), as `GVM_END_*`: 0 its bundles ran out, 1 sync (or an access an operation in flight holds, or a
 ninth operation), 2 wait, 3 the write cache full, 5 halted.

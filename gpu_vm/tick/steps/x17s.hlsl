@@ -1,12 +1,13 @@
 // Step x17 (gpu_vm/tick/steps/README.md, "x17"; gpu_vm/tick/STATE.md): the whole ISA. x16's fast loop as it was (paths
-// 3-7), which hands a memory op it cannot make (a word crossed, outside RAM and the ROM, a store below the devices,
-// what an operation in flight holds) to the general step: every op of every class, any address and alignment, d and q
-// widths, atomics, traps, the special registers, interrupts between bundles, wait, sync and the operations' queue.
-// Then the commit (four draws) and the operations' rounds (stage, write, progress), as the reference makes them.
+// 3-7), and the general step: every op of every class, any address, d and q widths, atomics, traps, the special
+// registers, interrupts between bundles, wait, sync and the operations' queue. A load or store the fast loop cannot
+// make (outside RAM and the ROM, a store below the devices or to the operations) only raises a flag: a pass that
+// raised it is made again from its start with every memory bundle in the general step (a pass is the same each time
+// it is made). While an operation is in flight the fast loop takes integer bundles alone (path 7). Then the commit
+// (four draws) and the operations' rounds (stage, write, progress), as the reference makes them.
 #include "../../isa.h"
-#ifndef CHK
-#define CHK 1   // the fast loop's route-out: 0 none (a probe), 1 a branch and return, 2 by selects into sinks
-#endif
+// Probes on x17 (README "x17"): NOFLT the sticky flag never raised, NOMIS no texel for a word store off its start,
+// THRC the loop's test against a constant, ONCE no second attempt, X16STEP x16's full step in place of the general one
 
 static const uint WCN = 130;         // write cache entries: two ways of HALF sets, two overflow slots, then a sink
 static const uint WCS = WCN - 2;     // the first overflow slot
@@ -40,15 +41,13 @@ static uint r[65];          // the registers; r[64] takes what is written to r0
 static uint2 wc[WCN + 1];   // the write cache: (word, value), NONE an empty entry; wc[WCN] a sink for a store not made
 static uint pc, tp, cycle, opsrun, flags, ops8;   // (tp: the fast loop's pc, in texels; ops8 its ops times 8)
 static uint4 cur;           // the bundle about to run (its path 0 when the general step must make it)
-static uint lwb, lwl, swb, swl;   // the fast loop's windows: a load's address (bit 30 off) in [lwb, lwb + lwl), a store's
+static uint thr;            // the fast loop's paths: from GVM_PATH_FAST, or GVM_PATH_INT alone (an operation in flight, a pass made again)
+static bool flt;            // a load or store the fast loop could not make: the pass is made again
 static uint st, epc, cause, tval, tvec, scratch, ien, tcmp_lo, tcmp_hi, rnd, left, core, ext, endr;
 static uint4 lat0, lat1;    // the latched operation words (GVM_OPS + 0..28)
 static uint4 q[16];         // the queue: operation k is q[2k], q[2k + 1]
 static uint qn, qhead, qgen, refused;
-static bool irq_due;
-static bool flt;
-static uint fltu;
-static uint thr = GVM_PATH_FAST, lim = 4;        // IE, and an interrupt pending and enabled: taken before the next whole bundle
+static bool irq_due;        // IE, and an interrupt pending and enabled: taken before the next whole bundle
 
 uint op_bit(uint b) { return b << 12; }   // an opc bit in an op word
 uint simm12(uint w) { return asuint((int)w >> 20); }
@@ -157,17 +156,9 @@ uint merge(uint w, uint word, uint ad, uint val) {   // a store's value into its
     uint sh = ad << 3, msk = (0xffffffffu >> ext_k(w)) << sh;
     return word ^ ((word ^ (val << sh)) & msk);
 }
-// the fast loop makes it: in its window (RAM or the ROM for a load, RAM above the boot area for a store, neither what
-// an operation in flight holds) and within one word
-bool fast_ok(uint w, uint ad) {
-    bool stv = (w & op_bit(8)) != 0;
-    uint x = stv ? ad - swb : (ad & ~GVM_ROM) - lwb;
-#ifdef NOX
-    return x < (stv ? swl : lwl);   // (a probe: no word crossed)
-#else
-    return x < (stv ? swl : lwl) && ((ad << 3) & 24) <= ext_k(w);
-#endif
-}
+// the fast loop does not make it: a load outside RAM and the ROM (bit 30 off: RAM's place), a store outside RAM above
+// the boot area
+bool fast_bad(uint w, uint ad) { return (w & op_bit(8)) != 0 ? ad - GVM_DEV >= _RamEnd - GVM_DEV : (ad & ~GVM_ROM) >= _RamEnd; }
 // one memory op, read at once: its address, tag, set, texel and both entries
 struct mop { uint ad, tag, h; uint4 q; uint2 ea, eb; };
 mop mread(uint w, uint imm, uint a, uint b) {
@@ -198,7 +189,7 @@ uint taken(uint ctl, uint CA, uint CB, uint i6, uint sum) {   // (i6 the rb fiel
     return (ctl & 0x80) ? (c == 0 ? 1u : 0u) : c;
 }
 
-// ---- The fast loop's step: paths 3-7. A memory op it does not make leaves the bundle, its path 0, to the general step.
+// ---- The fast loop's step: paths 3-7
 void fstep(inout uint budget) {
     uint4 t = cur;
     uint ctl = t.w, path = ctl & 7, n8 = ctl & 0x18;   // (n * 8)
@@ -210,40 +201,24 @@ void fstep(inout uint budget) {
     uint ca = (ctl >> 11) & 63, cb = ctl >> 26;
     uint A0 = r[ra0], B0 = r[rb0], A1 = r[ra1], B1 = r[rb1], CA = r[ca], CB = r[cb];
     uint v0, v1;
-    bool bad = false;
     [branch] if (path == GVM_PATH_INT) {   // integers: op 0 the mid unit, op 1 lite (op 0's result to it by selects)
         v0 = alu_mid(t.x, i0, A0, B0);
         r[s0] = v0;
         v1 = alu_lite(t.y, i1, ra1 == s0 ? v0 : A1, rb1 == s0 ? v0 : B1);
     } else {
-#if CHK == 1
-        [branch] if (!fast_ok(t.x, mem_addr(t.x, i0, A0, B0)) || ((ctl & 1) != 0 && !fast_ok(t.y, mem_addr(t.y, i1, A1, B1)))) {
-            cur.w &= ~7u;   // the general step makes it
-            return;
-        }
-#elif CHK == 8
-        uint a0 = mem_addr(t.x, i0, A0, B0), a1 = mem_addr(t.y, i1, A1, B1);
-        bool b1 = (ctl & 1) != 0;
-        uint x0 = (t.x & op_bit(8)) ? a0 - swb : (a0 & ~GVM_ROM) - lwb, x1 = (t.y & op_bit(8)) ? a1 - swb : (a1 & ~GVM_ROM) - lwb;
-        uint c0 = ((a0 & 3) << 3) - ext_k(t.x) - 1, c1 = ((a1 & 3) << 3) - ext_k(t.y) - 1;   // (top bit clear: a word crossed)
-        fltu |= (x0 >= ((t.x & op_bit(8)) ? swl : lwl) ? 1u : 0u) | (~c0 >> 31) | (b1 ? (x1 >= ((t.y & op_bit(8)) ? swl : lwl) ? 1u : 0u) | (~c1 >> 31) : 0u);
-#elif CHK >= 5
-        flt |= !fast_ok(t.x, mem_addr(t.x, i0, A0, B0)) || ((ctl & 1) != 0 && !fast_ok(t.y, mem_addr(t.y, i1, A1, B1)));
-#elif CHK >= 2
-        bad = !fast_ok(t.x, mem_addr(t.x, i0, A0, B0)) || ((ctl & 1) != 0 && !fast_ok(t.y, mem_addr(t.y, i1, A1, B1)));
+#ifndef NOFLT
+        flt = flt || fast_bad(t.x, mem_addr(t.x, i0, A0, B0)) || ((path == GVM_PATH_LOAD2 || path == GVM_PATH_MEM2) && fast_bad(t.y, mem_addr(t.y, i1, A1, B1)));
 #endif
-#if CHK == 2
-        s0 = bad ? 64 : s0; s1 = bad ? 64 : s1;
-#endif
-        uint pd = CHK == 4 && bad ? 0 : path;   // (CHK 4: a bundle the general step makes takes the dispatch's last way)
-        [branch] if (pd == GVM_PATH_MEM2) {   // a store, then a load or a store that sees it by selects
+        [branch] if (path == GVM_PATH_MEM2) {   // a store, then a load or a store that sees it by selects
             bool st1 = (t.y & op_bit(8)) != 0;
             mop m0 = mread_entries(t.x, i0, A0, B0), m1 = mread_entries(t.y, i1, A1, B1);
-            // the texels only when an op needs the old word (a byte or a half, or a load): a word's store is its value
-            [branch] if (((t.x & op_bit(3)) | ((t.y ^ op_bit(8)) & op_bit(11))) != 0) { m0.q = data_texel(m0.ad); m1.q = data_texel(m1.ad); }
-#if CHK == 3
-            [branch] if (bad) { cur.w &= ~7u; return; }
+            // the texels only when an op needs the old word (a byte or a half, a word not at its word's start, or a load):
+            // a word's store is its value
+            [branch] if (((t.x & op_bit(3)) | ((t.y ^ op_bit(8)) & op_bit(11)) 
+#ifndef NOMIS
+            | ((m0.ad | m1.ad) & 3)
 #endif
+            ) != 0) { m0.q = data_texel(m0.ad); m1.q = data_texel(m1.ad); }
             uint w0 = seen(m0), sl0 = slot(m0);
             uint2 e0 = uint2(m0.tag, merge(t.x, w0, m0.ad, r[d0]));
             m1.ea = sl0 == m1.h ? e0 : m1.ea;
@@ -252,53 +227,41 @@ void fstep(inout uint budget) {
             w1 = sl0 == NONE && m0.tag == m1.tag ? e0.y : w1;   // (op 0's store in an overflow slot)
             v1 = extend(t.y, w1, m1.ad);
             bool nr = sl0 == NONE || (st1 && sl1 == NONE);   // no room: the overflow slots, and the pass ends here
-            wc[bad ? WCN : sl0 == NONE ? WCS : sl0] = e0;
-            wc[st1 && !bad ? (sl1 == NONE ? WCS + 1 : sl1) : WCN] = uint2(m1.tag, merge(t.y, w1, m1.ad, r[d1]));
-            nr = nr && !bad;
+            wc[sl0 == NONE ? WCS : sl0] = e0;
+            wc[st1 ? (sl1 == NONE ? WCS + 1 : sl1) : WCN] = uint2(m1.tag, merge(t.y, w1, m1.ad, r[d1]));
             cycle -= nr ? budget - 1 : 0; budget = nr ? 1 : budget;
             s1 = st1 ? 64 : s1;
-        } else [branch] if (pd == GVM_PATH_LOAD2) {   // two loads
+        } else [branch] if (path == GVM_PATH_LOAD2) {   // two loads
             mop m0 = mread(t.x, i0, A0, B0), m1 = mread(t.y, i1, A1, B1);
-#if CHK == 3
-            [branch] if (bad) { cur.w &= ~7u; return; }
-#endif
             v0 = extend(t.x, seen(m0), m0.ad);
             r[s0] = v0;
             v1 = extend(t.y, seen(m1), m1.ad);
-        } else [branch] if (CHK != 4 || pd != 0) {   // a load or a store, and a lite op
+        } else {   // a load or a store, and a lite op
             bool st0 = (t.x & op_bit(8)) != 0;
             mop m0 = mread_entries(t.x, i0, A0, B0);
-            [branch] if (((t.x ^ op_bit(8)) & op_bit(11)) != 0) m0.q = data_texel(m0.ad);   // (a load, a byte or a half)
-#if CHK == 3
-            [branch] if (bad) { cur.w &= ~7u; return; }
+            [branch] if ((((t.x ^ op_bit(8)) & op_bit(11)) 
+#ifndef NOMIS
+            | (m0.ad & 3)
 #endif
+            ) != 0) m0.q = data_texel(m0.ad);   // (a load, a byte or a half, a word not at its start)
             uint w0 = seen(m0), sl0 = slot(m0);
             v0 = extend(t.x, w0, m0.ad);
             bool nr = st0 && sl0 == NONE;
-            nr = nr && !bad;
-            wc[st0 && !bad ? (nr ? WCS : sl0) : WCN] = uint2(m0.tag, merge(t.x, w0, m0.ad, r[d0]));
+            wc[st0 ? (nr ? WCS : sl0) : WCN] = uint2(m0.tag, merge(t.x, w0, m0.ad, r[d0]));
             cycle -= nr ? budget - 1 : 0; budget = nr ? 1 : budget;
             s0 = st0 ? 64 : s0;
             r[s0] = v0;
             v1 = alu_lite(t.y, i1, ra1 == s0 ? v0 : A1, rb1 == s0 ? v0 : B1);
-        } else { cur.w &= ~7u; return; }
+        }
     }
     r[s1] = v1;
     uint i6 = asuint((int)ctl >> 26), sum = CA + i6;
     uint tk = taken(ctl, CA, CB, i6, sum);
-#if CHK == 2
-    r[(ctl & 0x780) != (GVM_CC_ADDBNZ << 7) || bad ? 64 : ca] = sum;   // after the ops' writes: it wins
-    tp = bad ? tp : tk ? tg : tn;
-    cur = bad ? uint4(t.xyz, t.w & ~7u) : tk ? tc : nx;
-    budget -= bad ? 0 : 1;
-    ops8 += bad ? 0 : n8;
-#else
     r[(ctl & 0x780) != (GVM_CC_ADDBNZ << 7) ? 64 : ca] = sum;   // after the ops' writes: it wins
     tp = tk ? tg : tn;
     cur = tk ? tc : nx;
     budget--;
     ops8 += n8;
-#endif
 }
 
 // ---- Traps, special registers, interrupts
@@ -339,24 +302,6 @@ opd op_of(uint4 a, uint4 b) {
     return o;
 }
 bool in_range(uint a, uint by, uint lo, uint n) { return n != 0 && (a - lo < n || lo - a < by); }
-uint range_end(uint lo, uint n) { return lo + n < lo ? NONE : lo + n; }
-void window(uint b, uint e, uint xl, uint xh, out uint wb, out uint wl) {   // [b, e) without [xl - 3, xh): its longer side
-    xl = xl >= 3 ? xl - 3 : 0;
-    uint left = xl > b ? min(xl, e) - b : 0, right = xh < e ? e - max(xh, b) : 0;
-    bool cut = xh > xl && xh > b && xl < e;
-    wb = cut && left < right ? max(xh, b) : b;
-    wl = cut ? max(left, right) : e - b;
-}
-void windows() {
-    uint dl = NONE, dh = 0, ul = NONE, uh = 0;
-    [loop] for (uint k = 0; k < qn; k++) {
-        opd o = op_of(q[2 * k], q[2 * k + 1]);
-        [flatten] if (o.dn != 0) { dl = min(dl, o.dst); dh = max(dh, range_end(o.dst, o.dn)); }
-        [flatten] if (o.sn != 0) { ul = min(ul, o.src); uh = max(uh, range_end(o.src, o.sn)); }
-    }
-    window(0, _RamEnd, dl, dh, lwb, lwl);
-    window(GVM_DEV, _RamEnd, min(dl, ul), max(dh, uh), swb, swl);
-}
 bool op_waits(uint a, uint by, bool store) {   // an operation in flight holds it: the pass ends before the op
     [branch] if (a >= GVM_OPS) return store && a == GVM_OPS && by == 16 && qn == QMAX;
     bool w = false;
@@ -441,6 +386,7 @@ uint mem_any(uint w, uint imm, uint a, uint b, uint epcw, inout uint e, inout bo
         ill = by == 0;
         uint ad = a + (mode >= 2 ? b << ((w >> 20) & 31) : imm);
         bool store = (mode & 1) != 0;
+        by = by <= 4 ? min(by, 4 - (ad & 3)) : by;   // (a byte, a half or a word stays in its word)
         [branch] if (ill) return 0;
         [branch] if (op_waits(ad, by, store)) { pc = epcw; e = E_SYNC; return 3; }
         [branch] if (!store) {
@@ -459,7 +405,7 @@ uint mem_any(uint w, uint imm, uint a, uint b, uint epcw, inout uint e, inout bo
                 uint i = ((ad - GVM_OPS) >> 2) + k;
                 lat0 = i < 4 ? put(lat0, i, pick(d, k)) : lat0; lat1 = i >= 4 ? put(lat1, i & 3, pick(d, k)) : lat1;
             }
-            [branch] if (ad == GVM_OPS && by == 16) { q[2 * qn] = lat0; q[2 * qn + 1] = lat1; qn++; windows(); }
+            [branch] if (ad == GVM_OPS && by == 16) { q[2 * qn] = lat0; q[2 * qn + 1] = lat1; qn++; thr = GVM_PATH_INT; }
             return 0;
         }
         [branch] if (!store_any(ad, by, d)) { pc = epcw; e = E_FULL; return 3; }
@@ -574,33 +520,6 @@ uint general(uint budget) {
     endr = e != NONE ? e : endr;
     return e != NONE ? 0 : budget - 1;
 }
-void run(uint budget) {
-    [branch] if (flags & F_HALT) { endr = E_HALT; return; }
-    [branch] if ((flags & F_SYNC) != 0 && qn != 0) { endr = E_SYNC; return; }   // a sync waits for the operations
-    flags &= ~F_SYNC;
-    [branch] if ((flags & F_WAIT) != 0 && (ipend() & ien) == 0) { endr = E_WAIT; return; }
-    flags &= ~F_WAIT;
-    irq_due = (st & GVM_ST_IE) != 0 && (ipend() & ien) != 0;
-    cur = ram(pc >> 4);
-    cur.w &= (pc & 15) != 0 || irq_due ? ~7u : 0xffffffffu;
-    [loop] while (budget > 0) {
-        uint b0 = budget;
-        tp = pc >> 4;
-        ops8 = 0;
-#if CHK == 6
-        [loop] while (budget > 0 && (cur.w & 7) - GVM_PATH_FAST <= lim) fstep(budget);   // paths 3-7
-#elif CHK == 7
-        [loop] while (budget > 0 && (cur.w & 7) >= thr) fstep(budget);   // paths 3-7
-#else
-        [loop] while (budget > 0 && (cur.w & 7) >= GVM_PATH_FAST) fstep(budget);   // paths 3-7
-#endif
-        cycle += b0 - budget;
-        opsrun += ops8 >> 3;
-        pc = b0 != budget ? tp << 4 : pc;
-        [branch] if (budget > 0) budget = general(budget);
-    }
-}
-
 uint4 state_in(uint t, uint c) {
     int3 at = int3(t >> 3, c, 0);
     switch (t & 7) {
@@ -608,6 +527,68 @@ uint4 state_in(uint t, uint c) {
     case 4: return _S4.Load(at); case 5: return _S5.Load(at); case 6: return _S6.Load(at); default: return _S7.Load(at);
     }
 }
+void load_state(uint c) {   // a core's state as the pass found it
+    uint k;
+    [unroll] for (k = 0; k < 16; k++) {
+        uint4 s = state_in(k, c);
+        r[4 * k] = s.x; r[4 * k + 1] = s.y; r[4 * k + 2] = s.z; r[4 * k + 3] = s.w;
+    }
+    r[0] = 0;
+    [loop] for (k = 0; k <= WCN; k++) wc[k] = uint2(NONE, 0);
+    uint4 s16 = state_in(16, c), s17 = state_in(17, c), s18 = state_in(18, c), s19 = state_in(19, c);
+    uint4 s22 = state_in(22, c), os = _OpState.Load(int3(c, 0, 0));
+    pc = s16.x; st = s16.y; epc = s16.z; cause = s16.w;
+    tval = s17.x; tvec = s17.y; scratch = s17.z; ien = s17.w;
+    tcmp_lo = s18.x; tcmp_hi = s18.y; flags = s18.z; rnd = s18.w;
+    cycle = s19.x; opsrun = s19.y; endr = E_BUDGET;
+    lat0 = state_in(20, c); lat1 = state_in(21, c);
+    qn = s22.x; qhead = s22.y; qgen = s22.z; refused = s22.w;
+    [unroll] for (k = 0; k < 16; k++) q[k] = state_in(T_Q + k, c);
+    [branch] if (os.x == qgen) {   // the last pass's rounds: operations through, pieces made of the next, refused
+        uint d = min(os.y, qn);
+        [loop] for (k = 0; k + d < qn; k++) { q[2 * k] = q[2 * (k + d)]; q[2 * k + 1] = q[2 * (k + d) + 1]; }
+        qn -= d; qhead = os.z; refused += os.w;
+    }
+    qgen++;
+}
+uint start() {   // the bundles the core runs this pass: 0 when halted, in a sync or a wait
+    uint e = (flags & F_HALT) != 0 ? E_HALT : (flags & F_SYNC) != 0 && qn != 0 ? E_SYNC : (flags & F_WAIT) != 0 && (ipend() & ien) == 0 ? E_WAIT : NONE;
+    flags &= e == NONE ? ~(F_SYNC | F_WAIT) : 0xffffffffu;
+    endr = e == NONE ? E_BUDGET : e;
+    irq_due = (st & GVM_ST_IE) != 0 && (ipend() & ien) != 0;
+    cur = ram(pc >> 4);
+    cur.w &= (pc & 15) != 0 || irq_due ? ~7u : 0xffffffffu;
+    flt = false;
+    return e == NONE ? _Ticks : 0;
+}
+void run() {
+    uint budget = start();
+    [loop] while (budget > 0) {
+        uint b0 = budget;
+        tp = pc >> 4;
+        ops8 = 0;
+#ifdef THRC
+        [loop] while (budget > 0 && (cur.w & 7) >= GVM_PATH_FAST) fstep(budget);
+#else
+        [loop] while (budget > 0 && (cur.w & 7) >= thr) fstep(budget);   // paths 3-7 (or 7)
+#endif
+        cycle += b0 - budget;
+        opsrun += ops8 >> 3;
+        pc = b0 != budget ? tp << 4 : pc;
+        [branch] if (flt) {   // the fast loop met a load or store it does not make: the pass again, memory in the general step
+            load_state(core);
+            thr = GVM_PATH_INT;
+            budget = start();
+            continue;
+        }
+#ifdef NOGEN
+        [branch] if (budget > 0) { flags |= F_HALT; budget = 0; }   // (a probe: the general step's code gone)
+#else
+        [branch] if (budget > 0) budget = general(budget);
+#endif
+    }
+}
+
 uint4 state_out(uint t, uint4 s3) {
     [branch] if (t < 16) return uint4(r[4 * t], r[4 * t + 1], r[4 * t + 2], r[4 * t + 3]);
     [branch] if (t >= T_WC && t < T_WC + WCN / 2) {   // the write cache: two entries a texel
@@ -630,36 +611,14 @@ struct tick_out { uint4 t0 : SV_Target0; uint4 t1 : SV_Target1; uint4 t2 : SV_Ta
                   uint4 t4 : SV_Target4; uint4 t5 : SV_Target5; uint4 t6 : SV_Target6; uint4 t7 : SV_Target7; };
 tick_out frag(v2f i) {
     uint2 p = uint2(i.vertex.xy);
-    uint k;
     tick_out o;
     core = p.y;
     [branch] if (core >= _NCores) { o.t0 = o.t1 = o.t2 = o.t3 = o.t4 = o.t5 = o.t6 = o.t7 = 0; return o; }
-    [unroll] for (k = 0; k < 16; k++) {
-        uint4 s = state_in(k, core);
-        r[4 * k] = s.x; r[4 * k + 1] = s.y; r[4 * k + 2] = s.z; r[4 * k + 3] = s.w;
-    }
-    r[0] = 0;
-    [loop] for (k = 0; k <= WCN; k++) wc[k] = uint2(NONE, 0);
-    uint4 s16 = state_in(16, core), s17 = state_in(17, core), s18 = state_in(18, core), s19 = state_in(19, core);
-    uint4 s22 = state_in(22, core), os = _OpState.Load(int3(core, 0, 0));
-    pc = s16.x; st = s16.y; epc = s16.z; cause = s16.w;
-    tval = s17.x; tvec = s17.y; scratch = s17.z; ien = s17.w;
-    tcmp_lo = s18.x; tcmp_hi = s18.y; flags = s18.z; rnd = s18.w;
-    cycle = s19.x; opsrun = s19.y; endr = E_BUDGET;
-    lat0 = state_in(20, core); lat1 = state_in(21, core);
-    qn = s22.x; qhead = s22.y; qgen = s22.z; refused = s22.w;
     ext = (pick(_Ext[core >> 7], (core >> 5) & 3) >> (core & 31)) & 1;
-    [unroll] for (k = 0; k < 16; k++) q[k] = state_in(T_Q + k, core);
-    [branch] if (os.x == qgen) {   // the last pass's rounds: operations through, made of the next, refused
-        uint d = min(os.y, qn);
-        [loop] for (k = 0; k + d < qn; k++) { q[2 * k] = q[2 * (k + d)]; q[2 * k + 1] = q[2 * (k + d) + 1]; }
-        qn -= d; qhead = os.z; refused += os.w;
-    }
-    qgen++;
-    windows();
-    flt = false; fltu = 0;
-    run(_Ticks);
-    flags |= flt || fltu != 0 ? 64 : 0;
+    load_state(core);
+    thr = qn != 0 ? GVM_PATH_INT : GVM_PATH_FAST;
+    run();
+    uint4 s19 = state_in(19, core);
     o.t0 = state_out(p.x * 8 + 0, s19); o.t1 = state_out(p.x * 8 + 1, s19); o.t2 = state_out(p.x * 8 + 2, s19); o.t3 = state_out(p.x * 8 + 3, s19);
     o.t4 = state_out(p.x * 8 + 4, s19); o.t5 = state_out(p.x * 8 + 5, s19); o.t6 = state_out(p.x * 8 + 6, s19); o.t7 = state_out(p.x * 8 + 7, s19);
     return o;
