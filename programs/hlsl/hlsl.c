@@ -98,6 +98,9 @@ struct hlsl_program {
 	uint32_t steps_bytes;
 	uint32_t *pixels;
 	int width, height, stage;
+#ifdef HLSL_INTERP
+	hl_interp *interp;	/* the IR, which hl_interp_step runs (its address in the word below the block) */
+#endif
 };
 
 hlsl_program *hlsl_compile_ex(const char *source, const char *entry, int flags, char *error, int error_bytes)
@@ -120,10 +123,18 @@ hlsl_program *hlsl_compile_ex(const char *source, const char *entry, int flags, 
 	hl_lex();
 	hl_parse();
 	hl_gen(entry ? entry : "main");
+#ifdef HLSL_INTERP
+	/* (no code: the IR is run, a step whole; an index keeps one texel, two with HLSL_RAW's mark at 16) */
+	hc->texels = (flags & HLSL_RAW) ? 2 : 1;
+#else
 	hl_back();
+#endif
 	p = calloc(1, sizeof *p);
 	if (!p) hl_fail(0, "out of memory");
 	p->flags = flags;
+#ifdef HLSL_INTERP
+	if (!(p->interp = hl_interp_keep())) hl_fail(0, "out of memory");
+#endif
 	p->code_bytes = (uint32_t)hc->nmc * 4;
 	p->code_mem = malloc(p->code_bytes + 16);
 	p->ctx_bytes = 16 + 2048;	/* (uniforms are at most 2 KB) */
@@ -134,7 +145,15 @@ hlsl_program *hlsl_compile_ex(const char *source, const char *entry, int flags, 
 	if (!p->code_mem || !p->ctx_mem || !p->uniforms) hl_fail(0, "out of memory");
 	p->code = (uint8_t *)(((uintptr_t)p->code_mem + 15) & ~(uintptr_t)15);
 	memcpy(p->code, hc->mc, p->code_bytes);
+#ifdef HLSL_INTERP
+	/* (the block 16 bytes in, the IR's address in the word below it) */
+	free(p->ctx_mem);
+	if (!(p->ctx_mem = malloc(p->ctx_bytes + 32))) hl_fail(0, "out of memory");
+	p->ctx = (uint32_t *)((((uintptr_t)p->ctx_mem + 15) & ~(uintptr_t)15) + 16);
+	p->ctx[-1] = (uint32_t)(uintptr_t)p->interp;
+#else
 	p->ctx = (uint32_t *)(((uintptr_t)p->ctx_mem + 15) & ~(uintptr_t)15);
+#endif
 	memset(p->ctx, 0, p->ctx_bytes);
 	for (g = hc->globals; g; g = g->next)
 		if (g->offset >= 0) {
@@ -175,6 +194,9 @@ void hlsl_free(hlsl_program *p)
 	free(p->uniforms);
 	free(p->code_mem);
 	free(p->ctx_mem);
+#ifdef HLSL_INTERP
+	hl_interp_free(p->interp);
+#endif
 	free(p);	/* (steps_out is the workers' memory, mcw_alloc: kept) */
 }
 
@@ -206,7 +228,12 @@ int hlsl_set_int(hlsl_program *p, const char *name, const int32_t *values, int c
 struct hlsl_stats hlsl_stats(const hlsl_program *p) { return p->stats; }
 uint32_t *hlsl_ctx(hlsl_program *p) { return p->ctx; }
 const uint8_t *hlsl_code(const hlsl_program *p, uint32_t *bytes) { if (bytes) *bytes = p->code_bytes; return p->code; }
+#ifdef HLSL_INTERP
+uint32_t (*hlsl_step(const hlsl_program *p))(uint32_t, void *, uint32_t) { (void)p; return hl_interp_step; }
+#else
 uint32_t (*hlsl_step(const hlsl_program *p))(uint32_t, void *, uint32_t) { return (uint32_t (*)(uint32_t, void *, uint32_t))(uintptr_t)p->code; }
+#endif
+
 
 /* (hlsl_draw.c's view of the program) */
 void *hlsl_internal(hlsl_program *p, uint32_t ***steps_out, uint32_t **steps_bytes, uint32_t ***pixels, int **wh, int **stage)
