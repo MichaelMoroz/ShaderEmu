@@ -70,7 +70,7 @@ Builds side by side: `GVM_APPS_REPO`, `GVM_APPS_WORK` and `GVM_APPS_LOGS` name a
 ## Status (22 October 2026)
 
 `gvm_cpu`: `test_all.py` on `build/gvm_apps/img` (32 cores, 255 where a case asks), the last full run 102 of 131 cases,
-since then the terminal and ports fixes (below). Card: `card.py` (`rvc_harness --gvm`, RTX 5070 Laptop, `--wall-scale 2`).
+since then the terminal and ports fixes (below). Card: `card.py` (`rvc_harness --gvm`, RTX 5070 Laptop, `--wall-scale 2`): 34 of 38 chosen cases.
 Flags: every program `-O2`/`-O3` as its RISC-V script says, plus `-ffp-contract=fast -fapprox-func -ffunction-sections`
 (`GVM_MATH`, `GVM_CFLAGS`); Quake and Half-Life `-lmfloat`. A float output is compared with gvm_cpu's reference within
 the tolerance named (`gvmcmp`, `NEAR` in `test_all.py`); an exact sum where the program's logic must not drift.
@@ -86,10 +86,10 @@ the tolerance named (`gvmcmp`, `NEAR` in `test_all.py`); an exact sum where the 
 | nxray | yes | PASS | PASS | last picture PSNR >= 35 dB (RAY_SAVE), 4 sum lines |
 | nxpath (8 scenes) | yes | PASS (all) | nxpath, cornell PASS | pictures PSNR >= 35 dB (NXPATH_SAVE) |
 | nxphys | yes | PASS (6 cases) | wall, tower PASS | heights within 2 %, speeds 15 %, depth 10 mm |
-| nxpinball | yes | PASS | not run | gpu_vm's own: score 18060 state 51ec1e4b (floats take the ball elsewhere) |
+| nxpinball | yes | PASS | runs; another game (score 14370, the card's special functions) | gpu_vm's own on gvm_cpu: score 18060 state 51ec1e4b (floats take the ball elsewhere); a self-played game drifts with any float difference |
 | HLSL: hlsl_bench, hlslc, hlslview | yes (IR run: `hlsl_interp.c`) | PASS | PASS | picture PSNR >= 35 dB (host's sum 3614e8bb on gvm_cpu with exact libm) |
 | nxide | yes | js, py, problems, tree, storm PASS; C fails (tcc); hlsl too slow (20 pictures) | - | as RISC-V |
-| QuickJS, MicroPython | yes | PASS | qjs PASS | as RISC-V |
+| QuickJS, MicroPython | yes | PASS | PASS | as RISC-V |
 | Doom | yes | PASS (doom-1/2/3, told, rest) | PASS (all five) | exact state digests (integer game) |
 | NES | yes (interpreter) | PASS (8 cases) | thwaite-120, -lists, nova-120 PASS | exact RAM and picture sums |
 | ClassiCube | yes | meshes, meshes-workers, kept, pack PASS | meshes PASS | pack: 30-42 textures (speed decides how many before "steady") |
@@ -99,9 +99,9 @@ the tolerance named (`gvmcmp`, `NEAR` in `test_all.py`); an exact sum where the 
 | Quake | yes (-lmfloat) | quake-light PASS (QUAKE_STATS_FRAMES); walk, exit, particles fail on gvm_cpu's clock pacing | quake-light PASS | as RISC-V; walk reaches 480 687 24 with commands typed ahead |
 | Quake III | yes | workers, inline, bots, bots-serial PASS; server: digest by load time | workers/inline: 237 of 237 lines the same, fewer than 500 (load time) | as RISC-V where QUAKE3_ENTER fixes the entry |
 | Half-Life: Uplink | yes (-lmfloat, 1 MB stack) | plays through the fight, HL_ROTATION=check 0 wrong; GVM_RACES 0 or 7 undone (light styles) | not run | HLGL_PICSUM 656aa416 (GPU addresses moved: not RISC-V's) |
-| terminal: nano, mg, htop, dialog, sl, file | yes | PASS | not run | as RISC-V (TERM=linux) |
+| terminal: nano, mg, htop, dialog, sl, file | yes | PASS | nano PASS | as RISC-V (TERM=linux) |
 | mc, mcedit | yes | mc's subshell says fork () = -1 | - | - |
-| ports: pcre, lockfile, socat, thttpd, curl, dropbear, sftp, at | yes | PASS (dropbear: uname -m gpuvm) | pcre not reached | as RISC-V |
+| ports: pcre, lockfile, socat, thttpd, curl, dropbear, sftp, at | yes | PASS (dropbear: uname -m gpuvm) | pcre PASS | as RISC-V |
 | iproute2 | yes | all but /proc/net/stat/arp_cache (the kernel's) | - | - |
 
 ## Bugs found (gpu_vm/userland/apps/bugs)
