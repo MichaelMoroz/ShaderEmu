@@ -134,6 +134,11 @@ Phases, each one agent's (one writer of the LLVM tree in WSL at a time):
 3. Codegen and clang (`gpuvm-unknown-elf`): ISel, calling convention, frame lowering, branch relaxation.
 4. compiler-rt builtins, a small bare-metal libc and crt0; test apps (hello, isaloops, CoreMark) on gvm_cpu.
 5. Linux 5.17 `arch/gpuvm` (no MMU), `make ARCH=gpuvm LLVM=1`; then boot on gvm_cpu.
+- **On real work gpu_vm is 1.59-1.67x the lean RISC-V tick, short of the 2-3x required** (`gpu_vm/bench_real`, 22
+  October 2026: CoreMark 38.4 against 24.2 iterations/s under each machine's Linux, gzip 4.01 against 6.70 s, the same
+  clang and card). Two levers, an agent each: denser code (1.81 RISC-V instructions a bundle on CoreMark: 18.6% of its
+  bundles are a branch alone, a load and the branch on it always two bundles; target 120k bundles an iteration from
+  149.8k) and cheaper bundles in the tick (174 ns on CoreMark against the lean tick's 153 an instruction; target 138).
 - **Linux boots on the card** (22 October 2026): `gvm_gpu` (`gpu_vm/gpu`) with tick x17 runs vmlinux to init's line in
   2.1 s of card time (6.2M bundles, 15,148 passes, 2.96M bundles/s), lockstep with the reference clean (`--check`);
   gvm_cpu's tests, the 56 exec tests and CoreMark (5.7M bundles/s) run on the card. 15,110 of the boot's passes end on
