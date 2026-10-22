@@ -782,3 +782,10 @@ int getchar(void) {
   unsigned char c;
   return read(0, &c, 1) == 1 ? c : EOF;
 }
+
+//===-- files: none; errno ---------------------------------------------------===//
+
+int errno;
+int open(const char *path, int flags, ...) { return -1; }
+int close(int fd) { return 0; }
+long lseek(int fd, long off, int whence) { return -1; }
