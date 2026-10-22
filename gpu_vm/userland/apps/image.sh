@@ -25,7 +25,7 @@ mkdir -p "$W"
 L=$W/rootfs.list
 # the desktop as the RISC-V image starts with it (tools/make_linux_image.py's desktop_shortcuts: a shortcut for every
 # program of the Start menu, the places; nxfiles --desktop leaves at once without /root/Desktop), from the apps' menus
-rm -rf "$W/desktop"; mkdir -p "$W/desktop"
+rm -rf "$W/desktop" "$W/icons"; mkdir -p "$W/desktop" "$W/icons"
 python3 - "$ROOT/tools" "$APPS" "$W/desktop" <<'PY'
 import os, sys, types
 sys.modules.setdefault('PIL', types.SimpleNamespace(Image=None))   # (the image builder reads PNGs; not here)
@@ -36,10 +36,10 @@ for data, folder, name in m.desktop_shortcuts(sys.argv[2]):
     os.makedirs(d, exist_ok=True)
     open(os.path.join(d, name), 'wb').write(data)
 PY
-python3 - "$R/initramfs.list" "$HERE/rcS" "$APPS" "${DATA:-1}" "$W/desktop" "$ROOT/linux/prebuilt/nommu/root" "$ROOT/linux/prebuilt/root"     $( [ -d "$RVDATA" ] && echo "$RVDATA" ) > "$L" <<'EOF'
+python3 - "$R/initramfs.list" "$HERE/rcS" "$APPS" "${DATA:-1}" "$W/desktop" "$W/icons" "$ROOT/linux/prebuilt/nommu/root" "$ROOT/linux/prebuilt/root"     $( [ -d "$RVDATA" ] && echo "$RVDATA" ) > "$L" <<'EOF'
 import os, sys
-base, rcs, apps, data, desk = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4] == '1', sys.argv[5]
-extra = sys.argv[6:]
+base, rcs, apps, data, desk, iconized = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4] == '1', sys.argv[5], sys.argv[6]
+extra = sys.argv[7:]
 lines, have, dirs = [], set(), set()
 # (a program of both, rootfs.sh's and build.sh's, is build.sh's: QuickJS's newer qjs)
 ours = set()
@@ -63,6 +63,36 @@ def add_dir(p):
 def is_program(path):
     with open(path, 'rb') as f: head = f.read(4)
     return head in (b'bFLT', b'\x7fELF')
+# a program with its icon at its end, as the RISC-V image has it (make_linux_image.py's with_icon: 32 x 32 then 16 x 16
+# pixels of three bytes from the sheets' cell of its name, then the mark), in a copy under $W/icons
+ICON_MARK = b'NXICON1' + bytes(1)
+def sheet(path):
+    d = open(path, 'rb').read()
+    parts, at = [], 0
+    while len(parts) < 4:
+        while d[at:at + 1].isspace(): at += 1
+        e = at
+        while not d[e:e + 1].isspace(): e += 1
+        parts.append(d[at:e]); at = e
+    return int(parts[1]), d[at + 1:]
+icon_share = next((os.path.join(t, 'usr', 'share') for t in [apps] + extra if os.path.exists(os.path.join(t, 'usr', 'share', 'icons.idx'))), None)
+cells = dict(l.split() for l in open(os.path.join(icon_share, 'icons.idx'))) if icon_share else {}
+sheets = {z: sheet(os.path.join(icon_share, 'icons%d.ppm' % z)) for z in (32, 16)} if icon_share else {}
+def with_icon(src, name):
+    body = open(src, 'rb').read()
+    if name not in cells or body.endswith(ICON_MARK):
+        return src
+    cell, out = int(cells[name]), b''
+    for z in (32, 16):
+        w, px = sheets[z]
+        x0, y0 = cell % 16 * z, cell // 16 * z
+        for y in range(y0, y0 + z):
+            out += px[(y * w + x0) * 3:(y * w + x0 + z) * 3]
+    dst = os.path.join(iconized, src.lstrip('/'))
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    open(dst, 'wb').write(body + out + ICON_MARK)
+    os.chmod(dst, 0o755)
+    return dst
 def walk(top, programs):
     for dp, dn, fn in os.walk(top):
         dn.sort()
@@ -70,8 +100,15 @@ def walk(top, programs):
         rel = '' if rel == '.' else '/' + rel
         for n in sorted(fn):
             src = os.path.join(dp, n); p = rel + '/' + n
-            if p in have or n.endswith('.gdb') or n.endswith('.romlink'): continue
+            if n.endswith('.romlink'):   # NAME.romlink: NAME, a link to the path it names (make_linux_image.py's hard link)
+                q = p[:-len('.romlink')]
+                if q not in have:
+                    add_dir(rel or '/'); lines.append('slink %s %s 0777 0 0' % (q, open(src).read().strip())); have.add(q)
+                continue
+            if p in have or n.endswith('.gdb'): continue
             sep = chr(9) if ' ' in p or ' ' in src else ' '
+            if programs and not os.path.islink(src) and is_program(src):
+                src = with_icon(src, n)
             if os.path.islink(src):
                 add_dir(rel or '/'); lines.append(sep.join(('slink', p, os.readlink(src), '0777', '0', '0'))); have.add(p); continue
             if not programs and is_program(src): continue

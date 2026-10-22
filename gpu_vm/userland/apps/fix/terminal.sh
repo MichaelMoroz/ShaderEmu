@@ -21,3 +21,16 @@ if 'meson-dl' in s: sys.exit(0)
 if old not in s: sys.exit('fix/terminal.sh: the venv line moved')
 open(p, 'w').write(s.replace(old, new + old))
 PY
+# nano's gnulib asks whether threads are linked by weak references to pthread's functions, and under -fPIE an
+# undefined weak function's address is the program's load address, not 0 (bugs/weak_undef.c): nano called it and
+# died of SIGILL. They are linked in (musl has them in libc.a), so they are not undefined.
+python3 - "$R/linux/terminal/build.sh" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p).read()
+old = 'conf nano --disable-nls --disable-libmagic --enable-utf8 CPPFLAGS="$CURSES_CFLAGS -D_GL_CONFIG_H_INCLUDED=1" LDFLAGS="-L$ST/usr/lib"'
+if 'thrd_exit' in s: sys.exit(0)
+if old not in s: sys.exit('fix/terminal.sh: nano\'s conf line moved')
+u = ','.join('-u,' + n for n in ('pthread_mutex_destroy', 'pthread_mutex_init', 'pthread_mutex_lock', 'pthread_mutex_unlock',
+                                  'pthread_mutexattr_gettype', 'thrd_exit'))
+open(p, 'w').write(s.replace(old, old[:-1] + ' -Wl,' + u + '"'))
+PY
