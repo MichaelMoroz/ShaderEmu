@@ -148,6 +148,9 @@ calls libc for the rest, which uses an operation from a few KB up (a pass ended 
 As the RISC-V machine's (`docs/machine/multicore.md`): mailboxes at 0x00c0_0000 with the same
 layout, a worker starts in user mode at a pc and sp, `wait` parks it, a trap writes a fault record
 and parks it, a syscall writes a call record for core 0. Lanes are not part of gpu_vm for now.
+Made by the machine's worker firmware in the boot area (`gpu_vm/platform/worker.S`), not by the tick; a user's `wait`
+ends the worker's pass (the host freezes a sleeping worker until its job word changes). The design, the hosts' part
+and what was measured: `gpu_vm/platform.md`.
 
 ## ABI (ILP32)
 
