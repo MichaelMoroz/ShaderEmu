@@ -12,8 +12,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))
-sys.path.insert(0, os.path.join(ROOT, 'tools'))
-import test_all as T   # noqa: E402
+# (tools/test_all.py by its path: this file has its name)
+import importlib.util   # noqa: E402
+_spec = importlib.util.spec_from_file_location('riscv_test_all', os.path.join(ROOT, 'tools', 'test_all.py'))
+T = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(T)
 
 PROMPT = re.compile(rb'@gpuvm:[^\n]*?# ')
 UNSUPPORTED = ('--host', '--host-from', '--host-wheel', '--fixed-dt', '--pointer-sweep')
