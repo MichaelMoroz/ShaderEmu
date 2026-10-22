@@ -12,8 +12,7 @@ KBUILD_CFLAGS += -falign-functions=16
 
 head-y := arch/gpuvm/kernel/head.o
 
-core-y += arch/gpuvm/kernel/ arch/gpuvm/mm/
-libs-y += arch/gpuvm/lib/
+core-y += arch/gpuvm/kernel/ arch/gpuvm/mm/ arch/gpuvm/lib/
 
 boot := arch/gpuvm/boot
 

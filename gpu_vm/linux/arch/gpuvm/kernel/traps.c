@@ -22,6 +22,8 @@
 
 extern asmlinkage void handle_exception(void);
 
+int show_unhandled_signals = 1;
+
 static DEFINE_SPINLOCK(die_lock);
 
 void die(struct pt_regs *regs, const char *str)

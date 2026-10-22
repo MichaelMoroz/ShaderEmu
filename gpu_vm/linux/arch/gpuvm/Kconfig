@@ -38,6 +38,9 @@ config MMU
 config GENERIC_CSUM
 	def_bool y
 
+config GENERIC_CALIBRATE_DELAY
+	def_bool y
+
 config GENERIC_HWEIGHT
 	def_bool y
 
