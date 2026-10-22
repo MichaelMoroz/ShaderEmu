@@ -154,8 +154,8 @@ Phases, each one agent's (one writer of the LLVM tree in WSL at a time):
   gpu_vm (with the card's special functions and fused multiply-add), the drivers working (GPU, display, input, sound,
   ROM, LAN where feasible), and a game comparison against the RISC-V machine. Workers exactly as the RISC-V machine
   has them (docs/machine/multicore.md, lanes.md): up to 255 worker cores, the mailboxes, lent cores, /dev/gpu's
-  ioctls incl. REST, the mcw/mcwx API unchanged, LANES too, and gvm_cpu running workers (with a race check like
-  RVC_RACES). Agents: platform (harness gpu_vm mode, devices, drivers, workers), apps, math (libm on the card's
+  ioctls incl. REST, the mcw/mcwx API unchanged, and gvm_cpu running workers (with a race check like RVC_RACES).
+  No lanes (the user): programs take their plain-call path, as on rvc_cpu. Agents: platform (harness gpu_vm mode, devices, drivers, workers), apps, math (libm on the card's
   functions), ISA and latency (x19).
 - **Denser code** (22 October 2026, gpu_vm/llvm: GlobalFill, BundleModel, ZeroExt, LoadHoist, UnrollHint, inlining
   x3, PIE globals): CoreMark 149.3k -> 113.0k bundles an iteration (2.39 RISC-V instructions a bundle), gzip 19.38M ->
