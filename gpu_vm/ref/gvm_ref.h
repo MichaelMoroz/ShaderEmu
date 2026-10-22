@@ -225,7 +225,7 @@ static int gvm__room(gvm_core *c, uint32_t a, uint32_t bytes) {
 static void gvm__store(gvm_machine *m, gvm_core *c, uint32_t a, uint32_t bytes, uint32_t v) {
     if (a >= GVM_OPS) {
         c->op[(a - GVM_OPS) >> 2] = v;
-        c->op_pending = 1;
+        c->op_pending |= a == GVM_OPS;   // (the kind's word, stored last of a blit's two texels, asks for it)
         return;
     }
     for (uint32_t i = 0; i < bytes; i++) {
@@ -235,6 +235,22 @@ static void gvm__store(gvm_machine *m, gvm_core *c, uint32_t a, uint32_t bytes, 
         if (!e) e = gvm__wl_find(&c->wl, word, 1);
         *e = (old & ~(0xffu << sh)) | ((v >> (8 * i)) & 0xffu) << sh;
     }
+}
+
+// An operation asked for and not yet made does not stop the core: an access stops it (the pass ends before the op,
+// which runs again) only where the operation is still at work: a load of what it writes; a store to what it writes or
+// reads, or to the descriptors (one operation at a time). Fetches are not looked at: code an operation wrote runs
+// after a sync.
+static int gvm__in(uint32_t a, uint32_t bytes, uint32_t lo, uint32_t n) { return n && (a - lo < n || lo - a < bytes); }
+static int gvm__op_waits(const gvm_core *c, uint32_t a, uint32_t bytes, int store) {
+    const uint32_t *d = c->op;
+    uint32_t dn = 0, sn = 0;
+    if (!c->op_pending) return 0;
+    if (a >= GVM_OPS) return store;
+    if (d[0] == GVM_OP_COPY) dn = sn = d[3];
+    else if (d[0] == GVM_OP_FILL) dn = d[3];
+    else if (d[0] == GVM_OP_BLIT && d[7] && d[6]) { dn = d[4] * (d[7] - 1) + d[6]; sn = d[5] * (d[7] - 1) + d[6]; }
+    return gvm__in(a, bytes, d[1], dn) || (store && gvm__in(a, bytes, d[2], sn));
 }
 
 static int gvm__store_ok(const gvm_machine *m, uint32_t a, uint32_t bytes) {
@@ -394,6 +410,7 @@ static int gvm__op(gvm_machine *m, gvm_core *c, uint32_t base, uint32_t s, const
             uint32_t by = bytes_of[wd];
             if (!by) break;
             uint32_t addr = (mode <= 1) ? a + imm : a + (b << (rc & 31));
+            if (gvm__op_waits(c, addr, by, mode & 1)) { c->ops_run--; c->pc = epc; *end = GVM_END_SYNC; return GVM__END; }
             if (mode == 0 || mode == 2) {
                 uint32_t v[4] = {0, 0, 0, 0}, k, words = by > 4 ? by / 4 : 1;
                 for (k = 0; k < words; k++) {
@@ -413,6 +430,7 @@ static int gvm__op(gvm_machine *m, gvm_core *c, uint32_t base, uint32_t s, const
         if (mode == 4 || (mode == 5 && wd <= GVM_AMO2_MAXU)) {
             uint32_t old, nw;
             if ((a & 3) || !gvm__store_ok(m, a, 4) || a >= GVM_OPS) { c->ops_run--; gvm__trap(c, GVM_CAUSE_STORE, epc, a); return GVM__TRAPPED; }
+            if (gvm__op_waits(c, a, 4, 1)) { c->ops_run--; c->pc = epc; *end = GVM_END_SYNC; return GVM__END; }
             if (!gvm__room(c, a, 4)) { c->ops_run--; c->pc = epc; *end = GVM_END_FULL; return GVM__END; }
             old = gvm__word(m, c, a);
             if (mode == 5) nw = wd == GVM_AMO2_MINU ? (old < b ? old : b) : (old > b ? old : b);

@@ -18,6 +18,8 @@ check break 2 "" "$cpu" "$d/break.elf"
 check handler 2 "" "$cpu" "$d/handler.elf"
 check timer 43 "" "$cpu" "$d/timer.elf"
 check max-bundles 3 "" "$cpu" --max-bundles 1000 "$d/spin.elf"
+check opasync 7 "" "$cpu" "$d/opasync.elf"
+check opasync-short 7 "" "$cpu" --budget 3 "$d/opasync.elf"
 check trace 0 "Hello from gpu_vm!" "$cpu" --trace --strace --stats "$d/hello.elf"
 grep -q "syscall 64(0x1, 0x2010000, 0x13) = 19" "$d/trace.err" || { echo "FAIL trace: no syscall line"; bad=1; }
 exit $bad
