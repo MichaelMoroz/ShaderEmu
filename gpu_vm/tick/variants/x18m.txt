@@ -1,0 +1,5 @@
+# x18m: step12 fetching both next bundles first (S12P), as the fast loop does
+x17       gpu_vm/tick/steps/x17.hlsl
+o4s1      gpu_vm/tick/steps/x18v.hlsl -D ORD=4 -D S12X=1
+o4s1p     gpu_vm/tick/steps/x18v.hlsl -D ORD=4 -D S12X=1 -D S12P=1
+o4s3p     gpu_vm/tick/steps/x18v.hlsl -D ORD=4 -D S12X=3 -D S12P=1

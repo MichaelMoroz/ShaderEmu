@@ -1,0 +1,7 @@
+# x18p: on o4s3 (o4's order, step12 making cc 0, sel and lpc): the ROM in RAM's texture (one load), the data texel read
+# by every one-op memory bundle (TEX1), the guard's test by min
+o4s3      gpu_vm/tick/steps/x18v.hlsl -D ORD=4 -D S12X=3
+o4s3r     gpu_vm/tick/steps/x18v.hlsl -D ORD=4 -D S12X=3 -D ROMROWS=1
+o4s3t     gpu_vm/tick/steps/x18v.hlsl -D ORD=4 -D S12X=3 -D TEX1=1
+o4s3g     gpu_vm/tick/steps/x18v.hlsl -D ORD=4 -D S12X=3 -D GUARD=3
+o4s3rt    gpu_vm/tick/steps/x18v.hlsl -D ORD=4 -D S12X=3 -D ROMROWS=1 -D TEX1=1

@@ -1,0 +1,7 @@
+# x18n: cc 0's jumps (j, call, jr, callr) in the fast loop with x17's fields (CC0F): j and call by off18 beside off9, jr
+# and callr by a branch after the ops; the add left to step12
+x17       gpu_vm/tick/steps/x17.hlsl
+o4s1      gpu_vm/tick/steps/x18v.hlsl -D ORD=4 -D S12X=1
+o4s3      gpu_vm/tick/steps/x18v.hlsl -D ORD=4 -D S12X=3
+o4s1f     gpu_vm/tick/steps/x18v.hlsl -D ORD=4 -D S12X=1 -D CC0F=1
+o4s3f     gpu_vm/tick/steps/x18v.hlsl -D ORD=4 -D S12X=3 -D CC0F=1

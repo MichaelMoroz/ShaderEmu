@@ -781,7 +781,22 @@ static std::vector<Case> cases() {
         a.bind(f); a.ret();
         a.bind(over);
     });
+    // scattered stores (binfmt_flat's relocations, gzip's hash chains): words at random in 2 MB, and words 4 KB apart
+    probe("p_scat", [](GvmAsm& a) {
+        a.li(9, 1103515245); a.li(10, 0x1ffffc);   // (in the loop: the constants each trip, two bundles)
+        a.op(GVM_I_MUL, 6, 6, 9); a.addi(6, 6, 12345);
+        a.opi(GVM_I_SRL, 7, 6, 9); a.op(GVM_I_AND, 7, 7, 10);
+        a.add(7, 7, 4); a.close();
+        a.sw(5, 7, 0); a.close();
+    });
+    probe("p_page", [](GvmAsm& a) {
+        a.li(10, 0x1fffff);
+        a.addi(7, 7, 4096 + 4); a.op(GVM_I_AND, 7, 7, 10); a.close();
+        a.add(8, 7, 4); a.close();
+        a.sw(5, 8, 0); a.close();
+    });
     real("coremark", "build/tick_real/coremark.elf", "seed4_volatile=1,1000000");
+    real("coremark_pie", "build/tick_real/coremark_pie.elf", "seed4_volatile=1,1000000");   // (-fPIE: globals by lpc; the compiler of 834f68d)
     real("gzip", "build/tick_real/gzloop.elf", "gz_mode=1,1;gz_bytes=6000,262144;gz_rounds=1,1000");
     real("gunzip", "build/tick_real/gzloop.elf", "gz_mode=2,2;gz_rounds=1,1000");
     return v;
@@ -805,28 +820,22 @@ static std::vector<uint8_t> slurp_file(const char* path) {
     fclose(f);
     return b;
 }
-// (a probe of x18's encoding: cc 0's fields moved, and its bundles given their ops' path, as the compiler will make them)
-static int g_cc0 = 0, g_self = 0;
-static void cc0_convert(uint32_t* wv, uint32_t bundles) {
+// The real programs of build/tick_real were compiled before x18's paths (gpu_vm/isa.h): cc 0's bundles, and those whose op 0 is
+// sel or lpc, were path 0. Loading gives them x18's paths, as the compiler will (and as gvm_asm.h does).
+static int g_x17_paths = 0;   // (a variant -D X17PATHS=1: the real programs as compiled, for x17)
+static void x18_paths(uint32_t* wv, uint32_t bundles) {
+    if (g_x17_paths) return;
     for (uint32_t b = 0; b < bundles; b++) {
         uint32_t* w = wv + 4 * b, ctl = w[3];
-        if (g_self && GVM_OPC(w[0]) == GVM_OP_I(GVM_I_SEL) && GVM_N(ctl) >= 1 && GVM_PATH(ctl) != GVM_PATH_INT &&
-            (GVM_N(ctl) == 1 || GvmAsm::lite(w[1])) && GVM_N(ctl) < 3)   // (probe: sel as op 0 of the integer path)
-            w[3] = ctl = (ctl & ~7u) | GVM_PATH_INT;
-        if (!g_cc0) continue;
-        if (GVM_CC(ctl) != GVM_CC_SPECIAL || ctl == 0) continue;
-        uint32_t sub = (ctl >> 11) & 7, rs = (ctl >> 14) & 63, n = GVM_N(ctl), nc = (ctl & 0x7f8u) | sub << 29;
-        if (sub == GVM_SUB_J || sub == GVM_SUB_CALL) nc |= ((ctl >> 14) & 0x3ffffu) << 11;
-        else if (sub == GVM_SUB_JR || sub == GVM_SUB_CALLR) nc |= rs << 11;
-        else if (sub == GVM_SUB_ADD) nc |= rs << 11 | ((ctl >> 20) & 0xfffu) << 17;
-        GvmAsm a(0);
-        for (uint32_t k = 0; k < n && k < 2; k++) a.cur.push_back(w[k]);
-        bool fast = sub == GVM_SUB_J || sub == GVM_SUB_CALL || sub == GVM_SUB_ADD || sub == GVM_SUB_JR || sub == GVM_SUB_CALLR;
-        if ((sub == GVM_SUB_JR || sub == GVM_SUB_CALLR) && (a.writes(rs) || g_cc0 == 3)) fast = false;   // (jr reads rs as the bundle found it)
-        uint32_t pa = a.path();
-        if (g_self && n >= 1 && GVM_OPC(w[0]) == GVM_OP_I(GVM_I_SEL) && (n == 1 || GvmAsm::lite(w[1]))) pa = GVM_PATH_INT;
-        nc |= fast && n < 3 ? pa : GVM_PATH_GENERAL;
-        w[3] = nc;
+        if (ctl == 0 || GVM_N(ctl) == 3 || GVM_PATH(ctl) != GVM_PATH_GENERAL) continue;
+        uint32_t np;
+        if (GVM_CC(ctl) == GVM_CC_SPECIAL) np = GvmAsm::path12_of(ctl, w[0], w[1]);
+        else {
+            GvmAsm a(0);
+            for (uint32_t k = 0; k < GVM_N(ctl); k++) a.cur.push_back(w[k]);
+            np = a.path();
+        }
+        w[3] = (ctl & ~7u) | np;
     }
 }
 static uint32_t load_real(const Case& cs, std::vector<uint32_t>& img) {
@@ -843,7 +852,7 @@ static uint32_t load_real(const Case& cs, std::vector<uint32_t>& img) {
         if (va + ms > RAM_END) { printf("  %s: a segment past RAM's end\n", cs.name); return 0; }
         memcpy(bytes + va, e.data() + off, fs);
         memset(bytes + va + fs, 0, ms - fs);
-        if ((g_cc0 || g_self) && (rd32(ph + 24) & 1) && !(va & 15)) cc0_convert(&img[va / 4], fs / 16);   // (PF_X)
+        if ((rd32(ph + 24) & 1) && !(va & 15)) x18_paths(&img[va / 4], fs / 16);   // (PF_X)
     }
     bool timing = g_loop_n > 100000;
     std::string pk = cs.pokes;

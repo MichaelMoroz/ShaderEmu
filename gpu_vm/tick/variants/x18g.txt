@@ -1,0 +1,6 @@
+# x18g: x18's paths 1 and 2 (step12 makes cc 0 bundles: calls, returns, far j, the add; and path 1's op 0 is any integer
+# op or mulh-brev), alone and with o4's order of the fast loop's bodies
+x17       gpu_vm/tick/steps/x17.hlsl
+o4        gpu_vm/tick/steps/x18v.hlsl -D ORD=4
+s12x      gpu_vm/tick/steps/x18v.hlsl -D S12X=1
+o4s12x    gpu_vm/tick/steps/x18v.hlsl -D ORD=4 -D S12X=1

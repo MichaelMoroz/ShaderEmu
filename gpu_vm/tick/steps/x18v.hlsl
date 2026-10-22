@@ -24,7 +24,11 @@
 #define WCN 514
 #endif         // write cache entries: two ways of HALF sets, two overflow slots, then a sink (README "x17", the boot)
 static const uint WCS = WCN - 2;     // the first overflow slot
+#if WAYS == 4
+static const uint HALF = WCS / 4;   // (four ways of WCS / 4 sets: entries h, h + HALF, h + 2 HALF, h + 3 HALF)
+#else
 static const uint HALF = WCS / 2;
+#endif
 static const uint NONE = 0xffffffffu;   // an empty entry's tag, and no slot
 static const uint RAM_W = 8192;     // RAM's texture's width in texels: texel t is (t % RAM_W, t / RAM_W)
 static const uint T_WC = 40;        // the state's texels (STATE.md): registers 0-15, special 16-19, latch 20-21, queue 22-39
@@ -51,6 +55,10 @@ uint4 code(uint t) { return ram(t); }
 uint4 data_texel(uint ad) {   // the texel a load reads: RAM's, or the ROM's from GVM_ROM (bit 30), at the same place
     uint t = ad >> 4;
     int3 at = int3(t % RAM_W, (t / RAM_W) & 0x1fff, 0);
+#if ROMROWS   // the ROM in RAM's texture, its rows after RAM's (one load)
+    at.y += (ad & GVM_ROM) != 0 ? _RamRows : 0;
+    return _Ram.Load(at);
+#endif
 #if DATABUF
     uint4 rom = _Rom.Load(at), ram = _Code[t];
 #else
@@ -173,7 +181,23 @@ uint fpu(uint w, uint ra, uint rb, uint rc) {
 
 // ---- Memory: the write cache holds a word in its set's entry h or h + HALF, filled in that order, never emptied in
 // a pass; an entry's tag is the word's address >> 2
+#if SKEW   // the second way's entry: the word's place in its block of 256 scrambled by the block (x18)
+uint wc_hb(uint w) { return HALF + ((w ^ (((w >> 8) * 0x9e3779b1u) >> 24)) & (HALF - 1)); }
+#else
+uint wc_hb(uint w) { return (w ^ (w >> 6)) & (HALF - 1) | HALF; }
+#endif
+#if SKEW
+#define WC_HB(m) wc_hb(m.tag)
+#define WC_HBW(h, tag) wc_hb(tag)
+#else
+#define WC_HB(m) (m.h + HALF)
+#define WC_HBW(h, tag) ((h) + HALF)
+#endif
+#if HASH == 1   // multiplicative: every stride spread over the sets
+uint wc_h(uint w) { return (w * 0x9e3779b1u) >> (32 - firstbithigh(HALF)); }
+#else
 uint wc_h(uint w) { return (w ^ (w >> 6)) & (HALF - 1); }
+#endif
 uint pick_ad(uint4 q, uint ad) { uint2 h = (ad & 8) ? q.zw : q.xy; return (ad & 4) ? h.y : h.x; }   // the word at ad
 uint mem_addr(uint w, uint imm, uint a, uint b) { return a + ((w & op_bit(16)) ? b << (w >> 20) : imm); }
 // a byte or a half: a shift left and one right by k = 32 - its bits, the width's low bits times 8 (isa.h); its place
@@ -190,22 +214,39 @@ uint merge(uint w, uint word, uint ad, uint val) {   // a store's value into its
 // the fast loop does not make it: a load outside RAM and the ROM (bit 30 off: RAM's place), a store outside RAM above
 // the boot area
 // one memory op, read at once: its address, tag, set, texel and both entries
-struct mop { uint ad, tag, h; uint4 q; uint2 ea, eb; };
+#if WAYS == 4
+struct mop { uint ad, tag, h, hb; uint4 q; uint2 ea, eb, ec, ed; };
+#define READ_CD(m) m.ec = wcget(m.h + 2 * HALF); m.ed = wcget(m.h + 3 * HALF);
+#define FWD_CD m1.ec = sl0 == m1.h + 2 * HALF ? e0 : m1.ec; m1.ed = sl0 == m1.h + 3 * HALF ? e0 : m1.ed;
+#else
+struct mop { uint ad, tag, h, hb; uint4 q; uint2 ea, eb; };
+#define READ_CD(m)
+#define FWD_CD
+#endif
 mop mread(uint w, uint imm, uint a, uint b) {
     mop m;
     m.ad = mem_addr(w, imm, a, b); m.tag = m.ad >> 2; m.h = wc_h(m.tag);
-    m.q = data_texel(m.ad); m.ea = wcget(m.h); m.eb = wcget(m.h + HALF);
+    m.hb = WC_HB(m); m.q = data_texel(m.ad); m.ea = wcget(m.h); m.eb = wcget(m.hb); READ_CD(m)
     return m;
 }
 mop mread_entries(uint w, uint imm, uint a, uint b) {   // the same, the texel left 0 (for the caller to read)
     mop m;
     m.ad = mem_addr(w, imm, a, b); m.tag = m.ad >> 2; m.h = wc_h(m.tag);
-    m.q = 0; m.ea = wcget(m.h); m.eb = wcget(m.h + HALF);
+    m.hb = WC_HB(m); m.q = 0; m.ea = wcget(m.h); m.eb = wcget(m.hb); READ_CD(m)
     return m;
 }
-uint seen(mop m) { return m.ea.x == m.tag ? m.ea.y : m.eb.x == m.tag ? m.eb.y : pick_ad(m.q, m.ad); }   // its word as this core sees it
+#if WAYS == 4
+uint seen(mop m) { return m.ea.x == m.tag ? m.ea.y : m.eb.x == m.tag ? m.eb.y : m.ec.x == m.tag ? m.ec.y : m.ed.x == m.tag ? m.ed.y : pick_ad(m.q, m.ad); }
+#else
+uint seen(mop m) { return m.ea.x == m.tag ? m.ea.y : m.eb.x == m.tag ? m.eb.y : pick_ad(m.q, m.ad); }
+#endif   // its word as this core sees it
 uint slot(mop m) {   // where a store of it goes: its own entry, else an empty one (NONE: no room)
-    return (m.ea.x == m.tag || m.ea.x == NONE) ? m.h : (m.eb.x == m.tag || m.eb.x == NONE) ? m.h + HALF : NONE;
+#if WAYS == 4
+    return (m.ea.x == m.tag || m.ea.x == NONE) ? m.h : (m.eb.x == m.tag || m.eb.x == NONE) ? m.h + HALF
+         : (m.ec.x == m.tag || m.ec.x == NONE) ? m.h + 2 * HALF : (m.ed.x == m.tag || m.ed.x == NONE) ? m.h + 3 * HALF : NONE;
+#else
+    return (m.ea.x == m.tag || m.ea.x == NONE) ? m.h : (m.eb.x == m.tag || m.eb.x == NONE) ? m.hb : NONE;
+#endif
 }
 
 // ---- The control word's test (cc's bits, isa.h): a comparison (less, signed by bit 2), equality, a bit, or addbnz's
@@ -223,7 +264,15 @@ uint taken(uint ctl, uint CA, uint CB, uint i6, uint sum) {   // (i6 the rb fiel
 void fstep(inout uint budget) {
     uint4 t = cur;
     uint ctl = t.w, path = ctl & 7, n8 = ctl & 0x18;   // (n * 8)
-#if CC0 == 1   // cc 0 (jr, callr, j, call, the add; eret and the rest are path 0): jr and callr read rs as the bundle found it
+#if CC0F   // cc 0's jumps in the fast loop (x17's fields): j and call by off18, jr and callr by a branch after the ops
+    bool sp = (ctl & 0x780) == 0;
+    uint sub = (ctl >> 11) & 7;
+    uint tg = tp + asuint(sp ? (int)ctl >> 14 : (int)(ctl << 6) >> 23), tn = tp + 1;
+#if CC0F == 2   // jr and callr: rs read with the others and its bundle fetched beside the two (no op writes rs: the assembler's)
+    uint RS = r[(ctl >> 14) & 63];
+    uint4 tj = code(RS >> 4);
+#endif
+#elif CC0 == 1   // cc 0 (jr, callr, j, call, the add; eret and the rest are path 0): jr and callr read rs as the bundle found it
     bool sp = (ctl & 0x780) == 0;
     uint sub = ctl >> 29, ca = (ctl >> 11) & 63, CA = r[ca];
     uint tg = sp && (sub & 6) == 2 ? CA >> 4 : tp + asuint(sp ? (int)(ctl << 3) >> 14 : (int)(ctl << 6) >> 23), tn = tp + 1;
@@ -252,6 +301,10 @@ void fstep(inout uint budget) {
 #else
 #define MID0 alu_mid(t.x, i0, A0, B0)
 #endif
+#if LPCF   // lpc (integer I form 24) as op 0 of the integer path: the bundle's address + imm
+#undef MID0
+#define MID0 (((t.x >> 12) & 0xff) == 0x78 ? (tp << 4) + i0 : alu_mid(t.x, i0, A0, B0))
+#endif
 #define B_INT { v0 = MID0; r[s0] = v0; v1 = alu_lite(t.y, i1, ra1 == s0 ? v0 : A1, rb1 == s0 ? v0 : B1); }
 #define B_MEM2 { \
             bool st1 = (t.y & op_bit(8)) != 0; \
@@ -261,7 +314,8 @@ void fstep(inout uint budget) {
             uint w0 = seen(m0), sl0 = slot(m0); \
             uint2 e0 = uint2(m0.tag, merge(t.x, w0, m0.ad, r[d0])); \
             m1.ea = sl0 == m1.h ? e0 : m1.ea; \
-            m1.eb = sl0 == m1.h + HALF ? e0 : m1.eb; \
+            m1.eb = sl0 == m1.hb ? e0 : m1.eb; \
+            FWD_CD \
             uint w1 = seen(m1), sl1 = slot(m1); \
             w1 = sl0 == NONE && m0.tag == m1.tag ? e0.y : w1; \
             v1 = extend(t.y, w1, m1.ad); \
@@ -332,6 +386,20 @@ void fstep(inout uint budget) {
         else [branch] if (path == GVM_PATH_LOAD2) B_LOAD2
         else B_MEM2
     } else B_INT
+#elif ORD == 5
+    [branch] if (path != GVM_PATH_INT) {
+        [branch] if (path == GVM_PATH_LOAD) B_LOAD
+        else [branch] if (path == GVM_PATH_STORE) B_STORE
+        else [branch] if (path == GVM_PATH_LOAD2) B_LOAD2
+        else B_MEM2
+    } else B_INT
+#elif ORD == 6
+    [branch] if (path != GVM_PATH_INT) {
+        [branch] if (path == GVM_PATH_LOAD) B_LOAD
+        else [branch] if ((path & 1) != 0) B_SINGLE
+        else [branch] if (path == GVM_PATH_LOAD2) B_LOAD2
+        else B_MEM2
+    } else B_INT
 #else
     [branch] if (path == GVM_PATH_INT) B_INT
     else [branch] if (path == GVM_PATH_MEM2) B_MEM2
@@ -340,7 +408,20 @@ void fstep(inout uint budget) {
 #endif
     r[s1] = v1;
     uint i6 = asuint((int)ctl >> 26), sum = CA + i6;
-#if CC0
+#if CC0F
+    uint tk = sp ? 1u : taken(ctl, CA, CB, i6, sum), ret = (tp + 1) << 4;
+    bool cl = sp && (sub == GVM_SUB_CALL || sub == GVM_SUB_CALLR);
+#if CC0F == 2
+    bool jrr = sp && (sub == GVM_SUB_JR || sub == GVM_SUB_CALLR);
+    tp = jrr ? RS >> 4 : tk ? tg : tn;
+    cur = jrr ? tj : tk ? tc : nx;
+#else
+    tp = tk ? tg : tn;
+    cur = tk ? tc : nx;
+    [branch] if (sp && (sub == GVM_SUB_JR || sub == GVM_SUB_CALLR)) { tp = r[(ctl >> 14) & 63] >> 4; cur = code(tp); }   // (rs after the ops)
+#endif
+    r[cl ? 1 : (ctl & 0x780) != (GVM_CC_ADDBNZ << 7) ? 64 : ca] = cl ? ret : sum;   // after the ops' writes: it wins
+#elif CC0
 #if CC0 == 1
     uint tk = sp ? (sub != GVM_SUB_ADD ? 1u : 0u) : taken(ctl, CA, CB, i6, sum);
 #else
@@ -353,8 +434,10 @@ void fstep(inout uint budget) {
     uint tk = taken(ctl, CA, CB, i6, sum);
     r[(ctl & 0x780) != (GVM_CC_ADDBNZ << 7) ? 64 : ca] = sum;   // after the ops' writes: it wins
 #endif
+#if !CC0F
     tp = tk ? tg : tn;
     cur = tk ? tc : nx;
+#endif
 #if CC0 == 2
     [branch] if (sp && (sub & 6) == 2) { tp = CA >> 4; cur = code(tp); }
 #endif
@@ -362,6 +445,21 @@ void fstep(inout uint budget) {
     ops8 += n8;
 }
 
+uint ext_op(uint opc, uint a, uint b) {
+    uint al = a & 0xffff, ah = a >> 16, bl = b & 0xffff, bh = b >> 16;   // the high word of a * b, by halves
+    uint ll = al * bl, lh = al * bh, hl = ah * bl, mid = (ll >> 16) + (lh & 0xffff) + (hl & 0xffff);
+    uint hu = ah * bh + (lh >> 16) + (hl >> 16) + (mid >> 16);
+    bool sg = opc == GVM_X_DIV || opc == GVM_X_REM, na = sg && (a >> 31) != 0, nb = sg && (b >> 31) != 0;
+    uint ua = na ? 0 - a : a, ub = nb ? 0 - b : b, qt = ub == 0 ? 0xffffffffu : ua / ub, m = ub == 0 ? ua : ua - qt * ub;
+    bool rem = opc == GVM_X_REM || opc == GVM_X_REMU;
+    uint dv = b == 0 ? (rem ? a : 0xffffffffu) : rem ? (na ? 0 - m : m) : (na != nb ? 0 - qt : qt);
+    uint mh = opc == GVM_X_MULHU ? hu : hu - ((a >> 31) ? b : 0) - (opc == GVM_X_MULH && (b >> 31) ? a : 0);
+    uint bits = opc == GVM_X_CLZ ? (a == 0 ? 32u : 31u - firstbithigh(a)) : opc == GVM_X_CTZ ? (a == 0 ? 32u : firstbitlow(a))
+              : opc == GVM_X_POPC ? countbits(a) : opc == GVM_X_BSWAP ? (a >> 24 | ((a >> 8) & 0xff00u) | ((a << 8) & 0xff0000u) | a << 24)
+              : reversebits(a);
+    return opc <= GVM_X_MULHSU ? mh : opc <= GVM_X_REMU ? dv : bits;
+}
+uint bfmask(uint imm) { uint len = ((imm >> 5) & 31) + 1; return len >= 32 ? 0xffffffffu : (1u << len) - 1; }
 // ---- Paths 1 and 2 (an op of the whole integer unit or a float op, then lite or float lite; a load or store and a float
 // lite op), a whole bundle: x16's full step, both ops' registers read first. A load or store is noted as the fast loop's.
 uint fb(uint w, uint imm, bool L, uint b) { return (w & op_bit(32)) ? (L ? imm : (w >> 20) << 20) : b; }
@@ -373,7 +471,18 @@ uint step12(uint budget) {   // the budget left: 0 when a store found no room (n
     uint i0 = L0 ? t.z : simm12(t.x), i1 = L1 ? t.z : simm12(t.y);
     uint d0 = GVM_RD(t.x), d1 = GVM_RD(t.y), ra1 = GVM_RA(t.y), rb1 = GVM_RB(t.y);
     uint A0 = r[GVM_RA(t.x)], B0 = r[GVM_RB(t.x)], A1 = r[ra1], B1 = r[rb1], CA = r[GVM_CRA(ctl)], CB = r[GVM_CRB(ctl)], v0 = 0;
+#if S12X
+    bool fl1 = (t.y & op_bit(0xc0)) == op_bit(0xc0);   // (op 1 of class 3: a float; else lite)
+    uint cs0 = r[GVM_CRS(ctl)];
+#if S12P   // both next bundles fetched first, as the fast loop does (jr's from rs as found: again if an op wrote it)
+    uint sub = GVM_SUB(ctl), rs = GVM_CRS(ctl);
+    bool sp = GVM_CC(ctl) == GVM_CC_SPECIAL, viar = sp && (sub == GVM_SUB_JR || sub == GVM_SUB_CALLR);
+    uint tgt = !sp ? tg : viar ? cs0 & ~15u : sub == GVM_SUB_J || sub == GVM_SUB_CALL ? base + asuint(GVM_OFF18(ctl)) * 16 : base + 16;
+    uint4 pnx = ram((base >> 4) + 1), ptc = ram(tgt >> 4);
+#endif
+#else
     bool fl1 = path == GVM_PATH_MEMF || (t.y & op_bit(0xc0)) == op_bit(0xc0);   // (op 1 of class 3: a float)
+#endif
     [branch] if (path == GVM_PATH_MEMF) {   // a load or a store into its word as this core sees it, then a float sum
         mop m = mread(t.x, i0, A0, B0);
         bool stv = (t.x & op_bit(8)) != 0;
@@ -383,7 +492,32 @@ uint step12(uint budget) {   // the budget left: 0 when a store found no room (n
         ok = !stv || sl != NONE;
         WCSET(stv && ok ? sl : WCN, uint2(m.tag, merge(t.x, word, m.ad, r[d0])))
         d0 = stv ? 0 : d0;
-    } else v0 = (t.x & op_bit(0xc0)) == op_bit(0x40) ? alu(t.x, i0, A0, B0) : fpu(t.x, A0, fb(t.x, i0, L0, B0), r[GVM_RC(t.x)]);
+    } else {
+#if S12X   // x18: op 0 any integer op (shadd, sel, the carries, bfe) or an extended one of a and b (mulh-brev)
+        uint opc0 = (t.x >> 12) & 255, f0 = opc0 & 31, C0 = r[GVM_RC(t.x)];
+#if S12X == 2
+        [branch] if (false) {
+#elif S12X == 3
+        [branch] if (opc0 == 0x59 || opc0 == GVM_X_LPC) { v0 = opc0 == GVM_X_LPC ? base + i0 : C0 != 0 ? A0 : B0;
+        } else [branch] if (false) {
+#else
+        [branch] if ((opc0 >> 6) == 1 && f0 > GVM_I_COMMON_LAST) {
+#endif
+            uint cin = C0 & 1, s1 = A0 + B0, s2 = s1 + cin, dd = A0 - B0;
+            uint x = f0 == GVM_I_SHADD ? A0 + (B0 << GVM_RC(t.x)) : f0 == GVM_I_SEL ? (C0 != 0 ? A0 : B0) : f0 == GVM_I_ADDCY ? s2
+                   : f0 == GVM_I_CARRY ? ((s1 < A0 || s2 < s1) ? 1u : 0u) : f0 == GVM_I_SUBBY ? dd - cin : ((A0 < B0 || dd < cin) ? 1u : 0u);
+            uint bx = A0 >> (i0 & 31), m = bfmask(i0), bv = bx & m, top = ~m & (0 - ((bv & ~(m >> 1)) != 0 ? 1u : 0u));
+            v0 = (opc0 & 32) ? (f0 == GVM_I_LPC ? base + i0 : bv | ((i0 & 0x400) ? top : 0)) : x;
+#if S12X == 1
+        } else [branch] if ((opc0 >> 6) == 0) v0 = opc0 == GVM_X_LPC ? base + i0 : ext_op(opc0, A0, B0);
+#else
+        }
+#endif
+        else v0 = (opc0 >> 6) == 1 ? alu(t.x, i0, A0, B0) : fpu(t.x, A0, fb(t.x, i0, L0, B0), C0);
+#else
+        v0 = (t.x & op_bit(0xc0)) == op_bit(0x40) ? alu(t.x, i0, A0, B0) : fpu(t.x, A0, fb(t.x, i0, L0, B0), r[GVM_RC(t.x)]);
+#endif
+    }
     [branch] if (!ok) return 0;
     r[d0 == 0 ? 64 : d0] = v0;
     A1 = (d0 != 0 && ra1 == d0) ? v0 : A1; B1 = (d0 != 0 && rb1 == d0) ? v0 : B1;
@@ -392,7 +526,20 @@ uint step12(uint budget) {   // the budget left: 0 when a store found no room (n
     uint i6 = asuint(GVM_CIMM6(ctl)), sum = CA + i6;
     r[GVM_CC(ctl) != GVM_CC_ADDBNZ ? 64 : GVM_CRA(ctl)] = sum;   // after the ops' writes: it wins
     pc = taken(ctl, CA, CB, i6, sum) != 0 ? tg : base + 16;
+#if S12X
+    [branch] if (GVM_CC(ctl) == GVM_CC_SPECIAL) {   // x18: jr, callr (rs after the ops), j, call, the add (rs as found)
+        uint sub = GVM_SUB(ctl), rs = GVM_CRS(ctl), to = r[rs] & ~15u;
+        pc = sub == GVM_SUB_JR || sub == GVM_SUB_CALLR ? to : sub == GVM_SUB_J || sub == GVM_SUB_CALL ? base + asuint(GVM_OFF18(ctl)) * 16 : base + 16;
+        r[sub == GVM_SUB_CALL || sub == GVM_SUB_CALLR ? 1 : 64] = base + 16;
+        r[sub == GVM_SUB_ADD ? rs : 64] = cs0 + asuint(GVM_CIMM12(ctl));
+    }
+#endif
+#if S12P
+    cur = pc == tgt ? ptc : pnx;
+    [branch] if (viar && (d0 == rs || d1 == rs)) cur = ram(pc >> 4);
+#else
     cur = ram(pc >> 4);
+#endif
     cycle++;
     opsrun += n;
     return budget - 1;
@@ -449,8 +596,13 @@ bool op_waits(uint a, uint by, bool store) {   // an operation in flight holds i
 // ---- The general step's memory: any address, any alignment
 uint word_seen(uint a) {   // a readable word's value as this core sees it
     uint v = pick_ad(data_texel(a), a), tag = a >> 2, h = wc_h(tag);
-    uint2 ea = wcget(h), eb = wcget(h + HALF);
+    uint2 ea = wcget(h), eb = wcget(WC_HBW(h, tag));
+#if WAYS == 4
+    uint2 ec = wcget(h + 2 * HALF), ed = wcget(h + 3 * HALF);
+    return a >= GVM_ROM ? v : ea.x == tag ? ea.y : eb.x == tag ? eb.y : ec.x == tag ? ec.y : ed.x == tag ? ed.y : v;
+#else
     return a >= GVM_ROM ? v : ea.x == tag ? ea.y : eb.x == tag ? eb.y : v;
+#endif
 }
 bool readable(uint a) { return a < _RamEnd || (a >= GVM_ROM && a < GVM_ROM_END); }
 bool load_any(uint a, uint by, out uint v) {   // by 1, 2 or 4; false: a fault
@@ -479,8 +631,14 @@ bool store_any(uint a, uint by, uint4 d) {   // by bytes of d at a, into the wri
     bool ok = true;
     [loop] for (k = 0; k < min(nw, 5u) && ok; k++) {
         uint tag = (a >> 2) + k, h = wc_h(tag);
-        uint2 ea = wcget(h), eb = wcget(h + HALF);
-        uint s = (ea.x == tag || ea.x == NONE) ? h : (eb.x == tag || eb.x == NONE) ? h + HALF : NONE;
+        uint2 ea = wcget(h), eb = wcget(WC_HBW(h, tag));
+#if WAYS == 4
+        uint2 ec = wcget(h + 2 * HALF), ed = wcget(h + 3 * HALF);
+        uint s = (ea.x == tag || ea.x == NONE) ? h : (eb.x == tag || eb.x == NONE) ? h + HALF
+               : (ec.x == tag || ec.x == NONE) ? h + 2 * HALF : (ed.x == tag || ed.x == NONE) ? h + 3 * HALF : NONE;
+#else
+        uint s = (ea.x == tag || ea.x == NONE) ? h : (eb.x == tag || eb.x == NONE) ? WC_HBW(h, tag) : NONE;
+#endif
         ok = s != NONE;
         [branch] if (ok) {
             uint2 e = wcget(s);
@@ -498,21 +656,6 @@ bool store_any(uint a, uint by, uint4 d) {   // by bytes of d at a, into the wri
 
 // ---- The general step: one op of any class at slot s. 0: done; 1: trapped; 2: the pass ends after it (counted);
 // 3: the pass ends before it (not counted, pc at it)
-uint ext_op(uint opc, uint a, uint b) {
-    uint al = a & 0xffff, ah = a >> 16, bl = b & 0xffff, bh = b >> 16;   // the high word of a * b, by halves
-    uint ll = al * bl, lh = al * bh, hl = ah * bl, mid = (ll >> 16) + (lh & 0xffff) + (hl & 0xffff);
-    uint hu = ah * bh + (lh >> 16) + (hl >> 16) + (mid >> 16);
-    bool sg = opc == GVM_X_DIV || opc == GVM_X_REM, na = sg && (a >> 31) != 0, nb = sg && (b >> 31) != 0;
-    uint ua = na ? 0 - a : a, ub = nb ? 0 - b : b, qt = ub == 0 ? 0xffffffffu : ua / ub, m = ub == 0 ? ua : ua - qt * ub;
-    bool rem = opc == GVM_X_REM || opc == GVM_X_REMU;
-    uint dv = b == 0 ? (rem ? a : 0xffffffffu) : rem ? (na ? 0 - m : m) : (na != nb ? 0 - qt : qt);
-    uint mh = opc == GVM_X_MULHU ? hu : hu - ((a >> 31) ? b : 0) - (opc == GVM_X_MULH && (b >> 31) ? a : 0);
-    uint bits = opc == GVM_X_CLZ ? (a == 0 ? 32u : 31u - firstbithigh(a)) : opc == GVM_X_CTZ ? (a == 0 ? 32u : firstbitlow(a))
-              : opc == GVM_X_POPC ? countbits(a) : opc == GVM_X_BSWAP ? (a >> 24 | ((a >> 8) & 0xff00u) | ((a << 8) & 0xff0000u) | a << 24)
-              : reversebits(a);
-    return opc <= GVM_X_MULHSU ? mh : opc <= GVM_X_REMU ? dv : bits;
-}
-uint bfmask(uint imm) { uint len = ((imm >> 5) & 31) + 1; return len >= 32 ? 0xffffffffu : (1u << len) - 1; }
 uint mem_any(uint w, uint imm, uint a, uint b, uint epcw, inout uint e, inout bool ill) {
     uint opc = (w >> 12) & 255, mode = (opc >> 3) & 7, wd = opc & 7, rd = (w >> 6) & 63;
     [branch] if (mode <= 3) {
@@ -567,8 +710,8 @@ uint op_any(uint w, uint imm, bool L, uint base, uint s, inout uint e) {
         uint x = f == GVM_I_SHADD ? a + (b << rc) : f == GVM_I_SEL ? (c != 0 ? a : b) : f == GVM_I_ADDCY ? s2
                : f == GVM_I_CARRY ? ((s1 < a || s2 < s1) ? 1u : 0u) : f == GVM_I_SUBBY ? d1 - cin : ((a < b || d1 < cin) ? 1u : 0u);
         uint bx = a >> (imm & 31), m = bfmask(imm), bv = bx & m, top = ~m & (0 - ((bv & ~(m >> 1)) != 0 ? 1u : 0u));
-        ill = I ? f > GVM_I_COMMON_LAST && f != GVM_I_BFE : f > GVM_I_BORROW;
-        v = f <= GVM_I_COMMON_LAST ? alu(w, imm, a, b) : I ? bv | ((imm & 0x400) ? top : 0) : x;
+        ill = I ? f > GVM_I_COMMON_LAST && f != GVM_I_BFE && f != GVM_I_LPC : f > GVM_I_BORROW;
+        v = f <= GVM_I_COMMON_LAST ? alu(w, imm, a, b) : I ? (f == GVM_I_LPC ? base + imm : bv | ((imm & 0x400) ? top : 0)) : x;
     } else [branch] if (cls == 3) {   // float
         ill = I && (f == GVM_F_MAD || f == GVM_F_MSB || f == GVM_F_NMSB);
         v = fpu(w, a, I ? (L ? imm : (w >> 20) << 20) : b, c);
@@ -669,7 +812,13 @@ void run(uint budget) {
         guard--;
         tp = pc >> 4;
         ops8 = 0;
+        #if GUARD == 3
+        [loop] while (min(budget, guard) > 0 && (cur.w & 7) >= thr) { fstep(budget); guard--; }
+#elif GUARD == 2
+        [loop] while (budget - 1 < guard && (cur.w & 7) >= thr) { fstep(budget); guard--; }   // (budget 0, or a guard run out)
+#else
         [loop] while (budget > 0 && guard > 0 && (cur.w & 7) >= thr) { fstep(budget); guard--; }   // paths 3-7 (or 7)
+#endif
         cycle += b0 - budget;
         opsrun += ops8 >> 3;
         pc = b0 != budget ? tp << 4 : pc;

@@ -1,0 +1,6 @@
+# x18l: the write cache's second way scrambled by the word's block of 256 (SKEW): scattered stores fill 60% more before
+# a set overflows (a simulation of random words: 67 -> 107), sequential ones as before
+o4s1      gpu_vm/tick/steps/x18v.hlsl -D ORD=4 -D S12X=1
+o4s1sk    gpu_vm/tick/steps/x18v.hlsl -D ORD=4 -D S12X=1 -D SKEW=1
+o4s1h     gpu_vm/tick/steps/x18v.hlsl -D ORD=4 -D S12X=1 -D HASH=1
+o4s1w     gpu_vm/tick/steps/x18v.hlsl -D ORD=4 -D S12X=1 -D WAYS=4

@@ -1,0 +1,5 @@
+# x18o: lpc (-fPIE's globals) on step12's path 1 (S12X), or as integer I form 24 in the fast loop's op 0 (LPCF); coremark_pie
+x17       gpu_vm/tick/steps/x17.hlsl
+o4s3      gpu_vm/tick/steps/x18v.hlsl -D ORD=4 -D S12X=3
+o4s1      gpu_vm/tick/steps/x18v.hlsl -D ORD=4 -D S12X=1
+o4s3l     gpu_vm/tick/steps/x18v.hlsl -D ORD=4 -D S12X=3 -D LPCF=1

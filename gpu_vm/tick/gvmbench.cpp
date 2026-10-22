@@ -26,6 +26,7 @@
 #include "../ref/gvm_asm.h"
 
 #include "cases.h"
+static int g_romrows = 0;   // (probe: the ROM in RAM's texture)
 
 // ---- D3D11
 static ID3D11Device* dev;
@@ -137,7 +138,11 @@ struct Gpu {
     void make(uint32_t ncores, const std::vector<uint32_t>& ramImg, const std::vector<uint32_t>& romImg, const std::vector<std::vector<uint32_t>>& state) {
         cores = ncores;
         statePix = (g_twc + g_wcn / 2 + 7) / 8;
-        ram = make_tex(g_texw, ram_rows(), ramImg.data());
+        if (g_romrows) {   // (probe: the ROM in RAM's texture, rows from RamRows on)
+            std::vector<uint32_t> both(ramImg);
+            both.insert(both.end(), romImg.begin(), romImg.end());
+            ram = make_tex(g_texw, ram_rows() + rom_rows(), both.data());
+        } else ram = make_tex(g_texw, ram_rows(), ramImg.data());
         {
             D3D11_BUFFER_DESC bd = {(UINT)(ramImg.size() * 4), D3D11_USAGE_DEFAULT, D3D11_BIND_SHADER_RESOURCE, 0, D3D11_RESOURCE_MISC_BUFFER_STRUCTURED, 16};
             D3D11_SUBRESOURCE_DATA sd = {ramImg.data(), 0, 0};
@@ -332,7 +337,7 @@ static bool check_case(Gpu& gpu, const Case& cs, uint32_t seed, bool verbose) {
     }
     std::vector<uint32_t> gram = read_tex(gpu.ram);
     size_t ramBad = 0;
-    for (size_t k = 0; k < gram.size(); k++)
+    for (size_t k = 0; k < refRam.size(); k++)
         if (gram[k] != refRam[k] && ramBad++ < 3 && verbose) printf("  %s: word %08zx %08x, the reference %08x\n", cs.name, k * 4, gram[k], refRam[k]);
     gpu.release();
     return bad == 0 && ramBad == 0;
@@ -361,6 +366,7 @@ static double time_case(Gpu& gpu, const Case& cs, uint32_t ticks, uint32_t passe
     gpu.release();
     double mops = (o1 - o0) / (double(t1 - t0) / dj.Frequency) / 1e6;
     double per = at == 0 ? cs.bundles_fused : cs.ops_per_iter;
+    if (env_int("GVM_BPP") && cs.ns) printf("  %s: %.0f bundles a pass\n", cs.name, (double)(o1 - o0) / passes);   // (passes end early on a full write cache)
     if (cs.ns) return 1000.0 / mops;   // a real program: ns a bundle
     return cs.rv_per_iter > 0 ? mops / per * cs.rv_per_iter : mops;
 }
@@ -370,8 +376,8 @@ static void use(Gpu& gpu, const Variant& v) {
     gpu.hasCommit = v.hasCommit; gpu.hasOps = v.hasOps;
     g_wcn = v.wcn; g_texw = v.texw; g_twc = v.twc;   // (the state's layout, the commit's points and RAM's width are the variant's)
     gpu.opSlots = v.slots; gpu.opSpan = v.span; gpu.opRounds = g_op_rounds;
-    g_cc0 = 0; g_self = 0;   // (probes of x18's cc 0 and sel: the real programs converted on loading)
-    for (auto& d : v.defs) { if (d.rfind("CC0=", 0) == 0) g_cc0 = atoi(d.c_str() + 4); if (d == "SELF=1") g_self = 1; }
+    g_romrows = 0; g_x17_paths = 0;   // (probe: the ROM in RAM's texture; x17 on the real programs' own paths)
+    for (auto& d : v.defs) { if (d == "ROMROWS=1") g_romrows = 1; if (d == "X17PATHS=1") g_x17_paths = 1; }
 }
 // a step's write cache entries and RAM's width: a -D WCN= or RAM_W= of the variant, else the step's own
 // (`#define WCN 130` or `static const uint WCN = 130;`), else 128 and 2048

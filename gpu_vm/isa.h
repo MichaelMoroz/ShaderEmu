@@ -31,11 +31,12 @@
 // functions 0-19, "lite" 0-7 and 16-18 (sums, logic, the three shifts), "float lite" the float functions 0-7.
 // Memory ops here are loads and stores of bytes, halves and words. In paths 5 and 7 op 1 reads no register op 0
 // writes (the assembler opens a bundle for it), so both ops' addresses and values are known when the bundle starts.
-// An empty slot is a word of 0. A bundle whose control word is cc 0 (jr, callr, call, eret, a far j, the add) is the
-// general step's (path 0).
+// An empty slot is a word of 0. A bundle whose control word is cc 0 (jr, callr, call, a far j, the add) takes path 1
+// when its ops are path 1's or 7's (or it has none), path 2 when they are 2's, 3's or 5's, else 0; eret, and cc 0's
+// illegal subs, are path 0 (x18, 22 October 2026: the tick's step12 makes them, not the general step).
 #define GVM_PATH_GENERAL 0u                   // anything: the general step
-#define GVM_PATH_ALU 1u                       // op 0 an integer op 0-23 or a float op, op 1 lite or float lite
-#define GVM_PATH_MEMF 2u                      // op 0 a memory op, op 1 float lite
+#define GVM_PATH_ALU 1u                       // op 0 an integer op 0-23, sel, lpc (x18) or a float op, op 1 lite or float lite
+#define GVM_PATH_MEMF 2u                      // op 0 a memory op, op 1 float lite (or lite in a cc 0 bundle, x18)
 #define GVM_PATH_LOAD 3u                      // op 0 a load, op 1 lite
 #define GVM_PATH_LOAD2 4u                     // both loads
 #define GVM_PATH_STORE 5u                     // op 0 a store, op 1 lite
