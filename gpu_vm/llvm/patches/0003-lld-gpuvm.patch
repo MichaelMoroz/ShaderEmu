@@ -1,0 +1,233 @@
+diff --git a/lld/ELF/Arch/GPUVM.cpp b/lld/ELF/Arch/GPUVM.cpp
+new file mode 100755
+index 000000000..cf2c57165
+--- /dev/null
++++ b/lld/ELF/Arch/GPUVM.cpp
+@@ -0,0 +1,141 @@
++//===- GPUVM.cpp ----------------------------------------------------------===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++//
++// gpu_vm, the shader machine's own ISA (gpu_vm/isa.h in ShaderEmu). Code is
++// bundles of 16 bytes: two op words, a long immediate (word 2) and a control
++// word (word 3). A relocation's field is at a fixed word of its bundle, and
++// PC-relative values are taken from the bundle's address (P & ~15). Static
++// links only: no PLT, no GOT.
++//
++//===----------------------------------------------------------------------===//
++
++#include "Symbols.h"
++#include "Target.h"
++#include "llvm/BinaryFormat/ELF.h"
++#include "llvm/Support/Endian.h"
++
++using namespace llvm;
++using namespace llvm::object;
++using namespace llvm::support::endian;
++using namespace llvm::ELF;
++using namespace lld;
++using namespace lld::elf;
++
++namespace {
++class GPUVM final : public TargetInfo {
++public:
++  GPUVM(Ctx &);
++  RelExpr getRelExpr(RelType type, const Symbol &s,
++                     const uint8_t *loc) const override;
++  RelType getDynRel(RelType type) const override;
++  int64_t getImplicitAddend(const uint8_t *buf, RelType type) const override;
++  void relocate(uint8_t *loc, const Relocation &rel,
++                uint64_t val) const override;
++};
++} // namespace
++
++GPUVM::GPUVM(Ctx &ctx) : TargetInfo(ctx) {
++  symbolicRel = R_GVM_32;
++  relativeRel = R_GVM_RELATIVE;
++  // A bundle of zero words: its control word 0 is illegal.
++  trapInstr = {0, 0, 0, 0};
++  defaultMaxPageSize = 4096;
++  defaultCommonPageSize = 4096;
++  defaultImageBase = 0;
++}
++
++RelExpr GPUVM::getRelExpr(RelType type, const Symbol &s,
++                          const uint8_t *loc) const {
++  switch (type) {
++  case R_GVM_NONE:
++    return R_NONE;
++  case R_GVM_32:
++  case R_GVM_IMM32:
++  case R_GVM_IMM12:
++    return R_ABS;
++  case R_GVM_REL32:
++  case R_GVM_PCIMM32:
++  case R_GVM_BR9:
++  case R_GVM_J18:
++    return R_PC;
++  case R_GVM_TPREL32:
++    return R_TPREL;
++  default:
++    Err(ctx) << getErrorLoc(ctx, loc) << "unknown relocation (" << type.v
++             << ") against symbol " << &s;
++    return R_NONE;
++  }
++}
++
++RelType GPUVM::getDynRel(RelType type) const {
++  return type == R_GVM_32 ? type : R_GVM_NONE;
++}
++
++int64_t GPUVM::getImplicitAddend(const uint8_t *buf, RelType type) const {
++  switch (type) {
++  case R_GVM_NONE:
++    return 0;
++  case R_GVM_32:
++  case R_GVM_REL32:
++  case R_GVM_IMM32:
++  case R_GVM_PCIMM32:
++  case R_GVM_TPREL32:
++  case R_GVM_RELATIVE:
++    return SignExtend64<32>(read32le(buf));
++  case R_GVM_IMM12:
++    return SignExtend64<12>(read32le(buf) >> 20);
++  case R_GVM_BR9:
++    return SignExtend64<9>(read32le(buf) >> 17) * 16;
++  case R_GVM_J18:
++    return SignExtend64<18>(read32le(buf) >> 14) * 16;
++  default:
++    InternalErr(ctx, buf) << "cannot read addend for relocation " << type;
++    return 0;
++  }
++}
++
++void GPUVM::relocate(uint8_t *loc, const Relocation &rel, uint64_t val) const {
++  switch (rel.type) {
++  case R_GVM_32:
++  case R_GVM_REL32:
++  case R_GVM_IMM32:
++  case R_GVM_TPREL32:
++    checkIntUInt(ctx, loc, val, 32, rel);
++    write32le(loc, val);
++    break;
++  case R_GVM_PCIMM32:
++    // S + A - P, P word 2 of the bundle: from the bundle.
++    write32le(loc, val + 8);
++    break;
++  case R_GVM_IMM12:
++    checkInt(ctx, loc, static_cast<int64_t>(val), 12, rel);
++    write32le(loc, (read32le(loc) & 0x000fffff) | (val & 0xfff) << 20);
++    break;
++  case R_GVM_BR9: {
++    // P is the control word, the bundle's last word.
++    int64_t off = static_cast<int64_t>(val) + 12;
++    checkAlignment(ctx, loc, off, 16, rel);
++    checkInt(ctx, loc, off >> 4, 9, rel);
++    write32le(loc, (read32le(loc) & ~(0x1ffu << 17)) |
++                       static_cast<uint32_t>((off >> 4) & 0x1ff) << 17);
++    break;
++  }
++  case R_GVM_J18: {
++    int64_t off = static_cast<int64_t>(val) + 12;
++    checkAlignment(ctx, loc, off, 16, rel);
++    checkInt(ctx, loc, off >> 4, 18, rel);
++    write32le(loc, (read32le(loc) & 0x3fffu) |
++                       static_cast<uint32_t>((off >> 4) & 0x3ffff) << 14);
++    break;
++  }
++  default:
++    llvm_unreachable("unknown relocation");
++  }
++}
++
++void elf::setGPUVMTargetInfo(Ctx &ctx) { ctx.target.reset(new GPUVM(ctx)); }
+diff --git a/lld/ELF/CMakeLists.txt b/lld/ELF/CMakeLists.txt
+index e22897c27..dacbbab5d 100644
+--- a/lld/ELF/CMakeLists.txt
++++ b/lld/ELF/CMakeLists.txt
+@@ -24,6 +24,7 @@ add_lld_library(lldELF
+   Arch/AMDGPU.cpp
+   Arch/ARM.cpp
+   Arch/AVR.cpp
++  Arch/GPUVM.cpp
+   Arch/Hexagon.cpp
+   Arch/LoongArch.cpp
+   Arch/Mips.cpp
+diff --git a/lld/ELF/Driver.cpp b/lld/ELF/Driver.cpp
+index 51d9e3241..62cea5f11 100644
+--- a/lld/ELF/Driver.cpp
++++ b/lld/ELF/Driver.cpp
+@@ -164,6 +164,7 @@ static std::tuple<ELFKind, uint16_t, uint8_t> parseEmulation(Ctx &ctx,
+           .Cases({"elf32ppc", "elf32ppclinux"}, {ELF32BEKind, EM_PPC})
+           .Cases({"elf32lppc", "elf32lppclinux"}, {ELF32LEKind, EM_PPC})
+           .Case("elf32loongarch", {ELF32LEKind, EM_LOONGARCH})
++          .Case("elf32gpuvm", {ELF32LEKind, EM_GVM})
+           .Case("elf64btsmip", {ELF64BEKind, EM_MIPS})
+           .Case("elf64ltsmip", {ELF64LEKind, EM_MIPS})
+           .Case("elf64lriscv", {ELF64LEKind, EM_RISCV})
+diff --git a/lld/ELF/InputFiles.cpp b/lld/ELF/InputFiles.cpp
+index 05c0f3f1c..134f88a61 100644
+--- a/lld/ELF/InputFiles.cpp
++++ b/lld/ELF/InputFiles.cpp
+@@ -1758,6 +1758,8 @@ static uint16_t getBitcodeMachineKind(Ctx &ctx, StringRef path,
+     return EM_AVR;
+   case Triple::hexagon:
+     return EM_HEXAGON;
++  case Triple::gpuvm:
++    return EM_GVM;
+   case Triple::loongarch32:
+   case Triple::loongarch64:
+     return EM_LOONGARCH;
+diff --git a/lld/ELF/InputSection.cpp b/lld/ELF/InputSection.cpp
+index c78800787..8e5795af0 100644
+--- a/lld/ELF/InputSection.cpp
++++ b/lld/ELF/InputSection.cpp
+@@ -778,6 +778,7 @@ static int64_t getTlsTpOffset(Ctx &ctx, const Symbol &s) {
+     // to allow a signed 16-bit offset to reach 0x1000 of TCB/thread-library
+     // data and 0xf000 of the program's TLS segment.
+     return s.getVA(ctx, 0) + (tls->p_vaddr & (tls->p_align - 1)) - 0x7000;
++  case EM_GVM:
+   case EM_LOONGARCH:
+   case EM_RISCV:
+     // For TLSDESC=>IE, R_RISCV_TLSDESC_{LOAD_LO12,ADD_LO12_I,CALL} reference
+diff --git a/lld/ELF/ScriptParser.cpp b/lld/ELF/ScriptParser.cpp
+index 0c54fde48..25daa6835 100644
+--- a/lld/ELF/ScriptParser.cpp
++++ b/lld/ELF/ScriptParser.cpp
+@@ -485,6 +485,7 @@ static std::pair<ELFKind, uint16_t> parseBfdName(StringRef s) {
+       .Case("elf64-sparc", {ELF64BEKind, EM_SPARCV9})
+       .Case("elf32-msp430", {ELF32LEKind, EM_MSP430})
+       .Case("elf32-loongarch", {ELF32LEKind, EM_LOONGARCH})
++      .Case("elf32-gpuvm", {ELF32LEKind, EM_GVM})
+       .Case("elf64-loongarch", {ELF64LEKind, EM_LOONGARCH})
+       .Case("elf64-s390", {ELF64BEKind, EM_S390})
+       .Cases({"elf32-hexagon", "elf32-littlehexagon"},
+diff --git a/lld/ELF/Target.cpp b/lld/ELF/Target.cpp
+index 89e4dbeed..b83c4c57c 100644
+--- a/lld/ELF/Target.cpp
++++ b/lld/ELF/Target.cpp
+@@ -65,6 +65,8 @@ void elf::setTarget(Ctx &ctx) {
+     return setAVRTargetInfo(ctx);
+   case EM_HEXAGON:
+     return setHexagonTargetInfo(ctx);
++  case EM_GVM:
++    return setGPUVMTargetInfo(ctx);
+   case EM_LOONGARCH:
+     return setLoongArchTargetInfo(ctx);
+   case EM_MIPS:
+diff --git a/lld/ELF/Target.h b/lld/ELF/Target.h
+index 50f0cd8a9..e6efbcfb8 100644
+--- a/lld/ELF/Target.h
++++ b/lld/ELF/Target.h
+@@ -209,6 +209,7 @@ void setAArch64TargetInfo(Ctx &);
+ void setAMDGPUTargetInfo(Ctx &);
+ void setARMTargetInfo(Ctx &);
+ void setAVRTargetInfo(Ctx &);
++void setGPUVMTargetInfo(Ctx &);
+ void setHexagonTargetInfo(Ctx &);
+ void setLoongArchTargetInfo(Ctx &);
+ void setMSP430TargetInfo(Ctx &);

@@ -1,0 +1,151 @@
+diff --git a/llvm/include/llvm/BinaryFormat/ELF.h b/llvm/include/llvm/BinaryFormat/ELF.h
+index 3f1889f23..1a62fe153 100644
+--- a/llvm/include/llvm/BinaryFormat/ELF.h
++++ b/llvm/include/llvm/BinaryFormat/ELF.h
+@@ -325,6 +325,7 @@ enum {
+   EM_VE = 251,            // NEC SX-Aurora VE
+   EM_CSKY = 252,          // C-SKY 32-bit processor
+   EM_LOONGARCH = 258,     // LoongArch
++  EM_GVM = 0x4756,        // gpu_vm (ShaderEmu)
+ };
+ 
+ // Object file classes.
+@@ -1103,6 +1104,11 @@ enum {
+ #include "ELFRelocs/Xtensa.def"
+ };
+ 
++// ELF Relocation types for gpu_vm
++enum {
++#include "ELFRelocs/GPUVM.def"
++};
++
+ #undef ELF_RELOC
+ 
+ // Section header.
+diff --git a/llvm/include/llvm/BinaryFormat/ELFRelocs/GPUVM.def b/llvm/include/llvm/BinaryFormat/ELFRelocs/GPUVM.def
+new file mode 100644
+index 000000000..d786e859c
+--- /dev/null
++++ b/llvm/include/llvm/BinaryFormat/ELFRelocs/GPUVM.def
+@@ -0,0 +1,16 @@
++#ifndef ELF_RELOC
++#error "ELF_RELOC must be defined"
++#endif
++
++// gpu_vm (gpu_vm/isa.h). A bundle is 16 bytes: op 0, op 1, the long immediate
++// (word 2), the control word (word 3). "The bundle" is P & ~15.
++ELF_RELOC(R_GVM_NONE,      0)
++ELF_RELOC(R_GVM_32,        1) // a data word: S + A
++ELF_RELOC(R_GVM_REL32,     2) // a data word: S + A - P
++ELF_RELOC(R_GVM_IMM32,     3) // word 2: S + A
++ELF_RELOC(R_GVM_PCIMM32,   4) // word 2 (lpc): S + A - the bundle
++ELF_RELOC(R_GVM_BR9,       5) // control word [25:17]: (S + A - the bundle) / 16
++ELF_RELOC(R_GVM_J18,       6) // control word [31:14]: (S + A - the bundle) / 16
++ELF_RELOC(R_GVM_IMM12,     7) // op word [31:20]: S + A
++ELF_RELOC(R_GVM_TPREL32,   8) // word 2: S + A - the thread pointer's base
++ELF_RELOC(R_GVM_RELATIVE,  9)
+diff --git a/llvm/include/llvm/Object/ELFObjectFile.h b/llvm/include/llvm/Object/ELFObjectFile.h
+index 6d72741c3..8a9842517 100644
+--- a/llvm/include/llvm/Object/ELFObjectFile.h
++++ b/llvm/include/llvm/Object/ELFObjectFile.h
+@@ -1323,6 +1323,8 @@ StringRef ELFObjectFile<ELFT>::getFileFormatName() const {
+       return "elf32-loongarch";
+     case ELF::EM_XTENSA:
+       return "elf32-xtensa";
++    case ELF::EM_GVM:
++      return "elf32-gpuvm";
+     default:
+       return "elf32-unknown";
+     }
+@@ -1456,6 +1458,9 @@ template <class ELFT> Triple::ArchType ELFObjectFile<ELFT>::getArch() const {
+   case ELF::EM_XTENSA:
+     return Triple::xtensa;
+ 
++  case ELF::EM_GVM:
++    return Triple::gpuvm;
++
+   default:
+     return Triple::UnknownArch;
+   }
+diff --git a/llvm/lib/BinaryFormat/ELF.cpp b/llvm/lib/BinaryFormat/ELF.cpp
+index 4b430bc28..26892c222 100644
+--- a/llvm/lib/BinaryFormat/ELF.cpp
++++ b/llvm/lib/BinaryFormat/ELF.cpp
+@@ -94,6 +94,7 @@ uint16_t ELF::convertArchNameToEMachine(StringRef Arch) {
+       .Case("openrisc", EM_OPENRISC)
+       .Case("arc_compact", EM_ARC_COMPACT)
+       .Case("xtensa", EM_XTENSA)
++      .Case("gpuvm", EM_GVM)
+       .Case("videocore", EM_VIDEOCORE)
+       .Case("tmm_gpp", EM_TMM_GPP)
+       .Case("ns32k", EM_NS32K)
+@@ -262,6 +263,8 @@ uint16_t ELF::convertTripleArchTypeToEMachine(Triple::ArchType ArchType) {
+     return EM_XCORE;
+   case Triple::xtensa:
+     return EM_XTENSA;
++  case Triple::gpuvm:
++    return EM_GVM;
+   }
+ }
+ 
+@@ -424,6 +427,8 @@ StringRef ELF::convertEMachineToArchName(uint16_t EMachine) {
+     return "arc_compact";
+   case EM_XTENSA:
+     return "xtensa";
++  case EM_GVM:
++    return "gpuvm";
+   case EM_VIDEOCORE:
+     return "videocore";
+   case EM_TMM_GPP:
+diff --git a/llvm/lib/Object/ELF.cpp b/llvm/lib/Object/ELF.cpp
+index 5dbdecc99..721fccd11 100644
+--- a/llvm/lib/Object/ELF.cpp
++++ b/llvm/lib/Object/ELF.cpp
+@@ -183,6 +183,13 @@ StringRef llvm::object::getELFRelocationTypeName(uint32_t Machine,
+       break;
+     }
+     break;
++  case ELF::EM_GVM:
++    switch (Type) {
++#include "llvm/BinaryFormat/ELFRelocs/GPUVM.def"
++    default:
++      break;
++    }
++    break;
+   default:
+     break;
+   }
+diff --git a/llvm/lib/ObjectYAML/ELFYAML.cpp b/llvm/lib/ObjectYAML/ELFYAML.cpp
+index 0d742e34b..c8d4d3be5 100644
+--- a/llvm/lib/ObjectYAML/ELFYAML.cpp
++++ b/llvm/lib/ObjectYAML/ELFYAML.cpp
+@@ -273,6 +273,7 @@ void ScalarEnumerationTraits<ELFYAML::ELF_EM>::enumeration(
+   ECase(EM_OPENRISC);
+   ECase(EM_ARC_COMPACT);
+   ECase(EM_XTENSA);
++  ECase(EM_GVM);
+   ECase(EM_VIDEOCORE);
+   ECase(EM_TMM_GPP);
+   ECase(EM_NS32K);
+@@ -923,6 +924,9 @@ void ScalarEnumerationTraits<ELFYAML::ELF_REL>::enumeration(
+   case ELF::EM_XTENSA:
+ #include "llvm/BinaryFormat/ELFRelocs/Xtensa.def"
+     break;
++  case ELF::EM_GVM:
++#include "llvm/BinaryFormat/ELFRelocs/GPUVM.def"
++    break;
+   default:
+     // Nothing to do.
+     break;
+diff --git a/llvm/tools/llvm-readobj/ELFDumper.cpp b/llvm/tools/llvm-readobj/ELFDumper.cpp
+index bdc3062f3..f0abb4785 100644
+--- a/llvm/tools/llvm-readobj/ELFDumper.cpp
++++ b/llvm/tools/llvm-readobj/ELFDumper.cpp
+@@ -1245,6 +1245,7 @@ constexpr EnumStringDef<unsigned, 2> ElfMachineTypeDefs[] = {
+   ENUM_ENT(EM_OPENRISC,      "OpenRISC 32-bit embedded processor"),
+   ENUM_ENT(EM_ARC_COMPACT,   "EM_ARC_COMPACT"),
+   ENUM_ENT(EM_XTENSA,        "Tensilica Xtensa Processor"),
++  ENUM_ENT(EM_GVM,           "gpu_vm"),
+   ENUM_ENT(EM_VIDEOCORE,     "Alphamosaic VideoCore processor"),
+   ENUM_ENT(EM_TMM_GPP,       "Thompson Multimedia General Purpose Processor"),
+   ENUM_ENT(EM_NS32K,         "National Semiconductor 32000 series"),
