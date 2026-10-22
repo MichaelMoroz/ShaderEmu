@@ -2,7 +2,7 @@
 # gpu_vm's root file system as the kernel's initramfs, and the kernel with it (gpu_vm/userland/README.md, "The root
 # file system"). In WSL:
 #   bash gpu_vm/userland/rootfs.sh [busybox] [apps] [kernel]       (default: all three; busybox only when missing)
-# busybox: busybox.sh (BB, ~/gpu_vm/busybox). apps: lua, minigzip, coremark and four of test/'s programs, built with
+# busybox: busybox.sh (BB, ~/gpu_vm/busybox). apps: lua, QuickJS, minigzip, coremark, xtime and test/ programs, built with
 # gpuvm-linux-cc into $R (~/gpu_vm/rootfs-build). kernel: the cpio list $R/initramfs.list (rootfs/ for /etc, busybox's
 # links, the programs) and a kernel with it in $KOUT (~/gpu_vm/linux-build-rootfs: the first run configures and builds
 # it whole, later ones relink), copied with its device tree to build/gvm_rootfs. Boot it: systest.sh, or
@@ -47,6 +47,16 @@ for s in "${steps[@]}"; do
         # CoreMark, the POSIX port: coremark 0x0 0x0 0x66 ITERATIONS
         "$CC" $OPT -w -I"$COREMARK" -I"$COREMARK/posix" -DFLAGS_STR="\"$OPT\"" -DMULTITHREAD=1 -DUSE_CLOCK=0 \
             -o "$A/coremark" "$COREMARK"/core_{list_join,main,matrix,state,util}.c "$COREMARK/posix/core_portme.c"
+        # QuickJS (bellard.org's release, unpacked into $QJS): its REPL compiled to bytecode by the host's qjsc
+        QV=2025-04-26; QSHA=2f20074c25166ef6f781f381c50d57b502cb85d470d639abccebbef7954c83bf
+        QDL="$HOME/gpu_vm/dl/quickjs"; QJS="${QJS:-$HOME/gpu_vm/quickjs}"; mkdir -p "$QDL" "$A/qjs-build"
+        [ -f "$QDL/quickjs-$QV.tar.xz" ] || curl -sSL "https://bellard.org/quickjs/quickjs-$QV.tar.xz" -o "$QDL/quickjs-$QV.tar.xz"
+        echo "$QSHA  $QDL/quickjs-$QV.tar.xz" | sha256sum -c --quiet
+        if [ ! -f "$QJS/VERSION" ]; then mkdir -p "$QJS"; tar -xJf "$QDL/quickjs-$QV.tar.xz" -C "$QJS" --strip-components=1; fi
+        make -s -C "$QJS" qjsc > /dev/null 2>&1
+        "$QJS/qjsc" -s -c -o "$A/qjs-build/repl.c" -m "$QJS/repl.js"
+        GVM_STACK=262144 "$CC" $OPT -w -D_GNU_SOURCE -DCONFIG_VERSION="\"$(cat "$QJS/VERSION")\"" -I"$QJS" -o "$A/qjs" \
+            "$QJS"/{qjs,quickjs,dtoa,libregexp,libunicode,cutils,quickjs-libc}.c "$A/qjs-build/repl.c" -lm
         # libc tests of test.sh that need no path of their own
         for p in libc signals threads mathf badptr; do
             out=$p; [ $p = mathf ] && out=math
@@ -76,7 +86,7 @@ for s in "${steps[@]}"; do
                 [ $f = etc/shadow ] && m=0600
                 echo "file /$f $HERE/rootfs/$f $m 0 0"
             done
-            for p in lua minigzip coremark hello xtime; do echo "file /usr/bin/$p $R/apps/$p 0755 0 0"; done
+            for p in lua minigzip coremark hello xtime qjs; do echo "file /usr/bin/$p $R/apps/$p 0755 0 0"; done
             for p in libc signals threads math badptr; do echo "file /usr/lib/gvm-tests/$p $R/apps/test-$p 0755 0 0"; done
             echo "file /usr/bin/gvm-tests $HERE/rootfs/gvm-tests 0755 0 0"
         } > "$L"

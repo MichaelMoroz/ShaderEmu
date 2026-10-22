@@ -48,6 +48,7 @@ full=(
     'echo hello2 | minigzip | minigzip -d'
     "lua -e 'print(2^10, _VERSION)'"
     "lua -e 'local t = {} for i = 1, 10 do t[i] = i * i end print(\"LUA=\" .. table.concat(t, \",\"))'"
+    "qjs -e 'console.log(\"QJS=\" + [1, 2, 3].map(x => x * x).join(\",\"), JSON.stringify({a: [1, {b: 2}]}))'"
     'md5sum /bin/busybox'
     'sha256sum /etc/passwd'
     "printf 'b\\na\\nc\\na\\n' | sort | uniq -c | sed 's/^ *//' | tr '\\n' ' '; echo"
@@ -126,6 +127,7 @@ if [ "$SESSION" = full ]; then
     check 'hello2$'
     check '1024\.0[[:space:]]+Lua 5\.'
     check 'LUA=1,4,9,16,25,36,49,64,81,100'
+    check 'QJS=1,4,9 ."a":.1,."b":2'
     check "$BBMD5  /bin/busybox"
     check '2 a 1 b 1 c'
     check 'aXc'
