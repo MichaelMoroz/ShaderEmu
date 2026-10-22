@@ -44,7 +44,7 @@ for s in "${steps[@]}"; do
         mkcheck() { mk CC="$HERE/standin-cc.sh" "$@"; }
         export STANDIN_CLANG="$LLVM_BIN/clang"
         mkcheck gpuvm_defconfig
-        mkcheck -k init/ kernel/ mm/ fs/ ipc/ security/ crypto/ block/ lib/ drivers/ arch/gpuvm/ \
+        mkcheck -k init/ kernel/ mm/ fs/ ipc/ security/ crypto/ block/ lib/ drivers/ arch/gpuvm/kernel/ arch/gpuvm/mm/ arch/gpuvm/lib/ \
             2>&1 | tee "$OUT.log" | grep -E "error|warning:" || true
         echo "build.sh check: $(grep -c 'error' "$OUT.log" || true) lines with 'error' (all in $OUT.log)"
         ;;

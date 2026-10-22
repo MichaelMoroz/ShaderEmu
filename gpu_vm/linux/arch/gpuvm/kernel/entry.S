@@ -91,7 +91,7 @@ handle_syscall:
 	addi s2, s2, 4			/* past the syscall op */
 	sw s2, PT_EPC(sp)
 	lw t0, TASK_TI_FLAGS(tp)
-	andi t0, t0, _TIF_SYSCALL_WORK
+	andi t0, t0, 0 + _TIF_SYSCALL_WORK
 	bnez t0, handle_syscall_trace_enter
 check_syscall_nr:
 	li t0, __NR_syscalls
@@ -106,7 +106,7 @@ ret_from_syscall:
 	sw a0, PT_A0(sp)
 ret_from_syscall_rejected:
 	lw t0, TASK_TI_FLAGS(tp)
-	andi t0, t0, _TIF_SYSCALL_WORK
+	andi t0, t0, 0 + _TIF_SYSCALL_WORK
 	bnez t0, handle_syscall_trace_exit
 
 ENTRY(ret_from_exception)
@@ -119,7 +119,7 @@ ENTRY(ret_from_exception)
 resume_userspace:
 	/* interrupts are off: the flags are looked at atomically */
 	lw s0, TASK_TI_FLAGS(tp)
-	andi s1, s0, _TIF_WORK_MASK
+	andi s1, s0, 0 + _TIF_WORK_MASK
 	bnez s1, work_pending
 
 	/* the kernel stack is empty again; SCRATCH = the task while in user mode */
@@ -158,7 +158,7 @@ resume_kernel:
 	lw s0, TASK_TI_PREEMPT_COUNT(tp)
 	bnez s0, restore_all
 	lw s0, TASK_TI_FLAGS(tp)
-	andi s0, s0, _TIF_NEED_RESCHED
+	andi s0, s0, 0 + _TIF_NEED_RESCHED
 	beqz s0, restore_all
 	FAR_CALL(preempt_schedule_irq)
 #endif
@@ -166,7 +166,7 @@ resume_kernel:
 
 work_pending:
 	la ra, ret_from_exception
-	andi s1, s0, _TIF_NEED_RESCHED
+	andi s1, s0, 0 + _TIF_NEED_RESCHED
 	bnez s1, work_resched
 	/* signals and notify-resume, with interrupts on */
 	li t0, GVM_ST_IE

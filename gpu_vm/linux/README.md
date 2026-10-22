@@ -77,6 +77,9 @@ At **0x016b8280** (`docs/machine/console.md`, "Words in memory"), plain memory r
 
 ## State (22 October 2026)
 
-Done without the gpuvm compiler: `gpuvm_defconfig` configures (LLVM=1), `headers_install`, `dtbs`, and `build.sh check`.
+Done without the gpuvm compiler: `gpuvm_defconfig` configures (LLVM=1), `headers_install`, `dtbs`, and `build.sh check`
+(every C file of the defconfig's kernel compiles, 0 errors; the arch's .S files, preprocessed, assemble with
+`llvm-mc -triple=gpuvm`). An immediate that starts with `(` is taken for a memory operand by the assembler: entry.S
+writes `0 + _TIF_...`.
 Not done: building and booting vmlinux (needs clang for gpuvm and lld's gpuvm), SMP (stores reach other cores only at
 the commit, an amo is atomic on its own core only), the shaderemu drivers (GPU, input, sound, net), workers.
