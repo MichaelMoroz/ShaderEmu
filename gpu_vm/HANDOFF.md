@@ -158,14 +158,18 @@ Phases, each one agent's (one writer of the LLVM tree in WSL at a time):
 - **Userland on the card** (22 October 2026): busybox 1.37 (hush, 286 applets), init, a root file system as the
   initramfs, Lua, QuickJS, minigzip, CoreMark, gvm-tests (`gpu_vm/userland/README.md`); `systest.sh cpu|gpu` types a
   46-command session and checks it: PASS on gvm_cpu and on the card, lockstep with the reference clean over whole
-  sessions. On the card: 8.9 s to the prompt, 0.35-0.4 s a command: each exec relocates busybox's 15,256 words (~290
-  passes, each ending on a write cache's set after ~55 scattered stores): PC-relative globals in the compiler and a
-  write cache for scattered stores are the levers.
-- **On real work gpu_vm is 1.59-1.67x the lean RISC-V tick, short of the 2-3x required** (`gpu_vm/bench_real`, 22
-  October 2026: CoreMark 38.4 against 24.2 iterations/s under each machine's Linux, gzip 4.01 against 6.70 s, the same
-  clang and card). Two levers, an agent each: denser code (1.81 RISC-V instructions a bundle on CoreMark: 18.6% of its
-  bundles are a branch alone, a load and the branch on it always two bundles; target 120k bundles an iteration from
-  149.8k) and cheaper bundles in the tick (174 ns on CoreMark against the lean tick's 153 an instruction; target 138).
+  sessions. Rebuilt with the compiler of `c837089` (PIE: busybox 758 relocations) and tick x18: 5.9 s to the prompt,
+  0.16-0.25 s a command, the session 28 s and 85 M bundles (49 s and 156 M before); `--check` clean. The root on the
+  ROM (`romroot.sh`: romfs through MTD's phram, as the lean machine's) gives 4.0 s to the prompt.
+- **On real work gpu_vm is now 2.0-2.1x the lean RISC-V tick on CoreMark and gzip, 1.6x on gunzip**
+  (`gpu_vm/bench_real/README.md`, the evening of 22 October 2026: compiler `c837089`, tick x18, alternating rounds on
+  the card, the RISC-V side also at its best flags from the same clang: CoreMark 56.9 against 26.9 iterations/s (23.8
+  at -O2), gzip 3.30 against 6.65 s, gunzip 0.458 against 0.742 s). A CoreMark bundle costs what a lean instruction
+  does (155 ns) and carries 2.4 of them; gzip's and gunzip's cost 206-210 ns because their passes end on a full write
+  cache (97% and 70%, after 2,200-3,400 bundles). **The next lever is the write cache under scattered stores** (gzip
+  2.7x and gunzip 2.2x at CoreMark's cost a bundle); the boot (87% of passes full) and the system test (72%) are bound
+  by it too. The kernel's boot to init is now as long as the lean machine's (1.56 s from the first line, root on the
+  ROM on both); what follows (busybox init and rcS, each exec loading the 2 MB busybox whole) is 2 s more.
 - **Linux boots on the card** (22 October 2026): `gvm_gpu` (`gpu_vm/gpu`) with tick x17 runs vmlinux to init's line in
   2.1 s of card time (6.2M bundles, 15,148 passes, 2.96M bundles/s), lockstep with the reference clean (`--check`);
   gvm_cpu's tests, the 56 exec tests and CoreMark (5.7M bundles/s) run on the card. 15,110 of the boot's passes end on

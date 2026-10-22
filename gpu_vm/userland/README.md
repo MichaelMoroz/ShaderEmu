@@ -13,6 +13,7 @@ compiler-rt's builtins, a flat converter and a compiler driver, all over the gpu
 | `bin/gpuvm-linux-{ar,ranlib,nm,objdump,objcopy,readelf,strip,size}` | LLVM's tools under target names; `strip` copies a bFLT unchanged |
 | `test.sh`, `test/` | programs run under the kernel on gvm_cpu |
 | `busybox.sh`, `rootfs.sh`, `systest.sh` | busybox, the root file system with the kernel, the system test ("The root file system") |
+| `romroot.sh`, `mkromfs.py` | the root file system on the ROM ("The root file system", "The root on the ROM") |
 
 ## Building
 
@@ -196,6 +197,38 @@ What would make it faster: code that needs no relocations (globals addressed PC-
 global's address a long immediate, `R_GVM_IMM32`; since 22 October 2026 `-fPIE`, `lpc`, the default of `gpuvm-linux-cc`: busybox 758 relocations, a one-program command on gvm_cpu 0.034 s to 0.022 s, once the sysroot and busybox are built again), a write cache that takes scattered stores, a
 smaller busybox.
 
+**Rebuilt, 22 October 2026 evening** (compiler `c837089`: PIE, busybox 758 relocations; tick x18; RAM's last 64 bytes
+unused): PASS on gvm_cpu and on the card, `--check` with `SESSION=short` the reference's (16,690 passes, RAM too).
+
+| | gvm_cpu (WSL) | the card (x18) |
+|---|---|---|
+| boot to `Run /init` | 0.42 s | 4.2 s from gvm_gpu's start (the kernel's clock: 1.85 s) |
+| boot to the first prompt | 0.64 s | 5.9 s (6.9 in a slower run of the same build at 0179186) |
+| a command that runs one program | 0.02-0.03 s | 0.16-0.25 s |
+| `lua -e ...` / `qjs -e ...` | 0.02 / 0.06 s | 0.19 / 0.62 s |
+| `md5sum /bin/busybox` | 0.33 s | 3.8 s |
+| tar, gzip, gunzip and md5sum of /etc | 0.20 s | 1.6 s |
+| gvm-tests / CoreMark 20 iterations | 0.40 / 0.07 s | 4.0 / 0.40 s |
+| the whole session | 3.1 s, 83.9 M bundles | 28.4 s, 85.0 M bundles, 67,312 passes (48,501 ended on a full write cache) |
+
+Half the bundles of before (156 M): an exec no longer relocates 15,000 words. The passes are the limit now: 72% of
+them end on a full write cache.
+
+### The root on the ROM
+
+    bash gpu_vm/userland/romroot.sh                # after rootfs.sh: build/gvm_romroot (WSL)
+    W=build/gvm_romroot bash gpu_vm/userland/systest.sh cpu --rom build/gvm_romroot/rootfs.romfs
+    W=build/gvm_romroot pwsh tools\gpu_queue.ps1 "C:\Program Files\Git\bin\bash.exe" gpu_vm/userland/systest.sh gpu --rom build/gvm_romroot/rootfs.romfs
+
+rootfs.sh's tree (its cpio list) as a romfs image (`mkromfs.py`, genromfs's layout) in the ROM at 0x40000000, read
+through MTD (phram over the ROM's addresses: a page is one memcpy, the commit's copy from 4 KB up), as the lean RISC-V
+machine has its root; the kernel (`~/gpu_vm/linux-build-romroot`: gpuvm_defconfig with MTD, phram and romfs on MTD) has
+an initramfs of /root, /dev and /dev/console only, so it mounts `root=mtd:root` (`rootfstype=romfs ro init=/init`) and
+unpacks nothing. The system test passes on both machines (/tmp is a tmpfs; nothing else is written). On the card: 4.0 s
+to the prompt against 5.9 with the root in the initramfs, `Run /init` 1.5 s after the kernel's first line against 3.8;
+the session 28.8 s, 82.9 M bundles. The ROM disk `gvmrom` (a block device) boots too, but romfs on a block device reads
+1 KB buffers, each a bio and two copies: the first run of each program was seconds (qjs 3.7 s), the prompt 7.7 s.
+
 ### The kernel's part
 
 - `gpu_vm/linux/build.sh`: `INITRAMFS_LIST=FILE`, a whole cpio list.
@@ -210,7 +243,7 @@ smaller busybox.
 - No ash (hush instead), no `fork` for programs that need it. vi, less and top run, but slowly on the card for
   interactive use: a key waits for the tick's poll, a redraw goes out 255 bytes a pass.
 - No networking in the kernel (the networking applets are left out), no modules, no swap, no persistent disk: the root
-  is the initramfs, changes are lost at power-off (the ROM disk `gvmrom` is not used yet).
+  is the initramfs or the ROM (`romroot.sh`), changes are lost at power-off.
 - A program is loaded into RAM whole (bFLT `FLAT_FLAG_RAM`) and relocated at each exec: 2 MB and 15,000 relocations
   for every busybox command (above). No shared text (no XIP: the code has absolute addresses).
 - Stack overflows are silent (no MMU).

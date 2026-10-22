@@ -52,7 +52,11 @@ At **0x016b8280** (`docs/machine/console.md`, "Words in memory"), plain memory r
   1, set to 0 (off) when it fires. Interrupt lines (IEN/IPEND bits, CAUSE = 0x80000000 | the line's number): 0 software,
   1 timer, 2 external; one irq domain (`gpuvm,cpu-intc`). Idle is `wait` with IE off, then IE on.
 - ROM: `gpuvm,rom` (reg = 0x40000000 and the image's size) is the read-only disk `gvmrom` (`kernel/romblk.c`); a read is
-  a memcpy from the ROM. Disabled in gvm.dts until a size is filled in.
+  a memcpy from the ROM. Disabled in gvm.dts until a size is filled in. It works (romfs on it boots, 22 October 2026)
+  but romfs on a block device reads 1 KB buffers: the root on the ROM goes through MTD instead (phram over the ROM,
+  `gpu_vm/userland/romroot.sh`), as the lean RISC-V machine's does.
+- The last 64 bytes of RAM are reserved (`gvm_bootmem`): the compiler may load up to 16 bytes past an access through the
+  same register, and gpu_vm faults only beyond RAM's end.
 - memcpy, memmove, memset (`lib/string.S`), so copy_page, clear_page and the ROM's reads: from 4 KB up (`GVM_OP_MIN`) one
   `sq` of a copy or fill descriptor to 0xf0000000 and return (the commit makes it; the core stops only on touching what
   is still being made); below that loops of `lq`/`sq`. `flush_icache_range` is `sync` (a loaded flat program's code,

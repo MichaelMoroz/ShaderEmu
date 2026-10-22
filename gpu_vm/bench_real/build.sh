@@ -8,7 +8,8 @@
 # bare:   CoreMark bare-metal for gvm_gpu (gpu_vm/llvm/test/bench/run.sh) at ITER1 and ITER2 iterations -> $OUT/bare
 # kernel: a kernel ($KOUT) whose initramfs has the gvm programs, the input and init.c as /init
 # The input of gzip: zlib's own C sources, joined, cut to GZ_BYTES. OUT (build/bench_real of the tree), KOUT
-# (~/gpu_vm/linux-build-bench), ITER1 / ITER2 (CoreMark's iterations, 60 and 180), COREMARK, THIRD.
+# (~/gpu_vm/linux-build-bench), ITER1 / ITER2 (CoreMark's iterations, 60 and 180), COREMARK, THIRD. RVOPT: the RISC-V
+# side's optimization (-O2; e.g. "-O3 -mllvm -inline-threshold=675 -funroll-loops"), into RVDIR ($OUT/rv).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
@@ -20,6 +21,7 @@ Z="${THIRD:-$HOME/gpu_vm/third}/zlib"
 ITER1="${ITER1:-60}"; ITER2="${ITER2:-180}"
 GZ_BYTES="${GZ_BYTES:-262144}"
 RVSYS="$HOME/nm/work/sysroot"
+OPT=-O2
 steps=("$@"); [ ${#steps[@]} -gt 0 ] || steps=(rv gvm bare kernel)
 mkdir -p "$OUT"
 CM_SRC="core_list_join core_main core_matrix core_state core_util"
@@ -31,17 +33,17 @@ objs() {
     local d=$1; shift
     mkdir -p "$d"
     for f in $CM_SRC; do
-        "$@" -O2 -I"$HERE/coremark" -I"$COREMARK" -DPERFORMANCE_RUN=1 -DFLAGS_STR='"-O2"' -w -c "$COREMARK/$f.c" -o "$d/$f.o"
+        "$@" $OPT -I"$HERE/coremark" -I"$COREMARK" -DPERFORMANCE_RUN=1 -DFLAGS_STR="\"$OPT\"" -w -c "$COREMARK/$f.c" -o "$d/$f.o"
     done
-    "$@" -O2 -I"$HERE/coremark" -I"$COREMARK" -w -c "$HERE/coremark/core_portme.c" -o "$d/core_portme.o"
-    for f in $Z_SRC; do "$@" -O2 -DZ_HAVE_UNISTD_H -I"$Z" -w -c "$Z/$f.c" -o "$d/z_$f.o"; done
-    "$@" -O2 -DZ_HAVE_UNISTD_H -I"$Z" -w -c "$Z/test/minigzip.c" -o "$d/minigzip.o"
+    "$@" $OPT -I"$HERE/coremark" -I"$COREMARK" -w -c "$HERE/coremark/core_portme.c" -o "$d/core_portme.o"
+    for f in $Z_SRC; do "$@" $OPT -DZ_HAVE_UNISTD_H -I"$Z" -w -c "$Z/$f.c" -o "$d/z_$f.o"; done
+    "$@" $OPT -DZ_HAVE_UNISTD_H -I"$Z" -w -c "$Z/test/minigzip.c" -o "$d/minigzip.o"
 }
 
 for s in "${steps[@]}"; do
     case "$s" in
     rv)
-        d="$OUT/rv"
+        d="${RVDIR:-$OUT/rv}"; OPT="${RVOPT:--O2}"
         RVCC=("$BIN/clang" --target=riscv32-unknown-linux-musl -march=rv32imaf -mabi=ilp32 -fPIE -fno-stack-protector
               -ffp-contract=off -nostdinc -isystem "$RVSYS/include" -isystem "$("$BIN/clang" -print-resource-dir)/include"
               -include nommu_fork.h)
@@ -54,7 +56,7 @@ for s in "${steps[@]}"; do
           python3 "$ROOT/linux/nommu/elf2bflt.py" minigzip.elf minigzip 0x40000 )
         ;;
     gvm)
-        d="$OUT/gvm"
+        d="$OUT/gvm"; OPT=-O2
         CC="$ROOT/gpu_vm/userland/bin/gpuvm-linux-cc"
         objs "$d" "$CC"
         ( cd "$d"
@@ -68,7 +70,7 @@ for s in "${steps[@]}"; do
         done
         ;;
     kernel)
-        d="$OUT/gvm"
+        d="$OUT/gvm"; OPT=-O2
         { echo "dir /bin 0755 0 0"; echo "dir /tmp 01777 0 0"; echo "dir /bench 0755 0 0"
           echo "file /bin/coremark $d/coremark 0755 0 0"; echo "file /bin/minigzip $d/minigzip 0755 0 0"
           echo "file /bench/input $OUT/input 0644 0 0"; } > "$d/extra.list"
