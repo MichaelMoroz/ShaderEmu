@@ -23,9 +23,7 @@ ARCH_FLAGS="$GVM_MATH"
 # Every function in a section of its own: a call farther than 2 MB inside one section is an error of the assembler
 # (no relocation for lld's thunks: gpu_vm/userland/apps/bugs/far_call.c, QuickJS's quickjs.c); across sections it is
 # lld's to reach
-# No speculative loads by the +-16-byte rule of the fill across blocks: it moves a load above the test that guards
-# it (bugs/spec_load.c: QuickJS faulted at its start)
-GVM_CFLAGS=${GVM_CFLAGS:--ffunction-sections -mllvm -gpuvm-spec-window=0}
+GVM_CFLAGS=${GVM_CFLAGS:--ffunction-sections}
 # the C++ library's headers (templates only, as on the RISC-V machine: linux/tdawn/build.sh): libstdc++ 13.3's from
 # the RISC-V toolchain, a 32-bit Linux's bits
 CXXINC=${GVM_CXXINC:-$HOME/nm/work/toolchain/riscv32-buildroot-linux-gnu/include/c++/13.3.0}
@@ -123,9 +121,14 @@ for t in ar ranlib objcopy readelf strings objdump; do
     printf '#!/bin/sh\nexec "%s/bin/gpuvm-linux-%s" "$@"\n' "$GVM_UL" "$t" > "$WORK/bin/riscv32-linux-$t"
 done
 # strip: a bFLT is copied unchanged (gpuvm-linux-strip), and its ELF goes with it as .gdb
+# and the program installed gets the stack the RISC-V image gives it (flat_stack.py: 1 MB to linux/nommu/flat.py's BIG,
+# 256 KB to the rest; gpuvm-linux-cc's default is 64 KB: Half-Life's stack ran into its heap)
 cat > "$WORK/bin/riscv32-linux-strip" <<EOF
 #!/bin/sh
-exec "$GVM_UL/bin/gpuvm-linux-strip" "\$@"
+out=; prev=; last=
+for a do if [ "\$prev" = -o ]; then out=\$a; fi; prev=\$a; last=\$a; done
+"$GVM_UL/bin/gpuvm-linux-strip" "\$@" || exit \$?
+python3 "$GVM_UL/apps/flat_stack.py" "$GVM_UL/../../linux/nommu/flat.py" "\${out:-\$last}"
 EOF
 # nm: of a bFLT, its ELF beside it (PROG.gdb)
 cat > "$WORK/bin/riscv32-linux-nm" <<EOF
