@@ -349,7 +349,11 @@ cycles(void)
 {
 	uint32_t count;
 
+#ifdef __gpuvm__
+	__asm__ volatile("mfsr %0, cycle" : "=r"(count));
+#else
 	__asm__ volatile("rdcycle %0" : "=r"(count));
+#endif
 	return count;
 }
 
@@ -361,13 +365,21 @@ worker_picture(const struct picture *sc, uint32_t frame, uint32_t k)
 	uint32_t share = sc->plan[k], began = cycles(), rays, when, from;
 	int lanes = lanes_on ? mcw_lanes_here() : 0;
 
+#ifdef __gpuvm__
+	__asm__ volatile("mfsr %0, time_lo" : "=r"(from));
+#else
 	__asm__ volatile("rdtime %0" : "=r"(from));
+#endif
 
 	rays = trace_texels(sc, sc->band[share], sc->band[share + 1], k, lanes, frame);
 	slot->spent = cycles() - began;
 	slot->lanes = lanes > 0 ? (uint32_t)lanes : 1;
 	slot->rays = rays;
+#ifdef __gpuvm__
+	__asm__ volatile("mfsr %0, time_lo" : "=r"(when));
+#else
 	__asm__ volatile("rdtime %0" : "=r"(when));
+#endif
 	slot->ended = when;
 	slot->took = when - from;
 	slot->frame = frame;
@@ -746,7 +758,11 @@ publish(float t, uint32_t done)
 	/* (its pixels were picture `done`'s or the one's before: the list that shows that one has
 	 * been drawn while the scene was made, mostly) */
 	seglSettle();
+#ifdef __gpuvm__
+	__asm__ volatile("mfsr %0, time_lo" : "=r"(published_at[frame % outs]));
+#else
 	__asm__ volatile("rdtime %0" : "=r"(published_at[frame % outs]));
+#endif
 	go.shown = done;
 	go.frame = frame;
 }

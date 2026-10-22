@@ -53,7 +53,11 @@ cycles(void)
 {
 	uint32_t count;
 
+#ifdef __gpuvm__
+	__asm__ volatile("mfsr %0, cycle" : "=r"(count));
+#else
 	__asm__ volatile("rdcycle %0" : "=r"(count));
+#endif
 	return count;
 }
 

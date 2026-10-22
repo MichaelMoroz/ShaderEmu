@@ -26,6 +26,14 @@ sed -i -e 's/^+#define DEF_COMHUNKMEGS \t32$/+#define DEF_COMHUNKMEGS \t8/' -e '
     -e 's/^+#define DEF_COMZONEMEGS\t\t16$/+#define DEF_COMZONEMEGS\t\t4/' \
     -e 's/^+#define SERVER_ZONE_BYTES (8 \* 1024 \* 1024)$/+#define SERVER_ZONE_BYTES (6 * 1024 * 1024)/' "$R/linux/quake3/quake3.patch"
 sed -i 's/^exec quake3.bin +set fs_basepath/exec quake3.bin +set com_hunkMegs 8 +set com_zoneMegs 4 +set fs_basepath/' "$R/linux/quake3/build.sh"
+# what the RISC-V builds downloaded once (games' demos, meshes), taken from their folders when this one has none
+mkdir -p "$GVM_APPS_WORK/src"
+for d in pathtrace-data doom1.wad doom-shareware.zip quake-data tdawn-demo tdawn-demo.zip ralert-demo ralert-demo.zip          ra-demo ra95demo.zip quake3-data halflife-data nes-roms openttd-data micropolis-data classicube-data; do
+    [ -e "$GVM_APPS_WORK/src/$d" ] && continue
+    for from in "$HOME/nm/work/src" "$HOME/shaderemu-linux/src"; do
+        [ -e "$from/$d" ] && { cp -a "$from/$d" "$GVM_APPS_WORK/src/"; break; }
+    done
+done
 for f in "$HERE"/fix/*.sh; do [ -f "$f" ] && R="$R" bash "$f"; done
 ALL="userland/build.sh nanox/build.sh libmedia/build.sh apps/build.sh play/build.sh video/build.sh
      raytrace/build.sh pathtrace/build.sh physics/build.sh quickjs/build.sh micropython/build.sh ide/build.sh imgui/build.sh

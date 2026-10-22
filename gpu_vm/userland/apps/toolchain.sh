@@ -18,9 +18,15 @@ export SOURCE_DATE_EPOCH=1704067200
 # rcp and rsqrt; a program whose own checks need IEEE results sets GVM_MATH= for itself)
 GVM_MATH=${GVM_MATH:--ffp-contract=fast}
 ARCH_FLAGS="$GVM_MATH"
+# Every function in a section of its own: a call farther than 2 MB inside one section is an error of the assembler
+# (no relocation for lld's thunks: gpu_vm/userland/apps/bugs/far_call.c, QuickJS's quickjs.c); across sections it is
+# lld's to reach
+GVM_CFLAGS=${GVM_CFLAGS:--ffunction-sections}
 # the C++ library's headers (templates only, as on the RISC-V machine: linux/tdawn/build.sh): libstdc++ 13.3's from
 # the RISC-V toolchain, a 32-bit Linux's bits
 CXXINC=${GVM_CXXINC:-$HOME/nm/work/toolchain/riscv32-buildroot-linux-gnu/include/c++/13.3.0}
+# (and the RISC-V machine's own fixes of those headers for musl: linux/tdawn/cxx)
+GVM_CXX_EXTRA=${GVM_CXX_EXTRA:-$(cd "$GVM_UL/../../linux/tdawn/cxx" && pwd)}
 export PATH="$WORK/bin:$GVM_UL/bin:$PATH"
 [ -x "$LLVM_BIN/clang" ] || { echo "no gpu_vm clang in $LLVM_BIN (gpu_vm/llvm/build.sh)"; exit 1; }
 [ -f "$SYSROOT/lib/libc.a" ] || { echo "no gpu_vm sysroot in $SYSROOT (gpu_vm/userland/build.sh)"; exit 1; }
@@ -63,7 +69,7 @@ cat > "$WORK/bin/rv32-cc" <<EOF
 export GVM_KEEP_ELF=1
 exec "$GVM_UL/bin/gpuvm-linux-cc" -Wno-unknown-warning-option -Wno-ignored-optimization-argument -Qunused-arguments \
     -Wno-unused-command-line-argument -Wno-error=implicit-function-declaration -Wno-error=int-conversion \
-    -Wno-error=incompatible-pointer-types -Wno-error=implicit-int $GVM_MATH "\${args[@]+"\${args[@]}"}"
+    -Wno-error=incompatible-pointer-types -Wno-error=implicit-int $GVM_MATH $GVM_CFLAGS "\${args[@]+"\${args[@]}"}"
 EOF
 # rv32-c++: C++ with libstdc++'s headers (templates only), no exceptions or run-time types, as the RISC-V machine's
 # (a program brings its runtime: linux/tdawn/cxxrt.cpp); sources compiled here, the link gpuvm-linux-cc's
@@ -72,11 +78,11 @@ cat > "$WORK/bin/rv32-c++" <<EOF
 . "$WORK/bin/gvm-filter"
 export GVM_KEEP_ELF=1
 RES=\$("$LLVM_BIN/clang" -print-resource-dir)
-CXX=("$LLVM_BIN/clang++" --target=gpuvm-unknown-linux -fPIE -nostdinc -nostdinc++ -isystem "\${GVM_CXX_EXTRA:-/nonexistent}"
+CXX=("$LLVM_BIN/clang++" --target=gpuvm-unknown-linux -fPIE -nostdinc -nostdinc++ -isystem "$GVM_CXX_EXTRA"
      -isystem "$CXXINC" -isystem "$CXXINC/riscv32-buildroot-linux-gnu" -isystem "$CXXINC/backward" -isystem "$SYSROOT/include"
      -isystem "\$RES/include" -fno-exceptions -fno-rtti -fno-threadsafe-statics -fno-use-cxa-atexit "-D__GLIBC_PREREQ(a,b)=0"
      -Wno-unknown-warning-option -Wno-ignored-optimization-argument -Qunused-arguments -Wno-unused-command-line-argument
-     -Wno-register -Wno-c++11-narrowing $GVM_MATH)
+     -Wno-register -Wno-c++11-narrowing $GVM_MATH $GVM_CFLAGS)
 link=1 out=
 for a in "\${args[@]+"\${args[@]}"}"; do case "\$a" in -c|-S|-E|-M|-MM|-fsyntax-only) link=0 ;; esac; done
 [ \$link = 0 ] && exec "\${CXX[@]}" "\${args[@]}"
@@ -106,7 +112,7 @@ exec "$GVM_UL/bin/gpuvm-linux-cc" "\${copts[@]+"\${copts[@]}"}" "\${objs[@]+"\${
 EOF
 for t in gcc cc; do ln -sf rv32-cc "$WORK/bin/riscv32-linux-$t"; done
 for t in g++ c++; do ln -sf rv32-c++ "$WORK/bin/riscv32-linux-$t"; done
-for t in ar ranlib objcopy readelf size strings objdump; do
+for t in ar ranlib objcopy readelf strings objdump; do
     printf '#!/bin/sh\nexec "%s/bin/gpuvm-linux-%s" "$@"\n' "$GVM_UL" "$t" > "$WORK/bin/riscv32-linux-$t"
 done
 # strip: a bFLT is copied unchanged (gpuvm-linux-strip), and its ELF goes with it as .gdb
@@ -124,6 +130,8 @@ if [ -f "\$last" ] && [ "\$(head -c 4 "\$last")" = bFLT ]; then
 fi
 exec "$LLVM_BIN/llvm-nm" "\$@"
 EOF
+# size: the LLVM build has no llvm-size; what a build prints of a program's size is left out
+printf '#!/bin/sh\nexit 0\n' > "$WORK/bin/riscv32-linux-size"
 # ld: lld (a relocatable link, -r, is what the builds ask of it)
 printf '#!/bin/sh\nexec "%s/ld.lld" "$@"\n' "$LLVM_BIN" > "$WORK/bin/riscv32-linux-ld"
 chmod +x "$WORK/bin/"*
