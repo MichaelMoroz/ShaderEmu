@@ -113,11 +113,21 @@ GPUVMTargetLowering::GPUVMTargetLowering(const TargetMachine &TM,
                       ISD::FASIN, ISD::FACOS, ISD::FATAN, ISD::FATAN2,
                       ISD::FSINH, ISD::FCOSH, ISD::FTANH, ISD::FCANONICALIZE},
                      MVT::f32, Expand);
-  // The card's approximate special functions under afn (-ffast-math), libm
-  // otherwise.
+  // The card's approximate special functions under afn (-ffast-math,
+  // -fapprox-func), libm otherwise (sincosf for a sin and a cos of one value).
   setOperationAction({ISD::FSIN, ISD::FCOS, ISD::FEXP2, ISD::FLOG2, ISD::FEXP,
-                      ISD::FEXP10, ISD::FLOG, ISD::FLOG10},
+                      ISD::FEXP10, ISD::FLOG, ISD::FLOG10, ISD::FTAN,
+                      ISD::FSINCOS, ISD::FPOW},
                      MVT::f32, Custom);
+  // round (half away from zero) in three exact ops; lrint and lround to a
+  // long (i32) by them and ftoi (gpu_vm/llvm/README.md, "float")
+  setOperationAction({ISD::FROUND, ISD::LROUND, ISD::LRINT}, MVT::f32, Custom);
+  // f32 to i64 exactly in a few ops (compiler-rt's __fixsfdi otherwise)
+  setOperationAction({ISD::FP_TO_SINT, ISD::FP_TO_UINT}, MVT::i64, Custom);
+  // f32 to f64 and back by their bits, made before the types are legalized
+  // (PerformDAGCombine; softened, they are compiler-rt's __extendsfdf2 and
+  // __truncdfsf2, 15 and 24 bundles a call)
+  setTargetDAGCombine({ISD::FP_EXTEND, ISD::FP_ROUND});
   setOperationAction({ISD::FMAD, ISD::FMINNUM, ISD::FMAXNUM,
                       ISD::FMINIMUMNUM, ISD::FMAXIMUMNUM, ISD::FSQRT,
                       ISD::FFLOOR, ISD::FCEIL, ISD::FTRUNC, ISD::FROUNDEVEN,
@@ -640,7 +650,14 @@ SDValue GPUVMTargetLowering::LowerOperation(SDValue Op,
   case ISD::FEXP10:
   case ISD::FLOG:
   case ISD::FLOG10:
+  case ISD::FTAN:
+  case ISD::FSINCOS:
+  case ISD::FPOW:
     return lowerApproxFunc(Op, DAG);
+  case ISD::FROUND:
+  case ISD::LROUND:
+  case ISD::LRINT:
+    return lowerRound(Op, DAG);
   case ISD::INTRINSIC_VOID:
     return lowerINTRINSIC_VOID(Op, DAG);
   default:
@@ -818,7 +835,187 @@ SDValue GPUVMTargetLowering::lowerApproxFunc(SDValue Op,
     return Mul(DAG.getNode(ISD::FLOG2, DL, VT, X, Flags), 0.6931471805599453);
   case ISD::FLOG10: // log10 x = log2 x log10 2
     return Mul(DAG.getNode(ISD::FLOG2, DL, VT, X, Flags), 0.3010299956639812);
+  case ISD::FTAN: // sin x / cos x
+    return DAG.getNode(ISD::FDIV, DL, VT,
+                       DAG.getNode(ISD::FSIN, DL, VT, X, Flags),
+                       DAG.getNode(ISD::FCOS, DL, VT, X, Flags), Flags);
+  case ISD::FSINCOS:
+    return DAG.getMergeValues({DAG.getNode(ISD::FSIN, DL, VT, X, Flags),
+                               DAG.getNode(ISD::FCOS, DL, VT, X, Flags)},
+                              DL);
+  case ISD::FPOW: {
+    // 2^(y log2 |x|), negated for a negative x and an odd integer y (a
+    // fraction in y with a negative x: |x|^y, not nan; pow(0, 0) is nan).
+    SDValue Y = Op.getOperand(1);
+    SDValue R = DAG.getNode(
+        ISD::FEXP2, DL, VT,
+        DAG.getNode(ISD::FMUL, DL, VT, Y,
+                    DAG.getNode(ISD::FLOG2, DL, VT,
+                                DAG.getNode(ISD::FABS, DL, VT, X), Flags),
+                    Flags),
+        Flags);
+    if (DAG.SignBitIsZeroFP(X))
+      return R;
+    SDValue YI = DAG.getNode(ISD::FTRUNC, DL, VT, Y);
+    SDValue IsInt = DAG.getSetCC(DL, MVT::i32, YI, Y, ISD::SETOEQ);
+    SDValue Odd =
+        DAG.getNode(ISD::AND, DL, MVT::i32,
+                    DAG.getNode(ISD::FP_TO_SINT, DL, MVT::i32, YI), IsInt);
+    SDValue XI = DAG.getBitcast(MVT::i32, X);
+    SDValue Flip = DAG.getNode(
+        ISD::AND, DL, MVT::i32, XI,
+        DAG.getNode(ISD::SHL, DL, MVT::i32, Odd,
+                    DAG.getConstant(31, DL, MVT::i32)));
+    return DAG.getBitcast(
+        VT, DAG.getNode(ISD::XOR, DL, MVT::i32, DAG.getBitcast(MVT::i32, R),
+                        Flip));
+  }
   default:
     return Op; // the op itself
+  }
+}
+
+// round(x) = trunc(x + copysign(0.5 - 2^-25, x)): exact (below 2^23 the sum
+// reaches the next integer only when x's fraction is 0.5 or more; from 2^23 x
+// is an integer and the sum rounds back to it). lround is its ftoi, lrint
+// ftoi(fround x) (to even: the one rounding mode). An i32 result only (long).
+SDValue GPUVMTargetLowering::lowerRound(SDValue Op, SelectionDAG &DAG) const {
+  SDLoc DL(Op);
+  SDValue X = Op.getOperand(0);
+  if (X.getValueType() != MVT::f32 ||
+      (Op.getOpcode() != ISD::FROUND && Op.getValueType() != MVT::i32))
+    return SDValue();
+  if (Op.getOpcode() == ISD::LRINT)
+    return DAG.getNode(ISD::FP_TO_SINT, DL, MVT::i32,
+                       DAG.getNode(ISD::FRINT, DL, MVT::f32, X));
+  SDValue Half = DAG.getNode(ISD::FCOPYSIGN, DL, MVT::f32,
+                             DAG.getConstantFP(0x1.fffffep-2, DL, MVT::f32), X);
+  SDValue R = DAG.getNode(ISD::FTRUNC, DL, MVT::f32,
+                          DAG.getNode(ISD::FADD, DL, MVT::f32, X, Half));
+  if (Op.getOpcode() == ISD::FROUND)
+    return R;
+  return DAG.getNode(ISD::FP_TO_SINT, DL, MVT::i32, R);
+}
+
+// f32 to f64 by its bits: the exponent rebiased (+896, and inf and nan's 255 to
+// 2047), the mantissa shifted; zero and the denormals (which the card's ops take
+// as zero) +-0.
+static SDValue extendF32(SDValue X, const SDLoc &DL, SelectionDAG &DAG) {
+  EVT I = MVT::i32;
+  auto C = [&](uint32_t V) { return DAG.getConstant(V, DL, I); };
+  SDValue U = DAG.getBitcast(I, X);
+  SDValue Sign = DAG.getNode(ISD::AND, DL, I, U, C(0x80000000u));
+  SDValue A = DAG.getNode(ISD::AND, DL, I, U, C(0x7fffffffu));
+  SDValue IsSpecial = DAG.getSetCC(DL, I, A, C(0x7f800000u), ISD::SETUGE);
+  SDValue IsZero = DAG.getSetCC(DL, I, A, C(0x00800000u), ISD::SETULT);
+  SDValue Hi = DAG.getNode(
+      ISD::ADD, DL, I, DAG.getNode(ISD::SRL, DL, I, A, C(3)),
+      DAG.getSelect(DL, I, IsSpecial, C(0x70000000u), C(0x38000000u)));
+  SDValue Lo = DAG.getNode(ISD::SHL, DL, I, A, C(29));
+  Hi = DAG.getNode(ISD::OR, DL, I, DAG.getSelect(DL, I, IsZero, C(0), Hi),
+                   Sign);
+  Lo = DAG.getSelect(DL, I, IsZero, C(0), Lo);
+  return DAG.getBitcast(MVT::f64,
+                        DAG.getNode(ISD::BUILD_PAIR, DL, MVT::i64, Lo, Hi));
+}
+
+// f64 to f32 by its bits, rounded to nearest even: the exponent rebiased and
+// the top 23 bits of the mantissa, plus one where the 29 bits below are more
+// than half (or half and the result odd; a carry runs into the exponent, to inf
+// past the largest float). Beyond the range inf (nan a nan), below 2^-126 +-0
+// (the card's floats have no denormals).
+static SDValue roundF64(SDValue X, const SDLoc &DL, SelectionDAG &DAG) {
+  EVT I = MVT::i32;
+  auto C = [&](uint32_t V) { return DAG.getConstant(V, DL, I); };
+  SDValue X64 = DAG.getBitcast(MVT::i64, X);
+  SDValue Lo = DAG.getNode(ISD::EXTRACT_ELEMENT, DL, I, X64, C(0));
+  SDValue Hi = DAG.getNode(ISD::EXTRACT_ELEMENT, DL, I, X64, C(1));
+  SDValue Sign = DAG.getNode(ISD::AND, DL, I, Hi, C(0x80000000u));
+  SDValue A = DAG.getNode(ISD::AND, DL, I, Hi, C(0x7fffffffu));
+  SDValue F = DAG.getNode(
+      ISD::OR, DL, I,
+      DAG.getNode(ISD::SHL, DL, I,
+                  DAG.getNode(ISD::SUB, DL, I, A, C(0x38000000u)), C(3)),
+      DAG.getNode(ISD::SRL, DL, I, Lo, C(29)));
+  SDValue R = DAG.getNode(ISD::AND, DL, I, Lo, C(0x1fffffffu));
+  SDValue Up = DAG.getSetCC(
+      DL, I,
+      DAG.getNode(ISD::ADD, DL, I, R, DAG.getNode(ISD::AND, DL, I, F, C(1))),
+      C(0x10000000u), ISD::SETUGT);
+  F = DAG.getNode(ISD::ADD, DL, I, F, Up);
+  SDValue AX = DAG.getNode(
+      ISD::OR, DL, I, A, DAG.getSetCC(DL, I, Lo, C(0), ISD::SETNE));
+  SDValue Big = DAG.getSetCC(DL, I, A, C(0x47f00000u), ISD::SETUGE);
+  SDValue NaN = DAG.getSetCC(DL, I, AX, C(0x7ff00000u), ISD::SETUGT);
+  SDValue Small = DAG.getSetCC(DL, I, A, C(0x38100000u), ISD::SETULT);
+  F = DAG.getSelect(DL, I, Big,
+                    DAG.getSelect(DL, I, NaN, C(0x7fc00000u), C(0x7f800000u)),
+                    F);
+  F = DAG.getSelect(DL, I, Small, C(0), F);
+  return DAG.getBitcast(MVT::f32, DAG.getNode(ISD::OR, DL, I, F, Sign));
+}
+
+SDValue GPUVMTargetLowering::PerformDAGCombine(SDNode *N,
+                                               DAGCombinerInfo &DCI) const {
+  SelectionDAG &DAG = DCI.DAG;
+  switch (N->getOpcode()) {
+  case ISD::FP_EXTEND:
+    if (N->getValueType(0) == MVT::f64 &&
+        N->getOperand(0).getValueType() == MVT::f32)
+      return extendF32(N->getOperand(0), SDLoc(N), DAG);
+    break;
+  case ISD::FP_ROUND:
+    if (N->getValueType(0) == MVT::f32 &&
+        N->getOperand(0).getValueType() == MVT::f64)
+      return roundF64(N->getOperand(0), SDLoc(N), DAG);
+    break;
+  default:
+    break;
+  }
+  return SDValue();
+}
+
+// f32 to i64 (truncating): t = trunc(x) = H 2^32 + L with H = floor(t 2^-32)
+// and L = t - H 2^32, both exact where |t| >= 2^31 (t is a multiple of 2^8
+// there, and so is L, below 2^32: 24 bits); i64 = H's ftoi (ftou), L's ftou.
+// A signed |t| below 2^31 is t's ftoi and its sign (L of a small negative t,
+// 2^32 - |t|, is no float). Out of range: undefined, as C has it.
+void GPUVMTargetLowering::ReplaceNodeResults(SDNode *N,
+                                             SmallVectorImpl<SDValue> &Results,
+                                             SelectionDAG &DAG) const {
+  switch (N->getOpcode()) {
+  case ISD::FP_TO_SINT:
+  case ISD::FP_TO_UINT: {
+    SDValue X = N->getOperand(0);
+    if (N->getValueType(0) != MVT::i64 || X.getValueType() != MVT::f32)
+      return;
+    SDLoc DL(N);
+    SDValue T = DAG.getNode(ISD::FTRUNC, DL, MVT::f32, X);
+    SDValue H = DAG.getNode(
+        ISD::FFLOOR, DL, MVT::f32,
+        DAG.getNode(ISD::FMUL, DL, MVT::f32, T,
+                    DAG.getConstantFP(0x1p-32, DL, MVT::f32)));
+    SDValue L = DAG.getNode(
+        ISD::FSUB, DL, MVT::f32, T,
+        DAG.getNode(ISD::FMUL, DL, MVT::f32, H,
+                    DAG.getConstantFP(0x1p32, DL, MVT::f32)));
+    SDValue Lo = DAG.getNode(ISD::FP_TO_UINT, DL, MVT::i32, L);
+    SDValue Hi = DAG.getNode(N->getOpcode(), DL, MVT::i32, H);
+    if (N->getOpcode() == ISD::FP_TO_SINT) {
+      SDValue Small = DAG.getSetCC(
+          DL, MVT::i32, DAG.getNode(ISD::FABS, DL, MVT::f32, T),
+          DAG.getConstantFP(0x1p31, DL, MVT::f32), ISD::SETOLT);
+      SDValue S = DAG.getNode(ISD::FP_TO_SINT, DL, MVT::i32, T);
+      Lo = DAG.getSelect(DL, MVT::i32, Small, S, Lo);
+      Hi = DAG.getSelect(DL, MVT::i32, Small,
+                         DAG.getNode(ISD::SRA, DL, MVT::i32, S,
+                                     DAG.getConstant(31, DL, MVT::i32)),
+                         Hi);
+    }
+    Results.push_back(DAG.getNode(ISD::BUILD_PAIR, DL, MVT::i64, Lo, Hi));
+    return;
+  }
+  default:
+    return;
   }
 }

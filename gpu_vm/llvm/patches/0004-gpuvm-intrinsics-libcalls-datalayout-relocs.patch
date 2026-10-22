@@ -54,10 +54,10 @@ index 000000000..7ce1ebec2
 +    ClangBuiltin<"__builtin_gpuvm_fill">;
 +}
 diff --git a/llvm/include/llvm/IR/RuntimeLibcalls.td b/llvm/include/llvm/IR/RuntimeLibcalls.td
-index d5f38b967..828f1ab4a 100644
+index d5f38b967..800cbbf62 100644
 --- a/llvm/include/llvm/IR/RuntimeLibcalls.td
 +++ b/llvm/include/llvm/IR/RuntimeLibcalls.td
-@@ -2659,6 +2659,20 @@ def LanaiSystemLibrary
+@@ -2659,6 +2659,21 @@ def LanaiSystemLibrary
    let DefaultLibcallCallingConv = FASTCC;
  }
  
@@ -67,11 +67,12 @@ index d5f38b967..828f1ab4a 100644
 +
 +def isGPUVM : RuntimeLibcallPredicate<"TT.getArch() == Triple::gpuvm">;
 +
-+// compiler-rt's builtins (i64 division, double in software) and libm.
++// compiler-rt's builtins (i64 division, double in software) and libm (musl's,
++// with sincos and sincosf; the exec tests' runtime has sincosf).
 +def GPUVMSystemLibrary
 +    : SystemRuntimeLibrary<isGPUVM,
 +      (add DefaultRuntimeLibcallImpls,
-+         LibmHasSinCosF32, LibmHasSinCosF64,
++         sincosf, sincos,
 +         exp10f, exp10, __powisf2, __powidf2,
 +         DefaultStackProtector, DefaultSafeStackGlobals)>;
 +

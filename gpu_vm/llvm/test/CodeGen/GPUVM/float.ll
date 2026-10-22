@@ -139,11 +139,28 @@ define double @dbl(double %a, double %b) {
 
 define float @trunc(double %a) {
 ; CHECK-LABEL: trunc:
-; CHECK: addi sp, sp, -16
-; CHECK: sw ra, 12(sp)
-; CHECK: call __truncdfsf2
-; CHECK: lw ra, 12(sp)
-; CHECK: addi sp, sp, 16
+; CHECK: srli t0, a0, 29
+; CHECK: slli t1, a1, 3
+; CHECK: or t0, t1, t0
+; CHECK: addi t0, t0, 1073741824
+; CHECK: andi t1, t0, 1
+; CHECK: andi t2, a0, 536870911
+; CHECK: add t1, t2, t1
+; CHECK: andi t2, a1, 2147483647
+; CHECK: sgeui t1, t1, 268435457
+; CHECK: add t0, t0, t1
+; CHECK: sltu t1, zero, a0
+; CHECK: or t1, t2, t1
+; CHECK: sgeui t1, t1, 2146435073
+; CHECK: li t3, 2139095040
+; CHECK: li t4, 2143289344
+; CHECK: sel t1, t4, t3, t1
+; CHECK: sgeui t3, t2, 1206910976
+; CHECK: sel t0, t1, t0, t3
+; CHECK: sltui t1, t2, 940572672
+; CHECK: sel t0, zero, t0, t1
+; CHECK: andi t1, a1, -2147483648
+; CHECK: or a0, t0, t1
 ; CHECK: ret
   %r = fptrunc double %a to float
   ret float %r

@@ -37,6 +37,13 @@ public:
   GPUVMTargetLowering(const TargetMachine &TM, const GPUVMSubtarget &STI);
 
   SDValue LowerOperation(SDValue Op, SelectionDAG &DAG) const override;
+  void ReplaceNodeResults(SDNode *N, SmallVectorImpl<SDValue> &Results,
+                          SelectionDAG &DAG) const override;
+  SDValue PerformDAGCombine(SDNode *N, DAGCombinerInfo &DCI) const override;
+
+  // Under arcp (-freciprocal-math), three divisions by one value or more are
+  // one frcp and products: frcp and fmul share a bundle, fdiv is no op 1.
+  unsigned combineRepeatedFPDivisors() const override { return 3; }
 
   // A symbol + offset is one immediate, absolute or from the bundle (no GOT:
   // static links only).
@@ -123,6 +130,7 @@ private:
   SDValue lowerRETURNADDR(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerINTRINSIC_VOID(SDValue Op, SelectionDAG &DAG) const;
   SDValue lowerApproxFunc(SDValue Op, SelectionDAG &DAG) const;
+  SDValue lowerRound(SDValue Op, SelectionDAG &DAG) const;
 };
 
 } // namespace llvm

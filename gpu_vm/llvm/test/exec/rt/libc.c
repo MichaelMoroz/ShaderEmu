@@ -929,6 +929,7 @@ CARD_OP(exp2f, "fexp2")
 CARD_OP(log2f, "flog2")
 CARD_OP(sinf, "fsin")
 CARD_OP(cosf, "fcos")
+void sincosf(float x, float *s, float *c) { *s = sinf(x), *c = cosf(x); }
 
 //===-- files: stdin, stdout, stderr ----------------------------------------===//
 

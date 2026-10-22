@@ -510,3 +510,18 @@ index 08c06951c..b7c734b2d 100644
    case llvm::Triple::x86:
      if (T.isOSIAMCU())
        return "elf_iamcu";
+diff --git a/clang/lib/Driver/ToolChains/Linux.cpp b/clang/lib/Driver/ToolChains/Linux.cpp
+index 8d30a5ead..48c42aa06 100644
+--- a/clang/lib/Driver/ToolChains/Linux.cpp
++++ b/clang/lib/Driver/ToolChains/Linux.cpp
+@@ -960,7 +960,9 @@ bool Linux::IsAArch64OutlineAtomicsDefault(const ArgList &Args) const {
+ }
+ 
+ bool Linux::IsMathErrnoDefault() const {
+-  if (getTriple().isAndroid() || getTriple().isMusl())
++  // gpu_vm's Linux has musl, whatever the triple's environment says
++  if (getTriple().isAndroid() || getTriple().isMusl() ||
++      getTriple().getArch() == llvm::Triple::gpuvm)
+     return false;
+   return Generic_ELF::IsMathErrnoDefault();
+ }
