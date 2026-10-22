@@ -128,3 +128,51 @@ of RAM; `gpuvm_defconfig` turns the drivers on.
 - The card: `gvmdev` (`gpu_vm/userland/test/gvmdev.c`): draws through `/dev/fb0` and through the GPU, reads a key and
   the pointer, plays a tone; mctest with its worker counts; nxray, nxpath and nxphys's own checks.
 - The RISC-V machine as before: `tools/test_all.py`'s cases, a Doom run.
+
+## State (22 October 2026, RTX 5070 Laptop)
+
+How to run it:
+
+    bash gpu_vm/platform/build.sh                          (WSL: the firmware into worker_fw.h, after a change to worker.S)
+    bash gpu_vm/platform/test/run.sh                       (WSL: the bare workers' test on gvm_cpu, 3 and 15, GVM_RACES)
+    OUT=~/gpu_vm/linux-build-romroot-machine bash gpu_vm/linux/build.sh sync config image   (the kernel with the drivers)
+    pwsh tools\gpu_queue.ps1 bin\rvc_harness.exe --gvm build\gvm_desktop --viz --sound      (then `nx &` for the desktop)
+    pwsh tools\gpu_queue.ps1 bin\gvm_gpu.exe --check --cores 16 build\gvm_platform\workers.elf 15
+
+An image folder for `--gvm` is what `gpu_vm/userland/apps/image.sh` makes (`K=` a kernel folder with this kernel:
+`romroot.sh` with `W=build/gvm_machine KOUT=~/gpu_vm/linux-build-romroot-machine`); `build/gvm_desktop` is the apps'
+root, mctest and gvmdev, and `/root/Desktop` made by `tools/make_linux_image.py`'s `desktop_shortcuts`.
+
+What works:
+
+- **The harness** (`rvc_harness --gvm`): gpu_vm Linux boots on the card to its prompt in 3.6-4.3 s (the ROM 255 MB, RAM
+  192 MB), the console both ways and its scripts, the memory view with the display, the fetch and the kept folder's
+  words (the host answers `host:name` and `persist:load`). The desktop starts (`nx`): Nano-X with the GPU's lists, its
+  picture (a JPEG) and icons, the bar, the cursor. On WARP it boots too (110 s to init).
+- **The devices, `gvmdev all`** on the card: `/dev/fb0` drawn, read back and shown (mode 1, 640 x 480); a GPU list (a
+  clear and a rectangle) drawn and its picture copied into RAM, 3,072 of 3,072 pixels as drawn; a 440 Hz tone written to
+  `/dev/sound`, captured by `--sound-capture` at its pitch and amplitude; the pointer's 174 moves and its button through
+  evdev (`--pointer-sweep`, `--pointer-button`). The keyboard is the window's (not scripted). The network's driver and
+  zones are there, untried.
+- **Workers**: the bare test passes on gvm_cpu (3, 15; GVM_RACES: the 40 halves of one word undone, nothing else) and on
+  the card under `gvm_gpu --check` (3 and 15 workers, every core the reference's, RAM too). Under Linux, mctest 3, 15 and
+  255 pass on gvm_cpu (`mctest 15` and `mctest 3 0 race` under GVM_RACES: 0 undone; the race test keeps both halves,
+  `49 0 49 0`, since the commit writes words) and on the card in the harness (counters merged by the machine). nxray's
+  four sums with 255 workers are the RISC-V machine's on gvm_cpu (53ea472d 226b5e92 37366b32 3ffdbe63); nxphys's wall
+  b28b77b4 with 255 workers and with none, 0 pages brought for workers; nxpath d63313e9 with 255 workers and with none
+  (the RISC-V machine's is 02f213e9: floats). On the card nxray gives 6e3bc0ef de66b7e3 ... with 255 workers and with
+  none alike, and nxphys 44d0d906: the card's float special functions (as `--check` knows them), not the workers.
+- **Idle workers**: parked or sleeping workers are frozen by the harness (not drawn); a shell loop is 7.1 s after
+  mctest 255 against 7.4 before any worker (20.3 s when the parked rows were drawn).
+- **The RISC-V machine** in this harness: mctest 3 and 255 pass, Doom's timedemo state digest is 0ab4df93.
+
+Not done, or for others:
+
+- The apps' image (`apps/image.sh`) has no `/root/Desktop`: the desktop's `nxfiles --desktop` leaves at once without it.
+- A thawed worker starts a few frames late (the readback is behind); a program posting many short jobs to workers that
+  were frozen pays that once per wake. Workers in use are never frozen (24 readbacks of quiet first).
+- A pass a frame in the harness (0.33 ms a frame), and passes of a shell loop end early (about 1,400 ops of 8,192):
+  `--tick-rounds N` runs more a frame; why the passes end early is the tick's and the kernel's to look at.
+- A `write()` of a half-second tone to `/dev/sound` took about 7 s in the harness (the tone plays at its end, right):
+  the stream's pace against the frames, to be compared with the RISC-V machine's.
+- LAN between two harnesses, the kept folder's save, Unity: untried.
