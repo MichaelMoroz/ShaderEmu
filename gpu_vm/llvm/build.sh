@@ -22,6 +22,7 @@ EXPERIMENTAL=
 if [ -d "$HERE/Target/GPUVM" ]; then
     if [ ! -e "$SRC/llvm/lib/Target/GPUVM" ]; then ln -s "$HERE/Target/GPUVM" "$SRC/llvm/lib/Target/GPUVM"; fi
     if [ ! -e "$SRC/llvm/test/MC/GPUVM" ]; then ln -s "$HERE/test/MC/GPUVM" "$SRC/llvm/test/MC/GPUVM"; fi
+    if [ ! -e "$SRC/llvm/test/CodeGen/GPUVM" ]; then ln -s "$HERE/test/CodeGen/GPUVM" "$SRC/llvm/test/CodeGen/GPUVM"; fi
     EXPERIMENTAL=GPUVM
     for p in "$HERE"/patches/*.patch; do
         [ -e "$p" ] || continue

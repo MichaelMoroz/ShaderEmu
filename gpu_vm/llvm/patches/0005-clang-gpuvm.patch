@@ -1,0 +1,488 @@
+diff --git a/clang/include/clang/Basic/BuiltinsGPUVM.td b/clang/include/clang/Basic/BuiltinsGPUVM.td
+new file mode 100644
+index 000000000..942cb870f
+--- /dev/null
++++ b/clang/include/clang/Basic/BuiltinsGPUVM.td
+@@ -0,0 +1,28 @@
++//===--- BuiltinsGPUVM.td - gpu_vm Builtin function database ----*- C++ -*-===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++//
++// The commit's operations (llvm.gpuvm.copy, llvm.gpuvm.fill): always the
++// operation, one sq of a descriptor to 0xf0000000, whatever the size.
++//
++//===----------------------------------------------------------------------===//
++
++include "clang/Basic/BuiltinsBase.td"
++
++// memmove(dst, src, bytes)
++def GPUVMCopy : TargetBuiltin {
++  let Spellings = ["__builtin_gpuvm_copy"];
++  let Attributes = [NoThrow];
++  let Prototype = "void(void*, void const*, unsigned int)";
++}
++
++// bytes at dst from the word (byte i is byte i % 4 of the word)
++def GPUVMFill : TargetBuiltin {
++  let Spellings = ["__builtin_gpuvm_fill"];
++  let Attributes = [NoThrow];
++  let Prototype = "void(void*, unsigned int, unsigned int)";
++}
+diff --git a/clang/include/clang/Basic/CMakeLists.txt b/clang/include/clang/Basic/CMakeLists.txt
+index d334c1d41..ee43b5c70 100644
+--- a/clang/include/clang/Basic/CMakeLists.txt
++++ b/clang/include/clang/Basic/CMakeLists.txt
+@@ -106,6 +106,10 @@ clang_tablegen(BuiltinsBPF.inc -gen-clang-builtins
+   SOURCE BuiltinsBPF.td
+   TARGET ClangBuiltinsBPF)
+ 
++clang_tablegen(BuiltinsGPUVM.inc -gen-clang-builtins
++  SOURCE BuiltinsGPUVM.td
++  TARGET ClangBuiltinsGPUVM)
++
+ clang_tablegen(BuiltinsDirectX.inc -gen-clang-builtins
+   SOURCE BuiltinsDirectX.td
+   TARGET ClangBuiltinsDirectX)
+diff --git a/clang/include/clang/Basic/TargetBuiltins.h b/clang/include/clang/Basic/TargetBuiltins.h
+index 5828aae48..3108144e5 100644
+--- a/clang/include/clang/Basic/TargetBuiltins.h
++++ b/clang/include/clang/Basic/TargetBuiltins.h
+@@ -99,6 +99,17 @@ namespace clang {
+   };
+   }
+ 
++  /// gpu_vm builtins
++  namespace GPUVM {
++  enum {
++    LastTIBuiltin = clang::Builtin::FirstTSBuiltin - 1,
++#define GET_BUILTIN_ENUMERATORS
++#include "clang/Basic/BuiltinsGPUVM.inc"
++#undef GET_BUILTIN_ENUMERATORS
++    LastTSBuiltin
++  };
++  } // namespace GPUVM
++
+   /// BPF builtins
+   namespace BPF {
+   enum {
+@@ -496,7 +507,8 @@ namespace clang {
+        PPC::LastTSBuiltin, NVPTX::LastTSBuiltin, AMDGPU::LastTSBuiltin,
+        X86::LastTSBuiltin, VE::LastTSBuiltin, RISCV::LastTSBuiltin,
+        Hexagon::LastTSBuiltin, Mips::LastTSBuiltin, XCore::LastTSBuiltin,
+-       SystemZ::LastTSBuiltin, WebAssembly::LastTSBuiltin, AVR::LastTSBuiltin});
++       SystemZ::LastTSBuiltin, WebAssembly::LastTSBuiltin, AVR::LastTSBuiltin,
++       GPUVM::LastTSBuiltin});
+ 
+ } // end namespace clang.
+ 
+diff --git a/clang/lib/Basic/CMakeLists.txt b/clang/lib/Basic/CMakeLists.txt
+index 21851e79b..393abd972 100644
+--- a/clang/lib/Basic/CMakeLists.txt
++++ b/clang/lib/Basic/CMakeLists.txt
+@@ -104,6 +104,7 @@ add_clang_library(clangBasic
+   Targets/CSKY.cpp
+   Targets/DirectX.cpp
+   Targets/Hexagon.cpp
++  Targets/GPUVM.cpp
+   Targets/Lanai.cpp
+   Targets/LoongArch.cpp
+   Targets/M68k.cpp
+diff --git a/clang/lib/Basic/Targets.cpp b/clang/lib/Basic/Targets.cpp
+index 8c01cfca8..b5b1c49c6 100644
+--- a/clang/lib/Basic/Targets.cpp
++++ b/clang/lib/Basic/Targets.cpp
+@@ -22,6 +22,7 @@
+ #include "Targets/CSKY.h"
+ #include "Targets/DirectX.h"
+ #include "Targets/Hexagon.h"
++#include "Targets/GPUVM.h"
+ #include "Targets/Lanai.h"
+ #include "Targets/LoongArch.h"
+ #include "Targets/M68k.h"
+@@ -135,6 +136,11 @@ std::unique_ptr<TargetInfo> AllocateTarget(const llvm::Triple &Triple,
+   case llvm::Triple::lanai:
+     return std::make_unique<LanaiTargetInfo>(Triple, Opts);
+ 
++  case llvm::Triple::gpuvm:
++    if (os == llvm::Triple::Linux)
++      return std::make_unique<LinuxTargetInfo<GPUVMTargetInfo>>(Triple, Opts);
++    return std::make_unique<GPUVMTargetInfo>(Triple, Opts);
++
+   case llvm::Triple::aarch64_32:
+     if (Triple.isOSDarwin())
+       return std::make_unique<DarwinAArch64TargetInfo>(Triple, Opts);
+diff --git a/clang/lib/Basic/Targets/GPUVM.cpp b/clang/lib/Basic/Targets/GPUVM.cpp
+new file mode 100644
+index 000000000..fba191355
+--- /dev/null
++++ b/clang/lib/Basic/Targets/GPUVM.cpp
+@@ -0,0 +1,81 @@
++//===--- GPUVM.cpp - Implement gpu_vm target feature support --------------===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++
++#include "GPUVM.h"
++#include "clang/Basic/MacroBuilder.h"
++#include "clang/Basic/TargetBuiltins.h"
++#include "llvm/ADT/StringRef.h"
++
++using namespace clang;
++using namespace clang::targets;
++
++static constexpr int NumBuiltins =
++    clang::GPUVM::LastTSBuiltin - Builtin::FirstTSBuiltin;
++
++#define GET_BUILTIN_STR_TABLE
++#include "clang/Basic/BuiltinsGPUVM.inc"
++#undef GET_BUILTIN_STR_TABLE
++
++static constexpr Builtin::Info BuiltinInfos[] = {
++#define GET_BUILTIN_INFOS
++#include "clang/Basic/BuiltinsGPUVM.inc"
++#undef GET_BUILTIN_INFOS
++};
++static_assert(std::size(BuiltinInfos) == NumBuiltins);
++
++llvm::SmallVector<Builtin::InfosShard>
++GPUVMTargetInfo::getTargetBuiltins() const {
++  return {{&BuiltinStrings, BuiltinInfos}};
++}
++
++const char *const GPUVMTargetInfo::GCCRegNames[] = {
++    "r0",  "r1",  "r2",  "r3",  "r4",  "r5",  "r6",  "r7",  "r8",  "r9",
++    "r10", "r11", "r12", "r13", "r14", "r15", "r16", "r17", "r18", "r19",
++    "r20", "r21", "r22", "r23", "r24", "r25", "r26", "r27", "r28", "r29",
++    "r30", "r31", "r32", "r33", "r34", "r35", "r36", "r37", "r38", "r39",
++    "r40", "r41", "r42", "r43", "r44", "r45", "r46", "r47", "r48", "r49",
++    "r50", "r51", "r52", "r53", "r54", "r55", "r56", "r57", "r58", "r59",
++    "r60", "r61", "r62", "r63"};
++
++ArrayRef<const char *> GPUVMTargetInfo::getGCCRegNames() const {
++  return llvm::ArrayRef(GCCRegNames);
++}
++
++// The ABI's names (gpu_vm/GPU_VM.md, "ABI")
++const TargetInfo::GCCRegAlias GPUVMTargetInfo::GCCRegAliases[] = {
++    {{"zero"}, "r0"}, {{"ra"}, "r1"},  {{"sp"}, "r2"},  {{"gp"}, "r3"},
++    {{"tp"}, "r4"},   {{"a0"}, "r5"},  {{"a1"}, "r6"},  {{"a2"}, "r7"},
++    {{"a3"}, "r8"},   {{"a4"}, "r9"},  {{"a5"}, "r10"}, {{"a6"}, "r11"},
++    {{"a7"}, "r12"},  {{"t0"}, "r13"}, {{"t1"}, "r14"}, {{"t2"}, "r15"},
++    {{"t3"}, "r16"},  {{"t4"}, "r17"}, {{"t5"}, "r18"}, {{"t6"}, "r19"},
++    {{"t7"}, "r20"},  {{"t8"}, "r21"}, {{"t9"}, "r22"}, {{"t10"}, "r23"},
++    {{"t11"}, "r24"}, {{"t12"}, "r25"}, {{"t13"}, "r26"}, {{"t14"}, "r27"},
++    {{"t15"}, "r28"}, {{"t16"}, "r29"}, {{"t17"}, "r30"}, {{"t18"}, "r31"},
++    {{"s0", "fp"}, "r32"}, {{"s1"}, "r33"}, {{"s2"}, "r34"}, {{"s3"}, "r35"},
++    {{"s4"}, "r36"},  {{"s5"}, "r37"}, {{"s6"}, "r38"}, {{"s7"}, "r39"},
++    {{"s8"}, "r40"},  {{"s9"}, "r41"}, {{"s10"}, "r42"}, {{"s11"}, "r43"},
++    {{"s12"}, "r44"}, {{"s13"}, "r45"}, {{"s14"}, "r46"}, {{"s15"}, "r47"},
++    {{"s16"}, "r48"}, {{"s17"}, "r49"}, {{"s18"}, "r50"}, {{"s19"}, "r51"},
++    {{"s20"}, "r52"}, {{"s21"}, "r53"}, {{"s22"}, "r54"}, {{"s23"}, "r55"},
++    {{"t19"}, "r56"}, {{"t20"}, "r57"}, {{"t21"}, "r58"}, {{"t22"}, "r59"},
++    {{"t23"}, "r60"}, {{"t24"}, "r61"}, {{"t25"}, "r62"}, {{"t26"}, "r63"}};
++
++ArrayRef<TargetInfo::GCCRegAlias> GPUVMTargetInfo::getGCCRegAliases() const {
++  return llvm::ArrayRef(GCCRegAliases);
++}
++
++void GPUVMTargetInfo::getTargetDefines(const LangOptions &Opts,
++                                       MacroBuilder &Builder) const {
++  Builder.defineMacro("__gpuvm__");
++  Builder.defineMacro("__gpuvm");
++  if (getTriple().getOS() == llvm::Triple::UnknownOS)
++    Builder.defineMacro("__ELF__");
++  Builder.defineMacro("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_1");
++  Builder.defineMacro("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_2");
++  Builder.defineMacro("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_4");
++}
+diff --git a/clang/lib/Basic/Targets/GPUVM.h b/clang/lib/Basic/Targets/GPUVM.h
+new file mode 100644
+index 000000000..713845a91
+--- /dev/null
++++ b/clang/lib/Basic/Targets/GPUVM.h
+@@ -0,0 +1,77 @@
++//===--- GPUVM.h - Declare gpu_vm target feature support --------*- C++ -*-===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++//
++// gpu_vm, the shader machine's own ISA (ShaderEmu's gpu_vm/GPU_VM.md): ILP32,
++// little endian, char signed, long double as double, 64 registers.
++//
++//===----------------------------------------------------------------------===//
++
++#ifndef LLVM_CLANG_LIB_BASIC_TARGETS_GPUVM_H
++#define LLVM_CLANG_LIB_BASIC_TARGETS_GPUVM_H
++
++#include "clang/Basic/TargetInfo.h"
++#include "clang/Basic/TargetOptions.h"
++#include "llvm/Support/Compiler.h"
++#include "llvm/TargetParser/Triple.h"
++
++namespace clang {
++namespace targets {
++
++class LLVM_LIBRARY_VISIBILITY GPUVMTargetInfo : public TargetInfo {
++  static const char *const GCCRegNames[];
++  static const TargetInfo::GCCRegAlias GCCRegAliases[];
++
++public:
++  GPUVMTargetInfo(const llvm::Triple &Triple, const TargetOptions &)
++      : TargetInfo(Triple) {
++    SizeType = UnsignedInt;
++    PtrDiffType = SignedInt;
++    IntPtrType = SignedInt;
++    Int64Type = SignedLongLong;
++    IntMaxType = SignedLongLong;
++    WCharType = SignedInt;
++    WIntType = UnsignedInt;
++    LongDoubleWidth = 64;
++    LongDoubleAlign = 64;
++    LongDoubleFormat = &llvm::APFloat::IEEEdouble();
++    SuitableAlign = 128;
++    MaxAtomicPromoteWidth = MaxAtomicInlineWidth = 32;
++    resetDataLayout();
++  }
++
++  void getTargetDefines(const LangOptions &Opts,
++                        MacroBuilder &Builder) const override;
++
++  llvm::SmallVector<Builtin::InfosShard> getTargetBuiltins() const override;
++
++  BuiltinVaListKind getBuiltinVaListKind() const override {
++    return TargetInfo::VoidPtrBuiltinVaList;
++  }
++
++  ArrayRef<const char *> getGCCRegNames() const override;
++  ArrayRef<TargetInfo::GCCRegAlias> getGCCRegAliases() const override;
++
++  bool validateAsmConstraint(const char *&Name,
++                             TargetInfo::ConstraintInfo &Info) const override {
++    return false;
++  }
++
++  std::string_view getClobbers() const override { return ""; }
++
++  bool hasBitIntType() const override { return true; }
++
++  bool isValidCPUName(StringRef Name) const override {
++    return Name == "generic";
++  }
++  bool setCPU(StringRef Name) override { return Name == "generic"; }
++};
++
++} // namespace targets
++} // namespace clang
++
++#endif // LLVM_CLANG_LIB_BASIC_TARGETS_GPUVM_H
+diff --git a/clang/lib/CodeGen/CMakeLists.txt b/clang/lib/CodeGen/CMakeLists.txt
+index 853f038c4..32c99d7c1 100644
+--- a/clang/lib/CodeGen/CMakeLists.txt
++++ b/clang/lib/CodeGen/CMakeLists.txt
+@@ -144,6 +144,7 @@ add_clang_library(clangCodeGen
+   Targets/CSKY.cpp
+   Targets/DirectX.cpp
+   Targets/Hexagon.cpp
++  Targets/GPUVM.cpp
+   Targets/Lanai.cpp
+   Targets/LoongArch.cpp
+   Targets/M68k.cpp
+diff --git a/clang/lib/CodeGen/CodeGenModule.cpp b/clang/lib/CodeGen/CodeGenModule.cpp
+index 313a364e8..86faa3195 100644
+--- a/clang/lib/CodeGen/CodeGenModule.cpp
++++ b/clang/lib/CodeGen/CodeGenModule.cpp
+@@ -289,6 +289,9 @@ createTargetCodeGenInfo(CodeGenModule &CGM) {
+     return createHexagonTargetCodeGenInfo(CGM);
+   case llvm::Triple::lanai:
+     return createLanaiTargetCodeGenInfo(CGM);
++
++  case llvm::Triple::gpuvm:
++    return createGPUVMTargetCodeGenInfo(CGM);
+   case llvm::Triple::r600:
+     return createAMDGPUTargetCodeGenInfo(CGM);
+   case llvm::Triple::amdgpu:
+diff --git a/clang/lib/CodeGen/TargetInfo.h b/clang/lib/CodeGen/TargetInfo.h
+index 9405cf012..2e4a6a902 100644
+--- a/clang/lib/CodeGen/TargetInfo.h
++++ b/clang/lib/CodeGen/TargetInfo.h
+@@ -519,6 +519,9 @@ createHexagonTargetCodeGenInfo(CodeGenModule &CGM);
+ std::unique_ptr<TargetCodeGenInfo>
+ createLanaiTargetCodeGenInfo(CodeGenModule &CGM);
+ 
++std::unique_ptr<TargetCodeGenInfo>
++createGPUVMTargetCodeGenInfo(CodeGenModule &CGM);
++
+ std::unique_ptr<TargetCodeGenInfo>
+ createLoongArchTargetCodeGenInfo(CodeGenModule &CGM, unsigned GRLen,
+                                  unsigned FLen);
+diff --git a/clang/lib/CodeGen/Targets/GPUVM.cpp b/clang/lib/CodeGen/Targets/GPUVM.cpp
+new file mode 100644
+index 000000000..9fb3a9123
+--- /dev/null
++++ b/clang/lib/CodeGen/Targets/GPUVM.cpp
+@@ -0,0 +1,99 @@
++//===- GPUVM.cpp ----------------------------------------------------------===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++//
++// gpu_vm's ABI (gpu_vm/GPU_VM.md, "ABI"): integers narrower than 32 bits
++// extended; aggregates up to 8 bytes in registers (as i32 or i64), larger
++// ones by reference (a copy the caller makes), returned the same way (larger
++// ones by a hidden pointer). Variadic arguments are on the stack, 4 bytes a
++// slot (the backend puts them there).
++//
++//===----------------------------------------------------------------------===//
++
++#include "ABIInfoImpl.h"
++#include "TargetInfo.h"
++
++using namespace clang;
++using namespace clang::CodeGen;
++
++namespace {
++class GPUVMABIInfo : public DefaultABIInfo {
++public:
++  GPUVMABIInfo(CodeGen::CodeGenTypes &CGT) : DefaultABIInfo(CGT) {}
++
++  ABIArgInfo classifyType(QualType Ty, bool IsReturn) const;
++
++  void computeInfo(CGFunctionInfo &FI) const override {
++    if (!getCXXABI().classifyReturnType(FI))
++      FI.getReturnInfo() = classifyType(FI.getReturnType(), true);
++    for (auto &I : FI.arguments())
++      I.info = classifyType(I.type, false);
++  }
++
++  RValue EmitVAArg(CodeGenFunction &CGF, Address VAListAddr, QualType Ty,
++                   AggValueSlot Slot) const override;
++};
++} // namespace
++
++ABIArgInfo GPUVMABIInfo::classifyType(QualType Ty, bool IsReturn) const {
++  if (IsReturn && Ty->isVoidType())
++    return ABIArgInfo::getIgnore();
++  Ty = useFirstFieldIfTransparentUnion(Ty);
++
++  if (!IsReturn)
++    if (CGCXXABI::RecordArgABI RAA = getRecordArgABI(Ty, getCXXABI()))
++      return getNaturalAlignIndirect(
++          Ty, getDataLayout().getAllocaAddrSpace(),
++          /*ByVal=*/RAA == CGCXXABI::RAA_DirectInMemory);
++
++  if (isEmptyRecord(getContext(), Ty, true))
++    return ABIArgInfo::getIgnore();
++
++  uint64_t Size = getContext().getTypeSize(Ty);
++  if (!isAggregateTypeForABI(Ty)) {
++    if (const auto *ED = Ty->getAsEnumDecl())
++      Ty = ED->getIntegerType();
++    if (const auto *EIT = Ty->getAs<BitIntType>())
++      if (EIT->getNumBits() > 64)
++        return getNaturalAlignIndirect(Ty, getDataLayout().getAllocaAddrSpace(),
++                                       /*ByVal=*/false);
++    if (Size < 32 && Ty->isIntegralOrEnumerationType())
++      return ABIArgInfo::getExtend(Ty);
++    return ABIArgInfo::getDirect();
++  }
++
++  if (Size <= 32)
++    return ABIArgInfo::getDirect(llvm::IntegerType::get(getVMContext(), 32));
++  if (Size <= 64)
++    return ABIArgInfo::getDirect(llvm::IntegerType::get(getVMContext(), 64));
++  return getNaturalAlignIndirect(Ty, getDataLayout().getAllocaAddrSpace(),
++                                 /*ByVal=*/false);
++}
++
++RValue GPUVMABIInfo::EmitVAArg(CodeGenFunction &CGF, Address VAListAddr,
++                               QualType Ty, AggValueSlot Slot) const {
++  if (isEmptyRecord(getContext(), Ty, true))
++    return Slot.asRValue();
++  auto TInfo = getContext().getTypeInfoInChars(Ty);
++  bool IsIndirect = isAggregateTypeForABI(Ty) && TInfo.Width.getQuantity() > 8;
++  return emitVoidPtrVAArg(CGF, VAListAddr, Ty, IsIndirect, TInfo,
++                          CharUnits::fromQuantity(4),
++                          /*AllowHigherAlign=*/false, Slot);
++}
++
++namespace {
++class GPUVMTargetCodeGenInfo : public TargetCodeGenInfo {
++public:
++  GPUVMTargetCodeGenInfo(CodeGen::CodeGenTypes &CGT)
++      : TargetCodeGenInfo(std::make_unique<GPUVMABIInfo>(CGT)) {}
++};
++} // namespace
++
++std::unique_ptr<TargetCodeGenInfo>
++CodeGen::createGPUVMTargetCodeGenInfo(CodeGenModule &CGM) {
++  return std::make_unique<GPUVMTargetCodeGenInfo>(CGM.getTypes());
++}
+diff --git a/clang/lib/Driver/ToolChains/BareMetal.cpp b/clang/lib/Driver/ToolChains/BareMetal.cpp
+index ba454acbf..941d611b0 100644
+--- a/clang/lib/Driver/ToolChains/BareMetal.cpp
++++ b/clang/lib/Driver/ToolChains/BareMetal.cpp
+@@ -278,8 +278,14 @@ void BareMetal::findMultilibs(const Driver &D, const llvm::Triple &Triple,
+   }
+ }
+ 
++// gpuvm-unknown-elf: gpu_vm without an OS (gvm_cpu's semihosting).
++static bool isGPUVMBareMetal(const llvm::Triple &Triple) {
++  return Triple.getArch() == llvm::Triple::gpuvm &&
++         Triple.getOS() == llvm::Triple::UnknownOS;
++}
++
+ bool BareMetal::handlesTarget(const llvm::Triple &Triple) {
+-  return arm::isARMEABIBareMetal(Triple) ||
++  return isGPUVMBareMetal(Triple) || arm::isARMEABIBareMetal(Triple) ||
+          aarch64::isAArch64BareMetal(Triple) || isRISCVBareMetal(Triple) ||
+          isPPCBareMetal(Triple) || isX86BareMetal(Triple);
+ }
+diff --git a/clang/lib/Driver/ToolChains/BareMetal.h b/clang/lib/Driver/ToolChains/BareMetal.h
+index 5e6fb3cca..dda7c6afc 100644
+--- a/clang/lib/Driver/ToolChains/BareMetal.h
++++ b/clang/lib/Driver/ToolChains/BareMetal.h
+@@ -28,6 +28,18 @@ public:
+ 
+   static bool handlesTarget(const llvm::Triple &Triple);
+ 
++  // gpu_vm links with ld.lld (lld/ELF/Arch/GPUVM.cpp).
++  const char *getDefaultLinker() const override {
++    return getTriple().getArch() == llvm::Triple::gpuvm
++               ? "ld.lld"
++               : Generic_ELF::getDefaultLinker();
++  }
++  // gpu_vm's sqrtf is an op, and its libc's math sets no errno.
++  bool IsMathErrnoDefault() const override {
++    return getTriple().getArch() != llvm::Triple::gpuvm &&
++           Generic_ELF::IsMathErrnoDefault();
++  }
++
+   void findMultilibs(const Driver &D, const llvm::Triple &Triple,
+                      const llvm::opt::ArgList &Args);
+ 
+diff --git a/clang/lib/Driver/ToolChains/CommonArgs.cpp b/clang/lib/Driver/ToolChains/CommonArgs.cpp
+index 08c06951c..2ba66b911 100644
+--- a/clang/lib/Driver/ToolChains/CommonArgs.cpp
++++ b/clang/lib/Driver/ToolChains/CommonArgs.cpp
+@@ -585,6 +585,8 @@ void tools::AddLinkerInputs(const ToolChain &TC, const InputInfoList &Inputs,
+ 
+ const char *tools::getLDMOption(const llvm::Triple &T, const ArgList &Args) {
+   switch (T.getArch()) {
++  case llvm::Triple::gpuvm:
++    return "elf32gpuvm";
+   case llvm::Triple::x86:
+     if (T.isOSIAMCU())
+       return "elf_iamcu";

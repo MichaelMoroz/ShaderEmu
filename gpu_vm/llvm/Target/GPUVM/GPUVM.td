@@ -16,6 +16,8 @@ include "llvm/Target/Target.td"
 include "GPUVMRegisterInfo.td"
 include "GPUVMInstrFormats.td"
 include "GPUVMInstrInfo.td"
+include "GPUVMPatterns.td"
+include "GPUVMCallingConv.td"
 
 defm : RemapAllTargetPseudoPointerOperands<GPR>;
 
@@ -25,6 +27,8 @@ def GPUVMInstrInfo : InstrInfo;
 
 def GPUVMAsmParser : AsmParser {
   let ShouldEmitMatchRegisterAltName = true;
+  // The GPRQ tuples carry their first register's ABI name: the GPR wins.
+  let AllowDuplicateRegisterNames = true;
 }
 
 def GPUVMAsmWriter : AsmWriter {

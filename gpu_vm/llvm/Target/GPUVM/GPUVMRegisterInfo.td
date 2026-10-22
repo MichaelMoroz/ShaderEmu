@@ -13,6 +13,10 @@
 
 let Namespace = "GPUVM" in {
 def ABIRegAltName : RegAltNameIndex;
+def sub0 : SubRegIndex<32>;
+def sub1 : SubRegIndex<32, 32>;
+def sub2 : SubRegIndex<32, 64>;
+def sub3 : SubRegIndex<32, 96>;
 
 class GPUVMReg<bits<6> Enc, string n, string alt> : Register<n> {
   let HWEncoding{5-0} = Enc;
@@ -94,3 +98,15 @@ def GPR : RegisterClass<"GPUVM", [i32, f32], 32,
     (add (sequence "R%u", 13, 31), (sequence "R%u", 56, 63),
          (sequence "R%u", 5, 12), (sequence "R%u", 33, 55), R32,
          R0, R1, R2, R3, R4)>;
+
+// Four consecutive registers, any first: what `lq` and `sq` move (a texel).
+// The codegen's only (LQ_Q, SQ_Q: inline copies, the commit's operations'
+// descriptors); the MC operand is the first register (sub0).
+def GPRQTuples : RegisterTuples<[sub0, sub1, sub2, sub3],
+                                [(sequence "R%u", 0, 60),
+                                 (sequence "R%u", 1, 61),
+                                 (sequence "R%u", 2, 62),
+                                 (sequence "R%u", 3, 63)]>;
+def GPRQ : RegisterClass<"GPUVM", [untyped], 128, (add GPRQTuples)> {
+  let Size = 128;
+}
