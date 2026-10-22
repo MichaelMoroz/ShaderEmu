@@ -1,0 +1,96 @@
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# gpu_vm (gpu_vm/GPU_VM.md, gpu_vm/isa.h): the shader machine's own 32-bit instruction set. No MMU, one address
+# space, supervisor and user modes, a timer compare against TIME (100 kHz). Built with clang only (LLVM=1).
+#
+
+config GPUVM
+	def_bool y
+	select ARCH_32BIT_OFF_T
+	select ARCH_HAS_BINFMT_FLAT
+	select ARCH_USE_BUILTIN_BSWAP
+	select BINFMT_FLAT_NO_DATA_START_OFFSET
+	select CLONE_BACKWARDS
+	select GENERIC_ATOMIC64
+	select GENERIC_CPU_DEVICES
+	select GENERIC_IRQ_MULTI_HANDLER
+	select GENERIC_IRQ_SHOW
+	select GENERIC_LIB_ASHLDI3
+	select GENERIC_LIB_ASHRDI3
+	select GENERIC_LIB_CMPDI2
+	select GENERIC_LIB_LSHRDI3
+	select GENERIC_LIB_MULDI3
+	select GENERIC_LIB_UCMPDI2
+	select GENERIC_SCHED_CLOCK
+	select GENERIC_STRNCPY_FROM_USER
+	select GENERIC_STRNLEN_USER
+	select HAVE_ARCH_TRACEHOOK
+	select IRQ_DOMAIN
+	select OF
+	select OF_EARLY_FLATTREE
+	select OF_IRQ
+	select THREAD_INFO_IN_TASK
+	select UACCESS_MEMCPY
+
+config MMU
+	def_bool n
+
+config GENERIC_CSUM
+	def_bool y
+
+config GENERIC_HWEIGHT
+	def_bool y
+
+config NO_IOPORT_MAP
+	def_bool y
+
+config STACKTRACE_SUPPORT
+	def_bool n
+
+config LOCKDEP_SUPPORT
+	def_bool n
+
+config TRACE_IRQFLAGS_SUPPORT
+	def_bool n
+
+menu "gpu_vm machine"
+
+# Not yet: the commit makes a core's stores seen by the others only at the end of a pass, and an amo is atomic on its
+# own core only (gpu_vm/ref/gvm_ref.h). Kept as an option so nothing here assumes one CPU.
+config SMP
+	bool "Symmetric multi-processing (not done)"
+	depends on BROKEN
+
+config NR_CPUS
+	int "Maximum number of CPUs"
+	depends on SMP
+	range 2 256
+	default 8
+
+config GPUVM_RAM_SIZE
+	hex "RAM's size when the device tree names none"
+	default 0x04000000
+	help
+	  RAM starts at 0x02000000 (GVM_RAM). The device tree's memory node wins; this is the bank used when the
+	  tree has none (gvm_cpu's default --ram is 64 MB).
+
+config GPUVM_CONSOLE
+	bool "The machine's console (words and a ring in the device window)"
+	depends on TTY
+	default y
+	select HVC_DRIVER
+	help
+	  The console of gpu_vm/linux/README.md: the RISC-V machine's console words, moved down into the device
+	  window (0x016b8280). A boot console from the first line of setup_arch, then hvc0.
+
+config GPUVM_ROM
+	tristate "The ROM as a block device"
+	depends on BLOCK
+	default y
+	help
+	  The ROM window (0x40000000, the device tree's "gpuvm,rom" node, whose reg gives the size) read as a
+	  read-only disk, gvmrom. A read is a copy from the ROM by the commit's operations (memcpy).
+
+source "kernel/Kconfig.hz"
+
+endmenu

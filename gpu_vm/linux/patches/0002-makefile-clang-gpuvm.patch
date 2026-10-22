@@ -1,0 +1,12 @@
+diff --git a/scripts/Makefile.clang b/scripts/Makefile.clang
+index 51fc23e2e..fcf5a4fd1 100644
+--- a/scripts/Makefile.clang
++++ b/scripts/Makefile.clang
+@@ -10,6 +10,7 @@ CLANG_TARGET_FLAGS_powerpc	:= powerpc64le-linux-gnu
+ CLANG_TARGET_FLAGS_riscv	:= riscv64-linux-gnu
+ CLANG_TARGET_FLAGS_s390		:= s390x-linux-gnu
+ CLANG_TARGET_FLAGS_x86		:= x86_64-linux-gnu
++CLANG_TARGET_FLAGS_gpuvm	:= gpuvm-unknown-linux
+ CLANG_TARGET_FLAGS		:= $(CLANG_TARGET_FLAGS_$(SRCARCH))
+ 
+ ifeq ($(CROSS_COMPILE),)
