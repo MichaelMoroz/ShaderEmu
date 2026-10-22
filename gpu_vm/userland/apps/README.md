@@ -12,6 +12,9 @@ sources and by the same build scripts, and the ROM image and runner to try them 
 | `image.sh` | a romfs ROM of `rootfs.sh`'s tree, `build/gvm_apps/root` and the RISC-V image's data, with a kernel (`romroot.sh`'s, with the machine's drivers) and a device tree: `build/gvm_apps/img` |
 | `rcS` | the image's start: rootfs.sh's, a 32 MB `/tmp` and a `/persistence` in memory |
 | `run.sh [cpu\|gpu] 'cmd' ...` | types commands into that image on `gvm_cpu` (or the card's `gvm_gpu`) and prints the console |
+| `hlsl.sh` | the HLSL compiler (its IR run, `hlsl_interp.c`), `hlslc`, `hlslview`, `hlsl_bench` |
+| `romfs_extract.py` | the RISC-V image's data out of its ROM (`~/gpu_vm/riscv-rom-data`, which `image.sh` lays under the rest) |
+| `test_all.py` | `tools/test_all.py`'s cases typed into `image.sh`'s machine on `gvm_cpu`, checked by its rules |
 | `bugs/` | compiler bugs met on the way, each a small file with how to reproduce it |
 
 In WSL:
@@ -31,7 +34,7 @@ Builds side by side: `GVM_APPS_REPO`, `GVM_APPS_WORK` and `GVM_APPS_LOGS` name a
   `~/gpu_vm/apps-work`; what the RISC-V builds downloaded once (games' demos, meshes) is taken from their folders.
 - **The compiler driver** filters what means nothing to clang or gpu_vm (`-march`, `-mabi`, gcc's `--param` and tree
   passes, `-flto`, `-fno-toplevel-reorder`, a text segment's address, `-fno-pie`: gpu_vm's programs are PIE,
-  globals addressed from the bundle), adds `-ffunction-sections` (see the bugs) and keeps every link's ELF beside the
+  globals addressed from the bundle), adds `-ffunction-sections` and `-mllvm -gpuvm-spec-window=0` (see the bugs) and keeps every link's ELF beside the
   bFLT as `PROG.gdb`, which its `nm` reads. C++ is clang++ with libstdc++ 13.3's headers and the RISC-V build's fixes
   of them (`linux/tdawn/cxx`), no exceptions or run-time types, as on RISC-V (a program brings its runtime:
   `linux/tdawn/cxxrt.cpp`).
@@ -56,6 +59,10 @@ Builds side by side: `GVM_APPS_REPO`, `GVM_APPS_WORK` and `GVM_APPS_LOGS` name a
 | `real_vfork` (asm) | musl's `vfork` |
 | the NES's 6502 translator (RISC-V code) | not used: the interpreter (as `NES_CPU=interp`) |
 
+- **A half or a word stays in its address's word** on gpu_vm (`isa.h`): a `uint16_t`/`uint32_t` read through a cast of
+  an unaligned pointer, which RISC-V allows, gives the bytes past the word as 0 and nothing says so. The compiler
+  splits only what it does not know to be aligned, and a cast tells it the opposite. The NES read its 6502 words so
+  (`nofrendo.patch`: byte by byte under `__gpuvm__`); look for such casts first when a program's sums are wrong.
 - `gpu_vm/userland/flat.ld` names the ends GNU ld names (`etext`, `__DATA_BEGIN__`, `edata`, `__executable_start`).
 - Hand-written assembly is rewritten in gpu_vm's (`mcwx_setjmp`: ra, sp, s0-s23; Quake III's and Half-Life's call
   on a stack; Half-Life's renderer thunks).
@@ -64,8 +71,10 @@ Builds side by side: `GVM_APPS_REPO`, `GVM_APPS_WORK` and `GVM_APPS_LOGS` name a
 
 - **OpenTTD**: its C++ needs exceptions and the whole of libstdc++ (the RISC-V build makes its own GCC). gpu_vm's
   compiler emits no unwind information and there is no C++ runtime library: it waits for both.
-- **TinyCC** (`cc`, `tcc`) and **the HLSL compiler**'s code generator make RISC-V code: each needs a gpu_vm back end.
-  (`hlslc`/`hlslview`/`hlsl_bench` and the IDE's C and HLSL builds with them.)
+- **TinyCC** (`cc`, `tcc`) makes RISC-V code: it needs a gpu_vm back end (the IDE's C builds and `cc-bytes` with it).
+- **The HLSL compiler** runs its IR instead of making code (`programs/hlsl/hlsl_interp.c`, `HLSL_INTERP`, on for
+  `__gpuvm__`): each operation as the RISC-V code makes it, a step whole (no lanes). `hlsl.sh` builds libhlsl,
+  `hlslc`, `hlslview` and `hlsl_bench`; the fractal's sum is the host's (`3614e8bb`).
 - The ports of `linux/ports` (dropbear, curl, ...) are not tried yet.
 
 ## Checks
