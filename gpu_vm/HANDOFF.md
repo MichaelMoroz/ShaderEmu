@@ -117,6 +117,11 @@ Phases, each one agent's (one writer of the LLVM tree in WSL at a time):
 3. Codegen and clang (`gpuvm-unknown-elf`): ISel, calling convention, frame lowering, branch relaxation.
 4. compiler-rt builtins, a small bare-metal libc and crt0; test apps (hello, isaloops, CoreMark) on gvm_cpu.
 5. Linux 5.17 `arch/gpuvm` (no MMU), `make ARCH=gpuvm LLVM=1`; then boot on gvm_cpu.
+- The user (22 October 2026): devices stay at the start of the address space below RAM (0x0001_0000-0x01ff_ffff), the
+  operations region high (0xf000_0000 up). The compiler knows the commit's copy and fill: a constant-size memcpy,
+  memmove or memset from a threshold up (a few KB: an operation ends the pass) is the operation inline (the descriptor
+  texel by st.q to 0xf000_0000, then sync), a small one 16-byte ld.q/st.q, an unknown size libc's (which chooses);
+  builtins for code that wants the hardware's (the kernel's ROM reads, page copies and clears).
 
 ## Numbers (RTX 5070 Laptop, fxc2, M RISC-V instructions of work a second)
 
