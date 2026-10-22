@@ -1,10 +1,11 @@
 #!/bin/bash
 # The userland toolchain for gpu_vm's Linux (gpu_vm/userland/README.md). Run in WSL.
 #
-#   build.sh [STEP ...]    steps, in order: musl builtins (default: both)
+#   build.sh [STEP ...]    steps, in order: musl mfloat builtins (default: all three)
 #     syscalls   bits/syscall.h.in again from the kernel's headers (gpu_vm/linux/build.sh headers first)
 #     musl       musl 1.2.5 from its tarball into $MUSL with the port (musl/) laid over it; libc.a, crt1.o, crti.o,
 #                crtn.o and the headers installed into $SYSROOT
+#     mfloat     $SYSROOT/lib/libmfloat.a: double math functions at float precision (musl/mfloat/README; -lmfloat)
 #     builtins   compiler-rt's generic builtins as $SYSROOT/lib/libclang_rt.builtins-gpuvm.a
 #
 # MUSL_CFLAGS (-O2) musl's optimization. SYSROOT (~/gpu_vm/sysroot), MUSL the tree musl is built in (~/gpu_vm/musl), DL the downloads (~/gpu_vm/dl),
@@ -27,7 +28,7 @@ TARGET=gpuvm-unknown-linux
 CC="$LLVM_BIN/clang --target=$TARGET"
 
 steps=("$@")
-[ ${#steps[@]} -gt 0 ] || steps=(musl builtins)
+[ ${#steps[@]} -gt 0 ] || steps=(musl mfloat builtins)
 
 syscalls() {
     # every __NR_ the kernel's asm/unistd.h defines for gpuvm, as a number
@@ -86,6 +87,17 @@ musl() {
     echo "musl: $(ls -la "$SYSROOT/lib/libc.a" | awk '{print $5}') bytes of libc.a in $SYSROOT/lib"
 }
 
+mfloat() {
+    local O; O=$(mktemp -d)
+    for f in "$HERE"/musl/mfloat/*.c; do
+        $CC -O2 ${GVM_PIC:--fPIE} -ffreestanding -nostdinc -isystem "$SYSROOT/include" -c "$f" -o "$O/$(basename "$f" .c).o"
+    done
+    rm -f "$SYSROOT/lib/libmfloat.a"
+    "$LLVM_BIN/llvm-ar" rcs "$SYSROOT/lib/libmfloat.a" "$O"/*.o
+    echo "mfloat: $(ls "$O" | wc -l) functions into $SYSROOT/lib/libmfloat.a"
+    rm -rf "$O"
+}
+
 builtins() {
     # compiler-rt's generic builtins (lib/builtins: the C files, none of an architecture's own): i64 division,
     # double and float in software (soft float's sf/df ops), conversions, i64 shifts and compares, __atomic_* for 8
@@ -116,6 +128,7 @@ for s in "${steps[@]}"; do
     case "$s" in
     syscalls) syscalls ;;
     musl) musl ;;
+    mfloat) mfloat ;;
     builtins) builtins ;;
     *) echo "build.sh: no step $s" >&2; exit 1 ;;
     esac
