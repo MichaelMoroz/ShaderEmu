@@ -100,16 +100,19 @@ static void fuzz_float(SxAsm& a, Rng& g, int n) {
         else a.fop(f, rd, ra, rb, rc);
     }
 }
+// a width's bytes (sx/isa.h), and a store's width for a load's (the unsigned forms are the signed ones' stores)
+static uint32_t wbytes(uint32_t wd) { static const uint32_t b[8] = {4, 8, 2, 1, 16, 0, 2, 1}; return b[wd & 7]; }
+static uint32_t wstore(uint32_t wd) { return wd == SX_W_BU ? SX_W_B : wd == SX_W_HU ? SX_W_H : wd; }
 static void fuzz_mem(SxAsm& a, Rng& g, int n, uint32_t window) {   // r29 is the window's base
+    static const uint32_t wds[7] = {SX_W_B, SX_W_H, SX_W_W, SX_W_D, SX_W_BU, SX_W_HU, SX_W_Q};
     for (int i = 0; i < n; i++) {
-        uint32_t rd = rreg(g), wd = g.below(7), by = wd == SX_W_D ? 8 : wd == SX_W_Q ? 16 : (wd & 1) ? 2 : (wd == 2 ? 4 : 1);
-        if (wd == SX_W_BU || wd == SX_W_HU) by = wd == SX_W_BU ? 1 : 2;
+        uint32_t rd = rreg(g), wd = wds[g.below(7)], by = wbytes(wd);
         uint32_t off = g.below(window - 16);
         if (g.below(3)) off &= ~(by - 1);   // mostly aligned: the fast path's
         if (by >= 8) rd = 5 + g.below(20);
         switch (g.below(5)) {
         case 0: case 1: a.ld(wd, rd, 29, (int32_t)off); break;
-        case 2: case 3: if (wd <= SX_W_D || wd == SX_W_Q) a.st(wd == SX_W_D || wd == SX_W_Q ? wd : (wd & 3), rd, 29, (int32_t)off); else a.ld(wd, rd, 29, (int32_t)off); break;
+        case 2: case 3: if (wd != SX_W_BU && wd != SX_W_HU) a.st(wd, rd, 29, (int32_t)off); else a.ld(wd, rd, 29, (int32_t)off); break;
         default: {   // an atomic on an aligned word
             a.li(30, (int32_t)(off & ~3u));
             a.add(30, 30, 29);
@@ -157,10 +160,10 @@ static std::vector<Case> cases() {
             seed_regs(a, g, false);
             a.li(29, (int32_t)DATA);
             for (int i = 0; i < 60; i++) {
-                uint32_t wd = g.below(6), by = (wd & 3) == 0 ? 1 : (wd & 3) == 1 ? 2 : 4;
-                if (wd == SX_W_D) { wd = SX_W_W; by = 4; }
+                static const uint32_t wds[6] = {SX_W_B, SX_W_H, SX_W_W, SX_W_W, SX_W_BU, SX_W_HU};
+                uint32_t wd = wds[g.below(6)], by = wbytes(wd);
                 uint32_t off = g.below(4096 - 4) & ~(by - 1), rd = rreg(g);
-                if (g.below(2)) a.ld(wd, rd, 29, (int32_t)off); else a.st(wd & 3, rd, 29, (int32_t)off);
+                if (g.below(2)) a.ld(wd, rd, 29, (int32_t)off); else a.st(wstore(wd), rd, 29, (int32_t)off);
                 if (g.below(2)) a.addi(rreg(g), rreg(g), rimm(g));
             }
         }
@@ -250,9 +253,9 @@ static std::vector<Case> cases() {
         for (int i = 0; i < 300; i++) {
             a.li(5, (int32_t)rval(g)); a.li(6, (int32_t)(g.below(2) ? rval(g) : 0));
             if (g.below(2)) a.mv(6, 5);
-            uint32_t cc = 1 + g.below(14);
+            uint32_t cc = SX_CC_BLTU + g.below(14);   // (2-15: every condition)
             int skip = a.label();
-            a.br(cc, 5, cc <= SX_CC_BGEU ? 6 : g.below(64), skip);
+            a.br(cc, 5, cc < SX_CC_BBS ? 6 : g.below(64), skip);
             a.addi(20, 20, 1); a.addi(21, 21, i);
             a.bind(skip);
             a.addi(22, 22, 3);
@@ -279,9 +282,9 @@ static std::vector<Case> cases() {
         for (int i = 0; i < 200; i++) {
             a.li(5, (int32_t)rval(g)); a.li(6, (int32_t)(g.below(2) ? rval(g) : 0));
             if (g.below(2)) a.mv(6, 5);
-            uint32_t cc = 1 + g.below(14);
+            uint32_t cc = SX_CC_BLTU + g.below(14);
             int skip = a.label();
-            uint32_t bfield = cc <= SX_CC_BGEU ? 6 : g.below(64);
+            uint32_t bfield = cc < SX_CC_BBS ? 6 : g.below(64);
             a.br(cc, 5, bfield, skip);
             a.addi(20, 20, 1);
             a.opi(SX_I_XOR, 21, 21, (int32_t)i);
@@ -332,7 +335,7 @@ static std::vector<Case> cases() {
         a.bind(go);
         a.li(6, 1); a.x(SX_X_SYSCALL); a.addi(6, 6, 10);
         a.x(SX_X_SYSCALL);
-        a.put(0x3fu << 0 | 0); a.addi(7, 7, 1);              // opc 0x3f: illegal
+        a.put(0x3fu << SX_OPC_SHIFT); a.addi(7, 7, 1);      // opc 0x3f: illegal
         a.li(8, 0x7000000); a.lw(9, 8, 0); a.addi(10, 10, 1); // a load past RAM's end
         a.li(8, 0x100); a.sw(9, 8, 0);                        // a store to the boot area
         a.li(11, 1); a.mtsr(SX_SR_TCMP_LO, 11); a.li(11, 2); a.mtsr(SX_SR_IEN, 11);
@@ -384,7 +387,7 @@ static std::vector<Case> cases() {
                 case 2: a.lw(rreg(g), 30, 4 * (int32_t)g.below(64)); break;
                 case 3: {   // bytes, halves, words, aligned
                     static const uint32_t wds[] = {SX_W_B, SX_W_H, SX_W_W, SX_W_BU, SX_W_HU};
-                    uint32_t wd = wds[g.below(5)], by = wd == SX_W_W ? 4 : (wd & 1) ? 2 : 1;
+                    uint32_t wd = wds[g.below(5)], by = wbytes(wd);
                     a.ld(wd, rreg(g), 29, (int32_t)(g.below(4000) & ~(by - 1)));
                     break;
                 }
@@ -569,7 +572,7 @@ static Prepared prepare(const Case& cs, uint32_t seed) {
     }
     for (auto& d : data) pr.ramImg[d.first / 4] = d.second;
     // a trap nobody asked for halts the core where its handler would be: {break} at HALT_STUB
-    pr.ramImg[HALT_STUB / 4] = SX_X_BREAK; pr.ramImg[HALT_STUB / 4 + 3] = SX_CTRL_NONE | 1;
+    pr.ramImg[HALT_STUB / 4] = SX_WORD_R(SX_X_BREAK, 0u, 0u, 0u, 0u); pr.ramImg[HALT_STUB / 4 + 3] = SX_CTRL_NONE | 1u << 3 | SX_PATH_GENERAL;
     pr.state.assign(cs.cores, std::vector<uint32_t>((size_t)(24 + g_wcn / 2 + 8) * 4, 0));
     for (uint32_t c = 0; c < cs.cores; c++) {
         pr.state[c][16 * 4 + 0] = pr.bases[c];

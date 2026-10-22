@@ -7,108 +7,123 @@
 // the control word names), word 3 the control word.
 #define SX_BUNDLE 16u
 
-// Control word: n (ops, 0-2; 3 is illegal), whether word 2 is a long immediate and whose, the path (which of the
-// tick's bodies runs the bundle: the assembler's, and trusted), cc, then by cc. Its branch compares the registers
-// as they were when this run of the bundle began (before its ops; after a pass that ended inside it, where it
-// goes on).
-#define SX_N(w) ((w) & 3u)
-#define SX_LONG0(w) (((w) >> 2) & 1u)       // word 2 is op 0's long immediate
-#define SX_LONG1(w) (((w) >> 3) & 1u)       // op 1's (both bits set: illegal)
-#define SX_PATH(w) (((w) >> 4) & 7u)
+// Control word (x15's encoding, 22 October 2026; sx/tick/steps/README.md, "x15"): the path at the bottom (one mask),
+// n, whose immediate word 2 is, cc as fields, the compared register, a branch's offset, and the other register or
+// imm6 at the top (one shift).
+// Its branch compares the registers as they were when this run of the bundle began (before its ops; after a pass
+// that ended inside it, where it goes on). A control word of 0 is cc 0, sub 0: illegal (and path 0).
+#define SX_PATH(w) ((w) & 7u)
+#define SX_N(w) (((w) >> 3) & 3u)            // ops, 0-2 (3 is illegal)
+#define SX_LONG0(w) (((w) >> 5) & 1u)       // word 2 is op 0's long immediate
+#define SX_LONG1(w) (((w) >> 6) & 1u)       // op 1's (both bits set: illegal)
 #define SX_CC(w) (((w) >> 7) & 15u)
+#define SX_CRA(w) (((w) >> 11) & 63u)        // a branch's compared register (addbnz: the counted one)
+#define SX_OFF9(w) ((int)((w) << 6) >> 23)   // a branch's offset, in bundles (+-4 KB)
+#define SX_CRB(w) ((w) >> 26)                // the other register, or imm6
+#define SX_CIMM6(w) ((int)(w) >> 26)         // the rb field as a signed imm6 (every immediate form, addbnz)
 #define SX_SUB(w) (((w) >> 11) & 7u)         // cc 0
-#define SX_CRS(w) (((w) >> 14) & 63u)        // cc 0, jr and callr: the register
-#define SX_CRA(w) (((w) >> 11) & 63u)        // cc 1-14: the compared register
-#define SX_CRB(w) (((w) >> 17) & 63u)        // cc 1-8: the other register; 9-14: imm6
-#define SX_OFF9(w) ((int)(w) >> 23)          // in bundles (a branch: +-4 KB)
-#define SX_OFF18(w) ((int)(w) >> 14)         // in bundles (j, call: +-2 MB)
-#define SX_CIMM12(w) ((int)(w) >> 20)        // cc 0, sub add: the step added to rs
-#define SX_CIMM6(w) ((int)((w) << 9) >> 26)  // cc 9-15: the rb field as a signed imm6
-// The paths: which ops a bundle has, so which body of the tick runs it. "Lite" is the integer functions 0-10;
-// "float lite" the float functions 0-7 (sums, products, min, max).
-#define SX_PATH_GENERAL 0u                   // anything: the general step
-// Memory ops here are loads and stores of bytes, halves and words. In paths 3 and 5 op 1 reads no register op 0
+#define SX_CRS(w) (((w) >> 14) & 63u)        // cc 0: jr's, callr's and the add's register
+#define SX_OFF18(w) ((int)(w) >> 14)         // cc 0: j's and call's offset, in bundles (+-2 MB)
+#define SX_CIMM12(w) ((int)(w) >> 20)        // cc 0: the add's step
+// The paths: which ops a bundle has, so which body of the tick runs it (the assembler's, and trusted). Paths 3-7 are
+// the fast loop's (path >= 3); in 4-7 bit 0 says two memory ops and bit 1 a store among them. "Mid" is the integer
+// functions 0-19, "lite" 0-7 and 16-18 (sums, logic, the three shifts), "float lite" the float functions 0-7.
+// Memory ops here are loads and stores of bytes, halves and words. In paths 5 and 7 op 1 reads no register op 0
 // writes (the assembler opens a bundle for it), so both ops' addresses and values are known when the bundle starts.
-// An empty slot is a word of 0. A bundle whose control word is jr, callr, call or eret is the general step's (path 0). (Renumbered 22 October 2026, step x14: steps x1-x13 ran the numbering before.)
-#define SX_PATH_INT 1u                       // op 0 an integer op 0-23, op 1 lite
-#define SX_PATH_LOAD 2u                      // op 0 a load, op 1 lite
-#define SX_PATH_LOAD2 3u                     // both loads
-#define SX_PATH_STORE 4u                     // op 0 a store, op 1 lite
-#define SX_PATH_MEM2 5u                      // two memory ops, a store among them
-#define SX_PATH_FLOAT 6u                     // op 0 a float op, op 1 lite or float lite
-#define SX_PATH_MEMF 7u                      // op 0 a memory op, op 1 float lite
+// An empty slot is a word of 0. A bundle whose control word is cc 0 (jr, callr, call, eret, a far j, the add) is the
+// general step's (path 0).
+#define SX_PATH_GENERAL 0u                   // anything: the general step
+#define SX_PATH_ALU 1u                       // op 0 an integer op 0-23 or a float op, op 1 lite or float lite
+#define SX_PATH_MEMF 2u                      // op 0 a memory op, op 1 float lite
+#define SX_PATH_INT 3u                       // op 0 mid, op 1 lite
+#define SX_PATH_LOAD 4u                      // op 0 a load, op 1 lite
+#define SX_PATH_LOAD2 5u                     // both loads
+#define SX_PATH_STORE 6u                     // op 0 a store, op 1 lite
+#define SX_PATH_MEM2 7u                      // op 0 a store, op 1 a load or a store (a load's store after it: two bundles)
+#define SX_PATH_FAST 3u                      // the first of the fast loop's
+// cc's bits (7-10): 0 the inverse; 1 less; 2 with 1 signed, without it equal; 3 against imm6 (the rb field, signed:
+// the unsigned forms compare with it sign-extended). Neither 1 nor 2: special (cc 0) or addbnz, and with imm6 a bit's
+// test (bit imm6 & 31 of ra).
 #define SX_CC_SPECIAL 0u
+// ra += imm6 (the rb field, signed), from ra as the bundle found it, after the ops; taken when the sum is not 0. A
+// counted loop's decrement and branch in one (bdnz): `addi ra, ra, -1; bnei ra, 0` of the new value. An op of the
+// same bundle that writes ra: undefined (the add wins). ra 0 is illegal.
+#define SX_CC_ADDBNZ 1u
+#define SX_CC_BLTU 2u
+#define SX_CC_BGEU 3u
+#define SX_CC_BEQ 4u      // beq r0, r0: a near j (its path the ops')
+#define SX_CC_BNE 5u      // bne r0, r0: falls through (SX_CTRL_NONE)
+#define SX_CC_BLT 6u
+#define SX_CC_BGE 7u
+#define SX_CC_BBS 8u      // bit imm6[4:0] of ra set
+#define SX_CC_BBC 9u
+#define SX_CC_BLTUI 10u
+#define SX_CC_BGEUI 11u
+#define SX_CC_BEQI 12u
+#define SX_CC_BNEI 13u
+#define SX_CC_BLTI 14u
+#define SX_CC_BGEI 15u
 #define SX_SUB_ILLEGAL 0u
 #define SX_SUB_NONE 1u
 #define SX_SUB_JR 2u
 #define SX_SUB_CALLR 3u
 #define SX_SUB_ERET 4u
-#define SX_SUB_J 5u
+#define SX_SUB_J 5u       // the far j (+-2 MB); a near one is beq r0, r0
 #define SX_SUB_CALL 6u
 // The control word's add (fused, 22 October 2026): rs += imm12 (SX_CRS, SX_CIMM12) after the bundle's ops, from rs as
 // the bundle found it, and the bundle falls through. A pointer's post-increment, a counter, a stack's adjustment in a
 // bundle that does not branch, for no op slot. An op of the same bundle that writes rs: undefined (the add wins). rs 0
-// is illegal (the tick does not look: it trusts the assembler).
+// is illegal. (cc 0 since x15: the general step's.)
 #define SX_SUB_ADD 7u
-#define SX_CC_BEQ 1u
-#define SX_CC_BNE 2u
-#define SX_CC_BLT 3u
-#define SX_CC_BGE 4u
-#define SX_CC_BLTU 5u
-#define SX_CC_BGEU 6u
-#define SX_CC_BBS 7u      // bit rb[4:0] of ra set (rb field is the bit's number)
-#define SX_CC_BBC 8u
-#define SX_CC_BEQI 9u     // rb field: imm6, signed (unsigned for bltui and bgeui)
-#define SX_CC_BNEI 10u
-#define SX_CC_BLTI 11u
-#define SX_CC_BGEI 12u
-#define SX_CC_BLTUI 13u
-#define SX_CC_BGEUI 14u
-// ra += imm6 (the rb field, signed), from ra as the bundle found it, after the ops; taken when the sum is not 0. A
-// counted loop's decrement and branch in one (bdnz): `addi ra, ra, -1; bnei ra, 0` of the new value. An op of the
-// same bundle that writes ra: undefined (the add wins). ra 0 is illegal.
-#define SX_CC_ADDBNZ 15u
-// the control word of a bundle that only falls through
-#define SX_CTRL_NONE (SX_SUB_NONE << 11)
+// the control word of a bundle that only falls through (bne r0, r0), a near j's (beq r0, r0; the offset at 17), cc 0's
+#define SX_CTRL_NONE (SX_CC_BNE << 7)
+#define SX_CTRL_J (SX_CC_BEQ << 7)
+#define SX_CTRL_SPECIAL(sub) ((sub) << 11)
 
-// Op word: opc, rd, ra, then rb and rc (R form) or imm12 (I form). The op the control word names takes word 2 as
-// its immediate (the long form), and its own imm12 is ignored.
-#define SX_OPC(w) ((w) & 255u)
-#define SX_RD(w) (((w) >> 8) & 63u)
-#define SX_RA(w) (((w) >> 14) & 63u)
-#define SX_RB(w) (((w) >> 20) & 63u)
-#define SX_RC(w) ((w) >> 26)
+// Op word (x15): ra at the bottom and rb at the top (one op each), rd, opc, then rc (R form) or imm12 over rc and rb
+// (I form). The op the control word names takes word 2 as its immediate (the long form), and its own imm12 is
+// ignored. An indexed memory op's shift is rc's low 5 bits (w >> 20, as a shift takes them).
+#define SX_RA(w) ((w) & 63u)
+#define SX_RD(w) (((w) >> 6) & 63u)
+#define SX_OPC_SHIFT 12u
+#define SX_OPC(w) (((w) >> 12) & 255u)
+#define SX_RC(w) (((w) >> 20) & 63u)
+#define SX_RB(w) ((w) >> 26)
 #define SX_IMM12(w) ((int)(w) >> 20)
+#define SX_WORD_R(opc, rd, ra, rb, rc) ((opc) << 12 | ((rd) & 63u) << 6 | ((ra) & 63u) | ((rc) & 63u) << 20 | ((rb) & 63u) << 26)
+#define SX_WORD_I(opc, rd, ra, imm12) ((opc) << 12 | ((rd) & 63u) << 6 | ((ra) & 63u) | ((imm12) & 0xfffu) << 20)
 #define SX_CLASS(opc) ((opc) >> 6)            // 0 extended, 1 integer, 2 memory, 3 float
 #define SX_IFORM(opc) (((opc) >> 5) & 1u)     // integer and float classes: the I form
 
-// ---- Integer class: 0x40 + f (R form), 0x60 + f (I form). Numbered for a tree of selects (sx/tick/steps):
-// f[4:3] the group; in 0-7, f[1:0] sum, and, or, xor and f[2] the other operand inverted (sub, andn, orn, xnor);
-// in 16-23, f[0] unsigned, f[1] the operands swapped (gt), f[2] min or max instead of the comparison.
+// ---- Integer class: 0x40 + f (R form), 0x60 + f (I form). Numbered for a tree of selects (x15): f[4:3] the
+// group; in 0-7, f[1:0] sum, and, or, xor and f[2] the other operand inverted (sub, andn, orn, xnor; the I form's sub
+// is ra - imm); in 8-15, f[0] unsigned, f[1] min or max instead of the comparison, f[2] the comparison inverted (sge,
+// max); 16-23 the shifts, mul, the rotates and equality. 0-19 are "mid" (the fast loop's op 0), 0-7 and 16-18 "lite".
 #define SX_I_ADD 0u
 #define SX_I_AND 1u
 #define SX_I_OR 2u
 #define SX_I_XOR 3u
-#define SX_I_SUB 4u       // I form: rsub, imm - ra
+#define SX_I_SUB 4u
 #define SX_I_ANDN 5u
 #define SX_I_ORN 6u
 #define SX_I_XNOR 7u
-#define SX_I_SLL 8u
-#define SX_I_SRL 9u
-#define SX_I_SRA 10u
-#define SX_I_ROR 11u
-#define SX_I_ROL 12u
-#define SX_I_MUL 13u
-#define SX_I_SEQ 14u
-#define SX_I_SNE 15u
-#define SX_I_SLT 16u
-#define SX_I_SLTU 17u
-#define SX_I_SGT 18u
-#define SX_I_SGTU 19u
-#define SX_I_MIN 20u
-#define SX_I_MINU 21u
-#define SX_I_MAX 22u
-#define SX_I_MAXU 23u
+#define SX_I_SLT 8u
+#define SX_I_SLTU 9u
+#define SX_I_MIN 10u
+#define SX_I_MINU 11u
+#define SX_I_SGE 12u
+#define SX_I_SGEU 13u
+#define SX_I_MAX 14u
+#define SX_I_MAXU 15u
+#define SX_I_SLL 16u
+#define SX_I_SRL 17u
+#define SX_I_SRA 18u
+#define SX_I_MUL 19u
+#define SX_I_ROR 20u
+#define SX_I_ROL 21u
+#define SX_I_SEQ 22u
+#define SX_I_SNE 23u
+#define SX_I_MID_LAST 19u      // 0-19: the fast loop's op 0
 #define SX_I_COMMON_LAST 23u   // 0-23 in both forms
 #define SX_I_SHADD 24u    // R: ra + (rb << rc), rc the shift itself
 #define SX_I_SEL 25u      // R: x[rc] != 0 ? ra : rb
@@ -127,13 +142,15 @@
 #define SX_M_STOREX 3u
 #define SX_M_AMO 4u       // [ra], operand rb
 #define SX_M_AMO2 5u
-#define SX_W_B 0u
-#define SX_W_H 1u
-#define SX_W_W 2u
-#define SX_W_D 3u         // rd, rd + 1
-#define SX_W_BU 4u
-#define SX_W_HU 5u
-#define SX_W_Q 6u         // rd .. rd + 3
+// widths (x15): bits 1:0 the size (w, d, h, b: a byte or half is extended by a shift of 8 times them), bit 2
+// unsigned (w's is q; 5 is illegal)
+#define SX_W_W 0u
+#define SX_W_D 1u         // rd, rd + 1
+#define SX_W_H 2u
+#define SX_W_B 3u
+#define SX_W_Q 4u         // rd .. rd + 3
+#define SX_W_HU 6u
+#define SX_W_BU 7u
 #define SX_AMO_SWAP 0u
 #define SX_AMO_ADD 1u
 #define SX_AMO_AND 2u
@@ -270,8 +287,8 @@
 #define R_SX_REL32 2
 #define R_SX_IMM32 3      // an op's long immediate: S + A
 #define R_SX_PCIMM32 4    // lpc's long immediate: S + A - the bundle
-#define R_SX_BR9 5        // control word [31:23]: (S + A - the bundle) / 16
-#define R_SX_J18 6        // control word [31:14]
+#define R_SX_BR9 5        // control word [25:17]: (S + A - the bundle) / 16
+#define R_SX_J18 6        // control word [31:14] (cc 0: the far j, call)
 #define R_SX_IMM12 7      // op word [31:20]: S + A, which must fit
 #define R_SX_TPREL32 8    // a long immediate: S + A, from the thread pointer
 #define R_SX_RELATIVE 9

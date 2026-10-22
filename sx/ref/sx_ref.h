@@ -314,8 +314,8 @@ static uint32_t sx__int(uint32_t f, uint32_t a, uint32_t b) {
     case SX_I_SLTU: return a < b;
     case SX_I_SEQ: return a == b;
     case SX_I_SNE: return a != b;
-    case SX_I_SGT: return (int32_t)a > (int32_t)b;
-    case SX_I_SGTU: return a > b;
+    case SX_I_SGE: return (int32_t)a >= (int32_t)b;
+    case SX_I_SGEU: return a >= b;
     case SX_I_MIN: return (int32_t)a < (int32_t)b ? a : b;
     case SX_I_MAX: return (int32_t)a > (int32_t)b ? a : b;
     case SX_I_MINU: return a < b ? a : b;
@@ -376,12 +376,12 @@ static int sx__op(sx_machine *m, sx_core *c, uint32_t base, uint32_t s, const ui
         }
         if (f == SX_I_BFE) { sx__set(c, rd, sx__bfe(a, imm)); return SX__GO; }
         if (f > SX_I_COMMON_LAST) break;
-        sx__set(c, rd, f == SX_I_SUB ? imm - a : sx__int(f, a, imm));
+        sx__set(c, rd, sx__int(f, a, imm));   // (sub: ra - imm, since x15)
         return SX__GO;
     }
     case 2: {   // memory
         uint32_t mode = (opc >> 3) & 7, wd = opc & 7;
-        static const uint32_t bytes_of[8] = {1, 2, 4, 8, 1, 2, 16, 0};
+        static const uint32_t bytes_of[8] = {4, 8, 2, 1, 16, 0, 2, 1};   // by SX_W_* (x15)
         if (mode <= 3) {
             uint32_t by = bytes_of[wd];
             if (!by) break;
@@ -491,8 +491,8 @@ static int sx__cond(uint32_t cc, uint32_t a, uint32_t bf, uint32_t b) {
     case SX_CC_BNEI: return (int32_t)a != i6;
     case SX_CC_BLTI: return (int32_t)a < i6;
     case SX_CC_BGEI: return (int32_t)a >= i6;
-    case SX_CC_BLTUI: return a < bf;
-    case SX_CC_BGEUI: return a >= bf;
+    case SX_CC_BLTUI: return a < (uint32_t)i6;   // imm6 sign-extended (x15)
+    case SX_CC_BGEUI: return a >= (uint32_t)i6;
     }
     return 0;
 }
@@ -508,7 +508,7 @@ int sx_bundle(sx_machine *m, sx_core *c) {
     // the branch's registers as this run of the bundle begins
     uint32_t ca0 = c->x[SX_CRA(ctl)], cb0 = c->x[SX_CRB(ctl)], cs0 = c->x[SX_CRS(ctl)];
     for (; s < n; s++) {
-        int lu = 0, r = sx__op(m, c, base, s, t, n, ((ctl >> (2 + s)) & 1) != 0, &lu, &end);
+        int lu = 0, r = sx__op(m, c, base, s, t, n, (s == 0 ? SX_LONG0(ctl) : SX_LONG1(ctl)) != 0, &lu, &end);
         if (r == SX__TRAPPED) return SX_END_BUDGET;
         if (r == SX__END) {
             // the pass ends inside the bundle: pc is where it goes on (past n: the control word)

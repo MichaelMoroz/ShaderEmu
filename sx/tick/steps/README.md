@@ -181,3 +181,44 @@ know both slots before writing either (no undo; a write cache entry past the end
 | x14, loops as before | 15.47 | 9.37 | 7.85 | 14.55 | 14.55 | 13.17 | 11.60 | 1.79 |
 | x14, loops ending in addbnz (`--fused 1`) | 15.42 | 10.26 | 8.39 | 16.58 | 14.52 | 13.15 | 15.21 | 1.93 |
 | two times the lean tick | 16.5 | 11.4 | 9.8 | 16.4 | 14.6 | 14.4 | 12.7 | 2 |
+
+## x15: the encoding cut for the fast loop's decode (22 October 2026)
+
+`sx/isa.h` changed again (x14 and the steps before it read the old encoding and no longer compile or pass). DXBC an
+executed trip of the fast loop, counted from fxc2's listing (`dxbc.py --list`):
+
+| Trip | x14 | x15 |
+|---|---|---|
+| integer (path 3: op 0 mid, op 1 lite) | 199 | 150 |
+| loads (paths 4, 5: one load and lite, or two loads) | 229 | 188 |
+| stores (paths 6, 7: a store and lite, or a store and a load or store) | 280 | 226 |
+
+What changed, and what each saved (in an integer trip unless said):
+
+- **The control word's path at the bottom** (`ctl & 7`), the fast loop's paths 3-7 (`path >= 3`: two DXBC where
+  x14's `- 1 < 5` took four); in 4-7 bit 0 is "two memory ops", bit 1 "a store". 0 general, 1 ALU (the whole integer
+  unit or a float op, op 1 lite or float lite: the full step's), 2 memory and float lite. A control word of 0 is
+  still illegal (path 0, cc 0 sub 0).
+- **cc as fields** (bits 7-10): the inverse, less, signed (with less) or equal (without), against imm6. Neither less
+  nor equal: cc 0 is special (sub, the general step's), cc 1 addbnz (taken when the sum is not 0: its "sum is 0"
+  inverted), with imm6 bbs and bbc. The test has no `cc - 1`, no special or addbnz compare: 22 DXBC where x14 took 37.
+  bltui and bgeui compare with imm6 sign-extended.
+- **One offset field**: a near j is beq r0, r0 (its path the ops'), so the fast loop has no j and no select between
+  two offsets. A j past +-4 KB is cc 0's far j (path 0); the assembler chooses in `finish()`. The control word's add
+  (cc 0 sub 7) is path 0 too (x14's fast loop did not make it).
+- **Fields placed for one op each**: in the op word ra at the bottom and rb at the top (imm12 over rc and rb, as
+  before), rd and opc between; an indexed op's shift is `w >> 20`'s low 5 bits. In the control word cb (and imm6) at
+  the top, the offset at 17-25, n at 3-4 summed as `ctl & 0x18` and shifted once a fast run (-6 together).
+- **No rsub**: the I form's sub is ra - imm; sub is x + ~y + 1 (-5 over both units).
+- **A mid unit for op 0**: integer functions renumbered so that 0-19 (sums, logic, slt, sltu, min, max, sge, sgeu,
+  the shifts, mul) are one tree of selects and the fast loop's op 0 is that; ror, rol, seq and sne (20-23) are path 1,
+  the full step's. sgt and sgtu are gone (sge and sgeu; sgt is slt with the operands swapped). Lite is 0-7 and 16-18.
+  -12 (`x15full`, the whole unit in the fast loop, is 162).
+- **Widths** whose low two bits times 8 are the extension's shift (w 0, d 1, h 2, b 3, q 4, hu 6, bu 7): two DXBC
+  where x14's table shift took four, a memory op.
+- **Path 7's op 0 is a store** (a load before a store opens a bundle): the store path makes no op 0 result and no
+  select on op 0's kind (-16 a store trip).
+
+Checked on WARP (`--fused 1` with addbnz, and without; seeds 1, 2, 3, 5, 7, 11, 99, 12345): memw, spillw, ints, conds,
+float, fpaths, sfu, the seven loops and addbnz the same as the reference. int, mem, spill, branch, trap, ops, cores and
+fused have ops of path 0 (the general step is a halt here, as in x14). Not timed on the card (`variants/x15.txt`).
