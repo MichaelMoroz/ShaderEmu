@@ -1200,8 +1200,14 @@ int hlglOpen(unsigned int nano_x_window) {
     blocks[block_count].at = (uint32_t)(main_part - pool), blocks[block_count].size = main_size, blocks[block_count].owner = -1;
     block_count++;
     // every page written once here, so that a worker core's first store to one does not stop it
+#ifdef __gpuvm__
+    for (uint8_t* at = main_part; at < main_part + main_size; at += 4096) __asm__ volatile("amoor zero, zero, (%0)" : : "r"(at) : "memory");
+    for (unsigned at = 0; spare && at < spare_size; at += 4096) __asm__ volatile("amoor zero, zero, (%0)" : : "r"(spare + at) : "memory");
+#else
     for (uint8_t* at = main_part; at < main_part + main_size; at += 4096) __asm__ volatile("amoor.w zero, zero, (%0)" : : "r"(at) : "memory");
     for (unsigned at = 0; spare && at < spare_size; at += 4096) __asm__ volatile("amoor.w zero, zero, (%0)" : : "r"(spare + at) : "memory");
+#endif
+
     // workers for the studio models: the program's text read and the frames' sets written here first
     const char* want = getenv("HLGL_WORKERS");
     workers = mcw_open(want ? atoi(want) : 46);

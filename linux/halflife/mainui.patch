@@ -380,3 +380,17 @@ index 0000000..148fb92
 +}
 +
 +ADD_MENU( menu_readme, CMenuReadme, UI_Readme_Menu );
+diff --git a/sdk_includes/public/build.h b/sdk_includes/public/build.h
+index b92c51e..e85baf7 100644
+--- a/sdk_includes/public/build.h
++++ b/sdk_includes/public/build.h
+@@ -244,6 +244,9 @@ Then you can use another oneliner to query all variables:
+ 	#else // __SOFTFP__
+ 		#define XASH_ARM_HARDFP 1
+ 	#endif // __SOFTFP__
++#elif defined __gpuvm__ // gpu_vm: floats in integer registers, as the RISC-V machine's build (the same library names)
++	#define XASH_RISCV 1
++	#define XASH_RISCV_SOFTFP 1
+ #elif defined __riscv
+ 	#define XASH_RISCV 1
+ 

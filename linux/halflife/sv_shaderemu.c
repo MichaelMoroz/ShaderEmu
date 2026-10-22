@@ -38,9 +38,16 @@ static int mode = -1, worker, helpers, helper[8], out, inbox_loopback;	// mode 2
 static double skipped, given_frametime;	// the host's time while none was given; what the frame out covers
 
 uint32_t se_call_on_stack( uint32_t ( *fn )( uint32_t ), uint32_t arg, void *stack_top );
+#ifdef __gpuvm__
+// (gpu_vm: the same, callr for jalr; a bundle on 16 bytes)
+__asm__( ".text\n.globl se_call_on_stack\n.type se_call_on_stack, @function\n.p2align 4\nse_call_on_stack:\n"
+	"	addi a2, a2, -16\n	sw ra, 12(a2)\n	sw sp, 8(a2)\n	mv sp, a2\n	mv t0, a0\n	mv a0, a1\n	callr t0\n"
+	"	lw ra, 12(sp)\n	lw sp, 8(sp)\n	ret\n" );
+#else
 __asm__( ".text\n.globl se_call_on_stack\n.type se_call_on_stack, @function\nse_call_on_stack:\n"
 	"	addi a2, a2, -16\n	sw ra, 12(a2)\n	sw sp, 8(a2)\n	mv sp, a2\n	mv t0, a0\n	mv a0, a1\n	jalr t0\n"
 	"	lw ra, 12(sp)\n	lw sp, 8(sp)\n	ret\n" );
+#endif
 
 static void setup( void )
 {
