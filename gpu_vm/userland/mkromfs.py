@@ -28,8 +28,9 @@ def parse(path):
         parent, _, leaf = p.rstrip('/').rpartition('/')
         node.name = leaf
         node_at(parent).children[leaf] = node
-    for line in open(path):
-        w = line.split()
+    for line in open(path, encoding='utf-8'):
+        # (a line with a tab is split at tabs only: names with spaces, as the image's "Big Buck Bunny.avi")
+        w = line.rstrip('\n').split(chr(9)) if chr(9) in line else line.split()
         if not w or w[0].startswith('#'):
             continue
         if w[0] == 'dir':

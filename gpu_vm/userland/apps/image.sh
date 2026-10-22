@@ -25,9 +25,15 @@ import os, sys
 base, apps, data = sys.argv[1], sys.argv[2], sys.argv[3] == '1'
 extra = sys.argv[4:]
 lines, have, dirs = [], set(), set()
+# (a program of both, rootfs.sh's and build.sh's, is build.sh's: QuickJS's newer qjs)
+ours = set()
+for dp, dn, fn in os.walk(apps):
+    rel = os.path.relpath(dp, apps).replace(os.sep, '/')
+    for n in fn: ours.add(('' if rel == '.' else '/' + rel) + '/' + n)
 for line in open(base):
     f = line.split()
     if not f: continue
+    if f[0] in ('file', 'slink') and f[1] in ours: continue
     lines.append(line.rstrip('\n'))
     if f[0] in ('file', 'slink', 'nod', 'dir'): have.add(f[1])
     if f[0] == 'dir': dirs.add(f[1])
@@ -48,12 +54,13 @@ def walk(top, programs):
         for n in sorted(fn):
             src = os.path.join(dp, n); p = rel + '/' + n
             if p in have or n.endswith('.gdb') or n.endswith('.romlink'): continue
+            sep = chr(9) if ' ' in p or ' ' in src else ' '
             if os.path.islink(src):
-                add_dir(rel or '/'); lines.append('slink %s %s 0777 0 0' % (p, os.readlink(src))); have.add(p); continue
+                add_dir(rel or '/'); lines.append(sep.join(('slink', p, os.readlink(src), '0777', '0', '0'))); have.add(p); continue
             if not programs and is_program(src): continue
             add_dir(rel or '/')
             mode = '0755' if os.access(src, os.X_OK) or is_program(src) else '0644'
-            lines.append('file %s %s %s 0 0' % (p, src, mode)); have.add(p)
+            lines.append(sep.join(('file', p, src, mode, '0', '0'))); have.add(p)
 walk(apps, True)
 if data:
     for top in extra: walk(top, False)
