@@ -83,8 +83,7 @@ At **0x016b8280** (`docs/machine/console.md`, "Words in memory"), plain memory r
 
 The initramfs (`initramfs/`): `/dev/console` and a first `/init` (`init.S`, made flat with no relocations by
 `mkflat.py`) that prints a line and writes back every line typed. On 22 October 2026 the boot reaches it:
-`Run /init as init process`, its line, and a typed line back (the tty's echo, then init's), about 70 million bundles
-to `/init`.
+`Run /init as init process`, its line, and a typed line back (the tty's echo, then init's).
 
 ## State (22 October 2026)
 
