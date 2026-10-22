@@ -38,6 +38,9 @@ export GVM_LDLIBS=${GVM_LDLIBS:-}
 mkdir -p "$WORK/bin" "$WORK/src"
 # musl's sources, which some builds compile for the host (imgui's font atlas: qsort)
 [ -e "$WORK/src/musl" ] || ln -s "$HOME/gpu_vm/musl" "$WORK/src/musl"
+# the RISC-V kernel build's host tools (bison, m4, flex: linux/ports' at and iproute2 run them)
+[ -e "$WORK/tools" ] || [ ! -d "$HOME/nm/work/tools" ] || ln -s "$HOME/nm/work/tools" "$WORK/tools"
+export PATH="$PATH:$WORK/tools/usr/bin"
 
 # the shared filter of compiler options: gcc's and RISC-V's that clang or gpu_vm has no use for
 cat > "$WORK/bin/gvm-filter" <<'EOF'
