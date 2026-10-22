@@ -10,6 +10,7 @@
 #define _POSIX_C_SOURCE 200809L
 #define GVM_REF_IMPL
 #include "../ref/gvm_ref.h"
+#include "../platform/worker_fw.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -27,7 +28,7 @@
 #define host_read_fd read
 #endif
 
-#define CPU_MAX_CORES 64
+#define CPU_MAX_CORES 256   // core 0 and 255 workers, as the RISC-V machine (gpu_vm/platform.md)
 
 // exit codes of gvm_cpu itself (a program's exit is its own code)
 #define EXIT_USAGE 1      // bad options, a file that cannot be loaded
@@ -55,6 +56,10 @@ static struct {
     // the trace: what the bundle being traced found, to print what it wrote
     int tr_open;
     uint32_t tr_core, tr_x[64];
+    // the devices (gpu_vm/platform.md): the control words a host gives each pass, on with --dtb or --devices
+    int devices, desktop;
+    uint32_t workers;            // worker cores started (1 to workers), by the geometry's control words
+    uint8_t end[CPU_MAX_CORES];  // why each core's last pass ended (GVM_END_*)
 } H;
 
 static void out_flush(void) { fflush(stdout); fflush(stderr); }
@@ -526,6 +531,197 @@ static void setup_stack(gvm_core *c, int argc, char **argv) {
     H.heap_start = heap;   // (place() moved it past the arguments)
 }
 
+// ---- The devices and the workers (gpu_vm/platform.md): the RISC-V machine's control words at 0x01000000 (its
+// 0x87000000 less 0x86000000), given as rvc_cpu's control pass gives them; the worker cores started at the firmware
+// (gpu_vm/platform/worker.S) when the kernel lays them out
+#define CTRL 0x01000000u
+#define STATS_ALL 0x016ba000u   // every core's count, then a texel for every 32 cores: which run, which sleep
+#define W(a) H.m.ram[(a) >> 2]
+
+static void worker_start(uint32_t i) {
+    gvm_core *k = &H.cores[i];
+    gvm_core_reset(k, i, GVM_FW_ENTRY);
+    k->host_trap = host_trap;
+    k->host_step = host_step;
+    k->host_access = H.cores[0].host_access;
+    k->host = &H;
+    k->x[5] = i;
+}
+
+// The geometry's words (CTRL + 0x3d0: bit 0 while it is laid out anew, how many workers, their size) say which
+// cores are workers: those are started at the firmware, the others halted. Then what each core ran.
+static void workers_pass(void) {
+    if (H.ncores < 2) return;
+    uint32_t shaping = W(CTRL + 0x3d0) & 1, there = W(CTRL + 0x3d4), bits = W(CTRL + 0x3d8), want = 0;
+    if (!shaping && bits >= 3 && bits <= 6) want = there < H.ncores - 1 ? there : H.ncores - 1;
+    if (want != H.workers) {
+        for (uint32_t i = 1; i < H.ncores; i++) {
+            if (i <= want && i > H.workers) worker_start(i);
+            if (i > want) H.cores[i].halted = 1;
+        }
+        H.workers = want;
+    }
+    if (!H.devices) return;
+    uint32_t running[8] = {1}, asleep[8] = {0};
+    for (uint32_t i = 0; i < H.ncores; i++) {
+        uint32_t count = (uint32_t)H.cores[i].ops_run;
+        W(STATS_ALL + 4 * i) = count;
+        if (i < 16) W(CTRL + 0x380 + 4 * i) = count;
+        if (i == 0 || i > H.workers) continue;
+        uint32_t pc = H.cores[i].pc;
+        int parked = pc >= GVM_FW_PARK && pc < GVM_FW_PARK_END;
+        running[i / 32] |= (parked ? 0u : 1u) << (i % 32);
+        asleep[i / 32] |= (!parked && H.end[i] == GVM_END_WAIT ? 1u : 0u) << (i % 32);
+    }
+    W(CTRL + 0x3c0) = 1 + H.workers;
+    W(CTRL + 0x3c4) = running[0];
+    W(CTRL + 0x3c8) = asleep[0];
+    W(CTRL + 0x3cc) = H.ncores;
+    for (uint32_t n = 0; n < 8; n++) { W(STATS_ALL + 0x400 + 16 * n) = running[n]; W(STATS_ALL + 0x404 + 16 * n) = asleep[n]; }
+}
+
+// The rest of rvc_cpu's control pass with no host devices: a submitted list is drawn at once (nothing is drawn: the
+// submit word is taken back, the list counted and its copy counted), the clock, the host's flags, the passes
+static void devices_pass(void) {
+    uint32_t submit = W(CTRL + 0x10);
+    if (submit) {
+        W(CTRL + 0x10) = 0;
+        W(CTRL + 0x1c)++;
+        if ((submit & 1) && (submit & 6)) W(CTRL + 0x38)++;
+    }
+    W(CTRL + 0x34) = (uint32_t)(H.m.time / 100);   // milliseconds
+    W(CTRL + 0x3c) = (H.desktop ? 1u : 0u) | (128u << 8) | (128u << 16);
+    W(CTRL + 0x32c) = (uint32_t)H.passes;
+}
+
+// ---- GVM_RACES=FILE (gpu_vm/platform.md, "Stores"; rvc_cpu's RVC_RACES): every core here reads RAM as the last
+// commit left it, as on the card, so a program runs as it does there; this says where that mattered. "undone": a word
+// a lower core changed in the pass and a higher core stored too (its value as it saw the word is what the commit
+// leaves); "as it was": a core read a word another core stored in the same pass (and was given it as the pass began:
+// a core waiting on another's word does this every round, and is right to). The mailboxes, the firmware's words and
+// the counters are left out: several cores write them by design.
+static struct {
+    FILE *f;
+    uint64_t undone, asitwas;
+    uint32_t *reads[CPU_MAX_CORES], nreads[CPU_MAX_CORES], capreads[CPU_MAX_CORES];   // (word, pc) pairs
+    uint32_t *spc[CPU_MAX_CORES];   // a core's first store's pc to each word of this pass: word + 1, pc
+    uint32_t *wmap, *wmapused, nused;   // word + 1 -> the first writer's entry; entries chained
+    uint32_t *ent, nent, capent;        // (core, value, next)
+    uint32_t *place, nplace;            // (kind, pc, count)
+} RC;
+#define RC_SPC_BITS 13
+#define RC_SPC (1u << RC_SPC_BITS)
+#define RC_MAP_BITS 20
+#define RC_MAP (1u << RC_MAP_BITS)
+#define RC_NONE 0xffffffffu
+static int race_left_out(uint32_t a) {
+    return (a >= 0x00c00000u && a < 0x00c08000u) || (a >= 0x00c0c000u && a < 0x00d11000u);
+}
+static void race_note(uint32_t kind, uint32_t pc) {
+    for (uint32_t i = 0; i < RC.nplace; i++)
+        if (RC.place[3 * i] == kind && RC.place[3 * i + 1] == pc) { RC.place[3 * i + 2]++; return; }
+    RC.place = (uint32_t *)realloc(RC.place, 12 * (size_t)(RC.nplace + 1));
+    RC.place[3 * RC.nplace] = kind; RC.place[3 * RC.nplace + 1] = pc; RC.place[3 * RC.nplace + 2] = 1;
+    RC.nplace++;
+}
+static uint32_t *race_spc(uint32_t id, uint32_t w) {
+    uint32_t *t = RC.spc[id], h = (w * 0x9e3779b1u) >> (32 - RC_SPC_BITS), n = 0;
+    while (t[2 * h] && t[2 * h] != w + 1 && n++ < RC_SPC) h = (h + 1) & (RC_SPC - 1);
+    return &t[2 * h];
+}
+static void race_access(gvm_core *c, uint32_t a, uint32_t bytes, int store) {
+    if (race_left_out(a)) return;
+    uint32_t id = c->id;
+    for (uint32_t w = a >> 2; w <= (a + bytes - 1) >> 2; w++) {
+        if (store) {
+            uint32_t *e = race_spc(id, w);
+            if (!e[0]) { e[0] = w + 1; e[1] = c->pc; }
+        } else {
+            if (RC.nreads[id] + 2 > RC.capreads[id]) {
+                RC.capreads[id] = RC.capreads[id] ? 2 * RC.capreads[id] : 4096;
+                RC.reads[id] = (uint32_t *)realloc(RC.reads[id], 4 * (size_t)RC.capreads[id]);
+            }
+            RC.reads[id][RC.nreads[id]++] = w;
+            RC.reads[id][RC.nreads[id]++] = c->pc;
+        }
+    }
+}
+static uint32_t *race_slot(uint32_t w) {
+    uint32_t h = (w * 0x9e3779b1u) >> (32 - RC_MAP_BITS);
+    while (RC.wmap[2 * h] && RC.wmap[2 * h] != w + 1) h = (h + 1) & (RC_MAP - 1);
+    return &RC.wmap[2 * h];
+}
+// After every core's part of a pass, before the commit
+static void race_pass(void) {
+    RC.nent = 0;
+    for (uint32_t i = 0; i < H.ncores; i++) {
+        gvm_wlog *wl = &H.cores[i].wl;
+        for (uint32_t j = 0; j < wl->n; j++) {
+            uint32_t h = wl->order[j], w = wl->key[h] - 1;
+            if (race_left_out(w << 2)) continue;
+            uint32_t *s = race_slot(w);
+            if (!s[0]) { s[0] = w + 1; s[1] = RC_NONE; RC.wmapused[RC.nused++] = (uint32_t)(s - RC.wmap); }
+            if (RC.nent + 1 > RC.capent) {
+                RC.capent = RC.capent ? 2 * RC.capent : 65536;
+                RC.ent = (uint32_t *)realloc(RC.ent, 12 * (size_t)RC.capent);
+            }
+            RC.ent[3 * RC.nent] = i; RC.ent[3 * RC.nent + 1] = wl->val[h]; RC.ent[3 * RC.nent + 2] = RC_NONE;
+            if (s[1] == RC_NONE) s[1] = RC.nent;
+            else { uint32_t e = s[1]; while (RC.ent[3 * e + 2] != RC_NONE) e = RC.ent[3 * e + 2]; RC.ent[3 * e + 2] = RC.nent; }
+            RC.nent++;
+        }
+    }
+    for (uint32_t u = 0; u < RC.nused; u++) {
+        uint32_t *s = &RC.wmap[RC.wmapused[u]], w = s[0] - 1, start = H.m.ram[w];
+        for (uint32_t e = s[1]; e != RC_NONE && RC.ent[3 * e + 2] != RC_NONE; e = RC.ent[3 * e + 2]) {
+            uint32_t f = RC.ent[3 * e + 2], a = RC.ent[3 * e], b = RC.ent[3 * f], av = RC.ent[3 * e + 1], bv = RC.ent[3 * f + 1];
+            if (av != start && bv != av) {
+                uint32_t apc = race_spc(a, w)[1], bpc = race_spc(b, w)[1];
+                RC.undone++;
+                race_note(0, apc);
+                if (RC.f) fprintf(RC.f, "undone %08x: core %u (pc %08x) stored %08x, then core %u (pc %08x) %08x, it was %08x, pass %llu\n",
+                                  w << 2, a, apc, av, b, bpc, bv, start, (unsigned long long)H.passes);
+            }
+        }
+    }
+    for (uint32_t i = 0; i < H.ncores; i++) {
+        for (uint32_t r = 0; r < RC.nreads[i]; r += 2) {
+            uint32_t w = RC.reads[i][r], *s = race_slot(w);
+            if (!s[0]) continue;
+            int other = 0;
+            for (uint32_t e = s[1]; e != RC_NONE; e = RC.ent[3 * e + 2]) other |= RC.ent[3 * e] != i;
+            if (other) { RC.asitwas++; race_note(1, RC.reads[i][r + 1]); }
+        }
+        RC.nreads[i] = 0;
+        memset(RC.spc[i], 0, 8 * (size_t)RC_SPC);
+    }
+    for (uint32_t u = 0; u < RC.nused; u++) RC.wmap[RC.wmapused[u]] = 0, RC.wmap[RC.wmapused[u] + 1] = 0;
+    RC.nused = 0;
+}
+static int race_cmp(const void *x, const void *y) {
+    const uint32_t *a = (const uint32_t *)x, *b = (const uint32_t *)y;
+    return a[0] != b[0] ? (a[0] < b[0] ? -1 : 1) : a[2] != b[2] ? (a[2] > b[2] ? -1 : 1) : 0;
+}
+static void race_report(void) {
+    uint32_t shown[2] = {0, 0};
+    qsort(RC.place, RC.nplace, 12, race_cmp);
+    fprintf(stderr, "gvm_cpu: races: %llu undone, %llu read as they were\n", (unsigned long long)RC.undone, (unsigned long long)RC.asitwas);
+    for (uint32_t k = 0; k < RC.nplace; k++) {
+        uint32_t kind = RC.place[3 * k];
+        if (RC.f) fprintf(RC.f, "%s at %08x: %u\n", kind ? "as it was" : "undone", RC.place[3 * k + 1], RC.place[3 * k + 2]);
+        if (shown[kind]++ < 8) fprintf(stderr, "  %s at %08x: %u\n", kind ? "as it was" : "undone", RC.place[3 * k + 1], RC.place[3 * k + 2]);
+    }
+    if (RC.f) fclose(RC.f);
+}
+static void race_init(const char *path) {
+    RC.f = fopen(path, "w");
+    if (!RC.f) { fprintf(stderr, "gvm_cpu: GVM_RACES: cannot write %s\n", path); exit(EXIT_USAGE); }
+    for (uint32_t i = 0; i < H.ncores; i++) RC.spc[i] = (uint32_t *)calloc(2 * (size_t)RC_SPC, 4);
+    RC.wmap = (uint32_t *)calloc(2 * (size_t)RC_MAP, 4);
+    RC.wmapused = (uint32_t *)calloc(RC_MAP, 4);
+    for (uint32_t i = 0; i < H.ncores; i++) H.cores[i].host_access = race_access;
+}
+
 static void usage(void) {
     fprintf(stderr,
         "usage: gvm_cpu [options] PROGRAM.elf [ARGS...]\n"
@@ -535,7 +731,9 @@ static void usage(void) {
         "  --dtb FILE          a device tree at 0x1000\n"
         "  --budget N          bundles a pass, a core (default 8192)\n"
         "  --pass-time N       TIME's ticks (100 kHz) a pass (default 20: 0.2 ms)\n"
-        "  --cores N           cores (default 1; the others are parked: workers are not made yet)\n"
+        "  --cores N           cores (default 1): core 0, and workers up to N - 1 (gpu_vm/platform.md)\n"
+        "  --devices           the control words a host gives (on with --dtb; gpu_vm/platform.md)\n"
+        "  --desktop           the host's flag that the guest starts its desktop\n"
         "  --max-bundles N     stop with exit code 3 after N bundles\n"
         "  --trace             each bundle on stderr: core, pc, control word, ops, registers written\n"
         "  --strace            each semihosted call on stderr\n"
@@ -560,6 +758,8 @@ int main(int argc, char **argv) {
         else if (!strcmp(a, "--stats")) H.stats = 1;
         else if (!strcmp(a, "--no-console")) H.console = 0;
         else if (!strcmp(a, "--no-stdin")) H.console_in = 0;
+        else if (!strcmp(a, "--devices")) H.devices = 1;
+        else if (!strcmp(a, "--desktop")) H.desktop = 1;
         else if (!strcmp(a, "--ram") && more) ram_mb = num(argv[++i]);
         else if (!strcmp(a, "--rom") && more) rom = argv[++i];
         else if (!strcmp(a, "--dtb") && more) dtb = argv[++i];
@@ -610,6 +810,9 @@ int main(int argc, char **argv) {
         place(GVM_DTB, p, n, n, "the device tree");
         free(p);
     }
+    // the worker firmware in the boot area (gpu_vm/platform/worker.S): a worker core starts there
+    place(GVM_WORKER_FW, (const uint8_t *)gvm_worker_fw, sizeof gvm_worker_fw, sizeof gvm_worker_fw, "the worker firmware");
+    if (dtb) H.devices = 1;
     H.heap_start = GVM_RAM;
     if (elf) entry = load_elf(elf);
     else {
@@ -628,9 +831,10 @@ int main(int argc, char **argv) {
         k->host_trap = host_trap;
         k->host_step = host_step;
         k->host = &H;
-        // TODO(workers): cores past 0 wait parked until a mailbox gives them a job (docs/machine/multicore.md's layout)
-        if (c) k->halted = 1;
+        if (c) k->halted = 1;   // (a worker from when the kernel lays the workers out: workers_pass)
     }
+    if (getenv("GVM_RACES")) race_init(getenv("GVM_RACES"));
+    if (H.devices && H.ncores > 1) W(CTRL + 0x3cc) = H.ncores;   // how many cores there could be (the kernel reads it at once)
     if (dtb) {   // a kernel's boot: r5 the device tree's address, every other register 0 (no argument stack)
         H.cores[0].x[5] = GVM_DTB;
         H.stack_limit = H.m.ram_end;
@@ -648,14 +852,18 @@ int main(int argc, char **argv) {
             gvm_core *k = &H.cores[c];
             if (k->halted) continue;
             running = 1;
-            gvm_run(&H.m, k, H.budget);
-            if (!k->waiting) all_waiting = 0;
+            H.end[c] = (uint8_t)gvm_run(&H.m, k, H.budget);
+            // (a worker parked in the firmware, or whose job's loop ended its pass with a user's wait, is idle)
+            int idle = c && ((k->pc >= GVM_FW_PARK && k->pc < GVM_FW_PARK_END) || (H.end[c] == GVM_END_WAIT && !(k->sr[GVM_SR_STATUS] & GVM_ST_S)));
+            if (!k->waiting && !idle) all_waiting = 0;
         }
         trace_flush();
+        if (RC.wmap) race_pass();
         gvm_commit(&H.m);
         H.passes++;
         if (H.console) console_poll();
-        // TODO: the external interrupt line (gvm_core.ext) and the workers' mailboxes go here.
+        workers_pass();
+        if (H.devices) devices_pass();
         if (!running) {   // every core halted with no exit: a break with GVM_REF_BREAK_HALTS, say
             fprintf(stderr, "gvm_cpu: every core halted\n");
             H.exit_code = EXIT_TRAP;
@@ -668,7 +876,7 @@ int main(int argc, char **argv) {
             for (uint32_t c = 0; c < H.ncores; c++) {
                 gvm_core *k = &H.cores[c];
                 uint64_t cmp = (uint64_t)k->sr[GVM_SR_TCMP_HI] << 32 | k->sr[GVM_SR_TCMP_LO];
-                if (k->halted) continue;
+                if (k->halted || (c && !k->waiting)) continue;   // (an idle worker's timer is the next pass's)
                 if ((k->sr[GVM_SR_IEN] & (1u << GVM_IRQ_SOFT | 1u << GVM_IRQ_EXT)) && (k->soft || k->ext)) { next = H.m.time; break; }
                 if ((k->sr[GVM_SR_IEN] & 1u << GVM_IRQ_TIMER) && cmp && (!next || cmp < next)) next = cmp;
             }
@@ -683,6 +891,7 @@ int main(int argc, char **argv) {
         }
     }
     out_flush();
+    if (RC.wmap) race_report();
     if (H.exit_code == EXIT_LIMIT && H.max_bundles) fprintf(stderr, "gvm_cpu: %llu bundles run: stopped (--max-bundles), pc %08x\n", (unsigned long long)H.bundles, H.cores[0].pc);
     if (H.stats) {
         uint64_t b = 0, o = 0;

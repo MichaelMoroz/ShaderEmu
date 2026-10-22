@@ -61,6 +61,9 @@ typedef struct gvm_core {
     // interrupt is taken); nonzero halts the core there.
     int (*host_trap)(struct gvm_core *c, uint32_t cause, uint32_t epc, uint32_t tval);
     int (*host_step)(struct gvm_core *c);
+    // host_access (gvm_cpu's race check, GVM_RACES) is told of every load and store a core makes of RAM: its address,
+    // bytes and whether it stores (a store is told before it is made)
+    void (*host_access)(struct gvm_core *c, uint32_t a, uint32_t bytes, int store);
     void *host;
     gvm_wlog wl;
 } gvm_core;
@@ -211,6 +214,7 @@ static int gvm__load(gvm_machine *m, gvm_core *c, uint32_t a, uint32_t bytes, ui
         return 1;
     }
     if (!gvm__readable(m, a) || !gvm__readable(m, a + bytes - 1)) return 0;
+    if (c && c->host_access && a < m->ram_end) c->host_access(c, a, bytes, 0);
     uint32_t lo = gvm__word(m, c, a & ~3u), sh = (a & 3) * 8;
     uint64_t w = lo;
     if ((a & 3) + bytes > 4) w |= (uint64_t)gvm__word(m, c, (a & ~3u) + 4) << 32;
@@ -230,6 +234,7 @@ static int gvm__room(gvm_core *c, uint32_t a, uint32_t bytes) {
 
 static void gvm__store(gvm_machine *m, gvm_core *c, uint32_t a, uint32_t bytes, uint32_t v) {
     if (a >= GVM_OPS) { c->op[(a - GVM_OPS) >> 2] = v; return; }   // (latched: a 16-byte store at GVM_OPS asks)
+    if (c->host_access) c->host_access(c, a, bytes, 1);
     for (uint32_t i = 0; i < bytes; i++) {
         uint32_t b = a + i, word = b >> 2, sh = (b & 3) * 8;
         uint32_t *e = gvm__wl_find(&c->wl, word, 0);
