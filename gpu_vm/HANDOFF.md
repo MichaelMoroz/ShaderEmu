@@ -150,6 +150,11 @@ Phases, each one agent's (one writer of the LLVM tree in WSL at a time):
 3. Codegen and clang (`gpuvm-unknown-elf`): ISel, calling convention, frame lowering, branch relaxation.
 4. compiler-rt builtins, a small bare-metal libc and crt0; test apps (hello, isaloops, CoreMark) on gvm_cpu.
 5. Linux 5.17 `arch/gpuvm` (no MMU), `make ARCH=gpuvm LLVM=1`; then boot on gvm_cpu.
+- **Denser code** (22 October 2026, gpu_vm/llvm: GlobalFill, BundleModel, ZeroExt, LoadHoist, UnrollHint, inlining
+  x3, PIE globals): CoreMark 149.3k -> 113.0k bundles an iteration (2.39 RISC-V instructions a bundle), gzip 19.38M ->
+  15.25M, busybox's relocations 16,973 -> 758. Fair comparisons give the RISC-V build its best flags too (inlining and
+  unrolling cut the work itself). ABI: the last 64 bytes of RAM stay unused (the fill's speculative loads reach 16
+  bytes past an access).
 - **Userland on the card** (22 October 2026): busybox 1.37 (hush, 286 applets), init, a root file system as the
   initramfs, Lua, QuickJS, minigzip, CoreMark, gvm-tests (`gpu_vm/userland/README.md`); `systest.sh cpu|gpu` types a
   46-command session and checks it: PASS on gvm_cpu and on the card, lockstep with the reference clean over whole
