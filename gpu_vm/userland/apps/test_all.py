@@ -36,6 +36,9 @@ OVERRIDES = {
     # the textures made before "steady" depend on the machine's speed (gvm_cpu makes the world in its first stats
     # period: 8 loading texts fewer); its first 30 are the RISC-V machine's
     'classicube-pack': dict(count=[(r'^cctex: ', (30, 42))], digest=[]),
+    # (the programs' last screen leaves the cursor on the line the shell's echo then ends: no line of its own)
+    'term-htop': dict(has=[r'htop 0$']),
+    'term-dialog': dict(has=[r'dialog 0$', r'^pterm']),
     # uname -m says the machine
     'ports-dropbear': dict(has=[r'^ssh-ok gpuvm$', r'^file-data$', r'^sftp> get /tmp/f2 /tmp/f3']),
 }

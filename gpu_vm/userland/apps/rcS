@@ -6,6 +6,7 @@ mount -t sysfs sysfs /sys
 mount -t devtmpfs devtmpfs /dev 2>/dev/null
 mount -t tmpfs -o mode=1777,size=32m tmpfs /tmp
 mount -t tmpfs -o mode=0755,size=4m tmpfs /persistence
+mount -t tmpfs -o mode=0755,size=1m tmpfs /run
 # /root, /var, /etc and /home written over the ROM's (the desktop's places, a program's saves, at's spool), as the
 # RISC-V image's overlay makes the whole root
 for d in root var etc home; do
