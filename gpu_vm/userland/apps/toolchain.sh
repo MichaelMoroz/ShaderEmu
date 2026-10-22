@@ -70,12 +70,17 @@ for a in "$@"; do
 done
 EOF
 
+# No MMU: a fork is a vfork, as linux/nommu/setup.sh makes every C compilation of the RISC-V machine's say (its
+# nommu_fork.h, force-included: dropbear's server, socat, at)
+mkdir -p "$WORK/include"
+printf '%s\n' '/* No MMU: a fork is a vfork, whose child runs on its parent'"'"'s memory until it execs or exits. */' \
+    '#ifndef __ASSEMBLER__' 'int vfork(void) __attribute__((returns_twice));' '#define fork vfork' '#endif' > "$WORK/include/nommu_fork.h"
 # rv32-cc: gpuvm-linux-cc with the options filtered; every link keeps its ELF (PROG.gdb, for nm and profiles)
 cat > "$WORK/bin/rv32-cc" <<EOF
 #!/usr/bin/env bash
 . "$WORK/bin/gvm-filter"
 export GVM_KEEP_ELF=1
-exec "$GVM_UL/bin/gpuvm-linux-cc" -Wno-unknown-warning-option -Wno-ignored-optimization-argument -Qunused-arguments \
+exec "$GVM_UL/bin/gpuvm-linux-cc" -isystem "$WORK/include" -include nommu_fork.h -Wno-unknown-warning-option -Wno-ignored-optimization-argument -Qunused-arguments \
     -Wno-unused-command-line-argument -Wno-error=implicit-function-declaration -Wno-error=int-conversion \
     -Wno-error=incompatible-pointer-types -Wno-error=implicit-int $GVM_MATH $GVM_CFLAGS "\${args[@]+"\${args[@]}"}" \$GVM_LDLIBS
 EOF

@@ -6,8 +6,12 @@ mount -t sysfs sysfs /sys
 mount -t devtmpfs devtmpfs /dev 2>/dev/null
 mount -t tmpfs -o mode=1777,size=32m tmpfs /tmp
 mount -t tmpfs -o mode=0755,size=4m tmpfs /persistence
-# /root written over the ROM's (the desktop's places, a program's saves), as the RISC-V image's overlay makes it
-mkdir -p /tmp/.root/up /tmp/.root/work
-mount -t overlay overlay -o lowerdir=/root,upperdir=/tmp/.root/up,workdir=/tmp/.root/work /root
+# /root, /var, /etc and /home written over the ROM's (the desktop's places, a program's saves, at's spool), as the
+# RISC-V image's overlay makes the whole root
+for d in root var etc home; do
+    mkdir -p /tmp/.over/$d/up /tmp/.over/$d/work
+    mount -t overlay overlay -o lowerdir=/$d,upperdir=/tmp/.over/$d/up,workdir=/tmp/.over/$d/work /$d
+done
+mkdir -p /var/spool/cron/atjobs /var/spool/cron/atspool /var/run /var/log
 hostname -F /etc/hostname
 echo "gpuvm: up in $(cut -d' ' -f1 /proc/uptime) s"
