@@ -275,3 +275,27 @@ on all seven integer and memory loops** (the least loads, 2.21; stores 2.38), wi
 switch on the path is a quarter slower than tests in a row. Not kept from x14m: one lite op after the bodies, no-room
 by selects (fxc copied registers in the shared head), one extend for either op. x14 and x15 count `cycle` wrong on a
 store with no room (`budget = 1; cycle--` then `b0 - budget`): the timed loops never meet one; OVF counts it right.
+
+### Round 4 on x15 (x15s, x15sq: the loops' structure)
+
+`x15sq.hlsl` is x15m with the structure agent's switches: S_SW (a store bundle reads its texel only when an op needs
+the old word: a byte or half store, or a load; =2 in the one-op bodies too), S_KIND (a whole step a kind of bundle,
+chosen before it), S_ILOOP, S_STL, S_L2L (integer, store-pair and two-load bundles each in a do-while of their own,
+its test one compare with the budget). Q is q4ovf's switches. On the card, `--fused 1`:
+
+| Variant | arith | loads | stores | adds | tight | mix | stride | x lean (7) |
+|---|---|---|---|---|---|---|---|---|
+| q4ovf | 21.00 | 12.44 | 11.64 | 22.52 | 19.73 | 17.55 | 17.88 | 2.53 |
+| sq_sw (Q, S_SW=1) | 20.88 | 12.69 | 12.04 | 22.46 | 19.65 | 17.28 | 17.78 | 2.54 |
+| sq_sw2 (Q, S_SW=2) | 20.88 | 12.68 | 12.09 | 22.46 | 19.65 | 18.15 | 18.35 | 2.57 |
+| sq_kind (Q, S_KIND) | 17.46 | 12.68 | 12.06 | 18.73 | 16.37 | 15.63 | 16.55 | 2.29 |
+| sq_stlsw (S_KIND, S_STL, S_SW) | 17.12 | 12.94 | 12.78 | 18.44 | 16.14 | 15.69 | 16.62 | 2.31 |
+| sq_ilsw (S_KIND, S_ILOOP, S_SW) | 19.59 | 12.84 | 11.29 | 21.10 | 18.41 | 15.49 | 16.22 | 2.38 |
+| sq_loopssw (all the loops, S_SW) | 19.45 | 15.70 | 12.71 | 21.11 | 18.44 | 15.45 | 16.17 | 2.49 |
+| s_ilstlsw (on x15) | 19.59 | 12.41 | 11.86 | 21.10 | 18.41 | 14.71 | 16.30 | 2.37 |
+
+sq_sw2 is the reference's on the card (every case, `--fused 1`, and seed 7): a word store's merge needs no texel, and
+not waiting for it is worth 4% on stores and 3% on mix. A step or a loop a kind of bundle costs the integer loops 7 to
+17% again (as round 2's I_LOOPS did), though a loop of two-load bundles is 26% on loads. x14s (never timed): the loop
+test as one compare with the budget saves 1 to 2 DXBC; a tail in each branch, a switch on the class and two steps a
+trip do not pay.
