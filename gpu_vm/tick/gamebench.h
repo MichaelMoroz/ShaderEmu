@@ -44,7 +44,7 @@ struct GLogic {   // entities (a power of 2), traces a physics think, the tree's
     bool copyop = false;
 };
 struct GJob { int kind, size; };                      // 1 logic (size entities, instance = the worker), 2 vertices (size)
-struct GRay { int w = 256, h = 192, s = 8, spill = 2, stack = G_MEM; };   // the picture, spheres, spill pairs a pixel
+struct GRay { int w = 256, h = 192, s = 16, spill = 2, stack = G_MEM; };   // the picture, spheres, spill pairs a pixel
 struct GScene {
     GLogic core0, worker;      // core 0's logic; the logic of the workers' kind 1 jobs (its E from the job)
     std::vector<GJob> jobs;    // busy worker k + 1's job each frame
@@ -318,11 +318,12 @@ static int g_emit_verts(GvmAsm& a) {
 }
 
 // ray(r5 first chunk, r6 frame, r7 chunks apart): chunks of 32 pixels of the picture; r60 + 1 a chunk
+static uint32_t g_frames() { return g_loop_n > 100000 ? 0x3fffffff : 2; }
 static int g_emit_ray(GvmAsm& a, const GRay& R) {
     GEmit e(a, R.stack);
     int fn = a.label();
     a.bind(fn);
-    const uint32_t chunks = (uint32_t)(R.w * R.h / 32);
+    const uint32_t chunks = std::min((uint32_t)(R.w * R.h / 32), g_frames() == 2 ? 256u : ~0u);   // (a check: 256 chunks, WARP's time)
     int cl = a.label(), pl = a.label(), sl = a.label(), skip = a.label(), sky = a.label(), shaded = a.label(), done = a.label();
     int lw2 = 0; while ((1 << lw2) < R.w) lw2++;
     e.prologue(1, {1, 20, 21, 22});
@@ -335,8 +336,8 @@ static int g_emit_ray(GvmAsm& a, const GRay& R) {
     a.bind(pl);
     a.opi(GVM_I_AND, 9, 25, R.w - 1); a.opi(GVM_I_SRL, 10, 25, lw2);
     a.fop(GVM_F_ITOF, 9, 9, 0); a.fop(GVM_F_ITOF, 10, 10, 0);
-    a.lw(11, 14, 16); a.lw(12, 14, 20);                      // the pixel's step, the corner
-    a.fop(GVM_F_MSB, 9, 9, 11, 12); a.fop(GVM_F_MSB, 10, 10, 11, 12);   // dx, dy (dz 1)
+    a.li(11, (int32_t)fbits(4.0f / R.w)); a.li(12, (int32_t)fbits(2.0f)); a.li(19, (int32_t)fbits(2.0f * R.h / R.w));   // the pixel's step, the corner
+    a.fop(GVM_F_MSB, 9, 9, 11, 12); a.fop(GVM_F_MSB, 10, 10, 11, 19);   // dx, dy (dz 1)
     a.fop(GVM_F_MUL, 13, 9, 9); a.fop(GVM_F_MAD, 13, 10, 10, 13); a.fopi(GVM_F_ADD, 13, 13, 1.0f);   // a = d . d
     a.lw(23, 14, 12); a.li(24, 0);                    // the nearest t, the colour
     a.li(15, (int32_t)G_SPHERES); a.li(16, R.s);
@@ -348,6 +349,7 @@ static int g_emit_ray(GvmAsm& a, const GRay& R) {
     g_bnei(a, 19, 0, skip);                                    // a miss
     a.fop(GVM_F_SQRT, 61, 18, 0);                           // (the root, a sink: the card's own is not exact)
     a.lw(19, 14, 24); a.fop(GVM_F_NMSB, 18, 18, 19, 17);    // t ~ b - disc * k
+    e.spill(2, 18); e.spill(3, 17);                          // the hit's record on the stack (nxray's stores)
     a.fop(GVM_F_LT, 19, 18, 23);
     g_beq(a, 19, 0, skip);
     a.mv(23, 18); a.lw(24, 15, 16);
@@ -392,8 +394,8 @@ static void g_data(std::vector<std::pair<uint32_t, uint32_t>>& data, int instanc
     for (int k = 0; k < 8; k++) data.push_back({G_CONST + 4 * k, cst[k]});
     (void)R;
     for (int s = 0; s < 16; s++) {
-        float cx = (float)((int)g.below(65) - 32) / 16.0f, cy = (float)((int)g.below(49) - 24) / 16.0f, cz = (float)(3 + g.below(6));
-        float r = (float)(2 + g.below(7)) / 8.0f;
+        float cx = (float)((int)g.below(65) - 32) / 8.0f, cy = (float)((int)g.below(49) - 24) / 16.0f, cz = (float)(3 + g.below(6));
+        float r = (float)(16 + g.below(17)) / 8.0f;   // (big: a fifth of the tests hit, most pixels)
         float cc = cx * cx + cy * cy + cz * cz - r * r;
         uint32_t w[8] = {fbits(cx), fbits(cy), fbits(cz), fbits(cc), 0x10101u * (1 + g.below(255)), 0, 0, 0};
         for (int k = 0; k < 8; k++) data.push_back({G_SPHERES + 32 * s + 4 * k, w[k]});
@@ -418,7 +420,6 @@ static void g_data(std::vector<std::pair<uint32_t, uint32_t>>& data, int instanc
 }
 
 // A scene's programs: core 0's (or a lone kernel's), and the workers' (core 1's; cores 2 on jump there)
-static uint32_t g_frames() { return g_loop_n > 100000 ? 0x3fffffff : 2; }
 static void g_scene(std::vector<GvmAsm>& p, std::vector<std::pair<uint32_t, uint32_t>>& data, const GScene& S) {
     const uint32_t ncores = (uint32_t)p.size(), busy = (uint32_t)S.jobs.size();
     const int Ew = S.worker.E;   // (the instances' size: the largest a job asks)
@@ -463,7 +464,7 @@ static void g_scene(std::vector<GvmAsm>& p, std::vector<std::pair<uint32_t, uint
             }
         };
         a.bind(main_);
-        a.li(3, (int32_t)g_frames());
+        a.li(3, (int32_t)(S.rayW && g_frames() == 2 ? 1 : g_frames()));   // (a check: one frame of 191 workers is minutes on WARP)
         a.bind(fl);
         wait_all();
         // post this frame's jobs: {seq = frame + 1, kind, a0, a1}, the seq last
@@ -571,7 +572,7 @@ static GScene g_scene_of(const std::string& name) {
     else if (n == "g_verts") { S.core0.E = 0; }
     else if (n == "g_ray1") { S.ray.w = 64; S.ray.h = 32; }
     else if (n == "g_q3") { S.core0.E = 64; S.worker = S.core0; S.jobs = {{1, 256}, {2, 2048}, {1, 64}}; S.idle = 2; }
-    else if (n == "g_hl") { S.core0.E = 512; S.worker = S.core0; S.jobs = {{1, 128}, {2, 4096}, {2, 1024}, {1, 32}}; S.idle = 40; }
+    else if (n == "g_hl") { S.core0.E = 512; S.worker = S.core0; S.jobs = {{1, 128}, {2, 2048}, {2, 2048}, {1, 32}}; S.idle = 40; }
     else if (n == "g_ray") { S.core0.E = 16; S.worker = S.core0; S.rayW = 191; }
     int stack = form == "r" ? G_REGS : form == "f" ? G_FILE : G_MEM;
     S.core0.stack = S.worker.stack = S.ray.stack = stack;
@@ -607,10 +608,20 @@ static void game_cases(std::vector<Case>& v) {
         }};
         c.named = true; c.set = nm.find('_', 2) == std::string::npos ? "game" : "game_x"; c.big = true;
         c.skip_regs = G_SKIP_REGS; c.skip_ops = !lone; c.units_reg = 60;
-        c.check_ticks = lone ? 997 : 1999;
+        c.check_ticks = lone ? 997 : S.rayW ? 4093 : 1999;
         c.unit_div = nm == "g_verts" ? 1 : S.core0.E ? S.core0.E : S.ray.w * S.ray.h / 32;
         if (S.core0.stack == G_FILE) c.xr_need = 128;
         if (nm.rfind("g_hl", 0) == 0) c.passes = 1500;
+        v.push_back(c);
+    }
+    // the one-core kernels as gpu_vm's clang compiles them (gamebench_rv/gvm_lone.c, build_gvm.sh; the set game_cc): ns a
+    // bundle, as cases.h's real programs; work a second is 1 / (ns a bundle x bundles a frame, gvm_cpu --stats: GAMEBENCH.md)
+    for (const char* name : {"g_logic_cc", "g_verts_cc", "g_ray1_cc"}) {
+        static const char* pk[3] = {"gb_kind=1,1;gb_frames=1,1000000", "gb_kind=2,2;gb_frames=1,1000000", "gb_kind=3,3;gb_frames=1,1000000"};
+        int k = name[2] == 'l' ? 0 : name[2] == 'v' ? 1 : 2;
+        Case c{name, 1, true, [](std::vector<GvmAsm>&, std::vector<std::pair<uint32_t, uint32_t>>&, uint32_t) {}};
+        c.elf = "build/gamebench/gvm_lone.elf"; c.pokes = pk[k]; c.named = true; c.ns = true; c.set = "game_cc";
+        c.passes = 2000;   // (the data made first, ~640 thousand bundles: under 5% of the timing)
         v.push_back(c);
     }
 }

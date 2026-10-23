@@ -32,6 +32,7 @@ def main():
     ap.add_argument('--seconds', default='3')
     ap.add_argument('--log', default=os.path.join(ROOT, 'build', 'gamebench', 'rv.log'))
     a = ap.parse_args()
+    a.log = os.path.abspath(a.log)
     send = '; '.join(f'gamebench {c} {a.seconds}' for c in a.cases.split(',')) + "; echo GB-D''ONE\\n"
     if os.path.exists(a.log):
         os.remove(a.log)
@@ -46,8 +47,8 @@ def main():
     os.environ.setdefault('GPU_QUEUE_WHO', 'gamebench_rv')
     p = subprocess.run(cmd, cwd=folder(), capture_output=True, text=True, errors='replace')
     log = open(a.log, encoding='latin-1').read() if os.path.exists(a.log) else ''
-    if p.returncode:
-        print(f'exit {p.returncode}', p.stderr[-1500:])
+    if p.returncode or not log:
+        print(f'exit {p.returncode}', p.stdout[-1500:], p.stderr[-1500:])
     for c in a.cases.split(','):
         v = [float(x) for x in re.findall(rf'gamebench: {c} [\d.]+ frames in [\d.]+ s: ([\d.]+) a second', log)]
         other = re.findall(rf'gamebench: (\d+ workers of \d+)', log)
