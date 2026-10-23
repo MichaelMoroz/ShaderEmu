@@ -80,6 +80,7 @@ typedef struct gvm_core {
     uint32_t xtag[GVM_XR_MAX];       // a slot's binding: the word's address | 1 bound | 2 dirty (this pass)
     uint32_t pa[GVM_NPAIR_MAX][2];   // this pass's pairs: address (word aligned), value
     uint32_t np;
+    uint32_t thin;                   // (gvm_run copies gvm_machine.thin: a trap's vector is 8-aligned)
     uint32_t stale, stale_at;        // loads of a bound word or of one with a pair (the program's error), and the first's address
     gvm_wlog wl;
 } gvm_core;
@@ -94,6 +95,8 @@ typedef struct gvm_machine {
     uint32_t flags;          // GVM_REF_*
     gvm_core *cores;
     uint32_t ncores;
+    uint32_t thin;           // phase 3 (gvm_asm.h's thin8): 8-byte instructions {op, control} (16 with a long immediate:
+                             // {op, control, imm, 0}, at a texel's start); branch offsets in 8 bytes; an instruction has 0 or 1 op
 } gvm_machine;
 
 #define GVM_REF_BREAK_HALTS 1u   // break stops the core (the reference's tests) instead of trapping
@@ -336,7 +339,7 @@ static void gvm__trap(gvm_core *c, uint32_t cause, uint32_t epc, uint32_t tval) 
     c->sr[GVM_SR_TVAL] = tval;
     st = (st & ~(GVM_ST_PIE | GVM_ST_PS | GVM_ST_IE)) | ((st & GVM_ST_IE) ? GVM_ST_PIE : 0) | ((st & GVM_ST_S) ? GVM_ST_PS : 0) | GVM_ST_S;
     c->sr[GVM_SR_STATUS] = st;
-    c->pc = c->sr[GVM_SR_TVEC] & ~15u;
+    c->pc = c->sr[GVM_SR_TVEC] & (c->thin ? ~7u : ~15u);
     c->waiting = 0;
 }
 
@@ -627,13 +630,20 @@ static int gvm__cond(uint32_t cc, uint32_t a, uint32_t bf, uint32_t b) {
 }
 
 int gvm_bundle(gvm_machine *m, gvm_core *c) {
-    uint32_t pc = c->pc, base = pc & ~15u, s = (pc & 15) >> 2, t[4], k;
+    const int T = m->thin != 0;
+    const uint32_t AL = T ? 7u : 15u, CW = T ? 4u : 12u, U = T ? 8u : 16u;   // (thin: an instruction's alignment, its control word, offsets' unit)
+    uint32_t pc = c->pc, base = pc & ~AL, s = (pc & AL) >> 2, t[4], k;
     int end = GVM_END_BUDGET;
     if (base >= m->ram_end) { gvm__trap(c, GVM_CAUSE_FETCH, pc, pc); return GVM_END_BUDGET; }
-    for (k = 0; k < 4; k++) t[k] = m->ram[(base >> 2) + k];   // code is fetched from RAM as committed
-    uint32_t ctl = t[3], n = GVM_N(ctl);
+    if (T) {   // {op, control[, imm]}: as the bundle {op, -, imm, control}
+        t[0] = m->ram[base >> 2]; t[1] = 0; t[3] = m->ram[(base >> 2) + 1];
+        t[2] = GVM_LONG0(t[3]) ? m->ram[(base >> 2) + 2] : 0;
+        s = s ? 3 : 0;
+    } else for (k = 0; k < 4; k++) t[k] = m->ram[(base >> 2) + k];   // code is fetched from RAM as committed
+    uint32_t ctl = t[3], n = GVM_N(ctl), size = T ? (GVM_LONG0(ctl) ? 16u : 8u) : 16u;
+    if (T && n > 1) n = 3;
     c->bundles_run++;
-    if (n == 3) { gvm__trap(c, GVM_CAUSE_ILLEGAL, base | 12, ctl); return GVM_END_BUDGET; }
+    if (n == 3) { gvm__trap(c, GVM_CAUSE_ILLEGAL, base | CW, ctl); return GVM_END_BUDGET; }
     // the branch's registers as this run of the bundle begins
     uint32_t ca0 = c->x[GVM_CRA(ctl)], cb0 = c->x[GVM_CRB(ctl)], cs0 = c->x[GVM_CRS(ctl)];
     for (; s < n; s++) {
@@ -641,45 +651,45 @@ int gvm_bundle(gvm_machine *m, gvm_core *c) {
         if (r == GVM__TRAPPED) return GVM_END_BUDGET;
         if (r == GVM__END) {
             // the pass ends inside the bundle: pc is where it goes on (past n: the control word)
-            if ((c->pc & 15) >> 2 >= n) c->pc = base | 12;
+            if (T ? (c->pc & 7) != 0 : (c->pc & 15) >> 2 >= n) c->pc = base | CW;
             return end;
         }
         (void)lu;
     }
     // the control word: a branch on the registers as the bundle found them, jr and callr on its ops' results
-    uint32_t cc = GVM_CC(ctl), next = base + 16;
+    uint32_t cc = GVM_CC(ctl), next = base + size;
     int super = (c->sr[GVM_SR_STATUS] & GVM_ST_S) != 0;
     if (cc == GVM_CC_SPECIAL) {
         uint32_t sub = GVM_SUB(ctl), rs = GVM_CRS(ctl), to;
         switch (sub) {
         case GVM_SUB_NONE: break;
-        case GVM_SUB_JR: next = c->x[rs] & ~15u; break;
-        case GVM_SUB_CALLR: to = c->x[rs] & ~15u; c->x[1] = base + 16; next = to; break;
+        case GVM_SUB_JR: next = c->x[rs] & ~AL; break;
+        case GVM_SUB_CALLR: to = c->x[rs] & ~AL; c->x[1] = base + size; next = to; break;
         case GVM_SUB_ERET: {
-            if (!super) { gvm__trap(c, GVM_CAUSE_PRIV, base | 12, ctl); return GVM_END_BUDGET; }
+            if (!super) { gvm__trap(c, GVM_CAUSE_PRIV, base | CW, ctl); return GVM_END_BUDGET; }
             uint32_t st = c->sr[GVM_SR_STATUS];
             next = c->sr[GVM_SR_EPC];
             st = (st & ~(GVM_ST_IE | GVM_ST_S | GVM_ST_PS)) | ((st & GVM_ST_PIE) ? GVM_ST_IE : 0) | ((st & GVM_ST_PS) ? GVM_ST_S : 0) | GVM_ST_PIE;
             c->sr[GVM_SR_STATUS] = st;
             break;
         }
-        case GVM_SUB_J: next = base + (uint32_t)GVM_OFF18(ctl) * 16; break;
-        case GVM_SUB_CALL: c->x[1] = base + 16; next = base + (uint32_t)GVM_OFF18(ctl) * 16; break;
+        case GVM_SUB_J: next = base + (uint32_t)GVM_OFF18(ctl) * U; break;
+        case GVM_SUB_CALL: c->x[1] = base + size; next = base + (uint32_t)GVM_OFF18(ctl) * U; break;
         case GVM_SUB_ADD:   // after the ops: it wins; r0 is illegal
-            if (rs == 0) { gvm__trap(c, GVM_CAUSE_ILLEGAL, base | 12, ctl); return GVM_END_BUDGET; }
+            if (rs == 0) { gvm__trap(c, GVM_CAUSE_ILLEGAL, base | CW, ctl); return GVM_END_BUDGET; }
             gvm__set(c, rs, cs0 + (uint32_t)GVM_CIMM12(ctl));
             break;
-        default: gvm__trap(c, GVM_CAUSE_ILLEGAL, base | 12, ctl); return GVM_END_BUDGET;
+        default: gvm__trap(c, GVM_CAUSE_ILLEGAL, base | CW, ctl); return GVM_END_BUDGET;
         }
     } else if (cc == GVM_CC_ADDBNZ) {   // ra += imm6 after the ops (it wins); taken when the sum is not 0
         uint32_t v = ca0 + (uint32_t)GVM_CIMM6(ctl);
-        if (GVM_CRA(ctl) == 0) { gvm__trap(c, GVM_CAUSE_ILLEGAL, base | 12, ctl); return GVM_END_BUDGET; }   // r0: illegal
+        if (GVM_CRA(ctl) == 0) { gvm__trap(c, GVM_CAUSE_ILLEGAL, base | CW, ctl); return GVM_END_BUDGET; }   // r0: illegal
         gvm__set(c, GVM_CRA(ctl), v);
-        if (v != 0) next = base + (uint32_t)GVM_OFF9(ctl) * 16;
+        if (v != 0) next = base + (uint32_t)GVM_OFF9(ctl) * U;
     } else {
         uint32_t ra = GVM_CRA(ctl), bf = GVM_CRB(ctl);
         (void)ra;
-        if (gvm__cond(cc, ca0, bf, cb0)) next = base + (uint32_t)GVM_OFF9(ctl) * 16;
+        if (gvm__cond(cc, ca0, bf, cb0)) next = base + (uint32_t)GVM_OFF9(ctl) * U;
     }
     c->pc = next;
     return GVM_END_BUDGET;
@@ -687,6 +697,7 @@ int gvm_bundle(gvm_machine *m, gvm_core *c) {
 
 int gvm_run(gvm_machine *m, gvm_core *c, uint32_t budget) {
     c->left = budget;
+    c->thin = m->thin;
     if (c->halted) return GVM_END_HALT;
     if (c->waiting) {
         if (!(gvm__ipend(m, c) & c->sr[GVM_SR_IEN])) return GVM_END_WAIT;
@@ -694,7 +705,7 @@ int gvm_run(gvm_machine *m, gvm_core *c, uint32_t budget) {
     }
     while (c->left > 0) {
         // interrupts, between bundles only
-        if ((c->pc & 15) == 0 && (c->sr[GVM_SR_STATUS] & GVM_ST_IE)) {
+        if ((c->pc & (m->thin ? 7u : 15u)) == 0 && (c->sr[GVM_SR_STATUS] & GVM_ST_IE)) {
             uint32_t p = gvm__ipend(m, c) & c->sr[GVM_SR_IEN];
             if (p) {
                 uint32_t bit = (p & 4) ? 2 : (p & 2) ? 1 : 0;

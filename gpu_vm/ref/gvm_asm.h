@@ -40,6 +40,8 @@ struct GvmAsm {
     // as a load (lf) and stores (sf, fpair) in paths 3-6; without it they are the general step's
     static inline bool file_paths = false;
     static inline bool nc_loads = false;   // the tick has GVM_W_NC (its NCLOAD): lw_nc is a plain lw without it
+    static inline bool thin8 = false;   // phase 3: finish() lays the bundles out as 8-byte instructions (gvm_machine.thin; max_ops 1)
+    static inline int max_ops = 2;   // ops a bundle (the tick's THIN: 1, a bundle of one op and its control word)
     static bool file_fast(uint32_t op) {
         uint32_t o = GVM_OPC(op), mode = (o >> 3) & 7, k = o & 7;
         return file_paths && GVM_CLASS(o) == 2 && ((mode == GVM_M_FREAD && k == GVM_FK_LF) || (mode == GVM_M_FWRITE && (k == GVM_FK_SF || k == GVM_FK_PAIR)));
@@ -95,6 +97,7 @@ struct GvmAsm {
     }
     // op 1 takes only path 1's cheap ops: anything else opens a bundle
     bool fits1(uint32_t op) const {   // op 1's place: what some path has after op 0
+        if (max_ops < 2) return false;
         // a memory pair reads nothing op 0 writes, and a store's is op 0 (isa.h's paths 5 and 7)
         if (file_fast(op) || file_fast(cur[0])) return lite(op) && !file_fast(op);
         if (mem_op(op) && mem_op(cur[0])) return !reads_rd0(op) && (store_op(cur[0]) || !store_op(op));
@@ -224,6 +227,7 @@ struct GvmAsm {
 
     std::vector<uint32_t> finish() {
         close();
+        if (thin8) return finish_thin();
         for (const Fix& f : fixes) {
             if (labels[f.label] < 0) { fprintf(stderr, "gvm_asm: label %d not bound\n", f.label); exit(1); }
             int64_t off = labels[f.label] - (int64_t)f.bundle;
@@ -239,5 +243,43 @@ struct GvmAsm {
             else w[f.bundle * 4 + f.word] = (uint32_t)(off * 16);   // lpc: its immediate's word
         }
         return w;
+    }
+    // thin8: bundle i (n <= 1) becomes {op, control} at byte at[i], or {op, control, imm, 0} at a texel's start (a pad
+    // {0, none} before it when needed); branches count 8 bytes; lpc's immediates move with their instruction
+    std::vector<uint32_t> finish_thin() {
+        size_t nb = w.size() / 4;
+        std::vector<uint32_t> at(nb + 1);
+        uint32_t o = 0;
+        for (size_t i = 0; i < nb; i++) {
+            uint32_t ctl = w[i * 4 + 3];
+            if (GVM_N(ctl) > 1) { fprintf(stderr, "gvm_asm: thin8 with a bundle of %u ops\n", GVM_N(ctl)); exit(1); }
+            if (GVM_LONG0(ctl) && (o & 8)) o += 8;
+            at[i] = o;
+            o += GVM_LONG0(ctl) ? 16 : 8;
+        }
+        at[nb] = o;
+        std::vector<uint32_t> out(o / 4, 0);
+        for (uint32_t k = 0; k < o / 4; k += 2) out[k + 1] = GVM_CTRL_NONE | GVM_PATH_INT;   // (pads: no op, no control)
+        auto off_of = [&](const Fix& f) { return ((int64_t)at[labels[f.label]] - (int64_t)at[f.bundle]) / 8; };
+        for (size_t i = 0; i < nb; i++) {
+            uint32_t ctl = w[i * 4 + 3], k = at[i] / 4, imm = w[i * 4 + 2];
+            if (GVM_N(ctl) == 1 && GVM_OPC(w[i * 4]) == GVM_X_LPC && GVM_LONG0(ctl)) imm += (uint32_t)(i * 16) - at[i];   // (lpca: pc-relative)
+            out[k] = w[i * 4]; out[k + 1] = ctl;
+            if (GVM_LONG0(ctl)) out[k + 2] = imm;
+        }
+        for (const Fix& f : fixes) {
+            if (labels[f.label] < 0) { fprintf(stderr, "gvm_asm: label %d not bound\n", f.label); exit(1); }
+            int64_t off = off_of(f);
+            uint32_t& ctl = out[at[f.bundle] / 4 + 1];
+            if (f.kind == 3 && (off < -256 || off > 255)) {
+                ctl = (ctl & 0x78u) | GVM_CTRL_SPECIAL(GVM_SUB_J) | (uint32_t)(off << 14);
+                ctl |= path12_of(ctl, w[f.bundle * 4], 0);
+            } else if (f.kind == 0 || f.kind == 3) {
+                if (off < -256 || off > 255) { fprintf(stderr, "gvm_asm: a branch of %lld instructions\n", (long long)off); exit(1); }
+                ctl = (ctl & ~(0x1ffu << 17)) | ((uint32_t)off & 0x1ffu) << 17;
+            } else if (f.kind == 1) ctl = (ctl & 0x3fffu) | (uint32_t)(off << 14);
+            else out[at[f.bundle] / 4 + 2] = (uint32_t)(off * 8);   // lpc: its immediate
+        }
+        return out;
     }
 };

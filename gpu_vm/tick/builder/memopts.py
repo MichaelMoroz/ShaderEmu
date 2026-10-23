@@ -120,4 +120,32 @@ def memopts(P, src):
         assert 'data_texel(' in mid
         src = src[:i] + mid.replace('data_texel(', 'rc_texel(') + src[j:]
         src = _rep(src, '    bloom = 0;', '    bloom = 0; rct0 = 0; rct1 = 0;')
+    if P.get('thin', 0) or P.get('thin8', 0):   # one op a bundle: the fast loop's op 1 is nothing
+        i = src.index('void fstep(inout uint budget) {'); j = src.index(NL + '}' + NL, i)
+        f = src[i:j]
+        f = _rep(f, '    uint4 t = cur;' + NL, '    uint4 t = cur;' + NL + '    t.y = 0;   // (THIN)' + NL)
+        f = _rep(f, 'A1 = r[ra1], B1 = r[rb1]', 'A1 = 0, B1 = 0')
+        f = _rep(f, '    r[s1] = v1;' + NL, '')
+        src = src[:i] + f + src[j:]
+    if P.get('thin8', 0):   # 8-byte instructions {op, control} (16 with a long immediate), gvm_machine.thin: pc in bytes
+        src = _rep(src, 'uint4 data_texel(uint ad) {', '''uint4 fetch_ins(uint p) {   // the instruction at p as a bundle {op, 0, imm, control}
+    uint4 q = ram(p >> 4);
+    uint2 h = (p & 8) != 0 ? q.zw : q.xy;
+    return uint4(h.x, 0, q.z, h.y);
+}
+uint4 data_texel(uint ad) {''')
+        src = _rep(src, 'uint tg = tp + asuint((int)(ctl << 6) >> 23), tn = tp + 1;', 'uint tg = tp + asuint((int)(ctl << 6) >> 23) * 8, tn = tp + ((ctl & 0x20) != 0 ? 16 : 8);')
+        src = _rep(src, 'uint4 nx = ram(tn), tc = ram(tg);', 'uint4 nx = fetch_ins(tn), tc = fetch_ins(tg);')
+        src = _rep(src, '        tp = pc >> 4;', '        tp = pc;')
+        src = _rep(src, 'pc = b0 != budget ? tp << 4 : pc;', 'pc = b0 != budget ? tp : pc;')
+        src = _rep(src, 'uint base = pc & ~15u, s = (pc >> 2) & 3, e = NONE, res = 0;', 'uint base = pc & ~7u, s = (pc & 4) != 0 ? 3u : 0u, e = NONE, res = 0;')
+        src = _rep(src, 'uint4 t = ram(base >> 4);', 'uint4 t = fetch_ins(base);')
+        src = _rep(src, 'pc = ((pc >> 2) & 3) >= n ? base | 12 : pc;', 'pc = (pc & 7) != 0 ? base | 4 : pc;')
+        src = _rep(src, '    uint ctl = t.w, n = GVM_N(ctl);' + NL, '    uint ctl = t.w, n = GVM_N(ctl), isz = (ctl & 0x20) != 0 ? 16u : 8u;' + NL)
+        src = _rep(src, 'uint base = pc & ~15u, ctl = t.w, n = GVM_N(ctl), path = ctl & 7;', 'uint base = pc & ~7u, ctl = t.w, n = GVM_N(ctl), path = ctl & 7, isz = (ctl & 0x20) != 0 ? 16u : 8u;')
+        for a, b in (('ram(pc >> 4)', 'fetch_ins(pc)'), ('(pc & 15)', '(pc & 7)'), ('base | 12', 'base | 4'), ('r[rs] & ~15u', 'r[rs] & ~7u'),
+                     ('asuint(GVM_OFF18(ctl)) * 16', 'asuint(GVM_OFF18(ctl)) * 8'), ('asuint(GVM_OFF9(ctl)) * 16', 'asuint(GVM_OFF9(ctl)) * 8'),
+                     ('base + 16', 'base + isz'), ('pc = tvec & ~15u;', 'pc = tvec & ~7u;')):
+            assert a in src, a
+            src = src.replace(a, b)
     return src

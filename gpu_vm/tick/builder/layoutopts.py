@@ -42,8 +42,11 @@ def layoutopts(P, src):
     merged = lay == 'merged'
     # (name, elements, element kind, index map from (array, offset, expr))
     parts = []
-    parts.append(('r', '17' if rpk == 'vec' else '65', 'V' if rpk == 'vec' else 'S',
-                  (lambda A, o, X: '%s[%s((%s) >> 2)][(%s) & 3]' % (A, o, X, X)) if rpk == 'vec' else None))
+    if rpk == 'wide':   # a register a uint4 element, the scalar ops on its .x (no component select: the wide-register ISA's cost)
+        parts.append(('r', '65', 'V', lambda A, o, X: '%s[%s(%s)].x' % (A, o, X)))
+    else:
+        parts.append(('r', '17' if rpk == 'vec' else '65', 'V' if rpk == 'vec' else 'S',
+                      (lambda A, o, X: '%s[%s((%s) >> 2)][(%s) & 3]' % (A, o, X, X)) if rpk == 'vec' else None))
     if pk == 'scalar':
         parts.append(('wt', '(WCN + 1)', 'S', None))
         parts.append(('wd', '(4 * (WCN + 1))', 'S', None))
@@ -54,7 +57,7 @@ def layoutopts(P, src):
         parts.append(('wt', '(5 * NBK)', 'V', lambda A, o, X: '%s[%s5 * ((%s) >> 2)][(%s) & 3]' % (A, o, X, X)))
         parts.append(('wd', '0', 'V', lambda A, o, X: '%s[%s5 * ((%s) >> 4) + 1 + (((%s) >> 2) & 3)][(%s) & 3]' % (A, o, X, X, X)))
     decl = 'static const uint NBK = (WCN + 4) / 4;   // the tags\' elements: buckets of four (the sink\'s too)' + NL
-    names = {'r': 'R4' if rpk == 'vec' else 'r', 'wt': {'scalar': 'wt', 'vec': 'T4', 'aos': 'W4'}[pk],
+    names = {'r': 'R4' if rpk in ('vec', 'wide') else 'r', 'wt': {'scalar': 'wt', 'vec': 'T4', 'aos': 'W4'}[pk],
              'wd': {'scalar': 'wd', 'vec': 'D4', 'aos': 'W4'}[pk]}
     maps, offs = {}, {}
     if merged:

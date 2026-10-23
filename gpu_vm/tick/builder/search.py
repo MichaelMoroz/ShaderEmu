@@ -203,16 +203,19 @@ def scores(batch, ref='x23'):
 def cmd_report(a):
     sc = scores(a.batch)
     d = bdir(a.batch)
-    rows = sorted(sc.items(), key=lambda x: -x[1]['score'])
+    ck = json.load(open(os.path.join(d, 'checks.json'))) if os.path.exists(os.path.join(d, 'checks.json')) else {}
+    regs = lambda n: (ck.get(n) or {}).get('regs') or 0
+    # within 1% (the card's noise) the smaller footprint first: D3D11 temporary registers, 16 bytes each as DXBC declares them
+    rows = sorted(sc.items(), key=lambda x: (-int(x[1]['score'] * 100), regs(x[0]) or 1e9, -x[1]['score']))
     cases = sorted({c for v in sc.values() for c in v['ratios']}, key=lambda c: TIME_CASES.split(',').index(c) if c in TIME_CASES.split(',') else 99)
-    print('%-26s %6s %5s ' % ('variant', 'score', 'util') + ' '.join('%8s' % c[:8] for c in cases) + '  params')
+    print('%-26s %6s %5s %6s ' % ('variant', 'score', 'util', 'KB') + ' '.join('%8s' % c[:8] for c in cases) + '  params')
     for n, v in rows[:a.top or 30]:
         P = {}
         mf = os.path.join(d, n + '.json')
         if os.path.exists(mf):
             p = json.load(open(mf))['params']
             P = {k: p[k] for k in p if p[k] != gen.DEFAULTS[k]}
-        print('%-26s %6.3f %5.2f ' % (n, v['score'], v['util']) + ' '.join('%8.3f' % v['ratios'].get(c, 0) for c in cases) + '  ' + ' '.join('%s=%s' % kv for kv in P.items()))
+        print('%-26s %6.3f %5.2f %6s ' % (n, v['score'], v['util'], '%.1f' % (regs(n) * 16 / 1024) if regs(n) else '-') + ' '.join('%8.3f' % v['ratios'].get(c, 0) for c in cases) + '  ' + ' '.join('%s=%s' % kv for kv in P.items()))
 
 if __name__ == '__main__':
     ap = argparse.ArgumentParser()

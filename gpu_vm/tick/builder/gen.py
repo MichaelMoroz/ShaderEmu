@@ -38,6 +38,8 @@ DEFAULTS = dict(
     tfirst=0,           # x24's idea: a load's or store's texel fetched before its lookup (paths 3-5)
     s6=0,               # x24's idea (with mru): a store pair (path 6) whose texels are both kept skips the lookup
     nc=0,               # phase 2: GVM_W_NC loads (read-only data) skip the write cache's lookup
+    thin=0,             # one op a bundle: the fast loop drops op 1 (the assembler closes a bundle after every op)
+    thin8=0,            # phase 3: 8-byte instructions {op, control} (the assembler's thin8), one op each
     rc=0,               # a read cache: the last 0, 1 or 2 texels the fast paths fetched, in registers
     dtx='both',         # a data texel: ROM and RAM both fetched then selected (x23), or one behind a branch
     rpk='scalar',       # the registers: scalar r[65], or vec uint4 R4[17] (layoutopts.py)
@@ -58,7 +60,7 @@ SPACE = dict(   # the values a search draws from
     fetch=['both', 'one'], int_first=[0, 1], mem_order=['35', '4'], split=['branch', 'flatten'],
     block=[(8, 8), (16, 4), (4, 16), (8, 4), (4, 8), (32, 2), (16, 8), (8, 16), (32, 4), (64, 1), (32, 1), (16, 2)],
     bandx=[1, 2], per=[16, 32, 64, 128], jrow=[0, 1], perm=['id', 'bitrev', 'mul'], mul=[3, 5, 37, 77],
-    early=[0, 1, 2, 3], mru=[0, 1, 2, 4], bb=[0, 1], tfirst=[0, 1], s6=[0, 1], nc=[0, 1], rc=[0, 1, 2], dtx=['both', 'one'], rpk=['scalar', 'vec'], pk=['scalar', 'vec', 'aos'], lay=['split', 'merged'],
+    early=[0, 1, 2, 3], mru=[0, 1, 2, 4], bb=[0, 1], tfirst=[0, 1], s6=[0, 1], nc=[0, 1], thin=[0, 1], thin8=[0, 1], rc=[0, 1, 2], dtx=['both', 'one'], rpk=['scalar', 'vec', 'wide'], pk=['scalar', 'vec', 'aos'], lay=['split', 'merged'],
     xr=[0, 64, 128, 256, 512, 1024], npair=[0, 32, 64, 128], xbind=[0, 1], xload=['pre', 'lazy'], xfast=[0, 1],
 )
 
@@ -89,6 +91,7 @@ def valid(P):
     if P['xr'] and (P['xr'] & (P['xr'] - 1) or P['xr'] < 4): return 'xr not a power of two'
     if P['npair'] % 2: return 'npair odd'
     if P.get('s6', 0) and not P.get('mru', 0): return 's6 without mru'
+    if P.get('thin8', 0) and (P['fetch'] != 'both' or P.get('mru', 0)): return 'thin8 with fetch=both only'
     if P['xr'] > 1024 or P['npair'] > 256: return 'file or pairs too large'
     return ''
 
@@ -136,6 +139,8 @@ static const uint XR = {P['xr']};
 static const uint XBIND = {L['XBIND']};
 static const uint XFAST = {P['xfast'] if P['xr'] or P['npair'] else 0};
 static const uint NCLOAD = {P.get('nc', 0)};   // GVM_W_NC loads (no look at this pass's stores)
+static const uint THIN = {P.get('thin', 0)};
+static const uint THIN8 = {P.get('thin8', 0)};   // 8-byte instructions (gvm_machine.thin)   // one op a bundle (the assembler's max_ops 1): the fast loop has no op 1
 static const uint XLAZY = {1 if P['xload'] == 'lazy' else 0};
 static const uint NPAIR = {P['npair']};
 static const uint T_XF = {L['T_XF']};
@@ -666,6 +671,33 @@ def step12(P):
     assert a in src
     return src.replace(a, o + a.lstrip(), 1)
 
+def p2strip(P, src):
+    """a tick without the file or pairs: x23's text where phase 2 added branches (the state's texel 23, again_out's file,
+    the general step's file ops, the commit's points)"""
+    if P['xr'] or P['npair']: return src
+    def rep(a, b):
+        nonlocal src
+        assert a in src, 'p2strip: no ' + a[:60]
+        src = src.replace(a, b, 1)
+    rep(" : t == 23 ? uint4(pn, 0, 0, 0) : 0;", " : 0;")
+    rep("""    [branch] if (t >= T_XF && t < T_XT) return v;
+    [branch] if (t >= T_XT && t < T_PB) return v & ~2u;
+    [branch] if (t >= T_PB || t == 23) return 0;
+""", "")
+    rep("    [branch] if (mode >= GVM_M_FREAD) return file_any(w, imm, a, epcw, e, ill);", "")
+    i = src.index("c2f commit_vert(uint id : SV_VertexID) {"); j = src.index("uint4 commit_frag(", i)
+    src = src[:i] + """c2f commit_vert(uint id : SV_VertexID) {
+    uint c = id / WCN, j = id % WCN;
+    uint tg = pick(state_any(T_WT + (j >> 2), c), j & 3), tex = tg & 0x0fffffffu;
+    float2 at = (float2(tex % RAM_W, tex / RAM_W) + 0.5) / float2(RAM_W, _RamRows);
+    c2f o;
+    o.vertex = tg != NONE && ((tg >> (28 + _Comp)) & 1) != 0 ? float4(at.x * 2 - 1, 1 - at.y * 2, 0, 1) : float4(-2, -2, 0, 1);
+    o.value = pick(state_any(T_WC + j, c), _Comp);
+    return o;
+}
+""" + src[j:]
+    return src
+
 def emit(P):
     P = full(P)
     why = valid(P)
@@ -675,7 +707,7 @@ def emit(P):
            state_io(P), frag(P), part('ops')]
     from memopts import memopts
     from layoutopts import layoutopts
-    return layoutopts(P, memopts(P, '\n'.join(out)))
+    return layoutopts(P, memopts(P, p2strip(P, '\n'.join(out))))
 
 def manifest(P):
     P = full(P)

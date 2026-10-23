@@ -1123,7 +1123,7 @@ static Prepared prepare_mc(const Case& cs, uint32_t seed) {
         pr.state[c] = st;
         pr.bases.push_back(entry);
     }
-    pr.ramImg[HALT_STUB / 4] = GVM_WORD_R(GVM_X_BREAK, 0u, 0u, 0u, 0u); pr.ramImg[HALT_STUB / 4 + 3] = GVM_CTRL_NONE | 1u << 3 | GVM_PATH_GENERAL;
+    pr.ramImg[HALT_STUB / 4] = GVM_WORD_R(GVM_X_BREAK, 0u, 0u, 0u, 0u); pr.ramImg[HALT_STUB / 4 + 3] = GVM_CTRL_NONE | 1u << 3 | GVM_PATH_GENERAL; if (GvmAsm::thin8) pr.ramImg[HALT_STUB / 4 + 1] = pr.ramImg[HALT_STUB / 4 + 3];
     return pr;
 }
 static Prepared prepare(const Case& cs, uint32_t seed) {
@@ -1133,7 +1133,7 @@ static Prepared prepare(const Case& cs, uint32_t seed) {
         pr.ramImg.assign((size_t)RAM_END / 4, 0);
         uint32_t entry = load_real(cs, pr.ramImg);
         pr.bases.push_back(entry ? entry : HALT_STUB);
-        pr.ramImg[HALT_STUB / 4] = GVM_WORD_R(GVM_X_BREAK, 0u, 0u, 0u, 0u); pr.ramImg[HALT_STUB / 4 + 3] = GVM_CTRL_NONE | 1u << 3 | GVM_PATH_GENERAL;
+        pr.ramImg[HALT_STUB / 4] = GVM_WORD_R(GVM_X_BREAK, 0u, 0u, 0u, 0u); pr.ramImg[HALT_STUB / 4 + 3] = GVM_CTRL_NONE | 1u << 3 | GVM_PATH_GENERAL; if (GvmAsm::thin8) pr.ramImg[HALT_STUB / 4 + 1] = pr.ramImg[HALT_STUB / 4 + 3];
         pr.state.assign(1, std::vector<uint32_t>((size_t)(g_twc + g_wcn / 2 + 8) * 4, 0));
         pr.state[0][2] = RAM_END - 64;
         pr.state[0][16 * 4 + 0] = pr.bases[0];
@@ -1154,7 +1154,7 @@ static Prepared prepare(const Case& cs, uint32_t seed) {
     }
     for (auto& d : data) pr.ramImg[d.first / 4] = d.second;
     // a trap nobody asked for halts the core where its handler would be: {break} at HALT_STUB
-    pr.ramImg[HALT_STUB / 4] = GVM_WORD_R(GVM_X_BREAK, 0u, 0u, 0u, 0u); pr.ramImg[HALT_STUB / 4 + 3] = GVM_CTRL_NONE | 1u << 3 | GVM_PATH_GENERAL;
+    pr.ramImg[HALT_STUB / 4] = GVM_WORD_R(GVM_X_BREAK, 0u, 0u, 0u, 0u); pr.ramImg[HALT_STUB / 4 + 3] = GVM_CTRL_NONE | 1u << 3 | GVM_PATH_GENERAL; if (GvmAsm::thin8) pr.ramImg[HALT_STUB / 4 + 1] = pr.ramImg[HALT_STUB / 4 + 3];
     pr.state.assign(cs.cores, std::vector<uint32_t>((size_t)(g_twc + g_wcn / 2 + 8) * 4, 0));
     for (uint32_t c = 0; c < cs.cores; c++) {
         pr.state[c][16 * 4 + 0] = pr.bases[c];
