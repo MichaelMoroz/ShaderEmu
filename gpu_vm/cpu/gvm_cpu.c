@@ -67,6 +67,10 @@ static struct {
     // --profile-at TEXT / --profile-until TEXT: count from where the console says TEXT, stop where it says the other
     const char *prof_at, *prof_until;
     char con_tail[128];
+    // --wc NB,WAYS[,RELOC]: core 0's write cache as the tick's (gpu_vm/memory_model.md); its passes counted by why they
+    // ended (from --profile-at's line when given), printed with --stats
+    uint32_t wc_nb, wc_ways, wc_reloc;
+    uint64_t c0_end[8], c0_bundles, c0_last;
 } H;
 
 static void out_flush(void) { fflush(stdout); fflush(stderr); }
@@ -703,6 +707,39 @@ static void devices_pass(void) {
     W(CTRL + 0x32c) = (uint32_t)H.passes;
 }
 
+
+// ---- GVM_STLOG=FILE (gpu_vm/memory_model.md): core 0's stores while the profile counts (--profile-at), a record of
+// five words each: the address, sp, core 0's bundles run, bytes | the base register << 8 | supervisor << 16 |
+// the op's mode << 20 | a load << 24 (GVM_STLOG_LOADS=1: loads too), and the pc; a pass's end is the address 0xffffffff with why in the last word. GVM_STLOG_MAX: records.
+static struct { FILE *f; uint64_t n, max; int loads; } SL;
+static void stlog_put(uint32_t a, uint32_t sp, uint32_t b, uint32_t info, uint32_t pc) {
+    uint32_t r[5] = {a, sp, b, info, pc};
+    if (SL.n >= SL.max) { if (SL.n++ == SL.max) { fprintf(stderr, "gvm_cpu: GVM_STLOG full\n"); prof_killed = 1; } return; }
+    fwrite(r, 4, 5, SL.f);
+    SL.n++;
+}
+static void stlog_access(gvm_core *c, uint32_t a, uint32_t bytes, int store) {
+    if ((!store && !SL.loads) || c->id || H.bundles < H.prof_from) return;
+    uint32_t base = c->pc & ~15u, *t = &H.m.ram[base >> 2], ctl = t[3], n = GVM_N(ctl), s, reg = 64, mode = 7;
+    for (s = 0; s < n && s < 2; s++) {
+        uint32_t w = t[s], opc = GVM_OPC(w), md = (opc >> 3) & 7, ra = GVM_RA(w), addr;
+        if (GVM_CLASS(opc) != 2) continue;
+        if (md <= 1) addr = c->x[ra] + ((s == 0 ? GVM_LONG0(ctl) : GVM_LONG1(ctl)) ? t[2] : (uint32_t)GVM_IMM12(w));
+        else if (md <= 3) addr = c->x[ra] + (c->x[GVM_RB(w)] << (GVM_RC(w) & 31));
+        else if (md == 4 || md == 5) addr = c->x[ra];
+        else continue;
+        if (a - addr < 16) { reg = ra; mode = md; break; }
+    }
+    stlog_put(a, c->x[2], (uint32_t)c->bundles_run, bytes | reg << 8 | ((c->sr[GVM_SR_STATUS] & GVM_ST_S) ? 1u << 16 : 0) | mode << 20 | (store ? 0 : 1u << 24), c->pc);
+}
+static void stlog_init(const char *path) {
+    SL.f = fopen(path, "wb");
+    if (!SL.f) { fprintf(stderr, "gvm_cpu: GVM_STLOG: cannot write %s\n", path); exit(EXIT_USAGE); }
+    SL.loads = getenv("GVM_STLOG_LOADS") != NULL;
+    SL.max = getenv("GVM_STLOG_MAX") ? strtoull(getenv("GVM_STLOG_MAX"), NULL, 0) : 50000000ull;
+    for (uint32_t i = 0; i < H.ncores; i++) H.cores[i].host_access = stlog_access;
+}
+
 // ---- GVM_RACES=FILE (gpu_vm/platform.md, "Stores"; rvc_cpu's RVC_RACES): every core here reads RAM as the last
 // commit left it, as on the card, so a program runs as it does there; this says where that mattered. "undone": a word
 // a lower core changed in the pass and a higher core stored too (its value as it saw the word is what the commit
@@ -849,6 +886,8 @@ static void usage(void) {
         "  --stats             bundles, ops and passes at the end, on stderr\n"
         "  --profile FILE      the bundles run, a line each address and contents with its runs, to FILE at the end\n"
         "  --profile-from N    count from the Nth bundle on\n"
+        "  --wc NB,WAYS[,RELOC]  core 0's write cache as the tick's (x23: 32,4; RELOC 1: an insertion may move one\n"
+        "                      texel to its other bucket): its passes end full as the card's; --stats counts them\n"
         "  --profile-at TEXT   count from where the console says TEXT; --profile-until TEXT: stop where it says TEXT\n"
         "  --no-console        no console device (its words at 0x016b8280 are plain RAM)\n"
         "  --no-stdin          the console delivers no input\n");
@@ -882,6 +921,12 @@ int main(int argc, char **argv) {
         else if (!strcmp(a, "--pass-time") && more) H.pass_time = num(argv[++i]);
         else if (!strcmp(a, "--cores") && more) H.ncores = num(argv[++i]);
         else if (!strcmp(a, "--profile") && more) H.prof_path = argv[++i];
+        else if (!strcmp(a, "--wc") && more) {
+            H.wc_ways = 4; H.wc_reloc = 0;
+            if (sscanf(argv[++i], "%u,%u,%u", &H.wc_nb, &H.wc_ways, &H.wc_reloc) < 1 || !H.wc_nb || H.wc_nb > GVM_WC_MAXNB || !H.wc_ways || H.wc_ways > GVM_WC_MAXWAYS) {
+                fprintf(stderr, "gvm_cpu: --wc NB,WAYS[,RELOC]: NB 1-%d, WAYS 1-%d\n", GVM_WC_MAXNB, GVM_WC_MAXWAYS); return EXIT_USAGE;
+            }
+        }
         else if (!strcmp(a, "--profile-from") && more) H.prof_from = strtoull(argv[++i], NULL, 0);
         else if (!strcmp(a, "--profile-at") && more) H.prof_at = argv[++i], H.prof_from = ~0ull;
         else if (!strcmp(a, "--profile-until") && more) H.prof_until = argv[++i];
@@ -949,8 +994,10 @@ int main(int argc, char **argv) {
         k->host_step = host_step;
         k->host = &H;
         if (c) k->halted = 1;   // (a worker from when the kernel lays the workers out: workers_pass)
+        if (!c && H.wc_nb) { k->wl.nb = H.wc_nb; k->wl.ways = H.wc_ways; k->wl.reloc = H.wc_reloc; }
     }
     if (getenv("GVM_RACES")) race_init(getenv("GVM_RACES"));
+    else if (getenv("GVM_STLOG")) stlog_init(getenv("GVM_STLOG"));
     if (H.devices && H.ncores > 1) W(CTRL + 0x3cc) = H.ncores;   // how many cores there could be (the kernel reads it at once)
     if (dtb) {   // a kernel's boot: r5 the device tree's address, every other register 0 (no argument stack)
         H.cores[0].x[5] = GVM_DTB;
@@ -970,6 +1017,11 @@ int main(int argc, char **argv) {
             if (k->halted) continue;
             running = 1;
             H.end[c] = (uint8_t)gvm_run(&H.m, k, H.budget);
+            if (!c && H.bundles >= H.prof_from && H.end[c] < 8 && !(H.end[c] == GVM_END_WAIT && k->bundles_run == H.c0_last)) {
+                H.c0_end[H.end[c]]++; H.c0_bundles += k->bundles_run - H.c0_last;
+            }
+            if (!c) H.c0_last = k->bundles_run;
+            if (SL.f && !c && H.bundles >= H.prof_from) stlog_put(0xffffffffu, k->x[2], (uint32_t)k->bundles_run, H.end[c], k->pc);
             // (a worker parked in the firmware, or whose job's loop ended its pass with a user's wait, is idle)
             int idle = c && ((k->pc >= GVM_FW_PARK && k->pc < GVM_FW_PARK_END) || (H.end[c] == GVM_END_WAIT && !(k->sr[GVM_SR_STATUS] & GVM_ST_S)));
             if (!k->waiting && !idle) all_waiting = 0;
@@ -1008,11 +1060,17 @@ int main(int argc, char **argv) {
         }
     }
     out_flush();
+    if (SL.f) fclose(SL.f);
     if (RC.wmap) race_report();
     if (H.exit_code == EXIT_LIMIT && H.max_bundles) fprintf(stderr, "gvm_cpu: %llu bundles run: stopped (--max-bundles), pc %08x\n", (unsigned long long)H.bundles, H.cores[0].pc);
     if (H.stats) {
         uint64_t b = 0, o = 0;
         for (uint32_t c = 0; c < H.ncores; c++) { b += H.cores[c].bundles_run; o += H.cores[c].ops_run; }
+        uint64_t np = 0;
+        for (int e = 0; e < 8; e++) np += H.c0_end[e];
+        if (np) fprintf(stderr, "gvm_cpu: core 0: %llu passes, %.0f bundles a pass; ended: budget %llu, sync %llu, wait %llu, full %llu\n",
+                        (unsigned long long)np, (double)H.c0_bundles / (double)np, (unsigned long long)H.c0_end[GVM_END_BUDGET],
+                        (unsigned long long)H.c0_end[GVM_END_SYNC], (unsigned long long)H.c0_end[GVM_END_WAIT], (unsigned long long)H.c0_end[GVM_END_FULL]);
         fprintf(stderr, "gvm_cpu: %llu bundles, %llu ops (%.2f a bundle), %llu passes, time %llu (100 kHz)\n",
                 (unsigned long long)b, (unsigned long long)o, b ? (double)o / (double)b : 0.0, (unsigned long long)H.passes,
                 (unsigned long long)H.m.time);

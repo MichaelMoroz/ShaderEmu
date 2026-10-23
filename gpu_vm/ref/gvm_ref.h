@@ -19,6 +19,8 @@ extern "C" {
 
 #define GVM_WLOG_BITS 12          // the reference's write log: 4,096 words at most a pass, a core
 #define GVM_WLOG_SIZE (1u << GVM_WLOG_BITS)
+#define GVM_WC_MAXNB 256          // the write cache model's tables at most (gvm_wlog.nb)
+#define GVM_WC_MAXWAYS 8
 #define GVM_OPQ 8                 // operations a core may ask for in a pass (a ninth waits for the commit)
 
 typedef struct gvm_wlog {
@@ -27,6 +29,11 @@ typedef struct gvm_wlog {
     uint32_t order[GVM_WLOG_SIZE];  // slots in the order first written, for the commit
     uint32_t n;
     uint32_t cap;                // words a pass before a store ends it (<= GVM_WLOG_SIZE * 3 / 4)
+    // The tick's write cache as a model (gpu_vm/memory_model.md; off while nb is 0): a store whose texels the model
+    // cannot place ends the pass as a full log does. Two tables of nb buckets of `ways` texels (x23: 32, 4) with x23's
+    // hashes; reloc: an insertion that finds both buckets full may move one of their texels to its other bucket.
+    uint32_t nb, ways, reloc;
+    uint32_t tex[2 * GVM_WC_MAXNB * GVM_WC_MAXWAYS];   // texel number + 1 (0: empty), bucket b's ways from b * ways
 } gvm_wlog;
 
 // Why a pass ended for a core (gvm_run's result)
@@ -225,15 +232,49 @@ static int gvm__load(gvm_machine *m, gvm_core *c, uint32_t a, uint32_t bytes, ui
 
 int gvm_load32(gvm_machine *m, gvm_core *c, uint32_t a, uint32_t *v) { return gvm__load(m, c, a, 4, v); }
 
+// The write cache model: x23's two buckets of texel t (wc_b1, wc_b2 in gpu_vm/tick/steps/x23.hlsl)
+static uint32_t gvm__wc_b(const gvm_wlog *w, uint32_t t, int k) {
+    return k == 0 ? (t ^ (t >> 5) ^ (t >> 10)) % w->nb : w->nb + ((t >> 3) ^ (t << 2) ^ (t >> 5)) % w->nb;
+}
+// 1: texel t is in the model or was placed there (place: 0 only asks)
+static int gvm__wc_put(gvm_wlog *w, uint32_t t, int place) {
+    uint32_t k, j, *q[2];
+    for (k = 0; k < 2; k++) {
+        q[k] = &w->tex[gvm__wc_b(w, t, (int)k) * w->ways];
+        for (j = 0; j < w->ways; j++) if (q[k][j] == t + 1) return 1;
+    }
+    for (k = 0; k < 2; k++)
+        for (j = 0; j < w->ways; j++)
+            if (!q[k][j]) { if (place) q[k][j] = t + 1; return 1; }
+    if (w->reloc)   // both full: a resident that has room in its other bucket moves there
+        for (k = 0; k < 2; k++)
+            for (j = 0; j < w->ways; j++) {
+                uint32_t u = q[k][j] - 1, b0 = gvm__wc_b(w, u, 0), o = (q[k] == &w->tex[b0 * w->ways]) ? gvm__wc_b(w, u, 1) : b0, i;
+                uint32_t *r = &w->tex[o * w->ways];
+                for (i = 0; i < w->ways; i++)
+                    if (!r[i]) { if (place) { r[i] = u + 1; q[k][j] = t + 1; } return 1; }
+            }
+    return 0;
+}
+
 // Room for the words a store of `bytes` at a makes, or 0: the pass ends and the op runs again
 static int gvm__room(gvm_core *c, uint32_t a, uint32_t bytes) {
     uint32_t need = 0, w;
+    if (c->wl.nb) {   // the model: the texels (two at most) one after the other, as the store will place them
+        uint32_t t0 = a >> 4, t1 = (a + bytes - 1) >> 4;
+        if (!gvm__wc_put(&c->wl, t0, 0)) return 0;
+        if (t1 != t0) {   // (the first is placed to check the second; left placed if not, harmless to the model)
+            gvm__wc_put(&c->wl, t0, 1);
+            if (!gvm__wc_put(&c->wl, t1, 0)) return 0;
+        }
+    }
     for (w = a >> 2; w <= (a + bytes - 1) >> 2; w++) need += gvm__wl_find(&c->wl, w, 0) == NULL;
     return c->wl.n + need <= c->wl.cap;
 }
 
 static void gvm__store(gvm_machine *m, gvm_core *c, uint32_t a, uint32_t bytes, uint32_t v) {
     if (a >= GVM_OPS) { c->op[(a - GVM_OPS) >> 2] = v; return; }   // (latched: a 16-byte store at GVM_OPS asks)
+    if (c->wl.nb) { gvm__wc_put(&c->wl, a >> 4, 1); gvm__wc_put(&c->wl, (a + bytes - 1) >> 4, 1); }
     if (c->host_access) c->host_access(c, a, bytes, 1);
     for (uint32_t i = 0; i < bytes; i++) {
         uint32_t b = a + i, word = b >> 2, sh = (b & 3) * 8;
@@ -668,6 +709,7 @@ void gvm_commit(gvm_machine *m) {
             w->key[h] = 0;
         }
         w->n = 0;
+        if (w->nb) memset(w->tex, 0, 2 * w->nb * w->ways * sizeof w->tex[0]);
     }
     for (i = 0; i < m->ncores; i++) {
         gvm_core *c = &m->cores[i];

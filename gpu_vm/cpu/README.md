@@ -34,6 +34,10 @@ Runs programs for gpu_vm (`gpu_vm/isa.h`, `gpu_vm/GPU_VM.md`) on the host, aroun
 | `--stats` | bundles, ops, passes and TIME at the end, on stderr |
 | `--no-console` | no console device: its words are plain RAM |
 | `--no-stdin` | the console delivers no input |
+| `--wc NB,WAYS[,RELOC]` | core 0's write cache as the tick's (x23: `32,4`; RELOC 1: an insertion that finds both buckets full moves one texel to its other bucket): its passes end full as on the card, and `--stats` prints why core 0's passes ended (from `--profile-at`'s line on). `gpu_vm/memory_model.md` |
+
+`GVM_STLOG=FILE` logs core 0's stores (with `GVM_STLOG_LOADS=1` its loads too) from `--profile-at`'s line, at most
+`GVM_STLOG_MAX` records; `gpu_vm/cpu/stlog.py FILE` reads it (`gpu_vm/memory_model.md`).
 
 Exit code: the program's `exit` code; 1 a bad option or file; 2 an unhandled trap (`break` too: cause, pc, tval,
 the bundle and every register are printed), or every core waiting for an interrupt that cannot come; 3 `--max-bundles`.
