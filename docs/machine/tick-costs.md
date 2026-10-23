@@ -625,3 +625,33 @@ Loads (x23's buckets, every other bundle a load, written at the block's end; `HO
 start): K 2, 4, 8 78.4, 83.1, 74.7; hoisted 78.6, 82.4 (68.1 in a second batch), 65.5; with fast registers 106-135.
 Weighed by the guest runs (Quake III core 0; Half-Life core 0 in brackets): integers 58.8 ns against 77.8 (1.32x), the
 games' mix 74 ns against 94.4 (1.27x; 1.31x). Under 1.4x: the tick-side search is closed.
+
+## Each way of fetching a word, and exchanging one between lanes (23 October 2026)
+
+`gpu_vm/tick/probes/fetchlat.hlsl`, `fetchlat.cpp` (`bin\fetchlat.exe`): a dependent chain of fetches, each address the
+last fetch's word, in 512 words (L1's), one core (an 8 x 4 block), RTX 5070 Laptop at 2,835 MHz, two runs alike to 0.1 ns:
+
+| Fetch | ns |
+|---|---|
+| Texture2D<uint4> Load, the 8192-wide RAM texture (today) | 35.2 |
+| Texture2D<uint> (R32_UINT) Load; Texture2D<uint2> (R32G32) Load | 34.8; 34.8 |
+| Load with a constant offset (int2(1, 0)) | 39.4 |
+| GatherRed of R32_UINT (four words) | 49.1 |
+| SampleLevel, point sampler, R32G32B32A32_FLOAT, bits by asuint; Sample (implicit level) | 41.0; 41.1 |
+| a 256 x 256 texture's mip 0 | 37.3 |
+| a texture the draw before drew (as the state set) | 35.2 |
+| ByteAddressBuffer Load (a buffer: not in VRChat) | 22.9 |
+| StructuredBuffer<uint4> (a buffer: not in VRChat) | 19.0 |
+| a cbuffer's uint4[512], the index uniform | 18.2-19.4 |
+| the RAM texture, each word in a cache line of its own (64 texels apart) | 69.4-70.1 |
+
+A float texture's point sample gives its bits back exactly: 262,144 words, NaNs (quiet, signalling, with payloads),
+infinities, denormals and -0 among them, none changed. So the texture path is 35 ns whatever the format, size or how
+the texture was last written; an offset costs 4, a sampler 6, a gather 14; the load path (buffers, the cbuffer) is 18-23,
+and a cbuffer (64 KB, read-only in a pass) is the one of those a VRChat shader can have.
+
+`xlane.hlsl`, `xlane.cpp` (`bin\xlane.exe`): exchange between a core's lanes. An InterlockedAdd on a RWStructuredBuffer
+at u8 with nothing bound (feature level 11_1; the debug layer says nothing about it) gives every lane 0 on the card and on
+WARP, whatever the lanes add: no aggregate comes back. A dependent chain of them is 58.4 ns a step. A quad's exchange by
+ddx_fine / ddy_fine (a 32-bit word as two 16-bit halves in floats) is exact on all 32 pixels, and 38 ns a step (a chain
+43.6 against 5.5 for the same loop without it). Neither is a cross-lane primitive under 20 ns.
