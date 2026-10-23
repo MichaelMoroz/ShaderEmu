@@ -100,12 +100,15 @@ DEFAULTS = dict(
                         # 2 pairs: texels 2k and 2k + 1 one above the other, a 32-byte sector (GVM_PAIR_X; IDEAS 40)
     cc0f=0,             # a cc 0 bundle (j, call, jr, callr) whose ops are path 7's, 3's or 5's runs the fast step's body (fstep_c), not step12
     evmax=8,            # (evf 2) compactions a pass at most
+    evfx=0,             # (a measure, evf 2 and 3) 1: compact() finds nothing
+    evfl=0,             # (evf 2) 1: the drop a plain loop over the entries (less code than eight fetches at once)
     evf=0,              # a store that finds both buckets full first drops their entries whose words are RAM's (each entry's texel fetched and
                         # compared; nothing a load could see changes), then takes a freed way: silent stores' entries cost room only until
                         # the cache is full. A lookup takes a matching way before a free one (a dropped entry leaves a hole before a mate)
                         # 2: the same out of the fast loop: a pass that would end full drops every entry that holds RAM's words, packs the
                         # buckets again (no hole before a resident, none in a texel's first bucket while it lies in its second), places
-                        # the store that found no room and goes on (EVMAX times a pass at most); the lookups as they were
+                        # the store that found no room and goes on (EVMAX times a pass at most); the lookups as they were.
+                        # 3: as 2, run called again from frag; 4: as 3 with no packing, the lookups taking a match before a free way
 )
 
 SPACE = dict(   # the values a search draws from
@@ -115,7 +118,7 @@ SPACE = dict(   # the values a search draws from
     bandx=[1, 2], per=[16, 32, 64, 128], jrow=[0, 1], perm=['id', 'bitrev', 'mul'], mul=[3, 5, 37, 77],
     early=[0, 1, 2, 3], mru=[0, 1, 2, 4], bb=[0, 1], tfirst=[0, 1], s6=[0, 1], nc=[0, 1], thin=[0, 1], thin8=[0, 1], wide3=[0, 1, 2], late=[0, 1, 2, 3], fx1=[0, 1], ov=[0, 4, 8, 16], mv=[0, 1], cv=[0, 1, 2], wsh=[0, 1, 2, 3], wad=[0, 1, 2, 3, 4, 5, 6, 7], s12b=[0, 1, 2, 3], s12in=[0, 1], rc=[0, 1, 2], dtx=['both', 'one'], rpk=['scalar', 'vec', 'wide'], pk=['scalar', 'vec', 'aos'], lay=['split', 'merged'],
     xr=[0, 64, 128, 256, 512, 1024], npair=[0, 32, 64, 128], xbind=[0, 1], xload=['pre', 'lazy'], xfast=[0, 1],
-    pf=[0, 1, 2], pft=[0, 4, 8, 16], pfd=[1, 2], lpf=[0, 128, 256, 512, 1024], lps=[0, 64, 128, 256], s12pf=[0, 1], ldf=[0, 1], cc0f=[0, 1], evf=[0, 1, 2], cc0x=[0, 1, 2, 3], m6seq=[0, 1], snk=[0, 1], rmap=[0, 1, 2], sil=[0, 1, 2, 3], silp=[1, 2, 3, 4, 8, 12, 15], mflat=[0, 1, 2, 3, 6, 7, 10],
+    pf=[0, 1, 2], pft=[0, 4, 8, 16], pfd=[1, 2], lpf=[0, 128, 256, 512, 1024], lps=[0, 64, 128, 256], s12pf=[0, 1], ldf=[0, 1], cc0f=[0, 1], evf=[0, 1, 2, 3, 4], cc0x=[0, 1, 2, 3], m6seq=[0, 1], snk=[0, 1], rmap=[0, 1, 2], sil=[0, 1, 2, 3], silp=[1, 2, 3, 4, 8, 12, 15], mflat=[0, 1, 2, 3, 6, 7, 10],
 )
 
 def layout(P):
@@ -359,10 +362,11 @@ uint wc_b2(uint t) {{ return NB + ((t * 0x85ebca6bu + 0x165667b1u) >> {32 - lg})
 uint wc_b3(uint t) {{ return (t * 0xc2b2ae35u + 0x27d4eb2fu) >> {32 - lo}; }}'''
     look = "st || ((ad >> 4) & bloom) == (ad >> 4)" if P['bloom'] else 'true'
     evf = P.get('evf', 0) == 1
+    evk = P.get('evf', 0) in (1, 4)   # (a match before a free way: holes allowed)
     ll = ("""    uint ka_ = firstbitlow(msk | 16u), kb_ = firstbitlow((msk >> 4) | 16u);   // (ll) a bucket's ways fill in order: the first
     bool am = ka_ < 4 && pick(m.A, ka_ & 3) != NONE, bm = kb_ < 4 && pick(m.B, kb_ & 3) != NONE;   // match or free is its fill
     uint k = am ? ka_ : bm ? 4 + kb_ : kb_ < ka_ ? 4 + kb_ : ka_ < 4 ? ka_ : 8u;   // a new texel to the less full bucket
-""" if P.get('ll', 0) else EVFK if evf else "    uint k = firstbitlow(msk);" + chr(10))
+""" if P.get('ll', 0) else EVFK if evk else "    uint k = firstbitlow(msk);" + chr(10))
     ovh = "    [branch] if (OV != 0 && k >= 8) {   // (ovh) both buckets full: the texel's bucket of a third table\n        uint b3 = (OVB >> 2) + wc_b3(m.t);\n        uint4 C = bucket(b3);\n        bool4 kc = (C & 0x0fffffffu) == m.t || C == NONE;\n        uint j = kc.x ? 0u : kc.y ? 1u : kc.z ? 2u : kc.w ? 3u : 4u;\n        m.otag = j < 4 ? pick(C, j) : NONE; m.sl = j < 4 ? 4 * b3 + j : NONE;\n    } else" if P.get('ovh', 0) else ''
     return ('''// ---- Memory: the write cache holds a texel in an entry of its bucket in the first table or the second
 bool has(uint tg, uint t, uint i) { return tg != NONE && (tg & 0x0fffffffu) == t && ((tg >> (28 + i)) & 1) != 0; }
@@ -727,7 +731,7 @@ def sil_text(P, src):
 def evf_text(P, src):
     '''evf: evok on for the stores' lookups (paths 3, 5 and 6, step12, the general step's stores)'''
     if not P.get('evf', 0): return src
-    if P['evf'] == 2: return evf2_text(P, src)
+    if P['evf'] >= 2: return evf2_text(P, src)
     assert not (P.get('mru', 0) or P.get('bb', 0) or P.get('mv', 0) or P.get('ov', 0) or P.get('ll', 0) or P.get('m6seq', 0) or P.get('ovh', 0)), 'evf: a plain cache'
     def rep(a, b, n=1):
         nonlocal src
@@ -796,7 +800,47 @@ def evf2_text(P, src):
         assert src.count(a) == 1, 'evf 2: ' + a[:70]
         src = src.replace(a, b)
     N = chr(10)
-    rep("void run(uint budget) {", EVF2 + "void run(uint budget) {")
+    ev = EVF2
+    if P.get('evfx', 0) == 1:   # (a measure: compact() finds nothing; the structure's own cost)
+        ev = ev[:ev.index('bool compact() {')] + 'bool compact() { return false; }' + chr(10)
+    if P.get('evfx', 0) == 2:   # (a measure: the drop alone, then the pass ends as before)
+        ev = ev.replace('    [branch] if (n == 0) return false;', '    return false;')
+        ev = ev[:ev.index('    ev_pack(0, 2 * NB);')] + '}' + chr(10)
+    if P.get('evfx', 0) == 3:   # (a measure: the drop and the packing, then the pass ends as before)
+        ev = ev.replace('    ev_pack(NB, 2 * NB);', '    ev_pack(NB, 2 * NB);' + chr(10) + '    return false;')
+    if P.get('evfl', 0):   # (evfl 1: the drop a plain loop, one entry at a time: less code)
+        i = ev.index('    [loop] for (g = 0; g < 8 * NB; g += 8) {'); j = ev.index('    [branch] if (n == 0) return false;')
+        ev = ev[:i] + '''    [loop] for (g = 0; g < 8 * NB; g++) {
+        uint tg = wt[g], mk = tg >> 28;
+        uint4 v = ram(tg & 0x0fffffffu);
+        bool eq = tg != NONE && ((mk & 1) == 0 || wd[4 * g] == v.x) && ((mk & 2) == 0 || wd[4 * g + 1] == v.y)
+               && ((mk & 4) == 0 || wd[4 * g + 2] == v.z) && ((mk & 8) == 0 || wd[4 * g + 3] == v.w);
+        [flatten] if (eq) wt[g] = NONE;
+        n += eq ? 1u : 0u;
+    }
+''' + ev[j:]
+    rep("void run(uint budget) {", ev + "void run(uint budget) {")
+    if P['evf'] == 4:   # (evf 4: no packing: the lookups take a match before a free way, so a hole hides nothing)
+        a = ev[ev.index('    ev_pack(0, 2 * NB);'):ev.index('    bool ok = true;')]
+        assert src.count(a) == 1
+        src = src.replace(a, '')
+    if P['evf'] in (3, 4):   # (evf 3: run as it was, called again from frag after a full end that compact() frees)
+        calls = ["    run(core == 0 ? _Ticks : bud);" + N, "    run(bud);" + N]
+        c = [x for x in calls if src.count(x) == 1]
+        assert len(c) == 1, 'evf 3: run call'
+        rep("    [branch] if (!ok) return 0;" + N, "    [branch] if (!ok) { wfull = true; return 0; }   // (evf 3: no room)" + N)
+        rep("uint step12(uint budget) {", "static bool wfull = false;   // (evf 3: step12's store found no room)" + N + "uint step12(uint budget) {")
+        arg = c[0].strip()[4:-2]
+        rep(c[0], N.join([
+            "    uint rb = " + arg + ", c0 = cycle;   // (evf 3) a full end that compact() frees: run again with what is left of the budget",
+            "    [loop] for (evn = 0; evn <= %du; evn++) {   // (one call of run: its text once)" % P.get('evmax', 8),
+            "        run(rb - (cycle - c0));",
+            "        [branch] if (evn == %du || !(endr == E_FULL || (endr == E_BUDGET && (wfull || wt[WCS] != NONE || wt[WCS + 1] != NONE)))) break;   // (HLSL makes both sides of || )" % P.get('evmax', 8),
+            "        [branch] if (!compact()) break;",
+            "        wfull = false;",
+            "        endr = E_BUDGET;",
+            "    }", ""]))
+        return src
     a = "    uint guard = budget + 8;   // a hard cap on the trips of both loops, whatever the budget does" + N
     rep(a, a + "    uint rb = budget, c0 = cycle;   // (evf 2)" + N + "    evn = 0;" + N)
     a = "        else [branch] if (budget > 0) budget = general(budget);" + N + "    }" + N
