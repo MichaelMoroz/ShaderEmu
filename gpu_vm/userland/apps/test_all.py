@@ -174,9 +174,15 @@ def run_case(c, a, w):
             p.stdin.write(b'cd /; export TERM=linux; ' + c['cmd'].encode() + output_cmd(c, a).encode() + b'; ' + T.DONE.encode() + b'\n'); sent = 2
             mark = len(out)
         elif sent == 2:
-            for pr in pairs:
-                if pr[1] is not None and pr[0] in out[mark:]:
-                    p.stdin.write(pr[1]); pr[1] = None
+            # the pairs in order, each looked for after the last one's send (as the harness does): two that expect the
+            # same text (mc's "Quit" before and after a command line) were both typed at once
+            while pairs and pairs[0][0] in out[mark:]:
+                pr = pairs.pop(0)
+                mark = out.index(pr[0], mark) + len(pr[0])
+                if pr[1] is not None:
+                    p.stdin.write(pr[1])
+                    mark = len(out)
+                    break
             if until in out[mark:]:
                 reached = True
                 break

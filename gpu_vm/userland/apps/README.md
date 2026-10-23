@@ -102,7 +102,7 @@ the tolerance named (`gvmcmp`, `NEAR` in `test_all.py`); an exact sum where the 
 | Quake III | yes | workers, inline, bots, bots-serial PASS; server: digest by load time | workers/inline: 237 of 237 lines the same, fewer than 500 (load time) | as RISC-V where QUAKE3_ENTER fixes the entry |
 | Half-Life: Uplink | yes (-lmfloat, 1 MB stack) | plays through the fight, HL_ROTATION=check 0 wrong; GVM_RACES 0 or 7 undone (light styles) | not run | HLGL_PICSUM 656aa416 (GPU addresses moved: not RISC-V's) |
 | terminal: nano, mg, htop, dialog, sl, file | yes | PASS | nano PASS | as RISC-V (TERM=linux) |
-| mc, mcedit | yes | mc's subshell says fork () = -1 | - | - |
+| mc, mcedit | yes | PASS (term-mc: a command line in the subshell; term-mcedit) | PASS | as RISC-V |
 | ports: pcre, lockfile, socat, thttpd, curl, dropbear, sftp, at | yes | PASS (dropbear: uname -m gpuvm) | pcre PASS | as RISC-V |
 | iproute2 | yes | all but /proc/net/stat/arp_cache (the kernel's) | - | - |
 

@@ -4,6 +4,9 @@
 mount -t proc proc /proc
 mount -t sysfs sysfs /sys
 mount -t devtmpfs devtmpfs /dev 2>/dev/null
+# the pseudo-terminals, as linux/userland/emuinit.c mounts them (mc's subshell: "Cannot open master and slave sides of pty")
+mkdir -p /dev/pts
+mount -t devpts devpts /dev/pts
 mount -t tmpfs -o mode=1777,size=32m tmpfs /tmp
 mount -t tmpfs -o mode=0755,size=4m tmpfs /persistence
 mount -t tmpfs -o mode=0755,size=1m tmpfs /run
