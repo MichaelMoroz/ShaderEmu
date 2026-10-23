@@ -110,7 +110,7 @@ the tolerance named (`gvmcmp`, `NEAR` in `test_all.py`); an exact sum where the 
 - `spec_load.c`: the fill across blocks hoisted a guarded load (QuickJS faulted); fixed in 7764c11.
 - `dtor_debug.cpp`: -g crashed on a deleting destructor (Vanilla Conquer); fixed in 7764c11.
 - `weak_undef.c`: under -fPIE an undefined weak function's address is the load address, not 0 (nano's SIGILL; nano
-  links its weak pthread functions in: `fix/terminal.sh`). Open.
+  links its weak pthread functions in: `fix/terminal.sh`). Fixed 23 October 2026: such an address is absolute.
 - Not the compiler: unaligned `uint16_t` casts (the NES), a variadic call through a thunk taking register arguments
   (Quake III: gpu_vm passes `...` on the stack), a 64 KB stack (Half-Life: `flat_stack.py`), a stack buffer printed
   after its function returned (nxfiles).

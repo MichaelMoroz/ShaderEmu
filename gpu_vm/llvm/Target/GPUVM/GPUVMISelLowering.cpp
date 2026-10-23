@@ -233,7 +233,7 @@ static cl::opt<bool> MaskSelect(
 bool llvm::gpuvmMaskSelect() { return MaskSelect && !GeneralOps; }
 
 static cl::opt<bool> FnRelGlobals(
-    "gpuvm-fnrel", cl::Hidden, cl::init(false),
+    "gpuvm-fnrel", cl::Hidden, cl::init(true),
     cl::desc("gpu_vm: PIC addresses from the function's own (one lpc), the "
              "symbol's offset an op's immediate, instead of an lpc each"));
 
@@ -696,6 +696,15 @@ SDValue GPUVMTargetLowering::lowerAddress(SDValue Op, SelectionDAG &DAG) const {
   EVT VT = Op.getValueType();
   SDValue T;
   bool FnRel = isPositionIndependent() && FnRelGlobals;
+  // An undefined weak symbol must come out 0, which no address made from the
+  // bundle's can be once the program is loaded elsewhere: its address is
+  // absolute (R_GVM_IMM32, which elf2flt leaves alone for an undefined symbol
+  // and relocates for a defined one).
+  bool Absolute = false;
+  if (auto *N = dyn_cast<GlobalAddressSDNode>(Op))
+    Absolute = N->getGlobal()->hasExternalWeakLinkage();
+  if (Absolute)
+    FnRel = false;
   unsigned TF = FnRel ? GPUVMII::MO_FNREL : GPUVMII::MO_None;
   switch (Op.getOpcode()) {
   case ISD::GlobalAddress: {
@@ -742,7 +751,7 @@ SDValue GPUVMTargetLowering::lowerAddress(SDValue Op, SelectionDAG &DAG) const {
     return DAG.getNode(ISD::ADD, DL, VT, Base,
                        DAG.getNode(GPUVMISD::ADDR, DL, VT, T));
   }
-  if (isPositionIndependent())
+  if (isPositionIndependent() && !Absolute)
     return DAG.getNode(GPUVMISD::PCADDR, DL, VT, T);
   return DAG.getNode(GPUVMISD::ADDR, DL, VT, T);
 }

@@ -158,8 +158,11 @@ code generator's job toward bundles is the order of its ops.
   cmpxchg loops, nand by a loop; i64 atomics by `__atomic_*` libcalls; `fence` for fences; a word's load or store is
   atomic. Lock-free up to 4 bytes (`__GCC_HAVE_SYNC_COMPARE_AND_SWAP_1/2/4`).
 - **Globals and TLS**: absolute addresses (static links; bFLT relocates them), folded into a load's or store's
-  immediate; under `-fPIE`/`-fPIC` from the bundle's address, `lpc rd, sym+off` (R_GVM_PCIMM32): the text has no
-  relocation, only data words that hold addresses (`gpuvm-linux-cc` compiles so: busybox 16,973 relocations to 758).
+  immediate; under `-fPIE`/`-fPIC` from the function's own address (`-gpuvm-fnrel`, the default since 23 October 2026: one
+  `lpc rd, fn` (R_GVM_PCIMM32) a function, a global `%fnrel(sym - fn)` in an op's immediate; Quake III +3.2%, its static
+  bundles -6%; `-mllvm -gpuvm-fnrel=0` is an `lpc` each): the text has no relocation, only data words that hold
+  addresses (`gpuvm-linux-cc` compiles so: busybox 16,973 relocations to 758). An undefined weak symbol's address is
+  absolute (R_GVM_IMM32, which elf2flt leaves 0), so `if (f)` sees 0 (`userland/apps/bugs/weak_undef.c`).
   TLS is local exec whatever the model: `lw a0, %tprel(x)(tp)`. Jump tables in .rodata, `lw` and `jr`. Computed goto
   works.
 - **Inline asm**: `r` (`%0` prints `rN`), `i`, `n`, `m` (`off(rN)`), `{a0}`/`{r5}`/`{zero}` register constraints,
