@@ -49,14 +49,23 @@ def fps_ray(log):
 
 
 def fps_doom(log):
-    got = [(int(f), int(ms)) for f, ms in re.findall(r'doom: (\d+) frames in (\d+) ms', log)]
-    f, ms = sum(a for a, _ in got), sum(b for _, b in got)
-    return (f * 1000.0 / ms if ms else None), f'{f} frames in {ms} ms'
+    # the timedemo's end: its tics a second of the wall (35 tics a second of the game; lower realtics are faster)
+    m = re.search(r'timed (\d+) gametics in (\d+) realtics', log)
+    if m:
+        return int(m[1]) * 35.0 / int(m[2]), f'{m[1]} gametics in {m[2]} realtics'
+    got = [(int(f), float(s)) for f, s in re.findall(r'doom: (\d+) frames in ([\d.]+) seconds', log)]
+    f, s = sum(a for a, _ in got), sum(b for _, b in got)
+    return (f / s if s else None), f'{f} frames in {s:.1f} s'
 
 
 def fps_quake(log):
-    m = re.search(r'(\d+) frames ([\d.]+) seconds ([\d.]+) fps', log)
-    return (float(m[3]), m[0]) if m else (None, 'no timedemo line')
+    m = re.search(r'(\d+) frames\s+([\d.]+) seconds\s+([\d.]+) fps', log)
+    if m:
+        return float(m[3]), m[0]
+    # (the timedemo not ended in the run: its stats windows)
+    got = [(int(f), int(ms)) for f, ms in re.findall(r'quakestat: (\d+) frames in (\d+) ms', log)]
+    f, ms = sum(a for a, _ in got), sum(b for _, b in got)
+    return (f * 1000.0 / ms if ms else None), f'{len(got)} windows, {f} frames in {ms} ms'
 
 
 def fps_coremark(log):
