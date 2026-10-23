@@ -27,3 +27,5 @@ timed) and register-checked, then timed on the card in batches under 10 minutes;
 | 16 | Compiler gap: hand assembly vs our clang vs gcc for RISC-V, same kernels | in progress | the bench favours gpu_vm 2.2x more than the games do |
 | 17 | Compiler bundling options (-gpuvm-sched-kind, -gpuvm-mask-select, -gpuvm-fnrel) | parked | unfinished patch in build/wip |
 | 18 | More registers for LLVM; spills and frames in the core's file | after 7 and 16 | |
+| 19 | 128-bit registers: SIMD (one opcode, four lanes) and lane-VLIW (an opcode a lane), predication by lane mask, 16-byte texel loads/stores | queued (builder; vector kernels from the bench) | |
+| 20 | Pass latency: Quake III is ~6.3 passes a frame with core 0 under a third of its budget (sync, system); per-pass fixed cost, worker budget size, dependency rounds per frame | modelling (bench) | the kernels are 1.5-1.9x RISC-V but Q3 0.79x |
