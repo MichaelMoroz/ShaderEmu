@@ -11,7 +11,7 @@
 #define R_GVM_32 1         /* a data word: S + A */
 #define R_GVM_REL32 2      /* S + A - P */
 #define R_GVM_IMM32 3      /* word 2, a long immediate: S + A */
-#define R_GVM_PCIMM32 4    /* word 2: S + A - P + 8 (from the bundle) */
+#define R_GVM_PCIMM32 4    /* S + A - the bundle */
 #define R_GVM_BR9 5        /* the control word's off9, in bundles */
 #define R_GVM_J18 6        /* the control word's off18 (j, call) */
 #define R_GVM_IMM12 7      /* an op's imm12: S + A */
@@ -121,7 +121,8 @@ ST_FUNC void relocate(TCCState *s1, ElfW_Rel *rel, int type, unsigned char *ptr,
         add32le(ptr, val - addr);
         return;
     case R_GVM_PCIMM32:
-        write32le(ptr, val - addr + 8);
+        /* S + A - the bundle (its long immediate is word 1 or 2 of it) */
+        write32le(ptr, val - (addr & ~(addr_t)15));
         return;
     case R_GVM_IMM12:
         off = val;

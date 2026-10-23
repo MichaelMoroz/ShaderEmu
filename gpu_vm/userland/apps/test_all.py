@@ -48,6 +48,8 @@ OVERRIDES = {
     # (the sum at one frame: the lines printed vary, a worker's line now and then lost, a frame after the end or not)
     'quake-particles': dict(digest=[], has=[r'particles at frame 960: 64fca136']),
     'quake3-server': dict(digest=[(r'^(q3srvsum: .*)', '9b8ecbe9')]),
+    # TinyCC's outputs for gpu_vm (tcc.sh): its own bytes, the same with 17 and 32 cores
+    'cc-bytes': dict(digest=[(r'^([0-9a-f]{32}  \S+)', '825f76ab')]),
     # uname -m says the machine
     'ports-dropbear': dict(has=[r'^ssh-ok gpuvm$', r'^file-data$', r'^sftp> get /tmp/f2 /tmp/f3']),
 }
