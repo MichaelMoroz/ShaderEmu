@@ -1,0 +1,5 @@
+# x23a: x22's lookup reading words, not texels (x23v DREAD 0), the tags first (DREAD 1), and the bloom word (BLOOM 1)
+x22       gpu_vm/tick/steps/x22.hlsl
+d0b0      gpu_vm/tick/steps/x23v.hlsl -D DREAD=0 -D BLOOM=0
+d1b0      gpu_vm/tick/steps/x23v.hlsl -D DREAD=1 -D BLOOM=0
+d0b1      gpu_vm/tick/steps/x23v.hlsl -D DREAD=0 -D BLOOM=1
