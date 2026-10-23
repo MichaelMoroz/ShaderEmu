@@ -15,7 +15,7 @@ timed) and register-checked, then timed on the card in batches under 10 minutes;
 | 4 | Memory model study: stack share, coalescing, memcpy as the commit's copy, move on insertion | done (model) | stack 16-20% of distinct stored texels, globals 50-57%, memcpy 42%; move on insertion +17-23% in the model, within noise on the card |
 | 5 | Active workers serialized by placement | done (g "dims") | not so: busy workers overlap fully; bit-reversed placement -10% |
 | 6 | Idle-but-awake workers drawn every pass | measured | ~1.3 us each, 40 of them +2-3% |
-| 7 | Large register file in the core's state (merged registers and cache), 64-1024 | in progress (g1, g3) | an unused file costs 3-4% (128) to 12-16% (1024); file vs memory stack re-measured after the step12 fix |
+| 7 | Large register file in the core's state (merged registers and cache), 64-1024 | measured (g1, g3) | an unused file costs 3-4% (128) to 12-16% (1024); with it the stack-in-file kernels gain 6-7% on the same tick (util 0.40 -> 0.48), net vs x23 +4% g_logic, +2% g_hl, -5% g_q3; lazy loading of the file -15-20% |
 | 8 | Registers bound to addresses (fbind), (address, value) pair store buffer (fpair) | implemented (58970b6) | to measure |
 | 9 | Budget toggle with a flush window | superseded | the tick spills registers at every pass end; full budget every pass is the target |
 | 10 | Full budget every pass (core-0 util as a score) | in scoring | x23 util 0.45 on the game set |

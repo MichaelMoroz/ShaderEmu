@@ -37,6 +37,9 @@ DEFAULTS = dict(
     bb=0,               # x24's idea: a mask of the first-table buckets stored to; a load whose first bucket has none reads no tags
     tfirst=0,           # x24's idea: a load's or store's texel fetched before its lookup (paths 3-5)
     s6=0,               # x24's idea (with mru): a store pair (path 6) whose texels are both kept skips the lookup
+    rpk='scalar',       # the registers: scalar r[65], or vec uint4 R4[17] (layoutopts.py)
+    pk='scalar',        # the write cache: scalar wt[] and wd[], vec (uint4 tags a bucket, uint4 data an entry), aos (a bucket's tags and texels side by side)
+    lay='split',        # the arrays apart (split) or one array (merged)
     early=0,            # 0 none; 1 a halted core copies its state at the top; 2 and a sleeping one (a supervisor's wait);
                         # 3 and both discard when the other set holds the same (texel 23.w counts the quiet passes)
     # ---- phase 2 (ISA; isa.h GVM_M_FREAD): the core's file, its bindings and its pair buffer, in the state after the write cache
@@ -52,7 +55,7 @@ SPACE = dict(   # the values a search draws from
     fetch=['both', 'one'], int_first=[0, 1], mem_order=['35', '4'], split=['branch', 'flatten'],
     block=[(8, 8), (16, 4), (4, 16), (8, 4), (4, 8), (32, 2), (16, 8), (8, 16), (32, 4), (64, 1), (32, 1), (16, 2)],
     bandx=[1, 2], per=[16, 32, 64, 128], jrow=[0, 1], perm=['id', 'bitrev', 'mul'], mul=[3, 5, 37, 77],
-    early=[0, 1, 2, 3], mru=[0, 1, 2, 4], bb=[0, 1], tfirst=[0, 1], s6=[0, 1],
+    early=[0, 1, 2, 3], mru=[0, 1, 2, 4], bb=[0, 1], tfirst=[0, 1], s6=[0, 1], rpk=['scalar', 'vec'], pk=['scalar', 'vec', 'aos'], lay=['split', 'merged'],
     xr=[0, 64, 128, 256, 512, 1024], npair=[0, 32, 64, 128], xbind=[0, 1], xload=['pre', 'lazy'], xfast=[0, 1],
 )
 
@@ -631,15 +634,44 @@ def full(P):
             P['band'] = max(P['band'], P['bh'])
     return P
 
+def step12(P):
+    """step12 (paths 1 and 2): with the assembler's file_paths a file op with a cc 0 control word (call, ret, jr) is path 2's"""
+    src = part('step12')
+    if not ((P['xr'] or P['npair']) and P['xfast']): return src
+    xr, np_ = P['xr'], P['npair']
+    o = "    [branch] if (path == GVM_PATH_MEMF && (t.x & op_bit(0x30)) == op_bit(0x30)) {   // the core's file: lf, sf, fpair\n"
+    o += "        bool wr = (t.x & op_bit(8)) != 0;\n"
+    if xr:
+        o += "        uint xi = (A0 + i0) & (XR - 1);\n"
+        o += "        [branch] if (!wr) v0 = xget(xi);\n"
+        o += "        else [branch] if (((t.x >> 12) & 7) == GVM_FK_SF) xput(xi, r[d0]);\n"
+        if np_: o += "        else {\n"
+    else:
+        o += "        {\n"
+    if np_:
+        o += """            uint pad = (A0 + i0) & ~3u;
+            smax = max(smax, pad - GVM_DEV);
+            xpair(pad, r[d0]);
+            budget = pn >= NPAIR ? 1 : budget;   // (the bundle that fills the pairs is the pass's last)
+        }
+"""
+    elif not xr:
+        o += "        }\n"
+    o += "        d0 = wr ? 0 : d0;\n    } else "
+    a = "    [branch] if (path == GVM_PATH_MEMF) {"
+    assert a in src
+    return src.replace(a, o + a.lstrip(), 1)
+
 def emit(P):
     P = full(P)
     why = valid(P)
     if why: raise ValueError(why)
     L = layout(P)
-    out = [header(P, L), part('alu'), memory(P), part('taken'), fstep(P), part('step12'), part('general').replace('//@@FILE_ANY@@', file_any(P)), RUN,
+    out = [header(P, L), part('alu'), memory(P), part('taken'), fstep(P), step12(P), part('general').replace('//@@FILE_ANY@@', file_any(P)), RUN,
            state_io(P), frag(P), part('ops')]
     from memopts import memopts
-    return memopts(P, '\n'.join(out))
+    from layoutopts import layoutopts
+    return layoutopts(P, memopts(P, '\n'.join(out)))
 
 def manifest(P):
     P = full(P)

@@ -24,7 +24,7 @@ import gen
 
 GVMB = os.environ.get('GVMBENCH') or os.path.join(ROOT, 'bin', 'gvmbench.exe')
 CHECK_CASES = 'default,p_k1_m0,p_k4_m40,mc_int,p_spill,p_xspill'
-CHECK_SETS = ''   # (the game bench's sets are inputs, not the gate: on WARP they take a minute a variant)
+CHECK_SETS = 'game,game_x'   # (every g_ kernel, short: two frames; the file, bindings and pairs compared too)
 CHECK_CORES = '40'
 TIME_CASES = 'arith,loads,stores,mix,coremark,gzip,p_k0_m0,p_k8_m40,p_spill,p_xspill'   # (mc_ at 255 cores: seconds each)
 TIME_SETS = 'game,game_x'
@@ -161,6 +161,7 @@ def cmd_time(a):
     refs = [r for r in a.refs.split(',') if r]
     print('time: %d variants, chunks of %d with %s, %d rounds, cases %s' % (len(names), a.chunk, refs, a.rounds, a.cases))
     tag = time.strftime('%H%M%S')
+    names = names[:a.chunk * a.max_chunks] if a.max_chunks else names   # (one batch under ten minutes: the rest next time)
     for c in range(0, len(names), a.chunk):
         part = names[c:c + a.chunk]
         vf = os.path.join(d, 'chunk_%s_%03d.txt' % (tag, c // a.chunk))
@@ -220,7 +221,7 @@ if __name__ == '__main__':
     g.add_argument('--from', dest='from_'); g.add_argument('--mutate', type=int, default=2); g.add_argument('--grid', nargs='*')
     c = sp.add_parser('check'); c.add_argument('batch'); c.add_argument('-j', type=int, default=8); c.add_argument('--timeout', type=int, default=300)
     t = sp.add_parser('time'); t.add_argument('batch'); t.add_argument('--cases', default=TIME_CASES); t.add_argument('--rounds', type=int, default=3)
-    t.add_argument('--chunk', type=int, default=24); t.add_argument('--passes', type=int, default=100); t.add_argument('--refs', default='x23,x24')
+    t.add_argument('--chunk', type=int, default=24); t.add_argument('--max-chunks', type=int, default=1); t.add_argument('--passes', type=int, default=100); t.add_argument('--refs', default='x23,x24')
     t.add_argument('--top', type=int, default=0); t.add_argument('--only'); t.add_argument('--retime', action='store_true'); t.add_argument('--cores', type=int, default=255); t.add_argument('--sets', default=TIME_SETS); t.add_argument('--deadline', type=float, default=480)
     r = sp.add_parser('report'); r.add_argument('batch'); r.add_argument('--top', type=int, default=30)
     a = ap.parse_args()

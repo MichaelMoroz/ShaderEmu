@@ -32,7 +32,7 @@ static uint32_t g_ntex = 0;    // a step's NTEX (x22): its state texels (0: T_WC
 static uint32_t g_geo = 0;     // a step's GEO_BLOCKS (x21): pixel p of core c at ((c & 127) * 8 + p / 8, (c >> 7) * 16 + p % 8)
 static uint32_t g_wcn0 = 0;    // a step's WCN0 (x25): core 0's own write cache, its tick a compile of its own (CORE0=1)
 static uint32_t g_spix0 = 0;   // and its state pixels (NTEX0): 0-63 in its block, 64 on at ((p >> 3) - 8, 8 + (p & 7))
-struct Geo { uint32_t bw = 0, bh = 0, band = 0, per = 0, jrow = 0, perm = 0, mul = 0, inv = 0; uint32_t cpts = 0, xr = 0, npair = 0, xbind = 0, xfast = 0; };
+struct Geo { uint32_t bw = 0, bh = 0, band = 0, per = 0, jrow = 0, perm = 0, mul = 0, inv = 0; uint32_t cpts = 0, xr = 0, npair = 0, xbind = 0, xfast = 0, t_xf = 0, t_xt = 0, t_pn = 23; };
 static Geo g_gg;               // a built step's layout (builder/gen.py: GEO_BW...): core c's pixel j at (slot * bw + jx, band * BAND + jy)
 static uint32_t g_lrows = 1;   // a core's state pixels on this many rows (a step's LROWS, x19): pixel p at (p % spx, core * LROWS + p / spx)
 
@@ -473,6 +473,12 @@ static bool check_case(Gpu& gpu, const Case& cs, uint32_t seed, bool verbose) {
             }
             if (!same && bad++ < g_show && verbose) printf("  %s: core %u r%d %08x, the reference %08x\n", cs.name, c, k, st[k], rc[c].x[k]);
         }
+        // phase 2: the core's file, its bindings (the dirty bit apart: a commit clears it) and the pairs not yet written
+        for (uint32_t k = 0; k < g_gg.xr && g_gg.t_xf; k++)
+            if (st[g_gg.t_xf * 4 + k] != rc[c].xf[k] && bad++ < g_show && verbose) printf("  %s: core %u file %u %08x, the reference %08x\n", cs.name, c, k, st[g_gg.t_xf * 4 + k], rc[c].xf[k]);
+        for (uint32_t k = 0; k < g_gg.xr && g_gg.xbind && g_gg.t_xt; k++)
+            if ((st[g_gg.t_xt * 4 + k] & ~2u) != (rc[c].xtag[k] & ~2u) && bad++ < g_show && verbose) printf("  %s: core %u binding %u %08x, the reference %08x\n", cs.name, c, k, st[g_gg.t_xt * 4 + k], rc[c].xtag[k]);
+        if (g_gg.npair && st[g_gg.t_pn * 4] != rc[c].np && bad++ < g_show && verbose) printf("  %s: core %u %u pairs, the reference %u\n", cs.name, c, st[g_gg.t_pn * 4], rc[c].np);
         if (st[16 * 4] != rc[c].pc && bad++ < g_show && verbose) printf("  %s: core %u pc %08x, the reference %08x\n", cs.name, c, st[16 * 4], rc[c].pc);
         if (!cs.skip_ops && st[19 * 4 + 1] != (uint32_t)rc[c].ops_run && bad++ < g_show && verbose)
             printf("  %s: core %u ops %u, the reference %u\n", cs.name, c, st[19 * 4 + 1], (uint32_t)rc[c].ops_run);
@@ -582,7 +588,7 @@ static Geo step_geo(const std::string& path) {
     g.jrow = step_size(src, {}, "GEO_JROW", 0); g.perm = step_size(src, {}, "GEO_PERM", 0); g.mul = step_size(src, {}, "GEO_MUL", 0);
     g.inv = step_size(src, {}, "GEO_INV", 0);
     g.cpts = step_size(src, {}, "CPTS", 0); g.xr = step_size(src, {}, "XR", 0); g.npair = step_size(src, {}, "NPAIR", 0);
-    g.xbind = step_size(src, {}, "XBIND", 0); g.xfast = step_size(src, {}, "XFAST", 0);
+    g.xbind = step_size(src, {}, "XBIND", 0); g.xfast = step_size(src, {}, "XFAST", 0); g.t_xf = step_size(src, {}, "T_XF", 0); g.t_xt = step_size(src, {}, "T_XT", 0);
     return g;
 }
 static void build_variant(Variant& v) {
