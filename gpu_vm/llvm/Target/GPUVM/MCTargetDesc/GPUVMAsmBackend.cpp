@@ -55,6 +55,7 @@ MCFixupKindInfo GPUVMAsmBackend::getFixupKindInfo(MCFixupKind Kind) const {
       {"fixup_gvm_imm32", 0, 32, 0},  {"fixup_gvm_pcimm32", 0, 32, 0},
       {"fixup_gvm_br9", 17, 9, 0},    {"fixup_gvm_j", 14, 18, 0},
       {"fixup_gvm_j18", 14, 18, 0},   {"fixup_gvm_imm12", 20, 12, 0},
+      {"fixup_gvm_fnrel32", 0, 32, 0},
   };
   if (Kind < FirstTargetFixupKind)
     return MCAsmBackend::getFixupKindInfo(Kind);
@@ -78,8 +79,17 @@ bool GPUVMAsmBackend::writeNopData(raw_ostream &OS, uint64_t Count,
 void GPUVMAsmBackend::applyFixup(const MCFragment &F, const MCFixup &Fixup,
                                  const MCValue &Target, uint8_t *Data,
                                  uint64_t Value, bool IsResolved) {
-  maybeAddReloc(F, Fixup, Target, Value, IsResolved);
   MCFixupKind Kind = Fixup.getKind();
+  // %fnrel's relocation is R_GVM_PCIMM32 from word 2, which lld counts from
+  // the bundle: 8 less in the addend gives S + A - fn.
+  if (Kind == GPUVM::fixup_gvm_fnrel32)
+    maybeAddReloc(F, Fixup,
+                  MCValue::get(Target.getAddSym(), Target.getSubSym(),
+                               Target.getConstant() - 8,
+                               Target.getSpecifier()),
+                  Value, IsResolved);
+  else
+    maybeAddReloc(F, Fixup, Target, Value, IsResolved);
   if (mc::isRelocation(Kind))
     return;
   MCContext &Ctx = getContext();
@@ -113,6 +123,7 @@ void GPUVMAsmBackend::applyFixup(const MCFragment &F, const MCFixup &Fixup,
       write64le(Data, Value);
     return;
   case GPUVM::fixup_gvm_imm32:
+  case GPUVM::fixup_gvm_fnrel32:
     if (IsResolved)
       write32le(Data, Value);
     return;

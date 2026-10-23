@@ -9,6 +9,7 @@
 #include "MCTargetDesc/GPUVMMCAsmInfo.h"
 #include "MCTargetDesc/GPUVMFixupKinds.h"
 #include "llvm/MC/MCExpr.h"
+#include "llvm/MC/MCValue.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Triple.h"
 
@@ -37,8 +38,23 @@ void GPUVMMCAsmInfo::printSpecifierExpr(raw_ostream &OS,
                                         const MCSpecifierExpr &Expr) const {
   if (Expr.getSpecifier() == GPUVM::S_TPREL)
     OS << "%tprel(";
+  else if (Expr.getSpecifier() == GPUVM::S_FNREL)
+    OS << "%fnrel(";
   else
     OS << "(";
   printExpr(OS, *Expr.getSubExpr());
   OS << ')';
+}
+
+// %fnrel(sym - fn) keeps its difference (the object writer makes it relative
+// to the fixup); anything else as MCAsmInfo has it.
+bool GPUVMMCAsmInfo::evaluateAsRelocatableImpl(const MCSpecifierExpr &E,
+                                               MCValue &Res,
+                                               const MCAssembler *Asm) const {
+  if (E.getSpecifier() != GPUVM::S_FNREL)
+    return MCAsmInfo::evaluateAsRelocatableImpl(E, Res, Asm);
+  if (!E.getSubExpr()->evaluateAsRelocatable(Res, Asm))
+    return false;
+  Res.setSpecifier(E.getSpecifier());
+  return true;
 }

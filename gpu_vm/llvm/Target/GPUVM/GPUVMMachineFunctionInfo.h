@@ -16,6 +16,9 @@ namespace llvm {
 class GPUVMMachineFunctionInfo : public MachineFunctionInfo {
   // The first variadic argument's slot (they are all on the stack).
   int VarArgsFrameIndex = 0;
+  // PIC: the function's own address (lpc in the entry block), the base of
+  // its globals' %fnrel immediates.
+  Register GlobalBaseReg;
 
 public:
   GPUVMMachineFunctionInfo(const Function &F, const TargetSubtargetInfo *STI) {}
@@ -29,6 +32,8 @@ public:
 
   int getVarArgsFrameIndex() const { return VarArgsFrameIndex; }
   void setVarArgsFrameIndex(int FI) { VarArgsFrameIndex = FI; }
+  Register getGlobalBaseReg() const { return GlobalBaseReg; }
+  void setGlobalBaseReg(Register R) { GlobalBaseReg = R; }
 };
 
 } // namespace llvm

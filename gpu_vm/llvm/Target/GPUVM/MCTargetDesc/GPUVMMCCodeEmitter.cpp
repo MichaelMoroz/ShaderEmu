@@ -64,6 +64,9 @@ static void setImm(GPUVMMCCodeEmitter::OpEncoding &E, const MCOperand &MO,
   E.Long = true;
   E.LongExpr = MO.getExpr();
   E.LongKind = Kind;
+  if (auto *S = dyn_cast<MCSpecifierExpr>(E.LongExpr);
+      S && S->getSpecifier() == GPUVM::S_FNREL)
+    E.LongKind = GPUVM::fixup_gvm_fnrel32;
 }
 
 void GPUVMMCCodeEmitter::encodeOp(const MCInst &MI, OpEncoding &E) const {

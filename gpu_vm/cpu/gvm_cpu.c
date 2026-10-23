@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <signal.h>
 #ifdef _WIN32
 #include <io.h>
 #include <fcntl.h>
@@ -60,6 +61,9 @@ static struct {
     int devices, desktop;
     uint32_t workers;            // worker cores started (1 to workers), by the geometry's control words
     uint8_t end[CPU_MAX_CORES];  // why each core's last pass ended (GVM_END_*)
+    // --profile: bundles run by address and contents, from --profile-from bundles on; written at the exit
+    const char *prof_path;
+    uint64_t prof_from;
 } H;
 
 static void out_flush(void) { fflush(stdout); fflush(stderr); }
@@ -220,7 +224,61 @@ static void trace_flush(void) {
     H.tr_open = 0;
 }
 
+// ---- --profile: a table of (pc, the bundle's four words) -> runs, core 0's and the workers'
+typedef struct { uint32_t pc, w[4]; uint64_t n0, nw; } prof_ent;
+static struct { prof_ent *t; uint32_t mask, used; } P;
+
+static uint32_t prof_hash(uint32_t pc, const uint32_t *w) { return ((pc >> 4) ^ w[0] ^ w[3]) * 2654435761u; }
+
+static void prof_count(gvm_core *c) {
+    uint32_t pc = c->pc, *w;
+    if ((pc & 15u) || pc + 16 > H.m.ram_end || H.bundles < H.prof_from) return;   // (a bundle resumed: counted once)
+    w = &H.m.ram[pc >> 2];
+    if (P.used * 2 >= P.mask) {   // grown at half full
+        prof_ent *old = P.t;
+        uint32_t om = P.mask;
+        P.mask = om ? om * 2 + 1 : (1u << 16) - 1;
+        P.t = (prof_ent *)calloc((size_t)P.mask + 1, sizeof(prof_ent));
+        if (!P.t) { fprintf(stderr, "gvm_cpu: --profile: out of memory\n"); exit(EXIT_USAGE); }
+        for (uint32_t i = 0; old && i <= om; i++)
+            if (old[i].n0 || old[i].nw) {
+                uint32_t h = prof_hash(old[i].pc, old[i].w);
+                while (P.t[h & P.mask].n0 || P.t[h & P.mask].nw) h++;
+                P.t[h & P.mask] = old[i];
+            }
+        free(old);
+    }
+    for (uint32_t h = prof_hash(pc, w);; h++) {
+        prof_ent *e = &P.t[h & P.mask];
+        if (!e->n0 && !e->nw) { e->pc = pc; memcpy(e->w, w, 16); P.used++; }
+        else if (e->pc != pc || memcmp(e->w, w, 16)) continue;
+        if (c->id) e->nw++; else e->n0++;
+        return;
+    }
+}
+
+static void prof_write(void) {
+    FILE *f;
+    if (!H.prof_path || !(f = fopen(H.prof_path, "w"))) return;
+    fprintf(f, "# pc w0 w1 w2 ctl core0 workers\n");
+    for (uint32_t i = 0; P.t && i <= P.mask; i++) {
+        prof_ent *e = &P.t[i];
+        if (e->n0 || e->nw)
+            fprintf(f, "%08x %08x %08x %08x %08x %llu %llu\n", e->pc, e->w[0], e->w[1], e->w[2], e->w[3],
+                    (unsigned long long)e->n0, (unsigned long long)e->nw);
+    }
+    fclose(f);
+}
+
+// SIGTERM or SIGINT while profiling: the run stops at the next bundle and the profile is written
+static volatile sig_atomic_t prof_killed;
+static void prof_stop(int sig) { prof_killed = 1; }
+
 static int host_step(gvm_core *c) {
+    if (H.prof_path) {
+        if (prof_killed) { H.stop = 1; return 1; }
+        prof_count(c);
+    }
     if (H.trace) {
         char text[320];
         trace_flush();
@@ -773,6 +831,8 @@ static void usage(void) {
         "  --trace             each bundle on stderr: core, pc, control word, ops, registers written\n"
         "  --strace            each semihosted call on stderr\n"
         "  --stats             bundles, ops and passes at the end, on stderr\n"
+        "  --profile FILE      the bundles run, a line each address and contents with its runs, to FILE at the end\n"
+        "  --profile-from N    count from the Nth bundle on\n"
         "  --no-console        no console device (its words at 0x016b8280 are plain RAM)\n"
         "  --no-stdin          the console delivers no input\n");
     exit(EXIT_USAGE);
@@ -804,6 +864,8 @@ int main(int argc, char **argv) {
         else if (!strcmp(a, "--budget") && more) H.budget = num(argv[++i]);
         else if (!strcmp(a, "--pass-time") && more) H.pass_time = num(argv[++i]);
         else if (!strcmp(a, "--cores") && more) H.ncores = num(argv[++i]);
+        else if (!strcmp(a, "--profile") && more) H.prof_path = argv[++i];
+        else if (!strcmp(a, "--profile-from") && more) H.prof_from = strtoull(argv[++i], NULL, 0);
         else if (!strcmp(a, "--max-bundles") && more) H.max_bundles = strtoull(argv[++i], NULL, 0);
         else if (!strcmp(a, "--")) { i++; break; }
         else if (a[0] == '-' && a[1] == '-') { fprintf(stderr, "gvm_cpu: unknown option %s\n", a); usage(); }
@@ -817,6 +879,7 @@ int main(int argc, char **argv) {
     _setmode(_fileno(stdin), _O_BINARY);
 #endif
     if (H.trace) setvbuf(stdout, NULL, _IONBF, 0);
+    if (H.prof_path) { atexit(prof_write); signal(SIGTERM, prof_stop); signal(SIGINT, prof_stop); }
 
     // the machine: RAM is address 0 up (the boot area and the device window are words of it), to GVM_RAM + its size
     if ((uint64_t)GVM_RAM + (uint64_t)ram_mb * (1u << 20) > GVM_ROM) { fprintf(stderr, "gvm_cpu: --ram %u is past the ROM\n", ram_mb); return EXIT_USAGE; }

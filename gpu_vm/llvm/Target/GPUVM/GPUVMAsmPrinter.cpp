@@ -76,6 +76,11 @@ static MCOperand symbolOperand(const MachineOperand &MO, MCSymbol *Sym,
         E, MCConstantExpr::create(MO.getOffset(), Ctx), Ctx);
   if (MO.getTargetFlags() == GPUVMII::MO_TPREL)
     E = MCSpecifierExpr::create(E, GPUVM::S_TPREL, Ctx);
+  if (MO.getTargetFlags() == GPUVMII::MO_FNREL)
+    E = MCSpecifierExpr::create(
+        MCBinaryExpr::createSub(
+            E, MCSymbolRefExpr::create(AP.CurrentFnSym, Ctx), Ctx),
+        GPUVM::S_FNREL, Ctx);
   return MCOperand::createExpr(E);
 }
 

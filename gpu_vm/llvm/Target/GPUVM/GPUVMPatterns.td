@@ -189,6 +189,8 @@ def : Pat<(not (xor (i32 GPR:$a), (i32 GPR:$b))), (XNOR GPR:$a, GPR:$b)>;
 // By default a shift and a mask, a shift and an add, two shifts are made;
 // -gpuvm-general-ops takes the one op instead.
 def GeneralOps : Predicate<"llvm::gpuvmGeneralOps()">;
+def NoGeneralOps : Predicate<"!llvm::gpuvmGeneralOps()">;
+def MaskSelect : Predicate<"llvm::gpuvmMaskSelect()">;
 def lowmask : ImmLeaf<i32, [{ return isMask_32((uint32_t)Imm); }]>;
 let Predicates = [GeneralOps], AddedComplexity = 1 in {
 def : Pat<(and (i32 GPR:$a), lowmask12:$m), (BFE GPR:$a, 0, (MaskLen $m))>;
@@ -248,6 +250,13 @@ def : Pat<(add (i32 GPR:$a), (gpuvm_addr tglobaltlsaddr:$s)),
           (ADDI GPR:$a, tglobaltlsaddr:$s)>;
 def : Pat<(add (i32 GPR:$a), (gpuvm_addr tconstpool:$s)),
           (ADDI GPR:$a, tconstpool:$s)>;
+// PIC: the function's address + %fnrel(sym - fn) (GPUVMISelLowering.cpp)
+def : Pat<(add (i32 GPR:$a), (gpuvm_addr texternalsym:$s)),
+          (ADDI GPR:$a, texternalsym:$s)>;
+def : Pat<(add (i32 GPR:$a), (gpuvm_addr tblockaddress:$s)),
+          (ADDI GPR:$a, tblockaddress:$s)>;
+def : Pat<(add (i32 GPR:$a), (gpuvm_addr tjumptable:$s)),
+          (ADDI GPR:$a, tjumptable:$s)>;
 
 //===----------------------------------------------------------------------===//
 // Comparisons and selects
@@ -258,10 +267,22 @@ let AddedComplexity = 1 in {
 def : Pat<(seteq (i32 GPR:$a), 0), (SLTUI GPR:$a, 1)>;
 def : Pat<(setne (i32 GPR:$a), 0), (SLTU (i32 R0), GPR:$a)>;
 }
+// a == b, a != b: xor and sltu (two fast ops) rather than seq/sne
+let Predicates = [GeneralOps] in {
 def : Pat<(seteq (i32 GPR:$a), (i32 GPR:$b)), (SEQ GPR:$a, GPR:$b)>;
 def : Pat<(seteq (i32 GPR:$a), imm32:$i), (SEQI GPR:$a, imm32:$i)>;
 def : Pat<(setne (i32 GPR:$a), (i32 GPR:$b)), (SNE GPR:$a, GPR:$b)>;
 def : Pat<(setne (i32 GPR:$a), imm32:$i), (SNEI GPR:$a, imm32:$i)>;
+}
+let Predicates = [NoGeneralOps] in {
+def : Pat<(seteq (i32 GPR:$a), (i32 GPR:$b)),
+          (SLTUI (XOR GPR:$a, GPR:$b), 1)>;
+def : Pat<(seteq (i32 GPR:$a), imm32:$i), (SLTUI (XORI GPR:$a, imm32:$i), 1)>;
+def : Pat<(setne (i32 GPR:$a), (i32 GPR:$b)),
+          (SLTU (i32 R0), (XOR GPR:$a, GPR:$b))>;
+def : Pat<(setne (i32 GPR:$a), imm32:$i),
+          (SLTU (i32 R0), (XORI GPR:$a, imm32:$i))>;
+}
 def : Pat<(setlt (i32 GPR:$a), (i32 GPR:$b)), (SLT GPR:$a, GPR:$b)>;
 def : Pat<(setlt (i32 GPR:$a), imm32:$i), (SLTI GPR:$a, imm32:$i)>;
 def : Pat<(setult (i32 GPR:$a), (i32 GPR:$b)), (SLTU GPR:$a, GPR:$b)>;
@@ -279,6 +300,17 @@ def : Pat<(setugt (i32 GPR:$a), notUMax:$i), (SGEUI GPR:$a, (ImmPlus1 $i))>;
 def : Pat<(setule (i32 GPR:$a), (i32 GPR:$b)), (SGEU GPR:$b, GPR:$a)>;
 def : Pat<(setule (i32 GPR:$a), notUMax:$i), (SLTUI GPR:$a, (ImmPlus1 $i))>;
 
+// sel is step12's: a condition of 0 or 1 (ZeroOrOneBooleanContent) makes a
+// mask, -c, for lite ops of the fast loop instead (two ops with a zero arm).
+let Predicates = [MaskSelect], AddedComplexity = 2 in {
+def : Pat<(select (i32 GPR:$c), (i32 GPR:$a), (i32 0)),
+          (AND GPR:$a, (SUB (i32 R0), GPR:$c))>;
+def : Pat<(select (i32 GPR:$c), (i32 0), (i32 GPR:$b)),
+          (ANDN GPR:$b, (SUB (i32 R0), GPR:$c))>;
+}
+let Predicates = [MaskSelect], AddedComplexity = 1 in
+def : Pat<(select (i32 GPR:$c), (i32 GPR:$a), (i32 GPR:$b)),
+          (XOR (AND (XOR GPR:$a, GPR:$b), (SUB (i32 R0), GPR:$c)), GPR:$b)>;
 def : Pat<(select (i32 GPR:$c), (i32 GPR:$a), (i32 GPR:$b)),
           (SEL GPR:$a, GPR:$b, GPR:$c)>;
 def : Pat<(select (i32 GPR:$c), (f32 GPR:$a), (f32 GPR:$b)),

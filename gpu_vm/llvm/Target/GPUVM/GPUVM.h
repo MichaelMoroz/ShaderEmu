@@ -42,6 +42,7 @@ namespace GPUVMII {
 enum TOF : unsigned {
   MO_None = 0,
   MO_TPREL = 1, // %tprel(sym): from the thread pointer
+  MO_FNREL = 2, // %fnrel(sym - fn): from the function's start (PIC)
 };
 } // namespace GPUVMII
 } // namespace llvm

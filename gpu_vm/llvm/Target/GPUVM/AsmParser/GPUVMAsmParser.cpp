@@ -235,15 +235,19 @@ ParseStatus GPUVMAsmParser::tryParseRegister(MCRegister &Reg, SMLoc &StartLoc,
   return ParseStatus::Success;
 }
 
-// An immediate's expression; `%tprel(expr)` is TLS's offset.
+// An immediate's expression; `%tprel(expr)` is TLS's offset, `%fnrel(sym -
+// fn)` an address from fn, a symbol of the same section (PIC's globals).
 bool GPUVMAsmParser::parseImmExpr(const MCExpr *&E, SMLoc &End) {
   MCAsmParser &P = getParser();
   if (P.getTok().is(AsmToken::Percent)) {
     SMLoc L = getLoc();
     P.Lex();
     if (P.getTok().isNot(AsmToken::Identifier) ||
-        P.getTok().getIdentifier() != "tprel")
-      return Error(L, "unknown operator: only %tprel");
+        (P.getTok().getIdentifier() != "tprel" &&
+         P.getTok().getIdentifier() != "fnrel"))
+      return Error(L, "unknown operator: only %tprel and %fnrel");
+    auto Spec = P.getTok().getIdentifier() == "tprel" ? GPUVM::S_TPREL
+                                                      : GPUVM::S_FNREL;
     P.Lex();
     if (P.getTok().isNot(AsmToken::LParen))
       return Error(getLoc(), "expected '('");
@@ -255,7 +259,7 @@ bool GPUVMAsmParser::parseImmExpr(const MCExpr *&E, SMLoc &End) {
       return Error(getLoc(), "expected ')'");
     End = P.getTok().getEndLoc();
     P.Lex();
-    E = MCSpecifierExpr::create(Sub, GPUVM::S_TPREL, getContext(), L);
+    E = MCSpecifierExpr::create(Sub, Spec, getContext(), L);
     return false;
   }
   return P.parseExpression(E, End);

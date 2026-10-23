@@ -213,6 +213,17 @@ static cl::opt<bool> GeneralOps(
              "would do (fewer ops, but the tick's general step)"));
 bool llvm::gpuvmGeneralOps() { return GeneralOps; }
 
+static cl::opt<bool> MaskSelect(
+    "gpuvm-mask-select", cl::Hidden, cl::init(false),
+    cl::desc("gpu_vm: an integer select as lite ops on a mask of its 0 or 1 "
+             "condition (the fast loop) rather than sel (step12)"));
+bool llvm::gpuvmMaskSelect() { return MaskSelect && !GeneralOps; }
+
+static cl::opt<bool> FnRelGlobals(
+    "gpuvm-fnrel", cl::Hidden, cl::init(false),
+    cl::desc("gpu_vm: PIC addresses from the function's own (one lpc), the "
+             "symbol's offset an op's immediate, instead of an lpc each"));
+
 bool GPUVMTargetLowering::findOptimalMemOpLowering(
     LLVMContext &Context, std::vector<EVT> &MemOps, unsigned Limit,
     const MemOp &Op, unsigned DstAS, unsigned SrcAS,
@@ -671,40 +682,53 @@ SDValue GPUVMTargetLowering::lowerAddress(SDValue Op, SelectionDAG &DAG) const {
   SDLoc DL(Op);
   EVT VT = Op.getValueType();
   SDValue T;
+  bool FnRel = isPositionIndependent() && FnRelGlobals;
+  unsigned TF = FnRel ? GPUVMII::MO_FNREL : GPUVMII::MO_None;
   switch (Op.getOpcode()) {
   case ISD::GlobalAddress: {
     auto *N = cast<GlobalAddressSDNode>(Op);
-    T = DAG.getTargetGlobalAddress(N->getGlobal(), DL, VT, N->getOffset());
+    T = DAG.getTargetGlobalAddress(N->getGlobal(), DL, VT, N->getOffset(), TF);
     break;
   }
   case ISD::ExternalSymbol:
     T = DAG.getTargetExternalSymbol(cast<ExternalSymbolSDNode>(Op)->getSymbol(),
-                                    VT);
+                                    VT, TF);
     break;
   case ISD::BlockAddress: {
     auto *N = cast<BlockAddressSDNode>(Op);
-    T = DAG.getTargetBlockAddress(N->getBlockAddress(), VT, N->getOffset());
+    T = DAG.getTargetBlockAddress(N->getBlockAddress(), VT, N->getOffset(),
+                                  TF);
     break;
   }
   case ISD::JumpTable:
-    T = DAG.getTargetJumpTable(cast<JumpTableSDNode>(Op)->getIndex(), VT);
+    T = DAG.getTargetJumpTable(cast<JumpTableSDNode>(Op)->getIndex(), VT, TF);
     break;
   case ISD::ConstantPool: {
     auto *N = cast<ConstantPoolSDNode>(Op);
     if (N->isMachineConstantPoolEntry())
       T = DAG.getTargetConstantPool(N->getMachineCPVal(), VT, N->getAlign(),
-                                    N->getOffset());
+                                    N->getOffset(), TF);
     else
       T = DAG.getTargetConstantPool(N->getConstVal(), VT, N->getAlign(),
-                                    N->getOffset());
+                                    N->getOffset(), TF);
     break;
   }
   default:
     llvm_unreachable("not an address");
   }
-  // Position-independent code: from the bundle's address (lpc, R_GVM_PCIMM32),
-  // so that code has no relocation; data words that hold addresses keep
-  // theirs.
+  // Position-independent code: from the function's address, made once by an
+  // lpc (R_GVM_PCIMM32), the symbol's offset an op's immediate (%fnrel), so
+  // that code has no relocation; data words that hold addresses keep theirs.
+  if (FnRel) {
+    auto *FI = DAG.getMachineFunction().getInfo<GPUVMMachineFunctionInfo>();
+    if (!FI->getGlobalBaseReg())
+      FI->setGlobalBaseReg(DAG.getMachineFunction().getRegInfo()
+                               .createVirtualRegister(&GPUVM::GPRRegClass));
+    SDValue Base = DAG.getCopyFromReg(DAG.getEntryNode(), DL,
+                                      FI->getGlobalBaseReg(), VT);
+    return DAG.getNode(ISD::ADD, DL, VT, Base,
+                       DAG.getNode(GPUVMISD::ADDR, DL, VT, T));
+  }
   if (isPositionIndependent())
     return DAG.getNode(GPUVMISD::PCADDR, DL, VT, T);
   return DAG.getNode(GPUVMISD::ADDR, DL, VT, T);

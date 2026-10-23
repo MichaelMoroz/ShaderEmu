@@ -44,6 +44,11 @@ unsigned GPUVMELFObjectWriter::getRelocType(const MCFixup &Fixup,
       reportError(Fixup.getLoc(), "%tprel only in a long immediate");
     return ELF::R_GVM_TPREL32;
   }
+  if (Kind == GPUVM::fixup_gvm_fnrel32) {
+    if (!IsPCRel)
+      reportError(Fixup.getLoc(), "%fnrel names no symbol of this section");
+    return ELF::R_GVM_PCIMM32;
+  }
   switch (Kind) {
   case FK_NONE:
     return ELF::R_GVM_NONE;

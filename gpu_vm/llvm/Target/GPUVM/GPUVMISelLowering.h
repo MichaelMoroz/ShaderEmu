@@ -29,6 +29,8 @@ unsigned getGPUVMInlineTexels();
 // -gpuvm-general-ops: one op of the general step (bfe, shadd) where two of the
 // fast loop's would do (GPUVMPatterns.td)
 bool gpuvmGeneralOps();
+// -gpuvm-mask-select: integer selects as masks (GPUVMPatterns.td)
+bool gpuvmMaskSelect();
 
 class GPUVMTargetLowering : public TargetLowering {
   const GPUVMSubtarget &Subtarget;

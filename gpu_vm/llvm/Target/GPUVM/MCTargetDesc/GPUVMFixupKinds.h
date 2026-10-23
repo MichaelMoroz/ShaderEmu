@@ -24,6 +24,7 @@ enum Fixups {
   fixup_gvm_j,    // j: near (br9, beq r0, r0) or far (j18, cc 0), as it lands
   fixup_gvm_j18,  // call: control word [31:14]
   fixup_gvm_imm12, // op word [31:20]: S + A
+  fixup_gvm_fnrel32, // word 2: S + A - the function (R_GVM_PCIMM32)
 
   fixup_gvm_invalid,
   NumTargetFixupKinds = fixup_gvm_invalid - FirstTargetFixupKind
@@ -32,6 +33,7 @@ enum Fixups {
 enum Specifier : uint16_t {
   S_None = 0,
   S_TPREL = 1, // %tprel(sym)
+  S_FNREL = 2, // %fnrel(sym - fn): fn a symbol of the fixup's section
 };
 } // namespace GPUVM
 } // namespace llvm

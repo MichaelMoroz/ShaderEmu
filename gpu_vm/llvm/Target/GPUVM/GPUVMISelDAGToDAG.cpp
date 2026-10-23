@@ -8,9 +8,12 @@
 
 #include "GPUVM.h"
 #include "GPUVMISelLowering.h"
+#include "GPUVMMachineFunctionInfo.h"
 #include "GPUVMTargetMachine.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
+#include "llvm/CodeGen/MachineInstrBuilder.h"
+#include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/SelectionDAGISel.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -35,6 +38,7 @@ private:
 #include "GPUVMGenDAGISel.inc"
 
   void Select(SDNode *N) override;
+  bool runOnMachineFunction(MachineFunction &MF) override;
 
   bool selectAddrRI(SDValue Addr, SDValue &Base, SDValue &Offset);
   bool selectAddrRR(SDValue Addr, SDValue &Base, SDValue &Index,
@@ -63,6 +67,21 @@ static bool isSymbol(SDValue V) {
   return V.getOpcode() == GPUVMISD::ADDR;
 }
 
+// PIC's base of %fnrel immediates (GPUVMTargetLowering::lowerAddress): the
+// function's address, one lpc in the entry block (made again where registers
+// are short: lpc is rematerializable).
+bool GPUVMDAGToDAGISel::runOnMachineFunction(MachineFunction &MF) {
+  bool Changed = SelectionDAGISel::runOnMachineFunction(MF);
+  Register R = MF.getInfo<GPUVMMachineFunctionInfo>()->getGlobalBaseReg();
+  if (!R)
+    return Changed;
+  MachineBasicBlock &Entry = MF.front();
+  BuildMI(Entry, Entry.begin(), DebugLoc(),
+          MF.getSubtarget().getInstrInfo()->get(GPUVM::LPC), R)
+      .addGlobalAddress(&MF.getFunction());
+  return true;
+}
+
 // base + imm32: the immediate a constant or a symbol's address (+ offset).
 bool GPUVMDAGToDAGISel::selectAddrRI(SDValue Addr, SDValue &Base,
                                      SDValue &Offset) {
@@ -86,11 +105,16 @@ bool GPUVMDAGToDAGISel::selectAddrRI(SDValue Addr, SDValue &Base,
   if (CurDAG->isBaseWithConstantOffset(Addr)) {
     int64_t C = cast<ConstantSDNode>(Addr.getOperand(1))->getSExtValue();
     SDValue B = Addr.getOperand(0);
-    // A symbol and an offset: one immediate.
-    if (isSymbol(B)) {
-      SDValue Sym = B.getOperand(0);
-      if (auto *G = dyn_cast<GlobalAddressSDNode>(Sym)) {
-        Base = CurDAG->getRegister(GPUVM::R0, VT);
+    // A symbol and an offset: one immediate (from r0, or under PIC from the
+    // function's address).
+    SDValue SymBase = CurDAG->getRegister(GPUVM::R0, VT), S = B;
+    if (B.getOpcode() == ISD::ADD && isSymbol(B.getOperand(1))) {
+      SymBase = B.getOperand(0);
+      S = B.getOperand(1);
+    }
+    if (isSymbol(S)) {
+      if (auto *G = dyn_cast<GlobalAddressSDNode>(S.getOperand(0))) {
+        Base = SymBase;
         Offset = CurDAG->getTargetGlobalAddress(
             G->getGlobal(), DL, VT, G->getOffset() + C, G->getTargetFlags());
         return true;

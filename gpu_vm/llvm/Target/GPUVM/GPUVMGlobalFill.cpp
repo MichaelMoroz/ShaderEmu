@@ -460,7 +460,10 @@ bool GPUVMGlobalFill::speculable(const MachineInstr &X, const Place &P,
   for (auto &[Idx, R] : P.Subst)
     if (Idx == 1)
       Base = R;
-  if (Base == GPUVM::R0 || Base == GPUVM::R2)
+  // [r0 + symbol], [sp + k], PIC's [the function + %fnrel(symbol)]
+  const MachineOperand &Imm = X.getOperand(2);
+  if (Base == GPUVM::R0 || Base == GPUVM::R2 ||
+      (!Imm.isImm() && Imm.getTargetFlags() == GPUVMII::MO_FNREL))
     return true;
   if (Base == GPUVM::R32 && MF->getSubtarget().getFrameLowering()->hasFP(*MF))
     return true;

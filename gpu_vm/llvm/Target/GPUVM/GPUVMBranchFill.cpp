@@ -81,13 +81,15 @@ bool GPUVMBranchFill::movable(const MachineInstr &I,
   if (I.isPseudo() && I.getOpcode() != GPUVM::LQ_Q)
     return false;
   if (I.mayLoad()) {
-    // [r0 + symbol], [sp + k], [fp + k]: cannot fault
+    // [r0 + symbol], [sp + k], [fp + k], PIC's [the function + %fnrel(symbol)]:
+    // cannot fault
     if (GPUVMII::getForm(I.getDesc().TSFlags) != GPUVMII::FrmLoad)
       return false;
-    const MachineOperand &Base = I.getOperand(1);
+    const MachineOperand &Base = I.getOperand(1), &Imm = I.getOperand(2);
+    bool FnRel = !Imm.isImm() && Imm.getTargetFlags() == GPUVMII::MO_FNREL;
     if (!Base.isReg() || (Base.getReg() != GPUVM::R0 &&
                           Base.getReg() != GPUVM::R2 &&
-                          Base.getReg() != GPUVM::R32))
+                          Base.getReg() != GPUVM::R32 && !FnRel))
       return false;
     if (Base.getReg() == GPUVM::R32 &&
         !I.getMF()->getSubtarget().getFrameLowering()->hasFP(*I.getMF()))

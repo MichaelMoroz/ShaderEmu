@@ -19,6 +19,8 @@ public:
   explicit GPUVMMCAsmInfo(const Triple &TT, const MCTargetOptions &Options);
   void printSpecifierExpr(raw_ostream &OS,
                           const MCSpecifierExpr &Expr) const override;
+  bool evaluateAsRelocatableImpl(const MCSpecifierExpr &E, MCValue &Res,
+                                 const MCAssembler *Asm) const override;
 };
 } // namespace llvm
 

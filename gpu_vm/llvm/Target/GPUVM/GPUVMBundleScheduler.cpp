@@ -27,6 +27,7 @@
 #include "llvm/CodeGen/MachineScheduler.h"
 #include "llvm/CodeGen/ScheduleDAG.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/MathExtras.h"
 
 using namespace llvm;
@@ -36,6 +37,21 @@ using namespace llvm;
 namespace {
 
 using OpInfo = GPUVM::OpDesc;
+
+// What a bundle of the op costs the tick: a memory body (paths 3-6), the
+// integer path (7), or step12 and the general step (floats, sel, lpc, the
+// extended class). A pair of one kind spends one bundle where two mixed spend
+// two of the dearer kind.
+static cl::opt<bool> SchedKind("gpuvm-sched-kind", cl::Hidden, cl::init(false),
+                               cl::desc("gpu_vm: pair ops of one kind first"));
+
+static unsigned kind(uint32_t W) {
+  if (!SchedKind)
+    return 0;
+  if (GPUVM::bundle::memOp(W))
+    return 1;
+  return GPUVM::bundle::mid(W) ? 0 : 2;
+}
 
 class GPUVMBundleStrategy : public MachineSchedStrategy {
   ScheduleDAGMI *DAG = nullptr;
@@ -146,11 +162,26 @@ SUnit *GPUVMBundleStrategy::pickNode(bool &IsTopNode) {
       Best = SU;
       break;
     }
-  // One op open: an op that fits as op 1.
+  // One op open: an op that fits as op 1, one of op 0's kind first (two
+  // memory ops, two integer ops), a float after a memory op last (path 2).
   if (!Best && Words.size() == 1) {
-    for (SUnit *SU : Ready)
-      if (fits(info(SU)) && (!Best || Better(SU, Best)))
+    auto Rank = [&](const SUnit *SU) {
+      uint32_t W = info(SU).Word;
+      if (kind(W) == kind(Words[0]))
+        return 2;
+      return GPUVM::bundle::memOp(Words[0]) && GPUVM::bundle::fLite(W) ? 0
+                                                                      : 1;
+    };
+    int BestRank = -1;
+    for (SUnit *SU : Ready) {
+      if (!fits(info(SU)))
+        continue;
+      int R = Rank(SU);
+      if (R > BestRank || (R == BestRank && Better(SU, Best))) {
         Best = SU;
+        BestRank = R;
+      }
+    }
   }
   if (!Best) {
     // A new bundle: an op that another can follow (one ready now, or a
@@ -160,29 +191,29 @@ SUnit *GPUVMBundleStrategy::pickNode(bool &IsTopNode) {
       const OpInfo &I = info(SU);
       int Score = 0;
       if (I.Known && !I.Control) {
-        bool Pair = false;
+        bool Pair = false, Same = false;
         auto Follows = [&](const SUnit *D) {
           const OpInfo &J = info(D);
-          return J.Known && !J.Control && !(I.Long && J.Long) &&
-                 GPUVM::bundle::fits1(I.Word, J.Word);
+          if (!J.Known || J.Control || (I.Long && J.Long) ||
+              !GPUVM::bundle::fits1(I.Word, J.Word))
+            return false;
+          Pair = true;
+          Same |= kind(J.Word) == kind(I.Word);
+          return Same;
         };
         for (SUnit *D : Ready)
-          if (D != SU && Follows(D)) {
-            Pair = true;
+          if (D != SU && Follows(D))
             break;
-          }
-        if (!Pair)
+        if (!Same)
           for (const SDep &S : SU->Succs) {
             const SUnit *D = S.getSUnit();
             if (D->isBoundaryNode() || D->NumPredsLeft != 1)
               continue;
-            if (Follows(D)) {
-              Pair = true;
+            if (Follows(D))
               break;
-            }
           }
-        Score = (writesBranchReg(SU) ? 4 : 0) + (Pair ? 2 : 0) +
-                (GPUVM::bundle::lite(I.Word) ? 0 : 1);
+        Score = (writesBranchReg(SU) ? 8 : 0) + (Same ? 4 : 0) +
+                (Pair ? 2 : 0) + (GPUVM::bundle::lite(I.Word) ? 0 : 1);
       }
       if (Score > BestScore || (Score == BestScore && Better(SU, Best))) {
         Best = SU;
