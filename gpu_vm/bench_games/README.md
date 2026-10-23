@@ -33,12 +33,14 @@ default tick is not: it is x18 (Quake III 27.6 fps in the baseline below), so gi
 
   Outside run.py: `rvc_harness --gvm build\gvm_apps\img-cur --gvm-tick gpu_vm\tick\steps\v0009.hlsl ...`, through
   `pwsh tools\gpu_queue.ps1` like every card run.
+- **Quake III caps itself at 85 fps** (ioq3's `com_maxfps`) unless started with `+set com_maxfps 0`, which run.py's
+  command has since 24 October 2026. Every Quake III fps before that (83-91 on both machines) was the cap's.
 - **Its numbers on img-cur** (RTX 5070 Laptop, D3D11, fxc2; one round each, 24 October 2026; logs
   `build/bench_games/cur-v0009-a` and `-b`):
 
   | game | v0009 |
   |---|---|
-  | Quake III | 86.9 fps |
+  | Quake III | 86.9 fps under the 85 fps cap; uncapped below |
   | Half-Life | 13.5 fps of the level |
   | nxray | 37.5 pictures a second |
   | Doom (`doom`) | 188.3 frames a second |
@@ -51,8 +53,8 @@ default tick is not: it is x18 (Quake III 27.6 fps in the baseline below), so gi
 
   | | gpu_vm v0009 | RISC-V | ratio | where from |
   |---|---|---|---|---|
-  | Quake III fps | 89.2 / 90.8 | 83.4 / 82.9 | 1.08 | img-q3fix, frames 300-1300 (PROFILE_Q3.md) |
-  | Quake III fps | 88.2 | 79.1-82.6 | 1.07-1.12 | img-rest (IDEAS 24, 38) |
+  | **Quake III fps, uncapped** (`com_maxfps 0`) | **103.7 / 111.5** | **81.1 / 80.2** | **1.28-1.39** | img-cur, gvm-cur and rv saved again 24 October 2026 (`build/bench_games/nocap1`) |
+  | Quake III fps under ioq3's cap of 85 (not a measure of either machine) | 89.2 / 90.8 | 83.4 / 82.9 | | img-q3fix (PROFILE_Q3.md) |
   | Half-Life fps of the level | 14.3 | 9.8 | 1.46 | img-rest (IDEAS 38); RISC-V from the baseline below |
   | nxray pictures a second | 37.7 | 24.6 | 1.53 | img-rest (IDEAS 38); RISC-V from the baseline below |
   | Doom timedemo realtics (lower is better) | 927.5 | | x23 919.5 | img-rest, doomt (IDEAS 38) |

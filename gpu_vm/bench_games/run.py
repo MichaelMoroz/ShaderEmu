@@ -82,7 +82,8 @@ def fps_count(word):
 
 HL_FROM = 31
 GAMES = {
-    'quake3': dict(cmd=X + 'QUAKE3_STATS_FRAMES=100 quake3 +set fixedtime 33 +devmap q3dm17 +addbot sarge 3',
+    # (com_maxfps 0: ioq3's default 85 caps the frame at 11 ms, and both machines waited out the rest of it before 24 October)
+    'quake3': dict(cmd=X + 'QUAKE3_STATS_FRAMES=100 quake3 +set com_maxfps 0 +set fixedtime 33 +devmap q3dm17 +addbot sarge 3',
                    mark='q3stat: frame 100:', fps=fps_q3),
     # (its level's 12 s take longer than 15 s of the wall on the RISC-V machine: 40 s for every machine)
     'halflife': dict(cmd=X + f'HL_MARK={HL_FROM},{HL_FROM + 12} halflife +map hldemo1', mark='hlmark: begins', fps=fps_hl,
