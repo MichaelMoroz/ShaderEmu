@@ -59,6 +59,10 @@ struct Case {
     // bundle of all cores together
     const char* mc = nullptr;
     bool us_pass = false;   // timed in us a pass (the p_ cases: how a pass's time grows with the cores that run in it)
+    // phase 2 (isa.h GVM_M_FREAD): the case uses the core's file (at least xr_need words), bindings, pairs (at least
+    // pair_need a pass); a tick without them skips it
+    uint32_t xr_need = 0, pair_need = 0;
+    bool bind_need = false;
 
     // the game bench (gamebench.h): a set's name (gvmbench --set NAME), 128 MB of RAM, registers a check does not
     // compare (time-dependent: polls, sinks) and the ops count left out, timed in units of core 0's register units_reg
@@ -904,6 +908,50 @@ static std::vector<Case> cases() {
         c.named = true; c.us_pass = true;
         v.push_back(c);
     };
+    // ---- phase 2 (isa.h GVM_M_FREAD): the core's file, pairs and bindings checked against the reference (two cores, random
+    // slots and values; a pair's words are never loaded, a bound word only after its unbind; a tick without them skips these)
+    auto xcase = [&](const char* name, int kind) {   // 0 lf/sf, 1 pairs, 2 bindings
+        Case c{name, 2, false, [kind](std::vector<GvmAsm>& p, auto& data, uint32_t seed) {
+            for (uint32_t k = 0; k < 2; k++) {
+                GvmAsm& a = p[k];
+                Rng g{seed * 977u + k * 131u + 7u};
+                auto rr = [&]() { return 6 + g.below(19); };   // r6-r24
+                a.li(29, (int32_t)(DATA + 0x10000 + k * 0x4000)); a.li(28, (int32_t)(DATA + 0x20000 + k * 0x4000));
+                for (int i = 6; i < 25; i++) a.li(i, (int32_t)g.next());
+                a.li(5, 40);
+                int top = a.here();
+                for (int i = 0; i < 12; i++) {
+                    switch (g.below(kind == 2 ? 3 : 4)) {
+                    case 0: if (kind == 1) a.sub(rr(), rr(), rr()); else a.lf(rr(), 0, (int32_t)g.below(64)); break;
+                    case 1: if (kind == 1) a.opi(GVM_I_SLL, rr(), rr(), 3); else a.sf(rr(), 0, (int32_t)g.below(64)); break;
+                    case 2: a.op(GVM_I_XOR, rr(), rr(), rr()); a.addi(rr(), rr(), (int32_t)g.below(100)); break;
+                    default: if (kind == 1) a.fpair(rr(), 29, (int32_t)(4 * g.below(64))); else a.add(rr(), rr(), 5); break;
+                    }
+                    if (kind == 1 && g.below(2)) a.fpair(5, 29, (int32_t)(4 * g.below(64)));
+                }
+                if (kind == 2) {   // a slot bound, read, changed, unbound (dirty: the commit writes it), the word then loaded
+                    for (int j = 0; j < 2; j++) {
+                        int s = 64 + j + 2 * (int)g.below(4);
+                        a.addi(27, 28, (int32_t)(4 * g.below(16))); a.close();
+                        a.fbind(27, 0, s); a.close();
+                        a.lf(26, 0, s); a.close();
+                        a.add(26, 26, 5); a.close();
+                        a.sf(26, 0, s); a.close();
+                        if (g.below(2)) { a.lf(25, 0, s); a.op(GVM_I_XOR, 24, 24, 25); a.close(); }
+                        a.funbind(0, s); a.close();
+                        a.lw(25, 27, 0); a.close();
+                        a.add(23, 23, 25); a.close();
+                    }
+                }
+                loop_end(a, top);
+                a.halt();
+            }
+        }};
+        if (kind == 1) c.pair_need = 2; else c.xr_need = 64;
+        c.bind_need = kind == 2;
+        v.push_back(c);
+    };
+    xcase("xfile", 0); xcase("xpair", 1); xcase("xbind", 2);
     pmc("p_k0_m0", 0, 0); pmc("p_k1_m0", 1, 0); pmc("p_k2_m0", 2, 0); pmc("p_k4_m0", 4, 0); pmc("p_k8_m0", 8, 0);
     pmc("p_k0_m40", 0, 40); pmc("p_k4_m40", 4, 40); pmc("p_k8_m40", 8, 40);
     game_cases(v);   // the game bench's g_ cases (gamebench.h)

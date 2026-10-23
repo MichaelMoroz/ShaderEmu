@@ -22,6 +22,8 @@ extern "C" {
 #define GVM_WC_MAXNB 256          // the write cache model's tables at most (gvm_wlog.nb)
 #define GVM_WC_MAXWAYS 8
 #define GVM_OPQ 8                 // operations a core may ask for in a pass (a ninth waits for the commit)
+#define GVM_XR_MAX 1024           // the core's file (isa.h, GVM_M_FREAD): words at most (gvm_core.xr, a power of two)
+#define GVM_NPAIR_MAX 256         // its pair buffer at most (gvm_core.npair)
 
 typedef struct gvm_wlog {
     uint32_t key[GVM_WLOG_SIZE];  // word address + 1 (0: empty)
@@ -72,6 +74,13 @@ typedef struct gvm_core {
     // bytes and whether it stores (a store is told before it is made)
     void (*host_access)(struct gvm_core *c, uint32_t a, uint32_t bytes, int store);
     void *host;
+    // the core's file and pair buffer (isa.h, GVM_M_FREAD; 0: none, the ops illegal): set by the host after the reset
+    uint32_t xr, npair;
+    uint32_t xf[GVM_XR_MAX];
+    uint32_t xtag[GVM_XR_MAX];       // a slot's binding: the word's address | 1 bound | 2 dirty (this pass)
+    uint32_t pa[GVM_NPAIR_MAX][2];   // this pass's pairs: address (word aligned), value
+    uint32_t np;
+    uint32_t stale, stale_at;        // loads of a bound word or of one with a pair (the program's error), and the first's address
     gvm_wlog wl;
 } gvm_core;
 
@@ -214,6 +223,15 @@ static uint32_t gvm__word(gvm_machine *m, gvm_core *c, uint32_t a) {
     return m->ram[a >> 2];
 }
 
+// A load of a word bound in the core's file, or with a pair this pass: counted (isa.h: the program's error)
+static void gvm__stale(gvm_core *c, uint32_t a, uint32_t bytes) {
+    uint32_t k, w0 = a & ~3u, w1 = (a + bytes - 1) & ~3u;
+    if (!c || (!c->xr && !c->np)) return;
+    for (k = 0; k < c->xr; k++)
+        if ((c->xtag[k] & 1) && ((c->xtag[k] & ~3u) == w0 || (c->xtag[k] & ~3u) == w1)) { if (!c->stale++) c->stale_at = a; return; }
+    for (k = 0; k < c->np; k++)
+        if (c->pa[k][0] == w0 || c->pa[k][0] == w1) { if (!c->stale++) c->stale_at = a; return; }
+}
 // A load of `bytes` (1, 2, 4) at any alignment; 0 on a fault
 static int gvm__load(gvm_machine *m, gvm_core *c, uint32_t a, uint32_t bytes, uint32_t *v) {
     if (a >= GVM_OPS && a - GVM_OPS <= 32 - bytes && !((a | bytes) & 3)) {   // in flight, refused, the latched words
@@ -222,6 +240,7 @@ static int gvm__load(gvm_machine *m, gvm_core *c, uint32_t a, uint32_t bytes, ui
     }
     if (!gvm__readable(m, a) || !gvm__readable(m, a + bytes - 1)) return 0;
     if (c && c->host_access && a < m->ram_end) c->host_access(c, a, bytes, 0);
+    if (a < m->ram_end) gvm__stale(c, a, bytes);
     uint32_t lo = gvm__word(m, c, a & ~3u), sh = (a & 3) * 8;
     uint64_t w = lo;
     if ((a & 3) + bytes > 4) w |= (uint64_t)gvm__word(m, c, (a & ~3u) + 4) << 32;
@@ -338,6 +357,8 @@ static uint32_t gvm__sr_read(gvm_machine *m, gvm_core *c, uint32_t n) {
     case GVM_SR_LEFT: return c->left;
     case GVM_SR_OPS: return (uint32_t)c->ops_run;
     }
+    if (n == GVM_SR_XR) return c->xr;
+    if (n == GVM_SR_NPAIR) return c->npair;
     return n < GVM_SR_COUNT ? c->sr[n] : 0;
 }
 
@@ -502,6 +523,33 @@ static int gvm__op(gvm_machine *m, gvm_core *c, uint32_t base, uint32_t s, const
             gvm__set(c, rd, old);
             return GVM__GO;
         }
+        if (mode >= GVM_M_FREAD && (c->xr || c->npair)) {   // the core's file and its pairs
+            uint32_t i = c->xr ? (a + imm) & (c->xr - 1) : 0;
+            int pair = mode == GVM_M_FWRITE && wd == GVM_FK_PAIR;
+            if (pair ? !c->npair : !c->xr) break;
+            if (mode == GVM_M_FREAD && wd == GVM_FK_LF) { gvm__set(c, rd, c->xf[i]); return GVM__GO; }
+            if (mode == GVM_M_FWRITE && wd == GVM_FK_SF) { c->xf[i] = c->x[rd]; if (c->xtag[i] & 1) c->xtag[i] |= 2; return GVM__GO; }
+            if ((mode == GVM_M_FREAD && wd == GVM_FK_BIND) || (mode == GVM_M_FWRITE && wd == GVM_FK_UNBIND)) {
+                uint32_t ad = c->x[rd] & ~3u;
+                if (c->xtag[i] & 2) { c->ops_run--; c->pc = epc; *end = GVM_END_FULL; return GVM__END; }   // the commit writes it first
+                if (mode == GVM_M_FWRITE) { c->xtag[i] = 0; return GVM__GO; }
+                if (!gvm__writable(m, ad)) { c->ops_run--; gvm__trap(c, GVM_CAUSE_LOAD, epc, ad); return GVM__TRAPPED; }
+                if (gvm__op_waits(c, ad, 4, 0)) { c->ops_run--; c->pc = epc; *end = GVM_END_SYNC; return GVM__END; }
+                c->xtag[i] = 0;   // (its own old binding is no alias of the load)
+                gvm__stale(c, ad, 4);
+                c->xf[i] = gvm__word(m, c, ad);
+                c->xtag[i] = ad | 1;
+                return GVM__GO;
+            }
+            if (pair) {
+                uint32_t ad = (a + imm) & ~3u;
+                if (!gvm__writable(m, ad)) { c->ops_run--; gvm__trap(c, GVM_CAUSE_STORE, epc, ad); return GVM__TRAPPED; }
+                if (gvm__op_waits(c, ad, 4, 1)) { c->ops_run--; c->pc = epc; *end = GVM_END_SYNC; return GVM__END; }
+                if (c->np >= c->npair) { c->ops_run--; c->pc = epc; *end = GVM_END_FULL; return GVM__END; }
+                c->pa[c->np][0] = ad; c->pa[c->np][1] = c->x[rd]; c->np++;
+                return GVM__GO;
+            }
+        }
         break;
     }
     case 3: {   // float
@@ -657,6 +705,7 @@ int gvm_run(gvm_machine *m, gvm_core *c, uint32_t budget) {
         c->left--;
         int r = gvm_bundle(m, c);
         if (r != GVM_END_BUDGET) return r;
+        if (c->npair && c->np >= c->npair) return GVM_END_FULL;   // the bundle that filled the pair buffer ends the pass
         if (c->halted) return GVM_END_HALT;   // (by host_trap)
     }
     return GVM_END_BUDGET;
@@ -710,6 +759,11 @@ void gvm_commit(gvm_machine *m) {
         }
         w->n = 0;
         if (w->nb) memset(w->tex, 0, 2 * w->nb * w->ways * sizeof w->tex[0]);
+        gvm_core *c = &m->cores[i];   // then the file's dirty bound slots, in slot order, then the pairs, in order
+        for (j = 0; j < c->xr; j++)
+            if ((c->xtag[j] & 3) == 3) { m->ram[c->xtag[j] >> 2] = c->xf[j]; c->xtag[j] &= ~2u; }
+        for (j = 0; j < c->np; j++) m->ram[c->pa[j][0] >> 2] = c->pa[j][1];
+        c->np = 0;
     }
     for (i = 0; i < m->ncores; i++) {
         gvm_core *c = &m->cores[i];

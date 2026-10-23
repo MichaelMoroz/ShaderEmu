@@ -35,8 +35,12 @@ DEFAULTS = dict(
     mul=1,              # perm mul's odd factor
     early=0,            # 0 none; 1 a halted core copies its state at the top; 2 and a sleeping one (a supervisor's wait);
                         # 3 and both discard when the other set holds the same (texel 23.w counts the quiet passes)
-    # ---- phase 2 (ISA): a large register file's words in the state after the write cache (0: none; not yet run)
-    xregs=0,
+    # ---- phase 2 (ISA; isa.h GVM_M_FREAD): the core's file, its bindings and its pair buffer, in the state after the write cache
+    xr=0,               # the file's words (0: none; 64 to 1024)
+    npair=0,            # pairs a pass (0: none; even)
+    xbind=1,            # slots may be bound (a tag word a slot; the commit writes the dirty ones)
+    xload='pre',        # the file into local memory: 'pre' whole at the pass's start, 'lazy' a texel at its first use
+    xfast=1,            # lf, sf and fpair in the fast loop's paths 3 and 5 (the assembler's GvmAsm::file_paths)
 )
 
 SPACE = dict(   # the values a search draws from
@@ -45,6 +49,7 @@ SPACE = dict(   # the values a search draws from
     block=[(8, 8), (16, 4), (4, 16), (8, 4), (4, 8), (32, 2), (16, 8), (8, 16), (32, 4), (64, 1), (32, 1), (16, 2)],
     bandx=[1, 2], per=[16, 32, 64, 128], jrow=[0, 1], perm=['id', 'bitrev', 'mul'], mul=[3, 5, 37, 77],
     early=[0, 1, 2, 3],
+    xr=[0, 64, 128, 256, 512, 1024], npair=[0, 32, 64, 128], xbind=[0, 1], xload=['pre', 'lazy'], xfast=[0, 1],
 )
 
 def layout(P):
@@ -53,10 +58,14 @@ def layout(P):
     t_wc = 40
     t_wt = t_wc + wcn
     ntex = t_wt + (wcn + 3) // 4
-    t_xr = ntex
-    ntex += (P['xregs'] + 3) // 4
+    xr, np_, xb = P['xr'], P['npair'], P['xbind'] if P['xr'] else 0
+    t_xf = ntex
+    t_xt = t_xf + xr // 4
+    t_pb = t_xt + (xr // 4 if xb else 0)
+    ntex = t_pb + np_ // 2
     spix = (ntex + 7) // 8
-    return dict(WCN=wcn, T_WC=t_wc, T_WT=t_wt, NTEX=ntex, SPIX=spix, T_XR=t_xr)
+    cpts = wcn + (xr if xb else 0) + np_
+    return dict(WCN=wcn, T_WC=t_wc, T_WT=t_wt, NTEX=ntex, SPIX=spix, T_XF=t_xf, T_XT=t_xt, T_PB=t_pb, CPTS=cpts, XBIND=xb)
 
 def valid(P):
     """'' when the point can be built, else why not"""
@@ -67,7 +76,9 @@ def valid(P):
     if P['per'] * P['bw'] > 16384: return 'too wide'
     if P['nb'] & (P['nb'] - 1): return 'nb not a power of two'
     if P['perm'] == 'mul' and P['mul'] % 2 == 0: return 'mul even'
-    if P['xregs']: return 'xregs: phase 2, not built yet'
+    if P['xr'] and (P['xr'] & (P['xr'] - 1) or P['xr'] < 4): return 'xr not a power of two'
+    if P['npair'] % 2: return 'npair odd'
+    if P['xr'] > 1024 or P['npair'] > 256: return 'file or pairs too large'
     return ''
 
 def inv_mod(m, n):
@@ -108,6 +119,17 @@ static const uint T_Q = 24;
 static const uint T_WT = T_WC + WCN;
 static const uint NTEX = {L['NTEX']};
 static const uint SPIX = {L['SPIX']};
+// the core's file (phase 2): XR words from texel T_XF, their tags from T_XT (XBIND), NPAIR pairs from T_PB (their count
+// texel 23.x); the commit draws CPTS points a core: the write cache's, the file's slots (XBIND), the pairs
+static const uint XR = {P['xr']};
+static const uint XBIND = {L['XBIND']};
+static const uint XFAST = {P['xfast'] if P['xr'] or P['npair'] else 0};
+static const uint XLAZY = {1 if P['xload'] == 'lazy' else 0};
+static const uint NPAIR = {P['npair']};
+static const uint T_XF = {L['T_XF']};
+static const uint T_XT = {L['T_XT']};
+static const uint T_PB = {L['T_PB']};
+static const uint CPTS = {L['CPTS']};
 // the layout, as gvmbench reads it: core c's state pixel j at (slot * GEO_BW + jx, band * GEO_BAND + jy), its band c / GEO_PER,
 // its slot in the band GEO_PERM's (0 the same, 1 bits reversed, 2 times GEO_MUL), jx, jy by GEO_JROW
 static const uint GEO_BLOCKS = 1;
@@ -155,7 +177,75 @@ static uint4 lat0, lat1;
 static uint4 q[16];
 static uint qn, qhead, qgen, refused;
 static bool irq_due;
-'''
+''' + xstatics(P)
+
+def xstatics(P):
+    """the core's file (phase 2): its local copies and their access"""
+    xr, np_ = P['xr'], P['npair']
+    xb = P['xbind'] if xr else 0
+    lazy = P['xload'] == 'lazy'
+    o = "static uint pn;   // this pass's pairs\n"
+    if np_:
+        o += "static uint4 pa4[NPAIR / 2];   // (address, value) twice a texel\n"
+        o += "void xpair(uint ad, uint v) { uint k = pn >> 1; pa4[k] = (pn & 1) ? uint4(pa4[k].xy, ad, v) : uint4(ad, v, pa4[k].zw); pn++; }\n"
+    if not xr: return o
+    o += "static uint4 xf4[XR / 4];\n"
+    if xb: o += "static uint4 xt4[XR / 4];   // a slot's tag: the word's address | 1 bound | 2 dirty\n"
+    T = ''
+    if lazy:
+        o += "static uint xl[(XR / 4 + 31) / 32];   // the file's texels read in this pass\n"
+        o += "uint4 state_in(uint t, uint c);\n"
+        o += "bool xin(uint t) { return ((xl[t >> 5] >> (t & 31)) & 1) != 0; }\n"
+        o += "void xtouch(uint t) {\n    [branch] if (!xin(t)) {\n        xl[t >> 5] |= 1u << (t & 31);\n        xf4[t] = state_in(T_XF + t, core);\n"
+        if xb: o += "        xt4[t] = state_in(T_XT + t, core) & ~2u;\n"
+        o += "    }\n}\n"
+        T = "    xtouch(i >> 2);\n"
+    o += "uint xget(uint i) {\n" + T + "    return pick(xf4[i >> 2], i & 3);\n}\n"
+    o += "void xput(uint i, uint v) {\n" + T + "    xf4[i >> 2] = put(xf4[i >> 2], i & 3, v);\n"
+    if xb: o += "    uint g = pick(xt4[i >> 2], i & 3);\n    xt4[i >> 2] = put(xt4[i >> 2], i & 3, (g & 1) != 0 ? g | 2u : g);\n"
+    o += "}\n"
+    if xb:
+        o += "uint xgtag(uint i) {\n" + T + "    return pick(xt4[i >> 2], i & 3);\n}\n"
+        o += "void xstag(uint i, uint v) {\n" + T + "    xt4[i >> 2] = put(xt4[i >> 2], i & 3, v);\n}\n"
+        o += "void xsetv(uint i, uint v) {\n" + T + "    xf4[i >> 2] = put(xf4[i >> 2], i & 3, v);\n}\n"
+    return o
+
+FILE_PAIR = """    [branch] if (pair) {
+        uint ad = (a + imm) & ~3u;
+        [branch] if (!store_ok(ad, 4) || ad >= GVM_OPS) { trap(GVM_CAUSE_STORE, epcw, ad); return 1; }
+        [branch] if (op_waits(ad, 4, true)) { pc = epcw; e = E_SYNC; return 3; }
+        [branch] if (pn >= NPAIR) { pc = epcw; e = E_FULL; return 3; }
+        xpair(ad, r[rd]);
+        return 0;
+    }
+"""
+FILE_BIND = """    [branch] if ((xgtag(i) & 2) != 0) { pc = epcw; e = E_FULL; return 3; }   // a dirty slot: the commit writes it first
+    [branch] if (mode == GVM_M_FWRITE) { xstag(i, 0); return 0; }
+    uint ad = r[rd] & ~3u;
+    [branch] if (ad < GVM_DEV || ad >= _RamEnd) { trap(GVM_CAUSE_LOAD, epcw, ad); return 1; }
+    [branch] if (op_waits(ad, 4, false)) { pc = epcw; e = E_SYNC; return 3; }
+    xsetv(i, word_seen(ad));
+    xstag(i, ad | 1);
+"""
+
+def file_any(P):
+    """the general step's file ops (isa.h GVM_M_FREAD; the reference's gvm__op): 0 done, 1 trapped, 3 the pass ends before it"""
+    xr, np_ = P['xr'], P['npair']
+    xb = P['xbind'] if xr else 0
+    o = "uint file_any(uint w, uint imm, uint a, uint epcw, inout uint e, inout bool ill) {\n"
+    o += "    uint opc = (w >> 12) & 255, mode = (opc >> 3) & 7, k = opc & 7, rd = (w >> 6) & 63;\n"
+    o += "    bool pair = mode == GVM_M_FWRITE && k == GVM_FK_PAIR;\n"
+    o += "    ill = pair ? NPAIR == 0 : XR == 0 || (mode == GVM_M_FREAD ? k > GVM_FK_BIND : k > GVM_FK_UNBIND)%s;\n" % (
+        '' if xb else ' || (mode == GVM_M_FREAD ? k == GVM_FK_BIND : k == GVM_FK_UNBIND)')
+    o += "    [branch] if (ill) return 0;\n"
+    if np_: o += FILE_PAIR
+    if xr:
+        o += "    uint i = (a + imm) & (XR - 1);\n"
+        o += "    [branch] if (mode == GVM_M_FREAD && k == GVM_FK_LF) { r[rd == 0 ? 64 : rd] = xget(i); return 0; }\n"
+        o += "    [branch] if (mode == GVM_M_FWRITE && k == GVM_FK_SF) { xput(i, r[rd]); return 0; }\n"
+        if xb: o += FILE_BIND
+    o += "    return 0;\n}\n"
+    return o
 
 def memory(P):
     lg = int(math.log2(P['nb']))
@@ -278,11 +368,40 @@ INT = '''{   // integers: op 0 the mid unit, op 1 lite
         v1 = alu_lite(t.y, i1, ra1 == s0 ? v0 : A1, rb1 == s0 ? v0 : B1);
     }'''
 
-def fstep(P):
-    if P['mem_order'] == '35':
-        mem = MEM35 + ' else ' + MEM4 + ' else ' + MEM6
+def xfast(P):
+    """paths 3 and 5 with op 0 the file's lf, sf or fpair (the assembler's file_paths), before the memory op's body"""
+    xr, np_ = P['xr'], P['npair']
+    o = "[branch] if ((t.x & op_bit(0x30)) == op_bit(0x30)) {   // the core's file: lf, sf, fpair\n"
+    o += "            bool wr = (t.x & op_bit(8)) != 0;\n            v0 = 0;\n"
+    if xr:
+        o += "            uint xi = (A0 + i0) & (XR - 1);\n"
+        o += "            [branch] if (!wr) v0 = xget(xi);\n"
+        o += "            else [branch] if (((t.x >> 12) & 7) == GVM_FK_SF) xput(xi, r[d0]);\n"
+        o += "            else {\n" if np_ else ''
     else:
-        mem = MEM4 + ' else ' + MEM35 + ' else ' + MEM6
+        o += "            {\n"
+    if np_:
+        o += """                uint pad = (A0 + i0) & ~3u;
+                smax = max(smax, pad - GVM_DEV);
+                xpair(pad, r[d0]);
+                bool nr = pn >= NPAIR;
+                cycle -= nr ? budget - 1 : 0; budget = nr ? 1 : budget;
+            }
+"""
+    elif not xr:
+        o += "            }\n"
+    o += """            s0 = wr ? 64 : s0;
+            r[s0] = v0;
+            v1 = alu_lite(t.y, i1, ra1 == s0 ? v0 : A1, rb1 == s0 ? v0 : B1);
+        } else """
+    return o
+
+def fstep(P):
+    m35 = (xfast(P) if (P['xr'] or P['npair']) and P['xfast'] else '') + MEM35
+    if P['mem_order'] == '35':
+        mem = m35 + ' else ' + MEM4 + ' else ' + MEM6
+    else:
+        mem = MEM4 + ' else ' + m35 + ' else ' + MEM6
     mem = '{\n        ' + mem + '\n    }'
     attr = '[%s] ' % P['split']
     if P['int_first']:
@@ -346,6 +465,24 @@ RUN = '''void run(uint budget) {
 }
 '''
 
+def xout(P):
+    o = ''
+    if P['xr']:
+        lz = P['xload'] == 'lazy'
+        o += "    [branch] if (t >= T_XF && t < T_XF + XR / 4) { uint k = t - T_XF; return %s; }@N" % ('xin(k) ? xf4[k] : state_in(t, core)' if lz else 'xf4[k]')
+        if P['xbind']:
+            o += "    [branch] if (t >= T_XT && t < T_XT + XR / 4) { uint k = t - T_XT; return %s; }@N" % ('xin(k) ? xt4[k] : state_in(t, core) & ~2u' if lz else 'xt4[k]')
+    if P['npair']:
+        o += "    [branch] if (t >= T_PB && t < T_PB + NPAIR / 2) return pa4[t - T_PB];@N"
+    return o.replace('@N', chr(10))
+
+def xload(P):
+    if not P['xr']: return ''
+    if P['xload'] == 'lazy': return "    [unroll] for (k = 0; k < (XR / 4 + 31) / 32; k++) xl[k] = 0;" + chr(10)
+    o = "    [loop] for (k = 0; k < XR / 4; k++) {@N        xf4[k] = state_in(T_XF + k, c);@N"
+    if P['xbind']: o += "        xt4[k] = state_in(T_XT + k, c) & ~2u;@N"
+    return (o + "    }@N").replace('@N', chr(10))
+
 def state_io(P):
     clear = ('[loop] for (k = 0; k <= WCN; k++) wt[k] = NONE;' if P['clear'] == 'loop'
              else '[unroll] for (k = 0; k <= WCN; k++) wt[k] = NONE;')
@@ -363,14 +500,17 @@ uint4 state_out(uint t, uint4 s3) {
         uint k = 4 * (t - T_WT);
         return uint4(wt[k], wt[k + 1], k + 2 < WCN ? wt[k + 2] : NONE, k + 3 < WCN ? wt[k + 3] : NONE);
     }
-    [branch] if (t >= T_Q && t < T_WC) return q[t - T_Q];
+''' + xout(P) + '''    [branch] if (t >= T_Q && t < T_WC) return q[t - T_Q];
     uint4 s16 = uint4(pc, st, epc, cause), s17 = uint4(tval, tvec, scratch, ien), s18 = uint4(tcmp_lo, tcmp_hi, flags, rnd);
     uint4 s19 = uint4(cycle, opsrun, cycle - s3.x, endr == E_BUDGET && cycle - s3.x < _Ticks && (flags & F_HALT) == 0 ? E_FULL : endr);
     uint4 s22 = uint4(qn, qhead, qgen, refused);
-    return t == 16 ? s16 : t == 17 ? s17 : t == 18 ? s18 : t == 19 ? s19 : t == 20 ? lat0 : t == 21 ? lat1 : t == 22 ? s22 : 0;
+    return t == 16 ? s16 : t == 17 ? s17 : t == 18 ? s18 : t == 19 ? s19 : t == 20 ? lat0 : t == 21 ? lat1 : t == 22 ? s22 : t == 23 ? uint4(pn, 0, 0, 0) : 0;
 }
-uint4 again_out(uint t, uint c) {
+uint4 again_out(uint t, uint c) {   // (the file as it was, its slots clean: their values were committed; no pairs)
     uint4 v = state_in(t, c);
+    [branch] if (t >= T_XF && t < T_XT) return v;
+    [branch] if (t >= T_XT && t < T_PB) return v & ~2u;
+    [branch] if (t >= T_PB || t == 23) return 0;
     return t >= T_WT ? uint4(NONE, NONE, NONE, NONE) : t >= T_WC ? uint4(0, 0, 0, 0) : t == 18 ? uint4(v.xy, v.z | F_AGAIN, v.w) : t == 19 ? uint4(v.xyz, E_BUDGET) : v;
 }
 struct v2f { float4 vertex : SV_POSITION; };
@@ -390,7 +530,8 @@ void load_state(uint c) {
     r[0] = 0;
     ''' + clear + '''
     bloom = 0;
-    uint4 s16 = state_in(16, c), s17 = state_in(17, c), s18 = state_in(18, c), s19 = state_in(19, c);
+    pn = 0;
+''' + xload(P) + '''    uint4 s16 = state_in(16, c), s17 = state_in(17, c), s18 = state_in(18, c), s19 = state_in(19, c);
     uint4 s22 = state_in(22, c), os = _OpState.Load(int3(c, 0, 0));
     pc = s16.x; st = s16.y; epc = s16.z; cause = s16.w;
     tval = s17.x; tvec = s17.y; scratch = s17.z; ien = s17.w;
@@ -440,7 +581,8 @@ def frag(P):
             uint4 v[8];
             [unroll] for (uint k = 0; k < 8; k++) {
                 uint t = j * 8 + k;
-                uint4 x = t < T_WC ? state_in(t, core) : t < T_WT ? uint4(0, 0, 0, 0) : t < T_WT + (WCN + 3) / 4 ? uint4(NONE, NONE, NONE, NONE) : uint4(0, 0, 0, 0);
+                uint4 x = t < T_WC ? state_in(t, core) : t < T_WT ? uint4(0, 0, 0, 0) : t < T_XF ? uint4(NONE, NONE, NONE, NONE)
+                        : t < T_XT ? state_in(t, core) : t < T_PB ? state_in(t, core) & ~2u : uint4(0, 0, 0, 0);
                 x = t == 18 ? uint4(x.xy, x.z & ~F_AGAIN & (why == E_WAIT ? ~F_SYNC : 0xffffffffu), x.w) : t == 19 ? uint4(x.xy, 0, why) : t == 22 ? n22 : t == 23 ? n23 : x;
                 v[k] = x;
             }
@@ -484,7 +626,7 @@ def emit(P):
     why = valid(P)
     if why: raise ValueError(why)
     L = layout(P)
-    out = [header(P, L), part('alu'), memory(P), part('taken'), fstep(P), part('step12'), part('general'), RUN,
+    out = [header(P, L), part('alu'), memory(P), part('taken'), fstep(P), part('step12'), part('general').replace('//@@FILE_ANY@@', file_any(P)), RUN,
            state_io(P), frag(P), part('ops')]
     return '\n'.join(out)
 

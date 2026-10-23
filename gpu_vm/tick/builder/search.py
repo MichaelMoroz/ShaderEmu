@@ -22,7 +22,7 @@ ROOT = os.path.normpath(os.path.join(HERE, '..', '..', '..'))
 sys.path.insert(0, HERE)
 import gen
 
-GVMB = os.path.join(ROOT, 'bin', 'gvmbench.exe')
+GVMB = os.environ.get('GVMBENCH') or os.path.join(ROOT, 'bin', 'gvmbench.exe')
 CHECK_CASES = 'default,p_k1_m0,p_k4_m40,mc_int'
 CHECK_CORES = '40'
 TIME_CASES = 'arith,loads,stores,mix,stride,floats,coremark,gzip,mc_int,mc_load,p_k0_m0,p_k1_m0,p_k4_m0,p_k8_m0,p_k0_m40,p_k8_m40'

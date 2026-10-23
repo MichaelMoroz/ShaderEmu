@@ -8,12 +8,31 @@ uint4 state_any(uint t, uint c) {
 }
 struct c2f { float4 vertex : SV_POSITION; nointerpolation uint value : V; };
 c2f commit_vert(uint id : SV_VertexID) {
-    uint c = id / WCN, j = id % WCN;
-    uint tg = pick(state_any(T_WT + (j >> 2), c), j & 3), tex = tg & 0x0fffffffu;
+    uint c = id / CPTS, j = id % CPTS;   // a core's points: its write cache's, its file's slots (XBIND), its pairs
+    uint tex = 0, value = 0;
+    bool on = false;
+    [branch] if (j < WCN) {
+        uint tg = pick(state_any(T_WT + (j >> 2), c), j & 3);
+        tex = tg & 0x0fffffffu;
+        on = tg != NONE && ((tg >> (28 + _Comp)) & 1) != 0;
+        value = pick(state_any(T_WC + j, c), _Comp);
+    } else [branch] if (XBIND != 0 && j < WCN + XR) {   // a dirty bound slot: its word
+        uint k = j - WCN, tg = pick(state_any(T_XT + (k >> 2), c), k & 3);
+        tex = tg >> 4;
+        on = (tg & 3) == 3 && ((tg >> 2) & 3) == _Comp;
+        value = pick(state_any(T_XF + (k >> 2), c), k & 3);
+    } else [branch] if (NPAIR != 0) {   // a pair of this pass
+        uint k = j - WCN - (XBIND != 0 ? XR : 0);
+        uint4 pp = state_any(T_PB + (k >> 1), c);
+        uint ad = (k & 1) ? pp.z : pp.x;
+        tex = ad >> 4;
+        on = k < state_any(23, c).x && ((ad >> 2) & 3) == _Comp;
+        value = (k & 1) ? pp.w : pp.y;
+    }
     float2 at = (float2(tex % RAM_W, tex / RAM_W) + 0.5) / float2(RAM_W, _RamRows);
     c2f o;
-    o.vertex = tg != NONE && ((tg >> (28 + _Comp)) & 1) != 0 ? float4(at.x * 2 - 1, 1 - at.y * 2, 0, 1) : float4(-2, -2, 0, 1);
-    o.value = pick(state_any(T_WC + j, c), _Comp);
+    o.vertex = on ? float4(at.x * 2 - 1, 1 - at.y * 2, 0, 1) : float4(-2, -2, 0, 1);
+    o.value = value;
     return o;
 }
 uint4 commit_frag(c2f i) : SV_Target { return i.value; }

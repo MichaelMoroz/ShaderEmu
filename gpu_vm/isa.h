@@ -147,6 +147,21 @@
 #define GVM_M_STOREX 3u
 #define GVM_M_AMO 4u       // [ra], operand rb
 #define GVM_M_AMO2 5u
+// The core's file (phase 2, 23 October 2026; gpu_vm/tick/builder/README.md, "The file"): GVM_SR_XR words a core (0: none,
+// the ops illegal), private, kept across passes, read and written by index (i = (ra + imm) mod the file's size, in words),
+// no tags and no hash. A slot may be bound to a RAM word: bind reads the word into it, sf to a bound slot marks it dirty,
+// and the commit writes every dirty bound slot to its word at the pass's end (after the core's write cache, in slot order).
+// Pairs: fpair appends (ra + imm, rd) to the core's pair buffer (GVM_SR_NPAIR of them a pass), which the commit writes
+// after the bound slots, in order; a full buffer ends the pass before the op. Loads never see a bound slot's or a pair's
+// value: a load of a word that is bound, or that has a pair this pass, is the program's error (the reference counts it,
+// gvm_core.stale). bind and unbind of a dirty slot end the pass before the op (the commit writes it first).
+#define GVM_M_FREAD 6u     // the width field is the kind: GVM_FK_LF, GVM_FK_BIND
+#define GVM_M_FWRITE 7u    // GVM_FK_SF, GVM_FK_PAIR, GVM_FK_UNBIND
+#define GVM_FK_LF 0u       // rd = F[i]
+#define GVM_FK_BIND 1u     // slot i bound to the word at rd's address (word aligned, RAM), F[i] = that word as this core sees it
+#define GVM_FK_SF 0u       // F[i] = rd (dirty when bound)
+#define GVM_FK_PAIR 1u     // the pair (ra + imm, rd): a word stored at the pass's end
+#define GVM_FK_UNBIND 2u   // slot i no longer bound
 // widths (x15): bits 1:0 the size (w, d, h, b: a byte or half is extended by a shift of 8 times them), bit 2
 // unsigned (w's is q; 5 is illegal)
 #define GVM_W_W 0u
@@ -251,7 +266,9 @@
 #define GVM_SR_RANDOM 15u
 #define GVM_SR_LEFT 16u
 #define GVM_SR_OPS 17u
-#define GVM_SR_COUNT 18u
+#define GVM_SR_XR 18u      // the core's file's words (phase 2; read only)
+#define GVM_SR_NPAIR 19u   // its pair buffer's pairs a pass (read only)
+#define GVM_SR_COUNT 20u
 #define GVM_SR_USER_FIRST GVM_SR_TIME_LO
 #define GVM_ST_IE 1u
 #define GVM_ST_PIE 2u

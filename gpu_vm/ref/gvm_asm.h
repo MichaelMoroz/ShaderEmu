@@ -34,7 +34,14 @@ struct GvmAsm {
     static bool lite(uint32_t op) { return GVM_CLASS(GVM_OPC(op)) == 1 && (fn(op) <= GVM_I_XNOR || (fn(op) >= GVM_I_SLL && fn(op) <= GVM_I_SRA)); }
     static bool mem_op(uint32_t op) {
         uint32_t o = GVM_OPC(op), wd = o & 7;
-        return GVM_CLASS(o) == 2 && ((o >> 3) & 7) <= 3 && (wd == GVM_W_W || wd == GVM_W_H || wd == GVM_W_B || wd == GVM_W_HU || wd == GVM_W_BU);
+        return (GVM_CLASS(o) == 2 && ((o >> 3) & 7) <= 3 && (wd == GVM_W_W || wd == GVM_W_H || wd == GVM_W_B || wd == GVM_W_HU || wd == GVM_W_BU)) || file_fast(op);
+    }
+    // phase 2 (isa.h, GVM_M_FREAD): with file_paths a tick that makes the file's lf, sf and fpair in its fast loop takes them
+    // as a load (lf) and stores (sf, fpair) in paths 3-6; without it they are the general step's
+    static inline bool file_paths = false;
+    static bool file_fast(uint32_t op) {
+        uint32_t o = GVM_OPC(op), mode = (o >> 3) & 7, k = o & 7;
+        return file_paths && GVM_CLASS(o) == 2 && ((mode == GVM_M_FREAD && k == GVM_FK_LF) || (mode == GVM_M_FWRITE && (k == GVM_FK_SF || k == GVM_FK_PAIR)));
     }
     static bool madlike(uint32_t f) { return f == GVM_F_MAD || f == GVM_F_MSB || f == GVM_F_NMSB; }
     static bool float_op(uint32_t op) { uint32_t o = GVM_OPC(op); return GVM_CLASS(o) == 3 && !(GVM_IFORM(o) && madlike(o & 31)); }
@@ -62,6 +69,7 @@ struct GvmAsm {
         if (mid(a) && (one || lite(b))) return GVM_PATH_INT;
         if ((int_op(a) || float_op(a) || sel_lpc(a)) && (one || lite(b) || flite(b))) return GVM_PATH_ALU;
         if (mem_op(a) && (one || lite(b))) return store_op(a) ? GVM_PATH_STORE : GVM_PATH_LOAD;
+        if (file_fast(a) || file_fast(b)) return GVM_PATH_GENERAL;   // (a file op: paths 3 and 5 only)
         if (mem_op(a) && mem_op(b)) return store_op(a) ? GVM_PATH_MEM2 : store_op(b) ? GVM_PATH_GENERAL : GVM_PATH_LOAD2;
         if (mem_op(a)) return flite(b) ? GVM_PATH_MEMF : GVM_PATH_GENERAL;
         return GVM_PATH_GENERAL;
@@ -87,6 +95,7 @@ struct GvmAsm {
     // op 1 takes only path 1's cheap ops: anything else opens a bundle
     bool fits1(uint32_t op) const {   // op 1's place: what some path has after op 0
         // a memory pair reads nothing op 0 writes, and a store's is op 0 (isa.h's paths 5 and 7)
+        if (file_fast(op) || file_fast(cur[0])) return lite(op) && !file_fast(op);
         if (mem_op(op) && mem_op(cur[0])) return !reads_rd0(op) && (store_op(cur[0]) || !store_op(op));
         return lite(op) || (flite(op) && (float_op(cur[0]) || mem_op(cur[0])));
     }
@@ -96,7 +105,7 @@ struct GvmAsm {
     }
     // an op that names a register in any field (conservatively: rd, ra, rb, rc)
     static bool touches(uint32_t op, uint32_t r) { return GVM_RD(op) == r || GVM_RA(op) == r || GVM_RB(op) == r || GVM_RC(op) == r; }
-    static bool store_op(uint32_t op) { uint32_t o = GVM_OPC(op); return GVM_CLASS(o) == 2 && (((o >> 3) & 7) == GVM_M_STORE || ((o >> 3) & 7) == GVM_M_STOREX); }
+    static bool store_op(uint32_t op) { uint32_t o = GVM_OPC(op); return GVM_CLASS(o) == 2 && (((o >> 3) & 7) == GVM_M_STORE || ((o >> 3) & 7) == GVM_M_STOREX || ((o >> 3) & 7) == GVM_M_FWRITE); }
     static uint32_t span(uint32_t op) {   // the registers a memory op writes from rd: d two, q four (modes 0-3), else one
         uint32_t o = GVM_OPC(op);
         if (GVM_CLASS(o) != 2 || ((o >> 3) & 7) > 3) return 1;
@@ -148,6 +157,12 @@ struct GvmAsm {
     void lw(uint32_t rd, uint32_t ra, int32_t off) { ld(GVM_W_W, rd, ra, off); }
     void sw(uint32_t rs, uint32_t ra, int32_t off) { st(GVM_W_W, rs, ra, off); }
     void amo(uint32_t f, uint32_t rd, uint32_t ra, uint32_t rb) { R(GVM_OP_M(GVM_M_AMO, f), rd, ra, rb); }
+    // the core's file (isa.h, GVM_M_FREAD; phase 2): slot i = ra + imm (words, mod the file's size)
+    void lf(uint32_t rd, uint32_t ra, int32_t i) { I(GVM_OP_M(GVM_M_FREAD, GVM_FK_LF), rd, ra, i); }
+    void sf(uint32_t rs, uint32_t ra, int32_t i) { I(GVM_OP_M(GVM_M_FWRITE, GVM_FK_SF), rs, ra, i); }
+    void fbind(uint32_t raddr, uint32_t ra, int32_t i) { I(GVM_OP_M(GVM_M_FREAD, GVM_FK_BIND), raddr, ra, i); }   // slot i <- the word at raddr's address
+    void funbind(uint32_t ra, int32_t i) { I(GVM_OP_M(GVM_M_FWRITE, GVM_FK_UNBIND), 0, ra, i); }
+    void fpair(uint32_t rs, uint32_t ra, int32_t off) { I(GVM_OP_M(GVM_M_FWRITE, GVM_FK_PAIR), rs, ra, off); }   // the word rs at ra + off, at the pass's end
     // float: the I form's short immediate is a float's top 12 bits
     void fop(uint32_t f, uint32_t rd, uint32_t ra, uint32_t rb, uint32_t rc = 0) { R(GVM_OP_F(f), rd, ra, rb, rc); }
     void fopi(uint32_t f, uint32_t rd, uint32_t ra, float v) {
@@ -164,6 +179,11 @@ struct GvmAsm {
     void lpc(uint32_t rd, int l) {   // rd = the label's address (a long immediate, fixed up)
         put2(GVM_WORD_I(GVM_X_LPC, rd, 0u, 0u), 0);
         fixes.push_back({w.size() / 4, l, 2, 2});   // (after put2, which may close a bundle: the open one, its immediate word 2)
+    }
+    // rd = an absolute address by lpc (a PIC program's global: the bundle's address + a long immediate)
+    void lpca(uint32_t rd, uint32_t addr) {
+        put2(GVM_WORD_I(GVM_X_LPC, rd, 0u, 0u), 0);
+        long_imm = addr - (base + (uint32_t)(w.size() / 4) * 16);   // (the open bundle's address)
     }
     void halt() { close(); x(GVM_X_BREAK); close(); }   // break in a bundle of its own
 

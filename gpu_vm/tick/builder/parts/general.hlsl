@@ -13,7 +13,7 @@ uint sr_read(uint n) {
     [branch] if (n == GVM_SR_RANDOM) { rnd ^= rnd << 13; rnd ^= rnd >> 17; rnd ^= rnd << 5; }
     uint4 a = uint4(st, epc, cause, tval), b = uint4(tvec, scratch, ien, ipend()), c = uint4(tcmp_lo, tcmp_hi, _TimeLo, _TimeHi);
     uint4 d = uint4(cycle, core, _Player, rnd);
-    uint v = n < 4 ? pick(a, n) : n < 8 ? pick(b, n) : n < 12 ? pick(c, n) : n < 16 ? pick(d, n) : n == GVM_SR_LEFT ? left : opsrun + 1;   // (OPS counts the op reading it)
+    uint v = n < 4 ? pick(a, n) : n < 8 ? pick(b, n) : n < 12 ? pick(c, n) : n < 16 ? pick(d, n) : n == GVM_SR_LEFT ? left : n == GVM_SR_XR ? XR : n == GVM_SR_NPAIR ? NPAIR : opsrun + 1;   // (OPS counts the op reading it)
     return v;
 }
 void sr_write(uint n, uint v) {
@@ -114,8 +114,10 @@ uint ext_op(uint opc, uint a, uint b) {
     return opc <= GVM_X_MULHSU ? mh : opc <= GVM_X_REMU ? dv : bits;
 }
 uint bfmask(uint imm) { uint len = ((imm >> 5) & 31) + 1; return len >= 32 ? 0xffffffffu : (1u << len) - 1; }
+//@@FILE_ANY@@
 uint mem_any(uint w, uint imm, uint a, uint b, uint epcw, inout uint e, inout bool ill) {
     uint opc = (w >> 12) & 255, mode = (opc >> 3) & 7, wd = opc & 7, rd = (w >> 6) & 63;
+    [branch] if (mode >= GVM_M_FREAD) return file_any(w, imm, a, epcw, e, ill);   // the core's file (gen.py's xcode)
     [branch] if (mode <= 3) {
         uint by = wd == GVM_W_W ? 4u : wd == GVM_W_D ? 8u : wd == GVM_W_Q ? 16u : wd == 5 ? 0u : (wd & 1) ? 1u : 2u;
         ill = by == 0;
@@ -249,6 +251,7 @@ uint general(uint budget) {
     }
     left = budget - 1;
     uint e = bundle();
+    e = e == NONE && NPAIR != 0 && pn >= NPAIR ? E_FULL : e;   // the bundle that filled the pair buffer ends the pass
     irq_due = (st & GVM_ST_IE) != 0 && (ipend() & ien) != 0;
     cur = ram(pc >> 4);
     cur.w &= (pc & 15) != 0 || irq_due ? ~7u : 0xffffffffu;   // (the fast loop makes whole bundles, and takes no interrupt)
