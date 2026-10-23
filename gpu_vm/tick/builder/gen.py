@@ -82,6 +82,7 @@ DEFAULTS = dict(
     xtl=0,              # (a measure) N more texel loads a bundle (the next texels', folded into junk in the same step): what a load costs
     mflat=0,            # the memory paths in fewer blocks: 1 the buckets' tags read always (a select for the bloom word's skip),
                         # 2 paths 3 and 5 fetch the data texel always; 3 both
+    m6seq=0,            # path 6 as two steps: op 0's store, then op 1 looked up in the tags op 0 left (no patched copy of its buckets)
     cc0f=0,             # a cc 0 bundle (j, call, jr, callr) whose ops are path 7's, 3's or 5's runs the fast step's body (fstep_c), not step12
 )
 
@@ -92,7 +93,7 @@ SPACE = dict(   # the values a search draws from
     bandx=[1, 2], per=[16, 32, 64, 128], jrow=[0, 1], perm=['id', 'bitrev', 'mul'], mul=[3, 5, 37, 77],
     early=[0, 1, 2, 3], mru=[0, 1, 2, 4], bb=[0, 1], tfirst=[0, 1], s6=[0, 1], nc=[0, 1], thin=[0, 1], thin8=[0, 1], wide3=[0, 1, 2], late=[0, 1, 2, 3], fx1=[0, 1], ov=[0, 4, 8, 16], mv=[0, 1], cv=[0, 1, 2], wsh=[0, 1, 2, 3], wad=[0, 1, 2, 3, 4, 5, 6, 7], s12b=[0, 1, 2, 3], s12in=[0, 1], rc=[0, 1, 2], dtx=['both', 'one'], rpk=['scalar', 'vec', 'wide'], pk=['scalar', 'vec', 'aos'], lay=['split', 'merged'],
     xr=[0, 64, 128, 256, 512, 1024], npair=[0, 32, 64, 128], xbind=[0, 1], xload=['pre', 'lazy'], xfast=[0, 1],
-    pf=[0, 1, 2], pft=[0, 4, 8, 16], pfd=[1, 2], s12pf=[0, 1], ldf=[0, 1], cc0f=[0, 1], mflat=[0, 1, 2, 3, 6, 7, 10],
+    pf=[0, 1, 2], pft=[0, 4, 8, 16], pfd=[1, 2], s12pf=[0, 1], ldf=[0, 1], cc0f=[0, 1], m6seq=[0, 1], mflat=[0, 1, 2, 3, 6, 7, 10],
 )
 
 def layout(P):
@@ -133,6 +134,7 @@ def valid(P):
     if (P.get('pf', 0) or P.get('pft', 0)) and (P['fetch'] != 'both' or P.get('thin8', 0)): return 'pf, pft with fetch=both only'
     if P.get('cc0f', 0) and (P['fetch'] != 'both' or P['xr'] or P['npair'] or P.get('mru', 0) or P.get('bb', 0) or P.get('thin', 0) or P.get('thin8', 0)
                              or P.get('wide3', 0) or P.get('late', 0) or P.get('vec', 0) or P.get('s12in', 0) or P.get('mv', 0)): return 'cc0f with these'
+    if P.get('m6seq', 0) and (P.get('mru', 0) or P.get('bb', 0) or P.get('mv', 0) or P.get('mflat', 0) & 4): return 'm6seq with mru, bb, mv or mflat 4'
     if P.get('ldf', 0) and (not P['bloom'] or P['xr'] or P['npair'] or P.get('nc', 0) or P.get('mru', 0) or P.get('bb', 0) or P.get('rc', 0)): return 'ldf with bloom only'
     return ''
 
@@ -457,6 +459,30 @@ MEM6 = '''{   // a store, then a load or a store that sees it by selects (path 6
             cycle -= nr ? budget - 1 : 0; budget = nr ? 1 : budget;
             s1 = st1 ? 64 : s1;
         }'''
+MEM6SEQ = '''{   // a store, then a load or a store looked up after it (path 6 as two steps: m6seq)
+            bool st1 = (t.y & op_bit(8)) != 0;
+            mop m0 = mread_entries(t.x, i0, A0, B0, true);
+            [branch] if (((t.x & op_bit(3)) | (m0.ad & 3)) != 0) m0.q = data_texel(m0.ad);
+            uint w0 = seen(m0), sl0 = slot(m0), s0x = sl0 == NONE ? WCS : sl0;
+            uint tg0 = stag(slot_tag(m0, sl0), m0.t, m0.i);
+            wt[s0x] = tg0; wd[4 * s0x + m0.i] = merge(t.x, w0, m0.ad, r[d0]);
+            bloom |= m0.t;
+            mop m1 = mread_entries(t.y, i1, A1, B1, true);
+            bool over = m0.t == m1.t && sl0 == NONE;   // (op 0 took the spare slot: op 1 of its texel sees it there)
+            m1.sl = over ? WCS : m1.sl; m1.otag = over ? tg0 : m1.otag; m1.e = over ? (has(tg0, m1.t, m1.i) ? WCS : WCN) : m1.e;
+            m1.w = wd[4 * m1.e + m1.i];
+            [branch] if ((((t.y ^ op_bit(8)) & op_bit(11)) | (m1.ad & 3)) != 0) m1.q = data_texel(m1.ad);
+            smax = max(smax, max(m0.ad - GVM_DEV, st1 ? m1.ad - GVM_DEV : 0)); lmax = max(lmax, st1 ? 0 : m1.ad & ~GVM_ROM);
+            uint w1 = seen(m1), sl1 = m1.sl;
+            v1 = extend(t.y, w1, m1.ad);
+            bool nr = sl0 == NONE || (st1 && sl1 == NONE);
+            uint at1 = st1 ? (sl1 == NONE ? WCS + 1 : sl1) : WCN;
+            wt[at1] = stag(m1.otag, m1.t, m1.i);
+            wd[4 * at1 + m1.i] = merge(t.y, w1, m1.ad, r[d1]);
+            bloom |= st1 ? m1.t : 0;
+            cycle -= nr ? budget - 1 : 0; budget = nr ? 1 : budget;
+            s1 = st1 ? 64 : s1;
+        }'''
 INT = '''{   // integers: op 0 the mid unit, op 1 lite
         v0 = alu_mid(t.x, i0, A0, B0);
         r[s0] = v0;
@@ -538,10 +564,11 @@ def mflat(P, src):
 
 def fstep(P):
     m35 = (xfast(P) if (P['xr'] or P['npair']) and P['xfast'] else '') + (LDF if P.get('ldf', 0) else '') + MEM35
+    m6 = MEM6SEQ if P.get('m6seq', 0) else MEM6
     if P['mem_order'] == '35':
-        mem = m35 + ' else ' + MEM4 + ' else ' + MEM6
+        mem = m35 + ' else ' + MEM4 + ' else ' + m6
     else:
-        mem = MEM4 + ' else ' + m35 + ' else ' + MEM6
+        mem = MEM4 + ' else ' + m35 + ' else ' + m6
     mem = '{\n        ' + mem + '\n    }'
     attr = '[%s] ' % P['split']
     if P['int_first']:
