@@ -45,7 +45,7 @@ Shader "ShaderEmu/gvm_devices"
             Texture2D<uint4> _State;
             Texture2D<uint4> _GvmS0;   // the tick's state textures 0 and 3 (texels 16 and 19 of each core's row)
             Texture2D<uint4> _GvmS3;
-            uniform uint _GvmZoneX, _GvmZoneY, _GvmZoneSplit, _GvmZone2X, _GvmZone2Y, _GvmPasses, _GvmWorkers, _GvmParkLo, _GvmParkHi, _GvmGeo;
+            uniform uint _GvmZoneX, _GvmZoneY, _GvmZoneSplit, _GvmZone2X, _GvmZone2Y, _GvmPasses, _GvmWorkers, _GvmParkLo, _GvmParkHi, _GvmGeo, _GvmListDrawn;
             uniform float4 _InputPointer;
             uniform uint _InputButtons, _InputKeySeq, _InputKeyCount;
             uniform uint _HostMs;

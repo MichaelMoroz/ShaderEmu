@@ -317,10 +317,12 @@ public:
             // passes after a readback saw it submitted, as fast or faster in every game (gpu_vm/IDEAS.md 38) (the submit word is
             // taken back once it is drawn: a list waits a few passes more, as a world's frame draws the devices once)
             static const bool lazy = !getenv("GVM_LIST_LAZY") || atoi(getenv("GVM_LIST_LAZY")) != 0;
-            if (!lazy || listDue_ > 0) {
+            bool listDrawn = !lazy || listDue_ > 0;
+            if (listDrawn) {
                 gpuDraw(mat);
                 if (listDue_ > 0) listDue_--;
             }
+            mat.setInt("_GvmListDrawn", listDrawn ? 1 : 0);   // (the control zone takes the submit word back only then)
             if (tq_) ctx->End(tq_[4]);
             if (soundMix && devPasses_.size() > 3) soundDraw(mat, tag);   // (before the control zone moves the voices on)
             mat.setInt("_GvmPasses", (int64_t)(uint32_t)passes_);
@@ -337,7 +339,7 @@ public:
             // GVM_ZONES_EVERY=K: the control words' and the cores' counts' zones every K-th frame (and whenever the host
             // delivers something), as a world draws the devices once a frame of several rounds
             static const uint32_t zonesEvery = getenv("GVM_ZONES_EVERY") ? (std::max)(1, atoi(getenv("GVM_ZONES_EVERY"))) : 1;
-            bool zones = zonesEvery == 1 || merge || conDelivered || deliver_ || deliverNet_ || listDue_ > 0 || ++zoneSkip_ >= zonesEvery;
+            bool zones = zonesEvery == 1 || merge || conDelivered || deliver_ || deliverNet_ || (lazy && listDrawn) || ++zoneSkip_ >= zonesEvery;
             if (zones) zoneSkip_ = 0;
             // (the control words and, with workers, MC_STATS_ALL in one draw: gpu_vm/IDEAS.md 38)
             if (zones && workers_) zonePair(mat, 0x700000u, kControlTexels, 0x76ba00u, 72);   // MC_STATS_ALL

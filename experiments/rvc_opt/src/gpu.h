@@ -1055,6 +1055,9 @@ uint4 gpu_control(uint2 pos) {
     // (A list that needs passes the host is not drawing yet waits, submitted, until it is.)
 #ifdef GPU_INPUT
     bool served = (SUBMIT_PASSES(ram(GPU_CTRL).r) & ~_GpuPasses) == 0;
+#ifdef GVM_RAM
+    served = served && _GvmListDrawn != 0;   // (the harness's lazy list: a list not drawn this frame stays submitted)
+#endif
 #else
     bool served = true;
 #endif
