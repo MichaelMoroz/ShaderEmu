@@ -95,6 +95,8 @@ typedef struct gvm_machine {
     uint32_t flags;          // GVM_REF_*
     gvm_core *cores;
     uint32_t ncores;
+    uint32_t late;           // phase 3 (gvm_asm.h's late_br): a conditional branch and addbnz read their registers after the bundle's ops
+    uint32_t wide3;          // phase 3 (gvm_asm.h's max_ops 3): n 3 is three ops, word 2 op 2 (no long immediate then)
     uint32_t thin;           // phase 3 (gvm_asm.h's thin8): 8-byte instructions {op, control} (16 with a long immediate:
                              // {op, control, imm, 0}, at a texel's start); branch offsets in 8 bytes; an instruction has 0 or 1 op
 } gvm_machine;
@@ -641,13 +643,13 @@ int gvm_bundle(gvm_machine *m, gvm_core *c) {
         s = s ? 3 : 0;
     } else for (k = 0; k < 4; k++) t[k] = m->ram[(base >> 2) + k];   // code is fetched from RAM as committed
     uint32_t ctl = t[3], n = GVM_N(ctl), size = T ? (GVM_LONG0(ctl) ? 16u : 8u) : 16u;
-    if (T && n > 1) n = 3;
+    if (T && n > 1) n = 4;
     c->bundles_run++;
-    if (n == 3) { gvm__trap(c, GVM_CAUSE_ILLEGAL, base | CW, ctl); return GVM_END_BUDGET; }
+    if (n == 4 || (n == 3 && !m->wide3)) { gvm__trap(c, GVM_CAUSE_ILLEGAL, base | CW, ctl); return GVM_END_BUDGET; }
     // the branch's registers as this run of the bundle begins
     uint32_t ca0 = c->x[GVM_CRA(ctl)], cb0 = c->x[GVM_CRB(ctl)], cs0 = c->x[GVM_CRS(ctl)];
     for (; s < n; s++) {
-        int lu = 0, r = gvm__op(m, c, base, s, t, n, (s == 0 ? GVM_LONG0(ctl) : GVM_LONG1(ctl)) != 0, &lu, &end);
+        int lu = 0, r = gvm__op(m, c, base, s, t, n, (s == 0 ? GVM_LONG0(ctl) : s == 1 ? GVM_LONG1(ctl) : 0) != 0, &lu, &end);
         if (r == GVM__TRAPPED) return GVM_END_BUDGET;
         if (r == GVM__END) {
             // the pass ends inside the bundle: pc is where it goes on (past n: the control word)
@@ -657,6 +659,7 @@ int gvm_bundle(gvm_machine *m, gvm_core *c) {
         (void)lu;
     }
     // the control word: a branch on the registers as the bundle found them, jr and callr on its ops' results
+    if (m->late && GVM_CC(ctl) != GVM_CC_SPECIAL) { ca0 = c->x[GVM_CRA(ctl)]; cb0 = c->x[GVM_CRB(ctl)]; }   // (late: as its ops left them)
     uint32_t cc = GVM_CC(ctl), next = base + size;
     int super = (c->sr[GVM_SR_STATUS] & GVM_ST_S) != 0;
     if (cc == GVM_CC_SPECIAL) {

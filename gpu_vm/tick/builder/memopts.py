@@ -148,4 +148,28 @@ uint4 data_texel(uint ad) {''')
                      ('base + 16', 'base + isz'), ('pc = tvec & ~15u;', 'pc = tvec & ~7u;')):
             assert a in src, a
             src = src.replace(a, b)
+    W3 = P.get('wide3', 0)
+    if W3:   # three ops a bundle: n 3, op 2 (lite) in word 2 (gvm_machine.wide3); 1: behind a branch, 2: always made, into the sink unless n is 3
+        src = _rep(src, '[branch] if (n == 3) { trap(GVM_CAUSE_ILLEGAL, base | 12, ctl); return NONE; }', '[branch] if (n == 3 && WIDE3 == 0) { trap(GVM_CAUSE_ILLEGAL, base | 12, ctl); return NONE; }')
+        src = _rep(src, '        uint w = s != 0 ? t.y : t.x;' + NL + '        bool L = ((ctl >> (5 + s)) & 1) != 0;',
+                   '        uint w = s == 0 ? t.x : s == 1 ? t.y : t.z;' + NL + '        bool L = s < 2 && ((ctl >> (5 + s)) & 1) != 0;')
+        i = src.index('void fstep(inout uint budget) {')
+        a = '    r[s1] = v1;' + NL
+        j = src.index(a, i)
+        if W3 == 1:
+            op2 = '''    [branch] if (n8 == 0x18) {   // op 2 (WIDE3)
+        uint w2 = t.z, d2 = (w2 >> 6) & 63;
+        r[d2 != 0 ? d2 : 64] = alu_lite(w2, simm12(w2), r[w2 & 63], r[w2 >> 26]);
+    }
+'''
+        else:
+            op2 = '''    uint w2 = t.z, d2 = (w2 >> 6) & 63;   // op 2 (WIDE3), always made: into the sink unless the bundle has three ops
+    r[n8 == 0x18 && d2 != 0 ? d2 : 64] = alu_lite(w2, simm12(w2), r[w2 & 63], r[w2 >> 26]);
+'''
+        src = src[:j + len(a)] + op2 + src[j + len(a):]
+    if P.get('late', 0):   # the fast loop's branch on the registers as the ops left them (op 1's result wins)
+        i = src.index('void fstep(inout uint budget) {')
+        a = '    uint i6 = asuint((int)ctl >> 26), sum = CA + i6;'
+        j = src.index(a, i)
+        src = src[:j] + '    uint sl0 = path == GVM_PATH_MEM2 ? 64 : s0;   // (path 6: op 0 a store)' + NL + '    CA = ca == s1 ? v1 : ca == sl0 ? v0 : CA; CB = cb == s1 ? v1 : cb == sl0 ? v0 : CB;   // (LATEBR)' + NL + src[j:]
     return src

@@ -223,6 +223,7 @@ uint bundle() {
     }
     [branch] if (res == 1) return NONE;
     [branch] if (res != 0) { pc = ((pc >> 2) & 3) >= n ? base | 12 : pc; return e; }
+    [branch] if (LATEBR != 0 && GVM_CC(ctl) != GVM_CC_SPECIAL) { ca0 = r[GVM_CRA(ctl)]; cb0 = r[GVM_CRB(ctl)]; }   // (late branches)
     uint cc = GVM_CC(ctl), sub = GVM_SUB(ctl), rs = GVM_CRS(ctl), next = base + 16, i6 = asuint(GVM_CIMM6(ctl)), sum = ca0 + i6;
     bool bad = cc == GVM_CC_SPECIAL ? (sub == GVM_SUB_ILLEGAL || (sub == GVM_SUB_ADD && rs == 0)) : cc == GVM_CC_ADDBNZ && GVM_CRA(ctl) == 0;
     [branch] if (bad) { trap(GVM_CAUSE_ILLEGAL, base | 12, ctl); return NONE; }

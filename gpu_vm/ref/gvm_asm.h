@@ -41,7 +41,8 @@ struct GvmAsm {
     static inline bool file_paths = false;
     static inline bool nc_loads = false;   // the tick has GVM_W_NC (its NCLOAD): lw_nc is a plain lw without it
     static inline bool thin8 = false;   // phase 3: finish() lays the bundles out as 8-byte instructions (gvm_machine.thin; max_ops 1)
-    static inline int max_ops = 2;   // ops a bundle (the tick's THIN: 1, a bundle of one op and its control word)
+    static inline bool late_br = false;   // gvm_machine.late: a branch reads its registers after the bundle's ops
+    static inline int max_ops = 2;   // ops a bundle (the tick's THIN: 1, a bundle of one op and its control word; WIDE3: 3, op 2 in word 2)
     static bool file_fast(uint32_t op) {
         uint32_t o = GVM_OPC(op), mode = (o >> 3) & 7, k = o & 7;
         return file_paths && GVM_CLASS(o) == 2 && ((mode == GVM_M_FREAD && k == GVM_FK_LF) || (mode == GVM_M_FWRITE && (k == GVM_FK_SF || k == GVM_FK_PAIR)));
@@ -90,7 +91,7 @@ struct GvmAsm {
         uint32_t p = GVM_CC(ctl) != GVM_CC_SPECIAL ? path() : path12_of(ctl | n << 3, n > 0 ? cur[0] : 0, n > 1 ? cur[1] : 0);
         w.push_back(n > 0 ? cur[0] : 0);
         w.push_back(n > 1 ? cur[1] : 0);
-        w.push_back(long_of < 0 ? 0 : long_imm);
+        w.push_back(n > 2 ? cur[2] : long_of < 0 ? 0 : long_imm);
         w.push_back(ctl | n << 3 | L | p);
         cur.clear();
         long_of = -1;
@@ -115,18 +116,25 @@ struct GvmAsm {
         if (GVM_CLASS(o) != 2 || ((o >> 3) & 7) > 3) return 1;
         return (o & 7) == GVM_W_Q ? 4 : (o & 7) == GVM_W_D ? 2 : 1;
     }
+    bool br_old(uint32_t r) const { return !late_br && writes(r); }   // a branch on r must open a new bundle (it reads r as the bundle found it)
     bool writes(uint32_t r) const {   // an op of the open bundle that writes r (a store's rd is its value: read); d and q by rd's group
         for (uint32_t op : cur) if (!store_op(op) && (r - GVM_RD(op)) < span(op)) return true;
         return false;
     }
     void put(uint32_t op) {
         if (bump_reg >= 0 && touches(op, (uint32_t)bump_reg)) close();   // it comes after the add in program order
-        if (cur.size() == 2 || (!cur.empty() && !fits1(op))) close();
+        if (cur.size() == 2 ? !fits2(op) : cur.size() >= 3 || (!cur.empty() && !fits1(op))) close();
         cur.push_back(op);
+    }
+    // max_ops 3 (gvm_machine.wide3): a third op, lite, in word 2, after a lite op 1 in a bundle with no long immediate
+    bool fits2(uint32_t op) const {
+        if (max_ops < 3 || long_of >= 0 || !lite(op) || !lite(cur[1])) return false;
+        uint32_t p = path();
+        return p == GVM_PATH_INT || p == GVM_PATH_LOAD || p == GVM_PATH_STORE;   // (the fast loop's: step12 makes two ops)
     }
     void put2(uint32_t op, uint32_t imm) {
         if (bump_reg >= 0 && touches(op, (uint32_t)bump_reg)) close();
-        if (cur.size() == 2 || (!cur.empty() && !fits1(op)) || long_of >= 0) close();
+        if (cur.size() >= 2 || (!cur.empty() && !fits1(op)) || long_of >= 0) close();
         long_of = (int)cur.size();
         long_imm = imm;
         cur.push_back(op);
@@ -214,7 +222,7 @@ struct GvmAsm {
     // fused: ra += imm6 (-32..31) after the bundle's ops, and to l when the sum is not 0 (`addi ra, ra, i; bnez ra`)
     void addbnz(uint32_t a, int32_t i, int l) {
         if (i < -32 || i > 31 || (a & 63) == 0) { fprintf(stderr, "gvm_asm: addbnz r%u by %d\n", a & 63, i); exit(1); }
-        if (writes(a & 63)) close();
+        if (br_old(a & 63)) close();
         br(GVM_CC_ADDBNZ, a, (uint32_t)i & 63, l);
     }
     // j: beq r0, r0 (+-4 KB, the ops' path) when finish() finds the label near, else cc 0's far j (the general step)

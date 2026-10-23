@@ -40,6 +40,8 @@ DEFAULTS = dict(
     nc=0,               # phase 2: GVM_W_NC loads (read-only data) skip the write cache's lookup
     thin=0,             # one op a bundle: the fast loop drops op 1 (the assembler closes a bundle after every op)
     thin8=0,            # phase 3: 8-byte instructions {op, control} (the assembler's thin8), one op each
+    wide3=0,            # phase 3: three ops a bundle (op 2 lite, in word 2): 1 behind a branch, 2 always made
+    late=0,             # phase 3: a conditional branch reads its registers after the bundle's ops (no op-less bundle before it)
     rc=0,               # a read cache: the last 0, 1 or 2 texels the fast paths fetched, in registers
     dtx='both',         # a data texel: ROM and RAM both fetched then selected (x23), or one behind a branch
     rpk='scalar',       # the registers: scalar r[65], or vec uint4 R4[17] (layoutopts.py)
@@ -60,7 +62,7 @@ SPACE = dict(   # the values a search draws from
     fetch=['both', 'one'], int_first=[0, 1], mem_order=['35', '4'], split=['branch', 'flatten'],
     block=[(8, 8), (16, 4), (4, 16), (8, 4), (4, 8), (32, 2), (16, 8), (8, 16), (32, 4), (64, 1), (32, 1), (16, 2)],
     bandx=[1, 2], per=[16, 32, 64, 128], jrow=[0, 1], perm=['id', 'bitrev', 'mul'], mul=[3, 5, 37, 77],
-    early=[0, 1, 2, 3], mru=[0, 1, 2, 4], bb=[0, 1], tfirst=[0, 1], s6=[0, 1], nc=[0, 1], thin=[0, 1], thin8=[0, 1], rc=[0, 1, 2], dtx=['both', 'one'], rpk=['scalar', 'vec', 'wide'], pk=['scalar', 'vec', 'aos'], lay=['split', 'merged'],
+    early=[0, 1, 2, 3], mru=[0, 1, 2, 4], bb=[0, 1], tfirst=[0, 1], s6=[0, 1], nc=[0, 1], thin=[0, 1], thin8=[0, 1], wide3=[0, 1, 2], late=[0, 1], rc=[0, 1, 2], dtx=['both', 'one'], rpk=['scalar', 'vec', 'wide'], pk=['scalar', 'vec', 'aos'], lay=['split', 'merged'],
     xr=[0, 64, 128, 256, 512, 1024], npair=[0, 32, 64, 128], xbind=[0, 1], xload=['pre', 'lazy'], xfast=[0, 1],
 )
 
@@ -91,6 +93,8 @@ def valid(P):
     if P['xr'] and (P['xr'] & (P['xr'] - 1) or P['xr'] < 4): return 'xr not a power of two'
     if P['npair'] % 2: return 'npair odd'
     if P.get('s6', 0) and not P.get('mru', 0): return 's6 without mru'
+    if P.get('late', 0) and P.get('wide3', 0): return 'late with wide3'
+    if P.get('wide3', 0) and (P.get('thin', 0) or P.get('thin8', 0)): return 'wide3 with thin'
     if P.get('thin8', 0) and (P['fetch'] != 'both' or P.get('mru', 0)): return 'thin8 with fetch=both only'
     if P['xr'] > 1024 or P['npair'] > 256: return 'file or pairs too large'
     return ''
@@ -139,8 +143,10 @@ static const uint XR = {P['xr']};
 static const uint XBIND = {L['XBIND']};
 static const uint XFAST = {P['xfast'] if P['xr'] or P['npair'] else 0};
 static const uint NCLOAD = {P.get('nc', 0)};   // GVM_W_NC loads (no look at this pass's stores)
-static const uint THIN = {P.get('thin', 0)};
-static const uint THIN8 = {P.get('thin8', 0)};   // 8-byte instructions (gvm_machine.thin)   // one op a bundle (the assembler's max_ops 1): the fast loop has no op 1
+static const uint THIN = {P.get('thin', 0)};   // one op a bundle (the assembler's max_ops 1): the fast loop has no op 1
+static const uint THIN8 = {P.get('thin8', 0)};   // 8-byte instructions (gvm_machine.thin)
+static const uint WIDE3 = {P.get('wide3', 0)};   // three ops a bundle (gvm_machine.wide3)
+static const uint LATEBR = {P.get('late', 0)};   // branches read their registers after the bundle's ops (gvm_machine.late)
 static const uint XLAZY = {1 if P['xload'] == 'lazy' else 0};
 static const uint NPAIR = {P['npair']};
 static const uint T_XF = {L['T_XF']};

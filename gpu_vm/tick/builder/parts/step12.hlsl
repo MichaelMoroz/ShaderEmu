@@ -31,6 +31,10 @@ uint step12(uint budget) {   // the budget left: 0 when a store found no room (n
     A1 = (d0 != 0 && ra1 == d0) ? v0 : A1; B1 = (d0 != 0 && rb1 == d0) ? v0 : B1;
     uint v1 = fl1 ? fsum(fn(t.y), A1, fb(t.y, i1, L1, B1), r[GVM_RC(t.y)]) : alu_lite(t.y, i1, A1, B1);
     r[d1 == 0 ? 64 : d1] = v1;
+    [flatten] if (LATEBR != 0 && GVM_CC(ctl) != GVM_CC_SPECIAL) {   // (late branches: the registers as the ops left them)
+        uint ca = GVM_CRA(ctl), cb = GVM_CRB(ctl);
+        CA = d1 != 0 && ca == d1 ? v1 : d0 != 0 && ca == d0 ? v0 : CA; CB = d1 != 0 && cb == d1 ? v1 : d0 != 0 && cb == d0 ? v0 : CB;
+    }
     uint i6 = asuint(GVM_CIMM6(ctl)), sum = CA + i6;
     r[GVM_CC(ctl) != GVM_CC_ADDBNZ ? 64 : GVM_CRA(ctl)] = sum;   // after the ops' writes: it wins
     pc = taken(ctl, CA, CB, i6, sum) != 0 ? tg : base + 16;
