@@ -54,6 +54,23 @@ def fps_doom(log):
     return (f * 1000.0 / ms if ms else None), f'{f} frames in {ms} ms'
 
 
+def fps_quake(log):
+    m = re.search(r'(\d+) frames ([\d.]+) seconds ([\d.]+) fps', log)
+    return (float(m[3]), m[0]) if m else (None, 'no timedemo line')
+
+
+def fps_coremark(log):
+    m = re.search(r'Iterations/Sec\s*:\s*([\d.]+)', log)
+    return (float(m[1]), m[0]) if m else (None, 'no Iterations/Sec')
+
+
+def fps_count(word):
+    def f(log):   # (lines of a loop's rounds over the run's seconds: rounds a second; the run's length is fixed)
+        n = len(re.findall(word, log))
+        return (n / 15.0 if n else None), f'{n} rounds'
+    return f
+
+
 HL_FROM = 31
 GAMES = {
     'quake3': dict(cmd=X + 'QUAKE3_STATS_FRAMES=100 quake3 +set fixedtime 33 +devmap q3dm17 +addbot sarge 3',
@@ -63,6 +80,12 @@ GAMES = {
                      seconds=40),
     'nxray': dict(cmd=X + 'nxray', mark='raystat: 320 x 240', fps=fps_ray),
     'doom': dict(cmd=X + 'doom -1 -timedemo demo1', mark='doom: ', fps=fps_doom),
+    # programs that declare no REST mask (the builder's wad 5-7 cap nothing in them): saved at a word typed before them
+    'doomt': dict(cmd=X + 'echo MA""RKD; doom -1 -timedemo demo1', mark='MARKD', fps=fps_doom, seconds=60),
+    'quake1': dict(cmd=X + 'echo MA""RKQ; quake +timedemo demo1', mark='MARKQ', fps=fps_quake, seconds=60),
+    'coremark': dict(cmd='echo MA""RKC; coremark', mark='MARKC', fps=fps_coremark, seconds=60),
+    'gzipl': dict(cmd='echo MA""RKZ; i=0; while true; do gzip -c /usr/bin/coremark > /dev/null; i=$((i+1)); echo gzround $i; done',
+                  mark='MARKZ', fps=fps_count(r'gzround \d+'), seconds=15),
 }
 WHY_GVM = {0: 'budget', 1: 'sync', 2: 'wait', 3: 'full', 5: 'halt'}
 WHY_RV = {0: 'none', 1: 'exit call', 2: 'CSR full', 3: 'full', 6: 'UART', 7: 'fence.i', 8: 'copy', 9: 'wfi/pause',

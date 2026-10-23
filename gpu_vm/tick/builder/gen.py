@@ -45,6 +45,9 @@ DEFAULTS = dict(
     s12b=0,             # step12's op 0 integer or float: 0 a select of both, 1 a branch; 2 op 1's too
     cv=0,               # the commit reads one state texture a texel (a switch), an entry's value only when it is drawn
     wsh=0,              # a worker's budget a pass: core 0's (_Ticks) >> wsh
+    wadf=0,             # the wad block's form: 2 before the state's load, 16 run(core == 0 ? _Ticks : bud) (18: the ALU loops as wad=0's), 1 flatten, 4 core 0's run apart
+    wclean=0,           # 1: a pixel of the write cache's data texels whose entries are all unused is discarded (not written)
+    ovh=0,              # 1: the ov entries are a third table of ov / 4 hashed buckets, read when both buckets are full (slower: IDEAS 27)
     wad=0,              # 1: a worker's budget core 0's bundles of the last pass (+1/4, 512 at least) when that pass ended core 0 on sync or full
                         # (2 on full only; 3 as 2, half the budget at least; 4 as 1 unless the workers are busy; 5 on sync for
                         #  the workers outside the kernel's REST mask at WAITW, no mask no cap; 6 as 5 and on full as 2; 7 as 6, the full
@@ -321,8 +324,13 @@ uint wc_b2(uint t) { return NB + (((t >> 3) ^ (t << 2) ^ (t >> 5)) & (NB - 1)); 
     else:
         h = f'''uint wc_b1(uint t) {{ return (t * 0x9e3779b1u) >> {32 - lg}; }}
 uint wc_b2(uint t) {{ return NB + ((t * 0x85ebca6bu + 0x165667b1u) >> {32 - lg}); }}'''
+    if P.get('ovh', 0):
+        lo = int(math.log2(max(P['ov'] // 4, 1)))
+        h += f'''
+uint wc_b3(uint t) {{ return (t * 0xc2b2ae35u + 0x27d4eb2fu) >> {32 - lo}; }}'''
     look = "st || ((ad >> 4) & bloom) == (ad >> 4)" if P['bloom'] else 'true'
-    return '''// ---- Memory: the write cache holds a texel in an entry of its bucket in the first table or the second
+    ovh = "    [branch] if (OV != 0 && k >= 8) {   // (ovh) both buckets full: the texel's bucket of a third table\n        uint b3 = (OVB >> 2) + wc_b3(m.t);\n        uint4 C = bucket(b3);\n        bool4 kc = (C & 0x0fffffffu) == m.t || C == NONE;\n        uint j = kc.x ? 0u : kc.y ? 1u : kc.z ? 2u : kc.w ? 3u : 4u;\n        m.otag = j < 4 ? pick(C, j) : NONE; m.sl = j < 4 ? 4 * b3 + j : NONE;\n    } else" if P.get('ovh', 0) else ''
+    return ('''// ---- Memory: the write cache holds a texel in an entry of its bucket in the first table or the second
 bool has(uint tg, uint t, uint i) { return tg != NONE && (tg & 0x0fffffffu) == t && ((tg >> (28 + i)) & 1) != 0; }
 uint stag(uint tg, uint t, uint i) { return t | (((tg == NONE ? 0u : tg >> 28) | (1u << i)) << 28); }
 uint pick_ad(uint4 q, uint ad) { uint2 h = (ad & 8) ? q.zw : q.xy; return (ad & 4) ? h.y : h.x; }
@@ -346,7 +354,7 @@ void mfind(inout mop m) {
     uint k = firstbitlow(msk);
     m.otag = k < 8 ? pick(k < 4 ? m.A : m.B, k & 3) : NONE;
     m.sl = k < 4 ? 4 * m.b1 + k : k < 8 ? 4 * m.b2 + (k & 3) : NONE;
-    [branch] if (OV != 0 && k >= 8) {   // both buckets full: the texel's overflow entry, or the first free one
+@OVH@    [branch] if (OV != 0 && k >= 8) {   // both buckets full: the texel's overflow entry, or the first free one
         uint j = OV, q;
         [loop] for (q = 0; q < OV; q++) { uint g = wt[OVB + q]; j = j == OV && ((g & 0x0fffffffu) == m.t || g == NONE) ? q : j; }
         m.otag = j < OV ? wt[OVB + j] : NONE; m.sl = j < OV ? OVB + j : NONE;
@@ -397,7 +405,7 @@ mop mread(uint w, uint imm, uint a, uint b) {
 uint seen(mop m) { return m.e != WCN ? m.w : pick(m.q, m.i); }
 uint slot(mop m) { return m.sl; }
 uint slot_tag(mop m, uint sl) { return m.otag; }
-'''
+''').replace('@OVH@', ovh)
 
 MEM35 = '''[branch] if ((path & 1) != 0) {   // a load or a store, and a lite op (paths 3 and 5)
             bool st0 = (t.x & op_bit(8)) != 0;
