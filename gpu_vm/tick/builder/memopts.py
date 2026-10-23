@@ -255,9 +255,11 @@ uint vop(uint w, uint imm, uint rd) {
     if P.get('s12b', 0):   # step12: the integer or the float unit behind a branch, not both made and one selected
         src = _rep(src, '    else v0 = (opc0 >> 6) == 1 ? alu(t.x, i0, A0, B0) : fpu(t.x, A0, fb(t.x, i0, L0, B0), C0);',
                    '    else [branch] if ((opc0 >> 6) == 1) v0 = alu(t.x, i0, A0, B0); else v0 = fpu(t.x, A0, fb(t.x, i0, L0, B0), C0);   // (s12b)')
+    if P.get('s12b', 0) == 3:   # and a float sum (functions 0-7) apart from the rest of the float unit
+        src = _rep(src, 'else v0 = fpu(t.x, A0, fb(t.x, i0, L0, B0), C0);   // (s12b)', 'else [branch] if ((opc0 & 31) <= GVM_F_MAX) v0 = fsum(opc0 & 31, A0, fb(t.x, i0, L0, B0), C0); else v0 = fpu(t.x, A0, fb(t.x, i0, L0, B0), C0);   // (s12b 3)')
     if P.get('fx1', 0):   # op 1 any float function but the special ones: fpu's body (its special branch never taken there)
         src = _rep(src, 'uint v1 = fl1 ? fsum(fn(t.y),', 'uint v1 = fl1 ? fpu(t.y,')
-    if P.get('s12b', 0) == 2:   # op 1's float or lite behind a branch too
+    if P.get('s12b', 0) >= 2:   # op 1's float or lite behind a branch too
         i = src.index('    uint v1 = fl1 ? f'); j = src.index(chr(10), i); line = src[i:j]
         k = line.index(' : alu_lite(t.y, i1, A1, B1);')
         src = src[:i] + '    uint v1;' + chr(10) + '    [branch] if (fl1) v1 = ' + line[len('    uint v1 = fl1 ? '):k] + '; else v1 = alu_lite(t.y, i1, A1, B1);   // (s12b 2)' + src[j:]
