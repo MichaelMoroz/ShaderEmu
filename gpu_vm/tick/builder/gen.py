@@ -619,6 +619,11 @@ def frag(P):
 
 def full(P):
     P = dict(DEFAULTS, **P)
+    if P.get('fit', 1):   # a block too small for the state grows: columns first, then rows (band kept >= rows)
+        while P['bw'] * P['bh'] < layout(P)['SPIX'] and P['bw'] * P['bh'] < 1024:
+            if P['bw'] <= P['bh'] * 2: P['bw'] *= 2
+            else: P['bh'] *= 2
+            P['band'] = max(P['band'], P['bh'])
     return P
 
 def emit(P):

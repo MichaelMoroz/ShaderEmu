@@ -485,7 +485,8 @@ static bool check_case(Gpu& gpu, const Case& cs, uint32_t seed, bool verbose) {
     return bad == 0 && ramBad == 0;
 }
 static ID3D11Query *g_qDis, *g_q0, *g_q1;
-static double g_util;   // the last timing's budget used by core 0: its bundles over passes x ticks (1: every pass ran its whole budget)
+static double g_util;
+static uint32_t g_max_passes = 0;   // --max-passes: a case's own passes (Case::passes) at most this many   // the last timing's budget used by core 0: its bundles over passes x ticks (1: every pass ran its whole budget)
 // A timed case: millions of RISC-V instructions a second (its rv_per_iter), or gpu_vm ops when it has none
 static double time_case(Gpu& gpu, const Case& cs, uint32_t ticks, uint32_t passes) {
     RAM_END = cs.mc || cs.big ? RAM_MC : 2048 * 2048 * 16;
@@ -495,7 +496,7 @@ static double time_case(Gpu& gpu, const Case& cs, uint32_t ticks, uint32_t passe
     gpu.pass = {ticks, RAM_END, 1000, 0, 0, 1, ram_rows(), 0, cs.cores, {0, 0, 0}, {0}};
     for (int k = 0; k < (env_int("GVM_ENDS") > 1 ? 0 : 20); k++) gpu.run_pass();
     int at = (g_fused && cs.bundles_fused > 0) || cs.ns ? 0 : 1;   // fused loops and real programs are counted in bundles (19.x), others in ops (19.y)
-    if (cs.passes) passes = cs.passes;
+    if (cs.passes) passes = g_max_passes ? std::min(cs.passes, g_max_passes) : cs.passes;
     auto count = [&]() {   // core 0's bundles (or ops); many cores (Case::mc): every core's
         if (cs.units_reg) return gpu.core_state(0)[cs.units_reg];   // (the game bench: core 0's count of units)
         uint32_t n = 0;
@@ -641,7 +642,8 @@ static bool built(const Variant& v) { return slurp(v.shader).find("made by gpu_v
 int main(int argc, char** argv) {
     bool warp = false, nocheck = false;
     std::string jsonOut;
-    bool markOk = false;   // --json FILE: every variant's checks and every round's number, for builder/search.py   // --nocheck: time only (a batch's checks run apart: every run stays under 5 minutes)
+    bool markOk = false;
+    double deadline = 0;   // --json FILE: every variant's checks and every round's number, for builder/search.py   // --nocheck: time only (a batch's checks run apart: every run stays under 5 minutes)
     std::string only, shader, varfile, setName;
     uint32_t ticks = 8192, seed = 1, passes = 300, rounds = 2;
     std::vector<std::string> defStore;
@@ -650,7 +652,9 @@ int main(int argc, char** argv) {
         if (a == "--warp") warp = true;
         else if (a == "--nocheck") nocheck = true;
         else if (a == "--json" && i + 1 < argc) jsonOut = argv[++i];
-        else if (a == "--mark-ok") markOk = true;   // (WARP) a variant that passes every check gets SHADER.warp_ok, its source's stamp
+        else if (a == "--mark-ok") markOk = true;
+        else if (a == "--max-passes" && i + 1 < argc) g_max_passes = (uint32_t)atoi(argv[++i]);
+        else if (a == "--deadline" && i + 1 < argc) deadline = atof(argv[++i]);   // seconds: no timing round starts that would end after it   // (WARP) a variant that passes every check gets SHADER.warp_ok, its source's stamp
         else if (a == "--fused" && i + 1 < argc) g_fused = atoi(argv[++i]);   // the timed loops fused (cases.h; or GVM_FUSED=N)
         else if (a == "--shader" && i + 1 < argc) shader = argv[++i];
         else if (a == "--variants" && i + 1 < argc) varfile = argv[++i];
@@ -742,7 +746,7 @@ int main(int argc, char** argv) {
     std::vector<Case> all = cases(), picked;
     if (!setName.empty() && only.empty()) only = "-";   // (--set alone: that set's cases only)
     for (const Case& cs : all)
-        if (((only.empty() || ("," + only + ",").find(",default,") != std::string::npos) && !cs.named) || ("," + only + ",").find("," + std::string(cs.name) + ",") != std::string::npos || (cs.set && setName == cs.set)) picked.push_back(cs);
+        if (((only.empty() || ("," + only + ",").find(",default,") != std::string::npos) && !cs.named) || ("," + only + ",").find("," + std::string(cs.name) + ",") != std::string::npos || (cs.set && ("," + setName + ",").find("," + std::string(cs.set) + ",") != std::string::npos)) picked.push_back(cs);
     // checks: every picked case on every variant, the timed loops at a few thousand iterations
     std::vector<std::string> wrong(vars.size());
     g_loop_n = 3000;
@@ -756,7 +760,17 @@ int main(int argc, char** argv) {
     std::vector<const Case*> timed;
     for (const Case& cs : picked) if (cs.timed) timed.push_back(&cs);
     std::vector<std::vector<std::vector<double>>> got(vars.size(), std::vector<std::vector<double>>(timed.size())), util = got;
-    for (uint32_t r = 0; r < rounds && !timed.empty(); r++)
+    if (!timed.empty() && rounds > 0 && !warp) {   // (the card's clocks up first, 4 s of the first case: not kept; one timing was not enough)
+        use(gpu, vars[0]);
+        ULONGLONG w0 = GetTickCount64();
+        while (GetTickCount64() - w0 < 4000) time_case(gpu, *timed[0], ticks, passes);
+    }
+    ULONGLONG tStart = GetTickCount64();
+    for (uint32_t r = 0; r < rounds && !timed.empty(); r++) {
+        if (r > 0 && deadline > 0 && (GetTickCount64() - tStart) / 1000.0 * (r + 1) / r > deadline) {   // (the next round would end past it)
+            fprintf(stderr, "gvmbench: %u rounds: the next would pass the deadline\n", r);
+            break;
+        }
         for (size_t i = 0; i < vars.size(); i++) {
             size_t vi = (r & 1) ? vars.size() - 1 - i : i;
             use(gpu, vars[vi]);
@@ -767,6 +781,7 @@ int main(int argc, char** argv) {
             }
             if (env_int("GVM_PROGRESS")) { fprintf(stderr, "gvmbench: round %u, %s timed\n", r, vars[vi].name.c_str()); fflush(stderr); }
         }
+    }
     // each variant's mean over the rounds and its spread ((max - min) / mean, in %): the card's noise is visible
     printf("%-16s", "variant");
     for (auto* cs : timed) printf(" %13s", cs->ns ? (std::string(cs->name).substr(0, 8) + " ns").c_str() : cs->us_pass ? (std::string(cs->name) + " us").c_str() : cs->name);

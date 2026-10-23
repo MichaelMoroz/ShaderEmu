@@ -23,10 +23,12 @@ sys.path.insert(0, HERE)
 import gen
 
 GVMB = os.environ.get('GVMBENCH') or os.path.join(ROOT, 'bin', 'gvmbench.exe')
-CHECK_CASES = 'default,p_k1_m0,p_k4_m40,mc_int'
+CHECK_CASES = 'default,p_k1_m0,p_k4_m40,mc_int,p_spill,p_xspill'
+CHECK_SETS = ''   # (the game bench's sets are inputs, not the gate: on WARP they take a minute a variant)
 CHECK_CORES = '40'
-TIME_CASES = 'arith,loads,stores,mix,stride,floats,coremark,gzip,mc_int,mc_load,p_k0_m0,p_k1_m0,p_k4_m0,p_k8_m0,p_k0_m40,p_k8_m40'
-LOWER_BETTER = lambda name: name.startswith(('p_', 'mc_')) or name in ('coremark', 'coremark_pie', 'gzip', 'gunzip')
+TIME_CASES = 'arith,loads,stores,mix,coremark,gzip,p_k0_m0,p_k8_m40,p_spill,p_xspill'   # (mc_ at 255 cores: seconds each)
+TIME_SETS = 'game,game_x'
+LOWER_BETTER = lambda name: name.startswith(('p_', 'mc_')) or name in ('coremark', 'coremark_pie', 'gzip', 'gunzip')   # (g_: frames a second, higher)
 REFS = {'x23': 'gpu_vm/tick/steps/x23.hlsl', 'x24': 'gpu_vm/tick/steps/x24.hlsl'}
 
 def bdir(batch): return os.path.join(ROOT, 'build', 'tick_gen', batch)
@@ -88,11 +90,12 @@ def cmd_gen(a):
     for P in pts:
         P = gen.full(P)
         if gen.valid(P): continue
-        k = key_of(P)
+        src = gen.emit(P)
+        k = hashlib.sha1(src.encode()).hexdigest()[:16]   # (two points that make one source are one variant)
         if k in have: continue
         have.add(k)
         name = 'v%04d' % (n0 + made)
-        with open(os.path.join(d, name + '.hlsl'), 'w', newline='\n') as f: f.write(gen.emit(P))
+        with open(os.path.join(d, name + '.hlsl'), 'w', newline='\n') as f: f.write(src)
         m = gen.manifest(P); m['key'] = k; m['name'] = name
         with open(os.path.join(d, name + '.json'), 'w') as f: json.dump(m, f, indent=1)
         made += 1
@@ -101,7 +104,7 @@ def cmd_gen(a):
 def check_one(path, timeout):
     t0 = time.time()
     try:
-        r = subprocess.run([GVMB, '--warp', '--mark-ok', '--shader', path, '--case', CHECK_CASES, '--cores', CHECK_CORES, '--rounds', '0'],
+        r = subprocess.run([GVMB, '--warp', '--mark-ok', '--shader', path, '--case', CHECK_CASES] + (['--set', CHECK_SETS] if CHECK_SETS else []) + ['--cores', CHECK_CORES, '--rounds', '0'],
                            capture_output=True, text=True, timeout=timeout, cwd=ROOT)
         out = r.stdout + r.stderr
         regs = re.search(r'(\d+) temporary registers', out)
@@ -139,7 +142,7 @@ def gpu_run(args, log):
     cmd = ['pwsh', '-NoProfile', '-File', os.path.join(ROOT, 'tools', 'gpu_queue.ps1'), GVMB] + args
     env = dict(os.environ, GVM_PROGRESS="1")
     with open(log, "w") as f:
-        r = subprocess.run(cmd, cwd=ROOT, stdout=f, stderr=subprocess.STDOUT, timeout=7200, env=env)
+        r = subprocess.run(cmd, cwd=ROOT, stdout=f, stderr=subprocess.STDOUT, timeout=900, env=env)
     return r.returncode
 
 def cmd_time(a):
@@ -167,7 +170,7 @@ def cmd_time(a):
         jf = os.path.join(d, 'time_%s_%03d.json' % (tag, c // a.chunk))
         t0 = time.time()
         rc = gpu_run(['--variants', vf, '--nocheck', '--case', a.cases, '--rounds', str(a.rounds), '--passes', str(a.passes),
-                      '--cores', str(a.cores), '--json', jf], jf[:-5] + '.log')
+                      '--cores', str(a.cores), '--json', jf, '--deadline', str(a.deadline), '--max-passes', str(a.passes)] + (['--set', a.sets] if a.sets else []), jf[:-5] + '.log')
         print('  chunk %d: %d variants, exit %d, %.0f s' % (c // a.chunk, len(part), rc, time.time() - t0), flush=True)
     cmd_report(a)
 
@@ -191,7 +194,9 @@ def scores(batch, ref='x23'):
             g = math.exp(sum(math.log(x) for x in rat.values()) / len(rat))
             spread = max(((max(xs) - min(xs)) / mean(xs) if len(xs) > 1 and mean(xs) > 0 else 0) for xs in v['cases'].values())
             key = n if n not in REFS else '%s@%s' % (n, os.path.basename(f))
-            out[key] = dict(score=g, ratios=rat, raw={c: mean(xs) for c, xs in v['cases'].items()}, spread=spread, file=os.path.basename(f))
+            U = v.get('util', {})
+            gu = [sum(x) / len(x) for c, x in U.items() if c.startswith('g_') and x]
+            out[key] = dict(util=sum(gu) / len(gu) if gu else 0, score=g, ratios=rat, raw={c: mean(xs) for c, xs in v['cases'].items()}, spread=spread, file=os.path.basename(f))
     return out
 
 def cmd_report(a):
@@ -199,14 +204,14 @@ def cmd_report(a):
     d = bdir(a.batch)
     rows = sorted(sc.items(), key=lambda x: -x[1]['score'])
     cases = sorted({c for v in sc.values() for c in v['ratios']}, key=lambda c: TIME_CASES.split(',').index(c) if c in TIME_CASES.split(',') else 99)
-    print('%-26s %6s ' % ('variant', 'score') + ' '.join('%8s' % c[:8] for c in cases) + '  params')
+    print('%-26s %6s %5s ' % ('variant', 'score', 'util') + ' '.join('%8s' % c[:8] for c in cases) + '  params')
     for n, v in rows[:a.top or 30]:
         P = {}
         mf = os.path.join(d, n + '.json')
         if os.path.exists(mf):
             p = json.load(open(mf))['params']
             P = {k: p[k] for k in p if p[k] != gen.DEFAULTS[k]}
-        print('%-26s %6.3f ' % (n, v['score']) + ' '.join('%8.3f' % v['ratios'].get(c, 0) for c in cases) + '  ' + ' '.join('%s=%s' % kv for kv in P.items()))
+        print('%-26s %6.3f %5.2f ' % (n, v['score'], v['util']) + ' '.join('%8.3f' % v['ratios'].get(c, 0) for c in cases) + '  ' + ' '.join('%s=%s' % kv for kv in P.items()))
 
 if __name__ == '__main__':
     ap = argparse.ArgumentParser()
@@ -215,8 +220,8 @@ if __name__ == '__main__':
     g.add_argument('--from', dest='from_'); g.add_argument('--mutate', type=int, default=2); g.add_argument('--grid', nargs='*')
     c = sp.add_parser('check'); c.add_argument('batch'); c.add_argument('-j', type=int, default=8); c.add_argument('--timeout', type=int, default=300)
     t = sp.add_parser('time'); t.add_argument('batch'); t.add_argument('--cases', default=TIME_CASES); t.add_argument('--rounds', type=int, default=3)
-    t.add_argument('--chunk', type=int, default=24); t.add_argument('--passes', type=int, default=200); t.add_argument('--refs', default='x23,x24')
-    t.add_argument('--top', type=int, default=0); t.add_argument('--only'); t.add_argument('--retime', action='store_true'); t.add_argument('--cores', type=int, default=255)
+    t.add_argument('--chunk', type=int, default=24); t.add_argument('--passes', type=int, default=100); t.add_argument('--refs', default='x23,x24')
+    t.add_argument('--top', type=int, default=0); t.add_argument('--only'); t.add_argument('--retime', action='store_true'); t.add_argument('--cores', type=int, default=255); t.add_argument('--sets', default=TIME_SETS); t.add_argument('--deadline', type=float, default=480)
     r = sp.add_parser('report'); r.add_argument('batch'); r.add_argument('--top', type=int, default=30)
     a = ap.parse_args()
     {'gen': cmd_gen, 'check': cmd_check, 'time': cmd_time, 'report': cmd_report}[a.cmd](a)
