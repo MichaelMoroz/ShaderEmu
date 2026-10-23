@@ -80,6 +80,7 @@ typedef struct gvm_core {
     uint32_t xtag[GVM_XR_MAX];       // a slot's binding: the word's address | 1 bound | 2 dirty (this pass)
     uint32_t pa[GVM_NPAIR_MAX][2];   // this pass's pairs: address (word aligned), value
     uint32_t np;
+    uint32_t xv[64][3];              // phase 3: lanes 1-3 of every register (gvm_machine.vec)
     uint32_t thin;                   // (gvm_run copies gvm_machine.thin: a trap's vector is 8-aligned)
     uint32_t stale, stale_at;        // loads of a bound word or of one with a pair (the program's error), and the first's address
     gvm_wlog wl;
@@ -95,6 +96,7 @@ typedef struct gvm_machine {
     uint32_t flags;          // GVM_REF_*
     gvm_core *cores;
     uint32_t ncores;
+    uint32_t vec;            // phase 3: 128-bit registers (isa.h GVM_X_VADD ...): lanes 1-3 in gvm_core.xv
     uint32_t late;           // phase 3 (gvm_asm.h's late_br): a conditional branch and addbnz read their registers after the bundle's ops
     uint32_t wide3;          // phase 3 (gvm_asm.h's max_ops 3): n 3 is three ops, word 2 op 2 (no long immediate then)
     uint32_t thin;           // phase 3 (gvm_asm.h's thin8): 8-byte instructions {op, control} (16 with a long immediate:
@@ -575,6 +577,65 @@ static int gvm__op(gvm_machine *m, gvm_core *c, uint32_t base, uint32_t s, const
             return GVM__GO;
         case GVM_X_BFI: gvm__set(c, rd, gvm__bfi(c->x[rd], a, imm)); return GVM__GO;
         case GVM_X_LPC: gvm__set(c, rd, base + imm); return GVM__GO;
+        case GVM_X_VADD: case GVM_X_VSUB: case GVM_X_VMUL: case GVM_X_VAND: case GVM_X_VOR: case GVM_X_VXOR: case GVM_X_VFADD:
+        case GVM_X_VFSUB: case GVM_X_VFMUL: case GVM_X_VFMA: case GVM_X_VFMIN: case GVM_X_VFMAX: case GVM_X_VFLT: case GVM_X_VFLE:
+        case GVM_X_VEQ: case GVM_X_VSEL: case GVM_X_VDOT: case GVM_X_VSPLAT: case GVM_X_VSWZ: case GVM_X_VEXT: case GVM_X_VINS:
+        case GVM_X_VLD: case GVM_X_VST: case GVM_X_VMASK: {
+            if (!m->vec) break;
+            uint32_t A[4], B[4], C[4], D[4], R[4], l, rc2 = GVM_RC(w);
+            for (l = 0; l < 4; l++) {
+                A[l] = l ? (ra ? c->xv[ra][l - 1] : 0) : c->x[ra]; B[l] = l ? (rb ? c->xv[rb][l - 1] : 0) : c->x[rb];
+                C[l] = l ? (rc2 ? c->xv[rc2][l - 1] : 0) : c->x[rc2]; D[l] = l ? (rd ? c->xv[rd][l - 1] : 0) : c->x[rd];
+            }
+            int whole = 1;
+            for (l = 0; l < 4; l++) {
+                switch (opc) {
+                case GVM_X_VADD: R[l] = A[l] + B[l]; break;
+                case GVM_X_VSUB: R[l] = A[l] - B[l]; break;
+                case GVM_X_VMUL: R[l] = A[l] * B[l]; break;
+                case GVM_X_VAND: R[l] = A[l] & B[l]; break;
+                case GVM_X_VOR: R[l] = A[l] | B[l]; break;
+                case GVM_X_VXOR: R[l] = A[l] ^ B[l]; break;
+                case GVM_X_VFADD: R[l] = gvm_fop(GVM_F_ADD, A[l], B[l], 0); break;
+                case GVM_X_VFSUB: R[l] = gvm_fop(GVM_F_SUB, A[l], B[l], 0); break;
+                case GVM_X_VFMUL: R[l] = gvm_fop(GVM_F_MUL, A[l], B[l], 0); break;
+                case GVM_X_VFMA: R[l] = gvm_fop(GVM_F_MAD, A[l], B[l], C[l]); break;
+                case GVM_X_VFMIN: R[l] = gvm_fop(GVM_F_MIN, A[l], B[l], 0); break;
+                case GVM_X_VFMAX: R[l] = gvm_fop(GVM_F_MAX, A[l], B[l], 0); break;
+                case GVM_X_VFLT: R[l] = gvm_fop(GVM_F_LT, A[l], B[l], 0) ? ~0u : 0; break;
+                case GVM_X_VFLE: R[l] = gvm_fop(GVM_F_LE, A[l], B[l], 0) ? ~0u : 0; break;
+                case GVM_X_VEQ: R[l] = A[l] == B[l] ? ~0u : 0; break;
+                case GVM_X_VSEL: R[l] = C[l] ? A[l] : B[l]; break;
+                case GVM_X_VSPLAT: R[l] = A[0]; break;
+                case GVM_X_VSWZ: R[l] = A[(imm >> (2 * l)) & 3]; break;
+                case GVM_X_VINS: R[l] = l == (imm & 3) ? A[0] : D[l]; break;
+                default: R[l] = 0; break;
+                }
+            }
+            if (opc == GVM_X_VDOT) {
+                uint32_t s = gvm_fop(GVM_F_MUL, A[0], B[0], 0);
+                for (l = 1; l < 4; l++) s = gvm_fop(GVM_F_MAD, A[l], B[l], s);
+                R[0] = s; R[1] = R[2] = R[3] = 0;
+            }
+            if (opc == GVM_X_VEXT || opc == GVM_X_VMASK) { gvm__set(c, rd, opc == GVM_X_VEXT ? A[imm & 3] : (A[0] != 0) | (A[1] != 0) << 1 | (A[2] != 0) << 2 | (A[3] != 0) << 3); return GVM__GO; }
+            if (opc == GVM_X_VLD || opc == GVM_X_VST) {
+                uint32_t ad = a + imm;
+                int st = opc == GVM_X_VST;
+                if ((ad & 15) || (st ? !gvm__store_ok(m, ad, 16) : (!gvm__readable(m, ad) || !gvm__readable(m, ad + 15)))) {
+                    c->ops_run--; gvm__trap(c, st ? GVM_CAUSE_STORE : GVM_CAUSE_LOAD, epc, ad); return GVM__TRAPPED;
+                }
+                if (gvm__op_waits(c, ad, 16, st)) { c->ops_run--; c->pc = epc; *end = GVM_END_SYNC; return GVM__END; }
+                if (st) {
+                    if (ad < GVM_OPS && !gvm__room(c, ad, 16)) { c->ops_run--; c->pc = epc; *end = GVM_END_FULL; return GVM__END; }
+                    for (l = 0; l < 4; l++) gvm__store(m, c, ad + 4 * l, 4, D[l]);
+                    return GVM__GO;
+                }
+                for (l = 0; l < 4; l++) gvm__load(m, c, ad + 4 * l, 4, &R[l]);
+            }
+            (void)whole;
+            if (rd) { c->x[rd] = R[0]; c->xv[rd][0] = R[1]; c->xv[rd][1] = R[2]; c->xv[rd][2] = R[3]; }
+            return GVM__GO;
+        }
         case GVM_X_SYSCALL: c->ops_run--; gvm__trap(c, GVM_CAUSE_SYSCALL, epc, 0); return GVM__TRAPPED;
         case GVM_X_BREAK:
             c->ops_run--;

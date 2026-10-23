@@ -32,7 +32,7 @@ static uint32_t g_ntex = 0;    // a step's NTEX (x22): its state texels (0: T_WC
 static uint32_t g_geo = 0;     // a step's GEO_BLOCKS (x21): pixel p of core c at ((c & 127) * 8 + p / 8, (c >> 7) * 16 + p % 8)
 static uint32_t g_wcn0 = 0;    // a step's WCN0 (x25): core 0's own write cache, its tick a compile of its own (CORE0=1)
 static uint32_t g_spix0 = 0;   // and its state pixels (NTEX0): 0-63 in its block, 64 on at ((p >> 3) - 8, 8 + (p & 7))
-struct Geo { uint32_t bw = 0, bh = 0, band = 0, per = 0, jrow = 0, perm = 0, mul = 0, inv = 0; uint32_t cpts = 0, xr = 0, npair = 0, xbind = 0, xfast = 0, t_xf = 0, t_xt = 0, t_pn = 23, nc = 0, thin = 0, thin8 = 0, wide3 = 0, late = 0; };
+struct Geo { uint32_t bw = 0, bh = 0, band = 0, per = 0, jrow = 0, perm = 0, mul = 0, inv = 0; uint32_t cpts = 0, xr = 0, npair = 0, xbind = 0, xfast = 0, t_xf = 0, t_xt = 0, t_pn = 23, nc = 0, thin = 0, thin8 = 0, wide3 = 0, late = 0, vec = 0, t_vr = 0; };
 static Geo g_gg;               // a built step's layout (builder/gen.py: GEO_BW...): core c's pixel j at (slot * bw + jx, band * BAND + jy)
 static uint32_t g_lrows = 1;   // a core's state pixels on this many rows (a step's LROWS, x19): pixel p at (p % spx, core * LROWS + p / spx)
 
@@ -403,7 +403,7 @@ static void commit_constants(Gpu& gpu, uint32_t cores) {
     }
 }
 static bool runs_on(const Case& cs) {   // a phase 2 case needs the tick's file, bindings or pairs
-    return g_gg.xr >= cs.xr_need && g_gg.npair >= cs.pair_need && (!cs.bind_need || g_gg.xbind) && !((g_gg.thin8 || g_gg.thin) && (cs.elf || cs.mc));   // (thin, thin8: compiled code is two-op bundles)
+    return g_gg.xr >= cs.xr_need && g_gg.npair >= cs.pair_need && (!cs.bind_need || g_gg.xbind) && !((g_gg.thin8 || g_gg.thin) && (cs.elf || cs.mc)) && (!cs.vec_need || g_gg.vec);   // (thin, thin8: compiled code is two-op bundles)
 }
 // Both machines to the halt in passes of 61 bundles; false (and the differences printed) when they disagree
 static bool check_case(Gpu& gpu, const Case& cs, uint32_t seed, bool verbose) {
@@ -415,7 +415,7 @@ static bool check_case(Gpu& gpu, const Case& cs, uint32_t seed, bool verbose) {
     std::vector<uint8_t> romBytes(ROM_SIZE);
     memcpy(romBytes.data(), g_rom.data(), ROM_SIZE);
     m.ram = refRam.data(); m.ram_end = RAM_END; m.rom = romBytes.data(); m.rom_size = ROM_SIZE;
-    m.flags = GVM_REF_BREAK_HALTS; m.thin = g_gg.thin8; m.wide3 = g_gg.wide3 != 0; m.late = g_gg.late != 0;
+    m.flags = GVM_REF_BREAK_HALTS; m.thin = g_gg.thin8; m.wide3 = g_gg.wide3 != 0; m.late = g_gg.late != 0; m.vec = g_gg.vec != 0;
     std::vector<gvm_core> rc(cs.cores);
     for (uint32_t c = 0; c < cs.cores; c++) {
         gvm_core_reset(&rc[c], c, pr.bases[c]); rc[c].sr[GVM_SR_TVEC] = HALT_STUB;
@@ -478,6 +478,9 @@ static bool check_case(Gpu& gpu, const Case& cs, uint32_t seed, bool verbose) {
             if (st[g_gg.t_xf * 4 + k] != rc[c].xf[k] && bad++ < g_show && verbose) printf("  %s: core %u file %u %08x, the reference %08x\n", cs.name, c, k, st[g_gg.t_xf * 4 + k], rc[c].xf[k]);
         for (uint32_t k = 0; k < g_gg.xr && g_gg.xbind && g_gg.t_xt; k++)
             if ((st[g_gg.t_xt * 4 + k] & ~2u) != (rc[c].xtag[k] & ~2u) && bad++ < g_show && verbose) printf("  %s: core %u binding %u %08x, the reference %08x\n", cs.name, c, k, st[g_gg.t_xt * 4 + k], rc[c].xtag[k]);
+        for (uint32_t k = 1; k < 64 && g_gg.vec; k++)   // phase 3: lanes 1-3 of the 128-bit registers
+            for (uint32_t l = 1; l < 4; l++)
+                if (st[(g_gg.t_vr + k) * 4 + l] != rc[c].xv[k][l - 1] && bad++ < g_show && verbose) printf("  %s: core %u r%u lane %u %08x, the reference %08x\n", cs.name, c, k, l, st[(g_gg.t_vr + k) * 4 + l], rc[c].xv[k][l - 1]);
         if (g_gg.npair && st[g_gg.t_pn * 4] != rc[c].np && bad++ < g_show && verbose) printf("  %s: core %u %u pairs, the reference %u\n", cs.name, c, st[g_gg.t_pn * 4], rc[c].np);
         if (st[16 * 4] != rc[c].pc && bad++ < g_show && verbose) printf("  %s: core %u pc %08x, the reference %08x\n", cs.name, c, st[16 * 4], rc[c].pc);
         if (!cs.skip_ops && st[19 * 4 + 1] != (uint32_t)rc[c].ops_run && bad++ < g_show && verbose)
@@ -551,7 +554,7 @@ struct Variant { std::string name, shader; std::vector<std::string> defs; Prog t
 static void use(Gpu& gpu, const Variant& v) {
     gpu.tick = v.tick; gpu.commit = v.commit; gpu.stg = v.stg; gpu.wrt = v.wrt; gpu.prog = v.prog;
     gpu.hasCommit = v.hasCommit; gpu.hasOps = v.hasOps; gpu.uavTick = v.uavTick; gpu.hasW = v.hasW; gpu.tickW = v.tickW; gpu.tick0 = v.tick0; g_wcn0 = v.wcn0; g_spix0 = v.spix0; gpu.hasAny = v.hasAny && !env_int("GVM_NOPRED"); gpu.any = v.any;
-    g_wcn = v.wcn; g_texw = v.texw; g_twc = v.twc; g_lrows = v.lrows; g_wcn1 = v.wcn1; g_geo = v.geo; g_ntex = v.ntex; g_gg = v.gg; GvmAsm::file_paths = v.gg.xfast != 0; GvmAsm::nc_loads = v.gg.nc != 0; GvmAsm::max_ops = v.gg.thin || v.gg.thin8 ? 1 : v.gg.wide3 ? 3 : 2; GvmAsm::thin8 = v.gg.thin8 != 0; GvmAsm::late_br = v.gg.late != 0;   // (the state's layout, the commit's points and RAM's width are the variant's)
+    g_wcn = v.wcn; g_texw = v.texw; g_twc = v.twc; g_lrows = v.lrows; g_wcn1 = v.wcn1; g_geo = v.geo; g_ntex = v.ntex; g_gg = v.gg; GvmAsm::file_paths = v.gg.xfast != 0; GvmAsm::nc_loads = v.gg.nc != 0; GvmAsm::max_ops = v.gg.thin || v.gg.thin8 ? 1 : v.gg.wide3 ? 3 : 2; GvmAsm::thin8 = v.gg.thin8 != 0; GvmAsm::late_br = v.gg.late != 0; GvmAsm::vec_ops = v.gg.vec != 0;   // (the state's layout, the commit's points and RAM's width are the variant's)
     gpu.opSlots = v.slots; gpu.opSpan = v.span; gpu.opRounds = g_op_rounds;
     g_romrows = 0; g_x17_paths = 0;   // (probe: the ROM in RAM's texture; x17 on the real programs' own paths)
     for (auto& d : v.defs) { if (d == "ROMROWS=1") g_romrows = 1; if (d == "X17PATHS=1") g_x17_paths = 1; }
@@ -588,7 +591,7 @@ static Geo step_geo(const std::string& path) {
     g.jrow = step_size(src, {}, "GEO_JROW", 0); g.perm = step_size(src, {}, "GEO_PERM", 0); g.mul = step_size(src, {}, "GEO_MUL", 0);
     g.inv = step_size(src, {}, "GEO_INV", 0);
     g.cpts = step_size(src, {}, "CPTS", 0); g.xr = step_size(src, {}, "XR", 0); g.npair = step_size(src, {}, "NPAIR", 0);
-    g.xbind = step_size(src, {}, "XBIND", 0); g.xfast = step_size(src, {}, "XFAST", 0); g.nc = step_size(src, {}, "NCLOAD", 0); g.thin = step_size(src, {}, "THIN", 0); g.thin8 = step_size(src, {}, "THIN8", 0); g.wide3 = step_size(src, {}, "WIDE3", 0); g.late = step_size(src, {}, "LATEBR", 0); g.t_xf = step_size(src, {}, "T_XF", 0); g.t_xt = step_size(src, {}, "T_XT", 0);
+    g.xbind = step_size(src, {}, "XBIND", 0); g.xfast = step_size(src, {}, "XFAST", 0); g.nc = step_size(src, {}, "NCLOAD", 0); g.thin = step_size(src, {}, "THIN", 0); g.thin8 = step_size(src, {}, "THIN8", 0); g.wide3 = step_size(src, {}, "WIDE3", 0); g.late = step_size(src, {}, "LATEBR", 0); g.vec = step_size(src, {}, "VEC", 0); g.t_vr = step_size(src, {}, "T_VR", 0); g.t_xf = step_size(src, {}, "T_XF", 0); g.t_xt = step_size(src, {}, "T_XT", 0);
     return g;
 }
 static void build_variant(Variant& v) {

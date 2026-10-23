@@ -41,6 +41,7 @@ struct GvmAsm {
     static inline bool file_paths = false;
     static inline bool nc_loads = false;   // the tick has GVM_W_NC (its NCLOAD): lw_nc is a plain lw without it
     static inline bool thin8 = false;   // phase 3: finish() lays the bundles out as 8-byte instructions (gvm_machine.thin; max_ops 1)
+    static inline bool vec_ops = false;   // gvm_machine.vec: the vector ops (isa.h GVM_X_VADD ...) go in path 1 (step12) as op 0
     static inline bool late_br = false;   // gvm_machine.late: a branch reads its registers after the bundle's ops
     static inline int max_ops = 2;   // ops a bundle (the tick's THIN: 1, a bundle of one op and its control word; WIDE3: 3, op 2 in word 2)
     static bool file_fast(uint32_t op) {
@@ -51,6 +52,7 @@ struct GvmAsm {
     static bool float_op(uint32_t op) { uint32_t o = GVM_OPC(op); return GVM_CLASS(o) == 3 && !(GVM_IFORM(o) && madlike(o & 31)); }
     static bool flite(uint32_t op) { return float_op(op) && fn(op) <= GVM_F_MAX; }
     // x18: path 1's op 0 is an integer op 0-23 (int_op), sel, lpc or a float op
+    static bool vec_alu(uint32_t op) { uint32_t o = GVM_OPC(op); return vec_ops && o >= GVM_X_VFIRST && o <= GVM_X_VLAST && o != GVM_X_VLD && o != GVM_X_VST; }
     static bool sel_lpc(uint32_t op) { return GVM_OPC(op) == GVM_OP_I(GVM_I_SEL) || GVM_OPC(op) == GVM_X_LPC; }
     // x18: the path of a cc 0 bundle (jr, callr, j, call, the add: step12's, paths 1 and 2), or 0
     static uint32_t path12_of(uint32_t ctl, uint32_t w0, uint32_t w1) {
@@ -71,7 +73,7 @@ struct GvmAsm {
         bool one = cur.size() == 1;
         uint32_t b = one ? 0 : cur[1];
         if (mid(a) && (one || lite(b))) return GVM_PATH_INT;
-        if ((int_op(a) || float_op(a) || sel_lpc(a)) && (one || lite(b) || flite(b))) return GVM_PATH_ALU;
+        if ((int_op(a) || float_op(a) || sel_lpc(a) || vec_alu(a)) && (one || lite(b) || flite(b))) return GVM_PATH_ALU;
         if (mem_op(a) && (one || lite(b))) return store_op(a) ? GVM_PATH_STORE : GVM_PATH_LOAD;
         if (file_fast(a) || file_fast(b)) return GVM_PATH_GENERAL;   // (a file op: paths 3 and 5 only)
         if (mem_op(a) && mem_op(b)) return store_op(a) ? GVM_PATH_MEM2 : store_op(b) ? GVM_PATH_GENERAL : GVM_PATH_LOAD2;
@@ -198,6 +200,13 @@ struct GvmAsm {
         put2(GVM_WORD_I(GVM_X_LPC, rd, 0u, 0u), 0);
         long_imm = addr - (base + (uint32_t)(w.size() / 4) * 16);   // (the open bundle's address)
     }
+    // phase 3, 128-bit registers (gvm_machine.vec): per lane; vld and vst move a texel (16-aligned)
+    void vop(uint32_t opc, uint32_t rd, uint32_t ra, uint32_t rb, uint32_t rc = 0) { R(opc, rd, ra, rb, rc); }
+    void vswz(uint32_t rd, uint32_t ra, uint32_t pat) { I(GVM_X_VSWZ, rd, ra, (int32_t)(pat & 255)); }
+    void vext(uint32_t rd, uint32_t ra, uint32_t lane) { I(GVM_X_VEXT, rd, ra, (int32_t)(lane & 3)); }
+    void vins(uint32_t rd, uint32_t ra, uint32_t lane) { I(GVM_X_VINS, rd, ra, (int32_t)(lane & 3)); }
+    void vld(uint32_t rd, uint32_t ra, int32_t off) { I(GVM_X_VLD, rd, ra, off); }
+    void vst(uint32_t rs, uint32_t ra, int32_t off) { I(GVM_X_VST, rs, ra, off); }
     void halt() { close(); x(GVM_X_BREAK); close(); }   // break in a bundle of its own
 
     // fused (gpu_vm/isa.h): rd += imm12 in the open bundle's control word, after its ops (a post-increment: ops already in

@@ -172,4 +172,66 @@ uint4 data_texel(uint ad) {''')
         a = '    uint i6 = asuint((int)ctl >> 26), sum = CA + i6;'
         j = src.index(a, i)
         src = src[:j] + '    uint sl0 = path == GVM_PATH_MEM2 ? 64 : s0;   // (path 6: op 0 a store)' + NL + '    CA = ca == s1 ? v1 : ca == sl0 ? v0 : CA; CB = cb == s1 ? v1 : cb == sl0 ? v0 : CB;   // (LATEBR)' + NL + src[j:]
+    if P.get('vec', 0):   # 128-bit registers: R4[k] whole (rpk=wide), the vector ops in step12 (op 0) and the general step
+        V = """// ---- Phase 3: the vector ops (isa.h GVM_X_VADD ...) on whole registers; lane 0 as a scalar result
+bool fltu(uint a, uint b) { return !nan_u(a) && !nan_u(b) && asfloat(a) < asfloat(b); }
+bool fleu(uint a, uint b) { return !nan_u(a) && !nan_u(b) && asfloat(a) <= asfloat(b); }
+uint4 vlanes(uint opc, uint4 A, uint4 B, uint4 C, uint4 D, uint imm) {
+    uint4 R = 0;
+    uint k;
+    [unroll] for (k = 0; k < 4; k++) {
+        uint a = A[k], b = B[k], c = C[k], x;
+        [branch] if (opc >= GVM_X_VFADD && opc <= GVM_X_VFMAX) {
+            uint f = opc == GVM_X_VFADD ? GVM_F_ADD : opc == GVM_X_VFSUB ? GVM_F_SUB : opc == GVM_X_VFMUL ? GVM_F_MUL : opc == GVM_X_VFMA ? GVM_F_MAD : opc == GVM_X_VFMIN ? GVM_F_MIN : GVM_F_MAX;
+            x = fsum(f, a, b, c);
+        } else {
+            x = opc == GVM_X_VADD ? a + b : opc == GVM_X_VSUB ? a - b : opc == GVM_X_VMUL ? a * b : opc == GVM_X_VAND ? (a & b) : opc == GVM_X_VOR ? (a | b) : opc == GVM_X_VXOR ? (a ^ b)
+              : opc == GVM_X_VFLT ? (fltu(a, b) ? ~0u : 0) : opc == GVM_X_VFLE ? (fleu(a, b) ? ~0u : 0) : opc == GVM_X_VEQ ? (a == b ? ~0u : 0) : opc == GVM_X_VSEL ? (c != 0 ? a : b)
+              : opc == GVM_X_VSPLAT ? A.x : opc == GVM_X_VSWZ ? A[(imm >> (2 * k)) & 3] : opc == GVM_X_VINS ? (k == (imm & 3) ? A.x : D[k]) : 0;
+        }
+        R[k] = x;
+    }
+    [branch] if (opc == GVM_X_VDOT) {
+        uint s = fsum(GVM_F_MUL, A.x, B.x, 0);
+        s = fsum(GVM_F_MAD, A.y, B.y, s); s = fsum(GVM_F_MAD, A.z, B.z, s); s = fsum(GVM_F_MAD, A.w, B.w, s);
+        R = uint4(s, 0, 0, 0);
+    }
+    return R;
+}
+// a vector op as op 0 (not vld, vst): writes rd whole unless its result is a scalar (vext, vmask); lane 0 back
+uint vop(uint w, uint imm, uint rd) {
+    uint opc = (w >> 12) & 255;
+    uint4 A = R4[w & 63], B = R4[w >> 26], C = R4[(w >> 20) & 63], D = R4[rd];
+    [branch] if (opc == GVM_X_VEXT) return A[imm & 3];
+    [branch] if (opc == GVM_X_VMASK) return (A.x != 0 ? 1u : 0u) | (A.y != 0 ? 2u : 0u) | (A.z != 0 ? 4u : 0u) | (A.w != 0 ? 8u : 0u);
+    uint4 R = vlanes(opc, A, B, C, D, imm);
+    R4[rd != 0 ? rd : 64] = R;
+    return R.x;
+}
+"""
+        src = _rep(src, 'uint fb(uint w, uint imm, bool L, uint b)', V + 'uint fb(uint w, uint imm, bool L, uint b)')
+        src = _rep(src, '    } else [branch] if (opc0 == GVM_OP_I(GVM_I_SEL) || opc0 == GVM_X_LPC) v0 =',
+                   '    } else [branch] if (opc0 >= GVM_X_VFIRST && opc0 <= GVM_X_VLAST) v0 = vop(t.x, i0, d0);   // (VEC)' + NL
+                   + '    else [branch] if (opc0 == GVM_OP_I(GVM_I_SEL) || opc0 == GVM_X_LPC) v0 =')
+        src = _rep(src, '    } else {   // extended' + NL, """    } else [branch] if (opc >= GVM_X_VFIRST && opc <= GVM_X_VLAST) {   // the vector ops (VEC), vld and vst
+        wb = opc == GVM_X_VEXT || opc == GVM_X_VMASK;
+        [branch] if (opc == GVM_X_VLD || opc == GVM_X_VST) {
+            uint ad = a + imm;
+            bool vs = opc == GVM_X_VST;
+            bool okv = (ad & 15) == 0 && (vs ? store_ok(ad, 16) : readable(ad) && readable(ad + 15));
+            [branch] if (!okv) { trap(vs ? GVM_CAUSE_STORE : GVM_CAUSE_LOAD, epcw, ad); res = 1; }
+            else [branch] if (op_waits(ad, 16, vs)) { pc = epcw; e = E_SYNC; res = 3; }
+            else [branch] if (vs) {
+                [branch] if (!store_any(ad, 16, R4[rd])) { pc = epcw; e = E_FULL; res = 3; }
+            } else {
+                uint4 q; uint x0, x1, x2, x3;
+                load_any(ad, 4, x0); load_any(ad + 4, 4, x1); load_any(ad + 8, 4, x2); load_any(ad + 12, 4, x3);
+                R4[rd != 0 ? rd : 64] = uint4(x0, x1, x2, x3);
+            }
+        } else v = vop(w, imm, rd);
+    } else {   // extended
+""")
+        src = _rep(src, '    r[0] = 0;' + NL, '    r[0] = 0;' + NL + '    [loop] for (k = 1; k < 64; k++) R4[k].yzw = state_in(T_VR + k, c).yzw;   // (VEC: lanes 1-3)' + NL + '    R4[0] = 0;' + NL)
+        src = _rep(src, '    return t >= T_WT ? uint4(NONE, NONE, NONE, NONE) :', '    [branch] if (t >= T_VR && t < T_VR + 64) return v;   // (VEC: the registers as they were)' + NL + '    return t >= T_WT ? uint4(NONE, NONE, NONE, NONE) :')
+        src = _rep(src, '    [branch] if (t >= T_Q && t < T_WC) return q[t - T_Q];', '    [branch] if (t >= T_VR && t < T_VR + 64) return R4[t - T_VR];   // (VEC)' + NL + '    [branch] if (t >= T_Q && t < T_WC) return q[t - T_Q];')
     return src

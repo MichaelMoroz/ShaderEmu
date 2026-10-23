@@ -42,6 +42,7 @@ DEFAULTS = dict(
     thin8=0,            # phase 3: 8-byte instructions {op, control} (the assembler's thin8), one op each
     wide3=0,            # phase 3: three ops a bundle (op 2 lite, in word 2): 1 behind a branch, 2 always made
     late=0,             # phase 3: a conditional branch reads its registers after the bundle's ops (no op-less bundle before it)
+    vec=0,              # phase 3: 128-bit registers and the vector ops (isa.h GVM_X_VADD ...; rpk=wide)
     rc=0,               # a read cache: the last 0, 1 or 2 texels the fast paths fetched, in registers
     dtx='both',         # a data texel: ROM and RAM both fetched then selected (x23), or one behind a branch
     rpk='scalar',       # the registers: scalar r[65], or vec uint4 R4[17] (layoutopts.py)
@@ -77,9 +78,11 @@ def layout(P):
     t_xt = t_xf + xr // 4
     t_pb = t_xt + (xr // 4 if xb else 0)
     ntex = t_pb + np_ // 2
+    t_vr = ntex   # phase 3: the 128-bit registers, a texel each (lane 0 also in texels 0-15)
+    ntex += 64 if P.get('vec', 0) else 0
     spix = (ntex + 7) // 8
     cpts = wcn + (xr if xb else 0) + np_
-    return dict(WCN=wcn, T_WC=t_wc, T_WT=t_wt, NTEX=ntex, SPIX=spix, T_XF=t_xf, T_XT=t_xt, T_PB=t_pb, CPTS=cpts, XBIND=xb)
+    return dict(WCN=wcn, T_WC=t_wc, T_WT=t_wt, NTEX=ntex, SPIX=spix, T_XF=t_xf, T_XT=t_xt, T_PB=t_pb, CPTS=cpts, XBIND=xb, T_VR=t_vr)
 
 def valid(P):
     """'' when the point can be built, else why not"""
@@ -94,6 +97,7 @@ def valid(P):
     if P['npair'] % 2: return 'npair odd'
     if P.get('s6', 0) and not P.get('mru', 0): return 's6 without mru'
     if P.get('late', 0) and P.get('wide3', 0): return 'late with wide3'
+    if P.get('vec', 0) and P.get('rpk', 'scalar') != 'wide': return 'vec needs rpk=wide'
     if P.get('wide3', 0) and (P.get('thin', 0) or P.get('thin8', 0)): return 'wide3 with thin'
     if P.get('thin8', 0) and (P['fetch'] != 'both' or P.get('mru', 0)): return 'thin8 with fetch=both only'
     if P['xr'] > 1024 or P['npair'] > 256: return 'file or pairs too large'
@@ -152,6 +156,8 @@ static const uint NPAIR = {P['npair']};
 static const uint T_XF = {L['T_XF']};
 static const uint T_XT = {L['T_XT']};
 static const uint T_PB = {L['T_PB']};
+static const uint T_VR = {L['T_VR']};
+static const uint VEC = {P.get('vec', 0)};   // 128-bit registers (gvm_machine.vec; needs rpk=wide)
 static const uint CPTS = {L['CPTS']};
 // the layout, as gvmbench reads it: core c's state pixel j at (slot * GEO_BW + jx, band * GEO_BAND + jy), its band c / GEO_PER,
 // its slot in the band GEO_PERM's (0 the same, 1 bits reversed, 2 times GEO_MUL), jx, jy by GEO_JROW

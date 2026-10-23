@@ -248,6 +248,35 @@
 #define GVM_X_XSR 0x1au    // I: rd = sr[imm], sr[imm] = ra
 #define GVM_X_SRSET 0x1bu  // I: rd = sr[imm], sr[imm] |= ra
 #define GVM_X_SRCLR 0x1cu  // I: rd = sr[imm], sr[imm] &= ~ra
+// ---- Phase 3: 128-bit registers (gvm_machine.vec; the tick's VEC). Every register has four 32-bit lanes; lane 0 is the
+// scalar register: a scalar op reads lane 0 and writes lane 0 only (lanes 1-3 keep their values); r0 is 0 in every lane.
+// The vector ops (R form, per lane unless noted; floats as the scalar float ops):
+#define GVM_X_VADD 0x20u   // ints
+#define GVM_X_VSUB 0x21u
+#define GVM_X_VMUL 0x22u   // the low 32 bits
+#define GVM_X_VAND 0x23u
+#define GVM_X_VOR 0x24u
+#define GVM_X_VXOR 0x25u
+#define GVM_X_VFADD 0x26u
+#define GVM_X_VFSUB 0x27u
+#define GVM_X_VFMUL 0x28u
+#define GVM_X_VFMA 0x29u   // ra * rb + rc
+#define GVM_X_VFMIN 0x2au
+#define GVM_X_VFMAX 0x2bu
+#define GVM_X_VFLT 0x2cu   // ~0 where ra < rb, else 0 (a lane mask)
+#define GVM_X_VFLE 0x2du
+#define GVM_X_VEQ 0x2eu    // ints: ~0 where equal
+#define GVM_X_VSEL 0x2fu   // rc's lane != 0 ? ra : rb (per-lane predication)
+#define GVM_X_VDOT 0x30u   // lane 0 the float dot product of ra and rb (a sum of four products, in lane order), lanes 1-3 0
+#define GVM_X_VSPLAT 0x31u // every lane ra's lane 0
+#define GVM_X_VSWZ 0x32u   // I: lane i is ra's lane (imm >> 2i) & 3
+#define GVM_X_VEXT 0x33u   // I: lane 0 (a scalar write) ra's lane imm & 3
+#define GVM_X_VINS 0x34u   // I: rd's lane imm & 3 is ra's lane 0, rd's other lanes as they were
+#define GVM_X_VLD 0x35u    // I: the 16 bytes at ra + imm (a multiple of 16, else a load fault), lane 0 the lowest
+#define GVM_X_VST 0x36u    // I: rd's 16 bytes at ra + imm (a multiple of 16, else a store fault)
+#define GVM_X_VMASK 0x37u  // lane 0 (scalar): bit i set when ra's lane i is not 0
+#define GVM_X_VFIRST 0x20u
+#define GVM_X_VLAST 0x37u
 
 // ---- Special registers
 #define GVM_SR_STATUS 0u   // bit 0 IE, 1 PIE, 2 PS (previous mode supervisor), 3 S (read only)

@@ -63,6 +63,7 @@ struct Case {
     // pair_need a pass); a tick without them skips it
     uint32_t xr_need = 0, pair_need = 0;
     bool bind_need = false;
+    bool vec_need = false;   // phase 3: the 128-bit registers' vector ops (isa.h GVM_X_VADD ...)
 
     // the game bench (gamebench.h): a set's name (gvmbench --set NAME), 128 MB of RAM, registers a check does not
     // compare (time-dependent: polls, sinks) and the ops count left out, timed in units of core 0's register units_reg
@@ -997,6 +998,34 @@ static std::vector<Case> cases() {
         v.push_back(c);
     };
     rd("p_rd", false); rd("p_rdnc", true);
+    {   // xvec (phase 3): random vector ops on r5-r28 (ints and floats), vld and vst of texels, masks and vsel, vdot,
+        // swizzles, vext, vins and vmask, beside scalar ops (which write lane 0 only)
+        Case c{"xvec", 1, false, [](std::vector<GvmAsm>& p, auto& data, uint32_t seed) {
+            Rng g{seed * 6151 + 11};
+            for (uint32_t k = 0; k < 1024; k++) data.push_back({DATA + 4 * k, (k & 1) ? rfloat(g) : g.next()});
+            GvmAsm& a = p[0];
+            static const uint32_t vo[] = {GVM_X_VADD, GVM_X_VSUB, GVM_X_VMUL, GVM_X_VAND, GVM_X_VOR, GVM_X_VXOR, GVM_X_VFADD, GVM_X_VFSUB,
+                                          GVM_X_VFMUL, GVM_X_VFMA, GVM_X_VFMIN, GVM_X_VFMAX, GVM_X_VFLT, GVM_X_VFLE, GVM_X_VEQ, GVM_X_VSEL,
+                                          GVM_X_VDOT, GVM_X_VSPLAT};
+            for (int round = 0; round < 20; round++) {
+                seed_regs(a, g, true);
+                a.li(29, (int32_t)DATA);
+                for (int i = 0; i < 40; i++) {
+                    switch (g.below(7)) {
+                    case 0: case 1: a.vop(vo[g.below(sizeof vo / 4)], rreg(g), rreg(g), rreg(g), rreg(g)); break;
+                    case 2: a.vld(rreg(g), 29, (int32_t)(16 * g.below(256))); break;
+                    case 3: a.vst(rreg(g), 29, (int32_t)(16 * g.below(256))); break;
+                    case 4: { uint32_t k = g.below(4); if (k == 0) a.vswz(rreg(g), rreg(g), g.below(256)); else if (k == 1) a.vext(rreg(g), rreg(g), g.below(4)); else if (k == 2) a.vins(rreg(g), rreg(g), g.below(4)); else a.vop(GVM_X_VMASK, rreg(g), rreg(g), 0); break; }
+                    case 5: a.lw(rreg(g), 29, (int32_t)(4 * g.below(1024))); break;
+                    default: a.addi(rreg(g), rreg(g), rimm(g)); break;
+                    }
+                }
+            }
+            a.halt();
+        }};
+        c.named = true; c.vec_need = true; c.tol = 2e-5;
+        v.push_back(c);
+    }
     pmc("p_k0_m0", 0, 0); pmc("p_k1_m0", 1, 0); pmc("p_k2_m0", 2, 0); pmc("p_k4_m0", 4, 0); pmc("p_k8_m0", 8, 0);
     pmc("p_k0_m40", 0, 40); pmc("p_k4_m40", 4, 40); pmc("p_k8_m40", 8, 40);
     game_cases(v);   // the game bench's g_ cases (gamebench.h)
