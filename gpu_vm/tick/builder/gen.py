@@ -43,6 +43,7 @@ DEFAULTS = dict(
     wide3=0,            # phase 3: three ops a bundle (op 2 lite, in word 2): 1 behind a branch, 2 always made
     s12in=0,            # paths 1 and 2 (step12) inside the fast loop's loop, not after it leaves
     s12b=0,             # step12's op 0 integer or float: 0 a select of both, 1 a branch; 2 op 1's too
+    ov=0,               # overflow entries after the buckets: a store whose two buckets are full takes one (searched only then)
     fx1=0,              # phase 3: op 1 takes any float function but the special ones (compares, sign, conversions; gvm_asm.h fx1)
     late=0,             # phase 3: a conditional branch reads its registers after the bundle's ops (no op-less bundle before it)
     vec=0,              # phase 3: 128-bit registers and the vector ops (isa.h GVM_X_VADD ...; rpk=wide); 2: lanes read at first use
@@ -66,13 +67,13 @@ SPACE = dict(   # the values a search draws from
     fetch=['both', 'one'], int_first=[0, 1], mem_order=['35', '4'], split=['branch', 'flatten'],
     block=[(8, 8), (16, 4), (4, 16), (8, 4), (4, 8), (32, 2), (16, 8), (8, 16), (32, 4), (64, 1), (32, 1), (16, 2)],
     bandx=[1, 2], per=[16, 32, 64, 128], jrow=[0, 1], perm=['id', 'bitrev', 'mul'], mul=[3, 5, 37, 77],
-    early=[0, 1, 2, 3], mru=[0, 1, 2, 4], bb=[0, 1], tfirst=[0, 1], s6=[0, 1], nc=[0, 1], thin=[0, 1], thin8=[0, 1], wide3=[0, 1, 2], late=[0, 1, 2, 3], fx1=[0, 1], s12b=[0, 1, 2, 3], s12in=[0, 1], rc=[0, 1, 2], dtx=['both', 'one'], rpk=['scalar', 'vec', 'wide'], pk=['scalar', 'vec', 'aos'], lay=['split', 'merged'],
+    early=[0, 1, 2, 3], mru=[0, 1, 2, 4], bb=[0, 1], tfirst=[0, 1], s6=[0, 1], nc=[0, 1], thin=[0, 1], thin8=[0, 1], wide3=[0, 1, 2], late=[0, 1, 2, 3], fx1=[0, 1], ov=[0, 4, 8, 16], s12b=[0, 1, 2, 3], s12in=[0, 1], rc=[0, 1, 2], dtx=['both', 'one'], rpk=['scalar', 'vec', 'wide'], pk=['scalar', 'vec', 'aos'], lay=['split', 'merged'],
     xr=[0, 64, 128, 256, 512, 1024], npair=[0, 32, 64, 128], xbind=[0, 1], xload=['pre', 'lazy'], xfast=[0, 1],
 )
 
 def layout(P):
     nb = P['nb']
-    wcn = 8 * nb + 2
+    wcn = 8 * nb + P.get('ov', 0) + 2
     t_wc = 40
     t_wt = t_wc + wcn
     ntex = t_wt + (wcn + 3) // 4
@@ -137,6 +138,7 @@ def header(P, L):
 static const uint NB = {P['nb']};           // buckets of four entries a table
 static const uint WCN = {L['WCN']};         // write cache entries: 8 * NB in buckets, two overflow slots, then a sink
 static const uint WCS = WCN - 2;
+static const uint OV = {P.get('ov', 0)}, OVB = 8 * NB;   // overflow entries from OVB, searched when both buckets are full
 static const uint NONE = 0xffffffffu;
 static const uint RAM_W = 8192;
 static const uint T_WC = {L['T_WC']};
@@ -313,6 +315,11 @@ void mfind(inout mop m) {
     uint k = firstbitlow(msk);
     m.otag = k < 8 ? pick(k < 4 ? m.A : m.B, k & 3) : NONE;
     m.sl = k < 4 ? 4 * m.b1 + k : k < 8 ? 4 * m.b2 + (k & 3) : NONE;
+    [branch] if (OV != 0 && k >= 8) {   // both buckets full: the texel's overflow entry, or the first free one
+        uint j = OV, q;
+        [loop] for (q = 0; q < OV; q++) { uint g = wt[OVB + q]; j = j == OV && ((g & 0x0fffffffu) == m.t || g == NONE) ? q : j; }
+        m.otag = j < OV ? wt[OVB + j] : NONE; m.sl = j < OV ? OVB + j : NONE;
+    }
     m.e = has(m.otag, m.t, m.i) ? m.sl : WCN;
 }
 mop mlook(uint ad, bool look) {
