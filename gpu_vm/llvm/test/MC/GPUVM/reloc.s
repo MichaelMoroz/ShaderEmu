@@ -1,5 +1,6 @@
 # Relocations: a symbol in a long immediate (R_GVM_IMM32, %tprel R_GVM_TPREL32), lpc (R_GVM_PCIMM32), a branch
-# (R_GVM_BR9 at the control word), j and call (R_GVM_J18: j far, cc 0, path 0), data (R_GVM_32, R_GVM_REL32);
+# (R_GVM_BR9 at the control word), j and call (R_GVM_J18: j far, cc 0, path 0), data (R_GVM_32, R_GVM_REL32), .reloc
+# by an ELF name or BFD_RELOC_NONE (a profile's call graph section);
 # a j to a label of the section is resolved near.
 # RUN: llvm-mc -triple=gpuvm -filetype=obj %s -o %t.o
 # RUN: llvm-readelf -r %t.o | FileCheck --check-prefix=REL %s
@@ -24,6 +25,9 @@ near:
   .word ext
   .word ext - .
   .word f
+  .reloc ., BFD_RELOC_NONE, f
+  .reloc ., R_GVM_32, ext
+  .word 0
 
 # REL: 00000008 00000303 R_GVM_IMM32 00000000 ext + 0
 # REL: 00000018 00000303 R_GVM_IMM32 00000000 ext + 8
@@ -36,6 +40,8 @@ near:
 # REL: 00000000 00000301 R_GVM_32 00000000 ext + 0
 # REL: 00000004 00000302 R_GVM_REL32 00000000 ext + 0
 # REL: 00000008 00000201 R_GVM_32 00000000 f + 0
+# REL: 0000000c {{[0-9a-f]+}} R_GVM_NONE 00000000 f + 0
+# REL: 0000000c 00000301 R_GVM_32 00000000 ext + 0
 # CHECK: 0: 40 01 06 00 00 00 00 00 00 00 00 00 af 02 00 00 li a0, 0 ;;
 # CHECK: 10: 80 01 08 00 00 00 00 00 00 00 00 00 ab 02 00 00 lw a1, 0(zero) ;;
 # CHECK: 20: c0 e1 00 00 00 00 00 00 00 00 00 00 29 2a 00 18 lpc a2, 0x20; beq a0, a1, 0x20 ;;

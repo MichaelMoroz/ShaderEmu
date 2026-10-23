@@ -20,6 +20,8 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/ADT/StringSwitch.h"
+#include "llvm/BinaryFormat/ELF.h"
 
 using namespace llvm;
 using namespace llvm::support::endian;
@@ -42,6 +44,21 @@ public:
   }
 
   MCFixupKindInfo getFixupKindInfo(MCFixupKind Kind) const override;
+
+  // .reloc's names: the ELF relocations, and the BFD ones the code generator
+  // asks for (a profile-guided build's call graph section: BFD_RELOC_NONE)
+  std::optional<MCFixupKind> getFixupKind(StringRef Name) const override {
+    unsigned Type = StringSwitch<unsigned>(Name)
+#define ELF_RELOC(NAME, ID) .Case(#NAME, ID)
+#include "llvm/BinaryFormat/ELFRelocs/GPUVM.def"
+#undef ELF_RELOC
+                        .Case("BFD_RELOC_NONE", ELF::R_GVM_NONE)
+                        .Case("BFD_RELOC_32", ELF::R_GVM_32)
+                        .Default(-1u);
+    if (Type == -1u)
+      return std::nullopt;
+    return static_cast<MCFixupKind>(FirstLiteralRelocationKind + Type);
+  }
 
   bool writeNopData(raw_ostream &OS, uint64_t Count,
                     const MCSubtargetInfo *STI) const override;

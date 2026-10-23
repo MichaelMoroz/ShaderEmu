@@ -213,6 +213,33 @@ code generator's job toward bundles is the order of its ops.
   placed after the open bundle instead of closing it (`setSoftLabels`); a block that is branched to closes it; a
   line entry is a bundle's (the last `.loc` in it).
 
+## Profile-guided builds (23 October 2026)
+
+A game's hot code from a gvm_cpu profile, fed back to clang as a sample profile (AutoFDO's text format) and to lld as
+a function order:
+
+1. Build with `-g -fdebug-info-for-profiling` (the same code as without; discriminators in the line table).
+2. Profile on gvm_cpu between two console lines: `GVM_PROF_CORES=1 gvm_cpu --profile P --profile-at A --profile-until B`
+   (`GVM_PROF_CORES=1` adds each bundle's runs by core; `GVM_ICACHE=KB,LINE,WAYS` models each core's code fetches in an
+   LRU cache of its own and prints misses a bundle by core; `GVM_ICACHE_MAP=FILE` moves bundles in that model only, a
+   layout tried without building it: `gpu_vm/tick/gamebench_rv/layout_map.py`).
+3. `python3 gpu_vm/tick/gamebench_rv/autofdo.py P PROG.gdb PROG.afdo PROG.order` (in WSL: llvm-symbolizer's inline
+   stacks; a line's samples are the most of any bundle on it).
+4. Build again with `-gline-tables-only -fdebug-info-for-profiling -fprofile-sample-use=PROG.afdo` and
+   `GVM_ORDER_FILE=PROG.order` (gpuvm-linux-cc passes it to lld as `--symbol-ordering-file`).
+
+The profile drives the inliner (hot call sites at the hot threshold), block placement and the hot and unlikely sections;
+the build's call-graph section needs `.reloc` names (`GPUVMAsmBackend::getFixupKind`: the ELF names, `BFD_RELOC_NONE`).
+Card (w2 v0009, two rounds): Quake III 82.4/82.7 -> 85.5/85.3 fps (RISC-V 82.8/80.5), Half-Life 13.1/12.9 -> 13.3/13.2
+(RISC-V 9.9/9.3); text +4-8%.
+
+What the code-cache model says about layout: the cliff (`lp_code` 2/8/16/32/128 KB: 104/107/133/155/155 ns a bundle on
+the card, flat past 32 KB) is the hot code's size, not its order. With 16 KB, 32-byte lines, 4 ways, Quake III's busy
+cores miss 0.09-0.10 a bundle and Half-Life's core 0 0.11 (its drawing worker 0.27); functions laid out hottest first
+change that by -1 to +5%, and even a perfect split of the bundles that ran (cold ones out, hottest first) by only 5-12%.
+So hot/cold splitting is not worth a machine function splitter here; what an order file buys is the calls through lld's
+range thunks (a `jr` bundle each: 0.46% of Half-Life's core 0 bundles).
+
 ## The target's files (`Target/GPUVM`)
 
 - MC layer: `GPUVMRegisterInfo.td`, `GPUVMInstrFormats.td`, `GPUVMInstrInfo.td` (one instruction per op of isa.h and

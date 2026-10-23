@@ -9,3 +9,7 @@ f=$R/linux/quake3/build.sh
 grep -q '^    python3 "\$HERE/bake.py"' "$f" || { echo "fix/quake3.sh: bake.py's line not found"; exit 1; }
 sed -i "s|^    python3 \"\\\$HERE/bake.py\"|    python3 -c 'import numpy' 2>/dev/null \|\| { cp '$P/quake3-pak0.pk3' \"\$DATA/pak0.pk3\"; cp '$P/quake3-se.dat' \"\$DATA/se.dat\"; }; python3 -c 'import numpy' 2>/dev/null \&\& python3 \"\$HERE/bake.py\"|" "$f"
 grep -q "import numpy" "$f" || { echo "fix/quake3.sh: not changed"; exit 1; }
+# The three modules' partial links keep each function's section (.text alone merged), so that the program's link can
+# lay their functions out (GVM_ORDER_FILE: gpu_vm/userland/bin/gpuvm-linux-cc)
+grep -q '^    .text : { \*(.text .text.\*) }$' "$f" && sed -i 's/^    .text : { \*(.text .text.\*) }$/    .text : { *(.text) }/' "$f"
+grep -q '^    .text : { \*(.text) }$' "$f" || { echo "fix/quake3.sh: the modules' .text line not found"; exit 1; }

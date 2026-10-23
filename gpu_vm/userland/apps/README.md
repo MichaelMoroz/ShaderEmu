@@ -25,7 +25,9 @@ In WSL:
     bash gpu_vm/userland/apps/image.sh                         # DATA=0: without the games' data
     bash gpu_vm/userland/apps/run.sh 'NXVIEW_SUM=1 nxview --decode /usr/share/picture-fox.png /tmp/a.ppm'
 
-Builds side by side: `GVM_APPS_REPO`, `GVM_APPS_WORK` and `GVM_APPS_LOGS` name another copy, work folder and logs.
+Builds side by side: `GVM_APPS_REPO`, `GVM_APPS_WORK` and `GVM_APPS_LOGS` name another copy, work folder and logs,
+`GVM_APPS_OUT` the folder the programs go to (default `build/gvm_apps/root`). A profile-guided build (gpu_vm/llvm/README.md,
+"Profile-guided builds"): `GVM_CFLAGS` with the profile's flags and `GVM_ORDER_FILE`, a game at a time.
 
 ## How a program is made for gpu_vm
 

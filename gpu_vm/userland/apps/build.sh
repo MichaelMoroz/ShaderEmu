@@ -53,5 +53,7 @@ for s in ${*:-$ALL}; do
     echo "$s: exit $rc, $(( $(date +%s) - t )) s$( [ $rc = 0 ] || { echo; grep -E 'rror|undefined|cannot|No such' "$log" | head -6 | sed 's/^/    /'; } )"
 done
 # (added to what is there: builds in other copies put theirs there too)
-mkdir -p "$REPO/build/gvm_apps/root"
-rsync -a "$R/build/images/linux/root/" "$REPO/build/gvm_apps/root/"
+# (GVM_APPS_OUT: another folder for a side build's programs)
+OUT=${GVM_APPS_OUT:-$REPO/build/gvm_apps/root}
+mkdir -p "$OUT"
+rsync -a "$R/build/images/linux/root/" "$OUT/"

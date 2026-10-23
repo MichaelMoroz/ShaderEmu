@@ -232,14 +232,55 @@ static void trace_flush(void) {
 }
 
 // ---- --profile: a table of (pc, the bundle's four words) -> runs, core 0's and the workers'
-typedef struct { uint32_t pc, w[4]; uint64_t n0, nw; } prof_ent;
-static struct { prof_ent *t; uint32_t mask, used; } P;
+typedef struct { uint32_t pc, w[4]; uint64_t n0, nw; uint32_t *per; } prof_ent;
+static struct { prof_ent *t; uint32_t mask, used; int percore; } P;   // percore (GVM_PROF_CORES=1): runs by core too
+
+// GVM_ICACHE=KB[,LINE[,WAYS]]: each core's bundle fetches through a model cache of its own (LRU, LINE bytes a line, 32
+// and 4 ways by default) while the profile counts: misses a bundle by core at the end (the code-size cliff, IDEAS.md)
+// GVM_ICACHE_MAP=FILE: lines "pc newpc" (hex): the model sees a bundle at newpc (a layout tried without building it)
+static struct { uint32_t sets, ways, lsh; uint32_t *tag; uint64_t *age, *acc, *miss, clock; uint32_t *mk, *mv, mmask; } IC;
+static uint32_t ic_map(uint32_t pc) {
+    if (!IC.mk) return pc;
+    for (uint32_t h = (pc >> 4) * 2654435761u;; h++) {
+        uint32_t k = IC.mk[h & IC.mmask];
+        if (k == pc + 1) return IC.mv[h & IC.mmask];
+        if (!k) return pc;
+    }
+}
+static void ic_load_map(const char *fn) {
+    FILE *f = fopen(fn, "r");
+    unsigned a, b, n = 0;
+    if (!f) { fprintf(stderr, "gvm_cpu: GVM_ICACHE_MAP: no %s\n", fn); exit(EXIT_USAGE); }
+    while (fscanf(f, "%x %x", &a, &b) == 2) n++;
+    for (IC.mmask = 1; IC.mmask < 2 * n + 2; IC.mmask <<= 1) {}
+    IC.mk = (uint32_t *)calloc(IC.mmask, 4); IC.mv = (uint32_t *)calloc(IC.mmask, 4); IC.mmask--;
+    rewind(f);
+    while (fscanf(f, "%x %x", &a, &b) == 2) {
+        uint32_t h = (a >> 4) * 2654435761u;
+        while (IC.mk[h & IC.mmask]) h++;
+        IC.mk[h & IC.mmask] = a + 1; IC.mv[h & IC.mmask] = b;
+    }
+    fclose(f);
+}
+static void ic_fetch(uint32_t core, uint32_t pc) {
+    pc = ic_map(pc);
+    uint32_t ln = pc >> IC.lsh, set = ln % IC.sets, *t = IC.tag + ((size_t)core * IC.sets + set) * IC.ways;
+    uint64_t *g = IC.age + ((size_t)core * IC.sets + set) * IC.ways;
+    uint32_t old = 0;
+    IC.acc[core]++; IC.clock++;
+    for (uint32_t w = 0; w < IC.ways; w++) {
+        if (t[w] == ln + 1) { g[w] = IC.clock; return; }
+        if (g[w] < g[old]) old = w;
+    }
+    IC.miss[core]++; t[old] = ln + 1; g[old] = IC.clock;
+}
 
 static uint32_t prof_hash(uint32_t pc, const uint32_t *w) { return ((pc >> 4) ^ w[0] ^ w[3]) * 2654435761u; }
 
 static void prof_count(gvm_core *c) {
     uint32_t pc = c->pc, *w;
     if ((pc & 15u) || pc + 16 > H.m.ram_end || H.bundles < H.prof_from) return;   // (a bundle resumed: counted once)
+    if (IC.sets) ic_fetch(c->id, pc);
     w = &H.m.ram[pc >> 2];
     if (P.used * 2 >= P.mask) {   // grown at half full
         prof_ent *old = P.t;
@@ -260,6 +301,10 @@ static void prof_count(gvm_core *c) {
         if (!e->n0 && !e->nw) { e->pc = pc; memcpy(e->w, w, 16); P.used++; }
         else if (e->pc != pc || memcmp(e->w, w, 16)) continue;
         if (c->id) e->nw++; else e->n0++;
+        if (P.percore) {
+            if (!e->per) e->per = (uint32_t *)calloc(CPU_MAX_CORES, 4);
+            if (e->per) e->per[c->id]++;
+        }
         return;
     }
 }
@@ -267,14 +312,26 @@ static void prof_count(gvm_core *c) {
 static void prof_write(void) {
     FILE *f;
     if (!H.prof_path || !(f = fopen(H.prof_path, "w"))) return;
-    fprintf(f, "# pc w0 w1 w2 ctl core0 workers\n");
+    fprintf(f, "# pc w0 w1 w2 ctl core0 workers%s\n", P.percore ? " [core:runs ...]" : "");
     for (uint32_t i = 0; P.t && i <= P.mask; i++) {
         prof_ent *e = &P.t[i];
-        if (e->n0 || e->nw)
-            fprintf(f, "%08x %08x %08x %08x %08x %llu %llu\n", e->pc, e->w[0], e->w[1], e->w[2], e->w[3],
+        if (e->n0 || e->nw) {
+            fprintf(f, "%08x %08x %08x %08x %08x %llu %llu", e->pc, e->w[0], e->w[1], e->w[2], e->w[3],
                     (unsigned long long)e->n0, (unsigned long long)e->nw);
+            for (uint32_t k = 1; e->per && k < CPU_MAX_CORES; k++)
+                if (e->per[k]) fprintf(f, " %u:%u", k, e->per[k]);
+            fputc('\n', f);
+        }
     }
     fclose(f);
+    if (IC.sets) {
+        fprintf(stderr, "gvm_cpu: GVM_ICACHE %u KB, %u-byte lines, %u ways: core bundles misses a bundle\n",
+                (IC.sets * IC.ways << IC.lsh) >> 10, 1u << IC.lsh, IC.ways);
+        for (uint32_t k = 0; k < CPU_MAX_CORES; k++)
+            if (IC.acc[k] > 1000)
+                fprintf(stderr, "gvm_cpu: icache %3u %12llu %10llu %.4f\n", k, (unsigned long long)IC.acc[k],
+                        (unsigned long long)IC.miss[k], (double)IC.miss[k] / (double)IC.acc[k]);
+    }
 }
 
 // SIGTERM or SIGINT while profiling: the run stops at the next bundle and the profile is written
@@ -945,6 +1002,22 @@ int main(int argc, char **argv) {
     _setmode(_fileno(stdin), _O_BINARY);
 #endif
     if (H.trace) setvbuf(stdout, NULL, _IONBF, 0);
+    if (H.prof_path) {
+        const char *pc_env = getenv("GVM_PROF_CORES"), *ic_env = getenv("GVM_ICACHE");
+        P.percore = pc_env && atoi(pc_env);
+        if (ic_env) {
+            unsigned kb = 16, line = 32, ways = 4;
+            sscanf(ic_env, "%u,%u,%u", &kb, &line, &ways);
+            for (IC.lsh = 4; (1u << IC.lsh) < line; IC.lsh++) {}
+            IC.ways = ways ? ways : 1;
+            IC.sets = (kb << 10 >> IC.lsh) / IC.ways;
+            if (!IC.sets) IC.sets = 1;
+            IC.tag = (uint32_t *)calloc((size_t)CPU_MAX_CORES * IC.sets * IC.ways, 4);
+            IC.age = (uint64_t *)calloc((size_t)CPU_MAX_CORES * IC.sets * IC.ways, 8);
+            IC.acc = (uint64_t *)calloc(CPU_MAX_CORES, 8); IC.miss = (uint64_t *)calloc(CPU_MAX_CORES, 8);
+            if (getenv("GVM_ICACHE_MAP")) ic_load_map(getenv("GVM_ICACHE_MAP"));
+        }
+    }
     if (H.prof_path) { atexit(prof_write); signal(SIGTERM, prof_stop); signal(SIGINT, prof_stop); }
 
     // the machine: RAM is address 0 up (the boot area and the device window are words of it), to GVM_RAM + its size

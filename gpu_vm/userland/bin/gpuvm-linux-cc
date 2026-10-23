@@ -111,6 +111,11 @@ done
 
 pre=() post=()
 if [ $startfiles = 1 ]; then pre=("$SYSROOT/lib/crt1.o" "$SYSROOT/lib/crti.o"); post=("$SYSROOT/lib/crtn.o"); fi
+# GVM_ORDER_FILE: the functions laid out in that order (symbols, hottest first: gpu_vm/tick/gamebench_rv/autofdo.py):
+# the hot code together (the code-size cliff, gpu_vm/IDEAS.md)
+if [ -n "${GVM_ORDER_FILE:-}" ] && [ -f "$GVM_ORDER_FILE" ]; then
+    ldflags+=("--symbol-ordering-file=$GVM_ORDER_FILE" --no-warn-symbol-ordering)
+fi
 libs=()
 [ $stdlibs = 1 ] && libs=(--start-group -lc "$BUILTINS" --end-group)
 run "$LLVM_BIN/ld.lld" -static -q -T "$UL/flat.ld" -o "$tmp/prog.elf" "${pre[@]+"${pre[@]}"}" "${objs[@]+"${objs[@]}"}" \
