@@ -10,8 +10,8 @@ runs the games from checkpoints on both machines, on any tick step, and prints o
 
 ## The fastest machine today, and how to run it (23 October 2026)
 
-Measure gpu_vm with this setup, not with the defaults: the harness's default tick is x18 (Quake III 27.6 fps in the
-baseline below) and run.py's default image predates Quake III's fix (63-70 fps against 88-91).
+Measure gpu_vm with this setup. run.py's defaults are it (img-cur and gvm-cur since 24 October 2026); the harness's own
+default tick is not: it is x18 (Quake III 27.6 fps in the baseline below), so give `--gvm-tick` outside run.py.
 
 - **Tick: `gpu_vm/tick/steps/v0009.hlsl`** (`steps/README.md`, "v0009"). Made by the builder from `v0009.json`; its
   WARP stamp `v0009.hlsl.warp_ok` is beside it. It is not the project's default only because Doom's timedemo is 0.9%
@@ -20,22 +20,34 @@ baseline below) and run.py's default image predates Quake III's fix (63-70 fps a
 
   | games | image (`GVM_IMAGE`) | checkpoints (`GVM_CKPT`) |
   |---|---|---|
-  | every game: quake3, halflife, nxray, doomt, quake1, coremark, gzipl | `build/gvm_apps/img-rest` | `gvm-rest` |
-  | Quake III with its fix of 059c2b7 (PROFILE_Q3.md's runs) | `build/gvm_apps/img-q3fix` | `gvm-q3fix` |
-  | not to be used for Quake III: made before that fix | `build/gvm_apps/img` (run.py's default) | `gvm` |
+  | **every game, from the current apps** (Quake III's fix of 059c2b7, Red Alert's and libmedia's, all built from this tree on 24 October 2026): quake3, halflife, nxray, doom, doomt, quake1, coremark, gzipl | **`build/gvm_apps/img-cur`** (run.py's default) | **`gvm-cur`** |
+  | Quake III alone, PROFILE_Q3.md's runs | `build/gvm_apps/img-q3fix` | `gvm-q3fix` |
+  | older: IDEAS 24-39's numbers | `build/gvm_apps/img-rest` | `gvm-rest` |
+  | not to be used for Quake III: made before its fix | `build/gvm_apps/img` | `gvm` |
 
-  `img-cur` (every game, from the current apps) is being made; this table moves to it when it is.
+  A number is comparable only with numbers from the same image and checkpoints.
 - **The GPU list lazily** is the harness's default since feaddd5 (`GVM_LIST_LAZY=0` is the old every pass).
 - **Commands:**
 
-      set GVM_IMAGE=build\gvm_apps\img-rest
-      set GVM_CKPT=gvm-rest
       python gpu_vm/bench_games/run.py bench --machine v0009,rv --games quake3,halflife,nxray,doomt --rounds 2
 
-  Quake III alone on its newest image: `GVM_IMAGE=build\gvm_apps\img-q3fix GVM_CKPT=gvm-q3fix` and `--games quake3`.
-  Outside run.py: `rvc_harness --gvm build\gvm_apps\img-rest --gvm-tick gpu_vm\tick\steps\v0009.hlsl ...`, through
+  Outside run.py: `rvc_harness --gvm build\gvm_apps\img-cur --gvm-tick gpu_vm\tick\steps\v0009.hlsl ...`, through
   `pwsh tools\gpu_queue.ps1` like every card run.
-- **Its numbers** (RTX 5070 Laptop, D3D11, fxc2; the RISC-V machine `rvc_opt` on `build/checkpoints/rv`):
+- **Its numbers on img-cur** (RTX 5070 Laptop, D3D11, fxc2; one round each, 24 October 2026; logs
+  `build/bench_games/cur-v0009-a` and `-b`):
+
+  | game | v0009 |
+  |---|---|
+  | Quake III | 86.9 fps |
+  | Half-Life | 13.5 fps of the level |
+  | nxray | 37.5 pictures a second |
+  | Doom (`doom`) | 188.3 frames a second |
+  | Doom's timedemo (`doomt`) | 175.9 tics a second |
+  | Quake's timedemo (`quake1`) | 97.2 fps |
+  | coremark | 47.5 iterations a second |
+  | gzip (`gzipl`) | 0.33 rounds a second |
+
+- **Against the RISC-V machine** (`rvc_opt` on `build/checkpoints/rv`, its own image; earlier images on gpu_vm's side):
 
   | | gpu_vm v0009 | RISC-V | ratio | where from |
   |---|---|---|---|---|

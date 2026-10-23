@@ -20,8 +20,8 @@ import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 RV_ROOT = os.environ.get('RV_ROOT', os.path.join(os.path.dirname(ROOT), 'ShaderEmu'))
-GVM_IMAGE = os.environ.get('GVM_IMAGE', os.path.join(ROOT, 'build', 'gvm_apps', 'img'))   # (another image: its own GVM_CKPT)
-GVM_CKPT = os.environ.get('GVM_CKPT', 'gvm')   # gpu_vm's checkpoints' folder under build/checkpoints
+GVM_IMAGE = os.environ.get('GVM_IMAGE', os.path.join(ROOT, 'build', 'gvm_apps', 'img-cur'))   # (another image: its own GVM_CKPT; README.md, "The fastest machine today")
+GVM_CKPT = os.environ.get('GVM_CKPT', 'gvm-cur')   # gpu_vm's checkpoints' folder under build/checkpoints (img-cur's: every game)
 # the RISC-V image: linux/prebuilt/nommu with Uplink's data (`python linux/nommu/image.py nommu_hl` in this worktree,
 # with a junction rvc -> the main checkout's rvc): the main checkout's build/images/nommu has no Half-Life data
 RV_IMAGE = os.environ.get('RV_IMAGE', os.path.join(ROOT, 'build', 'images', 'nommu_hl'))
