@@ -11,6 +11,8 @@
 //   g_q3      core 0 + 3 busy workers (a server's logic, a scene's vertices, a client helper) + 2 awake idle
 //   g_hl      core 0 (the heavy logic) + 4 busy workers + 40 awake idle
 //   g_ray     core 0 + 191 workers sharing a picture in chunks of 32 pixels
+//   g_q3p     (set game2) Quake III as its passes are: 3 rounds a frame of core 0's logic and two short jobs, 2 spinning
+//             workers (a poll to the budget), 2 idle: 6 passes a frame, core 0's passes ending sync 61%, full 39%
 // and the same work in other forms (the set game_x):
 //   ..._r     the stack (frames' saves, spills, the trace's struct) in registers: moves (a large register file)
 //   ..._f     the stack in the core's file (lf, sf: phase 2; skipped on a tick without a file of 128 words)
@@ -48,7 +50,10 @@ struct GRay { int w = 256, h = 192, s = 16, spill = 2, stack = G_MEM; };   // th
 struct GScene {
     GLogic core0, worker;      // core 0's logic; the logic of the workers' kind 1 jobs (its E from the job)
     std::vector<GJob> jobs;    // busy worker k + 1's job each frame
+    int spin = 0;              // workers after the busy ones that never end a pass by themselves: a poll loop to the
+                               // budget (Quake III's helpers: some worker runs its whole budget in 90% of the passes)
     int idle = 0;              // awake idle workers after them
+    int rounds = 1;            // core 0's rounds a frame: each its jobs posted, core0.E entities, the jobs waited for
     int rayW = 0;              // > 0: workers 1..rayW share core 0's picture each frame
     GRay ray;
     int idleOps = 10;          // the idle poll's extra ops (worker.S's timer trap)
@@ -64,7 +69,7 @@ static const uint64_t G_SKIP_REGS = (1ull << 58) | (1ull << 59) | (1ull << 61) |
 // bundle first (as a compiler schedules it)
 static void g_br(GvmAsm& a, uint32_t cc, uint32_t ra, uint32_t rb, int l) {
     bool imm = cc >= GVM_CC_BBS;   // (bbs, bbc and the immediate forms: rb is a number)
-    if (a.writes(ra) || (!imm && a.writes(rb))) a.close();
+    if (a.br_old(ra) || (!imm && a.br_old(rb))) a.close();
     a.br(cc, ra, rb, l);
 }
 static void g_beq(GvmAsm& a, uint32_t x, uint32_t y, int l) { g_br(a, GVM_CC_BEQ, x, y, l); }
@@ -519,10 +524,20 @@ static void g_scene(std::vector<GvmAsm>& p, std::vector<std::pair<uint32_t, uint
         a.bind(main_);
         a.mfsr(3, GVM_SR_COREID);
         a.opi(GVM_I_SLL, 5, 3, 14); a.li(2, (int32_t)(G_STACK + 0x4000 - 64)); a.add(2, 2, 5);
-        a.li(56, (int32_t)G_MBOX); a.shadd(56, 56, 3, 4); a.li(3, 0);
+        a.li(56, (int32_t)G_MBOX); a.shadd(56, 56, 3, 4);
+        a.addi(61, 3, -(int32_t)(busy + 1)); a.li(62, S.spin); a.op(GVM_I_SLTU, 61, 61, 62);   // r61: a spinner
+        a.li(3, 0);
         a.bind(wl);
         a.lw(7, 56, 0);
         g_bne(a, 7, 3, got);
+        // a spinner polls again at once (gamebench.c's spin_job: a load, an add, a branch): its pass ends at the budget
+        {
+            int idle_ = a.label();
+            g_beq(a, 61, 0, idle_);
+            a.addi(59, 59, 1);
+            a.j(wl);
+            a.bind(idle_);
+        }
         // nothing: what the firmware's timer trap costs a pass (worker.S fw_irq and fw_back), then the pass's end
         a.mfsr(58, GVM_SR_TIME_LO); a.addi(58, 58, 1);
         for (int i = 0; i < S.idleOps; i++) {
@@ -572,6 +587,10 @@ static GScene g_scene_of(const std::string& name) {
     else if (n == "g_verts") { S.core0.E = 0; }
     else if (n == "g_ray1") { S.ray.w = 64; S.ray.h = 32; }
     else if (n == "g_q3") { S.core0.E = 64; S.worker = S.core0; S.jobs = {{1, 256}, {2, 2048}, {1, 64}}; S.idle = 2; }
+    else if (n == "g_q3p") {   // Quake III as its passes are: rounds bound, about 6 passes a frame on both machines (core 0's
+        // passes end sync 61%, full 39% on x23), a worker at its whole budget in 90% of the passes (spinners)
+        S.core0.E = 32; S.rounds = 3; S.worker = S.core0; S.jobs = {{1, 16}, {2, 128}}; S.spin = 2; S.idle = 2;
+    }
     else if (n == "g_hl") { S.core0.E = 512; S.worker = S.core0; S.jobs = {{1, 128}, {2, 2048}, {2, 2048}, {1, 32}}; S.idle = 40; }
     else if (n == "g_ray") { S.core0.E = 16; S.worker = S.core0; S.rayW = 191; }
     int stack = form == "r" ? G_REGS : form == "f" ? G_FILE : G_MEM;
@@ -579,9 +598,9 @@ static GScene g_scene_of(const std::string& name) {
     S.core0.copyop = S.worker.copyop = form == "c";
     return S;
 }
-static uint32_t g_cores_of(const GScene& S) { return 1 + (uint32_t)S.jobs.size() + (uint32_t)S.idle + (uint32_t)S.rayW; }
+static uint32_t g_cores_of(const GScene& S) { return 1 + (uint32_t)S.jobs.size() + (uint32_t)S.spin + (uint32_t)S.idle + (uint32_t)S.rayW; }
 static void game_cases(std::vector<Case>& v) {
-    for (const char* name : {"g_logic", "g_verts", "g_ray1", "g_q3", "g_hl", "g_ray",
+    for (const char* name : {"g_logic", "g_verts", "g_ray1", "g_q3", "g_hl", "g_ray", "g_q3p",
                              "g_logic_r", "g_logic_f", "g_logic_c", "g_q3_f", "g_hl_r", "g_hl_f", "g_hl_c", "g_ray_f"}) {
         std::string nm = name;
         GScene S = g_scene_of(nm);
@@ -606,10 +625,10 @@ static void game_cases(std::vector<Case>& v) {
             }
             g_scene(p, data, S);
         }};
-        c.named = true; c.set = nm.find('_', 2) == std::string::npos ? "game" : "game_x"; c.big = true;
+        c.named = true; c.set = nm == "g_q3p" ? "game2" : nm.find('_', 2) == std::string::npos ? "game" : "game_x"; c.big = true;   // (game2: cases made since the builder's sweeps began)
         c.skip_regs = G_SKIP_REGS; c.skip_ops = !lone; c.units_reg = 60;
         c.check_ticks = lone ? 997 : S.rayW ? 4093 : 1999;
-        c.unit_div = nm == "g_verts" ? 1 : S.core0.E ? S.core0.E : S.ray.w * S.ray.h / 32;
+        c.unit_div = nm == "g_verts" ? 1 : S.core0.E ? S.core0.E * S.rounds : S.ray.w * S.ray.h / 32;
         if (S.core0.stack == G_FILE) c.xr_need = 128;
         if (nm.rfind("g_hl", 0) == 0) c.passes = 1500;
         v.push_back(c);
