@@ -1976,7 +1976,7 @@ static void scene_show (unsigned upto, int wait)
 				break;
 			if (!wait)
 				return;
-			mcw_rest ();
+			mcw_rest_on (&scene_out, 1);	/* (gpu_vm: the scene's worker has the whole pass) */
 			se_scene_passes++;
 			SE_ServerPoll ();
 		}
@@ -2024,7 +2024,7 @@ void SE_SceneFlush (void)
 {
 	scene_show (scene_asked.recorded, 1);
 	while (scene_out && !mcw_ready (scene_out)) {
-		mcw_rest ();
+		mcw_rest_on (&scene_out, 1);
 		SE_ServerPoll ();
 	}
 	if (scene_out)

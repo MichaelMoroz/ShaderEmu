@@ -784,6 +784,16 @@ int mcw_ready(mcw_handle h)
 	return call_state[h - 1] == 2 || mcw_done((int)calls[h - 1].k);
 }
 
+void mcw_rest_on(const mcw_handle *h, int n)
+{
+	int workers[16], m = 0, i;
+
+	for (i = 0; i < n && m < 16; i++)
+		if (h[i] >= 1 && h[i] <= CALLS && call_state[h[i] - 1] == 1 && calls[h[i] - 1].k)
+			workers[m++] = (int)calls[h[i] - 1].k;
+	mcw_rest_for(workers, m);
+}
+
 uint32_t mcw_join(mcw_handle h)
 {
 	uint32_t answer;

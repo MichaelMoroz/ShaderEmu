@@ -773,7 +773,7 @@ static int ring_poll(int k) {
     if (k <= 0 || !rp.posted[k]) return 1;
     if (ring_done[k].done == ring_job[k].seq) { rp.posted[k] = 0; return 1; }
     if (SE_RenderWho()) { rw.waits[k]++; mc_end_pass(); }
-    else { if (posted[k] == 3) mcw_done(k); mcw_rest(); }
+    else { if (posted[k] == 3) mcw_done(k); mcw_rest_for(&k, 1); }
     return 0;
 }
 // The passes the drawing's worker waited for ring jobs since asked last, and for whose most. DEBUG
@@ -867,7 +867,7 @@ int hlglPoll(int k) {
     if (rings.on && ring_worker(k)) return ring_poll(k);
     if (k <= 0 || !posted[k]) return 1;
     if (mcw_done(k)) { posted[k] = 0; return 1; }
-    mcw_rest();
+    mcw_rest_for(&k, 1);
     return 0;
 }
 unsigned hlglWait(int k) {

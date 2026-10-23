@@ -70,10 +70,79 @@ def nommu_area(text, fn, phys, fops):
     return text
 
 
+REST_WORDS = '''
+/* gpu_vm (gpu_vm/platform.md, "Resting"): the workers core 0 waits for while it rests, a bit a core (the tick gives
+ * them their whole pass), and { REST_MARK, whether another task could run }: a program alone ends its pass at a rest
+ * by itself (mcw_rest), with no system call */
+#define REST_WAITING	0x1100
+#define REST_DECLARED	0x1120	/* the pid of the program that says what it waits for (mcw_rest_for), 0 when it closes */
+#define REST_CROWD	0x1130
+#define REST_MARK	0x54534552
+#define SHADEREMU_GPU_REST_MASK	_IOW('G', 12, __u32[8])
+'''
+
+REST_CROWD = '''/* Whether another task than the running one could run, said where a program reads it (from the timer's tick and
+ * each rest; a store only when it changes). rest_alone=0 (/sys/module/shaderemu_gpu/parameters) takes the mark
+ * away: every rest a system call, as before. */
+static bool rest_alone = true;
+module_param(rest_alone, bool, 0644);
+
+void shaderemu_gpu_crowd(void)
+{
+	u32 crowded = nr_running() > 1, mark = rest_alone ? REST_MARK : 0;
+
+	if (!workers)
+		return;
+	if (readl(workers + REST_CROWD + 4) != crowded)
+		writel(crowded, workers + REST_CROWD + 4);
+	if (readl(workers + REST_CROWD) != mark)
+		writel(mark, workers + REST_CROWD);
+}
+
+'''
+
+REST_MASK = '''	if (cmd == SHADEREMU_GPU_REST_MASK) {
+		u32 mask[8];
+		int i;
+
+		if (copy_from_user(mask, (void __user *)arg, sizeof(mask)))
+			return -EFAULT;
+		for (i = 0; i < 8; i++)
+			writel(mask[i], workers + REST_WAITING + 4 * i);
+		shaderemu_gpu_rest();
+		for (i = 0; i < 8; i++)
+			writel(0, workers + REST_WAITING + 4 * i);
+		return 0;
+	}
+'''
+
+
+REST_RELEASE = '''		/* a program that said what it waits for no longer does */
+		if (readl(workers + REST_DECLARED) == (u32)task_tgid_vnr(current))
+			writel(0, workers + REST_DECLARED);
+'''
+
+
+def rest(text):
+    """gpu_vm's rest: the words of the workers waited for, and whether a rest needs the kernel at all"""
+    for old, new in [
+        ('#define FIELD_JOB\t0x1900\n', '#define FIELD_JOB\t0x1900\n' + REST_WORDS),
+        ('static noinline void shaderemu_gpu_rest(void)\n', REST_CROWD + 'static noinline void shaderemu_gpu_rest(void)\n'),
+        ('\t\tyield();\n\tif (gvm_mfsr(time_lo) == pass)\n',
+         '\t\tyield();\n\tshaderemu_gpu_crowd();\n\tif (gvm_mfsr(time_lo) == pass)\n'),
+        ('\tif (cmd == SHADEREMU_GPU_REST) {\n', REST_MASK + '\tif (cmd == SHADEREMU_GPU_REST) {\n'),
+        ("\t\t/* the field's job of a program that dies with it out",
+         REST_RELEASE + "\t\t/* the field's job of a program that dies with it out"),
+    ]:
+        assert text.count(old) == 1, old
+        text = text.replace(old, new)
+    return text.replace('#include <asm/gvm.h>\n', '#include <asm/gvm.h>\n#include <linux/sched/stat.h>\n', 1)
+
+
 for source, directory, symbol, prompt, extra in DRIVERS:
     text = gvm(source, open(os.path.join(kernel, source)).read())
     if source == 'shaderemu_gpu.c':
-        text = nommu_area(text, 'shaderemu_gpu', 'GPU_PHYS', 'shaderemu_gpu_fops')
+        text = rest(nommu_area(text, 'shaderemu_gpu', 'GPU_PHYS', 'shaderemu_gpu_fops'))
     if source == 'shaderemu_sound.c':
         text = nommu_area(text, 'shaderemu_sound', 'SND_REGS', 'shaderemu_sound_fops')
     out = os.path.join(tree, directory, source)

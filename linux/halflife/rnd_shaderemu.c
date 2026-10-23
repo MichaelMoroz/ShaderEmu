@@ -203,7 +203,7 @@ void SE_RenderSettle( void )
 		hlglRingsServe();
 		if( piped && cls.state == ca_active )
 			S_ExtraUpdate();	// (what the frame's start and 2D mix after it is then short)
-		mcw_rest();
+		mcw_rest_for( &worker, 1 );	// (gpu_vm: the drawing's worker has the whole pass)
 	}
 	out = 0;
 	if( se_render_light_level[0] >= 0 )

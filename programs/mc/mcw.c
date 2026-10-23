@@ -186,9 +186,48 @@ void mcw_rest(void)
 {
 	static int none;	/* a kernel from before the rest: the pause hint, as it was */
 
+#ifdef __gpuvm__
+	/* (no other task to run: the pass ends here, no system call and nothing stored) */
+	if (page) {
+		const volatile uint32_t *crowd = (const volatile uint32_t *)(page + MC_CROWD_AT);
+		if (crowd[0] == MC_CROWD_MARK && crowd[1] == 0) {
+			mc_end_pass();
+			return;
+		}
+	}
+#endif
 	if (device >= 0 && !none && call6(29, device, MC_REST, 0, 0, 0, 0) == 0) return;
 	none = device >= 0;
 	mc_next_pass();
+}
+
+void mcw_rest_for(const int *workers, int n)
+{
+#ifdef __gpuvm__
+	volatile uint32_t *waiting = page ? (volatile uint32_t *)(page + MC_WAITING_AT) : 0;
+	uint32_t mask[8] = {0};
+	int i, any = 0;
+
+	for (i = 0; i < n; i++)
+		if (workers[i] >= 1 && workers[i] <= count && core_of[workers[i]]) {
+			int core = core_of[workers[i]];
+			mask[core / 32] |= 1u << (core % 32), any = 1;
+		}
+	if (waiting && any) {
+		static int declared;
+		if (!declared) {	/* (the tick holds the others to the first core's pass only for a program that says) */
+			declared = 1;
+			*(volatile uint32_t *)(page + MC_DECLARED_AT) = (uint32_t)call6(172, 0, 0, 0, 0, 0, 0);	/* getpid */
+		}
+		for (i = 0; i < 8; i++) waiting[i] = mask[i];
+	}
+	mcw_rest();
+	if (waiting && any)
+		for (i = 0; i < 8; i++) waiting[i] = 0;
+#else
+	(void)workers, (void)n;
+	mcw_rest();
+#endif
 }
 
 int mcw_most(void)

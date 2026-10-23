@@ -239,12 +239,12 @@ void SE_ServerSettle( void )
 	while( !mcw_done( worker ))
 	{
 		serve();
-		mcw_rest();
+		mcw_rest_for( &worker, 1 );	// (gpu_vm: the server's worker has the whole pass)
 		se_settle_passes++;
 	}
 	for( int i = 0; i < se_pack_helpers; i++ )
 		while( !mcw_done( helper[i] ))
-			mcw_rest();
+			mcw_rest_for( &helper[i], 1 );
 	se_pack_helpers = 0;
 	out = 0;
 	for( uint at = 0; at < work.used; at += Q_strlen( work.kept + at ) + 1 )

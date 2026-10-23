@@ -86,17 +86,21 @@ def rv_folder():
 def harness(machine, extra, log):
     """The command and folder for one run: machine 'rv' or a gpu_vm step's name."""
     q = ['pwsh', '-NoProfile', '-File', os.path.join(ROOT, 'tools', 'gpu_queue.ps1')]
+    rounds = []   # (NAME__rK: the machine NAME with K tick rounds a host frame, --tick-rounds K)
+    if '__r' in machine:
+        machine, k = machine.split('__r')
+        rounds = ['--tick-rounds', k]
     if machine == 'rv':
         # (from a snapshot the harness takes the full machine unless told: the no-MMU Linux runs without paging)
         return q + [os.path.join(RV_ROOT, 'bin', 'rvc_harness.exe'), '--d3d11', '--rvc', 'experiments/rvc_opt',
-                    '--define', 'NO_PAGING', '--image', 'linux-net', '--no-desktop', '--no-stdin', '--uart-log', log] + extra, rv_folder()
+                    '--define', 'NO_PAGING', '--image', 'linux-net', '--no-desktop', '--no-stdin', '--uart-log', log] + rounds + extra, rv_folder()
     a = q + [os.path.join(ROOT, 'bin', 'rvc_harness.exe'), '--gvm', GVM_IMAGE, '--no-viz', '--no-stdin', '--uart-log', log]
     if machine != 'gvm':   # a step of gpu_vm/tick/steps, or BATCH_VNNNN: the builder's build/tick_gen/BATCH/vNNNN.hlsl
         step = f'gpu_vm/tick/steps/{machine}.hlsl'
         if not os.path.exists(os.path.join(ROOT, step)) and '_v' in machine:
             step = 'build/tick_gen/%s/%s.hlsl' % tuple(machine.split('_', 1))
         a += ['--gvm-tick', step]
-    a += os.environ.get('GVM_EXTRA', '').split()   # (more of the harness's options, as --ticks N)
+    a += os.environ.get('GVM_EXTRA', '').split() + rounds   # (more of the harness's options, as --ticks N)
     return a + extra, ROOT
 
 
@@ -109,6 +113,7 @@ def save(a):
         log = os.path.join(CKPT, m, g + '.save.log')
         prompt = '/ # ' if m == 'rv' else '@gpuvm:~# '
         pre = '' if m == 'rv' else 'cd /; export TERM=linux; '
+        pre += os.environ.get('GVM_PRE', '')   # (commands before the game's: a kernel switch, say)
         # (GVM_SAVE_TICK: the tick that boots and saves, for an image whose code needs one: late branches, fx1)
         cmd, cwd = harness(os.environ.get('GVM_SAVE_TICK', 'x22') if m != 'rv' else m, ['--seconds', str(a.limit), '--expect', prompt, '--send', pre + G['cmd'] + '\\n',
                                '--until', G['mark'], '--save-state', snap], log)
@@ -125,7 +130,7 @@ def passes(path, machine):
     if not os.path.exists(path) or os.path.getsize(path) < 16:
         return None, {}
     d = np.fromfile(path, dtype=np.uint32).reshape(-1, 4)
-    if machine == 'rv':
+    if machine.split('__r')[0] == 'rv':
         n = d[:, 1].astype(np.int64)
         why = np.where(n >= 8192, -1, d[:, 2].astype(np.int64))
         names = {**WHY_RV, -1: 'budget'}
@@ -148,7 +153,7 @@ def bench(a):
     for r in range(a.rounds):
         for g in a.games.split(','):
             for m in machines:
-                snap = os.path.join(CKPT, 'rv' if m == 'rv' else GVM_CKPT, g + '.snap')
+                snap = os.path.join(CKPT, 'rv' if m.split('__r')[0] == 'rv' else GVM_CKPT, g + '.snap')
                 if not os.path.exists(snap):
                     print(f'{m} {g}: no checkpoint {snap}')
                     continue

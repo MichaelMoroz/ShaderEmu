@@ -85,6 +85,12 @@ int mcw_wait(int k);
  * as its idle loop does. With no workers open it is the pause hint. Not for a job.
  */
 void mcw_rest(void);
+/*
+ * The same, saying which workers (1 to mcw_count(), `n` of them) have the jobs the first core
+ * waits for: on gpu_vm the machine gives them their whole pass and holds the others to the
+ * first core's (gpu_vm/platform.md, "Resting"). Elsewhere it is mcw_rest().
+ */
+void mcw_rest_for(const int *workers, int n);
 /* Whether the code that asks is running on a worker. */
 int mcw_on_worker(void);
 /* Which worker runs the code that asks (1 to mcw_count()); 0 on the first core. */

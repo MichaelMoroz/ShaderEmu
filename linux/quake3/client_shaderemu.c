@@ -241,7 +241,11 @@ static void wait (unsigned frames)
 		start ();
 		if (made.frames >= frames)
 			break;	/* (no worker core: this one made them, there and then) */
-		mcw_rest ();
+		{
+			mcw_handle	on[2] = { job, side_out };
+
+			mcw_rest_on (on, 2);	/* (gpu_vm: those two have the whole pass) */
+		}
 		se_client_passes++;
 		SE_ServerPoll ();	/* (the server's frame is not kept waiting for this core's) */
 		SE_ScenePoll ();

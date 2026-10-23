@@ -122,6 +122,27 @@ Kconfig and Makefile entries (`install_drivers.py`'s) and the no-MMU mmap (`linu
 `linux/kernel/tick_input_hook.py` (input and the network polled from the tick). `gvm.dts` keeps the device window out
 of RAM; `gpuvm_defconfig` turns the drivers on.
 
+### Resting (gpu_vm only, 23 October 2026)
+
+A program's first core that waits for its workers rests (`mcw_rest`, the `REST` ioctl). On gpu_vm two words of the
+mailboxes' kernel page change what a rest costs and what the workers get:
+
+- **0x00c01130: { "REST" 0x54534552, crowded }**, the kernel's (`drivers.py`'s `rest()`, `shaderemu_gpu_crowd`): crowded is
+  `nr_running() > 1`, written from the timer's tick and after each `REST` ioctl's yield, a store only when it changes.
+  With the mark there and crowded 0, `mcw_rest` ends the pass by itself (`sync` in user mode): no system call, so none
+  of the trap's frame and the scheduler's stores before the pass ends. Crowded 1 is the ioctl as before (the kernel
+  yields to the others). A task woken meanwhile runs at the next tick at the latest (or at once, by the wake's
+  preemption). `echo 0 > /sys/module/shaderemu_gpu/parameters/rest_alone` takes the mark away: every rest a call.
+- **0x00c01100: eight words, a bit a core**, the workers the first core waits for (`mcw_rest_for(workers, n)`,
+  `mcw_rest_on(handles, n)` in `mcwx.h`, or the `REST_MASK` ioctl, `_IOW('G', 12, u32[8])`): set before the rest ends
+  the pass and 0 again after. The tick (the builder's `wad=5`) reads them when core 0's last pass ended on sync: a
+  worker whose bit is set has its whole budget, the others are held to core 0's bundles of that pass and a quarter.
+  All zero is the tick's rule without them. **0x00c01120** is the pid of the program that passes them (set at its first
+  `mcw_rest_for`, 0 again when it closes `/dev/gpu`, `drivers.py`'s release): the tick's `wad=6` caps the others on
+  full ends too only while it is set, so a later program that says nothing is not held. Quake III passes its client game's job and helper, the server's job and
+  its helpers, the scene's job; Half-Life its server's worker and helpers, the drawing's worker and the ring and
+  studio workers it polls; each where it waits for them.
+
 ## Tests
 
 - `gvm_cpu`: a bare-metal worker test (`gpu_vm/cpu/tests`), mctest under Linux, `GVM_RACES` 0 undone.

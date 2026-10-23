@@ -46,6 +46,16 @@
 // mailbox or start, and looks at the core's owner word after setting it: the kernel takes no
 // core of a program whose word is set, so what is written is never another program's.
 #define MC_POSTING_AT(tag) (0x1040u + 4u * ((tag) & 15u))
+// gpu_vm (gpu_vm/platform.md, "Resting"): eight words, a bit a core, the workers the first core
+// waits for while it rests (mcw_rest_for: set before the pass ends, 0 again after), which the
+// tick gives their whole pass; then a word, the pid of the program that says what it waits for
+// (set at its first mcw_rest_for, 0 again when it closes /dev/gpu); and the kernel's two words
+// { MC_CROWD_MARK, other tasks are runnable }: with the mark there and 0 a rest ends the pass
+// by itself, with no system call.
+#define MC_WAITING_AT 0x1100u
+#define MC_DECLARED_AT 0x1120u
+#define MC_CROWD_AT 0x1130u
+#define MC_CROWD_MARK 0x54534552u   // "REST"
 // (the texel at 0x1800 is the window system's for the kernel's pointer driver: linux/nanox/scr_shaderemu.c)
 // core k's 64 bytes: a job (core 0 writes it), its answer (the worker's), a fault (the
 // worker's, written by the machine) and the word that lets it go on (core 0's)

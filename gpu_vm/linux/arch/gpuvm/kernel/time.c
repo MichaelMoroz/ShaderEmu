@@ -17,6 +17,7 @@
 
 extern struct irq_domain *gvm_intc_domain;
 void gvm_console_tick(void);
+void shaderemu_gpu_crowd(void);
 
 static void gvm_set_tcmp(unsigned long long t)
 {
@@ -72,6 +73,9 @@ static irqreturn_t gvm_timer_interrupt(int irq, void *dev_id)
 	gvm_console_tick();	/* input is polled from the tick (no device interrupt) */
 #endif
 	ce->event_handler(ce);
+#ifdef CONFIG_SHADEREMU_GPU
+	shaderemu_gpu_crowd();	/* whether a program's rest needs the kernel (drivers.py, "rest") */
+#endif
 	return IRQ_HANDLED;
 }
 

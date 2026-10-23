@@ -73,6 +73,8 @@ mcw_handle mcw_call(mcw_fn fn, uint32_t a0, uint32_t a1);
 mcw_handle mcw_try_call(mcw_fn fn, uint32_t a0, uint32_t a1);
 int mcw_ready(mcw_handle h);
 uint32_t mcw_join(mcw_handle h);
+/* mcw_rest_for() the workers of these calls (handles of 0 or made here are passed over). */
+void mcw_rest_on(const mcw_handle *h, int n);
 
 /* ---- what a job may do (on the first core it is done at once) ---- */
 
