@@ -28,4 +28,5 @@ timed) and register-checked, then timed on the card in batches under 10 minutes;
 | 17 | Compiler bundling options (-gpuvm-sched-kind, -gpuvm-mask-select, -gpuvm-fnrel) | parked | unfinished patch in build/wip |
 | 18 | More registers for LLVM; spills and frames in the core's file | after 7 and 16 | |
 | 19 | 128-bit registers: SIMD (one opcode, four lanes) and lane-VLIW (an opcode a lane), predication by lane mask, 16-byte texel loads/stores | queued (builder; vector kernels from the bench) | |
+| 21 | Compiler density on real game code (Q3 workers 1.0-1.4 RISC-V instructions a bundle vs 2.3 on kernels): soft double from a dropped -fsingle-precision-constant (>=10.8% of Q3 worker bundles), one-op bundles 41.9%, globals through lpc 5.3%, calls 4.8%, memcpy 2.8% | in progress (bench) | toolchain fix: -cl-single-precision-constant |
 | 20 | Pass latency: Quake III is ~6.3 passes a frame with core 0 under a third of its budget (sync, system); per-pass fixed cost, worker budget size, dependency rounds per frame | modelling (bench) | the kernels are 1.5-1.9x RISC-V but Q3 0.79x |
