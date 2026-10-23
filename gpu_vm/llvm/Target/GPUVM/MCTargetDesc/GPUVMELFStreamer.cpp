@@ -41,12 +41,22 @@ static cl::opt<bool>
     NoPack("gpuvm-no-pack", cl::Hidden, cl::init(false),
            cl::desc("gpu_vm: one op a bundle (for debugging)"));
 
-static cl::opt<bool>
-    LateBr("gpuvm-late-br", cl::Hidden, cl::init(false),
+static cl::opt<std::string>
+    LateBr("gpuvm-late-br", cl::Hidden, cl::init("0"), cl::ValueOptional,
            cl::desc("gpu_vm: branches read their registers after the bundle's "
-                    "ops (a machine with gvm_machine.late)"));
+                    "ops (a machine with gvm_machine.late): 1 (or no value), "
+                    "or float: only in a bundle with a float op (late 2)"));
+static cl::opt<bool> FX1("gpuvm-fx1", cl::Hidden, cl::init(false),
+                         cl::desc("gpu_vm: op 1 takes float functions 0-23 "
+                                  "(the tick's FX1)"));
 
-bool llvm::GPUVM::lateBranches() { return LateBr; }
+unsigned llvm::GPUVM::lateBranches() {
+  const std::string &V = LateBr;
+  if (V == "float")
+    return 2;
+  return V == "1" || V == "true" || V.empty() ? 1 : 0;
+}
+bool llvm::GPUVM::fx1() { return FX1; }
 
 static GPUVMMCCodeEmitter &emitter(MCAssembler &A) {
   return static_cast<GPUVMMCCodeEmitter &>(A.getEmitter());
@@ -126,7 +136,7 @@ void GPUVMELFStreamer::putControl(const MCInst &Inst,
     break; // jr and callr read after the ops
   }
   // (late branches: a branch reads them as the ops left them, program order)
-  if (LateBr)
+  if (lateIn(Words))
     Read.clear();
   for (unsigned R : Read)
     if (R != 0 && writes(Words, R)) {

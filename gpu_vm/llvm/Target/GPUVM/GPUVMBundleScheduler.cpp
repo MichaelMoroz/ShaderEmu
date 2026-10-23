@@ -66,7 +66,10 @@ class GPUVMBundleStrategy : public MachineSchedStrategy {
   // early (a branch whose bundle writes one needs a bundle of its own).
   SmallVector<Register, 2> BranchRegs;
 
-  bool writesBranchReg(const SUnit *SU) const {
+  bool writesBranchReg(const SUnit *SU) {
+    // (late branches in a float bundle: a float writer may share the branch's)
+    if (GPUVM::lateBranches() == 2 && GPUVM::bundle::anyFloat(info(SU).Word))
+      return false;
     for (Register R : BranchRegs)
       if (SU->getInstr()->modifiesRegister(R, TRI))
         return true;
@@ -108,7 +111,7 @@ public:
 void GPUVMBundleStrategy::findBranchRegs() {
   BranchRegs.clear();
   MachineBasicBlock::iterator E = DAG->end();
-  if (GPUVM::lateBranches() || DAG->SUnits.empty() ||
+  if (GPUVM::lateBranches() == 1 || DAG->SUnits.empty() ||
       E == DAG->SUnits[0].getInstr()->getParent()->end() ||
       !GPUVMInstrInfo::isCondBranch(E->getOpcode()))
     return;

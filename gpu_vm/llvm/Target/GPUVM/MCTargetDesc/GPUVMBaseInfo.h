@@ -116,15 +116,21 @@ inline bool opIForm(unsigned Opc) { return (Opc >> 5) & 1; }
 // Functions (isa.h)
 constexpr unsigned IXnor = 7, ISll = 16, ISra = 18, IMidLast = 19,
                    ICommonLast = 23;
-constexpr unsigned FMad = 2, FMsb = 3, FNmsb = 5, FMax = 7;
+constexpr unsigned FMad = 2, FMsb = 3, FNmsb = 5, FMax = 7, FRound = 23;
 constexpr unsigned MStore = 1, MStoreX = 3;
 constexpr unsigned WW = 0, WH = 2, WB = 3, WHU = 6, WBU = 7;
 
 // The machine's late branches (gvm_machine.late, gvm_asm.h's late_br; the
 // tick's LATEBR): a conditional branch and addbnz read their registers after
 // the bundle's ops, so a branch on a register an op of its bundle writes need
-// not open a bundle of its own (-gpuvm-late-br; GPUVMELFStreamer.cpp).
-bool lateBranches();
+// not open a bundle of its own (-gpuvm-late-br; GPUVMELFStreamer.cpp). 0: no,
+// 1: yes, 2: only in a bundle with a float op (gvm_machine.late 2,
+// GvmAsm::late_float; -gpuvm-late-br=float).
+unsigned lateBranches();
+// The tick's FX1 (GvmAsm::fx1): op 1 takes any float function up to round
+// (compares, sign ops, frac, conversions, floor...), not only 0-7
+// (-gpuvm-fx1).
+bool fx1();
 
 // ---- The packing rules, as gvm_asm.h has them, on op words.
 namespace bundle {
@@ -149,7 +155,15 @@ inline bool floatOp(uint32_t Op) {
   unsigned O = opOpc(Op);
   return opClass(O) == 3 && !(opIForm(O) && madLike(O & 31));
 }
-inline bool fLite(uint32_t Op) { return floatOp(Op) && fn(Op) <= FMax; }
+inline bool fLite(uint32_t Op) {
+  return floatOp(Op) && fn(Op) <= (fx1() ? FRound : FMax);
+}
+inline bool anyFloat(uint32_t Op) { return opClass(opOpc(Op)) == 3; }
+// A branch whose register an op of Ops writes reads it as the ops left it
+inline bool lateIn(ArrayRef<uint32_t> Ops) {
+  unsigned L = lateBranches();
+  return L == 1 || (L == 2 && llvm::any_of(Ops, anyFloat));
+}
 // x18: sel (integer R function 25) and lpc (extended 0x0e) are path 1's op 0
 inline bool selLpc(uint32_t Op) {
   return opOpc(Op) == 0x40 + 25 || opOpc(Op) == 0x0e;
