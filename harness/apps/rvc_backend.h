@@ -86,6 +86,9 @@ class RvcBackend {
 public:
     // The GPU device's passes to draw in the next frame, one bit each (docs/machine/gpu.md); pass 0 always.
     uint32_t gpuPasses = 1;
+    // RVC_LIST_LAZY=1 (opt-in): passes the GPU device's list is still drawn in, set when a readback saw a list submitted
+    // (GPU_CTRL's submit word); with the option the list is drawn only then (gvm's GVM_LIST_LAZY, for like comparisons)
+    int listDue = 0;
     // Whether the machine's geometry has any worker (the harness reads its texel back with the
     // control words): while it has none, and is not being laid out, nothing of the workers'
     // is drawn or copied, which is a third of what a pass costs besides its instructions.

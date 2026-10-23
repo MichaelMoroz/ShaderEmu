@@ -258,7 +258,10 @@ public:
         if (rounds > 1) { mat.setInt("_TimePass", 0); mat.setInt("_ZapKind", (int)zapKind); }
         if (timeIt) gpu_.ctx->End(tsQuery_[2].Get());
         if (gpuPasses_.size() == 2 && !freeze) {
-            gpuDraw(mat);
+            if (!listLazy() || listDue > 0) {   // (RVC_LIST_LAZY: only while a list is due)
+                gpuDraw(mat);
+                if (listDue > 0) listDue--;
+            }
             bool mixed = soundMix && !soundPasses_.empty();
             if (mixed) soundDraw(mat, tag);   // before the control zone moves the voices on
             bool merge = countsAdded && (!cpuMode || computeMode);   // (--cpu: the interpreter adds them up itself)
@@ -835,7 +838,10 @@ private:
         prof_.mark(ctx);
         if (timeIt) ctx->End(tsQuery_[2].Get());
         if (gpuPasses_.size() == 2) {
-            gpuDraw(mat);
+            if (!listLazy() || listDue > 0) {   // (RVC_LIST_LAZY: only while a list is due)
+                gpuDraw(mat);
+                if (listDue > 0) listDue--;
+            }
             bool mixed = soundMix && !soundPasses_.empty();
             if (mixed) soundDraw(mat, tag);   // before the control zone moves the voices on
             bool merge = countsAdded && !cpuMode;
@@ -878,6 +884,7 @@ private:
         return true;
     }
 
+    static bool listLazy() { static const bool on = getenv("RVC_LIST_LAZY") && atoi(getenv("RVC_LIST_LAZY")) != 0; return on; }
     bool ensureQueries() {
         if (!tsDisjoint_) {
             D3D11_QUERY_DESC qd{D3D11_QUERY_TIMESTAMP_DISJOINT, 0};

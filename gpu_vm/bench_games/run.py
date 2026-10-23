@@ -115,7 +115,8 @@ def harness(machine, extra, log):
         rounds = ['--tick-rounds', k]
     if machine == 'rv':
         # (from a snapshot the harness takes the full machine unless told: the no-MMU Linux runs without paging)
-        return q + [os.path.join(RV_ROOT, 'bin', 'rvc_harness.exe'), '--d3d11', '--rvc', 'experiments/rvc_opt',
+        # (RV_EXE: another harness for the RISC-V machine, this worktree's bin/rvc_harness.exe for RVC_LIST_LAZY say)
+        return q + [os.environ.get('RV_EXE', os.path.join(RV_ROOT, 'bin', 'rvc_harness.exe')), '--d3d11', '--rvc', 'experiments/rvc_opt',
                     '--define', 'NO_PAGING', '--image', 'linux-net', '--no-desktop', '--no-stdin', '--uart-log', log] + rounds + extra, rv_folder()
     a = q + [os.path.join(ROOT, 'bin', 'rvc_harness.exe'), '--gvm', GVM_IMAGE, '--no-viz', '--no-stdin', '--uart-log', log]
     if machine != 'gvm':   # a step of gpu_vm/tick/steps, or BATCH_VNNNN: the builder's build/tick_gen/BATCH/vNNNN.hlsl
