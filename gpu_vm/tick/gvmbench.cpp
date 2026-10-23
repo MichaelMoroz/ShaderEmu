@@ -434,13 +434,13 @@ static bool check_case(Gpu& gpu, const Case& cs, uint32_t seed, bool verbose) {
         m.time = 1000 + (uint64_t)refPasses;
         rc[0].ext = ext_on(refPasses);
         busy = busyNext; busyNext = 0; const int e0 = end0; const uint32_t n0 = bun0;   // (core 0's last pass, as the tick reads it)
-        uint32_t wm[8] = {0};   // (WAD 5: the kernel's REST mask at 0x00c01100, as the last commit left it)
+        uint32_t wm[8] = {0};   // (WAD 5, 6: the kernel's REST mask at 0x00c01100, as the last commit left it)
         bool wgiven = false;
-        if (g_gg.wad == 5) for (int k = 0; k < 8; k++) { wm[k] = m.ram[0x00c01100 / 4 + k]; wgiven |= wm[k] != 0; }
+        if (g_gg.wad >= 5) for (int k = 0; k < 8; k++) { wm[k] = m.ram[0x00c01100 / 4 + k]; wgiven |= wm[k] != 0; }
         for (uint32_t c = 0; c < cs.cores; c++) if (!rc[c].halted) {   // (a worker's budget: the tick's WSH and WAD)
             uint32_t b = c == 0 ? T : T >> g_gg.wsh;
-            bool cap5 = g_gg.wad == 5 && e0 == GVM_END_SYNC && wgiven && !((wm[c >> 5] >> (c & 31)) & 1);
-            if (c != 0 && g_gg.wad && ((((g_gg.wad == 1 || g_gg.wad == 4) && e0 == GVM_END_SYNC) || e0 == GVM_END_FULL) && (g_gg.wad != 4 || busy < 4) || cap5)) b = std::min(b, std::max(g_gg.wad == 3 ? b >> 1 : 512u, n0 + (n0 >> 2)));
+            bool cap5 = g_gg.wad >= 5 && e0 == GVM_END_SYNC && wgiven && !((wm[c >> 5] >> (c & 31)) & 1);
+            if (c != 0 && g_gg.wad && ((((g_gg.wad == 1 || g_gg.wad == 4) && e0 == GVM_END_SYNC) || (e0 == GVM_END_FULL && g_gg.wad != 5)) && (g_gg.wad != 4 || busy < 4) || cap5)) b = std::min(b, std::max(g_gg.wad == 3 ? b >> 1 : 512u, n0 + (n0 >> 2)));
             int e = gvm_run(&m, &rc[c], b); any = true;
             if (c == 0) { end0 = e; bun0 = b - rc[0].left; }
             if (c >= 1 && c <= 8) busyNext += e == GVM_END_BUDGET;

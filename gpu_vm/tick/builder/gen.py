@@ -46,6 +46,8 @@ DEFAULTS = dict(
     cv=0,               # the commit reads one state texture a texel (a switch), an entry's value only when it is drawn
     wsh=0,              # a worker's budget a pass: core 0's (_Ticks) >> wsh
     wad=0,              # 1: a worker's budget core 0's bundles of the last pass (+1/4, 512 at least) when that pass ended core 0 on sync or full
+                        # (2 on full only; 3 as 2, half the budget at least; 4 as 1 unless the workers are busy; 5 on sync for
+                        #  the workers outside the kernel's REST mask at WAITW, no mask no cap; 6 as 5 and on full as 2)
     ov=0,               # overflow entries after the buckets: a store whose two buckets are full takes one (searched only then)
     fx1=0,              # phase 3: op 1 takes any float function but the special ones (compares, sign, conversions; gvm_asm.h fx1)
     late=0,             # phase 3: a conditional branch reads its registers after the bundle's ops (no op-less bundle before it)
@@ -70,7 +72,7 @@ SPACE = dict(   # the values a search draws from
     fetch=['both', 'one'], int_first=[0, 1], mem_order=['35', '4'], split=['branch', 'flatten'],
     block=[(8, 8), (16, 4), (4, 16), (8, 4), (4, 8), (32, 2), (16, 8), (8, 16), (32, 4), (64, 1), (32, 1), (16, 2)],
     bandx=[1, 2], per=[16, 32, 64, 128], jrow=[0, 1], perm=['id', 'bitrev', 'mul'], mul=[3, 5, 37, 77],
-    early=[0, 1, 2, 3], mru=[0, 1, 2, 4], bb=[0, 1], tfirst=[0, 1], s6=[0, 1], nc=[0, 1], thin=[0, 1], thin8=[0, 1], wide3=[0, 1, 2], late=[0, 1, 2, 3], fx1=[0, 1], ov=[0, 4, 8, 16], cv=[0, 1, 2], wsh=[0, 1, 2, 3], wad=[0, 1, 2, 3, 4, 5], s12b=[0, 1, 2, 3], s12in=[0, 1], rc=[0, 1, 2], dtx=['both', 'one'], rpk=['scalar', 'vec', 'wide'], pk=['scalar', 'vec', 'aos'], lay=['split', 'merged'],
+    early=[0, 1, 2, 3], mru=[0, 1, 2, 4], bb=[0, 1], tfirst=[0, 1], s6=[0, 1], nc=[0, 1], thin=[0, 1], thin8=[0, 1], wide3=[0, 1, 2], late=[0, 1, 2, 3], fx1=[0, 1], ov=[0, 4, 8, 16], cv=[0, 1, 2], wsh=[0, 1, 2, 3], wad=[0, 1, 2, 3, 4, 5, 6], s12b=[0, 1, 2, 3], s12in=[0, 1], rc=[0, 1, 2], dtx=['both', 'one'], rpk=['scalar', 'vec', 'wide'], pk=['scalar', 'vec', 'aos'], lay=['split', 'merged'],
     xr=[0, 64, 128, 256, 512, 1024], npair=[0, 32, 64, 128], xbind=[0, 1], xload=['pre', 'lazy'], xfast=[0, 1],
 )
 
@@ -652,8 +654,8 @@ def frag(P):
     bud = core == 0 ? _Ticks : _Ticks >> WSH;   // (wsh)
     [branch] if (WAD != 0 && core != 0) {   // (wad: the pass ends about when core 0's does)
         uint4 z = state_in(19, 0);
-        bool cap = WAD == 1 || WAD == 4 ? z.w == E_SYNC || z.w == E_FULL : z.w == E_FULL;   // (5 as 2 when no mask is given)   // (2, 3: core 0 had work: its cache was full)
-        [branch] if (WAD == 5 && z.w == E_SYNC) {   // (5: core 0 rested: the workers it waits for, from the kernel's word at WAITW)
+        bool cap = WAD == 1 || WAD == 4 ? z.w == E_SYNC || z.w == E_FULL : WAD != 5 && z.w == E_FULL;   // (2, 3, 6: core 0 had work: its cache was full; 5 never then)
+        [branch] if ((WAD == 5 || WAD == 6) && z.w == E_SYNC) {   // (5, 6: core 0 rested: the workers it waits for, from the kernel's word at WAITW; no mask, no cap)
             uint4 m0 = ram(WAITW >> 4), m1 = ram((WAITW >> 4) + 1);
             uint4 mm = (core >> 7) != 0 ? m1 : m0;
             bool given = any((m0 | m1) != 0), mine = ((pick(mm, (core >> 5) & 3) >> (core & 31)) & 1) != 0;
