@@ -99,9 +99,13 @@ DEFAULTS = dict(
     rmap=0,             # where texel t lies in RAM's and the ROM's textures: 0 row-major 8192 wide, 1 strips 512 x 4096 (isa.h GVM_STRIP_X; IDEAS 35),
                         # 2 pairs: texels 2k and 2k + 1 one above the other, a 32-byte sector (GVM_PAIR_X; IDEAS 40)
     cc0f=0,             # a cc 0 bundle (j, call, jr, callr) whose ops are path 7's, 3's or 5's runs the fast step's body (fstep_c), not step12
+    evmax=8,            # (evf 2) compactions a pass at most
     evf=0,              # a store that finds both buckets full first drops their entries whose words are RAM's (each entry's texel fetched and
                         # compared; nothing a load could see changes), then takes a freed way: silent stores' entries cost room only until
                         # the cache is full. A lookup takes a matching way before a free one (a dropped entry leaves a hole before a mate)
+                        # 2: the same out of the fast loop: a pass that would end full drops every entry that holds RAM's words, packs the
+                        # buckets again (no hole before a resident, none in a texel's first bucket while it lies in its second), places
+                        # the store that found no room and goes on (EVMAX times a pass at most); the lookups as they were
 )
 
 SPACE = dict(   # the values a search draws from
@@ -111,7 +115,7 @@ SPACE = dict(   # the values a search draws from
     bandx=[1, 2], per=[16, 32, 64, 128], jrow=[0, 1], perm=['id', 'bitrev', 'mul'], mul=[3, 5, 37, 77],
     early=[0, 1, 2, 3], mru=[0, 1, 2, 4], bb=[0, 1], tfirst=[0, 1], s6=[0, 1], nc=[0, 1], thin=[0, 1], thin8=[0, 1], wide3=[0, 1, 2], late=[0, 1, 2, 3], fx1=[0, 1], ov=[0, 4, 8, 16], mv=[0, 1], cv=[0, 1, 2], wsh=[0, 1, 2, 3], wad=[0, 1, 2, 3, 4, 5, 6, 7], s12b=[0, 1, 2, 3], s12in=[0, 1], rc=[0, 1, 2], dtx=['both', 'one'], rpk=['scalar', 'vec', 'wide'], pk=['scalar', 'vec', 'aos'], lay=['split', 'merged'],
     xr=[0, 64, 128, 256, 512, 1024], npair=[0, 32, 64, 128], xbind=[0, 1], xload=['pre', 'lazy'], xfast=[0, 1],
-    pf=[0, 1, 2], pft=[0, 4, 8, 16], pfd=[1, 2], lpf=[0, 128, 256, 512, 1024], lps=[0, 64, 128, 256], s12pf=[0, 1], ldf=[0, 1], cc0f=[0, 1], evf=[0, 1], cc0x=[0, 1, 2, 3], m6seq=[0, 1], snk=[0, 1], rmap=[0, 1, 2], sil=[0, 1, 2, 3], silp=[1, 2, 3, 4, 8, 12, 15], mflat=[0, 1, 2, 3, 6, 7, 10],
+    pf=[0, 1, 2], pft=[0, 4, 8, 16], pfd=[1, 2], lpf=[0, 128, 256, 512, 1024], lps=[0, 64, 128, 256], s12pf=[0, 1], ldf=[0, 1], cc0f=[0, 1], evf=[0, 1, 2], cc0x=[0, 1, 2, 3], m6seq=[0, 1], snk=[0, 1], rmap=[0, 1, 2], sil=[0, 1, 2, 3], silp=[1, 2, 3, 4, 8, 12, 15], mflat=[0, 1, 2, 3, 6, 7, 10],
 )
 
 def layout(P):
@@ -191,7 +195,7 @@ static const uint WCN = {L['WCN']};         // write cache entries: 8 * NB in bu
 static const uint WCS = WCN - 2;
 static const uint MV = {P.get('mv', 0)};   // (mv: the move on a full pair of buckets)
 static bool mvok = false;   // (mv: on for a store's lookup whose store fills the slot it frees: a free way must not hide its bucket's texel in the other)
-{"static bool evok = false;   // (evf: on for a store's lookup: a full pair of buckets drops its entries that hold RAM's words)" + chr(10) if P.get('evf', 0) else ''}static const uint OV = {P.get('ov', 0)}, OVB = 8 * NB;   // overflow entries from OVB, searched when both buckets are full
+{"static bool evok = false;   // (evf: on for a store's lookup: a full pair of buckets drops its entries that hold RAM's words)" + chr(10) if P.get('evf', 0) == 1 else ''}static const uint OV = {P.get('ov', 0)}, OVB = 8 * NB;   // overflow entries from OVB, searched when both buckets are full
 static const uint NONE = 0xffffffffu;
 static const uint RAM_W = 8192;
 static const uint T_WC = {L['T_WC']};
@@ -354,7 +358,7 @@ uint wc_b2(uint t) {{ return NB + ((t * 0x85ebca6bu + 0x165667b1u) >> {32 - lg})
         h += f'''
 uint wc_b3(uint t) {{ return (t * 0xc2b2ae35u + 0x27d4eb2fu) >> {32 - lo}; }}'''
     look = "st || ((ad >> 4) & bloom) == (ad >> 4)" if P['bloom'] else 'true'
-    evf = P.get('evf', 0)
+    evf = P.get('evf', 0) == 1
     ll = ("""    uint ka_ = firstbitlow(msk | 16u), kb_ = firstbitlow((msk >> 4) | 16u);   // (ll) a bucket's ways fill in order: the first
     bool am = ka_ < 4 && pick(m.A, ka_ & 3) != NONE, bm = kb_ < 4 && pick(m.B, kb_ & 3) != NONE;   // match or free is its fill
     uint k = am ? ka_ : bm ? 4 + kb_ : kb_ < ka_ ? 4 + kb_ : ka_ < 4 ? ka_ : 8u;   // a new texel to the less full bucket
@@ -723,6 +727,7 @@ def sil_text(P, src):
 def evf_text(P, src):
     '''evf: evok on for the stores' lookups (paths 3, 5 and 6, step12, the general step's stores)'''
     if not P.get('evf', 0): return src
+    if P['evf'] == 2: return evf2_text(P, src)
     assert not (P.get('mru', 0) or P.get('bb', 0) or P.get('mv', 0) or P.get('ov', 0) or P.get('ll', 0) or P.get('m6seq', 0) or P.get('ovh', 0)), 'evf: a plain cache'
     def rep(a, b, n=1):
         nonlocal src
@@ -735,6 +740,71 @@ def evf_text(P, src):
     rep("mvok = MV != 0 && st1; mfind(m1); mvok = false;", "mvok = MV != 0 && st1; evok = st1; mfind(m1); mvok = false; evok = false;")
     rep("        mop m = mread(t.x, i0, A0, B0);", "        evok = (t.x & op_bit(8)) != 0; mop m = mread(t.x, i0, A0, B0); evok = false;")
     rep("        mop lk = mlook(wi << 2, true);", "        evok = true; mop lk = mlook(wi << 2, true); evok = false;")
+    return src
+
+EVF2 = """static uint evn;   // (evf 2: this pass's compactions)
+void ev_move(uint f, uint to) {   // (evf 2) entry f to the free entry to
+    wt[to] = wt[f]; wd[4 * to] = wd[4 * f]; wd[4 * to + 1] = wd[4 * f + 1]; wd[4 * to + 2] = wd[4 * f + 2]; wd[4 * to + 3] = wd[4 * f + 3];
+    wt[f] = NONE;
+}
+void ev_pack(uint b0, uint b1) {   // (evf 2) buckets b0 to b1 - 1: their residents to the front, in order
+    uint b, w;
+    [loop] for (b = b0; b < b1; b++) {
+        uint k = 4 * b;
+        [loop] for (w = 0; w < 4; w++) [branch] if (wt[4 * b + w] != NONE) { [branch] if (k != 4 * b + w) ev_move(4 * b + w, k); k++; }
+    }
+}
+uint ev_free(uint b) { uint4 q = bucket(b); return q.x == NONE ? 4 * b : q.y == NONE ? 4 * b + 1 : q.z == NONE ? 4 * b + 2 : q.w == NONE ? 4 * b + 3 : NONE; }
+bool compact() {   // (evf 2) a full write cache: drop the entries that hold RAM's words, pack, place the stores that found no room
+    uint g, j, n = 0;
+    [loop] for (g = 0; g < 8 * NB; g += 8) {
+        uint4 v[8];
+        [unroll] for (j = 0; j < 8; j++) { uint tg = wt[g + j]; v[j] = ram(tg & 0x0fffffffu); }
+        [unroll] for (j = 0; j < 8; j++) {
+            uint e = g + j, tg = wt[e], mk = tg >> 28;
+            bool eq = tg != NONE && ((mk & 1) == 0 || wd[4 * e] == v[j].x) && ((mk & 2) == 0 || wd[4 * e + 1] == v[j].y)
+                   && ((mk & 4) == 0 || wd[4 * e + 2] == v[j].z) && ((mk & 8) == 0 || wd[4 * e + 3] == v[j].w);
+            [flatten] if (eq) wt[e] = NONE;
+            n += eq ? 1u : 0u;
+        }
+    }
+    [branch] if (n == 0) return false;
+    ev_pack(0, 2 * NB);
+    [loop] for (g = 4 * NB; g < 8 * NB; g++) {   // a second bucket's resident whose first bucket has room moves there
+        uint tg = wt[g];
+        [branch] if (tg != NONE) { uint f = ev_free(wc_b1(tg & 0x0fffffffu)); [branch] if (f != NONE) ev_move(g, f); }
+    }
+    ev_pack(NB, 2 * NB);
+    bool ok = true;
+    [loop] for (g = WCS; g < WCS + 2; g++) {   // the stores that found no room: their texel's first bucket, else its second
+        uint tg = wt[g];
+        [branch] if (tg != NONE) {
+            uint t = tg & 0x0fffffffu, f = ev_free(wc_b1(t));
+            f = f != NONE ? f : ev_free(wc_b2(t));
+            [branch] if (f != NONE) ev_move(g, f); else ok = false;
+        }
+    }
+    return ok;
+}
+"""
+
+def evf2_text(P, src):
+    """evf 2: compact() before run(), and run's loop goes on after a full end that it frees"""
+    assert not (P.get('mru', 0) or P.get('bb', 0) or P.get('mv', 0) or P.get('ov', 0) or P.get('ll', 0) or P.get('ovh', 0) or P.get('rmap', 0)), 'evf 2: a plain cache'
+    def rep(a, b):
+        nonlocal src
+        assert src.count(a) == 1, 'evf 2: ' + a[:70]
+        src = src.replace(a, b)
+    N = chr(10)
+    rep("void run(uint budget) {", EVF2 + "void run(uint budget) {")
+    a = "    uint guard = budget + 8;   // a hard cap on the trips of both loops, whatever the budget does" + N
+    rep(a, a + "    uint rb = budget, c0 = cycle;   // (evf 2)" + N + "    evn = 0;" + N)
+    a = "        else [branch] if (budget > 0) budget = general(budget);" + N + "    }" + N
+    rep(a, a[:-6] + N.join([
+        "        [branch] if (budget == 0 && cycle - c0 < rb && (endr == E_BUDGET || endr == E_FULL) && evn < %du) {   // (evf 2) a full end: room made, the pass goes on" % P.get('evmax', 8),
+        "            evn++;",
+        "            [branch] if (compact()) { endr = E_BUDGET; budget = rb - (cycle - c0); guard = budget + 8; }",
+        "        }", "    }", ""]))
     return src
 
 def cc0x_text(P, src):
@@ -1279,8 +1349,17 @@ def parse_kv(args):
 if __name__ == '__main__':
     if len(sys.argv) < 2:
         print(__doc__); sys.exit(1)
-    P = parse_kv(sys.argv[2:])
+    args = sys.argv[2:]   # name=value ..., or a manifest (its params) and then name=value over them
+    P = json.load(open(args.pop(0)))['params'] if args and args[0].endswith('.json') else {}
+    P.update(parse_kv(args))
     src = emit(P)
+    isa = os.path.normpath(os.path.join(HERE, '..', '..', 'isa.h'))
+    try:   # a tick inside the tree includes isa.h by a relative path (a step of gpu_vm/tick/steps, say), others by the absolute one
+        rel = os.path.relpath(isa, os.path.dirname(os.path.abspath(sys.argv[1])))
+    except ValueError:
+        rel = None
+    if rel and not rel.startswith(os.pardir * 4):
+        src = src.replace('#include "%s"' % isa.replace(os.sep, '/'), '#include "%s"' % rel.replace(os.sep, '/'), 1)
     with open(sys.argv[1], 'w', newline='\n') as f: f.write(src)
     m = manifest(P)
     with open(os.path.splitext(sys.argv[1])[0] + '.json', 'w') as f: json.dump(m, f, indent=1)
