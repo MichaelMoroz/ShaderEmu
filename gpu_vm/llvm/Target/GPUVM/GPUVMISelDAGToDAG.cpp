@@ -15,6 +15,7 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/TargetInstrInfo.h"
 #include "llvm/CodeGen/SelectionDAGISel.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 
@@ -82,6 +83,11 @@ bool GPUVMDAGToDAGISel::runOnMachineFunction(MachineFunction &MF) {
   return true;
 }
 
+static cl::opt<bool> SymIndex(
+    "gpuvm-sym-index", cl::Hidden, cl::init(true),
+    cl::desc("gpu_vm: (x + symbol) + k as one access, k(x) with the symbol "
+             "in the immediate"));
+
 // base + imm32: the immediate a constant or a symbol's address (+ offset).
 bool GPUVMDAGToDAGISel::selectAddrRI(SDValue Addr, SDValue &Base,
                                      SDValue &Offset) {
@@ -108,7 +114,7 @@ bool GPUVMDAGToDAGISel::selectAddrRI(SDValue Addr, SDValue &Base,
     // A symbol and an offset: one immediate (from r0, or under PIC from the
     // function's address).
     SDValue SymBase = CurDAG->getRegister(GPUVM::R0, VT), S = B;
-    if (B.getOpcode() == ISD::ADD && isSymbol(B.getOperand(1))) {
+    if (SymIndex && B.getOpcode() == ISD::ADD && isSymbol(B.getOperand(1))) {
       SymBase = B.getOperand(0);
       S = B.getOperand(1);
     }

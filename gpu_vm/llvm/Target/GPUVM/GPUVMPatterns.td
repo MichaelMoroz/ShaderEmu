@@ -189,7 +189,8 @@ def : Pat<(not (xor (i32 GPR:$a), (i32 GPR:$b))), (XNOR GPR:$a, GPR:$b)>;
 // By default a shift and a mask, a shift and an add, two shifts are made;
 // -gpuvm-general-ops takes the one op instead.
 def GeneralOps : Predicate<"llvm::gpuvmGeneralOps()">;
-def NoGeneralOps : Predicate<"!llvm::gpuvmGeneralOps()">;
+def XorEqP : Predicate<"llvm::gpuvmXorEq()">;
+def NoXorEq : Predicate<"!llvm::gpuvmXorEq()">;
 def MaskSelect : Predicate<"llvm::gpuvmMaskSelect()">;
 def lowmask : ImmLeaf<i32, [{ return isMask_32((uint32_t)Imm); }]>;
 let Predicates = [GeneralOps], AddedComplexity = 1 in {
@@ -268,13 +269,13 @@ def : Pat<(seteq (i32 GPR:$a), 0), (SLTUI GPR:$a, 1)>;
 def : Pat<(setne (i32 GPR:$a), 0), (SLTU (i32 R0), GPR:$a)>;
 }
 // a == b, a != b: xor and sltu (two fast ops) rather than seq/sne
-let Predicates = [GeneralOps] in {
+let Predicates = [NoXorEq] in {
 def : Pat<(seteq (i32 GPR:$a), (i32 GPR:$b)), (SEQ GPR:$a, GPR:$b)>;
 def : Pat<(seteq (i32 GPR:$a), imm32:$i), (SEQI GPR:$a, imm32:$i)>;
 def : Pat<(setne (i32 GPR:$a), (i32 GPR:$b)), (SNE GPR:$a, GPR:$b)>;
 def : Pat<(setne (i32 GPR:$a), imm32:$i), (SNEI GPR:$a, imm32:$i)>;
 }
-let Predicates = [NoGeneralOps] in {
+let Predicates = [XorEqP] in {
 def : Pat<(seteq (i32 GPR:$a), (i32 GPR:$b)),
           (SLTUI (XOR GPR:$a, GPR:$b), 1)>;
 def : Pat<(seteq (i32 GPR:$a), imm32:$i), (SLTUI (XORI GPR:$a, imm32:$i), 1)>;

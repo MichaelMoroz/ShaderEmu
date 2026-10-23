@@ -220,6 +220,12 @@ static cl::opt<bool> GeneralOps(
              "would do (fewer ops, but the tick's general step)"));
 bool llvm::gpuvmGeneralOps() { return GeneralOps; }
 
+static cl::opt<bool> XorEq(
+    "gpuvm-xor-eq", cl::Hidden, cl::init(true),
+    cl::desc("gpu_vm: a == b and a != b as xor and sltu (two fast ops) "
+             "rather than seq and sne"));
+bool llvm::gpuvmXorEq() { return XorEq && !GeneralOps; }
+
 static cl::opt<bool> MaskSelect(
     "gpuvm-mask-select", cl::Hidden, cl::init(false),
     cl::desc("gpu_vm: an integer select as lite ops on a mask of its 0 or 1 "
