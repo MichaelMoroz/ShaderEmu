@@ -1,0 +1,4 @@
+# x23: the plain step (x23w's BLOOM 1) against x22 and x21
+x21       gpu_vm/tick/steps/x21.hlsl
+x22       gpu_vm/tick/steps/x22.hlsl
+x23       gpu_vm/tick/steps/x23.hlsl

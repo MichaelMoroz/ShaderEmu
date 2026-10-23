@@ -1,0 +1,3 @@
+# x23d: x22 against x23w BLOOM 1 (the many-core cases, --cores 255)
+x22       gpu_vm/tick/steps/x22.hlsl
+w1        gpu_vm/tick/steps/x23w.hlsl -D BLOOM=1

@@ -529,3 +529,48 @@ harness and user code, not the kernel.
 
 Many cores: in gvmbench lockstep cores scale nearly linearly to 64 (p_int 8 cores 7.9x, CoreMark one copy 32 cores
 30x); different programs on neighbouring rows (quads hold two cores) or copies at different addresses cost 1.5-2x.
+
+## x23: the write cache in buckets, read by the word (23 October 2026; RTX 5070 Laptop)
+
+x22's write cache cost every memory op two 16-byte texels of local memory, and Half-Life ended 90% of its passes on a
+full cache at about 2,100 bundles. x23 (`x23.hlsl`, no switch) keeps x22's state layout (258 entries in 363 texels: the
+entries' texels from T_WC, their tags four a texel, `NTEX` 363), so the harness, the commit and the control pass are as
+for x22. What changed is how the tick finds and fills an entry:
+- **Buckets of four ways**: two tables of 32 buckets (entry e is bucket e / 4, way e % 4) with their own hashes
+  (`(t ^ t >> 5 ^ t >> 10) & 31`; mem.h's L1_H1); a texel takes the first entry of its two buckets that is its own or
+  empty, then the two overflow slots and the pass ends. x22's single entries filled about half before two collided.
+- **Read by the word**: the data is an array of words; a lookup reads the eight tags, then only the word that hits (the
+  sink entry on a miss); a store writes one word and its tag. A pair's second op is looked up with the first's new tag.
+- **The bloom word** (mem.h's `mem_cache_bloom`): the stored texels' numbers ORed; a load whose texel has a bit outside it
+  reads no tags.
+
+Batches on the card (`variants/x23a-d.txt`, `x23.txt`; loops in M instructions/s, real code ns a bundle):
+
+| | arith | loads | stores | mix | stride | CoreMark | gzip | gunzip | mc_int 255 | mc_load 255 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| x21 | 20.44 | 11.52 | 10.68 | 17.54 | 13.96 | 175.1 | 224.7 | 179.1 | 1.56 | 2.51 |
+| x22 | 20.50 | 9.81 | 7.86 | 15.74 | 10.71 | 185.2 | 257.6 | 211.8 | 1.56 | 3.16 |
+| x23v DREAD 0 (both words read, x22's tables) | 20.22 | 10.62 | 8.30 | 16.43 | 11.52 | 174.1 | 240.1 | 204.5 | | |
+| x23v DREAD 1 (the tags, then the word) | 20.40 | 10.25 | 8.63 | 16.52 | 13.43 | 159.1 | 205.0 | 174.8 | | |
+| x23v DREAD 0, BLOOM 1 | 20.22 | 10.17 | 8.19 | 15.89 | 13.05 | 179.9 | 231.3 | 182.0 | | |
+| x23w (buckets), BLOOM 0 | 19.86 | 7.91 | 6.61 | 15.56 | 12.98 | 184.9 | 222.8 | 196.0 | | |
+| **x23** (x23w BLOOM 1) | 20.49 | 8.38 | 6.79 | 15.86 | 13.73 | 182.3 | 219.1 | 182.1 | 1.60 | 2.84 |
+| x23w BLOOM 1, TAG4 1 (a bucket's tags one uint4, a tag written by read and write) | 20.23 | 8.34 | 5.87 | 13.82 | 11.92 | 206.9 | 255.5 | 206.5 | | |
+
+Half-Life from a checkpoint (`hldemo1`, `HL_MARK=31,45`, made at `hlmark: begins`; 15 s, `--frame-log`; frames are
+`hlmark: ends, N frames` over the 14 s of game time):
+
+| | core 0 bundles a pass | passes ended full / sync / budget | tick a pass | HL frames | workers' M instructions/s |
+|---|---|---|---|---|---|
+| x22 | 2,120 | 90.5 / 7.7 / 1.8% | 1.07 ms | 108 | 10.1 |
+| x23v DREAD 1 | 2,092 | 89.9 / 8.5 / 1.7% | 0.90 ms | 129 | 11.6 |
+| x23v DREAD 1, BLOOM 1 | 2,150 | 89.1 / 8.8 / 2.0% | 0.98 ms | 121 | 10.9 |
+| x23w BLOOM 0 | 4,015 | 84.5 / 10.9 / 4.6% | 1.63 ms | 149 | 12.9 |
+| **x23** | 4,020 | 84.2 / 11.0 / 4.8% | 1.73 ms | 154 | 13.3 |
+
+So x23 runs 1.9x the bundles a pass of x22 (in VRChat, a pass a frame, that is the speed), Half-Life +43% in the
+harness, gzip and gunzip 15% cheaper a bundle, the single-op loads and stores loops 14% dearer (a bucket is eight tags),
+many cores as x22 (mc_load 10% better). Half-Life still ends 84% of its passes full, now at 4,000 bundles: what is left is
+capacity (256 texels, 4 KB a pass; the RISC-V tick keeps about 6 KB), and 384 state texels (6 columns of a block) leave
+no room for more entries in this layout. Checked: gvmbench's default set on WARP, mc_int and mc_load at 255 cores on the
+card.

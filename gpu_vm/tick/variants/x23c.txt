@@ -1,0 +1,4 @@
+# x23c: x23w's tags a bucket a uint4 (TAG4) against a word each
+x22       gpu_vm/tick/steps/x22.hlsl
+w1        gpu_vm/tick/steps/x23w.hlsl -D BLOOM=1
+w1t       gpu_vm/tick/steps/x23w.hlsl -D BLOOM=1 -D TAG4=1
