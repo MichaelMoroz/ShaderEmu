@@ -1026,6 +1026,23 @@ static std::vector<Case> cases() {
         c.named = true; c.vec_need = true; c.tol = 2e-5;
         v.push_back(c);
     }
+    // ---- an empty pass (p_eN, us a pass): N cores each `sync` at once every pass; the pass's fixed cost (state in and out,
+    // the clear, the commit's draws) at one core and at many
+    auto pe = [&](const char* name, uint32_t N) {
+        Case c{name, N, true, [N](std::vector<GvmAsm>& p, auto&, uint32_t) {
+            for (uint32_t k = 0; k < N; k++) {
+                GvmAsm& a = p[k];
+                a.li(5, std::max(2, g_loop_n / 1000)); a.close();
+                int top = a.here();
+                a.x(GVM_X_SYNC); a.close();
+                a.addbnz(5, -1, top);
+                a.halt();
+            }
+        }};
+        c.named = true; c.us_pass = true; c.big = N > 64;
+        v.push_back(c);
+    };
+    pe("p_e1", 1); pe("p_e255", 255);
     pmc("p_k0_m0", 0, 0); pmc("p_k1_m0", 1, 0); pmc("p_k2_m0", 2, 0); pmc("p_k4_m0", 4, 0); pmc("p_k8_m0", 8, 0);
     pmc("p_k0_m40", 0, 40); pmc("p_k4_m40", 4, 40); pmc("p_k8_m40", 8, 40);
     game_cases(v);   // the game bench's g_ cases (gamebench.h)
