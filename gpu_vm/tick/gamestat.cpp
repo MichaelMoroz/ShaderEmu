@@ -19,6 +19,8 @@ static Mix g_mix[2];
 static uint32_t g_prev_pc[256], g_prev_cond[256];
 static std::set<uint32_t> g_win;   // core 0's stored texels in the window
 static uint64_t g_win_b = 0, g_wins = 0, g_win_tex = 0;
+static std::set<uint32_t> g_fw, g_fws;   // core 0's footprint in 8,192 bundles: texels stored, those of them on the stack
+static uint64_t g_fw_b = 0, g_fw_n = 0, g_fw_tex = 0, g_fw_stack = 0;
 static uint64_t g_st_stack = 0, g_st_all = 0;
 static const char* KN[16] = {"ilite", "iother", "imul", "load", "store", "loadQ", "storeQ", "amo", "flite", "fother", "fspecial", "idiv", "lpc", "sync", "xother", "-"};
 static const char* CN[10] = {"none", "cond", "j", "call", "callr", "ret", "jr", "eret", "add", "addbnz"};
@@ -52,13 +54,15 @@ static int step_hook(gvm_core* c) {
     else { ck = cc == GVM_CC_ADDBNZ ? 9 : 1; g_prev_cond[id] = 1; g_prev_pc[id] = pc; }
     M.ctl[ck]++;
     if (id == 0 && ++g_win_b == 4096) { g_win_tex += g_win.size(); g_wins++; g_win.clear(); g_win_b = 0; }
+    if (id == 0 && ++g_fw_b == 8192) { g_fw_tex += g_fw.size(); g_fw_stack += g_fws.size(); g_fw_n++; g_fw.clear(); g_fws.clear(); g_fw_b = 0; }
     return 0;
 }
 static void access_hook(gvm_core* c, uint32_t a, uint32_t bytes, int store) {
     if (!store || c->id != 0) return;
     g_win.insert(a >> 4);
     g_st_all++;
-    if (a >= c->x[2] - 64 && a < c->x[2] + 0x8000) g_st_stack++;
+    g_fw.insert(a >> 4);
+    if (a >= c->x[2] - 64 && a < c->x[2] + 0x8000) { g_st_stack++; g_fws.insert(a >> 4); }
     (void)bytes;
 }
 
@@ -89,6 +93,7 @@ int main(int argc, char** argv) {
         gvm_core_reset(&rc[c], c, pr.bases[c]); rc[c].sr[GVM_SR_TVEC] = HALT_STUB;
         for (int k = 1; k < 64; k++) rc[c].x[k] = pr.state[c][k];
         rc[c].host_step = step_hook; rc[c].host_access = access_hook;
+        rc[c].xr = cs->xr_need ? 256 : 0; rc[c].npair = 64;   // (a file for the _f cases)
     }
     if (nb) { rc[0].wl.nb = nb; rc[0].wl.ways = ways; rc[0].wl.reloc = reloc; }
     g_m.cores = rc.data(); g_m.ncores = cs->cores;
@@ -123,6 +128,7 @@ int main(int argc, char** argv) {
     for (int e = 0; e < 8; e++) if (ends[e]) printf(" %s %.0f%%", EN[e], 100.0 * ends[e] / p);
     printf("\n  workers a pass: %.1f ran (> 40 bundles), %.1f only looked, %.2f ran the whole pass\n", (double)ran / p, (double)idle / p, (double)whole / p);
     printf("  core 0: distinct texels stored in 4,096 bundles %.0f; stores to the stack %.0f%%\n", g_wins ? (double)g_win_tex / g_wins : 0, g_st_all ? 100.0 * g_st_stack / g_st_all : 0);
+    printf("  core 0's footprint in 8,192 bundles: %.0f texels stored, %.0f of them the stack's\n", g_fw_n ? (double)g_fw_tex / g_fw_n : 0, g_fw_n ? (double)g_fw_stack / g_fw_n : 0);
     for (int w = 0; w < 2; w++) {
         Mix& M = g_mix[w];
         if (!M.bundles) continue;
