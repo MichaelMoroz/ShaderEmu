@@ -194,7 +194,13 @@ int main(int argc, char** argv) {
             for (uint32_t r = 0; r < rounds; r++) { b1 = std::min(b1, timed(n1)); b2 = std::min(b2, timed(n2)); }
             if (b2 > 0.25) { printf("%s: a draw took %.3f s: stopped (a draw must stay well under a second)\n", pr.name.c_str(), b2); return 1; }
             ns = (b2 - b1) / (n2 - n1) * 1e9;
-            for (size_t i = 0; i < nm.size(); i++) if (nm[i] == "BLOCK") ns /= atoi(vl[i].c_str());   // (a turn is a block: ns a bundle)
+            for (size_t i = 0; i < nm.size(); i++) if (nm[i] == "BLOCK") ns /= atoi(vl[i].c_str());
+            for (size_t i = 0; i < nm.size(); i++) if (nm[i] == "VBLOCK") {   // (a turn is a block of 1-8: the bundles core 0 ran, from its pixel)
+                auto bundles = [&](uint32_t n) { setn(n); ctx->Draw(3, 0); ctx->CopyResource(st, out); D3D11_MAPPED_SUBRESOURCE mm; ck(ctx->Map(st, 0, D3D11_MAP_READ, 0, &mm), "map"); uint32_t z = ((uint32_t*)mm.pData)[2]; ctx->Unmap(st, 0); return z; };
+                uint32_t B1 = bundles(n1), B2 = bundles(n2);
+                ns = (b2 - b1) / double(B2 - B1) * 1e9;
+                printf("(%s: %.2f bundles a block) ", pr.name.c_str(), double(B2 - B1) / (n2 - n1));
+            }   // (a turn is a block: ns a bundle)
             mhz = clock();
         }
         std::string ds; for (auto& dd : pr.defs) ds += dd + " ";

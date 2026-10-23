@@ -197,6 +197,12 @@ uint4 dtex(uint t) { return _Data.Load(int3(t % 8192, (t / 8192) & 7, 0)); }
 // next bundle in t. Encoding (floor.cpp): t.x op 0 (ra bits 0-7, rb 8-15, rd 16-23, f 24-31), t.y op 1 (the same),
 // t.z the long immediate (or a load's offset), t.w control: bit 0 taken (BR 0) or the sense, bits 1-4 cc, bits 8-15 ca,
 // 16-23 cb (or imm6 in its low bits), 24-31 the offset in bundles (signed).
+#ifndef MEMBR
+#define MEMBR 0
+#endif
+#ifndef MEMRT
+#define MEMRT 0
+#endif
 #ifndef DEFER
 #define DEFER 0
 #endif
@@ -246,6 +252,9 @@ uint ops(uint4 t, uint base, uint K, bool memk, inout uint sum, uint slot = 0) {
     v0 = unit(f0, A0, B0, C0);
 #endif
 #else
+#if MEMBR
+    [branch]
+#endif
     if (!memk) v0 = unit(f0, A0, B0, C0); else {
 #if HOIST
     v0 = hv[slot];
@@ -352,7 +361,11 @@ void bundle(inout uint4 t, inout uint tp, uint K, inout uint sum) {
     bool tk = c != ((ctl & 1) != 0);
 #endif
 #endif
+#if MEMRT   // whether op 0 is a load: a bit of the bundle (--fpct of them)
+    v1 = ops(t, base, K, ((t.x >> 24) & 0x40) != 0, sum);
+#else
     v1 = ops(t, base, K, true, sum);
+#endif
 #if !BRFIRST
 #if BR == 0
     bool tk = (ctl & 1) != 0;
@@ -388,6 +401,37 @@ void bundle(inout uint4 t, inout uint tp, uint K, inout uint sum) {
 }
 
 
+
+#ifdef VBLOCK   // blocks of 1-8 bundles (the first bundle says how many), each bundle's op 0 a load or not by a bit: one turn a block
+#ifndef MEMBR
+#endif
+static uint nbund;
+uint klen(uint c) { uint t = (c >> 1) & 15; return t < 2 ? 1u : t < 5 ? 2u : t < 7 ? 3u : t < 10 ? 4u : t < 11 ? 5u : t < 13 ? 6u : 8u; }
+bool decide(uint ctl) { return (RD((ctl >> 8) & 255) != 0) == ((ctl & 1) != 0); }
+void vblock_run(uint core, inout uint sum) {
+    uint4 blk[8], nxt[8];
+    uint bi = (core * 13u) & _Mask, k, j;
+    [unroll] for (k = 0; k < 8; k++) blk[k] = code(bi * 8 + k);
+    uint n = min(_N, NCAP / 8);
+    nbund = 0;
+    [loop] for (j = 0; j < n; j++) {
+        uint c0 = blk[0].w, K = klen(c0);
+        uint nb = (bi + (decide(c0) ? asuint((int)c0 >> 24) : 1u)) & _Mask;
+        [unroll] for (k = 0; k < 8; k++) nxt[k] = code(nb * 8 + k);
+        [unroll] for (k = 0; k < 8; k++) pd[k] = 64;
+        [unroll] for (k = 0; k < 8; k++) {
+            [branch] if (k < K) sum += ops(blk[k], 0, 0, ((blk[k].x >> 24) & 0x40) != 0, sum, k);
+        }
+#if DEFER
+        [unroll] for (k = 0; k < 8; k++) WR(pd[k], pv[k]);
+#endif
+        nbund += K;
+        [unroll] for (k = 0; k < 8; k++) blk[k] = nxt[k];
+        bi = nb;
+    }
+    sum ^= bi;
+}
+#endif
 #ifdef BLOCK   // blocks of BLOCK bundles: fetched together at addresses that do not wait for them, run straight, one decision
 #ifndef EARLY
 #define EARLY 0
@@ -471,7 +515,10 @@ uint4 frag(float4 pos : SV_POSITION) : SV_Target {
     uint4 t2 = code(tp2);
     g_nn[1] = code((tp2 + 1) & _Mask);
 #endif
-#ifdef BLOCK
+#ifdef VBLOCK
+    vblock_run(core, sum);
+    uint n = 0;
+#elif defined(BLOCK)
     block_run(core, sum);
     uint n = 0;
 #else
@@ -500,6 +547,10 @@ uint4 frag(float4 pos : SV_POSITION) : SV_Target {
 #if MEM >= 2
     [loop] for (k = 0; k < 4 * NT * ILP; k += 5) h = h * 17u + wd[k] + wt[k / 4];
 #endif
+#ifdef VBLOCK
+    return uint4(h, core, nbund, 0);
+#else
     return uint4(h, core, 0, 0);
+#endif
 }
 float4 vert(uint id : SV_VertexID) : SV_POSITION { return float4(id == 1 ? 3.0 : -1.0, id == 2 ? -3.0 : 1.0, 0, 1); }

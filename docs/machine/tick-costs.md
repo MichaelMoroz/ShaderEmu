@@ -655,3 +655,13 @@ at u8 with nothing bound (feature level 11_1; the debug layer says nothing about
 WARP, whatever the lanes add: no aggregate comes back. A dependent chain of them is 58.4 ns a step. A quad's exchange by
 ddx_fine / ddy_fine (a 32-bit word as two 16-bit halves in floats) is exact on all 32 pixels, and 38 ns a step (a chain
 43.6 against 5.5 for the same loop without it). Neither is a cross-lane primitive under 20 ns.
+
+### Blocks as a real tick would run them: a length and a kind a bundle known only from the code
+
+The blocks above were straight code made for one K and one pattern of loads at compile time. A tick reads both from the
+bundles: `VBLOCK=1` (`floor12.txt`) fetches 8 bundles a block, runs the first K (1-8, from the first bundle; 4.2-4.9 a
+block as run) each behind a test, and each bundle's op 0 is a load or not by a bit of it (half of them, `--fpct 50`;
+x23's two buckets). One core, ns a bundle: integers 94.8 against 77.6 in today's shape (and 57.0 for the fixed K 4);
+the mix 176.3 (167.0 with the loads written at the block's end) against 112.1. The per-bundle tests take back more than
+the block gives: a block design pays only where its shape is the shader's, which a fixed tick cannot have for every
+block. x30 not built.
