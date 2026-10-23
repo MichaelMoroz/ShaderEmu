@@ -5,6 +5,7 @@ of a parameter space, and `search.py` makes thousands of points, checks every on
 the card. x23's design is the default point.
 
     python gpu_vm/tick/builder/gen.py OUT.hlsl [name=value ...]          one variant (OUT.json: its manifest)
+    python gpu_vm/tick/builder/gen.py OUT.hlsl FROM.json [name=value ...] the manifest's point again (a step: gpu_vm/tick/steps/v0009)
     python gpu_vm/tick/builder/search.py gen BATCH --n 300 --seed 1      random points (or --from BATCH:vNNNN --mutate K, --grid k=a,b)
     python gpu_vm/tick/builder/search.py check BATCH -j 8                 WARP, every variant, a timeout each
     python gpu_vm/tick/builder/search.py time BATCH --rounds 3            the card, through tools/gpu_queue.ps1

@@ -1354,11 +1354,9 @@ if __name__ == '__main__':
     P.update(parse_kv(args))
     src = emit(P)
     isa = os.path.normpath(os.path.join(HERE, '..', '..', 'isa.h'))
-    try:   # a tick inside the tree includes isa.h by a relative path (a step of gpu_vm/tick/steps, say), others by the absolute one
-        rel = os.path.relpath(isa, os.path.dirname(os.path.abspath(sys.argv[1])))
-    except ValueError:
-        rel = None
-    if rel and not rel.startswith(os.pardir * 4):
+    root, out = os.path.normcase(os.path.dirname(os.path.dirname(os.path.dirname(isa)))), os.path.abspath(sys.argv[1])
+    if os.path.normcase(out).startswith(root + os.sep):   # a tick inside the tree (a step of gpu_vm/tick/steps, say) includes isa.h by a relative path
+        rel = os.path.relpath(isa, os.path.dirname(out))
         src = src.replace('#include "%s"' % isa.replace(os.sep, '/'), '#include "%s"' % rel.replace(os.sep, '/'), 1)
     with open(sys.argv[1], 'w', newline='\n') as f: f.write(src)
     m = manifest(P)

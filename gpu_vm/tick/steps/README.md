@@ -678,3 +678,18 @@ Branches cost more than the work they skip, and two forms of nearly the same cod
 is x23's lookup order with none of x24's additions and is 13% slower than x23. So gzip's 6% could not be pinned to any one
 change. Each variant passed gvmbench's default set on WARP before its card run, and the card's checks on the real cases;
 x24 also mc_int and mc_load at 255 cores.
+
+## v0009: the builder's best point (23 October 2026; RTX 5070 Laptop; not the default)
+
+`v0009.hlsl` is made by the builder, not by hand: `python gpu_vm/tick/builder/gen.py gpu_vm/tick/steps/v0009.hlsl
+gpu_vm/tick/steps/v0009.json` writes it again (the manifest's parameters; first found as `build/tick_gen/w2/v0009`).
+It is x23 with 16 buckets of four in each of the two tables and the multiplicative hash (nb 16, hash 1), step12's units
+behind branches (s12b 3), the registers as `R4[]` (rpk wide), and a worker's budget against core 0's last pass (wad 7,
+wadf 18). `v0009.hlsl.warp_ok` is its stamp from the builder's WARP check (`search.py`'s cases and sets, 40 cores; 897
+temporary registers): gvmbench runs a builder-made tick on the card only with it, so a change to the file or to isa.h
+needs the check again. The games run it as `python gpu_vm/bench_games/run.py bench --machine v0009`.
+
+Against x23 on the card (IDEAS 22-24, 38): gvmbench 1.12 of x23 overall; Quake III 88.2 fps against 79.3 with the lazy
+list, Half-Life 14.3 against 12.5, nxray 37.7 against 21.3; Doom's timedemo 927.5 realtics against 919.5 (+0.9%), since
+its write cache ends 23% of Doom's passes full against x23's 12%. It is not the default because Doom is slower. Where
+Quake III's passes go under it: `gpu_vm/PROFILE_Q3.md`.
