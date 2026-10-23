@@ -4907,3 +4907,30 @@ index 972a6dc..2e1a5ab 100644
              if (Pending == THEME_PICK_ANOTHER) {
                  Pending = Next_Song(Score);
              }
+diff --git a/common/font.cpp b/common/font.cpp
+--- a/common/font.cpp
++++ b/common/font.cpp
+@@ -400,12 +400,23 @@
+                 x += FontXSpacing + char_width;
+                 int next_line = pitch - char_width;
+                 unsigned short dlist;
++#ifdef __gpuvm__
++                // (gpu_vm: the font lies in a mix file at any address, and a half gpu_vm loads stays in its word: by bytes)
++                dlist = reinterpret_cast<const unsigned char*>(datalist + char_num)[0]
++                        | reinterpret_cast<const unsigned char*>(datalist + char_num)[1] << 8;
++#else
+                 memcpy(&dlist, datalist + char_num, sizeof(unsigned short));
+                 dlist = le16toh(dlist);
++#endif
+                 const unsigned char* char_data = reinterpret_cast<const unsigned char*>(FontPtr) + dlist;
+                 short char_lle;
++#ifdef __gpuvm__
++                char_lle = (short)(reinterpret_cast<const unsigned char*>(linelist + char_num)[0]
++                                   | reinterpret_cast<const unsigned char*>(linelist + char_num)[1] << 8);
++#else
+                 memcpy(&char_lle, linelist + char_num, sizeof(short));
+                 char_lle = le16toh(char_lle);
++#endif
+                 int char_ypos = char_lle & 0xFF;
+                 int char_lines = char_lle >> 8;
+                 int char_height = fntheight - (char_ypos + char_lines);
