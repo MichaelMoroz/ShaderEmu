@@ -65,6 +65,10 @@ for a in "$@"; do
     -flimit-function-alignment|-falign-functions=*|-falign-loops=*|-falign-jumps=*|-falign-labels=*|-fno-align-*|\
     -Wl,-Ttext-segment=*|-Wl,-Ttext=*|-Wl,--relax|-Wl,--no-relax|-Wl,-z,norelro|-Wl,--hash-style=*|-Wl,--build-id*|-no-pie|-static-pie) ;;
     -Wl,--print-memory-usage|-Wl,-Map=*|-Wl,-Map,*) ;;
+    # gcc's float constants as float: clang ignores -fsingle-precision-constant (a warning the builds' -w hides), and
+    # every unsuffixed constant made the float math around it soft double (gpu_vm/tick/gamebench_rv/repro); clang's
+    # OpenCL option does it in C too
+    -fsingle-precision-constant) [ "${GVM_SPC:-1}" = 0 ] || args+=(-cl-single-precision-constant) ;;   # (GVM_SPC=0: as before)
     *) args+=("$a") ;;
     esac
 done

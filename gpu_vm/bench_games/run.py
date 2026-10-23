@@ -20,7 +20,8 @@ import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 RV_ROOT = os.environ.get('RV_ROOT', os.path.join(os.path.dirname(ROOT), 'ShaderEmu'))
-GVM_IMAGE = os.path.join(ROOT, 'build', 'gvm_apps', 'img')
+GVM_IMAGE = os.environ.get('GVM_IMAGE', os.path.join(ROOT, 'build', 'gvm_apps', 'img'))   # (another image: its own GVM_CKPT)
+GVM_CKPT = os.environ.get('GVM_CKPT', 'gvm')   # gpu_vm's checkpoints' folder under build/checkpoints
 # the RISC-V image: linux/prebuilt/nommu with Uplink's data (`python linux/nommu/image.py nommu_hl` in this worktree,
 # with a junction rvc -> the main checkout's rvc): the main checkout's build/images/nommu has no Half-Life data
 RV_IMAGE = os.environ.get('RV_IMAGE', os.path.join(ROOT, 'build', 'images', 'nommu_hl'))
@@ -96,7 +97,7 @@ def harness(machine, extra, log):
 
 
 def save(a):
-    m = 'rv' if a.machine == 'rv' else 'gvm'
+    m = 'rv' if a.machine == 'rv' else GVM_CKPT
     os.makedirs(os.path.join(CKPT, m), exist_ok=True)
     for g in a.games.split(','):
         G = GAMES[g]
@@ -104,7 +105,7 @@ def save(a):
         log = os.path.join(CKPT, m, g + '.save.log')
         prompt = '/ # ' if m == 'rv' else '@gpuvm:~# '
         pre = '' if m == 'rv' else 'cd /; export TERM=linux; '
-        cmd, cwd = harness('x22' if m == 'gvm' else m, ['--seconds', str(a.limit), '--expect', prompt, '--send', pre + G['cmd'] + '\\n',
+        cmd, cwd = harness('x22' if m != 'rv' else m, ['--seconds', str(a.limit), '--expect', prompt, '--send', pre + G['cmd'] + '\\n',
                                '--until', G['mark'], '--save-state', snap], log)
         t = time.time()
         p = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, errors='replace')
@@ -142,7 +143,7 @@ def bench(a):
     for r in range(a.rounds):
         for g in a.games.split(','):
             for m in machines:
-                snap = os.path.join(CKPT, 'rv' if m == 'rv' else 'gvm', g + '.snap')
+                snap = os.path.join(CKPT, 'rv' if m == 'rv' else GVM_CKPT, g + '.snap')
                 if not os.path.exists(snap):
                     print(f'{m} {g}: no checkpoint {snap}')
                     continue
