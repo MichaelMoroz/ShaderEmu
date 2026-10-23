@@ -23,7 +23,7 @@ sys.path.insert(0, HERE)
 import gen
 
 GVMB = os.environ.get('GVMBENCH') or os.path.join(ROOT, 'bin', 'gvmbench.exe')
-CHECK_CASES = 'default,p_k1_m0,p_k4_m40,mc_int,p_spill,p_xspill,p_rd,p_rdnc,xvec'
+CHECK_CASES = 'default,p_k1_m0,p_k4_m40,mc_int,p_spill,p_xspill,p_rd,p_rdnc,xvec,wmask,p_e1'
 CHECK_SETS = 'game,game_x,game_cc'   # (every g_ kernel, short: two frames; the file, bindings and pairs compared too)
 CHECK_CORES = '40'
 TIME_CASES = 'arith,loads,stores,mix,coremark,gzip,p_k0_m0,p_k8_m40,p_spill,p_xspill,p_rd,p_rdnc'   # (mc_ at 255 cores: seconds each)

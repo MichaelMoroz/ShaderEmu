@@ -245,6 +245,21 @@ uint vop(uint w, uint imm, uint rd) {
         src = _rep(src, '    r[0] = 0;' + NL, '    r[0] = 0;' + NL + '    [loop] for (k = 1; k < 64; k++) R4[k].yzw = state_in(T_VR + k, c).yzw;   // (VEC: lanes 1-3)' + NL + '    R4[0] = 0;' + NL)
         src = _rep(src, '    return t >= T_WT ? uint4(NONE, NONE, NONE, NONE) :', '    [branch] if (t >= T_VR && t < T_VR + 64) return v;   // (VEC: the registers as they were)' + NL + '    return t >= T_WT ? uint4(NONE, NONE, NONE, NONE) :')
         src = _rep(src, '    [branch] if (t >= T_Q && t < T_WC) return q[t - T_Q];', '    [branch] if (t >= T_VR && t < T_VR + 64) return R4[t - T_VR];   // (VEC)' + NL + '    [branch] if (t >= T_Q && t < T_WC) return q[t - T_Q];')
+    if P.get('cv', 0):   # the commit and the operations read one state texture a texel, not all eight; an entry's value only when drawn
+        src = _rep(src, """    uint4 v0 = (t & 1) ? _S1.Load(at) : _S0.Load(at), v1 = (t & 1) ? _S3.Load(at) : _S2.Load(at);
+    uint4 v2 = (t & 1) ? _S5.Load(at) : _S4.Load(at), v3 = (t & 1) ? _S7.Load(at) : _S6.Load(at);
+    return (t & 4) ? ((t & 2) ? v3 : v2) : ((t & 2) ? v1 : v0);""", """    switch (t & 7) {   // (cv)
+    case 0: return _S0.Load(at); case 1: return _S1.Load(at); case 2: return _S2.Load(at); case 3: return _S3.Load(at);
+    case 4: return _S4.Load(at); case 5: return _S5.Load(at); case 6: return _S6.Load(at); default: return _S7.Load(at);
+    }""")
+        src = _rep(src, """    o.vertex = tg != NONE && ((tg >> (28 + _Comp)) & 1) != 0 ? float4(at.x * 2 - 1, 1 - at.y * 2, 0, 1) : float4(-2, -2, 0, 1);
+    o.value = pick(state_any(T_WC + j, c), _Comp);""", """    bool on = tg != NONE && ((tg >> (28 + _Comp)) & 1) != 0;
+    o.vertex = on ? float4(at.x * 2 - 1, 1 - at.y * 2, 0, 1) : float4(-2, -2, 0, 1);
+    o.value = 0;
+    [branch] if (on) o.value = pick(state_any(T_WC + j, c), _Comp);   // (cv)""")
+    if P.get('cv', 0) >= 2:   # the operations' queue read only when it has any (16 texels a pass otherwise)
+        src = _rep(src, '    [unroll] for (k = 0; k < 16; k++) q[k] = state_in(T_Q + k, c);',
+                   '    [unroll] for (k = 0; k < 16; k++) q[k] = 0;' + chr(10) + '    [branch] if (qn != 0 || s22.x != 0) { [unroll] for (k = 0; k < 16; k++) q[k] = state_in(T_Q + k, c); }   // (cv 2)')
     if P.get('s12in', 0):   # step12's bundles in the fast loop's loop: no leaving and entering it around each
         src = _rep(src, '        [loop] while (budget > 0 && guard > 0 && (cur.w & 7) >= thr) { fstep(budget); guard--; }',
 '''        [loop] while (budget > 0 && guard > 0 && ((cur.w & 7) >= thr || (thr == GVM_PATH_FAST && (cur.w & 7) != GVM_PATH_GENERAL))) {   // (s12in)

@@ -1043,6 +1043,38 @@ static std::vector<Case> cases() {
         v.push_back(c);
     };
     pe("p_e1", 1); pe("p_e255", 255);
+    // ---- a worker's budget by the kernel's REST mask (the builder's wad=5, WAITW 0x00c01100): core 0 stores the mask (worker 2
+    // only), then ends its passes on sync for a while, cleared and given again; workers 1-3 count bundles until core 0 says
+    // done, then store their counts: as many as their budgets let them run, the same on the reference and the tick
+    {
+        Case c{"wmask", 4, false, [](std::vector<GvmAsm>& p, auto&, uint32_t) {
+            const uint32_t W = 0x00c01100u, DONE = DATA + 0x100;
+            GvmAsm& a = p[0];
+            a.li(4, (int32_t)W); a.li(6, 4); a.li(7, 0); a.li(8, (int32_t)DONE); a.close();
+            for (int round = 0; round < 3; round++) {
+                a.sw(round == 1 ? 7 : 6, 4, 0); a.sw(7, 4, 4); a.close();
+                a.li(5, 6); a.close();
+                int top = a.here();
+                a.x(GVM_X_SYNC); a.close();
+                a.addbnz(5, -1, top);
+            }
+            a.li(9, 1); a.close(); a.sw(9, 8, 0); a.close();
+            a.halt();
+            for (int k = 1; k < 4; k++) {
+                GvmAsm& w = p[k];
+                w.li(8, (int32_t)DONE); w.li(10, 0); w.close();
+                int top = w.here(), out = w.label();
+                w.lw(9, 8, 0); w.addi(10, 10, 1); w.close();
+                w.bnei(9, 0, out);
+                w.j(top);
+                w.bind(out);
+                w.li(11, (int32_t)(DONE + 16 * k)); w.close(); w.sw(10, 11, 0); w.close();
+                w.halt();
+            }
+        }};
+        c.named = true;
+        v.push_back(c);
+    }
     pmc("p_k0_m0", 0, 0); pmc("p_k1_m0", 1, 0); pmc("p_k2_m0", 2, 0); pmc("p_k4_m0", 4, 0); pmc("p_k8_m0", 8, 0);
     pmc("p_k0_m40", 0, 40); pmc("p_k4_m40", 4, 40); pmc("p_k8_m40", 8, 40);
     game_cases(v);   // the game bench's g_ cases (gamebench.h)
