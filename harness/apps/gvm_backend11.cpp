@@ -114,10 +114,17 @@ public:
         spix_ = (ntex_ + 7) / 8;
         geo_ = stepConst(src, "GEO_BLOCKS", 0);
         if (geo_ && spix_ > 48) { err = tickPath + ": GEO_BLOCKS takes 48 state pixels a core at most"; return false; }
+        if (geo_) {   // the builder's block: 8 wide, 3 to 8 rows, column by column, 128 blocks a band of 16 rows (the device reads pixel 2 at (0, 2))
+            bh_ = stepConst(src, "GEO_BH", 8);
+            if (stepConst(src, "GEO_BW", 8) != 8 || bh_ < 3 || bh_ > 8 || spix_ > 8 * bh_ || stepConst(src, "GEO_JROW", 0) != 0 ||
+                stepConst(src, "GEO_BAND", 16) != 16 || stepConst(src, "GEO_PER", 128) != 128 || stepConst(src, "GEO_PERM", 0) != 0) {
+                err = tickPath + ": GEO_BLOCKS takes blocks 8 wide and 3 to 8 high, column by column, 128 a band of 16 rows"; return false;
+            }
+        }
         if (src.find("#ifndef CORE0") != std::string::npos) {   // x25: core 0's own write cache, its tick compiled with CORE0=1
             wcn0_ = stepConst(src, "WCN0", 0);
             spix0_ = (stepConst(src, "NTEX0", 0) + 7) / 8;
-            if (!geo_ || !wcn0_ || spix0_ > 64 + 8 * 128) { err = tickPath + ": CORE0 needs GEO_BLOCKS, WCN0 and NTEX0"; return false; }
+            if (!geo_ || bh_ != 8 || !wcn0_ || spix0_ > 64 + 8 * 128) { err = tickPath + ": CORE0 needs GEO_BLOCKS, WCN0 and NTEX0"; return false; }
         }
         CompileSettings cs;
         cs.flags = D3DCOMPILE_OPTIMIZATION_LEVEL3;
@@ -359,7 +366,8 @@ public:
         size_t setBytes = h.pad ? (size_t)((kMaxCores - 1) / 128 * 16 + 8) * 1024 * 16 : (size_t)fromSpix * kMaxCores * 16;
         size_t need = sizeof h + (size_t)kRamW * rows_ * 16 + 16 * setBytes + 2 * (size_t)kMaxCores * 16 +
                       (devices_ ? (size_t)kGpuTarget * kGpuTarget * 4 : 0);
-        if (size != need || h.pad > 1 || memcmp(h.magic, want.magic, 8) != 0 || h.ramEnd != want.ramEnd || h.romRows != want.romRows ||
+        uint32_t fromBh = h.pad == 1 ? 8 : h.pad - 16;   // (pad: 0 a row a core, 1 8x8 blocks, 16 + h blocks 8 x h)
+        if (size != need || (h.pad > 1 && (h.pad < 19 || h.pad > 23)) || memcmp(h.magic, want.magic, 8) != 0 || h.ramEnd != want.ramEnd || h.romRows != want.romRows ||
             (h.ntex != want.ntex && (h.ntex < tWc_ || h.ntex > 48 * 8)) || h.devices != want.devices) {
             err = "not a snapshot of this image, tick and RAM (the same --gvm, --gvm-tick and --gvm-ram)";
             return false;
@@ -371,7 +379,7 @@ public:
                 std::vector<uint8_t> img((size_t)setW() * setH() * 16, 0);
                 for (uint32_t c = 0; c < kMaxCores; c++)
                     for (uint32_t j = 0; j < keep; j++) {
-                        size_t from = h.pad ? (size_t)((c >> 7) * 16 + j % 8) * 1024 + (c & 127) * 8 + j / 8 : (size_t)c * fromSpix + j;
+                        size_t from = h.pad ? (size_t)((c >> 7) * 16 + j % fromBh) * 1024 + (c & 127) * 8 + j / fromBh : (size_t)c * fromSpix + j;
                         memcpy(&img[setAt(c, j) * 16], p + from * 16, 16);
                     }
                 writeTex(set_[k][t].t.Get(), setW(), setH(), 16, img.data());
@@ -490,7 +498,7 @@ private:
     };
     SnapHeader snapHeader() const {
         SnapHeader h = {{'G', 'V', 'M', 'S', 'N', 'A', 'P', '1'}, ramEnd_, romRows_, ntex_, devices_ ? 1u : 0u,
-                        (uint32_t)cur_, (uint32_t)oc_, workers_, geo_, time_, passes_};
+                        (uint32_t)cur_, (uint32_t)oc_, workers_, geo_ ? (bh_ == 8 ? 1u : 16 + bh_) : 0u, time_, passes_};
         return h;
     }
     // A whole texture of `bpp` bytes a texel appended to `out`, row 0 first (a blocking read)
@@ -550,7 +558,7 @@ private:
     UINT setH() const { return geo_ ? (kMaxCores - 1) / 128 * 16 + 8 : kMaxCores; }
     size_t setAt(uint32_t c, uint32_t j) const {   // the texel of state pixel j of core c (x25: core 0's from 64 on in rows 8-15)
         if (geo_ && c == 0 && j >= 64) return (size_t)(8 + j % 8) * 1024 + j / 8 - 8;
-        return geo_ ? (size_t)((c >> 7) * 16 + j % 8) * 1024 + (c & 127) * 8 + j / 8 : (size_t)c * spix_ + j;
+        return geo_ ? (size_t)((c >> 7) * 16 + j % bh_) * 1024 + (c & 127) * 8 + j / bh_ : (size_t)c * spix_ + j;
     }
     void viewport(UINT w, UINT h, UINT y = 0, UINT x = 0) {
         D3D11_VIEWPORT v = {(float)x, (float)y, (float)w, (float)h, 0, 1};
@@ -607,7 +615,7 @@ private:
             }
             for (uint32_t c = (std::max)(run.first, apart ? 1u : 0u); c < run.second;) {   // (the run's blocks in one band at a time)
                 uint32_t end = (std::min)(run.second, (c / 128 + 1) * 128);
-                viewport((end - c) * 8, 8, (c / 128) * 16, (c % 128) * 8);
+                viewport((end - c) * 8, bh_, (c / 128) * 16, (c % 128) * 8);
                 ctx->Draw(3, 0);
                 c = end;
             }
@@ -737,12 +745,12 @@ private:
                         for (int w = 0; w < 2; w++) gpu_.ctx->CopySubresourceRegion(set_[w][t].t.Get(), 0, wc0, k, 0, none_.t.Get(), 0, &nb);
                         continue;
                     }
-                    UINT x0 = (k % 128) * 8, y0 = (k / 128) * 16, cols = (spix_ + 7) / 8;
-                    D3D11_BOX b = {x0, y0, 0, x0 + cols, y0 + 8, 1}, nb = {0, 0, 0, 1, 1, 1};
+                    UINT x0 = (k % 128) * 8, y0 = (k / 128) * 16, cols = (spix_ + bh_ - 1) / bh_;
+                    D3D11_BOX b = {x0, y0, 0, x0 + cols, y0 + bh_, 1}, nb = {0, 0, 0, 1, 1, 1};
                     gpu_.ctx->CopySubresourceRegion(set_[cur_][t].t.Get(), 0, x0, y0, 0, set_[cur_ ^ 1][t].t.Get(), 0, &b);
-                    for (uint32_t j = wc0; j < spix_; j++)   // (pixel j of the block: column j / 8, row j % 8)
+                    for (uint32_t j = wc0; j < spix_; j++)   // (pixel j of the block: column j / bh_, row j % bh_)
                         for (int w = 0; w < 2; w++)
-                            gpu_.ctx->CopySubresourceRegion(set_[w][t].t.Get(), 0, x0 + j / 8, y0 + j % 8, 0, none_.t.Get(), 0, &nb);
+                            gpu_.ctx->CopySubresourceRegion(set_[w][t].t.Get(), 0, x0 + j / bh_, y0 + j % bh_, 0, none_.t.Get(), 0, &nb);
                 }
             }
             frozen_[k] = freeze;
@@ -910,7 +918,7 @@ private:
     }
 
     Gpu gpu_;
-    uint32_t ramEnd_ = 0, rows_ = 0, romRows_ = 1, wcn_ = 514, tWc_ = 40, opSlots_ = 32, opSpan_ = 272, ntex_ = 297, spix_ = 38, geo_ = 0, wcn0_ = 0, spix0_ = 0;
+    uint32_t ramEnd_ = 0, rows_ = 0, romRows_ = 1, wcn_ = 514, tWc_ = 40, opSlots_ = 32, opSpan_ = 272, ntex_ = 297, spix_ = 38, geo_ = 0, bh_ = 8, wcn0_ = 0, spix0_ = 0;
     Prog tick_, tick0_, commit_, stage_, write_, progress_;
     Tex ram_, rom_, stageTex_, ops_[2], set_[2][8], zone_, ctl_, info_, none_;
     ComPtr<ID3D11Buffer> cb_, ccb_[4];
