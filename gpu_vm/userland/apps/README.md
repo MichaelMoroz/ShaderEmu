@@ -129,6 +129,15 @@ the tolerance named (`gvmcmp`, `NEAR` in `test_all.py`); an exact sum where the 
   `hlslc`, `hlslview` and `hlsl_bench`; the fractal's sum is the host's (`3614e8bb`).
 - Quake's walk and exit cases on gvm_cpu depend on its pace against the keys typed (they pass on the card).
 
+## Open items (the kernel)
+
+- **A word poked into another program's code needs a `sync` before that program runs.** The fetch reads RAM as the
+  last commit left it, and ptrace's poke (`copy_to_user_page`, a memcpy) is a store of the pass: a stop poked and the
+  program let run in the same pass is run past, and a word put back runs as the stop. nxide's debugger makes the `sync`
+  itself before `PTRACE_CONT` (`DBG_SETTLE` in `linux/ide/debug.h`), so any other debugger is still wrong. The place is
+  the RISC-V kernel's `linux/kernel/poke_hook.py`: a poke into another program sets a flag, and the kernel makes one
+  `sync` (there `fence.i`) when that program next runs. Then `DBG_SETTLE` can go.
+
 ## Checks
 
 `test_all.py` (gvm_cpu) and `card.py` (the card) run `tools/test_all.py`'s cases with gpu_vm's changes (its module text):
