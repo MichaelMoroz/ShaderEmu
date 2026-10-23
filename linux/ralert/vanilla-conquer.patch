@@ -125,7 +125,7 @@ index ba5543f..1d29b2d 100644
              char digest2[20];
              sha.Result(digest2);
 diff --git a/common/vqadrawer.cpp b/common/vqadrawer.cpp
-index 68dc9f1..1f42e2e 100644
+index f0d1108..684871c 100644
 --- a/common/vqadrawer.cpp
 +++ b/common/vqadrawer.cpp
 @@ -9,6 +9,12 @@
@@ -141,7 +141,19 @@ index 68dc9f1..1f42e2e 100644
  #include "vqadrawer.h"
  //#include "dialog.h"
  #include "lcw.h"
-@@ -53,12 +59,50 @@ int VQA_DrawFrame_Buffer(VQAHandle* handle)
+@@ -34,6 +40,11 @@ int VQA_DrawFrame_Buffer(VQAHandle* handle)
+         }
+ 
+         VQA_PrepareFrame(vqabuf);
++#ifdef SHADEREMU_RA
++        /* the frame selected: when the movie is late, VQA_SelectFrame skips frames and frees their buffers, and this
++           drew the first of them, which the loader (and a worker unpacking its pointers) was filling again */
++        curframe = drawer->CurFrame;
++#endif
+     }
+ 
+     if (vqabuf->Flags & 1) {
+@@ -53,12 +64,50 @@ int VQA_DrawFrame_Buffer(VQAHandle* handle)
          vqabuf->Drawer.Flags &= ~1;
      }
  
@@ -198,7 +210,20 @@ index 68dc9f1..1f42e2e 100644
  
      vqabuf->Drawer.LastFrameNum = curframe->FrameNum;
      vqabuf->Flipper.CurFrame = curframe;
-@@ -414,4 +458,10 @@ void VQA_PrepareFrame(VQAData* vqabuf)
+@@ -376,6 +425,12 @@ int VQA_SelectFrame(VQAHandle* handle)
+                     config->DrawerCallback(nullptr, curframe->FrameNum);
+                 }
+ 
++#ifdef SHADEREMU_RA
++                /* a skipped frame whose pointers a worker is unpacking: done before its buffer is the loader's again */
++                if (curframe->Flags & 0x20) {
++                    workers_lcw_wait();
++                }
++#endif
+                 curframe->Flags = 0;
+                 curframe = curframe->Next;
+                 vqabuf->Drawer.CurFrame = curframe;
+@@ -414,4 +469,10 @@ void VQA_PrepareFrame(VQAData* vqabuf)
          LCW_Uncompress(&curframe->Pointers[curframe->PtrOffset], curframe->Pointers, vqabuf->MaxPtrSize);
          curframe->Flags &= ~0x10;
      }
@@ -845,7 +870,7 @@ index a29eb2b..a3a94a5 100644
  #endif
 \ No newline at end of file
 diff --git a/redalert/conquer.cpp b/redalert/conquer.cpp
-index 4825ba4..bd5df61 100644
+index 4825ba4..cd2bf65 100644
 --- a/redalert/conquer.cpp
 +++ b/redalert/conquer.cpp
 @@ -125,6 +125,569 @@ bool Map_Edit_Loop(void);
@@ -4328,7 +4353,7 @@ index 36a2e3c..962ee56 100644
      **	The Map.
      */
 diff --git a/redalert/scenario.cpp b/redalert/scenario.cpp
-index 3738c61..bc554f6 100644
+index 3738c61..c3034b0 100644
 --- a/redalert/scenario.cpp
 +++ b/redalert/scenario.cpp
 @@ -862,8 +862,24 @@ void Clear_Scenario(void)

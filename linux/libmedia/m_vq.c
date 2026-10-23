@@ -72,6 +72,9 @@ m_lcw(const uint8_t *source, uint32_t source_bytes, uint8_t *dest, uint32_t leng
 
 	if (source_bytes > 0xffffffffu - (uint32_t)(uintptr_t)source)
 		in_end = (const uint8_t *)~(uintptr_t)0;
+/* what is left of the stream, unsigned: with no end given (media_lcw) it is the rest of the address space, which
+ * as a pointer difference is negative where the buffer lies below 2 GB (gpu_vm: every run and far copy stopped) */
+#define LEFT ((uintptr_t)in_end - (uintptr_t)source)
 	while (to < end && source < in_end) {
 		op = *source++;
 		if (!(op & 0x80)) {
@@ -85,15 +88,15 @@ m_lcw(const uint8_t *source, uint32_t source_bytes, uint8_t *dest, uint32_t leng
 			count = op & 0x3f;
 			if (count > (uint32_t)(end - to))
 				count = (uint32_t)(end - to);
-			if (count > (uint32_t)(in_end - source))
-				count = (uint32_t)(in_end - source);
+			if (count > LEFT)
+				count = (uint32_t)LEFT;
 			while (count--)
 				*to++ = *source++;
 			continue;
 		} else if (op == 0xfe) {
 			uint8_t value;
 
-			if (in_end - source < 3)
+			if (LEFT < 3)
 				break;
 			count = source[0] + (source[1] << 8);
 			value = source[2];
@@ -104,13 +107,13 @@ m_lcw(const uint8_t *source, uint32_t source_bytes, uint8_t *dest, uint32_t leng
 			to += count;
 			continue;
 		} else if (op == 0xff) {
-			if (in_end - source < 4)
+			if (LEFT < 4)
 				break;
 			count = source[0] + (source[1] << 8);
 			from = dest + source[2] + (source[3] << 8);
 			source += 4;
 		} else {
-			if (in_end - source < 2)
+			if (LEFT < 2)
 				break;
 			count = (op & 0x3f) + 3;
 			from = dest + source[0] + (source[1] << 8);
@@ -124,6 +127,7 @@ m_lcw(const uint8_t *source, uint32_t source_bytes, uint8_t *dest, uint32_t leng
 			*to++ = *from++;
 	}
 	return (uint32_t)(to - dest);
+#undef LEFT
 }
 
 uint32_t

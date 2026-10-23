@@ -39,6 +39,9 @@ OVERRIDES = {
     # (the programs' last screen leaves the cursor on the line the shell's echo then ends: no line of its own)
     'term-htop': dict(has=[r'htop 0$']),
     'term-dialog': dict(has=[r'dialog 0$', r'^pterm']),
+    # gvm_cpu plays the movie at its own pace and TDAWN_AUTO's Return ends it before its last frames (154 of 156; the
+    # card shows all 156): what is checked is that none differs
+    'ralert-movie': dict(has=[r'movie check: 0 of 15\d shared frames differ']),
     # uname -m says the machine
     'ports-dropbear': dict(has=[r'^ssh-ok gpuvm$', r'^file-data$', r'^sftp> get /tmp/f2 /tmp/f3']),
 }

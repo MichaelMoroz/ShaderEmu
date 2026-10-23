@@ -97,7 +97,7 @@ the tolerance named (`gvmcmp`, `NEAR` in `test_all.py`); an exact sum where the 
 | ClassiCube | yes | meshes, meshes-workers, kept, pack PASS | meshes PASS | pack: 30-42 textures (speed decides how many before "steady") |
 | Micropolis | yes | PASS | PASS | exact sums |
 | Tiberian Dawn | yes | PASS (300, 1300, paths, won) | 300, 1300 PASS | exact state sums |
-| Red Alert | yes | every case the RISC-V machine's state sums but ralert-movie (5fed4b4: a mix from the ROM mapped writable, the iconset header read by bytes) | soviet-300 PASS | exact state sums |
+| Red Alert | yes | every case the RISC-V machine's state sums (5fed4b4: a mix from the ROM mapped writable, the iconset header read by bytes); movie: 0 of 154 frames differ (154: the movie's own pace); atlas-forgotten 299 of 300 pictures (frame 58's overlay, gvm_cpu's timing) | soviet-300, movie (0 of 156), atlas, atlas-forgotten (300 of 300) PASS | exact state sums |
 | Quake | yes (-lmfloat) | quake-light PASS (QUAKE_STATS_FRAMES); walk, exit, particles fail on gvm_cpu's clock pacing | quake-light PASS | as RISC-V; walk reaches 480 687 24 with commands typed ahead |
 | Quake III | yes | workers, inline, bots, bots-serial PASS; server: digest by load time | workers/inline: 237 of 237 lines the same, fewer than 500 (load time) | as RISC-V where QUAKE3_ENTER fixes the entry |
 | Half-Life: Uplink | yes (-lmfloat, 1 MB stack) | plays through the fight, HL_ROTATION=check 0 wrong; GVM_RACES 0 or 7 undone (light styles) | not run | HLGL_PICSUM 656aa416 (GPU addresses moved: not RISC-V's) |
@@ -115,7 +115,9 @@ the tolerance named (`gvmcmp`, `NEAR` in `test_all.py`); an exact sum where the 
   links its weak pthread functions in: `fix/terminal.sh`). Fixed 23 October 2026: such an address is absolute.
 - Not the compiler: unaligned `uint16_t` casts (the NES), a variadic call through a thunk taking register arguments
   (Quake III: gpu_vm passes `...` on the stack), a 64 KB stack (Half-Life: `flat_stack.py`), a stack buffer printed
-  after its function returned (nxfiles).
+  after its function returned (nxfiles), libmedia's LCW (`m_lcw`) testing the stream's end given as the rest of the
+  address space by a signed pointer difference, negative where a buffer lies below 2 GB (Red Alert's movie pointers
+  were cut short); Red Alert's player drew the first frame it skipped, freed and being loaded again (both fixed).
 
 ## Not ported
 
@@ -126,7 +128,7 @@ the tolerance named (`gvmcmp`, `NEAR` in `test_all.py`); an exact sum where the 
   `__gpuvm__`): each operation as the RISC-V code makes it, a step whole (no lanes). `hlsl.sh` builds libhlsl,
   `hlslc`, `hlslview` and `hlsl_bench`; the fractal's sum is the host's (`3614e8bb`).
 - Quake's walk, exit and particles cases and Quake III's server case on gvm_cpu depend on the clock's pace against the
-  machine's speed; the card's runs of them are to be made. Red Alert's movie check.
+  machine's speed; the card's runs of them are to be made.
 
 ## Checks
 
