@@ -85,6 +85,11 @@ DEFAULTS = dict(
     mflat=0,            # the memory paths in fewer blocks: 1 the buckets' tags read always (a select for the bloom word's skip),
                         # 2 paths 3 and 5 fetch the data texel always; 3 both
     cc0x=0,             # (ISA paths: the assembler's cc0_fast) the fast step makes j, call, jr and callr with path 7's, 3's or 5's ops: CC0X
+    sil=0,              # silent stores: a store of the bytes the core sees, to a texel with no entry, makes none and needs no room
+                        # (the reference's gvm_machine.silent): 1 the data texel fetched for a store whose lookup found no entry, 2 for every store,
+                        # 3 only a store that finds no room looked at (fetched and compared): its texel goes on silent, the rest as before
+    sil6=0,             # (sil) path 6's own: 1 its texels fetched when a store's lookup found no entry, 2 always; 0 as sil
+    silp=15,            # (sil) where: 1 paths 3 and 5, 2 path 6, 4 step12's memory path, 8 the general step's stores
     snk=0,              # paths 3 and 5: a load writes no entry (the sink's tag and word) and reads no store value: a branch on the store
     m6seq=0,            # path 6 as two steps: op 0's store, then op 1 looked up in the tags op 0 left (no patched copy of its buckets)
     cc0f=0,             # a cc 0 bundle (j, call, jr, callr) whose ops are path 7's, 3's or 5's runs the fast step's body (fstep_c), not step12
@@ -97,7 +102,7 @@ SPACE = dict(   # the values a search draws from
     bandx=[1, 2], per=[16, 32, 64, 128], jrow=[0, 1], perm=['id', 'bitrev', 'mul'], mul=[3, 5, 37, 77],
     early=[0, 1, 2, 3], mru=[0, 1, 2, 4], bb=[0, 1], tfirst=[0, 1], s6=[0, 1], nc=[0, 1], thin=[0, 1], thin8=[0, 1], wide3=[0, 1, 2], late=[0, 1, 2, 3], fx1=[0, 1], ov=[0, 4, 8, 16], mv=[0, 1], cv=[0, 1, 2], wsh=[0, 1, 2, 3], wad=[0, 1, 2, 3, 4, 5, 6, 7], s12b=[0, 1, 2, 3], s12in=[0, 1], rc=[0, 1, 2], dtx=['both', 'one'], rpk=['scalar', 'vec', 'wide'], pk=['scalar', 'vec', 'aos'], lay=['split', 'merged'],
     xr=[0, 64, 128, 256, 512, 1024], npair=[0, 32, 64, 128], xbind=[0, 1], xload=['pre', 'lazy'], xfast=[0, 1],
-    pf=[0, 1, 2], pft=[0, 4, 8, 16], pfd=[1, 2], s12pf=[0, 1], ldf=[0, 1], cc0f=[0, 1], cc0x=[0, 1, 2, 3], m6seq=[0, 1], snk=[0, 1], mflat=[0, 1, 2, 3, 6, 7, 10],
+    pf=[0, 1, 2], pft=[0, 4, 8, 16], pfd=[1, 2], s12pf=[0, 1], ldf=[0, 1], cc0f=[0, 1], cc0x=[0, 1, 2, 3], m6seq=[0, 1], snk=[0, 1], sil=[0, 1, 2, 3], silp=[1, 2, 3, 4, 8, 12, 15], mflat=[0, 1, 2, 3, 6, 7, 10],
 )
 
 def layout(P):
@@ -195,7 +200,7 @@ static const uint THIN = {P.get('thin', 0)};   // one op a bundle (the assembler
 static const uint THIN8 = {P.get('thin8', 0)};   // 8-byte instructions (gvm_machine.thin)
 static const uint WIDE3 = {P.get('wide3', 0)};   // three ops a bundle (gvm_machine.wide3)
 static const uint WSH = {P.get('wsh', 0)};
-static const uint WAD = {P.get('wad', 0)};
+static const uint WAD = {P.get('wad', 0)};{sil_decl(P)}
 static const uint WAITW = 0x00c01100;   // (WAD 5) the kernel's REST mask: 8 words, bit k = worker k (core 0 waits for its job), one pass after a rest   // a worker's budget: core 0's >> WSH; WAD: core 0's last pass's when it ended on sync or full
 static const uint FX1 = {P.get('fx1', 0)};   // op 1's float functions: fpu's but the special ones (GvmAsm::fx1)
 static const uint LATEBR = {P.get('late', 0)};   // branches read their registers after the bundle's ops (gvm_machine.late)
@@ -569,6 +574,77 @@ def mflat(P, src):
         a = "            [branch] if (((t.x & op_bit(3)) | ((t.y ^ op_bit(8)) & op_bit(11)) | ((m0.ad | m1.ad) & 3)) != 0) { m0.q = data_texel(m0.ad); m1.q = data_texel(m1.ad); }\n"
         assert src.count(a) == 1
         src = src.replace(a, "            m0.q = data_texel(m0.ad); m1.q = data_texel(m1.ad);   // (mflat 4)\n")
+    return src
+
+def sil_decl(P):
+    return ('\nstatic const uint SIL = %d;   // (sil) a store of what the core sees, to a texel with no entry, makes none (gvm_machine.silent)' % P['sil']) if P.get('sil', 0) else ''
+
+def sil_text(P, src):
+    """sil: a store whose bytes are what the core sees already, to a texel with no entry this pass, makes no entry and needs no
+    room (no full end); a store to a texel with an entry updates it as before. 1: the data texel is fetched for a store whose
+    lookup found no entry, 2: for every store (paths 3, 5 and 6; step12 and the general step fetch it always)"""
+    k, wh = P.get('sil', 0), P.get('silp', 15)
+    k6 = P.get('sil6', 0) or k   # (path 6's fetch: sil6 1 or 2, else sil's)
+    if not k: return src
+    def rep(a, b, n=1):
+        nonlocal src
+        assert src.count(a) == n, 'sil: ' + a[:70]
+        src = src.replace(a, b)
+    # paths 3 and 5
+    if wh & 1: rep("            [branch] if ((((t.x ^ op_bit(8)) & op_bit(11)) | (m0.ad & 3)) != 0) m0.q = data_texel(m0.ad);\n",
+        "            [branch] if ((((t.x ^ op_bit(8)) & op_bit(11)) | (m0.ad & 3) | (st0 && %s ? 1u : 0u)) != 0) m0.q = data_texel(m0.ad);   // (sil %d)\n"
+        % ('m0.otag == NONE' if k != 2 else 'true', k))
+    if wh & 1: rep("            bool nr = st0 && sl0 == NONE;\n            uint at0 = st0 ? (nr ? WCS : sl0) : WCN;\n",
+        "            bool sil0 = st0 && m0.otag == NONE && merge(t.x, w0, m0.ad, r[d0]) == w0;   // (sil)\n"
+        "            bool nr = st0 && sl0 == NONE && !sil0;\n            uint at0 = st0 && !sil0 ? (nr ? WCS : sl0) : WCN;\n")
+    # path 6
+    if wh & 2: rep("            [branch] if (((t.x & op_bit(3)) | ((t.y ^ op_bit(8)) & op_bit(11)) | ((m0.ad | m1.ad) & 3)) != 0) { m0.q = data_texel(m0.ad); m1.q = data_texel(m1.ad); }\n",
+        "            [branch] if (((t.x & op_bit(3)) | ((t.y ^ op_bit(8)) & op_bit(11)) | ((m0.ad | m1.ad) & 3) | (%s ? 1u : 0u)) != 0) { m0.q = data_texel(m0.ad); m1.q = data_texel(m1.ad); }   // (sil %d)\n"
+        % ('m0.otag == NONE || (st1 && m1.otag == NONE)' if k6 != 2 else 'true', k6))
+    if wh & 2: rep("            bool same = m0.t == m1.t, over = same && sl0 == NONE;\n            wt[s0x] = tg0;",
+        "            bool sil0 = m0.otag == NONE && e0 == w0;   // (sil)\n            s0x = sil0 ? WCN : s0x;\n"
+        "            bool same = m0.t == m1.t, over = same && sl0 == NONE && !sil0;\n            wt[s0x] = tg0;")
+    if wh & 2: rep("""            v1 = extend(t.y, w1, m1.ad);
+            bool nr = sl0 == NONE || (st1 && sl1 == NONE);
+            uint o1 = m1.otag;
+            uint at1 = st1 ? (sl1 == NONE ? WCS + 1 : sl1) : WCN;
+""", """            v1 = extend(t.y, w1, m1.ad);
+            bool sil1 = st1 && m1.otag == NONE && merge(t.y, w1, m1.ad, r[d1]) == w1;   // (sil)
+            bool nr = (sl0 == NONE && !sil0) || (st1 && sl1 == NONE && !sil1);
+            uint o1 = m1.otag;
+            uint at1 = st1 && !sil1 ? (sl1 == NONE ? WCS + 1 : sl1) : WCN;
+""")
+    # step12's memory path (mread fetches the texel)
+    if wh & 4: rep("""        ok = !stv || sl != NONE;
+        uint at = stv && ok ? sl : WCN;
+""", """        bool sil = stv && m.otag == NONE && merge(t.x, word, m.ad, r[d0]) == word;   // (sil)
+        ok = !stv || sl != NONE || sil;
+        uint at = stv && ok && !sil ? sl : WCN;
+""")
+    # the general step's stores, a word at a time: a word of what is there, to a texel with no entry, goes to the sink
+    if wh & 8: rep("""        uint s = lk.sl;
+        ok = s != NONE;
+        [branch] if (ok) {
+            uint tg = lk.otag;
+            uint e = wd[4 * s + i];
+            uint old = lk.e != WCN ? lk.w : pick(ram(t), i);
+            uint lo = k == 0 ? o : 0, hi = min(4u, o + by - 4 * k);
+            uint m = (hi >= 4 ? 0xffffffffu : (1u << (8 * hi)) - 1) & ~((1u << (8 * lo)) - 1);
+            uint val = o != 0 ? (word_of(d, k) << (8 * o)) | (k != 0 ? word_of(d, k - 1) >> (32 - 8 * o) : 0) : word_of(d, k);
+""", """        uint s = lk.sl;
+        uint old = lk.e != WCN ? lk.w : pick(ram(t), i);   // (sil: before the room's test)
+        uint lo = k == 0 ? o : 0, hi = min(4u, o + by - 4 * k);
+        uint m = (hi >= 4 ? 0xffffffffu : (1u << (8 * hi)) - 1) & ~((1u << (8 * lo)) - 1);
+        uint val = o != 0 ? (word_of(d, k) << (8 * o)) | (k != 0 ? word_of(d, k - 1) >> (32 - 8 * o) : 0) : word_of(d, k);
+        s = lk.otag == NONE && ((old ^ val) & m) == 0 ? WCN : s;   // (sil: no entry, no room needed: the sink)
+        ok = s != NONE;
+        [branch] if (ok) {
+            uint tg = lk.otag;
+            uint e = wd[4 * s + i];
+""")
+    if k == 3:   # (3: only a store that finds no room is looked at: its texel fetched, compared, and the pass goes on if it is silent)
+        src = '\n'.join(l.replace('m0.otag == NONE', 'm0.sl == NONE').replace('m1.otag == NONE', 'm1.sl == NONE').replace('m.otag == NONE', 'm.sl == NONE')
+                        .replace('lk.otag == NONE', 'lk.sl == NONE') if '(sil' in l else l for l in src.split('\n'))
     return src
 
 def cc0x_text(P, src):
@@ -1084,7 +1160,7 @@ def emit(P):
            state_io(P), frag(P), part('ops')]
     from memopts import memopts
     from layoutopts import layoutopts
-    return core0(P, layoutopts(P, memopts(P, mflat(P, p2strip(P, '\n'.join(out))))))
+    return core0(P, layoutopts(P, sil_text(P, memopts(P, mflat(P, p2strip(P, '\n'.join(out)))))))
 
 def manifest(P):
     P = full(P)

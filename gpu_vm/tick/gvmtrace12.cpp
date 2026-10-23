@@ -170,7 +170,7 @@ static std::vector<uint32_t> read_tex(Tex& t) {
     return out;
 }
 
-static uint32_t g_bw = 0, g_bh = 1, g_jrow = 0, g_cpts = 0;   // a built step's block (builder/gen.py's GEO_BW, GEO_BH, GEO_JROW): core 0's pixel j at (jx, jy)
+static uint32_t g_bw = 0, g_bh = 1, g_jrow = 0, g_cpts = 0, g_band = 0, g_per = 0;   // a built step's block (builder/gen.py's GEO_BW, GEO_BH, GEO_JROW): core 0's pixel j at (jx, jy)
 int main(int argc, char** argv) {
     std::string shader, name = "arith";
     std::vector<std::string> defs;
@@ -199,12 +199,15 @@ int main(int argc, char** argv) {
             return dflt;
         };
         g_wcn = size("WCN", 128); g_texw = size("RAM_W", 2048); g_twc = size("T_WC", 24);
-        g_bw = size("GEO_BW", 0); g_bh = size("GEO_BH", 1); g_jrow = size("GEO_JROW", 0); g_cpts = size("CPTS", g_wcn);
+        g_bw = size("GEO_BW", 0); g_bh = size("GEO_BH", 1); g_jrow = size("GEO_JROW", 0); g_cpts = size("CPTS", g_wcn); g_band = size("GEO_BAND", 0); g_per = size("GEO_PER", 0);
     }
     const Case* cs = nullptr;
     static std::vector<Case> all = cases();
     for (auto& c : all) if (name == c.name) cs = &c;
-    if (!cs || cs->cores != 1) { printf("gvmtrace12: no case %s of one core\n", name.c_str()); return 1; }
+    // (a case of many cores, the game bench's scenes too: a built step's blocks, band by band, as gvmbench lays them out, perm id)
+    if (!cs || (cs->cores != 1 && !(g_bw && g_band && g_per))) { printf("gvmtrace12: no case %s (of many cores: a built step's blocks only)\n", name.c_str()); return 1; }
+    const uint32_t ncores = cs->cores;
+    RAM_END = cs->mc || cs->big ? RAM_MC : 2048 * 2048 * 16;
 
     check(D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&dev)), "D3D12CreateDevice");
     D3D12_COMMAND_QUEUE_DESC qd{D3D12_COMMAND_LIST_TYPE_DIRECT};
@@ -256,17 +259,26 @@ int main(int argc, char** argv) {
     // the machine: RAM, the ROM, two sets of eight state targets
     Prepared pr = prepare(*cs, 1);
     uint32_t statePix = (g_twc + g_wcn / 2 + 7) / 8;
-    uint32_t sw = g_bw ? g_bw : statePix, shh = g_bw ? g_bh : 1;   // the state textures' size: a built step's block, else a row
-    auto at_of = [&](uint32_t j) { return g_bw == 0 ? j : g_jrow ? (j / g_bw) * sw + j % g_bw : (j % g_bh) * sw + j / g_bh; };
+    // the state textures' size: a built step's blocks (a band of g_per a row of bands), else a row
+    uint32_t sw = g_bw ? (ncores > 1 ? g_per * g_bw : g_bw) : statePix, shh = g_bw ? (ncores > 1 ? ((ncores - 1) / g_per) * g_band + g_bh : g_bh) : 1;
+    auto at_core = [&](uint32_t c, uint32_t j) -> uint32_t {
+        if (g_bw == 0) return j;
+        uint32_t jx = g_jrow ? j % g_bw : j / g_bh, jy = g_jrow ? j / g_bw : j % g_bh;
+        return ((ncores > 1 ? (c / g_per) * g_band : 0) + jy) * sw + (ncores > 1 ? (c % g_per) * g_bw : 0) + jx;
+    };
+    auto at_of = [&](uint32_t j) { return at_core(0, j); };
     std::vector<uint32_t> rom((size_t)ROM_SIZE / 4);
     for (size_t k = 0; k < rom.size(); k++) rom[k] = (uint32_t)(k * 0x01000193u) ^ 0x5bd1e995u;
     Tex ram = make_tex(g_texw, ram_rows(), pr.ramImg.data()), romt = make_tex(g_texw, rom_rows(), rom.data()), set[2][8];
     for (int k = 0; k < 2; k++)
         for (int t = 0; t < 8; t++) {
             std::vector<uint32_t> img((size_t)sw * shh * 4, 0);
-            for (uint32_t tx = t; tx < sw * shh * 8 && tx < pr.state[0].size() / 4; tx += 8) memcpy(&img[at_of(tx / 8) * 4], &pr.state[0][tx * 4], 16);
+            for (uint32_t c = 0; c < ncores; c++)
+                for (uint32_t tx = t; tx < (g_bw ? g_bw * g_bh : sw) * 8 && tx < pr.state[c].size() / 4; tx += 8) memcpy(&img[at_core(c, tx / 8) * 4], &pr.state[c][tx * 4], 16);
             set[k][t] = make_tex(sw, shh, img.data());
         }
+    std::vector<uint32_t> zeros((size_t)256 * 4, 0);
+    Tex opz = make_tex(256, 1, zeros.data());
     // descriptors: an RTV each; two SRV tables, the state read from set 0 or from set 1
     D3D12_DESCRIPTOR_HEAP_DESC rh{D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 17}, sh{D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 24, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE};
     ComPtr<ID3D12DescriptorHeap> rtvs, srvs;
@@ -285,11 +297,11 @@ int main(int argc, char** argv) {
         for (int i = 0; i < 12; i++) {
             D3D12_CPU_DESCRIPTOR_HANDLE h = srvs->GetCPUDescriptorHandleForHeapStart();
             h.ptr += (size_t)(k * 12 + i) * sinc;
-            ID3D12Resource* r = i == 0 ? ram.r.Get() : i == 1 ? romt.r.Get() : i < 10 ? set[k][i - 2].r.Get() : romt.r.Get();
+            ID3D12Resource* r = i == 0 ? ram.r.Get() : i == 1 ? romt.r.Get() : i < 10 ? set[k][i - 2].r.Get() : i == 10 ? opz.r.Get() : romt.r.Get();   // (t10 _OpState: no operation asked, a texel a core)
             dev->CreateShaderResourceView(r, &sv, h);
         }
     auto table = [&](int k) { D3D12_GPU_DESCRIPTOR_HANDLE h = srvs->GetGPUDescriptorHandleForHeapStart(); h.ptr += (size_t)k * 12 * sinc; return h; };
-    uint32_t pass[20] = {ticks, RAM_END, 1000, 0, 0, 1, ram_rows(), 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    uint32_t pass[20] = {ticks, RAM_END, 1000, 0, 0, 1, ram_rows(), 0, ncores, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
     const D3D12_RESOURCE_STATES SRV = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
     int cur = 0;
     auto record_pass = [&]() {
@@ -299,18 +311,21 @@ int main(int argc, char** argv) {
         list->SetGraphicsRoot32BitConstants(0, 20, pass, 0);
         // the tick: set cur from set cur ^ 1
         for (int t = 0; t < 8; t++) { to(set[cur][t], D3D12_RESOURCE_STATE_RENDER_TARGET); to(set[cur ^ 1][t], SRV); }
-        to(ram, SRV); to(romt, SRV);
+        to(ram, SRV); to(romt, SRV); to(opz, SRV);
         D3D12_CPU_DESCRIPTOR_HANDLE rt[8];
         for (int t = 0; t < 8; t++) rt[t] = rtv(cur * 8 + t);
         list->OMSetRenderTargets(8, rt, FALSE, nullptr);
-        D3D12_VIEWPORT vp{0, 0, (float)sw, (float)shh, 0, 1};
         D3D12_RECT sc{0, 0, (LONG)sw, (LONG)shh + 1};
-        list->RSSetViewports(1, &vp);
         list->RSSetScissorRects(1, &sc);
         list->SetGraphicsRootDescriptorTable(2, table(cur ^ 1));
         list->SetPipelineState(tick.Get());
         list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        list->DrawInstanced(3, 1, 0, 0);
+        for (uint32_t b = 0; b * (g_per ? g_per : 1) < ncores; b++) {   // (a draw a band of blocks: gvmbench's order for a built step)
+            uint32_t n = ncores > 1 ? std::min(g_per, ncores - b * g_per) : 1;
+            D3D12_VIEWPORT vp{0, (float)(ncores > 1 ? b * g_band : 0), (float)(ncores > 1 ? n * g_bw : sw), (float)(ncores > 1 ? g_bh : shh), 0, 1};
+            list->RSSetViewports(1, &vp);
+            list->DrawInstanced(3, 1, 0, 0);
+        }
         if (hasCommit) {   // the commit: the pass's word pairs into RAM, a component a draw
             for (int t = 0; t < 8; t++) to(set[cur][t], SRV);
             to(ram, D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -326,7 +341,7 @@ int main(int argc, char** argv) {
                 uint32_t cc[4] = {c, 1, 0, 0};
                 list->SetGraphicsRoot32BitConstants(1, 4, cc, 0);
                 list->SetPipelineState(commit[c].Get());
-                list->DrawInstanced(g_bw ? g_cpts : g_wcn, 1, 0, 0);
+                list->DrawInstanced((g_bw ? g_cpts : g_wcn) * ncores, 1, 0, 0);
             }
         }
         cur ^= 1;

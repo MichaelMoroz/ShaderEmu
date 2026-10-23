@@ -103,6 +103,8 @@ typedef struct gvm_machine {
     uint32_t wide3;          // phase 3 (gvm_asm.h's max_ops 3): n 3 is three ops, word 2 op 2 (no long immediate then)
     uint32_t thin;           // phase 3 (gvm_asm.h's thin8): 8-byte instructions {op, control} (16 with a long immediate:
                              // {op, control, imm, 0}, at a texel's start); branch offsets in 8 bytes; an instruction has 0 or 1 op
+    uint32_t silent;         // (the builder's sil, a tick's SIL) a store of the bytes RAM holds already, to a texel this core has
+                             // not stored to in the pass, makes no entry (and needs no room): nothing it could change is seen
 } gvm_machine;
 
 #define GVM_REF_BREAK_HALTS 1u   // break stops the core (the reference's tests) instead of trapping
@@ -300,10 +302,23 @@ static int gvm__room(gvm_core *c, uint32_t a, uint32_t bytes) {
     return c->wl.n + need <= c->wl.cap;
 }
 
+// A store that changes nothing (gvm_machine.silent): every byte as RAM holds it, no word of its texels in the write log
+static int gvm__silent(const gvm_machine *m, gvm_core *c, uint32_t a, uint32_t bytes, uint32_t v) {
+    uint32_t i, t;
+    if (!m->silent || bytes > 4 || a >= GVM_OPS || a + bytes > m->ram_end) return 0;
+    for (t = a >> 4; t <= (a + bytes - 1) >> 4; t++)
+        for (i = 0; i < 4; i++) if (gvm__wl_find(&c->wl, t * 4 + i, 0)) return 0;
+    for (i = 0; i < bytes; i++)
+        if (((m->ram[(a + i) >> 2] >> (((a + i) & 3) * 8)) & 0xffu) != ((v >> (8 * i)) & 0xffu)) return 0;
+    return 1;
+}
+static uint32_t gvm__store_v;   // (the value of the store host_access is told of: gvm_cpu's GVM_STLOG_VALUES)
 static void gvm__store(gvm_machine *m, gvm_core *c, uint32_t a, uint32_t bytes, uint32_t v) {
     if (a >= GVM_OPS) { c->op[(a - GVM_OPS) >> 2] = v; return; }   // (latched: a 16-byte store at GVM_OPS asks)
-    if (c->wl.nb) { gvm__wc_put(&c->wl, a >> 4, 1); gvm__wc_put(&c->wl, (a + bytes - 1) >> 4, 1); }
+    gvm__store_v = v;
     if (c->host_access) c->host_access(c, a, bytes, 1);
+    if (gvm__silent(m, c, a, bytes, v)) return;
+    if (c->wl.nb) { gvm__wc_put(&c->wl, a >> 4, 1); gvm__wc_put(&c->wl, (a + bytes - 1) >> 4, 1); }
     for (uint32_t i = 0; i < bytes; i++) {
         uint32_t b = a + i, word = b >> 2, sh = (b & 3) * 8;
         uint32_t *e = gvm__wl_find(&c->wl, word, 0);
@@ -509,7 +524,7 @@ static int gvm__op(gvm_machine *m, gvm_core *c, uint32_t base, uint32_t s, const
                 return GVM__GO;
             }
             if (!gvm__store_ok(m, addr, by)) { c->ops_run--; gvm__trap(c, GVM_CAUSE_STORE, epc, addr); return GVM__TRAPPED; }
-            if (addr < GVM_OPS && !gvm__room(c, addr, by)) { c->ops_run--; c->pc = epc; *end = GVM_END_FULL; return GVM__END; }
+            if (addr < GVM_OPS && !(by <= 4 && gvm__silent(m, c, addr, by, c->x[rd])) && !gvm__room(c, addr, by)) { c->ops_run--; c->pc = epc; *end = GVM_END_FULL; return GVM__END; }
             if (by <= 4) gvm__store(m, c, addr, by, c->x[rd]);
             else for (uint32_t k = 0; k < by / 4; k++) gvm__store(m, c, addr + 4 * k, 4, c->x[(rd + k) & 63]);
             if (addr == GVM_OPS && by == 16) memcpy(c->opq[c->nops++], c->op, sizeof c->op);   // an operation asked for

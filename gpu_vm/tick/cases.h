@@ -1136,6 +1136,35 @@ static std::vector<Case> cases() {
         v.push_back(c);
     };
     pe("p_e1", 1); pe("p_e255", 255);
+    // ---- silent stores (the builder's sil, gvm_machine.silent): core 0 writes three words; in the next pass cores 1 and 3
+    // store what is there already (a word, and a word and a byte) and core 2 stores other values to the same words; after a
+    // sync each reads them back and stores what it saw. A silent store makes no entry, so the commit leaves core 2's values
+    // whatever the cores' order; the tick and the reference must agree on every word
+    {
+        Case c{"silent", 4, false, [](std::vector<GvmAsm>& p, auto&, uint32_t) {
+            const uint32_t W = DATA + 0x200, DONE = DATA + 0x100;
+            GvmAsm& a = p[0];
+            a.li(4, (int32_t)W); a.li(5, 5); a.li(6, 0x11223344); a.close();
+            a.sw(5, 4, 0); a.close(); a.sw(5, 4, 16); a.close(); a.sw(6, 4, 32); a.close();
+            a.x(GVM_X_SYNC); a.close();
+            a.halt();
+            for (int k = 1; k < 4; k++) {
+                GvmAsm& w = p[k];
+                w.li(4, (int32_t)W); w.li(5, 5); w.li(6, 0x44); w.li(7, 7); w.li(8, 9); w.close();
+                w.x(GVM_X_SYNC); w.close();   // (pass 0 ends: core 0's words are committed)
+                if (k == 1) { w.sw(5, 4, 0); w.close(); }
+                if (k == 2) { w.sw(7, 4, 0); w.close(); w.sw(8, 4, 16); w.close(); w.st(GVM_W_B, 8, 4, 33); w.close(); }
+                if (k == 3) { w.sw(5, 4, 16); w.st(GVM_W_B, 6, 4, 32); w.close(); }
+                w.x(GVM_X_SYNC); w.close();
+                w.lw(9, 4, 0); w.lw(10, 4, 16); w.close(); w.lw(11, 4, 32); w.close();
+                w.li(12, (int32_t)(DONE + 16 * k)); w.close();
+                w.sw(9, 12, 0); w.close(); w.sw(10, 12, 4); w.close(); w.sw(11, 12, 8); w.close();
+                w.halt();
+            }
+        }};
+        c.named = true;
+        v.push_back(c);
+    }
     // ---- a worker's budget by the kernel's REST mask (the builder's wad=5, WAITW 0x00c01100): core 0 stores the mask (worker 2
     // only), then ends its passes on sync for a while, cleared and given again; workers 1-3 count bundles until core 0 says
     // done, then store their counts: as many as their budgets let them run, the same on the reference and the tick

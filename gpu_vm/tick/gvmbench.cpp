@@ -32,7 +32,7 @@ static uint32_t g_ntex = 0;    // a step's NTEX (x22): its state texels (0: T_WC
 static uint32_t g_geo = 0;     // a step's GEO_BLOCKS (x21): pixel p of core c at ((c & 127) * 8 + p / 8, (c >> 7) * 16 + p % 8)
 static uint32_t g_wcn0 = 0;    // a step's WCN0 (x25): core 0's own write cache, its tick a compile of its own (CORE0=1)
 static uint32_t g_spix0 = 0;   // and its state pixels (NTEX0): 0-63 in its block, 64 on at ((p >> 3) - 8, 8 + (p & 7))
-struct Geo { uint32_t bw = 0, bh = 0, band = 0, per = 0, jrow = 0, perm = 0, mul = 0, inv = 0; uint32_t cpts = 0, xr = 0, npair = 0, xbind = 0, xfast = 0, t_xf = 0, t_xt = 0, t_pn = 23, nc = 0, thin = 0, thin8 = 0, wide3 = 0, late = 0, fx1 = 0, wsh = 0, wad = 0, vec = 0, t_vr = 0, cc0x = 0; };
+struct Geo { uint32_t bw = 0, bh = 0, band = 0, per = 0, jrow = 0, perm = 0, mul = 0, inv = 0; uint32_t cpts = 0, xr = 0, npair = 0, xbind = 0, xfast = 0, t_xf = 0, t_xt = 0, t_pn = 23, nc = 0, thin = 0, thin8 = 0, wide3 = 0, late = 0, fx1 = 0, wsh = 0, wad = 0, vec = 0, t_vr = 0, cc0x = 0, sil = 0; };
 static Geo g_gg;               // a built step's layout (builder/gen.py: GEO_BW...): core c's pixel j at (slot * bw + jx, band * BAND + jy)
 static uint32_t g_lrows = 1;   // a core's state pixels on this many rows (a step's LROWS, x19): pixel p at (p % spx, core * LROWS + p / spx)
 
@@ -432,7 +432,7 @@ static bool check_case(Gpu& gpu, const Case& cs, uint32_t seed, bool verbose) {
     std::vector<uint8_t> romBytes(ROM_SIZE);
     memcpy(romBytes.data(), g_rom.data(), ROM_SIZE);
     m.ram = refRam.data(); m.ram_end = RAM_END; m.rom = romBytes.data(); m.rom_size = ROM_SIZE;
-    m.flags = GVM_REF_BREAK_HALTS; m.thin = g_gg.thin8; m.wide3 = g_gg.wide3 != 0; m.late = g_gg.late == 3 ? 2 : g_gg.late != 0; m.vec = g_gg.vec != 0;
+    m.flags = GVM_REF_BREAK_HALTS; m.thin = g_gg.thin8; m.wide3 = g_gg.wide3 != 0; m.late = g_gg.late == 3 ? 2 : g_gg.late != 0; m.vec = g_gg.vec != 0; m.silent = g_gg.sil == 1 || g_gg.sil == 2;   // (sil 3: only a store that finds no room is silent, which the reference does not model)
     std::vector<gvm_core> rc(cs.cores);
     for (uint32_t c = 0; c < cs.cores; c++) {
         gvm_core_reset(&rc[c], c, pr.bases[c]); rc[c].sr[GVM_SR_TVEC] = HALT_STUB;
@@ -630,7 +630,7 @@ static Geo step_geo(const std::string& path) {
     g.jrow = step_size(src, {}, "GEO_JROW", 0); g.perm = step_size(src, {}, "GEO_PERM", 0); g.mul = step_size(src, {}, "GEO_MUL", 0);
     g.inv = step_size(src, {}, "GEO_INV", 0);
     g.cpts = step_size(src, {}, "CPTS", 0); g.xr = step_size(src, {}, "XR", 0); g.npair = step_size(src, {}, "NPAIR", 0);
-    g.xbind = step_size(src, {}, "XBIND", 0); g.xfast = step_size(src, {}, "XFAST", 0); g.nc = step_size(src, {}, "NCLOAD", 0); g.thin = step_size(src, {}, "THIN", 0); g.thin8 = step_size(src, {}, "THIN8", 0); g.wide3 = step_size(src, {}, "WIDE3", 0); g.late = step_size(src, {}, "LATEBR", 0); g.fx1 = step_size(src, {}, "FX1", 0); g.wsh = step_size(src, {}, "WSH", 0); g.wad = step_size(src, {}, "WAD", 0); g.vec = step_size(src, {}, "VEC", 0); g.t_vr = step_size(src, {}, "T_VR", 0); g.cc0x = step_size(src, {}, "CC0X", 0); g.t_xf = step_size(src, {}, "T_XF", 0); g.t_xt = step_size(src, {}, "T_XT", 0);
+    g.xbind = step_size(src, {}, "XBIND", 0); g.xfast = step_size(src, {}, "XFAST", 0); g.nc = step_size(src, {}, "NCLOAD", 0); g.thin = step_size(src, {}, "THIN", 0); g.thin8 = step_size(src, {}, "THIN8", 0); g.wide3 = step_size(src, {}, "WIDE3", 0); g.late = step_size(src, {}, "LATEBR", 0); g.fx1 = step_size(src, {}, "FX1", 0); g.wsh = step_size(src, {}, "WSH", 0); g.wad = step_size(src, {}, "WAD", 0); g.vec = step_size(src, {}, "VEC", 0); g.t_vr = step_size(src, {}, "T_VR", 0); g.cc0x = step_size(src, {}, "CC0X", 0); g.sil = step_size(src, {}, "SIL", 0); g.t_xf = step_size(src, {}, "T_XF", 0); g.t_xt = step_size(src, {}, "T_XT", 0);
     return g;
 }
 static void build_variant(Variant& v) {

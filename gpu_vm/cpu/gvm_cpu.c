@@ -770,15 +770,25 @@ static FILE *SY;   // GVM_SYNCLOG
 // ---- GVM_STLOG=FILE (gpu_vm/memory_model.md): core 0's stores while the profile counts (--profile-at), a record of
 // five words each: the address, sp, core 0's bundles run, bytes | the base register << 8 | supervisor << 16 |
 // the op's mode << 20 | a load << 24 (GVM_STLOG_LOADS=1: loads too), and the pc; a pass's end is the address 0xffffffff with why in the last word. GVM_STLOG_MAX: records.
-static struct { FILE *f; uint64_t n, max; int loads; } SL;
+static struct { FILE *f; uint64_t n, max; int loads, core, values; } SL;   // (GVM_STLOG_CORE=K: core K's, -1 every core's; the core in bits 25-31 of the fourth word)
 static void stlog_put(uint32_t a, uint32_t sp, uint32_t b, uint32_t info, uint32_t pc) {
     uint32_t r[5] = {a, sp, b, info, pc};
     if (SL.n >= SL.max) { if (SL.n++ == SL.max) { fprintf(stderr, "gvm_cpu: GVM_STLOG full\n"); prof_killed = 1; } return; }
     fwrite(r, 4, 5, SL.f);
     SL.n++;
 }
+// (GVM_STLOG_VALUES=1: two words more a record, the store's bytes and the bytes it overwrites as the core sees them, low first)
+static void stlog_values(gvm_core *c, uint32_t a, uint32_t bytes) {
+    uint32_t r[2] = {0, 0};
+    for (uint32_t i = 0; i < bytes && i < 4; i++) {
+        uint32_t b = a + i, *e = gvm__wl_find(&c->wl, b >> 2, 0), word = e ? *e : H.m.ram[b >> 2];
+        r[0] |= ((gvm__store_v >> (8 * i)) & 0xffu) << (8 * i);
+        r[1] |= ((word >> ((b & 3) * 8)) & 0xffu) << (8 * i);
+    }
+    if (SL.values && SL.n <= SL.max) fwrite(r, 4, 2, SL.f);
+}
 static void stlog_access(gvm_core *c, uint32_t a, uint32_t bytes, int store) {
-    if ((!store && !SL.loads) || c->id || H.bundles < H.prof_from) return;
+    if ((!store && !SL.loads) || (SL.core >= 0 && (int)c->id != SL.core) || H.bundles < H.prof_from) return;
     uint32_t base = c->pc & ~15u, *t = &H.m.ram[base >> 2], ctl = t[3], n = GVM_N(ctl), s, reg = 64, mode = 7;
     for (s = 0; s < n && s < 2; s++) {
         uint32_t w = t[s], opc = GVM_OPC(w), md = (opc >> 3) & 7, ra = GVM_RA(w), addr;
@@ -789,13 +799,16 @@ static void stlog_access(gvm_core *c, uint32_t a, uint32_t bytes, int store) {
         else continue;
         if (a - addr < 16) { reg = ra; mode = md; break; }
     }
-    stlog_put(a, c->x[2], (uint32_t)c->bundles_run, bytes | reg << 8 | ((c->sr[GVM_SR_STATUS] & GVM_ST_S) ? 1u << 16 : 0) | mode << 20 | (store ? 0 : 1u << 24), c->pc);
+    stlog_put(a, c->x[2], (uint32_t)c->bundles_run, bytes | reg << 8 | ((c->sr[GVM_SR_STATUS] & GVM_ST_S) ? 1u << 16 : 0) | mode << 20 | (store ? 0 : 1u << 24) | (c->id & 127u) << 25, c->pc);
+    if (SL.values) stlog_values(c, a, store ? bytes : 0);
 }
 static void stlog_init(const char *path) {
     SL.f = fopen(path, "wb");
     if (!SL.f) { fprintf(stderr, "gvm_cpu: GVM_STLOG: cannot write %s\n", path); exit(EXIT_USAGE); }
     SL.loads = getenv("GVM_STLOG_LOADS") != NULL;
     SL.max = getenv("GVM_STLOG_MAX") ? strtoull(getenv("GVM_STLOG_MAX"), NULL, 0) : 50000000ull;
+    SL.core = getenv("GVM_STLOG_CORE") ? atoi(getenv("GVM_STLOG_CORE")) : 0;
+    SL.values = getenv("GVM_STLOG_VALUES") != NULL;
     for (uint32_t i = 0; i < H.ncores; i++) H.cores[i].host_access = stlog_access;
 }
 
@@ -1109,7 +1122,7 @@ int main(int argc, char **argv) {
                 H.c0_end[H.end[c]]++; H.c0_bundles += k->bundles_run - H.c0_last;
             }
             if (!c) H.c0_last = k->bundles_run;
-            if (SL.f && !c && H.bundles >= H.prof_from) stlog_put(0xffffffffu, k->x[2], (uint32_t)k->bundles_run, H.end[c], k->pc);
+            if (SL.f && (SL.core < 0 || (int)c == SL.core) && H.bundles >= H.prof_from) { stlog_put(0xffffffffu, k->x[2], (uint32_t)k->bundles_run, H.end[c] | (c & 127u) << 25, k->pc); if (SL.values && SL.n <= SL.max) { uint32_t z[2] = {0, 0}; fwrite(z, 4, 2, SL.f); } }
             // (a worker parked in the firmware, or whose job's loop ended its pass with a user's wait, is idle)
             int idle = c && ((k->pc >= GVM_FW_PARK && k->pc < GVM_FW_PARK_END) || (H.end[c] == GVM_END_WAIT && !(k->sr[GVM_SR_STATUS] & GVM_ST_S)));
             if (!k->waiting && !idle) all_waiting = 0;
