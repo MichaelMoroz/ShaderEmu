@@ -104,12 +104,18 @@ builtins() {
     # bytes. A file that compiles to nothing (128-bit long double, tf) is left out by being empty.
     local B="$LLVM_SRC/compiler-rt/lib/builtins" O; O=$(mktemp -d)
     local skip=" emutls enable_execute_stack clear_cache gcc_personality_v0 eprintf os_version_check cpu_model trampoline_setup apple_versioning "
-    local n=0 f name
+    local n=0 f name inc
+    # gpu_vm's floats have no rounding modes or exceptions: the soft double's adds and the like read the mode inline
+    # (fp_mode.h's guard taken first), not through calls of fp_mode.c's __fe_getround and __fe_raise_inexact
+    printf '%s\n' '#define FP_MODE_H' 'typedef enum { CRT_FE_TONEAREST, CRT_FE_DOWNWARD, CRT_FE_UPWARD, CRT_FE_TOWARDZERO } CRT_FE_ROUND_MODE;' \
+        'static inline CRT_FE_ROUND_MODE __fe_getround(void) { return CRT_FE_TONEAREST; }' \
+        'static inline int __fe_raise_inexact(void) { return 0; }' > "$O/fp_mode_inline.h"
     for f in "$B"/*.c; do
         name=$(basename "$f" .c)
         case "$skip" in *" $name "*) continue ;; esac
         case "$name" in *xf*|*xc3|*bf2|crtbegin|crtend) continue ;; esac   # x87's long double, bfloat16, crt objects
-        if $CC -O2 ${GVM_PIC:--fPIE} -fno-builtin -ffreestanding -nostdinc -isystem "$SYSROOT/include" -I"$B" \
+        inc=(-include "$O/fp_mode_inline.h"); [ "$name" = fp_mode ] && inc=()
+        if $CC -O2 ${GVM_PIC:--fPIE} -fno-builtin -ffreestanding -nostdinc -isystem "$SYSROOT/include" -I"$B" "${inc[@]}" \
                -c "$f" -o "$O/$name.o" 2> "$O/$name.err"; then
             n=$((n + 1))
         else
@@ -118,7 +124,7 @@ builtins() {
         fi
     done
     mkdir -p "$SYSROOT/lib"
-    rm -f "$SYSROOT/lib/libclang_rt.builtins-gpuvm.a"
+    rm -f "$SYSROOT/lib/libclang_rt.builtins-gpuvm.a" "$O/fp_mode_inline.h"
     "$LLVM_BIN/llvm-ar" rcs "$SYSROOT/lib/libclang_rt.builtins-gpuvm.a" "$O"/*.o
     echo "builtins: $n files into $SYSROOT/lib/libclang_rt.builtins-gpuvm.a"
     rm -rf "$O"

@@ -79,8 +79,10 @@ GPUVMTargetLowering::GPUVMTargetLowering(const TargetMachine &TM,
                       ISD::ABS, ISD::SMIN, ISD::SMAX, ISD::UMIN, ISD::UMAX},
                      MVT::i32, Legal);
   setOperationAction({ISD::FSHL, ISD::FSHR}, MVT::i32, Expand);
+  // an i64 shift by a variable amount inline (lowerShiftParts), not
+  // compiler-rt's __ashldi3 and the rest: soft double's adds called them
   setOperationAction({ISD::SHL_PARTS, ISD::SRL_PARTS, ISD::SRA_PARTS},
-                     MVT::i32, Expand);
+                     MVT::i32, Custom);
   setOperationAction({ISD::UADDO, ISD::USUBO, ISD::UADDO_CARRY,
                       ISD::USUBO_CARRY},
                      MVT::i32, Custom);
@@ -662,6 +664,10 @@ SDValue GPUVMTargetLowering::LowerOperation(SDValue Op,
   case ISD::UADDO_CARRY:
   case ISD::USUBO_CARRY:
     return lowerCarryOp(Op, DAG);
+  case ISD::SHL_PARTS:
+  case ISD::SRL_PARTS:
+  case ISD::SRA_PARTS:
+    return lowerShiftParts(Op, DAG);
   case ISD::FRAMEADDR:
     return lowerFRAMEADDR(Op, DAG);
   case ISD::RETURNADDR:
@@ -783,6 +789,46 @@ SDValue GPUVMTargetLowering::lowerVASTART(SDValue Op, SelectionDAG &DAG) const {
 }
 
 // The carries of 64-bit sums: addcy/carry, subby/borrow.
+// An i64 shift by a variable amount (the shifts take the amount's low 5 bits;
+// what a select drops may be anything): left,
+//   s < 32: lo << s, (hi << s) | ((lo >> 1) >> (31 - s));  else 0, lo << (s - 32)
+// and right (logical or arithmetic) the mirror, hi's sign for the high part.
+SDValue GPUVMTargetLowering::lowerShiftParts(SDValue Op,
+                                             SelectionDAG &DAG) const {
+  SDLoc DL(Op);
+  SDValue Lo = Op.getOperand(0), Hi = Op.getOperand(1), S = Op.getOperand(2);
+  EVT VT = Lo.getValueType();
+  auto C = [&](int64_t V) { return DAG.getSignedConstant(V, DL, VT); };
+  SDValue SMinus32 = DAG.getNode(ISD::ADD, DL, VT, S, C(-32));
+  SDValue S31 = DAG.getNode(ISD::SUB, DL, VT, C(31), S);
+  SDValue Small = DAG.getSetCC(DL, VT, SMinus32, C(0), ISD::SETLT);
+  if (Op.getOpcode() == ISD::SHL_PARTS) {
+    SDValue LoT = DAG.getNode(ISD::SHL, DL, VT, Lo, S);
+    SDValue Carry = DAG.getNode(ISD::SRL, DL, VT,
+                                DAG.getNode(ISD::SRL, DL, VT, Lo, C(1)), S31);
+    SDValue HiT = DAG.getNode(ISD::OR, DL, VT,
+                              DAG.getNode(ISD::SHL, DL, VT, Hi, S), Carry);
+    SDValue HiF = DAG.getNode(ISD::SHL, DL, VT, Lo, SMinus32);
+    return DAG.getMergeValues(
+        {DAG.getNode(ISD::SELECT, DL, VT, Small, LoT, C(0)),
+         DAG.getNode(ISD::SELECT, DL, VT, Small, HiT, HiF)},
+        DL);
+  }
+  bool Arith = Op.getOpcode() == ISD::SRA_PARTS;
+  unsigned Sh = Arith ? ISD::SRA : ISD::SRL;
+  SDValue Carry = DAG.getNode(ISD::SHL, DL, VT,
+                              DAG.getNode(ISD::SHL, DL, VT, Hi, C(1)), S31);
+  SDValue LoT = DAG.getNode(ISD::OR, DL, VT,
+                            DAG.getNode(ISD::SRL, DL, VT, Lo, S), Carry);
+  SDValue HiT = DAG.getNode(Sh, DL, VT, Hi, S);
+  SDValue LoF = DAG.getNode(Sh, DL, VT, Hi, SMinus32);
+  SDValue HiF = Arith ? DAG.getNode(ISD::SRA, DL, VT, Hi, C(31)) : C(0);
+  return DAG.getMergeValues(
+      {DAG.getNode(ISD::SELECT, DL, VT, Small, LoT, LoF),
+       DAG.getNode(ISD::SELECT, DL, VT, Small, HiT, HiF)},
+      DL);
+}
+
 SDValue GPUVMTargetLowering::lowerCarryOp(SDValue Op, SelectionDAG &DAG) const {
   SDLoc DL(Op);
   SDValue A = Op.getOperand(0), B = Op.getOperand(1);
