@@ -42,6 +42,23 @@ The card here is slower than the 5090 (Quake III x22 44.6 against 50, Half-Life 
 machine more so for Half-Life; the ratios are what to read. On this card x22 is 0.54x of RISC-V in Quake III and
 0.77x in Half-Life and nxray.
 
+## x23 (23 October 2026, the write cache in buckets of four ways; same checkpoints, x22 run again beside it)
+
+| | RISC-V | x22 (again) | **x23** | x23 / RISC-V |
+|---|---|---|---|---|
+| Quake III, fps | 83.2 | 41.7 | **63.2** | 0.76 |
+| Half-Life, fps of the level | 9.8 | 7.3 | **10.6** | 1.08 |
+| nxray, pictures a second | 24.6 | 18.9 | **20.9** | 0.85 |
+| core 0 a pass: Q3 / HL / nxray | 4,135 / 6,016 / 2,783 | 1,089 / 1,420 / 1,922 | 2,294 / 2,735 / 3,090 | |
+| passes a second: Q3 / HL / nxray | 488 / 644 / 348 | 757 / 837 / 218 | 416 / 509 / 159 | |
+| tick ms a pass: Q3 / HL / nxray | 1.74 / 1.40 / 2.65 | 1.18 / 1.03 / 4.52 | 2.16 / 1.77 / 5.98 | |
+| passes ended, Q3 | budget 29%, pause 70% | full 72%, sync 28% | sync 61%, full 38%; a worker at its whole budget in 88% | |
+| passes ended, HL | budget 47%, pause 53% | full 92% | full 83%, sync 13% | |
+
+x22's second run is within 6.5% of its first (Quake III 41.7 against 44.6). With x23 the bound moves: in Quake III
+a worker (the server's or the scene's) now runs its whole budget in 88% of the passes (11,342 ops a pass for the
+busiest one), so the pass is that worker's 8,192 bundles, about 260 ns each (2.16 ms).
+
 ## Where a pass's time goes (23 October 2026)
 
 **There is no 0.34 us bundle.** That figure was a pass's tick time over core 0's bundles. Fitting each pass's wall time
@@ -58,6 +75,12 @@ x22: p_int 104 ns, CoreMark 193, gzip 257). Most of a pass is a cost that is not
 - A pass in which some worker reaches its whole budget costs 1.3-1.9 ms (5% of Quake III's passes on x21, 21% on x22).
 - x22 doubled both core 0's bundles a pass and the tick's time a pass (Quake III 0.54 -> 1.14 ms): its gain in fps
   (1.34x) comes from fewer passes ending on a full cache, not from cheaper bundles.
+
+With the busiest worker's ops a pass (`--frame-log`'s `.most` file, added for this) a pass fits as about 0.35-0.75 ms
+fixed + 250 ns x core 0's bundles + 115-120 ns x the busiest worker's ops (Half-Life x22 and x23; R^2 0.5, the wall's
+per-frame times are noisy); "core 0 + the busiest worker" fits a little better than "the larger of the two", so the
+cores do not overlap fully. The fixed part is not the tick's own (an idle machine's tick is 21 us); `GVM_NO_FREEZE=1`
+(every worker drawn every pass, a measure) adds 0.55 ms a pass to Quake III x21.
 
 Pass ends: gpu_vm's core 0 ends 73-96% of its passes on a full write cache after 550-1,500 bundles, while RISC-V's
 core 0 runs 4,000-6,000 instructions a pass and its passes end on the budget or the program's own pause.

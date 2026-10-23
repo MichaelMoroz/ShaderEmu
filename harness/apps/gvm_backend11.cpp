@@ -677,6 +677,8 @@ private:
     // the mailboxes (0x00c00000, 0x800 texels), `bits` MC_STATS_ALL's texels of which run and which are asleep.
     static const uint32_t kQuiet = 24;
     void freeze(const uint32_t* mbox, const uint32_t* bits) {
+        static const bool never = getenv("GVM_NO_FREEZE") != nullptr;   // (a measure: every worker drawn every pass)
+        if (never) return;
         bool changed = false;
         for (uint32_t k = 1; k <= workers_; k++) {
             const uint32_t* start = mbox + 4 * k;

@@ -1077,7 +1077,7 @@ int main(int argc, char** argv) {
     double guestTime = timeBase;
 
     std::vector<uint32_t> pcSamples, raSamples;
-    std::vector<uint32_t> frameSamples, workerSamples;
+    std::vector<uint32_t> frameSamples, workerSamples, workerMost;
     std::vector<uint32_t> l1Samples;
     uint32_t lastInstructions = 0, lastStall = 0;
     bool statsStarted = false;
@@ -1335,7 +1335,7 @@ int main(int argc, char** argv) {
         if (haveClock) guestInstructions += (uint32_t)(clock - lastClock);
         if (opt.cores > 1 && raw.size() >= (64 + kControlTexels + kNetRead) * 16) {
             // this pass: the workers' instructions, how many ran, how many a whole pass, how many only looked for a job
-            uint32_t ranNow = 0, coresNow = 0, fullNow = 0, waitNow = 0;
+            uint32_t ranNow = 0, coresNow = 0, fullNow = 0, waitNow = 0, mostNow = 0;
             for (int c = 1; c < opt.cores; ++c) {   // (MC_STATS, and MC_STATS_ALL from core 16)
                 uint32_t now = c < 16 ? texel(64 + 0x38 + c / 4, c % 4) : texel(64 + kControlTexels + kCoreStatsAt + c / 4, c % 4);
                 // (a geometry laid out anew starts the counts again: one that went down is all new)
@@ -1343,12 +1343,13 @@ int main(int argc, char** argv) {
                 workerInstructions += ran;
                 if (ran != 0 && ran < 64) { waitNow++; ran = 0; }   // (a worker awake with no job runs some 18 a pass)
                 ranNow += ran;
+                mostNow = (std::max)(mostNow, ran);
                 coresNow += ran != 0;
                 fullNow += ran >= (uint32_t)opt.ticks;
                 workerClock[c] = now;
             }
             haveWorkerClock = true;
-            if (!opt.frameLog.empty() && (opt.statsFrom.empty() || statsStarted)) workerSamples.insert(workerSamples.end(), {ranNow, coresNow, fullNow, waitNow});
+            if (!opt.frameLog.empty() && (opt.statsFrom.empty() || statsStarted)) workerSamples.insert(workerSamples.end(), {ranNow, coresNow, fullNow, waitNow}), workerMost.push_back(mostNow);
         }
         // the lanes' field (docs/machine/lanes.md): whether a job is posted, and what its lanes ran, by its
         // groups' words (each the sixteenths of its lanes' instructions for the job of the number it says)
@@ -2130,7 +2131,8 @@ int main(int argc, char** argv) {
     if (!opt.frameLog.empty()) writeFileBinary(opt.frameLog, (const uint8_t*)frameSamples.data(), frameSamples.size() * 4);
     // (beside it, a pass's worker cores: their instructions, how many ran, how many a whole pass, how many only waited)
     if (!opt.frameLog.empty() && !workerSamples.empty())
-        writeFileBinary(opt.frameLog + ".workers", (const uint8_t*)workerSamples.data(), workerSamples.size() * 4);
+        writeFileBinary(opt.frameLog + ".workers", (const uint8_t*)workerSamples.data(), workerSamples.size() * 4),
+        writeFileBinary(opt.frameLog + ".most", (const uint8_t*)workerMost.data(), workerMost.size() * 4);   // (the most one worker ran)
     if (!opt.l1Log.empty()) writeFileBinary(opt.l1Log, (const uint8_t*)l1Samples.data(), l1Samples.size() * 4);
     if (!opt.pcLog.empty()) writeFileBinary(opt.pcLog, (const uint8_t*)pcSamples.data(), pcSamples.size() * 4);
     if (!opt.raLog.empty()) writeFileBinary(opt.raLog, (const uint8_t*)raSamples.data(), raSamples.size() * 4);
