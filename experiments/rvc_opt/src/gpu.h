@@ -802,15 +802,18 @@ bool gpu_writeback(uint2 pos, out uint4 result) {
 #if defined(GVM_RAM) && defined(CORES) && CORES > 1
 // (gpu_vm: a core is a row of the tick's state; the host starts workers 1 to _GvmWorkers at the firmware, which
 // parks a core in its loop at _GvmParkLo to _GvmParkHi: gpu_vm/platform.md)
+int3 gvm_s16(uint core) {   // the pixel of texels 16 to 23: a row a core, or (_GvmGeo, the step's GEO_BLOCKS) a block
+    return _GvmGeo != 0 ? int3((core & 127) * 8, (core >> 7) * 16 + 2, 0) : int3(2, core, 0);
+}
 uint mc_stat_count(uint core) {
-    return core <= _GvmWorkers ? _GvmS3.Load(int3(2, core, 0)).g : 0;
+    return core <= _GvmWorkers ? _GvmS3.Load(gvm_s16(core)).g : 0;
 }
 uint2 mc_stat_bits(uint from) {
     uint running = 0, asleep = 0;
     for (uint n = 0; n < 32; n++) {
         uint core = from + n;
         if (core > _GvmWorkers) continue;
-        uint4 s16 = _GvmS0.Load(int3(2, core, 0)), s19 = _GvmS3.Load(int3(2, core, 0));
+        uint4 s16 = _GvmS0.Load(gvm_s16(core)), s19 = _GvmS3.Load(gvm_s16(core));
         bool parked = core != 0 && s16.x >= _GvmParkLo && s16.x < _GvmParkHi;
         running |= (parked ? 0u : 1u) << n;
         asleep |= (!parked && core != 0 && s19.w == 2 && (s16.y & 8) == 0 ? 1u : 0u) << n;   // a user's wait ended its pass

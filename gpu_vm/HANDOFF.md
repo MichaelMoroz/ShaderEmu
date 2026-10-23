@@ -1,4 +1,146 @@
-# Handoff: gpu_vm ISA, tick, LLVM, Linux (22 October 2026)
+# Handoff: gpu_vm ISA, tick, LLVM, Linux (23 October 2026)
+
+## For the next machine (RTX 5070 Laptop), 23 October 2026: real workloads, and the way to 2x (read this first)
+
+### The goal, in the user's words
+
+The goal is **twice the RISC-V machine's frame rate on most games, measured on real workloads**, with multiple workers
+working correctly and nothing slowing down. The bench's loops already pass 2x; they are not the goal. **ISA changes and
+compiler changes are completely allowed.** How it gets done does not matter, as long as it fits in a fragment shader
+**without UAVs**: the machine runs in VRChat, where a pixel shader writes only its render targets. So no compute
+shaders and no one-lane UAV ticks (x19u's `fragu` is a dead end for this reason). It may need a slight redesign of the
+ISA and the virtual machine. One idea the user raised: a memory model with an explicit cache, so that LLVM can manage
+the cache itself.
+
+### Where it stands (RTX 5090, D3D11, fxc2, from game checkpoints, 15 s a run)
+
+| | RISC-V (`rvc_opt`) | gpu_vm x18 | x21 (geometry) | x22 (geometry + texel cache) |
+|---|---|---|---|---|
+| Quake III, guest fps | 77 | 28 (100 frames in 3.6 s) | 42 (2.35 s) | **50** (1.94-2.02 s) |
+| Half-Life, frames in 15 s | ~495 (397 in 12 s) | 243 | 246 | **275** |
+| nxray 320 x 240, 255 workers, pictures/s | 37-42 | 7.4-8.9 | 25-27 | **38-39** |
+| Red Alert, game frames/s | 20.8 | 20.7 | 20.7 | 20.7 (idle-paced: no measure of speed) |
+| core 0 bundles a pass: Q3 / HL / RA | | 955 / 1,293 / 1,855 | 951 / 1,300 / 1,851 | 1,581 / 2,738 / 3,183 |
+| nxray workers, ops/s (all cores) | | 127 M | 448 M | 641 M |
+
+So multi-core work is at parity with RISC-V, Quake III is 0.65x of it, and Half-Life 0.55x. **2x means Quake III at
+about 154 fps and Half-Life at about 66**, roughly 3.1x and 3.6x where x22 is now.
+
+### What changed this session (committed)
+
+- **x21: the RISC-V tick's geometry** (docs/machine/multicore.md, "The geometry"). Core c's 38 state pixels sit in a
+  block of 5 of 8 columns and 8 of 16 rows, at x = (c & 127) * 8 + j / 8, y = (c >> 7) * 16 + j % 8. In x18 a core
+  was a row and adjacent rows were adjacent cores, so every warp held 4 to 8 cores and cost all their work. This
+  change alone made nxray 3.2x faster. It is a step constant (`GEO_BLOCKS = 1`) that the harness, gvmbench and the
+  control pass all read.
+- **x22: RISC-V's write cache** (experiments/rvc_opt/src/mem.h). An entry is a RAM texel whose tag carries a 4-bit
+  mask of the words stored, so the commit still writes words and the cross-core semantics are x18's. There are two
+  tables of 128 entries with independent hashes (the second is mem.h's `L1_H1`), then two overflow slots. That is 258
+  entries in 363 state texels (46 pixels, inside the 6 columns a block may run). The step's `NTEX` gives the harness
+  the state size.
+- **Harness gvm snapshots** (`--save-state` / `--load-state` with `--gvm`): RAM, both state sets, the operations'
+  textures and the GPU picture. Loading converts between the row and block layouts and between cache sizes, keeping
+  texels below T_WC.
+- **x20, a cuckoo cache on the word entries**, was measured and rejected: it costs 5-29% per bundle. It is kept in
+  steps/ as a record.
+
+### Pitfalls with real workloads (each one cost a round here)
+
+1. **The uncapped harness hides the cost that matters.** `rvc_harness` draws as many frames as it can, one tick pass
+   each. VRChat runs about one pass per display frame, so there **bundles per pass is the speed**, and a pass that
+   ends at 1,300 of its 8,192-bundle budget throws away 84% of the frame. Report bundles per pass (`--frame-log`;
+   the STATS `per_frame` field) next to guest fps, every time. In the harness the fixed cost of a pass is only about
+   11 µs, so longer passes look free there, and that is misleading.
+2. **The many-core bench (mc_int, mc_load) runs the same code on every core**, which hides warp sharing: a shared
+   warp costs nothing when its cores run the same instructions. On it x18 beat x21 (0.48 against 0.60 ns a bundle at
+   255 cores) while nxray ran 3.2x faster on x21. Judge geometry with nxray from its checkpoint.
+3. **The control pass reads core state by layout** (`experiments/rvc_opt/src/gpu.h`, `mc_stat_count` and
+   `mc_stat_bits`, through `gvm_s16()` and `_GvmGeo`). Its running and asleep bits drive the harness's freezing of
+   idle workers. Change the layout without updating it and the worker instruction counts turn absurd (10^13): that
+   was the symptom here.
+4. **Every gvmbench loop is a tight loop.** Real code costs about 0.34 µs a bundle (HL: 0.49 ms for 1,290 bundles)
+   against about 0.05 µs for the loops. Nobody has explained that gap yet. It is the biggest unknown, and measuring
+   it is the first job (Nsight on `gvmtrace12`, D3D12 with debug info, real code from a checkpoint).
+5. **Why passes end** (`frames.py`-style histogram of `--frame-log`: pc, bundles, why). On x22 Half-Life still ends
+   93.5% of its passes on a full write cache, at 2,331 bundles. Quake III ends 66% that way and 34% on sync, its
+   `shaderemu_gpu_rest` at 0x0230fe4c. Red Alert waits 18% of the time and is idle-paced: it needs a heavier scene
+   to measure anything.
+6. **x22's lookup reads both candidate entries' 16-byte texels on every memory op**: the bench's loads lose 15%,
+   stores 26% and stride 25% against x21. Read the tag texel first and the data only on a hit (the tags already sit
+   in texels of their own), and add RISC-V's bloom word (`mem_cache_bloom`: loads skip the lookup when the address
+   has a bit no store had).
+7. **HLSL's `&&` and `||` do not short-circuit.** A side-effecting call in a condition runs every time. x20's first
+   version committed placeholders this way. Nest the ifs.
+8. **nxray captures are not deterministic**: two runs of one tick differ in 0.9% of pixels (it animates by the host's
+   clock). Correctness comes from gvmbench against the reference on WARP, then on the card at 255 cores, which
+   crosses the second band.
+9. **WARP at many cores runs past 5 minutes** (mc_int at 160 cores was stopped). Check the full default set on WARP
+   (about 2 minutes), then many cores on the card.
+10. **The checkpoints are bound to their image.** Rebuilding `build/gvm_apps/img` invalidates them. They are 254 MB
+    each, machine-local and not in git, so the 5070 makes its own (see below).
+
+### What should be done to get to 2x (in order)
+
+1. **Find where a real bundle's 0.34 µs goes** (pitfall 4): Nsight per-shader on real code. Candidates are the 148 KB
+   fragment shader's instruction-cache misses on paths real code touches, local-array traffic (x22 keeps 5 KB of
+   arrays a pixel), and the general step for bundles the fast loop does not take. Before any of that, measure the
+   share of bundles that leave the fast loop.
+2. **The write cache** (Half-Life ends 93% of its passes full). Do pitfall 6 first. Then add a third table (RISC-V has
+   tables of 64, 32 and 16 buckets of three ways) or more ways a bucket, sized so a worker stays at 6 columns or
+   fewer. Core 0 may have a block of its own, larger than a worker's.
+3. **The ISA and the compiler, now allowed**. The user's own idea is a memory model the compiler manages. Some options:
+   - a core-private scratch region (the stack, spills) kept in state texels or a per-core RAM region, never hashed
+     into the write cache;
+   - stores coalesced into 16-byte stores (`GVM_W_Q` exists) so that one entry is one store;
+   - fewer spills (64 registers exist).
+
+   Whatever is built must keep worker stores visible to other cores at the commit.
+4. **The compiler subagent's work (stopped unfinished, committed separately, every option OFF by default).** It worked
+   from `gvm_cpu`, not the card. What it did:
+   - `gvm_cpu --profile` counts the bundles run by address, core 0's and the workers'.
+   - What it found: real games run 1.32-1.60 ops a bundle. The fast path takes 59% (nxray, whose float bundles take
+     step12) to 84% (Doom, Quake III) of bundles. A single-op bundle is most often an op followed by a block start
+     (16%), an op that shares its bundle with a branch, or a branch on a register the previous bundle wrote.
+   - Three compiler options, all defaulting to false:
+     - `-mllvm -gpuvm-sched-kind` pairs ops of one kind first in the bundle scheduler;
+     - `-mllvm -gpuvm-mask-select` makes an integer select lite ops on a 0/1 mask;
+     - `-mllvm -gpuvm-fnrel` makes PIC addresses function-relative (one `lpc` a function, globals as a base plus a
+       `%fnrel` offset), with an assembler specifier, a fixup and a PCIMM32 relocation.
+   - Its estimates, from gvm_cpu's profile and a card cost model, never measured on the card:
+     - all three on: Doom -3.3% bundles (est. -14.9% card time), Quake III est. -8%, nxray unchanged;
+     - masks and kind pairing alone: about 1%, and CoreMark 113,110 to 114,406 bundles an iteration (worse).
+   - **Not verified:** c-torture was not rerun with the options on (the baseline is 99.7% of what the host passes at
+     -O0 and -O2); the `nxray` test case failed in its runs with the options; whether the defaults-off build
+     matches the baseline was not checked either. A `build/gvm_apps/img-cc` image from its last iteration exists on
+     the 5090 machine only.
+5. **Tune for the card in use** (not done on the 5090 either): `--tick-rounds`, the `--ticks` budget, and whether
+   core 0 should be a larger block.
+
+### The benchmark: the state it is in, and how to run it
+
+- **Tick correctness**: `bin\gvmbench.exe --warp --shader gpu_vm/tick/steps/x22.hlsl` reads "same as the reference"
+  (129 s). On the card: `pwsh tools\gpu_queue.ps1 bin\gvmbench.exe --variants gpu_vm/tick/variants/x22a.txt`, and
+  the same with `--case mc_int,mc_load --cores 255`: all three steps are the same as the reference.
+- **The bench's latest numbers** (5090; loops in M RISC-V-equivalent instructions a second, mc in ns a bundle):
+
+  | | arith | loads | stores | mix | stride | x lean | mc_int 255 | mc_load 255 |
+  |---|---|---|---|---|---|---|---|---|
+  | x18 | 20.63 | 11.91 | 10.85 | 18.39 | 14.27 | 2.10 | 0.48 | 0.76 |
+  | x21 | 20.81 | 11.66 | 10.90 | 17.90 | 13.91 | 2.10 | 0.60 | 1.07 |
+  | x22 | 20.91 | 9.90 | 8.02 | 16.08 | 10.46 | 1.89 | 0.59 | 1.07 |
+
+- **Game checkpoints** (make them once per image on this machine; each run goes through `tools\gpu_queue.ps1`):
+  1. Boot each machine once per game with `--save-state` when the game prints its mark. The marks are
+     `q3stat: frame 100:`, `rastat: frame`, `raystat: 320 x 240` and `hlmark: begins`.
+     - gpu_vm: `bin\rvc_harness.exe --gvm build\gvm_apps\img --no-viz`.
+     - RISC-V: the main checkout's `rvc_harness --d3d11 --rvc experiments\rvc_opt --define NO_PAGING --image
+       linux-net`, from a root whose `build/images/linux` is the nommu image.
+  2. Then measure with `--load-state X.snap --seconds 15 --stats-after 2 --frame-log F --no-stdin --uart-log L`, and
+     for gpu_vm `--gvm-tick gpu_vm/tick/steps/x22.hlsl`. Read the guest's own lines from the UART log (`q3stat:
+     frame`, `hlmark: ends`, `raystat:`) and the harness's STATS line.
+  3. A 15 s run from a checkpoint costs about 20 s, so all four games on one tick take under 2 minutes.
+- **The default tick is still x18** in the harness (`gvm_backend11.cpp`). Pass `--gvm-tick
+  gpu_vm/tick/steps/x22.hlsl` to measure x22. Making it the default is the user's call.
 
 ## Where it stands at the end of 22 October 2026 (wrapped up; read this first)
 

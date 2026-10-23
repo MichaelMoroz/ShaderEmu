@@ -28,6 +28,8 @@
 #include "cases.h"
 static int g_romrows = 0;   // (probe: the ROM in RAM's texture)
 static uint32_t g_wcn1 = 0;    // a step's WCN1 (x19g): a worker's entries, the commit's points for it (0: WCN)
+static uint32_t g_ntex = 0;    // a step's NTEX (x22): its state texels (0: T_WC + WCN / 2)
+static uint32_t g_geo = 0;     // a step's GEO_BLOCKS (x21): pixel p of core c at ((c & 127) * 8 + p / 8, (c >> 7) * 16 + p % 8)
 static uint32_t g_lrows = 1;   // a core's state pixels on this many rows (a step's LROWS, x19): pixel p at (p % spx, core * LROWS + p / spx)
 
 // ---- D3D11
@@ -147,9 +149,15 @@ struct Gpu {
     ID3D11BlendState* mask[4];
     uint32_t opSlots = 32, opSpan = 272, opRounds = 2;   // the operations' stage (a step's OP_SLOTS, OP_SPAN) and rounds a pass
     struct { uint32_t ticks, ramEnd, timeLo, timeHi, player, flags, ramRows, ext0, ncores, pad[3], ext[8]; } pass;   // (x17's PassParams)
+    size_t pix(uint32_t c, uint32_t p) const {   // the place of core c's state pixel p in a state texture
+        if (g_geo) return (size_t)((c >> 7) * 16 + p % 8) * texW() + (c & 127) * 8 + p / 8;
+        return (size_t)(c * g_lrows + p / spx) * spx + p % spx;
+    }
+    UINT texW() const { return g_geo ? (cores < 128 ? cores : 128) * 8 : spx; }
+    UINT texH() const { return g_geo ? ((cores - 1) / 128) * 16 + 8 : cores * g_lrows; }
     void make(uint32_t ncores, const std::vector<uint32_t>& ramImg, const std::vector<uint32_t>& romImg, const std::vector<std::vector<uint32_t>>& state) {
         cores = ncores;
-        statePix = (g_twc + g_wcn / 2 + 7) / 8;
+        statePix = ((g_ntex ? g_ntex : g_twc + g_wcn / 2) + 7) / 8;
         spx = (statePix + g_lrows - 1) / g_lrows;
         if (g_romrows) {   // (probe: the ROM in RAM's texture, rows from RamRows on)
             std::vector<uint32_t> both(ramImg);
@@ -170,11 +178,11 @@ struct Gpu {
         for (int k = 0; k < 2; k++)
             for (int t = 0; t < 8; t++) {
                 g_uav_tex = uavTick;
-                std::vector<uint32_t> img((size_t)spx * g_lrows * cores * 4, 0);
+                std::vector<uint32_t> img((size_t)texW() * texH() * 4, 0);
                 for (uint32_t c = 0; c < cores; c++)
                     for (uint32_t tx = t; tx < statePix * 8 && tx < state[c].size() / 4; tx += 8)
-                        memcpy(&img[((size_t)(c * g_lrows + tx / 8 / spx) * spx + tx / 8 % spx) * 4], &state[c][tx * 4], 16);
-                set[k][t] = make_tex(spx, cores * g_lrows, img.data());
+                        memcpy(&img[pix(c, tx / 8) * 4], &state[c][tx * 4], 16);
+                set[k][t] = make_tex(texW(), texH(), img.data());
                 g_uav_tex = false;
             }
         cur = 0; oc = 0;
@@ -203,7 +211,7 @@ struct Gpu {
         ctx->VSSetShaderResources(0, 13, s);
         (void)state0;
     }
-    void viewport(UINT w, UINT h, UINT y = 0) { D3D11_VIEWPORT v = {0, (float)y, (float)w, (float)h, 0, 1}; ctx->RSSetViewports(1, &v); }
+    void viewport(UINT w, UINT h, UINT y = 0, UINT x = 0) { D3D11_VIEWPORT v = {(float)x, (float)y, (float)w, (float)h, 0, 1}; ctx->RSSetViewports(1, &v); }
     void run_pass() {
         ctx->UpdateSubresource(cb, 0, nullptr, &pass, 0, 0);
         ID3D11Buffer* cbs[2] = {cb, ccb[0]};
@@ -228,6 +236,11 @@ struct Gpu {
             viewport(spx, (cores - 1) * g_lrows, g_lrows);
             ctx->PSSetShader(tickW.ps, nullptr, 0);
             ctx->Draw(3, 0);
+        } else if (g_geo) {   // a band of 128 blocks at a time, its 8 rows
+            for (uint32_t b = 0; b * 128 < cores; b++) {
+                viewport((cores - b * 128 < 128 ? cores - b * 128 : 128) * 8, 8, b * 16);
+                ctx->Draw(3, 0);
+            }
         } else {
             viewport(uavTick ? 1 : spx, cores * g_lrows);
             ctx->Draw(3, 0);
@@ -305,7 +318,7 @@ struct Gpu {
         std::vector<uint32_t> out((size_t)statePix * 8 * 4);
         for (int t = 0; t < 8; t++) {
             std::vector<uint32_t> v = read_tex(set[cur ^ 1][t]);
-            for (uint32_t p = 0; p < statePix; p++) memcpy(&out[((size_t)p * 8 + t) * 4], &v[((size_t)(c * g_lrows + p / spx) * spx + p % spx) * 4], 16);
+            for (uint32_t p = 0; p < statePix; p++) memcpy(&out[((size_t)p * 8 + t) * 4], &v[pix(c, p) * 4], 16);
         }
         return out;
     }
@@ -449,11 +462,11 @@ static double time_case(Gpu& gpu, const Case& cs, uint32_t ticks, uint32_t passe
     if (cs.ns) return 1000.0 / mops;   // a real program: ns a bundle
     return cs.rv_per_iter > 0 ? mops / per * cs.rv_per_iter : mops;
 }
-struct Variant { std::string name, shader; std::vector<std::string> defs; Prog tick, commit, stg, wrt, prog, any, tickW; bool hasCommit, hasOps, hasAny = false, uavTick = false, hasW = false; uint32_t wcn = 128, texw = 2048, twc = 24, slots = 32, span = 272, lrows = 1, wcn1 = 0; };
+struct Variant { std::string name, shader; std::vector<std::string> defs; Prog tick, commit, stg, wrt, prog, any, tickW; bool hasCommit, hasOps, hasAny = false, uavTick = false, hasW = false; uint32_t wcn = 128, texw = 2048, twc = 24, slots = 32, span = 272, lrows = 1, wcn1 = 0, geo = 0, ntex = 0; };
 static void use(Gpu& gpu, const Variant& v) {
     gpu.tick = v.tick; gpu.commit = v.commit; gpu.stg = v.stg; gpu.wrt = v.wrt; gpu.prog = v.prog;
     gpu.hasCommit = v.hasCommit; gpu.hasOps = v.hasOps; gpu.uavTick = v.uavTick; gpu.hasW = v.hasW; gpu.tickW = v.tickW; gpu.hasAny = v.hasAny && !env_int("GVM_NOPRED"); gpu.any = v.any;
-    g_wcn = v.wcn; g_texw = v.texw; g_twc = v.twc; g_lrows = v.lrows; g_wcn1 = v.wcn1;   // (the state's layout, the commit's points and RAM's width are the variant's)
+    g_wcn = v.wcn; g_texw = v.texw; g_twc = v.twc; g_lrows = v.lrows; g_wcn1 = v.wcn1; g_geo = v.geo; g_ntex = v.ntex;   // (the state's layout, the commit's points and RAM's width are the variant's)
     gpu.opSlots = v.slots; gpu.opSpan = v.span; gpu.opRounds = g_op_rounds;
     g_romrows = 0; g_x17_paths = 0;   // (probe: the ROM in RAM's texture; x17 on the real programs' own paths)
     for (auto& d : v.defs) { if (d == "ROMROWS=1") g_romrows = 1; if (d == "X17PATHS=1") g_x17_paths = 1; }
@@ -469,7 +482,7 @@ static uint32_t step_size(const std::string& src, const std::vector<std::string>
     }
     return dflt;
 }
-static void step_sizes(const std::string& path, const std::vector<std::string>& defs, uint32_t& wcn, uint32_t& texw, uint32_t& twc, uint32_t& slots, uint32_t& span, uint32_t& lrows, uint32_t& wcn1) {
+static void step_sizes(const std::string& path, const std::vector<std::string>& defs, uint32_t& wcn, uint32_t& texw, uint32_t& twc, uint32_t& slots, uint32_t& span, uint32_t& lrows, uint32_t& wcn1, uint32_t& geo, uint32_t& ntex) {
     std::string src = slurp(path);
     wcn = step_size(src, defs, "WCN", 128);
     texw = step_size(src, defs, "RAM_W", 2048);
@@ -478,6 +491,8 @@ static void step_sizes(const std::string& path, const std::vector<std::string>& 
     span = step_size(src, defs, "OP_SPAN", 272);
     lrows = step_size(src, defs, "LROWS", 1);
     wcn1 = step_size(src, defs, "WCN1", 0);
+    geo = step_size(src, defs, "GEO_BLOCKS", 0);
+    ntex = step_size(src, defs, "NTEX", 0);
 }
 static void build_variant(Variant& v) {
     std::vector<std::string> names, values;
@@ -571,7 +586,7 @@ int main(int argc, char** argv) {
     QueryPerformanceCounter(&f0);
     for (Variant& v : vars) {
         if (v.shader.empty()) v.shader = dflt;
-        step_sizes(v.shader, v.defs, v.wcn, v.texw, v.twc, v.slots, v.span, v.lrows, v.wcn1);
+        step_sizes(v.shader, v.defs, v.wcn, v.texw, v.twc, v.slots, v.span, v.lrows, v.wcn1, v.geo, v.ntex);
         build_variant(v);
     }
     QueryPerformanceCounter(&f1);

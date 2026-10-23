@@ -1,0 +1,3 @@
+# x20a: the cuckoo write cache (x20) against x18
+x18       gpu_vm/tick/steps/x18.hlsl
+x20       gpu_vm/tick/steps/x20.hlsl

@@ -1,0 +1,4 @@
+# x22a: the texel write cache (x22) against x21 and x18
+x18       gpu_vm/tick/steps/x18.hlsl
+x21       gpu_vm/tick/steps/x21.hlsl
+x22       gpu_vm/tick/steps/x22.hlsl

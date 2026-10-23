@@ -155,6 +155,9 @@ public:
     virtual bool takeState(std::vector<uint8_t>& out) { (void)out; return false; }
     // Blocking read of the top-left w x h texels of the current state.
     virtual bool readState(UINT w, UINT h, std::vector<uint8_t>& out) = 0;
+    // A machine whose state is not one state texture (gpu_vm): the whole of it as one blob, and back.
+    virtual bool saveSnapshot(std::vector<uint8_t>& out) { (void)out; return false; }
+    virtual bool loadSnapshot(const uint8_t* data, size_t size, std::string& err) { (void)data; (void)size; err = "no snapshots here"; return false; }
     // Time on the graphics card of the last frame run with timeIt, once it is known: the CPUTick
     // draw, the Commit draw, and the emulated GPU device's two draws together (0 without one).
     virtual bool gpuTimes(double& tickMs, double& commitMs, double& deviceMs) = 0;

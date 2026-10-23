@@ -996,15 +996,17 @@ int main(int argc, char** argv) {
         SnapshotHeader hdr{};
         bool ok = readFileBinary(opt.loadState, snap) && snap.size() > sizeof hdr;
         if (ok) memcpy(&hdr, snap.data(), sizeof hdr);
-        // (one from before RAM reached 0x92000000 has 4096 rows: the rest is zeros)
-        if (!ok || memcmp(hdr.magic, kSnapshotMagic, 8) != 0 || hdr.width != W || hdr.height > H ||
-            snap.size() != sizeof hdr + (size_t)W * hdr.height * 16) {
+        // (one from before RAM reached 0x92000000 has 4096 rows: the rest is zeros; gpu_vm's is the backend's blob, 0 x 0)
+        bool gvmSnap = ok && !opt.gvm.empty() && memcmp(hdr.magic, kSnapshotMagic, 8) == 0 && hdr.width == 0;
+        if (!gvmSnap && (!ok || !opt.gvm.empty() || memcmp(hdr.magic, kSnapshotMagic, 8) != 0 || hdr.width != W || hdr.height > H ||
+                         snap.size() != sizeof hdr + (size_t)W * hdr.height * 16)) {
             fprintf(stderr, "[harness] %s is not a %ux%u snapshot\n", opt.loadState.c_str(), W, H);
             return 1;
         }
-        snap.resize(sizeof hdr + (size_t)W * H * 16, '\0');
+        if (!gvmSnap) snap.resize(sizeof hdr + (size_t)W * H * 16, '\0');
         if (!opt.replayDirs.empty()) replaySnap.assign(snap.data() + sizeof hdr, snap.size() - sizeof hdr);
-        if (!backend.setState(snap.data() + sizeof hdr, err)) {
+        if (gvmSnap ? !backend.loadSnapshot((const uint8_t*)snap.data() + sizeof hdr, snap.size() - sizeof hdr, err)
+                    : !backend.setState(snap.data() + sizeof hdr, err)) {
             fprintf(stderr, "[harness] %s\n", err.c_str());
             return 1;
         }
@@ -2067,12 +2069,12 @@ int main(int argc, char** argv) {
         std::vector<uint8_t> data;
         SnapshotHeader hdr{};
         memcpy(hdr.magic, kSnapshotMagic, 8);
-        hdr.width = W;
-        hdr.height = H;
+        hdr.width = opt.gvm.empty() ? W : 0;
+        hdr.height = opt.gvm.empty() ? H : 0;
         hdr.time = guestTime;
         hdr.sentTag = sentTag;
         hdr.sentChar = sentChar;
-        bool ok = backend.readState(W, H, data);
+        bool ok = opt.gvm.empty() ? backend.readState(W, H, data) : backend.saveSnapshot(data);
         if (ok) {
             data.insert(data.begin(), (const uint8_t*)&hdr, (const uint8_t*)&hdr + sizeof hdr);
             ok = writeFileBinary(opt.saveState, data.data(), data.size());
