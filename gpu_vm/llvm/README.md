@@ -40,6 +40,7 @@ libraries, X86 RISCV and GPUVM). `build.sh` links `Target/GPUVM` into `llvm/lib/
 | `0003-lld-gpuvm.patch` | `lld/ELF/Arch/GPUVM.cpp`: the relocations, TLS variant 1, no PLT or GOT, image base 0x02000000; `Thunks.cpp`: a range thunk for R_GVM_J18 beyond +-2 MB (one bundle: `addi t26, zero, dest; jr t26`) |
 | `0004-gpuvm-intrinsics-libcalls-datalayout-relocs.patch` | `llvm.gpuvm.copy`/`llvm.gpuvm.fill` (`IntrinsicsGPUVM.td`), gpuvm's runtime libcalls (`RuntimeLibcalls.td`: compiler-rt's and libm's, sincosf and sincos), the data layout `e-m:e-p:32:32-i64:64-n32-S128` (`TargetDataLayout.cpp`), R_GVM_32/REL32 for llvm-objdump and llvm-dwarfdump (`RelocationResolver.cpp`) |
 | `0005-clang-gpuvm.patch` | clang: `Basic/Targets/GPUVM.*` (TargetInfo), `CodeGen/Targets/GPUVM.cpp` (the ABI), `BuiltinsGPUVM.td`, the bare-metal driver for `gpuvm-unknown-elf` (ld.lld, no math errno), no math errno for `gpuvm-unknown-linux` either (`Linux.cpp`: musl), frame pointer omitted when optimizing, float denormals preserve-sign |
+| `0006-objdump-gpuvm-zeroes.patch` | llvm-objdump skips zeroes by whole bundles (16 bytes) on gpu_vm: by 4 it skipped the 12 zero bytes of a bundle of a control word alone (`ret`) and the rest of the dump came out of step with the bundles (`<unknown>`) |
 
 A change to a patched LLVM file: edit it in `~/gpu_vm/llvm-project` and write the patch again (0004 and 0005:
 `bash gpu_vm/llvm/patches/regen.sh`; the others `git diff -- PATHS > ...`, new files need `git add -N` first).

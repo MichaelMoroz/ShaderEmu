@@ -996,6 +996,7 @@ int main(int argc, char **argv) {
         if (c) k->halted = 1;   // (a worker from when the kernel lays the workers out: workers_pass)
         if (!c && H.wc_nb) { k->wl.nb = H.wc_nb; k->wl.ways = H.wc_ways; k->wl.reloc = H.wc_reloc; }
     }
+    H.m.late = getenv("GVM_LATE") && atoi(getenv("GVM_LATE")) != 0;   // GVM_LATE=1: late branches (gvm_machine.late; clang -mllvm -gpuvm-late-br)
     if (getenv("GVM_RACES")) race_init(getenv("GVM_RACES"));
     else if (getenv("GVM_STLOG")) stlog_init(getenv("GVM_STLOG"));
     if (H.devices && H.ncores > 1) W(CTRL + 0x3cc) = H.ncores;   // how many cores there could be (the kernel reads it at once)

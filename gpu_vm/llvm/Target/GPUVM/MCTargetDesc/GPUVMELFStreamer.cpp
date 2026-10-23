@@ -13,7 +13,8 @@
 // label, section change, alignment and datum. The control word acts after the
 // ops on the registers as the bundle found them: a branch whose compared
 // register an op of the bundle writes goes into a bundle of its own, so that
-// every control op keeps program order.
+// every control op keeps program order. On a machine with late branches
+// (-gpuvm-late-br) a branch reads them as the ops left them, and joins.
 //
 //===----------------------------------------------------------------------===//
 
@@ -39,6 +40,13 @@ using namespace llvm;
 static cl::opt<bool>
     NoPack("gpuvm-no-pack", cl::Hidden, cl::init(false),
            cl::desc("gpu_vm: one op a bundle (for debugging)"));
+
+static cl::opt<bool>
+    LateBr("gpuvm-late-br", cl::Hidden, cl::init(false),
+           cl::desc("gpu_vm: branches read their registers after the bundle's "
+                    "ops (a machine with gvm_machine.late)"));
+
+bool llvm::GPUVM::lateBranches() { return LateBr; }
 
 static GPUVMMCCodeEmitter &emitter(MCAssembler &A) {
   return static_cast<GPUVMMCCodeEmitter &>(A.getEmitter());
@@ -117,6 +125,9 @@ void GPUVMELFStreamer::putControl(const MCInst &Inst,
   default:
     break; // jr and callr read after the ops
   }
+  // (late branches: a branch reads them as the ops left them, program order)
+  if (LateBr)
+    Read.clear();
   for (unsigned R : Read)
     if (R != 0 && writes(Words, R)) {
       closeBundle();

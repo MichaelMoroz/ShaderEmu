@@ -1,0 +1,37 @@
+diff --git a/llvm/tools/llvm-objdump/llvm-objdump.cpp b/llvm/tools/llvm-objdump/llvm-objdump.cpp
+index 92c1c2da3..2967139d5 100644
+--- a/llvm/tools/llvm-objdump/llvm-objdump.cpp
++++ b/llvm/tools/llvm-objdump/llvm-objdump.cpp
+@@ -1396,7 +1396,8 @@ static void addPltEntries(const MCSubtargetInfo &STI, const ObjectFile &Obj,
+ // Normally the disassembly output will skip blocks of zeroes. This function
+ // returns the number of zero bytes that can be skipped when dumping the
+ // disassembly of the instructions in Buf.
+-static size_t countSkippableZeroBytes(ArrayRef<uint8_t> Buf) {
++static size_t countSkippableZeroBytes(ArrayRef<uint8_t> Buf,
++                                      size_t Granule = 4) {
+   // Find the number of leading zeroes.
+   size_t N = 0;
+   while (N < Buf.size() && !Buf[N])
+@@ -1408,8 +1409,9 @@ static size_t countSkippableZeroBytes(ArrayRef<uint8_t> Buf) {
+     return 0;
+ 
+   // We skip zeroes in multiples of 4 because do not want to truncate an
+-  // instruction if it starts with a zero byte.
+-  return N & ~0x3;
++  // instruction if it starts with a zero byte (gpu_vm: of a bundle, 16, or
++  // the rest of the dump is out of step with the bundles).
++  return N & ~(Granule - 1);
+ }
+ 
+ // Returns a map from sections to their relocations.
+@@ -2520,7 +2522,9 @@ disassembleObject(ObjectFile &Obj, const ObjectFile &DbgObj,
+                                  MaxOffset);
+ 
+           if (size_t N =
+-                  countSkippableZeroBytes(Bytes.slice(Index, MaxOffset))) {
++                  countSkippableZeroBytes(
++                      Bytes.slice(Index, MaxOffset),
++                      Obj.getArch() == Triple::gpuvm ? 16 : 4)) {
+             FOS << "\t\t..." << '\n';
+             Index += N;
+             continue;

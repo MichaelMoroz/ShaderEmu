@@ -113,6 +113,8 @@ public:
     if (getOptLevel() != CodeGenOptLevel::None)
       addPass(createGPUVMZeroExtPass());
     if (getOptLevel() != CodeGenOptLevel::None)
+      addPass(createGPUVMRebasePass());
+    if (getOptLevel() != CodeGenOptLevel::None)
       addPass(createGPUVMHoistConstantsPass());
   }
   void addPreSched2() override {

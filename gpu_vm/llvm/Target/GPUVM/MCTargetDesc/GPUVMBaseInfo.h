@@ -120,6 +120,12 @@ constexpr unsigned FMad = 2, FMsb = 3, FNmsb = 5, FMax = 7;
 constexpr unsigned MStore = 1, MStoreX = 3;
 constexpr unsigned WW = 0, WH = 2, WB = 3, WHU = 6, WBU = 7;
 
+// The machine's late branches (gvm_machine.late, gvm_asm.h's late_br; the
+// tick's LATEBR): a conditional branch and addbnz read their registers after
+// the bundle's ops, so a branch on a register an op of its bundle writes need
+// not open a bundle of its own (-gpuvm-late-br; GPUVMELFStreamer.cpp).
+bool lateBranches();
+
 // ---- The packing rules, as gvm_asm.h has them, on op words.
 namespace bundle {
 inline unsigned fn(uint32_t Op) { return opOpc(Op) & 31; }

@@ -179,7 +179,8 @@ bool GPUVMBranchFill::fill(MachineBasicBlock &B) {
 }
 
 bool GPUVMBranchFill::runOnMachineFunction(MachineFunction &MF) {
-  if (skipFunction(MF.getFunction()) || !BranchFill ||
+  // (late branches: a branch joins the bundle of the op before it)
+  if (skipFunction(MF.getFunction()) || !BranchFill || GPUVM::lateBranches() ||
       !MF.getRegInfo().tracksLiveness())
     return false;
   TII = MF.getSubtarget<GPUVMSubtarget>().getInstrInfo();

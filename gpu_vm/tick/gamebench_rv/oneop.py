@@ -60,6 +60,7 @@ def main():
         if not nxt: why['(next not run)'] += c; continue
         k2, rd2, reads2 = opinfo(nxt[0][0])
         if rd is not None and rd != 0 and rd in reads2: why['the next op reads its result'] += c
+        elif w[2] and nxt[0][2] and (nxt[0][3] >> 3) & 3 >= 1: why['both need the long immediate'] += c; pairs['long: ' + k + ' then ' + k2] += c
         elif k.startswith(('load', 'store')) and k2.startswith(('load', 'store')): why['two memory ops'] += c; pairs[k + ' then ' + k2] += c
         elif k2 not in ('int-lite', 'lpc') and not k2.startswith('float'): why['the next op is not lite (' + k2 + ')'] += c
         else: why['nothing: the scheduler left it'] += c

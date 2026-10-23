@@ -16,6 +16,11 @@
 //             andi sp, sp, -align; mv bp, sp
 //   epilogue: addi sp, fp, -N (sp moved); lw ra/s*, ...(sp); addi sp, sp, N
 //
+// A frame over 2 KB moves sp in two steps around the callee-saved registers'
+// stores and loads (splitSize), so that their offsets are short and two go in
+// a bundle: one long immediate a bundle made each its own (SV_PointContents'
+// 18 saves at 4148..4220(sp), a bundle each).
+//
 //===----------------------------------------------------------------------===//
 
 #include "GPUVMFrameLowering.h"
@@ -28,9 +33,31 @@
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/RegisterScavenging.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Target/TargetMachine.h"
 
 using namespace llvm;
+
+static cl::opt<bool> SplitSP("gpuvm-split-sp", cl::Hidden, cl::init(true),
+                             cl::desc("gpu_vm: a large frame's sp moves in two "
+                                      "steps around the callee-saved stores"));
+
+// The first step of sp in a frame over 2 KB: the callee-saved registers' area
+// (rounded to the stack's alignment), whose slots are then within an imm12 of
+// sp; 0: one step.
+static uint64_t splitSize(const MachineFunction &MF, uint64_t StackSize) {
+  const MachineFrameInfo &MFI = MF.getFrameInfo();
+  const std::vector<CalleeSavedInfo> &CSI = MFI.getCalleeSavedInfo();
+  if (!SplitSP || CSI.empty() || StackSize < 2048)
+    return 0;
+  int64_t Low = 0;
+  for (const CalleeSavedInfo &CS : CSI)
+    Low = std::min(Low, MFI.getObjectOffset(CS.getFrameIdx()));
+  uint64_t First = alignTo(static_cast<uint64_t>(-Low), Align(16));
+  if (First == 0 || First > 2032 || First >= StackSize)
+    return 0;
+  return First;
+}
 
 bool GPUVMFrameLowering::hasFPImpl(const MachineFunction &MF) const {
   const MachineFrameInfo &MFI = MF.getFrameInfo();
@@ -126,12 +153,18 @@ void GPUVMFrameLowering::emitPrologue(MachineFunction &MF,
   if (StackSize == 0 && !hasFP(MF))
     return;
 
+  uint64_t First = splitSize(MF, StackSize);
   adjustReg(MBB, MBBI, DL, TII, GPUVM::R2, GPUVM::R2,
-            -static_cast<int64_t>(StackSize), MachineInstr::FrameSetup);
+            -static_cast<int64_t>(First ? First : StackSize),
+            MachineInstr::FrameSetup);
 
   // Past the callee-saved registers' stores.
   while (MBBI != MBB.end() && MBBI->getFlag(MachineInstr::FrameSetup))
     ++MBBI;
+  if (First)
+    adjustReg(MBB, MBBI, DL, TII, GPUVM::R2, GPUVM::R2,
+              -static_cast<int64_t>(StackSize - First),
+              MachineInstr::FrameSetup);
 
   if (hasFP(MF))
     adjustReg(MBB, MBBI, DL, TII, GPUVM::R32, GPUVM::R2, StackSize,
@@ -166,12 +199,18 @@ void GPUVMFrameLowering::emitEpilogue(MachineFunction &MF,
          std::prev(FirstRestore)->getFlag(MachineInstr::FrameDestroy))
     --FirstRestore;
 
-  // sp as the prologue left it, before realignment or allocas
+  // sp as the prologue left it, before realignment or allocas (with a split
+  // frame, as its first step left it)
+  uint64_t First = splitSize(MF, StackSize);
   if (hasFP(MF) && (MFI.hasVarSizedObjects() || RI->hasStackRealignment(MF)))
     adjustReg(MBB, FirstRestore, DL, TII, GPUVM::R2, GPUVM::R32,
-              -static_cast<int64_t>(StackSize), MachineInstr::FrameDestroy);
+              -static_cast<int64_t>(First ? First : StackSize),
+              MachineInstr::FrameDestroy);
+  else if (First)
+    adjustReg(MBB, FirstRestore, DL, TII, GPUVM::R2, GPUVM::R2,
+              StackSize - First, MachineInstr::FrameDestroy);
 
-  adjustReg(MBB, MBBI, DL, TII, GPUVM::R2, GPUVM::R2, StackSize,
+  adjustReg(MBB, MBBI, DL, TII, GPUVM::R2, GPUVM::R2, First ? First : StackSize,
             MachineInstr::FrameDestroy);
 }
 
@@ -194,7 +233,8 @@ GPUVMFrameLowering::getFrameIndexReference(const MachineFunction &MF, int FI,
 
   if (IsCSR) {
     FrameReg = GPUVM::R2;
-    return StackOffset::getFixed(Offset + StackSize);
+    uint64_t First = splitSize(MF, StackSize);
+    return StackOffset::getFixed(Offset + (First ? First : StackSize));
   }
   if (MFI.isFixedObjectIndex(FI)) {
     if (hasFP(MF)) {

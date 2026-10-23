@@ -108,7 +108,7 @@ public:
 void GPUVMBundleStrategy::findBranchRegs() {
   BranchRegs.clear();
   MachineBasicBlock::iterator E = DAG->end();
-  if (DAG->SUnits.empty() ||
+  if (GPUVM::lateBranches() || DAG->SUnits.empty() ||
       E == DAG->SUnits[0].getInstr()->getParent()->end() ||
       !GPUVMInstrInfo::isCondBranch(E->getOpcode()))
     return;

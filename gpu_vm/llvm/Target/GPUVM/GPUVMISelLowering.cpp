@@ -44,6 +44,11 @@ using namespace llvm;
 #define GET_CALLING_CONV_IMPL
 #include "GPUVMGenCallingConv.inc"
 
+static cl::opt<unsigned> InlineStores(
+    "gpuvm-inline-stores", cl::Hidden, cl::init(32),
+    cl::desc("gpu_vm: stores a small memcpy, memmove or memset of a known "
+             "size makes inline at most (was 8)"));
+
 GPUVMTargetLowering::GPUVMTargetLowering(const TargetMachine &TM,
                                          const GPUVMSubtarget &STI)
     : TargetLowering(TM, STI), Subtarget(STI) {
@@ -143,12 +148,14 @@ GPUVMTargetLowering::GPUVMTargetLowering(const TargetMachine &TM,
   setPrefFunctionAlignment(Align(16));
 
   // Inline loads and stores for small copies (words, or texels when both
-  // sides are 16-aligned: GPUVMSelectionDAGInfo).
-  MaxStoresPerMemset = 8;
+  // sides are 16-aligned: GPUVMSelectionDAGInfo). Two loads or two stores go
+  // in a bundle, and a call of memcpy is a call and a return (cc 0 bundles)
+  // and its loop: Quake III's 72-byte structure copies called it.
+  MaxStoresPerMemset = InlineStores;
   MaxStoresPerMemsetOptSize = 4;
-  MaxStoresPerMemcpy = 8;
+  MaxStoresPerMemcpy = InlineStores;
   MaxStoresPerMemcpyOptSize = 4;
-  MaxStoresPerMemmove = 8;
+  MaxStoresPerMemmove = InlineStores;
   MaxStoresPerMemmoveOptSize = 4;
 }
 

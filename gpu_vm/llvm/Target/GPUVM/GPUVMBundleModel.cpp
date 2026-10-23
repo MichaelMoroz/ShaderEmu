@@ -145,7 +145,7 @@ bool GPUVM::Packer::put(const OpDesc &D) {
     return true;
   }
   if (D.Control) {
-    for (unsigned I = 0; I < D.NRead; ++I)
+    for (unsigned I = 0; I < (GPUVM::lateBranches() ? 0u : D.NRead); ++I)
       if (D.Read[I] != 0 && bundle::writes(Words, D.Read[I])) {
         close();
         break;
