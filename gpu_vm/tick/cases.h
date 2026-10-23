@@ -16,20 +16,22 @@
 static uint32_t RAM_END = 2048 * 2048 * 16;   // (128 MB for the many-core cases: RAM_MC)
 static const uint32_t ROM_SIZE = 1u << 20;
 static uint32_t g_texw = 2048;   // the RAM's and ROM's textures' width: a step's RAM_W (x16 on: 8192)
-static uint32_t g_rmap = 0;     // a step's RAM_MAP: 0 texel t at (t % g_texw, t / g_texw), 1 strips (isa.h GVM_STRIP_X)
-static uint32_t ram_rows() { return g_rmap ? GVM_STRIP_ROWS(RAM_END / 16) : RAM_END / 16 / g_texw; }
-static uint32_t rom_rows() { return g_rmap ? GVM_STRIP_ROWS(ROM_SIZE / 16) : ROM_SIZE / 16 / g_texw; }
+static uint32_t g_rmap = 0;     // a step's RAM_MAP: 0 texel t at (t % g_texw, t / g_texw), 1 strips (isa.h GVM_STRIP_X), 2 pairs (GVM_PAIR_X)
+static uint32_t map_rows(uint32_t texels) { return g_rmap == 2 ? GVM_PAIR_ROWS(texels) : g_rmap ? GVM_STRIP_ROWS(texels) : texels / g_texw; }
+static uint32_t ram_rows() { return map_rows(RAM_END / 16); }
+static uint32_t rom_rows() { return map_rows(ROM_SIZE / 16); }
+static size_t map_at(uint32_t t) { return g_rmap == 2 ? (size_t)GVM_PAIR_Y(t) * g_texw + GVM_PAIR_X(t) : (size_t)GVM_STRIP_Y(t) * g_texw + GVM_STRIP_X(t); }
 // an image of words (texel t at words 4t..4t+3) laid into a texture of g_texw x rows under the map, and back
 static std::vector<uint32_t> map_img(const std::vector<uint32_t>& lin, uint32_t rows) {
     if (!g_rmap) { std::vector<uint32_t> o(lin); o.resize((size_t)g_texw * rows * 4, 0); return o; }
     std::vector<uint32_t> o((size_t)g_texw * rows * 4, 0);
-    for (uint32_t t = 0; t < lin.size() / 4; t++) memcpy(&o[((size_t)GVM_STRIP_Y(t) * g_texw + GVM_STRIP_X(t)) * 4], &lin[(size_t)t * 4], 16);
+    for (uint32_t t = 0; t < lin.size() / 4; t++) memcpy(&o[map_at(t) * 4], &lin[(size_t)t * 4], 16);
     return o;
 }
 static std::vector<uint32_t> unmap_img(const std::vector<uint32_t>& img, size_t words) {
     if (!g_rmap) { std::vector<uint32_t> o(img); o.resize(words, 0); return o; }
     std::vector<uint32_t> o(words, 0);
-    for (uint32_t t = 0; t < words / 4; t++) memcpy(&o[(size_t)t * 4], &img[((size_t)GVM_STRIP_Y(t) * g_texw + GVM_STRIP_X(t)) * 4], 16);
+    for (uint32_t t = 0; t < words / 4; t++) memcpy(&o[(size_t)t * 4], &img[map_at(t) * 4], 16);
     return o;
 }
 static const uint32_t DATA = GVM_RAM + 0x100000;   // a case's data

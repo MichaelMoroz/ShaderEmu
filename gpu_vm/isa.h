@@ -337,6 +337,12 @@
 #define GVM_STRIP_Y(t) (((t) >> 9) & 0xfffu)
 #define GVM_STRIP_T(x, y) (((x) & 0x1ffu) | (((y) & 0xfffu) << 9) | (((x) >> 9) << 21))
 #define GVM_STRIP_ROWS(texels) ((texels) > 0x200000u ? 4096u : ((texels) + 511u) / 512u)
+// Map 2, pairs: texels 2k and 2k + 1 one above the other (the card's L1 sector is 32 bytes, two texels of one column:
+// tick/probes/codemap --line), the pairs in rows of 8192: a miss brings the next texel too. A 4 KB block is a box 128 x 2.
+#define GVM_PAIR_X(t) (((t) >> 1) & 0x1fffu)
+#define GVM_PAIR_Y(t) ((((t) >> 13) & ~1u) | ((t) & 1u))
+#define GVM_PAIR_T(x, y) ((((y) >> 1) << 14) | (((x) & 0x1fffu) << 1) | ((y) & 1u))
+#define GVM_PAIR_ROWS(texels) ((((texels) + 16383u) / 16384u) * 2u)
 #define GVM_OPS 0xf0000000u       // operations: stored to, made by the commit
 #define GVM_OP_COPY 1u            // {kind, dst, src, bytes}: memmove
 #define GVM_OP_FILL 2u            // {kind, dst, word, bytes}

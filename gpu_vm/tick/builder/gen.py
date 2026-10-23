@@ -77,6 +77,9 @@ DEFAULTS = dict(
                         # 2 the target fetched only when taken
     pft=0,              # a touch of the code texel this many ahead each bundle (0 none): warms the texture cache for straight code
     pfd=1,              # the touch's result used 1 or 2 iterations later
+    lpf=0,              # at a pass's start the core's lanes ask for this many code texels together, each lane its own, from a quarter
+                        # of them behind pc on (the texture cache is cold at every pass: codemap --short --pf 1, IDEAS 40)
+    lps=0,              # the same for the stack: this many RAM texels from sp up
     s12pf=0,            # step12: the fall-through, the target (and jr's register's target) fetched before the ops, picked after
     ldf=0,              # paths 3 and 5: a load whose texel the bloom word rules out takes a short branch (the texel, no lookup, no sink)
     dead=0,             # (a measure) N ops of never-run code in the fast step, behind a cbuffer bit no host sets: what the loop's size costs
@@ -93,7 +96,8 @@ DEFAULTS = dict(
     silc0=0,            # (sil) 1: core 0's stores only (a `core == 0` test in each silent condition; the workers as without sil)
     snk=0,              # paths 3 and 5: a load writes no entry (the sink's tag and word) and reads no store value: a branch on the store
     m6seq=0,            # path 6 as two steps: op 0's store, then op 1 looked up in the tags op 0 left (no patched copy of its buckets)
-    rmap=0,             # where texel t lies in RAM's and the ROM's textures: 0 row-major 8192 wide, 1 strips 512 x 4096 (isa.h GVM_STRIP_X; IDEAS 35)
+    rmap=0,             # where texel t lies in RAM's and the ROM's textures: 0 row-major 8192 wide, 1 strips 512 x 4096 (isa.h GVM_STRIP_X; IDEAS 35),
+                        # 2 pairs: texels 2k and 2k + 1 one above the other, a 32-byte sector (GVM_PAIR_X; IDEAS 40)
     cc0f=0,             # a cc 0 bundle (j, call, jr, callr) whose ops are path 7's, 3's or 5's runs the fast step's body (fstep_c), not step12
 )
 
@@ -104,7 +108,7 @@ SPACE = dict(   # the values a search draws from
     bandx=[1, 2], per=[16, 32, 64, 128], jrow=[0, 1], perm=['id', 'bitrev', 'mul'], mul=[3, 5, 37, 77],
     early=[0, 1, 2, 3], mru=[0, 1, 2, 4], bb=[0, 1], tfirst=[0, 1], s6=[0, 1], nc=[0, 1], thin=[0, 1], thin8=[0, 1], wide3=[0, 1, 2], late=[0, 1, 2, 3], fx1=[0, 1], ov=[0, 4, 8, 16], mv=[0, 1], cv=[0, 1, 2], wsh=[0, 1, 2, 3], wad=[0, 1, 2, 3, 4, 5, 6, 7], s12b=[0, 1, 2, 3], s12in=[0, 1], rc=[0, 1, 2], dtx=['both', 'one'], rpk=['scalar', 'vec', 'wide'], pk=['scalar', 'vec', 'aos'], lay=['split', 'merged'],
     xr=[0, 64, 128, 256, 512, 1024], npair=[0, 32, 64, 128], xbind=[0, 1], xload=['pre', 'lazy'], xfast=[0, 1],
-    pf=[0, 1, 2], pft=[0, 4, 8, 16], pfd=[1, 2], s12pf=[0, 1], ldf=[0, 1], cc0f=[0, 1], cc0x=[0, 1, 2, 3], m6seq=[0, 1], snk=[0, 1], rmap=[0, 1], sil=[0, 1, 2, 3], silp=[1, 2, 3, 4, 8, 12, 15], mflat=[0, 1, 2, 3, 6, 7, 10],
+    pf=[0, 1, 2], pft=[0, 4, 8, 16], pfd=[1, 2], lpf=[0, 128, 256, 512, 1024], lps=[0, 64, 128, 256], s12pf=[0, 1], ldf=[0, 1], cc0f=[0, 1], cc0x=[0, 1, 2, 3], m6seq=[0, 1], snk=[0, 1], rmap=[0, 1, 2], sil=[0, 1, 2, 3], silp=[1, 2, 3, 4, 8, 12, 15], mflat=[0, 1, 2, 3, 6, 7, 10],
 )
 
 def layout(P):
@@ -589,6 +593,20 @@ def rmap_text(P, src):
         nonlocal src
         assert src.count(a) >= n, 'rmap: ' + a[:70]
         src = src.replace(a, b)
+    if P['rmap'] == 2:   # (pairs: a piece of the operations, in one 4 KB block, is one box 128 x 2; the frag drops texels outside it)
+        rep("static const uint RAM_W = 8192;", "static const uint RAM_W = 8192;\nstatic const uint RAM_MAP = 2;   // (rmap) texel t at (GVM_PAIR_X(t), GVM_PAIR_Y(t)): pairs, one above the other\n"
+            "int3 rat(uint t) { return int3(GVM_PAIR_X(t), GVM_PAIR_Y(t), 0); }")
+        rep("return _Ram.Load(int3(t % RAM_W, t / RAM_W, 0));", "return _Ram.Load(rat(t));")
+        rep("int3 at = int3(t % RAM_W, (t / RAM_W) & 0x1fff, 0);", "int3 at = rat(t & 0x3ffffffu);")
+        rep("float2 at = (float2(tex % RAM_W, tex / RAM_W) + 0.5) / float2(RAM_W, _RamRows);",
+            "float2 at = (float2(GVM_PAIR_X(tex), GVM_PAIR_Y(tex)) + 0.5) / float2(RAM_W, _RamRows);")
+        rep("x0 = t0 % RAM_W, y0 = t0 / RAM_W, xe = x0 + t1 - t0 + 1;", "x0 = GVM_PAIR_X(t0), y0 = GVM_PAIR_Y(t0) & ~1u, xe = GVM_PAIR_X(t1) + 1;")
+        rep("""    r.vertex = corner(vid, second ? 0 : (float)x0, (float)(second ? xe - RAM_W : min(xe, RAM_W)), (float)(y0 + (second ? 1 : 0)),
+                      (float)(y0 + (second ? 2 : 1)), (float)RAM_W, (float)_RamRows, on && (!second || xe > RAM_W));""",
+            """    r.vertex = corner(vid, (float)x0, (float)xe, (float)y0, (float)(y0 + 2), (float)RAM_W, (float)_RamRows, on && !second);   // (rmap 2: one box)""")
+        rep("uint t = px.y * RAM_W + px.x;", "uint t = GVM_PAIR_T(px.x, px.y);")
+        assert '% RAM_W' not in src and 't / RAM_W' not in src, 'rmap: a row-major address left'
+        return src
     rep("static const uint RAM_W = 8192;", "static const uint RAM_W = 8192;\nstatic const uint RAM_MAP = 1;   // (rmap) texel t at (GVM_STRIP_X(t), GVM_STRIP_Y(t)): strips 512 x 4096\n"
         "int3 rat(uint t) { return int3(GVM_STRIP_X(t), GVM_STRIP_Y(t), 0); }")
     rep("return _Ram.Load(int3(t % RAM_W, t / RAM_W, 0));", "return _Ram.Load(rat(t));")
@@ -752,7 +770,8 @@ def fstep(P):
         pre += ('    junk ^= pre1; pre1 = ram(tp + %du).x;   // (pft)\n' % P['pft'] if P.get('pfd', 1) == 1 else
                 '    junk ^= pre2; pre2 = pre1; pre1 = ram(tp + %du).x;   // (pft, pfd 2)\n' % P['pft'])
     decl = ('static uint4 nf;   // (pf: the fall-through\'s texel, asked for an iteration ahead)\nstatic uint junk, pre1, pre2;   // (pft: the touches)\n'
-            if P.get('pf', 0) or P.get('pft', 0) or P.get('xtl', 0) else '')
+            if P.get('pf', 0) or P.get('pft', 0) or P.get('xtl', 0) or P.get('lpf', 0) or P.get('lps', 0) else '')
+    if P.get('lpf', 0) or P.get('lps', 0): decl += 'static uint lane;   // (lpf, lps: this lane\'s place in the core, 0 to SPIX - 1)\n'
     if dd and P.get('deadat', 0) == 0: pre += dd
     if P.get('cc0x', 0):
         decl += 'static const uint CC0X = 1;   // (cc0x: the fast step makes j, call, jr, callr; the assembler\'s cc0_fast)\n'
@@ -829,7 +848,18 @@ def run_text(P):
         a = '        tp = pc >> 4;\n'
         assert a in src
         src = src.replace(a, a + '        nf = ram(tp + 1);   // (pf)\n', 1)
-    if P.get('pft', 0) or P.get('xtl', 0):
+    if P.get('lpf', 0) or P.get('lps', 0):   # (lpf, lps: every lane a texel of its own, all asked for at once; folded into junk at the end)
+        a = '    cur = ram(pc >> 4);\n'
+        assert src.count(a) == 1
+        b = ''
+        if P.get('lpf', 0):
+            b += ('    [unroll] for (uint lk = 0; lk < (%du + SPIX - 1) / SPIX; lk++) junk ^= ram((pc >> 4) - %du + lane + SPIX * lk).y;   // (lpf)\n'
+                  % (P['lpf'], P['lpf'] // 4))
+        if P.get('lps', 0):
+            b += ('    [unroll] for (uint ls = 0; ls < (%du + SPIX - 1) / SPIX; ls++) { uint t = (r[2] >> 4) + lane + SPIX * ls; junk ^= _Ram.Load(int3(t %% RAM_W, (t / RAM_W) & 0x1fff, 0)).y; }   // (lps)\n'
+                  % P['lps'])
+        src = src.replace(a, a + b, 1)
+    if P.get('pft', 0) or P.get('xtl', 0) or P.get('lpf', 0) or P.get('lps', 0):
         a = '        else [branch] if (budget > 0) budget = general(budget);\n    }\n'
         assert a in src
         src = src.replace(a, a + '    cycle += junk == _TimeLo + 0x9e3779b9u && _NCores == 0 ? 1u : 0u;   // (pft: the touches kept; never true while a core runs)\n', 1)
@@ -1021,7 +1051,7 @@ def frag(P):
     thr = (flags & F_AGAIN) != 0 || qn != 0 ? GVM_PATH_INT : GVM_PATH_FAST;
     flags &= ~F_AGAIN;
     lmax = 0; smax = 0;
-''' + wad_post(P) + ('    [branch] if (core == 0) run(_Ticks); else run(bud);   // (wadf 4: core 0 runs a copy whose budget is the constant)@N' if P.get('wadf', 0) & 4 else '    run(core == 0 ? _Ticks : bud);@N' if P.get('wadf', 0) & 16 else '    run(bud);@N').replace('@N', chr(10)) + '''    bool again = lmax >= _RamEnd || smax >= _RamEnd - GVM_DEV;
+''' + ('    lane = j;   // (lpf, lps)\n' if P.get('lpf', 0) or P.get('lps', 0) else '') + wad_post(P) + ('    [branch] if (core == 0) run(_Ticks); else run(bud);   // (wadf 4: core 0 runs a copy whose budget is the constant)@N' if P.get('wadf', 0) & 4 else '    run(core == 0 ? _Ticks : bud);@N' if P.get('wadf', 0) & 16 else '    run(bud);@N').replace('@N', chr(10)) + '''    bool again = lmax >= _RamEnd || smax >= _RamEnd - GVM_DEV;
 ''' + wclean(P) + '''    uint4 s19 = state_in(19, core);
     o.t0 = state_out(j * 8 + 0, s19); o.t1 = state_out(j * 8 + 1, s19); o.t2 = state_out(j * 8 + 2, s19); o.t3 = state_out(j * 8 + 3, s19);
     o.t4 = state_out(j * 8 + 4, s19); o.t5 = state_out(j * 8 + 5, s19); o.t6 = state_out(j * 8 + 6, s19); o.t7 = state_out(j * 8 + 7, s19);
