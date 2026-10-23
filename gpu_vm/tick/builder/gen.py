@@ -76,6 +76,7 @@ DEFAULTS = dict(
     ldf=0,              # paths 3 and 5: a load whose texel the bloom word rules out takes a short branch (the texel, no lookup, no sink)
     dead=0,             # (a measure) N ops of never-run code in the fast step, behind a cbuffer bit no host sets: what the loop's size costs
     deadat=0,           # where: 0 before the path's branch, 1 at the step's end
+    xtl=0,              # (a measure) N more texel loads a bundle (the next texels', folded into junk in the same step): what a load costs
     mflat=0,            # the memory paths in fewer blocks: 1 the buckets' tags read always (a select for the bloom word's skip),
                         # 2 paths 3 and 5 fetch the data texel always; 3 both
     cc0f=0,             # a cc 0 bundle (j, call, jr, callr) whose ops are path 7's, 3's or 5's runs the fast step's body (fstep_c), not step12
@@ -88,7 +89,7 @@ SPACE = dict(   # the values a search draws from
     bandx=[1, 2], per=[16, 32, 64, 128], jrow=[0, 1], perm=['id', 'bitrev', 'mul'], mul=[3, 5, 37, 77],
     early=[0, 1, 2, 3], mru=[0, 1, 2, 4], bb=[0, 1], tfirst=[0, 1], s6=[0, 1], nc=[0, 1], thin=[0, 1], thin8=[0, 1], wide3=[0, 1, 2], late=[0, 1, 2, 3], fx1=[0, 1], ov=[0, 4, 8, 16], mv=[0, 1], cv=[0, 1, 2], wsh=[0, 1, 2, 3], wad=[0, 1, 2, 3, 4, 5, 6, 7], s12b=[0, 1, 2, 3], s12in=[0, 1], rc=[0, 1, 2], dtx=['both', 'one'], rpk=['scalar', 'vec', 'wide'], pk=['scalar', 'vec', 'aos'], lay=['split', 'merged'],
     xr=[0, 64, 128, 256, 512, 1024], npair=[0, 32, 64, 128], xbind=[0, 1], xload=['pre', 'lazy'], xfast=[0, 1],
-    pf=[0, 1, 2], pft=[0, 4, 8, 16], pfd=[1, 2], s12pf=[0, 1], ldf=[0, 1], cc0f=[0, 1], mflat=[0, 1, 2, 3, 6, 7],
+    pf=[0, 1, 2], pft=[0, 4, 8, 16], pfd=[1, 2], s12pf=[0, 1], ldf=[0, 1], cc0f=[0, 1], mflat=[0, 1, 2, 3, 6, 7, 10],
 )
 
 def layout(P):
@@ -506,6 +507,21 @@ def mflat(P, src):
         a = "            [branch] if ((((t.x ^ op_bit(8)) & op_bit(11)) | (m0.ad & 3)) != 0) m0.q = data_texel(m0.ad);\n"
         assert src.count(a) == 1
         src = src.replace(a, "            m0.q = data_texel(m0.ad);   // (mflat 2)\n")
+    if f & 8:   # (paths 3 and 5 alone read the tags always: mlook_f; path 4 keeps its branch)
+        i = src.index('mop mlook(uint ad, bool look) {'); j = src.index('\n}\n', i) + 3
+        k = src.index('mop mread_entries(uint w, uint imm, uint a, uint b, bool st) {'); l = src.index('\n}\n', k) + 3
+        fl = src[i:j].replace('mop mlook(', 'mop mlook_f(').replace('''    [branch] if (look) {
+        m.A = bucket(m.b1); m.B = bucket(m.b2);
+    }
+''', '''    uint4 ta = bucket(m.b1), tb = bucket(m.b2);   // (mflat 8)
+    m.A = look ? ta : NONE; m.B = look ? tb : NONE;
+''')
+        assert 'mflat 8' in fl
+        fe = src[k:l].replace('mop mread_entries(', 'mop mread_entries_f(').replace('return mlook(', 'return mlook_f(')
+        src = src[:l] + fl + fe + src[l:]
+        a = "mop m0 = mread_entries(t.x, i0, A0, B0, st0);"
+        assert src.count(a) == 1
+        src = src.replace(a, "mop m0 = mread_entries_f(t.x, i0, A0, B0, st0);")
     if f & 4:
         a = "            [branch] if (((t.x & op_bit(3)) | ((t.y ^ op_bit(8)) & op_bit(11)) | ((m0.ad | m1.ad) & 3)) != 0) { m0.q = data_texel(m0.ad); m1.q = data_texel(m1.ad); }\n"
         assert src.count(a) == 1
@@ -550,8 +566,10 @@ def fstep(P):
         pre += ('    junk ^= pre1; pre1 = ram(tp + %du).x;   // (pft)\n' % P['pft'] if P.get('pfd', 1) == 1 else
                 '    junk ^= pre2; pre2 = pre1; pre1 = ram(tp + %du).x;   // (pft, pfd 2)\n' % P['pft'])
     decl = ('static uint4 nf;   // (pf: the fall-through\'s texel, asked for an iteration ahead)\nstatic uint junk, pre1, pre2;   // (pft: the touches)\n'
-            if P.get('pf', 0) or P.get('pft', 0) else '')
+            if P.get('pf', 0) or P.get('pft', 0) or P.get('xtl', 0) else '')
     if dd and P.get('deadat', 0) == 0: pre += dd
+    if P.get('xtl', 0):
+        pre += ''.join('    junk ^= ram(tp + %du).%s;   // (xtl)\n' % (k + 1, 'xyzw'[k % 4]) for k in range(P['xtl']))
     return decl + '''// ---- The fast loop's step: paths 3-7
 void fstep(inout uint budget) {
     uint4 t = cur;
@@ -623,7 +641,7 @@ def run_text(P):
         a = '        tp = pc >> 4;\n'
         assert a in src
         src = src.replace(a, a + '        nf = ram(tp + 1);   // (pf)\n', 1)
-    if P.get('pft', 0):
+    if P.get('pft', 0) or P.get('xtl', 0):
         a = '        else [branch] if (budget > 0) budget = general(budget);\n    }\n'
         assert a in src
         src = src.replace(a, a + '    cycle += junk == _TimeLo + 0x9e3779b9u && _NCores == 0 ? 1u : 0u;   // (pft: the touches kept; never true while a core runs)\n', 1)
