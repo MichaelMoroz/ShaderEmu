@@ -60,7 +60,7 @@ static void count(const std::string& t, size_t& regs, int& loopn) {
 int main(int argc, char** argv) {
     bool warp = false, slots = false;
     const char* pfile = nullptr; std::string only;
-    uint32_t cores = 255, n1 = 2000, n2 = 12000, rounds = 5, codeN = 128, fpct = 10, nchk = 300;
+    uint32_t hot = 0, nfast = 8, cores = 255, n1 = 2000, n2 = 12000, rounds = 5, codeN = 128, fpct = 10, nchk = 300;
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
         if (a == "--warp") warp = true;
@@ -73,6 +73,8 @@ int main(int argc, char** argv) {
         else if (a == "--rounds" && i + 1 < argc) rounds = atoi(argv[++i]);
         else if (a == "--code" && i + 1 < argc) codeN = atoi(argv[++i]);
         else if (a == "--fpct" && i + 1 < argc) fpct = atoi(argv[++i]);
+        else if (a == "--hot" && i + 1 < argc) hot = atoi(argv[++i]);     // a register field is one of r1..r(nf-1) this percent of the time
+        else if (a == "--nf" && i + 1 < argc) nfast = atoi(argv[++i]);
         else { printf("floor --probes FILE [--warp] [--slots] [--only A,B] [--cores N] [--n1 N] [--n2 N] [--rounds N] [--code N] [--fpct P]\n"); return 1; }
     }
     if (!pfile) { printf("--probes FILE\n"); return 1; }
@@ -96,8 +98,9 @@ int main(int argc, char** argv) {
     if (codeN & (codeN - 1)) { printf("--code: a power of two\n"); return 1; }
     // the program: random fields (floor.hlsl's encoding); a branch taken 15% of the time (BR 0's bit)
     std::vector<uint32_t> img(8192 * 4 * 4, 0);
+    auto reg = [&](uint32_t r) { return rnd() % 100 < hot ? 1 + rnd() % (nfast - 1) : r; };
     auto op = [&](bool fl) {
-        uint32_t ra = rnd() % 64, rb = rnd() % 64, rd = 1 + rnd() % 63, f = rnd() & 0x3f;
+        uint32_t ra = reg(rnd() % 64), rb = reg(rnd() % 64), rd = reg(1 + rnd() % 63), f = rnd() & 0x3f;
         if (rnd() % 32 == 0) rd = 64;   // r0's sink
         if (rnd() % 2) f |= 0x80;       // the I form
         if (fl) f |= 0x40;
@@ -108,7 +111,7 @@ int main(int argc, char** argv) {
         q[0] = op(rnd() % 100 < fpct); q[1] = op(false);
         q[2] = rnd() & 0x7ffc;
         int off = (int)(rnd() % 41) - 20; if (off == 0) off = 3;
-        q[3] = (rnd() % 100 < 15 ? 1u : 0u) | (rnd() & 15) << 1 | (rnd() % 64) << 8 | (rnd() % 64) << 16 | (uint32_t)off << 24;
+        q[3] = (rnd() % 100 < 15 ? 1u : 0u) | (rnd() & 15) << 1 | reg(rnd() % 64) << 8 | (rnd() % 64) << 16 | (uint32_t)off << 24;
     }
     D3D11_TEXTURE2D_DESC d = {8192, 4, 1, 1, DXGI_FORMAT_R32G32B32A32_UINT, {1, 0}, D3D11_USAGE_DEFAULT, D3D11_BIND_SHADER_RESOURCE, 0, 0};
     D3D11_SUBRESOURCE_DATA sd = {img.data(), 8192 * 16, 0};

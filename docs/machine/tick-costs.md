@@ -612,3 +612,16 @@ against 77.7 (1.31x) and about 81 ns a bundle of the games' mix with the write c
 (1.16x; 1.06x without deferral, 1.2x with no write cache at all). The fetch is not where the rest of the time is: a
 block of straight bundles is bound by its registers' and loads' chains through local memory, which the in-order warp
 cannot overlap. Short of 1.6x: x30 not built on it.
+
+### Blocks with fast registers and hoisted loads (the last round)
+
+`floor10.txt` and `floor11.txt` (`--hot 70`: 70% of register fields name one of the fast registers, as a compiler's choice
+would), one core, ns a bundle. Fast registers (`FILE=6`: r0-r7 or r0-r3 in the GPU's registers by a tree of selects, the
+rest in local memory; `FILE=7` a branch an operand; `FILE=5` all 8 in GPU registers, the bound) are dearer in every
+shape: integer blocks of 1, 2, 4, 8 bundles 79.4, 62.3, 57.0, 52.8 with local memory, 100.8, 91.1, 83.1, 82.0 with 8 fast
+registers, 98.4, 76.6, 71.3, 66.6 with 4, 79.5, 66.9, 61.1, 58.3 with all 8 in GPU registers; today's shape 77.8, with 8
+fast registers 104.4. In a block the selects' issue is on the path that local memory's latency had overlapped.
+Loads (x23's buckets, every other bundle a load, written at the block's end; `HOIST=1` issues the block's loads at its
+start): K 2, 4, 8 78.4, 83.1, 74.7; hoisted 78.6, 82.4 (68.1 in a second batch), 65.5; with fast registers 106-135.
+Weighed by the guest runs (Quake III core 0; Half-Life core 0 in brackets): integers 58.8 ns against 77.8 (1.32x), the
+games' mix 74 ns against 94.4 (1.27x; 1.31x). Under 1.4x: the tick-side search is closed.

@@ -83,6 +83,30 @@ uint gread(uint i) {
 void gwrite(uint i, uint v) { uint k; [unroll] for (k = 1; k < NR; k++) G[k] = (i & (NR - 1)) == k ? v : G[k]; }
 #define RD(i) gread(i)
 #define WR(i, v) gwrite(i, v)
+#elif FILE == 6 || FILE == 7   // NF fast registers (0..NF-1) in GPU registers, the rest in local memory; 7: a branch an operand
+#ifndef NF
+#define NF 8
+#endif
+static uint G[NF];
+static uint4 R[65 * ILP];
+uint gtree(uint i) {
+    uint l0[4], l1[2], k;
+    [unroll] for (k = 0; k < NF / 2; k++) l0[k] = (i & 1) ? G[2 * k + 1] : G[2 * k];
+    [unroll] for (k = 0; k < NF / 4; k++) l1[k] = (i & 2) ? l0[2 * k + 1] : l0[2 * k];
+    return NF == 8 ? ((i & 4) ? l1[1] : l1[0]) : l1[0];
+}
+uint hread(uint i) {
+#if FILE == 7
+    uint r;
+    [branch] if (i < NF) r = gtree(i); else r = R[i].x;
+    return r;
+#else
+    return i < NF ? gtree(i) : R[i].x;
+#endif
+}
+void hwrite(uint i, uint v) { uint k; [unroll] for (k = 1; k < NF; k++) G[k] = i == k ? v : G[k]; R[i < NF ? 64 : i].x = v; }
+#define RD(i) hread(i)
+#define WR(i, v) hwrite(i, v)
 #else
 static uint Rz[ILP * 2];
 #define RD(i) ((i) * 0x9e3779b1u + Rz[0])
@@ -176,7 +200,32 @@ uint4 dtex(uint t) { return _Data.Load(int3(t % 8192, (t / 8192) & 7, 0)); }
 #ifndef DEFER
 #define DEFER 0
 #endif
-static uint pv[8], pd[8];   // (DEFER: a load's value and register, written at the block's end)
+static uint pv[8], pd[8];
+#ifndef HOIST
+#define HOIST 0
+#endif
+static uint hv[8];   // (HOIST: the block's loads, issued at its start)
+#if MEM
+uint memval(uint4 t, uint base) {   // op 0's load as the block found its registers
+    uint A0 = RD((t.x & 255) + base);
+#if MEM == 1
+    uint ad = (A0 + t.z) & DMASK;
+    return pick(dtex(ad >> 4), (ad >> 2) & 3);
+#else
+    uint ad = (A0 + t.z) & DMASK, tx = ad >> 4, i = (ad >> 2) & 3;
+    uint b1 = (tx * 0x9e3779b1u) >> 28, b2 = 16 + ((tx * 0x85ebca6bu + 0x165667b1u) >> 28);
+    uint4 q = dtex(tx);
+    uint4 A = uint4(wt[4 * b1], wt[4 * b1 + 1], wt[4 * b1 + 2], wt[4 * b1 + 3]);
+    uint4 B = uint4(wt[4 * b2], wt[4 * b2 + 1], wt[4 * b2 + 2], wt[4 * b2 + 3]);
+    bool4 ka = (A & 0x0fffffffu) == tx, kb = (B & 0x0fffffffu) == tx;
+    uint msk = (ka.x ? 1u : 0u) | (ka.y ? 2u : 0u) | (ka.z ? 4u : 0u) | (ka.w ? 8u : 0u)
+             | (kb.x ? 16u : 0u) | (kb.y ? 32u : 0u) | (kb.z ? 64u : 0u) | (kb.w ? 128u : 0u);
+    uint k = firstbitlow(msk);
+    uint e = k < 4 ? 4 * b1 + k : k < 8 ? 4 * b2 + (k & 3) : NT;
+    return e < NT ? wd[4 * e + i] : pick(q, i);
+#endif
+}
+#endif   // (DEFER: a load's value and register, written at the block's end)
 uint ops(uint4 t, uint base, uint K, bool memk, inout uint sum, uint slot = 0) {   // a bundle's two ops (no fetch, no branch); op 1's value
     uint v0 = 0, v1 = 0;
 #if OPS >= 1
@@ -198,6 +247,9 @@ uint ops(uint4 t, uint base, uint K, bool memk, inout uint sum, uint slot = 0) {
 #endif
 #else
     if (!memk) v0 = unit(f0, A0, B0, C0); else {
+#if HOIST
+    v0 = hv[slot];
+#else
 #if MEM == 1
     uint ad = (A0 + t.z) & DMASK;
     v0 = pick(dtex(ad >> 4), (ad >> 2) & 3);
@@ -231,6 +283,7 @@ uint ops(uint4 t, uint base, uint K, bool memk, inout uint sum, uint slot = 0) {
     uint k = firstbitlow(msk);
     uint e = k < 4 ? 4 * b1 + k : k < 8 ? 4 * b2 + (k & 3) : NT;
     v0 = e < NT ? wd[4 * (e + KB) + i] : pick(q, i);
+#endif
 #endif
     }
 #endif
@@ -354,6 +407,9 @@ void block_run(uint core, inout uint sum) {
         uint nb = (bi + (decide(c0) ? asuint((int)c0 >> 24) : 1u)) & _Mask;
         [unroll] for (k = 0; k < BLOCK; k++) nxt[k] = code(nb * BLOCK + k);
 #endif
+#if HOIST && MEM   // the block's loads issued at its start, their latencies overlapping
+        [unroll] for (k = 0; k < BLOCK; k += MEMEVERY) hv[k] = memval(blk[k], 0);
+#endif
         [unroll] for (k = 0; k < BLOCK; k++) sum += ops(blk[k], 0, 0, (k % MEMEVERY) == 0, sum, k);
 #if DEFER   // the block's loads land in their registers at its end (the compiler keeps their uses in later blocks)
         [unroll] for (k = 0; k < BLOCK; k += MEMEVERY) WR(pd[k], pv[k]);
@@ -395,6 +451,9 @@ uint4 frag(float4 pos : SV_POSITION) : SV_Target {
     [loop] for (k = 0; k < 17 * ILP; k++) R[k] = uint4(k * 4, k * 4 + 1, k * 4 + 2, k * 4 + 3) * 0x9e3779b9u ^ s;
 #elif FILE == 4 || FILE == 5
     [unroll] for (k = 0; k < NR; k++) G[k] = k == 0 ? 0u : (k * 0x9e3779b9u) ^ s;
+#elif FILE == 6 || FILE == 7
+    [unroll] for (k = 0; k < NF; k++) G[k] = k == 0 ? 0u : (k * 0x9e3779b9u) ^ s;
+    [loop] for (k = 0; k < 65; k++) R[k].x = k == 0 || k == 64 ? 0u : (k * 0x9e3779b9u) ^ s;
 #else
     Rz[0] = s; Rz[1] = s;
 #endif
@@ -430,6 +489,9 @@ uint4 frag(float4 pos : SV_POSITION) : SV_Target {
 #endif
 #if FILE == 4 || FILE == 5
     [unroll] for (k = 0; k < NR; k++) h = h * 31u + G[k];
+#elif FILE == 6 || FILE == 7
+    [unroll] for (k = 0; k < NF; k++) h = h * 31u + G[k];
+    [loop] for (k = NF; k < 64; k++) h = h * 31u + R[k].x;
 #elif FILE != 0
     [loop] for (k = 0; k < 65 * ILP; k++) h = h * 31u + RD(k);
 #else
