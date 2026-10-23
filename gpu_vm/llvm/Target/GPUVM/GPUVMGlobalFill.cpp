@@ -674,6 +674,15 @@ void GPUVMGlobalFill::places(const MachineInstr &X, MachineBasicBlock &B,
 // X at B's end, where B's terminators read B's own last value of Def: that
 // value goes to a fresh register (its def and its reads in B), X reads it
 // there if it reads Def.
+// Whether I has a use tied to a def (addbnz's counter): its def and that use
+// are one register field, renamed together or not at all.
+static bool hasTiedUse(const MachineInstr &I) {
+  for (const MachineOperand &MO : I.operands())
+    if (MO.isReg() && MO.isUse() && MO.isTied())
+      return true;
+  return false;
+}
+
 void GPUVMGlobalFill::localRename(const MachineInstr &X, MachineBasicBlock &B,
                                   Register Def, SmallVectorImpl<Place> &Out,
                                   Register Avoid) const {
@@ -716,7 +725,7 @@ void GPUVMGlobalFill::localRename(const MachineInstr &X, MachineBasicBlock &B,
   }
   std::reverse(Chain.begin(), Chain.end()); // D's block first
   if (D == &X || D->isCall() || D->isInlineAsm() || singleDef(*D) != Def ||
-      D->getNumImplicitOperands() != 0)
+      D->getNumImplicitOperands() != 0 || hasTiedUse(*D))
     return;
   Register N = freshReg(Avoid);
   if (!N)
@@ -728,7 +737,8 @@ void GPUVMGlobalFill::localRename(const MachineInstr &X, MachineBasicBlock &B,
       for (const MachineOperand &MO : J->operands())
         if ((MO.isReg() && MO.getReg() && MO.getReg() != Def &&
              TRI->regsOverlap(MO.getReg(), Def)) ||
-            (MO.isReg() && MO.getReg() == Def && MO.isImplicit()) ||
+            (MO.isReg() && MO.getReg() == Def &&
+             (MO.isImplicit() || MO.isTied())) ||
             (MO.isRegMask() && MO.clobbersPhysReg(N)))
           return;
   // X before the terminators, and earlier while it fits (after D)
@@ -841,7 +851,9 @@ bool GPUVMGlobalFill::renameRange(MachineInstr &X, Register Def, Register N,
       if (MO.getReg() != Def && TRI->regsOverlap(MO.getReg(), Def))
         return false;
       if (MO.getReg() == Def && MO.isUse()) {
-        if (MO.isImplicit())
+        // (a use tied to a def, addbnz's counter: one register field, so the
+        // def would be renamed with it and Def's later readers left behind)
+        if (MO.isImplicit() || MO.isTied())
           return false;
         Uses.push_back(&MO);
       }
