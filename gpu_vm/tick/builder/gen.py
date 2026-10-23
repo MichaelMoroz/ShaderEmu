@@ -618,6 +618,17 @@ void load_state(uint c) {
 }
 '''
 
+WADBLK = "    bud = core == 0 ? _Ticks : _Ticks >> WSH;   // (wsh)\n    [branch] if (WAD != 0 && core != 0) {   // (wad: the pass ends about when core 0's does)\n        uint4 z = state_in(19, 0);\n        bool cap = WAD == 1 || WAD == 4 ? z.w == E_SYNC || z.w == E_FULL : WAD != 5 && z.w == E_FULL;   // (2, 3, 6: core 0 had work: its cache was full; 5 never then)\n        [branch] if (WAD == 7 && cap) cap = ram((WAITW >> 4) + 2).x != 0;   // (7: on full only while a program has declared its mask)\n        [branch] if (WAD >= 5 && z.w == E_SYNC) {   // (5-7: core 0 rested: the workers it waits for, from the kernel's word at WAITW; no mask, no cap)\n            uint4 m0 = ram(WAITW >> 4), m1 = ram((WAITW >> 4) + 1);\n            uint4 mm = (core >> 7) != 0 ? m1 : m0;\n            bool given = any((m0 | m1) != 0), mine = ((pick(mm, (core >> 5) & 3) >> (core & 31)) & 1) != 0;\n            cap = given && !mine;\n        }\n        [branch] if (WAD == 4 && cap) {   // (4: not when the workers are the work: half of cores 1-8 ran their whole budget)\n            uint busy = 0, k;\n            [loop] for (k = 1; k <= 8; k++) busy += k < _NCores && state_in(19, k).w == E_BUDGET ? 1u : 0u;\n            cap = busy < 4;\n        }\n        bud = cap ? clamp(z.z + (z.z >> 2), WAD == 3 ? bud >> 1 : 512u, bud) : bud;\n    }\n"   # (the frag's budget: wsh, wad)
+
+def wad_text(P):
+    t = WADBLK
+    if P.get('wadf', 0) & 1:   # (straight-line: every core reads the words, no branches)
+        t = t.replace('[branch] if (WAD != 0 && core != 0) {', '{').replace('[branch] if (WAD', '[flatten] if (WAD')
+    return t
+def wad_top(P): return wad_text(P) if P.get('wadf', 0) & 8 else ''
+def wad_pre(P): return wad_text(P) if (P.get('wadf', 0) & 10) == 2 else ''
+def wad_post(P): return '' if P.get('wadf', 0) & 10 else wad_text(P)
+
 def frag(P):
     bw, bh, band, per = P['bw'], P['bh'], P['band'], P['per']
     j = ('ry * %du + rx' % bw) if P['jrow'] else ('rx * %du + ry' % bh)
@@ -668,30 +679,11 @@ def frag(P):
     uint j = ''' + j + ''';
     [branch] if (core >= _NCores || j >= SPIX || ry >= ''' + str(bh) + '''u) { o.t0 = o.t1 = o.t2 = o.t3 = o.t4 = o.t5 = o.t6 = o.t7 = 0; return o; }
     ext = (pick(_Ext[core >> 7], (core >> 5) & 3) >> (core & 31)) & 1;
-''' + early + '''    load_state(core);
+''' + wad_top(P) + early + wad_pre(P) + '''    load_state(core);
     thr = (flags & F_AGAIN) != 0 || qn != 0 ? GVM_PATH_INT : GVM_PATH_FAST;
     flags &= ~F_AGAIN;
     lmax = 0; smax = 0;
-    bud = core == 0 ? _Ticks : _Ticks >> WSH;   // (wsh)
-    [branch] if (WAD != 0 && core != 0) {   // (wad: the pass ends about when core 0's does)
-        uint4 z = state_in(19, 0);
-        bool cap = WAD == 1 || WAD == 4 ? z.w == E_SYNC || z.w == E_FULL : WAD != 5 && z.w == E_FULL;   // (2, 3, 6: core 0 had work: its cache was full; 5 never then)
-        [branch] if (WAD == 7 && cap) cap = ram((WAITW >> 4) + 2).x != 0;   // (7: on full only while a program has declared its mask)
-        [branch] if (WAD >= 5 && z.w == E_SYNC) {   // (5-7: core 0 rested: the workers it waits for, from the kernel's word at WAITW; no mask, no cap)
-            uint4 m0 = ram(WAITW >> 4), m1 = ram((WAITW >> 4) + 1);
-            uint4 mm = (core >> 7) != 0 ? m1 : m0;
-            bool given = any((m0 | m1) != 0), mine = ((pick(mm, (core >> 5) & 3) >> (core & 31)) & 1) != 0;
-            cap = given && !mine;
-        }
-        [branch] if (WAD == 4 && cap) {   // (4: not when the workers are the work: half of cores 1-8 ran their whole budget)
-            uint busy = 0, k;
-            [loop] for (k = 1; k <= 8; k++) busy += k < _NCores && state_in(19, k).w == E_BUDGET ? 1u : 0u;
-            cap = busy < 4;
-        }
-        bud = cap ? clamp(z.z + (z.z >> 2), WAD == 3 ? bud >> 1 : 512u, bud) : bud;
-    }
-    run(bud);
-    bool again = lmax >= _RamEnd || smax >= _RamEnd - GVM_DEV;
+''' + wad_post(P) + ('    [branch] if (core == 0) run(_Ticks); else run(bud);   // (wadf 4: core 0 runs a copy whose budget is the constant)@N' if P.get('wadf', 0) & 4 else '    run(core == 0 ? _Ticks : bud);@N' if P.get('wadf', 0) & 16 else '    run(bud);@N').replace('@N', chr(10)) + '''    bool again = lmax >= _RamEnd || smax >= _RamEnd - GVM_DEV;
     uint4 s19 = state_in(19, core);
     o.t0 = state_out(j * 8 + 0, s19); o.t1 = state_out(j * 8 + 1, s19); o.t2 = state_out(j * 8 + 2, s19); o.t3 = state_out(j * 8 + 3, s19);
     o.t4 = state_out(j * 8 + 4, s19); o.t5 = state_out(j * 8 + 5, s19); o.t6 = state_out(j * 8 + 6, s19); o.t7 = state_out(j * 8 + 7, s19);

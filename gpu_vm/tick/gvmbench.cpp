@@ -154,6 +154,7 @@ static Prog program(const char* path, const char* v, const char* p, const std::v
 }
 
 // ---- The GPU's machine
+static int g_parts = 0;   // (GVM_PARTS=1 with a p_ case: its pass timed whole, the tick alone and the tick with the commit)
 struct Gpu {
     uint32_t cores, statePix, spx;   // (spx: the state textures' width, statePix / LROWS rounded up)
     Tex ram, rom, stage, ops[2], set[2][8];
@@ -310,7 +311,7 @@ struct Gpu {
             viewport(uavTick ? 1 : spx, cores * g_lrows);
             ctx->Draw(3, 0);
         }
-        if (!hasCommit) { clear_srv(); cur ^= 1; return; }
+        if (!hasCommit || g_parts == 1) { clear_srv(); cur ^= 1; return; }   // (g_parts: a measure of a pass's parts, GVM_PARTS)
         // the commit: four draws, a component each
         clear_srv();
         ctx->OMSetRenderTargets(1, &ram.rtv, nullptr);
@@ -325,7 +326,7 @@ struct Gpu {
             ctx->Draw(g_gg.cpts ? cores * g_gg.cpts : g_wcn0 ? g_wcn0 + (cores - 1) * g_wcn : g_wcn1 ? g_wcn + (cores - 1) * g_wcn1 : cores * g_wcn, 0);   // (x19g: a worker's WCN1 entries; x25: core 0's WCN0)
         }
         ctx->OMSetBlendState(nullptr, nullptr, 0xffffffff);
-        if (!hasOps) { clear_srv(); cur ^= 1; return; }
+        if (!hasOps || g_parts == 2) { clear_srv(); cur ^= 1; return; }
         if (hasAny) {   // x19: no operation queued anywhere, no rounds: the GPU skips them by the predicate (no readback)
             if (!pred) {
                 D3D11_QUERY_DESC qd = {D3D11_QUERY_OCCLUSION_PREDICATE, 0};
@@ -555,6 +556,12 @@ static double time_case(Gpu& gpu, const Case& cs, uint32_t ticks, uint32_t passe
     uint32_t o1 = count();
     g_util = (gpu.core_state(0)[19 * 4] - u0) / ((double)passes * ticks);
     gpu.release();
+    if (cs.us_pass && env_int("GVM_PARTS") && g_parts == 0) {   // (a measure: the same pass with the tick alone, then the tick and the commit)
+        double whole = double(t1 - t0) / dj.Frequency * 1e6 / passes, part[2];
+        for (int k = 1; k <= 2; k++) { g_parts = k; part[k - 1] = time_case(gpu, cs, ticks, passes); g_parts = 0; }
+        printf("  %s parts: tick %.1f us, commit %.1f us, operations %.1f us, whole %.1f us\n", cs.name, part[0], part[1] - part[0], whole - part[1], whole);
+        return whole;
+    }
     if (cs.us_pass) return double(t1 - t0) / dj.Frequency * 1e6 / passes;   // (p_: us a pass)
     // (the game bench: frames a second; GVM_PASS_US=N adds N us a pass, the harness's own cost of a pass that the
     // card's passes here, queued back to back, do not pay: ~250 makes the scenes rank ticks as the games do, GAMEBENCH.md)

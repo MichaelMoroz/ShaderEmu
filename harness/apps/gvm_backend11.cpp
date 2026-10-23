@@ -213,6 +213,15 @@ public:
         if (getenv("GVM_ENDS_LOG") && geo_) {
             if (!endsRb_.init(dev, DXGI_FORMAT_R32G32B32A32_UINT, 16, 128, 2, 3, err)) return false;
             endsLog_ = fopen(getenv("GVM_ENDS_LOG"), "wb");
+            if (getenv("GVM_TIME_LOG")) {
+                timeLog_ = fopen(getenv("GVM_TIME_LOG"), "wb");
+                D3D11_QUERY_DESC qd{D3D11_QUERY_TIMESTAMP_DISJOINT, 0};
+                for (auto& t : tset_) {
+                    dev->CreateQuery(&qd, &t.dj);
+                    D3D11_QUERY_DESC q2{D3D11_QUERY_TIMESTAMP, 0};
+                    for (auto& q : t.q) dev->CreateQuery(&q2, &q);
+                }
+            }
         }
         mat.setInt("_GvmParkLo", GVM_FW_PARK);
         mat.setInt("_GvmParkHi", GVM_FW_PARK_END);
@@ -254,6 +263,16 @@ public:
             ctx->Begin(tsDisjoint_.Get());
             ctx->End(tsQuery_[0].Get());
         }
+        TimeSet* ts = timeLog_ && (!tset_[tag % 8].pending || tag - tset_[tag % 8].tag >= 64) ? &tset_[tag % 8] : nullptr;
+        ID3D11Query* tqs[7] = {};
+        if (ts) {
+            for (int k = 0; k < 7; k++) tqs[k] = ts->q[k].Get();
+            ctx->Begin(ts->dj.Get());
+            ctx->End(tqs[0]);
+            ts->tag = tag, ts->pending = true, ts->top = top_, ts->drawn = 0;
+            for (auto& r : runs_) ts->drawn += r.second - r.first;
+            tq_ = tqs;
+        }
         // TIME (100 kHz) from the host's clock (rvc_harness's _Time is t / 20, t, 2t, 3t), a tick more each pass at least
         uint64_t wall = (uint64_t)(mat.getFloat("_Time") * 20.0 * 100000.0);
         uint32_t rounds = (std::max)(1u, tickRounds);
@@ -268,6 +287,7 @@ public:
             ctx->CopySubresourceRegion(ctl_.t.Get(), 0, 0, 0, 0, ram_.t.Get(), 0, &cbx);
             writeback(mat);
             gpuDraw(mat);
+            if (tq_) ctx->End(tq_[4]);
             if (soundMix && devPasses_.size() > 3) soundDraw(mat, tag);   // (before the control zone moves the voices on)
             mat.setInt("_GvmPasses", (int64_t)(uint32_t)passes_);
             mat.setInt("_GvmWorkers", workers_);
@@ -299,6 +319,12 @@ public:
             ctx->End(tsQuery_[3].Get());
             ctx->End(tsDisjoint_.Get());
             tsPending_ = true;
+        }
+        if (ts) {
+            if (!devices_) ctx->End(tqs[4]);
+            ctx->End(tqs[5]);
+            ctx->End(ts->dj.Get());
+            tq_ = nullptr;
         }
         // what the host reads: core 0's texels 16-23 (the set just drawn), the control words, the network's row
         for (UINT t = 0; t < 8; t++) {
@@ -338,6 +364,24 @@ public:
                 const uint32_t* q = (const uint32_t*)e.data();
                 for (int c = 0; c < 256; c++) row[c] = (q[c * 4 + 2] << 8) | (q[c * 4 + 3] & 0xffu);
                 fwrite(row, 4, 256, endsLog_);
+                TimeSet& s = tset_[t5 % 8];
+                if (timeLog_ && s.pending && s.tag == t5) {
+                    D3D11_QUERY_DATA_TIMESTAMP_DISJOINT dj{};
+                    UINT64 v[6] = {};
+                    bool ok = gpu_.ctx->GetData(s.dj.Get(), &dj, sizeof dj, 0) == S_OK;
+                    for (int k = 0; ok && k < 6; k++) ok = gpu_.ctx->GetData(s.q[k].Get(), &v[k], sizeof v[k], 0) == S_OK;
+                    if (ok && !dj.Disjoint && dj.Frequency) {
+                        uint32_t most = 0, act = 0;
+                        for (int c = 1; c < 256; c++) most = (std::max)(most, row[c] >> 8), act += (row[c] >> 8) >= 64;
+                        uint32_t rec[16] = {(uint32_t)t5, row[0] >> 8, row[0] & 0xffu, most, act, s.drawn, s.top};
+                        for (int k = 0; k < 5; k++) rec[7 + k] = (uint32_t)((v[k + 1] - v[k]) * 1e9 / dj.Frequency);
+                        rec[12] = (uint32_t)((v[5] - v[0]) * 1e9 / dj.Frequency);
+                        uint64_t at = (uint64_t)((double)v[0] * 1e9 / dj.Frequency);   // (the frame's start on the GPU's clock, ns)
+                        rec[13] = (uint32_t)at, rec[14] = (uint32_t)(at >> 32), rec[15] = (uint32_t)(dj.Frequency / 1000);
+                        fwrite(rec, 4, 16, timeLog_);
+                    }
+                    s.pending = false;
+                }
             }
         }
         // the RISC-V machine's row 0 as rvc_harness reads it: the instructions (core 0's ops), the commits (passes), the
@@ -645,6 +689,7 @@ private:
         }
         if (apart && last) core0();
         if (timed) ctx->End(tsQuery_[1].Get());
+        if (tq_) ctx->End(tq_[1]);
         clearSrv();
         ctx->OMSetRenderTargets(1, ram_.rtv.GetAddressOf(), nullptr);
         bindTick(cur_, false, false);
@@ -659,6 +704,7 @@ private:
             ctx->Draw(wcn0_ ? wcn0_ + (top_ - 1) * wcn_ : top_ * wcn_, 0);   // (a frozen row's write cache is empty: its points draw nothing)
         }
         ctx->OMSetBlendState(nullptr, nullptr, 0xffffffff);
+        if (tq_) ctx->End(tq_[2]);
         for (uint32_t round = 0; round < 2; round++) {
             clearSrv();
             ctx->OMSetRenderTargets(1, stageTex_.rtv.GetAddressOf(), nullptr);
@@ -687,6 +733,7 @@ private:
         }
         clearSrv();
         if (timed) ctx->End(tsQuery_[2].Get());
+        if (tq_) ctx->End(tq_[3]);
         cur_ ^= 1;
         passes_++;
     }
@@ -970,6 +1017,13 @@ private:
     std::deque<uint64_t> soundTags_;
     ComPtr<ID3D11ShaderResourceView> hostData_, netData_;
     ComPtr<ID3D11Query> tsDisjoint_, tsQuery_[5];
+    // GVM_TIME_LOG=FILE (a measure, with GVM_ENDS_LOG): a frame's parts timed on the GPU, a ring of query sets, written when
+    // its row comes back: tag, core 0's bundles and why, the busiest worker's bundles, workers that ran 64 or more, rows
+    // drawn, the highest, then the tick, the commit, the operations' rounds, the devices' writeback and list, the rest (ns)
+    struct TimeSet { ComPtr<ID3D11Query> dj, q[7]; uint64_t tag = 0; bool pending = false; uint32_t drawn = 0, top = 0; };
+    TimeSet tset_[8];
+    FILE* timeLog_ = nullptr;
+    ID3D11Query* const* tq_ = nullptr;   // (the set this frame's passes mark, or none)
     bool tsPending_ = false;
     double tickMs_ = -1, commitMs_ = -1, deviceMs_ = 0;
     MemoryView view_;
