@@ -32,6 +32,8 @@ static uint32_t g_ntex = 0;    // a step's NTEX (x22): its state texels (0: T_WC
 static uint32_t g_geo = 0;     // a step's GEO_BLOCKS (x21): pixel p of core c at ((c & 127) * 8 + p / 8, (c >> 7) * 16 + p % 8)
 static uint32_t g_wcn0 = 0;    // a step's WCN0 (x25): core 0's own write cache, its tick a compile of its own (CORE0=1)
 static uint32_t g_spix0 = 0;   // and its state pixels (NTEX0): 0-63 in its block, 64 on at ((p >> 3) - 8, 8 + (p & 7))
+struct Geo { uint32_t bw = 0, bh = 0, band = 0, per = 0, jrow = 0, perm = 0, mul = 0, inv = 0; };
+static Geo g_gg;               // a built step's layout (builder/gen.py: GEO_BW...): core c's pixel j at (slot * bw + jx, band * BAND + jy)
 static uint32_t g_lrows = 1;   // a core's state pixels on this many rows (a step's LROWS, x19): pixel p at (p % spx, core * LROWS + p / spx)
 
 // ---- D3D11
@@ -168,12 +170,19 @@ struct Gpu {
     uint32_t opSlots = 32, opSpan = 272, opRounds = 2;   // the operations' stage (a step's OP_SLOTS, OP_SPAN) and rounds a pass
     struct { uint32_t ticks, ramEnd, timeLo, timeHi, player, flags, ramRows, ext0, ncores, pad[3], ext[8]; } pass;   // (x17's PassParams)
     size_t pix(uint32_t c, uint32_t p) const {   // the place of core c's state pixel p in a state texture
+        if (g_gg.bw) {
+            uint32_t i = c % g_gg.per, s = i;
+            if (g_gg.perm == 1) { uint32_t lg = 0; while ((1u << lg) < g_gg.per) lg++; s = 0; for (uint32_t k = 0; k < lg; k++) s |= ((i >> k) & 1) << (lg - 1 - k); }
+            else if (g_gg.perm == 2) s = (i * g_gg.mul) & (g_gg.per - 1);
+            uint32_t jx = g_gg.jrow ? p % g_gg.bw : p / g_gg.bh, jy = g_gg.jrow ? p / g_gg.bw : p % g_gg.bh;
+            return (size_t)((c / g_gg.per) * g_gg.band + jy) * texW() + s * g_gg.bw + jx;
+        }
         if (g_geo && c == 0 && p >= 64) return (size_t)(8 + p % 8) * texW() + p / 8 - 8;
         if (g_geo) return (size_t)((c >> 7) * 16 + p % 8) * texW() + (c & 127) * 8 + p / 8;
         return (size_t)(c * g_lrows + p / spx) * spx + p % spx;
     }
-    UINT texW() const { return g_geo ? std::max((cores < 128 ? cores : 128) * 8, g_spix0 > 64 ? (g_spix0 - 64 + 7) / 8 : 0u) : spx; }
-    UINT texH() const { return g_geo ? ((cores - 1) / 128) * 16 + (g_spix0 > 64 ? 16 : 8) : cores * g_lrows; }
+    UINT texW() const { if (g_gg.bw) return g_gg.per * g_gg.bw; return g_geo ? std::max((cores < 128 ? cores : 128) * 8, g_spix0 > 64 ? (g_spix0 - 64 + 7) / 8 : 0u) : spx; }
+    UINT texH() const { if (g_gg.bw) return ((cores - 1) / g_gg.per) * g_gg.band + g_gg.bh; return g_geo ? ((cores - 1) / 128) * 16 + (g_spix0 > 64 ? 16 : 8) : cores * g_lrows; }
     void make(uint32_t ncores, const std::vector<uint32_t>& ramImg, const std::vector<uint32_t>& romImg, const std::vector<std::vector<uint32_t>>& state) {
         cores = ncores;
         statePix = ((g_ntex ? g_ntex : g_twc + g_wcn / 2) + 7) / 8;
@@ -249,7 +258,13 @@ struct Gpu {
         bind(set[cur ^ 1][0], cur ^ 1, true, false);
         ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         ctx->VSSetShader(tick.vs, nullptr, 0); ctx->PSSetShader(tick.ps, nullptr, 0);
-        if (g_wcn0) {   // x25: core 0 by its own tick (its block, then its pixels in rows 8-15), the workers band by band
+        if (g_gg.bw) {   // a built step: band by band (the whole band when its blocks are permuted)
+            for (uint32_t b = 0; b * g_gg.per < cores; b++) {
+                uint32_t n = g_gg.perm ? g_gg.per : std::min(g_gg.per, cores - b * g_gg.per);
+                viewport(n * g_gg.bw, g_gg.bh, b * g_gg.band);
+                ctx->Draw(3, 0);
+            }
+        } else if (g_wcn0) {   // x25: core 0 by its own tick (its block, then its pixels in rows 8-15), the workers band by band
             ctx->PSSetShader(tick0.ps, nullptr, 0);
             viewport(8, 8);
             ctx->Draw(3, 0);
@@ -373,7 +388,7 @@ static void commit_constants(Gpu& gpu, uint32_t cores) {
 }
 // Both machines to the halt in passes of 61 bundles; false (and the differences printed) when they disagree
 static bool check_case(Gpu& gpu, const Case& cs, uint32_t seed, bool verbose) {
-    RAM_END = cs.mc ? RAM_MC : 2048 * 2048 * 16;
+    RAM_END = cs.mc || cs.big ? RAM_MC : 2048 * 2048 * 16;
     Prepared pr = prepare(cs, seed);
     commit_constants(gpu, cs.cores);
     gvm_machine m = {};
@@ -429,7 +444,7 @@ static bool check_case(Gpu& gpu, const Case& cs, uint32_t seed, bool verbose) {
     for (uint32_t c = 0; c < cs.cores; c++) {
         std::vector<uint32_t> st = gpu.core_state(c);
         for (int k = 1; k < 64; k++) {
-            bool same = st[k] == rc[c].x[k];
+            bool same = st[k] == rc[c].x[k] || ((cs.skip_regs >> k) & 1);   // (the game bench's time-dependent registers)
             if (!same && cs.tol > 0) {   // both numbers, and near
                 float x, y; memcpy(&x, &st[k], 4); memcpy(&y, &rc[c].x[k], 4);
                 same = fabsf(x - y) <= (float)cs.tol * fmaxf(1.0f, fabsf(y));
@@ -437,7 +452,7 @@ static bool check_case(Gpu& gpu, const Case& cs, uint32_t seed, bool verbose) {
             if (!same && bad++ < g_show && verbose) printf("  %s: core %u r%d %08x, the reference %08x\n", cs.name, c, k, st[k], rc[c].x[k]);
         }
         if (st[16 * 4] != rc[c].pc && bad++ < g_show && verbose) printf("  %s: core %u pc %08x, the reference %08x\n", cs.name, c, st[16 * 4], rc[c].pc);
-        if (st[19 * 4 + 1] != (uint32_t)rc[c].ops_run && bad++ < g_show && verbose)
+        if (!cs.skip_ops && st[19 * 4 + 1] != (uint32_t)rc[c].ops_run && bad++ < g_show && verbose)
             printf("  %s: core %u ops %u, the reference %u\n", cs.name, c, st[19 * 4 + 1], (uint32_t)rc[c].ops_run);
     }
     std::vector<uint32_t> gram = read_tex(gpu.ram);
@@ -450,14 +465,16 @@ static bool check_case(Gpu& gpu, const Case& cs, uint32_t seed, bool verbose) {
 static ID3D11Query *g_qDis, *g_q0, *g_q1;
 // A timed case: millions of RISC-V instructions a second (its rv_per_iter), or gpu_vm ops when it has none
 static double time_case(Gpu& gpu, const Case& cs, uint32_t ticks, uint32_t passes) {
-    RAM_END = cs.mc ? RAM_MC : 2048 * 2048 * 16;
+    RAM_END = cs.mc || cs.big ? RAM_MC : 2048 * 2048 * 16;
     Prepared pr = prepare(cs, 1);
     commit_constants(gpu, cs.cores);
     gpu.make(cs.cores, pr.ramImg, g_rom, pr.state);
     gpu.pass = {ticks, RAM_END, 1000, 0, 0, 1, ram_rows(), 0, cs.cores, {0, 0, 0}, {0}};
     for (int k = 0; k < (env_int("GVM_ENDS") > 1 ? 0 : 20); k++) gpu.run_pass();
     int at = (g_fused && cs.bundles_fused > 0) || cs.ns ? 0 : 1;   // fused loops and real programs are counted in bundles (19.x), others in ops (19.y)
+    if (cs.passes) passes = cs.passes;
     auto count = [&]() {   // core 0's bundles (or ops); many cores (Case::mc): every core's
+        if (cs.units_reg) return gpu.core_state(0)[cs.units_reg];   // (the game bench: core 0's count of units)
         uint32_t n = 0;
         for (uint32_t c = 0; c < (cs.mc ? cs.cores : 1u); c++) n += gpu.core_state(c)[19 * 4 + at];
         return n;
@@ -491,17 +508,19 @@ static double time_case(Gpu& gpu, const Case& cs, uint32_t ticks, uint32_t passe
     while (ctx->GetData(g_q1, &t1, sizeof t1, 0) != S_OK) Sleep(1);
     uint32_t o1 = count();
     gpu.release();
+    if (cs.us_pass) return double(t1 - t0) / dj.Frequency * 1e6 / passes;   // (p_: us a pass)
+    if (cs.units_reg) return (o1 - o0) / cs.unit_div / (double(t1 - t0) / dj.Frequency);   // (the game bench: frames a second)
     double mops = (o1 - o0) / (double(t1 - t0) / dj.Frequency) / 1e6;
     double per = at == 0 ? cs.bundles_fused : cs.ops_per_iter;
     if (env_int("GVM_BPP") && cs.ns) printf("  %s: %.0f bundles a pass\n", cs.name, (double)(o1 - o0) / passes);   // (passes end early on a full write cache)
     if (cs.ns) return 1000.0 / mops;   // a real program: ns a bundle
     return cs.rv_per_iter > 0 ? mops / per * cs.rv_per_iter : mops;
 }
-struct Variant { std::string name, shader; std::vector<std::string> defs; Prog tick, commit, stg, wrt, prog, any, tickW, tick0; uint32_t wcn0 = 0, spix0 = 0; bool hasCommit, hasOps, hasAny = false, uavTick = false, hasW = false; uint32_t wcn = 128, texw = 2048, twc = 24, slots = 32, span = 272, lrows = 1, wcn1 = 0, geo = 0, ntex = 0; };
+struct Variant { std::string name, shader; std::vector<std::string> defs; Prog tick, commit, stg, wrt, prog, any, tickW, tick0; uint32_t wcn0 = 0, spix0 = 0; bool hasCommit, hasOps, hasAny = false, uavTick = false, hasW = false; uint32_t wcn = 128, texw = 2048, twc = 24, slots = 32, span = 272, lrows = 1, wcn1 = 0, geo = 0, ntex = 0; Geo gg; };
 static void use(Gpu& gpu, const Variant& v) {
     gpu.tick = v.tick; gpu.commit = v.commit; gpu.stg = v.stg; gpu.wrt = v.wrt; gpu.prog = v.prog;
     gpu.hasCommit = v.hasCommit; gpu.hasOps = v.hasOps; gpu.uavTick = v.uavTick; gpu.hasW = v.hasW; gpu.tickW = v.tickW; gpu.tick0 = v.tick0; g_wcn0 = v.wcn0; g_spix0 = v.spix0; gpu.hasAny = v.hasAny && !env_int("GVM_NOPRED"); gpu.any = v.any;
-    g_wcn = v.wcn; g_texw = v.texw; g_twc = v.twc; g_lrows = v.lrows; g_wcn1 = v.wcn1; g_geo = v.geo; g_ntex = v.ntex;   // (the state's layout, the commit's points and RAM's width are the variant's)
+    g_wcn = v.wcn; g_texw = v.texw; g_twc = v.twc; g_lrows = v.lrows; g_wcn1 = v.wcn1; g_geo = v.geo; g_ntex = v.ntex; g_gg = v.gg;   // (the state's layout, the commit's points and RAM's width are the variant's)
     gpu.opSlots = v.slots; gpu.opSpan = v.span; gpu.opRounds = g_op_rounds;
     g_romrows = 0; g_x17_paths = 0;   // (probe: the ROM in RAM's texture; x17 on the real programs' own paths)
     for (auto& d : v.defs) { if (d == "ROMROWS=1") g_romrows = 1; if (d == "X17PATHS=1") g_x17_paths = 1; }
@@ -528,6 +547,16 @@ static void step_sizes(const std::string& path, const std::vector<std::string>& 
     wcn1 = step_size(src, defs, "WCN1", 0);
     geo = step_size(src, defs, "GEO_BLOCKS", 0);
     ntex = step_size(src, defs, "NTEX", 0);
+}
+static Geo step_geo(const std::string& path) {
+    std::string src = slurp(path);
+    Geo g;
+    g.bw = step_size(src, {}, "GEO_BW", 0);
+    if (!g.bw) return g;
+    g.bh = step_size(src, {}, "GEO_BH", 0); g.band = step_size(src, {}, "GEO_BAND", 0); g.per = step_size(src, {}, "GEO_PER", 0);
+    g.jrow = step_size(src, {}, "GEO_JROW", 0); g.perm = step_size(src, {}, "GEO_PERM", 0); g.mul = step_size(src, {}, "GEO_MUL", 0);
+    g.inv = step_size(src, {}, "GEO_INV", 0);
+    return g;
 }
 static void build_variant(Variant& v) {
     std::vector<std::string> names, values;
@@ -571,19 +600,36 @@ static void build_variant(Variant& v) {
     }
 }
 
+// A built variant's stamp: its source and defines hashed. The card runs a builder-made tick only when SHADER.warp_ok holds
+// the stamp (written by a WARP run with --mark-ok that passed every check): the card never sees an unchecked tick.
+static std::string stamp_of(const Variant& v) {
+    std::string key = slurp(v.shader);
+    for (auto& d : v.defs) key += ";" + d;
+    uint64_t h = 1469598103934665603ull;
+    for (unsigned char ch : key) h = (h ^ ch) * 1099511628211ull;
+    char b[32];
+    snprintf(b, sizeof b, "%016llx", (unsigned long long)h);
+    return b;
+}
+static bool built(const Variant& v) { return slurp(v.shader).find("made by gpu_vm/tick/builder") != std::string::npos; }
 int main(int argc, char** argv) {
-    bool warp = false, nocheck = false;   // --nocheck: time only (a batch's checks run apart: every run stays under 5 minutes)
-    std::string only, shader, varfile;
+    bool warp = false, nocheck = false;
+    std::string jsonOut;
+    bool markOk = false;   // --json FILE: every variant's checks and every round's number, for builder/search.py   // --nocheck: time only (a batch's checks run apart: every run stays under 5 minutes)
+    std::string only, shader, varfile, setName;
     uint32_t ticks = 8192, seed = 1, passes = 300, rounds = 2;
     std::vector<std::string> defStore;
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
         if (a == "--warp") warp = true;
         else if (a == "--nocheck") nocheck = true;
+        else if (a == "--json" && i + 1 < argc) jsonOut = argv[++i];
+        else if (a == "--mark-ok") markOk = true;   // (WARP) a variant that passes every check gets SHADER.warp_ok, its source's stamp
         else if (a == "--fused" && i + 1 < argc) g_fused = atoi(argv[++i]);   // the timed loops fused (cases.h; or GVM_FUSED=N)
         else if (a == "--shader" && i + 1 < argc) shader = argv[++i];
         else if (a == "--variants" && i + 1 < argc) varfile = argv[++i];
         else if (a == "--case" && i + 1 < argc) only = argv[++i];
+        else if (a == "--set" && i + 1 < argc) setName = argv[++i];   // a named set of cases (Case::set: `game`, gamebench.h)
         else if (a == "--ticks" && i + 1 < argc) ticks = (uint32_t)atoi(argv[++i]);
         else if (a == "--passes" && i + 1 < argc) passes = (uint32_t)atoi(argv[++i]);
         else if (a == "--rounds" && i + 1 < argc) rounds = (uint32_t)atoi(argv[++i]);
@@ -620,6 +666,13 @@ int main(int argc, char** argv) {
         v.defs = defStore;
         vars.push_back(v);
     }
+    if (!warp)   // the safety rule (gpu_vm/tick/builder/README.md): a built tick reaches the card only after WARP passed it
+        for (Variant& v : vars)
+            if (!v.shader.empty() && built(v)) {
+                std::string ok = slurp(v.shader + ".warp_ok");
+                while (!ok.empty() && (ok.back() == '\n' || ok.back() == '\r')) ok.pop_back();
+                if (ok != stamp_of(v)) { printf("gvmbench: %s (%s) has not passed WARP's checks as it is: not run on the card\n", v.name.c_str(), v.shader.c_str()); return 3; }
+            }
     D3D_FEATURE_LEVEL fl = D3D_FEATURE_LEVEL_11_0;
     check(D3D11CreateDevice(nullptr, warp ? D3D_DRIVER_TYPE_WARP : D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, &fl, 1, D3D11_SDK_VERSION, &dev, nullptr, &ctx), "D3D11CreateDevice");
     char exe[MAX_PATH];
@@ -631,6 +684,7 @@ int main(int argc, char** argv) {
     for (Variant& v : vars) {
         if (v.shader.empty()) v.shader = dflt;
         step_sizes(v.shader, v.defs, v.wcn, v.texw, v.twc, v.slots, v.span, v.lrows, v.wcn1, v.geo, v.ntex);
+        v.gg = step_geo(v.shader);
         build_variant(v);
     }
     QueryPerformanceCounter(&f1);
@@ -661,7 +715,8 @@ int main(int argc, char** argv) {
 
     std::vector<Case> all = cases(), picked;
     for (const Case& cs : all)
-        if ((only.empty() && !cs.named) || ("," + only + ",").find("," + std::string(cs.name) + ",") != std::string::npos) picked.push_back(cs);
+        if (!setName.empty() && only.empty()) only = "-";
+        if (((only.empty() || ("," + only + ",").find(",default,") != std::string::npos) && !cs.named) || ("," + only + ",").find("," + std::string(cs.name) + ",") != std::string::npos || (cs.set && setName == cs.set)) picked.push_back(cs);
     // checks: every picked case on every variant, the timed loops at a few thousand iterations
     std::vector<std::string> wrong(vars.size());
     g_loop_n = 3000;
@@ -670,7 +725,7 @@ int main(int argc, char** argv) {
         for (const Case& cs : picked)
             if (!check_case(gpu, cs, seed, vars.size() == 1)) wrong[vi] += std::string(wrong[vi].empty() ? "" : ",") + cs.name;
     }
-    // timing: rounds over every variant, forward then backward; the median of the rounds
+    // timing: rounds over every variant, forward then backward (ABBA...); the mean of the rounds and their spread
     g_loop_n = 3000000;
     std::vector<const Case*> timed;
     for (const Case& cs : picked) if (cs.timed) timed.push_back(&cs);
@@ -681,23 +736,47 @@ int main(int argc, char** argv) {
             use(gpu, vars[vi]);
             for (size_t ci = 0; ci < timed.size(); ci++) got[vi][ci].push_back(time_case(gpu, *timed[ci], ticks, passes));
         }
+    // each variant's mean over the rounds and its spread ((max - min) / mean, in %): the card's noise is visible
     printf("%-16s", "variant");
-    for (auto* cs : timed) printf(" %8s", cs->ns ? (std::string(cs->name).substr(0, 5) + " ns").c_str() : cs->name);
+    for (auto* cs : timed) printf(" %13s", cs->ns ? (std::string(cs->name).substr(0, 8) + " ns").c_str() : cs->us_pass ? (std::string(cs->name) + " us").c_str() : cs->name);
     printf("  x lean  checks\n");
     for (size_t vi = 0; vi < vars.size(); vi++) {
         printf("%-16s", vars[vi].name.c_str());
         double lg = 0;
         int nl = 0;
         for (size_t ci = 0; ci < timed.size(); ci++) {
-            std::vector<double> x = got[vi][ci];
-            std::sort(x.begin(), x.end());
-            double med = x.empty() ? 0 : x[x.size() / 2];
-            printf(" %8.2f", med);
+            const std::vector<double>& x = got[vi][ci];
+            double mean = 0, lo = 1e300, hi = -1e300;
+            for (double y : x) { mean += y; lo = std::min(lo, y); hi = std::max(hi, y); }
+            mean = x.empty() ? 0 : mean / x.size();
+            printf(" %8.2f %3.0f%%", mean, x.size() > 1 && mean > 0 ? (hi - lo) / mean * 100 : 0.0);
             double l = lean_of(timed[ci]->name);
-            if (l > 0 && med > 0) { lg += log(med / l); nl++; }
+            if (l > 0 && mean > 0) { lg += log(mean / l); nl++; }
         }
         printf("  %6.2f  %s\n", nl ? exp(lg / nl) : 0.0, nocheck ? "(not checked)" : wrong[vi].empty() ? "same as the reference" : ("WRONG: " + wrong[vi]).c_str());
     }
+    if (!jsonOut.empty()) {
+        if (FILE* f = fopen(jsonOut.c_str(), "w")) {
+            fprintf(f, "{\"device\": \"%s\", \"variants\": [\n", warp ? "warp" : "card");
+            for (size_t vi = 0; vi < vars.size(); vi++) {
+                fprintf(f, " {\"name\": \"%s\", \"shader\": \"", vars[vi].name.c_str());
+                for (char ch : vars[vi].shader) fputs(ch == '\\' ? "/" : std::string(1, ch).c_str(), f);
+                fprintf(f, "\", \"checked\": %s, \"wrong\": \"%s\", \"cases\": {", nocheck ? "false" : "true", wrong[vi].c_str());
+                for (size_t ci = 0; ci < timed.size(); ci++) {
+                    fprintf(f, "%s\"%s\": [", ci ? ", " : "", timed[ci]->name);
+                    for (size_t k = 0; k < got[vi][ci].size(); k++) fprintf(f, "%s%.4f", k ? ", " : "", got[vi][ci][k]);
+                    fprintf(f, "]");
+                }
+                fprintf(f, "}}%s\n", vi + 1 < vars.size() ? "," : "");
+            }
+            fprintf(f, "]}\n");
+            fclose(f);
+        }
+    }
+    if (warp && markOk && !nocheck)
+        for (size_t vi = 0; vi < vars.size(); vi++)
+            if (wrong[vi].empty())
+                if (FILE* f = fopen((vars[vi].shader + ".warp_ok").c_str(), "w")) { fprintf(f, "%s\n", stamp_of(vars[vi]).c_str()); fclose(f); }
     bool ok = true;
     for (auto& w : wrong) ok = ok && w.empty();
     return ok ? 0 : 2;

@@ -58,6 +58,18 @@ struct Case {
     // at a place of its own (the real programs built -fPIE, the probes' code), g_mc_cores cores; timed in ns a
     // bundle of all cores together
     const char* mc = nullptr;
+    bool us_pass = false;   // timed in us a pass (the p_ cases: how a pass's time grows with the cores that run in it)
+
+    // the game bench (gamebench.h): a set's name (gvmbench --set NAME), 128 MB of RAM, registers a check does not
+    // compare (time-dependent: polls, sinks) and the ops count left out, timed in units of core 0's register units_reg
+    // a second, unit_div of them a frame, over `passes` passes (0: gvmbench's --passes)
+    const char* set = nullptr;
+    bool big = false;
+    uint64_t skip_regs = 0;
+    bool skip_ops = false;
+    int units_reg = 0;
+    double unit_div = 1;
+    uint32_t passes = 0;
 };
 static uint32_t g_mc_cores = 32;   // (gvmbench --cores N)
 
@@ -148,6 +160,7 @@ static void loop_end(GvmAsm& a, int top) {
     if (g_fused) a.addbnz(5, -1, top);
     else { a.addi(5, 5, -1); a.bnei(5, 0, top); }
 }
+#include "gamebench.h"
 static std::vector<Case> cases() {
     std::vector<Case> v;
     v.push_back({"int", 1, false, [](std::vector<GvmAsm>& p, auto& data, uint32_t seed) {
@@ -852,6 +865,48 @@ static std::vector<Case> cases() {
     mc("mc_cm", "coremark");                // CoreMark on every core: the same path (lockstep)
     mc("mc_cm1", "coremark@");              // the same, one copy (code and data shared: as threads, in lockstep)
     mc("mc_mix", "coremark,gzip,coremark,gunzip");   // different programs on neighbouring cores
+    // ---- a pass with K busy workers and M awake idle ones (p_kK_mM, named, in us a pass of 8,192 bundles): core 0 and
+    // workers 1..K each run a long serial loop of their own (loads, stores to a ring of four words, integer chains: the write
+    // cache stays small, so every busy core runs its whole budget); workers K+1..K+M poll a word and `sync` (a few bundles
+    // and the general step a pass, as a game's idle worker). With overlap a pass costs what core 0's alone does (p_k0_m0).
+    // Core 0 stores the word when its loop ends (a check's 3,000 trips), and the idle workers halt.
+    static const uint32_t P_DATA = GVM_RAM + 0x1000000, P_DONE = P_DATA - 16;
+    auto pmc = [&](const char* name, int K, int M) {
+        Case c{name, (uint32_t)(1 + K + M), true, [K, M](std::vector<GvmAsm>& p, auto& data, uint32_t) {
+            for (int k = 0; k <= K; k++) {
+                GvmAsm& a = p[k];
+                a.li(5, loop_count(g_loop_n)); a.li(4, (int32_t)(P_DATA + k * 0x10000)); a.li(20, (int32_t)(P_DATA + k * 0x10000 + 0x8000));
+                a.li(10, k + 1); a.li(11, 3 * k + 7);
+                int top = a.here();
+                for (int i = 0; i < 4; i++) {
+                    a.lw(6 + i, 4, 64 * i + 4 * ((k + i) & 3)); a.add(10, 10, 6 + i); a.close();
+                    a.op(GVM_I_XOR, 11, 11, 10); a.opi(GVM_I_SLL, 12, 11, 1 + (k & 3)); a.close();
+                    a.sw(11, 20, 4 * i); a.addi(13, 13, 1); a.close();
+                    a.add(14, 14, 12); a.op(GVM_I_AND, 15, 14, 11); a.close();
+                }
+                loop_end(a, top);
+                if (k == 0) { a.li(6, 1); a.li(7, (int32_t)P_DONE); a.close(); a.sw(6, 7, 0); a.close(); }
+                a.halt();
+            }
+            for (int k = K + 1; k <= K + M; k++) {
+                GvmAsm& a = p[k];
+                a.li(4, (int32_t)P_DONE); a.close();
+                int top = a.here(), out = a.label();
+                a.lw(6, 4, 0); a.close();
+                a.bnei(6, 0, out);
+                a.x(GVM_X_SYNC); a.close();
+                a.j(top);
+                a.bind(out);
+                a.halt();
+            }
+            for (int k = 0; k < 64; k++) data.push_back({P_DATA + 4 * k, 0x9e3779b9u * (k + 1)});
+        }};
+        c.named = true; c.us_pass = true;
+        v.push_back(c);
+    };
+    pmc("p_k0_m0", 0, 0); pmc("p_k1_m0", 1, 0); pmc("p_k2_m0", 2, 0); pmc("p_k4_m0", 4, 0); pmc("p_k8_m0", 8, 0);
+    pmc("p_k0_m40", 0, 40); pmc("p_k4_m40", 4, 40); pmc("p_k8_m40", 8, 40);
+    game_cases(v);   // the game bench's g_ cases (gamebench.h)
     return v;
 }
 
@@ -1018,6 +1073,7 @@ static Prepared prepare(const Case& cs, uint32_t seed) {
 }
 // the lean tick on the RTX 5070 Laptop (isaloops, 22 October 2026, gpu_vm/tick/steps/README.md)
 static double lean_of(const char* name) {
+    if (double g = g_rv_of(name)) return g;   // (the game bench: the RISC-V machine's frames a second)
     static const struct { const char* n; double v; } L[] = {{"arith", 8.26}, {"loads", 5.70}, {"stores", 4.91}, {"adds", 8.18},
                                                             {"tight", 7.28}, {"mix", 7.22}, {"stride", 6.37}, {"floats", 6.11},
                                                             {"fmix", 5.31}};
