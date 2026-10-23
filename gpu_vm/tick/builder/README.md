@@ -36,6 +36,10 @@ A batch lives in `build/tick_gen/BATCH/` (vNNNN.hlsl, vNNNN.json, checks.json, c
 | jrow | 0, 1 | pixel j column by column (x23) or row by row |
 | perm, mul | id, bitrev, mul | which block of a band core c takes (bit-reversed, or c * mul mod per) |
 | early | 0-3 | a halted (1) or sleeping (2) core copies its state at the top, without loading it; 3: and discards when both state sets hold the same (texel 23.w counts its quiet passes) |
+| mru | 0, 1, 2, 4 | x24's: the last N stored texels' entries in registers; a load or store of one reads no tags (`memopts.py`) |
+| bb | 0, 1 | x24's: a mask of the first-table buckets stored to; a load whose bucket has none reads no tags |
+| tfirst | 0, 1 | x24's: a load's texel fetched before its lookup (paths 3 to 5) |
+| s6 | 0, 1 | x24's (with mru): a store pair (path 6) whose texels are both kept takes one branch past the lookup |
 | xr, npair, xbind, xload, xfast | phase 2 | the core's file (below) |
 
 The layout is told to gvmbench by constants in the tick (GEO_BW, GEO_BH, GEO_BAND, GEO_PER, GEO_JROW, GEO_PERM, GEO_MUL;

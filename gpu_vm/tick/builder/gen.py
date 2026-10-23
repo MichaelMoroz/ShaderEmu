@@ -33,6 +33,10 @@ DEFAULTS = dict(
     jrow=0,             # pixel j in its block: 0 column by column (x23), 1 row by row
     perm='id',          # core -> block within a band: id, bitrev, mul
     mul=1,              # perm mul's odd factor
+    mru=0,              # x24's idea: the last N stored texels' entries in registers (0, 1, 2, 4): a hit reads no tags
+    bb=0,               # x24's idea: a mask of the first-table buckets stored to; a load whose first bucket has none reads no tags
+    tfirst=0,           # x24's idea: a load's or store's texel fetched before its lookup (paths 3-5)
+    s6=0,               # x24's idea (with mru): a store pair (path 6) whose texels are both kept skips the lookup
     early=0,            # 0 none; 1 a halted core copies its state at the top; 2 and a sleeping one (a supervisor's wait);
                         # 3 and both discard when the other set holds the same (texel 23.w counts the quiet passes)
     # ---- phase 2 (ISA; isa.h GVM_M_FREAD): the core's file, its bindings and its pair buffer, in the state after the write cache
@@ -48,7 +52,7 @@ SPACE = dict(   # the values a search draws from
     fetch=['both', 'one'], int_first=[0, 1], mem_order=['35', '4'], split=['branch', 'flatten'],
     block=[(8, 8), (16, 4), (4, 16), (8, 4), (4, 8), (32, 2), (16, 8), (8, 16), (32, 4), (64, 1), (32, 1), (16, 2)],
     bandx=[1, 2], per=[16, 32, 64, 128], jrow=[0, 1], perm=['id', 'bitrev', 'mul'], mul=[3, 5, 37, 77],
-    early=[0, 1, 2, 3],
+    early=[0, 1, 2, 3], mru=[0, 1, 2, 4], bb=[0, 1], tfirst=[0, 1], s6=[0, 1],
     xr=[0, 64, 128, 256, 512, 1024], npair=[0, 32, 64, 128], xbind=[0, 1], xload=['pre', 'lazy'], xfast=[0, 1],
 )
 
@@ -78,6 +82,7 @@ def valid(P):
     if P['perm'] == 'mul' and P['mul'] % 2 == 0: return 'mul even'
     if P['xr'] and (P['xr'] & (P['xr'] - 1) or P['xr'] < 4): return 'xr not a power of two'
     if P['npair'] % 2: return 'npair odd'
+    if P.get('s6', 0) and not P.get('mru', 0): return 's6 without mru'
     if P['xr'] > 1024 or P['npair'] > 256: return 'file or pairs too large'
     return ''
 
@@ -633,7 +638,8 @@ def emit(P):
     L = layout(P)
     out = [header(P, L), part('alu'), memory(P), part('taken'), fstep(P), part('step12'), part('general').replace('//@@FILE_ANY@@', file_any(P)), RUN,
            state_io(P), frag(P), part('ops')]
-    return '\n'.join(out)
+    from memopts import memopts
+    return memopts(P, '\n'.join(out))
 
 def manifest(P):
     P = full(P)
