@@ -11,8 +11,8 @@
 //   g_q3      core 0 + 3 busy workers (a server's logic, a scene's vertices, a client helper) + 2 awake idle
 //   g_hl      core 0 (the heavy logic) + 4 busy workers + 40 awake idle
 //   g_ray     core 0 + 191 workers sharing a picture in chunks of 32 pixels
-//   g_q3p     (set game2) Quake III as its passes are: 3 rounds a frame of core 0's logic and two short jobs, 2 spinning
-//             workers (a poll to the budget), 2 idle: 6 passes a frame, core 0's passes ending sync 61%, full 39%
+//   g_q3p     (set game2) Quake III as its passes are: core 0's logic, the client game's job it waits for, the scene's,
+//             an items helper, the server's worker running logic to its whole budget every pass, 2 idle
 // and the same work in other forms (the set game_x):
 //   ..._r     the stack (frames' saves, spills, the trace's struct) in registers: moves (a large register file)
 //   ..._f     the stack in the core's file (lf, sf: phase 2; skipped on a tick without a file of 128 words)
@@ -52,7 +52,10 @@ struct GScene {
     std::vector<GJob> jobs;    // busy worker k + 1's job each frame
     int spin = 0;              // workers after the busy ones that never end a pass by themselves: a poll loop to the
                                // budget (Quake III's helpers: some worker runs its whole budget in 90% of the passes)
+    int spinE = 0;             // > 0: a spinner runs logic frames of spinE entities on an instance of its own, one after
+                               // another (Quake III's server worker, its bots at the whole budget), not a tight poll
     int idle = 0;              // awake idle workers after them
+    bool serial = false;       // core 0 posts its jobs after its own work and waits for them in the same frame
     int rounds = 1;            // core 0's rounds a frame: each its jobs posted, core0.E entities, the jobs waited for
     int rayW = 0;              // > 0: workers 1..rayW share core 0's picture each frame
     GRay ray;
@@ -430,7 +433,7 @@ static void g_scene(std::vector<GvmAsm>& p, std::vector<std::pair<uint32_t, uint
     const int Ew = S.worker.E;   // (the instances' size: the largest a job asks)
     int maxE = S.core0.E;
     for (auto& j : S.jobs) if (j.kind == 1 && j.size > maxE) maxE = j.size;
-    g_data(data, 1 + (int)busy, maxE ? maxE : 1, S.ray);
+    g_data(data, 1 + (int)busy + (S.spinE ? S.spin : 0), std::max(maxE, S.spinE) ? std::max(maxE, S.spinE) : 1, S.ray);
     (void)Ew;
     // ---- core 0
     {
@@ -470,33 +473,37 @@ static void g_scene(std::vector<GvmAsm>& p, std::vector<std::pair<uint32_t, uint
         };
         a.bind(main_);
         a.li(3, (int32_t)(S.rayW && g_frames() == 2 ? 1 : g_frames()));   // (a check: one frame of 191 workers is minutes on WARP)
+        auto post = [&]() {
+            // post this frame's jobs: {seq = frame + 1, kind, a0, a1}, the seq last
+            a.addi(51, 4, 1);
+            for (uint32_t k = 1; k <= busy; k++) {
+                const GJob& j = S.jobs[k - 1];
+                a.li(48, (int32_t)(G_MBOX + 16 * k));
+                a.li(52, j.kind);
+                a.li(53, (int32_t)(j.kind == 1 ? G_DATA + k * G_INST : G_VOUT + k * 0x20000));
+                a.li(54, j.size);
+                a.sw(52, 48, 4); a.sw(53, 48, 8); a.sw(54, 48, 12); a.sw(51, 48, 0);
+            }
+            if (S.rayW) {
+                int pl = a.label();
+                a.li(48, 1); a.li(52, 3);
+                a.bind(pl);
+                a.li(49, (int32_t)G_MBOX); a.shadd(49, 49, 48, 4);
+                a.addi(53, 48, -1);
+                a.sw(52, 49, 4); a.sw(53, 49, 8); a.sw(4, 49, 12); a.sw(51, 49, 0);
+                a.addi(48, 48, 1);
+                a.li(54, S.rayW + 1);
+                g_bne(a, 48, 54, pl);
+            }
+        };
+        auto own = [&]() {
+            // core 0's own work: its logic, or a lone kernel's (g_ray1: every chunk)
+            if (S.core0.E) { a.li(5, (int32_t)G_DATA); a.li(6, S.core0.E); a.mv(7, 4); a.call(lc.frame); }
+            else if (rayfn >= 0) { a.li(5, 0); a.mv(6, 4); a.li(7, 1); a.call(rayfn); }
+        };
         a.bind(fl);
-        wait_all();
-        // post this frame's jobs: {seq = frame + 1, kind, a0, a1}, the seq last
-        a.addi(51, 4, 1);
-        for (uint32_t k = 1; k <= busy; k++) {
-            const GJob& j = S.jobs[k - 1];
-            a.li(48, (int32_t)(G_MBOX + 16 * k));
-            a.li(52, j.kind);
-            a.li(53, (int32_t)(j.kind == 1 ? G_DATA + k * G_INST : G_VOUT + k * 0x20000));
-            a.li(54, j.size);
-            a.sw(52, 48, 4); a.sw(53, 48, 8); a.sw(54, 48, 12); a.sw(51, 48, 0);
-        }
-        if (S.rayW) {
-            int pl = a.label();
-            a.li(48, 1); a.li(52, 3);
-            a.bind(pl);
-            a.li(49, (int32_t)G_MBOX); a.shadd(49, 49, 48, 4);
-            a.addi(53, 48, -1);
-            a.sw(52, 49, 4); a.sw(53, 49, 8); a.sw(4, 49, 12); a.sw(51, 49, 0);
-            a.addi(48, 48, 1);
-            a.li(54, S.rayW + 1);
-            g_bne(a, 48, 54, pl);
-        }
-        // core 0's own work: its logic, or a lone kernel's (g_ray1: every chunk)
-        if (S.core0.E) { a.li(5, (int32_t)G_DATA); a.li(6, S.core0.E); a.mv(7, 4); a.call(lc.frame); }
-        else if (rayfn >= 0) { a.li(5, 0); a.mv(6, 4); a.li(7, 1); a.call(rayfn); }
-        a.addi(4, 4, 1);
+        if (!S.serial) { wait_all(); post(); own(); a.addi(4, 4, 1); }
+        else { own(); post(); a.addi(4, 4, 1); wait_all(); }   // (core 0 waits for this frame's jobs: Quake III's client game)
         g_bne(a, 4, 3, fl);
         // the end: the last jobs, then every worker told to stop (kind 0)
         wait_all();
@@ -525,16 +532,25 @@ static void g_scene(std::vector<GvmAsm>& p, std::vector<std::pair<uint32_t, uint
         a.mfsr(3, GVM_SR_COREID);
         a.opi(GVM_I_SLL, 5, 3, 14); a.li(2, (int32_t)(G_STACK + 0x4000 - 64)); a.add(2, 2, 5);
         a.li(56, (int32_t)G_MBOX); a.shadd(56, 56, 3, 4);
-        a.addi(61, 3, -(int32_t)(busy + 1)); a.li(62, S.spin); a.op(GVM_I_SLTU, 61, 61, 62);   // r61: a spinner
         a.li(3, 0);
         a.bind(wl);
         a.lw(7, 56, 0);
         g_bne(a, 7, 3, got);
-        // a spinner polls again at once (gamebench.c's spin_job: a load, an add, a branch): its pass ends at the budget
-        {
+        // a spinner (cores busy + 1 .. busy + spin) goes on at once: a poll (gamebench.c's spin_job: a load, an add, a
+        // branch) or a frame of logic on its own instance (spinE); its pass ends at the budget. (None in a scene without.)
+        if (S.spin) {
             int idle_ = a.label();
-            g_beq(a, 61, 0, idle_);
-            a.addi(59, 59, 1);
+            a.mfsr(58, GVM_SR_COREID); a.addi(58, 58, -(int32_t)(busy + 1)); a.li(59, S.spin); a.op(GVM_I_SLTU, 58, 58, 59);
+            g_beq(a, 58, 0, idle_);
+            // (a check: a spinner stops after 3 rounds, so that its memory at the halt is the same whatever ends passes)
+            a.li(59, (int32_t)(g_frames() == 2 ? 3 : 0x3fffffff));
+            g_br(a, GVM_CC_BGEU, 4, 59, idle_);
+            a.addi(4, 4, 1);
+            if (S.spinE) {
+                a.mfsr(6, GVM_SR_COREID); a.li(5, (int32_t)G_INST); a.op(GVM_I_MUL, 6, 6, 5); a.li(5, (int32_t)G_DATA); a.add(5, 5, 6);
+                a.li(6, S.spinE); a.mv(7, 4);
+                a.call(lc.frame);
+            }
             a.j(wl);
             a.bind(idle_);
         }
@@ -587,9 +603,11 @@ static GScene g_scene_of(const std::string& name) {
     else if (n == "g_verts") { S.core0.E = 0; }
     else if (n == "g_ray1") { S.ray.w = 64; S.ray.h = 32; }
     else if (n == "g_q3") { S.core0.E = 64; S.worker = S.core0; S.jobs = {{1, 256}, {2, 2048}, {1, 64}}; S.idle = 2; }
-    else if (n == "g_q3p") {   // Quake III as its passes are: rounds bound, about 6 passes a frame on both machines (core 0's
-        // passes end sync 61%, full 39% on x23), a worker at its whole budget in 90% of the passes (spinners)
-        S.core0.E = 32; S.rounds = 3; S.worker = S.core0; S.jobs = {{1, 16}, {2, 128}}; S.spin = 2; S.idle = 2;
+    else if (n == "g_q3p") {   // Quake III as its passes are (GAMEBENCH.md): about 6 passes a frame on both machines, core 0's
+        // passes ending sync 61%, full 39% on x23, a worker at its whole budget in 90% of the passes
+        // core 0 ~12k bundles, the client game's job waited for (~28k), the scene's (~22k), the items helper (~7k), the
+        // server's worker at its whole budget (logic on and on)
+        S.core0.E = 64; S.serial = true; S.worker = S.core0; S.jobs = {{1, 192}, {2, 832}, {1, 64}}; S.spin = 1; S.spinE = 64; S.idle = 2;
     }
     else if (n == "g_hl") { S.core0.E = 512; S.worker = S.core0; S.jobs = {{1, 128}, {2, 2048}, {2, 2048}, {1, 32}}; S.idle = 40; }
     else if (n == "g_ray") { S.core0.E = 16; S.worker = S.core0; S.rayW = 191; }

@@ -18,19 +18,28 @@
 
 /* ---- the scenes: gamebench.h's g_scene_of */
 typedef struct { int kind, size; } job;
-typedef struct { const char *name; int E0, idle, rayW; job jobs[4]; int njobs; int rw, rh, rounds, spin; } scene;
+typedef struct { const char *name; int E0, idle, rayW; job jobs[4]; int njobs; int rw, rh, rounds, spin, spinE, serial; } scene;
 static const scene scenes[] = {
 	{"g_logic", 512, 0, 0, {{0}}, 0, 256, 192, 1, 0},
 	{"g_verts", 0, 0, 0, {{0}}, 0, 256, 192, 1, 0},
 	{"g_ray1", 0, 0, 0, {{0}}, 0, 64, 32, 1, 0},
 	{"g_q3", 64, 2, 0, {{1, 256}, {2, 2048}, {1, 64}}, 3, 256, 192, 1, 0},
-	{"g_q3p", 32, 2, 0, {{1, 16}, {2, 128}}, 2, 256, 192, 3, 2},
+	{"g_q3p", 64, 2, 0, {{1, 192}, {2, 832}, {1, 64}}, 3, 256, 192, 1, 1, 64, 1},
 	{"g_hl", 512, 40, 0, {{1, 128}, {2, 2048}, {2, 2048}, {1, 32}}, 4, 256, 192, 1, 0},
 	{"g_ray", 16, 0, 191, {{0}}, 0, 256, 192, 1, 0},
 };
 static uint32_t logic_job(uint32_t instance, uint32_t E) { return logic_frame(instance, E); }
 static volatile uint32_t g_stop;
-static uint32_t spin_job(uint32_t a, uint32_t b) { uint32_t n = 0; while (!g_stop) n++; return n + a + b; }   /* a spinner: a poll to the budget */
+static int spinE;
+static uint32_t spin_job(uint32_t a, uint32_t b)
+{
+	uint32_t n = 0;
+	while (!g_stop) {
+		n++;
+		if (spinE) { ((inst *)(uintptr_t)a)->frame = n; logic_frame(a, (uint32_t)spinE); }
+	}
+	return n + b;
+}   /* a spinner: a poll to the budget */
 
 static double now(void)
 {
@@ -51,30 +60,38 @@ int main(int argc, char **argv)
 	for (int k = 0; k < busy; k++) if (S->jobs[k].kind == 1 && S->jobs[k].size > maxE) maxE = S->jobs[k].size;
 	LP.E = S->E0;
 	RW = S->rw; RH = S->rh;
-	insts = (inst *)mcw_alloc(sizeof(inst) * (1 + busy));
+	int ninst = 1 + busy + (S->spinE ? S->spin : 0);
+	insts = (inst *)mcw_alloc(sizeof(inst) * ninst);
 	fb = (uint32_t *)mcw_alloc((unsigned)(RW * RH * 4));
 	vout = (uint32_t (*)[4096][4])mcw_alloc(sizeof *vout * (1 + busy));
-	memset(insts, 0, sizeof(inst) * (1 + busy));
-	data(1 + busy, maxE ? maxE : 1);
+	memset(insts, 0, sizeof(inst) * ninst);
+	if (S->spinE > maxE) maxE = S->spinE;
+	spinE = S->spinE;
+	data(ninst, maxE ? maxE : 1);
 	int want = busy + S->spin + S->idle + S->rayW, got = 0;
 	if (want) {
 		got = mcw_open(want);
 		if (got < want) printf("gamebench: %d workers of %d\n", got, want);
-		mcw_touch(insts, sizeof(inst) * (1 + busy));
+		mcw_touch(insts, sizeof(inst) * ninst);
 		mcw_touch(fb, (unsigned)(RW * RH * 4));
 		mcw_touch(vout, sizeof *vout * (1 + busy));
 		mcw_touch_code((const void *)logic_frame, 4096);
 	}
 	ray_stride = S->rayW ? S->rayW : 1;
-	for (int k = busy + 1; k <= busy + S->spin; k++) mcw_post(k, spin_job, 0, 0);
+	for (int k = busy + 1; k <= busy + S->spin; k++) mcw_post(k, spin_job, (uint32_t)(uintptr_t)&insts[k], 0);
 	double unit = S->E0 ? S->E0 * S->rounds : (double)(RW * RH / 32);
 	if (!strcmp(S->name, "g_verts")) unit = 1;
 	double t0 = now(), mark = t0 + 1;
 	uint32_t at = 0, rounds = 0;
 	for (uint32_t frame = 0;; frame++) {
-		if (frame) {
+		if (frame && !S->serial) {
 			for (int k = 1; k <= S->rayW; k++) mcw_wait(k);
 			for (int k = 1; k <= busy; k++) mcw_wait(k);
+		}
+		if (S->serial) {
+			if (S->E0) { insts[0].frame = frame; logic_frame((uint32_t)(uintptr_t)&insts[0], (uint32_t)S->E0); units += (uint32_t)S->E0; }
+			else if (!strcmp(S->name, "g_verts")) { verts_job((uint32_t)(uintptr_t)vout[0], 4096); units++; }
+			else if (lone) { ray_stride = 1; ray_job(0, frame); units += (uint32_t)(RW * RH / 32); }
 		}
 		for (int k = 1; k <= busy; k++) {
 			const job *j = &S->jobs[k - 1];
@@ -82,9 +99,12 @@ int main(int argc, char **argv)
 			else mcw_post(k, verts_job, (uint32_t)(uintptr_t)vout[k], (uint32_t)j->size);
 		}
 		for (int k = 1; k <= S->rayW; k++) mcw_post(k, ray_job, (uint32_t)(k - 1), frame);
-		if (S->E0) { insts[0].frame = frame; logic_frame((uint32_t)(uintptr_t)&insts[0], (uint32_t)S->E0); units += (uint32_t)S->E0; }
-		else if (!strcmp(S->name, "g_verts")) { verts_job((uint32_t)(uintptr_t)vout[0], 4096); units++; }
-		else if (lone) { ray_stride = 1; ray_job(0, frame); units += (uint32_t)(RW * RH / 32); }
+		if (!S->serial) {
+			if (S->E0) { insts[0].frame = frame; logic_frame((uint32_t)(uintptr_t)&insts[0], (uint32_t)S->E0); units += (uint32_t)S->E0; }
+			else if (!strcmp(S->name, "g_verts")) { verts_job((uint32_t)(uintptr_t)vout[0], 4096); units++; }
+			else if (lone) { ray_stride = 1; ray_job(0, frame); units += (uint32_t)(RW * RH / 32); }
+		} else
+			for (int k = 1; k <= busy; k++) mcw_wait(k);   /* (this frame's jobs: Quake III's client game) */
 		if (nframes && frame + 1 >= (uint32_t)nframes) break;
 		double t = now();
 		if (t >= mark) {
@@ -94,8 +114,10 @@ int main(int argc, char **argv)
 			at = units; t0 = t; mark = t + every;
 		}
 	}
-	for (int k = 1; k <= S->rayW; k++) mcw_wait(k);
-	for (int k = 1; k <= busy; k++) mcw_wait(k);
+	if (!S->serial) {
+		for (int k = 1; k <= S->rayW; k++) mcw_wait(k);
+		for (int k = 1; k <= busy; k++) mcw_wait(k);
+	}
 	g_stop = 1;
 	for (int k = busy + 1; k <= busy + S->spin; k++) mcw_wait(k);
 	printf("gamebench: done\n");
