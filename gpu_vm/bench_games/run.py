@@ -91,8 +91,11 @@ def harness(machine, extra, log):
         return q + [os.path.join(RV_ROOT, 'bin', 'rvc_harness.exe'), '--d3d11', '--rvc', 'experiments/rvc_opt',
                     '--define', 'NO_PAGING', '--image', 'linux-net', '--no-desktop', '--no-stdin', '--uart-log', log] + extra, rv_folder()
     a = q + [os.path.join(ROOT, 'bin', 'rvc_harness.exe'), '--gvm', GVM_IMAGE, '--no-viz', '--no-stdin', '--uart-log', log]
-    if machine != 'gvm':
-        a += ['--gvm-tick', f'gpu_vm/tick/steps/{machine}.hlsl']
+    if machine != 'gvm':   # a step of gpu_vm/tick/steps, or BATCH_VNNNN: the builder's build/tick_gen/BATCH/vNNNN.hlsl
+        step = f'gpu_vm/tick/steps/{machine}.hlsl'
+        if not os.path.exists(os.path.join(ROOT, step)) and '_v' in machine:
+            step = 'build/tick_gen/%s/%s.hlsl' % tuple(machine.split('_', 1))
+        a += ['--gvm-tick', step]
     return a + extra, ROOT
 
 
