@@ -173,7 +173,7 @@ public:
         if (!makeTex(ram_, kRamW, rows_, ram.data(), err) || !makeTex(rom_, kRamW, romRows_, rom.data(), err) ||
             !makeTex(stageTex_, opSpan_, kMaxCores * opSlots_, nullptr, err) || !makeTex(ops_[0], kMaxCores, 1, nullptr, err) ||
             !makeTex(ops_[1], kMaxCores, 1, nullptr, err) || !makeTex(zone_, kRamW, 3, nullptr, err) || !makeTex(ctl_, 256, 1, nullptr, err) ||
-            !makeTex(info_, 8, 1, nullptr, err))
+            !makeTex(info_, 8, 1, nullptr, err) || !makeTex(ends_, 128, 2, nullptr, err))
             return false;
         {
             std::vector<uint32_t> none((size_t)spix_ * 8 * 4, 0);
@@ -209,6 +209,11 @@ public:
             !controlRb_.init(dev, DXGI_FORMAT_R32G32B32A32_UINT, 16, controlTexels, 1, 3, err) ||
             !netRb_.init(dev, DXGI_FORMAT_R32G32B32A32_UINT, 16, kNetRead, 1, 3, err))
             return false;
+        // GVM_ENDS_LOG=FILE: every frame, each core's texel 19 (bundles << 8 | why its pass ended), 256 words (block geometry only)
+        if (getenv("GVM_ENDS_LOG") && geo_) {
+            if (!endsRb_.init(dev, DXGI_FORMAT_R32G32B32A32_UINT, 16, 128, 2, 3, err)) return false;
+            endsLog_ = fopen(getenv("GVM_ENDS_LOG"), "wb");
+        }
         mat.setInt("_GvmParkLo", GVM_FW_PARK);
         mat.setInt("_GvmParkHi", GVM_FW_PARK_END);
         return true;
@@ -302,6 +307,14 @@ public:
             ctx->CopySubresourceRegion(info_.t.Get(), 0, t, 0, 0, set_[cur_ ^ 1][t].t.Get(), 0, &b);
         }
         infoRb_.request(ctx, info_.t.Get(), 0, 0, tag);
+        if (endsLog_) {   // (texel 19 is pixel 2's fourth target: at (block x, band y + 2), a texel a block)
+            for (UINT b = 0; b < 2; b++)
+                for (UINT k = 0; k < 128; k++) {
+                    D3D11_BOX e = {k * 8, b * 16 + 2, 0, k * 8 + 1, b * 16 + 3, 1};
+                    ctx->CopySubresourceRegion(ends_.t.Get(), 0, k, b, 0, set_[cur_ ^ 1][3].t.Get(), 0, &e);
+                }
+            endsRb_.request(ctx, ends_.t.Get(), 0, 0, tag);
+        }
         mboxRb_.request(ctx, ram_.t.Get(), 0, (GVM_MBOX >> 4) / kRamW, tag);
         uint32_t ct = 0x100000u, nt = 0x16b800u;
         controlRb_.request(ctx, ram_.t.Get(), ct % kRamW, ct / kRamW, tag);
@@ -309,7 +322,7 @@ public:
         ctx->Flush();
         return true;
     }
-    bool rowFull() const override { return infoRb_.full() || controlRb_.full() || netRb_.full() || mboxRb_.full(); }
+    bool rowFull() const override { return (endsLog_ && endsRb_.full()) || infoRb_.full() || controlRb_.full() || netRb_.full() || mboxRb_.full(); }
     size_t rowPending() const override { return infoRb_.pending(); }
     bool popRow(std::vector<uint8_t>& out, uint64_t& tag) override {
         std::vector<uint8_t> info, control, net, mbox;
@@ -317,6 +330,16 @@ public:
         if (!infoRb_.pop(gpu_.ctx.Get(), info, tag) || !controlRb_.pop(gpu_.ctx.Get(), control, t1) || !netRb_.pop(gpu_.ctx.Get(), net, t2) ||
             !mboxRb_.pop(gpu_.ctx.Get(), mbox, t4))
             return false;
+        if (endsLog_) {
+            std::vector<uint8_t> e;
+            uint64_t t5;
+            if (endsRb_.pop(gpu_.ctx.Get(), e, t5) && e.size() >= 256 * 16) {
+                uint32_t row[256];
+                const uint32_t* q = (const uint32_t*)e.data();
+                for (int c = 0; c < 256; c++) row[c] = (q[c * 4 + 2] << 8) | (q[c * 4 + 3] & 0xffu);
+                fwrite(row, 4, 256, endsLog_);
+            }
+        }
         // the RISC-V machine's row 0 as rvc_harness reads it: the instructions (core 0's ops), the commits (passes), the
         // pc; no UART (texel 11's last word 0xffffffff): the console is the network row's words, which both machines have
         out.assign((size_t)(64 + kControlTexels + kNetRead + kFieldRead) * 16, 0);
@@ -940,7 +963,9 @@ private:
     ComPtr<ID3D11BlendState> gpuBlend_[4];
     ComPtr<ID3D11Texture2D> soundTex_;
     ComPtr<ID3D11RenderTargetView> soundRtv_;
-    RegionReadback sound_, infoRb_, controlRb_, netRb_, mboxRb_;
+    RegionReadback sound_, infoRb_, controlRb_, netRb_, mboxRb_, endsRb_;
+    Tex ends_;
+    FILE* endsLog_ = nullptr;
     std::vector<uint8_t> lastSound_;
     std::deque<uint64_t> soundTags_;
     ComPtr<ID3D11ShaderResourceView> hostData_, netData_;

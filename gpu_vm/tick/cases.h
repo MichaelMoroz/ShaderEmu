@@ -1075,6 +1075,38 @@ static std::vector<Case> cases() {
         c.named = true;
         v.push_back(c);
     }
+    // ---- the same with core 0's passes ending full (wad=7: the cap on a full end only while the word after the mask, the
+    // program's "declared", is not 0): core 0 sets declared, stores to 2,048 distinct texels, clears it, stores again
+    {
+        Case c{"wdecl", 4, false, [](std::vector<GvmAsm>& p, auto&, uint32_t) {
+            const uint32_t W = 0x00c01100u, DONE = DATA + 0x100, BUF = DATA + 0x10000;
+            GvmAsm& a = p[0];
+            a.li(4, (int32_t)W); a.li(6, 1); a.li(7, 0); a.li(8, (int32_t)DONE); a.close();
+            for (int round = 0; round < 3; round++) {
+                a.sw(round == 1 ? 7 : 6, 4, 32); a.close();
+                a.li(5, 2048); a.li(12, (int32_t)BUF); a.close();
+                int top = a.here();
+                a.sw(5, 12, 0); a.addi(12, 12, 16); a.close();
+                a.addbnz(5, -1, top);
+            }
+            a.sw(7, 4, 32); a.close();
+            a.li(9, 1); a.close(); a.sw(9, 8, 0); a.close();
+            a.halt();
+            for (int k = 1; k < 4; k++) {
+                GvmAsm& w = p[k];
+                w.li(8, (int32_t)DONE); w.li(10, 0); w.close();
+                int top = w.here(), out = w.label();
+                w.lw(9, 8, 0); w.addi(10, 10, 1); w.close();
+                w.bnei(9, 0, out);
+                w.j(top);
+                w.bind(out);
+                w.li(11, (int32_t)(DONE + 16 * k)); w.close(); w.sw(10, 11, 0); w.close();
+                w.halt();
+            }
+        }};
+        c.named = true;
+        v.push_back(c);
+    }
     pmc("p_k0_m0", 0, 0); pmc("p_k1_m0", 1, 0); pmc("p_k2_m0", 2, 0); pmc("p_k4_m0", 4, 0); pmc("p_k8_m0", 8, 0);
     pmc("p_k0_m40", 0, 40); pmc("p_k4_m40", 4, 40); pmc("p_k8_m40", 8, 40);
     game_cases(v);   // the game bench's g_ cases (gamebench.h)

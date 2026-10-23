@@ -41,6 +41,8 @@ A batch lives in `build/tick_gen/BATCH/` (vNNNN.hlsl, vNNNN.json, checks.json, c
 | tfirst | 0, 1 | x24's: a load's texel fetched before its lookup (paths 3 to 5) |
 | s6 | 0, 1 | x24's (with mru): a store pair (path 6) whose texels are both kept takes one branch past the lookup |
 | nc | 0, 1 | loads of width GVM_W_NC skip the write cache (`lw_nc`) |
+| wad | 0-7 | a worker's budget against core 0's last pass (gen.py's DEFAULTS); 7: the workers outside the kernel's REST mask (0x00c01100) capped after core 0 rested, and all workers on core 0's full ends only while a program has declared a mask (0x00c01120); check cases wmask, wdecl |
+| ov, mv | 0-32; 0, 1 | overflow entries searched when both buckets are full; mv: a store whose buckets are full moves a resident to its other bucket (the last way fills the hole). Both slower on the games (IDEAS 26) |
 | rc, dtx | 0-2; both, one | the last 1 or 2 fetched texels kept in registers; ROM or RAM fetched behind a branch instead of both |
 | thin, thin8 | 0, 1 | one op a bundle in the 16-byte bundle; 8-byte instructions (gvm_machine.thin) |
 | wide3 | 0-2 | a third lite op in word 2: behind a branch (1) or always made (2) |

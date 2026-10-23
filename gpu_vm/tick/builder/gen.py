@@ -47,7 +47,9 @@ DEFAULTS = dict(
     wsh=0,              # a worker's budget a pass: core 0's (_Ticks) >> wsh
     wad=0,              # 1: a worker's budget core 0's bundles of the last pass (+1/4, 512 at least) when that pass ended core 0 on sync or full
                         # (2 on full only; 3 as 2, half the budget at least; 4 as 1 unless the workers are busy; 5 on sync for
-                        #  the workers outside the kernel's REST mask at WAITW, no mask no cap; 6 as 5 and on full as 2)
+                        #  the workers outside the kernel's REST mask at WAITW, no mask no cap; 6 as 5 and on full as 2; 7 as 6, the full
+                        #  cap only while the program has declared a mask: the word after the mask, WAITW + 32, not 0)
+    mv=0,               # 1: a texel whose two buckets are full moves one of their residents to its other bucket, if it has room (on that path only)
     ov=0,               # overflow entries after the buckets: a store whose two buckets are full takes one (searched only then)
     fx1=0,              # phase 3: op 1 takes any float function but the special ones (compares, sign, conversions; gvm_asm.h fx1)
     late=0,             # phase 3: a conditional branch reads its registers after the bundle's ops (no op-less bundle before it)
@@ -72,7 +74,7 @@ SPACE = dict(   # the values a search draws from
     fetch=['both', 'one'], int_first=[0, 1], mem_order=['35', '4'], split=['branch', 'flatten'],
     block=[(8, 8), (16, 4), (4, 16), (8, 4), (4, 8), (32, 2), (16, 8), (8, 16), (32, 4), (64, 1), (32, 1), (16, 2)],
     bandx=[1, 2], per=[16, 32, 64, 128], jrow=[0, 1], perm=['id', 'bitrev', 'mul'], mul=[3, 5, 37, 77],
-    early=[0, 1, 2, 3], mru=[0, 1, 2, 4], bb=[0, 1], tfirst=[0, 1], s6=[0, 1], nc=[0, 1], thin=[0, 1], thin8=[0, 1], wide3=[0, 1, 2], late=[0, 1, 2, 3], fx1=[0, 1], ov=[0, 4, 8, 16], cv=[0, 1, 2], wsh=[0, 1, 2, 3], wad=[0, 1, 2, 3, 4, 5, 6], s12b=[0, 1, 2, 3], s12in=[0, 1], rc=[0, 1, 2], dtx=['both', 'one'], rpk=['scalar', 'vec', 'wide'], pk=['scalar', 'vec', 'aos'], lay=['split', 'merged'],
+    early=[0, 1, 2, 3], mru=[0, 1, 2, 4], bb=[0, 1], tfirst=[0, 1], s6=[0, 1], nc=[0, 1], thin=[0, 1], thin8=[0, 1], wide3=[0, 1, 2], late=[0, 1, 2, 3], fx1=[0, 1], ov=[0, 4, 8, 16], mv=[0, 1], cv=[0, 1, 2], wsh=[0, 1, 2, 3], wad=[0, 1, 2, 3, 4, 5, 6, 7], s12b=[0, 1, 2, 3], s12in=[0, 1], rc=[0, 1, 2], dtx=['both', 'one'], rpk=['scalar', 'vec', 'wide'], pk=['scalar', 'vec', 'aos'], lay=['split', 'merged'],
     xr=[0, 64, 128, 256, 512, 1024], npair=[0, 32, 64, 128], xbind=[0, 1], xload=['pre', 'lazy'], xfast=[0, 1],
 )
 
@@ -110,6 +112,7 @@ def valid(P):
     if P.get('wide3', 0) and (P.get('thin', 0) or P.get('thin8', 0)): return 'wide3 with thin'
     if P.get('thin8', 0) and (P['fetch'] != 'both' or P.get('mru', 0)): return 'thin8 with fetch=both only'
     if P['xr'] > 1024 or P['npair'] > 256: return 'file or pairs too large'
+    if P.get('mv', 0) and (P.get('ov', 0) or P.get('mru', 0) or P.get('bb', 0)): return 'mv with ov, mru or bb'
     return ''
 
 def inv_mod(m, n):
@@ -143,6 +146,8 @@ def header(P, L):
 static const uint NB = {P['nb']};           // buckets of four entries a table
 static const uint WCN = {L['WCN']};         // write cache entries: 8 * NB in buckets, two overflow slots, then a sink
 static const uint WCS = WCN - 2;
+static const uint MV = {P.get('mv', 0)};   // (mv: the move on a full pair of buckets)
+static bool mvok = false;   // (mv: on for a store's lookup whose store fills the slot it frees: a free way must not hide its bucket's texel in the other)
 static const uint OV = {P.get('ov', 0)}, OVB = 8 * NB;   // overflow entries from OVB, searched when both buckets are full
 static const uint NONE = 0xffffffffu;
 static const uint RAM_W = 8192;
@@ -328,6 +333,22 @@ void mfind(inout mop m) {
         [loop] for (q = 0; q < OV; q++) { uint g = wt[OVB + q]; j = j == OV && ((g & 0x0fffffffu) == m.t || g == NONE) ? q : j; }
         m.otag = j < OV ? wt[OVB + j] : NONE; m.sl = j < OV ? OVB + j : NONE;
     }
+    [branch] if (MV != 0 && OV == 0 && k >= 8 && mvok) {   // (mv) both full: a resident with room in its other bucket moves there, its slot is the texel's
+        uint j, f = NONE, from = NONE;
+        [loop] for (j = 0; j < 8 && f == NONE; j++) {
+            uint u = pick(j < 4 ? m.A : m.B, j & 3) & 0x0fffffffu, ob = j < 4 ? wc_b2(u) : wc_b1(u);
+            uint4 o = bucket(ob);
+            uint w = o.x == NONE ? 0u : o.y == NONE ? 1u : o.z == NONE ? 2u : o.w == NONE ? 3u : 4u;
+            from = w < 4 ? (j < 4 ? 4 * m.b1 + j : 4 * m.b2 + (j & 3)) : from; f = w < 4 ? 4 * ob + w : f;
+        }
+        [branch] if (f != NONE) {
+            uint l = from | 3;   // (a bucket keeps no hole, a lookup takes its first free way: its last resident fills the moved one's way)
+            wt[f] = wt[from]; wd[4 * f] = wd[4 * from]; wd[4 * f + 1] = wd[4 * from + 1]; wd[4 * f + 2] = wd[4 * from + 2]; wd[4 * f + 3] = wd[4 * from + 3];
+            wt[from] = wt[l]; wd[4 * from] = wd[4 * l]; wd[4 * from + 1] = wd[4 * l + 1]; wd[4 * from + 2] = wd[4 * l + 2]; wd[4 * from + 3] = wd[4 * l + 3];
+            wt[l] = NONE; m.sl = l; m.otag = NONE;
+            m.A = bucket(m.b1); m.B = bucket(m.b2);
+        }
+    }
     m.e = has(m.otag, m.t, m.i) ? m.sl : WCN;
 }
 mop mlook(uint ad, bool look) {
@@ -362,7 +383,7 @@ uint slot_tag(mop m, uint sl) { return m.otag; }
 
 MEM35 = '''[branch] if ((path & 1) != 0) {   // a load or a store, and a lite op (paths 3 and 5)
             bool st0 = (t.x & op_bit(8)) != 0;
-            mop m0 = mread_entries(t.x, i0, A0, B0, st0);
+            mvok = MV != 0 && st0; mop m0 = mread_entries(t.x, i0, A0, B0, st0); mvok = false;
             [branch] if ((((t.x ^ op_bit(8)) & op_bit(11)) | (m0.ad & 3)) != 0) m0.q = data_texel(m0.ad);
             smax = max(smax, st0 ? m0.ad - GVM_DEV : 0); lmax = max(lmax, st0 ? 0 : m0.ad & ~GVM_ROM);
             uint w0 = seen(m0), sl0 = slot(m0);
@@ -396,7 +417,7 @@ MEM6 = '''{   // a store, then a load or a store that sees it by selects (path 6
             wt[s0x] = tg0; wd[4 * s0x + m0.i] = e0;
             m1.A = (s0x >> 2) == m1.b1 ? put(m1.A, s0x & 3, tg0) : m1.A;
             m1.B = (s0x >> 2) == m1.b2 ? put(m1.B, s0x & 3, tg0) : m1.B;
-            mfind(m1);
+            mvok = MV != 0 && st1; mfind(m1); mvok = false;
             m1.sl = over ? WCS : m1.sl; m1.otag = over ? tg0 : m1.otag; m1.e = over ? (has(tg0, m1.t, m1.i) ? WCS : WCN) : m1.e;
             m1.w = wd[4 * m1.e + m1.i];
             uint w1 = seen(m1), sl1 = m1.sl;
@@ -655,7 +676,8 @@ def frag(P):
     [branch] if (WAD != 0 && core != 0) {   // (wad: the pass ends about when core 0's does)
         uint4 z = state_in(19, 0);
         bool cap = WAD == 1 || WAD == 4 ? z.w == E_SYNC || z.w == E_FULL : WAD != 5 && z.w == E_FULL;   // (2, 3, 6: core 0 had work: its cache was full; 5 never then)
-        [branch] if ((WAD == 5 || WAD == 6) && z.w == E_SYNC) {   // (5, 6: core 0 rested: the workers it waits for, from the kernel's word at WAITW; no mask, no cap)
+        [branch] if (WAD == 7 && cap) cap = ram((WAITW >> 4) + 2).x != 0;   // (7: on full only while a program has declared its mask)
+        [branch] if (WAD >= 5 && z.w == E_SYNC) {   // (5-7: core 0 rested: the workers it waits for, from the kernel's word at WAITW; no mask, no cap)
             uint4 m0 = ram(WAITW >> 4), m1 = ram((WAITW >> 4) + 1);
             uint4 mm = (core >> 7) != 0 ? m1 : m0;
             bool given = any((m0 | m1) != 0), mine = ((pick(mm, (core >> 5) & 3) >> (core & 31)) & 1) != 0;
@@ -691,9 +713,16 @@ def full(P):
             P['band'] = max(P['band'], P['bh'])
     return P
 
+def general(P):
+    return part('general').replace('//@@FILE_ANY@@', file_any(P))
+
 def step12(P):
     """step12 (paths 1 and 2): with the assembler's file_paths a file op with a cc 0 control word (call, ret, jr) is path 2's"""
     src = part('step12')
+    if P.get('mv', 0):   # (mv: a store's lookup may move a resident)
+        a = "        mop m = mread(t.x, i0, A0, B0);"
+        assert src.count(a) == 1
+        src = src.replace(a, "        mvok = (t.x & op_bit(8)) != 0; mop m = mread(t.x, i0, A0, B0); mvok = false;")
     if not ((P['xr'] or P['npair']) and P['xfast']): return src
     xr, np_ = P['xr'], P['npair']
     o = "    [branch] if (path == GVM_PATH_MEMF && (t.x & op_bit(0x30)) == op_bit(0x30)) {   // the core's file: lf, sf, fpair\n"
@@ -751,7 +780,7 @@ def emit(P):
     why = valid(P)
     if why: raise ValueError(why)
     L = layout(P)
-    out = [header(P, L), part('alu'), memory(P), part('taken'), fstep(P), step12(P), part('general').replace('//@@FILE_ANY@@', file_any(P)), RUN,
+    out = [header(P, L), part('alu'), memory(P), part('taken'), fstep(P), step12(P), general(P), RUN,
            state_io(P), frag(P), part('ops')]
     from memopts import memopts
     from layoutopts import layoutopts
