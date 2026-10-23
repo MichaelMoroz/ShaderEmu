@@ -37,6 +37,11 @@ static cl::opt<unsigned>
                        "made short through a new base from this many (0: "
                        "never)"));
 
+static cl::opt<bool>
+    FnRelRebase("gpuvm-rebase-fnrel", cl::Hidden, cl::init(true),
+                cl::desc("gpu_vm: PIC's %fnrel accesses of one symbol and "
+                         "addresses in it through a new base too"));
+
 namespace {
 class GPUVMRebase : public MachineFunctionPass {
 public:
@@ -57,16 +62,28 @@ char GPUVMRebase::ID = 0;
 
 FunctionPass *llvm::createGPUVMRebasePass() { return new GPUVMRebase(); }
 
-// A load or store `op r, imm(base)` with a virtual base and a long immediate.
+// A load or store `op r, imm(base)` with a virtual base and a long immediate,
+// or PIC's `op r, %fnrel(sym+k)(base)`; and an `addi d, base, ...` of either
+// (a global's address and an index after it: Quake III's arrays of structs).
 static bool candidate(const MachineInstr &MI) {
   unsigned F = GPUVMII::getForm(MI.getDesc().TSFlags);
-  if (F != GPUVMII::FrmLoad && F != GPUVMII::FrmStore)
+  bool Addi = MI.getOpcode() == GPUVM::ADDI;
+  if (F != GPUVMII::FrmLoad && F != GPUVMII::FrmStore && !Addi)
     return false;
   if (MI.isPseudo() || MI.getNumExplicitOperands() != 3)
     return false;
   const MachineOperand &B = MI.getOperand(1), &O = MI.getOperand(2);
-  return B.isReg() && B.getReg().isVirtual() && O.isImm() &&
-         !isInt<12>(O.getImm()) && isInt<32>(O.getImm());
+  if (!B.isReg() || !B.getReg().isVirtual())
+    return false;
+  if (O.isGlobal())
+    return O.getTargetFlags() == GPUVMII::MO_FNREL && FnRelRebase;
+  // (an addi of a long constant is not an address: only symbols for it)
+  return !Addi && O.isImm() && !isInt<12>(O.getImm()) && isInt<32>(O.getImm());
+}
+
+static int64_t offsetOf(const MachineInstr &MI) {
+  const MachineOperand &O = MI.getOperand(2);
+  return O.isImm() ? O.getImm() : O.getOffset();
 }
 
 bool GPUVMRebase::runOnMachineFunction(MachineFunction &MF) {
@@ -78,33 +95,36 @@ bool GPUVMRebase::runOnMachineFunction(MachineFunction &MF) {
   const TargetInstrInfo *TII = MF.getSubtarget().getInstrInfo();
   bool Changed = false;
   for (MachineBasicBlock &MBB : MF) {
-    // the candidates by base, in program order
-    DenseMap<Register, SmallVector<MachineInstr *, 8>> ByBase;
-    SmallVector<Register, 8> Bases;
+    // the candidates by base (and symbol), in program order
+    using Key = std::pair<Register, const GlobalValue *>;
+    DenseMap<Key, SmallVector<MachineInstr *, 8>> ByBase;
+    SmallVector<Key, 8> Bases;
     for (MachineInstr &MI : MBB)
       if (candidate(MI)) {
-        Register B = MI.getOperand(1).getReg();
-        auto &L = ByBase[B];
+        const MachineOperand &O = MI.getOperand(2);
+        Key K(MI.getOperand(1).getReg(), O.isGlobal() ? O.getGlobal() : nullptr);
+        auto &L = ByBase[K];
         if (L.empty())
-          Bases.push_back(B);
+          Bases.push_back(K);
         L.push_back(&MI);
       }
-    for (Register B : Bases) {
-      auto &L = ByBase[B];
+    for (Key KB : Bases) {
+      Register B = KB.first;
+      auto &L = ByBase[KB];
       if (L.size() < RebaseMin)
         continue;
       // groups of offsets within 4094 of the lowest (sorted, greedily)
       SmallVector<MachineInstr *, 8> S(L.begin(), L.end());
       llvm::stable_sort(S, [](const MachineInstr *A, const MachineInstr *C) {
-        return A->getOperand(2).getImm() < C->getOperand(2).getImm();
+        return offsetOf(*A) < offsetOf(*C);
       });
       for (unsigned I = 0; I < S.size();) {
-        int64_t Lo = S[I]->getOperand(2).getImm();
+        int64_t Lo = offsetOf(*S[I]);
         unsigned J = I;
-        while (J < S.size() && S[J]->getOperand(2).getImm() - Lo <= 4094)
+        while (J < S.size() && offsetOf(*S[J]) - Lo <= 4094)
           ++J;
         if (J - I >= RebaseMin) {
-          int64_t Hi = S[J - 1]->getOperand(2).getImm();
+          int64_t Hi = offsetOf(*S[J - 1]);
           int64_t Mid = Lo + (Hi - Lo) / 2;
           // before the first of the group in the block's order
           MachineInstr *First = nullptr;
@@ -115,14 +135,19 @@ bool GPUVMRebase::runOnMachineFunction(MachineFunction &MF) {
             }
           }
           Register NB = MRI.createVirtualRegister(MRI.getRegClass(B));
-          BuildMI(MBB, First, First->getDebugLoc(), TII->get(GPUVM::ADDI), NB)
-              .addReg(B)
-              .addImm(Mid);
+          auto NewBase =
+              BuildMI(MBB, First, First->getDebugLoc(), TII->get(GPUVM::ADDI), NB)
+                  .addReg(B);
+          if (KB.second)
+            NewBase.addGlobalAddress(KB.second, Mid, GPUVMII::MO_FNREL);
+          else
+            NewBase.addImm(Mid);
           for (unsigned K = I; K < J; ++K) {
             MachineInstr *MI = S[K];
+            int64_t Off = offsetOf(*MI) - Mid;
             MI->getOperand(1).setReg(NB);
             MI->getOperand(1).setIsKill(false);
-            MI->getOperand(2).setImm(MI->getOperand(2).getImm() - Mid);
+            MI->getOperand(2).ChangeToImmediate(Off);
           }
           MRI.clearKillFlags(B);
           Changed = true;

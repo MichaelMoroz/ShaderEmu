@@ -7,6 +7,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "GPUVMInstrInfo.h"
+#include "GPUVM.h"
+#include "llvm/IR/GlobalVariable.h"
 #include "GPUVMSubtarget.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -358,4 +360,19 @@ bool GPUVMInstrInfo::isReMaterializableImpl(const MachineInstr &MI) const {
       MI.getOperand(1).getReg() != GPUVM::R0)
     return false;
   return TargetInstrInfo::isReMaterializableImpl(MI);
+}
+
+bool llvm::gpuvmLoadInsideGlobal(const MachineInstr &MI) {
+  if (!MI.hasOneMemOperand())
+    return false;
+  const MachineMemOperand *MMO = *MI.memoperands_begin();
+  if (MMO->isVolatile() || !MMO->getSize().hasValue())
+    return false;
+  const auto *GV = dyn_cast_or_null<GlobalVariable>(MMO->getValue());
+  if (!GV || GV->isDeclaration() || GV->hasExternalWeakLinkage() ||
+      GV->isInterposable() || !GV->getValueType()->isSized())
+    return false;
+  uint64_t Size = GV->getDataLayout().getTypeAllocSize(GV->getValueType());
+  return MMO->getOffset() >= 0 &&
+         uint64_t(MMO->getOffset()) + MMO->getSize().getValue() <= Size;
 }

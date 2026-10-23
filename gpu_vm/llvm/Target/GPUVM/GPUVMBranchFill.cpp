@@ -90,7 +90,8 @@ bool GPUVMBranchFill::movable(const MachineInstr &I,
     bool FnRel = !Imm.isImm() && Imm.getTargetFlags() == GPUVMII::MO_FNREL;
     if (!Base.isReg() || (Base.getReg() != GPUVM::R0 &&
                           Base.getReg() != GPUVM::R2 &&
-                          Base.getReg() != GPUVM::R32 && !FnRel))
+                          Base.getReg() != GPUVM::R32 && !FnRel &&
+                          !gpuvmLoadInsideGlobal(I)))
       return false;
     // (an undefined weak symbol is 0: not a load that cannot fault)
     if (Imm.isGlobal() && Imm.getGlobal()->hasExternalWeakLinkage())

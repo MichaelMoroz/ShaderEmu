@@ -29,6 +29,10 @@ FunctionPass *createGPUVMGlobalFillPass();
 FunctionPass *createGPUVMZeroExtPass();
 FunctionPass *createGPUVMLoadHoistPass();
 FunctionPass *createGPUVMRebasePass();
+// Whether a load reads inside a global the program defines (its memory
+// operand says which and where): it cannot fault wherever it runs
+// (GPUVMRebase's new bases hide the symbol from the fills otherwise).
+bool gpuvmLoadInsideGlobal(const MachineInstr &MI);
 
 void lowerGPUVMMachineInstrToMCInst(const MachineInstr *MI, MCInst &OutMI,
                                     AsmPrinter &AP);

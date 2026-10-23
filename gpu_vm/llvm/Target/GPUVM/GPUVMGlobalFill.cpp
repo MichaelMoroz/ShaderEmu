@@ -471,6 +471,8 @@ bool GPUVMGlobalFill::speculable(const MachineInstr &X, const Place &P,
     return true;
   if (Base == GPUVM::R32 && MF->getSubtarget().getFrameLowering()->hasFP(*MF))
     return true;
+  if (gpuvmLoadInsideGlobal(X))
+    return true;
   if (!X.getOperand(2).isImm())
     return false;
   int64_t Off = X.getOperand(2).getImm();
