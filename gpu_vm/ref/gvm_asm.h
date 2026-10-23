@@ -45,6 +45,7 @@ struct GvmAsm {
     static inline bool late_br = false;   // gvm_machine.late: a branch reads its registers after the bundle's ops
     static inline bool late_float = false;   // (gvm_machine.late 2: only in a bundle with a float op)
     static inline bool fx1 = false;   // phase 3 (the tick's FX1): op 1 takes any float function but the special ones (compares, sign, conversions)
+    static inline bool cc0_fast = false;   // (a tick's CC0X: its fast loop makes j, call, jr and callr) a cc 0 bundle with path 7's, 3's or 5's ops takes that path
     static inline int max_ops = 2;   // ops a bundle (the tick's THIN: 1, a bundle of one op and its control word; WIDE3: 3, op 2 in word 2)
     static bool file_fast(uint32_t op) {
         uint32_t o = GVM_OPC(op), mode = (o >> 3) & 7, k = o & 7;
@@ -65,6 +66,8 @@ struct GvmAsm {
         if (n > 0) a.cur.push_back(w0);
         if (n > 1) a.cur.push_back(w1);
         uint32_t p = a.path();
+        bool rs_written = (sub == GVM_SUB_JR || sub == GVM_SUB_CALLR) && GVM_CRS(ctl) != 0 && a.writes(GVM_CRS(ctl));   // (the fast loop reads rs as found)
+        if (cc0_fast && sub != GVM_SUB_ADD && !rs_written && (p == GVM_PATH_INT || p == GVM_PATH_LOAD || p == GVM_PATH_STORE)) return p;
         if (p == GVM_PATH_INT) return GVM_PATH_ALU;
         if (p == GVM_PATH_LOAD || p == GVM_PATH_STORE) return GVM_PATH_MEMF;
         return p == GVM_PATH_ALU || p == GVM_PATH_MEMF ? p : GVM_PATH_GENERAL;

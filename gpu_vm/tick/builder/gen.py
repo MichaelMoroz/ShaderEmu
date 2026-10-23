@@ -82,6 +82,8 @@ DEFAULTS = dict(
     xtl=0,              # (a measure) N more texel loads a bundle (the next texels', folded into junk in the same step): what a load costs
     mflat=0,            # the memory paths in fewer blocks: 1 the buckets' tags read always (a select for the bloom word's skip),
                         # 2 paths 3 and 5 fetch the data texel always; 3 both
+    cc0x=0,             # (ISA paths: the assembler's cc0_fast) the fast step makes j, call, jr and callr with path 7's, 3's or 5's ops: CC0X
+    snk=0,              # paths 3 and 5: a load writes no entry (the sink's tag and word) and reads no store value: a branch on the store
     m6seq=0,            # path 6 as two steps: op 0's store, then op 1 looked up in the tags op 0 left (no patched copy of its buckets)
     cc0f=0,             # a cc 0 bundle (j, call, jr, callr) whose ops are path 7's, 3's or 5's runs the fast step's body (fstep_c), not step12
 )
@@ -93,7 +95,7 @@ SPACE = dict(   # the values a search draws from
     bandx=[1, 2], per=[16, 32, 64, 128], jrow=[0, 1], perm=['id', 'bitrev', 'mul'], mul=[3, 5, 37, 77],
     early=[0, 1, 2, 3], mru=[0, 1, 2, 4], bb=[0, 1], tfirst=[0, 1], s6=[0, 1], nc=[0, 1], thin=[0, 1], thin8=[0, 1], wide3=[0, 1, 2], late=[0, 1, 2, 3], fx1=[0, 1], ov=[0, 4, 8, 16], mv=[0, 1], cv=[0, 1, 2], wsh=[0, 1, 2, 3], wad=[0, 1, 2, 3, 4, 5, 6, 7], s12b=[0, 1, 2, 3], s12in=[0, 1], rc=[0, 1, 2], dtx=['both', 'one'], rpk=['scalar', 'vec', 'wide'], pk=['scalar', 'vec', 'aos'], lay=['split', 'merged'],
     xr=[0, 64, 128, 256, 512, 1024], npair=[0, 32, 64, 128], xbind=[0, 1], xload=['pre', 'lazy'], xfast=[0, 1],
-    pf=[0, 1, 2], pft=[0, 4, 8, 16], pfd=[1, 2], s12pf=[0, 1], ldf=[0, 1], cc0f=[0, 1], m6seq=[0, 1], mflat=[0, 1, 2, 3, 6, 7, 10],
+    pf=[0, 1, 2], pft=[0, 4, 8, 16], pfd=[1, 2], s12pf=[0, 1], ldf=[0, 1], cc0f=[0, 1], cc0x=[0, 1, 2, 3], m6seq=[0, 1], snk=[0, 1], mflat=[0, 1, 2, 3, 6, 7, 10],
 )
 
 def layout(P):
@@ -134,6 +136,8 @@ def valid(P):
     if (P.get('pf', 0) or P.get('pft', 0)) and (P['fetch'] != 'both' or P.get('thin8', 0)): return 'pf, pft with fetch=both only'
     if P.get('cc0f', 0) and (P['fetch'] != 'both' or P['xr'] or P['npair'] or P.get('mru', 0) or P.get('bb', 0) or P.get('thin', 0) or P.get('thin8', 0)
                              or P.get('wide3', 0) or P.get('late', 0) or P.get('vec', 0) or P.get('s12in', 0) or P.get('mv', 0)): return 'cc0f with these'
+    if P.get('cc0x', 0) and (P['fetch'] != 'both' or P.get('late', 0) or P.get('thin8', 0) or P.get('pf', 0) or P.get('wide3', 0)): return 'cc0x with these'
+    if P.get('snk', 0) and (P.get('mru', 0) or P.get('bb', 0) or P['xr'] or P['npair']): return 'snk with mru, bb or the file'
     if P.get('m6seq', 0) and (P.get('mru', 0) or P.get('bb', 0) or P.get('mv', 0) or P.get('mflat', 0) & 4): return 'm6seq with mru, bb, mv or mflat 4'
     if P.get('ldf', 0) and (not P['bloom'] or P['xr'] or P['npair'] or P.get('nc', 0) or P.get('mru', 0) or P.get('bb', 0) or P.get('rc', 0)): return 'ldf with bloom only'
     return ''
@@ -562,8 +566,48 @@ def mflat(P, src):
         src = src.replace(a, "            m0.q = data_texel(m0.ad); m1.q = data_texel(m1.ad);   // (mflat 4)\n")
     return src
 
+def cc0x_text(P, src):
+    '''cc0x: j, call, jr and callr in the fast step (the assembler gives them paths 7, 3, 5 when their ops fit and none writes jr's rs)'''
+    if not P.get('cc0x', 0): return src
+    def rep(a, b):
+        nonlocal src
+        assert src.count(a) == 1, 'cc0x: ' + a[:60]
+        src = src.replace(a, b)
+    rep("    uint ctl = t.w, path = ctl & 7, n8 = ctl & 0x18;\n",
+        "    uint ctl = t.w, path = ctl & 7, n8 = ctl & 0x18;\n"
+        "    uint sb = (ctl >> 11) & 7;\n    bool c0 = (ctl & 0x780) == 0, ind = c0 && (sb == GVM_SUB_JR || sb == GVM_SUB_CALLR), cl = c0 && (sb == GVM_SUB_CALL || sb == GVM_SUB_CALLR);   // (cc0x)\n")
+    if P['cc0x'] == 1:
+        rep("    uint tg = tp + asuint((int)(ctl << 6) >> 23), tn = tp + 1;\n",
+            "    uint tg = c0 ? (ind ? r[(ctl >> 14) & 63] >> 4 : tp + asuint((int)ctl >> 14)) : tp + asuint((int)(ctl << 6) >> 23), tn = tp + 1;   // (cc0x)\n")
+    else:   # (2: jr's target fetched behind a branch; 3: fetched always, picked by a select at the end)
+        rep("    uint tg = tp + asuint((int)(ctl << 6) >> 23), tn = tp + 1;\n",
+            "    uint tg = tp + (c0 ? asuint((int)ctl >> 14) : asuint((int)(ctl << 6) >> 23)), tn = tp + 1;   // (cc0x: j's and call's target)\n")
+        if P['cc0x'] == 2:
+            rep("    uint tk = taken(ctl, CA, CB, i6, sum);\n",
+                "    uint tk = taken(ctl, CA, CB, i6, sum);\n    [branch] if (ind) { tg = r[(ctl >> 14) & 63] >> 4; tc = ram(tg); }   // (cc0x 2: jr, callr)\n")
+        else:
+            rep("    uint tk = taken(ctl, CA, CB, i6, sum);\n",
+                "    uint tk = taken(ctl, CA, CB, i6, sum);\n    tg = ind ? ti : tg; tc = ind ? tci : tc;   // (cc0x 3)\n")
+            a = "    uint4 nx = ram(tn), tc = ram(tg);\n"
+            assert src.count(a) == 1
+            src = src.replace(a, a + "    uint ti = r[(ctl >> 14) & 63] >> 4;\n    uint4 tci = ram(ti);   // (cc0x 3: jr's target, fetched always)\n")
+    rep("    uint tk = taken(ctl, CA, CB, i6, sum);\n", "    uint tk = c0 ? 1u : taken(ctl, CA, CB, i6, sum);   // (cc0x)\n")
+    rep("    r[(ctl & 0x780) != (GVM_CC_ADDBNZ << 7) ? 64 : ca] = sum;\n",
+        "    bool ab = (ctl & 0x780) == (GVM_CC_ADDBNZ << 7);\n    r[ab ? ca : cl ? 1 : 64] = ab ? sum : tn << 4;   // (cc0x: the sum, or a call's return address)\n")
+    return src
+
 def fstep(P):
     m35 = (xfast(P) if (P['xr'] or P['npair']) and P['xfast'] else '') + (LDF if P.get('ldf', 0) else '') + MEM35
+    if P.get('snk', 0):
+        a = '''            wt[at0] = stag(slot_tag(m0, sl0), m0.t, m0.i);
+            wd[4 * at0 + m0.i] = merge(t.x, w0, m0.ad, r[d0]);
+'''
+        assert m35.count(a) == 1
+        m35 = m35.replace(a, '''            [branch] if (st0) {   // (snk: a load writes no entry)
+                wt[at0] = stag(slot_tag(m0, sl0), m0.t, m0.i);
+                wd[4 * at0 + m0.i] = merge(t.x, w0, m0.ad, r[d0]);
+            }
+''')
     m6 = MEM6SEQ if P.get('m6seq', 0) else MEM6
     if P['mem_order'] == '35':
         mem = m35 + ' else ' + MEM4 + ' else ' + m6
@@ -603,9 +647,11 @@ def fstep(P):
     decl = ('static uint4 nf;   // (pf: the fall-through\'s texel, asked for an iteration ahead)\nstatic uint junk, pre1, pre2;   // (pft: the touches)\n'
             if P.get('pf', 0) or P.get('pft', 0) or P.get('xtl', 0) else '')
     if dd and P.get('deadat', 0) == 0: pre += dd
+    if P.get('cc0x', 0):
+        decl += 'static const uint CC0X = 1;   // (cc0x: the fast step makes j, call, jr, callr; the assembler\'s cc0_fast)\n'
     if P.get('xtl', 0):
         pre += ''.join('    junk ^= ram(tp + %du).%s;   // (xtl)\n' % (k + 1, 'xyzw'[k % 4]) for k in range(P['xtl']))
-    return decl + '''// ---- The fast loop's step: paths 3-7
+    return cc0x_text(P, decl + '''// ---- The fast loop's step: paths 3-7
 void fstep(inout uint budget) {
     uint4 t = cur;
     uint ctl = t.w, path = ctl & 7, n8 = ctl & 0x18;
@@ -622,7 +668,7 @@ void fstep(inout uint budget) {
 ''' + post + (dd if P.get('deadat', 0) == 1 else '') + '''    budget--;
     ops8 += n8;
 }
-'''
+''')
 
 def fstep_c(P):
     '''cc0f: the fast step's body for a cc 0 bundle (j, call, jr, callr) with path 7's, 3's or 5's ops: the path from its ops,
