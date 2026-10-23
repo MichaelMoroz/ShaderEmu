@@ -43,6 +43,8 @@ DEFAULTS = dict(
     wide3=0,            # phase 3: three ops a bundle (op 2 lite, in word 2): 1 behind a branch, 2 always made
     s12in=0,            # paths 1 and 2 (step12) inside the fast loop's loop, not after it leaves
     s12b=0,             # step12's op 0 integer or float: 0 a select of both, 1 a branch; 2 op 1's too
+    wsh=0,              # a worker's budget a pass: core 0's (_Ticks) >> wsh
+    wad=0,              # 1: a worker's budget core 0's bundles of the last pass (+1/4, 512 at least) when that pass ended core 0 on sync or full
     ov=0,               # overflow entries after the buckets: a store whose two buckets are full takes one (searched only then)
     fx1=0,              # phase 3: op 1 takes any float function but the special ones (compares, sign, conversions; gvm_asm.h fx1)
     late=0,             # phase 3: a conditional branch reads its registers after the bundle's ops (no op-less bundle before it)
@@ -67,7 +69,7 @@ SPACE = dict(   # the values a search draws from
     fetch=['both', 'one'], int_first=[0, 1], mem_order=['35', '4'], split=['branch', 'flatten'],
     block=[(8, 8), (16, 4), (4, 16), (8, 4), (4, 8), (32, 2), (16, 8), (8, 16), (32, 4), (64, 1), (32, 1), (16, 2)],
     bandx=[1, 2], per=[16, 32, 64, 128], jrow=[0, 1], perm=['id', 'bitrev', 'mul'], mul=[3, 5, 37, 77],
-    early=[0, 1, 2, 3], mru=[0, 1, 2, 4], bb=[0, 1], tfirst=[0, 1], s6=[0, 1], nc=[0, 1], thin=[0, 1], thin8=[0, 1], wide3=[0, 1, 2], late=[0, 1, 2, 3], fx1=[0, 1], ov=[0, 4, 8, 16], s12b=[0, 1, 2, 3], s12in=[0, 1], rc=[0, 1, 2], dtx=['both', 'one'], rpk=['scalar', 'vec', 'wide'], pk=['scalar', 'vec', 'aos'], lay=['split', 'merged'],
+    early=[0, 1, 2, 3], mru=[0, 1, 2, 4], bb=[0, 1], tfirst=[0, 1], s6=[0, 1], nc=[0, 1], thin=[0, 1], thin8=[0, 1], wide3=[0, 1, 2], late=[0, 1, 2, 3], fx1=[0, 1], ov=[0, 4, 8, 16], wsh=[0, 1, 2, 3], wad=[0, 1, 2, 3], s12b=[0, 1, 2, 3], s12in=[0, 1], rc=[0, 1, 2], dtx=['both', 'one'], rpk=['scalar', 'vec', 'wide'], pk=['scalar', 'vec', 'aos'], lay=['split', 'merged'],
     xr=[0, 64, 128, 256, 512, 1024], npair=[0, 32, 64, 128], xbind=[0, 1], xload=['pre', 'lazy'], xfast=[0, 1],
 )
 
@@ -155,6 +157,8 @@ static const uint NCLOAD = {P.get('nc', 0)};   // GVM_W_NC loads (no look at thi
 static const uint THIN = {P.get('thin', 0)};   // one op a bundle (the assembler's max_ops 1): the fast loop has no op 1
 static const uint THIN8 = {P.get('thin8', 0)};   // 8-byte instructions (gvm_machine.thin)
 static const uint WIDE3 = {P.get('wide3', 0)};   // three ops a bundle (gvm_machine.wide3)
+static const uint WSH = {P.get('wsh', 0)};
+static const uint WAD = {P.get('wad', 0)};   // a worker's budget: core 0's >> WSH; WAD: core 0's last pass's when it ended on sync or full
 static const uint FX1 = {P.get('fx1', 0)};   // op 1's float functions: fpu's but the special ones (GvmAsm::fx1)
 static const uint LATEBR = {P.get('late', 0)};   // branches read their registers after the bundle's ops (gvm_machine.late)
 static const uint XLAZY = {1 if P['xload'] == 'lazy' else 0};
@@ -205,7 +209,7 @@ static uint wd[4 * (WCN + 1)];
 static uint bloom;
 static uint pc, tp, cycle, opsrun, flags, ops8;
 static uint4 cur;
-static uint thr;
+static uint thr, bud;   // (bud: this core's budget this pass)
 static uint lmax, smax;
 static uint st, epc, cause, tval, tvec, scratch, ien, tcmp_lo, tcmp_hi, rnd, left, core, ext, endr;
 static uint4 lat0, lat1;
@@ -542,7 +546,7 @@ uint4 state_out(uint t, uint4 s3) {
     }
 ''' + xout(P) + '''    [branch] if (t >= T_Q && t < T_WC) return q[t - T_Q];
     uint4 s16 = uint4(pc, st, epc, cause), s17 = uint4(tval, tvec, scratch, ien), s18 = uint4(tcmp_lo, tcmp_hi, flags, rnd);
-    uint4 s19 = uint4(cycle, opsrun, cycle - s3.x, endr == E_BUDGET && cycle - s3.x < _Ticks && (flags & F_HALT) == 0 ? E_FULL : endr);
+    uint4 s19 = uint4(cycle, opsrun, cycle - s3.x, endr == E_BUDGET && cycle - s3.x < bud && (flags & F_HALT) == 0 ? E_FULL : endr);
     uint4 s22 = uint4(qn, qhead, qgen, refused);
     return t == 16 ? s16 : t == 17 ? s17 : t == 18 ? s18 : t == 19 ? s19 : t == 20 ? lat0 : t == 21 ? lat1 : t == 22 ? s22 : t == 23 ? uint4(pn, 0, 0, 0) : 0;
 }
@@ -643,7 +647,13 @@ def frag(P):
     thr = (flags & F_AGAIN) != 0 || qn != 0 ? GVM_PATH_INT : GVM_PATH_FAST;
     flags &= ~F_AGAIN;
     lmax = 0; smax = 0;
-    run(_Ticks);
+    bud = core == 0 ? _Ticks : _Ticks >> WSH;   // (wsh)
+    [branch] if (WAD != 0 && core != 0) {   // (wad: the pass ends about when core 0's does)
+        uint4 z = state_in(19, 0);
+        bool cap = WAD == 1 ? z.w == E_SYNC || z.w == E_FULL : z.w == E_FULL;   // (2, 3: core 0 had work: its cache was full)
+        bud = cap ? clamp(z.z + (z.z >> 2), WAD == 3 ? bud >> 1 : 512u, bud) : bud;
+    }
+    run(bud);
     bool again = lmax >= _RamEnd || smax >= _RamEnd - GVM_DEV;
     uint4 s19 = state_in(19, core);
     o.t0 = state_out(j * 8 + 0, s19); o.t1 = state_out(j * 8 + 1, s19); o.t2 = state_out(j * 8 + 2, s19); o.t3 = state_out(j * 8 + 3, s19);

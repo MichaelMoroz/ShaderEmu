@@ -96,6 +96,7 @@ def harness(machine, extra, log):
         if not os.path.exists(os.path.join(ROOT, step)) and '_v' in machine:
             step = 'build/tick_gen/%s/%s.hlsl' % tuple(machine.split('_', 1))
         a += ['--gvm-tick', step]
+    a += os.environ.get('GVM_EXTRA', '').split()   # (more of the harness's options, as --ticks N)
     return a + extra, ROOT
 
 
