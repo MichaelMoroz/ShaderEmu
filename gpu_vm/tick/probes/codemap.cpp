@@ -40,27 +40,30 @@ static void place(const Map& m, uint32_t i, uint32_t& x, uint32_t& y) {
     default: x = i % TW; y = i / TW;   // (the buffer: element i)
     }
 }
+static int g_ser = 0;
 static ID3DBlob* comp(const char* entry, const char* prof, const Map& m, int f2) {
-    char a[16], b[16], c[16], d[16], e[16];
-    snprintf(a, 16, "%d", m.map); snprintf(b, 16, "%d", m.w ? m.w : 8192); snprintf(c, 16, "%d", m.t ? m.t : 4); snprintf(d, 16, "%d", m.h ? m.h : 1024); snprintf(e, 16, "%d", f2);
-    D3D_SHADER_MACRO mac[] = {{"MAP", a}, {"W", b}, {"T", c}, {"H", d}, {"SW", b}, {"SH", d}, {"F2", e}, {nullptr, nullptr}};
+    char a[16], b[16], c[16], d[16], e[16], g[16];
+    snprintf(a, 16, "%d", m.map); snprintf(b, 16, "%d", m.w ? m.w : 8192); snprintf(c, 16, "%d", m.t ? m.t : 4); snprintf(d, 16, "%d", m.h ? m.h : 1024); snprintf(e, 16, "%d", f2); snprintf(g, 16, "%d", g_ser);
+    D3D_SHADER_MACRO mac[] = {{"MAP", a}, {"W", b}, {"T", c}, {"H", d}, {"SW", b}, {"SH", d}, {"F2", e}, {"SER", g}, {nullptr, nullptr}};
     ID3DBlob *bl, *err = nullptr;
     if (FAILED(D3DCompileFromFile(PATH, mac, nullptr, entry, prof, D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &bl, &err))) { printf("%s: %s", entry, err ? (char*)err->GetBufferPointer() : "?"); exit(1); }
     return bl;
 }
 int main(int argc, char** argv) {
-    bool warp = false; int rounds = 5, pat = -1, f2s = -1; std::string only;
+    bool warp = false; int rounds = 5, pat = -1, f2s = -1, shortN = 0; std::string only;
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
         if (a == "--warp") warp = true; else if (a == "--rounds" && i + 1 < argc) rounds = atoi(argv[++i]);
         else if (a == "--only" && i + 1 < argc) only = argv[++i]; else if (a == "--pat" && i + 1 < argc) pat = atoi(argv[++i]);
         else if (a == "--f2" && i + 1 < argc) f2s = atoi(argv[++i]);
+        else if (a == "--short" && i + 1 < argc) shortN = atoi(argv[++i]);
     }
     D3D_FEATURE_LEVEL fl = D3D_FEATURE_LEVEL_11_0;
     ck(D3D11CreateDevice(nullptr, warp ? D3D_DRIVER_TYPE_WARP : D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, &fl, 1, D3D11_SDK_VERSION, &dev, nullptr, &ctx), "device");
     ID3D11Texture2D* tx; ID3D11ShaderResourceView* tsrv;
-    { D3D11_TEXTURE2D_DESC d = {TW, TH, 1, 1, DXGI_FORMAT_R32G32B32A32_UINT, {1, 0}, D3D11_USAGE_DEFAULT, D3D11_BIND_SHADER_RESOURCE, 0, 0};
+    { D3D11_TEXTURE2D_DESC d = {TW, TH, 1, 1, DXGI_FORMAT_R32G32B32A32_UINT, {1, 0}, D3D11_USAGE_DEFAULT, D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET, 0, 0};
       ck(dev->CreateTexture2D(&d, nullptr, &tx), "tex"); ck(dev->CreateShaderResourceView(tx, nullptr, &tsrv), "srv"); }
+    ID3D11RenderTargetView* trtv; ck(dev->CreateRenderTargetView(tx, nullptr, &trtv), "tex rtv");
     const uint32_t BN = 16384;
     ID3D11Buffer* sb; ID3D11ShaderResourceView* bsrv;
     { D3D11_BUFFER_DESC bd = {BN * 16, D3D11_USAGE_DEFAULT, D3D11_BIND_SHADER_RESOURCE, 0, D3D11_RESOURCE_MISC_BUFFER_STRUCTURED, 16};
@@ -82,6 +85,72 @@ int main(int argc, char** argv) {
     printf("%-18s %3s %2s", "map", "pat", "f2"); for (uint32_t n : SIZES) printf(" %8uK", n * 16 / 1024); printf("   (ns a step)\n");
     uint32_t seed = 12345; auto rnd = [&]() { seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5; return seed; };
     bool bad = false;
+    if (shortN) {   // --short N: draws of N steps from the chain's start, D of them back to back, as passes; between them nothing,
+                    // a texel drawn into another target, or a texel drawn into the chain's own texture (as the commit draws RAM)
+        ID3D11Texture2D* ot2; ID3D11RenderTargetView* o2rtv;
+        { D3D11_TEXTURE2D_DESC d = {8, 4, 1, 1, DXGI_FORMAT_R32G32B32A32_UINT, {1, 0}, D3D11_USAGE_DEFAULT, D3D11_BIND_RENDER_TARGET, 0, 0};
+          ck(dev->CreateTexture2D(&d, nullptr, &ot2), "out2"); ck(dev->CreateRenderTargetView(ot2, nullptr, &o2rtv), "rtv2"); }
+        // the draws in order: each reads the word the last one wrote (two targets in turn), as a pass reads the state the last drew
+        g_ser = 1;
+        ID3D11Texture2D* pt[2]; ID3D11RenderTargetView* prtv[2]; ID3D11ShaderResourceView* psrv[2];
+        for (int k = 0; k < 2; k++) { D3D11_TEXTURE2D_DESC d = {8, 4, 1, 1, DXGI_FORMAT_R32G32B32A32_UINT, {1, 0}, D3D11_USAGE_DEFAULT, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE, 0, 0};
+          ck(dev->CreateTexture2D(&d, nullptr, &pt[k]), "prev"); ck(dev->CreateRenderTargetView(pt[k], nullptr, &prtv[k]), "prev rtv"); ck(dev->CreateShaderResourceView(pt[k], nullptr, &psrv[k]), "prev srv"); }
+        ID3DBlob* fb = comp("fill", "ps_5_0", m0, 0); ID3D11PixelShader* fps; ck(dev->CreatePixelShader(fb->GetBufferPointer(), fb->GetBufferSize(), nullptr, &fps), "fill");
+        const char* conds[] = {"nothing between", "a texel of another target", "a texel of the chain's texture"};
+        const uint32_t SZ[] = {512, 1024, 2048, 8192};
+        const int D = warp ? 3 : 64;
+        printf("--short %d: ns a step, %d draws of %d steps back to back\n%-18s %-30s", shortN, D, shortN, "map", "between draws");
+        for (uint32_t n : SZ) printf(" %7uK", n * 16 / 1024); printf("\n");
+        for (int mi : {0, 13}) {
+            const Map* mp = nullptr; for (const Map& m : MAPS) if ((mi == 0 && m.map == 0 && m.w == 8192) || (mi == 13 && m.map == 5 && m.w == 512 && m.h == 1024)) mp = &m;
+            const Map& m = *mp;
+            ID3DBlob* b = comp("frag", "ps_5_0", m, 0); ID3D11PixelShader* ps; ck(dev->CreatePixelShader(b->GetBufferPointer(), b->GetBufferSize(), nullptr, &ps), "ps");
+            for (int cnd = 0; cnd < 3; cnd++) {
+                printf("%-18s %-30s", m.name, conds[cnd]); fflush(stdout);
+                for (uint32_t N : SZ) {
+                    std::fill(img.begin(), img.end(), 0);
+                    for (uint32_t i = 0; i < N; i++) { uint32_t x, y; place(m, i, x, y); img[((size_t)y * TW + x) * 4] = (i + 1) % N; }
+                    ctx->UpdateSubresource(tx, 0, nullptr, img.data(), TW * 16, 0);
+                    uint32_t c[4] = {(uint32_t)shortN, N, 0, 0}; ctx->UpdateSubresource(cb, 0, nullptr, c, 0, 0);
+                    { const float z[4] = {0, 0, 0, 0}; for (int k = 0; k < 2; k++) ctx->ClearRenderTargetView(prtv[k], z); }
+                    auto run = [&]() {
+                        { const float z[4] = {0, 0, 0, 0}; for (int k = 0; k < 2; k++) ctx->ClearRenderTargetView(prtv[k], z); }
+                        ctx->Begin(qdis); ctx->End(q0);
+                        for (int k = 0; k < D; k++) {
+                            ID3D11ShaderResourceView* nil[3] = {}; ctx->PSSetShaderResources(0, 3, nil);
+                            ctx->OMSetRenderTargets(1, &prtv[k & 1], nullptr); ctx->RSSetViewports(1, &vp);
+                            ID3D11ShaderResourceView* sv[3] = {tsrv, bsrv, psrv[(k & 1) ^ 1]};
+                            ctx->PSSetShaderResources(0, 3, sv); ctx->PSSetConstantBuffers(0, 1, &cb); ctx->PSSetShader(ps, nullptr, 0);
+                            ctx->Draw(3, 0);
+                            if (cnd == 0) continue;
+                            ID3D11ShaderResourceView* none[3] = {}; ctx->PSSetShaderResources(0, 3, none);
+                            D3D11_VIEWPORT v1 = {(float)(TW - 1), (float)(TH - 1), 1, 1, 0, 1};
+                            if (cnd == 1) { ctx->OMSetRenderTargets(1, &o2rtv, nullptr); v1.TopLeftX = 0; v1.TopLeftY = 0; } else ctx->OMSetRenderTargets(1, &trtv, nullptr);
+                            ctx->RSSetViewports(1, &v1); ctx->PSSetShader(fps, nullptr, 0); ctx->Draw(3, 0);
+                        }
+                        ctx->End(q1); ctx->End(qdis);
+                        D3D11_QUERY_DATA_TIMESTAMP_DISJOINT dj; UINT64 a, bb;
+                        while (ctx->GetData(qdis, &dj, sizeof dj, 0) != S_OK) {} while (ctx->GetData(q0, &a, sizeof a, 0) != S_OK) {} while (ctx->GetData(q1, &bb, sizeof bb, 0) != S_OK) {}
+                        return dj.Disjoint ? 1e9 : double(bb - a) / dj.Frequency;
+                    };
+                    static bool warm = false;
+                    if (!warm && !warp) { warm = true; LARGE_INTEGER fq, t0, t1; QueryPerformanceFrequency(&fq); QueryPerformanceCounter(&t0); do { run(); QueryPerformanceCounter(&t1); } while (double(t1.QuadPart - t0.QuadPart) / fq.QuadPart < 1.5); }
+                    double best = 1e9; for (int r = 0; r < rounds; r++) best = std::min(best, run());
+                    if (best > 0.5) { printf("\na batch took %.3f s: stopped\n", best); return 1; }
+                    ctx->OMSetRenderTargets(1, &ortv, nullptr); ctx->RSSetViewports(1, &vp);
+                    ctx->CopyResource(st, pt[(D - 1) & 1]); D3D11_MAPPED_SUBRESOURCE ms; ck(ctx->Map(st, 0, D3D11_MAP_READ, 0, &ms), "map");
+                    uint32_t got = *(uint32_t*)ms.pData; ctx->Unmap(st, 0);
+                    if (got != (uint32_t)((uint64_t)D * shortN % N)) { printf(" WRONG(%u)", got); bad = true; continue; }
+                    printf(" %8.1f", warp ? 0.0 : best / ((double)D * shortN) * 1e9); fflush(stdout);
+                }
+                printf("\n");
+            }
+        }
+        FILE* pp = warp ? nullptr : _popen("nvidia-smi --query-gpu=clocks.gr --format=csv,noheader,nounits", "r");
+        int mhz = 0; if (pp) { if (fscanf(pp, "%d", &mhz) != 1) mhz = 0; _pclose(pp); printf("clock %d MHz\n", mhz); }
+        printf(bad ? "codemap: WRONG\n" : "codemap: all chains ok\n");
+        return bad ? 1 : 0;
+    }
     for (int p = 0; p <= 1; p++) for (int f2 = 0; f2 <= 1; f2++) {
         if ((pat >= 0 && p != pat) || (f2s >= 0 && f2 != f2s)) continue;
         for (const Map& m : MAPS) {

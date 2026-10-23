@@ -7,6 +7,7 @@
 // F2 1: the next texel fetched as well (the tick's "both"), its .y (0) or'ed in.
 Texture2D<uint4> _T : register(t0);
 StructuredBuffer<uint4> _B : register(t1);
+Texture2D<uint4> _Prev : register(t2);
 cbuffer P : register(b0) { uint _N, _Seed, _p0, _p1; };
 static const uint NCAP = 400000;
 #ifndef W
@@ -46,7 +47,11 @@ uint4 at(uint i) {
 #endif
 }
 uint4 frag(float4 pos : SV_POSITION) : SV_Target {
+#if SER
+    uint x = _Prev.Load(int3(0, 0, 0)).x % _Seed, k, n = min(_N, NCAP);   // (--short: the last draw's word: the draws in order)
+#else
     uint x = _Seed, k, n = min(_N, NCAP);
+#endif
     [loop] for (k = 0; k < n; k++) {
 #if F2
         x = at(x).x | at(x + 1).y;
@@ -57,3 +62,4 @@ uint4 frag(float4 pos : SV_POSITION) : SV_Target {
     return uint4(x, 0, 0, 0);
 }
 float4 vert(uint id : SV_VertexID) : SV_POSITION { return float4(id == 1 ? 3.0 : -1.0, id == 2 ? -3.0 : 1.0, 0, 1); }
+uint4 fill(float4 pos : SV_POSITION) : SV_Target { return uint4(0, 0, 0, 0); }   // (--short: a texel drawn between the chains' draws)
