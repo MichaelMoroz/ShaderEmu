@@ -1,0 +1,9 @@
+# local memory: a dependent chase through S words a lane, 255 cores (7 warps an SM), all 32 lanes or one
+c64        CHASE=64
+c256       CHASE=256
+c1024      CHASE=1024
+c2048      CHASE=2048
+c64_l1     CHASE=64 LANES=1
+c256_l1    CHASE=256 LANES=1
+c1024_l1   CHASE=1024 LANES=1
+c2048_l1   CHASE=2048 LANES=1

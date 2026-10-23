@@ -1,0 +1,57 @@
+# the base is uint4 R[65], .x (FILE=3); every probe twice (A, B) to see the noise
+f2.A             FETCH=2 FILE=0 OPS=0 BR=0
+a1.A             FETCH=2 FILE=3 OPS=1 UNIT=1
+a1_u65.A         FETCH=2 FILE=1 OPS=1 UNIT=1
+a2.A             FETCH=2 FILE=3 OPS=2 UNIT=1
+a2_u65.A         FETCH=2 FILE=1 OPS=2 UNIT=1
+a2_3rd.A         FETCH=2 FILE=3 OPS=2 UNIT=1 NRD=3
+a2_nowr.A        FETCH=2 FILE=3 OPS=2 UNIT=1 WRT=0
+u2.A             FETCH=2 FILE=3 OPS=2 UNIT=2
+u4.A             FETCH=2 FILE=3 OPS=2 UNIT=4
+u8.A             FETCH=2 FILE=3 OPS=2 UNIT=8
+u16.A            FETCH=2 FILE=3 OPS=2 UNIT=16
+u9x23.A          FETCH=2 FILE=3 OPS=2 UNIT=9
+u9x23_imm.A      FETCH=2 FILE=3 OPS=2 UNIT=9 IMM=1
+u8_imm.A         FETCH=2 FILE=3 OPS=2 UNIT=8 IMM=1
+uf8.A            FETCH=2 FILE=3 OPS=2 UNIT=20 NRD=3
+uf_br.A          FETCH=2 FILE=3 OPS=2 UNIT=21
+b16.A            FETCH=2 FILE=3 OPS=2 UNIT=8 BR=1
+b6.A             FETCH=2 FILE=3 OPS=2 UNIT=8 BR=4
+bz.A             FETCH=2 FILE=3 OPS=2 UNIT=8 BR=2
+bfwd.A           FETCH=2 FILE=3 OPS=2 UNIT=8 BR=3
+b16_x23.A        FETCH=2 FILE=3 OPS=2 UNIT=9 BR=1 IMM=1
+ilp_a2.A         FETCH=2 FILE=3 OPS=2 UNIT=1 ILP=2
+ilp_u8b16.A      FETCH=2 FILE=3 OPS=2 UNIT=8 BR=1 ILP=2
+m_tex.A          FETCH=2 FILE=3 OPS=2 UNIT=1 MEM=1
+m_dm1.A          FETCH=2 FILE=3 OPS=2 UNIT=1 MEM=2
+m_2x4.A          FETCH=2 FILE=3 OPS=2 UNIT=1 MEM=3
+m_2x4bloom.A     FETCH=2 FILE=3 OPS=2 UNIT=1 MEM=4
+m_dm1st.A        FETCH=2 FILE=3 OPS=2 UNIT=1 MEM=5
+f2.B             FETCH=2 FILE=0 OPS=0 BR=0
+a1.B             FETCH=2 FILE=3 OPS=1 UNIT=1
+a1_u65.B         FETCH=2 FILE=1 OPS=1 UNIT=1
+a2.B             FETCH=2 FILE=3 OPS=2 UNIT=1
+a2_u65.B         FETCH=2 FILE=1 OPS=2 UNIT=1
+a2_3rd.B         FETCH=2 FILE=3 OPS=2 UNIT=1 NRD=3
+a2_nowr.B        FETCH=2 FILE=3 OPS=2 UNIT=1 WRT=0
+u2.B             FETCH=2 FILE=3 OPS=2 UNIT=2
+u4.B             FETCH=2 FILE=3 OPS=2 UNIT=4
+u8.B             FETCH=2 FILE=3 OPS=2 UNIT=8
+u16.B            FETCH=2 FILE=3 OPS=2 UNIT=16
+u9x23.B          FETCH=2 FILE=3 OPS=2 UNIT=9
+u9x23_imm.B      FETCH=2 FILE=3 OPS=2 UNIT=9 IMM=1
+u8_imm.B         FETCH=2 FILE=3 OPS=2 UNIT=8 IMM=1
+uf8.B            FETCH=2 FILE=3 OPS=2 UNIT=20 NRD=3
+uf_br.B          FETCH=2 FILE=3 OPS=2 UNIT=21
+b16.B            FETCH=2 FILE=3 OPS=2 UNIT=8 BR=1
+b6.B             FETCH=2 FILE=3 OPS=2 UNIT=8 BR=4
+bz.B             FETCH=2 FILE=3 OPS=2 UNIT=8 BR=2
+bfwd.B           FETCH=2 FILE=3 OPS=2 UNIT=8 BR=3
+b16_x23.B        FETCH=2 FILE=3 OPS=2 UNIT=9 BR=1 IMM=1
+ilp_a2.B         FETCH=2 FILE=3 OPS=2 UNIT=1 ILP=2
+ilp_u8b16.B      FETCH=2 FILE=3 OPS=2 UNIT=8 BR=1 ILP=2
+m_tex.B          FETCH=2 FILE=3 OPS=2 UNIT=1 MEM=1
+m_dm1.B          FETCH=2 FILE=3 OPS=2 UNIT=1 MEM=2
+m_2x4.B          FETCH=2 FILE=3 OPS=2 UNIT=1 MEM=3
+m_2x4bloom.B     FETCH=2 FILE=3 OPS=2 UNIT=1 MEM=4
+m_dm1st.B        FETCH=2 FILE=3 OPS=2 UNIT=1 MEM=5

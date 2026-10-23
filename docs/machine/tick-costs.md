@@ -535,3 +535,53 @@ are loads, stores and fetches whose page neither TLB level had (`w_other_page`: 
 walks a pass). `mmu_translate` called where the fast step declines such an instruction, and
 the instruction run again on the fast path, was written down and not built; so was a second
 level of more than 256 pages (it moves the state's texels).
+
+## gpu_vm's floor: what the pieces of a step cost (23 October 2026)
+
+Before a new gpu_vm tick was designed (x30), its pieces were timed alone: `gpu_vm/tick/probes/floor.hlsl` is a loop
+whose turn is one bundle of a synthetic program, its parts chosen by defines, and `floor.cpp` (`bin\floor.exe`,
+`probes\build_floor.bat`) times it on the card by the GPU's clock (two lengths, the difference; the best of five or
+seven rounds), one warp a core (8 x 4 pixels), and checks its output against WARP's. The probe lists are
+`probes/floor1.txt` to `floor6.txt`. RTX 5070 Laptop at 2.8 GHz, one core (as gvmbench's ns cases; two runs agree to
+0.1 ns), ns a bundle and the timed loop's DXBC instructions; v0009's integer bundle is 103 ns:
+
+| Probe | ns | DXBC |
+|---|---|---|
+| straight code: the next bundle fetched, no work (its address does not wait for it) | 16.9 | 13 |
+| both next bundles fetched, the taken one chosen by a bit of the bundle (the tick's shape) | 48.5 | 19 |
+| ... the fall-through fetched a bundle ahead, chosen | 53.6 | 28 |
+| ... the target fetched by a branch only when taken | 55.0 | 36 |
+| one add (two register reads, a write), straight code | 27.7 | 22 |
+| two adds, straight code | 42.9 | 31 |
+| one add, both bundles fetched | 52.7 | 28 |
+| two adds | 63.9 | 37 |
+| ... no register writes | 52.8 | 39 |
+| two ops of a unit of 2, 4, 8, 16 functions chosen by selects | 65.7, 69.4, 70.5, 67.5 | 45-98 |
+| two ops of x23's mid unit; with the I/R choice | 75.3; 74.6 | 110; 112 |
+| two ops of 8 float functions; an add and the float unit behind a branch | 68.9; 70.5 | 86; 65 |
+| the 8-function unit and a branch on a register != 0, read with the ops' operands | 77.6 | 81 |
+| ... on lt/ltu/eq of two registers, a sense bit; x23's 16 kinds | 88.4; 93.9 | 94; 104 |
+| ... the same three with the registers read after the ops' writes | 116.1, 125.0, 126.7 | 82-105 |
+| ... on op 1's result != 0 (forwarded, no read) | 102.0 | 79 |
+| x23's mid unit, I/R, 16 kinds read first (the tick's integer path without its bookkeeping) | 112.2 | 142 |
+| two adds with 8 or 16 registers in the GPU's own registers (a tree of selects); with a branch on one | 52.1, 67.2; 74.9, 93.0 | 96-239 |
+| two chains of two adds a turn (two cores' bundles in one warp) | 97.1 (48.6 each) | 79 |
+| a load (the data texel, no write cache) and an add | 83.4 | 48 |
+| ... through a direct-mapped write cache of one tag; two buckets of four (x23's eight tags); behind the bloom word | 170.3; 110.7; 113.2 | 56; 103; 113 |
+| a store into the direct-mapped cache (tag and word written) and an add | 422.2 | 61 |
+
+A dependent chase through a local array (`CHASE`): 17 ns a read in the L1 cache, 106-117 in L2. One warp an SM keeps
+256 words a lane (32 KB a warp) in L1 and not 1,024; at 255 cores (7 warps an SM) 64 words a lane are already 33 ns and
+256 are 116. With all 255 cores busy every probe above is 1.2-4x dearer (two adds 77, the 8-unit 103, a branch on a
+register 115, x23's buckets 393): the 32 lanes of a core each keep the same registers and write cache, so a warp's
+local memory is 32 times its state.
+
+So, for one core, a bundle's floor is the fetch: its next bundle's address waits for the bundle (48.5 ns, 47% of
+v0009's 103), and a bundle that does anything useful costs more: two ops 64, two ops and a branch on a register 78 (the
+cheapest test, read with the operands), the same with x23's branch kinds 94. Half of today's bundle (52 ns) is the
+fetch and one op; a step of two ops and a branch cannot be 2x v0009's on this card in a fragment shader with the
+registers in local memory, and the GPU's registers (a tree of selects) are no cheaper past 8. What a unit holds is
+nearly free (2 to 16 functions: 66-71 ns); what costs is every dependence on a fetched or loaded value: the branch's
+register reads after a store (+38-50 ns), the write cache's tag reads (+27-87 ns over the texel alone), a store into
+local memory that the next bundle reads (+250 ns). Not measured: SASS counts (the GPU trace exports no shader's code;
+its SASS view is the Nsight UI's only), so the DXBC counts are the proxy.

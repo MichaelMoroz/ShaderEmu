@@ -1,0 +1,40 @@
+# Phase 1 of the rewrite (gpu_vm/tick/x30): the floor, piece by piece (floor.hlsl's defines)
+f1             FETCH=1 FILE=0 OPS=0 BR=0
+f2             FETCH=2 FILE=0 OPS=0 BR=0
+# register files: 2 reads and a write (a move), one op
+r1_u65         FETCH=2 FILE=1 OPS=1 UNIT=0
+r1_u4x17       FETCH=2 FILE=2 OPS=1 UNIT=0
+r1_u4x65       FETCH=2 FILE=3 OPS=1 UNIT=0
+r1_u65_3rd     FETCH=2 FILE=1 OPS=1 UNIT=0 NRD=3
+r1_u4x65_3rd   FETCH=2 FILE=3 OPS=1 UNIT=0 NRD=3
+# an add; two ops
+a1_u65         FETCH=2 FILE=1 OPS=1 UNIT=1
+a2_u65         FETCH=2 FILE=1 OPS=2 UNIT=1
+a2_u4x65       FETCH=2 FILE=3 OPS=2 UNIT=1
+a2_u4x17       FETCH=2 FILE=2 OPS=2 UNIT=1
+# flattened units, two ops
+u2             FETCH=2 FILE=1 OPS=2 UNIT=2
+u4             FETCH=2 FILE=1 OPS=2 UNIT=4
+u8             FETCH=2 FILE=1 OPS=2 UNIT=8
+u16            FETCH=2 FILE=1 OPS=2 UNIT=16
+u9x23          FETCH=2 FILE=1 OPS=2 UNIT=9
+u9x23_imm      FETCH=2 FILE=1 OPS=2 UNIT=9 IMM=1
+u8_imm         FETCH=2 FILE=1 OPS=2 UNIT=8 IMM=1
+# floats
+uf8            FETCH=2 FILE=1 OPS=2 UNIT=20
+uf_br          FETCH=2 FILE=1 OPS=2 UNIT=21
+# branch tests (u8 two ops)
+b16            FETCH=2 FILE=1 OPS=2 UNIT=8 BR=1
+b6             FETCH=2 FILE=1 OPS=2 UNIT=8 BR=4
+bz             FETCH=2 FILE=1 OPS=2 UNIT=8 BR=2
+bfwd           FETCH=2 FILE=1 OPS=2 UNIT=8 BR=3
+b16_x23        FETCH=2 FILE=1 OPS=2 UNIT=9 BR=1 IMM=1
+# ILP: two chains a turn
+ilp_a1         FETCH=2 FILE=1 OPS=1 UNIT=1 ILP=2
+ilp_u8b16      FETCH=2 FILE=1 OPS=2 UNIT=8 BR=1 ILP=2
+# a load (op 0) and an add (op 1)
+m_tex          FETCH=2 FILE=1 OPS=2 UNIT=1 MEM=1
+m_dm1          FETCH=2 FILE=1 OPS=2 UNIT=1 MEM=2
+m_2x4          FETCH=2 FILE=1 OPS=2 UNIT=1 MEM=3
+m_2x4bloom     FETCH=2 FILE=1 OPS=2 UNIT=1 MEM=4
+m_dm1st        FETCH=2 FILE=1 OPS=2 UNIT=1 MEM=5
