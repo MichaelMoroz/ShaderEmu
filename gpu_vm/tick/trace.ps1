@@ -12,6 +12,7 @@ param(
     [string]$Case = 'arith',
     [string]$Filter = '',
     [switch]$Dxbc,                       # fxc2's DXBC (the bytecode the D3D11 bench times) instead of DXC's with debug information
+    [switch]$Multi,                      # --multi-pass-metrics: L1/TEX hit rates, local memory and more, over several frames
     [string]$Out = 'logs\nsight-gvm',
     [string]$Ngfx = 'C:\Program Files\NVIDIA Corporation\Nsight Graphics 2026.3.1\host\windows-desktop-nomad-x64\ngfx.exe'
 )
@@ -23,11 +24,13 @@ $run = Join-Path $Root (Join-Path $Out $name)
 New-Item -ItemType Directory -Force $run | Out-Null
 $d = @($Defines -split ',' | Where-Object { $_ } | ForEach-Object { "-D $_" }) -join ' '
 $appArgs = "--shader $Shader $d --case $Case --seconds 8" + $(if ($Dxbc) { " --dxbc" } else { "" })
-$p = Start-Process -FilePath $Ngfx -ArgumentList @(
+$ng = @(
     '--activity', '"GPU Trace Profiler"', '--exe', (Join-Path $Root 'bin\gvmtrace12.exe'), '--dir', $Root, '--args', "`"$appArgs`"",
     '--start-after-ms', '3000', '--max-duration-ms', '400', '--auto-export', '--architecture', '"Blackwell GB20x"',
     '--metric-set-id', '0', '--real-time-shader-profiler', '--set-gpu-clocks', 'unaltered', '--output-dir', $run
-) -RedirectStandardOutput (Join-Path $run 'ngfx.out') -RedirectStandardError (Join-Path $run 'ngfx.err') -NoNewWindow -PassThru
+)
+if ($Multi) { $ng += '--multi-pass-metrics' }
+$p = Start-Process -FilePath $Ngfx -ArgumentList $ng -RedirectStandardOutput (Join-Path $run 'ngfx.out') -RedirectStandardError (Join-Path $run 'ngfx.err') -NoNewWindow -PassThru
 if (-not $p.WaitForExit(150000)) { Stop-Process -Id $p.Id -Force; Write-Error 'ngfx did not finish in 150 s'; exit 1 }
 $regimes = Get-ChildItem $run -Recurse -Filter GPUTRACE_REGIMES.xls | Select-Object -First 1
 if (-not $regimes) { Get-Content (Join-Path $run 'ngfx.out') -Tail 12; Get-Content (Join-Path $run 'ngfx.err') -Tail 5; Write-Error 'no trace was exported'; exit 1 }
