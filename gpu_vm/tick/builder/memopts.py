@@ -171,7 +171,13 @@ uint4 data_texel(uint ad) {''')
         i = src.index('void fstep(inout uint budget) {')
         a = '    uint i6 = asuint((int)ctl >> 26), sum = CA + i6;'
         j = src.index(a, i)
-        src = src[:j] + '    uint sl0 = path == GVM_PATH_MEM2 ? 64 : s0;   // (path 6: op 0 a store)' + NL + '    CA = ca == s1 ? v1 : ca == sl0 ? v0 : CA; CB = cb == s1 ? v1 : cb == sl0 ? v0 : CB;   // (LATEBR)' + NL + src[j:]
+        if P['late'] == 2:   # read again after the ops' writes: two indexed reads, no compares and selects
+            src = src[:j] + '    CA = r[ca]; CB = r[cb];   // (LATEBR 2: as the ops left them)' + NL + src[j:]
+            src = _rep(src, '''        uint ca = GVM_CRA(ctl), cb = GVM_CRB(ctl);
+        CA = d1 != 0 && ca == d1 ? v1 : d0 != 0 && ca == d0 ? v0 : CA; CB = d1 != 0 && cb == d1 ? v1 : d0 != 0 && cb == d0 ? v0 : CB;''',
+                       '''        CA = r[GVM_CRA(ctl)]; CB = r[GVM_CRB(ctl)];   // (LATEBR 2)''')
+        else:
+            src = src[:j] + '    uint sl0 = path == GVM_PATH_MEM2 ? 64 : s0;   // (path 6: op 0 a store)' + NL + '    CA = ca == s1 ? v1 : ca == sl0 ? v0 : CA; CB = cb == s1 ? v1 : cb == sl0 ? v0 : CB;   // (LATEBR)' + NL + src[j:]
     if P.get('vec', 0):   # 128-bit registers: R4[k] whole (rpk=wide), the vector ops in step12 (op 0) and the general step
         V = """// ---- Phase 3: the vector ops (isa.h GVM_X_VADD ...) on whole registers; lane 0 as a scalar result
 bool fltu(uint a, uint b) { return !nan_u(a) && !nan_u(b) && asfloat(a) < asfloat(b); }
@@ -234,6 +240,13 @@ uint vop(uint w, uint imm, uint rd) {
         src = _rep(src, '    r[0] = 0;' + NL, '    r[0] = 0;' + NL + '    [loop] for (k = 1; k < 64; k++) R4[k].yzw = state_in(T_VR + k, c).yzw;   // (VEC: lanes 1-3)' + NL + '    R4[0] = 0;' + NL)
         src = _rep(src, '    return t >= T_WT ? uint4(NONE, NONE, NONE, NONE) :', '    [branch] if (t >= T_VR && t < T_VR + 64) return v;   // (VEC: the registers as they were)' + NL + '    return t >= T_WT ? uint4(NONE, NONE, NONE, NONE) :')
         src = _rep(src, '    [branch] if (t >= T_Q && t < T_WC) return q[t - T_Q];', '    [branch] if (t >= T_VR && t < T_VR + 64) return R4[t - T_VR];   // (VEC)' + NL + '    [branch] if (t >= T_Q && t < T_WC) return q[t - T_Q];')
+    if P.get('s12in', 0):   # step12's bundles in the fast loop's loop: no leaving and entering it around each
+        src = _rep(src, '        [loop] while (budget > 0 && guard > 0 && (cur.w & 7) >= thr) { fstep(budget); guard--; }',
+'''        [loop] while (budget > 0 && guard > 0 && ((cur.w & 7) >= thr || (thr == GVM_PATH_FAST && (cur.w & 7) != GVM_PATH_GENERAL))) {   // (s12in)
+            [branch] if ((cur.w & 7) >= GVM_PATH_FAST) fstep(budget);
+            else { pc = tp << 4; uint r = step12(budget); cycle -= budget - r; budget = r; tp = pc >> 4; }   // (its own cycle and ops)
+            guard--;
+        }''')
     if P.get('s12b', 0):   # step12: the integer or the float unit behind a branch, not both made and one selected
         src = _rep(src, '    else v0 = (opc0 >> 6) == 1 ? alu(t.x, i0, A0, B0) : fpu(t.x, A0, fb(t.x, i0, L0, B0), C0);',
                    '    else [branch] if ((opc0 >> 6) == 1) v0 = alu(t.x, i0, A0, B0); else v0 = fpu(t.x, A0, fb(t.x, i0, L0, B0), C0);   // (s12b)')

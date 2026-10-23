@@ -24,11 +24,11 @@ import gen
 
 GVMB = os.environ.get('GVMBENCH') or os.path.join(ROOT, 'bin', 'gvmbench.exe')
 CHECK_CASES = 'default,p_k1_m0,p_k4_m40,mc_int,p_spill,p_xspill,p_rd,p_rdnc,xvec'
-CHECK_SETS = 'game,game_x'   # (every g_ kernel, short: two frames; the file, bindings and pairs compared too)
+CHECK_SETS = 'game,game_x,game_cc'   # (every g_ kernel, short: two frames; the file, bindings and pairs compared too)
 CHECK_CORES = '40'
 TIME_CASES = 'arith,loads,stores,mix,coremark,gzip,p_k0_m0,p_k8_m40,p_spill,p_xspill,p_rd,p_rdnc'   # (mc_ at 255 cores: seconds each)
-TIME_SETS = 'game,game_x'
-LOWER_BETTER = lambda name: name.startswith(('p_', 'mc_')) or name in ('coremark', 'coremark_pie', 'gzip', 'gunzip')   # (g_: frames a second, higher)
+TIME_SETS = 'game,game_x,game_cc'   # (game_cc, clang's code, is the primary score: real code is compiled)
+LOWER_BETTER = lambda name: name.startswith(('p_', 'mc_')) or name.endswith('_cc') or name in ('coremark', 'coremark_pie', 'gzip', 'gunzip')   # (g_: frames a second, higher; g_*_cc: ns a bundle, lower)
 REFS = {'x23': 'gpu_vm/tick/steps/x23.hlsl', 'x24': 'gpu_vm/tick/steps/x24.hlsl'}
 
 def bdir(batch): return os.path.join(ROOT, 'build', 'tick_gen', batch)
@@ -197,7 +197,8 @@ def scores(batch, ref='x23'):
             key = n if n not in REFS else '%s@%s' % (n, os.path.basename(f))
             U = v.get('util', {})
             gu = [sum(x) / len(x) for c, x in U.items() if c.startswith('g_') and x]
-            out[key] = dict(util=sum(gu) / len(gu) if gu else 0, score=g, ratios=rat, raw={c: mean(xs) for c, xs in v['cases'].items()}, spread=spread, file=os.path.basename(f))
+            cc = [math.log(x) for c, x in rat.items() if c.endswith('_cc')]
+            out[key] = dict(util=sum(gu) / len(gu) if gu else 0, cc=math.exp(sum(cc) / len(cc)) if cc else 0, score=g, ratios=rat, raw={c: mean(xs) for c, xs in v['cases'].items()}, spread=spread, file=os.path.basename(f))
     return out
 
 def cmd_report(a):
@@ -206,16 +207,17 @@ def cmd_report(a):
     ck = json.load(open(os.path.join(d, 'checks.json'))) if os.path.exists(os.path.join(d, 'checks.json')) else {}
     regs = lambda n: (ck.get(n) or {}).get('regs') or 0
     # within 1% (the card's noise) the smaller footprint first: D3D11 temporary registers, 16 bytes each as DXBC declares them
-    rows = sorted(sc.items(), key=lambda x: (-int(x[1]['score'] * 100), regs(x[0]) or 1e9, -x[1]['score']))
+    # the clang-compiled kernels (game_cc) first, all cases next
+    rows = sorted(sc.items(), key=lambda x: (-int(x[1]['cc'] * 100), -int(x[1]['score'] * 100), regs(x[0]) or 1e9, -x[1]['score']))
     cases = sorted({c for v in sc.values() for c in v['ratios']}, key=lambda c: TIME_CASES.split(',').index(c) if c in TIME_CASES.split(',') else 99)
-    print('%-26s %6s %5s %6s ' % ('variant', 'score', 'util', 'KB') + ' '.join('%8s' % (c[2:10] if c.startswith('g_') else c[:8]) for c in cases) + '  params')
+    print('%-26s %6s %6s %5s %6s ' % ('variant', 'cc', 'score', 'util', 'KB') + ' '.join('%8s' % (c[2:10] if c.startswith('g_') else c[:8]) for c in cases) + '  params')
     for n, v in rows[:a.top or 30]:
         P = {}
         mf = os.path.join(d, n + '.json')
         if os.path.exists(mf):
             p = json.load(open(mf))['params']
             P = {k: p[k] for k in p if p[k] != gen.DEFAULTS[k]}
-        print('%-26s %6.3f %5.2f %6s ' % (n, v['score'], v['util'], '%.1f' % (regs(n) * 16 / 1024) if regs(n) else '-') + ' '.join('%8.3f' % v['ratios'].get(c, 0) for c in cases) + '  ' + ' '.join('%s=%s' % kv for kv in P.items()))
+        print('%-26s %6.3f %6.3f %5.2f %6s ' % (n, v['cc'], v['score'], v['util'], '%.1f' % (regs(n) * 16 / 1024) if regs(n) else '-') + ' '.join('%8.3f' % v['ratios'].get(c, 0) for c in cases) + '  ' + ' '.join('%s=%s' % kv for kv in P.items()))
 
 if __name__ == '__main__':
     ap = argparse.ArgumentParser()

@@ -41,6 +41,7 @@ DEFAULTS = dict(
     thin=0,             # one op a bundle: the fast loop drops op 1 (the assembler closes a bundle after every op)
     thin8=0,            # phase 3: 8-byte instructions {op, control} (the assembler's thin8), one op each
     wide3=0,            # phase 3: three ops a bundle (op 2 lite, in word 2): 1 behind a branch, 2 always made
+    s12in=0,            # paths 1 and 2 (step12) inside the fast loop's loop, not after it leaves
     s12b=0,             # step12's op 0 integer or float: 0 a select of both, 1 a branch; 2 op 1's too
     fx1=0,              # phase 3: op 1 takes any float function but the special ones (compares, sign, conversions; gvm_asm.h fx1)
     late=0,             # phase 3: a conditional branch reads its registers after the bundle's ops (no op-less bundle before it)
@@ -65,7 +66,7 @@ SPACE = dict(   # the values a search draws from
     fetch=['both', 'one'], int_first=[0, 1], mem_order=['35', '4'], split=['branch', 'flatten'],
     block=[(8, 8), (16, 4), (4, 16), (8, 4), (4, 8), (32, 2), (16, 8), (8, 16), (32, 4), (64, 1), (32, 1), (16, 2)],
     bandx=[1, 2], per=[16, 32, 64, 128], jrow=[0, 1], perm=['id', 'bitrev', 'mul'], mul=[3, 5, 37, 77],
-    early=[0, 1, 2, 3], mru=[0, 1, 2, 4], bb=[0, 1], tfirst=[0, 1], s6=[0, 1], nc=[0, 1], thin=[0, 1], thin8=[0, 1], wide3=[0, 1, 2], late=[0, 1], fx1=[0, 1], s12b=[0, 1, 2], rc=[0, 1, 2], dtx=['both', 'one'], rpk=['scalar', 'vec', 'wide'], pk=['scalar', 'vec', 'aos'], lay=['split', 'merged'],
+    early=[0, 1, 2, 3], mru=[0, 1, 2, 4], bb=[0, 1], tfirst=[0, 1], s6=[0, 1], nc=[0, 1], thin=[0, 1], thin8=[0, 1], wide3=[0, 1, 2], late=[0, 1, 2], fx1=[0, 1], s12b=[0, 1, 2], s12in=[0, 1], rc=[0, 1, 2], dtx=['both', 'one'], rpk=['scalar', 'vec', 'wide'], pk=['scalar', 'vec', 'aos'], lay=['split', 'merged'],
     xr=[0, 64, 128, 256, 512, 1024], npair=[0, 32, 64, 128], xbind=[0, 1], xload=['pre', 'lazy'], xfast=[0, 1],
 )
 
