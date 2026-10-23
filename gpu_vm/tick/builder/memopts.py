@@ -234,4 +234,32 @@ uint vop(uint w, uint imm, uint rd) {
         src = _rep(src, '    r[0] = 0;' + NL, '    r[0] = 0;' + NL + '    [loop] for (k = 1; k < 64; k++) R4[k].yzw = state_in(T_VR + k, c).yzw;   // (VEC: lanes 1-3)' + NL + '    R4[0] = 0;' + NL)
         src = _rep(src, '    return t >= T_WT ? uint4(NONE, NONE, NONE, NONE) :', '    [branch] if (t >= T_VR && t < T_VR + 64) return v;   // (VEC: the registers as they were)' + NL + '    return t >= T_WT ? uint4(NONE, NONE, NONE, NONE) :')
         src = _rep(src, '    [branch] if (t >= T_Q && t < T_WC) return q[t - T_Q];', '    [branch] if (t >= T_VR && t < T_VR + 64) return R4[t - T_VR];   // (VEC)' + NL + '    [branch] if (t >= T_Q && t < T_WC) return q[t - T_Q];')
+    if P.get('s12b', 0):   # step12: the integer or the float unit behind a branch, not both made and one selected
+        src = _rep(src, '    else v0 = (opc0 >> 6) == 1 ? alu(t.x, i0, A0, B0) : fpu(t.x, A0, fb(t.x, i0, L0, B0), C0);',
+                   '    else [branch] if ((opc0 >> 6) == 1) v0 = alu(t.x, i0, A0, B0); else v0 = fpu(t.x, A0, fb(t.x, i0, L0, B0), C0);   // (s12b)')
+    if P.get('fx1', 0):   # op 1 any float function but the special ones: fpu's body (its special branch never taken there)
+        src = _rep(src, 'uint v1 = fl1 ? fsum(fn(t.y),', 'uint v1 = fl1 ? fpu(t.y,')
+    if P.get('s12b', 0) == 2:   # op 1's float or lite behind a branch too
+        i = src.index('    uint v1 = fl1 ? f'); j = src.index(chr(10), i); line = src[i:j]
+        k = line.index(' : alu_lite(t.y, i1, A1, B1);')
+        src = src[:i] + '    uint v1;' + chr(10) + '    [branch] if (fl1) v1 = ' + line[len('    uint v1 = fl1 ? '):k] + '; else v1 = alu_lite(t.y, i1, A1, B1);   // (s12b 2)' + src[j:]
+    if P.get('vec', 0) == 2:   # lanes 1-3 read at a register's first vector use in the pass, not at its start
+        src = _rep(src, '// ---- Phase 3: the vector ops', """uint4 state_in(uint t, uint c);
+static uint vl0, vl1;   // registers whose lanes 1-3 are in R4 this pass
+void vtouch(uint k) {
+    uint b = 1u << (k & 31);
+    [branch] if (((k < 32 ? vl0 : vl1) & b) == 0) {
+        R4[k].yzw = state_in(T_VR + k, core).yzw;
+        [flatten] if (k < 32) vl0 |= b; else vl1 |= b;
+    }
+}
+void vmark(uint k) { uint b = 1u << (k & 31); [flatten] if (k < 32) vl0 |= b; else vl1 |= b; }
+// ---- Phase 3: the vector ops""")
+        src = _rep(src, '    uint4 A = R4[w & 63], B = R4[w >> 26], C = R4[(w >> 20) & 63], D = R4[rd];',
+                   '    vtouch(w & 63); vtouch(w >> 26); vtouch((w >> 20) & 63); vtouch(rd);   // (vec=2)' + chr(10) + '    uint4 A = R4[w & 63], B = R4[w >> 26], C = R4[(w >> 20) & 63], D = R4[rd];')
+        src = _rep(src, '                [branch] if (!store_any(ad, 16, R4[rd]))', '                vtouch(rd);' + chr(10) + '                [branch] if (!store_any(ad, 16, R4[rd]))')
+        src = _rep(src, '                R4[rd != 0 ? rd : 64] = uint4(x0, x1, x2, x3);', '                R4[rd != 0 ? rd : 64] = uint4(x0, x1, x2, x3); vmark(rd);')
+        src = _rep(src, '    [loop] for (k = 1; k < 64; k++) R4[k].yzw = state_in(T_VR + k, c).yzw;   // (VEC: lanes 1-3)', '    vl0 = 1; vl1 = 0;   // (vec=2: lanes at first use)')
+        src = _rep(src, '    [branch] if (t >= T_VR && t < T_VR + 64) return R4[t - T_VR];   // (VEC)',
+                   '    [branch] if (t >= T_VR && t < T_VR + 64) { uint k = t - T_VR; return ((((k < 32 ? vl0 : vl1) >> (k & 31)) & 1) != 0) ? R4[k] : uint4(R4[k].x, state_in(t, core).yzw); }   // (VEC)')
     return src

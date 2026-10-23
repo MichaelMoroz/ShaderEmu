@@ -43,6 +43,7 @@ struct GvmAsm {
     static inline bool thin8 = false;   // phase 3: finish() lays the bundles out as 8-byte instructions (gvm_machine.thin; max_ops 1)
     static inline bool vec_ops = false;   // gvm_machine.vec: the vector ops (isa.h GVM_X_VADD ...) go in path 1 (step12) as op 0
     static inline bool late_br = false;   // gvm_machine.late: a branch reads its registers after the bundle's ops
+    static inline bool fx1 = false;   // phase 3 (the tick's FX1): op 1 takes any float function but the special ones (compares, sign, conversions)
     static inline int max_ops = 2;   // ops a bundle (the tick's THIN: 1, a bundle of one op and its control word; WIDE3: 3, op 2 in word 2)
     static bool file_fast(uint32_t op) {
         uint32_t o = GVM_OPC(op), mode = (o >> 3) & 7, k = o & 7;
@@ -50,7 +51,7 @@ struct GvmAsm {
     }
     static bool madlike(uint32_t f) { return f == GVM_F_MAD || f == GVM_F_MSB || f == GVM_F_NMSB; }
     static bool float_op(uint32_t op) { uint32_t o = GVM_OPC(op); return GVM_CLASS(o) == 3 && !(GVM_IFORM(o) && madlike(o & 31)); }
-    static bool flite(uint32_t op) { return float_op(op) && fn(op) <= GVM_F_MAX; }
+    static bool flite(uint32_t op) { return float_op(op) && fn(op) <= (fx1 ? GVM_F_ROUND : GVM_F_MAX); }
     // x18: path 1's op 0 is an integer op 0-23 (int_op), sel, lpc or a float op
     static bool vec_alu(uint32_t op) { uint32_t o = GVM_OPC(op); return vec_ops && o >= GVM_X_VFIRST && o <= GVM_X_VLAST && o != GVM_X_VLD && o != GVM_X_VST; }
     static bool sel_lpc(uint32_t op) { return GVM_OPC(op) == GVM_OP_I(GVM_I_SEL) || GVM_OPC(op) == GVM_X_LPC; }

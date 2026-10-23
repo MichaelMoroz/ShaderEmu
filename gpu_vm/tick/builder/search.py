@@ -208,7 +208,7 @@ def cmd_report(a):
     # within 1% (the card's noise) the smaller footprint first: D3D11 temporary registers, 16 bytes each as DXBC declares them
     rows = sorted(sc.items(), key=lambda x: (-int(x[1]['score'] * 100), regs(x[0]) or 1e9, -x[1]['score']))
     cases = sorted({c for v in sc.values() for c in v['ratios']}, key=lambda c: TIME_CASES.split(',').index(c) if c in TIME_CASES.split(',') else 99)
-    print('%-26s %6s %5s %6s ' % ('variant', 'score', 'util', 'KB') + ' '.join('%8s' % c[:8] for c in cases) + '  params')
+    print('%-26s %6s %5s %6s ' % ('variant', 'score', 'util', 'KB') + ' '.join('%8s' % (c[2:10] if c.startswith('g_') else c[:8]) for c in cases) + '  params')
     for n, v in rows[:a.top or 30]:
         P = {}
         mf = os.path.join(d, n + '.json')

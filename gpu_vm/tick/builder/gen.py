@@ -41,8 +41,10 @@ DEFAULTS = dict(
     thin=0,             # one op a bundle: the fast loop drops op 1 (the assembler closes a bundle after every op)
     thin8=0,            # phase 3: 8-byte instructions {op, control} (the assembler's thin8), one op each
     wide3=0,            # phase 3: three ops a bundle (op 2 lite, in word 2): 1 behind a branch, 2 always made
+    s12b=0,             # step12's op 0 integer or float: 0 a select of both, 1 a branch; 2 op 1's too
+    fx1=0,              # phase 3: op 1 takes any float function but the special ones (compares, sign, conversions; gvm_asm.h fx1)
     late=0,             # phase 3: a conditional branch reads its registers after the bundle's ops (no op-less bundle before it)
-    vec=0,              # phase 3: 128-bit registers and the vector ops (isa.h GVM_X_VADD ...; rpk=wide)
+    vec=0,              # phase 3: 128-bit registers and the vector ops (isa.h GVM_X_VADD ...; rpk=wide); 2: lanes read at first use
     rc=0,               # a read cache: the last 0, 1 or 2 texels the fast paths fetched, in registers
     dtx='both',         # a data texel: ROM and RAM both fetched then selected (x23), or one behind a branch
     rpk='scalar',       # the registers: scalar r[65], or vec uint4 R4[17] (layoutopts.py)
@@ -63,7 +65,7 @@ SPACE = dict(   # the values a search draws from
     fetch=['both', 'one'], int_first=[0, 1], mem_order=['35', '4'], split=['branch', 'flatten'],
     block=[(8, 8), (16, 4), (4, 16), (8, 4), (4, 8), (32, 2), (16, 8), (8, 16), (32, 4), (64, 1), (32, 1), (16, 2)],
     bandx=[1, 2], per=[16, 32, 64, 128], jrow=[0, 1], perm=['id', 'bitrev', 'mul'], mul=[3, 5, 37, 77],
-    early=[0, 1, 2, 3], mru=[0, 1, 2, 4], bb=[0, 1], tfirst=[0, 1], s6=[0, 1], nc=[0, 1], thin=[0, 1], thin8=[0, 1], wide3=[0, 1, 2], late=[0, 1], rc=[0, 1, 2], dtx=['both', 'one'], rpk=['scalar', 'vec', 'wide'], pk=['scalar', 'vec', 'aos'], lay=['split', 'merged'],
+    early=[0, 1, 2, 3], mru=[0, 1, 2, 4], bb=[0, 1], tfirst=[0, 1], s6=[0, 1], nc=[0, 1], thin=[0, 1], thin8=[0, 1], wide3=[0, 1, 2], late=[0, 1], fx1=[0, 1], s12b=[0, 1, 2], rc=[0, 1, 2], dtx=['both', 'one'], rpk=['scalar', 'vec', 'wide'], pk=['scalar', 'vec', 'aos'], lay=['split', 'merged'],
     xr=[0, 64, 128, 256, 512, 1024], npair=[0, 32, 64, 128], xbind=[0, 1], xload=['pre', 'lazy'], xfast=[0, 1],
 )
 
@@ -150,6 +152,7 @@ static const uint NCLOAD = {P.get('nc', 0)};   // GVM_W_NC loads (no look at thi
 static const uint THIN = {P.get('thin', 0)};   // one op a bundle (the assembler's max_ops 1): the fast loop has no op 1
 static const uint THIN8 = {P.get('thin8', 0)};   // 8-byte instructions (gvm_machine.thin)
 static const uint WIDE3 = {P.get('wide3', 0)};   // three ops a bundle (gvm_machine.wide3)
+static const uint FX1 = {P.get('fx1', 0)};   // op 1's float functions: fpu's but the special ones (GvmAsm::fx1)
 static const uint LATEBR = {P.get('late', 0)};   // branches read their registers after the bundle's ops (gvm_machine.late)
 static const uint XLAZY = {1 if P['xload'] == 'lazy' else 0};
 static const uint NPAIR = {P['npair']};
