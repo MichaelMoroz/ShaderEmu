@@ -40,6 +40,16 @@ A batch lives in `build/tick_gen/BATCH/` (vNNNN.hlsl, vNNNN.json, checks.json, c
 | bb | 0, 1 | x24's: a mask of the first-table buckets stored to; a load whose bucket has none reads no tags |
 | tfirst | 0, 1 | x24's: a load's texel fetched before its lookup (paths 3 to 5) |
 | s6 | 0, 1 | x24's (with mru): a store pair (path 6) whose texels are both kept takes one branch past the lookup |
+| nc | 0, 1 | loads of width GVM_W_NC skip the write cache (`lw_nc`) |
+| rc, dtx | 0-2; both, one | the last 1 or 2 fetched texels kept in registers; ROM or RAM fetched behind a branch instead of both |
+| thin, thin8 | 0, 1 | one op a bundle in the 16-byte bundle; 8-byte instructions (gvm_machine.thin) |
+| wide3 | 0-2 | a third lite op in word 2: behind a branch (1) or always made (2) |
+| late | 0-3 | branches read their registers after the ops: 1 forwarded by selects, 2 read again from the file, 3 only in a bundle with a float op (step12 and the general step; gvm_machine.late 2) |
+| fx1 | 0, 1 | op 1 takes every float function but the special ones (GvmAsm::fx1) |
+| s12b | 0-2 | step12's integer or float unit behind a branch (1), and op 1's float or lite too (2) |
+| s12in | 0, 1 | step12 inside the fast loop's loop (slower: 0.80-0.84) |
+| vec | 0-2 | 128-bit registers and the vector ops (rpk=wide); 2 reads lanes 1-3 at a register's first vector use |
+| rpk, pk, lay | scalar, vec, wide; scalar, vec, aos; split, merged | the registers' and the write cache's local arrays: scalar, packed in uint4, or R4[k] whole |
 | xr, npair, xbind, xload, xfast | phase 2 | the core's file (below) |
 
 The layout is told to gvmbench by constants in the tick (GEO_BW, GEO_BH, GEO_BAND, GEO_PER, GEO_JROW, GEO_PERM, GEO_MUL;
