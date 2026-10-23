@@ -43,6 +43,7 @@ struct GvmAsm {
     static inline bool thin8 = false;   // phase 3: finish() lays the bundles out as 8-byte instructions (gvm_machine.thin; max_ops 1)
     static inline bool vec_ops = false;   // gvm_machine.vec: the vector ops (isa.h GVM_X_VADD ...) go in path 1 (step12) as op 0
     static inline bool late_br = false;   // gvm_machine.late: a branch reads its registers after the bundle's ops
+    static inline bool late_float = false;   // (gvm_machine.late 2: only in a bundle with a float op)
     static inline bool fx1 = false;   // phase 3 (the tick's FX1): op 1 takes any float function but the special ones (compares, sign, conversions)
     static inline int max_ops = 2;   // ops a bundle (the tick's THIN: 1, a bundle of one op and its control word; WIDE3: 3, op 2 in word 2)
     static bool file_fast(uint32_t op) {
@@ -119,7 +120,8 @@ struct GvmAsm {
         if (GVM_CLASS(o) != 2 || ((o >> 3) & 7) > 3) return 1;
         return (o & 7) == GVM_W_Q ? 4 : (o & 7) == GVM_W_D ? 2 : 1;
     }
-    bool br_old(uint32_t r) const { return !late_br && writes(r); }   // a branch on r must open a new bundle (it reads r as the bundle found it)
+    bool br_old(uint32_t r) const { return (!late_br || (late_float && !has_float())) && writes(r); }
+    bool has_float() const { for (uint32_t op : cur) if (GVM_CLASS(GVM_OPC(op)) == 3) return true; return false; }   // a branch on r must open a new bundle (it reads r as the bundle found it)
     bool writes(uint32_t r) const {   // an op of the open bundle that writes r (a store's rd is its value: read); d and q by rd's group
         for (uint32_t op : cur) if (!store_op(op) && (r - GVM_RD(op)) < span(op)) return true;
         return false;

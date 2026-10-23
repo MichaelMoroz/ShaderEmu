@@ -167,7 +167,12 @@ uint4 data_texel(uint ad) {''')
     r[n8 == 0x18 && d2 != 0 ? d2 : 64] = alu_lite(w2, simm12(w2), r[w2 & 63], r[w2 >> 26]);
 '''
         src = src[:j + len(a)] + op2 + src[j + len(a):]
-    if P.get('late', 0):   # the fast loop's branch on the registers as the ops left them (op 1's result wins)
+    if P.get('late', 0) == 3:   # late only in a bundle with a float op: step12 and the general step; the fast loop as it was
+        src = _rep(src, '    [flatten] if (LATEBR != 0 && GVM_CC(ctl) != GVM_CC_SPECIAL) {',
+                   '    [flatten] if (LATEBR != 0 && GVM_CC(ctl) != GVM_CC_SPECIAL && ((opc0 >> 6) == 3 || fl1)) {   // (LATEBR 3: a float bundle)')
+        src = _rep(src, '    [branch] if (LATEBR != 0 && GVM_CC(ctl) != GVM_CC_SPECIAL) {',
+                   '    [branch] if (LATEBR != 0 && GVM_CC(ctl) != GVM_CC_SPECIAL && (((t.x >> 18) & 3) == 3 || (n > 1 && ((t.y >> 18) & 3) == 3))) {')
+    if P.get('late', 0) in (1, 2):   # the fast loop's branch on the registers as the ops left them (op 1's result wins)
         i = src.index('void fstep(inout uint budget) {')
         a = '    uint i6 = asuint((int)ctl >> 26), sum = CA + i6;'
         j = src.index(a, i)

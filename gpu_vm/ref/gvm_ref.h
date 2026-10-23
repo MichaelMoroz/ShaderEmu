@@ -98,6 +98,7 @@ typedef struct gvm_machine {
     uint32_t ncores;
     uint32_t vec;            // phase 3: 128-bit registers (isa.h GVM_X_VADD ...): lanes 1-3 in gvm_core.xv
     uint32_t late;           // phase 3 (gvm_asm.h's late_br): a conditional branch and addbnz read their registers after the bundle's ops
+                             // (2: only in a bundle with a float op, which the tick runs in step12 or the general step; gvm_asm.h late_float)
     uint32_t wide3;          // phase 3 (gvm_asm.h's max_ops 3): n 3 is three ops, word 2 op 2 (no long immediate then)
     uint32_t thin;           // phase 3 (gvm_asm.h's thin8): 8-byte instructions {op, control} (16 with a long immediate:
                              // {op, control, imm, 0}, at a texel's start); branch offsets in 8 bytes; an instruction has 0 or 1 op
@@ -720,7 +721,9 @@ int gvm_bundle(gvm_machine *m, gvm_core *c) {
         (void)lu;
     }
     // the control word: a branch on the registers as the bundle found them, jr and callr on its ops' results
-    if (m->late && GVM_CC(ctl) != GVM_CC_SPECIAL) { ca0 = c->x[GVM_CRA(ctl)]; cb0 = c->x[GVM_CRB(ctl)]; }   // (late: as its ops left them)
+    int hasf = 0;
+    for (k = 0; k < n; k++) hasf |= GVM_CLASS(GVM_OPC(t[k])) == 3;
+    if (m->late && GVM_CC(ctl) != GVM_CC_SPECIAL && (m->late != 2 || hasf)) { ca0 = c->x[GVM_CRA(ctl)]; cb0 = c->x[GVM_CRB(ctl)]; }   // (late: as its ops left them)
     uint32_t cc = GVM_CC(ctl), next = base + size;
     int super = (c->sr[GVM_SR_STATUS] & GVM_ST_S) != 0;
     if (cc == GVM_CC_SPECIAL) {

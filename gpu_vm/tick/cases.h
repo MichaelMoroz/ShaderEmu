@@ -1072,7 +1072,7 @@ static uint32_t load_real(const Case& cs, std::vector<uint32_t>& img) {
     std::string path = cs.elf;
     // GVM_CC_ELF: another build of the game_cc kernels; a tick with late branches takes its _late.elf (clang -mllvm -gpuvm-late-br)
     if (path == "build/gamebench/gvm_lone.elf" && getenv("GVM_CC_ELF")) path = getenv("GVM_CC_ELF");
-    if (path.size() > 4 && GvmAsm::late_br && path.rfind("gvm_lone", std::string::npos) != std::string::npos && getenv("GVM_CC_ELF"))
+    if (path.size() > 4 && GvmAsm::late_br && !GvmAsm::late_float && path.rfind("gvm_lone", std::string::npos) != std::string::npos && getenv("GVM_CC_ELF"))
         path = path.substr(0, path.size() - 4) + "_late.elf";
     std::vector<uint8_t> e = slurp_file(path.c_str());
     for (int up = 0; up < 3 && e.empty(); up++) { path = "../" + path; e = slurp_file(path.c_str()); }   // (run from bin or gpu_vm)

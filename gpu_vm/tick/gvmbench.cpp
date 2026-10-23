@@ -415,7 +415,7 @@ static bool check_case(Gpu& gpu, const Case& cs, uint32_t seed, bool verbose) {
     std::vector<uint8_t> romBytes(ROM_SIZE);
     memcpy(romBytes.data(), g_rom.data(), ROM_SIZE);
     m.ram = refRam.data(); m.ram_end = RAM_END; m.rom = romBytes.data(); m.rom_size = ROM_SIZE;
-    m.flags = GVM_REF_BREAK_HALTS; m.thin = g_gg.thin8; m.wide3 = g_gg.wide3 != 0; m.late = g_gg.late != 0; m.vec = g_gg.vec != 0;
+    m.flags = GVM_REF_BREAK_HALTS; m.thin = g_gg.thin8; m.wide3 = g_gg.wide3 != 0; m.late = g_gg.late == 3 ? 2 : g_gg.late != 0; m.vec = g_gg.vec != 0;
     std::vector<gvm_core> rc(cs.cores);
     for (uint32_t c = 0; c < cs.cores; c++) {
         gvm_core_reset(&rc[c], c, pr.bases[c]); rc[c].sr[GVM_SR_TVEC] = HALT_STUB;
@@ -554,7 +554,7 @@ struct Variant { std::string name, shader; std::vector<std::string> defs; Prog t
 static void use(Gpu& gpu, const Variant& v) {
     gpu.tick = v.tick; gpu.commit = v.commit; gpu.stg = v.stg; gpu.wrt = v.wrt; gpu.prog = v.prog;
     gpu.hasCommit = v.hasCommit; gpu.hasOps = v.hasOps; gpu.uavTick = v.uavTick; gpu.hasW = v.hasW; gpu.tickW = v.tickW; gpu.tick0 = v.tick0; g_wcn0 = v.wcn0; g_spix0 = v.spix0; gpu.hasAny = v.hasAny && !env_int("GVM_NOPRED"); gpu.any = v.any;
-    g_wcn = v.wcn; g_texw = v.texw; g_twc = v.twc; g_lrows = v.lrows; g_wcn1 = v.wcn1; g_geo = v.geo; g_ntex = v.ntex; g_gg = v.gg; GvmAsm::file_paths = v.gg.xfast != 0; GvmAsm::nc_loads = v.gg.nc != 0; GvmAsm::max_ops = v.gg.thin || v.gg.thin8 ? 1 : v.gg.wide3 ? 3 : 2; GvmAsm::thin8 = v.gg.thin8 != 0; GvmAsm::late_br = v.gg.late != 0; GvmAsm::fx1 = v.gg.fx1 != 0; GvmAsm::vec_ops = v.gg.vec != 0;   // (the state's layout, the commit's points and RAM's width are the variant's)
+    g_wcn = v.wcn; g_texw = v.texw; g_twc = v.twc; g_lrows = v.lrows; g_wcn1 = v.wcn1; g_geo = v.geo; g_ntex = v.ntex; g_gg = v.gg; GvmAsm::file_paths = v.gg.xfast != 0; GvmAsm::nc_loads = v.gg.nc != 0; GvmAsm::max_ops = v.gg.thin || v.gg.thin8 ? 1 : v.gg.wide3 ? 3 : 2; GvmAsm::thin8 = v.gg.thin8 != 0; GvmAsm::late_br = v.gg.late != 0; GvmAsm::late_float = v.gg.late == 3; GvmAsm::fx1 = v.gg.fx1 != 0; GvmAsm::vec_ops = v.gg.vec != 0;   // (the state's layout, the commit's points and RAM's width are the variant's)
     gpu.opSlots = v.slots; gpu.opSpan = v.span; gpu.opRounds = g_op_rounds;
     g_romrows = 0; g_x17_paths = 0;   // (probe: the ROM in RAM's texture; x17 on the real programs' own paths)
     for (auto& d : v.defs) { if (d == "ROMROWS=1") g_romrows = 1; if (d == "X17PATHS=1") g_x17_paths = 1; }
