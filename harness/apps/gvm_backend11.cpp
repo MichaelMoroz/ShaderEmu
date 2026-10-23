@@ -124,7 +124,7 @@ public:
         if (src.find("#ifndef CORE0") != std::string::npos) {   // x25: core 0's own write cache, its tick compiled with CORE0=1
             wcn0_ = stepConst(src, "WCN0", 0);
             spix0_ = (stepConst(src, "NTEX0", 0) + 7) / 8;
-            if (!geo_ || bh_ != 8 || !wcn0_ || spix0_ > 64 + 8 * 128) { err = tickPath + ": CORE0 needs GEO_BLOCKS, WCN0 and NTEX0"; return false; }
+            if (!geo_ || !wcn0_ || (bh_ == 8 ? spix0_ > 64 + 8 * 128 : c0rows() > 16)) { err = tickPath + ": CORE0 needs GEO_BLOCKS, WCN0 and NTEX0"; return false; }
         }
         CompileSettings cs;
         cs.flags = D3DCOMPILE_OPTIMIZATION_LEVEL3;
@@ -637,9 +637,14 @@ private:
     UINT setW() const { return geo_ ? 1024 : spix_; }
     UINT setH() const { return geo_ ? (kMaxCores - 1) / 128 * 16 + 8 : kMaxCores; }
     size_t setAt(uint32_t c, uint32_t j) const {   // the texel of state pixel j of core c (x25: core 0's from 64 on in rows 8-15)
-        if (geo_ && c == 0 && j >= 64) return (size_t)(8 + j % 8) * 1024 + j / 8 - 8;
+        if (geo_ && c == 0 && j >= 8 * bh_) {   // (a builder's c0nb, blocks under 8 rows: its blocks again, down the first band)
+            if (bh_ == 8) return (size_t)(8 + j % 8) * 1024 + j / 8 - 8;
+            uint32_t k = j % (8 * bh_);
+            return (size_t)((j / (8 * bh_)) * bh_ + k % bh_) * 1024 + k / bh_;
+        }
         return geo_ ? (size_t)((c >> 7) * 16 + j % bh_) * 1024 + (c & 127) * 8 + j / bh_ : (size_t)c * spix_ + j;
     }
+    uint32_t c0rows() const { return (spix0_ + 8 * bh_ - 1) / (8 * bh_) * bh_; }   // (c0nb with blocks under 8 rows: core 0's rows)
     void viewport(UINT w, UINT h, UINT y = 0, UINT x = 0) {
         D3D11_VIEWPORT v = {(float)x, (float)y, (float)w, (float)h, 0, 1};
         gpu_.ctx->RSSetViewports(1, &v);
@@ -675,9 +680,9 @@ private:
         bool apart = wcn0_ || split, last = split == 2;
         auto core0 = [&]() {   // core 0 by its own tick: its block, then its pixels in rows 8-15 of the first band
             if (wcn0_) ctx->PSSetShader(tick0_.ps.Get(), nullptr, 0);
-            viewport(8, 8);
+            viewport(8, wcn0_ && bh_ != 8 ? c0rows() : 8);
             ctx->Draw(3, 0);
-            if (wcn0_ && spix0_ > 64) {
+            if (wcn0_ && bh_ == 8 && spix0_ > 64) {
                 viewport((spix0_ - 64 + 7) / 8, 8, 8);
                 ctx->Draw(3, 0);
             }

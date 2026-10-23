@@ -171,6 +171,10 @@ struct Gpu {
     uint32_t opSlots = 32, opSpan = 272, opRounds = 2;   // the operations' stage (a step's OP_SLOTS, OP_SPAN) and rounds a pass
     struct { uint32_t ticks, ramEnd, timeLo, timeHi, player, flags, ramRows, ext0, ncores, pad[3], ext[8]; } pass;   // (x17's PassParams)
     size_t pix(uint32_t c, uint32_t p) const {   // the place of core c's state pixel p in a state texture
+        if (g_gg.bw && c == 0 && g_wcn0) {   // (a built step's c0nb: core 0's pixels from a block on in the rows under it)
+            uint32_t blk = g_gg.bw * g_gg.bh, jj = p % blk;
+            return (size_t)((p / blk) * g_gg.bh + jj % g_gg.bh) * texW() + jj / g_gg.bh;
+        }
         if (g_gg.bw) {
             uint32_t i = c % g_gg.per, s = i;
             if (g_gg.perm == 1) { uint32_t lg = 0; while ((1u << lg) < g_gg.per) lg++; s = 0; for (uint32_t k = 0; k < lg; k++) s |= ((i >> k) & 1) << (lg - 1 - k); }
@@ -183,7 +187,8 @@ struct Gpu {
         return (size_t)(c * g_lrows + p / spx) * spx + p % spx;
     }
     UINT texW() const { if (g_gg.bw) return g_gg.per * g_gg.bw; return g_geo ? std::max((cores < 128 ? cores : 128) * 8, g_spix0 > 64 ? (g_spix0 - 64 + 7) / 8 : 0u) : spx; }
-    UINT texH() const { if (g_gg.bw) return ((cores - 1) / g_gg.per) * g_gg.band + g_gg.bh; return g_geo ? ((cores - 1) / 128) * 16 + (g_spix0 > 64 ? 16 : 8) : cores * g_lrows; }
+    static uint32_t c0rows() { uint32_t blk = g_gg.bw * g_gg.bh; return (g_spix0 + blk - 1) / blk * g_gg.bh; }   // (c0nb: core 0's rows)
+    UINT texH() const { if (g_gg.bw) return std::max(((cores - 1) / g_gg.per) * g_gg.band + g_gg.bh, g_wcn0 ? c0rows() : 0u); return g_geo ? ((cores - 1) / 128) * 16 + (g_spix0 > 64 ? 16 : 8) : cores * g_lrows; }
     void make(uint32_t ncores, const std::vector<uint32_t>& ramImg, const std::vector<uint32_t>& romImg, const std::vector<std::vector<uint32_t>>& state) {
         cores = ncores;
         statePix = ((g_ntex ? g_ntex : g_twc + g_wcn / 2) + 7) / 8;
@@ -275,6 +280,17 @@ struct Gpu {
                 ctx->Draw(3, 0);
             }
             if (drawMode == 3) { viewport(g_gg.bw, g_gg.bh); ctx->Draw(3, 0); }
+        } else if (g_gg.bw && g_wcn0) {   // a built step with c0nb: core 0 by its own tick (its block and the rows under it), then the rest
+            ctx->PSSetShader(tick0.ps, nullptr, 0);
+            viewport(g_gg.bw, c0rows());
+            ctx->Draw(3, 0);
+            ctx->PSSetShader(tick.ps, nullptr, 0);
+            for (uint32_t b = 0; b * g_gg.per < cores; b++) {
+                uint32_t c0 = b ? b * g_gg.per : 1, n = std::min(g_gg.per, cores - b * g_gg.per) - (b ? 0 : 1);
+                if (!n) continue;
+                viewport(n * g_gg.bw, g_gg.bh, b * g_gg.band, (c0 % g_gg.per) * g_gg.bw);
+                ctx->Draw(3, 0);
+            }
         } else if (g_gg.bw) {   // a built step: band by band (the whole band when its blocks are permuted)
             for (uint32_t b = 0; b * g_gg.per < cores; b++) {
                 uint32_t n = g_gg.perm ? g_gg.per : std::min(g_gg.per, cores - b * g_gg.per);
@@ -323,7 +339,7 @@ struct Gpu {
             ID3D11Buffer* b2[2] = {cb, ccb[c]};
             ctx->VSSetConstantBuffers(0, 2, b2);
             ctx->OMSetBlendState(mask[c], nullptr, 0xffffffff);
-            ctx->Draw(g_gg.cpts ? cores * g_gg.cpts : g_wcn0 ? g_wcn0 + (cores - 1) * g_wcn : g_wcn1 ? g_wcn + (cores - 1) * g_wcn1 : cores * g_wcn, 0);   // (x19g: a worker's WCN1 entries; x25: core 0's WCN0)
+            ctx->Draw(g_gg.cpts ? (g_wcn0 ? g_wcn0 + (cores - 1) * g_gg.cpts : cores * g_gg.cpts) : g_wcn0 ? g_wcn0 + (cores - 1) * g_wcn : g_wcn1 ? g_wcn + (cores - 1) * g_wcn1 : cores * g_wcn, 0);   // (x19g: a worker's WCN1 entries; x25: core 0's WCN0)
         }
         ctx->OMSetBlendState(nullptr, nullptr, 0xffffffff);
         if (!hasOps || g_parts == 2) { clear_srv(); cur ^= 1; return; }

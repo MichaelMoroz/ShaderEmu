@@ -47,6 +47,7 @@ DEFAULTS = dict(
     wsh=0,              # a worker's budget a pass: core 0's (_Ticks) >> wsh
     wadf=0,             # the wad block's form: 2 before the state's load, 16 run(core == 0 ? _Ticks : bud) (18: the ALU loops as wad=0's), 1 flatten, 4 core 0's run apart
     wclean=0,           # 1: a pixel of the write cache's data texels whose entries are all unused is discarded (not written)
+    c0nb=0,             # core 0's own write cache: 2 x c0nb buckets of four (0: none), its tick compiled with CORE0=1 and drawn apart
     ll=0,               # 1: a new texel goes to the less full of its two buckets (more texels before a full end: +12-14% in a model)
     ovh=0,              # 1: the ov entries are a third table of ov / 4 hashed buckets, read when both buckets are full (slower: IDEAS 27)
     wad=0,              # 1: a worker's budget core 0's bundles of the last pass (+1/4, 512 at least) when that pass ended core 0 on sync or full
@@ -1012,6 +1013,68 @@ def p2strip(P, src):
 """ + src[j:]
     return src
 
+def core0(P, src):
+    """c0nb: core 0's own write cache of 2 x c0nb buckets (8 * c0nb + 2 entries), its tick the same source compiled with
+    CORE0=1 and drawn apart (the harness's and gvmbench's x25 path): its state pixels from bw * bh on lie in the rows under its
+    block (a block's rows again, as many as it needs), the workers' blocks are as they were. Only the core-0 compile and the
+    commit's (and the operations') reads of core 0's state differ from the point without it."""
+    import re
+    n0 = P.get('c0nb', 0)
+    if not n0: return src
+    bw, bh, band = P['bw'], P['bh'], P['band']
+    assert P['jrow'] == 0 and P['perm'] == 'id' and not P['xr'] and not P['npair'] and not P.get('vec', 0) and not P.get('ov', 0), 'c0nb: a plain point'
+    assert P['hash'] == 1, 'c0nb: hash=1'
+    blk = bw * bh
+    L = layout(P)
+    w0 = 8 * n0 + 2
+    nt0 = L['T_WC'] + w0 + (w0 + 3) // 4
+    sp0 = (nt0 + 7) // 8
+    rows = (sp0 + blk - 1) // blk * bh
+    assert rows <= band, 'c0nb: core 0 needs %d rows of a band of %d' % (rows, band)
+    def rep(a, b):
+        nonlocal src
+        assert src.count(a) == 1, 'core0: ' + a[:70]
+        src = src.replace(a, b)
+    def two(prefix, v0):   # a constant's line: the workers' value, core 0's in its compile
+        line = src[src.index(prefix):].split('\n', 1)[0]
+        name = re.match(r'static const uint (\w+) = ', line).group(1)
+        rep(line + '\n', '#if !CORE0\n' + line + '\n#else\nstatic const uint %s = %s;\n#endif\n' % (name, v0))
+    i = src.index('\n') + 1
+    src = src[:i] + ('#ifndef CORE0\n#define CORE0 0   // 1: core 0\'s tick (its own compile and draw: c0nb)\n#endif\n'
+                     'static const uint WCN0 = %d;   // core 0\'s write cache entries (8 * %d + 2) and state texels\n'
+                     'static const uint NTEX0 = %d;\n'
+                     'static const uint C0BLK = %du, C0BH = %du;   // core 0\'s pixel j from C0BLK on: C0BH rows down, a block again\n'
+                     % (w0, n0, nt0, blk, bh)) + src[i:]
+    two('static const uint NB = ', n0)
+    two('static const uint WCN = ', w0)
+    two('static const uint NTEX = ', nt0)
+    two('static const uint SPIX = ', sp0)
+    for t in ('T_XF', 'T_XT', 'T_PB', 'T_VR'):
+        two('static const uint %s = ' % t, nt0)
+    def hashes(nb):   # (a power of two: the shift; else the high part of a 16-bit fraction)
+        if nb & (nb - 1) == 0:
+            lg = nb.bit_length() - 1
+            return ('uint wc_b1(uint t) { return (t * 0x9e3779b1u) >> %d; }\n'
+                    'uint wc_b2(uint t) { return NB + ((t * 0x85ebca6bu + 0x165667b1u) >> %d); }\n' % (32 - lg, 32 - lg))
+        return ('uint wc_b1(uint t) { return (((t * 0x9e3779b1u) >> 16) * NB) >> 16; }\n'
+                'uint wc_b2(uint t) { return NB + ((((t * 0x85ebca6bu + 0x165667b1u) >> 16) * NB) >> 16); }\n')
+    old = hashes(P['nb'])
+    rep(old, '#if !CORE0\n' + old + '#else\n' + hashes(n0) + '#endif\n')
+    old = src[src.index('int3 sat(uint j, uint c) {'):].split('\n', 1)[0]
+    c0 = 'int3((j % C0BLK) / C0BH, (j / C0BLK) * C0BH + (j % C0BLK) % C0BH, 0)'
+    rep(old + '\n', '#if !CORE0\n' + old + '\n#else\nint3 sat(uint j, uint c) { return ' + c0 + '; }   // (core 0)\n#endif\n'
+        'int3 satx(uint j, uint c) { return c == 0 ? ' + c0 + ' : sat(j, c); }   // (the commit\'s and operations\' reads: core 0 too)\n')
+    a = 'uint4 state_any(uint t, uint c) {\n    int3 at = sat(t >> 3, c);'
+    rep(a, a.replace('sat(', 'satx('))
+    a = ('    core = (p.y / %du) * %du + core_at(p.x / %du);\n    uint j = rx * %du + ry;\n'
+         '    [branch] if (core >= _NCores || j >= SPIX || ry >= %du) {' % (band, P['per'], bw, bh, bh))
+    rep(a, '#if CORE0\n    core = 0;\n    uint j = (p.y / C0BH) * C0BLK + rx * C0BH + p.y % C0BH;\n'
+           '    [branch] if (p.x >= ' + str(bw) + 'u || p.y >= ' + str(rows) + 'u || j >= SPIX) {\n#else\n' + a + '\n#endif\n')
+    a = '    uint c = id / WCN, j = id % WCN;\n    uint tg = pick(state_any(T_WT + (j >> 2), c), j & 3)'
+    rep(a, '    bool z = id < WCN0;\n    uint k = id - WCN0, c = z ? 0 : 1 + k / WCN, j = z ? id : k % WCN;\n'
+           '    uint tg = pick(state_any(T_WC + (z ? WCN0 : WCN) + (j >> 2), c), j & 3)')
+    return src
+
 def emit(P):
     P = full(P)
     why = valid(P)
@@ -1021,7 +1084,7 @@ def emit(P):
            state_io(P), frag(P), part('ops')]
     from memopts import memopts
     from layoutopts import layoutopts
-    return layoutopts(P, memopts(P, mflat(P, p2strip(P, '\n'.join(out)))))
+    return core0(P, layoutopts(P, memopts(P, mflat(P, p2strip(P, '\n'.join(out))))))
 
 def manifest(P):
     P = full(P)
