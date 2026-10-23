@@ -90,6 +90,7 @@ DEFAULTS = dict(
                         # 3 only a store that finds no room looked at (fetched and compared): its texel goes on silent, the rest as before
     sil6=0,             # (sil) path 6's own: 1 its texels fetched when a store's lookup found no entry, 2 always; 0 as sil
     silp=15,            # (sil) where: 1 paths 3 and 5, 2 path 6, 4 step12's memory path, 8 the general step's stores
+    silc0=0,            # (sil) 1: core 0's stores only (a `core == 0` test in each silent condition; the workers as without sil)
     snk=0,              # paths 3 and 5: a load writes no entry (the sink's tag and word) and reads no store value: a branch on the store
     m6seq=0,            # path 6 as two steps: op 0's store, then op 1 looked up in the tags op 0 left (no patched copy of its buckets)
     rmap=0,             # where texel t lies in RAM's and the ROM's textures: 0 row-major 8192 wide, 1 strips 512 x 4096 (isa.h GVM_STRIP_X; IDEAS 35)
@@ -665,6 +666,11 @@ def sil_text(P, src):
     if k == 3:   # (3: only a store that finds no room is looked at: its texel fetched, compared, and the pass goes on if it is silent)
         src = '\n'.join(l.replace('m0.otag == NONE', 'm0.sl == NONE').replace('m1.otag == NONE', 'm1.sl == NONE').replace('m.otag == NONE', 'm.sl == NONE')
                         .replace('lk.otag == NONE', 'lk.sl == NONE') if '(sil' in l else l for l in src.split('\n'))
+    if P.get('silc0', 0):   # (core 0 alone: every silent condition behind core == 0, the workers' stores as without sil)
+        import re
+        assert k != 2 and P.get('sil6', 0) != 2, 'silc0: sil 1 or 3'
+        src = '\n'.join(re.sub(r'\b((?:m0|m1|m|lk)\.(?:otag|sl) == NONE)', r'(core == 0 && \1)', l) if '(sil' in l else l
+                        for l in src.split('\n'))
     return src
 
 def cc0x_text(P, src):
