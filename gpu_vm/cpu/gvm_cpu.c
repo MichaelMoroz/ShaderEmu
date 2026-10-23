@@ -708,6 +708,8 @@ static void devices_pass(void) {
 }
 
 
+static FILE *SY;   // GVM_SYNCLOG
+
 // ---- GVM_STLOG=FILE (gpu_vm/memory_model.md): core 0's stores while the profile counts (--profile-at), a record of
 // five words each: the address, sp, core 0's bundles run, bytes | the base register << 8 | supervisor << 16 |
 // the op's mode << 20 | a load << 24 (GVM_STLOG_LOADS=1: loads too), and the pc; a pass's end is the address 0xffffffff with why in the last word. GVM_STLOG_MAX: records.
@@ -997,6 +999,7 @@ int main(int argc, char **argv) {
         if (!c && H.wc_nb) { k->wl.nb = H.wc_nb; k->wl.ways = H.wc_ways; k->wl.reloc = H.wc_reloc; }
     }
     H.m.late = getenv("GVM_LATE") ? (uint32_t)atoi(getenv("GVM_LATE")) : 0;   // GVM_LATE=1: late branches, 2: in a float bundle only (gvm_machine.late; clang -mllvm -gpuvm-late-br[=float])
+    if (getenv("GVM_SYNCLOG") && !(SY = fopen(getenv("GVM_SYNCLOG"), "w"))) { fprintf(stderr, "gvm_cpu: GVM_SYNCLOG: cannot write\n"); return EXIT_USAGE; }
     if (getenv("GVM_RACES")) race_init(getenv("GVM_RACES"));
     else if (getenv("GVM_STLOG")) stlog_init(getenv("GVM_STLOG"));
     if (H.devices && H.ncores > 1) W(CTRL + 0x3cc) = H.ncores;   // how many cores there could be (the kernel reads it at once)
@@ -1017,7 +1020,18 @@ int main(int argc, char **argv) {
             gvm_core *k = &H.cores[c];
             if (k->halted) continue;
             running = 1;
+            if (!c) k->wait_k = ~0u;
             H.end[c] = (uint8_t)gvm_run(&H.m, k, H.budget);
+            // GVM_SYNCLOG=FILE: a line for each of core 0's passes that ended in a sync or full while the profile counts:
+            // the kind (1 the sync instruction, 2 an access an operation in flight holds, 3 an operation asked for with
+            // the queue full, 4 the write cache full: --wc), pc, ra, the address, and the operation it waited for
+            // {kind, dst, src, bytes} and the queue's length
+            if (SY && !c && H.bundles >= H.prof_from && (H.end[c] == GVM_END_SYNC || H.end[c] == GVM_END_FULL)) {
+                uint32_t kk = k->wait_k, kind = H.end[c] == GVM_END_FULL ? 4 : kk == ~0u ? 1 : kk == GVM_OPQ ? 3 : 2;
+                const uint32_t *d = kind == 2 ? k->opq[kk] : k->opq[0];
+                fprintf(SY, "%u %08x %08x %08x %u %08x %08x %u %u %llu\n", kind, k->pc, k->x[1], kind == 1 ? 0 : k->wait_a,
+                        d[0], d[1], d[2], d[3], k->nops, (unsigned long long)k->bundles_run);
+            }
             if (!c && H.bundles >= H.prof_from && H.end[c] < 8 && !(H.end[c] == GVM_END_WAIT && k->bundles_run == H.c0_last)) {
                 H.c0_end[H.end[c]]++; H.c0_bundles += k->bundles_run - H.c0_last;
             }
@@ -1062,6 +1076,7 @@ int main(int argc, char **argv) {
     }
     out_flush();
     if (SL.f) fclose(SL.f);
+    if (SY) fclose(SY);
     if (RC.wmap) race_report();
     if (H.exit_code == EXIT_LIMIT && H.max_bundles) fprintf(stderr, "gvm_cpu: %llu bundles run: stopped (--max-bundles), pc %08x\n", (unsigned long long)H.bundles, H.cores[0].pc);
     if (H.stats) {

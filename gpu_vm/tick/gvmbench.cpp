@@ -551,7 +551,10 @@ static double time_case(Gpu& gpu, const Case& cs, uint32_t ticks, uint32_t passe
     g_util = (gpu.core_state(0)[19 * 4] - u0) / ((double)passes * ticks);
     gpu.release();
     if (cs.us_pass) return double(t1 - t0) / dj.Frequency * 1e6 / passes;   // (p_: us a pass)
-    if (cs.units_reg) return (o1 - o0) / cs.unit_div / (double(t1 - t0) / dj.Frequency);   // (the game bench: frames a second)
+    // (the game bench: frames a second; GVM_PASS_US=N adds N us a pass, the harness's own cost of a pass that the
+    // card's passes here, queued back to back, do not pay: ~250 makes the scenes rank ticks as the games do, GAMEBENCH.md)
+    static const double passUs = env_int("GVM_PASS_US");
+    if (cs.units_reg) return (o1 - o0) / cs.unit_div / (double(t1 - t0) / dj.Frequency + passes * passUs * 1e-6);
     double mops = (o1 - o0) / (double(t1 - t0) / dj.Frequency) / 1e6;
     double per = at == 0 ? cs.bundles_fused : cs.ops_per_iter;
     if (env_int("GVM_BPP") && cs.ns) printf("  %s: %.0f bundles a pass\n", cs.name, (double)(o1 - o0) / passes);   // (passes end early on a full write cache)

@@ -81,6 +81,11 @@ static void g_bnei(GvmAsm& a, uint32_t x, int32_t i, int l) { g_br(a, GVM_CC_BNE
 
 static uint32_t fbits(float f) { uint32_t u; memcpy(&u, &f, 4); return u; }
 
+// The _v forms (the set game_vec, phase 3's 128-bit registers): what a compiler's vectorizer would make of the lone
+// kernels with isa.h's vector ops, as op 0 of path 1 (GvmAsm::vec_ops): memcpy a texel a trip (vld, vst), a vertex
+// by three vdot of its bone's rows, a sphere's b by one vdot (r28 the ray's direction (dx, dy, 1, 0), r29 1.0)
+static bool g_vec = false;
+
 // A function's frame (depth 1-4) and the stack's other traffic, by where the stack lives. Memory: 64 bytes a frame, the
 // saves at 0-15, spills at 16-31, a callee's result struct at 32-63 (r9 points the callee at it). Registers: banks of
 // moves. The file: 16 words a frame below r63, the same layout in words.
@@ -287,8 +292,11 @@ static GLogicCode g_emit_logic(GvmAsm& a, const GLogic& P) {
     a.bind(memcpy_);
     {
         int ml = a.here();
+        if (g_vec) { a.vld(8, 6, 0); a.vst(8, 5, 0); }
+        else {
         a.lw(8, 6, 0); a.lw(9, 6, 4); a.lw(10, 6, 8); a.lw(11, 6, 12);
         a.sw(8, 5, 0); a.sw(9, 5, 4); a.sw(10, 5, 8); a.sw(11, 5, 12);
+        }
         a.addi(6, 6, 16); a.addi(5, 5, 16);
         a.addbnz(7, -16, ml);
         a.ret();
@@ -302,7 +310,15 @@ static int g_emit_verts(GvmAsm& a) {
     a.bind(fn);
     int vl = a.label(), nc = a.label();
     a.li(8, (int32_t)G_VERTS); a.mv(9, 5); a.li(10, (int32_t)G_BONES); a.mv(11, 6); a.li(24, 0);
+    if (g_vec) a.li(29, (int32_t)fbits(1.0f));
     a.bind(vl);
+    if (g_vec) {   // the vertex {x, y, z, 1} against each row {m0, m1, m2, m3}
+        a.vld(12, 8, 0); a.vext(15, 12, 3);
+        a.opi(GVM_I_SLL, 16, 15, 6); a.add(16, 10, 16);
+        a.vins(12, 29, 3);
+        a.vld(17, 16, 0); a.vld(18, 16, 16); a.vld(19, 16, 32);
+        a.vop(GVM_X_VDOT, 21, 17, 12); a.vop(GVM_X_VDOT, 22, 18, 12); a.vop(GVM_X_VDOT, 23, 19, 12);
+    } else {
     a.lw(12, 8, 0); a.lw(13, 8, 4); a.lw(14, 8, 8); a.lw(15, 8, 12);
     a.opi(GVM_I_SLL, 16, 15, 6); a.add(16, 10, 16);
     a.lw(17, 16, 0); a.lw(18, 16, 4); a.lw(19, 16, 8); a.lw(20, 16, 12);
@@ -311,6 +327,7 @@ static int g_emit_verts(GvmAsm& a) {
     a.fop(GVM_F_MUL, 22, 17, 12); a.fop(GVM_F_MAD, 22, 18, 13, 22); a.fop(GVM_F_MAD, 22, 19, 14, 22); a.fop(GVM_F_ADD, 22, 22, 20);
     a.lw(17, 16, 32); a.lw(18, 16, 36); a.lw(19, 16, 40); a.lw(20, 16, 44);
     a.fop(GVM_F_MUL, 23, 17, 12); a.fop(GVM_F_MAD, 23, 18, 13, 23); a.fop(GVM_F_MAD, 23, 19, 14, 23); a.fop(GVM_F_ADD, 23, 23, 20);
+    }
     a.lw(17, 16, 48);                                        // the light: n . l, at least 0, as a byte
     a.fop(GVM_F_MUL, 18, 21, 17); a.fop(GVM_F_MAD, 18, 22, 17, 18); a.fopi(GVM_F_MAX, 18, 18, 0.0f);
     a.fopi(GVM_F_MIN, 18, 18, 255.0f); a.fop(GVM_F_FTOI, 18, 18, 0);
@@ -349,9 +366,16 @@ static int g_emit_ray(GvmAsm& a, const GRay& R) {
     a.fop(GVM_F_MUL, 13, 9, 9); a.fop(GVM_F_MAD, 13, 10, 10, 13); a.fopi(GVM_F_ADD, 13, 13, 1.0f);   // a = d . d
     a.lw(23, 14, 12); a.li(24, 0);                    // the nearest t, the colour
     a.li(15, (int32_t)G_SPHERES); a.li(16, R.s);
+    if (g_vec) {   // the direction (dx, dy, 1, 0)
+        a.vop(GVM_X_VXOR, 28, 28, 28); a.vins(28, 9, 0); a.vins(28, 10, 1);
+        a.li(29, (int32_t)fbits(1.0f)); a.vins(28, 29, 2);
+    }
     a.bind(sl);
+    if (g_vec) { a.vld(17, 15, 0); a.vext(27, 17, 3); a.vop(GVM_X_VDOT, 17, 17, 28); }   // {cx, cy, cz, cc}: b = d . c
+    else {
     a.lw(17, 15, 0); a.lw(18, 15, 4); a.lw(19, 15, 8); a.lw(27, 15, 12);
     a.fop(GVM_F_MUL, 17, 17, 9); a.fop(GVM_F_MAD, 17, 18, 10, 17); a.fop(GVM_F_ADD, 17, 17, 19);   // b = d . c
+    }
     a.fop(GVM_F_MUL, 18, 13, 27); a.fop(GVM_F_MSB, 18, 17, 17, 18);   // disc = b * b - a * cc
     a.fop(GVM_F_LT, 19, 18, 0);
     g_bnei(a, 19, 0, skip);                                    // a miss
@@ -610,7 +634,51 @@ static GScene g_scene_of(const std::string& name) {
         S.core0.E = 64; S.serial = true; S.worker = S.core0; S.jobs = {{1, 192}, {2, 832}, {1, 64}}; S.spin = 1; S.spinE = 64; S.idle = 2;
     }
     else if (n == "g_hl") { S.core0.E = 512; S.worker = S.core0; S.jobs = {{1, 128}, {2, 2048}, {2, 2048}, {1, 32}}; S.idle = 40; }
+    // the games' 256 cores (the harness's 255 workers, most of them idle): a pass's fixed cost as the games pay it
+    else if (n == "g_hlw") { S.core0.E = 512; S.worker = S.core0; S.jobs = {{1, 128}, {2, 2048}, {2, 2048}, {1, 32}}; S.idle = 251; }
+    else if (n == "g_q3w") { S.core0.E = 64; S.serial = true; S.worker = S.core0; S.jobs = {{1, 192}, {2, 832}, {1, 64}}; S.spin = 1; S.spinE = 64; S.idle = 251; }
     else if (n == "g_ray") { S.core0.E = 16; S.worker = S.core0; S.rayW = 191; }
+    // calibrated to the games' core 0 pass ends on x23 (img-fx2, frame logs of 23 October 2026; GAMEBENCH.md): Quake III
+    // rests (the REST ioctl's sync) in 41-55% of its passes and fills the write cache in the rest at ~2,600-2,700
+    // bundles; Half-Life fills it in 83% at ~2,600, rests in 14%, runs the whole budget in 3.5%
+    else if (n == "g_q3r") {   // 45% sync (2,116 bundles), 55% full (2,912): core 0's frame overlaps its three jobs
+        S.core0.E = 40; S.core0.spills = 3; S.core0.snap = 2; S.worker = S.core0; S.jobs = {{1, 16}, {2, 128}, {1, 8}};
+        S.spin = 1; S.spinE = 64; S.idle = 2;
+    }
+    else if (n == "g_q3s") {   // as g_q3r and with its jobs logic as long as core 0's, so that they slow down with it on a
+        // smaller write cache as the game's do (x23 ~50% sync, ~2,900 full; 16 buckets ~30% sync, ~1,350 full)
+        S.core0.E = 72; S.core0.spills = 3; S.core0.snap = 2; S.worker = S.core0; S.jobs = {{1, 88}, {1, 32}, {1, 8}};
+        S.spin = 1; S.spinE = 64; S.idle = 2;
+    }
+    else if (n == "g_hlr") {   // 13% sync (674), 87% full (2,693)
+        S.core0.E = 384; S.core0.snap = 2; S.worker = S.core0; S.jobs = {{1, 384}, {2, 3072}, {2, 3072}, {1, 48}}; S.idle = 40;
+    }
+    else if (n == "g_tune") {   // (calibration only: the scene from GB_TUNE, e.g. "E=64,spills=2,snap=4,serial=1,jobs=1:192/2:832,spin=1,spinE=64,idle=2")
+        S.core0.E = 64;
+        const char* e = getenv("GB_TUNE");
+        std::string t = e ? e : "";
+        size_t i = 0;
+        while (i < t.size()) {
+            size_t j = t.find(',', i); if (j == std::string::npos) j = t.size();
+            std::string kv = t.substr(i, j - i), k = kv.substr(0, kv.find('=')), v = kv.substr(kv.find('=') + 1);
+            int x = atoi(v.c_str());
+            if (k == "E") S.core0.E = x; else if (k == "spills") S.core0.spills = x; else if (k == "snap") S.core0.snap = x;
+            else if (k == "T") S.core0.T = x; else if (k == "ai") S.core0.ai = x;
+            else if (k == "serial") S.serial = x != 0; else if (k == "spin") S.spin = x; else if (k == "spinE") S.spinE = x;
+            else if (k == "idle") S.idle = x;
+            else if (k == "jobs") {
+                S.jobs.clear();
+                for (size_t a = 0; a < v.size();) {
+                    size_t b = v.find('/', a); if (b == std::string::npos) b = v.size();
+                    std::string js = v.substr(a, b - a);
+                    S.jobs.push_back({atoi(js.c_str()), atoi(js.c_str() + js.find(':') + 1)});
+                    a = b + 1;
+                }
+            }
+            i = j + 1;
+        }
+        S.worker = S.core0;
+    }
     int stack = form == "r" ? G_REGS : form == "f" ? G_FILE : G_MEM;
     S.core0.stack = S.worker.stack = S.ray.stack = stack;
     S.core0.copyop = S.worker.copyop = form == "c";
@@ -619,13 +687,16 @@ static GScene g_scene_of(const std::string& name) {
 static uint32_t g_cores_of(const GScene& S) { return 1 + (uint32_t)S.jobs.size() + (uint32_t)S.spin + (uint32_t)S.idle + (uint32_t)S.rayW; }
 static void game_cases(std::vector<Case>& v) {
     for (const char* name : {"g_logic", "g_verts", "g_ray1", "g_q3", "g_hl", "g_ray", "g_q3p",
-                             "g_logic_r", "g_logic_f", "g_logic_c", "g_q3_f", "g_hl_r", "g_hl_f", "g_hl_c", "g_ray_f"}) {
+                             "g_logic_r", "g_logic_f", "g_logic_c", "g_q3_f", "g_hl_r", "g_hl_f", "g_hl_c", "g_ray_f",
+                             "g_logic_v", "g_verts_v", "g_ray1_v", "g_hlw", "g_q3w", "g_q3r", "g_q3s", "g_hlr", "g_tune"}) {
         std::string nm = name;
         GScene S = g_scene_of(nm);
-        bool lone = nm.rfind("g_logic", 0) == 0 || nm == "g_verts" || nm == "g_ray1";
-        Case c{name, lone ? 1u : g_cores_of(S), true, [nm](std::vector<GvmAsm>& p, auto& data, uint32_t) {
+        bool vec = nm.size() > 2 && nm.compare(nm.size() - 2, 2, "_v") == 0;
+        bool lone = nm.rfind("g_logic", 0) == 0 || nm.rfind("g_verts", 0) == 0 || nm.rfind("g_ray1", 0) == 0;
+        Case c{name, lone ? 1u : g_cores_of(S), true, [nm, vec](std::vector<GvmAsm>& p, auto& data, uint32_t) {
             GScene S = g_scene_of(nm);
-            if (nm == "g_verts") {   // one core: verts of 4,096, a unit each call
+            g_vec = vec;
+            if (nm.rfind("g_verts", 0) == 0) {   // one core: verts of 4,096, a unit each call
                 GvmAsm& a = p[0];
                 g_data(data, 0, 1, S.ray);
                 int main_ = a.label();
@@ -643,10 +714,11 @@ static void game_cases(std::vector<Case>& v) {
             }
             g_scene(p, data, S);
         }};
-        c.named = true; c.set = nm == "g_q3p" ? "game2" : nm.find('_', 2) == std::string::npos ? "game" : "game_x"; c.big = true;   // (game2: cases made since the builder's sweeps began)
+        c.named = true; c.set = nm == "g_tune" ? "game_tune" : nm == "g_q3r" || nm == "g_q3s" || nm == "g_hlr" ? "game4" : nm == "g_q3p" ? "game2" : nm == "g_hlw" || nm == "g_q3w" ? "game3" : vec ? "game_vec" : nm.find('_', 2) == std::string::npos ? "game" : "game_x"; c.big = true;
+        c.vec_need = vec;   // (game2: cases made since the builder's sweeps began)
         c.skip_regs = G_SKIP_REGS; c.skip_ops = !lone; c.units_reg = 60;
         c.check_ticks = lone ? 997 : S.rayW ? 4093 : 1999;
-        c.unit_div = nm == "g_verts" ? 1 : S.core0.E ? S.core0.E * S.rounds : S.ray.w * S.ray.h / 32;
+        c.unit_div = nm.rfind("g_verts", 0) == 0 ? 1 : S.core0.E ? S.core0.E * S.rounds : S.ray.w * S.ray.h / 32;
         if (S.core0.stack == G_FILE) c.xr_need = 128;
         if (nm.rfind("g_hl", 0) == 0) c.passes = 1500;
         v.push_back(c);

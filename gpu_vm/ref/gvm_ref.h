@@ -83,6 +83,7 @@ typedef struct gvm_core {
     uint32_t xv[64][3];              // phase 3: lanes 1-3 of every register (gvm_machine.vec)
     uint32_t thin;                   // (gvm_run copies gvm_machine.thin: a trap's vector is 8-aligned)
     uint32_t stale, stale_at;        // loads of a bound word or of one with a pair (the program's error), and the first's address
+    uint32_t wait_k, wait_a;         // the last access an operation stopped: the operation's index (GVM_OPQ: the queue full), the address
     gvm_wlog wl;
 } gvm_core;
 
@@ -317,16 +318,19 @@ static void gvm__store(gvm_machine *m, gvm_core *c, uint32_t a, uint32_t bytes, 
 // it writes or reads; and a 16-byte store at GVM_OPS when GVM_OPQ are asked for already. Fetches are not looked at:
 // code an operation wrote runs after a sync, which waits for them all.
 static int gvm__in(uint32_t a, uint32_t bytes, uint32_t lo, uint32_t n) { return n && (a - lo < n || lo - a < bytes); }
-static int gvm__op_waits(const gvm_core *c, uint32_t a, uint32_t bytes, int store) {
+static int gvm__op_waits(gvm_core *c, uint32_t a, uint32_t bytes, int store) {
     uint32_t k;
-    if (a >= GVM_OPS) return store && a == GVM_OPS && bytes == 16 && c->nops == GVM_OPQ;
+    if (a >= GVM_OPS) {
+        if (!(store && a == GVM_OPS && bytes == 16 && c->nops == GVM_OPQ)) return 0;
+        c->wait_k = GVM_OPQ; c->wait_a = a; return 1;
+    }
     for (k = 0; k < c->nops; k++) {
         const uint32_t *d = c->opq[k];
         uint32_t dn = 0, sn = 0;
         if (d[0] == GVM_OP_COPY) dn = sn = d[3];
         else if (d[0] == GVM_OP_FILL) dn = d[3];
         else if (d[0] == GVM_OP_BLIT && d[7] && d[6]) { dn = d[4] * (d[7] - 1) + d[6]; sn = d[5] * (d[7] - 1) + d[6]; }
-        if (gvm__in(a, bytes, d[1], dn) || (store && gvm__in(a, bytes, d[2], sn))) return 1;
+        if (gvm__in(a, bytes, d[1], dn) || (store && gvm__in(a, bytes, d[2], sn))) { c->wait_k = k; c->wait_a = a; return 1; }
     }
     return 0;
 }
