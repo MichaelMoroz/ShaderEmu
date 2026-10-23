@@ -585,3 +585,30 @@ nearly free (2 to 16 functions: 66-71 ns); what costs is every dependence on a f
 register reads after a store (+38-50 ns), the write cache's tag reads (+27-87 ns over the texel alone), a store into
 local memory that the next bundle reads (+250 ns). Not measured: SASS counts (the GPU trace exports no shader's code;
 its SASS view is the Nsight UI's only), so the DXBC counts are the proxy.
+
+### Blocks: the fetch paid once a block (phase 1b)
+
+The fetch's chain is paid once a block rather than once a bundle when K bundles are fetched together from addresses that
+do not wait for them and run straight, with one decision at the block's end (`BLOCK=K`, `floor7.txt` to `floor9.txt`;
+two ops of the 8-function unit a bundle, the decision a register != 0). One core, ns a bundle:
+
+| K | 1 | 2 | 3 | 4 | 6 | 8 |
+|---|---|---|---|---|---|---|
+| the decision on the last bundle's register, after the ops | 113.2 | 81.8 | 69.4 | 64.2 | 59.3 | 57.6 |
+| the decision from the first bundle, before the ops (the next block in flight while they run) | 79.4 | 62.3 | 58.9 | 57.0 | 55.2 | 52.8 |
+
+Today's shape with the same unit and test is 77.7. Loads in blocks (op 0 a load in every bundle, or in every other; K 4):
+the data texel alone 86.4 and 68.3 (today's shape 83.5 every bundle), x23's two buckets of four 125.3 and 93.8 (110.4).
+In a block a bundle's register write of a loaded value holds every later bundle (a store of a value still in flight
+stops the warp's issue), so the loads that overlapped the fetch are on the path now. Written at the block's end instead
+(`DEFER`, the compiler keeping a load's uses in later blocks): every other bundle a load, K 2, 4, 8: the texel 68.9,
+61.8, 64.4; two buckets 78.4, 83.2, 77.7.
+
+Guest blocks (`gpu_vm/tick/x30/blocks.py` on gvm_cpu's profiles of the po builds, `build/bench_games/prof_lay/po`):
+bundles a run between decisions (a branch, addbnz, a j, a call, a return) are 3.09 for Quake III's core 0, 3.95 its
+workers, 3.33 Half-Life's core 0, 4.00 its workers; of the bundles 10-12% are in runs of 1, 11-16% of 2, 14-26% of 3-4,
+16-34% of 5-8, 18-42% longer; 48-59% hold a load or store. Weighed so, a block step costs about 59.5 ns an integer bundle
+against 77.7 (1.31x) and about 81 ns a bundle of the games' mix with the write cache and deferred loads against 94
+(1.16x; 1.06x without deferral, 1.2x with no write cache at all). The fetch is not where the rest of the time is: a
+block of straight bundles is bound by its registers' and loads' chains through local memory, which the in-order warp
+cannot overlap. Short of 1.6x: x30 not built on it.

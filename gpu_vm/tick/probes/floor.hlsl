@@ -53,7 +53,7 @@ cbuffer P : register(b0) { uint _N, _Cores, _Seed, _Mask; };
 #ifndef ILP
 #define ILP 1
 #endif
-static const uint NCAP = 400000;
+static const uint NCAP = 100000;   // (a draw stays well under a second)
 static const uint DMASK = 0x7ffcu;   // loads within 32 KB of data (2,048 texels: the texture cache keeps them)
 static const uint CW = 8192;   // _Code's width: bundle b at (b % CW, b / CW)
 
@@ -173,6 +173,94 @@ uint4 dtex(uint t) { return _Data.Load(int3(t % 8192, (t / 8192) & 7, 0)); }
 // next bundle in t. Encoding (floor.cpp): t.x op 0 (ra bits 0-7, rb 8-15, rd 16-23, f 24-31), t.y op 1 (the same),
 // t.z the long immediate (or a load's offset), t.w control: bit 0 taken (BR 0) or the sense, bits 1-4 cc, bits 8-15 ca,
 // 16-23 cb (or imm6 in its low bits), 24-31 the offset in bundles (signed).
+#ifndef DEFER
+#define DEFER 0
+#endif
+static uint pv[8], pd[8];   // (DEFER: a load's value and register, written at the block's end)
+uint ops(uint4 t, uint base, uint K, bool memk, inout uint sum, uint slot = 0) {   // a bundle's two ops (no fetch, no branch); op 1's value
+    uint v0 = 0, v1 = 0;
+#if OPS >= 1
+    uint ra0 = (t.x & 255) + base, rb0 = ((t.x >> 8) & 255) + base, d0 = ((t.x >> 16) & 255) + base, f0 = t.x >> 24;
+    uint A0 = RD(ra0), B0 = RD(rb0);
+#if NRD >= 3
+    uint C0 = RD(((t.x >> 26) & 63) + base);
+#else
+    uint C0 = A0;
+#endif
+#if IMM
+    B0 = (f0 & 0x80) ? t.z : B0;
+#endif
+#if MEM == 0
+#if UNIT == 21
+    [branch] if (f0 & 0x40) v0 = funit(f0, A0, B0, C0); else v0 = unit(f0, A0, B0, C0);
+#else
+    v0 = unit(f0, A0, B0, C0);
+#endif
+#else
+    if (!memk) v0 = unit(f0, A0, B0, C0); else {
+#if MEM == 1
+    uint ad = (A0 + t.z) & DMASK;
+    v0 = pick(dtex(ad >> 4), (ad >> 2) & 3);
+#elif MEM == 2 || MEM == 5
+    uint ad = (A0 + t.z) & DMASK, tx = ad >> 4, i = (ad >> 2) & 3, e = (tx & (NT - 1)) + K * NT;
+    uint4 q = dtex(tx);
+    bool hit = wt[e] == tx;
+#if MEM == 5
+    uint w = hit ? wd[4 * e + i] : pick(q, i);
+    wt[e] = tx; wd[4 * e + i] = B0;   // (a store: the texel's tag and its word; a miss takes the entry)
+    v0 = w;
+#else
+    v0 = hit ? wd[4 * e + i] : pick(q, i);
+#endif
+#else   // two buckets of four (x23's mfind without overflow)
+    uint ad = (A0 + t.z) & DMASK, tx = ad >> 4, i = (ad >> 2) & 3;
+    uint b1 = (tx * 0x9e3779b1u) >> 28, b2 = 16 + ((tx * 0x85ebca6bu + 0x165667b1u) >> 28);
+    uint4 q = dtex(tx);
+    uint4 A = 0xffffffffu, B = 0xffffffffu;
+    uint KB = K * NT;
+#if MEM == 4
+    [branch] if ((tx & bloom) == tx)
+#endif
+    {
+        A = uint4(wt[KB + 4 * b1], wt[KB + 4 * b1 + 1], wt[KB + 4 * b1 + 2], wt[KB + 4 * b1 + 3]);
+        B = uint4(wt[KB + 4 * b2], wt[KB + 4 * b2 + 1], wt[KB + 4 * b2 + 2], wt[KB + 4 * b2 + 3]);
+    }
+    bool4 ka = (A & 0x0fffffffu) == tx, kb = (B & 0x0fffffffu) == tx;
+    uint msk = (ka.x ? 1u : 0u) | (ka.y ? 2u : 0u) | (ka.z ? 4u : 0u) | (ka.w ? 8u : 0u)
+             | (kb.x ? 16u : 0u) | (kb.y ? 32u : 0u) | (kb.z ? 64u : 0u) | (kb.w ? 128u : 0u);
+    uint k = firstbitlow(msk);
+    uint e = k < 4 ? 4 * b1 + k : k < 8 ? 4 * b2 + (k & 3) : NT;
+    v0 = e < NT ? wd[4 * (e + KB) + i] : pick(q, i);
+#endif
+    }
+#endif
+#if WRT
+    if (DEFER && memk) { pv[slot] = v0; pd[slot] = d0; } else WR(d0, v0);
+#else
+    sum ^= v0 + d0;
+#endif
+#endif
+#if OPS >= 2
+    uint ra1 = (t.y & 255) + base, rb1 = ((t.y >> 8) & 255) + base, d1 = ((t.y >> 16) & 255) + base, f1 = t.y >> 24;
+    uint A1 = RD(ra1), B1 = RD(rb1);
+#if NRD >= 3
+    uint C1 = RD(((t.y >> 26) & 63) + base);
+#else
+    uint C1 = A1;
+#endif
+#if MEM == 0 && UNIT == 21
+    v1 = unit(f1, A1, B1, C1);
+#else
+    v1 = unit(f1, A1, B1, C1);
+#endif
+#if WRT
+    WR(d1, v1);
+#else
+    sum ^= v1 + d1;
+#endif
+#endif
+    return v1;
+}
 void bundle(inout uint4 t, inout uint tp, uint K, inout uint sum) {
     uint ctl = t.w;
     uint tn = (tp + 1) & _Mask;
@@ -211,82 +299,7 @@ void bundle(inout uint4 t, inout uint tp, uint K, inout uint sum) {
     bool tk = c != ((ctl & 1) != 0);
 #endif
 #endif
-#if OPS >= 1
-    uint ra0 = (t.x & 255) + base, rb0 = ((t.x >> 8) & 255) + base, d0 = ((t.x >> 16) & 255) + base, f0 = t.x >> 24;
-    uint A0 = RD(ra0), B0 = RD(rb0);
-#if NRD >= 3
-    uint C0 = RD(((t.x >> 26) & 63) + base);
-#else
-    uint C0 = A0;
-#endif
-#if IMM
-    B0 = (f0 & 0x80) ? t.z : B0;
-#endif
-#if MEM == 0
-#if UNIT == 21
-    [branch] if (f0 & 0x40) v0 = funit(f0, A0, B0, C0); else v0 = unit(f0, A0, B0, C0);
-#else
-    v0 = unit(f0, A0, B0, C0);
-#endif
-#elif MEM == 1
-    uint ad = (A0 + t.z) & DMASK;
-    v0 = pick(dtex(ad >> 4), (ad >> 2) & 3);
-#elif MEM == 2 || MEM == 5
-    uint ad = (A0 + t.z) & DMASK, tx = ad >> 4, i = (ad >> 2) & 3, e = (tx & (NT - 1)) + K * NT;
-    uint4 q = dtex(tx);
-    bool hit = wt[e] == tx;
-#if MEM == 5
-    uint w = hit ? wd[4 * e + i] : pick(q, i);
-    wt[e] = tx; wd[4 * e + i] = B0;   // (a store: the texel's tag and its word; a miss takes the entry)
-    v0 = w;
-#else
-    v0 = hit ? wd[4 * e + i] : pick(q, i);
-#endif
-#else   // two buckets of four (x23's mfind without overflow)
-    uint ad = (A0 + t.z) & DMASK, tx = ad >> 4, i = (ad >> 2) & 3;
-    uint b1 = (tx * 0x9e3779b1u) >> 28, b2 = 16 + ((tx * 0x85ebca6bu + 0x165667b1u) >> 28);
-    uint4 q = dtex(tx);
-    uint4 A = 0xffffffffu, B = 0xffffffffu;
-    uint KB = K * NT;
-#if MEM == 4
-    [branch] if ((tx & bloom) == tx)
-#endif
-    {
-        A = uint4(wt[KB + 4 * b1], wt[KB + 4 * b1 + 1], wt[KB + 4 * b1 + 2], wt[KB + 4 * b1 + 3]);
-        B = uint4(wt[KB + 4 * b2], wt[KB + 4 * b2 + 1], wt[KB + 4 * b2 + 2], wt[KB + 4 * b2 + 3]);
-    }
-    bool4 ka = (A & 0x0fffffffu) == tx, kb = (B & 0x0fffffffu) == tx;
-    uint msk = (ka.x ? 1u : 0u) | (ka.y ? 2u : 0u) | (ka.z ? 4u : 0u) | (ka.w ? 8u : 0u)
-             | (kb.x ? 16u : 0u) | (kb.y ? 32u : 0u) | (kb.z ? 64u : 0u) | (kb.w ? 128u : 0u);
-    uint k = firstbitlow(msk);
-    uint e = k < 4 ? 4 * b1 + k : k < 8 ? 4 * b2 + (k & 3) : NT;
-    v0 = e < NT ? wd[4 * (e + KB) + i] : pick(q, i);
-#endif
-#if WRT
-    WR(d0, v0);
-#else
-    sum ^= v0 + d0;
-#endif
-#endif
-#if OPS >= 2
-    uint ra1 = (t.y & 255) + base, rb1 = ((t.y >> 8) & 255) + base, d1 = ((t.y >> 16) & 255) + base, f1 = t.y >> 24;
-    uint A1 = RD(ra1), B1 = RD(rb1);
-#if NRD >= 3
-    uint C1 = RD(((t.y >> 26) & 63) + base);
-#else
-    uint C1 = A1;
-#endif
-#if MEM == 0 && UNIT == 21
-    v1 = unit(f1, A1, B1, C1);
-#else
-    v1 = unit(f1, A1, B1, C1);
-#endif
-#if WRT
-    WR(d1, v1);
-#else
-    sum ^= v1 + d1;
-#endif
-#endif
+    v1 = ops(t, base, K, true, sum);
 #if !BRFIRST
 #if BR == 0
     bool tk = (ctl & 1) != 0;
@@ -321,6 +334,41 @@ void bundle(inout uint4 t, inout uint tp, uint K, inout uint sum) {
 #endif
 }
 
+
+#ifdef BLOCK   // blocks of BLOCK bundles: fetched together at addresses that do not wait for them, run straight, one decision
+#ifndef EARLY
+#define EARLY 0
+#endif
+#ifndef MEMEVERY
+#define MEMEVERY 1
+#endif
+bool decide(uint ctl) { return (RD((ctl >> 8) & 255) != 0) == ((ctl & 1) != 0); }   // a register != 0 (15% taken)
+void block_run(uint core, inout uint sum) {
+    uint4 blk[BLOCK], nxt[BLOCK];
+    uint bi = (core * 13u) & _Mask, k, j;
+    [unroll] for (k = 0; k < BLOCK; k++) blk[k] = code(bi * BLOCK + k);
+    uint n = min(_N, NCAP / BLOCK);
+    [loop] for (j = 0; j < n; j++) {
+#if EARLY   // the decision from the block's first bundle, made before its ops: the next block in flight while they run
+        uint c0 = blk[0].w;
+        uint nb = (bi + (decide(c0) ? asuint((int)c0 >> 24) : 1u)) & _Mask;
+        [unroll] for (k = 0; k < BLOCK; k++) nxt[k] = code(nb * BLOCK + k);
+#endif
+        [unroll] for (k = 0; k < BLOCK; k++) sum += ops(blk[k], 0, 0, (k % MEMEVERY) == 0, sum, k);
+#if DEFER   // the block's loads land in their registers at its end (the compiler keeps their uses in later blocks)
+        [unroll] for (k = 0; k < BLOCK; k += MEMEVERY) WR(pd[k], pv[k]);
+#endif
+#if !EARLY   // the decision at the block's end, on its last bundle's register as the ops left it
+        uint cl = blk[BLOCK - 1].w;
+        uint nb = (bi + (decide(cl) ? asuint((int)cl >> 24) : 1u)) & _Mask;
+        [unroll] for (k = 0; k < BLOCK; k++) nxt[k] = code(nb * BLOCK + k);
+#endif
+        [unroll] for (k = 0; k < BLOCK; k++) blk[k] = nxt[k];
+        bi = nb;
+    }
+    sum ^= bi;
+}
+#endif
 #ifdef CHASE
 static uint CA_[CHASE];
 #endif
@@ -364,7 +412,12 @@ uint4 frag(float4 pos : SV_POSITION) : SV_Target {
     uint4 t2 = code(tp2);
     g_nn[1] = code((tp2 + 1) & _Mask);
 #endif
+#ifdef BLOCK
+    block_run(core, sum);
+    uint n = 0;
+#else
     uint n = min(_N, NCAP);
+#endif
     [loop] for (k = 0; k < n; k++) {
         bundle(t, tp, 0, sum);
 #if ILP == 2

@@ -189,7 +189,9 @@ int main(int argc, char** argv) {
             }
             double b1 = 1e9, b2 = 1e9;
             for (uint32_t r = 0; r < rounds; r++) { b1 = std::min(b1, timed(n1)); b2 = std::min(b2, timed(n2)); }
+            if (b2 > 0.25) { printf("%s: a draw took %.3f s: stopped (a draw must stay well under a second)\n", pr.name.c_str(), b2); return 1; }
             ns = (b2 - b1) / (n2 - n1) * 1e9;
+            for (size_t i = 0; i < nm.size(); i++) if (nm[i] == "BLOCK") ns /= atoi(vl[i].c_str());   // (a turn is a block: ns a bundle)
             mhz = clock();
         }
         std::string ds; for (auto& dd : pr.defs) ds += dd + " ";
