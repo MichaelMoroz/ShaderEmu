@@ -42,6 +42,7 @@
 #include "llvm/ADT/DepthFirstIterator.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/CodeGen/LivePhysRegs.h"
+#include "llvm/IR/GlobalValue.h"
 #include "llvm/CodeGen/MachineBlockFrequencyInfo.h"
 #include "llvm/CodeGen/MachineBranchProbabilityInfo.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
@@ -462,6 +463,9 @@ bool GPUVMGlobalFill::speculable(const MachineInstr &X, const Place &P,
       Base = R;
   // [r0 + symbol], [sp + k], PIC's [the function + %fnrel(symbol)]
   const MachineOperand &Imm = X.getOperand(2);
+  // (an undefined weak symbol is 0: not a load that cannot fault)
+  if (Imm.isGlobal() && Imm.getGlobal()->hasExternalWeakLinkage())
+    return false;
   if (Base == GPUVM::R0 || Base == GPUVM::R2 ||
       (!Imm.isImm() && Imm.getTargetFlags() == GPUVMII::MO_FNREL))
     return true;

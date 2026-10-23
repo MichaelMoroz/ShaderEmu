@@ -51,6 +51,12 @@ public:
   void emitInstruction(const MachineInstr *MI) override;
   void emitStartOfAsmFile(Module &M) override;
   void emitBasicBlockStart(const MachineBasicBlock &MBB) override;
+  void emitFunctionEntryLabel() override;
+
+  // The function's start as a temporary label (GPUVMII::MO_FNBASE): what the
+  // lpc of %fnrel's base names, resolved by the assembler, so that a --wrap
+  // of the function's own symbol does not move it.
+  MCSymbol *FnBase = nullptr;
   void emitFunctionBodyEnd() override;
   bool PrintAsmOperand(const MachineInstr *MI, unsigned OpNo,
                        const char *ExtraCode, raw_ostream &OS) override;
@@ -74,6 +80,8 @@ static MCOperand symbolOperand(const MachineOperand &MO, MCSymbol *Sym,
   if (!MO.isJTI() && !MO.isMBB() && MO.getOffset())
     E = MCBinaryExpr::createAdd(
         E, MCConstantExpr::create(MO.getOffset(), Ctx), Ctx);
+  if (MO.getTargetFlags() == GPUVMII::MO_FNBASE)
+    E = MCSymbolRefExpr::create(static_cast<GPUVMAsmPrinter &>(AP).FnBase, Ctx);
   if (MO.getTargetFlags() == GPUVMII::MO_TPREL)
     E = MCSpecifierExpr::create(E, GPUVM::S_TPREL, Ctx);
   if (MO.getTargetFlags() == GPUVMII::MO_FNREL)
@@ -254,6 +262,12 @@ static GPUVMTargetStreamer *targetStreamer(MCStreamer &S) {
 void GPUVMAsmPrinter::emitStartOfAsmFile(Module &M) {
   if (GPUVMTargetStreamer *TS = targetStreamer(*OutStreamer))
     TS->setSoftLabels(true);
+}
+
+void GPUVMAsmPrinter::emitFunctionEntryLabel() {
+  AsmPrinter::emitFunctionEntryLabel();
+  FnBase = OutContext.createTempSymbol("gvmfn");
+  OutStreamer->emitLabel(FnBase);
 }
 
 void GPUVMAsmPrinter::emitBasicBlockStart(const MachineBasicBlock &MBB) {

@@ -44,6 +44,8 @@ enum TOF : unsigned {
   MO_None = 0,
   MO_TPREL = 1, // %tprel(sym): from the thread pointer
   MO_FNREL = 2, // %fnrel(sym - fn): from the function's start (PIC)
+  MO_FNBASE = 3, // the function's start as a label of its own (lpc's base
+                 // of %fnrel: not the symbol, which --wrap may move)
 };
 } // namespace GPUVMII
 } // namespace llvm

@@ -22,6 +22,7 @@
 #include "GPUVMSubtarget.h"
 #include "MCTargetDesc/GPUVMBaseInfo.h"
 #include "llvm/CodeGen/LivePhysRegs.h"
+#include "llvm/IR/GlobalValue.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/Support/CommandLine.h"
@@ -90,6 +91,9 @@ bool GPUVMBranchFill::movable(const MachineInstr &I,
     if (!Base.isReg() || (Base.getReg() != GPUVM::R0 &&
                           Base.getReg() != GPUVM::R2 &&
                           Base.getReg() != GPUVM::R32 && !FnRel))
+      return false;
+    // (an undefined weak symbol is 0: not a load that cannot fault)
+    if (Imm.isGlobal() && Imm.getGlobal()->hasExternalWeakLinkage())
       return false;
     if (Base.getReg() == GPUVM::R32 &&
         !I.getMF()->getSubtarget().getFrameLowering()->hasFP(*I.getMF()))

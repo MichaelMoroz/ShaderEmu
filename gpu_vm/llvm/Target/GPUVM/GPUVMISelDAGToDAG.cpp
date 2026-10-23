@@ -79,7 +79,7 @@ bool GPUVMDAGToDAGISel::runOnMachineFunction(MachineFunction &MF) {
   MachineBasicBlock &Entry = MF.front();
   BuildMI(Entry, Entry.begin(), DebugLoc(),
           MF.getSubtarget().getInstrInfo()->get(GPUVM::LPC), R)
-      .addGlobalAddress(&MF.getFunction());
+      .addGlobalAddress(&MF.getFunction(), 0, GPUVMII::MO_FNBASE);
   return true;
 }
 
