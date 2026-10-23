@@ -7,6 +7,7 @@ a word a vertex of where it is in one atlas of the light maps. A frame still fin
 as ref/gl does; a seen surface then only checks its light map and is a run of those vertices, and
 a texture's runs are a few lit draws.
 */
+void hlglSay( const char *fmt, ... );	// (gl_shaderemu.c)
 void *hlglKeptMemory( unsigned bytes );
 int hlglLightAtlas( int count, int block, const int *names );
 void hlglDrawKept( const void *vertices, const uint *light, const uint *firsts, const uint *counts, int runs );
@@ -796,12 +797,12 @@ static qboolean R_KeptWorldGive( uint clipflags )
 	{
 		for( int n = 0; n < went.numents; n++ )
 			if( went.ent_slow[n] )
-				fprintf( stderr, "hl world: %s %d slow %d\n", went.ent[n].e->model->name, went.ent[n].e->curstate.rendermode, went.ent_slow[n] );
+				hlglSay( "hl world: %s %d slow %d\n", went.ent[n].e->model->name, went.ent[n].e->curstate.rendermode, went.ent_slow[n] );
 		for( int i = 0, solids = tr.draw_list->num_solid_entities; i < solids + (int)tr.draw_list->num_trans_entities; i++ )
 		{
 			cl_entity_t *e = i < solids ? tr.draw_list->solid_entities[i] : tr.draw_list->trans_entities[i - solids];
 			if( e->model && e->model->type == mod_brush )
-				fprintf( stderr, "hl world: %s %s mode %d turned %d\n", i < solids ? "solid" : "trans", e->model->name,
+				hlglSay( "hl world: %s %s mode %d turned %d\n", i < solids ? "solid" : "trans", e->model->name,
 					e->curstate.rendermode, e->angles[0] != 0.0f || e->angles[1] != 0.0f || e->angles[2] != 0.0f );
 		}
 	}
@@ -820,7 +821,7 @@ static qboolean R_KeptWorldGive( uint clipflags )
 		tl.sum[9] += now - tl.give, tl.n++, tl.sum[10] += tl_glow.unused[0], tl.sum[11] += tl_glow.unused[1];
 		if( tl.n == 256 )
 		{
-			fprintf( stderr, "hl timeline (passes after the give): mark %.1f help %.1f world %.1f enhelp %.1f ents %.1f glow %.1f relight %.1f; asks ents %.1f world %.1f; frame %.1f; glow %u instructions, %u glows\n",
+			hlglSay( "hl timeline (passes after the give): mark %.1f help %.1f world %.1f enhelp %.1f ents %.1f glow %.1f relight %.1f; asks ents %.1f world %.1f; frame %.1f; glow %u instructions, %u glows\n",
 				tl.sum[0] / 3136.0, tl.sum[1] / 3136.0, tl.sum[2] / 3136.0, tl.sum[3] / 3136.0, tl.sum[4] / 3136.0, tl.sum[5] / 3136.0, tl.sum[6] / 3136.0, tl.sum[7] / 3136.0, tl.sum[8] / 3136.0, tl.sum[9] / 3136.0, tl.sum[10] / 256, tl.sum[11] / 256 );
 			memset( tl.sum, 0, sizeof( tl.sum )), tl.n = 0;
 		}
@@ -1101,8 +1102,8 @@ void R_KeptEntsFinish( void )
 	rdbg0.n += hlglWait( ents_worker ) * 1000;
 	ents_done = 1;
 	if( !( tr.framecount & 255 ))
-		fprintf( stderr, "hl ents job a frame: entities %u (%u, %u surfaces), lights %u; world walk %u sort %u mark %u nodes %u\n", edbg.ents / 256, edbg.n / 256, edbg.surfs / 256, edbg.light / 256, ( wdbg.walk - wdbg_said.walk ) / 256, ( wdbg.sort - wdbg_said.sort ) / 256, ( wdbg.unused[0] - wdbg_said.unused[0] ) / 256, ( wdbg.unused[1] - wdbg_said.unused[1] ) / 256 ), memset( &edbg, 0, sizeof( edbg )), wdbg_said = wdbg,
-		fprintf( stderr, "hl relight a frame: walk %u light %u (%u) write %u ents %u write %u; ents %u draw %u world %u\n", ( rdbg.walk - rdbg_said.walk ) / 256, ( rdbg.light - rdbg_said.light ) / 256, 0,
+		hlglSay( "hl ents job a frame: entities %u (%u, %u surfaces), lights %u; world walk %u sort %u mark %u nodes %u\n", edbg.ents / 256, edbg.n / 256, edbg.surfs / 256, edbg.light / 256, ( wdbg.walk - wdbg_said.walk ) / 256, ( wdbg.sort - wdbg_said.sort ) / 256, ( wdbg.unused[0] - wdbg_said.unused[0] ) / 256, ( wdbg.unused[1] - wdbg_said.unused[1] ) / 256 ), memset( &edbg, 0, sizeof( edbg )), wdbg_said = wdbg,
+		hlglSay( "hl relight a frame: walk %u light %u (%u) write %u ents %u write %u; ents %u draw %u world %u\n", ( rdbg.walk - rdbg_said.walk ) / 256, ( rdbg.light - rdbg_said.light ) / 256, 0,
 			( rdbg.write - rdbg_said.write ) / 256, ( rdbg.ents - rdbg_said.ents ) / 256, ( rdbg.ewrite - rdbg_said.ewrite ) / 256, rdbg0.n / 256, rdbg0.draw / 256, rdbg0.world / 256 ), rdbg_said = rdbg, memset( &rdbg0, 0, sizeof( rdbg0 ));
 	world_finishing = 1;
 	R_EntsDrawOnWorker( );

@@ -172,11 +172,33 @@ client had predicted wrong (out of 400, walking in a circle; `HL_SERVER=every` g
   the settle and the older ones were lost. They go whole to the server's next frame now
   (`SE_ServerTakePacket`; `HL_INBOX=loopback` is the old way). 42 of 400 before, 18 after.
 
-A packed file (a map, a model, a sprite) is not opened on a worker: `FS_OpenInflated` refuses it
-and the open fails. A level change the game makes in the server's frame (a `trigger_changelevel`:
+A packed file (a map, a model, a sprite) is not opened by a worker's job: `FS_OpenInflated` refuses
+it there and the open fails, and opens it on core 0 for the server's worker and the drawing's (below).
+A level change the game makes in the server's frame (a `trigger_changelevel`:
 hldemo1's elevator) is therefore a `changelevel2` command for core 0 (`pfnChangeLevel`), which
 reads the next map with the server settled. Before 19 October 2026 the worker read the packed
 bytes as the map and its frame never ended: the game stood in the elevator.
+
+A studio model's sequence groups (`scientist01.mdl` to `scientist07.mdl`, `barney01.mdl` and the
+like) are loaded with the model by core 0 (`SE_StudioGroupsLoad`, from `Mod_ForName`): the engine
+and the client's renderer load one where it is first played, the server's worker or the drawing's.
+Before 21 October 2026 that froze the game in hldemo1's first corridor, 28 s into a walk: the server's
+and the drawing's workers run on stacks of their own, which `mcw_on_worker` does not know, so the
+drawing inflated the group itself with `media_inflate` on workers that were in the rings' loops and
+waited for them for ever, and core 0 for it at the settle. Now a file such a worker opens is opened by
+core 0 (`FS_OpenInflated` asks through `SE_ServerOnCore0`), and `SE_MediaWorkers` gives no workers off
+core 0, while the rings are on or while core 0 makes the server's ask: a decode there is core 0's
+alone. hldemo1's groups are 0.74 MB (barney 3, scientist 7, zombie 3).
+
+The walk that found it is `rvc_cpu` with the card's model on the desktop (`--desktop`, `RVC_SOUND`,
+`RVC_WCACHE`, `RVC_ADFAULT`, `RVC_RACES`, `--ips 3100000 --pass-ms 0.2`) and an `HL_SCRIPT` of
+`+forward` with a turn every 4 to 8 s, shots, jumps and use, for 1,200 s of the guest's time: before,
+the level's clock stopped at 28 s in every run; after, it reached 279 s (`HL_RENDER=core` 274, `wait`
+257), 0 undone. It also found statics both the server's worker and another core wrote, each core's own
+now (`SE_Who`): `Info_ValueForKey`'s values, the PVS's `g_visdata` (the server's and the drawing's
+`R_FatPVS`), and the random generator's state, which the drawing shared with core 0; and the
+renderer's lines to stderr write by themselves (`hlglSay`), as stdio's state was core 0's and the
+drawing's at once.
 
 The studio models' hit boxes are hulls of each core's own (`studio_hull`, `studio_of[3]` in
 `mod_studio.c`), made by the core that first traces against one (`Mod_HullForStudio`); the box
@@ -184,6 +206,41 @@ hulls of `pm_trace.c` are each core's too. Before 21 October 2026 only core 0's 
 server's worker traced its bullets against hulls with no planes and every shot went through a
 monster (a headcrab after the glock in hldemo2 could not be killed; the crowbar hit through the
 hull's other test). Now two glock shots of 8 kill it (`HL_SCRIPT`, `ent_info 530`: health -3).
+A job of the light ahead (the glows' `SE_VisTraceFraction`) has a box hull of its own too (`box_of[3]`):
+under `HL_RENDER=core` it and core 0's prediction wrote the same planes (88 undone).
+
+#### A level that goes, and the sequence groups after it
+
+On 21 October 2026 the game died in the Unity world when the elevator took the player from hldemo1 to
+hldemo2. Three things were wrong, each found on `rvc_cpu` with the card's model (the walk's switches,
+`HL_SCRIPT` with `-dev 1`: `ent_fire 1 set origin`, `ent_fire startdometalk_mm use`, the elevator's
+`startele1` used):
+
+- A level that goes waits first for the server's frame, the drawing and every job (`SE_LevelSettle` in
+  `rnd_shaderemu.c`, from `COM_Frame` whenever the host's state is not a running frame). Before, the
+  drawing given the old level's last frame at the loading plaque was still out while core 0 freed the
+  world and the studio cache (`Mod_PurgeStudioCache`), and the rings stayed on, so core 0 inflated the
+  next map alone: the change took 200 s of the guest's, 122 now.
+- Whether a sequence group is loaded is its pointer off core 0 (`Mod_CacheCheck`). The check walked
+  the studio cache's pool, whose list and the pool table core 0 may be changing (a pool made moves the
+  table): a bones-ahead job found `scientist01.mdl` not loaded at the dome's talk, asked for the file,
+  was refused (a packed file on a worker), and the `Host_Error` from the worker trashed the heap
+  (a capture with `HL_RENDER=core`; it depends on timing). A group a worker still finds missing
+  gives the first sequence's pose and says `a worker wanted ...`; it has not been said since.
+- Statics of core 0's and a worker's shared a texel: `serving` (core 0's, whether it makes the server's
+  ask) beside the server's count of asks (`se_asks`, its own texel now), so a clear of `serving` could
+  be undone and `Cbuf_Execute` then ran commands with the server's frame out; the drawing's `pulled`
+  vertices beside `se_settle_passes`; and `HL_ROTATION=check` printed with stdio from the drawing's
+  worker (`hlglSay` now).
+
+Five level changes in one run (the elevator, two `changelevel`s each way, `map hldemo2`, 3,000 s of the
+guest's) pass with the default and with `HL_RENDER=core`, 0 undone; before the last two fixes one
+`HL_RENDER=core` run died in hldemo2 (`Mem_FindPool: not allocated or double freed pool`, 1 undone). Barney's `c3a2_draw` at the elevator
+(`domebarn_script_4`, which does not turn him: `m_fMoveTo` 0) was the same drawn by the default as by
+everything on core 0 (`HL_RENDER=core HL_BONES=inline HL_LIGHT=inline HL_SERVER=inline`): each frame
+of one has a frame of the other within 26 to 46 changed pixels of his 200 x 200, against 75 between
+two frames. The level's clock ran at 0.56 of the guest's from the talk to the elevator (the server's
+frame given at most 0.25 s, `MAX_FRAMETIME`), so the player there outruns the game's people.
 
 Decals and brush models ask for `glPolygonOffset`, which the GPU has no state for: with
 `GL_POLYGON_OFFSET_FILL` on `gl_shaderemu.c` moves each point toward the eye along its own ray,

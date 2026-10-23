@@ -277,6 +277,19 @@ void SE_RenderStop( void )
 	hlglRingsStop();
 }
 
+// Before a level is changed, loaded or left: the server's frame, the drawing and their jobs done,
+// the workers free (a level's data is freed and read anew next, the next map inflated on them).
+void hlglJobsWaitAll( void );
+int SE_ServerBusy( void );
+void SE_LevelSettle( void )
+{
+	int server = SE_ServerBusy( ), drawing = out && !mcw_done( worker );
+	SE_ServerSettle();
+	SE_RenderStop();
+	hlglJobsWaitAll();
+	Con_Reportf( "a level goes: the server's frame was %s, the drawing %s\n", server ? "out" : "done", drawing ? "out" : out ? "done" : "none" );
+}
+
 // GL_RenderFrame, on the drawing's worker when it has one.
 void SE_RenderFrame( const ref_viewpass_t *rvp )
 {

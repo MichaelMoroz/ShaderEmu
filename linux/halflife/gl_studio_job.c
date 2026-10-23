@@ -5,6 +5,7 @@ Included at the end of ref/gl's gl_studio.c. The first core sets each mesh's sta
 for its triangles in the frame; a job then moves the vertices by their bones, lights the normals
 and writes the triangles there, as tagged vertices whose tag picks one of 256 shades.
 */
+void hlglSay( const char *fmt, ... );	// (gl_shaderemu.c)
 int hlglWorker( void );
 void hlglPost( int k, uint ( *fn )( uint, uint ), uint a0, uint a1 );
 uint *hlglShadedRoom( int count, const float *rgb, float alpha, uint **fill, uint *key );
@@ -337,7 +338,7 @@ static qboolean R_StudioPointsOnWorker( void )
 	else if( m_pSubModel->numverts > JOB_VERTS || m_pSubModel->numnorms > JOB_VERTS || m_pSubModel->nummesh > JOB_MESHES
 		|| m_pStudioHeader->numbones > MAXSTUDIOBONES ) why = "too big";
 	if( why && off == 2 && logged++ < 64 )   // (HL_STUDIO=log)
-		fprintf( stderr, "studio inline: %s %s\n", m_pStudioHeader->name, why );
+		hlglSay( "studio inline: %s %s\n", m_pStudioHeader->name, why );
 	if( why )
 		return false;
 
@@ -351,7 +352,7 @@ static qboolean R_StudioPointsOnWorker( void )
 		if( FBitSet( ptexture[pskinref[pmesh[j].skinref]].flags | g_nForceFaceFlags, STUDIO_NF_UV_COORDS ))
 		{
 			if( off == 2 && logged++ < 64 )
-				fprintf( stderr, "studio inline: %s float mesh\n", m_pStudioHeader->name );
+				hlglSay( "studio inline: %s float mesh\n", m_pStudioHeader->name );
 			return false;
 		}
 
@@ -475,7 +476,7 @@ static qboolean R_StudioPointsOnWorker( void )
 		tr.blend = oldblend;
 	}
 	if(( tr.framecount & 255 ) == 7 )	// DEBUG
-		fprintf( stderr, "studio job %d: %s verts %d norms %d meshes %d\n", k, m_pStudioHeader->name, job->numverts, m_pSubModel->numnorms, job->nummesh );
+		hlglSay( "studio job %d: %s verts %d norms %d meshes %d\n", k, m_pStudioHeader->name, job->numverts, m_pSubModel->numnorms, job->nummesh );
 posted:;
 	int cost[JOB_MESHES], total = 0;
 	for( int j = 0; j < job->nummesh; j++ )

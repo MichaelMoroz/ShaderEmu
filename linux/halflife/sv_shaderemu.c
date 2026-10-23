@@ -74,7 +74,7 @@ static void setup( void )
 
 // ---- what the worker asks of this core ----
 
-uint se_asks[64], se_asks_n;	// DEBUG
+struct se_asks_t { uint fn[64], n, unused[3]; } se_asks __attribute__(( aligned( 16 )));	// the worker's: DEBUG
 uint32_t SE_ServerOnCore0( uint32_t ( *fn )( void * ), void *args )
 {
 	if( SE_OnRender( ))
@@ -83,27 +83,33 @@ uint32_t SE_ServerOnCore0( uint32_t ( *fn )( void * ), void *args )
 		return fn( args );
 	ask.fn = fn, ask.args = args;
 	ask.seq = ask.seq + 1;
-	se_asks[se_asks_n++ & 63] = (uint)fn;	// DEBUG
+	se_asks.fn[se_asks.n++ & 63] = (uint)fn;	// DEBUG
 	while( answer.seq != ask.seq )
 		mc_end_pass();
 	return answer.result;
 }
 
-static int serving;
+static struct { int on, unused[3]; } serving __attribute__(( aligned( 16 )));	// this core's
 static void serve( void )
 {
 	if( ask.seq != answer.seq )
 	{
-		serving = 1;
+		serving.on = 1;
 		answer.result = ask.fn( ask.args );
 		answer.seq = ask.seq;
-		serving = 0;
+		serving.on = 0;
 	}
 }
 
 int SE_ServerServing( void )
 {
-	return serving;
+	return serving.on;
+}
+
+// Whether the server's frame is still being made on its worker.
+int SE_ServerBusy( void )
+{
+	return out && !mcw_done( worker );
 }
 
 void SE_ServerServe( void )
