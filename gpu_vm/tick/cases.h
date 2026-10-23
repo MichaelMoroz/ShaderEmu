@@ -952,6 +952,30 @@ static std::vector<Case> cases() {
         v.push_back(c);
     };
     xcase("xfile", 0); xcase("xpair", 1); xcase("xbind", 2);
+    // spills (named, ns a bundle of core 0; its budget used goes to --json's util): a frame of 8 words stored and loaded
+    // again, the frame moving through 4 KB of stack (256 texels a pass: x23's cache ends passes early); p_xspill the same
+    // in the core's file (slots by the frame's word index, masked by GVM_SR_XR), no write cache
+    auto spill = [&](const char* name, bool file) {
+        Case c{name, 1, true, [file](std::vector<GvmAsm>& p, auto& data, uint32_t) {
+            GvmAsm& a = p[0];
+            a.li(5, loop_count(g_loop_n)); a.li(4, (int32_t)(DATA + 0x8000)); a.li(20, 0);
+            if (file) { a.mfsr(23, GVM_SR_XR); a.addi(23, 23, -1); }
+            for (int i = 6; i < 14; i++) a.li(i, i * 0x01010101);
+            int top = a.here();
+            a.addi(20, 20, 64 * 13); a.opi(GVM_I_AND, 20, 20, 4095); a.close();
+            if (file) { a.opi(GVM_I_SRL, 21, 20, 2); a.close(); a.op(GVM_I_AND, 21, 21, 23); a.close(); }
+            else { a.add(21, 4, 20); a.close(); }
+            for (int k = 0; k < 8; k++) { if (file) a.sf(6 + k, 21, k); else a.sw(6 + k, 21, 4 * k); a.addi(14 + k % 4, 14 + k % 4, k); a.close(); }
+            for (int k = 0; k < 8; k++) { if (file) a.lf(6 + k, 21, k); else a.lw(6 + k, 21, 4 * k); a.add(18, 18, 14 + k % 4); a.close(); }
+            for (int k = 0; k < 8; k++) { a.add(6 + k, 6 + k, 18); a.close(); }
+            loop_end(a, top);
+            a.halt();
+        }};
+        c.named = true; c.ns = true;
+        if (file) c.xr_need = 64;
+        v.push_back(c);
+    };
+    spill("p_spill", false); spill("p_xspill", true);
     pmc("p_k0_m0", 0, 0); pmc("p_k1_m0", 1, 0); pmc("p_k2_m0", 2, 0); pmc("p_k4_m0", 4, 0); pmc("p_k8_m0", 8, 0);
     pmc("p_k0_m40", 0, 40); pmc("p_k4_m40", 4, 40); pmc("p_k8_m40", 8, 40);
     game_cases(v);   // the game bench's g_ cases (gamebench.h)

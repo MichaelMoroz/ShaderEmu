@@ -137,8 +137,9 @@ def cmd_check(a):
 
 def gpu_run(args, log):
     cmd = ['pwsh', '-NoProfile', '-File', os.path.join(ROOT, 'tools', 'gpu_queue.ps1'), GVMB] + args
-    with open(log, 'w') as f:
-        r = subprocess.run(cmd, cwd=ROOT, stdout=f, stderr=subprocess.STDOUT, timeout=3600)
+    env = dict(os.environ, GVM_PROGRESS="1")
+    with open(log, "w") as f:
+        r = subprocess.run(cmd, cwd=ROOT, stdout=f, stderr=subprocess.STDOUT, timeout=7200, env=env)
     return r.returncode
 
 def cmd_time(a):

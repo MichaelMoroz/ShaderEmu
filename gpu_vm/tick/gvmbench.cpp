@@ -258,7 +258,23 @@ struct Gpu {
         bind(set[cur ^ 1][0], cur ^ 1, true, false);
         ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         ctx->VSSetShader(tick.vs, nullptr, 0); ctx->PSSetShader(tick.ps, nullptr, 0);
-        if (g_gg.bw) {   // a built step: band by band (the whole band when its blocks are permuted)
+        static const int drawMode = env_int("GVM_DRAW");   // (a measure: 1 a draw per core, as the harness's runs between frozen
+                                                           // workers; 2 core 0 apart first, 3 last, the rest band by band; perm id)
+        if (g_gg.bw && drawMode == 1) {
+            for (uint32_t c = 0; c < cores; c++) {
+                viewport(g_gg.bw, g_gg.bh, (c / g_gg.per) * g_gg.band, (uint32_t)(pix(c, 0) % texW()) / g_gg.bw * g_gg.bw);
+                ctx->Draw(3, 0);
+            }
+        } else if (g_gg.bw && drawMode >= 2 && !g_gg.perm) {
+            if (drawMode == 2) { viewport(g_gg.bw, g_gg.bh); ctx->Draw(3, 0); }
+            for (uint32_t b = 0; b * g_gg.per < cores; b++) {
+                uint32_t c0 = b ? b * g_gg.per : 1, n = std::min(g_gg.per, cores - b * g_gg.per) - (b ? 0 : 1);
+                if (!n) continue;
+                viewport(n * g_gg.bw, g_gg.bh, b * g_gg.band, (c0 % g_gg.per) * g_gg.bw);
+                ctx->Draw(3, 0);
+            }
+            if (drawMode == 3) { viewport(g_gg.bw, g_gg.bh); ctx->Draw(3, 0); }
+        } else if (g_gg.bw) {   // a built step: band by band (the whole band when its blocks are permuted)
             for (uint32_t b = 0; b * g_gg.per < cores; b++) {
                 uint32_t n = g_gg.perm ? g_gg.per : std::min(g_gg.per, cores - b * g_gg.per);
                 viewport(n * g_gg.bw, g_gg.bh, b * g_gg.band);
@@ -749,6 +765,7 @@ int main(int argc, char** argv) {
                 got[vi][ci].push_back(time_case(gpu, *timed[ci], ticks, passes));
                 util[vi][ci].push_back(g_util);
             }
+            if (env_int("GVM_PROGRESS")) { fprintf(stderr, "gvmbench: round %u, %s timed\n", r, vars[vi].name.c_str()); fflush(stderr); }
         }
     // each variant's mean over the rounds and its spread ((max - min) / mean, in %): the card's noise is visible
     printf("%-16s", "variant");
