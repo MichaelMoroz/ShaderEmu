@@ -14,8 +14,8 @@ FLAGS=("$@")
 mkdir -p "$OUT"
 [ -d "$Z" ] || git clone -q --depth 1 https://github.com/madler/zlib.git "$Z" || exit 1
 cat "$Z"/*.c | head -c "$GZ_BYTES" > "$OUT/input"
-bash "$ROOT/gpu_vm/llvm/test/exec/run.sh" -O 0 arith > /dev/null || { echo "the exec runtime does not build"; exit 1; }
-RTDIR=$ROOT/build/gvm_exec
+RTDIR=${EXEC_OUT:-$ROOT/build/gvm_exec}
+OUT=$RTDIR bash "$ROOT/gpu_vm/llvm/test/exec/run.sh" -O 0 arith > /dev/null || { echo "the exec runtime does not build"; exit 1; }
 CC="$BIN/clang --target=gpuvm-unknown-elf -nostdlibinc -I$ROOT/gpu_vm/llvm/test/exec/rt/include -I$Z -w"
 objs=()
 for f in adler32 crc32 deflate inffast inflate inftrees trees zutil; do

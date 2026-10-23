@@ -17,8 +17,8 @@ if [ ! -d "$COREMARK" ]; then
     mkdir -p "$(dirname "$COREMARK")"
     git clone -q --depth 1 https://github.com/eembc/coremark.git "$COREMARK" || exit 1
 fi
-bash "$ROOT/gpu_vm/llvm/test/exec/run.sh" -O 0 arith > /dev/null || { echo "the exec runtime does not build"; exit 1; }
-RTDIR=$ROOT/build/gvm_exec
+RTDIR=${EXEC_OUT:-$ROOT/build/gvm_exec}
+OUT=$RTDIR bash "$ROOT/gpu_vm/llvm/test/exec/run.sh" -O 0 arith > /dev/null || { echo "the exec runtime does not build"; exit 1; }
 CC="$BIN/clang --target=gpuvm-unknown-elf -nostdlibinc -I$ROOT/gpu_vm/llvm/test/exec/rt/include -I$HERE/coremark
     -I$COREMARK -DITERATIONS=$ITER -DPERFORMANCE_RUN=1 -w"
 objs=()

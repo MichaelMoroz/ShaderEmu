@@ -3,6 +3,7 @@
 # from there) compiled by clang with the exec tests' runtime, run on gvm_cpu, checked against a run of the same
 # sources built for the host. In WSL:
 #   bash gpu_vm/llvm/test/apps/run.sh [-O "0 2"]
+# GVM_CFLAGS adds flags to gpu_vm's compiles (EXEC_OUT: a runtime built with them; OUT: where the builds go).
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../../../.." && pwd)
@@ -14,10 +15,10 @@ if [ "${1:-}" = "-O" ]; then LEVELS=$2; shift 2; fi
 mkdir -p "$OUT" "$THIRD"
 [ -d "$THIRD/zlib" ] || git clone -q --depth 1 https://github.com/madler/zlib.git "$THIRD/zlib"
 [ -d "$THIRD/lua" ] || git clone -q --depth 1 https://github.com/lua/lua.git "$THIRD/lua"
-bash "$ROOT/gpu_vm/llvm/test/exec/run.sh" -O 0 arith > /dev/null || { echo "the exec runtime does not build"; exit 1; }
-RTDIR=$ROOT/build/gvm_exec
+RTDIR=${EXEC_OUT:-$ROOT/build/gvm_exec}
+OUT=$RTDIR bash "$ROOT/gpu_vm/llvm/test/exec/run.sh" -O 0 arith > /dev/null || { echo "the exec runtime does not build"; exit 1; }
 CPU=$ROOT/build/gvm_cpu/gvm_cpu
-CC="$BIN/clang --target=gpuvm-unknown-elf -nostdlibinc -I$ROOT/gpu_vm/llvm/test/exec/rt/include -w"
+CC="$BIN/clang --target=gpuvm-unknown-elf ${GVM_CFLAGS:-} -nostdlibinc -I$ROOT/gpu_vm/llvm/test/exec/rt/include -w"
 fail=0
 
 # app NAME "sources" "flags": builds both ways, runs both, compares stdout

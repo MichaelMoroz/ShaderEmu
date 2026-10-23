@@ -2,7 +2,7 @@
 # Execution tests of the gpu_vm code generator: each *.c here compiled by clang (--target=gpuvm-unknown-elf) at
 # -O0, -O1, -O2 and -Os, linked by ld.lld with rt/ (crt0, a small libc over gvm_cpu's semihosting, compiler-rt's
 # builtins for i64 division and double), and run on gvm_cpu: a test passes when it exits 0 (and prints NAME.out
-# when there is one). In WSL:
+# when there is one). GVM_CFLAGS adds flags to every compile (the runtime's too: give it its own OUT). In WSL:
 #   bash gpu_vm/llvm/test/exec/run.sh [-O "0 2"] [TEST...]
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -14,7 +14,7 @@ LEVELS="0 1 2 s"
 if [ "${1:-}" = "-O" ]; then LEVELS=$2; shift 2; fi
 mkdir -p "$OUT/rt"
 
-CC="$BIN/clang --target=gpuvm-unknown-elf -ffreestanding -nostdlibinc -I$HERE/rt/include -I$HERE/rt -Wno-everything"
+CC="$BIN/clang --target=gpuvm-unknown-elf -ffreestanding -nostdlibinc -I$HERE/rt/include -I$HERE/rt -Wno-everything ${GVM_CFLAGS:-}"
 make -s -C "$ROOT/gpu_vm/cpu" CC=gcc >/dev/null || exit 1
 CPU=$ROOT/build/gvm_cpu/gvm_cpu
 

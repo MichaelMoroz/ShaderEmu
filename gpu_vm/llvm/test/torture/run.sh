@@ -7,8 +7,10 @@
 # gcc.c-torture/execute: a sparse clone of gcc's testsuite); nothing is run from there but the compiled programs (on
 # gvm_cpu, and the host's builds with a timeout). In WSL:
 #   bash gpu_vm/llvm/test/torture/run.sh [-O "0 2"] [-j N] [TEST...]
+# GVM_CFLAGS adds flags to gpu_vm's compiles (EXEC_OUT: a runtime built with them too; OUT: the results).
 # Prints the pass rates at each level, and the failures into $OUT/fail-O<level>.txt.
 set -u
+GVM_CFLAGS=${GVM_CFLAGS:-}
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../../../.." && pwd)
 BIN=${GVM_LLVM_BIN:-$HOME/gpu_vm/llvm-build/bin}
@@ -32,8 +34,8 @@ if [ ! -d "$TORTURE" ]; then   # a sparse clone of gcc: the testsuite's execute 
 fi
 
 # The runtime: the exec tests' (built by their run.sh)
-bash "$ROOT/gpu_vm/llvm/test/exec/run.sh" -O 0 arith > /dev/null || { echo "the exec runtime does not build"; exit 1; }
 RTDIR=${EXEC_OUT:-$ROOT/build/gvm_exec}
+OUT=$RTDIR bash "$ROOT/gpu_vm/llvm/test/exec/run.sh" -O 0 arith > /dev/null || { echo "the exec runtime does not build"; exit 1; }
 RTINC=$ROOT/gpu_vm/llvm/test/exec/rt/include
 CPU=$ROOT/build/gvm_cpu/gvm_cpu
 
@@ -68,7 +70,7 @@ one() { # test level -> prints "test level result host-result"
         timeout 10 "$d/$t.host" > /dev/null 2>&1 || host=run
     fi
     rm -f "$d/$t.host"
-    if ! timeout 60 "$BIN/clang" --target=gpuvm-unknown-elf $common -nostdlibinc -I"$RTINC" \
+    if ! timeout 60 "$BIN/clang" --target=gpuvm-unknown-elf $common $GVM_CFLAGS -nostdlibinc -I"$RTINC" \
             -c -o "$d/$t.o" "$src" > "$log" 2>&1; then
         echo "$t $o compile $host"; return
     fi
@@ -80,7 +82,7 @@ one() { # test level -> prints "test level result host-result"
     if [ $r = 0 ]; then echo "$t $o pass $host"; else echo "$t $o run$r $host"; fi
 }
 export -f one
-export TORTURE OUT BIN RTDIR RTINC CPU
+export TORTURE OUT BIN RTDIR RTINC CPU GVM_CFLAGS
 
 for o in $LEVELS; do
     mkdir -p "$OUT/O$o"
