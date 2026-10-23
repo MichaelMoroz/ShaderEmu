@@ -8,6 +8,46 @@ runs the games from checkpoints on both machines, on any tick step, and prints o
     python gpu_vm/bench_games/run.py table OUT
     python gpu_vm/bench_games/paths.py FILE.prof        (a gvm_cpu --profile's bundles by path)
 
+## The fastest machine today, and how to run it (23 October 2026)
+
+Measure gpu_vm with this setup, not with the defaults: the harness's default tick is x18 (Quake III 27.6 fps in the
+baseline below) and run.py's default image predates Quake III's fix (63-70 fps against 88-91).
+
+- **Tick: `gpu_vm/tick/steps/v0009.hlsl`** (`steps/README.md`, "v0009"). Made by the builder from `v0009.json`; its
+  WARP stamp `v0009.hlsl.warp_ok` is beside it. It is not the project's default only because Doom's timedemo is 0.9%
+  slower than under x23 (IDEAS 38); it is the fastest in Quake III, Half-Life and nxray.
+- **Images and checkpoints** (machine-local, in this worktree's `build/`; a checkpoint loads only on its own image):
+
+  | games | image (`GVM_IMAGE`) | checkpoints (`GVM_CKPT`) |
+  |---|---|---|
+  | every game: quake3, halflife, nxray, doomt, quake1, coremark, gzipl | `build/gvm_apps/img-rest` | `gvm-rest` |
+  | Quake III with its fix of 059c2b7 (PROFILE_Q3.md's runs) | `build/gvm_apps/img-q3fix` | `gvm-q3fix` |
+  | not to be used for Quake III: made before that fix | `build/gvm_apps/img` (run.py's default) | `gvm` |
+
+  `img-cur` (every game, from the current apps) is being made; this table moves to it when it is.
+- **The GPU list lazily** is the harness's default since feaddd5 (`GVM_LIST_LAZY=0` is the old every pass).
+- **Commands:**
+
+      set GVM_IMAGE=build\gvm_apps\img-rest
+      set GVM_CKPT=gvm-rest
+      python gpu_vm/bench_games/run.py bench --machine v0009,rv --games quake3,halflife,nxray,doomt --rounds 2
+
+  Quake III alone on its newest image: `GVM_IMAGE=build\gvm_apps\img-q3fix GVM_CKPT=gvm-q3fix` and `--games quake3`.
+  Outside run.py: `rvc_harness --gvm build\gvm_apps\img-rest --gvm-tick gpu_vm\tick\steps\v0009.hlsl ...`, through
+  `pwsh tools\gpu_queue.ps1` like every card run.
+- **Its numbers** (RTX 5070 Laptop, D3D11, fxc2; the RISC-V machine `rvc_opt` on `build/checkpoints/rv`):
+
+  | | gpu_vm v0009 | RISC-V | ratio | where from |
+  |---|---|---|---|---|
+  | Quake III fps | 89.2 / 90.8 | 83.4 / 82.9 | 1.08 | img-q3fix, frames 300-1300 (PROFILE_Q3.md) |
+  | Quake III fps | 88.2 | 79.1-82.6 | 1.07-1.12 | img-rest (IDEAS 24, 38) |
+  | Half-Life fps of the level | 14.3 | 9.8 | 1.46 | img-rest (IDEAS 38); RISC-V from the baseline below |
+  | nxray pictures a second | 37.7 | 24.6 | 1.53 | img-rest (IDEAS 38); RISC-V from the baseline below |
+  | Doom timedemo realtics (lower is better) | 927.5 | | x23 919.5 | img-rest, doomt (IDEAS 38) |
+
+  Two rounds or more, interleaved, on a quiet host (a loaded host spoiled a Quake III number once). Where Quake III's
+  time goes under v0009: `gpu_vm/PROFILE_Q3.md`.
+
 - **Checkpoints** (machine-local, not in git, about 250 MB each; a checkpoint is bound to its image):
   `build/checkpoints/gvm/GAME.snap` (saved with x22; any step loads it) and `build/checkpoints/rv/GAME.snap`.
   - gpu_vm: `build/gvm_apps/img`, made again on 23 October 2026 from the committed apps (`image.sh`).

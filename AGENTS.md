@@ -9,6 +9,9 @@
     ShaderEmu and Poiyomi shaders its README measures).
   - Optimizations are weighed together, not one at a time: one that loses alone may win with another (a layout and the
     compiler's address, a cache and the ISA's stores), and one that wins alone may not add up with the rest.
+- gpu_vm's fastest machine and how to measure it (its tick, the image and checkpoints for each game, the commands and
+  the numbers): `gpu_vm/bench_games/README.md`, "The fastest machine today". The harness's default tick (x18) and
+  run.py's default image are not it.
 - Linux with the MMU is no longer supported or developed for (21 October 2026): build, test, measure and document the
   no-MMU machine only (`linux/nommu`, `build/images/nommu`). Do not fix, rebuild, test or keep in step anything that only
   the MMU image uses, and do not add MMU paths to new work.
