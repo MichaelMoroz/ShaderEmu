@@ -2,6 +2,10 @@
 
 x18 (`gpu_vm/tick/steps/x18.hlsl`) has x17's contract unchanged: everything below holds for both.
 
+x22 and x23 change the write cache's texels (their `NTEX` 363, `WCN` 258): texels T_WC + e are entry e's RAM texel (the
+words its tag marks), then from T_WT = T_WC + WCN the tags four a texel (RAM texel number | the words stored << 28,
+0xffffffff empty). In x23 entry e is way e % 4 of bucket e / 4 (two tables of 32), 256 and 257 the overflow slots.
+
 What a harness needs to run gpu_vm's tick (`gpu_vm/tick/steps/x17.hlsl`): the textures, the cbuffers, the draws of a pass
 in order, and where a core's state lies. The semantics are the reference's (`gpu_vm/ref/gvm_ref.h`); `gvmbench.cpp` is a
 working harness (`Gpu::run_pass`). Every texture is `R32G32B32A32_UINT`. The constants named here are the step's

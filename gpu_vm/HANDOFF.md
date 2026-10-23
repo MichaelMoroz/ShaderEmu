@@ -26,6 +26,17 @@ the cache itself.
 So multi-core work is at parity with RISC-V, Quake III is 0.65x of it, and Half-Life 0.55x. **2x means Quake III at
 about 154 fps and Half-Life at about 66**, roughly 3.1x and 3.6x where x22 is now.
 
+### x23 on the 5070 (23 October 2026, plan item 2 and pitfall 6)
+
+`gpu_vm/tick/steps/x23.hlsl` (README "x23"): x22's state layout, but the cache in two tables of 32 buckets of four ways,
+a lookup reading the tags and then only the word that hits, and the bloom word for loads. Half-Life from a checkpoint
+(`build/gvm_snap/hl.snap`, made here at `hlmark: begins`; `build/gvm_snap/hl.ps1 -Tick T -Name N` measures 15 s and
+`fl.py` prints bundles a pass and why passes end, the end reason being the frame log's third word & 255):
+core 0 2,120 -> 4,020 bundles a pass, `hlmark` frames 108 -> 154; gzip 258 -> 219 ns a bundle, gunzip 212 -> 182,
+mc_int/mc_load at 255 as x22 (1.60/2.84 ns); the loads and stores loops 14% slower than x22. HL still ends 84% of its
+passes full (capacity now: 256 texels in at most 384 state texels). Not made the harness's default (the user's call).
+Not done: Quake III, nxray and Red Alert checkpoints on this machine, a larger block for core 0.
+
 ### What changed this session (committed)
 
 - **x21: the RISC-V tick's geometry** (docs/machine/multicore.md, "The geometry"). Core c's 38 state pixels sit in a
