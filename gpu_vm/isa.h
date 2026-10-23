@@ -328,6 +328,15 @@
 #define GVM_RAM 0x02000000u       // RAM, to the state texture's end
 #define GVM_ROM 0x40000000u
 #define GVM_ROM_END 0x60000000u
+// Where texel t (an address >> 4, of RAM or of the ROM's offset) lies in its 8192-wide texture. Map 0 (RAM_MAP in a tick):
+// row-major, (t % 8192, t / 8192). Map 1, strips: texel t's 512-texel run is a row of a strip 512 wide and 4096 tall,
+// strips side by side (t's bits 0-8 x, 9-20 y, 21 on the strip): a texture row of 8192 falls in few of L1's sets, a
+// strip's run of 32 KB does not (tick/probes/codemap, IDEAS 35). A texture under map 1 has 4096 rows, or as many as
+// its texels fill when they are fewer than a strip's.
+#define GVM_STRIP_X(t) (((t) & 0x1ffu) | (((t) >> 12) & ~0x1ffu))
+#define GVM_STRIP_Y(t) (((t) >> 9) & 0xfffu)
+#define GVM_STRIP_T(x, y) (((x) & 0x1ffu) | (((y) & 0xfffu) << 9) | (((x) >> 9) << 21))
+#define GVM_STRIP_ROWS(texels) ((texels) > 0x200000u ? 4096u : ((texels) + 511u) / 512u)
 #define GVM_OPS 0xf0000000u       // operations: stored to, made by the commit
 #define GVM_OP_COPY 1u            // {kind, dst, src, bytes}: memmove
 #define GVM_OP_FILL 2u            // {kind, dst, word, bytes}

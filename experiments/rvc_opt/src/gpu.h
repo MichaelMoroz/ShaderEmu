@@ -77,9 +77,17 @@
 // the RISC-V machine's moved down by 0x86000000. Indices here stay the RISC-V machine's ((address - 0x80000000) / 16):
 // gpu_vm's texel is the index less 0x600000, and a guest's address below the ROM is a gpu_vm one (a constant of this
 // file, 0x87000400 say, is the RISC-V machine's).
+// GVM_MAP 1 (the tick's RAM_MAP): texel t at the strips' place (gpu_vm/isa.h GVM_STRIP_X), the ROM's too
+#if defined(GVM_MAP) && GVM_MAP == 1
+uint2 gvm_at(uint t) { return uint2((t & 0x1ffu) | ((t >> 12) & ~0x1ffu), (t >> 9) & 0xfffu); }
+uint gvm_texel(uint2 p) { return (p.x & 0x1ffu) | ((p.y & 0xfffu) << 9) | ((p.x >> 9) << 21); }
+#else
+uint2 gvm_at(uint t) { return uint2(t % 8192u, t / 8192u); }
+uint gvm_texel(uint2 p) { return p.y * 8192u + p.x; }
+#endif
 uint4 ram(uint index) {
     uint t = index - 0x600000u;
-    return GPU_STATE[uint2(t % 8192u, t / 8192u)];
+    return GPU_STATE[gvm_at(t)];
 }
 uint texel_of(uint address) {
     return ((address < 0x40000000u ? address + 0x86000000u : address) & 0x7fffffff) >> 4;
@@ -108,7 +116,7 @@ uint texture_word(uint address) {
     [branch]
     if ((address >> 30) != 1) return ram_word(address);
     uint o = address - 0x40000000u, t = o >> 4, k = (o >> 2) & 3;
-    uint4 v = _GvmRom.Load(int3(t % 8192u, t / 8192u, 0));
+    uint4 v = _GvmRom.Load(int3(gvm_at(t), 0));
     return k == 0 ? v.r : k == 1 ? v.g : k == 2 ? v.b : v.a;
 }
 uint4 texture_texel(uint address) {
@@ -1029,7 +1037,7 @@ uint4 count_total(uint index) {
 
 uint4 gpu_control(uint2 pos) {
 #ifdef GVM_RAM
-    uint index = pos.y * 8192u + pos.x + 0x600000u;   // (pos: a texel of gpu_vm's RAM texture)
+    uint index = gvm_texel(pos) + 0x600000u;   // (pos: a texel of gpu_vm's RAM texture)
     uint4 keep = ram(index);
 #else
     uint4 keep = GPU_STATE[pos];

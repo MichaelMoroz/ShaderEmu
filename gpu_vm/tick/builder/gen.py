@@ -92,6 +92,7 @@ DEFAULTS = dict(
     silp=15,            # (sil) where: 1 paths 3 and 5, 2 path 6, 4 step12's memory path, 8 the general step's stores
     snk=0,              # paths 3 and 5: a load writes no entry (the sink's tag and word) and reads no store value: a branch on the store
     m6seq=0,            # path 6 as two steps: op 0's store, then op 1 looked up in the tags op 0 left (no patched copy of its buckets)
+    rmap=0,             # where texel t lies in RAM's and the ROM's textures: 0 row-major 8192 wide, 1 strips 512 x 4096 (isa.h GVM_STRIP_X; IDEAS 35)
     cc0f=0,             # a cc 0 bundle (j, call, jr, callr) whose ops are path 7's, 3's or 5's runs the fast step's body (fstep_c), not step12
 )
 
@@ -102,7 +103,7 @@ SPACE = dict(   # the values a search draws from
     bandx=[1, 2], per=[16, 32, 64, 128], jrow=[0, 1], perm=['id', 'bitrev', 'mul'], mul=[3, 5, 37, 77],
     early=[0, 1, 2, 3], mru=[0, 1, 2, 4], bb=[0, 1], tfirst=[0, 1], s6=[0, 1], nc=[0, 1], thin=[0, 1], thin8=[0, 1], wide3=[0, 1, 2], late=[0, 1, 2, 3], fx1=[0, 1], ov=[0, 4, 8, 16], mv=[0, 1], cv=[0, 1, 2], wsh=[0, 1, 2, 3], wad=[0, 1, 2, 3, 4, 5, 6, 7], s12b=[0, 1, 2, 3], s12in=[0, 1], rc=[0, 1, 2], dtx=['both', 'one'], rpk=['scalar', 'vec', 'wide'], pk=['scalar', 'vec', 'aos'], lay=['split', 'merged'],
     xr=[0, 64, 128, 256, 512, 1024], npair=[0, 32, 64, 128], xbind=[0, 1], xload=['pre', 'lazy'], xfast=[0, 1],
-    pf=[0, 1, 2], pft=[0, 4, 8, 16], pfd=[1, 2], s12pf=[0, 1], ldf=[0, 1], cc0f=[0, 1], cc0x=[0, 1, 2, 3], m6seq=[0, 1], snk=[0, 1], sil=[0, 1, 2, 3], silp=[1, 2, 3, 4, 8, 12, 15], mflat=[0, 1, 2, 3, 6, 7, 10],
+    pf=[0, 1, 2], pft=[0, 4, 8, 16], pfd=[1, 2], s12pf=[0, 1], ldf=[0, 1], cc0f=[0, 1], cc0x=[0, 1, 2, 3], m6seq=[0, 1], snk=[0, 1], rmap=[0, 1], sil=[0, 1, 2, 3], silp=[1, 2, 3, 4, 8, 12, 15], mflat=[0, 1, 2, 3, 6, 7, 10],
 )
 
 def layout(P):
@@ -578,6 +579,25 @@ def mflat(P, src):
 
 def sil_decl(P):
     return ('\nstatic const uint SIL = %d;   // (sil) a store of what the core sees, to a texel with no entry, makes none (gvm_machine.silent)' % P['sil']) if P.get('sil', 0) else ''
+
+def rmap_text(P, src):
+    """rmap 1: RAM's and the ROM's texel t at (GVM_STRIP_X(t), GVM_STRIP_Y(t)) (isa.h): ram(), data_texel(), the commit's points,
+    the operations' writes (a piece lies in one 4 KB block, so in one strip row: one quad) and their texel from a pixel"""
+    if not P.get('rmap', 0): return src
+    def rep(a, b, n=1):
+        nonlocal src
+        assert src.count(a) >= n, 'rmap: ' + a[:70]
+        src = src.replace(a, b)
+    rep("static const uint RAM_W = 8192;", "static const uint RAM_W = 8192;\nstatic const uint RAM_MAP = 1;   // (rmap) texel t at (GVM_STRIP_X(t), GVM_STRIP_Y(t)): strips 512 x 4096\n"
+        "int3 rat(uint t) { return int3(GVM_STRIP_X(t), GVM_STRIP_Y(t), 0); }")
+    rep("return _Ram.Load(int3(t % RAM_W, t / RAM_W, 0));", "return _Ram.Load(rat(t));")
+    rep("int3 at = int3(t % RAM_W, (t / RAM_W) & 0x1fff, 0);", "int3 at = rat(t & 0x3ffffffu);")
+    rep("float2 at = (float2(tex % RAM_W, tex / RAM_W) + 0.5) / float2(RAM_W, _RamRows);",
+        "float2 at = (float2(GVM_STRIP_X(tex), GVM_STRIP_Y(tex)) + 0.5) / float2(RAM_W, _RamRows);")
+    rep("x0 = t0 % RAM_W, y0 = t0 / RAM_W, xe = x0 + t1 - t0 + 1;", "x0 = GVM_STRIP_X(t0), y0 = GVM_STRIP_Y(t0), xe = x0 + t1 - t0 + 1;")
+    rep("uint t = px.y * RAM_W + px.x;", "uint t = GVM_STRIP_T(px.x, px.y);")
+    assert '% RAM_W' not in src and 't / RAM_W' not in src, 'rmap: a row-major address left'
+    return src
 
 def sil_text(P, src):
     """sil: a store whose bytes are what the core sees already, to a texel with no entry this pass, makes no entry and needs no
@@ -1160,7 +1180,7 @@ def emit(P):
            state_io(P), frag(P), part('ops')]
     from memopts import memopts
     from layoutopts import layoutopts
-    return core0(P, layoutopts(P, sil_text(P, memopts(P, mflat(P, p2strip(P, '\n'.join(out)))))))
+    return rmap_text(P, core0(P, layoutopts(P, sil_text(P, memopts(P, mflat(P, p2strip(P, '\n'.join(out))))))))
 
 def manifest(P):
     P = full(P)

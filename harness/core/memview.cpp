@@ -54,6 +54,7 @@ uint word(uint4 t, uint i) {
 // RAM texel by index (physical address - 0x80000000) / 16.
 uint4 ram(uint index) {
     if (Gvm) index -= 0x600000u;
+    if (Gvm == 2) return Cur.Load(int3((index & 0x1ffu) | ((index >> 12) & ~0x1ffu), (index >> 9) & 0xfffu, 0));
     return Cur.Load(int3(index % TexWidth, StateRows + index / TexWidth, 0));
 }
 // The index of a guest's address (gpu_vm's below the ROM are the RISC-V machine's less 0x86000000)
@@ -583,7 +584,7 @@ bool MemoryView::render(ID3D11DeviceContext* ctx, ID3D11ShaderResourceView* cur,
     c.inset = c.bar - 16 * g_ui;
     c.split = memoryViewSplit(width_);
     c.ui = g_ui;
-    c.gvm = gvm_ ? 1u : 0u;
+    c.gvm = gvm_ ? 1u + gvmMap_ : 0u;
     c.textSize[0] = (float)textW_;
     c.textSize[1] = (float)textH_;
     ctx->UpdateSubresource(cb_.Get(), 0, nullptr, &c, 0, 0);

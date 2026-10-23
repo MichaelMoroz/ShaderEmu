@@ -2,7 +2,8 @@ Shader "ShaderEmu/gvm_devices"
 {
     // gpu_vm's devices (gpu_vm/platform.md): the RISC-V machine's GPU, control words and sound card
     // (experiments/rvc_opt/gpu.shader, sound.shader and their src/gpu.h, src/sound.h) over gpu_vm's RAM texture
-    // (8192 texels wide from address 0, the device window moved down by 0x86000000) and its ROM texture: GVM_RAM.
+    // (8192 texels wide from address 0, the device window moved down by 0x86000000) and its ROM texture: GVM_RAM; with
+    // GVM_MAP 1 (the tick's RAM_MAP, set by the harness) texel t lies where gpu_vm/isa.h's GVM_STRIP_X says.
     // Drawn by rvc_harness --gvm (harness/apps/gvm_backend11.cpp), never by Unity.
     Properties
     {
@@ -118,13 +119,21 @@ Shader "ShaderEmu/gvm_devices"
                 if (!copy_of(first, width, height, row)) return float4(-2, -2, 0, 1);
                 // gpu_vm's texels: the RISC-V index less 0x600000
                 uint t0 = first / 4 - 0x600000u, t1 = (first + row * (height - 1) + width - 1) / 4 - 0x600000u;
+                float x0 = 0, x1 = 1;
+            #if defined(GVM_MAP) && GVM_MAP == 1
+                // (the strips: the rows of t0's strip to t1's, or of every strip when it spans two)
+                bool one = (t0 >> 21) == (t1 >> 21);
+                float y0 = one ? (float)((t0 >> 9) & 0xfffu) : 0.0, y1 = one ? (float)(((t1 >> 9) & 0xfffu) + 1) : (float)_GvmRows;
+                x0 = one ? (float)((t0 >> 21) * 512u) / 8192.0 : 0.0, x1 = one ? x0 + 512.0 / 8192.0 : 1.0;
+            #else
                 float y0 = (float)(t0 / 8192u), y1 = (float)(t1 / 8192u + 1);
+            #endif
                 float2 c = float2(id == 1 || id == 2 || id == 4 ? 1.0 : 0.0, id == 2 || id == 4 || id == 5 ? 1.0 : 0.0);
                 float y = lerp(y0, y1, c.y) / (float)_GvmRows;
-                return float4(c.x * 2.0 - 1.0, 1.0 - y * 2.0, 0, 1);
+                return float4(lerp(x0, x1, c.x) * 2.0 - 1.0, 1.0 - y * 2.0, 0, 1);
             }
             uint4 frag(float4 at : SV_Position) : SV_Target {
-                uint index = (uint)at.y * 8192u + (uint)at.x + 0x600000u, first, width, height, row;
+                uint index = gvm_texel(uint2(at.xy)) + 0x600000u, first, width, height, row;
                 if (index - 0x600000u >= 0x1e0000u || !copy_of(first, width, height, row)) discard;   // (what a GPU program may own)
                 uint word = index * 4 + _GvmComp;
                 if (word < first) discard;

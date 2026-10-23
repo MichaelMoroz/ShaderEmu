@@ -110,6 +110,14 @@ public:
         opSlots_ = stepConst(src, "OP_SLOTS", 32);
         opSpan_ = stepConst(src, "OP_SPAN", 272);
         if (stepConst(src, "RAM_W", 8192) != kRamW) { err = tickPath + ": RAM is not 8192 texels wide"; return false; }
+        rmap_ = stepConst(src, "RAM_MAP", 0);   // (the builder's rmap: where texel t lies, gpu_vm/isa.h GVM_STRIP_X)
+        if (rmap_ > 1) { err = tickPath + ": RAM_MAP " + std::to_string(rmap_) + " is not known"; return false; }
+        if (rmap_) {   // the strips: RAM and the ROM laid out under the map (4096 rows, or fewer for less than a strip)
+            rows_ = GVM_STRIP_ROWS(ramEnd_ / 16);
+            romRows_ = GVM_STRIP_ROWS((uint32_t)(rom.size() / 16));
+            ram = mapBytes(ram.data(), ramEnd_ / 16, rows_);
+            rom = mapBytes(rom.data(), (uint32_t)(rom.size() / 16), romRows_);
+        }
         ntex_ = stepConst(src, "NTEX", tWc_ + wcn_ / 2);   // (a step whose entries are not two a texel says)
         spix_ = (ntex_ + 7) / 8;
         geo_ = stepConst(src, "GEO_BLOCKS", 0);
@@ -162,6 +170,7 @@ public:
             for (auto& d : opt.compile.defines)   // Unity's own, not the RISC-V machine's
                 if (d.first == "SHADER_API_D3D11" || d.first == "SHADER_TARGET" || d.first == "UNITY_COMPILER_HLSL" || d.first == "UNITY_VERSION")
                     bo.settings.defines.push_back(d);
+            if (rmap_) bo.settings.defines.push_back({"GVM_MAP", std::to_string(rmap_)});   // (gpu.h's ram(), the writeback's rows)
             std::vector<std::string> names = {"GPUDraw", "GPUControl", "GPUWriteback"};
             if (opt.soundShader) names.push_back("SoundMix");
             if (!buildPasses(gpu_, ds, names, bo, devPasses_, err)) return false;
@@ -172,7 +181,7 @@ public:
         // ---- the textures (STATE.md)
         if (!makeTex(ram_, kRamW, rows_, ram.data(), err) || !makeTex(rom_, kRamW, romRows_, rom.data(), err) ||
             !makeTex(stageTex_, opSpan_, kMaxCores * opSlots_, nullptr, err) || !makeTex(ops_[0], kMaxCores, 1, nullptr, err) ||
-            !makeTex(ops_[1], kMaxCores, 1, nullptr, err) || !makeTex(zone_, kRamW, 3, nullptr, err) || !makeTex(ctl_, 256, 1, nullptr, err) ||
+            !makeTex(ops_[1], kMaxCores, 1, nullptr, err) || !makeTex(zone_, kRamW, rmap_ ? 48 : 3, nullptr, err) || !makeTex(ctl_, 256, 1, nullptr, err) ||
             !makeTex(info_, 8, 1, nullptr, err) || !makeTex(ends_, 128, 2, nullptr, err))
             return false;
         {
@@ -205,9 +214,9 @@ public:
         pass_ = {opt.gvmBudget ? opt.gvmBudget : 8192u, ramEnd_, 0, 0, 0, 0, rows_, 0, 1, {0, 0, 0}, {0}};
         const UINT controlTexels = kControlTexels;
         if (!infoRb_.init(dev, DXGI_FORMAT_R32G32B32A32_UINT, 16, 8, 1, 3, err) ||
-            !mboxRb_.init(dev, DXGI_FORMAT_R32G32B32A32_UINT, 16, 0x800, 1, 3, err) ||
+            !mboxRb_.init(dev, DXGI_FORMAT_R32G32B32A32_UINT, 16, rmap_ ? 512 : 0x800, rmap_ ? 4 : 1, 3, err) ||   // (strips: 4 runs of 512, one after another)
             !controlRb_.init(dev, DXGI_FORMAT_R32G32B32A32_UINT, 16, controlTexels, 1, 3, err) ||
-            !netRb_.init(dev, DXGI_FORMAT_R32G32B32A32_UINT, 16, kNetRead, 1, 3, err))
+            !netRb_.init(dev, DXGI_FORMAT_R32G32B32A32_UINT, 16, rmap_ ? 512 : kNetRead, rmap_ ? (kNetRead + 511) / 512 : 1, 3, err))
             return false;
         // GVM_ENDS_LOG=FILE: every frame, each core's texel 19 (bundles << 8 | why its pass ended), 256 words (block geometry only)
         if (getenv("GVM_ENDS_LOG") && geo_) {
@@ -283,7 +292,8 @@ public:
         }
         if (devices_) {
             // the control words as the cores left them, for the writeback; then the copy the last frame's list asked for
-            D3D11_BOX cbx = {0, (GVM_CONTROL >> 4) / kRamW, 0, 256, (GVM_CONTROL >> 4) / kRamW + 1, 1};
+            const uint32_t c0 = GVM_CONTROL >> 4;
+            D3D11_BOX cbx = {tx(c0), ty(c0), 0, tx(c0) + 256, ty(c0) + 1, 1};
             ctx->CopySubresourceRegion(ctl_.t.Get(), 0, 0, 0, 0, ram_.t.Get(), 0, &cbx);
             writeback(mat);
             // GVM_LIST_LAZY=1: the list is drawn only in the passes after a readback saw it submitted (the submit word is
@@ -353,10 +363,10 @@ public:
                 }
             endsRb_.request(ctx, ends_.t.Get(), 0, 0, tag);
         }
-        mboxRb_.request(ctx, ram_.t.Get(), 0, (GVM_MBOX >> 4) / kRamW, tag);
-        uint32_t ct = 0x100000u, nt = 0x16b800u;
-        controlRb_.request(ctx, ram_.t.Get(), ct % kRamW, ct / kRamW, tag);
-        netRb_.request(ctx, ram_.t.Get(), nt % kRamW, nt / kRamW, tag);
+        mboxRb_.request(ctx, ram_.t.Get(), tx(GVM_MBOX >> 4), ty(GVM_MBOX >> 4), tag);
+        uint32_t ct = 0x100000u, nt = 0x16b800u;   // (each 512-aligned: under the strips a box of whole runs is the texels in order)
+        controlRb_.request(ctx, ram_.t.Get(), tx(ct), ty(ct), tag);
+        netRb_.request(ctx, ram_.t.Get(), tx(nt), ty(nt), tag);
         ctx->Flush();
         return true;
     }
@@ -444,7 +454,9 @@ public:
         if (size >= sizeof h) memcpy(&h, data, sizeof h);
         uint32_t fromSpix = (h.ntex + 7) / 8, keep = h.ntex == ntex_ ? spix_ : tWc_ / 8;   // (another cache: the texels before it)
         size_t setBytes = h.pad ? (size_t)((kMaxCores - 1) / 128 * 16 + 8) * 1024 * 16 : (size_t)fromSpix * kMaxCores * 16;
-        size_t need = sizeof h + (size_t)kRamW * rows_ * 16 + 16 * setBytes + 2 * (size_t)kMaxCores * 16 +
+        uint32_t fromMap = h.magic[7] == '2' ? 1u : 0u, fromRows = fromMap ? GVM_STRIP_ROWS(h.ramEnd / 16) : h.ramEnd / 16 / kRamW;
+        if (fromMap != rmap_) want.romRows = h.romRows, want.magic[7] = h.magic[7];   // (the other map: its ROM rows its own, RAM converted)
+        size_t need = sizeof h + (size_t)kRamW * fromRows * 16 + 16 * setBytes + 2 * (size_t)kMaxCores * 16 +
                       (devices_ ? (size_t)kGpuTarget * kGpuTarget * 4 : 0);
         uint32_t fromBh = h.pad == 1 ? 8 : h.pad - 16;   // (pad: 0 a row a core, 1 8x8 blocks, 16 + h blocks 8 x h)
         if (size != need || (h.pad > 1 && (h.pad < 19 || h.pad > 23)) || memcmp(h.magic, want.magic, 8) != 0 || h.ramEnd != want.ramEnd || h.romRows != want.romRows ||
@@ -453,7 +465,16 @@ public:
             return false;
         }
         const uint8_t* p = data + sizeof h;
-        p = writeTex(ram_.t.Get(), kRamW, rows_, 16, p);
+        if (fromMap == rmap_) p = writeTex(ram_.t.Get(), kRamW, rows_, 16, p);
+        else {   // RAM laid out under the snapshot's map: its texels in order, then under this one's
+            std::vector<uint8_t> lin((size_t)ramEnd_, 0);
+            for (uint32_t t = 0; t < ramEnd_ / 16; t++) {
+                uint32_t x = fromMap ? GVM_STRIP_X(t) : t % kRamW, y = fromMap ? GVM_STRIP_Y(t) : t / kRamW;
+                memcpy(&lin[(size_t)t * 16], p + ((size_t)y * kRamW + x) * 16, 16);
+            }
+            writeTex(ram_.t.Get(), kRamW, rows_, 16, mapBytes(lin.data(), ramEnd_ / 16, rows_).data());
+            p += (size_t)kRamW * fromRows * 16;
+        }
         for (int k = 0; k < 2; k++)
             for (int t = 0; t < 8; t++) {   // (a snapshot of the other layout: its pixels moved to this one's places)
                 std::vector<uint8_t> img((size_t)setW() * setH() * 16, 0);
@@ -482,6 +503,26 @@ public:
         out.assign((size_t)n * 16, 0);
         uint32_t t0 = i0 - kIndexBias;
         ID3D11DeviceContext* ctx = gpu_.ctx.Get();
+        if (rmap_) {   // the strips: each box of the range copied to a staging texture a run of 512 a row, in order
+            if (GVM_STRIP_Y(t0 + n - 1) >= rows_) return false;
+            uint32_t tb = t0 & ~511u, R = (t0 + n - 1 - tb) / 512 + 1;
+            D3D11_TEXTURE2D_DESC td = {512, R, 1, 1, DXGI_FORMAT_R32G32B32A32_UINT, {1, 0}, D3D11_USAGE_STAGING, 0, D3D11_CPU_ACCESS_READ, 0};
+            ComPtr<ID3D11Texture2D> st;
+            if (FAILED(gpu_.device->CreateTexture2D(&td, nullptr, &st))) return false;
+            boxes(t0, n, [&](uint32_t t, uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
+                D3D11_BOX b = {x, y, 0, x + w, y + h, 1};
+                ctx->CopySubresourceRegion(st.Get(), 0, t & 511, (t - tb) / 512, 0, ram_.t.Get(), 0, &b);
+            });
+            D3D11_MAPPED_SUBRESOURCE m{};
+            if (FAILED(ctx->Map(st.Get(), 0, D3D11_MAP_READ, 0, &m))) return false;
+            for (uint32_t k = 0; k < n;) {
+                uint32_t t = t0 + k, r = (t - tb) / 512, c = t & 511, len = (std::min)(n - k, 512 - c);
+                memcpy(out.data() + (size_t)k * 16, (const uint8_t*)m.pData + (size_t)r * m.RowPitch + (size_t)c * 16, (size_t)len * 16);
+                k += len;
+            }
+            ctx->Unmap(st.Get(), 0);
+            return true;
+        }
         uint32_t y0 = t0 / kRamW, y1 = (t0 + n - 1) / kRamW;
         if (y1 >= rows_) return false;
         RegionReadback rb;
@@ -498,6 +539,13 @@ public:
         if (row < 64 || (row - 64) * 2048 < kIndexBias) return false;
         uint32_t t0 = (row - 64) * 2048 - kIndexBias, n = rows * 2048;
         const uint8_t* in = (const uint8_t*)texels;
+        if (rmap_) {
+            boxes(t0, n, [&](uint32_t t, uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
+                D3D11_BOX b = {x, y, 0, x + w, y + h, 1};
+                gpu_.ctx->UpdateSubresource(ram_.t.Get(), 0, &b, in + (size_t)(t - t0) * 16, w * 16, w * h * 16);
+            });
+            return true;
+        }
         while (n) {
             uint32_t x = t0 % kRamW, k = (std::min)(n, kRamW - x);
             D3D11_BOX b = {x, t0 / kRamW, 0, x + k, t0 / kRamW + 1, 1};
@@ -559,7 +607,7 @@ public:
     std::string deviceRemoved() override { return gpu_.deviceRemovedReason(); }
 
     bool viewInit(std::string& err) override {
-        view_.setGvm(true);
+        view_.setGvm(true, rmap_);
         return view_.init(gpu_.device.Get(), kRamW, rows_, 0, err);
     }
     bool viewOpen() const override { return view_.open(); }
@@ -576,8 +624,28 @@ private:
         uint32_t ramEnd, romRows, ntex, devices, cur, oc, workers, pad;
         uint64_t time, passes;
     };
+    // RAM's (and the ROM's) texel t in its texture under the tick's map (RAM_MAP: 0 rows of 8192, 1 the strips)
+    uint32_t tx(uint32_t t) const { return rmap_ ? GVM_STRIP_X(t) : t % kRamW; }
+    uint32_t ty(uint32_t t) const { return rmap_ ? GVM_STRIP_Y(t) : t / kRamW; }
+    // texels [t, t + n) as boxes of the texture, each its texels in order row by row: fn(t, x, y, w, h)
+    template <class F> void boxes(uint32_t t, uint32_t n, F fn) const {
+        while (n) {
+            uint32_t w, h = 1;
+            if (!rmap_) w = (std::min)(n, kRamW - t % kRamW);
+            else if ((t & 511) == 0 && n >= 512) w = 512, h = (std::min)(n / 512, 4096 - ((t >> 9) & 4095));
+            else w = (std::min)(n, 512 - (t & 511));
+            fn(t, tx(t), ty(t), w, h);
+            t += w * h, n -= w * h;
+        }
+    }
+    // n texels in order laid into a texture 8192 wide and `rows` tall under the strips
+    static std::vector<uint8_t> mapBytes(const uint8_t* lin, uint32_t n, uint32_t rows) {
+        std::vector<uint8_t> o((size_t)kRamW * rows * 16, 0);
+        for (uint32_t t = 0; t < n; t++) memcpy(&o[((size_t)GVM_STRIP_Y(t) * kRamW + GVM_STRIP_X(t)) * 16], lin + (size_t)t * 16, 16);
+        return o;
+    }
     SnapHeader snapHeader() const {
-        SnapHeader h = {{'G', 'V', 'M', 'S', 'N', 'A', 'P', '1'}, ramEnd_, romRows_, ntex_, devices_ ? 1u : 0u,
+        SnapHeader h = {{'G', 'V', 'M', 'S', 'N', 'A', 'P', (char)('1' + rmap_)}, ramEnd_, romRows_, ntex_, devices_ ? 1u : 0u,
                         (uint32_t)cur_, (uint32_t)oc_, workers_, geo_ ? (bh_ == 8 ? 1u : 16 + bh_) : 0u, time_, passes_};
         return h;
     }
@@ -851,10 +919,16 @@ private:
     // A zone of the control pass: RISC-V indices [index, index + n) drawn into the scratch texture reading RAM, then
     // copied into RAM (whole rows of it when the zone is longer than a row's rest)
     void zone(Material& mat, uint32_t index, uint32_t n) {
-        ID3D11DeviceContext* ctx = gpu_.ctx.Get();
         uint32_t t0 = index - kIndexBias, x0 = t0 % kRamW, y0 = t0 / kRamW;
+        if (rmap_) {   // the strips: a box of the zone at a time (gpu_control's index is the map's from the pixel)
+            boxes(t0, n, [&](uint32_t, uint32_t x, uint32_t y, uint32_t w, uint32_t h) { zoneBox(mat, x, y, w, h); });
+            return;
+        }
         bool rows = x0 + n > kRamW;
-        UINT w = rows ? kRamW : n, h = rows ? (x0 + n + kRamW - 1) / kRamW : 1, x = rows ? 0 : x0;
+        zoneBox(mat, rows ? 0 : x0, y0, rows ? kRamW : n, rows ? (x0 + n + kRamW - 1) / kRamW : 1);
+    }
+    void zoneBox(Material& mat, UINT x, uint32_t y0, UINT w, UINT h) {
+        ID3D11DeviceContext* ctx = gpu_.ctx.Get();
         if (h > zone_.h) return;
         mat.setInt("_GvmZoneX", x);
         mat.setInt("_GvmZoneY", y0);
@@ -1006,6 +1080,7 @@ private:
     }
 
     Gpu gpu_;
+    uint32_t rmap_ = 0;   // the tick's RAM_MAP
     uint32_t ramEnd_ = 0, rows_ = 0, romRows_ = 1, wcn_ = 514, tWc_ = 40, opSlots_ = 32, opSpan_ = 272, ntex_ = 297, spix_ = 38, geo_ = 0, bh_ = 8, wcn0_ = 0, spix0_ = 0;
     Prog tick_, tick0_, commit_, stage_, write_, progress_;
     Tex ram_, rom_, stageTex_, ops_[2], set_[2][8], zone_, ctl_, info_, none_;
