@@ -722,8 +722,11 @@ show_pin_menu(int pin)
 static void
 task_front(int task)
 {
-	if (tasks[task].hidden)
+	if (tasks[task].hidden) {
 		GrMapWindow(tasks[task].frame);
+		tasks[task].hidden = 0;
+		note_window(tasks[task].frame);	/* (the server tells only a window's owner that it is shown) */
+	}
 	GrRaiseWindow(tasks[task].frame);
 	GrSetFocus(tasks[task].client);
 	active_frame = tasks[task].frame;
@@ -740,6 +743,7 @@ show_desktop(void)
 		for (i = 0; i < desk_hidden_count; i++) {
 			GrMapWindow(desk_hidden[i]);
 			GrRaiseWindow(desk_hidden[i]);
+			note_window(desk_hidden[i]);
 		}
 		desk_hidden_count = 0;
 		return;
@@ -1400,6 +1404,8 @@ main(int argc, char **argv)
 				GR_WINDOW_ID was = active_frame;
 
 				retitle |= 1u << (i & 31);
+				if (tasks[i].hidden)
+					note_window(tasks[i].frame);	/* shown again by its program or a key: no map is heard */
 				find_active();
 				if (active_frame != was)
 					draw_bar();
@@ -1433,7 +1439,7 @@ main(int argc, char **argv)
 			load_pinned();
 			stale = 1;
 		}
-		if (stale || now - listed >= 60) {
+		if (stale || noted_count || now - listed >= 60) {
 			i |= find_tasks(now - listed >= 60 || i);
 			if (now - listed >= 60)
 				listed = now;
