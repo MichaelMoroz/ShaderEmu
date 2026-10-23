@@ -37,6 +37,18 @@ mc_int/mc_load at 255 as x22 (1.60/2.84 ns); the loads and stores loops 14% slow
 passes full (capacity now: 256 texels in at most 384 state texels). Not made the harness's default (the user's call).
 Not done: Quake III, nxray and Red Alert checkpoints on this machine, a larger block for core 0.
 
+### x25 on the 5070 (23 October 2026, memory_model.md's design: core 0's own write cache and the move on insertion)
+
+`gpu_vm/tick/steps/x25.hlsl` (README "x25"): x23 for the workers, and core 0 compiled apart (`CORE0=1`) with 1,026
+entries in 166 state pixels (pixels 64 on in rows 8-15 of the first band), drawn by a draw of its own; the move on
+insertion outside the fast loop (`x25n`: without it). The harness, gvmbench and x23's checkpoints take it as they are.
+At a pass a frame (`bench_games/run.py --pass-ms 11.11`, new) Half-Life is 2.2x x23, Quake III 1.38x, nxray 1.31x;
+uncapped in the harness every game is slower (0.77-0.91x: a pass costs 1.8-2.7x the card's time), core 0's bundle 5-15%
+dearer, many cores 23-30%. Not the default. Pitfall found: **D3D11 has 4,096 temporary registers** (an indexable array's
+element is one); core 0's first compile had 5,375, passed WARP and removed the device on the card. gvmbench now refuses
+such a tick. Open: whether the world's pass a frame or the harness's uncapped passes is the measure to decide by (the user's
+call), and making core 0's large cache cheaper a bundle (`uint4` words; 166 lanes of 21 KB local memory).
+
 ### What changed this session (committed)
 
 - **x21: the RISC-V tick's geometry** (docs/machine/multicore.md, "The geometry"). Core c's 38 state pixels sit in a

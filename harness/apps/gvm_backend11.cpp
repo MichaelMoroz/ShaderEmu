@@ -114,13 +114,18 @@ public:
         spix_ = (ntex_ + 7) / 8;
         geo_ = stepConst(src, "GEO_BLOCKS", 0);
         if (geo_ && spix_ > 48) { err = tickPath + ": GEO_BLOCKS takes 48 state pixels a core at most"; return false; }
+        if (src.find("#ifndef CORE0") != std::string::npos) {   // x25: core 0's own write cache, its tick compiled with CORE0=1
+            wcn0_ = stepConst(src, "WCN0", 0);
+            spix0_ = (stepConst(src, "NTEX0", 0) + 7) / 8;
+            if (!geo_ || !wcn0_ || spix0_ > 64 + 8 * 128) { err = tickPath + ": CORE0 needs GEO_BLOCKS, WCN0 and NTEX0"; return false; }
+        }
         CompileSettings cs;
         cs.flags = D3DCOMPILE_OPTIMIZATION_LEVEL3;
         cs.cacheDir = opt.compile.cacheDir;
         std::string rootDir = fs::u8path(tickPath).parent_path().u8string();
-        auto prog = [&](const char* v, const char* p, Prog& out) {
-            StageResult vs = compileStage(src, tickPath, rootDir, v, "vs_5_0", {}, cs);
-            StageResult ps = compileStage(src, tickPath, rootDir, p, "ps_5_0", {}, cs);
+        auto prog = [&](const char* v, const char* p, Prog& out, const Defines& defs = {}) {
+            StageResult vs = compileStage(src, tickPath, rootDir, v, "vs_5_0", defs, cs);
+            StageResult ps = compileStage(src, tickPath, rootDir, p, "ps_5_0", defs, cs);
             if (!vs.ok || !ps.ok) { err = tickPath + ": " + vs.log + ps.log; return false; }
             return SUCCEEDED(dev->CreateVertexShader(vs.bytecode->GetBufferPointer(), vs.bytecode->GetBufferSize(), nullptr, &out.vs)) &&
                    SUCCEEDED(dev->CreatePixelShader(ps.bytecode->GetBufferPointer(), ps.bytecode->GetBufferSize(), nullptr, &out.ps));
@@ -130,7 +135,12 @@ public:
             if (err.empty()) err = "creating the tick's shaders failed";
             return false;
         }
-        fprintf(stderr, "[harness] gpu_vm: tick %s (write cache %u, %u state texels a core)\n", tickPath.c_str(), wcn_, ntex_);
+        if (wcn0_ && !prog("vert", "frag", tick0_, {{"CORE0", "1"}})) {
+            if (err.empty()) err = "creating core 0's tick failed";
+            return false;
+        }
+        fprintf(stderr, "[harness] gpu_vm: tick %s (write cache %u, %u state texels a core; core 0's %u)\n", tickPath.c_str(), wcn_, ntex_,
+                wcn0_ ? wcn0_ : wcn_);
 
         // ---- the devices (gpu_vm/platform/devices.shader)
         devices_ = opt.gpuShader != nullptr;
@@ -236,7 +246,8 @@ public:
         uint64_t wall = (uint64_t)(mat.getFloat("_Time") * 20.0 * 100000.0);
         uint32_t rounds = (std::max)(1u, tickRounds);
         for (uint32_t r = 0; r < rounds; r++) {
-            time_ = (std::max)(time_ + 1, wall);
+            static const uint64_t dt = getenv("GVM_DT_TICKS") ? strtoull(getenv("GVM_DT_TICKS"), nullptr, 10) : 0;
+            time_ = dt ? time_ + dt : (std::max)(time_ + 1, wall);   // (GVM_DT_TICKS: TIME this much a pass, as in a world of a pass a frame)
             runPass(timeIt && r == rounds - 1);
         }
         if (devices_) {
@@ -415,6 +426,14 @@ public:
             const UINT fl = D3D11_ASYNC_GETDATA_DONOTFLUSH;
             bool ok = gpu_.ctx->GetData(tsDisjoint_.Get(), &dj, sizeof dj, fl) == S_OK;
             for (int k = 3; ok && k >= 0; k--) ok = gpu_.ctx->GetData(tsQuery_[k].Get(), &ts[k], sizeof ts[k], fl) == S_OK;
+            static const bool splitLog = getenv("GVM_SPLIT_LOG") != nullptr;   // (a measure: core 0's draws apart from the workers')
+            UINT64 t4 = 0;
+            if (ok && splitLog && gpu_.ctx->GetData(tsQuery_[4].Get(), &t4, sizeof t4, fl) == S_OK && !dj.Disjoint && dj.Frequency) {
+                static double a = 0, b = 0;
+                static int n = 0;
+                a += (double)(t4 - ts[0]) * 1000.0 / dj.Frequency, b += (double)(ts[1] - t4) * 1000.0 / dj.Frequency;
+                if (++n == 32) fprintf(stderr, "[gvm] split: first draws %.3f ms, the rest %.3f ms\n", a / n, b / n), a = b = 0, n = 0;
+            }
             if (ok) {
                 if (!dj.Disjoint && dj.Frequency) {
                     tickMs_ = (double)(ts[1] - ts[0]) * 1000.0 / (double)dj.Frequency;
@@ -529,7 +548,8 @@ private:
     // The state textures: a row a core, or (the step's GEO_BLOCKS) a block of 8 x 8 a core, 128 a band of 16 rows
     UINT setW() const { return geo_ ? 1024 : spix_; }
     UINT setH() const { return geo_ ? (kMaxCores - 1) / 128 * 16 + 8 : kMaxCores; }
-    size_t setAt(uint32_t c, uint32_t j) const {   // the texel of state pixel j of core c
+    size_t setAt(uint32_t c, uint32_t j) const {   // the texel of state pixel j of core c (x25: core 0's from 64 on in rows 8-15)
+        if (geo_ && c == 0 && j >= 64) return (size_t)(8 + j % 8) * 1024 + j / 8 - 8;
         return geo_ ? (size_t)((c >> 7) * 16 + j % 8) * 1024 + (c & 127) * 8 + j / 8 : (size_t)c * spix_ + j;
     }
     void viewport(UINT w, UINT h, UINT y = 0, UINT x = 0) {
@@ -563,19 +583,36 @@ private:
         ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         ctx->VSSetShader(tick_.vs.Get(), nullptr, 0);
         ctx->PSSetShader(tick_.ps.Get(), nullptr, 0);
+        static const int split = getenv("GVM_SPLIT0") ? atoi(getenv("GVM_SPLIT0")) : 0;   // (a measure: 1 core 0 drawn apart first, 2 last)
+        bool apart = wcn0_ || split, last = split == 2;
+        auto core0 = [&]() {   // core 0 by its own tick: its block, then its pixels in rows 8-15 of the first band
+            if (wcn0_) ctx->PSSetShader(tick0_.ps.Get(), nullptr, 0);
+            viewport(8, 8);
+            ctx->Draw(3, 0);
+            if (wcn0_ && spix0_ > 64) {
+                viewport((spix0_ - 64 + 7) / 8, 8, 8);
+                ctx->Draw(3, 0);
+            }
+            if (wcn0_) {
+                ctx->PSSetShader(tick_.ps.Get(), nullptr, 0);
+            }
+        };
+        if (apart && !last) core0();
+        if (timed && apart) ctx->End(tsQuery_[4].Get());   // (GVM_SPLIT_LOG: the tick's time to here, its first draws')
         for (auto& run : runs_) {   // (the triangle over each run's rows or blocks: a pixel's place is its core, the viewport's offset kept)
             if (!geo_) {
                 viewport(spix_, run.second - run.first, run.first);
                 ctx->Draw(3, 0);
                 continue;
             }
-            for (uint32_t c = run.first; c < run.second;) {   // (the run's blocks in one band at a time)
+            for (uint32_t c = (std::max)(run.first, apart ? 1u : 0u); c < run.second;) {   // (the run's blocks in one band at a time)
                 uint32_t end = (std::min)(run.second, (c / 128 + 1) * 128);
                 viewport((end - c) * 8, 8, (c / 128) * 16, (c % 128) * 8);
                 ctx->Draw(3, 0);
                 c = end;
             }
         }
+        if (apart && last) core0();
         if (timed) ctx->End(tsQuery_[1].Get());
         clearSrv();
         ctx->OMSetRenderTargets(1, ram_.rtv.GetAddressOf(), nullptr);
@@ -588,7 +625,7 @@ private:
             ID3D11Buffer* b2[2] = {cb_.Get(), ccb_[c].Get()};
             ctx->VSSetConstantBuffers(0, 2, b2);
             ctx->OMSetBlendState(mask_[c].Get(), nullptr, 0xffffffff);
-            ctx->Draw(top_ * wcn_, 0);   // (a frozen row's write cache is empty: its points draw nothing)
+            ctx->Draw(wcn0_ ? wcn0_ + (top_ - 1) * wcn_ : top_ * wcn_, 0);   // (a frozen row's write cache is empty: its points draw nothing)
         }
         ctx->OMSetBlendState(nullptr, nullptr, 0xffffffff);
         for (uint32_t round = 0; round < 2; round++) {
@@ -873,8 +910,8 @@ private:
     }
 
     Gpu gpu_;
-    uint32_t ramEnd_ = 0, rows_ = 0, romRows_ = 1, wcn_ = 514, tWc_ = 40, opSlots_ = 32, opSpan_ = 272, ntex_ = 297, spix_ = 38, geo_ = 0;
-    Prog tick_, commit_, stage_, write_, progress_;
+    uint32_t ramEnd_ = 0, rows_ = 0, romRows_ = 1, wcn_ = 514, tWc_ = 40, opSlots_ = 32, opSpan_ = 272, ntex_ = 297, spix_ = 38, geo_ = 0, wcn0_ = 0, spix0_ = 0;
+    Prog tick_, tick0_, commit_, stage_, write_, progress_;
     Tex ram_, rom_, stageTex_, ops_[2], set_[2][8], zone_, ctl_, info_, none_;
     ComPtr<ID3D11Buffer> cb_, ccb_[4];
     ComPtr<ID3D11BlendState> mask_[4];
@@ -899,7 +936,7 @@ private:
     std::vector<uint8_t> lastSound_;
     std::deque<uint64_t> soundTags_;
     ComPtr<ID3D11ShaderResourceView> hostData_, netData_;
-    ComPtr<ID3D11Query> tsDisjoint_, tsQuery_[4];
+    ComPtr<ID3D11Query> tsDisjoint_, tsQuery_[5];
     bool tsPending_ = false;
     double tickMs_ = -1, commitMs_ = -1, deviceMs_ = 0;
     MemoryView view_;

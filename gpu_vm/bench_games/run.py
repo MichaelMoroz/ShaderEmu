@@ -147,7 +147,11 @@ def bench(a):
                     print(f'{m} {g}: no checkpoint {snap}')
                     continue
                 base = os.path.join(out, f'{g}.{m}.{r}')
-                cmd, cwd = harness(m, ['--load-state', snap, '--seconds', str(GAMES[g].get('seconds', a.seconds)), '--stats-after', '2',
+                # --pass-ms: a pass a frame, TIME that much a pass (gpu_vm only: GVM_DT_TICKS), --passes of them (a world's speed)
+                lim = ['--seconds', str(GAMES[g].get('seconds', a.seconds))] if not a.pass_ms else ['--seconds', '300', '--frames', str(a.passes)]
+                if a.pass_ms:
+                    os.environ['GVM_DT_TICKS'] = str(int(a.pass_ms * 100))
+                cmd, cwd = harness(m, ['--load-state', snap] + lim + ['--stats-after', '2',
                                        '--frame-log', base + '.frames'], base + '.log')
                 t = time.time()
                 p = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, errors='replace')
@@ -194,6 +198,8 @@ def main():
     ap.add_argument('--games', default='quake3,halflife,nxray')
     ap.add_argument('--seconds', type=int, default=15)
     ap.add_argument('--rounds', type=int, default=1)
+    ap.add_argument('--pass-ms', type=float, default=0, help='bench: TIME a pass (ms), as a world drawing a pass a frame')
+    ap.add_argument('--passes', type=int, default=1500, help='bench with --pass-ms: the passes a run')
     ap.add_argument('--limit', type=int, default=280, help='save: the run\'s most seconds')
     a = ap.parse_args()
     if a.what == 'save':

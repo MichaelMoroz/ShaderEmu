@@ -59,6 +59,32 @@ x22's second run is within 6.5% of its first (Quake III 41.7 against 44.6). With
 a worker (the server's or the scene's) now runs its whole budget in 88% of the passes (11,342 ops a pass for the
 busiest one), so the pass is that worker's 8,192 bundles, about 260 ns each (2.16 ms).
 
+## x25 (23 October 2026, core 0's own write cache of 1,026 entries; x25n without the move on insertion)
+
+Same checkpoints (x23's: x25 keeps texels 0-39 where they were). Two measures: the uncapped harness as above (15 s, 40 for
+Half-Life), and **a pass a frame**, as a world draws it: `run.py bench --pass-ms 11.11 --passes N` advances TIME 11.1 ms
+a pass (the harness's `GVM_DT_TICKS`, 100 kHz ticks a pass, in place of the wall clock), so the game's own frames a second
+are what a 90 Hz world would show if the card keeps up (Half-Life 12,000 passes, the others 4,000).
+
+| | x23 | x25n | **x25** | x25 / x23 |
+|---|---|---|---|---|
+| Quake III, fps, uncapped | 66.8 | 49.8 | 51.5 | 0.77 |
+| Half-Life, fps of the level, uncapped | 10.9 | 9.2 | 9.9 | 0.91 |
+| nxray, pictures a second, uncapped | 21.2 | 17.2 | 16.6 | 0.78 |
+| Quake III, fps, a pass a frame (90 Hz) | 33.5 | 44.5 | 46.1 | 1.38 |
+| Half-Life, fps of the level, a pass a frame | 4.0 | 9.2 | 8.8 | 2.20 |
+| nxray, pictures a second, a pass a frame | 9.4 | 12.3 | 12.3 | 1.31 |
+| core 0 a pass (uncapped): Q3 / HL / nxray | 2,301 / 2,735 / 3,085 | 2,869 / 6,357 / 3,532 | 3,270 / 6,652 / 3,578 | |
+| tick ms a pass (uncapped): Q3 / HL / nxray | 2.06 / 1.72 / 5.65 | 3.44 / 4.57 / 7.07 | 3.77 / 4.71 / 7.73 | |
+| HL passes ended (uncapped) | full 83%, sync 14% | budget 54%, sync 30%, full 17% | budget 60%, sync 28%, full 13% | |
+| Q3 passes ended (uncapped) | sync 61%, full 38% | sync 87%, budget 12%, full 1% | sync 82%, budget 18% | |
+
+Core 0 now ends few passes full (Half-Life 13%, Quake III none), as `memory_model.md` predicted, and at a pass a frame
+Half-Life runs 2.2x x23's frames. But a pass costs 1.8-2.7x the card's time, so where passes are free to follow each other
+(the harness) every game is slower: core 0's bundles cost a little more, its pass is longer, and the workers are handed
+more in each pass. The move on insertion (x25 against x25n) is within the noise here. Logs: `build/bench_games/x25a`
+(uncapped), `x25_vr90b` and `x25_vr90hl` (a pass a frame).
+
 ## Where a pass's time goes (23 October 2026)
 
 **There is no 0.34 us bundle.** That figure was a pass's tick time over core 0's bundles. Fitting each pass's wall time

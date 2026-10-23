@@ -574,3 +574,54 @@ many cores as x22 (mc_load 10% better). Half-Life still ends 84% of its passes f
 capacity (256 texels, 4 KB a pass; the RISC-V tick keeps about 6 KB), and 384 state texels (6 columns of a block) leave
 no room for more entries in this layout. Checked: gvmbench's default set on WARP, mc_int and mc_load at 255 cores on the
 card.
+
+## x25: core 0's own write cache of 1,026 entries, and the move on insertion (23 October 2026; RTX 5070 Laptop)
+
+`gpu_vm/memory_model.md`'s design, items 1 and 2. `x25.hlsl` is x23 compiled twice: as it is for the workers (2 x 32
+buckets of four, 258 entries, 363 state texels), and with `CORE0=1` for core 0 alone (2 x 128 buckets, `WCN0` 1,026
+entries, `NTEX0` 1,323 state texels: 166 pixels), drawn by a draw of its own. Core 0's pixels 0-63 are its block's, as
+every core's; pixels 64 on lie in rows 8-15 of the first band from column 0 (rows no block uses): pixel j at
+((j >> 3) - 8, 8 + (j & 7)). Texels 0-39 are where every step has them, so the control pass, the harness's readback and
+the checkpoints of x22 and x23 are unchanged (x23's checkpoints load). The commit draws core 0's 1,026 points, then 258 a
+worker. The harness (`gvm_backend11.cpp`) and `gvmbench` see `#ifndef CORE0` in a step and draw core 0 by its own tick
+(two viewports: 8 x 8, then 13 x 8 at row 8), then the workers band by band from core 1. `gvm_gpu` has no block layout
+and does not run x23 or x25.
+
+- **D3D11's 4,096 temporary registers.** The first core 0 compile kept x23's arrays (the words a `uint` each): 5,375
+  registers (fxc2 declares an indexable array's element a register). WARP ran it and checked it; on the card it removed
+  the device at once (887a0005, a TDR, no lasting harm). Core 0's words are now 1,027 `uint4` (2,301 registers; a word
+  read is a pick, a store a read and a write of its entry's texel). `gvmbench` now counts a tick's registers from its
+  disassembly and refuses one over 4,096, on WARP too.
+- **The move on insertion** (`RELOC`, on in x25, off in `x25n`): a store that finds both of its texel's buckets full
+  moves one of their texels to its other bucket when that has an empty way (`make_room`, eight tries) and takes the entry
+  it leaves. The fast loop's text is x23's: when a store of the fast loop went to an overflow slot (which used to end the
+  pass), `run` moves the slot's texel into a bucket after the loop and gives the pass back its budget (`unspill`); step12
+  makes room before giving up on a store. A texel lies in its second bucket only while its first is full, and the entry
+  left is filled at once, so no lookup meets a hole (the general step's multi-word store does not move: its undo would
+  leave one).
+- New check cases: `wcovl` (core 0's cache full in passes of 8,192) and `wcov4` (four cores' random stores, a megabyte
+  each: a worker's cache full and the move). x23, x25n and x25 are the reference's on all of them, on WARP and the card.
+
+The bench on the card (`variants/x25a.txt`; loops in M instructions/s, real code ns a bundle, many cores ns a bundle of
+all cores):
+
+| | arith | loads | stores | mix | stride | CoreMark | gzip | gunzip | mc_int 255 | mc_load 255 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| x23 | 20.49 | 8.38 | 6.79 | 15.73 | 13.71 | 182.4 | 219.5 | 182.3 | 1.59 | 2.82 |
+| x25n | 20.21 | 8.33 | 6.09 | 14.28 | 13.25 | 199.5 | 242.1 | 195.3 | 1.97 | 3.66 |
+| x25 | 20.10 | 7.52 | 6.05 | 14.29 | 13.23 | 204.9 | 253.2 | 209.5 | 1.95 | 3.62 |
+| x25q (core 0's store writes back the texel its lookup read) | 19.71 | 7.67 | 6.14 | 14.09 | 11.21 | 216.9 | 276.0 | 220.0 | 1.96 | 3.63 |
+
+Core 0's bundle costs 5-15% more (the `uint4` words, and 166 pixels' local memory: about 21 KB a lane against x23's
+6), the move's code costs the loads loop 10% though it is outside the fast loop, and many cores 23-30% more (core 0's
+draw apart from the workers'). A core 0 compiled apart at x23's size (x25s, measured and deleted) ran nxray at 6.4 ms a
+pass against x23's 5.7-5.9; the workers declaring core 0's arrays too (x25p) changed nothing (7.7 ms).
+
+The games from x23's checkpoints (`gpu_vm/bench_games/README.md`, "x25"): Half-Life's core 0 runs 2.4x the bundles a
+pass (2,735 to 6,652) and ends 13% of its passes full (x23 83%), but a pass's tick time grows 2.7x (1.72 to 4.71 ms), so
+the uncapped harness is slower on all three games; at one pass a frame (90 Hz, `run.py --pass-ms 11.11`) Half-Life is
+2.2x, Quake III 1.38x and nxray 1.31x. Not made the default. Where a pass's time goes (`GVM_SPLIT0=1` draws x23's
+core 0 apart, `=2` after the workers; `GVM_SPLIT_LOG=1` prints a timestamp's split after core 0's draws): x23 drawn apart
+is as fast as in one draw (nxray 5.66 against 5.87 ms); Half-Life's core 0 draws end 0.98 ms into x23's pass and 2.65 ms
+into x25's, the workers 0.66 and 2.08 ms after them: x25's workers get more to do in a pass (a worker ran its whole
+budget in 75% of the passes, x23 41%), so the longer pass is core 0's and the workers' both.

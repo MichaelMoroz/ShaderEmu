@@ -30,6 +30,8 @@ static int g_romrows = 0;   // (probe: the ROM in RAM's texture)
 static uint32_t g_wcn1 = 0;    // a step's WCN1 (x19g): a worker's entries, the commit's points for it (0: WCN)
 static uint32_t g_ntex = 0;    // a step's NTEX (x22): its state texels (0: T_WC + WCN / 2)
 static uint32_t g_geo = 0;     // a step's GEO_BLOCKS (x21): pixel p of core c at ((c & 127) * 8 + p / 8, (c >> 7) * 16 + p % 8)
+static uint32_t g_wcn0 = 0;    // a step's WCN0 (x25): core 0's own write cache, its tick a compile of its own (CORE0=1)
+static uint32_t g_spix0 = 0;   // and its state pixels (NTEX0): 0-63 in its block, 64 on at ((p >> 3) - 8, 8 + (p & 7))
 static uint32_t g_lrows = 1;   // a core's state pixels on this many rows (a step's LROWS, x19): pixel p at (p % spx, core * LROWS + p / spx)
 
 // ---- D3D11
@@ -119,6 +121,22 @@ static Prog program(const char* path, const char* v, const char* p, const std::v
     check(dev->CreatePixelShader(pb->GetBufferPointer(), pb->GetBufferSize(), nullptr, &r.ps), p);
     if (!strcmp(p, "frag")) {
         printf("gvmbench: the tick's fragment shader is %zu bytes\n", pb->GetBufferSize());
+        {   // D3D11 allows 4,096 temporary registers, an indexable array's element taking one: past it the card removes the
+            // device (x25's first core 0 tick: 5,375). Counted from the disassembly (Windows' own compiler's).
+            ID3DBlob* text = nullptr;
+            HMODULE sys = LoadLibraryA("C:\\Windows\\System32\\d3dcompiler_47.dll");
+            auto dis = sys ? (decltype(&D3DDisassemble))GetProcAddress(sys, "D3DDisassemble") : nullptr;
+            if (dis && SUCCEEDED(dis(pb->GetBufferPointer(), pb->GetBufferSize(), 0, nullptr, &text))) {
+                std::string t((const char*)text->GetBufferPointer(), text->GetBufferSize());
+                size_t regs = 0, at = 0;
+                while ((at = t.find("dcl_temps ", at)) != std::string::npos) regs += strtoul(t.c_str() + (at += 10), nullptr, 10);
+                at = 0;
+                while ((at = t.find("dcl_indexableTemp x", at)) != std::string::npos) { at = t.find('[', at) + 1; regs += strtoul(t.c_str() + at, nullptr, 10); }
+                text->Release();
+                printf("gvmbench: %zu temporary registers\n", regs);
+                if (regs > 4096) { printf("gvmbench: more than D3D11's 4,096 temporary registers: not run\n"); exit(1); }
+            }
+        }
         if (const char* out = getenv("GVM_DISASM")) {   // its DXBC, for counting the loop's instructions
             ID3DBlob* text = nullptr;   // (fxc2 has no disassembler: Windows' own compiler's)
             HMODULE sys = LoadLibraryA("C:\\Windows\\System32\\d3dcompiler_47.dll");
@@ -140,7 +158,7 @@ struct Gpu {
     ID3D11Buffer* code = nullptr;   // t12: RAM's first image as a StructuredBuffer<uint4> (a probe's code fetched from a buffer)
     ID3D11ShaderResourceView* codeSrv = nullptr;
     int cur = 0, oc = 0;
-    Prog tick, commit, stg, wrt, prog, any, tickW;   // (tickW: the workers' rows' tick, a step's WORKER=1, x19)
+    Prog tick, commit, stg, wrt, prog, any, tickW, tick0;   // (tickW: the workers' rows' tick, a step's WORKER=1, x19; tick0: core 0's, CORE0=1, x25)
     bool hasCommit = true, hasOps = true, hasAny = false, uavTick = false, hasW = false;   // (uavTick: x19's probe, fragu)   // (hasAny: the step's op_any draw, x19: the rounds predicated on it)
     ID3D11Predicate* pred = nullptr;   // an occlusion predicate: some core has an operation queued
     Tex dummy;                         // op_any's 1 x 1 target (nothing is written: its blend state masks every component)
@@ -150,11 +168,12 @@ struct Gpu {
     uint32_t opSlots = 32, opSpan = 272, opRounds = 2;   // the operations' stage (a step's OP_SLOTS, OP_SPAN) and rounds a pass
     struct { uint32_t ticks, ramEnd, timeLo, timeHi, player, flags, ramRows, ext0, ncores, pad[3], ext[8]; } pass;   // (x17's PassParams)
     size_t pix(uint32_t c, uint32_t p) const {   // the place of core c's state pixel p in a state texture
+        if (g_geo && c == 0 && p >= 64) return (size_t)(8 + p % 8) * texW() + p / 8 - 8;
         if (g_geo) return (size_t)((c >> 7) * 16 + p % 8) * texW() + (c & 127) * 8 + p / 8;
         return (size_t)(c * g_lrows + p / spx) * spx + p % spx;
     }
-    UINT texW() const { return g_geo ? (cores < 128 ? cores : 128) * 8 : spx; }
-    UINT texH() const { return g_geo ? ((cores - 1) / 128) * 16 + 8 : cores * g_lrows; }
+    UINT texW() const { return g_geo ? std::max((cores < 128 ? cores : 128) * 8, g_spix0 > 64 ? (g_spix0 - 64 + 7) / 8 : 0u) : spx; }
+    UINT texH() const { return g_geo ? ((cores - 1) / 128) * 16 + (g_spix0 > 64 ? 16 : 8) : cores * g_lrows; }
     void make(uint32_t ncores, const std::vector<uint32_t>& ramImg, const std::vector<uint32_t>& romImg, const std::vector<std::vector<uint32_t>>& state) {
         cores = ncores;
         statePix = ((g_ntex ? g_ntex : g_twc + g_wcn / 2) + 7) / 8;
@@ -230,7 +249,22 @@ struct Gpu {
         bind(set[cur ^ 1][0], cur ^ 1, true, false);
         ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         ctx->VSSetShader(tick.vs, nullptr, 0); ctx->PSSetShader(tick.ps, nullptr, 0);
-        if (hasW && cores > 1) {   // x19: core 0's row by the tick, the workers' rows by the workers' tick
+        if (g_wcn0) {   // x25: core 0 by its own tick (its block, then its pixels in rows 8-15), the workers band by band
+            ctx->PSSetShader(tick0.ps, nullptr, 0);
+            viewport(8, 8);
+            ctx->Draw(3, 0);
+            if (g_spix0 > 64) {
+                viewport((g_spix0 - 64 + 7) / 8, 8, 8);
+                ctx->Draw(3, 0);
+            }
+            ctx->PSSetShader(tick.ps, nullptr, 0);
+            for (uint32_t b = 0; b * 128 < cores; b++) {
+                uint32_t c0 = b == 0 ? 1 : b * 128, c1 = std::min(cores, (b + 1) * 128);
+                if (c1 <= c0) continue;
+                viewport((c1 - c0) * 8, 8, b * 16, (c0 % 128) * 8);
+                ctx->Draw(3, 0);
+            }
+        } else if (hasW && cores > 1) {   // x19: core 0's row by the tick, the workers' rows by the workers' tick
             viewport(spx, g_lrows);
             ctx->Draw(3, 0);
             viewport(spx, (cores - 1) * g_lrows, g_lrows);
@@ -257,7 +291,7 @@ struct Gpu {
             ID3D11Buffer* b2[2] = {cb, ccb[c]};
             ctx->VSSetConstantBuffers(0, 2, b2);
             ctx->OMSetBlendState(mask[c], nullptr, 0xffffffff);
-            ctx->Draw(g_wcn1 ? g_wcn + (cores - 1) * g_wcn1 : cores * g_wcn, 0);   // (x19g: a worker's WCN1 entries)
+            ctx->Draw(g_wcn0 ? g_wcn0 + (cores - 1) * g_wcn : g_wcn1 ? g_wcn + (cores - 1) * g_wcn1 : cores * g_wcn, 0);   // (x19g: a worker's WCN1 entries; x25: core 0's WCN0)
         }
         ctx->OMSetBlendState(nullptr, nullptr, 0xffffffff);
         if (!hasOps) { clear_srv(); cur ^= 1; return; }
@@ -315,10 +349,11 @@ struct Gpu {
         cur ^= 1;
     }
     std::vector<uint32_t> core_state(uint32_t c) {   // the last pass's state of core c, texel by texel
-        std::vector<uint32_t> out((size_t)statePix * 8 * 4);
+        uint32_t np = c == 0 && g_spix0 ? g_spix0 : statePix;
+        std::vector<uint32_t> out((size_t)np * 8 * 4);
         for (int t = 0; t < 8; t++) {
             std::vector<uint32_t> v = read_tex(set[cur ^ 1][t]);
-            for (uint32_t p = 0; p < statePix; p++) memcpy(&out[((size_t)p * 8 + t) * 4], &v[pix(c, p) * 4], 16);
+            for (uint32_t p = 0; p < np; p++) memcpy(&out[((size_t)p * 8 + t) * 4], &v[pix(c, p) * 4], 16);
         }
         return out;
     }
@@ -462,10 +497,10 @@ static double time_case(Gpu& gpu, const Case& cs, uint32_t ticks, uint32_t passe
     if (cs.ns) return 1000.0 / mops;   // a real program: ns a bundle
     return cs.rv_per_iter > 0 ? mops / per * cs.rv_per_iter : mops;
 }
-struct Variant { std::string name, shader; std::vector<std::string> defs; Prog tick, commit, stg, wrt, prog, any, tickW; bool hasCommit, hasOps, hasAny = false, uavTick = false, hasW = false; uint32_t wcn = 128, texw = 2048, twc = 24, slots = 32, span = 272, lrows = 1, wcn1 = 0, geo = 0, ntex = 0; };
+struct Variant { std::string name, shader; std::vector<std::string> defs; Prog tick, commit, stg, wrt, prog, any, tickW, tick0; uint32_t wcn0 = 0, spix0 = 0; bool hasCommit, hasOps, hasAny = false, uavTick = false, hasW = false; uint32_t wcn = 128, texw = 2048, twc = 24, slots = 32, span = 272, lrows = 1, wcn1 = 0, geo = 0, ntex = 0; };
 static void use(Gpu& gpu, const Variant& v) {
     gpu.tick = v.tick; gpu.commit = v.commit; gpu.stg = v.stg; gpu.wrt = v.wrt; gpu.prog = v.prog;
-    gpu.hasCommit = v.hasCommit; gpu.hasOps = v.hasOps; gpu.uavTick = v.uavTick; gpu.hasW = v.hasW; gpu.tickW = v.tickW; gpu.hasAny = v.hasAny && !env_int("GVM_NOPRED"); gpu.any = v.any;
+    gpu.hasCommit = v.hasCommit; gpu.hasOps = v.hasOps; gpu.uavTick = v.uavTick; gpu.hasW = v.hasW; gpu.tickW = v.tickW; gpu.tick0 = v.tick0; g_wcn0 = v.wcn0; g_spix0 = v.spix0; gpu.hasAny = v.hasAny && !env_int("GVM_NOPRED"); gpu.any = v.any;
     g_wcn = v.wcn; g_texw = v.texw; g_twc = v.twc; g_lrows = v.lrows; g_wcn1 = v.wcn1; g_geo = v.geo; g_ntex = v.ntex;   // (the state's layout, the commit's points and RAM's width are the variant's)
     gpu.opSlots = v.slots; gpu.opSpan = v.span; gpu.opRounds = g_op_rounds;
     g_romrows = 0; g_x17_paths = 0;   // (probe: the ROM in RAM's texture; x17 on the real programs' own paths)
@@ -507,6 +542,15 @@ static void build_variant(Variant& v) {
     const char* path = v.shader.c_str();
     v.uavTick = slurp(v.shader).find("fragu(") != std::string::npos;
     v.tick = program(path, "vert", v.uavTick ? "fragu" : "frag", defs);
+    if (slurp(v.shader).find("#ifndef CORE0") != std::string::npos) {   // x25: core 0's tick, the same with CORE0=1
+        std::vector<D3D_SHADER_MACRO> d0(defs.begin(), defs.end() - 1);
+        d0.push_back({"CORE0", "1"});
+        d0.push_back({nullptr, nullptr});
+        v.tick0 = program(path, "vert", "frag", d0);
+        std::string src = slurp(v.shader);
+        v.wcn0 = step_size(src, {}, "WCN0", 0);
+        v.spix0 = (step_size(src, {}, "NTEX0", 0) + 7) / 8;
+    }
     v.hasW = slurp(v.shader).find("#ifndef WORKER") != std::string::npos;
     if (v.hasW) {   // the workers' tick: the same with WORKER=1
         std::vector<D3D_SHADER_MACRO> dw(defs.begin(), defs.end() - 1);

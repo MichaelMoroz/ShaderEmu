@@ -480,10 +480,10 @@ static std::vector<Case> cases() {
     v[v.size() - 2].named = v[v.size() - 1].named = true;
     // ---- x19: stores at random words of 1 MB in long passes, so that a set's two ways fill and words go to the overflow
     // list; loads read back the last stores (a store and a load in one bundle, path 6), a byte into a stored word
-    v.push_back({"wcov", 1, false, [](std::vector<GvmAsm>& p, auto& data, uint32_t seed) {
-        GvmAsm& a = p[0];
-        a.li(5, 1500); a.li(4, (int32_t)DATA); a.li(9, 1103515245); a.li(10, 0xffffc); a.li(6, (int32_t)(seed * 2654435761u));
-        a.li(11, (int32_t)DATA); a.li(13, (int32_t)DATA); a.li(12, 0);
+    // random stores (wcov's loop; core c in a megabyte of its own from DATA + c MB, n iterations)
+    auto wcov_core = [](GvmAsm& a, uint32_t c, uint32_t n, uint32_t seed) {
+        a.li(5, (int32_t)n); a.li(4, (int32_t)(DATA + c * 0x100000)); a.li(9, 1103515245); a.li(10, 0xffffc); a.li(6, (int32_t)((seed + c) * 2654435761u));
+        a.li(11, (int32_t)(DATA + c * 0x100000)); a.li(13, (int32_t)(DATA + c * 0x100000)); a.li(12, 0);
         int top = a.here();
         a.op(GVM_I_MUL, 6, 6, 9); a.close();
         a.addi(6, 6, 12345); a.close();
@@ -499,6 +499,14 @@ static std::vector<Case> cases() {
         a.add(12, 12, 15); a.close();
         a.addbnz(5, -1, top);
         a.halt();
+    };
+    v.push_back({"wcov", 1, false, [wcov_core](std::vector<GvmAsm>& p, auto& data, uint32_t seed) { wcov_core(p[0], 0, 1500, seed); }});
+    v.back().check_ticks = 3000;
+    // x25: core 0's cache full in long passes, and four cores' (a worker's cache full, its move on insertion)
+    v.push_back({"wcovl", 1, false, [wcov_core](std::vector<GvmAsm>& p, auto& data, uint32_t seed) { wcov_core(p[0], 0, 6000, seed); }});
+    v.back().check_ticks = 8192;
+    v.push_back({"wcov4", 4, false, [wcov_core](std::vector<GvmAsm>& p, auto& data, uint32_t seed) {
+        for (uint32_t c = 0; c < 4; c++) wcov_core(p[c], c, 2000, seed);
     }});
     v.back().check_ticks = 3000;
     // ---- x17's: the whole ISA (gpu_vm/tick/steps/README.md, "x17")

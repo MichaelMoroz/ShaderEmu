@@ -6,6 +6,11 @@ x22 and x23 change the write cache's texels (their `NTEX` 363, `WCN` 258): texel
 words its tag marks), then from T_WT = T_WC + WCN the tags four a texel (RAM texel number | the words stored << 28,
 0xffffffff empty). In x23 entry e is way e % 4 of bucket e / 4 (two tables of 32), 256 and 257 the overflow slots.
 
+x25 compiles the step twice: the workers' as x23, core 0's with `CORE0=1` (`WCN0` 1,026 entries, `NTEX0` 1,323 texels,
+T_WT = T_WC + WCN0). Core 0's pixels 0-63 are its block's; pixel j >= 64 is at ((j >> 3) - 8, 8 + (j & 7)) of the state
+textures (rows 8-15 of the first band). The harness draws core 0 with its own tick (viewports 8 x 8 at 0, and
+(SPIX0 - 64 + 7) / 8 x 8 at row 8), the workers from core 1; the commit draws WCN0 + (cores - 1) * WCN points.
+
 What a harness needs to run gpu_vm's tick (`gpu_vm/tick/steps/x17.hlsl`): the textures, the cbuffers, the draws of a pass
 in order, and where a core's state lies. The semantics are the reference's (`gpu_vm/ref/gvm_ref.h`); `gvmbench.cpp` is a
 working harness (`Gpu::run_pass`). Every texture is `R32G32B32A32_UINT`. The constants named here are the step's

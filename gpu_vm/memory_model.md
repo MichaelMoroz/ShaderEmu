@@ -93,6 +93,7 @@ The model ends more of Half-Life's passes than the card does: 2,986 bundles a pa
    destinations are read in the same pass). Revisit once the cache is larger: with 1,024 entries, the passes that
    still end full are the large copies and the long frames.
 
-Not done: the tick (items 1 and 2: WARP first, then the card), and Quake III's split measured on the card's own
+Done since: items 1 and 2 as tick x25 (`gpu_vm/tick/steps/README.md`, "x25"; at a pass a frame Half-Life 2.2x x23's frames, as
+predicted, but a pass costs 2.7x the card's time). Not done: Quake III's split measured on the card's own
 workload. The proxy for core 0's speed on the card is bundles a pass and passes ended full with `--wc`, from
 `hlmark: begins` (`build/memmodel/wc.sh` in this session).
