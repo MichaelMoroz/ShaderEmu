@@ -108,7 +108,9 @@ DEFAULTS = dict(
                         # 2: the same out of the fast loop: a pass that would end full drops every entry that holds RAM's words, packs the
                         # buckets again (no hole before a resident, none in a texel's first bucket while it lies in its second), places
                         # the store that found no room and goes on (EVMAX times a pass at most); the lookups as they were.
-                        # 3: as 2, run called again from frag; 4: as 3 with no packing, the lookups taking a match before a free way
+                        # 3: as 2, run called again from frag; 4: as 3 with no packing, the lookups taking a match before a free way;
+                        # 5: as 3 with no moves but the stores that found no room: a dropped entry a tombstone, freed after a bucket's last
+                        # resident when no second-table texel has that bucket as its first; the lookups as they were
 )
 
 SPACE = dict(   # the values a search draws from
@@ -118,7 +120,7 @@ SPACE = dict(   # the values a search draws from
     bandx=[1, 2], per=[16, 32, 64, 128], jrow=[0, 1], perm=['id', 'bitrev', 'mul'], mul=[3, 5, 37, 77],
     early=[0, 1, 2, 3], mru=[0, 1, 2, 4], bb=[0, 1], tfirst=[0, 1], s6=[0, 1], nc=[0, 1], thin=[0, 1], thin8=[0, 1], wide3=[0, 1, 2], late=[0, 1, 2, 3], fx1=[0, 1], ov=[0, 4, 8, 16], mv=[0, 1], cv=[0, 1, 2], wsh=[0, 1, 2, 3], wad=[0, 1, 2, 3, 4, 5, 6, 7], s12b=[0, 1, 2, 3], s12in=[0, 1], rc=[0, 1, 2], dtx=['both', 'one'], rpk=['scalar', 'vec', 'wide'], pk=['scalar', 'vec', 'aos'], lay=['split', 'merged'],
     xr=[0, 64, 128, 256, 512, 1024], npair=[0, 32, 64, 128], xbind=[0, 1], xload=['pre', 'lazy'], xfast=[0, 1],
-    pf=[0, 1, 2], pft=[0, 4, 8, 16], pfd=[1, 2], lpf=[0, 128, 256, 512, 1024], lps=[0, 64, 128, 256], s12pf=[0, 1], ldf=[0, 1], cc0f=[0, 1], evf=[0, 1, 2, 3, 4], cc0x=[0, 1, 2, 3], m6seq=[0, 1], snk=[0, 1], rmap=[0, 1, 2], sil=[0, 1, 2, 3], silp=[1, 2, 3, 4, 8, 12, 15], mflat=[0, 1, 2, 3, 6, 7, 10],
+    pf=[0, 1, 2], pft=[0, 4, 8, 16], pfd=[1, 2], lpf=[0, 128, 256, 512, 1024], lps=[0, 64, 128, 256], s12pf=[0, 1], ldf=[0, 1], cc0f=[0, 1], evf=[0, 1, 2, 3, 4, 5], cc0x=[0, 1, 2, 3], m6seq=[0, 1], snk=[0, 1], rmap=[0, 1, 2], sil=[0, 1, 2, 3], silp=[1, 2, 3, 4, 8, 12, 15], mflat=[0, 1, 2, 3, 6, 7, 10],
 )
 
 def layout(P):
@@ -824,7 +826,35 @@ def evf2_text(P, src):
         a = ev[ev.index('    ev_pack(0, 2 * NB);'):ev.index('    bool ok = true;')]
         assert src.count(a) == 1
         src = src.replace(a, '')
-    if P['evf'] in (3, 4):   # (evf 3: run as it was, called again from frag after a full end that compact() frees)
+    if P['evf'] == 5:   # (evf 5: a dropped entry's tag a tombstone (no texel, no word: a lookup passes it, the commit draws nothing);
+        # those after a bucket's last resident become free when no texel of the second table has the bucket as its first
+        rep("            bool eq = tg != NONE && ((mk & 1)", "            bool eq = tg != NONE && tg != TOMB && ((mk & 1)")
+        a = ev[ev.index('            [flatten] if (eq) wt[e] = NONE;'):ev.index('    bool ok = true;')]
+        assert src.count(a) == 1
+        src = src.replace(a, '''            [flatten] if (eq) wt[e] = TOMB;
+            n += eq ? 1u : 0u;
+        }
+    }
+    [branch] if (n == 0) return false;
+    uint dep0 = 0, dep1 = 0;   // (the first-table buckets a second-table resident has as its first: they must stay full)
+    [loop] for (g = 4 * NB; g < 8 * NB; g++) {
+        uint tg = wt[g];
+        [branch] if (tg != NONE && tg != TOMB) { uint b = wc_b1(tg & 0x0fffffffu); dep0 |= b < 32 ? 1u << b : 0u; dep1 |= b >= 32 ? 1u << (b - 32) : 0u; }
+    }
+    [loop] for (g = 0; g < 2 * NB; g++) {   // a bucket's tombstones after its last resident: free
+        uint4 q = bucket(g);
+        bool keep = g < NB && (((g < 32 ? dep0 >> g : dep1 >> (g - 32)) & 1) != 0);
+        bool l3 = q.w != NONE && q.w != TOMB, l2 = l3 || (q.z != NONE && q.z != TOMB), l1 = l2 || (q.y != NONE && q.y != TOMB);
+        [branch] if (!keep) {
+            [flatten] if (!l1 && q.y == TOMB) wt[4 * g + 1] = NONE;
+            [flatten] if (!l2 && q.z == TOMB) wt[4 * g + 2] = NONE;
+            [flatten] if (!l3 && q.w == TOMB) wt[4 * g + 3] = NONE;
+            [flatten] if (!l1 && !(q.x != NONE && q.x != TOMB) && q.x == TOMB) wt[4 * g] = NONE;
+        }
+    }
+''')
+        rep("static const uint NONE = 0xffffffffu;", "static const uint NONE = 0xffffffffu;" + N + "static const uint TOMB = 0x0ffffffeu;   // (evf 5: a dropped entry: no texel's, no word)")
+    if P['evf'] in (3, 4, 5):   # (evf 3: run as it was, called again from frag after a full end that compact() frees)
         calls = ["    run(core == 0 ? _Ticks : bud);" + N, "    run(bud);" + N]
         c = [x for x in calls if src.count(x) == 1]
         assert len(c) == 1, 'evf 3: run call'
