@@ -98,8 +98,8 @@ the tolerance named (`gvmcmp`, `NEAR` in `test_all.py`); an exact sum where the 
 | Micropolis | yes | PASS | PASS | exact sums |
 | Tiberian Dawn | yes | PASS (300, 1300, paths, won) | 300, 1300 PASS | exact state sums |
 | Red Alert | yes | every case the RISC-V machine's state sums (5fed4b4: a mix from the ROM mapped writable, the iconset header read by bytes); movie: 0 of 154 frames differ (154: the movie's own pace); atlas-forgotten 299 of 300 pictures (frame 58's overlay, gvm_cpu's timing) | soviet-300, movie (0 of 156), atlas, atlas-forgotten (300 of 300) PASS | exact state sums |
-| Quake | yes (-lmfloat) | quake-light PASS (QUAKE_STATS_FRAMES); walk, exit, particles fail on gvm_cpu's clock pacing | quake-light PASS | as RISC-V; walk reaches 480 687 24 with commands typed ahead |
-| Quake III | yes | workers, inline, bots, bots-serial PASS; server: digest by load time | workers/inline: 237 of 237 lines the same, fewer than 500 (load time) | as RISC-V where QUAKE3_ENTER fixes the entry |
+| Quake | yes (-lmfloat) | quake-light, particles PASS; walk, exit fail on gvm_cpu's pace (4x the card's: a key typed on seeing "track 30:" lands some 40 frames late) | light, particles, walk, exit PASS | as RISC-V; particles: a float sum, gvm_cpu's and the card's own (the same to frame 200, apart from 206: the card's special functions) |
+| Quake III | yes | workers, inline, bots, bots-serial, server PASS | server PASS; workers/inline: 237 of 237 lines the same, fewer than 500 (load time) | as RISC-V where QUAKE3_ENTER fixes the entry (server: QUAKE3_ENTER=1000 added; float sums, gvm_cpu's 9b8ecbe9, the card's 4fab5e9b in two runs: apart from the first sum, taken to be the special functions, not proven) |
 | Half-Life: Uplink | yes (-lmfloat, 1 MB stack) | plays through the fight, HL_ROTATION=check 0 wrong; GVM_RACES 0 or 7 undone (light styles) | not run | HLGL_PICSUM 656aa416 (GPU addresses moved: not RISC-V's) |
 | terminal: nano, mg, htop, dialog, sl, file | yes | PASS | nano PASS | as RISC-V (TERM=linux) |
 | mc, mcedit | yes | PASS (term-mc: a command line in the subshell; term-mcedit) | PASS | as RISC-V |
@@ -127,8 +127,7 @@ the tolerance named (`gvmcmp`, `NEAR` in `test_all.py`); an exact sum where the 
 - **The HLSL compiler** runs its IR instead of making code (`programs/hlsl/hlsl_interp.c`, `HLSL_INTERP`, on for
   `__gpuvm__`): each operation as the RISC-V code makes it, a step whole (no lanes). `hlsl.sh` builds libhlsl,
   `hlslc`, `hlslview` and `hlsl_bench`; the fractal's sum is the host's (`3614e8bb`).
-- Quake's walk, exit and particles cases and Quake III's server case on gvm_cpu depend on the clock's pace against the
-  machine's speed; the card's runs of them are to be made.
+- Quake's walk and exit cases on gvm_cpu depend on its pace against the keys typed (they pass on the card).
 
 ## Checks
 

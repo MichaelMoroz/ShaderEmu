@@ -15,6 +15,14 @@ _spec.loader.exec_module(G)
 T = G.T
 
 
+# the card's own values where its special functions take a float sum elsewhere than gvm_cpu's (test_all.py's OVERRIDES):
+# the same in two runs on the card
+CARD = {
+    'quake3-server': dict(digest=[(r'^(q3srvsum: .*)', '4fab5e9b')]),
+    'quake-particles': dict(digest=[], has=[r'particles at frame 960: 2e7780de']),
+}
+
+
 def run(c, a):
     log = os.path.join(a.logs, c['name'] + '.log')
     if os.path.exists(log):
@@ -46,7 +54,7 @@ def main():
     ap.add_argument('--wall-scale', type=float, default=1.0)
     a = ap.parse_args()
     os.makedirs(a.logs, exist_ok=True)
-    cases = [G.gpu_vm_case(c) for c in T.CASES if c['name'] in a.select or c['tags'] & set(a.select)]
+    cases = [dict(G.gpu_vm_case(c), **CARD.get(c['name'], {})) for c in T.CASES if c['name'] in a.select or c['tags'] & set(a.select)]
     done, failed = {}, []
     for c in cases:
         if c['cmd'] is None or c['image'] or any(m in ('--host', '--host-from', '--host-wheel') for m in c['more']):

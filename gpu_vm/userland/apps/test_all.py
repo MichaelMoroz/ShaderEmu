@@ -42,13 +42,22 @@ OVERRIDES = {
     # gvm_cpu plays the movie at its own pace and TDAWN_AUTO's Return ends it before its last frames (154 of 156; the
     # card shows all 156): what is checked is that none differs
     'ralert-movie': dict(has=[r'movie check: 0 of 15\d shared frames differ']),
+    # sums of floats (the particles' vertices; the bots' and the players' moves) under gpu_vm's math: gvm_cpu's own,
+    # the same with 17 to 32 cores; the card's special functions part from them (the particles at frame 206, the sums
+    # every 100 frames the same to frame 200), as nxpinball's game. quake3-server enters at 1000 ms (PREFIX)
+    # (the sum at one frame: the lines printed vary, a worker's line now and then lost, a frame after the end or not)
+    'quake-particles': dict(digest=[], has=[r'particles at frame 960: 64fca136']),
+    'quake3-server': dict(digest=[(r'^(q3srvsum: .*)', '9b8ecbe9')]),
     # uname -m says the machine
     'ports-dropbear': dict(has=[r'^ssh-ok gpuvm$', r'^file-data$', r'^sftp> get /tmp/f2 /tmp/f3']),
 }
-# a line added to a case's command (its program's own switches)
+# switches added to a case's command: (the text they go before, the switches)
 PREFIX = {
     # the timedemo ends before a stats period of the clock where frames are cheap: a period of frames instead
-    'quake-light': 'QUAKE_STATS_FRAMES=200 ',
+    'quake-light': ('QUAKE_LIGHTPOINT=', 'QUAKE_STATS_FRAMES=200 '),
+    # the player enters at 1000 ms of the game, not when its load ends (as quake3-bots): otherwise the sums go by the
+    # machine's speed
+    'quake3-server': ('QUAKE3_SEED=', 'QUAKE3_ENTER=1000 '),
 }
 
 # gvm_cpu's clock a pass (100 kHz ticks; its default 20 is 0.2 ms, the card's machine runs fewer bundles a second):
@@ -75,7 +84,8 @@ def gpu_vm_case(c):
     c = dict(c)
     c.update(OVERRIDES.get(c['name'], {}))
     if c['name'] in PREFIX and c['cmd']:
-        c['cmd'] = c['cmd'].replace('QUAKE_LIGHTPOINT=', PREFIX[c['name']] + 'QUAKE_LIGHTPOINT=')
+        at, add = PREFIX[c['name']]
+        c['cmd'] = c['cmd'].replace(at, add + at, 1)
     cmd, has, name = c['cmd'] or '', list(c.get('has', [])), c['name']
     # nxpath's pictures (docs/apps/raytrace.md: a sum each), by PSNR
     if name.startswith('nxpath') and 'NXPATH_AUTO=1' in cmd and any(' sum ' in h or '02f213e9' in h for h in has):
