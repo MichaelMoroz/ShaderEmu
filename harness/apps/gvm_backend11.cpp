@@ -296,9 +296,10 @@ public:
             D3D11_BOX cbx = {tx(c0), ty(c0), 0, tx(c0) + 256, ty(c0) + 1, 1};
             ctx->CopySubresourceRegion(ctl_.t.Get(), 0, 0, 0, 0, ram_.t.Get(), 0, &cbx);
             writeback(mat);
-            // GVM_LIST_LAZY=1: the list is drawn only in the passes after a readback saw it submitted (the submit word is
+            // The lazy list (the default; GVM_LIST_LAZY=0 draws it every pass, as before): the list is drawn only in the
+            // passes after a readback saw it submitted, as fast or faster in every game (gpu_vm/IDEAS.md 38) (the submit word is
             // taken back once it is drawn: a list waits a few passes more, as a world's frame draws the devices once)
-            static const bool lazy = getenv("GVM_LIST_LAZY") && atoi(getenv("GVM_LIST_LAZY")) != 0;
+            static const bool lazy = !getenv("GVM_LIST_LAZY") || atoi(getenv("GVM_LIST_LAZY")) != 0;
             if (!lazy || listDue_ > 0) {
                 gpuDraw(mat);
                 if (listDue_ > 0) listDue_--;
@@ -321,13 +322,14 @@ public:
             static const uint32_t zonesEvery = getenv("GVM_ZONES_EVERY") ? (std::max)(1, atoi(getenv("GVM_ZONES_EVERY"))) : 1;
             bool zones = zonesEvery == 1 || merge || conDelivered || deliver_ || deliverNet_ || listDue_ > 0 || ++zoneSkip_ >= zonesEvery;
             if (zones) zoneSkip_ = 0;
-            if (zones) zone(mat, 0x700000u, kControlTexels);
-            if (tq_) ctx->End(tq_[6]);   // (GVM_TIME_LOG: the control zone's end)
+            // (the control words and, with workers, MC_STATS_ALL in one draw: gpu_vm/IDEAS.md 38)
+            if (zones && workers_) zonePair(mat, 0x700000u, kControlTexels, 0x76ba00u, 72);   // MC_STATS_ALL
+            else if (zones) zone(mat, 0x700000u, kControlTexels);
+            if (tq_) ctx->End(tq_[6]);   // (GVM_TIME_LOG: the control zone's end, MC_STATS_ALL's too)
             if (conDelivered) {
                 zone(mat, 0x76b828u, 1);     // CON_HOST
                 conDelivered = false;
             }
-            if (workers_ && zones) zone(mat, 0x76ba00u, 72);   // MC_STATS_ALL
             if (deliver_) {
                 zone(mat, 0x76c000u, 0x4000);   // FETCH_DATA
                 deliver_ = false;
@@ -927,9 +929,36 @@ private:
         bool rows = x0 + n > kRamW;
         zoneBox(mat, rows ? 0 : x0, y0, rows ? kRamW : n, rows ? (x0 + n + kRamW - 1) / kRamW : 1);
     }
-    void zoneBox(Material& mat, UINT x, uint32_t y0, UINT w, UINT h) {
+    // Two zones of a row each in one draw (the control words and MC_STATS_ALL): zone A's texels, then B's, in the
+    // scratch row, then two copies; GVM_ZONES_APART=1 draws them apart as before (a measure)
+    void zonePair(Material& mat, uint32_t ia, uint32_t na, uint32_t ib, uint32_t nb) {
+        static const bool apart = getenv("GVM_ZONES_APART") && atoi(getenv("GVM_ZONES_APART")) != 0;
+        uint32_t ta = ia - kIndexBias, tb = ib - kIndexBias;
+        auto oneRow = [&](uint32_t t, uint32_t n) { return rmap_ ? (t & 511) + n <= 512 : t % kRamW + n <= kRamW; };
+        if (apart || !oneRow(ta, na) || !oneRow(tb, nb) || na + nb > kRamW) {
+            zone(mat, ia, na);
+            zone(mat, ib, nb);
+            return;
+        }
         ID3D11DeviceContext* ctx = gpu_.ctx.Get();
+        mat.setInt("_GvmZoneSplit", na);
+        mat.setInt("_GvmZone2X", tx(tb));
+        mat.setInt("_GvmZone2Y", ty(tb));
+        zoneDraw(mat, tx(ta), ty(ta), na + nb, 1);
+        D3D11_BOX a = {0, 0, 0, na, 1, 1}, b = {na, 0, 0, na + nb, 1, 1};
+        ctx->CopySubresourceRegion(ram_.t.Get(), 0, tx(ta), ty(ta), 0, zone_.t.Get(), 0, &a);
+        ctx->CopySubresourceRegion(ram_.t.Get(), 0, tx(tb), ty(tb), 0, zone_.t.Get(), 0, &b);
+        mat.setInt("_GvmZoneSplit", (int64_t)0xffffffffu);
+    }
+    void zoneBox(Material& mat, UINT x, uint32_t y0, UINT w, UINT h) {
         if (h > zone_.h) return;
+        mat.setInt("_GvmZoneSplit", (int64_t)0xffffffffu);
+        zoneDraw(mat, x, y0, w, h);
+        D3D11_BOX box = {0, 0, 0, w, h, 1};
+        gpu_.ctx->CopySubresourceRegion(ram_.t.Get(), 0, x, y0, 0, zone_.t.Get(), 0, &box);
+    }
+    void zoneDraw(Material& mat, UINT x, uint32_t y0, UINT w, UINT h) {
+        ID3D11DeviceContext* ctx = gpu_.ctx.Get();
         mat.setInt("_GvmZoneX", x);
         mat.setInt("_GvmZoneY", y0);
         mat.setTexture("_State", ram_.srv.Get(), kRamW, rows_);
@@ -945,8 +974,6 @@ private:
         mat.bind(ctx, pass, gpu_);
         ctx->Draw(3, 0);
         clearSrv();
-        D3D11_BOX box = {0, 0, 0, w, h, 1};
-        ctx->CopySubresourceRegion(ram_.t.Get(), 0, x, y0, 0, zone_.t.Get(), 0, &box);
     }
     // The picture into RAM, as the control pass noted it last frame (devices.shader's GPUWriteback)
     void writeback(Material& mat) {

@@ -813,18 +813,22 @@ bool gpu_writeback(uint2 pos, out uint4 result) {
 int3 gvm_s16(uint core) {   // the pixel of texels 16 to 23: a row a core, or (_GvmGeo, the step's GEO_BLOCKS) a block
     return _GvmGeo != 0 ? int3((core & 127) * 8, (core >> 7) * 16 + 2, 0) : int3(2, core, 0);
 }
+// (every load made, whether or not the core is there, and the loop unrolled: the 64 loads of a texel of bits go out
+// together, not one core's after the last one's came back, 5 us a pass less: gpu_vm/IDEAS.md 38. A core past
+// _GvmWorkers reads a texel of the state that is there and is masked off.)
 uint mc_stat_count(uint core) {
-    return core <= _GvmWorkers ? _GvmS3.Load(gvm_s16(core)).g : 0;
+    uint count = _GvmS3.Load(gvm_s16(min(core, 255u))).g;
+    return core <= _GvmWorkers ? count : 0;
 }
 uint2 mc_stat_bits(uint from) {
     uint running = 0, asleep = 0;
-    for (uint n = 0; n < 32; n++) {
+    [unroll] for (uint n = 0; n < 32; n++) {
         uint core = from + n;
-        if (core > _GvmWorkers) continue;
-        uint4 s16 = _GvmS0.Load(gvm_s16(core)), s19 = _GvmS3.Load(gvm_s16(core));
+        uint4 s16 = _GvmS0.Load(gvm_s16(min(core, 255u))), s19 = _GvmS3.Load(gvm_s16(min(core, 255u)));
+        bool there = core <= _GvmWorkers;
         bool parked = core != 0 && s16.x >= _GvmParkLo && s16.x < _GvmParkHi;
-        running |= (parked ? 0u : 1u) << n;
-        asleep |= (!parked && core != 0 && s19.w == 2 && (s16.y & 8) == 0 ? 1u : 0u) << n;   // a user's wait ended its pass
+        running |= (there && !parked ? 1u : 0u) << n;
+        asleep |= (there && !parked && core != 0 && s19.w == 2 && (s16.y & 8) == 0 ? 1u : 0u) << n;   // a user's wait ended its pass
     }
     return uint2(running, asleep);
 }

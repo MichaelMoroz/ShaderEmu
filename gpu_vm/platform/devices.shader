@@ -33,7 +33,8 @@ Shader "ShaderEmu/gvm_devices"
         }
 
         // The control words as zones: the host's viewport is the zone in a scratch texture, which it then copies into
-        // RAM at (_GvmZoneX, _GvmZoneY); every pixel reads RAM, none the texture it draws.
+        // RAM at (_GvmZoneX, _GvmZoneY); every pixel reads RAM, none the texture it draws. From pixel _GvmZoneSplit on
+        // the row is a second zone, at (_GvmZone2X, _GvmZone2Y): the control words and MC_STATS_ALL in one draw.
         Pass
         {
             Name "GPUControl"
@@ -44,7 +45,7 @@ Shader "ShaderEmu/gvm_devices"
             Texture2D<uint4> _State;
             Texture2D<uint4> _GvmS0;   // the tick's state textures 0 and 3 (texels 16 and 19 of each core's row)
             Texture2D<uint4> _GvmS3;
-            uniform uint _GvmZoneX, _GvmZoneY, _GvmPasses, _GvmWorkers, _GvmParkLo, _GvmParkHi, _GvmGeo;
+            uniform uint _GvmZoneX, _GvmZoneY, _GvmZoneSplit, _GvmZone2X, _GvmZone2Y, _GvmPasses, _GvmWorkers, _GvmParkLo, _GvmParkHi, _GvmGeo;
             uniform float4 _InputPointer;
             uniform uint _InputButtons, _InputKeySeq, _InputKeyCount;
             uniform uint _HostMs;
@@ -72,7 +73,10 @@ Shader "ShaderEmu/gvm_devices"
             #define GPU_INPUT
             #include "../../experiments/rvc_opt/src/gpu.h"
             float4 vert(uint id : SV_VertexID) : SV_Position { return float4(id == 1 ? 3.0 : -1.0, id == 2 ? -3.0 : 1.0, 0.0, 1.0); }
-            uint4 frag(float4 at : SV_Position) : SV_Target { return gpu_control(uint2(at.xy) + uint2(_GvmZoneX, _GvmZoneY)); }
+            uint4 frag(float4 at : SV_Position) : SV_Target {
+                uint2 p = uint2(at.xy);
+                return gpu_control(p.x >= _GvmZoneSplit ? uint2(p.x - _GvmZoneSplit + _GvmZone2X, _GvmZone2Y) : p + uint2(_GvmZoneX, _GvmZoneY));
+            }
             ENDCG
         }
 
