@@ -120,3 +120,18 @@ Which bundles leave the fast loop (gvm_cpu `--profile` between two of the game's
 | nxray, one picture | 36.9% | 23.2% (the kernel) | 50.6% | 0.4% (step12 50.2%: floats) |
 
 `gvm_cpu --profile-at TEXT --profile-until TEXT` counts between two console lines (added for this).
+
+## x24 (23 October 2026; gpu_vm/tick/steps/README.md "x24": x23 with the common memory op's lookup skipped)
+
+Two rounds a machine (`run.py bench OUT --machine x22,x23,x24 --rounds 2`); guest fps:
+
+| | x22 | x23 | x24 |
+|---|---|---|---|
+| Quake III | 44.6, 45.1 | 65.9 (69.8 in an earlier run) | 68.5 (63.6 in an earlier run) |
+| Half-Life | 7.5, 7.5 | 10.8, 10.7 | 10.5, 10.4 |
+| nxray | 19.1, 19.5 | 21.0, 21.2 | 21.2, 21.1 |
+| core 0 a pass: Q3 / HL / nxray | 1,075 / 1,418 / 1,907 | 2,264 / 2,734 / 3,078 | 2,347 / 2,743 / 3,076 |
+
+One Quake III run of x23 and one of x24 (and one of an x24 variant) ended in the game's `CG_ProcessSnapshots: n <
+cg.latestSnapshotNum` (docs/games/quake3.md, "Found and not explained"): the server stops, core 0 runs 5,300 bundles a
+pass at "85 fps" with the workers idle. Such a run is not a measure; read the log's ERROR line before the table.

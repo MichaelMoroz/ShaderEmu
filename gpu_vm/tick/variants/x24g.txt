@@ -1,0 +1,5 @@
+x23       gpu_vm/tick/steps/x23.hlsl
+d4        gpu_vm/tick/steps/x24w.hlsl
+g1        gpu_vm/tick/steps/x24w.hlsl -D MRU=0
+g2        gpu_vm/tick/steps/x24w.hlsl -D BB=0
+g3        gpu_vm/tick/steps/x24w.hlsl -D MRU=0 -D BB=0

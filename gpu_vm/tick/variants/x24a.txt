@@ -1,0 +1,9 @@
+# x24a: x23's lookup with the common case first: MRU (the last stored texel's entry in registers), TOUCH (buckets marked
+# when first stored to, the second bucket read only when the first is full), against x21, x22 and x23
+x21       gpu_vm/tick/steps/x21.hlsl
+x22       gpu_vm/tick/steps/x22.hlsl
+x23       gpu_vm/tick/steps/x23.hlsl
+m1t1      gpu_vm/tick/steps/x24v.hlsl -D MRU=1 -D TOUCH=1
+m0t1      gpu_vm/tick/steps/x24v.hlsl -D MRU=0 -D TOUCH=1
+m1t0      gpu_vm/tick/steps/x24v.hlsl -D MRU=1 -D TOUCH=0
+m0t0      gpu_vm/tick/steps/x24v.hlsl -D MRU=0 -D TOUCH=0

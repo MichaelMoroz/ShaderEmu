@@ -1,0 +1,8 @@
+# x24c: x24w's MRU kept out of step12 (S12 0: a store there forgets the last stored texels), packed a word an entry (PACK)
+x21       gpu_vm/tick/steps/x21.hlsl
+x22       gpu_vm/tick/steps/x22.hlsl
+x23       gpu_vm/tick/steps/x23.hlsl
+w11       gpu_vm/tick/steps/x24w.hlsl
+c1        gpu_vm/tick/steps/x24w.hlsl -D S12=0
+c2        gpu_vm/tick/steps/x24w.hlsl -D S12=0 -D PACK=1
+c3        gpu_vm/tick/steps/x24w.hlsl -D PACK=1

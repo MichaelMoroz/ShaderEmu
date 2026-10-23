@@ -1,0 +1,8 @@
+# x24e: x24w with a load's lookup and a store's note behind the branches the op takes anyway (LEAN), packed (PACK), not in step12 (S12 0)
+x21       gpu_vm/tick/steps/x21.hlsl
+x22       gpu_vm/tick/steps/x22.hlsl
+x23       gpu_vm/tick/steps/x23.hlsl
+d4        gpu_vm/tick/steps/x24w.hlsl -D LEAN=0
+e4        gpu_vm/tick/steps/x24w.hlsl -D LEAN=1
+e4p       gpu_vm/tick/steps/x24w.hlsl -D PACK=1 -D LEAN=1
+e4n       gpu_vm/tick/steps/x24w.hlsl -D S12=0 -D LEAN=1

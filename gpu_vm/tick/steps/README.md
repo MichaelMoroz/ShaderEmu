@@ -625,3 +625,56 @@ core 0 apart, `=2` after the workers; `GVM_SPLIT_LOG=1` prints a timestamp's spl
 is as fast as in one draw (nxray 5.66 against 5.87 ms); Half-Life's core 0 draws end 0.98 ms into x23's pass and 2.65 ms
 into x25's, the workers 0.66 and 2.08 ms after them: x25's workers get more to do in a pass (a worker ran its whole
 budget in 75% of the passes, x23 41%), so the longer pass is core 0's and the workers' both.
+
+## x24: x23 with the common memory op's lookup skipped (23 October 2026; RTX 5070 Laptop; not the default)
+
+x23's loads and stores loops were 14% slower than x22's. x24 (`x24.hlsl`, no switch; `x24w.hlsl` is its switch copy, the
+plain file compiles to the same DXBC as `x24w.hlsl -D FLAT=0`) keeps x23's state layout and tables and adds:
+- **The last four stored texels** in registers (`mtg`, `msl`: their tags and entries, the latest first). A texel's entry is
+  its own for the pass, so a store or a load of one of them reads no tags; a store pair (path 6) both of whose texels are
+  there (or whose second op is a load of no stored texel) takes one branch past both lookups.
+- **A first-bucket filter for loads** (`bb`: bit b1 of every stored texel): a load whose first bucket no store had reads
+  no tags (a texel goes to its second bucket only when its first is full). Beside the bloom word; it is what keeps
+  CoreMark at 180 ns (without it 190).
+- **Texels first**: a load's texel is fetched before its lookup, two loads' texels before either's, and the two loads look
+  up behind one branch. This is what brought the loads loop from 8.4 back to 10.7 (with no lookup made at all in that
+  loop, x23's order still cost 30%).
+
+Card, one batch (`variants/x24.txt`; loops in M instructions/s, real code ns a bundle, mc at 255 cores ns a bundle):
+
+| | arith | loads | stores | mix | stride | floats | fmix | fmath | x lean | CoreMark | gzip | gunzip | mc_int | mc_load |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| x21 | 20.43 | 11.50 | 10.68 | 17.53 | 13.99 | 7.09 | 8.76 | 6.83 | 2.07 | 175.1 | 224.6 | 179.6 | 1.56 | 2.52 |
+| x22 | 20.49 | 9.81 | 7.86 | 15.76 | 10.87 | 7.07 | 7.99 | 6.81 | 1.87 | 185.0 | 257.2 | 211.2 | 1.57 | 3.15 |
+| x23 | 20.49 | 8.38 | 6.78 | 15.86 | 13.71 | 7.01 | 7.44 | 6.74 | 1.84 | 182.4 | 218.9 | 181.4 | 1.61 | 2.83 |
+| **x24** | 20.47 | 10.74 | 8.42 | 16.49 | 13.57 | 6.74 | 8.03 | 6.51 | 1.95 | 180.1 | 232.2 | 177.4 | 1.60 | 2.67 |
+
+(adds and tight are 19.2-19.3 in all four.) Against x23: loads +28%, stores +24%, mix +4%, fmix +8%, CoreMark and gunzip
+1-2% cheaper, mc_load 6% cheaper; floats -4%, fmath -3%, gzip 6% dearer. Against max(x21, x22) it still loses loads
+(-7%), stores (-21%), mix (-6%), fmix (-8%), floats and fmath (-5%), CoreMark (+3%) and gzip (+3%, x21's).
+
+Games (`bench_games/run.py`, two rounds, fps; x23 and x24 each had one Quake III run end in the game's known
+`CG_ProcessSnapshots: n < cg.latestSnapshotNum` (docs/games/quake3.md), left out): Quake III x22 44.6/45.1, x23 65.9 (69.8 in
+an earlier run), x24 68.5 (63.6 earlier); Half-Life x22 7.5/7.5, x23 10.8/10.7, x24 10.5/10.4; nxray x22 19.1/19.5, x23
+21.0/21.2, x24 21.2/21.1. So x24 plays as x23 (Half-Life 3% under, in both rounds and in an earlier run): the games' passes
+still end on a full cache or on the busiest worker, which x24 does not change.
+
+What was tried on the way (`x24v.hlsl`, `x24w.hlsl`, `variants/x24a-j.txt`), each against x23 in its batch:
+
+| Variant | What | Result |
+|---|---|---|
+| x24v TOUCH | buckets marked when first stored to (no clear at the pass's start), the second bucket read only when the first is full, nested branches | stores 6.6, mix 14.7: slower than x23 |
+| x24v, sequential path 6 | op 1 looked up after op 0's store, the last stored texel by a branch | stores 5.4-7.1 |
+| x24w MRUN 1, 2, 4 | how many stored texels are kept | 4 best everywhere (gzip 239, 237, 232) |
+| x24w PACK | an entry a word (words << 28, texel << 3, table, way): 4 registers, not 8 | floats back to 6.98, all else 3% slower |
+| x24w LEAN | the load's lookup and the store's note behind more branches | CoreMark 194, gzip 258 |
+| x24w P6E 0, S12F 1 | path 6 without its branch to the kept texels; step12's lookup with none | gzip 231 and 232: neither is gzip's loss |
+| x24w MRU 0, BB 0 | without the kept texels, the filter, both | CoreMark 186, 190, 192; gzip 229, 234, 231 |
+| x24w ORD35, ORD6, LD2X | x23's order back (lookup, then texel) in paths 3/5, 6, two loads | CoreMark 196, 198, 179; gzip 263, 270, 240 |
+| x24w MRU 0 BB 0 + all three orders | as near x23's code as this shape gets | CoreMark 206, gzip 262 (x23: 182, 219) |
+| x24w FLAT | only the tag reads behind the branch, the compares after it (x23's shape) | CoreMark 201, gzip 248 |
+
+Branches cost more than the work they skip, and two forms of nearly the same code differ by 10-15%: the last row but two
+is x23's lookup order with none of x24's additions and is 13% slower than x23. So gzip's 6% could not be pinned to any one
+change. Each variant passed gvmbench's default set on WARP before its card run, and the card's checks on the real cases;
+x24 also mc_int and mc_load at 255 cores.

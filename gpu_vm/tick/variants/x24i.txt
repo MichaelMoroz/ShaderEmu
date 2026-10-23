@@ -1,0 +1,6 @@
+x23       gpu_vm/tick/steps/x23.hlsl
+g3        gpu_vm/tick/steps/x24w.hlsl -D MRU=0 -D BB=0
+i1        gpu_vm/tick/steps/x24w.hlsl -D MRU=0 -D BB=0 -D ORD35=1
+i2        gpu_vm/tick/steps/x24w.hlsl -D MRU=0 -D BB=0 -D ORD6=1
+i3        gpu_vm/tick/steps/x24w.hlsl -D MRU=0 -D BB=0 -D LD2X=1
+i4        gpu_vm/tick/steps/x24w.hlsl -D MRU=0 -D BB=0 -D ORD35=1 -D ORD6=1 -D LD2X=1

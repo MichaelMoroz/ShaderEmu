@@ -1,0 +1,8 @@
+# x24j: x24w with only the tags' reads behind a branch and the compares after it (FLAT, x23's shape)
+x21       gpu_vm/tick/steps/x21.hlsl
+x22       gpu_vm/tick/steps/x22.hlsl
+x23       gpu_vm/tick/steps/x23.hlsl
+d4        gpu_vm/tick/steps/x24w.hlsl -D FLAT=0
+j1        gpu_vm/tick/steps/x24w.hlsl -D FLAT=1
+j2        gpu_vm/tick/steps/x24w.hlsl -D MRU=0 -D BB=0 -D FLAT=1
+j3        gpu_vm/tick/steps/x24w.hlsl -D MRU=0 -D FLAT=1
