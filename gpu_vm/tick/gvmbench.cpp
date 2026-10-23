@@ -428,16 +428,18 @@ static bool check_case(Gpu& gpu, const Case& cs, uint32_t seed, bool verbose) {
     gpu.pass = {T, RAM_END, 1000, 0, 0, 1, ram_rows(), 0, cs.cores, {0, 0, 0}, {0}};
     // TIME is 1000 + the pass (both machines), core 0's external line on in passes [ext_from, ext_to)
     auto ext_on = [&](int pass) { return pass >= cs.ext_from && pass < cs.ext_to; };
-    int end0 = GVM_END_BUDGET; uint32_t bun0 = T;
+    int end0 = GVM_END_BUDGET; uint32_t bun0 = T, busy = 0, busyNext = 0;
     for (int refPasses = 0; refPasses < 400000; refPasses++) {
         bool any = false;
         m.time = 1000 + (uint64_t)refPasses;
         rc[0].ext = ext_on(refPasses);
+        busy = busyNext; busyNext = 0; const int e0 = end0; const uint32_t n0 = bun0;   // (core 0's last pass, as the tick reads it)
         for (uint32_t c = 0; c < cs.cores; c++) if (!rc[c].halted) {   // (a worker's budget: the tick's WSH and WAD)
             uint32_t b = c == 0 ? T : T >> g_gg.wsh;
-            if (c != 0 && g_gg.wad && ((g_gg.wad == 1 && end0 == GVM_END_SYNC) || end0 == GVM_END_FULL)) b = std::min(b, std::max(g_gg.wad == 3 ? b >> 1 : 512u, bun0 + (bun0 >> 2)));
+            if (c != 0 && g_gg.wad && (((g_gg.wad == 1 || g_gg.wad == 4) && e0 == GVM_END_SYNC) || e0 == GVM_END_FULL) && (g_gg.wad != 4 || busy < 4)) b = std::min(b, std::max(g_gg.wad == 3 ? b >> 1 : 512u, n0 + (n0 >> 2)));
             int e = gvm_run(&m, &rc[c], b); any = true;
             if (c == 0) { end0 = e; bun0 = b - rc[0].left; }
+            if (c >= 1 && c <= 8) busyNext += e == GVM_END_BUDGET;
         }
         gvm_commit(&m);
         if (!any) break;

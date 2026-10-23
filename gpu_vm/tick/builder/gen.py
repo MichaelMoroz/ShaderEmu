@@ -69,7 +69,7 @@ SPACE = dict(   # the values a search draws from
     fetch=['both', 'one'], int_first=[0, 1], mem_order=['35', '4'], split=['branch', 'flatten'],
     block=[(8, 8), (16, 4), (4, 16), (8, 4), (4, 8), (32, 2), (16, 8), (8, 16), (32, 4), (64, 1), (32, 1), (16, 2)],
     bandx=[1, 2], per=[16, 32, 64, 128], jrow=[0, 1], perm=['id', 'bitrev', 'mul'], mul=[3, 5, 37, 77],
-    early=[0, 1, 2, 3], mru=[0, 1, 2, 4], bb=[0, 1], tfirst=[0, 1], s6=[0, 1], nc=[0, 1], thin=[0, 1], thin8=[0, 1], wide3=[0, 1, 2], late=[0, 1, 2, 3], fx1=[0, 1], ov=[0, 4, 8, 16], wsh=[0, 1, 2, 3], wad=[0, 1, 2, 3], s12b=[0, 1, 2, 3], s12in=[0, 1], rc=[0, 1, 2], dtx=['both', 'one'], rpk=['scalar', 'vec', 'wide'], pk=['scalar', 'vec', 'aos'], lay=['split', 'merged'],
+    early=[0, 1, 2, 3], mru=[0, 1, 2, 4], bb=[0, 1], tfirst=[0, 1], s6=[0, 1], nc=[0, 1], thin=[0, 1], thin8=[0, 1], wide3=[0, 1, 2], late=[0, 1, 2, 3], fx1=[0, 1], ov=[0, 4, 8, 16], wsh=[0, 1, 2, 3], wad=[0, 1, 2, 3, 4], s12b=[0, 1, 2, 3], s12in=[0, 1], rc=[0, 1, 2], dtx=['both', 'one'], rpk=['scalar', 'vec', 'wide'], pk=['scalar', 'vec', 'aos'], lay=['split', 'merged'],
     xr=[0, 64, 128, 256, 512, 1024], npair=[0, 32, 64, 128], xbind=[0, 1], xload=['pre', 'lazy'], xfast=[0, 1],
 )
 
@@ -650,7 +650,12 @@ def frag(P):
     bud = core == 0 ? _Ticks : _Ticks >> WSH;   // (wsh)
     [branch] if (WAD != 0 && core != 0) {   // (wad: the pass ends about when core 0's does)
         uint4 z = state_in(19, 0);
-        bool cap = WAD == 1 ? z.w == E_SYNC || z.w == E_FULL : z.w == E_FULL;   // (2, 3: core 0 had work: its cache was full)
+        bool cap = WAD == 1 || WAD == 4 ? z.w == E_SYNC || z.w == E_FULL : z.w == E_FULL;   // (2, 3: core 0 had work: its cache was full)
+        [branch] if (WAD == 4 && cap) {   // (4: not when the workers are the work: half of cores 1-8 ran their whole budget)
+            uint busy = 0, k;
+            [loop] for (k = 1; k <= 8; k++) busy += k < _NCores && state_in(19, k).w == E_BUDGET ? 1u : 0u;
+            cap = busy < 4;
+        }
         bud = cap ? clamp(z.z + (z.z >> 2), WAD == 3 ? bud >> 1 : 512u, bud) : bud;
     }
     run(bud);
