@@ -735,7 +735,8 @@ void GPUVMGlobalFill::localRename(const MachineInstr &X, MachineBasicBlock &B,
              C == D->getParent() ? std::next(D->getIterator()) : C->begin();
          J != C->end(); ++J)
       for (const MachineOperand &MO : J->operands())
-        if ((MO.isReg() && MO.getReg() && MO.getReg() != Def &&
+        if ((J->isInlineAsm() && MO.isReg() && MO.getReg() == Def) || // (its register is the constraint's)
+            (MO.isReg() && MO.getReg() && MO.getReg() != Def &&
              TRI->regsOverlap(MO.getReg(), Def)) ||
             (MO.isReg() && MO.getReg() == Def &&
              (MO.isImplicit() || MO.isTied())) ||
