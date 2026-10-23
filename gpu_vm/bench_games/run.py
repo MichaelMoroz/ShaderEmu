@@ -108,7 +108,8 @@ def save(a):
         log = os.path.join(CKPT, m, g + '.save.log')
         prompt = '/ # ' if m == 'rv' else '@gpuvm:~# '
         pre = '' if m == 'rv' else 'cd /; export TERM=linux; '
-        cmd, cwd = harness('x22' if m != 'rv' else m, ['--seconds', str(a.limit), '--expect', prompt, '--send', pre + G['cmd'] + '\\n',
+        # (GVM_SAVE_TICK: the tick that boots and saves, for an image whose code needs one: late branches, fx1)
+        cmd, cwd = harness(os.environ.get('GVM_SAVE_TICK', 'x22') if m != 'rv' else m, ['--seconds', str(a.limit), '--expect', prompt, '--send', pre + G['cmd'] + '\\n',
                                '--until', G['mark'], '--save-state', snap], log)
         t = time.time()
         p = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, errors='replace')
