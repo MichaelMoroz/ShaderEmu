@@ -1963,6 +1963,21 @@ static void scene_start (void)
 		scene_out = mcw_call (scene_job, 0, 0);
 }
 
+int SE_SceneOut (int *on)
+{
+	on[0] = scene_out;
+	return 1;
+}
+
+/* Rests until the next pass: the scene's worker has the whole pass, and so have the client's game and its items (gpu_vm),
+   which are the frame's length in turn with it */
+static void scene_rest (void)
+{
+	mcw_handle	on[3] = { scene_out };
+
+	mcw_rest_on (on, 1 + SE_ClientOut (on + 1));
+}
+
 /* The frames recorded up to `upto` shown, each when it has been drawn; or those drawn so far. */
 static void scene_show (unsigned upto, int wait)
 {
@@ -1976,7 +1991,7 @@ static void scene_show (unsigned upto, int wait)
 				break;
 			if (!wait)
 				return;
-			mcw_rest_on (&scene_out, 1);	/* (gpu_vm: the scene's worker has the whole pass) */
+			scene_rest ();
 			se_scene_passes++;
 			SE_ServerPoll ();
 		}
@@ -2024,7 +2039,7 @@ void SE_SceneFlush (void)
 {
 	scene_show (scene_asked.recorded, 1);
 	while (scene_out && !mcw_ready (scene_out)) {
-		mcw_rest_on (&scene_out, 1);
+		scene_rest ();
 		SE_ServerPoll ();
 	}
 	if (scene_out)

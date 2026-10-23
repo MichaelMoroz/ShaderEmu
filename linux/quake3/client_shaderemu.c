@@ -234,6 +234,12 @@ static void ask (int serverTime, int stereo, int demo)
 	start ();
 }
 
+int SE_ClientOut (int *on)
+{
+	on[0] = job, on[1] = side_out;
+	return 2;
+}
+
 /* Until the worker has made so many frames. */
 static void wait (unsigned frames)
 {
@@ -242,9 +248,9 @@ static void wait (unsigned frames)
 		if (made.frames >= frames)
 			break;	/* (no worker core: this one made them, there and then) */
 		{
-			mcw_handle	on[2] = { job, side_out };
+			mcw_handle	on[3] = { job, side_out };
 
-			mcw_rest_on (on, 2);	/* (gpu_vm: those two have the whole pass) */
+			mcw_rest_on (on, 2 + SE_SceneOut (on + 2));	/* (gpu_vm: those and the scene have the whole pass) */
 		}
 		se_client_passes++;
 		SE_ServerPoll ();	/* (the server's frame is not kept waiting for this core's) */

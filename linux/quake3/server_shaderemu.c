@@ -608,13 +608,17 @@ void SE_ServerSettle (void)
 	if (!out)
 		return;
 	while (!mcw_ready (out)) {
-		mcw_handle	on[1 + SE_THINKERS];
+		mcw_handle	on[1 + SE_THINKERS + 3];
 		unsigned	i;
+		int		n;
 
 		on[0] = out;
 		for (i = 0; i < helpers.count && i < SE_THINKERS; i++)
 			on[1 + i] = helper_out[i];
-		mcw_rest_on (on, 1 + (int)i);	/* (gpu_vm: those have the whole pass) */
+		n = 1 + (int)i;
+		n += SE_ClientOut (on + n);
+		n += SE_SceneOut (on + n);
+		mcw_rest_on (on, n);	/* (gpu_vm: those and the client's frame have the whole pass) */
 		se_server_passes++;
 		helpers_poll ();	/* (the job may wait for a helper stopped at a page) */
 	}
