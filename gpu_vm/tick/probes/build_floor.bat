@@ -14,5 +14,7 @@ cl /nologo /O2 /EHsc /W3 /std:c++17 /Fo"%OUT%\\" /Fe"%OUT%\fetchlat.exe" "%~dp0f
 if errorlevel 1 exit /b 1
 cl /nologo /O2 /EHsc /W3 /std:c++17 /Fo"%OUT%\\" /Fe"%OUT%\xlane.exe" "%~dp0xlane.cpp" d3d11.lib d3dcompiler.lib dxguid.lib user32.lib
 if errorlevel 1 exit /b 1
+cl /nologo /O2 /EHsc /W3 /std:c++17 /Fo"%OUT%\\" /Fe"%OUT%\codemap.exe" "%~dp0codemap.cpp" d3d11.lib d3dcompiler.lib user32.lib
+if errorlevel 1 exit /b 1
 copy /y "%~dp0..\..\..\tools\fxc2\d3dcompiler_47.dll" "%OUT%\" >nul
 exit /b 0
