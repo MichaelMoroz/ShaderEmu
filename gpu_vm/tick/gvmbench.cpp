@@ -91,6 +91,7 @@ static ID3DBlob* compile(const char* path, const char* entry, const char* profil
     char dll[MAX_PATH] = "";   // the compiler that makes it (fxc2 or Microsoft's FXC)
     GetModuleFileNameA(GetModuleHandleA("d3dcompiler_47.dll"), dll, MAX_PATH);
     key += std::to_string(slurp(dll).size());
+    if (const char* u = getenv("VKD3D_UBFE")) key += std::string("VKD3D_UBFE=") + u;   // (fxc2's switch: its shift and mask as one ubfe)
     for (auto& d : defs) if (d.Name) key += std::string(d.Name) + "=" + d.Definition + ";";
     uint64_t h = 1469598103934665603ull;
     for (unsigned char ch : key) h = (h ^ ch) * 1099511628211ull;

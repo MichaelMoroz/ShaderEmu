@@ -1,3 +1,14 @@
+- The rules of the work (23 October 2026). We own the whole stack, from the games' and programs' sources down to the
+  tick's DXBC instructions: the games and userland, the LLVM backend, gpu_vm's ISA, the tick and the other shaders, and
+  fxc2 (`C:\Users\micha\Documents\FXC2`, `tools/fxc2`), so a cost is fixed at whichever layer it is cheapest.
+  - Any sacrifice that makes userland programs faster is worth it.
+  - The shaders can be rewritten completely if needed.
+  - Everything must work under VRChat's constraints (no UAVs in the fragment shader, no texture arrays, D3D11 DXBC).
+  - gpu_vm's ISA can be changed freely, and so can the LLVM backend.
+  - fxc2 can be changed freely for the tick, as long as it still works on all its uses (the harness, Unity, the
+    ShaderEmu and Poiyomi shaders its README measures).
+  - Optimizations are weighed together, not one at a time: one that loses alone may win with another (a layout and the
+    compiler's address, a cache and the ISA's stores), and one that wins alone may not add up with the rest.
 - Linux with the MMU is no longer supported or developed for (21 October 2026): build, test, measure and document the
   no-MMU machine only (`linux/nommu`, `build/images/nommu`). Do not fix, rebuild, test or keep in step anything that only
   the MMU image uses, and do not add MMU paths to new work.
