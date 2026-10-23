@@ -124,7 +124,71 @@ public:
         return rows_.init(gpu_.device.Get(), DXGI_FORMAT_R32G32B32A32_UINT, 16, 64, 1, 3, err, opt.readbackBatch) &&
                control_.init(gpu_.device.Get(), DXGI_FORMAT_R32G32B32A32_UINT, 16, kControlTexels, 1, 3, err, opt.readbackBatch) &&
                net_.init(gpu_.device.Get(), DXGI_FORMAT_R32G32B32A32_UINT, 16, kNetRead, 1, 3, err, opt.readbackBatch) &&
-               field_.init(gpu_.device.Get(), DXGI_FORMAT_R32G32B32A32_UINT, 16, kFieldRead, 1, 3, err, opt.readbackBatch);
+               field_.init(gpu_.device.Get(), DXGI_FORMAT_R32G32B32A32_UINT, 16, kFieldRead, 1, 3, err, opt.readbackBatch) &&
+               (!mboxLog() || mbox_.init(gpu_.device.Get(), DXGI_FORMAT_R32G32B32A32_UINT, 16, kMboxJobs, 1, 3, err, opt.readbackBatch)) &&
+               watchInit(err);
+    }
+    // RVC_MBOX_LOG=FILE (a measure, off by default; gpu_vm/PROFILE_Q3.md "Handoffs"): every pass, the frame's tag and each
+    // core's job, answer and taken words as the pass left them (programs/mc/mc.h: MC_JOB_AT(k) at 0x86c04000 + 64 k), a
+    // record of 2 + 6 x 256 words: tag (low, high), then for each core the job's seq, fn, a0, a1, the answer's done, the taken word
+    static FILE* mboxLog() { static FILE* f = getenv("RVC_MBOX_LOG") ? fopen(getenv("RVC_MBOX_LOG"), "wb") : nullptr; return f; }
+    static const UINT kMboxJobs = 1024, kMboxX = 1024, kMboxRow = 64 + 0x6c0400 / 2048;   // (0x86c04000: texel 0x6c0400 of RAM from 0x80000000)
+    void mboxRequest(ID3D11Texture2D* src, uint64_t tag) {
+        if (mboxLog()) mbox_.request(gpu_.ctx.Get(), src, kMboxX, kMboxRow, tag);
+        watchRequest(src, tag);
+    }
+    // RVC_WATCH=ADDR,ADDR,... and RVC_WATCH_LOG=FILE (a measure, off by default; gpu_vm/PROFILE_Q3.md "Handoffs"): the
+    // RAM texels of those guest addresses (up to 32) as each pass left them, a record of 2 + 4 x N words: the tag (low,
+    // high), then each texel's four words
+    std::vector<uint32_t> watch_;
+    ComPtr<ID3D11Texture2D> watchTex_;
+    RegionReadback watchRb_;
+    FILE* watchLog_ = nullptr;
+    bool watchInit(std::string& err) {
+        const char* w = getenv("RVC_WATCH");
+        if (!w || !getenv("RVC_WATCH_LOG")) return true;
+        for (const char* q = w; *q && watch_.size() < 32;) {
+            char* end;
+            uint32_t a = (uint32_t)strtoul(q, &end, 16);
+            if (end == q) break;
+            watch_.push_back(a);
+            q = *end == ',' ? end + 1 : end;
+        }
+        if (watch_.empty()) return true;
+        D3D11_TEXTURE2D_DESC td = {(UINT)watch_.size(), 1, 1, 1, DXGI_FORMAT_R32G32B32A32_UINT, {1, 0}, D3D11_USAGE_DEFAULT, 0, 0, 0};
+        if (FAILED(gpu_.device->CreateTexture2D(&td, nullptr, &watchTex_))) { err = "RVC_WATCH's texture"; return false; }
+        watchLog_ = fopen(getenv("RVC_WATCH_LOG"), "wb");
+        return watchRb_.init(gpu_.device.Get(), DXGI_FORMAT_R32G32B32A32_UINT, 16, (UINT)watch_.size(), 1, 3, err);
+    }
+    void watchRequest(ID3D11Texture2D* src, uint64_t tag) {
+        if (!watchLog_) return;
+        for (UINT k = 0; k < watch_.size(); k++) {
+            uint32_t t = (watch_[k] - 0x80000000u) >> 4;   // (RAM texel t from 0x80000000: row 64 + t / 2048)
+            D3D11_BOX b = {t % 2048, 64 + t / 2048, 0, t % 2048 + 1, 64 + t / 2048 + 1, 1};
+            gpu_.ctx->CopySubresourceRegion(watchTex_.Get(), 0, k, 0, 0, src, 0, &b);
+        }
+        watchRb_.request(gpu_.ctx.Get(), watchTex_.Get(), 0, 0, tag);
+    }
+    void watchPop() {
+        std::vector<uint8_t> m;
+        uint64_t t;
+        if (!watchLog_ || !watchRb_.pop(gpu_.ctx.Get(), m, t)) return;
+        uint32_t head[2] = {(uint32_t)t, (uint32_t)(t >> 32)};
+        fwrite(head, 4, 2, watchLog_);
+        fwrite(m.data(), 1, watch_.size() * 16, watchLog_);
+    }
+    void mboxPop() {
+        std::vector<uint8_t> m;
+        uint64_t t;
+        if (!mboxLog() || !mbox_.pop(gpu_.ctx.Get(), m, t) || m.size() < kMboxJobs * 16) return;
+        const uint32_t* q = (const uint32_t*)m.data();
+        uint32_t rec[2 + 6 * 256] = {(uint32_t)t, (uint32_t)(t >> 32)};
+        for (int k = 0; k < 256; k++) {   // (core k's four texels: the job, the answer, the fault, the resume; taken is the resume's .z)
+            const uint32_t* j = q + 16 * k;
+            uint32_t* r = rec + 2 + 6 * k;
+            r[0] = j[0], r[1] = j[1], r[2] = j[2], r[3] = j[3], r[4] = j[4], r[5] = j[14];
+        }
+        fwrite(rec, 4, 2 + 6 * 256, mboxLog());
     }
 
     bool loadPayload(Material& mat, const std::string& dir, const std::string& prefix, const std::string& propBase,
@@ -310,6 +374,7 @@ public:
         control_.request(gpu_.ctx.Get(), crt_.current(), 0, kControlRow, tag);
         net_.request(gpu_.ctx.Get(), crt_.current(), 0, kNetRow, tag);
         field_.request(gpu_.ctx.Get(), crt_.current(), kFieldAt, kFieldRow, tag);
+        mboxRequest(crt_.current(), tag);
         // hand the frame to the GPU now, as ExecuteCommandLists does on D3D12: without this it
         // starts when the readback's Map asks for it, after the host's own work for the frame
         if (!getenv("RVC11_NO_FLUSH")) gpu_.ctx->Flush();
@@ -326,6 +391,8 @@ public:
         out.insert(out.end(), control.begin(), control.end());
         if (!field_.pop(gpu_.ctx.Get(), control, controlTag)) return false;
         out.insert(out.end(), control.begin(), control.end());
+        mboxPop();
+        watchPop();
         lastSound_.clear();
         if (!soundTags_.empty() && soundTags_.front() == tag) {
             soundTags_.pop_front();
@@ -812,6 +879,7 @@ private:
             control_.request(ctx, ram_.Get(), 0, kControlRow, tag);
             net_.request(ctx, ram_.Get(), 0, kNetRow, tag);
             field_.request(ctx, ram_.Get(), kFieldAt, kFieldRow, tag);
+        mboxRequest(ram_.Get(), tag);
             if (!getenv("RVC11_NO_FLUSH")) ctx->Flush();
             return true;
         }
@@ -880,6 +948,7 @@ private:
         control_.request(ctx, ram_.Get(), 0, kControlRow, tag);
         net_.request(ctx, ram_.Get(), 0, kNetRow, tag);
         field_.request(ctx, ram_.Get(), kFieldAt, kFieldRow, tag);
+        mboxRequest(ram_.Get(), tag);
         if (!getenv("RVC11_NO_FLUSH")) ctx->Flush();
         return true;
     }
@@ -979,7 +1048,7 @@ private:
     ComPtr<ID3D11BlendState> gpuBlend_[4];
     std::vector<ComPtr<ID3D11ShaderResourceView>> keep_;
     CustomRenderTexture crt_;
-    RegionReadback rows_, control_, net_, field_;
+    RegionReadback rows_, control_, net_, field_, mbox_;
     ComPtr<ID3D11ShaderResourceView> netData_;
     bool deliverNet_ = false;   // the ring's zone is drawn in the next frame
 

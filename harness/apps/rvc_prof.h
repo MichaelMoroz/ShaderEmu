@@ -11,6 +11,7 @@
 namespace prof {
 
 static bool on = false, active = false, mem_on = false;
+static bool pc_cores = false;   // RVC_PROF_PCS=1: pcs.txt's pages kept apart for each core, its number an eighth column
 static std::string dir;
 static u32 ticks = 8192;
 static u64 pass_no = 0;
@@ -24,7 +25,7 @@ static PcPage* cache_page[256];
 static u32 pend_loads[256], pend_stores[256];   // the instruction now running: counted at its step
 
 static inline PcCell& cell(int hart, u32 satp, u32 pc) {
-    u64 key = ((u64)(hart != 0) << 62) | ((u64)(satp & 0x3fffff) << 20) | (pc >> 12);
+    u64 key = ((u64)(hart != 0) << 62) | (pc_cores ? (u64)(hart & 255) << 54 : 0) | ((u64)(satp & 0x3fffff) << 20) | (pc >> 12);
     if (cache_key[hart] != key || !cache_page[hart]) {
         PcPage*& p = pc_pages[key];
         if (!p) p = (PcPage*)calloc(1, sizeof(PcPage));
@@ -74,6 +75,7 @@ static void init(const char* d, size_t ncores, bool from_start) {
     std::error_code ec;
     std::filesystem::create_directories(dir, ec);
     mem_on = !getenv("RVC_PROF_MEM") || atoi(getenv("RVC_PROF_MEM")) != 0;
+    pc_cores = getenv("RVC_PROF_PCS") && atoi(getenv("RVC_PROF_PCS")) != 0;
     if (mem_on) mem_pages.assign(RAM_SIZE >> 12, nullptr);
     timeline = fopen((dir + "/timeline.bin").c_str(), "wb");
     if (getenv("RVC_PROF_CORES") && atoi(getenv("RVC_PROF_CORES")))
@@ -273,11 +275,12 @@ static void report() {
     if (f) {
         fprintf(f, "# class table pc word executed loads stores\n");
         for (auto& e : pc_pages) {
-            u32 cls = (u32)(e.first >> 62), table = (u32)(e.first >> 20) & 0x3fffff, page = (u32)(e.first & 0xfffff);
+            u32 cls = (u32)(e.first >> 62), table = (u32)(e.first >> 20) & 0x3fffff, page = (u32)(e.first & 0xfffff), hart = (u32)(e.first >> 54) & 255;
             for (u32 i = 0; i < 1024; i++) {
                 const PcCell& x = e.second->cell[i];
                 if (!x.exec) continue;
-                fprintf(f, "%u %x %08x %08x %llu %u %u\n", cls, table, (page << 12) | (i << 2), x.word, (unsigned long long)x.exec, x.loads, x.stores);
+                fprintf(f, "%u %x %08x %08x %llu %u %u", cls, table, (page << 12) | (i << 2), x.word, (unsigned long long)x.exec, x.loads, x.stores);
+                fprintf(f, pc_cores ? " %u\n" : "\n", hart);
                 pcs++;
             }
         }

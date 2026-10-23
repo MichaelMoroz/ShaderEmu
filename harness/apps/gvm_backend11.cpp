@@ -182,7 +182,7 @@ public:
         if (!makeTex(ram_, kRamW, rows_, ram.data(), err) || !makeTex(rom_, kRamW, romRows_, rom.data(), err) ||
             !makeTex(stageTex_, opSpan_, kMaxCores * opSlots_, nullptr, err) || !makeTex(ops_[0], kMaxCores, 1, nullptr, err) ||
             !makeTex(ops_[1], kMaxCores, 1, nullptr, err) || !makeTex(zone_, kRamW, rmap_ ? 48 : 3, nullptr, err) || !makeTex(ctl_, 256, 1, nullptr, err) ||
-            !makeTex(info_, 8, 1, nullptr, err) || !makeTex(ends_, 128, 2, nullptr, err))
+            !makeTex(info_, 8, 1, nullptr, err) || !makeTex(ends_, 128, 4, nullptr, err))
             return false;
         {
             std::vector<uint32_t> none((size_t)spix_ * 8 * 4, 0);
@@ -220,7 +220,7 @@ public:
             return false;
         // GVM_ENDS_LOG=FILE: every frame, each core's texel 19 (bundles << 8 | why its pass ended), 256 words (block geometry only)
         if (getenv("GVM_ENDS_LOG") && geo_) {
-            if (!endsRb_.init(dev, DXGI_FORMAT_R32G32B32A32_UINT, 16, 128, 2, 3, err)) return false;
+            if (!endsRb_.init(dev, DXGI_FORMAT_R32G32B32A32_UINT, 16, 128, 4, 3, err)) return false;   // (rows 2-3: texel 16, the pc, for GVM_MBOX_LOG)
             endsLog_ = fopen(getenv("GVM_ENDS_LOG"), "wb");
             if (getenv("GVM_TIME_LOG")) {
                 timeLog_ = fopen(getenv("GVM_TIME_LOG"), "wb");
@@ -230,6 +230,23 @@ public:
                     D3D11_QUERY_DESC q2{D3D11_QUERY_TIMESTAMP, 0};
                     for (auto& q : t.q) dev->CreateQuery(&q2, &q);
                 }
+            }
+        }
+        // GVM_WATCH=ADDR,ADDR,... and GVM_WATCH_LOG=FILE (a measure, off by default; gpu_vm/PROFILE_Q3.md "Handoffs"): the
+        // RAM texels of those guest addresses (up to 32) as each pass left them, a record of 2 + 4 x N words: the tag (low,
+        // high), then each texel's four words
+        if (const char* w = getenv("GVM_WATCH"); w && getenv("GVM_WATCH_LOG")) {
+            for (const char* q = w; *q && watch_.size() < 32;) {
+                char* end;
+                uint32_t a = (uint32_t)strtoul(q, &end, 16);
+                if (end == q) break;
+                watch_.push_back(a);
+                q = *end == ',' ? end + 1 : end;
+            }
+            if (!watch_.empty()) {
+                if (!makeTex(watchTex_, (UINT)watch_.size(), 1, nullptr, err) ||
+                    !watchRb_.init(dev, DXGI_FORMAT_R32G32B32A32_UINT, 16, (UINT)watch_.size(), 1, 3, err)) return false;
+                watchLog_ = fopen(getenv("GVM_WATCH_LOG"), "wb");
             }
         }
         mat.setInt("_GvmParkLo", GVM_FW_PARK);
@@ -350,6 +367,39 @@ public:
             ctx->End(ts->dj.Get());
             tq_ = nullptr;
         }
+        // GVM_WC_LOG=FILE (a measure, off by default; gpu_vm/PROFILE_Q3.md "The write cache"): the write cache's tags of
+        // every core as the pass left them, for GVM_WC_LOG_PASSES passes (default 500) from the GVM_WC_LOG_FROM-th frame
+        // (default 2000). A record: the tag (low, high), WCN, then 256 cores x 132 words (tag k of core c: texel T_WT + k / 4,
+        // word k % 4; 0xffffffff free). Each such pass waits for the card (a measure of the cache, not of time).
+        static FILE* wcLog = getenv("GVM_WC_LOG") ? fopen(getenv("GVM_WC_LOG"), "wb") : nullptr;
+        static const uint64_t wcFrom = getenv("GVM_WC_LOG_FROM") ? strtoull(getenv("GVM_WC_LOG_FROM"), nullptr, 10) : 2000;
+        static const uint64_t wcN = getenv("GVM_WC_LOG_PASSES") ? strtoull(getenv("GVM_WC_LOG_PASSES"), nullptr, 10) : 500;
+        if (wcLog && geo_ && wcn_ <= 132 && wcSeen_ < wcN && ++wcFrame_ > wcFrom) {
+            wcSeen_++;
+            static std::vector<uint32_t> rec;
+            rec.assign(3 + 256 * 132, 0xffffffffu);
+            rec[0] = (uint32_t)tag, rec[1] = (uint32_t)(tag >> 32), rec[2] = wcn_;
+            uint32_t tWt = tWc_ + wcn_;
+            for (uint32_t t = 0; t < 8; t++) {
+                if (!wcStage_[t]) {
+                    D3D11_TEXTURE2D_DESC td = {setW(), setH(), 1, 1, DXGI_FORMAT_R32G32B32A32_UINT, {1, 0}, D3D11_USAGE_STAGING, 0, D3D11_CPU_ACCESS_READ, 0};
+                    if (FAILED(gpu_.device->CreateTexture2D(&td, nullptr, &wcStage_[t]))) { wcSeen_ = wcN; break; }
+                }
+                ctx->CopyResource(wcStage_[t].Get(), set_[cur_ ^ 1][t].t.Get());
+                D3D11_MAPPED_SUBRESOURCE m{};
+                if (FAILED(ctx->Map(wcStage_[t].Get(), 0, D3D11_MAP_READ, 0, &m))) continue;
+                for (uint32_t c = 0; c < 256; c++)
+                    for (uint32_t x = tWt; x < tWt + 33; x++) {   // (texel x: target x % 8, pixel x / 8)
+                        if (x % 8 != t) continue;
+                        size_t at = setAt(c, x / 8);
+                        const uint32_t* v = (const uint32_t*)((const uint8_t*)m.pData + (at / setW()) * m.RowPitch + (at % setW()) * 16);
+                        for (uint32_t w = 0; w < 4; w++) rec[3 + c * 132 + (x - tWt) * 4 + w] = v[w];
+                    }
+                ctx->Unmap(wcStage_[t].Get(), 0);
+            }
+            fwrite(rec.data(), 4, rec.size(), wcLog);
+            if (wcSeen_ == wcN) fflush(wcLog);
+        }
         // what the host reads: core 0's texels 16-23 (the set just drawn), the control words, the network's row
         for (UINT t = 0; t < 8; t++) {
             UINT x = geo_ ? 0 : 2, y = geo_ ? 2 : 0;
@@ -362,17 +412,27 @@ public:
                 for (UINT k = 0; k < 128; k++) {
                     D3D11_BOX e = {k * 8, b * 16 + 2, 0, k * 8 + 1, b * 16 + 3, 1};
                     ctx->CopySubresourceRegion(ends_.t.Get(), 0, k, b, 0, set_[cur_ ^ 1][3].t.Get(), 0, &e);
+                    static const bool pcs = getenv("GVM_MBOX_LOG") != nullptr;   // (texel 16, the pc: GVM_MBOX_LOG's)
+                    if (pcs) ctx->CopySubresourceRegion(ends_.t.Get(), 0, k, b + 2, 0, set_[cur_ ^ 1][0].t.Get(), 0, &e);
                 }
             endsRb_.request(ctx, ends_.t.Get(), 0, 0, tag);
         }
         mboxRb_.request(ctx, ram_.t.Get(), tx(GVM_MBOX >> 4), ty(GVM_MBOX >> 4), tag);
+        if (watchLog_) {   // (GVM_WATCH: each watched texel into a row of its own texture, then read back)
+            for (UINT k = 0; k < watch_.size(); k++) {
+                uint32_t t = watch_[k] >> 4;
+                D3D11_BOX b = {tx(t), ty(t), 0, tx(t) + 1, ty(t) + 1, 1};
+                ctx->CopySubresourceRegion(watchTex_.t.Get(), 0, k, 0, 0, ram_.t.Get(), 0, &b);
+            }
+            watchRb_.request(ctx, watchTex_.t.Get(), 0, 0, tag);
+        }
         uint32_t ct = 0x100000u, nt = 0x16b800u;   // (each 512-aligned: under the strips a box of whole runs is the texels in order)
         controlRb_.request(ctx, ram_.t.Get(), tx(ct), ty(ct), tag);
         netRb_.request(ctx, ram_.t.Get(), tx(nt), ty(nt), tag);
         ctx->Flush();
         return true;
     }
-    bool rowFull() const override { return (endsLog_ && endsRb_.full()) || infoRb_.full() || controlRb_.full() || netRb_.full() || mboxRb_.full(); }
+    bool rowFull() const override { return (endsLog_ && endsRb_.full()) || (watchLog_ && watchRb_.full()) || infoRb_.full() || controlRb_.full() || netRb_.full() || mboxRb_.full(); }
     size_t rowPending() const override { return infoRb_.pending(); }
     bool popRow(std::vector<uint8_t>& out, uint64_t& tag) override {
         std::vector<uint8_t> info, control, net, mbox;
@@ -388,6 +448,8 @@ public:
                 const uint32_t* q = (const uint32_t*)e.data();
                 for (int c = 0; c < 256; c++) row[c] = (q[c * 4 + 2] << 8) | (q[c * 4 + 3] & 0xffu);
                 fwrite(row, 4, 256, endsLog_);
+                memcpy(lastEnds_, row, sizeof row), lastEndsTag_ = t5;
+                for (int c = 0; c < 256 && e.size() >= 512 * 16; c++) lastPc_[c] = q[(256 + c) * 4];
                 TimeSet& s = tset_[t5 % 8];
                 if (timeLog_ && s.pending && s.tag == t5) {
                     D3D11_QUERY_DATA_TIMESTAMP_DISJOINT dj{};
@@ -407,6 +469,32 @@ public:
                     s.pending = false;
                 }
             }
+        }
+        if (watchLog_) {
+            std::vector<uint8_t> m;
+            uint64_t t6;
+            if (watchRb_.pop(gpu_.ctx.Get(), m, t6)) {
+                uint32_t head[2] = {(uint32_t)t6, (uint32_t)(t6 >> 32)};
+                fwrite(head, 4, 2, watchLog_);
+                fwrite(m.data(), 1, watch_.size() * 16, watchLog_);
+            }
+        }
+        // GVM_MBOX_LOG=FILE (a measure, off by default; gpu_vm/PROFILE_Q3.md "Handoffs"): every pass a record of 2 + 256 +
+        // 256 + 6 x 256 words: the tag (low, high), each core's ends word as GVM_ENDS_LOG's (bundles << 8 | why) and its pc
+        // at the pass's end (both 0 without GVM_ENDS_LOG or when that readback is not this pass's), then each core's job
+        // seq, fn, a0, a1, answer done and taken word (programs/mc/mc.h, MC_JOB_AT(k): texel 0x400 + 4 k of the mailboxes)
+        static FILE* mboxLog = getenv("GVM_MBOX_LOG") ? fopen(getenv("GVM_MBOX_LOG"), "wb") : nullptr;
+        if (mboxLog && mbox.size() >= (0x400 + 4 * 256) * 16) {
+            static uint32_t rec[2 + 512 + 6 * 256];
+            rec[0] = (uint32_t)tag, rec[1] = (uint32_t)(tag >> 32);
+            for (int c = 0; c < 256; c++) rec[2 + c] = lastEndsTag_ == t4 ? lastEnds_[c] : 0, rec[258 + c] = lastEndsTag_ == t4 ? lastPc_[c] : 0;
+            const uint32_t* q = (const uint32_t*)mbox.data() + 0x400 * 4;
+            for (int k = 0; k < 256; k++) {
+                const uint32_t* j = q + 16 * k;
+                uint32_t* r = rec + 514 + 6 * k;
+                r[0] = j[0], r[1] = j[1], r[2] = j[2], r[3] = j[3], r[4] = j[4], r[5] = j[14];
+            }
+            fwrite(rec, 4, sizeof rec / 4, mboxLog);
         }
         // the RISC-V machine's row 0 as rvc_harness reads it: the instructions (core 0's ops), the commits (passes), the
         // pc; no UART (texel 11's last word 0xffffffff): the console is the network row's words, which both machines have
@@ -1108,6 +1196,14 @@ private:
 
     Gpu gpu_;
     uint32_t rmap_ = 0;   // the tick's RAM_MAP
+    ComPtr<ID3D11Texture2D> wcStage_[8];   // (GVM_WC_LOG)
+    std::vector<uint32_t> watch_;   // (GVM_WATCH)
+    Tex watchTex_;
+    RegionReadback watchRb_;
+    FILE* watchLog_ = nullptr;
+    uint64_t wcFrame_ = 0, wcSeen_ = 0;
+    uint32_t lastEnds_[256] = {}, lastPc_[256] = {};   // (GVM_MBOX_LOG: the last ends row and its tag)
+    uint64_t lastEndsTag_ = ~0ull;
     uint32_t ramEnd_ = 0, rows_ = 0, romRows_ = 1, wcn_ = 514, tWc_ = 40, opSlots_ = 32, opSpan_ = 272, ntex_ = 297, spix_ = 38, geo_ = 0, bh_ = 8, wcn0_ = 0, spix0_ = 0;
     Prog tick_, tick0_, commit_, stage_, write_, progress_;
     Tex ram_, rom_, stageTex_, ops_[2], set_[2][8], zone_, ctl_, info_, none_;

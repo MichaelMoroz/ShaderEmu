@@ -1140,8 +1140,20 @@ int main(int argc, char** argv) {
     double soundT0 = 0;
     std::deque<std::pair<uint64_t, uint32_t>> soundFrames;   // frames whose mix is on its way back, and their cursors
     bool cpuRunning = false;   // --cpu, past the frames that set the state texture up
+    // RVC_LINE_LOG=FILE (a measure, off by default; gpu_vm/PROFILE_Q3.md): each console line with the frame (pass) whose
+    // row brought it. RVC_CORES_LOG=FILE: every pass a record of 260 words: the frame, core 0's instructions (gpu_vm: ops),
+    // its last stall word, microseconds since the start, then cores 1 to 255's instructions (ops) in the pass (MC_STATS)
+    static FILE* lineLog = getenv("RVC_LINE_LOG") ? fopen(getenv("RVC_LINE_LOG"), "w") : nullptr;
+    static FILE* coresLog = getenv("RVC_CORES_LOG") ? fopen(getenv("RVC_CORES_LOG"), "wb") : nullptr;
+    uint64_t rowNow = 0;
+    std::string linePart;
     auto consoleOut = [&](const std::string& out) {
         if (out.empty()) return;
+        if (lineLog)
+            for (char c : out) {
+                if (c == '\n') fprintf(lineLog, "%llu\t%s\n", (unsigned long long)rowNow, linePart.c_str()), fflush(lineLog), linePart.clear();
+                else if (c != '\r') linePart += c;
+            }
         fwrite(out.data(), 1, out.size(), stdout);
         fflush(stdout);
         if (uartLog) { fwrite(out.data(), 1, out.size(), uartLog); fflush(uartLog); }
@@ -1167,6 +1179,7 @@ int main(int argc, char** argv) {
         const uint32_t* t = (const uint32_t*)raw.data();
         auto texel = [&](int x, int c) { return t[x * 4 + c]; };
         uint32_t clock = texel(28, 1);
+        rowNow = rowFrame;
         keyboardOwned = raw.size() >= (64 + 4) * 16 && texel(64 + 3, 0) == 0x6b657973u;
         displayMode = raw.size() >= (64 + 1) * 16 ? texel(64, 0) : 0;
         bool soundOn = bo.soundShader && raw.size() >= (64 + 0x24) * 16 && texel(64 + 0x22, 0) != 0;
@@ -1337,10 +1350,12 @@ int main(int argc, char** argv) {
         if (opt.cores > 1 && raw.size() >= (64 + kControlTexels + kNetRead) * 16) {
             // this pass: the workers' instructions, how many ran, how many a whole pass, how many only looked for a job
             uint32_t ranNow = 0, coresNow = 0, fullNow = 0, waitNow = 0, mostNow = 0;
+            uint32_t perCore[260] = {};
             for (int c = 1; c < opt.cores; ++c) {   // (MC_STATS, and MC_STATS_ALL from core 16)
                 uint32_t now = c < 16 ? texel(64 + 0x38 + c / 4, c % 4) : texel(64 + kControlTexels + kCoreStatsAt + c / 4, c % 4);
                 // (a geometry laid out anew starts the counts again: one that went down is all new)
                 uint32_t ran = !haveWorkerClock ? 0 : now < workerClock[c] ? now : (uint32_t)(now - workerClock[c]);
+                if (c < 256) perCore[4 + c - 1] = ran;
                 workerInstructions += ran;
                 if (ran != 0 && ran < 64) { waitNow++; ran = 0; }   // (a worker awake with no job runs some 18 a pass)
                 ranNow += ran;
@@ -1350,6 +1365,13 @@ int main(int argc, char** argv) {
                 workerClock[c] = now;
             }
             haveWorkerClock = true;
+            if (coresLog && haveClock) {
+                perCore[0] = (uint32_t)rowFrame, perCore[1] = (uint32_t)(clock - lastClock), perCore[2] = texel(40, 2);
+                perCore[3] = (uint32_t)std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();
+                fwrite(perCore, 4, 260, coresLog);
+                static uint32_t n = 0;
+                if (++n % 512 == 0) fflush(coresLog);
+            }
             if (!opt.frameLog.empty() && (opt.statsFrom.empty() || statsStarted)) workerSamples.insert(workerSamples.end(), {ranNow, coresNow, fullNow, waitNow}), workerMost.push_back(mostNow);
         }
         // the lanes' field (docs/machine/lanes.md): whether a job is posted, and what its lanes ran, by its

@@ -389,6 +389,13 @@ static u64 wc_pass = 1, wc_full_passes[2];   // passes ended so: core 0's, the w
 struct WCache { u64 stamp[128]; u32 tag[128][3]; };
 static std::vector<WCache> wcache;
 static u32 wc_bits_of(int hart);
+// RVC_WC_LOG=FILE (with RVC_WCACHE=1; a measure, gpu_vm/PROFILE_Q3.md "The write cache"): from --count-from on, at each
+// pass's end a record for every core that stored in it: the pass, the core, its table bits, 1 if a store found the cache
+// full, its stores, its silent stores (the bytes already there: no entry), its new entries, 0; then 112 bytes, each
+// bucket's entries in use (the three tables in order)
+static FILE* wc_log = nullptr;
+static u32 wc_st[256], wc_sil[256], wc_new[256];
+static u64 wc_full_at[256];
 static bool wc_take(int hart, u32 phys) {
     u32 bits = wc_bits_of(hart), t = (phys - RAM_BASE) >> 4, n = bits - 1, table = 1u << bits;
     if (!bits) return true;
@@ -399,7 +406,7 @@ static bool wc_take(int hart, u32 phys) {
         if (w.stamp[k] != wc_pass) w.stamp[k] = wc_pass, w.tag[k][0] = w.tag[k][1] = w.tag[k][2] = 0;
         for (u32& e : w.tag[k]) {
             if (e == t + 1) return true;
-            if (!e) { e = t + 1; return true; }
+            if (!e) { e = t + 1; wc_new[hart]++; return true; }
         }
     }
     return false;
@@ -415,9 +422,11 @@ static inline bool store(Core& c, u32 va, int size, u32 value, Trap& t) {
     if (!page_of(c, va, WRITE, phys, t)) return false;
     if (phys - RAM_BASE < RAM_SIZE) {
         uint8_t* p = &ram[phys - RAM_BASE];
+        if (wc_log) wc_st[c.hart]++, wc_sil[c.hart] += memcmp(p, &value, (size_t)size) == 0;
         if (wc_on && memcmp(p, &value, (size_t)size) &&
             (!wc_take(c.hart, phys) || ((phys & 15) + (u32)size > 16 && !wc_take(c.hart, phys + (u32)size - 1)))) {
             c.wc_full = c.end_pass = true;
+            wc_full_at[c.hart] = wc_pass;
             _InterlockedIncrement64((volatile long long*)&wc_full_passes[c.hart != 0]);
             return false;
         }
@@ -2376,6 +2385,17 @@ static u64 machine_pass(u32 ticks) {
     atom_merge();
     if (races_on) texel_marks.clear(), race_pass++;
     if (prof::on) prof::pass_end();
+    if (wc_log && count_marked)
+        for (size_t i = 0; i < cores.size() && i < 256; i++) {
+            if (!wc_st[i]) continue;
+            u32 rec[8] = {(u32)frame_no, (u32)i, wc_bits_of((int)i), wc_full_at[i] == wc_pass, wc_st[i], wc_sil[i], wc_new[i], 0};
+            uint8_t occ[112] = {};
+            u32 nb = (7u << wc_bits_of((int)i)) >> 2;
+            for (u32 k = 0; k < nb && k < 112; k++)
+                if (wcache[i].stamp[k] == wc_pass) occ[k] = (uint8_t)((wcache[i].tag[k][0] != 0) + (wcache[i].tag[k][1] != 0) + (wcache[i].tag[k][2] != 0));
+            fwrite(rec, 4, 8, wc_log), fwrite(occ, 1, 112, wc_log);
+        }
+    memset(wc_st, 0, sizeof wc_st), memset(wc_sil, 0, sizeof wc_sil), memset(wc_new, 0, sizeof wc_new);
     cores[0].wc_full = false;
     wc_pass++;
     frame_no++;
@@ -2565,6 +2585,7 @@ int main(int argc, char** argv) {
     if (const char* d = getenv("RVC_PROF"); d && *d) prof::ticks = opt.ticks, prof::init(d, cores.size(), opt.countFrom.empty());
     wc_on = getenv("RVC_WCACHE") && atoi(getenv("RVC_WCACHE")) != 0;
     if (wc_on) wcache.resize(cores.size());
+    if (wc_on && getenv("RVC_WC_LOG")) wc_log = fopen(getenv("RVC_WC_LOG"), "wb");
     zb_on = getenv("RVC_ZB") && atoi(getenv("RVC_ZB")) != 0;
     gpu_copy_on = getenv("RVC_GPU_COPY") && atoi(getenv("RVC_GPU_COPY")) != 0;
     if (opt.netPort) {
