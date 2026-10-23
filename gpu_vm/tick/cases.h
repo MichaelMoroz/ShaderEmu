@@ -892,6 +892,17 @@ static std::vector<Case> cases() {
     lp("lp_st", 16, none, [](GvmAsm& a) { for (int i = 0; i < 16; i++) { a.sw(10 + i % 4, 4, 4 * i); a.addi(14, 14, 1); a.close(); } });
     lp("lp_ld2", 16, none, [](GvmAsm& a) { for (int i = 0; i < 16; i++) { a.lw(6 + i % 4, 4, 8 * i); a.lw(10 + i % 4, 4, 8 * i + 4); a.close(); } });
     lp("lp_mem2", 16, none, [](GvmAsm& a) { for (int i = 0; i < 16; i++) { a.sw(6 + i % 4, 4, 8 * i); a.sw(10 + i % 4, 4, 8 * i + 4); a.close(); } });
+    // a frame's callee-saved registers (IDEAS row 21): 8 saved and restored by word pairs (8 bundles a trip), or by
+    // two 16-byte stores and two 16-byte loads (a bundle each: the general step); compare ns a trip (ns a bundle times the
+    // trip's bundles)
+    lp("lp_save", 8, none, [](GvmAsm& a) {
+        for (int i = 0; i < 4; i++) { a.sw(6 + 2 * i, 4, 8 * i); a.sw(7 + 2 * i, 4, 8 * i + 4); a.close(); }
+        for (int i = 0; i < 4; i++) { a.lw(6 + 2 * i, 4, 8 * i); a.lw(7 + 2 * i, 4, 8 * i + 4); a.close(); }
+    });
+    lp("lp_saveq", 4, none, [](GvmAsm& a) {
+        a.st(GVM_W_Q, 6, 4, 0); a.st(GVM_W_Q, 10, 4, 16); a.close();
+        a.ld(GVM_W_Q, 6, 4, 0); a.ld(GVM_W_Q, 10, 4, 16); a.close();
+    });
     // a load's result on the next bundle's address: a ring of 16 words in 16 texels (latency of the load path)
     lp("lp_chase", 16, [](GvmAsm& a, DataV& d) {
         for (uint32_t k = 0; k < 16; k++) d.push_back({DATA + 0x2000 + 16 * k, DATA + 0x2000 + 16 * ((k + 5) & 15)});
