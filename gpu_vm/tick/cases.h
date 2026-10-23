@@ -855,6 +855,88 @@ static std::vector<Case> cases() {
         a.add(8, 7, 4); a.close();
         a.sw(5, 8, 0); a.close();
     });
+    // ---- latency probes (lp_, named, ns a bundle): one kind of game bundle at a time, about 16 bundles a trip; the trips
+    // scaled so that every probe runs about g_loop_n * 16 bundles. r4 DATA, r5 the count; `init` adds data
+    using DataV = std::vector<std::pair<uint32_t, uint32_t>>;
+    auto lp = [&](const char* name, int per_trip, std::function<void(GvmAsm&, DataV&)> init, std::function<void(GvmAsm&)> body) {
+        Case c{name, 1, true, [per_trip, init, body](std::vector<GvmAsm>& p, auto& data, uint32_t) {
+            GvmAsm& a = p[0];
+            a.li(5, std::max(2, (int)((int64_t)g_loop_n * 16 / per_trip)) + 1); a.li(4, (int32_t)DATA);
+            init(a, data);
+            a.close();
+            int top = a.here();
+            body(a);
+            if (per_trip > 200) {   // (beyond a branch's reach: back by a far j)
+                int back = a.label(), out = a.label();
+                a.addbnz(5, -1, back);
+                a.j(out);
+                a.bind(back); a.j(top);
+                a.bind(out);
+            } else a.addbnz(5, -1, top);
+            a.halt();
+        }};
+        c.named = true; c.ns = true;
+        v.push_back(c);
+    };
+    auto none = [](GvmAsm&, DataV&) {};
+    // path 3, no store in the pass: the bloom word skips the tags (a global's load)
+    lp("lp_ld", 16, none, [](GvmAsm& a) { for (int i = 0; i < 16; i++) { a.lw(6 + i % 4, 4, 4 * i); a.add(10, 10, 11); a.close(); } });
+    // path 3 with the tags read and missed: one store to a texel whose number covers the loads' bits
+    lp("lp_ldt", 16, [](GvmAsm& a, DataV&) { a.sw(5, 4, 0xfff0); a.close(); },
+       [](GvmAsm& a) { for (int i = 0; i < 16; i++) { a.lw(6 + i % 4, 4, 4 * i); a.add(10, 10, 11); a.close(); } });
+    // path 5 then path 3 hits: 4 stores, 12 loads of the stored words (the stack's spill and reload)
+    lp("lp_ldh", 16, none, [](GvmAsm& a) {
+        for (int i = 0; i < 4; i++) { a.sw(10 + i, 4, 4 * i); a.addi(14, 14, 1); a.close(); }
+        for (int i = 0; i < 12; i++) { a.lw(6 + i % 4, 4, 4 * (i & 3)); a.add(10 + (i & 3), 10 + (i & 3), 14); a.close(); }
+    });
+    lp("lp_st", 16, none, [](GvmAsm& a) { for (int i = 0; i < 16; i++) { a.sw(10 + i % 4, 4, 4 * i); a.addi(14, 14, 1); a.close(); } });
+    lp("lp_ld2", 16, none, [](GvmAsm& a) { for (int i = 0; i < 16; i++) { a.lw(6 + i % 4, 4, 8 * i); a.lw(10 + i % 4, 4, 8 * i + 4); a.close(); } });
+    lp("lp_mem2", 16, none, [](GvmAsm& a) { for (int i = 0; i < 16; i++) { a.sw(6 + i % 4, 4, 8 * i); a.sw(10 + i % 4, 4, 8 * i + 4); a.close(); } });
+    // a load's result on the next bundle's address: a ring of 16 words in 16 texels (latency of the load path)
+    lp("lp_chase", 16, [](GvmAsm& a, DataV& d) {
+        for (uint32_t k = 0; k < 16; k++) d.push_back({DATA + 0x2000 + 16 * k, DATA + 0x2000 + 16 * ((k + 5) & 15)});
+        a.li(6, (int32_t)(DATA + 0x2000));
+    }, [](GvmAsm& a) { for (int i = 0; i < 16; i++) { a.lw(6, 6, 0); a.close(); } });
+    // the same over 4 MB (4,096 words 1 KB apart, in a scattered order): texel misses
+    lp("lp_chasem", 16, [](GvmAsm& a, DataV& d) {
+        const uint32_t B = DATA + 0x100000, N = 4096;
+        for (uint32_t k = 0; k < N; k++) d.push_back({B + 1024 * k, B + 1024 * ((k * 2654435761u + 1013904223u) & (N - 1))});
+        a.li(6, (int32_t)B);
+    }, [](GvmAsm& a) { for (int i = 0; i < 16; i++) { a.lw(6, 6, 0); a.close(); } });
+    // path 1 (step12): a float op a bundle, independent and chained
+    lp("lp_fl", 16, [](GvmAsm& a, DataV&) { a.li(6, 0x3f800000); a.li(7, 0x3f000000); },
+       [](GvmAsm& a) { for (int i = 0; i < 16; i++) { a.fop(GVM_F_ADD, 8 + i % 4, 8 + i % 4, 7); a.close(); } });
+    // taken branches: every bundle branches over a dead one
+    lp("lp_br", 16, none, [](GvmAsm& a) {
+        for (int i = 0; i < 16; i++) { int l = a.label(); a.add(6 + i % 4, 6 + i % 4, 5); a.blt(0, 5, l); a.add(9, 9, 9); a.close(); a.bind(l); }
+    });
+    // calls and returns only (cc 0: step12): 8 calls of a function of one bundle (an op and its return)
+    lp("lp_call", 16, none, [](GvmAsm& a) {
+        int f = a.label(), over = a.label();
+        for (int i = 0; i < 8; i++) { a.add(6 + i % 4, 6 + i % 4, 5); a.call(f); }
+        a.j(over);
+        a.bind(f); a.add(10, 10, 5); a.ret();
+        a.bind(over);
+    });
+    // code footprint: integer bundles straight on, 2,048 (32 KB) and 8,192 (128 KB) a trip
+    auto lpcode = [&](const char* name, int n) {
+        lp(name, n, none, [n](GvmAsm& a) { for (int i = 0; i < n; i++) { a.add(6 + i % 4, 6 + i % 4, 5); a.add(10 + i % 4, 10 + i % 4, 5); a.close(); } });
+    };
+    lpcode("lp_code32", 2048); lpcode("lp_code128", 8192);
+    lpcode("lp_code2", 128); lpcode("lp_code8", 512); lpcode("lp_code16", 1024);
+    // the texture cache's shape: 16 loads a trip, each moving its base by STRIDE (op 1), wrapped by MASK every trip
+    auto lpwalk = [&](const char* name, uint32_t stride, uint32_t mask) {
+        lp(name, 19, [stride, mask](GvmAsm& a, DataV&) { a.li(12, (int32_t)mask); a.li(13, (int32_t)stride); a.mv(8, 4); },
+           [](GvmAsm& a) {
+               for (int i = 0; i < 16; i++) { a.lw(6 + i % 4, 8, 0); a.add(8, 8, 13); a.close(); }
+               a.sub(11, 8, 4); a.close();
+               a.op(GVM_I_AND, 11, 11, 12); a.close();
+               a.add(8, 4, 11); a.close();
+           });
+    };
+    lpwalk("lp_wx16k", 16, 0x3fff);           // along a row: 1,024 texels
+    lpwalk("lp_wx1m", 16, 0xfffff);           // 1 MB: 8 rows
+    lpwalk("lp_wy", 0x20010, 0x7fffff);       // a row down and a texel on: every load its own row
     real("coremark", "build/tick_real/coremark.elf", "seed4_volatile=1,1000000");
     real("coremark_pie", "build/tick_real/coremark_pie.elf", "seed4_volatile=1,1000000");   // (-fPIE: globals by lpc; the compiler of 834f68d)
     real("gzip", "build/tick_real/gzloop.elf", "gz_mode=1,1;gz_bytes=6000,262144;gz_rounds=1,1000");

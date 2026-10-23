@@ -80,10 +80,10 @@ def memopts(P, src):
                 m1.sl = over ? WCS : m1.sl; m1.otag = over ? tg0 : m1.otag; m1.e = over ? (has(tg0, m1.t, m1.i) ? WCS : WCN) : m1.e;
             }""")
     if P.get('tfirst', 0):
-        src = _rep(src, """            mop m0 = mread_entries(t.x, i0, A0, B0, st0);
+        src = _rep(src, """            mvok = MV != 0 && st0; mop m0 = mread_entries(t.x, i0, A0, B0, st0); mvok = false;
             [branch] if ((((t.x ^ op_bit(8)) & op_bit(11)) | (m0.ad & 3)) != 0) m0.q = data_texel(m0.ad);""",
                    """            uint4 q0 = data_texel(mem_addr(t.x, i0, A0, B0));   // (the texel first)
-            mop m0 = mread_entries(t.x, i0, A0, B0, st0);
+            mvok = MV != 0 && st0; mop m0 = mread_entries(t.x, i0, A0, B0, st0); mvok = false;
             m0.q = q0;""")
         src = _rep(src, """            mop m0 = mread_load(t.x, i0, A0, B0), m1 = mread_load(t.y, i1, A1, B1);""",
                    """            uint4 q0 = data_texel(mem_addr(t.x, i0, A0, B0)), q1 = data_texel(mem_addr(t.y, i1, A1, B1));   // (the texels first)
