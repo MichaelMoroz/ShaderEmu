@@ -169,6 +169,8 @@
 #define GVM_W_H 2u
 #define GVM_W_B 3u
 #define GVM_W_Q 4u         // rd .. rd + 3
+#define GVM_W_NC 5u        // phase 2: a load mode's word that skips this pass's own stores (read-only data, as __ldg): a load
+                           // of a word the core stored this pass is the program's error (the reference counts it as stale)
 #define GVM_W_HU 6u
 #define GVM_W_BU 7u
 #define GVM_AMO_SWAP 0u

@@ -34,11 +34,12 @@ struct GvmAsm {
     static bool lite(uint32_t op) { return GVM_CLASS(GVM_OPC(op)) == 1 && (fn(op) <= GVM_I_XNOR || (fn(op) >= GVM_I_SLL && fn(op) <= GVM_I_SRA)); }
     static bool mem_op(uint32_t op) {
         uint32_t o = GVM_OPC(op), wd = o & 7;
-        return (GVM_CLASS(o) == 2 && ((o >> 3) & 7) <= 3 && (wd == GVM_W_W || wd == GVM_W_H || wd == GVM_W_B || wd == GVM_W_HU || wd == GVM_W_BU)) || file_fast(op);
+        return (GVM_CLASS(o) == 2 && ((o >> 3) & 7) <= 3 && (wd == GVM_W_W || wd == GVM_W_H || wd == GVM_W_B || wd == GVM_W_HU || wd == GVM_W_BU || (nc_loads && wd == GVM_W_NC))) || file_fast(op);
     }
     // phase 2 (isa.h, GVM_M_FREAD): with file_paths a tick that makes the file's lf, sf and fpair in its fast loop takes them
     // as a load (lf) and stores (sf, fpair) in paths 3-6; without it they are the general step's
     static inline bool file_paths = false;
+    static inline bool nc_loads = false;   // the tick has GVM_W_NC (its NCLOAD): lw_nc is a plain lw without it
     static bool file_fast(uint32_t op) {
         uint32_t o = GVM_OPC(op), mode = (o >> 3) & 7, k = o & 7;
         return file_paths && GVM_CLASS(o) == 2 && ((mode == GVM_M_FREAD && k == GVM_FK_LF) || (mode == GVM_M_FWRITE && (k == GVM_FK_SF || k == GVM_FK_PAIR)));
@@ -156,6 +157,7 @@ struct GvmAsm {
     void stx(uint32_t wd, uint32_t rs, uint32_t ra, uint32_t rb, uint32_t sh) { R(GVM_OP_M(GVM_M_STOREX, wd), rs, ra, rb, sh); }
     void lw(uint32_t rd, uint32_t ra, int32_t off) { ld(GVM_W_W, rd, ra, off); }
     void sw(uint32_t rs, uint32_t ra, int32_t off) { st(GVM_W_W, rs, ra, off); }
+    void lw_nc(uint32_t rd, uint32_t ra, int32_t off) { ld(nc_loads ? GVM_W_NC : GVM_W_W, rd, ra, off); }   // read-only data
     void amo(uint32_t f, uint32_t rd, uint32_t ra, uint32_t rb) { R(GVM_OP_M(GVM_M_AMO, f), rd, ra, rb); }
     // the core's file (isa.h, GVM_M_FREAD; phase 2): slot i = ra + imm (words, mod the file's size)
     void lf(uint32_t rd, uint32_t ra, int32_t i) { I(GVM_OP_M(GVM_M_FREAD, GVM_FK_LF), rd, ra, i); }

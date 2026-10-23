@@ -477,16 +477,17 @@ static int gvm__op(gvm_machine *m, gvm_core *c, uint32_t base, uint32_t s, const
     }
     case 2: {   // memory
         uint32_t mode = (opc >> 3) & 7, wd = opc & 7;
-        static const uint32_t bytes_of[8] = {4, 8, 2, 1, 16, 0, 2, 1};   // by GVM_W_* (x15)
+        static const uint32_t bytes_of[8] = {4, 8, 2, 1, 16, 4, 2, 1};   // by GVM_W_* (x15)
         if (mode <= 3) {
             uint32_t by = bytes_of[wd];
-            if (!by) break;
+            if (!by || (wd == GVM_W_NC && (mode & 1))) break;   // (nc: loads only)
             uint32_t addr = (mode <= 1) ? a + imm : a + (b << (rc & 31));
             // a byte, a half or a word stays in its address's word (since x17): the bytes past it are not accessed
             if (by <= 4 && (addr & 3) + by > 4) by = 4 - (addr & 3);
             if (gvm__op_waits(c, addr, by, mode & 1)) { c->ops_run--; c->pc = epc; *end = GVM_END_SYNC; return GVM__END; }
             if (mode == 0 || mode == 2) {
                 uint32_t v[4] = {0, 0, 0, 0}, k, words = by > 4 ? by / 4 : 1;
+                if (wd == GVM_W_NC && addr < m->ram_end && gvm__wl_find(&c->wl, addr >> 2, 0) && !c->stale++) c->stale_at = addr;   // (stored this pass)
                 for (k = 0; k < words; k++) {
                     if (!gvm__load(m, c, addr + 4 * k, by > 4 ? 4 : by, &v[k])) { c->ops_run--; gvm__trap(c, GVM_CAUSE_LOAD, epc, addr); return GVM__TRAPPED; }
                 }

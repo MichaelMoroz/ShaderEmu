@@ -119,7 +119,7 @@ uint mem_any(uint w, uint imm, uint a, uint b, uint epcw, inout uint e, inout bo
     uint opc = (w >> 12) & 255, mode = (opc >> 3) & 7, wd = opc & 7, rd = (w >> 6) & 63;
     [branch] if (mode >= GVM_M_FREAD) return file_any(w, imm, a, epcw, e, ill);   // the core's file (gen.py's xcode)
     [branch] if (mode <= 3) {
-        uint by = wd == GVM_W_W ? 4u : wd == GVM_W_D ? 8u : wd == GVM_W_Q ? 16u : wd == 5 ? 0u : (wd & 1) ? 1u : 2u;
+        uint by = wd == GVM_W_W ? 4u : wd == GVM_W_D ? 8u : wd == GVM_W_Q ? 16u : wd == GVM_W_NC ? (NCLOAD != 0 && (mode & 1) == 0 ? 4u : 0u) : (wd & 1) ? 1u : 2u;
         ill = by == 0;
         uint ad = a + (mode >= 2 ? b << ((w >> 20) & 31) : imm);
         bool store = (mode & 1) != 0;

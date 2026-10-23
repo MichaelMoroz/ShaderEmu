@@ -19,7 +19,7 @@ timed) and register-checked, then timed on the card in batches under 10 minutes;
 | 8 | Registers bound to addresses (fbind), (address, value) pair store buffer (fpair) | implemented (58970b6) | to measure |
 | 9 | Budget toggle with a flush window | superseded | the tick spills registers at every pass end; full budget every pass is the target |
 | 10 | Full budget every pass (core-0 util as a score) | in scoring | x23 util 0.45 on the game set |
-| 11 | One local array vs several; packing scalars as uint4 (every scalar array is declared 4 wide: 21.7 KB a lane) | in progress (g3) | |
+| 11 | One local array vs several; packing scalars as uint4 (every scalar array is declared 4 wide: 21.7 KB a lane) | done (g4) | merged = split (0.981 vs 0.984); uint4 cache 0.87-0.88, uint4 registers 0.71, both 0.58: 5.5 KB a lane and slower everywhere (the ", 4" is no real cost; a dynamic component select is). Keep scalar split arrays |
 | 12 | Wider bundles vs a thin loop; superinstructions from the profiles | queued | |
 | 13 | Loads that skip the store check (read-only data, like `__ldg`) | queued | |
 | 14 | A read cache for reused loads vs the GPU's texture cache | queued | |

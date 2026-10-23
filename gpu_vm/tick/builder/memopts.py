@@ -89,4 +89,35 @@ def memopts(P, src):
                    """            uint4 q0 = data_texel(mem_addr(t.x, i0, A0, B0)), q1 = data_texel(mem_addr(t.y, i1, A1, B1));   // (the texels first)
             mop m0 = mread_entries(t.x, i0, A0, B0, false), m1 = mread_entries(t.y, i1, A1, B1, false);
             m0.q = q0; m1.q = q1;""")
+    if P.get('nc', 0):   # GVM_W_NC: a load of read-only data looks at no tags, and is a word
+        src = _rep(src, 'uint ext_k(uint w) { return (w >> 9) & 24; }', 'uint ext_k(uint w) { return ((w >> 12) & 7) == GVM_W_NC ? 0 : (w >> 9) & 24; }')
+        a = 'mop mread_entries(uint w, uint imm, uint a, uint b, bool st) {'
+        if 'mop mread_entries2(' in src: a = 'mop mread_entries2(uint w, uint imm, uint a, uint b, bool st, bool mr) {'
+        src = _rep(src, a, a + NL + '    bool nc = ((w >> 12) & 7) == GVM_W_NC && !st;')
+        i = src.index(a); j = src.index('return mlook', i); k = src.index(';', j)
+        call = src[j:k]   # return mlook(ad, LOOK) or return mlook2(ad, mr, LOOK)
+        p = call.rindex(')')
+        c0 = call.index(', ') + 2
+        if 'mlook2' in call: c0 = call.index(', ', c0) + 2
+        src = src[:j] + call[:c0] + '!nc && (' + call[c0:p] + '))' + src[k:]
+    if P.get('dtx', 'both') == 'one':   # a data texel from the ROM or RAM behind a branch, not both fetched and selected
+        src = _rep(src, '''    uint4 rom = _Rom.Load(at), ram = _Ram.Load(at);
+    return (ad & GVM_ROM) != 0 ? rom : ram;''', '''    [branch] if ((ad & GVM_ROM) != 0) return _Rom.Load(at);
+    return _Ram.Load(at);''')
+    R = P.get('rc', 0)
+    if R:   # a read cache: the last R texels the fast paths fetched, kept in registers (RAM does not change in a pass)
+        d = 'static uint rct0, rct1; static uint4 rcq0, rcq1;   // (texel + 1, 0: none) and its words' + NL
+        d += 'uint4 rc_texel(uint ad) {' + NL + '    uint k = (ad >> 4) + 1;' + NL
+        d += '    [branch] if (rct0 == k) return rcq0;' + NL
+        if R > 1: d += '    [branch] if (rct1 == k) return rcq1;' + NL
+        d += '    uint4 q = data_texel(ad);' + NL
+        if R > 1: d += '    rct1 = rct0; rcq1 = rcq0;' + NL
+        d += '    rct0 = k; rcq0 = q;' + NL + '    return q;' + NL + '}' + NL
+        a = 'uint pick(uint4 q, uint i)'
+        src = _rep(src, a, d + a)
+        i = src.index('mop mread_load(uint w'); j = src.index('uint step12(')
+        mid = src[i:j]
+        assert 'data_texel(' in mid
+        src = src[:i] + mid.replace('data_texel(', 'rc_texel(') + src[j:]
+        src = _rep(src, '    bloom = 0;', '    bloom = 0; rct0 = 0; rct1 = 0;')
     return src

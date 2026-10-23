@@ -37,6 +37,9 @@ DEFAULTS = dict(
     bb=0,               # x24's idea: a mask of the first-table buckets stored to; a load whose first bucket has none reads no tags
     tfirst=0,           # x24's idea: a load's or store's texel fetched before its lookup (paths 3-5)
     s6=0,               # x24's idea (with mru): a store pair (path 6) whose texels are both kept skips the lookup
+    nc=0,               # phase 2: GVM_W_NC loads (read-only data) skip the write cache's lookup
+    rc=0,               # a read cache: the last 0, 1 or 2 texels the fast paths fetched, in registers
+    dtx='both',         # a data texel: ROM and RAM both fetched then selected (x23), or one behind a branch
     rpk='scalar',       # the registers: scalar r[65], or vec uint4 R4[17] (layoutopts.py)
     pk='scalar',        # the write cache: scalar wt[] and wd[], vec (uint4 tags a bucket, uint4 data an entry), aos (a bucket's tags and texels side by side)
     lay='split',        # the arrays apart (split) or one array (merged)
@@ -55,7 +58,7 @@ SPACE = dict(   # the values a search draws from
     fetch=['both', 'one'], int_first=[0, 1], mem_order=['35', '4'], split=['branch', 'flatten'],
     block=[(8, 8), (16, 4), (4, 16), (8, 4), (4, 8), (32, 2), (16, 8), (8, 16), (32, 4), (64, 1), (32, 1), (16, 2)],
     bandx=[1, 2], per=[16, 32, 64, 128], jrow=[0, 1], perm=['id', 'bitrev', 'mul'], mul=[3, 5, 37, 77],
-    early=[0, 1, 2, 3], mru=[0, 1, 2, 4], bb=[0, 1], tfirst=[0, 1], s6=[0, 1], rpk=['scalar', 'vec'], pk=['scalar', 'vec', 'aos'], lay=['split', 'merged'],
+    early=[0, 1, 2, 3], mru=[0, 1, 2, 4], bb=[0, 1], tfirst=[0, 1], s6=[0, 1], nc=[0, 1], rc=[0, 1, 2], dtx=['both', 'one'], rpk=['scalar', 'vec'], pk=['scalar', 'vec', 'aos'], lay=['split', 'merged'],
     xr=[0, 64, 128, 256, 512, 1024], npair=[0, 32, 64, 128], xbind=[0, 1], xload=['pre', 'lazy'], xfast=[0, 1],
 )
 
@@ -132,6 +135,7 @@ static const uint SPIX = {L['SPIX']};
 static const uint XR = {P['xr']};
 static const uint XBIND = {L['XBIND']};
 static const uint XFAST = {P['xfast'] if P['xr'] or P['npair'] else 0};
+static const uint NCLOAD = {P.get('nc', 0)};   // GVM_W_NC loads (no look at this pass's stores)
 static const uint XLAZY = {1 if P['xload'] == 'lazy' else 0};
 static const uint NPAIR = {P['npair']};
 static const uint T_XF = {L['T_XF']};

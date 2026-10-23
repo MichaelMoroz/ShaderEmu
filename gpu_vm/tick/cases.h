@@ -976,6 +976,27 @@ static std::vector<Case> cases() {
         v.push_back(c);
     };
     spill("p_spill", false); spill("p_xspill", true);
+    // read-only loads (ns a bundle): 8 loads of a 1 KB constant table beside 4 stores a trip to a moving 4 KB ring (the bloom
+    // word busy); p_rdnc the same loads as lw_nc (GVM_W_NC: no look at this pass's stores; a plain lw on a tick without it)
+    auto rd = [&](const char* name, bool nc) {
+        Case c{name, 1, true, [nc](std::vector<GvmAsm>& p, auto& data, uint32_t) {
+            GvmAsm& a = p[0];
+            const uint32_t TAB = DATA + 0x10000;
+            for (uint32_t k = 0; k < 256; k++) data.push_back({TAB + 4 * k, k * 0x9e3779b9u});
+            a.li(5, loop_count(g_loop_n)); a.li(4, (int32_t)(DATA + 0x8000)); a.li(7, (int32_t)TAB); a.li(20, 0); a.li(22, 0);
+            int top = a.here();
+            a.addi(20, 20, 16 * 5); a.opi(GVM_I_AND, 20, 20, 4095); a.addi(22, 22, 4 * 37); a.close();
+            a.add(21, 4, 20); a.opi(GVM_I_AND, 22, 22, 1023 - 31); a.close();
+            a.add(23, 7, 22); a.close();
+            for (int k = 0; k < 4; k++) { a.sw(10 + k, 21, 4 * k); a.addi(10 + k, 10 + k, 1); a.close(); }
+            for (int k = 0; k < 8; k++) { if (nc) a.lw_nc(14 + k, 23, 4 * k); else a.lw(14 + k, 23, 4 * k); a.add(10 + (k & 3), 10 + (k & 3), 14 + k); a.close(); }
+            loop_end(a, top);
+            a.halt();
+        }};
+        c.named = true; c.ns = true;
+        v.push_back(c);
+    };
+    rd("p_rd", false); rd("p_rdnc", true);
     pmc("p_k0_m0", 0, 0); pmc("p_k1_m0", 1, 0); pmc("p_k2_m0", 2, 0); pmc("p_k4_m0", 4, 0); pmc("p_k8_m0", 8, 0);
     pmc("p_k0_m40", 0, 40); pmc("p_k4_m40", 4, 40); pmc("p_k8_m40", 8, 40);
     game_cases(v);   // the game bench's g_ cases (gamebench.h)
