@@ -286,7 +286,13 @@ public:
             D3D11_BOX cbx = {0, (GVM_CONTROL >> 4) / kRamW, 0, 256, (GVM_CONTROL >> 4) / kRamW + 1, 1};
             ctx->CopySubresourceRegion(ctl_.t.Get(), 0, 0, 0, 0, ram_.t.Get(), 0, &cbx);
             writeback(mat);
-            gpuDraw(mat);
+            // GVM_LIST_LAZY=1: the list is drawn only in the passes after a readback saw it submitted (the submit word is
+            // taken back once it is drawn: a list waits a few passes more, as a world's frame draws the devices once)
+            static const bool lazy = getenv("GVM_LIST_LAZY") && atoi(getenv("GVM_LIST_LAZY")) != 0;
+            if (!lazy || listDue_ > 0) {
+                gpuDraw(mat);
+                if (listDue_ > 0) listDue_--;
+            }
             if (tq_) ctx->End(tq_[4]);
             if (soundMix && devPasses_.size() > 3) soundDraw(mat, tag);   // (before the control zone moves the voices on)
             mat.setInt("_GvmPasses", (int64_t)(uint32_t)passes_);
@@ -300,12 +306,18 @@ public:
                 countsAdded = false;
             }
             mat.setInt("_CountMerged", merge ? 2 : 1);
-            zone(mat, 0x700000u, kControlTexels);
+            // GVM_ZONES_EVERY=K: the control words' and the cores' counts' zones every K-th frame (and whenever the host
+            // delivers something), as a world draws the devices once a frame of several rounds
+            static const uint32_t zonesEvery = getenv("GVM_ZONES_EVERY") ? (std::max)(1, atoi(getenv("GVM_ZONES_EVERY"))) : 1;
+            bool zones = zonesEvery == 1 || merge || conDelivered || deliver_ || deliverNet_ || listDue_ > 0 || ++zoneSkip_ >= zonesEvery;
+            if (zones) zoneSkip_ = 0;
+            if (zones) zone(mat, 0x700000u, kControlTexels);
+            if (tq_) ctx->End(tq_[6]);   // (GVM_TIME_LOG: the control zone's end)
             if (conDelivered) {
                 zone(mat, 0x76b828u, 1);     // CON_HOST
                 conDelivered = false;
             }
-            if (workers_) zone(mat, 0x76ba00u, 72);   // MC_STATS_ALL
+            if (workers_ && zones) zone(mat, 0x76ba00u, 72);   // MC_STATS_ALL
             if (deliver_) {
                 zone(mat, 0x76c000u, 0x4000);   // FETCH_DATA
                 deliver_ = false;
@@ -321,7 +333,7 @@ public:
             tsPending_ = true;
         }
         if (ts) {
-            if (!devices_) ctx->End(tqs[4]);
+            if (!devices_) ctx->End(tqs[4]), ctx->End(tqs[6]);
             ctx->End(tqs[5]);
             ctx->End(ts->dj.Get());
             tq_ = nullptr;
@@ -367,9 +379,9 @@ public:
                 TimeSet& s = tset_[t5 % 8];
                 if (timeLog_ && s.pending && s.tag == t5) {
                     D3D11_QUERY_DATA_TIMESTAMP_DISJOINT dj{};
-                    UINT64 v[6] = {};
+                    UINT64 v[7] = {};
                     bool ok = gpu_.ctx->GetData(s.dj.Get(), &dj, sizeof dj, 0) == S_OK;
-                    for (int k = 0; ok && k < 6; k++) ok = gpu_.ctx->GetData(s.q[k].Get(), &v[k], sizeof v[k], 0) == S_OK;
+                    for (int k = 0; ok && k < 7; k++) ok = gpu_.ctx->GetData(s.q[k].Get(), &v[k], sizeof v[k], 0) == S_OK;
                     if (ok && !dj.Disjoint && dj.Frequency) {
                         uint32_t most = 0, act = 0;
                         for (int c = 1; c < 256; c++) most = (std::max)(most, row[c] >> 8), act += (row[c] >> 8) >= 64;
@@ -377,7 +389,7 @@ public:
                         for (int k = 0; k < 5; k++) rec[7 + k] = (uint32_t)((v[k + 1] - v[k]) * 1e9 / dj.Frequency);
                         rec[12] = (uint32_t)((v[5] - v[0]) * 1e9 / dj.Frequency);
                         uint64_t at = (uint64_t)((double)v[0] * 1e9 / dj.Frequency);   // (the frame's start on the GPU's clock, ns)
-                        rec[13] = (uint32_t)at, rec[14] = (uint32_t)(at >> 32), rec[15] = (uint32_t)(dj.Frequency / 1000);
+                        rec[13] = (uint32_t)at, rec[14] = (uint32_t)(at >> 32), rec[15] = (uint32_t)((v[6] - v[4]) * 1e9 / dj.Frequency);   // (15: the devices to the control zone's end)
                         fwrite(rec, 4, 16, timeLog_);
                     }
                     s.pending = false;
@@ -397,6 +409,7 @@ public:
         w[40 * 4 + 2] = (s[3 * 4 + 3] & 0xffu) | (s[3 * 4 + 2] << 8);
         w[11 * 4 + 3] = 0xffffffffu;
         memcpy(out.data() + 64 * 16, control.data(), (size_t)kControlTexels * 16);
+        if (control.size() >= 32 && ((const uint32_t*)control.data())[4] != 0) listDue_ = 4;   // (GPU_CTRL's submit word: a list waits)
         memcpy(out.data() + (64 + kControlTexels) * 16, net.data(), (size_t)kNetRead * 16);
         passesDone_ = passes_;
         // the mix drawn in that frame, if it drew one (rvc_backend11's)
@@ -1023,6 +1036,8 @@ private:
     struct TimeSet { ComPtr<ID3D11Query> dj, q[7]; uint64_t tag = 0; bool pending = false; uint32_t drawn = 0, top = 0; };
     TimeSet tset_[8];
     FILE* timeLog_ = nullptr;
+    int listDue_ = 0;
+    uint32_t zoneSkip_ = 0;   // (GVM_ZONES_EVERY: frames since the zones were drawn)   // (GVM_LIST_LAZY: passes the list is still drawn in)
     ID3D11Query* const* tq_ = nullptr;   // (the set this frame's passes mark, or none)
     bool tsPending_ = false;
     double tickMs_ = -1, commitMs_ = -1, deviceMs_ = 0;
