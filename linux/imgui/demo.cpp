@@ -123,7 +123,11 @@ int main()
         ImGui::SetNextWindowPos(ImVec2(12, 12), ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize(ImVec2(300, 0), ImGuiCond_FirstUseEver);
         ImGui::Begin("ShaderEmu");
+#ifdef __gpuvm__
+        ImGui::Text("Dear ImGui %s on a GPU-VM", ImGui::GetVersion());
+#else
         ImGui::Text("Dear ImGui %s on a RISC-V", ImGui::GetVersion());
+#endif
         ImGui::Text("computer in a pixel shader");
         ImGui::Separator();
         show(false);

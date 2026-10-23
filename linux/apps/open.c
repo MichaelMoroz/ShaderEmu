@@ -784,12 +784,21 @@ main(int argc, char **argv)
 		n = 0;
 	k = kind_of(path, head, n);
 	/* a program of another machine's is not run, and a script only if it says what runs it */
+#ifdef __gpuvm__
+	if (n >= 20 && !memcmp(head, "\177ELF", 4) && !(head[4] == 1 && head[18] == 0x56 && head[19] == 0x47)) {
+		printf("open: %s is a program, but not one for this machine (GPU-VM, 32 bits)\n", path);
+		if (!dry)
+			tell(path, "it is a program, but not one for this machine (GPU-VM, 32 bits)");
+		return 1;
+	}
+#else
 	if (n >= 20 && !memcmp(head, "\177ELF", 4) && !(head[4] == 1 && head[18] == 243 && head[19] == 0)) {
 		printf("open: %s is a program, but not one for this machine (RISC-V, 32 bits)\n", path);
 		if (!dry)
 			tell(path, "it is a program, but not one for this machine (RISC-V, 32 bits)");
 		return 1;
 	}
+#endif
 	if (!k) {
 		printf("open: %s: unknown kind\n", path);
 		if (!dry)

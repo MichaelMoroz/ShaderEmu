@@ -33,8 +33,13 @@ int main(int argc, char **argv)
 		return 1;
 	}
 	st = hlsl_stats(p);
+#ifdef __gpuvm__
+	printf("%s: run by GPU-VM's interpreter, %u places a lane may stop, %u texels an index, the longest step %u instructions\n",
+	       argv[1], st.yields, st.texels, st.longest_step);
+#else
 	printf("%s: %u bytes of RISC-V, %u places a lane may stop, %u texels an index, the longest step %u instructions\n", argv[1],
 	       st.code_bytes, st.yields, st.texels, st.longest_step);
+#endif
 	hlsl_free(p);
 	return 0;
 }

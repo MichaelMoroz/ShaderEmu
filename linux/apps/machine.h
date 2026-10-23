@@ -62,7 +62,7 @@ machine_isa(void)
 {
 #ifdef __gpuvm__
 	/* (gpu_vm: bundles of two ops, floats and the card's special functions always: gpu_vm/GPU_VM.md) */
-	return "gpu_vm (integers, floats, special functions)";
+	return "GPU-VM (integers, floats, special functions)";
 #endif
 	static int known, zb, fl;
 

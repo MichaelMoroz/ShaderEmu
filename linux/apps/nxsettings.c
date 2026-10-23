@@ -569,10 +569,15 @@ device_lines(int which, char lines[][96])
 
 		if (has_float < 0)
 			has_float = float_unit();
+#ifdef __gpuvm__
+		snprintf(lines[n++], 96, "Architecture: GPU-VM, 32 bits (bundles of two ops)");
+		snprintf(lines[n++], 96, "Units: integers, memory, floats, the card's special functions");
+#else
 		snprintf(lines[n++], 96, "Architecture: RISC-V, 32 bits (RV32I)");
 		snprintf(lines[n++], 96, "Extensions: M (multiply), A (atomics)%s, Zicsr, Zifencei", has_float ? ", F (float)" : "");
 		if (machine_zb())
 			snprintf(lines[n++], 96, "And Zba, Zbb: address and bit instructions");
+#endif
 		snprintf(lines[n++], 96, "No compressed (C) instructions: every one is 32 bits");
 		snprintf(lines[n++], 96, "Linux says: %s", isa[0] ? strchr(isa, ':') ? strchr(isa, ':') + 2 : isa : "-");
 		snprintf(lines[n++], 96, "Modes: machine (the firmware, in the GPU), supervisor, user");
@@ -894,7 +899,11 @@ draw(void)
 		system_count = n;
 		}
 		ui_text(window, 8, HEIGHT - 44, "Settings are kept when saved (the Storage tab).", -1, UI_SHADOW, 0);
+#ifdef __gpuvm__
+		ui_text(window, 8, HEIGHT - 26, "ShaderEmu: a GPU-VM computer in a pixel shader", -1, UI_SHADOW, 0);
+#else
 		ui_text(window, 8, HEIGHT - 26, "ShaderEmu: a RISC-V computer in a pixel shader", -1, UI_SHADOW, 0);
+#endif
 		break;
 	case TAB_DEVICES:
 		draw_devices(1);

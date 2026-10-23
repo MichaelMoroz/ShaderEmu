@@ -1,3 +1,3 @@
 
-  gpu_vm Linux: busybox (hush), lua, qjs, minigzip, coremark, xtime. `poweroff -f` ends the machine.
+  GPU-VM Linux: busybox (hush), lua, qjs, minigzip, coremark, xtime. `poweroff -f` ends the machine.
 
