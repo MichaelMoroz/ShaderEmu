@@ -1,8 +1,8 @@
 # TinyCC for gpu_vm
 
 A gpu_vm back end for TinyCC (jrrk2's riscv32 branch, which `linux/tcc/build.sh` builds for the RISC-V machine).
-It is meant to give `cc`, `tcc`, the `cc-bytes` case and nxide's C build on gpu_vm. That work is not finished: so far
-there is a cross compiler that runs on the host, and nothing in `build.sh` builds it.
+It gives `cc`, `tcc`, the `cc-bytes` case and nxide's C build and debugger on gpu_vm: `gpu_vm/userland/apps/tcc.sh`,
+in `build.sh`'s ALL, builds the cross compiler, its sysroot, the machine's compiler and the examples.
 
 ## The files
 
@@ -14,31 +14,19 @@ there is a cross compiler that runs on the host, and nothing in `build.sh` build
 | `gpuvm_hook.py` | Puts the three files into a tinycc tree and makes `TCC_TARGET_GPUVM` a variant of `TCC_TARGET_RISCV32`. It edits `tcc.h`, `libtcc.c` (unwind tables off), `tcc.c`, `tccelf.c` (the dynamic relocation count, e_flags, 16-byte code alignment), `include/tccdefs.h` (va_arg: 4-byte stack slots, an aggregate over 8 bytes by pointer) and `tccgen.c` (a pointer initializer's addend goes in the RELA relocation). Run it after linux/tcc's `fpu_hook.py`, `speed_hook.py` and `pass_hook.py`. It is idempotent. |
 | `elf2flt.c` | Turns the `tcc -shared` ELF into a bFLT. It is linux/nommu/elf2flt.c for EM_GVM, taking R_GVM_RELATIVE and R_GVM_32. |
 
-## Building the cross compiler (by hand, for now)
+## The build (tcc.sh)
 
-In WSL, with `SRC` a tinycc tree (`$GVM_APPS_WORK/src/tinycc`):
+`tcc.sh` runs linux/tcc's `fpu_hook.py`, `speed_hook.py` and `pass_hook.py` and `gpuvm_hook.py` on the tinycc tree,
+puts `TCC_TARGET_GPUVM 1`, `CONFIG_TCC_BCHECK 0` and `CONFIG_TCC_BACKTRACE 0` in config.h, and then:
 
-    python3 linux/tcc/fpu_hook.py $SRC; python3 linux/tcc/speed_hook.py $SRC; python3 linux/tcc/pass_hook.py $SRC
-    python3 gpu_vm/userland/apps/tcc/gpuvm_hook.py $SRC
-    mkdir B && cd B && $SRC/configure --cpu=riscv32 --triplet=riscv32-linux-musl --config-musl \
-        --sysincludepaths=/usr/include:/usr/lib/tcc/include --libpaths=/usr/lib:/usr/lib/tcc --crtprefix=/usr/lib --tccdir=/usr/lib/tcc
-
-Then, in config.h, put `#define TCC_TARGET_GPUVM 1`, `#define CONFIG_TCC_BCHECK 0` and
-`#define CONFIG_TCC_BACKTRACE 0` before `#define TCC_TARGET_RISCV32 1`, and run:
-
-    make tcc ONE_SOURCE=yes
-    make libtcc1.a ONE_SOURCE=yes RISCV32_O=builtin.o LIN_O=
-
-The second make builds TinyCC's `__builtin_clz` and the like with the new compiler. Its `libtcc1.c` stops on `#error
-unsupported CPU type`, and compiler-rt covers what that file would give.
-
-A program is linked against gpu_vm's musl sysroot (`~/gpu_vm/sysroot`):
-
-    tcc -nostdinc -I$SRC/include -I$S/include -shared -nostdlib $S/lib/crt1.o $S/lib/crti.o prog.c -L$S/lib -lc \
-        B/libtcc1.a $S/lib/libclang_rt.builtins-gpuvm.a $S/lib/crtn.o -o prog.elf
-    elf2flt prog.elf prog
-
-The sysroot's `crt1.o` already has gpu_vm's flat start (`__gvm_flat_start`), so no flatcrt is needed.
+1. The cross compiler (`$WORK/build/tcc-gvm-cross`): `make tcc`, then `libtcc1.a` with `RISCV32_O=builtin.o LIN_O=`
+   (`libtcc1.c` stops on `#error unsupported CPU type`; compiler-rt covers it).
+2. A sysroot as linux/tcc/build.sh stages one (`$WORK/build/tcc-gvm-sysroot`): the headers; `libtcc1.a` made of
+   compiler-rt's builtins, tcc's `builtin.o` and an `alloca.o`; musl's crt1.o (gpu_vm's flat start already: no
+   flatcrt, though a copy is installed under that name for nxide's link), crti.o, crtn.o, libc.a, libm.a; libnano-X,
+   libgles (`-DSEGL_FLOAT`), libmcw, libhlsl and libmedia with their headers; then `pack.py`.
+3. The machine's compiler (`tcc-gvm-guest`: rv32-cc, `mapped.c`, `ONE_SOURCE=yes`) and `elf2flt` into /usr/bin.
+4. `cc` (linux/nommu/cc with crt1.o for flatcrt.o), `example`, the examples and their nxapps entries.
 
 ## Where it stands (23 October 2026)
 
@@ -57,30 +45,20 @@ The sysroot's `crt1.o` already has gpu_vm's flat start (`__gvm_flat_start`), so 
   - `fconv`: the test expects clang's native double-to-float truncation, which flushes denormals to ±0. compiler-rt's
     `__truncdfsf2`, which tcc calls, gives the exact denormal.
 
-## What is left
+## In the machine (24 October 2026)
 
-1. **A build script.** `gpu_vm/userland/apps/tcc.sh` should run the hooks, build the cross compiler and libtcc1, and be
-   added to `build.sh`'s ALL. It also stages a sysroot, as linux/tcc/build.sh does:
-   - The headers, without the kernel's.
-   - tcc's own include folder.
-   - `libtcc1.a`: compiler-rt's builtins, tcc's `builtin.o` and an `alloca.o` assembled by clang.
-   - crt1.o, crti.o, crtn.o, libc.a and libm.a.
-   - libnano-X.a, libgles.a (gles.c with `-DSEGL_FLOAT`), libmcw.a, libhlsl.a (from hlsl.sh's build) and libmedia.a,
-     with their headers.
-   - Then pack.py, which accepts `-mfpu` and `-static` here.
-2. **The guest compiler.** Configure it with `--cc=rv32-cc`, use mapped.c, apply the same config.h edit, and build it
-   with `ONE_SOURCE=yes`. Also build `elf2flt.c` with rv32-cc into /usr/bin.
-3. **gpu_vm's `cc`.** Base it on linux/nommu/cc, using `/usr/lib/crt1.o` in place of flatcrt.o and compiler-rt in
-   libtcc1.a. Then the `example` script, the examples and the nxapps entries.
-4. **The cases.**
-   - `cc-bytes`: set gpu_vm's md5s as an OVERRIDE in `test_all.py`, the same over two runs, on gvm_cpu and on the card.
-   - The examples hello, cube, home and shader.
-   - `nxide-c`, which needs nxide's debugger on gpu_vm: a `break` poked into a bundle (it stops with pc at the op,
-     `epc`), stepping by bundles, and stabs, which tcc's `-g` writes (tccdbg.c's line offsets are in bytes, now 16 a
-     line's op).
-   - The hlsl cases that build with cc.
-5. **Not done in the compiler.**
-   - No bounds checking (`-b`) and no `-run`.
-   - A long long asm operand is refused.
-   - Code is four times RISC-V's size: one op a bundle, and every conditional branch is two bundles. Packing two ops a
-     bundle and near branches are the obvious next steps.
+- `cc-bytes` passes on gvm_cpu and on the card: 12 md5s, digest `825f76ab`, the same with 17 and 32 cores.
+- The examples hello, cube, home and shader build and run with the machine's `cc` (shader's "0 worker cores" on gvm_cpu
+  is `mcw_most()`, which reads a word gvm_cpu does not fill: clang's build says the same).
+- `nxide-c` passes on gvm_cpu and on the card: debug.h's stop on gpu_vm is a control word of three ops on the general
+  path (illegal before any op of the bundle runs; the trap's pc is word 3, and the debugger sets it back to the
+  bundle), a step decodes isa.h's control words, and a `sync` comes before the program is let run (the kernel's poke
+  is a store of the pass, and the fetch reads RAM as committed: without it a stop poked was run past).
+
+## Not done in the compiler
+
+- No bounds checking (`-b`) and no `-run`. A long long asm operand is refused.
+- Code is four times RISC-V's size: one op a bundle, and every conditional branch is two bundles. Packing two ops a
+  bundle and near branches are the obvious next steps.
+- The exec tests above: atomics, a packed struct's unaligned field (`bits`), `__builtin_sinf` and the like, and clang's
+  native double-to-float truncation.

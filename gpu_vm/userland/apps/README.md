@@ -90,7 +90,8 @@ the tolerance named (`gvmcmp`, `NEAR` in `test_all.py`); an exact sum where the 
 | nxphys | yes | PASS (6 cases) | wall, tower PASS | heights within 2 %, speeds 15 %, depth 10 mm |
 | nxpinball | yes | PASS | runs; another game (score 14370, the card's special functions) | gpu_vm's own on gvm_cpu: score 18060 state 51ec1e4b (floats take the ball elsewhere); a self-played game drifts with any float difference |
 | HLSL: hlsl_bench, hlslc, hlslview | yes (IR run: `hlsl_interp.c`) | PASS | PASS | picture PSNR >= 35 dB (host's sum 3614e8bb on gvm_cpu with exact libm) |
-| nxide | yes | js, py, problems, tree, storm PASS; C fails (tcc); hlsl too slow (20 pictures) | - | as RISC-V |
+| nxide | yes | c, js, py, problems, tree, storm PASS; hlsl too slow (20 pictures) | c, js, py PASS | as RISC-V (c: debug.h's stop and step on gpu_vm) |
+| TinyCC: cc, tcc, examples | yes (`tcc.sh`, `tcc/`) | cc-bytes PASS (`825f76ab`, gpu_vm's own bytes) | cc-bytes PASS | the same bytes on both and with 17 or 32 cores |
 | QuickJS, MicroPython | yes | PASS | PASS | as RISC-V |
 | Doom | yes | PASS (doom-1/2/3, told, rest) | PASS (all five) | exact state digests (integer game) |
 | NES | yes (interpreter) | PASS (8 cases) | thwaite-120, -lists, nova-120 PASS | exact RAM and picture sums |
@@ -123,7 +124,6 @@ the tolerance named (`gvmcmp`, `NEAR` in `test_all.py`); an exact sum where the 
 
 - **OpenTTD**: its C++ needs exceptions and the whole of libstdc++ (the RISC-V build makes its own GCC). gpu_vm's
   compiler emits no unwind information and there is no C++ runtime library: it waits for both.
-- **TinyCC** (`cc`, `tcc`) makes RISC-V code: it needs a gpu_vm back end (the IDE's C builds and `cc-bytes` with it).
 - **The HLSL compiler** runs its IR instead of making code (`programs/hlsl/hlsl_interp.c`, `HLSL_INTERP`, on for
   `__gpuvm__`): each operation as the RISC-V code makes it, a step whole (no lanes). `hlsl.sh` builds libhlsl,
   `hlslc`, `hlslview` and `hlsl_bench`; the fractal's sum is the host's (`3614e8bb`).

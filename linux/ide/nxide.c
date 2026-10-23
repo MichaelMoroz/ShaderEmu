@@ -1712,7 +1712,7 @@ debug_shown(void)
 {
 	int i;
 
-	variable_count = dbg_variables(variables, 48, dbg_function_now, dbg_regs[8]);
+	variable_count = dbg_variables(variables, 48, dbg_function_now, dbg_regs[DBG_FP]);
 	stack_count = dbg_stack(stack, 16);
 	variable_top = 0;
 	if (print_on) {

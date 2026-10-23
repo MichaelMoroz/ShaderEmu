@@ -85,6 +85,8 @@ mkdir -p "$ROOT/usr/bin" "$ROOT/usr/share" "$ROOT/usr/lib"
 rm -rf "$ROOT/usr/include"
 (cd "$STAGE/usr/lib" && for f in *; do rm -rf "$ROOT/usr/lib/$f"; done)
 cp -rL "$STAGE/usr/include" "$ROOT/usr/" && cp -rL "$STAGE/usr/lib/." "$ROOT/usr/lib/"
+# (the IDE links as linux/nommu/cc does, with the RISC-V machine's start file's name: here musl's crt1.o is that)
+cp "$STAGE/usr/lib/crt1.o" "$ROOT/usr/lib/flatcrt.o"
 
 # 3. the same compiler for the machine (the libraries read from memory: mapped.c)
 echo "== the guest's compiler"
