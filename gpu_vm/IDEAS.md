@@ -24,7 +24,7 @@ timed) and register-checked, then timed on the card in batches under 10 minutes;
 | 13 | Loads that skip the store check (read-only data, like `__ldg`) | queued | |
 | 14 | A read cache for reused loads vs the GPU's texture cache | queued | |
 | 15 | Large copies through the commit's operation queue | in the bench (`_c` kernels) | |
-| 16 | Compiler gap: hand assembly vs our clang vs gcc for RISC-V, same kernels | in progress | the bench favours gpu_vm 2.2x more than the games do |
+| 16 | Compiler gap: hand assembly vs our clang vs gcc for RISC-V, same kernels | done (bench) | none: clang -O2 (the games' flags) makes 0-10% fewer bundles than hand assembly at the same ns a bundle (g_logic 63.8 vs 62.0 frames/s on x23, g_verts 34.5 vs 35.5, g_ray1 11.6 vs 11.5); gcc's RISC-V 1.75-2.4 instructions a bundle (games 1.7-3.0); x23 over RISC-V 1.46-1.88 one core, g_hl 1.18 (HL 1.10), g_ray 1.04 (nxray 0.86), g_q3 1.74 (Q3 0.79: bound by passes, not code); the earlier 2.2x was a RISC-V run beside WARP checks |
 | 17 | Compiler bundling options (-gpuvm-sched-kind, -gpuvm-mask-select, -gpuvm-fnrel) | parked | unfinished patch in build/wip |
 | 18 | More registers for LLVM; spills and frames in the core's file | after 7 and 16 | |
 | 19 | 128-bit registers: SIMD (one opcode, four lanes) and lane-VLIW (an opcode a lane), predication by lane mask, 16-byte texel loads/stores | queued (builder; vector kernels from the bench) | |
