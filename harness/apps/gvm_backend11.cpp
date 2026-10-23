@@ -307,7 +307,9 @@ public:
         w[28 * 4 + 1] = s[3 * 4 + 1];        // OPS (texel 19.y)
         w[28 * 4 + 2] = (uint32_t)passesDone_;
         w[36 * 4 + 3] = s[0 * 4 + 0];        // pc
-        w[40 * 4 + 2] = s[3 * 4 + 3];        // why its last pass ended (texel 19.w), as the RISC-V machine's last stall
+        // why its last pass ended (texel 19.w), as the RISC-V machine's last stall, and above bit 8 the bundles it ran
+        // (texel 19.z), which --frame-log keeps (gpu_vm/bench_games)
+        w[40 * 4 + 2] = (s[3 * 4 + 3] & 0xffu) | (s[3 * 4 + 2] << 8);
         w[11 * 4 + 3] = 0xffffffffu;
         memcpy(out.data() + 64 * 16, control.data(), (size_t)kControlTexels * 16);
         memcpy(out.data() + (64 + kControlTexels) * 16, net.data(), (size_t)kNetRead * 16);

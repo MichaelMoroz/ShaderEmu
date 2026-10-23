@@ -64,6 +64,9 @@ static struct {
     // --profile: bundles run by address and contents, from --profile-from bundles on; written at the exit
     const char *prof_path;
     uint64_t prof_from;
+    // --profile-at TEXT / --profile-until TEXT: count from where the console says TEXT, stop where it says the other
+    const char *prof_at, *prof_until;
+    char con_tail[128];
 } H;
 
 static void out_flush(void) { fflush(stdout); fflush(stderr); }
@@ -453,7 +456,20 @@ static void console_poll(void) {
         }
         for (; H.con_printed != written; H.con_printed++) {
             uint32_t a = CON_RING + (H.con_printed & 255);
-            fputc((int)(ram[a >> 2] >> ((a & 3) * 8)) & 255, stdout);
+            int ch = (int)(ram[a >> 2] >> ((a & 3) * 8)) & 255;
+            fputc(ch, stdout);
+            if (H.prof_at || H.prof_until) {
+                size_t k = strlen(H.con_tail);
+                if (k + 1 >= sizeof H.con_tail) { memmove(H.con_tail, H.con_tail + 64, k - 64 + 1); k -= 64; }
+                H.con_tail[k] = (char)ch; H.con_tail[k + 1] = 0;
+                if (H.prof_at && strstr(H.con_tail, H.prof_at)) {
+                    H.prof_from = H.bundles; H.prof_at = NULL; H.con_tail[0] = 0;
+                    fprintf(stderr, "gvm_cpu: --profile from bundle %llu\n", (unsigned long long)H.bundles);
+                } else if (!H.prof_at && H.prof_until && strstr(H.con_tail, H.prof_until)) {
+                    prof_killed = 1;
+                    fprintf(stderr, "gvm_cpu: --profile until bundle %llu\n", (unsigned long long)H.bundles);
+                }
+            }
         }
         fflush(stdout);
     }
@@ -833,6 +849,7 @@ static void usage(void) {
         "  --stats             bundles, ops and passes at the end, on stderr\n"
         "  --profile FILE      the bundles run, a line each address and contents with its runs, to FILE at the end\n"
         "  --profile-from N    count from the Nth bundle on\n"
+        "  --profile-at TEXT   count from where the console says TEXT; --profile-until TEXT: stop where it says TEXT\n"
         "  --no-console        no console device (its words at 0x016b8280 are plain RAM)\n"
         "  --no-stdin          the console delivers no input\n");
     exit(EXIT_USAGE);
@@ -866,6 +883,8 @@ int main(int argc, char **argv) {
         else if (!strcmp(a, "--cores") && more) H.ncores = num(argv[++i]);
         else if (!strcmp(a, "--profile") && more) H.prof_path = argv[++i];
         else if (!strcmp(a, "--profile-from") && more) H.prof_from = strtoull(argv[++i], NULL, 0);
+        else if (!strcmp(a, "--profile-at") && more) H.prof_at = argv[++i], H.prof_from = ~0ull;
+        else if (!strcmp(a, "--profile-until") && more) H.prof_until = argv[++i];
         else if (!strcmp(a, "--max-bundles") && more) H.max_bundles = strtoull(argv[++i], NULL, 0);
         else if (!strcmp(a, "--")) { i++; break; }
         else if (a[0] == '-' && a[1] == '-') { fprintf(stderr, "gvm_cpu: unknown option %s\n", a); usage(); }
