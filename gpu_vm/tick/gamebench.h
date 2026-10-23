@@ -60,6 +60,9 @@ struct GScene {
     int rayW = 0;              // > 0: workers 1..rayW share core 0's picture each frame
     GRay ray;
     int idleOps = 10;          // the idle poll's extra ops (worker.S's timer trap)
+    bool decl = false;         // (form d) core 0 declares itself and the workers it waits for as Quake III and Half-Life do
+                               // through the REST ioctl: the pid word 0x00c01120 at the start, the mask 0x00c01100 (bit k:
+                               // worker k) while it waits for its jobs, 0 after (the builder's wad 5-7 read them)
 };
 
 // Registers: r1 ra, r2 sp, r3 frames (core 0) or the last job (a worker), r4 frame, r5-r19 temporaries, r20-r27 saved,
@@ -484,6 +487,9 @@ static void g_scene(std::vector<GvmAsm>& p, std::vector<std::pair<uint32_t, uint
                 a.li(51, S.rayW + 1);
                 g_bne(a, 48, 51, wl);
             }
+            if (S.decl && busy) {   // (the workers waited for: the REST mask)
+                a.li(48, (int32_t)0x00c01100u); a.li(49, (int32_t)(((1u << (busy + 1)) - 2) & 0xffffffffu)); a.sw(49, 48, 0);
+            }
             for (uint32_t k = 1; k <= busy; k++) {
                 int again = a.label(), ok = a.label();
                 a.li(49, (int32_t)(G_ANS + 16 * k));
@@ -494,8 +500,10 @@ static void g_scene(std::vector<GvmAsm>& p, std::vector<std::pair<uint32_t, uint
                 a.j(again);
                 a.bind(ok);
             }
+            if (S.decl && busy) { a.li(48, (int32_t)0x00c01100u); a.sw(0, 48, 0); }
         };
         a.bind(main_);
+        if (S.decl) { a.li(48, (int32_t)0x00c01120u); a.li(49, 1); a.sw(49, 48, 0); }   // (a program has declared a mask)
         a.li(3, (int32_t)(S.rayW && g_frames() == 2 ? 1 : g_frames()));   // (a check: one frame of 191 workers is minutes on WARP)
         auto post = [&]() {
             // post this frame's jobs: {seq = frame + 1, kind, a0, a1}, the seq last
@@ -682,13 +690,15 @@ static GScene g_scene_of(const std::string& name) {
     int stack = form == "r" ? G_REGS : form == "f" ? G_FILE : G_MEM;
     S.core0.stack = S.worker.stack = S.ray.stack = stack;
     S.core0.copyop = S.worker.copyop = form == "c";
+    S.decl = form == "d";
     return S;
 }
 static uint32_t g_cores_of(const GScene& S) { return 1 + (uint32_t)S.jobs.size() + (uint32_t)S.spin + (uint32_t)S.idle + (uint32_t)S.rayW; }
 static void game_cases(std::vector<Case>& v) {
     for (const char* name : {"g_logic", "g_verts", "g_ray1", "g_q3", "g_hl", "g_ray", "g_q3p",
                              "g_logic_r", "g_logic_f", "g_logic_c", "g_q3_f", "g_hl_r", "g_hl_f", "g_hl_c", "g_ray_f",
-                             "g_logic_v", "g_verts_v", "g_ray1_v", "g_hlw", "g_q3w", "g_q3r", "g_q3s", "g_hlr", "g_tune"}) {
+                             "g_logic_v", "g_verts_v", "g_ray1_v", "g_hlw", "g_q3w", "g_q3r", "g_q3s", "g_hlr", "g_tune",
+                             "g_q3r_d", "g_q3s_d", "g_hlr_d", "g_hl_d", "g_q3_d"}) {
         std::string nm = name;
         GScene S = g_scene_of(nm);
         bool vec = nm.size() > 2 && nm.compare(nm.size() - 2, 2, "_v") == 0;
@@ -714,7 +724,7 @@ static void game_cases(std::vector<Case>& v) {
             }
             g_scene(p, data, S);
         }};
-        c.named = true; c.set = nm == "g_tune" ? "game_tune" : nm == "g_q3r" || nm == "g_q3s" || nm == "g_hlr" ? "game4" : nm == "g_q3p" ? "game2" : nm == "g_hlw" || nm == "g_q3w" ? "game3" : vec ? "game_vec" : nm.find('_', 2) == std::string::npos ? "game" : "game_x"; c.big = true;
+        c.named = true; c.set = nm.size() > 2 && nm.compare(nm.size() - 2, 2, "_d") == 0 ? "game4d" : nm == "g_tune" ? "game_tune" : nm == "g_q3r" || nm == "g_q3s" || nm == "g_hlr" ? "game4" : nm == "g_q3p" ? "game2" : nm == "g_hlw" || nm == "g_q3w" ? "game3" : vec ? "game_vec" : nm.find('_', 2) == std::string::npos ? "game" : "game_x"; c.big = true;
         c.vec_need = vec;   // (game2: cases made since the builder's sweeps began)
         c.skip_regs = G_SKIP_REGS; c.skip_ops = !lone; c.units_reg = 60;
         c.check_ticks = lone ? 997 : S.rayW ? 4093 : 1999;
