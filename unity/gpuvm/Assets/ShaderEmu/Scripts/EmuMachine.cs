@@ -113,6 +113,11 @@ public class EmuMachine : UdonSharpBehaviour
     // address is loaded as text and as a picture eight seconds after start, and what came is logged.
     public bool fetchTest;
     public VRCUrl fetchTestUrl;
+    // For a script of the editor's that measures the machine (unity/gpuvm/minimal: GvmProbe): text set here is typed
+    // at the console ('\n' as Enter), and what the console printed is kept, its last 16 K characters.
+    [HideInInspector] public string hostInput = "";
+    [HideInInspector] public string consoleOut = "";
+    [HideInInspector] public int consolePrinted;   // characters printed since power-on
     private float fetchTestAt;
     private VRCImageDownloader fetchTestImages;
 
@@ -685,6 +690,8 @@ public class EmuMachine : UdonSharpBehaviour
         if (consoleKeyboard != null) consoleKeyboard.Flush();
         if (gpuKeyboard != null) gpuKeyboard.Flush();
         if (terminal != null) terminal.Clear();
+        consoleOut = "";
+        consolePrinted = 0;
         fetchState = FetchIdle;
         fetchAnswered = 0;
         heldAddress = "";
@@ -1371,6 +1378,13 @@ public class EmuMachine : UdonSharpBehaviour
         bool gpuAlways = initLeft != 0 || (oldPaths & 2) != 0 || ((oldPaths & 16) == 0 && Time.time < gpuBusyUntil);
 
         bool running = initLeft == 0;
+        if (running && hostInput.Length > 0)
+        {
+            // as much as the ring of typed characters has room for (256 less one), the rest a later frame
+            int typed = Mathf.Clamp(254 - ((charTail - charHead) & 255), 0, hostInput.Length);
+            for (int i = 0; i < typed; i++) RemoteChar(hostInput[i] == '\n' ? '\r' : hostInput[i]);
+            hostInput = hostInput.Substring(typed);
+        }
         if (running) Inputs();
         if (running) FetchStep();
         if (running) NetFrame();
@@ -1417,6 +1431,7 @@ public class EmuMachine : UdonSharpBehaviour
         volumeMaterial.SetTexture("_State", state);
         if (volumeMaskMaterial != null) volumeMaskMaterial.SetTexture("_State", state);
 
+        if (consoleOut.Length > 32768) consoleOut = consoleOut.Substring(consoleOut.Length - 16384);
         if (Time.time - statsAt >= 0.5f) ShowStats();
     }
 
@@ -1886,6 +1901,11 @@ public class EmuMachine : UdonSharpBehaviour
             int at = (int)(conWritten & (ConRing - 1));
             int c = (int)((Word(ConTexel + 1 + at / 16, (at / 4) % 4) >> (8 * (at % 4))) & 0xff);
             if (c != 0 && terminal != null) terminal.PutChar(c);
+            if (c != 0)
+            {
+                consoleOut += (char)c;
+                consolePrinted++;
+            }
         }
     }
 
