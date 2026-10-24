@@ -54,7 +54,9 @@ At **0x016b8280** (`docs/machine/console.md`, "Words in memory"), plain memory r
 - ROM: `gpuvm,rom` (reg = 0x40000000 and the image's size) is the read-only disk `gvmrom` (`kernel/romblk.c`); a read is
   a memcpy from the ROM. Disabled in gvm.dts until a size is filled in. It works (romfs on it boots, 22 October 2026)
   but romfs on a block device reads 1 KB buffers: the root on the ROM goes through MTD instead (phram over the ROM,
-  `gpu_vm/userland/romroot.sh`), as the lean RISC-V machine's does.
+  `gpu_vm/userland/romroot.sh`), as the lean RISC-V machine's does. A lookup and a read of up to 64 bytes skip MTD:
+  they are made where they lie in the ROM (`linux/kernel/romfs_hook.py`, applied by `drivers.py`). Through MTD, they
+  were half of nxfiles's start (`bench_games/RESULTS.md`, "Where a start went").
 - The last 64 bytes of RAM are reserved (`gvm_bootmem`): the compiler may load up to 16 bytes past an access through the
   same register, and gpu_vm faults only beyond RAM's end.
 - memcpy, memmove, memset (`lib/string.S`), so copy_page, clear_page and the ROM's reads: from 4 KB up (`GVM_OP_MIN`) one

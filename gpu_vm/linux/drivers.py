@@ -3,7 +3,8 @@ linux/kernel/shaderemu_{gpu,sound,fb,input,net}.c copied into the tree given as 
 less 0x86000000 (the device window moved down) and the few RISC-V lines in them made gpu_vm's; their Kconfig and
 Makefile entries (linux/kernel/install_drivers.py's); the no-MMU mmap at a device's own address
 (linux/nommu/patch_drivers.py's); and the RISC-V kernel's generic hooks that apply here (the tick polls the input and
-the network: tick_input_hook.py; a socket reader is not woken for room to write: unixwake_hook.py). Idempotent: the
+the network: tick_input_hook.py; a socket reader is not woken for room to write: unixwake_hook.py; romfs
+looks a name up and reads a header or a name where they lie in the ROM, not through MTD: romfs_hook.py). Idempotent: the
 drivers are copied anew each time. Run by build.sh's sync step.   python3 drivers.py KDIR"""
 import os, re, subprocess, sys
 
@@ -169,7 +170,7 @@ for source, directory, symbol, prompt, extra in DRIVERS:
             k = body + '\n\n' + entry
         open(kconfig, 'w').write(k)
 
-for hook in ('tick_input_hook.py', 'unixwake_hook.py'):
+for hook in ('tick_input_hook.py', 'unixwake_hook.py', 'romfs_hook.py'):
     subprocess.run([sys.executable, os.path.join(kernel, hook), tree], check=True, stdout=subprocess.DEVNULL)
 
 # The RISC-V machine's no-MMU kernel's generic patches (linux/nommu): overlayfs maps a ROM file where it lies, tmpfs

@@ -92,9 +92,43 @@ logs are in `wide-b`), so it has no row.
 | nxfiles | 0.10 | 0.79 | 0.94 | **0.13** | 0.11 |
 | nxcalc, nxmon, nxsettings, nxide | not run | not run | not run | | |
 
-A start costs gpu_vm 4 to 8 times RISC-V's CPU time. The idle machine is busier too (0.43 s against 0.27 in 4 s).
-The likely cause is the program's first pages: loading, relocating and touching a bFLT's text and data. This is
-the clearest thing to profile next.
+A start costs gpu_vm 4 to 8 times RISC-V's CPU time by this measure. The idle machine is busier too (0.43 s against
+0.27 in 4 s). Both are mostly the measure and romfs (below, "Where a start went").
+
+### Where a start went (24 October 2026)
+
+- **The measure undercounts RISC-V.** Its kernel's cpu line adds up to less than the time that passed: in the window of
+  nxterm's start, 421 jiffies of 4.71 s, and an idle window 427 of 4.58 s. gpu_vm's add up (458 of 4.58 s). The time
+  lost is busy time: a tick that comes late counts one jiffy for several. Uptime less idle time is the fair measure,
+  from the same logs:
+
+  | uptime less idle, s | RISC-V | v0009 before | v0009 after |
+  |---|---|---|---|
+  | idle, 4 s | 0.58 | 0.40 | 0.40 |
+  | nxterm's start | 0.33 | 0.52 | **0.32** |
+  | nxedit's start | 0.17 | 0.33 | **0.16** |
+  | nxfiles's start | 0.22 | 0.79 | **0.22** |
+
+  RISC-V's figures are from `wide-b`, which ran from a checkpoint. gpu_vm's are new: two interleaved rounds booted fresh
+  on the card (`nano-X -p & sleep 2` first), with the before and after kernels on img-cur's ROM. Each start is less the
+  idle line.
+- **Counted, the work was already even.** On `gvm_cpu` (32 cores, `--budget 4096 --wc 16,4`, v0009's write cache) and
+  `rvc_cpu`, core 0 over the start's 4 s less an idle 4 s: nxterm 1.41 M bundles against 1.51 M instructions.
+- **Half of gpu_vm's start was romfs through MTD.** Each lookup walked its directory an entry at a time, every entry
+  two or three reads through `mtd_read`, `mtd_read_oob`, `mtd_check_oob_ops` and `phram_read`, about 150 bundles each.
+  nxfiles made 11 lookups, 4,475 such reads and 0.61 M bundles: 43% of its start, 22% of nxterm's. The RISC-V kernel
+  has done these where they lie in the ROM since `linux/kernel/romfs_hook.py`. gpu_vm's `drivers.py` now applies that
+  hook as well.
+- **The hook's effect, counted (bundles less idle):** nxterm 1.22 M to 0.82 M, nxedit 0.83 M to 0.44 M, nxfiles 1.41 M
+  to 0.51 M. Core 0's passes in nxfiles's window went from 1,131 to 832, not counting waits.
+- **What is left of a start:**
+  - The program's own code, 45-55% of it.
+  - `alloc_pages_run`, which scans the page structures from the zone's bottom: 35 k bundles a call, twice for a
+    start. This is the same code as RISC-V's.
+  - slob, at 6-9%.
+- **What is left of the idle machine:** core 0 ends a pass with its write cache full at every timer tick, in
+  `timekeeping_update`'s copy of the timekeeper. That is 100 extra passes a second on every load: 480 of the idle 4 s's
+  929 passes end full. The RISC-V cache keeps 336 texels; v0009's keeps 128.
 
 ## What stands out
 
@@ -102,8 +136,9 @@ the clearest thing to profile next.
   - Micropolis 2.3x, CoreMark 2.1x, gzip 1.8x.
   - libmedia 1.5-1.6x, Quake III 1.46x, nxray 1.53x, Half-Life 1.31x, Doom 1.27x.
   - The interpreters and the path tracer 1.05-1.4x.
-- **gpu_vm is slower** on the NES (0.80 and 0.94), nxphys's tower (0.87), the HLSL bench (no back end) and program
-  starts (0.13-0.26). Red Alert and Quake's timedemo are even.
+- **gpu_vm is slower** on the NES (0.80 and 0.94), nxphys's tower (0.87) and the HLSL bench (no back end). Red Alert
+  and Quake's timedemo are even. Program starts measured 0.13-0.26. Since the romfs hook, and measured as uptime less
+  idle, they are even with RISC-V ("Where a start went").
 - **x23 trails v0009 everywhere.** It is below RISC-V on nxray, on most nxpath scenes and on ClassiCube.
 - **Missing from this table:** nxplay (did not finish), four of the seven starts, and a second round of the games and
   of `wide-b`'s programs (cut).
