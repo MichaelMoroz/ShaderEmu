@@ -167,7 +167,7 @@ public class EmuMachine : UdonSharpBehaviour
     private const int KindFile = 3;     // a request for whatever an address holds, as a file
     private const int UartBurst = 4;
     private const int InitFrames = 2;
-    private const int TicksPerRound = 8192;   // instructions a pass, as the harness's
+    private const int TicksPerRound = 4096;   // instructions a pass, as the harness's
     private const int MaxRounds = 32;
     private const int PassCommit = 0, PassControl = 1, PassUnpack = 2, PassWindowBack = 3;
     private const int FieldPoints = 2 * 3968;   // the lanes' field's buckets (FIELD_MAX in lean/tick.hlsl)

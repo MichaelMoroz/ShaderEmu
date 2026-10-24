@@ -31,7 +31,7 @@ Shader "ShaderEmu/GvmTick0"
                 float x = (v == 1 || v == 3 || v == 4) ? 8 : 0;
                 float y = (v == 2 || v == 4 || v == 5) ? rows : 0;
                 v2f o;
-                o.vertex = id < 6 ? float4(x / 1024.0 * 2 - 1, 1 - y / 24.0 * 2, 0, 1) : float4(-2, -2, 0, 1);
+                o.vertex = id < 6 ? float4(x / 1024.0 * 2 - 1, 1 - y / (float)max(24u, GEO_BAND + GEO_BH) * 2, 0, 1) : float4(-2, -2, 0, 1);
                 return o;
             }
             ENDCG

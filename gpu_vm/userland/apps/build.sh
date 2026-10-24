@@ -43,7 +43,7 @@ ALL="userland/build.sh nanox/build.sh libmedia/build.sh apps/build.sh play/build
      micropolis/build.sh halflife/build.sh terminal/build.sh
      ports/dropbear.sh ports/sftp.sh ports/curl.sh ports/socat.sh ports/thttpd.sh ports/pcre.sh ports/lockfile.sh ports/iproute2.sh
      ports/at.sh ../gpu_vm/userland/apps/mc.sh ../gpu_vm/userland/apps/hlsl.sh ../gpu_vm/userland/apps/tcc.sh
-     ../gpu_vm/userland/apps/openttd.sh"
+     ../gpu_vm/userland/apps/openttd.sh ../gpu_vm/userland/apps/hostwants.sh"
 for s in ${*:-$ALL}; do
     t=$(date +%s)
     log=$L/$(echo "$s" | tr / -).log

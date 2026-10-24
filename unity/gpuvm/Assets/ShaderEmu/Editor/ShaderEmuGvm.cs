@@ -49,6 +49,27 @@ public static partial class ShaderEmuBuilder
         }
     }
 
+    // The RISC-V machine's materials keep its image in saved texture slots no GPU-VM shader reads: dropped, or the
+    // world carries both machines' images. The ROM's scope shows gpu_vm's ROM.
+    static void GvmDropRiscvImages(EmuMachine machine)
+    {
+        foreach (string guid in AssetDatabase.FindAssets("t:Material", new[] { Generated }))
+        {
+            Material mat = AssetDatabase.LoadAssetAtPath<Material>(AssetDatabase.GUIDToAssetPath(guid));
+            SerializedObject so = new SerializedObject(mat);
+            SerializedProperty envs = so.FindProperty("m_SavedProperties.m_TexEnvs");
+            bool changed = false;
+            for (int i = 0; i < envs.arraySize; i++)
+            {
+                SerializedProperty tex = envs.GetArrayElementAtIndex(i).FindPropertyRelative("second.m_Texture");
+                if (tex.objectReferenceValue == null || !tex.objectReferenceValue.name.StartsWith("linux_")) continue;
+                tex.objectReferenceValue = mat.name == "ScopeRom" ? machine.imageTextures[4] : null;
+                changed = true;
+            }
+            if (changed) so.ApplyModifiedPropertiesWithoutUndo();
+        }
+    }
+
     static Mesh GvmMesh(string name, int count, MeshTopology topology)
     {
         Mesh mesh = LoadOrCreate(Generated + "/" + name + ".asset", () => new Mesh { name = name });
@@ -92,6 +113,7 @@ public static partial class ShaderEmuBuilder
         if (GvmConst(tick, "GEO_BW") != 8 || GvmConst(tick, "GEO_BAND") != 16) throw new System.Exception("tick.cginc: blocks 8 wide, bands of 16 rows");
         machine.gvmBlockH = GvmConst(tick, "GEO_BH");
         machine.gvmStateTexels = GvmConst(tick, "NTEX");
+        int stateRows = Mathf.Max(24, 16 + machine.gvmBlockH);   // (GvmTick.shader's GVM_STATE_ROWS: two bands of 128 cores)
         long romBytes = new FileInfo(GvmImageDir + "/rootfs.romfs").Length;
 
         machine.state = StateTexture("GvmRam", 8192, (0x2000000 + (machine.gvmRamMB << 20)) / 16 / 8192);
@@ -100,8 +122,8 @@ public static partial class ShaderEmuBuilder
         machine.gvmSetB = new RenderTexture[8];
         for (int t = 0; t < 8; t++)
         {
-            machine.gvmSetA[t] = StateTexture("GvmStateA" + t, 1024, 24);   // GEO_BLOCKS: 128 cores' blocks a band of 16 rows
-            machine.gvmSetB[t] = StateTexture("GvmStateB" + t, 1024, 24);
+            machine.gvmSetA[t] = StateTexture("GvmStateA" + t, 1024, stateRows);   // GEO_BLOCKS: 128 cores' blocks a band of 16 rows
+            machine.gvmSetB[t] = StateTexture("GvmStateB" + t, 1024, stateRows);
         }
         machine.gvmOps = new[] { StateTexture("GvmOps0", 256, 1), StateTexture("GvmOps1", 256, 1) };
         machine.gvmStage = StateTexture("GvmStage", span, 256 * slots);
@@ -109,7 +131,7 @@ public static partial class ShaderEmuBuilder
         machine.gvmPending = StateTexture("GvmPending", 1, 1);
         machine.gvmZone = StateTexture("GvmZone", 8192, 3);
         machine.gvmCtl = StateTexture("GvmCtl", 256, 1);
-        machine.gvmTickDepth = Target("GvmTickDepth", 1024, 24, 16);
+        machine.gvmTickDepth = Target("GvmTickDepth", 1024, stateRows, 16);
 
         Material tickMat = Mat("GvmTick", "ShaderEmu/GvmTick");
         machine.tickMaterial = tickMat;
@@ -184,6 +206,12 @@ public static partial class ShaderEmuBuilder
             machine.imageTextures[lane] = AssetDatabase.LoadAssetAtPath<Texture2D>(ShaderEmuImages.LanePath("gvm", "ram", lane));
             machine.imageTextures[4 + lane] = AssetDatabase.LoadAssetAtPath<Texture2D>(ShaderEmuImages.LanePath("gvm", "rom", lane));
         }
+        // a pass is 4,096 bundles (the harness's default), 64k a frame: 16 rounds
+        if (machine.tickSlider != null) { machine.tickSlider.value = 2; EditorUtility.SetDirty(machine.tickSlider); }
+        if (machine.speedSlider != null) { machine.speedSlider.value = 5; EditorUtility.SetDirty(machine.speedSlider); }
+        machine.powerOnAtStart = false;      // off until someone presses Power, as in the RISC-V world
+        machine.gvmDevicesEachPass = false;   // the devices once a frame: every pass cost a GPU camera render and seven blits
+        GvmDropRiscvImages(machine);
         Apply(machine);
         UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(world.gameObject.scene);
         AssetDatabase.SaveAssets();
