@@ -30,6 +30,7 @@ static int g_romrows = 0;   // (probe: the ROM in RAM's texture)
 static uint32_t g_wcn1 = 0;    // a step's WCN1 (x19g): a worker's entries, the commit's points for it (0: WCN)
 static uint32_t g_ntex = 0;    // a step's NTEX (x22): its state texels (0: T_WC + WCN / 2)
 static uint32_t g_geo = 0;     // a step's GEO_BLOCKS (x21): pixel p of core c at ((c & 127) * 8 + p / 8, (c >> 7) * 16 + p % 8)
+static bool g_copy = false;   // idlew 4: and a second draw copying the parked workers' state
 static bool g_cull = false;   // idlew 2: the tick drawn as a triangle a core, its vertex shader leaving out the quiet ones
 static bool g_c0rt = false;   // a builder's c0rt: core 0's cache chosen at run time, every core in one draw of one compile
 static uint32_t g_wcn0 = 0;    // a step's WCN0 (x25): core 0's own write cache, its tick a compile of its own (CORE0=1)
@@ -164,7 +165,7 @@ struct Gpu {
     ID3D11Buffer* code = nullptr;   // t12: RAM's first image as a StructuredBuffer<uint4> (a probe's code fetched from a buffer)
     ID3D11ShaderResourceView* codeSrv = nullptr;
     int cur = 0, oc = 0;
-    Prog tick, commit, stg, wrt, prog, any, tickW, tick0;   // (tickW: the workers' rows' tick, a step's WORKER=1, x19; tick0: core 0's, CORE0=1, x25)
+    Prog tick, commit, stg, wrt, prog, any, tickW, tick0, copyTick;   // (copyTick: idlew 4's copy of the parked workers; tickW: the workers' rows' tick, a step's WORKER=1, x19; tick0: core 0's, CORE0=1, x25)
     bool hasCommit = true, hasOps = true, hasAny = false, uavTick = false, hasW = false;   // (uavTick: x19's probe, fragu)   // (hasAny: the step's op_any draw, x19: the rounds predicated on it)
     ID3D11Predicate* pred = nullptr;   // an occlusion predicate: some core has an operation queued
     Tex dummy;                         // op_any's 1 x 1 target (nothing is written: its blend state masks every component)
@@ -288,6 +289,11 @@ struct Gpu {
         } else if (g_gg.bw && g_cull) {   // idlew 2: one draw over the whole state, a triangle a core
             viewport(texW(), texH());
             ctx->Draw(3 * cores, 0);
+            if (g_copy) {   // (idlew 4) the parked workers the tick's triangles left out, into the same targets
+                ctx->VSSetShader(copyTick.vs, nullptr, 0); ctx->PSSetShader(copyTick.ps, nullptr, 0);
+                ctx->Draw(3 * cores, 0);
+                ctx->VSSetShader(tick.vs, nullptr, 0); ctx->PSSetShader(tick.ps, nullptr, 0);
+            }
         } else if (g_gg.bw && g_c0rt) {   // c0rt: every core in one draw a band, the first band as tall as core 0's rows
             for (uint32_t b = 0; b * g_gg.per < cores; b++) {
                 uint32_t n = std::min(g_gg.per, cores - b * g_gg.per);
@@ -603,10 +609,10 @@ static double time_case(Gpu& gpu, const Case& cs, uint32_t ticks, uint32_t passe
     if (cs.ns) return 1000.0 / mops;   // a real program: ns a bundle
     return cs.rv_per_iter > 0 ? mops / per * cs.rv_per_iter : mops;
 }
-struct Variant { std::string name, shader; std::vector<std::string> defs; Prog tick, commit, stg, wrt, prog, any, tickW, tick0; uint32_t wcn0 = 0, spix0 = 0; bool c0rt = false, cull = false, hasCommit, hasOps, hasAny = false, uavTick = false, hasW = false; uint32_t wcn = 128, texw = 2048, twc = 24, slots = 32, span = 272, lrows = 1, wcn1 = 0, geo = 0, ntex = 0; Geo gg; };
+struct Variant { std::string name, shader; std::vector<std::string> defs; Prog tick, commit, stg, wrt, prog, any, tickW, tick0, copyTick; uint32_t wcn0 = 0, spix0 = 0; bool c0rt = false, cull = false, copy = false, hasCommit, hasOps, hasAny = false, uavTick = false, hasW = false; uint32_t wcn = 128, texw = 2048, twc = 24, slots = 32, span = 272, lrows = 1, wcn1 = 0, geo = 0, ntex = 0; Geo gg; };
 static void use(Gpu& gpu, const Variant& v) {
     gpu.tick = v.tick; gpu.commit = v.commit; gpu.stg = v.stg; gpu.wrt = v.wrt; gpu.prog = v.prog;
-    gpu.hasCommit = v.hasCommit; gpu.hasOps = v.hasOps; gpu.uavTick = v.uavTick; gpu.hasW = v.hasW; gpu.tickW = v.tickW; gpu.tick0 = v.tick0; g_wcn0 = v.wcn0; g_spix0 = v.spix0; g_c0rt = v.c0rt; g_cull = v.cull; gpu.hasAny = v.hasAny && !env_int("GVM_NOPRED"); gpu.any = v.any;
+    gpu.hasCommit = v.hasCommit; gpu.hasOps = v.hasOps; gpu.uavTick = v.uavTick; gpu.hasW = v.hasW; gpu.tickW = v.tickW; gpu.tick0 = v.tick0; g_wcn0 = v.wcn0; g_spix0 = v.spix0; g_c0rt = v.c0rt; g_cull = v.cull; g_copy = v.copy; gpu.copyTick = v.copyTick; gpu.hasAny = v.hasAny && !env_int("GVM_NOPRED"); gpu.any = v.any;
     g_wcn = v.wcn; g_texw = v.texw; g_twc = v.twc; g_lrows = v.lrows; g_wcn1 = v.wcn1; g_geo = v.geo; g_ntex = v.ntex; g_gg = v.gg; g_rmap = v.gg.rmap; GvmAsm::file_paths = v.gg.xfast != 0; GvmAsm::nc_loads = v.gg.nc != 0; GvmAsm::max_ops = v.gg.thin || v.gg.thin8 ? 1 : v.gg.wide3 ? 3 : 2; GvmAsm::thin8 = v.gg.thin8 != 0; GvmAsm::late_br = v.gg.late != 0; GvmAsm::late_float = v.gg.late == 3; GvmAsm::fx1 = v.gg.fx1 != 0; GvmAsm::vec_ops = v.gg.vec != 0; GvmAsm::cc0_fast = v.gg.cc0x != 0;   // (the state's layout, the commit's points and RAM's width are the variant's)
     gpu.opSlots = v.slots; gpu.opSpan = v.span; gpu.opRounds = g_op_rounds;
     g_romrows = 0; g_x17_paths = 0;   // (probe: the ROM in RAM's texture; x17 on the real programs' own paths)
@@ -661,6 +667,8 @@ static void build_variant(Variant& v) {
     v.uavTick = slurp(v.shader).find("fragu(") != std::string::npos;
     v.cull = slurp(v.shader).find("v2f vert_cull(") != std::string::npos;   // (a builder's idlew 2: a triangle a core, the quiet ones left out)
     v.tick = program(path, v.cull ? "vert_cull" : "vert", v.uavTick ? "fragu" : "frag", defs);
+    v.copy = slurp(v.shader).find("tick_out frag_copy(") != std::string::npos;   // (idlew 4)
+    if (v.copy) v.copyTick = program(path, "vert_copy", "frag_copy", defs);
     v.c0rt = step_size(slurp(v.shader), {}, "C0RT", 0) != 0;
     if (v.c0rt) {   // c0rt: no compile of its own, core 0's sizes for the commit and the layout
         std::string src = slurp(v.shader);

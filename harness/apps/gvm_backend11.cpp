@@ -121,16 +121,18 @@ public:
         ntex_ = stepConst(src, "NTEX", tWc_ + wcn_ / 2);   // (a step whose entries are not two a texel says)
         spix_ = (ntex_ + 7) / 8;
         geo_ = stepConst(src, "GEO_BLOCKS", 0);
-        if (geo_ && spix_ > 48) { err = tickPath + ": GEO_BLOCKS takes 48 state pixels a core at most"; return false; }
-        if (geo_) {   // the builder's block: 8 wide, 3 to 8 rows, column by column, 128 blocks a band of 16 rows (the device reads pixel 2 at (0, 2))
+        if (geo_ && spix_ > 128) { err = tickPath + ": GEO_BLOCKS takes 128 state pixels a core at most"; return false; }
+        if (geo_) {   // the builder's block: 8 wide, 3 to 16 rows, column by column, 128 blocks a band of 16 rows (the device reads pixel 2 at (0, 2))
             bh_ = stepConst(src, "GEO_BH", 8);
-            if (stepConst(src, "GEO_BW", 8) != 8 || bh_ < 3 || bh_ > 8 || spix_ > 8 * bh_ || stepConst(src, "GEO_JROW", 0) != 0 ||
+            if (stepConst(src, "GEO_BW", 8) != 8 || bh_ < 3 || bh_ > 16 || spix_ > 8 * bh_ || stepConst(src, "GEO_JROW", 0) != 0 ||
                 stepConst(src, "GEO_BAND", 16) != 16 || stepConst(src, "GEO_PER", 128) != 128 || stepConst(src, "GEO_PERM", 0) != 0) {
-                err = tickPath + ": GEO_BLOCKS takes blocks 8 wide and 3 to 8 high, column by column, 128 a band of 16 rows"; return false;
+                err = tickPath + ": GEO_BLOCKS takes blocks 8 wide and 3 to 16 high, column by column, 128 a band of 16 rows"; return false;
             }
         }
         c0rt_ = stepConst(src, "C0RT", 0) != 0;   // (a builder's c0rt: core 0's cache chosen at run time, one compile, every core in one draw)
         cull_ = src.find("v2f vert_cull(") != std::string::npos;   // (a builder's idlew 2: a triangle a core, none for a worker parked as it was)
+        cullVerts_ = stepConst(src, "CULL_QUADS", 0) ? 6 : 3;   // (a probe's: the culled draw as a quad a core, as the Unity world's mesh)
+        copy_ = src.find("tick_out frag_copy(") != std::string::npos;   // (idlew 4: and a second draw that copies the parked workers' state)
         if (src.find("#ifndef CORE0") != std::string::npos || c0rt_) {   // x25: core 0's own write cache, its tick compiled with CORE0=1
             wcn0_ = stepConst(src, "WCN0", 0);
             spix0_ = (stepConst(src, "NTEX0", 0) + 7) / 8;
@@ -148,7 +150,8 @@ public:
                    SUCCEEDED(dev->CreatePixelShader(ps.bytecode->GetBufferPointer(), ps.bytecode->GetBufferSize(), nullptr, &out.ps));
         };
         if (!prog(cull_ ? "vert_cull" : "vert", "frag", tick_) || !prog("commit_vert", "commit_frag", commit_) || !prog("op_stage_vert", "op_stage_frag", stage_) ||
-            !prog("op_write_vert", "op_write_frag", write_) || !prog("op_prog_vert", "op_prog_frag", progress_)) {
+            !prog("op_write_vert", "op_write_frag", write_) || !prog("op_prog_vert", "op_prog_frag", progress_) ||
+            (copy_ && !prog("vert_copy", "frag_copy", copyTick_))) {
             if (err.empty()) err = "creating the tick's shaders failed";
             return false;
         }
@@ -547,13 +550,13 @@ public:
         SnapHeader want = snapHeader(), h{};
         if (size >= sizeof h) memcpy(&h, data, sizeof h);
         uint32_t fromSpix = (h.ntex + 7) / 8, keep = h.ntex == ntex_ ? spix_ : tWc_ / 8;   // (another cache: the texels before it)
-        size_t setBytes = h.pad ? (size_t)((kMaxCores - 1) / 128 * 16 + 8) * 1024 * 16 : (size_t)fromSpix * kMaxCores * 16;
+        uint32_t fromBh = h.pad == 1 ? 8 : h.pad - 16;   // (pad: 0 a row a core, 1 8x8 blocks, 16 + h blocks 8 x h)
+        size_t setBytes = h.pad ? (size_t)((kMaxCores - 1) / 128 * 16 + (std::max)(8u, fromBh)) * 1024 * 16 : (size_t)fromSpix * kMaxCores * 16;
         uint32_t fromMap = h.magic[7] == '2' ? 1u : 0u, fromRows = fromMap ? GVM_STRIP_ROWS(h.ramEnd / 16) : h.ramEnd / 16 / kRamW;
         if (fromMap != rmap_) want.romRows = h.romRows, want.magic[7] = h.magic[7];   // (the other map: its ROM rows its own, RAM converted)
         size_t need = sizeof h + (size_t)kRamW * fromRows * 16 + 16 * setBytes + 2 * (size_t)kMaxCores * 16 +
                       (devices_ ? (size_t)kGpuTarget * kGpuTarget * 4 : 0);
-        uint32_t fromBh = h.pad == 1 ? 8 : h.pad - 16;   // (pad: 0 a row a core, 1 8x8 blocks, 16 + h blocks 8 x h)
-        if (size != need || (h.pad > 1 && (h.pad < 19 || h.pad > 23)) || memcmp(h.magic, want.magic, 8) != 0 || h.ramEnd != want.ramEnd || h.romRows != want.romRows ||
+        if (size != need || (h.pad > 1 && (h.pad < 19 || h.pad > 32)) || memcmp(h.magic, want.magic, 8) != 0 || h.ramEnd != want.ramEnd || h.romRows != want.romRows ||
             (h.ntex != want.ntex && (h.ntex < tWc_ || h.ntex > 48 * 8)) || h.devices != want.devices) {
             err = "not a snapshot of this image, tick and RAM (the same --gvm, --gvm-tick and --gvm-ram)";
             return false;
@@ -795,9 +798,9 @@ private:
         gpu_.ctx->PSSetShaderResources(0, 12, s);
         gpu_.ctx->VSSetShaderResources(0, 12, s);
     }
-    // The state textures: a row a core, or (the step's GEO_BLOCKS) a block of 8 x 8 a core, 128 a band of 16 rows
+    // The state textures: a row a core, or (the step's GEO_BLOCKS) a block of 8 x GEO_BH (3 to 16) a core, 128 a band of 16 rows
     UINT setW() const { return geo_ ? 1024 : spix_; }
-    UINT setH() const { return geo_ ? (kMaxCores - 1) / 128 * 16 + 8 : kMaxCores; }
+    UINT setH() const { return geo_ ? (kMaxCores - 1) / 128 * 16 + (std::max)(8u, bh_) : kMaxCores; }   // (blocks of 9 to 16 rows: the last band as tall as one)
     size_t setAt(uint32_t c, uint32_t j) const {   // the texel of state pixel j of core c (x25: core 0's from 64 on in rows 8-15)
         if (geo_ && c == 0 && j >= 8 * bh_) {   // (a builder's c0nb, blocks under 8 rows: its blocks again, down the first band)
             if (bh_ == 8) return (size_t)(8 + j % 8) * 1024 + j / 8 - 8;
@@ -856,7 +859,12 @@ private:
             D3D11_TEXTURE2D_DESC d;
             set_[cur_][0].t->GetDesc(&d);
             viewport(d.Width, d.Height);
-            ctx->Draw(3 * top_, 0);
+            ctx->Draw(cullVerts_ * top_, 0);
+            if (copy_) {   // (idlew 4) the parked workers the tick's triangles left out, into the same targets
+                ctx->VSSetShader(copyTick_.vs.Get(), nullptr, 0);
+                ctx->PSSetShader(copyTick_.ps.Get(), nullptr, 0);
+                ctx->Draw(cullVerts_ * top_, 0);
+            }
             if (timed) ctx->End(tsQuery_[1].Get());
             if (tq_) ctx->End(tq_[1]);
             goto ticked;
@@ -1220,9 +1228,10 @@ private:
     uint64_t wcFrame_ = 0, wcSeen_ = 0;
     uint32_t lastEnds_[256] = {}, lastPc_[256] = {};   // (GVM_MBOX_LOG: the last ends row and its tag)
     uint64_t lastEndsTag_ = ~0ull;
-    bool c0rt_ = false, cull_ = false;   // (C0RT: core 0 in the workers' draw)
+    bool c0rt_ = false, cull_ = false, copy_ = false;
+    uint32_t cullVerts_ = 3;   // (C0RT: core 0 in the workers' draw)
     uint32_t ramEnd_ = 0, rows_ = 0, romRows_ = 1, wcn_ = 514, tWc_ = 40, opSlots_ = 32, opSpan_ = 272, ntex_ = 297, spix_ = 38, geo_ = 0, bh_ = 8, wcn0_ = 0, spix0_ = 0;
-    Prog tick_, tick0_, commit_, stage_, write_, progress_;
+    Prog tick_, tick0_, commit_, stage_, write_, progress_, copyTick_;
     Tex ram_, rom_, stageTex_, ops_[2], set_[2][8], zone_, ctl_, info_, none_;
     ComPtr<ID3D11Buffer> cb_, ccb_[4];
     ComPtr<ID3D11BlendState> mask_[4];

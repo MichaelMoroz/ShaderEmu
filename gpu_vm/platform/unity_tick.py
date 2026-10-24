@@ -27,6 +27,12 @@ def main():
     # c0nb (core 0's own write cache): the step compiled again with CORE0=1 draws core 0 (GvmTick0.shader), the plain
     # one every other core
     head += "#define GVM_HAS_CORE0 %d\n" % (1 if "#ifndef CORE0" in src else 0)
+    # c0rt (as the RISC-V machine's tick sizes each core's cache by its geometry): core 0's cache chosen at run time, in the
+    # same compile and draw, its quad C0ROWS tall (GvmTick.shader); a step without it has a core 0 as tall as a worker
+    if "static const uint C0RT = 1;" not in src:
+        head += "static const uint C0RT = 0;\nstatic const uint C0ROWS = 0;\n"
+    # idlew 4: the tick's quads leave out the workers parked as they were, and GvmTick's second pass copies them (frag_copy)
+    head += "#define GVM_COPY %d\n" % (1 if "tick_out frag_copy(" in src else 0)
     open(os.path.join(out, "tick.cginc"), "w", newline="\n").write(head + src)
     open(os.path.join(out, "isa.cginc"), "w", newline="\n").write(open(os.path.join(HERE, "..", "isa.h")).read())
     print("tick.cginc and isa.cginc from", step)

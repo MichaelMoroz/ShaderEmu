@@ -1,21 +1,38 @@
-// u64.hlsl for Unity, made by gpu_vm/platform/unity_tick.py: do not edit
+// v0001.hlsl for Unity, made by gpu_vm/platform/unity_tick.py: do not edit
 #define GVM_HAS_CORE0 0
+#define GVM_COPY 1
 // A tick made by gpu_vm/tick/builder/gen.py (the manifest beside it has its parameters); not edited by hand.
-#include "isa.cginc"   // isa.h 63245e5c8e33
+static const uint C0RT = 1;   // core 0's cache chosen at run time: one compile, one draw (the harness: rows C0ROWS of the first band)
+static const uint C0ROWS = 12;
+#if 0   // (for the hosts, which read a size as text: a worker's)
+static const uint NB = 32;
+static const uint WCN = 258;
+static const uint NTEX = 363;
+static const uint SPIX = 46;
+static const uint T_XF = 363;
+static const uint T_XT = 363;
+static const uint T_PB = 363;
+static const uint T_VR = 363;
+#endif
+static const uint WCN0 = 386;   // core 0's write cache entries (8 * 48 + 2) and state texels
+static const uint NTEX0 = 523;
+static const uint C0BLK = 48u, C0BH = 6u;   // core 0's pixel j from C0BLK on: C0BH rows down, a block again
+#include "isa.cginc"   // isa.h 1805f4006457
 
-static const uint NB = 64;           // buckets of four entries a table
-static const uint WCN = 514;         // write cache entries: 8 * NB in buckets, two overflow slots, then a sink
-static const uint WCS = WCN - 2;
+#define NB	(core == 0u ? 48u : 32u)
+#define WCN	(core == 0u ? 386u : 258u)
+#define WCS	(WCN - 2)
 static const uint MV = 0;   // (mv: the move on a full pair of buckets)
 static bool mvok = false;   // (mv: on for a store's lookup whose store fills the slot it frees: a free way must not hide its bucket's texel in the other)
-static const uint OV = 0, OVB = 8 * NB;   // overflow entries from OVB, searched when both buckets are full
+static const uint OV = 0;
+#define OVB (8u * NB)   // overflow entries from OVB, searched when both buckets are full
 static const uint NONE = 0xffffffffu;
 static const uint RAM_W = 8192;
 static const uint T_WC = 40;
 static const uint T_Q = 24;
-static const uint T_WT = T_WC + WCN;
-static const uint NTEX = 683;
-static const uint SPIX = 86;
+#define T_WT	(T_WC + WCN)
+#define NTEX	(core == 0u ? 523u : 363u)
+#define SPIX	(core == 0u ? 66u : 46u)
 // the core's file (phase 2): XR words from texel T_XF, their tags from T_XT (XBIND), NPAIR pairs from T_PB (their count
 // texel 23.x); the commit draws CPTS points a core: the write cache's, the file's slots (XBIND), the pairs
 static const uint XR = 0;
@@ -32,17 +49,17 @@ static const uint FX1 = 0;   // op 1's float functions: fpu's but the special on
 static const uint LATEBR = 0;   // branches read their registers after the bundle's ops (gvm_machine.late)
 static const uint XLAZY = 0;
 static const uint NPAIR = 0;
-static const uint T_XF = 683;
-static const uint T_XT = 683;
-static const uint T_PB = 683;
-static const uint T_VR = 683;
+#define T_XF	(core == 0u ? 523u : 363u)
+#define T_XT	(core == 0u ? 523u : 363u)
+#define T_PB	(core == 0u ? 523u : 363u)
+#define T_VR	(core == 0u ? 523u : 363u)
 static const uint VEC = 0;   // 128-bit registers (gvm_machine.vec; needs rpk=wide)
-static const uint CPTS = 514;
+static const uint CPTS = 258;
 // the layout, as gvmbench reads it: core c's state pixel j at (slot * GEO_BW + jx, band * GEO_BAND + jy), its band c / GEO_PER,
 // its slot in the band GEO_PERM's (0 the same, 1 bits reversed, 2 times GEO_MUL), jx, jy by GEO_JROW
 static const uint GEO_BLOCKS = 1;
 static const uint GEO_BW = 8;
-static const uint GEO_BH = 16;
+static const uint GEO_BH = 6;
 static const uint GEO_BAND = 16;
 static const uint GEO_PER = 128;
 static const uint GEO_JROW = 0;
@@ -51,7 +68,8 @@ static const uint GEO_MUL = 1;
 static const uint GEO_INV = 0;
 uint slot_of(uint i) { return i; }
 uint core_at(uint s) { return s; }
-int3 sat(uint j, uint c) { return int3(slot_of(c % 128u) * 8u + (j / 16u), (c / 128u) * 16u + (j % 16u), 0); }
+int3 sat(uint j, uint c) { return c == 0 ? int3((j % C0BLK) / C0BH, (j / C0BLK) * C0BH + (j % C0BLK) % C0BH, 0) : int3(slot_of(c % 128u) * 8u + (j / 6u), (c / 128u) * 16u + (j % 6u), 0); }   // (core 0 in the rows under its block)
+int3 satx(uint j, uint c) { return c == 0 ? int3((j % C0BLK) / C0BH, (j / C0BLK) * C0BH + (j % C0BLK) % C0BH, 0) : sat(j, c); }   // (the commit's and operations' reads: core 0 too)
 static const uint QMAX = 8;
 static const uint OP_SLOTS = 32;
 static const uint OP_SPAN = 272;
@@ -71,10 +89,10 @@ uint4 data_texel(uint ad) {
 }
 uint pick(uint4 q, uint i) { return (i & 2) ? ((i & 1) ? q.w : q.z) : ((i & 1) ? q.y : q.x); }
 uint4 put(uint4 v, uint i, uint x) { return uint4(i == 0 ? x : v.x, i == 1 ? x : v.y, i == 2 ? x : v.z, i == 3 ? x : v.w); }
-static const uint NBK = (WCN + 4) / 4;   // the tags' elements: buckets of four (the sink's too)
+#define NBK	((WCN + 4) / 4)   // the tags' elements: buckets of four (the sink's too)
 static uint4 R4[65];
-static uint wt[(WCN + 1)];
-static uint wd[(4 * (WCN + 1))];
+static uint wt[(WCN0 + 1)];   // (WCN0: one local size for both compiles)
+static uint wd[(4 * (WCN0 + 1))];
 static uint bloom;
 static uint pc, tp, cycle, opsrun, flags, ops8;
 static uint4 cur;
@@ -192,15 +210,17 @@ uint merge(uint w, uint word, uint ad, uint val) {
     uint sh = ad << 3, msk = (0xffffffffu >> ext_k(w)) << sh;
     return word ^ ((word ^ (val << sh)) & msk);
 }
-uint wc_b1(uint t) { return (t * 0x9e3779b1u) >> 26; }
-uint wc_b2(uint t) { return NB + ((t * 0x85ebca6bu + 0x165667b1u) >> 26); }
+uint wc_b1(uint t) { return (((t * 0x9e3779b1u) >> 16) * NB) >> 16; }
+uint wc_b2(uint t) { return NB + ((((t * 0x85ebca6bu + 0x165667b1u) >> 16) * NB) >> 16); }
 uint4 bucket(uint b) { uint k = 4 * b; return uint4(wt[k], wt[k + 1], wt[k + 2], wt[k + 3]); }
 struct mop { uint ad, t, i, b1, b2; uint4 q, A, B; uint sl, otag, e, w; };
 void mfind(inout mop m) {
     bool4 ka = (m.A & 0x0fffffffu) == m.t || m.A == NONE, kb = (m.B & 0x0fffffffu) == m.t || m.B == NONE;
     uint msk = (ka.x ? 1u : 0u) | (ka.y ? 2u : 0u) | (ka.z ? 4u : 0u) | (ka.w ? 8u : 0u)
              | (kb.x ? 16u : 0u) | (kb.y ? 32u : 0u) | (kb.z ? 64u : 0u) | (kb.w ? 128u : 0u);
-    uint k = firstbitlow(msk);
+    uint mt = (ka.x && m.A.x != NONE ? 1u : 0u) | (ka.y && m.A.y != NONE ? 2u : 0u) | (ka.z && m.A.z != NONE ? 4u : 0u) | (ka.w && m.A.w != NONE ? 8u : 0u)
+             | (kb.x && m.B.x != NONE ? 16u : 0u) | (kb.y && m.B.y != NONE ? 32u : 0u) | (kb.z && m.B.z != NONE ? 64u : 0u) | (kb.w && m.B.w != NONE ? 128u : 0u);
+    uint k = firstbitlow(mt != 0 ? mt : msk);   // (evf: a match before a free way: a dropped entry leaves holes)
     m.otag = k < 8 ? pick(k < 4 ? m.A : m.B, k & 3) : NONE;
     m.sl = k < 4 ? 4 * m.b1 + k : k < 8 ? 4 * m.b2 + (k & 3) : NONE;
     [branch] if (OV != 0 && k >= 8) {   // both buckets full: the texel's overflow entry, or the first free one
@@ -346,6 +366,7 @@ void fstep(inout uint budget) {
 // a whole bundle with any control word but eret: x16's full step, both ops' registers read first. A load or store is
 // noted as the fast loop's. jr and callr take rs after the ops, the add from rs as the bundle found it (isa.h).
 uint fb(uint w, uint imm, bool L, uint b) { return (w & op_bit(32)) ? (L ? imm : (w >> 20) << 20) : b; }
+static bool wfull = false;   // (evf 3: step12's store found no room)
 uint step12(uint budget) {   // the budget left: 0 when a store found no room (nothing made; the bundle again next pass)
     uint4 t = cur;
     uint base = pc & ~15u, ctl = t.w, n = GVM_N(ctl), path = ctl & 7;
@@ -370,7 +391,7 @@ uint step12(uint budget) {   // the budget left: 0 when a store found no room (n
         d0 = stv ? 0 : d0;
     } else [branch] if (opc0 == GVM_OP_I(GVM_I_SEL) || opc0 == GVM_X_LPC) v0 = opc0 == GVM_X_LPC ? base + i0 : C0 != 0 ? A0 : B0;
     else [branch] if ((opc0 >> 6) == 1) v0 = alu(t.x, i0, A0, B0); else [branch] if ((opc0 & 31) <= GVM_F_MAX) v0 = fsum(opc0 & 31, A0, fb(t.x, i0, L0, B0), C0); else v0 = fpu(t.x, A0, fb(t.x, i0, L0, B0), C0);   // (s12b 3)
-    [branch] if (!ok) return 0;
+    [branch] if (!ok) { wfull = true; return 0; }   // (evf 3: no room)
     R4[(d0 == 0 ? 64 : d0)].x = v0;
     A1 = (d0 != 0 && ra1 == d0) ? v0 : A1; B1 = (d0 != 0 && rb1 == d0) ? v0 : B1;
     uint v1;
@@ -664,6 +685,44 @@ uint general(uint budget) {
     return e != NONE ? 0 : budget - 1;
 }
 
+static uint evn;   // (evf 2: this pass's compactions)
+void ev_move(uint f, uint to) {   // (evf 2) entry f to the free entry to
+    wt[to] = wt[f]; wd[4 * to] = wd[4 * f]; wd[4 * to + 1] = wd[4 * f + 1]; wd[4 * to + 2] = wd[4 * f + 2]; wd[4 * to + 3] = wd[4 * f + 3];
+    wt[f] = NONE;
+}
+void ev_pack(uint b0, uint b1) {   // (evf 2) buckets b0 to b1 - 1: their residents to the front, in order
+    uint b, w;
+    [loop] for (b = b0; b < b1; b++) {
+        uint k = 4 * b;
+        [loop] for (w = 0; w < 4; w++) [branch] if (wt[4 * b + w] != NONE) { [branch] if (k != 4 * b + w) ev_move(4 * b + w, k); k++; }
+    }
+}
+uint ev_free(uint b) { uint4 q = bucket(b); return q.x == NONE ? 4 * b : q.y == NONE ? 4 * b + 1 : q.z == NONE ? 4 * b + 2 : q.w == NONE ? 4 * b + 3 : NONE; }
+bool compact() {   // (evf 2) a full write cache: drop the entries that hold RAM's words, pack, place the stores that found no room
+    uint g, j, n = 0;
+    [loop] for (g = 0; g < 8 * NB; g += 8) {
+        uint4 v[8];
+        [unroll] for (j = 0; j < 8; j++) { uint tg = wt[g + j]; v[j] = ram(tg & 0x0fffffffu); }
+        [unroll] for (j = 0; j < 8; j++) {
+            uint e = g + j, tg = wt[e], mk = tg >> 28;
+            bool eq = tg != NONE && ((mk & 1) == 0 || wd[4 * e] == v[j].x) && ((mk & 2) == 0 || wd[4 * e + 1] == v[j].y)
+                   && ((mk & 4) == 0 || wd[4 * e + 2] == v[j].z) && ((mk & 8) == 0 || wd[4 * e + 3] == v[j].w);
+            [flatten] if (eq) wt[e] = NONE;
+            n += eq ? 1u : 0u;
+        }
+    }
+    [branch] if (n == 0) return false;
+    bool ok = true;
+    [loop] for (g = WCS; g < WCS + 2; g++) {   // the stores that found no room: their texel's first bucket, else its second
+        uint tg = wt[g];
+        [branch] if (tg != NONE) {
+            uint t = tg & 0x0fffffffu, f = ev_free(wc_b1(t));
+            f = f != NONE ? f : ev_free(wc_b2(t));
+            [branch] if (f != NONE) ev_move(g, f); else ok = false;
+        }
+    }
+    return ok;
+}
 void run(uint budget) {
     [branch] if (flags & F_HALT) { endr = E_HALT; return; }
     [branch] if ((flags & F_SYNC) != 0 && qn != 0) { endr = E_SYNC; return; }
@@ -696,6 +755,7 @@ uint4 state_in(uint t, uint c) {
     case 4: return _S4.Load(at); case 5: return _S5.Load(at); case 6: return _S6.Load(at); default: return _S7.Load(at);
     }
 }
+uint3 start_key(uint c) { uint4 w = ram((0x00c00000u >> 4) + c); return uint3(w.xy, w.z ^ (w.w * 0x9e3779b1u)); }   // (idlew) its start texel
 uint4 state_out(uint t, uint4 s3) {
     [branch] if (t < 16) return uint4(R4[(4 * t)].x, R4[(4 * t + 1)].x, R4[(4 * t + 2)].x, R4[(4 * t + 3)].x);
     [branch] if (t >= T_WC && t < T_WT) { uint e = 4 * (t - T_WC); return uint4(wd[e], wd[e + 1], wd[e + 2], wd[e + 3]); }
@@ -707,16 +767,17 @@ uint4 state_out(uint t, uint4 s3) {
     uint4 s16 = uint4(pc, st, epc, cause), s17 = uint4(tval, tvec, scratch, ien), s18 = uint4(tcmp_lo, tcmp_hi, flags, rnd);
     uint4 s19 = uint4(cycle, opsrun, cycle - s3.x, endr == E_BUDGET && cycle - s3.x < bud && (flags & F_HALT) == 0 ? E_FULL : endr);
     uint4 s22 = uint4(qn, qhead, qgen, refused);
-    return t == 16 ? s16 : t == 17 ? s17 : t == 18 ? s18 : t == 19 ? s19 : t == 20 ? lat0 : t == 21 ? lat1 : t == 22 ? s22 : 0;
+    return t == 16 ? s16 : t == 17 ? s17 : t == 18 ? s18 : t == 19 ? s19 : t == 20 ? lat0 : t == 21 ? lat1 : t == 22 ? s22 : t == 23 ? (core != 0 && pc >= 0x470u && pc < 0x520u && endr == E_SYNC ? uint4(start_key(core), 0) : uint4(NONE, NONE, NONE, NONE)) : 0;   // (idlew: the start texel a parked pass saw)
 }
 uint4 again_out(uint t, uint c) {   // (the file as it was, its slots clean: their values were committed; no pairs)
     uint4 v = state_in(t, c);
     return t >= T_WT ? uint4(NONE, NONE, NONE, NONE) : t >= T_WC ? uint4(0, 0, 0, 0) : t == 18 ? uint4(v.xy, v.z | F_AGAIN, v.w) : t == 19 ? uint4(v.xyz, E_BUDGET) : v;
 }
-struct v2f { float4 vertex : SV_POSITION; };
+struct v2f { float4 vertex : SV_POSITION; nointerpolation uint cc : CORE; };
 v2f vert(uint id : SV_VertexID) {
     v2f o;
     o.vertex = float4(id == 1 ? 3.0 : -1.0, id == 2 ? -3.0 : 1.0, 0, 1);
+    o.cc = NONE;
     return o;
 }
 struct tick_out { uint4 t0 : SV_Target0; uint4 t1 : SV_Target1; uint4 t2 : SV_Target2; uint4 t3 : SV_Target3;
@@ -748,14 +809,81 @@ void load_state(uint c) {
     qgen++;
 }
 
+static const uint C0ROWS_ = 12;   // (idlew 2) core 0's rows (c0rt: its own)
+bool parked_as_was(uint c) {   // (idlew) parked in the firmware (worker_fw.h's park loop) and its start texel as the last pass saw it
+    uint4 s16 = state_in(16, c), s19 = state_in(19, c), s22 = state_in(22, c), s23 = state_in(23, c);
+    return s16.x >= 0x470u && s16.x < 0x520u && s19.w == E_SYNC && s22.x == 0 && all(start_key(c) == s23.xyz);
+}
+v2f vert_cull(uint id : SV_VertexID) {   // (idlew 4) none for a worker parked as it was: frag_copy's
+    v2f o;
+    uint c = id / 3, k = id % 3;
+    o.cc = c;
+    float2 wh;
+    _S0.GetDimensions(wh.x, wh.y);
+    uint ec = (pick(uint4(0, 0, 0, 0), (c >> 5) & 3) >> (c & 31)) & 1;
+    bool quiet = c != 0 && c < _NCores && ec == 0 && parked_as_was(c);
+    bool none = c >= _NCores || quiet;
+    int3 at = sat(0, c);
+    float2 q = float2(k == 1 ? 2.0 : 0.0, k == 2 ? 2.0 : 0.0);
+    float2 px = float2(at.xy) + q * float2(8.0, c == 0 ? (float)C0ROWS_ : 6.0);
+    o.vertex = none ? float4(0, 0, 0, 0) : float4(px.x / wh.x * 2.0 - 1.0, 1.0 - px.y / wh.y * 2.0, 0, 1);
+    return o;
+}
+v2f vert_copy(uint id : SV_VertexID) {   // (idlew 4) the parked workers alone
+    v2f o;
+    uint c = id / 3, k = id % 3;
+    o.cc = c;
+    float2 wh;
+    _S0.GetDimensions(wh.x, wh.y);
+    uint ec = (pick(uint4(0, 0, 0, 0), (c >> 5) & 3) >> (c & 31)) & 1;
+    bool quiet = c != 0 && c < _NCores && ec == 0 && parked_as_was(c);
+    bool none = !quiet;
+    int3 at = sat(0, c);
+    float2 q = float2(k == 1 ? 2.0 : 0.0, k == 2 ? 2.0 : 0.0);
+    float2 px = float2(at.xy) + q * float2(8.0, c == 0 ? (float)C0ROWS_ : 6.0);
+    o.vertex = none ? float4(0, 0, 0, 0) : float4(px.x / wh.x * 2.0 - 1.0, 1.0 - px.y / wh.y * 2.0, 0, 1);
+    return o;
+}
+tick_out frag_copy(v2f i) {   // (idlew 4) a parked worker's pixels: its state as it was
+    uint2 p = uint2(i.vertex.xy);
+    tick_out o;
+    uint rx = p.x % 8u, ry = p.y % 16u;
+    core = (p.y / 16u) * 128u + core_at(p.x / 8u);
+    uint j = rx * 6u + ry;
+    [branch] if (i.cc != core || j >= SPIX || ry >= 6u) discard;
+        uint4 s23 = state_in(23, core);
+        uint4 v[8];
+        [unroll] for (uint k = 0; k < 8; k++) {   // (its state as it was, 22 too, as the harness's freeze; 23 counts the passes, 2 at most)
+            uint t = j * 8 + k;
+            uint4 x = t < T_WC ? state_in(t, core) : t < T_WT ? uint4(0, 0, 0, 0) : t < T_XF ? uint4(NONE, NONE, NONE, NONE) : uint4(0, 0, 0, 0);
+            x = t == 18 ? uint4(x.xy, x.z & ~F_AGAIN, x.w) : t == 19 ? uint4(x.xy, 0, E_SYNC) : t == 23 ? uint4(s23.xyz, min(s23.w + 1, 2u)) : x;
+            v[k] = x;
+        }
+        o.t0 = v[0]; o.t1 = v[1]; o.t2 = v[2]; o.t3 = v[3]; o.t4 = v[4]; o.t5 = v[5]; o.t6 = v[6]; o.t7 = v[7];
+        return o;
+}
 tick_out frag(v2f i) {
     uint2 p = uint2(i.vertex.xy);
     tick_out o;
     uint rx = p.x % 8u, ry = p.y % 16u;
     core = (p.y / 16u) * 128u + core_at(p.x / 8u);
-    uint j = rx * 16u + ry;
-    [branch] if (core >= _NCores || j >= SPIX || ry >= 16u) { o.t0 = o.t1 = o.t2 = o.t3 = o.t4 = o.t5 = o.t6 = o.t7 = 0; return o; }
-    ext = (pick(_Ext[core >> 7], (core >> 5) & 3) >> (core & 31)) & 1;
+    uint j = core == 0u ? (p.y / C0BH) * C0BLK + rx * C0BH + p.y % C0BH : rx * 6u + ry;   // (c0rt: core 0's pixels in its rows of the first block)
+    [branch] if (core == 0u ? p.y >= 12u || j >= SPIX : (core >= _NCores || j >= SPIX || ry >= 6u)) {
+ o.t0 = o.t1 = o.t2 = o.t3 = o.t4 = o.t5 = o.t6 = o.t7 = 0; return o; }
+    [branch] if (i.cc != NONE && i.cc != core) discard;   // (idlew 2) another core's triangle
+    ext = (pick(uint4(0, 0, 0, 0), (core >> 5) & 3) >> (core & 31)) & 1;
+    [branch] if (core != 0 && ext == 0 && parked_as_was(core)) {   // (idlew) parked in the firmware, its start texel as it was: not run
+        uint4 s23 = state_in(23, core);
+        uint4 v[8];
+        [unroll] for (uint k = 0; k < 8; k++) {   // (its state as it was, 22 too, as the harness's freeze; 23 counts the passes, 2 at most)
+            uint t = j * 8 + k;
+            uint4 x = t < T_WC ? state_in(t, core) : t < T_WT ? uint4(0, 0, 0, 0) : t < T_XF ? uint4(NONE, NONE, NONE, NONE) : uint4(0, 0, 0, 0);
+            x = t == 18 ? uint4(x.xy, x.z & ~F_AGAIN, x.w) : t == 19 ? uint4(x.xy, 0, E_SYNC) : t == 23 ? uint4(s23.xyz, min(s23.w + 1, 2u)) : x;
+            v[k] = x;
+        }
+        o.t0 = v[0]; o.t1 = v[1]; o.t2 = v[2]; o.t3 = v[3]; o.t4 = v[4]; o.t5 = v[5]; o.t6 = v[6]; o.t7 = v[7];
+        return o;
+    }
     bud = core == 0 ? _Ticks : _Ticks >> WSH;   // (wsh)
     [branch] if (WAD != 0 && core != 0) {   // (wad: the pass ends about when core 0's does)
         uint4 z = state_in(19, 0);
@@ -778,7 +906,14 @@ tick_out frag(v2f i) {
     thr = (flags & F_AGAIN) != 0 || qn != 0 ? GVM_PATH_INT : GVM_PATH_FAST;
     flags &= ~F_AGAIN;
     lmax = 0; smax = 0;
-    run(core == 0 ? _Ticks : bud);
+    uint rb = core == 0 ? _Ticks : bud, c0 = cycle;   // (evf 3) a full end that compact() frees: run again with what is left of the budget
+    [loop] for (evn = 0; evn <= 8u; evn++) {   // (one call of run: its text once)
+        run(rb - (cycle - c0));
+        [branch] if (evn == 8u || !(endr == E_FULL || (endr == E_BUDGET && (wfull || wt[WCS] != NONE || wt[WCS + 1] != NONE)))) break;   // (HLSL makes both sides of || )
+        [branch] if (!compact()) break;
+        wfull = false;
+        endr = E_BUDGET;
+    }
     bool again = lmax >= _RamEnd || smax >= _RamEnd - GVM_DEV;
     uint4 s19 = state_in(19, core);
     o.t0 = state_out(j * 8 + 0, s19); o.t1 = state_out(j * 8 + 1, s19); o.t2 = state_out(j * 8 + 2, s19); o.t3 = state_out(j * 8 + 3, s19);
@@ -794,15 +929,16 @@ tick_out frag(v2f i) {
 // ---- The commit: a point a write cache entry, drawn into its texel of RAM in the draw of its word's component
 
 uint4 state_any(uint t, uint c) {
-    int3 at = sat(t >> 3, c);
+    int3 at = satx(t >> 3, c);
     uint4 v0 = (t & 1) ? _S1.Load(at) : _S0.Load(at), v1 = (t & 1) ? _S3.Load(at) : _S2.Load(at);
     uint4 v2 = (t & 1) ? _S5.Load(at) : _S4.Load(at), v3 = (t & 1) ? _S7.Load(at) : _S6.Load(at);
     return (t & 4) ? ((t & 2) ? v3 : v2) : ((t & 2) ? v1 : v0);
 }
 struct c2f { float4 vertex : SV_POSITION; nointerpolation uint value : V; };
 c2f commit_vert(uint id : SV_VertexID) {
-    uint c = id / WCN, j = id % WCN;
-    uint tg = pick(state_any(T_WT + (j >> 2), c), j & 3), tex = tg & 0x0fffffffu;
+    bool z = id < WCN0;
+    uint k = id - WCN0, c = z ? 0 : 1 + k / 258u, j = z ? id : k % 258u;
+    uint tg = pick(state_any(T_WC + (z ? WCN0 : 258u) + (j >> 2), c), j & 3), tex = tg & 0x0fffffffu;
     float2 at = (float2(tex % RAM_W, tex / RAM_W) + 0.5) / float2(RAM_W, _RamRows);
     c2f o;
     o.vertex = tg != NONE && ((tg >> (28 + _Comp)) & 1) != 0 ? float4(at.x * 2 - 1, 1 - at.y * 2, 0, 1) : float4(-2, -2, 0, 1);

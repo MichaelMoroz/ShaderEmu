@@ -114,6 +114,7 @@ public class EmuMachine : UdonSharpBehaviour
     public TextMeshProUGUI workersLabel;
     public float minFrameRate = 45f;   // "steady" gives up instructions before frames come slower than this
     public bool powerOnAtStart;        // off until someone presses Power
+    public int hostWants = 3;          // the host flags' bits 0-1 (bit 0: the desktop at boot, rcS); a measuring scene's 0 is the console alone
     // A real client's test (docs/system/fetch.md, "In VRChat itself"): with fetchTest on, the
     // address is loaded as text and as a picture eight seconds after start, and what came is logged.
     public bool fetchTest;
@@ -536,7 +537,7 @@ public class EmuMachine : UdonSharpBehaviour
         if (sound != null) sound.mixMaterial.SetTexture("_GvmRom", gvmRom);   // samples are played from where they lie in the ROM
         tickMaterial.SetInt("_Ticks", ticks);
         RenderTexture target = gpuCamera.targetTexture;
-        machineMaterial.SetInt("_HostFlags", 3 | workerPresetBooted << 2 | (target.width / 16) << 8 | (target.height / 16) << 16);
+        machineMaterial.SetInt("_HostFlags", (hostWants & 3) | workerPresetBooted << 2 | (target.width / 16) << 8 | (target.height / 16) << 16);
     }
 
     // ---- gpu_vm's passes ----
@@ -729,7 +730,7 @@ public class EmuMachine : UdonSharpBehaviour
         // (bits 2-3: the workers' preset, read by geotune)
         workerPresetBooted = workerPreset;
         geoFirst = geoHybrid = 0;
-        machineMaterial.SetInt("_HostFlags", 3 | workerPreset << 2 | (target.width / 16) << 8 | (target.height / 16) << 16);
+        machineMaterial.SetInt("_HostFlags", (hostWants & 3) | workerPreset << 2 | (target.width / 16) << 8 | (target.height / 16) << 16);
         VRCPlayerApi player = Networking.LocalPlayer;
         tickMaterial.SetInt("_PlayerID", player != null ? player.playerId : 0);
         if (consoleKeyboard != null) consoleKeyboard.Flush();

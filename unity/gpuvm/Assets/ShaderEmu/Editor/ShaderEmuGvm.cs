@@ -160,7 +160,7 @@ public static partial class ShaderEmuBuilder
         Transform oldTick0 = device.Find("GvmTick0 mesh");
         if (oldTick0 != null) Object.DestroyImmediate(oldTick0.gameObject);
         machine.gvmTick0Material = null;
-        if (wcn0 > 0)
+        if (wcn0 > 0 && GvmConst(tick, "C0RT", 0) == 0)   // (c0rt: core 0 in GvmTick's draw, its rows taller)
         {
             machine.gvmTick0Material = Mat("GvmTick0", "ShaderEmu/GvmTick0");
             MeshRenderer tick0 = PassMesh(device, "GvmTick0", tickMesh.gameObject.layer, GvmMesh("GvmTick0Quad", 6, MeshTopology.Triangles), machine.gvmTick0Material);
@@ -210,7 +210,10 @@ public static partial class ShaderEmuBuilder
         if (machine.tickSlider != null) { machine.tickSlider.value = 2; EditorUtility.SetDirty(machine.tickSlider); }
         if (machine.speedSlider != null) { machine.speedSlider.value = 5; EditorUtility.SetDirty(machine.speedSlider); }
         machine.powerOnAtStart = false;      // off until someone presses Power, as in the RISC-V world
-        machine.gvmDevicesEachPass = false;   // the devices once a frame: every pass cost a GPU camera render and seven blits
+        // the devices after every pass while lists come, as the RISC-V world's GPU draws every round then (a GPU camera
+        // render and seven blits a pass): once a frame, a game that waits for its list made one frame a Unity frame
+        // (Doom at 8 x 8,192: 58 fps, Unity's 58; at 16 passes 40, Unity's 40)
+        machine.gvmDevicesEachPass = true;
         GvmDropRiscvImages(machine);
         Apply(machine);
         UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(world.gameObject.scene);

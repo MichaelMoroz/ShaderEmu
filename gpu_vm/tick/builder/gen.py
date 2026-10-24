@@ -48,7 +48,8 @@ DEFAULTS = dict(
     wadf=0,             # the wad block's form: 2 before the state's load, 16 run(core == 0 ? _Ticks : bud) (18: the ALU loops as wad=0's), 1 flatten, 4 core 0's run apart
     wclean=0,           # 1: a pixel of the write cache's data texels whose entries are all unused is discarded (not written)
     c0nb=0,             # core 0's own write cache: 2 x c0nb buckets of four (0: none), its tick compiled with CORE0=1 and drawn apart
-    idlew=0,            # (2: and drawn a triangle a core, the quiet ones left out by the vertex shader: slower; 3: its pixels discarded once both sets hold it)
+    idlew=0,            # (2: and drawn a triangle a core, the quiet ones left out by the vertex shader: slower; 3: its pixels discarded once both sets hold it;
+                        # 4: the tick's triangles leave out every parked worker and a second draw, frag_copy, copies their state)
                         # 1: a worker parked in the firmware whose start texel is as the last pass saw it is not run: its state copied,
                         # its write cache empty (RISC-V's mc_idle; texel 23 keeps the start texel a parked pass saw). Needs npair 0
     c0rt=0,             # (c0nb) 1: core 0's cache chosen at run time in the one compile and draw (RISC-V's sizes by geometry), not CORE0=1 apart
@@ -1196,6 +1197,54 @@ def fw_park():   # the worker firmware's park loop, [GVM_FW_PARK, GVM_FW_PARK_EN
     fw = open(os.path.join(HERE, '..', '..', 'platform', 'worker_fw.h')).read()
     return tuple(int(re.search(r'#define %s (0x[0-9a-fA-F]+)u' % k, fw).group(1), 16) for k in ('GVM_FW_PARK', 'GVM_FW_PARK_END'))
 
+def idle_copy(P, j):   # (idlew) a parked worker's pixel: its state as it was (the harness's freeze), its write cache empty
+    return '''        uint4 s23 = state_in(23, core);
+''' + ('''        [branch] if (s23.w >= 2) discard;   // (idlew 3) both state sets hold it already: nothing written
+''' if P['idlew'] == 3 else '') + '''        uint4 v[8];
+        [unroll] for (uint k = 0; k < 8; k++) {   // (its state as it was, 22 too, as the harness's freeze; 23 counts the passes, 2 at most)
+            uint t = ''' + j + ''' * 8 + k;
+            uint4 x = t < T_WC ? state_in(t, core) : t < T_WT ? uint4(0, 0, 0, 0) : t < T_XF ? uint4(NONE, NONE, NONE, NONE) : uint4(0, 0, 0, 0);
+            x = t == 18 ? uint4(x.xy, x.z & ~F_AGAIN, x.w) : t == 19 ? uint4(x.xy, 0, E_SYNC) : t == 23 ? uint4(s23.xyz, min(s23.w + 1, 2u)) : x;
+            v[k] = x;
+        }
+        o.t0 = v[0]; o.t1 = v[1]; o.t2 = v[2]; o.t3 = v[3]; o.t4 = v[4]; o.t5 = v[5]; o.t6 = v[6]; o.t7 = v[7];
+        return o;
+'''
+
+def cull_text(P, j):   # (idlew 2, 4) a triangle a core over its block (twice as wide and high: one primitive, no pixel shaded twice)
+    bw, bh, band, per = P['bw'], P['bh'], P['band'], P['per']
+    def vert(name, test, why):
+        return '''v2f %s(uint id : SV_VertexID) {   // %s
+    v2f o;
+    uint c = id / 3, k = id %% 3;
+    o.cc = c;
+    float2 wh;
+    _S0.GetDimensions(wh.x, wh.y);
+    uint ec = (pick(_Ext[c >> 7], (c >> 5) & 3) >> (c & 31)) & 1;
+    bool quiet = c != 0 && c < _NCores && ec == 0 && %s;
+    bool none = %s;
+    int3 at = sat(0, c);
+    float2 q = float2(k == 1 ? 2.0 : 0.0, k == 2 ? 2.0 : 0.0);
+    float2 px = float2(at.xy) + q * float2(%d.0, c == 0 ? (float)C0ROWS_ : %d.0);
+    o.vertex = none ? float4(0, 0, 0, 0) : float4(px.x / wh.x * 2.0 - 1.0, 1.0 - px.y / wh.y * 2.0, 0, 1);
+    return o;
+}
+''' % (name, why, test, 'c >= _NCores || quiet' if name == 'vert_cull' else '!quiet', bw, bh)
+    if P['idlew'] == 2:
+        return vert('vert_cull', 'state_in(23, c).w >= 2 && parked_as_was(c)', "(idlew 2) none for a worker parked as it was for two passes (RISC-V's tick_geom)")
+    # (idlew 4) the tick's draw leaves out every parked worker, and a second draw into the same targets copies their state by
+    # a shader that runs nothing: each core is written every pass, by one draw or the other, and no parked one starts the tick
+    return (vert('vert_cull', 'parked_as_was(c)', "(idlew 4) none for a worker parked as it was: frag_copy's") +
+            vert('vert_copy', 'parked_as_was(c)', '(idlew 4) the parked workers alone') + '''tick_out frag_copy(v2f i) {   // (idlew 4) a parked worker's pixels: its state as it was
+    uint2 p = uint2(i.vertex.xy);
+    tick_out o;
+    uint rx = p.x %% %du, ry = p.y %% %du;
+    core = (p.y / %du) * %du + core_at(p.x / %du);
+    uint j = %s;
+    [branch] if (i.cc != core || j >= SPIX || ry >= %du) discard;
+''' % (bw, band, band, per, bw, j, bh) + idle_copy(P, 'j') + '''}
+''')
+
 def frag(P):
     bw, bh, band, per = P['bw'], P['bh'], P['band'], P['per']
     j = ('ry * %du + rx' % bw) if P['jrow'] else ('rx * %du + ry' % bh)
@@ -1203,18 +1252,7 @@ def frag(P):
     if P.get('idlew', 0):   # (idlew) RISC-V's mc_idle: a parked worker whose start word is as it was costs a copy, not a pass
         assert not P['npair'], 'idlew: npair 0 (texel 23)'
         early += '''    [branch] if (core != 0 && ext == 0 && parked_as_was(core)) {   // (idlew) parked in the firmware, its start texel as it was: not run
-        uint4 s23 = state_in(23, core);
-''' + ('''        [branch] if (s23.w >= 2) discard;   // (idlew 3) both state sets hold it already: nothing written
-''' if P['idlew'] == 3 else '') + '''        uint4 v[8];
-        [unroll] for (uint k = 0; k < 8; k++) {   // (its state as it was, 22 too, as the harness's freeze; 23 counts the passes, 2 at most)
-            uint t = j * 8 + k;
-            uint4 x = t < T_WC ? state_in(t, core) : t < T_WT ? uint4(0, 0, 0, 0) : t < T_XF ? uint4(NONE, NONE, NONE, NONE) : uint4(0, 0, 0, 0);
-            x = t == 18 ? uint4(x.xy, x.z & ~F_AGAIN, x.w) : t == 19 ? uint4(x.xy, 0, E_SYNC) : t == 23 ? uint4(s23.xyz, min(s23.w + 1, 2u)) : x;
-            v[k] = x;
-        }
-        o.t0 = v[0]; o.t1 = v[1]; o.t2 = v[2]; o.t3 = v[3]; o.t4 = v[4]; o.t5 = v[5]; o.t6 = v[6]; o.t7 = v[7];
-        return o;
-    }
+''' + idle_copy(P, 'j') + '''    }
 '''
     if P['early']:
         wake = ''
@@ -1262,21 +1300,7 @@ def frag(P):
     uint4 s16 = state_in(16, c), s19 = state_in(19, c), s22 = state_in(22, c), s23 = state_in(23, c);
     return s16.x >= 0x%xu && s16.x < 0x%xu && s19.w == E_SYNC && s22.x == 0 && all(start_key(c) == s23.xyz);
 }
-''' % (park, end) + ('''v2f vert_cull(uint id : SV_VertexID) {   // (idlew 2) a triangle a core over its block (twice as wide and high: one primitive, no pixel shaded
-    v2f o;                                  // twice), none for a worker parked as it was for two passes (RISC-V's tick_geom)
-    uint c = id / 3, k = id %% 3;
-    o.cc = c;
-    float2 wh;
-    _S0.GetDimensions(wh.x, wh.y);
-    uint ec = (pick(_Ext[c >> 7], (c >> 5) & 3) >> (c & 31)) & 1;
-    bool none = c >= _NCores || (c != 0 && ec == 0 && state_in(23, c).w >= 2 && parked_as_was(c));
-    int3 at = sat(0, c);
-    float2 q = float2(k == 1 ? 2.0 : 0.0, k == 2 ? 2.0 : 0.0);
-    float2 px = float2(at.xy) + q * float2(%d.0, c == 0 ? (float)C0ROWS_ : %d.0);
-    o.vertex = none ? float4(0, 0, 0, 0) : float4(px.x / wh.x * 2.0 - 1.0, 1.0 - px.y / wh.y * 2.0, 0, 1);
-    return o;
-}
-''' % (bw, bh) if P['idlew'] == 2 else ''))
+''' % (park, end) + (cull_text(P, j) if P['idlew'] in (2, 4) else ''))
     return pre + '''tick_out frag(v2f i) {
     uint2 p = uint2(i.vertex.xy);
     tick_out o;
@@ -1500,7 +1524,7 @@ def emit(P):
            state_io(P), frag(P), part('ops')]
     from memopts import memopts
     from layoutopts import layoutopts
-    if P.get('idlew', 0) == 2:   # (idlew 2) the triangle's core: a pixel of another core's block is that core's triangle's
+    if P.get('idlew', 0) in (2, 4):   # (idlew 2, 4) the triangle's core: a pixel of another core's block is that core's triangle's
         out = [x.replace('struct v2f { float4 vertex : SV_POSITION; };', 'struct v2f { float4 vertex : SV_POSITION; nointerpolation uint cc : CORE; };')
                 .replace('    o.vertex = float4(id == 1 ? 3.0 : -1.0, id == 2 ? -3.0 : 1.0, 0, 1);', '    o.vertex = float4(id == 1 ? 3.0 : -1.0, id == 2 ? -3.0 : 1.0, 0, 1);\n    o.cc = NONE;')
                 .replace('    ext = (pick(_Ext[core >> 7]', '    [branch] if (i.cc != NONE && i.cc != core) discard;   // (idlew 2) another core\'s triangle\n    ext = (pick(_Ext[core >> 7]', 1) for x in out]

@@ -381,6 +381,9 @@ public static partial class ShaderEmuBuilder
 
         EditorSceneManager.SaveScene(scene, ScenePath);
         GvmBuild();
+        machine.hostWants = 0;   // the console's shell alone, as the RISC-V scene and the harness's --no-desktop: nx is typed
+        machine.powerOnAtStart = true;   // (GvmBuild leaves the world's machine off until Power: this scene measures from play)
+        Apply(machine);
         EditorSceneManager.SaveScene(scene, ScenePath);
         AssetDatabase.SaveAssets();
         Debug.Log("[GVM] the machine's scene is " + ScenePath);
