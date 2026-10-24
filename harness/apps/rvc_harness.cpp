@@ -953,7 +953,7 @@ int main(int argc, char** argv) {
         bo.gvmDir = opt.gvm;
         bo.gvmTick = opt.gvmTick;
         bo.gvmRamMB = opt.gvmRamMB;
-        bo.gvmBudget = (unsigned)opt.ticks;
+        bo.gvmBudget = opt.ticksSet ? (unsigned)opt.ticks : 4096u;   // (a pass half RISC-V's: lighter in VRChat, and the games between 2K and 8K; gpu_vm/bench_games/README.md)
         opt.cores = kCores;   // (the workers' counts come with the control words)
         opt.initFrames = 0;
     }

@@ -26,6 +26,23 @@ default tick is not: it is x18 (Quake III 27.6 fps in the baseline below), so gi
   | not to be used for Quake III: made before its fix | `build/gvm_apps/img` | `gvm` |
 
   A number is comparable only with numbers from the same image and checkpoints.
+- **A pass is 4,096 bundles** on gpu_vm since 24 October 2026 (`--ticks N` sets it; RISC-V keeps 8,192 instructions):
+  a shorter pass is lighter in VRChat, and the games come out between the short and the long budget. v0009 on
+  img-cur, one round each (`build/bench_games/budget_t*`; the numbers above are at 8,192):
+
+  | game | 2,048 | 4,096 | 8,192 |
+  |---|---|---|---|
+  | Half-Life | 18.1 | 15.0 | 13.5 |
+  | Quake's timedemo | 113.2 | 106.7 | 97.2 |
+  | Doom's timedemo | 187.9 | 186.3 | 175.9 |
+  | nxray | 31.5 | 35.3 | 37.5 |
+  | coremark | 42.4 | 46.4 | 47.5 |
+  | gzip | 0.3 | 0.3 | 0.33 |
+
+  Games that hand work between cores gain from short passes (a job is seen a pass sooner); one long computation on a
+  core (nxray's workers at their whole budget in every pass, coremark) loses a pass's fixed cost more often.
+  On the tree of 24 October 2026, 02:40 (with 4edb861's list fix), the default and `--ticks 4096` give the same:
+  coremark 46.2 at 4,096 against 48.0 at 8,192, Doom's timedemo 175.0 against 174.7 (one round each).
 - **The GPU list lazily** is the harness's default since feaddd5 (`GVM_LIST_LAZY=0` is the old every pass).
 - **Commands:**
 
