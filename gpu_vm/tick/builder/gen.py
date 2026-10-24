@@ -1373,6 +1373,10 @@ def core0(P, src):
     two('static const uint SPIX = ', sp0)
     for t in ('T_XF', 'T_XT', 'T_PB', 'T_VR'):
         two('static const uint %s = ' % t, nt0)
+    # the cache's arrays as core 0's in both compiles: two pixel shaders of different local sizes do not overlap on the
+    # card (the workers' draws waited for core 0's: Doom 220 ns a worker bundle on top of core 0's, 72 with one size)
+    rep('static uint wt[(WCN + 1)];', 'static uint wt[(WCN0 + 1)];   // (WCN0: one local size for both compiles)')
+    rep('static uint wd[(4 * (WCN + 1))];', 'static uint wd[(4 * (WCN0 + 1))];')
     def hashes(nb):   # (a power of two: the shift; else the high part of a 16-bit fraction)
         if nb & (nb - 1) == 0:
             lg = nb.bit_length() - 1
