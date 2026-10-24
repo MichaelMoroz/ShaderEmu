@@ -24,6 +24,7 @@ JOBS = {
     **{f'start-{p}': f'{p} & sleep 3; kill $!' for p in ('nxterm', 'nxedit', 'nxfiles', 'nxcalc', 'nxsettings')},
     'coremark': 'coremark 0x0 0x0 0x66 300',
     'doomt': 'doom -1 -timedemo demo1',
+    'nxray': 'RAY_FRAMES=20 nxray',   # (255 workers: the many-core load)
     'quake1': ('quake +timedemo demo1', ' fps'),   # (it stays at its console after the timedemo: its fps line ends the job)
 }
 IDLE_GVM = {2}        # wait: core 0 had nothing to do (gpu_vm's frame log)

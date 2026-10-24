@@ -693,3 +693,28 @@ Against x23 on the card (IDEAS 22-24, 38): gvmbench 1.12 of x23 overall; Quake I
 list, Half-Life 14.3 against 12.5, nxray 37.7 against 21.3; Doom's timedemo 927.5 realtics against 919.5 (+0.9%), since
 its write cache ends 23% of Doom's passes full against x23's 12%. It is not the default because Doom is slower. Where
 Quake III's passes go under it: `gpu_vm/PROFILE_Q3.md`.
+
+## v0010: more work a round than RISC-V at less of the card's time (24 October 2026; RTX 5070 Laptop)
+
+`python gpu_vm/tick/builder/gen.py gpu_vm/tick/steps/v0010.hlsl gpu_vm/tick/steps/v0009.json nb=32 bw=8 bh=6 c0nb=48
+evf=4` writes it again (first found as `build/tick_gen/c2/v0006`). It is v0009 with 32 buckets of four a table for every
+core (blocks 8 x 6), core 0's own cache of 2 x 48 buckets (386 entries, compiled with CORE0=1 and drawn apart), and a
+store that finds both buckets full first drops the entries whose words are RAM's (evf 4; a lookup takes a match before a
+free way). Its stamp: the builder's WARP check, 2,187 temporary registers.
+
+The measure is Unity's: a frame has a fixed number of rounds, so a job is faster in the world when it takes fewer passes
+at the same budget and no more of the card's time a pass (`gpu_vm/bench_games/rounds.py`, `GVM_TIME_LOG` and
+`RVC_PASS_PROF` for the card's time). img-ui5's desktop checkpoint, 8,192 a pass, passes / the card's seconds:
+
+| job | RISC-V | v0009 | v0010 |
+|---|---|---|---|
+| ImGui, 300 frames (all passes) | 7,657 / 10.65 | 16,805 / 7.85 | 3,823 / 8.87 |
+| Doom's timedemo (all passes) | 30,187 / 37.3 | 57,510 / 29.5 | 30,112 / 35.95 |
+| nxray, 20 pictures (all passes) | 4,471 / 4.57 | 3,848 / 3.17 | 2,442 / 4.24 |
+| CoreMark (busy passes) | 9,829 / 13.9 | 5,253 / 6.3 | 4,375 / 7.3 |
+| nxterm, nxedit, nxfiles started (busy passes) | 463, 350, 382 | 1,046, 789, 867 | 339, 242, 276 |
+
+What made core 0's own cache pay: two pixel shaders whose indexable temps differ in size do not overlap on the card,
+so core 0's draw and the workers' ran one after the other (Doom's tick: 119 us + 285 ns a core 0 bundle + 220 ns a busiest
+worker's). The builder now sizes the cache's arrays as core 0's in the workers' compile too (240 and 72 ns). A busy ImGui
+pass costs 2.3 ms of the card against RISC-V's 1.4: the job is done in half the rounds and 83% of the card's time.
