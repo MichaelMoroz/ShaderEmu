@@ -129,7 +129,8 @@ public:
                 err = tickPath + ": GEO_BLOCKS takes blocks 8 wide and 3 to 8 high, column by column, 128 a band of 16 rows"; return false;
             }
         }
-        if (src.find("#ifndef CORE0") != std::string::npos) {   // x25: core 0's own write cache, its tick compiled with CORE0=1
+        c0rt_ = stepConst(src, "C0RT", 0) != 0;   // (a builder's c0rt: core 0's cache chosen at run time, one compile, every core in one draw)
+        if (src.find("#ifndef CORE0") != std::string::npos || c0rt_) {   // x25: core 0's own write cache, its tick compiled with CORE0=1
             wcn0_ = stepConst(src, "WCN0", 0);
             spix0_ = (stepConst(src, "NTEX0", 0) + 7) / 8;
             if (!geo_ || !wcn0_ || (bh_ == 8 ? spix0_ > 64 + 8 * 128 : c0rows() > 16)) { err = tickPath + ": CORE0 needs GEO_BLOCKS, WCN0 and NTEX0"; return false; }
@@ -150,7 +151,7 @@ public:
             if (err.empty()) err = "creating the tick's shaders failed";
             return false;
         }
-        if (wcn0_ && !prog("vert", "frag", tick0_, {{"CORE0", "1"}})) {
+        if (wcn0_ && !c0rt_ && !prog("vert", "frag", tick0_, {{"CORE0", "1"}})) {
             if (err.empty()) err = "creating core 0's tick failed";
             return false;
         }
@@ -837,7 +838,7 @@ private:
         ctx->VSSetShader(tick_.vs.Get(), nullptr, 0);
         ctx->PSSetShader(tick_.ps.Get(), nullptr, 0);
         static const int split = getenv("GVM_SPLIT0") ? atoi(getenv("GVM_SPLIT0")) : 0;   // (a measure: 1 core 0 drawn apart first, 2 last)
-        bool apart = wcn0_ || split, last = split == 2;
+        bool apart = (wcn0_ && !c0rt_) || split, last = split == 2;
         auto core0 = [&]() {   // core 0 by its own tick: its block, then its pixels in rows 8-15 of the first band
             if (wcn0_) ctx->PSSetShader(tick0_.ps.Get(), nullptr, 0);
             viewport(8, wcn0_ && bh_ != 8 ? c0rows() : 8);
@@ -860,7 +861,7 @@ private:
             }
             for (uint32_t c = (std::max)(run.first, apart ? 1u : 0u); c < run.second;) {   // (the run's blocks in one band at a time)
                 uint32_t end = (std::min)(run.second, (c / 128 + 1) * 128);
-                viewport((end - c) * 8, bh_, (c / 128) * 16, (c % 128) * 8);
+                viewport((end - c) * 8, c == 0 && c0rt_ ? (std::max)(bh_, c0rows()) : bh_, (c / 128) * 16, (c % 128) * 8);   // (c0rt: core 0's rows in its band's draw)
                 ctx->Draw(3, 0);
                 c = end;
             }
@@ -1206,6 +1207,7 @@ private:
     uint64_t wcFrame_ = 0, wcSeen_ = 0;
     uint32_t lastEnds_[256] = {}, lastPc_[256] = {};   // (GVM_MBOX_LOG: the last ends row and its tag)
     uint64_t lastEndsTag_ = ~0ull;
+    bool c0rt_ = false;   // (C0RT: core 0 in the workers' draw)
     uint32_t ramEnd_ = 0, rows_ = 0, romRows_ = 1, wcn_ = 514, tWc_ = 40, opSlots_ = 32, opSpan_ = 272, ntex_ = 297, spix_ = 38, geo_ = 0, bh_ = 8, wcn0_ = 0, spix0_ = 0;
     Prog tick_, tick0_, commit_, stage_, write_, progress_;
     Tex ram_, rom_, stageTex_, ops_[2], set_[2][8], zone_, ctl_, info_, none_;

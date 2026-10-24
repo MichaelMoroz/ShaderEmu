@@ -48,6 +48,9 @@ DEFAULTS = dict(
     wadf=0,             # the wad block's form: 2 before the state's load, 16 run(core == 0 ? _Ticks : bud) (18: the ALU loops as wad=0's), 1 flatten, 4 core 0's run apart
     wclean=0,           # 1: a pixel of the write cache's data texels whose entries are all unused is discarded (not written)
     c0nb=0,             # core 0's own write cache: 2 x c0nb buckets of four (0: none), its tick compiled with CORE0=1 and drawn apart
+    idlew=0,            # 1: a worker parked in the firmware whose start texel is as the last pass saw it is not run: its state copied,
+                        # its write cache empty (RISC-V's mc_idle; texel 23 keeps the start texel a parked pass saw). Needs npair 0
+    c0rt=0,             # (c0nb) 1: core 0's cache chosen at run time in the one compile and draw (RISC-V's sizes by geometry), not CORE0=1 apart
     ll=0,               # 1: a new texel goes to the less full of its two buckets (more texels before a full end: +12-14% in a model)
     ovh=0,              # 1: the ov entries are a third table of ov / 4 hashed buckets, read when both buckets are full (slower: IDEAS 27)
     wad=0,              # 1: a worker's budget core 0's bundles of the last pass (+1/4, 512 at least) when that pass ended core 0 on sync or full
@@ -1187,10 +1190,36 @@ def wclean(P):
     }
 """
 
+def fw_park():   # the worker firmware's park loop, [GVM_FW_PARK, GVM_FW_PARK_END) (gpu_vm/platform/worker_fw.h)
+    import re
+    fw = open(os.path.join(HERE, '..', '..', 'platform', 'worker_fw.h')).read()
+    return tuple(int(re.search(r'#define %s (0x[0-9a-fA-F]+)u' % k, fw).group(1), 16) for k in ('GVM_FW_PARK', 'GVM_FW_PARK_END'))
+
 def frag(P):
     bw, bh, band, per = P['bw'], P['bh'], P['band'], P['per']
     j = ('ry * %du + rx' % bw) if P['jrow'] else ('rx * %du + ry' % bh)
     early = ''
+    if P.get('idlew', 0):   # (idlew) RISC-V's mc_idle: a parked worker whose start word is as it was costs a copy, not a pass
+        assert not P['npair'], 'idlew: npair 0 (texel 23)'
+        park, end = fw_park()
+        early += '''    [branch] if (core != 0 && ext == 0) {   // (idlew) parked in the firmware (worker_fw.h's park loop), its start texel as it was
+        uint4 s16 = state_in(16, core), s19 = state_in(19, core), s22 = state_in(22, core);
+        [branch] if (s16.x >= 0x%xu && s16.x < 0x%xu && s19.w == E_SYNC && s22.x == 0 && all(ram((0x00c00000u >> 4) + core) == state_in(23, core))) {
+            uint4 os = _OpState.Load(int3(core, 0, 0));
+            bool fold = os.x == s22.z;
+            uint4 n22 = uint4(0, fold ? os.z : s22.y, s22.z + 1, s22.w + (fold ? os.w : 0));
+            uint4 v[8];
+            [unroll] for (uint k = 0; k < 8; k++) {
+                uint t = j * 8 + k;
+                uint4 x = t < T_WC ? state_in(t, core) : t < T_WT ? uint4(0, 0, 0, 0) : t < T_XF ? uint4(NONE, NONE, NONE, NONE) : uint4(0, 0, 0, 0);
+                x = t == 18 ? uint4(x.xy, x.z & ~F_AGAIN, x.w) : t == 19 ? uint4(x.xy, 0, E_SYNC) : t == 22 ? n22 : t == 23 ? state_in(23, core) : x;
+                v[k] = x;
+            }
+            o.t0 = v[0]; o.t1 = v[1]; o.t2 = v[2]; o.t3 = v[3]; o.t4 = v[4]; o.t5 = v[5]; o.t6 = v[6]; o.t7 = v[7];
+            return o;
+        }
+    }
+''' % (park, end)
     if P['early']:
         wake = ''
         if P['early'] >= 2:
@@ -1316,7 +1345,8 @@ def p2strip(P, src):
         nonlocal src
         assert a in src, 'p2strip: no ' + a[:60]
         src = src.replace(a, b, 1)
-    rep(" : t == 23 ? uint4(pn, 0, 0, 0) : 0;", " : 0;")
+    rep(" : t == 23 ? uint4(pn, 0, 0, 0) : 0;", " : t == 23 ? (core != 0 && pc >= 0x%xu && pc < 0x%xu && endr == E_SYNC ? ram((0x00c00000u >> 4) + core) : uint4(NONE, NONE, NONE, NONE)) : 0;   // (idlew: the start texel a parked pass saw)" % fw_park()
+        if P.get('idlew', 0) else " : 0;")
     rep("""    [branch] if (t >= T_XF && t < T_XT) return v;
     [branch] if (t >= T_XT && t < T_PB) return v & ~2u;
     [branch] if (t >= T_PB || t == 23) return 0;
@@ -1375,8 +1405,11 @@ def core0(P, src):
         two('static const uint %s = ' % t, nt0)
     # the cache's arrays as core 0's in both compiles: two pixel shaders of different local sizes do not overlap on the
     # card (the workers' draws waited for core 0's: Doom 220 ns a worker bundle on top of core 0's, 72 with one size)
-    rep('static uint wt[(WCN + 1)];', 'static uint wt[(WCN0 + 1)];   // (WCN0: one local size for both compiles)')
-    rep('static uint wd[(4 * (WCN + 1))];', 'static uint wd[(4 * (WCN0 + 1))];')
+    def c0size(m):   # (an array the cache sizes: its length from core 0's entries, whatever the layout)
+        n = re.sub(r'\bNBK\b', '((WCN0 + 4) / 4)', re.sub(r'\bWCN\b', 'WCN0', m.group(2)))
+        return m.group(1) + n + m.group(3) + ('   // (WCN0: one local size for both compiles)' if 'wt' in m.group(1) else '')
+    src, k = re.subn(r'^(static uint4? \w+\[)([^\]\n]*\b(?:WCN|NBK)\b[^\]\n]*)(\];)', c0size, src, flags=re.M)
+    assert k, 'core0: no cache arrays'
     def hashes(nb):   # (a power of two: the shift; else the high part of a 16-bit fraction)
         if nb & (nb - 1) == 0:
             lg = nb.bit_length() - 1
@@ -1399,6 +1432,43 @@ def core0(P, src):
     a = '    uint c = id / WCN, j = id % WCN;\n    uint tg = pick(state_any(T_WT + (j >> 2), c), j & 3)'
     rep(a, '    bool z = id < WCN0;\n    uint k = id - WCN0, c = z ? 0 : 1 + k / WCN, j = z ? id : k % WCN;\n'
            '    uint tg = pick(state_any(T_WC + (z ? WCN0 : WCN) + (j >> 2), c), j & 3)')
+    return core0_rt(P, src, rows) if P.get('c0rt', 0) else src
+
+def core0_rt(P, src, rows):
+    """c0rt: core 0's cache chosen at run time in the one compile, as RISC-V's tick sizes each core's cache by its geometry
+    (mc_bits_now): every core in one draw, core 0 the largest. The CORE0 pairs core0() wrote become choices on `core == 0`,
+    what is made of them follows, the hashes take the core's buckets, a pixel in core 0's rows of the first block is core 0's."""
+    import re
+    names, worker = [], {}
+    def pair(m):   # '#if !CORE0 / static const uint X = a; / #else / static const uint X = b; / #endif' -> a choice
+        names.append(m.group(1)); worker[m.group(1)] = m.group(2)
+        return '#define %s\t(core == 0u ? %su : %su)\n' % (m.group(1), m.group(3), m.group(2))   # (a tab: the hosts read the 'uint X = ' below)
+    src = re.sub(r'#if !CORE0\nstatic const uint (\w+) = (\w+);[^\n]*\n#else\nstatic const uint \1 = (\w+);[^\n]*\n#endif\n', pair, src)
+    src = src.replace('static const uint OV = 0, OVB = 8 * NB;', 'static const uint OV = 0;\n#define OVB (8u * NB)')
+    a = '    uint k = id - WCN0, c = z ? 0 : 1 + k / WCN, j = z ? id : k % WCN;\n    uint tg = pick(state_any(T_WC + (z ? WCN0 : WCN) + (j >> 2), c), j & 3)'
+    assert src.count(a) == 1, 'c0rt: the commit'   # (the commit's `core` is no core's: the workers' count written out)
+    src = src.replace(a, a.replace('WCN;', worker['WCN'] + 'u;').replace('k / WCN', 'k / %su' % worker['WCN']).replace(': WCN)', ': %su)' % worker['WCN']))
+    while True:   # a constant made of a choice is one too
+        m = re.search(r'^static const uint (\w+) = ([^;\n]*\b(?:%s)\b[^;\n]*);' % '|'.join(names), src, flags=re.M)
+        if not m: break
+        names.append(m.group(1))
+        src = src[:m.start()] + '#define %s\t(%s)' % (m.group(1), m.group(2)) + src[m.end():]
+    m = re.search(r'#if !CORE0\nuint wc_b1[^\n]*\nuint wc_b2[^\n]*\n#else\n(uint wc_b1[^\n]*\nuint wc_b2[^\n]*\n)#endif\n', src)
+    assert m, 'c0rt: the hashes'
+    src = src[:m.start()] + m.group(1) + src[m.end():]   # (the high part of a 16-bit fraction: any core's count)
+    m = re.search(r'#if !CORE0\nint3 sat\(uint j, uint c\) \{ return ([^;]*); \}\n#else\nint3 sat\(uint j, uint c\) \{ return ([^;]*); \}[^\n]*\n#endif\n', src)
+    assert m, 'c0rt: sat'
+    src = src[:m.start()] + 'int3 sat(uint j, uint c) { return c == 0 ? %s : %s; }   // (core 0 in the rows under its block)\n' % (m.group(2), m.group(1)) + src[m.end():]
+    m = re.search(r'#if CORE0\n    core = 0;\n    uint j = ([^;]*);\n    \[branch\] if \(([^{]*)\) \{\n#else\n    core = ([^;]*);\n    uint j = ([^;]*);\n'
+                  r'    \[branch\] if \(([^{]*)\) \{\n#endif\n', src)
+    assert m, 'c0rt: the pixel'
+    src = src[:m.start()] + ('    core = %s;\n    uint j = core == 0u ? %s : %s;   // (c0rt: core 0\'s pixels in its rows of the first block)\n'
+                             '    [branch] if (core == 0u ? p.y >= %du || j >= SPIX : (%s)) {\n' % (m.group(3), m.group(1), m.group(4), rows, m.group(5))) + src[m.end():]
+    assert 'CORE0\n' not in src.replace('#ifndef CORE0\n', '').replace('#define CORE0 0', ''), 'c0rt: a CORE0 left'
+    src = src.replace('#ifndef CORE0\n#define CORE0 0   // 1: core 0\'s tick (its own compile and draw: c0nb)\n#endif\n',
+                      'static const uint C0RT = 1;   // core 0\'s cache chosen at run time: one compile, one draw (the harness: rows C0ROWS of the first band)\n'
+                      'static const uint C0ROWS = %d;\n' % rows + '#if 0   // (for the hosts, which read a size as text: a worker\'s)\n' +
+                      ''.join('static const uint %s = %s;\n' % (k, v) for k, v in worker.items()) + '#endif\n')
     return src
 
 def emit(P):
