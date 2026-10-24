@@ -64,6 +64,9 @@ public class EmuMachine : UdonSharpBehaviour
     public RenderTexture gvmRom;              // 8192 wide: the ROM from 0x40000000, four words a texel
     public RenderTexture[] gvmSetA, gvmSetB;  // the tick's state, eight textures a set: a pass reads one, draws the other
     public RenderTexture[] gvmOps;            // the operations' progress, two of 256 x 1
+    public RenderTexture gvmPending;          // 1 x 1: how many cores have operations queued after a pass
+    public bool gvmTwoRounds;                 // two rounds of the operations every pass, as the harness (a measure)
+    public int gvmBusyRounds = 4;             // rounds of the operations a pass while some are queued
     public RenderTexture gvmStage, gvmZone, gvmCtl, gvmTickDepth;
     public Camera gvmPassCamera;              // disabled: the commit's and the operations' draws, one mesh at a time
     public MeshRenderer gvmCommitRenderer, gvmStageRenderer, gvmWriteRenderer, gvmProgRenderer;
@@ -72,6 +75,7 @@ public class EmuMachine : UdonSharpBehaviour
     public Material gvmOpsBlitMaterial;       // a round's plan, stage and progress as blits (GvmOpsBlit)
     public RenderTexture gvmPlan;             // each core's and slot's piece of the round, two texels a slot
     public int gvmEntry = 0x02000000, gvmRamMB = 192;   // the kernel's entry and RAM (unity_boot.txt)
+    public int gvmBlockH = 4, gvmStateTexels = 203;    // a core's block rows and state texels (tick.cginc's GEO_BH, NTEX)
 
     // Pages for the guest's browser (docs/system/fetch.md). A world can only load the addresses it
     // was built with, and the one a visitor types into the field on the panel.
@@ -184,6 +188,7 @@ public class EmuMachine : UdonSharpBehaviour
     private float reached = 1f;             // of a pass's instructions, what core 0 ran, lately
     // Steady: so many instructions a second, however long a frame is, as far as the frame rate allows.
     private bool steady;
+    public bool gvmDevicesEachPass;   // the GPU's list and the control words after every pass while lists come (a measure)
     private int workerPreset, workerPresetBooted, geoBits;   // 0 geotune's pick, 1-3 blocks of 2, 4, 8 columns
     private uint geoFirst, geoHybrid;
     private float targetIps = 2000000f;
@@ -473,6 +478,8 @@ public class EmuMachine : UdonSharpBehaviour
         VRCGraphics.Blit(blackTexture, gvmRom, machineMaterial, GvmInitRom);
         machineMaterial.SetInt("_GvmEntryLo", gvmEntry & 0xffff);
         machineMaterial.SetInt("_GvmEntryHi", (gvmEntry >> 16) & 0xffff);
+        machineMaterial.SetInt("_GvmBH", gvmBlockH);
+        machineMaterial.SetInt("_GvmNTex", gvmStateTexels);
         for (int t = 0; t < 8; t++)
         {
             machineMaterial.SetInt("_GvmTarget", t);
@@ -481,6 +488,8 @@ public class EmuMachine : UdonSharpBehaviour
         }
         VRCGraphics.Blit(blackTexture, gvmOps[0], machineMaterial, GvmZero);
         VRCGraphics.Blit(blackTexture, gvmOps[1], machineMaterial, GvmZero);
+        gvmOpsCur = 0;
+        gvmOpsSeen = Time.frameCount;   // (the boot's first copies come before any readback says so)
         gvmCur = 0;
         gvmTime = 0;
         gvmPasses = 0;
@@ -514,6 +523,7 @@ public class EmuMachine : UdonSharpBehaviour
         machineMaterial.SetInt("_GvmRows", rows);
         machineMaterial.SetTexture("_Ram", state);
         machineMaterial.SetTexture("_Zone", gvmZone);
+        machineMaterial.SetTexture("_GvmPending", gvmPending);
         machineMaterial.SetInt("_GvmParkLo", 0x470);   // GVM_FW_PARK, GVM_FW_PARK_END (gpu_vm/platform/worker_fw.h)
         machineMaterial.SetInt("_GvmParkHi", 0x520);
         machineMaterial.SetInt("_GvmGeo", 1);
@@ -534,6 +544,7 @@ public class EmuMachine : UdonSharpBehaviour
     private const int GvmCtlCopy = 6, GvmReadback = 7, GvmZero = 8;
     private const int GvmNone = 8192;   // no second zone in the control pass's row
     private int gvmCur, gvmWorkers;     // the set the next pass draws; the worker cores the kernel laid out
+    private int gvmOpsCur, gvmOpsSeen;  // the progress texture the next round reads; the frame operations were last queued
     private double gvmTime;             // TIME, 100 kHz
     private uint gvmPasses;
     private RenderBuffer[] gvmBuffersA = new RenderBuffer[8], gvmBuffersB = new RenderBuffer[8];
@@ -583,7 +594,7 @@ public class EmuMachine : UdonSharpBehaviour
         m.SetInt("_TimeH0", (int)(hi % 65536.0));
         m.SetInt("_TimeH1", 0);
         GvmState(m, read, gvmStateNames);
-        m.SetTexture("_OpState", gvmOps[0]);
+        m.SetTexture("_OpState", gvmOps[gvmOpsCur]);
         m.SetInt("_Ticks", ticks);
     }
 
@@ -601,15 +612,21 @@ public class EmuMachine : UdonSharpBehaviour
         GvmState(gvmCommitMaterial, drawn, gvmStateNames);
         GvmDraw(gvmCommitRenderer, state);
         GvmState(gvmOpsBlitMaterial, drawn, gvmStateNames);
-        for (int oc = 0; oc < 2; oc++)
+        // more rounds only while operations were queued lately (texel 12 of the readback): a round is a camera's render,
+        // and a core waiting on its copy loses a whole pass
+        int opRounds = gvmTwoRounds ? 2 : Time.frameCount - gvmOpsSeen < 4 ? gvmBusyRounds : 1;
+        for (int oc = 0; oc < opRounds; oc++)
         {
             // only the write scatters, a camera's render; the plan, the stage and the progress are blits
-            gvmOpsBlitMaterial.SetTexture("_OpState", gvmOps[oc]);
+            gvmOpsBlitMaterial.SetTexture("_OpState", gvmOps[gvmOpsCur]);
             VRCGraphics.Blit(blackTexture, gvmPlan, gvmOpsBlitMaterial, 0);
             VRCGraphics.Blit(blackTexture, gvmStage, gvmOpsBlitMaterial, 1);
             GvmDraw(gvmWriteRenderer, state);
-            VRCGraphics.Blit(blackTexture, gvmOps[oc ^ 1], gvmOpsBlitMaterial, 2);
+            gvmOpsCur ^= 1;
+            VRCGraphics.Blit(blackTexture, gvmOps[gvmOpsCur], gvmOpsBlitMaterial, 2);
         }
+        gvmOpsBlitMaterial.SetTexture("_OpState", gvmOps[gvmOpsCur]);
+        VRCGraphics.Blit(blackTexture, gvmPending, gvmOpsBlitMaterial, 3);
         gvmCur ^= 1;
         gvmPasses++;
     }
@@ -634,6 +651,21 @@ public class EmuMachine : UdonSharpBehaviour
         machineMaterial.SetInt("_GvmZone2Y", t2 / 8192);
         VRCGraphics.Blit(blackTexture, gvmZone, machineMaterial, GvmControl);
         VRCGraphics.Blit(blackTexture, state, machineMaterial, GvmZoneBack);
+    }
+
+    // The copy the last list asked for, the list (the control pass takes the submit word back), the sound card in a
+    // frame's last pass (before the control zone moves its voices on), and the control words with MC_STATS_ALL.
+    private void GvmDevices(int i, int n)
+    {
+        VRCGraphics.Blit(blackTexture, gvmCtl, machineMaterial, GvmCtlCopy);
+        for (int c = 0; c < 4; c++) VRCGraphics.Blit(blackTexture, state, gvmWritebackMaterial, c);
+        gpuMaterial.SetTexture("_State", state);
+        gpuCamera.Render();
+        if (i == n - 1 && sound != null) sound.Mix(state, machineMaterial, soundEnabled, soundClock);
+        HostClock(i, n);
+        machineMaterial.SetTexture("_GvmS0", GvmSet(gvmCur ^ 1)[0]);
+        machineMaterial.SetTexture("_GvmS3", GvmSet(gvmCur ^ 1)[3]);
+        GvmZone(0x100000, 256, 0x16ba00, gvmWorkers > 0 ? 72 : 0);
     }
 
     private void GvmPassesOn(Material m)
@@ -1413,22 +1445,14 @@ public class EmuMachine : UdonSharpBehaviour
             GvmPassesOn(machineMaterial);
             machineMaterial.SetInt("_Row", i);
             VRCGraphics.Blit(blackTexture, readbackTexture, machineMaterial, GvmReadback);
+            // while lists come, the GPU and the control words after every pass, as the harness does: a list then
+            // waits a pass, not a frame
+            if (running && i < n - 1 && gpuAlways && gvmDevicesEachPass) GvmDevices(i, n);
         }
         if (running)
         {
-            // the copy the last frame's list asked for, then the list (the control pass takes the submit word back)
-            VRCGraphics.Blit(blackTexture, gvmCtl, machineMaterial, GvmCtlCopy);
-            for (int c = 0; c < 4; c++) VRCGraphics.Blit(blackTexture, state, gvmWritebackMaterial, c);
-            gpuMaterial.SetTexture("_State", state);
-            gpuCamera.Render();
-            // the sound card mixes before the control pass, which then moves its voices up to where the mix began
-            if (sound != null) sound.Mix(state, machineMaterial, soundEnabled, soundClock);
-            HostClock(n - 1, n);
-            machineMaterial.SetTexture("_GvmS0", GvmSet(gvmCur ^ 1)[0]);
-            machineMaterial.SetTexture("_GvmS3", GvmSet(gvmCur ^ 1)[3]);
-            // the control words with the cores' counts (MC_STATS_ALL), the console's host words, the network's
-            // ring and the fetch's rows (RISC-V indices less 0x600000)
-            GvmZone(0x100000, 256, 0x16ba00, gvmWorkers > 0 ? 72 : 0);
+            // then the console's host words, the network's ring and the fetch's rows (RISC-V indices less 0x600000)
+            GvmDevices(n - 1, n);
             GvmZone(0x16b828, 1, 0, 0);
             GvmZone(0x16b840, 320, 0, 0);
             GvmZone(0x16c000, 0x4000, 0, 0);
@@ -1832,6 +1856,7 @@ public class EmuMachine : UdonSharpBehaviour
             displayWidth = 0;
             displayHeight = 0;
         }
+        if (Word(12, 0) != 0) gvmOpsSeen = Time.frameCount;
         gpuFrames = Word(65, 3);
         if (gpuFrames != gpuFramesSeen)
         {

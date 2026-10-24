@@ -89,6 +89,9 @@ public static partial class ShaderEmuBuilder
         string[] boot = File.ReadAllLines(GvmImageDir + "/unity_boot.txt");
         machine.gvmEntry = System.Convert.ToInt32(boot[0].Split(' ')[1], 16);
         machine.gvmRamMB = int.Parse(boot[1].Split(' ')[1]);
+        if (GvmConst(tick, "GEO_BW") != 8 || GvmConst(tick, "GEO_BAND") != 16) throw new System.Exception("tick.cginc: blocks 8 wide, bands of 16 rows");
+        machine.gvmBlockH = GvmConst(tick, "GEO_BH");
+        machine.gvmStateTexels = GvmConst(tick, "NTEX");
         long romBytes = new FileInfo(GvmImageDir + "/rootfs.romfs").Length;
 
         machine.state = StateTexture("GvmRam", 8192, (0x2000000 + (machine.gvmRamMB << 20)) / 16 / 8192);
@@ -103,6 +106,7 @@ public static partial class ShaderEmuBuilder
         machine.gvmOps = new[] { StateTexture("GvmOps0", 256, 1), StateTexture("GvmOps1", 256, 1) };
         machine.gvmStage = StateTexture("GvmStage", span, 256 * slots);
         machine.gvmPlan = StateTexture("GvmPlan", 2 * slots, 256);
+        machine.gvmPending = StateTexture("GvmPending", 1, 1);
         machine.gvmZone = StateTexture("GvmZone", 8192, 3);
         machine.gvmCtl = StateTexture("GvmCtl", 256, 1);
         machine.gvmTickDepth = Target("GvmTickDepth", 1024, 24, 16);
@@ -157,6 +161,21 @@ public static partial class ShaderEmuBuilder
         machine.gvmProgRenderer = PassMesh(device, "GvmProg", PointsLayer, GvmMesh("GvmProgPoints", MachineCores, MeshTopology.Points), machine.gvmProgMaterial);
         foreach (MeshRenderer r in new[] { machine.gvmCommitRenderer, machine.gvmStageRenderer, machine.gvmWriteRenderer, machine.gvmProgRenderer })
             r.enabled = false;
+        // a pass renders four times: nothing for the cameras to cull or light but the one mesh
+        foreach (MeshRenderer r in new[] { machine.gvmCommitRenderer, machine.gvmStageRenderer, machine.gvmWriteRenderer, machine.gvmProgRenderer,
+                                           tickMesh.GetComponent<MeshRenderer>() })
+        {
+            r.reflectionProbeUsage = UnityEngine.Rendering.ReflectionProbeUsage.Off;
+            r.lightProbeUsage = UnityEngine.Rendering.LightProbeUsage.Off;
+            r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            r.receiveShadows = false;
+        }
+        foreach (Camera cam in new[] { machine.tickCamera, machine.pointsCamera })
+        {
+            cam.useOcclusionCulling = false;
+            cam.allowHDR = false;
+            cam.allowMSAA = false;
+        }
 
         // the boot image: RAM's four textures, then the ROM's
         machine.imageTextures = new Texture2D[8];

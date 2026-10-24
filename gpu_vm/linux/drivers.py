@@ -196,6 +196,26 @@ for patch in ('patch_ovl.py', 'patch_ramfs.py', 'patch_procmaps.py'):
     subprocess.run([sys.executable, os.path.join(nommu, patch), tree], check=True, stdout=subprocess.DEVNULL)   # (after alloc_pages_run: patch_ovl.py changes its lines)
 # gpu_vm's own: a program's memory taken from the free lists and given back in blocks (fastrun.py)
 subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fastrun.py'), tree], check=True)
+# sysfs folders nothing reads, a third of the kernel's start: /sys/kernel/slab for every boot cache (caches made
+# later still get theirs) and /sys/module for the built-in parameters
+p = os.path.join(tree, 'mm/slub.c')
+s = open(p).read()
+old = '\tslab_state = FULL;\n\n\tlist_for_each_entry(s, &slab_caches, list) {\n'
+if old in s:
+    open(p, 'w').write(s.replace(old, '\tslab_state = FULL;\n\n\tif (IS_ENABLED(CONFIG_GPUVM)) {\n\t\twhile (alias_list) {\n'
+                                 '\t\t\tstruct saved_alias *al = alias_list;\n\n\t\t\talias_list = al->next;\n\t\t\tkfree(al);\n\t\t}\n'
+                                 '\t\tmutex_unlock(&slab_mutex);\n\t\treturn 0;\n\t}\n\n\tlist_for_each_entry(s, &slab_caches, list) {\n'))
+p = os.path.join(tree, 'kernel/params.c')
+s = open(p).read()
+old = '\tversion_sysfs_builtin();\n\tparam_sysfs_builtin();\n'
+if old in s:
+    open(p, 'w').write(s.replace(old, '\tif (!IS_ENABLED(CONFIG_GPUVM)) {\n\t\tversion_sysfs_builtin();\n\t\tparam_sysfs_builtin();\n\t}\n'))
+# the device tree lies where the kernel cannot store (0x1000): its rng-seed is left in it
+p = os.path.join(tree, 'drivers/of/fdt.c')
+s = open(p).read()
+old = '\t\tfdt_nop_property(initial_boot_params, node, "rng-seed");\n'
+if old in s:
+    open(p, 'w').write(s.replace(old, '#ifndef CONFIG_GPUVM\n' + old + '#endif\n'))
 # binfmt_flat's copy of a program that lies in memory (patch_ovl.py): the RISC-V machine's copy CSRs there, gpu_vm's
 # memcpy here (one operation of the commit from 4 KB up: arch/gpuvm/lib/string.S)
 p = os.path.join(tree, 'fs/binfmt_flat.c')

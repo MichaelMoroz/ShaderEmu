@@ -97,11 +97,11 @@ Shader "ShaderEmu/GvmMachine"
             #pragma target 5.0
             #pragma vertex blit_vert
             #pragma fragment frag
-            uniform uint _GvmTarget, _GvmEntryLo, _GvmEntryHi;
+            uniform uint _GvmTarget, _GvmEntryLo, _GvmEntryHi, _GvmBH;   // (GEO_BH of tick.cginc)
             uint4 frag(blit_v2f i) : SV_Target {
                 uint2 p = (uint2)i.vertex.xy;
-                if (p.x >= 8 || p.y >= 4) return 0;
-                uint T = (p.x * 4 + p.y) * 8 + _GvmTarget;
+                if (p.x >= 8 || p.y >= _GvmBH) return 0;
+                uint T = (p.x * _GvmBH + p.y) * 8 + _GvmTarget;
                 if (T == 1) return uint4(0, 0x1000, 0, 0);
                 if (T == 16) return uint4((_GvmEntryLo & 0xffff) | (_GvmEntryHi << 16), 8, 0, 0);
                 if (T == 18) return uint4(0, 0, 0, 0x9e3779b9u);
@@ -119,11 +119,11 @@ Shader "ShaderEmu/GvmMachine"
             #pragma target 5.0
             #pragma vertex blit_vert
             #pragma fragment frag
-            uniform uint _GvmTarget, _GvmFrom, _GvmTo;
+            uniform uint _GvmTarget, _GvmFrom, _GvmTo, _GvmBH, _GvmNTex;   // (GEO_BH, NTEX of tick.cginc)
             uint4 frag(blit_v2f i) : SV_Target {
                 uint2 p = (uint2)i.vertex.xy;
-                uint c = (p.y / 16) * 128 + p.x / 8, ry = p.y % 16, T = ((p.x % 8) * 4 + ry) * 8 + _GvmTarget;
-                if (ry >= 4 || T >= 203) discard;   // (NTEX of tick.cginc)
+                uint c = (p.y / 16) * 128 + p.x / 8, ry = p.y % 16, T = ((p.x % 8) * _GvmBH + ry) * 8 + _GvmTarget;
+                if (ry >= _GvmBH || T >= _GvmNTex) discard;
                 if (c > _GvmFrom && c <= _GvmTo) {
                     uint4 s = T >= 40 ? uint4(0xffffffffu, 0, 0xffffffffu, 0) : 0;
                     if (T == 1) s.y = c;
@@ -261,6 +261,7 @@ Shader "ShaderEmu/GvmMachine"
             #pragma vertex vert
             #pragma fragment frag
             Texture2D<uint4> _GvmR0, _GvmR1, _GvmR2, _GvmR3, _GvmR4, _GvmR5, _GvmR6, _GvmR7;
+            Texture2D<uint4> _GvmPending;   // GvmOpsBlit's pass 3: cores with operations still queued (texel 12)
             uniform uint _Row, _GvmPassesLo, _GvmPassesHi;
             static const uint Words = 1032;
             float4 vert(appdata_img v) : SV_Position {
@@ -283,6 +284,7 @@ Shader "ShaderEmu/GvmMachine"
                     else if (texel == 36 && k == 3) v = core0(16, 0);
                     else if (texel == 40 && k == 2) v = (core0(19, 3) & 0xff) | (core0(19, 2) << 8);
                     else if (texel == 11 && k == 3) v = 0xffffffffu;
+                    else if (texel == 12 && k == 0) v = _GvmPending.Load(int3(0, 0, 0)).x;
                     else if (texel >= 28 && reg >= 1 && reg <= 31) v = core0((uint)reg >> 2, (uint)reg & 3);
                 } else if (texel < 128) v = pick4(_Ram[uint2(texel - 64, 128)], k);
                 else {

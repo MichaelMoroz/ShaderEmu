@@ -2,7 +2,7 @@ Shader "ShaderEmu/GvmOpsBlit"
 {
     // A round of the operations as blits where the harness draws meshes (a camera's render costs the world 0.16 ms):
     // pass 0 each core's and slot's piece into _Plan (the stage's and the write's vertex work, once), pass 1 the
-    // stage as a gather over its texture, pass 2 the progress, a texel a core.
+    // stage as a gather over its texture, pass 2 the progress, a texel a core, pass 3 how many cores have more queued.
     Properties
     {
         _Ram ("RAM", 2D) = "black" {}
@@ -70,6 +70,21 @@ Shader "ShaderEmu/GvmOpsBlit"
                 uint c = (uint)i.vertex.x;
                 plan_t P = plan(c, NONE);
                 return uint4(state_any(22, c).z, P.d, P.p, P.rf);
+            }
+            ENDCG
+        }
+        Pass   // 3: the cores with operations still queued after the pass's rounds, into one texel (read back: a second round)
+        {
+            CGPROGRAM
+            #pragma vertex blit_vert
+            #pragma fragment blit_frag
+            uint4 blit_frag(b2f i) : SV_Target {
+                uint n = 0;
+                [loop] for (uint c = 0; c < _NCores; c++) {
+                    uint4 qs = state_any(22, c), os = _OpState.Load(int3(c, 0, 0));
+                    n += (os.x != qs.z ? qs.x > 0 : os.y < qs.x) ? 1u : 0u;
+                }
+                return uint4(n, 0, 0, 0);
             }
             ENDCG
         }

@@ -1,22 +1,26 @@
 #!/bin/sh
 # the system's start for apps/image.sh's machine: rootfs.sh's (gpu_vm/userland/rootfs/etc/init.d/rcS), and a
-# /persistence in memory (the host keeps nothing here yet: docs/system/persist.md), which the games' starters use
-mount -t proc proc /proc
-mount -t sysfs sysfs /sys
-mount -t devtmpfs devtmpfs /dev 2>/dev/null
-# the pseudo-terminals, as linux/userland/emuinit.c mounts them (mc's subshell: "Cannot open master and slave sides of pty")
-mkdir -p /dev/pts
-mount -t devpts devpts /dev/pts
-mount -t tmpfs -o mode=1777,size=32m tmpfs /tmp
-mount -t tmpfs -o mode=0755,size=4m tmpfs /persistence
+# /persistence in memory (the host keeps nothing here yet: docs/system/persist.md), which the games' starters use.
+# Every program is an exec of busybox, relocated whole (no MMU): four here, the rest the shell's own (the kernel mounts /dev)
 mount -t tmpfs -o mode=0755,size=1m tmpfs /run
+echo "proc /proc proc defaults 0 0" > /run/boot.fstab
+echo "sysfs /sys sysfs defaults 0 0" >> /run/boot.fstab
+echo "tmpfs /tmp tmpfs mode=1777,size=32m 0 0" >> /run/boot.fstab
+echo "tmpfs /persistence tmpfs mode=0755,size=4m 0 0" >> /run/boot.fstab
+mount -a -T /run/boot.fstab
 # /root, /var, /etc and /home written over the ROM's (the desktop's places, a program's saves, at's spool), as the
-# RISC-V image's overlay makes the whole root
+# RISC-V image's overlay makes the whole root; /var's folders made in its upper layer
+mkdir -p /dev/pts /tmp/.over/root/up /tmp/.over/root/work /tmp/.over/etc/up /tmp/.over/etc/work \
+    /tmp/.over/home/up /tmp/.over/home/work /tmp/.over/var/work /tmp/.over/var/up/spool/cron/atjobs \
+    /tmp/.over/var/up/spool/cron/atspool /tmp/.over/var/up/run /tmp/.over/var/up/log
+: > /tmp/.over/var/up/spool/cron/atjobs/.SEQ   # (at's sequence file, which the RISC-V ROM has)
+# the pseudo-terminals, as linux/userland/emuinit.c mounts them (mc's subshell: "Cannot open master and slave sides of pty")
+echo "devpts /dev/pts devpts defaults 0 0" > /run/boot.fstab
 for d in root var etc home; do
-    mkdir -p /tmp/.over/$d/up /tmp/.over/$d/work
-    mount -t overlay overlay -o lowerdir=/$d,upperdir=/tmp/.over/$d/up,workdir=/tmp/.over/$d/work /$d
+    echo "overlay /$d overlay lowerdir=/$d,upperdir=/tmp/.over/$d/up,workdir=/tmp/.over/$d/work 0 0" >> /run/boot.fstab
 done
-mkdir -p /var/spool/cron/atjobs /var/spool/cron/atspool /var/run /var/log
-: > /var/spool/cron/atjobs/.SEQ   # (at's sequence file, which the RISC-V ROM has)
-hostname -F /etc/hostname
-echo "gpuvm: up in $(cut -d' ' -f1 /proc/uptime) s"
+mount -a -T /run/boot.fstab
+read h < /etc/hostname
+echo "$h" > /proc/sys/kernel/hostname
+read up rest < /proc/uptime
+echo "gpuvm: up in $up s"

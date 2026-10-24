@@ -1,10 +1,10 @@
-// v0009.hlsl for Unity, made by gpu_vm/platform/unity_tick.py: do not edit
+// u32.hlsl for Unity, made by gpu_vm/platform/unity_tick.py: do not edit
 #define GVM_HAS_CORE0 0
 // A tick made by gpu_vm/tick/builder/gen.py (the manifest beside it has its parameters); not edited by hand.
-#include "isa.cginc"   // isa.h 1805f4006457
+#include "isa.cginc"   // isa.h 63245e5c8e33
 
-static const uint NB = 16;           // buckets of four entries a table
-static const uint WCN = 130;         // write cache entries: 8 * NB in buckets, two overflow slots, then a sink
+static const uint NB = 32;           // buckets of four entries a table
+static const uint WCN = 258;         // write cache entries: 8 * NB in buckets, two overflow slots, then a sink
 static const uint WCS = WCN - 2;
 static const uint MV = 0;   // (mv: the move on a full pair of buckets)
 static bool mvok = false;   // (mv: on for a store's lookup whose store fills the slot it frees: a free way must not hide its bucket's texel in the other)
@@ -14,8 +14,8 @@ static const uint RAM_W = 8192;
 static const uint T_WC = 40;
 static const uint T_Q = 24;
 static const uint T_WT = T_WC + WCN;
-static const uint NTEX = 203;
-static const uint SPIX = 26;
+static const uint NTEX = 363;
+static const uint SPIX = 46;
 // the core's file (phase 2): XR words from texel T_XF, their tags from T_XT (XBIND), NPAIR pairs from T_PB (their count
 // texel 23.x); the commit draws CPTS points a core: the write cache's, the file's slots (XBIND), the pairs
 static const uint XR = 0;
@@ -32,17 +32,17 @@ static const uint FX1 = 0;   // op 1's float functions: fpu's but the special on
 static const uint LATEBR = 0;   // branches read their registers after the bundle's ops (gvm_machine.late)
 static const uint XLAZY = 0;
 static const uint NPAIR = 0;
-static const uint T_XF = 203;
-static const uint T_XT = 203;
-static const uint T_PB = 203;
-static const uint T_VR = 203;
+static const uint T_XF = 363;
+static const uint T_XT = 363;
+static const uint T_PB = 363;
+static const uint T_VR = 363;
 static const uint VEC = 0;   // 128-bit registers (gvm_machine.vec; needs rpk=wide)
-static const uint CPTS = 130;
+static const uint CPTS = 258;
 // the layout, as gvmbench reads it: core c's state pixel j at (slot * GEO_BW + jx, band * GEO_BAND + jy), its band c / GEO_PER,
 // its slot in the band GEO_PERM's (0 the same, 1 bits reversed, 2 times GEO_MUL), jx, jy by GEO_JROW
 static const uint GEO_BLOCKS = 1;
 static const uint GEO_BW = 8;
-static const uint GEO_BH = 4;
+static const uint GEO_BH = 8;
 static const uint GEO_BAND = 16;
 static const uint GEO_PER = 128;
 static const uint GEO_JROW = 0;
@@ -51,7 +51,7 @@ static const uint GEO_MUL = 1;
 static const uint GEO_INV = 0;
 uint slot_of(uint i) { return i; }
 uint core_at(uint s) { return s; }
-int3 sat(uint j, uint c) { return int3(slot_of(c % 128u) * 8u + (j / 4u), (c / 128u) * 16u + (j % 4u), 0); }
+int3 sat(uint j, uint c) { return int3(slot_of(c % 128u) * 8u + (j / 8u), (c / 128u) * 16u + (j % 8u), 0); }
 static const uint QMAX = 8;
 static const uint OP_SLOTS = 32;
 static const uint OP_SPAN = 272;
@@ -192,8 +192,8 @@ uint merge(uint w, uint word, uint ad, uint val) {
     uint sh = ad << 3, msk = (0xffffffffu >> ext_k(w)) << sh;
     return word ^ ((word ^ (val << sh)) & msk);
 }
-uint wc_b1(uint t) { return (t * 0x9e3779b1u) >> 28; }
-uint wc_b2(uint t) { return NB + ((t * 0x85ebca6bu + 0x165667b1u) >> 28); }
+uint wc_b1(uint t) { return (t * 0x9e3779b1u) >> 27; }
+uint wc_b2(uint t) { return NB + ((t * 0x85ebca6bu + 0x165667b1u) >> 27); }
 uint4 bucket(uint b) { uint k = 4 * b; return uint4(wt[k], wt[k + 1], wt[k + 2], wt[k + 3]); }
 struct mop { uint ad, t, i, b1, b2; uint4 q, A, B; uint sl, otag, e, w; };
 void mfind(inout mop m) {
@@ -753,8 +753,8 @@ tick_out frag(v2f i) {
     tick_out o;
     uint rx = p.x % 8u, ry = p.y % 16u;
     core = (p.y / 16u) * 128u + core_at(p.x / 8u);
-    uint j = rx * 4u + ry;
-    [branch] if (core >= _NCores || j >= SPIX || ry >= 4u) { o.t0 = o.t1 = o.t2 = o.t3 = o.t4 = o.t5 = o.t6 = o.t7 = 0; return o; }
+    uint j = rx * 8u + ry;
+    [branch] if (core >= _NCores || j >= SPIX || ry >= 8u) { o.t0 = o.t1 = o.t2 = o.t3 = o.t4 = o.t5 = o.t6 = o.t7 = 0; return o; }
     ext = (pick(_Ext[core >> 7], (core >> 5) & 3) >> (core & 31)) & 1;
     bud = core == 0 ? _Ticks : _Ticks >> WSH;   // (wsh)
     [branch] if (WAD != 0 && core != 0) {   // (wad: the pass ends about when core 0's does)

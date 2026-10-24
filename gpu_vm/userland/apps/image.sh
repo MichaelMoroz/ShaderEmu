@@ -132,7 +132,9 @@ print('\n'.join(lines))
 EOF
 python3 "$UL/mkromfs.py" "$L" "$W/rootfs.romfs"
 MIB=$(( ($(stat -c %s "$W/rootfs.romfs") + 1048575) / 1048576 ))
-sed -e "s|bootargs = \"console=hvc0\";|bootargs = \"console=hvc0 root=mtd:root rootfstype=romfs ro init=/init phram.phram=root,0x40000000,${MIB}Mi\";|" \
+# the random pool's seed (RANDOM_TRUST_BOOTLOADER): ready before /init, not after a second's wait and jitter
+SEED=$(od -An -tx1 -N128 /dev/urandom | tr -d '\n')
+sed -e "s|bootargs = \"console=hvc0\";|bootargs = \"console=hvc0 root=mtd:root rootfstype=romfs ro init=/init phram.phram=root,0x40000000,${MIB}Mi\";\n\t\trng-seed = [$SEED];|" \
     -e "s|reg = <0x02000000 0x04000000>;|reg = <0x02000000 $(printf '0x%08x' $((RAM_MB << 20)))>;|" \
     "$ROOT/gpu_vm/linux/arch/gpuvm/boot/dts/gvm.dts" > "$W/gvm.dts"
 "$KOUT/scripts/dtc/dtc" -q -I dts -O dtb -o "$W/gvm.dtb" "$W/gvm.dts"

@@ -22,6 +22,8 @@ export PATH="${LLVM_BIN:-$HOME/gpu_vm/llvm-build/bin}:$PATH"
 mkdir -p "$W"
 python3 "$HERE/mkromfs.py" "$R/initramfs.list" "$W/rootfs.romfs"
 MIB=$(( ($(stat -c %s "$W/rootfs.romfs") + 1048575) / 1048576 ))
+# the random pool's seed (RANDOM_TRUST_BOOTLOADER): ready before /init, not after a second's wait and jitter
+SEED=$(od -An -tx1 -N128 /dev/urandom | tr -d '\n')
 printf 'dir /root 0700 0 0\ndir /dev 0755 0 0\nnod /dev/console 0600 0 0 c 5 1\n' > "$W/initramfs.list"
 {
     if [ ! -f "$KOUT/.config" ]; then
@@ -32,7 +34,7 @@ printf 'dir /root 0700 0 0\ndir /dev 0755 0 0\nnod /dev/console 0600 0 0 c 5 1\n
     OUT="$KOUT" INITRAMFS_LIST="$W/initramfs.list" bash "$ROOT/gpu_vm/linux/build.sh" sync initramfs image dtbs
 } > "$W/kernel.log" 2>&1 || { tail -30 "$W/kernel.log"; exit 1; }
 grep -q '^CONFIG_MTD_PHRAM=y' "$KOUT/.config" || { echo "romroot.sh: $KOUT/.config has no phram" >&2; exit 1; }
-sed "s|bootargs = \"console=hvc0\";|bootargs = \"console=hvc0 root=mtd:root rootfstype=romfs ro init=/init phram.phram=root,0x40000000,${MIB}Mi\";|" \
+sed "s|bootargs = \"console=hvc0\";|bootargs = \"console=hvc0 root=mtd:root rootfstype=romfs ro init=/init phram.phram=root,0x40000000,${MIB}Mi\";\n\t\trng-seed = [$SEED];|" \
     "$ROOT/gpu_vm/linux/arch/gpuvm/boot/dts/gvm.dts" > "$W/gvm.dts"
 grep -q 'root=mtd:root' "$W/gvm.dts" || { echo "romroot.sh: gvm.dts's bootargs not found" >&2; exit 1; }
 "$KOUT/scripts/dtc/dtc" -q -I dts -O dtb -o "$W/gvm.dtb" "$W/gvm.dts"
