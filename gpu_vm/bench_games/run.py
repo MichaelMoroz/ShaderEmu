@@ -90,10 +90,12 @@ GAMES = {
                      seconds=40),
     'nxray': dict(cmd=X + 'nxray', mark='raystat: 320 x 240', fps=fps_ray),
     'doom': dict(cmd=X + 'doom -1 -timedemo demo1', mark='doom: ', fps=fps_doom),
-    # programs that declare no REST mask (the builder's wad 5-7 cap nothing in them): saved at a word typed before them
-    'doomt': dict(cmd=X + 'echo MA""RKD; doom -1 -timedemo demo1', mark='MARKD', fps=fps_doom, seconds=60),
-    'quake1': dict(cmd=X + 'echo MA""RKQ; quake +timedemo demo1', mark='MARKQ', fps=fps_quake, seconds=60),
-    'coremark': dict(cmd='echo MA""RKC; coremark', mark='MARKC', fps=fps_coremark, seconds=60),
+    # programs that declare no REST mask (the builder's wad 5-7 cap nothing in them): saved at a word typed before them.
+    # Each runs to its own end and no longer (24 October 2026, from 60 s each): Doom's timedemo is 27-34 s of 5,026
+    # gametics, Quake's 9-10 s after a 10 s load, CoreMark's 600 iterations 13-14 s, on both machines
+    'doomt': dict(cmd=X + 'echo MA""RKD; doom -1 -timedemo demo1', mark='MARKD', fps=fps_doom, seconds=40),
+    'quake1': dict(cmd=X + 'echo MA""RKQ; quake +timedemo demo1', mark='MARKQ', fps=fps_quake, seconds=25),
+    'coremark': dict(cmd='echo MA""RKC; coremark', mark='MARKC', fps=fps_coremark, seconds=20),
     'gzipl': dict(cmd='echo MA""RKZ; i=0; while true; do gzip -c /usr/bin/coremark > /dev/null; i=$((i+1)); echo gzround $i; done',
                   mark='MARKZ', fps=fps_count(r'gzround \d+'), seconds=15),
 }
