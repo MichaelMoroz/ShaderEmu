@@ -130,6 +130,9 @@ text (both are mistakes of the layout's), lists every item (`--items`), says wha
 inside and with what style (`--why X Y`), and draws the page into a PPM file (the cache's
 JPEGs and PNGs in it with libmedia compiled in, `-DWEB_TEST_MEDIA`: the line is at its head). A change to the
 engine is tried there on every cached page first: the machine then gives the same numbers.
+A `.md` file is made HTML as the editor's reader makes it (`nxedit_md.h`), and `--sections` lays
+it out a section at a time as the reader does (`nxedit_page.h`; `docs/system/nanox.md`, "The
+editor's reader"), printing the reader's `NXEDIT_DUMP` line.
 
 ## The tree and the styles
 

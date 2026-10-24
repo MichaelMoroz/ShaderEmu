@@ -92,3 +92,4 @@ show-desktop            places/user-desktop
 volume                  status/audio-volume-high
 volume-muted            status/audio-volume-muted
 calendar                apps/office-calendar
+documents               places/folder-documents

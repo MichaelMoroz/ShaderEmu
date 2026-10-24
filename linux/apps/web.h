@@ -57,7 +57,11 @@ struct web_face {
 	int height, ascent, twice, tried;
 	char name[32];
 };
+#ifdef WEB_FACES_LATER
+static struct web_face *web_faces;	/* (60 KB the program allocates before it lays anything out: nxedit's reader) */
+#else
 static struct web_face web_faces[WEB_FACES];
+#endif
 /* With no fonts in the image, or a window system that cannot draw them: every face is the
  * window system's own font, whose widths these are (Latin letters only, one size). */
 static const unsigned char *web_plain;
@@ -260,7 +264,7 @@ web_resolve(const char *href, char *whole)
 
 /* ---- characters ---- */
 
-static const struct { const char *name; unsigned short code; } web_entities[] = {
+static const struct { char name[10]; unsigned short code; } web_entities[] = {	/* (names in place: no pointers to relocate when a program starts) */
 	{ "AElig", 0xc6 }, { "Aacute", 0xc1 }, { "Agrave", 0xc0 }, { "Aring", 0xc5 }, { "Auml", 0xc4 }, { "Ccedil", 0xc7 },
 	{ "Dagger", 0x2021 }, { "Delta", 0x394 }, { "Eacute", 0xc9 }, { "Egrave", 0xc8 }, { "Iacute", 0xcd }, { "Ntilde", 0xd1 },
 	{ "Oacute", 0xd3 }, { "Omega", 0x3a9 }, { "Oslash", 0xd8 }, { "Ouml", 0xd6 }, { "Prime", 0x2033 }, { "Sigma", 0x3a3 },

@@ -193,6 +193,39 @@ PLACES = [('Home', 'home', 'nxfiles /root'), ('Pictures', 'pictures', 'nxfiles /
           ('Persistence', 'persistence', 'nxfiles /persistence')]   # (the nx script makes the folder: docs/system/persist.md)
 
 
+DOCS = '/usr/share/doc/shaderemu'   # the documentation, which the desktop's Docs folder opens
+GPU_VM_DOCS = (('GPU_VM.md', "gpu_vm, the machine's own instruction set"), ('platform.md', 'gpu_vm as a whole machine: devices, workers, drivers'))
+
+
+def documentation():
+    """The repository's documentation for the machine's own reader (the editor reads Markdown: docs/system/nanox.md,
+    "The editor's reader"), at DOCS: docs/ as it is but for its plans, and gpu_vm's two docs for users in gpu_vm/. The index
+    (README.md) leaves the plans out and names gpu_vm's. A list of (bytes, folder, name), read anew at every build."""
+    top, files = os.path.join(ROOT, 'docs'), []
+    for folder, dirs, names in os.walk(top):
+        dirs[:] = sorted(d for d in dirs if d != 'plans')
+        rel = os.path.relpath(folder, top).replace(os.sep, '/')
+        for name in sorted(n for n in names if n.endswith('.md')):
+            text = open(os.path.join(folder, name), 'rb').read()
+            if rel == '.' and name == 'README.md':
+                lines, out, skip = text.decode('utf-8').split('\n'), [], False
+                for line in lines:
+                    if line.startswith('## '):
+                        skip = line.strip() == '## plans'
+                    if not skip:
+                        out.append(line)
+                while out and not out[-1].strip():
+                    out.pop()
+                out += ['', '## gpu_vm', ''] + ['- [%s](gpu_vm/%s) – %s' % (n, n, title) for n, title in GPU_VM_DOCS] + ['']
+                text = '\n'.join(out).encode('utf-8')
+            files.append((text, DOCS + ('' if rel == '.' else '/' + rel), name))
+    for name, _ in GPU_VM_DOCS:
+        files.append((open(os.path.join(ROOT, 'gpu_vm', name), 'rb').read(), DOCS + '/gpu_vm', name))
+    # (and test_all.py nxedit-read's page of every kind of Markdown)
+    files.append((open(os.path.join(ROOT, 'linux', 'apps', 'md-test.md'), 'rb').read(), '/usr/share', 'md-test.md'))
+    return files
+
+
 def desktop_shortcuts(extra):
     """The desktop as the image starts with it (linux/apps/nxfiles.c): a shortcut for every
     program of the Start menu (the nxapps.* files) but the System folder's, and for the places
@@ -213,6 +246,8 @@ def desktop_shortcuts(extra):
             if run and label and folder != 'System':
                 folder = '' if run.split()[0] in WITH_PLACES else folder or 'Other'
                 columns.setdefault(folder, []).append((label, 'name=%s\nrun=%s\n' % (label, run)))
+    # the documentation (documentation()) in a column of its own, the last: no other icon moves for it
+    columns.setdefault(' docs', []).append(('Docs', 'name=Docs\nicon=documents\nrun=nxfiles %s\n' % DOCS))
     files, places, column = [], [], 0
     for folder in columns:
         for row, (label, text) in enumerate(columns[folder]):
@@ -239,6 +274,7 @@ def main():
     for folder, _, names in os.walk(extra):
         directory = '/' + os.path.relpath(folder, extra).replace(os.sep, '/')
         files += [(os.path.join(folder, name), directory, name) for name in sorted(names)]
+    files += documentation()
     files += desktop_shortcuts(extra)
     # a file in the tree replaces the one of the same name listed above
     last = {(directory, name): path for path, directory, name in files}

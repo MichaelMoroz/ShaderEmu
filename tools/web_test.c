@@ -7,6 +7,10 @@
  *   gcc -O1 -g -fsanitize=address,undefined -Ilinux/apps tools/web_test.c -o web_test
  *   web_test DIR ADDRESS|FILE [--width 572] [--ppm OUT.ppm] [--items] [--sheets no] [--why X Y] [--failed]
  *
+ * A FILE whose name ends in .md is Markdown, made HTML as the editor's reader makes it (nxedit_md.h);
+ * with --sections it is laid out a section at a time as the reader does (nxedit_page.h), and the
+ * line it prints is the one `NXEDIT_DUMP=1 nxedit FILE` prints in the machine, for the same width.
+ *
  * --failed: a picture not in the cache is laid out as the browser lays out one it could not have,
  * a box with a line that says why (web_broken_size), not as its description.
  *
@@ -23,6 +27,7 @@
 static char cache_dir[400];
 #define WEB_CACHE_DIR cache_dir
 #include "web_layout.h"
+#include "nxedit_page.h"
 #ifdef WEB_TEST_MEDIA
 #include "media.h"
 #endif
@@ -299,6 +304,33 @@ draw(const char *out)
 	fclose(f);
 }
 
+/* Markdown's lines, for md_html */
+static const char *md_text;
+static int md_ends[200000], md_lines;
+
+static const char *
+md_line_of(int i, int *n)
+{
+	int from = i ? md_ends[i - 1] + 1 : 0;
+
+	*n = md_ends[i] - from;
+	return md_text + from;
+}
+
+static char *
+md_page(const char *text, int *n)
+{
+	int i;
+
+	md_text = text;
+	for (i = 0, md_lines = 0; i < *n && md_lines < 200000; i++)
+		if (text[i] == '\n')
+			md_ends[md_lines++] = i;
+	if ((!md_lines || md_ends[md_lines - 1] != *n - 1) && *n && md_lines < 200000)
+		md_ends[md_lines++] = *n;
+	return md_html(md_lines, md_line_of, n);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -306,7 +338,7 @@ main(int argc, char **argv)
 	char file[400];
 	char *html;
 	int width = 572, n, i, list = 0, sheets = 1, texts = 0, boxes = 0, images = 0, fields = 0, wide = 0, over = 0, chars = 0;
-	int links = 0, last_link = -1, repeat = 1, why_x = 0, why_y = -1;
+	int links = 0, last_link = -1, repeat = 1, why_x = 0, why_y = -1, sections = 0;
 	clock_t began = clock();
 
 	if (argc < 3) {
@@ -328,6 +360,8 @@ main(int argc, char **argv)
 			list = 1;
 		else if (!strcmp(argv[i], "--failed"))
 			failed_boxes = 1;
+		else if (!strcmp(argv[i], "--sections"))
+			sections = 1;
 		else if (!strcmp(argv[i], "--sheets") && i + 1 < argc)
 			sheets = strcmp(argv[++i], "no") != 0;
 	}
@@ -343,6 +377,35 @@ main(int argc, char **argv)
 		fprintf(stderr, "cannot read %s\n", file);
 		return 1;
 	}
+	if (sections && strlen(file) > 3 && !strcmp(file + strlen(file) - 3, ".md")) {
+		/* as the editor's reader lays it out, a section at a time (nxedit_page.h), and says it (NXEDIT_DUMP) */
+		static struct web_item *copy;
+
+		md_page(html, &n);
+		for (i = 0; i < repeat; i++) {
+			rp_begin(md_lines, md_line_of, width);
+			while (!rp.done)
+				rp_more();
+		}
+		printf("nxedit: read %s: %d nodes, %d x %d; %d texts (%d characters, %d links), %d boxes; %d texts past the edge; sum %08x; %.0f ms\n",
+		       where, rp.nodes, rp.width, rp.h, rp.texts, rp.chars, rp.links, rp.boxes, rp.wide, rp.sum,
+		       (clock() - began) * 1000.0 / CLOCKS_PER_SEC);
+		if (out) {
+			copy = calloc(rp.count + 1, sizeof *copy);
+			for (i = 0; i < rp.count; i++) {
+				const struct rp_item *r = &rp.items[i];
+
+				copy[i] = (struct web_item){ r->x, r->y, r->w, r->h, r->text, r->kind == I_TEXT ? r->n : r->b, r->colour, 0, r->kind, r->face, r->flags };
+			}
+			web_items = copy, web_item_count = rp.count, web_u = rp.text, web_page_bg = 0xffffff;
+			pw = width;
+			ph = rp.h < 12000 ? rp.h + 8 : 12000;
+			draw(out);
+		}
+		return 0;
+	}
+	if (strlen(file) > 3 && !strcmp(file + strlen(file) - 3, ".md"))
+		html = md_page(html, &n);
 	web_find_sheets(html, n, width);
 	for (i = 0; i < web_sheet_count; i++) {
 		struct web_sheet *sh = &web_sheets[i];

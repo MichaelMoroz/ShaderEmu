@@ -35,7 +35,7 @@ import os, sys, types
 sys.modules.setdefault('PIL', types.SimpleNamespace(Image=None))   # (the image builder reads PNGs; not here)
 sys.path.insert(0, sys.argv[1])
 import make_linux_image as m
-for data, folder, name in m.desktop_shortcuts(sys.argv[2]):
+for data, folder, name in m.desktop_shortcuts(sys.argv[2]) + m.documentation():   # (the docs: the desktop's Docs folder)
     d = os.path.join(sys.argv[3], folder.lstrip('/'))
     os.makedirs(d, exist_ok=True)
     open(os.path.join(d, name), 'wb').write(data)

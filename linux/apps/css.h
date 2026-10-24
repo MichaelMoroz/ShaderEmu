@@ -20,7 +20,9 @@
 #define CSS_UNSET (-30001)
 #define CSS_PCT 100000		/* a length of CSS_PCT + n is n tenths of a percent */
 #define CSS_EM 13		/* our font against the 16 pixels pages are written for */
-#define CSS_ATOMS 8192
+#ifndef CSS_ATOMS
+#define CSS_ATOMS 8192		/* (a program of few pages may have fewer: nxedit's reader) */
+#endif
 
 #define CSS_TAGS(X) \
 	X(html) X(body) X(p) X(div) X(table) X(blockquote) X(section) X(article) X(header) X(footer) X(form) \
@@ -179,7 +181,7 @@ css_keep(const char *text, int n)
 static void
 css_reset(int view, int view_h)
 {
-	static const char *const tags[] = {
+	static const char tags[][11] = {	/* (in place, as the tables below: no pointers to relocate at a start) */
 #define X(name) #name,
 		CSS_TAGS(X)
 #undef X
@@ -352,7 +354,7 @@ css_hsl(int h, int s, int l)
 static int
 css_colour(const char *v)
 {
-	static const struct { const char *name; int rgb; } named[] = {
+	static const struct { char name[15]; int rgb; } named[] = {
 		{ "black", 0x000000 }, { "white", 0xffffff }, { "red", 0xff0000 }, { "green", 0x008000 }, { "blue", 0x0000ff },
 		{ "gray", 0x808080 }, { "grey", 0x808080 }, { "silver", 0xc0c0c0 }, { "maroon", 0x800000 }, { "navy", 0x000080 },
 		{ "teal", 0x008080 }, { "olive", 0x808000 }, { "purple", 0x800080 }, { "orange", 0xffa500 }, { "yellow", 0xffff00 },
@@ -535,7 +537,7 @@ css_word(const char *v, const char *word)
 static int
 css_font_size(const char *v, int *unit, int *value)
 {
-	static const struct { const char *name; int unit, value; } words[] = {
+	static const struct { char name[10]; int unit, value; } words[] = {
 		{ "xx-small", U_PX, 9000 }, { "x-small", U_PX, 10000 }, { "smaller", U_EM, 830 }, { "small", U_PX, 11000 },
 		{ "medium", U_PX, 13000 }, { "larger", U_EM, 1200 }, { "large", U_PX, 15000 }, { "x-large", U_PX, 20000 },
 		{ "xx-large", U_PX, 24000 }, { "xxx-large", U_PX, 32000 },
@@ -560,7 +562,7 @@ static int
 css_family(const char *v)
 {
 	/* the first name of the list that begins like one of these says which */
-	static const struct { const char *name; unsigned char n, face; } known[] = {
+	static const struct { char name[19]; unsigned char n, face; } known[] = {
 		{ "monospace", 9, 2 }, { "courier", 7, 2 }, { "consolas", 8, 2 }, { "menlo", 5, 2 }, { "monaco", 6, 2 },
 		{ "source code", 11, 2 }, { "dejavu sans mono", 16, 2 }, { "ui-monospace", 12, 2 }, { "sfmono", 6, 2 }, { "sf mono", 7, 2 },
 		{ "lucida console", 14, 2 }, { "liberation mono", 15, 2 },
@@ -589,7 +591,7 @@ css_family(const char *v)
 static int
 css_declaration(const char *name, int nn, const char *v, struct css_decl *out)
 {
-	static const struct { const char *name; unsigned char first, sides; } boxes[] = {
+	static const struct { char name[21]; unsigned char first, sides; } boxes[] = {
 		{ "margin", P_MT, 4 }, { "padding", P_PT, 4 }, { "margin-top", P_MT, 1 }, { "margin-bottom", P_MB, 1 },
 		{ "margin-left", P_ML, 1 }, { "margin-right", P_MR, 1 }, { "padding-top", P_PT, 1 }, { "padding-bottom", P_PB, 1 },
 		{ "padding-left", P_PL, 1 }, { "padding-right", P_PR, 1 }, { "margin-block", P_MT, 12 }, { "margin-inline", P_ML, 13 },
@@ -643,7 +645,7 @@ css_declaration(const char *name, int nn, const char *v, struct css_decl *out)
 		return n;
 	}
 	if (IS("display")) {
-		static const struct { const char *name; int display; } kinds[] = {
+		static const struct { char name[19]; int display; } kinds[] = {
 			{ "none", D_NONE }, { "inline-block", D_INLINE_BLOCK }, { "inline-flex", D_INLINE_FLEX },
 			{ "inline-grid", D_INLINE_BLOCK }, { "inline-table", D_TABLE }, { "inline", D_INLINE }, { "contents", D_INLINE },
 			{ "flex", D_FLEX }, { "grid", D_GRID }, { "table-row-group", D_ROW_GROUP }, { "table-header-group", D_ROW_GROUP },

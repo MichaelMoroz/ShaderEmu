@@ -233,6 +233,11 @@ they take no window and no buffer).
   starts with one for every program of the Start menu but the System folder's, and for Home,
   Pictures, Music and Videos (`desktop_shortcuts` in `tools/make_linux_image.py`), a column a
   folder of the menu. `open` starts one too (`nxfiles --run FILE.app`).
+- **Docs**, alone in the last column, opens Files on `/usr/share/doc/shaderemu`: the
+  repository's `docs/` but for its plans, and gpu_vm's `GPU_VM.md` and `platform.md` in
+  `gpu_vm/`, copied by every image build (`documentation()` in `make_linux_image.py`; gpu_vm's
+  `image.sh` too), so they are the tree's. A file there opens in the editor as a page
+  ("The editor's reader"), `README.md` first, and its links go from file to file.
 - **Places.** Each icon stands where it was last put, in whole cells of 76 x 70
   (`/root/Desktop/.places`: `x y name` a line). The left button held moves the selected
   icons; onto a folder it moves them into it. A new entry takes the first free cell, or the
@@ -676,7 +681,7 @@ A program that takes clicks must check `ui_wheel` first, or a notch is a click t
 
 | Program | What it does |
 |---|---|
-| `nxedit [FILE...]` | a text editor, a file a tab (up to 16; Ctrl+Page Up and Down go between them, since Ctrl+Tab is the window manager's; the tab's cross or the middle button closes one), with File, Edit, Search and View menus (Alt+letter or F10; the right button brings Undo to Select all). Tabs and bytes are kept as they are, and so are CR LF and a missing last newline; a file is read in 256 KB blocks and its lines stay there until edited. Undo keeps 40,000 changes, a command's changes undone together. Find and Replace is a window that stays open (match case, whole word, wrap around, previous, replace all as one change, count); Ctrl+G goes to a line, Ctrl+B to the matching brace; Edit's Lines duplicate, move, indent, sort and trim. View has word wrap, line numbers, spaces and tabs shown, the cursor's line lit, colours for C (off for a file over 1 MB) and the tab width, kept in the registry (`nxedit.*`, with six recent files). Ctrl+Insert copies, Shift+Insert pastes, Shift+Delete cuts; a file is saved to a new file beside it and renamed over it. A text with changes is asked about before it is let go |
+| `nxedit [FILE...]` | a text editor, a file a tab (up to 16; Ctrl+Page Up and Down go between them, since Ctrl+Tab is the window manager's; the tab's cross or the middle button closes one), with File, Edit, Search and View menus (Alt+letter or F10; the right button brings Undo to Select all). Tabs and bytes are kept as they are, and so are CR LF and a missing last newline; a file is read in 256 KB blocks and its lines stay there until edited. Undo keeps 40,000 changes, a command's changes undone together. Find and Replace is a window that stays open (match case, whole word, wrap around, previous, replace all as one change, count); Ctrl+G goes to a line, Ctrl+B to the matching brace; Edit's Lines duplicate, move, indent, sort and trim. View has word wrap, line numbers, spaces and tabs shown, the cursor's line lit, colours for C (off for a file over 1 MB) and the tab width, kept in the registry (`nxedit.*`, with six recent files). Ctrl+Insert copies, Shift+Insert pastes, Shift+Delete cuts; a file is saved to a new file beside it and renamed over it. A text with changes is asked about before it is let go. View's Read (Ctrl+R) shows a Markdown file as a page, laid out by the browser's engine, links followed (below, "The editor's reader"); a file of the documentation opens so, `--read` opens any `.md` so |
 | `nxfiles [FOLDER]` | the file explorer (and with `--desktop` the desktop, above): a tile with an icon for every entry (a name too long for one line goes on in a second, broken at a space when one is near, and only then is cut with two dots), or a list with sizes and kinds (View). Two clicks (or Enter) open: a folder, a shortcut's program, anything else through `open`. Ctrl and Shift with a click, Shift with the arrows and Ctrl+A select several; the selected entries are dragged onto a folder, into another Files window or onto the desktop (Ctrl held: copied). The right button, the Menu key or Shift+F10 bring a menu: Open, Edit, Cut, Copy, Paste, Rename (typed over the name, "A new name" above), Delete, Save to persistence, Shortcut on the desktop, Properties (a window of its own, `nxfiles --properties PATH`: the icon, the kind, where it is, its size or how much a folder holds, when it changed (the ROM keeps no dates: the image builder writes each file's into `/usr/share/rom-dates`, a line a file, and a file of the image has its date from there; `NXFILES_PRINT=1` prints the window's lines), what may be done with it, what a shortcut starts); on a folder also Paste into it and Terminal in it; on no entry View, Refresh, Select all, Paste, New (a folder, a text file), Terminal here (`nxterm` with its shell in the folder shown; on the desktop too), Properties. In the list a click on a column's heading puts the entries in that order (Name, Size largest first, Kind). Entries dragged to a folder that has one of the same name stay where they are: nothing is replaced unasked. Back, Forward, Up, Home, View, New folder and Terminal (a terminal in the folder shown) are keys with signs (`ui_glyph.h`; greyed when there is nowhere to go), with the folder's path beside them: a click on the path, or Ctrl+L, and another is typed there (Enter goes, Escape leaves). Down the left side are the places (Home, Desktop, Pictures, Music, Videos, Computer, and Network, which starts `nxnet`), the one shown picked out. The status line says how much can still be written. Keys: arrows, Page Up and Down, Home, End, letters typed one after another for the entry that starts so, Space to select, Backspace or Alt+Up for the folder above, Alt+Left and Alt+Right back and forward, F2, Delete (asked about first: "Delete these 3 entries?"; a folder goes with everything in it), F5, Ctrl+C, Ctrl+X, Ctrl+V (the entries are remembered in `/tmp/clipboard.files`, for any Files window), Escape. It reads the folder again when something else changes it. A name may have 127 letters and a folder 512 entries: what is over is counted in the status line ("3 more are not shown"), not shown cut short as an entry that cannot be opened |
 | `nxweb [ADDRESS]` | the browser (`docs/apps/web.md`): pages with their style sheets, in the ROM's fonts and any script, tables and boxes side by side, forms that search; the page is drawn into a pixmap in strips ahead of the view, by worker cores, and scrolled as a copy. Menus (File, Edit, View, Go with the session's pages, Bookmarks, Help), a bar with Back, Forward, Reload or Stop, Home, Bookmark and the address, a status line, wheel and scroll bar; options and bookmarks in the registry. Keys: arrows and the paging keys scroll, Tab goes from link to link (its address in the status line) and Enter follows, Backspace or Alt+Left goes back, Alt+Right forward, Alt+Home home, F5 reloads, Escape stops, Ctrl+L or F6 opens the address, Ctrl+D bookmarks, Ctrl+F finds and F3 again, Ctrl+O, Ctrl+S, Ctrl+U open a file, save the page, show its source, F10 opens the menus |
 | `nxpaint [FILE]` | the paint program (below, "Paint"): ten tools, a flood fill, a selection that is moved, copied and cropped to, pictures of any size up to 1,600 x 1,200, zoom, every change taken back and made again. Opens every kind libmedia reads (`docs/system/media.md`); saves PNG, JPEG, BMP or PPM by the name's ending, encoded on the worker cores |
@@ -863,6 +868,52 @@ drawing it pixel by pixel through `GrArea` took 6 s. Pictures are not clipped by
 
 The server is started with `-p`: without it Nano-X ends when its last program has gone, and
 the program that puts up the desktop's picture is the first to come and go.
+
+## The editor's reader (24 October 2026)
+
+The editor shows a Markdown file as a page (`linux/apps/nxedit_read.h`): headings, emphasis,
+strong and struck text, code in a line and in blocks (indented or fenced), lists in lists,
+quotes, GitHub's tables with their alignment, links, rules; a picture is its description. View's
+first item, Read (Markdown), or Ctrl+R goes between the page and the text, at the same place
+in the file. A `.md` file under `/usr/share/doc/` opens as a page (the documentation: "The
+desktop", Docs), `nxedit --read FILE` opens any so, and every other one as text.
+
+- **The browser's engine lays it out**, with the ROM's fonts (`css.h`, `web.h`, `web_layout.h`;
+  `docs/apps/web.md`): `nxedit_md.h` makes the text HTML (CommonMark's blocks, its rules for
+  emphasis, a style sheet like GitHub's) and nothing of the window system is in it, so
+  `tools/web_test.c FONTS FILE.md --sections` lays a file out on the host as the editor does and
+  prints the same line as `NXEDIT_DUMP=1` does in the machine (nodes, size, texts, links, boxes,
+  texts past the edge, and a sum of every item and character).
+- **A section at a time** (`nxedit_page.h`). The engine is about 300 instructions a byte:
+  this file, 110 KB, was 37 million at once, 12 s at the machine's speed. A section is the
+  text from a heading at the start of a line, outside a fenced block, to a later one (2 KB at
+  least for the first, 8 KB after), made HTML and laid out alone; its items are copied into
+  the reader's own list under the sections before it, placed by an empty block at the end of
+  the one before (where its next heading would have stood). The page is the whole page's to the
+  pixel (`--sections` against a whole layout on the host, every file of the documentation).
+  The first screen is there when its section is, and the rest is laid out while no event
+  waits; the scroll bar and the status line ("Reading 12%", "Reading (laying out)") follow it.
+  On `rvc_cpu`: the first screen of this file in 0.5 s, the whole in 9.2 s; the index in 0.6
+  and 0.9 s (`NXEDIT_TIME=1`).
+- **Keys and the pointer**: arrows, Page Up and Down, Space, Home and End, the wheel and the
+  scroll bar move the page; a click on a link goes to a heading of the page (`#id`, GitHub's
+  ids), to another `.md` file in the same tab (Backspace or Alt+Left come back; the right
+  button's menu has Back and Edit the text), a file of another kind through `open`, an address
+  through `open` too (the browser). A letter typed says that Ctrl+R edits. A command that
+  changes the text goes back to the text first.
+- The code's spaces at a line's start are no-break spaces: the engine starts a line at its
+  first word, in a `<pre>` too.
+- **What the editor's start pays for it**: the engine is 140 KB more of the program, which
+  the kernel maps and copies at every start. On `rvc_cpu`, the editor on a C file, three
+  seconds from the command less the same without it: the first window 1,540 thousand
+  instructions before and 1,582 after, a later one 1,144 and 1,186 (+3%). It was 1,630 and
+  1,218: the engine's tables of names were pointers, 470 relocations at every start of every
+  program that has it (`web_entities`, `css.h`'s tags, colours, fonts, boxes and kinds are
+  names in place now: 682 relocations to 233, the browser's pages laid out as before), and its
+  60 KB of faces are allocated when a page is first laid out (`WEB_FACES_LATER`).
+
+Test: `tools/test_all.py nxedit-read` (`/usr/share/md-test.md`, `linux/apps/md-test.md`, a page of
+every kind, must give web_test's sum; a document opens as a page, a `.md` elsewhere as text).
 
 ## Changes to Microwindows
 

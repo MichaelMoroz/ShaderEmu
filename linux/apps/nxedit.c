@@ -54,6 +54,9 @@ struct doc {
 	int undo_count, undo_room, redo_count, redo_room, saved_group;
 	unsigned char *carry;	/* carry[y]: line y begins inside a comment; known up to carry_known */
 	int carry_known, carry_room;
+	int reading, read_y;	/* shown as Markdown read (nxedit_read.h), from the page's row read_y */
+	char **back;		/* the texts read in this tab before, for Back */
+	int back_count;
 };
 
 static struct doc docs[DOCS], *d;
@@ -697,6 +700,18 @@ c_like(const char *path)
 	return 0;
 }
 
+static int read_wanted;		/* nxedit --read: every .md file opened is read, not edited */
+
+/* Whether a file opened is shown read: Markdown in the image's documentation (/usr/share/doc), or
+ * any Markdown when the editor was started with --read. */
+static int
+read_first(const char *path)
+{
+	size_t n = strlen(path);
+
+	return n > 3 && !strcasecmp(path + n - 3, ".md") && (read_wanted || !strncmp(path, "/usr/share/doc/", 15));
+}
+
 static void
 clear_doc(struct doc *e)
 {
@@ -706,6 +721,9 @@ clear_doc(struct doc *e)
 		drop_line(&e->lines[i]);
 	for (i = 0; i < e->block_count; i++)
 		free(e->blocks[i]);
+	for (i = 0; i < e->back_count; i++)
+		free(e->back[i]);
+	free(e->back);
 	forget(e->undo, &e->undo_count);
 	forget(e->redo, &e->redo_count);
 	free(e->lines);
@@ -794,6 +812,7 @@ load(const char *file)
 	d->named = 1;
 	d->final_newline = 1;
 	d->c_code = c_like(file);
+	d->reading = read_first(file);
 	if (fd < 0) {
 		if (why == ENOENT)
 			say("new file");
@@ -930,6 +949,9 @@ write_to(const char *to)
 }
 
 /* ---- drawing ---- */
+
+static void read_status(char *right);
+static void read_flush(void);
 
 static const char *const bar_names[] = { "File", "Edit", "Search", "View" };
 static int bar_x[5], bar_open = -1;
@@ -1203,6 +1225,8 @@ draw_status(void)
 	p = put(put_number(put(p, "    "), d->count), d->count == 1 ? " line" : " lines");
 	p = put(p, d->crlf ? "    Windows (CR LF)" : "    Unix (LF)");
 	put(p, overwrite ? "    OVR" : "    INS");
+	if (d->reading)
+		read_status(right);
 	tw = ui_width(&ui_var_widths, ui_var, right, -1);
 	ui_fill(window, 0, y, width, STATUS, UI_FACE);
 	ui_fill(window, 0, y, width, 1, UI_SHADOW);
@@ -1263,6 +1287,10 @@ flush(void)
 	if (title_changed != changed(d)) {
 		titled();
 		tabs_dirty = 1;
+	}
+	if (d->reading) {
+		read_flush();
+		return;
 	}
 	moved = d->top != drawn_top || d->sub != drawn_sub || d->left != drawn_left;
 	if (dirty_all) {
@@ -1776,7 +1804,7 @@ reload(void)
 {
 	static const char *const answers[] = { "Reload", "Cancel" };
 	char file[512];
-	int cy = d->cy;
+	int cy = d->cy, reading, read_y;
 
 	if (!d->named) {
 		say("this text has no file yet");
@@ -1785,11 +1813,15 @@ reload(void)
 	if (changed(d) && ui_ask("Editor", "Reading the file again loses the changes made here.", answers, 2, others) != 0)
 		return;
 	snprintf(file, sizeof file, "%s", d->path);
+	reading = d->reading, read_y = d->read_y;
 	clear_doc(d);
 	load(file);
 	d->cy = cy < d->count ? cy : d->count - 1;
+	d->reading = reading, d->read_y = read_y;
 	switch_to(current);
 }
+
+#include "nxedit_read.h"
 
 /* ---- commands ---- */
 
@@ -1797,7 +1829,7 @@ enum { C_NEW = 1, C_OPEN, C_RELOAD, C_SAVE, C_SAVE_AS, C_SAVE_ALL, C_CLOSE, C_CL
 	C_UNDO, C_REDO, C_CUT, C_COPY, C_PASTE, C_DELETE, C_ALL,
 	C_DUPLICATE, C_DELETE_LINE, C_LINE_UP, C_LINE_DOWN, C_SORT, C_TRIM, C_INDENT, C_OUTDENT, C_UPPER, C_LOWER, C_LF, C_CRLF,
 	C_OVERWRITE, C_FIND, C_NEXT, C_PREVIOUS, C_REPLACE, C_FIND_WORD, C_LINE, C_BRACE,
-	C_WRAP, C_NUMBERS, C_WHITESPACE, C_LIT, C_COLOUR, C_TAB2, C_TAB4, C_TAB8, C_NEXT_TAB, C_PREVIOUS_TAB,
+	C_WRAP, C_NUMBERS, C_WHITESPACE, C_LIT, C_COLOUR, C_TAB2, C_TAB4, C_TAB8, C_NEXT_TAB, C_PREVIOUS_TAB, C_READ, C_BACK,
 	C_RECENT = 100 };
 
 static struct ui_menu_item recent_items[RECENT];
@@ -1835,7 +1867,7 @@ static struct ui_menu_item tab_items[] = {
 	{ "2", -1, C_TAB2 }, { "4", -1, C_TAB4 }, { "8", -1, C_TAB8 },
 };
 static struct ui_menu_item view_items[] = {
-	{ "Word wrap", -1, C_WRAP }, { "Line numbers", -1, C_NUMBERS }, { "Spaces and tabs", -1, C_WHITESPACE },
+	{ "Read (Markdown)   Ctrl+R", -1, C_READ }, { "Word wrap", -1, C_WRAP, NULL, 0, UI_MENU_LINE }, { "Line numbers", -1, C_NUMBERS }, { "Spaces and tabs", -1, C_WHITESPACE },
 	{ "The cursor's line lit", -1, C_LIT }, { "Colours for C", -1, C_COLOUR }, { "Tab width", -1, 0, tab_items, 3 },
 	{ "Next tab   Ctrl+PgDn", -1, C_NEXT_TAB, NULL, 0, UI_MENU_LINE }, { "Previous tab   Ctrl+PgUp", -1, C_PREVIOUS_TAB },
 };
@@ -1843,8 +1875,12 @@ static struct ui_menu_item pointer_items[] = {
 	{ "Undo", -1, C_UNDO }, { "Redo", -1, C_REDO }, { "Cut", -1, C_CUT, NULL, 0, UI_MENU_LINE }, { "Copy", -1, C_COPY },
 	{ "Paste", -1, C_PASTE }, { "Delete", -1, C_DELETE }, { "Select all", -1, C_ALL, NULL, 0, UI_MENU_LINE },
 };
+/* the right button's while reading */
+static struct ui_menu_item read_items[] = {
+	{ "Back   Backspace", -1, C_BACK }, { "Edit the text   Ctrl+R", -1, C_READ, NULL, 0, UI_MENU_LINE },
+};
 static const struct { struct ui_menu_item *items; int count; } bar_menus[4] = {
-	{ file_items, 10 }, { edit_items, 11 }, { search_items, 7 }, { view_items, 8 },
+	{ file_items, 10 }, { edit_items, 11 }, { search_items, 7 }, { view_items, 9 },
 };
 
 static void
@@ -1888,13 +1924,15 @@ menu_flags(void)
 	flag(ending_items, 2, C_LF, UI_MENU_CHECK, !d->crlf);
 	flag(ending_items, 2, C_CRLF, UI_MENU_CHECK, d->crlf);
 	flag(edit_items, 11, C_OVERWRITE, UI_MENU_CHECK, overwrite);
-	flag(view_items, 8, C_WRAP, UI_MENU_CHECK, wrap);
-	flag(view_items, 8, C_NUMBERS, UI_MENU_CHECK, numbers);
-	flag(view_items, 8, C_WHITESPACE, UI_MENU_CHECK, whitespace);
-	flag(view_items, 8, C_LIT, UI_MENU_CHECK, line_lit);
-	flag(view_items, 8, C_COLOUR, UI_MENU_CHECK, colour);
-	flag(view_items, 8, C_NEXT_TAB, UI_MENU_GREY, doc_count < 2);
-	flag(view_items, 8, C_PREVIOUS_TAB, UI_MENU_GREY, doc_count < 2);
+	flag(view_items, 9, C_WRAP, UI_MENU_CHECK, wrap);
+	flag(view_items, 9, C_NUMBERS, UI_MENU_CHECK, numbers);
+	flag(view_items, 9, C_WHITESPACE, UI_MENU_CHECK, whitespace);
+	flag(view_items, 9, C_LIT, UI_MENU_CHECK, line_lit);
+	flag(view_items, 9, C_COLOUR, UI_MENU_CHECK, colour);
+	flag(view_items, 9, C_NEXT_TAB, UI_MENU_GREY, doc_count < 2);
+	flag(view_items, 9, C_PREVIOUS_TAB, UI_MENU_GREY, doc_count < 2);
+	flag(view_items, 9, C_READ, UI_MENU_CHECK, d->reading);
+	flag(read_items, 2, C_BACK, UI_MENU_GREY, !d->back_count);
 	flag(tab_items, 3, C_TAB2, UI_MENU_CHECK, tab_width == 2);
 	flag(tab_items, 3, C_TAB4, UI_MENU_CHECK, tab_width == 4);
 	flag(tab_items, 3, C_TAB8, UI_MENU_CHECK, tab_width == 8);
@@ -2190,6 +2228,12 @@ command(int id)
 	notice[0] = 0;
 	status_dirty = 1;
 	begin();
+	if (d->reading && id >= C_UNDO && id <= C_BRACE && id != C_COPY) {
+		/* (what works on the text, or shows a place of it, is done where it can be seen) */
+		rows_from_read();
+		d->reading = 0;
+		dirty_all = 1;
+	}
 	switch (id) {
 	case C_NEW:
 		new_doc();
@@ -2317,6 +2361,22 @@ command(int id)
 	case C_TAB2: setting("nxedit.tabs", &tab_width, 2); break;
 	case C_TAB4: setting("nxedit.tabs", &tab_width, 4); break;
 	case C_TAB8: setting("nxedit.tabs", &tab_width, 8); break;
+	case C_READ:
+		if (d->reading)
+			rows_from_read();
+		else
+			read_from_rows();
+		d->reading = !d->reading;
+		dirty_all = 1;
+		if (!d->reading) {
+			layout();
+			follow();
+			find_brace();
+		}
+		return;
+	case C_BACK:
+		read_back();
+		return;
 	case C_NEXT_TAB:
 	case C_PREVIOUS_TAB:
 		if (doc_count > 1)
@@ -2342,9 +2402,9 @@ command(int id)
 static int
 command_of(int letter, int shift)
 {
-	static const char letters[] = "nosqzyxcvafghdlbuw";
+	static const char letters[] = "nosqzyxcvafghdlbuwr";
 	static const int ids[] = { C_NEW, C_OPEN, C_SAVE, C_EXIT, C_UNDO, C_REDO, C_CUT, C_COPY, C_PASTE, C_ALL, C_FIND, C_LINE,
-		C_REPLACE, C_DUPLICATE, C_DELETE_LINE, C_BRACE, C_LOWER, C_CLOSE };
+		C_REPLACE, C_DUPLICATE, C_DELETE_LINE, C_BRACE, C_LOWER, C_CLOSE, C_READ };
 	const char *at = strchr(letters, letter);
 
 	if (!at)
@@ -2550,6 +2610,11 @@ key(const GR_EVENT_KEYSTROKE *k)
 		command(ch == MWKEY_UP ? C_LINE_UP : C_LINE_DOWN);
 		return;
 	}
+	if (d->reading) {
+		notice[0] = 0;
+		read_key(k);
+		return;
+	}
 	notice[0] = 0;
 	status_dirty = 1;
 	if (moving(ch)) {
@@ -2749,7 +2814,10 @@ main_event(GR_EVENT *event)
 		break;
 	case GR_EVENT_TYPE_BUTTON_DOWN:
 		if ((i = ui_wheel(event)) != 0) {
-			scroll_rows(3 * ui_wheel_sum(event));
+			if (d->reading)
+				read_scroll(2 * READ_LINE * ui_wheel_sum(event));
+			else
+				scroll_rows(3 * ui_wheel_sum(event));
 			break;
 		}
 		if (event->button.y < MENU_H) {
@@ -2770,6 +2838,20 @@ main_event(GR_EVENT *event)
 		}
 		if (event->button.y >= text_bottom)
 			break;
+		if (d->reading) {
+			notice[0] = 0;
+			status_dirty = 1;
+			if (event->button.x >= width - UI_SCROLL_W) {
+				ui_moves(window, EVENTS, 1);
+				dragging = 1;
+				read_to(ui_scroll_to(event->button.y, text_top, text_bottom - text_top, rp_height_guess(), read_view_h()));
+			} else if (event->button.changebuttons & GR_BUTTON_R) {
+				menu_flags();
+				ui_menu_open(read_items, 2, event->button.rootx, event->button.rooty, 0, 0);
+			} else if (event->button.changebuttons & GR_BUTTON_L)
+				read_link(event->button.x, event->button.y);
+			break;
+		}
 		if (event->button.changebuttons & GR_BUTTON_R) {
 			place(event->button.x, event->button.y, &x, &y);
 			if (!selection(&x0, &y0, &x1, &y1) || y < y0 || y > y1 || (y == y0 && x < x0) || (y == y1 && x > x1))
@@ -2796,7 +2878,9 @@ main_event(GR_EVENT *event)
 		break;
 	case GR_EVENT_TYPE_MOUSE_MOTION:
 		held_x = event->mouse.x, held_y = event->mouse.y;
-		if (dragging && (event->mouse.buttons & GR_BUTTON_L)) {
+		if (dragging && (event->mouse.buttons & GR_BUTTON_L) && d->reading) {
+			read_to(ui_scroll_to(event->mouse.y, text_top, text_bottom - text_top, rp_height_guess(), read_view_h()));
+		} else if (dragging && (event->mouse.buttons & GR_BUTTON_L)) {
 			d->top = ui_scroll_to(event->mouse.y, text_top, text_bottom - text_top, d->count, rows), d->sub = 0;
 		} else if (selecting && (event->mouse.buttons & GR_BUTTON_L)) {
 			drag();
@@ -2838,6 +2922,9 @@ main(int argc, char **argv)
 	tab_width = reg_int("nxedit.tabs", 4);
 	tab_width = tab_width < 1 || tab_width > 16 ? 4 : tab_width;
 	recent_read();
+	read_dump = getenv("NXEDIT_DUMP") != NULL;
+	if (argc > 1 && !strcmp(argv[1], "--read"))
+		read_wanted = 1, argc--, argv++;
 	for (i = 0, x = 2; i < 4; i++) {
 		bar_x[i] = x;
 		x += ui_width(&ui_var_widths, ui_var, bar_names[i], -1) + 16;
@@ -2862,6 +2949,12 @@ main(int argc, char **argv)
 	GrMapWindow(window);
 	GrSetFocus(window);
 	for (;;) {
+		if (read_pending() && !GrPeekEvent(&event)) {
+			/* the rest of a page being read is laid out while nothing waits */
+			read_step();
+			flush();
+			continue;
+		}
 		if (selecting && (held_y < text_top + MARGIN || held_y >= height - STATUS)) {
 			/* held above or below the text: it scrolls while the pointer stays */
 			GrGetNextEventTimeout(&event, 60);

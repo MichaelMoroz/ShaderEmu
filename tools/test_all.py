@@ -318,6 +318,14 @@ CASES = [
               r'nxweb: /usr/share/web-test\.html: 88 nodes, 1 rules, 586 x 636; 40 texts \(520 characters\), 1 boxes, 1 pictures']),
     # a short first page ("No such page"): its strips were never made, nothing was shown
     case('nxweb-short', 'desktop', X + 'NXWEB_TIME=1 nxweb /usr/share/web-nowhere.html & sleep 10; killall nxweb', has=[r'nxweb: the first picture \d+ ms after']),
+    # the editor's reader (docs/system/nanox.md, "The editor's reader"): a page of every kind of Markdown as tools/web_test.c
+    # --sections lays it out; a file of the documentation is read at once, another .md only with --read (or Ctrl+R)
+    case('nxedit-read', 'desktop', X + 'NXEDIT_DUMP=1 nxedit --read /usr/share/md-test.md & sleep 10; killall nxedit; '
+         'NXEDIT_DUMP=1 nxedit /usr/share/doc/shaderemu/README.md & sleep 10; killall nxedit; '
+         'cp /usr/share/md-test.md /tmp/t.md; NXEDIT_DUMP=1 nxedit /tmp/t.md & sleep 6; killall nxedit',
+         has=[r'^nxedit: read /usr/share/md-test\.md: 201 nodes, 526 x 1404; 89 texts \(855 characters, 4 links\), 59 boxes; 0 texts past the edge; sum e00ae1c0$',
+              r'^nxedit: read /usr/share/doc/shaderemu/README\.md: \d+ nodes, 526 x \d+; \d+ texts \(\d+ characters, \d+ links\), \d+ boxes; 0 texts past the edge; sum'],
+         never=[r'^nxedit: read /tmp/']),
     # the script languages (docs/system/scripts.md): QuickJS's pi example, MicroPython with its built-in modules
     case('qjs', 'programs', "qjs /examples/pi.js 50; qjs --std -e 'print([1, 2, 3].map(x => x * x).join(), std.getenv(\"HOME\"))'",
          has=[r'^3\.14159265358979323846264338327950288419716939937510\r?$', r'^1,4,9 /root']),
