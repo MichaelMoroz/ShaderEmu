@@ -24,7 +24,7 @@ JOBS = {
     **{f'start-{p}': f'{p} & sleep 3; kill $!' for p in ('nxterm', 'nxedit', 'nxfiles', 'nxcalc', 'nxsettings')},
     'coremark': 'coremark 0x0 0x0 0x66 300',
     'doomt': 'doom -1 -timedemo demo1',
-    'quake1': 'quake +timedemo demo1',
+    'quake1': ('quake +timedemo demo1', ' fps'),   # (it stays at its console after the timedemo: its fps line ends the job)
 }
 IDLE_GVM = {2}        # wait: core 0 had nothing to do (gpu_vm's frame log)
 IDLE_RV = {9}         # wfi/pause (RISC-V's)
@@ -55,9 +55,10 @@ def main():
         for t in a.ticks.split(','):
             for m in a.machine.split(','):
                 base = os.path.join(out, f'{job}.{m}.{t}')
-                line = f'cd /; {JOBS[job]}; echo UI""DONE'
+                cmd, until = JOBS[job] if isinstance(JOBS[job], tuple) else (JOBS[job], 'UIDONE')
+                line = f'cd /; {cmd}; echo UI""DONE'
                 c, cwd = R.harness(m, ['--load-state', Wd.snap_of(m), '--seconds', str(a.limit), '--ticks', t, '--input', line + '\\n',
-                                       '--until', 'UIDONE', '--frame-log', base + '.frames'], base + '.log')
+                                       '--until', until, '--frame-log', base + '.frames'], base + '.log')
                 t0 = time.time()
                 p = subprocess.run(c, cwd=cwd, capture_output=True, text=True, errors='replace')
                 open(base + '.err', 'w').write(p.stderr)
