@@ -6,6 +6,8 @@
 # Link options of its own: -Wl,-z,stack-size=N or -Wl,-elf2flt=-sN or GVM_STACK=N (the stack, default 65536);
 # GVM_KEEP_ELF=1 keeps the linked ELF as PROG.gdb. -v prints the commands.
 # SYSROOT (~/gpu_vm/sysroot), LLVM_BIN (~/gpu_vm/llvm-build/bin).
+# As gpuvm-linux-c++ (or -g++): C++ with libc++, libc++abi and libunwind (cxx.sh's, in the sysroot): exceptions and
+# run-time types, the unwinder's index (--eh-frame-hdr).
 set -u
 HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 UL="$(dirname "$HERE")"
@@ -15,6 +17,11 @@ TARGET=gpuvm-unknown-linux
 RES="$("$LLVM_BIN/clang" -print-resource-dir)"
 BUILTINS="$SYSROOT/lib/libclang_rt.builtins-gpuvm.a"
 CFLAGS0=(--target=$TARGET -nostdinc -isystem "$SYSROOT/include" -isystem "$RES/include" ${GVM_PIC:--fPIE})
+cxx=${GVM_CXX:-0}
+case "$(basename "$0")" in *c++|*g++) cxx=1 ;; esac
+# (C++: libc++'s headers before the C library's, as clang orders them; a C file given to it is still C)
+[ $cxx = 1 ] && CFLAGS0=(--target=$TARGET -nostdinc -isystem "$SYSROOT/include/c++/v1" -isystem "$SYSROOT/include"
+                         -isystem "$RES/include" ${GVM_PIC:--fPIE})
 
 mode=link out= stack="${GVM_STACK:-65536}" verbose=0 startfiles=1 stdlibs=1
 compile=()      # arguments for each compilation
@@ -88,7 +95,8 @@ if [ $mode != link ]; then
         esac
     done
     o=(); [ -n "$out" ] && o=(-o "$out")
-    run "$LLVM_BIN/clang" "${CFLAGS0[@]}" "${compile[@]+"${compile[@]}"}" "${srcs[@]+"${srcs[@]}"}" "${o[@]+"${o[@]}"}"
+    run "$LLVM_BIN/$( [ $cxx = 1 ] && echo clang++ || echo clang )" "${CFLAGS0[@]}" "${compile[@]+"${compile[@]}"}" \
+        "${srcs[@]+"${srcs[@]}"}" "${o[@]+"${o[@]}"}"
     exit $?
 fi
 
@@ -103,7 +111,8 @@ for i in "${inputs[@]+"${inputs[@]}"}"; do
         rest=${i#src:}; lang=${rest%%:*}; f=${rest#*:}
         n=$((n + 1)); o="$tmp/$n-$(basename "${f%.*}").o"
         x=(); [ -n "$lang" ] && x=(-x "$lang")
-        run "$LLVM_BIN/clang" "${CFLAGS0[@]}" "${compile[@]+"${compile[@]}"}" "${x[@]+"${x[@]}"}" -c "$f" -o "$o" || exit 1
+        run "$LLVM_BIN/$( [ $cxx = 1 ] && echo clang++ || echo clang )" "${CFLAGS0[@]}" "${compile[@]+"${compile[@]}"}" \
+            "${x[@]+"${x[@]}"}" -c "$f" -o "$o" || exit 1
         objs+=("$o") ;;
     *) objs+=("$i") ;;
     esac
@@ -118,6 +127,7 @@ if [ -n "${GVM_ORDER_FILE:-}" ] && [ -f "$GVM_ORDER_FILE" ]; then
 fi
 libs=()
 [ $stdlibs = 1 ] && libs=(--start-group -lc "$BUILTINS" --end-group)
+[ $stdlibs = 1 ] && [ $cxx = 1 ] && libs=(--eh-frame-hdr --start-group -lc++ -lc++abi -lunwind -lc "$BUILTINS" --end-group)
 run "$LLVM_BIN/ld.lld" -static -q -T "$UL/flat.ld" -o "$tmp/prog.elf" "${pre[@]+"${pre[@]}"}" "${objs[@]+"${objs[@]}"}" \
     -L"$SYSROOT/lib" "${ldflags[@]+"${ldflags[@]}"}" "${libs[@]+"${libs[@]}"}" "${post[@]+"${post[@]}"}" || exit 1
 v=(); [ $verbose = 1 ] && v=(-v)

@@ -65,7 +65,7 @@ index b32f98b..847f06c 100644
  
  #include "../safeguards.h"
  
-@@ -86,10 +87,73 @@ void Blitter_8bppBase::CopyImageToBuffer(const void *video, void *dst, int width
+@@ -86,10 +87,77 @@ void Blitter_8bppBase::CopyImageToBuffer(const void *video, void *dst, int width
  	}
  }
  
@@ -73,10 +73,14 @@ index b32f98b..847f06c 100644
 +/** The machine's copy (CSRs 0xb0 to 0xb3, docs/machine/gpu.md): the core stops until it is made, a pass a 256 KB. */
 +static void MachineCopy(void *dst, const void *src, uint32_t bytes)
 +{
++#ifdef __gpuvm__
++	__builtin_memmove(dst, src, bytes);	/* (gpu_vm: a copy this long is one operation of the commit, gpu_vm/llvm/ASM.md) */
++#else
 +	asm volatile("csrw 0x0b1, %0" :: "r"(src));
 +	asm volatile("csrw 0x0b2, %0" :: "r"(dst));
 +	asm volatile("csrw 0x0b3, %0" :: "r"(bytes));
 +	asm volatile("csrw 0x0b0, %0" :: "r"(1) : "memory");
++#endif
 +}
 +
 +/**
@@ -2066,3 +2070,28 @@ index 3d07ff3..b8911ba 100644
  static const uint ZOOM_BASE_SHIFT = to_underlying(ZoomLevel::Normal);
  static uint const ZOOM_BASE = 1U << ZOOM_BASE_SHIFT;
  
+diff --git a/src/music.cpp b/src/music.cpp
+index ee33585..03a3fb3 100644
+--- a/src/music.cpp
++++ b/src/music.cpp
+@@ -112,6 +112,9 @@ template <>
+ }
+ 
+ template class BaseMedia<MusicSet>;
++/* (and the content check's search of the sets: clang inlines it into HasSet and keeps no copy for
++ * network/core/tcp_content.cpp, which GCC's implicit instantiation gave) */
++template std::optional<std::string_view> TryGetBaseSetFile(const ContentInfo &, bool, std::span<const std::unique_ptr<MusicSet>>);
+ 
+ bool MusicSet::FillSetDetails(const IniFile &ini, const std::string &path, const std::string &full_filename)
+ {
+diff --git a/src/sound.cpp b/src/sound.cpp
+index 31a7ede..a28afc9 100644
+--- a/src/sound.cpp
++++ b/src/sound.cpp
+@@ -302,3 +302,6 @@ template <>
+ }
+ 
+ template class BaseMedia<SoundsSet>;
++/* (and the content check's search of the sets: clang inlines it into HasSet and keeps no copy for
++ * network/core/tcp_content.cpp, which GCC's implicit instantiation gave) */
++template std::optional<std::string_view> TryGetBaseSetFile(const ContentInfo &, bool, std::span<const std::unique_ptr<SoundsSet>>);

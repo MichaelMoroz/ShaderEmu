@@ -102,8 +102,19 @@ bool GPUVMHoistConstants::runOnMachineFunction(MachineFunction &MF) {
   MachineBlockFrequencyInfo &MBFI =
       getAnalysis<MachineBlockFrequencyInfoWrapperPass>().getMBFI();
   MachineBasicBlock &Entry = MF.front();
+  // Where the constants go: the entry's end, or, when the entry ends in a
+  // call that may throw (an invoke: a landing pad is a successor), before that
+  // call's EH_LABEL, which the exception's path does not pass after
+  MachineBasicBlock::iterator At = Entry.getFirstTerminator();
+  if (any_of(Entry.successors(),
+             [](const MachineBasicBlock *S) { return S->isEHPad(); }))
+    for (MachineInstr &MI : Entry)
+      if (MI.isEHLabel()) {
+        At = MI;
+        break;
+      }
   DenseMap<int64_t, Register> InEntry;
-  for (MachineInstr &MI : Entry)
+  for (MachineInstr &MI : make_range(Entry.begin(), At))
     if (isLi(MI))
       InEntry.try_emplace(MI.getOperand(2).getImm(),
                           MI.getOperand(0).getReg());
@@ -141,7 +152,7 @@ bool GPUVMHoistConstants::runOnMachineFunction(MachineFunction &MF) {
           MBFI.getBlockFreqRelativeToEntryBlock(&MBB) < HoistCold)
         continue;
       MI.removeFromParent();
-      Entry.insert(Entry.getFirstTerminator(), &MI);
+      Entry.insert(At, &MI);
       MRI.clearKillFlags(R);
       InEntry[Imm] = R;
       ++Hoisted;

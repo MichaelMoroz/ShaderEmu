@@ -25,6 +25,7 @@
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/TargetLoweringObjectFileImpl.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
+#include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
@@ -40,6 +41,26 @@ static cl::opt<bool>
 namespace llvm {
 ScheduleDAGInstrs *createGPUVMPostMachineScheduler(MachineSchedContext *C);
 }
+
+namespace {
+// C++'s exception tables with no absolute word in them, whatever the
+// relocation model: the personality routine, the LSDA and the types a catch
+// names are reached pc-relative (the personality and the types through a
+// DW.ref word in data, which a flat program's loader relocates as any data
+// word). An absolute word in .eh_frame is not one elf2flt can find: ld.lld
+// rewrites that section, and the relocations -q keeps no longer match it.
+class GPUVMTargetObjectFile : public TargetLoweringObjectFileELF {
+public:
+  void Initialize(MCContext &Ctx, const TargetMachine &TM) override {
+    TargetLoweringObjectFileELF::Initialize(Ctx, TM);
+    PersonalityEncoding = dwarf::DW_EH_PE_indirect | dwarf::DW_EH_PE_pcrel |
+                          dwarf::DW_EH_PE_sdata4;
+    LSDAEncoding = dwarf::DW_EH_PE_pcrel | dwarf::DW_EH_PE_sdata4;
+    TTypeEncoding = dwarf::DW_EH_PE_indirect | dwarf::DW_EH_PE_pcrel |
+                    dwarf::DW_EH_PE_sdata4;
+  }
+};
+} // namespace
 
 extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void LLVMInitializeGPUVMTarget() {
   RegisterTargetMachine<GPUVMTargetMachine> X(getTheGPUVMTarget());
@@ -58,7 +79,7 @@ GPUVMTargetMachine::GPUVMTargetMachine(const Target &T, const Triple &TT,
                                RM.value_or(Reloc::Static),
                                getEffectiveCodeModel(CM, CodeModel::Small),
                                OL),
-      TLOF(std::make_unique<TargetLoweringObjectFileELF>()),
+      TLOF(std::make_unique<GPUVMTargetObjectFile>()),
       Subtarget(TT, CPU, FS, *this) {
   initAsmInfo();
 }

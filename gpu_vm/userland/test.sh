@@ -4,7 +4,7 @@
 # Builds test/*.c with gpuvm-linux-cc into $T, an initramfs with them in /bin and test/init.c as /init, a kernel in a
 # build folder of its own ($KOUT: the first run configures and builds it whole, later ones relink), boots it on
 # gvm_cpu and looks for init's summary: every program passed. The console's output is $T/boot.log.
-# Needs build.sh's sysroot (musl, builtins). T (~/gpu_vm/userland-test), KOUT (~/gpu_vm/linux-build-ut), GVM_CPU (the
+# Needs build.sh's sysroot (musl, builtins) and cxx.sh's C++ runtime. T (~/gpu_vm/userland-test), KOUT (~/gpu_vm/linux-build-ut), GVM_CPU (the
 # tree's gvm_cpu, made first).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -16,10 +16,13 @@ if [ "${1:-}" = -O ]; then OPT=-O$2; shift 2; fi
 CC="$HERE/bin/gpuvm-linux-cc"
 mkdir -p "$T"
 
-progs="hello libc files proc signals timeenv threads mathf init"
+progs="hello libc files proc signals timeenv threads mathf cxx_eh init"
 for p in $progs; do
     out=$p; [ $p = mathf ] && out=math
     extra=; [ $p = mathf ] && extra=-lm; [ $p = threads ] && extra=-pthread
+    if [ $p = cxx_eh ]; then   # C++: exceptions through every kind of frame (libunwind, libc++abi, libc++: cxx.sh)
+        "$HERE/bin/gpuvm-linux-c++" $OPT -Wall "$HERE/test/$p.cpp" -o "$T/$out"; continue
+    fi
     "$CC" $OPT -Wall -Wno-unused-variable -Wno-format-truncation $extra "$HERE/test/$p.c" -o "$T/$out"
 done
 

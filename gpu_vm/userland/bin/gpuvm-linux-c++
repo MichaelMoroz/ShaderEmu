@@ -1,0 +1,3 @@
+#!/bin/sh
+# C++ as gpuvm-linux-cc (its C++ mode: libc++, libc++abi, libunwind)
+GVM_CXX=1 exec "$(dirname "$(readlink -f "$0")")/gpuvm-linux-cc" "$@"

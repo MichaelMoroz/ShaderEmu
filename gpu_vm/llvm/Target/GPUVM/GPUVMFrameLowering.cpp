@@ -21,6 +21,13 @@
 // a bundle: one long immediate a bundle made each its own (SV_PointContents'
 // 18 saves at 4148..4220(sp), a bundle each).
 //
+// Call frame information (for C++'s exceptions; not for -g alone): the CFA is sp at
+// entry; after each move of sp its offset, after the stores where each
+// callee-saved register is, and with fp the CFA is fp (fp is the caller's
+// sp). The epilogue says nothing: only a call is unwound through, and no call
+// follows an epilogue's first instruction in its block; a block laid out
+// after an epilogue is still inside the frame.
+//
 //===----------------------------------------------------------------------===//
 
 #include "GPUVMFrameLowering.h"
@@ -28,6 +35,7 @@
 #include "GPUVMMachineFunctionInfo.h"
 #include "GPUVMRegisterInfo.h"
 #include "GPUVMSubtarget.h"
+#include "llvm/CodeGen/CFIInstBuilder.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
@@ -154,21 +162,38 @@ void GPUVMFrameLowering::emitPrologue(MachineFunction &MF,
     return;
 
   uint64_t First = splitSize(MF, StackSize);
+  // Only for a function that is unwound through (C++'s, or uwtable): a CFI
+  // instruction is a scheduling boundary, and -g must not change the code.
+  bool CFI = MF.getFunction().needsUnwindTableEntry();
   adjustReg(MBB, MBBI, DL, TII, GPUVM::R2, GPUVM::R2,
             -static_cast<int64_t>(First ? First : StackSize),
             MachineInstr::FrameSetup);
+  CFIInstBuilder CFIBuilder(MBB, MBBI, MachineInstr::FrameSetup);
+  if (CFI && (First ? First : StackSize))
+    CFIBuilder.buildDefCFAOffset(First ? First : StackSize);
 
   // Past the callee-saved registers' stores.
   while (MBBI != MBB.end() && MBBI->getFlag(MachineInstr::FrameSetup))
     ++MBBI;
-  if (First)
+  if (CFI) {
+    CFIBuilder.setInsertPoint(MBBI);
+    for (const CalleeSavedInfo &CS : MFI.getCalleeSavedInfo())
+      CFIBuilder.buildOffset(CS.getReg(), MFI.getObjectOffset(CS.getFrameIdx()));
+  }
+  if (First) {
     adjustReg(MBB, MBBI, DL, TII, GPUVM::R2, GPUVM::R2,
               -static_cast<int64_t>(StackSize - First),
               MachineInstr::FrameSetup);
+    if (CFI && !hasFP(MF))
+      CFIBuilder.buildDefCFAOffset(StackSize);
+  }
 
-  if (hasFP(MF))
+  if (hasFP(MF)) {
     adjustReg(MBB, MBBI, DL, TII, GPUVM::R32, GPUVM::R2, StackSize,
               MachineInstr::FrameSetup);
+    if (CFI)
+      CFIBuilder.buildDefCFA(GPUVM::R32, 0);
+  }
 
   if (RI->hasStackRealignment(MF)) {
     Align MaxAlign = MFI.getMaxAlign();

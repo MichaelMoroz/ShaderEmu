@@ -20,6 +20,7 @@
 #include "MCTargetDesc/GPUVMInstPrinter.h"
 #include "TargetInfo/GPUVMTargetInfo.h"
 #include "llvm/CodeGen/AsmPrinter.h"
+#include "llvm/CodeGen/AsmPrinterHandler.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineOperand.h"
 #include "llvm/IR/Mangler.h"
@@ -257,11 +258,36 @@ static GPUVMTargetStreamer *targetStreamer(MCStreamer &S) {
   return static_cast<GPUVMTargetStreamer *>(S.getTargetStreamer());
 }
 
+namespace {
+// What C++'s unwinding reads closes the open bundle first: a call site's
+// labels (EH_LABEL), so that a call's range starts at its bundle (a soft label
+// lands after the bundle that is open, and the call would join that bundle),
+// and a frame's CFI, so that a rule's place is the end of the bundle of the op
+// it describes and not of a later one (a call packed with a prologue's store
+// would be unwound with the rule before it). Code without unwind tables has
+// neither.
+class GPUVMUnwindBundles : public AsmPrinterHandler {
+  MCStreamer &S;
+
+public:
+  explicit GPUVMUnwindBundles(MCStreamer &S) : S(S) {}
+  void endModule() override {}
+  void beginFunction(const MachineFunction *) override {}
+  void endFunction(const MachineFunction *) override {}
+  void beginInstruction(const MachineInstr *MI) override {
+    if (MI->isEHLabel() || MI->isCFIInstruction())
+      if (GPUVMTargetStreamer *TS = targetStreamer(S))
+        TS->emitBlockStart();
+  }
+};
+} // namespace
+
 // Labels of the code generator do not close bundles (debug info's would
 // change the code); a block that is branched to closes the open one.
 void GPUVMAsmPrinter::emitStartOfAsmFile(Module &M) {
   if (GPUVMTargetStreamer *TS = targetStreamer(*OutStreamer))
     TS->setSoftLabels(true);
+  addAsmPrinterHandler(std::make_unique<GPUVMUnwindBundles>(*OutStreamer));
 }
 
 void GPUVMAsmPrinter::emitFunctionEntryLabel() {

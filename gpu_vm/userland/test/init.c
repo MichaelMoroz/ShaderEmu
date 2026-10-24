@@ -48,6 +48,7 @@ int main(int argc, char **argv)
 		{ "/bin/timeenv", "one", "two words", "", 0 },
 		{ "/bin/threads", 0 },
 		{ "/bin/math", 0 },
+		{ "/bin/cxx_eh", 0 },
 	};
 	int n = sizeof tests / sizeof *tests, passed = 0;
 	mount("proc", "/proc", "proc", 0, 0);

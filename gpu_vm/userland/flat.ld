@@ -20,7 +20,18 @@ SECTIONS
 	.rodata : {
 		*(.rodata .rodata.*)
 		*(.srodata .srodata.*)
+		*(.gcc_except_table .gcc_except_table.*)
 	}
+	/* C++'s unwind tables (libunwind built bare-metal finds them by these symbols; -Wl,--eh-frame-hdr adds the
+	   index): a program of C has none (clang makes no unwind tables for C here), so nothing is there */
+	.eh_frame : {
+		__eh_frame_start = .;
+		KEEP(*(.eh_frame))
+		__eh_frame_end = .;
+	}
+	.eh_frame_hdr : { KEEP(*(.eh_frame_hdr)) }
+	__eh_frame_hdr_start = SIZEOF(.eh_frame_hdr) > 0 ? ADDR(.eh_frame_hdr) : 0;
+	__eh_frame_hdr_end = SIZEOF(.eh_frame_hdr) > 0 ? . : 0;
 	.tdata : { *(.tdata .tdata.*) }
 	.tbss : { *(.tbss .tbss.*) }
 
@@ -60,5 +71,5 @@ SECTIONS
 	_end = .;
 	end = .;
 
-	/DISCARD/ : { *(.note.GNU-stack) *(.comment) *(.eh_frame) *(.eh_frame_hdr) }
+	/DISCARD/ : { *(.note.GNU-stack) *(.comment) }
 }

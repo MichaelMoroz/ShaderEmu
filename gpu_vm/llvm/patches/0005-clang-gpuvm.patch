@@ -219,10 +219,10 @@ index 000000000..fba191355
 +}
 diff --git a/clang/lib/Basic/Targets/GPUVM.h b/clang/lib/Basic/Targets/GPUVM.h
 new file mode 100644
-index 000000000..713845a91
+index 000000000..2ed8c1028
 --- /dev/null
 +++ b/clang/lib/Basic/Targets/GPUVM.h
-@@ -0,0 +1,77 @@
+@@ -0,0 +1,83 @@
 +//===--- GPUVM.h - Declare gpu_vm target feature support --------*- C++ -*-===//
 +//
 +// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -287,6 +287,12 @@ index 000000000..713845a91
 +  }
 +
 +  std::string_view getClobbers() const override { return ""; }
++
++  // C++'s landing pads: the exception in a0 (r5), the selector in a1 (r6), as
++  // the backend's getExceptionPointerRegister (__builtin_eh_return_data_regno)
++  int getEHDataRegisterNumber(unsigned RegNo) const override {
++    return RegNo < 2 ? 5 + RegNo : -1;
++  }
 +
 +  bool hasBitIntType() const override { return true; }
 +

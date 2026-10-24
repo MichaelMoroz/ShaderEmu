@@ -98,6 +98,17 @@ public:
   Register getRegisterByName(const char *RegName, LLT VT,
                              const MachineFunction &MF) const override;
 
+  // A landing pad finds the exception in a0 and its selector in a1 (what the
+  // unwinder's personality sets: libunwind's Registers_gpuvm).
+  Register
+  getExceptionPointerRegister(const Constant *PersonalityFn) const override {
+    return GPUVM::R5;
+  }
+  Register
+  getExceptionSelectorRegister(const Constant *PersonalityFn) const override {
+    return GPUVM::R6;
+  }
+
   SDValue LowerFormalArguments(SDValue Chain, CallingConv::ID CallConv,
                                bool IsVarArg,
                                const SmallVectorImpl<ISD::InputArg> &Ins,

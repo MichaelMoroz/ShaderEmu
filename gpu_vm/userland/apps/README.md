@@ -102,6 +102,7 @@ the tolerance named (`gvmcmp`, `NEAR` in `test_all.py`); an exact sum where the 
 | Quake | yes (-lmfloat) | quake-light, particles PASS; walk, exit fail on gvm_cpu's pace (4x the card's: a key typed on seeing "track 30:" lands some 40 frames late) | light, particles, walk, exit PASS | as RISC-V; particles: a float sum, gvm_cpu's and the card's own (the same to frame 200, apart from 206: the card's special functions) |
 | Quake III | yes | workers, inline, bots, bots-serial, server PASS | server PASS; workers/inline: 237 of 237 lines the same, fewer than 500 (load time) | as RISC-V where QUAKE3_ENTER fixes the entry (server: QUAKE3_ENTER=1000 added; float sums, gvm_cpu's 9b8ecbe9, the card's 4fab5e9b in two runs: apart from the first sum, taken to be the special functions, not proven) |
 | Half-Life: Uplink | yes (-lmfloat, 1 MB stack) | plays through the fight, HL_ROTATION=check 0 wrong; GVM_RACES 0 or 7 undone (light styles) | not run | HLGL_PICSUM 656aa416 (GPU addresses moved: not RISC-V's) |
+| OpenTTD | yes (`openttd.sh`: libc++, exact math) | openttd (sums 9d6fc0a0 66880c87, host_sum.sh's), openttd-scroll and openttd-scroll-serial PASS (199 pictures checked, 0 pixels differ) | not run | as RISC-V (the game state the build computer's) |
 | terminal: nano, mg, htop, dialog, sl, file | yes | PASS | nano PASS | as RISC-V (TERM=linux) |
 | mc, mcedit | yes | PASS (term-mc: a command line in the subshell; term-mcedit) | PASS | as RISC-V |
 | ports: pcre, lockfile, socat, thttpd, curl, dropbear, sftp, at | yes | PASS (dropbear: uname -m gpuvm) | pcre PASS | as RISC-V |
@@ -122,8 +123,6 @@ the tolerance named (`gvmcmp`, `NEAR` in `test_all.py`); an exact sum where the 
 
 ## Not ported
 
-- **OpenTTD**: its C++ needs exceptions and the whole of libstdc++ (the RISC-V build makes its own GCC). gpu_vm's
-  compiler emits no unwind information and there is no C++ runtime library: it waits for both.
 - **The HLSL compiler** runs its IR instead of making code (`programs/hlsl/hlsl_interp.c`, `HLSL_INTERP`, on for
   `__gpuvm__`): each operation as the RISC-V code makes it, a step whole (no lanes). `hlsl.sh` builds libhlsl,
   `hlslc`, `hlslview` and `hlsl_bench`; the fractal's sum is the host's (`3614e8bb`).

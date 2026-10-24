@@ -34,7 +34,30 @@ The driver: `-c`/`-S`/`-E` compile with musl's headers (`-nostdinc -isystem $SYS
 otherwise sources are compiled first, then `ld.lld -static -q -T flat.ld crt1.o crti.o ... -lc builtins crtn.o`, then
 `elf2flt`. Its own options: `-Wl,-z,stack-size=N`, `-Wl,-elf2flt=-sN` or `GVM_STACK=N` (default 65536), `GVM_KEEP_ELF=1`
 (the ELF beside as `PROG.gdb`, for llvm-objdump), `-v`. `-shared` is an error; `-static`, `-pie`, `-s` are ignored.
-`-print-libgcc-file-name` gives the builtins. `SYSROOT`, `LLVM_BIN` override the paths. No C++ runtime.
+`-print-libgcc-file-name` gives the builtins. `SYSROOT`, `LLVM_BIN` override the paths. C++: `gpuvm-linux-c++` ("C++" below).
+
+## C++ (24 October 2026)
+
+    bash gpu_vm/userland/cxx.sh        # LLVM's libunwind, libc++abi and libc++ into the sysroot (a few minutes)
+    gpuvm-linux-c++ -O2 prog.cpp -o prog
+
+`gpuvm-linux-c++` is `gpuvm-linux-cc` in C++ mode: clang++ with libc++'s headers first, and the link adds
+`--eh-frame-hdr` and `-lc++ -lc++abi -lunwind`. Exceptions, run-time types and the whole library work: `test/cxx_eh.cpp`
+throws through every kind of frame (small, over 2 KB, with fp, realigned) and is one of `test.sh`'s programs.
+
+- **libunwind** is patched for gpu_vm (`gpu_vm/llvm/patches/libunwind_gpuvm.py`): `Registers_gpuvm` (r1-r63 in their
+  words, the pc in r0's), the context's save and restore by `sq`/`lq`. It is built bare-metal: a flat program has no
+  program headers, so it finds the tables by `flat.ld`'s `__eh_frame_start`/`__eh_frame_end` and the index.
+- **The tables have no absolute word.** The personality and the types go through `DW.ref` words in data, and the LSDA
+  and the FDEs are pc-relative. ld.lld rewrites `.eh_frame`, so the relocations `-q` keeps cannot be relocated by elf2flt.
+- **The compiler:**
+  - CFI is made only for a function that is unwound through (C++'s, or uwtable): C and `-g` code are unchanged.
+  - The printer closes the open bundle before an EH label and before CFI, so a call site's range starts at its call's
+    bundle and a rule's place is its op's bundle.
+  - A landing pad finds the exception in a0 and the selector in a1 (`__builtin_eh_return_data_regno`: patch 0005).
+  - GPUVMHoistConstants puts an entry constant before an invoke, not after it.
+  - ld.lld points a call of an undefined weak function at its own bundle (patch 0003).
+- **musl** has no `__cxa_thread_atexit_impl`: libc++abi's own `thread_local` destructors are used.
 
 ## The flat format (what binfmt_flat takes)
 
@@ -164,7 +187,8 @@ siglongjmp out of handlers, sigsuspend; `timeenv`: argv and the environment, clo
 strftime, mktime, 2100, uname; `threads`: create and join, a contended mutex, a condition variable, `__thread`, once,
 keys, detached; `math`: libm in double and float), puts them in an initramfs's `/bin` with `test/init.c` as `/init`
 (`INIT` and `INITRAMFS_EXTRA` of `gpu_vm/linux/build.sh`), builds a kernel in `~/gpu_vm/linux-build-ut` (whole the
-first time, a relink after), boots it on gvm_cpu and looks for init's line `gvm-userland-test: 8 passed, 0 failed`.
+first time, a relink after), boots it on gvm_cpu and looks for init's line `gvm-userland-test: 9 passed, 0 failed`
+(`cxx_eh`, C++'s exceptions, is the ninth).
 
 `GVM_CPU=PATH` runs another gvm_cpu (the tree's is made and used otherwise). 22 October 2026: all 8 pass at -O2 and
 -O0 (gvm_cpu of commit 6aad9c7: the reference from 44e96df on keeps a b/h/w access in its word, and the compiler and
@@ -322,7 +346,7 @@ the session 28.8 s, 82.9 M bundles. The ROM disk `gvmrom` (a block device) boots
 
 ## Gaps (the toolchain)
 
-- C only: no C++ runtime (libc++, libunwind; the compiler emits no CFI).
+- C++ is static libc++ (`cxx.sh`); no libstdc++.
 - No shared libraries or dlopen; TLS local-exec, alignment at most 64.
 - No fork: programs must use vfork/posix_spawn (busybox: its NOMMU configuration).
 - memcpy/memset are musl's C: not yet the commit's copy and fill operations (the kernel's string.S uses them from

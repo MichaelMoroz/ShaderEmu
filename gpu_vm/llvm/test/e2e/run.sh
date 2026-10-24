@@ -39,4 +39,14 @@ set +e
 set -e
 n=$("$BIN/llvm-nm" "$OUT/thunk.elf" | grep -c __gpuvm_thunk_)
 [ $r = 7 ] && [ "$n" = 2 ] && echo "thunk: 2 thunks, gvm_cpu exits 7" || { echo "thunk: exit $r, $n thunks; want 7, 2"; fail=1; }
+# a call of an undefined weak function: linked (to its own bundle), never made
+"$BIN/llvm-mc" -triple=gpuvm -filetype=obj -o "$OUT/weak.o" "$HERE/weak.s"
+if "$BIN/ld.lld" -Ttext=0x02000000 -o "$OUT/weak.elf" "$OUT/weak.o"; then
+    set +e
+    "$CPU" --ram 8 --max-bundles 1000 "$OUT/weak.elf"; r=$?
+    set -e
+    [ $r = 5 ] && echo "weak: linked, gvm_cpu exits 5" || { echo "weak: exit $r, want 5"; fail=1; }
+else
+    echo "weak: ld.lld refused the call"; fail=1
+fi
 [ $fail = 0 ] && echo PASS || { echo FAIL; exit 1; }

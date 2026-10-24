@@ -216,7 +216,7 @@ index 05c0f3f1c..134f88a61 100644
    case Triple::loongarch64:
      return EM_LOONGARCH;
 diff --git a/lld/ELF/InputSection.cpp b/lld/ELF/InputSection.cpp
-index c78800787..8e5795af0 100644
+index c78800787..132d653b2 100644
 --- a/lld/ELF/InputSection.cpp
 +++ b/lld/ELF/InputSection.cpp
 @@ -778,6 +778,7 @@ static int64_t getTlsTpOffset(Ctx &ctx, const Symbol &s) {
@@ -227,6 +227,18 @@ index c78800787..8e5795af0 100644
    case EM_LOONGARCH:
    case EM_RISCV:
      // For TLSDESC=>IE, R_RISCV_TLSDESC_{LOAD_LO12,ADD_LO12_I,CALL} reference
+@@ -942,6 +943,11 @@ uint64_t InputSectionBase::getRelocTargetVA(Ctx &ctx, const Relocation &r,
+         dest = p;
+       else if (ctx.arg.emachine == EM_RISCV)
+         dest = getRISCVUndefinedRelativeWeakVA(r.type, p) + a;
++      else if (ctx.arg.emachine == EM_GVM)
++        // gpu_vm: a call of an undefined weak function (one the code tests
++        // first) to its own bundle (a branch counts from its bundle's start),
++        // never far from it
++        dest = p & ~uint64_t(15);
+       else
+         dest = r.sym->getVA(ctx, a);
+     } else {
 diff --git a/lld/ELF/ScriptParser.cpp b/lld/ELF/ScriptParser.cpp
 index 0c54fde48..25daa6835 100644
 --- a/lld/ELF/ScriptParser.cpp
