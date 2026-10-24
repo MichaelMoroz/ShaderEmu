@@ -1,0 +1,81 @@
+--- a/mm/page_alloc.c	2026-10-24 03:52:19.775340249 +0200
++++ b/mm/page_alloc.c	2026-10-24 03:52:19.796035047 +0200
+@@ -1335,6 +1335,9 @@
+ 				bad++;
+ 				continue;
+ 			}
++#ifdef CONFIG_GPUVM
++			if ((page + i)->flags & PAGE_FLAGS_CHECK_AT_PREP)
++#endif
+ 			(page + i)->flags &= ~PAGE_FLAGS_CHECK_AT_PREP;
+ 		}
+ 	}
+@@ -1628,6 +1631,10 @@
+ 
+ 			/* Avoid false-positive PageTail() */
+ 			INIT_LIST_HEAD(&page->lru);
++#ifdef CONFIG_GPUVM
++			/* (memmap_init_range made it free, count 0: reserved is 1, as __init_single_page gives) */
++			init_page_count(page);
++#endif
+ 
+ 			/*
+ 			 * no need for atomic set_bit because the struct
+@@ -1675,6 +1682,15 @@
+ 	 * refcount of all involved pages to 0.
+ 	 */
+ 	prefetchw(p);
++#ifdef CONFIG_GPUVM
++	/* (memmap_init_range made the pages free, count 0 and not reserved: stores only where that changed) */
++	for (loop = 0; loop < nr_pages; loop++, p++) {
++		if (unlikely(PageReserved(p)))
++			__ClearPageReserved(p);
++		if (unlikely(page_ref_count(p)))
++			set_page_count(p, 0);
++	}
++#else
+ 	for (loop = 0; loop < (nr_pages - 1); loop++, p++) {
+ 		prefetchw(p + 1);
+ 		__ClearPageReserved(p);
+@@ -1682,6 +1698,7 @@
+ 	}
+ 	__ClearPageReserved(p);
+ 	set_page_count(p, 0);
++#endif
+ 
+ 	atomic_long_add(nr_pages, &page_zone(page)->managed_pages);
+ 
+@@ -6551,6 +6568,33 @@
+ 	}
+ #endif
+ 
++#if defined(CONFIG_GPUVM) && defined(CONFIG_FLATMEM) && !defined(CONFIG_DEFERRED_STRUCT_PAGE_INIT)
++	if (context == MEMINIT_EARLY && !mirrored_kernelcore && start_pfn < end_pfn) {
++		struct page *first = pfn_to_page(start_pfn);
++		unsigned long n = 1, total = end_pfn - start_pfn;
++
++		/*
++		 * Every page of a flat zone has the same struct page at first (its flags are the zone's and the node's),
++		 * and it is made free here, count 0, so that __free_pages_core stores nothing: reserve_bootmem_region
++		 * gives reserved pages their count of 1. lru is left 0, which is no PageTail.
++		 */
++		__init_single_page(first, start_pfn, zone, nid);
++		set_page_count(first, 0);
++		first->lru.next = first->lru.prev = NULL;
++		while (n < total) {
++			unsigned long k = min(n, total - n);
++
++			memcpy(first + n, first, k * sizeof(struct page));
++			n += k;
++		}
++		for (pfn = ALIGN(start_pfn, pageblock_nr_pages); pfn < end_pfn; pfn += pageblock_nr_pages) {
++			set_pageblock_migratetype(pfn_to_page(pfn), migratetype);
++			cond_resched();
++		}
++		return;
++	}
++#endif
++
+ 	for (pfn = start_pfn; pfn < end_pfn; ) {
+ 		/*
+ 		 * There can be holes in boot-time mem_map[]s handed to this

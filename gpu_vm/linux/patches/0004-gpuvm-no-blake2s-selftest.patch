@@ -1,0 +1,12 @@
+--- a/lib/crypto/blake2s.c	2026-10-24 03:54:59.238236244 +0200
++++ b/lib/crypto/blake2s.c	2026-10-24 03:54:59.253190901 +0200
+@@ -32,7 +32,8 @@
+ 
+ static int __init blake2s_mod_init(void)
+ {
+-	if (!IS_ENABLED(CONFIG_CRYPTO_MANAGER_DISABLE_TESTS) &&
++	/* (gpu_vm: 1.3 million bundles of a boot, a third of its first second; no crypto manager to turn it off) */
++	if (!IS_ENABLED(CONFIG_CRYPTO_MANAGER_DISABLE_TESTS) && !IS_ENABLED(CONFIG_GPUVM) &&
+ 	    WARN_ON(!blake2s_selftest()))
+ 		return -ENODEV;
+ 	return 0;

@@ -93,6 +93,26 @@ The initramfs (`initramfs/`): `/dev/console` and a first `/init` (`init.S`, made
 `mkflat.py`) that prints a line and writes back every line typed. On 22 October 2026 the boot reaches it:
 `Run /init as init process`, its line, and a typed line back (the tty's echo, then init's).
 
+## A boot's passes (24 October 2026)
+
+A boot to the shell was 6,448 passes on `gvm_cpu` (32 cores, `--budget 4096 --wc 16,4`), two thirds of them ended by
+core 0's full write cache; it is 3,642 (8.7 million bundles from 13.8), and on the card the shell is up in 2.21 s of
+the guest's against 3.24 (`rvc_harness --gvm`, v0009). In Unity a pass is a round, so the boot follows the passes.
+
+- `patches/0003-gpuvm-memmap-copied.patch`: a flat zone's struct pages are one made free and copied over the rest by
+  doubling `memcpy` (the copy operation from 4 KB up, made by the commit, not stored through the write cache);
+  reserved pages get their count of 1 in `reserve_bootmem_region`, `__free_pages_core` and `free_pages_prepare` store
+  only what changes. 900 and 1,110 full passes of a boot were `memmap_init_range` and the freeing.
+- `patches/0004-gpuvm-no-blake2s-selftest.patch`: no BLAKE2s self-test at every boot (1.3 million bundles, 400 passes;
+  the kernel has no crypto manager whose switch turns it off).
+- `fastrun.py` (drivers.py): a program's memory taken from the free lists when a block is there (`alloc_pages_run`'s walk
+  of the zone only without one) and given back in aligned blocks (`free_page_series`): a boot's programs' exits were a
+  quarter of its bundles.
+- Measured: `gvm_cpu` with `--profile`, `GVM_SYNCLOG` (which function ends a pass full) and `GVM_STLOG` with
+  `GVM_STLOG_RA=1` (a store's ra in sp's word: a leaf's caller, as memset's). What is left: SLOB's zeroing of small
+  objects (734 KB in a boot: 151 of 2,332 bytes, 2,107 of 88), exec's copies and relocations. ImGui's frames are as
+  they were (300 frames 15.5-16.5 fps on both kernels).
+
 ## State (22 October 2026)
 
 Built with clang for gpuvm (`gpu_vm/llvm`) and booted on gvm_cpu to a user program on the console: traps, syscalls,

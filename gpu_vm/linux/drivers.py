@@ -194,6 +194,8 @@ if 'alloc_pages_run' not in s:
     open(p, 'w').write(s)
 for patch in ('patch_ovl.py', 'patch_ramfs.py', 'patch_procmaps.py'):
     subprocess.run([sys.executable, os.path.join(nommu, patch), tree], check=True, stdout=subprocess.DEVNULL)   # (after alloc_pages_run: patch_ovl.py changes its lines)
+# gpu_vm's own: a program's memory taken from the free lists and given back in blocks (fastrun.py)
+subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fastrun.py'), tree], check=True)
 # binfmt_flat's copy of a program that lies in memory (patch_ovl.py): the RISC-V machine's copy CSRs there, gpu_vm's
 # memcpy here (one operation of the commit from 4 KB up: arch/gpuvm/lib/string.S)
 p = os.path.join(tree, 'fs/binfmt_flat.c')
