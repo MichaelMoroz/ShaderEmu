@@ -68,6 +68,8 @@ public class EmuMachine : UdonSharpBehaviour
     public Camera gvmPassCamera;              // disabled: the commit's and the operations' draws, one mesh at a time
     public MeshRenderer gvmCommitRenderer, gvmStageRenderer, gvmWriteRenderer, gvmProgRenderer;
     public Material gvmCommitMaterial, gvmStageMaterial, gvmWriteMaterial, gvmProgMaterial, gvmWritebackMaterial;
+    public Material gvmOpsBlitMaterial;       // a round's plan, stage and progress as blits (GvmOpsBlit)
+    public RenderTexture gvmPlan;             // each core's and slot's piece of the round, two texels a slot
     public int gvmEntry = 0x02000000, gvmRamMB = 192;   // the kernel's entry and RAM (unity_boot.txt)
 
     // Pages for the guest's browser (docs/system/fetch.md). A world can only load the addresses it
@@ -501,6 +503,8 @@ public class EmuMachine : UdonSharpBehaviour
         }
         GvmCores();
         gvmWriteMaterial.SetTexture("_Stage", gvmStage);
+        gvmWriteMaterial.SetTexture("_Plan", gvmPlan);
+        gvmOpsBlitMaterial.SetTexture("_Plan", gvmPlan);
         machineMaterial.SetInt("_GvmRows", rows);
         machineMaterial.SetTexture("_Ram", state);
         machineMaterial.SetTexture("_Zone", gvmZone);
@@ -532,7 +536,7 @@ public class EmuMachine : UdonSharpBehaviour
 
     private Material[] GvmTickMaterials()
     {
-        Material[] m = { tickMaterial, gvmCommitMaterial, gvmStageMaterial, gvmWriteMaterial, gvmProgMaterial };
+        Material[] m = { tickMaterial, gvmCommitMaterial, gvmWriteMaterial, gvmOpsBlitMaterial };
         return m;
     }
 
@@ -578,17 +582,15 @@ public class EmuMachine : UdonSharpBehaviour
         tickCamera.Render();
         GvmState(gvmCommitMaterial, drawn, gvmStateNames);
         GvmDraw(gvmCommitRenderer, state);
-        GvmState(gvmStageMaterial, drawn, gvmStateNames);
-        GvmState(gvmWriteMaterial, drawn, gvmStateNames);
-        GvmState(gvmProgMaterial, drawn, gvmStateNames);
+        GvmState(gvmOpsBlitMaterial, drawn, gvmStateNames);
         for (int oc = 0; oc < 2; oc++)
         {
-            gvmStageMaterial.SetTexture("_OpState", gvmOps[oc]);
-            gvmWriteMaterial.SetTexture("_OpState", gvmOps[oc]);
-            gvmProgMaterial.SetTexture("_OpState", gvmOps[oc]);
-            GvmDraw(gvmStageRenderer, gvmStage);
+            // only the write scatters, a camera's render; the plan, the stage and the progress are blits
+            gvmOpsBlitMaterial.SetTexture("_OpState", gvmOps[oc]);
+            VRCGraphics.Blit(blackTexture, gvmPlan, gvmOpsBlitMaterial, 0);
+            VRCGraphics.Blit(blackTexture, gvmStage, gvmOpsBlitMaterial, 1);
             GvmDraw(gvmWriteRenderer, state);
-            GvmDraw(gvmProgRenderer, gvmOps[oc ^ 1]);
+            VRCGraphics.Blit(blackTexture, gvmOps[oc ^ 1], gvmOpsBlitMaterial, 2);
         }
         gvmCur ^= 1;
         gvmPasses++;

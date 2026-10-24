@@ -99,6 +99,7 @@ public static partial class ShaderEmuBuilder
         }
         machine.gvmOps = new[] { StateTexture("GvmOps0", 256, 1), StateTexture("GvmOps1", 256, 1) };
         machine.gvmStage = StateTexture("GvmStage", span, 256 * slots);
+        machine.gvmPlan = StateTexture("GvmPlan", 2 * slots, 256);
         machine.gvmZone = StateTexture("GvmZone", 8192, 3);
         machine.gvmCtl = StateTexture("GvmCtl", 256, 1);
         machine.gvmTickDepth = Target("GvmTickDepth", 1024, 24, 16);
@@ -111,6 +112,7 @@ public static partial class ShaderEmuBuilder
         machine.gvmWriteMaterial = Mat("GvmOpWrite", "ShaderEmu/GvmOps");
         machine.gvmProgMaterial = Mat("GvmOpProg", "ShaderEmu/GvmOps");
         machine.gvmWritebackMaterial = Mat("GvmWriteback", "ShaderEmu/GvmWriteback");
+        machine.gvmOpsBlitMaterial = Mat("GvmOpsBlit", "ShaderEmu/GvmOpsBlit");
         string[] draws = { "GVM_STAGE", "GVM_WRITE", "GVM_PROG" };
         Material[] ops = { machine.gvmStageMaterial, machine.gvmWriteMaterial, machine.gvmProgMaterial };
         for (int i = 0; i < 3; i++)
@@ -155,3 +157,4 @@ public static partial class ShaderEmuBuilder
         Debug.Log("[GVM] the machine is built: RAM " + machine.state.width + " x " + machine.state.height + ", ROM " + machine.gvmRom.height + " rows, WCN " + wcn);
     }
 }
+

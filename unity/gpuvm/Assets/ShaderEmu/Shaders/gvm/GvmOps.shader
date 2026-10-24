@@ -33,9 +33,18 @@ Shader "ShaderEmu/GvmOps"
             }
             uint4 pfrag(o2f i) : SV_Target { return op_stage_frag(i); }
         #elif defined(GVM_WRITE)
+            Texture2D<uint4> _Plan;   // GvmOpsBlit's pass 0: the piece op_write_vert would plan, made once a round
             o2f gvm_op_vert(uint id : SV_VertexID) {
-                o2f r = op_write_vert(id % 12, id / 12);
-                if (id / 12 >= _NCores * OP_SLOTS) r.vertex = float4(-2, -2, 0, 1);
+                uint vid = id % 12, inst = id / 12, c = inst / OP_SLOTS, s = inst % OP_SLOTS;
+                uint4 j0 = _Plan.Load(int3(2 * s, c, 0));
+                bool on = c < _NCores && _Plan.Load(int3(2 * s + 1, c, 0)).z != 0;
+                uint t0 = j0.x >> 4, t1 = (j0.y - 1) >> 4, x0 = t0 % RAM_W, y0 = t0 / RAM_W, xe = x0 + t1 - t0 + 1;
+                bool second = vid >= 6;
+                o2f r;
+                r.vertex = corner(vid, second ? 0 : (float)x0, (float)(second ? xe - RAM_W : min(xe, RAM_W)), (float)(y0 + (second ? 1 : 0)),
+                                  (float)(y0 + (second ? 2 : 1)), (float)RAM_W, (float)_RamRows, on && (!second || xe > RAM_W));
+                r.j0 = uint4(t0, t1, inst, 0);
+                r.j1 = 0;
                 return r;
             }
             uint4 pfrag(o2f i) : SV_Target { return op_write_frag(i); }
