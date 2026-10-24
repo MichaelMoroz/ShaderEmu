@@ -18,7 +18,7 @@ using VRC.Udon;
 //   sample S NAME     S seconds of Unity's frames and the machine's instructions, averaged
 //   shot NAME         the Game view to Logs/NAME.png
 //   stop              play mode ends (gvm_auto.txt then goes on: GvmAuto.cs)
-// and logs to Logs/gvm_probe.log: the console's lines with the wall's seconds since play began, and once a second
+// and logs to Logs/gvm_probe.log (Logs/NAME.log when the first line is "log NAME"): the console's lines with the wall's seconds since play began, and once a second
 // the frame rate, the frame's milliseconds and core 0's instructions.
 public class GvmProbe : MonoBehaviour
 {
@@ -51,9 +51,15 @@ public class GvmProbe : MonoBehaviour
             if (u.GetProgramVariable("consoleOut") != null) machine = u;
         string root = Path.GetDirectoryName(Application.dataPath);
         Directory.CreateDirectory(Path.Combine(root, "Logs"));
-        log = new StreamWriter(Path.Combine(root, "Logs", "gvm_probe.log"), false) { AutoFlush = true };
         string path = Path.Combine(root, scriptFile);
         if (File.Exists(path)) script.AddRange(File.ReadAllLines(path));
+        string logName = "gvm_probe";
+        if (script.Count > 0 && script[0].StartsWith("log "))
+        {
+            logName = script[0].Substring(4).Trim();
+            script.RemoveAt(0);
+        }
+        log = new StreamWriter(Path.Combine(root, "Logs", logName + ".log"), false) { AutoFlush = true };
         t0 = Time.realtimeSinceStartup;
         secStart = t0;
         Log("probe: " + (machine != null ? "machine found" : "NO MACHINE") + ", " + script.Count + " lines of " + path

@@ -15,6 +15,8 @@ import json
 import os
 import re
 import shutil
+import subprocess
+import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.normpath(os.path.join(HERE, "..", ".."))
@@ -22,6 +24,11 @@ WORLD = os.path.join(REPO, "unity", "ShaderEmu")
 TEMPLATE = os.path.join(os.environ.get("LOCALAPPDATA", ""), "VRChatCreatorCompanion", "VRCTemplates", "World")
 SDK = ("com.vrchat.base", "com.vrchat.worlds", "com.vrchat.core.vpm-resolver")
 SHADERS = ("Display.shader", "DisplayShow.shader", "Terminal.shader", "MachineBlit.cginc")
+# the RISC-V machine beside it (ShadersRv: the world's own, named ShaderEmuRv/...; Scripts/EmuRvMachine.cs: the world's
+# EmuMachine under another name), to compare the two in one project
+RV_SHADERS = ("Machine.shader", "MachineTickLean.shader", "MachineCommitPoints.shader", "MachineGather.shader", "GpuDraw.shader",
+              "GpuDrawPass.cginc", "Readback.shader", "Display.shader", "MachineBlit.cginc", "MachineCommit.cginc",
+              "MachineWindow.cginc", "lean/tick.hlsl")
 
 
 def copy(src, dst):
@@ -38,11 +45,70 @@ def tree(src, dst, skip_meta=True):
             copy(s, os.path.join(dst, os.path.relpath(s, src)))
 
 
+def write(path, text):
+    """Only a changed file: an untouched one keeps its date, and Unity compiles nothing again for it."""
+    if os.path.exists(path) and open(path, encoding="utf-8").read() == text:
+        return
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    open(path, "w", encoding="utf-8", newline="\n").write(text)
+
+
+def write_src(src, dst):
+    """rvc_opt's src/*.h as .cginc, as the world's "Sync shader sources" makes them."""
+    for f in sorted(os.listdir(src)):
+        if f.endswith(".h"):
+            text = re.sub(r'(#include\s+"[^"]+)\.h"', r'\1.cginc"', open(os.path.join(src, f), encoding="utf-8").read())
+            write(os.path.join(dst, f[:-2] + ".cginc"), text)
+
+
+def sub(text, old, new):
+    assert old in text, "EmuMachine.cs has no: " + old
+    return text.replace(old, new, 1)
+
+
+def rv_machine(world_cs):
+    """The world's EmuMachine as EmuRvMachine, with the measuring hooks of unity/gpuvm's and its host flags a field."""
+    s = open(world_cs, encoding="utf-8").read()
+    s = sub(s, "public class EmuMachine : UdonSharpBehaviour", "public class EmuRvMachine : UdonSharpBehaviour")
+    s = sub(s, "    public bool fetchTest;\n", r'''    public bool fetchTest;
+    // (unity/gpuvm/minimal: GvmProbe) typed at the console, and what it printed; the host flags' bits 0-1 (the desktop
+    // at boot, the console as tabs: 0 is the harness's --no-desktop)
+    [HideInInspector] public string hostInput = "";
+    [HideInInspector] public string consoleOut = "";
+    [HideInInspector] public int consolePrinted;
+    public int hostWants = 3;
+''')
+    s = sub(s, "        if (running) Inputs();\n", r'''        if (running && hostInput.Length > 0)
+        {
+            int typed = Mathf.Clamp(254 - ((charTail - charHead) & 255), 0, hostInput.Length);
+            for (int i = 0; i < typed; i++) RemoteChar(hostInput[i] == '\n' ? '\r' : hostInput[i]);
+            hostInput = hostInput.Substring(typed);
+        }
+        if (running) Inputs();
+''')
+    s = sub(s, "            if (c != 0 && terminal != null) terminal.PutChar(c);\n", r'''            if (c != 0 && terminal != null) terminal.PutChar(c);
+            if (c != 0)
+            {
+                consoleOut += (char)c;
+                consolePrinted++;
+            }
+''')
+    s = sub(s, "        if (terminal != null) terminal.Clear();\n",
+            "        if (terminal != null) terminal.Clear();\n        consoleOut = \"\";\n        consolePrinted = 0;\n")
+    s = sub(s, "        if (Time.time - statsAt >= 0.5f) ShowStats();\n",
+            "        if (consoleOut.Length > 32768) consoleOut = consoleOut.Substring(consoleOut.Length - 16384);\n"
+            "        if (Time.time - statsAt >= 0.5f) ShowStats();\n")
+    s = sub(s, '_HostFlags", 3 |', '_HostFlags", (hostWants & 3) |')
+    return s
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("project")
     ap.add_argument("--sdk-from", help="a VCC project whose Packages hold com.vrchat.base and com.vrchat.worlds")
     ap.add_argument("--template", default=TEMPLATE)
+    ap.add_argument("--tick", help="a gpu_vm step to draw in place of the committed tick.cginc's (v0009), e.g. "
+                    "build/tick_gen/c0e/v0003.hlsl: gpu_vm/platform/unity_tick.py makes it")
     a = ap.parse_args()
     p = os.path.abspath(a.project)
     os.makedirs(p, exist_ok=True)
@@ -71,18 +137,24 @@ def main():
     for f in SHADERS:
         copy(os.path.join(WORLD, "Shaders", f), os.path.join(se, "Shaders", f))
     src = os.path.join(REPO, "experiments", "rvc_opt", "src")
-    for f in sorted(os.listdir(src)):
-        if f.endswith(".h"):
-            text = re.sub(r'(#include\s+"[^"]+)\.h"', r'\1.cginc"', open(os.path.join(src, f), encoding="utf-8").read())
-            os.makedirs(os.path.join(se, "Shaders", "src"), exist_ok=True)
-            out = os.path.join(se, "Shaders", "src", f[:-2] + ".cginc")
-            if not os.path.exists(out) or open(out, encoding="utf-8").read() != text:
-                open(out, "w", encoding="utf-8", newline="\n").write(text)
+    write_src(src, os.path.join(se, "Shaders", "src"))
+    # the RISC-V machine: the world's shaders as ShaderEmuRv/..., with rvc_opt's src/ unchanged, and its EmuMachine
+    rv = os.path.join(se, "ShadersRv")
+    for f in RV_SHADERS:
+        text = open(os.path.join(WORLD, "Shaders", f), encoding="utf-8").read()
+        write(os.path.join(rv, f), re.sub(r'^Shader "ShaderEmu/', 'Shader "ShaderEmuRv/', text, flags=re.M))
+    for f in ("crt.cginc", "helpers.cginc"):
+        copy(os.path.join(REPO, "experiments", "rvc_opt", f), os.path.join(rv, f))
+    write_src(src, os.path.join(rv, "src"))
+    write(os.path.join(se, "Scripts", "EmuRvMachine.cs"), rv_machine(os.path.join(WORLD, "Scripts", "EmuMachine.cs")))
     copy(os.path.join(WORLD, "Editor", "ShaderEmuImages.cs"), os.path.join(se, "Editor", "ShaderEmuImages.cs"))
     copy(os.path.join(WORLD, "Textures", "TerminalFont.png"), os.path.join(se, "Textures", "TerminalFont.png"))
     tree(os.path.join(HERE, "Assets", "ShaderEmu"), se)                       # the gpu_vm copy's files over the world's
     tree(os.path.join(HERE, "minimal", "Editor"), os.path.join(se, "Editor"))
     tree(os.path.join(HERE, "minimal", "Measure"), os.path.join(se, "Measure"))
+    if a.tick:
+        subprocess.check_call([sys.executable, os.path.join(REPO, "gpu_vm", "platform", "unity_tick.py"), a.tick,
+                               os.path.join(se, "Shaders", "gvm")])
     print("project at", p, "with", ", ".join("%s %s" % (n, v["version"]) for n, v in locked.items()))
 
 

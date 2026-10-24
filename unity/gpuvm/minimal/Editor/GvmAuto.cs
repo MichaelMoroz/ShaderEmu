@@ -7,12 +7,17 @@ using UnityEngine;
 // Drives the editor from the project's gvm_auto.txt (unity/gpuvm/README.md, "Measuring"), a command a line, each taken
 // off the file before it runs:
 //   image DIR   the boot image's folder (EditorPrefs ShaderEmu.GvmImage)
+//   import      that image imported again (its RAM and ROM lanes: after "image" names another)
+//   repo DIR    the repository (EditorPrefs ShaderEmu.Repo): the RISC-V machine's image is its build/images/nommu
 //   programs    the Udon program assets made and compiled (before "scene": U# serializes no behaviour of a script
 //               whose program has not compiled yet)
 //   scene       ShaderEmu/GPU-VM: make the machine's scene
+//   rvscene     ShaderEmu/RISC-V: make the machine's scene (RvMachine.unity)
+//   probe FILE  FILE (in the project's folder) copied to gvm_probe.txt, the script the next play runs
 //   check       every pass of the machine's materials compiled now; on any error the rest of the file is dropped
 //               (a shader that has not compiled cleanly is never run on the card)
-//   play        the scene opened, the Game view in front, play mode (GvmProbe runs gvm_probe.txt; its "stop" ends it)
+//   play [rv]   the scene opened (rv: RvMachine.unity), the Game view in front, play mode (GvmProbe runs
+//               gvm_probe.txt; its "stop" ends it)
 //   quit        the editor exits
 // The rest of the file is taken up again when play mode has ended.
 [InitializeOnLoad]
@@ -82,6 +87,14 @@ public static class GvmAuto
             File.WriteAllLines(FilePath, lines);
             Debug.Log("[GvmAuto] " + cmd);
             if (cmd.StartsWith("image ")) EditorPrefs.SetString("ShaderEmu.GvmImage", cmd.Substring(6).Trim());
+            else if (cmd.StartsWith("repo ")) EditorPrefs.SetString("ShaderEmu.Repo", cmd.Substring(5).Trim());
+            else if (cmd == "import") ShaderEmuBuilder.GvmImportImage();
+            else if (cmd == "rvscene") ShaderEmuBuilder.RvScene();
+            else if (cmd.StartsWith("probe "))
+            {
+                string root = Path.GetDirectoryName(Application.dataPath);
+                File.Copy(Path.Combine(root, cmd.Substring(6).Trim()), Path.Combine(root, "gvm_probe.txt"), true);
+            }
             else if (cmd == "programs")
             {
                 ShaderEmuBuilder.CreateProgramAssets();
@@ -97,9 +110,9 @@ public static class GvmAuto
                     return;
                 }
             }
-            else if (cmd == "play")
+            else if (cmd == "play" || cmd == "play rv")
             {
-                EditorSceneManager.OpenScene("Assets/ShaderEmu/GvmMachine.unity", OpenSceneMode.Single);
+                EditorSceneManager.OpenScene(cmd == "play rv" ? "Assets/ShaderEmu/RvMachine.unity" : "Assets/ShaderEmu/GvmMachine.unity", OpenSceneMode.Single);
                 EditorApplication.ExecuteMenuItem("Window/General/Game");   // the Game view in front: else the Scene view draws too
                 EditorApplication.isPlaying = true;
                 return;

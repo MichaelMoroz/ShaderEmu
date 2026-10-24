@@ -1,4 +1,5 @@
 // v0009.hlsl for Unity, made by gpu_vm/platform/unity_tick.py: do not edit
+#define GVM_HAS_CORE0 0
 // A tick made by gpu_vm/tick/builder/gen.py (the manifest beside it has its parameters); not edited by hand.
 #include "isa.cginc"   // isa.h 1805f4006457
 

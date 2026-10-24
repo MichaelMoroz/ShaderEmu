@@ -28,7 +28,8 @@ Shader "ShaderEmu/GvmTick"
                 float x = (c % 128) * 8 + ((v == 1 || v == 3 || v == 4) ? 8 : 0);
                 float y = (c / 128) * GEO_BAND + ((v == 2 || v == 4 || v == 5) ? GEO_BH : 0);
                 v2f o;
-                o.vertex = c < _NCores ? float4(x / 1024.0 * 2 - 1, 1 - y / 24.0 * 2, 0, 1) : float4(-2, -2, 0, 1);
+                bool apart = GVM_HAS_CORE0 && c == 0;   // (c0nb: core 0 is GvmTick0's)
+                o.vertex = c < _NCores && !apart ? float4(x / 1024.0 * 2 - 1, 1 - y / 24.0 * 2, 0, 1) : float4(-2, -2, 0, 1);
                 return o;
             }
             ENDCG

@@ -68,6 +68,7 @@ public class EmuMachine : UdonSharpBehaviour
     public Camera gvmPassCamera;              // disabled: the commit's and the operations' draws, one mesh at a time
     public MeshRenderer gvmCommitRenderer, gvmStageRenderer, gvmWriteRenderer, gvmProgRenderer;
     public Material gvmCommitMaterial, gvmStageMaterial, gvmWriteMaterial, gvmProgMaterial, gvmWritebackMaterial;
+    public Material gvmTick0Material;         // core 0's tick when the step has CORE0 (GvmTick0), else none
     public Material gvmOpsBlitMaterial;       // a round's plan, stage and progress as blits (GvmOpsBlit)
     public RenderTexture gvmPlan;             // each core's and slot's piece of the round, two texels a slot
     public int gvmEntry = 0x02000000, gvmRamMB = 192;   // the kernel's entry and RAM (unity_boot.txt)
@@ -541,8 +542,13 @@ public class EmuMachine : UdonSharpBehaviour
 
     private Material[] GvmTickMaterials()
     {
-        Material[] m = { tickMaterial, gvmCommitMaterial, gvmWriteMaterial, gvmOpsBlitMaterial };
-        return m;
+        if (gvmTick0Material == null)
+        {
+            Material[] m = { tickMaterial, gvmCommitMaterial, gvmWriteMaterial, gvmOpsBlitMaterial };
+            return m;
+        }
+        Material[] m0 = { tickMaterial, gvmCommitMaterial, gvmWriteMaterial, gvmOpsBlitMaterial, gvmTick0Material };
+        return m0;
     }
 
     private RenderTexture[] GvmSet(int k) { return k == 0 ? gvmSetA : gvmSetB; }
@@ -570,19 +576,26 @@ public class EmuMachine : UdonSharpBehaviour
         mesh.enabled = false;
     }
 
+    private void GvmTickUniforms(Material m, int lo16, double lo, double hi, RenderTexture[] read)
+    {
+        m.SetInt("_TimeL0", lo16);
+        m.SetInt("_TimeL1", (int)((lo - lo16) / 65536.0));
+        m.SetInt("_TimeH0", (int)(hi % 65536.0));
+        m.SetInt("_TimeH1", 0);
+        GvmState(m, read, gvmStateNames);
+        m.SetTexture("_OpState", gvmOps[0]);
+        m.SetInt("_Ticks", ticks);
+    }
+
     // A pass (gpu_vm/tick/STATE.md): the tick, the commit's four draws, two rounds of the operations.
     private void GvmPass(double wall)
     {
         gvmTime = Math.Max(gvmTime + 1, wall);
         double hi = Math.Floor(gvmTime / 4294967296.0), lo = gvmTime - hi * 4294967296.0;
         int lo16 = (int)(lo % 65536.0);
-        tickMaterial.SetInt("_TimeL0", lo16);
-        tickMaterial.SetInt("_TimeL1", (int)((lo - lo16) / 65536.0));
-        tickMaterial.SetInt("_TimeH0", (int)(hi % 65536.0));
-        tickMaterial.SetInt("_TimeH1", 0);
         RenderTexture[] read = GvmSet(gvmCur ^ 1), drawn = GvmSet(gvmCur);
-        GvmState(tickMaterial, read, gvmStateNames);
-        tickMaterial.SetTexture("_OpState", gvmOps[0]);
+        GvmTickUniforms(tickMaterial, lo16, lo, hi, read);
+        if (gvmTick0Material != null) GvmTickUniforms(gvmTick0Material, lo16, lo, hi, read);
         tickCamera.SetTargetBuffers(gvmCur == 0 ? gvmBuffersA : gvmBuffersB, gvmTickDepth.depthBuffer);
         tickCamera.Render();
         GvmState(gvmCommitMaterial, drawn, gvmStateNames);

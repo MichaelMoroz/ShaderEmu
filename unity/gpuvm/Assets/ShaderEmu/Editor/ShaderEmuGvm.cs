@@ -66,8 +66,9 @@ public static partial class ShaderEmuBuilder
         return mesh;
     }
 
-    static int GvmConst(string source, string name)
+    static int GvmConst(string source, string name, int none = -1)
     {
+        if (none >= 0 && !Regex.IsMatch(source, "static const uint " + name + " = (\\d+);")) return none;
         Match m = Regex.Match(source, "static const uint " + name + " = (\\d+);");
         if (!m.Success) throw new System.Exception("tick.cginc has no " + name);
         return int.Parse(m.Groups[1].Value);
@@ -82,6 +83,8 @@ public static partial class ShaderEmuBuilder
         EmuMachine machine = world.GetComponentInChildren<EmuMachine>(true);
         UdonSharpEditorUtility.CopyUdonToProxy(machine);
         string tick = File.ReadAllText(GvmShaders + "/tick.cginc");
+        // c0nb: core 0's own write cache of WCN0 entries and its own tick (GvmTick0.shader); 0 for a step without
+        int wcn0 = GvmConst(tick, "WCN0", 0);
         int wcn = GvmConst(tick, "WCN"), slots = GvmConst(tick, "OP_SLOTS"), span = GvmConst(tick, "OP_SPAN");
         string[] boot = File.ReadAllLines(GvmImageDir + "/unity_boot.txt");
         machine.gvmEntry = System.Convert.ToInt32(boot[0].Split(' ')[1], 16);
@@ -128,6 +131,17 @@ public static partial class ShaderEmuBuilder
         MeshFilter tickMesh = device.Find("Tick mesh").GetComponent<MeshFilter>();
         tickMesh.sharedMesh = GvmMesh("GvmTickQuads", 6 * MachineCores, MeshTopology.Triangles);
         tickMesh.GetComponent<MeshRenderer>().sharedMaterial = tickMat;
+        Transform oldTick0 = device.Find("GvmTick0 mesh");
+        if (oldTick0 != null) Object.DestroyImmediate(oldTick0.gameObject);
+        machine.gvmTick0Material = null;
+        if (wcn0 > 0)
+        {
+            machine.gvmTick0Material = Mat("GvmTick0", "ShaderEmu/GvmTick0");
+            MeshRenderer tick0 = PassMesh(device, "GvmTick0", tickMesh.gameObject.layer, GvmMesh("GvmTick0Quad", 6, MeshTopology.Triangles), machine.gvmTick0Material);
+            tick0.transform.localPosition = tickMesh.transform.localPosition;
+            tick0.transform.localRotation = tickMesh.transform.localRotation;
+            tick0.transform.localScale = tickMesh.transform.localScale;
+        }
         // the points camera draws one of these at a time; the RISC-V machine's meshes are off
         machine.gvmPassCamera = machine.pointsCamera;
         machine.pointsRenderer.enabled = false;
@@ -137,7 +151,7 @@ public static partial class ShaderEmuBuilder
             Transform t = device.Find(old);
             if (t != null) Object.DestroyImmediate(t.gameObject);
         }
-        machine.gvmCommitRenderer = PassMesh(device, "GvmCommit", PointsLayer, GvmMesh("GvmCommitPoints", MachineCores * wcn, MeshTopology.Points), machine.gvmCommitMaterial);
+        machine.gvmCommitRenderer = PassMesh(device, "GvmCommit", PointsLayer, GvmMesh("GvmCommitPoints", wcn0 > 0 ? wcn0 + (MachineCores - 1) * wcn : MachineCores * wcn, MeshTopology.Points), machine.gvmCommitMaterial);
         machine.gvmStageRenderer = PassMesh(device, "GvmStage", PointsLayer, GvmMesh("GvmStageQuads", 6 * MachineCores * slots, MeshTopology.Triangles), machine.gvmStageMaterial);
         machine.gvmWriteRenderer = PassMesh(device, "GvmWrite", PointsLayer, GvmMesh("GvmWriteQuads", 12 * MachineCores * slots, MeshTopology.Triangles), machine.gvmWriteMaterial);
         machine.gvmProgRenderer = PassMesh(device, "GvmProg", PointsLayer, GvmMesh("GvmProgPoints", MachineCores, MeshTopology.Points), machine.gvmProgMaterial);
@@ -154,7 +168,7 @@ public static partial class ShaderEmuBuilder
         Apply(machine);
         UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(world.gameObject.scene);
         AssetDatabase.SaveAssets();
-        Debug.Log("[GVM] the machine is built: RAM " + machine.state.width + " x " + machine.state.height + ", ROM " + machine.gvmRom.height + " rows, WCN " + wcn);
+        Debug.Log("[GVM] the machine is built: RAM " + machine.state.width + " x " + machine.state.height + ", ROM " + machine.gvmRom.height + " rows, WCN " + wcn + (wcn0 > 0 ? ", core 0's WCN0 " + wcn0 : ""));
     }
 }
 
