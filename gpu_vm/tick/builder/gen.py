@@ -48,7 +48,8 @@ DEFAULTS = dict(
     wadf=0,             # the wad block's form: 2 before the state's load, 16 run(core == 0 ? _Ticks : bud) (18: the ALU loops as wad=0's), 1 flatten, 4 core 0's run apart
     wclean=0,           # 1: a pixel of the write cache's data texels whose entries are all unused is discarded (not written)
     c0nb=0,             # core 0's own write cache: 2 x c0nb buckets of four (0: none), its tick compiled with CORE0=1 and drawn apart
-    idlew=0,            # 1: a worker parked in the firmware whose start texel is as the last pass saw it is not run: its state copied,
+    idlew=0,            # (2: and drawn a triangle a core, the quiet ones left out by the vertex shader: slower; 3: its pixels discarded once both sets hold it)
+                        # 1: a worker parked in the firmware whose start texel is as the last pass saw it is not run: its state copied,
                         # its write cache empty (RISC-V's mc_idle; texel 23 keeps the start texel a parked pass saw). Needs npair 0
     c0rt=0,             # (c0nb) 1: core 0's cache chosen at run time in the one compile and draw (RISC-V's sizes by geometry), not CORE0=1 apart
     ll=0,               # 1: a new texel goes to the less full of its two buckets (more texels before a full end: +12-14% in a model)
@@ -1201,25 +1202,20 @@ def frag(P):
     early = ''
     if P.get('idlew', 0):   # (idlew) RISC-V's mc_idle: a parked worker whose start word is as it was costs a copy, not a pass
         assert not P['npair'], 'idlew: npair 0 (texel 23)'
-        park, end = fw_park()
-        early += '''    [branch] if (core != 0 && ext == 0) {   // (idlew) parked in the firmware (worker_fw.h's park loop), its start texel as it was
-        uint4 s16 = state_in(16, core), s19 = state_in(19, core), s22 = state_in(22, core);
-        [branch] if (s16.x >= 0x%xu && s16.x < 0x%xu && s19.w == E_SYNC && s22.x == 0 && all(ram((0x00c00000u >> 4) + core) == state_in(23, core))) {
-            uint4 os = _OpState.Load(int3(core, 0, 0));
-            bool fold = os.x == s22.z;
-            uint4 n22 = uint4(0, fold ? os.z : s22.y, s22.z + 1, s22.w + (fold ? os.w : 0));
-            uint4 v[8];
-            [unroll] for (uint k = 0; k < 8; k++) {
-                uint t = j * 8 + k;
-                uint4 x = t < T_WC ? state_in(t, core) : t < T_WT ? uint4(0, 0, 0, 0) : t < T_XF ? uint4(NONE, NONE, NONE, NONE) : uint4(0, 0, 0, 0);
-                x = t == 18 ? uint4(x.xy, x.z & ~F_AGAIN, x.w) : t == 19 ? uint4(x.xy, 0, E_SYNC) : t == 22 ? n22 : t == 23 ? state_in(23, core) : x;
-                v[k] = x;
-            }
-            o.t0 = v[0]; o.t1 = v[1]; o.t2 = v[2]; o.t3 = v[3]; o.t4 = v[4]; o.t5 = v[5]; o.t6 = v[6]; o.t7 = v[7];
-            return o;
+        early += '''    [branch] if (core != 0 && ext == 0 && parked_as_was(core)) {   // (idlew) parked in the firmware, its start texel as it was: not run
+        uint4 s23 = state_in(23, core);
+''' + ('''        [branch] if (s23.w >= 2) discard;   // (idlew 3) both state sets hold it already: nothing written
+''' if P['idlew'] == 3 else '') + '''        uint4 v[8];
+        [unroll] for (uint k = 0; k < 8; k++) {   // (its state as it was, 22 too, as the harness's freeze; 23 counts the passes, 2 at most)
+            uint t = j * 8 + k;
+            uint4 x = t < T_WC ? state_in(t, core) : t < T_WT ? uint4(0, 0, 0, 0) : t < T_XF ? uint4(NONE, NONE, NONE, NONE) : uint4(0, 0, 0, 0);
+            x = t == 18 ? uint4(x.xy, x.z & ~F_AGAIN, x.w) : t == 19 ? uint4(x.xy, 0, E_SYNC) : t == 23 ? uint4(s23.xyz, min(s23.w + 1, 2u)) : x;
+            v[k] = x;
         }
+        o.t0 = v[0]; o.t1 = v[1]; o.t2 = v[2]; o.t3 = v[3]; o.t4 = v[4]; o.t5 = v[5]; o.t6 = v[6]; o.t7 = v[7];
+        return o;
     }
-''' % (park, end)
+'''
     if P['early']:
         wake = ''
         if P['early'] >= 2:
@@ -1258,7 +1254,30 @@ def frag(P):
         }
     }
 '''
-    return '''tick_out frag(v2f i) {
+    pre = ''
+    if P.get('idlew', 0):
+        park, end = fw_park()
+        assert P['idlew'] < 2 or not P.get('c0nb', 0) or P.get('c0rt', 0), 'idlew 2: one draw (c0rt)'
+        pre = ('static const uint C0ROWS_ = %d;   // (idlew 2) core 0\'s rows (c0rt: its own)\n' % bh) + ('''bool parked_as_was(uint c) {   // (idlew) parked in the firmware (worker_fw.h's park loop) and its start texel as the last pass saw it
+    uint4 s16 = state_in(16, c), s19 = state_in(19, c), s22 = state_in(22, c), s23 = state_in(23, c);
+    return s16.x >= 0x%xu && s16.x < 0x%xu && s19.w == E_SYNC && s22.x == 0 && all(start_key(c) == s23.xyz);
+}
+''' % (park, end) + ('''v2f vert_cull(uint id : SV_VertexID) {   // (idlew 2) a triangle a core over its block (twice as wide and high: one primitive, no pixel shaded
+    v2f o;                                  // twice), none for a worker parked as it was for two passes (RISC-V's tick_geom)
+    uint c = id / 3, k = id %% 3;
+    o.cc = c;
+    float2 wh;
+    _S0.GetDimensions(wh.x, wh.y);
+    uint ec = (pick(_Ext[c >> 7], (c >> 5) & 3) >> (c & 31)) & 1;
+    bool none = c >= _NCores || (c != 0 && ec == 0 && state_in(23, c).w >= 2 && parked_as_was(c));
+    int3 at = sat(0, c);
+    float2 q = float2(k == 1 ? 2.0 : 0.0, k == 2 ? 2.0 : 0.0);
+    float2 px = float2(at.xy) + q * float2(%d.0, c == 0 ? (float)C0ROWS_ : %d.0);
+    o.vertex = none ? float4(0, 0, 0, 0) : float4(px.x / wh.x * 2.0 - 1.0, 1.0 - px.y / wh.y * 2.0, 0, 1);
+    return o;
+}
+''' % (bw, bh) if P['idlew'] == 2 else ''))
+    return pre + '''tick_out frag(v2f i) {
     uint2 p = uint2(i.vertex.xy);
     tick_out o;
     uint rx = p.x % ''' + str(bw) + '''u, ry = p.y % ''' + str(band) + '''u;
@@ -1345,7 +1364,7 @@ def p2strip(P, src):
         nonlocal src
         assert a in src, 'p2strip: no ' + a[:60]
         src = src.replace(a, b, 1)
-    rep(" : t == 23 ? uint4(pn, 0, 0, 0) : 0;", " : t == 23 ? (core != 0 && pc >= 0x%xu && pc < 0x%xu && endr == E_SYNC ? ram((0x00c00000u >> 4) + core) : uint4(NONE, NONE, NONE, NONE)) : 0;   // (idlew: the start texel a parked pass saw)" % fw_park()
+    rep(" : t == 23 ? uint4(pn, 0, 0, 0) : 0;", " : t == 23 ? (core != 0 && pc >= 0x%xu && pc < 0x%xu && endr == E_SYNC ? uint4(start_key(core), 0) : uint4(NONE, NONE, NONE, NONE)) : 0;   // (idlew: the start texel a parked pass saw)" % fw_park()
         if P.get('idlew', 0) else " : 0;")
     rep("""    [branch] if (t >= T_XF && t < T_XT) return v;
     [branch] if (t >= T_XT && t < T_PB) return v & ~2u;
@@ -1464,6 +1483,7 @@ def core0_rt(P, src, rows):
     assert m, 'c0rt: the pixel'
     src = src[:m.start()] + ('    core = %s;\n    uint j = core == 0u ? %s : %s;   // (c0rt: core 0\'s pixels in its rows of the first block)\n'
                              '    [branch] if (core == 0u ? p.y >= %du || j >= SPIX : (%s)) {\n' % (m.group(3), m.group(1), m.group(4), rows, m.group(5))) + src[m.end():]
+    src = re.sub(r'static const uint C0ROWS_ = \d+;', 'static const uint C0ROWS_ = %d;' % rows, src)
     assert 'CORE0\n' not in src.replace('#ifndef CORE0\n', '').replace('#define CORE0 0', ''), 'c0rt: a CORE0 left'
     src = src.replace('#ifndef CORE0\n#define CORE0 0   // 1: core 0\'s tick (its own compile and draw: c0nb)\n#endif\n',
                       'static const uint C0RT = 1;   // core 0\'s cache chosen at run time: one compile, one draw (the harness: rows C0ROWS of the first band)\n'
@@ -1480,6 +1500,13 @@ def emit(P):
            state_io(P), frag(P), part('ops')]
     from memopts import memopts
     from layoutopts import layoutopts
+    if P.get('idlew', 0) == 2:   # (idlew 2) the triangle's core: a pixel of another core's block is that core's triangle's
+        out = [x.replace('struct v2f { float4 vertex : SV_POSITION; };', 'struct v2f { float4 vertex : SV_POSITION; nointerpolation uint cc : CORE; };')
+                .replace('    o.vertex = float4(id == 1 ? 3.0 : -1.0, id == 2 ? -3.0 : 1.0, 0, 1);', '    o.vertex = float4(id == 1 ? 3.0 : -1.0, id == 2 ? -3.0 : 1.0, 0, 1);\n    o.cc = NONE;')
+                .replace('    ext = (pick(_Ext[core >> 7]', '    [branch] if (i.cc != NONE && i.cc != core) discard;   // (idlew 2) another core\'s triangle\n    ext = (pick(_Ext[core >> 7]', 1) for x in out]
+    if P.get('idlew', 0):   # (idlew) the start texel's key, before state_out writes it
+        k = 'uint4 state_out(uint t, uint4 s3) {'
+        out = [x.replace(k, 'uint3 start_key(uint c) { uint4 w = ram((0x00c00000u >> 4) + c); return uint3(w.xy, w.z ^ (w.w * 0x9e3779b1u)); }   // (idlew) its start texel\n' + k) for x in out]
     return rmap_text(P, core0(P, layoutopts(P, sil_text(P, memopts(P, mflat(P, evf_text(P, p2strip(P, '\n'.join(out)))))))))
 
 def manifest(P):

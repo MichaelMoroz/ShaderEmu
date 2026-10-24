@@ -152,6 +152,9 @@ def main():
     tree(os.path.join(HERE, "Assets", "ShaderEmu"), se)                       # the gpu_vm copy's files over the world's
     tree(os.path.join(HERE, "minimal", "Editor"), os.path.join(se, "Editor"))
     tree(os.path.join(HERE, "minimal", "Measure"), os.path.join(se, "Measure"))
+    timer = os.path.join(HERE, "minimal", "GpuTimer", "GpuTimer.dll")   # (a measure: GpuTimer/build.bat makes it)
+    if os.path.exists(timer):
+        copy(timer, os.path.join(se, "Measure", "Plugins", "x86_64", "GpuTimer.dll"))
     if a.tick:
         subprocess.check_call([sys.executable, os.path.join(REPO, "gpu_vm", "platform", "unity_tick.py"), a.tick,
                                os.path.join(se, "Shaders", "gvm")])

@@ -13,7 +13,8 @@ using UnityEngine;
 //               whose program has not compiled yet)
 //   scene       ShaderEmu/GPU-VM: make the machine's scene
 //   rvscene     ShaderEmu/RISC-V: make the machine's scene (RvMachine.unity)
-//   probe FILE  FILE (in the project's folder) copied to gvm_probe.txt, the script the next play runs
+//   probe FILE [LOG]  FILE (in the project's folder) copied to gvm_probe.txt, the script the next play runs (LOG:
+//               its log's name)
 //   check       every pass of the machine's materials compiled now; on any error the rest of the file is dropped
 //               (a shader that has not compiled cleanly is never run on the card)
 //   play [rv]   the scene opened (rv: RvMachine.unity), the Game view in front, play mode (GvmProbe runs
@@ -25,6 +26,7 @@ public static class GvmAuto
 {
     static GvmAuto()
     {
+        PlayerSettings.enableFrameTimingStats = true;   // (GvmProbe's GPU frame time)
         // (a delayCall set while the editor starts is dropped: an update a few seconds on)
         Later(3.0);
         EditorApplication.playModeStateChanged += s => { if (s == PlayModeStateChange.EnteredEditMode) Later(3.0); };
@@ -92,8 +94,16 @@ public static class GvmAuto
             else if (cmd == "rvscene") ShaderEmuBuilder.RvScene();
             else if (cmd.StartsWith("probe "))
             {
+                // probe FILE [LOG]: LOG in place of the file's "log NAME" line
                 string root = Path.GetDirectoryName(Application.dataPath);
-                File.Copy(Path.Combine(root, cmd.Substring(6).Trim()), Path.Combine(root, "gvm_probe.txt"), true);
+                string[] w = cmd.Substring(6).Trim().Split(' ');
+                List<string> text = new List<string>(File.ReadAllLines(Path.Combine(root, w[0])));
+                if (w.Length > 1)
+                {
+                    if (text.Count > 0 && text[0].StartsWith("log ")) text.RemoveAt(0);
+                    text.Insert(0, "log " + w[1]);
+                }
+                File.WriteAllLines(Path.Combine(root, "gvm_probe.txt"), text);
             }
             else if (cmd == "programs")
             {

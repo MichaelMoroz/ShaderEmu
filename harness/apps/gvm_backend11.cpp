@@ -130,6 +130,7 @@ public:
             }
         }
         c0rt_ = stepConst(src, "C0RT", 0) != 0;   // (a builder's c0rt: core 0's cache chosen at run time, one compile, every core in one draw)
+        cull_ = src.find("v2f vert_cull(") != std::string::npos;   // (a builder's idlew 2: a triangle a core, none for a worker parked as it was)
         if (src.find("#ifndef CORE0") != std::string::npos || c0rt_) {   // x25: core 0's own write cache, its tick compiled with CORE0=1
             wcn0_ = stepConst(src, "WCN0", 0);
             spix0_ = (stepConst(src, "NTEX0", 0) + 7) / 8;
@@ -146,7 +147,7 @@ public:
             return SUCCEEDED(dev->CreateVertexShader(vs.bytecode->GetBufferPointer(), vs.bytecode->GetBufferSize(), nullptr, &out.vs)) &&
                    SUCCEEDED(dev->CreatePixelShader(ps.bytecode->GetBufferPointer(), ps.bytecode->GetBufferSize(), nullptr, &out.ps));
         };
-        if (!prog("vert", "frag", tick_) || !prog("commit_vert", "commit_frag", commit_) || !prog("op_stage_vert", "op_stage_frag", stage_) ||
+        if (!prog(cull_ ? "vert_cull" : "vert", "frag", tick_) || !prog("commit_vert", "commit_frag", commit_) || !prog("op_stage_vert", "op_stage_frag", stage_) ||
             !prog("op_write_vert", "op_write_frag", write_) || !prog("op_prog_vert", "op_prog_frag", progress_)) {
             if (err.empty()) err = "creating the tick's shaders failed";
             return false;
@@ -851,6 +852,15 @@ private:
                 ctx->PSSetShader(tick_.ps.Get(), nullptr, 0);
             }
         };
+        if (cull_ && !apart) {   // (idlew 2: one draw of a triangle a core over the whole state, the vertex shader leaves out the quiet ones)
+            D3D11_TEXTURE2D_DESC d;
+            set_[cur_][0].t->GetDesc(&d);
+            viewport(d.Width, d.Height);
+            ctx->Draw(3 * top_, 0);
+            if (timed) ctx->End(tsQuery_[1].Get());
+            if (tq_) ctx->End(tq_[1]);
+            goto ticked;
+        }
         if (apart && !last) core0();
         if (timed && apart) ctx->End(tsQuery_[4].Get());   // (GVM_SPLIT_LOG: the tick's time to here, its first draws')
         for (auto& run : runs_) {   // (the triangle over each run's rows or blocks: a pixel's place is its core, the viewport's offset kept)
@@ -869,6 +879,7 @@ private:
         if (apart && last) core0();
         if (timed) ctx->End(tsQuery_[1].Get());
         if (tq_) ctx->End(tq_[1]);
+    ticked:
         clearSrv();
         ctx->OMSetRenderTargets(1, ram_.rtv.GetAddressOf(), nullptr);
         bindTick(cur_, false, false);
@@ -880,11 +891,13 @@ private:
             ID3D11Buffer* b2[2] = {cb_.Get(), ccb_[c].Get()};
             ctx->VSSetConstantBuffers(0, 2, b2);
             ctx->OMSetBlendState(mask_[c].Get(), nullptr, 0xffffffff);
-            ctx->Draw(wcn0_ ? wcn0_ + (top_ - 1) * wcn_ : top_ * wcn_, 0);   // (a frozen row's write cache is empty: its points draw nothing)
+            static const bool c0only = getenv("GVM_MEASURE_COMMIT0") != nullptr;   // (a measure, wrong results: core 0's points alone)
+            ctx->Draw(c0only ? (wcn0_ ? wcn0_ : wcn_) : wcn0_ ? wcn0_ + (top_ - 1) * wcn_ : top_ * wcn_, 0);   // (a frozen row's write cache is empty: its points draw nothing)
         }
         ctx->OMSetBlendState(nullptr, nullptr, 0xffffffff);
         if (tq_) ctx->End(tq_[2]);
-        for (uint32_t round = 0; round < 2; round++) {
+        static const uint32_t opRounds = getenv("GVM_MEASURE_NOOPS") ? 0u : 2u;   // (a measure, wrong results: no operation rounds)
+        for (uint32_t round = 0; round < opRounds; round++) {
             clearSrv();
             ctx->OMSetRenderTargets(1, stageTex_.rtv.GetAddressOf(), nullptr);
             bindTick(cur_, true, false);
@@ -1207,7 +1220,7 @@ private:
     uint64_t wcFrame_ = 0, wcSeen_ = 0;
     uint32_t lastEnds_[256] = {}, lastPc_[256] = {};   // (GVM_MBOX_LOG: the last ends row and its tag)
     uint64_t lastEndsTag_ = ~0ull;
-    bool c0rt_ = false;   // (C0RT: core 0 in the workers' draw)
+    bool c0rt_ = false, cull_ = false;   // (C0RT: core 0 in the workers' draw)
     uint32_t ramEnd_ = 0, rows_ = 0, romRows_ = 1, wcn_ = 514, tWc_ = 40, opSlots_ = 32, opSpan_ = 272, ntex_ = 297, spix_ = 38, geo_ = 0, bh_ = 8, wcn0_ = 0, spix0_ = 0;
     Prog tick_, tick0_, commit_, stage_, write_, progress_;
     Tex ram_, rom_, stageTex_, ops_[2], set_[2][8], zone_, ctl_, info_, none_;

@@ -19,6 +19,9 @@ def main():
     src, n1 = re.subn(r"cbuffer PassParams : register\(b0\) \{[^}]*\};", '#include "params.cginc"', src)
     src, n2 = re.subn(r"cbuffer CommitParams : register\(b1\) \{[^}]*\};", "", src)
     src = re.sub(r"\s*:\s*register\(t\d+\)", "", src)
+    # the world has no external lines: their word is 0 where it is read (a static array indexed by the core became an
+    # indexable temp of every pixel)
+    src, n3 = re.subn(r"_Ext\[[^\]]*\]", "uint4(0, 0, 0, 0)", src)
     assert n0 == 1 and n1 == 1 and n2 == 1, "the step's include and cbuffers are not as expected"
     head = "// %s for Unity, made by gpu_vm/platform/unity_tick.py: do not edit\n" % os.path.basename(step)
     # c0nb (core 0's own write cache): the step compiled again with CORE0=1 draws core 0 (GvmTick0.shader), the plain
