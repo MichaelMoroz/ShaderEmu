@@ -255,6 +255,7 @@ public class EmuMachine : UdonSharpBehaviour
     private bool countWorkers;         // this round's row is one the workers' counts are taken from
     private float workersAt;
     private float workerInstructions;  // since the last stats line
+    private float workerFrom, workerTo; // the readings those span: rated over that time, not the stats line's
     private double totalWorkerInstructions;
     private int frames;
     private float statsAt;
@@ -534,6 +535,7 @@ public class EmuMachine : UdonSharpBehaviour
         gvmWritebackMaterial.SetTexture("_GpuTarget", gpuCamera.targetTexture);
         gpuMaterial.SetTexture("_State", state);
         gpuMaterial.SetTexture("_GvmRom", gvmRom);
+        if (volumeMaterial != null) volumeMaterial.SetTexture("_GvmRom", gvmRom);   // the holodeck reads the same lists
         if (sound != null) sound.mixMaterial.SetTexture("_GvmRom", gvmRom);   // samples are played from where they lie in the ROM
         tickMaterial.SetInt("_Ticks", ticks);
         RenderTexture target = gpuCamera.targetTexture;
@@ -1913,6 +1915,8 @@ public class EmuMachine : UdonSharpBehaviour
             }
             workerClock[c] = now;
         }
+        if (!haveWorkerClock) workerFrom = Time.time;
+        workerTo = Time.time;
         haveWorkerClock = cores > 1;
         // the geometry: what geotune picked and laid out, shown when it changes
         uint first = Word(64 + 0x3d, 0), hybrid = Word(64 + 0x3d, 3);
@@ -1952,9 +1956,10 @@ public class EmuMachine : UdonSharpBehaviour
     {
         float dt = Time.time - statsAt;
         statsAt = Time.time;
-        float ips = instructions / dt, fps = frames / dt, workerIps = workerInstructions / dt;
+        float ips = instructions / dt, fps = frames / dt, workerIps = workerTo > workerFrom ? workerInstructions / (workerTo - workerFrom) : 0f;
         instructions = 0;
         workerInstructions = 0;
+        workerFrom = workerTo;
         frames = 0;
         mipsCore = ips / 1000000f;
         mipsAll = (ips + workerIps) / 1000000f;

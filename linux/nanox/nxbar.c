@@ -304,9 +304,10 @@ task_x(int i)
 	return tasks_x() + i * (task_width() + 4);
 }
 
-/* The machine's speed in millions of instructions a second: the first core's (its cycle
- * counter counts them), then all cores' (the workers' counts are the machine's control words,
- * as nxmon reads them: docs/machine/multicore.md). True when the text is another than it was. */
+/* The machine's speed in millions of instructions a second: the first core's (its cycle counter
+ * counts them; on gpu_vm its ops counter, as cycle counts bundles), then all cores' (the workers'
+ * counts are the control words, as nxmon reads them: docs/machine/multicore.md). True when the
+ * text is another than it was. */
 static char speed_text[24] = "";
 
 static int
@@ -331,7 +332,7 @@ speed_sample(unsigned ms)
 			more = at;
 	}
 #ifdef __gpuvm__
-	__asm__ volatile("mfsr %0, cycle" : "=r"(first));
+	__asm__ volatile("mfsr %0, ops" : "=r"(first));
 #else
 	__asm__ volatile("rdcycle %0" : "=r"(first));
 #endif

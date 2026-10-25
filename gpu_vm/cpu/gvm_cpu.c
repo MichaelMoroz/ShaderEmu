@@ -1085,6 +1085,7 @@ int main(int argc, char **argv) {
         if (c) k->halted = 1;   // (a worker from when the kernel lays the workers out: workers_pass)
         if (!c && H.wc_nb) { k->wl.nb = H.wc_nb; k->wl.ways = H.wc_ways; k->wl.reloc = H.wc_reloc; }
     }
+    H.m.op_passes = getenv("GVM_OP_PASSES") ? (uint32_t)atoi(getenv("GVM_OP_PASSES")) : 0;   // operations landing later, as on the card
     H.m.late = getenv("GVM_LATE") ? (uint32_t)atoi(getenv("GVM_LATE")) : 0;   // GVM_LATE=1: late branches, 2: in a float bundle only (gvm_machine.late; clang -mllvm -gpuvm-late-br[=float])
     if (getenv("GVM_SYNCLOG") && !(SY = fopen(getenv("GVM_SYNCLOG"), "w"))) { fprintf(stderr, "gvm_cpu: GVM_SYNCLOG: cannot write\n"); return EXIT_USAGE; }
     if (getenv("GVM_RACES")) race_init(getenv("GVM_RACES"));

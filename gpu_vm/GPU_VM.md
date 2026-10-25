@@ -136,7 +136,14 @@ stops it (the pass ends before the op, which runs again) only where one is still
 what one writes, a store to what one writes or reads. The tick checks two ranges, all the destinations'
 and all the sources' (conservative, cheap); the reference each operation's. Fetches are not looked at:
 code an operation wrote runs after a `sync`, which waits for them all. A load of 0xf000_0000 is the
-count still in flight, of 0xf000_0004 the count ever refused. Other regions can be mapped to other
+count still in flight, of 0xf000_0004 the count ever refused. Only the core's own accesses are looked
+at: another core, or a device, reads what an operation in flight writes as it is. So the kernel, which
+alone asks for operations (a read's copy, a page from the ROM, a cleared page), returns to a task that
+has `/dev/gpu` open (its workers, the GPU's lists) only with none in flight (`TIF_GVM_DRAIN`,
+`resume_userspace` in `entry.S`: a load of 0xf000_0000, a `sync` if not 0; every task paid half a
+second of the boot in Unity). Half-Life handed a model a read had not yet filled to the workers ("a
+segment is damaged", on the card only; `GVM_OP_PASSES=3` on `gvm_cpu` lands each operation two commits
+late, as the card's long ones land). Other regions can be mapped to other
 system operations the same way.
 
 The compiler lowers `memcpy` and `memset` of a known small size to 16-byte loads and stores, and

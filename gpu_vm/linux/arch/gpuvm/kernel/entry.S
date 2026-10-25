@@ -122,6 +122,14 @@ resume_userspace:
 	andi s1, s0, 0 + _TIF_WORK_MASK
 	bnez s1, work_pending
 
+	/* a task with /dev/gpu open runs with this core's operations through: a load waits only on its own core's,
+	 * and what they write (a read's buffer, a page) may go next to a worker or the GPU */
+	andi s1, s0, 0 + _TIF_GVM_DRAIN
+	beqz s1, .Lops_through
+	lw s1, GVM_OPS(zero)
+	beqz s1, .Lops_through
+	sync
+.Lops_through:
 	/* the kernel stack is empty again; SCRATCH = the task while in user mode */
 	addi s0, sp, PT_SIZE_ON_STACK
 	sw s0, TASK_TI_KERNEL_SP(tp)

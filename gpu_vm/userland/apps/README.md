@@ -65,6 +65,8 @@ Builds side by side: `GVM_APPS_REPO`, `GVM_APPS_WORK` and `GVM_APPS_LOGS` name a
   an unaligned pointer, which RISC-V allows, gives the bytes past the word as 0 and nothing says so. The compiler
   splits only what it does not know to be aligned, and a cast tells it the opposite. The NES read its 6502 words so
   (`nofrendo.patch`: byte by byte under `__gpuvm__`); look for such casts first when a program's sums are wrong.
+  Half-Life's save and restore read its fields so (`hlsdk.patch`: `SR_Read` in `dlls/util.cpp`): at a level change
+  the player's table entry lost its flag (0x80000000) and the player came into the next level at 0 0 0.
 - `gpu_vm/userland/flat.ld` names the ends GNU ld names (`etext`, `__DATA_BEGIN__`, `edata`, `__executable_start`).
 - Hand-written assembly is rewritten in gpu_vm's (`mcwx_setjmp`: ra, sp, s0-s23; Quake III's and Half-Life's call
   on a stack; Half-Life's renderer thunks).
@@ -101,8 +103,8 @@ the tolerance named (`gvmcmp`, `NEAR` in `test_all.py`); an exact sum where the 
 | Red Alert | yes | every case the RISC-V machine's state sums (5fed4b4: a mix from the ROM mapped writable, the iconset header read by bytes); movie: 0 of 154 frames differ (154: the movie's own pace); atlas-forgotten 299 of 300 pictures (frame 58's overlay, gvm_cpu's timing) | soviet-300, movie (0 of 156), atlas, atlas-forgotten (300 of 300) PASS | exact state sums |
 | Quake | yes (-lmfloat) | quake-light, particles PASS; walk, exit fail on gvm_cpu's pace (4x the card's: a key typed on seeing "track 30:" lands some 40 frames late) | light, particles, walk, exit PASS | as RISC-V; particles: a float sum, gvm_cpu's and the card's own (the same to frame 200, apart from 206: the card's special functions) |
 | Quake III | yes | workers, inline, bots, bots-serial, server PASS | server PASS; workers/inline: 237 of 237 lines the same, fewer than 500 (load time) | as RISC-V where QUAKE3_ENTER fixes the entry (server: QUAKE3_ENTER=1000 added; float sums, gvm_cpu's 9b8ecbe9, the card's 4fab5e9b in two runs: apart from the first sum, taken to be the special functions, not proven) |
-| Half-Life: Uplink | yes (-lmfloat, 1 MB stack) | plays through the fight, HL_ROTATION=check 0 wrong; GVM_RACES 0 or 7 undone (light styles) | not run | HLGL_PICSUM 656aa416 (GPU addresses moved: not RISC-V's) |
-| OpenTTD | yes (`openttd.sh`: libc++, exact math) | openttd (sums 9d6fc0a0 66880c87, host_sum.sh's), openttd-scroll and openttd-scroll-serial PASS (199 pictures checked, 0 pixels differ) | not run | as RISC-V (the game state the build computer's) |
+| Half-Life: Uplink | yes (-lmfloat, 1 MB stack) | plays through the fight, HL_ROTATION=check 0 wrong; GVM_RACES 0 or 7 undone (light styles) | in the Unity world (25 October 2026): hldemo1 loads (41 s) and is drawn; before the kernel's drain of operations (`gpu_vm/GPU_VM.md`, "Operations") models came out damaged; the elevator to hldemo2 (`HL_SCRIPT` puts the player in it and uses `changetohldemo2`) brings the player to -472 -160 196, at 13 fps | HLGL_PICSUM 656aa416 (GPU addresses moved: not RISC-V's) |
+| OpenTTD | yes (`openttd.sh`: libc++, exact math) | openttd (sums 9d6fc0a0 66880c87, host_sum.sh's), openttd-scroll and openttd-scroll-serial PASS (199 pictures checked, 0 pixels differ) | in the Unity world (25 October 2026): 500 ticks sum 9d6fc0a0, the title screen drawn | as RISC-V (the game state the build computer's) |
 | terminal: nano, mg, htop, dialog, sl, file | yes | PASS | nano PASS | as RISC-V (TERM=linux) |
 | mc, mcedit | yes | PASS (term-mc: a command line in the subshell; term-mcedit) | PASS | as RISC-V |
 | ports: pcre, lockfile, socat, thttpd, curl, dropbear, sftp, at | yes | PASS (dropbear: uname -m gpuvm) | pcre PASS | as RISC-V |

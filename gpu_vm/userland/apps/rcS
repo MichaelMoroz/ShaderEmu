@@ -24,5 +24,6 @@ read h < /etc/hostname
 echo "$h" > /proc/sys/kernel/hostname
 read up rest < /proc/uptime
 echo "gpuvm: up in $up s"
-# the window system and its desktop when the host asks (bit 0 of hostwants), as emuinit.c does: the console keeps its shell
-hostwants; [ $(( $? & 1 )) = 1 ] && [ -x /usr/bin/nx ] && setsid sh /usr/bin/nx &
+# the window system and its desktop when the host asks (bit 0 of hostwants), as emuinit.c does: the console keeps its
+# shell, and the desktop writes to /tmp/nx.log (on the console it went once init gave that to the shell)
+hostwants; [ $(( $? & 1 )) = 1 ] && [ -x /usr/bin/nx ] && setsid sh /usr/bin/nx < /dev/null > /tmp/nx.log 2>&1 &

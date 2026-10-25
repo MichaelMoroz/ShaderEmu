@@ -56,6 +56,7 @@ typedef struct gvm_core {
     uint32_t waiting;        // in a supervisor's wait until (IPEND & IEN) != 0
     uint32_t op[8];          // the descriptor texels as stored at GVM_OPS (op[0] the kind; op[4-7] a blit's second)
     uint32_t opq[GVM_OPQ][8];   // the operations asked for in this pass, in order: the commit makes them
+    uint32_t opage[GVM_OPQ];    // commits each has waited through (gvm_machine.op_passes)
     uint32_t nops;
     uint32_t refused;        // operations the commit refused, ever (GVM_OPS + 4 reads it)
     uint32_t ext;            // the external interrupt line (the host's)
@@ -105,6 +106,8 @@ typedef struct gvm_machine {
                              // {op, control, imm, 0}, at a texel's start); branch offsets in 8 bytes; an instruction has 0 or 1 op
     uint32_t silent;         // (the builder's sil, a tick's SIL) a store of the bytes RAM holds already, to a texel this core has
                              // not stored to in the pass, makes no entry (and needs no room): nothing it could change is seen
+    uint32_t op_passes;      // 0 or 1: an operation is made at its pass's commit; N: N - 1 commits later, as the card's
+                             // long ones land (its core waits on it as on any in flight; another core does not)
 } gvm_machine;
 
 #define GVM_REF_BREAK_HALTS 1u   // break stops the core (the reference's tests) instead of trapping
@@ -527,7 +530,7 @@ static int gvm__op(gvm_machine *m, gvm_core *c, uint32_t base, uint32_t s, const
             if (addr < GVM_OPS && !(by <= 4 && gvm__silent(m, c, addr, by, c->x[rd])) && !gvm__room(c, addr, by)) { c->ops_run--; c->pc = epc; *end = GVM_END_FULL; return GVM__END; }
             if (by <= 4) gvm__store(m, c, addr, by, c->x[rd]);
             else for (uint32_t k = 0; k < by / 4; k++) gvm__store(m, c, addr + 4 * k, 4, c->x[(rd + k) & 63]);
-            if (addr == GVM_OPS && by == 16) memcpy(c->opq[c->nops++], c->op, sizeof c->op);   // an operation asked for
+            if (addr == GVM_OPS && by == 16) c->opage[c->nops] = 0, memcpy(c->opq[c->nops++], c->op, sizeof c->op);   // an operation asked for
             return GVM__GO;
         }
         if (mode == 4 || (mode == 5 && wd <= GVM_AMO2_MAXU)) {
@@ -669,7 +672,7 @@ static int gvm__op(gvm_machine *m, gvm_core *c, uint32_t base, uint32_t s, const
             c->waiting = 1;
             *end = GVM_END_WAIT;
             return GVM__END;
-        case GVM_X_SYNC: c->pc = epc + 4; *end = GVM_END_SYNC; return GVM__END;
+        case GVM_X_SYNC: c->pc = c->nops && m->op_passes > 1 ? epc : epc + 4; *end = GVM_END_SYNC; return GVM__END;
         case GVM_X_FENCE: return GVM__GO;
         case GVM_X_MFSR: case GVM_X_MTSR: case GVM_X_XSR: case GVM_X_SRSET: case GVM_X_SRCLR: {
             uint32_t n2 = imm & 0xfff;
@@ -865,8 +868,13 @@ void gvm_commit(gvm_machine *m) {
     }
     for (i = 0; i < m->ncores; i++) {
         gvm_core *c = &m->cores[i];
-        for (j = 0; j < c->nops; j++) c->refused += !gvm__operation(m, c->opq[j]);   // in the order asked for
-        c->nops = 0;
+        uint32_t made = 0;
+        for (j = 0; j < c->nops; j++) c->opage[j]++;
+        for (; made < c->nops && c->opage[made] >= m->op_passes; made++)   // in the order asked for
+            c->refused += !gvm__operation(m, c->opq[made]);
+        c->nops -= made;
+        memmove(c->opq, c->opq + made, c->nops * sizeof c->opq[0]);
+        memmove(c->opage, c->opage + made, c->nops * sizeof c->opage[0]);
     }
 }
 #endif   // GVM_REF_IMPL

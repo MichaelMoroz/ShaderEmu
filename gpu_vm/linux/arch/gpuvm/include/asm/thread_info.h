@@ -40,6 +40,7 @@ struct thread_info {
 #define TIF_MEMDIE		5	/* is terminating due to OOM killer */
 #define TIF_NOTIFY_SIGNAL	6	/* signal notifications exist */
 #define TIF_POLLING_NRFLAG	7	/* idle polls TIF_NEED_RESCHED */
+#define TIF_GVM_DRAIN		8	/* /dev/gpu opened: no operation in flight on return to user (entry.S) */
 
 #define _TIF_SYSCALL_TRACE	(1 << TIF_SYSCALL_TRACE)
 #define _TIF_NOTIFY_RESUME	(1 << TIF_NOTIFY_RESUME)
@@ -47,6 +48,7 @@ struct thread_info {
 #define _TIF_NEED_RESCHED	(1 << TIF_NEED_RESCHED)
 #define _TIF_NOTIFY_SIGNAL	(1 << TIF_NOTIFY_SIGNAL)
 #define _TIF_POLLING_NRFLAG	(1 << TIF_POLLING_NRFLAG)
+#define _TIF_GVM_DRAIN		(1 << TIF_GVM_DRAIN)
 
 #define _TIF_WORK_MASK \
 	(_TIF_NOTIFY_RESUME | _TIF_SIGPENDING | _TIF_NEED_RESCHED | _TIF_NOTIFY_SIGNAL)

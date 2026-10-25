@@ -134,6 +134,10 @@ def rest(text):
         ('\tif (cmd == SHADEREMU_GPU_REST) {\n', REST_MASK + '\tif (cmd == SHADEREMU_GPU_REST) {\n'),
         ("\t\t/* the field's job of a program that dies with it out",
          REST_RELEASE + "\t\t/* the field's job of a program that dies with it out"),
+        # (what its reads and pages bring may go to its workers or the GPU next: arch/gpuvm/kernel/entry.S)
+        ('static int shaderemu_gpu_open(struct inode *inode, struct file *file)\n{\n\tint i;\n\n',
+         'static int shaderemu_gpu_open(struct inode *inode, struct file *file)\n{\n\tint i;\n\n'
+         '\tset_thread_flag(TIF_GVM_DRAIN);\n'),
     ]:
         assert text.count(old) == 1, old
         text = text.replace(old, new)
