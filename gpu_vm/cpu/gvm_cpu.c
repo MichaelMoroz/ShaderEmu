@@ -818,10 +818,13 @@ static void stlog_init(const char *path) {
 // a lower core changed in the pass and a higher core stored too (its value as it saw the word is what the commit
 // leaves); "as it was": a core read a word another core stored in the same pass (and was given it as the pass began:
 // a core waiting on another's word does this every round, and is right to). The mailboxes, the firmware's words and
-// the counters are left out: several cores write them by design.
+// the counters are left out: several cores write them by design. "texel": a lower core changed a word of a texel and a
+// higher core stored only other words of it in the same pass: a commit of whole texels (gpu_vm/tick/CACHE.md, "Decided
+// for the new tick") would write the higher core's view of that word, the value from before the pass, over the lower's.
 static struct {
     FILE *f;
-    uint64_t undone, asitwas;
+    uint64_t undone, asitwas, texel;
+    uint32_t *tmap, *tmapused, ntused;  // texel + 1, then up to 8 cores' (core << 8 | words stored << 4 | words changed)
     uint32_t *reads[CPU_MAX_CORES], nreads[CPU_MAX_CORES], capreads[CPU_MAX_CORES];   // (word, pc) pairs
     uint32_t *spc[CPU_MAX_CORES];   // a core's first store's pc to each word of this pass: word + 1, pc
     uint32_t *wmap, *wmapused, nused;   // word + 1 -> the first writer's entry; entries chained
@@ -903,6 +906,37 @@ static void race_pass(void) {
             }
         }
     }
+    // texels: each core's words stored and changed, then every lower core's changed word that a higher one did not store
+    for (uint32_t u = 0; u < RC.nused; u++) {
+        uint32_t *s = &RC.wmap[RC.wmapused[u]], w = s[0] - 1, start = H.m.ram[w], t = w >> 2, bit = 1u << (w & 3);
+        uint32_t h = (t * 0x9e3779b1u) >> (32 - RC_MAP_BITS);
+        while (RC.tmap[9 * h] && RC.tmap[9 * h] != t + 1) h = (h + 1) & (RC_MAP - 1);
+        uint32_t *ts = &RC.tmap[9 * h];
+        if (!ts[0]) { ts[0] = t + 1; for (int k = 1; k < 9; k++) ts[k] = RC_NONE; RC.tmapused[RC.ntused++] = h; }
+        for (uint32_t e = s[1]; e != RC_NONE; e = RC.ent[3 * e + 2]) {
+            uint32_t core = RC.ent[3 * e], changed = RC.ent[3 * e + 1] != start ? bit : 0;
+            int k = 1;
+            while (k < 9 && ts[k] != RC_NONE && ts[k] >> 8 != core) k++;
+            if (k == 9) continue;   // (more than eight cores in one texel: not looked at)
+            ts[k] = (ts[k] == RC_NONE ? core << 8 : ts[k]) | bit << 4 | changed;
+        }
+    }
+    for (uint32_t u = 0; u < RC.ntused; u++) {
+        uint32_t *ts = &RC.tmap[9 * RC.tmapused[u]], t = ts[0] - 1;
+        for (int a = 1; a < 9 && ts[a] != RC_NONE; a++)
+            for (int b = 1; b < 9 && ts[b] != RC_NONE; b++) {
+                uint32_t ca = ts[a] >> 8, cb = ts[b] >> 8, lost = (ts[a] & 15) & ~((ts[b] >> 4) & 15);
+                if (ca >= cb || !lost) continue;   // the commit writes the lower core first, the higher over it
+                uint32_t lw = (t << 2) + (uint32_t)__builtin_ctz(lost), apc = race_spc(ca, lw)[1], bpc = 0;
+                for (uint32_t k = 0; k < 4 && !bpc; k++) if ((ts[b] >> (4 + k)) & 1) bpc = race_spc(cb, (t << 2) + k)[1];
+                RC.texel++;
+                race_note(2, bpc);
+                if (RC.f) fprintf(RC.f, "texel %08x: core %u (pc %08x) changed words %x, core %u (pc %08x) stored words %x, pass %llu\n",
+                                  t << 4, ca, apc, ts[a] & 15, cb, bpc, (ts[b] >> 4) & 15, (unsigned long long)H.passes);
+            }
+        ts[0] = 0;
+    }
+    RC.ntused = 0;
     for (uint32_t i = 0; i < H.ncores; i++) {
         for (uint32_t r = 0; r < RC.nreads[i]; r += 2) {
             uint32_t w = RC.reads[i][r], *s = race_slot(w);
@@ -922,13 +956,15 @@ static int race_cmp(const void *x, const void *y) {
     return a[0] != b[0] ? (a[0] < b[0] ? -1 : 1) : a[2] != b[2] ? (a[2] > b[2] ? -1 : 1) : 0;
 }
 static void race_report(void) {
-    uint32_t shown[2] = {0, 0};
+    uint32_t shown[3] = {0, 0, 0};
+    static const char *const kinds[3] = {"undone", "as it was", "texel"};
     qsort(RC.place, RC.nplace, 12, race_cmp);
-    fprintf(stderr, "gvm_cpu: races: %llu undone, %llu read as they were\n", (unsigned long long)RC.undone, (unsigned long long)RC.asitwas);
+    fprintf(stderr, "gvm_cpu: races: %llu undone, %llu read as they were, %llu texels a whole-texel commit would lose a word of\n",
+            (unsigned long long)RC.undone, (unsigned long long)RC.asitwas, (unsigned long long)RC.texel);
     for (uint32_t k = 0; k < RC.nplace; k++) {
         uint32_t kind = RC.place[3 * k];
-        if (RC.f) fprintf(RC.f, "%s at %08x: %u\n", kind ? "as it was" : "undone", RC.place[3 * k + 1], RC.place[3 * k + 2]);
-        if (shown[kind]++ < 8) fprintf(stderr, "  %s at %08x: %u\n", kind ? "as it was" : "undone", RC.place[3 * k + 1], RC.place[3 * k + 2]);
+        if (RC.f) fprintf(RC.f, "%s at %08x: %u\n", kinds[kind], RC.place[3 * k + 1], RC.place[3 * k + 2]);
+        if (shown[kind]++ < 8) fprintf(stderr, "  %s at %08x: %u\n", kinds[kind], RC.place[3 * k + 1], RC.place[3 * k + 2]);
     }
     if (RC.f) fclose(RC.f);
 }
@@ -938,6 +974,8 @@ static void race_init(const char *path) {
     for (uint32_t i = 0; i < H.ncores; i++) RC.spc[i] = (uint32_t *)calloc(2 * (size_t)RC_SPC, 4);
     RC.wmap = (uint32_t *)calloc(2 * (size_t)RC_MAP, 4);
     RC.wmapused = (uint32_t *)calloc(RC_MAP, 4);
+    RC.tmap = (uint32_t *)calloc(9 * (size_t)RC_MAP, 4);
+    RC.tmapused = (uint32_t *)calloc(RC_MAP, 4);
     for (uint32_t i = 0; i < H.ncores; i++) H.cores[i].host_access = race_access;
 }
 

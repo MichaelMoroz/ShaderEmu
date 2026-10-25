@@ -78,6 +78,7 @@ research out of the repository.
 
 - **0a, the wave probe** (WAVES.md): the pixel-to-wave map for every draw, block and padding case.
   - Gate: a geometry with 0% of waves mixing cores, and its padding cost in lanes and ms.
+  - Done (25 October 2026): an 8 x 8 block a core, one row of blocks (2,048 x 8 for 256 cores), one triangle.
 - **0b, what divergence costs today:** Nsight Graphics' Shader Profiler on c8 (live lanes per warp instruction) and
   the D3D11 timing probe. This bounds the gain from 0a.
 

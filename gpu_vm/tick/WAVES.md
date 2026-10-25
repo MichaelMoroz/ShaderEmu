@@ -9,9 +9,92 @@ in which eight state texels they write at the end. Lanes of two cores run two pr
 differ, the wave runs both: its fast loop runs as long as its slowest core, and a general step that one core takes is
 paid by every lane. No compiler or ISA change can make two programs agree, so the geometry must keep them apart.
 
-## Where today's tick stands
+## Measured (25 October 2026, `gpu_vm/tick/probes/waves.cpp`)
 
-c8_v0001 has not been measured, and it probably breaks the rule:
+`bin\waves.exe` (`build_waves.bat`; through `tools\gpu_queue.ps1`, `--warp` first) draws 256 cores each way. A map
+shader appends a record for every invocation (its wave from an atomic counter, pixel, core, lane), and a timing shader
+runs 20,000 steps of a hash in every core's pixels (the median of 7 draws). The RTX 5070 Laptop runs pixel waves of 32
+lanes. The timing's alternating column (odd cores long, even short) is left out: at 256 cores every wave runs at once,
+so a draw lasts as long as its longest wave either way.
+
+| how the cores are drawn | waves | waves mixing cores, % | cores a wave | live lanes a wave | invocations a useful pixel | time, ms |
+|---|---|---|---|---|---|---|
+| c8 (8 x 6 in cells 8 x 16), a triangle a core (today) | 894 | 0 | 0.72 | 27.4 | 2.00 | 0.229 |
+| c8, a triangle a core cut to the block by clip distances | 512 | 0 | 1.00 | 24.0 | 1.00 | 0.186 |
+| c8, a quad a core | 512 | 0 | 1.00 | 24.0 | 1.00 | 0.187 |
+| c8, one triangle over all, padding discarded | 1,024 | 0 | 0.50 | 32.0 | 2.67 | 0.405 |
+| 4 x 8, one triangle over all | 256 | 0 | 1.00 | 32.0 | 1.00 | 0.203 |
+| 4 x 16, one triangle over all | 512 | 0 | 1.00 | 32.0 | 1.00 | 0.222 |
+| 8 x 8, one triangle over all | 512 | 0 | 1.00 | 32.0 | 1.00 | 0.207 |
+| 8 x 16, one triangle over all | 1,024 | 0 | 1.00 | 32.0 | 1.00 | 0.445 |
+| 8 x 4, one triangle over all | 256 | 100 | 2.00 | 32.0 | 1.00 | 0.112 |
+| 16 x 2, one triangle over all | 256 | 100 | 4.00 | 32.0 | 1.00 | 0.129 |
+| 8 x 6, one triangle over all | 384 | 66.7 | 1.67 | 32.0 | 1.00 | 0.158 |
+| 4 x 8 side by side, a quad a core | 384 | 33.3 | 1.33 | 21.3 | 1.00 | 0.147 |
+| 8 x 8 side by side, a quad a core | 640 | 20.0 | 1.20 | 25.6 | 1.00 | 0.261 |
+| 4 x 8, one quad over each row of 256 cores | 288 | 66.7 | 1.89 | 28.4 | 1.00 | 0.174 |
+| 8 x 8, one quad over each row of 128 cores | 576 | 22.2 | 1.22 | 28.4 | 1.00 | 0.217 |
+| 4 x 8 alone in a 64 x 64 cell, a quad a core | 512 | 0 | 1.00 | 16.0 | 1.00 | 0.194 |
+| 4 x 8 alone in a 64 x 64 cell, a clipped triangle a core | 512 | 0 | 1.00 | 16.0 | 1.00 | 0.202 |
+| 8 x 4 alone in a 64 x 64 cell, a quad a core | 512 | 0 | 1.00 | 16.0 | 1.00 | 0.186 |
+| 16 x 2 alone in a 64 x 16 cell, a quad a core | 512 | 0 | 1.00 | 16.0 | 1.00 | 0.192 |
+| 32 x 1 alone in a 64 x 8 cell, a quad a core | 512 | 0 | 1.00 | 16.0 | 1.00 | 0.186 |
+
+The full table is in `build\waves_card.txt`. What it shows:
+
+- **Over one big triangle, a warp is a 4 x 8 pixel tile** (2 x 4 quads). A block that is a whole number of those tiles,
+  on their grid (4 x 8, 4 x 16, 8 x 8, 8 x 16), never shares a warp and fills every lane.
+- **Any primitive edge inside the cores' area mixes them.** One quad over a row of 4 x 8 cores mixed 67% of its waves,
+  because its diagonal crosses the tiles. Side-by-side quads, one a core, mixed 20-33%.
+- **A core as a primitive of its own, far from the next, never mixes, but its waves hold 16 lanes**, whatever the
+  shape or the way it is drawn: a 32-pixel core is two half waves. At 256 cores they cost about what full waves cost
+  (0.19-0.20 ms against 0.20). A tick that fills the card with warps would pay for them.
+- **Rows 1 pixel tall** run half their lanes as helpers (16 live lanes a wave for 32 x 1 and 64 x 1).
+- **Today's tick keeps the rule on this card**, but its triangle a core launches twice the pixels it uses, the spill
+  past the block that it then discards. Cutting the triangle to the block with two clip distances (`SV_ClipDistance`,
+  which Unity has) launches only the block, 0.186 ms against 0.229 in the probe. That is a change to try on c8 now.
+
+**Padding inside one big triangle, and wider quads** (the second round, same probe):
+
+| how the cores are drawn | waves | mixing, % | live lanes a wave | invocations a useful pixel | time, ms |
+|---|---|---|---|---|---|
+| 4 x 8 side by side, one triangle (no padding) | 256 | 0 | 32.0 | 1.00 | 0.203 |
+| 4 x 8 in 8 x 8 cells, one triangle, padding discarded | 512 | 0 | 32.0 | 2.00 | 0.223 |
+| 4 x 8 in 8 x 8 cells, one triangle, padding returns | 512 | 0 | 32.0 | 2.00 | 0.221 |
+| 4 x 8 in 8 x 16 cells, one triangle | 1,024 | 0 | 32.0 | 4.00 | 0.442 |
+| 4 x 8 in 16 x 16 cells, one triangle | 2,048 | 0 | 32.0 | 8.00 | 0.384 |
+| 4 x 8 in 32 x 32 cells, one triangle | 8,192 | 0 | 32.0 | 32.0 | 0.554 |
+| 4 x 8 in 64 x 64 cells, one triangle | 32,768 | 0 | 32.0 | 128 | 1.451 |
+| 64 x 2 in 128 x 16 cells, a quad a core | 1,536 | 0 | 21.3 | 1.00 | 0.617 |
+| 32 x 4 in 64 x 16 cells, a quad a core | 1,536 | 0 | 21.3 | 1.00 | 0.615 |
+| 16 x 16 in 64 x 64 cells, a quad a core | 2,304 | 0 | 28.4 | 1.00 | 0.845 |
+| 32 x 8 in 64 x 64 cells, a quad a core | 2,560 | 0 | 25.6 | 1.00 | 0.968 |
+
+- Padding between tile-aligned cores keeps every core's warp full and separate. But padding is not free: every wave of
+  padding is launched and leaves at once, and a draw costs about as many waves as it launches. Twice the pixels cost
+  10%, 128 times cost 7x.
+- No shape of a primitive a core fills its warps on NVIDIA, however wide (21-28 live lanes of 32).
+- Other cards, from their public material (not measured here):
+  - AMD RDNA runs pixel shaders in waves of 64 or 32, chosen by the compiler, usually 64 ([RDNA architecture,
+    GPUOpen](https://gpuopen.com/download/RDNA_Architecture_public.pdf)).
+  - Intel packs pixels of several polygons into one thread on purpose ("multi-polygon" dispatch: 2 polygons a thread on
+    Gen12, SIMD4x8 and SIMD2x16 on Xe2; [Mesa MR 26585](https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/26585),
+    [Phoronix](https://www.phoronix.com/news/Intel-Dual-SIMD8-Mesa)).
+  - Patents describe packers that merge partly covered quads of different primitives into one
+    ([US11798218](https://patents.google.com/patent/US11798218), [US11748933](https://patents.google.com/patent/US11748933)).
+  - So a primitive a core is never safe across vendors: packing several primitives into one wave is what these GPUs are
+    built to do. One big triangle has no primitive edges inside it, so what remains is the wave's tile. A block of 8 x 8,
+    on an 8 x 8 grid, is two whole NVIDIA warps and as large as a wave of 64.
+
+**The geometry for the new tick (decided 25 October 2026):** a core is an 8 x 8 block (64 pixels: two whole NVIDIA
+warps, one AMD wave of 64), and the cores lie in one row of blocks: 256 cores make a target 2,048 x 8, drawn by one
+triangle. With one row, no wave can take pixels of two rows of cores, whatever a card's tile is. A core with nothing to
+do still launches its waves and must leave at the top; whether that costs more than culling it by geometry (which
+commit 759f259 found to matter) is still to be measured.
+
+## Where today's tick stood before the probe
+
+c8_v0001 had not been measured, and it looked as if it broke the rule:
 
 - A worker's block is 8 x 6 pixels, which is 48 pixels or 12 quads. Its 363 state texels at eight a pixel need 46
   pixels: the 258-entry write cache sets the block's size.
