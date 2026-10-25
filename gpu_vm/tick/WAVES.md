@@ -89,8 +89,44 @@ The full table is in `build\waves_card.txt`. What it shows:
 **The geometry for the new tick (decided 25 October 2026):** a core is an 8 x 8 block (64 pixels: two whole NVIDIA
 warps, one AMD wave of 64), and the cores lie in one row of blocks: 256 cores make a target 2,048 x 8, drawn by one
 triangle. With one row, no wave can take pixels of two rows of cores, whatever a card's tile is. A core with nothing to
-do still launches its waves and must leave at the top; whether that costs more than culling it by geometry (which
-commit 759f259 found to matter) is still to be measured.
+do still launches its waves and leaves at the top (measured below: not culled).
+
+**Idle cores in that geometry** (`bin\waves.exe --only idle`, 25 October 2026, RTX 5070 Laptop). A busy core's pixels run
+20,000 steps of a hash, an idle core's return at the top. Each draw is its own submission, waited for: drawn back to back
+the draws overlapped, and a small draw's timestamps did not wait for its work (1 busy core read 0.001 ms).
+
+| busy cores of 256 | how drawn | waves | mixing, % | live lanes a wave | time, ms |
+|---|---|---|---|---|---|
+| all | one triangle | 512 | 0 | 32.0 | 0.342 |
+| 128, a run | one triangle | 512 | 0 | 32.0 | 0.225 |
+| 128, a run | one quad over the run | 288 | 22.2 | 28.4 | 0.234 |
+| 128, a run | a quad a busy core | 320 | 20.0 | 25.6 | 0.234 |
+| 128, every 2nd | one triangle | 512 | 0 | 32.0 | 0.332 |
+| 128, every 2nd | a quad a busy core | 384 | 0 | 21.3 | 0.250 |
+| 32, a run | one triangle | 512 | 0 | 32.0 | 0.173 |
+| 32, a run | one quad over the run | 72 | 22.2 | 28.4 | 0.186 |
+| 32, every 8th | one triangle | 512 | 0 | 32.0 | 0.229 |
+| 32, every 8th | a quad a busy core | 96 | 0 | 21.3 | 0.172 |
+| 5, a run | one triangle | 512 | 0 | 32.0 | 0.173 |
+| 5, a run | one quad over the run | 13 | 15.4 | 24.6 | 0.187 |
+| 1 | one triangle | 512 | 0 | 32.0 | 0.173 |
+| 1 | one quad over it | 3 | 0 | 21.3 | 0.172 |
+
+At 2,000 steps the same order: all 0.044, 1 busy 0.020 either way, 128 every 2nd 0.043 against 0.027.
+
+- Culling by geometry breaks the rule. A quad's diagonal edge crosses the blocks it covers, so a quad over a run of
+  cores mixes 15-22% of its waves, and quads of neighbouring cores mix 20%. Only quads of cores apart keep 0%, at 21 live
+  lanes of 32.
+- One triangle keeps 0% in every pattern. An idle core's waves launched and left cost nothing measurable while the busy
+  cores lie together (1, 5, 32 and 128 in a run: 0.173 to 0.225 against 0.172 to 0.234 culled).
+- Busy cores scattered among idle ones cost up to a third more than culled ones (every 8th 0.229 against 0.172, every 2nd
+  0.332 against 0.250): a run of 128 costs 0.225, the same 128 spread over the row 0.332, as much as all 256.
+- So the new tick draws one triangle and culls nothing, and the kernel gives out worker cores packed from core 1 up,
+  not spread.
+- An idle core that copies its state (a load a pixel, as from the state's other texture: "idle copy") costs what one that
+  returns a constant does: 1 busy 0.172 against 0.173, 32 in a run 0.173 against 0.172, every 8th 0.235 against 0.235,
+  128 in a run 0.236 against 0.236 (a second run on the card, in which all 256 read 0.408: the clock moves between runs,
+  so compare within one). So the state can stay in two textures with no copy draw (c8's vert_copy and frag_copy).
 
 ## Where today's tick stood before the probe
 

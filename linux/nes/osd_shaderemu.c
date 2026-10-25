@@ -549,7 +549,11 @@ frame_elsewhere(int after)
 static void
 frame_paced(void)
 {
-	static unsigned due;
+	/* the emulating core's alone, in a texel of its own: a plain static lay in one with the first
+	 * core's `listing` (split into words by the link), and a whole texel stored by either core
+	 * loses the other's word (gpu_vm's GVM_RACES; volatile keeps the link from splitting it) */
+	static volatile struct { unsigned due, pad[3]; } paced __attribute__((aligned(16)));
+	unsigned due = paced.due;
 	const volatile unsigned *clock = (const volatile unsigned *)((char *)seglPalette() - 0x400 + 0x34);
 	unsigned now = *clock;
 
@@ -569,9 +573,12 @@ frame_paced(void)
 		else if ((int)(due - now) > 2 && gpu_every > 1)
 			gpu_every--;
 	}
-	if ((int)(now - due) > 50 || (int)(due - now) > 200)
-		due = now;
-	else if (emu_worker) {
+	if ((int)(now - due) > 50 || (int)(due - now) > 200) {
+		paced.due = now;
+		return;
+	}
+	paced.due = due;
+	if (emu_worker) {
 		while ((int)(due - *clock) > 0)
 			mc_end_pass();
 	} else {

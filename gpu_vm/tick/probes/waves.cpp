@@ -101,19 +101,22 @@ static void barrier(ID3D12Resource* r, D3D12_RESOURCE_STATES a, D3D12_RESOURCE_S
     list->ResourceBarrier(1, &x);
 }
 
-struct Case { const char* name; uint32_t geo, bw, bh, cw, ch, pad; };
-struct Params { uint32_t geo, bw, bh, cw, ch, perRow, cores, work, pad, alt, w, h; };
+// w: the target's width (0: 1024); busyN and stride: the busy cores (waves.hlsl's busy())
+struct Case { const char* name; uint32_t geo, bw, bh, cw, ch, pad, w = 0, busyN = 0, stride = 1; };
+struct Params { uint32_t geo, bw, bh, cw, ch, perRow, cores, work, pad, alt, w, h, busyN, stride; };
 
 int main(int argc, char** argv) {
     bool warp = false;
     uint32_t ncores = 256, work = 20000, rounds = 7;
+    std::string only;
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
         if (a == "--warp") warp = true;
         else if (a == "--cores" && i + 1 < argc) ncores = atoi(argv[++i]);
         else if (a == "--work" && i + 1 < argc) work = atoi(argv[++i]);
         else if (a == "--rounds" && i + 1 < argc) rounds = atoi(argv[++i]);
-        else { printf("waves [--warp] [--cores N] [--work N] [--rounds N]\n"); return 1; }
+        else if (a == "--only" && i + 1 < argc) only = argv[++i];
+        else { printf("waves [--warp] [--cores N] [--work N] [--rounds N] [--only TEXT]\n"); return 1; }
     }
     ComPtr<IDXGIFactory4> fac;
     check(CreateDXGIFactory1(IID_PPV_ARGS(&fac)), "factory");
@@ -134,7 +137,7 @@ int main(int argc, char** argv) {
     check(dev->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)), "fence");
 
     D3D12_ROOT_PARAMETER rp[2] = {};
-    rp[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS; rp[0].Constants = {0, 0, 12};
+    rp[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS; rp[0].Constants = {0, 0, 14};
     rp[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV; rp[1].Descriptor = {1, 0};
     D3D12_ROOT_SIGNATURE_DESC rsd{2, rp, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_NONE};
     ComPtr<ID3DBlob> rsb, rse;
@@ -228,8 +231,27 @@ int main(int argc, char** argv) {
         {"32x4 in 64x16, a quad a core", 2, 32, 4, 64, 16, 0},
         {"16x16 in 64x64, a quad a core", 2, 16, 16, 64, 64, 0},
         {"32x8 in 64x64, a quad a core", 2, 32, 8, 64, 64, 0},
+        // the new tick's geometry (8 x 8 cores in one row, 2,048 x 8) with idle cores: one triangle over all of them
+        // (an idle core leaves at the top), a quad a busy core, or one quad over the busy run
+        {"idle: all 256 busy, one triangle", 0, 8, 8, 8, 8, 0, 2048},
+        {"idle: 128 of 256 busy (a run), one triangle", 0, 8, 8, 8, 8, 0, 2048, 128, 1},
+        {"idle: 128 of 256 busy (a run), one quad over them", 6, 8, 8, 8, 8, 0, 2048, 128, 1},
+        {"idle: 128 of 256 busy (a run), a quad a busy core", 5, 8, 8, 8, 8, 0, 2048, 128, 1},
+        {"idle: 128 of 256 busy (every 2nd), one triangle", 0, 8, 8, 8, 8, 0, 2048, 128, 2},
+        {"idle: 128 of 256 busy (every 2nd), a quad a busy core", 5, 8, 8, 8, 8, 0, 2048, 128, 2},
+        {"idle: 32 of 256 busy (a run), one triangle", 0, 8, 8, 8, 8, 0, 2048, 32, 1},
+        {"idle: 32 of 256 busy (a run), one quad over them", 6, 8, 8, 8, 8, 0, 2048, 32, 1},
+        {"idle: 32 of 256 busy (every 8th), one triangle", 0, 8, 8, 8, 8, 0, 2048, 32, 8},
+        {"idle: 32 of 256 busy (every 8th), a quad a busy core", 5, 8, 8, 8, 8, 0, 2048, 32, 8},
+        {"idle: 5 of 256 busy (a run), one triangle", 0, 8, 8, 8, 8, 0, 2048, 5, 1},
+        {"idle: 5 of 256 busy (a run), one quad over them", 6, 8, 8, 8, 8, 0, 2048, 5, 1},
+        {"idle: 1 of 256 busy, one triangle", 0, 8, 8, 8, 8, 0, 2048, 1, 1},
+        {"idle: 1 of 256 busy, one quad over it", 6, 8, 8, 8, 8, 0, 2048, 1, 1},
+        {"idle: 1 of 256 busy, one triangle, idle copy", 0, 8, 8, 8, 8, 2, 2048, 1, 1},
+        {"idle: 32 of 256 busy (a run), one triangle, idle copy", 0, 8, 8, 8, 8, 2, 2048, 32, 1},
+        {"idle: 32 of 256 busy (every 8th), one triangle, idle copy", 0, 8, 8, 8, 8, 2, 2048, 32, 8},
+        {"idle: 128 of 256 busy (a run), one triangle, idle copy", 0, 8, 8, 8, 8, 2, 2048, 128, 1},
     };
-    const uint32_t W = 1024;
     ComPtr<ID3D12QueryHeap> qh;
     D3D12_QUERY_HEAP_DESC qhd{D3D12_QUERY_HEAP_TYPE_TIMESTAMP, 2 * 64};
     check(dev->CreateQueryHeap(&qhd, IID_PPV_ARGS(&qh)), "query heap");
@@ -243,6 +265,8 @@ int main(int argc, char** argv) {
     printf("\n%-52s %7s %9s %9s %9s %9s %9s %10s %10s %6s\n", "case", "waves", "mixed %", "cores/w", "lanes/w", "pad w %",
            "inv/px", "same ms", "alt ms", "alt/s");
     for (const Case& cs : cases) {
+        if (!only.empty() && std::string(cs.name).find(only) == std::string::npos) continue;
+        const uint32_t W = cs.w ? cs.w : 1024;
         uint32_t perRow = W / cs.cw, rows = (ncores + perRow - 1) / perRow, H = rows * cs.ch;
         D3D12_HEAP_PROPERTIES hp{D3D12_HEAP_TYPE_DEFAULT};
         D3D12_RESOURCE_DESC td{D3D12_RESOURCE_DIMENSION_TEXTURE2D, 0, W, H, 1, 1, DXGI_FORMAT_R32G32B32A32_UINT, {1, 0},
@@ -256,11 +280,12 @@ int main(int argc, char** argv) {
         ComPtr<ID3D12Resource> zero = buffer(D3D12_HEAP_TYPE_UPLOAD, 16, D3D12_RESOURCE_STATE_GENERIC_READ, false);
         ComPtr<ID3D12Resource> rb = buffer(D3D12_HEAP_TYPE_READBACK, bytes, D3D12_RESOURCE_STATE_COPY_DEST, false);
         { void* p; check(zero->Map(0, nullptr, &p), "Map"); memset(p, 0, 16); zero->Unmap(0, nullptr); }
-        uint32_t verts = cs.geo == 0 ? 3 : cs.geo == 2 ? 6 * ncores : cs.geo == 4 ? 6 * rows * (cs.pad ? cs.pad : 1) : 3 * ncores;
+        uint32_t verts = cs.geo == 0 ? 3 : cs.geo == 2 ? 6 * ncores : cs.geo == 4 ? 6 * rows * (cs.pad ? cs.pad : 1)
+                       : cs.geo == 5 ? 6 * cs.busyN : cs.geo == 6 ? 6 : 3 * ncores;
         auto setup = [&](ID3D12PipelineState* p, const Params& pr) {
             list->SetPipelineState(p);
             list->SetGraphicsRootSignature(root.Get());
-            list->SetGraphicsRoot32BitConstants(0, 12, &pr, 0);
+            list->SetGraphicsRoot32BitConstants(0, 14, &pr, 0);
             list->SetGraphicsRootUnorderedAccessView(1, ub->GetGPUVirtualAddress());
             D3D12_VIEWPORT vp{0, 0, (float)W, (float)H, 0, 1};
             D3D12_RECT sc{0, 0, (LONG)W, (LONG)H};
@@ -269,7 +294,7 @@ int main(int argc, char** argv) {
             list->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
             list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         };
-        Params pr{cs.geo, cs.bw, cs.bh, cs.cw, cs.ch, perRow, ncores, 0, cs.pad, 0, W, H};
+        Params pr{cs.geo, cs.bw, cs.bh, cs.cw, cs.ch, perRow, ncores, 0, cs.pad, 0, W, H, cs.busyN, cs.stride};
         // the map
         barrier(ub.Get(), D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COPY_DEST);
         list->CopyBufferRegion(ub.Get(), 0, zero.Get(), 0, 16);
@@ -307,11 +332,14 @@ int main(int argc, char** argv) {
         for (int alt = 0; alt < 2; alt++) {
             Params tp = pr;
             tp.work = work; tp.alt = alt;
-            setup(pTime.Get(), tp);
+            // (a round a submission, waited for: back to back the draws overlapped and a small one's timestamps did
+            // not wait for its work; the tick's passes each wait for the last)
             for (uint32_t r = 0; r < rounds; r++) {
+                setup(pTime.Get(), tp);
                 list->EndQuery(qh.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 2 * r);
                 list->DrawInstanced(verts, 1, 0, 0);
                 list->EndQuery(qh.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 2 * r + 1);
+                flush();
             }
             list->ResolveQueryData(qh.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0, 2 * rounds, qrb.Get(), 0);
             flush();

@@ -202,6 +202,39 @@ limit of 4).
   `SE_ParticlesGive`. The fix is in Quake's port: the fields each side writes go on 16-byte lines of their own, as
   gles.c's statics already are for the RISC-V machine.
 
+**Fixed, 25 October 2026: every program with workers at 0.** `python3 gpu_vm/userland/apps/test_all.py --races` runs
+each case with workers under `GVM_RACES` and fails one with a change undone or a texel two cores stored to in a pass
+(`gvm_cpu` reports on SIGTERM too, for a program that does not exit).
+
+- The ports already put every variable on 16 bytes of its own (`objcopy --set-section-alignment .data*=16`), but on gpu_vm
+  that was a no-op: llvm-objcopy takes an exact section name, GNU objcopy a pattern. `gpuvm-linux-objcopy` now makes a
+  pattern the input's own sections. With Quake, Quake III, ClassiCube, Doom, Tiberian Dawn and Red Alert rebuilt: Quake
+  1,863 texels to 0 (its timedemo), Quake III 3,126 and 1,575 to 0, ClassiCube 4 to 8 to 0.
+- The NES (linked whole, LTO) had 1: the link split the first core's aligned `listing` into words, and the emulating
+  core's `frame_paced.due` lay beside them. `due` is now a volatile struct of 16 bytes (`linux/nes/osd_shaderemu.c`).
+- Every case of the test set, the long ones too (140 run): 0 undone, 0 texels. `--races` covers every case, as nxpaint,
+  nxweb and the IDE take workers without the RISC-V set marking them.
+- The cases that read the host now run: gvm_cpu takes `--host`, `--host-from` and `--host-wheel` as rvc_cpu does (the
+  eight words at the control words' 0x360) and `--fixed-dt` is ignored as there. ClassiCube's eight seat cases and its
+  sound, Quake's three server modes: 0 undone, 0 texels, and their own checks pass (vr-pick with `--wall-scale 2`
+  under the check: its last line came after the wall). Still skipped: `lazy` and `zero-tail`, images of their own
+  with no workers.
+- Programs with no case: the Dear ImGui demo (300 frames), geotune, the browser's strips (`NXWEB_CHECK=1` on two
+  pages: 0 strips differ), and wl's 25 kernels that run on workers (`build/wl/img`; `-m p` and `-m w`, 1 s each, the
+  sums as on one core; `phys_step` has no `inst()` and runs on one core only): 0 undone, 0 texels. Each run under 5
+  minutes.
+- Not a texel conflict: Red Alert's movie check (`ralert-movie`) fails on images made since 24 October (147 of 154
+  frames on img-cur's kernel, 12 on img-ui5's; 0 texels, 0 undone either way). The LCW unpacker worker fills the next
+  frame's pointers while the frame before is drawn; a frame whose buffer goes back to the loader before its unpack is
+  waited for would give this. Not fixed.
+- Half-Life had no alignment at all: 20-21 texels and 1-3 changes undone (a race today too) in hldemo1's walk and
+  fight. Its build now aligns every variable as Quake's does (`linux/halflife/build.sh`): 0 and 0 in 16 sections (the
+  walk's 3 to 56 s and the fight's 31 to 45 s, the drawing on its worker and `HL_RENDER=core`).
+- A long program is checked by sections: `GVM_RACES_AT=TEXT` runs at full speed to where the console says TEXT and
+  checks from the next pass on, `GVM_RACES_UNTIL=TEXT` ends the run there (a case's `race_at` and `race_until` in
+  `test_all.py`). Half-Life's script lines (`script 24.00:`) and `HL_MARK`'s (`hlmark: begins`) bound its sections; a
+  section is under 5 minutes.
+
 ## Directions not yet tried
 
 These are not measured. They are listed for the plan (`gpu_vm/PLAN_GPU-VM.md`).

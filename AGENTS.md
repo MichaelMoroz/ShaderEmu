@@ -15,7 +15,9 @@
   discarded. Measured with `bin\waves.exe`: on NVIDIA a warp is a 4 x 8 pixel tile under one big triangle, so blocks of
   whole tiles (4 x 8, 4 x 16, 8 x 8) drawn by one triangle never mix; a primitive edge inside the cores' area does.
   The new tick's cores are 8 x 8 blocks in one row (2,048 x 8 for 256), one triangle. Its commit is one draw of whole
-  texels: two cores must not store to one texel in a pass (`GVM_RACES` on `gvm_cpu` counts them; Quake 0).
+  texels: two cores must not store to one texel in a pass. `python3 gpu_vm/userland/apps/test_all.py --races` must say 0
+  undone and 0 texels for every case (140 on 25 October 2026; `gpu_vm/tick/CACHE.md`). A long program is checked by
+  sections under 5 minutes each: full speed to `GVM_RACES_AT`'s console text, the check to `GVM_RACES_UNTIL`'s.
 - gpu_vm's fastest machine and how to measure it (its tick, the image and checkpoints for each game, the commands and
   the numbers): `gpu_vm/bench_games/README.md`, "The fastest machine today". run.py's defaults (img-cur, gvm-cur) are
   the image to use; the harness's own default tick (x18) is not the tick: give `--gvm-tick` (v0009).

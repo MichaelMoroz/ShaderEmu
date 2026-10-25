@@ -3,8 +3,11 @@
 // one triangle over everything (geo 0), one triangle a core as c8's vert_cull (geo 1: 2bw x 2bh, its pixels outside the
 // block discarded), or one quad a core (geo 2). Shader model 6: the wave intrinsics.
 cbuffer P : register(b0) {
-    uint geo, bw, bh, cw, ch, perRow, cores, work, pad, alt, w, h;
+    uint geo, bw, bh, cw, ch, perRow, cores, work, pad, alt, w, h, busyN, stride;
 };
+// busy cores (busyN != 0): cores 0, stride, 2 stride ... (busyN of them) run; the others are idle and leave at the top.
+// geo 5 draws a quad a busy core, geo 6 one quad over the busy run (stride 1)
+bool busy(uint c) { return busyN == 0 || (c % stride == 0 && c / stride < busyN); }
 RWByteAddressBuffer Out : register(u1);   // map: [0] wave counter, [1] records; then records of 4 words
 
 struct v2f { float4 pos : SV_Position; nointerpolation uint core : CORE; float2 clip : SV_ClipDistance0; };
@@ -12,6 +15,15 @@ struct v2f { float4 pos : SV_Position; nointerpolation uint core : CORE; float2 
 // geo 3: geo 1's triangle cut to the block by two clip distances (bw - x, bh - y), so nothing outside it is rasterized
 v2f vs(uint id : SV_VertexID) {
     v2f o;
+    if (geo == 5 || geo == 6) {   // a quad a busy core, or one over the run of busy cores (one row of cores)
+        uint c = geo == 5 ? (id / 6) * stride : 0, n = geo == 5 ? 1 : busyN, q = id % 6 < 3 ? id % 6 : id % 6 - 2;
+        float2 a = float2(c * cw, 0), b = a + float2(n * cw, bh);
+        float2 p4 = float2((q == 1 || q == 3) ? b.x : a.x, q >= 2 ? b.y : a.y);
+        o.pos = float4(p4.x / w * 2 - 1, 1 - p4.y / h * 2, 0, 1);
+        o.core = 0xffffffffu;
+        o.clip = float2(1, 1);
+        return o;
+    }
     if (geo == 4) {   // one quad over a run of cores side by side: perRow / pad of them (pad 0: the whole row)
         uint run = pad == 0 ? perRow : perRow / pad, r = id / 6, q = id % 6 < 3 ? id % 6 : id % 6 - 2;
         uint row = r / (perRow / run), first = (r % (perRow / run)) * run;
@@ -44,7 +56,7 @@ v2f vs(uint id : SV_VertexID) {
 uint owner(v2f i) {
     uint2 x = uint2(i.pos.xy);
     uint c = (x.y / ch) * perRow + x.x / cw;
-    bool inside = x.x % cw < bw && x.y % ch < bh && x.x / cw < perRow && c < cores && (geo == 0 || geo == 4 || i.core == c);
+    bool inside = x.x % cw < bw && x.y % ch < bh && x.x / cw < perRow && c < cores && (geo == 0 || geo >= 4 || i.core == c);
     return inside ? c : 0xffffffffu;
 }
 
@@ -66,6 +78,8 @@ uint4 ps_map(v2f i) : SV_Target {
 uint4 ps_time(v2f i) : SV_Target {
     uint c = owner(i);
     if (c == 0xffffffffu) { if (pad == 0) discard; return 0; }
+    // an idle core: its state as it is (pad 2: copied, a load a pixel, as from the state's other texture)
+    if (!busy(c)) return pad == 2 ? Out.Load4(16 + (uint(i.pos.y) * w + uint(i.pos.x)) * 16) : uint4(c, 0, 0, 0);
     uint n = alt != 0 && (c & 1) == 0 ? work / 16 : work, x = c * 0x9e3779b9u + uint(i.pos.x);
     [loop] for (uint k = 0; k < n && k < 1000000; k++) x = (x ^ (x >> 15)) * 0x2c1b3c6du + k;
     return uint4(x, c, 0, 0);

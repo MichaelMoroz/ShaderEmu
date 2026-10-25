@@ -59,13 +59,21 @@ static struct {
     uint32_t tr_core, tr_x[64];
     // the devices (gpu_vm/platform.md): the control words a host gives each pass, on with --dtb or --devices
     int devices, desktop;
-    uint32_t workers;            // worker cores started (1 to workers), by the geometry's control words
+    // --host W0,...,W7, --host-from S W0,...,W7 (up to four), --host-wheel N: the host's eight words as rvc_cpu gives them
+    // (docs/world/holodeck.md), those of guest second S on, the wheel turning up N notches a second
+    uint32_t host[8], host_later[4][8];
+    double host_from[4], host_wheel;
+    int host_steps;
+    uint32_t workers;           // worker cores started (1 to workers), by the geometry's control words
     uint8_t end[CPU_MAX_CORES];  // why each core's last pass ended (GVM_END_*)
     // --profile: bundles run by address and contents, from --profile-from bundles on; written at the exit
     const char *prof_path;
     uint64_t prof_from;
     // --profile-at TEXT / --profile-until TEXT: count from where the console says TEXT, stop where it says the other
     const char *prof_at, *prof_until;
+    // GVM_RACES_AT / GVM_RACES_UNTIL: the race check from where the console says one text, the run's end at the other
+    // (a run at full speed to the part of a program that is looked at, then the slow check over that part alone)
+    const char *race_at, *race_until;
     char con_tail[128];
     // --wc NB,WAYS[,RELOC]: core 0's write cache as the tick's (gpu_vm/memory_model.md); its passes counted by why they
     // ended (from --profile-at's line when given), printed with --stats
@@ -337,6 +345,9 @@ static void prof_write(void) {
 // SIGTERM or SIGINT while profiling: the run stops at the next bundle and the profile is written
 static volatile sig_atomic_t prof_killed;
 static void prof_stop(int sig) { prof_killed = 1; }
+// GVM_RACES: a run stops at the next pass and reports (SIGTERM, or GVM_RACES_UNTIL's text); race_on starts the check
+static volatile sig_atomic_t race_killed;
+static void race_on(void);
 
 static int host_step(gvm_core *c) {
     if (H.prof_path) {
@@ -519,10 +530,18 @@ static void console_poll(void) {
             uint32_t a = CON_RING + (H.con_printed & 255);
             int ch = (int)(ram[a >> 2] >> ((a & 3) * 8)) & 255;
             fputc(ch, stdout);
-            if (H.prof_at || H.prof_until) {
+            if (H.prof_at || H.prof_until || H.race_at || H.race_until) {
                 size_t k = strlen(H.con_tail);
                 if (k + 1 >= sizeof H.con_tail) { memmove(H.con_tail, H.con_tail + 64, k - 64 + 1); k -= 64; }
                 H.con_tail[k] = (char)ch; H.con_tail[k + 1] = 0;
+                if (H.race_at && strstr(H.con_tail, H.race_at)) {
+                    H.race_at = NULL; H.con_tail[0] = 0;
+                    race_on();
+                } else if (!H.race_at && H.race_until && strstr(H.con_tail, H.race_until)) {
+                    H.race_until = NULL;
+                    race_killed = 1;
+                    fprintf(stderr, "gvm_cpu: GVM_RACES until pass %llu\n", (unsigned long long)H.passes);
+                }
                 if (H.prof_at && strstr(H.con_tail, H.prof_at)) {
                     H.prof_from = H.bundles; H.prof_at = NULL; H.con_tail[0] = 0;
                     fprintf(stderr, "gvm_cpu: --profile from bundle %llu\n", (unsigned long long)H.bundles);
@@ -761,6 +780,13 @@ static void devices_pass(void) {
     }
     W(CTRL + 0x34) = (uint32_t)(H.m.time / 100);   // milliseconds
     W(CTRL + 0x3c) = (H.desktop ? 1u : 0u) | (128u << 8) | (128u << 16);
+    if (H.host[0]) {   // (as rvc_cpu's control pass writes them)
+        double s = (double)H.m.time / 100000;
+        const uint32_t *now = H.host;
+        for (int k = 0; k < H.host_steps; k++) if (s >= H.host_from[k]) now = H.host_later[k];
+        for (int i = 0; i < 8; i++) W(CTRL + 0x360 + 4 * i) = now[i];
+        if (H.host_wheel != 0) W(CTRL + 0x374) = (H.host[5] & 0xff00ffffu) | ((uint32_t)(long long)(s * H.host_wheel) & 255u) << 16;
+    }
     W(CTRL + 0x32c) = (uint32_t)H.passes;
 }
 
@@ -823,6 +849,7 @@ static void stlog_init(const char *path) {
 // for the new tick") would write the higher core's view of that word, the value from before the pass, over the lower's.
 static struct {
     FILE *f;
+    int on;                             // checking (GVM_RACES_AT: once its text is seen)
     uint64_t undone, asitwas, texel;
     uint32_t *tmap, *tmapused, ntused;  // texel + 1, then up to 8 cores' (core << 8 | words stored << 4 | words changed)
     uint32_t *reads[CPU_MAX_CORES], nreads[CPU_MAX_CORES], capreads[CPU_MAX_CORES];   // (word, pc) pairs
@@ -958,6 +985,7 @@ static int race_cmp(const void *x, const void *y) {
 static void race_report(void) {
     uint32_t shown[3] = {0, 0, 0};
     static const char *const kinds[3] = {"undone", "as it was", "texel"};
+    if (!RC.on) { fprintf(stderr, "gvm_cpu: races: not checked (GVM_RACES_AT's text never came)\n"); if (RC.f) fclose(RC.f); return; }
     qsort(RC.place, RC.nplace, 12, race_cmp);
     fprintf(stderr, "gvm_cpu: races: %llu undone, %llu read as they were, %llu texels a whole-texel commit would lose a word of\n",
             (unsigned long long)RC.undone, (unsigned long long)RC.asitwas, (unsigned long long)RC.texel);
@@ -968,6 +996,13 @@ static void race_report(void) {
     }
     if (RC.f) fclose(RC.f);
 }
+static void race_stop(int sig) { race_killed = 1; }
+// the check from the next pass on (at a commit's end: no pass's stores or reads are half seen)
+static void race_on(void) {
+    RC.on = 1;
+    for (uint32_t i = 0; i < H.ncores; i++) H.cores[i].host_access = race_access;
+    fprintf(stderr, "gvm_cpu: GVM_RACES from pass %llu\n", (unsigned long long)H.passes);
+}
 static void race_init(const char *path) {
     RC.f = fopen(path, "w");
     if (!RC.f) { fprintf(stderr, "gvm_cpu: GVM_RACES: cannot write %s\n", path); exit(EXIT_USAGE); }
@@ -976,7 +1011,10 @@ static void race_init(const char *path) {
     RC.wmapused = (uint32_t *)calloc(RC_MAP, 4);
     RC.tmap = (uint32_t *)calloc(9 * (size_t)RC_MAP, 4);
     RC.tmapused = (uint32_t *)calloc(RC_MAP, 4);
-    for (uint32_t i = 0; i < H.ncores; i++) H.cores[i].host_access = race_access;
+    H.race_at = getenv("GVM_RACES_AT"); H.race_until = getenv("GVM_RACES_UNTIL");
+    if (!H.race_at) race_on();
+    // a run ended by SIGTERM (a test whose program does not exit) stops at the next pass and still reports
+    signal(SIGTERM, race_stop);
 }
 
 static void usage(void) {
@@ -991,6 +1029,8 @@ static void usage(void) {
         "  --cores N           cores (default 1): core 0, and workers up to N - 1 (gpu_vm/platform.md)\n"
         "  --devices           the control words a host gives (on with --dtb; gpu_vm/platform.md)\n"
         "  --desktop           the host's flag that the guest starts its desktop\n"
+        "  --host W0,...,W7    the host's eight words (hex; a seat, docs/world/holodeck.md); --host-from S W0,...,W7:\n"
+        "                      those from second S of the guest's on (up to four); --host-wheel N: the wheel N notches a second\n"
         "  --max-bundles N     stop with exit code 3 after N bundles\n"
         "  --trace             each bundle on stderr: core, pc, control word, ops, registers written\n"
         "  --strace            each semihosted call on stderr\n"
@@ -1022,6 +1062,17 @@ int main(int argc, char **argv) {
         else if (!strcmp(a, "--no-stdin")) H.console_in = 0;
         else if (!strcmp(a, "--devices")) H.devices = 1;
         else if (!strcmp(a, "--desktop")) H.desktop = 1;
+        else if (!strcmp(a, "--host") && more) {
+            uint32_t *w = H.host;
+            sscanf(argv[++i], "%x,%x,%x,%x,%x,%x,%x,%x", &w[0], &w[1], &w[2], &w[3], &w[4], &w[5], &w[6], &w[7]);
+        }
+        else if (!strcmp(a, "--host-from") && i + 2 < argc) {
+            int k = H.host_steps < 4 ? H.host_steps++ : 3;
+            uint32_t *w = H.host_later[k];
+            H.host_from[k] = atof(argv[++i]);
+            sscanf(argv[++i], "%x,%x,%x,%x,%x,%x,%x,%x", &w[0], &w[1], &w[2], &w[3], &w[4], &w[5], &w[6], &w[7]);
+        }
+        else if (!strcmp(a, "--host-wheel") && more) H.host_wheel = atof(argv[++i]);
         else if (!strcmp(a, "--ram") && more) ram_mb = num(argv[++i]);
         else if (!strcmp(a, "--rom") && more) rom = argv[++i];
         else if (!strcmp(a, "--dtb") && more) dtb = argv[++i];
@@ -1141,6 +1192,7 @@ int main(int argc, char **argv) {
     // the passes: each core runs its budget from the RAM the last commit left, then the commit
     H.m.time = 0;
     while (!H.stop) {
+        if (race_killed) break;
         int running = 0, all_waiting = 1;
         for (uint32_t c = 0; c < H.ncores && !H.stop; c++) {
             gvm_core *k = &H.cores[c];
@@ -1168,7 +1220,7 @@ int main(int argc, char **argv) {
             if (!k->waiting && !idle) all_waiting = 0;
         }
         trace_flush();
-        if (RC.wmap) race_pass();
+        if (RC.on) race_pass();
         gvm_commit(&H.m);
         H.passes++;
         if (H.console) console_poll();

@@ -1,10 +1,15 @@
 """tools/test_all.py's cases on gpu_vm (gpu_vm/userland/apps/README.md, "Checks"): each case's line typed into
 image.sh's machine on gvm_cpu, its console checked by test_all's own rules (has, sums, digest, same ...). Run in WSL:
 
-    python3 gpu_vm/userland/apps/test_all.py [CASE or TAG ...] [--jobs N] [--cores N] [--list] [--save-refs]
+    python3 gpu_vm/userland/apps/test_all.py [CASE or TAG ...] [--jobs N] [--cores N] [--list] [--save-refs] [--races]
 
-gvm_cpu has the devices' words but draws no picture (frames are counted, as rvc_cpu does), so a case that types into
-a window or reads the host (`--host`, `--fixed-dt`, `--host-wheel`) is skipped and said so. A case's `--expect`/`--send`
+--races runs every case under GVM_RACES (not only those the RISC-V set marks as using workers: nxpaint, nxweb and
+the IDE's take workers too): none may lose a change, nor have a texel two cores stored to in one pass (the whole-texel
+commit's rule, gpu_vm/tick/CACHE.md).
+
+gvm_cpu has the devices' words but draws no picture (frames are counted, as rvc_cpu does), so a case that moves the
+pointer (`--pointer-sweep`) is skipped and said so; the host's words (`--host`, `--host-from`, `--host-wheel`) are
+gvm_cpu's as rvc_cpu's, and `--fixed-dt` is taken and does nothing, as in rvc_cpu. A case's `--expect`/`--send`
 pairs are typed when their text appears. The kernel, ROM and device tree are image.sh's (W, build/gvm_apps/img).
 
 Float results are not compared bit for bit (the user, 22 October 2026: the card's special functions are close enough):
@@ -24,7 +29,7 @@ T = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(T)
 
 PROMPT = re.compile(rb'@gpuvm:[^\n]*?# ')
-UNSUPPORTED = ('--host', '--host-from', '--host-wheel', '--fixed-dt', '--pointer-sweep')
+UNSUPPORTED = ('--pointer-sweep',)   # (--fixed-dt is the shader harness's: rvc_cpu takes it and does nothing, as here)
 OUT = '/tmp/gvm-output'
 REFS_IN_IMAGE = '/usr/share/gvm-refs'
 
@@ -159,23 +164,41 @@ def run_case(c, a, w):
     more = list(c['more'])
     if any(m in UNSUPPORTED for m in more) or c['cmd'] is None or c['image']:
         return None
-    pairs = []
+    pairs, host = [], []
     while more:
         k = more.pop(0)
         if k == '--expect' and more:
             pairs.append([more.pop(0).encode(), None])
         elif k == '--send' and more and pairs:
             pairs[-1][1] = more.pop(0).encode().decode('unicode_escape').encode('latin-1')
+        elif k in ('--host', '--host-wheel') and more:   # (the host's words: gvm_cpu takes them as rvc_cpu does)
+            host += [k, more.pop(0)]
+        elif k == '--host-from' and len(more) >= 2:
+            host += [k, more.pop(0), more.pop(0)]
+        elif k == '--fixed-dt' and more:
+            more.pop(0)
     cores = 256 if re.search(r'\b(mctest|lanetest|steptest) 255|255 workers|with 255', c['cmd'] + ' '.join(c.get('has', []))) else a.cores
     ram = open(os.path.join(w, 'ram_mb')).read().strip()
     emu = os.path.join(ROOT, 'build', 'gvm_cpu', 'gvm_cpu')
     pt = next((t for k, t in PASS_TIME.items() if c['name'].startswith(k)), a.pass_time)
+    env = dict(os.environ)
+    if (c.get('env') or {}).get('RVC_SOUND'):
+        env['GVM_SOUND'] = c['env']['RVC_SOUND']
+    races = a.races
+    if races:
+        env['GVM_RACES'] = os.path.join(a.logs, c['name'] + '.races')
+        # (a case's part looked at: full speed to race_at's text, the check from there, the run's end at race_until's)
+        for k, e in (('race_at', 'GVM_RACES_AT'), ('race_until', 'GVM_RACES_UNTIL')):
+            if c.get(k):
+                env[e] = c[k]
     p = subprocess.Popen([emu, '--cores', str(cores), '--pass-time', str(pt), '--ram', ram, '--rom', os.path.join(w, 'rootfs.romfs'),
-                          '--dtb', os.path.join(w, 'gvm.dtb'), os.path.join(w, 'vmlinux')],
-                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=0)
+                          '--dtb', os.path.join(w, 'gvm.dtb')] + host + [os.path.join(w, 'vmlinux')],
+                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=0, env=env)
     out, sent, until, t0 = b'', 0, c['until'].encode(), time.time()
     reached = False
-    while time.time() - t0 < c['wall'] * a.wall_scale:
+    # (no run longer than 5 minutes, its end and report included: the case's wall, at most 250 s, then 50 s to stop)
+    limit = min(c['wall'] * a.wall_scale, 250)
+    while time.time() - t0 < limit:
         r, _, _ = select.select([p.stdout], [], [], 0.5)
         if r:
             chunk = os.read(p.stdout.fileno(), 65536)
@@ -203,14 +226,35 @@ def run_case(c, a, w):
                 break
     try:
         p.stdin.write(b'poweroff -f\n')
-        p.wait(10)
+        # (gvm_cpu's report, GVM_RACES's line too, comes as it exits)
+        t1 = time.time()
+        while time.time() - t1 < 15:
+            r, _, _ = select.select([p.stdout], [], [], 0.5)
+            chunk = os.read(p.stdout.fileno(), 65536) if r else b''
+            if r and not chunk:
+                break
+            out += chunk.replace(b'\r', b'')
+        p.wait(5)
     except Exception:
         pass
+    if p.poll() is None and races:
+        # (a program that does not exit took the poweroff as its input: gvm_cpu reports its races on SIGTERM)
+        p.terminate()
+        try:
+            out += p.communicate(timeout=25)[0].replace(b'\r', b'')
+        except Exception:
+            pass
     if p.poll() is None:
         p.kill()
     # (with stty -echo a command's output follows its prompt on the line: the RISC-V console's echo ends that line)
     text = re.sub(r'(@gpuvm:[^\n]*?# )', lambda m: m.group(1) + chr(10), out.decode('latin-1'))
     text = judge(c, text, a)
+    if races:
+        # GVM_RACES: no change undone, and no texel two cores stored to in one pass (the whole-texel commit's rule)
+        m = re.search(r'races: (\d+) undone, \d+ read as they were, (\d+) texels', text)
+        c['has'] = c.get('has', []) + [r'^races: 0 undone and 0 texels$']
+        text += '\nraces: %s\n' % ('0 undone and 0 texels' if m and m[1] == '0' and m[2] == '0' else
+                                   '%s undone, %s texels' % (m[1], m[2]) if m else 'no report')
     with open(os.path.join(a.logs, c['name'] + '.log'), 'w', encoding='latin-1') as f:
         f.write(text)
     return text, ('--until matched' if reached else ''), time.time() - t0
@@ -227,6 +271,7 @@ def main():
     ap.add_argument('--logs', default=os.path.join(ROOT, 'build', 'gvm_apps', 'test_all'))
     ap.add_argument('--list', action='store_true')
     ap.add_argument('--refs', default=os.path.join(ROOT, 'build', 'gvm_apps', 'refs'), help="the outputs' references (gvm_cpu's)")
+    ap.add_argument('--races', action='store_true', help='GVM_RACES on every case: 0 undone and 0 texels')
     ap.add_argument('--save-refs', action='store_true', help='keep the outputs made as the references (then image.sh again)')
     a = ap.parse_args()
     w = os.environ.get('W', os.path.join(ROOT, 'build', 'gvm_apps', 'img'))

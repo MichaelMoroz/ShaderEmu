@@ -62,7 +62,10 @@ HLDEFS="-DXASH_SHADEREMU=1 -DXASH_BUILD_COMMIT=\"$HLSDK_COMMIT\" -DHAVE_TGMATH_H
     -D_vsnprintf=vsnprintf -D_LINUX=1 -DLINUX=1 -DCLIENT_WEAPONS=1 -DCROWBAR_FIX_RAPID_CROWBAR=1 -DSPEAKABLE_TARGETS=1
     -DHAVE_STRLCPY=1 -DHAVE_STRLCAT=1"
 HLINC="-I$H/dlls -I$H/common -I$H/engine -I$H/pm_shared -I$H/game_shared -I$H/public"
-export HERE BUILD
+# A variable a section (-fdata-sections), each starting on 16 bytes: the server's and the drawing's workers store
+# beside core 0, and two cores must not store to one 16-byte texel in a pass (gpu_vm's whole-texel commit, GVM_RACES)
+ALIGN16="--set-section-alignment .data*=16 --set-section-alignment .sdata*=16 --set-section-alignment .bss*=16 --set-section-alignment .sbss*=16"
+export HERE BUILD ALIGN16
 mkdir -p "$BUILD" && cd "$BUILD"
 
 # one object a source (its path made a name), made again when the source, a patch or this script is newer
@@ -72,7 +75,7 @@ compile() {   # folder, compiler and flags (one word, quoted), then sources
     printf '%s\n' "$@" | CC="$cc" DIR="$dir" xargs -P "$(nproc)" -I{} sh -c '
         o="$BUILD/$DIR/$(echo {} | sed "s|^/||; s|/|_|g; s|\.[a-z]*$||").o"
         [ "$o" -nt {} ] && [ "$o" -nt "$HERE/xash3d.patch" ] && [ "$o" -nt "$HERE/hlsdk.patch" ] && [ "$o" -nt "$HERE/build.sh" ] && [ "$o" -nt "$HERE/gl_kept.c" ] && [ "$o" -nt "$HERE/gl_studio_job.c" ] && [ "$o" -nt "$HERE/se_server.h" ] ||
-            { $CC -c {} -o "$o" || { echo "failed: {}"; exit 255; }; }'
+            { $CC -c {} -o "$o" && riscv32-linux-objcopy $ALIGN16 "$o" || { echo "failed: {}"; exit 255; }; }'
 }
 # A library as Xash's static build makes one: its objects as one, every name inside it local but
 # lib_NAME_exports, a table of the names the engine asks it for (generated_library_tables.h).
@@ -167,7 +170,7 @@ library menu menu.names menu
 # the GPU: gles.c with Quake III's draws, and the OpenGL on them
 rv32-cc $OPT $FPU -fno-pie -fno-common -fdata-sections -Wall -c -DSEGL_FLOAT -DMAX_TEXTURES=64 -idirafter "$PROGRAMS/linux/include" \
     -I"$MW/src/include" -I"$PROGRAMS/linux" -I"$REPO/linux/quake3" "$REPO/linux/quake3/gpu_shaderemu.c" -o gpu.o
-rv32-cc $OPT $FPU -fno-pie -fno-common -Wall -c -I"$REPO/linux/quake3" -I"$PROGRAMS/mc" "$HERE/gl_shaderemu.c" -o gl.o
+rv32-cc $OPT $FPU -fno-pie -fno-common -fdata-sections -Wall -c -I"$REPO/linux/quake3" -I"$PROGRAMS/mc" "$HERE/gl_shaderemu.c" -o gl.o
 rv32-c++ -O2 -fno-pie -c "$HERE/cxxrt.cpp" -o cxxrt.o
 # freevgui casts down: the client has run-time type information, and rtti_shaderemu.c its casts
 rv32-cc -O2 -fno-pie -Wall -c "$HERE/rtti_shaderemu.c" -o rtti.o
@@ -175,8 +178,9 @@ rv32-cc $OPT $FPU -fno-pie -Wall -c "$HERE/fastmath.c" -o fastmath.o
 MEDIA=$WORK/src/libmedia
 [ -f "$MEDIA/libmedia.a" ] || { echo "run linux/libmedia/build.sh first"; exit 1; }
 # the workers' library from this tree (another build's copy of it may be older)
-rv32-cc -O2 -fno-pie -w -I"$PROGRAMS/mc" -c "$PROGRAMS/mc/mcw.c" -o mcw.o
-rv32-cc -O2 -fno-pie -w -I"$PROGRAMS/mc" -c "$PROGRAMS/mc/mcwx.c" -o mcwx.o
+rv32-cc -O2 -fno-pie -fno-common -fdata-sections -w -I"$PROGRAMS/mc" -c "$PROGRAMS/mc/mcw.c" -o mcw.o
+rv32-cc -O2 -fno-pie -fno-common -fdata-sections -w -I"$PROGRAMS/mc" -c "$PROGRAMS/mc/mcwx.c" -o mcwx.o
+for o in gpu.o gl.o mcw.o mcwx.o; do riscv32-linux-objcopy $ALIGN16 "$o"; done
 rv32-c++ -O2 $FPU "$BUILD"/engine/*.o filesystem_stdio.o ref_gl.o client.o server.o menu.o gpu.o gl.o cxxrt.o rtti.o fastmath.o \
     "$MEDIA/libmedia.a" mcw.o mcwx.o "$MW/src/lib/libnano-X.a" -lm -o halflife \
     -Wl,--wrap=malloc,--wrap=free,--wrap=calloc,--wrap=realloc,--wrap=posix_memalign,--wrap=aligned_alloc,--wrap=memalign
