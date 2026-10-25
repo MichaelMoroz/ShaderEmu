@@ -703,7 +703,9 @@ typedef struct { uint32_t fn, a0, a1, k; } call_rec;
 static call_rec calls[CALLS] __attribute__((aligned(16)));
 static uint8_t call_state[CALLS];	/* 0 free, 1 out on a worker, 2 made here */
 static uint32_t call_answer[CALLS];
-static int next_worker = 1;
+/* A call goes to the lowest free worker, as a round's members are taken: the busy cores lie together. Under one
+ * triangle over every core (gpu_vm/tick/WAVES.md, "Idle cores") busy cores among idle ones cost up to a third more
+ * than a run of them; a round-robin spread every few calls over the whole row. */
 
 static uint32_t call_job(uint32_t rec_at, uint32_t unused)
 {
@@ -726,9 +728,8 @@ mcw_handle mcw_call(mcw_fn fn, uint32_t a0, uint32_t a1)
 	c->a1 = a1;
 	if (workers && !mcw_self() && setup())
 		for (tries = 0; tries < workers && !k; tries++) {
-			int w = next_worker;
+			int w = tries + 1;
 
-			next_worker = next_worker % workers + 1;
 			if (busy[w] || !mcw_bound(w)) continue;
 			if (in_team[w]) {
 				if (!mcw_done(w)) continue;
@@ -757,9 +758,8 @@ mcw_handle mcw_try_call(mcw_fn fn, uint32_t a0, uint32_t a1)
 	for (h = 0; h < CALLS && call_state[h]; h++) {}
 	if (h == CALLS) return 0;
 	for (tries = 0; tries < workers && !k; tries++) {
-		int w = next_worker;
+		int w = tries + 1;
 
-		next_worker = next_worker % workers + 1;
 		if (busy[w] || !mcw_bound(w)) continue;
 		if (in_team[w]) {
 			if (!mcw_done(w)) continue;
