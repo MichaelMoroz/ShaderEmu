@@ -1,5 +1,7 @@
 # GPU-VM: a clean repository and the next architecture (plan, 25 October 2026)
 
+The current plan is GPU-VM's `docs/PLAN.md` (github.com/MichaelMoroz/GPU-VM); this is how it stood at the end of phase 0.
+
 ## What is asked
 
 - A new public repository, **GPU-VM**, written again from scratch, with nothing of the RISC-V machine or of gpu_vm's
@@ -128,11 +130,9 @@ research out of the repository.
 | wl's 24 kernels, units a second, three modes | speed against today and against RISC-V | phases 1 (first core), 2 (workers), 3 (Linux) |
 | the games' benchmarks | fps | phase 4 |
 
-## Open decisions (the user's)
+## Decided (25 October 2026)
 
-1. **Where it goes.** I would make it `github.com/MichaelMoroz/GPU-VM` under the MIT license, as ShaderEmu has. It
-   would be created private and made public when phase 1's gate is met, unless you want it public from the start.
-2. **The builder.** I would leave the parameter builder and its search in the old tree, so the new repository has
-   only the tick by hand.
-3. **The kernel.** I would keep Linux 5.17.11 for the new port, since the drivers and the userland are known to work
-   with it.
+The repository is made: `github.com/MichaelMoroz/GPU-VM` (private until phase 1's gate, MIT), locally
+`E:\Development\Emu\GPU-VM`. Its `docs/PLAN.md` is the plan from here on, with phase 0's results; this file is kept
+as it was when phase 0 ended. The parameter builder and its search stay in this tree, and the Linux port stays on
+5.17.11.
