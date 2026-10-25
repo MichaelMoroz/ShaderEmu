@@ -21,6 +21,11 @@ DEFAULTS = dict(
     bloom=1,            # a load whose texel has a bit no stored texel had skips the tags
     hash=0,             # the buckets' hashes: 0 x23's (xor-folds), 1 a multiplicative pair
     clear='loop',       # the tags' clearing at the pass's start: loop, unroll
+    probe=0,            # the new tick's cache (newcache.py): one array of nb buckets probed in turn, this many at most (0: two tables)
+    probef=0,           # (probe) the lookup's shape: 0 a loop, 1 the first bucket straight, 2 the first two straight
+    bmr=0,              # (bmap 128, 256) the map in two uint4 registers, not an array
+    bmap=0,             # (newcache.py) a load looks up only when its texel's bit of a bmap-bit map of stored texels is set (0: the OR word)
+    wtx=0,              # (newcache.py) 1: an entry is its whole texel, the commit one draw of whole texels, a hit reads no RAM
     # ---- the fast loop
     fetch='both',       # the next bundle: 'both' texels (fall-through and target) then a select; 'one': the branch first, one texel
     int_first=0,        # the integer path tested before the memory paths
@@ -130,7 +135,7 @@ SPACE = dict(   # the values a search draws from
 
 def layout(P):
     nb = P['nb']
-    wcn = 8 * nb + P.get('ov', 0) + 2
+    wcn = (4 if P.get('probe', 0) else 8) * nb + P.get('ov', 0) + 2
     t_wc = 40
     t_wt = t_wc + wcn
     ntex = t_wt + (wcn + 3) // 4
@@ -148,6 +153,11 @@ def layout(P):
 def valid(P):
     """'' when the point can be built, else why not"""
     L = layout(P)
+    if P.get('probe', 0) and (P.get('ov', 0) or P.get('mv', 0) or P.get('evf', 0) or P.get('ll', 0) or P.get('ovh', 0) or not P.get('m6seq', 0)
+                              or P.get('mru', 0) or P.get('bb', 0) or P.get('c0nb', 0) or P.get('sil', 0) or P.get('mflat', 0)):
+        return 'probe: m6seq, and no ov, mv, evf, ll, ovh, mru, bb, c0nb, sil or mflat'
+    if P.get('bmap', 0) and (P['bmap'] & (P['bmap'] - 1) or P['bmap'] < 32 or P.get('ldf', 0)): return 'bmap: a power of two from 32, no ldf'
+    if P.get('wtx', 0) and (P['xr'] or P['npair'] or P.get('c0nb', 0)): return 'wtx: no file, pairs or c0nb'
     if P['bw'] * P['bh'] < L['SPIX']: return 'block %dx%d < %d state pixels' % (P['bw'], P['bh'], L['SPIX'])
     if P['band'] < P['bh']: return 'band < bh'
     if P['per'] & (P['per'] - 1): return 'per not a power of two'
@@ -1531,7 +1541,8 @@ def emit(P):
     if P.get('idlew', 0):   # (idlew) the start texel's key, before state_out writes it
         k = 'uint4 state_out(uint t, uint4 s3) {'
         out = [x.replace(k, 'uint3 start_key(uint c) { uint4 w = ram((0x00c00000u >> 4) + c); return uint3(w.xy, w.z ^ (w.w * 0x9e3779b1u)); }   // (idlew) its start texel\n' + k) for x in out]
-    return rmap_text(P, core0(P, layoutopts(P, sil_text(P, memopts(P, mflat(P, evf_text(P, p2strip(P, '\n'.join(out)))))))))
+    from newcache import newcache
+    return rmap_text(P, newcache(P, core0(P, layoutopts(P, sil_text(P, memopts(P, mflat(P, evf_text(P, p2strip(P, '\n'.join(out))))))))))
 
 def manifest(P):
     P = full(P)

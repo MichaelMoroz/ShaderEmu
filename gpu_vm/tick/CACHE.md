@@ -130,6 +130,56 @@ of that component alone:
   - It would also need an exact check against other cores' stores, and a second cache in the tick.
   - Without compute shaders there is no group-shared memory to put one in. Not taken.
 
+## The decisions measured on the card (25 October 2026)
+
+Each decision was built as a builder option (`gpu_vm/tick/builder/newcache.py`: `probe`, `probef`, `bmap`, `bmr`, `wtx`)
+over c8 (`build/tick_gen/c8/v0001`), checked on WARP against the reference, and timed with `bench_games/run.py` on
+img-cur's checkpoints (RTX 5070 Laptop). The variants are in `build/tick_gen/nt/`, and the logs are
+`build/bench_games/nt1.txt`, `nt2.txt` and `nt3.txt`. Quake's timedemo fps is left out: its runs ended with different
+numbers of stats windows, and the load fell inside them. Core 0's rate is the measure.
+
+| tick | what changes | Doom core 0 (M/s) | Quake core 0 (M/s) | gzip loop core 0 (M/s) |
+|---|---|---|---|---|
+| c8 | today's tick | 2.29 | 2.38 | 4.93 |
+| nt v0001 | 8 x 8 cores in one row; every core 370 entries (c8's core 0 had 386, its workers 258); idle cores copy at the top (`idlew` 1) | 2.66 | 2.72 | 5.45 |
+| nt v0005 | v0001, no drop at a full cache (`evf` 0), path 6 as two lookups | 2.77 | 2.79 | 5.68 |
+| nt v0008 | v0005, whole-texel entries and the one-draw commit (`wtx` 1) | **2.78** | **2.74** | **5.63** |
+| nt v0003 | v0001, and a hit fetches no texel (`wtx` 2) | 2.52 | 2.55 | 4.93 |
+| nt v0004, v0009 | v0001 or v0005, the 256-bit map in an array, or in registers | 2.50, 2.70 | 2.58, 2.70 | 4.82, 5.42 |
+| nt v0006, v0010, v0011 | v0005, probed (374 entries, up to 4 buckets): a loop; the first bucket straight; the first two straight | 2.49, 2.51, 2.47 | 2.70, 2.71, 2.69 | 5.01, 5.09, 4.84 |
+
+Doom's timedemo went from 90.3 fps under c8 to 108.8 under v0001 (passes 1.81 ms to 1.51).
+
+All four decisions together, each in its cheapest form (nt v0013: `probe=4 probef=1 bmap=256 bmr=1 wtx=2`, 374 entries),
+timed in one run beside c8 and v0008 (`nt4.txt`):
+
+| tick | Doom fps | Doom core 0 (M/s) | Quake core 0 (M/s) | gzip loop core 0 (M/s) |
+|---|---|---|---|---|
+| c8 | 90.4 | 2.29 | 2.37 | 4.94 |
+| nt v0013, the whole design | 100.6 | 2.47 | 2.51 | 4.91 |
+| nt v0008, the geometry and the whole-texel commit only | **114.6** | **2.78** | **2.75** | **5.65** |
+
+What it says:
+
+- **The geometry and one cache size for every core: +16% to +21%.** Most of the gain came from these two.
+- **The whole-texel commit is free.** It is level within a run's spread, so it is taken. The words a core did not
+  store are filled from RAM when its state is written (each lane fills its own eight entries), not when the entry is
+  made.
+- **A hit that reads no RAM loses 5% to 10%.** The texel's fetch then waits for the lookup, where before it ran beside it.
+  Not taken.
+- **The bitmap loses 2% to 12%, against the OR word.** In registers it loses 2% to 4%. Not taken.
+- **Probing loses 9% to 15% in every shape.**
+  - The two tables already are a probe of two buckets, stopped at the first match or free way.
+  - What costs is any loop for a third bucket. It sits in each memory path's lookup, inside the fast loop.
+  - Kept: the two tables. With 370 entries a core and no drop, Doom ends 21% of its passes full, against 10% with
+    `evf` 4, and is still faster.
+- **The tick to build on: nt v0008.** Its parameters are c8's with `bh=8 band=8 per=256 c0nb=0 c0rt=0 idlew=1 nb=46
+  evf=0 m6seq=1 wtx=1`. It needs the harness's and gvmbench's one-row geometry and `COMMIT_WHOLE`, both in `gvm_backend11.cpp` and `gvmbench.cpp`.
+- **Not yet done:**
+  - Unity's copy of the geometry and the commit.
+  - The default-switch rule's full check (every bench loop, real case and game).
+  - Half-Life, Quake III and nxray on it.
+
 ## Measured on the reference (25 October 2026)
 
 `gpu_vm/cpu/wcstudy.c` replays a gvm_cpu log of every core's loads and stores (`GVM_STLOG_CORE=-1 GVM_STLOG_LOADS=1`,

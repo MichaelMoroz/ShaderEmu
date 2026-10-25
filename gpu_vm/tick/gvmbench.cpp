@@ -35,7 +35,7 @@ static bool g_cull = false;   // idlew 2: the tick drawn as a triangle a core, i
 static bool g_c0rt = false;   // a builder's c0rt: core 0's cache chosen at run time, every core in one draw of one compile
 static uint32_t g_wcn0 = 0;    // a step's WCN0 (x25): core 0's own write cache, its tick a compile of its own (CORE0=1)
 static uint32_t g_spix0 = 0;   // and its state pixels (NTEX0): 0-63 in its block, 64 on at ((p >> 3) - 8, 8 + (p & 7))
-struct Geo { uint32_t bw = 0, bh = 0, band = 0, per = 0, jrow = 0, perm = 0, mul = 0, inv = 0; uint32_t cpts = 0, xr = 0, npair = 0, xbind = 0, xfast = 0, t_xf = 0, t_xt = 0, t_pn = 23, nc = 0, thin = 0, thin8 = 0, wide3 = 0, late = 0, fx1 = 0, wsh = 0, wad = 0, vec = 0, t_vr = 0, cc0x = 0, sil = 0, rmap = 0; };
+struct Geo { uint32_t bw = 0, bh = 0, band = 0, per = 0, jrow = 0, perm = 0, mul = 0, inv = 0; uint32_t cpts = 0, xr = 0, npair = 0, xbind = 0, xfast = 0, t_xf = 0, t_xt = 0, t_pn = 23, nc = 0, thin = 0, thin8 = 0, wide3 = 0, late = 0, fx1 = 0, wsh = 0, wad = 0, vec = 0, t_vr = 0, cc0x = 0, sil = 0, rmap = 0, whole = 0; };
 static Geo g_gg;               // a built step's layout (builder/gen.py: GEO_BW...): core c's pixel j at (slot * bw + jx, band * BAND + jy)
 static uint32_t g_lrows = 1;   // a core's state pixels on this many rows (a step's LROWS, x19): pixel p at (p % spx, core * LROWS + p / spx)
 
@@ -355,10 +355,10 @@ struct Gpu {
         viewport(g_texw, ram_rows());
         ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_POINTLIST);
         ctx->VSSetShader(commit.vs, nullptr, 0); ctx->PSSetShader(commit.ps, nullptr, 0);
-        for (int c = 0; c < 4; c++) {
+        for (int c = 0; c < (g_gg.whole ? 1 : 4); c++) {   // (COMMIT_WHOLE: one draw, the whole texel)
             ID3D11Buffer* b2[2] = {cb, ccb[c]};
             ctx->VSSetConstantBuffers(0, 2, b2);
-            ctx->OMSetBlendState(mask[c], nullptr, 0xffffffff);
+            ctx->OMSetBlendState(g_gg.whole ? nullptr : mask[c], nullptr, 0xffffffff);
             ctx->Draw(g_gg.cpts ? (g_wcn0 ? g_wcn0 + (cores - 1) * g_gg.cpts : cores * g_gg.cpts) : g_wcn0 ? g_wcn0 + (cores - 1) * g_wcn : g_wcn1 ? g_wcn + (cores - 1) * g_wcn1 : cores * g_wcn, 0);   // (x19g: a worker's WCN1 entries; x25: core 0's WCN0)
         }
         ctx->OMSetBlendState(nullptr, nullptr, 0xffffffff);
@@ -649,6 +649,7 @@ static Geo step_geo(const std::string& path) {
     g.bh = step_size(src, {}, "GEO_BH", 0); g.band = step_size(src, {}, "GEO_BAND", 0); g.per = step_size(src, {}, "GEO_PER", 0);
     g.jrow = step_size(src, {}, "GEO_JROW", 0); g.perm = step_size(src, {}, "GEO_PERM", 0); g.mul = step_size(src, {}, "GEO_MUL", 0);
     g.inv = step_size(src, {}, "GEO_INV", 0);
+    g.whole = step_size(src, {}, "COMMIT_WHOLE", 0);
     g.cpts = step_size(src, {}, "CPTS", 0); g.xr = step_size(src, {}, "XR", 0); g.npair = step_size(src, {}, "NPAIR", 0);
     g.xbind = step_size(src, {}, "XBIND", 0); g.xfast = step_size(src, {}, "XFAST", 0); g.nc = step_size(src, {}, "NCLOAD", 0); g.thin = step_size(src, {}, "THIN", 0); g.thin8 = step_size(src, {}, "THIN8", 0); g.wide3 = step_size(src, {}, "WIDE3", 0); g.late = step_size(src, {}, "LATEBR", 0); g.fx1 = step_size(src, {}, "FX1", 0); g.wsh = step_size(src, {}, "WSH", 0); g.wad = step_size(src, {}, "WAD", 0); g.vec = step_size(src, {}, "VEC", 0); g.t_vr = step_size(src, {}, "T_VR", 0); g.cc0x = step_size(src, {}, "CC0X", 0); g.sil = step_size(src, {}, "SIL", 0); g.rmap = step_size(src, {}, "RAM_MAP", 0); g.t_xf = step_size(src, {}, "T_XF", 0); g.t_xt = step_size(src, {}, "T_XT", 0);
     return g;

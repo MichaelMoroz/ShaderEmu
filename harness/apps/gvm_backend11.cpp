@@ -122,13 +122,16 @@ public:
         spix_ = (ntex_ + 7) / 8;
         geo_ = stepConst(src, "GEO_BLOCKS", 0);
         if (geo_ && spix_ > 128) { err = tickPath + ": GEO_BLOCKS takes 128 state pixels a core at most"; return false; }
-        if (geo_) {   // the builder's block: 8 wide, 3 to 16 rows, column by column, 128 blocks a band of 16 rows (the device reads pixel 2 at (0, 2))
-            bh_ = stepConst(src, "GEO_BH", 8);
+        if (geo_) {   // the builder's block: 8 wide, 3 to 16 rows, column by column, 128 blocks a band of 16 rows, or 256 blocks
+            bh_ = stepConst(src, "GEO_BH", 8);   // of 8 rows in one band (WAVES.md); the device reads pixel 2 at (0, 2)
+            per_ = stepConst(src, "GEO_PER", 128), band_ = stepConst(src, "GEO_BAND", 16);
+            bool one = per_ == 256 && band_ == 8 && bh_ == 8;
             if (stepConst(src, "GEO_BW", 8) != 8 || bh_ < 3 || bh_ > 16 || spix_ > 8 * bh_ || stepConst(src, "GEO_JROW", 0) != 0 ||
-                stepConst(src, "GEO_BAND", 16) != 16 || stepConst(src, "GEO_PER", 128) != 128 || stepConst(src, "GEO_PERM", 0) != 0) {
-                err = tickPath + ": GEO_BLOCKS takes blocks 8 wide and 3 to 16 high, column by column, 128 a band of 16 rows"; return false;
+                !(one || (band_ == 16 && per_ == 128)) || stepConst(src, "GEO_PERM", 0) != 0) {
+                err = tickPath + ": GEO_BLOCKS takes blocks 8 wide and 3 to 16 high, column by column, 128 a band of 16 rows, or 8 x 8 in one row"; return false;
             }
         }
+        whole_ = stepConst(src, "COMMIT_WHOLE", 0) != 0;   // (the commit writes an entry's whole texel in one draw: CACHE.md, "Decided")
         c0rt_ = stepConst(src, "C0RT", 0) != 0;   // (a builder's c0rt: core 0's cache chosen at run time, one compile, every core in one draw)
         cull_ = src.find("v2f vert_cull(") != std::string::npos;   // (a builder's idlew 2: a triangle a core, none for a worker parked as it was)
         cullVerts_ = stepConst(src, "CULL_QUADS", 0) ? 6 : 3;   // (a probe's: the culled draw as a quad a core, as the Unity world's mesh)
@@ -417,7 +420,8 @@ public:
         if (endsLog_) {   // (texel 19 is pixel 2's fourth target: at (block x, band y + 2), a texel a block)
             for (UINT b = 0; b < 2; b++)
                 for (UINT k = 0; k < 128; k++) {
-                    D3D11_BOX e = {k * 8, b * 16 + 2, 0, k * 8 + 1, b * 16 + 3, 1};
+                    UINT bx = (b * 128 + k) % per_ * 8, by = (b * 128 + k) / per_ * band_;   // (the block of core b * 128 + k)
+                    D3D11_BOX e = {bx, by + 2, 0, bx + 1, by + 3, 1};
                     ctx->CopySubresourceRegion(ends_.t.Get(), 0, k, b, 0, set_[cur_ ^ 1][3].t.Get(), 0, &e);
                     static const bool pcs = getenv("GVM_MBOX_LOG") != nullptr;   // (texel 16, the pc: GVM_MBOX_LOG's)
                     if (pcs) ctx->CopySubresourceRegion(ends_.t.Get(), 0, k, b + 2, 0, set_[cur_ ^ 1][0].t.Get(), 0, &e);
@@ -550,14 +554,15 @@ public:
         SnapHeader want = snapHeader(), h{};
         if (size >= sizeof h) memcpy(&h, data, sizeof h);
         uint32_t fromSpix = (h.ntex + 7) / 8, keep = h.ntex == ntex_ ? spix_ : tWc_ / 8;   // (another cache: the texels before it)
-        uint32_t fromBh = h.pad == 1 ? 8 : h.pad - 16;   // (pad: 0 a row a core, 1 8x8 blocks, 16 + h blocks 8 x h)
-        size_t setBytes = h.pad ? (size_t)((kMaxCores - 1) / 128 * 16 + (std::max)(8u, fromBh)) * 1024 * 16 : (size_t)fromSpix * kMaxCores * 16;
+        uint32_t fromBh = h.pad <= 2 ? 8 : h.pad - 16;   // (pad: 0 a row a core, 1 8x8 blocks, 2 8x8 blocks in one row, 16 + h blocks 8 x h)
+        uint32_t fromPer = h.pad == 2 ? 256 : 128, fromBand = h.pad == 2 ? 8 : 16;
+        size_t setBytes = h.pad ? (size_t)((kMaxCores - 1) / fromPer * fromBand + (std::max)(8u, fromBh)) * fromPer * 8 * 16 : (size_t)fromSpix * kMaxCores * 16;
         uint32_t fromMap = h.magic[7] == '2' ? 1u : 0u, fromRows = fromMap ? GVM_STRIP_ROWS(h.ramEnd / 16) : h.ramEnd / 16 / kRamW;
         if (fromMap != rmap_) want.romRows = h.romRows, want.magic[7] = h.magic[7];   // (the other map: its ROM rows its own, RAM converted)
         size_t need = sizeof h + (size_t)kRamW * fromRows * 16 + 16 * setBytes + 2 * (size_t)kMaxCores * 16 +
                       (devices_ ? (size_t)kGpuTarget * kGpuTarget * 4 : 0);
-        if (size != need || (h.pad > 1 && (h.pad < 19 || h.pad > 32)) || memcmp(h.magic, want.magic, 8) != 0 || h.ramEnd != want.ramEnd || h.romRows != want.romRows ||
-            (h.ntex != want.ntex && (h.ntex < tWc_ || h.ntex > 48 * 8)) || h.devices != want.devices) {
+        if (size != need || (h.pad > 2 && (h.pad < 19 || h.pad > 32)) || memcmp(h.magic, want.magic, 8) != 0 || h.ramEnd != want.ramEnd || h.romRows != want.romRows ||
+            (h.ntex != want.ntex && (h.ntex < tWc_ || h.ntex > 64 * 8)) || h.devices != want.devices) {
             err = "not a snapshot of this image, tick and RAM (the same --gvm, --gvm-tick and --gvm-ram)";
             return false;
         }
@@ -577,7 +582,7 @@ public:
                 std::vector<uint8_t> img((size_t)setW() * setH() * 16, 0);
                 for (uint32_t c = 0; c < kMaxCores; c++)
                     for (uint32_t j = 0; j < keep; j++) {
-                        size_t from = h.pad ? (size_t)((c >> 7) * 16 + j % fromBh) * 1024 + (c & 127) * 8 + j / fromBh : (size_t)c * fromSpix + j;
+                        size_t from = h.pad ? (size_t)(c / fromPer * fromBand + j % fromBh) * fromPer * 8 + c % fromPer * 8 + j / fromBh : (size_t)c * fromSpix + j;
                         memcpy(&img[setAt(c, j) * 16], p + from * 16, 16);
                     }
                 writeTex(set_[k][t].t.Get(), setW(), setH(), 16, img.data());
@@ -743,7 +748,7 @@ private:
     }
     SnapHeader snapHeader() const {
         SnapHeader h = {{'G', 'V', 'M', 'S', 'N', 'A', 'P', (char)('1' + rmap_)}, ramEnd_, romRows_, ntex_, devices_ ? 1u : 0u,
-                        (uint32_t)cur_, (uint32_t)oc_, workers_, geo_ ? (bh_ == 8 ? 1u : 16 + bh_) : 0u, time_, passes_};
+                        (uint32_t)cur_, (uint32_t)oc_, workers_, geo_ ? (per_ == 256 ? 2u : bh_ == 8 ? 1u : 16 + bh_) : 0u, time_, passes_};
         return h;
     }
     // A whole texture of `bpp` bytes a texel appended to `out`, row 0 first (a blocking read)
@@ -799,15 +804,15 @@ private:
         gpu_.ctx->VSSetShaderResources(0, 12, s);
     }
     // The state textures: a row a core, or (the step's GEO_BLOCKS) a block of 8 x GEO_BH (3 to 16) a core, 128 a band of 16 rows
-    UINT setW() const { return geo_ ? 1024 : spix_; }
-    UINT setH() const { return geo_ ? (kMaxCores - 1) / 128 * 16 + (std::max)(8u, bh_) : kMaxCores; }   // (blocks of 9 to 16 rows: the last band as tall as one)
+    UINT setW() const { return geo_ ? per_ * 8 : spix_; }
+    UINT setH() const { return geo_ ? (kMaxCores - 1) / per_ * band_ + (std::max)(8u, bh_) : kMaxCores; }   // (blocks of 9 to 16 rows: the last band as tall as one)
     size_t setAt(uint32_t c, uint32_t j) const {   // the texel of state pixel j of core c (x25: core 0's from 64 on in rows 8-15)
         if (geo_ && c == 0 && j >= 8 * bh_) {   // (a builder's c0nb, blocks under 8 rows: its blocks again, down the first band)
             if (bh_ == 8) return (size_t)(8 + j % 8) * 1024 + j / 8 - 8;
             uint32_t k = j % (8 * bh_);
             return (size_t)((j / (8 * bh_)) * bh_ + k % bh_) * 1024 + k / bh_;
         }
-        return geo_ ? (size_t)((c >> 7) * 16 + j % bh_) * 1024 + (c & 127) * 8 + j / bh_ : (size_t)c * spix_ + j;
+        return geo_ ? (size_t)(c / per_ * band_ + j % bh_) * setW() + c % per_ * 8 + j / bh_ : (size_t)c * spix_ + j;
     }
     uint32_t c0rows() const { return (spix0_ + 8 * bh_ - 1) / (8 * bh_) * bh_; }   // (c0nb with blocks under 8 rows: core 0's rows)
     void viewport(UINT w, UINT h, UINT y = 0, UINT x = 0) {
@@ -878,8 +883,8 @@ private:
                 continue;
             }
             for (uint32_t c = (std::max)(run.first, apart ? 1u : 0u); c < run.second;) {   // (the run's blocks in one band at a time)
-                uint32_t end = (std::min)(run.second, (c / 128 + 1) * 128);
-                viewport((end - c) * 8, c == 0 && c0rt_ ? (std::max)(bh_, c0rows()) : bh_, (c / 128) * 16, (c % 128) * 8);   // (c0rt: core 0's rows in its band's draw)
+                uint32_t end = (std::min)(run.second, (c / per_ + 1) * per_);
+                viewport((end - c) * 8, c == 0 && c0rt_ ? (std::max)(bh_, c0rows()) : bh_, (c / per_) * band_, (c % per_) * 8);   // (c0rt: core 0's rows in its band's draw)
                 ctx->Draw(3, 0);
                 c = end;
             }
@@ -895,10 +900,10 @@ private:
         ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_POINTLIST);
         ctx->VSSetShader(commit_.vs.Get(), nullptr, 0);
         ctx->PSSetShader(commit_.ps.Get(), nullptr, 0);
-        for (int c = 0; c < 4; c++) {
+        for (int c = 0; c < (whole_ ? 1 : 4); c++) {   // (COMMIT_WHOLE: one draw, a point a texel, the whole texel)
             ID3D11Buffer* b2[2] = {cb_.Get(), ccb_[c].Get()};
             ctx->VSSetConstantBuffers(0, 2, b2);
-            ctx->OMSetBlendState(mask_[c].Get(), nullptr, 0xffffffff);
+            ctx->OMSetBlendState(whole_ ? nullptr : mask_[c].Get(), nullptr, 0xffffffff);
             static const bool c0only = getenv("GVM_MEASURE_COMMIT0") != nullptr;   // (a measure, wrong results: core 0's points alone)
             ctx->Draw(c0only ? (wcn0_ ? wcn0_ : wcn_) : wcn0_ ? wcn0_ + (top_ - 1) * wcn_ : top_ * wcn_, 0);   // (a frozen row's write cache is empty: its points draw nothing)
         }
@@ -1015,7 +1020,7 @@ private:
                         for (int w = 0; w < 2; w++) gpu_.ctx->CopySubresourceRegion(set_[w][t].t.Get(), 0, wc0, k, 0, none_.t.Get(), 0, &nb);
                         continue;
                     }
-                    UINT x0 = (k % 128) * 8, y0 = (k / 128) * 16, cols = (spix_ + bh_ - 1) / bh_;
+                    UINT x0 = (k % per_) * 8, y0 = (k / per_) * band_, cols = (spix_ + bh_ - 1) / bh_;
                     D3D11_BOX b = {x0, y0, 0, x0 + cols, y0 + bh_, 1}, nb = {0, 0, 0, 1, 1, 1};
                     gpu_.ctx->CopySubresourceRegion(set_[cur_][t].t.Get(), 0, x0, y0, 0, set_[cur_ ^ 1][t].t.Get(), 0, &b);
                     for (uint32_t j = wc0; j < spix_; j++)   // (pixel j of the block: column j / bh_, row j % bh_)
@@ -1230,7 +1235,7 @@ private:
     uint64_t lastEndsTag_ = ~0ull;
     bool c0rt_ = false, cull_ = false, copy_ = false;
     uint32_t cullVerts_ = 3;   // (C0RT: core 0 in the workers' draw)
-    uint32_t ramEnd_ = 0, rows_ = 0, romRows_ = 1, wcn_ = 514, tWc_ = 40, opSlots_ = 32, opSpan_ = 272, ntex_ = 297, spix_ = 38, geo_ = 0, bh_ = 8, wcn0_ = 0, spix0_ = 0;
+    uint32_t ramEnd_ = 0, rows_ = 0, romRows_ = 1, wcn_ = 514, tWc_ = 40, opSlots_ = 32, opSpan_ = 272, ntex_ = 297, spix_ = 38, geo_ = 0, whole_ = 0, bh_ = 8, per_ = 128, band_ = 16, wcn0_ = 0, spix0_ = 0;
     Prog tick_, tick0_, commit_, stage_, write_, progress_, copyTick_;
     Tex ram_, rom_, stageTex_, ops_[2], set_[2][8], zone_, ctl_, info_, none_;
     ComPtr<ID3D11Buffer> cb_, ccb_[4];
