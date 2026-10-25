@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>gpu_vm vs RISC-V</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* programs/wl/plot.py fills DATA: a log-log panel a mode, each kernel's ratio, and the table */
+:root {
+  color-scheme: light;
+  --bg: #f6f6f4; --surface-1: #fcfcfb; --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #77756f;
+  --rule: #dddcd6; --grid: #ebeae5; --axis: #b9b7ae;
+  --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a;
+  --faster: #2a78d6; --slower: #eb6834; --band: rgba(42, 120, 214, 0.06);
+  --body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --bg: #121211; --surface-1: #1a1a19; --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #94938a;
+    --rule: #33332f; --grid: #262624; --axis: #55544e;
+    --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70;
+    --faster: #3987e5; --slower: #d95926; --band: rgba(57, 135, 229, 0.08);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #121211; --surface-1: #1a1a19; --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #94938a;
+  --rule: #33332f; --grid: #262624; --axis: #55544e;
+  --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70;
+  --faster: #3987e5; --slower: #d95926; --band: rgba(57, 135, 229, 0.08);
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text-primary); font-family: var(--body); font-size: 15px; line-height: 1.5; }
+.wrap { max-width: 1240px; margin: 0 auto; padding: 28px 16px 64px; display: grid; gap: 32px; }
+h1 { font-size: 1.9rem; margin: 0; line-height: 1.15; text-wrap: balance; }
+h2 { font-size: 1.25rem; margin: 0 0 4px; }
+p { margin: 0; max-width: 78ch; }
+.muted { color: var(--text-secondary); }
+.small { font-size: 0.85rem; }
+code { font-family: var(--mono); font-size: 0.88em; }
+section { display: grid; gap: 12px; min-width: 0; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.tile { background: var(--surface-1); border: 1px solid var(--rule); border-radius: 8px; padding: 14px 16px; display: grid; gap: 2px; }
+.tile .k { font-size: 0.8rem; color: var(--text-secondary); }
+.tile .v { font-family: var(--mono); font-size: 1.6rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+.tile .s { font-size: 0.8rem; color: var(--text-muted); }
+.panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; }
+.panel { background: var(--surface-1); border: 1px solid var(--rule); border-radius: 8px; padding: 14px 14px 8px; min-width: 0; position: relative; }
+.panel h3 { margin: 0; font-size: 1rem; }
+.panel .sub { font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 4px; }
+svg { display: block; width: 100%; height: auto; overflow: visible; }
+svg text { font-family: var(--body); fill: var(--text-secondary); font-size: 11px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 0.85rem; color: var(--text-secondary); }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
+.tip { position: fixed; pointer-events: none; background: var(--surface-1); color: var(--text-primary); border: 1px solid var(--rule); border-radius: 6px;
+  padding: 8px 10px; font-size: 0.82rem; box-shadow: 0 4px 16px rgba(0,0,0,0.15); max-width: 320px; display: none; z-index: 10; }
+.tip b { font-family: var(--mono); }
+.tip .r { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+.tabs button { font: inherit; font-size: 0.88rem; padding: 4px 12px; border-radius: 999px; border: 1px solid var(--rule); background: var(--surface-1); color: var(--text-secondary); cursor: pointer; }
+.tabs button[aria-pressed="true"] { background: var(--text-primary); color: var(--surface-1); border-color: var(--text-primary); }
+.tabs button:focus-visible { outline: 2px solid var(--series-1); outline-offset: 2px; }
+.tw { overflow-x: auto; border: 1px solid var(--rule); border-radius: 8px; background: var(--surface-1); }
+table { border-collapse: collapse; width: 100%; font-size: 0.85rem; font-variant-numeric: tabular-nums; }
+th, td { padding: 5px 10px; border-bottom: 1px solid var(--rule); text-align: left; white-space: nowrap; }
+th { font-size: 0.78rem; color: var(--text-secondary); font-weight: 600; position: sticky; top: 0; background: var(--surface-1); }
+td.n, th.n { text-align: right; }
+td.m { font-family: var(--mono); font-weight: 600; }
+td.d { white-space: normal; color: var(--text-secondary); min-width: 260px; }
+ul.notes { margin: 0; padding-left: 1.2em; font-size: 0.85rem; color: var(--text-secondary); }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header style="display:grid;gap:10px">
+  <h1 id="title"></h1>
+  <p class="muted" id="lede"></p>
+</header>
+<section><div class="tiles" id="tiles"></div></section>
+<section>
+  <h2>Speed against speed</h2>
+  <p class="muted small">Each dot is one kernel. Across: units of work a second on the RISC-V machine; up: units a second on gpu_vm. Both axes are logarithmic. On the diagonal the two machines are equally fast; above it gpu_vm is faster. The shaded band is within 2&times; either way.</p>
+  <div class="legend" id="legend"></div>
+  <div class="panels" id="panels"></div>
+</section>
+<section>
+  <h2>gpu_vm's speed over RISC-V's, kernel by kernel</h2>
+  <div class="tabs" id="tabs" role="group" aria-label="Mode"></div>
+  <div class="panel"><svg id="bars" role="img"></svg></div>
+</section>
+<section>
+  <h2>Every result</h2>
+  <div class="tw"><table id="table"></table></div>
+  <ul class="notes" id="notes"></ul>
+</section>
+</div>
+<div class="tip" id="tip"></div>
+<script>
+const D = /*DATA*/null;
+const MODES = [['c0', 'First core alone', 'one core, no workers'], ['w', 'One worker', 'the work on one worker while the first core rests'],
+               ['p', 'Every worker', 'each worker runs units of its own; the first core waits']];
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+const fmt = v => v >= 100 ? Math.round(v).toLocaleString('en-US') : v >= 10 ? v.toFixed(1) : v.toFixed(2);
+const fx = r => (r >= 1 ? r.toFixed(2) : r.toFixed(2)) + '×';
+const color = g => `var(--series-${D.groups.indexOf(g) + 1})`;
+const geo = a => Math.exp(a.reduce((s, x) => s + Math.log(x), 0) / a.length);
+const NS = 'http://www.w3.org/2000/svg';
+const el = (tag, attrs, parent) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; };
+const modes = MODES.filter(m => D.rows.some(r => r.mode === m[0]));
+
+$('title').textContent = D.title;
+$('lede').innerHTML = `${new Set(D.rows.map(r => r.name)).size} kernels, each a piece of a real program of the machine (the file and the functions it copies are in the table), run for a few seconds on each machine. A <b>unit</b> is one of the kernel's pieces of work (a frame, a server tick, a batch of traces), the same on both machines. RISC-V: ${esc((D.info.rv || []).join(', ') || 'rv')} (rvc_opt); gpu_vm: ${esc((D.info.gvm || []).join(', '))}.`;
+
+$('tiles').innerHTML = modes.map(([m, name]) => {
+  const rs = D.rows.filter(r => r.mode === m), g = geo(rs.map(r => r.ratio)), wins = rs.filter(r => r.ratio > 1).length;
+  const lo = rs.reduce((a, b) => a.ratio < b.ratio ? a : b), hi = rs.reduce((a, b) => a.ratio > b.ratio ? a : b);
+  return `<div class="tile"><span class="k">${name}: gpu_vm over RISC-V, geometric mean</span><span class="v">${fx(g)}</span><span class="s">faster on ${wins} of ${rs.length}; from ${fx(lo.ratio)} (${esc(lo.name)}) to ${fx(hi.ratio)} (${esc(hi.name)})</span></div>`;
+}).join('');
+$('legend').innerHTML = D.groups.map(g => `<span><i style="background:${color(g)}"></i>${esc(g)}</span>`).join('');
+
+const tip = $('tip');
+function showTip(e, r) {
+  tip.innerHTML = `<b>${esc(r.name)}</b> <span class="muted">(${esc(MODES.find(m => m[0] === r.mode)[1])})</span><br><span class="muted">${esc(r.desc)}</span><br>
+    RISC-V <span class="r">${fmt(r.rv)}</span> units/s &middot; gpu_vm <span class="r">${fmt(r.gvm)}</span> units/s<br>gpu_vm is <b>${fx(r.ratio)}</b> RISC-V's speed`;
+  tip.style.display = 'block';
+  const x = Math.min(e.clientX + 14, window.innerWidth - tip.offsetWidth - 8), y = Math.min(e.clientY + 14, window.innerHeight - tip.offsetHeight - 8);
+  tip.style.left = x + 'px', tip.style.top = y + 'px';
+}
+const hideTip = () => tip.style.display = 'none';
+
+// a log-log panel a mode, one scale for all panels
+const all = D.rows.flatMap(r => [r.rv, r.gvm]);
+let lo = Math.pow(10, Math.floor(Math.log10(Math.min(...all)))), hi = Math.pow(10, Math.ceil(Math.log10(Math.max(...all))));
+const W = 360, H = 340, L = 46, R = 12, T = 10, B = 40;
+const sx = v => L + (Math.log10(v) - Math.log10(lo)) / (Math.log10(hi) - Math.log10(lo)) * (W - L - R);
+const sy = v => H - B - (Math.log10(v) - Math.log10(lo)) / (Math.log10(hi) - Math.log10(lo)) * (H - T - B);
+for (const [m, name, sub] of modes) {
+  const p = document.createElement('div');
+  p.className = 'panel';
+  p.innerHTML = `<h3>${name}</h3><div class="sub">${sub}</div>`;
+  $('panels').appendChild(p);
+  const rs = D.rows.filter(r => r.mode === m);
+  const svg = el('svg', {viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': `${name}: gpu_vm against RISC-V units a second, ${rs.filter(r => r.ratio > 1).length} of ${rs.length} kernels faster on gpu_vm`}, p);
+  // the band within 2x, the grid, the diagonal
+  el('polygon', {points: [[lo, lo * 2], [hi / 2, hi], [hi, hi], [hi, hi / 2], [lo * 2, lo], [lo, lo]].map(([x, y]) => `${sx(x)},${sy(y)}`).join(' '), fill: 'var(--band)'}, svg);
+  for (let d = lo; d <= hi * 1.001; d *= 10) {
+    el('line', {x1: sx(d), x2: sx(d), y1: T, y2: H - B, stroke: 'var(--grid)'}, svg);
+    el('line', {x1: L, x2: W - R, y1: sy(d), y2: sy(d), stroke: 'var(--grid)'}, svg);
+    const lab = d >= 1000 ? (d / 1000) + 'k' : String(d);
+    el('text', {x: sx(d), y: H - B + 16, 'text-anchor': 'middle'}, svg).textContent = lab;
+    el('text', {x: L - 6, y: sy(d) + 4, 'text-anchor': 'end'}, svg).textContent = lab;
+  }
+  el('line', {x1: sx(lo), y1: sy(lo), x2: sx(hi), y2: sy(hi), stroke: 'var(--axis)', 'stroke-width': 1.5, 'stroke-dasharray': '4 3'}, svg);
+  el('text', {x: sx(hi) - 4, y: sy(hi) + 14, 'text-anchor': 'end'}, svg).textContent = 'x = y';
+  el('text', {x: (L + W - R) / 2, y: H - 6, 'text-anchor': 'middle'}, svg).textContent = 'RISC-V, units/s';
+  el('text', {x: 12, y: (T + H - B) / 2, 'text-anchor': 'middle', transform: `rotate(-90 12 ${(T + H - B) / 2})`}, svg).textContent = 'gpu_vm, units/s';
+  for (const r of rs) {
+    const g = el('g', {tabindex: 0, 'aria-label': `${r.name}: ${fx(r.ratio)}`}, svg);
+    el('circle', {cx: sx(r.rv), cy: sy(r.gvm), r: 12, fill: 'transparent'}, g);
+    el('circle', {cx: sx(r.rv), cy: sy(r.gvm), r: 4.5, fill: color(r.group), stroke: 'var(--surface-1)', 'stroke-width': 2}, g);
+    g.addEventListener('mousemove', e => showTip(e, r));
+    g.addEventListener('mouseleave', hideTip);
+    g.addEventListener('focus', () => { const b = g.getBoundingClientRect(); showTip({clientX: b.right, clientY: b.bottom}, r); });
+    g.addEventListener('blur', hideTip);
+  }
+  // the furthest from the diagonal, named
+  const far = rs.slice().sort((a, b) => Math.abs(Math.log(b.ratio)) - Math.abs(Math.log(a.ratio))).slice(0, 3);
+  for (const r of far) {
+    const right = sx(r.rv) < W * 0.7;
+    el('text', {x: sx(r.rv) + (right ? 8 : -8), y: sy(r.gvm) + 4, 'text-anchor': right ? 'start' : 'end', style: 'fill:var(--text-primary)'}, svg).textContent = r.name;
+  }
+}
+
+// the ratio bars of one mode, sorted
+function drawBars(m) {
+  const rs = D.rows.filter(r => r.mode === m).sort((a, b) => b.ratio - a.ratio);
+  const svg = $('bars'), rowH = 20, BL = 120, BR = 60, BW = 760, top = 22;
+  svg.innerHTML = '';
+  svg.setAttribute('viewBox', `0 0 ${BW} ${top + rs.length * rowH + 8}`);
+  svg.setAttribute('aria-label', `gpu_vm over RISC-V, ${MODES.find(x => x[0] === m)[1]}, sorted`);
+  const rlo = Math.min(0.5, ...rs.map(r => r.ratio)) * 0.9, rhi = Math.max(2, ...rs.map(r => r.ratio)) * 1.1;
+  const bx = v => BL + (Math.log(v) - Math.log(rlo)) / (Math.log(rhi) - Math.log(rlo)) * (BW - BL - BR);
+  for (const t of [0.1, 0.2, 0.5, 1, 2, 5, 10, 20]) {
+    if (t < rlo || t > rhi) continue;
+    el('line', {x1: bx(t), x2: bx(t), y1: top - 4, y2: top + rs.length * rowH, stroke: t === 1 ? 'var(--axis)' : 'var(--grid)', 'stroke-width': t === 1 ? 1.5 : 1}, svg);
+    el('text', {x: bx(t), y: top - 8, 'text-anchor': 'middle'}, svg).textContent = t + '×';
+  }
+  rs.forEach((r, i) => {
+    const y = top + i * rowH, x1 = bx(Math.min(1, r.ratio)), x2 = bx(Math.max(1, r.ratio));
+    const g = el('g', {tabindex: 0}, svg);
+    el('rect', {x: 0, y, width: BW, height: rowH, fill: 'transparent'}, g);
+    el('text', {x: BL - 8, y: y + 14, 'text-anchor': 'end', style: 'fill:var(--text-primary);font-family:var(--mono)'}, g).textContent = r.name;
+    el('rect', {x: x1, y: y + 4, width: Math.max(2, x2 - x1), height: rowH - 8, rx: 3, fill: r.ratio >= 1 ? 'var(--faster)' : 'var(--slower)'}, g);
+    el('text', {x: r.ratio >= 1 ? x2 + 6 : x1 - 6, y: y + 14, 'text-anchor': r.ratio >= 1 ? 'start' : 'end'}, g).textContent = fx(r.ratio);
+    g.addEventListener('mousemove', e => showTip(e, r));
+    g.addEventListener('mouseleave', hideTip);
+  });
+}
+$('tabs').innerHTML = modes.map(([m, name], i) => `<button type="button" data-m="${m}" aria-pressed="${i === 0}">${name}</button>`).join('');
+$('tabs').querySelectorAll('button').forEach(b => b.onclick = () => {
+  $('tabs').querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', x === b));
+  drawBars(b.dataset.m);
+});
+drawBars(modes[0][0]);
+
+// the table
+const names = [...new Set(D.rows.map(r => r.name))];
+const get = (n, m) => D.rows.find(r => r.name === n && r.mode === m);
+$('table').innerHTML = `<thead><tr><th>kernel</th><th>group</th>${modes.map(([m, name]) => `<th class="n">${name}: RISC-V, units/s</th><th class="n">gpu_vm, units/s</th><th class="n">gpu_vm / RISC-V</th>`).join('')}<th>what it runs (file)</th></tr></thead><tbody>` +
+  names.map(n => { const any = D.rows.find(r => r.name === n);
+    return `<tr><td class="m">${esc(n)}</td><td>${esc(any.group)}</td>${modes.map(([m]) => { const r = get(n, m);
+      return r ? `<td class="n">${fmt(r.rv)}</td><td class="n">${fmt(r.gvm)}</td><td class="n">${fx(r.ratio)}</td>` : '<td class="n">-</td><td class="n">-</td><td class="n">-</td>'; }).join('')}<td class="d">${esc(any.desc)} <code>${esc(any.src)}</code></td></tr>`; }).join('') + '</tbody>';
+$('notes').innerHTML = D.notes.map(n => `<li>${esc(n)}</li>`).join('');
+</script>
+</body>
+</html>

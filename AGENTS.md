@@ -9,6 +9,10 @@
     ShaderEmu and Poiyomi shaders its README measures).
   - Optimizations are weighed together, not one at a time: one that loses alone may win with another (a layout and the
     compiler's address, a cache and the ISA's stores), and one that wins alone may not add up with the rest.
+- One core a wave (25 October 2026, `gpu_vm/tick/WAVES.md`): every wave of the tick's draw holds the lanes of one core
+  only. Cores that share a wave run two programs, and the wave pays for both paths. A tick is valid only with a geometry
+  (block, draw, harness, Unity) measured to keep this on the card. Padding lanes are kept out of the geometry, not
+  discarded. c8's 8 x 6 blocks (12 quads, 1.5 warps) are not yet measured against it.
 - gpu_vm's fastest machine and how to measure it (its tick, the image and checkpoints for each game, the commands and
   the numbers): `gpu_vm/bench_games/README.md`, "The fastest machine today". run.py's defaults (img-cur, gvm-cur) are
   the image to use; the harness's own default tick (x18) is not the tick: give `--gvm-tick` (v0009).

@@ -1,0 +1,12 @@
+/* K(wl_...) lines of this group */
+K(wl_q3_trace)
+K(wl_q3_snap)
+K(wl_q3_bot)
+K(wl_q1_hull)
+K(wl_doom_render)
+K(wl_hl_studio)
+K(wl_q1_alias)
+K(wl_hl_pmove)
+K(wl_doom_play)
+K(wl_q3_tess)
+K(wl_q1_surf)
