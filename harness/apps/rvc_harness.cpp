@@ -59,6 +59,94 @@ namespace cpuemu {
 static std::string g_cpuConsole;   // what the interpreter's console said since it was last looked at
 static void cpuConsoleHook(char c) { g_cpuConsole.push_back(c); }
 
+// --cpu --save-state: a snapshot the shader machine (experiments/rvc_opt, 256 cores, TICK_MRT) resumes from.
+// `data` is the state texture as drawn, W texels wide: the GPU's memory and the control words are kept as
+// they are there; Linux's RAM (shown four times a second) is the processor's, and every core's state is
+// written where the shader keeps it (src/types.h: decode, encode_l1, mc_geo_read, mc_state_at; src/mc.h),
+// with empty write caches. The interpreter knows only the geometry of workers all alike, so geotune leaves
+// that one there; `width` (2, 4 or 8) lays them out as geotune does on the card instead (its hybrid: 16 big
+// workers, the rest small in blocks of `width` columns), which the empty caches allow. Returns how many
+// workers it wrote; -1 when a core is in a state the shader cannot be given (a copy still being made).
+static int cpuSnapshotCores(std::vector<uint8_t>& data, uint32_t W, uint32_t width) {
+    using namespace cpuemu;
+    auto tex = [&](uint32_t x, uint32_t y) { return (uint32_t*)&data[((size_t)y * W + x) * 16]; };
+    for (uint32_t a = RAM_BASE; a - RAM_BASE < RAM_SIZE; a += 0x400000u) {
+        if (a >= 0x86000000u && a < 0x88000000u) continue;
+        uint32_t lin = (a - RAM_BASE) / 16;
+        memcpy(tex(lin % 2048, 64 + lin / 2048), &ram[a - RAM_BASE], 0x400000);
+    }
+    // the workers' geometry (MC_HYBRID; STATE_ROWS 16, MC_STRIP_TILES 248, TICK_COLS 1024, 6 strip bands, 2 tick bands)
+    const uint32_t L1_AT = 44, TILES = 248, COLS = 1024, SBANDS = 6, TBANDS = 2, LAST = 255;
+    auto buckets = [](uint32_t bits) { return (7u << bits) >> 2; };
+    auto rowsOf = [&](uint32_t bits) { return bits == 0 ? 0u : (L1_AT + 8 + buckets(bits) * 4 + 63) / 64; };
+    auto wide = [](uint32_t rows, uint32_t block, uint32_t pad) { return (rows + pad + block - 1) / block * block; };
+    uint32_t geo[4];
+    memcpy(geo, &ram[0x870003d0u - RAM_BASE], 16);
+    // (none yet, where no program has asked for workers: geotune lays it out at boot on the card, all 255)
+    if (width && (geo[1] > 16 || geo[1] == 0) && geo[3] == 0 && (geo[0] & 1) == 0) {
+        uint32_t laid[4] = {width << 8, geo[1] ? geo[1] : 255u, width == 8 ? 5u : 3u, 16u | 5u << 8 | width << 16 | 8u << 24};   // (geotune.c: hybrid(1, width, WIDE))
+        memcpy(geo, laid, 16);
+        memcpy(tex(0x70003du % 2048, 64 + 0x70003du / 2048), laid, 16);
+    }
+    uint32_t ws = (geo[3] >> 16) & 0xff, wb = geo[3] >> 24;
+    uint32_t rows = geo[2] < 3 || geo[2] > 6 ? 0 : rowsOf(geo[2]);
+    uint32_t cols = ws != 0 && ws <= 64 ? wide(rows, ws, 0) : wide(rows, 4, 2);
+    uint32_t nb = 0, per0 = 0, count = 0, bb = (geo[3] >> 8) & 0xff, rowsB = 0;
+    if ((geo[3] & 0xff) != 0 && bb >= 3 && bb <= 6 && rows != 0) {
+        rowsB = rowsOf(bb);
+        uint32_t colsB = wb != 0 && wb <= 64 ? wide(rowsB, wb, 0) : wide(rowsB, 8, 0);
+        nb = (std::min)({geo[3] & 0xff, TILES / rowsB, COLS / colsB, geo[1], LAST});
+        if (nb != 0) per0 = (COLS - nb * colsB) / cols;
+    }
+    uint32_t sb0 = nb != 0 ? 1 : 0;
+    if (rows != 0 && (geo[0] & 1) == 0)
+        count = nb + (std::min)((std::min)(geo[1], LAST) - nb, (std::min)((SBANDS - sb0) * (TILES / rows), (TBANDS - sb0) * (COLS / cols) + per0));
+    for (uint32_t core = 0; core <= count && core < cores.size(); core++) {
+        Core& c = cores[core];
+        if (c.copying) return -1;
+        uint32_t bits = core == 0 ? 6 : core <= nb ? bb : geo[2];
+        uint32_t cacheEnd = L1_AT + buckets(bits) * 4, tile0 = 0;
+        if (core != 0) {
+            uint32_t j = core - 1 - nb, per = TILES / (std::max)(rows, 1u);
+            tile0 = core <= nb ? (core - 1) * rowsB : (sb0 + j / per) * TILES + (j % per) * rows;
+        }
+        // texel lin as core 0 numbers them (its float registers' 8 from cacheEnd on), where this core keeps it
+        auto at = [&](uint32_t lin) {
+            if (core == 0) return tex(lin % 64, lin / 64);
+            uint32_t t = tile0 + (lin >> 6);
+            return tex(64 + 8 * (t % TILES) + (lin & 7), 8 * (t / TILES) + ((lin >> 3) & 7));
+        };
+        auto put = [&](uint32_t lin, uint32_t r, uint32_t g, uint32_t b, uint32_t a) {
+            uint32_t* p = at(lin);
+            p[0] = r, p[1] = g, p[2] = b, p[3] = a;
+        };
+        for (uint32_t lin = 0; lin < cacheEnd; lin++) put(lin, 0, 0, 0, 0);
+        put(0, c.mstatus, c.mie, c.mip, c.stvec);
+        put(1, c.sscratch, c.sepc, c.scause, c.stval);
+        put(2, c.scounteren, c.fcsr, 0, 0);
+        put(8, 0xffffffffu, 3735931358u, c.priv, 0);
+        put(10, 0, (uint32_t)c.timecmp, (uint32_t)(c.timecmp >> 32), 0);
+        put(11, 0, 0, 0, 0xffffffffu);
+        put(28, 0, (uint32_t)c.clock, 0, 0);
+        for (uint32_t k = 0; k < 8; k++)
+            put(29 + k, c.x[4 * k + 1], c.x[4 * k + 2], c.x[4 * k + 3], k == 7 ? c.pc : c.x[4 * k + 4]);
+        put(37, c.reserved ? 1 : 0, c.reservation, c.memop_src, c.memop_dst);
+        put(38, 0, 0, c.memop_n, 0);
+        uint32_t word = 0;
+        if (core != 0) {
+            const Worker& w = workers[core];
+            uint32_t start = cpuemu::word(mc_start_at((int)core));
+            word = w.state == MC_RUNNING ? 1 : w.state == MC_ASLEEP ? 3 | (w.job_seen & 0xffffff) << 8
+                 : w.state == MC_FAULTED ? 5 | (w.seen & 0xffffff) << 8 : w.state == MC_CALLING ? 9 | (w.seen & 0xffffff) << 8
+                 : (start == MC_STOP ? 2u : 1u) << 8;
+        }
+        put(41, 0, 0, 0, word);
+        for (uint32_t k = 0; k < 8; k++)
+            put(cacheEnd + k, c.f[4 * k], c.f[4 * k + 1], c.f[4 * k + 2], c.f[4 * k + 3]);
+    }
+    return (int)count;
+}
+
 #ifndef SHADEREMU_UNITY_INCLUDE_DIR
 #define SHADEREMU_UNITY_INCLUDE_DIR "harness/unity_include"
 #endif
@@ -2099,6 +2187,16 @@ int main(int argc, char** argv) {
         hdr.sentTag = sentTag;
         hdr.sentChar = sentChar;
         bool ok = opt.gvm.empty() ? backend.readState(W, H, data) : backend.saveSnapshot(data);
+        if (ok && cpuRunning) {
+            // (--cpu: the processor's state put where the shader machine keeps it, its clock the guest's)
+            int workers = cpuSnapshotCores(data, W, opt.workers ? 1u << opt.workers : 2u);   // (2: geotune's pick on this card)
+            hdr.time = cpuemu::guest_seconds;
+            hdr.sentTag = cpuemu::word(0x876b8280u);
+            hdr.sentChar = cpuemu::word(0x876b8284u);
+            if (workers < 0) fprintf(stderr, "\n[harness] --cpu: a core is in the middle of a copy: no snapshot\n");
+            else fprintf(stderr, "\n[harness] --cpu: core 0 and %d workers in the snapshot, guest time %.1fs\n", workers, hdr.time);
+            ok = workers >= 0;
+        }
         if (ok) {
             data.insert(data.begin(), (const uint8_t*)&hdr, (const uint8_t*)&hdr + sizeof hdr);
             ok = writeFileBinary(opt.saveState, data.data(), data.size());
