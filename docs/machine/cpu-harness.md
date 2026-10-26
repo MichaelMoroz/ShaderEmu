@@ -86,6 +86,25 @@ October 2026 it showed a desktop with no windows where the layer table had a cal
 40,20 and a snapshot of the same run showed it drawn: a capture of what programs look like is
 taken with `--save-state` at the run's end and `snapshot_screen.py`, never from the log.
 
+Since 26 October 2026 that snapshot is one the shader machine resumes from: `--save-state` writes
+the processor's RAM and every core's registers, CSRs, timer and worker word where
+`experiments/rvc_opt` keeps them, with empty write caches (`cpuSnapshotCores`), and the guest's
+clock goes on from the processor's. So a moment reached here in seconds (Quake's timedemo, boot
+included, in 9) is measured on the card from the same state:
+
+    bin\rvc_harness.exe --d3d11 --rvc experiments\rvc_opt --define NO_PAGING --image linux-net --cpu --no-desktop
+        --input "nano-X -p & sleep 10; quake +timedemo demo1\n" --until "You got the nails" --save-state Q.snap
+    bin\rvc_harness.exe --d3d11 --rvc experiments\rvc_opt --define NO_PAGING --image linux-net --no-desktop --load-state Q.snap
+
+The interpreter knows only the geometry of workers all alike, which geotune then leaves; the
+snapshot lays them out as geotune does on the card (16 big, the rest small in blocks of 2, or as
+`--workers` says), or nxray draws 12.9 lists a second where it draws 19.2. A program's state that
+goes by the guest's clock is not the card's at the same line (Quake III's frame 200 is 16 s in
+here), and a part measured just after `nano-X` starts is not settled: give it 10 s. Checked on the
+card against states reached there: Quake's timedemo 66.3 against 67.2 fps, nxray with its scene
+held still 19.4 against 19.2 (`GPU-VM/compare/short.md`). It goes one way only: under `--cpu`,
+`--load-state` still restores only the texture and the processor boots afresh.
+
 `rvc_harness --compute fast` is the same with the processor a compute shader on the card in
 place of this interpreter (`experiments/rv32_min/README.md`, "The whole machine"): core 0 and 255
 workers, a thread group each, RAM in buffers of their own (core 0's and the workers', merged
