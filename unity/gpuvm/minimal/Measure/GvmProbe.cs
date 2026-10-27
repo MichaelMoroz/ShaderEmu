@@ -315,6 +315,13 @@ public class GvmProbe : MonoBehaviour
                 machine.SetProgramVariable(p[0], int.Parse(p[1]));
                 Log("var " + arg);
             }
+            else if (verb == "bool")
+            {
+                // bool NAME 0|1: a bool of the machine's program
+                string[] p = arg.Split(' ');
+                machine.SetProgramVariable(p[0], p[1] != "0");
+                Log("bool " + arg);
+            }
             else if (verb == "frozen")
             {
                 // which workers GvmFreeze.shader has frozen: how many, and how many have been quiet long enough
