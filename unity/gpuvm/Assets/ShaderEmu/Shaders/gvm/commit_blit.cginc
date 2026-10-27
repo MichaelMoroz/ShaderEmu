@@ -4,7 +4,8 @@
 uint _CommitPoints;   // the commit mesh's points: GvmCommit's vertex count
 [maxvertexcount(16)]
 [instance(32)]
-void amp_geo(point amp_d I[1], inout PointStream<c2f> s, uint inst : SV_GSInstanceID, uint pid : SV_PrimitiveID) {
+void amp_geo(point amp_d I[1], inout PointStream<c2f> s, uint inst : SV_GSInstanceID) {
+    uint pid = I[0].patch;
     uint call = amp_call(I[0], pid, inst);
     [loop] for (uint k = 0; k < 16; k++) {
         uint id = 16 * call + k;

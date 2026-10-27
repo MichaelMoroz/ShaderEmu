@@ -78,7 +78,8 @@ public class EmuMachine : UdonSharpBehaviour
     public MeshRenderer gvmCommitRenderer, gvmStageRenderer, gvmWriteRenderer, gvmProgRenderer;
     public Material gvmCommitMaterial, gvmStageMaterial, gvmWriteMaterial, gvmProgMaterial, gvmWritebackMaterial;
     public Material gvmCommitBlitMaterial;    // GvmCommitBlit: the commit and the merged write as blits
-    public bool gvmCommitBlits;               // the commit (and with gvmMergeWrite the first write) as blits, no camera
+    public bool gvmCommitBlits = true;        // the commit (and with gvmMergeWrite the first write) as blits, no camera: 6 ms of main
+                                              // thread a frame in the world for 0.1 ms of card (docs/REGRESSIONS.md: the CPU is what a world lacks)
     public bool gvmCommitBoth;                // (a check: the camera's commit, then the blits' over it)
     public Material gpuBlitMaterial;          // GvmGpuDrawBlit: the GPU's 8 passes as blits into its target
     public bool gvmGpuBlits;                  // the GPU's lists drawn by those blits, no camera (off: step 2 item 4)

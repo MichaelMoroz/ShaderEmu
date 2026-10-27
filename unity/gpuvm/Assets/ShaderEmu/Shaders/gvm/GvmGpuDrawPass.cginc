@@ -51,7 +51,8 @@ void gpu_triangle(uint t, inout TriangleStream<gpu_varyings> stream) {
 static const uint GPU_BLIT_TRIS = 13;
 [maxvertexcount(39)]
 [instance(32)]
-void amp_geo(point amp_d I[1], inout TriangleStream<gpu_varyings> stream, uint inst : SV_GSInstanceID, uint pid : SV_PrimitiveID) {
+void amp_geo(point amp_d I[1], inout TriangleStream<gpu_varyings> stream, uint inst : SV_GSInstanceID) {
+    uint pid = I[0].patch;
 #if _GpuPass != 0
     if (((ram(GPU_CTRL).r >> (8 + _GpuPass)) & 1) == 0) return;
 #endif

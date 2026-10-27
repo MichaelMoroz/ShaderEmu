@@ -22,7 +22,7 @@ Shader "ShaderEmu/GvmGpuDrawBlit"
         static const uint AMP_F = 8, AMP_N = AMP_F + 1, AMP_INST = 32;
         struct amp_v { float4 p : INTERNALTESSPOS; };
         struct amp_tf { float e[4] : SV_TessFactor; float i[2] : SV_InsideTessFactor; };
-        struct amp_d { float2 uv : TEXCOORD0; };
+        struct amp_d { float2 uv : TEXCOORD0; nointerpolation uint patch : TEXCOORD1; };   // (patch: the domain shader's SV_PrimitiveID)
         amp_v amp_vert(float4 v : POSITION) { amp_v o; o.p = v; return o; }
         amp_tf amp_hc(InputPatch<amp_v, 3> I) {
             amp_tf o;
@@ -37,7 +37,7 @@ Shader "ShaderEmu/GvmGpuDrawBlit"
         [outputcontrolpoints(3)]
         amp_v amp_hull(InputPatch<amp_v, 3> I, uint id : SV_OutputControlPointID) { return I[id]; }
         [domain("quad")]
-        amp_d amp_dom(amp_tf h, const OutputPatch<amp_v, 3> I, float2 uv : SV_DomainLocation) { amp_d o; o.uv = uv; return o; }
+        amp_d amp_dom(amp_tf h, const OutputPatch<amp_v, 3> I, float2 uv : SV_DomainLocation, uint pid : SV_PrimitiveID) { amp_d o; o.uv = uv; o.patch = pid; return o; }
         uint amp_call(amp_d d, uint pid, uint inst) {   // this call's number, 0 to 5,183
             uint x = (uint)round(d.uv.x * AMP_F), y = (uint)round(d.uv.y * AMP_F);
             return ((pid * AMP_N + y) * AMP_N + x) * AMP_INST + inst;
@@ -142,7 +142,8 @@ Shader "ShaderEmu/GvmGpuDrawBlit"
             struct clr { float4 position : SV_Position; };
             [maxvertexcount(3)]
             [instance(32)]
-            void amp_geo(point amp_d I[1], inout TriangleStream<clr> s, uint inst : SV_GSInstanceID, uint pid : SV_PrimitiveID) {
+            void amp_geo(point amp_d I[1], inout TriangleStream<clr> s, uint inst : SV_GSInstanceID) {
+                uint pid = I[0].patch;
                 if (amp_call(I[0], pid, inst) != 0) return;
 #if defined(UNITY_REVERSED_Z)
                 float z = 0.0;
