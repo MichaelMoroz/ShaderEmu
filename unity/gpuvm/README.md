@@ -9,9 +9,14 @@ alone there is a smaller project, made from this folder and `minimal/`.
 
     python gpu_vm/platform/unity_image.py build/gvm_apps/img-cur
     python unity/gpuvm/make_project.py C:/Development/VRChat/ShaderEmu-GPUVM --sdk-from E:/Development/VRChat/VRCFluid
+    python unity/gpuvm/make_project.py C:/Development/VRChat/ShaderEmu --sdk-from E:/Development/VRChat/VRCFluid --world
     pwsh C:\Users\micha\Documents\FXC2\scripts\unity-overlay.ps1 -Editor "C:\Program Files\Unity\Hub\Editor\2022.3.22f1\Editor" -Dest C:\Development\VRChat\Unity-2022.3.22f1-fxc2
     copy C:\Users\micha\Documents\FXC2\bin\unity\* C:\Development\VRChat\Unity-2022.3.22f1-fxc2\Data\Tools\
 
+- `--world` makes the whole room instead: `unity/ShaderEmu` as committed (its models and textures: no Blender, no
+  downloads but the shader packages of `world/install_packages.py`), the gpu_vm files over it, and the measuring
+  folder; `minimal/Editor` is left out, as the world's builder has what it stands in for. Then the image's `Images`
+  folder, "ShaderEmu/Build world" and "ShaderEmu/GPU-VM: build the machine".
 - `make_project.py` takes VRChat Creator Companion's World template (ProjectSettings, Unity's packages) and copies
   VRChat's Base and Worlds SDK (3.10.4; UdonSharp and ClientSim are in Worlds) from another VCC project's `Packages`
   (VCC or `vpm` can add them instead). It writes the world's Scripts, the few shaders the machine draws with, `src/`

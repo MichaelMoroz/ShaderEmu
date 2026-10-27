@@ -109,6 +109,8 @@ def main():
     ap.add_argument("--template", default=TEMPLATE)
     ap.add_argument("--tick", help="a gpu_vm step to draw in place of the committed tick.cginc's (v0009), e.g. "
                     "build/tick_gen/c0e/v0003.hlsl: gpu_vm/platform/unity_tick.py makes it")
+    ap.add_argument("--world", action="store_true", help="the whole room (unity/ShaderEmu, its models and textures as "
+                    "committed) under the gpu_vm files, and the room's shader packages (world/install_packages.py)")
     a = ap.parse_args()
     p = os.path.abspath(a.project)
     os.makedirs(p, exist_ok=True)
@@ -133,6 +135,9 @@ def main():
 
     # Assets/ShaderEmu
     se = os.path.join(p, "Assets", "ShaderEmu")
+    if a.world:
+        tree(WORLD, se, skip_meta=False)
+        subprocess.check_call([sys.executable, os.path.join(REPO, "world", "install_packages.py"), p])
     tree(os.path.join(WORLD, "Scripts"), os.path.join(se, "Scripts"))
     for f in SHADERS:
         copy(os.path.join(WORLD, "Shaders", f), os.path.join(se, "Shaders", f))
@@ -150,7 +155,8 @@ def main():
     copy(os.path.join(WORLD, "Editor", "ShaderEmuImages.cs"), os.path.join(se, "Editor", "ShaderEmuImages.cs"))
     copy(os.path.join(WORLD, "Textures", "TerminalFont.png"), os.path.join(se, "Textures", "TerminalFont.png"))
     tree(os.path.join(HERE, "Assets", "ShaderEmu"), se)                       # the gpu_vm copy's files over the world's
-    tree(os.path.join(HERE, "minimal", "Editor"), os.path.join(se, "Editor"))
+    if not a.world:   # (the world's builder has what minimal's scene builders stand in for, under the same names)
+        tree(os.path.join(HERE, "minimal", "Editor"), os.path.join(se, "Editor"))
     tree(os.path.join(HERE, "minimal", "Measure"), os.path.join(se, "Measure"))
     timer = os.path.join(HERE, "minimal", "GpuTimer", "GpuTimer.dll")   # (a measure: GpuTimer/build.bat makes it)
     if os.path.exists(timer):
