@@ -84,6 +84,12 @@ public class EmuMachine : UdonSharpBehaviour
     public Material gpuBlitMaterial;          // GvmGpuDrawBlit: the GPU's 8 passes as blits into its target
     public bool gvmGpuBlits;                  // the GPU's lists drawn by those blits, no camera (off: step 2 item 4)
     public Material gvmTick0Material;         // core 0's tick when the step has CORE0 (GvmTick0), else none
+    public Material gvmTickOneMaterial;       // GvmTickOne: the tick as a blit into one target, no camera
+    public Material gvmStateOneMaterial;      // GvmStateOne: a state set between the eight targets and GvmTickOne's one
+    public RenderTexture[] gvmOne;            // GvmTickOne's two sets, a texture each: 72 columns core 0, 48 a worker, 8 rows
+    public bool gvmTickOne;                   // the tick as GvmTickOne's blit while the cores are at most gvmTickOneMax
+    public int gvmTickOneMax = 64;
+    public int gvmMeasureCores;               // (a measure: the passes draw only the first this many cores, 0 all)
     public Material gvmOpsBlitMaterial;       // a round's plan, stage and progress as blits (GvmOpsBlit)
     public RenderTexture gvmPlan;             // each core's and slot's piece of the round, two texels a slot
     public int gvmEntry = 0x02000000, gvmRamMB = 192;   // the kernel's entry and RAM (unity_boot.txt)
@@ -528,6 +534,7 @@ public class EmuMachine : UdonSharpBehaviour
         gvmCur = 0;
         gvmTime = 0;
         gvmPasses = 0;
+        gvmOneNow = false;
         // (a snapshot's workers are its own: GvmLayout starting them again would lose their state; its clock goes on)
         gvmWorkers = snap ? gvmSnapWorkers : 0;
         gvmTimeBase = snap ? gvmSnapTime - (double)Time.timeSinceLevelLoad * 100000.0 : 0;
@@ -566,7 +573,7 @@ public class EmuMachine : UdonSharpBehaviour
         machineMaterial.SetTexture("_GvmPending", gvmPending);
         machineMaterial.SetInt("_GvmParkLo", 0x470);   // GVM_FW_PARK, GVM_FW_PARK_END (gpu_vm/platform/worker_fw.h)
         machineMaterial.SetInt("_GvmParkHi", 0x520);
-        machineMaterial.SetInt("_GvmGeo", 1);
+        machineMaterial.SetInt("_GvmGeo", gvmOneNow ? 4 : 1);   // (4: GvmTickOne's one target, gpu.cginc's gvm_s16)
         machineMaterial.SetInt("_GvmListDrawn", 1);
         gvmWritebackMaterial.SetInt("_GvmRows", rows);
         gvmWritebackMaterial.SetTexture("_GvmCtl", gvmCtl);
@@ -586,6 +593,7 @@ public class EmuMachine : UdonSharpBehaviour
     private const int GvmCtlCopy = 6, GvmReadback = 7, GvmZero = 8;
     private const int GvmNone = 8192;   // no second zone in the control pass's row
     private const int GvmSnapState = 9;
+    private bool gvmOneNow;             // the set the next pass reads is in GvmTickOne's layout
     private int gvmCur, gvmWorkers;     // the set the next pass draws; the worker cores the kernel laid out
     private double gvmTimeBase;         // added to the wall: a snapshot's clock goes on from its own time
 
@@ -601,14 +609,43 @@ public class EmuMachine : UdonSharpBehaviour
     {
         if (gvmTick0Material == null)
         {
-            Material[] m = { tickMaterial, gvmCommitMaterial, gvmWriteMaterial, gvmOpsBlitMaterial, gvmCommitBlitMaterial };
+            Material[] m = { tickMaterial, gvmCommitMaterial, gvmWriteMaterial, gvmOpsBlitMaterial, gvmCommitBlitMaterial, gvmTickOneMaterial, gvmStateOneMaterial };
             return m;
         }
-        Material[] m0 = { tickMaterial, gvmCommitMaterial, gvmWriteMaterial, gvmOpsBlitMaterial, gvmCommitBlitMaterial, gvmTick0Material };
+        Material[] m0 = { tickMaterial, gvmCommitMaterial, gvmWriteMaterial, gvmOpsBlitMaterial, gvmCommitBlitMaterial, gvmTickOneMaterial, gvmStateOneMaterial, gvmTick0Material };
         return m0;
     }
 
     private RenderTexture[] GvmSet(int k) { return k == 0 ? gvmSetA : gvmSetB; }
+
+    // The set the next pass reads into GvmTickOne's layout (one) or back into the eight targets.
+    private void GvmOneSwitch(bool one)
+    {
+        RenderTexture[] read = GvmSet(gvmCur ^ 1);
+        if (one)
+        {
+            GvmState(gvmStateOneMaterial, read, gvmStateNames);
+            VRCGraphics.Blit(blackTexture, gvmOne[gvmCur ^ 1], gvmStateOneMaterial, 0);
+        }
+        else
+        {
+            gvmStateOneMaterial.SetTexture("_One", gvmOne[gvmCur ^ 1]);
+            for (int t = 0; t < 8; t++)
+            {
+                gvmStateOneMaterial.SetInt("_GvmTarget", t);
+                VRCGraphics.Blit(blackTexture, read[t], gvmStateOneMaterial, 1);
+            }
+        }
+        gvmOneNow = one;
+        machineMaterial.SetInt("_GvmGeo", one ? 4 : 1);
+    }
+
+    // A reader of the set a pass drew (the commit's, the operations'): GvmTickOne's texture when the pass drew it.
+    private void GvmOneReader(Material m)
+    {
+        m.SetInt("_GvmOne", gvmOneNow ? 1 : 0);
+        if (gvmOneNow) m.SetTexture("_S0", gvmOne[gvmCur]);
+    }
 
     private void GvmState(Material m, RenderTexture[] set, string[] names)
     {
@@ -619,9 +656,11 @@ public class EmuMachine : UdonSharpBehaviour
     private void GvmCores()
     {
         Material[] tick = GvmTickMaterials();
-        for (int i = 0; i < tick.Length; i++) tick[i].SetInt("_NCores", 1 + gvmWorkers);
+        int n = 1 + gvmWorkers;
+        if (gvmMeasureCores > 0 && gvmMeasureCores < n) n = gvmMeasureCores;   // (a measure: the passes draw the first n)
+        for (int i = 0; i < tick.Length; i++) tick[i].SetInt("_NCores", n);
         machineMaterial.SetInt("_GvmWorkers", gvmWorkers);
-        cores = 1 + gvmWorkers;
+        cores = n;
     }
 
     // One of the passive passes' draws: its mesh alone on the pass camera's layer, into target.
@@ -651,14 +690,28 @@ public class EmuMachine : UdonSharpBehaviour
         double hi = Math.Floor(gvmTime / 4294967296.0), lo = gvmTime - hi * 4294967296.0;
         int lo16 = (int)(lo % 65536.0);
         RenderTexture[] read = GvmSet(gvmCur ^ 1), drawn = GvmSet(gvmCur);
-        GvmTickUniforms(tickMaterial, lo16, lo, hi, read);
-        if (gvmTick0Material != null) GvmTickUniforms(gvmTick0Material, lo16, lo, hi, read);
-        tickCamera.SetTargetBuffers(gvmCur == 0 ? gvmBuffersA : gvmBuffersB, gvmTickDepth.depthBuffer);
-        tickCamera.Render();
+        bool one = gvmTickOne && gvmTick0Material == null && gvmOne != null && cores <= gvmTickOneMax && 72 + 48 * (cores - 1) <= gvmOne[0].width;
+        if (one != gvmOneNow) GvmOneSwitch(one);
+        if (gvmOneNow)
+        {
+            // (GvmTickOne: one blit, no camera; a parked worker keeps its state inside the tick, no copy pass)
+            GvmTickUniforms(gvmTickOneMaterial, lo16, lo, hi, read);
+            gvmTickOneMaterial.SetTexture("_S0", gvmOne[gvmCur ^ 1]);
+            VRCGraphics.Blit(blackTexture, gvmOne[gvmCur], gvmTickOneMaterial, 0);
+        }
+        else
+        {
+            GvmTickUniforms(tickMaterial, lo16, lo, hi, read);
+            if (gvmTick0Material != null) GvmTickUniforms(gvmTick0Material, lo16, lo, hi, read);
+            tickCamera.SetTargetBuffers(gvmCur == 0 ? gvmBuffersA : gvmBuffersB, gvmTickDepth.depthBuffer);
+            tickCamera.Render();
+        }
         GvmState(gvmCommitBlits ? gvmCommitBlitMaterial : gvmCommitMaterial, drawn, gvmStateNames);
+        GvmOneReader(gvmCommitBlits ? gvmCommitBlitMaterial : gvmCommitMaterial);
         if (gvmCommitBoth) GvmState(gvmCommitMaterial, drawn, gvmStateNames);
         for (int k = 0; k < gvmMeasureStates; k++) GvmState(gvmCommitMaterial, drawn, gvmStateNames);
         GvmState(gvmOpsBlitMaterial, drawn, gvmStateNames);
+        GvmOneReader(gvmOpsBlitMaterial);
         // (gvmMergeWrite: the first round staged through the cores' write caches before the commit, its write drawn after
         // the commit's points in the same render: a camera less a pass)
         int merged = gvmMergeWrite ? 1 : 0;
@@ -748,8 +801,8 @@ public class EmuMachine : UdonSharpBehaviour
         }
         if (i == n - 1 && sound != null) sound.Mix(state, machineMaterial, soundEnabled, soundClock);
         HostClock(i, n);
-        machineMaterial.SetTexture("_GvmS0", GvmSet(gvmCur ^ 1)[0]);
-        machineMaterial.SetTexture("_GvmS3", GvmSet(gvmCur ^ 1)[3]);
+        machineMaterial.SetTexture("_GvmS0", gvmOneNow ? gvmOne[gvmCur ^ 1] : GvmSet(gvmCur ^ 1)[0]);
+        machineMaterial.SetTexture("_GvmS3", gvmOneNow ? gvmOne[gvmCur ^ 1] : GvmSet(gvmCur ^ 1)[3]);
         GvmZone(0x100000, 256, 0x16ba00, gvmWorkers > 0 ? 72 : 0);
     }
 
@@ -766,6 +819,7 @@ public class EmuMachine : UdonSharpBehaviour
         uint g0 = Word(64 + 0x3d, 0), g1 = Word(64 + 0x3d, 1), g2 = Word(64 + 0x3d, 2);
         int want = (g0 & 1) != 0 || g2 < 3 || g2 > 6 ? 0 : g1 > 255u ? 255 : (int)g1;
         if (want == gvmWorkers) return;
+        if (gvmOneNow) GvmOneSwitch(false);
         machineMaterial.SetInt("_GvmFrom", gvmWorkers);
         machineMaterial.SetInt("_GvmTo", want);
         RenderTexture[] next = GvmSet(gvmCur ^ 1);
@@ -1535,6 +1589,8 @@ public class EmuMachine : UdonSharpBehaviour
         {
             GvmPass(wall, i, i == n - 1);
             GvmState(machineMaterial, GvmSet(gvmCur ^ 1), gvmReadNames);
+            machineMaterial.SetInt("_GvmOne", gvmOneNow ? 1 : 0);
+            if (gvmOneNow) machineMaterial.SetTexture("_GvmR0", gvmOne[gvmCur ^ 1]);
             GvmPassesOn(machineMaterial);
             machineMaterial.SetInt("_Row", i);
             VRCGraphics.Blit(blackTexture, readbackTexture, machineMaterial, GvmReadback);

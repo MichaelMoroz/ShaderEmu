@@ -268,7 +268,9 @@ Shader "ShaderEmu/GvmMachine"
                 return float4(v.texcoord.x * 2.0 - 1.0, 1.0 - 2.0 * (_Row + v.texcoord.y) / 32.0, 0.5, 1.0);
             }
             uint pick4(uint4 t, uint k) { return k == 0 ? t.r : k == 1 ? t.g : k == 2 ? t.b : t.a; }
+            uniform uint _GvmOne;   // (GvmTickOne's one target: core 0's texel T at column T >> 3, row T & 7, in _GvmR0)
             uint core0(uint T, uint k) {   // core 0's state texel T (0-23): target T & 7, pixel T >> 3 at (0, T >> 3)
+                [branch] if (_GvmOne != 0u) return pick4(_GvmR0.Load(int3(T >> 3, T & 7, 0)), k);
                 int3 at = int3(0, T >> 3, 0);
                 uint t = T & 7;
                 uint4 v = t == 0 ? _GvmR0.Load(at) : t == 1 ? _GvmR1.Load(at) : t == 2 ? _GvmR2.Load(at) : t == 3 ? _GvmR3.Load(at)

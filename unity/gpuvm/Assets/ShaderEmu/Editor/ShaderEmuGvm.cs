@@ -185,6 +185,11 @@ public static partial class ShaderEmuBuilder
         machine.gvmProgMaterial = Mat("GvmOpProg", "ShaderEmu/GvmOps");
         machine.gvmWritebackMaterial = Mat("GvmWriteback", "ShaderEmu/GvmWriteback");
         machine.gvmCommitBlitMaterial = Mat("GvmCommitBlit", "ShaderEmu/GvmCommitBlit");
+        machine.gvmTickOneMaterial = Mat("GvmTickOne", "ShaderEmu/GvmTickOne");
+        machine.gvmStateOneMaterial = Mat("GvmStateOne", "ShaderEmu/GvmStateOne");
+        // (GvmTickOne's sets: core 0 72 columns, a worker 48, up to gvmTickOneMax cores; 8 rows)
+        int oneW = 72 + 48 * (Mathf.Max(machine.gvmTickOneMax, 1) - 1);
+        machine.gvmOne = new[] { StateTexture("GvmOneA", oneW, 8), StateTexture("GvmOneB", oneW, 8) };
         machine.gvmOpsBlitMaterial = Mat("GvmOpsBlit", "ShaderEmu/GvmOpsBlit");
         machine.gpuBlitMaterial = Mat("GvmGpuDrawBlit", "ShaderEmu/GvmGpuDrawBlit");
         string[] draws = { "GVM_STAGE", "GVM_WRITE", "GVM_PROG" };

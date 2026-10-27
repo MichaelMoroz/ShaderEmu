@@ -69,6 +69,13 @@ static const uint GEO_INV = 0;
 uint slot_of(uint i) { return i; }
 uint core_at(uint s) { return s; }
 int3 sat(uint j, uint c) { return c == 0 ? int3((j % C0BLK) / C0BH, (j / C0BLK) * C0BH + (j % C0BLK) % C0BH, 0) : int3(slot_of(c % 128u) * 8u + (j / 6u), (c / 128u) * 16u + (j % 6u), 0); }   // (core 0 in the rows under its block)
+// (gvm_one: the state set as one target, 8 rows: core c's pixel j, texels 8j to 8j + 7, is column one_x(c) + j, a texel
+// a row; core 0 72 columns, a worker 48: each core whole 4 x 8 and 8 x 8 tiles of one big triangle, warps of its own)
+static const uint ONE_C0W = 72u, ONE_W = 48u;
+uint one_x(uint c) { return c == 0u ? 0u : ONE_C0W + ONE_W * (c - 1u); }
+uint one_core(uint x) { return x < ONE_C0W ? 0u : 1u + (x - ONE_C0W) / ONE_W; }
+int3 one_at(uint t, uint c) { return int3(one_x(c) + (t >> 3), t & 7, 0); }
+uniform uint _GvmOne;   // (the commit's and operations' reads: the set drawn by GvmTickOne)
 int3 satx(uint j, uint c) { return c == 0 ? int3((j % C0BLK) / C0BH, (j / C0BLK) * C0BH + (j % C0BLK) % C0BH, 0) : sat(j, c); }   // (the commit's and operations' reads: core 0 too)
 static const uint QMAX = 8;
 static const uint OP_SLOTS = 32;
@@ -749,6 +756,9 @@ void run(uint budget) {
 }
 
 uint4 state_in(uint t, uint c) {
+#ifdef GVM_ONE
+    return _S0.Load(one_at(t, c));
+#endif
     int3 at = sat(t >> 3, c);
     switch (t & 7) {
     case 0: return _S0.Load(at); case 1: return _S1.Load(at); case 2: return _S2.Load(at); case 3: return _S3.Load(at);
@@ -865,10 +875,16 @@ tick_out frag_copy(v2f i) {   // (idlew 4) a parked worker's pixels: its state a
 tick_out frag(v2f i) {
     uint2 p = uint2(i.vertex.xy);
     tick_out o;
+#ifdef GVM_ONE
+    core = one_core(p.x);
+    uint j = p.x - one_x(core);   // (gvm_one: the column is the pixel; its row picks the texel, frag_one)
+    [branch] if (core >= _NCores || j >= SPIX) {
+#else
     uint rx = p.x % 8u, ry = p.y % 16u;
     core = (p.y / 16u) * 128u + core_at(p.x / 8u);
     uint j = core == 0u ? (p.y / C0BH) * C0BLK + rx * C0BH + p.y % C0BH : rx * 6u + ry;   // (c0rt: core 0's pixels in its rows of the first block)
     [branch] if (core == 0u ? p.y >= 12u || j >= SPIX : (core >= _NCores || j >= SPIX || ry >= 6u)) {
+#endif
  o.t0 = o.t1 = o.t2 = o.t3 = o.t4 = o.t5 = o.t6 = o.t7 = 0; return o; }
     [branch] if (i.cc != NONE && i.cc != core) discard;   // (idlew 2) another core's triangle
     ext = (pick(uint4(0, 0, 0, 0), (core >> 5) & 3) >> (core & 31)) & 1;
@@ -929,6 +945,7 @@ tick_out frag(v2f i) {
 // ---- The commit: a point a write cache entry, drawn into its texel of RAM in the draw of its word's component
 
 uint4 state_any(uint t, uint c) {
+    [branch] if (_GvmOne != 0u) return _S0.Load(one_at(t, c));
     int3 at = satx(t >> 3, c);
     uint4 v0 = (t & 1) ? _S1.Load(at) : _S0.Load(at), v1 = (t & 1) ? _S3.Load(at) : _S2.Load(at);
     uint4 v2 = (t & 1) ? _S5.Load(at) : _S4.Load(at), v3 = (t & 1) ? _S7.Load(at) : _S6.Load(at);
@@ -1077,3 +1094,11 @@ p2f op_prog_vert(uint c : SV_VertexID) {
     return o;
 }
 uint4 op_prog_frag(p2f i) : SV_Target { return i.v; }
+#ifdef GVM_ONE
+// (gvm_one) the tick into one target: a pixel's texel is the one of its eight its row names
+uint4 frag_one(v2f i) : SV_Target {
+    tick_out o = frag(i);
+    uint r = (uint)i.vertex.y & 7u;
+    return r < 4u ? (r < 2u ? (r == 0u ? o.t0 : o.t1) : (r == 2u ? o.t2 : o.t3)) : (r < 6u ? (r == 4u ? o.t4 : o.t5) : (r == 6u ? o.t6 : o.t7));
+}
+#endif

@@ -810,8 +810,9 @@ bool gpu_writeback(uint2 pos, out uint4 result) {
 #if defined(GVM_RAM) && defined(CORES) && CORES > 1
 // (gpu_vm: a core is a row of the tick's state; the host starts workers 1 to _GvmWorkers at the firmware, which
 // parks a core in its loop at _GvmParkLo to _GvmParkHi: gpu_vm/platform.md)
-int3 gvm_s16(uint core) {   // the pixel of texels 16 to 23: a row a core, or (_GvmGeo, the step's GEO_BLOCKS) a block
-    return _GvmGeo != 0 ? int3((core & 127) * 8, (core >> 7) * 16 + 2, 0) : int3(2, core, 0);
+int3 gvm_s16(uint core) {   // the pixel of texels 16 to 23: a row a core, or a block (_GvmGeo: 1 8 x 8, 128 a band of 16 rows;
+    // 2 8 x 8 in one row; 3 4 x 8 in one row, gpu_vm/tick/WAVES.md)
+    return _GvmGeo == 3 ? int3(core * 4, 2, 0) : _GvmGeo == 2 ? int3(core * 8, 2, 0) : _GvmGeo != 0 ? int3((core & 127) * 8, (core >> 7) * 16 + 2, 0) : int3(2, core, 0);
 }
 // (every load made, whether or not the core is there, and the loop unrolled: the 64 loads of a texel of bits go out
 // together, not one core's after the last one's came back, 5 us a pass less: gpu_vm/IDEAS.md 38. A core past
