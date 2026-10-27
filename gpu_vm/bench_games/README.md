@@ -10,7 +10,7 @@ runs the games from checkpoints on both machines, on any tick step, and prints o
 
 ## The fastest machine today, and how to run it (23 October 2026)
 
-Measure gpu_vm with this setup. run.py's defaults are it (img-cur and gvm-cur since 24 October 2026); the harness's own
+Measure gpu_vm with this setup. run.py's defaults are it (img-q4 and gvm-c25 since 25 October 2026); the harness's own
 default tick is not: it is x18 (Quake III 27.6 fps in the baseline below), so give `--gvm-tick` outside run.py.
 
 - **Tick: `gpu_vm/tick/steps/v0009.hlsl`** (`steps/README.md`, "v0009"). Made by the builder from `v0009.json`; its
@@ -20,7 +20,8 @@ default tick is not: it is x18 (Quake III 27.6 fps in the baseline below), so gi
 
   | games | image (`GVM_IMAGE`) | checkpoints (`GVM_CKPT`) |
   |---|---|---|
-  | **every game, from the current apps** (Quake III's fix of 059c2b7, Red Alert's and libmedia's, all built from this tree on 24 October 2026): quake3, halflife, nxray, doom, doomt, quake1, coremark, gzipl | **`build/gvm_apps/img-cur`** (run.py's default) | **`gvm-cur`** |
+  | **every game, after the 25 October race fixes** (Half-Life's and Quake's 16-byte alignment, which the 8 x 8 one-row and 4 x 8 ticks' whole-texel commit needs: on img-cur Half-Life overflows its messages and Quake's cache fails): quake3, halflife, nxray, doom, doomt, quake1, coremark, gzipl (the RISC-V image has no coremark: no RISC-V coremark or gzipl) | **`build/gvm_apps/img-q4`** (run.py's default since 25 October 2026) | **`gvm-c25`** |
+  | every game, from the apps of 24 October (Quake III's fix of 059c2b7, Red Alert's and libmedia's, all built from this tree on 24 October 2026): quake3, halflife, nxray, doom, doomt, quake1, coremark, gzipl | `build/gvm_apps/img-cur` | `gvm-cur` |
   | Quake III alone, PROFILE_Q3.md's runs | `build/gvm_apps/img-q3fix` | `gvm-q3fix` |
   | older: IDEAS 24-39's numbers | `build/gvm_apps/img-rest` | `gvm-rest` |
   | not to be used for Quake III: made before its fix | `build/gvm_apps/img` | `gvm` |

@@ -3,6 +3,14 @@
 #include <stdint.h>
 #include <endian.h>
 
+#ifndef GVM_UOP_ASYNC
+#define GVM_UOP_ASYNC (192 * 1024)   /* bytes of copies core 0 asks for in a pass without a sync (0: always a sync) */
+#endif
+
+#ifndef GVM_UOP_MIN
+#define GVM_UOP_MIN 2048
+#endif
+
 void *memcpy(void *restrict dest, const void *restrict src, size_t n)
 {
 	unsigned char *d = dest;
@@ -20,6 +28,33 @@ void *memcpy(void *restrict dest, const void *restrict src, size_t n)
 
 	typedef uint32_t __attribute__((__may_alias__)) u32;
 	uint32_t w, x;
+
+	/* gpu_vm: from GVM_UOP_MIN bytes up the commit's copy (gpu_vm/GPU_VM.md, "Operations"), then a sync, which ends
+	   the pass and waits for it: the copy's texels never fill the core's write cache (Quake's copies of 2 to 64 KB
+	   into GPU memory were most of its core 0's full ends in memcpy) */
+	if (n >= GVM_UOP_MIN) {
+		register uint32_t k __asm__("r16") = 1, od __asm__("r17") = (uint32_t)d;
+		register uint32_t os __asm__("r18") = (uint32_t)s, on __asm__("r19") = n;
+		__asm__ __volatile__ ("sq r16, 0xf0000000(zero)" : : "r"(k), "r"(od), "r"(os), "r"(on) : "memory");
+#if GVM_UOP_ASYNC
+		/* gpu_vm: core 0 goes on without the sync while its copies of this pass are under what one commit makes
+		   (256 KB a core): they land with the pass's stores, so no other core or the GPU can tell, and the core's
+		   own accesses to them stop it only where one is still at work. A new pass is told by LEFT, which only
+		   falls within one (missed when the next copy comes later in its pass: a sync too many) */
+		uint32_t who, left;
+		__asm__ __volatile__ ("mfsr %0, coreid" : "=r"(who));
+		__asm__ __volatile__ ("mfsr %0, left" : "=r"(left));
+		if (who == 0) {
+			static uint32_t uop_left, uop_bytes;
+			if (left >= uop_left) uop_bytes = 0;
+			uop_left = left;
+			uop_bytes += n;
+			if (uop_bytes <= GVM_UOP_ASYNC) return dest;
+		}
+#endif
+		__asm__ __volatile__ ("sync" : : : "memory");
+		return dest;
+	}
 
 	for (; (uintptr_t)s % 4 && n; n--) *d++ = *s++;
 

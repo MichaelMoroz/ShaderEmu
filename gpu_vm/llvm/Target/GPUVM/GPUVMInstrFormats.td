@@ -48,6 +48,7 @@ def CtlCall   : Form<26>; // target
 def CtlJR     : Form<27>; // rs
 def CtlNone   : Form<28>; // eret
 def CtlBump   : Form<29>; // rd, rs (tied), imm12
+def FrmPair   : Form<30>; // rd, rb, ra, imm (ld2) or rs, rs2, ra, imm (sd2): imm in rc's words or long
 
 class GPUVMInst<dag outs, dag ins, string asmstr, list<dag> pattern,
                 Form form>

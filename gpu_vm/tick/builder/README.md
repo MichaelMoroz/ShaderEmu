@@ -49,6 +49,7 @@ A batch lives in `build/tick_gen/BATCH/` (vNNNN.hlsl, vNNNN.json, checks.json, c
 | rmap 2 | | pairs: texels 2k and 2k + 1 one above the other, the card's 32-byte sector (isa.h GVM_PAIR_X; gvmbench only, not in the harness): gvmbench 1.113 against 1.123, large code 1-3% faster, small loops 3% slower (IDEAS 40) |
 | lpf, lps | 0-1024; 0-256 | at a pass's start the core's lanes ask for this many code texels round pc (a quarter behind) and stack texels from sp, each lane its own: Half-Life 6% slower at 1024/128, the rest as before (IDEAS 40) |
 | ov, mv | 0-32; 0, 1 | overflow entries searched when both buckets are full; mv: a store whose buckets are full moves a resident to its other bucket (the last way fills the hole). Both slower on the games (IDEAS 26) |
+| nbw | 0, 2-nb-1 | (wtx) the workers' buckets a table at run time, core 0 keeping nb: one compile with nb's arrays, a worker touches only its first 8 x nbw entries (`worker_nb` in gen.py) |
 | rc, dtx | 0-2; both, one | the last 1 or 2 fetched texels kept in registers; ROM or RAM fetched behind a branch instead of both |
 | thin, thin8 | 0, 1 | one op a bundle in the 16-byte bundle; 8-byte instructions (gvm_machine.thin) |
 | wide3 | 0-2 | a third lite op in word 2: behind a branch (1) or always made (2) |

@@ -35,7 +35,7 @@ static bool g_cull = false;   // idlew 2: the tick drawn as a triangle a core, i
 static bool g_c0rt = false;   // a builder's c0rt: core 0's cache chosen at run time, every core in one draw of one compile
 static uint32_t g_wcn0 = 0;    // a step's WCN0 (x25): core 0's own write cache, its tick a compile of its own (CORE0=1)
 static uint32_t g_spix0 = 0;   // and its state pixels (NTEX0): 0-63 in its block, 64 on at ((p >> 3) - 8, 8 + (p & 7))
-struct Geo { uint32_t bw = 0, bh = 0, band = 0, per = 0, jrow = 0, perm = 0, mul = 0, inv = 0; uint32_t cpts = 0, xr = 0, npair = 0, xbind = 0, xfast = 0, t_xf = 0, t_xt = 0, t_pn = 23, nc = 0, thin = 0, thin8 = 0, wide3 = 0, late = 0, fx1 = 0, wsh = 0, wad = 0, vec = 0, t_vr = 0, cc0x = 0, sil = 0, rmap = 0, whole = 0; };
+struct Geo { uint32_t bw = 0, bh = 0, band = 0, per = 0, jrow = 0, perm = 0, mul = 0, inv = 0; uint32_t cpts = 0, xr = 0, npair = 0, xbind = 0, xfast = 0, t_xf = 0, t_xt = 0, t_pn = 23, nc = 0, thin = 0, thin8 = 0, wide3 = 0, late = 0, fx1 = 0, wsh = 0, wad = 0, vec = 0, t_vr = 0, cc0x = 0, sil = 0, rmap = 0, whole = 0, pairs = 0, enc = 0; };
 static Geo g_gg;               // a built step's layout (builder/gen.py: GEO_BW...): core c's pixel j at (slot * bw + jx, band * BAND + jy)
 static uint32_t g_lrows = 1;   // a core's state pixels on this many rows (a step's LROWS, x19): pixel p at (p % spx, core * LROWS + p / spx)
 
@@ -440,7 +440,8 @@ static void commit_constants(Gpu& gpu, uint32_t cores) {
     }
 }
 static bool runs_on(const Case& cs) {   // a phase 2 case needs the tick's file, bindings or pairs
-    return g_gg.xr >= cs.xr_need && g_gg.npair >= cs.pair_need && (!cs.bind_need || g_gg.xbind) && !((g_gg.thin8 || g_gg.thin) && (cs.elf || cs.mc)) && (!cs.vec_need || g_gg.vec);   // (thin, thin8: compiled code is two-op bundles)
+    return g_gg.xr >= cs.xr_need && g_gg.npair >= cs.pair_need && (!cs.bind_need || g_gg.xbind) && !((g_gg.thin8 || g_gg.thin) && (cs.elf || cs.mc)) && (!cs.vec_need || g_gg.vec)
+        && !(g_gg.enc && (cs.elf || cs.mc || !strcmp(cs.name, "trap") || !strcmp(cs.name, "irq") || !strcmp(cs.name, "memx") || (!strncmp(cs.name, "g_", 2) && strstr(cs.name, "_c"))));   // (thin, thin8: compiled code is two-op bundles; E2, E1: cases whose hand-written handlers or compiled code are E4's, and the game's copies by the commit's operation, which the reference makes at once: what they copy depends on where passes end)
 }
 // Both machines to the halt in passes of 61 bundles; false (and the differences printed) when they disagree
 static bool check_case(Gpu& gpu, const Case& cs, uint32_t seed, bool verbose) {
@@ -452,7 +453,7 @@ static bool check_case(Gpu& gpu, const Case& cs, uint32_t seed, bool verbose) {
     std::vector<uint8_t> romBytes(ROM_SIZE);
     memcpy(romBytes.data(), g_rom.data(), ROM_SIZE);
     m.ram = refRam.data(); m.ram_end = RAM_END; m.rom = romBytes.data(); m.rom_size = ROM_SIZE;
-    m.flags = GVM_REF_BREAK_HALTS; m.thin = g_gg.thin8; m.wide3 = g_gg.wide3 != 0; m.late = g_gg.late == 3 ? 2 : g_gg.late != 0; m.vec = g_gg.vec != 0; m.silent = g_gg.sil == 1 || g_gg.sil == 2;   // (sil 3: only a store that finds no room is silent, which the reference does not model)
+    m.flags = GVM_REF_BREAK_HALTS; m.thin = g_gg.thin8; m.wide3 = g_gg.wide3 != 0; m.late = g_gg.late == 3 ? 2 : g_gg.late != 0; m.vec = g_gg.vec != 0; m.silent = g_gg.sil == 1 || g_gg.sil == 2; m.enc = (int)g_gg.enc;   // (sil 3: only a store that finds no room is silent, which the reference does not model)
     std::vector<gvm_core> rc(cs.cores);
     for (uint32_t c = 0; c < cs.cores; c++) {
         gvm_core_reset(&rc[c], c, pr.bases[c]); rc[c].sr[GVM_SR_TVEC] = HALT_STUB;
@@ -613,7 +614,7 @@ struct Variant { std::string name, shader; std::vector<std::string> defs; Prog t
 static void use(Gpu& gpu, const Variant& v) {
     gpu.tick = v.tick; gpu.commit = v.commit; gpu.stg = v.stg; gpu.wrt = v.wrt; gpu.prog = v.prog;
     gpu.hasCommit = v.hasCommit; gpu.hasOps = v.hasOps; gpu.uavTick = v.uavTick; gpu.hasW = v.hasW; gpu.tickW = v.tickW; gpu.tick0 = v.tick0; g_wcn0 = v.wcn0; g_spix0 = v.spix0; g_c0rt = v.c0rt; g_cull = v.cull; g_copy = v.copy; gpu.copyTick = v.copyTick; gpu.hasAny = v.hasAny && !env_int("GVM_NOPRED"); gpu.any = v.any;
-    g_wcn = v.wcn; g_texw = v.texw; g_twc = v.twc; g_lrows = v.lrows; g_wcn1 = v.wcn1; g_geo = v.geo; g_ntex = v.ntex; g_gg = v.gg; g_rmap = v.gg.rmap; GvmAsm::file_paths = v.gg.xfast != 0; GvmAsm::nc_loads = v.gg.nc != 0; GvmAsm::max_ops = v.gg.thin || v.gg.thin8 ? 1 : v.gg.wide3 ? 3 : 2; GvmAsm::thin8 = v.gg.thin8 != 0; GvmAsm::late_br = v.gg.late != 0; GvmAsm::late_float = v.gg.late == 3; GvmAsm::fx1 = v.gg.fx1 != 0; GvmAsm::vec_ops = v.gg.vec != 0; GvmAsm::cc0_fast = v.gg.cc0x != 0;   // (the state's layout, the commit's points and RAM's width are the variant's)
+    g_wcn = v.wcn; g_texw = v.texw; g_twc = v.twc; g_lrows = v.lrows; g_wcn1 = v.wcn1; g_geo = v.geo; g_ntex = v.ntex; g_gg = v.gg; g_rmap = v.gg.rmap; GvmAsm::file_paths = v.gg.xfast != 0; GvmAsm::nc_loads = v.gg.nc != 0; GvmAsm::pair_ops = v.gg.pairs != 0; GvmAsm::max_ops = v.gg.thin || v.gg.thin8 ? 1 : v.gg.wide3 ? 3 : 2; GvmAsm::thin8 = v.gg.thin8 != 0; GvmAsm::late_br = v.gg.late != 0; GvmAsm::late_float = v.gg.late == 3; GvmAsm::fx1 = v.gg.fx1 != 0; GvmAsm::vec_ops = v.gg.vec != 0; GvmAsm::cc0_fast = v.gg.cc0x != 0; GvmAsm::enc = (int)v.gg.enc;   // (the state's layout, the commit's points and RAM's width are the variant's)
     gpu.opSlots = v.slots; gpu.opSpan = v.span; gpu.opRounds = g_op_rounds;
     g_romrows = 0; g_x17_paths = 0;   // (probe: the ROM in RAM's texture; x17 on the real programs' own paths)
     for (auto& d : v.defs) { if (d == "ROMROWS=1") g_romrows = 1; if (d == "X17PATHS=1") g_x17_paths = 1; }
@@ -651,7 +652,7 @@ static Geo step_geo(const std::string& path) {
     g.inv = step_size(src, {}, "GEO_INV", 0);
     g.whole = step_size(src, {}, "COMMIT_WHOLE", 0);
     g.cpts = step_size(src, {}, "CPTS", 0); g.xr = step_size(src, {}, "XR", 0); g.npair = step_size(src, {}, "NPAIR", 0);
-    g.xbind = step_size(src, {}, "XBIND", 0); g.xfast = step_size(src, {}, "XFAST", 0); g.nc = step_size(src, {}, "NCLOAD", 0); g.thin = step_size(src, {}, "THIN", 0); g.thin8 = step_size(src, {}, "THIN8", 0); g.wide3 = step_size(src, {}, "WIDE3", 0); g.late = step_size(src, {}, "LATEBR", 0); g.fx1 = step_size(src, {}, "FX1", 0); g.wsh = step_size(src, {}, "WSH", 0); g.wad = step_size(src, {}, "WAD", 0); g.vec = step_size(src, {}, "VEC", 0); g.t_vr = step_size(src, {}, "T_VR", 0); g.cc0x = step_size(src, {}, "CC0X", 0); g.sil = step_size(src, {}, "SIL", 0); g.rmap = step_size(src, {}, "RAM_MAP", 0); g.t_xf = step_size(src, {}, "T_XF", 0); g.t_xt = step_size(src, {}, "T_XT", 0);
+    g.xbind = step_size(src, {}, "XBIND", 0); g.xfast = step_size(src, {}, "XFAST", 0); g.nc = step_size(src, {}, "NCLOAD", 0); g.pairs = step_size(src, {}, "PAIRS", 0); g.enc = step_size(src, {}, "ENC", 0); g.thin = step_size(src, {}, "THIN", 0); g.thin8 = step_size(src, {}, "THIN8", 0); g.wide3 = step_size(src, {}, "WIDE3", 0); g.late = step_size(src, {}, "LATEBR", 0); g.fx1 = step_size(src, {}, "FX1", 0); g.wsh = step_size(src, {}, "WSH", 0); g.wad = step_size(src, {}, "WAD", 0); g.vec = step_size(src, {}, "VEC", 0); g.t_vr = step_size(src, {}, "T_VR", 0); g.cc0x = step_size(src, {}, "CC0X", 0); g.sil = step_size(src, {}, "SIL", 0); g.rmap = step_size(src, {}, "RAM_MAP", 0); g.t_xf = step_size(src, {}, "T_XF", 0); g.t_xt = step_size(src, {}, "T_XT", 0);
     return g;
 }
 static void build_variant(Variant& v) {
@@ -716,10 +717,71 @@ static std::string stamp_of(const Variant& v) {
     return b;
 }
 static bool built(const Variant& v) { return slurp(v.shader).find("made by gpu_vm/tick/builder") != std::string::npos; }
+// --enc-ref: every picked case on the reference alone as E4, E2 and E1 (GPU-VM's spec/ENCODINGS.md): the steps each
+// took, the code's bytes, and whether the registers came out as E4's (no card, no tick)
+static int enc_ref(const std::vector<Case>& picked, uint32_t seed) {
+    printf("| case | E4 bundles | E2 units | E1 steps | E4 code, bytes | E2 code | E1 code | registers |\n|---|---|---|---|---|---|---|---|\n");
+    int bad = 0;
+    for (const Case& cs : picked) {
+        if (cs.elf || cs.mc) continue;
+        uint64_t steps[3] = {0, 0, 0}, bytes[3] = {0, 0, 0}, changed[3] = {0, 0, 0};
+        std::vector<uint32_t> regs0;
+        std::string same = "same";
+        const int encs[3] = {0, 2, 1};
+        for (int e = 0; e < 3; e++) {
+            GvmAsm::enc = encs[e];
+            RAM_END = cs.big ? RAM_MC : 2048 * 2048 * 16;
+            GvmAsm::e21_changed = 0;
+            Prepared pr = prepare(cs, seed);
+            changed[e] = GvmAsm::e21_changed;
+            if (encs[e]) pr.ramImg[HALT_STUB / 4 + 1] = GvmAsm::E21_NOP;
+            for (uint32_t c = 0; c < cs.cores; c++) {   // (the code's bytes: to the last word that is not 0 under the core's base)
+                uint32_t b = pr.bases[c] / 4, k = b + 0x40000 / 4;
+                while (k > b && pr.ramImg[k - 1] == 0) k--;
+                bytes[e] += (uint64_t)(k - b) * 4;
+            }
+            gvm_machine m = {};
+            std::vector<uint8_t> romBytes(ROM_SIZE);
+            memcpy(romBytes.data(), g_rom.data(), ROM_SIZE);
+            m.ram = pr.ramImg.data(); m.ram_end = RAM_END; m.rom = romBytes.data(); m.rom_size = ROM_SIZE;
+            m.flags = GVM_REF_BREAK_HALTS; m.enc = (uint32_t)encs[e];
+            std::vector<gvm_core> rc(cs.cores);
+            for (uint32_t c = 0; c < cs.cores; c++) {
+                gvm_core_reset(&rc[c], c, pr.bases[c]); rc[c].sr[GVM_SR_TVEC] = HALT_STUB;
+                for (int k = 1; k < 64; k++) rc[c].x[k] = pr.state[c][k];
+            }
+            m.cores = rc.data(); m.ncores = cs.cores;
+            for (int pass = 0; pass < 400000; pass++) {
+                bool any = false;
+                m.time = 1000 + (uint64_t)pass;
+                for (uint32_t c = 0; c < cs.cores; c++) if (!rc[c].halted) { gvm_run(&m, &rc[c], cs.check_ticks); any = true; }
+                gvm_commit(&m);
+                if (!any) break;
+            }
+            std::vector<uint32_t> regs;
+            for (uint32_t c = 0; c < cs.cores; c++) {
+                steps[e] += rc[c].bundles_run;
+                for (int k = 2; k < 64; k++) regs.push_back(((cs.skip_regs >> k) & 1) ? 0 : rc[c].x[k]);
+                if (rc[c].sr[GVM_SR_CAUSE] != 0 && rc[c].sr[GVM_SR_CAUSE] != GVM_CAUSE_BREAK) { same = "trap"; printf("  %s E%d: core %u cause %x at %08x\n", cs.name, encs[e] ? encs[e] : 4, c, rc[c].sr[GVM_SR_CAUSE], rc[c].sr[GVM_SR_EPC]); }
+            }
+            if (e == 0) regs0 = regs;
+            else if (regs != regs0 && same == "same") {
+                same = "DIFFER";
+                for (size_t k = 0; k < regs.size(); k++) if (regs[k] != regs0[k]) { printf("  %s E%d: core %zu r%zu %08x, E4's %08x\n", cs.name, encs[e], k / 62, k % 62 + 2, regs[k], regs0[k]); break; }
+            }
+        }
+        GvmAsm::enc = 0;
+        bad += same != "same" && !changed[1] && !changed[2];   // (a late branch may change what a loop counts to)
+        if (changed[1] || changed[2]) same += " (late branches: E2 " + std::to_string(changed[1]) + ", E1 " + std::to_string(changed[2]) + ")";
+        printf("| %s | %llu | %llu (%.3f) | %llu (%.3f) | %llu | %llu | %llu | %s |\n", cs.name, (unsigned long long)steps[0], (unsigned long long)steps[1], (double)steps[1] / (double)steps[0],
+               (unsigned long long)steps[2], (double)steps[2] / (double)steps[0], (unsigned long long)bytes[0], (unsigned long long)bytes[1], (unsigned long long)bytes[2], same.c_str());
+    }
+    return bad ? 1 : 0;
+}
 int main(int argc, char** argv) {
     bool warp = false, nocheck = false;
     std::string jsonOut;
-    bool markOk = false;
+    bool markOk = false, encRef = false;
     double deadline = 0;   // --json FILE: every variant's checks and every round's number, for builder/search.py   // --nocheck: time only (a batch's checks run apart: every run stays under 5 minutes)
     std::string only, shader, varfile, setName;
     uint32_t ticks = 8192, seed = 1, passes = 300, rounds = 2;
@@ -730,6 +792,7 @@ int main(int argc, char** argv) {
         else if (a == "--nocheck") nocheck = true;
         else if (a == "--json" && i + 1 < argc) jsonOut = argv[++i];
         else if (a == "--mark-ok") markOk = true;
+        else if (a == "--enc-ref") encRef = true;   // the picked cases on the reference as E4, E2 and E1 (no tick)
         else if (a == "--max-passes" && i + 1 < argc) g_max_passes = (uint32_t)atoi(argv[++i]);
         else if (a == "--deadline" && i + 1 < argc) deadline = atof(argv[++i]);   // seconds: no timing round starts that would end after it   // (WARP) a variant that passes every check gets SHADER.warp_ok, its source's stamp
         else if (a == "--fused" && i + 1 < argc) g_fused = atoi(argv[++i]);   // the timed loops fused (cases.h; or GVM_FUSED=N)
@@ -827,6 +890,7 @@ int main(int argc, char** argv) {
     // checks: every picked case on every variant, the timed loops at a few thousand iterations
     std::vector<std::string> wrong(vars.size());
     g_loop_n = 3000;
+    if (encRef) return enc_ref(picked, seed);
     for (size_t vi = 0; vi < vars.size() && !nocheck; vi++) {
         use(gpu, vars[vi]);
         for (const Case& cs : picked)

@@ -255,6 +255,7 @@ public:
         if (timeIt) {
             gpu_.ctx->Begin(tsDisjoint_.Get());
             gpu_.ctx->End(tsQuery_[0].Get());
+            timedRounds_ = (std::max)(1u, tickRounds);
         }
         // (the devices' words for this frame, before the control pass's draws clear them)
         bool importCon = conDelivered, importFetch = deliver_, importNet = deliverNet_, importCounts = false;
@@ -449,6 +450,7 @@ public:
                     tickMs_ = (double)(ts[1] - ts[0]) * 1000.0 / (double)dj.Frequency;
                     commitMs_ = (double)(ts[2] - ts[1]) * 1000.0 / (double)dj.Frequency;
                     deviceMs_ = (double)(ts[3] - ts[2]) * 1000.0 / (double)dj.Frequency;
+                    frameMs = (double)(ts[3] - ts[0]) * 1000.0 / (double)dj.Frequency, frameRounds = timedRounds_, frameTimes++;
                 }
                 tsPending_ = false;
             }
@@ -854,56 +856,62 @@ private:
         if (timeIt) {
             ctx->Begin(tsDisjoint_.Get());
             ctx->End(tsQuery_[0].Get());
+            timedRounds_ = init ? 1u : (std::max)(1u, tickRounds);
         }
         // the tick, from R; its state rows into A, which holds R's state rows for the rest
         bool ticks = !(cpuMode && !init);
         UpdateZone core0{32, kHeight - tickRows_ / 2, 64, tickRows_, 0};
         static const char* const kInplaceLabels[] = {"tick", "unpack", "gather", "commit rows", "commit points", "devices", "", "", "", "", "", ""};
         if (getenv("RVC_PASS_PROF") && !init) { prof_.labels = kInplaceLabels; profBegin(tag); }
-        if (ticks) {
-            bool workers = cores_ > 1 && (workersNow || getenv("RVC_WORKERS_ALWAYS"));
-            activeCores_ = workers ? (UINT)cores_ : 1;
-            // (while a job has been seen in the last 8 frames: the readback is frames behind, and a program's jobs come one
-            // after another; with no job posted the field's primitive draws no pixel, but its 7,936 points cost a pass)
-            fieldSeen_ = fieldNow ? 8 : fieldSeen_ > 0 ? fieldSeen_ - 1 : 0;
-            fieldDraw_ = laneField_ && fieldSeen_ > 0;
-            if (laneField_) mat.setInt("_LaneField", 1);
-            if (mrt_) tickDraw(mat, core0);
+        // --tick-rounds N (and --unity): the tick and its commit N times before the devices, a tick of the clock on each round
+        const uint32_t rounds = ticks && !init ? (std::max)(1u, tickRounds) : 1u;
+        for (uint32_t round = 0; round < rounds; round++) {
+            if (rounds > 1) { mat.setInt("_TimePass", (int)round); mat.setInt("_TickFull", (int)(tickSplit ? tickSplit : rounds)); }
+            if (ticks) {
+                bool workers = cores_ > 1 && (workersNow || getenv("RVC_WORKERS_ALWAYS"));
+                activeCores_ = workers ? (UINT)cores_ : 1;
+                // (while a job has been seen in the last 8 frames: the readback is frames behind, and a program's jobs come one
+                // after another; with no job posted the field's primitive draws no pixel, but its 7,936 points cost a pass)
+                fieldSeen_ = fieldNow ? 8 : fieldSeen_ > 0 ? fieldSeen_ - 1 : 0;
+                fieldDraw_ = laneField_ && fieldSeen_ > 0;
+                if (laneField_) mat.setInt("_LaneField", 1);
+                if (mrt_) tickDraw(mat, core0);
+            }
+            prof_.mark(ctx);
+            // RVC_FREEZE: as frame()'s, the tick alone, its state not written back (every pass the same instructions)
+            static const bool freezeAsked = getenv("RVC_FREEZE") != nullptr;
+            if (freezeAsked && !init) {
+                profEnd();
+                rows_.request(ctx, ram_.Get(), 0, 0, tag);
+                control_.request(ctx, ram_.Get(), 0, kControlRow, tag);
+                net_.request(ctx, ram_.Get(), 0, kNetRow, tag);
+                field_.request(ctx, ram_.Get(), kFieldAt, kFieldRow, tag);
+            mboxRequest(ram_.Get(), tag);
+                if (!getenv("RVC11_NO_FLUSH")) ctx->Flush();
+                return true;
+            }
+            D3D11_BOX rows{0, 0, 0, kWidth, 64, 1};
+            ctx->CopySubresourceRegion(tickState_.Get(), 0, 0, 0, 0, ram_.Get(), 0, &rows);
+            if (ticks) drawInto(mrt_ ? unpackPasses_[0] : passes_[0], mat, tickStateRtv_.Get(), 0,
+                                (std::max)(6u, 3 * tickPrims()), D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST, &core0);
+            prof_.mark(ctx);
+            if (timeIt && round == rounds - 1) ctx->End(tsQuery_[1].Get());
+            // the commit: the gather into T, then the state rows and the points into R
+            if (!gpuPasses_.empty()) mat.setTexture("_GpuTarget", gpuSrv_.Get(), kGpuTarget, kGpuTarget);
+            mat.setTexture("_TickState", tickStateSrv_.Get(), kWidth, 64);
+            mat.setTexture("_Ram", ramSrv_.Get(), kWidth, kHeight);
+            drawInto(gatherPasses_[0], mat, stageRtv_.Get(), 0, 1 + activeCores_, D3D11_PRIMITIVE_TOPOLOGY_POINTLIST, nullptr, kStageRows);
+            prof_.mark(ctx);
+            mat.setTexture("_Stage", stageSrv_.Get(), kWidth, kStageRows);
+            drawInto(passes_[1], mat, ramRtv_.Get(), 0, 6, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            prof_.mark(ctx);
+            bool field = ticks && fieldDraw_;
+            UINT points = 1 + 258 + (activeCores_ - 1) * 130 + (field ? kFieldPoints : 0) + 1;   // ram_commit_geom: the zap, the cores' places, the field's buckets, the picture
+            mat.setInt("_CommitPoints", points);
+            if (laneField_) mat.setInt("_FieldPoints", field ? kFieldPoints : 0);
+            drawInto(ramPasses_[0], mat, ramRtv_.Get(), 0, points, D3D11_PRIMITIVE_TOPOLOGY_POINTLIST);
+            prof_.mark(ctx);
         }
-        prof_.mark(ctx);
-        // RVC_FREEZE: as frame()'s, the tick alone, its state not written back (every pass the same instructions)
-        static const bool freezeAsked = getenv("RVC_FREEZE") != nullptr;
-        if (freezeAsked && !init) {
-            profEnd();
-            rows_.request(ctx, ram_.Get(), 0, 0, tag);
-            control_.request(ctx, ram_.Get(), 0, kControlRow, tag);
-            net_.request(ctx, ram_.Get(), 0, kNetRow, tag);
-            field_.request(ctx, ram_.Get(), kFieldAt, kFieldRow, tag);
-        mboxRequest(ram_.Get(), tag);
-            if (!getenv("RVC11_NO_FLUSH")) ctx->Flush();
-            return true;
-        }
-        D3D11_BOX rows{0, 0, 0, kWidth, 64, 1};
-        ctx->CopySubresourceRegion(tickState_.Get(), 0, 0, 0, 0, ram_.Get(), 0, &rows);
-        if (ticks) drawInto(mrt_ ? unpackPasses_[0] : passes_[0], mat, tickStateRtv_.Get(), 0,
-                            (std::max)(6u, 3 * tickPrims()), D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST, &core0);
-        prof_.mark(ctx);
-        if (timeIt) ctx->End(tsQuery_[1].Get());
-        // the commit: the gather into T, then the state rows and the points into R
-        if (!gpuPasses_.empty()) mat.setTexture("_GpuTarget", gpuSrv_.Get(), kGpuTarget, kGpuTarget);
-        mat.setTexture("_TickState", tickStateSrv_.Get(), kWidth, 64);
-        mat.setTexture("_Ram", ramSrv_.Get(), kWidth, kHeight);
-        drawInto(gatherPasses_[0], mat, stageRtv_.Get(), 0, 1 + activeCores_, D3D11_PRIMITIVE_TOPOLOGY_POINTLIST, nullptr, kStageRows);
-        prof_.mark(ctx);
-        mat.setTexture("_Stage", stageSrv_.Get(), kWidth, kStageRows);
-        drawInto(passes_[1], mat, ramRtv_.Get(), 0, 6, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        prof_.mark(ctx);
-        bool field = ticks && fieldDraw_;
-        UINT points = 1 + 258 + (activeCores_ - 1) * 130 + (field ? kFieldPoints : 0) + 1;   // ram_commit_geom: the zap, the cores' places, the field's buckets, the picture
-        mat.setInt("_CommitPoints", points);
-        if (laneField_) mat.setInt("_FieldPoints", field ? kFieldPoints : 0);
-        drawInto(ramPasses_[0], mat, ramRtv_.Get(), 0, points, D3D11_PRIMITIVE_TOPOLOGY_POINTLIST);
-        prof_.mark(ctx);
         if (timeIt) ctx->End(tsQuery_[2].Get());
         if (gpuPasses_.size() == 2) {
             if (!listLazy() || listDue > 0) {   // (RVC_LIST_LAZY: only while a list is due)
@@ -1403,6 +1411,7 @@ private:
     ComPtr<ID3D11Buffer> profBuf_, profStaging_;
     ComPtr<ID3D11UnorderedAccessView> profUav_;
     ComPtr<ID3D11Query> tsDisjoint_, tsQuery_[4];
+    uint32_t timedRounds_ = 1;   // (--unity: the rounds of the frame being timed)
     bool tsPending_ = false;
     double tickMs_ = -1, commitMs_ = -1, deviceMs_ = 0;
     bool bands_ = false;   // the commit draws only the bands of RAM that changed

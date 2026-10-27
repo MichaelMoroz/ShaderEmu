@@ -40,7 +40,11 @@ struct GvmAsm {
     // as a load (lf) and stores (sf, fpair) in paths 3-6; without it they are the general step's
     static inline bool file_paths = false;
     static inline bool nc_loads = false;   // the tick has GVM_W_NC (its NCLOAD): lw_nc is a plain lw without it
+    static inline bool pair_ops = false;   // the tick's PAIRS: a pair (ld2, st2) is op 0 of paths 3 and 5; without it the general step's
+    static bool pair_op(uint32_t op) { uint32_t o = GVM_OPC(op); return GVM_CLASS(o) == 2 && ((o >> 3) & 7) <= 1 && (o & 7) == GVM_W_D; }
+    static bool fast_pair(uint32_t op) { return pair_ops && pair_op(op); }
     static inline bool thin8 = false;   // phase 3: finish() lays the bundles out as 8-byte instructions (gvm_machine.thin; max_ops 1)
+    static inline int enc = 0;   // GPU-VM's encodings: finish() lays the bundles out as E2's units (2) or E1's words (1) (gvm_machine.enc)
     static inline bool vec_ops = false;   // gvm_machine.vec: the vector ops (isa.h GVM_X_VADD ...) go in path 1 (step12) as op 0
     static inline bool late_br = false;   // gvm_machine.late: a branch reads its registers after the bundle's ops
     static inline bool late_float = false;   // (gvm_machine.late 2: only in a bundle with a float op)
@@ -67,6 +71,7 @@ struct GvmAsm {
         if (n > 1) a.cur.push_back(w1);
         uint32_t p = a.path();
         bool rs_written = (sub == GVM_SUB_JR || sub == GVM_SUB_CALLR) && GVM_CRS(ctl) != 0 && a.writes(GVM_CRS(ctl));   // (the fast loop reads rs as found)
+        if (n > 0 && pair_op(w0) && !cc0_fast) return GVM_PATH_GENERAL;   // (step12 has no pairs)
         if (cc0_fast && sub != GVM_SUB_ADD && !rs_written && (p == GVM_PATH_INT || p == GVM_PATH_LOAD || p == GVM_PATH_STORE)) return p;
         if (p == GVM_PATH_INT) return GVM_PATH_ALU;
         if (p == GVM_PATH_LOAD || p == GVM_PATH_STORE) return GVM_PATH_MEMF;
@@ -79,7 +84,7 @@ struct GvmAsm {
         uint32_t b = one ? 0 : cur[1];
         if (mid(a) && (one || lite(b))) return GVM_PATH_INT;
         if ((int_op(a) || float_op(a) || sel_lpc(a) || vec_alu(a)) && (one || lite(b) || flite(b))) return GVM_PATH_ALU;
-        if (mem_op(a) && (one || lite(b))) return store_op(a) ? GVM_PATH_STORE : GVM_PATH_LOAD;
+        if ((mem_op(a) || fast_pair(a)) && (one || lite(b))) return store_op(a) ? GVM_PATH_STORE : GVM_PATH_LOAD;
         if (file_fast(a) || file_fast(b)) return GVM_PATH_GENERAL;   // (a file op: paths 3 and 5 only)
         if (mem_op(a) && mem_op(b)) return store_op(a) ? GVM_PATH_MEM2 : store_op(b) ? GVM_PATH_GENERAL : GVM_PATH_LOAD2;
         if (mem_op(a)) return flite(b) ? GVM_PATH_MEMF : GVM_PATH_GENERAL;
@@ -108,11 +113,17 @@ struct GvmAsm {
         if (max_ops < 2) return false;
         // a memory pair reads nothing op 0 writes, and a store's is op 0 (isa.h's paths 5 and 7)
         if (file_fast(op) || file_fast(cur[0])) return lite(op) && !file_fast(op);
+        if (fast_pair(cur[0])) {   // (a pair: paths 3 and 5 only; op 1 reads neither register of a load pair: rd is forwarded, rb is not)
+            uint32_t r2 = store_op(cur[0]) ? 0 : GVM_RB(cur[0]);
+            return lite(op) && (r2 == 0 || (GVM_RA(op) != r2 && GVM_RB(op) != r2));
+        }
+        if (pair_op(op)) return false;
         if (mem_op(op) && mem_op(cur[0])) return !reads_rd0(op) && (store_op(cur[0]) || !store_op(op));
         return lite(op) || (flite(op) && (float_op(cur[0]) || mem_op(cur[0])));
     }
     bool reads_rd0(uint32_t op) const {   // op names op 0's result in a field it reads (a store's rd is its value)
-        uint32_t d = GVM_RD(cur[0]);
+        uint32_t d = GVM_RD(cur[0]), d2 = pair_op(cur[0]) ? GVM_RB(cur[0]) : 0;
+        if (!store_op(cur[0]) && d2 != 0 && (GVM_RA(op) == d2 || GVM_RB(op) == d2 || (store_op(op) && GVM_RD(op) == d2))) return true;
         return !store_op(cur[0]) && d != 0 && (GVM_RA(op) == d || GVM_RB(op) == d || (store_op(op) && GVM_RD(op) == d));
     }
     // an op that names a register in any field (conservatively: rd, ra, rb, rc)
@@ -126,7 +137,7 @@ struct GvmAsm {
     bool br_old(uint32_t r) const { return (!late_br || (late_float && !has_float())) && writes(r); }
     bool has_float() const { for (uint32_t op : cur) if (GVM_CLASS(GVM_OPC(op)) == 3) return true; return false; }   // a branch on r must open a new bundle (it reads r as the bundle found it)
     bool writes(uint32_t r) const {   // an op of the open bundle that writes r (a store's rd is its value: read); d and q by rd's group
-        for (uint32_t op : cur) if (!store_op(op) && (r - GVM_RD(op)) < span(op)) return true;
+        for (uint32_t op : cur) if (!store_op(op) && (pair_op(op) ? r == GVM_RD(op) || r == GVM_RB(op) : (r - GVM_RD(op)) < span(op))) return true;
         return false;
     }
     void put(uint32_t op) {
@@ -170,8 +181,22 @@ struct GvmAsm {
         I(GVM_OP_II(GVM_I_BFE), rd, ra, (int32_t)(pos | (len - 1) << 5 | (sgn ? 0x400u : 0)));
     }
     // memory
-    void ld(uint32_t wd, uint32_t rd, uint32_t ra, int32_t off) { I(GVM_OP_M(GVM_M_LOAD, wd), rd, ra, off); }
-    void st(uint32_t wd, uint32_t rs, uint32_t ra, int32_t off) { I(GVM_OP_M(GVM_M_STORE, wd), rs, ra, off); }
+    void ld(uint32_t wd, uint32_t rd, uint32_t ra, int32_t off) { if (wd == GVM_W_D) ld2(rd, rd + 1, ra, off); else I(GVM_OP_M(GVM_M_LOAD, wd), rd, ra, off); }
+    void st(uint32_t wd, uint32_t rs, uint32_t ra, int32_t off) { if (wd == GVM_W_D) st2(rs, rs + 1, ra, off); else I(GVM_OP_M(GVM_M_STORE, wd), rs, ra, off); }
+    // a pair (isa.h GVM_IMM_D): rd and rb from the two words at ra + off; the offset in rc's words, or long
+    void pair(uint32_t mode, uint32_t r1, uint32_t r2, uint32_t ra, int32_t off) {
+        uint32_t w0 = GVM_WORD_R(GVM_OP_M(mode, GVM_W_D), r1, ra, r2, 0u);
+        if ((off & 3) == 0 && off >= -128 && off <= 124) put(w0 | (uint32_t)((off >> 2) & 63) << 20);
+        else if (enc) {   // (E2, E1: a prefix leaves an op 8 bits of its own, not rb's six: two words, the base read before it changes)
+            bool ldm = mode == GVM_M_LOAD, swap = ldm && r1 == ra;
+            for (int k = 0; k < 2; k++) {
+                bool hi = (k == 1) != swap;
+                if (ldm) ld(GVM_W_W, hi ? r2 : r1, ra, off + (hi ? 4 : 0)); else st(GVM_W_W, hi ? r2 : r1, ra, off + (hi ? 4 : 0));
+            }
+        } else put2(w0, (uint32_t)off);
+    }
+    void ld2(uint32_t rd, uint32_t rb, uint32_t ra, int32_t off) { pair(GVM_M_LOAD, rd, rb, ra, off); }
+    void st2(uint32_t rs, uint32_t rs2, uint32_t ra, int32_t off) { pair(GVM_M_STORE, rs, rs2, ra, off); }
     void ldx(uint32_t wd, uint32_t rd, uint32_t ra, uint32_t rb, uint32_t sh) { R(GVM_OP_M(GVM_M_LOADX, wd), rd, ra, rb, sh); }
     void stx(uint32_t wd, uint32_t rs, uint32_t ra, uint32_t rb, uint32_t sh) { R(GVM_OP_M(GVM_M_STOREX, wd), rs, ra, rb, sh); }
     void lw(uint32_t rd, uint32_t ra, int32_t off) { ld(GVM_W_W, rd, ra, off); }
@@ -251,6 +276,7 @@ struct GvmAsm {
     std::vector<uint32_t> finish() {
         close();
         if (thin8) return finish_thin();
+        if (enc) return finish_e21();
         for (const Fix& f : fixes) {
             if (labels[f.label] < 0) { fprintf(stderr, "gvm_asm: label %d not bound\n", f.label); exit(1); }
             int64_t off = labels[f.label] - (int64_t)f.bundle;
@@ -266,6 +292,119 @@ struct GvmAsm {
             else w[f.bundle * 4 + f.word] = (uint32_t)(off * 16);   // lpc: its immediate's word
         }
         return w;
+    }
+    // enc 2 or 1 (GPU-VM's spec/ENCODINGS.md, gvm_machine.enc): the bundles laid out again as E2's units of 8 bytes or E1's
+    // words, in program order. A bundle's control word reads no register its ops write (br_old, bump), so it may follow
+    // them. Branches count units or words from the control word's own; lpc's constants move with their op.
+    static inline uint64_t e21_changed = 0;   // bundles whose control word now reads a register after an op wrote it (E1; E2 when it cannot reorder)
+    static constexpr uint32_t E21_NOP = 0x00060000u;   // addi r0, r0, 0: a unit's second word when it has no other
+    static uint32_t e21_pre(uint32_t k) { return (k & 0xfff00000u) | 0x1fu << 12 | ((k >> 8) & 0xfffu); }
+    static uint32_t e21_ctl(uint32_t cc, uint32_t ra, uint32_t rbf, int32_t off) {
+        return ((uint32_t)off & 0x7ffu) << 21 | (cc >> 3) << 20 | 7u << 15 | (cc & 7u) << 12 | (rbf & 63u) << 6 | (ra & 63u);
+    }
+    static uint32_t e21_special(uint32_t sub, uint32_t rs, int32_t v, bool dist) {   // j and call: a 20-bit distance; the add: a 14-bit step
+        uint32_t u = (uint32_t)v;
+        if (dist) return (u >> 9 & 0x7ffu) << 21 | 7u << 15 | (u >> 6 & 7u) << 9 | sub << 6 | (u & 63u);
+        return (u >> 3 & 0x7ffu) << 21 | 7u << 15 | (u & 7u) << 9 | sub << 6 | (rs & 63u);
+    }
+    static bool e21_nz(uint32_t ctl) {   // a control word that does something
+        uint32_t cc = GVM_CC(ctl);
+        return !(cc == GVM_CC_SPECIAL && GVM_SUB(ctl) == GVM_SUB_NONE) && !(cc == GVM_CC_BNE && GVM_CRA(ctl) == 0 && GVM_CRB(ctl) == 0);
+    }
+    std::vector<uint32_t> finish_e21() {
+        const bool E2 = enc == 2;
+        const uint32_t U = E2 ? 8 : 4;
+        size_t nb = w.size() / 4;
+        struct Step { uint32_t a, b; int kind; };   // kind 0 op (E2: two words), 1 prefix + op, 2 a control word
+        std::vector<uint32_t> at(nb + 1), cw(nb, 0), longat(nb, 0);   // bundle i's first step, its control word's step, its long op's step
+        std::vector<std::vector<Step>> steps(nb);
+        uint32_t o = 0;
+        for (size_t i = 0; i < nb; i++) {
+            uint32_t ctl = w[i * 4 + 3], n = GVM_N(ctl), imm = w[i * 4 + 2];
+            if (n > 2) { fprintf(stderr, "gvm_asm: enc %d with a bundle of %u ops\n", enc, n); exit(1); }
+            int lg = GVM_LONG0(ctl) ? 0 : GVM_LONG1(ctl) ? 1 : -1;
+            bool nz = e21_nz(ctl);
+            std::vector<Step>& S = steps[i];
+            at[i] = o;
+            auto op_of = [&](int k) {
+                uint32_t op = w[i * 4 + k];
+                if (k == lg) {
+                    if ((op >> 20) != 0) { fprintf(stderr, "gvm_asm: a long op with an imm12 of its own\n"); exit(1); }
+                    if (GVM_OPC(op) == GVM_X_LPC) imm += (uint32_t)(i * 16);   // (pc-relative: made again below from the new place)
+                    return Step{e21_pre(imm), (op & 0x000fffffu) | (imm & 0xffu) << 20, 1};
+                }
+                return Step{op, 0, 0};
+            };
+            // the registers the control word reads as the bundle found them (a branch's, addbnz's): an op that writes one
+            // must come after it. E2 puts the control word beside that op ({op, control} reads before its op); E1 cannot
+            uint32_t cc = GVM_CC(ctl), rr[2] = {nz && cc != GVM_CC_SPECIAL ? GVM_CRA(ctl) : 0u, nz && cc >= GVM_CC_BLTU && cc <= GVM_CC_BGE ? GVM_CRB(ctl) : 0u};
+            auto wr = [&](int k) { uint32_t op = w[i * 4 + k]; for (uint32_t r : rr) if (r && !store_op(op) && r - GVM_RD(op) < span(op)) return true; return false; };
+            bool w0 = n > 0 && wr(0), w1 = n > 1 && wr(1);
+            int order[2] = {0, 1};
+            bool apart = false;   // E2: op 0 and op 1 in units of their own, the control word beside the second
+            if (E2 && n == 2 && lg < 0 && nz && (w0 || w1)) {
+                uint32_t a0 = w[i * 4], a1 = w[i * 4 + 1], d0 = GVM_RD(a0), d1 = GVM_RD(a1);
+                bool indep = !(mem_op(a0) && mem_op(a1)) && !(d0 && touches(a1, d0)) && !(d1 && touches(a0, d1));
+                if (!w0) apart = true;
+                else if (!w1 && indep) { apart = true; order[0] = 1; order[1] = 0; }
+                else e21_changed++;
+            } else if (nz && (w0 || w1) && (!E2 || lg >= 0)) e21_changed++;
+            for (int kk = 0; kk < (int)n; kk++) {
+                int k = order[kk];
+                Step s = op_of(k);
+                if (s.kind == 1) { longat[i] = o; S.push_back(s); o += 8; continue; }
+                if (E2) {
+                    if (!apart && kk + 1 < (int)n && order[kk + 1] != lg) { s.b = w[i * 4 + order[kk + 1]]; kk++; }
+                    else if (kk + 1 == (int)n && nz) { s.b = 0xffffffffu; s.kind = 3; }   // (its control word, below)
+                    else s.b = E21_NOP;
+                    if (s.kind == 3) cw[i] = o;
+                    S.push_back(s); o += 8;
+                } else { S.push_back(s); o += 4; }
+            }
+            if (nz && !(E2 && !S.empty() && S.back().kind == 3)) { cw[i] = o; S.push_back(Step{E2 ? E21_NOP : 0u, 0, 2}); o += U; }
+        }
+        at[nb] = o;
+        std::vector<uint32_t> out(o / 4, E21_NOP);
+        std::vector<int32_t> off(nb, 0);
+        std::vector<int> fixk(nb, -1), lpcl(nb, -1);
+        for (const Fix& f : fixes) {
+            if (labels[f.label] < 0) { fprintf(stderr, "gvm_asm: label %d not bound\n", f.label); exit(1); }
+            if (f.kind == 2) { lpcl[f.bundle] = f.label; continue; }
+            off[f.bundle] = (int32_t)(((int64_t)at[labels[f.label]] - (int64_t)cw[f.bundle]) / U);
+            fixk[f.bundle] = f.kind;
+        }
+        for (size_t i = 0; i < nb; i++) {
+            uint32_t ctl = w[i * 4 + 3], cc = GVM_CC(ctl), c = 0;
+            if (e21_nz(ctl)) {
+                int32_t d = off[i];
+                if (cc == GVM_CC_SPECIAL) {
+                    uint32_t sub = GVM_SUB(ctl);
+                    if (sub == GVM_SUB_ADD) c = e21_special(sub, GVM_CRS(ctl), GVM_CIMM12(ctl), false);
+                    else if (sub == GVM_SUB_J || sub == GVM_SUB_CALL) c = e21_special(sub, 0, d, true);
+                    else c = e21_special(sub, GVM_CRS(ctl), 0, false);
+                } else if (fixk[i] == 3 && (d < -1024 || d > 1023)) c = e21_special(GVM_SUB_J, 0, d, true);   // a far j
+                else {
+                    if (fixk[i] >= 0 && (d < -1024 || d > 1023)) { fprintf(stderr, "gvm_asm: a branch of %d steps\n", d); exit(1); }
+                    c = e21_ctl(cc, GVM_CRA(ctl), GVM_CRB(ctl), d);
+                }
+            }
+            uint32_t p = at[i];
+            for (const Step& s : steps[i]) {
+                if (s.kind == 1) {   // the prefix: lpc's constant from its new place
+                    uint32_t k = ((s.a & 0xfff00000u) | (s.a & 0xfffu) << 8 | (s.b >> 20 & 0xffu));
+                    if (GVM_OPC(s.b) == GVM_X_LPC) k = lpcl[i] >= 0 ? at[labels[lpcl[i]]] - longat[i] : k - longat[i];
+                    out[p / 4] = e21_pre(k); out[p / 4 + 1] = (s.b & 0x000fffffu) | (k & 0xffu) << 20;
+                    p += 8;
+                } else if (s.kind == 2) {
+                    if (E2) { out[p / 4] = E21_NOP; out[p / 4 + 1] = c; } else out[p / 4] = c;
+                    p += U;
+                } else if (E2) {
+                    out[p / 4] = s.a; out[p / 4 + 1] = s.kind == 3 ? c : s.b;
+                    p += 8;
+                } else { out[p / 4] = s.a; p += 4; }
+            }
+        }
+        return out;
     }
     // thin8: bundle i (n <= 1) becomes {op, control} at byte at[i], or {op, control, imm, 0} at a texel's start (a pad
     // {0, none} before it when needed); branches count 8 bytes; lpc's immediates move with their instruction

@@ -13,12 +13,19 @@
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/TargetFrameLowering.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
 
 #define GET_REGINFO_TARGET_DESC
 #include "GPUVMGenRegisterInfo.inc"
 
 using namespace llvm;
+
+// -gpuvm-regs=N (the ISA search, GPU-VM's RESULTS.md): a machine of N registers, as the allocator sees it. Kept: r0-r12
+// (zero, ra, sp, gp, tp, the eight arguments), then half of the rest as temporaries from r13 and half as saved
+// registers from r32 (the frame pointer's), as a smaller ISA's own ABI would split them; the others are reserved.
+static cl::opt<unsigned> GvmRegs("gpuvm-regs", cl::Hidden, cl::init(64),
+                                 cl::desc("Registers the allocator may use (16-64)"));
 
 GPUVMRegisterInfo::GPUVMRegisterInfo() : GPUVMGenRegisterInfo(GPUVM::R1) {}
 
@@ -46,6 +53,15 @@ BitVector GPUVMRegisterInfo::getReservedRegs(const MachineFunction &MF) const {
     markSuperRegs(Reserved, R);
   if (TFL->hasFP(MF))
     markSuperRegs(Reserved, GPUVM::R32);
+  if (GvmRegs < 64) {
+    unsigned Rest = GvmRegs > 13 ? GvmRegs - 13 : 0, Saved = Rest / 2, Temps = Rest - Saved;
+    for (MCPhysReg R : GPUVM::GPRRegClass) {
+      unsigned E = getEncodingValue(R);
+      bool Kept = E <= 12 || (E >= 13 && E < 13 + Temps) || (E >= 32 && E < 32 + Saved);
+      if (!Kept)
+        markSuperRegs(Reserved, R);
+    }
+  }
   if (hasBasePointer(MF))
     markSuperRegs(Reserved, GPUVM::R33);
   assert(checkAllSuperRegsMarked(Reserved));

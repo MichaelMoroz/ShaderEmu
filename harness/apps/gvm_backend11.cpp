@@ -125,10 +125,11 @@ public:
         if (geo_) {   // the builder's block: 8 wide, 3 to 16 rows, column by column, 128 blocks a band of 16 rows, or 256 blocks
             bh_ = stepConst(src, "GEO_BH", 8);   // of 8 rows in one band (WAVES.md); the device reads pixel 2 at (0, 2)
             per_ = stepConst(src, "GEO_PER", 128), band_ = stepConst(src, "GEO_BAND", 16);
-            bool one = per_ == 256 && band_ == 8 && bh_ == 8;
-            if (stepConst(src, "GEO_BW", 8) != 8 || bh_ < 3 || bh_ > 16 || spix_ > 8 * bh_ || stepConst(src, "GEO_JROW", 0) != 0 ||
+            bw_ = stepConst(src, "GEO_BW", 8);   // (4: a core one warp, 4 x 8 blocks in one row; WAVES.md)
+            bool one = per_ == 256 && (band_ == 8 || band_ == 16) && bh_ == 8;   // (band 16: c0rt's core 0 in rows 8-15 under its block)
+            if ((bw_ != 8 && !(bw_ == 4 && one)) || bh_ < 3 || bh_ > 16 || spix_ > bw_ * bh_ || stepConst(src, "GEO_JROW", 0) != 0 ||
                 !(one || (band_ == 16 && per_ == 128)) || stepConst(src, "GEO_PERM", 0) != 0) {
-                err = tickPath + ": GEO_BLOCKS takes blocks 8 wide and 3 to 16 high, column by column, 128 a band of 16 rows, or 8 x 8 in one row"; return false;
+                err = tickPath + ": GEO_BLOCKS takes blocks 8 wide and 3 to 16 high, column by column, 128 a band of 16 rows, or 8 x 8 or 4 x 8 in one row"; return false;
             }
         }
         whole_ = stepConst(src, "COMMIT_WHOLE", 0) != 0;   // (the commit writes an entry's whole texel in one draw: CACHE.md, "Decided")
@@ -139,7 +140,7 @@ public:
         if (src.find("#ifndef CORE0") != std::string::npos || c0rt_) {   // x25: core 0's own write cache, its tick compiled with CORE0=1
             wcn0_ = stepConst(src, "WCN0", 0);
             spix0_ = (stepConst(src, "NTEX0", 0) + 7) / 8;
-            if (!geo_ || !wcn0_ || (bh_ == 8 ? spix0_ > 64 + 8 * 128 : c0rows() > 16)) { err = tickPath + ": CORE0 needs GEO_BLOCKS, WCN0 and NTEX0"; return false; }
+            if (!geo_ || !wcn0_ || (bh_ == 8 && bw_ == 8 && !c0rt_ ? spix0_ > 64 + 8 * 128 : c0rows() > band_)) { err = tickPath + ": CORE0 needs GEO_BLOCKS, WCN0 and NTEX0"; return false; }
         }
         CompileSettings cs;
         cs.flags = D3DCOMPILE_OPTIMIZATION_LEVEL3;
@@ -296,6 +297,7 @@ public:
         if (timeIt) {
             ctx->Begin(tsDisjoint_.Get());
             ctx->End(tsQuery_[0].Get());
+            timedRounds_ = (std::max)(1u, tickRounds);
         }
         TimeSet* ts = timeLog_ && (!tset_[tag % 8].pending || tag - tset_[tag % 8].tag >= 64) ? &tset_[tag % 8] : nullptr;
         ID3D11Query* tqs[7] = {};
@@ -335,7 +337,7 @@ public:
             if (soundMix && devPasses_.size() > 3) soundDraw(mat, tag);   // (before the control zone moves the voices on)
             mat.setInt("_GvmPasses", (int64_t)(uint32_t)passes_);
             mat.setInt("_GvmWorkers", workers_);
-            mat.setInt("_GvmGeo", geo_);
+            mat.setInt("_GvmGeo", geo_ ? (per_ == 256 ? (bw_ == 4 ? 3 : 2) : 1) : 0);   // (gpu.h gvm_s16: the block layout)
             mat.setTexture("_GvmS0", set_[cur_ ^ 1][0].srv.Get(), setW(), setH());
             mat.setTexture("_GvmS3", set_[cur_ ^ 1][3].srv.Get(), setW(), setH());
             bool merge = countsAdded;
@@ -420,7 +422,7 @@ public:
         if (endsLog_) {   // (texel 19 is pixel 2's fourth target: at (block x, band y + 2), a texel a block)
             for (UINT b = 0; b < 2; b++)
                 for (UINT k = 0; k < 128; k++) {
-                    UINT bx = (b * 128 + k) % per_ * 8, by = (b * 128 + k) / per_ * band_;   // (the block of core b * 128 + k)
+                    UINT bx = (b * 128 + k) % per_ * bw_, by = (b * 128 + k) / per_ * band_;   // (the block of core b * 128 + k)
                     D3D11_BOX e = {bx, by + 2, 0, bx + 1, by + 3, 1};
                     ctx->CopySubresourceRegion(ends_.t.Get(), 0, k, b, 0, set_[cur_ ^ 1][3].t.Get(), 0, &e);
                     static const bool pcs = getenv("GVM_MBOX_LOG") != nullptr;   // (texel 16, the pc: GVM_MBOX_LOG's)
@@ -554,14 +556,14 @@ public:
         SnapHeader want = snapHeader(), h{};
         if (size >= sizeof h) memcpy(&h, data, sizeof h);
         uint32_t fromSpix = (h.ntex + 7) / 8, keep = h.ntex == ntex_ ? spix_ : tWc_ / 8;   // (another cache: the texels before it)
-        uint32_t fromBh = h.pad <= 2 ? 8 : h.pad - 16;   // (pad: 0 a row a core, 1 8x8 blocks, 2 8x8 blocks in one row, 16 + h blocks 8 x h)
-        uint32_t fromPer = h.pad == 2 ? 256 : 128, fromBand = h.pad == 2 ? 8 : 16;
-        size_t setBytes = h.pad ? (size_t)((kMaxCores - 1) / fromPer * fromBand + (std::max)(8u, fromBh)) * fromPer * 8 * 16 : (size_t)fromSpix * kMaxCores * 16;
+        uint32_t fromBh = h.pad <= 3 ? 8 : h.pad - 16;   // (pad: 0 a row a core, 1 8x8 blocks, 2 8x8 blocks in one row, 3 4x8 in one row, 16 + h blocks 8 x h)
+        uint32_t fromPer = h.pad == 2 || h.pad == 3 ? 256 : 128, fromBand = h.pad == 2 || h.pad == 3 ? 8 : 16, fromBw = h.pad == 3 ? 4 : 8;
+        size_t setBytes = h.pad ? (size_t)((kMaxCores - 1) / fromPer * fromBand + (std::max)(8u, fromBh)) * fromPer * fromBw * 16 : (size_t)fromSpix * kMaxCores * 16;
         uint32_t fromMap = h.magic[7] == '2' ? 1u : 0u, fromRows = fromMap ? GVM_STRIP_ROWS(h.ramEnd / 16) : h.ramEnd / 16 / kRamW;
         if (fromMap != rmap_) want.romRows = h.romRows, want.magic[7] = h.magic[7];   // (the other map: its ROM rows its own, RAM converted)
         size_t need = sizeof h + (size_t)kRamW * fromRows * 16 + 16 * setBytes + 2 * (size_t)kMaxCores * 16 +
                       (devices_ ? (size_t)kGpuTarget * kGpuTarget * 4 : 0);
-        if (size != need || (h.pad > 2 && (h.pad < 19 || h.pad > 32)) || memcmp(h.magic, want.magic, 8) != 0 || h.ramEnd != want.ramEnd || h.romRows != want.romRows ||
+        if (size != need || (h.pad > 3 && (h.pad < 19 || h.pad > 32)) || memcmp(h.magic, want.magic, 8) != 0 || h.ramEnd != want.ramEnd || h.romRows != want.romRows ||
             (h.ntex != want.ntex && (h.ntex < tWc_ || h.ntex > 64 * 8)) || h.devices != want.devices) {
             err = "not a snapshot of this image, tick and RAM (the same --gvm, --gvm-tick and --gvm-ram)";
             return false;
@@ -582,12 +584,17 @@ public:
                 std::vector<uint8_t> img((size_t)setW() * setH() * 16, 0);
                 for (uint32_t c = 0; c < kMaxCores; c++)
                     for (uint32_t j = 0; j < keep; j++) {
-                        size_t from = h.pad ? (size_t)(c / fromPer * fromBand + j % fromBh) * fromPer * 8 + c % fromPer * 8 + j / fromBh : (size_t)c * fromSpix + j;
+                        size_t from = h.pad ? (size_t)(c / fromPer * fromBand + j % fromBh) * fromPer * fromBw + c % fromPer * fromBw + j / fromBh : (size_t)c * fromSpix + j;
                         memcpy(&img[setAt(c, j) * 16], p + from * 16, 16);
                     }
                 writeTex(set_[k][t].t.Get(), setW(), setH(), 16, img.data());
                 p += setBytes;
             }
+        {   // the worker firmware as this harness has it (the boot area is read only to the cores: the snapshot's is a boot's copy)
+            std::vector<uint8_t> fw((sizeof gvm_worker_fw + 15) & ~(size_t)15, 0);
+            memcpy(fw.data(), gvm_worker_fw, sizeof gvm_worker_fw);
+            putTexels(GVM_WORKER_FW / 16, (uint32_t)(fw.size() / 16), fw.data());
+        }
         p = writeTex(ops_[0].t.Get(), kMaxCores, 1, 16, p);
         p = writeTex(ops_[1].t.Get(), kMaxCores, 1, 16, p);
         if (devices_) writeTex(gpuColor_.Get(), kGpuTarget, kGpuTarget, 4, p);
@@ -639,14 +646,16 @@ public:
     }
     bool uploadRows(UINT row, UINT rows, const void* texels) override {
         if (row < 64 || (row - 64) * 2048 < kIndexBias) return false;
-        uint32_t t0 = (row - 64) * 2048 - kIndexBias, n = rows * 2048;
-        const uint8_t* in = (const uint8_t*)texels;
+        putTexels((row - 64) * 2048 - kIndexBias, rows * 2048, (const uint8_t*)texels);
+        return true;
+    }
+    void putTexels(uint32_t t0, uint32_t n, const uint8_t* in) {   // n texels of RAM from texel t0
         if (rmap_) {
             boxes(t0, n, [&](uint32_t t, uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
                 D3D11_BOX b = {x, y, 0, x + w, y + h, 1};
                 gpu_.ctx->UpdateSubresource(ram_.t.Get(), 0, &b, in + (size_t)(t - t0) * 16, w * 16, w * h * 16);
             });
-            return true;
+            return;
         }
         while (n) {
             uint32_t x = t0 % kRamW, k = (std::min)(n, kRamW - x);
@@ -654,7 +663,6 @@ public:
             gpu_.ctx->UpdateSubresource(ram_.t.Get(), 0, &b, in, k * 16, k * 16);
             in += (size_t)k * 16, n -= k, t0 += k;
         }
-        return true;
     }
 
     bool gpuTimes(double& tickMs, double& commitMs, double& deviceMs) override {
@@ -677,6 +685,7 @@ public:
                     tickMs_ = (double)(ts[1] - ts[0]) * 1000.0 / (double)dj.Frequency;
                     commitMs_ = (double)(ts[2] - ts[1]) * 1000.0 / (double)dj.Frequency;
                     deviceMs_ = (double)(ts[3] - ts[2]) * 1000.0 / (double)dj.Frequency;
+                    frameMs = (double)(ts[3] - ts[0]) * 1000.0 / (double)dj.Frequency, frameRounds = timedRounds_, frameTimes++;
                 }
                 tsPending_ = false;
             }
@@ -748,7 +757,7 @@ private:
     }
     SnapHeader snapHeader() const {
         SnapHeader h = {{'G', 'V', 'M', 'S', 'N', 'A', 'P', (char)('1' + rmap_)}, ramEnd_, romRows_, ntex_, devices_ ? 1u : 0u,
-                        (uint32_t)cur_, (uint32_t)oc_, workers_, geo_ ? (per_ == 256 ? 2u : bh_ == 8 ? 1u : 16 + bh_) : 0u, time_, passes_};
+                        (uint32_t)cur_, (uint32_t)oc_, workers_, geo_ ? (per_ == 256 ? (bw_ == 4 ? 3u : 2u) : bh_ == 8 ? 1u : 16 + bh_) : 0u, time_, passes_};
         return h;
     }
     // A whole texture of `bpp` bytes a texel appended to `out`, row 0 first (a blocking read)
@@ -804,17 +813,16 @@ private:
         gpu_.ctx->VSSetShaderResources(0, 12, s);
     }
     // The state textures: a row a core, or (the step's GEO_BLOCKS) a block of 8 x GEO_BH (3 to 16) a core, 128 a band of 16 rows
-    UINT setW() const { return geo_ ? per_ * 8 : spix_; }
-    UINT setH() const { return geo_ ? (kMaxCores - 1) / per_ * band_ + (std::max)(8u, bh_) : kMaxCores; }   // (blocks of 9 to 16 rows: the last band as tall as one)
+    UINT setW() const { return geo_ ? per_ * bw_ : spix_; }
+    UINT setH() const { return geo_ ? (std::max)((kMaxCores - 1) / per_ * band_ + (std::max)(8u, bh_), wcn0_ ? c0rows() : 0u) : kMaxCores; }   // (blocks of 9 to 16 rows: the last band as tall as one; c0nb, c0rt: core 0's rows)
     size_t setAt(uint32_t c, uint32_t j) const {   // the texel of state pixel j of core c (x25: core 0's from 64 on in rows 8-15)
-        if (geo_ && c == 0 && j >= 8 * bh_) {   // (a builder's c0nb, blocks under 8 rows: its blocks again, down the first band)
-            if (bh_ == 8) return (size_t)(8 + j % 8) * 1024 + j / 8 - 8;
-            uint32_t k = j % (8 * bh_);
-            return (size_t)((j / (8 * bh_)) * bh_ + k % bh_) * 1024 + k / bh_;
+        if (geo_ && c == 0 && j >= bw_ * bh_) {   // (a builder's c0nb or c0rt: its blocks again, down the first band)
+            uint32_t k = j % (bw_ * bh_);
+            return (size_t)((j / (bw_ * bh_)) * bh_ + k % bh_) * setW() + k / bh_;
         }
-        return geo_ ? (size_t)(c / per_ * band_ + j % bh_) * setW() + c % per_ * 8 + j / bh_ : (size_t)c * spix_ + j;
+        return geo_ ? (size_t)(c / per_ * band_ + j % bh_) * setW() + c % per_ * bw_ + j / bh_ : (size_t)c * spix_ + j;
     }
-    uint32_t c0rows() const { return (spix0_ + 8 * bh_ - 1) / (8 * bh_) * bh_; }   // (c0nb with blocks under 8 rows: core 0's rows)
+    uint32_t c0rows() const { return (spix0_ + bw_ * bh_ - 1) / (bw_ * bh_) * bh_; }   // (c0nb, c0rt: core 0's rows, its blocks down the band)
     void viewport(UINT w, UINT h, UINT y = 0, UINT x = 0) {
         D3D11_VIEWPORT v = {(float)x, (float)y, (float)w, (float)h, 0, 1};
         gpu_.ctx->RSSetViewports(1, &v);
@@ -884,7 +892,7 @@ private:
             }
             for (uint32_t c = (std::max)(run.first, apart ? 1u : 0u); c < run.second;) {   // (the run's blocks in one band at a time)
                 uint32_t end = (std::min)(run.second, (c / per_ + 1) * per_);
-                viewport((end - c) * 8, c == 0 && c0rt_ ? (std::max)(bh_, c0rows()) : bh_, (c / per_) * band_, (c % per_) * 8);   // (c0rt: core 0's rows in its band's draw)
+                viewport((end - c) * bw_, c == 0 && c0rt_ ? (std::max)(bh_, c0rows()) : bh_, (c / per_) * band_, (c % per_) * bw_);   // (c0rt: core 0's rows in its band's draw)
                 ctx->Draw(3, 0);
                 c = end;
             }
@@ -1020,7 +1028,7 @@ private:
                         for (int w = 0; w < 2; w++) gpu_.ctx->CopySubresourceRegion(set_[w][t].t.Get(), 0, wc0, k, 0, none_.t.Get(), 0, &nb);
                         continue;
                     }
-                    UINT x0 = (k % per_) * 8, y0 = (k / per_) * band_, cols = (spix_ + bh_ - 1) / bh_;
+                    UINT x0 = (k % per_) * bw_, y0 = (k / per_) * band_, cols = (spix_ + bh_ - 1) / bh_;
                     D3D11_BOX b = {x0, y0, 0, x0 + cols, y0 + bh_, 1}, nb = {0, 0, 0, 1, 1, 1};
                     gpu_.ctx->CopySubresourceRegion(set_[cur_][t].t.Get(), 0, x0, y0, 0, set_[cur_ ^ 1][t].t.Get(), 0, &b);
                     for (uint32_t j = wc0; j < spix_; j++)   // (pixel j of the block: column j / bh_, row j % bh_)
@@ -1235,7 +1243,7 @@ private:
     uint64_t lastEndsTag_ = ~0ull;
     bool c0rt_ = false, cull_ = false, copy_ = false;
     uint32_t cullVerts_ = 3;   // (C0RT: core 0 in the workers' draw)
-    uint32_t ramEnd_ = 0, rows_ = 0, romRows_ = 1, wcn_ = 514, tWc_ = 40, opSlots_ = 32, opSpan_ = 272, ntex_ = 297, spix_ = 38, geo_ = 0, whole_ = 0, bh_ = 8, per_ = 128, band_ = 16, wcn0_ = 0, spix0_ = 0;
+    uint32_t ramEnd_ = 0, rows_ = 0, romRows_ = 1, wcn_ = 514, tWc_ = 40, opSlots_ = 32, opSpan_ = 272, ntex_ = 297, spix_ = 38, geo_ = 0, whole_ = 0, timedRounds_ = 1, bh_ = 8, bw_ = 8, per_ = 128, band_ = 16, wcn0_ = 0, spix0_ = 0;
     Prog tick_, tick0_, commit_, stage_, write_, progress_, copyTick_;
     Tex ram_, rom_, stageTex_, ops_[2], set_[2][8], zone_, ctl_, info_, none_;
     ComPtr<ID3D11Buffer> cb_, ccb_[4];

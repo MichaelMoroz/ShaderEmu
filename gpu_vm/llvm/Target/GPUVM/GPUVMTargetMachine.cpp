@@ -139,6 +139,8 @@ public:
       addPass(createGPUVMHoistConstantsPass());
   }
   void addPreSched2() override {
+    if (getOptLevel() != CodeGenOptLevel::None)
+      addPass(createGPUVMPairsPass()); // (-gpuvm-pairs)
     if (getOptLevel() != CodeGenOptLevel::None && BundleSched)
       addPass(&PostMachineSchedulerID);
   }

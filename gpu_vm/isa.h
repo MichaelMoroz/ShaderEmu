@@ -165,7 +165,11 @@
 // widths (x15): bits 1:0 the size (w, d, h, b: a byte or half is extended by a shift of 8 times them), bit 2
 // unsigned (w's is q; 5 is illegal)
 #define GVM_W_W 0u
-#define GVM_W_D 1u         // rd, rd + 1
+#define GVM_W_D 1u         // two words: rd, then rb in modes 0 and 1 (a pair, 25 October 2026), rd + 1 in modes 2 and 3
+// A pair (ld2, st2: d in modes 0 and 1) takes its second register from rb, so its offset is rc's six bits, signed, in
+// words (+-128 bytes), or word 2 when long. Any alignment, as d was; the tick's fast loop makes one whose two words lie
+// in one texel (op 0 of paths 3 and 5; the assembler's pair_ops), the general step the rest.
+#define GVM_IMM_D(w) (((int)((w) << 6) >> 26) * 4)
 #define GVM_W_H 2u
 #define GVM_W_B 3u
 #define GVM_W_Q 4u         // rd .. rd + 3

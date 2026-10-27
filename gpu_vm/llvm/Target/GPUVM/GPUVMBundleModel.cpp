@@ -92,6 +92,13 @@ GPUVM::OpDesc GPUVM::describeOp(const MachineInstr &MI,
     D.Word = wordI(Opc, R(0), R(1), 0);
     D.Long = IsLong(2, true);
     break;
+  case GPUVMII::FrmPair: {
+    D.Word = wordR(Opc, R(0), R(2), R(1), 0);
+    const MachineOperand &MO = MI.getOperand(3);
+    D.Long = !MO.isImm() || (MO.getImm() & 3) != 0 || MO.getImm() < -128 ||
+             MO.getImm() > 124;
+    break;
+  }
   case GPUVMII::FrmBF:
     D.Word = wordI(Opc, R(0), R(1), 0);
     break;
