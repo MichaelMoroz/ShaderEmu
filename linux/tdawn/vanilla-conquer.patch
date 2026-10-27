@@ -4934,3 +4934,45 @@ diff --git a/common/font.cpp b/common/font.cpp
                  int char_ypos = char_lle & 0xFF;
                  int char_lines = char_lle >> 8;
                  int char_height = fntheight - (char_ypos + char_lines);
+diff --git a/common/wsa.cpp b/common/wsa.cpp
+--- a/common/wsa.cpp
++++ b/common/wsa.cpp
+@@ -830,6 +830,18 @@ unsigned int Get_Animation_Size(void const* handle)
+ static unsigned int Get_Resident_Frame_Offset(char* file_buffer, int frame)
+ {
+     unsigned int frame0_size;
++#ifdef SHADEREMU
++    /* (bytes: the table lies where the delta buffer ends, at any byte, and a copy through a uint32_t pointer
++    ** is a word load, which on gpu_vm keeps only the bytes up to its word's end: the Soviet score screen's
++    ** offsets came out a byte each, its frames were drawn over the heap) */
++    const char* lptr;
++
++    // If there is a frame 0, the calculate its size.
++    lptr = file_buffer;
++    uint32_t x1, x0;
++    memcpy(&x0, lptr, sizeof(uint32_t));
++    memcpy(&x1, lptr + sizeof(uint32_t), sizeof(uint32_t));
++#else
+     uint32_t* lptr;
+ 
+     // If there is a frame 0, the calculate its size.
+@@ -837,6 +849,7 @@ static unsigned int Get_Resident_Frame_Offset(char* file_buffer, int frame)
+     uint32_t x1, x0;
+     memcpy(&x0, lptr, sizeof(uint32_t));
+     memcpy(&x1, lptr + 1, sizeof(uint32_t));
++#endif
+ 
+     x0 = le32toh(x0);
+     x1 = le32toh(x1);
+@@ -848,7 +861,11 @@ static unsigned int Get_Resident_Frame_Offset(char* file_buffer, int frame)
+     }
+ 
+     // Return the offset into RAM for the frame.
++#ifdef SHADEREMU
++    lptr += frame * sizeof(uint32_t);
++#else
+     lptr += frame;
++#endif
+     memcpy(&x0, lptr, sizeof(uint32_t));
+     x0 = le32toh(x0);
+     if (x0)

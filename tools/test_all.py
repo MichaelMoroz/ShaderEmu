@@ -179,6 +179,11 @@ CASES = [
          has=[r'done at frame 300: SCG02EA\.INI, .* state ea72a5d1'],
          count=[(r"^ralert: the demo's menu again", 2), (r'^interpolation: 0 of 65536 entries differ', 2), (r'^interpolation: 0 of 399 rows differ', 22)],
          never=[r'^interpolation: [1-9]', r'Segmentation fault', r'out of memory']),
+    # the Soviet side's won (docs/games/ralert.md, "A mission won"): its score screen's animation read its frame table through
+    # a word cast at an odd address, which gpu_vm cut to a byte an offset, and drew over the heap (a crash after the name)
+    case('ralert-won-soviet', 'games ralert', X + 'TDAWN_AUTO=1 RALERT_SIDE=soviet RALERT_SEED=7 RALERT_WIN=100,2 RALERT_FRAMES=300 ralert',
+         True, wall=400, has=[r'done at frame 300: SCU01EA\.INI, .* state 01e0dd60'], count=[(r"^ralert: the demo's menu again", 2)],
+         never=[r'Segmentation fault', r'out of memory']),
     # NES (docs/games/nes.md, "Testing"): RAM and picture with the lists on the first core and on a worker
     *[case(f'nes-{n}{tag}', 'games nes', NES + pre + c, True, sums=[(r"every frame's RAM ([0-9a-f]+)", [ram]), (r'done, picture ([0-9a-f]+)', [pic])])
       for n, c, ram, pic in NES_RUNS for tag, pre in (('', ''), ('-lists', 'NES_LIST=worker '))],
