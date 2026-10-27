@@ -67,6 +67,9 @@ public class EmuMachine : UdonSharpBehaviour
     public RenderTexture gvmPending;          // 1 x 1: how many cores have operations queued after a pass
     public bool gvmTwoRounds;                 // two rounds of the operations every pass, as the harness (a measure)
     public int gvmBusyRounds = 4;             // rounds of the operations a pass while some are queued
+    public int gvmMeasureStates;              // (a measure: this many more bindings of a state set a pass)
+    public int gvmMeasureDraws;               // (a measure: the commit drawn again this many times a pass)
+    public int gvmMeasureBlits;               // (a measure: this many more blits of the pending texel a pass)
     public int gvmIdleEvery = 1;              // with none queued lately, a round every this many passes and in the frame's last
     public RenderTexture gvmStage, gvmZone, gvmCtl, gvmTickDepth;
     public Camera gvmPassCamera;              // disabled: the commit's and the operations' draws, one mesh at a time
@@ -614,7 +617,9 @@ public class EmuMachine : UdonSharpBehaviour
         tickCamera.SetTargetBuffers(gvmCur == 0 ? gvmBuffersA : gvmBuffersB, gvmTickDepth.depthBuffer);
         tickCamera.Render();
         GvmState(gvmCommitMaterial, drawn, gvmStateNames);
+        for (int k = 0; k < gvmMeasureStates; k++) GvmState(gvmCommitMaterial, drawn, gvmStateNames);
         GvmDraw(gvmCommitRenderer, state);
+        for (int k = 0; k < gvmMeasureDraws; k++) GvmDraw(gvmCommitRenderer, state);
         GvmState(gvmOpsBlitMaterial, drawn, gvmStateNames);
         // more rounds only while operations were queued lately (texel 12 of the readback): a round is a camera's render,
         // and a core waiting on its copy loses a whole pass
@@ -632,6 +637,7 @@ public class EmuMachine : UdonSharpBehaviour
         }
         gvmOpsBlitMaterial.SetTexture("_OpState", gvmOps[gvmOpsCur]);
         VRCGraphics.Blit(blackTexture, gvmPending, gvmOpsBlitMaterial, 3);
+        for (int k = 0; k < gvmMeasureBlits; k++) VRCGraphics.Blit(blackTexture, gvmPending, gvmOpsBlitMaterial, 3);
         gvmCur ^= 1;
         gvmPasses++;
     }
