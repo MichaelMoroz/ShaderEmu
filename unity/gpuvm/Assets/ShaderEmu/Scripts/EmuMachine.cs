@@ -67,6 +67,7 @@ public class EmuMachine : UdonSharpBehaviour
     public RenderTexture gvmPending;          // 1 x 1: how many cores have operations queued after a pass
     public bool gvmTwoRounds;                 // two rounds of the operations every pass, as the harness (a measure)
     public int gvmBusyRounds = 4;             // rounds of the operations a pass while some are queued
+    public bool gvmIdleSkip;                  // with none queued lately, the frame's last pass alone has a round (a measure)
     public RenderTexture gvmStage, gvmZone, gvmCtl, gvmTickDepth;
     public Camera gvmPassCamera;              // disabled: the commit's and the operations' draws, one mesh at a time
     public MeshRenderer gvmCommitRenderer, gvmStageRenderer, gvmWriteRenderer, gvmProgRenderer;
@@ -602,7 +603,7 @@ public class EmuMachine : UdonSharpBehaviour
     }
 
     // A pass (gpu_vm/tick/STATE.md): the tick, the commit's four draws, two rounds of the operations.
-    private void GvmPass(double wall)
+    private void GvmPass(double wall, bool last)
     {
         gvmTime = Math.Max(gvmTime + 1, wall);
         double hi = Math.Floor(gvmTime / 4294967296.0), lo = gvmTime - hi * 4294967296.0;
@@ -617,7 +618,8 @@ public class EmuMachine : UdonSharpBehaviour
         GvmState(gvmOpsBlitMaterial, drawn, gvmStateNames);
         // more rounds only while operations were queued lately (texel 12 of the readback): a round is a camera's render,
         // and a core waiting on its copy loses a whole pass
-        int opRounds = gvmTwoRounds ? 2 : Time.frameCount - gvmOpsSeen < 4 ? gvmBusyRounds : 1;
+        // (gvmIdleSkip: an operation queued while idle waits for the frame's last pass, then the readback says so)
+        int opRounds = gvmTwoRounds ? 2 : Time.frameCount - gvmOpsSeen < 4 ? gvmBusyRounds : gvmIdleSkip && !last ? 0 : 1;
         for (int oc = 0; oc < opRounds; oc++)
         {
             // only the write scatters, a camera's render; the plan, the stage and the progress are blits
@@ -1443,7 +1445,7 @@ public class EmuMachine : UdonSharpBehaviour
         double wall = (double)Time.timeSinceLevelLoad * 100000.0;
         for (int i = 0; i < n; i++)
         {
-            GvmPass(wall);
+            GvmPass(wall, i == n - 1);
             GvmState(machineMaterial, GvmSet(gvmCur ^ 1), gvmReadNames);
             GvmPassesOn(machineMaterial);
             machineMaterial.SetInt("_Row", i);
