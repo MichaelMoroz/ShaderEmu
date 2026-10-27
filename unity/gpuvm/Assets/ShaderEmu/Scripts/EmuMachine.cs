@@ -70,6 +70,8 @@ public class EmuMachine : UdonSharpBehaviour
     public int gvmMeasureStates;              // (a measure: this many more bindings of a state set a pass)
     public int gvmMeasureDraws;               // (a measure: the commit drawn again this many times a pass)
     public int gvmMeasureBlits;               // (a measure: this many more blits of the pending texel a pass)
+    public bool gvmMergeWrite = true;         // the first round's write in the commit's render, its stage before the commit (GvmOpsBlit 4)
+    public int gvmMergeStage = 4;             // (a check: 1 stages the merged round without the write caches, wrong after a store)
     public int gvmIdleEvery = 1;              // with none queued lately, a round every this many passes and in the frame's last
     public RenderTexture gvmStage, gvmZone, gvmCtl, gvmTickDepth;
     public Camera gvmPassCamera;              // disabled: the commit's and the operations' draws, one mesh at a time
@@ -618,14 +620,30 @@ public class EmuMachine : UdonSharpBehaviour
         tickCamera.Render();
         GvmState(gvmCommitMaterial, drawn, gvmStateNames);
         for (int k = 0; k < gvmMeasureStates; k++) GvmState(gvmCommitMaterial, drawn, gvmStateNames);
-        GvmDraw(gvmCommitRenderer, state);
-        for (int k = 0; k < gvmMeasureDraws; k++) GvmDraw(gvmCommitRenderer, state);
         GvmState(gvmOpsBlitMaterial, drawn, gvmStateNames);
+        // (gvmMergeWrite: the first round staged through the cores' write caches before the commit, its write drawn after
+        // the commit's points in the same render: a camera less a pass)
+        int merged = gvmMergeWrite ? 1 : 0;
+        if (merged == 1)
+        {
+            gvmOpsBlitMaterial.SetTexture("_OpState", gvmOps[gvmOpsCur]);
+            VRCGraphics.Blit(blackTexture, gvmPlan, gvmOpsBlitMaterial, 0);
+            VRCGraphics.Blit(blackTexture, gvmStage, gvmOpsBlitMaterial, gvmMergeStage);
+            gvmWriteRenderer.enabled = true;
+        }
+        GvmDraw(gvmCommitRenderer, state);
+        if (merged == 1)
+        {
+            gvmWriteRenderer.enabled = false;
+            gvmOpsCur ^= 1;
+            VRCGraphics.Blit(blackTexture, gvmOps[gvmOpsCur], gvmOpsBlitMaterial, 2);
+        }
+        for (int k = 0; k < gvmMeasureDraws; k++) GvmDraw(gvmCommitRenderer, state);
         // more rounds only while operations were queued lately (texel 12 of the readback): a round is a camera's render,
         // and a core waiting on its copy loses a whole pass
         // (gvmIdleEvery: an operation queued while idle waits up to that many passes, until the readback says so)
         int opRounds = gvmTwoRounds ? 2 : Time.frameCount - gvmOpsSeen < 4 ? gvmBusyRounds : last || (i + 1) % Math.Max(1, gvmIdleEvery) == 0 ? 1 : 0;
-        for (int oc = 0; oc < opRounds; oc++)
+        for (int oc = merged; oc < opRounds; oc++)
         {
             // only the write scatters, a camera's render; the plan, the stage and the progress are blits
             gvmOpsBlitMaterial.SetTexture("_OpState", gvmOps[gvmOpsCur]);

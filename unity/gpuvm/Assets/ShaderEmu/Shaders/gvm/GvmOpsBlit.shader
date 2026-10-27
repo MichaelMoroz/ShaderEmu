@@ -88,5 +88,66 @@ Shader "ShaderEmu/GvmOpsBlit"
             }
             ENDCG
         }
+        Pass   // 4: the stage before the commit (one render for the commit and the write): what the asking core stored this
+               // pass is still in its write cache, so its texels are read through it, the sources and a destination's
+               // own old bytes (a texel no two cores store to in a pass: the commit's rule)
+        {
+            CGPROGRAM
+            #pragma vertex blit_vert
+            #pragma fragment blit_frag
+            uint4 wc_over(uint t, uint c, uint4 v) {   // texel t as core c's write cache has it, over v
+                core = c;
+                uint b[3] = { wc_b1(t), wc_b2(t), WCS >> 2 };
+                [unroll] for (uint k = 0; k < 3; k++) {
+                    uint4 tg = state_any(T_WC + WCN + b[k], c);
+                    [unroll] for (uint w = 0; w < 4; w++) {
+                        uint g = pick(tg, w), e = 4 * b[k] + w;
+                        [branch] if (g != NONE && (g & 0x0fffffffu) == t && e < WCN) {
+                            uint4 d = state_any(T_WC + e, c);
+                            [unroll] for (uint i = 0; i < 4; i++) v = ((g >> (28 + i)) & 1) != 0 ? put(v, i, pick(d, i)) : v;
+                        }
+                    }
+                }
+                return v;
+            }
+            uint4 texel_of(uint ad, uint c) { uint4 v = data_texel(ad); return (ad & GVM_ROM) != 0 ? v : wc_over(ad >> 4, c, v); }
+            uint byte_of(uint a, uint c) { return (pick_ad(texel_of(a, c), a) >> ((a & 3) * 8)) & 0xffu; }
+            uint4 blit_frag(b2f i) : SV_Target {
+                uint2 px = uint2(i.vertex.xy);
+                uint c = px.y / OP_SLOTS, s = px.y % OP_SLOTS;
+                [branch] if (c >= _NCores) return 0;
+                uint4 j1 = _Plan.Load(int3(2 * s + 1, c, 0));
+                [branch] if (j1.z == 0) return 0;
+                uint4 j0 = _Plan.Load(int3(2 * s, c, 0));
+                [branch] if (px.x >= ((j0.y - 1) >> 4) - (j0.x >> 4) + 1) return 0;
+                // (op_stage_frag with the core's reads)
+                uint d0 = j0.x, d1 = j0.y, s0 = j0.z, t = (d0 >> 4) + px.x, k;
+                uint lo = max(d0, t * 16) - t * 16, hi = min(d1, t * 16 + 16) - t * 16, sa = s0 + (t * 16 - d0);
+                uint4 old = lo != 0 || hi != 16 ? wc_over(t, c, ram(t)) : 0, nv = j1.x;
+                [branch] if (j0.w != GVM_OP_FILL) {
+                    [branch] if (j1.y != 0) {
+                        [loop] for (k = 0; k < 16; k++) {
+                            uint b = t * 16 + k - d0, v = byte_of(s0 + b % j1.y, c);
+                            nv = put(nv, k >> 2, (pick(nv, k >> 2) & ~(0xffu << (8 * (k & 3)))) | (v << (8 * (k & 3))));
+                        }
+                    } else {
+                        uint4 a = texel_of(sa, c), bb = texel_of(sa + 16, c);
+                        uint w[8] = { a.x, a.y, a.z, a.w, bb.x, bb.y, bb.z, bb.w };
+                        uint o = sa & 15, sh = (o & 3) * 8;
+                        [unroll] for (k = 0; k < 4; k++) {
+                            uint x = w[(o >> 2) + k], y = w[(o >> 2) + k + 1];
+                            nv = put(nv, k, sh != 0 ? (x >> sh) | (y << (32 - sh)) : x);
+                        }
+                    }
+                }
+                [unroll] for (k = 0; k < 4; k++) {
+                    uint l = clamp((int)lo - 4 * (int)k, 0, 4), h = clamp((int)hi - 4 * (int)k, 0, 4);
+                    uint m = (h >= 4 ? 0xffffffffu : (1u << (8 * h)) - 1) & ~(l >= 4 ? 0xffffffffu : (1u << (8 * l)) - 1);
+                    old = put(old, k, pick(old, k) ^ ((pick(old, k) ^ pick(nv, k)) & m));
+                }
+                return old;
+            }
+            ENDCG
+        }
     }
 }

@@ -183,6 +183,9 @@ public static partial class ShaderEmuBuilder
         machine.gvmProgRenderer = PassMesh(device, "GvmProg", PointsLayer, GvmMesh("GvmProgPoints", MachineCores, MeshTopology.Points), machine.gvmProgMaterial);
         foreach (MeshRenderer r in new[] { machine.gvmCommitRenderer, machine.gvmStageRenderer, machine.gvmWriteRenderer, machine.gvmProgRenderer })
             r.enabled = false;
+        // (gvmMergeWrite draws the write in the commit's render: after the commit's points)
+        machine.gvmWriteMaterial.renderQueue = machine.gvmCommitMaterial.renderQueue + 1;
+        machine.gvmWriteRenderer.sortingOrder = 1;
         // a pass renders four times: nothing for the cameras to cull or light but the one mesh
         foreach (MeshRenderer r in new[] { machine.gvmCommitRenderer, machine.gvmStageRenderer, machine.gvmWriteRenderer, machine.gvmProgRenderer,
                                            tickMesh.GetComponent<MeshRenderer>() })
