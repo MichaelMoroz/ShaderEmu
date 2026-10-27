@@ -1931,7 +1931,11 @@ int main(int argc, char** argv) {
             ++timeSamples;
         }
         {
-            uint32_t passes = 1;
+            // every pass every frame, as a world draws them (Unity's _GpuPasses 0xff): a list that asked for a pass the
+            // host drew only after a readback saw it waited submitted for it, and the machine with it, three frames
+            // (gpu_vm's Doom, 27 October 2026). RVC_PASS_LIFE=1: the passes seen lately only
+            static const bool passLife = getenv("RVC_PASS_LIFE") && atoi(getenv("RVC_PASS_LIFE")) != 0;
+            uint32_t passes = passLife ? 1u : 0xffu;
             for (int p = 1; p < 8; ++p)
                 if (gpuPassLife[p] > 0) {
                     --gpuPassLife[p];
