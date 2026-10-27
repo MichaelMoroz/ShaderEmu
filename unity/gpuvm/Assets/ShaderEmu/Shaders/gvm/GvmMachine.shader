@@ -308,5 +308,31 @@ Shader "ShaderEmu/GvmMachine"
             uint4 frag(blit_v2f i) : SV_Target { return 0; }
             ENDCG
         }
+
+        Pass
+        {
+            // 9: state texture _GvmTarget of a set from a world snapshot (gvm_cpu --save-world; ShaderEmuGvm.cs): core c's
+            // texel T (40 a core) is texel 40 c + T of the four lanes; core c's pixel j at (slot * 8 + j / BH, band * 16 +
+            // j % BH), its band c / 128, slot c % 128, texel T = 8 j + _GvmTarget (InitState's order). The write cache's
+            // texels (40 on) are empty, as after a commit
+            Name "SnapState"
+            CGPROGRAM
+            #pragma target 5.0
+            #pragma vertex blit_vert
+            #pragma fragment frag
+            Texture2D<float4> _GvmSnapR, _GvmSnapG, _GvmSnapB, _GvmSnapA;
+            uniform uint _GvmTarget, _GvmBH, _GvmSnapCores;
+            uint4 frag(blit_v2f i) : SV_Target {
+                uint2 p = (uint2)i.vertex.xy, d;
+                uint jy = p.y % 16, c = (p.y / 16) * 128 + p.x / 8;
+                if (jy >= _GvmBH || c >= _GvmSnapCores) return 0;
+                uint T = ((p.x % 8) * _GvmBH + jy) * 8 + _GvmTarget;
+                if (T >= 40) return 0;
+                _GvmSnapR.GetDimensions(d.x, d.y);
+                uint t = c * 40 + T;
+                return uint4(lane_word(_GvmSnapR, t, d), lane_word(_GvmSnapG, t, d), lane_word(_GvmSnapB, t, d), lane_word(_GvmSnapA, t, d));
+            }
+            ENDCG
+        }
     }
 }

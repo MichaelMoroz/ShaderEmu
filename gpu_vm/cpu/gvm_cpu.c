@@ -518,6 +518,49 @@ static int stdin_ready(uint8_t *buf, int max) {
 #endif
 }
 
+// --save-world FILE --save-at TEXT: the machine where the console says TEXT, for the world to start from instead of
+// booting (ShaderEmuGvm.cs, "GPU-VM: import a world snapshot"): a header, RAM from address 0, and each core's 40 state
+// texels as the tick keeps them (texels 0-15 the registers, 16 pc, status, epc, cause, 17 tval, tvec, scratch, ien,
+// 18 the timer's compare, the flags, the seed, 19 the counters and why the pass ended, 20-21 the latched descriptor, 22
+// the queue's count, head, generation and refusals, 23 no parked start, 24-39 the queue). Taken after a commit with
+// every core's queue empty (a pass later if one is not), so the write caches are empty and no copy is in flight.
+static const char *ws_path, *ws_at;
+static char ws_tail[256];
+static int ws_hit;
+static int world_snap(void) {
+    for (uint32_t c = 0; c < H.ncores; c++) if (H.cores[c].nops) return 0;
+    FILE *f = fopen(ws_path, "wb");
+    if (!f) { fprintf(stderr, "gvm_cpu: --save-world: cannot write %s\n", ws_path); H.exit_code = EXIT_USAGE; return 1; }
+    uint32_t *ram = H.m.ram;
+    struct { char magic[8]; uint32_t ram_end, ncores, workers, ntex; uint64_t time, passes; uint32_t delivered, last, written, pad; } h = {
+        {'G', 'V', 'M', 'W', 'O', 'R', 'L', 'D'}, H.m.ram_end, H.ncores, H.workers, 40, H.m.time + H.pass_time, H.passes,
+        ram[CON_DELIVERED >> 2], ram[CON_LAST >> 2], ram[CON_WRITTEN >> 2], 0};
+    fwrite(&h, sizeof h, 1, f);
+    fwrite(ram, 1, H.m.ram_end, f);
+    for (uint32_t c = 0; c < H.ncores; c++) {
+        gvm_core *k = &H.cores[c];
+        uint32_t s[40][4], *sr = k->sr, e = H.end[c];
+        memset(s, 0, sizeof s);
+        memcpy(s, k->x, sizeof k->x);
+        s[0][0] = 0;
+        uint32_t endr = e == GVM_END_SYNC || e == GVM_END_PARKED ? 1 : e == GVM_END_WAIT ? 2 : e == GVM_END_FULL ? 3 : e == GVM_END_HALT ? 5 : 0;
+        uint32_t t16[4] = {k->pc, sr[GVM_SR_STATUS], sr[GVM_SR_EPC], sr[GVM_SR_CAUSE]};
+        uint32_t t17[4] = {sr[GVM_SR_TVAL], sr[GVM_SR_TVEC], sr[GVM_SR_SCRATCH], sr[GVM_SR_IEN]};
+        uint32_t t18[4] = {sr[GVM_SR_TCMP_LO], sr[GVM_SR_TCMP_HI], (k->waiting ? 1u : 0) | (k->soft ? 2u : 0) | (k->halted ? 4u : 0), k->rnd};
+        uint32_t t19[4] = {(uint32_t)k->bundles_run, (uint32_t)k->ops_run, 0, endr};
+        uint32_t t22[4] = {0, 0, 1, k->refused};   // (the queue empty; generation 1, which no progress texel of 0 matches)
+        memcpy(s[16], t16, 16), memcpy(s[17], t17, 16), memcpy(s[18], t18, 16), memcpy(s[19], t19, 16);
+        memcpy(s[20], k->op, 16), memcpy(s[21], k->op + 4, 16), memcpy(s[22], t22, 16);
+        memset(s[23], 0xff, 16);
+        fwrite(s, 16, 40, f);
+    }
+    fclose(f);
+    fflush(stdout);
+    fprintf(stderr, "gvm_cpu: world snapshot to %s at pass %llu, time %llu, %u workers\n", ws_path,
+            (unsigned long long)H.passes, (unsigned long long)h.time, H.workers);
+    return 1;
+}
+
 static void console_poll(void) {
     uint32_t *ram = H.m.ram, written = ram[CON_WRITTEN >> 2];
     if (written != H.con_printed) {
@@ -530,6 +573,12 @@ static void console_poll(void) {
             uint32_t a = CON_RING + (H.con_printed & 255);
             int ch = (int)(ram[a >> 2] >> ((a & 3) * 8)) & 255;
             fputc(ch, stdout);
+            if (ws_at && !ws_hit) {   // (--save-at)
+                size_t k = strlen(ws_tail);
+                if (k + 1 >= sizeof ws_tail) { memmove(ws_tail, ws_tail + 128, k - 128 + 1); k -= 128; }
+                ws_tail[k] = (char)ch; ws_tail[k + 1] = 0;
+                ws_hit = strstr(ws_tail, ws_at) != NULL;
+            }
             if (H.prof_at || H.prof_until || H.race_at || H.race_until) {
                 size_t k = strlen(H.con_tail);
                 if (k + 1 >= sizeof H.con_tail) { memmove(H.con_tail, H.con_tail + 64, k - 64 + 1); k -= 64; }
@@ -1093,6 +1142,8 @@ int main(int argc, char **argv) {
         else if (!strcmp(a, "--profile-at") && more) H.prof_at = argv[++i], H.prof_from = ~0ull;
         else if (!strcmp(a, "--profile-until") && more) H.prof_until = argv[++i];
         else if (!strcmp(a, "--max-bundles") && more) H.max_bundles = strtoull(argv[++i], NULL, 0);
+        else if (!strcmp(a, "--save-world") && more) ws_path = argv[++i];
+        else if (!strcmp(a, "--save-at") && more) ws_at = argv[++i];
         else if (!strcmp(a, "--")) { i++; break; }
         else if (a[0] == '-' && a[1] == '-') { fprintf(stderr, "gvm_cpu: unknown option %s\n", a); usage(); }
         else break;
@@ -1226,6 +1277,7 @@ int main(int argc, char **argv) {
         if (H.console) console_poll();
         workers_pass();
         if (H.devices) devices_pass();
+        if (ws_hit && ws_path && world_snap()) break;
         if (!running) {   // every core halted with no exit: a break with GVM_REF_BREAK_HALTS, say
             fprintf(stderr, "gvm_cpu: every core halted\n");
             H.exit_code = EXIT_TRAP;

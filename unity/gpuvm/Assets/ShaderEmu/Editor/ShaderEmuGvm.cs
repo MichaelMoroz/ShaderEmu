@@ -33,20 +33,63 @@ public static partial class ShaderEmuBuilder
     static void GvmLanes(string part, string path)
     {
         byte[] bin = File.ReadAllBytes(path);
-        int texels = (bin.Length + 15) / 16, width = 2048, height = Mathf.Max((texels + width - 1) / width, 1);
+        GvmLanes("gvm", part, bin, 0, bin.Length);
+    }
+
+    static void GvmLanes(string name, string part, byte[] bin, int from, int bytes)
+    {
+        int texels = (bytes + 15) / 16, width = 2048, height = Mathf.Max((texels + width - 1) / width, 1);
         for (int lane = 0; lane < 4; lane++)
         {
             byte[] raw = new byte[width * height * 4];
             for (int t = 0; t < texels; t++)
             {
                 int at = ((height - 1 - t / width) * width + t % width) * 4, src = t * 16 + lane * 4;
-                for (int k = 0; k < 4 && src + k < bin.Length; k++) raw[at + k] = bin[src + k];
+                for (int k = 0; k < 4 && src + k < bytes; k++) raw[at + k] = bin[from + src + k];
             }
             Texture2D tex = new Texture2D(width, height, TextureFormat.RGBA32, false, true);
             tex.LoadRawTextureData(raw);
-            File.WriteAllBytes(ShaderEmuImages.LanePath("gvm", part, lane), tex.EncodeToPNG());
+            File.WriteAllBytes(ShaderEmuImages.LanePath(name, part, lane), tex.EncodeToPNG());
             Object.DestroyImmediate(tex);
         }
+    }
+
+    // A world snapshot (gvm_cpu --save-world FILE --save-at TEXT, of the boot image's own ROM and kernel), at
+    // EditorPrefs ShaderEmu.GvmSnapshot: the machine starts from it at power-on instead of booting. Its header (56 bytes:
+    // "GVMWORLD", RAM's end, cores, workers, texels a core, TIME, passes, the console's delivered, last and written),
+    // RAM from address 0, each core's 40 state texels. "GPU-VM: build the machine" makes it boot again.
+    [MenuItem("ShaderEmu/GPU-VM: import a world snapshot")]
+    public static void GvmImportSnapshot()
+    {
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        string path = EditorPrefs.GetString("ShaderEmu.GvmSnapshot", "");
+        byte[] bin = File.ReadAllBytes(path);
+        if (System.Text.Encoding.ASCII.GetString(bin, 0, 8) != "GVMWORLD") throw new System.Exception(path + ": not a world snapshot");
+        int ramEnd = System.BitConverter.ToInt32(bin, 8), cores = System.BitConverter.ToInt32(bin, 12);
+        int workers = System.BitConverter.ToInt32(bin, 16), ntex = System.BitConverter.ToInt32(bin, 20);
+        long time = System.BitConverter.ToInt64(bin, 24);
+        int delivered = System.BitConverter.ToInt32(bin, 40), last = System.BitConverter.ToInt32(bin, 44);
+        if (ntex != 40 || bin.Length != 56 + ramEnd + cores * 40 * 16) throw new System.Exception(path + ": its size is not its header's");
+        Directory.CreateDirectory(ShaderEmuImages.ImageFolder);
+        GvmLanes("gvmsnap", "ram", bin, 56, ramEnd);
+        GvmLanes("gvmsnap", "cores", bin, 56 + ramEnd, cores * 40 * 16);
+        AssetDatabase.Refresh();
+        EmuMachine machine = GameObject.Find("ShaderEmu").transform.GetComponentInChildren<EmuMachine>(true);
+        UdonSharpEditorUtility.CopyUdonToProxy(machine);
+        machine.gvmSnapLanes = new Texture2D[4];
+        for (int lane = 0; lane < 4; lane++)
+        {
+            machine.imageTextures[lane] = AssetDatabase.LoadAssetAtPath<Texture2D>(ShaderEmuImages.LanePath("gvmsnap", "ram", lane));
+            machine.gvmSnapLanes[lane] = AssetDatabase.LoadAssetAtPath<Texture2D>(ShaderEmuImages.LanePath("gvmsnap", "cores", lane));
+        }
+        machine.gvmSnapCores = cores;
+        machine.gvmSnapWorkers = workers;
+        machine.gvmSnapTime = time;
+        machine.gvmSnapDelivered = delivered;
+        machine.gvmSnapLast = last;
+        Apply(machine);
+        UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(machine.gameObject.scene);
+        Debug.Log("[GVM] world snapshot " + path + ": " + cores + " cores, " + workers + " workers, TIME " + time + ", RAM to " + ramEnd.ToString("x8") + ", in " + watch.Elapsed.TotalSeconds.ToString("F1") + " s");
     }
 
     // The RISC-V machine's materials keep its image in saved texture slots no GPU-VM shader reads: dropped, or the
@@ -210,6 +253,8 @@ public static partial class ShaderEmuBuilder
             machine.imageTextures[lane] = AssetDatabase.LoadAssetAtPath<Texture2D>(ShaderEmuImages.LanePath("gvm", "ram", lane));
             machine.imageTextures[4 + lane] = AssetDatabase.LoadAssetAtPath<Texture2D>(ShaderEmuImages.LanePath("gvm", "rom", lane));
         }
+        machine.gvmSnapCores = 0;   // (a boot: "GPU-VM: import a world snapshot" starts from one)
+        machine.gvmSnapLanes = null;
         // a pass is 4,096 bundles (the harness's default), 64k a frame: 16 rounds
         if (machine.tickSlider != null) { machine.tickSlider.value = 2; EditorUtility.SetDirty(machine.tickSlider); }
         if (machine.speedSlider != null) { machine.speedSlider.value = 5; EditorUtility.SetDirty(machine.speedSlider); }

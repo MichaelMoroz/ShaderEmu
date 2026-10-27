@@ -85,6 +85,12 @@ public class EmuMachine : UdonSharpBehaviour
     public RenderTexture gvmPlan;             // each core's and slot's piece of the round, two texels a slot
     public int gvmEntry = 0x02000000, gvmRamMB = 192;   // the kernel's entry and RAM (unity_boot.txt)
     public int gvmBlockH = 4, gvmStateTexels = 203;    // a core's block rows and state texels (tick.cginc's GEO_BH, NTEX)
+    // A world snapshot to start from instead of booting (gvm_cpu --save-world; ShaderEmuGvm.cs, "GPU-VM: import a world
+    // snapshot"): its RAM is the boot image's RAM, its cores' 40 state texels these four lanes; 0 cores: a boot
+    public int gvmSnapCores, gvmSnapWorkers;
+    public double gvmSnapTime;                 // TIME at the snapshot's next pass (100 kHz): the clock goes on from it
+    public int gvmSnapDelivered, gvmSnapLast;  // the console's input: characters delivered so far, the last delivery
+    public Texture2D[] gvmSnapLanes;
 
     // Pages for the guest's browser (docs/system/fetch.md). A world can only load the addresses it
     // was built with, and the one a visitor types into the field on the panel.
@@ -497,6 +503,21 @@ public class EmuMachine : UdonSharpBehaviour
             VRCGraphics.Blit(blackTexture, gvmSetA[t], machineMaterial, GvmInitState);
             VRCGraphics.Blit(blackTexture, gvmSetB[t], machineMaterial, GvmInitState);
         }
+        bool snap = GvmSnapshot();
+        if (snap)
+        {
+            machineMaterial.SetTexture("_GvmSnapR", gvmSnapLanes[0]);
+            machineMaterial.SetTexture("_GvmSnapG", gvmSnapLanes[1]);
+            machineMaterial.SetTexture("_GvmSnapB", gvmSnapLanes[2]);
+            machineMaterial.SetTexture("_GvmSnapA", gvmSnapLanes[3]);
+            machineMaterial.SetInt("_GvmSnapCores", gvmSnapCores);
+            for (int t = 0; t < 8; t++)
+            {
+                machineMaterial.SetInt("_GvmTarget", t);
+                VRCGraphics.Blit(blackTexture, gvmSetA[t], machineMaterial, GvmSnapState);
+                VRCGraphics.Blit(blackTexture, gvmSetB[t], machineMaterial, GvmSnapState);
+            }
+        }
         VRCGraphics.Blit(blackTexture, gvmOps[0], machineMaterial, GvmZero);
         VRCGraphics.Blit(blackTexture, gvmOps[1], machineMaterial, GvmZero);
         gvmOpsCur = 0;
@@ -504,7 +525,9 @@ public class EmuMachine : UdonSharpBehaviour
         gvmCur = 0;
         gvmTime = 0;
         gvmPasses = 0;
-        gvmWorkers = 0;
+        // (a snapshot's workers are its own: GvmLayout starting them again would lose their state; its clock goes on)
+        gvmWorkers = snap ? gvmSnapWorkers : 0;
+        gvmTimeBase = snap ? gvmSnapTime - (double)Time.timeSinceLevelLoad * 100000.0 : 0;
         GvmUniforms();
         for (int i = 0; i < 8; i++)
         {
@@ -558,7 +581,11 @@ public class EmuMachine : UdonSharpBehaviour
     private const int GvmInitRam = 0, GvmInitRom = 1, GvmInitState = 2, GvmWorkersPass = 3, GvmControl = 4, GvmZoneBack = 5;
     private const int GvmCtlCopy = 6, GvmReadback = 7, GvmZero = 8;
     private const int GvmNone = 8192;   // no second zone in the control pass's row
+    private const int GvmSnapState = 9;
     private int gvmCur, gvmWorkers;     // the set the next pass draws; the worker cores the kernel laid out
+    private double gvmTimeBase;         // added to the wall: a snapshot's clock goes on from its own time
+
+    private bool GvmSnapshot() { return gvmSnapCores > 0 && gvmSnapLanes != null && gvmSnapLanes.Length == 4; }
     private int gvmOpsCur, gvmOpsSeen;  // the progress texture the next round reads; the frame operations were last queued
     private double gvmTime;             // TIME, 100 kHz
     private uint gvmPasses;
@@ -766,6 +793,14 @@ public class EmuMachine : UdonSharpBehaviour
         machineMaterial.SetInt("_UartInLo", 0);
         machineMaterial.SetInt("_UartInHi", 0);
         machineMaterial.SetInt("_UdonUARTInTag", 0);
+        if (GvmSnapshot())
+        {
+            // (the console's input counts go on from the snapshot's: a delivered count gone back is input to the guest)
+            sentTag = consumedTag = (uint)gvmSnapDelivered;
+            machineMaterial.SetInt("_UartInLo", gvmSnapLast & 0xffff);
+            machineMaterial.SetInt("_UartInHi", (gvmSnapLast >> 16) & 0xffff);
+            machineMaterial.SetInt("_UdonUARTInTag", gvmSnapDelivered);
+        }
         machineMaterial.SetInt("_InputKeyCount", 0);
         // the host flags: the desktop at boot, and the largest screen the GPU's target can show
         // (in 16s of pixels: the word must stay within what a material's number holds exactly)
@@ -1481,7 +1516,7 @@ public class EmuMachine : UdonSharpBehaviour
         machineMaterial.SetInt("_SoundMixed", 0);
         // gpu_vm's frame (gvm_backend11.cpp's frame): n passes, each read back into its row of the readback (the
         // console's ring and the control words as it left them), then the devices once
-        double wall = (double)Time.timeSinceLevelLoad * 100000.0;
+        double wall = (double)Time.timeSinceLevelLoad * 100000.0 + gvmTimeBase;
         for (int i = 0; i < n; i++)
         {
             GvmPass(wall, i, i == n - 1);
