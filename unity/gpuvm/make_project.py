@@ -137,6 +137,9 @@ def main():
     se = os.path.join(p, "Assets", "ShaderEmu")
     if a.world:
         tree(WORLD, se, skip_meta=False)
+        scenes = os.path.join(p, "Assets", "Scenes")   # "Build world" starts from VCC's default scene
+        if not os.path.exists(scenes) and a.sdk_from:
+            shutil.copytree(os.path.join(a.sdk_from, "Assets", "Scenes"), scenes)
         subprocess.check_call([sys.executable, os.path.join(REPO, "world", "install_packages.py"), p])
     tree(os.path.join(WORLD, "Scripts"), os.path.join(se, "Scripts"))
     for f in SHADERS:
