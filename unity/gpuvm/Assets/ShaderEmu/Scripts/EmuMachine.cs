@@ -80,6 +80,8 @@ public class EmuMachine : UdonSharpBehaviour
     public Material gvmCommitBlitMaterial;    // GvmCommitBlit: the commit and the merged write as blits
     public bool gvmCommitBlits;               // the commit (and with gvmMergeWrite the first write) as blits, no camera
     public bool gvmCommitBoth;                // (a check: the camera's commit, then the blits' over it)
+    public Material gpuBlitMaterial;          // GvmGpuDrawBlit: the GPU's 8 passes as blits into its target
+    public bool gvmGpuBlits;                  // the GPU's lists drawn by those blits, no camera (off: step 2 item 4)
     public Material gvmTick0Material;         // core 0's tick when the step has CORE0 (GvmTick0), else none
     public Material gvmOpsBlitMaterial;       // a round's plan, stage and progress as blits (GvmOpsBlit)
     public RenderTexture gvmPlan;             // each core's and slot's piece of the round, two texels a slot
@@ -570,6 +572,7 @@ public class EmuMachine : UdonSharpBehaviour
         gvmWritebackMaterial.SetTexture("_GpuTarget", gpuCamera.targetTexture);
         gpuMaterial.SetTexture("_State", state);
         gpuMaterial.SetTexture("_GvmRom", gvmRom);
+        if (gpuBlitMaterial != null) gpuBlitMaterial.SetTexture("_GvmRom", gvmRom);
         if (volumeMaterial != null) volumeMaterial.SetTexture("_GvmRom", gvmRom);   // the holodeck reads the same lists
         if (sound != null) sound.mixMaterial.SetTexture("_GvmRom", gvmRom);   // samples are played from where they lie in the ROM
         tickMaterial.SetInt("_Ticks", ticks);
@@ -730,8 +733,18 @@ public class EmuMachine : UdonSharpBehaviour
     {
         VRCGraphics.Blit(blackTexture, gvmCtl, machineMaterial, GvmCtlCopy);
         for (int c = 0; c < 4; c++) VRCGraphics.Blit(blackTexture, state, gvmWritebackMaterial, c);
-        gpuMaterial.SetTexture("_State", state);
-        gpuCamera.Render();
+        if (gvmGpuBlits && gpuBlitMaterial != null)
+        {
+            // the camera's depth clear (pass 8) and its 8 passes, a blit each into the GPU's target and its depth buffer
+            gpuBlitMaterial.SetTexture("_State", state);
+            VRCGraphics.Blit(blackTexture, gpuCamera.targetTexture, gpuBlitMaterial, 8);
+            for (int p = 0; p < 8; p++) VRCGraphics.Blit(blackTexture, gpuCamera.targetTexture, gpuBlitMaterial, p);
+        }
+        else
+        {
+            gpuMaterial.SetTexture("_State", state);
+            gpuCamera.Render();
+        }
         if (i == n - 1 && sound != null) sound.Mix(state, machineMaterial, soundEnabled, soundClock);
         HostClock(i, n);
         machineMaterial.SetTexture("_GvmS0", GvmSet(gvmCur ^ 1)[0]);
