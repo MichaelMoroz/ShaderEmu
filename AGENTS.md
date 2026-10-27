@@ -343,7 +343,10 @@
   they open is opened by core 0 (`FS_OpenInflated` through `SE_ServerOnCore0`), `SE_MediaWorkers` is 0 off core 0
   and while the rings hold the workers, and a model's sequence groups load with it (`SE_StudioGroupsLoad`): one first
   played on the drawing's worker froze hldemo1's first corridor (`docs/games/halflife.md`). A static both may write
-  is indexed by `SE_Who()`. A change to the game is also walked: `HL_SCRIPT` with `+forward`, turns and shots for
+  is indexed by `SE_Who()`, and what a worker writes lies in texels apart from what another core writes (`SE_APART`):
+  `world_ahead`, the loopback's `get` and `send` and `net_drop` shared texels and broke the card's connect only in
+  one link's layout (27 October 2026). gpu_vm's check: `gvm_cpu --card-budget` with `GVM_RACES` and `GVM_RACES_NEAR=4`
+  (GPU-VM `docs/REGRESSIONS.md`). A change to the game is also walked: `HL_SCRIPT` with `+forward`, turns and shots for
   1,200 s of the guest's on the desktop with `RVC_RACES` (standing in the fight never played a sequence group).
   A level that goes settles the server, the drawing and every job first (`SE_LevelSettle`), and off core 0 a group
   is loaded when its pointer is set (`Mod_CacheCheck` walked pools core 0 moves): a change to either is run through

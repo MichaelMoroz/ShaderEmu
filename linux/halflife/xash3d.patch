@@ -2864,7 +2864,21 @@ diff --git a/engine/common/net_chan.c b/engine/common/net_chan.c
 index bd54e905..e4dfdc6c 100644
 --- a/engine/common/net_chan.c
 +++ b/engine/common/net_chan.c
-@@ -535,13 +535,26 @@ static void Netchan_UpdateFlow( netchan_t *chan )
+@@ -98,7 +98,13 @@
+ CVAR_DEFINE_AUTO( net_send_debug, "0", FCVAR_PRIVILEGED, "enable debugging output for outgoing messages" );
+ CVAR_DEFINE_AUTO( net_recv_debug, "0", FCVAR_PRIVILEGED, "enable debugging output for incoming messages" );
+ 
++#if XASH_SHADEREMU
++// one a side (netchan.h): the server's frame on its worker reads its own in SV_ParseClientMove while the client's
++// Netchan_Process on the first core writes the client's
++struct se_net_drop_s se_net_drop[3];
++#else
+ int	net_drop;
++#endif
+ netadr_t	net_from;
+ sizebuf_t	net_message;
+ static poolhandle_t net_mempool;
+@@ -535,13 +541,26 @@ static void Netchan_UpdateFlow( netchan_t *chan )
  	{
  		flow_t	*pflow = &chan->flow[flow];
  
@@ -2891,7 +2905,7 @@ index bd54e905..e4dfdc6c 100644
  		for( int i = 0; i < MASK_LATENT; i++ )
  		{
  			flowstats_t *pprev = &pflow->stats[(start - i) & MASK_LATENT];
-@@ -550,6 +563,7 @@ static void Netchan_UpdateFlow( netchan_t *chan )
+@@ -550,6 +569,7 @@ static void Netchan_UpdateFlow( netchan_t *chan )
  			faccumulatedtime += ( pprev->time - pstat->time );
  			bytes += pstat->size;
  		}
@@ -2899,7 +2913,7 @@ index bd54e905..e4dfdc6c 100644
  
  		pflow->kbytespersec = (faccumulatedtime == 0.0f) ? 0.0f : bytes / faccumulatedtime / 1024.0f;
  		pflow->avgkbytespersec = pflow->avgkbytespersec * FLOW_AVG + pflow->kbytespersec * (1.0f - FLOW_AVG);
-@@ -1126,7 +1140,11 @@ qboolean Netchan_CopyNormalFragments( netchan_t *chan, sizebuf_t *msg, size_t *l
+@@ -1126,7 +1146,11 @@ qboolean Netchan_CopyNormalFragments( netchan_t *chan, sizebuf_t *msg, size_t *l
  
  	fragbuf_t *p = chan->incomingbufs[FRAG_NORMAL_STREAM];
  
@@ -2911,7 +2925,7 @@ index bd54e905..e4dfdc6c 100644
  
  	while( p )
  	{
-@@ -1212,7 +1230,11 @@ qboolean Netchan_CopyFileFragments( netchan_t *chan, sizebuf_t *msg )
+@@ -1212,7 +1236,11 @@ qboolean Netchan_CopyFileFragments( netchan_t *chan, sizebuf_t *msg )
  
  	fragbuf_t *p = chan->incomingbufs[FRAG_FILE_STREAM];
  
@@ -2923,7 +2937,7 @@ index bd54e905..e4dfdc6c 100644
  
  	// copy in first chunk so we can get filename out
  	MSG_WriteBytes( msg, MSG_GetData( &p->frag_message ), MSG_GetNumBytesWritten( &p->frag_message ));
-@@ -1670,7 +1692,11 @@ void Netchan_TransmitBits( netchan_t *chan, int length, const byte *data )
+@@ -1670,7 +1698,11 @@ void Netchan_TransmitBits( netchan_t *chan, int length, const byte *data )
  		}
  	}
  
@@ -2935,7 +2949,7 @@ index bd54e905..e4dfdc6c 100644
  	MSG_Init( &send, "NetSend", send_buf, sizeof( send_buf ));
  
  	// prepare the packet header
-@@ -1766,6 +1792,10 @@ void Netchan_TransmitBits( netchan_t *chan, int length, const byte *data )
+@@ -1766,6 +1798,10 @@ void Netchan_TransmitBits( netchan_t *chan, int length, const byte *data )
  		}
  	}
  
@@ -2989,6 +3003,23 @@ index 64bc35e7..6798546d 100644
  	int startBit = msg->iCurBit;
  
  	if( to->number < 0 || to->number >= GI->max_edicts )
+diff --git a/engine/common/netchan.h b/engine/common/netchan.h
+--- a/engine/common/netchan.h
++++ b/engine/common/netchan.h
+@@ -250,7 +250,13 @@
+ extern byte		net_message_buffer[NET_MAX_MESSAGE];
+ extern convar_t		sv_lan;
+ extern convar_t		sv_lan_rate;
++#if XASH_SHADEREMU
++#include "se_server.h"
++extern struct SE_APART se_net_drop_s { int v; } se_net_drop[3];
++#define net_drop se_net_drop[SE_Who()].v
++#else
+ extern int		net_drop;
++#endif
+ 
+ void Netchan_Init( void );
+ void Netchan_Shutdown( void );
 diff --git a/engine/common/net_ws.c b/engine/common/net_ws.c
 index d139dff7..e951cf7d 100644
 --- a/engine/common/net_ws.c
@@ -3003,7 +3034,19 @@ index d139dff7..e951cf7d 100644
  #include "client.h" // ConnectionProgress
  #include "netchan.h"
  #include "xash3d_mathlib.h"
-@@ -982,6 +985,15 @@ static qboolean NET_GetLoopPacket( netsrc_t sock, netadr_t *from, byte *data, si
+@@ -49,7 +52,11 @@
+ typedef struct
+ {
+ 	net_loopmsg_t	msgs[MAX_LOOPBACK];
++#if XASH_SHADEREMU	// (the reader's count and the writer's in texels of their own: the client on the first core, the server on its worker)
++	int		get SE_APART, send SE_APART;
++#else
+ 	int		get, send;
++#endif
+ } net_loopback_t;
+ 
+ typedef struct packetlag_s
+@@ -982,6 +989,15 @@ static qboolean NET_GetLoopPacket( netsrc_t sock, netadr_t *from, byte *data, si
  
  	net_loopback_t *loop = &net.loopbacks[sock];
  
@@ -3019,7 +3062,7 @@ index d139dff7..e951cf7d 100644
  	if( loop->send - loop->get > MAX_LOOPBACK )
  		loop->get = loop->send - MAX_LOOPBACK;
  
-@@ -1008,6 +1020,10 @@ static void NET_SendLoopPacket( netsrc_t sock, size_t length, const void *data,
+@@ -1008,6 +1024,10 @@ static void NET_SendLoopPacket( netsrc_t sock, size_t length, const void *data,
  {
  	net_loopback_t *loop = &net.loopbacks[sock^1];
  
@@ -3030,7 +3073,7 @@ index d139dff7..e951cf7d 100644
  	int i = loop->send & MASK_LOOPBACK;
  	loop->send++;
  
-@@ -1416,6 +1432,10 @@ qboolean NET_GetPacket( netsrc_t sock, netadr_t *from, byte *data, size_t *lengt
+@@ -1416,6 +1436,10 @@ qboolean NET_GetPacket( netsrc_t sock, netadr_t *from, byte *data, size_t *lengt
  	if( !data || !length )
  		return false;
  
@@ -3751,13 +3794,13 @@ index 3ff8edbf..9deb3786 100644
 +}
 +
 +void SE_WorldAhead( void );
-+extern volatile int se_ahead_done;
++extern volatile struct __attribute__(( aligned( 16 ))) se_ahead_s { int done; } se_ahead;
 +uint32_t SE_PackJob( uint32_t part, uint32_t unused )
 +{
 +	if( !part )
 +	{
 +		SE_WorldAhead();	// (until the server asks for the packet)
-+		se_ahead_done = 1;
++		se_ahead.done = 1;
 +	}
 +	while( !se_pack_ask[part].go )
 +		END_PASS( );
@@ -3777,7 +3820,7 @@ index 3ff8edbf..9deb3786 100644
 +	se_pack_ask[part].done = 1;
 +	return 0;
 +}
-+void SE_PackReset( void ) { for( int i = 0; i < SE_PACKERS; i++ ) se_pack_ask[i].go = se_pack_ask[i].done = 0; se_ahead_done = 0; }	// (the first core's, before posting them)
++void SE_PackReset( void ) { for( int i = 0; i < SE_PACKERS; i++ ) se_pack_ask[i].go = se_pack_ask[i].done = 0; se_ahead.done = 0; }	// (the first core's, before posting them)
 +void SE_PackTouch( void ) { memset( se_pack_out, 0, sizeof( se_pack_out )); }	// (the first core's, once)
 +void SE_PackFrameEnd( void ) { for( int i = 0; i < SE_PACKERS; i++ ) if( !se_pack_ask[i].go ) se_pack_ask[i].go = 2; }	// (the server's)
 +int SE_Packers( void ) { return SE_PACKERS; }
@@ -4468,7 +4511,7 @@ index dbbb19ad..f05a19ac 100644
  
  		if( !SV_ClipToEntity( touch, clip ))
  			return; // trace.allsoild
-@@ -1293,11 +1344,71 @@ static void SV_ClipToWorldBrush( areanode_t *node, moveclip_t *clip )
+@@ -1293,11 +1344,72 @@ static void SV_ClipToWorldBrush( areanode_t *node, moveclip_t *clip )
  SV_Move
  ==================
  */
@@ -4479,9 +4522,10 @@ index dbbb19ad..f05a19ac 100644
 +static struct { uint32_t key[12]; trace_t trace; } world_kept[WORLD_KEPT];
 +static int world_kept_for = -1;
 +unsigned se_world_kept_hits, se_world_kept_misses;
-+static struct { uint32_t key[12]; trace_t trace; } world_ahead[WORLD_KEPT];
-+static int world_ahead_for = -1;
-+volatile int se_ahead_done;
++// (the first packer's, in texels of their own: SV_LinkEdict's statics beside lost words to the whole-texel commit)
++static struct __attribute__(( aligned( 16 ))) { uint32_t key[12]; trace_t trace; } world_ahead[WORLD_KEPT];
++static struct __attribute__(( aligned( 16 ))) { int v; } world_ahead_for = { -1 };
++volatile struct __attribute__(( aligned( 16 ))) se_ahead_s { int done; } se_ahead;
 +static void SE_ClipWorld( const vec3_t start, vec3_t mins, vec3_t maxs, const vec3_t end, trace_t *trace )
 +{
 +	uint32_t key[12], h = 0;
@@ -4500,7 +4544,7 @@ index dbbb19ad..f05a19ac 100644
 +		*trace = world_kept[h].trace, se_world_kept_hits++;
 +		return;
 +	}
-+	if( se_ahead_done && !memcmp( world_ahead[h].key, key, sizeof( key )))
++	if( se_ahead.done && !memcmp( world_ahead[h].key, key, sizeof( key )))
 +	{
 +		*trace = world_ahead[h].trace, se_world_kept_hits++;
 +		memcpy( world_kept[h].key, key, sizeof( key )), world_kept[h].trace = *trace;
@@ -4517,11 +4561,11 @@ index dbbb19ad..f05a19ac 100644
 +	memcpy( key, start, 12 ), memcpy( key + 3, mins, 12 ), memcpy( key + 6, maxs, 12 ), memcpy( key + 9, end, 12 );
 +	for( int i = 0; i < 12; i++ )
 +		h = ( h ^ key[i] ) * 0x9e3779b1u;
-+	if( world_ahead_for != svs.spawncount )
++	if( world_ahead_for.v != svs.spawncount )
 +	{
 +		for( int i = 0; i < WORLD_KEPT; i++ )
 +			world_ahead[i].key[0] = 0xffffffffu;
-+		world_ahead_for = svs.spawncount;
++		world_ahead_for.v = svs.spawncount;
 +	}
 +	h >>= 26;
 +	SV_ClipMoveToEntity( SV_EdictNum( 0 ), start, mins, maxs, end, &world_ahead[h].trace );
@@ -4541,7 +4585,7 @@ index dbbb19ad..f05a19ac 100644
  
  	if( clip.trace.fraction != 0.0f )
  	{
-@@ -1351,7 +1462,7 @@ trace_t GAME_EXPORT SV_MoveNoEnts( const vec3_t start, vec3_t mins, vec3_t maxs,
+@@ -1351,7 +1463,7 @@ trace_t GAME_EXPORT SV_MoveNoEnts( const vec3_t start, vec3_t mins, vec3_t maxs,
  	moveclip_t	clip;
  
  	memset( &clip, 0, sizeof( moveclip_t ));
@@ -4783,7 +4827,7 @@ index 302c3238..f988b944 100644
  
  	return FS_OpenHandle( search, search->pack->handle->handle, pfile->filepos, pfile->filelen );
  }
-@@ -249,9 +331,16 @@ FS_Search_PAK
+@@ -249,9 +343,16 @@ FS_Search_PAK
  static void FS_Search_PAK( searchpath_t *search, stringlist_t *list, const char *pattern, int caseinsensitive )
  {
  	string temp;
