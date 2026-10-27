@@ -231,6 +231,8 @@ struct Options {
     int computeSplit = -1;    // --compute-split F: of them the first F always run, a core's at most --ticks over F (-1: 2 for the fast shader)
     bool ticksSet = false;
     int tickRounds = 1;       // --tick-rounds N: the tick and its commit N times a frame (the fragment machine)
+    double unityMs = 0, unityOverMs = 1.4;   // --unity F[,U[,R]]: a world's frame of F ms, U of them Unity's own (below)
+    double unityRoundMs = 0;  // R: Unity's CPU a round (its cameras and blits), which the card's time a round cannot go under
     int tickSplit = 0;        // --tick-split F: of them the first F always run (0: all), the rest while core 0 rests    // --ticks was given (--compute's fast shader then takes 8192 a pass of its split)
     bool noGpu = false;       // --no-gpu: leave out the GPU device's passes (gpu.shader)
     bool noSound = false;     // --no-sound: leave out the sound card (sound.shader)
@@ -340,6 +342,9 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
   --compute-cores N    with --compute: core 0 and N - 1 workers (256; plain has core 0 alone)
   --compute-passes N   with --compute: the processor's passes a frame at most, before the devices' (fast: 4, plain: 1)
   --tick-rounds N      the tick and its commit N times a frame before the devices' passes (1)
+  --unity F[,U[,R]]    run as a world does: the guest's clock F ms a frame, and each frame as many rounds as fit
+                       F - U ms on the card (U: Unity's own part of a frame, default 1.4), the devices once a frame;
+                       R: Unity's CPU a round in ms (default 0): a frame's rounds cost at least R each
   --tick-split F       of them the first F always run; the others give core 0 the rest of its F x --ticks,
                        and run the workers only while core 0 rests (experiments/rvc_lean: 0, all)
   --compute-split F    with --compute: the first F of them always run, each core's at most --ticks / F; the rest
@@ -558,6 +563,19 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--compute-cores") o.computeCores = (std::max)(1, (std::min)(256, atoi(next("--compute-cores").c_str())));
         else if (a == "--compute-passes") o.computePasses = (std::max)(1, (std::min)(64, atoi(next("--compute-passes").c_str())));
         else if (a == "--tick-split") o.tickSplit = (std::max)(0, (std::min)(16, atoi(next("--tick-split").c_str())));
+        else if (a == "--unity") {
+            std::string v = next("--unity");
+            o.unityMs = atof(v.c_str());
+            size_t c1 = v.find(',');
+            if (c1 != std::string::npos) {
+                o.unityOverMs = atof(v.c_str() + c1 + 1);
+                size_t c2 = v.find(',', c1 + 1);
+                if (c2 != std::string::npos) o.unityRoundMs = atof(v.c_str() + c2 + 1);
+            }
+            o.fixedDt = o.unityMs / 1000.0;
+            // (a world draws the GPU's list in every frame's devices: gpu_vm's lazy list waited for a readback frames behind)
+            if (!getenv("GVM_LIST_LAZY")) _putenv("GVM_LIST_LAZY=0");
+        }
         else if (a == "--tick-rounds") o.tickRounds = (std::max)(1, (std::min)(16, atoi(next("--tick-rounds").c_str())));
         else if (a == "--compute-split") o.computeSplit = (std::max)(0, (std::min)(64, atoi(next("--compute-split").c_str())));
         else if (a == "--cpu-ips") { o.cpu = true; o.cpuIps = atof(next("--cpu-ips").c_str()); }
@@ -1135,6 +1153,9 @@ int main(int argc, char** argv) {
     std::vector<std::string> overlayLines;
     uint64_t ovInstr = 0, ovFrames = 0, ovWorkers = 0;
     double gpuTickMs = -1, gpuCommitMs = -1, gpuDeviceMs = 0;
+    // --unity: the rounds of the next frame, from the last timed frame's card time; and what the run had
+    double unityRounds = 4, unityMsSum = 0;
+    uint64_t unitySeen = 0, unityTimed = 0, unityRoundSum = 0, unityFrames = 0;
     unsigned lastKey = 0;   // last character handed to the guest
     std::deque<uint32_t> keyEvents;   // raw key events from the window, waiting for the input device
     uint32_t keySeq = 0;              // events delivered so far
@@ -1268,6 +1289,12 @@ int main(int argc, char** argv) {
         auto texel = [&](int x, int c) { return t[x * 4 + c]; };
         uint32_t clock = texel(28, 1);
         rowNow = rowFrame;
+        {   // RVC_FRAMES_LOG=FILE: the frame (host frame) whose row first shows each new count of lists drawn (GPU_CTRL's .w)
+            static FILE* framesLog = getenv("RVC_FRAMES_LOG") ? fopen(getenv("RVC_FRAMES_LOG"), "w") : nullptr;
+            static uint32_t framesSeen = 0xffffffffu;
+            if (framesLog && raw.size() >= (64 + 2) * 16 && texel(65, 3) != framesSeen)
+                framesSeen = texel(65, 3), fprintf(framesLog, "%llu\t%u\n", (unsigned long long)rowFrame, framesSeen), fflush(framesLog);
+        }
         keyboardOwned = raw.size() >= (64 + 4) * 16 && texel(64 + 3, 0) == 0x6b657973u;
         displayMode = raw.size() >= (64 + 1) * 16 ? texel(64, 0) : 0;
         bool soundOn = bo.soundShader && raw.size() >= (64 + 0x24) * 16 && texel(64 + 0x22, 0) != 0;
@@ -1707,7 +1734,7 @@ int main(int argc, char** argv) {
             cpuDisplay[0] = word(CTRL + 4), cpuDisplay[1] = word(CTRL + 8);
         }
 
-        backend.tickRounds = (uint32_t)opt.tickRounds; backend.tickSplit = (uint32_t)opt.tickSplit;   // (--tick-rounds: the fragment tick's rounds a frame)
+        backend.tickRounds = opt.unityMs > 0 ? (uint32_t)unityRounds : (uint32_t)opt.tickRounds; backend.tickSplit = (uint32_t)opt.tickSplit;   // (--tick-rounds: the fragment tick's rounds a frame)
         // --compute: the processor's RAM and hart, once the frames that set the state texture up are
         // over; from then on a frame is a pass of it, and the rest is the harness's as without it
         if (!opt.compute.empty() && frame >= (uint64_t)opt.initFrames && !backend.computeMode &&
@@ -1913,7 +1940,22 @@ int main(int argc, char** argv) {
             backend.gpuPasses = passes;
             mat.setInt("_GpuPasses", passes);
         }
-        backend.frame(mat, frame, sampleTimes || (backend.viewOpen() && wall - ovLast >= 0.2));
+        if (opt.unityMs > 0) {   // (--unity: a frame timed whenever the last timing is in; the rounds follow the card's time)
+            double a, b, c;
+            backend.gpuTimes(a, b, c);
+            if (backend.frameTimes != unitySeen && backend.frameMs > 0 && backend.frameRounds) {
+                unitySeen = backend.frameTimes;
+                // (a bursty game's frames overshoot or undershoot F - U on the card, as the world's steady mode does: compare
+                // machines by fps at the card time a frame they took, bench_games/grid.py's "at budget")
+                // (with R, a frame costs the larger of its card time and its rounds' CPU: Unity's CPU and the card overlap)
+                double cost = (std::max)(backend.frameMs, backend.frameRounds * opt.unityRoundMs);
+                double want = backend.frameRounds * (opt.unityMs - opt.unityOverMs) / cost;
+                unityRounds = (std::max)(1.0, (std::min)(64.0, unityRounds + (want - unityRounds) * 0.5));
+                if (statsStarted) unityMsSum += cost, unityTimed++;
+            }
+            if (statsStarted) unityRoundSum += (uint32_t)unityRounds, unityFrames++;
+        }
+        backend.frame(mat, frame, sampleTimes || opt.unityMs > 0 || (backend.viewOpen() && wall - ovLast >= 0.2));
         ++frame;
         if (cpuRunning) {
             // the devices' answer, before the processor goes on: the control words as the control
@@ -2213,6 +2255,9 @@ int main(int argc, char** argv) {
         if (opt.cores > 1)
             fprintf(stderr, "STATS workers: instructions=%llu ips=%.0f; all cores ips=%.0f\n", (unsigned long long)(workerInstructions - workerInstr0),
                     (workerInstructions - workerInstr0) / secs, (instr + workerInstructions - workerInstr0) / secs);
+        if (opt.unityMs > 0 && unityFrames)
+            fprintf(stderr, "STATS unity: a frame %.2f ms of the guest's clock, %.2f ms of rounds; %.2f rounds a frame, %.3f ms on the card a frame (%llu timed; the rounds' CPU at R %.2f ms when larger)\n",
+                    opt.unityMs, opt.unityMs - opt.unityOverMs, (double)unityRoundSum / (double)unityFrames, unityTimed ? unityMsSum / (double)unityTimed : 0.0, (unsigned long long)unityTimed, opt.unityRoundMs);
         if (timeSamples > 0)
             fprintf(stderr, "STATS gpu per frame: tick %.3f ms, commit %.3f ms, device %.3f ms; wall %.3f ms\n", timeSum[0] / timeSamples,
                     timeSum[1] / timeSamples, timeSum[2] / timeSamples, 1000.0 * secs / (double)frames);
