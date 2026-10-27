@@ -77,6 +77,9 @@ public class EmuMachine : UdonSharpBehaviour
     public Camera gvmPassCamera;              // disabled: the commit's and the operations' draws, one mesh at a time
     public MeshRenderer gvmCommitRenderer, gvmStageRenderer, gvmWriteRenderer, gvmProgRenderer;
     public Material gvmCommitMaterial, gvmStageMaterial, gvmWriteMaterial, gvmProgMaterial, gvmWritebackMaterial;
+    public Material gvmCommitBlitMaterial;    // GvmCommitBlit: the commit and the merged write as blits
+    public bool gvmCommitBlits;               // the commit (and with gvmMergeWrite the first write) as blits, no camera
+    public bool gvmCommitBoth;                // (a check: the camera's commit, then the blits' over it)
     public Material gvmTick0Material;         // core 0's tick when the step has CORE0 (GvmTick0), else none
     public Material gvmOpsBlitMaterial;       // a round's plan, stage and progress as blits (GvmOpsBlit)
     public RenderTexture gvmPlan;             // each core's and slot's piece of the round, two texels a slot
@@ -528,6 +531,9 @@ public class EmuMachine : UdonSharpBehaviour
         gvmWriteMaterial.SetTexture("_Stage", gvmStage);
         gvmWriteMaterial.SetTexture("_Plan", gvmPlan);
         gvmOpsBlitMaterial.SetTexture("_Plan", gvmPlan);
+        gvmCommitBlitMaterial.SetTexture("_Stage", gvmStage);
+        gvmCommitBlitMaterial.SetTexture("_Plan", gvmPlan);
+        gvmCommitBlitMaterial.SetInt("_CommitPoints", gvmCommitRenderer.GetComponent<MeshFilter>().sharedMesh.vertexCount);
         machineMaterial.SetInt("_GvmRows", rows);
         machineMaterial.SetTexture("_Ram", state);
         machineMaterial.SetTexture("_Zone", gvmZone);
@@ -564,10 +570,10 @@ public class EmuMachine : UdonSharpBehaviour
     {
         if (gvmTick0Material == null)
         {
-            Material[] m = { tickMaterial, gvmCommitMaterial, gvmWriteMaterial, gvmOpsBlitMaterial };
+            Material[] m = { tickMaterial, gvmCommitMaterial, gvmWriteMaterial, gvmOpsBlitMaterial, gvmCommitBlitMaterial };
             return m;
         }
-        Material[] m0 = { tickMaterial, gvmCommitMaterial, gvmWriteMaterial, gvmOpsBlitMaterial, gvmTick0Material };
+        Material[] m0 = { tickMaterial, gvmCommitMaterial, gvmWriteMaterial, gvmOpsBlitMaterial, gvmCommitBlitMaterial, gvmTick0Material };
         return m0;
     }
 
@@ -618,7 +624,8 @@ public class EmuMachine : UdonSharpBehaviour
         if (gvmTick0Material != null) GvmTickUniforms(gvmTick0Material, lo16, lo, hi, read);
         tickCamera.SetTargetBuffers(gvmCur == 0 ? gvmBuffersA : gvmBuffersB, gvmTickDepth.depthBuffer);
         tickCamera.Render();
-        GvmState(gvmCommitMaterial, drawn, gvmStateNames);
+        GvmState(gvmCommitBlits ? gvmCommitBlitMaterial : gvmCommitMaterial, drawn, gvmStateNames);
+        if (gvmCommitBoth) GvmState(gvmCommitMaterial, drawn, gvmStateNames);
         for (int k = 0; k < gvmMeasureStates; k++) GvmState(gvmCommitMaterial, drawn, gvmStateNames);
         GvmState(gvmOpsBlitMaterial, drawn, gvmStateNames);
         // (gvmMergeWrite: the first round staged through the cores' write caches before the commit, its write drawn after
@@ -629,9 +636,17 @@ public class EmuMachine : UdonSharpBehaviour
             gvmOpsBlitMaterial.SetTexture("_OpState", gvmOps[gvmOpsCur]);
             VRCGraphics.Blit(blackTexture, gvmPlan, gvmOpsBlitMaterial, 0);
             VRCGraphics.Blit(blackTexture, gvmStage, gvmOpsBlitMaterial, gvmMergeStage);
-            gvmWriteRenderer.enabled = true;
+            gvmWriteRenderer.enabled = !gvmCommitBlits;
         }
-        GvmDraw(gvmCommitRenderer, state);
+        if (gvmCommitBoth) GvmDraw(gvmCommitRenderer, state);
+        if (gvmCommitBlits)
+        {
+            // (GvmCommitBlit: a word of the texel a blit, then the write: points and quads from tessellation and a
+            // geometry shader, in the order a camera would draw them)
+            for (int w = 0; w < 4; w++) VRCGraphics.Blit(blackTexture, state, gvmCommitBlitMaterial, w);
+            if (merged == 1) VRCGraphics.Blit(blackTexture, state, gvmCommitBlitMaterial, 4);
+        }
+        if (!gvmCommitBlits) GvmDraw(gvmCommitRenderer, state);
         if (merged == 1)
         {
             gvmWriteRenderer.enabled = false;

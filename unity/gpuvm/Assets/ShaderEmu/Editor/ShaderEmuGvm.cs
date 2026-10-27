@@ -141,6 +141,7 @@ public static partial class ShaderEmuBuilder
         machine.gvmWriteMaterial = Mat("GvmOpWrite", "ShaderEmu/GvmOps");
         machine.gvmProgMaterial = Mat("GvmOpProg", "ShaderEmu/GvmOps");
         machine.gvmWritebackMaterial = Mat("GvmWriteback", "ShaderEmu/GvmWriteback");
+        machine.gvmCommitBlitMaterial = Mat("GvmCommitBlit", "ShaderEmu/GvmCommitBlit");
         machine.gvmOpsBlitMaterial = Mat("GvmOpsBlit", "ShaderEmu/GvmOpsBlit");
         string[] draws = { "GVM_STAGE", "GVM_WRITE", "GVM_PROG" };
         Material[] ops = { machine.gvmStageMaterial, machine.gvmWriteMaterial, machine.gvmProgMaterial };
