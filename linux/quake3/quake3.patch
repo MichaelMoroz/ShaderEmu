@@ -1839,7 +1839,7 @@ index 8cf4ac57..dea23df1 100644
  
  //----------------------------------------------
 diff --git a/code/cgame/cg_snapshot.c b/code/cgame/cg_snapshot.c
-index 11b9a067..4158e063 100644
+index 11b9a067..859913b3 100644
 --- a/code/cgame/cg_snapshot.c
 +++ b/code/cgame/cg_snapshot.c
 @@ -55,8 +55,30 @@ CG_TransitionEntity
@@ -1914,6 +1914,19 @@ index 11b9a067..4158e063 100644
  		//cent->nextState = *es;
  
  		// if this frame is a teleport, or the entity wasn't in the
+@@ -330,7 +371,12 @@ void CG_ProcessSnapshots( void ) {
+ 	if ( n != cg.latestSnapshotNum ) {
+ 		if ( n < cg.latestSnapshotNum ) {
+ 			// this should never happen
++#ifdef SHADEREMU
++			CG_Error( "CG_ProcessSnapshots: n %i < cg.latestSnapshotNum %i (core of kind %i, frame time %i, the latest snapshot at %i)",
++				n, cg.latestSnapshotNum, SE_OnWorker(), cg.time, cg.latestSnapshotTime );
++#else
+ 			CG_Error( "CG_ProcessSnapshots: n < cg.latestSnapshotNum" );
++#endif
+ 		}
+ 		cg.latestSnapshotNum = n;
+ 	}
 diff --git a/code/cgame/cg_syscalls.c b/code/cgame/cg_syscalls.c
 index 010be948..e65b3f55 100644
 --- a/code/cgame/cg_syscalls.c
