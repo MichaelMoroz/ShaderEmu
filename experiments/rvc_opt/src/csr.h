@@ -97,6 +97,10 @@
 #define CSR_MEMOP_SRC 0x0b1
 #define CSR_MEMOP_DST 0x0b2
 #define CSR_MEMOP_N 0x0b3
+#define CSR_UMEMOP_OP 0x8b0   // (the same four in the custom user range, a program's)
+#define CSR_UMEMOP_SRC 0x8b1
+#define CSR_UMEMOP_DST 0x8b2
+#define CSR_UMEMOP_N 0x8b3
 
 #define CSR_PLAYER_ID 0xbe
 #define CSR_RNG 0x0bf
@@ -158,6 +162,13 @@ uint read_csr_raw(uint address) {
 #endif
         case CSR_RNG: return xorshift(asuint(_Time.w));
         case CSR_PLAYER_ID: return _PlayerID;
+        // a program's copy (0x8b0-0x8b3, the custom user range): asked for on the first core only,
+        // where it does not wait for other cores' (docs/machine/gpu.md, "A program's copy")
+#if CORES > 1
+        case CSR_UMEMOP_OP: return hart == 0 ? 1 : 0;
+#else
+        case CSR_UMEMOP_OP: return 1;
+#endif
     }
     return 0;
 }
@@ -182,10 +193,10 @@ void write_csr_raw(uint address, uint value) {
         case CSR_SEPC: cpu.sepc = value; break;
         case CSR_SCAUSE: cpu.scause = value; break;
         case CSR_STVAL: cpu.stval = value; break;
-        case CSR_MEMOP_SRC: cpu.memop_src_v = value; break;
-        case CSR_MEMOP_DST: cpu.memop_dst_v = value; break;
-        case CSR_MEMOP_N: cpu.memop_n = value; break;
-        case CSR_MEMOP_OP: cpu.stall = value == 2 ? STALL_MEMOP_FILL : STALL_MEMOP_COPY; break;   // 2: a fill
+        case CSR_MEMOP_SRC: case CSR_UMEMOP_SRC: cpu.memop_src_v = value; break;
+        case CSR_MEMOP_DST: case CSR_UMEMOP_DST: cpu.memop_dst_v = value; break;
+        case CSR_MEMOP_N: case CSR_UMEMOP_N: cpu.memop_n = value; break;
+        case CSR_MEMOP_OP: case CSR_UMEMOP_OP: cpu.stall = value == 2 ? STALL_MEMOP_FILL : STALL_MEMOP_COPY; break;   // 2: a fill
     }
 }
 #else

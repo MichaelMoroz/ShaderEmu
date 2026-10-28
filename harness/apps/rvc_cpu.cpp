@@ -650,9 +650,12 @@ static bool csr_read(Core& c, u32 n, u32& v) {
     case 0xc01: v = (u32)mtime_now; return true;
     case 0xc81: v = (u32)(mtime_now >> 32); return true;
     case 0x0b0: v = 0; return true;
-    case 0x0b1: v = c.memop_src; return true;
-    case 0x0b2: v = c.memop_dst; return true;
-    case 0x0b3: v = c.memop_n; return true;
+    case 0x0b1: case 0x8b1: v = c.memop_src; return true;
+    case 0x0b2: case 0x8b2: v = c.memop_dst; return true;
+    case 0x0b3: case 0x8b3: v = c.memop_n; return true;
+    // (the copy's registers in the custom user range, docs/machine/gpu.md "A program's copy": 0x8b0 reads 1
+    // where a program's copy is worth asking for, on the first core; a worker's would wait for the others')
+    case 0x8b0: { static const bool none = getenv("RVC_NO_UOP") != nullptr; v = !none && c.hart == 0; return true; }   // (RVC_NO_UOP: as a machine without)
     case 0x0bf: rng_state ^= rng_state << 13; rng_state ^= rng_state >> 17; rng_state ^= rng_state << 5; v = rng_state; return true;
     case 0x0be: v = 0; return true;
     // (lanes, docs/machine/lanes.md: the lean tick's; here none, and mcw_lanes() makes plain calls)
@@ -688,10 +691,10 @@ static bool csr_write(Core& c, u32 n, u32 v, Trap& t) {
     case 0x143: c.stval = v; return true;
     case 0x144: c.mip = (c.mip & ~0x222u) | (v & 0x222); c.recheck = true; return true;
     case 0x180: c.satp = v & 0x803fffff; c.flush(); return true;
-    case 0x0b1: c.memop_src = v; return true;
-    case 0x0b2: c.memop_dst = v; return true;
-    case 0x0b3: c.memop_n = v; return true;
-    case 0x0b0: memop(c, v, t); return true;
+    case 0x0b1: case 0x8b1: c.memop_src = v; return true;
+    case 0x0b2: case 0x8b2: c.memop_dst = v; return true;
+    case 0x0b3: case 0x8b3: c.memop_n = v; return true;
+    case 0x0b0: case 0x8b0: memop(c, v, t); return true;
     case 0x0b4: case 0x0b5: case 0x0b6: case 0x0b7: case 0x0b8: case 0x0b9: case 0x0ba: case 0x0bb: case 0x0bc: case 0x0bd: return true;
     case 0x0c0: case 0x0c1: case 0x0c2: case 0x0c3: return true;
     }

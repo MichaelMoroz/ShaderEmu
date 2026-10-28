@@ -80,6 +80,7 @@ static void case_copy(const char* name, uint32_t to, uint32_t from, uint32_t byt
 }
 
 int main(void) {
+#ifndef PROGRAM_COPY_ONLY   // (-DPROGRAM_COPY_ONLY: case 10 alone, a quick look on WARP)
     // 1-2: one chunk, and four
     case_copy("4 KB", 0x83000000u, 0x83100000u, 4096);
     case_copy("1 MB forward", 0x83000000u, 0x83400000u, 0x100000);
@@ -127,5 +128,21 @@ int main(void) {
     puts("copytest: sum ");
     put_hex(sum);
     puts(" done\n");
+#endif
+    // 10 (after the sum, which stays as it was): the same copy by a program's CSRs (0x8b0-0x8b3, docs/machine/gpu.md,
+    // "A program's copy"), with bytes stored before it in its pass as memcpy's head does; 0x8b0 reads 1 on the first core
+    {
+        uint32_t to = 0x83000000u, from = 0x83100000u, bytes = 8192, worth;
+        pattern(from, bytes);
+        pattern(to - GUARD, bytes + 2 * GUARD);
+        want_copy(to, from, bytes);
+        W(SCRATCH + GUARD - 4) = 0x9abcdef0u;
+        next_pass();
+        __asm__ volatile("csrr %0, 0x8b0" : "=r"(worth));
+        W(to - 4) = 0x9abcdef0u;
+        uint32_t before = passes();
+        __asm__ volatile("csrw 0x8b1, %0\n csrw 0x8b2, %1\n csrw 0x8b3, %2\n li t0, 1\n csrw 0x8b0, t0" : : "r"(from), "r"(to), "r"(bytes) : "t0", "memory");
+        check(worth == 1 ? "program's copy" : "program's copy, 0x8b0 not 1:", to, bytes, passes() - before);
+    }
     for (;;) next_pass();
 }

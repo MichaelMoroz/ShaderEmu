@@ -418,3 +418,28 @@ On the RTX 5090 (D3D11, fxc2), in turn with the tree before, from a cold boot: a
 A loop of 4 MB copies takes 16 passes a copy (0.020 ms of commit each) where it took one
 (0.036 ms). Linux's own copies are pages: Doom's timedemo made 16 of up to 4 KB, a `cp` of
 8 MB 4,096 of 4 KB, and no core waited for another's.
+
+### A program's copy
+
+A program asks for the same copy and fill at CSRs 0x8b0 to 0x8b3, the custom range a user-mode program
+may use, which the tick and `rvc_cpu` take as 0x0b0 to 0x0b3 (`src/csr.h`, `CSR_UMEMOP_*`). Reading 0x8b0
+says whether asking is worth it: 1 on the first core, 0 on a worker, whose copy from RAM would wait for
+every other core's (one a pass), and 0 on a tick from before (it reads unknown CSRs as 0), so a program
+built with it runs on either. (0x0b0 to 0x0b3 were never kept from user mode: their privilege bits are
+a user's.)
+
+The image's C library asks from 2 KB up (`linux/userland/memcpy.S`, `memset.c`, `uop.h`): a `memcpy`
+whose two pointers lie at one place in a texel and a `memset`, both ranges in RAM (0x80000000 to
+0x87e00000, the GPU's memory with it, or 0x88000000 to 0x92000000), copy or fill the bytes up to the
+first texel themselves, ask for the whole texels and do the last bytes in the next pass. The texels
+never enter the core's write cache; asking ends the pass, as the kernel's does. `memmove` without an
+overlap is a `memcpy`. On `rvc_cpu` (`RVC_NO_UOP=1`: 0x8b0 reads 0, as a machine without) Quake's
+timedemo (`quake +timedemo demo1`, from its command to its fps line, `RVC_WCACHE=1`, 28 October 2026):
+
+| | core 0 (M instructions) | passes | core 0's passes ended full | guest time (s) |
+|---|---|---|---|---|
+| without | 112.90 | 18,266 | 4,223 | 39.14 |
+| with | 107.35 | 17,015 | 2,650 | 37.40 |
+
+`programs\copytest`'s case 10 (after its sum, which stays `0e7f76c3`) is such a copy with a byte
+stored beside it in its pass; `-DPROGRAM_COPY_ONLY` builds it alone for a quick look on WARP.
