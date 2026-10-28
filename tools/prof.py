@@ -29,7 +29,9 @@ import time
 import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-WSL = r'\\wsl.localhost\Ubuntu-24.04'
+# (the distribution's name: Ubuntu-24.04 once, Ubuntu on 28 October 2026)
+WSL = next((p for p in (r'\\wsl.localhost\Ubuntu-24.04', r'\\wsl.localhost\Ubuntu') if os.path.isdir(p + r'\home')),
+           r'\\wsl.localhost\Ubuntu')
 WSL_HOME = '/home/micha'
 KERNEL = WSL + r'\home\micha\nm\k-rom\vmlinux'
 TOOLBIN = WSL_HOME + '/shaderemu-linux/toolchain/bin'
@@ -73,8 +75,11 @@ class Elf:
             if kind == 2:   # SYMTAB
                 strtab = sections[sh[6]]
                 for at in range(off, off + size, 16):
-                    nm_, value, sz, info = struct.unpack_from('<IIIB', data, at)
-                    if info & 15 != 2 or not value:
+                    nm_, value, sz, info, _, shndx = struct.unpack_from('<IIIBBH', data, at)
+                    # (functions; and global symbols of no type, the assembler's: the kernel's memcpy and memset are
+                    # NOTYPE, and their code was named after the C function before them)
+                    if not value or not (info & 15 == 2 or (info & 15 == 0 and info >> 4 in (1, 2) and 0 < shndx < len(sections)
+                                                             and sections[shndx][2] & 4)):
                         continue
                     end = data.index(b'\0', strtab[4] + nm_)
                     funcs.append((value, sz, data[strtab[4] + nm_:end].decode('latin-1')))
@@ -139,10 +144,11 @@ class Profile:
         for line in open(os.path.join(out, 'pcs.txt')):
             if line[0] == '#':
                 continue
-            c, table, pc, word, ex, lo, st = line.split()
-            rows.append((int(c), int(pc, 16), int(word, 16), int(ex), int(lo), int(st)))
-        a = np.array(rows, dtype=np.int64).reshape(-1, 6)
-        self.cls, self.pc, self.word, self.exec, self.loads, self.stores = (a[:, i] for i in range(6))
+            c, table, pc, word, ex, lo, st, *more = line.split()
+            nt, full = (int(more[0]), int(more[1])) if len(more) >= 2 else (0, 0)   # (rvc_cpu before 28 October 2026: no such columns)
+            rows.append((int(c), int(pc, 16), int(word, 16), int(ex), int(lo), int(st), nt, full))
+        a = np.array(rows, dtype=np.int64).reshape(-1, 8)
+        self.cls, self.pc, self.word, self.exec, self.loads, self.stores, self.newtex, self.full = (a[:, i] for i in range(8))
         self.edges = []
         p = os.path.join(out, 'edges.txt')
         if os.path.exists(p):
@@ -158,7 +164,7 @@ class Profile:
         hot_pc, hot_word = self.pc[order], self.word[order]
         _, first = np.unique(hot_pc, return_index=True)   # (core 0's and the workers' rows of one pc: once)
         keep = np.sort(first)
-        hot_pc, hot_word = hot_pc[keep][:20000], hot_word[keep][:20000]
+        hot_pc, hot_word = hot_pc[keep][:60000], hot_word[keep][:60000]
         free = np.ones(len(hot_pc), dtype=bool)
         for e in elfs:
             if not e.code:
@@ -211,14 +217,111 @@ class Profile:
                     print(f'  {img.name}: at {base:#010x} (text {e.lo + base:#010x}..{e.hi + base:#010x}), '
                           f'{found[1]} of the hottest pcs match ({found[2]:.0%}'
                           f'{"" if found[2] > 0.97 else ": not quite the build that ran"})')
+        self.place_pieces(elfs, hot_pc, hot_word, free, quiet)
         self.images.sort(key=lambda i: i.lo + i.base)
         self.starts_img = [i.lo + i.base for i in self.images]
+        # a pc whose word is not the ELF's there is not named by it (a piece widened to whole functions, or a build
+        # apart, would name another program's code: nxvideo's decoder was named musl's string_read)
+        self.bad = set()
+        pcs, first = np.unique(self.pc, return_index=True)
+        words = self.word[first]
+        img_of = np.array([-1 if (m := self.image_of(int(p))) is None else id(m) for p in pcs], dtype=np.int64)
+        for img in self.images:
+            sel = img_of == id(img)
+            if not sel.any() or not img.code:
+                continue
+            allw = np.concatenate([w for a, w in img.code])
+            alla = np.concatenate([a + 4 * np.arange(len(w), dtype=np.int64) for a, w in img.code])
+            rel = pcs[sel].astype(np.int64) - img.base
+            pos = np.minimum(np.searchsorted(alla, rel), len(alla) - 1)
+            # (an immediate may differ: data or a callee moved in a build a little apart; the registers may not)
+            ew, rw = allw[pos].astype(np.int64), words[sel].astype(np.int64)
+            op = rw & 0x7f
+            mask = np.where(np.isin(op, (0x17, 0x37, 0x6f)), 0xfff,
+                            np.where(np.isin(op, (0x03, 0x13, 0x67)), 0xf8fff,
+                                     np.where(np.isin(op, (0x23, 0x63)), 0x1fff07f, 0xffffffff)))
+            ok = (alla[pos] == rel) & ((ew & mask) == (rw & mask))
+            self.bad.update(int(p) for p in pcs[sel][~ok])
+        if not quiet:
+            named = img_of >= 0
+            print(f'  {len(self.bad)} of {int(named.sum())} named pcs carry another word than the ELF\'s there: left unnamed')
+
+    def place_pieces(self, elfs, hot_pc, hot_word, free, quiet):
+        """An ELF built from sources a little apart from the run's (a function more in a library, a patch moved) has its
+        code in a few stretches each at a base of its own: the hot pcs still unplaced vote for bases by the ELF's rare
+        words, and each base keeps the runs of pcs whose words match there (32 or more), widened to whole functions."""
+        for e in elfs:
+            if not e.code:
+                continue
+            idx = np.nonzero(free)[0]
+            if len(idx) < 32:
+                break
+            allw = np.concatenate([w for a, w in e.code])
+            alla = np.concatenate([a + 4 * np.arange(len(w), dtype=np.int64) for a, w in e.code])
+            order = np.argsort(allw, kind='stable')
+            sw = allw[order]
+            uw, start, cnt = np.unique(sw, return_index=True, return_counts=True)
+            k = np.minimum(np.searchsorted(uw, hot_word[idx]), len(uw) - 1)
+            rare = (uw[k] == hot_word[idx]) & (cnt[k] <= 2)
+            a_idx, k = idx[rare], k[rare]
+            bases = [hot_pc[a_idx] - alla[order[start[k]]]]
+            two = cnt[k] == 2
+            bases.append(hot_pc[a_idx[two]] - alla[order[start[k[two]] + 1]])
+            ub, nv = np.unique(np.concatenate(bases), return_counts=True)
+            top = np.argsort(-nv)[:24]
+            pieces = matched = 0
+            for base, v in zip(ub[top].tolist(), nv[top].tolist()):
+                if v < 16:
+                    break
+                idx = np.nonzero(free)[0]
+                idx = idx[np.argsort(hot_pc[idx])]
+                rel = hot_pc[idx] - base
+                inside = (rel >= e.lo) & (rel < e.hi)
+                idx, rel = idx[inside], rel[inside]
+                if len(idx) < 32:
+                    continue
+                pos = np.minimum(np.searchsorted(alla, rel), len(alla) - 1)
+                ok = (alla[pos] == rel) & (allw[pos] == hot_word[idx])
+                runs, cur, miss = [], [], 0
+                for i in range(len(idx)):
+                    if ok[i]:
+                        cur.append(i)
+                        miss = 0
+                    elif cur:
+                        miss += 1
+                        if miss > 2:
+                            runs.append(cur)
+                            cur, miss = [], 0
+                if cur:
+                    runs.append(cur)
+                for r in runs:
+                    if len(r) < 32:
+                        continue
+                    lo, hi = int(rel[r[0]]), int(rel[r[-1]]) + 4
+                    f = e.func(lo)
+                    if f:
+                        lo = f[1]
+                    i = bisect.bisect_right(e.starts, hi - 4) - 1
+                    if i >= 0 and e.funcs[i][1]:
+                        hi = max(hi, e.funcs[i][0] + e.funcs[i][1])
+                    img = Elf.__new__(Elf)
+                    img.__dict__.update(e.__dict__)
+                    img.base, img.lo, img.hi = base, lo, hi
+                    img.name = e.name
+                    self.images.append(img)
+                    free &= ~((hot_pc - base >= lo) & (hot_pc - base < hi))
+                    pieces += 1
+                    matched += len(r)
+            if pieces and not quiet:
+                print(f'  {e.name}: {pieces} pieces at bases of their own, {matched} more of the hottest pcs match')
 
     def image_of(self, pc):
+        if pc in getattr(self, 'bad', ()):
+            return None
         i = bisect.bisect_right(self.starts_img, pc) - 1
-        if i >= 0:
-            img = self.images[i]
-            if pc - img.base < img.hi:
+        for j in range(i, max(i - 8, -1), -1):   # (pieces widened to whole functions may lie inside another)
+            img = self.images[j]
+            if img.lo <= pc - img.base < img.hi:
                 return img
         return None
 
@@ -418,6 +521,28 @@ def memory(P, top):
         print(f'   stores of {"core 0" if k == 0 else "the workers"} by function ({tot:,}):')
         for f, n in by.most_common(min(top, 10)):
             print(f'    {pct(n, tot):5.1f}%  {f}')
+    # what fills the write cache: the stores that took a texel new to their core's pass (changed bytes), and where a
+    # store found it full (RVC_WCACHE: the pass ended there)
+    for k in (0, 1):
+        sel = (P.cls == k) & ((P.newtex > 0) | (P.full > 0))
+        if not sel.any():
+            continue
+        by, fu = collections.Counter(), collections.Counter()
+        for pc, nt, f in zip(P.pc[sel], P.newtex[sel], P.full[sel]):
+            name = P.func_key(int(pc))[0]
+            by[name] += int(nt)
+            fu[name] += int(f)
+        tot, tf = sum(by.values()), sum(fu.values())
+        tl = os.path.join(P.out, 'timeline.bin')
+        passes = os.path.getsize(tl) // 32 if os.path.exists(tl) else 0   # (the passes profiled: from --count-from on)
+        print(f'   texels new to a pass of {"core 0" if k == 0 else "the workers"} by function ({tot:,}'
+              f'{f", {tot / passes:.1f} a pass" if passes else ""}; the write cache entries they took):')
+        for f, n in by.most_common(min(top, 12)):
+            print(f'    {pct(n, tot):5.1f}%  {n:>12,}  {f}')
+        if tf:
+            print(f'   where {"core 0" if k == 0 else "the workers"} found the write cache full ({tf:,} passes ended so):')
+            for f, n in fu.most_common(min(top, 8)):
+                print(f'    {pct(n, tf):5.1f}%  {n:>10,}  {f}')
     path = os.path.join(P.out, 'wcache.txt')
     if os.path.exists(path):
         hist = {0: collections.Counter(), 1: collections.Counter()}

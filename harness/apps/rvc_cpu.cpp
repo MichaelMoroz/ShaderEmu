@@ -581,11 +581,12 @@ static inline bool store(Core& c, u32 va, int size, u32 value, Trap& t) {
             (!wc_take(c.hart, phys) || ((phys & 15) + (u32)size > 16 && !wc_take(c.hart, phys + (u32)size - 1)))) {
             c.wc_full = c.end_pass = true;
             wc_full_at[c.hart] = wc_pass;
+            if (prof::on) prof::full(c);
             _InterlockedIncrement64((volatile long long*)&wc_full_passes[c.hart != 0]);
             return false;
         }
         dirty(c, phys);
-        if (prof::mem_on) prof::mem(c, va, phys, size, true);
+        if (prof::mem_on) prof::mem(c, va, phys, size, true, memcmp(p, &value, (size_t)size) != 0);
         if (races_on && race_watched(phys)) {
             race_store(c, phys, value, size);
             return true;
@@ -1763,7 +1764,7 @@ static int run_some(Core& c, u64 n, const uint8_t* kinds) {
     R.kinds = kinds;
     R.end = c.clock + n;
     R.mem = ramp - RAM_BASE;
-    R.plain_loads = !prof::mem_on, R.plain_stores = !prof::mem_on && !wc_log;
+    R.plain_loads = !(prof::mem_on && prof::active), R.plain_stores = !(prof::mem_on && prof::active) && !wc_log;
     R.wcache = wc_on;
     R.bands = 0;
     R.r = STEP_ON;
@@ -2144,14 +2145,15 @@ static int native_run(Core& c, u64 n) {
     return STEP_ON;
 }
 
-// The instructions that are always a core's general step's: with RVC_PROF every instruction is, with
+// The instructions that are always a core's general step's: with RVC_PROF every instruction is (from --count-from's
+// line on: before it the run is a plain one, the workers on their threads), with
 // RVC_CPU_LAST core 0's, for their tables; with RVC_CALLS core 0's jal and jalr (call_fast counts the rest).
 static bool check_on = false, check_general = false;   // RVC_FAST_CHECK; its first run, all on the general step
 static u64 checked(Core& c, u64 budget, u64 (*fn)(Core&, u64));
 static const uint8_t* step_kinds(const Core& c) {
     static const uint8_t all_general[8192] = {};
     if (!step_kinds_made) make_step_kinds();
-    if (prof::on || (keep_last && c.hart == 0) || check_general) return all_general;
+    if (prof::active || (keep_last && c.hart == 0) || check_general) return all_general;
     return step_kind[(calls_on && c.hart == 0 ? 2 : 0) + zb_on];
 }
 
@@ -2379,7 +2381,7 @@ static void pool_run(const int* list, int n, u32 budget, u64 (*fn)(int) = pool_e
 static u64 workers_pass(u32 ticks) {
     if (pool_size == 0) pool_size = threads_wanted();
     u64 most = 0;
-    if (pool_size == 1 || prof::on || cores.size() < 3) {
+    if (pool_size == 1 || prof::active || cores.size() < 3) {
         for (size_t i = 1; i < cores.size(); i++) {
             u64 n = run_worker(cores[i], ticks);
             worker_instr += n;
