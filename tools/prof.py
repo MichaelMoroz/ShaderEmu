@@ -75,8 +75,11 @@ class Elf:
             if kind == 2:   # SYMTAB
                 strtab = sections[sh[6]]
                 for at in range(off, off + size, 16):
-                    nm_, value, sz, info = struct.unpack_from('<IIIB', data, at)
-                    if info & 15 != 2 or not value:
+                    nm_, value, sz, info, _, shndx = struct.unpack_from('<IIIBBH', data, at)
+                    # (functions; and global symbols of no type, the assembler's: the kernel's memcpy and memset are
+                    # NOTYPE, and their code was named after the C function before them)
+                    if not value or not (info & 15 == 2 or (info & 15 == 0 and info >> 4 in (1, 2) and 0 < shndx < len(sections)
+                                                             and sections[shndx][2] & 4)):
                         continue
                     end = data.index(b'\0', strtab[4] + nm_)
                     funcs.append((value, sz, data[strtab[4] + nm_:end].decode('latin-1')))
@@ -233,15 +236,16 @@ class Profile:
             order = np.argsort(allw, kind='stable')
             sw = allw[order]
             uw, start, cnt = np.unique(sw, return_index=True, return_counts=True)
-            votes = collections.Counter()
-            for anchor in idx:
-                k = np.searchsorted(uw, hot_word[anchor])
-                if k >= len(uw) or uw[k] != hot_word[anchor] or cnt[k] > 2:
-                    continue
-                for j in order[start[k]:start[k] + cnt[k]]:
-                    votes[int(hot_pc[anchor] - alla[j])] += 1
+            k = np.minimum(np.searchsorted(uw, hot_word[idx]), len(uw) - 1)
+            rare = (uw[k] == hot_word[idx]) & (cnt[k] <= 2)
+            a_idx, k = idx[rare], k[rare]
+            bases = [hot_pc[a_idx] - alla[order[start[k]]]]
+            two = cnt[k] == 2
+            bases.append(hot_pc[a_idx[two]] - alla[order[start[k[two]] + 1]])
+            ub, nv = np.unique(np.concatenate(bases), return_counts=True)
+            top = np.argsort(-nv)[:24]
             pieces = matched = 0
-            for base, v in votes.most_common(24):
+            for base, v in zip(ub[top].tolist(), nv[top].tolist()):
                 if v < 16:
                     break
                 idx = np.nonzero(free)[0]
