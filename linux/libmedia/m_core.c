@@ -400,10 +400,16 @@ fit_rows(void *ctx, uint32_t from, uint32_t to)
 	const struct media_image *in = f->in;
 	struct media_image *out = f->out;
 	int ch = in->channels, y, x;
+	/* the input's x under a pixel's middle, (2 rx + 1) sw 2^15 / dw, goes up by sw 2^16 / dw a pixel: kept as a
+	 * quotient and a remainder in 32 bits, with one 64-bit division a row where it begins (one a pixel was 10%
+	 * of nxview's first core) */
+	const uint32_t dw = (uint32_t)f->dw, step_q = dw ? (uint32_t)(((uint64_t)(uint32_t)f->sw << 16) / dw) : 0,
+		step_r = dw ? (uint32_t)(((uint64_t)(uint32_t)f->sw << 16) % dw) : 0;
 
 	for (y = (int)from; y < (int)to; y++) {
 		uint8_t *o = out->pixels + (uint32_t)y * (uint32_t)out->stride;
-		int ry = y - f->dy0;
+		int ry = y - f->dy0, uy = 0, mean = f->sw >= 2 * f->dw && f->sh >= 2 * f->dh, begun = 0;
+		uint32_t qx = 0, rx_rem = 0;
 
 		if (ry < 0 || ry >= f->dh) {
 			for (x = 0; x < out->width; x++)
@@ -420,7 +426,7 @@ fit_rows(void *ctx, uint32_t from, uint32_t to)
 				continue;
 			}
 			/* (the mean under each where it is two pixels or more; below that the four nearest to its middle) */
-			if (f->sw >= 2 * f->dw && f->sh >= 2 * f->dh) {
+			if (mean) {
 				int x0 = f->sx0 + rx * f->sw / f->dw, x1 = f->sx0 + (rx + 1) * f->sw / f->dw;
 				int y0 = f->sy0 + ry * f->sh / f->dh, y1 = f->sy0 + (ry + 1) * f->sh / f->dh, i, j, n, sr = 0, sg = 0, sb = 0, sa = 0;
 
@@ -438,10 +444,21 @@ fit_rows(void *ctx, uint32_t from, uint32_t to)
 				r = sr / n, g = sg / n, b = sb / n, a = sa / n;
 			} else {
 				/* 16.16: the input's point under this pixel's middle */
-				int ux = (int)(((int64_t)(2 * rx + 1) * f->sw << 15) / f->dw) - 32768 + (f->sx0 << 16);
-				int uy = (int)(((int64_t)(2 * ry + 1) * f->sh << 15) / f->dh) - 32768 + (f->sy0 << 16);
-				int ix, iy, fx, fy, c[4][4], k;
+				int ux, ix, iy, fx, fy, c[4][4], k;
 				const uint8_t *p;
+
+				if (!begun) {	/* (the row's first pixel of the picture: the pixels after it follow on) */
+					uint64_t n = (uint64_t)(2 * rx + 1) * (uint32_t)f->sw << 15;
+
+					qx = (uint32_t)(n / dw), rx_rem = (uint32_t)(n % dw);
+					uy = (int)(((int64_t)(2 * ry + 1) * f->sh << 15) / f->dh) - 32768 + (f->sy0 << 16);
+					begun = 1;
+				} else {
+					qx += step_q, rx_rem += step_r;
+					if (rx_rem >= dw)
+						qx++, rx_rem -= dw;
+				}
+				ux = (int)qx - 32768 + (f->sx0 << 16);
 
 				if (ux < f->sx0 << 16) ux = f->sx0 << 16;
 				if (uy < f->sy0 << 16) uy = f->sy0 << 16;
