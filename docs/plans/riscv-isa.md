@@ -268,10 +268,30 @@ comparison frees the harness lock. Owed, in order:
 - **Neither is a 2x lever.** Together they are worth a few percent, and the card has to show that `ZB` and the
   `fmadd` case cost the fast loop less than that.
 
+## The card's timing (28 October 2026): not taken
+
+The three variants' own changes (`ZB`/`ZB_X`, `FAST_FMA`; 31 to 33 lines of `main.shader` and `src/emu.h`) were put on
+the backport's tick (the after machine's, RAM in one piece) in `build/isa2/rvc_opt_{zb,fma,zbfma}`. Each passed
+`mctest-3` on WARP (`tools/test_card.py mctest-3 --warp --parts --max-wall 0`, 174 to 182 s), the case the tree's own
+stamp holds. `lanetest` and `fptest` do not finish on WARP in parts with the tree's tick either (no line in 280 s), so
+they say nothing of the variants.
+
+`RVC_TICK_ALT` with the tree's tick and the three, a tick picked every 4 frames, every frame timed, on the after image
+(whose programs use neither extension), 40 s each:
+
+| workload | tree (ms a frame's tick) | zb | fma | zbfma |
+|---|---|---|---|---|
+| a shell loop (8,193 instructions a frame) | 1.4266 | 1.4426 (+1.1%) | 1.4317 (+0.4%) | 1.4505 (+1.7%) |
+| Doom's timedemo (2,680 a frame) | 0.5823 | 0.5987 (+2.8%) | 0.6029 (+3.5%) | 0.5976 (+2.6%) |
+
+Every program not built for them pays 1 to 3.5% for the decode, as the tick's other changes to the fast loop have
+(AGENTS.md); Doom pays more (2.8%) than Zb was estimated to give it (+1.8%, at no cost). By the rule for a default
+switch (no game slower) none is taken. Zb would need a decode that costs the fast loop nothing: the instructions
+taken where the tree already falls out of the fast path (the general step), so that only programs that use them pay.
+That is the next thing to try; `rvc_cpu`'s `RVC_ISA` counts stay as the measure of what they would save.
+
 ## What is left
 
-- The card's timing of `rvc_opt_zb`, `rvc_opt_fma` and `rvc_opt_zbfma` against the tree's tick, after the comparison.
-- The Zb tick should be taken only if Doom's timedemo and the shell loop are both no slower (the rule for a default
-  switch).
+- Zb on the general step only (above), measured as here.
 - These builds were based on 7624f55. `riscv-backport` is now at c135015 (RAM in one piece). The deltas are build
   against build, so they should hold, but the absolute counts are 7624f55's.
