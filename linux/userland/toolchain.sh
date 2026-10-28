@@ -57,20 +57,24 @@ exec riscv32-linux-gcc $ARCH_FLAGS \$inc "\$@"
 EOF
 chmod +x "$WORK/bin/rv32-cc"
 
-# Our memcpy and memset in place of musl's (memcpy.S, memset.c beside this file): two pointers on
-# word boundaries go sixteen words a turn with no stack frame; musl's own routine stays in the
+# Our memcpy, memset, memmove and memcmp in place of musl's (memcpy.S, memset.c, memmove.c, memcmp.c beside
+# this file): two pointers on word boundaries go sixteen words a turn with no stack frame; musl's own routine stays in the
 # library as memcpy_any, for every other case. From 2 KB up both ask for the commit's copy or fill
 # (uop.h). Put in again when the library or a file is newer.
 OURS=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-newer() { for f in memcpy.S memset.c uop.h; do [ "$OURS/$f" -nt "$SYSROOT/lib/memcpy-ours" ] && return 0; done; return 1; }
+newer() { for f in memcpy.S memset.c memmove.c memcmp.c uop.h; do [ "$OURS/$f" -nt "$SYSROOT/lib/memcpy-ours" ] && return 0; done; return 1; }
 if [ ! -f "$SYSROOT/lib/memcpy-ours" ] || newer || [ "$SYSROOT/lib/libc.a" -nt "$SYSROOT/lib/memcpy-ours" ]; then
     echo "== memcpy, memset"
     MEMOPS="-O2 -fPIC -ffreestanding -fno-builtin -fno-tree-loop-distribute-patterns"
     rv32-cc $MEMOPS -I"$OURS" -c "$OURS/memcpy.S" -o "$WORK/src/memcpy_ours.o"
     rv32-cc $MEMOPS -Dmemcpy=memcpy_any -c "$WORK/src/musl/src/string/memcpy.c" -o "$WORK/src/memcpy_any.o"
     rv32-cc $MEMOPS -c "$OURS/memset.c" -o "$WORK/src/memset_ours.o"
-    riscv32-linux-ar d "$SYSROOT/lib/libc.a" memcpy.lo memcpy_ours.o memcpy_any.o memset.lo memset_ours.o 2>/dev/null || true
-    riscv32-linux-ar rs "$SYSROOT/lib/libc.a" "$WORK/src/memcpy_ours.o" "$WORK/src/memcpy_any.o" "$WORK/src/memset_ours.o" 2>/dev/null
+    # (memmove.c: the source's words read whole and shifted where the two pointers are at different places in a word)
+    rv32-cc $MEMOPS -c "$OURS/memmove.c" -o "$WORK/src/memmove_ours.o"
+    # (memcmp.c: memcmp a word a turn)
+    rv32-cc $MEMOPS -c "$OURS/memcmp.c" -o "$WORK/src/memcmp_ours.o"
+    riscv32-linux-ar d "$SYSROOT/lib/libc.a" memcpy.lo memcpy_ours.o memcpy_any.o memset.lo memset_ours.o memmove.lo memmove_ours.o \n        memcmp.lo memcmp_ours.o 2>/dev/null || true
+    riscv32-linux-ar rs "$SYSROOT/lib/libc.a" "$WORK/src/memcpy_ours.o" "$WORK/src/memcpy_any.o" "$WORK/src/memset_ours.o" "$WORK/src/memmove_ours.o" \n        "$WORK/src/memcmp_ours.o" 2>/dev/null
     touch "$SYSROOT/lib/memcpy-ours"
 fi
 
