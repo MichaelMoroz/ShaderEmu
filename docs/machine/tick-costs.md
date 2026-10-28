@@ -665,3 +665,27 @@ x23's two buckets). One core, ns a bundle: integers 94.8 against 77.6 in today's
 the mix 176.3 (167.0 with the loads written at the block's end) against 112.1. The per-bundle tests take back more than
 the block gives: a block design pays only where its shape is the shader's, which a fixed tick cannot have for every
 block. x30 not built.
+
+## gpu_vm's lessons tried on this tick (28 October 2026)
+
+Each variant beside the tree's tick in one run (`RVC_TICK_ALT`, every frame's tick picked by a hash, every
+frame timed: `--stats-after 3`, about 2,000 to 4,500 frames timed each), RTX 5090, D3D11, fxc2: the shell loop
+typed at the shell snapshot, Doom's timedemo (`DOOM_VIEW=told doom -1 -timedemo demo1`, from a snapshot 15 s
+in, so it plays the whole 45 s) and Quake standing at e1m1's start (`quake +map e1m1`). Milliseconds of a
+frame's tick, the tree's first:
+
+| variant | shell loop (ms) | Doom (ms) | Quake e1m1 (ms) | kept |
+|---|---|---|---|---|
+| `l1_occ` a `uint4` picked by selects, not an array of four words (`types.h`) | 1.4993 → 1.4424 (-3.8%); 1.4926 → 1.4339 (-3.9%) | 1.5573 → 1.4765 (-5.2%); 1.5496 → 1.4721 (-5.0%) | 1.4959 → 1.4470 (-3.3%); 1.5019 → 1.4430 (-3.9%) | yes |
+| the stalled store's word (`ram_l1_last_*`) looked at by the general path's load only, not every fast load | 1.4993 → 1.4766 (-1.5%) | 1.5573 → 1.5055 (-3.3%) | 1.4959 → 1.4659 (-2.0%) | no: with the `uint4` it is worse than the `uint4` alone (1.4714, 1.5127, 1.4702 against 1.4339, 1.4721, 1.4430) |
+| `MC_FAULT`'s record by one store in a loop, not up to ten inlined (2,700 instructions fewer of 12,890) | 1.4993 → 1.4995 | 1.5573 → 1.5556 | 1.4959 → 1.4923 | no: level |
+| `#pragma static_noinit` before `xr[65]` (fxc2 65; the tree's fxc2 ignores it), both ticks by fxc2 65 | 1.4301 → 1.4232 (-0.5%) | 1.5483 → 1.5424 (-0.4%) | 1.4946 → 1.4904 (-0.3%) | no: level, and it needs the newer fxc2 |
+| `l1_has` (1,024 bits in local memory) as 128 bits in a `uint4`, with the `uint4` above | 1.4336 → 1.4315 | 1.4631 → 1.4772 (+1.0%) | 1.4406 → 1.4422 | no |
+| the same as 256 bits in two `uint4`s | 1.4336 → 1.4385 | 1.4631 → 1.4764 (+0.9%) | 1.4406 → 1.4439 | no |
+| no `l1_has` filter at all | 1.4336 → 1.4217 (-0.8%) | 1.4631 → 1.4741 (+0.8%) | 1.4406 → 1.4330 (-0.5%) | no: Doom slower |
+| a pad, a static array of N words declared before `l1_has` and used after the loop (gpu_vm's 880f7d1), N = 1, 3, 5, 9, 13, 17, 24 (with the `uint4`) | +0.9, +0.4, +1.1, +0.6, +0.2, +0.2, -0.8%; N 24 again -0.6, -0.7% | -1.6, -2.7, -4.6, -1.3, -1.9, -1.0, -1.5%; N 24 again -0.4, +0.2% | -1.0, -0.8, -1.0, -1.6, -0.6, -1.3, -1.0%; N 24 again -0.9, -1.1% | no: N 5 slows the shell loop, N 24 under 1% and level on Doom |
+
+The first array of four words was what cost: the stalled store's test and the one store site gain alone and
+lose with it, as gpu_vm's layouts did (a change to the local arrays moves the others). The COMMIT_BANDS mask
+dropped from the in-place tick was level too (shell loop runs in turn: 4,505.7, 4,935.4 and 4,937.0 thousand
+instructions a second without it against 4,487.0, 4,955.7 and 4,970.0 with it).
