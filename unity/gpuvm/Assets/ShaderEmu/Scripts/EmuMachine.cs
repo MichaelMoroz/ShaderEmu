@@ -82,7 +82,7 @@ public class EmuMachine : UdonSharpBehaviour
                                               // thread a frame in the world for 0.1 ms of card (docs/REGRESSIONS.md: the CPU is what a world lacks)
     public bool gvmCommitBoth;                // (a check: the camera's commit, then the blits' over it)
     public Material gpuBlitMaterial;          // GvmGpuDrawBlit: the GPU's 8 passes as blits into its target
-    public bool gvmGpuBlits;                  // the GPU's lists drawn by those blits, no camera (off: step 2 item 4)
+    public bool gvmGpuBlits = true;           // the GPU's lists drawn by those blits, no camera (step 2 item 4: a camera of main thread a frame)
     public Material gvmTick0Material;         // core 0's tick when the step has CORE0 (GvmTick0), else none
     public Material gvmTickOneMaterial;       // GvmTickOne: the tick as a blit into one target, no camera
     public Material gvmStateOneMaterial;      // GvmStateOne: a state set between the eight targets and GvmTickOne's one
