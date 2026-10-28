@@ -628,7 +628,7 @@ static uint4 l1_tag[L1_BUCKETS];
 // buckets whose tags have been written this pass. Up to 128 buckets (L1_TABLE_BITS 6 and below) a uint4,
 // its word picked by selects: an array of four words is in local memory and read by a dynamic index on
 // every probe; the uint4 made the tick 3.9% faster on the shell loop, 5.0% on Doom, 3.9% on Quake's e1m1
-// (RVC_TICK_ALT on the card, 28 October 2026; gpu_vm keeps arrays of 1 to 3 words in registers)
+// (RVC_TICK_ALT on the card, 28 October 2026)
 #if L1_TABLE_BITS < 7
 static uint4 l1_occ = 0;
 #define L1_OCC(b) (((idx_uint4(l1_occ, (b) >> 5) >> ((b) & 31)) & 1) != 0)
