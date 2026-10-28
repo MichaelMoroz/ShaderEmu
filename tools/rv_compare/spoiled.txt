@@ -1,0 +1,9 @@
+# MACHINE:PART:ROUND why: a round left out of the means
+before:quake-server:1 the card slower 08:15-08:50 on 28 October: 6.6 rounds a frame against 7.2 and 7.1 at the same card ms; run again as round 2
+before:quake3-server:1 the card slower 08:15-08:50 on 28 October: 4.6 rounds a frame against 5.2 and 5.1 at the same card ms; run again as round 2
+before:quake3-menu:1 the card slower 08:15-08:50 on 28 October: 3.9 rounds a frame against 5.2 and 5.1 at the same card ms; run again as round 2
+before:halflife:1 the card slower 08:15-08:50 on 28 October: 6.1 rounds a frame against 7.0 and 6.8 at the same card ms; run again as round 2
+before:classicube:1 the card slower 08:15-08:50 on 28 October: 5.0 rounds a frame against 6.2 and 5.9 at the same card ms; run again as round 2
+before:tdawn:1 the card slower 08:15-08:50 on 28 October: 5.1 rounds a frame against 8.3 and 8.2 at the same card ms; run again as round 2
+before:ralert:1 the card slower 08:15-08:50 on 28 October: 4.4 rounds a frame against 7.7 and 7.6 at the same card ms; run again as round 2
+before:nes:1 the card slower 08:15-08:50 on 28 October: 4.7 rounds a frame against 7.6 and 7.4 at the same card ms; run again as round 2

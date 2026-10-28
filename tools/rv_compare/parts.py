@@ -1,0 +1,200 @@
+"""The parts compared (tools/rv_compare/cmp.py; GPU-VM's compare/parts.py with RISC-V alone): each a command typed at the shell (nano-X up), how long it may run (host frames of
+11.1 ms), the line that ends it, and its metrics: name -> (unit, better, metric); better is 'low' or 'high'.
+Metrics (cmp.measure): ('time', LINE) GO to a line, None the first list drawn; ('rate', FROM, COUNT, SCALE) lines (None:
+lists drawn) a second from a line (or seconds after GO) to the end; ('value', RE) / ('mean', RE) / ('last', RE): a
+number the program prints (group 1), the first, the mean or the last.
+
+Not here: CoreMark (no `coremark` in the image at 7624f55: it was only in nommu_hlb, a clang build of the bench's
+own), and the network games (two machines)."""
+import os
+
+T, R = 'low', 'high'
+FIRST = ('time', None)
+CUBE = 'mkdir -p /tmp/classicube; echo singleplayerphysics=false >> /tmp/classicube/options.txt; '
+
+def typed(src):
+    """a file's text as the harness's --input types it: cat into /tmp/m.c, ended by Ctrl-D (escapes for the quotes)"""
+    return src.replace('\\', '\\x5c').replace('"', '\\x22').replace("'", '\\x27').replace('\n', '\\n')
+
+
+MEMB = ('cat > /tmp/m.c\\n' + typed(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'memb.c')).read()) +
+        '\\x04cd /tmp; cc -o memb m.c && ./memb')
+
+PARTS = {
+    # ---- games: their start, menus and play
+    'doom': dict(group='game', cmd='DOOM_HASH_TICS=100 doom -1 -timedemo demo1', frames=3700, until='timed ',
+                 what="Doom: timedemo demo1 (as fast as it goes)",
+                 metrics={'start to first frame': ('s', T, FIRST),
+                          'timedemo tics a second': ('tics/s', R, ('rate', r'^doom: tic 100 ', r'^doom: tic \d+ state', 100)),
+                          'frames drawn': ('fps', R, ('rate', r'^doom: tic 100 ', None))}),
+    'doom-attract': dict(group='game', cmd='doom -1', frames=1500,
+                         what="Doom: the title and its demos as a player sees them (35 tics a second)",
+                         metrics={'start to first frame': ('s', T, FIRST), 'frames drawn': ('fps', R, ('rate', 5, None))}),
+    'quake': dict(group='game', pace=r'track 10:', cmd='QUAKE_TRACK=5 quake +map e1m1', frames=5000, until='track 1200:',
+                  what="Quake: e1m1 loaded and played (standing)",
+                  metrics={'start to first frame': ('s', T, FIRST),
+                           'start to the level': ('s', T, r'track 5:'),
+                           'server ticks in the level (QUAKE_TRACK)': ('ticks/s', R, ('rate', r'track 10:', r'track \d+:', 5)),
+                           'lists drawn in the level': ('fps', R, ('rate', r'track 10:', None)),
+                           "server's game time against the world's": ('%', R, ('svclock',))}),
+    'quake-server': dict(group='game', pace="a level's first frame", cmd='QUAKE_STATS_MS=2000 quake +map e1m1', frames=4500,
+                         what="Quake: e1m1, the server's ticks on its worker core (quakestat: every 2 s)",
+                         metrics={'start to the level': ('s', T, r"a level's first frame"),
+                                  'server ticks': ('ticks/s', R, ('pertimes', r'the server on a worker core: (\d+) frames of its own to these (\d+)', r'^quakestat: ([5-9]\d|\d{3,}) frames in (\d+) ms')),
+                                  'client frames': ('fps', R, ('sumratio', r'^quakestat: ([5-9]\d|\d{3,}) frames in (\d+) ms', 1000)),
+                                  'client frames drawn behind the older server answer': ('%', T, ('sumratio', r'(?=.*?(\d+) behind the older)frames of its own to these (\d+)', 100)),
+                                  'server instructions a tick': ('k', T, ('mean', r'frames of its own to these \d+ .*, (\d+) thousand instructions each'))}),
+    'quake-timedemo': dict(group='game', cmd='quake +timedemo demo1', frames=3600, until=' fps',
+                           what="Quake: timedemo demo1",
+                           metrics={'start to first frame': ('s', T, FIRST), 'timedemo': ('fps', R, ('value', r'([\d.]+) fps'))}),
+    'quake3': dict(group='game', pace="quake3: the level's first frame", cmd='QUAKE3_STATS_FRAMES=100 quake3 +set com_maxfps 0 +set fixedtime 33 +devmap q3dm17 +addbot sarge 3',
+                   frames=9000, until='q3stat: frame 600:', what="Quake III: q3dm17 with a bot",
+                   metrics={'start to first frame': ('s', T, FIRST),
+                            'start to the level': ('s', T, r"quake3: the level's first frame"),
+                            'frames in the level': ('fps', R, ('sumratio', r'frame (?!100:)\d+: (\d+) frames in (\d+) ms', 1000)),
+                            'lists drawn in the level': ('fps', R, ('rate', r"quake3: the level's first frame", None))}),
+    'quake3-server': dict(group='game', cmd='QUAKE3_SERVER_LOG=1 QUAKE3_STATS_FRAMES=100 quake3 +set com_maxfps 0 +set fixedtime 33 +devmap q3dm17 +addbot sarge 3',
+                          frames=9000, what="Quake III: the server's ticks on its worker (a q3srv: line a job)",
+                          metrics={'server game frames (sv_fps 20)': ('frames/s', R, ('sumrate', r'q3srv: job \d+: .* in (\d+) frames')),
+                                   'the world moves (a server job taken) every': ('ms', T, ('meangap', r'q3srv: job \d+: .* taken (\d+) ms')),
+                                   'a server job, posted to taken': ('ms', T, ('meandiff', r'q3srv: job \d+: posted (\d+) began \d+ ended \d+ taken (\d+) ms')),
+                                   'game frames a job': ('frames', T, ('mean', r'q3srv: job \d+: .* in (\d+) frames')),
+                                   "the server's worker while it runs": ('M instructions/s', R, ('perms', r'q3srv: job \d+: posted \d+ began (\d+) ended (\d+) .* frames, (\d+) instructions')),
+                                   'server crashes': ('', T, ('count', r'Server crashed')),
+                                   'instructions a job': ('k', T, ('mean', r'in \d+ frames, (\d+) instructions', 0.001))}),
+    'quake3-menu': dict(group='game', cmd='quake3', frames=5400, what="Quake III: its main menu",
+                        metrics={'start to first frame': ('s', T, FIRST), 'menu frames (from 30 s)': ('fps', R, ('rate', 30, None))}),
+    'halflife': dict(group='game', pace='hlmark: begins', cmd='HL_MARK=31,43 halflife +map hldemo1', frames=12000, until='hlmark: ends',
+                     what="Half-Life: hldemo1 played from second 31 to 43 of the level",
+                     metrics={'start to first frame': ('s', T, FIRST),
+                              'start to the level drawn': ('s', T, ('steady',)),
+                              'frames in the level': ('fps', R, ('rate', 'steady', None)),
+                              'start to second 31 of the level': ('s', T, r'hlmark: begins')}),
+    'classicube': dict(group='game', pace='classicube: steady', cmd=CUBE + 'CLASSICUBE_SEED=7 CLASSICUBE_STATS_MS=2000 classicube', frames=4500,
+                       what="ClassiCube: a new world, standing",
+                       metrics={'start to first frame': ('s', T, FIRST),
+                                'start to steady': ('s', T, r'classicube: steady'),
+                                'frames when steady': ('fps', R, ('rate', r'classicube: steady', None))}),
+    'tdawn-menu': dict(group='game', cmd='tdawn FROMINSTALL', frames=3600, what="Tiberian Dawn: its start and menu",
+                       metrics={'start to first frame': ('s', T, FIRST), 'start to the menu (its last list; it holds still)': ('s', T, ('lastlist',))}),
+    'tdawn': dict(group='game', cmd='TDAWN_AUTO=1 TDAWN_SEED=7 TDAWN_NO_DELAY=1 TDAWN_SCEN=3 TDAWN_FRAMES=1300 tdawn FROMINSTALL',
+                  frames=7200, until='tdawn: done', what="Tiberian Dawn: mission 3 played by itself, as fast as it goes",
+                  metrics={'start to first frame': ('s', T, FIRST),
+                           'game frames': ('frames/s', R, ('last', r'tdstat: frame \d+: ([\d.]+) game frames/s')),
+                           'start to frame 1300': ('s', T, r'tdawn: done')}),
+    'ralert': dict(group='game', pace='ralert: begun at frame 0', cmd='TDAWN_AUTO=1 RALERT_SIDE=soviet RALERT_SEED=7 RALERT_FRAMES=1300 ralert', frames=9600,
+                   until='ralert: done', what="Red Alert: its film, then the Soviet mission played by itself",
+                   metrics={'start to first frame': ('s', T, FIRST),
+                            'film (154 or 156 frames shown)': ('s', T, ('value', r'movie ENGLISH.VQA: \d+ frames in (\d+) ms', 0.001)),
+                            'start to the mission': ('s', T, r'ralert: begun at frame 0'),
+                            'mission start to frame 1300': ('s', T, ('gapline', r'ralert: begun at frame 0', r'ralert: done at frame 1300'))}),
+    'nes': dict(group='game', cmd='NES_FRAMES=1500 nes thwaite', frames=3000, until='nes: done', what="NES: thwaite",
+                metrics={'start to first frame': ('s', T, FIRST),
+                         "the NES's speed": ('%', R, ('mean', r"in \d+ ms \(\d+ drawn\): \d+ thousand instructions each, (\d+)% of its speed"))}),
+    'nxphys': dict(group='game', cmd='PHYS_SCENE=1 PHYS_STEPS=600 nxphys', frames=3600, until='physstat: done',
+                   what="nxphys: the wall, 600 substeps",
+                   metrics={'start to first frame': ('s', T, FIRST),
+                            '600 substeps': ('s', T, ('value', r'600 substeps in (\d+) ms', 0.001)),
+                            'a picture while it runs': ('ms', T, ('sumratio', r'substeps in (\d+) ms.*; (\d+) pictures'))}),
+    'pinball': dict(group='game', cmd='PINBALL_DEMO=1800 nxpinball', frames=3600, until='pinball: 1800 frames',
+                    what="Pinball: its demo, 1,800 frames",
+                    metrics={'start to first frame': ('s', T, FIRST), 'frames drawn': ('fps', R, ('rate', r'pinball: go', None)),
+                             'start to frame 1800': ('s', T, r'pinball: 1800 frames')}),
+    'micropolis': dict(group='game', cmd='MICROPOLIS_SUM=/usr/share/micropolis/cities/haight.cty,1000 nxmicropolis', frames=7200,
+                       until='micropolis: ', what="Micropolis: Haight, 1,000 ticks simulated",
+                       metrics={'start to the end': ('s', T, r'^micropolis: ')}),
+    'openttd': dict(group='game', cmd='OPENTTD_PLAY=1 OPENTTD_PAUSE=1 openttd -g /usr/share/openttd/busy.sav', frames=15000,
+                    until='play PL-DONE', what="OpenTTD: a busy game loaded, scrolled, zoomed, its windows",
+                    metrics={'start to first frame': ('s', T, FIRST),
+                             'start to the game': ('s', T, r'play PL-GO'),
+                             'scroll': ('pictures/s', R, ('value', r'play scroll: .* ([\d.]+) a second')),
+                             'zoomed out': ('pictures/s', R, ('value', r'play zoomed out: .* ([\d.]+) a second')),
+                             'windows': ('pictures/s', R, ('value', r'play windows: .* ([\d.]+) a second'))}),
+    'openttd-title': dict(group='game', pace='steady', cmd='openttd', frames=6750, what="OpenTTD: its title screen (a game behind the menu)",
+                          metrics={'start to first frame': ('s', T, FIRST), 'start to the title drawn': ('s', T, ('steady',)), 'title frames': ('fps', R, ('rate', 'steady', None))}),
+    # ---- applications
+    'video-mpg': dict(group='app', cmd='NXVIDEO_ONCE=1 nxvideo', frames=3000, until='picture 4[5-7]\\d of 480',
+                      what='nxvideo: Big Buck Bunny, MPEG-1 320 x 176 at 24 pictures a second',
+                      metrics={'start to first picture': ('s', T, r'film at 0 ms'),
+                               'pictures left out': ('pictures', T, ('last', r'nxvideostat: picture \d+ of 480, (\d+) left out')),
+                               'frames drawn': ('fps', R, ('rate', r'film at 1\d\d\d ms', None))}),
+    'video-avi': dict(group='app', cmd='NXVIDEO_ONCE=1 nxvideo "/root/Videos/Big Buck Bunny.avi"', frames=3000, until='client closed socket',
+                      what='nxvideo: Big Buck Bunny, the AVI (MPEG-4)',
+                      metrics={'start to first picture': ('s', T, r'film at 0 ms'),
+                               'pictures left out': ('pictures', T, ('last', r'nxvideostat: picture \d+ of \d+, (\d+) left out')),
+                               'frames drawn': ('fps', R, ('rate', r'film at 1\d\d\d ms', None))}),
+    'decode-avi': dict(group='app', cmd='media_test video "/root/Videos/Big Buck Bunny.avi" 16', frames=5400, until="pictures' sum",
+                       what='libmedia: the AVI decoded whole on 16 workers', metrics={'decode': ('s', T, r"pictures' sum")}),
+    'nxray': dict(group='app', cmd='nxray', frames=2700, what='nxray: 320 x 240 on 255 workers',
+                  metrics={'start to first picture': ('s', T, r'raystat: '),
+                           'pictures': ('pictures/s', R, ('mean', r'raystat: \d+ x \d+ with \d+ workers: ([\d.]+) pictures a second'))}),
+    'nxpath': dict(group='app', cmd='NXPATH_AUTO=1 NXPATH_EXIT=1 NXPATH_SIZE=160x120 NXPATH_SAMPLES=2 nxpath', frames=3600,
+                   until='pathstat:', what='nxpath: the default scene, 160 x 120, 2 samples',
+                   metrics={'start to the picture': ('s', T, r'pathstat:'),
+                            'the tree (BVH)': ('ms', T, ('value', r'tree (\d+) ms')),
+                            'the picture': ('ms', T, ('value', r'picture (\d+) ms'))}),
+    'nxweb': dict(group='app', cmd='NXWEB_DUMP=1 nxweb', frames=2700, until='nxweb: /usr', what='nxweb: its start page',
+                  metrics={'start to first frame': ('s', T, FIRST), 'start to the page laid out': ('s', T, r'^nxweb: /usr')}),
+    'nxedit': dict(group='app', cmd=typed('for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25; do echo "## Part $i"; echo; '
+                   'echo "Some *text* of part $i, with a [link](p$i.md), **bold** and a list:"; echo; echo "- one"; echo "- two $i"; echo; done > /tmp/t.txt; '
+                   'echo MD""READY; nxedit /tmp/t.txt'), frames=1800,
+                   what='nxedit: a text of 175 lines made in /tmp, opened to edit',
+                   metrics={'file made to the window still': ('s', T, ('tolast', r'^MDREADY'))}),
+    'nxide': dict(group='app', cmd="NXIDE_PRINT=1 NXIDE_SCRIPT='example:pi run wait quit quit' nxide", frames=4500,
+                  until='the program ended', what='nxide: started, pi.js opened and run',
+                  metrics={'start to first frame': ('s', T, FIRST), 'start to its keys': ('s', T, r'nxide: key New'),
+                           'start to the result': ('s', T, r'3\.14159265')}),
+    'desktop': dict(group='app', cmd='killall nano-X; sleep 1; export UI_LAUNCH=print; nx; sleep 4; nxkey 266,94 266,94; sleep 4; echo DE""SK',
+                    frames=3600, until='DESK', what='the desktop started, the Calculator launched from its icon',
+                    metrics={'desktop up (first frame after the old server)': ('s', T, r'nxpersist'),
+                             'Calculator window shown after': ('ms', T, ('value', r'a window shown after (\d+) ms'))}),
+    'nxview': dict(group='app', cmd='NXVIEW_PRINT=1 nxview /root/Pictures/Earthrise.jpg', frames=2700,
+                   until='Earthrise.jpg, ', what='nxview: a JPEG picture opened',
+                   metrics={'start to first frame': ('s', T, FIRST), 'start to the picture': ('s', T, r'Earthrise\.jpg, \d+ x')}),
+    'nxpaint': dict(group='app', cmd='NXPAINT_SCRIPT="new:200x120 fg:ff0000 tool:Rect size:2 drag:20,20:120,90 sum tool:Fill fg:00ff00 press:60,50 pixel:60,50 undo sum quit quit" nxpaint',
+                    frames=2700, until='1 to make again', what='nxpaint: a rectangle drawn, filled and taken back',
+                    metrics={'start to the script done': ('s', T, r'1 to make again')}),
+    'nxfiles': dict(group='app', cmd='NXFILES_PRINT=1 nxfiles /usr/share', frames=1800, what='nxfiles: /usr/share opened',
+                    metrics={'start to first frame': ('s', T, FIRST), 'start to the folder shown (its last list)': ('s', T, ('lastlist',))}),
+    # ---- memory: what one core stores and loads a second (memb.c, compiled in the machine by its own cc, typed in)
+    'memory': dict(group='memory', cmd=MEMB, frames=9000, args=('--uart-burst', '4'), until='memb: finished', env={'RVC_CORES_LOG': '{stem}.cores'},
+                   what="memb.c on one core (cc in the machine): sequential, byte, random stores and loads, libc's copy and fill",
+                   metrics={name: ('MB/s', R, ('value', r'memb: ' + name + r' ([\d.]+) MB/s')) for name in
+                            ['store-seq-word', 'load-seq-word', 'store-seq-byte', 'memcpy-1MB', 'memset-1MB', 'memcpy-8KB', 'no-memory-same-loop',
+                             'store-rand-64KB', 'store-rand-1MB', 'store-rand-16MB', 'load-rand-16MB']}),
+    'memory-kernel': dict(group='memory', cmd='dd if=/dev/zero of=/dev/null bs=64k count=512 2>&1 | tail -1; echo DD""1; '
+                          'dd if=/dev/zero of=/tmp/z bs=64k count=128 2>&1 | tail -1; echo DD""2; cat /tmp/z /tmp/z /tmp/z /tmp/z > /dev/null; echo DD""3',
+                          frames=4500, until='DD3', what="the kernel's copy: 32 MB from /dev/zero, 8 MB into a file of the memory's file system, it read 4 times",
+                          metrics={'/dev/zero to /dev/null, 32 MB': ('s', T, r'^DD1'), 'into /tmp, 8 MB': ('s', T, ('gapline', r'^DD1', r'^DD2')),
+                                   'out of /tmp, 32 MB': ('s', T, ('gapline', r'^DD2', r'^DD3'))}),
+    # ---- terminal programs
+    'cc': dict(group='terminal', cmd='cd /tmp; cc /usr/share/example-cube.c -o cube.x; echo CC""DONE', frames=3600, until='CCDONE',
+               what='cc (tcc): an example compiled and linked', metrics={'compile': ('s', T, r'^CCDONE')}),
+    'qjs': dict(group='terminal', cmd='qjs /examples/pi.js 200; echo QJ""DONE', frames=3600, until='QJDONE',
+                what='qjs: 200 digits of pi', metrics={'run': ('s', T, r'^QJDONE')}),
+    'python': dict(group='terminal', cmd="micropython -c 'print(sum(i*i for i in range(20000)))'; echo PY\"\"DONE", frames=3600,
+                   until='PYDONE', what='micropython: a sum of 20,000 squares (big integers past 2^31)', metrics={'run': ('s', T, r'^PYDONE')}),
+    'gzip': dict(group='terminal', cmd='echo SE""Q; seq 1 20000 > /tmp/g; echo GZ""GO; i=0; while [ $i -lt 3 ]; do gzip -c /tmp/g > /dev/null; i=$((i+1)); done; echo GZ""DONE',
+                 frames=7200, until='GZDONE', what='gzip: seq 1 20000 (109 KB of text) made, then gzip three times',
+                 metrics={'seq 1 20000 into /tmp': ('s', T, ('gapline', r'^SEQ', r'^GZGO')), 'gzip three times': ('s', T, ('gapline', r'^GZGO', r'^GZDONE'))}),
+    'htop': dict(group='terminal', cmd='htop -d 5; echo HT""DONE', frames=900, until='HTDONE', sends=(('Quit', 'q'),),
+                 what='htop: started, quit by q once its keys are drawn', metrics={'start to its screen and out': ('s', T, r'HTDONE')}),
+}
+
+# The Start menu's other programs: each started from the Start menu by its keys (nxkey: meta, the folder's letter,
+# enter, the program's letters, enter) on the desktop, which says when its window is shown (UI_LAUNCH=print: from the
+# key that starts it), then 8 s of it: the lists drawn a second from 3 s on, and `ps` shows which program started.
+for _name, _keys, _prog, _what in (
+        ('tetris', 'g 300 enter 300 t', 'nxtetris', 'Tetris'), ('mines', 'g 300 enter 300 m', 'nxmine', 'Mines'),
+        ('terminal', 'u 300 enter 300 t', 'nxterm', 'the Terminal'), ('clock', 'u 300 enter 300 c 300 c', 'nxclock', 'the Clock'),
+        ('monitor', 'u 300 enter 300 m', 'nxmon', 'the Monitor'), ('network', 'u 300 enter 300 n', 'nxnet', 'Network'),
+        ('settings', 'u 300 enter 300 s', 'nxsettings', 'Settings'), ('eyes', 'o 300 enter 300 e', 'nxeyes', 'Eyes'),
+        ('glxgears', 'o 300 enter 300 g', 'glxgears', 'Gears (OpenGL)'), ('imgui', 'o 300 enter 300 d', 'imdemo', 'Dear ImGui'),
+        ('music', 'o 300 enter 300 m', 'nxplay', 'the Music player'), ('nes-nova', 'g 300 enter 300 n', 'nes nova', 'Nova the Squirrel (NES)'),
+        ('example-cube', 'p 300 enter 300 c', 'example-cube', 'the IDE with the Cube example')):
+    PARTS[_name] = dict(group='app', frames=2700, until='APPDONE',
+                        cmd=f'killall nano-X; sleep 1; export UI_LAUNCH=print; nx; sleep 4; nxkey meta 400 {_keys} 300 enter; sleep 8; '
+                            f'ps | grep -v grep | grep "{_prog}" | sed "s/^/RAN: /"; echo AP""PDONE',
+                        what=f'{_what}: started from the Start menu, 8 s',
+                        metrics={'window shown after (from its key)': ('ms', T, ('value', r'a window(?: without a frame)? shown after (\d+) ms')),
+                                 'lists drawn from 3 s': ('fps', R, ('rate', 3, None))})
