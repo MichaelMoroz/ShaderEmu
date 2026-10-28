@@ -683,6 +683,7 @@ frame's tick, the tree's first:
 | `l1_has` (1,024 bits in local memory) as 128 bits in a `uint4`, with the `uint4` above | 1.4336 → 1.4315 | 1.4631 → 1.4772 (+1.0%) | 1.4406 → 1.4422 | no |
 | the same as 256 bits in two `uint4`s | 1.4336 → 1.4385 | 1.4631 → 1.4764 (+0.9%) | 1.4406 → 1.4439 | no |
 | no `l1_has` filter at all | 1.4336 → 1.4217 (-0.8%) | 1.4631 → 1.4741 (+0.8%) | 1.4406 → 1.4330 (-0.5%) | no: Doom slower |
+| a pad, a static array of N words declared before `l1_has` and used after the loop (gpu_vm's 880f7d1), N = 1, 3, 5, 9, 13, 17, 24 (with the `uint4`) | +0.9, +0.4, +1.1, +0.6, +0.2, +0.2, -0.8%; N 24 again -0.6, -0.7% | -1.6, -2.7, -4.6, -1.3, -1.9, -1.0, -1.5%; N 24 again -0.4, +0.2% | -1.0, -0.8, -1.0, -1.6, -0.6, -1.3, -1.0%; N 24 again -0.9, -1.1% | no: N 5 slows the shell loop, N 24 under 1% and level on Doom |
 
 The first array of four words was what cost: the stalled store's test and the one store site gain alone and
 lose with it, as gpu_vm's layouts did (a change to the local arrays moves the others). The COMMIT_BANDS mask
