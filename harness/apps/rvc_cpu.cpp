@@ -995,10 +995,26 @@ static void atom_merge() {
 }
 
 // RVC_ZB=1: Zba and Zbb (RV32), which neither the tick nor the default machine has; a count only.
-static bool zb_on = false;
+// RVC_ISA=zb,zbs,zicond,zfinx (any of them; docs/plans/riscv-isa.md): Zba and Zbb, Zbs, Zicond and Zfinx, for counting
+// what programs built with them run. Their encodings are no fast kind's (step_key's funct7 classes send them to the
+// general step), so the plain path does not look at them; under zfinx the float handlers take the integer registers
+// for the float ones, and flw, fsw and the two fmv's are illegal.
+static bool zb_on = false, zbs_on = false, zicond_on = false, zfinx_on = false, zb_table = false;
+#define ZFX(c) (zfinx_on && (c).priv == PRIV_U)   // (the kernel keeps its float state in the float registers: Zfinx is user mode's)
 static u64 zb_run = 0;
 static bool zb(u32 ins, u32 op, u32 f3, u32 f7, u32 rs2, u32 a, u32 b, u32& result) {
     u32 sh = rs2;
+    if (zbs_on && (f7 == 0x14 || f7 == 0x24 || f7 == 0x34) && (f3 == 1 || (f3 == 5 && f7 == 0x24))) {
+        u32 bit = 1u << ((op == 0x13 ? sh : b) & 31);   // bset, bclr, binv, bext (and their immediates)
+        if (f3 == 5) { result = (a & bit) != 0; return true; }
+        result = f7 == 0x14 ? a | bit : f7 == 0x24 ? a & ~bit : a ^ bit;
+        return true;
+    }
+    if (zicond_on && op == 0x33 && f7 == 0x07 && (f3 == 5 || f3 == 7)) {   // czero.eqz, czero.nez
+        result = (f3 == 5 ? b == 0 : b != 0) ? 0 : a;
+        return true;
+    }
+    if (!zb_on) return false;
     if (op == 0x13) {
         if (f3 == 1 && f7 == 0x30) {
             switch (rs2) {
@@ -1139,7 +1155,7 @@ static __declspec(noinline) int general_step(Core& c, u32 ins) {
     u32 a = c.x[rs1], b = c.x[rs2], next = pc + 4, result = 0;
     bool write = true, illegal = false;
     if (!W && calls_on && c.hart == 0) call_fast(c, c.clock - 1);   // (this one is counted in c.clock already)
-    if (zb_on && (op == 0x13 || op == 0x33) && zb(ins, op, f3, f7, rs2, a, b, result)) { _InterlockedIncrement64((volatile long long*)&zb_run); op = 0x80; }   // (no opcode is 0x80)
+    if ((zb_on || zbs_on || zicond_on) && (op == 0x13 || op == 0x33) && zb(ins, op, f3, f7, rs2, a, b, result)) { _InterlockedIncrement64((volatile long long*)&zb_run); op = 0x80; }   // (no opcode is 0x80)
     // which funct7 each op and op-imm has, as the tick's general path (emu.h): the rest are illegal
     if ((op == 0x13 || (op == 0x33 && f7 != 1)) &&
         !(((f7 == 0 ? 0xffffu : f7 == 0x20 ? 0x21fdu : 0x00ddu) >> (((ins >> 2) & 8) | f3)) & 1)) op = 0x81;
@@ -1301,7 +1317,7 @@ static __declspec(noinline) int general_step(Core& c, u32 ins) {
     case 0x07:   // flw
     case 0x27: { // fsw
         u32 va, v;
-        if (f3 != 2 || !(c.mstatus & 0x6000)) { illegal = true; break; }
+        if (f3 != 2 || !(c.mstatus & 0x6000) || ZFX(c)) { illegal = true; break; }
         write = false;
         if (op == 0x07) {
             va = a + ((i32)ins >> 20);
@@ -1313,41 +1329,45 @@ static __declspec(noinline) int general_step(Core& c, u32 ins) {
         break;
     }
     case 0x43: case 0x47: case 0x4b: case 0x4f: {   // fmadd, fmsub, fnmsub, fnmadd
-        if (!(c.mstatus & 0x6000) || (f7 & 3)) { illegal = true; break; }
-        float x = fl(c.f[rs1]), y = fl(c.f[rs2]), z = fl(c.f[ins >> 27]);
+        if ((!ZFX(c) && !(c.mstatus & 0x6000)) || (f7 & 3)) { illegal = true; break; }
+        u32* F = ZFX(c) ? c.x : c.f;   // (Zfinx: the floats in the integer registers)
+        float x = fl(F[rs1]), y = fl(F[rs2]), z = fl(F[ins >> 27]);
         float r = op == 0x43 ? fmaf(x, y, z) : op == 0x47 ? fmaf(x, y, -z) : op == 0x4b ? fmaf(-x, y, z) : fmaf(-x, y, -z);
-        c.f[rd] = canon(r);
+        F[rd] = canon(r);
+        c.x[0] = 0;
         write = false;
         break;
     }
     case 0x53: {
-        if (!(c.mstatus & 0x6000)) { illegal = true; break; }
-        u32 fa = c.f[rs1], fb = c.f[rs2], rm = f3 == 7 ? (c.fcsr >> 5) & 7 : f3;
+        if (!ZFX(c) && !(c.mstatus & 0x6000)) { illegal = true; break; }
+        u32* F = ZFX(c) ? c.x : c.f;
+        u32 fa = F[rs1], fb = F[rs2], rm = f3 == 7 ? (c.fcsr >> 5) & 7 : f3;
         float x = fl(fa), y = fl(fb);
         write = false;
         switch (f7) {
-        case 0x00: c.f[rd] = canon(x + y); break;
-        case 0x04: c.f[rd] = canon(x - y); break;
-        case 0x08: c.f[rd] = canon(x * y); break;
-        case 0x0c: c.f[rd] = canon(x / y); break;
-        case 0x2c: c.f[rd] = canon(sqrtf(x)); break;
-        case 0x10: c.f[rd] = f3 == 0 ? (fa & 0x7fffffff) | (fb & 0x80000000) : f3 == 1 ? (fa & 0x7fffffff) | (~fb & 0x80000000) : fa ^ (fb & 0x80000000); break;
+        case 0x00: F[rd] = canon(x + y); break;
+        case 0x04: F[rd] = canon(x - y); break;
+        case 0x08: F[rd] = canon(x * y); break;
+        case 0x0c: F[rd] = canon(x / y); break;
+        case 0x2c: F[rd] = canon(sqrtf(x)); break;
+        case 0x10: F[rd] = f3 == 0 ? (fa & 0x7fffffff) | (fb & 0x80000000) : f3 == 1 ? (fa & 0x7fffffff) | (~fb & 0x80000000) : fa ^ (fb & 0x80000000); break;
         case 0x14: {
             bool an = is_nan(fa), bn = is_nan(fb);
-            if (an && bn) c.f[rd] = 0x7fc00000;
-            else if (an) c.f[rd] = fb;
-            else if (bn) c.f[rd] = fa;
-            else if (x == y) c.f[rd] = f3 == 0 ? (fa | fb) : (fa & fb);   // -0 is under +0
-            else c.f[rd] = (f3 == 0) == (x < y) ? fa : fb;
+            if (an && bn) F[rd] = 0x7fc00000;
+            else if (an) F[rd] = fb;
+            else if (bn) F[rd] = fa;
+            else if (x == y) F[rd] = f3 == 0 ? (fa | fb) : (fa & fb);   // -0 is under +0
+            else F[rd] = (f3 == 0) == (x < y) ? fa : fb;
             break;
         }
         case 0x60: result = to_int(bits(round_mode(x, rm)), rs2 == 1); if (is_nan(fa)) result = rs2 == 1 ? 0xffffffffu : 0x7fffffffu; write = true; break;
-        case 0x68: c.f[rd] = bits(rs2 == 1 ? (float)a : (float)(i32)a); break;
-        case 0x70: result = f3 == 0 ? fa : fclass(fa); write = true; break;
-        case 0x78: c.f[rd] = a; break;
+        case 0x68: F[rd] = bits(rs2 == 1 ? (float)a : (float)(i32)a); break;
+        case 0x70: if (ZFX(c) && f3 == 0) illegal = true; result = f3 == 0 ? fa : fclass(fa); write = true; break;
+        case 0x78: if (ZFX(c)) illegal = true; else F[rd] = a; break;
         case 0x50: result = f3 == 2 ? x == y : f3 == 1 ? x < y : x <= y; write = true; break;
         default: illegal = true;
         }
+        c.x[0] = 0;
         break;
     }
     default: illegal = true;
@@ -1692,11 +1712,13 @@ HANDLER(h_rem) { u32 a = RS1, b = RS2; SET(b == 0 ? a : (a == 0x80000000u && b =
 HANDLER(h_remu) { u32 a = RS1, b = RS2; SET(b == 0 ? a : a % b); NEXT(PC + 4); }
 
 // The floats (docs/machine/fpu.md) as the general step makes them, when they are on.
-#define FLOATS_ON() if (!(R->c->mstatus & 0x6000)) { [[msvc::musttail]] return h_general<W>(R, x, st, ins); }
-HANDLER(h_flw) { FLOATS_ON(); [[msvc::musttail]] return h_load<W, 4, false, true>(R, x, st, ins); }
-HANDLER(h_fsw) { FLOATS_ON(); [[msvc::musttail]] return h_store<W, 4, true>(R, x, st, ins); }
-HANDLER(h_flw_side) { FLOATS_ON(); [[msvc::musttail]] return h_load_side<W, 4, false, true>(R, x, st, ins); }
-HANDLER(h_fsw_side) { FLOATS_ON(); [[msvc::musttail]] return h_store_side<W, 4, true>(R, x, st, ins); }
+// (under RVC_ISA's zfinx the float state is not looked at, and flw, fsw and the fmv's are the general step's: illegal)
+#define FLOATS_ON() if (!(R->c->mstatus & 0x6000) && !ZFX(*R->c)) { [[msvc::musttail]] return h_general<W>(R, x, st, ins); }
+#define FLOAT_MEM_ON() if (!(R->c->mstatus & 0x6000) || ZFX(*R->c)) { [[msvc::musttail]] return h_general<W>(R, x, st, ins); }
+HANDLER(h_flw) { FLOAT_MEM_ON(); [[msvc::musttail]] return h_load<W, 4, false, true>(R, x, st, ins); }
+HANDLER(h_fsw) { FLOAT_MEM_ON(); [[msvc::musttail]] return h_store<W, 4, true>(R, x, st, ins); }
+HANDLER(h_flw_side) { FLOAT_MEM_ON(); [[msvc::musttail]] return h_load_side<W, 4, false, true>(R, x, st, ins); }
+HANDLER(h_fsw_side) { FLOAT_MEM_ON(); [[msvc::musttail]] return h_store_side<W, 4, true>(R, x, st, ins); }
 // (the floats' work is a function of its own too: a handler that keeps a float register calls the next one)
 #define FMA(name, x_, y_, z_)                                                                        \
     static __declspec(noinline) void name##_do(u32* f, u32 ins) {                                    \
@@ -1704,8 +1726,9 @@ HANDLER(h_fsw_side) { FLOATS_ON(); [[msvc::musttail]] return h_store_side<W, 4, 
         f[RD] = canon(fmaf(x_, y_, z_));                                                             \
     }                                                                                                \
     HANDLER(name) {                                                                                  \
-        if (!(R->c->mstatus & 0x6000) || (ins >> 25 & 3)) { [[msvc::musttail]] return h_general<W>(R, x, st, ins); } \
-        name##_do(R->c->f, ins);                                                                     \
+        if ((!(R->c->mstatus & 0x6000) && !ZFX(*R->c)) || (ins >> 25 & 3)) { [[msvc::musttail]] return h_general<W>(R, x, st, ins); } \
+        name##_do(ZFX(*R->c) ? x : R->c->f, ins);                                                      \
+        x[0] = 0;                                                                                    \
         NEXT_FAR(PC + 4);                                                                            \
     }
 FMA(h_fmadd, a, b, z)
@@ -1715,7 +1738,7 @@ FMA(h_fnmadd, -a, b, -z)
 #undef FMA
 // One of op-fp's: false for one the general step makes.
 static __declspec(noinline) void fop_do(Core& c, u32* x, u32 ins) {
-    u32* f = c.f;
+    u32* f = ZFX(c) ? x : c.f;
     u32 fa = f[(ins >> 15) & 31], fb = f[(ins >> 20) & 31], f3 = (ins >> 12) & 7, rs2 = (ins >> 20) & 31, rd = RD;
     float a = fl(fa), b = fl(fb);
     switch (ins >> 25) {
@@ -1749,8 +1772,9 @@ HANDLER(h_fop) {
     FLOATS_ON();
     // (fop_do's cases; the rest the general step makes)
     const u64 made_lo = 0x100000111111ull, made_hi = 0x101010100010000ull;   // 0x00 0x04 0x08 0x0c 0x10 0x14 0x2c; 0x50 0x60 0x68 0x70 0x78
-    if (!((((ins >> 31) ? made_hi : made_lo) >> ((ins >> 25) & 63)) & 1)) { [[msvc::musttail]] return h_general<W>(R, x, st, ins); }
+    if (!((((ins >> 31) ? made_hi : made_lo) >> ((ins >> 25) & 63)) & 1) || (ZFX(*R->c) && ((ins >> 25) == 0x78 || ((ins >> 25) == 0x70 && ((ins >> 12) & 7) == 0)))) { [[msvc::musttail]] return h_general<W>(R, x, st, ins); }
     fop_do(*R->c, x, ins);
+    x[0] = 0;
     NEXT_FAR(PC + 4);
 }
 
@@ -2203,7 +2227,7 @@ static const uint8_t* step_kinds(const Core& c) {
     static const uint8_t all_general[8192] = {};
     if (!step_kinds_made) make_step_kinds();
     if (prof::active || (keep_last && c.hart == 0) || check_general) return all_general;
-    return step_kind[(calls_on && c.hart == 0 ? 2 : 0) + zb_on];
+    return step_kind[(calls_on && c.hart == 0 ? 2 : 0) + zb_table];
 }
 
 static u64 run(Core& c, u64 budget) {
@@ -3286,7 +3310,14 @@ int main(int argc, char** argv) {
     if (getenv("RVC_WC_BITS")) wc_bits0 = (u32)std::max(4, std::min(8, atoi(getenv("RVC_WC_BITS"))));
     if (wc_on) wcache.resize(cores.size());
     if (wc_on && getenv("RVC_WC_LOG")) wc_log = fopen(getenv("RVC_WC_LOG"), "wb");
-    zb_on = getenv("RVC_ZB") && atoi(getenv("RVC_ZB")) != 0;
+    zb_on = zb_table = getenv("RVC_ZB") && atoi(getenv("RVC_ZB")) != 0;
+    if (const char* isa = getenv("RVC_ISA")) {
+        std::string l = std::string(",") + isa + ",";
+        zb_on = zb_on || l.find(",zb,") != std::string::npos;
+        zbs_on = l.find(",zbs,") != std::string::npos;
+        zicond_on = l.find(",zicond,") != std::string::npos;
+        zfinx_on = l.find(",zfinx,") != std::string::npos;
+    }
     gpu_copy_on = getenv("RVC_GPU_COPY") && atoi(getenv("RVC_GPU_COPY")) != 0;
     check_init();
     if (opt.netPort) {
@@ -3404,7 +3435,7 @@ int main(int argc, char** argv) {
         fprintf(stderr, "[cpu] write cache: %llu passes of core 0 and %llu of workers ended full (RVC_WCACHE)\n",
                 (unsigned long long)wc_full_passes[0], (unsigned long long)wc_full_passes[1]);
     if (check_on) fprintf(stderr, "[check] RVC_FAST_CHECK: %llu passes of a core alike both ways\n", (unsigned long long)fc.checks);
-    if (zb_on) fprintf(stderr, "[cpu] Zba and Zbb instructions run (RVC_ZB): %llu\n", (unsigned long long)zb_run);
+    if (zb_on || zbs_on || zicond_on) fprintf(stderr, "[cpu] Zba, Zbb, Zbs and Zicond instructions run (RVC_ZB, RVC_ISA): %llu\n", (unsigned long long)zb_run);
     if (copies_long || copy_waits || getenv("RVC_COPY_STATS"))
         fprintf(stderr, "[cpu] copies from RAM to RAM: %llu, %llu of them over 256 KB (the longest %llu bytes): %llu chunks; cores waited %llu passes\n",
                 (unsigned long long)copies_made.load(), (unsigned long long)copies_long.load(), (unsigned long long)copy_most.load(),
