@@ -182,8 +182,22 @@ it goes with an image of its own, and a snapshot from before does not load.
   `types.h:1542`, `pend_texel` in `mem.h:102`, `gpu.h:132`, `GpuVolumePass.cginc`): a word is a 4-way switch and a
   float-to-byte unpack, a whole texel four fetches (ROM copies, Quake III's draws from the ROM, sound's samples). gpu_vm's
   `_GvmRom` is one integer texture, unpacked once at power-on by a blit (`GvmInitRom`, `EmuMachine.ApplyImage`); its
-  device tree is in RAM at 0x1000, so `_Data_DTB_*`'s four textures go too. Not measured on RISC-V. The cost: a second
-  copy of the ROM in video memory (gpu_vm's 268 MB) unless the RGBA8 sources are let go after the blit.
+  device tree is in RAM at 0x1000, so `_Data_DTB_*`'s four textures go too. Not measured on RISC-V.
+
+  Better than gpu_vm's blit: the ROM shipped as one 16-byte texture, with no unpack and no second copy. Tried in the
+  world's editor (Unity 2022.3.22f1, 28 October 2026):
+  - `R32G32B32A32_UInt` cannot be a `Texture2D` there: Unity says the format cannot be sampled and will not make one.
+  - `R32G32B32A32_SFloat` (`RGBAFloat`), saved and loaded again, kept every byte, NaNs of every kind, denormals, -0
+    and infinities included. The card reads such a texture's bits exactly: `Load` or `SampleLevel` at a point, then
+    `asuint` (`gpu_vm/IDEAS.md` row 30).
+  - The project saves assets as text (`ForceText`), and a texture's pixels go into it as hex: 4,096 bytes made a
+    9,281-byte file. The ROM is 282 MB (`build/images/nommu/rootfs.bin`), so it does not go in as a saved asset but
+    through a `ScriptedImporter` that reads the image file and makes the `RGBAFloat` texture in Unity's own binary cache.
+    That replaces `ShaderEmuImages.WriteLanes`' four PNGs and the importer settings that keep them byte for byte.
+
+  At 2,048 texels wide the ROM is 8,600 rows, under the 16,384 limit: one texture of the same size in video memory as
+  the four RGBA8 ones together. In the shaders, `_Data_MTD_R/G/B/A` become one `Texture2D<float4>` read by `asuint`,
+  one fetch a texel. The harness uploads the same texture.
 - **The GPU's picture copied into RAM by a draw of its own.** Every pixel of RISC-V's commit reads `GPU_COPY` and
   branches (`gpu_writeback()`, `main.shader:763`); gpu_vm draws the copy apart (`devices.shader`'s GPUWriteback, the
   destination's rows only). Minor.
