@@ -581,7 +581,7 @@ static inline bool load(Core& c, u32 va, int size, u32& value, Trap& t) {
 // bucket has room for ends the core's pass before it, and the instruction runs in the next.
 static bool wc_on = false;
 static u64 wc_pass = 1, wc_full_passes[2];   // passes ended so: core 0's, the workers'
-struct WCache { u64 stamp[128]; u32 tag[128][3]; };
+struct WCache { u64 stamp[448]; u32 tag[448][3]; };   // (up to 2^8 + 2^7 + 2^6 buckets: RVC_WC_BITS)
 static std::vector<WCache> wcache;
 static u32 wc_bits_of(int hart);
 // RVC_WC_LOG=FILE (with RVC_WCACHE=1; a measure, gpu_vm/PROFILE_Q3.md "The write cache"): from --count-from on, at each
@@ -1054,7 +1054,10 @@ enum { MC_PARKED, MC_RUNNING, MC_ASLEEP, MC_FAULTED, MC_CALLING };
 struct Worker { int state = MC_PARKED; u32 seen = 0, start_seen = 0, job_seen = 0, job_was = 0; };
 static std::vector<Worker> workers;
 static u32 geometry[256];   // each worker's cache bits as the machine's geometry has them; 0: no such worker
-static u32 wc_bits_of(int hart) { return hart ? geometry[hart] : 6; }
+// RVC_WC_BITS=N (4 to 8): core 0's tables of 2^N buckets, not the tick's 6 (L1_TABLE_BITS): the cache's size against
+// what a pass does (GPU-VM's compare/wcsize.py; tools/wcsize.py)
+static u32 wc_bits0 = 6;
+static u32 wc_bits_of(int hart) { return hart ? geometry[hart] : wc_bits0; }
 
 // ---- one pass of a core: up to `budget` instructions ----
 
@@ -3274,6 +3277,7 @@ int main(int argc, char** argv) {
     if (const char* f = getenv("RVC_PASSLOG"); f && *f && !(pass_log = fopen(f, "w"))) { fprintf(stderr, "rvc_cpu: RVC_PASSLOG: cannot write %s\n", f); return 2; }
     pass_log_stack = getenv("RVC_PASSLOG_STACK") ? atoi(getenv("RVC_PASSLOG_STACK")) : 0;
     wc_on = getenv("RVC_WCACHE") && atoi(getenv("RVC_WCACHE")) != 0;
+    if (getenv("RVC_WC_BITS")) wc_bits0 = (u32)std::max(4, std::min(8, atoi(getenv("RVC_WC_BITS"))));
     if (wc_on) wcache.resize(cores.size());
     if (wc_on && getenv("RVC_WC_LOG")) wc_log = fopen(getenv("RVC_WC_LOG"), "wb");
     zb_on = getenv("RVC_ZB") && atoi(getenv("RVC_ZB")) != 0;
