@@ -15,14 +15,16 @@ if [ ! -d "$Q/.git" ]; then
     echo "== QuickJS $COMMIT"
     git clone -q https://github.com/bellard/quickjs.git "$Q"
 fi
-# no os.Worker and no Atomics: both want threads and the A extension's atomics, which the machine lacks
-# (the tree is put back only when it is not that commit with these two changes: objects then stay)
-if [ "$(git -C "$Q" rev-parse HEAD)" != $COMMIT ] || [ "$(git -C "$Q" diff --stat | tail -1)" != " 2 files changed, 2 insertions(+), 2 deletions(-)" ]; then
+# no os.Worker and no Atomics: both want threads and the A extension's atomics, which the machine lacks;
+# and a bigint's limbs divided in 32-bit divisions (mp_div1.patch: 64-bit ones are library calls here)
+# (the tree is put back only when it is not that commit with these changes: objects then stay)
+if [ "$(git -C "$Q" rev-parse HEAD)" != $COMMIT ] || [ "$(git -C "$Q" diff --stat | tail -1)" != " 2 files changed, 45 insertions(+), 2 deletions(-)" ]; then
     git -C "$Q" checkout -q -f "$COMMIT" && git -C "$Q" clean -q -fd
     sed -i 's|^#define USE_WORKER$|/* #define USE_WORKER */|' "$Q/quickjs-libc.c"
+    git -C "$Q" apply "$HERE/mp_div1.patch"
     sed -i 's|^#define CONFIG_ATOMICS$|/* #define CONFIG_ATOMICS */|' "$Q/quickjs.c"
 fi
-grep -q '^/\* #define USE_WORKER \*/' "$Q/quickjs-libc.c" && grep -q '^/\* #define CONFIG_ATOMICS \*/' "$Q/quickjs.c" || { echo "QuickJS's switches moved"; exit 1; }
+grep -q '^/\* #define USE_WORKER \*/' "$Q/quickjs-libc.c" && grep -q '^/\* #define CONFIG_ATOMICS \*/' "$Q/quickjs.c" && grep -q mp_divlu "$Q/quickjs.c" || { echo "QuickJS's switches moved"; exit 1; }
 mkdir -p "$BUILD/host" "$BUILD/guest"
 LIB="quickjs dtoa libregexp libunicode cutils quickjs-libc"
 DEF="-D_GNU_SOURCE -DCONFIG_VERSION=\"$(cat "$Q/VERSION")\""

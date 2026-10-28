@@ -1,0 +1,62 @@
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -11368,16 +11368,59 @@
+     return l;
+ }
+ 
++#if JS_LIMB_BITS == 32 && defined(__riscv) && __riscv_xlen == 32
++/* (ShaderEmu: a 64-bit division is a library call here, __udivdi3 and __umoddi3 for every limb. With u1 < v the
++   quotient fits a limb: Hacker's Delight's divlu, two 32-bit divisions by v's top half, normalized) */
++static inline js_limb_t mp_divlu(js_limb_t u1, js_limb_t u0, js_limb_t v, js_limb_t *pr)
++{
++    const uint32_t b = 65536;
++    uint32_t un1, un0, vn1, vn0, q1, q0, un32, un21, un10, rhat;
++    int s = __builtin_clz(v);
++
++    v <<= s;
++    vn1 = v >> 16;
++    vn0 = v & 0xffff;
++    un32 = (u1 << s) | (s ? u0 >> (32 - s) : 0);
++    un10 = u0 << s;
++    un1 = un10 >> 16;
++    un0 = un10 & 0xffff;
++    q1 = un32 / vn1;
++    rhat = un32 - q1 * vn1;
++    while (q1 >= b || q1 * vn0 > b * rhat + un1) {
++        q1--;
++        rhat += vn1;
++        if (rhat >= b)
++            break;
++    }
++    un21 = un32 * b + un1 - q1 * v;
++    q0 = un21 / vn1;
++    rhat = un21 - q0 * vn1;
++    while (q0 >= b || q0 * vn0 > b * rhat + un0) {
++        q0--;
++        rhat += vn1;
++        if (rhat >= b)
++            break;
++    }
++    *pr = (un21 * b + un0 - q0 * v) >> s;
++    return q1 * b + q0;
++}
++#endif
++
+ static js_limb_t mp_div1(js_limb_t *tabr, const js_limb_t *taba, js_limb_t n,
+                       js_limb_t b, js_limb_t r)
+ {
+     js_slimb_t i;
++#if JS_LIMB_BITS == 32 && defined(__riscv) && __riscv_xlen == 32
++    for(i = n - 1; i >= 0; i--)
++        tabr[i] = mp_divlu(r, taba[i], b, &r);
++#else
+     js_dlimb_t a1;
+     for(i = n - 1; i >= 0; i--) {
+         a1 = ((js_dlimb_t)r << JS_LIMB_BITS) | taba[i];
+         tabr[i] = a1 / b;
+         r = a1 % b;
+     }
++#endif
+     return r;
+ }
+ 
