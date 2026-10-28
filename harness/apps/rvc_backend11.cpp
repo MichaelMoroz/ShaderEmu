@@ -42,11 +42,6 @@ public:
         // the commit draws whole only the bands the cores' stores are not what changed (they are points)
         if (scatter_) bo.settings.defines.push_back({"COMMIT_SCATTER", "1"});
         if (inplace_) {
-            // (no pass of RAM in one texture reads the bands a tick wrote: the tick is compiled without COMMIT_BANDS,
-            // as the world's is, and keeps no mask of them; RVC_TICK_BANDS=1 keeps it, a measure)
-            if (!getenv("RVC_TICK_BANDS"))
-                bo.settings.defines.erase(std::remove_if(bo.settings.defines.begin(), bo.settings.defines.end(),
-                                                         [](const auto& d) { return d.first == "COMMIT_BANDS"; }), bo.settings.defines.end());
             // (the tick is compiled without RAM_INPLACE, which only the commit's passes know)
             ShaderBuildOptions c = bo;
             c.settings.defines.push_back({"RAM_INPLACE", "1"});
