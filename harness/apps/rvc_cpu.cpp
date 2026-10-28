@@ -1376,7 +1376,8 @@ struct Run {
     const uint8_t* kinds;     // the kind by step_key
     const uint8_t* code;      // the fetch's page in RAM, and its number
     u32 vpn;
-    u64 limit;                // the core's clock when the run is over
+    u64 limit;                // the core's clock when this piece of the run is over
+    u64 end;                  // and when the run is
     uint8_t* mem;             // RAM, by physical address
     const TlbEntry *reads, *writes;
     u32 rgen, wgen;           // the tags' generation, or GEN_NONE when memory is watched
@@ -1384,6 +1385,7 @@ struct Run {
     bool wcache;              // RVC_WCACHE: a store that changes bytes takes its texels in the core's cache
     u64 bands;                // 4 MB bands stored to
     int r;                    // how it ended (STEP_*)
+    bool again;               // returned to go on: a handler that called a function (NEXT_FAR), or a piece's end
 };
 static __forceinline u32 step_key(u32 ins) {
     return (ins & 0x7f) | (ins >> 5 & 0x380) | (ins >> 15 & 0x400) | (ins >> 19 & 0x800) | ((ins & 0xbc000000) != 0) << 12;
@@ -1419,13 +1421,18 @@ static __forceinline void run_sync(Run* R, u64 st) { R->c->pc = (u32)st, R->c->c
         memcpy(&i_, R->code + (s_ & 0xfff), 4);                                                \
         [[msvc::musttail]] return R->table[R->kinds[step_key(i_)]](R, x, s_, i_);             \
     }
+// NEXT for a handler that has called a function: back to run_some, which goes on. MSVC ignores
+// [[msvc::musttail]], and a handler with a frame (one that calls) calls the next handler instead of
+// jumping to it, even run_edge, so that its frame stays on the stack for the rest of the run: a worker's
+// pass of slow stores overflowed it under RVC_RACES.
+#define NEXT_FAR(npc) { run_sync(R, (st & 0xffffffff00000000ull) | (u32)(npc)); R->again = true; return; }
 #define SET(v) (x[RD] = (v), x[0] = 0)
 
 // The run's start, its end, and a fetch off the page.
 template <bool W>
 static void run_edge(Run* R, u32* x, u64 st, u32 ins) {
     (void)ins;
-    if (st < (1ull << 32)) { run_sync(R, st); R->r = STEP_ON; return; }
+    if (st < (1ull << 32)) { run_sync(R, st); R->r = STEP_ON; R->again = R->limit != R->end; return; }
     if (((u32)st >> 12) != R->vpn) {
         run_sync(R, st);
         int r = fetch_page<W>(*R->c);
@@ -1473,16 +1480,23 @@ HANDLER(h_bltu) { NEXT(RS1 < RS2 ? PC + IMM_B : PC + 4); }
 HANDLER(h_bgeu) { NEXT(RS1 >= RS2 ? PC + IMM_B : PC + 4); }
 
 // Loads and stores: a hit in the core's table in RAM here, the rest the whole way (load(), store()).
+// (The whole way's work is a function of its own: a handler must have no local whose address escapes,
+// or MSVC calls the next handler instead of jumping to it, and the frame stays for the rest of the run.)
 template <bool W, int N, bool SIGNED, bool FLOAT>
-static void h_load_slow(Run* R, u32* x, u64 st, u32 ins) {
+static __declspec(noinline) bool load_slow(Run* R, u32* x, u64 st, u32 ins) {
     Core& c = *R->c;
     u32 v;
     Trap t;
     run_sync(R, st);
-    if (!load(c, RS1 + IMM_I, N, v, t)) { R->r = fault_step<W>(c, t); return; }
+    if (!load(c, RS1 + IMM_I, N, v, t)) { R->r = fault_step<W>(c, t); return false; }
     if (FLOAT) c.f[RD] = v;
     else SET(!SIGNED ? v : N == 1 ? (u32)(i32)(int8_t)v : (u32)(i32)(int16_t)v);
-    NEXT(PC + 4);
+    return true;
+}
+template <bool W, int N, bool SIGNED, bool FLOAT>
+static __declspec(noinline) void h_load_slow(Run* R, u32* x, u64 st, u32 ins) {
+    if (!load_slow<W, N, SIGNED, FLOAT>(R, x, st, ins)) return;
+    NEXT_FAR(PC + 4);
 }
 template <bool W, int N, bool SIGNED, bool FLOAT = false>
 static void h_load(Run* R, u32* x, u64 st, u32 ins) {
@@ -1501,7 +1515,7 @@ static void h_load(Run* R, u32* x, u64 st, u32 ins) {
     [[msvc::musttail]] return h_load_slow<W, N, SIGNED, FLOAT>(R, x, st, ins);
 }
 template <bool W, int N, bool FLOAT>
-static void h_store_slow(Run* R, u32* x, u64 st, u32 ins) {
+static __declspec(noinline) bool store_slow(Run* R, u32* x, u64 st, u32 ins) {
     Core& c = *R->c;
     Trap t;
     run_sync(R, st);
@@ -1510,26 +1524,48 @@ static void h_store_slow(Run* R, u32* x, u64 st, u32 ins) {
             c.clock--;
             if (W) c.wc_full = false;
             R->r = W ? STEP_OUT : STEP_BREAK;
-            return;
+            return false;
         }
         R->r = fault_step<W>(c, t);
-        return;
+        return false;
     }
-    NEXT(PC + 4);
+    return true;
+}
+template <bool W, int N, bool FLOAT>
+static __declspec(noinline) void h_store_slow(Run* R, u32* x, u64 st, u32 ins) {
+    if (!store_slow<W, N, FLOAT>(R, x, st, ins)) return;
+    NEXT_FAR(PC + 4);
+}
+// A store hit under RVC_WCACHE: one that changes bytes takes its texels in the core's cache first (as
+// store(): a cache with no room ends the pass there).
+template <bool W, int N, bool FLOAT>
+static __declspec(noinline) bool store_cached(Run* R, u32* x, u32 ins) {
+    u32 va = RS1 + IMM_S;
+    const TlbEntry& e = R->writes[(va >> 12) & (TLB_N - 1)];
+    u32 phys = e.ppage + (va & 0xfff);
+    uint8_t* p = R->mem + phys;
+    u32 v = FLOAT ? R->c->f[(ins >> 20) & 31] : RS2;
+    if (memcmp(p, &v, N) != 0 && (!wc_take(R->c->hart, phys) || ((phys & 15) + N > 16 && !wc_take(R->c->hart, phys + N - 1))))
+        return false;
+    R->bands |= 1ull << (((e.ppage - RAM_BASE) >> 22) & 63);
+    if (N == 4) memcpy(p, &v, 4);
+    else if (N == 2) { uint16_t h = (uint16_t)v; memcpy(p, &h, 2); }
+    else *p = (uint8_t)v;
+    return true;
+}
+template <bool W, int N, bool FLOAT>
+static __declspec(noinline) void h_store_cached(Run* R, u32* x, u64 st, u32 ins) {
+    if (!store_cached<W, N, FLOAT>(R, x, ins)) { [[msvc::musttail]] return h_store_slow<W, N, FLOAT>(R, x, st, ins); }
+    NEXT_FAR(PC + 4);
 }
 template <bool W, int N, bool FLOAT>
 static void h_store(Run* R, u32* x, u64 st, u32 ins) {
     u32 va = RS1 + IMM_S;
     const TlbEntry& e = R->writes[(va >> 12) & (TLB_N - 1)];
     if ((N == 1 || (va & 0xfff) <= 0x1000u - N) && e.tag == ((va >> 12) | R->wgen)) {
+        if (R->wcache) { [[msvc::musttail]] return h_store_cached<W, N, FLOAT>(R, x, st, ins); }
         uint8_t* p = R->mem + e.ppage + (va & 0xfff);
         u32 v = FLOAT ? R->c->f[(ins >> 20) & 31] : RS2;
-        if (R->wcache && memcmp(p, &v, N) != 0) {   // (as store(): a cache with no room ends the pass there)
-            u32 phys = e.ppage + (va & 0xfff);
-            if (!wc_take(R->c->hart, phys) || ((phys & 15) + N > 16 && !wc_take(R->c->hart, phys + N - 1))) {
-                [[msvc::musttail]] return h_store_slow<W, N, FLOAT>(R, x, st, ins);
-            }
-        }
         R->bands |= 1ull << (((e.ppage - RAM_BASE) >> 22) & 63);
         if (N == 4) memcpy(p, &v, 4);
         else if (N == 2) { uint16_t h = (uint16_t)v; memcpy(p, &h, 2); }
@@ -1571,22 +1607,24 @@ HANDLER(h_remu) { u32 a = RS1, b = RS2; SET(b == 0 ? a : a % b); NEXT(PC + 4); }
 #define FLOATS_ON() if (!(R->c->mstatus & 0x6000)) { [[msvc::musttail]] return h_general<W>(R, x, st, ins); }
 HANDLER(h_flw) { FLOATS_ON(); [[msvc::musttail]] return h_load<W, 4, false, true>(R, x, st, ins); }
 HANDLER(h_fsw) { FLOATS_ON(); [[msvc::musttail]] return h_store<W, 4, true>(R, x, st, ins); }
+// (the floats' work is a function of its own too: a handler that keeps a float register calls the next one)
 #define FMA(name, x_, y_, z_)                                                                        \
-    HANDLER(name) {                                                                                  \
-        if (!(R->c->mstatus & 0x6000) || (ins >> 25 & 3)) { [[msvc::musttail]] return h_general<W>(R, x, st, ins); } \
-        u32* f = R->c->f;                                                                            \
+    static __declspec(noinline) void name##_do(u32* f, u32 ins) {                                    \
         float a = fl(f[(ins >> 15) & 31]), b = fl(f[(ins >> 20) & 31]), z = fl(f[ins >> 27]);        \
         f[RD] = canon(fmaf(x_, y_, z_));                                                             \
-        NEXT(PC + 4);                                                                                \
+    }                                                                                                \
+    HANDLER(name) {                                                                                  \
+        if (!(R->c->mstatus & 0x6000) || (ins >> 25 & 3)) { [[msvc::musttail]] return h_general<W>(R, x, st, ins); } \
+        name##_do(R->c->f, ins);                                                                     \
+        NEXT_FAR(PC + 4);                                                                            \
     }
 FMA(h_fmadd, a, b, z)
 FMA(h_fmsub, a, b, -z)
 FMA(h_fnmsub, -a, b, z)
 FMA(h_fnmadd, -a, b, -z)
 #undef FMA
-HANDLER(h_fop) {
-    FLOATS_ON();
-    Core& c = *R->c;
+// One of op-fp's: false for one the general step makes.
+static __declspec(noinline) void fop_do(Core& c, u32* x, u32 ins) {
     u32* f = c.f;
     u32 fa = f[(ins >> 15) & 31], fb = f[(ins >> 20) & 31], f3 = (ins >> 12) & 7, rs2 = (ins >> 20) & 31, rd = RD;
     float a = fl(fa), b = fl(fb);
@@ -1615,9 +1653,15 @@ HANDLER(h_fop) {
     case 0x70: SET(f3 == 0 ? fa : fclass(fa)); break;
     case 0x78: f[rd] = RS1; break;
     case 0x50: SET(f3 == 2 ? a == b : f3 == 1 ? a < b : a <= b); break;
-    default: [[msvc::musttail]] return h_general<W>(R, x, st, ins);
     }
-    NEXT(PC + 4);
+}
+HANDLER(h_fop) {
+    FLOATS_ON();
+    // (fop_do's cases; the rest the general step makes)
+    const u64 made_lo = 0x100000111111ull, made_hi = 0x101010100010000ull;   // 0x00 0x04 0x08 0x0c 0x10 0x14 0x2c; 0x50 0x60 0x68 0x70 0x78
+    if (!((((ins >> 31) ? made_hi : made_lo) >> ((ins >> 25) & 63)) & 1)) { [[msvc::musttail]] return h_general<W>(R, x, st, ins); }
+    fop_do(*R->c, x, ins);
+    NEXT_FAR(PC + 4);
 }
 
 // The handlers by kind, for a worker (W) and for any core.
@@ -1637,13 +1681,14 @@ static const Handler* handler_table() {
 }
 
 // Up to n instructions of a core: how it ended (STEP_*).
+static const u64 RUN_PIECE = 2048;
 template <bool W>
 static int run_some(Core& c, u64 n, const uint8_t* kinds) {
     Run R;
     R.c = &c;
     R.table = handler_table<W>();
     R.kinds = kinds;
-    R.limit = c.clock + n;
+    R.end = c.clock + n;
     R.mem = ramp - RAM_BASE;
     // (under RVC_RACES core 0, which runs first, reads RAM as the fast loads do)
     R.plain_loads = !(races_on && c.hart != 0) && !prof::mem_on, R.plain_stores = !races_on && !prof::mem_on && !wc_log;
@@ -1651,7 +1696,13 @@ static int run_some(Core& c, u64 n, const uint8_t* kinds) {
     R.bands = 0;
     R.r = STEP_ON;
     run_reload(&R);
-    run_edge<W>(&R, c.x, n << 32 | c.pc, 0);
+    // (in pieces of RUN_PIECE instructions: a handler MSVC gave a frame calls the next one instead of jumping
+    // to it, and the frames stay on the stack until the piece is over)
+    do {
+        R.again = false;
+        R.limit = c.clock + std::min<u64>(R.end - c.clock, RUN_PIECE);
+        run_edge<W>(&R, c.x, (R.limit - c.clock) << 32 | c.pc, 0);
+    } while (R.again);
     c.dirty |= R.bands;
     return R.r;
 }
@@ -1665,6 +1716,7 @@ static int run_some(Core& c, u64 n, const uint8_t* kinds) {
 #undef IMM_B
 #undef IMM_J
 #undef NEXT
+#undef NEXT_FAR
 #undef SET
 #undef FLOATS_ON
 
