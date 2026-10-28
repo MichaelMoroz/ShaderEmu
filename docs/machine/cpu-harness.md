@@ -40,6 +40,22 @@ console has said TEXT. For samples fine enough, `--ticks 256 --pass-ms 0.0078`: 
 milliseconds must go down with its instructions, or the guest's clock runs four times as
 fast for each instruction and the kernel's timer is a quarter of the profile.
 
+Other logs, each a measure that leaves the run as it was (gpu_vm's names in brackets):
+
+- `RVC_PASSLOG=FILE` (`GVM_PASSLOG`): from `--count-from`'s mark, a line a pass, `pass end ran pc ra ms`:
+  how core 0's pass ended (0 its budget, 1 it ended the pass itself, 2 it waited, 4 the write cache was
+  full, 5 a copy), its instructions, pc, `ra` and the guest's milliseconds (a jump is a sleep).
+  `RVC_PASSLOG_STACK=N` (`GVM_SYNCLOG_STACK`) adds, after an end of 1 or 4, the first N words above `sp`
+  that could be return addresses: who ended the pass, not only the leaf. Doom's timedemo: 16,331 passes
+  to their budget, 8,082 ended, 710 waits, 829 full.
+- `RVC_WC_LOG`'s records (with `RVC_WCACHE=1`) end with the address of the store that found the cache
+  full, 0 for a pass that did not end so: Doom's 8,351 full records all had one.
+- `RVC_DEVICE_EVERY=N` (`GVM_DEVICE_EVERY`): the devices' pass takes the GPU's list back every Nth pass
+  only, as a world does once a frame; every pass hides a game's waits for its list (Doom's timedemo 1,664
+  realtics, 1,812 at 4).
+- `RVC_CON_TRACE=1` (`GVM_CON_TRACE`): each delivery of console input to the guest and each take, with
+  the pass and the guest's seconds (`[con] delivered`, `[con] taken`).
+
 `--count-from TEXT` prints every core's instructions from when the console said TEXT to the
 end (`COUNT from ...`), and `--until-times N` stops at the Nth `--until` after it:
 `tools\game_par.py` measures the games' frames with them (`docs/machine/multicore.md`, "Every core's

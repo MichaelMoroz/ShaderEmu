@@ -587,9 +587,10 @@ static u32 wc_bits_of(int hart);
 // RVC_WC_LOG=FILE (with RVC_WCACHE=1; a measure, gpu_vm/PROFILE_Q3.md "The write cache"): from --count-from on, at each
 // pass's end a record for every core that stored in it: the pass, the core, its table bits, 1 if a store found the cache
 // full, its stores, its silent stores (the bytes already there: no entry), its new entries, 0; then 112 bytes, each
-// bucket's entries in use (the three tables in order)
+// bucket's entries in use (the three tables in order). The record's last word is the store's address that found the
+// cache full (a full end's: gpu_vm's 108b3e7), else 0
 static FILE* wc_log = nullptr;
-static u32 wc_st[256], wc_sil[256], wc_new[256];
+static u32 wc_st[256], wc_sil[256], wc_new[256], wc_full_addr[256];
 static u64 wc_full_at[256];
 static bool wc_take(int hart, u32 phys) {
     u32 bits = wc_bits_of(hart), t = (phys - RAM_BASE) >> 4, n = bits - 1, table = 1u << bits;
@@ -621,7 +622,7 @@ static inline bool store(Core& c, u32 va, int size, u32 value, Trap& t) {
         if (wc_on && memcmp(p, &value, (size_t)size) &&
             (!wc_take(c.hart, phys) || ((phys & 15) + (u32)size > 16 && !wc_take(c.hart, phys + (u32)size - 1)))) {
             c.wc_full = c.end_pass = true;
-            wc_full_at[c.hart] = wc_pass;
+            wc_full_at[c.hart] = wc_pass, wc_full_addr[c.hart] = phys;
             _InterlockedIncrement64((volatile long long*)&wc_full_passes[c.hart != 0]);
             return false;
         }
@@ -2495,6 +2496,7 @@ static bool amo_threaded(Core& c, u32 kind, u32 a, u32 b, u32& result, Trap& t, 
         }
         if (wc_on && (u32)*p != n && !wc_take(c.hart, pw)) {   // (as store() finds its write cache full)
             c.wc_full = c.end_pass = true;
+            wc_full_at[c.hart] = wc_pass, wc_full_addr[c.hart] = pw;
             _InterlockedIncrement64((volatile long long*)&wc_full_passes[1]);
             return true;
         }
@@ -2623,12 +2625,19 @@ static void console_pass() {
     for (; read != written; read++)
         if (uint8_t c = ram[RING - RAM_BASE + (read & (SIZE - 1))]) console_put(c);
     // (only to a guest that writes the ring: the MMU kernel takes its input by SBI calls)
+    // RVC_CON_TRACE=1 (gpu_vm's GVM_CON_TRACE): each delivery of input and each take by the guest, its pass and second
+    static const bool trace = getenv("RVC_CON_TRACE") && atoi(getenv("RVC_CON_TRACE")) != 0;
+    static u32 traced_taken = 0;
+    if (trace && word(GUEST) != traced_taken)
+        traced_taken = word(GUEST), fprintf(stderr, "[con] taken %u at pass %llu, %.3f s\n", traced_taken, (unsigned long long)frame_no, guest_seconds);
     if (written != 0 && word(GUEST) == word(HOST) && !console_in.empty()) {
         u32 group = 0, n = 0;
         for (; n < 4 && !console_in.empty(); n++, console_in.pop_front()) group |= (u32)console_in.front() << (8 * n);
         word(HOST + 4) = group;
         word(HOST) += n;
         dirty(HOST);
+        if (trace) fprintf(stderr, "[con] delivered %u (%u bytes, %08x) at pass %llu, %.3f s; %zu waiting\n", word(HOST), n, group,
+                           (unsigned long long)frame_no, guest_seconds, console_in.size());
     }
 }
 
@@ -2678,7 +2687,10 @@ static void control_pass() {
     }
     // a submitted list has been drawn: the GPU is free, and the copy it asked for is counted
     u32 submit = word(CTRL + 0x10);
-    if (submit) {
+    // RVC_DEVICE_EVERY=N (a measure, gpu_vm's GVM_DEVICE_EVERY): the list taken back only every Nth pass, as a world
+    // draws it once a host frame of N rounds (a control pass every pass hides a game's waits for it)
+    static const u64 device_every = getenv("RVC_DEVICE_EVERY") ? std::max(1, atoi(getenv("RVC_DEVICE_EVERY"))) : 1;
+    if (submit && (device_every <= 1 || frame_no % device_every == 0)) {
         if ((submit & 1) && (submit & 6) && gpu_copy_on) gpu_copy(submit);
         word(CTRL + 0x10) = 0;
         word(CTRL + 0x1c)++;
@@ -2912,6 +2924,26 @@ static bool machine_boot(const std::string& image, int count) {
     return true;
 }
 
+// RVC_PASSLOG=FILE (a measure, gpu_vm's GVM_PASSLOG and GVM_SYNCLOG_STACK): from --count-from's mark on, a line a
+// pass: the pass, how core 0's ended (0 its budget, 1 a pause, a call, a copy or a rest, 2 wfi, 4 its write cache full,
+// 5 it was copying and did not run), its instructions in it, its pc, ra and the guest's milliseconds; with
+// RVC_PASSLOG_STACK=N, after a pass ended by 1 or 4, the first N words above sp that could be return addresses: who
+// ended the pass, not only the leaf
+static FILE* pass_log = nullptr;
+static int pass_log_stack = 0;
+static int prof_wait = 0;   // RVC_PROF_PASS=N: passes left until the profile starts (from the mark, or the start)
+static bool count_marked_now();
+static void pass_log_put(int end, u64 ran) {
+    const Core& c = cores[0];
+    fprintf(pass_log, "%llu %d %llu %08x %08x %llu", (unsigned long long)frame_no, end, (unsigned long long)ran, c.pc, c.x[1],
+            (unsigned long long)(guest_seconds * 1000.0));
+    for (u32 a = c.x[2], n = 0; (end == 1 || end == 4) && n < (u32)pass_log_stack && a - RAM_BASE < RAM_SIZE - 4 && a < c.x[2] + 1024; a += 4) {
+        u32 v = word(a);
+        if (v - 0x80400000u < RAM_BASE + RAM_SIZE - 0x80400000u && !(v & 3)) fprintf(pass_log, " %08x", v), n++;
+    }
+    fputc(10, pass_log);
+}
+
 // One pass of every core, after the host's part of it; the most instructions a core ran.
 static u64 machine_pass(u32 ticks) {
     control_pass();
@@ -2920,7 +2952,10 @@ static u64 machine_pass(u32 ticks) {
         if (geometry[i]) workers[i].job_was = word(mc_job_at((int)i));
     if (races_on) mbox_keep();
     if (prof::on) prof::pass_begin();
-    u64 most = cores[0].copying ? 0 : check_on ? checked(cores[0], ticks, run) : run(cores[0], ticks);
+    bool copying0 = cores[0].copying;
+    u64 most = copying0 ? 0 : check_on ? checked(cores[0], ticks, run) : run(cores[0], ticks);
+    if (pass_log && count_marked_now())
+        pass_log_put(copying0 ? 5 : cores[0].wc_full ? 4 : cores[0].waiting ? 2 : cores[0].end_pass ? 1 : 0, most);
     most = std::max(most, workers_pass(ticks));
     copy_pass();
     for (Core& c : cores) dirty_bands |= c.dirty, c.dirty = 0;
@@ -2930,7 +2965,8 @@ static u64 machine_pass(u32 ticks) {
     if (wc_log && count_marked)
         for (size_t i = 0; i < cores.size() && i < 256; i++) {
             if (!wc_st[i]) continue;
-            u32 rec[8] = {(u32)frame_no, (u32)i, wc_bits_of((int)i), wc_full_at[i] == wc_pass, wc_st[i], wc_sil[i], wc_new[i], 0};
+            u32 rec[8] = {(u32)frame_no, (u32)i, wc_bits_of((int)i), wc_full_at[i] == wc_pass, wc_st[i], wc_sil[i], wc_new[i],
+                          wc_full_at[i] == wc_pass ? wc_full_addr[i] : 0};
             uint8_t occ[112] = {};
             u32 nb = (7u << wc_bits_of((int)i)) >> 2;
             for (u32 k = 0; k < nb && k < 112; k++)
@@ -2941,12 +2977,14 @@ static u64 machine_pass(u32 ticks) {
     cores[0].wc_full = false;
     wc_pass++;
     frame_no++;
+    if (prof_wait && count_marked_now() && --prof_wait == 0) prof::active = prof::on;
     return most;
 }
 
+static bool count_marked_now() { return count_marked || opt.countFrom.empty(); }
 static void count_mark() {
     count_marked = true;
-    prof::active = prof::on;
+    prof::active = prof::on && !prof_wait;
     count_at.resize(cores.size());
     for (size_t i = 0; i < cores.size(); i++) count_at[i] = cores[i].clock;
     memcpy(stops_at, stops, sizeof stops);
@@ -3230,7 +3268,11 @@ int main(int argc, char** argv) {
     }
     atom_merging = !getenv("RVC_COUNT_MERGE") || atoi(getenv("RVC_COUNT_MERGE")) != 0;
     calls_on = calls_file && *calls_file;
-    if (const char* d = getenv("RVC_PROF"); d && *d) prof::ticks = opt.ticks, prof::init(d, cores.size(), opt.countFrom.empty());
+    // RVC_PROF_PASS=N (gpu_vm's GVM_PROF_PASS): the profile from N passes after --count-from's mark (or the start)
+    prof_wait = getenv("RVC_PROF_PASS") ? std::max(0, atoi(getenv("RVC_PROF_PASS"))) : 0;
+    if (const char* d = getenv("RVC_PROF"); d && *d) prof::ticks = opt.ticks, prof::init(d, cores.size(), opt.countFrom.empty() && !prof_wait);
+    if (const char* f = getenv("RVC_PASSLOG"); f && *f && !(pass_log = fopen(f, "w"))) { fprintf(stderr, "rvc_cpu: RVC_PASSLOG: cannot write %s\n", f); return 2; }
+    pass_log_stack = getenv("RVC_PASSLOG_STACK") ? atoi(getenv("RVC_PASSLOG_STACK")) : 0;
     wc_on = getenv("RVC_WCACHE") && atoi(getenv("RVC_WCACHE")) != 0;
     if (wc_on) wcache.resize(cores.size());
     if (wc_on && getenv("RVC_WC_LOG")) wc_log = fopen(getenv("RVC_WC_LOG"), "wb");
@@ -3359,6 +3401,7 @@ int main(int argc, char** argv) {
                 (unsigned long long)copy_chunks, (unsigned long long)copy_waits);
     if (calls_on) call_fast(c0, c0.clock), calls_report(calls_file);
     if (prof::on) prof::report();
+    if (pass_log) fclose(pass_log);
     if (uart_log) fclose(uart_log);
     if (!opt.pcLog.empty()) {
         FILE* f = fopen(opt.pcLog.c_str(), "wb");
