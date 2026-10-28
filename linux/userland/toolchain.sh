@@ -71,6 +71,24 @@ if [ ! -f "$SYSROOT/lib/memcpy-ours" ] || [ "$OURS/memcpy.S" -nt "$SYSROOT/lib/m
     touch "$SYSROOT/lib/memcpy-ours"
 fi
 
+# The float libm (libm/ beside this file, gpu_vm's): sinf, cosf, sincosf, tanf, expf, exp2f, logf, log2f, log10f,
+# powf and asinf in float instructions alone, and the doubles' floor, ceil, trunc and round on their bits, in place
+# of musl's, which work in software doubles. Each object replaces musl's member of its name where it lies in libc.a
+# (the archive's order stays). Put in again when the library or a file is newer.
+if [ ! -f "$SYSROOT/lib/libm-ours" ] || [ -n "$(find "$OURS/libm" -newer "$SYSROOT/lib/libm-ours")" ] || [ "$SYSROOT/lib/libc.a" -nt "$SYSROOT/lib/libm-ours" ]; then
+    echo "== libm"
+    M=$WORK/src/musl
+    rm -rf "$M/src/math/shaderemu" "$WORK/src/libm-obj" && mkdir -p "$M/src/math/shaderemu" "$WORK/src/libm-obj"
+    cp "$OURS"/libm/* "$M/src/math/shaderemu/"
+    MUSLF="-O2 -std=c99 -ffreestanding -fexcess-precision=standard -frounding-math -fno-strict-aliasing -D_XOPEN_SOURCE=700 -w
+           -I$M/arch/riscv32 -I$M/arch/generic -I$M/obj/src/internal -I$M/src/include -I$M/src/internal -I$M/obj/include -I$M/include"
+    for f in "$M"/src/math/shaderemu/*.c; do
+        rv32-cc $MUSLF -c "$f" -o "$WORK/src/libm-obj/$(basename "$f" .c).lo"
+    done
+    riscv32-linux-ar r "$SYSROOT/lib/libc.a" "$WORK"/src/libm-obj/*.lo
+    touch "$SYSROOT/lib/memcpy-ours" "$SYSROOT/lib/libm-ours"   # (the memcpy above is still in: no turn of each again)
+fi
+
 # The compiler's own runtime is built for a CPU with an FPU, so the integer and soft-float
 # routines come from compiler-rt, and the 128-bit long double ones (which compiler-rt lacks
 # on a 32-bit CPU) from libgcc's soft-fp.
