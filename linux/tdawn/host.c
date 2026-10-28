@@ -122,11 +122,15 @@ host_settle(void)
 	flight = 0;
 }
 
+static unsigned int shows;	/* lists shown: host_event() rests when the game asks again and again between two */
+
 /* The list made since the last one is shown, or the last one once more as its memory is now. */
 static void
 show(int again)
 {
 	static int waits = -1;
+
+	shows++;
 
 	if (waits < 0) {
 		const char *how = getenv("TDAWN_SWAP");
@@ -1849,6 +1853,23 @@ virtual_key(int ch)
  * is owed (a tenth of a second at most: the kernel's tick is later). Otherwise once a second,
  * or four times while the pointer moves outside the picture (it may be coming in or going out).
  */
+/*
+ * A game that waits (its menus, a frame's time not yet come) asks for events in a loop with nothing
+ * else to do: the menu ran 3.3 million instructions a second there. Asked a fourth time with no
+ * event and no list shown since, the first core rests until the next pass (mcw_rest()).
+ */
+static void
+idle_poll(void)
+{
+	static unsigned int at_shows, polls;
+
+	if (shows != at_shows) {
+		at_shows = shows;
+		polls = 0;
+	} else if (++polls >= 4)
+		mcw_rest();
+}
+
 int
 host_event(struct host_event *event)
 {
@@ -1902,6 +1923,7 @@ host_event(struct host_event *event)
 		case GR_EVENT_TYPE_NONE:
 			ask--;
 			asked_ms = host_ms();
+			idle_poll();
 			return 0;
 		case GR_EVENT_TYPE_MOUSE_ENTER:
 			pointer_inside = 1;
@@ -1955,6 +1977,7 @@ host_event(struct host_event *event)
 			return 1;
 		}
 	}
+	idle_poll();
 	return 0;
 }
 

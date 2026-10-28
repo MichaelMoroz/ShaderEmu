@@ -579,6 +579,9 @@ void mcw_post(int k, mcw_fn fn, uint32_t a0, uint32_t a1)
 {
 	mc_job *j;
 
+	/* (what the program stored for the job is stored before the job: a call orders it only where this file is
+	 * compiled apart, and the NES links it into its program under LTO) */
+	mc_publish();
 	look(k);
 	if (core_of[k]) {
 		if (writing(core_of[k])) {
@@ -586,6 +589,7 @@ void mcw_post(int k, mcw_fn fn, uint32_t a0, uint32_t a1)
 			j->fn = (uint32_t)fn;
 			j->a0 = a0;
 			j->a1 = a1;
+			mc_publish();
 			j->seq = ++seq[k];
 			settled[k] = 0;
 			written();
@@ -846,6 +850,7 @@ static void field_post(void)
 	field_skips[field_set].any = 0;
 	field_job.stuck = (uint32_t)field_stuck[field_set] | (field_steps_on ? 1u : 0u);	/* (bit 0: a job in steps) */
 	field_seq = job[1] + 1;
+	mc_publish();
 	job[1] = field_seq;
 }
 

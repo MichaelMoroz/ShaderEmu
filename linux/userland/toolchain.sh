@@ -57,21 +57,57 @@ exec riscv32-linux-gcc $ARCH_FLAGS \$inc "\$@"
 EOF
 chmod +x "$WORK/bin/rv32-cc"
 
-# Our memcpy and memset in place of musl's (memcpy.S, memset.c beside this file): two pointers on
-# word boundaries go sixteen words a turn with no stack frame; musl's own routine stays in the
+# Our memcpy, memset, memmove and memcmp in place of musl's (memcpy.S, memset.c, memmove.c, memcmp.c beside
+# this file): two pointers on word boundaries go sixteen words a turn with no stack frame; musl's own routine stays in the
 # library as memcpy_any, for every other case. From 2 KB up both ask for the commit's copy or fill
 # (uop.h). Put in again when the library or a file is newer.
 OURS=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-newer() { for f in memcpy.S memset.c uop.h; do [ "$OURS/$f" -nt "$SYSROOT/lib/memcpy-ours" ] && return 0; done; return 1; }
+newer() { for f in memcpy.S memset.c memmove.c memcmp.c uop.h; do [ "$OURS/$f" -nt "$SYSROOT/lib/memcpy-ours" ] && return 0; done; return 1; }
 if [ ! -f "$SYSROOT/lib/memcpy-ours" ] || newer || [ "$SYSROOT/lib/libc.a" -nt "$SYSROOT/lib/memcpy-ours" ]; then
     echo "== memcpy, memset"
     MEMOPS="-O2 -fPIC -ffreestanding -fno-builtin -fno-tree-loop-distribute-patterns"
     rv32-cc $MEMOPS -I"$OURS" -c "$OURS/memcpy.S" -o "$WORK/src/memcpy_ours.o"
     rv32-cc $MEMOPS -Dmemcpy=memcpy_any -c "$WORK/src/musl/src/string/memcpy.c" -o "$WORK/src/memcpy_any.o"
     rv32-cc $MEMOPS -c "$OURS/memset.c" -o "$WORK/src/memset_ours.o"
-    riscv32-linux-ar d "$SYSROOT/lib/libc.a" memcpy.lo memcpy_ours.o memcpy_any.o memset.lo memset_ours.o 2>/dev/null || true
-    riscv32-linux-ar rs "$SYSROOT/lib/libc.a" "$WORK/src/memcpy_ours.o" "$WORK/src/memcpy_any.o" "$WORK/src/memset_ours.o" 2>/dev/null
+    # (memmove.c: the source's words read whole and shifted where the two pointers are at different places in a word)
+    rv32-cc $MEMOPS -c "$OURS/memmove.c" -o "$WORK/src/memmove_ours.o"
+    # (memcmp.c: memcmp a word a turn)
+    rv32-cc $MEMOPS -c "$OURS/memcmp.c" -o "$WORK/src/memcmp_ours.o"
+    riscv32-linux-ar d "$SYSROOT/lib/libc.a" memcpy.lo memcpy_ours.o memcpy_any.o memset.lo memset_ours.o memmove.lo memmove_ours.o \n        memcmp.lo memcmp_ours.o 2>/dev/null || true
+    riscv32-linux-ar rs "$SYSROOT/lib/libc.a" "$WORK/src/memcpy_ours.o" "$WORK/src/memcpy_any.o" "$WORK/src/memset_ours.o" "$WORK/src/memmove_ours.o" \n        "$WORK/src/memcmp_ours.o" 2>/dev/null
     touch "$SYSROOT/lib/memcpy-ours"
+fi
+
+# The float libm (libm/ beside this file, gpu_vm's): sinf, cosf, sincosf, tanf, expf, exp2f, logf, log2f, log10f,
+# powf and asinf in float instructions alone, and the doubles' floor, ceil, trunc and round on their bits, in place
+# of musl's, which work in software doubles. Each object replaces musl's member of its name where it lies in libc.a
+# (the archive's order stays). Put in again when the library or a file is newer.
+if [ ! -f "$SYSROOT/lib/libm-ours" ] || [ -n "$(find "$OURS/libm" -newer "$SYSROOT/lib/libm-ours")" ] || [ "$SYSROOT/lib/libc.a" -nt "$SYSROOT/lib/libm-ours" ]; then
+    echo "== libm"
+    M=$WORK/src/musl
+    rm -rf "$M/src/math/shaderemu" "$WORK/src/libm-obj" && mkdir -p "$M/src/math/shaderemu" "$WORK/src/libm-obj"
+    cp "$OURS"/libm/* "$M/src/math/shaderemu/"
+    MUSLF="-O2 -std=c99 -ffreestanding -fexcess-precision=standard -frounding-math -fno-strict-aliasing -D_XOPEN_SOURCE=700 -w
+           -I$M/arch/riscv32 -I$M/arch/generic -I$M/obj/src/internal -I$M/src/include -I$M/src/internal -I$M/obj/include -I$M/include"
+    for f in "$M"/src/math/shaderemu/*.c; do
+        rv32-cc $MUSLF -c "$f" -o "$WORK/src/libm-obj/$(basename "$f" .c).lo"
+    done
+    riscv32-linux-ar r "$SYSROOT/lib/libc.a" "$WORK"/src/libm-obj/*.lo
+    touch "$SYSROOT/lib/memcpy-ours" "$SYSROOT/lib/libm-ours"   # (the memcpy above is still in: no turn of each again)
+fi
+
+# A double's %e, %f, %g and %a formatted in doubles, not in 128-bit software long doubles (vfprintf_double.py beside
+# this file); musl's vfprintf.lo replaced where it lies in libc.a. Put in again when the library or the script is newer.
+if [ ! -f "$SYSROOT/lib/vfprintf-ours" ] || [ "$OURS/vfprintf_double.py" -nt "$SYSROOT/lib/vfprintf-ours" ] || [ "$SYSROOT/lib/libc.a" -nt "$SYSROOT/lib/vfprintf-ours" ]; then
+    echo "== vfprintf"
+    M=$WORK/src/musl
+    MUSLF="-O2 -std=c99 -ffreestanding -fexcess-precision=standard -frounding-math -fno-strict-aliasing -D_XOPEN_SOURCE=700 -w
+           -I$M/arch/riscv32 -I$M/arch/generic -I$M/obj/src/internal -I$M/src/include -I$M/src/internal -I$M/obj/include -I$M/include"
+    mkdir -p "$WORK/src/vfprintf-obj"
+    python3 "$OURS/vfprintf_double.py" "$M/src/stdio/vfprintf.c" "$M/src/stdio/vfprintf_double.c"
+    rv32-cc $MUSLF -c "$M/src/stdio/vfprintf_double.c" -o "$WORK/src/vfprintf-obj/vfprintf.lo"
+    riscv32-linux-ar r "$SYSROOT/lib/libc.a" "$WORK/src/vfprintf-obj/vfprintf.lo"
+    touch "$SYSROOT/lib/memcpy-ours" "$SYSROOT/lib/libm-ours" "$SYSROOT/lib/vfprintf-ours"   # (the others are still in)
 fi
 
 # The compiler's own runtime is built for a CPU with an FPU, so the integer and soft-float

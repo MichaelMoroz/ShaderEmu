@@ -314,7 +314,8 @@ shone, and a light's brightness went with the square of its radius.
 - **The panel** has a third tab, Material: the six starting points, the colour, and a slider
   with its number for each of the six.
 
-On `rvc_cpu`, the scene it starts with, 160 x 120: the sum is now `02f213e9` (2 samples, 255
+On `rvc_cpu`, the scene it starts with, 160 x 120: the sum is now `d63313e9` (`02f213e9` until libc's float
+sinf and cosf of 28 October 2026 (`linux/userland/libm`), a unit in the last place apart; 2 samples, 255
 workers and none, 81,647 rays, 230 ms with workers as before), 0 of 20 rays wrong by the
 tree. The picture's mean light (`light` in `pathstat:`, thousandths, 16 samples) with the
 light at 0.05, 0.12 and 0.30 of radius: 146, 147 and 161, which is the same but for the
@@ -370,11 +371,11 @@ to their sums.
   it); light_at picks the glowing things as one more light. A glowing thing met after a matt
   surface then adds nothing, as a lamp does, where it was the only way its light came, a
   speck at a time. With no glowing thing nothing a path draws changes: the scene the program
-  starts with is still `02f213e9`. The Cornell box's light is a glowing quad. There are no
+  starts with is still `02f213e9` (`d63313e9` since the float libm). The Cornell box's light is a glowing quad. There are no
   caustics: light by way of glass or a mirror onto a matt surface is not found (above).
 - The sums (`rvc_cpu`, 2 samples, with 255 workers and with none; `tools/test_all.py`'s
   `pathtrace` tag): `cornell` `78c07525` and `cornell-balls` `b962c063` at 120 x 120, at
-  160 x 120 `balls` `b85eb16e`, `materials` `5ecc7a24`, `beer` `3c29787e`, `mirrors`
+  160 x 120 `balls` `820f06bc` (`b85eb16e` before the float libm), `materials` `5ecc7a24`, `beer` `3c29787e`, `mirrors`
   `2f211b98`, `glow` `2858a999`; `NXPATH_CHECK=500 nxpath cornell` 0 rays wrong and 0
   thousandths apart. Looked at: each at 32 samples (the Cornell box at 64, 240 x 240), and
   the menu and an example chosen from it under `rvc_harness --cpu --warp`. Not done: the

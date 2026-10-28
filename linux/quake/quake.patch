@@ -975,7 +975,7 @@ index 25a8007..1d07424 100644
  	strcpy (glt->identifier, identifier);
  	glt->texnum = texture_extension_number;
 diff --git a/WinQuake/gl_model.c b/WinQuake/gl_model.c
-index 21ef130..d7f9cb5 100644
+index 21ef130..0c5894b 100644
 --- a/WinQuake/gl_model.c
 +++ b/WinQuake/gl_model.c
 @@ -38,7 +38,10 @@ byte	mod_novis[MAX_MAP_LEAFS/8];
@@ -990,7 +990,19 @@ index 21ef130..d7f9cb5 100644
  
  /*
  ===============
-@@ -170,6 +173,7 @@ void Mod_ClearAll (void)
+@@ -111,7 +114,10 @@ Mod_DecompressVis
+ */
+ byte *Mod_DecompressVis (byte *in, model_t *model)
+ {
+-	static byte	decompressed[MAX_MAP_LEAFS/8];
++	// one for the server's worker and one for the client's cores: the two decompress in the same pass
++	// (gl_model.c's static was stored by both: test_all quake-walk --races)
++	static byte	decompressed_of[2][MAX_MAP_LEAFS/8] __attribute__ ((aligned (16)));
++	byte	*decompressed = decompressed_of[SE_ServerOnWorker () != 0];
+ 	int		c;
+ 	byte	*out;
+ 	int		row;
+@@ -170,6 +176,7 @@ void Mod_ClearAll (void)
  	int		i;
  	model_t	*mod;
  	
@@ -998,7 +1010,7 @@ index 21ef130..d7f9cb5 100644
  	for (i=0 , mod=mod_known ; i<mod_numknown ; i++, mod++)
  		if (mod->type != mod_alias)
  			mod->needload = true;
-@@ -998,6 +1002,45 @@ Mod_MakeHull0
+@@ -998,6 +1005,45 @@ Mod_MakeHull0
  Deplicate the drawing hull structure as a clipping hull
  =================
  */
@@ -1044,7 +1056,7 @@ index 21ef130..d7f9cb5 100644
  void Mod_MakeHull0 (void)
  {
  	mnode_t		*in, *child;
-@@ -1183,6 +1226,7 @@ void Mod_LoadBrushModel (model_t *mod, void *buffer)
+@@ -1183,6 +1229,7 @@ void Mod_LoadBrushModel (model_t *mod, void *buffer)
  	Mod_LoadSubmodels (&header->lumps[LUMP_MODELS]);
  
  	Mod_MakeHull0 ();
@@ -1052,7 +1064,7 @@ index 21ef130..d7f9cb5 100644
  	
  	mod->numframes = 2;		// regular and alternate animation
  	
-@@ -1408,6 +1452,18 @@ void Mod_FloodFillSkin( byte *skin, int skinwidth, int skinheight )
+@@ -1408,6 +1455,18 @@ void Mod_FloodFillSkin( byte *skin, int skinwidth, int skinheight )
  Mod_LoadAllSkins
  ===============
  */
@@ -1071,7 +1083,7 @@ index 21ef130..d7f9cb5 100644
  void *Mod_LoadAllSkins (int numskins, daliasskintype_t *pskintype)
  {
  	int		i, j, k;
-@@ -1430,7 +1486,12 @@ void *Mod_LoadAllSkins (int numskins, daliasskintype_t *pskintype)
+@@ -1430,7 +1489,12 @@ void *Mod_LoadAllSkins (int numskins, daliasskintype_t *pskintype)
  	for (i=0 ; i<numskins ; i++)
  	{
  		if (pskintype->type == ALIAS_SKIN_SINGLE) {
@@ -1085,7 +1097,7 @@ index 21ef130..d7f9cb5 100644
  
  			// save 8 bit texels for the player model to remap
  	//		if (!strcmp(loadmodel->name,"progs/player.mdl")) {
-@@ -1455,9 +1516,14 @@ void *Mod_LoadAllSkins (int numskins, daliasskintype_t *pskintype)
+@@ -1455,9 +1519,14 @@ void *Mod_LoadAllSkins (int numskins, daliasskintype_t *pskintype)
  
  			pskintype = (void *)(pinskinintervals + groupskins);
  
@@ -1101,7 +1113,7 @@ index 21ef130..d7f9cb5 100644
  					if (j == 0) {
  						texels = Hunk_AllocName(s, loadname);
  						pheader->texels[i] = texels - (byte *)pheader;
-@@ -1564,7 +1630,24 @@ void Mod_LoadAliasModel (model_t *mod, void *buffer)
+@@ -1564,7 +1633,24 @@ void Mod_LoadAliasModel (model_t *mod, void *buffer)
  // load the skins
  //
  	pskintype = (daliasskintype_t *)&pinmodel[1];
@@ -1127,7 +1139,7 @@ index 21ef130..d7f9cb5 100644
  
  //
  // load base s and t vertices
-@@ -1631,9 +1714,18 @@ void Mod_LoadAliasModel (model_t *mod, void *buffer)
+@@ -1631,9 +1717,18 @@ void Mod_LoadAliasModel (model_t *mod, void *buffer)
  	//
  	GL_MakeAliasModelDisplayLists (mod, pheader);
  

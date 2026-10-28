@@ -426,6 +426,7 @@ void SE_BotThinks (int (*think) (int, float), const int *clients, int n, float t
 		for (i = 0; i < n; i++)		/* (the server's core takes the first, the others one each in turn) */
 			if (i % (h + 1))
 				k = i % (h + 1) - 1, think_task[k].clients[think_task[k].count++] = clients[i];
+		mc_publish ();	/* (the clients before the tasks' numbers: mc.h) */
 		for (k = 0; k < h; k++) {
 			think_task[k].seq++;
 			if (first)

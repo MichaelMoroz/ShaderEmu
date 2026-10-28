@@ -7,6 +7,52 @@
 #define STB_VORBIS_NO_STDIO
 #define STB_VORBIS_NO_PUSHDATA_API
 #include <stdlib.h>
+
+/*
+ * sin(pi t) and cos(pi t) for t in [0, 1], in floats (a file's twiddle factors and windows:
+ * vorbis_tables.py; in soft doubles they were a third of nxplay's start). t is folded to
+ * [0, 1/4] exactly (1 - t and 1/2 - t of a float there are exact); the polynomials are musl's
+ * __sindf and __cosdf, here in floats.
+ */
+static float
+m_vorbis_sin_kernel(float x)
+{
+	float z = x * x;
+
+	return x + x * z * (-0x1.555556p-3f + z * (0x1.111108p-7f + z * (-0x1.a00f9ep-13f + z * 0x1.6cd878p-19f)));
+}
+
+static float
+m_vorbis_cos_kernel(float x)
+{
+	float z = x * x;
+
+	return 1.0f + z * (-0x1p-1f + z * (0x1.55553ep-5f + z * (-0x1.6c087ep-10f + z * 0x1.99342ep-16f)));
+}
+
+static float
+m_vorbis_sinpi(float t)
+{
+	const float pi = 3.14159265358979f;
+
+	if (t > 0.5f)
+		t = 1.0f - t;
+	return t <= 0.25f ? m_vorbis_sin_kernel(pi * t) : m_vorbis_cos_kernel(pi * (0.5f - t));
+}
+
+static float
+m_vorbis_cospi(float t)
+{
+	const float pi = 3.14159265358979f;
+	float sign = 1.0f;
+
+	if (t > 0.5f) {
+		t = 1.0f - t;
+		sign = -1.0f;
+	}
+	return sign * (t <= 0.25f ? m_vorbis_cos_kernel(pi * t) : m_vorbis_sin_kernel(pi * (0.5f - t)));
+}
+
 #pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
 #include "stb_vorbis.c"
 #include "m_audio.h"
