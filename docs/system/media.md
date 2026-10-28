@@ -292,6 +292,16 @@ backwards:
 two Ogg files give `4bc10ffb` and `303b2940`. `RVC_RACES` with 16 workers over Vorbis, FLAC, MP3
 and WAV: 0 undone.
 
+Since 28 October 2026 a Vorbis block size's twiddle factors and window are made in floats
+(`vorbis_tables.py`, `m_vorbis_sinpi`), not by sines in software doubles: a file's setup was some 18
+million instructions on the first core (a third of the Music player's start), now well under one.
+The tables are nearer the true sines than before (28,544 values over every block size: at most 5
+units in the last place, before up to 713 where the old float angle was rounded), and the samples
+move by 1 in a few: the image's two Ogg files 0.05% and 0.12% of their samples, by 1 at most;
+`Beethoven - Moonlight Sonata.ogg` with 16 workers `49b4ad58` before, `113e5533` now, the same on
+the build computer and the guest. The sums of the table above and of `play.md` are of before
+(the files are not in the image).
+
 Instructions for a second of 44.1 kHz stereo (`nxplay`'s `playstat`): Vorbis 15.6 million in
 order, 17.6 in pieces (each seek 12% more); FLAC 11.7 and 12.9; MP3 12.9 and 14.0, at half rate
 8.6 and 9.6; MOD 1.1; WAV 0.1. `nxplay` decodes the 25 s Vorbis file in 5.5 s with 48 workers,

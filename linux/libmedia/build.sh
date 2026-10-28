@@ -30,6 +30,8 @@ fetch stb_vorbis.c https://raw.githubusercontent.com/nothings/stb/2c980bb59875b0
 # minimp3 with a half rate and frames that only fill the bit reservoir (minimp3.patch); a FLAC
 # subframe in 32-bit sums whenever its coefficients allow (flac_bound.py)
 cp "$BUILD/fetch/minimp3.h" "$BUILD/fetch/dr_flac.h" "$BUILD/fetch/stb_vorbis.c" "$BUILD/"
+# a Vorbis block size's tables in floats, not sines in soft doubles (vorbis_tables.py)
+python3 "$HERE/vorbis_tables.py" "$BUILD/stb_vorbis.c"
 tr -d '\r' < "$HERE/minimp3.patch" | patch -s "$BUILD/minimp3.h"
 python3 "$HERE/flac_bound.py" "$BUILD/dr_flac.h"
 # ---- films (m_video*.c)
