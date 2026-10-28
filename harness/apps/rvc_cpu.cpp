@@ -1363,6 +1363,7 @@ struct Run {
     const TlbEntry *reads, *writes;
     u32 rgen, wgen;           // the tags' generation, or GEN_NONE when memory is watched
     bool plain_loads, plain_stores;
+    bool wcache;              // RVC_WCACHE: a store that changes bytes takes its texels in the core's cache
     u64 bands;                // 4 MB bands stored to
     int r;                    // how it ended (STEP_*)
 };
@@ -1505,6 +1506,12 @@ static void h_store(Run* R, u32* x, u64 st, u32 ins) {
     if ((N == 1 || (va & 0xfff) <= 0x1000u - N) && e.tag == ((va >> 12) | R->wgen)) {
         uint8_t* p = R->mem + e.ppage + (va & 0xfff);
         u32 v = FLOAT ? R->c->f[(ins >> 20) & 31] : RS2;
+        if (R->wcache && memcmp(p, &v, N) != 0) {   // (as store(): a cache with no room ends the pass there)
+            u32 phys = e.ppage + (va & 0xfff);
+            if (!wc_take(R->c->hart, phys) || ((phys & 15) + N > 16 && !wc_take(R->c->hart, phys + N - 1))) {
+                [[msvc::musttail]] return h_store_slow<W, N, FLOAT>(R, x, st, ins);
+            }
+        }
         R->bands |= 1ull << (((e.ppage - RAM_BASE) >> 22) & 63);
         if (N == 4) memcpy(p, &v, 4);
         else if (N == 2) { uint16_t h = (uint16_t)v; memcpy(p, &h, 2); }
@@ -1621,7 +1628,8 @@ static int run_some(Core& c, u64 n, const uint8_t* kinds) {
     R.limit = c.clock + n;
     R.mem = ramp - RAM_BASE;
     // (under RVC_RACES core 0, which runs first, reads RAM as the fast loads do)
-    R.plain_loads = !(races_on && c.hart != 0) && !prof::mem_on, R.plain_stores = !races_on && !prof::mem_on && !wc_on;
+    R.plain_loads = !(races_on && c.hart != 0) && !prof::mem_on, R.plain_stores = !races_on && !prof::mem_on && !wc_log;
+    R.wcache = wc_on;
     R.bands = 0;
     R.r = STEP_ON;
     run_reload(&R);
