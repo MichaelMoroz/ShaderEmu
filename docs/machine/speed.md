@@ -99,3 +99,18 @@ The fxc2 bytecode of each draw and dispatch, as the harness compiled it (its log
 
 The devices are the same on all but the old rvc: the GPU device's draw 77,476 and its control
 88,032, the sound card's mix 46,764.
+
+## Measured in one run
+
+`RVC_MARK=TEXT` prints the card's tick time a frame each time TEXT comes on the console, since the last
+one (`[harness] mark N: tick X ms a frame over N frames`), so two programs run in turn are timed on the same
+card's clock; `RVC_STATS_EVERY=1` times every frame, not one in 64 (gpu_vm's `GVM_MARK`, `GVM_STATS_EVERY`).
+From a shell snapshot, `echo MARK; sleep 2; echo MARK` gave 0.191 ms over 2,959 frames and 0.154 over 6,368.
+
+`--unity F,U[,R]` gives the tick the rounds a world frame of F ms would, U of it the world's own. With
+`--frame-log FILE` it also writes `FILE.rounds` (a frame's rounds, uint32) and `FILE.timed` (each card timing
+as it came: the frame, its card ms and its rounds, three floats; gpu_vm's be87943, a2ea5a3).
+`RVC_UNITY_PACE=world` paces the rounds as `EmuMachine.SteadyRounds` does (a frame's time smoothed a tenth a
+frame, the cap one down or an eighth more every sixth frame over F, one up under 0.8 F) rather than fitting
+each frame to the card's last time: a shell loop under `--unity 11.1,1.4` had 2 to 55 rounds a frame the
+plain way and 4 to 24 the world's (28 October 2026).
