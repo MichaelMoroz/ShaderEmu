@@ -17,6 +17,7 @@
 #include <linux/seq_file.h>
 #include <linux/string.h>
 #include <linux/uaccess.h>
+#include <linux/workqueue.h>
 #include <linux/sched.h>
 #include <linux/sched/signal.h>
 #include <linux/sched/stat.h>
@@ -137,7 +138,7 @@ static struct gpu_user {
 static DEFINE_MUTEX(gpu_lock);
 
 /*
- * The workers' layout, set once, the first time a program asks for workers: as many as the
+ * The workers' layout, set once, at boot (below) or the first time a program asks: as many as the
  * machine has cores for, all alike, so that any program can have any of them (the cores are
  * shared out between programs, below). Every worker parked, then the machine's strip is
  * nothing but zeros for some passes, and then it is the workers'.
@@ -159,6 +160,29 @@ static void workers_layout(void)
 	msleep(60);
 	writel(0, gpu_regs + WORKERS_SHAPE);
 	msleep(60);
+}
+
+/*
+ * The layout made at boot, in the background, not when the first program asks: its three sleeps
+ * of 60 ms were paid by the first program with workers and by the window server at the
+ * pointer's first move (GPU-VM c519897). Tried again every 100 ms, a few times, while the host
+ * has not yet said how many cores there could be; a program that asks first lays them out itself.
+ */
+static void workers_layout_boot(struct work_struct *work);
+static DECLARE_DELAYED_WORK(workers_layout_work, workers_layout_boot);
+
+static void workers_layout_boot(struct work_struct *work)
+{
+	static int tries;
+	bool again;
+
+	mutex_lock(&workers_lock);
+	again = readl(gpu_regs + WORKERS_MOST_NOW) < 2;
+	if (!again && !readl(gpu_regs + WORKERS_SHAPE + 4))
+		workers_layout();
+	mutex_unlock(&workers_lock);
+	if (again && ++tries < 20)
+		schedule_delayed_work(&workers_layout_work, HZ / 10);
 }
 
 /* Everything below is called with workers_lock held. */
@@ -656,6 +680,7 @@ static int __init shaderemu_gpu_init(void)
 	shaderemu_gpu_wm = workers + WORKERS_WM;
 	pr_info("shaderemu_gpu: /dev/gpu at 0x%lx, %lu KiB\n", GPU_PHYS, GPU_SIZE >> 10);
 	proc_create_single("gpu", 0444, NULL, shaderemu_gpu_show);
+	schedule_delayed_work(&workers_layout_work, 0);
 	return misc_register(&shaderemu_gpu_dev);
 }
 device_initcall(shaderemu_gpu_init);
