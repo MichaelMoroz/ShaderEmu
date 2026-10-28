@@ -18,6 +18,7 @@ using VRC.Udon;
 //   type TEXT         typed at the console (\n is Enter)
 //   sleep S           seconds of the wall
 //   mark NAME         a line in the log with the time
+//   event NAME        a custom event of the machine (PowerOn: the world starts it off)
 //   speed N / tick N  the panel's sliders: 2,048 << N instructions a frame, 1,024 << N a pass
 //   sample S NAME     S seconds of Unity's frames and the machine's instructions, averaged
 //   shot NAME         the Game view to Logs/NAME.png
@@ -159,6 +160,9 @@ public class GvmProbe : MonoBehaviour
         return m.Success ? double.Parse(m.Groups[1].Value.Replace(",", ""), CultureInfo.InvariantCulture) : 0;
     }
 
+    double samplePasses;
+    double Passes() { object p = machine.GetProgramVariable("gvmPasses"); return p is uint ? (uint)p : 0; }   // (the tick's passes)
+
     void Update()
     {
         if (timerEvent != IntPtr.Zero)
@@ -202,7 +206,8 @@ public class GvmProbe : MonoBehaviour
                     "sample {0}: {1:F2} s, {2} frames, {3:F1} fps, frame {4:F2} ms mean, {5:F2} median, {6:F2} p95; core 0 {7:N0} instructions, {8:F3} M a second",
                     sampleName, span, sampleFrames, sampleFrames / span, 1000f * span / sampleFrames, sampleMs[sampleMs.Count / 2],
                     sampleMs[(int)(sampleMs.Count * 0.95f)], instr, instr / span / 1e6));
-                StringBuilder where = new StringBuilder("  where " + sampleName + ":");
+                StringBuilder where = new StringBuilder(string.Format(CultureInfo.InvariantCulture, "  where {0}: passes {1:F2} a frame;", sampleName,
+                    (Passes() - samplePasses) / sampleFrames));
                 for (int i = 0; i < Counters.Length; i++)
                     if (recorders[i].Valid && sums[i] > 0)
                         where.Append(string.Format(CultureInfo.InvariantCulture, " {0} {1:F2} ms;", Counters[i], sums[i] / sumFrames / 1e6));
@@ -284,6 +289,17 @@ public class GvmProbe : MonoBehaviour
                 waitUntil = -1f;
             }
             else if (verb == "mark") Log("mark: " + arg);
+            else if (verb == "stats")
+            {
+                // stats: the machine's panel text (its workers running, its rounds) into the log
+                Log("stats: " + ((machine.GetProgramVariable("statsLine") as string) ?? "").Replace("\n", " | "));
+            }
+            else if (verb == "event")
+            {
+                // event NAME: a custom event of the machine's program (PowerOn in the world, where it starts off)
+                machine.SendCustomEvent(arg);
+                Log("event " + arg);
+            }
             else if (verb == "speed" || verb == "tick")
             {
                 Slider s = (Slider)machine.GetProgramVariable(verb == "speed" ? "speedSlider" : "tickSlider");
@@ -305,6 +321,7 @@ public class GvmProbe : MonoBehaviour
                 sumFrames = ftFrames = 0;
                 ftCpu = ftGpu = 0;
                 sampleInstr = Instructions();
+                samplePasses = Passes();
                 step++;
                 return;
             }

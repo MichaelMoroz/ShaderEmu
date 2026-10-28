@@ -812,20 +812,23 @@ bool gpu_writeback(uint2 pos, out uint4 result) {
 // parks a core in its loop at _GvmParkLo to _GvmParkHi: gpu_vm/platform.md)
 int3 gvm_s16(uint core) {   // the pixel of texels 16 to 23: a row a core, or a block (_GvmGeo: 1 8 x 8, 128 a band of 16 rows;
     // 2 8 x 8 in one row; 3 4 x 8 in one row, gpu_vm/tick/WAVES.md)
-    return _GvmGeo == 3 ? int3(core * 4, 2, 0) : _GvmGeo == 2 ? int3(core * 8, 2, 0) : _GvmGeo != 0 ? int3((core & 127) * 8, (core >> 7) * 16 + 2, 0) : int3(2, core, 0);
+    // 4: GvmTickOne's one target, core 0 72 columns and a worker 48, texel 16 + r at row r: _GvmS0 and _GvmS3 are the
+    // same texture there, and texel 19 is gvm_s19's)
+    return _GvmGeo == 4 ? int3(core == 0 ? 2 : 72 + 48 * (core - 1) + 2, 0, 0) : _GvmGeo == 3 ? int3(core * 4, 2, 0) : _GvmGeo == 2 ? int3(core * 8, 2, 0) : _GvmGeo != 0 ? int3((core & 127) * 8, (core >> 7) * 16 + 2, 0) : int3(2, core, 0);
 }
+int3 gvm_s19(uint core) { return gvm_s16(core) + (_GvmGeo == 4 ? int3(0, 3, 0) : int3(0, 0, 0)); }   // (texel 19's pixel in _GvmS3)
 // (every load made, whether or not the core is there, and the loop unrolled: the 64 loads of a texel of bits go out
 // together, not one core's after the last one's came back, 5 us a pass less: gpu_vm/IDEAS.md 38. A core past
 // _GvmWorkers reads a texel of the state that is there and is masked off.)
 uint mc_stat_count(uint core) {
-    uint count = _GvmS3.Load(gvm_s16(min(core, 255u))).g;
+    uint count = _GvmS3.Load(gvm_s19(min(core, 255u))).g;
     return core <= _GvmWorkers ? count : 0;
 }
 uint2 mc_stat_bits(uint from) {
     uint running = 0, asleep = 0;
     [unroll] for (uint n = 0; n < 32; n++) {
         uint core = from + n;
-        uint4 s16 = _GvmS0.Load(gvm_s16(min(core, 255u))), s19 = _GvmS3.Load(gvm_s16(min(core, 255u)));
+        uint4 s16 = _GvmS0.Load(gvm_s16(min(core, 255u))), s19 = _GvmS3.Load(gvm_s19(min(core, 255u)));
         bool there = core <= _GvmWorkers;
         bool parked = core != 0 && s16.x >= _GvmParkLo && s16.x < _GvmParkHi;
         running |= (there && !parked ? 1u : 0u) << n;
