@@ -278,6 +278,7 @@ static const uint32_t owner_colour[16] = {
 struct lane_job { const struct picture *sc; uint32_t from, core, unused; };
 static struct lane_job lane_jobs[OUT][MC_MAX_CORES] __attribute__((aligned(16)));
 static int lanes_on = 1;
+static int one_out;	/* RAY_ONE: one picture out at a time, each timed by itself (gpu_vm: the default) */
 static int field_wanted = 1, use_field;	/* RAY_FIELD=0: no field; whether this picture is the field's */
 static float texel_least = 8192.0f / 6.0f;	/* what a texel costs a lane at least: a sixth of a pass (RAY_FLOOR) */	/* RAY_LANES=0: a worker traces its texels one after another */
 
@@ -339,9 +340,10 @@ trace_texels(const struct picture *sc, uint32_t from, uint32_t to, uint32_t core
 }
 
 /* How far a worker is with picture f and what the picture took it, in instructions, how many
- * lanes it has (1 without), and when it was through (the clock's 1/5000 s). slots[f % outs][k]:
- * its own 32 bytes. */
-struct slot { volatile uint32_t frame, rays, spent, lanes, ended, took, unused[2]; };
+ * lanes it has (1 without), when it was through (the clock's 1/5000 s), and for a test the sum
+ * of its share's pixels (shares_sum). slots[f % outs][k]: its own 32 bytes. */
+struct slot { volatile uint32_t frame, rays, spent, lanes, ended, took, sum, power; };
+static int summing;	/* RAY_FRAMES: a test, whose pictures are summed */
 static struct slot slots[OUT][MC_MAX_CORES] __attribute__((aligned(16)));
 
 static inline uint32_t
@@ -373,8 +375,16 @@ worker_picture(const struct picture *sc, uint32_t frame, uint32_t k)
 
 	rays = trace_texels(sc, sc->band[share], sc->band[share + 1], k, lanes, frame);
 	slot->spent = cycles() - began;
-	slot->lanes = lanes > 0 ? (uint32_t)lanes : 1;
+	slot->lanes = lanes > 0 ? (uint32_t)lanes : 0;
 	slot->rays = rays;
+	if (summing) {
+		uint32_t i, sum = 0, power = 1;
+
+		for (i = 4 * sc->band[share]; i < 4 * sc->band[share + 1]; i++)
+			sum = sum * 31 + (sc->pixels[i] & 0xffffff), power *= 31;
+		slot->sum = sum;
+		slot->power = power;
+	}
 #ifdef __gpuvm__
 	__asm__ volatile("mfsr %0, time_lo" : "=r"(when));
 #else
@@ -433,6 +443,33 @@ now_ms(void)
 
 	clock_gettime(CLOCK_MONOTONIC, &ts);
 	return (unsigned)ts.tv_sec * 1000u + (unsigned)ts.tv_nsec / 1000000u;
+}
+
+/* A test's sum of picture f (sum = sum * 31 + pixel, in order) from its shares' sums: a share
+ * of n pixels after the ones before it multiplies their sum by 31 to the n (its worker's power).
+ * 0 when a share was not summed by a worker for f (the first core traced the picture, or a
+ * share is missing). */
+static int
+shares_sum(const struct picture *sc, uint32_t f, unsigned *sum)
+{
+	static uint16_t by[MC_MAX_CORES];
+	uint32_t s, h = 0;
+	int k;
+
+	if (!sc->traced_by || sc->shares > MC_MAX_CORES)
+		return 0;
+	for (s = 0; s < (uint32_t)sc->shares; s++)
+		by[s] = NO_SHARE;
+	for (k = 1; k <= workers; k++)
+		if (sc->plan[k] != NO_SHARE && sc->plan[k] < sc->shares)
+			by[sc->plan[k]] = (uint16_t)k;
+	for (s = 0; s < (uint32_t)sc->shares; s++) {
+		if (by[s] == NO_SHARE || slots[f % outs][by[s]].frame != f)
+			return 0;
+		h = h * slots[f % outs][by[s]].power + slots[f % outs][by[s]].sum;
+	}
+	*sum = h;
+	return 1;
 }
 
 /* A job for every worker that has a core and none out: it begins with the next picture published. */
@@ -532,7 +569,7 @@ give_shares(struct picture *sc, uint32_t done)
 {
 	/* (in floats, which this machine has: a 64-bit division is a call of hundreds of instructions,
 	 * and two a share were more than all the rest of this core's picture) */
-	static float cost[MC_MAX_CORES], speed[MC_MAX_CORES], rate[MC_MAX_CORES], smooth[MC_MAX_CORES];
+	static float cost[MC_MAX_CORES], speed[MC_MAX_CORES], rate[MC_MAX_CORES], smooth[MC_MAX_CORES], least[MC_MAX_CORES];
 	static uint32_t was_band[MC_MAX_CORES + 1];
 	const struct picture *old = &pictures[done % outs];
 	const struct slot *was = slots[done % outs];
@@ -556,8 +593,10 @@ give_shares(struct picture *sc, uint32_t done)
 
 		n += share != NO_SHARE;
 		sc->plan[k] = share;
+		/* (a worker without lanes traces its texels one after another: no floor) */
 		if (same && share != NO_SHARE)
-			cost[share] = (float)was[k].spent, speed[share] = (float)(was[k].lanes ? was[k].lanes : 1);
+			cost[share] = (float)was[k].spent, speed[share] = (float)(was[k].lanes ? was[k].lanes : 1),
+			least[share] = was[k].lanes ? texel_least : 0.0f;
 	}
 	sc->shares = n ? (int)n : 1;
 	sc->traced_by = (int)n;
@@ -587,7 +626,7 @@ give_shares(struct picture *sc, uint32_t done)
 			if (s >= d && rate[s - d] > 0.0f) near += rate[s - d], w += 1.0f;
 			if (s + d < n && rate[s + d] > 0.0f) near += rate[s + d], w += 1.0f;
 		}
-		smooth[s] = __builtin_fmaxf(near / w, texel_least) * (float)(was_band[s + 1] - was_band[s]) + 1.0f;
+		smooth[s] = __builtin_fmaxf(near / w, least[s]) * (float)(was_band[s + 1] - was_band[s]) + 1.0f;
 		total += smooth[s], speeds += speed[s];
 	}
 	/* where the cost of the bands before reaches each share's part of the whole, half way
@@ -916,7 +955,7 @@ main(void)
 	if (width < 32 || height < 32 || width > 1024 || height > 768)
 		width = 320, height = 240;
 	if ((text = getenv("RAY_FRAMES")) != NULL)
-		frames_left = atoi(text);
+		frames_left = atoi(text), summing = 1;
 	if ((text = getenv("RAY_WORKERS")) != NULL)
 		wanted = atoi(text);
 	still = getenv("RAY_STILL") != NULL;
@@ -991,6 +1030,14 @@ main(void)
 	atexit(mcw_close);
 	atexit(end_jobs);	/* (first: the workers' jobs end only when told) */
 	even = getenv("RAY_EVEN") != NULL;
+	one_out = getenv("RAY_ONE") != NULL;
+#ifdef __gpuvm__
+	/* gpu_vm: one picture out at a time (RAY_AHEAD for more). With four out a worker takes its shares
+	 * in turn, so a picture waited on the dearest share behind that worker's shares of the pictures
+	 * before it: 38.4 pictures a second, a picture 22 ms to 111; one out, 40.6 and 22 to 55, and the
+	 * rounds cheaper (GPU-VM docs/REGRESSIONS.md, step 6) */
+	one_out = getenv("RAY_AHEAD") == NULL;
+#endif
 	take_workers();
 	while (frames_left != 0) {
 		/* when the keys were last read and the picture's figures last said, and what was traced since */
@@ -1010,14 +1057,15 @@ main(void)
 			start_jobs();
 		}
 		/* Two pictures are out while they follow each other freely: a worker goes from one to
-		 * the next, and this core shows one and makes the next but one meanwhile. One for a
-		 * test, whose pictures are timed each by itself, and with no workers. */
-		for (k = 1; k <= workers && frames_left < 0 && !getenv("RAY_ONE"); k++)
+		 * the next, and this core shows one and makes the next but one meanwhile. A test's too
+		 * (its pictures are a fixed step apart: the same sums); one with RAY_ONE, whose
+		 * pictures are timed each by itself, and with no workers. */
+		for (k = 1; k <= workers && !one_out; k++)
 			if (running[k]) {
 				ahead = (int)outs;
 				break;
 			}
-		if (use_field && frames_left < 0 && !getenv("RAY_ONE"))
+		if (use_field && frames_left < 0 && !one_out)
 			ahead = 2;
 		while (!stopped && go.frame - done < (uint32_t)ahead) {
 			/* the scene moves by the clock, so it moves as fast whatever a picture takes (a test's
@@ -1163,7 +1211,9 @@ main(void)
 		done = at;
 		/* (the sum is a test's: 300 thousand pixels are half a second of this core, with every worker waiting;
 		 * a texel's rays in its first pixel's top byte are not of the picture) */
-		for (i = 0; frames_left > 0 && i < width * height; i++) {
+		if (frames_left > 0 && !use_field && shares_sum(sc, at, &sum))
+			;	/* (each share summed by the worker that traced it) */
+		else for (i = 0; frames_left > 0 && i < width * height; i++) {
 			sum = sum * 31 + (sc->pixels[i] & 0xffffff);
 			if (use_field && !(i & 3))
 				rays += sc->pixels[i] >> 24;
