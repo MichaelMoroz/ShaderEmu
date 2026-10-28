@@ -17,12 +17,14 @@ static u32 ticks = 8192;
 static u64 pass_no = 0;
 
 // ---- what each pc ran: a page of 1,024 pcs, by class (0 core 0, 1 the workers), table and page
-struct PcCell { u64 exec; u32 loads, stores, word, pad; };
+// newtex: stores that took a texel new to the core's pass (changed bytes: what the write cache keeps); full: stores
+// that found the cache full (RVC_WCACHE), the pass ended there
+struct PcCell { u64 exec; u32 loads, stores, word, newtex, full, pad; };
 struct PcPage { PcCell cell[1024]; };
 static std::unordered_map<u64, PcPage*> pc_pages;
 static u64 cache_key[256][16];      // each core's last pages, by the page's low bits
 static PcPage* cache_page[256][16];
-static u32 pend_loads[256], pend_stores[256];   // the instruction now running: counted at its step
+static u32 pend_loads[256], pend_stores[256], pend_new[256];   // the instruction now running: counted at its step
 
 static inline PcCell& cell(int hart, u32 satp, u32 pc) {
     u64 key = ((u64)(hart != 0) << 62) | (pc_cores ? (u64)(hart & 255) << 54 : 0) | ((u64)(satp & 0x3fffff) << 20) | (pc >> 12);
@@ -36,7 +38,7 @@ static inline PcCell& cell(int hart, u32 satp, u32 pc) {
 }
 
 // ---- memory: each texel's loads and stores by class, and how many distinct texels a core stored a pass
-struct MemPage { u32 loads[2][256], stores[2][256], stamp[256]; };
+struct MemPage { u32 loads[2][256], stores[2][256], stamp[256], cstamp[256]; };
 static std::vector<MemPage*> mem_pages;   // a RAM page each
 static u32 distinct[256];                 // this pass, each core's
 static u64 distinct_hist[2][257];         // passes by distinct texels stored (in 16s; the last: more)
@@ -161,7 +163,7 @@ static void deps_access(Core& c, u32 va, int size, bool store) {
 }
 
 // A load or store to RAM at physical `phys` (virtual `va`) by the instruction at c.pc.
-static inline void mem(Core& c, u32 va, u32 phys, int size, bool store) {
+static inline void mem(Core& c, u32 va, u32 phys, int size, bool store, bool changed = false) {
     if (!active) return;
     int k = c.hart != 0;
     MemPage*& p = mem_pages[(phys - RAM_BASE) >> 12];
@@ -171,6 +173,7 @@ static inline void mem(Core& c, u32 va, u32 phys, int size, bool store) {
         p->stores[k][t]++, pend_stores[c.hart]++;
         u32 stamp = (u32)(pass_no << 8) | (u32)c.hart;
         if (p->stamp[t] != stamp) p->stamp[t] = stamp, distinct[c.hart]++;
+        if (changed && p->cstamp[t] != stamp) p->cstamp[t] = stamp, pend_new[c.hart]++;
     } else p->loads[k][t]++, pend_loads[c.hart]++;
     if (!k && !watches.empty()) deps_access(c, va, size, store);
 }
@@ -180,8 +183,8 @@ static inline void step(Core& c, u32 op, u32 rd, u32 rs1, u32 ins, u32 pc, u32 n
     if (!active) return;
     PcCell& x = cell(c.hart, c.satp, pc);
     x.exec++, x.word = ins;
-    x.loads += pend_loads[c.hart], x.stores += pend_stores[c.hart];
-    pend_loads[c.hart] = pend_stores[c.hart] = 0;
+    x.loads += pend_loads[c.hart], x.stores += pend_stores[c.hart], x.newtex += pend_new[c.hart];
+    pend_loads[c.hart] = pend_stores[c.hart] = pend_new[c.hart] = 0;
     // (a stack for each thread: tp is the C library's thread pointer in a program, the task in the kernel)
     u64 key = ((u64)c.hart << 56) | ((u64)(c.priv == PRIV_S) << 55) | ((u64)(c.satp & 0x3fffff) << 32) | c.x[4];
     if (stack_key[c.hart] != key || !stack_at[c.hart]) stack_key[c.hart] = key, stack_at[c.hart] = &stacks[key];
@@ -235,6 +238,11 @@ static inline void step(Core& c, u32 op, u32 rd, u32 rs1, u32 ins, u32 pc, u32 n
         }
 }
 
+// A store at c.pc found the write cache full (RVC_WCACHE): the instruction runs again in the next pass.
+static inline void full(Core& c) {
+    if (active) cell(c.hart, c.satp, c.pc).full++;
+}
+
 static void pass_begin() {
     for (size_t i = 0; i < cores.size(); i++) clock_at[i] = cores[i].clock;
 }
@@ -277,13 +285,14 @@ static void report() {
     f = fopen((dir + "/pcs.txt").c_str(), "w");
     size_t pcs = 0;
     if (f) {
-        fprintf(f, "# class table pc word executed loads stores\n");
+        fprintf(f, pc_cores ? "# class table pc word executed loads stores newtex full hart\n" : "# class table pc word executed loads stores newtex full\n");
         for (auto& e : pc_pages) {
             u32 cls = (u32)(e.first >> 62), table = (u32)(e.first >> 20) & 0x3fffff, page = (u32)(e.first & 0xfffff), hart = (u32)(e.first >> 54) & 255;
             for (u32 i = 0; i < 1024; i++) {
                 const PcCell& x = e.second->cell[i];
                 if (!x.exec) continue;
-                fprintf(f, "%u %x %08x %08x %llu %u %u", cls, table, (page << 12) | (i << 2), x.word, (unsigned long long)x.exec, x.loads, x.stores);
+                fprintf(f, "%u %x %08x %08x %llu %u %u %u %u", cls, table, (page << 12) | (i << 2), x.word, (unsigned long long)x.exec, x.loads, x.stores,
+                        x.newtex, x.full);
                 fprintf(f, pc_cores ? " %u\n" : "\n", hart);
                 pcs++;
             }

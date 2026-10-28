@@ -19,14 +19,21 @@ For example, Doom's timedemo:
     python tools/prof.py run C:\...\b_doom -- --image build/images/nommu --quiet --expect "/ # " --send "echo FL-''GO; nano-X -p & sleep 2; doom -1 -timedemo demo1; echo LX-''DONE\n" --count-from FL-GO --until LX-DONE --seconds 120
 
 `RVC_PROF` runs the workers in order on one thread (whatever `--threads` says): Doom's
-timedemo takes 19 s of the host's time profiled, the first 150 s of Quake III 97 s.
+timedemo takes 19 s of the host's time profiled, the first 150 s of Quake III 97 s. Before
+`--count-from`'s line the run is a plain one (since 28 October 2026: the fast handlers, the
+workers on their threads), so a window late in a long program costs only its own instructions
+profiled: Quake III's 600 frames from its level's first frame take 11 s of the host's time,
+OpenTTD's play from `play PL-GO` reaches its game in seconds.
 
 ## What `rvc_cpu` writes
 
 `RVC_PROF=DIR` (a Windows path) writes into DIR when the run ends:
 
-- `pcs.txt`: every pc run, core 0 and the workers apart, with its word, how often it ran, and
-  the loads and stores it made to RAM.
+- `pcs.txt`: every pc run, core 0 and the workers apart, with its word, how often it ran, the
+  loads and stores it made to RAM, its stores that took a texel new to the core's pass with
+  bytes that changed (`newtex`: what the write cache keeps), and, under `RVC_WCACHE=1`, its
+  stores that found the write cache full and ended the pass (`full`). `prof.py report` gives
+  both by function ("texels new to a pass", "where core 0 found the write cache full").
 - `edges.txt`: calls, caller to callee, how many and their instructions inclusive. A stack is
   kept for each thread: by the hart, the privilege and `tp` (the C library's thread pointer in
   a program, the task in the kernel), so the programs of a machine without an MMU, which share
