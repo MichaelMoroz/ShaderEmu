@@ -862,6 +862,19 @@ static std::unordered_map<u64, CallStat> call_sites;   // RVC_CALLS_SITES=1: (th
 static CallCtx* call_cur = nullptr;
 static u64 call_cur_key = ~0ull;
 
+// Core 0's instructions on the fast handlers (all but jal and jalr) are counted into the context
+// in bulk: at its next instruction of the general step and before a trap or interrupt changes it.
+// call_last: core 0's clock up to which every instruction is counted (or was one that trapped).
+static u64 call_last = 0;
+static void call_fast(Core& c, u64 upto) {
+    if (upto > call_last) {
+        u64 key = c.priv == PRIV_S ? 0 : (u64)((c.satp & 0x3fffff) | 0x400000);
+        if (key != call_cur_key) call_cur = &call_ctx[key], call_cur_key = key;
+        call_cur->clock += upto - call_last;
+    }
+    call_last = upto;
+}
+
 static void call_step(Core& c, u32 op, u32 rd, u32 rs1, u32 ins, u32 pc, u32 next) {
     u64 key = c.priv == PRIV_S ? 0 : (u64)((c.satp & 0x3fffff) | 0x400000);
     if (key != call_cur_key) call_cur = &call_ctx[key], call_cur_key = key;
@@ -996,7 +1009,8 @@ enum : uint8_t {
     K_FLW, K_FSW, K_FMADD, K_FMSUB, K_FNMSUB, K_FNMADD, K_FOP, K_COUNT
 };
 // (their index: opcode, funct3, funct7's bits 0 and 5, whether it has any other: no load for the class)
-static uint8_t step_kind[2][8192];   // [RVC_ZB]: with Zba and Zbb, op and op-imm are all the general step's
+static uint8_t step_kind[4][8192];   // [RVC_ZB]: with Zba and Zbb, op and op-imm are all the general step's;
+                                     // [2 + RVC_ZB]: RVC_CALLS's core 0, jal and jalr the general step's too
 static bool step_kinds_made = false;
 static void make_step_kinds() {
     static const uint8_t branch[8] = {K_BEQ, K_BNE, 0, 0, K_BLT, K_BGE, K_BLTU, K_BGEU};
@@ -1035,6 +1049,7 @@ static void make_step_kinds() {
         }
         step_kind[0][key] = k;
         step_kind[1][key] = op == 0x13 || op == 0x33 ? K_GENERAL : k;
+        for (int z = 0; z < 2; z++) step_kind[2 + z][key] = k == K_JAL || k == K_JALR ? K_GENERAL : step_kind[z][key];
     }
     step_kinds_made = true;
 }
@@ -1055,6 +1070,7 @@ static __declspec(noinline) int general_step(Core& c, u32 ins) {
     u32 op = ins & 0x7f, rd = (ins >> 7) & 31, f3 = (ins >> 12) & 7, rs1 = (ins >> 15) & 31, rs2 = (ins >> 20) & 31, f7 = ins >> 25;
     u32 a = c.x[rs1], b = c.x[rs2], next = pc + 4, result = 0;
     bool write = true, illegal = false;
+    if (!W && calls_on && c.hart == 0) call_fast(c, c.clock - 1);   // (this one is counted in c.clock already)
     if (zb_on && (op == 0x13 || op == 0x33) && zb(ins, op, f3, f7, rs2, a, b, result)) { _InterlockedIncrement64((volatile long long*)&zb_run); op = 0x80; }   // (no opcode is 0x80)
     // which funct7 each op and op-imm has, as the tick's general path (emu.h): the rest are illegal
     if ((op == 0x13 || (op == 0x33 && f7 != 1)) &&
@@ -1270,18 +1286,20 @@ static __declspec(noinline) int general_step(Core& c, u32 ins) {
     }
     if (c.wc_full) {   // (the instruction is the next pass's)
         c.clock--;
+        if (!W && calls_on && c.hart == 0) call_last = c.clock;
         if (W) c.wc_full = false;
         return W ? STEP_OUT : STEP_BREAK;
     }
     if (illegal) t.on = true, t.cause = 2, t.value = ins;
     if (t.on) {
         // a worker core in user mode does not trap: it stops where it is (mc_fault)
+        if (!W && calls_on && c.hart == 0) call_last = c.clock;   // (one that traps is no context's)
         if (!W && c.hart == 0) note_stop(c, t);
         if ((!W && c.hart == 0) || !mc_fault(c, t)) take_trap(c, t.cause, t.value, pc);
         return STEP_BREAK;
     }
     if (write && rd) c.x[rd] = result;
-    if (!W && calls_on && c.hart == 0) call_step(c, op, rd, rs1, ins, pc, next);
+    if (!W && calls_on && c.hart == 0) call_step(c, op, rd, rs1, ins, pc, next), call_last = c.clock;
     if (prof::on) prof::step(c, op, rd, rs1, ins, pc, next);
     c.pc = next;
     if (c.recheck) {
@@ -1300,12 +1318,18 @@ static __declspec(noinline) int fetch_page(Core& c) {
     Trap t;
     if (!page_of(c, pc, FETCH, phys, t)) {
         // (a worker stops at code its program has not touched yet, as at any other page)
+        if (!W && calls_on && c.hart == 0) call_fast(c, c.clock), call_last = c.clock + 1;   // (it is counted, and traps)
         if (!W && c.hart == 0) note_stop(c, t);
         if ((!W && c.hart == 0) || !mc_fault(c, t)) take_trap(c, t.cause, t.value, pc);
         c.clock++;
         return STEP_BREAK;
     }
-    if (phys - RAM_BASE >= RAM_SIZE) { take_trap(c, 1, pc, pc); c.clock++; return STEP_BREAK; }
+    if (phys - RAM_BASE >= RAM_SIZE) {
+        if (!W && calls_on && c.hart == 0) call_fast(c, c.clock), call_last = c.clock + 1;
+        take_trap(c, 1, pc, pc);
+        c.clock++;
+        return STEP_BREAK;
+    }
     c.fetch_vpn = pc >> 12;
     c.fetch_host = ramp + ((phys & ~0xfffu) - RAM_BASE);
     return STEP_ON;
@@ -1314,6 +1338,7 @@ static __declspec(noinline) int fetch_page(Core& c) {
 // A load or store of the fast loop that faulted.
 template <bool W>
 static __declspec(noinline) int fault_step(Core& c, const Trap& t) {
+    if (!W && calls_on && c.hart == 0) call_fast(c, c.clock - 1), call_last = c.clock;   // (it is counted, and traps)
     if (!W && c.hart == 0) note_stop(c, t);
     if ((!W && c.hart == 0) || !mc_fault(c, t)) take_trap(c, t.cause, t.value, c.pc);
     return STEP_BREAK;
@@ -1969,16 +1994,17 @@ static int native_run(Core& c, u64 n) {
     return STEP_ON;
 }
 
-// The instructions that are always the general step's: with RVC_CALLS, RVC_PROF or RVC_CPU_LAST
-// every instruction is, for their tables.
-static const uint8_t* step_kinds() {
+// The instructions that are always a core's general step's: with RVC_PROF every instruction is, with
+// RVC_CPU_LAST core 0's, for their tables; with RVC_CALLS core 0's jal and jalr (call_fast counts the rest).
+static const uint8_t* step_kinds(const Core& c) {
     static const uint8_t all_general[8192] = {};
     if (!step_kinds_made) make_step_kinds();
-    return calls_on || prof::on || keep_last ? all_general : step_kind[zb_on];
+    if (prof::on || (keep_last && c.hart == 0)) return all_general;
+    return step_kind[(calls_on && c.hart == 0 ? 2 : 0) + zb_on];
 }
 
 static u64 run(Core& c, u64 budget) {
-    const uint8_t* kinds = step_kinds();
+    const uint8_t* kinds = step_kinds(c);
     u64 done = 0;
     c.end_pass = false;
     while (done < budget && !c.end_pass) {
@@ -1987,6 +2013,7 @@ static u64 run(Core& c, u64 budget) {
             c.waiting = false;
             c.mip &= irq == 0x80000005u ? ~0u : ~(1u << (irq & 31));   // (the timer's stays until a new deadline)
             if (c.hart == 0) native_check_stop("an interrupt", c);
+            if (c.hart == 0 && calls_on) call_fast(c, c.clock);
             take_trap(c, irq, 0, c.pc);
         }
         // wfi ends when an interrupt is pending and enabled, taken or not (Linux waits with
@@ -2006,7 +2033,7 @@ static u64 run(Core& c, u64 budget) {
 // A worker's pass once it runs: in user mode run_some's own, else (it took a trap into the
 // supervisor) one instruction of run() at a time with the checks in front, as it always was.
 static u64 worker_exec(Core& c, u64 budget) {
-    const uint8_t* kinds = step_kinds();
+    const uint8_t* kinds = step_kinds(c);
     Worker& w = workers[c.hart];
     u64 done = 0;
     while (native_on && done < budget && w.state == MC_RUNNING) {
@@ -2831,7 +2858,7 @@ int main(int argc, char** argv) {
         fprintf(stderr, "[cpu] copies from RAM to RAM: %llu, %llu of them over 256 KB (the longest %llu bytes): %llu chunks; cores waited %llu passes\n",
                 (unsigned long long)copies_made.load(), (unsigned long long)copies_long.load(), (unsigned long long)copy_most.load(),
                 (unsigned long long)copy_chunks, (unsigned long long)copy_waits);
-    if (calls_on) calls_report(calls_file);
+    if (calls_on) call_fast(c0, c0.clock), calls_report(calls_file);
     if (prof::on) prof::report();
     if (uart_log) fclose(uart_log);
     if (!opt.pcLog.empty()) {
