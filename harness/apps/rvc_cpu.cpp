@@ -585,11 +585,11 @@ static u64 wc_pass = 1, wc_full_passes[2];   // passes ended so: core 0's, the w
 struct WCache { u64 stamp[448]; u32 tag[448][3]; };   // (up to 2^8 + 2^7 + 2^6 buckets: RVC_WC_BITS)
 static std::vector<WCache> wcache;
 static u32 wc_bits_of(int hart);
-// RVC_WC_LOG=FILE (with RVC_WCACHE=1; a measure, gpu_vm/PROFILE_Q3.md "The write cache"): from --count-from on, at each
+// RVC_WC_LOG=FILE (with RVC_WCACHE=1; a measure): from --count-from on, at each
 // pass's end a record for every core that stored in it: the pass, the core, its table bits, 1 if a store found the cache
 // full, its stores, its silent stores (the bytes already there: no entry), its new entries, 0; then 112 bytes, each
 // bucket's entries in use (the three tables in order). The record's last word is the store's address that found the
-// cache full (a full end's: gpu_vm's 108b3e7), else 0
+// cache full (a full end's), else 0
 static FILE* wc_log = nullptr;
 static u32 wc_st[256], wc_sil[256], wc_new[256], wc_full_addr[256];
 static u64 wc_full_at[256];
@@ -2658,7 +2658,7 @@ static void console_pass() {
     for (; read != written; read++)
         if (uint8_t c = ram[RING - RAM_BASE + (read & (SIZE - 1))]) console_put(c);
     // (only to a guest that writes the ring: the MMU kernel takes its input by SBI calls)
-    // RVC_CON_TRACE=1 (gpu_vm's GVM_CON_TRACE): each delivery of input and each take by the guest, its pass and second
+    // RVC_CON_TRACE=1: each delivery of input and each take by the guest, its pass and second
     static const bool trace = getenv("RVC_CON_TRACE") && atoi(getenv("RVC_CON_TRACE")) != 0;
     static u32 traced_taken = 0;
     if (trace && word(GUEST) != traced_taken)
@@ -2720,7 +2720,7 @@ static void control_pass() {
     }
     // a submitted list has been drawn: the GPU is free, and the copy it asked for is counted
     u32 submit = word(CTRL + 0x10);
-    // RVC_DEVICE_EVERY=N (a measure, gpu_vm's GVM_DEVICE_EVERY): the list taken back only every Nth pass, as a world
+    // RVC_DEVICE_EVERY=N (a measure): the list taken back only every Nth pass, as a world
     // draws it once a host frame of N rounds (a control pass every pass hides a game's waits for it)
     static const u64 device_every = getenv("RVC_DEVICE_EVERY") ? std::max(1, atoi(getenv("RVC_DEVICE_EVERY"))) : 1;
     if (submit && (device_every <= 1 || frame_no % device_every == 0)) {
@@ -2957,7 +2957,7 @@ static bool machine_boot(const std::string& image, int count) {
     return true;
 }
 
-// RVC_PASSLOG=FILE (a measure, gpu_vm's GVM_PASSLOG and GVM_SYNCLOG_STACK): from --count-from's mark on, a line a
+// RVC_PASSLOG=FILE (a measure): from --count-from's mark on, a line a
 // pass: the pass, how core 0's ended (0 its budget, 1 a pause, a call, a copy or a rest, 2 wfi, 4 its write cache full,
 // 5 it was copying and did not run), its instructions in it, its pc, ra and the guest's milliseconds; with
 // RVC_PASSLOG_STACK=N, after a pass ended by 1 or 4, the first N words above sp that could be return addresses: who
@@ -3301,7 +3301,7 @@ int main(int argc, char** argv) {
     }
     atom_merging = !getenv("RVC_COUNT_MERGE") || atoi(getenv("RVC_COUNT_MERGE")) != 0;
     calls_on = calls_file && *calls_file;
-    // RVC_PROF_PASS=N (gpu_vm's GVM_PROF_PASS): the profile from N passes after --count-from's mark (or the start)
+    // RVC_PROF_PASS=N: the profile from N passes after --count-from's mark (or the start)
     prof_wait = getenv("RVC_PROF_PASS") ? std::max(0, atoi(getenv("RVC_PROF_PASS"))) : 0;
     if (const char* d = getenv("RVC_PROF"); d && *d) prof::ticks = opt.ticks, prof::init(d, cores.size(), opt.countFrom.empty() && !prof_wait);
     if (const char* f = getenv("RVC_PASSLOG"); f && *f && !(pass_log = fopen(f, "w"))) { fprintf(stderr, "rvc_cpu: RVC_PASSLOG: cannot write %s\n", f); return 2; }

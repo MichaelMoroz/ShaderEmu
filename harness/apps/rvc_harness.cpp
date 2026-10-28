@@ -250,10 +250,6 @@ struct Options {
     std::string dxcOpt = "-O3", dxcSm = "6_6", dxcDir;
     bool rvcDirSet = false, payloadSet = false;
     std::string image;        // --image: a named boot image from kImages
-    // --gvm DIR: a gpu_vm machine (gpu_vm/platform.md, harness/apps/gvm_backend11.cpp) booting the image in DIR
-    // (vmlinux, gvm.dtb, rootfs.romfs); --gvm-tick FILE its tick, --gvm-ram MB its RAM
-    std::string gvm, gvmTick;
-    unsigned gvmRamMB = 0;
     int machine = -1;         // --machine: 0 full, 1 no paging, 2 machine mode only, -1 = most the image allows
     std::vector<std::string> defines;
     GpuOptions gpu;
@@ -308,9 +304,6 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
   --viz                open a window showing memory live (writes glow); --no-viz turns it off
   --viz-capture FILE   save the memory view as a BMP at exit
   --resume             when started without other arguments: resume the shell snapshot instead of booting
-  --gvm DIR            a gpu_vm machine (gpu_vm/platform.md): DIR's vmlinux, gvm.dtb and rootfs.romfs (as
-                       gpu_vm/userland/romroot.sh or apps/image.sh make them), the tick of --gvm-tick FILE
-                       (gpu_vm/tick/steps/x18.hlsl), --gvm-ram MB of RAM (DIR's ram_mb, or 192); --ticks its bundles a pass
   --image NAME|DIR     boot a named image instead of --payload/--ram/--mtd/--dtb; --image list shows them.
                        DIR: a folder of our Linux without an MMU (a private image, build\\images\\NAME)
                        Without it (and without --payload, --ram or --load-state) a menu asks at start
@@ -443,9 +436,6 @@ bool parseArgs(int argc, char** argv, Options& o) {
         }
         else if (a == "--payload") { o.payloadDir = next("--payload"); o.payloadSet = true; }
         else if (a == "--image") o.image = next("--image");
-        else if (a == "--gvm") o.gvm = next("--gvm");
-        else if (a == "--gvm-tick") o.gvmTick = next("--gvm-tick");
-        else if (a == "--gvm-ram") o.gvmRamMB = (unsigned)atoi(next("--gvm-ram").c_str());
         else if (a == "--machine") {
             std::string v = next("--machine");
             const char* names[4] = {"auto", "full", "nopaging", "mmode"};
@@ -582,8 +572,6 @@ bool parseArgs(int argc, char** argv, Options& o) {
                 if (c2 != std::string::npos) o.unityRoundMs = atof(v.c_str() + c2 + 1);
             }
             o.fixedDt = o.unityMs / 1000.0;
-            // (a world draws the GPU's list in every frame's devices: gpu_vm's lazy list waited for a readback frames behind)
-            if (!getenv("GVM_LIST_LAZY")) _putenv("GVM_LIST_LAZY=0");
         }
         else if (a == "--tick-rounds") o.tickRounds = (std::max)(1, (std::min)(16, atoi(next("--tick-rounds").c_str())));
         else if (a == "--compute-split") o.computeSplit = (std::max)(0, (std::min)(64, atoi(next("--compute-split").c_str())));
@@ -844,13 +832,6 @@ int main(int argc, char** argv) {
     }
     std::error_code ec;
     bool haveOpt = fs::exists("experiments/rvc_opt/main.shader", ec);
-    if (!opt.gvm.empty()) {
-        terminalMode = false;
-        if (opt.cpu || !opt.compute.empty() || opt.dxc) { fprintf(stderr, "[harness] --gvm is D3D11's, with no --cpu or --compute\n"); return 2; }
-        opt.rvcDir = "experiments/rvc_opt";
-        opt.rvcDirSet = true;
-        opt.kernel = "nommu";
-    }
     // (--cpu needs the shader with the GPU device and the display: upstream's has neither)
     if ((terminalMode || opt.dxc || opt.cpu || !opt.compute.empty()) && !opt.rvcDirSet && haveOpt) opt.rvcDir = "experiments/rvc_opt";
     const char* shellSnap = "build/snapshots/rvc_shell.snap";
@@ -865,7 +846,7 @@ int main(int argc, char** argv) {
         if (!linuxBuilt(opt)) opt.kernel = "mmu";
     }
     if (terminalMode && opt.image.empty() && !opt.resume && !interactive) opt.image = "linux-net";
-    bool chosen = !opt.image.empty() || opt.payloadSet || !opt.loadState.empty() || opt.resume || !opt.gvm.empty();
+    bool chosen = !opt.image.empty() || opt.payloadSet || !opt.loadState.empty() || opt.resume;
     if (!chosen && interactive && !chooseImage(opt, canResume)) return 0;
     if (terminalMode) {
         if (opt.resume && canResume) {
@@ -1061,10 +1042,10 @@ int main(int argc, char** argv) {
         bo.compile.defines.push_back({d.substr(0, eq), eq == std::string::npos ? "1" : d.substr(eq + 1)});
     }
 
-    // The WARP stamp (gpu_vm's tick.hlsl.warp_ok): the card runs a processor folder only when its warp_ok holds the
+    // The WARP stamp: the card runs a processor folder only when its warp_ok holds the
     // hash of its sources (and of the devices' folder), written by tools/test_card.py --warp --mark-ok after WARP
     // passed its cases: a tick the card has never run is checked in software first. --stamp prints the hash.
-    if (opt.gvm.empty() && opt.compute.empty() && !opt.cpu && (opt.printStamp || !opt.gpu.warp)) {
+    if (opt.compute.empty() && !opt.cpu && (opt.printStamp || !opt.gpu.warp)) {
         std::vector<std::pair<std::string, fs::path>> files;
         for (const fs::path& dir : {fs::u8path(opt.rvcDir), deviceDir}) {
             for (auto it = fs::recursive_directory_iterator(dir, ec); !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
@@ -1098,15 +1079,7 @@ int main(int argc, char** argv) {
     // --- Material and backend ---
     Material mat;
     mat.applyDefaults(shader);
-    if (!opt.gvm.empty()) {
-        bo.gvmDir = opt.gvm;
-        bo.gvmTick = opt.gvmTick;
-        bo.gvmRamMB = opt.gvmRamMB;
-        bo.gvmBudget = opt.ticksSet ? (unsigned)opt.ticks : 4096u;   // (a pass half RISC-V's: lighter in VRChat, and the games between 2K and 8K; gpu_vm/bench_games/README.md)
-        opt.cores = kCores;   // (the workers' counts come with the control words)
-        opt.initFrames = 0;
-    }
-    std::unique_ptr<RvcBackend> backendPtr = !opt.gvm.empty() ? makeBackendGvm() : opt.dxc ? makeBackend12() : makeBackend11();
+    std::unique_ptr<RvcBackend> backendPtr = opt.dxc ? makeBackend12() : makeBackend11();
     RvcBackend& backend = *backendPtr;
     if (!backend.init(bo, shader, mat, err)) {
         fprintf(stderr, "[harness] %s\n", err.c_str());
@@ -1121,7 +1094,7 @@ int main(int argc, char** argv) {
     }
     // RVC_TICK_ALT=DIR;DIR...: other ticks of the same layout beside the machine's own (variant 0), each frame's tick
     // picked by a hash of the frame (RVC_TICK_ALT_SHIFT=N: 2^N frames a pick), every frame timed (with --stats-after)
-    // and each timing kept by its tick: ticks compared in one run, on one card's clock (gpu_vm's GVM_TICK_ALT, 5fa6f70)
+    // and each timing kept by its tick: ticks compared in one run, on one card's clock
     std::vector<std::string> altDirs;
     if (const char* alt = getenv("RVC_TICK_ALT"); alt && *alt) {
         if (!opt.replayDirs.empty()) { fprintf(stderr, "[harness] RVC_TICK_ALT or --replay, not both\n"); return 2; }
@@ -1168,22 +1141,20 @@ int main(int argc, char** argv) {
         SnapshotHeader hdr{};
         bool ok = readFileBinary(opt.loadState, snap) && snap.size() > sizeof hdr;
         if (ok) memcpy(&hdr, snap.data(), sizeof hdr);
-        // (one from before RAM reached 0x92000000 has 4096 rows: the rest is zeros; gpu_vm's is the backend's blob, 0 x 0)
-        bool gvmSnap = ok && !opt.gvm.empty() && memcmp(hdr.magic, kSnapshotMagic, 8) == 0 && hdr.width == 0;
-        if (!gvmSnap && ok && opt.gvm.empty() && memcmp(hdr.magic, kSnapshotMagic, 8) == 0) {
+        // (one from before RAM reached 0x92000000 has 4096 rows: the rest is zeros)
+        if (ok && memcmp(hdr.magic, kSnapshotMagic, 8) == 0) {
             fprintf(stderr, "[harness] %s is a snapshot of the layout before 28 October 2026 (the devices at 0x86000000): make it again\n",
                     opt.loadState.c_str());
             return 1;
         }
-        if (!gvmSnap && (!ok || !opt.gvm.empty() || memcmp(hdr.magic, rvlayout::kSnapshotMagic, 8) != 0 || hdr.width != W || hdr.height > H ||
-                         snap.size() != sizeof hdr + (size_t)W * hdr.height * 16)) {
+        if (!ok || memcmp(hdr.magic, rvlayout::kSnapshotMagic, 8) != 0 || hdr.width != W || hdr.height > H ||
+            snap.size() != sizeof hdr + (size_t)W * hdr.height * 16) {
             fprintf(stderr, "[harness] %s is not a %ux%u snapshot\n", opt.loadState.c_str(), W, H);
             return 1;
         }
-        if (!gvmSnap) snap.resize(sizeof hdr + (size_t)W * H * 16, '\0');
+        snap.resize(sizeof hdr + (size_t)W * H * 16, '\0');
         if (!opt.replayDirs.empty()) replaySnap.assign(snap.data() + sizeof hdr, snap.size() - sizeof hdr);
-        if (gvmSnap ? !backend.loadSnapshot((const uint8_t*)snap.data() + sizeof hdr, snap.size() - sizeof hdr, err)
-                    : !backend.setState(snap.data() + sizeof hdr, err)) {
+        if (!backend.setState(snap.data() + sizeof hdr, err)) {
             fprintf(stderr, "[harness] %s\n", err.c_str());
             return 1;
         }
@@ -1232,7 +1203,7 @@ int main(int argc, char** argv) {
     std::deque<uint32_t> keyEvents;   // raw key events from the window, waiting for the input device
     uint32_t keySeq = 0;              // events delivered so far
     MemoryViewInput pointer;
-    // --record-input / --replay-input (gpu_vm's a338987): a line an event, "SECONDS P x y panelW panelH buttons" (the
+    // --record-input / --replay-input: a line an event, "SECONDS P x y panelW panelH buttons" (the
     // pointer as it changes), "SECONDS K code" (a key event, hex), "SECONDS T bytes" (typed, hex)
     struct InputEvent { double t; char kind; float p[5]; uint32_t code; std::string typed; };
     std::vector<InputEvent> replay;
@@ -1291,7 +1262,7 @@ int main(int argc, char** argv) {
     int timeSamples = 0;
     // RVC_MARK=TEXT: at each TEXT on the console, the card's tick time a frame since the last one (every frame timed
     // with RVC_STATS_EVERY=1; from --stats-after's start): two programs run in turn in one run are timed apart, on the
-    // same card's clock (gpu_vm's GVM_MARK)
+    // same card's clock
     const char* markText = getenv("RVC_MARK");
     double segMs = 0;
     int segN = 0, markN = 0;
@@ -1361,9 +1332,9 @@ int main(int argc, char** argv) {
     double soundT0 = 0;
     std::deque<std::pair<uint64_t, uint32_t>> soundFrames;   // frames whose mix is on its way back, and their cursors
     bool cpuRunning = false;   // --cpu, past the frames that set the state texture up
-    // RVC_LINE_LOG=FILE (a measure, off by default; gpu_vm/PROFILE_Q3.md): each console line with the frame (pass) whose
-    // row brought it. RVC_CORES_LOG=FILE: every pass a record of 260 words: the frame, core 0's instructions (gpu_vm: ops),
-    // its last stall word, microseconds since the start, then cores 1 to 255's instructions (ops) in the pass (MC_STATS)
+    // RVC_LINE_LOG=FILE (a measure, off by default): each console line with the frame (pass) whose
+    // row brought it. RVC_CORES_LOG=FILE: every pass a record of 260 words: the frame, core 0's instructions,
+    // its last stall word, microseconds since the start, then cores 1 to 255's instructions in the pass (MC_STATS)
     static FILE* lineLog = getenv("RVC_LINE_LOG") ? fopen(getenv("RVC_LINE_LOG"), "w") : nullptr;
     static FILE* coresLog = getenv("RVC_CORES_LOG") ? fopen(getenv("RVC_CORES_LOG"), "wb") : nullptr;
     uint64_t rowNow = 0;
@@ -2080,7 +2051,7 @@ int main(int argc, char** argv) {
         {
             // every pass every frame, as a world draws them (Unity's _GpuPasses 0xff): a list that asked for a pass the
             // host drew only after a readback saw it waited submitted for it, and the machine with it, three frames
-            // (gpu_vm's Doom, 27 October 2026). RVC_PASS_LIFE=1: the passes seen lately only
+            // (27 October 2026). RVC_PASS_LIFE=1: the passes seen lately only
             static const bool passLife = getenv("RVC_PASS_LIFE") && atoi(getenv("RVC_PASS_LIFE")) != 0;
             uint32_t passes = passLife ? 1u : 0xffu;
             for (int p = 1; p < 8; ++p)
@@ -2388,13 +2359,13 @@ int main(int argc, char** argv) {
     if (!opt.saveState.empty() && exitCode != 1) {
         std::vector<uint8_t> data;
         SnapshotHeader hdr{};
-        memcpy(hdr.magic, opt.gvm.empty() ? rvlayout::kSnapshotMagic : kSnapshotMagic, 8);
-        hdr.width = opt.gvm.empty() ? W : 0;
-        hdr.height = opt.gvm.empty() ? H : 0;
+        memcpy(hdr.magic, rvlayout::kSnapshotMagic, 8);
+        hdr.width = W;
+        hdr.height = H;
         hdr.time = guestTime;
         hdr.sentTag = sentTag;
         hdr.sentChar = sentChar;
-        bool ok = opt.gvm.empty() ? backend.readState(W, H, data) : backend.saveSnapshot(data);
+        bool ok = backend.readState(W, H, data);
         if (ok && cpuRunning) {
             // (--cpu: the processor's state put where the shader machine keeps it, its clock the guest's)
             int workers = cpuSnapshotCores(data, W, opt.workers ? 1u << opt.workers : 2u);   // (2: geotune's pick on this card)

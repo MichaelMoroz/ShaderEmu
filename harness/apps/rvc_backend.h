@@ -31,11 +31,6 @@ struct BackendOptions {
     bool tickDirect = false;      // --unpack-in-place: the unpack draws into the state texture itself, no zone copied in and back (a tick that does not read the texture there)
     bool ramInplace = false;      // D3D11: RAM in one texture written in place, the commit's passes with RAM_INPLACE (src/ram.h)
     bool laneField = false;       // D3D11, RAM in place: the tick has the lanes' field (LANE_FIELD, experiments/rvc_lean; docs/machine/lanes.md)
-    // --gvm DIR (gpu_vm/platform.md): a gpu_vm machine (gvm_backend11.cpp): its image's folder (vmlinux, gvm.dtb,
-    // rootfs.romfs, ram_mb), its tick (--gvm-tick; gpu_vm/tick/steps/x18.hlsl), RAM in MB (0: the folder's ram_mb, or
-    // 192), bundles a pass (0: 8192)
-    std::string gvmDir, gvmTick;
-    unsigned gvmRamMB = 0, gvmBudget = 0;
 };
 
 // The state texture's rows: 64 of the cores' state, then RAM from 0x80000000 to 0x92000000, 32 KB a
@@ -88,7 +83,7 @@ public:
     // The GPU device's passes to draw in the next frame, one bit each (docs/machine/gpu.md); pass 0 always.
     uint32_t gpuPasses = 1;
     // RVC_LIST_LAZY=1 (opt-in): passes the GPU device's list is still drawn in, set when a readback saw a list submitted
-    // (GPU_CTRL's submit word); with the option the list is drawn only then (gvm's GVM_LIST_LAZY, for like comparisons)
+    // (GPU_CTRL's submit word); with the option the list is drawn only then
     int listDue = 0;
     // Whether the machine's geometry has any worker (the harness reads its texel back with the
     // control words): while it has none, and is not being laid out, nothing of the workers'
@@ -162,9 +157,6 @@ public:
     virtual bool takeState(std::vector<uint8_t>& out) { (void)out; return false; }
     // Blocking read of the top-left w x h texels of the current state.
     virtual bool readState(UINT w, UINT h, std::vector<uint8_t>& out) = 0;
-    // A machine whose state is not one state texture (gpu_vm): the whole of it as one blob, and back.
-    virtual bool saveSnapshot(std::vector<uint8_t>& out) { (void)out; return false; }
-    virtual bool loadSnapshot(const uint8_t* data, size_t size, std::string& err) { (void)data; (void)size; err = "no snapshots here"; return false; }
     // Time on the graphics card of the last frame run with timeIt, once it is known: the CPUTick
     // draw, the Commit draw, and the emulated GPU device's two draws together (0 without one).
     virtual bool gpuTimes(double& tickMs, double& commitMs, double& deviceMs) = 0;
@@ -208,4 +200,3 @@ inline bool loadPayloadLane(const std::string& dir, const std::string& prefix, i
 
 std::unique_ptr<RvcBackend> makeBackend11();
 std::unique_ptr<RvcBackend> makeBackend12();
-std::unique_ptr<RvcBackend> makeBackendGvm();
