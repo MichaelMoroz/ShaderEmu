@@ -397,10 +397,8 @@ cache fills. What is left:
 | `xr[65]` zeroed on entry (`types.h:692`), though `xreg_load` and `fp_state_load` write all of it | | `#pragma static_noinit` before it (fxc2 patch 62). `l1_has` and `l1_occ` must stay zeroed | gpu_vm's was mixed (before `wd` level, before `r` floats -2.3%) | S |
 | loads from the ROM go the general way (`emu.h:1143`, `mem.h:249-277`, about 2,700 ns) | | the ROM in the fast load after 3c, only if a profile shows ROM loads (no-MMU copies a mapped file's pages into RAM) | low | S |
 
-Not to take, though it costs: RISC-V's workers carry core 0's 448-entry `l1_cache` (`mem.h:40-49`), about 7 KB a
-lane, and gpu_vm measured a lane's cost following the arrays' allocated size, not the entries used (1.98 against 0.93 ns
-a bundle at 255 cores); likely part of nxray's gap. A worker's own build is a second draw, and shaders of different
-local sizes never overlap on the card, so core 0 would run alone.
+The rule stands: every core in the one tick draw, one compile, no worker drawn or built apart from core 0. Whatever
+the tick's arrays cost a lane is paid by every core alike.
 
 Lessons that hold for the RISC-V tick: two pixel shaders of different local sizes never overlap on the card (e6e8121);
 starting the tick's pixels is the cost, and discarding them does not help (759f259); the texture cache is cold at every
