@@ -108,7 +108,7 @@ def keyed(image):
 def words(image):
     """The GPU's words of an RGBA picture (see the top)."""
     out = bytearray()
-    for r, g, b, a in image.get_flattened_data():
+    for r, g, b, a in (image.get_flattened_data() if hasattr(image, "get_flattened_data") else image.getdata()):
         out += struct.pack('<I', CLEAR if a == 0 else (255 - a) << 24 | r << 16 | g << 8 | b)
     return bytes(out)
 
