@@ -624,9 +624,19 @@ static uint4 l1_cache[L1_DATA_N];
 static uint4 l1_tag[L1_BUCKETS];
 #endif
 #endif
-static uint l1_occ[(L1_BUCKETS + 31) / 32];   // buckets whose tags have been written this pass
+// buckets whose tags have been written this pass. Up to 128 buckets (L1_TABLE_BITS 6 and below) a uint4,
+// its word picked by selects: an array of four words is in local memory and read by a dynamic index on
+// every probe; the uint4 made the tick 3.9% faster on the shell loop, 5.0% on Doom, 3.9% on Quake's e1m1
+// (RVC_TICK_ALT on the card, 28 October 2026; gpu_vm keeps arrays of 1 to 3 words in registers)
+#if L1_TABLE_BITS < 7
+static uint4 l1_occ = 0;
+#define L1_OCC(b) (((idx_uint4(l1_occ, (b) >> 5) >> ((b) & 31)) & 1) != 0)
+#define L1_OCC_SET(b) { uint occ_b_ = (b); l1_occ |= uint4((occ_b_ >> 5) == 0, (occ_b_ >> 5) == 1, (occ_b_ >> 5) == 2, (occ_b_ >> 5) == 3) * (1u << (occ_b_ & 31)); }
+#else
+static uint l1_occ[(L1_BUCKETS + 31) / 32];
 #define L1_OCC(b) (((l1_occ[(b) >> 5] >> ((b) & 31)) & 1) != 0)
 #define L1_OCC_SET(b) l1_occ[(b) >> 5] |= 1u << ((b) & 31);
+#endif
 #endif
 
 // TYPE HELPERS
