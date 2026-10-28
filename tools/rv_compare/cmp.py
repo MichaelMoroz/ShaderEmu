@@ -47,7 +47,8 @@ def queued(cmd, cwd, env=None, timeout=900):
             p = subprocess.run(QUEUE + cmd, cwd=cwd, env=env, capture_output=True, text=True, errors='replace', timeout=timeout)
             out, code = p.stderr + p.stdout, p.returncode
         except subprocess.TimeoutExpired as e:
-            out, code = (e.stderr or b'').decode('latin-1') + (e.stdout or b'').decode('latin-1') + '\n[rv_compare] over the time', -1
+            text = lambda x: x.decode('latin-1') if isinstance(x, bytes) else (x or '')   # (str under text=True)
+            out, code = text(e.stderr) + text(e.stdout) + '\n[rv_compare] over the time', -1
         if code == REFUSED and time.time() - t0 < 600:
             print('  refused by the harness lock (a CPU harness runs): again in 20 s', flush=True)
             time.sleep(20)
