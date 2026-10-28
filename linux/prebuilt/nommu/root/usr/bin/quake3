@@ -1,5 +1,0 @@
-#!/bin/sh
-# what it writes (its settings) goes to the folder the host keeps (docs/system/persist.md)
-mkdir -p /tmp/quake3/baseq3 /persistence/quake3 && cd /tmp/quake3 || exit 1
-ln -sf /usr/share/quake3-pak0.pk3 baseq3/pak0.pk3
-exec quake3.bin +set com_hunkMegs 8 +set com_zoneMegs 4 +set fs_basepath /tmp/quake3 +set fs_homepath /persistence/quake3 +set sv_pure 0 +set name "${USER:-player}" "$@"

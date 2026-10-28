@@ -1,4 +1,4 @@
-# The example meshes in four materials (docs/raytrace.md, "Example scenes"): a matt teapot, a
+# The example meshes in four materials (docs/apps/raytrace.md, "Example scenes"): a matt teapot, a
 # plastic rabbit, a metal teapot and a glass knot.
 camera target 0 0.35 0 turn 0 tilt 18 far 3.4 lens 0.6
 background colour 0.6 0.75 1 power 0.3

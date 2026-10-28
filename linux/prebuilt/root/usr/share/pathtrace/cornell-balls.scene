@@ -1,4 +1,4 @@
-# The Cornell box with a mirror ball and a glass ball in place of the blocks (docs/raytrace.md,
+# The Cornell box with a mirror ball and a glass ball in place of the blocks (docs/apps/raytrace.md,
 # "Example scenes"): the room and the light as in cornell.scene.
 camera target 2.78 2.73 2.796 turn 180 tilt 0 far 10.796 lens 0.357143
 background power 0

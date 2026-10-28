@@ -16,6 +16,14 @@ void seglSwap(void);
 // the palette: anything written through a pointer; the library's own calls settle themselves).
 void seglSwapEarly(void);
 void seglSettle(void);
+// seglSwapEarly() for a frame drawn on a worker core: the list is handed to the first core,
+// which submits it with seglSwapTake() (1 if it did; never a wait) and must call that often. A
+// worker never takes the GPU's lock: it is the window system's too (docs/machine/gpu.md).
+void seglSwapHand(void);
+int seglSwapTake(void);
+// The next swap shows a picture that is not a whole frame (one filling in): the caption's
+// frames a second (fps_caption.h) does not count it.
+void seglNotAFrame(void);
 // The window was resized (a GR_UPDATE_SIZE event): learn its size now, not at the next swap.
 void seglWindowChanged(void);
 // Where a point of the window (an event's x, y) lies in a picture of width x height pixels
@@ -37,11 +45,11 @@ unsigned int seglMemoryLeft(void);
 // One program may have it at a time; nothing hands it out or takes it back.
 void* seglMemorySpare(unsigned int* bytes);
 
-// What the host says of where the machine is shown (docs/holodeck.md): eight words the host
+// What the host says of where the machine is shown (docs/world/holodeck.md): eight words the host
 // writes every frame, or 0 before seglInit. All zero: a host that says nothing.
 const volatile unsigned int* seglHostState(void);
 // Which of the world's axes is up (1 x, 2 y, 3 z; 0: not said), for a host that shows the
-// frame as a world round its visitor (docs/holodeck.md): it keeps that axis upright whatever
+// frame as a world round its visitor (docs/world/holodeck.md): it keeps that axis upright whatever
 // the program's camera looks at. A program whose camera looks up and down says it.
 void seglWorldUp(int axis);
 // The frames from here on are a flat screen (a menu, a level loading) and no world: such a
@@ -82,7 +90,7 @@ void seglWorldFlat(int flat);
 #define SEGL_HOST_WHEEL(s)     (((s)[5] >> 16) & 255)
 /* the jump button is held (a headset's, or a desktop sitter's Space): no trigger jumps */
 #define SEGL_HOST_JUMP(s)      (((s)[0] >> 6) & 1)
-/* For the holodeck's default scale (docs/holodeck.md, "The world's size"): the player's eye over
+/* For the holodeck's default scale (docs/world/holodeck.md, "The world's size"): the player's eye over
    its floor in the program's units, its near and far planes and its projection's x and y scales.
    `game` is linux/apps/gameid.h's number: the host takes the word only while that game is played. */
 static inline void seglWorldEye(int game, float eye, float znear, float zfar, float fx, float fy)
@@ -97,12 +105,12 @@ static inline void seglWorldEye(int game, float eye, float znear, float zfar, fl
 	a = a < -32768 ? -32768 : a > 32767 ? 32767 : a;
 	b = b > 4095 ? 4095 : b;
 	said = (unsigned)(a & 0xffff) | (unsigned)b << 16 | (unsigned)(game & 15) << 28;
-	word += (0x6c - 0x360) / 4;	/* the control word 0x8700006c, written only when it changes */
+	word += (0x6c - 0x360) / 4;	/* the control word 0x8100006c, written only when it changes */
 	if (*word != said)
 		*word = said;
 }
 
-// Vertices the program has made compact itself (docs/gpu.md: x, y, z, then u | v << 16 in
+// Vertices the program has made compact itself (docs/machine/gpu.md: x, y, z, then u | v << 16 in
 // 1,024ths), drawn as glDrawArrays draws: GL_TRIANGLES, a strip, a fan or GL_QUADS. x, y and z
 // are the kind of number the library was built for: floats with SEGL_FLOAT, else 16.16.
 void seglCompact(GLenum mode, const unsigned int* vertices, GLsizei count);
@@ -118,7 +126,7 @@ unsigned int* seglPoints(GLsizei count, const void* size_growth_from);
 // And for triangles that are in memory from seglMemory() already: a draw of them where they
 // are, which the program may ask for again in any later frame. -1 when the frame is full.
 int seglCompactAt(const void* vertices, GLsizei count);
-// Triangles of tagged vertices (docs/gpu.md): the fourth word is u | v << 12 | tag << 24. With
+// Triangles of tagged vertices (docs/machine/gpu.md): the fourth word is u | v << 12 | tag << 24. With
 // a `table` (256 words in memory from seglMemory()) a vertex's colour is the word its tag
 // names. `vertices` are where they are, as seglCompactAt()'s, or NULL for room in the frame.
 // Returns where the vertices are (to be written, when the room is the frame's), NULL for none.
@@ -144,7 +152,7 @@ void seglQuad(const GLfixed* xyz, const GLfixed* uv, GLuint name, unsigned grey,
 // One bit a pixel for seglTexturePointer (rows of whole bytes, leftmost pixel in the highest
 // bit): where a bit is set the colour is drawn, elsewhere nothing.
 #define SEGL_BITS 0x1F0B1
-// A layer of tiles for seglTexturePointer (docs/gpu.md, fragment mode 5): `pixels` is four
+// A layer of tiles for seglTexturePointer (docs/machine/gpu.md, fragment mode 5): `pixels` is four
 // words in memory from seglMemory(), the addresses (seglAddress()) of its cells, its tiles
 // and its palette, and tile width | height << 8 | cells in a row << 16 | n << 28 (n not 0:
 // the tiles are in pieces of 2^n, and their address is a table of the pieces'). A cell is 16 bits:
@@ -152,7 +160,7 @@ void seglQuad(const GLfixed* xyz, const GLfixed* uv, GLuint name, unsigned grey,
 // A tile is width x height bytes; the palette is words of 0x00RRGGBB. The texture's width and
 // height are the layer's in pixels; seglQuad draws it, keyed on a tile's byte.
 #define SEGL_TILES 0x1F0B2
-// A video's frame for seglTexturePointer (docs/gpu.md, fragment mode 6): width x height bytes
+// A video's frame for seglTexturePointer (docs/machine/gpu.md, fragment mode 6): width x height bytes
 // of luma, then the blue and the red chroma planes, each half the size each way; both sizes even.
 #define SEGL_YUV420 0x1F0B3
 // A rectangle of a texture drawn over what the list drew before it, in the list's order: box is
@@ -176,11 +184,11 @@ unsigned int* seglLastVertices(void);
 unsigned int seglAddress(const void* memory);
 // Triangles in the window's own pixels (x right, y down), drawn over the frame in the order
 // given and blended by alpha: a user interface. A vertex is sixteen of the library's numbers
-// (docs/gpu.md): x, y at 0-1, texture coordinates at 8-9, red, green, blue, alpha (0 to 1) at
+// (docs/machine/gpu.md): x, y at 0-1, texture coordinates at 8-9, red, green, blue, alpha (0 to 1) at
 // 12-15. Room for vertices, and in *room how many fit; then how many were written of them.
 void* seglScreenSpace(GLsizei* room);
 void seglScreenUsed(GLsizei count, GLuint name);   // (a multiple of three; a texture of words, or 0)
-// The same in a quarter of the memory, as tagged vertices with a table (docs/gpu.md): a vertex
+// The same in a quarter of the memory, as tagged vertices with a table (docs/machine/gpu.md): a vertex
 // is four words, x and y in pixels (the library's numbers), 0, and u | v << 12 | tag << 24 in
 // 1,024ths of the texture; its colour is the table's word for its tag, transparency << 24 |
 // red << 16 | green << 8 | blue. seglScreenTable() gives a table of 256 words in the frame
@@ -190,7 +198,7 @@ unsigned int* seglScreenTable(void);
 unsigned int* seglScreenCompactSpace(GLsizei* room);
 void seglScreenCompactUsed(GLsizei count, int quads, GLuint name, const unsigned int* table);
 // For a program whose worker cores write such vertices while it does other things
-// (docs/imgui.md, "The copy on worker cores"): seglFrameSpace() is room in the frame, whole
+// (docs/apps/imgui.md, "The copy on worker cores"): seglFrameSpace() is room in the frame, whole
 // 16 bytes, that the program fills as it likes (NULL: not that much; seglFrameLeft() says how
 // much there is), and seglScreenCompactAt() draws `count` vertices that lie in it, with a
 // table that does, as seglScreenCompactUsed() draws those written last.
@@ -205,7 +213,7 @@ void seglSwapAgain(void);
 // The same without the wait: seglSettle() before the program next writes what that list reads.
 void seglSwapAgainEarly(void);
 
-// Commands that stay (docs/gpu.md): quads of compact vertices in memory from seglMemory(), and
+// Commands that stay (docs/machine/gpu.md): quads of compact vertices in memory from seglMemory(), and
 // a command per run of them with one texture and one grey, at the head of every frame's list.
 // seglKeep(n, quads) says how many (0: none; -1 if they do not fit), before a frame's drawing;
 // seglKeptMatrices() gives them the matrices in force, once a frame before anything is drawn.

@@ -1,11 +1,11 @@
 #!/bin/sh
 mkdir -p /tmp/classicube/texpacks /persistence/classicube && cd /tmp/classicube || exit 1
 ln -sf /usr/share/classicube-default.zip texpacks/default.zip
-# its settings are of the folder the host keeps (docs/persist.md); its maps are too large for it
+# its settings are of the folder the host keeps (docs/system/persist.md); its maps are too large for it
 # (the frame rate in the corner is a line of text drawn again every second: 7% of the machine)
 [ -f /persistence/classicube/options.txt ] || echo "gui-showfps=false" > /persistence/classicube/options.txt
 ln -sf /persistence/classicube/options.txt options.txt
-# the player's name, the desktop's (docs/persist.md), as the launcher's would be
+# the player's name, the desktop's (docs/system/persist.md), as the launcher's would be
 if [ -n "$USER" ]; then
     grep -v '^launcher-cc-username=' options.txt > /tmp/classicube/options.new
     echo "launcher-cc-username=$USER" >> /tmp/classicube/options.new

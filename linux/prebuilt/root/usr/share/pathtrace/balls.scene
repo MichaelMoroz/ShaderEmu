@@ -1,4 +1,4 @@
-# Glass and metal balls on a plane (docs/raytrace.md, "Example scenes"), under a light and a
+# Glass and metal balls on a plane (docs/apps/raytrace.md, "Example scenes"), under a light and a
 # sky that gives light. Glass's shadow is light of its colour, not a caustic: the tracer finds
 # no light by way of glass or a mirror after a matt surface.
 camera target 0 0.3 0.2 turn 20 tilt 22 far 3.3 lens 0.6

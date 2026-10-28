@@ -1,1 +1,1 @@
-source   c,h   -   nxide %s
+source   c,h,js,py,hlsl   -   nxide %s

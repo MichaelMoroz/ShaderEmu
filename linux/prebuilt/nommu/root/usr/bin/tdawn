@@ -1,6 +1,0 @@
-#!/bin/sh
-mkdir -p /tmp/tdawn && cd /tmp/tdawn || exit 1
-for f in DEMO DEMOL SOUNDS SPEECH; do ln -sf /usr/share/tdawn-$f.MIX $f.MIX; done
-for f in MAP1 WIN1; do ln -sf /usr/share/tdawn-$f.AUD $f.AUD; done
-# its settings and saved games go to the folder the host keeps (docs/system/persist.md)
-HOME=/tmp/tdawn XDG_CONFIG_HOME=/persistence exec /usr/lib/tdawn/game "$@"

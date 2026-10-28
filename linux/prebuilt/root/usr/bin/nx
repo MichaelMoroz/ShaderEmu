@@ -7,7 +7,9 @@
 # nx restart ask [SIZE]: asked first, and the programs get to ask about what is not saved.
 if [ "$1" = restart ]; then
     # in a session of its own: typed in a terminal of the desktop it would go with that terminal
-    [ -z "$NX_OWN_SESSION" ] && NX_OWN_SESSION=1 exec setsid "$0" "$@"
+    # (not exec: no-MMU busybox's setsid, run by a session leader such as Settings' child,
+    # re-execs itself with the command's name as the applet's and says "nx: applet not found")
+    [ -z "$NX_OWN_SESSION" ] && { NX_OWN_SESSION=1 setsid "$0" "$@"; exit; }
     unset NX_OWN_SESSION
     # one restart at a time: a second one (the button pressed twice) would take down the
     # window system the first is starting, and leave two of everything or none
@@ -38,10 +40,10 @@ fi
 # the size Settings last chose, unless this start names one
 named=$NANOX_SIZE
 mkdir -p /persistence/desktop
-# (the registry is every program's kept settings: registry.h, docs/persist.md)
+# (the registry is every program's kept settings: registry.h, docs/system/persist.md)
 [ -z "$NANOX_SIZE" ] && NANOX_SIZE="$(nxreg get desktop.size)" && export NANOX_SIZE
 [ -d /dev/pts ] || { mkdir /dev/pts && mount -t devpts devpts /dev/pts; }
-# the player's name, every program's: $USER and the registry's user.name (docs/persist.md)
+# the player's name, every program's: $USER and the registry's user.name (docs/system/persist.md)
 name=$(nxpersist name 2>/dev/null | tr -cd 'A-Za-z0-9._-' | cut -c1-32)
 [ -n "$name" ] && nxreg set user.name "$name"
 USER=$(nxreg get user.name)
@@ -49,8 +51,10 @@ USER=$(nxreg get user.name)
 LOGNAME=$USER
 export USER LOGNAME
 nano-X -p &            # -p: it stays when the last program has gone
-sleep 2
-# what the host keeps of /persistence, once a session and before the desktop shows it (docs/persist.md)
+# the start's word in the middle of the screen as soon as the server takes it (a client tries to
+# reach it for 2 s), until the picture covers it
+nxbar --splash "the kept settings and files" 2>/dev/null || nxbar --splash "the kept settings and files"
+# what the host keeps of /persistence, once a session and before the desktop shows it (docs/system/persist.md)
 if [ ! -f /tmp/nxpersist.loaded ]; then
     : > /tmp/nxpersist.loaded
     # (geotune loads it at boot, before the workers are laid out: linux/userland/geotune.c)
@@ -63,6 +67,8 @@ if [ ! -f /tmp/nxpersist.loaded ]; then
     kept=$(nxreg get desktop.size)
     [ -z "$named" ] && [ -n "$kept" ] && [ "$kept" != "${NANOX_SIZE:-800x600}" ] && exec "$0" restart
 fi
+nxbar --look          # the look Settings chose (Windows 7 by default), before anything is drawn in it
+nxbar --splash "its picture and icons"
 nxnet --serve 2>/dev/null &   # answers the other computers' Network program (one a machine: a second finds the port taken)
 nxfiles --desktop &   # the desktop: its picture, and the icons of /root/Desktop on it
 nxbar &

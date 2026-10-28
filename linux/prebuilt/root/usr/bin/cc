@@ -1,7 +1,25 @@
 #!/bin/sh
 # cc: the machine's own C compiler (TinyCC), with the C library, Nano-X, OpenGL ES and the
-# worker cores' library (mcw.h).
+# worker cores' library (mcw.h) and the HLSL compiler (hlsl.h).
 #   cc cube.c -o cube
 # Its headers and libraries are in the ROM, in /usr/include and /usr/lib.
 # -mfpu: float arithmetic as the machine's instructions (a double is still a library call)
-exec tcc -static -mfpu "$@" -lgles -lnano-X -lmcw
+# No MMU: tcc's code is position-independent already; it links it as a library (every address
+# relocatable), and elf2flt makes that a flat program.
+out=; link=1; prev=
+for a do
+    shift
+    if [ "$prev" = -o ]; then out=$a; prev=; continue; fi
+    [ "$a" = -o ] && { prev=-o; continue; }
+    case "$a" in -c|-E|-S|-M|-MM) link=0 ;; esac
+    set -- "$@" "$a"
+done
+if [ $link = 0 ]; then
+    [ -n "$out" ] && set -- "$@" -o "$out"
+    exec tcc -static -mfpu "$@"
+fi
+out=${out:-a.out}
+tcc -shared -nostdlib -mfpu /usr/lib/flatcrt.o /usr/lib/crti.o "$@" -lgles -lnano-X -lhlsl -lmcw -lc /usr/lib/tcc/libtcc1.a /usr/lib/crtn.o \
+    -o "$out.elf" || exit 1
+elf2flt "$out.elf" "$out" || exit 1
+rm -f "$out.elf"

@@ -1,4 +1,4 @@
-# Lit only by a glowing thing (docs/raytrace.md, "Example scenes"): no light and no sky, a ball
+# Lit only by a glowing thing (docs/apps/raytrace.md, "Example scenes"): no light and no sky, a ball
 # that glows, and round it things of other materials, lit by it.
 camera target 0 0.35 0 turn 15 tilt 24 far 3 lens 0.6
 background power 0

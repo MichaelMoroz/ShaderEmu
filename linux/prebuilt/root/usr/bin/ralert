@@ -3,7 +3,7 @@ mkdir -p /tmp/ralert && cd /tmp/ralert || exit 1
 for f in REDALERT MAIN; do ln -sf /usr/share/ralert-$f.MIX $f.MIX; done
 for f in CRUS226M HELL226M; do ln -sf /usr/share/ralert-$f.AUD $f.AUD; done
 # a first run "from the install" goes past the menu into the Soviet mission: say it has been run
-# (its settings and saved games are of the folder the host keeps: docs/persist.md)
+# (its settings and saved games are of the folder the host keeps: docs/system/persist.md)
 ini=/persistence/vanilla-conquer/vanillara/redalert.ini
 [ -f $ini ] || { mkdir -p ${ini%/*} && printf '[Intro]\nPlayIntro=no\n' > $ini; }
 HOME=/tmp/ralert XDG_CONFIG_HOME=/persistence exec /usr/lib/ralert/game "$@"

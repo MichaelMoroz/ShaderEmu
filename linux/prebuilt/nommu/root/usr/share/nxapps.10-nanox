@@ -1,8 +1,0 @@
-Games/Tetris=nxtetris
-Games/Mines=nxmine
-Games/Pinball=nxpinball
-Utilities/Terminal=nxterm
-Utilities/Calculator=nxcalc
-Utilities/Clock=nxclock
-Other/Eyes=nxeyes
-Other/Gears (OpenGL)=glxgears

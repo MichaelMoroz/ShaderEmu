@@ -1,4 +1,4 @@
-# The Cornell box (docs/raytrace.md, "Example scenes"): the walls, the blocks, the light and the
+# The Cornell box (docs/apps/raytrace.md, "Example scenes"): the walls, the blocks, the light and the
 # camera as the Cornell Program of Computer Graphics measured them, in millimetres at a hundredth
 # (www.graphics.cornell.edu/online/box/data.html); the colours as RGB of its spectra, the light's
 # as 17, 12, 4. The camera: 35 mm of lens over 25 mm of film, at 278 273 -800 looking along z.

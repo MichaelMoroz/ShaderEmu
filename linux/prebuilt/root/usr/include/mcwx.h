@@ -1,5 +1,5 @@
 /*
- * Over mcw.h (docs/multicore.md, "The second layer"): a parallel loop, calls collected later,
+ * Over mcw.h (docs/machine/multicore.md, "The second layer"): a parallel loop, calls collected later,
  * what a job may do that only the first core may (print, defer, allocate, fail), and counters
  * every core adds to. With no workers the first core does all of it.
  */
@@ -45,6 +45,22 @@ void mcw_for_begin(uint32_t n, mcw_body fn, void *ctx, const mcw_for_opts *o);
 int mcw_for_ready(void);
 void mcw_for_wait(void);
 
+/* ---- a picture made as a fragment shader makes it (docs/machine/lanes.md, "Shaders") ---- */
+
+/*
+ * A pixel's colour, 0x00RRGGBB, at column x and row y of the picture (0, 0 its top left). Called
+ * once for every pixel, on any core and in no set order, mostly on a worker's lanes: it computes
+ * and reads, and stores nothing but to its own stack (no globals, no system calls, no stdio).
+ */
+typedef uint32_t (*mcw_pixel_fn)(int x, int y, void *ctx);
+/* fn for every pixel of a width x height picture of words at `pixels` (16-byte aligned, width
+ * a multiple of 4, e.g. seglMemory()), on the lanes' field where the machine has one, else on the
+ * workers' lanes (a program that opened them); returns with it whole. */
+void mcw_shade(uint32_t *pixels, int width, int height, mcw_pixel_fn fn, void *ctx);
+/* The same begun and not waited for (the round of mcw_for_begin()), and the wait. One out at a time. */
+void mcw_shade_begin(uint32_t *pixels, int width, int height, mcw_pixel_fn fn, void *ctx);
+void mcw_shade_wait(void);
+
 /* ---- calls collected later ---- */
 
 /*
@@ -57,6 +73,8 @@ mcw_handle mcw_call(mcw_fn fn, uint32_t a0, uint32_t a1);
 mcw_handle mcw_try_call(mcw_fn fn, uint32_t a0, uint32_t a1);
 int mcw_ready(mcw_handle h);
 uint32_t mcw_join(mcw_handle h);
+/* mcw_rest_for() the workers of these calls (handles of 0 or made here are passed over). */
+void mcw_rest_on(const mcw_handle *h, int n);
 
 /* ---- what a job may do (on the first core it is done at once) ---- */
 

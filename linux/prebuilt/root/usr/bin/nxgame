@@ -1,6 +1,6 @@
 #!/bin/sh
-# nxgame quake host|join, nxgame quake3 host|join, nxgame doom host|now: a game over the network with the other
-# computers (docs/lan.md, "Games over the network"). A computer that hosts says so to whoever
+# nxgame quake|quake3|openttd host|join, nxgame doom host|now: a game over the network with the other
+# computers (docs/system/lan.md, "Games over the network"). A computer that hosts says so to whoever
 # asks who is there (/tmp/nxhosting, which nxnet --serve reads); a join looks for it.
 game="$1"
 how="${2:-host}"
@@ -47,6 +47,21 @@ case "$game $how" in
     echo "nxgame: joining Quake III at $it"
     quake3 +set rate 3000 +set snaps 10 +set cl_maxpackets 15 +connect "$it"
     ;;
+"openttd host")
+    # a new game made a server; the game itself says so once it runs (its start and map take minutes)
+    OPENTTD_HOST=1 OPENTTD_HOSTING=/tmp/nxhosting openttd -g
+    ;;
+"openttd join")
+    it=$(others openttd | head -1)
+    if [ -n "$it" ]; then
+        echo "nxgame: joining OpenTTD at $it"
+        openttd -n "$it"
+    else
+        # (nobody yet: the server list, whose Search LAN asks again)
+        echo "nxgame: nobody is hosting OpenTTD yet; the server list"
+        OPENTTD_JOIN=1 openttd
+    fi
+    ;;
 "doom host" | "doom now")
     # every player starts this: the players are the computers that say doom, in their addresses' order
     echo doom > /tmp/nxhosting
@@ -69,7 +84,7 @@ case "$game $how" in
     doom -net "$me"$rest
     ;;
 *)
-    echo "usage: nxgame quake host|join, nxgame quake3 host|join, nxgame doom host|now"
+    echo "usage: nxgame quake|quake3|openttd host|join, nxgame doom host|now"
     exit 2
     ;;
 esac

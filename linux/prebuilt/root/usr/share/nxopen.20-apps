@@ -1,4 +1,4 @@
-# What `open` starts for a file (docs/open.md): kind, endings, first bytes, command.
+# What `open` starts for a file (docs/system/open.md): kind, endings, first bytes, command.
 # "-" is none; \xNN is a byte, \x.. any; %s is the file. First bytes are looked at before endings.
 page     html,htm                                  <!doctype,<html                      nxweb %s
 picture  png,jpg,jpeg,gif,bmp,ppm,pgm,pbm,pnm,tga,xpm  \x89PNG,\xff\xd8\xff,GIF8,BM,P6,P5,P4  nxview %s

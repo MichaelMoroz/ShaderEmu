@@ -1,7 +1,0 @@
-Games/Network/Quake: host a game=nxgame quake host
-Games/Network/Quake: join a game=nxgame quake join
-Games/Network/Quake III: host a game=nxgame quake3 host
-Games/Network/Quake III: join a game=nxgame quake3 join
-Games/Network/OpenTTD: host a game=nxgame openttd host
-Games/Network/OpenTTD: join a game=nxgame openttd join
-Games/Network/Doom: network game=nxgame doom host

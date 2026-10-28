@@ -1,4 +1,4 @@
-// The OpenGL that programs/linux/gles.c implements on the machine's GPU device (docs/gpu.md):
+// The OpenGL that programs/linux/gles.c implements on the machine's GPU device (docs/machine/gpu.md):
 // OpenGL ES 1.x's way of working (vertex arrays, no glBegin), with numbers as floats or as
 // GLfixed, plus GL_QUADS and paletted textures, which the device draws directly. What is not
 // declared here does not exist. segl.h has the calls that tie it to a window.

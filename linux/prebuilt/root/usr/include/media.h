@@ -1,5 +1,5 @@
 /*
- * libmedia: pictures, sound and films for every program of the machine (docs/media.md),
+ * libmedia: pictures, sound and films for every program of the machine (docs/system/media.md),
  * decoded and encoded on the worker cores (mcw.h). Link with -lmedia (and mcw.c's workers).
  *
  * `workers` everywhere is the most worker cores a call may use: it opens them when the program
@@ -79,6 +79,28 @@ uint8_t *media_gif_anim_encode(const struct media_image *frames, int count, cons
 /* Writes a picture as its name's ending asks (.png .jpg .jpeg .gif .bmp .ppm; another: PPM). */
 const char *media_image_save(const char *path, const struct media_image *image, int quality, int workers);
 void media_free(void *memory, uint32_t size);
+/* Called on the first core while a picture is decoded, when not NULL: `done` of `total`, or a
+ * total of 0 where how far is not known (it is still at work). Often: the program draws no more
+ * than it likes. */
+extern void (*media_progress)(uint32_t done, uint32_t total);
+
+/* Deflate in segments ("MDZ1", total, piece, count, count + 1 offsets, then raw deflate streams of
+ * `piece` bytes each but the last): the inflated size, 0 for another file; inflated on the workers
+ * into out (16-byte aligned: a segment a job). NULL, or what is wrong. */
+uint32_t media_inflated_size(const void *file, uint32_t size);
+const char *media_inflate(const void *file, uint32_t size, void *out, uint32_t out_size, int workers);
+/* One raw deflate stream (a gzip member's, a zip entry's) inflated into out[0..out_size) on up to
+ * `workers` more cores: the bytes made, the compressed bytes taken and the output's CRC-32 into
+ * *made, *used and *crc (each may be NULL). NULL, or what is wrong. */
+const char *media_inflate_stream(const void *in, uint32_t in_size, void *out, uint32_t out_size, uint32_t *made, uint32_t *used,
+				 uint32_t *crc, int workers);
+/* The same on this core alone (a worker's job too), in room of media_inflate_room() bytes, 16-aligned. */
+uint32_t media_inflate_room(void);
+const char *media_inflate_one(const void *in, uint32_t in_size, void *out, uint32_t out_size, uint32_t *made, uint32_t *used,
+			      uint32_t *crc, void *room);
+/* CRC-32 (gzip's and zip's) of more bytes after crc (0 at first); of two pieces joined. */
+uint32_t media_crc32(uint32_t crc, const void *data, uint32_t bytes);
+uint32_t media_crc32_join(uint32_t crc1, uint32_t crc2, uint32_t bytes2);
 
 /* ---------------------------------------------------------------- animations (GIF) */
 
@@ -137,8 +159,8 @@ void media_audio_close(struct media_audio *audio);
 /* ---------------------------------------------------------------- films */
 
 /*
- * MPEG-1 (closed groups of pictures, no B pictures: docs/video.md), Westwood's VQA, MJPEG in
- * AVI and GIF animations (docs/media.md, "Films"). One MPEG-1 film is open at a time. While a film is open
+ * MPEG-1 (closed groups of pictures, no B pictures: docs/apps/video.md), Westwood's VQA, MJPEG in
+ * AVI and GIF animations (docs/system/media.md, "Films"). One MPEG-1 film is open at a time. While a film is open
  * its workers are its own: the program posts nothing to them.
  */
 struct media_video;

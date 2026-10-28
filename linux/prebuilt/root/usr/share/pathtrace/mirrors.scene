@@ -1,4 +1,4 @@
-# Two mirrors that face each other (docs/raytrace.md, "Example scenes"): what stands between
+# Two mirrors that face each other (docs/apps/raytrace.md, "Example scenes"): what stands between
 # them is seen again and again, as far as a path's turns go.
 camera target -0.35 0.45 -0.2 turn 68 tilt 15 far 1.5 lens 0.6
 background colour 0.6 0.75 1 power 0.4

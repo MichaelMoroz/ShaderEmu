@@ -1,4 +1,4 @@
-# Coloured glass by its thickness (Beer and Lambert; docs/raytrace.md, "Example scenes"): three
+# Coloured glass by its thickness (Beer and Lambert; docs/apps/raytrace.md, "Example scenes"): three
 # panes of the same glass, 5, 15 and 45 hundredths thick, and three balls of another that take
 # its light the sooner, densities 0.5, 2 and 8. The light is behind them: their shadows are coloured.
 camera target 0 0.3 0.3 turn 0 tilt 32 far 4.2 lens 0.6
