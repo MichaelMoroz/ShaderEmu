@@ -855,6 +855,36 @@ private:
         gpu_.ctx->CopySubresourceRegion(ram_.Get(), 0, (UINT)x0, (UINT)y0, 0, zone_.Get(), 0, &box);
     }
 
+    // Two zones of a row each (the control words, then the cores' stats) in one draw: A's texels and then B's in the
+    // zone texture's first row, the pixel shader placing B's (_ZoneSplit), then a copy each. The stats are read
+    // from the state as it was before the control words change, as when they were drawn after them: no pixel of
+    // either reads the other's texels.
+    void zonePairInplace(Material& mat, const float* za, const float* zb) {
+        static const bool apart = getenv("RVC_ZONES_APART") && atoi(getenv("RVC_ZONES_APART")) != 0;
+        auto box = [](const float* zf, LONG& x0, LONG& y0, LONG& w) {
+            x0 = (std::max)(0L, (LONG)std::lround(zf[0] - zf[2] * 0.5f));
+            y0 = (std::max)(0L, (LONG)std::lround((float)kHeight - (zf[1] + zf[3] * 0.5f)));
+            w = (LONG)std::lround(zf[2]);
+        };
+        LONG ax, ay, aw, bx, by, bw;
+        box(za, ax, ay, aw);
+        box(zb, bx, by, bw);
+        if (apart || za[3] != 1 || zb[3] != 1 || ax + aw + bw > (LONG)kWidth) {
+            zoneInplace(mat, za);
+            zoneInplace(mat, zb);
+            return;
+        }
+        UpdateZone z{ax + (aw + bw) * 0.5f, (float)kHeight - ay - 0.5f, (float)(aw + bw), 1, 1};
+        mat.setInt("_ZoneSplit", (int)(ax + aw));
+        mat.setInt("_Zone2X", (int)bx);
+        mat.setInt("_Zone2Y", (int)by);
+        drawInto(gpuPasses_[1], mat, zoneRtv_.Get(), (float)ay, 6, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST, &z);
+        mat.setInt("_ZoneSplit", 0);
+        D3D11_BOX a{(UINT)ax, 0, 0, (UINT)(ax + aw), 1, 1}, b{(UINT)(ax + aw), 0, 0, (UINT)(ax + aw + bw), 1, 1};
+        gpu_.ctx->CopySubresourceRegion(ram_.Get(), 0, (UINT)ax, (UINT)ay, 0, zone_.Get(), 0, &a);
+        gpu_.ctx->CopySubresourceRegion(ram_.Get(), 0, (UINT)bx, (UINT)by, 0, zone_.Get(), 0, &b);
+    }
+
     bool frameInplace(Material& mat, uint64_t tag, bool timeIt) {
         timeIt = timeIt && ensureQueries() && !tsPending_;
         ID3D11DeviceContext* ctx = gpu_.ctx.Get();
@@ -935,12 +965,13 @@ private:
                 countsAdded = false;
             }
             mat.setInt("_CountMerged", merge ? 2 : 1);
-            zoneInplace(mat, kGpuControlZone);
+            // (the control words and, with workers, the cores' stats in one draw: gpu_vm's feaddd5; RVC_ZONES_APART=1 two)
+            if (cores_ > 16 && activeCores_ > 1) zonePairInplace(mat, kGpuControlZone, kCoreStatsZone);
+            else zoneInplace(mat, kGpuControlZone);
             if (conDelivered) {
                 zoneInplace(mat, kConZone);
                 conDelivered = false;
             }
-            if (cores_ > 16 && activeCores_ > 1) zoneInplace(mat, kCoreStatsZone);
             if (deliver_) {
                 zoneInplace(mat, kFetchZone);
                 deliver_ = false;

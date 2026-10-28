@@ -890,13 +890,24 @@ uint mc_geo_count(uint4 geo, out uint nb, out uint rb, out uint rows) {
     sb0 = nb != 0 ? 1 : 0;
     return nb + min(min(geo.g, (uint)CORES - 1) - nb, min(((CORES + 47) / 49 - sb0) * (248 / rows), ((CORES + 126) / 128 - sb0) * (avail / cols) + per0));
 }
-uint2 mc_place(uint core) {
+// (the geometry read once, for a pixel that places many cores: mc_stat_bits)
+struct mc_geo_t {
+    uint count, nb, rb, rows;
+};
+mc_geo_t mc_geo_now() {
+    mc_geo_t g;
+    g.count = mc_geo_count(ram(0x70003du), g.nb, g.rb, g.rows);   // MC_GEOMETRY
+    return g;
+}
+uint2 mc_place_in(mc_geo_t g, uint core) {
     if (core == 0) return uint2(0, 0);
-    uint nb, rb, rows, count = mc_geo_count(ram(0x70003du), nb, rb, rows);   // MC_GEOMETRY
-    if (core > count || core >= CORES) return uint2(64, 0xffff);
-    if (core <= nb) return uint2(64, (core - 1) * rb);
-    uint j = core - 1 - nb, per = 248 / rows, sb0 = nb != 0 ? 1 : 0;
-    return uint2(64, (sb0 + j / per) * 248 + (j % per) * rows);
+    if (core > g.count || core >= CORES) return uint2(64, 0xffff);
+    if (core <= g.nb) return uint2(64, (core - 1) * g.rb);
+    uint j = core - 1 - g.nb, per = 248 / max(g.rows, 1u), sb0 = g.nb != 0 ? 1 : 0;
+    return uint2(64, (sb0 + j / per) * 248 + (j % per) * g.rows);
+}
+uint2 mc_place(uint core) {
+    return mc_place_in(mc_geo_now(), core);
 }
 #else
 uint2 mc_place(uint core) {
@@ -921,14 +932,25 @@ uint mc_stat_count(uint core) {
     return core < CORES && at.y != 0xffff ? mc_state_texel(at, 28).g : 0;
 }
 // Which of the 32 cores from `from` run, and which are asleep: a worker's state word
-// (41,0).a has bit 0 while it runs and bit 1 while it sleeps on its job word.
+// (41,0).a has bit 0 while it runs and bit 1 while it sleeps on its job word. (Every load
+// made, a core that is not there reading worker 1's texel and masked off, and the loop
+// unrolled: the 32 loads go out together, not one after the last came back; gpu_vm's
+// feaddd5, its zones 22 to 6.7 us a pass.)
 uint2 mc_stat_bits(uint from) {
     uint running = 0, asleep = 0;
-    for (uint n = 0; n < 32; n++) {
+#ifdef MC_HYBRID
+    mc_geo_t g = mc_geo_now();
+#endif
+    [unroll] for (uint n = 0; n < 32; n++) {
         uint core = from + n;
+#ifdef MC_HYBRID
+        uint2 at = mc_place_in(g, core);
+#else
         uint2 at = mc_place(core);
-        if (core >= CORES || at.y == 0xffff) continue;
-        uint word = core == 0 ? 1 : mc_state_texel(at, 41).a;
+#endif
+        bool there = core < CORES && at.y != 0xffff;
+        uint word = mc_state_texel(there && core != 0 ? at : uint2(64, 0), 41).a;
+        word = core == 0 ? 1 : there ? word : 0;
         running |= (word & 1) << n;
         asleep |= ((word >> 1) & 1) << n;
     }

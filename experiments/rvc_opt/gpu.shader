@@ -117,10 +117,15 @@ Shader "ShaderEmu/gpu"
             #define GPU_INPUT
             #include "src/gpu.h"
 
+            // From pixel _ZoneSplit (0: none) on, the row drawn is a second zone at (_Zone2X, _Zone2Y): the control
+            // words and the cores' stats (MC_STATS_ALL) in one draw (the harness's zonePair, gpu_vm's feaddd5)
+            uniform uint _ZoneSplit, _Zone2X, _Zone2Y;
             uint4 frag(v2f_customrendertexture i) : SV_Target {
                 uint2 dim;
                 _SelfTexture2D.GetDimensions(dim.x, dim.y);
-                return gpu_control(i.globalTexcoord.xy * dim);
+                uint2 p = uint2(i.globalTexcoord.xy * dim);
+                if (_ZoneSplit != 0 && p.x >= _ZoneSplit) p = uint2(p.x - _ZoneSplit + _Zone2X, _Zone2Y);
+                return gpu_control(p);
             }
             ENDCG
         }
