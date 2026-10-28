@@ -114,3 +114,10 @@ as it came: the frame, its card ms and its rounds, three floats; gpu_vm's be8794
 frame, the cap one down or an eighth more every sixth frame over F, one up under 0.8 F) rather than fitting
 each frame to the card's last time: a shell loop under `--unity 11.1,1.4` had 2 to 55 rounds a frame the
 plain way and 4 to 24 the world's (28 October 2026).
+
+`RVC_TICK_ALT=DIR;DIR...` puts other ticks of the same layout beside the machine's own, and each frame's tick is
+picked by a hash of the frame (`RVC_TICK_ALT_SHIFT=N`: 2^N frames a pick); with `--stats-after`, every frame is timed
+and each timing is kept by its tick (`STATS tick N DIR: X ms a frame's tick`). Ticks are compared in one run on one
+card's clock, not in runs taken in turn, which drift with the host and the card's clocks (gpu_vm's `GVM_TICK_ALT`,
+5fa6f70). `--replay` is still the way to run each tick from one snapshot. On Doom's timedemo, the tree's tick and a
+copy of it in the second slot gave 0.9548 and 0.9545 ms over some 6,000 frames timed each (28 October 2026).

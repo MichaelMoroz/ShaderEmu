@@ -162,6 +162,7 @@ struct Options {
     std::string dumpState;
     std::string saveState, loadState;
     std::string recordInput, replayInput;   // the window's input to a file with its times, or from one instead of the window's
+    bool printStamp = false;
     std::string screenLog, screenFrom;   // --screen-log: the display, every frame, into a file
     int screenFrames = 0, screenEvery = 0;
     std::vector<std::pair<std::string, std::string>> expectSend;
@@ -285,6 +286,8 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
   --save-state FILE    write a snapshot of the whole machine (290 MB) at exit
   --record-input FILE  write the window's keys, pointer and typing to FILE, each with its second of the run
   --replay-input FILE  play FILE's input at its seconds instead of the window's (Ctrl+] still quits)
+  --stamp              print the processor folder's WARP stamp (its sources hashed) and exit: the card runs
+                       a folder only when its warp_ok holds it (tools/test_card.py --warp --mark-ok)
   --load-state FILE    resume from a snapshot instead of booting
   --replay DIR;DIR...  with --load-state: the tick (CPUTick pass) of each folder beside the machine's own,
                        each run --replay-frames N (600) frames from the snapshot's state, in turn,
@@ -480,6 +483,7 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--dump-state") o.dumpState = next("--dump-state");
         else if (a == "--save-state") o.saveState = next("--save-state");
         else if (a == "--record-input") o.recordInput = next("--record-input");
+        else if (a == "--stamp") o.printStamp = true;
         else if (a == "--replay-input") o.replayInput = next("--replay-input");
         else if (a == "--screen-log") o.screenLog = next("--screen-log");
         else if (a == "--screen-from") o.screenFrom = unescape(next("--screen-from"));
@@ -826,7 +830,7 @@ int main(int argc, char** argv) {
             printf("%-12s %s%s\n", im.name, im.title, imageAvailable(im) ? "" : "  (files missing)");
         return 0;
     }
-    if (!run_lock_take(!opt.cpu, opt.cpu ? (opt.gpu.warp ? "rvc_harness --cpu --warp" : "rvc_harness --cpu") : "rvc_harness"))
+    if (!opt.printStamp && !run_lock_take(!opt.cpu, opt.cpu ? (opt.gpu.warp ? "rvc_harness --cpu --warp" : "rvc_harness --cpu") : "rvc_harness"))
         return kRunLockRefused;
 
     // Opened with no arguments (or only --resume / --no-viz): act as a terminal on the emulated
@@ -1057,6 +1061,40 @@ int main(int argc, char** argv) {
         bo.compile.defines.push_back({d.substr(0, eq), eq == std::string::npos ? "1" : d.substr(eq + 1)});
     }
 
+    // The WARP stamp (gpu_vm's tick.hlsl.warp_ok): the card runs a processor folder only when its warp_ok holds the
+    // hash of its sources (and of the devices' folder), written by tools/test_card.py --warp --mark-ok after WARP
+    // passed its cases: a tick the card has never run is checked in software first. --stamp prints the hash.
+    if (opt.gvm.empty() && opt.compute.empty() && !opt.cpu && (opt.printStamp || !opt.gpu.warp)) {
+        std::vector<std::pair<std::string, fs::path>> files;
+        for (const fs::path& dir : {fs::u8path(opt.rvcDir), deviceDir}) {
+            for (auto it = fs::recursive_directory_iterator(dir, ec); !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
+                std::string ext = it->path().extension().u8string();
+                if (it->is_regular_file(ec) && (ext == ".shader" || ext == ".cginc" || ext == ".h" || ext == ".hlsl"))
+                    files.push_back({fs::relative(it->path(), dir, ec).generic_u8string(), it->path()});
+            }
+            if (fs::equivalent(fs::u8path(opt.rvcDir), deviceDir, ec)) break;
+        }
+        std::sort(files.begin(), files.end());
+        uint64_t h = 0xcbf29ce484222325ull;
+        for (auto& f : files) {
+            std::string text;
+            readFileBinary(f.second.u8string(), text);
+            text.erase(std::remove(text.begin(), text.end(), '\r'), text.end());   // (a checkout's line ends are not the tick)
+            h = fnv1a64(f.first.data(), f.first.size(), h);
+            h = fnv1a64(text.data(), text.size(), h);
+        }
+        char stamp[32];
+        snprintf(stamp, sizeof stamp, "%016llx", (unsigned long long)h);
+        if (opt.printStamp) { printf("stamp %s (%zu files of %s)\n", stamp, files.size(), opt.rvcDir.c_str()); return 0; }
+        std::string ok;
+        readFileBinary((fs::u8path(opt.rvcDir) / "warp_ok").u8string(), ok);
+        if (ok.find(stamp) == std::string::npos) {
+            fprintf(stderr, "[harness] %s (stamp %s) has not passed WARP's checks as it is: not run on the card "
+                            "(python tools/test_card.py machine --warp --mark-ok --rvc %s)\n", opt.rvcDir.c_str(), stamp, opt.rvcDir.c_str());
+            return 3;
+        }
+    }
+
     // --- Material and backend ---
     Material mat;
     mat.applyDefaults(shader);
@@ -1081,6 +1119,29 @@ int main(int argc, char** argv) {
             return 1;
         }
     }
+    // RVC_TICK_ALT=DIR;DIR...: other ticks of the same layout beside the machine's own (variant 0), each frame's tick
+    // picked by a hash of the frame (RVC_TICK_ALT_SHIFT=N: 2^N frames a pick), every frame timed (with --stats-after)
+    // and each timing kept by its tick: ticks compared in one run, on one card's clock (gpu_vm's GVM_TICK_ALT, 5fa6f70)
+    std::vector<std::string> altDirs;
+    if (const char* alt = getenv("RVC_TICK_ALT"); alt && *alt) {
+        if (!opt.replayDirs.empty()) { fprintf(stderr, "[harness] RVC_TICK_ALT or --replay, not both\n"); return 2; }
+        for (std::string list = alt; !list.empty();) {
+            size_t e = list.find(';');
+            if (e) altDirs.push_back(list.substr(0, e));
+            list = e == std::string::npos ? "" : list.substr(e + 1);
+        }
+        for (auto& dir : altDirs) {
+            SLShader variant;
+            if (!loadShaderLab((fs::u8path(dir) / "main.shader").u8string(), variant, err) || !backend.addTickVariant(variant, err)) {
+                fprintf(stderr, "[harness] RVC_TICK_ALT %s: %s\n", dir.c_str(), err.c_str());
+                return 1;
+            }
+        }
+    }
+    static const int altShift = getenv("RVC_TICK_ALT_SHIFT") ? atoi(getenv("RVC_TICK_ALT_SHIFT")) : 0;
+    std::vector<double> altMs(altDirs.size() + 1);
+    std::vector<uint64_t> altN(altDirs.size() + 1), altPicked(altDirs.size() + 1);
+    uint64_t altSeen = 0;
     if (!backend.loadPayload(mat, opt.payloadDir, opt.ramPrefix, "_Data_RAM", err) ||
         !backend.loadPayload(mat, opt.payloadDir, opt.mtdPrefix, "_Data_MTD", err) ||
         !backend.loadPayload(mat, opt.payloadDir, opt.dtbPrefix, "_Data_DTB", err)) {
@@ -1991,7 +2052,7 @@ int main(int argc, char** argv) {
         }
         // The GPU times the two draws of one frame per refresh of the text box.
         // with --stats-after, one frame in 64 is timed on the GPU and the times are averaged
-        static const uint64_t statsMask = getenv("RVC_STATS_EVERY") && atoi(getenv("RVC_STATS_EVERY")) ? 0u : 63u;   // (every frame timed)
+        static const uint64_t statsMask = (getenv("RVC_STATS_EVERY") && atoi(getenv("RVC_STATS_EVERY"))) || !altDirs.empty() ? 0u : 63u;   // (every frame timed)
         bool sampleTimes = statsStarted && opt.statsFrom.empty() && (frame & statsMask) == 0;
         if (sampleTimes && backend.gpuTimes(gpuTickMs, gpuCommitMs, gpuDeviceMs)) {
             timeSum[0] += gpuTickMs;
@@ -1999,6 +2060,17 @@ int main(int argc, char** argv) {
             timeSum[1] += gpuCommitMs;
             timeSum[2] += gpuDeviceMs;
             ++timeSamples;
+            if (!altDirs.empty() && backend.frameTimes != altSeen && backend.frameVariant < altMs.size()) {   // (a timing just in, of its tick)
+                altSeen = backend.frameTimes;
+                altMs[backend.frameVariant] += gpuTickMs, altN[backend.frameVariant]++;
+            }
+        }
+        if (!altDirs.empty()) {
+            uint64_t x = (frame >> altShift) * 0x9e3779b97f4a7c15ull;
+            x ^= x >> 31, x *= 0xbf58476d1ce4e5b9ull, x ^= x >> 29;
+            size_t v = (size_t)(x % altMs.size());
+            backend.useTickVariant(v);
+            if (statsStarted) altPicked[v]++;
         }
         {
             // every pass every frame, as a world draws them (Unity's _GpuPasses 0xff): a list that asked for a pass the
@@ -2347,6 +2419,10 @@ int main(int argc, char** argv) {
         if (opt.unityMs > 0 && unityFrames)
             fprintf(stderr, "STATS unity: a frame %.2f ms of the guest's clock, %.2f ms of rounds; %.2f rounds a frame, %.3f ms on the card a frame (%llu timed; the rounds' CPU at R %.2f ms when larger)\n",
                     opt.unityMs, opt.unityMs - opt.unityOverMs, (double)unityRoundSum / (double)unityFrames, unityTimed ? unityMsSum / (double)unityTimed : 0.0, (unsigned long long)unityTimed, opt.unityRoundMs);
+        for (size_t v = 0; v < altMs.size() && !altDirs.empty(); ++v)
+            fprintf(stderr, "STATS tick %zu %s: %.4f ms a frame's tick over %llu frames timed (%llu frames run)\n", v,
+                    v ? altDirs[v - 1].c_str() : opt.rvcDir.c_str(), altN[v] ? altMs[v] / (double)altN[v] : 0.0,
+                    (unsigned long long)altN[v], (unsigned long long)altPicked[v]);
         if (timeSamples > 0)
             fprintf(stderr, "STATS gpu per frame: tick %.3f ms, commit %.3f ms, device %.3f ms; wall %.3f ms\n", timeSum[0] / timeSamples,
                     timeSum[1] / timeSamples, timeSum[2] / timeSamples, 1000.0 * secs / (double)frames);

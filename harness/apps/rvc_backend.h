@@ -125,6 +125,7 @@ public:
     uint32_t tickRounds = 1;     // the fragment tick: its rounds (a tick and its commit) a frame
     // --unity: a timed frame's whole time on the card (its first query to its last) and its rounds; frameTimes counts them
     double frameMs = -1; uint32_t frameRounds = 0; uint64_t frameTimes = 0;
+    size_t frameVariant = 0;     // the tick variant (useTickVariant) of the frame timed last: RVC_TICK_ALT
     uint32_t tickSplit = 0;      // of them the first so many always run, the rest while core 0 rests (0: all)   // of them the first so many always run, a core's at most the frame's instructions over them
     // Loads <imageDir>/linux_payload.bin into RAM and rootfs.bin as the ROM, and starts the hart.
     virtual bool computeStart(const std::string& imageDir, std::string& err) { (void)imageDir; err = "--compute is for the D3D11 backend"; return false; }
