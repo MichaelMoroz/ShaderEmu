@@ -919,15 +919,17 @@ private:
         if (getenv("RVC_PASS_PROF") && !init) { prof_.labels = kInplaceLabels; profBegin(tag); }
         // --tick-rounds N (and --unity): the tick and its commit N times before the devices, a tick of the clock on each round
         const uint32_t rounds = ticks && !init ? (std::max)(1u, tickRounds) : 1u;
+        if (ticks) {
+            // (while a job has been seen in the last 8 frames, not rounds: the readback is frames behind, and a program's jobs
+            // come one after another; with no job posted the field's primitive draws no pixel, but its 7,936 points cost a pass)
+            fieldSeen_ = fieldNow ? 8 : fieldSeen_ > 0 ? fieldSeen_ - 1 : 0;
+            fieldDraw_ = laneField_ && fieldSeen_ > 0;
+        }
         for (uint32_t round = 0; round < rounds; round++) {
             if (rounds > 1) { mat.setInt("_TimePass", (int)round); mat.setInt("_TickFull", (int)(tickSplit ? tickSplit : rounds)); }
             if (ticks) {
                 bool workers = cores_ > 1 && (workersNow || getenv("RVC_WORKERS_ALWAYS"));
                 activeCores_ = workers ? (UINT)cores_ : 1;
-                // (while a job has been seen in the last 8 frames: the readback is frames behind, and a program's jobs come one
-                // after another; with no job posted the field's primitive draws no pixel, but its 7,936 points cost a pass)
-                fieldSeen_ = fieldNow ? 8 : fieldSeen_ > 0 ? fieldSeen_ - 1 : 0;
-                fieldDraw_ = laneField_ && fieldSeen_ > 0;
                 if (laneField_) mat.setInt("_LaneField", 1);
                 if (mrt_) tickDraw(mat, core0);
             }

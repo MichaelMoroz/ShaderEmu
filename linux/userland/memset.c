@@ -8,12 +8,13 @@
 
 #define UOP_MIN 2048   /* (uop.h) */
 
-/* [a, a + n) in RAM: below the GPU's memory's end, or above the device words */
+/* [a, a + n) in the GPU's memory, 0x80000000 to its end at 0x81e00000, or in RAM, 0x82000000 to 0x92000000 (not the
+   device words between, which the commit's fill leaves as they are): uop.h's UOP_IN_RAM */
 static inline int uop_in_ram(uintptr_t a, size_t n)
 {
 	uintptr_t t = a - 0x80000000u, e = t + n;
 	if (e < t) return 0;
-	return t < 0x07e00000u ? e <= 0x07e00000u : t >= 0x08000000u && e <= 0x12000000u;
+	return t < 0x01e00000u ? e <= 0x01e00000u : t >= 0x02000000u && e <= 0x12000000u;
 }
 
 void *memset(void *dest, int c, size_t n)
