@@ -1503,7 +1503,8 @@ static void h_load(Run* R, u32* x, u64 st, u32 ins) {
     u32 va = RS1 + IMM_I;
     const TlbEntry& e = R->reads[(va >> 12) & (TLB_N - 1)];
     if ((N == 1 || (va & 0xfff) <= 0x1000u - N) && e.tag == ((va >> 12) | R->rgen)) {
-        const uint8_t* p = R->mem + e.ppage + (va & 0xfff);
+        u32 phys = e.ppage + (va & 0xfff);
+        const uint8_t* p = R->mem + phys;
         u32 v;
         if (N == 4) memcpy(&v, p, 4);
         else if (N == 2) { uint16_t h; memcpy(&h, p, 2); v = SIGNED ? (u32)(i32)(int16_t)h : h; }
@@ -1536,37 +1537,74 @@ static __declspec(noinline) void h_store_slow(Run* R, u32* x, u64 st, u32 ins) {
     if (!store_slow<W, N, FLOAT>(R, x, st, ins)) return;
     NEXT_FAR(PC + 4);
 }
-// A store hit under RVC_WCACHE: one that changes bytes takes its texels in the core's cache first (as
-// store(): a cache with no room ends the pass there).
+// A store hit under RVC_WCACHE or RVC_RACES (the side handlers' table, run_some), as store() makes it: one
+// that changes bytes takes its texels in the core's cache first (a cache with no room ends the pass there),
+// and a watched one goes to the core's texels (race_store).
 template <bool W, int N, bool FLOAT>
-static __declspec(noinline) bool store_cached(Run* R, u32* x, u32 ins) {
+static __declspec(noinline) bool store_side(Run* R, u32* x, u64 st, u32 ins) {
     u32 va = RS1 + IMM_S;
     const TlbEntry& e = R->writes[(va >> 12) & (TLB_N - 1)];
     u32 phys = e.ppage + (va & 0xfff);
     uint8_t* p = R->mem + phys;
     u32 v = FLOAT ? R->c->f[(ins >> 20) & 31] : RS2;
-    if (memcmp(p, &v, N) != 0 && (!wc_take(R->c->hart, phys) || ((phys & 15) + N > 16 && !wc_take(R->c->hart, phys + N - 1))))
+    if (R->wcache && memcmp(p, &v, N) != 0 &&
+        (!wc_take(R->c->hart, phys) || ((phys & 15) + N > 16 && !wc_take(R->c->hart, phys + N - 1))))
         return false;
     R->bands |= 1ull << (((e.ppage - RAM_BASE) >> 22) & 63);
+    if (races_on && race_watched(phys)) {
+        run_sync(R, st);   // (its pc)
+        race_store(*R->c, phys, v, N);
+        return true;
+    }
     if (N == 4) memcpy(p, &v, 4);
     else if (N == 2) { uint16_t h = (uint16_t)v; memcpy(p, &h, 2); }
     else *p = (uint8_t)v;
     return true;
 }
 template <bool W, int N, bool FLOAT>
-static __declspec(noinline) void h_store_cached(Run* R, u32* x, u64 st, u32 ins) {
-    if (!store_cached<W, N, FLOAT>(R, x, ins)) { [[msvc::musttail]] return h_store_slow<W, N, FLOAT>(R, x, st, ins); }
-    NEXT_FAR(PC + 4);
+static __declspec(noinline) void h_store_side(Run* R, u32* x, u64 st, u32 ins) {
+    u32 va = RS1 + IMM_S;
+    const TlbEntry& e = R->writes[(va >> 12) & (TLB_N - 1)];
+    if ((N == 1 || (va & 0xfff) <= 0x1000u - N) && e.tag == ((va >> 12) | R->wgen) && store_side<W, N, FLOAT>(R, x, st, ins))
+        NEXT_FAR(PC + 4);
+    [[msvc::musttail]] return h_store_slow<W, N, FLOAT>(R, x, st, ins);
+}
+// A worker's load hit under RVC_RACES (the side handlers' table): a watched one as the pass began, or its own.
+template <bool W, int N, bool SIGNED, bool FLOAT>
+static __declspec(noinline) void load_side(Run* R, u32* x, u64 st, u32 ins) {
+    u32 va = RS1 + IMM_I;
+    const TlbEntry& e = R->reads[(va >> 12) & (TLB_N - 1)];
+    u32 phys = e.ppage + (va & 0xfff), v;
+    if (race_watched(phys)) {
+        run_sync(R, st);   // (its pc)
+        v = race_load(*R->c, phys, N);
+    } else if (N == 4) memcpy(&v, R->mem + phys, 4);
+    else if (N == 2) { uint16_t h; memcpy(&h, R->mem + phys, 2); v = h; }
+    else v = R->mem[phys];
+    if (N == 2 && SIGNED) v = (u32)(i32)(int16_t)v;
+    if (N == 1 && SIGNED) v = (u32)(i32)(int8_t)v;
+    if (FLOAT) R->c->f[RD] = v;
+    else SET(v);
+}
+template <bool W, int N, bool SIGNED, bool FLOAT = false>
+static __declspec(noinline) void h_load_side(Run* R, u32* x, u64 st, u32 ins) {
+    u32 va = RS1 + IMM_I;
+    const TlbEntry& e = R->reads[(va >> 12) & (TLB_N - 1)];
+    if ((N == 1 || (va & 0xfff) <= 0x1000u - N) && e.tag == ((va >> 12) | R->rgen)) {
+        load_side<W, N, SIGNED, FLOAT>(R, x, st, ins);
+        NEXT_FAR(PC + 4);
+    }
+    [[msvc::musttail]] return h_load_slow<W, N, SIGNED, FLOAT>(R, x, st, ins);
 }
 template <bool W, int N, bool FLOAT>
 static void h_store(Run* R, u32* x, u64 st, u32 ins) {
     u32 va = RS1 + IMM_S;
     const TlbEntry& e = R->writes[(va >> 12) & (TLB_N - 1)];
     if ((N == 1 || (va & 0xfff) <= 0x1000u - N) && e.tag == ((va >> 12) | R->wgen)) {
-        if (R->wcache) { [[msvc::musttail]] return h_store_cached<W, N, FLOAT>(R, x, st, ins); }
-        uint8_t* p = R->mem + e.ppage + (va & 0xfff);
+        u32 phys = e.ppage + (va & 0xfff);
+        R->bands |= 1ull << (((phys - RAM_BASE) >> 22) & 63);
+        uint8_t* p = R->mem + phys;
         u32 v = FLOAT ? R->c->f[(ins >> 20) & 31] : RS2;
-        R->bands |= 1ull << (((e.ppage - RAM_BASE) >> 22) & 63);
         if (N == 4) memcpy(p, &v, 4);
         else if (N == 2) { uint16_t h = (uint16_t)v; memcpy(p, &h, 2); }
         else *p = (uint8_t)v;
@@ -1607,6 +1645,8 @@ HANDLER(h_remu) { u32 a = RS1, b = RS2; SET(b == 0 ? a : a % b); NEXT(PC + 4); }
 #define FLOATS_ON() if (!(R->c->mstatus & 0x6000)) { [[msvc::musttail]] return h_general<W>(R, x, st, ins); }
 HANDLER(h_flw) { FLOATS_ON(); [[msvc::musttail]] return h_load<W, 4, false, true>(R, x, st, ins); }
 HANDLER(h_fsw) { FLOATS_ON(); [[msvc::musttail]] return h_store<W, 4, true>(R, x, st, ins); }
+HANDLER(h_flw_side) { FLOATS_ON(); [[msvc::musttail]] return h_load_side<W, 4, false, true>(R, x, st, ins); }
+HANDLER(h_fsw_side) { FLOATS_ON(); [[msvc::musttail]] return h_store_side<W, 4, true>(R, x, st, ins); }
 // (the floats' work is a function of its own too: a handler that keeps a float register calls the next one)
 #define FMA(name, x_, y_, z_)                                                                        \
     static __declspec(noinline) void name##_do(u32* f, u32 ins) {                                    \
@@ -1679,6 +1719,38 @@ static const Handler* handler_table() {
     static_assert(sizeof table / sizeof table[0] == K_COUNT, "a handler for every kind");
     return table;
 }
+// The same with the side handlers: the loads' (by 1) a worker's under RVC_RACES, the stores' (by 2) under
+// RVC_WCACHE or RVC_RACES.
+template <bool W>
+static const Handler* handler_table(int side) {
+    static Handler tables[4][K_COUNT];
+    static std::once_flag made;
+    std::call_once(made, [] {
+        const Handler* plain = handler_table<W>();
+        for (int k = 0; k < 4; k++) {
+            Handler* t = tables[k];
+            memcpy(t, plain, sizeof tables[k]);
+            for (int i = 0; i < K_COUNT; i++) {
+                const Handler h = plain[i];
+                if (k & 1) {
+                    if (h == h_load<W, 1, true>) t[i] = h_load_side<W, 1, true>;
+                    if (h == h_load<W, 2, true>) t[i] = h_load_side<W, 2, true>;
+                    if (h == h_load<W, 4, false>) t[i] = h_load_side<W, 4, false>;
+                    if (h == h_load<W, 1, false>) t[i] = h_load_side<W, 1, false>;
+                    if (h == h_load<W, 2, false>) t[i] = h_load_side<W, 2, false>;
+                    if (h == h_flw<W>) t[i] = h_flw_side<W>;
+                }
+                if (k & 2) {
+                    if (h == h_store<W, 1, false>) t[i] = h_store_side<W, 1, false>;
+                    if (h == h_store<W, 2, false>) t[i] = h_store_side<W, 2, false>;
+                    if (h == h_store<W, 4, false>) t[i] = h_store_side<W, 4, false>;
+                    if (h == h_fsw<W>) t[i] = h_fsw_side<W>;
+                }
+            }
+        }
+    });
+    return side ? tables[side] : handler_table<W>();
+}
 
 // Up to n instructions of a core: how it ended (STEP_*).
 static const u64 RUN_PIECE = 2048;
@@ -1686,12 +1758,12 @@ template <bool W>
 static int run_some(Core& c, u64 n, const uint8_t* kinds) {
     Run R;
     R.c = &c;
-    R.table = handler_table<W>();
+    // (under RVC_RACES core 0, which runs first, reads RAM as the fast loads do)
+    R.table = handler_table<W>((races_on && c.hart != 0 ? 1 : 0) | (races_on || wc_on ? 2 : 0));
     R.kinds = kinds;
     R.end = c.clock + n;
     R.mem = ramp - RAM_BASE;
-    // (under RVC_RACES core 0, which runs first, reads RAM as the fast loads do)
-    R.plain_loads = !(races_on && c.hart != 0) && !prof::mem_on, R.plain_stores = !races_on && !prof::mem_on && !wc_log;
+    R.plain_loads = !prof::mem_on, R.plain_stores = !prof::mem_on && !wc_log;
     R.wcache = wc_on;
     R.bands = 0;
     R.r = STEP_ON;
