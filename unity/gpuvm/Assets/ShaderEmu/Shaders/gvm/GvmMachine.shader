@@ -14,6 +14,10 @@ Shader "ShaderEmu/GvmMachine"
         _GvmRomG ("ROM, word 1", 2D) = "black" {}
         _GvmRomB ("ROM, word 2", 2D) = "black" {}
         _GvmRomA ("ROM, word 3", 2D) = "black" {}
+        _GvmSnapR ("A snapshot's cores, word 0 of a texel", 2D) = "black" {}
+        _GvmSnapG ("A snapshot's cores, word 1", 2D) = "black" {}
+        _GvmSnapB ("A snapshot's cores, word 2", 2D) = "black" {}
+        _GvmSnapA ("A snapshot's cores, word 3", 2D) = "black" {}
         _Zone ("The control zone's scratch", 2D) = "black" {}
         _HostData ("A fetch's bytes", 2D) = "black" {}
         _HostImage ("Or a picture", 2D) = "black" {}
