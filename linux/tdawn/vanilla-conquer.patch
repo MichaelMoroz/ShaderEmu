@@ -4901,22 +4901,6 @@ index 972a6dc..2e1a5ab 100644
              if (Pending == THEME_PICK_ANOTHER) {
                  Pending = Next_Song(Score);
              }
-diff --git a/common/font.cpp b/common/font.cpp
---- a/common/font.cpp
-+++ b/common/font.cpp
-@@ -400,12 +400,12 @@
-                 x += FontXSpacing + char_width;
-                 int next_line = pitch - char_width;
-                 unsigned short dlist;
-                 memcpy(&dlist, datalist + char_num, sizeof(unsigned short));
-                 dlist = le16toh(dlist);
-                 const unsigned char* char_data = reinterpret_cast<const unsigned char*>(FontPtr) + dlist;
-                 short char_lle;
-                 memcpy(&char_lle, linelist + char_num, sizeof(short));
-                 char_lle = le16toh(char_lle);
-                 int char_ypos = char_lle & 0xFF;
-                 int char_lines = char_lle >> 8;
-                 int char_height = fntheight - (char_ypos + char_lines);
 diff --git a/common/wsa.cpp b/common/wsa.cpp
 --- a/common/wsa.cpp
 +++ b/common/wsa.cpp

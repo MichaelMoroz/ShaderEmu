@@ -55,14 +55,6 @@ index 72be869..583eaef 100644
  /* memory region pointers */
  static uint8 *ram = NULL, *stack = NULL;
  static uint8 null_page[NES6502_BANKSIZE];
-@@ -1145,7 +1167,7 @@ static uint8 null_page[NES6502_BANKSIZE];
- #define  ZP_READBYTE(addr)          ram[(addr)]
- #define  ZP_WRITEBYTE(addr, value)  ram[(addr)] = (uint8) (value)
- 
- #ifdef HOST_LITTLE_ENDIAN
- 
- /* NOTE: following two functions will fail on architectures
- ** which do not support byte alignment
 @@ -1264,6 +1286,8 @@ void nes6502_setcontext(nes6502_context *context)
  
     ASSERT(context);
