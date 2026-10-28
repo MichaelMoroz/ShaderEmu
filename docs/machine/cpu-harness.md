@@ -226,7 +226,7 @@ instructions on core 0, is the 43 s at its end.
     python tools/test_all.py                 # the default set
     python tools/test_all.py games nes-cells # tags (machine, games, doom, quake, ..., workers, media, desktop) or names
     python tools/test_all.py --long          # and the long cases: no workers, zerotest and tailtest, three bots
-    python tools/test_all.py --races         # RVC_RACES on every case with workers: 0 changes undone
+    python tools/test_all.py --races         # RVC_RACES on every case: 0 changes undone
     python tools/test_all.py --card-model    # RVC_SOUND, RVC_WCACHE, RVC_ADFAULT as game_par.py has them
     python tools/test_all.py --image build/images/NAME --list
 

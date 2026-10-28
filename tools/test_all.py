@@ -5,7 +5,7 @@ any failure.
     python tools/test_all.py                    # the default set (some 5 minutes at most)
     python tools/test_all.py games doom-1 ...   # cases by name or tag (machine, games, desktop, media, long, ...)
     python tools/test_all.py --long             # the default set and the long cases
-    python tools/test_all.py --races            # RVC_RACES on the cases with workers: 0 undone
+    python tools/test_all.py --races            # RVC_RACES on every case: 0 undone
     python tools/test_all.py --image DIR --jobs 8 --list
 
 A case is the line typed at the guest's shell, what ends it, and what its console must say:
@@ -538,7 +538,7 @@ def run(c, a, image, logs):
     env.setdefault('RVC_THREADS', str(max(1, (os.cpu_count() or 4) // a.jobs)))   # the workers' host threads, all cases together
     if a.card_model:
         env.update(RVC_SOUND='1', RVC_WCACHE='1', RVC_ADFAULT='1')
-    races = a.races and c['workers']
+    races = a.races   # (every case: nxpaint, nxweb, the IDE and others take workers though their cases do not say so)
     if races:
         env['RVC_RACES'] = log + '.races'
     env.update(c['env'])
@@ -560,7 +560,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('select', nargs='*', help='case names or tags (default: every case not tagged long)')
     ap.add_argument('--long', action='store_true', help='the long cases too')
-    ap.add_argument('--races', action='store_true', help='RVC_RACES on the cases that use workers: 0 changes undone')
+    ap.add_argument('--races', action='store_true', help='RVC_RACES on every case: 0 changes undone')
     ap.add_argument('--card-model', action='store_true', help="rvc_cpu as the card: RVC_SOUND, RVC_WCACHE, RVC_ADFAULT")
     made = os.path.exists(os.path.join(ROOT, 'build', 'images', 'nommu', 'linux_payload.bin'))
     ap.add_argument('--image', default='build/images/nommu' if made else 'build/images/linux',
