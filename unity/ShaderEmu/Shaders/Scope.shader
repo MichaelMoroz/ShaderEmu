@@ -6,7 +6,7 @@ Shader "ShaderEmu/Scope"
     {
         _Mode ("1: CPU state, 2: ROM, 3: sound", Int) = 1
         _State ("Machine state texture", 2D) = "black" {}
-        _Data_MTD_R ("ROM, first word of each texel", 2D) = "black" {}
+        _Data_ROM ("ROM, a 16-byte texel a pixel (RGBAFloat, read by its bits)", 2D) = "black" {}
         _Mix ("Sound card's mix", 2D) = "black" {}
     }
     SubShader
@@ -22,7 +22,7 @@ Shader "ShaderEmu/Scope"
             #include "UnityCG.cginc"
 
             Texture2D<uint4> _State;
-            Texture2D<float4> _Data_MTD_R;
+            Texture2D<float4> _Data_ROM;   // the ROM: a 16-byte texel a pixel, read by its bits (asuint)
             Texture2D<float4> _Mix;
             uint _Mode;
 
@@ -84,13 +84,14 @@ Shader "ShaderEmu/Scope"
             // bytes as its colour. Its textures have their first row at the bottom.
             float3 rom(float2 p) {
                 uint2 dim;
-                _Data_MTD_R.GetDimensions(dim.x, dim.y);
+                _Data_ROM.GetDimensions(dim.x, dim.y);
                 float sx = p.x * 3.0;
                 int strip = min((int)sx, 2);
                 int x = min((int)(frac(sx) * (float)dim.x), (int)dim.x - 1);
                 int row = (int)(((float)strip + p.y) * (float)dim.y / 3.0);
                 if (row >= (int)dim.y) return float3(0.02, 0.025, 0.04);
-                float3 c = _Data_MTD_R.Load(int3(x, (int)dim.y - 1 - row, 0)).rgb;
+                uint w = asuint(_Data_ROM.Load(int3(x, (int)dim.y - 1 - row, 0)).x);
+                float3 c = float3(w & 0xff, (w >> 8) & 0xff, (w >> 16) & 0xff) / 255.0;
                 return c * 0.9 + 0.04;
             }
 

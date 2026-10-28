@@ -190,6 +190,18 @@ int main(int argc, char** argv) {
     std::vector<std::pair<const char*, const char*>> payloads = {{"rootfs", "_Data_MTD"}, {"dts", "_Data_DTB"}};
     if (opt.cold) payloads.push_back({"linux_payload", "_Data_RAM"});
     for (auto& pr : payloads) {
+        if (std::string(pr.second) == "_Data_MTD") {   // the ROM: one RGBAFloat texture, a 16-byte texel a pixel
+            std::string bin;
+            if (!readFileBinary((fs::u8path(opt.payloadDir) / "rootfs.bin").u8string(), bin)) die("rootfs.bin: cannot read the ROM");
+            const UINT w = 2048, h = (std::max)(1u, (UINT)((bin.size() / 16 + w - 1) / w));
+            const size_t pitch = (size_t)w * 16;
+            std::vector<uint8_t> rows((size_t)h * pitch, 0);   // row 0 = the bottom: texel 0 in the last row
+            for (UINT y = 0; y < h && (size_t)y * pitch < bin.size(); ++y)
+                memcpy(rows.data() + (size_t)(h - 1 - y) * pitch, bin.data() + (size_t)y * pitch, (std::min)(pitch, bin.size() - (size_t)y * pitch));
+            textures["_Data_ROM"] = uploadTexture(dx, w, h, DXGI_FORMAT_R32G32B32A32_FLOAT, 16, rows.data(), D3D12_RESOURCE_FLAG_NONE,
+                                                  D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            continue;
+        }
         for (int i = 0; i < 4; ++i) {
             ImageRGBA8 img;
             std::string path = (fs::u8path(opt.payloadDir) / (std::string(pr.first) + "." + lanes[i] + ".png")).u8string();

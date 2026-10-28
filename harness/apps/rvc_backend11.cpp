@@ -199,6 +199,23 @@ public:
     bool loadPayload(Material& mat, const std::string& dir, const std::string& prefix, const std::string& propBase,
                      std::string& err) override {
         if (prefix == "none") return true;
+        if (propBase == "_Data_MTD") {
+            // the ROM: one texture of 16-byte texels, RGBAFloat read by its bits (as the world's importer makes it,
+            // docs/machine/gpu.md "The ROM as one texture")
+            std::string bin;
+            fs::path base = prefix.find_first_of("/\\") == std::string::npos ? fs::u8path(dir) / prefix : fs::u8path(prefix);
+            if (!readFileBinary(base.u8string() + ".bin", bin)) {
+                err = base.u8string() + ".bin: cannot read the ROM";
+                return false;
+            }
+            UINT height = 0;
+            auto srv = createTextureTexels(gpu_.device.Get(), bin, 2048, /*flipY=*/true, height, err);
+            if (!srv) return false;
+            mat.setTexture("_Data_ROM", srv.Get(), 2048, height);
+            keep_.push_back(srv);
+            fprintf(stderr, "[harness] _Data_ROM <- %s (2048x%u, RGBAFloat)\n", prefix.c_str(), height);
+            return true;
+        }
         const char* lanes[4] = {"r", "g", "b", "a"};
         const char* props[4] = {"_R", "_G", "_B", "_A"};
         for (int i = 0; i < 4; ++i) {

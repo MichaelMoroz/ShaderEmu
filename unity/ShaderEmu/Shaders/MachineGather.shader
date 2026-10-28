@@ -10,10 +10,7 @@ Shader "ShaderEmu/MachineGather"
         _Ram ("The state", 2D) = "black" {}
         _TickState ("The state rows after the tick", 2D) = "black" {}
         _GpuTarget ("The GPU's colour target", 2D) = "black" {}
-        _Data_MTD_R ("MTD ROM Texture R", 2D) = "black" {}
-        _Data_MTD_G ("MTD ROM Texture G", 2D) = "black" {}
-        _Data_MTD_B ("MTD ROM Texture B", 2D) = "black" {}
-        _Data_MTD_A ("MTD ROM Texture A", 2D) = "black" {}
+        _Data_ROM ("ROM, a 16-byte texel a pixel (RGBAFloat, read by its bits)", 2D) = "black" {}
     }
     SubShader
     {

@@ -1535,23 +1535,7 @@ uint mem_get_cached_or_tex_from_state_cache_or_mtd(uint addr) {
         uint2 mtd_lin = uint2(mtd_addr % m_dim.x, mtd_addr / m_dim.x);
         mtd_lin.y = m_dim.y - mtd_lin.y - 1;
         //[branch] if (mtd_lin.y >= m_dim.y) return 0;
-        float4 full;
-        [branch]
-        switch (mtd_idx) {
-            case 0:
-                full = _Data_MTD_R[mtd_lin];
-                break;
-            case 1:
-                full = _Data_MTD_G[mtd_lin];
-                break;
-            case 2:
-                full = _Data_MTD_B[mtd_lin];
-                break;
-            case 3:
-                full = _Data_MTD_A[mtd_lin];
-                break;
-        }
-        return unpack_raw_float4(full);
+        return idx_uint4(asuint(_Data_ROM[mtd_lin]), mtd_idx);   // (the ROM: one texture, a texel a pixel)
     }
     return 0;
 }

@@ -139,7 +139,7 @@ A textured quad is then 16 words of vertices instead of 96.
 | 1 | a texture of `0x00RRGGBB` words, times the colour. Its address may be in the ROM, as mode 4's |
 | 2 | a texture of bytes looked up in the display palette (`0x87000400`), times the colour |
 | 3 | a texture of single bits, each row a whole number of bytes, leftmost pixel in the highest bit: set bits take the colour, clear bits are not drawn |
-| 4 | a texture of three bytes a pixel (red, green, blue, as in a PPM file), rows not padded, starting at any byte, times the colour. Its address may be in the ROM (from `0x40000000`): the draw pass has the ROM's four textures (`_Data_MTD_R/G/B/A`) as well as the state |
+| 4 | a texture of three bytes a pixel (red, green, blue, as in a PPM file), rows not padded, starting at any byte, times the colour. Its address may be in the ROM (from `0x40000000`): the draw pass has the ROM's texture (`_Data_ROM`) as well as the state |
 | 5 | a layer of tiles (below): the texture's address is four words that say where its cells, its tiles and its palette are |
 | 6 | a picture as three planes of bytes one after another: width x height of luma, then the blue and the red chroma planes, each half the size each way (both sizes even). The colour is BT.601's, luma 16 to 235; times the colour. A video's frame as its decoder leaves it (`docs/apps/video.md`; `SEGL_YUV420` in the OpenGL library) |
 | 7 | (text) four bits of coverage a pixel: the colour, its alpha times the coverage |
@@ -443,3 +443,25 @@ timedemo (`quake +timedemo demo1`, from its command to its fps line, `RVC_WCACHE
 
 `programs\copytest`'s case 10 (after its sum, which stays `0e7f76c3`) is such a copy with a byte
 stored beside it in its pass; `-DPROGRAM_COPY_ONLY` builds it alone for a quick look on WARP.
+
+## The ROM as one texture
+
+The ROM (the image's `rootfs.bin`) was four RGBA8 textures, one for each word of a texel
+(`_Data_MTD_R/G/B/A`, PNGs made from the file). It is one RGBAFloat texture now, `_Data_ROM`:
+2048 texels a row, texel 0 in the last row, a 16-byte texel a pixel read back by its bits
+(`asuint`). The tick, the commit, the gather, the GPU's draw (`texture_word`), the sound, the
+lean tick and the world's shaders take a word as `asuint(_Data_ROM[p])[k]`: one load where a
+load of the ROM was a switch over four textures and an unpack, and a copy out of the ROM one
+texel load where it was four.
+
+- The harness makes it from `rootfs.bin` itself (`createTextureTexels` in `harness/core/image.cpp`;
+  D3D12 and `rvc_trace12` the same way).
+- In the world it is an asset made by a ScriptedImporter (`unity/ShaderEmu/Editor/ShaderEmuTexelsImporter.cs`,
+  files named `*.texels`: `ShaderEmuImages` copies the ROM in as `NAME_rom.texels`). A `UInt`
+  texture cannot be a `Texture2D` in Unity 2022.3; an RGBAFloat one keeps every byte as the file
+  has it as long as nothing filters or converts it (point filter, linear, no mipmaps). The
+  importer's `Mismatches` read every byte back in the world's editor on 28 October 2026: 0 of
+  393,240 bytes differed in a file of NaN patterns, infinities,
+  denormals and -0, and 0 of 281,828,352 in the ROM (2048 x 8601).
+- The Udon model still reads the ROM from lanes: "ShaderEmu/Import the ROM's lanes for the Udon
+  model" makes them. The device tree is still four lanes (a row).

@@ -18,10 +18,7 @@ Shader "ShaderEmu/gpu"
         _FetchInfo ("A picture's width | height << 16", Int) = 0
         _FetchW ("or its width", Int) = 0
         _FetchH ("and its height", Int) = 0
-        _Data_MTD_R ("ROM, first word of each texel", 2D) = "black" {}
-        _Data_MTD_G ("ROM, second word", 2D) = "black" {}
-        _Data_MTD_B ("ROM, third word", 2D) = "black" {}
-        _Data_MTD_A ("ROM, fourth word", 2D) = "black" {}
+        _Data_ROM ("ROM, a 16-byte texel a pixel (RGBAFloat, read by its bits)", 2D) = "black" {}
     }
     SubShader
     {
@@ -43,10 +40,7 @@ Shader "ShaderEmu/gpu"
 
             Texture2D<uint4> _State;
             // The ROM, for textures that are files in it (FRAGMENT_RGB24).
-            Texture2D<float4> _Data_MTD_R;
-            Texture2D<float4> _Data_MTD_G;
-            Texture2D<float4> _Data_MTD_B;
-            Texture2D<float4> _Data_MTD_A;
+            Texture2D<float4> _Data_ROM;   // the ROM: a 16-byte texel a pixel, read by its bits (asuint)
             #define GPU_ROM
             // The pass this draw is (see FRAGMENT_PASS in gpu.h) and the passes drawn this frame,
             // one bit each. A host that only ever draws pass 0 leaves both at their defaults.

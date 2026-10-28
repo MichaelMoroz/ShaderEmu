@@ -752,8 +752,7 @@ public static partial class ShaderEmuBuilder
     // A program's textures, light maps and models may be files in the ROM (Quake III Arena's all are).
     static void GiveRom(Material m)
     {
-        for (int lane = 0; lane < 4; lane++)
-            m.SetTexture("_Data_MTD_" + "RGBA"[lane], AssetDatabase.LoadAssetAtPath<Texture2D>(ShaderEmuImages.LanePath(ShaderEmuImages.Images[0].name, "rom", lane)));
+        m.SetTexture("_Data_ROM", AssetDatabase.LoadAssetAtPath<Texture2D>(ShaderEmuImages.RomPath(ShaderEmuImages.Images[0].name)));
         EditorUtility.SetDirty(m);
     }
 

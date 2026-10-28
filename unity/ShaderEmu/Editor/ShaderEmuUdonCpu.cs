@@ -45,7 +45,11 @@ public static partial class ShaderEmuBuilder
         drv.cpu = cpu;
         drv.machine = machine;
         drv.ramLanes = new Texture2D[] { machine.imageTextures[0], machine.imageTextures[1], machine.imageTextures[2], machine.imageTextures[3] };
-        drv.romLanes = new Texture2D[] { machine.imageTextures[4], machine.imageTextures[5], machine.imageTextures[6], machine.imageTextures[7] };
+        // (the machine's ROM is one RGBAFloat texture; the Udon model reads lanes: ShaderEmu/Import the ROM's lanes for the Udon model)
+        drv.romLanes = new Texture2D[4];
+        for (int lane = 0; lane < 4; lane++)
+            drv.romLanes[lane] = AssetDatabase.LoadAssetAtPath<Texture2D>(ShaderEmuImages.LanePath(ShaderEmuImages.Images[0].name, "rom", lane));
+        if (drv.romLanes[0] == null) Debug.LogWarning("[ShaderEmu] the Udon model has no ROM: run ShaderEmu/Import the ROM's lanes for the Udon model");
         drv.unpackMaterial = Mat("UdonAotUnpack", "ShaderEmu/UdonAotUnpack");
         drv.unpackTarget = Target("UdonAotUnpack", 2048, 2048, 0);
         drv.pageStages = new Texture2D[] { PageStage("UdonAotPages64", 64), PageStage("UdonAotPages256", 256), PageStage("UdonAotPages1024", 1024) };

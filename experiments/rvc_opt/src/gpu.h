@@ -129,16 +129,10 @@ uint texture_word(uint address) {
     [branch]
     if ((address >> 30) != 1) return ram_word(address);
     uint2 dim;
-    _Data_MTD_R.GetDimensions(dim.x, dim.y);
+    _Data_ROM.GetDimensions(dim.x, dim.y);
     uint texel = (address - 0x40000000) >> 4, k = (address >> 2) & 3;
     uint2 at = uint2(texel % dim.x, dim.y - 1 - texel / dim.x);
-    float4 t;
-    if (k == 0) t = _Data_MTD_R[at];
-    else if (k == 1) t = _Data_MTD_G[at];
-    else if (k == 2) t = _Data_MTD_B[at];
-    else t = _Data_MTD_A[at];
-    uint4 b = (uint4)(t * 255.0 + 0.5);
-    return b.r | b.g << 8 | b.b << 16 | b.a << 24;
+    return asuint(_Data_ROM[at])[k];   // (the ROM: one texture, a texel a pixel)
 }
 // A 16-byte texel there.
 uint4 texture_texel(uint address) {

@@ -87,6 +87,27 @@ public:
     bool loadPayload(Material& mat, const std::string& dir, const std::string& prefix, const std::string& propBase,
                      std::string& err) override {
         if (prefix == "none") return true;
+        if (propBase == "_Data_MTD") {
+            // the ROM: one texture of 16-byte texels, RGBAFloat read by its bits (docs/machine/gpu.md "The ROM as one texture")
+            std::string bin;
+            fs::path base = prefix.find_first_of("/\\") == std::string::npos ? fs::u8path(dir) / prefix : fs::u8path(prefix);
+            if (!readFileBinary(base.u8string() + ".bin", bin)) {
+                err = base.u8string() + ".bin: cannot read the ROM";
+                return false;
+            }
+            const UINT w = 2048, h = (std::max)(1u, (UINT)((bin.size() / 16 + w - 1) / w));
+            const size_t pitch = (size_t)w * 16;
+            std::vector<uint8_t> texels((size_t)h * pitch, 0);   // row 0 = the bottom: texel 0 in the last row
+            for (UINT y = 0; y < h && (size_t)y * pitch < bin.size(); ++y)
+                memcpy(texels.data() + (size_t)(h - 1 - y) * pitch, bin.data() + (size_t)y * pitch,
+                       (std::min)(pitch, bin.size() - (size_t)y * pitch));
+            textures_["_Data_ROM"] = uploadTexture(dx_, w, h, DXGI_FORMAT_R32G32B32A32_FLOAT, 16, texels.data(),
+                                                   D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            mat.setVector("_Data_ROM_TexelSize", 1.0 / w, 1.0 / h, w, h);
+            fprintf(stderr, "[harness] _Data_ROM <- %s (%ux%u, RGBAFloat)\n", prefix.c_str(), w, h);
+            tablesBuilt_ = false;
+            return true;
+        }
         const char* lanes[4] = {"r", "g", "b", "a"};
         const char* props[4] = {"_R", "_G", "_B", "_A"};
         for (int i = 0; i < 4; ++i) {

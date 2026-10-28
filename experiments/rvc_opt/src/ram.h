@@ -310,7 +310,7 @@ void ram_gather_geom(point ram_point IN[1], inout TriangleStream<ram_v2f> stream
 uint4 ram_gather_texel(ram_v2f i) {
     uint2 pos = (uint2)i.vertex.xy;
     s_dim = uint2(2048, STATE_TEX_HEIGHT);
-    _Data_MTD_R.GetDimensions(m_dim.x, m_dim.y);
+    _Data_ROM.GetDimensions(m_dim.x, m_dim.y);
 #if CORES > 1
     MC_GEO_READ
 #endif
@@ -383,7 +383,7 @@ uint4 ram_progress(uint core, uint x, uint4 result) {
 }
 uint4 ram_state_texel(uint2 pos) {
     s_dim = uint2(2048, STATE_TEX_HEIGHT);
-    _Data_MTD_R.GetDimensions(m_dim.x, m_dim.y);
+    _Data_ROM.GetDimensions(m_dim.x, m_dim.y);
     if (_Init && _InitRaw) return ram_init_raw(pos);
     uint4 own = _TickState[pos], result;
 #ifdef LANE_FIELD
@@ -523,7 +523,7 @@ uint4 ram_init_texel(uint2 pos) {
 uint4 ram_commit_texel(ram_v2f i) {
     uint2 pos = (uint2)i.vertex.xy;
     s_dim = uint2(2048, STATE_TEX_HEIGHT);
-    _Data_MTD_R.GetDimensions(m_dim.x, m_dim.y);
+    _Data_ROM.GetDimensions(m_dim.x, m_dim.y);
     uint kind = i.info.x, t = (pos.y - 64) * 2048 + pos.x;
     [branch]
     if (kind == RK_SLOT) return _Stage[i.info.yz];
