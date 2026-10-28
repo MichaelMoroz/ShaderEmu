@@ -7,10 +7,7 @@
 
 Texture2D<uint4> _State;
 // The ROM, for textures that are files in it (FRAGMENT_RGB24).
-Texture2D<float4> _Data_MTD_R;
-Texture2D<float4> _Data_MTD_G;
-Texture2D<float4> _Data_MTD_B;
-Texture2D<float4> _Data_MTD_A;
+Texture2D<float4> _Data_ROM;   // the ROM: a 16-byte texel a pixel, read by its bits (asuint)
 #define GPU_ROM
 #define GPU_STATE _State
 float _StateRow;

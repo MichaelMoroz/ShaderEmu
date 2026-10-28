@@ -4,6 +4,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <algorithm>
 
 bool loadImageRGBA8(const std::string& path, ImageRGBA8& out, std::string& err) {
     ComPtr<IWICImagingFactory> factory;
@@ -64,6 +65,36 @@ ComPtr<ID3D11ShaderResourceView> createTextureRGBA8(ID3D11Device* dev, const Ima
     td.Usage = D3D11_USAGE_IMMUTABLE;
     td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
     D3D11_SUBRESOURCE_DATA sd{p, (UINT)pitch, 0};
+    ComPtr<ID3D11Texture2D> tex;
+    ComPtr<ID3D11ShaderResourceView> srv;
+    HRESULT hr = dev->CreateTexture2D(&td, &sd, &tex);
+    if (SUCCEEDED(hr)) hr = dev->CreateShaderResourceView(tex.Get(), nullptr, &srv);
+    if (FAILED(hr)) {
+        err = "creating texture failed: " + hrToString(hr);
+        return nullptr;
+    }
+    return srv;
+}
+
+ComPtr<ID3D11ShaderResourceView> createTextureTexels(ID3D11Device* dev, const std::string& bytes, UINT width, bool flipY,
+                                                     UINT& height, std::string& err) {
+    size_t texels = (bytes.size() + 15) / 16, pitch = (size_t)width * 16;
+    height = (UINT)(std::max<size_t>)(1, (texels + width - 1) / width);
+    std::vector<uint8_t> data((size_t)height * pitch, 0);
+    for (UINT y = 0; y < height; ++y) {
+        size_t from = (size_t)y * pitch, to = (size_t)(flipY ? height - 1 - y : y) * pitch;
+        if (from < bytes.size()) memcpy(data.data() + to, bytes.data() + from, (std::min)(pitch, bytes.size() - from));
+    }
+    D3D11_TEXTURE2D_DESC td{};
+    td.Width = width;
+    td.Height = height;
+    td.MipLevels = 1;
+    td.ArraySize = 1;
+    td.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+    td.SampleDesc.Count = 1;
+    td.Usage = D3D11_USAGE_IMMUTABLE;
+    td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    D3D11_SUBRESOURCE_DATA sd{data.data(), (UINT)pitch, 0};
     ComPtr<ID3D11Texture2D> tex;
     ComPtr<ID3D11ShaderResourceView> srv;
     HRESULT hr = dev->CreateTexture2D(&td, &sd, &tex);

@@ -6,10 +6,7 @@ Shader "ShaderEmu/GpuDraw"
     {
         _State ("Machine state texture", 2D) = "black" {}
         _StateRow ("The state texture's row RAM starts in", Float) = 64
-        _Data_MTD_R ("ROM, first word of each texel", 2D) = "black" {}
-        _Data_MTD_G ("ROM, second word", 2D) = "black" {}
-        _Data_MTD_B ("ROM, third word", 2D) = "black" {}
-        _Data_MTD_A ("ROM, fourth word", 2D) = "black" {}
+        _Data_ROM ("ROM, a 16-byte texel a pixel (RGBAFloat, read by its bits)", 2D) = "black" {}
     }
     SubShader
     {

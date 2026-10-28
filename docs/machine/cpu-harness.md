@@ -40,6 +40,36 @@ console has said TEXT. For samples fine enough, `--ticks 256 --pass-ms 0.0078`: 
 milliseconds must go down with its instructions, or the guest's clock runs four times as
 fast for each instruction and the kernel's timer is a quarter of the profile.
 
+Other logs, each a measure that leaves the run as it was (gpu_vm's names in brackets):
+
+- `RVC_PASSLOG=FILE` (`GVM_PASSLOG`): from `--count-from`'s mark, a line a pass, `pass end ran pc ra ms`:
+  how core 0's pass ended (0 its budget, 1 it ended the pass itself, 2 it waited, 4 the write cache was
+  full, 5 a copy), its instructions, pc, `ra` and the guest's milliseconds (a jump is a sleep).
+  `RVC_PASSLOG_STACK=N` (`GVM_SYNCLOG_STACK`) adds, after an end of 1 or 4, the first N words above `sp`
+  that could be return addresses: who ended the pass, not only the leaf. Doom's timedemo: 16,331 passes
+  to their budget, 8,082 ended, 710 waits, 829 full.
+- `RVC_WC_LOG`'s records (with `RVC_WCACHE=1`) end with the address of the store that found the cache
+  full, 0 for a pass that did not end so: Doom's 8,351 full records all had one.
+- `RVC_WC_BITS=N` (4 to 8, with `RVC_WCACHE=1`): core 0's tables of 2^N buckets, not the tick's 6
+  (`L1_TABLE_BITS`). `python tools/wcsize.py model` runs Doom's timedemo at 5 to 8, `card` on the card with
+  the tick built at `L1_TABLE_BITS=N` under a world's frame (GPU-VM's `compare/wcsize.py`). On 28 October 2026:
+
+  | bits | texels (core 0) | core 0's passes ended full | workers' passes ended full | passes | realtics | fps (guest) |
+  |---|---|---|---|---|---|---|
+  | 5 | 168 | 21,128 | 8,102 | 34,961 | 1,739 | 101.2 |
+  | 6 (the tick's) | 336 | 861 | 7,522 | 29,970 | 1,664 | 105.7 |
+  | 7 | 672 | 106 | 7,531 | 29,748 | 1,664 | 105.7 |
+  | 8 | 1,344 | 10 | 7,545 | 29,691 | 1,663 | 105.8 |
+
+  On the processor's clock a full end at 6 costs the demo nothing: the pass's budget is not what limits it.
+  On the card under a VR frame (`--unity 11.1,7.1,1.0`, some 2.2 rounds a frame), the same: 40.1 fps (guest) at 6,
+  40.0 at 7 (3.27 and 3.23 card ms a frame).
+- `RVC_DEVICE_EVERY=N` (`GVM_DEVICE_EVERY`): the devices' pass takes the GPU's list back every Nth pass
+  only, as a world does once a frame; every pass hides a game's waits for its list (Doom's timedemo 1,664
+  realtics, 1,812 at 4).
+- `RVC_CON_TRACE=1` (`GVM_CON_TRACE`): each delivery of console input to the guest and each take, with
+  the pass and the guest's seconds (`[con] delivered`, `[con] taken`).
+
 `--count-from TEXT` prints every core's instructions from when the console said TEXT to the
 end (`COUNT from ...`), and `--until-times N` stops at the Nth `--until` after it:
 `tools\game_par.py` measures the games' frames with them (`docs/machine/multicore.md`, "Every core's
@@ -191,6 +221,14 @@ to a folder of its own.
   one, from the mark too; `RVC_ADFAULT=2` prints each (`[adfault]`: core, cause, address, pc).
 - `--save-ram FILE` writes the 288 MB of RAM as the run ends: a picture in GPU memory at a
   hold can be read from it (the NES's at `0x87000400` plus what `nes: holding` prints).
+- `--save FILE` writes the whole machine as the run ends (unless at `--until`): RAM, every core and worker, the
+  devices' counts and the console's and the script's place, 315 MB; `--load FILE` goes on from one with the same
+  image, cores and arguments. `--max-passes N` and `--save-after S` (seconds of this computer's) stop the run there,
+  and with `--save` it exits 5, to be gone on with. Doom's first timedemo stopped at pass 15,000 and gone on with ends
+  at the same pass (28,295) with every core's instructions and the console the same bytes as one run. Not kept:
+  `RVC_RACES`', `RVC_PROF`'s and `RVC_CALLS`' tables (each call reports its own part), the write caches' lines (empty at
+  a pass's start), the network. `tools/test_all.py --sections` runs every case in calls of `--section-secs` (40 s)
+  through it: a case not yet ended prints `part`, and the next call of the same line goes on with it.
 - A world's rounds in time: `--ticks 8192 --ips 1e12 --pass-ms 2.7307` makes every pass a
   round of 8,192 instructions at 3 MIPS a core, whatever it ran, so a program's own clock (the
   NES's `nesstat` percentages) counts as on cores of that speed (`docs/games/nes.md`).
@@ -226,7 +264,9 @@ instructions on core 0, is the 43 s at its end.
     python tools/test_all.py                 # the default set
     python tools/test_all.py games nes-cells # tags (machine, games, doom, quake, ..., workers, media, desktop) or names
     python tools/test_all.py --long          # and the long cases: no workers, zerotest and tailtest, three bots
-    python tools/test_all.py --races         # RVC_RACES on every case with workers: 0 changes undone
+    python tools/test_all.py --races         # RVC_RACES on every case: 0 changes undone (RVC_RACES_NEAR=4 said)
+    python tools/test_all.py --sections      # each case in calls of 40 s (--section-secs): run it again till none is left
+    python tools/test_all.py --max-wall 55 --wall-scale 2   # a case's wall at most 55 s, every wall doubled
     python tools/test_all.py --card-model    # RVC_SOUND, RVC_WCACHE, RVC_ADFAULT as game_par.py has them
     python tools/test_all.py --image build/images/NAME --list
 
@@ -234,4 +274,24 @@ A case's expected values are in the script, each with the doc it comes from; whe
 only "as before" (Doom's, Quake's and Quake III's server sums, Quake's particles, ClassiCube's
 meshes and pack, `cc`'s outputs) a case keeps the md5 of every such line, as the image of 15
 October 2026 and, but for ClassiCube's leaves, the last commit's printed them. A change that
-moves one on purpose sets the new value with the reason. Captures and the card are not in it.
+moves one on purpose sets the new value with the reason. Captures are not in it.
+
+`python tools/test_card.py CASE_OR_TAG ...` runs the same cases on the card: `bin/rvc_harness.exe --d3d11`
+with `experiments/rvc_opt`, one at a time through `tools\gpu_queue.ps1`, each console checked by test_all's
+rules. The card boots in some 50 s, so a case resumes a snapshot of the shell made once on the processor
+(`build/test_card/shell.snap`; `--snapshot` makes it again) and its wall is at most 55 s (`--max-wall`). A case
+is skipped for another image, for host words that change as it runs, for `rvc_cpu`'s own devices (its `env`),
+or when it is longer than a run may be. The card's own values are in its `CARD` table, each the same in two
+runs. On 28 October 2026 the `machine` tag with `doom-3`, `nxpath-balls` and `nxpaint` passed 10 of 10 in
+some 5 minutes (`mctest-255` and `cc-bytes` over 55 s; `hlsl` sums `a4b289dd` and `nxpath-balls` `11e09363`
+on the card, the tick's floats). `--parts` runs a case in runs of `--part-secs` (45 s), the machine saved at
+the end of each (`--save-state`) and resumed by the next, until its `--until` or its wall: the long cases
+(`mctest-255`, `cc-bytes`) then run too.
+
+The card runs a processor folder only when its `warp_ok` holds the folder's stamp, its sources hashed
+(`rvc_harness --stamp`; the devices' folder too when another; gpu_vm's `tick.hlsl.warp_ok`); otherwise
+`rvc_harness` says so and exits 3. `--warp` runs the cases on WARP, D3D11's software device, and with
+`--mark-ok` writes the stamp when every case passed: `python tools/test_card.py mctest-3 --warp --parts
+--max-wall 240 --mark-ok`. WARP is some 300 thousand instructions a second: `mctest 3` took 313 s in parts on
+28 October 2026 (`steptest` did not end in 240). The stamp is of the sources only: a define (`--define`,
+`--lazy`) is the same tick checked. `--cpu`, `--compute` and `--gvm` are not the card's tick and need none.

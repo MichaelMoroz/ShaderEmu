@@ -97,10 +97,9 @@ uint4 pend_texel(uint t) {
     uint4 texel;
     [branch]
     if ((in1 || in2) && !fill && (src & 0x80000000) == 0) {
-        // the ROM: a word of the texel in each of four textures
+        // the ROM: one texture, a texel a pixel
         uint2 p = uint2(at % m_dim.x, m_dim.y - at / m_dim.x - 1);
-        texel = uint4(unpack_raw_float4(_Data_MTD_R[p]), unpack_raw_float4(_Data_MTD_G[p]),
-                      unpack_raw_float4(_Data_MTD_B[p]), unpack_raw_float4(_Data_MTD_A[p]));
+        texel = asuint(_Data_ROM[p]);
     } else {
         texel = RAM_TEX(RAM_ADDR((in1 || in2) && !fill ? ((src & 0x7fffffff) >> 4) + (in2 ? rel2 : rel) : t));
         if ((in1 || in2) && fill) texel = uint4(src, src, src, src);
@@ -257,23 +256,7 @@ uint mem_get_word_l1(L1P uint addr) {
             uint2 mtd_lin = uint2(mtd_addr % m_dim.x, mtd_addr / m_dim.x);
             mtd_lin.y = m_dim.y - mtd_lin.y - 1;
             //[branch] if (mtd_lin.y >= m_dim.y) return 0;
-            float4 full;
-            [branch]
-            switch (mtd_idx) {
-                case 0:
-                    full = _Data_MTD_R[mtd_lin];
-                    break;
-                case 1:
-                    full = _Data_MTD_G[mtd_lin];
-                    break;
-                case 2:
-                    full = _Data_MTD_B[mtd_lin];
-                    break;
-                case 3:
-                    full = _Data_MTD_A[mtd_lin];
-                    break;
-            }
-            return unpack_raw_float4(full);
+            return idx_uint4(asuint(_Data_ROM[mtd_lin]), mtd_idx);   // (the ROM: one texture, a texel a pixel)
         }
 
         [branch]

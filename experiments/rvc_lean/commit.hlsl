@@ -9,7 +9,7 @@
 
 Texture2D<uint4> _SelfTexture2D;
 Texture2D<float4> _Data_RAM_R, _Data_RAM_G, _Data_RAM_B, _Data_RAM_A, _Data_RAM_RAW;
-Texture2D<float4> _Data_MTD_R, _Data_MTD_G, _Data_MTD_B, _Data_MTD_A;
+Texture2D<float4> _Data_ROM;
 Texture2D<float4> _GpuTarget;   // the GPU device's picture (docs/machine/gpu.md)
 Texture2D<uint4> _TickOut0, _TickOut1, _TickOut2, _TickOut3, _TickOut4, _TickOut5, _TickOut6, _TickOut7;
 uniform float _Init, _InitRaw;
@@ -136,10 +136,10 @@ uint source_word(uint a) {
         return idx(cached(t, c) ? c : TEX(RAM_ADDR(t)), (a >> 2) & 3);
     }
     [branch] if ((a & 0x40000000) == 0) return 0;
-    uint2 d; _Data_MTD_R.GetDimensions(d.x, d.y);
+    uint2 d; _Data_ROM.GetDimensions(d.x, d.y);
     uint t = (a - 0x40000000) >> 4, i = (a >> 2) & 3;
     uint2 p = uint2(t % d.x, d.y - 1 - t / d.x);
-    return unpack(i == 0 ? _Data_MTD_R[p] : i == 1 ? _Data_MTD_G[p] : i == 2 ? _Data_MTD_B[p] : _Data_MTD_A[p]);
+    return asuint(_Data_ROM[p])[i];   // (the ROM: a texel a pixel)
 }
 // RAM texel at pos as the selected core's pass leaves it: its copy or fill, or its cache's texel
 // and the one store the cache had no room for. False when the core stored nothing there.

@@ -13,10 +13,7 @@ Texture2D<float4> _Data_RAM_B;
 Texture2D<float4> _Data_RAM_A;
 Texture2D<float4> _Data_RAM_RAW;
 
-Texture2D<float4> _Data_MTD_R;
-Texture2D<float4> _Data_MTD_G;
-Texture2D<float4> _Data_MTD_B;
-Texture2D<float4> _Data_MTD_A;
+Texture2D<float4> _Data_ROM;   // the ROM: a 16-byte texel a pixel, read by its bits (asuint)
 
 // The state after the tick is the tick's texture (all 64 rows), and RAM is read by the gather
 // alone; the other passes see the control words as the stage keeps them.

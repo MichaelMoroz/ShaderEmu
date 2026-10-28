@@ -194,6 +194,23 @@ public:
     bool loadPayload(Material& mat, const std::string& dir, const std::string& prefix, const std::string& propBase,
                      std::string& err) override {
         if (prefix == "none") return true;
+        if (propBase == "_Data_MTD") {
+            // the ROM: one texture of 16-byte texels, RGBAFloat read by its bits (as the world's importer makes it,
+            // docs/machine/gpu.md "The ROM as one texture")
+            std::string bin;
+            fs::path base = prefix.find_first_of("/\\") == std::string::npos ? fs::u8path(dir) / prefix : fs::u8path(prefix);
+            if (!readFileBinary(base.u8string() + ".bin", bin)) {
+                err = base.u8string() + ".bin: cannot read the ROM";
+                return false;
+            }
+            UINT height = 0;
+            auto srv = createTextureTexels(gpu_.device.Get(), bin, 2048, /*flipY=*/true, height, err);
+            if (!srv) return false;
+            mat.setTexture("_Data_ROM", srv.Get(), 2048, height);
+            keep_.push_back(srv);
+            fprintf(stderr, "[harness] _Data_ROM <- %s (2048x%u, RGBAFloat)\n", prefix.c_str(), height);
+            return true;
+        }
         const char* lanes[4] = {"r", "g", "b", "a"};
         const char* props[4] = {"_R", "_G", "_B", "_A"};
         for (int i = 0; i < 4; ++i) {
@@ -256,6 +273,7 @@ public:
             gpu_.ctx->Begin(tsDisjoint_.Get());
             gpu_.ctx->End(tsQuery_[0].Get());
             timedRounds_ = (std::max)(1u, tickRounds);
+            timedVariant_ = curVariant_;
         }
         // (the devices' words for this frame, before the control pass's draws clear them)
         bool importCon = conDelivered, importFetch = deliver_, importNet = deliverNet_, importCounts = false;
@@ -323,10 +341,12 @@ public:
         if (rounds > 1) { mat.setInt("_TimePass", 0); mat.setInt("_ZapKind", (int)zapKind); }
         if (timeIt) gpu_.ctx->End(tsQuery_[2].Get());
         if (gpuPasses_.size() == 2 && !freeze) {
-            if (!listLazy() || listDue > 0) {   // (RVC_LIST_LAZY: only while a list is due)
+            bool listDrawn = !listLazy() || listDue > 0;   // (RVC_LIST_LAZY: only while a list is due)
+            if (listDrawn) {
                 gpuDraw(mat);
                 if (listDue > 0) listDue--;
             }
+            mat.setInt("_GpuListSkipped", listDrawn ? 0 : 1);   // (the control zone takes the submit word back only when drawn)
             bool mixed = soundMix && !soundPasses_.empty();
             if (mixed) soundDraw(mat, tag);   // before the control zone moves the voices on
             bool merge = countsAdded && (!cpuMode || computeMode);   // (--cpu: the interpreter adds them up itself)
@@ -451,6 +471,7 @@ public:
                     commitMs_ = (double)(ts[2] - ts[1]) * 1000.0 / (double)dj.Frequency;
                     deviceMs_ = (double)(ts[3] - ts[2]) * 1000.0 / (double)dj.Frequency;
                     frameMs = (double)(ts[3] - ts[0]) * 1000.0 / (double)dj.Frequency, frameRounds = timedRounds_, frameTimes++;
+                    frameVariant = timedVariant_;
                 }
                 tsPending_ = false;
             }
@@ -756,6 +777,7 @@ private:
     // --replay: the tick variants (variant 0 is the machine's own), each its tick and its unpack
     ShaderBuildOptions tickBo_, unpackBo_;
     std::vector<std::pair<GpuPass, GpuPass>> tickVariants_;
+    size_t curVariant_ = 0, timedVariant_ = 0;   // the variant in place, and the one of the frame being timed
     bool addTickVariant(const SLShader& shader, std::string& err) override {
         std::vector<GpuPass> t, u;
         if (!buildPasses(gpu_, shader, {"CPUTick"}, tickBo_, t, err)) return false;
@@ -765,6 +787,7 @@ private:
     }
     bool useTickVariant(size_t i) override {
         if (i >= tickVariants_.size()) return false;
+        curVariant_ = i;
         passes_[0] = tickVariants_[i].first;
         if (mrt_) unpackPasses_[0] = tickVariants_[i].second;
         return true;
@@ -849,6 +872,36 @@ private:
         gpu_.ctx->CopySubresourceRegion(ram_.Get(), 0, (UINT)x0, (UINT)y0, 0, zone_.Get(), 0, &box);
     }
 
+    // Two zones of a row each (the control words, then the cores' stats) in one draw: A's texels and then B's in the
+    // zone texture's first row, the pixel shader placing B's (_ZoneSplit), then a copy each. The stats are read
+    // from the state as it was before the control words change, as when they were drawn after them: no pixel of
+    // either reads the other's texels.
+    void zonePairInplace(Material& mat, const float* za, const float* zb) {
+        static const bool apart = getenv("RVC_ZONES_APART") && atoi(getenv("RVC_ZONES_APART")) != 0;
+        auto box = [](const float* zf, LONG& x0, LONG& y0, LONG& w) {
+            x0 = (std::max)(0L, (LONG)std::lround(zf[0] - zf[2] * 0.5f));
+            y0 = (std::max)(0L, (LONG)std::lround((float)kHeight - (zf[1] + zf[3] * 0.5f)));
+            w = (LONG)std::lround(zf[2]);
+        };
+        LONG ax, ay, aw, bx, by, bw;
+        box(za, ax, ay, aw);
+        box(zb, bx, by, bw);
+        if (apart || za[3] != 1 || zb[3] != 1 || ax + aw + bw > (LONG)kWidth) {
+            zoneInplace(mat, za);
+            zoneInplace(mat, zb);
+            return;
+        }
+        UpdateZone z{ax + (aw + bw) * 0.5f, (float)kHeight - ay - 0.5f, (float)(aw + bw), 1, 1};
+        mat.setInt("_ZoneSplit", (int)(ax + aw));
+        mat.setInt("_Zone2X", (int)bx);
+        mat.setInt("_Zone2Y", (int)by);
+        drawInto(gpuPasses_[1], mat, zoneRtv_.Get(), (float)ay, 6, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST, &z);
+        mat.setInt("_ZoneSplit", 0);
+        D3D11_BOX a{(UINT)ax, 0, 0, (UINT)(ax + aw), 1, 1}, b{(UINT)(ax + aw), 0, 0, (UINT)(ax + aw + bw), 1, 1};
+        gpu_.ctx->CopySubresourceRegion(ram_.Get(), 0, (UINT)ax, (UINT)ay, 0, zone_.Get(), 0, &a);
+        gpu_.ctx->CopySubresourceRegion(ram_.Get(), 0, (UINT)bx, (UINT)by, 0, zone_.Get(), 0, &b);
+    }
+
     bool frameInplace(Material& mat, uint64_t tag, bool timeIt) {
         timeIt = timeIt && ensureQueries() && !tsPending_;
         ID3D11DeviceContext* ctx = gpu_.ctx.Get();
@@ -857,6 +910,7 @@ private:
             ctx->Begin(tsDisjoint_.Get());
             ctx->End(tsQuery_[0].Get());
             timedRounds_ = init ? 1u : (std::max)(1u, tickRounds);
+            timedVariant_ = curVariant_;
         }
         // the tick, from R; its state rows into A, which holds R's state rows for the rest
         bool ticks = !(cpuMode && !init);
@@ -914,10 +968,12 @@ private:
         }
         if (timeIt) ctx->End(tsQuery_[2].Get());
         if (gpuPasses_.size() == 2) {
-            if (!listLazy() || listDue > 0) {   // (RVC_LIST_LAZY: only while a list is due)
+            bool listDrawn = !listLazy() || listDue > 0;   // (RVC_LIST_LAZY: only while a list is due)
+            if (listDrawn) {
                 gpuDraw(mat);
                 if (listDue > 0) listDue--;
             }
+            mat.setInt("_GpuListSkipped", listDrawn ? 0 : 1);   // (the control zone takes the submit word back only when drawn)
             bool mixed = soundMix && !soundPasses_.empty();
             if (mixed) soundDraw(mat, tag);   // before the control zone moves the voices on
             bool merge = countsAdded && !cpuMode;
@@ -926,12 +982,13 @@ private:
                 countsAdded = false;
             }
             mat.setInt("_CountMerged", merge ? 2 : 1);
-            zoneInplace(mat, kGpuControlZone);
+            // (the control words and, with workers, the cores' stats in one draw: gpu_vm's feaddd5; RVC_ZONES_APART=1 two)
+            if (cores_ > 16 && activeCores_ > 1) zonePairInplace(mat, kGpuControlZone, kCoreStatsZone);
+            else zoneInplace(mat, kGpuControlZone);
             if (conDelivered) {
                 zoneInplace(mat, kConZone);
                 conDelivered = false;
             }
-            if (cores_ > 16 && activeCores_ > 1) zoneInplace(mat, kCoreStatsZone);
             if (deliver_) {
                 zoneInplace(mat, kFetchZone);
                 deliver_ = false;

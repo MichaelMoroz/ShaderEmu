@@ -8,10 +8,7 @@ Shader "ShaderEmu/GpuVolume"
     Properties
     {
         _State ("Machine state texture", 2D) = "black" {}
-        _Data_MTD_R ("ROM, first word of each texel", 2D) = "black" {}
-        _Data_MTD_G ("ROM, second word", 2D) = "black" {}
-        _Data_MTD_B ("ROM, third word", 2D) = "black" {}
-        _Data_MTD_A ("ROM, fourth word", 2D) = "black" {}
+        _Data_ROM ("ROM, a 16-byte texel a pixel (RGBAFloat, read by its bits)", 2D) = "black" {}
         _ScreenSize ("Width and height of the screen", Vector) = (1.28, 0.8, 0, 0)
         _Plane ("Where the screen is between the near plane (0) and the far plane (1)", Range(0, 1)) = 0
     }

@@ -26,3 +26,14 @@ MACHINES = {
                   image=os.environ.get('RVCMP_AFTER_IMAGE', os.path.join(AFTER, 'build', 'images', 'nommu')),
                   shell=os.path.join(AFTER, 'build', 'rv_compare', 'after_shell.snap'), args=[]),
 }
+
+# More machines for an A/B of images or checkouts (GPU-VM's bench_games/ab.py): RVCMP_MACHINES="NAME=IMAGE[@ROOT],..."
+# runs IMAGE (an image's folder) on ROOT's harness and tick (default AFTER), with its own shell snapshot in ROOT's
+# build/rv_compare/NAME_shell.snap (`cmp.py shell NAME` makes it). `run.py --machines NAME1,NAME2` then alternates
+# them, and `report.py NAME1 NAME2` compares them, at the card's budget too.
+for spec in filter(None, os.environ.get('RVCMP_MACHINES', '').split(',')):
+    name, _, rest = spec.partition('=')
+    image, _, root = rest.partition('@')
+    root = root or AFTER
+    MACHINES[name.strip()] = dict(root=root, exe=os.path.join('bin', 'rvc_harness.exe'), image=os.path.abspath(image),
+                                  shell=os.path.join(root, 'build', 'rv_compare', name.strip() + '_shell.snap'), args=[])

@@ -27,10 +27,7 @@
         _Data_DTB_B ("Device Tree Binary Texture B", 2D) = "black" {}
         _Data_DTB_A ("Device Tree Binary Texture A", 2D) = "black" {}
 
-        _Data_MTD_R ("MTD ROM Texture R", 2D) = "black" {}
-        _Data_MTD_G ("MTD ROM Texture G", 2D) = "black" {}
-        _Data_MTD_B ("MTD ROM Texture B", 2D) = "black" {}
-        _Data_MTD_A ("MTD ROM Texture A", 2D) = "black" {}
+        _Data_ROM ("ROM, a 16-byte texel a pixel (RGBAFloat, read by its bits)", 2D) = "black" {}
 
         _DoTick ("DEBUG: Perform single step", Int) = 0
         /* _BreakpointLow ("DEBUG: Breakpoint: Enter single step mode at this PC address (low 16)", Int) = 0 */
@@ -83,10 +80,7 @@
             Texture2D<float4> _Data_DTB_B;
             Texture2D<float4> _Data_DTB_A;
 
-            Texture2D<float4> _Data_MTD_R;
-            Texture2D<float4> _Data_MTD_G;
-            Texture2D<float4> _Data_MTD_B;
-            Texture2D<float4> _Data_MTD_A;
+            Texture2D<float4> _Data_ROM;   // the ROM: a 16-byte texel a pixel, read by its bits (asuint)
 
             static uint hart = 0;
             static uint2 hart_offset = uint2(0, 0);
@@ -270,7 +264,7 @@
                 uint k;
                 #define TICK_ZERO { TICK_EACH(k) o[k] = (uint4)0; TICK_DONE }
                 _SelfTexture2D.GetDimensions(s_dim.x, s_dim.y);
-                _Data_MTD_R.GetDimensions(m_dim.x, m_dim.y);
+                _Data_ROM.GetDimensions(m_dim.x, m_dim.y);
 
 #ifdef TICK_MRT
                 uint2 pixel = uint2(i.vertex.xy);
@@ -443,10 +437,7 @@
             Texture2D<float4> _Data_RAM_A;
             Texture2D<float4> _Data_RAM_RAW;
 
-            Texture2D<float4> _Data_MTD_R;
-            Texture2D<float4> _Data_MTD_G;
-            Texture2D<float4> _Data_MTD_B;
-            Texture2D<float4> _Data_MTD_A;
+            Texture2D<float4> _Data_ROM;   // the ROM: a 16-byte texel a pixel, read by its bits (asuint)
 
             // CORES > 1 (docs/machine/multicore.md): core 0's state is the block at the left of the state
             // rows and the workers' is the strip beside it, each worker some rows of it, as the
@@ -741,7 +732,7 @@
 
             uint4 frag(v2f_customrendertexture i) : SV_Target {
                 _SelfTexture2D.GetDimensions(s_dim.x, s_dim.y);
-                _Data_MTD_R.GetDimensions(m_dim.x, m_dim.y);
+                _Data_ROM.GetDimensions(m_dim.x, m_dim.y);
                 uint2 pos = i.globalTexcoord.xy * s_dim;
 #ifdef COMMIT_COPY
                 // the same points once more, into the buffer the commit did not draw into: its

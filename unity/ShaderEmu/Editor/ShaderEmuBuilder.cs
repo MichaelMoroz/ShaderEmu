@@ -1085,7 +1085,9 @@ public static partial class ShaderEmuBuilder
         ShaderEmuImages.BootImage boot = ShaderEmuImages.Images[0];
         foreach (string part in new[] { "ram", "rom", "tree" })
             for (int lane = 0; lane < 4; lane++)
-                textures.Add(AssetDatabase.LoadAssetAtPath<Texture2D>(ShaderEmuImages.LanePath(boot.name, part, lane)));
+                // (the ROM is one texture, in place 4: ShaderEmuTexelsImporter)
+                textures.Add(part != "rom" ? AssetDatabase.LoadAssetAtPath<Texture2D>(ShaderEmuImages.LanePath(boot.name, part, lane))
+                             : lane == 0 ? AssetDatabase.LoadAssetAtPath<Texture2D>(ShaderEmuImages.RomPath(boot.name)) : null);
         if (textures[0] == null) Debug.LogError("[ShaderEmu] no boot image: run ShaderEmu/Import boot images first");
         machine.imageTextures = textures.ToArray();
 

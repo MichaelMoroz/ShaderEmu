@@ -6,10 +6,7 @@ Shader "ShaderEmu/sound"
     Properties
     {
         _State ("Machine state texture", 2D) = "black" {}
-        _Data_MTD_R ("ROM, first word of each texel", 2D) = "black" {}
-        _Data_MTD_G ("ROM, second word", 2D) = "black" {}
-        _Data_MTD_B ("ROM, third word", 2D) = "black" {}
-        _Data_MTD_A ("ROM, fourth word", 2D) = "black" {}
+        _Data_ROM ("ROM, a 16-byte texel a pixel (RGBAFloat, read by its bits)", 2D) = "black" {}
         _SoundCursor ("The sample the ring starts at", Int) = 0
     }
     SubShader
@@ -31,10 +28,7 @@ Shader "ShaderEmu/sound"
 
             Texture2D<uint4> _State;
             // The ROM, for samples that are files in it.
-            Texture2D<float4> _Data_MTD_R;
-            Texture2D<float4> _Data_MTD_G;
-            Texture2D<float4> _Data_MTD_B;
-            Texture2D<float4> _Data_MTD_A;
+            Texture2D<float4> _Data_ROM;   // the ROM: a 16-byte texel a pixel, read by its bits (asuint)
             uniform uint _SoundCursor;
             #define SOUND_CURSOR _SoundCursor
             #define SOUND_MIXED 1

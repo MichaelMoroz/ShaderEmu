@@ -18,10 +18,7 @@ Shader "ShaderEmu/gpu"
         _FetchInfo ("A picture's width | height << 16", Int) = 0
         _FetchW ("or its width", Int) = 0
         _FetchH ("and its height", Int) = 0
-        _Data_MTD_R ("ROM, first word of each texel", 2D) = "black" {}
-        _Data_MTD_G ("ROM, second word", 2D) = "black" {}
-        _Data_MTD_B ("ROM, third word", 2D) = "black" {}
-        _Data_MTD_A ("ROM, fourth word", 2D) = "black" {}
+        _Data_ROM ("ROM, a 16-byte texel a pixel (RGBAFloat, read by its bits)", 2D) = "black" {}
     }
     SubShader
     {
@@ -43,10 +40,7 @@ Shader "ShaderEmu/gpu"
 
             Texture2D<uint4> _State;
             // The ROM, for textures that are files in it (FRAGMENT_RGB24).
-            Texture2D<float4> _Data_MTD_R;
-            Texture2D<float4> _Data_MTD_G;
-            Texture2D<float4> _Data_MTD_B;
-            Texture2D<float4> _Data_MTD_A;
+            Texture2D<float4> _Data_ROM;   // the ROM: a 16-byte texel a pixel, read by its bits (asuint)
             #define GPU_ROM
             // The pass this draw is (see FRAGMENT_PASS in gpu.h) and the passes drawn this frame,
             // one bit each. A host that only ever draws pass 0 leaves both at their defaults.
@@ -91,6 +85,9 @@ Shader "ShaderEmu/gpu"
             #define HOST_STATE_WORDS(n) ((n) == 0 ? _HostState0 : (n) == 1 ? _HostState1 : (n) == 2 ? _HostState2 : (n) == 3 ? _HostState3 : (n) == 4 ? _HostState4 : (n) == 5 ? _HostState5 : (n) == 6 ? _HostState6 : (n) == 7 ? _HostState7 : 0u)
             uniform uint _HostFlags;
             uniform uint _GpuPasses;   // the passes the GPU draw made this frame, one bit each
+            // 1: the harness did not draw the list this frame (RVC_LIST_LAZY), which then stays submitted
+            uniform uint _GpuListSkipped;
+            #define GPU_LIST_SKIP
             uniform uint _CountMerged;   // the counters (src/gpu.h): 0 a host that never merges, 2 merged this frame
             #define GPU_COUNT_MERGE
             uniform uint _InputKey0, _InputKey1, _InputKey2, _InputKey3;
@@ -114,10 +111,15 @@ Shader "ShaderEmu/gpu"
             #define GPU_INPUT
             #include "src/gpu.h"
 
+            // From pixel _ZoneSplit (0: none) on, the row drawn is a second zone at (_Zone2X, _Zone2Y): the control
+            // words and the cores' stats (MC_STATS_ALL) in one draw (the harness's zonePair, gpu_vm's feaddd5)
+            uniform uint _ZoneSplit, _Zone2X, _Zone2Y;
             uint4 frag(v2f_customrendertexture i) : SV_Target {
                 uint2 dim;
                 _SelfTexture2D.GetDimensions(dim.x, dim.y);
-                return gpu_control(i.globalTexcoord.xy * dim);
+                uint2 p = uint2(i.globalTexcoord.xy * dim);
+                if (_ZoneSplit != 0 && p.x >= _ZoneSplit) p = uint2(p.x - _ZoneSplit + _Zone2X, _Zone2Y);
+                return gpu_control(p);
             }
             ENDCG
         }

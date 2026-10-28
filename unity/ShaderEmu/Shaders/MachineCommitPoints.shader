@@ -15,10 +15,7 @@ Shader "ShaderEmu/MachineCommitPoints"
         _Data_RAM_G ("RAM Texture G", 2D) = "black" {}
         _Data_RAM_B ("RAM Texture B", 2D) = "black" {}
         _Data_RAM_A ("RAM Texture A", 2D) = "black" {}
-        _Data_MTD_R ("MTD ROM Texture R", 2D) = "black" {}
-        _Data_MTD_G ("MTD ROM Texture G", 2D) = "black" {}
-        _Data_MTD_B ("MTD ROM Texture B", 2D) = "black" {}
-        _Data_MTD_A ("MTD ROM Texture A", 2D) = "black" {}
+        _Data_ROM ("ROM, a 16-byte texel a pixel (RGBAFloat, read by its bits)", 2D) = "black" {}
         _CommitPoints ("Points the mesh has", Int) = 41346
         _FieldPoints ("Of them the lanes' field's buckets, before the picture's", Int) = 7936
     }

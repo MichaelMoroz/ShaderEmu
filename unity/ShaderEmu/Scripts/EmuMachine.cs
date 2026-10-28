@@ -443,43 +443,25 @@ public class EmuMachine : UdonSharpBehaviour
         machineMaterial.SetTexture("_Data_RAM_G", Pick(1));
         machineMaterial.SetTexture("_Data_RAM_B", Pick(2));
         machineMaterial.SetTexture("_Data_RAM_A", Pick(3));
-        machineMaterial.SetTexture("_Data_MTD_R", Pick(4));
-        tickMaterial.SetTexture("_Data_MTD_R", Pick(4));
-        machineMaterial.SetTexture("_Data_MTD_G", Pick(5));
-        tickMaterial.SetTexture("_Data_MTD_G", Pick(5));
-        machineMaterial.SetTexture("_Data_MTD_B", Pick(6));
-        tickMaterial.SetTexture("_Data_MTD_B", Pick(6));
-        machineMaterial.SetTexture("_Data_MTD_A", Pick(7));
-        tickMaterial.SetTexture("_Data_MTD_A", Pick(7));
+        machineMaterial.SetTexture("_Data_ROM", Pick(4));
+        tickMaterial.SetTexture("_Data_ROM", Pick(4));
         tickMaterial.SetTexture("_Data_DTB_R", Pick(8));
         tickMaterial.SetTexture("_Data_DTB_G", Pick(9));
         tickMaterial.SetTexture("_Data_DTB_B", Pick(10));
         tickMaterial.SetTexture("_Data_DTB_A", Pick(11));
         // (a copy out of the ROM is committed as points, and its edges gathered; RAM starts as points)
-        pointsMaterial.SetTexture("_Data_MTD_R", Pick(4));
-        pointsMaterial.SetTexture("_Data_MTD_G", Pick(5));
-        pointsMaterial.SetTexture("_Data_MTD_B", Pick(6));
-        pointsMaterial.SetTexture("_Data_MTD_A", Pick(7));
-        gatherMaterial.SetTexture("_Data_MTD_R", Pick(4));
-        gatherMaterial.SetTexture("_Data_MTD_G", Pick(5));
-        gatherMaterial.SetTexture("_Data_MTD_B", Pick(6));
-        gatherMaterial.SetTexture("_Data_MTD_A", Pick(7));
+        pointsMaterial.SetTexture("_Data_ROM", Pick(4));
+        gatherMaterial.SetTexture("_Data_ROM", Pick(4));
         pointsMaterial.SetTexture("_Data_RAM_R", Pick(0));
         pointsMaterial.SetTexture("_Data_RAM_G", Pick(1));
         pointsMaterial.SetTexture("_Data_RAM_B", Pick(2));
         pointsMaterial.SetTexture("_Data_RAM_A", Pick(3));
-        gpuMaterial.SetTexture("_Data_MTD_R", Pick(4));
-        gpuMaterial.SetTexture("_Data_MTD_G", Pick(5));
-        gpuMaterial.SetTexture("_Data_MTD_B", Pick(6));
-        gpuMaterial.SetTexture("_Data_MTD_A", Pick(7));
-        if (romViewMaterial != null) romViewMaterial.SetTexture("_Data_MTD_R", Pick(4));
+        gpuMaterial.SetTexture("_Data_ROM", Pick(4));
+        if (romViewMaterial != null) romViewMaterial.SetTexture("_Data_ROM", Pick(4));
         if (sound != null)
         {
             // samples are played from where they lie in the ROM
-            sound.mixMaterial.SetTexture("_Data_MTD_R", Pick(4));
-            sound.mixMaterial.SetTexture("_Data_MTD_G", Pick(5));
-            sound.mixMaterial.SetTexture("_Data_MTD_B", Pick(6));
-            sound.mixMaterial.SetTexture("_Data_MTD_A", Pick(7));
+            sound.mixMaterial.SetTexture("_Data_ROM", Pick(4));
         }
     }
 

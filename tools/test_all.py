@@ -5,7 +5,7 @@ any failure.
     python tools/test_all.py                    # the default set (some 5 minutes at most)
     python tools/test_all.py games doom-1 ...   # cases by name or tag (machine, games, desktop, media, long, ...)
     python tools/test_all.py --long             # the default set and the long cases
-    python tools/test_all.py --races            # RVC_RACES on the cases with workers: 0 undone
+    python tools/test_all.py --races            # RVC_RACES on every case: 0 undone (and RVC_RACES_NEAR=4's count said)
     python tools/test_all.py --image DIR --jobs 8 --list
 
 A case is the line typed at the guest's shell, what ends it, and what its console must say:
@@ -466,10 +466,10 @@ def check(c, text, err, races, done):
         if a != b:
             n = sum(x == y for x, y in zip(a, b))
             why.append(f'/{p}/: {n} of {max(len(a), len(b))} as in {other}')
-    if races:
-        m = re.search(r'(\d+) changes undone', err)
-        if not m or m[1] != '0':
-            why.append(f'RVC_RACES: {m[1] if m else "no"} changes undone')
+    if races:   # (in sections, each call says its own)
+        m = re.findall(r'(\d+) changes undone', err)
+        if not m or sum(map(int, m)) != 0:
+            why.append(f'RVC_RACES: {sum(map(int, m)) if m else "no"} changes undone')
     return why
 
 
@@ -516,7 +516,7 @@ def zerotail_nommu():
 # (16-byte romfs packing): what the pool hands out is checked on copies in tmpfs
 ZERO_TAIL_NOMMU = ('zerotest 12 4; mkdir -p /tmp/t; find /usr/share /usr/bin /etc -maxdepth 1 -type f -size -256k | '
                    'while read f; do cp "$f" /tmp/t/; done; tailtest /tmp/t/*')
-CC_BYTES_NOMMU = '716cecf0'   # libmcw.a's mcw_post orders the program's stores before the job's (mc_publish; 28 October 2026)
+CC_BYTES_NOMMU = 'c23bcf68'   # libc.a's memcpy and memset ask for the commit's copy from 2 KB (uop.h; 28 October 2026)
 
 
 def without_mmu(image):
@@ -527,9 +527,30 @@ def without_mmu(image):
 
 def run(c, a, image, logs):
     log = os.path.join(logs, c['name'] + '.log')
-    if os.path.exists(log):
-        os.remove(log)
-    args = [a.cpu, '--quiet', '--uart-log', log, '--wall', str(c['wall']), '--image', image]
+    # --sections: the case in calls of --section-secs each, rvc_cpu's snapshot (--save, --load: the console's place
+    # and the script's with it) and what the calls before said kept between them
+    snap, state = os.path.join(logs, c['name'] + '.snap'), os.path.join(logs, c['name'] + '.state')
+    before = dict(seconds=0.0, part=0, err='')
+    left = a.deadline - time.time() - 5   # (--sections: the call's time left, its snapshot's writing apart)
+    if a.sections and left < 3:
+        return 'later', 0, False, 0.0
+    if a.sections and os.path.exists(state) and (os.path.exists(snap) or json.load(open(state)).get('ended')):
+        before = json.load(open(state))
+        if before.get('ended'):   # (ended in an earlier call, its check waiting for a case it is compared with)
+            os.remove(state)
+            return open(log, encoding='latin-1').read(), before['err'], a.races, before['seconds']
+    else:
+        for f in (log, state, snap):
+            if os.path.exists(f):
+                os.remove(f)
+    # the case's wall (--wall-scale for a slower build or host), at most --max-wall, less what its sections took
+    wall = c['wall'] * a.wall_scale
+    if a.max_wall:
+        wall = min(wall, a.max_wall)
+    wall = max(1.0, wall - before['seconds'])
+    args = [a.cpu, '--quiet', '--uart-log', log, '--wall', f'{wall:.0f}', '--image', image]
+    if a.sections:
+        args += ['--save', snap, '--save-after', f'{min(a.section_secs, left):.0f}'] + (['--load', snap] if before['part'] else [])
     if c['cmd'] is not None:
         args += ['--expect', '/ # ', '--send', c['cmd'] + '; ' + DONE + '\\n']
     args += ['--until', c['until']] + c['more']
@@ -538,9 +559,16 @@ def run(c, a, image, logs):
     env.setdefault('RVC_THREADS', str(max(1, (os.cpu_count() or 4) // a.jobs)))   # the workers' host threads, all cases together
     if a.card_model:
         env.update(RVC_SOUND='1', RVC_WCACHE='1', RVC_ADFAULT='1')
-    races = a.races and c['workers']
+    races = a.races   # (every case: nxpaint, nxweb, the IDE and others take workers though their cases do not say so)
     if races:
         env['RVC_RACES'] = log + '.races'
+        # a case's part looked at (full speed to race_at's text, the check from there, the run's end at race_until's)
+        for k, e in (('race_at', 'RVC_RACES_AT'), ('race_until', 'RVC_RACES_UNTIL')):
+            if c.get(k):
+                env[e] = c[k]
+        # a texel another core changed other words of within 4 passes: on the card, whose passes end elsewhere, the
+        # two may meet in one pass (Half-Life's statics, 632e982). Reported, not failed: a hand-over by a job word is one
+        env.setdefault('RVC_RACES_NEAR', '4')
     env.update(c['env'])
     t = time.time()
     for _ in range(60):   # the harness lock refuses a CPU harness beside a GPU one: wait for it
@@ -548,8 +576,16 @@ def run(c, a, image, logs):
         if '[lock]' not in p.stderr or 'refused' not in p.stderr:
             break
         time.sleep(20)
+    secs = before['seconds'] + time.time() - t
+    err = before['err'] + p.stderr
+    if a.sections and p.returncode == 5 and os.path.exists(snap):   # (stopped at --save-after and saved: to go on)
+        json.dump(dict(seconds=secs, part=before['part'] + 1, err=err), open(state, 'w'))
+        return 'part', before['part'] + 1, races, secs
+    for f in (state, snap):
+        if os.path.exists(f):
+            os.remove(f)
     text = open(log, encoding='latin-1').read() if os.path.exists(log) else ''
-    return text, p.stderr, races, time.time() - t
+    return text, err, races, secs
 
 
 def futures_names(futures):
@@ -560,7 +596,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('select', nargs='*', help='case names or tags (default: every case not tagged long)')
     ap.add_argument('--long', action='store_true', help='the long cases too')
-    ap.add_argument('--races', action='store_true', help='RVC_RACES on the cases that use workers: 0 changes undone')
+    ap.add_argument('--races', action='store_true', help='RVC_RACES on every case: 0 changes undone')
     ap.add_argument('--card-model', action='store_true', help="rvc_cpu as the card: RVC_SOUND, RVC_WCACHE, RVC_ADFAULT")
     made = os.path.exists(os.path.join(ROOT, 'build', 'images', 'nommu', 'linux_payload.bin'))
     ap.add_argument('--image', default='build/images/nommu' if made else 'build/images/linux',
@@ -569,7 +605,14 @@ def main():
     ap.add_argument('--logs', default=os.path.join(ROOT, 'build', 'test_all'), help='where the consoles go')
     ap.add_argument('--list', action='store_true', help='list the cases and stop')
     ap.add_argument('--cpu', default=os.path.join(ROOT, 'bin', 'rvc_cpu.exe'), help='the rvc_cpu to run (default bin/rvc_cpu.exe)')
+    ap.add_argument('--wall-scale', type=float, default=1.0, help="every case's wall times this (a slower build or host)")
+    ap.add_argument('--max-wall', type=float, default=0, help="a case's wall at most (with --sections: its whole run's)")
+    ap.add_argument('--sections', action='store_true',
+                    help='a case in calls of --section-secs: run again to go on from its snapshot (each call under a minute)')
+    ap.add_argument('--section-secs', type=float, default=40, help="a section's seconds (default 40)")
+    ap.add_argument('--call-secs', type=float, default=52, help="with --sections, a call's seconds: no case starts or goes on past them")
     a = ap.parse_args()
+    done_before = {}
     if a.select:
         a.run = [c for c in CASES if c['name'] in a.select or c['tags'] & set(a.select)]
     else:
@@ -579,6 +622,23 @@ def main():
             print(f"{c['name']:28} {' '.join(sorted(c['tags']))}")
         return 0 if a.run else 1
     os.makedirs(a.logs, exist_ok=True)
+    # --sections: the cases checked in the earlier calls of this round (sections.json), not run again, and their
+    # consoles for a case compared with one; the round ends with the call that leaves no case to go on with
+    progress_file = os.path.join(a.logs, 'sections.json')
+    progress = {}
+    if a.sections:
+        try:
+            progress = json.load(open(progress_file))
+        except (OSError, ValueError):
+            progress = {}
+        for name in progress:
+            f = os.path.join(a.logs, name + '.log')
+            done_before[name] = open(f, encoding='latin-1').read() if os.path.exists(f) else ''
+        for c in a.run:   # (and one not in this selection, ended before)
+            for other in [rule[1] for rule in c.get('same', [])]:
+                f = os.path.join(a.logs, other + '.log')
+                if other not in [x['name'] for x in a.run] and os.path.exists(f):
+                    done_before[other] = open(f, encoding='latin-1').read()
     if without_mmu(a.image):   # cc's programs there are flat ones (tcc -shared, elf2flt): other bytes
         for c in CASES:
             if c['name'] == 'cc-bytes':
@@ -586,7 +646,8 @@ def main():
             if c['name'] == 'zero-tail':
                 c['cmd'] = ZERO_TAIL_NOMMU
     where = images(a)
-    done, failed, t0 = {}, [], time.time()
+    done, failed, t0 = dict(done_before), [], time.time()
+    a.deadline = t0 + a.call_secs
     # the longest first, by the seconds each took the last time (the last case to start then ends soonest);
     # a case compared with another is checked once that one has ended
     times_file = os.path.join(a.logs, 'times.json')
@@ -594,34 +655,54 @@ def main():
         times = json.load(open(times_file))
     except (OSError, ValueError):
         times = {}
-    order = sorted(a.run, key=lambda c: -times.get(c['name'], 60))
-    waiting = []
+    order = sorted([c for c in a.run if c['name'] not in progress], key=lambda c: -times.get(c['name'], 60))
+    waiting, parts = [], []
 
     def report(c, text, err, races, secs):
         why = check(c, text, err, races, done)
-        print(f"{'PASS' if not why else 'FAIL'} {c['name']:28} {secs:5.0f} s" + ('' if not why else '  ' + '; '.join(why)), flush=True)
+        near = re.findall(r'\[races\] (\d+) changes to a texel another core changed other words of within \d+ passes \(RVC_RACES_NEAR\)', err)
+        near = sum(map(int, near))
+        near = f'  (near: {near}, {c["name"]}.log.races)' if near else ''
+        print(f"{'PASS' if not why else 'FAIL'} {c['name']:28} {secs:5.0f} s" + ('' if not why else '  ' + '; '.join(why)) + near, flush=True)
         if why:
             failed.append(c['name'])
+        progress[c['name']] = why
 
     with ThreadPoolExecutor(a.jobs) as ex:
         futures = {ex.submit(run, c, a, where[c['image']], a.logs): c for c in order}
         for f in as_completed(futures):
             c = futures[f]
             text, err, races, secs = f.result()
+            if text in ('part', 'later'):   # (--sections: saved, not ended; or not begun in this call)
+                parts.append(c['name'])
+                print(f"part {c['name']:28} {secs:5.0f} s: section {err} saved, run again to go on" if text == 'part' else
+                      f"later {c['name']:27} (this call's time is up)", flush=True)
+                continue
             done[c['name']] = text
             times[c['name']] = round(secs, 1)
             waiting.append((c, text, err, races, secs))
             for w in [w for w in waiting if all(s[1] in done or s[1] not in futures_names(futures) for s in w[0].get('same', []))]:
                 waiting.remove(w)
                 report(*w)
-    for w in waiting:   # (compared with a case that was not run)
+    for w in waiting:   # (compared with a case that was not run, or, with --sections, has not ended yet: checked then)
+        if a.sections and any(s[1] in parts for s in w[0].get('same', [])):
+            json.dump(dict(ended=True, err=w[2], seconds=w[4]), open(os.path.join(a.logs, w[0]['name'] + '.state'), 'w'))
+            parts.append(w[0]['name'])
+            print(f"later {w[0]['name']:27} (ended; checked once what it is compared with has)", flush=True)
+            continue
         report(*w)
     try:
         json.dump(times, open(times_file, 'w'), indent=0, sort_keys=True)
     except OSError:
         pass
-    print(f'{len(a.run) - len(failed)} of {len(a.run)} passed in {time.time() - t0:.0f} s' + (f'; failed: {" ".join(failed)}' if failed else '') +
-          f' (consoles in {a.logs})')
+    if a.sections:   # (the whole round's: the earlier calls' checks too)
+        failed = [name for name, why in progress.items() if why]
+        if parts:
+            json.dump(progress, open(progress_file, 'w'), indent=0)
+        elif os.path.exists(progress_file):
+            os.remove(progress_file)
+    print(f'{len(a.run) - len(failed) - len(parts)} of {len(a.run)} passed in {time.time() - t0:.0f} s' + (f'; failed: {" ".join(failed)}' if failed else '') +
+          (f'; {len(parts)} to go on (run again): {" ".join(parts)}' if parts else '') + f' (consoles in {a.logs})')
     return 1 if failed else 0
 
 

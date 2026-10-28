@@ -45,6 +45,9 @@ OpenTTD's play from `play PL-GO` reaches its game in seconds.
   instructions a pass (`cores.bin`).
 - `RVC_PROF_DEPS=f:ADDR,l:LO-HI,...` watches calls of a function or a loop's runs on core 0
   and writes `deps.txt` (below). `RVC_PROF_MEM=0` leaves the memory out.
+- `RVC_PROF_PASS=N` starts the profile N passes after `--count-from`'s mark (or the start), so
+  a level's load or a demo's first seconds stay out (gpu_vm's `GVM_PROF_PASS`): Doom's timedemo
+  from 20,000 passes on had 52,583 pcs against 133,419 from the mark.
 
 A profiled run takes about twice as long as a plain one.
 

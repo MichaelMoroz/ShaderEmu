@@ -11,7 +11,7 @@
 // that copies the targets into the state texture.
 
 Texture2D<uint4> _SelfTexture2D;
-Texture2D<float4> _Data_MTD_R, _Data_MTD_G, _Data_MTD_B, _Data_MTD_A;   // the ROM at 0x40000000
+Texture2D<float4> _Data_ROM;   // the ROM at 0x40000000
 Texture2D<float4> _Data_DTB_R, _Data_DTB_G, _Data_DTB_B, _Data_DTB_A;   // the device tree at 0x1020
 uniform uint _Init, _InitRaw, _Ticks, _TicksDivisor, _PlayerID;
 #ifdef RTC_HALVES   // Unity: a material's numbers are floats, so each clock word comes as two 16-bit halves
@@ -348,9 +348,9 @@ uint load_word(inout uint4 c[C_N], uint a) {
         return o < RAM_MAX ? ram_word(c, o) : 0;
     }
     [branch] if (a & 0x40000000) {
-        uint2 d; _Data_MTD_R.GetDimensions(d.x, d.y);
+        uint2 d; _Data_ROM.GetDimensions(d.x, d.y);
         uint t = (a - 0x40000000) >> 4;
-        return unpack(rom4(_Data_MTD_R, _Data_MTD_G, _Data_MTD_B, _Data_MTD_A, uint2(t % d.x, d.y - 1 - t / d.x), (a >> 2) & 3));
+        return asuint(_Data_ROM[uint2(t % d.x, d.y - 1 - t / d.x)])[(a >> 2) & 3];   // (the ROM: a texel a pixel)
     }
     [branch] if (a - 0x1020 < 0xfe0)
         return unpack(rom4(_Data_DTB_R, _Data_DTB_G, _Data_DTB_B, _Data_DTB_A, uint2((a - 0x1020) >> 4, 0), (a >> 2) & 3));
