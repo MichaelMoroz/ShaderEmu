@@ -220,6 +220,31 @@ class Profile:
         self.place_pieces(elfs, hot_pc, hot_word, free, quiet)
         self.images.sort(key=lambda i: i.lo + i.base)
         self.starts_img = [i.lo + i.base for i in self.images]
+        # a pc whose word is not the ELF's there is not named by it (a piece widened to whole functions, or a build
+        # apart, would name another program's code: nxvideo's decoder was named musl's string_read)
+        self.bad = set()
+        pcs, first = np.unique(self.pc, return_index=True)
+        words = self.word[first]
+        img_of = np.array([-1 if (m := self.image_of(int(p))) is None else id(m) for p in pcs], dtype=np.int64)
+        for img in self.images:
+            sel = img_of == id(img)
+            if not sel.any() or not img.code:
+                continue
+            allw = np.concatenate([w for a, w in img.code])
+            alla = np.concatenate([a + 4 * np.arange(len(w), dtype=np.int64) for a, w in img.code])
+            rel = pcs[sel].astype(np.int64) - img.base
+            pos = np.minimum(np.searchsorted(alla, rel), len(alla) - 1)
+            # (an immediate may differ: data or a callee moved in a build a little apart; the registers may not)
+            ew, rw = allw[pos].astype(np.int64), words[sel].astype(np.int64)
+            op = rw & 0x7f
+            mask = np.where(np.isin(op, (0x17, 0x37, 0x6f)), 0xfff,
+                            np.where(np.isin(op, (0x03, 0x13, 0x67)), 0xf8fff,
+                                     np.where(np.isin(op, (0x23, 0x63)), 0x1fff07f, 0xffffffff)))
+            ok = (alla[pos] == rel) & ((ew & mask) == (rw & mask))
+            self.bad.update(int(p) for p in pcs[sel][~ok])
+        if not quiet:
+            named = img_of >= 0
+            print(f'  {len(self.bad)} of {int(named.sum())} named pcs carry another word than the ELF\'s there: left unnamed')
 
     def place_pieces(self, elfs, hot_pc, hot_word, free, quiet):
         """An ELF built from sources a little apart from the run's (a function more in a library, a patch moved) has its
@@ -291,6 +316,8 @@ class Profile:
                 print(f'  {e.name}: {pieces} pieces at bases of their own, {matched} more of the hottest pcs match')
 
     def image_of(self, pc):
+        if pc in getattr(self, 'bad', ()):
+            return None
         i = bisect.bisect_right(self.starts_img, pc) - 1
         for j in range(i, max(i - 8, -1), -1):   # (pieces widened to whole functions may lie inside another)
             img = self.images[j]
