@@ -256,6 +256,7 @@ public:
             gpu_.ctx->Begin(tsDisjoint_.Get());
             gpu_.ctx->End(tsQuery_[0].Get());
             timedRounds_ = (std::max)(1u, tickRounds);
+            timedVariant_ = curVariant_;
         }
         // (the devices' words for this frame, before the control pass's draws clear them)
         bool importCon = conDelivered, importFetch = deliver_, importNet = deliverNet_, importCounts = false;
@@ -451,6 +452,7 @@ public:
                     commitMs_ = (double)(ts[2] - ts[1]) * 1000.0 / (double)dj.Frequency;
                     deviceMs_ = (double)(ts[3] - ts[2]) * 1000.0 / (double)dj.Frequency;
                     frameMs = (double)(ts[3] - ts[0]) * 1000.0 / (double)dj.Frequency, frameRounds = timedRounds_, frameTimes++;
+                    frameVariant = timedVariant_;
                 }
                 tsPending_ = false;
             }
@@ -756,6 +758,7 @@ private:
     // --replay: the tick variants (variant 0 is the machine's own), each its tick and its unpack
     ShaderBuildOptions tickBo_, unpackBo_;
     std::vector<std::pair<GpuPass, GpuPass>> tickVariants_;
+    size_t curVariant_ = 0, timedVariant_ = 0;   // the variant in place, and the one of the frame being timed
     bool addTickVariant(const SLShader& shader, std::string& err) override {
         std::vector<GpuPass> t, u;
         if (!buildPasses(gpu_, shader, {"CPUTick"}, tickBo_, t, err)) return false;
@@ -765,6 +768,7 @@ private:
     }
     bool useTickVariant(size_t i) override {
         if (i >= tickVariants_.size()) return false;
+        curVariant_ = i;
         passes_[0] = tickVariants_[i].first;
         if (mrt_) unpackPasses_[0] = tickVariants_[i].second;
         return true;
@@ -857,6 +861,7 @@ private:
             ctx->Begin(tsDisjoint_.Get());
             ctx->End(tsQuery_[0].Get());
             timedRounds_ = init ? 1u : (std::max)(1u, tickRounds);
+            timedVariant_ = curVariant_;
         }
         // the tick, from R; its state rows into A, which holds R's state rows for the rest
         bool ticks = !(cpuMode && !init);

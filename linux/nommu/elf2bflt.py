@@ -35,6 +35,26 @@ for va, off, fs, ms, fl in loads:
 wseg = [s for s in loads if s[4] & 2]
 # (loaded whole, the split is only where the loader puts data: rounded down, every address stays where it is)
 data_start = (wseg[0][0] if wseg else end_file) & ~31
+# binfmt_flat (5.17, BINFMT_FLAT_NO_DATA_START_OFFSET or not: fs/binfmt_flat.c's shared-library table) stores the
+# data's start into the word just below it: nothing of the program may lie there (on gpu_vm it overwrote musl's
+# decfloat and broke strtod). The linker leaves a page between text and data, so with it nothing ever does; where
+# something does (tcc's .eh_frame_hdr runs to its data), the data starts lower, at the first 32 bytes with a word of
+# nothing below (loaded whole, the split moves no address), and with none the program is refused
+covered = []
+if e_shoff and e_shnum:
+    names = struct.unpack_from('<10I', data, e_shoff + e_shstrndx * e_shentsize)[4]
+    for k in range(e_shnum):
+        sh_name, sh_type, sh_flags, sh_addr, _, sh_size = struct.unpack_from('<6I', data, e_shoff + k * e_shentsize)
+        if sh_flags & 2 and sh_size and not sh_flags & 0x400:   # (ALLOC, not TLS)
+            covered.append((sh_addr, sh_addr + sh_size, data[names + sh_name:data.index(b'\0', names + sh_name)].decode()))
+else:
+    covered = [(va, va + ms, 'the segment at %#x' % va) for va, _, _, ms, _ in loads]
+start, text_end = data_start, max(va + ms for va, _, _, ms, fl in loads if fl & 1)   # (not into the text)
+while data_start >= max(4, text_end) and any(a < data_start and b > data_start - 4 for a, b, _ in covered):
+    data_start -= 32
+if data_start < max(4, text_end):
+    sys.exit("%s: every 32 bytes from the text's end to the data's (%#x) has a section below it, which the kernel overwrites (%s)" %
+             (sys.argv[1], start, ', '.join(n for a, b, n in covered if a < start and b > start - 4)))
 
 relocs = []
 if dynamic:

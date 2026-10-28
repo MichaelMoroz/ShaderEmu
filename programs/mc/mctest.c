@@ -19,6 +19,7 @@
 //   mctest [WORKERS [LIMIT [bench [LINE]]]]
 //   mctest WORKERS SECONDS share [lend]     (the kernel's sharing: how many of them have cores, second by second)
 //   mctest WORKERS 0 race                   (two workers store to one 16 bytes: for RVC_RACES, docs/machine/multicore.md)
+//   mctest WORKERS 0 near                   (the same in passes apart: for RVC_RACES_NEAR, which plain RVC_RACES misses)
 #include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -201,6 +202,19 @@ static uint32_t race_job(uint32_t half, uint32_t count) {
     return race_words[half * 2];
 }
 
+// The same two halves stored in turns, one worker a pass, the other the next: never in one pass on rvc_cpu, where
+// every core's pass ends at its budget, but on the card a pass ends where it ends, so the two may meet in one and
+// the commit undo one (Half-Life's statics beside another core's, 632e982). For RVC_RACES_NEAR to find.
+static uint32_t near_job(uint32_t half, uint32_t count) {
+    if (half) mc_end_pass();
+    for (uint32_t i = 0; i < count; i++) {
+        race_words[half * 2] = i + 1;
+        mc_end_pass();
+        mc_end_pass();
+    }
+    return race_words[half * 2];
+}
+
 // ---- core 0 ----
 
 static uint32_t guest_ms(void) {
@@ -258,10 +272,11 @@ int main(int argc, char** argv) {
         return wrong != 0;
     }
 
-    if (argc > 3 && !strcmp(argv[3], "race")) {
+    if (argc > 3 && (!strcmp(argv[3], "race") || !strcmp(argv[3], "near"))) {
         if (workers < 2) return 1;
-        mcw_post(1, race_job, 0, 50);
-        mcw_post(2, race_job, 1, 50);
+        uint32_t (*job)(uint32_t, uint32_t) = !strcmp(argv[3], "race") ? race_job : near_job;
+        mcw_post(1, job, 0, 50);
+        mcw_post(2, job, 1, 50);
         mcw_wait(1);
         mcw_wait(2);
         printf("mctest: race: %u %u %u %u\n", race_words[0], race_words[1], race_words[2], race_words[3]);
