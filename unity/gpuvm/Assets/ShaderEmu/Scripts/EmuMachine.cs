@@ -87,8 +87,8 @@ public class EmuMachine : UdonSharpBehaviour
     public Material gvmTickOneMaterial;       // GvmTickOne: the tick as a blit into one target, no camera
     public Material gvmStateOneMaterial;      // GvmStateOne: a state set between the eight targets and GvmTickOne's one
     public RenderTexture[] gvmOne;            // GvmTickOne's two sets, a texture each: 72 columns core 0, 48 a worker, 8 rows
-    public bool gvmTickOne;                   // the tick as GvmTickOne's blit while the cores are at most gvmTickOneMax
-    public int gvmTickOneMax = 64;
+    public bool gvmTickOne = true;            // the tick as GvmTickOne's blit while the cores are at most gvmTickOneMax
+    public int gvmTickOneMax = 7;             // (each core 12 warps: with every core busy 1.25 ms a pass at 1 core as the camera, +0.2 to 0.35 at 8 and 16, x2.4 at 32; 0.14 ms of main thread a pass saved)
     public int gvmMeasureCores;               // (a measure: the passes draw only the first this many cores, 0 all)
     public Material gvmOpsBlitMaterial;       // a round's plan, stage and progress as blits (GvmOpsBlit)
     public RenderTexture gvmPlan;             // each core's and slot's piece of the round, two texels a slot
@@ -594,6 +594,7 @@ public class EmuMachine : UdonSharpBehaviour
     private const int GvmNone = 8192;   // no second zone in the control pass's row
     private const int GvmSnapState = 9;
     private bool gvmOneNow;             // the set the next pass reads is in GvmTickOne's layout
+    public int gvmOneSwitches;          // (how often the layout changed, the probe's count)
     private int gvmCur, gvmWorkers;     // the set the next pass draws; the worker cores the kernel laid out
     private double gvmTimeBase;         // added to the wall: a snapshot's clock goes on from its own time
 
@@ -637,6 +638,7 @@ public class EmuMachine : UdonSharpBehaviour
             }
         }
         gvmOneNow = one;
+        gvmOneSwitches++;
         machineMaterial.SetInt("_GvmGeo", one ? 4 : 1);
     }
 

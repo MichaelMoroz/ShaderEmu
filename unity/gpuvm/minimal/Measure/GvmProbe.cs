@@ -206,8 +206,9 @@ public class GvmProbe : MonoBehaviour
                     "sample {0}: {1:F2} s, {2} frames, {3:F1} fps, frame {4:F2} ms mean, {5:F2} median, {6:F2} p95; core 0 {7:N0} instructions, {8:F3} M a second",
                     sampleName, span, sampleFrames, sampleFrames / span, 1000f * span / sampleFrames, sampleMs[sampleMs.Count / 2],
                     sampleMs[(int)(sampleMs.Count * 0.95f)], instr, instr / span / 1e6));
-                StringBuilder where = new StringBuilder(string.Format(CultureInfo.InvariantCulture, "  where {0}: passes {1:F2} a frame;", sampleName,
-                    (Passes() - samplePasses) / sampleFrames));
+                StringBuilder where = new StringBuilder(string.Format(CultureInfo.InvariantCulture, "  where {0}: passes {1:F2} a frame; tick {2}, layout changes {3};",
+                    sampleName, (Passes() - samplePasses) / sampleFrames, (machine.GetProgramVariable("gvmOneNow") as bool?) == true ? "blit" : "MRT",
+                    machine.GetProgramVariable("gvmOneSwitches")));
                 for (int i = 0; i < Counters.Length; i++)
                     if (recorders[i].Valid && sums[i] > 0)
                         where.Append(string.Format(CultureInfo.InvariantCulture, " {0} {1:F2} ms;", Counters[i], sums[i] / sumFrames / 1e6));
