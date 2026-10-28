@@ -48,6 +48,8 @@ CASES = [
     # one index a share longer than a pass, which a lane would leave to its worker
     case('lanetest', 'machine', 'lanetest 255 50 1 40; lanetest 31 40 3 20', True, count=[(r'^lanetest: PASS', 2)]),
     case('steptest', 'machine', 'steptest 31 3000', True, count=[(r'^steptest: PASS', 1)]),
+    # a double's printf in doubles (linux/userland/vfprintf_double.py) against the long double's, and the host glibc's sum
+    case('printf', 'machine', 'printf_check 500', has=[r'printf_check: 0 of 8000 differ, sum \S+, without %a a284a76e']),
     # the HLSL compiler in the machine (docs/system/hlsl.md): the fractal example compiled there and drawn on 31 workers'
     # lanes in steps, the host's sum (programs/hlsl/test/hlsl_test.c with the same arguments)
     case('hlsl', 'machine', 'HLSL_WORKERS=31 hlsl_bench /usr/share/example-fractal.hlsl 160 120 1 eye=1.9095,1.2344,-2.7911 '
