@@ -285,13 +285,15 @@ static void device_write(Core& c, u32 phys, u32 value, int size) {
 // ---- RVC_RACES=FILE: memory as the shader machine has it (docs/machine/multicore.md, "Races") ----
 //
 // Every core reads what the last pass left, its own stores apart, and at the commit the highest
-// core's 16 bytes win. Here the cores run one after another, lowest first, so a core that reads
-// 16 bytes another changed in this pass is given them as they were, and a higher core's change
-// to them undoes the lower one's. Both are noted, where and by whom.
+// core's 16 bytes win. The cores are taken as running one after another, lowest first: a core that
+// reads 16 bytes a lower one changed in this pass is given them as they were, and a higher core's
+// change to them undoes the lower one's. Both are noted, where and by whom.
+//
+// Core 0 runs first and stores into RAM, keeping each texel it changed as it was; the workers (on
+// threads too) keep the texels they change in logs of their own and read the rest as the pass
+// began, noting each such read. After the pass (race_settle) the reads and the first changes are
+// held against the lower cores' changes, in core order, and the highest core's texels go to RAM.
 static bool races_on = false;
-static u64 race_pass = 1;
-struct TexelMark { u64 pass; u32 pc, satp; int core; u32 bytes; uint8_t old[16]; };   // (bytes: which it changed)
-static std::unordered_map<u32, TexelMark> texel_marks;   // texels changed in this pass: by whom, and before
 struct RaceStat { u64 count = 0; int kind = 0; u32 pc = 0, phys = 0, other_pc = 0, satp = 0, other_satp = 0; int core = 0, other = 0; };
 static std::unordered_map<u64, RaceStat> race_stats[2];  // stale reads, lost stores: by (pc, the other's pc)
 static const u32 ATOM_BASE = 0x86C10000u, ATOM_END = ATOM_BASE + 0x101000u;   // (counters: mc.h)
@@ -302,25 +304,76 @@ static inline bool race_watched(u32 phys) {
     return phys - RAM_BASE < RAM_SIZE && phys - 0x86C00000u >= 0x8000u && phys - ATOM_BASE >= ATOM_END - ATOM_BASE &&
            (phys & ~15u) != ATOM_HEAD;
 }
-static void race_note(int kind, Core& c, u32 phys, const TexelMark& m) {
-    RaceStat& r = race_stats[kind][((u64)c.pc << 32) | m.pc];
-    if (!r.count++) r.kind = kind, r.pc = c.pc, r.phys = phys, r.other_pc = m.pc, r.satp = c.satp, r.other_satp = m.satp, r.core = c.hart, r.other = m.core;
-}
 static inline u32 byte_mask(u32 phys, int size) { return ((1u << size) - 1) << (phys & 15); }
-// The bytes this core sees: its own, or as the pass began for 16 bytes another core changed.
+static inline u32 texel_hash(u32 t, u32 bits) { return (t * 0x9e3779b1u) >> (32 - bits); }
+
+// A core's texels changed in this pass, by open addressing, cleared by the slots it used (kept in the
+// order made). view: core 0's texel as the pass began, a worker's as it has it now; bytes: which its
+// stores changed; pc: its last store's that changed one; satp, first_pc, first_phys: its first such.
+struct TexelEntry { u32 key, bytes, pc, satp, first_pc, first_phys; uint8_t view[16]; };   // (key: the texel + 1)
+struct TexelLog {
+    std::vector<TexelEntry> slot;
+    std::vector<u32> used;
+    u32 bits = 0;
+    TexelEntry* find(u32 t) {
+        if (used.empty()) return nullptr;
+        for (u32 h = texel_hash(t, bits);; h = (h + 1) & ((1u << bits) - 1)) {
+            TexelEntry& e = slot[h];
+            if (e.key == t + 1) return &e;
+            if (!e.key) return nullptr;
+        }
+    }
+    TexelEntry* add(u32 t) {   // (t not there yet)
+        if (2 * (used.size() + 1) > slot.size()) grow();
+        u32 h = texel_hash(t, bits);
+        while (slot[h].key) h = (h + 1) & ((1u << bits) - 1);
+        used.push_back(h);
+        slot[h].key = t + 1;
+        return &slot[h];
+    }
+    void grow() {
+        std::vector<TexelEntry> was;
+        for (u32 i : used) was.push_back(slot[i]);
+        bits = bits ? bits + 1 : 10;
+        slot.assign((size_t)1 << bits, TexelEntry{});
+        used.clear();
+        for (const TexelEntry& e : was) *add(e.key - 1) = e;
+    }
+    void clear() {
+        for (u32 i : used) slot[i].key = 0;
+        used.clear();
+    }
+};
+struct RaceRead { u32 phys, pc, bytes, satp; };   // a worker's read of a texel it had not changed
+struct RaceNote { int kind, other; u32 pc, other_pc, phys, satp, other_satp; };
+static std::vector<TexelLog> texel_logs;               // each core's
+static std::vector<std::vector<RaceRead>> race_reads;   // each worker's, in order
+static std::vector<std::vector<RaceNote>> race_notes;   // what race_settle found of each worker's, in order
+
+static void races_begin(size_t n) {
+    texel_logs.resize(n), race_reads.resize(n), race_notes.resize(n);
+}
+// The texel a worker sees: its own, else as the pass began.
+static inline const uint8_t* race_seen(Core& c, u32 t, bool& own) {
+    if (TexelEntry* e = texel_logs[(size_t)c.hart].find(t)) { own = true; return e->view; }
+    own = false;
+    if (TexelEntry* z = texel_logs[0].find(t)) return z->view;
+    return &ram[(t << 4) - RAM_BASE];
+}
 static u32 race_load(Core& c, u32 phys, int size) {
     u32 value = 0;
     if ((phys & 15) + (u32)size > 16) {   // (across two texels: a byte at a time)
         for (int i = 0; i < size; i++) value |= race_load(c, phys + (u32)i, 1) << (8 * i);
         return value;
     }
-    const uint8_t* from = &ram[phys - RAM_BASE];
-    auto it = texel_marks.find(phys >> 4);
-    if (it != texel_marks.end() && it->second.core != c.hart) {
-        if (it->second.bytes & byte_mask(phys, size)) race_note(0, c, phys, it->second);
-        from = it->second.old + (phys & 15);
+    if (c.hart == 0) {   // (core 0, the first, sees RAM as it leaves it)
+        memcpy(&value, &ram[phys - RAM_BASE], (size_t)size);
+        return value;
     }
-    memcpy(&value, from, (size_t)size);
+    bool own;
+    const uint8_t* from = race_seen(c, phys >> 4, own);
+    if (!own) race_reads[(size_t)c.hart].push_back(RaceRead{phys, c.pc, byte_mask(phys, size), c.satp});
+    memcpy(&value, from + (phys & 15), (size_t)size);
     return value;
 }
 static void race_store(Core& c, u32 phys, u32 value, int size) {
@@ -328,26 +381,109 @@ static void race_store(Core& c, u32 phys, u32 value, int size) {
         for (int i = 0; i < size; i++) race_store(c, phys + (u32)i, value >> (8 * i), 1);
         return;
     }
-    uint8_t* texel = &ram[(phys & ~15u) - RAM_BASE];
-    auto it = texel_marks.find(phys >> 4);
-    bool other = it != texel_marks.end() && it->second.core != c.hart;
-    const uint8_t* seen = other ? it->second.old : texel;
+    u32 t = phys >> 4;
+    TexelLog& log = texel_logs[(size_t)c.hart];
+    bool own = true;
+    TexelEntry* e = log.find(t);
+    uint8_t* texel = &ram[(t << 4) - RAM_BASE];
+    const uint8_t* seen = c.hart == 0 ? texel : e ? e->view : race_seen(c, t, own);
     u32 changed = 0;
     for (int i = 0; i < size; i++)
         if (seen[(phys & 15) + i] != (uint8_t)(value >> (8 * i))) changed |= byte_mask(phys + (u32)i, 1);
     if (!changed) return;   // (the machine keeps no store that changes nothing)
-    if (it == texel_marks.end()) {
-        TexelMark m{race_pass, c.pc, c.satp, c.hart, 0, {}};
-        memcpy(m.old, texel, 16);
-        it = texel_marks.emplace(phys >> 4, m).first;
-    } else if (other) {
-        race_note(1, c, phys, it->second);
-        memcpy(texel, it->second.old, 16);   // (this core's 16 bytes, as it had them, win)
-        it->second.core = c.hart, it->second.bytes = 0, it->second.satp = c.satp;
+    if (!e) {
+        TexelEntry n{0, 0, c.pc, c.satp, c.pc, phys, {}};
+        memcpy(n.view, seen, 16);
+        e = log.add(t);
+        n.key = e->key;
+        *e = n;
     }
-    for (int i = 0; i < size; i++) texel[(phys & 15) + i] = (uint8_t)(value >> (8 * i));
-    it->second.bytes |= changed;
-    it->second.pc = c.pc;
+    uint8_t* to = c.hart == 0 ? texel : e->view;
+    for (int i = 0; i < size; i++) to[(phys & 15) + i] = (uint8_t)(value >> (8 * i));
+    e->bytes |= changed;
+    e->pc = c.pc;
+}
+
+// After the pass: every texel some core changed, with the cores that did, lowest first.
+struct RaceChange { int core; const TexelEntry* e; u32 next; };
+static std::vector<RaceChange> race_changes;
+static std::vector<u32> race_index, race_index_used;   // (texel + 1, first change, last change) a slot
+static u32 race_index_bits = 0;
+static u32* race_index_find(u32 t) {
+    for (u32 h = texel_hash(t, race_index_bits);; h = (h + 1) & ((1u << race_index_bits) - 1)) {
+        u32* s = &race_index[3 * (size_t)h];
+        if (s[0] == t + 1 || !s[0]) return s;
+    }
+}
+// The change of the highest core under `core`, or null.
+static const RaceChange* race_owner(u32 t, int core) {
+    if (race_index_used.empty()) return nullptr;
+    u32* s = race_index_find(t);
+    if (!s[0]) return nullptr;
+    const RaceChange* owner = nullptr;
+    for (u32 k = s[1]; k != ~0u && race_changes[k].core < core; k = race_changes[k].next) owner = &race_changes[k];
+    return owner;
+}
+// What a worker's reads and first changes met (on any thread, once the index is made).
+static u64 race_settle_core(int hart) {
+    std::vector<RaceNote>& notes = race_notes[(size_t)hart];
+    for (const RaceRead& r : race_reads[(size_t)hart]) {
+        const RaceChange* o = race_owner(r.phys >> 4, hart);
+        if (o && (o->e->bytes & r.bytes)) notes.push_back(RaceNote{0, o->core, r.pc, o->e->pc, r.phys, r.satp, o->e->satp});
+    }
+    TexelLog& log = texel_logs[(size_t)hart];
+    for (u32 i : log.used) {
+        const TexelEntry& e = log.slot[i];
+        if (const RaceChange* o = race_owner(e.key - 1, hart))
+            notes.push_back(RaceNote{1, o->core, e.first_pc, o->e->pc, e.first_phys, e.satp, o->e->satp});
+    }
+    return 0;
+}
+static void race_settle_on(const int* list, int n);   // (on the workers' threads: below)
+static void race_settle() {
+    // the index, the cores in order
+    size_t changes = 0;
+    for (const TexelLog& log : texel_logs) changes += log.used.size();
+    race_changes.clear();
+    if (changes) {
+        u32 bits = 10;
+        while (((size_t)1 << bits) < 2 * changes) bits++;
+        if (bits > race_index_bits) race_index_bits = bits, race_index.assign(3 * ((size_t)1 << bits), 0);
+        for (size_t c = 0; c < texel_logs.size(); c++)
+            for (u32 i : texel_logs[c].used) {
+                const TexelEntry& e = texel_logs[c].slot[i];
+                u32* s = race_index_find(e.key - 1);
+                u32 k = (u32)race_changes.size();
+                race_changes.push_back(RaceChange{(int)c, &e, ~0u});
+                if (!s[0]) s[0] = e.key, s[1] = k, race_index_used.push_back((u32)((s - race_index.data()) / 3));
+                else race_changes[s[2]].next = k;
+                s[2] = k;
+            }
+    }
+    int list[256], n = 0;
+    for (size_t c = 1; c < texel_logs.size(); c++)
+        if (!race_reads[c].empty() || !texel_logs[c].used.empty()) list[n++] = (int)c;
+    race_settle_on(list, n);
+    // the notes in the order the cores ran
+    for (int k = 0; k < n; k++) {
+        for (const RaceNote& m : race_notes[(size_t)list[k]]) {
+            RaceStat& r = race_stats[m.kind][((u64)m.pc << 32) | m.other_pc];
+            if (!r.count++)
+                r.kind = m.kind, r.pc = m.pc, r.phys = m.phys, r.other_pc = m.other_pc, r.satp = m.satp, r.other_satp = m.other_satp,
+                r.core = list[k], r.other = m.other;
+        }
+        race_notes[(size_t)list[k]].clear();
+        race_reads[(size_t)list[k]].clear();
+    }
+    // the highest core's 16 bytes win (core 0's are in RAM already)
+    for (u32 slot : race_index_used) {
+        u32* s = &race_index[3 * (size_t)slot];
+        const RaceChange& last = race_changes[s[2]];
+        if (last.core != 0) memcpy(&ram[((s[0] - 1) << 4) - RAM_BASE], last.e->view, 16);
+        s[0] = 0;
+    }
+    race_index_used.clear();
+    for (TexelLog& log : texel_logs) log.clear();
 }
 
 #include "rvc_prof.h"   // RVC_PROF=DIR (tools/prof.py)
@@ -1459,7 +1595,8 @@ static int run_some(Core& c, u64 n, const uint8_t* kinds) {
     R.kinds = kinds;
     R.limit = c.clock + n;
     R.mem = ramp - RAM_BASE;
-    R.plain_loads = !races_on && !prof::mem_on, R.plain_stores = R.plain_loads && !wc_on;
+    // (under RVC_RACES core 0, which runs first, reads RAM as the fast loads do)
+    R.plain_loads = !(races_on && c.hart != 0) && !prof::mem_on, R.plain_stores = !races_on && !prof::mem_on && !wc_on;
     R.bands = 0;
     R.r = STEP_ON;
     run_reload(&R);
@@ -1991,8 +2128,8 @@ static u64 run_worker(Core& c, u64 budget) {
 //
 // After core 0's part of a pass, the workers that run in it are shared out among this many host
 // threads, each worker's whole pass on one of them; a store is seen by the other threads when
-// the host makes it, not in core order as with one thread. Under RVC_RACES or RVC_PROF
-// (which keep tables of every core's accesses) the workers run one after another.
+// the host makes it, not in core order as with one thread. Under RVC_PROF (which keeps tables of
+// every core's accesses) the workers run one after another; under RVC_RACES each keeps its own.
 static int pool_size = 0;   // 0: not yet decided
 static std::vector<std::thread> pool;
 static std::atomic<u64> pool_ticket{0};    // the pass's number << 32 | the next worker of its list to take
@@ -2002,6 +2139,8 @@ static int pool_list[2][256];
 static std::atomic<u64> pool_slot[2];   // a list's pass << 32 | its length
 static u64 pool_done[256];
 static u32 pool_budget;
+static u64 (*pool_fn[2])(int hart);   // a list's job for each of its workers
+static u64 pool_exec(int hart) { return worker_exec(cores[(size_t)hart], pool_budget); }
 static const u64 POOL_LEAST = 16384;   // the workers' instructions in a pass worth the threads
 
 static int threads_wanted() {
@@ -2017,7 +2156,7 @@ static void pool_take() {
         u64 slot = pool_slot[pass & 1].load(std::memory_order_acquire);
         if ((u32)(slot >> 32) != pass || i >= (u32)slot) return;   // (a ticket of a pass that is over)
         int hart = pool_list[pass & 1][i];
-        pool_done[hart] = worker_exec(cores[(size_t)hart], pool_budget);
+        pool_done[hart] = pool_fn[pass & 1](hart);
         pool_left.fetch_sub(1, std::memory_order_acq_rel);
     }
 }
@@ -2038,11 +2177,12 @@ static void pool_helper() {
 }
 
 // Runs the listed workers' passes on the threads; the instructions each ran in pool_done.
-static void pool_run(const int* list, int n, u32 budget) {
+static void pool_run(const int* list, int n, u32 budget, u64 (*fn)(int) = pool_exec) {
     static u32 pass = 0;
     pass++;
     int* to = pool_list[pass & 1];
     memcpy(to, list, sizeof(int) * (size_t)n);
+    pool_fn[pass & 1] = fn;
     pool_slot[pass & 1].store((u64)pass << 32 | (u32)n, std::memory_order_release);
     pool_budget = budget;
     pool_left.store(n, std::memory_order_relaxed);
@@ -2059,7 +2199,7 @@ static void pool_run(const int* list, int n, u32 budget) {
 static u64 workers_pass(u32 ticks) {
     if (pool_size == 0) pool_size = threads_wanted();
     u64 most = 0;
-    if (pool_size == 1 || races_on || prof::on || cores.size() < 3) {
+    if (pool_size == 1 || prof::on || cores.size() < 3) {
         for (size_t i = 1; i < cores.size(); i++) {
             u64 n = run_worker(cores[i], ticks);
             worker_instr += n;
@@ -2088,6 +2228,17 @@ static u64 workers_pass(u32 ticks) {
     return most;
 }
 
+// RVC_RACES: what the workers' reads and changes met, on the threads when there are many reads.
+static void race_settle_on(const int* list, int n) {
+    size_t reads = 0;
+    for (int k = 0; k < n; k++) reads += race_reads[(size_t)list[k]].size();
+    if (pool_size > 1 && !prof::on && n > 1 && reads >= 4096) {
+        while ((int)pool.size() < pool_size - 1) pool.emplace_back(pool_helper), pool.back().detach();
+        pool_run(list, n, 0, race_settle_core);
+    } else
+        for (int k = 0; k < n; k++) race_settle_core(list[k]);
+}
+
 // An atomic, lr or sc of a worker while the workers run on several threads: made on the host's
 // word at once, so that two workers' never lose each other's (an sc succeeds on its reservation
 // alone, as with one thread). False: the general step makes it (not aligned, not in RAM).
@@ -2096,7 +2247,7 @@ static bool amo_threaded(Core& c, u32 kind, u32 a, u32 b, u32& result, Trap& t, 
     u32 pr, pw;
     if (kind != 3) {   // (an sc does not read: as store() alone)
         if (!page_of(c, a, READ, pr, t)) return true;
-        if (pr - RAM_BASE >= RAM_SIZE) return false;
+        if (pr - RAM_BASE >= RAM_SIZE || (races_on && race_watched(pr))) return false;   // (RVC_RACES: in its own log)
     }
     if (kind == 2) {   // lr
         result = c.reserved_value = *(volatile u32*)(ramp + (pr - RAM_BASE));
@@ -2107,7 +2258,7 @@ static bool amo_threaded(Core& c, u32 kind, u32 a, u32 b, u32& result, Trap& t, 
     if (!((kinds >> kind) & 1)) { illegal = true; return true; }
     if (kind == 3 && !(c.reserved && c.reservation == a)) { result = 1; c.reserved = false; return true; }
     if (!page_of(c, a, WRITE, pw, t)) return true;
-    if (pw - RAM_BASE >= RAM_SIZE) return false;
+    if (pw - RAM_BASE >= RAM_SIZE || (races_on && race_watched(pw))) return false;
     volatile long* p = (volatile long*)(ramp + (pw - RAM_BASE));
     for (;;) {
         u32 v = (u32)*p, n = b;
@@ -2383,7 +2534,7 @@ static u64 machine_pass(u32 ticks) {
     copy_pass();
     for (Core& c : cores) dirty_bands |= c.dirty, c.dirty = 0;
     atom_merge();
-    if (races_on) texel_marks.clear(), race_pass++;
+    if (races_on) race_settle();
     if (prof::on) prof::pass_end();
     if (wc_log && count_marked)
         for (size_t i = 0; i < cores.size() && i < 256; i++) {
@@ -2580,6 +2731,7 @@ int main(int argc, char** argv) {
     const char* races_file = getenv("RVC_RACES");
     const char* calls_file = getenv("RVC_CALLS");
     races_on = races_file && *races_file;
+    if (races_on) races_begin(cores.size());
     atom_merging = !getenv("RVC_COUNT_MERGE") || atoi(getenv("RVC_COUNT_MERGE")) != 0;
     calls_on = calls_file && *calls_file;
     if (const char* d = getenv("RVC_PROF"); d && *d) prof::ticks = opt.ticks, prof::init(d, cores.size(), opt.countFrom.empty());
