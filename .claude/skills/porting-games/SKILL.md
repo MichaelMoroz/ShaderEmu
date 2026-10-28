@@ -170,7 +170,7 @@ The canonical 2D driver is `linux/openttd/shaderemu_v.cpp` (and Doom's `doom_vid
 
 - Keys and buttons from Nano-X events; map `MWKEY_*` and modifiers to the game's codes (OpenTTD's
   `KeyOf`). Track held keys yourself for keys the game polls (`_dirkeys`).
-- The pointer's place from the machine's words at `0x87000020` (two loads: `pointer_read()` in
+- The pointer's place from the machine's words at `0x81000020` (two loads: `pointer_read()` in
   `linux/tdawn/host.c`, `ReadPointer` in ClassiCube), not from motion events; ask the window
   system for events only when the button word or key count changed and a few times a second
   (`docs/machine/input.md`, "A program's own reading"): Red Alert went 10 to 17 fps with it.
@@ -182,7 +182,7 @@ The canonical 2D driver is `linux/openttd/shaderemu_v.cpp` (and Doom's `doom_vid
 
 ### Time and waiting
 
-- Read the machine's clock word (`0x87000034`, `regs[0x34/4]`) instead of a system call (~400
+- Read the machine's clock word (`0x81000034`, `regs[0x34/4]`) instead of a system call (~400
   instructions each) and divide in 32 bits (64-bit division is a library call): 45k
   instructions a frame in Tiberian Dawn; Doom's `I_GetTime`, Quake's `Sys_Milliseconds`.
 - Never spin on the clock: the clock moves between passes, so a spin burns the whole pass. End

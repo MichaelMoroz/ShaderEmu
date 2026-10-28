@@ -45,7 +45,7 @@ of a long load is a cost too: draw progress once a second.
 
 | Slow | Fix | Port |
 |---|---|---|
-| Time asked by system call + 64-bit division (45k a frame) | clock word `0x87000034`, 32-bit math | Tiberian Dawn, Doom, Quake |
+| Time asked by system call + 64-bit division (45k a frame) | clock word `0x81000034`, 32-bit math | Tiberian Dawn, Doom, Quake |
 | Spinning on the clock while waiting | end the pass (`GrGetNextEventTimeout`, `mcw_rest`, pause) | Doom (177M of 402M), Quake |
 | `seglSwap` waiting for the GPU | `seglSwapEarly` + `seglSettle` before the next write (93.4% to 99.8% of passes used) | Doom, Quake, OpenTTD |
 | Copying the hidden page to the visible one | show the hidden page; copy only if something reads/draws the visible one (`Catch_Up`) | Tiberian Dawn |
