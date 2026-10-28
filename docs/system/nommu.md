@@ -29,7 +29,13 @@ In WSL, after the MMU build (`linux/kernel/build.sh` and the programs' build scr
 - `bash linux/nommu/build.sh [script ...]`: the sources copied to `~/nm/repo` again and the
   repository's build scripts run there with the flat drivers, a line each.
 - `bash linux/nommu/root.sh`: mctest and the machine's `elf2flt`, then every program of the root
-  made flat (`flat.py`, `elf2bflt.py`) into `build/nommu/flatroot`.
+  made flat (`flat.py`, `elf2bflt.py`) into `build/nommu/flatroot`. binfmt_flat writes the data's start into
+  the word just below it (its shared-library table, `NO_DATA_START_OFFSET` or not; on gpu_vm it overwrote musl's
+  `decfloat`): both converters start the data at the first 32 bytes, from the first writable segment down to the
+  text's end, with no section in that word, and refuse a program with none. The linker leaves a page between text
+  and data, so every program of the root keeps its bytes; `tcc -shared` does not, and the example cube's
+  `.eh_frame_hdr` ran into its `.dynamic`: its data now starts at 0x27500 for 0x2d000 (only the header's word
+  differs), and `cc-bytes`' digest moves once the image's `elf2flt` is built from this.
 - `python linux/nommu/image.py [--save-prebuilt]`: `build/images/nommu`, the shared image with
   that root as its overlay, the kernel, and RAM in the device tree from the kernel's address
   (0x80400000) to the GPU's memory and from 0x88000000 to 0x92000000 ("Memory", below); without
