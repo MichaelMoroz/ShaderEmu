@@ -1,8 +1,8 @@
-/* floor by the bits (gvm_dround.h) */
+/* floor by the bits (flm_dround.h) */
 #include <math.h>
-#include "gvm_dround.h"
+#include "flm_dround.h"
 
 double floor(double x)
 {
-	return gvm_dround(x, 1);
+	return flm_dround(x, 1);
 }

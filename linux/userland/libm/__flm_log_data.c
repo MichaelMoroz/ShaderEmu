@@ -1,9 +1,9 @@
-/* The log tables of gpu_vm's libm (gvm_libm.h, "log"), written by llvm/test/libm/gen_logtab.c:
+/* The log tables of the float libm (flm_libm.h, "log"):
  * {invc, hi, lo}: invc 1/z at the interval's middle to 8 bits, hi + lo = -log(invc) (-log2 in the second),
  * hi a multiple of 2^-16. */
-#include "gvm_libm.h"
+#include "flm_libm.h"
 
-const struct gvm_log_entry __gvm_log_tab[64] __attribute__((aligned(16))) = {
+const struct flm_log_entry __flm_log_tab[64] __attribute__((aligned(16))) = {
 	{0x1.6cp+0, -0x1.686cp-2, -0x1.03d362p-19, 0},
 	{0x1.68p+0, -0x1.5d1cp-2, 0x1.2053fcp-21, 0},
 	{0x1.64p+0, -0x1.51acp-2, 0x1.278d2p-18, 0},
@@ -70,7 +70,7 @@ const struct gvm_log_entry __gvm_log_tab[64] __attribute__((aligned(16))) = {
 	{0x1.7p-1, 0x1.522cp-2, -0x1.1f8c76p-18, 0},
 };
 
-const struct gvm_log_entry __gvm_log2_tab[64] __attribute__((aligned(16))) = {
+const struct flm_log_entry __flm_log2_tab[64] __attribute__((aligned(16))) = {
 	{0x1.6cp+0, -0x1.03fep-1, 0x1.5d1a1ap-19, 0},
 	{0x1.68p+0, -0x1.f7a8p-2, -0x1.5a32c2p-20, 0},
 	{0x1.64p+0, -0x1.e728p-2, 0x1.55e18ap-18, 0},

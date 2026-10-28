@@ -1,8 +1,8 @@
-/* trunc by the bits (gvm_dround.h) */
+/* trunc by the bits (flm_dround.h) */
 #include <math.h>
-#include "gvm_dround.h"
+#include "flm_dround.h"
 
 double trunc(double x)
 {
-	return gvm_dround(x, 0);
+	return flm_dround(x, 0);
 }

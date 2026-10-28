@@ -80,7 +80,7 @@ if [ ! -f "$SYSROOT/lib/memcpy-ours" ] || newer || [ "$SYSROOT/lib/libc.a" -nt "
     touch "$SYSROOT/lib/memcpy-ours"
 fi
 
-# The float libm (libm/ beside this file, gpu_vm's): sinf, cosf, sincosf, tanf, expf, exp2f, logf, log2f, log10f,
+# The float libm (libm/ beside this file, flm_libm.h): sinf, cosf, sincosf, tanf, expf, exp2f, logf, log2f, log10f,
 # powf and asinf in float instructions alone, and the doubles' floor, ceil, trunc and round on their bits, in place
 # of musl's, which work in software doubles. Each object replaces musl's member of its name where it lies in libc.a
 # (the archive's order stays). Put in again when the library or a file is newer.

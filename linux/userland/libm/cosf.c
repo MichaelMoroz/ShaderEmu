@@ -1,22 +1,18 @@
-/* cosf in float instructions alone (gvm_libm.h): about an ulp. |x| >= 8192,
+/* cosf in float instructions alone (flm_libm.h): about an ulp. |x| >= 8192,
  * inf and nan: musl's generic cosf. */
-#include "gvm_libm.h"
+#include "flm_libm.h"
 
-#ifdef GVM_HOST
-#define generic_cosf gvm_host_cosf
-#else
 #define cosf generic_cosf
 #include "../cosf.c"
 #undef cosf
-#endif
 
 float cosf(float x)
 {
-	if ((gvm_asu(x) & 0x7fffffffu) >= GVM_TRIG_MAX)
+	if ((flm_asu(x) & 0x7fffffffu) >= FLM_TRIG_MAX)
 		return generic_cosf(x);
 	int k;   /* cos is even: |x| reduced */
-	float rl, r = gvm_trig_reduce(__builtin_fabsf(x), &k, &rl), z = r * r;
-	float s = gvm_sin_poly(r, rl, z), c = gvm_cos_poly(r, rl, z);
+	float rl, r = flm_trig_reduce(__builtin_fabsf(x), &k, &rl), z = r * r;
+	float s = flm_sin_poly(r, rl, z), c = flm_cos_poly(r, rl, z);
 	float v = (k & 1) ? s : c;
-	return gvm_asf(gvm_asu(v) ^ ((uint32_t)((k + 1) & 2) << 30));
+	return flm_asf(flm_asu(v) ^ ((uint32_t)((k + 1) & 2) << 30));
 }
