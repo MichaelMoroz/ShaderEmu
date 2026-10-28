@@ -25,7 +25,20 @@ In WSL, after the MMU build (`linux/kernel/build.sh` and the programs' build scr
   "mmu" line out, `patch_ovl.py`, `patch_ramfs.py`, `patch_console.py`: the console in memory,
   `patch_procmaps.py`: a read of `/proc/PID/maps` gives PID's mmap lock back, as upstream since
   6.8; before, PID's next `mmap` waited forever) and its configuration without the MMU, into
-  `build/nommu/Image`.
+  `build/nommu/Image`. Then the ones of the RISC-V backport (28 October 2026; each commit has its
+  numbers): `patch_uaccess.py` (`access_ok` checks the ROM and RAM, a `get_user` or `put_user` is
+  one load or store), `patch_memmap.py` (the boot's `struct page`s copied from one, frees that
+  store only what changes: the boot 14.5 to 10.2 million instructions), `patch_fastrun.py`
+  (GPU-VM's: a program's memory one block of the buddy allocator, freed in aligned blocks),
+  `patch_memcpy.py` (no byte loops for misaligned copies; the commit's parallel copy for any
+  large copy whose two ends lie alike in a texel), `patch_flatreloc.py` (GPU-VM's: relocations a
+  word at a time), `patch_sysfs.py` (no sysfs for the boot's slab caches and built-in
+  parameters: the boot 9.9 to 8.0 million), `patch_zeroread.py` (`/dev/zero` a megabyte a step,
+  no fault-in of a write's buffer) and `patch_timekeeping.py` (with one processor the tick
+  advances the timekeeper in place, not a shadow copied whole). The configuration has no VM event
+  counters, kallsyms, AIO, io_uring or core dumps and a 16 KB log, and trusts the device tree's
+  `rng-seed`, which `image.py` writes (128 bytes; `RNG_SEED` in hex gives a fixed one): without
+  it a `getrandom()` without `GRND_NONBLOCK` never returned.
 - `bash linux/nommu/build.sh [script ...]`: the sources copied to `~/nm/repo` again and the
   repository's build scripts run there with the flat drivers, a line each.
 - `bash linux/nommu/root.sh`: mctest and the machine's `elf2flt`, then every program of the root
