@@ -91,6 +91,9 @@ Shader "ShaderEmu/gpu"
             #define HOST_STATE_WORDS(n) ((n) == 0 ? _HostState0 : (n) == 1 ? _HostState1 : (n) == 2 ? _HostState2 : (n) == 3 ? _HostState3 : (n) == 4 ? _HostState4 : (n) == 5 ? _HostState5 : (n) == 6 ? _HostState6 : (n) == 7 ? _HostState7 : 0u)
             uniform uint _HostFlags;
             uniform uint _GpuPasses;   // the passes the GPU draw made this frame, one bit each
+            // 1: the harness did not draw the list this frame (RVC_LIST_LAZY), which then stays submitted
+            uniform uint _GpuListSkipped;
+            #define GPU_LIST_SKIP
             uniform uint _CountMerged;   // the counters (src/gpu.h): 0 a host that never merges, 2 merged this frame
             #define GPU_COUNT_MERGE
             uniform uint _InputKey0, _InputKey1, _InputKey2, _InputKey3;

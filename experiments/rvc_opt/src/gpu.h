@@ -1057,6 +1057,8 @@ uint4 gpu_control(uint2 pos) {
     bool served = (SUBMIT_PASSES(ram(GPU_CTRL).r) & ~_GpuPasses) == 0;
 #ifdef GVM_RAM
     served = served && _GvmListDrawn != 0;   // (the harness's lazy list: a list not drawn this frame stays submitted)
+#elif defined(GPU_LIST_SKIP)
+    served = served && _GpuListSkipped == 0;   // (rvc_harness's RVC_LIST_LAZY: the same; Unity draws it every frame)
 #endif
 #else
     bool served = true;

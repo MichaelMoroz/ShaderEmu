@@ -324,10 +324,12 @@ public:
         if (rounds > 1) { mat.setInt("_TimePass", 0); mat.setInt("_ZapKind", (int)zapKind); }
         if (timeIt) gpu_.ctx->End(tsQuery_[2].Get());
         if (gpuPasses_.size() == 2 && !freeze) {
-            if (!listLazy() || listDue > 0) {   // (RVC_LIST_LAZY: only while a list is due)
+            bool listDrawn = !listLazy() || listDue > 0;   // (RVC_LIST_LAZY: only while a list is due)
+            if (listDrawn) {
                 gpuDraw(mat);
                 if (listDue > 0) listDue--;
             }
+            mat.setInt("_GpuListSkipped", listDrawn ? 0 : 1);   // (the control zone takes the submit word back only when drawn)
             bool mixed = soundMix && !soundPasses_.empty();
             if (mixed) soundDraw(mat, tag);   // before the control zone moves the voices on
             bool merge = countsAdded && (!cpuMode || computeMode);   // (--cpu: the interpreter adds them up itself)
@@ -919,10 +921,12 @@ private:
         }
         if (timeIt) ctx->End(tsQuery_[2].Get());
         if (gpuPasses_.size() == 2) {
-            if (!listLazy() || listDue > 0) {   // (RVC_LIST_LAZY: only while a list is due)
+            bool listDrawn = !listLazy() || listDue > 0;   // (RVC_LIST_LAZY: only while a list is due)
+            if (listDrawn) {
                 gpuDraw(mat);
                 if (listDue > 0) listDue--;
             }
+            mat.setInt("_GpuListSkipped", listDrawn ? 0 : 1);   // (the control zone takes the submit word back only when drawn)
             bool mixed = soundMix && !soundPasses_.empty();
             if (mixed) soundDraw(mat, tag);   // before the control zone moves the voices on
             bool merge = countsAdded && !cpuMode;
