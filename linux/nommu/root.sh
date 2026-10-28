@@ -19,6 +19,9 @@ riscv32-linux-strip -o "$RT/usr/bin/steptest" "$NM/steptest" && echo "steptest b
 # a frame's hand-off to a worker alone, the data then the word that says it is there (mc_publish in mc.h)
 rv32-cc -O2 -w -I"$R/programs/mc" "$R/programs/mc/handoff.c" "$R/programs/mc/mcw.c" -o "$NM/handoff" 2>&1 | head -5
 riscv32-linux-strip -o "$RT/usr/bin/handoff" "$NM/handoff" && echo "handoff built"
+# a double's printf in doubles against the long double's (linux/userland/vfprintf_double.py): 0 must differ
+rv32-cc -O2 -w "$R/linux/userland/test/printf_check.c" -o "$NM/printf_check" 2>&1 | head -5
+riscv32-linux-strip -o "$RT/usr/bin/printf_check" "$NM/printf_check" && echo "printf_check built"
 # the HLSL compiler, compiling and drawing a shader in the machine (docs/system/hlsl.md)
 rv32-cc -O2 -w -fno-math-errno -I"$R/programs/hlsl" -I"$R/programs/mc" "$R/programs/hlsl/test/hlsl_bench.c" \
     "$R"/programs/hlsl/{hlsl,hlsl_parse,hlsl_gen,hlsl_back,hlsl_draw}.c "$R/programs/mc/mcw.c" "$R/programs/mc/mcwx.c" -o "$NM/hlsl_bench" 2>&1 | head -5

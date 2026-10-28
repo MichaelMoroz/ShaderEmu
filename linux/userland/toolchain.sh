@@ -96,6 +96,20 @@ if [ ! -f "$SYSROOT/lib/libm-ours" ] || [ -n "$(find "$OURS/libm" -newer "$SYSRO
     touch "$SYSROOT/lib/memcpy-ours" "$SYSROOT/lib/libm-ours"   # (the memcpy above is still in: no turn of each again)
 fi
 
+# A double's %e, %f, %g and %a formatted in doubles, not in 128-bit software long doubles (vfprintf_double.py beside
+# this file); musl's vfprintf.lo replaced where it lies in libc.a. Put in again when the library or the script is newer.
+if [ ! -f "$SYSROOT/lib/vfprintf-ours" ] || [ "$OURS/vfprintf_double.py" -nt "$SYSROOT/lib/vfprintf-ours" ] || [ "$SYSROOT/lib/libc.a" -nt "$SYSROOT/lib/vfprintf-ours" ]; then
+    echo "== vfprintf"
+    M=$WORK/src/musl
+    MUSLF="-O2 -std=c99 -ffreestanding -fexcess-precision=standard -frounding-math -fno-strict-aliasing -D_XOPEN_SOURCE=700 -w
+           -I$M/arch/riscv32 -I$M/arch/generic -I$M/obj/src/internal -I$M/src/include -I$M/src/internal -I$M/obj/include -I$M/include"
+    mkdir -p "$WORK/src/vfprintf-obj"
+    python3 "$OURS/vfprintf_double.py" "$M/src/stdio/vfprintf.c" "$M/src/stdio/vfprintf_double.c"
+    rv32-cc $MUSLF -c "$M/src/stdio/vfprintf_double.c" -o "$WORK/src/vfprintf-obj/vfprintf.lo"
+    riscv32-linux-ar r "$SYSROOT/lib/libc.a" "$WORK/src/vfprintf-obj/vfprintf.lo"
+    touch "$SYSROOT/lib/memcpy-ours" "$SYSROOT/lib/libm-ours" "$SYSROOT/lib/vfprintf-ours"   # (the others are still in)
+fi
+
 # The compiler's own runtime is built for a CPU with an FPU, so the integer and soft-float
 # routines come from compiler-rt, and the 128-bit long double ones (which compiler-rt lacks
 # on a 32-bit CPU) from libgcc's soft-fp.
