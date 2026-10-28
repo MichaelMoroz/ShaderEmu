@@ -1,3 +1,0 @@
-#!/bin/sh
-# llvm-ranlib for gpu_vm (gpu_vm/userland/README.md)
-exec "${LLVM_BIN:-$HOME/gpu_vm/llvm-build/bin}/llvm-ranlib" "$@"

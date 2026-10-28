@@ -1,8 +1,0 @@
-# x18f: x18c-e again on the card at its full clock (those ran at 1.1 GHz), with x17's loop caps; the guard's test as one compare
-x17       gpu_vm/tick/steps/x17.hlsl
-g2        gpu_vm/tick/steps/x18v.hlsl -D GUARD=2
-o1t       gpu_vm/tick/steps/x18v.hlsl -D ORD=1 -D TEX1=1
-o2        gpu_vm/tick/steps/x18v.hlsl -D ORD=2
-o4        gpu_vm/tick/steps/x18v.hlsl -D ORD=4
-wcsplit   gpu_vm/tick/steps/x18v.hlsl -D WCSPLIT=1
-self      gpu_vm/tick/steps/x18v.hlsl -D SELF=1

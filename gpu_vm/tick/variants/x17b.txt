@@ -1,7 +1,0 @@
-# (run against x17s.hlsl as of commit 44e96df; x17s.hlsl has other switches since)
-# x17b: probes of a sticky flag in the fast loop (no branch; wrong where it is set) and a loop test with a register
-x16       gpu_vm/tick/steps/x16.hlsl
-chk0      gpu_vm/tick/steps/x17s.hlsl -D CHK=0
-stk       gpu_vm/tick/steps/x17s.hlsl -D CHK=5
-stknox    gpu_vm/tick/steps/x17s.hlsl -D CHK=5 -D NOX=1
-stku      gpu_vm/tick/steps/x17s.hlsl -D CHK=8

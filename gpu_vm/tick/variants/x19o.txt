@@ -1,4 +1,0 @@
-# x19o: more write cache sets (WCN 1026, 2050; x18 is 514)
-x18       gpu_vm/tick/steps/x18.hlsl
-w1026     gpu_vm/tick/steps/x19w1026.hlsl
-w2050     gpu_vm/tick/steps/x19w2050.hlsl

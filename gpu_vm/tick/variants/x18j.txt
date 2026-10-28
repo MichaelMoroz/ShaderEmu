@@ -1,9 +1,0 @@
-# x18j: the write cache for scattered stores (relocations, hash chains): a multiplicative hash, four ways of 128 sets, both
-x17       gpu_vm/tick/steps/x17.hlsl
-o4s1      gpu_vm/tick/steps/x18v.hlsl -D ORD=4 -D S12X=1
-o4s1h     gpu_vm/tick/steps/x18v.hlsl -D ORD=4 -D S12X=1 -D HASH=1
-o4s1w     gpu_vm/tick/steps/x18v.hlsl -D ORD=4 -D S12X=1 -D WAYS=4
-o4s1hw    gpu_vm/tick/steps/x18v.hlsl -D ORD=4 -D S12X=1 -D WAYS=4 -D HASH=1
-o5s1      gpu_vm/tick/steps/x18v.hlsl -D ORD=5 -D S12X=1
-o6s1      gpu_vm/tick/steps/x18v.hlsl -D ORD=6 -D S12X=1
-o4s1g3    gpu_vm/tick/steps/x18v.hlsl -D ORD=4 -D S12X=1 -D GUARD=3

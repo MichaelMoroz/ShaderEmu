@@ -1,8 +1,0 @@
-# x15: x15's encoding (gpu_vm/isa.h, gpu_vm/tick/steps/README.md "x15"). Checked on WARP with --fused 1 (add addbnz to --case)
-# and without. x14 and earlier no longer pass: they read the encoding before.
-#   x15        the step
-#   x15full    a probe: the fast loop's op 0 the whole integer unit (x14's), not the mid one: what the mid unit saves
-#   x15wc64    the write cache at 64 entries (x15 128)
-x15       gpu_vm/tick/steps/x15.hlsl
-x15full   gpu_vm/tick/steps/x15.hlsl -D FULL_ALU=1
-x15wc64   gpu_vm/tick/steps/x15.hlsl -D WCN=64

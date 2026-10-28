@@ -1,4 +1,0 @@
-# x19g: the fall-through's bundle fetched an iteration ahead (PF), alone and with the texel cache (TC=2)
-x18       gpu_vm/tick/steps/x18.hlsl
-pf        gpu_vm/tick/steps/x19v.hlsl -D PF=1
-pftc2     gpu_vm/tick/steps/x19v.hlsl -D PF=1 -D TC=2

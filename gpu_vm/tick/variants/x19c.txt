@@ -1,3 +1,0 @@
-# x19c: the write cache a set a texel (both ways in one local read; x19w)
-x18       gpu_vm/tick/steps/x18.hlsl
-wc4       gpu_vm/tick/steps/x19w.hlsl

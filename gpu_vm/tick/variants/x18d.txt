@@ -1,8 +1,0 @@
-# x18d: cc 0 (calls, returns, far j, the add) in the fast loop with its fields moved, sel as op 0 of the integer path
-x17       gpu_vm/tick/steps/x17.hlsl
-o1t       gpu_vm/tick/steps/x18v.hlsl -D ORD=1 -D TEX1=1
-o2        gpu_vm/tick/steps/x18v.hlsl -D ORD=2
-cc0       gpu_vm/tick/steps/x18v.hlsl -D CC0=1
-self      gpu_vm/tick/steps/x18v.hlsl -D SELF=1
-cc0self   gpu_vm/tick/steps/x18v.hlsl -D CC0=1 -D SELF=1
-o2cs      gpu_vm/tick/steps/x18v.hlsl -D ORD=2 -D CC0=1 -D SELF=1

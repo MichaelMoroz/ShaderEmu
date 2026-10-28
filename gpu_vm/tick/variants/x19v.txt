@@ -1,4 +1,0 @@
-# x19v: x19h (core 0's 512 sets, a workers' tick of 64 compiled apart, WORKER=1) against x18 and x19
-x18       gpu_vm/tick/steps/x18.hlsl
-x19       gpu_vm/tick/steps/x19w1026.hlsl
-x19h      gpu_vm/tick/steps/x19h.hlsl

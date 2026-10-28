@@ -1,6 +1,0 @@
-# x18h: x18g's step12 by parts (2: cc 0 alone; 3: cc 0 and sel; 1: every integer op and mulh-brev), with o4's order
-x17       gpu_vm/tick/steps/x17.hlsl
-o4        gpu_vm/tick/steps/x18v.hlsl -D ORD=4
-o4s1      gpu_vm/tick/steps/x18v.hlsl -D ORD=4 -D S12X=1
-o4s2      gpu_vm/tick/steps/x18v.hlsl -D ORD=4 -D S12X=2
-o4s3      gpu_vm/tick/steps/x18v.hlsl -D ORD=4 -D S12X=3

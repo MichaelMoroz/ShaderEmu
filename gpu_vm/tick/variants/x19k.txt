@@ -1,3 +1,0 @@
-# x19k: the write cache's overflow list (x19o: 30 entries for a set's third word, flagged on way 1's tag)
-x18       gpu_vm/tick/steps/x18.hlsl
-ovf       gpu_vm/tick/steps/x19o.hlsl

@@ -1,6 +1,0 @@
-# x18i: on o4 with x18's step12 (S12X=1): loads apart from stores in the memory side (5), loads alone apart (6), the loop's test
-o4s1      gpu_vm/tick/steps/x18v.hlsl -D ORD=4 -D S12X=1
-o5s1      gpu_vm/tick/steps/x18v.hlsl -D ORD=5 -D S12X=1
-o6s1      gpu_vm/tick/steps/x18v.hlsl -D ORD=6 -D S12X=1
-o4s1g3    gpu_vm/tick/steps/x18v.hlsl -D ORD=4 -D S12X=1 -D GUARD=3
-o5s1g3    gpu_vm/tick/steps/x18v.hlsl -D ORD=5 -D S12X=1 -D GUARD=3

@@ -1,5 +1,0 @@
-# x18s: x18 against x18v's loads apart from stores (ORD 5: load, store, two loads, mem2; ORD 6: load, one-op, ...) with x18's step12
-x18       gpu_vm/tick/steps/x18.hlsl
-o4s3      gpu_vm/tick/steps/x18v.hlsl -D ORD=4 -D S12X=3
-o5s3      gpu_vm/tick/steps/x18v.hlsl -D ORD=5 -D S12X=3
-o6s3      gpu_vm/tick/steps/x18v.hlsl -D ORD=6 -D S12X=3

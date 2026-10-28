@@ -1,3 +1,0 @@
-# x21a: the RISC-V tick's geometry (x21: a block of 8 x 8 a core, 128 a band) against x18's row a core
-x18       gpu_vm/tick/steps/x18.hlsl
-x21       gpu_vm/tick/steps/x21.hlsl

@@ -1,8 +1,0 @@
-# x24f: x24w (MRU 4) without path 6's branch to the last stored texels (P6E 0), step12's lookup without a branch (S12F 1)
-x21       gpu_vm/tick/steps/x21.hlsl
-x22       gpu_vm/tick/steps/x22.hlsl
-x23       gpu_vm/tick/steps/x23.hlsl
-d4        gpu_vm/tick/steps/x24w.hlsl
-f1        gpu_vm/tick/steps/x24w.hlsl -D P6E=0
-f2        gpu_vm/tick/steps/x24w.hlsl -D S12F=1
-f3        gpu_vm/tick/steps/x24w.hlsl -D P6E=0 -D S12F=1
