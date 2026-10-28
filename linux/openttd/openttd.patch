@@ -767,7 +767,7 @@ index dc20f33..61ceb18 100644
  	CallbackID callback{}; ///< Callback being resolved.
  	uint32_t callback_param1 = 0; ///< First parameter (var 10) of the callback.
 diff --git a/src/openttd.cpp b/src/openttd.cpp
-index 7d585b0..abcc37c 100644
+index 7d585b0..3cb1db3 100644
 --- a/src/openttd.cpp
 +++ b/src/openttd.cpp
 @@ -73,6 +73,11 @@
@@ -782,7 +782,16 @@ index 7d585b0..abcc37c 100644
  #include "misc_cmd.h"
  #include "timer/timer.h"
  #include "timer/timer_game_calendar.h"
-@@ -333,6 +338,13 @@ static void LoadIntroGame(bool load_newgrfs = true)
+@@ -93,6 +98,8 @@
+ #	include <emscripten/html5.h>
+ #endif
+ 
++#include "language.h"
++
+ #include "safeguards.h"
+ 
+ void CallLandscapeTick();
+@@ -333,6 +340,13 @@ static void LoadIntroGame(bool load_newgrfs = true)
  	SetupColoursAndInitialWindow();
  
  	/* Load the default opening screen savegame */
@@ -796,7 +805,21 @@ index 7d585b0..abcc37c 100644
  	if (SaveOrLoad("opntitle.dat", SLO_LOAD, DFT_GAME_FILE, BASESET_DIR) != SL_OK) {
  		GenerateWorld(GWM_EMPTY, 64, 64); // if failed loading, make empty world.
  		SetLocalCompany(COMPANY_SPECTATOR);
-@@ -370,6 +382,30 @@ void OpenBrowser(const std::string &url)
+@@ -344,7 +358,13 @@ static void LoadIntroGame(bool load_newgrfs = true)
+ 	_pause_mode = {};
+ 	_cursor.fix_at = false;
+ 
++#ifdef WITH_SHADEREMU
++	/* (every string of the language looked at for a glyph the font lacks, 11.5 million instructions of the start: the
++	 * image's English is drawn by the base set's own font, which has them all; docs/games/openttd.md, "The start") */
++	if (std::string_view(_current_language->isocode) != "en_GB") CheckForMissingGlyphs();
++#else
+ 	CheckForMissingGlyphs();
++#endif
+ 
+ 	MusicLoop(); // ensure music is correct
+ }
+@@ -370,6 +390,30 @@ void OpenBrowser(const std::string &url)
  	}
  }
  
@@ -827,7 +850,7 @@ index 7d585b0..abcc37c 100644
  /** Callback structure of statements to be executed after the NewGRF scan. */
  struct AfterNewGRFScan : NewGRFScanCallback {
  	TimerGameCalendar::Year startyear = CalendarTime::INVALID_YEAR; ///< The start year.
-@@ -433,6 +469,9 @@ struct AfterNewGRFScan : NewGRFScanCallback {
+@@ -433,6 +477,9 @@ struct AfterNewGRFScan : NewGRFScanCallback {
  		IConsoleInit();
  		InitializeGUI();
  		IConsoleCmdExec("exec scripts/autoexec.scr 0");
@@ -837,7 +860,7 @@ index 7d585b0..abcc37c 100644
  
  		/* Make sure _settings is filled with _settings_newgame if we switch to a game directly */
  		if (_switch_mode != SM_NONE) MakeNewgameSettingsLive();
-@@ -1173,6 +1212,14 @@ void SwitchToMode(SwitchMode new_mode)
+@@ -1173,6 +1220,14 @@ void SwitchToMode(SwitchMode new_mode)
  			}
  
  			UpdateSocialIntegration(GM_MENU);
