@@ -104,6 +104,9 @@ struct Options {
     double netLoss = 0, netDelay = 0;
     std::string persist;                 // --persist FILE: the guest's kept folder (docs/system/persist.md)
     std::string saveRam;                 // --save-ram FILE: the 288 MB of RAM as the run ends
+    std::string save, load;              // --save FILE, --load FILE: the whole machine at the run's end, and from one
+    u64 maxPasses = 0;                   // --max-passes N: the run stops after N passes (from a --load's too)
+    double saveAfter = 0;                // --save-after S: and after S seconds of this computer's (then --save)
 };
 static Options opt;
 
@@ -2608,10 +2611,12 @@ static void gpu_copy(u32 submit) {
 
 // The console (docs/machine/console.md): the ring the guest wrote, and up to four waiting characters
 // delivered once it has taken the last.
+static u32 console_read = 0;      // (how far the ring has been read: kept in a snapshot)
+static bool console_seen = false;
 static void console_pass() {
     const u32 HOST = 0x876b8280u, GUEST = 0x876b8290u, RING = 0x876b82a0u, SIZE = 256;
-    static u32 read = 0;
-    static bool seen = false;
+    u32& read = console_read;
+    bool& seen = console_seen;
     u32 written = word(GUEST + 4);
     if (!seen) read = written, seen = true;
     if (written - read > SIZE) read = written - SIZE;
@@ -2953,6 +2958,76 @@ static void count_mark() {
 #ifndef RVC_CPU_LIBRARY
 #include "run_lock.h"
 
+// --save FILE / --load FILE: the whole machine between two passes (RAM, every core and worker, the devices' counts
+// and the console's state, the script's place in it), so that a run goes on in another call with the same arguments
+// and image (test_all.py --sections: every call under a minute). Not kept: RVC_RACES', RVC_PROF's and RVC_CALLS'
+// tables (each call reports its own part), the write cache's lines (empty at a pass's start), the network.
+static const char SNAP_MAGIC[8] = {'R', 'V', 'C', 'S', 'N', 'A', 'P', '1'};
+template <class T> static void snap_put(FILE* f, const T& v) { fwrite(&v, sizeof v, 1, f); }
+template <class T> static bool snap_get(FILE* f, T& v) { return fread(&v, sizeof v, 1, f) == 1; }
+static void snap_put_str(FILE* f, const std::string& v) { u32 n = (u32)v.size(); snap_put(f, n); fwrite(v.data(), 1, n, f); }
+static bool snap_str(FILE* f, std::string& v) {
+    u32 n;
+    if (!snap_get(f, n)) return false;
+    v.resize(n);
+    return fread(v.data(), 1, n, f) == n;
+}
+static bool machine_save(const std::string& path) {
+    FILE* f = fopen(path.c_str(), "wb");
+    if (!f) return false;
+    fwrite(SNAP_MAGIC, 1, 8, f);
+    u32 n = (u32)cores.size(), core_bytes = (u32)sizeof(Core);
+    snap_put(f, n), snap_put(f, core_bytes);
+    fwrite(ram.data(), 1, RAM_SIZE, f);
+    fwrite(cores.data(), sizeof(Core), n, f);
+    fwrite(workers.data(), sizeof(Worker), n, f);
+    fwrite(geometry, sizeof geometry, 1, f);
+    snap_put(f, mtime_now), snap_put(f, guest_seconds), snap_put(f, rng_state), snap_put(f, rtc0), snap_put(f, rtc1);
+    snap_put(f, frame_no), snap_put(f, key_seq), snap_put(f, worker_instr), snap_put(f, wc_pass), snap_put(f, wc_full_passes);
+    snap_put(f, sbi_counts), snap_put(f, trap_counts), snap_put(f, stops), snap_put(f, copy_chunks), snap_put(f, copy_waits);
+    u64 made = copies_made, longer = copies_long, most = copy_most;
+    snap_put(f, made), snap_put(f, longer), snap_put(f, most), snap_put(f, zb_run);
+    snap_put(f, console_read), snap_put(f, console_seen);
+    snap_put_str(f, std::string(console_in.begin(), console_in.end()));
+    snap_put_str(f, console_text);
+    u64 at = script_at, from = expect_from;
+    snap_put(f, at), snap_put(f, from), snap_put(f, until_seen), snap_put(f, count_marked), snap_put(f, count_pass), snap_put(f, count_seconds);
+    u32 counted = (u32)count_at.size();
+    snap_put(f, counted);
+    fwrite(count_at.data(), 8, counted, f);
+    bool ok = !ferror(f);
+    return fclose(f) == 0 && ok;
+}
+static bool machine_load(const std::string& path) {
+    FILE* f = fopen(path.c_str(), "rb");
+    if (!f) return false;
+    char magic[8];
+    u32 n = 0, core_bytes = 0;
+    bool ok = fread(magic, 1, 8, f) == 8 && !memcmp(magic, SNAP_MAGIC, 8) && snap_get(f, n) && snap_get(f, core_bytes) &&
+              n == cores.size() && core_bytes == sizeof(Core);
+    ok = ok && fread(ram.data(), 1, RAM_SIZE, f) == RAM_SIZE && fread(cores.data(), sizeof(Core), n, f) == n &&
+         fread(workers.data(), sizeof(Worker), n, f) == n && fread(geometry, sizeof geometry, 1, f) == 1;
+    u64 made = 0, longer = 0, most = 0, at = 0, from = 0;
+    std::string in;
+    u32 counted = 0;
+    ok = ok && snap_get(f, mtime_now) && snap_get(f, guest_seconds) && snap_get(f, rng_state) && snap_get(f, rtc0) && snap_get(f, rtc1) &&
+         snap_get(f, frame_no) && snap_get(f, key_seq) && snap_get(f, worker_instr) && snap_get(f, wc_pass) && snap_get(f, wc_full_passes) &&
+         snap_get(f, sbi_counts) && snap_get(f, trap_counts) && snap_get(f, stops) && snap_get(f, copy_chunks) && snap_get(f, copy_waits) &&
+         snap_get(f, made) && snap_get(f, longer) && snap_get(f, most) && snap_get(f, zb_run) && snap_get(f, console_read) &&
+         snap_get(f, console_seen) && snap_str(f, in) && snap_str(f, console_text) && snap_get(f, at) && snap_get(f, from) &&
+         snap_get(f, until_seen) && snap_get(f, count_marked) && snap_get(f, count_pass) && snap_get(f, count_seconds) && snap_get(f, counted);
+    if (ok) count_at.resize(counted), ok = fread(count_at.data(), 8, counted, f) == counted;
+    fclose(f);
+    if (!ok) return false;
+    copies_made = made, copies_long = longer, copy_most = most;
+    console_in.assign(in.begin(), in.end());
+    script_at = (size_t)at, expect_from = (size_t)from;
+    for (Core& c : cores) c.fetch_vpn = ~0u, c.fetch_host = nullptr;   // (a host pointer: found again at the next fetch)
+    wc_pass++;                     // (every write cache empty)
+    dirty_bands = ~0ull;
+    return true;
+}
+
 // What RVC_RACES and RVC_CALLS found, into their files and a few lines here.
 static void races_report(const char* file) {
     std::vector<std::pair<u64, RaceStat>> all(race_stats[0].begin(), race_stats[0].end());
@@ -3048,6 +3123,10 @@ int main(int argc, char** argv) {
         else if (a == "--ticks") opt.ticks = (u32)atoi(next("--ticks").c_str());
         else if (a == "--ips") opt.ips = atof(next("--ips").c_str());
         else if (a == "--save-ram") opt.saveRam = next("--save-ram");
+        else if (a == "--save") opt.save = next("--save");
+        else if (a == "--load") opt.load = next("--load");
+        else if (a == "--max-passes") opt.maxPasses = strtoull(next("--max-passes").c_str(), nullptr, 10);
+        else if (a == "--save-after") opt.saveAfter = atof(next("--save-after").c_str());
         else if (a == "--pass-ms") opt.passMs = atof(next("--pass-ms").c_str());
         else if (a == "--pointer-sweep") opt.sweep = atoll(next("--pointer-sweep").c_str());
         else if (a == "--pointer-circle") sscanf(next("--pointer-circle").c_str(), "%d,%d,%d", &opt.circleX, &opt.circleY, &opt.circleR);
@@ -3094,6 +3173,10 @@ int main(int argc, char** argv) {
                    "  --pc-from T            for finer samples); from when the console has said T\n"
                    "  --ips N --pass-ms M    the guest's clock: a pass takes M ms and its instructions 1/N s each\n"
                    "  --save-ram FILE        the RAM (288 MB from 0x80000000) as the run ends\n"
+                   "  --save FILE            the whole machine as the run ends (but at --until), to go on with --load\n"
+                   "  --load FILE            go on from a --save instead of booting (the same image, cores and arguments)\n"
+                   "  --max-passes N         stop after N passes (exit 5 with --save: to be gone on with)\n"
+                   "  --save-after S         stop after S s of this computer's (the same)\n"
                    "                         (3700000 and 0.25: the harness; the world is about 3100000 and 0.2)\n"
                    "  --pointer-sweep N      the pointer goes round from pass N on\n"
                    "  --pointer-circle X,Y,R round that place of the display, so far from it\n"
@@ -3125,10 +3208,15 @@ int main(int argc, char** argv) {
         fprintf(stderr, "rvc_cpu: no image in %s (python tools\\make_linux_image.py)\n", opt.image.c_str());
         return 2;
     }
+    if (!opt.load.empty() && !machine_load(opt.load)) {
+        fprintf(stderr, "rvc_cpu: %s is no snapshot of this machine (--save, with as many cores)\n", opt.load.c_str());
+        return 2;
+    }
+    if (!opt.load.empty()) fprintf(stderr, "[cpu] on from %s at pass %llu, %.1f s of guest time\n", opt.load.c_str(), (unsigned long long)frame_no, guest_seconds);
     native_check_init();
     if (!opt.uartLog.empty()) {
         uart_log = fopen(opt.uartLog.c_str(), "ab");
-        if (uart_log) fprintf(uart_log, "\n=== rvc_cpu ===\n");
+        if (uart_log && opt.load.empty()) fprintf(uart_log, "\n=== rvc_cpu ===\n");   // (a --load's console goes on as it was)
     }
     Core& c0 = cores[0];
     const char* races_file = getenv("RVC_RACES");
@@ -3162,9 +3250,12 @@ int main(int argc, char** argv) {
     int exit_code = 0;
     std::vector<u32> pc_samples;
     pc_sampling = !opt.pcLog.empty() && opt.pcFrom.empty();
+    u64 passes_run = 0;
+    bool stopped = false;   // (by --max-passes or --save-after: to be gone on with)
     for (;;) {
         u64 clock_was = c0.clock;
         u64 most = machine_pass(opt.ticks);
+        passes_run++;
         if (pc_sampling && c0.clock != clock_was) {
             pc_samples.push_back(c0.pc);
             pc_samples.push_back((u32)(c0.clock - clock_was));
@@ -3199,6 +3290,11 @@ int main(int argc, char** argv) {
         if (opt.maxInstr && c0.clock >= opt.maxInstr) { exit_code = opt.until.empty() ? 0 : 3; break; }
         if (opt.wall > 0 && (frame_no & 255) == 0 &&
             std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() >= opt.wall) { exit_code = opt.until.empty() ? 0 : 3; break; }
+        if ((opt.maxPasses && passes_run >= opt.maxPasses) ||
+            (opt.saveAfter > 0 && (frame_no & 15) == 0 && std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() >= opt.saveAfter)) {
+            stopped = true, exit_code = opt.save.empty() ? (opt.until.empty() ? 0 : 3) : 5;
+            break;
+        }
     }
     double wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     if (!opt.quiet) fputc('\n', stdout);
@@ -3242,6 +3338,12 @@ int main(int argc, char** argv) {
                 (unsigned long long)(stops[1] - stops_at[1]), (unsigned long long)(stops[2] - stops_at[2]));
     if (races_armed && !races_on && !races_ended) fprintf(stderr, "[races] not checked: the console never said RVC_RACES_AT's text\n");
     else if (races_armed) races_report(races_file);
+    if (!opt.save.empty() && !until_hit) {
+        bool ok = machine_save(opt.save);
+        fprintf(stderr, "[cpu] %s %s at pass %llu%s\n", ok ? "saved to" : "could not save", opt.save.c_str(), (unsigned long long)frame_no,
+                stopped ? " (stopped there: go on with --load)" : "");
+        if (!ok) exit_code = 2;
+    }
     if (!opt.saveRam.empty()) {
         FILE* f = fopen(opt.saveRam.c_str(), "wb");
         if (f) { fwrite(ram.data(), 1, ram.size(), f); fclose(f); }

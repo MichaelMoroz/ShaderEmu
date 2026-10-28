@@ -191,6 +191,14 @@ to a folder of its own.
   one, from the mark too; `RVC_ADFAULT=2` prints each (`[adfault]`: core, cause, address, pc).
 - `--save-ram FILE` writes the 288 MB of RAM as the run ends: a picture in GPU memory at a
   hold can be read from it (the NES's at `0x87000400` plus what `nes: holding` prints).
+- `--save FILE` writes the whole machine as the run ends (unless at `--until`): RAM, every core and worker, the
+  devices' counts and the console's and the script's place, 315 MB; `--load FILE` goes on from one with the same
+  image, cores and arguments. `--max-passes N` and `--save-after S` (seconds of this computer's) stop the run there,
+  and with `--save` it exits 5, to be gone on with. Doom's first timedemo stopped at pass 15,000 and gone on with ends
+  at the same pass (28,295) with every core's instructions and the console the same bytes as one run. Not kept:
+  `RVC_RACES`', `RVC_PROF`'s and `RVC_CALLS`' tables (each call reports its own part), the write caches' lines (empty at
+  a pass's start), the network. `tools/test_all.py --sections` runs every case in calls of `--section-secs` (40 s)
+  through it: a case not yet ended prints `part`, and the next call of the same line goes on with it.
 - A world's rounds in time: `--ticks 8192 --ips 1e12 --pass-ms 2.7307` makes every pass a
   round of 8,192 instructions at 3 MIPS a core, whatever it ran, so a program's own clock (the
   NES's `nesstat` percentages) counts as on cores of that speed (`docs/games/nes.md`).
@@ -227,6 +235,8 @@ instructions on core 0, is the 43 s at its end.
     python tools/test_all.py games nes-cells # tags (machine, games, doom, quake, ..., workers, media, desktop) or names
     python tools/test_all.py --long          # and the long cases: no workers, zerotest and tailtest, three bots
     python tools/test_all.py --races         # RVC_RACES on every case: 0 changes undone (RVC_RACES_NEAR=4 said)
+    python tools/test_all.py --sections      # each case in calls of 40 s (--section-secs): run it again till none is left
+    python tools/test_all.py --max-wall 55 --wall-scale 2   # a case's wall at most 55 s, every wall doubled
     python tools/test_all.py --card-model    # RVC_SOUND, RVC_WCACHE, RVC_ADFAULT as game_par.py has them
     python tools/test_all.py --image build/images/NAME --list
 
