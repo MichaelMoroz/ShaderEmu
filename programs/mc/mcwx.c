@@ -333,8 +333,9 @@ typedef struct { volatile uint32_t round, fn, ctx, n, grain, shares, linger, pad
 typedef struct { volatile uint32_t round, share, pad[2]; } texel_t;
 static round_t *team;
 static texel_t *plan;		/* the first core's: worker k's share of a round */
-static texel_t *done_of;	/* worker k's: the last round it did */
+static texel_t *done_of;	/* worker k's: the last round it did, and (pad[0]) how many team jobs it left by lingering out */
 static uint8_t in_team[MC_MAX_CORES];	/* a team job is posted to worker k and has not ended */
+static uint32_t left_seen[MC_MAX_CORES];	/* done_of[k].pad[0] when the team job was posted to k */
 static uint8_t busy[MC_MAX_CORES];	/* worker k has a call out */
 static int linger = 16;
 static int in_round;	/* a round is out: a loop asked meanwhile (from core 0's piece) is one call */
@@ -396,6 +397,8 @@ static uint32_t team_job(uint32_t unused, uint32_t k)
 			last = r;
 			idle = 0;
 		} else if (++idle > team->linger) {
+			/* (said, so the first core's next round posts it again at once: team_left) */
+			done_of[k].pad[0] = done_of[k].pad[0] + 1;
 			break;
 		}
 		mc_end_pass();
@@ -407,11 +410,23 @@ static uint32_t team_job(uint32_t unused, uint32_t k)
  * the caller, never inside the post: shares may wait for lower ones (m_stages' pipelines). */
 static int post_team(int k)
 {
+	left_seen[k] = done_of[k].pad[0];
 	in_team[k] = 1;
 	mcw_post(k, team_job, 0, (uint32_t)k);
 	if (mcw_bound(k)) return 1;
 	in_team[k] = 0;
 	return 0;
+}
+
+/* Whether worker k's team job lingered out since it was posted, read from the worker's own word (a load, where
+ * asking the worker, mcw_done, is some 50 instructions): it is then not in the team and is posted with the round.
+ * Taken as in the team, it would be posted again only in the wait, one worker a pass (round_through): Red Alert's
+ * film, its frames 66 ms apart and every team job gone between them, 10.5 s to 13.9 on the card. */
+static int team_left(int k)
+{
+	if (!in_team[k] || done_of[k].pad[0] == left_seen[k] || !mcw_done(k)) return 0;
+	in_team[k] = 0;
+	return 1;
 }
 
 /* Worker k's share of round r, run by the first core: only once every lower share is done or
@@ -454,7 +469,9 @@ void mcw_for_opt(uint32_t n, mcw_body fn, void *ctx, const mcw_for_opts *o)
 	want = o && o->workers > 0 && o->workers < workers ? o->workers : workers;
 	for (k = 1; k <= workers && members < want; k++) {
 		if (busy[k]) continue;
-		/* (one in the team is taken as it is: a team job that ended is seen in the wait, round_through) */
+		/* (one in the team is taken as it is, unless its team job said it lingered out: another end, a stop at a
+		 * page, is seen in the wait, round_through) */
+		team_left(k);
 		/* (one with no core would run its piece here and now, before the others had theirs) */
 		if (!in_team[k] && (!mcw_bound(k) || !side_for(k))) continue;
 		list[members++] = k;
@@ -514,6 +531,7 @@ void mcw_for_begin(uint32_t n, mcw_body fn, void *ctx, const mcw_for_opts *o)
 	out_members = 0;
 	for (k = 1; k <= workers && out_members < want; k++) {
 		if (busy[k]) continue;
+		team_left(k);
 		if (!in_team[k] && (!mcw_bound(k) || !side_for(k))) continue;
 		out_list[out_members++] = k;
 	}
