@@ -51,7 +51,11 @@ Two more correctness items, not yet anywhere on RISC-V:
 
 - **`access_ok` checks a user range is in RAM** (25e38c0): nine system calls given a bad pointer said EFAULT, not an
   oops. The RISC-V no-MMU kernel selects `UACCESS_MEMCPY`, whose asm-generic `__access_ok` returns 1: a hook defines it
-  for the two RAM ranges. What the RISC-V tick does with a kernel access outside RAM is not checked.
+  for the two RAM ranges. What the RISC-V tick does with a kernel access outside RAM is not checked. The same hook
+  gives **`get_user` and `put_user` one access when aligned** (gpu_vm's `arch/gpuvm/include/asm/uaccess.h`):
+  asm-generic's path is safe for any alignment, so the RISC-V kernel stores a user `u32` as four `sb` and three `srl`
+  (`__se_sys_getresuid` in the image) and loads one in about 7 instructions. Every futex word, ioctl argument and
+  signal frame's word goes through it.
 - **The lazy list dropped a list** (4edb861): one submitted in a frame where none was drawn was never drawn. The fix in
   `src/gpu.h` is under `GVM_RAM`, so RISC-V's opt-in `RVC_LIST_LAZY` (a4ff4d4) still has it: fix it or take it out.
 
@@ -84,7 +88,9 @@ Two more, not straight ports:
   (62af8c2, c4d9e26; GPU-VM `userland/musl/src/math/gpuvm`, `userland/musl/mfloat`) are 14 to 58 ops a call against
   788 to 1,898 soft-double instructions: `AnglesToAxis` 9,998 instructions, `SinTable` 1.75M, `GammaTable` 0.95M. Its
   C goes into RISC-V musl's `src/math` (with no `fmadd`, or through the general path until section 6), and Quake and
-  Half-Life link `-lmfloat`. Checked by the libm table's tolerances and the programs' float sums, which move.
+  Half-Life link `-lmfloat`. Checked by the libm table's tolerances and the programs' float sums, which move. The
+  doubles' `floor`, `ceil`, `trunc` and `round` done on the bits go with it (`userland/musl/src/math/gpuvm`: 571 to 37
+  bundles a call).
 - **Quake III's scene job is the frame's chain** (PROFILE_Q3.md sections 3, 6, 7): its 45 thousand instructions fill
   94% of a frame's 5.83 x 8,192, and it ends last in 97% of frames. Posted earlier (it starts 3.3 passes into the
   frame) or split over two workers.
@@ -141,7 +147,8 @@ Smaller for a frame, but each is a stall a player sees (a program's first window
 | no sysfs for the boot's slab caches and built-in parameters; the boot loader's seed trusted | d7996f4 (`drivers.py`: `mm/slub.c`, `kernel/params.c`, `drivers/of/fdt.c`) | the sysfs folders were a third of the kernel's start | SLUB, no IPv6 and one ramdisk are in RISC-V's config already; the sysfs skips and `RANDOM_TRUST_BOOTLOADER` are not |
 | no fault-in of a write's buffer | a004391's second half | `fault_in_readable` reads a byte a page, for nothing with no MMU | the same code |
 | no BLAKE2s self-test | `0004-gpuvm-no-blake2s-selftest.patch` | | part of the above | the same |
-| a program's memory in blocks | `linux/fastrun.py` | from the free lists and given back in blocks | part of the above | to read: what of it the RISC-V kernel lacks |
+| a program's memory in blocks | `linux/fastrun.py` | from the free lists and given back in blocks | `alloc_pages_run` walks the zone from its first page, about 35 thousand bundles a call and two calls a start; a program's exit freed page by page, a quarter of a boot's bundles | RISC-V lacks both halves: its `alloc_pages_run` (`linux/nommu/patch_drivers.py`) is the same code. fastrun's is behind `CONFIG_GPUVM`: the guard goes |
+| the kernel's config trimmed | `linux/machine.config`, `gpuvm_defconfig` | `BASE_SMALL=1` (smaller hash tables), no `VM_EVENT_COUNTERS` (a store at every page allocation, free and fault); also no `KALLSYMS`, `AIO`, `IO_URING`, `COREDUMP`, a 16 KB log | not measured | RISC-V's `config.extra` keeps them; the two that store at run time are worth taking, then the boot's passes looked at |
 | `/dev/zero` a megabyte a step | `linux/drivers/zeroread_hook.py` | `read_zero` cleared a page a step, each a fill that ended the pass | 4 MB 0.0256 to 0.0016 s | `read_zero` is 5.17's, a page a step through `clear_user` |
 | relocations a word at a time | `linux/drivers/flatreloc_hook.py` | `load_flat_file`'s loop by words, one bounds check, `calc_reloc` once | 37 to 13 bundles a relocation | RISC-V's programs carry few: Half-Life 48,015, OpenTTD 28,694, the rest under 5,400. Last |
 
@@ -150,6 +157,36 @@ another task could run, and `mcw_rest` ends the pass in user mode). RISC-V's `RE
 and does the zero pool's idle work, which would have to go elsewhere. Low value.
 
 Check: `zerotest` and `tailtest` PASS, `mctest`, the boot to the desktop, `test_all.py`.
+
+## 3b. RAM in one piece: the devices below it
+
+gpu_vm keeps every device of the RISC-V machine, layouts and protocols word for word, at its address less 0x86000000
+(GPU-VM `docs/platform.md`, "The device window"): the GPU's memory from 0x00010000, the mailboxes at 0x00c00000, the
+control words at 0x01000000, sound memory to 0x01e00000, and RAM one range from 0x02000000. The RISC-V machine's RAM is
+two ranges, 0x80400000-0x86000000 and 0x88000000-0x92000000, with the device window between (`docs/system/nommu.md`,
+"Memory").
+
+Not a speed-up in itself, but one range of RAM means:
+- one memory node for the kernel, so no allocation is limited by the split;
+- no band mask spread over two pieces (`ram_bands`);
+- no rule that a GPU copy into RAM stays below 0x87e00000.
+
+For RISC-V the window moves below RAM in the same way: the device tree, the kernel's drivers' addresses
+(`linux/kernel/shaderemu_*.c`), `programs/mc/mc.h`'s `MC_PAGE_GPU_OFFSET`, the device shaders (`src/gpu.h`,
+`sound.h`), the harness's uploads and readbacks, Unity's copies. Every program built against the addresses is rebuilt:
+it goes with an image of its own, and a snapshot from before does not load.
+
+## 3c. The devices' textures and draws
+
+- **The ROM as one `uint4` texture.** RISC-V keeps the ROM in four RGBA8 float textures (`_Data_MTD_R/G/B/A`: `src/mem.h:264`,
+  `types.h:1542`, `pend_texel` in `mem.h:102`, `gpu.h:132`, `GpuVolumePass.cginc`): a word is a 4-way switch and a
+  float-to-byte unpack, a whole texel four fetches (ROM copies, Quake III's draws from the ROM, sound's samples). gpu_vm's
+  `_GvmRom` is one integer texture, unpacked once at power-on by a blit (`GvmInitRom`, `EmuMachine.ApplyImage`); its
+  device tree is in RAM at 0x1000, so `_Data_DTB_*`'s four textures go too. Not measured on RISC-V. The cost: a second
+  copy of the ROM in video memory (gpu_vm's 268 MB) unless the RGBA8 sources are let go after the blit.
+- **The GPU's picture copied into RAM by a draw of its own.** Every pixel of RISC-V's commit reads `GPU_COPY` and
+  branches (`gpu_writeback()`, `main.shader:763`); gpu_vm draws the copy apart (`devices.shader`'s GPUWriteback, the
+  destination's rows only). Minor.
 
 ## 4. Tools
 
@@ -179,7 +216,10 @@ Check: `zerotest` and `tailtest` PASS, `mctest`, the boot to the desktop, `test_
 
 A likely bug, not verified: under `--unity` or `--tick-rounds N`, rvc_harness moves the clock every round but reads the
 console's ring once a frame (`rvc_backend11.cpp:1320`), so a guest may write 255 bytes a round and lose what is past
-256 a frame: gpu_vm's c3713e9 (Quake's statistics lines cut). The world reads it every round.
+256 a frame: gpu_vm's c3713e9 (Quake's statistics lines cut). The world reads it every round. gpu_vm's fix is the
+guest's (6eac8ac): the console puts at most 255 bytes while both the clock and a word the control pass counts up once
+a host frame (`GPU_CLOCK` word 0) are unchanged. On RISC-V `se_con_put` (`linux/nommu/patch_console.py`) counts by
+`CSR_TIME` alone: it compares the frame word too, and `gpu_control` in `src/gpu.h` and Unity's control pass count it.
 
 ### Measuring and comparing
 
@@ -210,6 +250,9 @@ console's ring once a frame (`rvc_backend11.cpp:1320`), so a guest may write 255
 | a call's wall limits | aeae927, d5c0d8d (`--max-wall`, `--wall-scale`) | every call under a minute | missing | S |
 | the fast step against the general | `GVM_FAST_CHECK=1` | each pass both ways, stopped at the first byte that differs | partial: `RVC_NATIVE_CHECK` covers `--native` only | S |
 | stop at N passes and save | aeae927 (`--max-passes N` with `--save`) | | missing | S |
+| `--races` on every case | GPU-VM `userland/apps/test_all.py` | nxpaint, nxweb and the IDE take workers though their cases do not say so | `tools/test_all.py:541` checks only cases marked `workers`: 56 of 155 never checked (`nxpaint`, every `nxweb*` and `nxide-*`, `openttd`, `micropolis`, `nxpinball`, `nxfiles`). The condition goes | S |
+| the test set on the card | `userland/apps/card.py` (vm.exe through `gpu_queue.ps1`, test_all's checks, the card's own expected values) | every case on the card, not only the CPU model | `--card-model` on `rvc_cpu` only: a runner on `rvc_harness` | S-M |
+| the word below a program's data | GPU-VM `userland/flat.ld`, `elf2flt` | binfmt_flat writes the data's start into the word below it even with `NO_DATA_START_OFFSET` (`fs/binfmt_flat.c:1001` in RISC-V's tree too): on gpu_vm it overwrote musl's `decfloat` and broke `strtod` | `linux/nommu/elf2bflt.py` and `elf2flt.c` round the data's start down to 32 bytes and never look at what lies there; the word is 0 in all 98 of today's programs, which a live 0 would also be. Both refuse a section there | S |
 
 ### `rvc_cpu`'s speed
 
@@ -270,6 +313,16 @@ starting the tick's pixels is the cost, and discarding them does not help (759f2
 draw (98f2222, f2e848a); under the Unity measure RISC-V is slower at 16,384 a pass than at 8,192 (Quake III 50.6
 against 65: 62fc7fc); Quake III's `com_maxfps` 85 capped both machines before 24 October (fef1431); Half-Life's fps moves
 5-9% with where its data lies (03e2fc0, IDEAS 31).
+
+## 5b. What gpu_vm did without
+
+- **One tick in the tree.** vm.exe has no legacy modes; RISC-V carries `rvc_lean`, `rvc_compute` (each with a `gpu.h` of
+  its own), `rvc_backend12`, `rvc_compute_harness` and options such as `--compute`, `--dxc`, `--ping-pong`,
+  `--tick-split`, `--zap`, `--isa`, `--rvc`. gpu_vm's rule: an experiment's result is a row of RESULTS.md and its code
+  goes. Clean-up, no speed.
+- **The overlay only where programs write** (gpu_vm's `rcS`: the ROM's root, overlays on `/root`, `/var`, `/etc`,
+  `/home`). RISC-V lays one over the whole root, so every lookup searches two layers, and any file of the image can be
+  written or renamed (`nxfiles-rename`). A trade, not measured: only with a reason.
 
 ## 6. The ISA fork, last
 
