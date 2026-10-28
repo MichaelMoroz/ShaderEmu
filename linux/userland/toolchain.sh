@@ -73,8 +73,10 @@ if [ ! -f "$SYSROOT/lib/memcpy-ours" ] || newer || [ "$SYSROOT/lib/libc.a" -nt "
     rv32-cc $MEMOPS -c "$OURS/memmove.c" -o "$WORK/src/memmove_ours.o"
     # (memcmp.c: memcmp a word a turn)
     rv32-cc $MEMOPS -c "$OURS/memcmp.c" -o "$WORK/src/memcmp_ours.o"
-    riscv32-linux-ar d "$SYSROOT/lib/libc.a" memcpy.lo memcpy_ours.o memcpy_any.o memset.lo memset_ours.o memmove.lo memmove_ours.o \n        memcmp.lo memcmp_ours.o 2>/dev/null || true
-    riscv32-linux-ar rs "$SYSROOT/lib/libc.a" "$WORK/src/memcpy_ours.o" "$WORK/src/memcpy_any.o" "$WORK/src/memset_ours.o" "$WORK/src/memmove_ours.o" \n        "$WORK/src/memcmp_ours.o" 2>/dev/null
+    riscv32-linux-ar d "$SYSROOT/lib/libc.a" memcpy.lo memcpy_ours.o memcpy_any.o memset.lo memset_ours.o memmove.lo memmove_ours.o \
+        memcmp.lo memcmp_ours.o 2>/dev/null || true
+    riscv32-linux-ar rs "$SYSROOT/lib/libc.a" "$WORK/src/memcpy_ours.o" "$WORK/src/memcpy_any.o" "$WORK/src/memset_ours.o" "$WORK/src/memmove_ours.o" \
+        "$WORK/src/memcmp_ours.o" 2>/dev/null
     touch "$SYSROOT/lib/memcpy-ours"
 fi
 
