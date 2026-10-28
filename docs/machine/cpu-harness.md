@@ -244,4 +244,14 @@ A case's expected values are in the script, each with the doc it comes from; whe
 only "as before" (Doom's, Quake's and Quake III's server sums, Quake's particles, ClassiCube's
 meshes and pack, `cc`'s outputs) a case keeps the md5 of every such line, as the image of 15
 October 2026 and, but for ClassiCube's leaves, the last commit's printed them. A change that
-moves one on purpose sets the new value with the reason. Captures and the card are not in it.
+moves one on purpose sets the new value with the reason. Captures are not in it.
+
+`python tools/test_card.py CASE_OR_TAG ...` runs the same cases on the card: `bin/rvc_harness.exe --d3d11`
+with `experiments/rvc_opt`, one at a time through `tools\gpu_queue.ps1`, each console checked by test_all's
+rules. The card boots in some 50 s, so a case resumes a snapshot of the shell made once on the processor
+(`build/test_card/shell.snap`; `--snapshot` makes it again) and its wall is at most 55 s (`--max-wall`). A case
+is skipped for another image, for host words that change as it runs, for `rvc_cpu`'s own devices (its `env`),
+or when it is longer than a run may be. The card's own values are in its `CARD` table, each the same in two
+runs. On 28 October 2026 the `machine` tag with `doom-3`, `nxpath-balls` and `nxpaint` passed 10 of 10 in
+some 5 minutes (`mctest-255` and `cc-bytes` over 55 s; `hlsl` sums `a4b289dd` and `nxpath-balls` `11e09363`
+on the card, the tick's floats).
