@@ -19,7 +19,8 @@ workers ran 16,384 instructions or more. `--threads 1` gives the old order exact
 instructions on every core and the same console as before. With threads, a program whose
 workers wait on each other's words inside a pass counts other numbers of instructions from
 run to run (Quake's and nxphys's statistics, Quake III's passes); its sums do not change.
-`RVC_RACES` and `RVC_PROF` run the workers in order on one thread.
+`RVC_PROF` runs the workers in order on one thread; under `RVC_RACES` each worker keeps the texels
+it changes apart and they run on the threads too, with the reports of the cores in order.
 
     bin\rvc_cpu.exe --quiet --uart-log logs\uart_x.log --expect "/ # " ^
         --send "nano-X -p & sleep 2; TDAWN_AUTO=1 RALERT_SIDE=soviet RALERT_SEED=7 RALERT_FRAMES=300 ralert; echo LX-''DONE\n" ^
@@ -199,6 +200,12 @@ to a folder of its own.
 `fptest` in the guest (every float instruction against the runtime's integer routines), the
 games' state sums (`docs/games/ralert.md`, `docs/games/tdawn.md`), and the workers' instruction counts,
 which for Red Alert's movie agree with the shader machine's to five digits.
+
+`RVC_FAST_CHECK=1` checks the fast handlers against the general step: every core's pass is run
+both ways from the same state (RAM read-only meanwhile, a page copied at its first store, so the
+first run is undone), and the core, its worker's state, what it said and RAM must be the same to
+the byte; the first pass that differs stops the run (exit 4) with what differs and where. On one
+thread, about four times slower; with `RVC_WCACHE` too, not with `RVC_RACES`, `RVC_PROF`, `RVC_CALLS`.
 
 ## The test set
 

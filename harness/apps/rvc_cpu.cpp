@@ -44,7 +44,23 @@ static const u32 RAM_BASE = 0x80000000u, RAM_SIZE = 0x12000000u;   // to 0x92000
 static const u32 ROM_BASE = 0x40000000u;
 static const u32 CTRL = 0x87000000u;   // the control words (docs/machine/gpu.md, docs/machine/input.md)
 
-static std::vector<uint8_t> ram, rom;
+// RAM in pages of its own (RVC_FAST_CHECK makes them read-only while a core runs)
+template <class T> struct PageAlloc {
+    typedef T value_type;
+    PageAlloc() = default;
+    template <class U> PageAlloc(const PageAlloc<U>&) {}
+    T* allocate(size_t n) {
+        void* p = VirtualAlloc(nullptr, n * sizeof(T), MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        if (!p) throw std::bad_alloc();
+        return (T*)p;
+    }
+    void deallocate(T* p, size_t) { VirtualFree(p, 0, MEM_RELEASE); }
+    template <class U> bool operator==(const PageAlloc<U>&) const { return true; }
+    template <class U> bool operator!=(const PageAlloc<U>&) const { return false; }
+};
+typedef std::vector<uint8_t, PageAlloc<uint8_t>> RamBytes;
+static RamBytes ram;
+static std::vector<uint8_t> rom;
 static u32* ramw;   // the same bytes as words
 static uint8_t* ramp;   // and as bytes, without the vector
 
@@ -105,9 +121,11 @@ static double count_seconds = 0;
 
 static void count_mark();
 static bool console_mute = false;   // (RVC_NATIVE_CHECK's second machine says nothing)
+static std::string* console_into = nullptr;   // (RVC_FAST_CHECK: what a core says while it runs, kept)
 static void console_put(u32 c) {
     char ch = (char)c;
     if (console_mute) return;
+    if (console_into) { console_into->push_back(ch); return; }
     if (console_hook) { console_hook(ch); return; }
     console_text.push_back(ch);
     if (!opt.quiet) fputc(ch, stdout);
@@ -1844,7 +1862,7 @@ static bool read_file(const std::string& path, std::vector<uint8_t>& to);
 static struct NativeCheck {
     bool on = false;
     Core a;
-    std::vector<uint8_t> ram;
+    RamBytes ram;
     std::vector<u32> native;
     u32 lo = 0, last = 0, nlo = ~0u, nhi = 0;   // (nlo, nhi: where the slots lie)
     u64 owed = 0, checks = 0;
@@ -2004,10 +2022,12 @@ static int native_run(Core& c, u64 n) {
 
 // The instructions that are always a core's general step's: with RVC_PROF every instruction is, with
 // RVC_CPU_LAST core 0's, for their tables; with RVC_CALLS core 0's jal and jalr (call_fast counts the rest).
+static bool check_on = false, check_general = false;   // RVC_FAST_CHECK; its first run, all on the general step
+static u64 checked(Core& c, u64 budget, u64 (*fn)(Core&, u64));
 static const uint8_t* step_kinds(const Core& c) {
     static const uint8_t all_general[8192] = {};
     if (!step_kinds_made) make_step_kinds();
-    if (prof::on || (keep_last && c.hart == 0)) return all_general;
+    if (prof::on || (keep_last && c.hart == 0) || check_general) return all_general;
     return step_kind[(calls_on && c.hart == 0 ? 2 : 0) + zb_on];
 }
 
@@ -2156,7 +2176,8 @@ static bool worker_wake(Core& c) {
 
 static u64 run_worker(Core& c, u64 budget) {
     if (!worker_wake(c)) return 0;
-    return c.copying ? 0 : worker_exec(c, budget);   // (waiting for its copy: copy_pass)
+    if (c.copying) return 0;   // (waiting for its copy: copy_pass)
+    return check_on ? checked(c, budget, worker_exec) : worker_exec(c, budget);
 }
 
 // ---- the workers on host threads (--threads, RVC_THREADS) ----
@@ -2535,6 +2556,174 @@ static bool read_file(const std::string& path, std::vector<uint8_t>& to) {
     return got == (size_t)n;
 }
 
+// ---- RVC_FAST_CHECK=1: each core's pass both ways, the general step against the fast handlers ----
+//
+// A core's pass is run first with every instruction on the general step, then again from the same
+// state on the fast handlers, and the two must leave the core, its worker's state, what it said and
+// RAM the same to the byte; the first pass that does not stops the run (exit 4) with what differs.
+// RAM is read-only while a core runs: the first store to a page brings it back (check_fault) with a
+// copy of it, so a pass is undone by the pages it wrote. On one thread; not with RVC_RACES, RVC_PROF,
+// RVC_CALLS, RVC_CPU_LAST or --native, whose tables the first run would fill too.
+static struct FastCheck {
+    bool armed = false;
+    std::vector<u32> opened;                            // pages made writable since they were last closed
+    std::vector<u32> pages;                             // pages the armed run wrote, and their copies
+    std::vector<uint8_t> copies;
+    std::string said;                                   // what the core said while it ran (console_into)
+    u64 checks = 0;
+} fc;
+
+static LONG CALLBACK check_fault(EXCEPTION_POINTERS* e) {
+    const EXCEPTION_RECORD* r = e->ExceptionRecord;
+    if (r->ExceptionCode != EXCEPTION_ACCESS_VIOLATION || r->NumberParameters < 2 || r->ExceptionInformation[0] != 1)
+        return EXCEPTION_CONTINUE_SEARCH;
+    uintptr_t at = (uintptr_t)r->ExceptionInformation[1], base = (uintptr_t)ramp;
+    if (at < base || at >= base + RAM_SIZE) return EXCEPTION_CONTINUE_SEARCH;
+    u32 page = (u32)((at - base) >> 12);
+    if (fc.armed) {
+        fc.pages.push_back(page);
+        fc.copies.insert(fc.copies.end(), ramp + ((size_t)page << 12), ramp + ((size_t)page << 12) + 4096);
+    }
+    DWORD was;
+    VirtualProtect(ramp + ((size_t)page << 12), 4096, PAGE_READWRITE, &was);
+    fc.opened.push_back(page);
+    return EXCEPTION_CONTINUE_EXECUTION;
+}
+static void check_close() {   // (every page written since: read-only again)
+    DWORD was;
+    for (u32 p : fc.opened) VirtualProtect(ramp + ((size_t)p << 12), 4096, PAGE_READONLY, &was);
+    fc.opened.clear();
+}
+static void check_init() {
+    const char* v = getenv("RVC_FAST_CHECK");
+    if (!v || !atoi(v)) return;
+    if (races_on || prof::on || calls_on || keep_last || native_on) {
+        fprintf(stderr, "[check] RVC_FAST_CHECK: not with RVC_RACES, RVC_PROF, RVC_CALLS, RVC_CPU_LAST or --native\n");
+        return;
+    }
+    check_on = true, pool_size = 1;
+    AddVectoredExceptionHandler(1, check_fault);
+    DWORD was;
+    VirtualProtect(ramp, RAM_SIZE, PAGE_READONLY, &was);
+}
+
+// What a core's run may change besides the core, its worker and RAM.
+struct CheckState {
+    std::deque<uint8_t> in;
+    u64 sbi[16], traps[2][16], stops_[3], wc_passes[2], wc_at, made, longer, most, zb;
+    u32 rng, wst, wsil, wnew;
+    WCache wc;
+};
+static void check_save(CheckState& s, int hart) {
+    s.in = console_in;
+    memcpy(s.sbi, sbi_counts, sizeof s.sbi), memcpy(s.traps, trap_counts, sizeof s.traps), memcpy(s.stops_, stops, sizeof s.stops_);
+    memcpy(s.wc_passes, wc_full_passes, sizeof s.wc_passes);
+    s.wc_at = wc_full_at[hart], s.wst = wc_st[hart], s.wsil = wc_sil[hart], s.wnew = wc_new[hart];
+    s.made = copies_made, s.longer = copies_long, s.most = copy_most, s.zb = zb_run, s.rng = rng_state;
+    if (wc_on) s.wc = wcache[(size_t)hart];
+}
+static void check_load(const CheckState& s, int hart) {
+    console_in = s.in;
+    memcpy(sbi_counts, s.sbi, sizeof s.sbi), memcpy(trap_counts, s.traps, sizeof s.traps), memcpy(stops, s.stops_, sizeof s.stops_);
+    memcpy(wc_full_passes, s.wc_passes, sizeof s.wc_passes);
+    wc_full_at[hart] = s.wc_at, wc_st[hart] = s.wst, wc_sil[hart] = s.wsil, wc_new[hart] = s.wnew;
+    copies_made = s.made, copies_long = s.longer, copy_most = s.most, zb_run = s.zb, rng_state = s.rng;
+    if (wc_on) wcache[(size_t)hart] = s.wc;
+}
+static bool check_same(const CheckState& a, const CheckState& b, int hart, std::string& what) {
+    if (a.in != b.in) what += " console input;";
+    if (memcmp(a.sbi, b.sbi, sizeof a.sbi)) what += " firmware calls;";
+    if (memcmp(a.traps, b.traps, sizeof a.traps)) what += " traps;";
+    if (memcmp(a.stops_, b.stops_, sizeof a.stops_)) what += " stops;";
+    if (memcmp(a.wc_passes, b.wc_passes, sizeof a.wc_passes) || a.wc_at != b.wc_at || a.wst != b.wst || a.wsil != b.wsil || a.wnew != b.wnew)
+        what += " write cache counts;";
+    if (a.made != b.made || a.longer != b.longer || a.most != b.most) what += " copies;";
+    if (a.zb != b.zb) what += " Zb count;";
+    if (a.rng != b.rng) what += " random;";
+    if (wc_on && memcmp(&a.wc, &b.wc, sizeof a.wc)) what += " write cache;";
+    (void)hart;
+    return what.empty();
+}
+
+// A core's pass (fn: run or worker_exec) both ways; what the fast one ran.
+static u64 checked(Core& c, u64 budget, u64 (*fn)(Core&, u64)) {
+    static Core* before = new Core, *general = new Core;
+    static CheckState s0, s1, s2;
+    Worker w0 = workers[(size_t)c.hart], w1;
+    u32 pc0 = c.pc;
+    memcpy((void*)before, (const void*)&c, sizeof(Core));
+    check_save(s0, c.hart);
+    // the general step's run, its pages kept and undone
+    check_close();
+    fc.pages.clear(), fc.copies.clear();
+    fc.armed = true, console_into = &fc.said, check_general = true;
+    fc.said.clear();
+    u64 n1 = fn(c, budget);
+    check_general = false;
+    std::string said1 = fc.said;
+    std::vector<u32> pages1 = fc.pages;
+    std::vector<uint8_t> after1(pages1.size() * 4096);
+    for (size_t k = 0; k < pages1.size(); k++) {
+        uint8_t* p = ramp + ((size_t)pages1[k] << 12);
+        memcpy(&after1[k * 4096], p, 4096);
+        memcpy(p, &fc.copies[k * 4096], 4096);
+    }
+    memcpy((void*)general, (const void*)&c, sizeof(Core));
+    w1 = workers[(size_t)c.hart];
+    check_save(s1, c.hart);
+    memcpy((void*)&c, (const void*)before, sizeof(Core));
+    workers[(size_t)c.hart] = w0;
+    check_load(s0, c.hart);
+    // the fast handlers' run
+    check_close();
+    fc.pages.clear(), fc.copies.clear();
+    fc.said.clear();
+    u64 n2 = fn(c, budget);
+    fc.armed = false, console_into = nullptr;
+    check_save(s2, c.hart);
+    std::string what;
+    if (n1 != n2) what += " instructions run;";
+    if (memcmp((const void*)general, (const void*)&c, sizeof(Core))) {
+        what += " the core:";
+        for (int r = 1; r < 32; r++) if (general->x[r] != c.x[r]) what += " x" + std::to_string(r);
+        for (int r = 0; r < 32; r++) if (general->f[r] != c.f[r]) what += " f" + std::to_string(r);
+        if (general->pc != c.pc) what += " pc";
+        if (general->clock != c.clock) what += " clock";
+        for (size_t i = 0; i < sizeof(Core); i++)
+            if (((const uint8_t*)general)[i] != ((const uint8_t*)&c)[i]) { what += " (its byte " + std::to_string(i) + " first);"; break; }
+    }
+    if (memcmp(&w1, &workers[(size_t)c.hart], sizeof w1)) what += " its worker's state;";
+    if (said1 != fc.said) what += " what it said;";
+    check_same(s1, s2, c.hart, what);
+    // RAM: each page either run wrote, as the general step left it
+    std::vector<u32> all = pages1;
+    all.insert(all.end(), fc.pages.begin(), fc.pages.end());
+    std::sort(all.begin(), all.end());
+    all.erase(std::unique(all.begin(), all.end()), all.end());
+    for (u32 p : all) {
+        const uint8_t* want = nullptr;
+        for (size_t k = 0; k < pages1.size() && !want; k++) if (pages1[k] == p) want = &after1[k * 4096];
+        for (size_t k = 0; k < fc.pages.size() && !want; k++) if (fc.pages[k] == p) want = &fc.copies[k * 4096];   // (as it was)
+        const uint8_t* now = ramp + ((size_t)p << 12);
+        if (!memcmp(want, now, 4096)) continue;
+        u32 i = 0;
+        while (want[i] == now[i]) i++;
+        char line[160];
+        snprintf(line, sizeof line, " RAM at %08x: %02x by the general step, %02x by the fast handlers;", RAM_BASE + (p << 12) + i, want[i], now[i]);
+        what += line;
+        break;
+    }
+    if (!what.empty()) {
+        fprintf(stderr, "[check] RVC_FAST_CHECK: pass %llu, core %d from pc %08x: the general step ended at pc %08x after %llu instructions, "
+                "the fast handlers at %08x after %llu; differ in:%s\n", (unsigned long long)frame_no, c.hart, pc0, general->pc,
+                (unsigned long long)n1, c.pc, (unsigned long long)n2, what.c_str());
+        exit(4);
+    }
+    fc.checks++;
+    for (char ch : fc.said) console_put((uint8_t)ch);
+    return n2;
+}
+
 // The machine at power-on: the image's RAM and ROM, core 0 at the kernel.
 static bool machine_boot(const std::string& image, int count) {
     std::vector<uint8_t> payload;
@@ -2564,7 +2753,7 @@ static u64 machine_pass(u32 ticks) {
         if (geometry[i]) workers[i].job_was = word(mc_job_at((int)i));
     if (races_on) mbox_keep();
     if (prof::on) prof::pass_begin();
-    u64 most = cores[0].copying ? 0 : run(cores[0], ticks);
+    u64 most = cores[0].copying ? 0 : check_on ? checked(cores[0], ticks, run) : run(cores[0], ticks);
     most = std::max(most, workers_pass(ticks));
     copy_pass();
     for (Core& c : cores) dirty_bands |= c.dirty, c.dirty = 0;
@@ -2775,6 +2964,7 @@ int main(int argc, char** argv) {
     if (wc_on && getenv("RVC_WC_LOG")) wc_log = fopen(getenv("RVC_WC_LOG"), "wb");
     zb_on = getenv("RVC_ZB") && atoi(getenv("RVC_ZB")) != 0;
     gpu_copy_on = getenv("RVC_GPU_COPY") && atoi(getenv("RVC_GPU_COPY")) != 0;
+    check_init();
     if (opt.netPort) {
         std::string why = "--net-id is 1 to 16";
         if (opt.netId < 1 || opt.netId > (int)NetLink::kBroadcastTo || !net.open(opt.netPort, (unsigned)opt.netId, opt.netLoss, opt.netDelay, why)) {
@@ -2861,6 +3051,7 @@ int main(int argc, char** argv) {
     if (wc_on)
         fprintf(stderr, "[cpu] write cache: %llu passes of core 0 and %llu of workers ended full (RVC_WCACHE)\n",
                 (unsigned long long)wc_full_passes[0], (unsigned long long)wc_full_passes[1]);
+    if (check_on) fprintf(stderr, "[check] RVC_FAST_CHECK: %llu passes of a core alike both ways\n", (unsigned long long)fc.checks);
     if (zb_on) fprintf(stderr, "[cpu] Zba and Zbb instructions run (RVC_ZB): %llu\n", (unsigned long long)zb_run);
     if (copies_long || copy_waits || getenv("RVC_COPY_STATS"))
         fprintf(stderr, "[cpu] copies from RAM to RAM: %llu, %llu of them over 256 KB (the longest %llu bytes): %llu chunks; cores waited %llu passes\n",
