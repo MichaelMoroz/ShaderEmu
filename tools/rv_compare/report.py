@@ -52,13 +52,27 @@ def spread(v):
     return 100 * (max(v) - min(v)) / abs(mean(v))
 
 
+def spoiled():
+    """spoiled.txt: `MACHINE:PART:ROUND reason` a line, a round left out of the means (a card that was slower)"""
+    p = os.path.join(HERE, 'spoiled.txt')
+    out = {}
+    for l in open(p) if os.path.exists(p) else []:
+        if l.strip() and not l.startswith('#'):
+            key, _, why = l.strip().partition(' ')
+            m, part, rnd = key.split(':')
+            out[(m, part, int(rnd))] = why
+    return out
+
+
 def load():
     res = {}   # (machine, part) -> {round: row}
     p = os.path.join(HERE, 'results.jsonl')
+    bad = spoiled()
     if os.path.exists(p):
         for l in open(p):
             r = json.loads(l)
-            res.setdefault((r['machine'], r['part']), {})[r.get('round', 0)] = r
+            if (r['machine'], r['part'], r.get('round', 0)) not in bad:
+                res.setdefault((r['machine'], r['part']), {})[r.get('round', 0)] = r
     return res
 
 
@@ -107,6 +121,9 @@ def main(A='before', B='after'):
             v = sorted(spreads[m])
             s += (f'- Run-to-run spread on {m} over {len(v)} metrics with two rounds or more: median {statistics.median(v):.1f}%, '
                   f'75th percentile {v[int(0.75 * len(v))]:.1f}%, largest {v[-1]:.1f}%.\n')
+    bad = spoiled()
+    if bad:
+        s += f'- Rounds left out of the means ({len(bad)}, `spoiled.txt`): ' + '; '.join(f'{m} {p} round {r}' for m, p, r in bad) + '.\n'
     s += '\n'
     notes = os.path.join(HERE, 'notes.md')
     if os.path.exists(notes):
