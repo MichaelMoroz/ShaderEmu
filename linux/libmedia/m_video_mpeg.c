@@ -614,7 +614,7 @@ static int
 mpeg_ready(struct media_video *v, int *in_time)
 {
 	struct mpeg *m = v->own;
-	uint32_t now = m_now_ms();
+	uint32_t now = m_now_ms(), asked;
 	int k;
 
 	*in_time = 0;
@@ -626,6 +626,7 @@ mpeg_ready(struct media_video *v, int *in_time)
 	/* whether the groups being decoded will be there in time, each going on as fast as it has got
 	 * to where it is (the first groups are all begun at once and end seconds apart) */
 	*in_time = 1;
+	asked = media_video_time(v, m->asked + 1);
 	for (k = 1; k <= m->unit_count; k++) {
 		struct unit *u = &m->units[k];
 		int done, until;
@@ -633,7 +634,7 @@ mpeg_ready(struct media_video *v, int *in_time)
 		if (u->state != DECODING)
 			continue;
 		done = m->videos[u->video]->done;
-		until = (int)(media_video_time(v, m->gop[u->gop].first) - media_video_time(v, m->asked + 1));
+		until = (int)(media_video_time(v, m->gop[u->gop].first) - asked);
 		if (until < 0 || (now - u->began) * (unsigned)(u->frames - done) > (unsigned)until * (unsigned)(done ? done : 1))
 			*in_time = 0;
 	}
