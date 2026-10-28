@@ -1210,11 +1210,11 @@ W_CheckNumForName(char *name)
 int
 R_CheckTextureNumForName(char *name)
 {
-	static struct named *whole, *begins;
+	static struct named *whole, *begins, *answered;	/* answered: a name asked before, and its number + 1 */
 	static void *of;
-	static int count = -1, nameless;
-	static unsigned whole_mask, begins_mask;
-	unsigned a, b;
+	static int count = -1, nameless, answers;
+	static unsigned whole_mask, begins_mask, answered_mask;
+	unsigned a, b, name_a, name_b;
 	int i, k, length = 0, found, other;
 
 	if (name[0] == '-')
@@ -1226,12 +1226,16 @@ R_CheckTextureNumForName(char *name)
 	if (of != (void *)textures || count != numtextures) {
 		free(whole);
 		free(begins);
+		free(answered);
 		whole = name_table(numtextures, &whole_mask);
 		begins = name_table(numtextures * 8, &begins_mask);
-		if (!whole || !begins) {
+		answered = name_table(512, &answered_mask);
+		answers = 0;
+		if (!whole || !begins || !answered) {
 			free(whole);
 			free(begins);
-			whole = begins = NULL;
+			free(answered);
+			whole = begins = answered = NULL;
 			count = -1;
 			return R_CheckTextureNumForName_port(name);
 		}
@@ -1254,6 +1258,12 @@ R_CheckTextureNumForName(char *name)
 	if (!length)
 		return numtextures > 0 ? 0 : -1;	/* no name at all fits the first texture */
 	name_words(name, length, &a, &b);
+	/* a level's sides ask some 3,000 times for a hundred names: 100 instructions a search, 9% of its load */
+	found = name_find(answered, answered_mask, a, b);
+	if (found >= 0)
+		return found - 1;
+	name_a = a;
+	name_b = b;
 	found = name_find(begins, begins_mask, a, b);
 	if (nameless >= 0 && (found < 0 || nameless < found))
 		found = nameless;
@@ -1262,6 +1272,10 @@ R_CheckTextureNumForName(char *name)
 		other = name_find(whole, whole_mask, a, b);
 		if (other >= 0 && (found < 0 || other < found))
 			found = other;
+	}
+	if (answers < 512) {	/* (the table has room for three times as many) */
+		name_add(answered, answered_mask, name_a, name_b, found + 1);
+		answers++;
 	}
 	return found;
 }

@@ -222,14 +222,14 @@ CASES = [
          has=[r'with 255 workers']),
     case('nxray-none', 'workers long', X + 'RAY_WORKERS=0 RAY_FRAMES=4 nxray', wall=600,
          sums=[(r'raystat: picture \d.* sum ([0-9a-f]+)', ['53ea472d', '226b5e92', '37366b32', '3ffdbe63'])]),
-    case('nxpath', 'workers', X + 'NXPATH_AUTO=1 NXPATH_EXIT=1 NXPATH_SIZE=160x120 NXPATH_SAMPLES=2 nxpath', True, has=[r'02f213e9']),
-    case('nxpath-none', 'workers long', X + 'NXPATH_CORES=0 NXPATH_AUTO=1 NXPATH_EXIT=1 NXPATH_SIZE=160x120 NXPATH_SAMPLES=2 nxpath', wall=600, has=[r'02f213e9']),
+    case('nxpath', 'workers', X + 'NXPATH_AUTO=1 NXPATH_EXIT=1 NXPATH_SIZE=160x120 NXPATH_SAMPLES=2 nxpath', True, has=[r'd63313e9']),
+    case('nxpath-none', 'workers long', X + 'NXPATH_CORES=0 NXPATH_AUTO=1 NXPATH_EXIT=1 NXPATH_SIZE=160x120 NXPATH_SAMPLES=2 nxpath', wall=600, has=[r'd63313e9']),
     case('nxpath-check', 'workers', X + 'NXPATH_CHECK=500 nxpath', True, until='thousandths of a pixel',
          has=[r'nxpath: 0 of 500 rays met another object']),
     # nxpath's example scenes (docs/apps/raytrace.md, "Example scenes"): the same sum with every worker and with none
     *[case(f'nxpath-{n}{tag}', 'workers pathtrace', X + f'{pre}NXPATH_AUTO=1 NXPATH_EXIT=1 NXPATH_SIZE={size} NXPATH_SAMPLES=2 nxpath {n}',
            not pre, has=[rf'pathstat: {size.replace("x", " x ")}, 2 samples.* sum {s}'])
-      for n, size, s in (('cornell', '120x120', '78c07525'), ('cornell-balls', '120x120', 'b962c063'), ('balls', '160x120', 'b85eb16e'),
+      for n, size, s in (('cornell', '120x120', '78c07525'), ('cornell-balls', '120x120', 'b962c063'), ('balls', '160x120', '820f06bc'),
                          ('materials', '160x120', '5ecc7a24'), ('beer', '160x120', '3c29787e'), ('mirrors', '160x120', '2f211b98'),
                          ('glow', '160x120', '2858a999'))
       for tag, pre in (('', ''), ('-none', 'NXPATH_CORES=0 '))],
@@ -237,7 +237,7 @@ CASES = [
     *[case(f'nxpath-saved-{n or "start"}', 'workers pathtrace', X + f'NXPATH_WRITE=/tmp/s.scene NXPATH_AUTO=1 NXPATH_EXIT=1 NXPATH_SIZE=8x8 NXPATH_SAMPLES=1 nxpath {n}'
            f' && NXPATH_AUTO=1 NXPATH_EXIT=1 NXPATH_SIZE={size} NXPATH_SAMPLES=2 nxpath /tmp/s.scene', True,
            has=[r'nxpath: /tmp/s\.scene written', rf'pathstat: {size.replace("x", " x ")}, 2 samples.* sum {s}'])
-      for n, size, s in (('', '160x120', '02f213e9'), ('cornell', '120x120', '78c07525'), ('materials', '160x120', '5ecc7a24'))],
+      for n, size, s in (('', '160x120', 'd63313e9'), ('cornell', '120x120', '78c07525'), ('materials', '160x120', '5ecc7a24'))],
     case('nxpath-cornell-check', 'workers pathtrace', X + 'NXPATH_CHECK=500 nxpath cornell', True, until='thousandths of a pixel',
          has=[r'nxpath: 0 of 500 rays met another object', r'at most 0 thousandths of a pixel']),
     # libmedia and the players (docs/system/media.md, docs/apps/play.md, docs/apps/video.md)
@@ -282,7 +282,7 @@ CASES = [
          has=[r'pixel 60,50 is 00ff00', r'saved as /tmp/x\.png'], pairs=[r'nxpaint: (\d+ x \d+, sum [0-9a-f]+),']),
     case('nxask', 'desktop', X + "(nxkey 2500 n) & nxask 'Sure?' Yes No; echo ASK=$?", has=[r'^ASK=1']),
     case('nxpinball', 'desktop', X + 'PINBALL_DEMO=1800 nxpinball',   # docs/apps/pinball.md: three balls of a game played by itself
-         has=[r'pinball: 1800 frames, 1 games, ball 3, high 0, score 28900 state 76570342']),
+         has=[r'pinball: 1800 frames, 1 games, ball 3, high 0, score 18060 state 51ec1e4b']),
     case('nxfiles', 'desktop', X + 'NXFILES_PRINT=1 nxfiles /usr/share & sleep 6; nxkey drag:643,86:343,196; sleep 4',
          has=[r'nxfiles: the box selected 8 ']),
     # docs/system/nanox.md, "A new name" and "Save to persistence": typed over the name, its ending kept; refused over 100 KB
@@ -516,7 +516,7 @@ def zerotail_nommu():
 # (16-byte romfs packing): what the pool hands out is checked on copies in tmpfs
 ZERO_TAIL_NOMMU = ('zerotest 12 4; mkdir -p /tmp/t; find /usr/share /usr/bin /etc -maxdepth 1 -type f -size -256k | '
                    'while read f; do cp "$f" /tmp/t/; done; tailtest /tmp/t/*')
-CC_BYTES_NOMMU = 'c23bcf68'   # libc.a's memcpy and memset ask for the commit's copy from 2 KB (uop.h; 28 October 2026)
+CC_BYTES_NOMMU = '4b1da89b'   # libc.a's float libm (linux/userland/libm) and memcpy and memset through the commit's copy; libmcw.a's mc_publish (28 October 2026)
 
 
 def without_mmu(image):

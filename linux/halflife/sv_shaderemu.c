@@ -82,6 +82,7 @@ uint32_t SE_ServerOnCore0( uint32_t ( *fn )( void * ), void *args )
 	if( !SE_OnServer( ))
 		return fn( args );
 	ask.fn = fn, ask.args = args;
+	mc_publish( );	// (the call before its number: mc.h)
 	ask.seq = ask.seq + 1;
 	se_asks.fn[se_asks.n++ & 63] = (uint)fn;	// DEBUG
 	while( answer.seq != ask.seq )

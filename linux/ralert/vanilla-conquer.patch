@@ -124,6 +124,26 @@ index ba5543f..1d29b2d 100644
              char digest1[20];
              char digest2[20];
              sha.Result(digest2);
+diff --git a/common/vector.h b/common/vector.h
+index cd86400..1a64467 100644
+--- a/common/vector.h
++++ b/common/vector.h
+@@ -355,6 +355,15 @@ public:
+     // Set all boolean values to false;
+     void Reset(void);
+ 
++    // Set the values in bytes first to first + count - 1 false (a part of Reset: the rest stay as they are)
++    void Reset_Bytes(int first, int count)
++    {
++        if (LastIndex != -1)
++            Fixup(-1);
++        for (int i = 0; i < count; i++)
++            BitArray[first + i] = 0;
++    }
++
+     // Set all boolean values to true.
+     void Set(void);
+ 
 diff --git a/common/vqadrawer.cpp b/common/vqadrawer.cpp
 index f0d1108..684871c 100644
 --- a/common/vqadrawer.cpp
@@ -1803,10 +1823,10 @@ index 4825ba4..cd2bf65 100644
      Hide_Mouse();
      SeenPage.Blit(HidPage);
 diff --git a/redalert/display.cpp b/redalert/display.cpp
-index d328d82..dfd21c8 100644
+index d328d82..d385db2 100644
 --- a/redalert/display.cpp
 +++ b/redalert/display.cpp
-@@ -115,6 +115,12 @@ unsigned char DisplayClass::UnitShadowAir[(USHADOW_COL_COUNT + 1) * 256];
+@@ -115,12 +115,31 @@ unsigned char DisplayClass::UnitShadowAir[(USHADOW_COL_COUNT + 1) * 256];
  unsigned char DisplayClass::SpecialGhost[2 * 256];
  
  void const* DisplayClass::ShadowShapes;
@@ -1819,7 +1839,26 @@ index d328d82..dfd21c8 100644
  unsigned char DisplayClass::ShadowTrans[(SHADOW_COL_COUNT + 1) * 256];
  
  /*
-@@ -1298,6 +1304,18 @@ void DisplayClass::Refresh_Cells(CELL cell, short const* list)
+ ** Bit array of cell redraw flags
+ */
+ BooleanVectorClass DisplayClass::CellRedraw;
++#ifdef SHADEREMU
++unsigned DisplayClass::CellRedrawRows[MAP_CELL_H / 32];
++
++void DisplayClass::CellRedraw_Reset(void)
++{
++    for (int k = 0; k < MAP_CELL_H / 32; k++) {
++        for (unsigned rows = CellRedrawRows[k]; rows; rows &= rows - 1) {
++            CellRedraw.Reset_Bytes((k * 32 + __builtin_ctz(rows)) * (MAP_CELL_W / 8), MAP_CELL_W / 8);
++        }
++        CellRedrawRows[k] = 0;
++    }
++}
++#endif
+ 
+ /*
+ ** The main button that intercepts user input to the map
+@@ -1298,6 +1317,18 @@ void DisplayClass::Refresh_Cells(CELL cell, short const* list)
          list++;
      }
  
@@ -1838,7 +1877,7 @@ index d328d82..dfd21c8 100644
      List_Copy(list, ARRAY_SIZE(tlist), tlist);
      short* tt = tlist;
      int count = 0;
-@@ -1606,7 +1624,12 @@ bool DisplayClass::Map_Cell(CELL cell, HouseClass* house, bool check_radar_spied
+@@ -1606,7 +1637,12 @@ bool DisplayClass::Map_Cell(CELL cell, HouseClass* house, bool check_radar_spied
      */
  #if (1)
      if (cellptr->Is_Mapped(house)) {
@@ -1851,7 +1890,7 @@ index d328d82..dfd21c8 100644
              cellptr->Redraw_Objects();
          }
          return (false);
-@@ -1754,12 +1777,28 @@ bool DisplayClass::Coord_To_Pixel(COORDINATE coord, int& x, int& y) const
+@@ -1754,12 +1790,28 @@ bool DisplayClass::Coord_To_Pixel(COORDINATE coord, int& x, int& y) const
  bool DisplayClass::Coord_To_Pixel(COORDINATE coord, int& x, int& y) const
  {
      if (coord) {
@@ -1880,7 +1919,7 @@ index d328d82..dfd21c8 100644
              int yoff = Pixel_To_Lepton(Lepton_To_Pixel(Coord_Y(coord)));
  
              yoff = (yoff + EDGE_ZONE) - ytac;
-@@ -1891,9 +1930,44 @@ void DisplayClass::Draw_It(bool forced)
+@@ -1891,9 +1943,44 @@ void DisplayClass::Draw_It(bool forced)
  
      MapClass::Draw_It(forced);
  
@@ -1917,7 +1956,7 @@ index d328d82..dfd21c8 100644
 +                Layer[LAYER_GROUND][index]->IsToDisplay = false;
 +            }
 +#endif
-+            CellRedraw.Reset();
++            CellRedraw_Reset();
 +            BEnd(BENCH_TACTICAL);
 +            return;
 +        }
@@ -1925,7 +1964,29 @@ index d328d82..dfd21c8 100644
  
          /*
          **	In rubber band mode, mark all cells under the "rubber band" to be
-@@ -4792,6 +4866,10 @@ void DisplayClass::Read_INI(CCINIClass& ini)
+@@ -2155,6 +2242,9 @@ void DisplayClass::Draw_It(bool forced)
+         */
+         if (forced) {
+             CellRedraw.Set();
++#ifdef SHADEREMU
++            memset(CellRedrawRows, 0xff, sizeof(CellRedrawRows));
++#endif
+         }
+ 
+         /*
+@@ -2250,7 +2340,11 @@ void DisplayClass::Draw_It(bool forced)
+         /*
+         **	Clear the redraw flags so that normal redraw flag setting can resume.
+         */
++#ifdef SHADEREMU
++        CellRedraw_Reset();
++#else
+         CellRedraw.Reset();
++#endif
+ 
+ #ifdef SCENARIO_EDITOR
+         /*
+@@ -4792,6 +4886,10 @@ void DisplayClass::Read_INI(CCINIClass& ini)
                  tt->AttachCount++;
                  tt->Cell = cell;
                  (*this)[cell].Trigger = tt;
@@ -1936,7 +1997,7 @@ index d328d82..dfd21c8 100644
              }
          }
      }
-@@ -4993,6 +5071,14 @@ void DisplayClass::Constrained_Look(COORDINATE center, LEPTON distance, HouseCla
+@@ -4993,9 +5091,20 @@ void DisplayClass::Constrained_Look(COORDINATE center, LEPTON distance, HouseCla
   *=============================================================================================*/
  void DisplayClass::Flag_Cell(CELL cell)
  {
@@ -1951,8 +2012,14 @@ index d328d82..dfd21c8 100644
      Flag_To_Redraw(false);
      IsToRedraw = true;
      CellRedraw[cell] = true;
++#ifdef SHADEREMU
++    CellRedrawRows[Cell_Y(cell) >> 5] |= 1u << (Cell_Y(cell) & 31);
++#endif
+ }
+ 
+ static ActionType _priority_actions[] =
 diff --git a/redalert/display.h b/redalert/display.h
-index c8ed7a3..1b668e5 100644
+index c8ed7a3..2c2840b 100644
 --- a/redalert/display.h
 +++ b/redalert/display.h
 @@ -142,6 +142,9 @@ public:
@@ -1965,6 +2032,21 @@ index c8ed7a3..1b668e5 100644
  
      /*
      **	Added functionality.
+@@ -338,6 +341,14 @@ private:
+     **	be redrawn for a cell, then the corresponding flag will be true.
+     */
+     static BooleanVectorClass CellRedraw;
++#ifdef SHADEREMU
++    /*
++    ** The rows of CellRedraw with a cell flagged, a bit a row: a reset clears those rows only (a
++    ** row is 16 bytes, one texel; the whole 2 KB each frame filled most of a pass's write cache).
++    */
++    static unsigned CellRedrawRows[MAP_CELL_H / 32];
++    static void CellRedraw_Reset(void);
++#endif
+ 
+     bool Good_Reinforcement_Cell(CELL outcell, CELL incell, SpeedType loco, int zone, MZoneType mzone) const;
+ 
 diff --git a/redalert/externs.h b/redalert/externs.h
 index 7ca9684..a8a299b 100644
 --- a/redalert/externs.h

@@ -177,13 +177,40 @@ media_video_seek(struct media_video *v, int n)
 	return v->film->seek(v, n);
 }
 
+/* n * 1000000 / f and ms * f / 1000000 in 32-bit divides where they fit: a 64-bit divide is a call of about
+ * 400 instructions, and a film's player asks for times at every poll (nxvideo's mpeg_ready: 34% of core 0) */
+static uint32_t
+frames_ms(uint32_t n, uint32_t f)
+{
+	uint32_t a;
+
+	if (n <= 4294u)
+		return n * 1000000u / f;
+	if (n >= 4294967u || f >= 4294967u)
+		return (uint32_t)((uint64_t)n * 1000000u / f);
+	a = n * 1000u;	/* a * 1000 / f = 1000 (a / f) + 1000 (a % f) / f */
+	return a / f * 1000u + a % f * 1000u / f;
+}
+
+static uint32_t
+ms_frames(uint32_t ms, uint32_t f)
+{
+	uint32_t s = ms / 1000u, u;
+
+	if (f >= 4294967u || (s && s > (0xffffffffu - 4294967u) / f))
+		return (uint32_t)((uint64_t)ms * f / 1000000u);
+	/* ms = 1000 s + t: (1000 s f + t f) / 1000000 = (s f + t f / 1000) / 1000, every floor taken */
+	u = ms % 1000u * f / 1000u;
+	return (s * f + u) / 1000u;
+}
+
 uint32_t
 media_video_time(const struct media_video *v, int n)
 {
 	n = n < 0 ? 0 : n > v->info.frames ? v->info.frames : n;
 	if (v->film->time)
 		return v->film->time(v, n);
-	return (uint32_t)((uint64_t)n * 1000000u / (uint32_t)v->info.fps_milli);
+	return frames_ms((uint32_t)n, (uint32_t)v->info.fps_milli);
 }
 
 int
@@ -192,9 +219,9 @@ media_video_at(const struct media_video *v, uint32_t ms)
 	int low = 0, high = v->info.frames - 1, middle;
 
 	if (!v->film->time) {
-		uint64_t n = (uint64_t)ms * (uint32_t)v->info.fps_milli / 1000000u;
+		uint32_t n = ms_frames(ms, (uint32_t)v->info.fps_milli);
 
-		return n >= (uint64_t)v->info.frames ? v->info.frames - 1 : (int)n;
+		return n >= (uint32_t)v->info.frames ? v->info.frames - 1 : (int)n;
 	}
 	while (low < high) {
 		middle = (low + high + 1) / 2;

@@ -15,10 +15,12 @@
 #include <string.h>
 #include <GLES/segl.h>
 #include "mcw.h"
+#include "mcwx.h"
 #include "doomdef.h"
 #include "doomstat.h"
 #include "hu_lib.h"
 #include "hu_stuff.h"
+#include "i_system.h"
 #include "m_swap.h"
 #include "p_local.h"
 #include "r_local.h"
@@ -35,6 +37,8 @@ void R_Subsector_soft(int num);
 void R_SetupFrame(player_t *player);
 void R_AddLine(seg_t *line);
 extern short **texturecolumnlump;
+extern unsigned short **texturecolumnofs;
+extern byte **texturecomposite;
 extern int *texturewidthmask;
 extern int numtextures;
 extern int skyflatnum;
@@ -215,6 +219,27 @@ ask(int kind, int number)
 	return 0;
 }
 
+/* Wall `number`'s columns into its picture; `columns` has them found already (R_GetColumn), or is NULL. */
+static void
+wall_copy(byte *picture, int number, byte *const *columns)
+{
+	const int width = texturewidthmask[number] + 1, height = textureheight[number] >> FRACBITS;
+	int x;
+
+	for (x = 0; x < width && texturecolumnlump[number][x] <= 0; x++)
+		;
+	if (x < width)	/* (a picture of whole columns has no holes to clear first) */
+		memset(picture, KEY, width * height);
+	for (x = 0; x < width; x++) {
+		byte *column = columns ? columns[x] : R_GetColumn(number, x), *to = picture + x * height;
+
+		if (texturecolumnlump[number][x] > 0)
+			column_posts(to, height, (column_t *)(column - 3));	/* straight from one patch: it may leave holes */
+		else
+			memcpy(to, column, height);
+	}
+}
+
 /* (`number` is the picture after animation: wall_now's) */
 static GLuint
 wall_texture(int number)
@@ -235,15 +260,7 @@ wall_texture(int number)
 		wall_gl[number] = name;
 		return 0;
 	}
-	memset(picture, KEY, width * height);
-	for (x = 0; x < width; x++) {
-		byte *column = R_GetColumn(number, x), *to = picture + x * height;
-
-		if (texturecolumnlump[number][x] > 0)
-			column_posts(to, height, (column_t *)(column - 3));	/* straight from one patch: it may leave holes */
-		else
-			memcpy(to, column, height);
-	}
+	wall_copy(picture, number, NULL);
 	glBindTexture(GL_TEXTURE_2D, name);
 	seglTexturePointer(picture, height, width, GL_COLOR_INDEX8_EXT);
 	return wall_gl[number] = name;	/* (named last: a worker core may be looking) */
@@ -375,6 +392,32 @@ keep_polygon(int subsector, fixed_t (*p)[2], int n)
 	corner_count += n;
 }
 
+/* (n << 16) / (n + m) for n, m > 0 (under 2^47), as C's division has it: the quotient is under 65,536,
+ * guessed from a float division of the top 31 bits and made exact by the remainder (the library's
+ * 64-bit division took 200 instructions a call, 8% of a level's load; a bit at a time, 150). */
+static long long
+fraction(unsigned long long n, unsigned long long m)
+{
+	const unsigned long long d = n + m, whole = n << 16;
+	const unsigned high = (unsigned)(d >> 32);
+	const int shift = high ? 33 - __builtin_clz(high) : (unsigned)d >> 31;
+	unsigned q = (unsigned)((float)(int)(unsigned)(n >> shift) * 65536.0f / (float)(int)(unsigned)(d >> shift));
+	unsigned long long product;
+
+	if (q > 65535)
+		q = 65535;
+	product = (unsigned long long)q * d;
+	while (product > whole) {
+		q--;
+		product -= d;
+	}
+	while (whole - product >= d) {
+		q++;
+		product += d;
+	}
+	return q;
+}
+
 /* The part of polygon `in` on `side` of a node's partition line (as R_PointOnSide has sides). */
 static int
 clip(fixed_t (*in)[2], int n, node_t *node, int side, fixed_t (*out)[2])
@@ -401,7 +444,7 @@ clip(fixed_t (*in)[2], int n, node_t *node, int side, fixed_t (*out)[2])
 				di >>= 1;
 				dj >>= 1;
 			}
-			t = (di << 16) / (di - dj);
+			t = fraction(di < 0 ? -di : di, di < 0 ? dj : -dj);	/* (opposite signs) */
 			out[m][0] = in[i][0] + (fixed_t)((((long long)in[j][0] - in[i][0]) * t) >> 16);
 			out[m++][1] = in[i][1] + (fixed_t)((((long long)in[j][1] - in[i][1]) * t) >> 16);
 		}
@@ -889,28 +932,40 @@ add_piece(int of, int kind, int sector, int texture, int shade, int unique, int 
 	p->offset = kind < FLOOR ? segs[of].sidedef->textureoffset : 0;
 }
 
-/* Into piece_order: by sector first, which a count does, then the few of each sector among themselves. */
+/* Into piece_order: by sector first, which a count does, then the few of each sector among themselves,
+ * by numbers (a piece is 32 bytes: moving pieces was 4% of a level's load) and a halving search for
+ * where each goes, after the last that is not after it (the order a stable sort gives). */
 static void
 sort_pieces(void)
 {
 	struct piece *sorted = room((piece_count + 1) * sizeof *sorted);
-	int *start = calloc(numsectors + 3, sizeof *start), i, s;
+	int *start = calloc(numsectors + 3, sizeof *start), *at = malloc((piece_count + 1) * sizeof *at), i, s;
 
 	for (i = 0; i < piece_count; i++)
 		start[pieces[i].sector + 2]++;
 	for (s = 0; s <= numsectors; s++)
 		start[s + 2] += start[s + 1];
 	for (i = 0; i < piece_count; i++)
-		sorted[start[pieces[i].sector + 1]++] = pieces[i];
+		at[start[pieces[i].sector + 1]++] = i;
 	for (s = 0; s <= numsectors; s++)
 		for (i = start[s] + 1; i < start[s + 1]; i++) {
-			struct piece moved = sorted[i];
-			int k = i;
+			const int moved = at[i];
+			int low = start[s], high = i;
 
-			for (; k > start[s] && piece_order(&sorted[k - 1], &moved) > 0; k--)
-				sorted[k] = sorted[k - 1];
-			sorted[k] = moved;
+			while (low < high) {
+				const int middle = (low + high) >> 1;
+
+				if (piece_order(&pieces[at[middle]], &pieces[moved]) > 0)
+					high = middle;
+				else
+					low = middle + 1;
+			}
+			memmove(at + low + 1, at + low, (i - low) * sizeof *at);
+			at[low] = moved;
 		}
+	for (i = 0; i < piece_count; i++)
+		sorted[i] = pieces[at[i]];
+	free(at);
 	free(start);
 	free(pieces);
 	pieces = sorted;
@@ -999,6 +1054,143 @@ world_free(void)
 	world_name = 0;
 	world_on = 0;
 	seglKeep(0, 0);
+}
+
+/*
+ * A level's wall and floor pictures before its groups ask for them one by one, which was a third of
+ * the first core's load: this core finds each picture's columns (R_GetColumn may make a composite
+ * in the zone, and a lump is read from the file) and holds their memory in the zone, and the workers
+ * copy them into GPU memory, a picture each (seglMemory's are 16 bytes apart). In batches, so that
+ * the zone never holds more than BATCH pictures' lumps at once.
+ */
+#define BATCH 64
+struct making { byte *picture; int number, flat; GLuint name; byte **columns; };
+
+static void
+pictures_make(void *ctx, uint32_t from, uint32_t to)
+{
+	struct making *m = ctx;
+
+	for (; from < to; from++)
+		if (m[from].flat)
+			memcpy(m[from].picture, m[from].columns[0], 64 * 64);
+		else
+			wall_copy(m[from].picture, m[from].number, m[from].columns);
+}
+
+/* A wall picture's lumps (but its composite) held in the zone (PU_STATIC) or let go (PU_CACHE); with
+ * `columns`, where its columns lie. */
+static void
+wall_lumps(int number, int tag, byte **columns)
+{
+	byte *at = NULL;
+	int x, lump, last = 0;
+
+	for (x = 0; x <= texturewidthmask[number]; x++) {
+		lump = texturecolumnlump[number][x];
+		if (lump > 0 && lump != last)
+			at = W_CacheLumpNum(lump, tag);
+		if (lump > 0)
+			last = lump;
+		if (columns)
+			columns[x] = (lump > 0 ? at : texturecomposite[number]) + texturecolumnofs[number][x];
+	}
+}
+
+static void
+pictures_ahead(void)
+{
+	static const mcw_for_opts each = { 1, 0, NULL, 0, 0, 0 };	/* a picture a piece */
+	struct making *m = malloc(BATCH * sizeof *m);
+	byte *wanted = calloc(numtextures + flat_count + 1, 1), **columns = NULL;
+	int g, k, n = 0, x, used, number, flat, bytes;
+
+	if (!m || !wanted) {
+		free(m);
+		free(wanted);
+		return;
+	}
+	mcw_touch_code((const void *)pictures_make, 64);
+	mcw_touch_code((const void *)wall_copy, 256);
+	mcw_touch_code((const void *)column_posts, 64);
+	for (g = 0; g <= group_count; g++) {
+		if (g < group_count) {
+			const struct group *group = &groups[g];
+
+			if (group->kind == WALL_SKY || group->kind == SKY)
+				continue;
+			flat = group->kind >= FLOOR;
+			number = flat ? flat_now[group->texture] : wall_now[group->texture];
+			if (flat ? number < 0 || number >= flat_count || flat_gl[number] : wall_gl[number])
+				continue;
+			if (wanted[flat ? numtextures + number : number])
+				continue;
+			wanted[flat ? numtextures + number : number] = 1;
+			bytes = flat ? 64 * 64 : (texturewidthmask[number] + 1) * (textureheight[number] >> FRACBITS);
+			m[n].number = number;
+			m[n].flat = flat;
+			m[n].picture = seglMemory(bytes);
+			glGenTextures(1, &m[n].name);
+			if (!m[n].picture || !m[n].name) {
+				if (flat)
+					flat_gl[number] = m[n].name;
+				else
+					wall_gl[number] = m[n].name;
+				continue;
+			}
+			mcw_touch(m[n].picture, bytes);
+			if (++n < BATCH)
+				continue;
+		}
+		if (!n)
+			continue;
+		/* the composites first (making one reads patches, which leaves them PU_CACHE), held; then
+		 * the lumps, held, and nothing else asked of the zone until they are let go */
+		for (k = used = 0; k < n; k++) {
+			number = m[k].number;
+			used += m[k].flat ? 1 : texturewidthmask[number] + 1;
+			if (m[k].flat)
+				continue;
+			for (x = 0; x <= texturewidthmask[number] && texturecolumnlump[number][x] > 0; x++)
+				;
+			if (x <= texturewidthmask[number]) {
+				R_GetColumn(number, x);
+				Z_ChangeTag(texturecomposite[number], PU_STATIC);
+			}
+		}
+		if (!(columns = realloc(columns, (used + 1) * sizeof *columns)))
+			break;	/* (what is not made is made as it is asked for) */
+		for (k = used = 0; k < n; k++) {
+			number = m[k].number;
+			m[k].columns = columns + used;
+			if (m[k].flat) {
+				columns[used++] = W_CacheLumpNum(firstflat + number, PU_STATIC);
+			} else {
+				wall_lumps(number, PU_STATIC, columns + used);
+				used += texturewidthmask[number] + 1;
+			}
+		}
+		mcw_for_opt(n, pictures_make, m, &each);
+		for (k = 0; k < n; k++) {
+			number = m[k].number;
+			glBindTexture(GL_TEXTURE_2D, m[k].name);
+			if (m[k].flat) {
+				seglTexturePointer(m[k].picture, 64, 64, GL_COLOR_INDEX8_EXT);
+				flat_gl[number] = m[k].name;
+				W_CacheLumpNum(firstflat + number, PU_CACHE);
+				continue;
+			}
+			seglTexturePointer(m[k].picture, textureheight[number] >> FRACBITS, texturewidthmask[number] + 1, GL_COLOR_INDEX8_EXT);
+			wall_gl[number] = m[k].name;
+			wall_lumps(number, PU_CACHE, NULL);
+			if (texturecomposite[number])
+				Z_ChangeTag(texturecomposite[number], PU_CACHE);
+		}
+		n = 0;
+	}
+	free(columns);
+	free(wanted);
+	free(m);
 }
 
 /* Into order of height (a Shell sort: a level has hundreds of sectors and few heights). */
@@ -1197,6 +1389,7 @@ world_build(void)
 		own_told[i].offset = own[i].offset;
 	}
 	light_seen[0] = light_seen[1] = told.white;
+	pictures_ahead();
 	for (g = 0, s = 0; g < group_count; g++) {
 		struct group *group = &groups[g];
 		GLuint name = group_picture(group, &group->shown);
