@@ -703,9 +703,28 @@ typedef struct { uint32_t fn, a0, a1, k; } call_rec;
 static call_rec calls[CALLS] __attribute__((aligned(16)));
 static uint8_t call_state[CALLS];	/* 0 free, 1 out on a worker, 2 made here */
 static uint32_t call_answer[CALLS];
-/* A call goes to the lowest free worker, as a round's members are taken: the busy cores lie together. Under one
- * triangle over every core (gpu_vm/tick/WAVES.md, "Idle cores") busy cores among idle ones cost up to a third more
- * than a run of them; a round-robin spread every few calls over the whole row. */
+/* gpu_vm: a call goes to the lowest free worker, as a round's members are taken: the busy cores lie together. Under
+ * one triangle over every core (gpu_vm/tick/WAVES.md, "Idle cores") busy cores among idle ones cost up to a third more
+ * than a run of them; a round-robin spread every few calls over the whole row. RISC-V: round the row, as before. The
+ * lowest free worker halved Quake III's server there (q3dm17 with a bot on the card: 22.9 game frames a second to
+ * 11.8, its worker 3.59 M instructions a second to 1.45; 7624f55's Quake III built with each). */
+#ifndef __gpuvm__
+static int next_worker = 1;
+#endif
+
+static int call_worker(int tries, int workers)
+{
+#ifdef __gpuvm__
+	(void)workers;
+	return tries + 1;
+#else
+	int w = next_worker;
+
+	(void)tries;
+	next_worker = next_worker % workers + 1;
+	return w;
+#endif
+}
 
 static uint32_t call_job(uint32_t rec_at, uint32_t unused)
 {
@@ -728,7 +747,7 @@ mcw_handle mcw_call(mcw_fn fn, uint32_t a0, uint32_t a1)
 	c->a1 = a1;
 	if (workers && !mcw_self() && setup())
 		for (tries = 0; tries < workers && !k; tries++) {
-			int w = tries + 1;
+			int w = call_worker(tries, workers);
 
 			if (busy[w] || !mcw_bound(w)) continue;
 			if (in_team[w]) {
@@ -758,7 +777,7 @@ mcw_handle mcw_try_call(mcw_fn fn, uint32_t a0, uint32_t a1)
 	for (h = 0; h < CALLS && call_state[h]; h++) {}
 	if (h == CALLS) return 0;
 	for (tries = 0; tries < workers && !k; tries++) {
-		int w = tries + 1;
+		int w = call_worker(tries, workers);
 
 		if (busy[w] || !mcw_bound(w)) continue;
 		if (in_team[w]) {
