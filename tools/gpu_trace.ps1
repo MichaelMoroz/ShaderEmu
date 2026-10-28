@@ -15,7 +15,7 @@ param(
     [int]$Frames = 20,
     [string]$Extra = '',
     [string]$Filter = '',   # comma-separated substrings of metric names
-    [string]$Ngfx = 'C:\Program Files\NVIDIA Corporation\Nsight Graphics 2025.5.0\host\windows-desktop-nomad-x64\ngfx.exe'
+    [string]$Ngfx = 'C:\Program Files\NVIDIA Corporation\Nsight Graphics 2026.3.1\host\windows-desktop-nomad-x64\ngfx.exe'
 )
 $Root = Split-Path -Parent $PSScriptRoot
 Set-Location $Root
