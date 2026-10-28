@@ -144,6 +144,18 @@ For RISC-V:
 1. **A copy a program can ask for.** The RISC-V standard keeps CSRs 0x800-0x8FF for custom user-mode registers: the
    tick takes the commit's copy (source, destination, length, go) at four of them in user mode, as it takes 0x0b0-0x0b3
    from the kernel, with the same alignment rule. No new instruction, and nothing for the compiler.
+
+   gpu_vm asks by stores instead: no CSRs, a descriptor of four word stores to `GVM_OPS` (0xf0000000), the kind last,
+   whose store is the ask; the commit makes up to 8 a pass a core, which is what lets a copy go on without the pass's
+   end. Its cost: the fast loop took a store outside RAM for RAM's and threw the pass away, 14% of the card's time in
+   Quake III's menu, until the compiler sent every access to that window through the general path (595533b).
+
+   For RISC-V the CSR form fits better. A `csrw` already leaves the fast loop, and the descriptor already lives in the
+   core's state texels (37, 38: `cpu.memop_*`, read by the commit's `ram_op_of` in `src/ram.h`), so a user-mode alias
+   is a few `case` lines in `csr.h`'s general path and a permission test. The store form would need the fast store path
+   to tell the window apart on every store (gpu_vm's lesson), or else go unnoticed by the tick, with no end of the pass
+   and no check of the core's own later accesses. A queue of several copies a pass (step 3 below) is state texels
+   more, in either form.
 2. **musl's `memcpy`** asks for it from 2 KB up, when both ends are on a texel and in RAM (GPU memory is RAM), and the
    pass ends there as the kernel's copy does. A program on an older tick traps on the CSR, so the image and the tick
    go together. Its statics, if any, in a texel of their own (49c688e). Its aligned path in rounds of 64 bytes as
