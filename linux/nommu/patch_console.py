@@ -1,4 +1,4 @@
-"""No-MMU kernel: the console is words and a ring in RAM that the host reads after every pass (docs/machine/console.md)."""
+"""No-MMU kernel: the console is words and a ring in RAM that the host reads between two of its clock's values (docs/machine/console.md)."""
 import sys
 K = sys.argv[1]
 
@@ -6,30 +6,45 @@ CON = r'''
 /*
  * ShaderEmu's console without the MMU (docs/machine/console.md): the host's words at 0x876b8280
  * (characters delivered, the last of them), the guest's at 0x876b8290 (taken, written), and
- * the output ring after them, which the host reads after every pass.
+ * the output ring after them, which the host reads before its clock word changes.
  */
 #define SE_CON_HOST	((volatile u32 *)0x876b8280)
 #define SE_CON_GUEST	((volatile u32 *)0x876b8290)
 #define SE_CON_RING	((volatile u8 *)0x876b82a0)
 #define SE_CON_SIZE	256
+#define SE_HOST_MS	((volatile u32 *)0x87000034)	/* the host's clock in milliseconds (docs/machine/gpu.md) */
 
-static unsigned long se_con_pass;	/* the timer's value when the count began */
-static int se_con_put_n;		/* bytes put in that pass */
+static u32 se_con_ms;		/* the host's clock when the count began */
+static int se_con_put_n;	/* bytes put since */
 
-/* As many of buf's bytes as the ring takes in this pass: the time is the same for a whole pass. */
+/*
+ * As many of buf's bytes as the ring takes before the host reads it. A host changes its clock word
+ * only between two reads of the ring (rvc_harness once a frame of all its rounds, the world and
+ * rvc_cpu at most once a round or pass, each read), so at most 254 bytes are put while the word is
+ * as it was. The processor's clock was the measure before, and it moves every round: rvc_harness
+ * --tick-rounds read a frame's rounds of 255 bytes each once. Each byte is put and told (the guest's
+ * word) after the clock is looked at: a call that runs over the end of a pass told its bytes in the
+ * next one and counted them in the last, and the next call there put 255 more (510 bytes between two
+ * of rvc_cpu's reads). Now a pass's end between the look and the store miscounts one byte at most.
+ */
 int se_con_put(const char *buf, int count)
 {
-	unsigned long now = csr_read(CSR_TIME);
 	u32 n = SE_CON_GUEST[1];
 	int i;
 
-	if (now != se_con_pass) {
-		se_con_pass = now;
-		se_con_put_n = 0;
-	}
-	for (i = 0; i < count && se_con_put_n < SE_CON_SIZE - 1; i++, se_con_put_n++)
+	for (i = 0; i < count; i++) {
+		u32 ms = *SE_HOST_MS;
+
+		if (ms != se_con_ms) {
+			se_con_ms = ms;
+			se_con_put_n = 0;
+		}
+		if (se_con_put_n >= SE_CON_SIZE - 2)
+			break;
+		se_con_put_n++;
 		SE_CON_RING[(n + i) & (SE_CON_SIZE - 1)] = buf[i];
-	SE_CON_GUEST[1] = n + i;
+		SE_CON_GUEST[1] = n + i + 1;
+	}
 	return i;
 }
 

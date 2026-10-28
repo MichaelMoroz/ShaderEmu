@@ -21,10 +21,17 @@ the shader has no part in it. It lies in the network's row, between the window a
 
 - The control pass writes the host's texel every frame (`CON_HOST` in `gpu.h`; the harness's
   `kConZone`). The host delivers again only once the guest has taken everything.
-- Every host reads the ring back after every pass, with the network's row (`kConHost` in
-  `rvc_backend.h`, `ConTexel` in `EmuMachine.cs`); `rvc_cpu` reads it in its control pass.
-- The guest puts at most 255 bytes in a pass. The time CSR is the same for a whole pass, so
-  a new value is a new pass with room again; a full ring ends the pass with the pause hint.
+- Every host reads the ring back with the network's row (`kConHost` in `rvc_backend.h`,
+  `ConTexel` in `EmuMachine.cs`): `rvc_harness` once a frame of all its rounds, the world once a
+  round, `rvc_cpu` in its control pass, every pass.
+- The guest puts at most 254 bytes while the host's clock word (`0x87000034`, `GPU_CLOCK`) is as
+  it was: every host changes it only between two reads of the ring. It puts and tells one byte at
+  a time after looking at the clock, so a pass that ends inside a write miscounts one byte at
+  most. A full ring ends the pass with the pause hint. (The processor's time CSR was the measure
+  until 28 October 2026: it moves every round, and `rvc_harness --tick-rounds` read a frame's
+  rounds of 255 bytes each once; and a write that ran over a pass's end told its bytes in the next
+  pass while it counted them in the last, so 510 bytes came between two reads even at one round a
+  frame: 344 of 1,500 numbers lost.)
 - The kernel's side is `linux/nommu/patch_console.py`: the hvc driver's `put_chars` and
   `get_chars`, and earlycon's `putc`. The SBI console calls are not answered.
 
