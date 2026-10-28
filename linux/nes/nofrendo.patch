@@ -55,32 +55,15 @@ index 72be869..583eaef 100644
  /* memory region pointers */
  static uint8 *ram = NULL, *stack = NULL;
  static uint8 null_page[NES6502_BANKSIZE];
-@@ -1145,7 +1167,23 @@ static uint8 null_page[NES6502_BANKSIZE];
+@@ -1145,7 +1167,7 @@ static uint8 null_page[NES6502_BANKSIZE];
  #define  ZP_READBYTE(addr)          ram[(addr)]
  #define  ZP_WRITEBYTE(addr, value)  ram[(addr)] = (uint8) (value)
  
--#ifdef HOST_LITTLE_ENDIAN
-+#if defined __gpuvm__
-+
-+/* ours: gpu_vm's half-word load stays in its own word (a half at the word's last byte reads 0 above it), so a
-+** 6502 word at any address is read a byte at a time */
-+INLINE uint32 zp_readword(register uint8 address)
-+{
-+   return (uint32) ram[address] | (uint32) ram[address + 1] << 8;   /* (not wrapped, as the word load it stands for) */
-+}
-+
-+INLINE uint32 bank_readword(register uint32 address)
-+{
-+   const uint8 *at = cpu.mem_page[address >> NES6502_BANKSHIFT] + (address & NES6502_BANKMASK);
-+
-+   return (uint32) at[0] | (uint32) at[1] << 8;
-+}
-+
-+#elif defined HOST_LITTLE_ENDIAN
+ #ifdef HOST_LITTLE_ENDIAN
  
  /* NOTE: following two functions will fail on architectures
  ** which do not support byte alignment
-@@ -1264,6 +1302,8 @@ void nes6502_setcontext(nes6502_context *context)
+@@ -1264,6 +1286,8 @@ void nes6502_setcontext(nes6502_context *context)
  
     ASSERT(context);
  
@@ -89,7 +72,7 @@ index 72be869..583eaef 100644
     cpu = *context;
  
     /* set dead page for all pages not pointed at anything */
-@@ -1284,6 +1324,7 @@ void nes6502_getcontext(nes6502_context *context)
+@@ -1284,6 +1308,7 @@ void nes6502_getcontext(nes6502_context *context)
  
     ASSERT(context);
  
@@ -97,7 +80,7 @@ index 72be869..583eaef 100644
     *context = cpu;
  
     /* reset dead pages to null */
-@@ -1294,6 +1335,23 @@ void nes6502_getcontext(nes6502_context *context)
+@@ -1294,6 +1319,23 @@ void nes6502_getcontext(nes6502_context *context)
     }
  }
  
@@ -121,7 +104,7 @@ index 72be869..583eaef 100644
  /* DMA a byte of data from ROM */
  uint8 nes6502_getbyte(uint32 address)
  {
-@@ -1346,10 +1404,11 @@ uint32 nes6502_getcycles(bool reset_flag)
+@@ -1346,10 +1388,11 @@ uint32 nes6502_getcycles(bool reset_flag)
  
  #else /* !NES6520_DISASM */
  
@@ -134,7 +117,7 @@ index 72be869..583eaef 100644
  
  #endif /* !NES6502_DISASM */
  
-@@ -1359,12 +1418,370 @@ uint32 nes6502_getcycles(bool reset_flag)
+@@ -1359,12 +1402,370 @@ uint32 nes6502_getcycles(bool reset_flag)
  #endif /* !NES6502_JUMPTABLE */
  
  
@@ -505,7 +488,7 @@ index 72be869..583eaef 100644
  {
     int old_cycles = cpu.total_cycles;
  
-@@ -1445,6 +1862,20 @@ int nes6502_execute(int timeslice_cycles)
+@@ -1445,6 +1846,20 @@ int nes6502_execute(int timeslice_cycles)
     /* fetch first instruction */
     OPCODE_END
  
@@ -526,7 +509,7 @@ index 72be869..583eaef 100644
  #else /* !NES6502_JUMPTABLE */
  
     /* Continue until we run out of cycles */
-@@ -2389,6 +2820,24 @@ int nes6502_execute(int timeslice_cycles)
+@@ -2389,6 +2804,24 @@ int nes6502_execute(int timeslice_cycles)
  #ifdef NES6502_JUMPTABLE
  end_execute:
  
@@ -551,7 +534,7 @@ index 72be869..583eaef 100644
  #else /* !NES6502_JUMPTABLE */
        }
     }
-@@ -2402,8 +2851,42 @@ end_execute:
+@@ -2402,8 +2835,42 @@ end_execute:
  }
  
  /* Issue a CPU Reset */
@@ -594,7 +577,7 @@ index 72be869..583eaef 100644
     cpu.p_reg = Z_FLAG | R_FLAG | I_FLAG;     /* Reserved bit always 1 */
     cpu.int_pending = 0;                      /* No pending interrupts */
     cpu.int_latency = 0;                      /* No latent interrupts */
-@@ -2424,6 +2907,7 @@ void nes6502_nmi(void)
+@@ -2424,6 +2891,7 @@ void nes6502_nmi(void)
  {
     DECLARE_LOCAL_REGS
  
@@ -602,7 +585,7 @@ index 72be869..583eaef 100644
     if (false == cpu.jammed)
     {
        GET_GLOBAL_REGS();
-@@ -2438,6 +2922,13 @@ void nes6502_irq(void)
+@@ -2438,6 +2906,13 @@ void nes6502_irq(void)
  {
     DECLARE_LOCAL_REGS
  
@@ -616,7 +599,7 @@ index 72be869..583eaef 100644
     if (false == cpu.jammed)
     {
        GET_GLOBAL_REGS();
-@@ -2457,6 +2948,7 @@ void nes6502_irq(void)
+@@ -2457,6 +2932,7 @@ void nes6502_irq(void)
  /* Set dead cycle period */
  void nes6502_burn(int cycles)
  {

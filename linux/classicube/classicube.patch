@@ -3720,21 +3720,3 @@ index 21c7255..0960c06 100644
  	Launcher_Setup();
  	/* NOTE: Make sure to keep delay same as hardcoded delay in Launcher_Tick */
  	while (Launcher_Tick()) { Thread_Sleep(10); }
-diff --git a/src/posix/Plat_Linux.inc b/src/posix/Plat_Linux.inc
-index 1409fa7..ca89789 100644
---- a/src/posix/Plat_Linux.inc
-+++ b/src/posix/Plat_Linux.inc
-@@ -126,6 +126,13 @@ void CrashHandler_DumpRegisters(void* ctx, cc_string* str) {
- 	String_Format4(str, "r20=%x r21=%x r22=%x r23=%x" _NL, RNUM(20), RNUM(21), RNUM(22), RNUM(23));
- 	String_Format4(str, "r24=%x r25=%x r26=%x r27=%x" _NL, RNUM(24), RNUM(25), RNUM(26), RNUM(27));
- 	String_Format4(str, "r28=%x r29=%x r30=%x r31=%x" _NL, RNUM(28), RNUM(29), RNUM(30), RNUM(31));
-+#elif defined __gpuvm__
-+	/* gpu_vm (the machine's own instruction set): the kernel's 64 registers, the pc in word 0 */
-+	mcontext_t* r = &((ucontext_t*)ctx)->uc_mcontext;
-+	#define RNUM(reg) &r->__gregs[reg]
-+
-+	String_Format4(str, "pc =%x ra =%x sp =%x tp =%x" _NL, RNUM(0),  RNUM(1),  RNUM(2),  RNUM(4));
-+	String_Format4(str, "a0 =%x a1 =%x a2 =%x a3 =%x" _NL, RNUM(5),  RNUM(6),  RNUM(7),  RNUM(8));
- #elif defined __e2k__
- 	struct sigcontext* r = &((ucontext_t*)ctx)->uc_mcontext;
- 	#define RREG(reg) &r->reg

@@ -68,7 +68,7 @@ index b32f98b..a5d435e 100644
  
  #include "../safeguards.h"
  
-@@ -86,10 +90,141 @@ void Blitter_8bppBase::CopyImageToBuffer(const void *video, void *dst, int width
+@@ -86,10 +90,137 @@ void Blitter_8bppBase::CopyImageToBuffer(const void *video, void *dst, int width
  	}
  }
  
@@ -76,14 +76,10 @@ index b32f98b..a5d435e 100644
 +/** The machine's copy (CSRs 0xb0 to 0xb3, docs/machine/gpu.md): the core stops until it is made, a pass a 256 KB. */
 +static void MachineCopy(void *dst, const void *src, uint32_t bytes)
 +{
-+#ifdef __gpuvm__
-+	__builtin_memmove(dst, src, bytes);	/* (gpu_vm: a copy this long is one operation of the commit, gpu_vm/llvm/ASM.md) */
-+#else
 +	asm volatile("csrw 0x0b1, %0" :: "r"(src));
 +	asm volatile("csrw 0x0b2, %0" :: "r"(dst));
 +	asm volatile("csrw 0x0b3, %0" :: "r"(bytes));
 +	asm volatile("csrw 0x0b0, %0" :: "r"(1) : "memory");
-+#endif
 +}
 +
 +/**
@@ -210,7 +206,7 @@ index b32f98b..a5d435e 100644
  
  	if (scroll_y > 0) {
  		/* Calculate pointers */
-@@ -111,7 +246,11 @@ void Blitter_8bppBase::ScrollBuffer(void *video, int &left, int &top, int &width
+@@ -111,7 +242,11 @@ void Blitter_8bppBase::ScrollBuffer(void *video, int &left, int &top, int &width
  			width += scroll_x;
  		}
  
@@ -223,7 +219,7 @@ index b32f98b..a5d435e 100644
  	} else {
  		/* Calculate pointers */
  		dst = (uint8_t *)video + left + top * _screen.pitch;
-@@ -131,7 +270,11 @@ void Blitter_8bppBase::ScrollBuffer(void *video, int &left, int &top, int &width
+@@ -131,7 +266,11 @@ void Blitter_8bppBase::ScrollBuffer(void *video, int &left, int &top, int &width
  			width += scroll_x;
  		}
  
