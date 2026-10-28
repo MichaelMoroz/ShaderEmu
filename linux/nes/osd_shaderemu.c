@@ -1231,6 +1231,7 @@ frame_after_away(int last, int drawn)
 		gives++;
 		emu_said.slot = (uint32_t)gd_with;
 		emu_said.written = (uint32_t)gd_written;
+		mc_publish();	/* (the frame's slot and words before its number: mc.h) */
 		emu_said.seq = (uint32_t)frames_emulated;
 		gd_spent[0] += cycles() - t0;
 	}

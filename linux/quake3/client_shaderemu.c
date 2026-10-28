@@ -21,8 +21,14 @@ unsigned	se_client_stack;	/* its stack's top (q_shared.h, SE_OnWorker) */
 unsigned	se_client_jobs, se_client_cycles, se_client_passes;	/* for the q3stat: lines */
 int		se_client_list;		/* the list of the frame the worker is at (server_shaderemu.c keeps by it) */
 
-/* what a frame is given, by its list: this core's, written before the frame is asked for */
-static struct { int serverTime, stereo, demo, cmdNumber, snapNumber, snapTime, unused[2]; } given[SE_LISTS] __attribute__ ((aligned (16)));
+/* what a frame is given, by its list: this core's, written before the frame is asked for. Each of its two texels
+   says the frame it is for (frame_a, frame_b): the worker makes a frame only once both do (client_job), not by
+   asked.frames alone (Quake III's card-only n < cg.latestSnapshotNum: a list's snapshot four frames old). The
+   cause: the compiler may store the count before the entry, and a pass ends between them (ask's mc_publish; handoff.c) */
+static struct { int serverTime, stereo, demo; unsigned frame_a; int cmdNumber, snapNumber, snapTime; unsigned frame_b; }
+	given[SE_LISTS] __attribute__ ((aligned (16)));
+/* the passes the worker waited for a list asked for to reach it, and the frames that waited: the worker's */
+static struct { unsigned passes, frames, unused[2]; } given_late __attribute__ ((aligned (16)));
 /* how many frames have been asked for: this core's. The worker goes on to the next without waiting to be told */
 static struct { unsigned frames, unused[3]; } asked __attribute__ ((aligned (16)));
 /* how many it has made, what the last cost, and a frame's two words for the next move: the worker's */
@@ -110,6 +116,7 @@ void SE_SideAsk (int number)
 void SE_SideGo (void)
 {
 	side_task.list = (unsigned)se_client_list;
+	mc_publish ();	/* (the numbers before the task's number: mc.h) */
 	side_task.seq++;
 }
 
@@ -173,8 +180,18 @@ static uint32_t client_job (uint32_t a, uint32_t b)
 {
 	made.jobs++;
 	while (made.frames < asked.frames) {
-		unsigned	began = SE_Cycles ();
+		unsigned	began, frame = made.frames + 1, waited = 0;
 
+		while (given[LIST (frame) - 1].frame_a != frame || given[LIST (frame) - 1].frame_b != frame) {
+			mc_end_pass ();
+			waited++;
+		}
+		if (waited) {
+			given_late.passes += waited, given_late.frames++;
+			Com_Printf ("quake3: frame %u's list came %u passes after it was asked for (%u frames, %u passes so far)\n",
+				frame, waited, given_late.frames, given_late.passes);
+		}
+		began = SE_Cycles ();
 		se_call_on_stack (frame_body, LIST (made.frames + 1), stack + STACK_BYTES);
 		made.cycles = SE_Cycles () - began;
 		made.frames++;
@@ -230,6 +247,9 @@ static void ask (int serverTime, int stereo, int demo)
 
 	given[list - 1].serverTime = serverTime, given[list - 1].stereo = stereo, given[list - 1].demo = demo;
 	given[list - 1].cmdNumber = cl.cmdNumber, given[list - 1].snapNumber = cl.snap.messageNum, given[list - 1].snapTime = cl.snap.serverTime;
+	mc_publish ();	/* (the entry's fields stored before its frame's tags, and those before the count) */
+	given[list - 1].frame_a = given[list - 1].frame_b = asked.frames + 1;
+	mc_publish ();
 	asked.frames++;
 	start ();
 }
