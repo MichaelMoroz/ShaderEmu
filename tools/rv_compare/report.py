@@ -29,6 +29,8 @@ below is what a player in the world sees.
   rounds, in percent. **ratio**: how many times better B is than A (A / B for a time, B / A for a rate): above 1 B
   is better; 3% either way is level.
 - **card ms**: the card's time a host frame, the run's mean (the budget is 9.7); **rounds**: rounds a frame.
+  **ratio at the budget**: the ratio with each side's card ms a frame brought to the budget (A's card ms over B's
+  times the ratio), as GPU-VM's `grid.py`: a machine whose rounds overshot the budget is not paid for it.
 - Machines: `tools/rv_compare/machines.py`; `before` is frozen in the backport's `build/before` (its README.md).
 
 """
@@ -79,9 +81,9 @@ def load():
 def main(A='before', B='after'):
     res = load()
     rows = [f'| group | program and part | metric | unit | better | {A}: mean | {A}: each round | {A}: spread (%) | '
-            f'{B}: mean | {B}: each round | {B}: spread (%) | ratio ({B} x {A}) | card ms a frame {A} / {B} (ms) | '
+            f'{B}: mean | {B}: each round | {B}: spread (%) | ratio ({B} x {A}) | ratio at the budget ({B} x {A}) | card ms a frame {A} / {B} (ms) | '
             f'rounds a frame {A} / {B} (rounds) | runs {A} / {B} (guest s, sections) |',
-            '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|']
+            '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|']
     wins = losses = level = 0
     spreads = {A: [], B: []}
     parts_done = {A: 0, B: 0}
@@ -102,6 +104,10 @@ def main(A='before', B='after'):
             if am and bm:
                 ratio = am / bm if better == 'low' else bm / am
                 wins, losses, level = wins + (ratio > 1.03), losses + (ratio < 0.97), level + (0.97 <= ratio <= 1.03)
+            # at the budget (GPU-VM's grid.py "fps at budget"): a rate scaled by the budget over the card ms a frame the
+            # run took, a time by the inverse: the harness's rounds overshoot or undershoot 9.7 ms on a bursty program
+            ca, cb = mean([r.get('card_ms_frame') for r in ar]), mean([r.get('card_ms_frame') for r in br])
+            at_budget = ratio * (ca / cb) if ratio and ca and cb else None
             for m, v in ((A, av), (B, bv)):
                 if spread(v) is not None:
                     spreads[m].append(spread(v))
@@ -112,7 +118,7 @@ def main(A='before', B='after'):
             err = ' '.join(r.get('error', '') for r in ar + br if r.get('error'))
             rows.append(f"| {P['group']} | {name}: {P['what']} | {metric} | {unit} | {better}er | {fmt(am)} | {each(av)} | "
                         f"{fmt(spread(av))} | {fmt(bm)} | {each(bv)} | {fmt(spread(bv))} | {'-' if ratio is None else f'{ratio:.2f}'} | "
-                        f"{card(ar)} / {card(br)} | {rnd(ar)} / {rnd(br)} | {runs(ar)} / {runs(br)}{' ' + err if err else ''} |")
+                        f"{'-' if at_budget is None else f'{at_budget:.2f}'} | {card(ar)} / {card(br)} | {rnd(ar)} / {rnd(br)} | {runs(ar)} / {runs(br)}{' ' + err if err else ''} |")
     s = HEAD
     s += (f'**Parts measured: {A} {parts_done[A]}, {B} {parts_done[B]} of {len(PARTS)}. '
           f'{B} better than {A} in {wins} metrics, worse in {losses}, level in {level} (3% either way).**\n\n')
