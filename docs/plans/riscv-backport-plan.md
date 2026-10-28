@@ -45,7 +45,31 @@ The rest of `custom_isa`'s changes to shared files are behind `__gpuvm__` or are
 bytes in Red Alert, Tiberian Dawn, Doom and the NES; `mcw_rest_on`'s declared workers; the HLSL back end).
 
 `linux/prebuilt` was last made on 24 October (07d38c8, 1d858a2), so the RISC-V image has none of the above even on
-this branch: the prebuilt is made again after them (`pwsh tools\make_image.ps1 --save-prebuilt`).
+this branch: the prebuilt is made again after them (`pwsh tools\make_image.ps1 --save-prebuilt`). Its kernel
+(`linux/prebuilt/nommu/Image`) is older still, made at b935841 on 21 October: it lacks 9e09037's network driver polled
+from the tick (an idle shell 229 to 157 thousand instructions a second). The rebuild must make `Image` too.
+
+What the merge brings that the commits' subjects do not say (read from their code):
+- **07d38c8:** besides the editor's Markdown reader, links followed to headings and other files in the same tab
+  with Back; the repository's `docs/` (not `plans/`) at `/usr/share/doc/shaderemu`, with a Docs folder and icon on
+  the desktop; and the browser engine's name tables stored in place (`char name[N]` in `css.h`, `web.h`), not as
+  pointers: 682 relocations to 233 at every start of a program using the engine.
+- **cf99ef8:** Red Alert's movie player drew a skipped frame already freed and being reloaded; a skipped frame now
+  waits for its worker's unpacking (`workers_lcw_wait`). A use-after-free race with a worker on any machine.
+- **96b83fc:** OpenTTD's station names no longer stay after their windows close, and lines no longer stay behind
+  when scrolling.
+- **64438ab:** Half-Life's studio hit hulls on every core (the server worker's bullets went through monsters),
+  `glPolygonOffset` working (decal flicker 21.5 to 2.7 changed pixels a frame), a seated hand's shots from the hand,
+  and `CL_DrawString` no longer dropping characters of a say line.
+- Harmless on RISC-V and coming with it: Half-Life's save and restore read their fields through `memcpy` (5b36b37's
+  `SR_Read`); mc's `ecall`, `ebreak` and the pause hint through macros that give the same words, with `mcw_lane_stub`
+  aligned on 16 (`libmcw.a`'s bytes and so `cc-bytes` change); OpenTTD's explicit `TryGetBaseSetFile` instances
+  (`host_sum.sh`'s sums to be checked after).
+
+One hazard: `tools/make_linux_image.py`'s `documentation()` (lines 197-223) opens `gpu_vm/GPU_VM.md` and
+`gpu_vm/platform.md` and writes a gpu_vm section into the image's docs index. Without `gpu_vm/` on `main` the image
+build fails there: the section goes, or depends on the folder being there. Only that file and `programs/wl` need
+`gpu_vm/`.
 
 Two more correctness items, not yet anywhere on RISC-V:
 
@@ -83,6 +107,7 @@ Two more, not straight ports:
   from 124 passes to 110. This is the app's own path, not only its test.
 - **nxray with one picture out** (c13b2cb, `__gpuvm__` only): 38.4 to 40.6 pictures a second, the worst picture's
   latency 111 to 55 ms. With the floor above, the default on a tick without lanes.
+- (`mcw_post` is safe only where `mcw.c` is compiled apart: see section 2b for the NES.)
 - **Floats in floats: libm.** RISC-V's musl `sinf`, `cosf`, `expf`, `logf`, `powf` work in doubles, which are library
   calls (`docs/system/cc.md`); Quake III makes its own sines to avoid them. gpu_vm's float-only libm and `libmfloat`
   (62af8c2, c4d9e26; GPU-VM `userland/musl/src/math/gpuvm`, `userland/musl/mfloat`) are 14 to 58 ops a call against
@@ -135,6 +160,39 @@ For RISC-V:
 
 Check: `programs\copytest` (`sum 0e7f76c3`) on `rvc_cpu` and the shader machine, `test_all.py`, Quake's and Quake
 III's sums.
+
+## 2b. The compiler's settings
+
+Read from gpu_vm's compiler code and wrappers (`llvm/Target/GPUVM/*.cpp`'s options, `userland/bin/gpuvm-linux-cc`,
+`userland/apps/toolchain.sh`) against what every RISC-V build passes.
+
+- **Every RISC-V program is PIE, whatever its build says.** `rv32-cc` and `rv32-c++` drop `-fno-pie`, `-fno-PIE`,
+  `-no-pie`, `-fno-pic` and `-fno-PIC` and always compile `-fPIE` (`linux/nommu/setup.sh:57`, 65-66), so the
+  `-fno-pie` of Quake, Quake III, Half-Life, Doom, Tiberian Dawn and the rest does nothing. Compiled with the
+  toolchain's GCC (28 October 2026): under `-fPIE` a global declared `extern` is reached through the GOT
+  (`la a5,ext_var; lw a0,0(a5)`), a load more at every use; with `#pragma GCC visibility push(hidden)` before it, it is
+  `lw a0,ext_var`, PC-relative with no load. A global defined in the same file is PC-relative either way.
+  `-fvisibility=hidden` does not cover `extern` declarations; the pragma does. gpu_vm's like of this (`-gpuvm-fnrel`)
+  cut globals reached through a load, 5.3% of Quake III's worker bundles. So the wrapper force-includes a header with
+  the pragma, for every program; the count of GOT entries before and after says how much. Not checked: whether the
+  linker relaxes GOT loads already.
+- **Inlining.** gpu_vm inlines 3 times LLVM's threshold (`GPUVMTargetTransformInfo.cpp:30`; Quake 8): fewer calls are
+  fewer prologue saves, which are stores (5.2% of Quake III's workers' cost, 7.3% of Half-Life's, 14.7% of Half-Life's
+  core 0; IDEAS 28). Quake's tuned set: -2.37% bundles, +1.4% fps in the Unity measure, code +30%. GCC:
+  `--param max-inline-insns-auto=60 --param max-inline-insns-single=400 --param inline-unit-growth=80` (as imgui and
+  pathtrace already have; Tiberian Dawn and Red Alert go further), on the compile and the link line (the params act in
+  LTO's link). Quake, Quake III, Half-Life, Doom and the NES are on GCC's defaults.
+- **Half-Life is still `-O2 -fno-tree-vectorize`.** The others' measured recipe is `-O3 -fno-tree-vectorize
+  -fsched-pressure -funroll-loops` (Quake -6% instructions a frame, Doom -3% a tic and -11% a frame, the NES -5 to -7%).
+  Checked by `se_sum_exact`'s sums and `game_par.py halflife`.
+- **The NES may post a job before its data.** It compiles `mcw.c` and `mcwx.c` inside its `-flto -flto-partition=one`
+  link (`nes/build.sh:38,48`): once `mcw_post` is inlined, GCC may move the program's stores past the volatile `seq`
+  store, which C allows. That is Quake III's `mc_publish` bug. `mcw_post` gets a compiler barrier before `seq`
+  (`asm volatile("" ::: "memory")`, no instructions), which makes the section 1 note true for every build.
+- **Not to take:** `-msave-restore` (a call and a return a frame for the same stores), `-fallow-store-data-races`
+  (stores into texels workers write), gpu_vm's bundle-filling passes, its approximate special functions.
+- **To check once:** `readelf -S` that the `ALIGN16` sections are on 16 (GNU objcopy takes the patterns; not seen on a
+  built ELF).
 
 ## 3. The kernel: starts and the boot
 
@@ -322,6 +380,28 @@ Not audited on RISC-V's DXBC yet:
 - a local pad array holds the card's local-memory layout: without it the fast loop was 10% slower (880f7d1). Any change
   to `L1_LOCAL`'s arrays is measured on the fast loop, however cold the code it touches.
 
+From the two ticks read side by side (`GPU-VM/tick/tick.hlsl` against `experiments/rvc_opt`; nothing compiled or
+timed). Most of gpu_vm's savings are in the RISC-V tick already or lost there before (`docs/machine/tick-costs.md`
+369-526: both next texels fetched every step -3.2%, the cache as words -3%). RISC-V's skip of stores that change
+nothing (`mem.h:446`) stays: gpu_vm dropped silent stores for their cost a bundle, but in VR a round ends when the
+cache fills. What is left:
+
+| area | RISC-V today | what to do | how sure | effort |
+|---|---|---|---|---|
+| a round's draws besides the tick | a 2 MB copy of the state rows, the unpack, a gather through a geometry shader (`ram.h:273`, 24 vertices), a quad over 2048 x 64 state pixels (`ram.h:384-420`), the RAM commit through a geometry shader (`ram.h:430`); order at `rvc_backend11.cpp:887-905`. gpu_vm keeps the state in the targets (`state_k`) and commits by one point draw with no geometry shader, a vertex an entry (`tick.hlsl:759-768`) | time each first (`RVC_PASS_PROF` labels them; tick-costs.md's 0.134 ms a pass predates `RAM_INPLACE`), then: read the targets directly, the state's commit folded into the next `decode`, the RAM commit as vertex-shader points. Fewer or cheaper draws a round count most where rounds are few | a guess: no one timed a geometry shader's commit against a vertex shader's | M-L, Unity too |
+| D3D11's speed levels | about 40 shapes rejected at -0.4 to -8% in tick-costs.md, each judged before the levels were known | after the pad sweep (0-20 words), the near misses of that list timed again on the shell loop, Doom and Quake | the levels measured on gpu_vm (up to 20% between them; a pad of 9 took t4 from 18.6 to 20.6), on RISC-V a guess | M |
+| cold copies of the store path | `MC_FAULT` (`mc.h:102-132`, expanded at `emu.h:1560`) inlines up to 11 copies of `mem_set_ram`'s three-bucket search, four more in the fast and general paths | the fault's record through a `[loop]` over a table of 10 words with one `mem_set_ram`, with the pad sweep (gpu_vm's one store site: 5.4 KB less, level, nxray +1%) | an analogy | S |
+| work on every access that does nothing | every fast load compares `ram_l1_last_addr` (`mem.h:200`; the stores' copy `mem.h:441`), which is NONE until a store stalls, and then the run stops anyway; every changed store sets `mem_dirty` (`mem.h:449`), read only by the commit that is not in place (`main.shader:577`) | the load test only where `slow` is set; `mem_dirty` gone under `RAM_INPLACE` | about 0.55 ns each of a 215-450 ns access (tick-costs.md:170): under 1%, a guess | S |
+| a store to a new texel waits for its fetch | making an entry fetches the texel and waits on the chain, for the silent compare and the merge (`mem.h:419-446`); gpu_vm's whole-word store makes the entry with no fetch and fills the missing words at the exit (`tick.hlsl:243, 635-644`, measured free) | for whole-word misses only, which then lose the silent test: weighed against it first | up to 336 new entries a pass at 86 ns a cold texel, about 30 us a pass; an analogy | M |
+| `l1_occ[4]` read by a dynamic index on every probe (`types.h:627`) | arrays of 4 words or more are in local memory (gpu_vm, 1-3 are registers) | a `uint4` picked by `idx_uint4`, timed with the pad | a guess | S |
+| `xr[65]` zeroed on entry (`types.h:692`), though `xreg_load` and `fp_state_load` write all of it | | `#pragma static_noinit` before it (fxc2 patch 62). `l1_has` and `l1_occ` must stay zeroed | gpu_vm's was mixed (before `wd` level, before `r` floats -2.3%) | S |
+| loads from the ROM go the general way (`emu.h:1143`, `mem.h:249-277`, about 2,700 ns) | | the ROM in the fast load after 3c, only if a profile shows ROM loads (no-MMU copies a mapped file's pages into RAM) | low | S |
+
+Not to take, though it costs: RISC-V's workers carry core 0's 448-entry `l1_cache` (`mem.h:40-49`), about 7 KB a
+lane, and gpu_vm measured a lane's cost following the arrays' allocated size, not the entries used (1.98 against 0.93 ns
+a bundle at 255 cores); likely part of nxray's gap. A worker's own build is a second draw, and shaders of different
+local sizes never overlap on the card, so core 0 would run alone.
+
 Lessons that hold for the RISC-V tick: two pixel shaders of different local sizes never overlap on the card (e6e8121);
 starting the tick's pixels is the cost, and discarding them does not help (759f259); the texture cache is cold at every
 draw (98f2222, f2e848a); under the Unity measure RISC-V is slower at 16,384 a pass than at 8,192 (Quake III 50.6
@@ -361,7 +441,7 @@ against 65: 62fc7fc); Quake III's `com_maxfps` 85 capped both machines before 24
 | a bigger write cache | tried on RISC-V too | did not help flat out. Under a VR frame (`--unity 11.1,7.1,1.0`, about 3 rounds a frame) gpu_vm's 170 to 250 entries gave 1.7-2.1x (Doom 24.8 to 43.8, Quake 16.8 to 33.6 frames a second; GPU-VM 261a597, cbd5eb7): if RISC-V's attempt was judged flat out, that model is the one to judge it by |
 | the tick as one blit | main thread 0.33 to 0.19 ms a pass | few rounds a frame on RISC-V |
 | 8 x 8 cores in one row, one triangle | +16-21% over gpu_vm's c8 | c8 launched twice its pixels; RISC-V's padded blocks were measured with nxray to share no warp ("Eight texels a pixel") |
-| zeroed static arrays (`#pragma static_noinit`) | DXBC 190 KB to 173 KB | RISC-V's write cache is a local array already (`L1_LOCAL` under fxc2) |
+| zeroed static arrays (`#pragma static_noinit`) for the write cache | DXBC 190 KB to 173 KB | RISC-V's write cache is a local array already (`L1_LOCAL` under fxc2); `xr` is the one array left (the tick's table above) |
 | a hit with no texel fetch, a stored-texel bitmap, probing past two buckets | -5 to -15% | lost on gpu_vm |
 | silent stores, evicting at a full cache, overflow entries | passes longer, every bundle dearer | lost on gpu_vm |
 | the lazy GPU list | gpu_vm's default | RISC-V's Quake III slower with it (`gpu_vm/PROFILE_Q3.md`); weak evidence: those runs were under the 85 fps cap, on an `RVC_LIST_LAZY` with the dropped-list bug (section 0) |
