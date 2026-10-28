@@ -207,6 +207,11 @@ public class EmuMachine : UdonSharpBehaviour
     private float gpuBusyUntil;        // lists have come lately: the GPU's camera draws every round
 
     private bool powered, paused;
+    // A snapshot's images (RAM, ROM, the cores' lanes) are uploaded by Unity in the background for seconds after a scene
+    // loads: a power-on before they are on the GPU read zeros, and every core stood at pc 0 trapping to itself. A snapshot
+    // never stands there, so its first rounds that do apply the image again, every half second, for 30 s at most.
+    public int gvmSnapRetries;          // (how many times this power-on applied its image again)
+    private float snapCheckUntil, snapNextApply;
     private int budget = 32768;        // instructions a frame
     private int rounds = 4, ticks = TicksPerRound;
     private int tickSize = TicksPerRound;   // the tick slider's: a round's pass at most
@@ -863,8 +868,12 @@ public class EmuMachine : UdonSharpBehaviour
         machineMaterial.SetInt("_UartInLo", 0);
         machineMaterial.SetInt("_UartInHi", 0);
         machineMaterial.SetInt("_UdonUARTInTag", 0);
+        gvmSnapRetries = 0;
+        snapCheckUntil = 0f;
         if (GvmSnapshot())
         {
+            snapCheckUntil = Time.time + 30f;
+            snapNextApply = Time.time + 0.5f;
             // (the console's input counts go on from the snapshot's: a delivered count gone back is input to the guest)
             sentTag = consumedTag = (uint)gvmSnapDelivered;
             machineMaterial.SetInt("_UartInLo", gvmSnapLast & 0xffff);
@@ -1994,6 +2003,24 @@ public class EmuMachine : UdonSharpBehaviour
     // What one round left in the row at rowAt.
     private void TakeRound()
     {
+        if (snapCheckUntil > 0f)
+        {
+            if (Word(36, 3) != 0 || Time.time > snapCheckUntil) snapCheckUntil = 0f;
+            else
+            {
+                // (pc 0: the image was not on the GPU yet; what ran since is nothing, and counts nothing)
+                if (Time.time >= snapNextApply)
+                {
+                    ApplyImage();
+                    ignoreUntil = requestsSent;
+                    snapNextApply = Time.time + 0.5f;
+                    gvmSnapRetries++;
+                    Debug.Log("[gvm] the snapshot's image was not on the GPU at power-on: applied again (" + gvmSnapRetries + ")");
+                }
+                haveClock = false;
+                return;
+            }
+        }
 
         // state row 0, as rvc_harness.cpp reads it
         uint clock = Word(28, 1), commits = Word(28, 2);
