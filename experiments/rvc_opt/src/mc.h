@@ -1,5 +1,6 @@
 #ifndef MC_H
 #define MC_H
+#include "layout.h"
 
 // More than one core (CORES > 1, docs/machine/multicore.md). Core 0 is the machine as it always was.
 // The others are workers: a block of state each (the CPU's texels, the write cache and the
@@ -39,7 +40,7 @@
 // its state word and its mailbox and returns what it holds (mc_idle(), before anything of the
 // CPU is decoded), and the commit pass passes over a core that stored nothing.
 #if CORES > 1
-#define MC_MBOX 0x86C00000u
+#define MC_MBOX (DEV_AT + 0xC00000u)
 #define MC_START 0x5553434du   // "MCSU"
 #define MC_STOP 0x5453434du    // "MCST"
 #define MC_PARKED_STOP 2

@@ -77,7 +77,7 @@ arrow keys and Space working ImGui's own keyboard navigation.
   instructions a call); the common formats are written exactly (a float to at most nine
   places, in integers, rounded as the library rounds) and anything else is the library's.
   After a change, compare with the library on random numbers, on the host and in the guest.
-- **Events** are asked for when the machine's input words (0x87000020 to 0x2c) change, for
+- **Events** are asked for when the machine's input words (0x81000020 to 0x2c) change, for
   eight frames after, and twice a second: a question with no answer was 9,300 instructions
   a frame. Keys from `nxkey` do not change those words and can be half a second late.
 - **Flags.** `-O3 -flto` with more inlining (`TUNE` in `build.sh`) is 7% of a frame over

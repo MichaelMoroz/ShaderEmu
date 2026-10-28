@@ -23,18 +23,18 @@ Shader "ShaderEmu/MemView"
             uint _Strips;
             float4 _Cursor;
 
-            // Whose a megabyte of RAM is, as a colour for the strip's left edge: Linux's own
-            // (the kernel brighter), window buffers, the display and the GPU's lists and
-            // textures, a 3D program's, the sound card's (docs/machine/gpu.md, docs/machine/sound.md).
+            // Whose a megabyte of RAM is, as a colour for the strip's left edge: the devices' first
+            // (window buffers, the display and the GPU's lists and textures, a 3D program's, the sound
+            // card's, the device words), then Linux's own, the kernel brighter (docs/machine/gpu.md,
+            // docs/machine/sound.md, docs/system/nommu.md "Memory"; src/zap.h's zap_zone).
             float3 owner(float megabyte) {
-                if (megabyte < 4.0) return float3(0.10, 0.11, 0.14);
-                if (megabyte < 9.0) return float3(0.35, 0.60, 1.00);
-                if (megabyte < 96.0) return float3(0.16, 0.26, 0.45);
-                if (megabyte < 112.0) return float3(0.30, 0.80, 0.40);
-                if (megabyte < 119.0) return float3(0.95, 0.80, 0.25);
-                if (megabyte < 123.0) return float3(0.75, 0.45, 0.95);
-                if (megabyte < 126.0) return float3(1.00, 0.55, 0.20);
-                return float3(0.16, 0.26, 0.45);   // Linux's again, from 0x88000000
+                if (megabyte < 16.0) return float3(0.30, 0.80, 0.40);
+                if (megabyte < 23.0) return float3(0.95, 0.80, 0.25);
+                if (megabyte < 27.0) return float3(0.75, 0.45, 0.95);
+                if (megabyte < 30.0) return float3(1.00, 0.55, 0.20);
+                if (megabyte < 32.0) return float3(0.10, 0.11, 0.14);
+                if (megabyte < 41.0) return float3(0.35, 0.60, 1.00);
+                return float3(0.16, 0.26, 0.45);
             }
 
             struct v2f {

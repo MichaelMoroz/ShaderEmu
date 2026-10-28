@@ -15,10 +15,10 @@ Nothing new is drawn by the guest. A program's last whole frame is a command lis
 
 | Address | Contents |
 |---|---|
-| `0x87000300` | address of the frame's command list (0: none) |
-| `0x87000304` | commands in it |
-| `0x87000308` | frames so far |
-| `0x8700030c` | the picture's size: width, and height from bit 16; from bit 28, which axis is up (1 x, 2 y, 3 z; 0: not said); bit 31, a flat screen (`seglWorldFlat`) |
+| `0x81000300` | address of the frame's command list (0: none) |
+| `0x81000304` | commands in it |
+| `0x81000308` | frames so far |
+| `0x8100030c` | the picture's size: width, and height from bit 16; from bit 28, which axis is up (1 x, 2 y, 3 z; 0: not said); bit 31, a flat screen (`seglWorldFlat`) |
 
 - Both OpenGL libraries write them after each swap (`programs/linux/gl.c`, `gles.c`) and build
   the next frame somewhere else: frames alternate between two places, so the one named here

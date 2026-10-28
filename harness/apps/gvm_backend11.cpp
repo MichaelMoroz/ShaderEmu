@@ -26,7 +26,7 @@ namespace {
 
 const UINT kRamW = 8192;                 // RAM's texture's width (STATE.md)
 const UINT kMaxCores = 256;              // core 0 and 255 workers
-const uint32_t kIndexBias = 0x600000u;   // a RISC-V RAM index less this is gpu_vm's texel (the window moved down)
+const uint32_t kIndexBias = rvlayout::devT(0);   // a RISC-V RAM index less this is gpu_vm's texel (both have the devices from 0x80000000)
 // the tick's state (STATE.md): flags (18.z)
 const uint32_t F_HALT = 4;
 
@@ -340,7 +340,7 @@ public:
             mat.setTexture("_GvmS3", set_[cur_ ^ 1][3].srv.Get(), setW(), setH());
             bool merge = countsAdded;
             if (merge) {
-                zone(mat, 0x6c1000u, 256);   // COUNT_TOTAL (src/gpu.h)
+                zone(mat, rvlayout::devT(0xc1000u), 256);   // COUNT_TOTAL (src/gpu.h)
                 countsAdded = false;
             }
             mat.setInt("_CountMerged", merge ? 2 : 1);
@@ -350,19 +350,19 @@ public:
             bool zones = zonesEvery == 1 || merge || conDelivered || deliver_ || deliverNet_ || (lazy && listDrawn) || ++zoneSkip_ >= zonesEvery;
             if (zones) zoneSkip_ = 0;
             // (the control words and, with workers, MC_STATS_ALL in one draw: gpu_vm/IDEAS.md 38)
-            if (zones && workers_) zonePair(mat, 0x700000u, kControlTexels, 0x76ba00u, 72);   // MC_STATS_ALL
-            else if (zones) zone(mat, 0x700000u, kControlTexels);
+            if (zones && workers_) zonePair(mat, rvlayout::devT(0x100000u), kControlTexels, rvlayout::devT(0x16ba00u), 72);   // MC_STATS_ALL
+            else if (zones) zone(mat, rvlayout::devT(0x100000u), kControlTexels);
             if (tq_) ctx->End(tq_[6]);   // (GVM_TIME_LOG: the control zone's end, MC_STATS_ALL's too)
             if (conDelivered) {
-                zone(mat, 0x76b828u, 1);     // CON_HOST
+                zone(mat, rvlayout::devT(0x16b828u), 1);     // CON_HOST
                 conDelivered = false;
             }
             if (deliver_) {
-                zone(mat, 0x76c000u, 0x4000);   // FETCH_DATA
+                zone(mat, rvlayout::devT(0x16c000u), 0x4000);   // FETCH_DATA
                 deliver_ = false;
             }
             if (deliverNet_) {
-                zone(mat, 0x76b840u, 40 * 8);   // NET_RX
+                zone(mat, rvlayout::devT(0x16b840u), 40 * 8);   // NET_RX
                 deliverNet_ = false;
             }
         }

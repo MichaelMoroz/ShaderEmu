@@ -169,8 +169,8 @@ to a folder of its own.
   each of fetch, read and write. No machine mode: as in the shader machine with `SBI_HLE`,
   every trap is the supervisor's and its `ecall` is answered in place (timer, console, the
   base extension).
-- **Memory**: 288 MB from `0x80000000` (Linux's RAM, the GPU's and the control words from
-  `0x86000000`, which are RAM, and Linux's again from `0x88000000`), the ROM at `0x40000000`, the parallel copy and fill (CSRs `0x0b0` to `0x0b3`, whose
+- **Memory**: 288 MB from `0x80000000` (the GPU's memory and the control words to `0x82000000`,
+  which are RAM too, then Linux's to `0x92000000`), the ROM at `0x40000000`, the parallel copy and fill (CSRs `0x0b0` to `0x0b3`, whose
   source may be the ROM), the clock chip and a UART that prints; the console ring of the
   kernel without an MMU (`docs/machine/console.md`, "Words in memory") is read in the control pass.
   A copy from RAM to RAM is made after the cores' pass, 256 KB a pass for one core a pass, as
@@ -220,7 +220,7 @@ to a folder of its own.
   ends with a `[cpu] stops:` line: the workers' faults, those on such a bit, and core 0's on
   one, from the mark too; `RVC_ADFAULT=2` prints each (`[adfault]`: core, cause, address, pc).
 - `--save-ram FILE` writes the 288 MB of RAM as the run ends: a picture in GPU memory at a
-  hold can be read from it (the NES's at `0x87000400` plus what `nes: holding` prints).
+  hold can be read from it (the NES's at `0x81000400` plus what `nes: holding` prints).
 - `--save FILE` writes the whole machine as the run ends (unless at `--until`): RAM, every core and worker, the
   devices' counts and the console's and the script's place, 315 MB; `--load FILE` goes on from one with the same
   image, cores and arguments. `--max-passes N` and `--save-after S` (seconds of this computer's) stop the run there,

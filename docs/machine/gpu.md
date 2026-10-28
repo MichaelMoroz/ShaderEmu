@@ -20,11 +20,11 @@ How it is drawn:
   clock and the console's typed characters (`console.md`, "Words in memory").
 - **Writeback** needs no pass of its own: when a submit asks for it, the machine's Commit pass
   (built with `GPU_DEVICE`) copies the picture into RAM, one `0x00RRGGBB` word per pixel, so
-  the CPU can read what the GPU drew. The control pass notes the copy at `0x87000070`; the
+  the CPU can read what the GPU drew. The control pass notes the copy at `0x81000070`; the
   commit after the draw makes it and adds one to the copies counter. A program that needs the
   pixels waits for that counter; one that only wants them shown does not wait at all.
 - The copy can go to the display's framebuffer, or to **any rectangle of RAM** from
-  `0x86000000` to `0x87e00000` (RAM above `0x88000000` is Linux's, `docs/system/nommu.md`): a picture of the rectangle's size is drawn and stored there, a row length
+  `0x80000000` to `0x81e00000` (RAM from `0x82000000` is Linux's, `docs/system/nommu.md`): a picture of the rectangle's size is drawn and stored there, a row length
   apart. That makes any buffer a render target, which is how a window system gives each
   window its own (`nanox.md`), and how an OpenGL program draws into a window.
 
@@ -36,21 +36,21 @@ colour fragments. The CPU shader has no GPU code.
 
 | Address | Contents |
 |---|---|
-| `0x87000000` | display mode: 3 shows the GPU's picture (see `display.md` for width and height) |
-| `0x87000010` | submit: bit 0 draws the list; bit 1 then copies the picture to the RAM framebuffer at `0x87001000`; bit 2 copies it into the rectangle below instead; bits 9-15 say the list has commands for passes 1-7 (below). The GPU sets it back to 0 |
-| `0x87000014` | address of the command list |
-| `0x87000018` | number of commands in it (at most 4096) |
-| `0x8700001c` | lists drawn so far; it changes when a submitted list has been drawn |
-| `0x87000034` | the host's clock in milliseconds, updated once per frame |
-| `0x87000038` | copies made so far |
-| `0x8700003c` | host flags, written every frame. Bit 0: the guest should start its desktop when it boots. Bit 1: the host shows the console as four terminals (`docs/machine/console.md`). Bits 2-3: the workers' layout the host asks `geotune` for (0 its own pick; 1, 2, 3: small workers in 2, 4, 8 columns; `docs/machine/multicore.md`, "Packing the small workers"). Bits 8-15 and 16-23: the largest screen the host shows, width and height in 16s of pixels (0: it does not say) |
-| `0x87000100` | a request for a page from the host, and its answer (`docs/system/fetch.md`) |
-| `0x87000300` | a 3D program's last whole frame, for a host that shows it in space (`docs/world/volume.md`) |
-| `0x87000320` | the counters' head: a core added, "ERGM" from a host that merges, merges so far, commits so far, a pass each (`docs/machine/multicore.md`, "Counters") |
-| `0x87000380` | what each core ran, and how many cores there are (`docs/machine/multicore.md`) |
-| `0x87000060` | a lock for programs that share the GPU: take it with an atomic swap around looking at the submit word and writing a list's registers |
-| `0x87000070` | the copy still to be made for the list drawn last (0: none), then its address, width and height, row length |
-| `0x87000050` | for bit 2: address of the rectangle's first pixel (a multiple of 4), its width, its height, and the length of a row in pixels (0: the width) |
+| `0x81000000` | display mode: 3 shows the GPU's picture (see `display.md` for width and height) |
+| `0x81000010` | submit: bit 0 draws the list; bit 1 then copies the picture to the RAM framebuffer at `0x81001000`; bit 2 copies it into the rectangle below instead; bits 9-15 say the list has commands for passes 1-7 (below). The GPU sets it back to 0 |
+| `0x81000014` | address of the command list |
+| `0x81000018` | number of commands in it (at most 4096) |
+| `0x8100001c` | lists drawn so far; it changes when a submitted list has been drawn |
+| `0x81000034` | the host's clock in milliseconds, updated once per frame |
+| `0x81000038` | copies made so far |
+| `0x8100003c` | host flags, written every frame. Bit 0: the guest should start its desktop when it boots. Bit 1: the host shows the console as four terminals (`docs/machine/console.md`). Bits 2-3: the workers' layout the host asks `geotune` for (0 its own pick; 1, 2, 3: small workers in 2, 4, 8 columns; `docs/machine/multicore.md`, "Packing the small workers"). Bits 8-15 and 16-23: the largest screen the host shows, width and height in 16s of pixels (0: it does not say) |
+| `0x81000100` | a request for a page from the host, and its answer (`docs/system/fetch.md`) |
+| `0x81000300` | a 3D program's last whole frame, for a host that shows it in space (`docs/world/volume.md`) |
+| `0x81000320` | the counters' head: a core added, "ERGM" from a host that merges, merges so far, commits so far, a pass each (`docs/machine/multicore.md`, "Counters") |
+| `0x81000380` | what each core ran, and how many cores there are (`docs/machine/multicore.md`) |
+| `0x81000060` | a lock for programs that share the GPU: take it with an atomic swap around looking at the submit word and writing a list's registers |
+| `0x81000070` | the copy still to be made for the list drawn last (0: none), then its address, width and height, row length |
+| `0x81000050` | for bit 2: address of the rectangle's first pixel (a multiple of 4), its width, its height, and the length of a row in pixels (0: the width) |
 
 The list is drawn between two CPU frames, once. The picture then stays until the next submit.
 Nothing the CPU can observe changes inside one of its frames, so a program should end its frame
@@ -137,7 +137,7 @@ A textured quad is then 16 words of vertices instead of 96.
 |---|---|
 | 0 | the interpolated vertex colour |
 | 1 | a texture of `0x00RRGGBB` words, times the colour. Its address may be in the ROM, as mode 4's |
-| 2 | a texture of bytes looked up in the display palette (`0x87000400`), times the colour |
+| 2 | a texture of bytes looked up in the display palette (`0x81000400`), times the colour |
 | 3 | a texture of single bits, each row a whole number of bytes, leftmost pixel in the highest bit: set bits take the colour, clear bits are not drawn |
 | 4 | a texture of three bytes a pixel (red, green, blue, as in a PPM file), rows not padded, starting at any byte, times the colour. Its address may be in the ROM (from `0x40000000`): the draw pass has the ROM's texture (`_Data_ROM`) as well as the state |
 | 5 | a layer of tiles (below): the texture's address is four words that say where its cells, its tiles and its palette are |
@@ -309,7 +309,7 @@ frames a second with this project's kernel (about 80 on upstream's):
   calling it becomes a lit draw; `glXSwapBuffers` submits. A call outside the subset does not
   exist, so such a program fails to link rather than misbehave.
 - This project's kernel (`linux/kernel`: pimaker's 5.17.11 fork plus our drivers) has
-  `/dev/gpu`. It maps GPU memory, `0x86000000` to `0x87b00000` (the control words are 16 MiB
+  `/dev/gpu`. It maps GPU memory, `0x80000000` to `0x81b00000` (the control words are 16 MiB
   in), so buffers are written with plain stores. Its pages are mapped accessed and written:
   the machine's walk faults on a clear bit (`src/mmu.h`), and a worker's first store to a
   page stopped it until core 0 served it (`docs/machine/multicore.md`, "A game's speed"). One ioctl draws a list, copies the picture
@@ -345,10 +345,9 @@ frames a second with this project's kernel (about 80 on upstream's):
   an MTD device: the phram driver makes one for a physical range written to
   `/sys/module/phram/parameters/phram`, and the library uses `pread` and `pwrite` on it and
   spins while it waits.
-- The GPU's memory must not be RAM the kernel uses, so the image's device tree ends RAM at
-  `0x86000000` (`tools/make_linux_image.py`, which also adds the binary to the root
-  filesystem; `linux/nommu/image.py` for Linux without an MMU, from `0x80400000`, with a second
-  range above the devices from `0x88000000`: `docs/system/nommu.md`, "Memory").
+- The GPU's memory must not be RAM the kernel uses, so the image's device tree starts RAM at
+  `0x82000000`, above the devices, and ends it at `0x92000000` (`linux/nommu/image.py`;
+  `tools/make_linux_image.py` also adds the binary to the root filesystem: `docs/system/nommu.md`, "Memory").
 - The binary is static and links no C library: `programs/linux/libc.c` is a tiny runtime, and
   floating point comes from compiler-rt's soft-float routines, fetched at build time
   (`programs/linux/fetch.py`). Inside, the driver works in 16.16 fixed point.
@@ -407,7 +406,7 @@ how long cores waited).
 `programs\copytest` (`tools\make_lazy_image.py DIR --program copytest --rom-kb 1024`, then
 `rvc_harness --kernel mmu --image linux-net` in DIR) checks a copy of 4 KB, of 1 MB forward,
 overlapping ahead and behind, from an odd address over three chunks, across and onto
-`0x88000000`, 1 MB from the ROM, a fill of 2 MB, and a store beside a destination in its
+`0x88000000` (where the commit's bands wrap: bit b is bands b, b + 32 and b + 64), 1 MB from the ROM, a fill of 2 MB, and a store beside a destination in its
 pass: every line `ok` and `copytest: sum 0e7f76c3` on the card and on `rvc_cpu`. Before,
 the card had the store beside it wrong and `rvc_cpu` the overlap ahead.
 
@@ -429,8 +428,8 @@ built with it runs on either. (0x0b0 to 0x0b3 were never kept from user mode: th
 a user's.)
 
 The image's C library asks from 2 KB up (`linux/userland/memcpy.S`, `memset.c`, `uop.h`): a `memcpy`
-whose two pointers lie at one place in a texel and a `memset`, both ranges in RAM (0x80000000 to
-0x87e00000, the GPU's memory with it, or 0x88000000 to 0x92000000), copy or fill the bytes up to the
+whose two pointers lie at one place in a texel and a `memset`, both ranges in the GPU's memory
+(0x80000000 to 0x81e00000) or in RAM (0x82000000 to 0x92000000), copy or fill the bytes up to the
 first texel themselves, ask for the whole texels and do the last bytes in the next pass. The texels
 never enter the core's write cache; asking ends the pass, as the kernel's does. `memmove` without an
 overlap is a `memcpy`. On `rvc_cpu` (`RVC_NO_UOP=1`: 0x8b0 reads 0, as a machine without) Quake's

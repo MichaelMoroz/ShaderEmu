@@ -3,7 +3,7 @@
 Through the den's left doorway is a corridor 2 m wide and 16 m long with eight rooms of grid off
 it, four a side, each 3.6 m square and 3 m high, with a seat. While a 3D program runs on the
 machine of whoever sits there, its last frame is a world round the seat: the command list the
-volume display drew (`docs/world/volume.md`, the words at `0x87000300`), seen from the sitter's own
+volume display drew (`docs/world/volume.md`, the words at `0x81000300`), seen from the sitter's own
 eyes. Games and their controllers are here and nowhere else in the world.
 
 ## What a visitor does
@@ -72,7 +72,7 @@ eyes. Games and their controllers are here and nowhere else in the world.
 
 A game says how high its player's eye is over its floor (`seglWorldEye` in `GLES/segl.h`: the eye
 in its units, its near and far planes and its projection's scales), in the control word
-`0x8700006c`: bits 0-15 the plane (in 4,096ths, signed) at which that eye is 1 m high, bits 16-27
+`0x8100006c`: bits 0-15 the plane (in 4,096ths, signed) at which that eye is 1 m high, bits 16-27
 how far the plane moves for e times higher (4,096ths), bits 28-31 the game's number
 (`linux/apps/gameid.h`). The word is written only when it changes, and the host takes it only
 while that game is the one played (`EmuHolodeck.Natural`): the room's scale is then the plane
@@ -113,7 +113,7 @@ side (400 m both, or 0 and 25 m); nothing is synced.
   turn, the camera staying where it is, then about the room's up until the camera's right is
   the seat's.
 - Up is what the program says it is: the top four bits of the frame's size word
-  (`0x8700030c`: 1 x, 2 y, 3 z; `seglWorldUp()` in `GLES/segl.h`). Quake and Doom say z,
+  (`0x8100030c`: 1 x, 2 y, 3 z; `seglWorldUp()` in `GLES/segl.h`). Quake and Doom say z,
   ClassiCube y. Of a program that says nothing it is found from the camera (the axis its up
   is nearest to and its right is square to), which is wrong once the camera looks more down
   than ahead: with the aim on a hand, a hand let down made forward the room's up.
@@ -160,13 +160,13 @@ bar, weapon, menus; `GpuOverlay.shader`). It stood in the program's world: far o
 the weapon, or under the world's nearer walls, and whichever way its depth was settled it read
 wrong. A frame's flat commands can be told from its draws in space (a projection whose w does
 not come from z; a sky is a flat draw at the far plane; Quake tints its view with two fills
-the view's size), and the frame's size is the fourth of its words (`0x8700030c`), which the
+the view's size), and the frame's size is the fourth of its words (`0x8100030c`), which the
 libraries still write.
 
 ## What the machine is told of the room
 
 A program cannot see that it is looked at from a seat. The host writes eight words every frame
-at `0x87000360` (`HOST_STATE` in `src/gpu.h`; the control pass, from `EmuHolodeck.Tell`), and
+at `0x81000360` (`HOST_STATE` in `src/gpu.h`; the control pass, from `EmuHolodeck.Tell`), and
 `seglHostState()` gives a program their address (`GLES/segl.h`, with a macro for each field):
 
 | Word | Contents |
@@ -366,7 +366,7 @@ a still beam went right across it to its edge.
 ## A flat screen in place of the world
 
 A program says that its frames are a flat screen and no world (`seglWorldFlat()`, bit 31 of
-the frame's size word at `0x8700030c`): a menu, the console, a level loading, the screen
+the frame's size word at `0x8100030c`): a menu, the console, a level loading, the screen
 between levels (Quake's totals and an episode's text, `cl.intermission`; Quake III's scoreboard at
 a level's end, `pm_type` 5 or 6). `EmuMachine` reads it back (`flatFrame`, and `worldFrame`: there is a list
 at all), and while it is so, or the sitter's program draws no world (the desktop, a 2D

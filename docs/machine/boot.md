@@ -13,9 +13,9 @@ Upstream boots OpenSBI, which then starts the kernel and answers its calls. That
 of the boot's instructions. Our image has no firmware in it: with `SBI_HLE` (the harness
 defines it for our image and for snapshots) the machine does the firmware's part itself:
 
-- It starts at the kernel (`0x80400000`) in supervisor mode with the device tree's address in
-  `a1`. The tree has to be in RAM for a 32-bit kernel, so `make_linux_image.py` puts it at
-  `0x82200000`.
+- It starts at the kernel (`0x82000000`, `KERNEL_AT` in `src/layout.h`) in supervisor mode with the
+  device tree's address in `a1`. The tree has to be in RAM for a 32-bit kernel, so
+  `make_linux_image.py` and `image.py` put it at `0x83e00000` (`TREE_AT`).
 - An `ecall` from supervisor mode is an SBI call answered in place (`sbi_call` in `emu.h`):
   set_timer, console putchar and getchar, and the base extension's version and probe calls.
   Anything else returns "not supported". Without the MMU (`CSR_FIELDS`, `docs/system/nommu.md`) the

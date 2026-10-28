@@ -9,6 +9,7 @@
 // console, some fifty times faster. It draws nothing: a submitted list is taken as drawn, and
 // a picture a program asked to have copied back is not there. Pictures, sound and timings in
 // seconds are the shader machine's (rvc_harness) to check.
+#include "rvc_layout.h"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -40,9 +41,9 @@ typedef int32_t i32;
 typedef uint64_t u64;
 typedef int64_t i64;
 
-static const u32 RAM_BASE = 0x80000000u, RAM_SIZE = 0x12000000u;   // to 0x92000000: Linux's RAM, the GPU's from 0x86000000, Linux's again from 0x88000000
+static const u32 RAM_BASE = 0x80000000u, RAM_SIZE = 0x12000000u;   // to 0x92000000: the devices, then Linux's RAM from rvlayout::kDevEnd (rvc_layout.h)
 static const u32 ROM_BASE = 0x40000000u;
-static const u32 CTRL = 0x87000000u;   // the control words (docs/machine/gpu.md, docs/machine/input.md)
+static const u32 CTRL = rvlayout::kCtrl;   // the control words (docs/machine/gpu.md, docs/machine/input.md)
 
 // RAM in pages of its own (RVC_FAST_CHECK makes them read-only while a core runs)
 template <class T> struct PageAlloc {
@@ -323,12 +324,12 @@ static size_t races_scan = 0;
 struct RaceStat { u64 count = 0; int kind = 0; u32 pc = 0, phys = 0, other_pc = 0, satp = 0, other_satp = 0; int core = 0, other = 0;
                  u32 apart = 0, words = 0, other_words = 0; };   // (RVC_RACES_NEAR's: passes apart, the words each changed)
 static std::unordered_map<u64, RaceStat> race_stats[2];  // stale reads, lost stores: by (pc, the other's pc)
-static const u32 ATOM_BASE = 0x86C10000u, ATOM_END = ATOM_BASE + 0x101000u;   // (counters: mc.h)
-static const u32 ATOM_HEAD = 0x87000320u;
+static const u32 ATOM_BASE = rvlayout::kCountTotal, ATOM_END = ATOM_BASE + 0x101000u;   // (counters: mc.h)
+static const u32 ATOM_HEAD = rvlayout::kCtrl + 0x320u;
 
 static inline bool race_watched(u32 phys) {
     // (the mailboxes and the counters' regions are written by several cores by design)
-    return phys - RAM_BASE < RAM_SIZE && phys - 0x86C00000u >= 0x8000u && phys - ATOM_BASE >= ATOM_END - ATOM_BASE &&
+    return phys - RAM_BASE < RAM_SIZE && phys - rvlayout::kMbox >= 0x8000u && phys - ATOM_BASE >= ATOM_END - ATOM_BASE &&
            (phys & ~15u) != ATOM_HEAD;
 }
 static inline u32 byte_mask(u32 phys, int size) { return ((1u << size) - 1) << (phys & 15); }
@@ -1048,7 +1049,7 @@ static bool zb(u32 ins, u32 op, u32 f3, u32 f7, u32 rs2, u32 a, u32 b, u32& resu
 // stack and a page table. It then runs in user mode on that page table; `pause` puts it to
 // sleep until its job word changes; a fault or a system call stops it and leaves a record
 // for core 0, which answers through the resume texel.
-static const u32 MC_MBOX = 0x86C00000u, MC_START = 0x5553434Du, MC_STOP = 0x5453434Du;
+static const u32 MC_MBOX = rvlayout::kMbox, MC_START = 0x5553434Du, MC_STOP = 0x5453434Du;
 static inline u32 mc_start_at(int hart) { return MC_MBOX + 16 * hart; }
 static inline u32 mc_job_at(int hart) { return MC_MBOX + 0x4000 + 64 * hart; }
 static inline u32 mc_fault_at(int hart) { return mc_job_at(hart) + 32; }
@@ -2069,7 +2070,7 @@ static void native_check_init() {
     memcpy(nc.native.data(), words.data() + 8, std::min<size_t>(4ull * head[1], words.size() - 8));
     for (u32 v : nc.native)
         if (v) nc.nlo = std::min(nc.nlo, v), nc.nhi = std::max(nc.nhi, v + 16);
-    nc.a.pc = 0x80400000, nc.a.x[11] = 0x82200000, nc.a.priv = PRIV_S;
+    nc.a.pc = rvlayout::kKernelAt, nc.a.x[11] = rvlayout::kTreeAt, nc.a.priv = PRIV_S;
     nc.owed = ~0ull;   // (the boot slot has no RISC-V instruction of its own)
     nc.on = true;
 }
@@ -2527,7 +2528,7 @@ static u64 frame_no = 0;
 // goes out, and what came for it goes into its ring with the host's three words.
 static NetLink net;
 static void net_pass() {
-    const u32 NET = 0x876b8000u, RING = NET + 0x400;
+    const u32 NET = rvlayout::kNet, RING = NET + 0x400;
     uint8_t places[NetLink::kMost * NetLink::kSlotBytes];
     u32 before = 0;
     net.fromGuest(word(CTRL + 0x3e0), word(CTRL + 0x3e4), &word(NET));
@@ -2543,7 +2544,7 @@ static void net_pass() {
 // The addresses "persist:..." of a fetch (docs/system/fetch.md, docs/system/persist.md): the only ones this
 // host answers, and at once.
 static void persist_pass() {
-    const u32 DATA = 0x876c0000u;
+    const u32 DATA = rvlayout::kFetchData;
     u32 asked = word(CTRL + 0x100), length = word(CTRL + 0x104) > 255 ? 255 : word(CTRL + 0x104);
     if (asked == word(CTRL + 0x110)) return;
     std::string address((const char*)&ram[CTRL + 0x120 - RAM_BASE], length);
@@ -2599,7 +2600,7 @@ static void sound_pass() {
 static bool gpu_copy_on = false;
 static void gpu_copy(u32 submit) {
     static u32 told[64][4], told_n = 0;
-    u32 first = 0x87001000u, width = word(CTRL + 4), height = word(CTRL + 8), row = width;
+    u32 first = CTRL + 0x1000u, width = word(CTRL + 4), height = word(CTRL + 8), row = width;
     if (submit & 4) {
         first = word(CTRL + 0x50) | 0x80000000u, width = word(CTRL + 0x54), height = word(CTRL + 0x58);
         row = std::max(word(CTRL + 0x5c), width);
@@ -2613,7 +2614,7 @@ static void gpu_copy(u32 submit) {
     for (u32 y = 0; y < height; y++)
         for (u32 x = 0; x < width; x++) {
             u32 at = first + 4 * (y * row + x);
-            if (at - 0x86000000u >= 0x1e00000u) continue;   // (outside what a GPU program may own)
+            if (at - rvlayout::kDevAt >= rvlayout::kGpuMemEnd - rvlayout::kDevAt) continue;   // (outside what a GPU program may own)
             word(at) = 0x00c0ffeeu;
             dirty(at);
         }
@@ -2624,7 +2625,7 @@ static void gpu_copy(u32 submit) {
 static u32 console_read = 0;      // (how far the ring has been read: kept in a snapshot)
 static bool console_seen = false;
 static void console_pass() {
-    const u32 HOST = 0x876b8280u, GUEST = 0x876b8290u, RING = 0x876b82a0u, SIZE = 256;
+    const u32 HOST = rvlayout::kCon, GUEST = rvlayout::kCon + 0x10, RING = rvlayout::kCon + 0x20, SIZE = 256;
     u32& read = console_read;
     bool& seen = console_seen;
     u32 written = word(GUEST + 4);
@@ -2656,7 +2657,7 @@ static void control_pass() {
     // what each core ran, how many workers the geometry has (docs/machine/multicore.md: the cores have
     // no write cache here, so their sizes are only counted) and how many there could be
     // (every core again at MC_STATS_ALL of src/gpu.h: counts, then a texel for every 32 cores of bits)
-    const u32 STATS_ALL = 0x876ba000u;
+    const u32 STATS_ALL = rvlayout::kStatsAll;
     // (their band is marked only when a word of it changes: the harness uploads what is marked)
     bool more = false;
     for (size_t i = 0; i < cores.size(); i++) {
@@ -2926,8 +2927,8 @@ static bool machine_boot(const std::string& image, int count) {
     cores.resize((size_t)count);
     workers.resize((size_t)count);
     for (int i = 0; i < count; i++) cores[(size_t)i].hart = i;
-    cores[0].pc = 0x80400000;      // the kernel, in supervisor mode, with the device tree in a1
-    cores[0].x[11] = 0x82200000;
+    cores[0].pc = rvlayout::kKernelAt;      // the kernel, in supervisor mode, with the device tree in a1
+    cores[0].x[11] = rvlayout::kTreeAt;
     cores[0].priv = PRIV_S;
     return true;
 }
@@ -2947,7 +2948,7 @@ static void pass_log_put(int end, u64 ran) {
             (unsigned long long)(guest_seconds * 1000.0));
     for (u32 a = c.x[2], n = 0; (end == 1 || end == 4) && n < (u32)pass_log_stack && a - RAM_BASE < RAM_SIZE - 4 && a < c.x[2] + 1024; a += 4) {
         u32 v = word(a);
-        if (v - 0x80400000u < RAM_BASE + RAM_SIZE - 0x80400000u && !(v & 3)) fprintf(pass_log, " %08x", v), n++;
+        if (v - rvlayout::kKernelAt < RAM_BASE + RAM_SIZE - rvlayout::kKernelAt && !(v & 3)) fprintf(pass_log, " %08x", v), n++;
     }
     fputc(10, pass_log);
 }
@@ -3008,7 +3009,7 @@ static void count_mark() {
 // and the console's state, the script's place in it), so that a run goes on in another call with the same arguments
 // and image (test_all.py --sections: every call under a minute). Not kept: RVC_RACES', RVC_PROF's and RVC_CALLS'
 // tables (each call reports its own part), the write cache's lines (empty at a pass's start), the network.
-static const char SNAP_MAGIC[8] = {'R', 'V', 'C', 'S', 'N', 'A', 'P', '1'};
+static const char SNAP_MAGIC[8] = {'R', 'V', 'C', 'S', 'N', 'A', 'P', '2'};   // 2: the layout of 28 October 2026 (rvc_layout.h); 1 is refused
 template <class T> static void snap_put(FILE* f, const T& v) { fwrite(&v, sizeof v, 1, f); }
 template <class T> static bool snap_get(FILE* f, T& v) { return fread(&v, sizeof v, 1, f) == 1; }
 static void snap_put_str(FILE* f, const std::string& v) { u32 n = (u32)v.size(); snap_put(f, n); fwrite(v.data(), 1, n, f); }

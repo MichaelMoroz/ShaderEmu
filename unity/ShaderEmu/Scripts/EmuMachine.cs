@@ -321,7 +321,7 @@ public class EmuMachine : UdonSharpBehaviour
         return preset == 1 ? "Dense" : preset == 2 ? "Medium" : preset == 3 ? "Wide" : "Auto";
     }
 
-    // What geotune laid out (the geometry texel at 0x870003d0): its pick and ratio in the first
+    // What geotune laid out (the geometry texel at 0x810003d0): its pick and ratio in the first
     // word's high bits, the small workers' cache bits and block width.
     private void ShowWorkers()
     {
@@ -1738,7 +1738,7 @@ public class EmuMachine : UdonSharpBehaviour
     // is enough (255 workers a round were most of a frame's script time).
     private void Workers()
     {
-        // the cores' counts of instructions, which the control pass publishes at 0x87000380
+        // the cores' counts of instructions, which the control pass publishes at 0x81000380
         cores = Mathf.Clamp(Small(Word(64 + 0x3c, 0)), 1, MostCores);
         // started, and not asleep on its job word: a texel for every 32 cores
         for (int g = 0; g < MostCores / 32; g++) coresRunning[g] = Word(CoresMore + 64 + g, 0) & ~Word(CoresMore + 64 + g, 1);

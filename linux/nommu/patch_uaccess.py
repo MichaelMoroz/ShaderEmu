@@ -1,7 +1,7 @@
 """No MMU: user memory checked and accessed as gpu_vm's arch/gpuvm/include/asm/uaccess.h does (GPU-VM 25e38c0).
 
 - access_ok: a user's range must start in memory the kernel may read: the ROM (0x40000000 up, a mapped file of it is
-  a user's pointer there), or RAM and the devices between its two ranges (0x80400000 to 0x92000000: a program's
+  a user's pointer there), or the devices and RAM after them (0x80000000 to 0x92000000: a program's
   buffers in the GPU's memory are its pointers too), and end by RAM's end (TASK_SIZE_MAX, which the strings'
   functions ask for). asm-generic's UACCESS_MEMCPY said yes to anything, so a bad pointer given to a system call
   faulted in the kernel or wrote over the firmware; now it is EFAULT. A range of 0 bytes is anywhere.
@@ -29,7 +29,7 @@ new = '#else /* CONFIG_MMU */\n' + MARK + r'''
 
 #define SE_ROM_START	0x40000000UL
 #define SE_ROM_END	0x80000000UL
-#define SE_RAM_START	0x80400000UL
+#define SE_RAM_START	0x80000000UL	/* the devices (docs/system/nommu.md, "Memory"), then RAM from 0x82000000 */
 #define SE_RAM_END	0x92000000UL
 
 /* the strings' functions (strncpy_from_user, strnlen_user) ask for a range from the string to here */

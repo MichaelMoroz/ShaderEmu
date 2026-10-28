@@ -665,9 +665,9 @@ draw_rows(GR_DRAW_ID to, int dy, int y0, int y1)
 #define REG_LOCK 24
 #define REG_COPY 28		/* nonzero: the list drawn last has its copy still to be made */
 #ifdef __gpuvm__
-#define GPU_PHYS 0x00000000u	/* gpu_vm: the device window moved down by 0x86000000 */
+#define GPU_PHYS 0x00000000u	/* gpu_vm: the device window moved down by 0x80000000 */
 #else
-#define GPU_PHYS 0x86000000u
+#define GPU_PHYS 0x80000000u
 #endif
 #define PASS_OVER (5u << 16)	/* blends by alpha, as the window system draws text of coverage */
 

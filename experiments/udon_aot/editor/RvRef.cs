@@ -9,7 +9,7 @@ namespace UdonAot
     public static class Mem
     {
         public const uint RamBase = 0x80000000u, RamBytes = 0x12000000u, RomBase = 0x40000000u;
-        public const uint ConHost = 0x876b8280u, ConGuest = 0x876b8290u, ConRing = 0x876b82a0u;
+        public const uint ConHost = 0x816b8280u, ConGuest = 0x816b8290u, ConRing = 0x816b82a0u;
         public static int[] Rom;
         static string romPath;
 
@@ -95,20 +95,20 @@ namespace UdonAot
     {
         public readonly uint[] r = new uint[65];   // x0-x31, f0-f31 as bits, [64] a sink
         public readonly uint[] csr = new uint[16];
-        public uint pc = 0x80400000u, priv = 1, fcsr, res = ~0u, msrc, mdst, mn;
+        public uint pc = 0x82000000u, priv = 1, fcsr, res = ~0u, msrc, mdst, mn;
         public ulong tcmp;
         public int[] ram;
         public Clock clock;
         public long Instret, UserInstret, Traps, Interrupts, Csrs, Ecalls;
         public readonly long[] UserOps = new long[128], SupOps = new long[128];   // instructions by major opcode
         public long SupLowLoads, SupLowStores, Misaligned, HighAccess, SupOutside, SupByteLoads, SupHalf;
-        public const uint TextLo = 0x80400000u, TextHi = 0x806d63ecu;
+        public const uint TextLo = 0x82000000u, TextHi = 0x822d63ecu;
         public static int[] PcCount;      // supervisor executions of each text word, when not null
         public static int[] Entered;      // supervisor jalr, trap and sret targets, when not null
         void Enter(uint t) { if (Entered != null && t - TextLo < TextHi - TextLo) Entered[(t - TextLo) >> 2]++; }
         bool trapped; uint trapCause, trapVal;
 
-        public RefCpu(int[] ram, Clock clock) { this.ram = ram; this.clock = clock; r[11] = 0x82200000u; }
+        public RefCpu(int[] ram, Clock clock) { this.ram = ram; this.clock = clock; r[11] = 0x83e00000u; }
 
         void Raise(uint cause, uint val) { if (!trapped) { trapped = true; trapCause = cause; trapVal = val; } }
 

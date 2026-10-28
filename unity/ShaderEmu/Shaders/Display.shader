@@ -34,8 +34,8 @@ Shader "ShaderEmu/Display"
             float4 _RawSize, _HostPointer;
             float4 _Off;
 
-            static const uint DispCtrl = 0x700000, DispPalette = 0x700040, DispPixels = 0x700100;
-            static const uint DispCursor = 0x700004;   // x, y, on, address of a 32x32 image
+            static const uint DispCtrl = 0x100000, DispPalette = 0x100040, DispPixels = 0x100100;
+            static const uint DispCursor = 0x100004;   // x, y, on, address of a 32x32 image
 
             struct v2f {
                 float4 pos : SV_Position;

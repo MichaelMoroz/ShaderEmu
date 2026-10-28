@@ -838,7 +838,7 @@ int mcw_counters(void)
 	if (slot < 0) return MC_COUNTERS;	/* (no workers: words; asked again after mcw_open()) */
 	counting = 1;
 	if (!(counts = mcw_map(MC_COUNT_GPU_OFFSET, MC_COUNT_BYTES)) ||
-	    !(head = mcw_map((MC_COUNT_HEAD_PHYS & ~4095u) - 0x86000000u, 4096)))
+	    !(head = mcw_map((MC_COUNT_HEAD_PHYS & ~4095u) - 0x80000000u, 4096)))
 		mcw_fail("mcw: the counters' memory could not be mapped", 0);
 	head += (MC_COUNT_HEAD_PHYS & 4095u) / 4;
 	mcw_touch((void *)counts, MC_COUNT_BYTES);

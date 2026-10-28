@@ -71,7 +71,7 @@ is 43k. Where the time went, and what was done:
   picture: 9k instructions of a frame on a level of 215 sectors where a handful change. The
   game says what it changes now (below).
 - **Time.** Doom asks the time several times a frame, 416 instructions a system call. It
-  reads the machine's clock word (`0x87000034`) instead.
+  reads the machine's clock word (`0x81000034`) instead.
 - **Matrices.** `glOrthox` and the library's 64-bit divisions cost a frame about 5k; the flat
   views are constant matrices, and a window's size divides in 32 bits.
 - **Fixed-point division** takes as many bits a step as the divisor leaves room for, instead

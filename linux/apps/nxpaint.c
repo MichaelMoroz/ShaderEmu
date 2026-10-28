@@ -241,7 +241,7 @@ static int width, height;		/* the window's */
 static int view_w, view_h;		/* the part of it the picture shows in, from (TOOLS_W, MENU_H) */
 static uint32_t *surface;		/* the window's own buffer, mapped: 0xAARRGGBB a pixel */
 static uint32_t surface_at, surface_bytes, buffers_seen;
-static volatile uint32_t *buffers;	/* the screen driver's count of buffers made (0x87000064) */
+static volatile uint32_t *buffers;	/* the screen driver's count of buffers made (0x81000064) */
 static int surface_row, gpu = -1;
 
 static uint32_t *pix, *back;		/* the picture, and the picture as of the last change that was kept */
@@ -315,7 +315,7 @@ locate(int ask)
 #ifdef __gpuvm__
 	offset = info.surface_address;	/* (gpu_vm: the device window starts at 0) */
 #else
-	offset = info.surface_address - 0x86000000u;
+	offset = info.surface_address - 0x80000000u;
 #endif
 	surface_bytes = (offset & 4095) + (uint32_t)surface_row * (uint32_t)height * 4;
 	memory = mmap(NULL, surface_bytes, PROT_READ | PROT_WRITE, MAP_SHARED, gpu, offset & ~4095u);

@@ -31,9 +31,9 @@ Shader "ShaderEmu/UdonAotScatter"
     // red and alpha, 4 the guest's red only, 5 the device's red and green.
     uint texel_class(uint t)
     {
-        if (t >= 0x700000 && t < 0x700100)
+        if (t >= 0x100000 && t < 0x100100)
         {
-            uint i = t - 0x700000;
+            uint i = t - 0x100000;
             if (i == 0x01) return _Send > 0.5 ? 2 : 3;               // GPU_CTRL: submit, list, count, frames drawn
             if (i == 0x03) return 4;                                 // GPU_CLOCK
             if (i == 0x32) return 2;                                 // COUNT_HEAD
@@ -42,9 +42,9 @@ Shader "ShaderEmu/UdonAotScatter"
                 || i == 0x31 || (i >= 0x33 && i < 0x3d) || i == 0x3f || i >= 0xc0) return 1;
             return 0;
         }
-        if (t >= 0x76b800 && t < 0x76ba00)
+        if (t >= 0x16b800 && t < 0x16ba00)
         {
-            uint i = t - 0x76b800;
+            uint i = t - 0x16b800;
             if (i == 0x29) return 4;                                 // the console's words: taken (written is printed here)
             if (i == 0x28 || (i >= 0x2a && i < 0x3a) || (i >= 0x40 && i < 0x180)) return 1;   // CON_HOST, its ring, NET_RX
         }

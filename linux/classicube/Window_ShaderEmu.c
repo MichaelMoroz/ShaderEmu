@@ -59,7 +59,7 @@ static uint32_t mouse_count;
 #define HOST_STATE 0x360	/* the host's eight words (GLES/segl.h has their fields) */
 static void WindowOrigin(void);
 
-/* GPU memory from 0x87000000 (the device maps from 0x86000000), or NULL without the device. */
+/* GPU memory from 0x81000000 (the device maps from 0x80000000), or NULL without the device. */
 uint8_t* SE_Gpu(void) {
 	int fd;
 	void* map;

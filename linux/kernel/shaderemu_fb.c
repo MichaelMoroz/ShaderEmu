@@ -9,7 +9,7 @@
 #include <linux/mm.h>
 #include <linux/module.h>
 
-#define DISP_PHYS	0x87000000UL
+#define DISP_PHYS	0x81000000UL
 #define DISP_PIXELS	0x1000UL
 #define DISP_LEN	0x003ff000UL	/* pixel memory, up to the GPU's buffers */
 #define DISP_MODE_RGB32	1

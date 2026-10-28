@@ -7,16 +7,16 @@
 
 #include "platform.h"
 
-#define GPU_SUBMIT (*(volatile uint32_t*)0x87000010)   // what to do with the list (below); the GPU clears it
+#define GPU_SUBMIT (*(volatile uint32_t*)0x81000010)   // what to do with the list (below); the GPU clears it
 #define GPU_SUBMIT_DRAW 1        // draw it
 #define GPU_SUBMIT_WRITEBACK 2   // then copy the picture into the RAM framebuffer (DISP_PIXELS)
 #define GPU_SUBMIT_INTO 4        // then copy it into the rectangle at GPU_INTO, whose size the picture has
-#define GPU_INTO ((volatile uint32_t*)0x87000050)   // address, width, height, row length in pixels
-#define GPU_LIST   (*(volatile uint32_t*)0x87000014)   // address of the command list
-#define GPU_COUNT  (*(volatile uint32_t*)0x87000018)   // number of commands in it
-#define GPU_FRAMES (*(volatile uint32_t*)0x8700001c)   // lists drawn so far
+#define GPU_INTO ((volatile uint32_t*)0x81000050)   // address, width, height, row length in pixels
+#define GPU_LIST   (*(volatile uint32_t*)0x81000014)   // address of the command list
+#define GPU_COUNT  (*(volatile uint32_t*)0x81000018)   // number of commands in it
+#define GPU_FRAMES (*(volatile uint32_t*)0x8100001c)   // lists drawn so far
 
-#define GPU_COMMANDS 0x87500000u   // where gpu_begin() builds the list: 4096 commands of 64 bytes
+#define GPU_COMMANDS 0x81500000u   // where gpu_begin() builds the list: 4096 commands of 64 bytes
 #define GPU_MAX_COMMANDS 4096
 #define GPU_MAX_VERTICES 196608    // per list, over all commands (65,536 triangles)
 

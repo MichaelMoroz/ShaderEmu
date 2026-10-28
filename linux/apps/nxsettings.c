@@ -615,9 +615,9 @@ device_lines(int which, char lines[][96])
 		} else
 #endif
 		if (machine_mmu())
-			snprintf(lines[n++], 96, "Where: 0x80000000 up (Linux from 0x80400000)");
+			snprintf(lines[n++], 96, "Where: 0x82000000 up, Linux's from its start");
 		else {
-			snprintf(lines[n++], 96, "Where: 0x80400000 to 0x86000000, Linux's from its start");
+			snprintf(lines[n++], 96, "Where: 0x82000000 to 0x92000000, Linux's from its start");
 			snprintf(lines[n++], 96, "No MMU: a program's memory is taken whole as it starts");
 		}
 		snprintf(lines[n++], 96, "Kept in: the GPU's state texture, 16 bytes a texel");
@@ -625,7 +625,7 @@ device_lines(int which, char lines[][96])
 #ifdef __gpuvm__
 		snprintf(lines[n++], 96, "GPU memory: 0x00010000 to 0x01000000, 16 MB (the GPU's)");
 #else
-		snprintf(lines[n++], 96, "GPU memory: 0x86000000 to 0x87000000, 16 MB (the GPU's)");
+		snprintf(lines[n++], 96, "GPU memory: 0x80000000 to 0x81000000, 16 MB (the GPU's)");
 #endif
 		break;
 	}
@@ -649,7 +649,7 @@ device_lines(int which, char lines[][96])
 #ifdef __gpuvm__
 		snprintf(lines[n++], 96, "Device: /dev/gpu, its words at 0x01000000");
 #else
-		snprintf(lines[n++], 96, "Device: /dev/gpu, its words at 0x87000000");
+		snprintf(lines[n++], 96, "Device: /dev/gpu, its words at 0x81000000");
 #endif
 		snprintf(lines[n++], 96, "Draws: triangle lists into pictures in GPU memory");
 		snprintf(lines[n++], 96, "Textures: in GPU memory, or files of the ROM where they lie");

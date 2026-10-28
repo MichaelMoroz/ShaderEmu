@@ -793,7 +793,7 @@ start(const char *label, const char *command)
 /* "Open this" from the host (docs/system/open.md): a count among the machine's control words, and an
  * address in two runs of them. The last count acted on is kept in a file, for a bar started
  * again, and each new one starts `open` with the address. */
-#define OPEN_COUNT 144		/* word indices: 0x87000240 */
+#define OPEN_COUNT 144		/* word indices: 0x81000240 */
 #define OPEN_FIRST 148		/* 176 bytes of the address */
 #define OPEN_MORE 196		/* and 80 more */
 #define OPEN_SEEN "/tmp/nxopen.count"

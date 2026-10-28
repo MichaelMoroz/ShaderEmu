@@ -1,6 +1,7 @@
 // The machine's processor as one compute shader thread (experiments/rv32_min): an image's RAM
 // and ROM, passes of the shader, the console in and out, instructions counted. No GPU, sound
 // or network device, no worker cores: Linux to its shell and what runs on the console.
+#include "rvc_layout.h"
 #include "run_lock.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -31,7 +32,7 @@
 using Microsoft::WRL::ComPtr;
 
 static const uint32_t RAM_BASE = 0x80000000u, RAM_SIZE = 0x12000000u;   // as rvc_cpu's
-static const uint32_t CON = 0x876b8280u;   // docs/machine/console.md: host words, guest words, the ring
+static const uint32_t CON = rvlayout::kCon;   // docs/machine/console.md: host words, guest words, the ring
 static const uint32_t CON_BYTES = 0x120u, RING = 0x20u, RING_SIZE = 256;
 static const uint32_t DEC_BYTES = 2 * RAM_SIZE;   // decoded instructions: 8 bytes a word of RAM
 // a core's words (rv32_min_fast.hlsl): 128 of them from core * 512 bytes
@@ -240,8 +241,8 @@ int main(int argc, char** argv) {
     for (uint32_t c = 0; c < (opt.allRun ? opt.cores : 1); c++) {
         uint32_t* w = &state0[(size_t)c * STATE_WORDS];
         w[10] = c;
-        w[11] = 0x82200000u;
-        w[S_PC] = 0x80400000u;
+        w[11] = rvlayout::kTreeAt;
+        w[S_PC] = rvlayout::kKernelAt;
         w[S_PRIV] = 1;
         w[S_RES] = ~0u;
     }

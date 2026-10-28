@@ -726,9 +726,9 @@ show(void)
 /* ---- DOOM_SUM=1: at a held tic, a sum of all the GPU was given for the picture on show ---- */
 
 #ifdef __gpuvm__
-#define GPU_FROM	0x01000000u	/* gpu_vm: the device window moved down by 0x86000000 */
+#define GPU_FROM	0x01000000u	/* gpu_vm: the device window moved down by 0x80000000 */
 #else
-#define GPU_FROM	0x87000000u
+#define GPU_FROM	0x81000000u
 #endif
 #define GPU_BYTES	0x00b00000u
 #define REG_SHOWN	0x300		/* the last whole frame: its list's address, how many commands */

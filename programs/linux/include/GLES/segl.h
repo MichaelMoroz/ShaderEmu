@@ -105,7 +105,7 @@ static inline void seglWorldEye(int game, float eye, float znear, float zfar, fl
 	a = a < -32768 ? -32768 : a > 32767 ? 32767 : a;
 	b = b > 4095 ? 4095 : b;
 	said = (unsigned)(a & 0xffff) | (unsigned)b << 16 | (unsigned)(game & 15) << 28;
-	word += (0x6c - 0x360) / 4;	/* the control word 0x8700006c, written only when it changes */
+	word += (0x6c - 0x360) / 4;	/* the control word 0x8100006c, written only when it changes */
 	if (*word != said)
 		*word = said;
 }

@@ -30,9 +30,9 @@
 // ---- GPU memory ----
 
 #ifdef __gpuvm__
-#define GPU_PHYS 0x01000000u   // gpu_vm: the device window moved down by 0x86000000 (gpu_vm/GPU_VM.md, "Memory")
+#define GPU_PHYS 0x01000000u   // gpu_vm: the device window moved down by 0x80000000 (gpu_vm/GPU_VM.md, "Memory")
 #else
-#define GPU_PHYS 0x87000000u
+#define GPU_PHYS 0x81000000u
 #endif
 #define GPU_SIZE 0x00b00000u
 // This frame's uniform blocks and command list, then the vertex buffers of display lists to
@@ -88,7 +88,7 @@ static void gpu_open(void) {
     gpu_fd = open("/dev/gpu", O_RDWR | O_CLOEXEC);   // (not held across exec)
     if (gpu_fd >= 0) {
         if (draw_claim(gpu_fd) < 0) exit(1);
-        void* map = mmap(0, GPU_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, gpu_fd, 0x01000000);   // the device maps from 0x86000000
+        void* map = mmap(0, GPU_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, gpu_fd, 0x01000000);   // the device maps from 0x80000000
         if (map == MAP_FAILED) die("cannot map /dev/gpu");
         gpu_map = map;
         return;
@@ -98,7 +98,7 @@ static void gpu_open(void) {
 #ifdef __gpuvm__
         const char spec[] = "gpu,0x01000000,0xb00000";
 #else
-        const char spec[] = "gpu,0x87000000,0xb00000";
+        const char spec[] = "gpu,0x81000000,0xb00000";
 #endif
         int fd = open("/sys/module/phram/parameters/phram", O_WRONLY);
         if (fd < 0 || write(fd, spec, sizeof spec - 1) < 0) die("cannot create the GPU memory device (phram)");

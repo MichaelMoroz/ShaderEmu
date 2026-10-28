@@ -61,7 +61,7 @@ Shader "ShaderEmu/Scope"
                     float2 at = float2(p.x * 64.0, p.y / top * 32.0);
                     return state_cell(_State.Load(int3(min((int)at.x, 63), min((int)at.y, 31), 0)), frac(at));
                 }
-                uint4 geo = _State.Load(int3(0x3d, 64 + 0x700000 / 2048, 0));
+                uint4 geo = _State.Load(int3(0x3d, 64 + 0x100000 / 2048, 0));
                 uint rows = geo.b >= 3 && geo.b <= 6 ? (52 + ((7u << geo.b) >> 2) * 4 + 63) / 64 : 0;
                 uint count = (geo.r & 1) != 0 ? 0 : min(geo.g, 255u);
                 if (rows == 0 || count == 0) return back * 0.6;

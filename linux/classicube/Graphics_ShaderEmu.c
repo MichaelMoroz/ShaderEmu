@@ -16,7 +16,7 @@
 #include <pthread.h>
 #include "mcwx.h"
 
-/* from Window_ShaderEmu.c: GPU memory from 0x87000000, and where the window's pixels are */
+/* from Window_ShaderEmu.c: GPU memory from 0x81000000, and where the window's pixels are */
 uint8_t* SE_Gpu(void);
 int SE_Surface(uint32_t* address, int* width, int* height, uint32_t* row);
 uint32_t SE_Milliseconds(void);
@@ -26,9 +26,9 @@ int SE_Flat(void);
 *------------------------------------------------------GPU memory---------------------------------------------------------*
 *#########################################################################################################################*/
 #ifdef __gpuvm__
-#define GPU_PHYS 0x01000000u /* gpu_vm: the device window moved down by 0x86000000 */
+#define GPU_PHYS 0x01000000u /* gpu_vm: the device window moved down by 0x80000000 */
 #else
-#define GPU_PHYS 0x87000000u
+#define GPU_PHYS 0x81000000u
 #endif
 #define GPU_END  0x00b00000u
 /* Two sets: a frame is built in one while the other is still shown (docs/world/volume.md). */

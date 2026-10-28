@@ -92,7 +92,7 @@ host answers these itself, with a fetch's status.
 | `persist:auto=0`, `=1` | loading at start off, on | 200 |
 | `persist:state` | answers with the text `stored N`, `limit N`, `auto 0|1`, a line each | 200 |
 
-For a save the guest stores its bytes at `0x876c0000` first, which until now only the host
+For a save the guest stores its bytes at `0x816c0000` first, which until now only the host
 wrote. The host's SAVE button reaches the guest as an address to open (`docs/system/open.md`):
 `open persist:save` runs `nxpersist save`, so it needs the desktop's bar.
 

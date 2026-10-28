@@ -10,10 +10,10 @@ program registered for what it is. The file manager opens a file the same way.
 
 | Address | Contents |
 |---|---|
-| `0x87000240` | requests so far: the host adds 1 |
-| `0x87000244` | the address's length, 255 at most |
-| `0x87000250` | the address's first 176 bytes |
-| `0x87000310` | and 80 more |
+| `0x81000240` | requests so far: the host adds 1 |
+| `0x81000244` | the address's length, 255 at most |
+| `0x81000250` | the address's first 176 bytes |
+| `0x81000310` | and 80 more |
 
 - The control pass writes them from the answer's texture with `_FetchDeliver` 4 (`HOST_OPEN` in
   `src/gpu.h`), in one frame, as it writes a fetch's answer.

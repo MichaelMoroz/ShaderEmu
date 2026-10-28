@@ -36,7 +36,7 @@ cores cost nothing now: "Up to 256 cores").
 - **Workers** have no devices and take no traps; they have the float registers and paging.
   A worker is a thread of a Linux program that the kernel does not know of: it runs in user
   mode on the program's own page table, so the program's functions and pointers are its own.
-  It is parked until core 0 writes its start word, the texel at `0x86C00000 + 16 k`:
+  It is parked until core 0 writes its start word, the texel at `0x80C00000 + 16 k`:
   `{ "MCSU", pc, sp, root }`, the page table's first page being number `root` (the kernel
   tells a program its own: an ioctl of `/dev/gpu`). It starts there with its number in `a0`.
   `pause` is its sleep until the first word of its job changes, and `ebreak` parks it again.
@@ -55,7 +55,7 @@ cores cost nothing now: "Up to 256 cores").
   calls that are about which thread is calling (a new thread, a new program).
 - **No TLB kept.** A worker starts every pass with empty TLBs and walks the page table for
   each page it uses in the pass ("What paging costs a worker", below).
-- **The mailboxes** are eight pages of the GPU device's memory at `0x86C00000`, which `/dev/gpu`
+- **The mailboxes** are eight pages of the GPU device's memory at `0x80C00000`, which `/dev/gpu`
   maps: the start words, the kernel's words, a system call's words, and from `0x4000` 64 bytes
   a core (its job, its answer, its fault and the word that lets it go on). `programs/mc/mc.h`
   is the layout ("Up to 256 cores").
@@ -262,7 +262,7 @@ about 1.4 million, Quake III to frame 200 1,165 to 1,465, nxray 119 to 180.
 So it is few workers that store much in a pass or many that store little, or any mix. A
 worker whose cache is full ends its pass there, as any core does, and goes on in the next.
 
-The geometry is a texel of the control words (`0x870003d0`): a word with bit 0 set while the
+The geometry is a texel of the control words (`0x810003d0`): a word with bit 0 set while the
 square is laid out anew, then four bits a worker for workers 1 to 8 and for 9 to 15 (its
 bits; 0 ends the list). **It is set while every worker is parked, and at no other time**: a
 worker's registers and cache are those pixels. The kernel did it (`SHADEREMU_GPU_SHAPE`,
@@ -271,7 +271,7 @@ do nothing now, and `workers_layout()` writes the kernel's one geometry the same
 refuses with EBUSY while any program has a worker, parks every core, sets the bit, during
 which every pixel of the band is zero and the commit takes no worker's stores (a worker
 with no state is a parked one), writes the two words and clears the bit. The control pass
-says in `0x870003c0` how many cores there are now, and in the word at `0x870003cc` how many
+says in `0x810003c0` how many cores there are now, and in the word at `0x810003cc` how many
 there could be (256). Until a program asked, the kernel
 laid out three workers of the full size and twelve of size 4 the first time workers were
 asked for. `mctest N LIMIT shape 6,6,5,4,4` sets a geometry and runs the tests on it.
@@ -417,7 +417,7 @@ of one band of 248 tiles and of the mailboxes' places is how it was before this.
 The machine has 256 cores: the harness and `rvc_cpu` (`kCores`), and the world (`CORES` in
 `MachineBlit.cginc`, `MachineCores` in the builder). It had 64. What made that possible:
 
-- **The workers are all alike**, so the geometry is two words of the texel at `0x870003d0`:
+- **The workers are all alike**, so the geometry is two words of the texel at `0x810003d0`:
   how many workers (`.g`) and the size of their write caches (`.b`, 3 to 6); bit 0 of `.r` is
   still "being laid out". Where a worker's state and its pixels are is arithmetic from its
   number, with no loop over the workers before it (`mc_tile_of`, `mc_block_of`, `mc_core_at`,
@@ -440,13 +440,13 @@ The machine has 256 cores: the harness and `rvc_cpu` (`kCores`), and the world (
 - **The tick's targets are bands too**: 1,040 columns (core 0's eight, eight empty, 128
   blocks) and 16 rows for every 128 workers. Blocks 16 rows apart do not share: every
   worker's pixels drawn twice cost nothing, four times 6%, eight times 94% (`TICK_LOAD`).
-- **The mailboxes are eight pages** at `0x86c00000` (`programs/mc/mc.h`): a start texel a core
+- **The mailboxes are eight pages** at `0x80c00000` (`programs/mc/mc.h`): a start texel a core
   from 0, the kernel's words from `0x1000` (cores asked back, the offer count, a word a
   program that posts) and `0x1400` (a core's owner), a system call's words from `0x2000` and
   the mailboxes from `0x4000`. A bit a core is eight words, in the calls and in memory.
   `/proc/gpu` says whose a tag is: a line an open of `/dev/gpu` (`pid workers wanted lent tag
   draws lists`), which `nxmon` matches to the owner words to give each program its cores.
-- **What the cores ran** is at `0x876ba000` (`MC_STATS_ALL`, the network's row after its ring):
+- **What the cores ran** is at `0x816ba000` (`MC_STATS_ALL`, the network's row after its ring):
   a word a core, then from `+0x400` a texel for every 32 cores: a word of which of them run
   and a word of which sleep.
 - **The commit's points are a bucket each**, not an entry: 258 for core 0 and 130 a worker.
@@ -509,7 +509,7 @@ workers 1 to 16 big (caches of 2^5 buckets), which keeps a game's few workers at
 (small caches cost Doom 15 to 38%), and the rest small (2^3). How the small ones' blocks lie
 in the tick's targets depends on the card, and `geotune` measures it at boot.
 
-**The field.** The geometry's texel (`0x870003d0`) is the same four words, and `.a` says the
+**The field.** The geometry's texel (`0x810003d0`) is the same four words, and `.a` says the
 rest:
 
 | Bits of `.a` | What |
@@ -525,7 +525,7 @@ workers have the first band of the state strip and of the targets; the small one
 after, and those the targets' later bands do not hold go after the big ones' blocks in the
 first band (with eight columns a worker the second band holds 128 of 239). `mc_geo_read()` in
 `src/types.h` reads it for the tick and the commit, and `mc_geo_count()` in `src/gpu.h` the same
-for the control pass (`gpu.shader` has no `types.h`), whose count of cores (`0x870003c0`) is
+for the control pass (`gpu.shader` has no `types.h`), whose count of cores (`0x810003c0`) is
 what the kernel shares out: a worker the targets have no block for is no worker. With
 `MC_UNIFORM` defined the shader is that of before, preprocessed text for text.
 
@@ -560,7 +560,7 @@ workers).
 
 **What it says and who may choose.** At boot it prints each step on the console: what it
 measures, each of the three rounds' times, the ratio and its pick, and the layout it made. The
-host may ask for a layout in bits 2-3 of the host flags (`0x8700003c`: 0 the pick, 1, 2, 3 the
+host may ask for a layout in bits 2-3 of the host flags (`0x8100003c`: 0 the pick, 1, 2, 3 the
 small workers in 2, 4 or 8 columns; the harness's `--workers auto|2|4|8`); `geotune` still
 measures, lays out what was asked and says both. Its pick and ratio are then in the geometry
 texel's first word, which the tick reads only bit 0 of: bits 8-15 the width it picked, 16-31
@@ -616,7 +616,7 @@ since "Up to 256 cores"). What is different above 16:
 
 - the workers' band is the state rows to their end, 248 tiles of 8 x 8 in place of 64;
 - the geometry is eight words, four bits a worker: the geometry texel's second to fourth
-  words and two texels of the mailbox page (`0x86c00f00`, `0x86c00f10`; they were the two
+  words and two texels of the mailbox page (`0x80c00f00`, `0x80c00f10`; they were the two
   control texels after it, which are the network's);
 - cores 16 to 63 have their mailboxes after the first sixteen's (`programs/mc/mc.h`: three
   pages now), so a program built before knows the first fifteen workers and is not disturbed;
@@ -834,9 +834,9 @@ and 1.07 s (255), and 64 rounds of 16 KB back to back 0.23 s and 0.65 s.
 
 A counter is a word every core may add to in the same pass, with no lock: 1024 of them, 64 for
 each program that has workers (its slot, the low four bits of its tag). Worker k adds to its
-own region of the counters (`MC_COUNT_REGION_AT(k)` at `0x86C10000`, core 0 the first) with
+own region of the counters (`MC_COUNT_REGION_AT(k)` at `0x80C10000`, core 0 the first) with
 `amoadd.w`, which is one instruction on one core, and sets the word "added" of the counters'
-head, a control word at `0x87000320` (`{ added, "ERGM", merges, passes }`: the last, the
+head, a control word at `0x81000320` (`{ added, "ERGM", merges, passes }`: the last, the
 commits so far, is what a monitor measures a core's 8,192 instructions a pass by). Regions only grow. The
 host reads the control words back every frame; when it sees "added" it draws the 256 texels of
 the totals after the commit, each the sum of its word over the 256 regions, and the control
@@ -1126,12 +1126,12 @@ other:
 
 | Address | Contents |
 |---|---|
-| `0x87000380 + 4 k` | core k's instructions so far (k from 0 to 15; 0 for a core the machine lacks) |
-| `0x870003c0` | how many cores the machine has (0 on a machine built for one) |
-| `0x870003c4` | a bit a core: it runs (a worker that was started and has not parked) |
-| `0x870003c8` | a bit a core: it is asleep on its job word |
-| `0x876ba000 + 4 k` | core k's instructions so far, every core (`MC_STATS_ALL`: the network's row, after its ring) |
-| `0x876ba400 + 16 n`, `+ 4` | cores 32 n to 32 n + 31, a bit a core: runs, asleep |
+| `0x81000380 + 4 k` | core k's instructions so far (k from 0 to 15; 0 for a core the machine lacks) |
+| `0x810003c0` | how many cores the machine has (0 on a machine built for one) |
+| `0x810003c4` | a bit a core: it runs (a worker that was started and has not parked) |
+| `0x810003c8` | a bit a core: it is asleep on its job word |
+| `0x816ba000 + 4 k` | core k's instructions so far, every core (`MC_STATS_ALL`: the network's row, after its ring) |
+| `0x816ba400 + 16 n`, `+ 4` | cores 32 n to 32 n + 31, a bit a core: runs, asleep |
 
 `nxmon`, a task manager (`docs/system/nanox.md`), reads them: on its Performance tab the workers'
 instructions a second, all 255 of them, are stacked on core 0's plot (or Per core, a 16 x 16

@@ -65,7 +65,7 @@ uniform uint _HostMtimeLo, _HostMtimeHi;
 #define STALL_LANES_START 13
 #define STALL_LANE_RET 14
 #define STALL_LANE_FAIL 15
-#define MBOX 0x06C00000u
+#define MBOX 0x00C00000u
 #ifdef LANE_FIELD
 // The field (docs/machine/lanes.md, "The field"): up to FIELD_MAX lanes of no core's, a pixel each in
 // rows 8-15 of the targets' two bands (no core's block is there), their texels in rows 48-63 of the
@@ -78,8 +78,8 @@ uniform uint _LaneField;
 #define FIELD_W 248
 #define FIELD_X 16
 #define FIELD_STATE_ROW 48
-#define FIELD_JOB_T 0x6C0190u
-#define FIELD_STATUS_T 0x6C01A0u
+#define FIELD_JOB_T 0x0C0190u
+#define FIELD_STATUS_T 0x0C01A0u
 #endif                             // the workers' mailboxes, as a RAM offset
 #define MC_START 0x5553434du
 #define MC_STOP 0x5453434du
@@ -87,7 +87,7 @@ uniform uint _LaneField;
 // ---- The geometry (docs/machine/multicore.md, "The geometry"): the workers' state is tiles of
 // 8 x 8 texels in the strip right of core 0's block, 248 to a band; in the targets a worker is
 // a block of columns. Workers 1 to g_nb are big (caches of g_bb bits); the rest have .b's.
-#define GEO_TEXEL 0x70003du
+#define GEO_TEXEL 0x10003du
 #define STRIP_TILES 248
 #define STRIP_BANDS ((CORES + 47) / 49)
 #define TICK_W 1040
@@ -1143,9 +1143,9 @@ tick_out frag(v2f i) {
     [branch] if (!none && !keep && any && !(_Init && _InitRaw)) {
         if (_Init) {
             // as firmware would enter the kernel: supervisor mode, the device tree's address in a1
-            stall = 0; clock = 0; priv = 1; pc = 0x80400000; ovf_addr = 0xffffffff;
+            stall = 0; clock = 0; priv = 1; pc = 0x82000000; ovf_addr = 0xffffffff;
             for (k = 0; k < 65; k++) xr[k] = 0;
-            xr[11] = 0x82200000;
+            xr[11] = 0x83e00000;
         } else {
 #ifdef LANE_FIELD
             [branch] if (field) {

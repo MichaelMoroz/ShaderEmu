@@ -1,5 +1,6 @@
 #ifndef TYPES_H
 #define TYPES_H
+#include "layout.h"
 
 // Linux without an MMU, entered in supervisor mode: its CSRs are fields of the CPU's texels 0
 // to 2, with no CSR table and no CSR cache (docs/system/nommu.md, "The state").
@@ -38,7 +39,7 @@
 #endif
 #define RAM_MAX (2048 * (STATE_TEX_HEIGHT - 64) * 4 * 4)
 // RAM's 4 MB bands (128 rows) from lo to hi as the commit's mask of 32 bits: bit b & 31 stands
-// for bands b, b + 32 and b + 64, the RAM above 0x88000000 sharing the bits of the RAM below.
+// for bands b, b + 32 and b + 64 (the devices' 32 MB are bands 0 to 7: layout.h).
 uint ram_bands(uint lo, uint hi) {
     if (hi < lo) return 0;
     if (hi - lo >= 31) return 0xffffffff;
@@ -135,7 +136,7 @@ uint ram_bands(uint lo, uint hi) {
 //   .g  how many workers
 //   .b  their caches' tables are 2^bits buckets (3 to 6)
 // A worker keeps the CPU's 44 texels, its cache and the float registers' 8, in that order.
-#define MC_GEOMETRY 0x70003du
+#define MC_GEOMETRY DEV_T(0x10003du)
 #define MC_STRIP_X 64
 #define MC_STRIP_TILES 248
 #ifndef MC_STRIP_BANDS

@@ -21,7 +21,7 @@ In WSL, after the MMU build (`linux/kernel/build.sh` and the programs' build scr
   `RV32_MARCH=rv32imaf_zba_zbb` builds with Zba and Zbb.
 - `bash linux/nommu/kernel.sh`: the MMU kernel's tree copied with its hooks, seven patches
   (`patch_kconfig.py`: RV32 without the MMU, still in supervisor mode under the machine's SBI and
-  linked at 0x80400000; `patch_signal.py`, `patch_drivers.py`, which also keeps `/proc/cpuinfo`'s
+  linked at 0x82000000; `patch_signal.py`, `patch_drivers.py`, which also keeps `/proc/cpuinfo`'s
   "mmu" line out, `patch_ovl.py`, `patch_ramfs.py`, `patch_console.py`: the console in memory,
   `patch_procmaps.py`: a read of `/proc/PID/maps` gives PID's mmap lock back, as upstream since
   6.8; before, PID's next `mmap` waited forever) and its configuration without the MMU, into
@@ -50,12 +50,12 @@ In WSL, after the MMU build (`linux/kernel/build.sh` and the programs' build scr
   `.eh_frame_hdr` ran into its `.dynamic`: its data now starts at 0x27500 for 0x2d000 (only the header's word
   differs), and `cc-bytes`' digest moves once the image's `elf2flt` is built from this.
 - `python linux/nommu/image.py [--save-prebuilt]`: `build/images/nommu`, the shared image with
-  that root as its overlay, the kernel, and RAM in the device tree from the kernel's address
-  (0x80400000) to the GPU's memory and from 0x88000000 to 0x92000000 ("Memory", below); without
+  that root as its overlay, the kernel, and RAM in the device tree in one range from the kernel's
+  address (0x82000000) to 0x92000000 ("Memory", below); without
   `build/nommu`, from `linux/prebuilt/nommu`.
 - `python tools/test_all.py`: the test set, on this image once it is made (`linux/nommu/test.py`
   names it); `cc-bytes` takes the flat programs' digest on an image whose RAM starts at
-  0x80400000.
+  0x82000000.
 
 `rvc_harness` boots this image once it has been made, on the machine without paging
 (`NO_PAGING`), with its window, desktop and sound; so does `rvc_cpu`, whose workers with a page
@@ -164,29 +164,41 @@ the boot's clock were as before.
 
 ## Memory
 
-RAM is two ranges: from the kernel at 0x80400000 to the GPU's memory at 0x86000000 (92 MB), and
-from 0x88000000, above the devices, to 0x92000000 (160 MB). `MemTotal` is 250,956 kB and 240,936
-of it is free at the shell, where they were 88,752 and 78,740 when RAM ended at 0x86000000, as
-the MMU kernel's does (18 October 2026). The devices did not move, so no program changed: the state texture
-is taller (2048 x 9280, `STATE_TEX_HEIGHT` in `src/types.h`, `kStateHeight` in
-`harness/apps/rvc_backend.h`), RAM in it what is under `RAM_MAX` (0x12000000 bytes) as before, and
-`rvc_cpu` has 288 MB. `image.py` gives the memory node two ranges (its `reg` grows by 16 bytes,
-the tree's offsets with it), and the drivers find their devices with `page_is_ram`
-(`patch_drivers.py`): the GPU's pages lie inside the memory map now, so `pfn_valid` is true there.
-A copy of the GPU's picture goes only to 0x86000000 to 0x87e00000, as a GPU program's buffers do
-(`gpu_writeback` in `src/gpu.h`).
+The layout since 28 October 2026, in one place for the tick (`experiments/rvc_opt/src/layout.h`)
+and one for the host (`harness/apps/rvc_layout.h`):
+
+| from | to | what |
+|---|---|---|
+| 0x80000000 | 0x81e00000 | the devices: the GPU's memory (a program's buffers, the windows', the display's), the workers' mailboxes at 0x80c00000, the control words at 0x81000000 (the network's and the console's row at 0x816b8000, a fetch's answer at 0x816c0000), the sound card's memory from 0x81b00000 |
+| 0x81e00000 | 0x82000000 | the device words no GPU copy may reach |
+| 0x82000000 | 0x92000000 | RAM in one range, 256 MB: the kernel from its start, where the machine enters it, then Linux's |
+
+The boot image still loads from 0x80000000 (its first 32 MB are zeros), the kernel at +32 MB and the
+device tree at +62 MB (0x83e00000; `tools/make_linux_image.py`, `image.py`'s `TREE_AT`), whose
+memory node is that one range. The state texture is 2048 x 9280 (`STATE_TEX_HEIGHT` in `src/types.h`,
+`kStateHeight` in `harness/apps/rvc_backend.h`), RAM in it what is under `RAM_MAX` (0x12000000
+bytes), and `rvc_cpu` has 288 MB. A copy of the GPU's picture goes only to 0x80000000 to 0x81e00000,
+as a GPU program's buffers do (`gpu_writeback` in `src/gpu.h`), and a program's parallel copy or fill
+only there or to RAM (`UOP_IN_RAM` in `linux/userland/uop.h`). The drivers find their devices with
+`page_is_ram` (`patch_drivers.py`), false below the kernel. A snapshot is marked with the layout it
+was taken in (`SX86SNP2`, `RVCSNAP2`): one of the layout before is refused, to be made again.
+
+Before 28 October 2026 the devices lay at 0x86000000 to 0x88000000 and RAM was two ranges, from the
+kernel at 0x80400000 to them (92 MB) and from 0x88000000 to 0x92000000 (160 MB): `MemTotal` was
+250,956 kB and 240,936 of it free at the shell (18 October 2026), where they had been 88,752 and
+78,740 when RAM ended at the devices, as the MMU kernel's does.
 
 The boot to the shell is 14.5 million instructions where it was 10.0, 1.4 s more of the guest's
 time: the kernel sets up a page structure for each of 49,152 more pages (the gap between the
-ranges is 8,192 of them) and frees each (`memmap_init_range`, `memset` of each structure,
+ranges was 8,192 of them) and frees each (`memmap_init_range`, `memset` of each structure,
 `__free_pages_core`, `__free_pages_ok`). A test that presses a button once a game is loaded
 presses it at 20 s where it was 16 (`classicube-seat-*`), and ClassiCube's `classicube-pack`
 draws one text fewer by `classicube: steady`.
 
 The commit's bands of RAM stay 4 MB and a mask of 32 bits: bit b stands for bands b, b + 32 and
 b + 64 (`ram_bands`), so the tick's store marks its band as it did, at no cost an instruction. A
-band the commit must draw draws its two others too; the control words' band is drawn every
-commit apart from the mask (`_CommitAlways` in the harness, `CONTROL_BANDS` in Unity's
+band the commit must draw draws its two others too; the control words' band (4, and 5 for a fetch's
+answer) is drawn every commit apart from the mask (`_CommitAlways` in the harness, `CONTROL_BANDS` in Unity's
 `MachineBlit.cginc`, which draws runs of bands). The state texture is 290 MiB where it was 128,
 twice that with its other buffer: 580 MiB of video memory a machine where it was 256.
 

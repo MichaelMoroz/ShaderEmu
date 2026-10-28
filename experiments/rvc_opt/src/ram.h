@@ -19,7 +19,7 @@
 #define STAGE_ZAP_ROW 12
 #define STAGE_ROWS 21
 #define STAGE_ZAP_REACH 64
-#define CONTROL_ROW (64 + 0x700000 / 2048)
+#define CONTROL_ROW (64 + DEV_T(0x100000u) / 2048)
 
 #ifndef RAM_GEOM_GUARD
 #define RAM_GEOM_GUARD
@@ -552,8 +552,8 @@ uint4 ram_commit_texel(ram_v2f i) {
 #ifdef GPU_DEVICE
     [branch]
     if (kind == RK_PICTURE) {
-        // (only what a GPU program may own, 0x86000000 to 0x87e00000)
-        if (t - 0x600000u >= 0x1e0000u) discard;
+        // (only what a GPU program may own, DEV_AT to GPU_MEM_END)
+        if (t - DEV_T(0u) >= ((GPU_MEM_END - DEV_AT) >> 4)) discard;
         ram_pic p;
         uint covered;
         ram_picture(p);

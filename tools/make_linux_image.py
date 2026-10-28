@@ -3,8 +3,9 @@ build/images/linux, which the harness's linux-net entry uses when present:
 
   rootfs.bin  upstream's romfs with our programs added: programs/bin/glxgears in /usr/bin, and
               everything under build/images/linux/root at the same path in the image
-  dts.bin     upstream's device tree with RAM ending at 0x86000000, so the kernel leaves the
-              GPU device's memory alone (docs/machine/gpu.md)
+  dts.bin     upstream's device tree with RAM in one range, 0x82000000 to 0x92000000, above the
+              devices' 32 MB (docs/system/nommu.md, "Memory"; the kernel with the MMU, legacy,
+              is not linked for it and does not run in this layout)
   linux_payload.bin
               only if our kernel has been built (linux/kernel/build.sh leaves it in
               build/images/linux/Image): that kernel and the device tree where the machine
@@ -309,7 +310,7 @@ def main():
     dtb = read_lanes('dts')
     dtb = bytearray(dtb[:be32(dtb, 4)])
     # memory@80000000 { reg = <0 0x80000000 0 size> }: two cells each for address and size
-    old, new = struct.pack('>IIII', 0, 0x80000000, 0, 0x07b00000), struct.pack('>IIII', 0, 0x80000000, 0, 0x06000000)
+    old, new = struct.pack('>IIII', 0, 0x80000000, 0, 0x07b00000), struct.pack('>IIII', 0, 0x82000000, 0, 0x10000000)
     if dtb[:4] != b'\xd0\x0d\xfe\xed' or dtb.count(old) != 1:
         raise SystemExit('device tree: expected one memory range 0x80000000 + 0x07b00000')
     dtb[dtb.index(old):dtb.index(old) + 16] = new
@@ -326,18 +327,19 @@ def main():
             raise SystemExit('device tree: expected init=/rvcinit in the boot arguments')
         dtb[dtb.index(old):dtb.index(old) + len(old)] = new
     open(os.path.join(OUT, 'dts.bin'), 'wb').write(dtb)
-    print('dts.bin: RAM now ends at 0x86000000 (%d bytes)' % len(dtb))
+    print('dts.bin: RAM now 0x82000000 to 0x92000000 (%d bytes)' % len(dtb))
 
-    # The boot image: the kernel at +4 MiB, where it is linked to run and the machine starts,
-    # and the device tree at +34 MiB, where the machine tells the kernel it is.
+    # The boot image from 0x80000000: the devices' 32 MB (zeros), the kernel at +32 MiB (0x82000000), where it
+    # is linked to run and the machine starts, and the device tree at +62 MiB (0x83e00000), where the machine
+    # tells the kernel it is (experiments/rvc_opt/src/layout.h).
     kernel, payload = ours('Image'), os.path.join(OUT, 'linux_payload.bin')
     if os.path.exists(kernel):
         image = open(kernel, 'rb').read()
-        at, tree_at = 0x400000, 0x2200000
+        at, tree_at = 0x2000000, 0x3e00000
         if image[0x38:0x3c] != b'RSC\x05':
             raise SystemExit('expected a RISC-V kernel image in ' + kernel)
         if at + len(image) > tree_at - 0x400000:
-            raise SystemExit('kernel image too large for the device tree at +34 MiB')
+            raise SystemExit('kernel image too large for the device tree at +62 MiB')
         open(payload, 'wb').write(bytes(at) + image + bytes(tree_at - at - len(image)) + bytes(dtb))
         print('linux_payload.bin: our kernel, device tree (%d bytes)' % (tree_at + len(dtb)))
         print('kernel from %s, programs from %s' % (os.path.relpath(kernel, ROOT), os.path.relpath(extra, ROOT)))

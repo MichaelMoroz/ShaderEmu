@@ -15,8 +15,8 @@ cpu_t cpu_init() {
 #ifdef SBI_HLE
     // straight into the kernel, as firmware would enter it: supervisor mode, hart 0 in a0 and
     // the device tree (which the image has in RAM at this address) in a1
-    ret.xreg[11] = 0x82200000;
-    ret.pc = 0x80400000;
+    ret.xreg[11] = TREE_AT;
+    ret.pc = KERNEL_AT;
     ret.csr.privilege = 1;
 #endif
 

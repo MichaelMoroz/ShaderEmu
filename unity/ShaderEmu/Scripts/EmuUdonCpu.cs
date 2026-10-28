@@ -35,11 +35,11 @@ public class EmuUdonCpu : UdonSharpBehaviour
     [HideInInspector] public double cpuMs, uploadMs, uploadPages;   // summed, for a test
 
     private const int RamWords = 0x12000000 / 4, ChunkWords = 2048 * 2048, Pages = 0x12000000 / 4096;
-    private const int TextAt = 0x00400000 / 4;
-    private const int Dev = 0x700000 * 4;                 // 0x87000000: the control page's first word
-    private const int ConRow = 0x76b800 * 4;              // the console's and the network's
+    private const int TextAt = 0x02000000 / 4;          // the kernel in the boot image (0x82000000)
+    private const int Dev = 0x100000 * 4;                 // 0x81000000: the control page's first word
+    private const int ConRow = 0x16b800 * 4;              // the console's and the network's
     private const int ConGuest = ConRow + 0x29 * 4, ConRing = ConRow + 0x2a * 4;
-    private const int FetchData = 0x76c000 * 4;
+    private const int FetchData = 0x16c000 * 4;
 
     private int[] mem, rom, payload, pdirty, plist, pageHead = new int[1024];
     private int[] dev = new int[3072], answer = new int[65536], region;
@@ -162,9 +162,9 @@ public class EmuUdonCpu : UdonSharpBehaviour
         watch.Restart();
         // what the control pass left in this frame's state, before this frame's pages go in
         wordsMaterial.SetTexture("_State", machine.state);
-        wordsMaterial.SetFloat("_TexelA", 0x700000);
+        wordsMaterial.SetFloat("_TexelA", 0x100000);
         wordsMaterial.SetFloat("_CountA", 256);
-        wordsMaterial.SetFloat("_TexelB", 0x76b800);
+        wordsMaterial.SetFloat("_TexelB", 0x16b800);
         VRCGraphics.Blit(machine.state, devWords, wordsMaterial);
         // a copy on its way is read beside them, from the same state: when they say it is made, it is here
         bool copyToo = listOut && copyOut && !regionAsked && !copyReady && Time.frameCount - sentFrame >= 2;
@@ -206,11 +206,11 @@ public class EmuUdonCpu : UdonSharpBehaviour
         else System.Array.Clear(mem, 0, RamWords);
         System.Array.Copy(payload, mem, payload.Length);   // the state has the same image, from EmuMachine's power-on
         for (int r = 1; r < 32; r++) cpu.SetProgramVariable("x" + r, 0);
-        cpu.SetProgramVariable("x11", -2111832064);      // 0x82200000, the device tree
+        cpu.SetProgramVariable("x11", -2082471936);      // 0x83e00000, the device tree
         cpu.SetProgramVariable("priv", 1);
         cpu.SetProgramVariable("mode", 1);
         cpu.SetProgramVariable("res", -1);
-        cpu.SetProgramVariable("rpc", -2143289344);      // 0x80400000
+        cpu.SetProgramVariable("rpc", -2113929216);      // 0x82000000
         cpu.SetProgramVariable("resume", cpu.GetProgramVariable("resume0"));
         string[] zero = { "th", "tl", "fcsr", "msrc", "mdst", "mn", "ipc", "icount", "gcount", "pn" };
         foreach (string z in zero) cpu.SetProgramVariable(z, 0);
@@ -229,7 +229,7 @@ public class EmuUdonCpu : UdonSharpBehaviour
         }
         System.Array.Clear(pdirty, 0, pdirty.Length);
         listOut = copyOut = regionAsked = copyReady = answerAsked = false;
-        heldSeq = mem[0x700011 * 4];
+        heldSeq = mem[0x100011 * 4];
         guestTime = 1; slices = 0; conRead = 0; ranBefore = 0; ranAt = 0f;
         if (clock == null) clock = new System.Diagnostics.Stopwatch();
         clock.Restart();
@@ -263,7 +263,7 @@ public class EmuUdonCpu : UdonSharpBehaviour
             listCopies = mem[Dev + 14];
             copyOut = (mem[Dev + 4] & 6) != 0;
             if ((mem[Dev + 4] & 4) != 0) { copyAt = mem[Dev + 20]; copyW = mem[Dev + 21]; copyH = mem[Dev + 22]; copyRow = Mathf.Max(mem[Dev + 23], copyW); }
-            else { copyAt = -2030043136 + 0x1000; copyW = mem[Dev + 1]; copyH = mem[Dev + 2]; copyRow = copyW; }   // 0x87001000
+            else { copyAt = -2130706432 + 0x1000; copyW = mem[Dev + 1]; copyH = mem[Dev + 2]; copyRow = copyW; }   // 0x81001000
             MarkWords(Dev, 1024);
         }
         int n = (int)cpu.GetProgramVariable("pn");
@@ -337,7 +337,7 @@ public class EmuUdonCpu : UdonSharpBehaviour
         if (!answerAsked && dev[0x11 * 4] != heldSeq)
         {
             answerAsked = true;
-            wordsMaterial.SetFloat("_TexelA", 0x76c000);
+            wordsMaterial.SetFloat("_TexelA", 0x16c000);
             wordsMaterial.SetFloat("_CountA", 0x4000);
             VRCGraphics.Blit(machine.state, fetchWords, wordsMaterial);
             Ask(fetchWords, 3);
@@ -371,8 +371,8 @@ public class EmuUdonCpu : UdonSharpBehaviour
         if (request.hasError || !request.TryGetData(answerBytes)) { Ask(fetchWords, 3); return; }
         int seq = answer[0], length = answer[1], status = answer[2], info = answer[3];
         System.Buffer.BlockCopy(answerBytes, 0, mem, FetchData * 4, 0x4000 * 16);
-        mem[0x700011 * 4 + 1] = length; mem[0x700011 * 4 + 2] = status; mem[0x700011 * 4 + 3] = info;
-        mem[0x700011 * 4] = seq;
+        mem[0x100011 * 4 + 1] = length; mem[0x100011 * 4 + 2] = status; mem[0x100011 * 4 + 3] = info;
+        mem[0x100011 * 4] = seq;
         answerAsked = false;
     }
 

@@ -1,6 +1,6 @@
 """build/images/NAME (default nommu): the shared image with the flat root (root.sh) as its overlay, the
-no-MMU kernel (kernel.sh), and RAM in the device tree from the kernel's address to the GPU's memory
-and from 0x88000000 to 0x92000000 (docs/system/nommu.md, "Memory"). Without a build
+no-MMU kernel (kernel.sh), and RAM in the device tree from the kernel's address, after the devices, to
+0x92000000 (docs/system/nommu.md, "Memory"). Without a build
 in build/nommu, linux/prebuilt/nommu: its kernel and the files that differ from linux/prebuilt/root.
    python linux/nommu/image.py [NAME [ROOT [KERNEL]]] [--save-prebuilt]"""
 import filecmp, os, shutil, struct, subprocess, sys
@@ -36,18 +36,19 @@ r = subprocess.run([sys.executable, os.path.join(ROOT, 'tools', 'private_image.p
 print(r.stdout[-600:], r.stderr[-600:])
 if r.returncode:
     raise SystemExit('tools/private_image.py %s failed (exit %d): see its output above' % (name, r.returncode))
-# RAM from the kernel at 0x80400000 (without an MMU, memory below it is no RAM the kernel may hand
-# out) to the GPU's memory at 0x86000000, and above the devices from 0x88000000 to 0x92000000
-# (where the state texture ends: kStateHeight in harness/apps/rvc_backend.h)
-RAM = [(0x80400000, 0x05c00000), (0x88000000, 0x0a000000)]
+# RAM in one range from the kernel at 0x82000000, after the devices' 32 MB (experiments/rvc_opt/src/layout.h),
+# to 0x92000000 (where the state texture ends: kStateHeight in harness/apps/rvc_backend.h)
+RAM = [(0x82000000, 0x10000000)]
 
 
 def with_ram(dtb):
     """The device tree with the memory node's reg as RAM: the property grows, so every offset of
     the header past it moves."""
-    old = struct.pack('>IIII', 0, 0x80000000, 0, 0x06000000)
+    # (the shared image's tree has RAM from 0x82000000 since 28 October 2026, one made before from 0x80000000)
+    olds = [struct.pack('>IIII', 0, 0x82000000, 0, 0x10000000), struct.pack('>IIII', 0, 0x80000000, 0, 0x06000000)]
+    old = next((o for o in olds if dtb.count(o) == 1), olds[0])
     value = b''.join(struct.pack('>IIII', 0, at, 0, size) for at, size in RAM)
-    assert dtb.count(old) == 1 and dtb[:4] == b'\xd0\x0d\xfe\xed', 'device tree: expected one memory range 0x80000000 + 0x06000000'
+    assert dtb.count(old) == 1 and dtb[:4] == b'\xd0\x0d\xfe\xed', 'device tree: expected one memory range 0x82000000 + 0x10000000'
     i = dtb.index(old)
     assert struct.unpack('>III', dtb[i - 12:i])[:2] == (3, 16), 'device tree: the range is not a property of 16 bytes'
     grow = len(value) - len(old)
@@ -85,7 +86,7 @@ def with_seed(dtb):
     return bytes(out)
 
 
-TREE_AT = 0x2200000   # the device tree in the boot image (tools/make_linux_image.py)
+TREE_AT = 0x3e00000   # the device tree in the boot image (tools/make_linux_image.py): 0x83e00000
 tree = open(os.path.join(D, 'dts.bin'), 'rb').read()
 payload = open(os.path.join(D, 'linux_payload.bin'), 'rb').read()
 assert payload[TREE_AT:] == tree, 'linux_payload.bin does not end with dts.bin'

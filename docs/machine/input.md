@@ -7,12 +7,12 @@ is separate.
 
 | Address | Contents |
 |---|---|
-| `0x87000020` | pointer x, in display pixels |
-| `0x87000024` | pointer y |
-| `0x87000028` | buttons: bit 0 left, bit 1 right, bit 2 middle |
-| `0x8700002c` | number of key events written so far |
-| `0x87000030` | keyboard owner: a program that takes its keys from this device writes `0x6b657973` here, and 0 when it stops |
-| `0x87000080` | ring of the last 32 key events, one word each |
+| `0x81000020` | pointer x, in display pixels |
+| `0x81000024` | pointer y |
+| `0x81000028` | buttons: bit 0 left, bit 1 right, bit 2 middle |
+| `0x8100002c` | number of key events written so far |
+| `0x81000030` | keyboard owner: a program that takes its keys from this device writes `0x6b657973` here, and 0 when it stops |
+| `0x81000080` | ring of the last 32 key events, one word each |
 
 - The pointer is where the host's pointer is over the picture, in the display's own pixels
   (0..width-1, 0..height-1, clamped), whatever size the picture is shown at. It needs a display
@@ -20,7 +20,7 @@ is separate.
 - A key event is a Linux key code (`KEY_A` = 30; the numbers of `linux/input-event-codes.h`)
   with bit 31 set for a press and clear for a release. The host does not repeat keys.
 - Event number n is at ring position n mod 32. A reader keeps its own count: while it differs
-  from the word at `0x8700002c`, read the next ring entry. If more than 32 are outstanding the
+  from the word at `0x8100002c`, read the next ring entry. If more than 32 are outstanding the
   reader has lost some and should restart from the current count.
 - At most four key events arrive per frame; the host queues the rest.
 - A notch of the pointer's wheel travels in the same ring, as a "press" of a code that is no
@@ -81,7 +81,7 @@ report and up in the next; a program sees a button-down event with `GR_BUTTON_SC
 ## A program's own reading
 
 A game takes its keys and buttons from the window system, which knows whose they are, and
-the pointer's place from the words at `0x87000020`, which cost two loads (`pointer_read()` in
+the pointer's place from the words at `0x81000020`, which cost two loads (`pointer_read()` in
 `linux/tdawn/host.c`, `Sys_SendKeyEvents` in `linux/quake/vid_shaderemu.c`,
 `ReadPointer` in `linux/classicube/Window_ShaderEmu.c`). It asks the window system for events
 only when the button word or the key count has changed, and a few times a second. It does

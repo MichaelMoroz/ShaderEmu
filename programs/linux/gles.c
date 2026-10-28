@@ -16,9 +16,9 @@
 // ---- GPU memory: the part Nano-X leaves to one program ----
 
 #ifdef __gpuvm__
-#define GPU_PHYS 0x01000000u   // gpu_vm: the device window moved down by 0x86000000 (gpu_vm/GPU_VM.md, "Memory")
+#define GPU_PHYS 0x01000000u   // gpu_vm: the device window moved down by 0x80000000 (gpu_vm/GPU_VM.md, "Memory")
 #else
-#define GPU_PHYS 0x87000000u
+#define GPU_PHYS 0x81000000u
 #endif
 #define GPU_SIZE 0x00b00000u
 // A frame's commands, matrix blocks and vertices are a set; frames alternate between two sets,
@@ -211,7 +211,7 @@ int seglInit(unsigned int nano_x_window) {
     if (fd < 0) return -1;
     // (not "no GPU", which a program may get by without: two programs' drawings in one memory)
     if (draw_claim(fd) < 0) exit(1);
-    void* map = mmap(0, GPU_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0x01000000);   // the device maps from 0x86000000
+    void* map = mmap(0, GPU_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0x01000000);   // the device maps from 0x80000000
     if (map == MAP_FAILED) return -1;
     gpu = map;
     gpu_fd = fd;

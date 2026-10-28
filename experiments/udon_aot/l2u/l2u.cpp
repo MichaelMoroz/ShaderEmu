@@ -25,7 +25,7 @@ typedef uint32_t u32;
 static const i64 RAM = 0x80000000LL, MIN = 0x80000000LL, MASK = 0xFFFFFFFFLL;
 static const i64 RAMSIZE = 0x12000000LL, ROM = 0x40000000LL;
 static const i64 RTC0 = 0x12000020LL, RTC1 = 0x26101901LL;
-static const i64 TEXT = 0x80400000LL, TEND = 0x806d63ecLL;
+static const i64 TEXT = 0x82000000LL, TEND = 0x822d63ecLL;
 static bool COUNT = true;
 static bool FLT = true;                  // translate the F extension (L2U_FLOAT=0: the interpreter's)
 

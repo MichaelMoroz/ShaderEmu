@@ -55,7 +55,7 @@ its mix is 64% arithmetic, 17% multiplies (16.16 fixed point), 9% loads, 4% stor
 
 ## Linux: the kernel and its programs translated
 
-`linux2udon.py` translates the no-MMU kernel's text (0x80400000 to `_einittext`, 743,675 words)
+`linux2udon.py` translates the no-MMU kernel's text (0x82000000 to `_einittext`, 743,675 words)
 and the text of programs in the ROM into Udon bytecode, and adds an interpreter written in Udon for
 the rest: the system instructions, code it did not translate, and programs not named.
 `editor/UdonLinux.cs` loads it into the editor's VM and runs it slice by slice with

@@ -129,10 +129,10 @@ public:
                watchInit(err);
     }
     // RVC_MBOX_LOG=FILE (a measure, off by default; gpu_vm/PROFILE_Q3.md "Handoffs"): every pass, the frame's tag and each
-    // core's job, answer and taken words as the pass left them (programs/mc/mc.h: MC_JOB_AT(k) at 0x86c04000 + 64 k), a
+    // core's job, answer and taken words as the pass left them (programs/mc/mc.h: MC_JOB_AT(k) at rvlayout::kMbox + 0x4000 + 64 k), a
     // record of 2 + 6 x 256 words: tag (low, high), then for each core the job's seq, fn, a0, a1, the answer's done, the taken word
     static FILE* mboxLog() { static FILE* f = getenv("RVC_MBOX_LOG") ? fopen(getenv("RVC_MBOX_LOG"), "wb") : nullptr; return f; }
-    static const UINT kMboxJobs = 1024, kMboxX = 1024, kMboxRow = 64 + 0x6c0400 / 2048;   // (0x86c04000: texel 0x6c0400 of RAM from 0x80000000)
+    static const UINT kMboxJobs = 1024, kMboxX = 1024, kMboxRow = 64 + rvlayout::devT(0xc0400) / 2048;   // (rvlayout::kMbox + 0x4000)
     void mboxRequest(ID3D11Texture2D* src, uint64_t tag) {
         if (mboxLog()) mbox_.request(gpu_.ctx.Get(), src, kMboxX, kMboxRow, tag);
         watchRequest(src, tag);
@@ -1384,8 +1384,8 @@ private:
         texels((kControlRow - 64) * 2048, kControlTexels);
         if (con) texels(net0 + kConHost, 1);
         if (net) texels(net0 + kNetRing, kNetSlot * kNetSlots);
-        if (fetch) texels(0x76c000, 0x4000);   // FETCH_DATA (src/gpu.h); its words are control words
-        if (counts) texels(0x6c1000, 256);     // COUNT_TOTAL: the counters' totals the control pass added up
+        if (fetch) texels(rvlayout::devT(0x16c000), 0x4000);   // FETCH_DATA (src/gpu.h); its words are control words
+        if (counts) texels(rvlayout::devT(0xc1000), 256);     // COUNT_TOTAL: the counters' totals the control pass added up
         // the cores as the control words have them (after those came back)
         prof_.mark(ctx);
         setSync(0, 0, 0, computeCores);
@@ -1411,11 +1411,11 @@ public:
             cpuRam_ = makeBuffer(dev, ramBytes * 3, D3D11_BIND_UNORDERED_ACCESS, RAW, D3D11_USAGE_DEFAULT, 0, ram.data(), err);
         }
         rom.resize((rom.size() + 15) & ~(size_t)15, 0);
-        // the hart as the kernel without an MMU starts: supervisor mode at 0x80400000, the device tree in
+        // the hart as the kernel without an MMU starts: supervisor mode at rvlayout::kKernelAt, the device tree in
         // x11, no reservation; every band of RAM still to go into the texture
         std::vector<uint32_t> state((size_t)computeCores * kCpuStateBytes / 4, 0);
-        state[11] = 0x82200000u;
-        state[80] = 0x80400000u;
+        state[11] = rvlayout::kTreeAt;
+        state[80] = rvlayout::kKernelAt;
         state[81] = 1;
         state[83] = ~0u;
         state[90] = ~0u;

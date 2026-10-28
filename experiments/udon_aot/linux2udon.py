@@ -12,7 +12,7 @@ RAM, MIN, MASK = 0x80000000, 0x80000000, 0xFFFFFFFF
 RAMSIZE = 0x12000000
 ROM = 0x40000000
 RTC0, RTC1 = 0x12000020, 0x26101901
-TEXT, TEND = 0x80400000, 0x806d63ec
+TEXT, TEND = 0x82000000, 0x822d63ec
 COUNT = os.environ.get("L2U_COUNT", "1") == "1"    # count translated instructions (gcount), for rdcycle
 
 I32 = "SystemInt32.__op_%s__SystemInt32_SystemInt32__SystemInt32"

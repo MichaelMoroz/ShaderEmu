@@ -6,16 +6,16 @@ window, or the display's material in the VRChat world, `Display.shader`) reads t
 
 | Address | Contents |
 |---|---|
-| `0x87000000` | mode: 0 = off, 1 = 32-bit colour, 2 = 8-bit indexed, 3 = the GPU's picture, 4 = layers |
-| `0x87000004` | width in pixels |
-| `0x87000008` | height in pixels |
-| `0x8700000c` | mode 4: address of the layer table |
-| `0x87000040` | cursor x: where the left edge of the cursor image is, in display pixels (may be negative) |
-| `0x87000044` | cursor y |
-| `0x87000048` | cursor on: bit 0 shows it. Bits 8-12 and 16-20: where the hot spot is in the image (x, y), for a host that draws the cursor under its own pointer |
-| `0x8700004c` | address of the cursor image: 32x32 words, `0xAARRGGBB`, drawn where the top byte is not 0 |
-| `0x87000400` | palette for mode 2: 256 words, `0x00RRGGBB` |
-| `0x87001000` | pixels, rows top to bottom, no padding between rows |
+| `0x81000000` | mode: 0 = off, 1 = 32-bit colour, 2 = 8-bit indexed, 3 = the GPU's picture, 4 = layers |
+| `0x81000004` | width in pixels |
+| `0x81000008` | height in pixels |
+| `0x8100000c` | mode 4: address of the layer table |
+| `0x81000040` | cursor x: where the left edge of the cursor image is, in display pixels (may be negative) |
+| `0x81000044` | cursor y |
+| `0x81000048` | cursor on: bit 0 shows it. Bits 8-12 and 16-20: where the hot spot is in the image (x, y), for a host that draws the cursor under its own pointer |
+| `0x8100004c` | address of the cursor image: 32x32 words, `0xAARRGGBB`, drawn where the top byte is not 0 |
+| `0x81000400` | palette for mode 2: 256 words, `0x00RRGGBB` |
+| `0x81001000` | pixels, rows top to bottom, no padding between rows |
 
 - **Mode 1**: one word per pixel, `0x00RRGGBB`.
 - **Mode 2**: one byte per pixel, an index into the palette. This is the layout Doom renders

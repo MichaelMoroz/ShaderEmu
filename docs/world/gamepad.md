@@ -10,7 +10,7 @@ the guest's keyboard.
 A controller presses the keys and moves the pointer the games already read
 (`docs/machine/input.md`); the guest knows nothing of it. What the guest does say is which program
 has the keyboard: the desktop's bar writes a number for it once a second to the control word
-at `0x87000068` (`watch_focus` in `linux/nanox/nxbar.c`, the numbers and the names they go
+at `0x81000068` (`watch_focus` in `linux/nanox/nxbar.c`, the numbers and the names they go
 by in `linux/apps/gameid.h`; a word nothing else used), `EmuMachine` reads it from the
 readback (`gameId`), and `EmuGamepad.SchemeOf` picks the mapping: Doom, Quake and Quake III the
 shooter's, ClassiCube the blocks', the NES the pad's, the physics demo the hands' (no keys but
@@ -94,7 +94,7 @@ UdonInputEventArgs(0.9f, HandType.LEFT))` and the like on "Gamepad", and read th
 keyboard's `queue` (a key code, plus 65536 while pressed) and the machine's `pointerX`.
 Set the machine's `gameId` (1 Doom, 2 Quake, 3 ClassiCube, 6 the NES) and the keys held
 must change with it, the old ones let go first. In the guest: `nx; sleep 8; doom & sleep
-20`, then the word at `0x87000068` in a snapshot is 1, and 0 again once a terminal has the
+20`, then the word at `0x81000068` in a snapshot is 1, and 0 again once a terminal has the
 keyboard.
 
 ## Not known yet

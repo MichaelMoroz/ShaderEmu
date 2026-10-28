@@ -14,11 +14,11 @@ uniform uint _ZapSeed;                 // kind 2: what the pattern is made from
 uniform uint _ZapZones;                // a bit a zone (zap_zone): only those are touched
 
 // Whose a row of RAM is, as the memory screen colours it (a row is 32 KB; MemView.shader's owner()):
-// 0 the kernel, 1 Linux's programs, 2 the windows' buffers, 3 the display and the GPU's words,
-// 4 a 3D program's GPU memory, 5 the sound card's; above 0x88000000 Linux's programs again.
+// 2 the windows' buffers, 3 the display and the GPU's words, 4 a 3D program's GPU memory, 5 the sound
+// card's (the devices, layout.h), then 0 the kernel and 1 Linux's programs.
 uint zap_zone(uint row) {
     uint megabyte = row >> 5;
-    return megabyte < 9 ? 0 : megabyte < 96 ? 1 : megabyte < 112 ? 2 : megabyte < 119 ? 3 : megabyte < 123 ? 4 : megabyte < 128 ? 5 : 1;
+    return megabyte < 16 ? 2 : megabyte < 23 ? 3 : megabyte < 27 ? 4 : megabyte < 32 ? 5 : megabyte < 41 ? 0 : 1;
 }
 
 // The 4 MB bands of RAM a zap of this commit is in, a bit each.

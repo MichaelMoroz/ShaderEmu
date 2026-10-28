@@ -23,9 +23,9 @@
 #include <linux/sched/stat.h>
 #include <asm/processor.h>
 
-#define GPU_PHYS	0x86000000UL	/* buffers; the registers are 16 MiB in */
+#define GPU_PHYS	0x80000000UL	/* buffers; the registers are 16 MiB in */
 #define GPU_SIZE	0x01b00000UL
-#define GPU_REGS	0x87000000UL
+#define GPU_REGS	0x81000000UL
 #define GPU_SUBMIT	0x10
 #define GPU_LIST	0x14
 #define GPU_COUNT	0x18
@@ -104,7 +104,7 @@ struct shaderemu_gpu_workers {
 #define WORKERS_BOX(k)	(0x4000 + 64 * (k))	/* a core's mailbox: its job, then its answer */
 #define WORKERS_PAGES	0x8000	/* the mailboxes: programs/mc/mc.h */
 #define WORKERS_CLIENTS	16
-#define WORKERS_PHYS	0x86C00000UL	/* the worker cores' mailboxes */
+#define WORKERS_PHYS	0x80C00000UL	/* the worker cores' mailboxes */
 #define WORKERS_STOP	0x5453434d	/* in a core's start word: park it */
 #define WORKERS_MOST	256
 /* in a free part of the mailbox pages: the window system's words for the pointer's driver

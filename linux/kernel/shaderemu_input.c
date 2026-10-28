@@ -15,7 +15,7 @@
 #include <linux/sched.h>
 #include <linux/timer.h>
 
-#define INPUT_PHYS	0x87000000UL
+#define INPUT_PHYS	0x81000000UL
 #define INPUT_STATE	0x20
 #define INPUT_KEYS	0x80
 #define INPUT_RING	32

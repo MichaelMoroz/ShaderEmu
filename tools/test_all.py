@@ -520,9 +520,9 @@ CC_BYTES_NOMMU = 'c23bcf68'   # libc.a's memcpy and memset ask for the commit's 
 
 
 def without_mmu(image):
-    """An image of linux/nommu/image.py: its RAM starts at the kernel's 0x80400000."""
+    """An image of linux/nommu/image.py: its RAM starts at the kernel's 0x82000000."""
     dts = os.path.join(ROOT, image, 'dts.bin')
-    return os.path.exists(dts) and struct.pack('>II', 0, 0x80400000) in open(dts, 'rb').read()
+    return os.path.exists(dts) and struct.pack('>II', 0, 0x82000000) in open(dts, 'rb').read()
 
 
 def run(c, a, image, logs):

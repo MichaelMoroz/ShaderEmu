@@ -32,7 +32,7 @@ def main():
         tot_i, tot_t = int(P.exec[sel].sum()), int(P.newtex[sel].sum())
         by_i, by_t = collections.Counter(), collections.Counter()
         for pc, ex, nt in zip(P.pc[sel], P.exec[sel], P.newtex[sel]):
-            if not (0x80400000 <= pc < 0x80800000):
+            if not (0x82000000 <= pc < 0x82400000):
                 continue
             f = P.name(int(pc), False)
             by_i[f] += int(ex)

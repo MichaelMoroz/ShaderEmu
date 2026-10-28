@@ -270,10 +270,12 @@
 - unarc (`linux/apps/unarc.c`) unpacks zip, tar, `.tar.gz` and `.gz` on the workers through libmedia's
   `media_inflate_stream`, and `open --unpack` runs it first; it exits 3 (busybox then) for what it cannot do,
   a lack of memory in one piece too. `tools/test_all.py unarc` packs a folder with busybox and unpacks it both ways.
-- RAM is 0x80400000 to 0x86000000 and 0x88000000 to 0x92000000 (`docs/system/nommu.md`, "Memory"): the devices stay
-  where they were, the state texture is 2048 x 9280 (`STATE_TEX_HEIGHT`, `kStateHeight`, Unity's StateA and StateB). The
-  commit's band mask stays 32 bits, bit b for bands b, b + 32 and b + 64 (`ram_bands`); the control words' band is drawn
-  apart (`_CommitAlways`, `CONTROL_BANDS`). A GPU copy into RAM goes only below 0x87e00000. A snapshot of 4096 rows still loads.
+- The devices are 0x80000000 to 0x82000000 and RAM is one range, 0x82000000 to 0x92000000, the kernel at its start
+  (28 October 2026; `docs/system/nommu.md`, "Memory"): the layout is `experiments/rvc_opt/src/layout.h` for the tick and
+  `harness/apps/rvc_layout.h` for the host. The state texture is 2048 x 9280 (`STATE_TEX_HEIGHT`, `kStateHeight`, Unity's
+  StateA). The commit's band mask stays 32 bits, bit b for bands b, b + 32 and b + 64 (`ram_bands`); the control words'
+  bands (4 and 5) are drawn apart (`_CommitAlways`, `CONTROL_BANDS`). A GPU copy into RAM goes only below 0x81e00000. A
+  snapshot of the layout before (devices at 0x86000000) is refused: make it again.
 - RAM is one texture written in place (`src/ram.h`, `docs/machine/gpu.md`, "RAM in one texture"; Unity has StateA alone):
   no commit pass reads what it draws, what it needs of RAM is gathered into a stage first, and a copy from RAM to RAM
   is 256 KB a pass, in `rvc_cpu` too (`copy_pass`). `programs\copytest` must say `sum 0e7f76c3` on both; `--ping-pong`

@@ -3,7 +3,7 @@ ENTRY(_start)
 
 SECTIONS
 {
-    . = 0x80400000;
+    . = 0x82000000;
     .text : { *(.text.start) *(.text) *(.text.[a-oq-z]*) . = ALIGN(4096); *(.text.probe) }
     .rodata : { *(.rodata*) *(.srodata*) }
     .data : { *(.data*) *(.sdata*) }

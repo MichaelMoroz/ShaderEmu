@@ -1,5 +1,5 @@
 // The machine's parallel fill and copy (CSRs 0x0b0-0x0b3) against plain loops, as a program
-// that runs in place of the kernel: supervisor mode at 0x80400000, console through the SBI
+// that runs in place of the kernel: supervisor mode at 0x82000000, console through the SBI
 // call, as rvc_cpu and the harness start our Linux image (tools\make_lazy_image.py makes the
 // image's folder). The shader machine may leave a fill or a copy to its commit pass and run on
 // (LAZY_MEMOP, docs/machine/boot.md); every case here is one where that could show. It prints a line a

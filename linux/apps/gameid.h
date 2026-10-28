@@ -1,6 +1,6 @@
 /*
  * The program whose window has the keyboard, as a number the host can read: the desktop's bar
- * writes it once a second to the control word at 0x87000068, and the world's game controller
+ * writes it once a second to the control word at 0x81000068, and the world's game controller
  * picks its controls by it (unity/ShaderEmu/Scripts/EmuGamepad.cs has the same numbers).
  */
 #ifndef GAMEID_H

@@ -34,14 +34,14 @@ the first group, the device the second, and neither the other's: nothing needs a
 
 | Address | Whose | |
 |---|---|---|
-| `0x87000220` | guest | enable (not 0: the card mixes) |
-| `0x87000224` | guest | master volume, 0..256 |
-| `0x87000228` | guest | voices the card looks at, from voice 0 (at most 32) |
-| `0x87000230` | device | the clock: output samples so far |
-| `0x87000234` | device | output samples a second; 0 until the host has mixed once |
-| `0x87000800 + 32v` | guest | voice v: key, kind, address, length, loop, step, volume, aux |
-| `0x87000c00 + 32v` | device | voice v: key seen, state (bit 0 playing), position, fraction, and what it latched |
-| `0x87b00000` - `0x87e00000` | guest | sound memory: samples, rings, tracks |
+| `0x81000220` | guest | enable (not 0: the card mixes) |
+| `0x81000224` | guest | master volume, 0..256 |
+| `0x81000228` | guest | voices the card looks at, from voice 0 (at most 32) |
+| `0x81000230` | device | the clock: output samples so far |
+| `0x81000234` | device | output samples a second; 0 until the host has mixed once |
+| `0x81000800 + 32v` | guest | voice v: key, kind, address, length, loop, step, volume, aux |
+| `0x81000c00 + 32v` | device | voice v: key seen, state (bit 0 playing), position, fraction, and what it latched |
+| `0x81b00000` - `0x81e00000` | guest | sound memory: samples, rings, tracks |
 
 A voice starts when its **key** changes to a value with bit 0 set and stops when it changes to
 one with bit 0 clear. At that moment the card takes the kind, address, length, loop and aux;
@@ -66,7 +66,7 @@ so its samples can be played where they lie.
 
 `/dev/sound` (`linux/kernel/shaderemu_sound.c`; `linux/userland/shaderemu_sound.h` wraps it):
 
-- `mmap` at offset 0 is the registers' page; at `address - 0x87000000` it is sound memory.
+- `mmap` at offset 0 is the registers' page; at `address - 0x81000000` it is sound memory.
 - ioctls claim and free voices and hand out sound memory. When a program ends, however it
   ends, its voices stop and its memory is free; the card is off when nobody has it open.
   Whether the host has a card is asked once, at boot (the driver switches it on for half a

@@ -25,7 +25,7 @@ cbuffer C : register(b0) {
     float Bar;         // height of the info bar under the memory image
     float Split;       // the display is left of this x, the memory image right of it
     float Ui;          // window pixels a 96 dpi pixel: the bar's text and margins
-    uint Gvm;          // gpu_vm's RAM texture (gpu_vm/platform.md): texel t is index t + 0x600000, an address below the ROM gpu_vm's
+    uint Gvm;          // gpu_vm's RAM texture (gpu_vm/platform.md): texel t is index t (the devices lie from 0x80000000 in both), an address below the ROM gpu_vm's
 };
 
 float4 vs(uint id : SV_VertexID) : SV_Position {
@@ -53,13 +53,12 @@ uint word(uint4 t, uint i) {
 
 // RAM texel by index (physical address - 0x80000000) / 16.
 uint4 ram(uint index) {
-    if (Gvm) index -= 0x600000u;
     if (Gvm == 2) return Cur.Load(int3((index & 0x1ffu) | ((index >> 12) & ~0x1ffu), (index >> 9) & 0xfffu, 0));
     return Cur.Load(int3(index % TexWidth, StateRows + index / TexWidth, 0));
 }
-// The index of a guest's address (gpu_vm's below the ROM are the RISC-V machine's less 0x86000000)
+// The index of a guest's address (gpu_vm's below the ROM are the RISC-V machine's less 0x80000000, the devices' first byte)
 uint index_of(uint a) {
-    return ((Gvm && a < 0x40000000u ? a + 0x86000000u : a) & 0x7fffffff) >> 4;
+    return ((Gvm && a < 0x40000000u ? a + 0x80000000u : a) & 0x7fffffff) >> 4;
 }
 uint word_at(uint a) {
     uint4 t = ram(index_of(a));
@@ -71,10 +70,10 @@ float3 rgb(uint v) {
     return float3((v >> 16) & 0xff, (v >> 8) & 0xff, v & 0xff) / 255.0;
 }
 
-// The guest's display (docs/machine/display.md): control words at 0x87000000 (mode, width, height),
-// palette at 0x87000400, pixels from 0x87001000.
-static const uint DispCtrl = 0x700000, DispPalette = 0x700040, DispPixels = 0x700100;
-static const uint DispCursor = 0x700004;   // x, y, on, address of a 32x32 image
+// The guest's display (docs/machine/display.md): control words at 0x81000000 (mode, width, height),
+// palette at 0x81000400, pixels from 0x81001000.
+static const uint DispCtrl = 0x100000, DispPalette = 0x100040, DispPixels = 0x100100;
+static const uint DispCursor = 0x100004;   // x, y, on, address of a 32x32 image
 
 // One pixel of the display as the guest made it, the cursor over it; `c` where no layer is.
 float3 pixelAt(int2 at, uint4 ctrl, float3 c) {

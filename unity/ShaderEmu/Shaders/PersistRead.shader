@@ -1,7 +1,7 @@
 Shader "ShaderEmu/PersistRead"
 {
     // Blit target for EmuPersist's readback (docs/system/persist.md): what the guest left in the
-    // fetch's memory at 0x876c0000, one output pixel per 32-bit word, its bytes in r, g, b, a,
+    // fetch's memory at 0x816c0000, one output pixel per 32-bit word, its bytes in r, g, b, a,
     // 256 words a row. Drawn only when the guest hands its kept folder over.
     Properties
     {
@@ -24,7 +24,7 @@ Shader "ShaderEmu/PersistRead"
 
             Texture2D<uint4> _State;
 
-            static const uint DataRow = 64 + 0x76c000 / 2048;
+            static const uint DataRow = 64 + 0x16c000 / 2048;
 
             // Blit's rectangle over the whole target: clip space as the card has it, row 0 at y = 1.
             float4 vert(appdata_img v) : SV_Position {

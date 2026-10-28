@@ -80,11 +80,11 @@ they were). All under `LANE_FIELD`, which `experiments/rvc_lean/main.shader` def
 draws the field when the folder's `main.shader` has it (`BackendOptions::laneField`), and sets
 `_LaneField` and `_FieldPoints`.
 
-The job is posted in the mailboxes' page: the texel at `0x86C01900` is the descriptor's address,
+The job is posted in the mailboxes' page: the texel at `0x80C01900` is the descriptor's address,
 the job's number, how many lanes. Each lane keeps the job's number's last byte in its state: a lane
 that sees another number starts the new job's order from its beginning. The first pixel of every
 64 is its group's **leader**: it runs no index, and each pass writes how its 63 lanes left the pass
-before into the group's texel (`0x86C01A00 + 16 g`, 62 of them): the number of the job; bit 0 busy,
+before into the group's texel (`0x80C01A00 + 16 g`, 62 of them): the number of the job; bit 0 busy,
 and bits 1 to 31 which of lanes 0 to 30 skipped or stopped; its lanes' instructions for the job in
 sixteens; and which of lanes 31 to 62 did. The first core asks the 62 texels whether the job is
 through, and looks at the stuck texels of those lanes alone (one scan of every lane's took 290 ms of

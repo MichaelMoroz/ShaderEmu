@@ -7,16 +7,16 @@ pass of the GPU device's control shader. `nxweb`, the browser, asks for pages; `
 
 | Address | Contents |
 |---|---|
-| `0x87000100` | requests made: the guest adds 1 to ask |
-| `0x87000104` | length of the address in bytes |
-| `0x87000108` | kind: 0 for a page's bytes, 1 for a picture's pixels, 2 for a style sheet's bytes, 3 for a file |
-| `0x8700010c` | offset: the part of the answer wanted begins at this byte (0 for the first) |
-| `0x87000110` | requests answered: the host sets it to the request's number |
-| `0x87000114` | bytes of the whole answer; 262,144 of them at most are handed over at a time |
-| `0x87000118` | status: 200 for a page, 201 for a file with its header (below), the HTTP status otherwise; 1: an address this host may not open until its user hands it over (ask again); 3: one it never may; 0 or 2: no answer; 415: a picture the host could not decode |
-| `0x8700011c` | a picture's width, and its height from bit 16 |
-| `0x87000120` | the address, up to 255 bytes |
-| `0x876c0000` | the answer, 256 KB |
+| `0x81000100` | requests made: the guest adds 1 to ask |
+| `0x81000104` | length of the address in bytes |
+| `0x81000108` | kind: 0 for a page's bytes, 1 for a picture's pixels, 2 for a style sheet's bytes, 3 for a file |
+| `0x8100010c` | offset: the part of the answer wanted begins at this byte (0 for the first) |
+| `0x81000110` | requests answered: the host sets it to the request's number |
+| `0x81000114` | bytes of the whole answer; 262,144 of them at most are handed over at a time |
+| `0x81000118` | status: 200 for a page, 201 for a file with its header (below), the HTTP status otherwise; 1: an address this host may not open until its user hands it over (ask again); 3: one it never may; 0 or 2: no answer; 415: a picture the host could not decode |
+| `0x8100011c` | a picture's width, and its height from bit 16 |
+| `0x81000120` | the address, up to 255 bytes |
+| `0x816c0000` | the answer, 256 KB |
 
 - The guest writes the address and its length, then the request number. The host reads these
   words back with the rest of the control block (256 texels in the harness, 64 in the world), fetches, and in one frame

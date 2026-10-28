@@ -21,8 +21,8 @@
 #include <linux/sched/signal.h>
 #include <asm/processor.h>
 
-#define SND_REGS	0x87000000UL	/* the machine's control words: one page */
-#define SND_MEM		0x87b00000UL	/* samples, rings, tracks */
+#define SND_REGS	0x81000000UL	/* the machine's control words: one page */
+#define SND_MEM		0x81b00000UL	/* samples, rings, tracks */
 #define SND_MEM_SIZE	0x00300000UL
 #define SND_CHUNK	0x10000UL	/* what memory is handed out in */
 #define SND_CHUNKS	(SND_MEM_SIZE / SND_CHUNK)
@@ -41,7 +41,7 @@
 /* out: a voice that is the caller's until it frees it or closes the device */
 #define SHADEREMU_SOUND_CLAIM	_IOR('S', 1, __u32)
 #define SHADEREMU_SOUND_FREE	_IOW('S', 2, __u32)
-/* in: bytes wanted; out: their physical address (mmap offset: address - 0x87000000) */
+/* in: bytes wanted; out: their physical address (mmap offset: address - 0x81000000) */
 struct shaderemu_sound_memory {
 	__u32 bytes, address;
 };

@@ -5,12 +5,12 @@
 // numbers for C. GPU_STATE is the machine's state texture (RAM from row 64 on).
 //
 // Addresses below are RAM texel indices: (physical address - 0x80000000) / 16.
-#define GPU_DISPLAY 0x700000u   // display control: mode, width, height
-#define GPU_CTRL    0x700001u   // submit, command list address, command count, frames done
-#define GPU_PIXELS  0x700100u   // the display's framebuffer in RAM, for writing the picture back
-#define GPU_INTO    0x700005u   // where SUBMIT_INTO writes the picture: address, width, height, row length
-#define GPU_COPY    0x700007u   // the copy still to do for the list just drawn: how (0: none), address, width | height << 16, row length
-#define GPU_CLOCK   0x700003u   // word 1: the host's clock in milliseconds; word 2: copies made so far; word 3: host flags
+#define GPU_DISPLAY 0x100000u   // display control: mode, width, height
+#define GPU_CTRL    0x100001u   // submit, command list address, command count, frames done
+#define GPU_PIXELS  0x100100u   // the display's framebuffer in RAM, for writing the picture back
+#define GPU_INTO    0x100005u   // where SUBMIT_INTO writes the picture: address, width, height, row length
+#define GPU_COPY    0x100007u   // the copy still to do for the list just drawn: how (0: none), address, width | height << 16, row length
+#define GPU_CLOCK   0x100003u   // word 1: the host's clock in milliseconds; word 2: copies made so far; word 3: host flags
 
 // Submit word: what to do with the list.
 #define SUBMIT_DRAW 1        // draw it
@@ -336,7 +336,7 @@ float4 gpu_fragment(gpu_varyings i) {
         if (mode == FRAGMENT_INDEXED) {
             texel = (ram_word(i.texture_info.g + (n & ~3u)) >> (8 * (n & 3))) & 0xff;
             if ((i.texture_info.r & FRAGMENT_KEYED) && texel == i.key) discard;
-            texel = ram_word(0x87000400 + 4 * texel);
+            texel = ram_word(0x81000400 + 4 * texel);
         } else if (mode == FRAGMENT_RGB24) {
             // the texture may start at any byte, and three bytes may run into the next word
             uint first = i.texture_info.g + 3 * n, at = first & ~3u, shift = 8 * (first & 3);
@@ -355,7 +355,7 @@ float4 gpu_fragment(gpu_varyings i) {
 #ifdef GPU_VOLUME
 // The volume display (docs/world/volume.md): a host that shows a 3D program's last whole frame from
 // a point of view of its own, instead of the picture the GPU drew of it.
-#define VOLUME_LIST 0x700030u   // that frame's list address, command count, frames so far
+#define VOLUME_LIST 0x100030u   // that frame's list address, command count, frames so far
 
 // The frame's command that claims mesh vertices id to id + 2, if it is a draw in perspective
 // with its own modelview: the only kind that has a place in space.
@@ -452,7 +452,7 @@ bool gpu_writeback(uint2 pos, out uint4 result) {
     result = 0;
     if (pos.y < 64) return false;
     uint index = (pos.y - 64) * 2048 + pos.x;
-    if (index < 0x600000u) return false;   // below anything a GPU program may own
+    if (index >= 0x200000u) return false;   // above the devices (RAM): no GPU program owns it
     uint4 copy = ram(GPU_COPY);
     if (copy.r == 0) return false;
     if (index == GPU_COPY) return true;    // done: result is all zeros
@@ -491,10 +491,10 @@ bool gpu_writeback(uint2 pos, out uint4 result) {
 }
 #endif
 
-#define INPUT_STATE 0x700002u   // pointer x, y (display pixels), buttons, key events so far
-#define INPUT_KEYS  0x700008u   // ring of the last 32 key events, one word each
-#define FETCH_REPLY 0x700011u   // requests the host has answered, bytes, status (docs/system/fetch.md)
-#define FETCH_DATA  0x76c000u   // what the host fetched: 0x4000 texels
+#define INPUT_STATE 0x100002u   // pointer x, y (display pixels), buttons, key events so far
+#define INPUT_KEYS  0x100008u   // ring of the last 32 key events, one word each
+#define FETCH_REPLY 0x100011u   // requests the host has answered, bytes, status (docs/system/fetch.md)
+#define FETCH_DATA  0x16c000u   // what the host fetched: 0x4000 texels
 
 #ifdef GPU_INPUT
 // A word of what the host fetched: its texture holds one byte a channel, one word a texel.

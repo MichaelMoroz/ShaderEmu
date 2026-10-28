@@ -19,8 +19,8 @@ def patch(path, fn, phys, fops):
 
 patch('drivers/misc/shaderemu_gpu.c', 'shaderemu_gpu', 'GPU_PHYS', 'shaderemu_gpu_fops')
 patch('drivers/misc/shaderemu_sound.c', 'shaderemu_sound', 'SND_REGS', 'shaderemu_sound_fops')
-# RAM lies on both sides of the devices (0x88000000 up, image.py): their pages are in the memory
-# map's range, so pfn_valid no longer says whether the device tree gave them to the kernel
+# (RAM lay on both sides of the devices until 28 October 2026, their pages in the memory map's range, so
+# pfn_valid did not say whether the device tree gave them to the kernel; page_is_ram does, wherever they are)
 for path in ('drivers/misc/shaderemu_gpu.c', 'drivers/misc/shaderemu_sound.c', 'drivers/video/fbdev/shaderemu_fb.c',
              'drivers/input/misc/shaderemu_input.c', 'drivers/net/shaderemu_net.c'):
     p = f'{K}/{path}'

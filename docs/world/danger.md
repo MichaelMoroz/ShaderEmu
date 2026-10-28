@@ -12,7 +12,7 @@ and see what it does. A machine is its visitor's own (`share.md`): nobody else's
 - **Six keys say what is exposed**, the memory screen's own kinds (`owner()` in
   `MemView.shader`): the kernel, Linux's programs, the windows' buffers, the display and the
   GPU's words, a 3D program's GPU memory, the sound card's. The kernel and Linux start safe;
-  Linux's programs are also the RAM above the devices (0x88000000 to 0x92000000, `docs/system/nommu.md`).
+  Linux's programs are the RAM after the kernel, to 0x92000000 (`docs/system/nommu.md`, "Memory").
 
 Reset on the control panel starts the machine over, whole.
 
@@ -76,7 +76,7 @@ the laser there leaves words with their top bit set, and Udon's cast of such a w
 number throws, which halted `EmuMachine` for the session in the world on 12 October 2026
 (`ToInt32` of a `UInt32` in the readback's event). Every guest word that becomes a number
 goes through `EmuMachine.Small` now. To check: in play mode queue zaps over them (`zaps`
-nine numbers each: 2, a column under 64, row 3584, reach 8, 0, 0xffff, 0xffff, a seed,
+nine numbers each: 2, a column under 64, row 512, reach 8, 0, 0xffff, 0xffff, a seed,
 0x3c; then `zapTail`), and the machine must go on counting with texel 64 of `row` scrambled.
 
 ## Not done

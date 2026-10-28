@@ -46,20 +46,20 @@ wire, from the first byte of its IP header, byte i at the address of its first b
 
 | Address | Written by | Contents |
 |---|---|---|
-| `0x870003e0` | guest | `sent`: packets the guest has put into the window so far |
-| `0x870003e4` | guest | `taken`: packets the guest has read from the ring so far |
-| `0x870003f0` | host | `acked`: the value of `sent` up to which the host has taken the window's packets |
-| `0x870003f4` | host | `delivered`: packets the host has put into the ring so far |
-| `0x870003f8` | host | the machine's number N (0: no link) |
-| `0x870003fc` | host | 0 |
-| `0x876b8000` | guest | the window: 640 bytes, packets for the others |
-| `0x876b8400` | host | the ring: 8 places of 640 bytes, packets for this machine |
+| `0x810003e0` | guest | `sent`: packets the guest has put into the window so far |
+| `0x810003e4` | guest | `taken`: packets the guest has read from the ring so far |
+| `0x810003f0` | host | `acked`: the value of `sent` up to which the host has taken the window's packets |
+| `0x810003f4` | host | `delivered`: packets the host has put into the ring so far |
+| `0x810003f8` | host | the machine's number N (0: no link) |
+| `0x810003fc` | host | 0 |
+| `0x816b8000` | guest | the window: 640 bytes, packets for the others |
+| `0x816b8400` | host | the ring: 8 places of 640 bytes, packets for this machine |
 
 The two control texels (`0x3e` and `0x3f` of the control row) are among the first 64 that
 every host reads back already. The window and the ring are one row of the state texture:
-RAM texel `0x76b800`, row 3863 (64 + 3799), the window at x 0 to 39 and the ring at x 64 to
+RAM texel `0x16b800`, row 791 (64 + 727), the window at x 0 to 39 and the ring at x 64 to
 383. The console is x 40 to 57 (`docs/machine/console.md`). That row was the top of Nano-X's scratch textures (`DATA_END` in `scr_shaderemu.c`); it
-lies in band 29, which a control pass that draws bands 28 and 29 covers.
+lies in band 5, which a control pass that draws bands 4 and 5 covers.
 
 A packet's place, in the window or in the ring, is: a word with its length in bytes, a word
 with its number, two words that are not used, then its bytes. Packets are numbered from 1 in
@@ -156,7 +156,7 @@ pass defines `GPU_NET`).
 - The readback's row is 1,032 words: 130 texels of the network's row (the window's 160 words,
   what the cores ran and which of them are asleep, then the console's 18) after state row 0 and the control texels (`Readback.shader`). `NetWindow` walks it at every round's row and acks; `NetFrame` puts up
   to four waiting packets into `_NetData` before a frame's rounds, which all draw the same
-  delivery. The ring's row is in band 29, which the control pass draws anyway.
+  delivery. The ring's row is in band 5, which the control pass draws anyway.
 - Between visitors a packet travels through its sender's own player object for the network
   (`EmuNet`, the template "Net player"): the packets taken since the last batch, each after two
   bytes of its length, up to 1,000 bytes a batch (`NetBatchMost`) (one full packet, or several

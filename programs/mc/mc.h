@@ -10,9 +10,9 @@
 #define MC_H
 #include <stdint.h>
 
-#define MC_PAGE_PHYS 0x86C00000u
+#define MC_PAGE_PHYS 0x80C00000u
 #define MC_PAGE_SIZE 0x8000u   // (eight pages: a word, a mailbox and a system call's words for 256 cores)
-#define MC_PAGE_GPU_OFFSET (MC_PAGE_PHYS - 0x86000000u)   // where it is in /dev/gpu
+#define MC_PAGE_GPU_OFFSET (MC_PAGE_PHYS - 0x80000000u)   // where it is in /dev/gpu
 #define MC_MAX_CORES 256
 #define MC_MASK_WORDS (MC_MAX_CORES / 32)   // a bit a core
 
@@ -75,11 +75,11 @@
 // Counters (mcwx.h): 1024 words, 64 for each program's slot (its tag's low four bits). A worker
 // adds into a region of its own (core 0 into region 0) and sets the head's first word; some
 // passes later the machine makes each total the sum of all regions, and counts it in the head.
-#define MC_COUNT_PHYS 0x86C10000u
-#define MC_COUNT_GPU_OFFSET (MC_COUNT_PHYS - 0x86000000u)
+#define MC_COUNT_PHYS 0x80C10000u
+#define MC_COUNT_GPU_OFFSET (MC_COUNT_PHYS - 0x80000000u)
 #define MC_COUNT_BYTES 0x101000u                         // the totals, then the regions
 #define MC_COUNT_REGION_AT(k) (0x1000u + 0x1000u * (k))
-#define MC_COUNT_HEAD_PHYS 0x87000320u                   // a control word: { added, MC_COUNT_MERGED, merges, 0 }
+#define MC_COUNT_HEAD_PHYS 0x81000320u                   // a control word: { added, MC_COUNT_MERGED, merges, 0 }
 #define MC_COUNT_MERGED 0x4d475245u                      // "ERGM": a machine that merges
 #define MC_COUNTERS 64
 
@@ -92,7 +92,7 @@ typedef struct { volatile uint32_t count, cause, address, pc; } mc_fault;      /
 // core's pass ends; a worker sleeps until the first word of its job changes), `sync` is fence.i (the pass ends
 // here, and the commit's operations are made before it goes on), `break` is ebreak (a worker parks), `syscall` is
 // ecall, the special register `cycle` (bundles run) the cycle counter and `time_lo` the clock (the machine's
-// 100 kHz). The mailboxes are where they were in /dev/gpu (the device window moved down by 0x86000000, so
+// 100 kHz). The mailboxes are where they were in /dev/gpu (the device window moved down by 0x80000000, so
 // MC_PAGE_GPU_OFFSET is the same).
 #define mc_next_pass() __asm__ volatile("wait" ::: "memory")
 #define mc_end_pass() __asm__ volatile("sync" ::: "memory")

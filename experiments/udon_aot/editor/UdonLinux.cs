@@ -100,11 +100,11 @@ namespace UdonAot
                 if (S.ContainsKey(Path.GetFileNameWithoutExtension(f))) h.SetHeapVariable(S[Path.GetFileNameWithoutExtension(f)], I32(f), typeof(int[]));
             foreach (var f in Directory.GetFiles(dir, "*.u32"))
                 if (S.ContainsKey(Path.GetFileNameWithoutExtension(f))) h.SetHeapVariable(S[Path.GetFileNameWithoutExtension(f)], U32(f), typeof(uint[]));
-            h.SetHeapVariable(S["x11"], unchecked((int)0x82200000u), typeof(int));
+            h.SetHeapVariable(S["x11"], unchecked((int)0x83e00000u), typeof(int));
             h.SetHeapVariable(S["priv"], 1, typeof(int));
             h.SetHeapVariable(S["mode"], 1, typeof(int));
             h.SetHeapVariable(S["res"], -1, typeof(int));
-            h.SetHeapVariable(S["rpc"], unchecked((int)0x80400000u), typeof(int));
+            h.SetHeapVariable(S["rpc"], unchecked((int)0x82000000u), typeof(int));
             h.SetHeapVariable(S["resume"], S["@resume0"], typeof(uint));
             h.SetHeapVariable(S["k_u32"], 0xFFFFFFFFL, typeof(long));
             h.SetHeapVariable(S["k_l0"], 0L, typeof(long));

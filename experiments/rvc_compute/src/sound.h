@@ -4,10 +4,10 @@
 // The sound card (docs/machine/sound.md): voices the guest sets up, mixed here one pixel an output
 // sample. Included by gpu.h, whose ram() and texture_word() it uses; programs/common/sound.h
 // has the same numbers for C. Addresses below are RAM texel indices.
-#define SND_GUEST  0x700022u   // the guest's: enable, master volume (0..256), voices in use
-#define SND_DEVICE 0x700023u   // the device's: sample clock, output rate
-#define SND_VOICES 0x700080u   // two texels a voice: key, kind, address, length; loop, step, volume, aux
-#define SND_STATE  0x7000c0u   // the device's two: seen, state, position, fraction; address, length, loop, aux
+#define SND_GUEST  0x100022u   // the guest's: enable, master volume (0..256), voices in use
+#define SND_DEVICE 0x100023u   // the device's: sample clock, output rate
+#define SND_VOICES 0x100080u   // two texels a voice: key, kind, address, length; loop, step, volume, aux
+#define SND_STATE  0x1000c0u   // the device's two: seen, state, position, fraction; address, length, loop, aux
 #define SND_MAX_VOICES 32u
 #define SND_RING 16384u        // samples the host keeps ahead: the mix target's pixels, 128 a row
 

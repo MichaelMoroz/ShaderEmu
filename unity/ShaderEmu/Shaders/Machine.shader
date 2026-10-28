@@ -253,7 +253,7 @@ Shader "ShaderEmu/Machine"
                 // the lanes' field (lean/tick.hlsl, docs/machine/lanes.md): rows 48 to 63, lane F's texel from its
                 // pixel in the targets (rows 8 to 15 of the bands, from column 16), while a job is posted
                 [branch] if (pos.y >= WORKER_BAND_ROWS) {
-                    uint4 job = _SelfTexture2D[uint2(0x6C0190u % 2048u, 64u + 0x6C0190u / 2048u)];
+                    uint4 job = _SelfTexture2D[uint2(0x0C0190u % 2048u, 64u + 0x0C0190u / 2048u)];
                     uint F = ((pos.y - WORKER_BAND_ROWS) * 2048u + pos.x) >> 3, r = F / 248u;
                     if (_Init || job.x == 0 || F >= (min(job.z, 3968u) + 247u) / 248u * 248u) return _SelfTexture2D[pos];
                     return tick_out(pos.x & 7, uint2(16u + F % 248u, (r >> 3) * TICK_STATE_ROWS + 8u + (r & 7u)));

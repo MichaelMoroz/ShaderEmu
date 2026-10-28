@@ -237,7 +237,7 @@ copy of a part of it (`show_view`): one textured rectangle of the GPU's, two whe
 strips wraps, whatever is on the page.
 
 - **The GPU draws no row past its target's.** The host says the target's size in its flags
-  (`0x8700003c`, `docs/machine/gpu.md`). A pixmap of 1,365 rows in the world had its rows from 720 on
+  (`0x8100003c`, `docs/machine/gpu.md`). A pixmap of 1,365 rows in the world had its rows from 720 on
   never drawn, black as a new pixmap is: the home page scrolled to its end showed 152 black
   rows of its 376 (13 October 2026). The driver gives no pixmap larger than the target the
   GPU's memory any more, and the browser asks for none. (A strip's own list is drawn into the

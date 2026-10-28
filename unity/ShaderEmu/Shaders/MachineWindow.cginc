@@ -3,9 +3,9 @@
 // reads what it draws: the control words, the counters' totals, then the row of the console,
 // the network and the core statistics, and a fetched page's eight (src/gpu.cginc).
 #define WINDOW_ROWS 11
-#define WINDOW_CONTROL (64 + 0x700000 / 2048)
-#define WINDOW_COUNTS (64 + 0x6c1000 / 2048)
-#define WINDOW_NET (64 + 0x76b800 / 2048)
+#define WINDOW_CONTROL (64 + 0x100000 / 2048)
+#define WINDOW_COUNTS (64 + 0x0c1000 / 2048)
+#define WINDOW_NET (64 + 0x16b800 / 2048)
 uint window_state_row(uint r) {
     return r == 0 ? WINDOW_CONTROL : r == 1 ? WINDOW_COUNTS : WINDOW_NET + (r - 2);
 }

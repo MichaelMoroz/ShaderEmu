@@ -62,7 +62,7 @@ static void fps_locate(const GR_WINDOW_INFO* info) {
 #ifdef __gpuvm__
     first = info->surface_address - FPS_ABOVE * row * 4;   // (gpu_vm: the device window starts at 0)
 #else
-    first = info->surface_address - 0x86000000u - FPS_ABOVE * row * 4;
+    first = info->surface_address - 0x80000000u - FPS_ABOVE * row * 4;
 #endif
     bytes = (first & 4095) + FPS_ABOVE * row * 4;
     memory = mmap(0, bytes, PROT_READ | PROT_WRITE, MAP_SHARED, fps_state.fd, first & ~4095u);
@@ -80,7 +80,7 @@ static int fps_number(int* to, uint32_t v, int decimals) {
     return out;
 }
 
-// A frame was shown. `now` is the machine's clock in milliseconds (the word at 0x87000034).
+// A frame was shown. `now` is the machine's clock in milliseconds (the word at 0x81000034).
 // Once a second (a slow program: over three frames or 2.5 s) the caption gets the rate and the
 // mean frame's time, drawn on the caption's own pixels in its text's colour (dark on a light
 // caption, light on a dark one). Under 10 frames a second the rate has a tenth.

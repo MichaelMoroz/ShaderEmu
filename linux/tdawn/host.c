@@ -1366,7 +1366,7 @@ host_window_picture(int *width, int *height, int *row)
 #ifdef __gpuvm__
 	at = info.surface_address;	/* (the device's memory, from its start: 0 on gpu_vm) */
 #else
-	at = info.surface_address - 0x86000000u;	/* (the device's memory, from its start) */
+	at = info.surface_address - 0x80000000u;	/* (the device's memory, from its start) */
 #endif
 	if (mapped != (at & ~0xfffu)) {
 		if (map)

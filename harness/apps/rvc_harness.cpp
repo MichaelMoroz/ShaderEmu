@@ -71,7 +71,7 @@ static int cpuSnapshotCores(std::vector<uint8_t>& data, uint32_t W, uint32_t wid
     using namespace cpuemu;
     auto tex = [&](uint32_t x, uint32_t y) { return (uint32_t*)&data[((size_t)y * W + x) * 16]; };
     for (uint32_t a = RAM_BASE; a - RAM_BASE < RAM_SIZE; a += 0x400000u) {
-        if (a >= 0x86000000u && a < 0x88000000u) continue;
+        if (a >= rvlayout::kDevAt && a < rvlayout::kDevEnd) continue;
         uint32_t lin = (a - RAM_BASE) / 16;
         memcpy(tex(lin % 2048, 64 + lin / 2048), &ram[a - RAM_BASE], 0x400000);
     }
@@ -81,12 +81,12 @@ static int cpuSnapshotCores(std::vector<uint8_t>& data, uint32_t W, uint32_t wid
     auto rowsOf = [&](uint32_t bits) { return bits == 0 ? 0u : (L1_AT + 8 + buckets(bits) * 4 + 63) / 64; };
     auto wide = [](uint32_t rows, uint32_t block, uint32_t pad) { return (rows + pad + block - 1) / block * block; };
     uint32_t geo[4];
-    memcpy(geo, &ram[0x870003d0u - RAM_BASE], 16);
+    memcpy(geo, &ram[rvlayout::kCtrl + 0x3d0u - RAM_BASE], 16);
     // (none yet, where no program has asked for workers: geotune lays it out at boot on the card, all 255)
     if (width && (geo[1] > 16 || geo[1] == 0) && geo[3] == 0 && (geo[0] & 1) == 0) {
         uint32_t laid[4] = {width << 8, geo[1] ? geo[1] : 255u, width == 8 ? 5u : 3u, 16u | 5u << 8 | width << 16 | 8u << 24};   // (geotune.c: hybrid(1, width, WIDE))
         memcpy(geo, laid, 16);
-        memcpy(tex(0x70003du % 2048, 64 + 0x70003du / 2048), laid, 16);
+        memcpy(tex(rvlayout::devT(0x10003du) % 2048, 64 + rvlayout::devT(0x10003du) / 2048), laid, 16);
     }
     uint32_t ws = (geo[3] >> 16) & 0xff, wb = geo[3] >> 24;
     uint32_t rows = geo[2] < 3 || geo[2] > 6 ? 0 : rowsOf(geo[2]);
@@ -1170,7 +1170,12 @@ int main(int argc, char** argv) {
         if (ok) memcpy(&hdr, snap.data(), sizeof hdr);
         // (one from before RAM reached 0x92000000 has 4096 rows: the rest is zeros; gpu_vm's is the backend's blob, 0 x 0)
         bool gvmSnap = ok && !opt.gvm.empty() && memcmp(hdr.magic, kSnapshotMagic, 8) == 0 && hdr.width == 0;
-        if (!gvmSnap && (!ok || !opt.gvm.empty() || memcmp(hdr.magic, kSnapshotMagic, 8) != 0 || hdr.width != W || hdr.height > H ||
+        if (!gvmSnap && ok && opt.gvm.empty() && memcmp(hdr.magic, kSnapshotMagic, 8) == 0) {
+            fprintf(stderr, "[harness] %s is a snapshot of the layout before 28 October 2026 (the devices at 0x86000000): make it again\n",
+                    opt.loadState.c_str());
+            return 1;
+        }
+        if (!gvmSnap && (!ok || !opt.gvm.empty() || memcmp(hdr.magic, rvlayout::kSnapshotMagic, 8) != 0 || hdr.width != W || hdr.height > H ||
                          snap.size() != sizeof hdr + (size_t)W * hdr.height * 16)) {
             fprintf(stderr, "[harness] %s is not a %ux%u snapshot\n", opt.loadState.c_str(), W, H);
             return 1;
@@ -1450,8 +1455,8 @@ int main(int argc, char** argv) {
                     std::vector<uint8_t> data(PersistHost::kLimit + 32768, 0), rows, reply;
                     keeper.file = opt.persist;
                     bool read = true;
-                    if (opt.cpu) memcpy(data.data(), &cpuemu::ram[0x876c0000u - cpuemu::RAM_BASE], PersistHost::kLimit);
-                    else if (url == "persist:save" && (read = backend.readRows(64 + 0x76c000 / 2048, 4, rows)))
+                    if (opt.cpu) memcpy(data.data(), &cpuemu::ram[rvlayout::kFetchData - cpuemu::RAM_BASE], PersistHost::kLimit);
+                    else if (url == "persist:save" && (read = backend.readRows(64 + rvlayout::devT(0x16c000) / 2048, 4, rows)))
                         memcpy(data.data(), rows.data(), (std::min)(rows.size(), data.size()));
                     fetch.status = read ? keeper.answer(url, offset, data.data(), reply) : 500;
                     fetch.offset = 0;
@@ -1762,7 +1767,7 @@ int main(int argc, char** argv) {
         mat.setVector("_SinTime", sin(t / 8), sin(t / 4), sin(t / 2), sin(t));
         mat.setVector("_CosTime", cos(t / 8), cos(t / 4), cos(t / 2), cos(t));
         mat.setInt("_Init", frame < (uint64_t)opt.initFrames ? 1 : 0);
-        mat.setInt("_CommitAlways", opt.cpu ? 0xff000000u : 1u << 28);   // the bands of the GPU's words, or of all it has
+        mat.setInt("_CommitAlways", opt.cpu ? 0xffu : 1u << ((rvlayout::kCtrl - 0x80000000u) >> 22));   // the band of the GPU's words, or the devices'
 
         // --cpu: the processor runs passes until the devices have something to do (a list to
         // draw, a picture to copy back) or a sixtieth of a second is over, and what it wrote of
@@ -1825,7 +1830,7 @@ int main(int argc, char** argv) {
             g_cpuConsole.clear();
             // RAM: the GPU's memory and the control words whenever they were written, Linux's own
             // (which the memory view shows and GPU draws may read) four times a second
-            const uint64_t devices = 0xffull << 24;   // 0x86000000 to 0x88000000
+            const uint64_t devices = 0xffull;   // rvlayout::kDevAt to kDevEnd, bands 0 to 7
             uint64_t upload = dirty_bands & devices;
             cpuLow |= dirty_bands & ~devices;
             dirty_bands = 0;
@@ -1971,8 +1976,8 @@ int main(int argc, char** argv) {
                     // (--cpu: the processor's own memory has only the control words copied back,
                     // so the answer's bytes are put there here, before its words say it has come)
                     if (opt.cpu) {
-                        memcpy(&cpuemu::ram[0x876c0000u - cpuemu::RAM_BASE], bytes.data(), bytes.size());
-                        cpuemu::dirty(0x876c0000u);
+                        memcpy(&cpuemu::ram[rvlayout::kFetchData - cpuemu::RAM_BASE], bytes.data(), bytes.size());
+                        cpuemu::dirty(rvlayout::kFetchData);
                     }
                     mat.setInt("_FetchDeliver", 1);
                     mat.setInt("_FetchSeq", fetch.seq);
@@ -2140,7 +2145,7 @@ int main(int argc, char** argv) {
                     address = (cpuCopy[1] & 0x7ffffffcu) | 0x80000000u;
                     bytes = (std::max)(cpuCopy[3], width) * height * 4;
                 }
-                if (address >= 0x86000000u && bytes && address + bytes <= 0x87e00000u) {   // (where a copy may go: src/gpu.h)
+                if (address >= rvlayout::kDevAt && bytes && address + bytes <= rvlayout::kGpuMemEnd) {   // (where a copy may go: src/gpu.h)
                     uint32_t offset = address - RAM_BASE, first = offset / 32768, last = (offset + bytes - 1) / 32768;
                     std::vector<uint8_t> rows;
                     if (backend.readRows(64 + first, last - first + 1, rows) && rows.size() >= (size_t)(last - first + 1) * 32768)
@@ -2383,7 +2388,7 @@ int main(int argc, char** argv) {
     if (!opt.saveState.empty() && exitCode != 1) {
         std::vector<uint8_t> data;
         SnapshotHeader hdr{};
-        memcpy(hdr.magic, kSnapshotMagic, 8);
+        memcpy(hdr.magic, opt.gvm.empty() ? rvlayout::kSnapshotMagic : kSnapshotMagic, 8);
         hdr.width = opt.gvm.empty() ? W : 0;
         hdr.height = opt.gvm.empty() ? H : 0;
         hdr.time = guestTime;
@@ -2394,8 +2399,8 @@ int main(int argc, char** argv) {
             // (--cpu: the processor's state put where the shader machine keeps it, its clock the guest's)
             int workers = cpuSnapshotCores(data, W, opt.workers ? 1u << opt.workers : 2u);   // (2: geotune's pick on this card)
             hdr.time = cpuemu::guest_seconds;
-            hdr.sentTag = cpuemu::word(0x876b8280u);
-            hdr.sentChar = cpuemu::word(0x876b8284u);
+            hdr.sentTag = cpuemu::word(rvlayout::kCon);
+            hdr.sentChar = cpuemu::word(rvlayout::kCon + 4);
             if (workers < 0) fprintf(stderr, "\n[harness] --cpu: a core is in the middle of a copy: no snapshot\n");
             else fprintf(stderr, "\n[harness] --cpu: core 0 and %d workers in the snapshot, guest time %.1fs\n", workers, hdr.time);
             ok = workers >= 0;

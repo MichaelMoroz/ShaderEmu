@@ -6,7 +6,7 @@
 // A Linux program maps the registers first (linux/userland/shaderemu_sound.h) and says where.
 #ifndef SND_BASE
 #include "platform.h"
-#define SND_BASE 0x87000000u
+#define SND_BASE 0x81000000u
 #define SND_BARE
 #endif
 

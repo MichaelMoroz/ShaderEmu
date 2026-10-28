@@ -22,15 +22,15 @@
 #include "sef.h"
 
 /* /dev/gpu maps GPU memory from GPU_PHYS; offsets below are from there (gpu_vm: the device window moved down by
- * 0x86000000, gpu_vm/GPU_VM.md "Memory") */
+ * 0x80000000, gpu_vm/GPU_VM.md "Memory") */
 #ifdef __gpuvm__
 #define GPU_PHYS	0x00000000u
 #else
-#define GPU_PHYS	0x86000000u
+#define GPU_PHYS	0x80000000u
 #endif
 #define GPU_SIZE	0x01b00000u
 #define POOL_SIZE	0x00c00000u	/* window buffers, from offset 0; the worker cores' mailbox page is right above (programs/mc/mc.h) */
-#define REGS_OFFSET	0x01000000u	/* the machine's control words (physical 0x87000000) */
+#define REGS_OFFSET	0x01000000u	/* the machine's control words (physical 0x81000000) */
 #define LAYERS_OFFSET	0x01001000u	/* the display's layer table: count, then x, y, w, h, address */
 #define LIST_OFFSET	0x01400000u	/* our command list: 4096 commands of 64 bytes */
 #define CURSOR_OFFSET	0x01440000u	/* the cursor's image */
@@ -2087,7 +2087,7 @@ gpu_open(PSD psd)
 		most_h = (f >> 16 & 255) * 16;
 	}
 #ifdef __gpuvm__
-	/* (gpu_vm: the window's first 64 KB, RISC-V 0x86000000 to 0x86010000, is the boot area, which no core may store
+	/* (gpu_vm: the window's first 64 KB, RISC-V 0x80000000 to 0x80010000, is the boot area, which no core may store
 	 * to: the pool begins after it; gpu_vm/platform.md) */
 	blocks[0].at = 0x10000;
 	blocks[0].bytes = POOL_SIZE - 0x10000;

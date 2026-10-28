@@ -17,7 +17,7 @@
 static void say(const char* text) { write(1, text, strlen(text)); }
 
 /* What the host asks for at boot: bits 0 and 1 of the machine's host flags (the word at
- * 0x8700003c, docs/machine/gpu.md), the desktop and the console as tabs. A machine without the GPU
+ * 0x8100003c, docs/machine/gpu.md), the desktop and the console as tabs. A machine without the GPU
  * device has no such word and neither. */
 static int host_wants(void) {
     int fd = open("/dev/gpu", O_RDWR), wanted = 0;

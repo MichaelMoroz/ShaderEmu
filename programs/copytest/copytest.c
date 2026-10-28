@@ -1,15 +1,15 @@
 // The machine's parallel copy (CSRs 0x0b0-0x0b3) from RAM to RAM, from the ROM, and its fill,
 // at lengths over the shader machine's chunk of 256 KB (docs/machine/gpu.md, "RAM in one
-// texture"), as a program in the kernel's place (supervisor mode at 0x80400000, no paging,
+// texture"), as a program in the kernel's place (supervisor mode at 0x82000000, no paging,
 // the console as words in memory; tools\make_lazy_image.py --program copytest makes its folder).
 // Every case is checked against plain loops; the sum must be the same on rvc_cpu and the shader.
 #include <stdint.h>
 
 // the console (docs/machine/console.md): bytes written so far, and the ring of 256; a line a pass
 static void putc(char ch) {
-    volatile uint32_t* written = (volatile uint32_t*)0x876b8294u;
+    volatile uint32_t* written = (volatile uint32_t*)0x816b8294u;
     uint32_t n = *written;
-    *(volatile uint8_t*)(0x876b82a0u + (n & 255)) = (uint8_t)ch;
+    *(volatile uint8_t*)(0x816b82a0u + (n & 255)) = (uint8_t)ch;
     *written = n + 1;
 }
 static void puts(const char* s) { while (*s) putc(*s++); }
@@ -30,7 +30,7 @@ static void copy(uint32_t to, uint32_t from, uint32_t bytes) {
     __asm__ volatile("csrw 0x0b1, %0\n csrw 0x0b2, %1\n csrw 0x0b3, %2\n li t0, 1\n csrw 0x0b0, t0" : : "r"(from), "r"(to), "r"(bytes) : "t0", "memory");
 }
 static void next_pass(void) { __asm__ volatile(".word 0x0100000f"); }   // pause: what was stored is committed
-static uint32_t passes(void) { return *(volatile uint32_t*)0x8700032cu; }   // the control words' count of passes
+static uint32_t passes(void) { return *(volatile uint32_t*)0x8100032cu; }   // the control words' count of passes
 
 #define W(a) (*(volatile uint32_t*)(a))
 #define SCRATCH 0x8a000000u   // what the destination should be, made by plain loops
@@ -89,7 +89,7 @@ int main(void) {
     case_copy("overlap behind", 0x83000000u, 0x83010000u, 0x60000);
     // 5: the source off a texel and the length off one too, over three chunks
     case_copy("odd source", 0x83800000u, 0x83a00004u, 0x80008);
-    // 6: from below 0x88000000 to above it, and across it
+    // 6: from below 0x88000000 to above it, and across it (the commit's bands wrap there: bit b for bands b, b + 32, b + 64)
     case_copy("across 0x88", 0x8c000000u, 0x87f00000u, 0x200000);
     case_copy("onto 0x88", 0x87f80000u, 0x84000000u, 0x100000);
     // 7: from the ROM, 1 MB at once

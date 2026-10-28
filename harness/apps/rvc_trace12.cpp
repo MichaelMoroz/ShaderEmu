@@ -170,7 +170,7 @@ int main(int argc, char** argv) {
     } else {
         if (!readFileBinary(opt.snapshot, snap) || snap.size() != sizeof hdr + (size_t)W * H * 16) die("cannot read snapshot");
         memcpy(&hdr, snap.data(), sizeof hdr);
-        if (memcmp(hdr.magic, "SX86SNAP", 8) != 0 || hdr.width != W || hdr.height != H) die("not a snapshot");
+        if (memcmp(hdr.magic, "SX86SNP2", 8) != 0 || hdr.width != W || hdr.height != H) die("not a snapshot");
     }
     ComPtr<ID3D12Resource> state[2];
     for (int i = 0; i < 2; ++i)

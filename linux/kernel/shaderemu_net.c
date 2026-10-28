@@ -21,10 +21,10 @@
 #include <net/ip_fib.h>
 #include <net/net_namespace.h>
 
-#define NET_REGS	0x87000000UL
+#define NET_REGS	0x81000000UL
 #define NET_GUEST	0x3e0	/* ours: packets sent, packets taken from the ring */
 #define NET_HOST	0x3f0	/* the host's: packets it took, packets it delivered, our number */
-#define NET_PHYS	0x876b8000UL
+#define NET_PHYS	0x816b8000UL
 #define NET_SLOT	640	/* a packet's place: its length, its number, 8 bytes unused, 576 of data */
 #define NET_RING	0x400	/* the ring's first slot, from NET_PHYS; the 640 bytes at 0 are what we send */
 #define NET_SLOTS	8

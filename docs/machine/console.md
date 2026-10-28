@@ -13,18 +13,18 @@ the shader has no part in it. It lies in the network's row, between the window a
 
 | RAM | |
 |---|---|
-| `0x876b8280` | characters the host has delivered so far (the host's) |
-| `0x876b8284` | the last delivery, up to four characters, the first in the low byte (the host's) |
-| `0x876b8290` | characters the guest has taken so far |
-| `0x876b8294` | bytes the guest has written so far |
-| `0x876b82a0` | the output ring: 256 bytes, byte n of the output at n mod 256 |
+| `0x816b8280` | characters the host has delivered so far (the host's) |
+| `0x816b8284` | the last delivery, up to four characters, the first in the low byte (the host's) |
+| `0x816b8290` | characters the guest has taken so far |
+| `0x816b8294` | bytes the guest has written so far |
+| `0x816b82a0` | the output ring: 256 bytes, byte n of the output at n mod 256 |
 
 - The control pass writes the host's texel every frame (`CON_HOST` in `gpu.h`; the harness's
   `kConZone`). The host delivers again only once the guest has taken everything.
 - Every host reads the ring back with the network's row (`kConHost` in `rvc_backend.h`,
   `ConTexel` in `EmuMachine.cs`): `rvc_harness` once a frame of all its rounds, the world once a
   round, `rvc_cpu` in its control pass, every pass.
-- The guest puts at most 254 bytes while the host's clock word (`0x87000034`, `GPU_CLOCK`) is as
+- The guest puts at most 254 bytes while the host's clock word (`0x81000034`, `GPU_CLOCK`) is as
   it was: every host changes it only between two reads of the ring. It puts and tells one byte at
   a time after looking at the clock, so a pass that ends inside a write miscounts one byte at
   most. A full ring ends the pass with the pause hint. (The processor's time CSR was the measure
@@ -50,7 +50,7 @@ them all over the console.
 - A terminal's shell starts when the terminal is first picked, and again when it ends.
   Each is 80 x 30 to the programs in it, as the world's screen is.
 - `emuinit` starts `emumux` in the shell's place when the host asks: bit 1 of the host flags
-  (`0x8700003c`, `docs/machine/gpu.md`). The world sets it; the harness does with `--tabs`, and
+  (`0x8100003c`, `docs/machine/gpu.md`). The world sets it; the harness does with `--tabs`, and
   without it the console is the one shell it was (snapshots and tests are as they were).
 - What the kernel prints goes to the console itself, untagged: it lands in whichever
   terminal spoke last.

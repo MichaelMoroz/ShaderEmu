@@ -4,6 +4,7 @@
 #pragma once
 
 #include "common.h"
+#include "rvc_layout.h"
 #include "gpu.h"
 #include "image.h"
 #include "material.h"
@@ -42,45 +43,45 @@ struct BackendOptions {
 const unsigned kStateHeight = 9280;
 // The GPU device (docs/machine/gpu.md): a mesh of kGpuTriangles triangles drawn into a square colour and
 // depth target of kGpuTarget pixels, then one small update zone on the state texture (Unity
-// pixel space, y up) holding the control words: RAM 0x87000000 to 0x87000fff.
+// pixel space, y up) holding the control words: RAM rvlayout::kCtrl to + 0xfff.
 const UINT kGpuTriangles = 65536;
 const UINT kGpuTarget = 2048;
-const float kGpuControlZone[4] = {128, kStateHeight - (64 + 0x700000 / 2048) - 0.5f, 256, 1};
+const float kGpuControlZone[4] = {128, kStateHeight - (64 + rvlayout::devT(0x100000) / 2048) - 0.5f, 256, 1};
 // The sound card's mix target (docs/machine/sound.md): kSoundSide squared samples, two floats each.
 const UINT kSoundSide = 128;
 // The rows of RAM an answer to the guest's request is written to (docs/system/fetch.md), as a zone.
-const float kFetchZone[4] = {1024, kStateHeight - (64 + 0x76c000 / 2048) - 4, 2048, 8};
+const float kFetchZone[4] = {1024, kStateHeight - (64 + rvlayout::devT(0x16c000) / 2048) - 4, 2048, 8};
 const UINT kFetchSide = 256;   // the answer's texture: one word a texel, 256 KB
-// The network device (docs/system/lan.md): a row of RAM at 0x876b8000. Its first kNetSlot texels are the
+// The network device (docs/system/lan.md): a row of RAM at rvlayout::kNet. Its first kNetSlot texels are the
 // packet the guest sends, which popRow() returns after the control words; from kNetRing on is
 // the ring of kNetSlots packets for the guest, written as a zone when deliverNet() was called.
-const unsigned kNetRow = 64 + 0x76b800 / 2048, kNetSlot = 40, kNetRing = 64, kNetSlots = 8, kNetMost = 4;
+const unsigned kNetRow = 64 + rvlayout::devT(0x16b800) / 2048, kNetSlot = 40, kNetRing = 64, kNetSlots = 8, kNetMost = 4;
 // What every core ran (MC_STATS_ALL in src/gpu.h): 72 texels after the ring, which the control
 // pass writes every frame. kNetRead texels of the row are read back: the window, the ring, those.
 const unsigned kCoreStatsAt = 0x200, kNetRead = kCoreStatsAt + 72;
-const float kCoreStatsZone[4] = {kCoreStatsAt + 36.0f, kStateHeight - (64 + 0x76b800 / 2048) - 0.5f, 72, 1};
+const float kCoreStatsZone[4] = {kCoreStatsAt + 36.0f, kStateHeight - (64 + rvlayout::devT(0x16b800) / 2048) - 0.5f, 72, 1};
 const float kNetZone[4] = {kNetRing + kNetSlot * kNetSlots / 2.0f, kStateHeight - kNetRow - 0.5f, (float)(kNetSlot * kNetSlots), 1};
-// The counters' totals (programs/mc/mc.h, MC_COUNT_*): RAM 0x86C10000 to 0x86C11000, drawn after
+// The counters' totals (programs/mc/mc.h, MC_COUNT_*): RAM rvlayout::kCountTotal to + 0x1000, drawn after
 // the commit when the control words read back say a core added (src/gpu.h).
-const float kCountZone[4] = {128, kStateHeight - (64 + 0x6c1000 / 2048) - 0.5f, 256, 1};
+const float kCountZone[4] = {128, kStateHeight - (64 + rvlayout::devT(0xc1000) / 2048) - 0.5f, 256, 1};
 // Quads the Commit pass draws when its vertex shader chooses them: the state rows and RAM's 4 MB bands.
 const unsigned kCommitQuads = 1 + (kStateHeight - 64) / 128;
-// The machine's control words (display, GPU, input, sound: RAM from 0x87000000) as a row of the
+// The machine's control words (display, GPU, input, sound: RAM from rvlayout::kCtrl) as a row of the
 // state texture. popRow() returns them after the 64 texels of row 0.
-const unsigned kControlRow = 64 + 0x700000 / 2048, kControlTexels = 256;
+const unsigned kControlRow = 64 + rvlayout::devT(0x100000) / 2048, kControlTexels = 256;
 // The console (docs/machine/console.md): texel kConHost of the network's row is the host's words, the
 // next the guest's, then the ring of kConRing bytes; the control pass writes the first.
 const unsigned kConHost = 40, kConRing = 256;
 const float kConZone[4] = {kConHost + 0.5f, kStateHeight - kNetRow - 0.5f, 1, 1};
 // The lanes' field (docs/machine/lanes.md, experiments/rvc_lean/tick.hlsl): its job's texel and its groups'
-// words in the mailboxes' page (RAM 0x86C01900 and 0x86C01A00), which popRow() returns after the network's
+// words in the mailboxes' page (rvlayout::kMbox + 0x1900 and + 0x1a00), which popRow() returns after the network's
 // texels: kFieldRead of them from the job's. The tick's primitive after the cores' draws it; the commit has
 // a point for each of its buckets, before the picture's.
-const unsigned kFieldRow = 64 + 0x6c0000 / 2048, kFieldAt = 0x190, kFieldRead = 0x10 + 62;
+const unsigned kFieldRow = 64 + rvlayout::devT(0xc0000) / 2048, kFieldAt = 0x190, kFieldRead = 0x10 + 62;
 const unsigned kFieldLanes = 3968, kFieldPoints = 2 * kFieldLanes;
 const int kCoresMost = 256;   // what the shader, the kernel and the library have room for
 const int kCores = 256;       // core 0 and 255 workers: the only machine there is (docs/machine/multicore.md)
-// The display's RAM framebuffer (RAM 0x87000000, 128 texture rows), for writing the picture back.
+// The display's RAM framebuffer (rvlayout::kCtrl, 128 texture rows), for writing the picture back.
 
 class RvcBackend {
 public:

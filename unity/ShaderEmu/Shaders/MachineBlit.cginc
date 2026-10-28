@@ -29,9 +29,9 @@ blit_v2f blit_vert(appdata_base v) {
 }
 
 #ifdef BLIT_BANDS
-// The control pass writes the device's words and a page the host fetched: RAM bands 28 and 29,
+// The control pass writes the device's words and a page the host fetched: RAM bands 4 and 5,
 // drawn by every pass that draws bands.
-#define CONTROL_BANDS (3u << 28)
+#define CONTROL_BANDS (3u << 4)
 // The bands of RAM (4 MB, 128 rows from row 64 + 128 b) the pass has to draw: what it changes,
 // and what the pass before it changed, which the texture drawn into lacks. The other texels
 // there are right already. Bit b & 31 stands for bands b, b + 32 and b + 64 (ram_bands, src/types.h).

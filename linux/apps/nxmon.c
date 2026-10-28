@@ -145,7 +145,7 @@ static int no_workers, check, print;
 static unsigned frames_shaded;
 
 /* The machine's control words (docs/machine/multicore.md, "Counters"): what each core ran, cores 16 on in
- * the network's row (0x876ba000); and a word a core with its program's tag (WORKERS_OWNER). */
+ * the network's row (0x816ba000); and a word a core with its program's tag (WORKERS_OWNER). */
 static const volatile unsigned *core_words, *core_more, *owners;
 static unsigned core_count = 1, core_before[MAX_CORES], core_rate[MAX_CORES];
 static unsigned cores_working, cores_idle, cores_asleep, core_busiest;
@@ -900,7 +900,7 @@ locate(void)
 #ifdef __gpuvm__
 	offset = info.surface_address;	/* (gpu_vm: the device window starts at 0) */
 #else
-	offset = info.surface_address - 0x86000000u;
+	offset = info.surface_address - 0x80000000u;
 #endif
 	size = (offset & 4095) + (uint32_t)surface_row * MAPPED_ROWS * 4;
 	memory = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, gpu, offset & ~4095u);
@@ -2240,7 +2240,7 @@ main(void)
 	words = gpu < 0 ? MAP_FAILED : mmap(NULL, 4096, PROT_READ, MAP_SHARED, gpu, 0x01000000 + 0x6ba000);
 	if (words != MAP_FAILED)
 		core_more = words;
-	/* the workers' owner words (WORKERS_OWNER, 0x86c01400) */
+	/* the workers' owner words (WORKERS_OWNER, 0x80c01400) */
 	words = gpu < 0 ? MAP_FAILED : mmap(NULL, 4096, PROT_READ, MAP_SHARED, gpu, 0x00c01000);
 	if (words != MAP_FAILED)
 		owners = words;

@@ -307,7 +307,7 @@ NES_PRESS="20 start 50 start 80 a 100 left 110 a 200 a 210 +right 300 a 400 a 42
 `NES_PRESS="60 start 120 start 180 start 240 start 300 a 330 +right 600 a 700 a 800 a 900 +a
 1100 -a 1200 a 1400 +left"`, 1,000 frames: RAM `fca83c4e`. What the GPU is given can be
 compared under `rvc_cpu` without a picture: at a hold, sum the list (address and count at
-0x87000300), both sets (0x87700000 to 0x877C0000), texture memory to its top, and the palette.
+0x81000300), both sets (0x81700000 to 0x817C0000), texture memory to its top, and the palette.
 
 ### The window system asked less (13 October 2026)
 
@@ -695,7 +695,7 @@ To check it:
   must be the same (frame 260 of a Thwaite game: no pixel of 512 x 480 different). A plain
   hold stops before the next frame writes anything, and cannot show a store made too early.
 - `NES_HOLD=N` stops at frame N with the window up and prints where the picture is in GPU
-  memory (bytes past the palette at 0x87000400): in a snapshot from `rvc_harness`,
+  memory (bytes past the palette at 0x81000400): in a snapshot from `rvc_harness`,
   the window's layer must be that picture through the palette, each pixel twice, and the
   workers' picture the same as `NES_PPU=inline`'s, with no pixel different.
 - The cartridge of our own (`exact_rom.py`, "Lines ahead" above) must give its five sums in

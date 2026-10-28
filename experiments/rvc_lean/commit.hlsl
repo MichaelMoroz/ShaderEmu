@@ -26,7 +26,7 @@ uniform uint _ZapKind, _ZapX, _ZapY, _ZapR, _ZapWord, _ZapMaskLo, _ZapMaskHi, _Z
 #define STATE_TEX_HEIGHT 9280u   // the state texture's rows: 64 of state, then RAM to 0x92000000
 #endif
 #define RAM_TEXELS (2048u * (STATE_TEX_HEIGHT - 64u))
-#define CTRL_ROW (64u + 0x700000u / 2048u)   // the control words' row (0x87000000), the control pass's
+#define CTRL_ROW (64u + 0x100000u / 2048u)   // the control words' row (0x81000000), the control pass's
 #define L1_AT 44
 #define FP_AT 492
 #ifndef CORE0_BITS
@@ -38,14 +38,14 @@ uniform uint _ZapKind, _ZapX, _ZapY, _ZapR, _ZapWord, _ZapMaskLo, _ZapMaskHi, _Z
 #define H2(t, n) ((((t) >> 2) ^ ((t) << ((n) - 2)) ^ ((t) >> ((n) + 3))) & ((1u << (n)) - 1))
 #define STALL_COPY 8
 #define STALL_FILL 10
-#define GPU_DISPLAY 0x700000u   // display: mode, width, height
-#define GPU_CLOCK 0x700003u     // word 2: copies made so far
-#define GPU_COPY 0x700007u      // the copy still to make of the list drawn last: how, address, width | height << 16, row
-#define GPU_PIXELS 0x700100u    // the display's framebuffer
+#define GPU_DISPLAY 0x100000u   // display: mode, width, height
+#define GPU_CLOCK 0x100003u     // word 2: copies made so far
+#define GPU_COPY 0x100007u      // the copy still to make of the list drawn last: how, address, width | height << 16, row
+#define GPU_PIXELS 0x100100u    // the display's framebuffer
 #define SUBMIT_INTO 4
 
 // ---- The geometry, as the tick has it (tick.hlsl)
-#define GEO_TEXEL 0x70003du
+#define GEO_TEXEL 0x10003du
 #define STRIP_TILES 248
 #define STRIP_BANDS ((CORES + 47) / 49)
 #define TICK_W 1040
@@ -182,7 +182,7 @@ bool writeback(uint2 pos, out uint4 r) {
     r = 0;
     uint t = (pos.y - 64) * 2048 + pos.x;
     uint4 c = ram(GPU_COPY);
-    if (pos.y < 64 || t - 0x600000u >= 0x1e0000u || c.r == 0) return false;   // (what a GPU program may own: 0x86000000 to 0x87e00000)
+    if (pos.y < 64 || t >= 0x1e0000u || c.r == 0) return false;   // (what a GPU program may own: 0x80000000 to 0x81e00000)
     if (t == GPU_COPY) return true;                          // made: cleared
     if (t == GPU_CLOCK) { r = TEX(pos); r.b += 1; return true; }
     uint4 d = ram(GPU_DISPLAY);

@@ -4,15 +4,15 @@ K = sys.argv[1]
 
 CON = r'''
 /*
- * ShaderEmu's console without the MMU (docs/machine/console.md): the host's words at 0x876b8280
- * (characters delivered, the last of them), the guest's at 0x876b8290 (taken, written), and
+ * ShaderEmu's console without the MMU (docs/machine/console.md): the host's words at 0x816b8280
+ * (characters delivered, the last of them), the guest's at 0x816b8290 (taken, written), and
  * the output ring after them, which the host reads before its clock word changes.
  */
-#define SE_CON_HOST	((volatile u32 *)0x876b8280)
-#define SE_CON_GUEST	((volatile u32 *)0x876b8290)
-#define SE_CON_RING	((volatile u8 *)0x876b82a0)
+#define SE_CON_HOST	((volatile u32 *)0x816b8280)
+#define SE_CON_GUEST	((volatile u32 *)0x816b8290)
+#define SE_CON_RING	((volatile u8 *)0x816b82a0)
 #define SE_CON_SIZE	256
-#define SE_HOST_MS	((volatile u32 *)0x87000034)	/* the host's clock in milliseconds (docs/machine/gpu.md) */
+#define SE_HOST_MS	((volatile u32 *)0x81000034)	/* the host's clock in milliseconds (docs/machine/gpu.md) */
 
 static u32 se_con_ms;		/* the host's clock when the count began */
 static int se_con_put_n;	/* bytes put since */

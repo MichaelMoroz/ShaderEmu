@@ -1,16 +1,18 @@
 #ifndef GPU_H
 #define GPU_H
+#include "layout.h"
 
 // The GPU device. See docs/machine/gpu.md for the guest's view; programs/common/gpu.h has the same
 // numbers for C. GPU_STATE is the machine's state texture (RAM from row 64 on).
 //
-// Addresses below are RAM texel indices: (physical address - 0x80000000) / 16.
-#define GPU_DISPLAY 0x700000u   // display control: mode, width, height
-#define GPU_CTRL    0x700001u   // submit, command list address, command count, frames done
-#define GPU_PIXELS  0x700100u   // the display's framebuffer in RAM, for writing the picture back
-#define GPU_INTO    0x700005u   // where SUBMIT_INTO writes the picture: address, width, height, row length
-#define GPU_COPY    0x700007u   // the copy still to do for the list just drawn: how (0: none), address, width | height << 16, row length
-#define GPU_CLOCK   0x700003u   // word 1: the host's clock in milliseconds; word 2: copies made so far; word 3: host flags
+// Addresses below are RAM texel indices: (physical address - 0x80000000) / 16; a device's are
+// DEV_T of its offset from the devices' first texel (layout.h).
+#define GPU_DISPLAY DEV_T(0x100000u)   // display control: mode, width, height
+#define GPU_CTRL    DEV_T(0x100001u)   // submit, command list address, command count, frames done
+#define GPU_PIXELS  DEV_T(0x100100u)   // the display's framebuffer in RAM, for writing the picture back
+#define GPU_INTO    DEV_T(0x100005u)   // where SUBMIT_INTO writes the picture: address, width, height, row length
+#define GPU_COPY    DEV_T(0x100007u)   // the copy still to do for the list just drawn: how (0: none), address, width | height << 16, row length
+#define GPU_CLOCK   DEV_T(0x100003u)   // word 1: the host's clock in milliseconds; word 2: copies made so far; word 3: host flags
 
 // Submit word: what to do with the list.
 #define SUBMIT_DRAW 1        // draw it
@@ -74,9 +76,9 @@
 
 #ifdef GVM_RAM
 // gpu_vm (gpu_vm/platform.md): RAM is a texture of its own, 8192 texels wide from address 0, and the device window is
-// the RISC-V machine's moved down by 0x86000000. Indices here stay the RISC-V machine's ((address - 0x80000000) / 16):
-// gpu_vm's texel is the index less 0x600000, and a guest's address below the ROM is a gpu_vm one (a constant of this
-// file, 0x87000400 say, is the RISC-V machine's).
+// the RISC-V machine's moved down by DEV_AT (layout.h). Indices here stay the RISC-V machine's ((address - 0x80000000) / 16):
+// gpu_vm's texel is the index less DEV_T(0), and a guest's address below the ROM is a gpu_vm one (a constant of this
+// file, DEV_AT + 0x1000400 say, is the RISC-V machine's).
 // GVM_MAP 1 (the tick's RAM_MAP): texel t at the strips' place (gpu_vm/isa.h GVM_STRIP_X), the ROM's too
 #if defined(GVM_MAP) && GVM_MAP == 1
 uint2 gvm_at(uint t) { return uint2((t & 0x1ffu) | ((t >> 12) & ~0x1ffu), (t >> 9) & 0xfffu); }
@@ -86,11 +88,11 @@ uint2 gvm_at(uint t) { return uint2(t % 8192u, t / 8192u); }
 uint gvm_texel(uint2 p) { return p.y * 8192u + p.x; }
 #endif
 uint4 ram(uint index) {
-    uint t = index - 0x600000u;
+    uint t = index - DEV_T(0u);
     return GPU_STATE[gvm_at(t)];
 }
 uint texel_of(uint address) {
-    return ((address < 0x40000000u ? address + 0x86000000u : address) & 0x7fffffff) >> 4;
+    return ((address < 0x40000000u ? address + DEV_AT : address) & 0x7fffffff) >> 4;
 }
 #else
 #ifndef GPU_STATE_ROW
@@ -441,7 +443,7 @@ float4 gpu_texel(gpu_varyings i, uint mode, uint x, uint y, uint width, out floa
     if (mode == FRAGMENT_INDEXED) {
         texel = (ram_word(i.texture_info.g + (n & ~3u)) >> (8 * (n & 3))) & 0xff;
         there = (i.texture_info.r & FRAGMENT_KEYED) && texel == i.key ? 0.0 : 1.0;
-        texel = ram_word(0x87000400 + 4 * texel);
+        texel = ram_word(DEV_AT + 0x1000400u + 4 * texel);
     } else {
         if (mode == FRAGMENT_RGB24) texel = gpu_rgb24(i.texture_info.g, n);
         else texel = texture_word(i.texture_info.g + 4 * n);
@@ -584,7 +586,7 @@ float4 gpu_fragment(gpu_varyings i) {
         } else if (mode == FRAGMENT_INDEXED) {
             texel = (ram_word(i.texture_info.g + (n & ~3u)) >> (8 * (n & 3))) & 0xff;
             if ((i.texture_info.r & FRAGMENT_KEYED) && texel == i.key) discard;
-            texel = ram_word(0x87000400 + 4 * texel);
+            texel = ram_word(DEV_AT + 0x1000400u + 4 * texel);
         } else if (mode == FRAGMENT_RGB24) {
             texel = gpu_rgb24(i.texture_info.g, n);
             if ((i.texture_info.r & FRAGMENT_KEYED) && texel == i.key) discard;
@@ -600,7 +602,7 @@ float4 gpu_fragment(gpu_varyings i) {
 #ifdef GPU_VOLUME
 // The volume display (docs/world/volume.md): a host that shows a 3D program's last whole frame from
 // a point of view of its own, instead of the picture the GPU drew of it.
-#define VOLUME_LIST 0x700030u   // that frame's list address, command count, frames so far, picture size
+#define VOLUME_LIST DEV_T(0x100030u)   // that frame's list address, command count, frames so far, picture size
 // Which of the program's axes is up, where the program says (the top four bits of the size
 // word: 1 x, 2 y, 3 z); 0: it does not, and a host works it out from the camera.
 uint volume_up() { return ram(VOLUME_LIST).a >> 28; }
@@ -738,7 +740,7 @@ bool gpu_writeback(uint2 pos, out uint4 result) {
     result = 0;
     if (pos.y < 64) return false;
     uint index = (pos.y - 64) * 2048 + pos.x;
-    if (index - 0x600000u >= 0x1e0000u) return false;   // outside what a GPU program may own (0x86000000 to 0x87e00000)
+    if (index - DEV_T(0u) >= ((GPU_MEM_END - DEV_AT) >> 4)) return false;   // outside what a GPU program may own (DEV_AT to GPU_MEM_END)
     uint4 copy = ram(GPU_COPY);
     if (copy.r == 0) return false;
     if (index == GPU_COPY) return true;    // done: result is all zeros
@@ -777,29 +779,29 @@ bool gpu_writeback(uint2 pos, out uint4 result) {
 }
 #endif
 
-#define INPUT_STATE 0x700002u   // pointer x, y (display pixels), buttons, key events so far
-#define INPUT_KEYS  0x700008u   // ring of the last 32 key events, one word each
-#define FETCH_REPLY 0x700011u   // requests the host has answered, bytes, status (docs/system/fetch.md)
-#define CON_HOST    0x76b828u   // the console (docs/machine/console.md): characters delivered, the last of them
+#define INPUT_STATE DEV_T(0x100002u)   // pointer x, y (display pixels), buttons, key events so far
+#define INPUT_KEYS  DEV_T(0x100008u)   // ring of the last 32 key events, one word each
+#define FETCH_REPLY DEV_T(0x100011u)   // requests the host has answered, bytes, status (docs/system/fetch.md)
+#define CON_HOST    DEV_T(0x16b828u)   // the console (docs/machine/console.md): characters delivered, the last of them
 #ifndef CON_IN_TAG
 #define CON_IN_TAG _UdonUARTInTag
 #define CON_IN_CHARS _UdonUARTInChar
 #endif
-#define FETCH_DATA  0x76c000u   // what the host fetched: 0x4000 texels
+#define FETCH_DATA  DEV_T(0x16c000u)   // what the host fetched: 0x4000 texels
 // "Open this" from the host (docs/system/open.md): requests so far and the address's length, then the
 // address, 176 bytes of it in the eleven texels after and 80 more from HOST_OPEN_MORE.
-#define HOST_OPEN      0x700024u
-#define HOST_OPEN_MORE 0x700031u
+#define HOST_OPEN      DEV_T(0x100024u)
+#define HOST_OPEN_MORE DEV_T(0x100031u)
 // What the cores did, for a guest to show (docs/machine/multicore.md): 16 words, core k's count of
 // instructions in word k; then a texel of how many cores, which run and which are asleep (a bit each).
 // With more than 16 cores: every core's count again in 64 texels at MC_STATS_ALL (the
-// network's row, after its ring: 0x876ba000), then eight texels, one for every 32 cores: a
+// network's row, after its ring: DEV_AT + 0x16ba000), then eight texels, one for every 32 cores: a
 // word of which of them run, a bit each, and a word of which are asleep. (A pixel that loops
 // over every core takes as long as hundreds of instructions of the tick: none does.)
-#define MC_STATS    0x700038u
-#define MC_STATS_ALL 0x76ba00u
+#define MC_STATS    DEV_T(0x100038u)
+#define MC_STATS_ALL DEV_T(0x16ba00u)
 // What the host says of where the machine is shown (docs/world/holodeck.md): two texels.
-#define HOST_STATE  0x700036u
+#define HOST_STATE  DEV_T(0x100036u)
 
 #if defined(GVM_RAM) && defined(CORES) && CORES > 1
 // (gpu_vm: a core is a row of the tick's state; the host starts workers 1 to _GvmWorkers at the firmware, which
@@ -890,7 +892,7 @@ struct mc_geo_t {
 };
 mc_geo_t mc_geo_now() {
     mc_geo_t g;
-    g.count = mc_geo_count(ram(0x70003du), g.nb, g.rb, g.rows);   // MC_GEOMETRY
+    g.count = mc_geo_count(ram(DEV_T(0x10003du)), g.nb, g.rb, g.rows);   // MC_GEOMETRY
     return g;
 }
 uint2 mc_place_in(mc_geo_t g, uint core) {
@@ -906,7 +908,7 @@ uint2 mc_place(uint core) {
 #else
 uint2 mc_place(uint core) {
     if (core == 0) return uint2(0, 0);
-    uint4 geo = ram(0x70003du);   // MC_GEOMETRY: how many workers, and their size
+    uint4 geo = ram(DEV_T(0x10003du));   // MC_GEOMETRY: how many workers, and their size
 #ifdef MC_FORCE_BITS
     if (geo.b != 0) geo.b = MC_FORCE_BITS;
 #endif
@@ -954,9 +956,9 @@ uint2 mc_stat_bits(uint from) {
 uint mc_stat_cores() {
 #ifdef MC_HYBRID
     uint nb, rb, rows;
-    return 1 + mc_geo_count(ram(0x70003du), nb, rb, rows);
+    return 1 + mc_geo_count(ram(DEV_T(0x10003du)), nb, rb, rows);
 #else
-    uint4 geo = ram(0x70003du);
+    uint4 geo = ram(DEV_T(0x10003du));
     uint rows = geo.b < 3 || geo.b > 6 ? 0 : mc_rows_of_bits(geo.b);
     if (rows == 0 || (geo.r & 1) != 0) return 1;
     return 1 + min(min(geo.g, (uint)CORES - 1), (248 / rows) * ((CORES + 47) / 49));
@@ -1017,9 +1019,9 @@ uint fetch_word(uint n) {
 #ifdef GPU_NET
 // The network device (docs/system/lan.md). The guest sends one packet at a time through a slot the
 // host reads back, and takes packets from a ring this pass fills from the host's texture.
-#define NET_GUEST 0x70003eu   // the guest's: packets sent, packets taken from the ring
-#define NET_HOST  0x70003fu   // the host's: packets it took, packets delivered, the machine's number
-#define NET_RX    0x76b840u   // the ring: NET_SLOTS places of NET_SLOT texels (length, number, 8 bytes, the packet)
+#define NET_GUEST DEV_T(0x10003eu)   // the guest's: packets sent, packets taken from the ring
+#define NET_HOST  DEV_T(0x10003fu)   // the host's: packets it took, packets delivered, the machine's number
+#define NET_RX    DEV_T(0x16b840u)   // the ring: NET_SLOTS places of NET_SLOT texels (length, number, 8 bytes, the packet)
 #define NET_SLOT  40u
 #define NET_SLOTS 8u
 // Texel k of the ring's place `slot`, if a packet arrives there in this pass: row e of _NetData
@@ -1045,9 +1047,9 @@ bool net_arrives(uint slot, uint k, out uint4 texel) {
 // submit word back and count it; and deliver the host's keyboard and pointer (docs/machine/input.md).
 // The counters (programs/mc/mc.h, MC_COUNT_*): drawn when the host has read "added" in the head,
 // each total is the sum of that word in all 256 regions (which only grow).
-#define COUNT_TOTAL 0x6c1000u
+#define COUNT_TOTAL DEV_T(0xc1000u)
 #define COUNT_REGIONS (COUNT_TOTAL + 0x100u)
-#define COUNT_HEAD 0x700032u   // { added, COUNT_MERGED, merges, passes so far }: the control pass's
+#define COUNT_HEAD DEV_T(0x100032u)   // { added, COUNT_MERGED, merges, passes so far }: the control pass's
 #define COUNT_MERGED 0x4d475245u
 uint4 count_total(uint index) {
     uint4 sum = uint4(0, 0, 0, 0);
@@ -1057,7 +1059,7 @@ uint4 count_total(uint index) {
 
 uint4 gpu_control(uint2 pos) {
 #ifdef GVM_RAM
-    uint index = gvm_texel(pos) + 0x600000u;   // (pos: a texel of gpu_vm's RAM texture)
+    uint index = gvm_texel(pos) + DEV_T(0u);   // (pos: a texel of gpu_vm's RAM texture)
     uint4 keep = ram(index);
 #else
     uint4 keep = GPU_STATE[pos];

@@ -138,7 +138,7 @@ a surface like a window's: fills, text, pictures and copies on it are commands, 
 from it to a window is one rectangle. A program draws something large once and shows parts
 of it (the browser's page, `docs/apps/web.md`). When the pool has no room, or the pixmap is of
 another kind, it is the server's memory as before; the driver counts the ones the GPU keeps
-at word 28 of its page of the control block (`WM_PIXMAPS`, `0x87001870`), so a program that
+at word 28 of its page of the control block (`WM_PIXMAPS`, `0x81001870`), so a program that
 made one can tell. A new one is black, by a fill of the GPU's.
 
 A program can also fill its window itself: `GrGetWindowInfo` returns the physical address of
@@ -147,10 +147,10 @@ server the pixels changed. The OpenGL driver does this. For a pixmap the GPU kee
 the same (0 for one in the server's memory): the browser submits lists of its own that are
 copied into its pixmap, and keeps them in another (`docs/apps/web.md`, "Strips").
 
-GPU memory under Nano-X: window buffers in the first 12 MiB (`0x86000000`; the worker cores'
-mailbox pages above them, `0x86c00000`), then the control
+GPU memory under Nano-X: window buffers in the first 12 MiB (`0x80000000`; the worker cores'
+mailbox pages above them, `0x80c00000`), then the control
 words and the display's framebuffer, the server's command list, cursor, glyph cache and
-scratch textures up to `0x87700000`; the last 4 MiB are left to one OpenGL program.
+scratch textures up to `0x81700000`; the last 4 MiB are left to one OpenGL program.
 
 ## The bar, and what a program adds to it
 
@@ -193,8 +193,8 @@ again where it changed once a second. The processor's extensions are tried, not 
 `isa` line comes from the device tree): `linux/apps/machine.h` runs a float and a Zba/Zbb
 instruction and says which trapped, and takes the MMU from `/proc/cpuinfo`, which names one
 only when there is one (`docs/system/nommu.md`). Its cores and workers are the control words'
-(`0x870003c0` on), the network's figures `/sys/class/net/lan0`'s, the host's kind and its
-visitors the host's words (`0x87000360`).
+(`0x810003c0` on), the network's figures `/sys/class/net/lan0`'s, the host's kind and its
+visitors the host's words (`0x81000360`).
 
 Before the clock is the machine's speed in millions of instructions a second, the first core's
 and all cores' (`0.3 / 43.7 M`: `speed_sample`, from the core's cycle counter and the workers'
@@ -380,7 +380,7 @@ text (classic is the old look whole: Chicago95's icons, grey frames, the bitmap 
 buttons then change only that. `nxsettings look seven|classic [smooth|classic]` does the same
 from a script. The choice is the registry's `desktop.style` and `desktop.font` and, for the
 running session, one word of the window manager's page of GPU memory (word 24 of `WM_OFFSET`,
-`0x87001860`; `/dev/gpu` at offset `0x01001000` + `0x860`): `0x4c4b0000 | smooth << 8 | style`,
+`0x81001860`; `/dev/gpu` at offset `0x01001000` + `0x860`): `0x4c4b0000 | smooth << 8 | style`,
 style 1 for Windows 7. 0 there (nobody set it) is the classic look, as a bare `nano-X` for a
 test has it; `nx` writes the registry's look (Windows 7 unless it says otherwise) before the
 desktop starts (`nxbar --look`). `linux/apps/ui_look.h` reads and writes it.
@@ -506,7 +506,7 @@ picture each, 16 x 16 in a few colours (`tool_pictures` in `nxpaint.c`), the sam
   taken in the folder shown, and a file that is there is asked about once. A file is written
   beside itself and renamed, and a write that fails says why.
 - The window made larger (the caption's box, Ctrl+F10) has another buffer: the program maps
-  it again when the driver's count at `0x87000064` moves, and draws everything when its
+  it again when the driver's count at `0x81000064` moves, and draws everything when its
   size changed (`locate`).
 - A window that takes the pointer's moves while a button is held (`ui_moves` in `ui.h`) asks
   for the button's release with them: the window system sends a held button's moves only to
@@ -615,7 +615,7 @@ is at 0,0 still.
 A window that changes size gets another buffer, which starts as a copy of the old one: what
 was drawn stays, and only the area the window gained is cleared and its program asked to
 draw. (A terminal's text survives, and the terminal takes as many columns and rows as now fit.) The
-screen driver counts new buffers at `0x87000064`, and a program that draws into its window
+screen driver counts new buffers at `0x81000064`, and a program that draws into its window
 itself (the OpenGL library) asks the server where its window is whenever the count moves.
 
 The window manager's record of a window (`nanowm.h`) has our fields at its end. The build

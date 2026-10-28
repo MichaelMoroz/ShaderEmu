@@ -1,9 +1,9 @@
 Shader "ShaderEmu/Readback"
 {
     // The script's readback, a pixel a word (bytes in r, g, b, a), a row a round: state row 0, 64
-    // control texels, then of the row at 0x876b8000 the network's window (40, docs/system/lan.md), what
-    // the cores ran and which run or sleep (72 from 0x876ba000), and the console's 18 from
-    // 0x876b8280 (docs/machine/console.md).
+    // control texels, then of the row at 0x816b8000 the network's window (40, docs/system/lan.md), what
+    // the cores ran and which run or sleep (72 from 0x816ba000), and the console's 18 from
+    // 0x816b8280 (docs/machine/console.md).
     Properties
     {
         _State ("Machine state texture", 2D) = "black" {}
@@ -26,7 +26,7 @@ Shader "ShaderEmu/Readback"
 
             Texture2D<uint4> _State;
 
-            static const uint Words = 1032, ControlRow = 64 + 0x700000 / 2048, WindowRow = 64 + 0x76b800 / 2048;
+            static const uint Words = 1032, ControlRow = 64 + 0x100000 / 2048, WindowRow = 64 + 0x16b800 / 2048;
             static const float Rows = 32;   // the target's height: EmuMachine's MaxRounds
             uniform uint _Row;
 

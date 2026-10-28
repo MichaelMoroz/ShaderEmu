@@ -76,10 +76,10 @@ def place_pixels(p, depth):
 
 def vertices(m):
     """Every command's vertices, in mesh order: clip position, colour, uv, and per-vertex state."""
-    mode, width, height = (int(v) for v in m.w(0x87000000, 3))
+    mode, width, height = (int(v) for v in m.w(0x81000000, 3))
     if '--size' in sys.argv:   # a list drawn into a window: the picture has the window's size
         width, height = (int(v) for v in sys.argv[sys.argv.index('--size') + 1].split('x'))
-    list_addr, count = (int(v) for v in m.w(0x87000014, 2))
+    list_addr, count = (int(v) for v in m.w(0x81000014, 2))
     size = np.array([width, height], f32)
     out = []
     for c in range(min(count, 4096)):
