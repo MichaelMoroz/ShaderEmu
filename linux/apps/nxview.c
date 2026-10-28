@@ -87,15 +87,9 @@ decode(const char *from, const char *to, int *pw, int *ph)
 	unsigned then_n, now_n;
 
 	gettimeofday(&then, NULL);
-#ifdef __gpuvm__
-	__asm__ volatile("mfsr %0, cycle" : "=r"(then_n));
-	why = media_image_to_ppm(from, to, pw, ph, workers);
-	__asm__ volatile("mfsr %0, cycle" : "=r"(now_n));
-#else
 	__asm__ volatile("rdcycle %0" : "=r"(then_n));
 	why = media_image_to_ppm(from, to, pw, ph, workers);
 	__asm__ volatile("rdcycle %0" : "=r"(now_n));
-#endif
 	gettimeofday(&now, NULL);
 	if (!why) {
 		/* a sum of the pixels, for a test to compare with the same decoder's on another machine */

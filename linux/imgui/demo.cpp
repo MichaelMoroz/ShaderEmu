@@ -19,11 +19,7 @@ extern "C" {
 static unsigned instructions()
 {
     unsigned n;
-#ifdef __gpuvm__
-    __asm__ volatile("mfsr %0, cycle" : "=r"(n));
-#else
     __asm__ volatile("rdcycle %0" : "=r"(n));
-#endif
     return n;
 }
 
@@ -123,11 +119,7 @@ int main()
         ImGui::SetNextWindowPos(ImVec2(12, 12), ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize(ImVec2(300, 0), ImGuiCond_FirstUseEver);
         ImGui::Begin("ShaderEmu");
-#ifdef __gpuvm__
-        ImGui::Text("Dear ImGui %s on a GPU-VM", ImGui::GetVersion());
-#else
         ImGui::Text("Dear ImGui %s on a RISC-V", ImGui::GetVersion());
-#endif
         ImGui::Text("computer in a pixel shader");
         ImGui::Separator();
         show(false);

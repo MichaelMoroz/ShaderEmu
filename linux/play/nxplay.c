@@ -108,11 +108,7 @@ cycles(void)
 {
 	uint32_t n;
 
-#ifdef __gpuvm__
-	__asm__ volatile("mfsr %0, cycle" : "=r"(n));
-#else
 	__asm__ volatile("rdcycle %0" : "=r"(n));
-#endif
 	return n;
 }
 

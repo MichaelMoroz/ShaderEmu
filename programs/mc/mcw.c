@@ -79,16 +79,6 @@ static void say(const char *text, uint32_t value)
  */
 void mcw_entry(void);
 uint32_t mcw_loop(uint32_t core) __attribute__((used));	/* (called from the lines below only) */
-#ifdef __gpuvm__
-/* (gpu_vm has no global pointer: globals are addressed from the bundle) */
-__asm__(".text\n"
-	".globl mcw_entry\n"
-	".p2align 4\n"
-	"mcw_entry:\n"
-	"	lw tp, 0(sp)\n"
-	"	call mcw_loop\n"
-	"	break\n");
-#else
 __asm__(".text\n"
 	".globl mcw_entry\n"
 	"mcw_entry:\n"
@@ -99,7 +89,6 @@ __asm__(".text\n"
 	"	lw tp, 0(sp)\n"
 	"	call mcw_loop\n"
 	"	ebreak\n");
-#endif
 
 uint32_t mcw_loop(uint32_t core)
 {
@@ -186,16 +175,6 @@ void mcw_rest(void)
 {
 	static int none;	/* a kernel from before the rest: the pause hint, as it was */
 
-#ifdef __gpuvm__
-	/* (no other task to run: the pass ends here, no system call and nothing stored) */
-	if (page) {
-		const volatile uint32_t *crowd = (const volatile uint32_t *)(page + MC_CROWD_AT);
-		if (crowd[0] == MC_CROWD_MARK && crowd[1] == 0) {
-			mc_end_pass();
-			return;
-		}
-	}
-#endif
 	if (device >= 0 && !none && call6(29, device, MC_REST, 0, 0, 0, 0) == 0) return;
 	none = device >= 0;
 	mc_next_pass();
@@ -203,31 +182,8 @@ void mcw_rest(void)
 
 void mcw_rest_for(const int *workers, int n)
 {
-#ifdef __gpuvm__
-	volatile uint32_t *waiting = page ? (volatile uint32_t *)(page + MC_WAITING_AT) : 0;
-	uint32_t mask[8] = {0};
-	int i, any = 0;
-
-	for (i = 0; i < n; i++)
-		if (workers[i] >= 1 && workers[i] <= count && core_of[workers[i]]) {
-			int core = core_of[workers[i]];
-			mask[core / 32] |= 1u << (core % 32), any = 1;
-		}
-	if (waiting && any) {
-		static int declared;
-		if (!declared) {	/* (the tick holds the others to the first core's pass only for a program that says) */
-			declared = 1;
-			*(volatile uint32_t *)(page + MC_DECLARED_AT) = (uint32_t)call6(172, 0, 0, 0, 0, 0, 0);	/* getpid */
-		}
-		for (i = 0; i < 8; i++) waiting[i] = mask[i];
-	}
-	mcw_rest();
-	if (waiting && any)
-		for (i = 0; i < 8; i++) waiting[i] = 0;
-#else
 	(void)workers, (void)n;
 	mcw_rest();
-#endif
 }
 
 int mcw_most(void)
@@ -552,11 +508,7 @@ void mcw_touch(void *memory, unsigned bytes)
 
 	/* a word or-ed with nothing: the page is there and this program's to write, and nothing
 	 * changes. One instruction that stores, so one fault: a load and then a store were two. */
-#ifdef __gpuvm__
-	for (; at < end; at += 4096) __asm__ volatile("amoor zero, zero, (%0)" : : "r"(at) : "memory");
-#else
 	for (; at < end; at += 4096) __asm__ volatile("amoor.w zero, zero, (%0)" : : "r"(at) : "memory");
-#endif
 }
 
 void *mcw_alloc(unsigned bytes)
@@ -668,11 +620,7 @@ static inline uint32_t lanes_word(void)
 {
 	uint32_t v;
 
-#ifdef __gpuvm__
-	v = 0;	/* no lanes on gpu_vm: every job is plain calls, as on rvc_cpu */
-#else
 	__asm__ volatile("csrr %0, 0x0b8" : "=r"(v));
-#endif
 	return v;
 }
 
@@ -743,9 +691,7 @@ static int lanes_run(mcw_lane_fn fn, void *ctx, uint32_t first, uint32_t count, 
 	for (L = 0; L < 2 * lanes; L++) job.stuck[L][0] = 0;
 	/* the job: this core's passes are its lanes' until all are through (the stores above are in
 	 * memory by then: this pass ends here) */
-#ifndef __gpuvm__
 	__asm__ volatile("csrw 0x0b8, %0" : : "r"(&job) : "memory");
-#endif
 	v = lanes_word();
 	*how = v & 0xff;
 	if (v & 2)
@@ -806,11 +752,7 @@ int mcw_field_lanes(void)
 	uint32_t v;
 
 	if (mcw_on_worker()) return 0;
-#ifdef __gpuvm__
-	v = 0;	/* no field on gpu_vm */
-#else
 	__asm__ volatile("csrr %0, 0x0b9" : "=r"(v));
-#endif
 	return v > FIELD_MOST ? 0 : (int)v;
 }
 
@@ -980,11 +922,7 @@ uint32_t mcw_steps_left(void)
 {
 	uint32_t v, d;
 
-#ifdef __gpuvm__
-	v = 0;	/* no steps on gpu_vm */
-#else
 	__asm__ volatile("csrr %0, 0x0ba" : "=r"(v));
-#endif
 	if (v != 0 && v != 0xffffffffu) return v;
 	if (!probe_on) return 0xffffffffu;
 	d = clock_now() - probe_t0;

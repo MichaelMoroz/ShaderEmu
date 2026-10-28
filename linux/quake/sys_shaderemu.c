@@ -213,11 +213,7 @@ int main (int c, char **v)
 	quakeparms_t	parms;
 	int		j;
 
-#ifdef __gpuvm__
-	__asm__ volatile ("mfsr %0, cycle" : "=r"(se_started));
-#else
 	__asm__ volatile ("rdcycle %0" : "=r"(se_started));
-#endif
 	memset (&parms, 0, sizeof (parms));
 	COM_InitArgv (c, v);
 	parms.argc = com_argc;
@@ -239,11 +235,7 @@ int main (int c, char **v)
 		newtime = Sys_Milliseconds ();
 		/* the clock moves once a machine frame: end the frame instead of asking again */
 		if (newtime == oldtime) {
-#ifdef __gpuvm__
-			__asm__ volatile ("wait");	/* pause */
-#else
 			__asm__ volatile (".word 0x0100000f");	/* pause */
-#endif
 			continue;
 		}
 		passed = newtime - oldtime;

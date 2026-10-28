@@ -15,11 +15,7 @@
 
 // ---- GPU memory: the part Nano-X leaves to one program ----
 
-#ifdef __gpuvm__
-#define GPU_PHYS 0x01000000u   // gpu_vm: the device window moved down by 0x80000000 (gpu_vm/GPU_VM.md, "Memory")
-#else
 #define GPU_PHYS 0x81000000u
-#endif
 #define GPU_SIZE 0x00b00000u
 // A frame's commands, matrix blocks and vertices are a set; frames alternate between two sets,
 // so the frame shown last stays whole while the next is built (the volume display draws it
@@ -45,11 +41,7 @@
 #define REG_LOCK 0x60
 #define REG_BUFFERS 0x64           // goes up when the window system gives a window another buffer
 // The pause hint: this machine ends its frame there, which is when the GPU does its work.
-#ifdef __gpuvm__
-#define next_frame() __asm__ volatile("wait" ::: "memory")   // gpu_vm's pause hint: a user's wait
-#else
 #define next_frame() __asm__ volatile(".word 0x0100000f")
-#endif
 
 enum { CMD_CLEAR = 1, CMD_DRAW = 3 };
 enum { VERTEX_CLIP = 1, VERTEX_MODELVIEW = 0x100, VERTEX_QUADS = 0x200, VERTEX_COMPACT = 0x400, VERTEX_FLOAT = 0x800,
@@ -190,11 +182,7 @@ static __attribute__((noinline)) void rest(void) {
     // (a worker core's pause is a sleep until its job changes, which a job that draws frame after
     // frame never does: off the first core's stack the pass is ended instead)
     if ((uintptr_t)&here - first_stack + 0x400000u >= 0x800000u) {
-#ifdef __gpuvm__
-        __asm__ volatile("sync" ::: "memory");   // gpu_vm: the pass ends here
-#else
         __asm__ volatile(".word 0x0000100f" ::: "memory");   // fence.i
-#endif
         return;
     }
     next_frame();

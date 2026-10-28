@@ -18,27 +18,6 @@
 /* A stop is an instruction that is none: the kernel stops the first core's thread with SIGILL
  * there. Not ebreak: on a worker core that is "park", and a worker that came to a marked line
  * went to sleep in the middle of its job with nobody told. This one is a trap there too. */
-#ifdef __gpuvm__
-/* gpu_vm (gpu_vm/isa.h): a line begins at a bundle of 16 bytes, and its stop is in the control word
- * (word 3): three ops on the general path, which is illegal before any op of the bundle runs. The
- * trap's pc is the control word's, so the program goes on from the bundle's start (dbg_rewind).
- * The registers are 64 words, the pc first; s0 (r32) is the frame's pointer; a call's return
- * address is the next bundle. */
-#define DBG_STOP 0x00000018u
-#define DBG_WORD 12u
-#define DBG_CC(w) ((w) >> 7 & 15u)		/* 0 special, else a branch */
-#define DBG_SUB(w) ((w) >> 11 & 7u)		/* cc 0: 2 jr, 3 callr, 5 j, 6 call */
-#define DBG_RS(w) ((w) >> 14 & 63u)
-#define DBG_OFF9(w) ((int32_t)((w) << 6) >> 23)	/* a branch's, in bundles */
-#define DBG_OFF18(w) ((int32_t)(w) >> 14)	/* j's and call's */
-#define DBG_REGS 64
-#define DBG_FP 32
-#define DBG_NEXT 16u
-#define DBG_HERE(pc) ((pc) & ~15u)
-/* The fetch reads RAM as the last commit left it, and the kernel's poke is a store of this pass: the
- * program let run in it would run the code as it was. A sync first (code stored runs after one). */
-#define DBG_SETTLE() __asm__ volatile("sync" ::: "memory")
-#else
 #define DBG_SETTLE() ((void)0)
 #define DBG_STOP 0x00000000u
 #define DBG_WORD 0u
@@ -46,7 +25,6 @@
 #define DBG_FP 8
 #define DBG_NEXT 4u
 #define DBG_HERE(pc) (pc)
-#endif
 enum { T_NONE, T_INT, T_FLOAT, T_POINTER, T_ARRAY, T_STRUCT, T_FUNCTION };
 enum { V_LOCAL, V_FIXED };		/* a variable is at the frame's pointer plus `at`, or at `at` */
 enum { DBG_RUN, DBG_OVER, DBG_INTO, DBG_OUT };
@@ -57,7 +35,7 @@ struct dbg_field { char name[24]; int type, offset; };
 struct dbg_var { char name[32]; int type, where, function; int32_t at; };
 struct dbg_function { char name[40]; uint32_t start, end; };
 struct dbg_line { uint32_t address; int line, function; };
-struct dbg_stop { uint32_t address, word, was; int user; };	/* word: where the stop is (a bundle's word on gpu_vm) */
+struct dbg_stop { uint32_t address, word, was; int user; };	/* word: where the stop is */
 
 #define DBG_TYPES 1024
 static struct dbg_type dbg_types[DBG_TYPES];
@@ -70,7 +48,7 @@ static int dbg_var_count, dbg_function_count, dbg_line_count;
 
 static pid_t dbg_pid;
 static int dbg_state = DBG_GONE, dbg_mode;
-static uint32_t dbg_regs[DBG_REGS];	/* pc, then x1 to x31 (r1 to r63 on gpu_vm) */
+static uint32_t dbg_regs[DBG_REGS];	/* pc, then x1 to x31 */
 static uint32_t dbg_from_sp;		/* the stack where a step began */
 static int dbg_line_now, dbg_function_now, dbg_signal, dbg_exit;
 static int dbg_on_break;		/* it stands on a line whose stop was lifted: that instruction is still to run */
@@ -383,8 +361,7 @@ dbg_registers(int write)
 	ptrace(write ? PTRACE_SETREGSET : PTRACE_GETREGSET, dbg_pid, (void *)1 /* NT_PRSTATUS */, &io);
 }
 
-/* At a stop: the pc where the program goes on from it. On gpu_vm the trap was at the bundle's
- * control word, and the bundle runs again whole. */
+/* At a stop: the pc where the program goes on from it (DBG_HERE: the stop's own pc). */
 static void
 dbg_rewind(void)
 {
@@ -474,20 +451,6 @@ dbg_one(void)
 {
 	uint32_t pc = DBG_HERE(dbg_regs[0]), next[2] = { pc + DBG_NEXT, 0 };
 	int status, k;
-#ifdef __gpuvm__
-	uint32_t op = dbg_peek(pc + 12), sub = DBG_SUB(op);
-
-	if (DBG_CC(op) == 4 && !(op >> 11 & 63) && !(op >> 26))	/* beq r0, r0: a near j */
-		next[0] = pc + (uint32_t)(DBG_OFF9(op) * 16);
-	else if (DBG_CC(op) == 5 && !(op >> 11 & 63) && !(op >> 26))	/* bne r0, r0: on to the next bundle */
-		;
-	else if (DBG_CC(op))	/* a branch, taken or not */
-		next[1] = pc + (uint32_t)(DBG_OFF9(op) * 16);
-	else if (sub == 5 || sub == 6)
-		next[0] = pc + (uint32_t)(DBG_OFF18(op) * 16);
-	else if (sub == 2 || sub == 3)
-		next[0] = dbg_regs[DBG_RS(op)] & ~15u;
-#else
 	uint32_t op = dbg_peek(pc);
 
 	if ((op & 0x7f) == 0x63)
@@ -498,7 +461,6 @@ dbg_one(void)
 					  (int32_t)(op >> 21 & 0x3ff) << 1);
 	else if ((op & 0x7f) == 0x67)
 		next[0] = (((op >> 15 & 31) ? dbg_regs[op >> 15 & 31] : 0) + (uint32_t)((int32_t)op >> 20)) & ~1u;
-#endif
 	for (k = 0; k < 2; k++)
 		if (next[k])
 			dbg_place(next[k], 0);
@@ -671,17 +633,11 @@ dbg_step(int mode)
 		return;
 	}
 	for (steps = 0; steps < 400; steps++) {
-#ifdef __gpuvm__
-		op = dbg_peek(DBG_HERE(dbg_regs[0]) + 12);
-		if (!DBG_CC(op) && (DBG_SUB(op) == 3 || DBG_SUB(op) == 6)) {	/* callr, call */
-			target = DBG_SUB(op) == 6 ? DBG_HERE(dbg_regs[0]) + (uint32_t)(DBG_OFF18(op) * 16) : dbg_regs[DBG_RS(op)] & ~15u;
-#else
 		op = dbg_peek(dbg_regs[0]);
 		if (((op & 0x7f) == 0x6f || (op & 0x7f) == 0x67) && (op >> 7 & 31) == 1) {
 			target = (op & 0x7f) == 0x6f ? dbg_regs[0] + (uint32_t)((int32_t)(op & 0x80000000) >> 11 | (int32_t)(op & 0xff000) |
 										 (int32_t)(op >> 20 & 1) << 11 | (int32_t)(op >> 21 & 0x3ff) << 1)
 						     : (((op >> 15 & 31) ? dbg_regs[op >> 15 & 31] : 0) + (uint32_t)((int32_t)op >> 20)) & ~1u;
-#endif
 			now_function = dbg_function_at(target);
 			if (now_function >= 0 && dbg_entry(now_function))
 				dbg_go_to(DBG_RUN, dbg_entry(now_function));

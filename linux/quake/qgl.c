@@ -1226,18 +1226,10 @@ int qglOpen(unsigned int nano_x_window, const unsigned char* palette) {
     block_count++;
     // Every page of ours written once here: the device maps them clean, and a worker that first
     // writes one stops until this core has served it (the written bit, src/mmu.h): 344 in demo1.
-#ifdef __gpuvm__
-    // (gpu_vm: no MMU, no written bits; the same store that changes nothing, gpu_vm's amoor)
-    for (uint8_t* at = (uint8_t*)ramp; at < main_part + main_size; at += 4096)
-        __asm__ volatile("amoor zero, zero, (%0)" : : "r"(at) : "memory");
-    for (unsigned int at = 0; spare && at < spare_size; at += 4096)
-        __asm__ volatile("amoor zero, zero, (%0)" : : "r"(spare + at) : "memory");
-#else
     for (uint8_t* at = (uint8_t*)ramp; at < main_part + main_size; at += 4096)
         __asm__ volatile("amoor.w zero, zero, (%0)" : : "r"(at) : "memory");
     for (unsigned int at = 0; spare && at < spare_size; at += 4096)
         __asm__ volatile("amoor.w zero, zero, (%0)" : : "r"(spare + at) : "memory");
-#endif
     for (int i = 0; i < 256; i++) byte_bits[i] = bits((float)i);
     for (uint32_t i = 0; i < 256; i++) qgl_particle_colour[i] = ((i & 15) * 64 + 32) | ((i >> 4) * 64 + 32) << 16;
     return 0;

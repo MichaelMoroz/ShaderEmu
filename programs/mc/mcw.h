@@ -87,8 +87,7 @@ int mcw_wait(int k);
 void mcw_rest(void);
 /*
  * The same, saying which workers (1 to mcw_count(), `n` of them) have the jobs the first core
- * waits for: on gpu_vm the machine gives them their whole pass and holds the others to the
- * first core's (gpu_vm/platform.md, "Resting"). Elsewhere it is mcw_rest().
+ * waits for (mc.h's MC_WAITING_AT); otherwise it is mcw_rest().
  */
 void mcw_rest_for(const int *workers, int n);
 /* Whether the code that asks is running on a worker. */

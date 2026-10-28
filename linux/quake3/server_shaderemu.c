@@ -73,15 +73,9 @@ extern unsigned se_server_parts[3], se_server_frames;	/* sv_main.c (quake3.patch
 /* fn(arg) on another stack */
 void CL_AddReliableCommand (const char *cmd, qboolean isDisconnectCmd);
 uint32_t se_call_on_stack (uint32_t (*fn) (uint32_t), uint32_t arg, void *stack_top);
-#ifdef __gpuvm__
-__asm__ (".text\n.globl se_call_on_stack\n.type se_call_on_stack, @function\n.p2align 4\nse_call_on_stack:\n"
-	"	addi a2, a2, -16\n	sw ra, 12(a2)\n	sw sp, 8(a2)\n	mv sp, a2\n	mv t0, a0\n	mv a0, a1\n	callr t0\n"
-	"	lw ra, 12(sp)\n	lw sp, 8(sp)\n	ret\n");
-#else
 __asm__ (".text\n.globl se_call_on_stack\n.type se_call_on_stack, @function\nse_call_on_stack:\n"
 	"	addi a2, a2, -16\n	sw ra, 12(a2)\n	sw sp, 8(a2)\n	mv sp, a2\n	mv t0, a0\n	mv a0, a1\n	jalr t0\n"
 	"	lw ra, 12(sp)\n	lw sp, 8(sp)\n	ret\n");
-#endif
 
 /* The program's worker cores: the server's, the client's game's, the scene's, the bots' thinks', and
    QUAKE3_DECODERS more (24) for the pictures a level loads (tr_shaderemu.c). How many there are. */
@@ -619,7 +613,7 @@ void SE_ServerSettle (void)
 		n = 1 + (int)i;
 		n += SE_ClientOut (on + n);
 		n += SE_SceneOut (on + n);
-		mcw_rest_on (on, n);	/* (gpu_vm: those and the client's frame have the whole pass) */
+		mcw_rest_on (on, n);
 		se_server_passes++;
 		helpers_poll ();	/* (the job may wait for a helper stopped at a page) */
 	}

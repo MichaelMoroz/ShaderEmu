@@ -51,7 +51,7 @@ extern unsigned se_client_jobs, se_client_cycles, se_client_passes;
 extern struct se_side_counts { unsigned n[4]; } se_side_worker, se_side_helper;	/* the items on the client's helper core */
 extern int se_client_list;		/* which of its two lists the frame the worker is at writes */
 void SE_ClientPoll (void);
-/* the calls of the client's frame that are out (gpu_vm: a core that rests gives them the whole pass): its game, the items, the scene */
+/* the calls of the client's frame that are out: its game, the items, the scene */
 int SE_ClientOut (int *on);
 int SE_SceneOut (int *on);
 

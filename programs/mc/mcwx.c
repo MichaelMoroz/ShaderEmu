@@ -27,13 +27,7 @@ static long call6(long number, long a, long b, long c, long d, long e, long f)
 
 int mcwx_setjmp(uint32_t *at) __attribute__((returns_twice));
 void mcwx_longjmp(uint32_t *at) __attribute__((noreturn));
-#ifdef __gpuvm__
-/* gpu_vm: ra, sp and s0-s23 are what a call keeps (26 words, as RISC-V's 14 and 12 floats) */
-#define FLOAT_SAVES(op) \
-	"	" op " s12, 56(a0)\n	" op " s13, 60(a0)\n	" op " s14, 64(a0)\n	" op " s15, 68(a0)\n" \
-	"	" op " s16, 72(a0)\n	" op " s17, 76(a0)\n	" op " s18, 80(a0)\n	" op " s19, 84(a0)\n" \
-	"	" op " s20, 88(a0)\n	" op " s21, 92(a0)\n	" op " s22, 96(a0)\n	" op " s23, 100(a0)\n"
-#elif defined __riscv_flen
+#if defined __riscv_flen
 #define FLOAT_SAVES(op) \
 	"	" op " fs0, 56(a0)\n	" op " fs1, 60(a0)\n	" op " fs2, 64(a0)\n	" op " fs3, 68(a0)\n" \
 	"	" op " fs4, 72(a0)\n	" op " fs5, 76(a0)\n	" op " fs6, 80(a0)\n	" op " fs7, 84(a0)\n" \
@@ -46,19 +40,6 @@ void mcwx_longjmp(uint32_t *at) __attribute__((noreturn));
 	"	" op " s2, 16(a0)\n	" op " s3, 20(a0)\n	" op " s4, 24(a0)\n	" op " s5, 28(a0)\n" \
 	"	" op " s6, 32(a0)\n	" op " s7, 36(a0)\n	" op " s8, 40(a0)\n	" op " s9, 44(a0)\n" \
 	"	" op " s10, 48(a0)\n	" op " s11, 52(a0)\n"
-#ifdef __gpuvm__
-__asm__(".text\n"
-	".globl mcwx_setjmp\n"
-	".p2align 4\n"
-	"mcwx_setjmp:\n" INT_SAVES("sw") FLOAT_SAVES("sw")
-	"	li a0, 0\n"
-	"	ret\n"
-	".globl mcwx_longjmp\n"
-	".p2align 4\n"
-	"mcwx_longjmp:\n" INT_SAVES("lw") FLOAT_SAVES("lw")
-	"	li a0, 1\n"
-	"	ret\n");
-#else
 __asm__(".text\n"
 	".globl mcwx_setjmp\n"
 	"mcwx_setjmp:\n" INT_SAVES("sw") FLOAT_SAVES("fsw")
@@ -68,7 +49,6 @@ __asm__(".text\n"
 	"mcwx_longjmp:\n" INT_SAVES("lw") FLOAT_SAVES("flw")
 	"	li a0, 1\n"
 	"	ret\n");
-#endif
 #define JUMP_WORDS 26
 
 /* ---- what a core keeps of a job's side effects ---- */
@@ -721,27 +701,18 @@ typedef struct { uint32_t fn, a0, a1, k; } call_rec;
 static call_rec calls[CALLS] __attribute__((aligned(16)));
 static uint8_t call_state[CALLS];	/* 0 free, 1 out on a worker, 2 made here */
 static uint32_t call_answer[CALLS];
-/* gpu_vm: a call goes to the lowest free worker, as a round's members are taken: the busy cores lie together. Under
- * one triangle over every core (gpu_vm/tick/WAVES.md, "Idle cores") busy cores among idle ones cost up to a third more
- * than a run of them; a round-robin spread every few calls over the whole row. RISC-V: round the row, as before. The
- * lowest free worker halved Quake III's server there (q3dm17 with a bot on the card: 22.9 game frames a second to
- * 11.8, its worker 3.59 M instructions a second to 1.45; 7624f55's Quake III built with each). */
-#ifndef __gpuvm__
+/* A call goes to the next worker round the row. The lowest free worker instead (the busy cores together) halved
+ * Quake III's server (q3dm17 with a bot on the card: 22.9 game frames a second to 11.8, its worker 3.59 M
+ * instructions a second to 1.45; 7624f55's Quake III built with each). */
 static int next_worker = 1;
-#endif
 
 static int call_worker(int tries, int workers)
 {
-#ifdef __gpuvm__
-	(void)workers;
-	return tries + 1;
-#else
 	int w = next_worker;
 
 	(void)tries;
 	next_worker = next_worker % workers + 1;
 	return w;
-#endif
 }
 
 static uint32_t call_job(uint32_t rec_at, uint32_t unused)
@@ -899,11 +870,7 @@ void mcw_add(int i, uint32_t value)
 		return;
 	}
 	k = mcw_self();
-#ifdef __gpuvm__
-	__asm__ volatile("amoadd zero, %1, (%0)" : : "r"(counts + REGION(k) + count_base + i), "r"(value) : "memory");
-#else
 	__asm__ volatile("amoadd.w zero, %1, (%0)" : : "r"(counts + REGION(k) + count_base + i), "r"(value) : "memory");
-#endif
 	head[0] = 1;
 	merges = head[2];
 	own = &since[k][i];

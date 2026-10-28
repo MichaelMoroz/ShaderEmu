@@ -61,11 +61,7 @@ static uint32_t cycles(void)
 {
 	uint32_t c;
 
-#ifdef __gpuvm__
-	__asm__ volatile("mfsr %0, cycle" : "=r"(c));
-#else
 	__asm__ volatile("rdcycle %0" : "=r"(c));
-#endif
 	return c;
 }
 

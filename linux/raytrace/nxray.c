@@ -278,7 +278,7 @@ static const uint32_t owner_colour[16] = {
 struct lane_job { const struct picture *sc; uint32_t from, core, unused; };
 static struct lane_job lane_jobs[OUT][MC_MAX_CORES] __attribute__((aligned(16)));
 static int lanes_on = 1;
-static int one_out;	/* RAY_ONE: one picture out at a time, each timed by itself (gpu_vm: the default) */
+static int one_out;	/* RAY_ONE: one picture out at a time, each timed by itself */
 static int field_wanted = 1, use_field;	/* RAY_FIELD=0: no field; whether this picture is the field's */
 static float texel_least = 8192.0f / 6.0f;	/* what a texel costs a lane at least: a sixth of a pass (RAY_FLOOR) */	/* RAY_LANES=0: a worker traces its texels one after another */
 
@@ -351,11 +351,7 @@ cycles(void)
 {
 	uint32_t count;
 
-#ifdef __gpuvm__
-	__asm__ volatile("mfsr %0, cycle" : "=r"(count));
-#else
 	__asm__ volatile("rdcycle %0" : "=r"(count));
-#endif
 	return count;
 }
 
@@ -367,11 +363,7 @@ worker_picture(const struct picture *sc, uint32_t frame, uint32_t k)
 	uint32_t share = sc->plan[k], began = cycles(), rays, when, from;
 	int lanes = lanes_on ? mcw_lanes_here() : 0;
 
-#ifdef __gpuvm__
-	__asm__ volatile("mfsr %0, time_lo" : "=r"(from));
-#else
 	__asm__ volatile("rdtime %0" : "=r"(from));
-#endif
 
 	rays = trace_texels(sc, sc->band[share], sc->band[share + 1], k, lanes, frame);
 	slot->spent = cycles() - began;
@@ -385,11 +377,7 @@ worker_picture(const struct picture *sc, uint32_t frame, uint32_t k)
 		slot->sum = sum;
 		slot->power = power;
 	}
-#ifdef __gpuvm__
-	__asm__ volatile("mfsr %0, time_lo" : "=r"(when));
-#else
 	__asm__ volatile("rdtime %0" : "=r"(when));
-#endif
 	slot->ended = when;
 	slot->took = when - from;
 	slot->frame = frame;
@@ -797,11 +785,7 @@ publish(float t, uint32_t done)
 	/* (its pixels were picture `done`'s or the one's before: the list that shows that one has
 	 * been drawn while the scene was made, mostly) */
 	seglSettle();
-#ifdef __gpuvm__
-	__asm__ volatile("mfsr %0, time_lo" : "=r"(published_at[frame % outs]));
-#else
 	__asm__ volatile("rdtime %0" : "=r"(published_at[frame % outs]));
-#endif
 	go.shown = done;
 	go.frame = frame;
 }
@@ -1031,13 +1015,6 @@ main(void)
 	atexit(end_jobs);	/* (first: the workers' jobs end only when told) */
 	even = getenv("RAY_EVEN") != NULL;
 	one_out = getenv("RAY_ONE") != NULL;
-#ifdef __gpuvm__
-	/* gpu_vm: one picture out at a time (RAY_AHEAD for more). With four out a worker takes its shares
-	 * in turn, so a picture waited on the dearest share behind that worker's shares of the pictures
-	 * before it: 38.4 pictures a second, a picture 22 ms to 111; one out, 40.6 and 22 to 55, and the
-	 * rounds cheaper (GPU-VM docs/REGRESSIONS.md, step 6) */
-	one_out = getenv("RAY_AHEAD") == NULL;
-#endif
 	take_workers();
 	while (frames_left != 0) {
 		/* when the keys were last read and the picture's figures last said, and what was traced since */
@@ -1218,20 +1195,6 @@ main(void)
 			if (use_field && !(i & 3))
 				rays += sc->pixels[i] >> 24;
 		}
-#ifdef __gpuvm__
-		/* (gpu_vm's test: the picture itself, compared with a reference by its PSNR, the card's special functions
-		 * giving other bits than the reference machine's: gpu_vm/userland/apps/README.md, "Checks") */
-		if (frames_left > 0 && getenv("RAY_SAVE")) {
-			FILE *f = fopen(getenv("RAY_SAVE"), "wb");
-
-			if (f) {
-				fprintf(f, "P6\n%d %d\n255\n", width, height);
-				for (i = 0; i < width * height; i++)
-					fputc(sc->pixels[i] >> 16 & 255, f), fputc(sc->pixels[i] >> 8 & 255, f), fputc(sc->pixels[i] & 255, f);
-				fclose(f);
-			}
-		}
-#endif
 		if (use_field && getenv("RAY_SHARES")) {
 			/* (for a test: what this core's picture took, in instructions, and what the lanes left it) */
 			extern unsigned mcw_field_stuck;	/* (mcw.c: indices the field's lanes left to this core) */

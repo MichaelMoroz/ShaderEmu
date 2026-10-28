@@ -704,11 +704,7 @@ ui_gpu_map(GR_WINDOW_ID pixmap, int width, int height, struct media_image *out)
 	}
 	/* (a pixel read first: the GPU has drawn what it was asked, a copy from it among them) */
 	GrReadArea(pixmap, 0, 0, 1, 1, &pixel);
-#ifdef __gpuvm__
-	offset = info.surface_address;	/* (gpu_vm: the device window starts at 0) */
-#else
 	offset = info.surface_address - 0x80000000u;
-#endif
 	bytes = (offset & 4095) + info.surface_row * (uint32_t)height * 4;
 	mapped = mmap(NULL, bytes, PROT_READ | PROT_WRITE, MAP_SHARED, gpu, offset & ~4095u);
 	close(gpu);
