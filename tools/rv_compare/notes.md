@@ -94,8 +94,8 @@ the lanes' field 8 rounds, not 8 frames, under `--unity` (2ecf76d). memcpy's com
 | memory | load-seq-word (MB/s) | 3.49 | 3.24 | 0.93 | a loop compiled by `cc` in the machine; its store twin is 1.13 better; not explained |
 | quake-server | client frames drawn behind the older server answer (%) | 36.5 | 45.5 | 0.80 | the server ticks faster (56.7 to 61.7 a second): more answers arrive behind a frame |
 | quake3-server | game frames a job, a job posted to taken (ms), instructions a job | 2.00, 90, 261 k | 2.32, 99, 298 k | 0.86 to 0.91 | within the spreads (11 to 14%) on both sides; its rate, server game frames a second, is 1.07 better |
-| quake3-menu | menu frames (fps) | 74.86 | 72.46 | 0.97 | not explained: the same rounds a frame, no pass ended by a copy or fill in its window (`rvc_cpu`, `prof_parts.py`); memcpy and memset under 1.5% of core 0 |
-| video-mpg | frames drawn (fps) | 19.40 | 19.08 | 0.98 | the card fit 1.6% fewer rounds a frame (8.23 to 8.10); the guest's copies cost 0.5% of core 0 |
+| quake3-menu | menu frames (fps) | 74.86 | 72.46 | 0.97 | 19561b9's calls round the row (which gave Quake III's server back its 2x): before's binary on after's machine 74.95 and 74.98, 7624f55's source with today's libraries and the lowest free worker 74.79, the same with the calls round the row 72.36 (one round each but q3old's two); kept for the server, a policy for both in work (rv-wk) |
+| video-mpg | frames drawn (fps) | 19.40 | 19.08 | 0.98 | the machine, not the program: before's `nxvideo` on after's machine 19.13 and 19.08; the card fit 1.6% fewer rounds a frame (8.23 to 8.10) |
 
 Tiberian Dawn's "game frames" reads only the last short `tdstat` window (spread 11% on both sides): its "start to frame
 1300" is the measure.
@@ -104,5 +104,6 @@ Tiberian Dawn's "game frames" reads only the last short `tdstat` window (spread 
     python tools/rv_compare/run.py --machines after --rounds 3
     python tools/rv_compare/report.py before after
 
-`machines.py`'s `after` is the backport's checkout (`binvc_harness.exe`, `build/images/nommu`, `experiments/rvc_opt`);
+`machines.py`'s `after` is the backport's checkout (`bin
+vc_harness.exe`, `build/images/nommu`, `experiments/rvc_opt`);
 `RVCMP_AFTER_ROOT` and `RVCMP_AFTER_IMAGE` move it (here `RVCMP_AFTER_ROOT=ShaderEmu-rvbp/build/after`).
