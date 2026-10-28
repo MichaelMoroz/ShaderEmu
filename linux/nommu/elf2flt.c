@@ -57,6 +57,36 @@ int main(int argc, char **argv)
 			memcpy(img + rd(p + 8), e + rd(p + 4), rd(p + 16));
 	}
 	data_start = (data_start ? data_start : end_file) & ~31u;
+	/* binfmt_flat stores the data's start into the word just below it (fs/binfmt_flat.c's shared-library table,
+	 * BINFMT_FLAT_NO_DATA_START_OFFSET or not): where a section lies there (tcc's .eh_frame_hdr runs to its data), the
+	 * data starts lower, at the first 32 bytes with a word of nothing below (loaded whole, the split moves no
+	 * address); with none, the program is refused (elf2bflt.py) */
+	{
+		uint32_t shoff = rd(e + 32), shent = rd16(e + 46), shnum = rd16(e + 48), start = data_start, hit = 1, least = 4;
+
+		for (i = 0; i < phnum; i++) {	/* (not into the text: the end of what is executed) */
+			const uint8_t *p = e + phoff + i * phent;
+
+			if (rd(p) == 1 && (rd(p + 24) & 1) && rd(p + 8) + rd(p + 20) > least)
+				least = rd(p + 8) + rd(p + 20);
+		}
+		while (data_start >= least && hit) {
+			for (i = 0, hit = 0; !hit && i < (shoff ? shnum : phnum); i++) {
+				const uint8_t *s = shoff ? e + shoff + i * shent : e + phoff + i * phent;
+				/* a section: ALLOC, not TLS, with a size; else a loaded segment (sh_size and p_memsz alike) */
+				int is = shoff ? (rd(s + 8) & 2) && !(rd(s + 8) & 0x400) && rd(s + 20) : rd(s) == 1;
+				uint32_t at = shoff ? rd(s + 12) : rd(s + 8);
+
+				hit = is && at < data_start && at + rd(s + 20) > data_start - 4;
+			}
+			if (hit)
+				data_start -= 32;
+		}
+		if (data_start < least) {
+			fprintf(stderr, "elf2flt: every 32 bytes from the text's end to the data's (%#x) has a section below it, which the kernel overwrites\n", start);
+			return 1;
+		}
+	}
 	if (dyn >= 0) {
 		const uint8_t *p = e + phoff + dyn * phent;
 

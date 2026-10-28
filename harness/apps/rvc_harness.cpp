@@ -161,6 +161,8 @@ struct Options {
     std::string uartLog;
     std::string dumpState;
     std::string saveState, loadState;
+    std::string recordInput, replayInput;   // the window's input to a file with its times, or from one instead of the window's
+    bool printStamp = false;
     std::string screenLog, screenFrom;   // --screen-log: the display, every frame, into a file
     int screenFrames = 0, screenEvery = 0;
     std::vector<std::pair<std::string, std::string>> expectSend;
@@ -282,6 +284,10 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
   --uart-log FILE      append all UART output to FILE
   --dump-state FILE    write the 64x64 state area (raw uint32 RGBA) at exit
   --save-state FILE    write a snapshot of the whole machine (290 MB) at exit
+  --record-input FILE  write the window's keys, pointer and typing to FILE, each with its second of the run
+  --replay-input FILE  play FILE's input at its seconds instead of the window's (Ctrl+] still quits)
+  --stamp              print the processor folder's WARP stamp (its sources hashed) and exit: the card runs
+                       a folder only when its warp_ok holds it (tools/test_card.py --warp --mark-ok)
   --load-state FILE    resume from a snapshot instead of booting
   --replay DIR;DIR...  with --load-state: the tick (CPUTick pass) of each folder beside the machine's own,
                        each run --replay-frames N (600) frames from the snapshot's state, in turn,
@@ -476,6 +482,9 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--uart-log") o.uartLog = next("--uart-log");
         else if (a == "--dump-state") o.dumpState = next("--dump-state");
         else if (a == "--save-state") o.saveState = next("--save-state");
+        else if (a == "--record-input") o.recordInput = next("--record-input");
+        else if (a == "--stamp") o.printStamp = true;
+        else if (a == "--replay-input") o.replayInput = next("--replay-input");
         else if (a == "--screen-log") o.screenLog = next("--screen-log");
         else if (a == "--screen-from") o.screenFrom = unescape(next("--screen-from"));
         else if (a == "--screen-frames") o.screenFrames = atoi(next("--screen-frames").c_str());
@@ -821,7 +830,7 @@ int main(int argc, char** argv) {
             printf("%-12s %s%s\n", im.name, im.title, imageAvailable(im) ? "" : "  (files missing)");
         return 0;
     }
-    if (!run_lock_take(!opt.cpu, opt.cpu ? (opt.gpu.warp ? "rvc_harness --cpu --warp" : "rvc_harness --cpu") : "rvc_harness"))
+    if (!opt.printStamp && !run_lock_take(!opt.cpu, opt.cpu ? (opt.gpu.warp ? "rvc_harness --cpu --warp" : "rvc_harness --cpu") : "rvc_harness"))
         return kRunLockRefused;
 
     // Opened with no arguments (or only --resume / --no-viz): act as a terminal on the emulated
@@ -1052,6 +1061,40 @@ int main(int argc, char** argv) {
         bo.compile.defines.push_back({d.substr(0, eq), eq == std::string::npos ? "1" : d.substr(eq + 1)});
     }
 
+    // The WARP stamp (gpu_vm's tick.hlsl.warp_ok): the card runs a processor folder only when its warp_ok holds the
+    // hash of its sources (and of the devices' folder), written by tools/test_card.py --warp --mark-ok after WARP
+    // passed its cases: a tick the card has never run is checked in software first. --stamp prints the hash.
+    if (opt.gvm.empty() && opt.compute.empty() && !opt.cpu && (opt.printStamp || !opt.gpu.warp)) {
+        std::vector<std::pair<std::string, fs::path>> files;
+        for (const fs::path& dir : {fs::u8path(opt.rvcDir), deviceDir}) {
+            for (auto it = fs::recursive_directory_iterator(dir, ec); !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
+                std::string ext = it->path().extension().u8string();
+                if (it->is_regular_file(ec) && (ext == ".shader" || ext == ".cginc" || ext == ".h" || ext == ".hlsl"))
+                    files.push_back({fs::relative(it->path(), dir, ec).generic_u8string(), it->path()});
+            }
+            if (fs::equivalent(fs::u8path(opt.rvcDir), deviceDir, ec)) break;
+        }
+        std::sort(files.begin(), files.end());
+        uint64_t h = 0xcbf29ce484222325ull;
+        for (auto& f : files) {
+            std::string text;
+            readFileBinary(f.second.u8string(), text);
+            text.erase(std::remove(text.begin(), text.end(), '\r'), text.end());   // (a checkout's line ends are not the tick)
+            h = fnv1a64(f.first.data(), f.first.size(), h);
+            h = fnv1a64(text.data(), text.size(), h);
+        }
+        char stamp[32];
+        snprintf(stamp, sizeof stamp, "%016llx", (unsigned long long)h);
+        if (opt.printStamp) { printf("stamp %s (%zu files of %s)\n", stamp, files.size(), opt.rvcDir.c_str()); return 0; }
+        std::string ok;
+        readFileBinary((fs::u8path(opt.rvcDir) / "warp_ok").u8string(), ok);
+        if (ok.find(stamp) == std::string::npos) {
+            fprintf(stderr, "[harness] %s (stamp %s) has not passed WARP's checks as it is: not run on the card "
+                            "(python tools/test_card.py machine --warp --mark-ok --rvc %s)\n", opt.rvcDir.c_str(), stamp, opt.rvcDir.c_str());
+            return 3;
+        }
+    }
+
     // --- Material and backend ---
     Material mat;
     mat.applyDefaults(shader);
@@ -1076,6 +1119,29 @@ int main(int argc, char** argv) {
             return 1;
         }
     }
+    // RVC_TICK_ALT=DIR;DIR...: other ticks of the same layout beside the machine's own (variant 0), each frame's tick
+    // picked by a hash of the frame (RVC_TICK_ALT_SHIFT=N: 2^N frames a pick), every frame timed (with --stats-after)
+    // and each timing kept by its tick: ticks compared in one run, on one card's clock (gpu_vm's GVM_TICK_ALT, 5fa6f70)
+    std::vector<std::string> altDirs;
+    if (const char* alt = getenv("RVC_TICK_ALT"); alt && *alt) {
+        if (!opt.replayDirs.empty()) { fprintf(stderr, "[harness] RVC_TICK_ALT or --replay, not both\n"); return 2; }
+        for (std::string list = alt; !list.empty();) {
+            size_t e = list.find(';');
+            if (e) altDirs.push_back(list.substr(0, e));
+            list = e == std::string::npos ? "" : list.substr(e + 1);
+        }
+        for (auto& dir : altDirs) {
+            SLShader variant;
+            if (!loadShaderLab((fs::u8path(dir) / "main.shader").u8string(), variant, err) || !backend.addTickVariant(variant, err)) {
+                fprintf(stderr, "[harness] RVC_TICK_ALT %s: %s\n", dir.c_str(), err.c_str());
+                return 1;
+            }
+        }
+    }
+    static const int altShift = getenv("RVC_TICK_ALT_SHIFT") ? atoi(getenv("RVC_TICK_ALT_SHIFT")) : 0;
+    std::vector<double> altMs(altDirs.size() + 1);
+    std::vector<uint64_t> altN(altDirs.size() + 1), altPicked(altDirs.size() + 1);
+    uint64_t altSeen = 0;
     if (!backend.loadPayload(mat, opt.payloadDir, opt.ramPrefix, "_Data_RAM", err) ||
         !backend.loadPayload(mat, opt.payloadDir, opt.mtdPrefix, "_Data_MTD", err) ||
         !backend.loadPayload(mat, opt.payloadDir, opt.dtbPrefix, "_Data_DTB", err)) {
@@ -1154,12 +1220,37 @@ int main(int argc, char** argv) {
     uint64_t ovInstr = 0, ovFrames = 0, ovWorkers = 0;
     double gpuTickMs = -1, gpuCommitMs = -1, gpuDeviceMs = 0;
     // --unity: the rounds of the next frame, from the last timed frame's card time; and what the run had
-    double unityRounds = 4, unityMsSum = 0;
+    double unityRounds = 4, unityMsSum = 0, unityRoundCost = 0, unitySmoothMs = 0;
+    int unityCap = 4, unityGuard = 0;
     uint64_t unitySeen = 0, unityTimed = 0, unityRoundSum = 0, unityFrames = 0;
     unsigned lastKey = 0;   // last character handed to the guest
     std::deque<uint32_t> keyEvents;   // raw key events from the window, waiting for the input device
     uint32_t keySeq = 0;              // events delivered so far
     MemoryViewInput pointer;
+    // --record-input / --replay-input (gpu_vm's a338987): a line an event, "SECONDS P x y panelW panelH buttons" (the
+    // pointer as it changes), "SECONDS K code" (a key event, hex), "SECONDS T bytes" (typed, hex)
+    struct InputEvent { double t; char kind; float p[5]; uint32_t code; std::string typed; };
+    std::vector<InputEvent> replay;
+    size_t inputNext = 0;
+    MemoryViewInput replayPointer, recorded;
+    FILE* inputLog = opt.recordInput.empty() ? nullptr : fopen(opt.recordInput.c_str(), "w");
+    if (!opt.recordInput.empty() && !inputLog) { fprintf(stderr, "[harness] cannot write %s\n", opt.recordInput.c_str()); return 1; }
+    if (!opt.replayInput.empty()) {
+        FILE* f = fopen(opt.replayInput.c_str(), "r");
+        if (!f) { fprintf(stderr, "[harness] cannot read %s\n", opt.replayInput.c_str()); return 1; }
+        char line[4096], hex[4000];
+        for (InputEvent e{}; fgets(line, sizeof line, f); e = {}) {
+            if (sscanf(line, "%lf P %f %f %f %f %f", &e.t, &e.p[0], &e.p[1], &e.p[2], &e.p[3], &e.p[4]) == 6) e.kind = 'P';
+            else if (sscanf(line, "%lf K %x", &e.t, &e.code) == 2) e.kind = 'K';
+            else if (sscanf(line, "%lf T %3999s", &e.t, hex) == 2) {
+                e.kind = 'T';
+                for (size_t i = 0; hex[i] && hex[i + 1]; i += 2) e.typed += (char)strtoul(std::string(hex + i, 2).c_str(), nullptr, 16);
+            } else continue;
+            replay.push_back(e);
+        }
+        fclose(f);
+        fprintf(stderr, "[harness] replaying %zu input events from %s\n", replay.size(), opt.replayInput.c_str());
+    }
     auto withCommas = [](uint64_t v) {
         std::string s = std::to_string(v);
         for (int i = (int)s.size() - 3; i > 0; i -= 3) s.insert((size_t)i, ",");
@@ -1186,16 +1277,32 @@ int main(int argc, char** argv) {
     double guestTime = timeBase;
 
     std::vector<uint32_t> pcSamples, raSamples;
-    std::vector<uint32_t> frameSamples, workerSamples, workerMost;
+    std::vector<uint32_t> frameSamples, workerSamples, workerMost, roundSamples;
+    std::vector<float> timedSamples;
     std::vector<uint32_t> l1Samples;
     uint32_t lastInstructions = 0, lastStall = 0;
     bool statsStarted = false;
     double timeSum[3] = {0, 0, 0};
     int timeSamples = 0;
+    // RVC_MARK=TEXT: at each TEXT on the console, the card's tick time a frame since the last one (every frame timed
+    // with RVC_STATS_EVERY=1; from --stats-after's start): two programs run in turn in one run are timed apart, on the
+    // same card's clock (gpu_vm's GVM_MARK)
+    const char* markText = getenv("RVC_MARK");
+    double segMs = 0;
+    int segN = 0, markN = 0;
     uint64_t statsInstr0 = 0, statsFrame0 = 0;
     auto statsT0 = t0;
     bool keyboardOwned = false;   // a guest program reads the keyboard device (docs/machine/input.md)
     uint32_t displayMode = 0;     // the guest's display (docs/machine/display.md): 0 while it shows nothing
+    // keys typed into the window go to the guest's console too while it shows no display
+    // and no program there has the keyboard device open; Ctrl+] quits
+    auto typedToGuest = [&](const std::string& typed) {
+        std::lock_guard<std::mutex> lock(g_inputMutex);
+        for (char c : typed) {
+            if (c == kQuitKey) g_quit = true;
+            else if (!keyboardOwned && displayMode == 0) g_stdinQueue.push_back(c);
+        }
+    };
     // --cpu: when the interpreter started, its passes, the bands of Linux's RAM still to show,
     // the bands sent with the last frame, and the copy the commit of this frame makes
     double cpuT0 = 0, cpuLowAt = 0;
@@ -1275,6 +1382,13 @@ int main(int argc, char** argv) {
         if (!opt.statsFrom.empty() && !statsFromHit) {
             size_t from = before >= opt.statsFrom.size() ? before - opt.statsFrom.size() + 1 : 0;
             if (transcript.find(opt.statsFrom, from) != std::string::npos) statsFromHit = true;
+        }
+        if (markText && *markText) {
+            size_t n = strlen(markText), from = before >= n ? before - n + 1 : 0, p;
+            while ((p = transcript.find(markText, from)) != std::string::npos) {
+                fprintf(stderr, "[harness] mark %d: tick %.4f ms a frame over %d frames\n", markN++, segN ? segMs / segN : 0.0, segN);
+                segMs = 0, segN = 0, from = p + n;
+            }
         }
         while (expectIdx < opt.expectSend.size()) {
             size_t p = transcript.find(opt.expectSend[expectIdx].first, expectScanFrom);
@@ -1514,6 +1628,7 @@ int main(int argc, char** argv) {
         if (haveClock && !opt.frameLog.empty() && (opt.statsFrom.empty() || statsStarted)) {
             double us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();
             frameSamples.insert(frameSamples.end(), {texel(36, 3), (uint32_t)(clock - lastClock), texel(40, 2), (uint32_t)us});
+            roundSamples.push_back(backend.tickRounds);   // (the rounds the frame was given: --unity fits them to the card's time)
         }
         lastInstructions = haveClock ? (uint32_t)(clock - lastClock) : 0;
         lastStall = texel(40, 2);
@@ -1773,6 +1888,13 @@ int main(int argc, char** argv) {
         {
             uint32_t batch[4] = {0, 0, 0, 0};
             int n = 0;
+            for (; inputNext < replay.size() && replay[inputNext].t <= wall; ++inputNext) {
+                const InputEvent& e = replay[inputNext];
+                if (e.kind == 'P') replayPointer.x = e.p[0], replayPointer.y = e.p[1], replayPointer.panelW = e.p[2], replayPointer.panelH = e.p[3],
+                                   replayPointer.buttons = (unsigned)e.p[4];
+                else if (e.kind == 'K') keyEvents.push_back(e.code);
+                else typedToGuest(e.typed);
+            }
             for (; n < 4 && !keyEvents.empty(); ++n) {
                 batch[n] = keyEvents.front();
                 keyEvents.pop_front();
@@ -1784,6 +1906,13 @@ int main(int argc, char** argv) {
                 pointer.y = 300 + 60 * (float)sin(turn);
             }
             if (opt.pointerButton) pointer.buttons = t >= opt.pointerButtonFrom && t < opt.pointerButtonTo ? opt.pointerButton : 0;
+            if (!replay.empty()) pointer.x = replayPointer.x, pointer.y = replayPointer.y, pointer.panelW = replayPointer.panelW,
+                                 pointer.panelH = replayPointer.panelH, pointer.buttons = replayPointer.buttons;
+            if (inputLog && (pointer.x != recorded.x || pointer.y != recorded.y || pointer.panelW != recorded.panelW ||
+                             pointer.panelH != recorded.panelH || pointer.buttons != recorded.buttons)) {
+                fprintf(inputLog, "%.4f P %g %g %g %g %u\n", wall, pointer.x, pointer.y, pointer.panelW, pointer.panelH, pointer.buttons);
+                recorded = pointer, recorded.keys.clear();
+            }
             mat.setVector("_InputPointer", pointer.x, pointer.y, pointer.panelW, pointer.panelH);
             mat.setInt("_InputButtons", pointer.buttons);
             mat.setInt("_HostMs", (int64_t)(uint32_t)(t * 1000.0));   // a clock programs read without a system call
@@ -1923,12 +2052,25 @@ int main(int argc, char** argv) {
         }
         // The GPU times the two draws of one frame per refresh of the text box.
         // with --stats-after, one frame in 64 is timed on the GPU and the times are averaged
-        bool sampleTimes = statsStarted && opt.statsFrom.empty() && (frame & 63) == 0;
+        static const uint64_t statsMask = (getenv("RVC_STATS_EVERY") && atoi(getenv("RVC_STATS_EVERY"))) || !altDirs.empty() ? 0u : 63u;   // (every frame timed)
+        bool sampleTimes = statsStarted && opt.statsFrom.empty() && (frame & statsMask) == 0;
         if (sampleTimes && backend.gpuTimes(gpuTickMs, gpuCommitMs, gpuDeviceMs)) {
             timeSum[0] += gpuTickMs;
+            segMs += gpuTickMs, segN++;
             timeSum[1] += gpuCommitMs;
             timeSum[2] += gpuDeviceMs;
             ++timeSamples;
+            if (!altDirs.empty() && backend.frameTimes != altSeen && backend.frameVariant < altMs.size()) {   // (a timing just in, of its tick)
+                altSeen = backend.frameTimes;
+                altMs[backend.frameVariant] += gpuTickMs, altN[backend.frameVariant]++;
+            }
+        }
+        if (!altDirs.empty()) {
+            uint64_t x = (frame >> altShift) * 0x9e3779b97f4a7c15ull;
+            x ^= x >> 31, x *= 0xbf58476d1ce4e5b9ull, x ^= x >> 29;
+            size_t v = (size_t)(x % altMs.size());
+            backend.useTickVariant(v);
+            if (statsStarted) altPicked[v]++;
         }
         {
             // every pass every frame, as a world draws them (Unity's _GpuPasses 0xff): a list that asked for a pass the
@@ -1945,17 +2087,31 @@ int main(int argc, char** argv) {
             mat.setInt("_GpuPasses", passes);
         }
         if (opt.unityMs > 0) {   // (--unity: a frame timed whenever the last timing is in; the rounds follow the card's time)
+            static const bool worldPace = getenv("RVC_UNITY_PACE") && !strcmp(getenv("RVC_UNITY_PACE"), "world");   // (the world's steady mode)
             double a, b, c;
             backend.gpuTimes(a, b, c);
             if (backend.frameTimes != unitySeen && backend.frameMs > 0 && backend.frameRounds) {
                 unitySeen = backend.frameTimes;
+                if (!opt.frameLog.empty()) timedSamples.insert(timedSamples.end(), {(float)frame, (float)backend.frameMs, (float)backend.frameRounds});   // (each timing as it came: the frame, its card ms, its rounds)
                 // (a bursty game's frames overshoot or undershoot F - U on the card, as the world's steady mode does: compare
                 // machines by fps at the card time a frame they took, bench_games/grid.py's "at budget")
                 // (with R, a frame costs the larger of its card time and its rounds' CPU: Unity's CPU and the card overlap)
                 double cost = (std::max)(backend.frameMs, backend.frameRounds * opt.unityRoundMs);
                 double want = backend.frameRounds * (opt.unityMs - opt.unityOverMs) / cost;
-                unityRounds = (std::max)(1.0, (std::min)(64.0, unityRounds + (want - unityRounds) * 0.5));
+                unityRoundCost = cost / backend.frameRounds;
+                if (!worldPace) unityRounds = (std::max)(1.0, (std::min)(64.0, unityRounds + (want - unityRounds) * 0.5));
                 if (statsStarted) unityMsSum += cost, unityTimed++;
+            }
+            if (worldPace && unityRoundCost > 0) {   // (EmuMachine.SteadyRounds: a frame's time smoothed a tenth a frame, the
+                // rounds' cap one down or an eighth more every sixth frame over F, one up under 0.8 F, as at the fastest speed)
+                double dt = opt.unityOverMs + unityRounds * unityRoundCost;
+                unitySmoothMs += (dt - unitySmoothMs) * 0.1;
+                if (--unityGuard <= 0) {
+                    unityGuard = 6;
+                    if (unitySmoothMs > opt.unityMs) unityCap = (std::max)(1, unityCap - 1 - unityCap / 8);
+                    else if (unitySmoothMs < opt.unityMs * 0.8 && unityCap < 64) unityCap++;
+                }
+                unityRounds = unityCap;
             }
             if (statsStarted) unityRoundSum += (uint32_t)unityRounds, unityFrames++;
         }
@@ -2133,10 +2289,10 @@ int main(int argc, char** argv) {
             backend.viewRender();
             lastViz = wall;
             pointer = memoryViewTakeInput();
-            keyEvents.insert(keyEvents.end(), pointer.keys.begin(), pointer.keys.end());
+            if (inputLog)
+                for (uint32_t k : pointer.keys) fprintf(inputLog, "%.4f K %x\n", wall, k);
+            if (replay.empty()) keyEvents.insert(keyEvents.end(), pointer.keys.begin(), pointer.keys.end());
             pointer.keys.clear();
-            // keys typed into the window go to the guest's console too while it shows no display
-            // and no program there has the keyboard device open; Ctrl+] quits
             for (char c : memoryViewTakeHostKeys()) {
                 if (c == 's') soundSwitch = !soundSwitch;
                 else opt.volume = (std::max)(0, (std::min)(100, opt.volume + (c == '+' ? 5 : -5)));
@@ -2144,13 +2300,13 @@ int main(int argc, char** argv) {
                 if (audioOpen && !soundSwitch) audio.silence();
             }
             std::string typed = memoryViewTakeKeys();
-            if (!typed.empty()) {
-                std::lock_guard<std::mutex> lock(g_inputMutex);
-                for (char c : typed) {
-                    if (c == kQuitKey) g_quit = true;
-                    else if (!keyboardOwned && displayMode == 0) g_stdinQueue.push_back(c);
-                }
+            if (inputLog && !typed.empty()) {
+                fprintf(inputLog, "%.4f T ", wall);
+                for (unsigned char c : typed) fprintf(inputLog, "%02x", c);
+                fputc(10, inputLog);
             }
+            if (!replay.empty()) typed = typed.find(kQuitKey) != std::string::npos ? std::string(1, kQuitKey) : "";
+            typedToGuest(typed);
         }
         if (viewShown && !backend.viewOpen()) break;  // closing the memory window quits
         if (g_quit) break;
@@ -2159,6 +2315,7 @@ int main(int argc, char** argv) {
         if (opt.maxSeconds > 0 && wall >= opt.maxSeconds) { if (!opt.until.empty()) exitCode = 3; break; }
     }
 
+    if (inputLog) fclose(inputLog);
     // Drain outstanding readbacks so trailing output is not lost.
     while (exitCode != 1 && backend.rowPending() > 0 && takeRow()) {}
     if (audioOpen) audio.close();
@@ -2262,6 +2419,10 @@ int main(int argc, char** argv) {
         if (opt.unityMs > 0 && unityFrames)
             fprintf(stderr, "STATS unity: a frame %.2f ms of the guest's clock, %.2f ms of rounds; %.2f rounds a frame, %.3f ms on the card a frame (%llu timed; the rounds' CPU at R %.2f ms when larger)\n",
                     opt.unityMs, opt.unityMs - opt.unityOverMs, (double)unityRoundSum / (double)unityFrames, unityTimed ? unityMsSum / (double)unityTimed : 0.0, (unsigned long long)unityTimed, opt.unityRoundMs);
+        for (size_t v = 0; v < altMs.size() && !altDirs.empty(); ++v)
+            fprintf(stderr, "STATS tick %zu %s: %.4f ms a frame's tick over %llu frames timed (%llu frames run)\n", v,
+                    v ? altDirs[v - 1].c_str() : opt.rvcDir.c_str(), altN[v] ? altMs[v] / (double)altN[v] : 0.0,
+                    (unsigned long long)altN[v], (unsigned long long)altPicked[v]);
         if (timeSamples > 0)
             fprintf(stderr, "STATS gpu per frame: tick %.3f ms, commit %.3f ms, device %.3f ms; wall %.3f ms\n", timeSum[0] / timeSamples,
                     timeSum[1] / timeSamples, timeSum[2] / timeSamples, 1000.0 * secs / (double)frames);
@@ -2299,6 +2460,9 @@ int main(int argc, char** argv) {
         }
     }
     if (!opt.frameLog.empty()) writeFileBinary(opt.frameLog, (const uint8_t*)frameSamples.data(), frameSamples.size() * 4);
+    // (beside it, each frame's rounds, and each timing as it came: frame, card ms, rounds as floats)
+    if (!opt.frameLog.empty()) writeFileBinary(opt.frameLog + ".rounds", (const uint8_t*)roundSamples.data(), roundSamples.size() * 4);
+    if (!opt.frameLog.empty()) writeFileBinary(opt.frameLog + ".timed", (const uint8_t*)timedSamples.data(), timedSamples.size() * 4);
     // (beside it, a pass's worker cores: their instructions, how many ran, how many a whole pass, how many only waited)
     if (!opt.frameLog.empty() && !workerSamples.empty())
         writeFileBinary(opt.frameLog + ".workers", (const uint8_t*)workerSamples.data(), workerSamples.size() * 4),
