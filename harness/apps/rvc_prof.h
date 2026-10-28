@@ -20,18 +20,19 @@ static u64 pass_no = 0;
 struct PcCell { u64 exec; u32 loads, stores, word, pad; };
 struct PcPage { PcCell cell[1024]; };
 static std::unordered_map<u64, PcPage*> pc_pages;
-static u64 cache_key[256];
-static PcPage* cache_page[256];
+static u64 cache_key[256][16];      // each core's last pages, by the page's low bits
+static PcPage* cache_page[256][16];
 static u32 pend_loads[256], pend_stores[256];   // the instruction now running: counted at its step
 
 static inline PcCell& cell(int hart, u32 satp, u32 pc) {
     u64 key = ((u64)(hart != 0) << 62) | (pc_cores ? (u64)(hart & 255) << 54 : 0) | ((u64)(satp & 0x3fffff) << 20) | (pc >> 12);
-    if (cache_key[hart] != key || !cache_page[hart]) {
+    u32 w = (pc >> 12) & 15;
+    if (cache_key[hart][w] != key || !cache_page[hart][w]) {
         PcPage*& p = pc_pages[key];
         if (!p) p = (PcPage*)calloc(1, sizeof(PcPage));
-        cache_key[hart] = key, cache_page[hart] = p;
+        cache_key[hart][w] = key, cache_page[hart][w] = p;
     }
-    return cache_page[hart]->cell[(pc >> 2) & 1023];
+    return cache_page[hart][w]->cell[(pc >> 2) & 1023];
 }
 
 // ---- memory: each texel's loads and stores by class, and how many distinct texels a core stored a pass
@@ -44,6 +45,8 @@ static u64 distinct_hist[2][257];         // passes by distinct texels stored (i
 struct Frame { u32 target, ret; u64 at, serial; };
 struct Stack { std::vector<Frame> f; u64 clock = 0; };
 static std::unordered_map<u64, Stack> stacks;
+static u64 stack_key[256];          // each core's last stack, by its key (an element of stacks stays where it is)
+static Stack* stack_at[256];
 struct Edge { u64 calls = 0, inclusive = 0; };
 static std::unordered_map<u64, Edge> edges[2];   // (caller << 32) | callee; caller 0: none seen
 static u64 serial_next = 1;
@@ -181,7 +184,8 @@ static inline void step(Core& c, u32 op, u32 rd, u32 rs1, u32 ins, u32 pc, u32 n
     pend_loads[c.hart] = pend_stores[c.hart] = 0;
     // (a stack for each thread: tp is the C library's thread pointer in a program, the task in the kernel)
     u64 key = ((u64)c.hart << 56) | ((u64)(c.priv == PRIV_S) << 55) | ((u64)(c.satp & 0x3fffff) << 32) | c.x[4];
-    Stack& s = stacks[key];
+    if (stack_key[c.hart] != key || !stack_at[c.hart]) stack_key[c.hart] = key, stack_at[c.hart] = &stacks[key];
+    Stack& s = *stack_at[c.hart];
     s.clock++;
     int k = c.hart != 0;
     bool call = (op == 0x6f || op == 0x67) && (rd == 1 || rd == 5);
