@@ -518,7 +518,7 @@ def zerotail_nommu():
 # (16-byte romfs packing): what the pool hands out is checked on copies in tmpfs
 ZERO_TAIL_NOMMU = ('zerotest 12 4; mkdir -p /tmp/t; find /usr/share /usr/bin /etc -maxdepth 1 -type f -size -256k | '
                    'while read f; do cp "$f" /tmp/t/; done; tailtest /tmp/t/*')
-CC_BYTES_NOMMU = '840198fe'   # the devices at 0x80000000 (libmcw.a's and libgles.a's device addresses, uop.h's RAM test in memcpy and memset); libc.a's float libm (linux/userland/libm), memcpy and memset through the commit's copy, memmove and memcmp a word a turn, a double's printf in doubles; libmcw.a's mc_publish (28 October 2026)
+CC_BYTES_NOMMU = 'bf24b082'   # memcpy's commit's copy from 4 KB and mcwx's calls round the row on RISC-V (28 October 2026, later); the devices at 0x80000000 (libmcw.a's and libgles.a's device addresses, uop.h's RAM test in memcpy and memset); libc.a's float libm (linux/userland/libm), memcpy and memset through the commit's copy, memmove and memcmp a word a turn, a double's printf in doubles; libmcw.a's mc_publish (28 October 2026)
 
 
 def without_mmu(image):
