@@ -62,11 +62,34 @@ def with_ram(dtb):
     return bytes(out)
 
 
+def with_seed(dtb):
+    """The device tree with an rng-seed of 128 bytes in /chosen, which the kernel trusts (RANDOM_TRUST_BOOTLOADER):
+    the random pool is ready before /init. Without it nothing credited the pool, and a getrandom() without
+    GRND_NONBLOCK waited for ever. The kernel's fast load takes the first 64 bytes and credits nothing; what is
+    past them is credited (a seed of 64 left crng_init at 1). The struct block grows by the property, the strings
+    block by its name."""
+    assert b'rng-seed\0' not in dtb
+    head = list(struct.unpack('>10I', dtb[:40]))
+    st, ss = head[3], head[8]
+    assert head[2] < st and st + ss == head[1], 'device tree: the strings are not last'
+    seed = bytes.fromhex(os.environ['RNG_SEED']) if os.environ.get('RNG_SEED') else os.urandom(128)   # (a fixed one to compare kernels)
+    node = dtb.index(b'\0\0\0\x01chosen\0', head[2]) + 4
+    after = node + (len(b'chosen\0') + 3) // 4 * 4
+    prop = struct.pack('>III', 3, len(seed), ss) + seed
+    out = bytearray(dtb[:after]) + prop + dtb[after:] + b'rng-seed\0'
+    head[1] = len(out)
+    head[3] += len(prop)
+    head[8] += len(b'rng-seed\0')
+    head[9] += len(prop)
+    out[:40] = struct.pack('>10I', *head)
+    return bytes(out)
+
+
 TREE_AT = 0x2200000   # the device tree in the boot image (tools/make_linux_image.py)
 tree = open(os.path.join(D, 'dts.bin'), 'rb').read()
 payload = open(os.path.join(D, 'linux_payload.bin'), 'rb').read()
 assert payload[TREE_AT:] == tree, 'linux_payload.bin does not end with dts.bin'
-tree = with_ram(tree)
+tree = with_seed(with_ram(tree))
 open(os.path.join(D, 'dts.bin'), 'wb').write(tree)
 open(os.path.join(D, 'linux_payload.bin'), 'wb').write(payload[:TREE_AT] + tree)
 # what this machine can neither run nor read leaves the ROM (slim.py)
