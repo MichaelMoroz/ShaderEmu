@@ -510,6 +510,148 @@ index 8c5cf4b..f8b1cbe 100644
  
  	bool main_river = false;
  	if (found) {
+diff --git a/src/linkgraph/linkgraphjob.cpp b/src/linkgraph/linkgraphjob.cpp
+index 365b035..2628cbf 100644
+--- a/src/linkgraph/linkgraphjob.cpp
++++ b/src/linkgraph/linkgraphjob.cpp
+@@ -56,8 +56,29 @@ void LinkGraphJob::EraseFlows(StationID from)
+  * Spawn a thread if possible and run the link graph job in the thread. If
+  * that's not possible run the job right now in the current thread.
+  */
++#ifdef WITH_SHADEREMU
++/** Whether SpawnThread leaves the job to run later (LinkGraphSchedule::SpawnAll, of a load). */
++bool _se_spawn_later = false;
++
++/** A job a load spawned, run now: as a thread would have run it, on its own copy of the graph. */
++void LinkGraphJob::SeRunPending()
++{
++	if (!this->se_pending) return;
++	this->se_pending = false;
++	LinkGraphSchedule::Run(this);
++}
++#endif
++
+ void LinkGraphJob::SpawnThread()
+ {
++#ifdef WITH_SHADEREMU
++	/* (no threads here: a load's jobs, all spawned at once, were 18 million instructions of the start to the game;
++	 * they run one a tick from the first, each before it is first asked about; docs/games/openttd.md, "The start") */
++	if (_se_spawn_later) {
++		this->se_pending = true;
++		return;
++	}
++#endif
+ 	if (!StartNewThread(&this->thread, "ottd:linkgraph", &(LinkGraphSchedule::Run), this)) {
+ 		/* Of course this will hang a bit.
+ 		 * On the other hand, if you want to play games which make this hang noticeably
+@@ -75,6 +96,15 @@ void LinkGraphJob::SpawnThread()
+  */
+ void LinkGraphJob::JoinThread()
+ {
++#ifdef WITH_SHADEREMU
++	if (this->se_pending) {
++		if (CleaningPool() || this->IsJobAborted()) {
++			this->se_pending = false;
++		} else {
++			this->SeRunPending();
++		}
++	}
++#endif
+ 	if (this->thread.joinable()) {
+ 		this->thread.join();
+ 	}
+diff --git a/src/linkgraph/linkgraphjob.h b/src/linkgraph/linkgraphjob.h
+index b308211..1240805 100644
+--- a/src/linkgraph/linkgraphjob.h
++++ b/src/linkgraph/linkgraphjob.h
+@@ -170,6 +170,11 @@ protected:
+ 	void EraseFlows(StationID from);
+ 	void JoinThread();
+ 	void SpawnThread();
++#ifdef WITH_SHADEREMU
++	bool se_pending = false; ///< spawned by a load and not run yet: run a tick at a time, or when it is first asked about
++public:
++	void SeRunPending();
++#endif
+ 
+ public:
+ 	/**
+@@ -188,7 +193,15 @@ public:
+ 	 * This is allowed to spuriously return an incorrect value.
+ 	 * @return True if job has actually finished.
+ 	 */
++#ifdef WITH_SHADEREMU
++	inline bool IsJobCompleted() const
++	{
++		if (this->se_pending) const_cast<LinkGraphJob *>(this)->SeRunPending();
++		return this->job_completed.load(std::memory_order_acquire);
++	}
++#else
+ 	inline bool IsJobCompleted() const { return this->job_completed.load(std::memory_order_acquire); }
++#endif
+ 
+ 	/**
+ 	 * Check if job has been aborted.
+diff --git a/src/linkgraph/linkgraphschedule.cpp b/src/linkgraph/linkgraphschedule.cpp
+index ea7195e..523139f 100644
+--- a/src/linkgraph/linkgraphschedule.cpp
++++ b/src/linkgraph/linkgraphschedule.cpp
+@@ -108,11 +108,30 @@ void LinkGraphSchedule::JoinNext()
+  * Start all threads in the running list. This is only useful for save/load.
+  * Usually threads are started when the job is created.
+  */
++#ifdef WITH_SHADEREMU
++void LinkGraphSchedule::SeRunOnePending()
++{
++	for (LinkGraphJob *job : this->running) {
++		if (job->se_pending) {
++			job->SeRunPending();
++			return;
++		}
++	}
++}
++#endif
++
+ void LinkGraphSchedule::SpawnAll()
+ {
++#ifdef WITH_SHADEREMU
++	extern bool _se_spawn_later;
++	_se_spawn_later = true;
++#endif
+ 	for (auto &it : this->running) {
+ 		it->SpawnThread();
+ 	}
++#ifdef WITH_SHADEREMU
++	_se_spawn_later = false;
++#endif
+ }
+ 
+ /**
+@@ -201,6 +220,10 @@ void AfterLoad_LinkGraphPauseControl()
+  */
+ void OnTick_LinkGraph()
+ {
++#ifdef WITH_SHADEREMU
++	/* (a job a load spawned, one a tick: SpawnAll) */
++	LinkGraphSchedule::instance.SeRunOnePending();
++#endif
+ 	if (TimerGameEconomy::date_fract != LinkGraphSchedule::SPAWN_JOIN_TICK) return;
+ 	TimerGameEconomy::Date offset{TimerGameEconomy::date.base() % (_settings_game.linkgraph.recalc_interval / EconomyTime::SECONDS_PER_DAY)};
+ 	if (offset == 0) {
+diff --git a/src/linkgraph/linkgraphschedule.h b/src/linkgraph/linkgraphschedule.h
+index 3cd2b0d..f8446f7 100644
+--- a/src/linkgraph/linkgraphschedule.h
++++ b/src/linkgraph/linkgraphschedule.h
+@@ -47,6 +47,9 @@ protected:
+ 	JobList running;               ///< Currently running jobs.
+ 
+ public:
++#ifdef WITH_SHADEREMU
++	void SeRunOnePending();
++#endif
+ 	/* This is a tick where not much else is happening, so a small lag might go unnoticed. */
+ 	static const uint SPAWN_JOIN_TICK = 21; ///< Tick when jobs are spawned or joined every day.
+ 	static LinkGraphSchedule instance;
 diff --git a/src/music.cpp b/src/music.cpp
 index ee33585..03a3fb3 100644
 --- a/src/music.cpp
@@ -625,7 +767,7 @@ index dc20f33..61ceb18 100644
  	CallbackID callback{}; ///< Callback being resolved.
  	uint32_t callback_param1 = 0; ///< First parameter (var 10) of the callback.
 diff --git a/src/openttd.cpp b/src/openttd.cpp
-index 7d585b0..8e450f4 100644
+index 7d585b0..abcc37c 100644
 --- a/src/openttd.cpp
 +++ b/src/openttd.cpp
 @@ -73,6 +73,11 @@
@@ -640,7 +782,21 @@ index 7d585b0..8e450f4 100644
  #include "misc_cmd.h"
  #include "timer/timer.h"
  #include "timer/timer_game_calendar.h"
-@@ -370,6 +375,30 @@ void OpenBrowser(const std::string &url)
+@@ -333,6 +338,13 @@ static void LoadIntroGame(bool load_newgrfs = true)
+ 	SetupColoursAndInitialWindow();
+ 
+ 	/* Load the default opening screen savegame */
++#ifdef WITH_SHADEREMU
++	/* (a game asked for at start, -g, is loaded at the first tick: the title's game, never seen, is not loaded before
++	 * it, which was a sixth of the start to the game; docs/games/openttd.md, "The start") */
++	if (!load_newgrfs && _switch_mode == SM_LOAD_GAME) {
++		SetLocalCompany(COMPANY_SPECTATOR);
++	} else
++#endif
+ 	if (SaveOrLoad("opntitle.dat", SLO_LOAD, DFT_GAME_FILE, BASESET_DIR) != SL_OK) {
+ 		GenerateWorld(GWM_EMPTY, 64, 64); // if failed loading, make empty world.
+ 		SetLocalCompany(COMPANY_SPECTATOR);
+@@ -370,6 +382,30 @@ void OpenBrowser(const std::string &url)
  	}
  }
  
@@ -671,7 +827,7 @@ index 7d585b0..8e450f4 100644
  /** Callback structure of statements to be executed after the NewGRF scan. */
  struct AfterNewGRFScan : NewGRFScanCallback {
  	TimerGameCalendar::Year startyear = CalendarTime::INVALID_YEAR; ///< The start year.
-@@ -433,6 +462,9 @@ struct AfterNewGRFScan : NewGRFScanCallback {
+@@ -433,6 +469,9 @@ struct AfterNewGRFScan : NewGRFScanCallback {
  		IConsoleInit();
  		InitializeGUI();
  		IConsoleCmdExec("exec scripts/autoexec.scr 0");
@@ -681,7 +837,7 @@ index 7d585b0..8e450f4 100644
  
  		/* Make sure _settings is filled with _settings_newgame if we switch to a game directly */
  		if (_switch_mode != SM_NONE) MakeNewgameSettingsLive();
-@@ -1173,6 +1205,14 @@ void SwitchToMode(SwitchMode new_mode)
+@@ -1173,6 +1212,14 @@ void SwitchToMode(SwitchMode new_mode)
  			}
  
  			UpdateSocialIntegration(GM_MENU);
@@ -813,6 +969,215 @@ index c0aaec4..3e79686 100644
  
  public:
  	RandomAccessFile(std::string_view filename, Subdirectory subdir);
+diff --git a/src/saveload/saveload.cpp b/src/saveload/saveload.cpp
+index ebec3d2..9613ccc 100644
+--- a/src/saveload/saveload.cpp
++++ b/src/saveload/saveload.cpp
+@@ -2684,17 +2684,118 @@ struct ZlibSaveFilter : SaveFilter {
+  */
+ static const lzma_stream _lzma_init = LZMA_STREAM_INIT;
+ 
++#ifdef WITH_SHADEREMU
++#include <mcwx.h>
++int VpWorkersOpen(); /* viewport.cpp */
++
++/**
++ * A load's LZMA decoded ahead by a worker into a ring the first core takes from, while it reads what it took
++ * (docs/games/openttd.md, "The start"): the stream's state is the worker's while it runs. Its memory comes from
++ * the first core (the decoder's dictionary, made when the first core decodes the first piece), and from a reserve
++ * here on the worker, which may not allocate. Each word in 16 bytes of its own: the core that stores it alone does.
++ */
++struct alignas(16) SeLzmaAhead {
++	static constexpr uint32_t CHUNK = 64 * 1024, RING = 16 * CHUNK, RESERVE = 64 * 1024, FREES = 32;
++	struct alignas(16) Word { volatile uint32_t value = 0; };
++	lzma_stream lzma = LZMA_STREAM_INIT;
++	lzma_allocator allocator{};
++	Word produced;      ///< bytes made (the worker's)
++	Word state;         ///< 0 on, 1 at the stream's end, 2 an error, 3 the reserve too small (the worker's)
++	Word consumed;      ///< bytes taken (the first core's)
++	Word stop;          ///< the first core gives up (the first core's)
++	alignas(16) uint8_t reserve[RESERVE];
++	uint32_t reserve_used = 0;
++	uint32_t frees = 0;
++	void *freed[FREES]; ///< blocks of the first core's the worker let go: freed when it has ended
++	uint8_t *ring = nullptr;
++};
++
++static void *SeLzmaAlloc(void *opaque, size_t nmemb, size_t size)
++{
++	SeLzmaAhead *a = static_cast<SeLzmaAhead *>(opaque);
++	size_t bytes = nmemb * size;
++	if (mcw_on_worker()) {
++		bytes = (bytes + 15) & ~size_t{15};
++		if (a->reserve_used + bytes > SeLzmaAhead::RESERVE) return nullptr;
++		void *p = a->reserve + a->reserve_used;
++		a->reserve_used += static_cast<uint32_t>(bytes);
++		return p;
++	}
++	uint8_t *p = static_cast<uint8_t *>(::operator new(bytes, std::nothrow));
++	/* (a store to each page here, so that a worker that writes it later does not stop there) */
++	if (p != nullptr) {
++		for (size_t i = 0; i < bytes; i += 4096) p[i] = 0;
++		if (bytes > 0) p[bytes - 1] = 0;
++	}
++	return p;
++}
++
++static void SeLzmaFree(void *opaque, void *p)
++{
++	SeLzmaAhead *a = static_cast<SeLzmaAhead *>(opaque);
++	uint8_t *q = static_cast<uint8_t *>(p);
++	if (p == nullptr || (q >= a->reserve && q < a->reserve + SeLzmaAhead::RESERVE)) return;
++	if (mcw_on_worker()) {
++		if (a->frees < SeLzmaAhead::FREES) a->freed[a->frees++] = p;
++		return;
++	}
++	::operator delete(p);
++}
++
++/** The worker's job: the rest of the stream into the ring, a chunk at a time, as room is left in it. */
++static uint32_t SeLzmaJob(uint32_t at, uint32_t)
++{
++	SeLzmaAhead *a = reinterpret_cast<SeLzmaAhead *>(at);
++	for (;;) {
++		const uint32_t made = a->produced.value;
++		while (made + SeLzmaAhead::CHUNK - a->consumed.value > SeLzmaAhead::RING) {
++			if (a->stop.value) return 0;
++			mc_end_pass();
++		}
++		a->lzma.next_out = a->ring + made % SeLzmaAhead::RING;
++		a->lzma.avail_out = SeLzmaAhead::CHUNK;
++		lzma_ret r = LZMA_OK;
++		while (a->lzma.avail_out != 0 && r == LZMA_OK) r = lzma_code(&a->lzma, LZMA_RUN);
++		a->produced.value = made + (SeLzmaAhead::CHUNK - static_cast<uint32_t>(a->lzma.avail_out));
++		if (r == LZMA_STREAM_END) {
++			a->state.value = 1;
++			return 0;
++		}
++		if (r != LZMA_OK) {
++			a->state.value = r == LZMA_MEM_ERROR ? 3 : 2;
++			return 0;
++		}
++	}
++}
++#endif
++
+ /** Filter without any compression. */
+ struct LZMALoadFilter : LoadFilter {
++#ifdef WITH_SHADEREMU
++	std::unique_ptr<SeLzmaAhead> ahead;
++	lzma_stream &lzma;                 ///< (ahead's)
++	std::vector<uint8_t> input;        ///< the whole file, read at the first Read
++	bool started = false;
++	mcw_handle job = 0;
++	uint32_t taken = 0;
++#else
+ 	lzma_stream lzma;                  ///< Stream state that we are reading from.
++#endif
+ 	uint8_t fread_buf[MEMORY_CHUNK_SIZE]; ///< Buffer for reading from the file.
+ 
+ 	/**
+ 	 * Initialise this filter.
+ 	 * @param chain The next filter in this chain.
+ 	 */
++#ifdef WITH_SHADEREMU
++	LZMALoadFilter(std::shared_ptr<LoadFilter> chain) : LoadFilter(std::move(chain)), ahead(std::make_unique<SeLzmaAhead>()), lzma(ahead->lzma)
++	{
++		this->ahead->allocator = { SeLzmaAlloc, SeLzmaFree, this->ahead.get() };
++		this->lzma.allocator = &this->ahead->allocator;
++#else
+ 	LZMALoadFilter(std::shared_ptr<LoadFilter> chain) : LoadFilter(std::move(chain)), lzma(_lzma_init)
+ 	{
++#endif
+ 		/* Allow saves up to 256 MB uncompressed */
+ 		if (lzma_auto_decoder(&this->lzma, 1 << 28, 0) != LZMA_OK) SlError(STR_GAME_SAVELOAD_ERROR_BROKEN_INTERNAL_ERROR, "cannot initialize decompressor");
+ 	}
+@@ -2702,11 +2803,85 @@ struct LZMALoadFilter : LoadFilter {
+ 	/** Clean everything up. */
+ 	~LZMALoadFilter()
+ 	{
++#ifdef WITH_SHADEREMU
++		if (this->job != 0) {
++			this->ahead->stop.value = 1;
++			mcw_join(this->job);
++		}
++		for (uint32_t i = 0; i < this->ahead->frees; i++) ::operator delete(this->ahead->freed[i]);
++		::operator delete(this->ahead->ring);
++#endif
+ 		lzma_end(&this->lzma);
+ 	}
+ 
++#ifdef WITH_SHADEREMU
++	/** What the worker made, taken into buf; the first core rests while it has made none. */
++	size_t ReadAhead(uint8_t *buf, size_t size)
++	{
++		SeLzmaAhead &a = *this->ahead;
++		size_t got = 0;
++		while (got < size) {
++			const uint32_t avail = a.produced.value - this->taken;
++			if (avail == 0) {
++				const uint32_t state = a.state.value;
++				if (state != 0 && a.produced.value == this->taken) {
++					if (state == 1) break;
++					SlError(STR_GAME_SAVELOAD_ERROR_BROKEN_INTERNAL_ERROR, state == 3 ? "liblzma wanted memory on a worker" : "liblzma returned error code");
++				}
++				/* (asking whether it is ready serves a worker stopped at a page) */
++				if (!mcw_ready(this->job)) mcw_rest();
++				continue;
++			}
++			const uint32_t at = this->taken % SeLzmaAhead::RING;
++			const size_t n = std::min<size_t>({ static_cast<size_t>(avail), size - got, static_cast<size_t>(SeLzmaAhead::RING - at) });
++			std::copy_n(a.ring + at, n, buf + got);
++			got += n;
++			this->taken += static_cast<uint32_t>(n);
++			a.consumed.value = this->taken;
++		}
++		return got;
++	}
++
++	/** At the first Read: the whole file read, for the decoder to take from at once. */
++	void Start()
++	{
++		this->started = true;
++		for (;;) {
++			const size_t at = this->input.size();
++			this->input.resize(at + MEMORY_CHUNK_SIZE);
++			const size_t n = this->chain->Read(this->input.data() + at, MEMORY_CHUNK_SIZE);
++			this->input.resize(at + n);
++			if (n == 0) break;
++		}
++		this->lzma.next_in = this->input.data();
++		this->lzma.avail_in = this->input.size();
++	}
++#endif
++
+ 	size_t Read(uint8_t *buf, size_t size) override
+ 	{
++#ifdef WITH_SHADEREMU
++		if (this->job != 0) return this->ReadAhead(buf, size);
++		const bool first = !this->started;
++		if (first) this->Start();
++		this->lzma.next_out = buf;
++		this->lzma.avail_out = size;
++		lzma_ret r = LZMA_OK;
++		while (this->lzma.avail_out != 0 && r == LZMA_OK) r = lzma_code(&this->lzma, LZMA_RUN);
++		if (r != LZMA_OK && r != LZMA_STREAM_END) SlError(STR_GAME_SAVELOAD_ERROR_BROKEN_INTERNAL_ERROR, "liblzma returned error code");
++		/* the first piece decoded here (the decoder's memory is made then), the rest by a worker where one is free */
++		if (first && r == LZMA_OK && VpWorkersOpen() > 0) {
++			this->ahead->ring = static_cast<uint8_t *>(::operator new(SeLzmaAhead::RING, std::nothrow));
++			if (this->ahead->ring != nullptr) {
++				for (uint32_t i = 0; i < SeLzmaAhead::RING; i += 4096) this->ahead->ring[i] = 0;
++				mcw_touch(this->ahead.get(), sizeof(SeLzmaAhead));
++				mcw_touch_code(reinterpret_cast<const void *>(SeLzmaJob), 256);
++				mcw_for_end(); /* (a team lingering after a round takes no call) */
++				this->job = mcw_try_call(SeLzmaJob, static_cast<uint32_t>(reinterpret_cast<uintptr_t>(this->ahead.get())), 0);
++			}
++		}
++		return size - this->lzma.avail_out;
++#endif
+ 		this->lzma.next_out  = buf;
+ 		this->lzma.avail_out = size;
+ 
 diff --git a/src/sound.cpp b/src/sound.cpp
 index 31a7ede..a28afc9 100644
 --- a/src/sound.cpp
@@ -1986,7 +2351,7 @@ index 85cc2d5..439e51d 100644
  	if (std::this_thread::get_id() != this->game_thread.get_id()) return;
  
 diff --git a/src/viewport.cpp b/src/viewport.cpp
-index 6427a14..0cc5107 100644
+index 6427a14..c019e53 100644
 --- a/src/viewport.cpp
 +++ b/src/viewport.cpp
 @@ -99,6 +99,11 @@
@@ -2364,7 +2729,7 @@ index 6427a14..0cc5107 100644
  	ViewportDrawParentSprites(&_vd.parent_sprites_to_sort, &_vd.child_screen_sprites_to_draw);
  
  	if (_draw_bounding_boxes) ViewportDrawBoundingBoxes(&_vd.parent_sprites_to_sort);
-@@ -1897,6 +2122,415 @@ static inline void ViewportDraw(const Viewport &vp, int left, int top, int right
+@@ -1897,6 +2122,426 @@ static inline void ViewportDraw(const Viewport &vp, int left, int top, int right
  	);
  }
  
@@ -2451,6 +2816,17 @@ index 6427a14..0cc5107 100644
 +	for (int k = 1; k <= got; k++) _vp_room[k] = 2048;
 +	_vp_workers = got;
 +	return got;
++}
++
++/** The workers, opened if they are not yet (for a load's LZMA decoded ahead, saveload.cpp). */
++int VpWorkersOpen()
++{
++	/* (as VpWorkers asks for them, whatever the blitter: the null video driver's too) */
++	const char *asked = getenv("OPENTTD_WORKERS");
++	int want = asked != nullptr ? 0 : VP_CORES - 1;
++	for (const char *c = asked; c != nullptr && *c >= '0' && *c <= '9'; c++) want = want * 10 + (*c - '0');
++	want = std::min(want, VP_CORES - 1);
++	return want > 0 ? std::max(mcw_open(want), 0) : 0;
 +}
 +
 +/** A part asked for while parts are kept: kept, to be made at the flush. */
