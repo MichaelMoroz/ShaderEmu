@@ -63,13 +63,46 @@ Against GPU-VM's comparison of 26 October (RISC-V on `nommu_hl`, an older image)
 nxray 19.19 pictures/s against 19.17-19.21, Quake III's level 64.5 fps against 64.7-66.5. The tool measures what that
 comparison measured.
 
-## After
+## After (28 October 2026)
 
-    python tools/rv_compare/cmp.py shell after                       # its own shell snapshot (RAM's layout may differ)
-    python tools/rv_compare/run.py --machines before,after --rounds 2  # before and after alternating, part by part
+The machine at riscv-backport's end, 133e575, frozen in `ShaderEmu-rvbp/build/after` (its README.md): the harness and
+tick of c135015 (unchanged to 133e575 but for `rvc_cpu`), and the image of 133e575's `linux/prebuilt` with Uplink's data.
+Every part ran three rounds (`run.py --machines after --rounds 3`, 19:50 to 21:14), none spoiled (the rounds a frame
+of each part are within the usual spread of before's at the same card ms).
+
+Two "after" images were measured and dropped on the way (`build/after/build/images/nommu.v1`, `nommu.v2`, their rows in
+`build/rv_compare/results_v1.jsonl` and `results_v2.jsonl`), each for a regression found and fixed:
+
+- Quake III's server, 20.2 game frames a second to 10.7: `mcwx`'s calls to the lowest free worker (830fbdb, gpu_vm's,
+  25 October) put the server's job and the client's helpers on one core. RISC-V goes round the row again (19561b9);
+  gpu_vm keeps the lowest.
+- Red Alert's film, 12.8 s to 13.9: since 477bcc2 (21 October, lanes) a worker whose team job lingered out was posted
+  again only in the round's wait, one worker a pass, and the film's frames are 66 ms apart. It is posted with the round
+  now (4c405fe; the film 10.8 s).
+
+Also fixed: memset's fill by the commit still had the layout before RAM in one piece (2ecf76d), and the harness held
+the lanes' field 8 rounds, not 8 frames, under `--unity` (2ecf76d). memcpy's commit copy starts at 4 KB, not 2
+(366d9fe: on the card a copy of 2 KB by words was faster).
+
+**What is worse, and why** (ratio after x before; spreads in percent, before / after):
+
+| part | metric | before | after | ratio | why |
+|---|---|---|---|---|---|
+| pinball | frames drawn (fps) | 22.10 | 3.88 | 0.18 | the demo runs flat out and never yields: with the new libm it plays a different (chaotic) game, and the game itself is faster (start to frame 1800: 12.11 s to 9.62) |
+| desktop apps | lists drawn from 3 s (fps) | 1.8 to 2.9 | 1.5 to 2.6 | 0.84 to 0.95 | fewer idle redraws; their windows open sooner (Network 137 ms to 89, Monitor 318 to 226) |
+| memory | memcpy-8KB (MB/s) | 9.35 | 7.62 | 0.81 | a hot cache copied back to back: the commit's copy loses to words there; from 16 KB and over many sources it wins (memcpy-1MB 5.75 to 160) |
+| memory | load-seq-word (MB/s) | 3.49 | 3.24 | 0.93 | a loop compiled by `cc` in the machine; its store twin is 1.13 better; not explained |
+| quake-server | client frames drawn behind the older server answer (%) | 36.5 | 45.5 | 0.80 | the server ticks faster (56.7 to 61.7 a second): more answers arrive behind a frame |
+| quake3-server | game frames a job, a job posted to taken (ms), instructions a job | 2.00, 90, 261 k | 2.32, 99, 298 k | 0.86 to 0.91 | within the spreads (11 to 14%) on both sides; its rate, server game frames a second, is 1.07 better |
+| quake3-menu | menu frames (fps) | 74.86 | 72.46 | 0.97 | not explained: the same rounds a frame, no pass ended by a copy or fill in its window (`rvc_cpu`, `prof_parts.py`); memcpy and memset under 1.5% of core 0 |
+| video-mpg | frames drawn (fps) | 19.40 | 19.08 | 0.98 | the card fit 1.6% fewer rounds a frame (8.23 to 8.10); the guest's copies cost 0.5% of core 0 |
+
+Tiberian Dawn's "game frames" reads only the last short `tdstat` window (spread 11% on both sides): its "start to frame
+1300" is the measure.
+
+    python tools/rv_compare/cmp.py shell after                       # its own shell snapshot (RAM's layout differs)
+    python tools/rv_compare/run.py --machines after --rounds 3
     python tools/rv_compare/report.py before after
 
-`machines.py`'s `after` is the backport's checkout (`bin\rvc_harness.exe`, `build/images/nommu`, `experiments/rvc_opt`);
-`RVCMP_AFTER_ROOT` and `RVCMP_AFTER_IMAGE` move it. Rows are kept by (machine, part, round): run `after` as rounds 0 and
-1 and `before` again beside it as rounds 2 and 3 (`--rounds 4`: the done rounds are skipped), or start a fresh
-`results.jsonl` for the final pair.
+`machines.py`'s `after` is the backport's checkout (`binvc_harness.exe`, `build/images/nommu`, `experiments/rvc_opt`);
+`RVCMP_AFTER_ROOT` and `RVCMP_AFTER_IMAGE` move it (here `RVCMP_AFTER_ROOT=ShaderEmu-rvbp/build/after`).
