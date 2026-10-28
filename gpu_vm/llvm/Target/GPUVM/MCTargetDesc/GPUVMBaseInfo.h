@@ -53,6 +53,7 @@ enum Form : unsigned {
   CtlJR = 27,
   CtlNone = 28,
   CtlBump = 29,
+  FrmPair = 30,
 };
 
 inline unsigned getOpc(uint64_t TSFlags) { return TSFlags & 0xff; }
@@ -131,6 +132,14 @@ unsigned lateBranches();
 // (compares, sign ops, frac, conversions, floor...), not only 0-7
 // (-gpuvm-fx1).
 bool fx1();
+// The tick's PAIRS (GvmAsm::pair_ops): a pair (ld2, sd2: isa.h's d in modes 0
+// and 1, rd and rb) is op 0 of paths 3 and 5; without it the general step's
+// (-gpuvm-pairs). The pair pass (GPUVMPairs.cpp) makes them only then.
+bool pairs();
+// The tick's CC0X (GvmAsm::cc0_fast): its fast loop makes j, call, jr and callr
+// whose ops are path 7's, 3's or 5's and write no register jr reads
+// (-gpuvm-cc0x); without it step12 makes them.
+bool cc0Fast();
 
 // ---- The packing rules, as gvm_asm.h has them, on op words.
 namespace bundle {
@@ -150,6 +159,12 @@ inline bool memOp(uint32_t Op) {
   return opClass(O) == 2 && ((O >> 3) & 7) <= 3 &&
          (Wd == WW || Wd == WH || Wd == WB || Wd == WHU || Wd == WBU);
 }
+// A pair (ld2, sd2): d in modes 0 and 1, its second register rb
+inline bool pairOp(uint32_t Op) {
+  unsigned O = opOpc(Op);
+  return opClass(O) == 2 && ((O >> 3) & 7) <= 1 && (O & 7) == 1;
+}
+inline bool fastPair(uint32_t Op) { return pairs() && pairOp(Op); }
 inline bool madLike(unsigned F) { return F == FMad || F == FMsb || F == FNmsb; }
 inline bool floatOp(uint32_t Op) {
   unsigned O = opOpc(Op);
@@ -185,7 +200,7 @@ inline unsigned path(ArrayRef<uint32_t> Ops) {
     return PathInt;
   if ((intOp(A) || floatOp(A) || selLpc(A)) && (One || lite(B) || fLite(B)))
     return PathALU;
-  if (memOp(A) && (One || lite(B)))
+  if ((memOp(A) || fastPair(A)) && (One || lite(B)))
     return storeOp(A) ? PathStore : PathLoad;
   if (memOp(A) && memOp(B))
     return storeOp(A) ? PathMem2 : storeOp(B) ? PathGeneral : PathLoad2;
@@ -198,6 +213,7 @@ inline unsigned path(ArrayRef<uint32_t> Ops) {
 // path12_of): jr, callr, call, a far j and the add (its register not r0) take
 // path 1 when their ops would be path 1's or 7's (or there are none), path 2
 // when 2's, 3's or 5's; anything else, eret and the illegal subs path 0.
+inline bool writes(ArrayRef<uint32_t> Ops, unsigned R);
 inline unsigned path12(uint32_t Ctl, ArrayRef<uint32_t> Ops) {
   unsigned Sub = ctlSub(Ctl);
   bool Ok = Sub == SubJ || Sub == SubCall || Sub == SubJR || Sub == SubCallR ||
@@ -205,6 +221,13 @@ inline unsigned path12(uint32_t Ctl, ArrayRef<uint32_t> Ops) {
   if (!Ok || Ops.size() > 2)
     return PathGeneral;
   unsigned P = path(Ops);
+  bool RsWritten = (Sub == SubJR || Sub == SubCallR) && ctlRS(Ctl) != 0 &&
+                   writes(Ops, ctlRS(Ctl));
+  if (cc0Fast() && Sub != SubAdd && !RsWritten &&
+      (P == PathInt || P == PathLoad || P == PathStore))
+    return P;
+  if (!Ops.empty() && pairOp(Ops[0]))
+    return PathGeneral; // (step12 has no pairs)
   if (P == PathInt)
     return PathALU;
   if (P == PathLoad || P == PathStore)
@@ -221,6 +244,12 @@ inline bool readsRd0(uint32_t Op0, uint32_t Op) {
 
 // Op can be op 1 after Op0.
 inline bool fits1(uint32_t Op0, uint32_t Op) {
+  if (fastPair(Op0)) { // paths 3 and 5: op 1 reads no rb of a load pair
+    unsigned R2 = storeOp(Op0) ? 0 : opRB(Op0);
+    return lite(Op) && (R2 == 0 || (opRA(Op) != R2 && opRB(Op) != R2));
+  }
+  if (pairOp(Op))
+    return false;
   if (memOp(Op) && memOp(Op0))
     return !readsRd0(Op0, Op) && (storeOp(Op0) || !storeOp(Op));
   return lite(Op) || (fLite(Op) && (floatOp(Op0) || memOp(Op0)));
@@ -242,7 +271,8 @@ inline unsigned span(uint32_t Op) {
 // An op of Ops writes R (a store's rd is read); d and q by rd's group.
 inline bool writes(ArrayRef<uint32_t> Ops, unsigned R) {
   for (uint32_t Op : Ops)
-    if (!storeOp(Op) && (R - opRD(Op)) < span(Op))
+    if (!storeOp(Op) && (pairOp(Op) ? R == opRD(Op) || R == opRB(Op)
+                                    : (R - opRD(Op)) < span(Op)))
       return true;
   return false;
 }

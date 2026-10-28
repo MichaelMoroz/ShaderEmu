@@ -57,6 +57,16 @@ unsigned llvm::GPUVM::lateBranches() {
   return V == "1" || V == "true" || V.empty() ? 1 : 0;
 }
 bool llvm::GPUVM::fx1() { return FX1; }
+static cl::opt<bool> Pairs("gpuvm-pairs", cl::Hidden, cl::init(false),
+                           cl::desc("gpu_vm: ld2 and sd2 (pairs) as op 0 of "
+                                    "paths 3 and 5 (the tick's PAIRS); the "
+                                    "pair pass makes them"));
+bool llvm::GPUVM::pairs() { return Pairs; }
+static cl::opt<bool> CC0X("gpuvm-cc0x", cl::Hidden, cl::init(false),
+                          cl::desc("gpu_vm: j, call, jr and callr with fast "
+                                   "ops take the fast loop's paths (the "
+                                   "tick's CC0X)"));
+bool llvm::GPUVM::cc0Fast() { return CC0X; }
 
 static GPUVMMCCodeEmitter &emitter(MCAssembler &A) {
   return static_cast<GPUVMMCCodeEmitter &>(A.getEmitter());

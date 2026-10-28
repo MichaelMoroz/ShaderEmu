@@ -125,10 +125,11 @@ public:
         if (geo_) {   // the builder's block: 8 wide, 3 to 16 rows, column by column, 128 blocks a band of 16 rows, or 256 blocks
             bh_ = stepConst(src, "GEO_BH", 8);   // of 8 rows in one band (WAVES.md); the device reads pixel 2 at (0, 2)
             per_ = stepConst(src, "GEO_PER", 128), band_ = stepConst(src, "GEO_BAND", 16);
-            bool one = per_ == 256 && band_ == 8 && bh_ == 8;
-            if (stepConst(src, "GEO_BW", 8) != 8 || bh_ < 3 || bh_ > 16 || spix_ > 8 * bh_ || stepConst(src, "GEO_JROW", 0) != 0 ||
+            bw_ = stepConst(src, "GEO_BW", 8);   // (4: a core one warp, 4 x 8 blocks in one row; WAVES.md)
+            bool one = per_ == 256 && (band_ == 8 || band_ == 16) && bh_ == 8;   // (band 16: c0rt's core 0 in rows 8-15 under its block)
+            if ((bw_ != 8 && !(bw_ == 4 && one)) || bh_ < 3 || bh_ > 16 || spix_ > bw_ * bh_ || stepConst(src, "GEO_JROW", 0) != 0 ||
                 !(one || (band_ == 16 && per_ == 128)) || stepConst(src, "GEO_PERM", 0) != 0) {
-                err = tickPath + ": GEO_BLOCKS takes blocks 8 wide and 3 to 16 high, column by column, 128 a band of 16 rows, or 8 x 8 in one row"; return false;
+                err = tickPath + ": GEO_BLOCKS takes blocks 8 wide and 3 to 16 high, column by column, 128 a band of 16 rows, or 8 x 8 or 4 x 8 in one row"; return false;
             }
         }
         whole_ = stepConst(src, "COMMIT_WHOLE", 0) != 0;   // (the commit writes an entry's whole texel in one draw: CACHE.md, "Decided")
@@ -139,7 +140,7 @@ public:
         if (src.find("#ifndef CORE0") != std::string::npos || c0rt_) {   // x25: core 0's own write cache, its tick compiled with CORE0=1
             wcn0_ = stepConst(src, "WCN0", 0);
             spix0_ = (stepConst(src, "NTEX0", 0) + 7) / 8;
-            if (!geo_ || !wcn0_ || (bh_ == 8 ? spix0_ > 64 + 8 * 128 : c0rows() > 16)) { err = tickPath + ": CORE0 needs GEO_BLOCKS, WCN0 and NTEX0"; return false; }
+            if (!geo_ || !wcn0_ || (bh_ == 8 && bw_ == 8 && !c0rt_ ? spix0_ > 64 + 8 * 128 : c0rows() > band_)) { err = tickPath + ": CORE0 needs GEO_BLOCKS, WCN0 and NTEX0"; return false; }
         }
         CompileSettings cs;
         cs.flags = D3DCOMPILE_OPTIMIZATION_LEVEL3;
@@ -164,6 +165,152 @@ public:
         }
         fprintf(stderr, "[harness] gpu_vm: tick %s (write cache %u, %u state texels a core; core 0's %u)\n", tickPath.c_str(), wcn_, ntex_,
                 wcn0_ ? wcn0_ : wcn_);
+        // GVM_COMMIT_BLIT=1 (a measure: the Unity world's gvmCommitBlits): the commit's four draws as blits, a blit's two triangles as
+        // 3-point patches, a quad domain at factor 8 (81 points a patch) and a geometry shader of 32 instances, 16 of commit_vert's
+        // points a call (GvmCommitBlit.shader); _cpad.x is the points' count
+        if (getenv("GVM_COMMIT_BLIT") && !whole_ && !wcn0_) {
+            static const char* amp = R"(
+static const uint AMP_F = 8, AMP_N = AMP_F + 1, AMP_INST = 32;
+struct amp_v { float4 p : INTERNALTESSPOS; };
+struct amp_tf { float e[4] : SV_TessFactor; float i[2] : SV_InsideTessFactor; };
+struct amp_d { float2 uv : TEXCOORD0; nointerpolation uint patch : TEXCOORD1; };   // (patch: the domain shader's SV_PrimitiveID)
+amp_v amp_vert(float4 v : POSITION) { amp_v o; o.p = v; return o; }
+amp_tf amp_hc(InputPatch<amp_v, 3> I) { amp_tf o; o.e[0] = o.e[1] = o.e[2] = o.e[3] = AMP_F; o.i[0] = o.i[1] = AMP_F; return o; }
+[domain("quad")] [partitioning("integer")] [outputtopology("point")] [patchconstantfunc("amp_hc")] [outputcontrolpoints(3)]
+amp_v amp_hull(InputPatch<amp_v, 3> I, uint id : SV_OutputControlPointID) { return I[id]; }
+[domain("quad")] amp_d amp_dom(amp_tf h, const OutputPatch<amp_v, 3> I, float2 uv : SV_DomainLocation, uint pid : SV_PrimitiveID) { amp_d o; o.uv = uv; o.patch = pid; return o; }
+uint amp_call(amp_d d, uint pid, uint inst) {
+    uint x = (uint)round(d.uv.x * AMP_F), y = (uint)round(d.uv.y * AMP_F);
+    return ((pid * AMP_N + y) * AMP_N + x) * AMP_INST + inst;
+}
+#ifndef AMP_PER
+#define AMP_PER 16   // (GVM_BLIT_PER: points a call)
+#endif
+[maxvertexcount(AMP_PER)] [instance(32)]
+void amp_geo(point amp_d I[1], inout PointStream<c2f> s, uint inst : SV_GSInstanceID) {
+    uint pid = I[0].patch;
+    uint call = amp_call(I[0], pid, inst);
+#ifdef AMP_PROBE
+    bool probe = AMP_PROBE == 1 || (AMP_PROBE == 2 && _cpad.x != 0) || (AMP_PROBE == 3 && call < 5184);
+    if (probe) { c2f q; q.vertex = float4(-0.999, 0.999, 0, 1); q.value = 0; s.Append(q); s.RestartStrip(); }
+    return;
+#endif
+#ifdef AMP_SPLIT
+    // (GVM_BLIT_SPLIT=B: B points' loads first, then their appends, so that the loads' waits overlap)
+    [loop] for (uint b = 0; b < AMP_PER; b += AMP_SPLIT) {
+        c2f o[AMP_SPLIT];
+        [unroll] for (uint k = 0; k < AMP_SPLIT; k++) {
+            uint id = AMP_PER * call + b + k;
+            bool on = id < _cpad.x && (_cpad.y == 0 || id < _cpad.y);
+            o[k] = commit_vert(on ? id : 0u);
+            if (!on) o[k].vertex.x = -2;
+        }
+        [unroll] for (uint k2 = 0; k2 < AMP_SPLIT; k2++) [branch] if (o[k2].vertex.x > -1.5) { s.Append(o[k2]); s.RestartStrip(); }
+    }
+    return;
+#endif
+#ifdef AMP_SPLITV
+    // (GVM_BLIT_SPLITV=4 or 8: the same as AMP_SPLIT in named variables, no array: an indexable temp is memory)
+#define AMP_LOAD(k) c2f o##k; { uint id = AMP_PER * call + b + k; bool on = id < _cpad.x && (_cpad.y == 0 || id < _cpad.y); \
+    o##k = commit_vert(on ? id : 0u); if (!on) o##k.vertex.x = -2; }
+#define AMP_PUT(k) [branch] if (o##k.vertex.x > -1.5) { s.Append(o##k); s.RestartStrip(); }
+    [loop] for (uint b = 0; b < AMP_PER; b += AMP_SPLITV) {
+        AMP_LOAD(0) AMP_LOAD(1) AMP_LOAD(2) AMP_LOAD(3)
+#if AMP_SPLITV == 8
+        AMP_LOAD(4) AMP_LOAD(5) AMP_LOAD(6) AMP_LOAD(7)
+#endif
+        AMP_PUT(0) AMP_PUT(1) AMP_PUT(2) AMP_PUT(3)
+#if AMP_SPLITV == 8
+        AMP_PUT(4) AMP_PUT(5) AMP_PUT(6) AMP_PUT(7)
+#endif
+    }
+    return;
+#endif
+#ifdef AMP_UNROLL
+    [unroll]   // (GVM_BLIT_UNROLL: a call's loads go out together)
+#else
+    [loop]
+#endif
+    for (uint k = 0; k < AMP_PER; k++) {
+        uint id = AMP_PER * call + k;
+        [branch] if (id < _cpad.x && (_cpad.y == 0 || id < _cpad.y)) {
+            c2f o = commit_vert(id);
+            [branch] if (o.vertex.x > -1.5) { s.Append(o); s.RestartStrip(); }
+        }
+    }
+}
+c2f rev_vert(uint id : SV_VertexID) { return commit_vert(_cpad.x - 1 - id); }   // (GVM_COMMIT_BLIT=rev: the mesh's points in reverse)
+c2f tail_vert(uint id : SV_VertexID) {   // (GVM_BLIT_LIMIT=N: the blits draw the points below N, the mesh the rest)
+    c2f o = commit_vert(id);
+    if (id < _cpad.y) o.vertex = float4(-2, -2, 0, 1);
+    return o;
+}
+)";
+            std::string bsrc = (getenv("GVM_BLIT_PROBE") ? "#define AMP_PROBE " + std::string(getenv("GVM_BLIT_PROBE")) + "\n" : std::string()) +
+                               (getenv("GVM_BLIT_PER") ? "#define AMP_PER " + std::string(getenv("GVM_BLIT_PER")) + "\n" : std::string()) +
+                               (getenv("GVM_BLIT_UNROLL") ? std::string("#define AMP_UNROLL\n") : std::string()) +
+                               (getenv("GVM_BLIT_SPLIT") ? "#define AMP_SPLIT " + std::string(getenv("GVM_BLIT_SPLIT")) + "\n" : std::string()) +
+                               (getenv("GVM_BLIT_SPLITV") ? "#define AMP_SPLITV " + std::string(getenv("GVM_BLIT_SPLITV")) + "\n" : std::string()) + src + amp;
+            if (std::string(getenv("GVM_COMMIT_BLIT")) == "rev") {   // (a check: does the commit's result depend on its points' order?)
+                StageResult r = compileStage(bsrc, tickPath, rootDir, "rev_vert", "vs_5_0", {}, cs);
+                if (!r.ok || FAILED(dev->CreateVertexShader(r.bytecode->GetBufferPointer(), r.bytecode->GetBufferSize(), nullptr, &revVs_))) {
+                    err = "GVM_COMMIT_BLIT=rev: " + r.log;
+                    return false;
+                }
+                fprintf(stderr, "[harness] gpu_vm: the commit's points in reverse order (GVM_COMMIT_BLIT=rev)\n");
+            } else {
+            StageResult v = compileStage(bsrc, tickPath, rootDir, "amp_vert", "vs_5_0", {}, cs), h = compileStage(bsrc, tickPath, rootDir, "amp_hull", "hs_5_0", {}, cs);
+            StageResult d = compileStage(bsrc, tickPath, rootDir, "amp_dom", "ds_5_0", {}, cs), g = compileStage(bsrc, tickPath, rootDir, "amp_geo", "gs_5_0", {}, cs);
+            if (!v.ok || !h.ok || !d.ok || !g.ok) { err = "GVM_COMMIT_BLIT: " + v.log + h.log + d.log + g.log; return false; }
+            D3D11_INPUT_ELEMENT_DESC ie = {"POSITION", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0};
+            const float quad[24] = {-1, -1, 0, 1, -1, 1, 0, 1, 1, 1, 0, 1, -1, -1, 0, 1, 1, 1, 0, 1, 1, -1, 0, 1};
+            D3D11_BUFFER_DESC vd = {sizeof quad, D3D11_USAGE_IMMUTABLE, D3D11_BIND_VERTEX_BUFFER, 0, 0, 0};
+            D3D11_SUBRESOURCE_DATA vi = {quad, 0, 0};
+            if (FAILED(dev->CreateVertexShader(v.bytecode->GetBufferPointer(), v.bytecode->GetBufferSize(), nullptr, &abVs_)) ||
+                FAILED(dev->CreateHullShader(h.bytecode->GetBufferPointer(), h.bytecode->GetBufferSize(), nullptr, &abHs_)) ||
+                FAILED(dev->CreateDomainShader(d.bytecode->GetBufferPointer(), d.bytecode->GetBufferSize(), nullptr, &abDs_)) ||
+                FAILED(dev->CreateGeometryShader(g.bytecode->GetBufferPointer(), g.bytecode->GetBufferSize(), nullptr, &abGs_)) ||
+                FAILED(dev->CreateInputLayout(&ie, 1, v.bytecode->GetBufferPointer(), v.bytecode->GetBufferSize(), &abIl_)) ||
+                FAILED(dev->CreateBuffer(&vd, &vi, &abVb_))) { err = "GVM_COMMIT_BLIT: the shaders"; return false; }
+            if (const char* dir = getenv("GVM_BLIT_CSO")) {   // (a check: DIR's fxc_amp_{vert,hull,dom}.cso, another compiler's, for those stages)
+                auto load = [&](const char* name) {
+                    std::ifstream f(std::string(dir) + "/fxc_" + name + ".cso", std::ios::binary);
+                    return std::vector<char>((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+                };
+                std::string which = getenv("GVM_BLIT_CSO_STAGES") ? getenv("GVM_BLIT_CSO_STAGES") : "vert,hull,dom";   // (which of them)
+                bool ok = true;
+                if (which.find("vert") != std::string::npos) {
+                    std::vector<char> cv = load("amp_vert");
+                    abVs_.Reset(), abIl_.Reset();
+                    ok = ok && !cv.empty() && SUCCEEDED(dev->CreateVertexShader(cv.data(), cv.size(), nullptr, &abVs_)) &&
+                         SUCCEEDED(dev->CreateInputLayout(&ie, 1, cv.data(), cv.size(), &abIl_));
+                }
+                if (which.find("hull") != std::string::npos) {
+                    std::vector<char> ch = load("amp_hull");
+                    abHs_.Reset();
+                    ok = ok && !ch.empty() && SUCCEEDED(dev->CreateHullShader(ch.data(), ch.size(), nullptr, &abHs_));
+                }
+                if (which.find("dom") != std::string::npos) {
+                    std::vector<char> cd = load("amp_dom");
+                    abDs_.Reset();
+                    ok = ok && !cd.empty() && SUCCEEDED(dev->CreateDomainShader(cd.data(), cd.size(), nullptr, &abDs_));
+                }
+                if (!ok) { err = "GVM_BLIT_CSO: the stages"; return false; }
+                fprintf(stderr, "[harness] gpu_vm: the blits' %s stages from %s\n", which.c_str(), dir);
+            }
+            commitBlit_ = true;
+            fprintf(stderr, "[harness] gpu_vm: the commit as blits (GVM_COMMIT_BLIT)\n");
+            if (getenv("GVM_BLIT_LIMIT")) {
+                blitLimit_ = (uint32_t)atoi(getenv("GVM_BLIT_LIMIT"));
+                StageResult r = compileStage(bsrc, tickPath, rootDir, "tail_vert", "vs_5_0", {}, cs);
+                if (!r.ok || FAILED(dev->CreateVertexShader(r.bytecode->GetBufferPointer(), r.bytecode->GetBufferSize(), nullptr, &revVs_))) {
+                    err = "GVM_BLIT_LIMIT: " + r.log;
+                    return false;
+                }
+                fprintf(stderr, "[harness] gpu_vm: the blits draw the commit's points below %u, the mesh the rest\n", blitLimit_);
+            }
+            }
+        }
 
         // ---- the devices (gpu_vm/platform/devices.shader)
         devices_ = opt.gpuShader != nullptr;
@@ -296,6 +443,7 @@ public:
         if (timeIt) {
             ctx->Begin(tsDisjoint_.Get());
             ctx->End(tsQuery_[0].Get());
+            timedRounds_ = (std::max)(1u, tickRounds);
         }
         TimeSet* ts = timeLog_ && (!tset_[tag % 8].pending || tag - tset_[tag % 8].tag >= 64) ? &tset_[tag % 8] : nullptr;
         ID3D11Query* tqs[7] = {};
@@ -335,7 +483,7 @@ public:
             if (soundMix && devPasses_.size() > 3) soundDraw(mat, tag);   // (before the control zone moves the voices on)
             mat.setInt("_GvmPasses", (int64_t)(uint32_t)passes_);
             mat.setInt("_GvmWorkers", workers_);
-            mat.setInt("_GvmGeo", geo_);
+            mat.setInt("_GvmGeo", geo_ ? (per_ == 256 ? (bw_ == 4 ? 3 : 2) : 1) : 0);   // (gpu.h gvm_s16: the block layout)
             mat.setTexture("_GvmS0", set_[cur_ ^ 1][0].srv.Get(), setW(), setH());
             mat.setTexture("_GvmS3", set_[cur_ ^ 1][3].srv.Get(), setW(), setH());
             bool merge = countsAdded;
@@ -420,7 +568,7 @@ public:
         if (endsLog_) {   // (texel 19 is pixel 2's fourth target: at (block x, band y + 2), a texel a block)
             for (UINT b = 0; b < 2; b++)
                 for (UINT k = 0; k < 128; k++) {
-                    UINT bx = (b * 128 + k) % per_ * 8, by = (b * 128 + k) / per_ * band_;   // (the block of core b * 128 + k)
+                    UINT bx = (b * 128 + k) % per_ * bw_, by = (b * 128 + k) / per_ * band_;   // (the block of core b * 128 + k)
                     D3D11_BOX e = {bx, by + 2, 0, bx + 1, by + 3, 1};
                     ctx->CopySubresourceRegion(ends_.t.Get(), 0, k, b, 0, set_[cur_ ^ 1][3].t.Get(), 0, &e);
                     static const bool pcs = getenv("GVM_MBOX_LOG") != nullptr;   // (texel 16, the pc: GVM_MBOX_LOG's)
@@ -554,14 +702,14 @@ public:
         SnapHeader want = snapHeader(), h{};
         if (size >= sizeof h) memcpy(&h, data, sizeof h);
         uint32_t fromSpix = (h.ntex + 7) / 8, keep = h.ntex == ntex_ ? spix_ : tWc_ / 8;   // (another cache: the texels before it)
-        uint32_t fromBh = h.pad <= 2 ? 8 : h.pad - 16;   // (pad: 0 a row a core, 1 8x8 blocks, 2 8x8 blocks in one row, 16 + h blocks 8 x h)
-        uint32_t fromPer = h.pad == 2 ? 256 : 128, fromBand = h.pad == 2 ? 8 : 16;
-        size_t setBytes = h.pad ? (size_t)((kMaxCores - 1) / fromPer * fromBand + (std::max)(8u, fromBh)) * fromPer * 8 * 16 : (size_t)fromSpix * kMaxCores * 16;
+        uint32_t fromBh = h.pad <= 3 ? 8 : h.pad - 16;   // (pad: 0 a row a core, 1 8x8 blocks, 2 8x8 blocks in one row, 3 4x8 in one row, 16 + h blocks 8 x h)
+        uint32_t fromPer = h.pad == 2 || h.pad == 3 ? 256 : 128, fromBand = h.pad == 2 || h.pad == 3 ? 8 : 16, fromBw = h.pad == 3 ? 4 : 8;
+        size_t setBytes = h.pad ? (size_t)((kMaxCores - 1) / fromPer * fromBand + (std::max)(8u, fromBh)) * fromPer * fromBw * 16 : (size_t)fromSpix * kMaxCores * 16;
         uint32_t fromMap = h.magic[7] == '2' ? 1u : 0u, fromRows = fromMap ? GVM_STRIP_ROWS(h.ramEnd / 16) : h.ramEnd / 16 / kRamW;
         if (fromMap != rmap_) want.romRows = h.romRows, want.magic[7] = h.magic[7];   // (the other map: its ROM rows its own, RAM converted)
         size_t need = sizeof h + (size_t)kRamW * fromRows * 16 + 16 * setBytes + 2 * (size_t)kMaxCores * 16 +
                       (devices_ ? (size_t)kGpuTarget * kGpuTarget * 4 : 0);
-        if (size != need || (h.pad > 2 && (h.pad < 19 || h.pad > 32)) || memcmp(h.magic, want.magic, 8) != 0 || h.ramEnd != want.ramEnd || h.romRows != want.romRows ||
+        if (size != need || (h.pad > 3 && (h.pad < 19 || h.pad > 32)) || memcmp(h.magic, want.magic, 8) != 0 || h.ramEnd != want.ramEnd || h.romRows != want.romRows ||
             (h.ntex != want.ntex && (h.ntex < tWc_ || h.ntex > 64 * 8)) || h.devices != want.devices) {
             err = "not a snapshot of this image, tick and RAM (the same --gvm, --gvm-tick and --gvm-ram)";
             return false;
@@ -582,12 +730,17 @@ public:
                 std::vector<uint8_t> img((size_t)setW() * setH() * 16, 0);
                 for (uint32_t c = 0; c < kMaxCores; c++)
                     for (uint32_t j = 0; j < keep; j++) {
-                        size_t from = h.pad ? (size_t)(c / fromPer * fromBand + j % fromBh) * fromPer * 8 + c % fromPer * 8 + j / fromBh : (size_t)c * fromSpix + j;
+                        size_t from = h.pad ? (size_t)(c / fromPer * fromBand + j % fromBh) * fromPer * fromBw + c % fromPer * fromBw + j / fromBh : (size_t)c * fromSpix + j;
                         memcpy(&img[setAt(c, j) * 16], p + from * 16, 16);
                     }
                 writeTex(set_[k][t].t.Get(), setW(), setH(), 16, img.data());
                 p += setBytes;
             }
+        {   // the worker firmware as this harness has it (the boot area is read only to the cores: the snapshot's is a boot's copy)
+            std::vector<uint8_t> fw((sizeof gvm_worker_fw + 15) & ~(size_t)15, 0);
+            memcpy(fw.data(), gvm_worker_fw, sizeof gvm_worker_fw);
+            putTexels(GVM_WORKER_FW / 16, (uint32_t)(fw.size() / 16), fw.data());
+        }
         p = writeTex(ops_[0].t.Get(), kMaxCores, 1, 16, p);
         p = writeTex(ops_[1].t.Get(), kMaxCores, 1, 16, p);
         if (devices_) writeTex(gpuColor_.Get(), kGpuTarget, kGpuTarget, 4, p);
@@ -639,14 +792,16 @@ public:
     }
     bool uploadRows(UINT row, UINT rows, const void* texels) override {
         if (row < 64 || (row - 64) * 2048 < kIndexBias) return false;
-        uint32_t t0 = (row - 64) * 2048 - kIndexBias, n = rows * 2048;
-        const uint8_t* in = (const uint8_t*)texels;
+        putTexels((row - 64) * 2048 - kIndexBias, rows * 2048, (const uint8_t*)texels);
+        return true;
+    }
+    void putTexels(uint32_t t0, uint32_t n, const uint8_t* in) {   // n texels of RAM from texel t0
         if (rmap_) {
             boxes(t0, n, [&](uint32_t t, uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
                 D3D11_BOX b = {x, y, 0, x + w, y + h, 1};
                 gpu_.ctx->UpdateSubresource(ram_.t.Get(), 0, &b, in + (size_t)(t - t0) * 16, w * 16, w * h * 16);
             });
-            return true;
+            return;
         }
         while (n) {
             uint32_t x = t0 % kRamW, k = (std::min)(n, kRamW - x);
@@ -654,7 +809,6 @@ public:
             gpu_.ctx->UpdateSubresource(ram_.t.Get(), 0, &b, in, k * 16, k * 16);
             in += (size_t)k * 16, n -= k, t0 += k;
         }
-        return true;
     }
 
     bool gpuTimes(double& tickMs, double& commitMs, double& deviceMs) override {
@@ -677,6 +831,7 @@ public:
                     tickMs_ = (double)(ts[1] - ts[0]) * 1000.0 / (double)dj.Frequency;
                     commitMs_ = (double)(ts[2] - ts[1]) * 1000.0 / (double)dj.Frequency;
                     deviceMs_ = (double)(ts[3] - ts[2]) * 1000.0 / (double)dj.Frequency;
+                    frameMs = (double)(ts[3] - ts[0]) * 1000.0 / (double)dj.Frequency, frameRounds = timedRounds_, frameTimes++;
                 }
                 tsPending_ = false;
             }
@@ -748,7 +903,7 @@ private:
     }
     SnapHeader snapHeader() const {
         SnapHeader h = {{'G', 'V', 'M', 'S', 'N', 'A', 'P', (char)('1' + rmap_)}, ramEnd_, romRows_, ntex_, devices_ ? 1u : 0u,
-                        (uint32_t)cur_, (uint32_t)oc_, workers_, geo_ ? (per_ == 256 ? 2u : bh_ == 8 ? 1u : 16 + bh_) : 0u, time_, passes_};
+                        (uint32_t)cur_, (uint32_t)oc_, workers_, geo_ ? (per_ == 256 ? (bw_ == 4 ? 3u : 2u) : bh_ == 8 ? 1u : 16 + bh_) : 0u, time_, passes_};
         return h;
     }
     // A whole texture of `bpp` bytes a texel appended to `out`, row 0 first (a blocking read)
@@ -804,17 +959,16 @@ private:
         gpu_.ctx->VSSetShaderResources(0, 12, s);
     }
     // The state textures: a row a core, or (the step's GEO_BLOCKS) a block of 8 x GEO_BH (3 to 16) a core, 128 a band of 16 rows
-    UINT setW() const { return geo_ ? per_ * 8 : spix_; }
-    UINT setH() const { return geo_ ? (kMaxCores - 1) / per_ * band_ + (std::max)(8u, bh_) : kMaxCores; }   // (blocks of 9 to 16 rows: the last band as tall as one)
+    UINT setW() const { return geo_ ? per_ * bw_ : spix_; }
+    UINT setH() const { return geo_ ? (std::max)((kMaxCores - 1) / per_ * band_ + (std::max)(8u, bh_), wcn0_ ? c0rows() : 0u) : kMaxCores; }   // (blocks of 9 to 16 rows: the last band as tall as one; c0nb, c0rt: core 0's rows)
     size_t setAt(uint32_t c, uint32_t j) const {   // the texel of state pixel j of core c (x25: core 0's from 64 on in rows 8-15)
-        if (geo_ && c == 0 && j >= 8 * bh_) {   // (a builder's c0nb, blocks under 8 rows: its blocks again, down the first band)
-            if (bh_ == 8) return (size_t)(8 + j % 8) * 1024 + j / 8 - 8;
-            uint32_t k = j % (8 * bh_);
-            return (size_t)((j / (8 * bh_)) * bh_ + k % bh_) * 1024 + k / bh_;
+        if (geo_ && c == 0 && j >= bw_ * bh_) {   // (a builder's c0nb or c0rt: its blocks again, down the first band)
+            uint32_t k = j % (bw_ * bh_);
+            return (size_t)((j / (bw_ * bh_)) * bh_ + k % bh_) * setW() + k / bh_;
         }
-        return geo_ ? (size_t)(c / per_ * band_ + j % bh_) * setW() + c % per_ * 8 + j / bh_ : (size_t)c * spix_ + j;
+        return geo_ ? (size_t)(c / per_ * band_ + j % bh_) * setW() + c % per_ * bw_ + j / bh_ : (size_t)c * spix_ + j;
     }
-    uint32_t c0rows() const { return (spix0_ + 8 * bh_ - 1) / (8 * bh_) * bh_; }   // (c0nb with blocks under 8 rows: core 0's rows)
+    uint32_t c0rows() const { return (spix0_ + bw_ * bh_ - 1) / (bw_ * bh_) * bh_; }   // (c0nb, c0rt: core 0's rows, its blocks down the band)
     void viewport(UINT w, UINT h, UINT y = 0, UINT x = 0) {
         D3D11_VIEWPORT v = {(float)x, (float)y, (float)w, (float)h, 0, 1};
         gpu_.ctx->RSSetViewports(1, &v);
@@ -825,7 +979,7 @@ private:
         pass_.timeLo = (uint32_t)time_, pass_.timeHi = (uint32_t)(time_ >> 32);
         pass_.ncores = top_;
         ctx->UpdateSubresource(cb_.Get(), 0, nullptr, &pass_, 0, 0);
-        uint32_t cdata[4] = {0, top_, 0, 0};
+        uint32_t cdata[4] = {0, top_, top_ * wcn_, blitLimit_};   // (_cpad.x: the commit's points, GVM_COMMIT_BLIT's)
         for (uint32_t c = 0; c < 4; c++) {
             cdata[0] = c;
             ctx->UpdateSubresource(ccb_[c].Get(), 0, nullptr, cdata, 0, 0);
@@ -884,7 +1038,7 @@ private:
             }
             for (uint32_t c = (std::max)(run.first, apart ? 1u : 0u); c < run.second;) {   // (the run's blocks in one band at a time)
                 uint32_t end = (std::min)(run.second, (c / per_ + 1) * per_);
-                viewport((end - c) * 8, c == 0 && c0rt_ ? (std::max)(bh_, c0rows()) : bh_, (c / per_) * band_, (c % per_) * 8);   // (c0rt: core 0's rows in its band's draw)
+                viewport((end - c) * bw_, c == 0 && c0rt_ ? (std::max)(bh_, c0rows()) : bh_, (c / per_) * band_, (c % per_) * bw_);   // (c0rt: core 0's rows in its band's draw)
                 ctx->Draw(3, 0);
                 c = end;
             }
@@ -897,10 +1051,53 @@ private:
         ctx->OMSetRenderTargets(1, ram_.rtv.GetAddressOf(), nullptr);
         bindTick(cur_, false, false);
         viewport(kRamW, rows_);
+        if (commitBlit_) {   // (GVM_COMMIT_BLIT: a blit a word; the geometry shader reads the state and both constant buffers)
+            ID3D11ShaderResourceView* s[12] = {};   // (bindTick(cur_, false, false)'s: the ops' progress at t10 too)
+            s[1] = rom_.srv.Get();
+            for (int t = 0; t < 8; t++) s[2 + t] = set_[cur_][t].srv.Get();
+            s[10] = ops_[oc_].srv.Get();
+            ctx->GSSetShaderResources(0, 12, s);
+            UINT stride = 16, off = 0;
+            ctx->IASetInputLayout(abIl_.Get());
+            ctx->IASetVertexBuffers(0, 1, abVb_.GetAddressOf(), &stride, &off);
+            ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST);
+            ctx->VSSetShader(abVs_.Get(), nullptr, 0);
+            ctx->HSSetShader(abHs_.Get(), nullptr, 0);
+            ctx->DSSetShader(abDs_.Get(), nullptr, 0);
+            ctx->GSSetShader(abGs_.Get(), nullptr, 0);
+            ctx->PSSetShader(commit_.ps.Get(), nullptr, 0);
+            static int statsLeft = getenv("GVM_BLIT_STATS") ? atoi(getenv("GVM_BLIT_STATS")) : 0;   // (a check: the pipeline's counts, N passes)
+            ComPtr<ID3D11Query> stats;
+            D3D11_QUERY_DESC qd = {D3D11_QUERY_PIPELINE_STATISTICS, 0};
+            if (statsLeft > 0 && SUCCEEDED(gpu_.device->CreateQuery(&qd, &stats))) ctx->Begin(stats.Get());
+            for (int c = 0; c < 4; c++) {
+                ID3D11Buffer* b2[2] = {cb_.Get(), ccb_[c].Get()};
+                ctx->GSSetConstantBuffers(0, 2, b2);
+                ctx->PSSetConstantBuffers(0, 2, b2);
+                ctx->OMSetBlendState(mask_[c].Get(), nullptr, 0xffffffff);
+                ctx->Draw(6, 0);
+            }
+            if (stats) {
+                ctx->End(stats.Get());
+                D3D11_QUERY_DATA_PIPELINE_STATISTICS p = {};
+                while (ctx->GetData(stats.Get(), &p, sizeof p, 0) == S_FALSE) {}
+                fprintf(stderr, "[harness] commit blits: IA vertices %llu, VS %llu, HS %llu, DS %llu, GS %llu, GS primitives %llu, "
+                        "clipper %llu in %llu out, PS %llu\n", p.IAVertices, p.VSInvocations, p.HSInvocations, p.DSInvocations,
+                        p.GSInvocations, p.GSPrimitives, p.CInvocations, p.CPrimitives, p.PSInvocations);
+                statsLeft--;
+            }
+            ctx->HSSetShader(nullptr, nullptr, 0);
+            ctx->DSSetShader(nullptr, nullptr, 0);
+            ctx->GSSetShader(nullptr, nullptr, 0);
+            ID3D11ShaderResourceView* none[12] = {};
+            ctx->GSSetShaderResources(0, 12, none);
+            ctx->IASetInputLayout(nullptr);
+            ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_POINTLIST);
+        }
         ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_POINTLIST);
-        ctx->VSSetShader(commit_.vs.Get(), nullptr, 0);
+        ctx->VSSetShader(revVs_ ? revVs_.Get() : commit_.vs.Get(), nullptr, 0);
         ctx->PSSetShader(commit_.ps.Get(), nullptr, 0);
-        for (int c = 0; c < (whole_ ? 1 : 4); c++) {   // (COMMIT_WHOLE: one draw, a point a texel, the whole texel)
+        for (int c = 0; c < (commitBlit_ && !blitLimit_ ? 0 : whole_ ? 1 : 4); c++) {   // (COMMIT_WHOLE: one draw, a point a texel, the whole texel)
             ID3D11Buffer* b2[2] = {cb_.Get(), ccb_[c].Get()};
             ctx->VSSetConstantBuffers(0, 2, b2);
             ctx->OMSetBlendState(whole_ ? nullptr : mask_[c].Get(), nullptr, 0xffffffff);
@@ -1020,7 +1217,7 @@ private:
                         for (int w = 0; w < 2; w++) gpu_.ctx->CopySubresourceRegion(set_[w][t].t.Get(), 0, wc0, k, 0, none_.t.Get(), 0, &nb);
                         continue;
                     }
-                    UINT x0 = (k % per_) * 8, y0 = (k / per_) * band_, cols = (spix_ + bh_ - 1) / bh_;
+                    UINT x0 = (k % per_) * bw_, y0 = (k / per_) * band_, cols = (spix_ + bh_ - 1) / bh_;
                     D3D11_BOX b = {x0, y0, 0, x0 + cols, y0 + bh_, 1}, nb = {0, 0, 0, 1, 1, 1};
                     gpu_.ctx->CopySubresourceRegion(set_[cur_][t].t.Get(), 0, x0, y0, 0, set_[cur_ ^ 1][t].t.Get(), 0, &b);
                     for (uint32_t j = wc0; j < spix_; j++)   // (pixel j of the block: column j / bh_, row j % bh_)
@@ -1235,11 +1432,18 @@ private:
     uint64_t lastEndsTag_ = ~0ull;
     bool c0rt_ = false, cull_ = false, copy_ = false;
     uint32_t cullVerts_ = 3;   // (C0RT: core 0 in the workers' draw)
-    uint32_t ramEnd_ = 0, rows_ = 0, romRows_ = 1, wcn_ = 514, tWc_ = 40, opSlots_ = 32, opSpan_ = 272, ntex_ = 297, spix_ = 38, geo_ = 0, whole_ = 0, bh_ = 8, per_ = 128, band_ = 16, wcn0_ = 0, spix0_ = 0;
+    uint32_t ramEnd_ = 0, rows_ = 0, romRows_ = 1, wcn_ = 514, tWc_ = 40, opSlots_ = 32, opSpan_ = 272, ntex_ = 297, spix_ = 38, geo_ = 0, whole_ = 0, timedRounds_ = 1, bh_ = 8, bw_ = 8, per_ = 128, band_ = 16, wcn0_ = 0, spix0_ = 0;
     Prog tick_, tick0_, commit_, stage_, write_, progress_, copyTick_;
     Tex ram_, rom_, stageTex_, ops_[2], set_[2][8], zone_, ctl_, info_, none_;
     ComPtr<ID3D11Buffer> cb_, ccb_[4];
     ComPtr<ID3D11BlendState> mask_[4];
+    bool commitBlit_ = false;   // GVM_COMMIT_BLIT: the commit as blits (tessellation and a geometry shader)
+    ComPtr<ID3D11VertexShader> abVs_;
+    ComPtr<ID3D11HullShader> abHs_;
+    ComPtr<ID3D11DomainShader> abDs_;
+    ComPtr<ID3D11GeometryShader> abGs_; ComPtr<ID3D11VertexShader> revVs_; uint32_t blitLimit_ = 0;
+    ComPtr<ID3D11InputLayout> abIl_;
+    ComPtr<ID3D11Buffer> abVb_;
     PassParams pass_{};
     int cur_ = 0, oc_ = 0;
     uint32_t ncores_ = 1, workers_ = 0, top_ = 1;   // (top_: the rows below the highest one drawn: the passes' cores)

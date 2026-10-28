@@ -60,11 +60,17 @@ int main() {
                                                    {"q", GVM_W_Q}, {"hu", GVM_W_HU}, {"bu", GVM_W_BU}};
     for (W w : ws) {
         uint32_t wd = w.w;
-        op(std::string("l") + w.n + " a0, 8(sp)", [wd](GvmAsm &a) { a.ld(wd, A0, SP, 8); });
+        if (wd == GVM_W_D)   // (a pair: ld2, sd2, its second register rb; isa.h GVM_IMM_D)
+            op("ld2 a0, a1, 8(sp)", [](GvmAsm &a) { a.ld2(A0, A1, SP, 8); });
+        else
+            op(std::string("l") + w.n + " a0, 8(sp)", [wd](GvmAsm &a) { a.ld(wd, A0, SP, 8); });
         op(std::string("l") + w.n + "x a0, a1, a2, 2", [wd](GvmAsm &a) { a.ldx(wd, A0, A1, A2, 2); });
         if (wd == GVM_W_HU || wd == GVM_W_BU)
             continue;
-        op(std::string("s") + w.n + " a0, -4(sp)", [wd](GvmAsm &a) { a.st(wd, A0, SP, -4); });
+        if (wd == GVM_W_D)
+            op("sd2 a0, a1, -4(sp)", [](GvmAsm &a) { a.st2(A0, A1, SP, -4); });
+        else
+            op(std::string("s") + w.n + " a0, -4(sp)", [wd](GvmAsm &a) { a.st(wd, A0, SP, -4); });
         op(std::string("s") + w.n + "x a0, a1, a2, 4", [wd](GvmAsm &a) { a.stx(wd, A0, A1, A2, 4); });
     }
     op("lw a0, 0x10000(sp)", "lw a0, 65536(sp)", [](GvmAsm &a) { a.lw(A0, SP, 0x10000); });

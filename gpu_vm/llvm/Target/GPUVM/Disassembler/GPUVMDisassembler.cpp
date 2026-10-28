@@ -105,6 +105,11 @@ bool GPUVMDisassembler::decodeOp(MCInst &MI, uint32_t W, bool IsLong,
   case GPUVMII::FrmStore:
     Reg(opRD(W)), Reg(opRA(W)), ImmOp(Imm);
     return true;
+  case GPUVMII::FrmPair:
+    Reg(opRD(W)), Reg(opRB(W)), Reg(opRA(W)); // (ld2's rd, rb; sd2's rs, rs2)
+    ImmOp(IsLong ? static_cast<int32_t>(Long)
+                 : (static_cast<int32_t>(W << 6) >> 26) * 4);
+    return true;
   case GPUVMII::FrmFI:
     Reg(opRD(W)), Reg(opRA(W));
     ImmOp(IsLong ? Long : (W >> 20) << 20);

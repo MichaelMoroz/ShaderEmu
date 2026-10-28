@@ -43,6 +43,8 @@ DEFAULTS = dict(
     tfirst=0,           # x24's idea: a load's or store's texel fetched before its lookup (paths 3-5)
     s6=0,               # x24's idea (with mru): a store pair (path 6) whose texels are both kept skips the lookup
     nc=0,               # phase 2: GVM_W_NC loads (read-only data) skip the write cache's lookup
+    pairs=0,            # 1: a pair (ld2, st2: isa.h GVM_W_D in modes 0 and 1) is op 0 of paths 3 and 5, its two words in one texel
+                        # (one that is not word aligned, or crosses a texel, has the pass redone on the general path); the assembler's pair_ops
     thin=0,             # one op a bundle: the fast loop drops op 1 (the assembler closes a bundle after every op)
     thin8=0,            # phase 3: 8-byte instructions {op, control} (the assembler's thin8), one op each
     wide3=0,            # phase 3: three ops a bundle (op 2 lite, in word 2): 1 behind a branch, 2 always made
@@ -57,9 +59,13 @@ DEFAULTS = dict(
                         # 4: the tick's triangles leave out every parked worker and a second draw, frag_copy, copies their state)
                         # 1: a worker parked in the firmware whose start texel is as the last pass saw it is not run: its state copied,
                         # its write cache empty (RISC-V's mc_idle; texel 23 keeps the start texel a parked pass saw). Needs npair 0
+    qs=0,               # (wtx, 4 x 8) the write cache's data split among a quad's lanes, the tags in every lane (quad_split)
+    nbw=0,              # (wtx) the workers' buckets a table at run time, core 0 keeping nb (0: nb for every core): one compile, the arrays
+                        # nb's; a worker clears, hashes into and writes out only its first 8 * nbw entries (and the overflow slots)
     c0rt=0,             # (c0nb) 1: core 0's cache chosen at run time in the one compile and draw (RISC-V's sizes by geometry), not CORE0=1 apart
     ll=0,               # 1: a new texel goes to the less full of its two buckets (more texels before a full end: +12-14% in a model)
     ovh=0,              # 1: the ov entries are a third table of ov / 4 hashed buckets, read when both buckets are full (slower: IDEAS 27)
+    wadk=0,             # (wad) the capped budget: 0 core 0's last pass + 1/4 of it, 1 just core 0's last pass, 2 three quarters of it
     wad=0,              # 1: a worker's budget core 0's bundles of the last pass (+1/4, 512 at least) when that pass ended core 0 on sync or full
                         # (2 on full only; 3 as 2, half the budget at least; 4 as 1 unless the workers are busy; 5 on sync for
                         #  the workers outside the kernel's REST mask at WAITW, no mask no cap; 6 as 5 and on full as 2; 7 as 6, the full
@@ -97,6 +103,14 @@ DEFAULTS = dict(
     xtl=0,              # (a measure) N more texel loads a bundle (the next texels', folded into junk in the same step): what a load costs
     mflat=0,            # the memory paths in fewer blocks: 1 the buckets' tags read always (a select for the bloom word's skip),
                         # 2 paths 3 and 5 fetch the data texel always; 3 both
+    enc=0,              # GPU-VM's encodings (spec/ENCODINGS.md): 0 E4's bundles, 2 E2's units of 8 bytes, 1 E1's words. The fast step takes
+                        # a unit as the E4 bundle it means, its path found from the ops (paths 3-7; anything else the general step's)
+    dload=0,            # a load's value kept out of the register file for a bundle (path 4's two, 1; path 3's too, 2): the file takes it
+                        # when a later bundle names its register, the next deferred load comes, or the fast loop is left, so its
+                        # texel's latency overlaps the next bundle unless that bundle uses it (the GPU waits at a value's first use)
+    oprange=0,          # operations in flight keep the fast loop: its deferred address check (lmax, smax) takes a load in their
+                        # destinations' hull or a store in it or the sources' as out of range (the pass redone on the general step,
+                        # which ends it before the access); without it a pass with one in flight runs every memory bundle general
     cc0x=0,             # (ISA paths: the assembler's cc0_fast) the fast step makes j, call, jr and callr with path 7's, 3's or 5's ops: CC0X
     sil=0,              # silent stores: a store of the bytes the core sees, to a texel with no entry, makes none and needs no room
                         # (the reference's gvm_machine.silent): 1 the data texel fetched for a store whose lookup found no entry, 2 for every store,
@@ -130,7 +144,7 @@ SPACE = dict(   # the values a search draws from
     bandx=[1, 2], per=[16, 32, 64, 128], jrow=[0, 1], perm=['id', 'bitrev', 'mul'], mul=[3, 5, 37, 77],
     early=[0, 1, 2, 3], mru=[0, 1, 2, 4], bb=[0, 1], tfirst=[0, 1], s6=[0, 1], nc=[0, 1], thin=[0, 1], thin8=[0, 1], wide3=[0, 1, 2], late=[0, 1, 2, 3], fx1=[0, 1], ov=[0, 4, 8, 16], mv=[0, 1], cv=[0, 1, 2], wsh=[0, 1, 2, 3], wad=[0, 1, 2, 3, 4, 5, 6, 7], s12b=[0, 1, 2, 3], s12in=[0, 1], rc=[0, 1, 2], dtx=['both', 'one'], rpk=['scalar', 'vec', 'wide'], pk=['scalar', 'vec', 'aos'], lay=['split', 'merged'],
     xr=[0, 64, 128, 256, 512, 1024], npair=[0, 32, 64, 128], xbind=[0, 1], xload=['pre', 'lazy'], xfast=[0, 1],
-    pf=[0, 1, 2], pft=[0, 4, 8, 16], pfd=[1, 2], lpf=[0, 128, 256, 512, 1024], lps=[0, 64, 128, 256], s12pf=[0, 1], ldf=[0, 1], cc0f=[0, 1], evf=[0, 1, 2, 3, 4, 5], cc0x=[0, 1, 2, 3], m6seq=[0, 1], snk=[0, 1], rmap=[0, 1, 2], sil=[0, 1, 2, 3], silp=[1, 2, 3, 4, 8, 12, 15], mflat=[0, 1, 2, 3, 6, 7, 10],
+    pf=[0, 1, 2], pft=[0, 4, 8, 16], pfd=[1, 2], lpf=[0, 128, 256, 512, 1024], lps=[0, 64, 128, 256], s12pf=[0, 1], ldf=[0, 1], cc0f=[0, 1], evf=[0, 1, 2, 3, 4, 5], cc0x=[0, 1, 2, 3, 4, 5, 6], oprange=[0, 1], wadk=[0, 1, 2], dload=[0, 1], enc=[0, 1, 2], m6seq=[0, 1], snk=[0, 1], rmap=[0, 1, 2], sil=[0, 1, 2, 3], silp=[1, 2, 3, 4, 8, 12, 15], mflat=[0, 1, 2, 3, 6, 7, 10],
 )
 
 def layout(P):
@@ -157,7 +171,8 @@ def valid(P):
                               or P.get('mru', 0) or P.get('bb', 0) or P.get('c0nb', 0) or P.get('sil', 0) or P.get('mflat', 0)):
         return 'probe: m6seq, and no ov, mv, evf, ll, ovh, mru, bb, c0nb, sil or mflat'
     if P.get('bmap', 0) and (P['bmap'] & (P['bmap'] - 1) or P['bmap'] < 32 or P.get('ldf', 0)): return 'bmap: a power of two from 32, no ldf'
-    if P.get('wtx', 0) and (P['xr'] or P['npair'] or P.get('c0nb', 0)): return 'wtx: no file, pairs or c0nb'
+    if P.get('wtx', 0) and (P['xr'] or P['npair'] or (P.get('c0nb', 0) and not P.get('c0rt', 0))): return 'wtx: no file or pairs, c0nb only with c0rt'
+    if P.get('nbw', 0) and (not P.get('wtx', 0) or P['nbw'] >= P['nb'] or P.get('ov', 0) or P.get('probe', 0)): return 'nbw: wtx, under nb, no ov or probe'
     if P['bw'] * P['bh'] < L['SPIX']: return 'block %dx%d < %d state pixels' % (P['bw'], P['bh'], L['SPIX'])
     if P['band'] < P['bh']: return 'band < bh'
     if P['per'] & (P['per'] - 1): return 'per not a power of two'
@@ -229,6 +244,7 @@ static const uint XR = {P['xr']};
 static const uint XBIND = {L['XBIND']};
 static const uint XFAST = {P['xfast'] if P['xr'] or P['npair'] else 0};
 static const uint NCLOAD = {P.get('nc', 0)};   // GVM_W_NC loads (no look at this pass's stores)
+static const uint PAIRS = {P.get('pairs', 0)};   // the fast loop's pairs (ld2, st2; the assembler's pair_ops)
 static const uint THIN = {P.get('thin', 0)};   // one op a bundle (the assembler's max_ops 1): the fast loop has no op 1
 static const uint THIN8 = {P.get('thin8', 0)};   // 8-byte instructions (gvm_machine.thin)
 static const uint WIDE3 = {P.get('wide3', 0)};   // three ops a bundle (gvm_machine.wide3)
@@ -896,6 +912,234 @@ def evf2_text(P, src):
         "        }", "    }", ""]))
     return src
 
+OPRANGE_X = """static uint odl, odn, osl, osn;   // (oprange) the operations in flight: their destinations' and sources' hulls, 3 bytes low
+uint lx(uint a) { return a - odl < odn ? 0xffffffffu : a & ~GVM_ROM; }   // a load's lmax: out of range in a destination
+uint sx(uint a) { return a - odl < odn || a - osl < osn ? 0xffffffffu : a - GVM_DEV; }   // a store's smax
+"""
+OPRANGE = """void op_hull() {
+    uint dl = 0xffffffffu, dh = 0, sl = 0xffffffffu, sh = 0;
+    [loop] for (uint k = 0; k < min(qn, QMAX); k++) {
+        opd o = op_of(q[2 * k], q[2 * k + 1]);
+        [branch] if (o.dn != 0) { dl = min(dl, o.dst); dh = max(dh, o.dst + o.dn); }
+        [branch] if (o.sn != 0) { sl = min(sl, o.src); sh = max(sh, o.src + o.sn); }
+    }
+    odl = dl - 3; odn = dh > dl ? dh - dl + 3 : 0; osl = sl - 3; osn = sh > sl ? sh - sl + 3 : 0;
+}
+"""
+
+ENC_FNS = """static const uint ENC = %(enc)d;   // (enc) %(name)s: a step's unit is %(U)d bytes, %(per)d a texel
+static const uint EU = %(U)du, ESH = %(sh)du;
+uint e21k(uint w) {   // an op's kind for the paths: 1 lite, 2 mid, 3 a load, 4 a store (W, H, B, HU, BU in modes 0-3), 0 another
+    uint o = (w >> 12) & 255u, f = o & 31u, md = (o >> 3) & 7u, wd = o & 7u;
+    bool intc = (o >> 6) == 1u, memw = (o >> 6) == 2u && md <= 3u && (wd == GVM_W_W || wd == GVM_W_H || wd == GVM_W_B || wd >= GVM_W_HU);
+    return intc && (f <= GVM_I_XNOR || (f >= GVM_I_SLL && f <= GVM_I_SRA)) ? 1u : intc && f <= GVM_I_MID_LAST ? 2u : memw ? ((md & 1u) != 0 ? 4u : 3u) : 0u;
+}
+uint e21path(uint a, uint b, uint n) {   // the E4 path of ops a, b (n of them), as the assembler's path(); 0: the general step's
+    uint ka = n == 0u ? 2u : e21k(a), kb = n < 2u ? 1u : e21k(b);
+    bool ix = ((((b >> 12) & 255u) >> 3) & 2u) != 0, dep = ((a >> 6) & 63u) == (b & 63u) || (ix && ((a >> 6) & 63u) == (b >> 26));
+    return (ka == 1u || ka == 2u) ? (kb == 1u ? GVM_PATH_INT : 0u) : ka >= 3u && kb == 1u ? (ka == 4u ? GVM_PATH_STORE : GVM_PATH_LOAD)
+         : ka == 4u && kb >= 3u ? GVM_PATH_MEM2 : ka == 3u && kb == 3u && !dep ? GVM_PATH_LOAD2 : 0u;
+}
+bool e21ctl(uint w) { return ((w >> 15) & 31u) == 7u; }
+bool e21pre(uint w) { return ((w >> 12) & 255u) == 0x1fu; }
+uint e21const(uint p, uint op) { return (p & 0xfff00000u) | (p & 0xfffu) << 8 | ((op >> 20) & 0xffu); }
+// the unit at tp (units of EU bytes) of texel q (its next texel q2, for E1's prefix) as an E4 bundle: its words, control word
+// (path, n, long, cc, ca, cb as E4's), the branch's distance in units and the units it takes
+void e21unit(uint4 q, uint tp, out uint4 t, out uint ctl, out int off, out uint adv) {
+    t = uint4(0, 0, 0, 0); off = 0; adv = 1u;
+    uint n = 0, L = 0, cw = 0, path = 0;
+    bool bad = false, hasc = false;
+#if %(e2)d
+    uint A = (tp & 1u) != 0 ? q.z : q.x, B = (tp & 1u) != 0 ? q.w : q.y;
+    [branch] if (e21pre(A)) { t.x = B; t.z = e21const(A, B); n = 1; L = 0x20u; bad = e21ctl(B) || e21pre(B); }
+    else [branch] if (e21ctl(B)) { t.x = A; n = 1; cw = B; hasc = true; bad = e21ctl(A) || e21pre(A); }
+    else { t.x = A; t.y = B; n = 2; bad = e21ctl(A) || e21pre(A); }
+#else
+    uint A = pick(q, tp & 3u);
+    [branch] if (e21ctl(A)) { cw = A; hasc = true; }
+    else [branch] if (e21pre(A)) { bad = (tp & 3u) == 3u; uint B = pick(q, (tp + 1u) & 3u); t.x = B; t.z = e21const(A, B); n = 1; L = 0x20u; adv = 2u; bad = bad || e21ctl(B) || e21pre(B); }
+    else { t.x = A; n = 1; }
+#endif
+    uint cc = hasc ? ((cw >> 12) & 7u) | ((cw >> 17) & 8u) : GVM_CC_BNE;
+    path = bad || cc == GVM_CC_SPECIAL || (cc == GVM_CC_ADDBNZ && (cw & 63u) == 0u) ? 0u : e21path(t.x, t.y, n);
+    off = hasc ? (int)cw >> 21 : 0;
+    ctl = path | n << 3 | L | cc << 7 | (hasc ? (cw & 63u) << 11 | ((cw >> 6) & 63u) << 26 : 0u);
+}
+"""
+
+ENC_GEN = """// (enc) the general step's unit: GPU-VM's ref gvm_step21, a control word as gvm__control21
+uint control21(uint w, uint cw, uint next, uint ca0, uint cb0) {   // 1: trapped
+    uint cc = ((w >> 12) & 7u) | ((w >> 17) & 8u);
+    int off = (int)w >> 21;
+    [branch] if (cc == GVM_CC_SPECIAL) {
+        uint sub = (w >> 6) & 7u, rs = w & 63u;
+        int dist = (int)((asuint(off) << 9) | ((w >> 9) & 7u) << 6 | (w & 63u));
+        [branch] if (sub == 0u || (sub == GVM_SUB_ADD && rs == 0u)) { trap(GVM_CAUSE_ILLEGAL, cw, w); return 1; }
+        [branch] if (sub == GVM_SUB_ERET) {
+            [branch] if ((st & GVM_ST_S) == 0) { trap(GVM_CAUSE_PRIV, cw, w); return 1; }
+            next = epc;
+            st = (st & GVM_ST_PIE ? GVM_ST_IE : 0) | (st & GVM_ST_PS ? GVM_ST_S : 0) | GVM_ST_PIE;
+        }
+        uint to = r[rs] & ~(EU - 1u), far = cw + asuint(dist) * EU;
+        r[sub == GVM_SUB_CALLR || sub == GVM_SUB_CALL ? 1 : 64] = next;
+        r[sub == GVM_SUB_ADD ? rs : 64] = ca0 + ((asuint(off) << 3) | ((w >> 9) & 7u));
+        next = sub == GVM_SUB_JR || sub == GVM_SUB_CALLR ? to : sub == GVM_SUB_J || sub == GVM_SUB_CALL ? far : next;
+    } else {
+        uint rbf = (w >> 6) & 63u, ctl4 = cc << 7 | rbf << 26, i6 = asuint((int)ctl4 >> 26), sum = ca0 + i6;
+        [branch] if (cc == GVM_CC_ADDBNZ && (w & 63u) == 0u) { trap(GVM_CAUSE_ILLEGAL, cw, w); return 1; }
+        r[cc == GVM_CC_ADDBNZ ? (w & 63u) : 64] = sum;
+        next = taken(ctl4, ca0, cb0, i6, sum) != 0 ? cw + asuint(off) * EU : next;
+    }
+    pc = next;
+    return 0;
+}
+uint bundle21() {
+    uint e = NONE, res = 0;
+    [branch] if (pc >= _RamEnd || (pc & 3u) != 0) { trap(GVM_CAUSE_FETCH, pc, pc); return NONE; }
+    uint4 q = ram(pc >> 4);
+    cycle++;
+#if %(e2)d
+    uint base = pc & ~7u, A = (pc & 8u) != 0 ? q.z : q.x, B = (pc & 8u) != 0 ? q.w : q.y;
+    [branch] if (e21pre(A)) {   // {prefix, op}
+        [branch] if (e21ctl(B) || e21pre(B)) { trap(GVM_CAUSE_ILLEGAL, base, A); return NONE; }
+        res = op_any(B, e21const(A, B), true, base, 0, e);
+        [branch] if (res == 1) return NONE;
+        [branch] if (res != 0) { pc = pc == (base | 4u) ? base + 8 : pc; return e; }
+        pc = base + 8;
+        return NONE;
+    }
+    [branch] if (e21ctl(B)) {   // {op, control}: the control word on the registers as the unit found them
+        uint ca0 = r[B & 63u], cb0 = r[(B >> 6) & 63u];
+        [branch] if ((pc & 4u) == 0) {
+            [branch] if (e21ctl(A) || e21pre(A)) { trap(GVM_CAUSE_ILLEGAL, base, A); return NONE; }
+            res = op_any(A, simm12(A), false, base, 0, e);
+            [branch] if (res == 1) return NONE;
+            [branch] if (res != 0) { pc = pc != base ? base | 4u : pc; return e; }
+        }
+        control21(B, base, base + 8, ca0, cb0);
+        return NONE;
+    }
+    [branch] if (e21ctl(A) || e21pre(A)) { trap(GVM_CAUSE_ILLEGAL, base, A); return NONE; }
+    uint s = (pc & 4u) != 0 ? 1u : 0u;
+    [loop] for (; s < 2u && res == 0; s++) res = op_any(s != 0 ? B : A, simm12(s != 0 ? B : A), false, base, s, e);
+    [branch] if (res == 1) return NONE;
+    [branch] if (res != 0) { pc = pc == (base | 8u) ? base + 8 : pc; return e; }
+    pc = base + 8;
+    return NONE;
+#else
+    uint A = pick(q, (pc >> 2) & 3u);
+    [branch] if (e21ctl(A)) { uint ca0 = r[A & 63u]; control21(A, pc, pc + 4, ca0, r[(A >> 6) & 63u]); return NONE; }
+    [branch] if (e21pre(A)) {   // the prefix and its op, one step
+        [branch] if (pc + 4 >= _RamEnd) { trap(GVM_CAUSE_FETCH, pc, pc + 4); return NONE; }
+        uint B = pick(ram((pc + 4) >> 4), ((pc + 4) >> 2) & 3u), at = pc;
+        [branch] if (e21ctl(B) || e21pre(B)) { trap(GVM_CAUSE_ILLEGAL, pc, A); return NONE; }
+        res = op_any(B, e21const(A, B), true, at, 0, e);
+        [branch] if (res == 1) return NONE;
+        [branch] if (res != 0) { pc = pc == at + 4 ? at + 8 : pc; return e; }
+        pc = at + 8;
+        return NONE;
+    }
+    uint at = pc;
+    res = op_any(A, simm12(A), false, at, 0, e);
+    [branch] if (res == 1) return NONE;
+    [branch] if (res != 0) return e;
+    pc = at + 4;
+    return NONE;
+#endif
+}
+"""
+
+def enc_text(P, src):
+    """enc 2, 1: GPU-VM's E2 and E1 (spec/ENCODINGS.md) in place of E4's bundles: the fast step takes a unit as the E4 bundle
+    it means (e21unit, the path found from its ops), the general step runs it as the reference's gvm_step21"""
+    if not P.get('enc', 0): return src
+    e = P['enc']
+    d = dict(enc=e, name='E2' if e == 2 else 'E1', U=8 if e == 2 else 4, per=2 if e == 2 else 4, sh=3 if e == 2 else 2, e2=1 if e == 2 else 0)
+    def rep(a, b, n=1):
+        nonlocal src
+        assert src.count(a) == n, 'enc: %d of ' % src.count(a) + a[:60]
+        src = src.replace(a, b)
+    rep("// ---- The fast loop's step: paths 3-7", ENC_FNS % d + "// ---- The fast loop's step: paths 3-7")
+    rep("void fstep(inout uint budget) {\n    uint4 t = cur;\n    uint ctl = t.w, path = ctl & 7, n8 = ctl & 0x18;\n"
+        "    uint tg = tp + asuint((int)(ctl << 6) >> 23), tn = tp + 1;\n    uint4 nx = ram(tn), tc = ram(tg);\n",
+        "bool fstep(inout uint budget) {   // (enc) false: the unit is not the fast loop's (nothing made)\n"
+        "    uint4 t; uint ctl, adv; int off;\n    e21unit(cur, tp, t, ctl, off, adv);\n    uint path = ctl & 7, n8 = ctl & 0x18;\n"
+        "    [branch] if (path < thr || irq_due) return false;\n"
+        "    uint tg = tp + asuint(off), tn = tp + adv;\n    uint4 nx = ram(tn >> (4u - ESH)), tc = ram(tg >> (4u - ESH));\n")
+    rep("    budget--;\n    ops8 += n8;\n}\n", "    budget--;\n    ops8 += n8;\n    return true;\n}\n")
+    rep("        tp = pc >> 4;\n", "        tp = pc >> ESH;\n        bool fok = (pc & (EU - 1u)) == 0;   // (enc) a unit's start\n")
+    rep("        [loop] while (budget > 0 && guard > 0 && (cur.w & 7) >= thr) { fstep(budget); guard--; }\n",
+        "        [loop] while (budget > 0 && guard > 0 && fok) { [branch] if (!fstep(budget)) break; guard--; }\n")
+    rep("        pc = b0 != budget ? tp << 4 : pc;\n", "        pc = b0 != budget ? tp << ESH : pc;\n")
+    rep("        [branch] if (budget > 0 && (path == GVM_PATH_ALU || path == GVM_PATH_MEMF) && thr == GVM_PATH_FAST) budget = step12(budget);\n        else [branch] if (budget > 0) budget = general(budget);\n",
+        "        [branch] if (budget > 0) budget = general(budget);   // (enc: no step12, its paths are the general step's)\n")
+    rep("    cur.w &= (pc & 15) != 0 || irq_due ? ~7u : 0xffffffffu;   // (the fast loop makes whole bundles, and takes no interrupt)\n", "")
+    rep("    cur.w &= (pc & 15) != 0 || irq_due ? ~7u : 0xffffffffu;\n", "")
+    rep("    [branch] if (irq_due && (pc & 15) == 0) {\n", "    [branch] if (irq_due && (pc & (EU - 1u)) == 0) {\n")
+    rep("    uint e = bundle();\n", "    uint e = bundle21();\n")
+    rep("    pc = tvec & ~15u;\n", "    pc = tvec & ~(EU - 1u);\n")
+    rep("// The general step: an interrupt if one is due, then a bundle;", ENC_GEN % d + "// The general step: an interrupt if one is due, then a bundle;")
+    return src
+
+def dload_text(P, src):
+    """dload: path 4's two loads written into the file a bundle late, decoded then from the raw texel (the GPU waits for a texel
+    at its first use, so its fetch overlaps the next bundle unless that bundle names the register)"""
+    if not P.get('dload', 0): return src
+    def rep(a, b):
+        nonlocal src
+        assert src.count(a) == 1, 'dload: ' + a[:60]
+        src = src.replace(a, b)
+    rep("// ---- The fast loop's step: paths 3-7",
+        "static uint4 pq0, pq1;   // (dload) the deferred loads: texel, hit, cache word, word, address, op word, register (64: none)\n"
+        "static bool ph0, ph1;\nstatic uint pw0, pw1, pi0, pi1, pa0, pa1, po0, po1, pd0, pd1;\n"
+        "uint dval(uint4 q, bool h, uint w, uint i, uint ad, uint op) { return extend(op, h ? w : pick(q, i), ad); }\n"
+        "void dflush() { r[pd0] = dval(pq0, ph0, pw0, pi0, pa0, po0); r[pd1] = dval(pq1, ph1, pw1, pi1, pa1, po1); pd0 = 64u; pd1 = 64u; }\n"
+        "// ---- The fast loop's step: paths 3-7")
+    rep("    uint A0 = r[ra0], B0 = r[rb0], A1 = r[ra1], B1 = r[rb1], CA = r[ca], CB = r[cb];\n",
+        "    [branch] if (pd0 != 64u || pd1 != 64u) {   // (dload) the file takes the loads before when this bundle names one or defers its own\n"
+        "        bool u = path == GVM_PATH_LOAD2;\n"
+        "        u = u || ra0 == pd0 || rb0 == pd0 || ra1 == pd0 || rb1 == pd0 || ca == pd0 || cb == pd0 || d0 == pd0 || d1 == pd0;\n"
+        "        u = u || ra0 == pd1 || rb0 == pd1 || ra1 == pd1 || rb1 == pd1 || ca == pd1 || cb == pd1 || d0 == pd1 || d1 == pd1;\n"
+        "        [branch] if (u) dflush();\n"
+        "    }\n"
+        "    uint A0 = r[ra0], B0 = r[rb0], A1 = r[ra1], B1 = r[rb1], CA = r[ca], CB = r[cb];\n")
+    rep("            v0 = extend(t.x, seen(m0), m0.ad);\n            r[s0] = v0;\n            v1 = extend(t.y, seen(m1), m1.ad);\n",
+        "            pq0 = m0.q; ph0 = m0.e != WCN; pw0 = m0.w; pi0 = m0.i; pa0 = m0.ad; po0 = t.x; pd0 = s0;   // (dload)\n"
+        "            pq1 = m1.q; ph1 = m1.e != WCN; pw1 = m1.w; pi1 = m1.i; pa1 = m1.ad; po1 = t.y; pd1 = s1;\n"
+        "            s1 = 64; v0 = 0; v1 = 0;   // (the step's r[s1] = v1 must not wait for them)\n")
+    rep("        [loop] while (budget > 0 && guard > 0 && (cur.w & 7) >= thr) { fstep(budget); guard--; }\n",
+        "        [loop] while (budget > 0 && guard > 0 && (cur.w & 7) >= thr) { fstep(budget); guard--; }\n"
+        "        dflush();   // (dload) the file whole for the other steps\n")
+    rep("    uint guard = budget + 8;   // a hard cap on the trips of both loops, whatever the budget does\n",
+        "    uint guard = budget + 8;   // a hard cap on the trips of both loops, whatever the budget does\n"
+        "    pd0 = 64u; pd1 = 64u; pq0 = 0; pq1 = 0; ph0 = false; ph1 = false; pw0 = 0; pw1 = 0; pi0 = 0; pi1 = 0; pa0 = 0; pa1 = 0; po0 = 0; po1 = 0;   // (dload)\n")
+    return src
+
+def oprange_text(P, src):
+    '''oprange: the fast loop runs with operations in flight, its loads and stores checked against their hulls after the pass'''
+    if not P.get('oprange', 0): return src
+    import re
+    def rep(a, b):
+        nonlocal src
+        assert src.count(a) == 1, 'oprange: ' + a[:60]
+        src = src.replace(a, b)
+    rep("bool op_waits(uint a, uint by, bool store) {", OPRANGE + "bool op_waits(uint a, uint by, bool store) {")
+    rep("// ---- The fast loop's step: paths 3-7", OPRANGE_X + "// ---- The fast loop's step: paths 3-7")
+    rep("qn++; thr = GVM_PATH_INT; }", "qn++; op_hull(); }   // (oprange: the fast loop goes on)")
+    rep("    thr = (flags & F_AGAIN) != 0 || qn != 0 ? GVM_PATH_INT : GVM_PATH_FAST;\n",
+        "    thr = (flags & F_AGAIN) != 0 ? GVM_PATH_INT : GVM_PATH_FAST;\n    op_hull();   // (oprange)\n")
+    n = 0
+    out = []
+    for l in src.split('\n'):
+        if 'lmax = max(' in l or 'smax = max(' in l:
+            l2 = re.sub(r'([\w.]+) & ~GVM_ROM', r'lx(\1)', l)
+            l2 = re.sub(r'([\w.]+) - GVM_DEV', r'sx(\1)', l2)
+            n += l2 != l
+            l = l2
+        out.append(l)
+    assert n > 0
+    return '\n'.join(out)
+
 def cc0x_text(P, src):
     '''cc0x: j, call, jr and callr in the fast step (the assembler gives them paths 7, 3, 5 when their ops fit and none writes jr's rs)'''
     if not P.get('cc0x', 0): return src
@@ -903,6 +1147,29 @@ def cc0x_text(P, src):
         nonlocal src
         assert src.count(a) == 1, 'cc0x: ' + a[:60]
         src = src.replace(a, b)
+    if P['cc0x'] >= 4:   # (4: apart, the plain tail as it was and a branch for cc 0 after the ops, its target fetched there;
+                         #  5: j's and call's target picked at the top and fetched early; 6: jr's and callr's too)
+        tail = ("    uint i6 = asuint((int)ctl >> 26), sum = CA + i6;\n"
+                "    uint tk = taken(ctl, CA, CB, i6, sum);\n"
+                "    r[(ctl & 0x780) != (GVM_CC_ADDBNZ << 7) ? 64 : ca] = sum;\n"
+                "    tp = tk ? tg : tn;\n"
+                "    cur = tk ? tc : nx;\n")
+        rep(tail,
+            "    [branch] if ((ctl & 0x780) == 0) {   // (cc0x 4) j, call, jr, callr, apart\n"
+            "        uint sb = (ctl >> 11) & 7;\n" +
+            ("        uint g = (sb == GVM_SUB_JR || sb == GVM_SUB_CALLR) ? r[(ctl >> 14) & 63] >> 4 : tp + asuint((int)ctl >> 14);\n" if P['cc0x'] == 4 else
+             "        bool ind = sb == GVM_SUB_JR || sb == GVM_SUB_CALLR;\n        uint g = ind ? r[(ctl >> 14) & 63] >> 4 : tg;\n" if P['cc0x'] == 5 else
+             "        uint g = tg;\n") +
+            "        r[(sb == GVM_SUB_CALL || sb == GVM_SUB_CALLR) ? 1 : 64] = tn << 4;\n"
+            "        tp = g;\n" +
+            ("        cur = ram(g);\n" if P['cc0x'] == 4 else "        cur = ind ? ram(g) : tc;\n" if P['cc0x'] == 5 else "        cur = tc;\n") +
+            "    } else {\n" + ''.join('    ' + l + '\n' for l in tail.splitlines()) + "    }\n")
+        top = "    uint tg = tp + asuint((int)(ctl << 6) >> 23), tn = tp + 1;\n"
+        if P['cc0x'] == 5:
+            rep(top, "    uint tg = tp + ((ctl & 0x780) == 0 ? asuint((int)ctl >> 14) : asuint((int)(ctl << 6) >> 23)), tn = tp + 1;   // (cc0x 5: j's and call's target)\n")
+        elif P['cc0x'] == 6:
+            rep(top, "    uint sb6 = (ctl >> 11) & 7;\n    uint tg = (ctl & 0x780) == 0 ? ((sb6 == GVM_SUB_JR || sb6 == GVM_SUB_CALLR) ? r[(ctl >> 14) & 63] >> 4 : tp + asuint((int)ctl >> 14)) : tp + asuint((int)(ctl << 6) >> 23), tn = tp + 1;   // (cc0x 6)\n")
+        return src
     rep("    uint ctl = t.w, path = ctl & 7, n8 = ctl & 0x18;\n",
         "    uint ctl = t.w, path = ctl & 7, n8 = ctl & 0x18;\n"
         "    uint sb = (ctl >> 11) & 7;\n    bool c0 = (ctl & 0x780) == 0, ind = c0 && (sb == GVM_SUB_JR || sb == GVM_SUB_CALLR), cl = c0 && (sb == GVM_SUB_CALL || sb == GVM_SUB_CALLR);   // (cc0x)\n")
@@ -926,6 +1193,65 @@ def cc0x_text(P, src):
         "    bool ab = (ctl & 0x780) == (GVM_CC_ADDBNZ << 7);\n    r[ab ? ca : cl ? 1 : 64] = ab ? sum : tn << 4;   // (cc0x: the sum, or a call's return address)\n")
     return src
 
+PAIR_APART = '''[branch] if ((path & 1) != 0) {   // a load or a store, and a lite op (paths 3 and 5)
+          [branch] if ((t.x & op_bit(0x37)) == op_bit(1)) {   // (pairs 4) a pair (ld2, st2), apart: rd and rb from the words at ad, ad + 4 of one texel
+            bool st0 = (t.x & op_bit(8)) != 0;
+            uint ip = (ctl & 0x20) ? t.z : asuint(GVM_IMM_D(t.x));
+            mvok = MV != 0 && st0; mop m0 = mread_entries(t.x, ip, A0, B0, st0); mvok = false;
+            [branch] if (!st0) m0.q = data_texel(m0.ad);
+            smax = max(smax, st0 ? m0.ad - GVM_DEV : 0);
+            lmax = max(lmax, (m0.ad & 3) != 0 || (m0.ad & 15) == 12 ? 0xffffffffu : st0 ? 0 : m0.ad & ~GVM_ROM);   // (across texels: redone)
+            uint w0 = seen(m0), sl0 = slot(m0), i2 = (m0.i + 1) & 3, o2 = slot_tag(m0, sl0);
+            uint e2 = has(o2, m0.t, i2) ? sl0 : WCN, w2 = e2 != WCN ? wd[4 * e2 + i2] : pick(m0.q, i2);
+            bool nr = st0 && sl0 == NONE;
+            uint at0 = st0 ? (nr ? WCS : sl0) : WCN;
+            wt[at0] = stag(o2, m0.t, m0.i) | (st0 ? 1u << (28 + i2) : 0u);
+            wd[4 * at0 + m0.i] = r[d0];
+            wd[4 * at0 + i2] = B0;
+            bloom |= st0 ? m0.t : 0;
+            cycle -= nr ? budget - 1 : 0; budget = nr ? 1 : budget;
+            s0 = st0 ? 64 : s0;
+            r[s0] = w0;
+            r[st0 || rb0 == 0 ? 64 : rb0] = w2;
+            v1 = alu_lite(t.y, i1, ra1 == s0 ? w0 : A1, rb1 == s0 ? w0 : B1);
+          } else {
+'''
+
+def pairs_apart(m35):
+    '''pairs 4: the pair a branch of its own at the top of paths 3 and 5; the word ops' code as without pairs'''
+    head = MEM35.split(chr(10), 1)[0] + chr(10)
+    assert m35.count(head) == 1 and m35.endswith('        }'), 'pairs 4'
+    return m35.replace(head, PAIR_APART) + chr(10) + '        }'
+
+def pairs_text(m35, flat=False):
+    '''pairs: op 0 of paths 3 and 5 may be a pair (ld2, st2), rd and rb from the words at ad and ad + 4 of one texel. Op 1 reads
+    neither of a load pair's registers (the assembler opens a bundle), so only rd is forwarded as before.'''
+    def rep(a, b):
+        nonlocal m35
+        assert m35.count(a) == 1, 'pairs: ' + a[:60]
+        m35 = m35.replace(a, b)
+    rep('''            bool st0 = (t.x & op_bit(8)) != 0;
+''', '''            bool st0 = (t.x & op_bit(8)) != 0;
+            bool pr = (t.x & op_bit(0x37)) == op_bit(1);   // (pairs) ld2, st2: the second word to rb (isa.h GVM_IMM_D)
+            i0 = pr && (ctl & 0x20) == 0 ? asuint(GVM_IMM_D(t.x)) : i0;
+''')
+    rep('''            [branch] if ((((t.x ^ op_bit(8)) & op_bit(11)) | (m0.ad & 3)) != 0) m0.q = data_texel(m0.ad);''',
+        '''            [branch] if ((((t.x ^ op_bit(8)) & (pr ? op_bit(8) : op_bit(11))) | (m0.ad & 3)) != 0) m0.q = data_texel(m0.ad);''')
+    rep('''lmax = max(lmax, st0 ? 0 : m0.ad & ~GVM_ROM);''',
+        '''lmax = max(lmax, pr && ((m0.ad & 3) != 0 || (m0.ad & 15) == 12) ? 0xffffffffu : st0 ? 0 : m0.ad & ~GVM_ROM);   // (a pair across texels: redone)''')
+    rep('''            v0 = extend(t.x, w0, m0.ad);''', '''            v0 = pr ? w0 : extend(t.x, w0, m0.ad);''')
+    rep('''            wd[4 * at0 + m0.i] = merge(t.x, w0, m0.ad, r[d0]);
+''', '''            wd[4 * at0 + m0.i] = pr ? r[d0] : merge(t.x, w0, m0.ad, r[d0]);
+            ''' + ('[flatten]' if flat else '[branch]') + ''' if (pr) {   // (pairs) the second word: a store's into the entry, a load's into rb
+                uint i2 = (m0.i + 1) & 3, o2 = slot_tag(m0, sl0);
+                uint e2 = has(o2, m0.t, i2) ? sl0 : WCN, w2 = e2 != WCN ? wd[4 * e2 + i2] : pick(m0.q, i2);
+                wt[at0] = st0 ? wt[at0] | 1u << (28 + i2) : wt[at0];
+                wd[4 * at0 + i2] = B0;
+                r[st0 || rb0 == 0 ? 64 : rb0] = w2;
+            }
+''')
+    return m35
+
 def fstep(P):
     m35 = (xfast(P) if (P['xr'] or P['npair']) and P['xfast'] else '') + (LDF if P.get('ldf', 0) else '') + MEM35
     if P.get('snk', 0):
@@ -938,6 +1264,8 @@ def fstep(P):
                 wd[4 * at0 + m0.i] = merge(t.x, w0, m0.ad, r[d0]);
             }
 ''')
+    if P.get('pairs', 0) in (1, 2): m35 = pairs_text(m35, P['pairs'] == 2)
+    elif P.get('pairs', 0) == 4: m35 = pairs_apart(m35)
     m6 = MEM6SEQ if P.get('m6seq', 0) else MEM6
     if P['mem_order'] == '35':
         mem = m35 + ' else ' + MEM4 + ' else ' + m6
@@ -1183,7 +1511,7 @@ void load_state(uint c) {
 WADBLK = "    bud = core == 0 ? _Ticks : _Ticks >> WSH;   // (wsh)\n    [branch] if (WAD != 0 && core != 0) {   // (wad: the pass ends about when core 0's does)\n        uint4 z = state_in(19, 0);\n        bool cap = WAD == 1 || WAD == 4 ? z.w == E_SYNC || z.w == E_FULL : WAD != 5 && z.w == E_FULL;   // (2, 3, 6: core 0 had work: its cache was full; 5 never then)\n        [branch] if (WAD == 7 && cap) cap = ram((WAITW >> 4) + 2).x != 0;   // (7: on full only while a program has declared its mask)\n        [branch] if (WAD >= 5 && z.w == E_SYNC) {   // (5-7: core 0 rested: the workers it waits for, from the kernel's word at WAITW; no mask, no cap)\n            uint4 m0 = ram(WAITW >> 4), m1 = ram((WAITW >> 4) + 1);\n            uint4 mm = (core >> 7) != 0 ? m1 : m0;\n            bool given = any((m0 | m1) != 0), mine = ((pick(mm, (core >> 5) & 3) >> (core & 31)) & 1) != 0;\n            cap = given && !mine;\n        }\n        [branch] if (WAD == 4 && cap) {   // (4: not when the workers are the work: half of cores 1-8 ran their whole budget)\n            uint busy = 0, k;\n            [loop] for (k = 1; k <= 8; k++) busy += k < _NCores && state_in(19, k).w == E_BUDGET ? 1u : 0u;\n            cap = busy < 4;\n        }\n        bud = cap ? clamp(z.z + (z.z >> 2), WAD == 3 ? bud >> 1 : 512u, bud) : bud;\n    }\n"   # (the frag's budget: wsh, wad)
 
 def wad_text(P):
-    t = WADBLK
+    t = WADBLK.replace('z.z + (z.z >> 2)', ['z.z + (z.z >> 2)', 'z.z', 'z.z - (z.z >> 2)'][P.get('wadk', 0)])
     if P.get('wadf', 0) & 1:   # (straight-line: every core reads the words, no branches)
         t = t.replace('[branch] if (WAD != 0 && core != 0) {', '{').replace('[branch] if (WAD', '[flatten] if (WAD')
     return t
@@ -1418,6 +1746,92 @@ def p2strip(P, src):
 """ + src[j:]
     return src
 
+QS_HELPERS = r'''static uint ql;   // (qs) this pixel's lane in its quad: x & 1, y & 1 << 1
+// (qs) an entry's data lies only with the lane whose pixel writes its texel out (texel T_WC + e, pixel j = rx * 8 + ry),
+// in that lane's local entry qloc(e): a quarter of the entries a lane. The tags stay in every lane.
+uint qown(uint e) { uint j = (T_WC + e) >> 3; return ((j >> 3) & 1u) | ((j & 1u) << 1); }
+uint qloc(uint e) { uint j = (T_WC + e) >> 3; return ((((j >> 4) << 2) | ((j & 7u) >> 1)) << 3) | ((T_WC + e) & 7u); }
+uint wdi(uint e, uint i) { return e < WCN && qown(e) == ql ? 4 * qloc(e) + i : 4 * QSL + i; }   // (another lane's or the sink's: the spare)
+uint wdr0(uint e, uint i) { return e < WCN && qown(e) == ql ? wd[4 * qloc(e) + i] : 0u; }   // (this lane's word, 0 for another's)
+uint qsum(uint v) {   // (qs) the quad's sum by ddx_fine and ddy_fine, exact on 16-bit halves: the owner's word in every lane
+    float lo = (float)(v & 0xffffu), hi = (float)(v >> 16);
+    float dl = ddx_fine(lo), dh = ddx_fine(hi);
+    lo += (ql & 1u) != 0 ? lo - dl : lo + dl; hi += (ql & 1u) != 0 ? hi - dh : hi + dh;
+    dl = ddy_fine(lo); dh = ddy_fine(hi);
+    lo += (ql & 2u) != 0 ? lo - dl : lo + dl; hi += (ql & 2u) != 0 ? hi - dh : hi + dh;
+    return (uint)lo | ((uint)hi << 16);
+}
+'''
+
+def quad_split(P, src):
+    """qs: the write cache's data split among the four lanes of each quad (gpu_vm/tick/CACHE.md, "Lanes that share the
+    cache"): every lane keeps every tag, so each decision stays the same in all lanes, and an entry's four words only in
+    the lane that writes its texel out at the pass's end. A store writes its owner's copy (the others a spare); a load that
+    hits a word stored this pass takes it from the owner by a quad sum (ddx_fine, ddy_fine); every pixel of a core's block
+    runs, so its quads are whole. 4 x 8 blocks and whole-texel entries only."""
+    import re
+    if not P.get('qs', 0): return src
+    assert P['bw'] == 4 and P['bh'] == 8 and P.get('wtx', 0) and not P.get('mv', 0) and not P.get('c0nb', 0), 'qs: 4 x 8, wtx, no mv or c0nb'
+    def rep(a, b):
+        nonlocal src
+        assert src.count(a) == 1, 'qs: ' + a[:70]
+        src = src.replace(a, b)
+    m = re.search(r'static uint wd\[[^\]\n]*\];[^\n]*\n', src)
+    assert m, 'qs: the data array'
+    src = src[:m.start()] + ('static const uint QSL = 64;   // (qs) a lane\'s entries: pixels 0-31 of the block, a quarter of them\n'
+                             'static uint wd[QSL * 4 + 4];   // (qs) this lane\'s entries\' words, then a spare entry\n' + QS_HELPERS) + src[m.end():]
+    rep('    m.w = wd[4 * m.e + m.i];\n', '    m.w = wdr0(m.e, m.i);\n')
+    rep('    return mlook(ad, st || ((ad >> 4) & bloom) == (ad >> 4));\n',
+        '    mop m = mlook(ad, st || ((ad >> 4) & bloom) == (ad >> 4));\n'
+        '    [branch] if (!st && m.e != WCN) m.w = qsum(m.w);   // (qs) a load of a word stored this pass: its owner\'s\n    return m;\n')
+    rep('    mop m = mread_entries(w, imm, a, b, true);\n    m.q = data_texel(m.ad);\n',
+        '    mop m = mread_entries(w, imm, a, b, true);\n    [branch] if ((w & op_bit(8)) == 0 && m.e != WCN) m.w = qsum(m.w);   // (qs) a load\n    m.q = data_texel(m.ad);\n')
+    rep('            m1.w = wd[4 * m1.e + m1.i];\n',
+        '            m1.w = wdr0(m1.e, m1.i);\n            [branch] if (!st1 && m1.e != WCN) m1.w = qsum(m1.w);   // (qs) a load\n')
+    rep('    mop m = mlook(a, true);\n    uint v = pick_ad(data_texel(a), a);\n',
+        '    mop m = mlook(a, true);\n    [branch] if (m.e != WCN) m.w = qsum(m.w);   // (qs)\n    uint v = pick_ad(data_texel(a), a);\n')
+    rep('            sl[k] = s; wast[k] = tg; was[k] = e; wix[k] = 4 * s + i;\n', '            sl[k] = s; wast[k] = tg; was[k] = e; wix[k] = wdi(s, i);\n')
+    rep('        uint4 v = uint4(wd[e], wd[e + 1], wd[e + 2], wd[e + 3]);\n',
+        '        uint q4 = 4 * qloc(t - T_WC);   // (qs: this pixel\'s own entries)\n        uint4 v = uint4(wd[q4], wd[q4 + 1], wd[q4 + 2], wd[q4 + 3]);\n')
+    src = re.sub(r'\bwd\[4 \* ([\w.]+) \+ ([^\]\n]+?)\]', r'wd[wdi(\1, \2)]', src)   # (every other entry's word: its owner's, or the spare)
+    src = re.sub(r'\bwd\[4 \* ([\w.]+)\]', r'wd[wdi(\1, 0)]', src)
+    assert not re.search(r'\bwd\[4 \* ', src.replace('wd[4 * qloc(e) + i]', '')), 'qs: an entry\'s word left'
+    rep('    uint rx = p.x % 4u, ry = p.y % 8u;\n', '    uint rx = p.x % 4u, ry = p.y % 8u;\n    ql = (p.x & 1u) | ((p.y & 1u) << 1);\n')
+    rep('[branch] if (core >= _NCores || j >= SPIX || ry >= 8u) {', '[branch] if (core >= _NCores || ry >= 8u) {   // (qs: every pixel runs, its quad whole)\n   ')
+    return src
+
+def worker_nb(P, src):
+    """nbw: the workers' write cache is the first 8 * nbw entries of core 0's (nb buckets a table), chosen at run time in the one
+    compile: the local arrays keep nb's size, and a worker touches only its part, so its lanes' local memory is a small cache's
+    while core 0 has the large one. The state layout (T_WT, the commit's points) is nb's for every core."""
+    import re
+    nw = P.get('nbw', 0)
+    if not nw: return src
+    def rep(a, b):
+        nonlocal src
+        assert src.count(a) == 1, 'nbw: ' + a[:70]
+        src = src.replace(a, b)
+    rep('static const uint WCS = WCN - 2;\n', 'static const uint WCS = WCN - 2;\n'
+        'static const uint NBW = %d;   // (nbw) a worker\'s buckets a table\n'
+        'static uint NBD;   // (nbw) this core\'s: NB on core 0, NBW on a worker\n' % nw)
+    line = src[src.index('static uint wt['):].split('\n', 1)[0]
+    rep(line + '\n', line + '\nuint wtg(uint e) { return e < 8 * NBD || e >= WCS ? wt[e] : NONE; }   // (nbw) a tag, NONE past this core\'s part\n')
+    for a in ('uint wc_b1(uint t) { return ', 'uint wc_b2(uint t) { return '):
+        line = src[src.index(a):].split('\n', 1)[0]
+        rep(line, re.sub(r'\bNB\b', 'NBD', line))
+    rep('    [loop] for (k = 0; k <= WCN; k++) wt[k] = NONE;\n',
+        '    NBD = c == 0 ? NB : NBW;\n'
+        '    [loop] for (k = 0; k < 8 * NBD; k++) wt[k] = NONE;\n'
+        '    wt[WCS] = NONE; wt[WCS + 1] = NONE; wt[WCN] = NONE;   // (nbw) the overflow slots and the sink\n')
+    rep('        uint e = 4 * (t - T_WC), g = wt[t - T_WC];\n        uint4 v = uint4(wd[e], wd[e + 1], wd[e + 2], wd[e + 3]);\n',
+        '        uint e = 4 * (t - T_WC), g = wtg(t - T_WC);\n'
+        '        [branch] if (g == NONE) return uint4(0, 0, 0, 0);   // (nbw: an entry past a worker\'s part is not read)\n'
+        '        uint4 v = uint4(wd[e], wd[e + 1], wd[e + 2], wd[e + 3]);\n')
+    rep('        return uint4(wt[k], wt[k + 1], k + 2 < WCN ? wt[k + 2] : NONE, k + 3 < WCN ? wt[k + 3] : NONE);\n',
+        '        return uint4(wtg(k), wtg(k + 1), k + 2 < WCN ? wtg(k + 2) : NONE, k + 3 < WCN ? wtg(k + 3) : NONE);\n')
+    return src
+
+
 def core0(P, src):
     """c0nb: core 0's own write cache of 2 x c0nb buckets (8 * c0nb + 2 entries), its tick the same source compiled with
     CORE0=1 and drawn apart (the harness's and gvmbench's x25 path): its state pixels from bw * bh on lie in the rows under its
@@ -1542,7 +1956,7 @@ def emit(P):
         k = 'uint4 state_out(uint t, uint4 s3) {'
         out = [x.replace(k, 'uint3 start_key(uint c) { uint4 w = ram((0x00c00000u >> 4) + c); return uint3(w.xy, w.z ^ (w.w * 0x9e3779b1u)); }   // (idlew) its start texel\n' + k) for x in out]
     from newcache import newcache
-    return rmap_text(P, newcache(P, core0(P, layoutopts(P, sil_text(P, memopts(P, mflat(P, evf_text(P, p2strip(P, '\n'.join(out))))))))))
+    return enc_text(P, dload_text(P, oprange_text(P, rmap_text(P, quad_split(P, worker_nb(P, newcache(P, core0(P, layoutopts(P, sil_text(P, memopts(P, mflat(P, evf_text(P, p2strip(P, '\n'.join(out)))))))))))))))
 
 def manifest(P):
     P = full(P)

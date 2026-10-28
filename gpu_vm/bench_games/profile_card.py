@@ -16,14 +16,14 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import run as R
 
 
-def one(out, game, conf, seconds):
+def one(out, game, conf, seconds, unity=None):
     parts = conf.split(':')
     machine, env = parts[0], dict(p.split('=', 1) for p in parts[1:])
     tag = conf.replace(':', '_').replace('=', '')
     base = os.path.join(out, f'{game}.{tag}')
     e = dict(os.environ)
     gvm = machine != 'rv'
-    extra = []
+    extra = ['--unity', unity] if unity else []
     if 'TICKS' in env:
         extra += ['--ticks', env.pop('TICKS')]
     logs = env.pop('LOGS', 'all')   # (LOGS=min: no log the card draws for: no ends, times, mailboxes; LOGS=time: ends and times only)
@@ -67,10 +67,11 @@ def main():
     ap.add_argument('configs')
     ap.add_argument('--game', default='quake3')
     ap.add_argument('--seconds', type=int, default=15)
+    ap.add_argument('--unity', help='F,U: run.py --unity (a Unity-like frame of F ms, U of them not rounds)')
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
     for c in a.configs.split(','):
-        one(os.path.abspath(a.out), a.game, c, a.seconds)
+        one(os.path.abspath(a.out), a.game, c, a.seconds, a.unity)
 
 
 if __name__ == '__main__':

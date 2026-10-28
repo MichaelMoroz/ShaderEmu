@@ -205,14 +205,27 @@ class GVM_StoreX<int w, string opcodestr>
 // codegen will want register-pair and quad classes for them; for now the MC
 // operand is the first register.
 def LW  : GVM_Load<W_W, "lw">;
-def LD  : GVM_Load<W_D, "ld">;
 def LH  : GVM_Load<W_H, "lh">;
 def LB  : GVM_Load<W_B, "lb">;
 def LQ  : GVM_Load<W_Q, "lq">;
 def LHU : GVM_Load<W_HU, "lhu">;
 def LBU : GVM_Load<W_BU, "lbu">;
 def SW  : GVM_Store<W_W, "sw">;
-def SD  : GVM_Store<W_D, "sd">;
+// A pair (isa.h GVM_IMM_D): rd and rb from the words at ra + imm and ra +
+// imm + 4 (ld2), or rs and rs2 to them (sd2). Made after register allocation
+// by GPUVMPairs.cpp from two words of one texel.
+def LD2 : GVMOp<0x81, FrmPair, (outs GPR:$rd, GPR:$rb), (ins GPR:$ra, imm32:$imm),
+                "ld2", "$rd, $rb, ${imm}(${ra})"> {
+  let mayLoad = 1;
+  let mayStore = 0;
+  let hasSideEffects = 0;
+}
+def SD2 : GVMOp<0x89, FrmPair, (outs), (ins GPR:$rs, GPR:$rs2, GPR:$ra, imm32:$imm),
+                "sd2", "$rs, $rs2, ${imm}(${ra})"> {
+  let mayLoad = 0;
+  let mayStore = 1;
+  let hasSideEffects = 0;
+}
 def SH  : GVM_Store<W_H, "sh">;
 def SB  : GVM_Store<W_B, "sb">;
 def SQ  : GVM_Store<W_Q, "sq">;
@@ -432,14 +445,12 @@ multiclass GVM_MemAlias<string opcodestr, Instruction I> {
   def : InstAlias<opcodestr # " $rd, $imm", (I GPR:$rd, R0, imm32:$imm), 0>;
 }
 defm : GVM_MemAlias<"lw", LW>;
-defm : GVM_MemAlias<"ld", LD>;
 defm : GVM_MemAlias<"lh", LH>;
 defm : GVM_MemAlias<"lb", LB>;
 defm : GVM_MemAlias<"lq", LQ>;
 defm : GVM_MemAlias<"lhu", LHU>;
 defm : GVM_MemAlias<"lbu", LBU>;
 defm : GVM_MemAlias<"sw", SW>;
-defm : GVM_MemAlias<"sd", SD>;
 defm : GVM_MemAlias<"sh", SH>;
 defm : GVM_MemAlias<"sb", SB>;
 defm : GVM_MemAlias<"sq", SQ>;

@@ -123,6 +123,7 @@ uint mem_any(uint w, uint imm, uint a, uint b, uint epcw, inout uint e, inout bo
         ill = by == 0;
         uint ad = a + (mode >= 2 ? b << ((w >> 20) & 31) : imm);
         bool store = (mode & 1) != 0;
+        uint r2 = mode <= 1 && wd == GVM_W_D ? w >> 26 : (rd + 1) & 63;   // (a pair's second register is rb)
         by = by <= 4 ? min(by, 4 - (ad & 3)) : by;   // (a byte, a half or a word stays in its word)
         [branch] if (ill) return 0;
         [branch] if (op_waits(ad, by, store)) { pc = epcw; e = E_SYNC; return 3; }
@@ -132,11 +133,11 @@ uint mem_any(uint w, uint imm, uint a, uint b, uint epcw, inout uint e, inout bo
             [loop] for (uint k = 0; k < clamp(by >> 2, 1u, 4u) && ok; k++) { uint x; ok = load_any(ad + 4 * k, min(by, 4u), x); v = put(v, k, x); }
             [branch] if (!ok) { trap(GVM_CAUSE_LOAD, epcw, ad); return 1; }
             v.x = wd == GVM_W_B ? asuint(asint(v.x << 24) >> 24) : wd == GVM_W_H ? asuint(asint(v.x << 16) >> 16) : v.x;
-            [loop] for (uint j = 0; j < clamp(by >> 2, 1u, 4u); j++) { uint x = (rd + j) & 63; r[x == 0 ? 64 : x] = pick(v, j); }
+            [loop] for (uint j = 0; j < clamp(by >> 2, 1u, 4u); j++) { uint x = j == 1 ? r2 : (rd + j) & 63; r[x == 0 ? 64 : x] = pick(v, j); }
             return 0;
         }
         [branch] if (!store_ok(ad, by)) { trap(GVM_CAUSE_STORE, epcw, ad); return 1; }
-        uint4 d = uint4(r[rd], r[(rd + 1) & 63], r[(rd + 2) & 63], r[(rd + 3) & 63]);
+        uint4 d = uint4(r[rd], r[r2], r[(rd + 2) & 63], r[(rd + 3) & 63]);
         [branch] if (ad >= GVM_OPS) {   // the latched words; a 16-byte store at GVM_OPS asks for the operation
             [loop] for (uint k = 0; k < min(by >> 2, 4u); k++) {
                 uint i = ((ad - GVM_OPS) >> 2) + k;
@@ -176,7 +177,7 @@ uint op_any(uint w, uint imm, bool L, uint base, uint s, inout uint e) {
         ill = I && (f == GVM_F_MAD || f == GVM_F_MSB || f == GVM_F_NMSB);
         v = fpu(w, a, I ? (L ? imm : (w >> 20) << 20) : b, c);
     } else [branch] if (cls == 2) {
-        res = mem_any(w, imm, a, b, epcw, e, ill);
+        res = mem_any(w, (opc & 0xf7) == GVM_OP_M(GVM_M_LOAD, GVM_W_D) && !L ? asuint(GVM_IMM_D(w)) : imm, a, b, epcw, e, ill);   // (a pair's offset: isa.h)
         wb = false;
     } else {   // extended
         wb = opc <= GVM_X_LPC || (opc >= GVM_X_MFSR && opc != GVM_X_MTSR);

@@ -845,7 +845,7 @@ static FILE *SY;   // GVM_SYNCLOG
 // ---- GVM_STLOG=FILE (gpu_vm/memory_model.md): core 0's stores while the profile counts (--profile-at), a record of
 // five words each: the address, sp, core 0's bundles run, bytes | the base register << 8 | supervisor << 16 |
 // the op's mode << 20 | a load << 24 (GVM_STLOG_LOADS=1: loads too), and the pc; a pass's end is the address 0xffffffff with why in the last word. GVM_STLOG_MAX: records.
-static struct { FILE *f; uint64_t n, max; int loads, core, values, ra; } SL;   // (GVM_STLOG_CORE=K: core K's, -1 every core's; the core in bits 25-31 of the fourth word; GVM_STLOG_RA=1: ra in sp's word)
+static struct { FILE *f; uint64_t n, max; int loads, core, values, ra; uint32_t lo, hi; } SL;   // (GVM_STLOG_CORE=K: core K's, -1 every core's; the core in bits 25-31 of the fourth word; GVM_STLOG_RA=1: ra in sp's word)
 static void stlog_put(uint32_t a, uint32_t sp, uint32_t b, uint32_t info, uint32_t pc) {
     uint32_t r[5] = {a, sp, b, info, pc};
     if (SL.n >= SL.max) { if (SL.n++ == SL.max) { fprintf(stderr, "gvm_cpu: GVM_STLOG full\n"); prof_killed = 1; } return; }
@@ -864,6 +864,7 @@ static void stlog_values(gvm_core *c, uint32_t a, uint32_t bytes) {
 }
 static void stlog_access(gvm_core *c, uint32_t a, uint32_t bytes, int store) {
     if ((!store && !SL.loads) || (SL.core >= 0 && (int)c->id != SL.core) || H.bundles < H.prof_from) return;
+    if (SL.lo < SL.hi && (a + bytes <= SL.lo || a >= SL.hi)) return;   // (GVM_STLOG_LO/HI: only accesses to [LO, HI))
     uint32_t base = c->pc & ~15u, *t = &H.m.ram[base >> 2], ctl = t[3], n = GVM_N(ctl), s, reg = 64, mode = 7;
     for (s = 0; s < n && s < 2; s++) {
         uint32_t w = t[s], opc = GVM_OPC(w), md = (opc >> 3) & 7, ra = GVM_RA(w), addr;
@@ -885,6 +886,8 @@ static void stlog_init(const char *path) {
     SL.core = getenv("GVM_STLOG_CORE") ? atoi(getenv("GVM_STLOG_CORE")) : 0;
     SL.values = getenv("GVM_STLOG_VALUES") != NULL;
     SL.ra = getenv("GVM_STLOG_RA") != NULL;
+    SL.lo = getenv("GVM_STLOG_LO") ? (uint32_t)strtoul(getenv("GVM_STLOG_LO"), NULL, 0) : 0;
+    SL.hi = getenv("GVM_STLOG_HI") ? (uint32_t)strtoul(getenv("GVM_STLOG_HI"), NULL, 0) : 0;
     for (uint32_t i = 0; i < H.ncores; i++) H.cores[i].host_access = stlog_access;
 }
 
@@ -1320,6 +1323,10 @@ int main(int argc, char **argv) {
         fprintf(stderr, "gvm_cpu: %llu bundles, %llu ops (%.2f a bundle), %llu passes, time %llu (100 kHz)\n",
                 (unsigned long long)b, (unsigned long long)o, b ? (double)o / (double)b : 0.0, (unsigned long long)H.passes,
                 (unsigned long long)H.m.time);
+        uint64_t u2 = 0, s1 = 0, w1 = 0;
+        for (uint32_t c = 0; c < H.ncores; c++) { u2 += H.cores[c].e2_units; s1 += H.cores[c].e1_steps; w1 += H.cores[c].e1_words; }
+        if (b) fprintf(stderr, "gvm_cpu: as E2 %.3f units a bundle; as E1 %.3f steps and %.3f words a bundle\n",
+                       (double)u2 / (double)b, (double)s1 / (double)b, (double)w1 / (double)b);
     }
     return H.exit_code;
 }

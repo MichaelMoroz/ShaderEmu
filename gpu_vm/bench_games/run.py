@@ -20,8 +20,8 @@ import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 RV_ROOT = os.environ.get('RV_ROOT', os.path.join(os.path.dirname(ROOT), 'ShaderEmu'))
-GVM_IMAGE = os.environ.get('GVM_IMAGE', os.path.join(ROOT, 'build', 'gvm_apps', 'img-cur'))   # (another image: its own GVM_CKPT; README.md, "The fastest machine today")
-GVM_CKPT = os.environ.get('GVM_CKPT', 'gvm-cur')   # gpu_vm's checkpoints' folder under build/checkpoints (img-cur's: every game)
+GVM_IMAGE = os.environ.get('GVM_IMAGE', os.path.join(ROOT, 'build', 'gvm_apps', 'img-q4'))   # (img-q4: after the 25 October race fixes, which the whole-texel commit needs; another image: its own GVM_CKPT; README.md, "The fastest machine today")
+GVM_CKPT = os.environ.get('GVM_CKPT', 'gvm-c25')   # gpu_vm's checkpoints' folder under build/checkpoints (img-q4's: every game)
 # the RISC-V image: linux/prebuilt/nommu with Uplink's data (`python linux/nommu/image.py nommu_hl` in this worktree,
 # with a junction rvc -> the main checkout's rvc): the main checkout's build/images/nommu has no Half-Life data
 RV_IMAGE = os.environ.get('RV_IMAGE', os.path.join(ROOT, 'build', 'images', 'nommu_hl'))
@@ -53,7 +53,8 @@ def fps_doom(log):
     m = re.search(r'timed (\d+) gametics in (\d+) realtics', log)
     if m:
         return int(m[1]) * 35.0 / int(m[2]), f'{m[1]} gametics in {m[2]} realtics'
-    got = [(int(f), float(s)) for f, s in re.findall(r'doom: (\d+) frames in ([\d.]+) seconds', log)]
+    # (the console may drop a line's first characters when a frame holds many rounds: the window's end is enough)
+    got = [(float(fps) * float(s), float(s)) for s, fps in re.findall(r'in ([\d.]+) seconds = ([\d.]+) FPS', log)]
     f, s = sum(a for a, _ in got), sum(b for _, b in got)
     return (f / s if s else None), f'{f} frames in {s:.1f} s'
 
@@ -84,17 +85,17 @@ HL_FROM = 31
 GAMES = {
     # (com_maxfps 0: ioq3's default 85 caps the frame at 11 ms, and both machines waited out the rest of it before 24 October)
     'quake3': dict(cmd=X + 'QUAKE3_STATS_FRAMES=100 quake3 +set com_maxfps 0 +set fixedtime 33 +devmap q3dm17 +addbot sarge 3',
-                   mark='q3stat: frame 100:', fps=fps_q3),
+                   mark='q3stat: frame 100:', fps=fps_q3, useconds=40),
     # (its level's 12 s take longer than 15 s of the wall on the RISC-V machine: 40 s for every machine)
     'halflife': dict(cmd=X + f'HL_MARK={HL_FROM},{HL_FROM + 12} halflife +map hldemo1', mark='hlmark: begins', fps=fps_hl,
-                     seconds=40),
+                     seconds=40, useconds=100),   # (useconds: the guest's seconds under --unity, where a slow machine plays the level slower; USECONDS_SCALE multiplies them: a smaller share of the card)
     'nxray': dict(cmd=X + 'nxray', mark='raystat: 320 x 240', fps=fps_ray),
     'doom': dict(cmd=X + 'doom -1 -timedemo demo1', mark='doom: ', fps=fps_doom),
     # programs that declare no REST mask (the builder's wad 5-7 cap nothing in them): saved at a word typed before them.
     # Each runs to its own end and no longer (24 October 2026, from 60 s each): Doom's timedemo is 27-34 s of 5,026
     # gametics, Quake's 9-10 s after a 10 s load, CoreMark's 600 iterations 13-14 s, on both machines
     'doomt': dict(cmd=X + 'echo MA""RKD; doom -1 -timedemo demo1', mark='MARKD', fps=fps_doom, seconds=40),
-    'quake1': dict(cmd=X + 'echo MA""RKQ; quake +timedemo demo1', mark='MARKQ', fps=fps_quake, seconds=25),
+    'quake1': dict(cmd=X + 'echo MA""RKQ; quake +timedemo demo1', mark='MARKQ', fps=fps_quake, seconds=25, useconds=60),
     'coremark': dict(cmd='echo MA""RKC; coremark', mark='MARKC', fps=fps_coremark, seconds=20),
     'gzipl': dict(cmd='echo MA""RKZ; i=0; while true; do gzip -c /usr/bin/coremark > /dev/null; i=$((i+1)); echo gzround $i; done',
                   mark='MARKZ', fps=fps_count(r'gzround \d+'), seconds=15),
@@ -125,11 +126,13 @@ def harness(machine, extra, log):
     if '__r' in machine:
         machine, k = machine.split('__r')
         rounds = ['--tick-rounds', k]
-    if machine == 'rv':
+    if machine in ('rv', 'rvlean'):   # (rvlean: experiments/rvc_lean, the tick Unity's RISC-V world runs)
         # (from a snapshot the harness takes the full machine unless told: the no-MMU Linux runs without paging)
         # (RV_EXE: another harness for the RISC-V machine, this worktree's bin/rvc_harness.exe for RVC_LIST_LAZY say)
-        return q + [os.environ.get('RV_EXE', os.path.join(RV_ROOT, 'bin', 'rvc_harness.exe')), '--d3d11', '--rvc', 'experiments/rvc_opt',
-                    '--define', 'NO_PAGING', '--image', 'linux-net', '--no-desktop', '--no-stdin', '--uart-log', log] + rounds + extra, rv_folder()
+        # (--unity: this worktree's harness, which has the mode, unless RV_EXE says otherwise)
+        rv_exe = os.environ.get('RV_EXE', os.path.join(ROOT if '--unity' in extra else RV_ROOT, 'bin', 'rvc_harness.exe'))
+        return q + [rv_exe, '--d3d11', '--rvc', 'experiments/rvc_lean' if machine == 'rvlean' else 'experiments/rvc_opt',
+                    '--define', 'NO_PAGING', '--image', 'linux-net', '--no-desktop', '--no-stdin', '--uart-log', log] + os.environ.get('RV_EXTRA', '').split() + rounds + extra, rv_folder()   # (RV_EXTRA: as GVM_EXTRA, for the RISC-V machine)
     a = q + [os.path.join(ROOT, 'bin', 'rvc_harness.exe'), '--gvm', GVM_IMAGE, '--no-viz', '--no-stdin', '--uart-log', log]
     if machine != 'gvm':   # a step of gpu_vm/tick/steps, or BATCH_VNNNN: the builder's build/tick_gen/BATCH/vNNNN.hlsl
         step = f'gpu_vm/tick/steps/{machine}.hlsl'
@@ -166,7 +169,7 @@ def passes(path, machine):
     if not os.path.exists(path) or os.path.getsize(path) < 16:
         return None, {}
     d = np.fromfile(path, dtype=np.uint32).reshape(-1, 4)
-    if machine.split('__r')[0] == 'rv':
+    if machine.split('__r')[0] in ('rv', 'rvlean'):
         n = d[:, 1].astype(np.int64)
         why = np.where(n >= 8192, -1, d[:, 2].astype(np.int64))
         names = {**WHY_RV, -1: 'budget'}
@@ -189,13 +192,16 @@ def bench(a):
     for r in range(a.rounds):
         for g in a.games.split(','):
             for m in machines:
-                snap = os.path.join(CKPT, 'rv' if m.split('__r')[0] == 'rv' else GVM_CKPT, g + '.snap')
+                snap = os.path.join(CKPT, 'rv' if m.split('__r')[0] in ('rv', 'rvlean') else GVM_CKPT, g + '.snap')
                 if not os.path.exists(snap):
                     print(f'{m} {g}: no checkpoint {snap}')
                     continue
                 base = os.path.join(out, f'{g}.{m}.{r}')
                 # --pass-ms: a pass a frame, TIME that much a pass (gpu_vm only: GVM_DT_TICKS), --passes of them (a world's speed)
                 lim = ['--seconds', str(GAMES[g].get('seconds', a.seconds))] if not a.pass_ms else ['--seconds', '300', '--frames', str(a.passes)]
+                if a.unity:   # (--unity F,U: the game's seconds of the guest's clock at F ms a frame, the rounds as fit F - U on the card)
+                    f_ms = float(a.unity.split(',')[0])
+                    lim = ['--seconds', '290', '--frames', str(int(GAMES[g].get('useconds', GAMES[g].get('seconds', a.seconds)) * float(os.environ.get('USECONDS_SCALE', '1')) * 1000 / f_ms)), '--unity', a.unity]
                 if a.pass_ms:
                     os.environ['GVM_DT_TICKS'] = str(int(a.pass_ms * 100))
                 cmd, cwd = harness(m, ['--load-state', snap] + lim + ['--stats-after', '2',
@@ -223,6 +229,9 @@ def table(out):
         st = re.search(r'STATS seconds=([\d.]+) instructions=\d+ ips=(\d+) frames=\d+ fps=([\d.]+) per_frame=([\d.]+)', err)
         wk = re.search(r'STATS workers: instructions=\d+ ips=(\d+); all cores ips=(\d+)', err)
         gp = re.search(r'STATS gpu per frame: tick ([\d.]+) ms, commit ([\d.]+) ms, device ([\d.]+) ms; wall ([\d.]+) ms', err)
+        un = re.search(r'STATS unity: .*?; ([\d.]+) rounds a frame, ([\d.]+) ms on the card a frame', err)
+        if un:   # (--unity: the world's rounds a frame and the card's time a frame in place of the flat-out times)
+            what = f'{float(un[1]):.1f} rounds/frame, {float(un[2]):.2f} ms card/frame; ' + what
         rows.append((g, mach, r, fps, what, per, hist, st, wk, gp))
     print(f'\n{out}\n')
     print('| game | machine | round | guest fps | core 0 a pass | passes ended | core 0 M/s | workers M/s | passes/s | game\'s lines |')
@@ -247,6 +256,7 @@ def main():
     ap.add_argument('--rounds', type=int, default=1)
     ap.add_argument('--pass-ms', type=float, default=0, help='bench: TIME a pass (ms), as a world drawing a pass a frame')
     ap.add_argument('--passes', type=int, default=1500, help='bench with --pass-ms: the passes a run')
+    ap.add_argument('--unity', default='', help="bench: F,U as the harness's --unity: a world's frame of F ms, U of it Unity's own")
     ap.add_argument('--limit', type=int, default=280, help='save: the run\'s most seconds')
     a = ap.parse_args()
     if a.what == 'save':

@@ -121,7 +121,7 @@ fw_trap:
     slli r58, r60, 5
     sw r12, CALLREC(r58)
     sq r5, CALLREC+4(r58)           // r5-r8
-    sd r9, CALLREC+20(r58)          // r9, r10
+    sd2 r9, r10, CALLREC+20(r58)    // r9, r10 (the long form: rd + 1 and rb alike, so ticks of either meaning of d agree)
     li r57, 1
     sw r57, S_KIND(r63)
     li r57, 8

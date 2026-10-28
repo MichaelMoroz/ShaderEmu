@@ -50,6 +50,12 @@ cbuffer P : register(b0) { uint _N, _Cores, _Seed, _Mask; };
 #ifndef WRT
 #define WRT 1
 #endif
+#ifndef NREG
+#define NREG 64   // registers (r0-r(NREG-1)); R[NREG] is the sink
+#endif
+#ifndef RM
+#define RM (NREG < 64 ? NREG - 1 : 255)   // a register field's mask (fewer registers: narrower fields)
+#endif
 #ifndef ILP
 #define ILP 1
 #endif
@@ -58,7 +64,7 @@ static const uint DMASK = 0x7ffcu;   // loads within 32 KB of data (2,048 texels
 static const uint CW = 8192;   // _Code's width: bundle b at (b % CW, b / CW)
 
 #if FILE == 1
-static uint R[65 * ILP];
+static uint R[(NREG + 1) * ILP];
 #define RD(i) R[(i)]
 #define WR(i, v) R[(i)] = (v)
 #elif FILE == 2
@@ -67,7 +73,7 @@ uint rget(uint i) { uint4 q = R[i >> 2]; return (i & 2) ? ((i & 1) ? q.w : q.z) 
 #define RD(i) rget(i)
 #define WR(i, v) { uint i_ = (i), v_ = (v); uint4 q_ = R[i_ >> 2]; R[i_ >> 2] = uint4((i_ & 3) == 0 ? v_ : q_.x, (i_ & 3) == 1 ? v_ : q_.y, (i_ & 3) == 2 ? v_ : q_.z, (i_ & 3) == 3 ? v_ : q_.w); }
 #elif FILE == 3
-static uint4 R[65 * ILP];
+static uint4 R[(NREG + 1) * ILP];
 #define RD(i) R[(i)].x
 #define WR(i, v) R[(i)].x = (v)
 #elif FILE == 4 || FILE == 5   // NR registers in the GPU's own registers: reads a tree of selects, writes a select each
@@ -88,7 +94,7 @@ void gwrite(uint i, uint v) { uint k; [unroll] for (k = 1; k < NR; k++) G[k] = (
 #define NF 8
 #endif
 static uint G[NF];
-static uint4 R[65 * ILP];
+static uint4 R[(NREG + 1) * ILP];
 uint gtree(uint i) {
     uint l0[4], l1[2], k;
     [unroll] for (k = 0; k < NF / 2; k++) l0[k] = (i & 1) ? G[2 * k + 1] : G[2 * k];
@@ -104,7 +110,7 @@ uint hread(uint i) {
     return i < NF ? gtree(i) : R[i].x;
 #endif
 }
-void hwrite(uint i, uint v) { uint k; [unroll] for (k = 1; k < NF; k++) G[k] = i == k ? v : G[k]; R[i < NF ? 64 : i].x = v; }
+void hwrite(uint i, uint v) { uint k; [unroll] for (k = 1; k < NF; k++) G[k] = i == k ? v : G[k]; R[i < NF ? NREG : i].x = v; }
 #define RD(i) hread(i)
 #define WR(i, v) hwrite(i, v)
 #else
@@ -207,13 +213,20 @@ uint4 dtex(uint t) { return _Data.Load(int3(t % 8192, (t / 8192) & 7, 0)); }
 #define DEFER 0
 #endif
 static uint pv[8], pd[8];
+#ifndef WX
+#define WX 0   // ops 2 and 3 of a wider step (W3: 1, W4: 2): general ops in the step's second texel (code index + XO), fetched with its first
+#endif
+static const uint XO = 16384;   // (the generator fills all 32,768 texels; the program is the first _Mask + 1)
+static uint4 g_t2[ILP];
+static uint4 g_t1[ILP];   // (FETCH 5, a delayed branch: the next step's texel, chosen a step ago)
+static uint g_p1[ILP];   // (and its index)
 #ifndef HOIST
 #define HOIST 0
 #endif
 static uint hv[8];   // (HOIST: the block's loads, issued at its start)
 #if MEM
 uint memval(uint4 t, uint base) {   // op 0's load as the block found its registers
-    uint A0 = RD((t.x & 255) + base);
+    uint A0 = RD((t.x & RM) + base);
 #if MEM == 1
     uint ad = (A0 + t.z) & DMASK;
     return pick(dtex(ad >> 4), (ad >> 2) & 3);
@@ -235,10 +248,10 @@ uint memval(uint4 t, uint base) {   // op 0's load as the block found its regist
 uint ops(uint4 t, uint base, uint K, bool memk, inout uint sum, uint slot = 0) {   // a bundle's two ops (no fetch, no branch); op 1's value
     uint v0 = 0, v1 = 0;
 #if OPS >= 1
-    uint ra0 = (t.x & 255) + base, rb0 = ((t.x >> 8) & 255) + base, d0 = ((t.x >> 16) & 255) + base, f0 = t.x >> 24;
+    uint ra0 = (t.x & RM) + base, rb0 = ((t.x >> 8) & RM) + base, d0 = ((t.x >> 16) & RM) + base, f0 = t.x >> 24;
     uint A0 = RD(ra0), B0 = RD(rb0);
 #if NRD >= 3
-    uint C0 = RD(((t.x >> 26) & 63) + base);
+    uint C0 = RD(((t.x >> 26) & (NREG - 1)) + base);
 #else
     uint C0 = A0;
 #endif
@@ -303,10 +316,10 @@ uint ops(uint4 t, uint base, uint K, bool memk, inout uint sum, uint slot = 0) {
 #endif
 #endif
 #if OPS >= 2
-    uint ra1 = (t.y & 255) + base, rb1 = ((t.y >> 8) & 255) + base, d1 = ((t.y >> 16) & 255) + base, f1 = t.y >> 24;
+    uint ra1 = (t.y & RM) + base, rb1 = ((t.y >> 8) & RM) + base, d1 = ((t.y >> 16) & RM) + base, f1 = t.y >> 24;
     uint A1 = RD(ra1), B1 = RD(rb1);
 #if NRD >= 3
-    uint C1 = RD(((t.y >> 26) & 63) + base);
+    uint C1 = RD(((t.y >> 26) & (NREG - 1)) + base);
 #else
     uint C1 = A1;
 #endif
@@ -329,6 +342,13 @@ void bundle(inout uint4 t, inout uint tp, uint K, inout uint sum) {
 #if FETCH == 2
     uint tg = (tp + asuint((int)ctl >> 24)) & _Mask;
     uint4 nx = code(tn), tc = code(tg);
+#if WX
+    uint4 nx2 = code(tn + XO), tc2 = code(tg + XO);
+#endif
+#elif FETCH == 5   // a delayed branch: this step's branch picks the step after the next; both are asked for now
+    uint tg = (tp + asuint((int)ctl >> 24)) & _Mask;
+    uint pn = g_p1[K], pf = (pn + 1) & _Mask;
+    uint4 af = code(pf), at = code(tg);
 #elif FETCH == 4   // the fall-through fetched a bundle ahead, the target by a branch only when taken
     uint tg = (tp + asuint((int)ctl >> 24)) & _Mask;
     uint4 nx = g_nn[K];
@@ -341,21 +361,21 @@ void bundle(inout uint4 t, inout uint tp, uint K, inout uint sum) {
 #if FILE == 2
     uint base = K * 68;
 #else
-    uint base = K * 65;
+    uint base = K * (NREG + 1);
 #endif
     uint v0 = 0, v1 = 0;
 #if BRFIRST   // the branch's registers read with the ops' (as the bundle found them)
 #if BR == 0
     bool tk = (ctl & 1) != 0;
 #elif BR == 1
-    uint CA = RD(((ctl >> 8) & 255) + base), CB = RD(((ctl >> 16) & 255) + base);
+    uint CA = RD(((ctl >> 8) & RM) + base), CB = RD(((ctl >> 16) & RM) + base);
     bool tk = taken16((ctl >> 1) & 15, CA, CB, asuint((int)(ctl << 10) >> 26)) != 0;
 #elif BR == 2
-    bool tk = (RD(((ctl >> 8) & 255) + base) != 0) == ((ctl & 1) != 0);   // (random registers are not 0: taken as the bit, 15%)
+    bool tk = (RD(((ctl >> 8) & RM) + base) != 0) == ((ctl & 1) != 0);   // (random registers are not 0: taken as the bit, 15%)
 #elif BR == 3
     bool tk = (v1 != 0) == ((ctl & 1) != 0);
 #elif BR == 4
-    uint CA = RD(((ctl >> 8) & 255) + base), CB = RD(((ctl >> 16) & 255) + base);
+    uint CA = RD(((ctl >> 8) & RM) + base), CB = RD(((ctl >> 16) & RM) + base);
     uint F = (ctl << 29) & 0x80000000u;
     bool c = (ctl & 4) ? (CA ^ F) < (CB ^ F) : CA == CB;
     bool tk = c != ((ctl & 1) != 0);
@@ -366,18 +386,31 @@ void bundle(inout uint4 t, inout uint tp, uint K, inout uint sum) {
 #else
     v1 = ops(t, base, K, true, sum);
 #endif
+#if WX   // the wider step's ops 2 (and 3), after ops 0 and 1, in order
+    {
+        uint4 t2 = g_t2[K];
+        [unroll] for (uint xk = 0; xk < WX; xk++) {
+            uint w = xk == 0 ? t2.x : t2.y;
+            uint xa = (w & RM) + base, xb = ((w >> 8) & RM) + base, xd = ((w >> 16) & RM) + base;
+            uint A = RD(xa), B = RD(xb);
+            uint v = unit(w >> 24, A, B, A);
+            WR(xd, v);
+            v1 = v;
+        }
+    }
+#endif
 #if !BRFIRST
 #if BR == 0
     bool tk = (ctl & 1) != 0;
 #elif BR == 1
-    uint CA = RD(((ctl >> 8) & 255) + base), CB = RD(((ctl >> 16) & 255) + base);
+    uint CA = RD(((ctl >> 8) & RM) + base), CB = RD(((ctl >> 16) & RM) + base);
     bool tk = taken16((ctl >> 1) & 15, CA, CB, asuint((int)(ctl << 10) >> 26)) != 0;
 #elif BR == 2
-    bool tk = (RD(((ctl >> 8) & 255) + base) != 0) == ((ctl & 1) != 0);   // (random registers are not 0: taken as the bit, 15%)
+    bool tk = (RD(((ctl >> 8) & RM) + base) != 0) == ((ctl & 1) != 0);   // (random registers are not 0: taken as the bit, 15%)
 #elif BR == 3
     bool tk = (v1 != 0) == ((ctl & 1) != 0);
 #elif BR == 4
-    uint CA = RD(((ctl >> 8) & 255) + base), CB = RD(((ctl >> 16) & 255) + base);
+    uint CA = RD(((ctl >> 8) & RM) + base), CB = RD(((ctl >> 16) & RM) + base);
     uint F = (ctl << 29) & 0x80000000u;
     bool c = (ctl & 4) ? (CA ^ F) < (CB ^ F) : CA == CB;
     bool tk = c != ((ctl & 1) != 0);
@@ -386,6 +419,14 @@ void bundle(inout uint4 t, inout uint tp, uint K, inout uint sum) {
 #if FETCH == 2
     tp = tk ? tg : tn;
     t = tk ? tc : nx;
+#if WX
+    g_t2[K] = tk ? tc2 : nx2;
+#endif
+#elif FETCH == 5
+    tp = pn;
+    t = g_t1[K];
+    g_t1[K] = tk ? at : af;
+    g_p1[K] = tk ? tg : pf;
 #elif FETCH == 3
     tp = tk ? tg : tn;
     t = tk ? tc : nx;
@@ -407,7 +448,7 @@ void bundle(inout uint4 t, inout uint tp, uint K, inout uint sum) {
 #endif
 static uint nbund;
 uint klen(uint c) { uint t = (c >> 1) & 15; return t < 2 ? 1u : t < 5 ? 2u : t < 7 ? 3u : t < 10 ? 4u : t < 11 ? 5u : t < 13 ? 6u : 8u; }
-bool decide(uint ctl) { return (RD((ctl >> 8) & 255) != 0) == ((ctl & 1) != 0); }
+bool decide(uint ctl) { return (RD((ctl >> 8) & RM) != 0) == ((ctl & 1) != 0); }
 void vblock_run(uint core, inout uint sum) {
     uint4 blk[8], nxt[8];
     uint bi = (core * 13u) & _Mask, k, j;
@@ -418,7 +459,7 @@ void vblock_run(uint core, inout uint sum) {
         uint c0 = blk[0].w, K = klen(c0);
         uint nb = (bi + (decide(c0) ? asuint((int)c0 >> 24) : 1u)) & _Mask;
         [unroll] for (k = 0; k < 8; k++) nxt[k] = code(nb * 8 + k);
-        [unroll] for (k = 0; k < 8; k++) pd[k] = 64;
+        [unroll] for (k = 0; k < 8; k++) pd[k] = NREG;
         [unroll] for (k = 0; k < 8; k++) {
             [branch] if (k < K) sum += ops(blk[k], 0, 0, ((blk[k].x >> 24) & 0x40) != 0, sum, k);
         }
@@ -439,7 +480,7 @@ void vblock_run(uint core, inout uint sum) {
 #ifndef MEMEVERY
 #define MEMEVERY 1
 #endif
-bool decide(uint ctl) { return (RD((ctl >> 8) & 255) != 0) == ((ctl & 1) != 0); }   // a register != 0 (15% taken)
+bool decide(uint ctl) { return (RD((ctl >> 8) & RM) != 0) == ((ctl & 1) != 0); }   // a register != 0 (15% taken)
 void block_run(uint core, inout uint sum) {
     uint4 blk[BLOCK], nxt[BLOCK];
     uint bi = (core * 13u) & _Mask, k, j;
@@ -490,14 +531,14 @@ uint4 frag(float4 pos : SV_POSITION) : SV_Target {
 #endif
     uint k, s = _Seed ^ (core * 0x85ebca6bu);
 #if FILE == 1 || FILE == 3
-    [loop] for (k = 0; k < 65 * ILP; k++) { WR(k, (k % 65) == 0 || (k % 65) == 64 ? 0u : (k * 0x9e3779b9u) ^ s); }
+    [loop] for (k = 0; k < (NREG + 1) * ILP; k++) { WR(k, (k % (NREG + 1)) == 0 || (k % (NREG + 1)) == NREG ? 0u : (k * 0x9e3779b9u) ^ s); }
 #elif FILE == 2
     [loop] for (k = 0; k < 17 * ILP; k++) R[k] = uint4(k * 4, k * 4 + 1, k * 4 + 2, k * 4 + 3) * 0x9e3779b9u ^ s;
 #elif FILE == 4 || FILE == 5
     [unroll] for (k = 0; k < NR; k++) G[k] = k == 0 ? 0u : (k * 0x9e3779b9u) ^ s;
 #elif FILE == 6 || FILE == 7
     [unroll] for (k = 0; k < NF; k++) G[k] = k == 0 ? 0u : (k * 0x9e3779b9u) ^ s;
-    [loop] for (k = 0; k < 65; k++) R[k].x = k == 0 || k == 64 ? 0u : (k * 0x9e3779b9u) ^ s;
+    [loop] for (k = 0; k < NREG + 1; k++) R[k].x = k == 0 || k == NREG ? 0u : (k * 0x9e3779b9u) ^ s;
 #else
     Rz[0] = s; Rz[1] = s;
 #endif
@@ -510,6 +551,7 @@ uint4 frag(float4 pos : SV_POSITION) : SV_Target {
     uint tp = (core * 13u) & _Mask, sum = 0;
     uint4 t = code(tp);
     g_nn[0] = code((tp + 1) & _Mask);
+    g_p1[0] = (tp + 1) & _Mask; g_t1[0] = g_nn[0];   // (FETCH 5)
 #if ILP == 2
     uint tp2 = (core * 29u + 7u) & _Mask;
     uint4 t2 = code(tp2);
@@ -538,9 +580,9 @@ uint4 frag(float4 pos : SV_POSITION) : SV_Target {
     [unroll] for (k = 0; k < NR; k++) h = h * 31u + G[k];
 #elif FILE == 6 || FILE == 7
     [unroll] for (k = 0; k < NF; k++) h = h * 31u + G[k];
-    [loop] for (k = NF; k < 64; k++) h = h * 31u + R[k].x;
+    [loop] for (k = NF; k < NREG; k++) h = h * 31u + R[k].x;
 #elif FILE != 0
-    [loop] for (k = 0; k < 65 * ILP; k++) h = h * 31u + RD(k);
+    [loop] for (k = 0; k < (NREG + 1) * ILP; k++) h = h * 31u + RD(k);
 #else
     h ^= Rz[0];
 #endif

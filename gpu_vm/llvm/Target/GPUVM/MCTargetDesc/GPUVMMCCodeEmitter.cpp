@@ -102,6 +102,24 @@ void GPUVMMCCodeEmitter::encodeOp(const MCInst &MI, OpEncoding &E) const {
     E.Word = GPUVM::wordI(Opc, R(0), R(1), 0);
     setImm(E, MI.getOperand(2), true, GPUVM::fixup_gvm_imm32);
     return;
+  case GPUVMII::FrmPair: { // rc's words (+-128 bytes), else long
+    E.Word = GPUVM::wordR(Opc, R(0), R(2), R(1), 0);
+    int64_t V;
+    if (constValue(MI.getOperand(3), V) && (V & 3) == 0 && V >= -128 &&
+        V <= 124) {
+      E.Word |= static_cast<uint32_t>((V >> 2) & 63) << 20;
+      return;
+    }
+    const MCOperand &MO = MI.getOperand(3);
+    E.Long = true;
+    if (constValue(MO, V)) {
+      E.LongValue = static_cast<uint32_t>(V);
+      return;
+    }
+    E.LongExpr = MO.getExpr();
+    E.LongKind = GPUVM::fixup_gvm_imm32;
+    return;
+  }
   case GPUVMII::FrmBF:
     E.Word = GPUVM::wordI(Opc, R(0), R(1),
                           (Imm(2) & 31) | ((Imm(3) - 1) & 31) << 5 |

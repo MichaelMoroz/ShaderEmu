@@ -204,6 +204,32 @@ static std::vector<Case> cases() {
         for (int round = 0; round < 30; round++) { seed_regs(a, g, false); a.li(29, (int32_t)DATA); fuzz_mem(a, g, 50, 8192); }
         a.halt();
     }});
+    v.push_back({"pairs", 1, false, [](std::vector<GvmAsm>& p, auto& data, uint32_t seed) {
+        // pairs (ld2, st2: isa.h GVM_IMM_D) between word loads, stores and lite ops that read their registers: any two
+        // registers (the same one too), offsets mostly 8-aligned in rc's reach, some long, some across a texel or a word
+        Rng g{seed * 0x51ed27u + 11};
+        for (uint32_t k = 0; k < 1024; k++) data.push_back({DATA + 4 * k, g.next()});
+        GvmAsm& a = p[0];
+        for (int round = 0; round < 30; round++) {
+            seed_regs(a, g, false);
+            a.li(29, (int32_t)DATA + 2048);
+            for (int i = 0; i < 60; i++) {
+                uint32_t r1 = rreg(g), r2 = g.below(8) ? rreg(g) : r1, k = g.below(16);
+                int32_t off = 8 * (int32_t)g.below(32) - 128;   // (-128 to 120)
+                if (k == 0) off = 4 * (int32_t)g.below(400) - 800;   // long, any word
+                if (k == 1) off += 4;   // a word, maybe across a texel
+                if (k == 2) off += 1 + (int32_t)g.below(3);   // not a word's
+                switch (g.below(6)) {
+                case 0: case 1: a.ld2(r1, r2, 29, off); break;
+                case 2: case 3: a.st2(r1, r2, 29, off); break;
+                case 4: a.ld(GVM_W_W, r1, 29, off & ~3); break;
+                default: a.st(GVM_W_W, r1, 29, off & ~3); break;
+                }
+                if (g.below(2)) a.add(rreg(g), g.below(2) ? r1 : r2, rreg(g));
+            }
+        }
+        a.halt();
+    }});
     v.push_back({"memw", 1, false, [](std::vector<GvmAsm>& p, auto& data, uint32_t seed) {
         // loads and stores of bytes, halves and words, aligned, in a window, between sums (step x7 on)
         Rng g{seed * 31337 + 9};
@@ -1375,7 +1401,7 @@ static Prepared prepare_mc(const Case& cs, uint32_t seed) {
         pr.state[c] = st;
         pr.bases.push_back(entry);
     }
-    pr.ramImg[HALT_STUB / 4] = GVM_WORD_R(GVM_X_BREAK, 0u, 0u, 0u, 0u); pr.ramImg[HALT_STUB / 4 + 3] = GVM_CTRL_NONE | 1u << 3 | GVM_PATH_GENERAL; if (GvmAsm::thin8) pr.ramImg[HALT_STUB / 4 + 1] = pr.ramImg[HALT_STUB / 4 + 3];
+    pr.ramImg[HALT_STUB / 4] = GVM_WORD_R(GVM_X_BREAK, 0u, 0u, 0u, 0u); pr.ramImg[HALT_STUB / 4 + 3] = GVM_CTRL_NONE | 1u << 3 | GVM_PATH_GENERAL; if (GvmAsm::thin8) pr.ramImg[HALT_STUB / 4 + 1] = pr.ramImg[HALT_STUB / 4 + 3]; if (GvmAsm::enc) pr.ramImg[HALT_STUB / 4 + 1] = GvmAsm::E21_NOP;
     return pr;
 }
 static Prepared prepare(const Case& cs, uint32_t seed) {
@@ -1385,7 +1411,7 @@ static Prepared prepare(const Case& cs, uint32_t seed) {
         pr.ramImg.assign((size_t)RAM_END / 4, 0);
         uint32_t entry = load_real(cs, pr.ramImg);
         pr.bases.push_back(entry ? entry : HALT_STUB);
-        pr.ramImg[HALT_STUB / 4] = GVM_WORD_R(GVM_X_BREAK, 0u, 0u, 0u, 0u); pr.ramImg[HALT_STUB / 4 + 3] = GVM_CTRL_NONE | 1u << 3 | GVM_PATH_GENERAL; if (GvmAsm::thin8) pr.ramImg[HALT_STUB / 4 + 1] = pr.ramImg[HALT_STUB / 4 + 3];
+        pr.ramImg[HALT_STUB / 4] = GVM_WORD_R(GVM_X_BREAK, 0u, 0u, 0u, 0u); pr.ramImg[HALT_STUB / 4 + 3] = GVM_CTRL_NONE | 1u << 3 | GVM_PATH_GENERAL; if (GvmAsm::thin8) pr.ramImg[HALT_STUB / 4 + 1] = pr.ramImg[HALT_STUB / 4 + 3]; if (GvmAsm::enc) pr.ramImg[HALT_STUB / 4 + 1] = GvmAsm::E21_NOP;
         pr.state.assign(1, std::vector<uint32_t>((size_t)(g_twc + g_wcn / 2 + 8) * 4, 0));
         pr.state[0][2] = RAM_END - 64;
         pr.state[0][16 * 4 + 0] = pr.bases[0];
@@ -1406,7 +1432,7 @@ static Prepared prepare(const Case& cs, uint32_t seed) {
     }
     for (auto& d : data) pr.ramImg[d.first / 4] = d.second;
     // a trap nobody asked for halts the core where its handler would be: {break} at HALT_STUB
-    pr.ramImg[HALT_STUB / 4] = GVM_WORD_R(GVM_X_BREAK, 0u, 0u, 0u, 0u); pr.ramImg[HALT_STUB / 4 + 3] = GVM_CTRL_NONE | 1u << 3 | GVM_PATH_GENERAL; if (GvmAsm::thin8) pr.ramImg[HALT_STUB / 4 + 1] = pr.ramImg[HALT_STUB / 4 + 3];
+    pr.ramImg[HALT_STUB / 4] = GVM_WORD_R(GVM_X_BREAK, 0u, 0u, 0u, 0u); pr.ramImg[HALT_STUB / 4 + 3] = GVM_CTRL_NONE | 1u << 3 | GVM_PATH_GENERAL; if (GvmAsm::thin8) pr.ramImg[HALT_STUB / 4 + 1] = pr.ramImg[HALT_STUB / 4 + 3]; if (GvmAsm::enc) pr.ramImg[HALT_STUB / 4 + 1] = GvmAsm::E21_NOP;
     pr.state.assign(cs.cores, std::vector<uint32_t>((size_t)(g_twc + g_wcn / 2 + 8) * 4, 0));
     for (uint32_t c = 0; c < cs.cores; c++) {
         pr.state[c][16 * 4 + 0] = pr.bases[c];
