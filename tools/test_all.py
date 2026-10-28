@@ -5,7 +5,7 @@ any failure.
     python tools/test_all.py                    # the default set (some 5 minutes at most)
     python tools/test_all.py games doom-1 ...   # cases by name or tag (machine, games, desktop, media, long, ...)
     python tools/test_all.py --long             # the default set and the long cases
-    python tools/test_all.py --races            # RVC_RACES on every case: 0 undone
+    python tools/test_all.py --races            # RVC_RACES on every case: 0 undone (and RVC_RACES_NEAR=4's count said)
     python tools/test_all.py --image DIR --jobs 8 --list
 
 A case is the line typed at the guest's shell, what ends it, and what its console must say:
@@ -541,6 +541,13 @@ def run(c, a, image, logs):
     races = a.races   # (every case: nxpaint, nxweb, the IDE and others take workers though their cases do not say so)
     if races:
         env['RVC_RACES'] = log + '.races'
+        # a texel another core changed other words of within 4 passes: on the card, whose passes end elsewhere, the
+        # two may meet in one pass (Half-Life's statics, 632e982). Reported, not failed: a hand-over by a job word is one
+        env.setdefault('RVC_RACES_NEAR', '4')
+        # a case's part looked at (full speed to race_at's text, the check from there, the run's end at race_until's)
+        for k, e in (('race_at', 'RVC_RACES_AT'), ('race_until', 'RVC_RACES_UNTIL')):
+            if c.get(k):
+                env[e] = c[k]
     env.update(c['env'])
     t = time.time()
     for _ in range(60):   # the harness lock refuses a CPU harness beside a GPU one: wait for it
@@ -599,7 +606,10 @@ def main():
 
     def report(c, text, err, races, secs):
         why = check(c, text, err, races, done)
-        print(f"{'PASS' if not why else 'FAIL'} {c['name']:28} {secs:5.0f} s" + ('' if not why else '  ' + '; '.join(why)), flush=True)
+        near = re.findall(r'\[races\] (\d+) changes to a texel another core changed other words of within \d+ passes \(RVC_RACES_NEAR\)', err)
+        near = sum(map(int, near))
+        near = f'  (near: {near}, {c["name"]}.log.races)' if near else ''
+        print(f"{'PASS' if not why else 'FAIL'} {c['name']:28} {secs:5.0f} s" + ('' if not why else '  ' + '; '.join(why)) + near, flush=True)
         if why:
             failed.append(c['name'])
 

@@ -312,7 +312,13 @@ static void device_write(Core& c, u32 phys, u32 value, int size) {
 // began, noting each such read. After the pass (race_settle) the reads and the first changes are
 // held against the lower cores' changes, in core order, and the highest core's texels go to RAM.
 static bool races_on = false;
-struct RaceStat { u64 count = 0; int kind = 0; u32 pc = 0, phys = 0, other_pc = 0, satp = 0, other_satp = 0; int core = 0, other = 0; };
+// RVC_RACES_AT=TEXT, RVC_RACES_UNTIL=TEXT: the check from where the console says one text (full speed to it), the
+// run's end where it says the other (AGENTS.md: a long program checked in sections under the minute)
+static bool races_armed = false, races_ended = false;
+static std::string races_at, races_until;
+static size_t races_scan = 0;
+struct RaceStat { u64 count = 0; int kind = 0; u32 pc = 0, phys = 0, other_pc = 0, satp = 0, other_satp = 0; int core = 0, other = 0;
+                 u32 apart = 0, words = 0, other_words = 0; };   // (RVC_RACES_NEAR's: passes apart, the words each changed)
 static std::unordered_map<u64, RaceStat> race_stats[2];  // stale reads, lost stores: by (pc, the other's pc)
 static const u32 ATOM_BASE = 0x86C10000u, ATOM_END = ATOM_BASE + 0x101000u;   // (counters: mc.h)
 static const u32 ATOM_HEAD = 0x87000320u;
@@ -367,9 +373,19 @@ struct RaceNote { int kind, other; u32 pc, other_pc, phys, satp, other_satp; };
 static std::vector<TexelLog> texel_logs;               // each core's
 static std::vector<std::vector<RaceRead>> race_reads;   // each worker's, in order
 static std::vector<std::vector<RaceNote>> race_notes;   // what race_settle found of each worker's, in order
+// RVC_RACES_NEAR=N: a change to a texel another core changed other words of within N passes before. rvc_cpu ends
+// every core's pass at its own budget; on the card passes end elsewhere (the write cache full, a sync, a rest), so the
+// two may fall in one pass there and the whole-texel commit lose a word (Half-Life's world_ahead, the loopback's get
+// and send, net_drop: 632e982). Each texel's last change: (pass << 12 | core << 4 | words), and its first pc.
+static u32 near_passes = 0;
+static std::vector<u32> near_at, near_pc;
+static std::unordered_map<u64, RaceStat> near_stats;   // by (pc, the other's pc)
+static u64 near_count = 0;
 
 static void races_begin(size_t n) {
     texel_logs.resize(n), race_reads.resize(n), race_notes.resize(n);
+    if (const char* v = getenv("RVC_RACES_NEAR"); v && atoi(v) > 0)
+        near_passes = (u32)atoi(v), near_at.assign(RAM_SIZE >> 4, 0), near_pc.assign(RAM_SIZE >> 4, 0);
 }
 // The texel a worker sees: its own, else as the pass began.
 static inline const uint8_t* race_seen(Core& c, u32 t, bool& own) {
@@ -458,7 +474,7 @@ static u64 race_settle_core(int hart) {
     return 0;
 }
 static void race_settle_on(const int* list, int n);   // (on the workers' threads: below)
-static void race_settle() {
+static void race_settle(u64 pass) {
     // the index, the cores in order
     size_t changes = 0;
     for (const TexelLog& log : texel_logs) changes += log.used.size();
@@ -493,6 +509,28 @@ static void race_settle() {
         race_notes[(size_t)list[k]].clear();
         race_reads[(size_t)list[k]].clear();
     }
+    // RVC_RACES_NEAR: each texel's changes in core order against its last change of an earlier pass
+    if (near_passes)
+        for (u32 slot : race_index_used) {
+            u32* s = &race_index[3 * (size_t)slot];
+            u32 t = s[0] - 1, i = t - (RAM_BASE >> 4), now = (u32)pass & 0xfffff;
+            for (u32 k = s[1]; k != ~0u; k = race_changes[k].next) {
+                const RaceChange& ch = race_changes[k];
+                u32 b = ch.e->bytes, w = (b & 0xf ? 1 : 0) | (b & 0xf0 ? 2 : 0) | (b & 0xf00 ? 4 : 0) | (b & 0xf000 ? 8 : 0);
+                u32 was = near_at[i];
+                if (was && ((was >> 4) & 255) != (u32)ch.core && (was >> 12) != now && ((now - (was >> 12)) & 0xfffff) <= near_passes &&
+                    ((was & 15) ^ w)) {
+                    near_count++;
+                    RaceStat& r = near_stats[((u64)ch.e->first_pc << 32) | near_pc[i]];
+                    if (!r.count++)
+                        r.kind = 2, r.pc = ch.e->first_pc, r.phys = t << 4, r.other_pc = near_pc[i], r.satp = ch.e->satp,
+                        r.core = ch.core, r.other = (int)((was >> 4) & 255), r.apart = (now - (was >> 12)) & 0xfffff, r.words = w,
+                        r.other_words = was & 15;
+                }
+                near_at[i] = now << 12 | (u32)ch.core << 4 | w;
+                near_pc[i] = ch.e->first_pc;
+            }
+        }
     // the highest core's 16 bytes win (core 0's are in RAM already)
     for (u32 slot : race_index_used) {
         u32* s = &race_index[3 * (size_t)slot];
@@ -2721,7 +2759,7 @@ static void check_close() {   // (every page written since: read-only again)
 static void check_init() {
     const char* v = getenv("RVC_FAST_CHECK");
     if (!v || !atoi(v)) return;
-    if (races_on || prof::on || calls_on || keep_last || native_on) {
+    if (races_armed || prof::on || calls_on || keep_last || native_on) {
         fprintf(stderr, "[check] RVC_FAST_CHECK: not with RVC_RACES, RVC_PROF, RVC_CALLS, RVC_CPU_LAST or --native\n");
         return;
     }
@@ -2882,7 +2920,7 @@ static u64 machine_pass(u32 ticks) {
     copy_pass();
     for (Core& c : cores) dirty_bands |= c.dirty, c.dirty = 0;
     atom_merge();
-    if (races_on) race_settle();
+    if (races_on) race_settle(frame_no);
     if (prof::on) prof::pass_end();
     if (wc_log && count_marked)
         for (size_t i = 0; i < cores.size() && i < 256; i++) {
@@ -2939,6 +2977,23 @@ static void races_report(const char* file) {
         int kind = r.kind;
         fprintf(stderr, "[races]   %s x %llu: core %d at pc %08x, core %d at pc %08x, e.g. %08x\n", kind ? "undone" : "as it was",
                 (unsigned long long)r.count, r.core, r.pc, r.other, r.other_pc, r.phys);
+    }
+    if (!near_passes) return;
+    std::vector<RaceStat> nears;
+    for (auto& e : near_stats) nears.push_back(e.second);
+    std::sort(nears.begin(), nears.end(), [](const RaceStat& a, const RaceStat& b) { return a.count > b.count; });
+    if (FILE* g = fopen(file, "a")) {
+        for (const RaceStat& r : nears)
+            fprintf(g, "near %llu core %d pc %08x words %x other %d pc %08x words %x passes %u phys %08x\n", (unsigned long long)r.count,
+                    r.core, r.pc, r.words, r.other, r.other_pc, r.other_words, r.apart, r.phys);
+        fclose(g);
+    }
+    fprintf(stderr, "[races] %llu changes to a texel another core changed other words of within %u passes (RVC_RACES_NEAR); %zu places\n",
+            (unsigned long long)near_count, near_passes, nears.size());
+    for (size_t i = 0; i < nears.size() && i < 8; i++) {
+        const RaceStat& r = nears[i];
+        fprintf(stderr, "[races]   near x %llu: core %d at pc %08x (words %x), %u passes after core %d at pc %08x (words %x), e.g. %08x\n",
+                (unsigned long long)r.count, r.core, r.pc, r.words, r.apart, r.other, r.other_pc, r.other_words, r.phys);
     }
 }
 
@@ -3078,8 +3133,13 @@ int main(int argc, char** argv) {
     Core& c0 = cores[0];
     const char* races_file = getenv("RVC_RACES");
     const char* calls_file = getenv("RVC_CALLS");
-    races_on = races_file && *races_file;
-    if (races_on) races_begin(cores.size());
+    races_armed = races_file && *races_file;
+    if (races_armed) {
+        races_begin(cores.size());
+        if (const char* v = getenv("RVC_RACES_AT")) races_at = v;
+        if (const char* v = getenv("RVC_RACES_UNTIL")) races_until = v;
+        races_on = races_at.empty();
+    }
     atom_merging = !getenv("RVC_COUNT_MERGE") || atoi(getenv("RVC_COUNT_MERGE")) != 0;
     calls_on = calls_file && *calls_file;
     if (const char* d = getenv("RVC_PROF"); d && *d) prof::ticks = opt.ticks, prof::init(d, cores.size(), opt.countFrom.empty());
@@ -3122,6 +3182,19 @@ int main(int argc, char** argv) {
         while (net.on() && guest_seconds > std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count())
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         if (until_hit) break;
+        if (races_armed && !races_ended && script_at >= opt.script.size() && races_scan < console_text.size()) {
+            const std::string& want = races_on ? races_until : races_at;
+            size_t k = want.empty() ? std::string::npos : console_text.find(want, races_scan);
+            if (k == std::string::npos) races_scan = console_text.size() > want.size() ? console_text.size() - want.size() : races_scan;
+            else if (!races_on) {
+                races_on = true, races_scan = k + want.size();
+                fprintf(stderr, "[races] RVC_RACES from pass %llu (RVC_RACES_AT)\n", (unsigned long long)frame_no);
+            } else {
+                races_on = false, races_ended = true;
+                fprintf(stderr, "[races] RVC_RACES until pass %llu (RVC_RACES_UNTIL): the run ends\n", (unsigned long long)frame_no);
+                break;
+            }
+        }
         if (opt.seconds > 0 && guest_seconds >= opt.seconds) { exit_code = opt.until.empty() ? 0 : 3; break; }
         if (opt.maxInstr && c0.clock >= opt.maxInstr) { exit_code = opt.until.empty() ? 0 : 3; break; }
         if (opt.wall > 0 && (frame_no & 255) == 0 &&
@@ -3167,7 +3240,8 @@ int main(int argc, char** argv) {
     if (count_marked)
         fprintf(stderr, "; from the mark %llu, %llu, %llu\n", (unsigned long long)(stops[0] - stops_at[0]),
                 (unsigned long long)(stops[1] - stops_at[1]), (unsigned long long)(stops[2] - stops_at[2]));
-    if (races_on) races_report(races_file);
+    if (races_armed && !races_on && !races_ended) fprintf(stderr, "[races] not checked: the console never said RVC_RACES_AT's text\n");
+    else if (races_armed) races_report(races_file);
     if (!opt.saveRam.empty()) {
         FILE* f = fopen(opt.saveRam.c_str(), "wb");
         if (f) { fwrite(ram.data(), 1, ram.size(), f); fclose(f); }
