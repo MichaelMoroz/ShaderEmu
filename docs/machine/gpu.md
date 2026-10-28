@@ -427,7 +427,8 @@ every other core's (one a pass), and 0 on a tick from before (it reads unknown C
 built with it runs on either. (0x0b0 to 0x0b3 were never kept from user mode: their privilege bits are
 a user's.)
 
-The image's C library asks from 2 KB up (`linux/userland/memcpy.S`, `memset.c`, `uop.h`): a `memcpy`
+The image's C library asks from 4 KB up for a copy and 2 KB for a fill (`linux/userland/memcpy.S`, `memset.c`, `uop.h`;
+on the card a copy of 2 KB by words was faster, of 4 KB slower, 28 October 2026): a `memcpy`
 whose two pointers lie at one place in a texel and a `memset`, both ranges in the GPU's memory
 (0x80000000 to 0x81e00000) or in RAM (0x82000000 to 0x92000000), copy or fill the bytes up to the
 first texel themselves, ask for the whole texels and do the last bytes in the next pass. The texels

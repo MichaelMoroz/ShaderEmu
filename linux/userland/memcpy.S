@@ -3,7 +3,7 @@
  * Two pointers on word boundaries, which most are, go sixteen words a turn and then by the
  * bits of what is left, with no stack frame. Anything else is musl's own (memcpy_any).
  *
- * From 2 KB up, with both pointers at one place in a texel (16 bytes) and both ranges in RAM,
+ * From 4 KB up (uop.h), with both pointers at one place in a texel (16 bytes) and both ranges in RAM,
  * the texels between the ends are the commit's copy (docs/machine/gpu.md, "A program's copy"):
  * they never enter the core's write cache. Asking ends the pass. CSR 0x8b0 reads 1 where that
  * is worth it (the first core; 0 on a worker, whose copy would wait for other cores', and on a
