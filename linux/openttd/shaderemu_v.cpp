@@ -72,6 +72,10 @@ std::optional<std::string_view> VideoDriver_ShaderEmu::Start(const StringList &)
 	GrMapWindow(_window);
 	GrSetFocus(_window);
 	if (seglInit(_window) < 0) return "this machine has no GPU";
+	/* the machine's clock in milliseconds, the word 0x34 of its control words (seglPalette() is the word 0x400):
+	 * the frame rate window's measurements read it, not the system's clock (framerate_gui.cpp) */
+	extern const volatile uint32_t *_se_clock_ms;
+	_se_clock_ms = reinterpret_cast<const volatile uint32_t *>(reinterpret_cast<const char *>(seglPalette()) - 0x400 + 0x34);
 
 	/* The game loads for a minute at 2 MIPS without a picture: the window says so, drawn at each
 	 * exposure of its first second, which is also the window manager's time to frame it. */
@@ -498,6 +502,20 @@ static void PlayStep()
 	const int len = short_play ? std::size(PLAY_SHORT) : 200;
 	int f = _play_frame++ % len;
 	if (short_play) f = PLAY_SHORT[f];
+	/* OPENTTD_PLAY_TIMES=1: each picture's time, to see where a part's time goes */
+	static const bool times = getenv("OPENTTD_PLAY_TIMES") != nullptr;
+	if (times) {
+		static auto last = std::chrono::steady_clock::now();
+		auto now = std::chrono::steady_clock::now();
+		/* (=sums: and the last picture's sum, to compare two builds' pictures) */
+		static const bool sums = std::string_view(getenv("OPENTTD_PLAY_TIMES")) == "sums";
+		uint32_t sum = 2166136261u;
+		if (sums && _picture != nullptr) {
+			for (int i = 0; i < _screen.width * _screen.height; i++) sum = (sum ^ _picture[i]) * 16777619u;
+		}
+		fmt::print(stderr, "openttd: picture {} took {:.1f} ms, sum {:08x}\n", f, std::chrono::duration<double, std::milli>(now - last).count(), sum);
+		last = now;
+	}
 	if (f == 0) {
 		/* the rounds before the last warm the sprite cache and the ships' water regions */
 		if (_play_frame / len + 1 == rounds) fmt::print(stderr, "openttd: play PL-GO\n");

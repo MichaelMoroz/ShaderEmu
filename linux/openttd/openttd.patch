@@ -278,6 +278,27 @@ index d1148b7..eda444a 100644
  	uint8_t *dst = temp_dst->data;
  
  	/* Make the sprites per zoom-level */
+diff --git a/src/framerate_gui.cpp b/src/framerate_gui.cpp
+index c1de3c5..9c42d29 100644
+--- a/src/framerate_gui.cpp
++++ b/src/framerate_gui.cpp
+@@ -233,8 +233,16 @@ namespace {
+  * The basis of the timestamp is implementation defined, but the value should be steady,
+  * so differences can be taken to reliably measure intervals.
+  */
++#ifdef WITH_SHADEREMU
++/** The machine's clock in milliseconds (the video driver's, once it is open): a system call a measurement was a tenth of a vehicle's tick. */
++const volatile uint32_t *_se_clock_ms;
++#endif
++
+ static TimingMeasurement GetPerformanceTimer()
+ {
++#ifdef WITH_SHADEREMU
++	if (_se_clock_ms != nullptr) return static_cast<TimingMeasurement>(*_se_clock_ms) * 1000;
++#endif
+ 	using namespace std::chrono;
+ 	return (TimingMeasurement)time_point_cast<microseconds>(high_resolution_clock::now()).time_since_epoch().count();
+ }
 diff --git a/src/gfx.cpp b/src/gfx.cpp
 index 2cae30c..233f229 100644
 --- a/src/gfx.cpp
@@ -818,7 +839,7 @@ index 0abd7c0..675f9c3 100644
 +    CONDITION SHADEREMU
 +)
 diff --git a/src/spritecache.cpp b/src/spritecache.cpp
-index f26695a..aee487d 100644
+index f26695a..70d7e8d 100644
 --- a/src/spritecache.cpp
 +++ b/src/spritecache.cpp
 @@ -18,11 +18,16 @@
@@ -854,7 +875,7 @@ index f26695a..aee487d 100644
  static uint32_t _sprite_lru_counter;
  static std::vector<std::unique_ptr<SpriteFile>> _sprite_files;
  
-@@ -361,8 +375,33 @@ static bool PadSprites(SpriteLoader::SpriteCollection &sprite, ZoomLevels sprite
+@@ -361,8 +375,102 @@ static bool PadSprites(SpriteLoader::SpriteCollection &sprite, ZoomLevels sprite
  	return true;
  }
  
@@ -868,6 +889,75 @@ index f26695a..aee487d 100644
 +	bool ours = encoder == static_cast<SpriteEncoder *>(blitter) && (blitter->GetName() == "8bpp-optimized" || blitter->GetName() == "null");
 +	/* (a font's glyph is encoded from its font zoom level alone) */
 +	if (ours && sprite_type == SpriteType::Font && sprite_avail.Test(_font_zoom)) return true;
++	if (ours && sprite_type != SpriteType::Font && sprite_avail == ZoomLevels{ZoomLevel::Normal} && _settings_client.gui.zoom_min >= ZoomLevel::Normal &&
++			_settings_client.gui.sprite_zoom_min <= ZoomLevel::Normal && (sprite[ZoomLevel::In4x].width != 0 || sprite[ZoomLevel::In2x].width != 0)) {
++		/* The same with the sizes of the levels closer, whose pixels were not read (LoadSpriteV2): the root is made of the
++		 * closest as ResizeSpriteIn would, and every level padded as PadSprites would; only the normal level has pixels. */
++		auto &normal = sprite[ZoomLevel::Normal];
++		auto &root = sprite[ZoomLevel::Min];
++		if (sprite[ZoomLevel::In4x].width == 0) {
++			const auto &in2x = sprite[ZoomLevel::In2x];
++			uint8_t scaled_1 = AdjustByZoom(1, ZoomLevel::In2x - ZoomLevel::Min);
++			if (in2x.width * scaled_1 > UINT16_MAX || in2x.height * scaled_1 > UINT16_MAX) return false;
++			root.width = in2x.width * scaled_1;
++			root.height = in2x.height * scaled_1;
++			root.x_offs = in2x.x_offs * scaled_1;
++			root.y_offs = in2x.y_offs * scaled_1;
++			root.colours = in2x.colours;
++		}
++		ZoomLevels levels{ZoomLevel::Min, ZoomLevel::Normal};
++		if (sprite[ZoomLevel::In2x].width != 0) levels.Set(ZoomLevel::In2x);
++		int min_xoffs = INT32_MAX, min_yoffs = INT32_MAX;
++		for (ZoomLevel zoom : levels) {
++			min_xoffs = std::min(min_xoffs, ScaleByZoom(sprite[zoom].x_offs, zoom));
++			min_yoffs = std::min(min_yoffs, ScaleByZoom(sprite[zoom].y_offs, zoom));
++		}
++		int max_width = INT32_MIN, max_height = INT32_MIN;
++		for (ZoomLevel zoom : levels) {
++			max_width = std::max(max_width, ScaleByZoom(sprite[zoom].width + sprite[zoom].x_offs - UnScaleByZoom(min_xoffs, zoom), zoom));
++			max_height = std::max(max_height, ScaleByZoom(sprite[zoom].height + sprite[zoom].y_offs - UnScaleByZoom(min_yoffs, zoom), zoom));
++		}
++		uint align = encoder->GetSpriteAlignment();
++		if (align != 0) {
++			max_width = Align(max_width, align);
++			max_height = Align(max_height, align);
++		}
++		for (ZoomLevel zoom : levels) {
++			auto &cur = sprite[zoom];
++			int pad_left = std::max(0, cur.x_offs - UnScaleByZoom(min_xoffs, zoom));
++			int pad_top = std::max(0, cur.y_offs - UnScaleByZoom(min_yoffs, zoom));
++			int pad_right = std::max(0, UnScaleByZoom(max_width, zoom) - cur.width - pad_left);
++			int pad_bottom = std::max(0, UnScaleByZoom(max_height, zoom) - cur.height - pad_top);
++			if (pad_left == 0 && pad_right == 0 && pad_top == 0 && pad_bottom == 0) continue;
++			if (zoom == ZoomLevel::Normal && !VpArenaOn()) {
++				if (!PadSingleSprite(&cur, zoom, pad_left, pad_top, pad_right, pad_bottom)) return false;
++				continue;
++			}
++			if (zoom == ZoomLevel::Normal) {
++				/* (PadSingleSprite on a core loading in a round, which may not allocate: the arena's new memory leaves the old) */
++				const uint width = cur.width + pad_left + pad_right, height = cur.height + pad_top + pad_bottom;
++				if (width > UINT16_MAX || height > UINT16_MAX) return false;
++				const SpriteLoader::CommonPixel *src = cur.data;
++				cur.AllocateData(zoom, static_cast<size_t>(width) * height);
++				for (uint y = 0; y < cur.height; y++) {
++					std::copy_n(src + static_cast<size_t>(y) * cur.width, cur.width, cur.data + static_cast<size_t>(y + pad_top) * width + pad_left);
++				}
++				cur.width = width;
++				cur.height = height;
++				cur.x_offs -= pad_left;
++				cur.y_offs -= pad_top;
++				continue;
++			}
++			/* (a size alone: PadSingleSprite's sizes) */
++			if (cur.width + pad_left + pad_right > UINT16_MAX || cur.height + pad_top + pad_bottom > UINT16_MAX) return false;
++			cur.width += pad_left + pad_right;
++			cur.height += pad_top + pad_bottom;
++			cur.x_offs -= pad_left;
++			cur.y_offs -= pad_top;
++		}
++		for (ZoomLevel zoom = ZoomLevel::Out2x; zoom != ZoomLevel::End; zoom++) ResizeSpriteOut(sprite, zoom);
++		return true;
++	}
 +	if (ours && sprite_type != SpriteType::Font && sprite_avail == ZoomLevels{ZoomLevel::Normal} && _settings_client.gui.zoom_min >= ZoomLevel::Normal &&
 +			_settings_client.gui.sprite_zoom_min <= ZoomLevel::Normal) {
 +		const auto &normal = sprite[ZoomLevel::Normal];
@@ -889,7 +979,7 @@ index f26695a..aee487d 100644
  	/* Create a fully zoomed image if it does not exist */
  	ZoomLevel first_avail = ZoomLevel::End;
  	for (ZoomLevel zoom = ZoomLevel::Min; zoom <= ZoomLevel::Max; ++zoom) {
-@@ -520,7 +559,7 @@ static void *ReadSprite(const SpriteCache *sc, SpriteID id, SpriteType sprite_ty
+@@ -520,7 +628,7 @@ static void *ReadSprite(const SpriteCache *sc, SpriteID id, SpriteType sprite_ty
  		return s;
  	}
  
@@ -898,7 +988,7 @@ index f26695a..aee487d 100644
  		if (id == SPR_IMG_QUERY) UserError("Okay... something went horribly wrong. I couldn't resize the fallback sprite. What should I do?");
  		return (void*)GetRawSprite(SPR_IMG_QUERY, SpriteType::Normal, &allocator, encoder);
  	}
-@@ -539,7 +578,14 @@ struct GrfSpriteOffset {
+@@ -539,7 +647,14 @@ struct GrfSpriteOffset {
  };
  
  /** Map from sprite numbers to position in the GRF file. */
@@ -913,7 +1003,7 @@ index f26695a..aee487d 100644
  
  /**
   * Get the file offset for a specific sprite in the sprite section of a GRF.
-@@ -557,6 +603,14 @@ size_t GetGRFSpriteOffset(uint32_t id)
+@@ -557,6 +672,14 @@ size_t GetGRFSpriteOffset(uint32_t id)
   */
  void ReadGRFSpriteOffsets(SpriteFile &file)
  {
@@ -928,7 +1018,7 @@ index f26695a..aee487d 100644
  	_grf_sprite_offsets.clear();
  
  	if (file.GetContainerVersion() >= 2) {
-@@ -854,6 +908,23 @@ static void *HandleInvalidSpriteRequest(SpriteID sprite, SpriteType requested, S
+@@ -854,6 +977,23 @@ static void *HandleInvalidSpriteRequest(SpriteID sprite, SpriteType requested, S
   */
  void *GetRawSprite(SpriteID sprite, SpriteType type, SpriteAllocator *allocator, SpriteEncoder *encoder)
  {
@@ -952,7 +1042,7 @@ index f26695a..aee487d 100644
  	assert(type != SpriteType::MapGen || IsMapgenSpriteID(sprite));
  	assert(type < SpriteType::Invalid);
  
-@@ -894,6 +965,159 @@ void *GetRawSprite(SpriteID sprite, SpriteType type, SpriteAllocator *allocator,
+@@ -894,8 +1034,168 @@ void *GetRawSprite(SpriteID sprite, SpriteType type, SpriteAllocator *allocator,
  	}
  }
  
@@ -1109,11 +1199,30 @@ index f26695a..aee487d 100644
 +}
 +#endif
 +
++#ifdef WITH_SHADEREMU
++uint32_t _sprite_bounds_gen = 1;
++#endif
++
  void GfxInitSpriteMem()
  {
++#ifdef WITH_SHADEREMU
++	_sprite_bounds_gen++;
++#endif
  	/* Reset the spritecache 'pool' */
+ 	_spritecache.clear();
+ 	_spritecache.shrink_to_fit();
+@@ -910,6 +1210,9 @@ void GfxInitSpriteMem()
+  */
+ void GfxClearSpriteCache()
+ {
++#ifdef WITH_SHADEREMU
++	_sprite_bounds_gen++;
++#endif
+ 	/* Clear sprite ptr for all cached items */
+ 	for (SpriteCache &sc : _spritecache) {
+ 		if (sc.ptr != nullptr) sc.ClearSpriteData();
 diff --git a/src/spriteloader/grf.cpp b/src/spriteloader/grf.cpp
-index a7ddcda..cebe866 100644
+index a7ddcda..9648911 100644
 --- a/src/spriteloader/grf.cpp
 +++ b/src/spriteloader/grf.cpp
 @@ -22,6 +22,23 @@
@@ -1251,17 +1360,82 @@ index a7ddcda..cebe866 100644
  		avail_8bpp.Set(zoom_lvl);
  		return avail_8bpp;
  	}
-@@ -253,7 +289,8 @@ static ZoomLevels LoadSpriteV1(SpriteLoader::SpriteCollection &sprite, SpriteFil
+@@ -253,13 +289,46 @@ static ZoomLevels LoadSpriteV1(SpriteLoader::SpriteCollection &sprite, SpriteFil
  	return {};
  }
  
 -static ZoomLevels LoadSpriteV2(SpriteLoader::SpriteCollection &sprite, SpriteFile &file, size_t file_pos, SpriteType sprite_type, bool load_32bpp, SpriteCacheCtrlFlags control_flags, ZoomLevels &avail_8bpp, ZoomLevels &avail_32bpp)
++#ifdef WITH_SHADEREMU
++#include "../blitter/factory.hpp"
++#include "../string_func.h"
++
++/**
++ * Whether a sprite's levels closer than normal zoom are shown nowhere: no viewport may zoom in, the windows are
++ * drawn at normal zoom and the blitter is the 8bpp one, whose encoder reads no level closer than the viewports'
++ * (spritecache.cpp's ResizeSprites, the case of a sprite of normal zoom alone).
++ */
++static bool SeCloseLevelsUnseen(SpriteType sprite_type, bool load_32bpp)
++{
++	/* (OPENTTD_SPRITES=whole: every level read, as upstream; the first call is the first core's, at start) */
++	static const bool whole = GetEnv("OPENTTD_SPRITES").value_or("") == "whole";
++	if (sprite_type != SpriteType::Normal || load_32bpp || whole) return false;
++	if (_settings_client.gui.zoom_min < ZoomLevel::Normal || _settings_client.gui.sprite_zoom_min > ZoomLevel::Normal || _gui_zoom < ZoomLevel::Normal) return false;
++	Blitter *blitter = BlitterFactory::GetCurrentBlitter();
++	return blitter != nullptr && (blitter->GetName() == "8bpp-optimized" || blitter->GetName() == "null");
++}
++#endif
++
 +template <class F>
-+static ZoomLevels LoadSpriteV2(SpriteLoader::SpriteCollection &sprite, F &file, size_t file_pos, SpriteType sprite_type, bool load_32bpp, SpriteCacheCtrlFlags control_flags, ZoomLevels &avail_8bpp, ZoomLevels &avail_32bpp)
++static ZoomLevels LoadSpriteV2(SpriteLoader::SpriteCollection &sprite, F &file, size_t file_pos, SpriteType sprite_type, bool load_32bpp, SpriteCacheCtrlFlags control_flags, ZoomLevels &avail_8bpp, ZoomLevels &avail_32bpp
++#ifdef WITH_SHADEREMU
++		, bool skip_close = true
++#endif
++		)
  {
  	static const ZoomLevel zoom_lvl_map[6] = {ZoomLevel::Normal, ZoomLevel::In4x, ZoomLevel::In2x, ZoomLevel::Out2x, ZoomLevel::Out4x, ZoomLevel::Out8x};
  
-@@ -339,7 +376,7 @@ static ZoomLevels LoadSpriteV2(SpriteLoader::SpriteCollection &sprite, SpriteFil
+ 	/* Is the sprite not present/stripped in the GRF? */
+ 	if (file_pos == SIZE_MAX) return {};
+ 
++#ifdef WITH_SHADEREMU
++	/* A level closer than normal zoom, where none is shown, is not decoded: its size alone is read into the sprite,
++	 * with no pixels, for ResizeSprites to pad the normal level as it would (docs/games/openttd.md, "Sprites loaded").
++	 * The windows' icons have a level at 2x: making it, and the 4x from it, was most of the time a window took to open. */
++	skip_close = skip_close && SeCloseLevelsUnseen(sprite_type, load_32bpp);
++	ZoomLevels skipped;
++#endif
++
+ 	/* Open the right file and go to the correct position */
+ 	file.SeekTo(file_pos, SEEK_SET);
+ 
+@@ -306,6 +375,26 @@ static ZoomLevels LoadSpriteV2(SpriteLoader::SpriteCollection &sprite, SpriteFil
+ 			is_wanted_zoom_lvl = (zoom == 0);
+ 		}
+ 
++#ifdef WITH_SHADEREMU
++		if (skip_close && is_wanted_colour_depth && is_wanted_zoom_lvl && zoom_lvl_map[zoom] < ZoomLevel::Normal) {
++			ZoomLevel zoom_lvl = zoom_lvl_map[zoom];
++			if (skipped.Test(zoom_lvl)) {
++				file.SkipBytes(num - 2);
++				continue;
++			}
++			skipped.Set(zoom_lvl);
++			auto &size = sprite[zoom_lvl];
++			size.height = file.ReadWord();
++			size.width = file.ReadWord();
++			size.x_offs = file.ReadWord();
++			size.y_offs = file.ReadWord();
++			size.colours = colour;
++			size.data = nullptr;
++			file.SkipBytes(num - 10);
++			if (size.width == 0 || size.height == 0 || size.width > INT16_MAX || size.height > INT16_MAX) skip_close = false;
++			continue;
++		}
++#endif
+ 		if (is_wanted_colour_depth && is_wanted_zoom_lvl) {
+ 			ZoomLevel zoom_lvl = (sprite_type != SpriteType::MapGen) ? zoom_lvl_map[zoom] : ZoomLevel::Min;
+ 
+@@ -339,7 +428,7 @@ static ZoomLevels LoadSpriteV2(SpriteLoader::SpriteCollection &sprite, SpriteFil
  			 * otherwise we can calculate it from the image dimensions. */
  			uint decomp_size = (type & 0x08) ? file.ReadDword() : dest_sprite.width * dest_sprite.height * bpp;
  
@@ -1270,7 +1444,24 @@ index a7ddcda..cebe866 100644
  			if (file.GetPos() != start_pos + num) {
  				WarnCorruptSprite(file, file_pos, __LINE__);
  				return {};
-@@ -364,3 +401,53 @@ ZoomLevels SpriteLoaderGrf::LoadSprite(SpriteLoader::SpriteCollection &sprite, S
+@@ -353,6 +442,16 @@ static ZoomLevels LoadSpriteV2(SpriteLoader::SpriteCollection &sprite, SpriteFil
+ 
+ 	} while (file.ReadDword() == id);
+ 
++#ifdef WITH_SHADEREMU
++	/* (the case ResizeSprites takes is the normal level alone, with the sizes of those closer: anything else, or a
++	 * size that cannot be, is read again whole; a core loading in a round has room for one reading) */
++	if (skipped.Any() && (loaded_sprites != ZoomLevels{ZoomLevel::Normal} || !skip_close)) {
++		sprite[ZoomLevel::In4x] = {};
++		sprite[ZoomLevel::In2x] = {};
++		if (VpArenaOn()) return VpRefuse(), ZoomLevels{};
++		return LoadSpriteV2(sprite, file, file_pos, sprite_type, load_32bpp, control_flags, avail_8bpp, avail_32bpp, false);
++	}
++#endif
+ 	return loaded_sprites;
+ }
+ 
+@@ -364,3 +463,53 @@ ZoomLevels SpriteLoaderGrf::LoadSprite(SpriteLoader::SpriteCollection &sprite, S
  		return LoadSpriteV1(sprite, file, file_pos, sprite_type, load_32bpp, avail_8bpp);
  	}
  }
@@ -1550,7 +1741,7 @@ index b33a953..d84a33e 100644
  		static std::mutex thread_startup_mutex;
  		std::lock_guard<std::mutex> lock(thread_startup_mutex);
 diff --git a/src/vehicle.cpp b/src/vehicle.cpp
-index 91588a6..cbff8e8 100644
+index 91588a6..9bca4be 100644
 --- a/src/vehicle.cpp
 +++ b/src/vehicle.cpp
 @@ -1118,6 +1118,18 @@ static void DoDrawVehicle(const Vehicle *v)
@@ -1611,6 +1802,47 @@ index 91588a6..cbff8e8 100644
  				}
  
  				v = v->hash_viewport_next;
+@@ -1671,7 +1701,19 @@ void Vehicle::UpdatePosition()
+ void Vehicle::UpdateBoundingBoxCoordinates(bool update_cache) const
+ {
+ 	Rect new_coord;
++#ifdef WITH_SHADEREMU
++	/* (a vehicle moving keeps its sprite most ticks: its sizes are not looked up again; docs/games/openttd.md,
++	 * "The game's own speed") */
++	MutableSpriteCache &sc = this->sprite_cache;
++	if (sc.sprite_seq.count == 1 && sc.seq_bounds_of == sc.sprite_seq.seq[0].sprite && sc.seq_bounds_gen == _sprite_bounds_gen) {
++		new_coord = sc.seq_bounds;
++	} else {
++		sc.sprite_seq.GetBounds(&new_coord);
++		if (sc.sprite_seq.count == 1) sc.seq_bounds = new_coord, sc.seq_bounds_of = sc.sprite_seq.seq[0].sprite, sc.seq_bounds_gen = _sprite_bounds_gen;
++	}
++#else
+ 	this->sprite_cache.sprite_seq.GetBounds(&new_coord);
++#endif
+ 
+ 	/* z-bounds are not used. */
+ 	Point pt = RemapCoords(this->x_pos + this->bounds.origin.x + this->bounds.offset.x, this->y_pos + this->bounds.origin.y + this->bounds.offset.y, this->z_pos);
+diff --git a/src/vehicle_base.h b/src/vehicle_base.h
+index 7edf724..ab06bc4 100644
+--- a/src/vehicle_base.h
++++ b/src/vehicle_base.h
+@@ -160,7 +160,16 @@ struct MutableSpriteCache {
+ 	bool is_viewport_candidate = false; ///< This vehicle can potentially be drawn on a viewport
+ 	Rect old_coord{}; ///< Co-ordinates from the last valid bounding box
+ 	VehicleSpriteSeq sprite_seq{}; ///< Vehicle appearance.
++#ifdef WITH_SHADEREMU
++	/* the bounds of a sequence of one sprite, kept while the sprite and the sprite cache's generation are the same */
++	Rect seq_bounds{};
++	SpriteID seq_bounds_of = 0;
++	uint32_t seq_bounds_gen = 0;
++#endif
+ };
++#ifdef WITH_SHADEREMU
++extern uint32_t _sprite_bounds_gen; ///< raised whenever sprites may load anew with other sizes (spritecache.cpp)
++#endif
+ 
+ /** A vehicle pool for a little over 1 million vehicles. */
+ typedef Pool<Vehicle, VehicleID, 512> VehiclePool;
 diff --git a/src/vehicle_func.h b/src/vehicle_func.h
 index 9b69b13..4571a5f 100644
 --- a/src/vehicle_func.h
@@ -1640,7 +1872,7 @@ index e09c202..3319032 100644
 +    CONDITION SHADEREMU
 +)
 diff --git a/src/video/null_v.cpp b/src/video/null_v.cpp
-index 65fc9f3..9070c5e 100644
+index 65fc9f3..61e230d 100644
 --- a/src/video/null_v.cpp
 +++ b/src/video/null_v.cpp
 @@ -12,6 +12,11 @@
@@ -1655,29 +1887,53 @@ index 65fc9f3..9070c5e 100644
  #include "null_v.h"
  
  #include "../safeguards.h"
-@@ -50,11 +55,48 @@ void VideoDriver_Null::MainLoop()
+@@ -36,6 +41,13 @@ std::optional<std::string_view> VideoDriver_Null::Start(const StringList &parm)
+ 	_screen.dst_ptr = nullptr;
+ 	ScreenSizeChanged();
+ 
++#ifdef WITH_SHADEREMU
++	/* (no clock for the frame rate window's measurements: nothing shows them) */
++	extern const volatile uint32_t *_se_clock_ms;
++	static const uint32_t no_clock = 0;
++	_se_clock_ms = &no_clock;
++#endif
++
+ 	/* Do not render, nor blit */
+ 	Debug(misc, 1, "Forcing blitter 'null'...");
+ 	BlitterFactory::SelectBlitter("null");
+@@ -50,11 +62,57 @@ void VideoDriver_Null::MainLoop()
  {
  	uint i;
  
-+	/* OPENTTD_WARM=W: the ticks after the first W timed (the first after a load warm caches such as the
-+	 * ships' water regions), "openttd: ticks TK-GO" at the first of them */
++	/* OPENTTD_WARM=W: the game loop's time over the ticks after the first W (the first after a load warm caches
++	 * such as the ships' water regions), "openttd: ticks TK-GO" at the first of them: the simulation alone */
++	const bool timed = GetEnv("OPENTTD_WARM").has_value();
 +	uint warm = 0;
 +	for (char c : GetEnv("OPENTTD_WARM").value_or("")) warm = c >= '0' && c <= '9' ? warm * 10 + (c - '0') : warm;
 +	warm = std::min<uint>(warm, this->ticks);
++	std::chrono::steady_clock::duration in_loop{};
 +	auto timed_from = std::chrono::steady_clock::now();
  	for (i = 0; i < this->ticks; i++) {
-+		if (i == warm && GetEnv("OPENTTD_WARM").has_value()) {
+-		::GameLoop();
++		if (timed && i == warm) {
 +			fmt::print("openttd: ticks TK-GO\n");
 +			fflush(stdout);
 +			timed_from = std::chrono::steady_clock::now();
 +		}
- 		::GameLoop();
++		if (timed && i >= warm) {
++			auto t = std::chrono::steady_clock::now();
++			::GameLoop();
++			in_loop += std::chrono::steady_clock::now() - t;
++		} else {
++			::GameLoop();
++		}
  		::InputLoop();
  		::UpdateWindows();
  	}
-+	if (GetEnv("OPENTTD_WARM").has_value()) {
-+		double s = std::chrono::duration<double>(std::chrono::steady_clock::now() - timed_from).count();
-+		fmt::print("openttd: ticks TK-DONE: {} in {:.2f} s, {:.2f} a second\n", this->ticks - warm, s, (this->ticks - warm) / s);
++	if (timed) {
++		double s = std::chrono::duration<double>(in_loop).count();
++		double all = std::chrono::duration<double>(std::chrono::steady_clock::now() - timed_from).count();
++		fmt::print("openttd: ticks TK-DONE: {} in {:.2f} s of the game loop, {:.2f} a second ({:.2f} s in all)\n", this->ticks - warm, s, (this->ticks - warm) / s, all);
 +	}
 +
 +	/* OPENTTD_SUM: every tile, the game's random state, the date and the companies' money after
