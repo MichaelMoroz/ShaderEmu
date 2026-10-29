@@ -225,6 +225,34 @@ rectangle that upstream leaves as they were: compare with `OPENTTD_DRAW=cpu OPEN
 `rvc_harness --cpu` the GPU reads RAM that the processor wrote outside the GPU's memory only every 0.25
 s: run with `--cpu-fresh`.
 
+Checked (29 October 2026): `OPENTTD_PLAY_SHORT=1 OPENTTD_PLAY_ODD=1 OPENTTD_PAUSE=1 OPENTTD_CHECK=1` under
+`rvc_harness --cpu --warp --cpu-fresh` checked 70 pictures, 0 differ; the 200 pictures' sums of the paused
+script with `OPENTTD_PLAY_JUMP=1` are the 8-bit blitter's but for picture 113, which shows picture 114's
+window a picture early in both GPU runs (a window that is drawn again by the wall's time: WARP's pictures are
+slower). `tools/test_all.py openttd-gpu --races`: 0 undone.
+
+On the card (`tools/rv_compare`, `rvc_harness --d3d11 --unity 11.1,1.4,0.75`, two rounds alternating; GPU
+and CPU are the same binary and image, `OPENTTD_DRAW=cpu` the second; "after" the frozen image of
+`build/after`):
+
+| Part | GPU | CPU | after |
+|---|---|---|---|
+| `openttd` (paused): scroll, pictures/s | 3.46, 3.21 | 2.50, 2.57 | 3.19, 3.21, 3.22 |
+| zoomed out, pictures/s | 2.36, 2.49 | 2.23, 2.35 | 2.33, 2.25, 2.21 |
+| windows, pictures/s | 20.0, 26.2 | 20.3, 17.7 | 17.9, 18.1, 18.0 |
+| start to the game, s | 59.9, 59.7 | 61.7, 61.5 | 95.1 |
+| `openttd-play` (played): game ticks/s | 1.26, 1.26 | 1.16, 1.15 | 1.05, 1.05 |
+| scroll, pictures/s | 1.06, 1.05 | 1.02, 1.02 | 1.08, 1.09 |
+| zoomed out, pictures/s | 1.23, 1.23 | 1.15, 1.15 | 1.02, 1.02 |
+| windows, pictures/s | 1.59, 1.58 | 1.34, 1.33 | - |
+| `openttd-title`: title frames/s | 33.1, 33.3 | 28.3, 28.7 | 27.1, 27.4 |
+| start to the title drawn, s | 44.4, 44.1 | 46.2, 46.3 | 58.1 |
+
+The CPU column is slower than the image of 28 October 23:58 (`rvc_cpu`, the paused short script: 1.62
+pictures a second against 3.77), a loss of the CPU's path in the same commits. A played picture is about
+half the game's tick on the first core (three ships' path searches that rebuilt water regions were 30% of
+it, `RVC_PROF`) and collecting the viewport's sprites; the GPU's records are some 5% of the first core.
+
 ## Is it the same game
 
 `host_sum.sh` builds the same tree for the build computer, without a window and without
