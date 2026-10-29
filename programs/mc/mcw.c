@@ -78,7 +78,7 @@ static void say(const char *text, uint32_t value)
  * shared, then: a job does not use it).
  */
 void mcw_entry(void);
-uint32_t mcw_loop(uint32_t core) __attribute__((used));	/* (called from the lines below only) */
+uint32_t mcw_loop(uint32_t core, uint32_t tag) __attribute__((used));	/* (called from the lines below only) */
 __asm__(".text\n"
 	".globl mcw_entry\n"
 	"mcw_entry:\n"
@@ -87,16 +87,20 @@ __asm__(".text\n"
 	"	la gp, __global_pointer$\n"
 	".option pop\n"
 	"	lw tp, 0(sp)\n"
+	"	lw a1, 4(sp)\n"
 	"	call mcw_loop\n"
 	"	ebreak\n");
 
-uint32_t mcw_loop(uint32_t core)
+uint32_t mcw_loop(uint32_t core, uint32_t tag)
 {
 	mc_job *job = (mc_job *)(page + MC_JOB_AT(core));
 	mc_answer *answer = (mc_answer *)(page + MC_ANSWER_AT(core));
 	uint32_t last = job->seq;
 
 	answer->done = last;
+	/* (the program's tag with it: a core the kernel parked when its last program ended still says it is
+	 * alive, and the next program to start it must not take that for its own worker there) */
+	answer->pad = tag;
 	answer->alive = MC_ALIVE | core;
 	for (;;) {
 		uint32_t at = job->seq;
@@ -246,6 +250,7 @@ static void start(int k, int core)
 	uint32_t *top = (uint32_t *)(stacks + (uint32_t)k * STACK_BYTES - 16);
 
 	top[0] = own_tp;
+	top[1] = my_tag;
 	if (!writing(core)) return;	/* (taken back already) */
 	starting[k] = core;
 	at[1] = (uint32_t)mcw_entry;
@@ -266,7 +271,7 @@ static int arrived(int k)
 		starting[k] = 0;	/* (taken back before it was there) */
 		return 0;
 	}
-	if (answer->alive != (MC_ALIVE | (uint32_t)core)) return 0;
+	if (answer->alive != (MC_ALIVE | (uint32_t)core) || answer->pad != my_tag) return 0;
 	if (!writing(core)) {
 		starting[k] = 0;
 		return 0;

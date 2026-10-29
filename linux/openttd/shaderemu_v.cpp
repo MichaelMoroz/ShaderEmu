@@ -93,6 +93,8 @@ std::optional<std::string_view> VideoDriver_ShaderEmu::Start(const StringList &)
 	_picture_h = std::max(_screen_rows, 480);
 	_picture = static_cast<uint8_t *>(seglMemory(_picture_w * _picture_h));
 	if (_picture == nullptr) return "no GPU memory for the screen";
+	/* (the GPU's memory is handed out from the same place to every program: it holds the last one's picture) */
+	std::fill_n(_picture, static_cast<size_t>(_picture_w) * _picture_h, uint8_t{0});
 	glGenTextures(1, &_texture);
 	if (!this->Resize(_cur_resolution.width, _cur_resolution.height)) return "no screen";
 

@@ -221,8 +221,11 @@ CASES = [
     # started twice in one boot (docs/games/openttd.md, "At exit"): the first played with its ships' paths made ahead, the
     # second must find its sprites as they are (a worker left running at exit once wrote into the next program's pages)
     case('openttd-twice', 'games openttd', X + 'OPENTTD_PLAY=1 OPENTTD_PLAY_SHORT=1 openttd -g /usr/share/openttd/busy.sav; '
+         'OPENTTD_PLAY=1 OPENTTD_PLAY_SHORT=1 OPENTTD_PAUSE=1 OPENTTD_CHECK=1 openttd -g /usr/share/openttd/busy.sav; '
          'OPENTTD_SUM=1 openttd -v null:ticks=1 -s null -m null -g /usr/share/openttd/busy.sav',
-         True, wall=400, has=[r'openttd: play PL-DONE', r'openttd: 1 ticks, map 256 x 256, .* sum [0-9a-f]+']),
+         True, wall=600, has=[r'openttd: play PL-DONE', r'openttd: play scroll: .* [1-9]\d* made again by workers',
+                              r'openttd: play round 1: .*checked \d+, 0 differ \(0 pixels'],
+         sums=[(r'openttd: 1 ticks, map 256 x 256, .* sum ([0-9a-f]+)', ['e49e18e3'])]),
     # nxray and nxpath (docs/apps/raytrace.md)
     # (the scene's sines in floats since 20 October 2026: docs/apps/raytrace.md, "Lanes"; rvc_cpu has no lanes, the same sums plain)
     case('nxray', 'workers', X + 'RAY_FRAMES=4 nxray', True, sums=[(r'raystat: picture \d.* sum ([0-9a-f]+)', ['53ea472d', '226b5e92', '37366b32', '3ffdbe63'])],
@@ -523,7 +526,7 @@ def zerotail_nommu():
 # (16-byte romfs packing): what the pool hands out is checked on copies in tmpfs
 ZERO_TAIL_NOMMU = ('zerotest 12 4; mkdir -p /tmp/t; find /usr/share /usr/bin /etc -maxdepth 1 -type f -size -256k | '
                    'while read f; do cp "$f" /tmp/t/; done; tailtest /tmp/t/*')
-CC_BYTES_NOMMU = '4e0a84e8'   # libcompiler_rt.a's 64-bit division and double's sum, product and conversions of our own (rt/) and every global hidden in rv32-cc (nommu_hidden.h) (29 October 2026, latest); memset's range in the layout of RAM in one piece (2ecf76d) and mcwx's team job that lingered out posted with the round (28 October 2026, latest); memcpy's commit's copy from 4 KB and mcwx's calls round the row on RISC-V (28 October 2026, later); the devices at 0x80000000 (libmcw.a's and libgles.a's device addresses, uop.h's RAM test in memcpy and memset); libc.a's float libm (linux/userland/libm), memcpy and memset through the commit's copy, memmove and memcmp a word a turn, a double's printf in doubles; libmcw.a's mc_publish (28 October 2026)
+CC_BYTES_NOMMU = '4e0a84e8'   # libcompiler_rt.a's 64-bit division and double's sum, product and conversions of our own (rt/) and every global hidden in rv32-cc (nommu_hidden.h) (29 October 2026, latest); memset's range in the layout of RAM in one piece (2ecf76d) and mcwx's team job that lingered out posted with the round (28 October 2026, latest); memcpy's commit's copy from 4 KB and mcwx's calls round the row on RISC-V (28 October 2026, later); the devices at 0x80000000 (libmcw.a's and libgles.a's device addresses, uop.h's RAM test in memcpy and memset); libc.a's float libm (linux/userland/libm), memcpy and memset through the commit's copy, memmove and memcmp a word a turn, a double's printf in doubles; libmcw.a's mc_publish (28 October 2026)  # with libmcw.a's tagged answers (1ee0347) too it moves again: set anew from a build with both
 
 
 def without_mmu(image):
