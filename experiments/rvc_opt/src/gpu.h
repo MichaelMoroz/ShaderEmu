@@ -173,6 +173,12 @@ struct gpu_varyings {
     nointerpolation uint key : TEXCOORD2;
     float2 light_uv : TEXCOORD3;                      // FRAGMENT_LIT: where in the light map
     nointerpolation uint3 light_info : TEXCOORD4;     // and its address, width, height
+#ifdef GPU_EDGE
+    // The picture's right and bottom edges, where the target is larger than the picture: CMD_CLEAR's triangle, twice
+    // the picture each way, is cut there (docs/machine/gpu.md, "The picture's rectangle"). Only it: a cut triangle's
+    // new corners move the interpolation inside it, and a 3D triangle so cut changed 113 of Half-Life's pixels.
+    float2 edge : SV_ClipDistance0;
+#endif
 };
 
 // Pixels (x right, y down, depth 0..1) to the corner of the render target the display shows.
@@ -229,6 +235,9 @@ gpu_varyings gpu_vertex_sized(uint id, uint base, uint4 head, float2 size) {
     o.key = 0;
     o.light_uv = 0;
     o.light_info = 0;
+#ifdef GPU_EDGE
+    o.edge = 1.0;
+#endif
     {
         uint op = head.r;
         uint k = id - head.a;
@@ -237,6 +246,10 @@ gpu_varyings gpu_vertex_sized(uint id, uint base, uint4 head, float2 size) {
             // one triangle over the whole picture, at the far plane
             o.position = place_pixels(float2(k == 1 ? 2.0 : 0.0, k == 2 ? 2.0 : 0.0) * size, 1.0);
             o.colour = colour_of(head.g);
+#ifdef GPU_EDGE
+            // cut at x = size.x and y = size.y: its colour and depth are the same at every corner, so no pixel inside changes
+            o.edge = float2(1.0 - (k == 1 ? 2.0 : 0.0), 1.0 - (k == 2 ? 2.0 : 0.0));
+#endif
         } else if (op == CMD_RECT) {
             // head.g colour; then x0, y0, x1, y1; mode, texture address, width, height;
             // u0, v0, u1, v1 (16.16). head.b is the key
@@ -360,9 +373,9 @@ gpu_varyings gpu_vertex_sized(uint id, uint base, uint4 head, float2 size) {
     return o;
 }
 
-// The same for the list that is submitted (gpu_command): its picture is the display's, or the
+// The submitted list's picture, in pixels at the target's top left: the display's, or the
 // rectangle it is drawn into.
-gpu_varyings gpu_vertex_of(uint id, uint base, uint4 head) {
+float2 gpu_picture_size() {
     uint4 ctrl = ram(GPU_CTRL);
     uint4 disp = ram(GPU_DISPLAY);
     float2 size = float2(disp.g, disp.b);
@@ -370,7 +383,12 @@ gpu_varyings gpu_vertex_of(uint id, uint base, uint4 head) {
         uint4 into = ram(GPU_INTO);
         size = float2(into.g, into.b);
     }
-    return gpu_vertex_sized(id, base, head, size);
+    return size;
+}
+
+// The same for the list that is submitted (gpu_command).
+gpu_varyings gpu_vertex_of(uint id, uint base, uint4 head) {
+    return gpu_vertex_sized(id, base, head, gpu_picture_size());
 }
 
 // The mesh's vertex `id` belongs to whichever command claims that slot. Vertices no command
@@ -384,6 +402,9 @@ gpu_varyings gpu_vertex(uint id) {
     o.key = 0;
     o.light_uv = 0;
     o.light_info = 0;
+#ifdef GPU_EDGE
+    o.edge = 0;
+#endif
     uint base;
     uint4 head;
     [branch]
@@ -394,7 +415,7 @@ gpu_varyings gpu_vertex(uint id) {
 #ifdef GPU_AMP
 // The device's mesh drawn by a blit (src/amp.h, docs/machine/gpu.md "Blits in place of cameras"): a call draws
 // GPU_AMP_EACH of its triangles in their order, each whole if a command claims all three of its vertices (as
-// Unity's mesh of a point a triangle did). 13 triangles are 39 vertices of gpu_varyings' 20 values, under the
+// Unity's mesh of a point a triangle did). 13 triangles are 39 vertices of gpu_varyings' 22 values (20 without GPU_EDGE), under the
 // 1,024 a geometry shader may write, and 5,184 calls are 67,392 triangles. The includer defines _GpuPass (a
 // number or a uniform) and GPU_AMP_Z(o) if the target's depth runs the other way (Unity's reversed Z).
 #include "amp.h"

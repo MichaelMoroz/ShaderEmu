@@ -3,3 +3,4 @@
 d312032d83c3574e  2026-10-28  WARP passed 1 cases: mctest-3
 d122a0c1f39d72fe  2026-10-28  WARP passed 1 cases: mctest-3
 aaa39067b1a2c22c  2026-10-29  WARP passed 1 cases: mctest-3 (tools/test_card.py mctest-3 --warp --parts --part-secs 25, 928 s in 25 s parts)
+873424bc76ccfbe5  2026-10-29  WARP passed 1 cases: mctest-3 (tools/test_card.py mctest-3 --warp --parts --part-secs 25, 570 s in 25 s parts)

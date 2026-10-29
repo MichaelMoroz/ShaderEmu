@@ -47,6 +47,9 @@ Shader "ShaderEmu/gpu"
             uniform uint _GpuPass, _GpuPasses;
             #define GPU_STATE _State
             #define GPU_PASS_UNIFORMS
+            #ifndef GPU_NO_EDGE
+            #define GPU_EDGE   // the clear cut at the picture's edge (gpu_varyings; --define GPU_NO_EDGE: drawn past it)
+            #endif
             #include "src/gpu.h"
 
             // In Unity the mesh carries its vertex number; here SV_VertexID is the same thing.

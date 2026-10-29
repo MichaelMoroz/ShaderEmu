@@ -17,6 +17,8 @@ float _StateRow;
 // the picture is 1280x720 at most here
 #define GPU_TARGET_W 1280.0
 #define GPU_TARGET_H 720.0
+// the clear cut at the picture's edge (gpu_varyings in src/gpu.cginc)
+#define GPU_EDGE
 #ifdef GPU_AMP
 // GpuDrawBlit.shader: the mesh's triangles made by a blit's calls (gpu_amp_geom in src/gpu.cginc, src/amp.cginc),
 // their depth turned as the camera's geometry shader below turns it
@@ -26,6 +28,24 @@ float _StateRow;
 #endif
 #endif
 #include "src/gpu.cginc"
+
+#ifdef GPU_CLEAR
+// GpuDrawBlit.shader's pass 8: the depth cleared to far over the list's picture only, where the camera cleared the
+// whole target: depth past it is tested only by pixels past it, which nothing reads. A blit's quad is 0 to 1 each way.
+float4 vert(float4 v : POSITION) : SV_Position {
+    float2 part = gpu_picture_size() / float2(GPU_TARGET_W, GPU_TARGET_H);
+#if defined(UNITY_REVERSED_Z)
+    float far = 0.0;
+#else
+    float far = 1.0;
+#endif
+    return float4(v.x * 2.0 * part.x - 1.0, 1.0 - v.y * 2.0 * part.y, far, 1.0);
+}
+
+float4 frag() : SV_Target {
+    return 0;
+}
+#else
 
 #ifndef GPU_AMP
 
@@ -64,3 +84,5 @@ void geom(point gpu_point i[1], inout TriangleStream<gpu_varyings> stream) {
 float4 frag(gpu_varyings i) : SV_Target {
     return gpu_fragment(i);
 }
+
+#endif
