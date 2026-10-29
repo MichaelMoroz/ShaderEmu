@@ -1,6 +1,6 @@
 /*
- * cpu6502: an emulator's interpreter loop, as the NES's runs on gpu_vm (nofrendo's nes6502.c: on the RISC-V
- * machine its code is translated instead, linux/nes/rc6502.h). Re-implemented in nofrendo's manner: the
+ * cpu6502: an emulator's interpreter loop, as nofrendo's nes6502.c runs it (on this machine the NES's
+ * code is translated instead, linux/nes/rc6502.h). Re-implemented in nofrendo's manner: the
  * opcode fetched through a table of 4 KB pages, a switch over the opcodes, the flags kept apart (N and Z as
  * the last result, C, V), memory read and written through the pages, cycles counted down. The program is
  * made here: a frame's game logic stand-in (sprite tables walked with indexed and indirect loads, adds and

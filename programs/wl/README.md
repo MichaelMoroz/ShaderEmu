@@ -1,9 +1,9 @@
 # wl: the machine's workloads, piece by piece
 
 `wl` runs small kernels, each a piece of a real program of the machine copied from its source, for a given time and
-prints how many units of work it did a second. It is built for both machines from the same sources, so one kernel's
-rate on the RISC-V machine and on gpu_vm compare the machines on that kind of work. A **unit** is the kernel's own
-piece of work (a frame, a server tick, a batch of traces) and is the same on both.
+prints how many units of work it did a second: one kernel's rate measures the machine on that kind of work, and the
+same kernel before and after a change to the tick or the compiler measures the change. A **unit** is the kernel's own
+piece of work (a frame, a server tick, a batch of traces).
 
 ```
 wl list
@@ -11,8 +11,7 @@ wl [-s SECONDS] [-m c0|w|p] [-n WORKERS] NAME[,NAME...]|all
 ```
 
 It prints `WL name mode units seconds rate sum`. The sum is one unit's result: every unit must give the same, and a
-worker whose unit differs is reported. Floats may give another sum on the other machine (gpu_vm's multiply-add rounds
-twice, its special functions are the card's).
+worker whose unit differs is reported. Floats may give another sum on the host build.
 
 The three modes:
 
@@ -44,20 +43,15 @@ In WSL:
 
 ```
 bash programs/wl/build.sh host     # build/wl/host/wl, without the libmedia kernels: try a kernel here first
-bash programs/wl/build.sh          # build/wl/rv/wl (rv32-cc, GCC 13.3, flat) and build/wl/gvm/wl (gpu_vm's clang)
-bash programs/wl/image.sh gvm      # build/wl/img: gpu_vm's img-cur with wl (and hostwants, or the desktop starts)
+bash programs/wl/build.sh          # build/wl/rv/wl (rv32-cc, GCC 13.3, flat)
+bash programs/wl/image.sh          # build/wl/rvroot: linux/prebuilt/nommu's root with wl
 ```
 
-The RISC-V image (Windows): put `build/wl/rv/wl` in `linux/prebuilt/nommu/root/usr/bin`, run
-`python linux/nommu/image.py nommu_wl` with `HALFLIFE_DATA=0`, and take it out again.
+The image (Windows): `python linux/nommu/image.py nommu_wl build/wl/rvroot linux/prebuilt/nommu/Image` with
+`HALFLIFE_DATA=0`.
 
-On the card, through `tools/gpu_queue.ps1` (run.py's harness does that):
+On the card, through `tools/gpu_queue.ps1` (run.py does that), one JSON a round:
 
 ```
-set GVM_EXTRA=--ticks 8192
-python programs/wl/run.py build/wl/runs/NAME --machine rv,c8_v0001 --cmd "wl -s 3 all" --cmd "wl -m w -s 3 all" --cmd "wl -m p -s 3 all" --limit 2400
-python programs/wl/plot.py build/wl/runs/NAME.html build/wl/runs/NAME
+python programs/wl/run.py build/wl/runs/NAME --cmd "wl -s 3 all" --cmd "wl -m w -s 3 all" --cmd "wl -m p -s 3 all" --limit 2400
 ```
-
-`plot.py` draws gpu_vm's rate against RISC-V's, a log-log panel a mode, and each kernel's ratio; several run folders
-(rounds) are averaged.
