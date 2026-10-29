@@ -172,19 +172,9 @@ Shader "ShaderEmu/GpuDrawBlit"
             #pragma target 5.0
             #pragma vertex vert
             #pragma fragment frag
-            #include "UnityCG.cginc"
-            float4 vert(float4 v : POSITION) : SV_Position {
-                float4 p = UnityObjectToClipPos(v);
-#if defined(UNITY_REVERSED_Z)
-                p.z = 0.0;
-#else
-                p.z = p.w;
-#endif
-                return p;
-            }
-            float4 frag() : SV_Target {
-                return 0;
-            }
+            #define _GpuPass 0
+            #define GPU_CLEAR
+            #include "GpuDrawPass.cginc"
             ENDCG
         }
     }
