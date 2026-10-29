@@ -5,9 +5,9 @@ Deluxe, on the desktop, with the open base sets in place of the original game's 
 OpenGFX 8.0 (pictures, GPL-2.0), OpenSFX 1.0.3 (sounds, CC BY-SA 3.0) and OpenMSX 0.4.2 (music,
 GPL-2.0). Nothing of the 1995 game is in the image. The engine is upstream's, compiled with
 the patch below; the window, the sound, the music and the mixer are new (`linux/openttd/shaderemu_v.cpp`,
-`shaderemu_s.cpp`, `shaderemu_m.cpp`, `mixer_shaderemu.cpp`). The picture is drawn by the 8-bit blitter into a
-paletted texture that the GPU draws as one quad; sounds are voices of the sound card, and the
-music is its FM voices.
+`shaderemu_s.cpp`, `shaderemu_m.cpp`, `mixer_shaderemu.cpp`). The picture is drawn by the GPU from lists the
+processor makes ("The picture on the GPU"; `OPENTTD_DRAW=cpu` is the 8-bit blitter into a paletted texture that the
+GPU shows as one quad); sounds are voices of the sound card, and the music is its FM voices.
 
     / # openttd                                         # the title screen
     / # openttd -g                                      # straight into a new game
@@ -189,6 +189,69 @@ too far to scroll, and the whole view drawn again was kept over them in the same
 pieces of both were copied out, then the texts of both, the old rectangles' station names last.
 A part asked for over a kept one now flushes first (`ViewportKept`), as upstream draws one after
 the other.
+
+## The picture on the GPU
+
+The blitter is `8bpp-gpu` (`linux/openttd/shaderemu_gpu.cpp`): it draws no pixel. A sprite's zoom levels
+stay in the sprite cache as plain rows of palette indices, where the GPU reads them; a sprite, a fill, a
+line's pixels (a run of `SetPixel`s on one row joined), a remapped rectangle and a scroll become records of
+the GPU's sprite command (`CMD_SPRITES`, `docs/machine/gpu.md`, "Sprites of a paletted picture"), a texel
+each, in the order the game draws them. The GPU draws a list's records the later nearer into its target and
+copies it into a picture of words in GPU memory (red the index); the next list starts with that picture as
+its first record (kind 7), and a second list shows it through the palette in the window. The palette and its
+animation are the show list's 256 words: a palette change draws nothing again.
+
+- Company colours and recolours are a record's remap table (kind 1); a table a worker may change again is
+  copied beside its records first.
+- The transparent buildings and a shaded window remap what is already there: they are drawn in the list's
+  second, blended pass and add to green, 1 for the first table and 16 for the second (words 7 and 8 of the
+  command). Whoever reads the picture next makes the remaps, the next list's first record or the CPU's copy.
+  A third table ends the list.
+- A scroll is the picture's own record shifted, after the list so far is drawn: no pixel is moved by the
+  processor.
+- The viewport's pieces are recorded by the worker cores into records of their own, which the first core puts
+  in the list after the round in the pieces' order ("One order"): a piece that runs out of room, or meets a
+  remap the first core has not seen, is given up and drawn again by the first core.
+- The pointer's sprites go to an overlay that only the show list draws.
+
+A list is submitted at the frame's end, and the game's tick runs while the GPU draws it: the processor waits
+only at the next frame's first drawing, if the list is not drawn by then (its records' chunks are used again).
+
+`OPENTTD_CHECK=1` reads the GPU's picture back for each comparison. `OPENTTD_HOLD_WHO=x,y` with a hold prints
+every list's records that cover that pixel. `OPENTTD_PLAY_JUMP=1` turns smooth scrolling off: a smooth
+scroll's step goes by the time between pictures, so two runs' pictures are compared only with it. The
+CPU's blitter moves a scroll's whole rows (`ScrollAsBlock`), including the few pixels right of the
+rectangle that upstream leaves as they were: compare with `OPENTTD_DRAW=cpu OPENTTD_MEMOP=0`. Under
+`rvc_harness --cpu` the GPU reads RAM that the processor wrote outside the GPU's memory only every 0.25
+s: run with `--cpu-fresh`.
+
+Checked (29 October 2026): `OPENTTD_PLAY_SHORT=1 OPENTTD_PLAY_ODD=1 OPENTTD_PAUSE=1 OPENTTD_CHECK=1` under
+`rvc_harness --cpu --warp --cpu-fresh` checked 70 pictures, 0 differ; the 200 pictures' sums of the paused
+script with `OPENTTD_PLAY_JUMP=1` are the 8-bit blitter's but for picture 113, which shows picture 114's
+window a picture early in both GPU runs (a window that is drawn again by the wall's time: WARP's pictures are
+slower). `tools/test_all.py openttd-gpu --races`: 0 undone.
+
+On the card (`tools/rv_compare`, `rvc_harness --d3d11 --unity 11.1,1.4,0.75`, two rounds alternating; GPU
+and CPU are the same binary and image, `OPENTTD_DRAW=cpu` the second; "after" the frozen image of
+`build/after`):
+
+| Part | GPU | CPU | after |
+|---|---|---|---|
+| `openttd` (paused): scroll, pictures/s | 3.46, 3.21 | 2.50, 2.57 | 3.19, 3.21, 3.22 |
+| zoomed out, pictures/s | 2.36, 2.49 | 2.23, 2.35 | 2.33, 2.25, 2.21 |
+| windows, pictures/s | 20.0, 26.2 | 20.3, 17.7 | 17.9, 18.1, 18.0 |
+| start to the game, s | 59.9, 59.7 | 61.7, 61.5 | 95.1 |
+| `openttd-play` (played): game ticks/s | 1.26, 1.26 | 1.16, 1.15 | 1.05, 1.05 |
+| scroll, pictures/s | 1.06, 1.05 | 1.02, 1.02 | 1.08, 1.09 |
+| zoomed out, pictures/s | 1.23, 1.23 | 1.15, 1.15 | 1.02, 1.02 |
+| windows, pictures/s | 1.59, 1.58 | 1.34, 1.33 | - |
+| `openttd-title`: title frames/s | 33.1, 33.3 | 28.3, 28.7 | 27.1, 27.4 |
+| start to the title drawn, s | 44.4, 44.1 | 46.2, 46.3 | 58.1 |
+
+The CPU column is slower than the image of 28 October 23:58 (`rvc_cpu`, the paused short script: 1.62
+pictures a second against 3.77), a loss of the CPU's path in the same commits. A played picture is about
+half the game's tick on the first core (three ships' path searches that rebuilt water regions were 30% of
+it, `RVC_PROF`) and collecting the viewport's sprites; the GPU's records are some 5% of the first core.
 
 ## Is it the same game
 

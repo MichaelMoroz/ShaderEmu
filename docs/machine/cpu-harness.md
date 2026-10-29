@@ -106,7 +106,10 @@ input and the control words stay the shader's passes, which is where they are ch
   shader's mask has 32 bits, bit b standing for bands b, b + 32 and b + 64, `ram_bands` in
   `src/types.h`, and the GPU's bands are drawn every commit, `_CommitAlways`): the
   GPU's memory and the control words every time they changed, Linux's own RAM four times a
-  second (the memory view shows it, and a GPU draw may read a texture there: Half-Life's pool). The commit pass is told those bands (state
+  second (the memory view shows it, and a GPU draw may read a texture there: Half-Life's pool), or every
+  frame with `--cpu-fresh`. A GPU list that reads the program's own memory a frame after it wrote it (commands
+  or records there, as OpenTTD's: `docs/games/openttd.md`, "The picture on the GPU") draws what was there up to
+  a quarter of a second before without it, and on the card never does. The commit pass is told those bands (state
   texel (41, 0), where the tick pass says which it wrote) and carries them into the buffer it
   draws, as it does the tick's.
 - The frame is then the harness's own without the tick: the commit (which copies a drawn

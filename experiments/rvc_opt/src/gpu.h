@@ -36,6 +36,7 @@
 #define CMD_RECT 2      // 6 vertices
 #define CMD_DRAW 3      // `count` vertices
 #define CMD_TEXT 4      // 6 vertices a character
+#define CMD_SPRITES 5   // 6 vertices a sprite record (docs/machine/gpu.md, "Sprites of a paletted picture")
 
 // How a draw's vertices are projected.
 #define VERTEX_SCREEN 0   // position is already in pixels (x, y) and depth (z, 0..1)
@@ -62,6 +63,7 @@
 #define FRAGMENT_YUV 6        // a picture as three planes of bytes one after another: luma, then the two of chroma at half the size each way (a video's frame)
 #define FRAGMENT_COVER 7      // (text) four bits a pixel of how much of it the glyph covers, rows of whole bytes, the left pixel in the high half
 #define FRAGMENT_MSDF 8       // (text) a glyph's three distance fields, three bytes a pixel, sampled bilinearly; their median is the edge
+#define FRAGMENT_SPRITE 9     // (sprites) a record's pixel as an index of a paletted picture: the kinds below
 #define TEXT_MORE 0x100       // flag (text): words 9-11 are a scale, a slant and what a glyph's bitmap address is from
 #define FRAGMENT_KEYED 0x100  // flag: texels equal to the key colour (or index) are not drawn
 #define FRAGMENT_LAID 0x200   // flag (draws): the texture lies on the picture, not on the surface (a sky)
@@ -73,6 +75,17 @@
 //   0 opaque   1 alpha blend   2 additive   3 multiply     depth tested; only pass 0 writes it
 //   4 opaque   5 alpha blend   6 additive   7 multiply     no depth
 #define FRAGMENT_PASS(mode) (((mode) >> 16) & 7)
+// A sprite record's kind (CMD_SPRITES, bits 22-25 of its fourth word). A sprite's byte 0 is a hole but in RAW.
+#define SPRITE_COPY 0         // the byte
+#define SPRITE_REMAP 1        // the byte through a table of 256 bytes (word 1); a 0 there is a hole
+#define SPRITE_BLACK 2        // index 0 where the sprite has a pixel
+#define SPRITE_SHADE 3        // where the sprite has a pixel, word 1 added to the picture's green (pass 2): a remap of what is there
+#define SPRITE_FILL 4         // word 0's low byte over the whole rectangle
+#define SPRITE_FILL_SHADE 5   // word 1 added to green over the whole rectangle (pass 2)
+#define SPRITE_CHECKER 6      // word 0's low byte where x + y is odd (bit 8 of word 0 set) or even
+#define SPRITE_WORDS 7        // a picture these commands drew, a word a pixel: red the index, green its remaps (the command's table)
+#define SPRITE_RAW 8          // the byte, 0 too
+#define SPRITE_SHADES(kind) ((kind) == SPRITE_SHADE || (kind) == SPRITE_FILL_SHADE)
 
 #ifndef GPU_STATE_ROW
 #define GPU_STATE_ROW 64u   // the state texture's row RAM starts in
@@ -211,10 +224,11 @@ bool gpu_command(uint id, uint span, out uint base, out uint4 head) {
     base = list + 4 * lo;
     head = ram(base);
     uint op = head.r;
-    uint slots = op == CMD_CLEAR ? 3 : op == CMD_RECT ? 6 : op == CMD_DRAW ? head.b : op == CMD_TEXT ? 6 * ram(base + 1).b : 0;
+    uint slots = op == CMD_CLEAR ? 3 : op == CMD_RECT ? 6 : op == CMD_DRAW ? head.b : op == CMD_TEXT ? 6 * ram(base + 1).b : op == CMD_SPRITES ? 6 * head.b : 0;
     if (id < head.a || id + span > head.a + slots) return false;
 #ifdef GPU_PASS_UNIFORMS
     uint drawn_in = op == CMD_RECT || op == CMD_TEXT ? FRAGMENT_PASS(ram(base + 2).r) : op == CMD_DRAW ? FRAGMENT_PASS(ram(base + 1).g) : 0;
+    if (op == CMD_SPRITES) return ((ram(base + 1).r >> _GpuPass) & 1) != 0;   // (its word 4: the passes it is drawn in)
     if (drawn_in != _GpuPass) return false;
 #endif
     return true;
@@ -262,6 +276,24 @@ gpu_varyings gpu_vertex_sized(uint id, uint base, uint4 head, float2 size) {
             o.uv = float2(right ? uv.z : uv.x, low ? uv.w : uv.y);
             o.texture_info = tex;
             o.key = head.b;
+        } else if (op == CMD_SPRITES) {
+            // head.g the records, head.b how many; then the passes (a bit each), the first record's place in the
+            // order, the palette (0: the picture is of indices), then words 7 and 8 the two remaps green counts (SPRITE_WORDS). A record is a
+            // texel: its bytes' address (or a colour), a remap table (or what is added to green), x | y << 11 |
+            // stride << 22, w | h << 11 | kind << 22 | (stride >> 10) << 26. A later record lies nearer.
+            uint4 cw = ram(base + 1);
+            uint part = k % 6, corner = part < 3 ? part : (part == 3 ? 2 : (part == 4 ? 1 : 3));
+            uint4 rec = ram(texel_of(head.g) + k / 6);
+            uint kind = (rec.a >> 22) & 15;
+            bool right = (corner & 1) != 0, low = (corner & 2) != 0;
+            uint x = rec.b & 0x7ff, y = (rec.b >> 11) & 0x7ff, w = rec.a & 0x7ff, h = (rec.a >> 11) & 0x7ff;
+#ifdef GPU_PASS_UNIFORMS
+            if (SPRITE_SHADES(kind) != (_GpuPass == 2)) return o;   // (a shade in pass 2, the rest in pass 0)
+#endif
+            o.position = place_pixels(float2(x + (right ? w : 0), y + (low ? h : 0)), 1.0 - (float)(cw.g + k / 6 + 1) / 4194304.0);
+            o.texture_info = uint4(FRAGMENT_SPRITE | kind << 24, rec.r, (rec.b >> 22) | (rec.a >> 26) << 10, rec.g);
+            o.key = x | y << 16;
+            o.light_info = uint3(cw.b, cw.a, ram(base + 2).r);
         } else if (op == CMD_TEXT) {
             // head.g colour, head.b the font's table; then x, y, count, the string; then the
             // fragment word. A character is a word: its glyph, and in the high half where it
@@ -501,8 +533,52 @@ void gpu_msdf_pair(uint address, uint n, out float3 a, out float3 b) {
     b = float3(lo >> 24, hi & 0xff, (hi >> 8) & 0xff) / 255.0;
 }
 
+// A byte of RAM.
+uint gpu_byte(uint address) {
+    return (ram_word(address & ~3u) >> (8 * (address & 3))) & 0xff;
+}
+
+// A pixel of a sprite record (CMD_SPRITES): an index of a paletted picture in red, or with a palette its colour. A
+// shade adds to green, which a later SPRITE_WORDS read takes as the remaps made since the index was drawn.
+float4 gpu_sprite_fragment(gpu_varyings i) {
+    uint kind = (i.texture_info.r >> 24) & 15, at = i.texture_info.g, stride = i.texture_info.b;
+    uint2 p = (uint2)i.position.xy;
+    uint u = p.x - (i.key & 0xffff), v = p.y - (i.key >> 16), index = 0;
+    [branch]
+    if (kind == SPRITE_FILL) {
+        index = at & 0xff;
+    } else if (kind == SPRITE_CHECKER) {
+        if (((p.x + p.y) & 1) != ((at >> 8) & 1)) discard;
+        index = at & 0xff;
+    } else if (kind == SPRITE_FILL_SHADE) {
+        return float4(0.0, (float)i.texture_info.a / 255.0, 0.0, 1.0);
+    } else if (kind == SPRITE_WORDS) {
+        uint word = ram_word(at + v * stride + 4 * u), later = (word >> 8) & 0xff;
+        index = (word >> 16) & 0xff;
+        // green: the first table (word 7) made `later & 15` times, then the second (word 8) `later >> 4` times
+        [branch]
+        if (later != 0) {
+            uint first = later & 15, second = later >> 4;
+            [loop]
+            for (uint n = 0; n < first; n++) index = gpu_byte(i.light_info.g + index);
+            [loop]
+            for (uint m = 0; m < second; m++) index = gpu_byte(i.light_info.b + index);
+        }
+    } else {
+        uint s = gpu_byte(at + v * stride + u);
+        if (s == 0 && kind != SPRITE_RAW) discard;
+        if (kind == SPRITE_SHADE) return float4(0.0, (float)i.texture_info.a / 255.0, 0.0, 1.0);
+        index = kind == SPRITE_REMAP ? gpu_byte(i.texture_info.a + s) : kind == SPRITE_BLACK ? 0 : s;
+        if (index == 0 && kind == SPRITE_REMAP) discard;
+    }
+    if (i.light_info.r != 0) return float4(colour_of(ram_word(i.light_info.r + 4 * index) & 0xffffff).rgb, 1.0);
+    return float4((float)index / 255.0, 0.0, 0.0, 1.0);
+}
+
 float4 gpu_fragment(gpu_varyings i) {
     uint mode = i.texture_info.r & 0xff, width = i.texture_info.b, height = i.texture_info.a;
+    [branch]
+    if (mode == FRAGMENT_SPRITE) return gpu_sprite_fragment(i);
     float4 c = i.colour;
     float2 uv = i.uv;
     if (i.texture_info.r & FRAGMENT_LAID) {

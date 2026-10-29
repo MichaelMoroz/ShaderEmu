@@ -2564,7 +2564,7 @@ index f26695a..70d7e8d 100644
 +	/* A sprite of normal zoom alone, and no closer zoom shown: the levels out are made from it, and the
 +	 * closest level is only a size, with no pixels, which no encoder reads (making it was most of a start). */
 +	Blitter *blitter = BlitterFactory::GetCurrentBlitter();
-+	bool ours = encoder == static_cast<SpriteEncoder *>(blitter) && (blitter->GetName() == "8bpp-optimized" || blitter->GetName() == "null");
++	bool ours = encoder == static_cast<SpriteEncoder *>(blitter) && (blitter->GetName() == "8bpp-optimized" || blitter->GetName() == "8bpp-gpu" || blitter->GetName() == "null");
 +	/* (a font's glyph is encoded from its font zoom level alone) */
 +	if (ours && sprite_type == SpriteType::Font && sprite_avail.Test(_font_zoom)) return true;
 +	if (ours && sprite_type != SpriteType::Font && sprite_avail == ZoomLevels{ZoomLevel::Normal} && _settings_client.gui.zoom_min >= ZoomLevel::Normal &&
@@ -3049,7 +3049,7 @@ index a7ddcda..9648911 100644
 +
 +/**
 + * Whether a sprite's levels closer than normal zoom are shown nowhere: no viewport may zoom in, the windows are
-+ * drawn at normal zoom and the blitter is the 8bpp one, whose encoder reads no level closer than the viewports'
++ * drawn at normal zoom and the blitter is an 8bpp one (the CPU's or the GPU's), whose encoder reads no level closer than the viewports'
 + * (spritecache.cpp's ResizeSprites, the case of a sprite of normal zoom alone).
 + */
 +static bool SeCloseLevelsUnseen(SpriteType sprite_type, bool load_32bpp)
@@ -3059,7 +3059,7 @@ index a7ddcda..9648911 100644
 +	if (sprite_type != SpriteType::Normal || load_32bpp || whole) return false;
 +	if (_settings_client.gui.zoom_min < ZoomLevel::Normal || _settings_client.gui.sprite_zoom_min > ZoomLevel::Normal || _gui_zoom < ZoomLevel::Normal) return false;
 +	Blitter *blitter = BlitterFactory::GetCurrentBlitter();
-+	return blitter != nullptr && (blitter->GetName() == "8bpp-optimized" || blitter->GetName() == "null");
++	return blitter != nullptr && (blitter->GetName() == "8bpp-optimized" || blitter->GetName() == "8bpp-gpu" || blitter->GetName() == "null");
 +}
 +#endif
 +
@@ -3861,7 +3861,7 @@ diff --git a/src/video/CMakeLists.txt b/src/video/CMakeLists.txt
 index e09c202..3319032 100644
 --- a/src/video/CMakeLists.txt
 +++ b/src/video/CMakeLists.txt
-@@ -42,3 +42,9 @@ add_files(
+@@ -42,3 +42,11 @@ add_files(
      video_driver.cpp
      video_driver.hpp
  )
@@ -3869,6 +3869,8 @@ index e09c202..3319032 100644
 +add_files(
 +    shaderemu_v.cpp
 +    shaderemu_v.h
++    shaderemu_gpu.cpp
++    shaderemu_gpu.h
 +    CONDITION SHADEREMU
 +)
 diff --git a/src/video/null_v.cpp b/src/video/null_v.cpp
@@ -4394,7 +4396,7 @@ index 6427a14..eb48315 100644
  	ViewportDrawParentSprites(&_vd.parent_sprites_to_sort, &_vd.child_screen_sprites_to_draw);
  
  	if (_draw_bounding_boxes) ViewportDrawBoundingBoxes(&_vd.parent_sprites_to_sort);
-@@ -1897,6 +2141,452 @@ static inline void ViewportDraw(const Viewport &vp, int left, int top, int right
+@@ -1897,6 +2141,472 @@ static inline void ViewportDraw(const Viewport &vp, int left, int top, int right
  	);
  }
  
@@ -4426,6 +4428,12 @@ index 6427a14..eb48315 100644
 +};
 +
 +static std::vector<VpJob> _vp_jobs;
++/* the GPU's picture (video/shaderemu_gpu.h): its pieces are records, drawn where they lie */
++bool SeGpuOn();
++void SeGpuPiecesBegin(int pieces);
++void SeGpuPieceBegin(int piece);
++void SeGpuPieceEnd(int piece, bool failed);
++void SeGpuPiecesEnd();
 +static VpVector<VpPiece> _vp_pieces;
 +static std::vector<int> _vp_order; ///< pieces of a round, the dearest first
 +static VpVector<uint8_t> _vp_buffers;
@@ -4586,15 +4594,19 @@ index 6427a14..eb48315 100644
 +	me.failed = false;
 +	const uint32_t refused = k != 0 ? VpSpritesRefused(k) : 0;
 +	const VpJob &job = _vp_jobs[piece.job];
-+	/* (what no sprite covers stays as the screen was) */
-+	for (int r = 0; r < piece.row1 - piece.row0; r++) {
++	/* (what no sprite covers stays as the screen was; on the GPU a piece is records: SeGpuPieceBegin) */
++	const bool gpu = SeGpuOn();
++	for (int r = 0; r < piece.row1 - piece.row0 && !gpu; r++) {
 +		std::copy_n(piece.screen + r * _screen.pitch, piece.width, piece.buf + r * piece.pitch);
 +	}
++	const int index = static_cast<int>(&piece - _vp_pieces.data());
++	if (gpu) SeGpuPieceBegin(index);
 +	DrawPixelInfo outer = job.outer;
 +	DrawPixelInfo *was = me.cur_dpi;
 +	me.cur_dpi = &outer;
 +	VpDrawSprites(job.vp, piece.left, piece.top, piece.right, piece.bottom, piece.buf, piece.pitch);
 +	me.cur_dpi = was;
++	if (gpu) SeGpuPieceEnd(index, me.failed);
 +	piece.failed = me.failed;
 +	piece.full = me.full;
 +	piece.refused = k != 0 ? VpSpritesRefused(k) - refused : 0;
@@ -4794,9 +4806,15 @@ index 6427a14..eb48315 100644
 +		}
 +	}
 +	/* (the buffers grow on the first core, so that their pages are there before a worker writes them) */
-+	if (_vp_buffers.size() < buffer_bytes) _vp_buffers.resize(buffer_bytes * 2);
-+	uint8_t *buf = _vp_buffers.data();
-+	for (VpPiece &p : _vp_pieces) p.buf = buf, buf += static_cast<size_t>(p.pitch) * (p.row1 - p.row0);
++	if (SeGpuOn()) {
++		/* (the GPU's pieces are records, drawn where they lie: SeGpuPieceBegin) */
++		for (VpPiece &p : _vp_pieces) p.buf = p.screen, p.pitch = _screen.pitch;
++		SeGpuPiecesBegin(static_cast<int>(_vp_pieces.size()));
++	} else {
++		if (_vp_buffers.size() < buffer_bytes) _vp_buffers.resize(buffer_bytes * 2);
++		uint8_t *buf = _vp_buffers.data();
++		for (VpPiece &p : _vp_pieces) p.buf = buf, buf += static_cast<size_t>(p.pitch) * (p.row1 - p.row0);
++	}
 +
 +	const int n = static_cast<int>(_vp_pieces.size());
 +	_vp_order.resize(n);
@@ -4835,7 +4853,11 @@ index 6427a14..eb48315 100644
 +		VpDrawPiece(p);
 +		_vp_stat_redrawn++;
 +	}
-+	mcw_for_opt(static_cast<uint32_t>((_screen.height + 15) / 16), VpCopyOut, nullptr, &opts);
++	if (SeGpuOn()) {
++		SeGpuPiecesEnd();
++	} else {
++		mcw_for_opt(static_cast<uint32_t>((_screen.height + 15) / 16), VpCopyOut, nullptr, &opts);
++	}
 +	for (const VpJob &job : _vp_jobs) VpDrawTexts(job);
 +	_vp_stat_jobs += static_cast<uint32_t>(_vp_jobs.size());
 +	_vp_stat_pieces += static_cast<uint32_t>(n);
@@ -4847,7 +4869,7 @@ index 6427a14..eb48315 100644
  /**
   * Draw the viewport of this window.
   */
-@@ -2091,10 +2781,53 @@ static bool MarkViewportDirty(const Viewport &vp, int left, int top, int right,
+@@ -2091,10 +2801,53 @@ static bool MarkViewportDirty(const Viewport &vp, int left, int top, int right,
   * @return true if at least one viewport has a dirty block
   * @ingroup dirty
   */
