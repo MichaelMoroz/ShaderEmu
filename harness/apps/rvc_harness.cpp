@@ -195,6 +195,7 @@ struct Options {
     std::string isa = "base"; // "base" RV32IMAF, or "zb" with Zba and Zbb (the shader's ZB)
     std::string vizCapture;   // BMP of the memory view, written at exit
     std::string gpuCapture;   // BMP of the GPU device's colour target, written at exit
+    bool cpuFresh = false;    // --cpu-fresh: every band the processor wrote goes to the GPU each frame
     std::string raLog;        // per frame: pc, the return address register (who called a leaf function) and instructions
     std::string pcLog;        // per frame: the guest's pc and the instructions it ran, as two uint32
     std::string frameLog;     // per frame, four uint32: pc, instructions, last stall, microseconds since start
@@ -325,6 +326,9 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
   --readback-batch N   D3D11: read the rows of N frames back with one Map (1); the console's
                        output and typed input then come N frames later
   --gpu-capture FILE   save the GPU device's whole colour target as a BMP at exit
+  --cpu-fresh          with --cpu: RAM the processor wrote outside the GPU's memory goes to the GPU every
+                       frame, not four times a second (a GPU list that reads a program's own memory: its
+                       commands, records or pictures there as the card has them)
   --no-sound           leave out the sound card (<rvc>/sound.shader, docs/machine/sound.md)
   --sound              play what the sound card mixes (the terminal mode does; other runs are silent)
   --volume P           how loud the host plays it, 0 to 100 (default 10). In the window Ctrl+F11 and
@@ -529,6 +533,7 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--no-doubles") o.noDoubles = true;
         else if (a == "--no-gpu") o.noGpu = true;
         else if (a == "--gpu-capture") o.gpuCapture = next("--gpu-capture");
+        else if (a == "--cpu-fresh") o.cpuFresh = true;
         else if (a == "--no-sound") o.noSound = true;
         else if (a == "--sound") o.sound = true;
         else if (a == "--volume") o.volume = (std::max)(0, (std::min)(100, atoi(next("--volume").c_str())));
@@ -1818,7 +1823,7 @@ int main(int argc, char** argv) {
             uint64_t upload = dirty_bands & devices;
             cpuLow |= dirty_bands & ~devices;
             dirty_bands = 0;
-            if (cpuFirst || wall - cpuLowAt >= 0.25) {
+            if (cpuFirst || opt.cpuFresh || wall - cpuLowAt >= 0.25) {
                 upload |= cpuLow;
                 cpuLow = 0;
                 cpuLowAt = wall;
