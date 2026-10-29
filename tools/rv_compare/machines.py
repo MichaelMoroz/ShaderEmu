@@ -27,7 +27,7 @@ MACHINES = {
                   shell=os.path.join(AFTER, 'build', 'rv_compare', 'after_shell.snap'), args=[]),
 }
 
-# More machines for an A/B of images or checkouts (GPU-VM's bench_games/ab.py): RVCMP_MACHINES="NAME=IMAGE[@ROOT],..."
+# More machines for an A/B of images or checkouts: RVCMP_MACHINES="NAME=IMAGE[@ROOT],..."
 # runs IMAGE (an image's folder) on ROOT's harness and tick (default AFTER), with its own shell snapshot in ROOT's
 # build/rv_compare/NAME_shell.snap (`cmp.py shell NAME` makes it). `run.py --machines NAME1,NAME2` then alternates
 # them, and `report.py NAME1 NAME2` compares them, at the card's budget too.

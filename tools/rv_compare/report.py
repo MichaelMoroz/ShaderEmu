@@ -11,7 +11,7 @@ PACE = {'frame time median': ('ms', 'low', 0), 'frame time p95': ('ms', 'low', 0
 
 HEAD = """# The RISC-V machine, machine against machine, every application on the card
 
-`tools/rv_compare/` (GPU-VM's `compare/` with RISC-V alone). Every part runs on the card (RTX 5070 Laptop, D3D11, fxc2)
+`tools/rv_compare/`. Every part runs on the card (RTX 5070 Laptop, D3D11, fxc2)
 as a VRChat world runs it: `rvc_harness --unity 11.1,1.4,0.75`, the guest's clock 11.1 ms a host frame (90 Hz), as many
 rounds (a tick of 8,192 instructions and its commit) a frame as fit 9.7 ms of the card, each round costing at least
 0.75 ms (Unity's CPU a round in RISC-V's world). Under it the guest's clock is the world's, so every time and rate
@@ -30,7 +30,7 @@ below is what a player in the world sees.
   is better; 3% either way is level.
 - **card ms**: the card's time a host frame, the run's mean (the budget is 9.7); **rounds**: rounds a frame.
   **ratio at the budget**: the ratio with each side's card ms a frame brought to the budget (A's card ms over B's
-  times the ratio), as GPU-VM's `grid.py`: a machine whose rounds overshot the budget is not paid for it.
+  times the ratio): a machine whose rounds overshot the budget is not paid for it.
 - Machines: `tools/rv_compare/machines.py`; `before` is frozen in the backport's `build/before` (its README.md).
 
 """
@@ -104,7 +104,7 @@ def main(A='before', B='after'):
             if am and bm:
                 ratio = am / bm if better == 'low' else bm / am
                 wins, losses, level = wins + (ratio > 1.03), losses + (ratio < 0.97), level + (0.97 <= ratio <= 1.03)
-            # at the budget (GPU-VM's grid.py "fps at budget"): a rate scaled by the budget over the card ms a frame the
+            # at the budget ("fps at budget"): a rate scaled by the budget over the card ms a frame the
             # run took, a time by the inverse: the harness's rounds overshoot or undershoot 9.7 ms on a bursty program
             ca, cb = mean([r.get('card_ms_frame') for r in ar]), mean([r.get('card_ms_frame') for r in br])
             at_budget = ratio * (ca / cb) if ratio and ca and cb else None
