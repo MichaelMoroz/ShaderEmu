@@ -37,10 +37,23 @@ ALIGN16="--set-section-alignment .data*=16 --set-section-alignment .sdata*=16 --
 # With it a frame is 3% fewer instructions, a chunk's mesh 14% and digging 20%; the meshes are the same.
 HOT="-O3 -fno-tree-vectorize -fsched-pressure -funroll-loops"
 HOTFILES=" Builder Generator Graphics_ShaderEmu MapRenderer Lighting Particle ExtMath Vectors Animations Entity EntityComponents Physics World Block Bitmap Drawer2D "
+# What a played world ran, for the compiler (linux/userland/pgo/gcov.c; docs/games/tdawn.md, "What the compiler is told"):
+# CLASSICUBE_PROFILE=count builds the program that counts, in a folder of its own; otherwise classicube.profile's counts.
+PGO=""; COUNTS=""
+if [ "${CLASSICUBE_PROFILE:-}" = count ]; then
+    BUILD=$WORK/src/classicube-count-build
+    mkdir -p "$WORK/src/nogcov" && riscv32-linux-ar rc "$WORK/src/nogcov/libgcov.a"
+    PGO="-fprofile-generate -fprofile-update=single"; COUNTS="-L$WORK/src/nogcov"
+elif [ -f "$HERE/classicube.profile" ] && [ "${CLASSICUBE_PROFILE:-}" != off ]; then
+    python3 "$REPO/linux/tdawn/profile.py" put "$HERE/classicube.profile" "$BUILD"
+    PGO="-fprofile-use -fprofile-partial-training -fprofile-correction -Wno-missing-profile -Wno-coverage-mismatch"
+fi
+CFLAGS="$CFLAGS $PGO"
 export CFLAGS HERE BUILD ALIGN16 HOT HOTFILES
 mkdir -p "$BUILD" && cd "$BUILD"
+[ "${CLASSICUBE_PROFILE:-}" = count ] && rv32-cc -O2 -fno-pie -Wall -c "$REPO/linux/userland/pgo/gcov.c" -o gcov.o
 { ls "$C"/src/*.c; ls "$HERE"/*.c; } |
-    xargs -P "$(nproc)" -I{} sh -c 'o=$(basename {} .c).o; [ "$o" -nt {} ] && [ "$o" -nt "$HERE/classicube.patch" ] && [ "$o" -nt "$HERE/build.sh" ] || { b=$(basename {} .c); f=; case "$HOTFILES" in *" $b "*) f=$HOT;; esac; rv32-cc $CFLAGS $f -c {} -o "$o" && riscv32-linux-objcopy $ALIGN16 "$o"; }'
+    xargs -P "$(nproc)" -I{} sh -c 'o=$(basename {} .c).o; [ "$o" -nt {} ] && [ "$o" -nt "$HERE/classicube.patch" ] && [ "$o" -nt "$HERE/build.sh" ] && [ "$o" -nt "$HERE/classicube.profile" ] || { b=$(basename {} .c); f=; case "$HOTFILES" in *" $b "*) f=$HOT;; esac; rv32-cc $CFLAGS $f -c {} -o "$o" && riscv32-linux-objcopy $ALIGN16 "$o"; }'
 # Builder.c again for each worker core that makes meshes (SE_COPIES in MapRenderer.h): its own
 # buffers, and its four names another's
 rm -f Builder_w.o
@@ -59,7 +72,7 @@ rv32-cc -O2 -fno-pie -fno-common -fdata-sections -msmall-data-limit=0 -c zz_pad.
 sed 's/se_pad_/se_pad_s/g' zz_pad.c > zz_pads.c
 rv32-cc -O2 -fno-pie -fno-common -fdata-sections -msmall-data-limit=64 -c zz_pads.c -o zz_pad_small.o
 for o in Builder_w[1-7].o mcw.o mcwx.o zz_pad_large.o zz_pad_small.o; do riscv32-linux-objcopy $ALIGN16 "$o"; done
-rv32-cc -O2 $FPU -w $(ls *.o | grep -v '^zz_') zz_pad_large.o zz_pad_small.o "$MEDIA" "$MW/src/lib/libnano-X.a" -lm -o classicube
+rv32-cc -O2 $FPU -w $PGO $COUNTS $(ls *.o | grep -v '^zz_') zz_pad_large.o zz_pad_small.o "$MEDIA" "$MW/src/lib/libnano-X.a" -lm -o classicube
 mkdir -p "$OUT/usr/bin" "$OUT/usr/share"
 riscv32-linux-strip -o "$OUT/usr/bin/classicube.bin" classicube
 riscv32-linux-nm -n classicube > "$WORK/src/classicube.nm"
