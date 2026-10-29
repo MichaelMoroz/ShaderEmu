@@ -1021,39 +1021,176 @@ index 7d585b0..3cb1db3 100644
  
  		case SM_SAVE_GAME: // Save game.
 diff --git a/src/pathfinder/water_regions.cpp b/src/pathfinder/water_regions.cpp
-index e725401..314061b 100644
+index e725401..9eb5298 100644
 --- a/src/pathfinder/water_regions.cpp
 +++ b/src/pathfinder/water_regions.cpp
-@@ -142,8 +142,16 @@ public:
+@@ -20,6 +20,9 @@
+ #include "../debug.h"
+ #include "../3rdparty/fmt/ranges.h"
+ #include "../core/convertible_through_base.hpp"
++#ifdef WITH_SHADEREMU
++#include <mcwx.h>
++#endif
+ #include "../safeguards.h"
  
+ using WaterRegionTraversabilityBits = uint16_t;
+@@ -54,6 +57,16 @@ class WaterRegionData {
+ 	WaterRegionPatchLabel::BaseType number_of_patches{0}; // 0 = no water, 1 = one single patch of water, etc...
+ };
+ 
++#ifdef WITH_SHADEREMU
++/** What the labeling makes of a region, apart from it (on a worker, in 16 bytes of its own). */
++struct alignas(16) WaterRegionMade {
++	WaterRegionPatchLabelArray labels;
++	std::array<WaterRegionTraversabilityBits, DIAGDIR_END> edges;
++	bool aqueducts;
++	WaterRegionPatchLabel::BaseType patches;
++};
++#endif
++
+ /**
+  * Represents a square section of the map of a fixed size. Within this square individual unconnected patches of water are
+  * identified using a Connected Component Labeling (CCL) algorithm. Note that all information stored in this class applies
+@@ -124,6 +137,46 @@ public:
+ 	 * Performs the connected component labeling and other data gathering.
+ 	 * @see WaterRegion
+ 	 */
++#ifdef WITH_SHADEREMU
++	void ForceUpdate()
++	{
++		if (SeShipAhead()) { /* (a worker making a ship's path ahead makes a region of its own) */
++			WaterRegionMade made;
++			std::vector<TileIndex> tiles_to_check;
++			this->Make(made, tiles_to_check, true);
++			this->Keep(made);
++			return;
++		}
++		static WaterRegionMade made;
++		static std::vector<TileIndex> tiles_to_check;
++		this->Make(made, tiles_to_check, false);
++		this->Keep(made);
++	}
++
++	/** The labeling's result kept, as ForceUpdate leaves it. */
++	void Keep(const WaterRegionMade &made)
++	{
++		this->data.has_cross_region_aqueducts = made.aqueducts;
++		this->data.edge_traversability_bits = made.edges;
++		this->data.number_of_patches = made.patches;
++		if (this->NumberOfPatches() == 0 || (this->NumberOfPatches() == 1 &&
++				std::all_of(made.labels.begin(), made.labels.end(), [](WaterRegionPatchLabel label) { return label == FIRST_REGION_LABEL; }))) {
++			this->data.tile_patch_labels.reset();
++			return;
++		}
++		if (this->data.tile_patch_labels == nullptr) this->data.tile_patch_labels = std::make_unique<WaterRegionPatchLabelArray>();
++		*this->data.tile_patch_labels = made.labels;
++	}
++
++	/** The connected component labeling into made, on any core (poll: a ship's path made ahead waits there while
++	 * the first core may change the map, a region being half a million instructions). */
++	void Make(WaterRegionMade &made, std::vector<TileIndex> &tiles_to_check, bool poll) const
++	{
++		Debug(map, 3, "Updating water region ({},{})", GetWaterRegionX(this->tile_area.tile), GetWaterRegionY(this->tile_area.tile));
++		made.aqueducts = false;
++		made.labels.fill(INVALID_WATER_REGION_PATCH);
++		made.edges.fill(0);
++#else
+ 	void ForceUpdate()
+ 	{
+ 		Debug(map, 3, "Updating water region ({},{})", GetWaterRegionX(this->tile_area.tile), GetWaterRegionY(this->tile_area.tile));
+@@ -136,6 +189,7 @@ public:
+ 
+ 		this->data.tile_patch_labels->fill(INVALID_WATER_REGION_PATCH);
+ 		this->data.edge_traversability_bits.fill(0);
++#endif
+ 
+ 		WaterRegionPatchLabel current_label = FIRST_REGION_LABEL;
+ 		WaterRegionPatchLabel highest_assigned_label = INVALID_WATER_REGION_PATCH;
+@@ -143,7 +197,11 @@ public:
  		/* Perform connected component labeling. This uses a flooding algorithm that expands until no
  		 * additional tiles can be added. Only tiles inside the water region are considered. */
-+#ifdef WITH_SHADEREMU
-+		std::vector<TileIndex> worker_tiles; /* (a worker making a ship's path ahead makes a region of its own) */
-+#endif
  		for (const TileIndex start_tile : this->tile_area) {
 +#ifdef WITH_SHADEREMU
-+			static std::vector<TileIndex> first_core_tiles;
-+			std::vector<TileIndex> &tiles_to_check = SeShipAhead() ? worker_tiles : first_core_tiles;
++			if (poll && (start_tile.base() & 15) == 0) SeShipAheadPoll();
 +#else
  			static std::vector<TileIndex> tiles_to_check;
 +#endif
  			tiles_to_check.clear();
  			tiles_to_check.push_back(start_tile);
  
-@@ -221,6 +229,11 @@ public:
+@@ -155,7 +213,11 @@ public:
+ 				const TrackdirBits valid_dirs = TrackBitsToTrackdirBits(GetWaterTracks(tile));
+ 				if (valid_dirs == TRACKDIR_BIT_NONE) continue;
+ 
++#ifdef WITH_SHADEREMU
++				WaterRegionPatchLabel &tile_patch = made.labels[this->GetLocalIndex(tile)];
++#else
+ 				WaterRegionPatchLabel &tile_patch = (*this->data.tile_patch_labels)[this->GetLocalIndex(tile)];
++#endif
+ 				if (tile_patch != INVALID_WATER_REGION_PATCH) continue;
+ 
+ 				tile_patch = current_label;
+@@ -172,10 +234,17 @@ public:
+ 							assert(DistanceManhattan(ft.new_tile, tile) == 1);
+ 							const auto side = DiagdirBetweenTiles(tile, ft.new_tile);
+ 							const int local_x_or_y = DiagDirToAxis(side) == AXIS_X ? TileY(tile) - TileY(this->tile_area.tile) : TileX(tile) - TileX(this->tile_area.tile);
++#ifdef WITH_SHADEREMU
++							SetBit(made.edges[side], local_x_or_y);
++						} else {
++							made.aqueducts = true;
++						}
++#else
+ 							SetBit(this->data.edge_traversability_bits[side], local_x_or_y);
+ 						} else {
+ 							this->data.has_cross_region_aqueducts = true;
+ 						}
++#endif
+ 					}
+ 				}
+ 			}
+@@ -183,6 +252,10 @@ public:
+ 			if (increase_label) current_label++;
+ 		}
+ 
++#ifdef WITH_SHADEREMU
++		made.patches = highest_assigned_label.base();
++	}
++#else
+ 		this->data.number_of_patches = highest_assigned_label.base();
+ 
+ 		if (this->NumberOfPatches() == 0 || (this->NumberOfPatches() == 1 &&
+@@ -191,6 +264,7 @@ public:
+ 			this->data.tile_patch_labels.reset();
+ 		}
+ 	}
++#endif
+ 
+ 	void PrintDebugInfo()
+ 	{
+@@ -221,6 +295,12 @@ public:
  	}
  };
  
 +#ifdef WITH_SHADEREMU
 +static std::vector<uint32_t> _water_region_gen;
++static bool _water_regions_invalid = false; ///< a region was made invalid since WaterRegionsMakeAll
 +uint32_t SeWaterRegionGen(uint32_t index) { return _water_region_gen[index]; }
 +#endif
 +
  TypedIndexContainer<std::vector<WaterRegionData>, WaterRegionIndex> _water_region_data;
  TypedIndexContainer<std::vector<bool>, WaterRegionIndex> _is_water_region_valid;
  
-@@ -246,8 +259,29 @@ static TileIndex GetEdgeTileCoordinate(int region_x, int region_y, DiagDirection
+@@ -243,11 +323,39 @@ static TileIndex GetEdgeTileCoordinate(int region_x, int region_y, DiagDirection
+ 	}
+ }
+ 
++#ifdef WITH_SHADEREMU
++/* static and vector-instead-of-map for performance reasons (VisitAdjacentWaterRegionPatchNeighbours): at file scope,
++ * with no guard a worker could initialise beside another (the first core may never have called it, the regions
++ * being made on the workers) */
++static std::vector<WaterRegionPatchLabel> _wr_first_core_labels;
++#endif
++
  static WaterRegion GetUpdatedWaterRegion(uint16_t region_x, uint16_t region_y)
  {
  	const WaterRegionIndex index = GetWaterRegionIndex(region_x, region_y);
@@ -1083,22 +1220,23 @@ index e725401..314061b 100644
  		water_region.ForceUpdate();
  		_is_water_region_valid[index] = true;
  	}
-@@ -318,6 +352,9 @@ void InvalidateWaterRegion(TileIndex tile)
+@@ -318,6 +426,10 @@ void InvalidateWaterRegion(TileIndex tile)
  		const WaterRegionIndex water_region_index = GetWaterRegionIndex(tile);
  		if (!_is_water_region_valid[water_region_index]) Debug(map, 3, "Invalidated water region ({},{})", GetWaterRegionX(tile), GetWaterRegionY(tile));
  		_is_water_region_valid[water_region_index] = false;
 +#ifdef WITH_SHADEREMU
 +		_water_region_gen[water_region_index.base()]++;
++		_water_regions_invalid = true;
 +#endif
  	};
  
  	invalidate_region(tile);
-@@ -365,7 +402,13 @@ static inline void VisitAdjacentWaterRegionPatchNeighbours(const WaterRegionPatc
+@@ -365,7 +477,13 @@ static inline void VisitAdjacentWaterRegionPatchNeighbours(const WaterRegionPatc
  	}
  
  	/* Multiple water patches can be reached from the current patch. Check each edge tile individually. */
 +#ifdef WITH_SHADEREMU
-+	static std::vector<WaterRegionPatchLabel> first_core_labels; // static and vector-instead-of-map for performance reasons
++	std::vector<WaterRegionPatchLabel> &first_core_labels = _wr_first_core_labels;
 +	std::vector<WaterRegionPatchLabel> worker_labels; // (a worker's own, in its heap)
 +	std::vector<WaterRegionPatchLabel> &unique_labels = SeShipAhead() ? worker_labels : first_core_labels;
 +#else
@@ -1107,7 +1245,7 @@ index e725401..314061b 100644
  	unique_labels.clear();
  	for (int x_or_y = 0; x_or_y < WATER_REGION_EDGE_LENGTH; ++x_or_y) {
  		if (!HasBit(traversability_bits, x_or_y)) continue;
-@@ -399,9 +442,19 @@ void VisitWaterRegionPatchNeighbours(const WaterRegionPatchDesc &water_region_pa
+@@ -399,15 +517,81 @@ void VisitWaterRegionPatchNeighbours(const WaterRegionPatchDesc &water_region_pa
  
  	/* Visit neighbouring water patches accessible via cross-region aqueducts */
  	if (current_region.HasCrossRegionAqueducts()) {
@@ -1127,12 +1265,75 @@ index e725401..314061b 100644
  				if (GetWaterRegionIndex(tile) != GetWaterRegionIndex(other_end_tile)) callback(GetWaterRegionPatchInfo(other_end_tile));
  			}
  		}
-@@ -420,6 +473,9 @@ void AllocateWaterRegions()
+ 	}
+ }
+ 
++#ifdef WITH_SHADEREMU
++static std::vector<WaterRegionMade> _wr_made;
++static std::vector<WaterRegionIndex> _wr_wanted;
++struct alignas(16) WaterRegionCheck { std::vector<TileIndex> v; }; ///< a core's, in texels of its own
++static WaterRegionCheck _wr_check[MC_MAX_CORES + 1];
++
++static void WaterRegionsMakePieces(void *after_first, uint32_t from, uint32_t to)
++{
++	const int k = mcw_self();
++	if (after_first != nullptr && from == 0) from = 1;
++	for (uint32_t i = from; i < to; i++) {
++		const WaterRegionIndex index = _wr_wanted[i];
++		const int x = index.base() % GetWaterRegionMapSizeX(), y = index.base() / GetWaterRegionMapSizeX();
++		WaterRegion(x, y, _water_region_data[index]).Make(_wr_made[i], _wr_check[k].v, false);
++	}
++}
++
++/** Every region not made yet made now, one a job on the workers, as the pathfinder would make each when it asks
++ * (first core; between ticks, while no ship's path made ahead reads them): a loaded game has none, and each ship's
++ * first path made them one by one in the tick, half a million instructions each (main's 5a3b851). */
++void WaterRegionsMakeAll()
++{
++	if (!_water_regions_invalid) return;
++	_water_regions_invalid = false;
++	_wr_wanted.clear();
++	for (size_t i = 0; i < _is_water_region_valid.size(); i++) {
++		if (!_is_water_region_valid[WaterRegionIndex(i)]) _wr_wanted.push_back(WaterRegionIndex(i));
++	}
++	if (_wr_wanted.empty()) return;
++	_wr_made.resize(_wr_wanted.size());
++	for (WaterRegionCheck &c : _wr_check) {
++		std::vector<TileIndex> &v = c.v;
++		if (v.capacity() >= 16 * WATER_REGION_NUMBER_OF_TILES) continue;
++		v.reserve(16 * WATER_REGION_NUMBER_OF_TILES);
++		mcw_touch(v.data(), static_cast<unsigned>(v.capacity() * sizeof(TileIndex)));
++	}
++	mcw_for_opts opts = {};
++	opts.grain = 1;
++	opts.out_bytes = sizeof(WaterRegionMade);
++	opts.touch = _wr_made.data();
++	opts.touch_bytes = static_cast<uint32_t>(_wr_made.size() * sizeof(WaterRegionMade));
++	/* (the first on the first core: what the labeling initialises once, a function's static behind its guard,
++	 * is then not initialised by two workers at once) */
++	WaterRegionsMakePieces(nullptr, 0, 1);
++	if (_wr_wanted.size() > 1) mcw_for_opt(static_cast<uint32_t>(_wr_wanted.size()), WaterRegionsMakePieces, &_wr_made, &opts);
++	for (size_t i = 0; i < _wr_wanted.size(); i++) {
++		const WaterRegionIndex index = _wr_wanted[i];
++		const int x = index.base() % GetWaterRegionMapSizeX(), y = index.base() / GetWaterRegionMapSizeX();
++		WaterRegion(x, y, _water_region_data[index]).Keep(_wr_made[i]);
++		_is_water_region_valid[index] = true;
++		_water_region_gen[index.base()]++;
++	}
++	Debug(map, 2, "Made {} water regions on the workers", _wr_wanted.size());
++}
++#endif
++
+ /**
+  * Allocates the appropriate amount of water regions for the current map size
+  */
+@@ -420,6 +604,10 @@ void AllocateWaterRegions()
  
  	_is_water_region_valid.clear();
  	_is_water_region_valid.resize(number_of_regions, false);
 +#ifdef WITH_SHADEREMU
 +	_water_region_gen.assign(number_of_regions, 0);
++	_water_regions_invalid = true;
 +#endif
  
  	Debug(map, 2, "Allocating {} x {} water regions", GetWaterRegionMapSizeX(), GetWaterRegionMapSizeY());
@@ -1191,7 +1392,7 @@ index 3f257e2..32d6ddc 100644
  	/** default destructor */
  	~CYapfBaseT() {}
 diff --git a/src/pathfinder/yapf/yapf_ship.cpp b/src/pathfinder/yapf/yapf_ship.cpp
-index b024edb..410bf79 100644
+index b024edb..9c31e16 100644
 --- a/src/pathfinder/yapf/yapf_ship.cpp
 +++ b/src/pathfinder/yapf/yapf_ship.cpp
 @@ -16,8 +16,399 @@
@@ -1688,7 +1889,7 @@ index b024edb..410bf79 100644
  			c += count * 3 * YAPF_TILE_LENGTH;
  		}
  
-@@ -424,14 +868,411 @@ struct CYapfShip_TypesT {
+@@ -424,14 +868,417 @@ struct CYapfShip_TypesT {
  
  struct CYapfShip : CYapfT<CYapfShip_TypesT<CYapfShip>> {
  	explicit CYapfShip(int max_nodes) { this->max_search_nodes = max_nodes; }
@@ -1949,8 +2150,14 @@ index b024edb..410bf79 100644
 +} // namespace
 +
 +/** After the vehicles' tick: a path made ahead for each ship that will ask for one at its next tile. */
++void WaterRegionsMakeAll();
++
 +void YapfShipAhead()
 +{
++	if (_game_mode == GM_NORMAL) {
++		AheadReap();
++		WaterRegionsMakeAll(); /* (the regions made invalid since, on the workers: a ship's path then makes none) */
++	}
 +	if (AheadMode() == 0 || _game_mode != GM_NORMAL || !AheadInit()) return;
 +	AheadReap();
 +	bool team_ended = false;

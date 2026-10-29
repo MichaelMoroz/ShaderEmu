@@ -440,6 +440,15 @@ Paused, on `rvc_cpu` (`OPENTTD_PLAY_SHORT=1 OPENTTD_PAUSE=1`, pictures a second,
 scroll 1.85 with the paths kept to 7.42 (7.81 before the paths were made ahead), zoomed out 1.06 to
 1.67, windows 1.82 to 5.52.
 
+The water regions made invalid are made at the end of each tick's vehicles, one region a job on the
+workers (`WaterRegionsMakeAll` in `water_regions.cpp`, from main's 5a3b851: the labeling `Make` into a
+`WaterRegionMade` of its own, `Keep` on the first core). A loaded game has none made, and each ship's
+first path made them one by one, half a million instructions each, on the first core or in a ship's
+job while the first core waited at the picture's end. A ship's job that still makes a region of its own
+waits at every sixteenth tile of it (`SeShipAheadPoll`). Played on `rvc_cpu` (`OPENTTD_PLAY_SHORT=1`,
+pictures a second): scroll 0.60 to 1.57, zoomed out 0.48 to 0.77; with `OPENTTD_SHIP_AHEAD=0` the
+same pictures are 1.52 and 0.83 (they were 0.83 and 0.56).
+
 `OPENTTD_SHIP_AHEAD=check` makes every path taken again on the first core and compares the two:
 0 differ. `OPENTTD_SHIP_AHEAD=0` is without. The check of the tiles logged is cut in parts of at
 least 128 tiles, each part on a free worker and the first on the first core (`AheadValidTiles`): the
