@@ -689,3 +689,24 @@ The first array of four words was what cost: the stalled store's test and the on
 lose with it, as gpu_vm's layouts did (a change to the local arrays moves the others). The COMMIT_BANDS mask
 dropped from the in-place tick was level too (shell loop runs in turn: 4,505.7, 4,935.4 and 4,937.0 thousand
 instructions a second without it against 4,487.0, 4,955.7 and 4,970.0 with it).
+
+## A round's draws besides the tick (29 October 2026)
+
+`RVC_PASS_PROF=1` on the after machine (RTX 5070 Laptop, D3D11, fxc2, flat out, one round a frame), milliseconds of a
+round's each draw:
+
+| workload | tick (ms) | unpack and the state rows' copy (ms) | gather (ms) | state rows (ms) | RAM points (ms) | devices, once a frame (ms) |
+|---|---|---|---|---|---|---|
+| a shell loop (core 0 alone: 260 points) | 1.41 | 0.023 | 0.006 | 0.009 | 0.036 | 0.076 |
+| Doom's timedemo (workers on: 33,410 points) | 1.44 | 0.022 | 0.006 | 0.009 | 0.037 | 0.088 |
+| Quake standing at e1m1 | 1.41 to 1.44 | 0.026 | 0.006 | 0.009 | 0.038 | 0.118 |
+
+The draws after the tick are 0.074 ms a round, 5% of it. The RAM points cost the same with 260 points as with 33,410,
+so not their geometry shader's work. Probes in a harness built for them (not kept): the same points' draw again
+right after it, with any count, 0 to 0.004 ms; the state rows' draw again 0.008; the points drawn before the state
+rows still 0.036 and the rows 0.008; the RAM texture, the stage or the state texture made able to be a UAV (which
+changes how the driver lays a texture out) changed nothing. The first draw of the points shader in a round pays
+about 0.03 ms that an identical second draw does not: a cold start of that shader (its code, or the state it
+reads, after the tick), not its points. A smaller points shader would show whether the code's size is the cause;
+not tried (a commit pass is checked on WARP first, and WARP runs this machine at 20 thousand instructions a
+second from the shell snapshot). At most 0.03 ms of 1.5 a round, 2%, and Unity's points camera would follow.
