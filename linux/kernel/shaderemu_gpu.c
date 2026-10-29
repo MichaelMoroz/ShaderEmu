@@ -5,6 +5,7 @@
  */
 #include <linux/cpu.h>
 #include <linux/delay.h>
+#include <linux/fdtable.h>
 #include <linux/fs.h>
 #include <linux/init.h>
 #include <linux/io.h>
@@ -659,6 +660,50 @@ static const struct file_operations shaderemu_gpu_fops = {
 	.mmap		= shaderemu_gpu_mmap,
 	.llseek		= noop_llseek,
 };
+
+/*
+ * A program's memory is about to go (do_exit, before exit_mm: linux/nommu/patch_exitpark.py), and its
+ * worker cores run in it. A worker reads its start word as its pass begins: one that began this pass
+ * runs it whole and its stores are committed when the pass ends, into what was the program's. Its
+ * cores are parked here and the pass is ended, so that they have stored all they will before the
+ * memory is freed, and the next pass finds them parked. (Parked at release, after exit_mm, they ran
+ * on in freed memory through the passes between.)
+ */
+static int shaderemu_gpu_exiting_one(const void *parked, struct file *file, unsigned int fd)
+{
+	u32 k;
+
+	if (file->f_op != &shaderemu_gpu_fops)
+		return 0;
+	for (k = 1; k < WORKERS_MOST; k++)
+		if (worker_owner[k] == file) {
+			workers_park(k);
+			*(bool *)parked = true;
+		}
+	/* the lanes' field's job of this program: its lanes read and write that memory too */
+	if (readl(workers + FIELD_JOB) && readl(workers + FIELD_JOB + 12) == (u32)task_tgid_vnr(current)) {
+		writel(0, workers + FIELD_JOB);
+		*(bool *)parked = true;
+	}
+	return 0;
+}
+
+void shaderemu_gpu_exiting(void)
+{
+	bool parked = false;
+	unsigned long pass;
+
+	if (!workers || !current->mm || atomic_read(&current->mm->mm_users) != 1 || !current->files)
+		return;
+	mutex_lock(&workers_lock);
+	iterate_fd(current->files, 0, shaderemu_gpu_exiting_one, &parked);
+	mutex_unlock(&workers_lock);
+	if (!parked)
+		return;
+	pass = csr_read(CSR_TIME);	/* (one value a pass) */
+	while (csr_read(CSR_TIME) == pass)
+		__asm__ __volatile__(".word 0x0100000f" ::: "memory");	/* pause: the machine's pass ends */
+}
 
 static struct miscdevice shaderemu_gpu_dev = {
 	.minor	= MISC_DYNAMIC_MINOR,
