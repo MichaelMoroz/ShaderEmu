@@ -53,6 +53,20 @@ index 16215e7..01f800e 100644
 +    mixer_shaderemu.cpp
 +    CONDITION SHADEREMU
 +)
+diff --git a/src/aircraft_cmd.cpp b/src/aircraft_cmd.cpp
+index bde4e71..25efee6 100644
+--- a/src/aircraft_cmd.cpp
++++ b/src/aircraft_cmd.cpp
+@@ -2135,7 +2135,9 @@ bool Aircraft::Tick()
+ {
+ 	if (!this->IsNormalAircraft()) return true;
+ 
++#ifndef WITH_SHADEREMU /* (a vehicle's time on the machine's millisecond clock is 0 or 1 ms: not taken, 56 instructions a vehicle) */
+ 	PerformanceAccumulator framerate(PFE_GL_AIRCRAFT);
++#endif
+ 
+ 	this->tick_counter++;
+ 
 diff --git a/src/blitter/8bpp_base.cpp b/src/blitter/8bpp_base.cpp
 index b32f98b..9306f93 100644
 --- a/src/blitter/8bpp_base.cpp
@@ -296,7 +310,7 @@ index c1de3c5..9c42d29 100644
  	return (TimingMeasurement)time_point_cast<microseconds>(high_resolution_clock::now()).time_since_epoch().count();
  }
 diff --git a/src/gfx.cpp b/src/gfx.cpp
-index 2cae30c..e1de9bb 100644
+index 2cae30c..48dd662 100644
 --- a/src/gfx.cpp
 +++ b/src/gfx.cpp
 @@ -51,7 +51,12 @@ PauseModes _pause_mode;
@@ -356,7 +370,7 @@ index 2cae30c..e1de9bb 100644
  
  	/* Don't draw the mouse cursor if it's already drawn */
  	if (_cursor.visible) {
-@@ -1449,8 +1468,20 @@ void RedrawScreenRect(int left, int top, int right, int bottom)
+@@ -1449,8 +1468,22 @@ void RedrawScreenRect(int left, int top, int right, int bottom)
   *
   * @ingroup dirty
   */
@@ -371,6 +385,8 @@ index 2cae30c..e1de9bb 100644
  void DrawDirtyBlocks()
  {
 +#ifdef WITH_SHADEREMU
++	extern void RefreshStaleTextEffects();
++	RefreshStaleTextEffects();
 +	ShipAheadQuiet quiet;
 +	ViewportKeep keep;
 +#endif
@@ -446,6 +462,78 @@ index 2cdabb7..a2ebcf5 100644
  
  	size = std::min(size, max_size);
  
+diff --git a/src/ground_vehicle.cpp b/src/ground_vehicle.cpp
+index 7962aa8..33d7821 100644
+--- a/src/ground_vehicle.cpp
++++ b/src/ground_vehicle.cpp
+@@ -101,6 +101,15 @@ void GroundVehicle<T, Type>::CargoChanged()
+  * Calculates the acceleration of the vehicle under its current conditions.
+  * @return Current acceleration of the vehicle.
+  */
++/** a / b, by the processor's own 32-bit division when both fit (the same quotient: libgcc's 64-bit one is 50 instructions). */
++static inline int64_t SeDiv64(int64_t a, int64_t b)
++{
++#ifdef WITH_SHADEREMU
++	if (a == static_cast<int32_t>(a) && b == static_cast<int32_t>(b) && b != -1) return static_cast<int32_t>(a) / static_cast<int32_t>(b);
++#endif
++	return a / b;
++}
++
+ template <class T, VehicleType Type>
+ int GroundVehicle<T, Type>::GetAcceleration() const
+ {
+@@ -141,7 +150,7 @@ int GroundVehicle<T, Type>::GetAcceleration() const
+ 	}
+ 	/* Air drag; the air drag coefficient is in an arbitrary NewGRF-unit,
+ 	 * so we need some magic conversion factor. */
+-	resistance += static_cast<int64_t>(area) * this->gcache.cached_air_drag * speed * speed / 1000;
++	resistance += SeDiv64(static_cast<int64_t>(area) * this->gcache.cached_air_drag * speed * speed, 1000);
+ 
+ 	resistance += this->GetSlopeResistance();
+ 
+@@ -155,10 +164,10 @@ int GroundVehicle<T, Type>::GetAcceleration() const
+ 	if (speed > 0) {
+ 		if (!maglev) {
+ 			/* Conversion factor from km/h to m/s is 5/18 to get [N] in the end. */
+-			force = power * 18 / (speed * 5);
++			force = SeDiv64(power * 18, speed * 5);
+ 			if (mode == AS_ACCEL && force > max_te) force = max_te;
+ 		} else {
+-			force = power / 25;
++			force = SeDiv64(power, 25);
+ 		}
+ 	} else {
+ 		/* "Kickoff" acceleration. */
+@@ -175,10 +184,10 @@ int GroundVehicle<T, Type>::GetAcceleration() const
+ 		 * down hill will never slow down enough, and a vehicle that came up
+ 		 * a hill will never speed up enough to (eventually) get back to the
+ 		 * same (maximum) speed. */
+-		int accel = ClampTo<int32_t>((force - resistance) / (mass * 4));
++		int accel = ClampTo<int32_t>(SeDiv64(force - resistance, mass * 4));
+ 		return force < resistance ? std::min(-1, accel) : std::max(1, accel);
+ 	} else {
+-		return ClampTo<int32_t>(std::min<int64_t>(-force - resistance, -10000) / mass);
++		return ClampTo<int32_t>(SeDiv64(std::min<int64_t>(-force - resistance, -10000), mass));
+ 	}
+ }
+ 
+diff --git a/src/industry_cmd.cpp b/src/industry_cmd.cpp
+index bdf2bfc..27c3279 100644
+--- a/src/industry_cmd.cpp
++++ b/src/industry_cmd.cpp
+@@ -1245,10 +1245,11 @@ void OnTick_Industry()
+ 
+ 	if (_game_mode == GM_EDITOR) return;
+ 
++	const uint32_t day_rem = static_cast<uint32_t>(TimerGameTick::counter % Ticks::DAY_TICKS);
+ 	for (Industry *i : Industry::Iterate()) {
+ 		ProduceIndustryGoods(i);
+ 
+-		if ((TimerGameTick::counter + i->index) % Ticks::DAY_TICKS == 0) {
++		if ((day_rem + i->index.base()) % Ticks::DAY_TICKS == 0) {
+ 			for (auto &a : i->accepted) a.accumulated_waiting += a.waiting;
+ 		}
+ 	}
 diff --git a/src/industry_gui.cpp b/src/industry_gui.cpp
 index 4373c92..19bb57d 100644
 --- a/src/industry_gui.cpp
@@ -1083,7 +1171,7 @@ index 3f257e2..32d6ddc 100644
  	/** default destructor */
  	~CYapfBaseT() {}
 diff --git a/src/pathfinder/yapf/yapf_ship.cpp b/src/pathfinder/yapf/yapf_ship.cpp
-index b024edb..4e19fc2 100644
+index b024edb..a9d95ad 100644
 --- a/src/pathfinder/yapf/yapf_ship.cpp
 +++ b/src/pathfinder/yapf/yapf_ship.cpp
 @@ -16,8 +16,388 @@
@@ -1178,7 +1266,7 @@ index b024edb..4e19fc2 100644
 + */
 +namespace {
 +
-+constexpr int AHEAD_SLOTS = 6;
++constexpr int AHEAD_SLOTS = 9;
 +constexpr uint32_t AHEAD_HEAP = 3072 * 1024;
 +constexpr uint32_t AHEAD_TILES = 32768;
 +constexpr int AHEAD_SNAP = 128;
@@ -1402,7 +1490,7 @@ index b024edb..4e19fc2 100644
 +		if (s->in.cancel) SeShipAheadRefuse(4);
 +		const uint32_t q = _ahead_quiet.v;
 +		if (q & 1) return;
-+		s->out.ack = q;
++		if (s->out.ack != q) s->out.ack = q;
 +		mc_end_pass();
 +	}
 +}
@@ -2063,6 +2151,20 @@ index c0aaec4..3e79686 100644
  
  public:
  	RandomAccessFile(std::string_view filename, Subdirectory subdir);
+diff --git a/src/roadveh_cmd.cpp b/src/roadveh_cmd.cpp
+index 9070e07..8c35392 100644
+--- a/src/roadveh_cmd.cpp
++++ b/src/roadveh_cmd.cpp
+@@ -1660,7 +1660,9 @@ Money RoadVehicle::GetRunningCost() const
+ 
+ bool RoadVehicle::Tick()
+ {
++#ifndef WITH_SHADEREMU /* (a vehicle's time on the machine's millisecond clock is 0 or 1 ms: not taken, 56 instructions a vehicle) */
+ 	PerformanceAccumulator framerate(PFE_GL_ROADVEHS);
++#endif
+ 
+ 	this->tick_counter++;
+ 
 diff --git a/src/saveload/saveload.cpp b/src/saveload/saveload.cpp
 index ebec3d2..14f25ca 100644
 --- a/src/saveload/saveload.cpp
@@ -2283,6 +2385,20 @@ index ebec3d2..14f25ca 100644
  		ResetSaveloadData();
  
  		/* Old maps were hardcoded to 256x256 and thus did not contain
+diff --git a/src/ship_cmd.cpp b/src/ship_cmd.cpp
+index 7b4446d..0efa64e 100644
+--- a/src/ship_cmd.cpp
++++ b/src/ship_cmd.cpp
+@@ -838,7 +838,9 @@ static void ShipController(Ship *v)
+ 
+ bool Ship::Tick()
+ {
++#ifndef WITH_SHADEREMU /* (a vehicle's time on the machine's millisecond clock is 0 or 1 ms: not taken, 56 instructions a vehicle) */
+ 	PerformanceAccumulator framerate(PFE_GL_SHIPS);
++#endif
+ 
+ 	if (!this->vehstatus.Test(VehState::Stopped)) this->running_ticks++;
+ 
 diff --git a/src/sound.cpp b/src/sound.cpp
 index 31a7ede..49e1914 100644
 --- a/src/sound.cpp
@@ -3054,6 +3170,39 @@ index c92d143..a069cfc 100644
  	private:
  		/** Allocated memory to pass sprite data around */
  		static SpriteCollMap<ReusableBuffer<SpriteLoader::CommonPixel>> buffer;
+diff --git a/src/station_cmd.cpp b/src/station_cmd.cpp
+index d754b2f..f7ae6f6 100644
+--- a/src/station_cmd.cpp
++++ b/src/station_cmd.cpp
+@@ -4343,22 +4343,25 @@ void OnTick_Station()
+ {
+ 	if (_game_mode == GM_EDITOR) return;
+ 
++	/* (the 64-bit counter's remainders once, each station's in 32 bits: the same) */
++	const uint32_t link_rem = static_cast<uint32_t>(TimerGameTick::counter % Ticks::STATION_LINKGRAPH_TICKS);
++	const uint32_t accept_rem = static_cast<uint32_t>(TimerGameTick::counter % Ticks::STATION_ACCEPTANCE_TICKS);
+ 	for (BaseStation *st : BaseStation::Iterate()) {
+ 		StationHandleSmallTick(st);
+ 
+ 		/* Clean up the link graph about once a week. */
+-		if (Station::IsExpected(st) && (TimerGameTick::counter + st->index) % Ticks::STATION_LINKGRAPH_TICKS == 0) {
++		if (Station::IsExpected(st) && (link_rem + st->index.base()) % Ticks::STATION_LINKGRAPH_TICKS == 0) {
+ 			DeleteStaleLinks(Station::From(st));
+ 		};
+ 
+ 		/* Spread out big-tick over STATION_ACCEPTANCE_TICKS ticks. */
+-		if ((TimerGameTick::counter + st->index) % Ticks::STATION_ACCEPTANCE_TICKS == 0) {
++		if ((accept_rem + st->index.base()) % Ticks::STATION_ACCEPTANCE_TICKS == 0) {
+ 			/* Stop processing this station if it was deleted */
+ 			if (!StationHandleBigTick(st)) continue;
+ 		}
+ 
+ 		/* Spread out station animation over STATION_ACCEPTANCE_TICKS ticks. */
+-		if ((TimerGameTick::counter + st->index) % Ticks::STATION_ACCEPTANCE_TICKS == 0) {
++		if ((accept_rem + st->index.base()) % Ticks::STATION_ACCEPTANCE_TICKS == 0) {
+ 			TriggerStationAnimation(st, st->xy, StationAnimationTrigger::AcceptanceTick);
+ 			TriggerRoadStopAnimation(st, st->xy, StationAnimationTrigger::AcceptanceTick);
+ 			if (Station::IsExpected(st)) TriggerAirportAnimation(Station::From(st), AirportAnimationTrigger::AcceptanceTick);
 diff --git a/src/table/settings/gui_settings.ini b/src/table/settings/gui_settings.ini
 index 6989729..db7cd19 100644
 --- a/src/table/settings/gui_settings.ini
@@ -3205,6 +3354,68 @@ index 5c5012c..4ad3af1 100644
  min      = MIN_MAP_SIZE_BITS
  max      = MAX_MAP_SIZE_BITS
  cat      = SC_BASIC
+diff --git a/src/texteff.cpp b/src/texteff.cpp
+index 18c93ab..e49da7a 100644
+--- a/src/texteff.cpp
++++ b/src/texteff.cpp
+@@ -24,6 +24,9 @@ struct TextEffect : public ViewportSign {
+ 	TextEffectMode mode; ///< Type of text effect.
+ 	uint8_t duration; ///< How long the text effect should stay, in ticks (applies only when mode == TE_RISING)
+ 	EncodedString msg; ///< Encoded message for text effect.
++#ifdef WITH_SHADEREMU
++	bool stale = false; ///< msg changed while no viewport could show it: its place and width are made when one can
++#endif
+ 
+ 	/** Reset the text effect */
+ 	void Reset()
+@@ -56,6 +59,9 @@ TextEffectID AddTextEffect(EncodedString &&msg, int center, int y, uint8_t durat
+ 	te.msg = std::move(msg);
+ 	te.duration = duration;
+ 	te.mode = mode;
++#ifdef WITH_SHADEREMU
++	te.stale = false;
++#endif
+ 
+ 	/* Make sure we only dirty the new area */
+ 	te.width_normal = 0;
+@@ -71,14 +77,37 @@ void UpdateTextEffect(TextEffectID te_id, EncodedString &&msg)
+ 	if (msg == te.msg) return;
+ 	te.msg = std::move(msg);
+ 
++#ifdef WITH_SHADEREMU
++	/* (a loading vehicle's percent, out of every viewport: its string is not made each tick; docs/games/openttd.md,
++	 * "The game's own speed") */
++	extern bool ViewportSignSeen(const ViewportSign &sign);
++	te.stale = !ViewportSignSeen(te);
++	if (te.stale) return;
++#endif
+ 	te.UpdatePosition(te.center, te.top, te.msg.GetDecodedString());
+ }
+ 
++#ifdef WITH_SHADEREMU
++/** Before the dirty blocks are drawn: a text effect changed out of sight that a viewport now shows is made. */
++void RefreshStaleTextEffects()
++{
++	extern bool ViewportSignSeen(const ViewportSign &sign);
++	for (TextEffect &te : _text_effects) {
++		if (!te.stale || !te.IsValid() || !ViewportSignSeen(te)) continue;
++		te.stale = false;
++		te.UpdatePosition(te.center, te.top, te.msg.GetDecodedString());
++	}
++}
++#endif
++
+ void UpdateAllTextEffectVirtCoords()
+ {
+ 	for (auto &te : _text_effects) {
+ 		if (!te.IsValid()) continue;
+ 
++#ifdef WITH_SHADEREMU
++		te.stale = false;
++#endif
+ 		te.UpdatePosition(te.center, te.top, te.msg.GetDecodedString());
+ 	}
+ }
 diff --git a/src/thread.h b/src/thread.h
 index b33a953..d84a33e 100644
 --- a/src/thread.h
@@ -3220,8 +3431,22 @@ index b33a953..d84a33e 100644
  	try {
  		static std::mutex thread_startup_mutex;
  		std::lock_guard<std::mutex> lock(thread_startup_mutex);
+diff --git a/src/train_cmd.cpp b/src/train_cmd.cpp
+index 91a1111..9e2ba5f 100644
+--- a/src/train_cmd.cpp
++++ b/src/train_cmd.cpp
+@@ -4117,7 +4117,9 @@ bool Train::Tick()
+ 	this->tick_counter++;
+ 
+ 	if (this->IsFrontEngine()) {
++#ifndef WITH_SHADEREMU /* (a vehicle's time on the machine's millisecond clock is 0 or 1 ms: not taken, 56 instructions a vehicle) */
+ 		PerformanceAccumulator framerate(PFE_GL_TRAINS);
++#endif
+ 
+ 		if (!this->vehstatus.Test(VehState::Stopped) || this->cur_speed > 0) this->running_ticks++;
+ 
 diff --git a/src/vehicle.cpp b/src/vehicle.cpp
-index 91588a6..fff968a 100644
+index 91588a6..802668f 100644
 --- a/src/vehicle.cpp
 +++ b/src/vehicle.cpp
 @@ -60,6 +60,11 @@
@@ -3347,7 +3572,7 @@ index 91588a6..fff968a 100644
  
  	/* z-bounds are not used. */
  	Point pt = RemapCoords(this->x_pos + this->bounds.origin.x + this->bounds.offset.x, this->y_pos + this->bounds.origin.y + this->bounds.offset.y, this->z_pos);
-@@ -1713,7 +1772,47 @@ void Vehicle::UpdateBoundingBoxCoordinates(bool update_cache) const
+@@ -1713,7 +1772,50 @@ void Vehicle::UpdateBoundingBoxCoordinates(bool update_cache) const
   * Update the vehicle on the viewport, updating the right hash and setting the new coordinates.
   * @param dirty Mark the (new and old) coordinates of the vehicle as dirty.
   */
@@ -3381,10 +3606,13 @@ index 91588a6..fff968a 100644
 +static void VpDeferEnd()
 +{
 +	_vp_defer = false;
++	extern void ViewportsFixed(bool on);
++	ViewportsFixed(true); /* (no window comes or goes while the vehicles' places are marked) */
 +	for (VehicleID id : _vp_pending) {
 +		Vehicle *v = Vehicle::GetIfValid(id);
 +		if (v != nullptr) v->UpdateViewportPending();
 +	}
++	ViewportsFixed(false);
 +	_vp_pending.clear();
 +}
 +
@@ -3577,7 +3805,7 @@ index 85cc2d5..439e51d 100644
  	if (std::this_thread::get_id() != this->game_thread.get_id()) return;
  
 diff --git a/src/viewport.cpp b/src/viewport.cpp
-index 6427a14..c019e53 100644
+index 6427a14..97b640a 100644
 --- a/src/viewport.cpp
 +++ b/src/viewport.cpp
 @@ -99,6 +99,11 @@
@@ -3779,7 +4007,33 @@ index 6427a14..c019e53 100644
  	StringSpriteToDraw &ss = _vd.string_sprites_to_draw.emplace_back();
  	ss.colour = colour;
  	ss.flags = flags;
-@@ -1713,7 +1797,136 @@ static void ViewportSortParentSprites(ParentSpriteToSortVector *psdv)
+@@ -1552,6 +1636,25 @@ void ViewportSign::UpdatePosition(int center, int top, std::string_view str, std
+  *
+  * @ingroup dirty
+  */
++#ifdef WITH_SHADEREMU
++/** Whether a sign could be seen in a viewport, its text up to 64 pixels wider either way. */
++bool ViewportSignSeen(const ViewportSign &sign)
++{
++	const int half_width = std::max(sign.width_normal, sign.width_small) / 2 + 1 + 64;
++	const int height = WidgetDimensions::scaled.fullbevel.top + std::max(GetCharacterHeight(FS_NORMAL), GetCharacterHeight(FS_SMALL)) + WidgetDimensions::scaled.fullbevel.bottom + 1;
++	for (const Window *w : Window::Iterate()) {
++		if (w->viewport == nullptr) continue;
++		const Viewport &vp = *w->viewport;
++		const int left = sign.center - ScaleByZoom(half_width, vp.zoom) - vp.virtual_left;
++		const int top = sign.top - ScaleByZoom(1, vp.zoom) - vp.virtual_top;
++		const int right = sign.center + ScaleByZoom(half_width, vp.zoom) + (1 << to_underlying(vp.zoom)) - 1 - vp.virtual_left;
++		const int bottom = sign.top + ScaleByZoom(height, vp.zoom) + (1 << to_underlying(vp.zoom)) - 1 - vp.virtual_top;
++		if (right > 0 && bottom > 0 && left < vp.virtual_width && top < vp.virtual_height) return true;
++	}
++	return false;
++}
++#endif
++
+ void ViewportSign::MarkDirty(ZoomLevel maxzoom) const
+ {
+ 	Rect zoomlevels[to_underlying(ZoomLevel::End)];
+@@ -1713,7 +1816,136 @@ static void ViewportSortParentSprites(ParentSpriteToSortVector *psdv)
  }
  
  
@@ -3917,7 +4171,7 @@ index 6427a14..c019e53 100644
  {
  	for (const ParentSpriteToDraw *ps : *psd) {
  		if (ps->image != SPR_EMPTY_BOUNDING_BOX) DrawSpriteViewport(ps->image, ps->pal, ps->x, ps->y, ps->sub);
-@@ -1735,7 +1948,8 @@ static void ViewportDrawParentSprites(const ParentSpriteToSortVector *psd, const
+@@ -1735,7 +1967,8 @@ static void ViewportDrawParentSprites(const ParentSpriteToSortVector *psd, const
   * Draws the bounding boxes of all ParentSprites
   * @param psd Array of ParentSprites
   */
@@ -3927,7 +4181,7 @@ index 6427a14..c019e53 100644
  {
  	for (const ParentSpriteToDraw *ps : *psd) {
  		Point pt1 = RemapCoords(ps->xmax + 1, ps->ymax + 1, ps->zmax + 1); // top front corner
-@@ -1808,8 +2022,15 @@ static void ViewportDrawStrings(ZoomLevel zoom, const StringSpriteToDrawVector *
+@@ -1808,8 +2041,15 @@ static void ViewportDrawStrings(ZoomLevel zoom, const StringSpriteToDrawVector *
  	}
  }
  
@@ -3943,7 +4197,7 @@ index 6427a14..c019e53 100644
  	_vd.dpi.zoom = vp.zoom;
  	int mask = ScaleByZoom(-1, vp.zoom);
  
-@@ -1841,7 +2062,11 @@ void ViewportDoDraw(const Viewport &vp, int left, int top, int right, int bottom
+@@ -1841,7 +2081,11 @@ void ViewportDoDraw(const Viewport &vp, int left, int top, int right, int bottom
  		_vd.parent_sprites_to_sort.push_back(&psd);
  	}
  
@@ -3955,7 +4209,7 @@ index 6427a14..c019e53 100644
  	ViewportDrawParentSprites(&_vd.parent_sprites_to_sort, &_vd.child_screen_sprites_to_draw);
  
  	if (_draw_bounding_boxes) ViewportDrawBoundingBoxes(&_vd.parent_sprites_to_sort);
-@@ -1897,6 +2122,426 @@ static inline void ViewportDraw(const Viewport &vp, int left, int top, int right
+@@ -1897,6 +2141,452 @@ static inline void ViewportDraw(const Viewport &vp, int left, int top, int right
  	);
  }
  
@@ -4013,6 +4267,32 @@ index 6427a14..c019e53 100644
 +	}
 +}
 +
++/**
++ * At exit, the workers given back while this program's memory is still its own: the kernel parks them only when
++ * /dev/gpu closes, after the memory has gone, and a worker still running (a ship's path waiting for the drawing,
++ * which stores its answer every pass) wrote into pages given to the next program (the second start of the game
++ * found its sprites broken).
++ */
++static void VpWorkersAtExit()
++{
++	extern void YapfShipAheadCancel();
++	YapfShipAheadCancel();
++	mcw_for_end();
++	mcw_close();
++}
++
++/** mcw_open, and the workers given back at exit (VpWorkersAtExit). */
++static int VpOpen(int want)
++{
++	const int got = mcw_open(want);
++	static bool at_exit = false;
++	if (got > 0 && !at_exit) {
++		at_exit = true;
++		std::atexit(VpWorkersAtExit);
++	}
++	return got;
++}
++
 +/** The worker cores asked for (OPENTTD_WORKERS, 31 by default, 0 draws as upstream), opened once. */
 +static int VpWorkers()
 +{
@@ -4023,7 +4303,7 @@ index 6427a14..c019e53 100644
 +	want = std::min(want, VP_CORES - 1);
 +	_vp_workers = 0;
 +	if (want <= 0 || BlitterFactory::GetCurrentBlitter()->GetScreenDepth() != 8) return 0;
-+	int got = mcw_open(want);
++	int got = VpOpen(want);
 +	if (got <= 0) return 0;
 +	/* A worker's stack is the k-th 64 KB from the first, its top on a page: its sp says where they begin. */
 +	mcw_for_opts opts = {};
@@ -4052,7 +4332,7 @@ index 6427a14..c019e53 100644
 +	int want = asked != nullptr ? 0 : VP_CORES - 1;
 +	for (const char *c = asked; c != nullptr && *c >= '0' && *c <= '9'; c++) want = want * 10 + (*c - '0');
 +	want = std::min(want, VP_CORES - 1);
-+	return want > 0 ? std::max(mcw_open(want), 0) : 0;
++	return want > 0 ? std::max(VpOpen(want), 0) : 0;
 +}
 +
 +/** A part asked for while parts are kept: kept, to be made at the flush. */
@@ -4382,6 +4662,44 @@ index 6427a14..c019e53 100644
  /**
   * Draw the viewport of this window.
   */
+@@ -2091,10 +2781,37 @@ static bool MarkViewportDirty(const Viewport &vp, int left, int top, int right,
+  * @return true if at least one viewport has a dirty block
+  * @ingroup dirty
+  */
++#ifdef WITH_SHADEREMU
++/** The viewports, listed once while no window comes or goes (ViewportsFixed): -1 when not listed. */
++static const Viewport *_vp_fixed[8];
++static int _vp_fixed_count = -1;
++
++void ViewportsFixed(bool on)
++{
++	_vp_fixed_count = -1;
++	if (!on) return;
++	int n = 0;
++	for (const Window *w : Window::Iterate()) {
++		if (w->viewport == nullptr) continue;
++		if (n == 8) return;
++		_vp_fixed[n++] = w->viewport.get();
++	}
++	_vp_fixed_count = n;
++}
++#endif
++
+ bool MarkAllViewportsDirty(int left, int top, int right, int bottom)
+ {
+ 	bool dirty = false;
+ 
++#ifdef WITH_SHADEREMU
++	if (_vp_fixed_count >= 0) {
++		for (int i = 0; i < _vp_fixed_count; i++) {
++			if (MarkViewportDirty(*_vp_fixed[i], left, top, right, bottom)) dirty = true;
++		}
++		return dirty;
++	}
++#endif
+ 	for (const Window *w : Window::Iterate()) {
+ 		if (w->viewport != nullptr) {
+ 			assert(w->viewport->width != 0);
 diff --git a/src/viewport_func.h b/src/viewport_func.h
 index 05acc3f..0a48e83 100644
 --- a/src/viewport_func.h
