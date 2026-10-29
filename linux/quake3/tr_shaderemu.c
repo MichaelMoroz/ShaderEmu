@@ -838,31 +838,9 @@ static void picture_room_back (void *to, unsigned bytes)
 		gpuMemoryRelease (gpuMemoryMark () - bytes);
 }
 
-/* The decoding workers parked in a game: a call each, not joined until the next sheet, so that
-   the game's calls (which go round the workers with none out) keep to as many as it asked for.
-   A parked worker sleeps; going round all of them woke a cold one for every job. */
-#define PARKED_MOST	64
-static mcw_handle	parked[PARKED_MOST];
-static int		parked_count;
-
-static uint32_t park_job (uint32_t unused0, uint32_t unused1)
-{
-	return 0;
-}
-
-static void pictures_park (void)
-{
-	int	extra = mcw_count () - se_game_workers;
-
-	while (parked_count < extra && parked_count < PARKED_MOST && (parked[parked_count] = mcw_try_call (park_job, 0, 0)) != 0)
-		parked_count++;
-}
-
-static void pictures_unpark (void)
-{
-	while (parked_count > 0)
-		mcw_join (parked[--parked_count]);
-}
+/* (The decoding workers are not parked in a game: a call goes to the lowest free worker of the large write caches
+   (mcwx.c, call_pick), so the game's jobs keep to the first few. Parked, the decoders took those, and the server, the
+   client's game and the scene ran on cores of the small caches at half the instructions a pass.) */
 
 /* Sheet s decoded where the GPU reads it, and its textures' states made again. */
 static void sheet_decode (int s)
@@ -884,7 +862,6 @@ static void sheet_decode (int s)
 	}
 	for (i = x->at & ~4095u; i < x->at + x->bytes; i += 4096)
 		sum += dat[i];		/* (the file's pages there before a worker reads them) */
-	pictures_unpark ();
 	/* (a small one is this core's: two strips of 16 rows at least) */
 	got = x->height < 32 ? 0 : (x->height + 15) / 16u < picture_workers ? (x->height + 15) / 16u : picture_workers;
 	why = media_image_decode (dat + x->at, x->bytes, &out, (int)got);
@@ -2084,8 +2061,6 @@ static void RE_EndFrame (int *frontEndMsec, int *backEndMsec)
 			se_pictures[3] / 1000);
 		fflush (stdout);
 	}
-	if (!parked_count && clc.state == CA_ACTIVE)
-		pictures_park ();
 	if (scene_mode > 0) {
 		if (pictures_pending ()) {
 			SE_SceneFlush ();

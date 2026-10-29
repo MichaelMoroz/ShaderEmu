@@ -66,7 +66,7 @@ extern int se_rand_core;					/* sys_shaderemu.c */
 int AAS_WarmAllRoutes (int travelflags);		/* be_aas_route.c */
 /* QUAKE3_SERVER_LOG=1: a q3srv: line for every job. The worker's part of it, and this core's */
 static struct { unsigned began, ended, frames, bots, game, tell, moves, packets; } job_log __attribute__ ((aligned (16)));
-static unsigned	log_on, log_posted, log_msec, log_jobs;
+static unsigned	log_on, log_posted, log_msec, log_jobs, log_worker;
 unsigned SE_WindowClock (void);
 extern unsigned se_server_parts[3], se_server_frames;	/* sv_main.c (quake3.patch) */
 
@@ -575,9 +575,9 @@ static void done (void)
 	se_server_cycles += out_result;
 	se_server_jobs++;
 	if (log_on)
-		printf ("q3srv: job %u: posted %u began %u ended %u taken %u ms; %d ms of the game in %u frames, %u instructions: the bots %u, the game %u, telling %u, the moves %u in %u\n",
+		printf ("q3srv: job %u: posted %u began %u ended %u taken %u ms; %d ms of the game in %u frames, %u instructions: the bots %u, the game %u, telling %u, the moves %u in %u; worker %u core %d\n",
 			++log_jobs, log_posted, job_log.began, job_log.ended, SE_WindowClock (), log_msec, job_log.frames, out_result,
-			job_log.bots, job_log.game, job_log.tell, job_log.moves, job_log.packets);
+			job_log.bots, job_log.game, job_log.tell, job_log.moves, job_log.packets, log_worker, mcw_core ((int)log_worker));
 	failed = SE_WorkerKept (0);
 	for (at = 0; at < outbox.used; ) {
 		packet_t *p = (packet_t *)(outbox.data + at);
@@ -665,6 +665,7 @@ static void give (void)
 	}
 	helpers_give ();
 	out = mcw_call (server_job, (uint32_t)(pending > JOB_MSEC ? JOB_MSEC : pending), 0);
+	log_worker = (unsigned)mcw_call_worker (out);
 	pending = 0;
 }
 

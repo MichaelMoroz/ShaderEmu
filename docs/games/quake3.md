@@ -837,9 +837,14 @@ cores into GPU memory when the game registers what draws with them, and drawn fr
   in their colours, and the line `quake3: pictures decoded so far` says how many were not.
 - **On which cores.** The program opens 24 more worker cores than the game's six
   (`QUAKE3_DECODERS`), and a sheet is decoded on all that have no job out (`mcw_for`'s teams).
-  In a game they are parked: each has a call that is not joined until the next sheet
-  (`pictures_park`), because `mcw_call` goes round every worker with no call out, and round 30
-  it woke a cold one for each of the game's jobs: 7.46 passes a client frame against 7.01.
+  They are not parked in a game (28 October 2026): a call goes to the lowest free worker of the
+  large write caches (`call_pick` in `mcwx.c`), so the game's jobs keep to cores 1 to 4 by themselves.
+  Parked (each with a call not joined until the next sheet, `pictures_park`, gone), the decoders took
+  workers 1 and 3 to 25 and the server, the client's game and the scene ran on 26 to 28, cores of the
+  hybrid geometry's small caches (2^3: `docs/machine/multicore.md`, "Packing the small workers"),
+  where the server ran 2.9 thousand instructions a pass against 7.6 on a big one.
+  `QUAKE3_CORES=1` prints each worker's core and instructions a pass with every `q3stat` (the
+  geometry's words first), and `QUAKE3_SERVER_LOG`'s lines say the server job's worker and core.
 - **The game's workers are lent to libmedia**, and the server's may be making the bots' routes:
   the library steps round a busy worker on lent ones and never posts to one by number
   (`media.md`, at the top), which once hung the game here. Every sheet is shared out over the

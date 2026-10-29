@@ -817,6 +817,13 @@ the fullest). `programs/mc/mcwx.h` and `mcwx.c` are those, over `mcw.h`, with no
   (not one holding a call, nor one still in the team: `mcw_for_end()` sends the team away
   and waits until it has gone, as before a plain `mcw_post()`),
   or made at once on core 0 when there is none. `mcw_ready(h)` asks without waiting.
+  Which worker: the lowest free one whose core has the largest write cache (`call_pick`; `mcw_fast(k)`: cores 1 to 16;
+  `geotune`'s hybrid has 16 cores of 2^5 buckets and the rest of 2^3), then the lowest free one.
+  A job that stores much ends its passes on a full cache on a small core: Quake III's server ran
+  2.9 thousand instructions a pass on core 26 against 7.6 on core 4 (28 October 2026; its parked
+  picture decoders had taken the lowest workers, `docs/games/quake3.md`). Round the row (before
+  830fbdb, and again 19561b9) spread a program's calls over small cores too. `mcw_call_worker(h)`
+  and `mcw_core(k)` say where a call went, for a program's statistics.
 - **What a job may do that only core 0 may**: `mcw_print()` (a log of 2 KB a worker, written
   at the join; a full one is written then and there by a system call), `mcw_defer(fn, a0, a1)`
   (made by core 0 at the join, in order), `mcw_scratch(bytes)` (memory of the core's own, in
