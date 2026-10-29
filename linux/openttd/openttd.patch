@@ -2084,7 +2084,7 @@ index 7d585b0..5138ceb 100644
  
  	SoundDriver::GetInstance()->MainLoop();
 diff --git a/src/pathfinder/water_regions.cpp b/src/pathfinder/water_regions.cpp
-index e725401..5c8f21e 100644
+index e725401..e67f5ee 100644
 --- a/src/pathfinder/water_regions.cpp
 +++ b/src/pathfinder/water_regions.cpp
 @@ -20,6 +20,10 @@
@@ -2309,7 +2309,7 @@ index e725401..5c8f21e 100644
  	unique_labels.clear();
  	for (int x_or_y = 0; x_or_y < WATER_REGION_EDGE_LENGTH; ++x_or_y) {
  		if (!HasBit(traversability_bits, x_or_y)) continue;
-@@ -399,15 +518,81 @@ void VisitWaterRegionPatchNeighbours(const WaterRegionPatchDesc &water_region_pa
+@@ -399,15 +518,83 @@ void VisitWaterRegionPatchNeighbours(const WaterRegionPatchDesc &water_region_pa
  
  	/* Visit neighbouring water patches accessible via cross-region aqueducts */
  	if (current_region.HasCrossRegionAqueducts()) {
@@ -2376,7 +2376,9 @@ index e725401..5c8f21e 100644
 +	/* (the first on the first core: what the labeling initialises once, a function's static behind its guard,
 +	 * is then not initialised by two workers at once) */
 +	WaterRegionsMakePieces(nullptr, 0, 1);
-+	if (_wr_wanted.size() > 1) mcw_for_opt(static_cast<uint32_t>(_wr_wanted.size()), WaterRegionsMakePieces, &_wr_made, &opts);
++	/* (the tick on a worker of its own makes them itself: mcw's calls are the first core's) */
++	if (_wr_wanted.size() > 1 && TickOnWorker()) WaterRegionsMakePieces(nullptr, 1, static_cast<uint32_t>(_wr_wanted.size()));
++	else if (_wr_wanted.size() > 1) mcw_for_opt(static_cast<uint32_t>(_wr_wanted.size()), WaterRegionsMakePieces, &_wr_made, &opts);
 +	for (size_t i = 0; i < _wr_wanted.size(); i++) {
 +		const WaterRegionIndex index = _wr_wanted[i];
 +		const int x = index.base() % GetWaterRegionMapSizeX(), y = index.base() / GetWaterRegionMapSizeX();
@@ -2391,7 +2393,7 @@ index e725401..5c8f21e 100644
  /**
   * Allocates the appropriate amount of water regions for the current map size
   */
-@@ -420,6 +605,10 @@ void AllocateWaterRegions()
+@@ -420,6 +607,10 @@ void AllocateWaterRegions()
  
  	_is_water_region_valid.clear();
  	_is_water_region_valid.resize(number_of_regions, false);
@@ -2476,10 +2478,10 @@ index 3f257e2..0392c91 100644
  			if (best_open_node == nullptr) break;
  
 diff --git a/src/pathfinder/yapf/yapf_ship.cpp b/src/pathfinder/yapf/yapf_ship.cpp
-index b024edb..deaa82d 100644
+index b024edb..accbb7f 100644
 --- a/src/pathfinder/yapf/yapf_ship.cpp
 +++ b/src/pathfinder/yapf/yapf_ship.cpp
-@@ -16,8 +16,406 @@
+@@ -16,8 +16,416 @@
  #include "yapf_ship_regions.h"
  #include "../water_regions.h"
  
@@ -2494,6 +2496,9 @@ index b024edb..deaa82d 100644
 +#include <new>
 +#include <mcwx.h>
 +int VpWorkersOpen(); /* viewport.cpp */
++void YapfShipAheadGo();
++void YapfShipAheadStop();
++void YapfShipAheadService();
 +
 +/*
 + * The heap of a worker making a ship's path ahead (docs/games/openttd.md, "Ships' paths made ahead"): a worker may
@@ -2618,6 +2623,7 @@ index b024edb..deaa82d 100644
 +	uint8_t *heap;
 +	uint32_t map_size;
 +	alignas(16) volatile uint32_t cancel;
++	volatile uint32_t req; ///< the game's core's request (the tick on a worker: the first core posts the job)
 +};
 +
 +struct alignas(64) AheadOut { ///< the worker's
@@ -2639,6 +2645,7 @@ index b024edb..deaa82d 100644
 +	uint32_t region_gen[256];
 +	uint32_t region_seen[8];
 +	alignas(16) volatile uint32_t ack;
++	volatile uint32_t ended; ///< the request the job ended for (the tick on a worker)
 +};
 +
 +struct AheadSlot {
@@ -2655,8 +2662,11 @@ index b024edb..deaa82d 100644
 +uint32_t _ahead_gen = 0;
 +AheadState _ahead_state[AHEAD_SLOTS] = {};
 +mcw_handle _ahead_handle[AHEAD_SLOTS] = {};
++/** The tick on a worker: the first core's word on each slot's request, the request it posted, and its handle. */
++struct alignas(16) AheadPost { volatile uint32_t decided = 0, posted = 0; mcw_handle h = 0; };
++AheadPost _ahead_post[AHEAD_SLOTS];
 +bool _ahead_broken = false;
-+struct { uint32_t launched, taken, none, moved, late, refused[12], invalid, checked, differ, why[12]; } _ahead_stats;
++struct { uint32_t launched, taken, none, moved, late, refused[12], invalid, checked, differ, why[12], waited, unposted; } _ahead_stats;
 +
 +int AheadMode()
 +{
@@ -2812,7 +2822,9 @@ index b024edb..deaa82d 100644
 +	for (;;) {
 +		if (s->in.cancel) SeShipAheadRefuse(4);
 +		const uint32_t q = _ahead_quiet.v;
-+		if (q & 1) return;
++		/* (it reads only once its word that it reads (ack) was stored in an earlier pass and the map is still still:
++		 * whoever ends the stillness then waits for every job whose word says it reads; YapfShipAheadStop) */
++		if ((q & 1) && s->out.ack == q) return;
 +		if (s->out.ack != q) s->out.ack = q;
 +		mc_end_pass();
 +	}
@@ -2886,7 +2898,7 @@ index b024edb..deaa82d 100644
  constexpr int NUMBER_OR_WATER_REGIONS_LOOKAHEAD = 4;
  constexpr int MAX_SHIP_PF_NODES = (NUMBER_OR_WATER_REGIONS_LOOKAHEAD + 1) * WATER_REGION_NUMBER_OF_TILES * 4; // 4 possible exit dirs per tile.
  
-@@ -43,6 +441,17 @@ protected:
+@@ -43,6 +451,17 @@ protected:
  public:
  	void SetDestination(const Ship *v)
  	{
@@ -2904,7 +2916,7 @@ index b024edb..deaa82d 100644
  		if (v->current_order.IsType(OT_GOTO_STATION)) {
  			this->dest_station = v->current_order.GetDestination().ToStationID();
  			this->dest_tile = CalcClosestStationTile(this->dest_station, v->tile, StationType::Dock);
-@@ -83,6 +492,19 @@ public:
+@@ -83,6 +502,19 @@ public:
  			return GetWaterRegionPatchInfo(tile) == this->intermediate_dest_region_patch;
  		}
  
@@ -2924,7 +2936,7 @@ index b024edb..deaa82d 100644
  		if (this->dest_station != StationID::Invalid()) return IsDockingTile(tile) && IsShipDestinationTile(tile, this->dest_station);
  
  		return tile == this->dest_tile && ((this->dest_trackdirs & TrackdirToTrackdirBits(trackdir)) != TRACKDIR_BIT_NONE);
-@@ -134,6 +556,24 @@ public:
+@@ -134,6 +566,24 @@ public:
  	inline void PfFollowNode(Node &old_node)
  	{
  		TrackFollower follower{Yapf().GetVehicle()};
@@ -2949,7 +2961,7 @@ index b024edb..deaa82d 100644
  		if (follower.Follow(old_node.key.tile, old_node.key.td)) {
  			if (this->water_region_corridor.empty()
  					|| std::ranges::find(this->water_region_corridor, GetWaterRegionInfo(follower.new_tile)) != this->water_region_corridor.end()) {
-@@ -158,6 +598,9 @@ public:
+@@ -158,6 +608,9 @@ public:
  	/** Returns a random trackdir out of a set of trackdirs. */
  	static Trackdir GetRandomTrackdir(TrackdirBits trackdirs)
  	{
@@ -2959,7 +2971,7 @@ index b024edb..deaa82d 100644
  		const int strip_amount = RandomRange(CountBits(trackdirs));
  		for (int s = 0; s < strip_amount; ++s) RemoveFirstTrackdir(&trackdirs);
  		return FindFirstTrackdir(trackdirs);
-@@ -368,12 +811,20 @@ public:
+@@ -368,12 +821,20 @@ public:
  		/* Additional penalty for curves. */
  		c += this->CurveCost(n.parent->GetTrackdir(), n.GetTrackdir());
  
@@ -2980,7 +2992,7 @@ index b024edb..deaa82d 100644
  			c += count * 3 * YAPF_TILE_LENGTH;
  		}
  
-@@ -424,14 +875,419 @@ struct CYapfShip_TypesT {
+@@ -424,14 +885,533 @@ struct CYapfShip_TypesT {
  
  struct CYapfShip : CYapfT<CYapfShip_TypesT<CYapfShip>> {
  	explicit CYapfShip(int max_nodes) { this->max_search_nodes = max_nodes; }
@@ -3026,7 +3038,7 @@ index b024edb..deaa82d 100644
 +	return true;
 +}
 +
-+uint32_t AheadJob(uint32_t at, uint32_t)
++uint32_t AheadJob(uint32_t at, uint32_t req)
 +{
 +	AheadSlot &s = *reinterpret_cast<AheadSlot *>(at);
 +	AheadOut &o = s.out;
@@ -3069,7 +3081,27 @@ index b024edb..deaa82d 100644
 +	}
 +	c.slot = nullptr;
 +	c.lo = nullptr;
++	o.ended = req;
 +	return 0;
++}
++
++/** Whether slot k's job will not touch its slot again (the tick on a worker: ended, or never posted). */
++bool AheadEnded(int k)
++{
++	if (!_tw_on) return mcw_ready(_ahead_handle[k]);
++	const uint32_t r = _ahead_slots[k].in.req;
++	return _ahead_post[k].decided == r && (_ahead_post[k].posted != r || _ahead_slots[k].out.ended == r);
++}
++
++/** Whether slot k's job was posted to a worker (the tick on a worker: the first core may have had none free). */
++bool AheadPosted(int k)
++{
++	return !_tw_on || _ahead_post[k].posted == _ahead_slots[k].in.req;
++}
++
++void AheadJoin(int k)
++{
++	if (!_tw_on) mcw_join(_ahead_handle[k]);
 +}
 +
 +int AheadFind(VehicleID id)
@@ -3091,8 +3123,8 @@ index b024edb..deaa82d 100644
 +void AheadReap()
 +{
 +	for (int k = 0; k < AHEAD_SLOTS; k++) {
-+		if (_ahead_state[k] == AHEAD_ABANDONED && mcw_ready(_ahead_handle[k])) {
-+			mcw_join(_ahead_handle[k]);
++		if (_ahead_state[k] == AHEAD_ABANDONED && AheadEnded(k)) {
++			AheadJoin(k);
 +			_ahead_state[k] = AHEAD_FREE;
 +		}
 +	}
@@ -3185,7 +3217,7 @@ index b024edb..deaa82d 100644
 +	 * here), the first part on the first core; why not is the first part's that says so, as one pass in order gives. */
 +	constexpr uint32_t SLICE = 128, MOST = 24;
 +	const uint32_t n = o.n_tiles;
-+	if (n < 2 * SLICE || AheadMode() == 2) return AheadValidTiles(s, 0, n);
++	if (n < 2 * SLICE || AheadMode() == 2 || _tw_on) return AheadValidTiles(s, 0, n);
 +	const uint32_t parts = std::min<uint32_t>(MOST, (n + SLICE - 1) / SLICE);
 +	mcw_for_end(); /* (a lingering team takes no calls) */
 +	mcw_handle h[MOST];
@@ -3215,13 +3247,28 @@ index b024edb..deaa82d 100644
 +		AheadAbandon(k);
 +		return false;
 +	}
-+	if (!mcw_ready(_ahead_handle[k])) {
++	if (_tw_on && _ahead_post[k].decided == s.in.req && AheadPosted(k) && !AheadEnded(k)) {
++		/* (the tick on a worker: the job runs only while the tick waits; it is waited for here, the map still) */
++		_ahead_stats.waited++;
++		YapfShipAheadGo();
++		while (!AheadEnded(k)) {
++			TickWorkerYield();
++			YapfShipAheadGo();
++			mc_end_pass();
++		}
++		YapfShipAheadStop();
++	}
++	if (!AheadEnded(k)) {
 +		_ahead_stats.late++;
 +		AheadAbandon(k);
 +		return false;
 +	}
-+	mcw_join(_ahead_handle[k]);
++	AheadJoin(k);
 +	_ahead_state[k] = AHEAD_FREE;
++	if (!AheadPosted(k)) {
++		_ahead_stats.unposted++;
++		return false;
++	}
 +	if (s.out.refused != 0) {
 +		_ahead_stats.refused[std::clamp(s.out.refused, 0, 11)]++;
 +		return false;
@@ -3249,9 +3296,10 @@ index b024edb..deaa82d 100644
 +		AheadReap();
 +		WaterRegionsMakeAll(); /* (the regions made invalid since, on the workers: a ship's path then makes none) */
 +	}
-+	/* (the tick on a worker of its own changes the map while the first core draws: no path is made ahead) */
-+	if (TickOnWorker()) return;
-+	if (AheadMode() == 0 || _game_mode != GM_NORMAL || !AheadInit()) return;
++	/* (the tick on a worker of its own: a path is made ahead only while the tick waits, the map still; the first core
++	 * posts the jobs, YapfShipAheadService) */
++	if (AheadMode() == 0 || _game_mode != GM_NORMAL) return;
++	if (_tw_on ? _ahead_slots == nullptr : !AheadInit()) return;
 +	AheadReap();
 +	bool team_ended = false;
 +	/* The ships, listed anew every 64 ticks: Ship::Iterate goes through the whole pool of vehicles, a thousand a tick
@@ -3307,11 +3355,17 @@ index b024edb..deaa82d 100644
 +		}
 +		in.cancel = 0;
 +		s.out.ack = ~0u;
++		if (_tw_on) {
++			in.req = in.req + 1;
++			_ahead_state[k] = AHEAD_RUNNING;
++			_ahead_stats.launched++;
++			continue;
++		}
 +		if (!team_ended) {
 +			mcw_for_end(); /* (a lingering team takes no calls) */
 +			team_ended = true;
 +		}
-+		const mcw_handle h = mcw_try_call(AheadJob, static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&s)), 0);
++		const mcw_handle h = mcw_try_call(AheadJob, static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&s)), in.req);
 +		if (h == 0) break;
 +		_ahead_handle[k] = h;
 +		_ahead_state[k] = AHEAD_RUNNING;
@@ -3324,7 +3378,7 @@ index b024edb..deaa82d 100644
 +
 +void YapfShipAheadQuiet(bool on)
 +{
-+	if (_ahead_slots == nullptr) return;
++	if (_ahead_slots == nullptr || _tw_on) return;
 +	if (on) {
 +		/* A picture with no tick since the last (the game paused, or drawn faster than it ticks): the paths are
 +		 * given up, not made on, so that every worker draws. The jobs launched at a tick held up to nine workers
@@ -3355,15 +3409,87 @@ index b024edb..deaa82d 100644
 +	for (int k = 0; k < AHEAD_SLOTS; k++) {
 +		if (_ahead_state[k] == AHEAD_FREE) continue;
 +		_ahead_slots[k].in.cancel = 1;
-+		mcw_join(_ahead_handle[k]);
++		if (_tw_on) {
++			/* (the first core, the tick held: each request posted or not now, and each job joined once it has ended) */
++			while (!AheadEnded(k) || _ahead_post[k].h != 0) {
++				YapfShipAheadService();
++				mcw_rest();
++			}
++		} else {
++			mcw_join(_ahead_handle[k]);
++		}
 +		_ahead_state[k] = AHEAD_FREE;
 +	}
++}
++
++/**
++ * The tick on a worker, the first core: each job the tick asked for posted to a free worker (or said to have none), and
++ * each that has ended joined. Never while a flush's pieces are out (a lingering team is ended first).
++ */
++void YapfShipAheadService()
++{
++	if (_ahead_slots == nullptr || TickOnWorker() || mcw_on_worker()) return;
++	bool ended = false;
++	for (int k = 0; k < AHEAD_SLOTS; k++) {
++		AheadPost &f = _ahead_post[k];
++		if (f.h != 0 && mcw_ready(f.h)) {
++			mcw_join(f.h);
++			f.h = 0;
++		}
++		AheadSlot &s = _ahead_slots[k];
++		const uint32_t req = s.in.req;
++		if (f.decided == req || f.h != 0) continue;
++		mcw_handle h = 0;
++		if (!VpFlushOut() && !s.in.cancel) {
++			if (!ended) mcw_for_end();
++			ended = true;
++			h = mcw_try_call(AheadJob, static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&s)), req);
++		}
++		if (h != 0) {
++			f.h = h;
++			f.posted = req;
++		}
++		f.decided = req;
++	}
++}
++
++/**
++ * The tick on a worker: the map may change from here (the tick begins or goes on, or the first core holds it). The
++ * stillness is ended, and every job whose word says it reads is waited for until it stops (SeShipAheadPoll).
++ */
++void YapfShipAheadStop()
++{
++	if (_ahead_slots == nullptr) return;
++	const uint32_t q = _ahead_quiet.v;
++	if ((q & 1) == 0) return;
++	_ahead_quiet.v = q + 1;
++	const bool first = !TickOnWorker();
++	auto pass = [first] { if (first) mcw_rest(); else mc_end_pass(); };
++	pass();
++	for (int k = 0; k < AHEAD_SLOTS; k++) {
++		const AheadSlot &s = _ahead_slots[k];
++		while (s.out.ack == q && s.out.ended != s.in.req) pass();
++	}
++}
++
++/** The tick on its worker waits, between two ticks or for a path: the map is still until YapfShipAheadStop. */
++void YapfShipAheadGo()
++{
++	if (_ahead_slots == nullptr) return;
++	const uint32_t q = _ahead_quiet.v;
++	if ((q & 1) == 0) _ahead_quiet.v = q + 1;
++}
++
++void YapfShipAheadInit()
++{
++	if (AheadMode() != 0) AheadInit();
 +}
 +
 +void YapfShipAheadStats()
 +{
 +	if (_ahead_slots == nullptr) return;
 +	const auto &a = _ahead_stats;
++	Debug(misc, 0, "ship paths ahead: {} waited for, {} with no worker", a.waited, a.unposted);
 +	Debug(misc, 0, "ship paths ahead: {} made, {} taken, {} with none, {} moved, {} late, {} invalid, refused {} {} {} {} {} {} {} {} {} {} {} {}, {} checked, {} differ; invalid by {} {} {} {} {} {} {} {} {} {}",
 +		a.launched, a.taken, a.none, a.moved, a.late, a.invalid, a.refused[0], a.refused[1], a.refused[2], a.refused[3], a.refused[4], a.refused[5], a.refused[6], a.refused[7], a.refused[8], a.refused[9], a.refused[10], a.refused[11], a.checked, a.differ, a.why[1], a.why[2], a.why[3], a.why[4], a.why[5], a.why[6], a.why[7], a.why[8], a.why[9], a.why[10]);
 +}

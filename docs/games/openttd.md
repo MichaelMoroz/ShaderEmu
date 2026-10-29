@@ -551,6 +551,18 @@ Paused, on `rvc_cpu` (`OPENTTD_PLAY_SHORT=1 OPENTTD_PAUSE=1`, pictures a second,
 scroll 1.85 with the paths kept to 7.42 (7.81 before the paths were made ahead), zoomed out 1.06 to
 1.67, windows 1.82 to 5.52.
 
+With the tick on a worker of its own the map is still only while the tick waits, between two ticks
+(`YapfShipAheadGo` in `TwMain`), or mid-tick for a path made ahead that it is about to take. The tick
+asks for the paths at the end of its vehicles (`in.req`), the first core posts each to a free worker
+or says it has none (`YapfShipAheadService`, from `TwService`), and before the tick goes on, and
+when the first core holds it (it may run a command), the stillness ends (`YapfShipAheadStop`). A job
+reads only once its word that it reads was stored a pass before and the map is still still
+(`SeShipAheadPoll`); whoever ends the stillness waits for every job whose word says so. The checks
+of the tiles are the tick's alone there (mcw's calls are the first core's), and so is the making of
+water regions made invalid (`WaterRegionsMakeAll`). The game is the same: the played script's sum at
+tick 40 (`OPENTTD_SUM_AT=40`, `cfbecedf`, vehicles `fb8c297e`) with and without the paths ahead and
+the link graph's workers, and `OPENTTD_SHIP_AHEAD=check` says 6 checked, 0 differ.
+
 The water regions made invalid are made at the end of each tick's vehicles, one region a job on the
 workers (`WaterRegionsMakeAll` in `water_regions.cpp`, from main's 5a3b851: the labeling `Make` into a
 `WaterRegionMade` of its own, `Keep` on the first core). A loaded game has none made, and each ship's
@@ -609,8 +621,7 @@ The paused scroll is held to 10.5 pictures a second by the picture's interval (`
 
 - Pitch bend and other controllers in the music.
 - The tick is one worker's ("The tick on a worker"): its vehicles, paths, tile loop, stations and
-  towns are not split over more workers (but for ships' paths made ahead, when the tick is the first
-  core's), and the first core's sync of the vehicles it moved bounds how many ticks a scrolling
+  towns are not split over more workers (but for ships' paths made ahead and the link graph's jobs), and the first core's sync of the vehicles it moved bounds how many ticks a scrolling
   picture can take. Signs, texts and windows' widgets are the first core's.
 - A NewGRF chain other than canals' is resolved by the first core: only canals' resolver was
   read through for stores outside a core's own registers (`WorkerSafe` in `newgrf_spritegroup.h`).

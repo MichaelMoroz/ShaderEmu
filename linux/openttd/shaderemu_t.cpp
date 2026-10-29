@@ -21,6 +21,11 @@ extern "C" {
 
 void CallWindowGameTickEvent(); /* window.cpp, gfx.cpp */
 void DoPaletteAnimations();
+void YapfShipAheadService(); /* yapf_ship.cpp */
+void YapfShipAheadStop();
+void YapfShipAheadGo();
+void YapfShipAheadCancel();
+void YapfShipAheadInit();
 
 extern "C" {
 void *__real_malloc(size_t n);
@@ -353,6 +358,7 @@ static void TwMain()
 		}
 		const uint32_t now = VpTime();
 		if (static_cast<int32_t>(now - _tw_next) < 0) {
+			YapfShipAheadGo(); /* (the map is still until the tick's next) */
 			mc_end_pass();
 			_tw_idle_time += VpTime() - now;
 			continue;
@@ -365,6 +371,7 @@ static void TwMain()
 		uint32_t i0;
 		asm volatile("rdinstret %0" : "=r"(i0));
 		const uint32_t park0 = _tw_park_time;
+		YapfShipAheadStop();
 		try {
 			StateGameLoop();
 		} catch (...) {
@@ -409,6 +416,7 @@ void SeLinkGraphStats();
 void TwService()
 {
 	SeLinkGraphService();
+	YapfShipAheadService();
 	if (!_tw_on) return;
 	if (mcw_ready(_tw_handle) && _tw_ended.v == 0) {
 		fmt::print(stderr, "openttd: the game tick's worker ended\n");
@@ -493,6 +501,7 @@ void TwHold(bool between)
 			break;
 		}
 	}
+	YapfShipAheadStop(); /* (the first core may change the map while it holds the tick: no ship's path made ahead reads it) */
 	_tw_holds++;
 	_tw_held_now = true;
 	_tw_held_between = between || _tw_where.v == 0;
@@ -537,6 +546,8 @@ bool TwStart()
 	if (VpWorkersOpen() < 2) return false;
 	/* (a loaded game has none of its water regions: ships' first paths made them one by one in the tick) */
 	WaterRegionsMakeAll();
+	YapfShipAheadCancel(); /* (the paths made ahead go by the tick's place: every job ends) */
+	YapfShipAheadInit(); /* (and their slots made here, by the first core) */
 	SeLinkGraphInit(); /* (the link graph's slots made here: the tick's worker hands its jobs to them) */
 	if (_tw_stack == 0) {
 		uint8_t *s = static_cast<uint8_t *>(__real_malloc(TW_STACK + 16));
@@ -584,6 +595,7 @@ void TwStop()
 	if (!_tw_on) return;
 	VpFlushFinish();
 	TwHold(true);
+	YapfShipAheadCancel(); /* (the paths made ahead go by the tick's place: every job ends) */
 	_tw_stop.v = 1;
 	TwLetGo();
 	while (_tw_ended.v == 0) {
@@ -613,6 +625,8 @@ void TwStop()
 	}
 	if (!holds.empty()) fmt::print(stderr, "openttd: holds over 40 ms, by where the tick stopped:{}\n", holds);
 	SeLinkGraphStats();
+	extern void YapfShipAheadStats();
+	YapfShipAheadStats();
 }
 
 bool TwActive() { return _tw_on; }
