@@ -368,8 +368,11 @@ program's. A kernel from before its own fix (`patch_exitpark.py`) parked the wor
 `/dev/gpu` closed, after the memory had been given back. A ship's path waiting for the drawing
 stored its answer every pass, into pages the next program got. The second start of the game
 then found its sprites broken ("Tried to load  sprite #0 as a normal sprite", the 'query'
-sprite's error). The wait stores its answer only when it changes. `test_all.py openttd-twice`
-plays busy.sav and starts the game again in the same boot.
+sprite's error). The wait stores its answer only when it changes. The GPU's memory is handed out
+from the same place to every program (`seglMemory`), so the screen's picture is cleared at start:
+the second start showed the first one's last picture until it drew. `test_all.py openttd-twice`
+plays busy.sav, then plays it again paused with every picture checked (0 pixels, the workers
+drawing), then starts it a third time for the state's sum after a tick (`e49e18e3`).
 
 ## Not done
 

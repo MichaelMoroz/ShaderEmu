@@ -221,8 +221,11 @@ CASES = [
     # started twice in one boot (docs/games/openttd.md, "At exit"): the first played with its ships' paths made ahead, the
     # second must find its sprites as they are (a worker left running at exit once wrote into the next program's pages)
     case('openttd-twice', 'games openttd', X + 'OPENTTD_PLAY=1 OPENTTD_PLAY_SHORT=1 openttd -g /usr/share/openttd/busy.sav; '
+         'OPENTTD_PLAY=1 OPENTTD_PLAY_SHORT=1 OPENTTD_PAUSE=1 OPENTTD_CHECK=1 openttd -g /usr/share/openttd/busy.sav; '
          'OPENTTD_SUM=1 openttd -v null:ticks=1 -s null -m null -g /usr/share/openttd/busy.sav',
-         True, wall=400, has=[r'openttd: play PL-DONE', r'openttd: 1 ticks, map 256 x 256, .* sum [0-9a-f]+']),
+         True, wall=600, has=[r'openttd: play PL-DONE', r'openttd: play scroll: .* [1-9]\d* made again by workers',
+                              r'openttd: play round 1: .*checked \d+, 0 differ \(0 pixels'],
+         sums=[(r'openttd: 1 ticks, map 256 x 256, .* sum ([0-9a-f]+)', ['e49e18e3'])]),
     # nxray and nxpath (docs/apps/raytrace.md)
     # (the scene's sines in floats since 20 October 2026: docs/apps/raytrace.md, "Lanes"; rvc_cpu has no lanes, the same sums plain)
     case('nxray', 'workers', X + 'RAY_FRAMES=4 nxray', True, sums=[(r'raystat: picture \d.* sum ([0-9a-f]+)', ['53ea472d', '226b5e92', '37366b32', '3ffdbe63'])],
