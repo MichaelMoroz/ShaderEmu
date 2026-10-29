@@ -110,6 +110,13 @@ PARTS = {
                              'scroll': ('pictures/s', R, ('value', r'play scroll: .* ([\d.]+) a second')),
                              'zoomed out': ('pictures/s', R, ('value', r'play zoomed out: .* ([\d.]+) a second')),
                              'windows': ('pictures/s', R, ('value', r'play windows: .* ([\d.]+) a second'))}),
+    'openttd-play': dict(group='game', cmd='OPENTTD_PLAY=1 openttd -g /usr/share/openttd/busy.sav', frames=20000,
+                         until='play PL-DONE', what="OpenTTD: the busy game played as it runs (its ticks while it is drawn)",
+                         metrics={'start to the game': ('s', T, r'play PL-GO'),
+                                  'game ticks while played': ('ticks/s', R, ('sumratio', r'play (?:scroll|zoomed out|windows): \d+ pictures in (?=.*, (\d+) ticks;)([\d.]+) s')),
+                                  'scroll': ('pictures/s', R, ('value', r'play scroll: .* ([\d.]+) a second')),
+                                  'zoomed out': ('pictures/s', R, ('value', r'play zoomed out: .* ([\d.]+) a second')),
+                                  'windows': ('pictures/s', R, ('value', r'play windows: .* ([\d.]+) a second'))}),
     'openttd-title': dict(group='game', pace='steady', cmd='openttd', frames=6750, what="OpenTTD: its title screen (a game behind the menu)",
                           metrics={'start to first frame': ('s', T, FIRST), 'start to the title drawn': ('s', T, ('steady',)), 'title frames': ('fps', R, ('rate', 'steady', None))}),
     # ---- applications

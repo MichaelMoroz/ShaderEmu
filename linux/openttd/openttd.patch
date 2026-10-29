@@ -310,7 +310,7 @@ index c1de3c5..9c42d29 100644
  	return (TimingMeasurement)time_point_cast<microseconds>(high_resolution_clock::now()).time_since_epoch().count();
  }
 diff --git a/src/gfx.cpp b/src/gfx.cpp
-index 2cae30c..48dd662 100644
+index 2cae30c..fbd450c 100644
 --- a/src/gfx.cpp
 +++ b/src/gfx.cpp
 @@ -51,7 +51,12 @@ PauseModes _pause_mode;
@@ -393,6 +393,26 @@ index 2cae30c..48dd662 100644
  	auto is_dirty = [](auto block) -> bool { return block != 0; };
  	auto block = _dirty_blocks.begin();
  
+@@ -1534,6 +1567,19 @@ void AddDirtyBlock(int left, int top, int right, int bottom)
+ 
+ 	assert(left < right && height > 0);
+ 
++#ifdef WITH_SHADEREMU
++	/* (a vehicle's box is a few blocks a column: stores, not a call of memset, whose start alone cost more) */
++	if (height <= 4) {
++		uint8_t *col = _dirty_blocks.data() + _dirty_blocks_per_column * left + top;
++		for (; left < right; ++left, col += _dirty_blocks_per_column) {
++			col[0] = 0xFF;
++			if (height > 1) col[1] = 0xFF;
++			if (height > 2) col[2] = 0xFF;
++			if (height > 3) col[3] = 0xFF;
++		}
++		return;
++	}
++#endif
+ 	for (; left < right; ++left) {
+ 		size_t offset = _dirty_blocks_per_column * left + top;
+ 		std::fill_n(_dirty_blocks.begin() + offset, height, 0xFF);
 diff --git a/src/gfx_func.h b/src/gfx_func.h
 index 4254611..2110652 100644
 --- a/src/gfx_func.h
@@ -1171,16 +1191,17 @@ index 3f257e2..32d6ddc 100644
  	/** default destructor */
  	~CYapfBaseT() {}
 diff --git a/src/pathfinder/yapf/yapf_ship.cpp b/src/pathfinder/yapf/yapf_ship.cpp
-index b024edb..a9d95ad 100644
+index b024edb..1134065 100644
 --- a/src/pathfinder/yapf/yapf_ship.cpp
 +++ b/src/pathfinder/yapf/yapf_ship.cpp
-@@ -16,8 +16,388 @@
+@@ -16,8 +16,398 @@
  #include "yapf_ship_regions.h"
  #include "../water_regions.h"
  
 +#ifdef WITH_SHADEREMU
 +#include "../../station_base.h"
 +#include "../../tunnelbridge_map.h"
++#include "../../timer/timer_game_tick.h"
 +#include "../../string_func.h"
 +#include <csetjmp>
 +#include <new>
@@ -1275,10 +1296,17 @@ index b024edb..a9d95ad 100644
 +/** A tile as a worker read it: its words, and the heights of the three corners its slope takes from its neighbours. */
 +struct TileRec {
 +	uint32_t tile;
-+	uint8_t data[15];
++	alignas(4) uint8_t data[16]; ///< (the last byte 0: compared as four words)
 +	uint8_t dock; ///< the ships on it were counted (a docking tile's cost)
 +	uint8_t kind; ///< 0 the tile's words, 1 only its water tracks and whether it is a tunnel or bridge, 2 its type
 +};
++
++/** Whether two records read the same, by four words (std::equal on the bytes was a call of memcmp a tile). */
++inline bool SameData(const TileRec &a, const TileRec &b)
++{
++	const uint32_t *x = reinterpret_cast<const uint32_t *>(a.data), *y = reinterpret_cast<const uint32_t *>(b.data);
++	return ((x[0] ^ y[0]) | (x[1] ^ y[1]) | (x[2] ^ y[2]) | (x[3] ^ y[3])) == 0;
++}
 +
 +struct alignas(64) AheadIn { ///< the first core's: written before the job is posted
 +	alignas(Ship) uint8_t ship[sizeof(Ship)];
@@ -1311,6 +1339,7 @@ index b024edb..a9d95ad 100644
 +	uint16_t *index; ///< a tile's place in tiles, + 1
 +	uint16_t *status_index; ///< a tile's place in tiles as its water tracks, + 1
 +	uint16_t *type_index; ///< a tile's place in tiles as its type, + 1
++	uint32_t clean_size; ///< the map size for which the three indexes are 0 but for the tiles logged
 +	uint32_t regions; ///< the water regions read
 +	void *own_region[256]; ///< regions invalid on the map, made anew by the worker
 +	uint32_t region_index[256];
@@ -1364,6 +1393,7 @@ index b024edb..a9d95ad 100644
 +	r.data[12] = px ? TileHeight(TileXY(x + 1, y)) : 0;
 +	r.data[13] = py ? TileHeight(TileXY(x, y + 1)) : 0;
 +	r.data[14] = px && py ? TileHeight(TileXY(x + 1, y + 1)) : 0;
++	r.data[15] = 0;
 +	r.dock = 0;
 +	r.kind = 0;
 +}
@@ -1405,7 +1435,7 @@ index b024edb..a9d95ad 100644
 +	of(t, r);
 +	const uint32_t k = index[i];
 +	if (k != 0) {
-+		if (!std::equal(r.data, r.data + sizeof(r.data), o.tiles[k - 1].data)) SeShipAheadRefuse(6);
++		if (!SameData(r, o.tiles[k - 1])) SeShipAheadRefuse(6);
 +		return;
 +	}
 +	if (o.n_tiles >= AHEAD_TILES) SeShipAheadRefuse(7);
@@ -1435,7 +1465,7 @@ index b024edb..a9d95ad 100644
 +	TileRecOf(t, r);
 +	const uint32_t k = o.index[i];
 +	if (k != 0) {
-+		if (!std::equal(r.data, r.data + sizeof(r.data), o.tiles[k - 1].data)) SeShipAheadRefuse(6);
++		if (!SameData(r, o.tiles[k - 1])) SeShipAheadRefuse(6);
 +		return o.tiles[k - 1];
 +	}
 +	if (o.n_tiles >= AHEAD_TILES) SeShipAheadRefuse(7);
@@ -1563,7 +1593,7 @@ index b024edb..a9d95ad 100644
  constexpr int NUMBER_OR_WATER_REGIONS_LOOKAHEAD = 4;
  constexpr int MAX_SHIP_PF_NODES = (NUMBER_OR_WATER_REGIONS_LOOKAHEAD + 1) * WATER_REGION_NUMBER_OF_TILES * 4; // 4 possible exit dirs per tile.
  
-@@ -43,6 +423,17 @@ protected:
+@@ -43,6 +433,17 @@ protected:
  public:
  	void SetDestination(const Ship *v)
  	{
@@ -1581,7 +1611,7 @@ index b024edb..a9d95ad 100644
  		if (v->current_order.IsType(OT_GOTO_STATION)) {
  			this->dest_station = v->current_order.GetDestination().ToStationID();
  			this->dest_tile = CalcClosestStationTile(this->dest_station, v->tile, StationType::Dock);
-@@ -83,6 +474,19 @@ public:
+@@ -83,6 +484,19 @@ public:
  			return GetWaterRegionPatchInfo(tile) == this->intermediate_dest_region_patch;
  		}
  
@@ -1601,7 +1631,7 @@ index b024edb..a9d95ad 100644
  		if (this->dest_station != StationID::Invalid()) return IsDockingTile(tile) && IsShipDestinationTile(tile, this->dest_station);
  
  		return tile == this->dest_tile && ((this->dest_trackdirs & TrackdirToTrackdirBits(trackdir)) != TRACKDIR_BIT_NONE);
-@@ -134,6 +538,24 @@ public:
+@@ -134,6 +548,24 @@ public:
  	inline void PfFollowNode(Node &old_node)
  	{
  		TrackFollower follower{Yapf().GetVehicle()};
@@ -1626,7 +1656,7 @@ index b024edb..a9d95ad 100644
  		if (follower.Follow(old_node.key.tile, old_node.key.td)) {
  			if (this->water_region_corridor.empty()
  					|| std::ranges::find(this->water_region_corridor, GetWaterRegionInfo(follower.new_tile)) != this->water_region_corridor.end()) {
-@@ -158,6 +580,9 @@ public:
+@@ -158,6 +590,9 @@ public:
  	/** Returns a random trackdir out of a set of trackdirs. */
  	static Trackdir GetRandomTrackdir(TrackdirBits trackdirs)
  	{
@@ -1636,7 +1666,7 @@ index b024edb..a9d95ad 100644
  		const int strip_amount = RandomRange(CountBits(trackdirs));
  		for (int s = 0; s < strip_amount; ++s) RemoveFirstTrackdir(&trackdirs);
  		return FindFirstTrackdir(trackdirs);
-@@ -368,12 +793,20 @@ public:
+@@ -368,12 +803,20 @@ public:
  		/* Additional penalty for curves. */
  		c += this->CurveCost(n.parent->GetTrackdir(), n.GetTrackdir());
  
@@ -1657,7 +1687,7 @@ index b024edb..a9d95ad 100644
  			c += count * 3 * YAPF_TILE_LENGTH;
  		}
  
-@@ -424,14 +857,347 @@ struct CYapfShip_TypesT {
+@@ -424,14 +867,399 @@ struct CYapfShip_TypesT {
  
  struct CYapfShip : CYapfT<CYapfShip_TypesT<CYapfShip>> {
  	explicit CYapfShip(int max_nodes) { this->max_search_nodes = max_nodes; }
@@ -1713,18 +1743,28 @@ index b024edb..a9d95ad 100644
 +	c.size = AHEAD_HEAP;
 +	c.slot = &s;
 +	o.refused = 0;
++	const uint32_t logged = o.n_tiles;
 +	o.n_tiles = 0;
 +	o.regions = 0;
 +	std::fill_n(o.own_region, 256, nullptr);
 +	std::fill_n(o.region_seen, 8, 0u);
 +	if (setjmp(o.jb) == 0) {
++		/* The slot's heap gives the same places every job: the last job's indexes are cleared where it logged. */
 +		o.index = static_cast<uint16_t *>(SeAheadAlloc(s.in.map_size * sizeof(uint16_t)));
-+		std::fill_n(o.index, s.in.map_size, uint16_t{0});
 +		o.status_index = static_cast<uint16_t *>(SeAheadAlloc(s.in.map_size * sizeof(uint16_t)));
-+		std::fill_n(o.status_index, s.in.map_size, uint16_t{0});
 +		o.type_index = static_cast<uint16_t *>(SeAheadAlloc(s.in.map_size * sizeof(uint16_t)));
-+		std::fill_n(o.type_index, s.in.map_size, uint16_t{0});
 +		o.tiles = static_cast<TileRec *>(SeAheadAlloc(AHEAD_TILES * sizeof(TileRec)));
++		if (o.clean_size == s.in.map_size) {
++			for (uint32_t k = 0; k < logged; k++) {
++				const TileRec &r = o.tiles[k];
++				(r.kind == 0 ? o.index : r.kind == 1 ? o.status_index : o.type_index)[r.tile] = 0;
++			}
++		} else {
++			std::fill_n(o.index, s.in.map_size, uint16_t{0});
++			std::fill_n(o.status_index, s.in.map_size, uint16_t{0});
++			std::fill_n(o.type_index, s.in.map_size, uint16_t{0});
++			o.clean_size = s.in.map_size;
++		}
 +		SeShipAheadPoll();
 +		ShipPathCache path;
 +		bool found = false;
@@ -1791,6 +1831,45 @@ index b024edb..a9d95ad 100644
 +}
 +
 +/** Whether everything the worker read is as it is now. */
++/** Whether the tiles from..to of what the worker read are each as they are now: 0, or why not. */
++int AheadValidTiles(const AheadSlot &s, uint32_t from, uint32_t to)
++{
++	const AheadIn &in = s.in;
++	const AheadOut &o = s.out;
++	for (uint32_t i = from; i < to; i++) {
++		const TileRec &was = o.tiles[i];
++		TileRec r;
++		if (was.kind == 1) {
++			TileStatusOf(TileIndex{was.tile}, r);
++		} else if (was.kind == 2) {
++			TileTypeOf(TileIndex{was.tile}, r);
++		} else {
++			TileRecOf(TileIndex{was.tile}, r);
++		}
++		if (!SameData(r, was)) {
++			if (AheadMode() == 2) Debug(misc, 0, "ship ahead: tile {} ({},{}) kind {} type {} changed: {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} to {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x}, {} logged",
++				was.tile, TileX(TileIndex{was.tile}), TileY(TileIndex{was.tile}), was.kind, (int)GetTileType(TileIndex{was.tile}),
++				was.data[0], was.data[1], was.data[2], was.data[3], was.data[4], was.data[5], was.data[6], was.data[7], was.data[8], was.data[9], was.data[10], was.data[11], was.data[12], was.data[13], was.data[14],
++				r.data[0], r.data[1], r.data[2], r.data[3], r.data[4], r.data[5], r.data[6], r.data[7], r.data[8], r.data[9], r.data[10], r.data[11], r.data[12], r.data[13], r.data[14], o.n_tiles);
++			return 8;
++		}
++		if (was.dock) {
++			uint count = 0;
++			for (int j = 0; j < in.snaps; j++) {
++				if (in.snap_tile[j] == was.tile) count = in.snap_count[j];
++			}
++			if (DockShips(TileIndex{was.tile}) != count) return 9;
++		}
++	}
++	return 0;
++}
++
++/** A worker's part of AheadValidTiles: the slot, and from | to << 16. */
++uint32_t AheadValidJob(uint32_t at, uint32_t range)
++{
++	return static_cast<uint32_t>(AheadValidTiles(*reinterpret_cast<const AheadSlot *>(at), range & 0xffff, range >> 16));
++}
++
 +int AheadValid(AheadSlot &s, const Ship *v)
 +{
 +	const AheadIn &in = s.in;
@@ -1809,32 +1888,24 @@ index b024edb..a9d95ad 100644
 +			if (!(now[i] == in.origin_patch[i])) return 6;
 +		}
 +	}
-+	for (uint32_t i = 0; i < o.n_tiles; i++) {
-+		const TileRec &was = o.tiles[i];
-+		TileRec r;
-+		if (was.kind == 1) {
-+			TileStatusOf(TileIndex{was.tile}, r);
-+		} else if (was.kind == 2) {
-+			TileTypeOf(TileIndex{was.tile}, r);
-+		} else {
-+			TileRecOf(TileIndex{was.tile}, r);
-+		}
-+		if (!std::equal(r.data, r.data + sizeof(r.data), was.data)) {
-+			if (AheadMode() == 2) Debug(misc, 0, "ship ahead: tile {} ({},{}) kind {} type {} changed: {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} to {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x}, {} logged",
-+				was.tile, TileX(TileIndex{was.tile}), TileY(TileIndex{was.tile}), was.kind, (int)GetTileType(TileIndex{was.tile}),
-+				was.data[0], was.data[1], was.data[2], was.data[3], was.data[4], was.data[5], was.data[6], was.data[7], was.data[8], was.data[9], was.data[10], was.data[11], was.data[12], was.data[13], was.data[14],
-+				r.data[0], r.data[1], r.data[2], r.data[3], r.data[4], r.data[5], r.data[6], r.data[7], r.data[8], r.data[9], r.data[10], r.data[11], r.data[12], r.data[13], r.data[14], o.n_tiles);
-+			return 8;
-+		}
-+		if (was.dock) {
-+			uint count = 0;
-+			for (int j = 0; j < in.snaps; j++) {
-+				if (in.snap_tile[j] == was.tile) count = in.snap_count[j];
-+			}
-+			if (DockShips(TileIndex{was.tile}) != count) return 9;
-+		}
++	/* The tiles in parts, on the workers free (each only reads: the map does not change while the first core waits
++	 * here), the first part on the first core; why not is the first part's that says so, as one pass in order gives. */
++	constexpr uint32_t SLICE = 128, MOST = 24;
++	const uint32_t n = o.n_tiles;
++	if (n < 2 * SLICE || AheadMode() == 2) return AheadValidTiles(s, 0, n);
++	const uint32_t parts = std::min<uint32_t>(MOST, (n + SLICE - 1) / SLICE);
++	mcw_for_end(); /* (a lingering team takes no calls) */
++	mcw_handle h[MOST];
++	const uint32_t at = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&s));
++	for (uint32_t p = 1; p < parts; p++) {
++		h[p] = mcw_try_call(AheadValidJob, at, (n * p / parts) | (n * (p + 1) / parts) << 16);
 +	}
-+	return 0;
++	int why = AheadValidTiles(s, 0, n / parts);
++	for (uint32_t p = 1; p < parts; p++) {
++		const int w = h[p] != 0 ? static_cast<int>(mcw_join(h[p])) : AheadValidTiles(s, n * p / parts, n * (p + 1) / parts);
++		if (why == 0) why = w;
++	}
++	return why;
 +}
 +
 +/** The path made ahead for this ship, if there is one and all it read is as it was. */
@@ -1882,7 +1953,18 @@ index b024edb..a9d95ad 100644
 +	if (AheadMode() == 0 || _game_mode != GM_NORMAL || !AheadInit()) return;
 +	AheadReap();
 +	bool team_ended = false;
-+	for (const Ship *v : Ship::Iterate()) {
++	/* The ships, listed anew every 64 ticks: Ship::Iterate goes through the whole pool of vehicles, a thousand a tick
++	 * for 64 ships (one made since waits for its list; a path made ahead or not is the same path). */
++	static std::vector<VehicleID> ships;
++	static uint64_t listed_at = 0;
++	if (ships.empty() || TimerGameTick::counter - listed_at >= 64) {
++		ships.clear();
++		for (const Ship *v : Ship::Iterate()) ships.push_back(v->index);
++		listed_at = TimerGameTick::counter;
++	}
++	for (VehicleID id : ships) {
++		const Ship *v = Ship::GetIfValid(id);
++		if (v == nullptr) continue;
 +		TileIndex next;
 +		TrackdirBits origin;
 +		if (!AheadWanted(v, next, origin)) continue;
@@ -3355,7 +3437,7 @@ index 5c5012c..4ad3af1 100644
  max      = MAX_MAP_SIZE_BITS
  cat      = SC_BASIC
 diff --git a/src/texteff.cpp b/src/texteff.cpp
-index 18c93ab..e49da7a 100644
+index 18c93ab..6c0a7b4 100644
 --- a/src/texteff.cpp
 +++ b/src/texteff.cpp
 @@ -24,6 +24,9 @@ struct TextEffect : public ViewportSign {
@@ -3368,7 +3450,7 @@ index 18c93ab..e49da7a 100644
  
  	/** Reset the text effect */
  	void Reset()
-@@ -56,6 +59,9 @@ TextEffectID AddTextEffect(EncodedString &&msg, int center, int y, uint8_t durat
+@@ -56,9 +59,21 @@ TextEffectID AddTextEffect(EncodedString &&msg, int center, int y, uint8_t durat
  	te.msg = std::move(msg);
  	te.duration = duration;
  	te.mode = mode;
@@ -3378,7 +3460,19 @@ index 18c93ab..e49da7a 100644
  
  	/* Make sure we only dirty the new area */
  	te.width_normal = 0;
-@@ -71,14 +77,37 @@ void UpdateTextEffect(TextEffectID te_id, EncodedString &&msg)
++#ifdef WITH_SHADEREMU
++	/* (an income out of every viewport: its string is made when one can show it, by RefreshStaleTextEffects) */
++	te.width_small = 0;
++	te.center = center;
++	te.top = y;
++	extern bool ViewportSignSeen(const ViewportSign &sign);
++	te.stale = !ViewportSignSeen(te);
++	if (te.stale) return static_cast<TextEffectID>(it - std::begin(_text_effects));
++#endif
+ 	te.UpdatePosition(center, y, te.msg.GetDecodedString());
+ 
+ 	return static_cast<TextEffectID>(it - std::begin(_text_effects));
+@@ -71,14 +86,37 @@ void UpdateTextEffect(TextEffectID te_id, EncodedString &&msg)
  	if (msg == te.msg) return;
  	te.msg = std::move(msg);
  
@@ -3446,10 +3540,10 @@ index 91a1111..9e2ba5f 100644
  		if (!this->vehstatus.Test(VehState::Stopped) || this->cur_speed > 0) this->running_ticks++;
  
 diff --git a/src/vehicle.cpp b/src/vehicle.cpp
-index 91588a6..802668f 100644
+index 91588a6..51a9f7f 100644
 --- a/src/vehicle.cpp
 +++ b/src/vehicle.cpp
-@@ -60,6 +60,11 @@
+@@ -60,9 +60,18 @@
  #include "timer/timer_game_calendar.h"
  #include "timer/timer_game_economy.h"
  #include "timer/timer_game_tick.h"
@@ -3461,7 +3555,14 @@ index 91588a6..802668f 100644
  
  #include "table/strings.h"
  
-@@ -867,6 +872,9 @@ Vehicle::~Vehicle()
++#ifdef WITH_SHADEREMU
++#include <mcwx.h>
++#endif
++
+ #include "safeguards.h"
+ 
+ /* Number of bits in the hash to use from each vehicle coord */
+@@ -867,6 +876,9 @@ Vehicle::~Vehicle()
  		return;
  	}
  
@@ -3471,7 +3572,7 @@ index 91588a6..802668f 100644
  	/* sometimes, eg. for disaster vehicles, when company bankrupts, when removing crashed/flooded vehicles,
  	 * it may happen that vehicle chain is deleted when visible */
  	if (!this->vehstatus.Test(VehState::Hidden)) this->MarkAllViewportsDirty();
-@@ -966,6 +974,10 @@ void CallVehicleTicks()
+@@ -966,6 +978,10 @@ void CallVehicleTicks()
  	PerformanceAccumulator::Reset(PFE_GL_SHIPS);
  	PerformanceAccumulator::Reset(PFE_GL_AIRCRAFT);
  
@@ -3482,7 +3583,7 @@ index 91588a6..802668f 100644
  	for (Vehicle *v : Vehicle::Iterate()) {
  		[[maybe_unused]] VehicleID vehicle_index = v->index;
  
-@@ -1039,6 +1051,11 @@ void CallVehicleTicks()
+@@ -1039,6 +1055,11 @@ void CallVehicleTicks()
  		}
  	}
  
@@ -3494,7 +3595,7 @@ index 91588a6..802668f 100644
  	Backup<CompanyID> cur_company(_current_company);
  	for (auto &it : _vehicles_to_autoreplace) {
  		Vehicle *v = Vehicle::Get(it.first);
-@@ -1118,6 +1135,18 @@ static void DoDrawVehicle(const Vehicle *v)
+@@ -1118,6 +1139,18 @@ static void DoDrawVehicle(const Vehicle *v)
   * Add the vehicle sprites that should be drawn at a part of the screen.
   * @param dpi Rectangle being drawn.
   */
@@ -3513,7 +3614,7 @@ index 91588a6..802668f 100644
  void ViewportAddVehicles(DrawPixelInfo *dpi)
  {
  	/* The bounding rectangle */
-@@ -1167,6 +1196,9 @@ void ViewportAddVehicles(DrawPixelInfo *dpi)
+@@ -1167,6 +1200,9 @@ void ViewportAddVehicles(DrawPixelInfo *dpi)
  					 * This vehicle can potentially be drawn as part of this viewport and
  					 * needs to be revalidated, as the sprite may not be correct.
  					 */
@@ -3523,7 +3624,7 @@ index 91588a6..802668f 100644
  					if (v->sprite_cache.revalidate_before_draw) {
  						VehicleSpriteSeq seq;
  						v->GetImage(v->direction, EIT_ON_MAP, &seq);
-@@ -1189,10 +1221,25 @@ void ViewportAddVehicles(DrawPixelInfo *dpi)
+@@ -1189,10 +1225,25 @@ void ViewportAddVehicles(DrawPixelInfo *dpi)
  						v->sprite_cache.revalidate_before_draw = false;
  					}
  
@@ -3552,7 +3653,7 @@ index 91588a6..802668f 100644
  				}
  
  				v = v->hash_viewport_next;
-@@ -1671,7 +1718,19 @@ void Vehicle::UpdatePosition()
+@@ -1671,7 +1722,19 @@ void Vehicle::UpdatePosition()
  void Vehicle::UpdateBoundingBoxCoordinates(bool update_cache) const
  {
  	Rect new_coord;
@@ -3572,7 +3673,7 @@ index 91588a6..802668f 100644
  
  	/* z-bounds are not used. */
  	Point pt = RemapCoords(this->x_pos + this->bounds.origin.x + this->bounds.offset.x, this->y_pos + this->bounds.origin.y + this->bounds.offset.y, this->z_pos);
-@@ -1713,7 +1772,50 @@ void Vehicle::UpdateBoundingBoxCoordinates(bool update_cache) const
+@@ -1713,12 +1776,102 @@ void Vehicle::UpdateBoundingBoxCoordinates(bool update_cache) const
   * Update the vehicle on the viewport, updating the right hash and setting the new coordinates.
   * @param dirty Mark the (new and old) coordinates of the vehicle as dirty.
   */
@@ -3603,11 +3704,45 @@ index 91588a6..802668f 100644
 +	_vp_defer = true;
 +}
 +
++/** The box of a vehicle whose sprite's bounds are kept: what UpdateViewportNow does first, on any core (it stores
++ * to the vehicle alone). */
++void Vehicle::UpdateViewportBox()
++{
++	MutableSpriteCache &sc = this->sprite_cache;
++	sc.vp_unboxed = sc.old_coord.left == INVALID_COORD;
++	this->UpdateBoundingBoxCoordinates(true);
++	/* the area UpdateViewportNow marks dirty: out of every viewport, no block is marked */
++	extern bool ViewportsFixedSee(int left, int top, int right, int bottom);
++	sc.vp_unseen = sc.vp_unboxed ? !ViewportsFixedSee(this->coord.left, this->coord.top, this->coord.right, this->coord.bottom) :
++		!ViewportsFixedSee(std::min(sc.old_coord.left, this->coord.left), std::min(sc.old_coord.top, this->coord.top),
++			std::max(sc.old_coord.right, this->coord.right), std::max(sc.old_coord.bottom, this->coord.bottom));
++	sc.vp_boxed = true;
++}
++
++static void VpBoxes(void *, uint32_t from, uint32_t to)
++{
++	extern bool _draw_bounding_boxes;
++	for (uint32_t i = from; i < to; i++) {
++		Vehicle *v = Vehicle::GetIfValid(_vp_pending[i]);
++		if (v == nullptr || !v->sprite_cache.vp_pending) continue;
++		const MutableSpriteCache &sc = v->sprite_cache;
++		/* (bounds not kept are looked up on the first core: a sprite may load) */
++		if (sc.sprite_seq.count != 1 || sc.seq_bounds_of != sc.sprite_seq.seq[0].sprite || sc.seq_bounds_gen != _sprite_bounds_gen || _draw_bounding_boxes) continue;
++		v->UpdateViewportBox();
++	}
++}
++
 +static void VpDeferEnd()
 +{
 +	_vp_defer = false;
 +	extern void ViewportsFixed(bool on);
 +	ViewportsFixed(true); /* (no window comes or goes while the vehicles' places are marked) */
++	/* The boxes on the workers (a few hundred vehicles a tick); the hash and the dirty blocks then in order, here. */
++	if (_vp_pending.size() >= 64 && mcw_count() > 0) {
++		mcw_for_opts opts = {};
++		opts.grain = 16;
++		mcw_for_opt(static_cast<uint32_t>(_vp_pending.size()), VpBoxes, nullptr, &opts);
++	}
 +	for (VehicleID id : _vp_pending) {
 +		Vehicle *v = Vehicle::GetIfValid(id);
 +		if (v != nullptr) v->UpdateViewportPending();
@@ -3622,12 +3757,42 @@ index 91588a6..802668f 100644
 +#endif
  {
  	/* If the existing cache is invalid we should ignore it, as it will be set to the current coords by UpdateBoundingBoxCoordinates */
++#ifdef WITH_SHADEREMU
++	bool ignore_cached_coords;
++	bool unseen = false;
++	if (this->sprite_cache.vp_boxed) {
++		this->sprite_cache.vp_boxed = false;
++		ignore_cached_coords = this->sprite_cache.vp_unboxed;
++		unseen = this->sprite_cache.vp_unseen;
++	} else {
++		ignore_cached_coords = this->sprite_cache.old_coord.left == INVALID_COORD;
++		this->UpdateBoundingBoxCoordinates(true);
++	}
++#else
  	bool ignore_cached_coords = this->sprite_cache.old_coord.left == INVALID_COORD;
+ 
+ 	this->UpdateBoundingBoxCoordinates(true);
++#endif
+ 
+ 	if (ignore_cached_coords) {
+ 		UpdateVehicleViewportHash(this, this->coord.left, this->coord.top, INVALID_COORD, INVALID_COORD);
+@@ -1726,6 +1879,11 @@ void Vehicle::UpdateViewport(bool dirty)
+ 		UpdateVehicleViewportHash(this, this->coord.left, this->coord.top, this->sprite_cache.old_coord.left, this->sprite_cache.old_coord.top);
+ 	}
+ 
++#ifdef WITH_SHADEREMU
++	if (dirty && unseen) {
++		this->sprite_cache.is_viewport_candidate = false;
++	} else
++#endif
+ 	if (dirty) {
+ 		if (ignore_cached_coords) {
+ 			this->sprite_cache.is_viewport_candidate = this->MarkAllViewportsDirty();
 diff --git a/src/vehicle_base.h b/src/vehicle_base.h
-index 7edf724..382de9c 100644
+index 7edf724..1156d7d 100644
 --- a/src/vehicle_base.h
 +++ b/src/vehicle_base.h
-@@ -160,7 +160,19 @@ struct MutableSpriteCache {
+@@ -160,7 +160,22 @@ struct MutableSpriteCache {
  	bool is_viewport_candidate = false; ///< This vehicle can potentially be drawn on a viewport
  	Rect old_coord{}; ///< Co-ordinates from the last valid bounding box
  	VehicleSpriteSeq sprite_seq{}; ///< Vehicle appearance.
@@ -3639,6 +3804,9 @@ index 7edf724..382de9c 100644
 +	/* an update of the viewport asked for while the vehicles tick, made once when they have (vehicle.cpp) */
 +	bool vp_pending = false;
 +	bool vp_dirty = false;
++	bool vp_boxed = false; ///< its box made already, by a worker (VpDeferEnd); vp_unboxed: it had none before
++	bool vp_unboxed = false;
++	bool vp_unseen = false; ///< (with vp_boxed) no viewport shows its old or new box
 +#endif
  };
 +#ifdef WITH_SHADEREMU
@@ -3647,17 +3815,34 @@ index 7edf724..382de9c 100644
  
  /** A vehicle pool for a little over 1 million vehicles. */
  typedef Pool<Vehicle, VehicleID, 512> VehiclePool;
-@@ -781,6 +793,10 @@ public:
+@@ -781,6 +796,11 @@ public:
  
  	void UpdatePosition();
  	void UpdateViewport(bool dirty);
 +#ifdef WITH_SHADEREMU
 +	void UpdateViewportNow(bool dirty);
++	void UpdateViewportBox();
 +	void UpdateViewportPending() { if (this->sprite_cache.vp_pending) { this->sprite_cache.vp_pending = false; this->UpdateViewportNow(this->sprite_cache.vp_dirty); this->sprite_cache.vp_dirty = false; } }
 +#endif
  	void UpdateBoundingBoxCoordinates(bool update_cache) const;
  	void UpdatePositionAndViewport();
  	bool MarkAllViewportsDirty() const;
+@@ -1171,7 +1191,15 @@ struct SpecializedVehicle : public Vehicle {
+ 		 * to resolve a new sprite.
+ 		 */
+ 		if (this->direction != this->sprite_cache.last_direction || this->sprite_cache.is_viewport_candidate) {
++#ifdef WITH_SHADEREMU
++			/* (only the sprites it counts are read, and GetImage sets them and the count: the eight zeroed first were a
++			 * call of memset a step of every vehicle a viewport can show) */
++			union SeqRaw { VehicleSpriteSeq s; SeqRaw() {} } raw;
++			VehicleSpriteSeq &seq = raw.s;
++			seq.count = 0;
++#else
+ 			VehicleSpriteSeq seq;
++#endif
+ 
+ 			((T*)this)->T::GetImage(this->direction, EIT_ON_MAP, &seq);
+ 			if (this->sprite_cache.sprite_seq != seq) {
 diff --git a/src/vehicle_func.h b/src/vehicle_func.h
 index 9b69b13..4571a5f 100644
 --- a/src/vehicle_func.h
@@ -3805,7 +3990,7 @@ index 85cc2d5..439e51d 100644
  	if (std::this_thread::get_id() != this->game_thread.get_id()) return;
  
 diff --git a/src/viewport.cpp b/src/viewport.cpp
-index 6427a14..97b640a 100644
+index 6427a14..eb48315 100644
 --- a/src/viewport.cpp
 +++ b/src/viewport.cpp
 @@ -99,6 +99,11 @@
@@ -4662,7 +4847,7 @@ index 6427a14..97b640a 100644
  /**
   * Draw the viewport of this window.
   */
-@@ -2091,10 +2781,37 @@ static bool MarkViewportDirty(const Viewport &vp, int left, int top, int right,
+@@ -2091,10 +2781,53 @@ static bool MarkViewportDirty(const Viewport &vp, int left, int top, int right,
   * @return true if at least one viewport has a dirty block
   * @ingroup dirty
   */
@@ -4682,6 +4867,22 @@ index 6427a14..97b640a 100644
 +		_vp_fixed[n++] = w->viewport.get();
 +	}
 +	_vp_fixed_count = n;
++}
++
++/** Whether MarkAllViewportsDirty would mark any block of the area (its tests alone): on any core, while the viewports
++ * are fixed; true when they are not. */
++bool ViewportsFixedSee(int left, int top, int right, int bottom)
++{
++	if (_vp_fixed_count < 0) return true;
++	for (int i = 0; i < _vp_fixed_count; i++) {
++		const Viewport &vp = *_vp_fixed[i];
++		if (right + (1 << to_underlying(vp.zoom)) - 1 - vp.virtual_left <= 0) continue;
++		if (bottom + (1 << to_underlying(vp.zoom)) - 1 - vp.virtual_top <= 0) continue;
++		if (std::max(0, left - vp.virtual_left) >= vp.virtual_width) continue;
++		if (std::max(0, top - vp.virtual_top) >= vp.virtual_height) continue;
++		return true;
++	}
++	return false;
 +}
 +#endif
 +
