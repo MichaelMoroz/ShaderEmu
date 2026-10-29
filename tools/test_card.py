@@ -47,9 +47,9 @@ def skip_why(c, a):
     return None
 
 
-def harness(a):
+def harness(a, more=True):
     return ['pwsh', '-NoProfile', '-File', os.path.join(ROOT, 'tools', 'gpu_queue.ps1'), a.harness, '--d3d11'] + (['--warp'] if a.warp else []) + ['--rvc', a.rvc,
-            '--define', 'NO_PAGING', '--image', os.path.abspath(a.image), '--no-desktop', '--no-viz', '--no-stdin']
+            '--define', 'NO_PAGING', '--image', os.path.abspath(a.image), '--no-desktop', '--no-viz', '--no-stdin'] + (a.more if more else [])
 
 
 def run_locked(args):
@@ -63,7 +63,7 @@ def run_locked(args):
 
 def make_snapshot(a):
     """The shell on the processor, a cold boot to the prompt, saved where the shader machine resumes it."""
-    p = run_locked(harness(a) + ['--cpu', '--frames', '1000000', '--uart-log', a.snapshot_file + '.uart',
+    p = run_locked(harness(a, False) + ['--cpu', '--frames', '1000000', '--uart-log', a.snapshot_file + '.uart',
                                  '--input', 'echo SH""READY\\n', '--until', 'SHREADY', '--save-state', a.snapshot_file])
     if '--until matched' not in p.stderr or not os.path.exists(a.snapshot_file):
         raise SystemExit('the shell snapshot was not made: ' + ' '.join(p.stderr.strip().splitlines()[-3:]))
@@ -134,6 +134,8 @@ def main():
     ap.add_argument('--snapshot', action='store_true', help='make the shell snapshot again (rvc_harness --cpu)')
     ap.add_argument('--parts', action='store_true', help='each case in runs of --part-secs, the machine saved between')
     ap.add_argument('--part-secs', type=float, default=45)
+    ap.add_argument('--with', dest='more', action='append', default=[], metavar='ARG',
+                    help="an option for rvc_harness, as --with=--blits (each case's run; the shell snapshot is made without)")
     ap.add_argument('--warp', action='store_true', help="on WARP, D3D11's software device, not the card")
     ap.add_argument('--mark-ok', action='store_true', help="with --warp: when every case chosen passed, the tick's stamp "
                     "goes into its folder's warp_ok, and the card runs it (rvc_harness --stamp)")

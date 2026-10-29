@@ -50,7 +50,9 @@ struct GpuPass {
     ComPtr<ID3D11VertexShader> vs;
     ComPtr<ID3D11GeometryShader> gs;
     ComPtr<ID3D11PixelShader> ps;
-    StageLayout vsLayout, gsLayout, psLayout;
+    ComPtr<ID3D11HullShader> hs;      // with ds: a pass drawn as patches (src/amp.h)
+    ComPtr<ID3D11DomainShader> ds;
+    StageLayout vsLayout, gsLayout, psLayout, hsLayout, dsLayout;
 };
 
 struct ShaderBuildOptions {

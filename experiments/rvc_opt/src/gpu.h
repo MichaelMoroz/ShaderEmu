@@ -391,6 +391,42 @@ gpu_varyings gpu_vertex(uint id) {
     return o;
 }
 
+#ifdef GPU_AMP
+// The device's mesh drawn by a blit (src/amp.h, docs/machine/gpu.md "Blits in place of cameras"): a call draws
+// GPU_AMP_EACH of its triangles in their order, each whole if a command claims all three of its vertices (as
+// Unity's mesh of a point a triangle did). 13 triangles are 39 vertices of gpu_varyings' 20 values, under the
+// 1,024 a geometry shader may write, and 5,184 calls are 67,392 triangles. The includer defines _GpuPass (a
+// number or a uniform) and GPU_AMP_Z(o) if the target's depth runs the other way (Unity's reversed Z).
+#include "amp.h"
+#ifndef GPU_TRIANGLES
+#define GPU_TRIANGLES 65536u
+#endif
+#ifndef GPU_AMP_Z
+#define GPU_AMP_Z(o)
+#endif
+#define GPU_AMP_EACH 13
+[maxvertexcount(39)]   // 3 * GPU_AMP_EACH (vkd3d takes a number there)
+[instance(AMP_INST)]
+void gpu_amp_geom(point amp_d I[1], inout TriangleStream<gpu_varyings> stream, uint inst : SV_GSInstanceID) {
+    // nothing to do unless the submitted list says it has commands for this pass
+    if (_GpuPass != 0 && ((ram(GPU_CTRL).r >> (8 + _GpuPass)) & 1) == 0) return;
+    uint first = amp_call(I[0], inst) * GPU_AMP_EACH;
+    for (uint t = 0; t < GPU_AMP_EACH; t++) {
+        if (first + t >= GPU_TRIANGLES) break;
+        uint v = (first + t) * 3, base;
+        uint4 head;
+        if (gpu_command(v, 3, base, head)) {
+            for (uint k = 0; k < 3; k++) {
+                gpu_varyings o = gpu_vertex_of(v + k, base, head);
+                GPU_AMP_Z(o);
+                stream.Append(o);
+            }
+            stream.RestartStrip();
+        }
+    }
+}
+#endif
+
 // Texel n of a texture of three bytes a pixel as a colour word: it may start at any byte, and
 // three bytes may run into the next word. In RAM or the ROM.
 uint gpu_rgb24(uint address, uint n) {

@@ -24,6 +24,11 @@
 #ifndef RAM_GEOM_GUARD
 #define RAM_GEOM_GUARD
 #endif
+#ifdef RAM_AMP
+// The gather and the RAM commit as blits (src/amp.h, docs/machine/gpu.md "Blits in place of cameras"): the same
+// points, made by calls of a blit's geometry shader in the order the mesh had them.
+#include "amp.h"
+#endif
 #ifdef LANE_FIELD
 #define LANE_FIELD_ROW 48   // the lanes' field's texels: state rows 48 to 63 (FIELD_STATE_ROW, rvc_lean's tick)
 #endif
@@ -238,10 +243,31 @@ void ram_span(inout TriangleStream<ram_v2f> stream, uint row, uint count, uint h
     ram_quad(stream, 0, row, 2048, count / 2048, height, value, info);
     ram_quad(stream, 0, row + count / 2048, count % 2048, 1, height, value, info);
 }
+#ifdef RAM_AMP
+// One texel as one triangle, three vertices where a quad is four: its corner and 1.5 texels along each side, which
+// covers that texel's centre and no other (a blit's call has 85 vertices of ram_v2f to make nine points with).
+void ram_tri(inout TriangleStream<ram_v2f> stream, uint x, uint y, uint height, uint4 value, uint4 info) {
+    for (uint corner = 0; corner < 3; corner++) {
+        float2 p = float2(x + (corner == 1 ? 1.5 : 0.0), y + (corner == 2 ? 1.5 : 0.0)) / float2(2048.0, height);
+        ram_v2f o;
+        o.vertex = float4(p.x * 2.0 - 1.0, 1.0 - p.y * 2.0, 0.5, 1.0);
+        o.value = value;
+        o.info = info;
+        stream.Append(o);
+    }
+    stream.RestartStrip();
+}
+#endif
 // RAM texels t0 to t1, row by row
 void ram_rows(inout TriangleStream<ram_v2f> stream, uint t0, uint t1, uint4 value, uint4 info) {
     if (t0 > t1) return;
     uint y0 = t0 / 2048, y1 = t1 / 2048, x0 = t0 % 2048, x1 = t1 % 2048;
+#ifdef RAM_AMP
+    if (t0 == t1) {
+        ram_tri(stream, x0, 64 + y0, STATE_TEX_HEIGHT, value, info);
+        return;
+    }
+#endif
     if (y0 == y1) {
         ram_quad(stream, x0, 64 + y0, x1 - x0 + 1, 1, STATE_TEX_HEIGHT, value, info);
     } else {
@@ -270,13 +296,8 @@ bool ram_core_stored(uint core) {
 // The gather's points: point 0 the head (no copy), the control words, the picture's and the
 // zap's texels; then one a core: its texels of row 8, and a staged copy's head and chunk. Of
 // the cores with a copy pending the highest draws last, and its copy is the one made.
-[maxvertexcount(24)]
-void ram_gather_geom(point ram_point IN[1], inout TriangleStream<ram_v2f> stream) {
-    RAM_GEOM_GUARD
-    uint id = IN[0].id;
-#if CORES > 1
-    MC_GEO_READ
-#endif
+#define RAM_GATHER_MOST 24   // vertices a point makes at most
+void ram_gather_point(uint id, inout TriangleStream<ram_v2f> stream) {
     if (id == 0) {
         ram_quad(stream, STAGE_HEAD_X, STAGE_SLOT_ROW, 1, 1, STAGE_ROWS, uint4(0xffffffff, 0, 0, 0), uint4(RK_VALUE, 0, 0, 0));
         ram_quad(stream, 0, STAGE_CONTROL_ROW, 2048, 1, STAGE_ROWS, 0, uint4(RK_CONTROL, 0, 0, 0));
@@ -306,6 +327,32 @@ void ram_gather_geom(point ram_point IN[1], inout TriangleStream<ram_v2f> stream
         }
     }
 }
+[maxvertexcount(RAM_GATHER_MOST)]
+void ram_gather_geom(point ram_point IN[1], inout TriangleStream<ram_v2f> stream) {
+    RAM_GEOM_GUARD
+#if CORES > 1
+    MC_GEO_READ
+#endif
+    ram_gather_point(IN[0].id, stream);
+}
+#ifdef RAM_AMP
+// As a blit: a point a call, _GatherPoints of them (the mesh's, 1 + CORES; the harness's, 1 + the cores it drew).
+// With AMP_INST 2 a blit has 324 calls.
+uniform uint _GatherPoints;
+#if CORES + 1 > 162 * AMP_INST
+#error "the gather's blit has fewer calls than points: a larger AMP_INST"
+#endif
+[maxvertexcount(RAM_GATHER_MOST)]
+[instance(AMP_INST)]
+void ram_gather_amp_geom(point amp_d I[1], inout TriangleStream<ram_v2f> stream, uint inst : SV_GSInstanceID) {
+    uint id = amp_call(I[0], inst);
+    if (id >= _GatherPoints) return;
+#if CORES > 1
+    MC_GEO_READ
+#endif
+    ram_gather_point(id, stream);
+}
+#endif
 
 uint4 ram_gather_texel(ram_v2f i) {
     uint2 pos = (uint2)i.vertex.xy;
@@ -427,13 +474,8 @@ uniform uint _FieldPoints;    // of them, before the picture's, the lanes' field
 // The RAM commit's points: point 0 the zap's square (or, with _Init, all of RAM), then as many as
 // the cores' places (core 0's 258: its buckets, its lone store, its fill or copy; a worker's
 // 130), then the picture. Drawn in that order, which is which wins where two write a texel.
-[maxvertexcount(20)]
-void ram_commit_geom(point ram_point IN[1], inout TriangleStream<ram_v2f> stream) {
-    RAM_GEOM_GUARD
-    uint id = IN[0].id;
-#if CORES > 1
-    MC_GEO_READ
-#endif
+#define RAM_COMMIT_MOST 20   // vertices a point makes at most (the picture's)
+void ram_commit_point(uint id, inout TriangleStream<ram_v2f> stream) {
     if (id == 0) {
         if (_Init) {
             ram_quad(stream, 0, 64, 2048, STATE_TEX_HEIGHT - 64, STATE_TEX_HEIGHT, 0, uint4(RK_INIT, 0, 0, 0));
@@ -507,6 +549,39 @@ void ram_commit_geom(point ram_point IN[1], inout TriangleStream<ram_v2f> stream
         }
     }
 }
+[maxvertexcount(RAM_COMMIT_MOST)]
+void ram_commit_geom(point ram_point IN[1], inout TriangleStream<ram_v2f> stream) {
+    RAM_GEOM_GUARD
+#if CORES > 1
+    MC_GEO_READ
+#endif
+    ram_commit_point(IN[0].id, stream);
+}
+#ifdef RAM_AMP
+// As blits: nine points a call in their order, and the last point (the picture's, up to 20 vertices) a call of its
+// own. A texel is a triangle (ram_tri), so nine points are 81 vertices at most: nine buckets of three entries, or a
+// fill's three rows, a lone store and seven buckets (a core's places are 130 or 258, so nine of them have one fill at
+// most). 85 vertices of ram_v2f's 12 values are the 1,024 a geometry shader may write. The mesh's 41,346 points are
+// 4,595 calls: at AMP_INST 8 four blits of 1,296 calls (_AmpFirst 0, 1,296, 2,592, 3,888). One blit at 32 instances
+// would do, but WARP compiles this shader in 1 s at 1 instance, 5 s at 8, 24 s at 16 and not in 18 minutes at 32.
+#define RAM_COMMIT_EACH 9
+[maxvertexcount(85)]
+[instance(AMP_INST)]
+void ram_commit_amp_geom(point amp_d I[1], inout TriangleStream<ram_v2f> stream, uint inst : SV_GSInstanceID) {
+    uint call = amp_call(I[0], inst), last = _CommitPoints - 1, calls = (last + RAM_COMMIT_EACH - 1) / RAM_COMMIT_EACH;
+    if (call > calls) return;
+#if CORES > 1
+    MC_GEO_READ
+#endif
+    // (one place that calls ram_commit_point: two were twice the code)
+    uint first = call == calls ? last : call * RAM_COMMIT_EACH, end = call == calls ? last + 1 : min(first + RAM_COMMIT_EACH, last);
+    for (uint k = 0; k < RAM_COMMIT_EACH; k++) {
+        uint id = first + k;
+        if (id >= end) break;
+        ram_commit_point(id, stream);
+    }
+}
+#endif
 
 uint4 ram_init_texel(uint2 pos) {
     if (_InitRaw) return ram_init_raw(pos);

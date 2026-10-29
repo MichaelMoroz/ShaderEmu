@@ -31,6 +31,10 @@ struct BackendOptions {
     bool tickDirect = false;      // --unpack-in-place: the unpack draws into the state texture itself, no zone copied in and back (a tick that does not read the texture there)
     bool ramInplace = false;      // D3D11: RAM in one texture written in place, the commit's passes with RAM_INPLACE (src/ram.h)
     bool laneField = false;       // D3D11, RAM in place: the tick has the lanes' field (LANE_FIELD, experiments/rvc_lean; docs/machine/lanes.md)
+    // --blits (D3D11, RAM in place): the gather, the RAM commit and the GPU's lists drawn as the world's blits draw them,
+    // patches amplified by a geometry shader (src/amp.h; docs/machine/gpu.md, "Blits in place of cameras"), with
+    // amp.shader's order probe first
+    const SLShader* ampShader = nullptr;
 };
 
 // The state texture's rows: 64 of the cores' state, then RAM from 0x80000000 to 0x92000000, 32 KB a
