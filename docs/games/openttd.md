@@ -295,6 +295,9 @@ stay `6abca409`, and `503e40ee` with 1,300 ticks, as upstream's.
 | a vehicle's sprite sizes kept while its sprite is the same | 3.49 |
 | a vehicle's place on the viewports updated once a tick | 3.62 |
 | ships' paths made ahead | 4.12 |
+| 64-bit divisions in 32 bits where both fit, no vehicle's frame rate timer | 4.38 |
+| the viewports listed once while vehicles are marked, a loading percent out of sight not made | 4.49 |
+| nine ships' paths made ahead at once, not six | 4.53 |
 
 - The frame rate window's timer reads the machine's clock word, not `clock_gettime`.
 - `UpdateBoundingBoxCoordinates` keeps the bounds of a sequence of one sprite while the sprite
@@ -305,8 +308,18 @@ stay `6abca409`, and `503e40ee` with 1,300 ticks, as upstream's.
   step was a box, a hash update and a mark. The blocks marked are those of the old box and the
   last one, the only ones a picture can have shown. A vehicle deleted, or a sound placed at a
   vehicle, makes its update first. `OPENTTD_VP_NOW=1` is the old way.
+- `GetAcceleration` divides by the processor's 32-bit division when both sides fit (`SeDiv64`):
+  libgcc's 64-bit one was 50 instructions, 78 thousand calls in 200 ticks. The station and
+  industry ticks take the 64-bit tick counter's remainder once, not once a station.
+- A vehicle's tick has no `PerformanceAccumulator`: the machine's clock is in milliseconds, so a
+  vehicle's tick read 0 or 1 ms for 56 instructions. The frame rate window shows no vehicle times.
+- While the vehicles' places are marked (`VpDeferEnd`), the viewports are listed once
+  (`ViewportsFixed`), not by walking every window for each vehicle.
+- A text effect changed where no viewport can show it (a loading vehicle's percent) keeps its new
+  text and makes its string and width only when a viewport can show it (`RefreshStaleTextEffects`,
+  before the dirty blocks are drawn). Each was a string formatted and measured, 5,900 instructions.
 
-What is left of a tick's 0.82 million instructions (`RVC_PROF`, the same run): trains 260
+What was left of a tick's 0.82 million instructions (with ships' paths made ahead) (`RVC_PROF`, the same run): trains 260
 thousand, road vehicles 136, loading and unloading 48, aircraft 38, and the ships' own ticks
 with the paths not made ahead. The vehicles tick in one order on one core. Their random
 numbers come from one state in that order, so they cannot tick on workers and keep the same
@@ -345,6 +358,18 @@ path itself. A load or a new map first stops every worker (`YapfShipAheadCancel`
 0 differ. `OPENTTD_SHIP_AHEAD=0` is without. Over 1,300 ticks, 144 of about 210 calls were taken.
 17 were invalid, 13 of them because a docking tile's count had changed. 49 had none made,
 because they were not foreseen.
+
+## At exit
+
+The program gives its workers back itself at exit (`VpWorkersAtExit` in `viewport.cpp`,
+registered with `atexit` at the first `mcw_open`): the ships' paths made ahead are cancelled
+and joined, a lingering team is ended, and `mcw_close` runs while the memory is still the
+program's. A kernel from before its own fix (`patch_exitpark.py`) parked the workers only when
+`/dev/gpu` closed, after the memory had been given back. A ship's path waiting for the drawing
+stored its answer every pass, into pages the next program got. The second start of the game
+then found its sprites broken ("Tried to load  sprite #0 as a normal sprite", the 'query'
+sprite's error). The wait stores its answer only when it changes. `test_all.py openttd-twice`
+plays busy.sav and starts the game again in the same boot.
 
 ## Not done
 
