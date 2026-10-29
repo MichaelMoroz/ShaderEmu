@@ -1,4 +1,4 @@
-"""No MMU: user memory checked and accessed as gpu_vm's arch/gpuvm/include/asm/uaccess.h does (GPU-VM 25e38c0).
+"""No MMU: user memory checked by its ranges, and a get_user or put_user one access.
 
 - access_ok: a user's range must start in memory the kernel may read: the ROM (0x40000000 up, a mapped file of it is
   a user's pointer there), or the devices and RAM after them (0x80000000 to 0x92000000: a program's
@@ -6,8 +6,7 @@
   functions ask for). asm-generic's UACCESS_MEMCPY said yes to anything, so a bad pointer given to a system call
   faulted in the kernel or wrote over the firmware; now it is EFAULT. A range of 0 bytes is anywhere.
 - get_user, put_user: one load or store (two for 64 bits), aligned or not: the machine makes a misaligned access
-  itself, in the general step (experiments/rvc_opt/src/emu.h), where gpu_vm tests the alignment first and uses
-  bytes. UACCESS_MEMCPY made every one a get_unaligned or put_unaligned: a word four byte loads or stores and
+  itself, in the general step (experiments/rvc_opt/src/emu.h). UACCESS_MEMCPY made every one a get_unaligned or put_unaligned: a word four byte loads or stores and
   the shifts between.
    python3 patch_uaccess.py K"""
 import sys

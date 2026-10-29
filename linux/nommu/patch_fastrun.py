@@ -1,11 +1,11 @@
-"""No MMU: a program's memory taken from the free lists and given back in blocks (GPU-VM linux/fastrun.py, there
-behind CONFIG_GPUVM). After patch_drivers.py, whose alloc_pages_run this changes.
+"""No MMU: a program's memory taken from the free lists and given back in blocks. After patch_drivers.py, whose
+alloc_pages_run this changes.
 
 - alloc_pages_run takes a free block of the run's order or larger from the free lists when there is one (the excess
   goes back as aligned blocks, as before); it walks the zone from its first page only when there is none. The walk
-  was about 35 thousand bundles a call, two calls a program's start.
+  was tens of thousands of instructions a call, two calls a program's start.
 - free_page_series gives back aligned blocks of pages that only the mapping holds as one free of their order, not a
-  page at a time through the per-cpu lists: a boot's programs' exits were a quarter of its bundles.
+  page at a time through the per-cpu lists.
 
 Idempotent (a marker in each file).   python3 patch_fastrun.py K"""
 import os, sys

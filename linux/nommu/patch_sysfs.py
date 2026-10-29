@@ -1,5 +1,4 @@
-"""No MMU: sysfs folders nothing reads, left out of the boot (GPU-VM's d7996f4, there behind CONFIG_GPUVM): a third
-of gpu_vm's kernel start. /sys/kernel/slab for every cache made before slab_sysfs_init (a cache made later still
+"""No MMU: sysfs folders nothing reads, left out of the boot. /sys/kernel/slab for every cache made before slab_sysfs_init (a cache made later still
 gets its folder) and /sys/module for the built-in parameters and versions.   python3 patch_sysfs.py K"""
 import sys
 K = sys.argv[1]
