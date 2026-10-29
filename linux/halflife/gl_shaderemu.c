@@ -984,6 +984,27 @@ int hlglShadedRoomFor(int draws, unsigned vertices, unsigned passes, uint32_t** 
     drawn_vertices += vertices;
     return 1;
 }
+// The same for packed vertices (gl_studio_job.c): room for `words` words, the first `vertices` of them the draws' vertices.
+int hlglPackedRoomFor(int draws, unsigned vertices, unsigned words, unsigned passes, uint32_t** commands, uint32_t** room, uint32_t* block, uint32_t* first_mesh) {
+    *room = gpuFrameMemory(words * 4);
+    if (!*room || !(*commands = gpuDrawsRoom(draws, vertices, passes, block, first_mesh))) return 0;
+    drawn_vertices += vertices;
+    return 1;
+}
+// One of those draws: `count` packed vertices at `at`, their texture places at `uv`.
+void hlglShadedPut(uint32_t* c, const void* template, unsigned name, uint32_t block, const void* at, uint32_t first_mesh, int count);
+void hlglPackedPut(uint32_t* c, const void* template, unsigned name, uint32_t block, const void* at, uint32_t first_mesh, int count, const void* uv) {
+    const shaded_template* t = template;
+    gpu_state s = t->s;
+    if (!t->untextured && name > 0 && name < GAP_OWNER && textures[name].at != NOWHERE) {
+        uint32_t vertex = s.vertex, colour = s.colour;
+        texture_state(&s, &textures[name], t->pass, t->alpha);
+        s.vertex = vertex, s.colour = colour;
+    }
+    s.vertex |= GPU_PACKED;
+    s.more[0] = gpuAddress(uv);
+    gpuDrawPut(c, &s, block, gpuAddress(at), first_mesh, count);
+}
 // One of those draws: `count` vertices at `at`, with the template and texture `name`.
 void hlglShadedPut(uint32_t* c, const void* template, unsigned name, uint32_t block, const void* at, uint32_t first_mesh, int count) {
     const shaded_template* t = template;

@@ -16,6 +16,8 @@ int hlglShadedTemplate( void *to, const float *rgb, float alpha, uint **fill, ui
 unsigned hlglTemplatePass( const void *t );
 int hlglShadedRoomFor( int draws, unsigned vertices, unsigned passes, uint **commands, uint **room, uint *block, uint *first_mesh );
 void hlglShadedPut( uint *c, const void *t, unsigned name, uint block, const void *at, uint first_mesh, int count );
+int hlglPackedRoomFor( int draws, unsigned vertices, unsigned words, unsigned passes, uint **commands, uint **room, uint *block, uint *first_mesh );
+void hlglPackedPut( uint *c, const void *t, unsigned name, uint block, const void *at, uint first_mesh, int count, const void *uv );
 
 #define JOB_VERTS 4096
 #define JOB_MESHES 64
@@ -39,7 +41,11 @@ typedef struct studio_job_s
 	const mstudiotexture_t *ptexture;
 	const short	*pskinref;
 	uint		template[3][16];
-	struct { const short *tricmds; uint *to, *table, key; int flags, numnorms; float s, t; int slot, first, corners, skin, kind; } mesh[JOB_MESHES];	// in the file's order
+	// packed corners (R_StudioPackedOf): a word each, x, y and z a byte each in the box the bones make, where
+	// a vertex's byte is ( its place - qlo ) * qscale; the texture's places a word each in uv
+	int		packed;
+	float		qlo[3], qscale[3];
+	struct { const short *tricmds; uint *to, *table, key, *uv; int flags, numnorms; float s, t; int slot, first, corners, skin, kind, uvframe; } mesh[JOB_MESHES];	// in the file's order
 	matrix3x4	bones[MAXSTUDIOBONES];
 	vec3_t		blight[MAXSTUDIOBONES];
 	// chrome: the light's bones, made into each bone's two directions when a normal needs them
@@ -49,6 +55,7 @@ typedef struct studio_job_s
 	vec3_t		chromeright[MAXSTUDIOBONES], chromeup[MAXSTUDIOBONES];
 	byte		chromemade[MAXSTUDIOBONES];
 	vec3_t		xyz[JOB_VERTS];
+	uint		qxyz[JOB_VERTS];	// (packed: each vertex's three bytes)
 	byte		tag[JOB_VERTS];
 	float		chrome[JOB_VERTS][2];
 } studio_job_t;
@@ -72,9 +79,11 @@ static int R_StudioCorners( const short *ptricmds )
 
 // The meshes' corners counted once a level (R_StudioJobLevel empties it, when models may move).
 static struct { const short *tricmds; int corners; } corners_kept[1024];
+static void R_StudioKeepLevel( void );
 void R_StudioJobLevel( void )
 {
 	memset( corners_kept, 0, sizeof( corners_kept ));
+	R_StudioKeepLevel();
 }
 static int R_StudioCornersKept( const short *ptricmds )
 {
@@ -146,6 +155,163 @@ static inline void R_StudioCorner( uint *to, const studio_job_t *job, const shor
 	to[3] = u | w << 12 | (uint)job->tag[c[1]] << 24;
 }
 
+// ---- packed corners (docs/games/halflife.md, "Packed corners"): a word a corner, the texture's places kept ----
+
+static inline uint R_StudioUV( float cs, float ct, float s, float t )
+{
+	return ((uint)(int)( cs * s * 1024.0f ) & 0xfff ) | ((uint)(int)( ct * t * 1024.0f ) & 0xfff ) << 12;
+}
+
+// The texture's places of the mesh's corners, in the order R_StudioJob writes the corners (a strip's odd triangles turned round).
+static void R_StudioUVsMake( uint *to, const short *ptricmds, float s, float t, const studio_job_t *job, qboolean chrome )
+{
+	int i;
+#define UV_OF( c ) ( chrome ? R_StudioUV( job->chrome[( c )[1]][0], job->chrome[( c )[1]][1], s, t ) : R_StudioUV(( c )[2], ( c )[3], s, t ))
+	while(( i = *( ptricmds++ )))
+	{
+		qboolean fan = i < 0;
+		if( fan ) i = -i;
+		uint a = UV_OF( ptricmds ), b = UV_OF( ptricmds + 4 );
+		ptricmds += 8;
+		for( int n = 0; n < i - 2; n++, ptricmds += 4, to += 3 )
+		{
+			uint c = UV_OF( ptricmds );
+			if( fan ) to[0] = a, to[1] = b, to[2] = c, b = c;
+			else if( n & 1 ) to[0] = b, to[1] = a, to[2] = c, a = b, b = c;
+			else to[0] = a, to[1] = b, to[2] = c, a = b, b = c;
+		}
+	}
+#undef UV_OF
+}
+
+// The mesh's corners as packed words: the vertex's bytes and the normal's shade.
+static void R_StudioPackedMake( uint *to, const short *ptricmds, const studio_job_t *job )
+{
+	int i;
+	if( !to )
+		return;
+#define WORD_OF( c ) ( job->qxyz[( c )[0]] | (uint)job->tag[( c )[1]] << 24 )
+	while(( i = *( ptricmds++ )))
+	{
+		qboolean fan = i < 0;
+		if( fan ) i = -i;
+		uint a = WORD_OF( ptricmds ), b = WORD_OF( ptricmds + 4 );
+		ptricmds += 8;
+		for( int n = 0; n < i - 2; n++, ptricmds += 4, to += 3 )
+		{
+			uint c = WORD_OF( ptricmds );
+			if( fan ) to[0] = a, to[1] = b, to[2] = c, b = c;
+			else if( n & 1 ) to[0] = b, to[1] = a, to[2] = c, a = b, b = c;
+			else to[0] = a, to[1] = b, to[2] = c, a = b, b = c;
+		}
+	}
+#undef WORD_OF
+}
+
+// Memory kept for the level, by the drawing (its worker's, or this core's under HL_RENDER=core): each mesh's texture
+// places and each submodel's bones' reach. Emptied when a level is loaded, with the drawing settled.
+#define KEEP_BYTES ( 2048 * 1024 )
+#define KEEP_SLOTS 2048
+static struct { byte *at; uint used, failed; } keep;
+static struct { const void *key; uint st; void *at; } kept_of[KEEP_SLOTS];
+static void R_StudioKeepLevel( void )
+{
+	keep.used = 0;
+	memset( kept_of, 0, sizeof( kept_of ));
+}
+// What is kept for key and st, or made by make (NULL: no room for it).
+static void *R_StudioKept( const void *key, uint st, uint bytes, void ( *make )( void *to, const void *key, const void *arg ), const void *arg )
+{
+	uint h = ((uint)(uintptr_t)key >> 3 ^ st * 2654435761u ) & ( KEEP_SLOTS - 1 );
+	for( int probe = 0; probe < 8; probe++, h = ( h + 1 ) & ( KEEP_SLOTS - 1 ))
+	{
+		if( kept_of[h].key == key && kept_of[h].st == st )
+			return kept_of[h].at;
+		if( kept_of[h].key )
+			continue;
+		if( !keep.at && ( keep.failed || !( keep.at = hlglJobMemory( KEEP_BYTES ))))
+		{
+			keep.failed = 1;
+			return NULL;
+		}
+		bytes = ( bytes + 15 ) & ~15u;
+		if( keep.used + bytes > KEEP_BYTES )
+			return NULL;
+		void *at = keep.at + keep.used;
+		keep.used += bytes;
+		make( at, key, arg );
+		kept_of[h].key = key, kept_of[h].st = st, kept_of[h].at = at;
+		return at;
+	}
+	return NULL;
+}
+typedef struct { const studio_job_t *job; int j; } uv_make_t;
+static void R_StudioUVsKept( void *to, const void *key, const void *arg )
+{
+	const uv_make_t *m = arg;
+	R_StudioUVsMake( to, key, m->job->mesh[m->j].s, m->job->mesh[m->j].t, m->job, false );
+}
+// How far a submodel's vertices lie from each bone (they are in its space): numbones floats, -1 for a bone with none.
+static void R_StudioReachMake( void *to, const void *key, const void *arg )
+{
+	const studio_job_t *job = arg;
+	float *reach = to;
+	memset( reach, 0, sizeof( float ) * job->numbones );
+	for( int i = 0; i < job->numverts; i++ )
+	{
+		float r = DotProduct( job->verts[i], job->verts[i] ) + 1e-6f;
+		if( r > reach[job->vertbone[i]] ) reach[job->vertbone[i]] = r;
+	}
+	for( int b = 0; b < job->numbones; b++ )
+		reach[b] = reach[b] > 0.0f ? sqrtf( reach[b] ) * 1.001f + 0.01f : -1.0f;
+}
+
+// Whether the job's corners are packed (only with HL_STUDIO_PACKED=1: WIP, the picture is wrong on the card): the box its bones make, and every mesh's
+// texture places kept, or the chrome's made with the corners.
+static qboolean R_StudioPackedOf( studio_job_t *job )
+{
+	static int off = -1;
+	if( off < 0 ) off = !getenv( "HL_STUDIO_PACKED" ) || !atoi( getenv( "HL_STUDIO_PACKED" ));	// (off unless HL_STUDIO_PACKED=1: WIP, drawn wrong)
+	job->packed = 0;
+	if( off )
+		return false;
+	const float *reach = R_StudioKept( job->verts, 0xffffffffu, sizeof( float ) * job->numbones, R_StudioReachMake, job );
+	if( !reach )
+		return false;
+	vec3_t lo = { 1e30f, 1e30f, 1e30f }, hi = { -1e30f, -1e30f, -1e30f };
+	for( int b = 0; b < job->numbones; b++ )
+	{
+		if( reach[b] < 0.0f )
+			continue;
+		const float ( *m )[4] = job->bonesp[b];
+		for( int i = 0; i < 3; i++ )
+		{
+			float e = reach[b] * sqrtf( m[i][0] * m[i][0] + m[i][1] * m[i][1] + m[i][2] * m[i][2] );
+			if( m[i][3] - e < lo[i] ) lo[i] = m[i][3] - e;
+			if( m[i][3] + e > hi[i] ) hi[i] = m[i][3] + e;
+		}
+	}
+	if( lo[0] > hi[0] )
+		return false;
+	for( int i = 0; i < 3; i++ )
+	{
+		float ext = hi[i] - lo[i] > 0.01f ? hi[i] - lo[i] : 0.01f;
+		job->qlo[i] = lo[i], job->qscale[i] = 255.0f / ext;
+	}
+	for( int j = 0; j < job->nummesh; j++ )
+	{
+		job->mesh[j].uv = NULL, job->mesh[j].uvframe = FBitSet( job->mesh[j].flags, STUDIO_NF_CHROME ) != 0;
+		if( job->mesh[j].uvframe )
+			continue;
+		uv_make_t m = { job, j };
+		uint st = (uint)( 1.0f / job->mesh[j].s + 0.5f ) | (uint)( 1.0f / job->mesh[j].t + 0.5f ) << 16;
+		if( !( job->mesh[j].uv = R_StudioKept( job->mesh[j].tricmds, st, 4 * R_StudioCornersKept( job->mesh[j].tricmds ), R_StudioUVsKept, &m )))
+			return false;
+	}
+	job->packed = 1;
+	return true;
+}
+
 // a1: the meshes it draws, from a1 & 255 to a1 >> 8 & 255 (all the vertices are moved for any of them);
 // a part's worker in a1 >> 16, whose job is made a copy of the whole a0 first
 static uint R_StudioJob( uint a0, uint a1 )
@@ -156,8 +322,19 @@ static uint R_StudioJob( uint a0, uint a1 )
 	if( a1 >> 16 )
 		R_StudioJobCopy( studio_jobs[a1 >> 16], job ), job = studio_jobs[a1 >> 16];
 
-	for( int i = 0; i < job->numverts; i++ )
-		Matrix3x4_VectorTransform( job->whole->bonesp[job->vertbone[i]], job->verts[i], job->xyz[i] );
+	if( job->packed )
+		for( int i = 0; i < job->numverts; i++ )
+		{
+			vec3_t v;
+			Matrix3x4_VectorTransform( job->whole->bonesp[job->vertbone[i]], job->verts[i], v );
+			int x = (int)(( v[0] - job->qlo[0] ) * job->qscale[0] + 0.5f ), y = (int)(( v[1] - job->qlo[1] ) * job->qscale[1] + 0.5f );
+			int z = (int)(( v[2] - job->qlo[2] ) * job->qscale[2] + 0.5f );
+			x = x < 0 ? 0 : x > 255 ? 255 : x, y = y < 0 ? 0 : y > 255 ? 255 : y, z = z < 0 ? 0 : z > 255 ? 255 : z;
+			job->qxyz[i] = (uint)x | (uint)y << 8 | (uint)z << 16;
+		}
+	else
+		for( int i = 0; i < job->numverts; i++ )
+			Matrix3x4_VectorTransform( job->whole->bonesp[job->vertbone[i]], job->verts[i], job->xyz[i] );
 	for( int b = 0; job->blightfrom && b < job->numbones; b++ )	// (R_StudioSetupLighting's)
 	{
 		Matrix3x4_VectorIRotate( job->blightfrom[b], job->lightvec, job->blight[b] );
@@ -180,9 +357,23 @@ static uint R_StudioJob( uint a0, uint a1 )
 	{
 		uint n = job->white ? job->white : job->ptexture[job->pskinref[job->mesh[j].skin]].index;
 		if( n <= 0 || n >= MAX_TEXTURES ) n = tr.defaultTexture;
-		hlglShadedPut( job->commands + 16 * job->mesh[j].slot, job->template[job->mesh[j].kind], R_GetTexture( n )->texnum,
-			job->block, job->mesh[j].to, job->first_mesh + job->mesh[j].first, job->mesh[j].corners );
+		if( job->packed )
+			hlglPackedPut( job->commands + 16 * job->mesh[j].slot, job->template[job->mesh[j].kind], R_GetTexture( n )->texnum,
+				job->block, job->mesh[j].to, job->first_mesh + job->mesh[j].first, job->mesh[j].corners, job->mesh[j].uv );
+		else
+			hlglShadedPut( job->commands + 16 * job->mesh[j].slot, job->template[job->mesh[j].kind], R_GetTexture( n )->texnum,
+				job->block, job->mesh[j].to, job->first_mesh + job->mesh[j].first, job->mesh[j].corners );
 	}
+	for( int j = lo; j < hi && job->packed; j++ )
+	{
+		if( job->mesh[j].table )
+			hlglShades( job->mesh[j].table, job->mesh[j].key );
+		if( job->mesh[j].uvframe )
+			R_StudioUVsMake( job->mesh[j].uv, job->mesh[j].tricmds, job->mesh[j].s, job->mesh[j].t, job, true );
+		R_StudioPackedMake( job->mesh[j].to, job->mesh[j].tricmds, job );
+	}
+	if( job->packed )
+		return 0;
 	for( int j = lo; j < hi; j++ )
 	{
 		const short *ptricmds = job->mesh[j].tricmds;
@@ -301,16 +492,47 @@ static qboolean R_StudioCommandsOnWorker( studio_job_t *job, cl_entity_t *e, con
 			}
 	}
 	uint *room;
-	if( !corners || !hlglShadedRoomFor( job->nummesh, corners, passes, &job->commands, &room, &job->block, &job->first_mesh ))
+	if( corners && R_StudioPackedOf( job ))
+	{
+		// each mesh's corners on whole texels (the parts of a job are on cores of their own), and the chrome's places after them
+		uint words = 0, frame_uv = 0;
+		for( int n = 0; n < job->nummesh; n++ )
+		{
+			int j = order[n];
+			job->mesh[j].first = words, words += ( job->mesh[j].corners + 3 ) & ~3;
+		}
+		for( int j = 0; j < job->nummesh; j++ )
+			if( job->mesh[j].uvframe )
+				frame_uv += ( job->mesh[j].corners + 3 ) & ~3;
+		pglPushMatrix();
+		pglTranslatef( job->qlo[0], job->qlo[1], job->qlo[2] );
+		pglScalef( 1.0f / job->qscale[0], 1.0f / job->qscale[1], 1.0f / job->qscale[2] );
+		int made = hlglPackedRoomFor( job->nummesh, words, words + frame_uv, passes, &job->commands, &room, &job->block, &job->first_mesh );
+		pglPopMatrix();
+		if( !made )
+		{
+			job->commands = NULL, job->packed = 0;
+			return false;
+		}
+		for( int j = 0; j < job->nummesh; j++ )
+		{
+			job->mesh[j].to = room + job->mesh[j].first;
+			if( job->mesh[j].uvframe )
+				job->mesh[j].uv = room + words, words += ( job->mesh[j].corners + 3 ) & ~3;
+			r_stats.c_studio_polys += pmesh[j].numtris;
+		}
+	}
+	else if( !corners || !hlglShadedRoomFor( job->nummesh, corners, passes, &job->commands, &room, &job->block, &job->first_mesh ))
 	{
 		job->commands = NULL;
 		return false;
 	}
-	for( int j = 0; j < job->nummesh; j++ )
-	{
-		job->mesh[j].to = room + 4 * job->mesh[j].first;
-		r_stats.c_studio_polys += pmesh[j].numtris;
-	}
+	else
+		for( int j = 0; j < job->nummesh; j++ )
+		{
+			job->mesh[j].to = room + 4 * job->mesh[j].first;
+			r_stats.c_studio_polys += pmesh[j].numtris;
+		}
 	job->ptexture = m_fDoRemap ? gEngfuncs.CL_GetRemapInfoForEntity( e )->ptexture : NULL;	// (R_StudioSetupSkin's)
 	if( !job->ptexture ) job->ptexture = ptexture;
 	job->pskinref = pskinref;
@@ -392,7 +614,7 @@ static qboolean R_StudioPointsOnWorker( void )
 			SE_BlightNow();
 		memcpy( job->blight, g_studio.blightvec, sizeof( vec3_t ) * job->numbones );
 	}
-	job->chromed = 0;
+	job->chromed = 0, job->packed = 0;
 
 	int order[JOB_MESHES];
 	for( int j = 0; j < job->nummesh; j++ )

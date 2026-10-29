@@ -278,6 +278,40 @@ its recording (some 40 characters a frame, three calls each). The replay was 28k
 there (700 instructions a character). A text character asks the font texture's size once in 256
 calls (`CL_DrawCharacter`). The titles' and the HUD's pixels at 12 s are the same as before.
 
+### Where the frame went on 29 October 2026 (work in progress)
+
+On the card, hldemo1's fight (31 to 43 s of the level, `HL_MARK=31,43`, the world's mode, about 7 rounds a
+11.1 ms frame):
+
+| Build | Fight frames (31-43 s) | Frames in the level (fps, rv_compare halflife, HL_RENDER_CALLS=1) | Start to the level drawn (s) |
+|---|---|---|---|
+| 9d77da6 | 111 | 17.8 | 66.9 |
+| roles on the first cores (3100fda) | 141 to 147 | 22.8 | 74.7 (one round: to check, may be noise) |
+| roles, 64 workers | 140 | | |
+| roles split among big and small cores | 119 | | |
+
+One round each only for the last two columns: the three-round comparison against 9d77da6 is not made yet.
+
+- The sixteen roles (the drawing's worker, the world's, light maps, entities, the server, their helpers) on
+  cores 1 to 16, which have the large write caches (`mcw_prefer` in `programs/mc/mcw.c`; `HL_ROLES=last` is
+  the old placing): the drawing's job went from 750 clock units a frame to 300.
+- `HL_RENDER_CALLS=1` prints where core 0 waited a frame and which studio rings the swap waited for longest.
+  With the roles moved, the swap still waited about 160 units (about 32 ms) a frame for the studio rings
+  (`R_StudioJob`): the bound is the models' corners, 16 bytes a corner, written by small-cache cores.
+- Packed corners (`HL_STUDIO_PACKED=1`, off by default, WIP): a word a corner (`GPU_PACKED`: bytes of the
+  model's box, the matrix scaled and moved by `qlo`, `qscale`), the texture places kept for the level
+  (`R_StudioKept`). The swap's ring wait fell to about 15 units a frame, but the picture is wrong (huge
+  triangles, the same on WARP). Checked so far: the matrix block the draws take is right (the modelview,
+  translated and scaled), the mode is GL_MODELVIEW, the box and the scale are plausible. Not yet checked:
+  the words the GPU reads (dump a job's commands and its first words and decode them), `gpuAddress` of the
+  kept places (they are not in GPU memory: `hlglJobMemory`), the tags (`job->tag` is made in the loop the
+  packed path skips?).
+- Levers not yet tried: the client's prediction (about 20 thousand instructions a frame on core 0), the 2D
+  recording.
+
+Not checked on these commits: `RVC_RACES`, the fight and the changelevels with both drawings,
+`test_all.py` halflife plain and `--races`; `linux/prebuilt/nommu/root/usr/bin/halflife.bin` is not rebuilt.
+
 ## The controls
 
 On a desktop the left button held drags the view round, a quarter of a degree a pixel, as
