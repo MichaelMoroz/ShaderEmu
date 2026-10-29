@@ -65,8 +65,21 @@ HLINC="-I$H/dlls -I$H/common -I$H/engine -I$H/pm_shared -I$H/game_shared -I$H/pu
 # A variable a section (-fdata-sections), each starting on 16 bytes: the server's and the drawing's workers store
 # beside core 0, and two cores must not store to one 16-byte texel in a pass (RVC_RACES)
 ALIGN16="--set-section-alignment .data*=16 --set-section-alignment .sdata*=16 --set-section-alignment .bss*=16 --set-section-alignment .sbss*=16"
+# What a played level ran, for the compiler (linux/userland/pgo/gcov.c; docs/games/tdawn.md, "What the compiler is
+# told"): HALFLIFE_PROFILE=count builds the program that counts, in a folder of its own; otherwise halflife.profile's.
+PGO=""; COUNTS=""
+if [ "${HALFLIFE_PROFILE:-}" = count ]; then
+    BUILD=$WORK/src/halflife-count-build
+    mkdir -p "$WORK/src/nogcov" && riscv32-linux-ar rc "$WORK/src/nogcov/libgcov.a"
+    PGO="-fprofile-generate -fprofile-update=single"; COUNTS="-L$WORK/src/nogcov gcov.o"
+elif [ -f "$HERE/halflife.profile" ] && [ "${HALFLIFE_PROFILE:-}" != off ]; then
+    python3 "$REPO/linux/tdawn/profile.py" put "$HERE/halflife.profile" "$BUILD"
+    PGO="-fprofile-use -fprofile-partial-training -fprofile-correction -Wno-missing-profile -Wno-coverage-mismatch"
+fi
+C_ALL="$C_ALL $PGO"
 export HERE BUILD ALIGN16
 mkdir -p "$BUILD" && cd "$BUILD"
+[ "${HALFLIFE_PROFILE:-}" = count ] && rv32-cc -O2 -fno-pie -Wall -c "$REPO/linux/userland/pgo/gcov.c" -o gcov.o
 
 # one object a source (its path made a name), made again when the source, a patch or this script is newer
 compile() {   # folder, compiler and flags (one word, quoted), then sources
@@ -74,7 +87,7 @@ compile() {   # folder, compiler and flags (one word, quoted), then sources
     mkdir -p "$BUILD/$dir"
     printf '%s\n' "$@" | CC="$cc" DIR="$dir" xargs -P "$(nproc)" -I{} sh -c '
         o="$BUILD/$DIR/$(echo {} | sed "s|^/||; s|/|_|g; s|\.[a-z]*$||").o"
-        [ "$o" -nt {} ] && [ "$o" -nt "$HERE/xash3d.patch" ] && [ "$o" -nt "$HERE/hlsdk.patch" ] && [ "$o" -nt "$HERE/build.sh" ] && [ "$o" -nt "$HERE/gl_kept.c" ] && [ "$o" -nt "$HERE/gl_studio_job.c" ] && [ "$o" -nt "$HERE/se_server.h" ] ||
+        [ "$o" -nt {} ] && [ "$o" -nt "$HERE/xash3d.patch" ] && [ "$o" -nt "$HERE/hlsdk.patch" ] && [ "$o" -nt "$HERE/build.sh" ] && [ "$o" -nt "$HERE/gl_kept.c" ] && [ "$o" -nt "$HERE/gl_studio_job.c" ] && [ "$o" -nt "$HERE/se_server.h" ] && [ "$o" -nt "$HERE/halflife.profile" ] ||
             { $CC -c {} -o "$o" && riscv32-linux-objcopy $ALIGN16 "$o" || { echo "failed: {}"; exit 255; }; }'
 }
 # A library as Xash's static build makes one: its objects as one, every name inside it local but
@@ -181,7 +194,7 @@ MEDIA=$WORK/src/libmedia
 rv32-cc -O2 -fno-pie -fno-common -fdata-sections -w -I"$PROGRAMS/mc" -c "$PROGRAMS/mc/mcw.c" -o mcw.o
 rv32-cc -O2 -fno-pie -fno-common -fdata-sections -w -I"$PROGRAMS/mc" -c "$PROGRAMS/mc/mcwx.c" -o mcwx.o
 for o in gpu.o gl.o mcw.o mcwx.o; do riscv32-linux-objcopy $ALIGN16 "$o"; done
-rv32-c++ -O2 $FPU "$BUILD"/engine/*.o filesystem_stdio.o ref_gl.o client.o server.o menu.o gpu.o gl.o cxxrt.o rtti.o fastmath.o \
+rv32-c++ -O2 $FPU $PGO $COUNTS "$BUILD"/engine/*.o filesystem_stdio.o ref_gl.o client.o server.o menu.o gpu.o gl.o cxxrt.o rtti.o fastmath.o \
     "$MEDIA/libmedia.a" mcw.o mcwx.o "$MW/src/lib/libnano-X.a" -lm -o halflife \
     -Wl,--wrap=malloc,--wrap=free,--wrap=calloc,--wrap=realloc,--wrap=posix_memalign,--wrap=aligned_alloc,--wrap=memalign
 mkdir -p "$OUT/usr/bin"

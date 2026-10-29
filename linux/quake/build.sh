@@ -63,10 +63,23 @@ OPT="-O3 -fno-tree-vectorize -fsched-pressure -funroll-loops --param max-inline-
 CFLAGS="$OPT $FPU -fno-pie -fno-common -fdata-sections -fsigned-char -fno-strict-aliasing -w -DGLQUAKE -DSHADEREMU -include $HERE/fmath.h $GLINC -I$Q/WinQuake -I$PROGRAMS/mc ${QUAKE_DEFINES:-}"
 ALIGN16="--set-section-alignment .data*=16 --set-section-alignment .sdata*=16 --set-section-alignment .bss*=16 --set-section-alignment .sbss*=16"
 export CFLAGS Q HERE BUILD ALIGN16
+# What played levels ran, for the compiler (linux/userland/pgo/gcov.c; docs/games/tdawn.md, "What the compiler is told"):
+# QUAKE_PROFILE=count builds the program that counts, in a folder of its own; otherwise quake.profile's counts.
+PGO=""; COUNTS=""
+if [ "${QUAKE_PROFILE:-}" = count ]; then
+    BUILD=$WORK/src/quake-count-build
+    mkdir -p "$WORK/src/nogcov" && riscv32-linux-ar rc "$WORK/src/nogcov/libgcov.a"
+    PGO="-fprofile-generate -fprofile-update=single"; COUNTS="-L$WORK/src/nogcov"
+elif [ -f "$HERE/quake.profile" ] && [ "${QUAKE_PROFILE:-}" != off ]; then
+    python3 "$REPO/linux/tdawn/profile.py" put "$HERE/quake.profile" "$BUILD"
+    PGO="-fprofile-use -fprofile-partial-training -fprofile-correction -Wno-missing-profile -Wno-coverage-mismatch"
+fi
+OPT="$OPT $PGO"; CFLAGS="$CFLAGS $PGO"
 mkdir -p "$BUILD" && cd "$BUILD"
+[ "${QUAKE_PROFILE:-}" = count ] && rv32-cc -O2 -fno-pie -Wall -c "$REPO/linux/userland/pgo/gcov.c" -o gcov.o
 rm -f net_none.o   # (of a build before the network: the link takes every object here)
 { for f in $SOURCES; do echo "$Q/WinQuake/$f.c"; done; for f in $OURS; do echo "$HERE/$f.c"; done; } |
-    xargs -P "$(nproc)" -I{} sh -c 'o=$(basename {} .c).o; [ "$o" -nt {} ] && [ "$o" -nt "$HERE/quake.patch" ] && [ "$o" -nt "$HERE/include/GL/gl.h" ] && [ "$o" -nt "$HERE/build.sh" ] && [ "$o" -nt "$HERE/fmath.h" ] || { rv32-cc $CFLAGS -c {} -o "$o" && riscv32-linux-objcopy $ALIGN16 "$o"; }'
+    xargs -P "$(nproc)" -I{} sh -c 'o=$(basename {} .c).o; [ "$o" -nt {} ] && [ "$o" -nt "$HERE/quake.patch" ] && [ "$o" -nt "$HERE/include/GL/gl.h" ] && [ "$o" -nt "$HERE/build.sh" ] && [ "$o" -nt "$HERE/fmath.h" ] && [ "$o" -nt "$HERE/quake.profile" ] || { rv32-cc $CFLAGS -c {} -o "$o" && riscv32-linux-objcopy $ALIGN16 "$o"; }'
 rv32-cc $OPT $FPU -fno-pie -fno-common -fdata-sections -Wall -c $GLINC "$HERE/qgl.c" -o qgl.o
 # gles.c with what a thing drawn again asks of it (gpu_shaderemu.c includes it)
 rv32-cc $OPT -fno-pie -fno-common -fdata-sections -Wall -c $GLES $GLINC -I"$PROGRAMS/linux" "$HERE/gpu_shaderemu.c" -o gles.o
@@ -79,7 +92,7 @@ rv32-cc -O2 -fno-pie -fno-common -fdata-sections -msmall-data-limit=0 -c zz_pad.
 sed 's/se_pad_/se_pad_s/g' zz_pad.c > zz_pads.c
 rv32-cc -O2 -fno-pie -fno-common -fdata-sections -msmall-data-limit=64 -c zz_pads.c -o zz_pad_small.o
 for o in qgl.o gles.o mcw.o mcwx.o zz_pad_large.o zz_pad_small.o; do riscv32-linux-objcopy $ALIGN16 "$o"; done
-rv32-cc -O2 $FPU -w $(ls *.o | grep -v '^zz_') zz_pad_large.o zz_pad_small.o "$MW/src/lib/libnano-X.a" -lm -o quake
+rv32-cc -O2 $FPU -w $PGO $COUNTS $(ls *.o | grep -v '^zz_') zz_pad_large.o zz_pad_small.o "$MW/src/lib/libnano-X.a" -lm -o quake
 mkdir -p "$OUT/usr/bin" "$OUT/usr/share"
 riscv32-linux-strip -o "$OUT/usr/bin/quake.bin" quake
 riscv32-linux-nm -n quake > "${QUAKE_NM:-$WORK/src/quake.nm}"

@@ -19,9 +19,23 @@ mkdir -p "$BUILD" "$OUT/usr/bin" "$OUT/usr/share"
 # No position-independent code: every use of a global would go through a table.
 # -O3 with these two is 3% fewer instructions a tic and 11% fewer a frame than -O2 (docs/games/doom.md).
 export OPT="-O3 -fno-tree-vectorize -fsched-pressure -funroll-loops -flto -fno-pie"
+# What played demos ran, for the compiler (linux/userland/pgo/gcov.c; docs/games/tdawn.md, "What the compiler is told"):
+# DOOM_PROFILE=count builds the program that counts, in a folder of its own; otherwise doom.profile's counts.
+PGO=""; COUNTS=""; SUM=""
+if [ "${DOOM_PROFILE:-}" = count ]; then
+    BUILD=$WORK/src/doom-count-build; mkdir -p "$BUILD"
+    mkdir -p "$WORK/src/nogcov" && riscv32-linux-ar rc "$WORK/src/nogcov/libgcov.a"
+    PGO="-fprofile-generate -fprofile-update=single"; COUNTS="-L$WORK/src/nogcov"
+elif [ -f "$HERE/doom.profile" ] && [ "${DOOM_PROFILE:-}" != off ]; then
+    python3 "$REPO/linux/tdawn/profile.py" put "$HERE/doom.profile" "$BUILD"
+    PGO="-fprofile-use -fprofile-partial-training -fprofile-correction -Wno-missing-profile -Wno-coverage-mismatch"
+    SUM=$(md5sum < "$HERE/doom.profile")
+fi
+export OPT="$OPT $PGO"
 cd "$BUILD"
-# objects made with other flags are made again (the loop below only looks at dates)
-[ "$(cat flags 2>/dev/null)" = "$OPT" ] || { rm -f *.o; echo "$OPT" > flags; }
+# objects made with other flags (or other counts) are made again (the loop below only looks at dates)
+[ "$(cat flags 2>/dev/null)" = "$OPT $SUM" ] || { rm -f *.o; echo "$OPT $SUM" > flags; }
+[ "${DOOM_PROFILE:-}" = count ] && rv32-cc -O2 -fno-pie -Wall -c "$REPO/linux/userland/pgo/gcov.c" -o zz_gcov.o
 # Doom assumes char is signed (its tables end with -1); on RISC-V it is not unless asked
 # (i_sound.c is the port's sound, which mixed for a sound server: doom_sound.c takes its place)
 SOURCES=$(cd "$DOOM" && ls *.c | grep -v _sdl | grep -vx i_sound.c)
@@ -193,7 +207,7 @@ rm zz_pad.c zz_pads.c
 for o in gles.o doom_gl.o mcw.o mcwx.o zz_pad_large.o zz_pad_small.o; do riscv32-linux-objcopy $ALIGN16 "$o"; done
 rv32-cc $OPT -Wall -c $GLINC -I"$MW/src/include" -I"$REPO/programs/mc" "$HERE/doom_video.c" -o doom_video.o
 rm -f doom_fps.o
-rv32-cc $OPT -w $(ls *.o | grep -vx -e 'zz_pad_.*' -e doom_gl.o -e gles.o -e mcw.o -e mcwx.o) doom_gl.o gles.o mcw.o mcwx.o zz_pad_large.o zz_pad_small.o "$MW/src/lib/libnano-X.a" -lm -o doom
+rv32-cc $OPT -w $(ls *.o | grep -vx -e 'zz_pad_.*' -e doom_gl.o -e gles.o -e mcw.o -e mcwx.o -e zz_gcov.o) $COUNTS $( [ -f zz_gcov.o ] && echo zz_gcov.o ) doom_gl.o gles.o mcw.o mcwx.o zz_pad_large.o zz_pad_small.o "$MW/src/lib/libnano-X.a" -lm -o doom
 riscv32-linux-strip -o "$OUT/usr/bin/doom.bin" doom
 # the image builder adds files to directories the image has, so the data sits in /usr/share
 # its settings and saved games go to the folder the host keeps (docs/system/persist.md)
