@@ -231,12 +231,12 @@ void SE_ServerSettle( void )
 	while( !mcw_done( worker ))
 	{
 		serve();
-		mcw_rest_for( &worker, 1 );
+		{ extern unsigned se_wait_sum[8]; uint32_t t0 = sv_now( ); mcw_rest_for( &worker, 1 ); se_wait_sum[5] += sv_now( ) - t0; }
 		se_settle_passes++;
 	}
 	for( int i = 0; i < se_pack_helpers; i++ )
 		while( !mcw_done( helper[i] ))
-			mcw_rest_for( &helper[i], 1 );
+		{ extern unsigned se_wait_sum[8]; uint32_t t0 = sv_now( ); mcw_rest_for( &helper[i], 1 ); se_wait_sum[6] += sv_now( ) - t0; }
 	se_pack_helpers = 0;
 	out = 0;
 	for( uint at = 0; at < work.used; at += Q_strlen( work.kept + at ) + 1 )

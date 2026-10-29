@@ -722,6 +722,23 @@ void hlglKeptPut(void* room, uint32_t block, int name, const void* vertices, con
 // ---- worker cores (gl_studio_job.c) ----
 
 static int workers, next_worker, posted[65], swaps;
+// Core 0's time waiting, by where, in the clock's units (HL_RENDER_CALLS=1 prints it with the render timeline). DEBUG
+unsigned se_wait_sum[8], se_ring_wait[66], se_ring_fn[66];
+// The rings core 0 waited for at the swap most, since asked last: "k:time:fn" for the five longest. DEBUG
+void hlglRingWaitsSay(char* out, int size) {
+    int n = 0;
+    out[0] = 0;
+    for (int top = 0; top < 5; top++) {
+        int best = 0;
+        for (int k = 1; k < 66; k++) if (se_ring_wait[k] > se_ring_wait[best]) best = k;
+        if (!best || !se_ring_wait[best]) break;
+        n += snprintf(out + n, size - n, " %d:%u:%x", best, se_ring_wait[best], se_ring_fn[best]);
+        se_ring_wait[best] = 0;
+    }
+    memset(se_ring_wait, 0, sizeof se_ring_wait);
+}
+static inline uint32_t se_wait_now(void) { uint32_t v; __asm__ volatile("rdtime %0" : "=r"(v)); return v; }
+#define SE_WAITING(i, stmt) do { uint32_t t0_ = se_wait_now(); stmt; se_wait_sum[i] += se_wait_now() - t0_; } while (0)
 static unsigned dbg_waited[65], dbg_swapwait[65], dbg_fn[65];	// DEBUG
 unsigned se_settle_passes;
 static uint32_t shade_table, shade_key, shade_swap;
@@ -775,7 +792,7 @@ static int ring_poll(int k) {
     if (k <= 0 || !rp.posted[k]) return 1;
     if (ring_done[k].done == ring_job[k].seq) { rp.posted[k] = 0; return 1; }
     if (SE_RenderWho()) { rw.waits[k]++; mc_end_pass(); }
-    else { if (posted[k] == 3) mcw_done(k); mcw_rest_for(&k, 1); }
+    else { if (posted[k] == 3) mcw_done(k); SE_WAITING(0, mcw_rest_for(&k, 1)); }
     return 0;
 }
 // The passes the drawing's worker waited for ring jobs since asked last, and for whose most. DEBUG
@@ -839,7 +856,7 @@ int hlglWorker(void) {
     if (rings.on) {
         if (ring_closed()) {
             int k = studio_workers() - core0_next++ % CORE0_WORKERS;
-            if (posted[k]) dbg_waited[k] += mcw_wait(k), posted[k] = 0;
+            if (posted[k]) { SE_WAITING(1, dbg_waited[k] += mcw_wait(k)); posted[k] = 0; }
             return k;
         }
         int n = studio_workers() - CORE0_WORKERS, k = rp.next % n + 1;
@@ -853,7 +870,7 @@ int hlglWorker(void) {
     }
     int k = next_worker % studio_workers() + 1;
     next_worker++;
-    if (posted[k]) dbg_waited[k] += mcw_wait(k), posted[k] = 0;
+    if (posted[k]) { SE_WAITING(1, dbg_waited[k] += mcw_wait(k)); posted[k] = 0; }
     return k;
 }
 // fn(a0, a1) on worker k, done before the frame is shown; here and now for k 0.
@@ -879,7 +896,7 @@ int hlglPoll(int k) {
     if (rings.on && ring_worker(k)) return ring_poll(k);
     if (k <= 0 || !posted[k]) return 1;
     if (mcw_done(k)) { posted[k] = 0; return 1; }
-    mcw_rest_for(&k, 1);
+    SE_WAITING(2, mcw_rest_for(&k, 1));
     return 0;
 }
 unsigned hlglWait(int k) {
@@ -888,13 +905,15 @@ unsigned hlglWait(int k) {
         while (!ring_poll(k)) w++;
         return w;
     }
-    if (k > 0 && posted[k]) w = mcw_wait(k), dbg_waited[k] += w, posted[k] = 0;
+    if (k > 0 && posted[k]) { SE_WAITING(2, w = mcw_wait(k)); dbg_waited[k] += w, posted[k] = 0; }
     return w;
 }
 static void jobs_wait(void) {
-    for (int k = 1; rings.on && !ring_closed() && k <= workers; k++) if (rp.posted[k] == 1) while (!ring_poll(k)) ;
+    uint32_t t0 = se_wait_now();
+    for (int k = 1; rings.on && !ring_closed() && k <= workers; k++) if (rp.posted[k] == 1) { uint32_t t1 = se_wait_now(); while (!ring_poll(k)) ; se_ring_wait[k] += se_wait_now() - t1, se_ring_fn[k] = ring_job[k].fn; }
     for (int k = 1; k <= workers; k++)
         if (posted[k] == 1) { unsigned w = mcw_wait(k); dbg_swapwait[k] += w, posted[k] = 0; if (w > 1 && (swaps & 255) == 7) fprintf(stderr, "swapwait %d %u fn %x\n", k, w, dbg_fn[k]); }
+    se_wait_sum[3] += se_wait_now() - t0;
 }
 void hlglJobsWait(void) { jobs_wait(); }
 // Every job out done, the late ones too.

@@ -185,7 +185,7 @@ void SE_RenderSettle( void )
 		hlglRingsServe();
 		if( piped && cls.state == ca_active )
 			S_ExtraUpdate();	// (what the frame's start and 2D mix after it is then short)
-		mcw_rest_for( &worker, 1 );
+		{ extern unsigned se_wait_sum[8]; uint32_t t0 = rd_time( ); mcw_rest_for( &worker, 1 ); se_wait_sum[4] += rd_time( ) - t0; }
 	}
 	out = 0;
 	if( se_render_light_level[0] >= 0 )
@@ -442,6 +442,12 @@ void SE_RenderWindow( int open )
 		if( tl.n )
 			fprintf( stderr, "render timeline (in the clock's units after the give): start %u end %u; settle %u to %u (waiting for the job %u, after its end %u; the longest job %u, its ring waits %u most for %d; %u asks, the last of %x; %u faults, %u calls served; %u instructions; frames of %u)\n",
 				tl.sum[0] / tl.n, tl.sum[1] / tl.n, tl.sum[2] / tl.n, tl.sum[3] / tl.n, tl.sum[4] / tl.n, tl.sum[5] / tl.n, tl.longest, tl.lw, tl.lm, ask.seq - tl.asks, (unsigned)ask.fn, mcw_faults - tl.faults, mcw_calls - tl.calls, tl.sum[6] / tl.n, tl.sum[7] / tl.n ), tl.longest = 0, tl.asks = ask.seq, tl.faults = mcw_faults, tl.calls = mcw_calls;
+		{ extern unsigned se_wait_sum[8]; uint n = tl.n ? tl.n : 1;
+		  fprintf( stderr, "core 0 waits a frame: rings %u, a worker %u, a job %u, the swap's jobs %u, the drawing %u, the server %u, its helpers %u\n",
+			se_wait_sum[0] / n, se_wait_sum[1] / n, se_wait_sum[2] / n, se_wait_sum[3] / n, se_wait_sum[4] / n, se_wait_sum[5] / n, se_wait_sum[6] / n );
+		  memset( se_wait_sum, 0, sizeof( se_wait_sum ));
+		  void hlglRingWaitsSay( char *out, int size ); char says[256]; hlglRingWaitsSay( says, sizeof( says ));
+		  fprintf( stderr, "the swap waited for rings (worker:time in 32 frames:job):%s\n", says ); }
 		memset( tl.sum, 0, sizeof( tl.sum )), tl.n = 0;
 	}
 }
