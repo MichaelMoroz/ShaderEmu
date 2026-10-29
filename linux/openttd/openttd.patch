@@ -2564,7 +2564,7 @@ index f26695a..70d7e8d 100644
 +	/* A sprite of normal zoom alone, and no closer zoom shown: the levels out are made from it, and the
 +	 * closest level is only a size, with no pixels, which no encoder reads (making it was most of a start). */
 +	Blitter *blitter = BlitterFactory::GetCurrentBlitter();
-+	bool ours = encoder == static_cast<SpriteEncoder *>(blitter) && (blitter->GetName() == "8bpp-optimized" || blitter->GetName() == "null");
++	bool ours = encoder == static_cast<SpriteEncoder *>(blitter) && (blitter->GetName() == "8bpp-optimized" || blitter->GetName() == "8bpp-gpu" || blitter->GetName() == "null");
 +	/* (a font's glyph is encoded from its font zoom level alone) */
 +	if (ours && sprite_type == SpriteType::Font && sprite_avail.Test(_font_zoom)) return true;
 +	if (ours && sprite_type != SpriteType::Font && sprite_avail == ZoomLevels{ZoomLevel::Normal} && _settings_client.gui.zoom_min >= ZoomLevel::Normal &&
@@ -3049,7 +3049,7 @@ index a7ddcda..9648911 100644
 +
 +/**
 + * Whether a sprite's levels closer than normal zoom are shown nowhere: no viewport may zoom in, the windows are
-+ * drawn at normal zoom and the blitter is the 8bpp one, whose encoder reads no level closer than the viewports'
++ * drawn at normal zoom and the blitter is an 8bpp one (the CPU's or the GPU's), whose encoder reads no level closer than the viewports'
 + * (spritecache.cpp's ResizeSprites, the case of a sprite of normal zoom alone).
 + */
 +static bool SeCloseLevelsUnseen(SpriteType sprite_type, bool load_32bpp)
@@ -3059,7 +3059,7 @@ index a7ddcda..9648911 100644
 +	if (sprite_type != SpriteType::Normal || load_32bpp || whole) return false;
 +	if (_settings_client.gui.zoom_min < ZoomLevel::Normal || _settings_client.gui.sprite_zoom_min > ZoomLevel::Normal || _gui_zoom < ZoomLevel::Normal) return false;
 +	Blitter *blitter = BlitterFactory::GetCurrentBlitter();
-+	return blitter != nullptr && (blitter->GetName() == "8bpp-optimized" || blitter->GetName() == "null");
++	return blitter != nullptr && (blitter->GetName() == "8bpp-optimized" || blitter->GetName() == "8bpp-gpu" || blitter->GetName() == "null");
 +}
 +#endif
 +
