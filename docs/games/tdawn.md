@@ -843,6 +843,29 @@ The counts are of a tree's functions as they were: a function changed since is c
 without them (no warning: `-Wno-coverage-mismatch`), so a profile ages gracefully and is
 worth making again after a large change. The state sums are the same with and without.
 
+Quake and Quake III are compiled the same way (29 October 2026), with their own counts: `linux/quake/quake.profile`,
+`linux/quake3/quake3.profile`. Their counters are `linux/userland/pgo/gcov.c`'s
+(host.c's functions, the values kept in a pool of its own, not malloc'd, since worker cores run counted code too), and
+they are written at the program's end or at `kill -USR2`, so a game that never ends by itself is counted part way:
+
+- `QUAKE3_PROFILE=count linux/quake3/build.sh` (`QUAKE_PROFILE`, and `DOOM_PROFILE`, `HALFLIFE_PROFILE`
+  for the two below that keep none) builds the counting program in a folder of its own
+  (`$WORK/src/*-count-build`); `=off` builds without the counts kept. The counting build has the same drivers and
+  hidden globals as the one that uses the counts.
+- Counted on `rvc_cpu`, each under a minute: Quake III `QUAKE3_STATS_FRAMES=100 quake3 +set com_maxfps 0 +set fixedtime
+  33 +devmap q3dm17 +addbot sarge 3 & sleep 115; kill -USR2 $!` (the level's first 1,700 frames); Quake `quake
+  +timedemo demo1` (100 s) and `QUAKE_TRACK=5 quake +map e1m1` (90 s), each sent USR2 at the end. `profile.py make`
+  makes the file from the runs' consoles.
+- Quake on the card, two rounds each against the same tree without counts: its timedemo 73.0 to 75.4 fps, the server's
+  ticks in e1m1 58.0 to 68.0 a second, the start to the level 16.4 to 15.6 s, but its first frame 0.44 to 0.50 s (the
+  start's code is run once in a count, and is compiled as rarely run: 1.25% more instructions to "Quake Initialized").
+  Quake III's start to the level 27.8 to 25.8 s.
+- Not kept: Doom (`doom -1 -timedemo demo1` and `demo2`, 110 s each): on `rvc_cpu` its timedemo 148.1 to 139.3 million
+  instructions on the first core, but on the card 91.9 to 91.1 tics a second, at 11.2 rounds a frame for 10.5 (two
+  rounds each). Half-Life (hldemo1 to second 43 of the level, in sections): 2% fewer instructions from second 31 to 43
+  and the same frames, 162 to 163, for 1.7 MB of counts. Tiberian Dawn's and Red Alert's counts made again on this tree
+  gave 0.1% and 0.4% fewer instructions on the first core: the old ones are kept.
+
 ## Frames made ready
 
 A shape the scene has not shown before has to be unpacked (the game's `Build_Frame`: 5 to 18

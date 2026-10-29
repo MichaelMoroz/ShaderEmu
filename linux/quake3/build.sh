@@ -73,6 +73,18 @@ FPU="-fno-math-errno -fsingle-precision-constant"
 # (docs/plans/riscv-backport-plan.md, 2b). On rvc_cpu Quake's track 10 to 1200 2.1% fewer instructions on the first core,
 # Quake III's 600 frames 1.9% fewer on all cores and 2.4% less guest time; Doom and the NES gained nothing.
 OPT="-O3 -fno-tree-vectorize -fsched-pressure -funroll-loops --param max-inline-insns-auto=60 --param max-inline-insns-single=400 --param inline-unit-growth=80"
+# What a played level ran, for the compiler (linux/userland/pgo/gcov.c; docs/games/tdawn.md, "What the compiler is
+# told"): QUAKE3_PROFILE=count builds the program that counts, in a folder of its own; otherwise quake3.profile's counts.
+PGO=""; COUNTS=""
+if [ "${QUAKE3_PROFILE:-}" = count ]; then
+    BUILD=$WORK/src/quake3-count-build
+    mkdir -p "$WORK/src/nogcov" && riscv32-linux-ar rc "$WORK/src/nogcov/libgcov.a"
+    PGO="-fprofile-generate -fprofile-update=single"; COUNTS="-L$WORK/src/nogcov gcov.o"
+elif [ -f "$HERE/quake3.profile" ] && [ "${QUAKE3_PROFILE:-}" != off ]; then
+    python3 "$REPO/linux/tdawn/profile.py" put "$HERE/quake3.profile" "$BUILD"
+    PGO="-fprofile-use -fprofile-partial-training -fprofile-correction -Wno-missing-profile -Wno-coverage-mismatch"
+fi
+OPT="$OPT $PGO"
 DEFS="-DSTANDALONE -DBOTLIB -DNO_VM_COMPILED -DNDEBUG -DSHADEREMU -DPRODUCT_VERSION=\"1.36-shaderemu\" ${QUAKE3_DEFINES:-}"
 CFLAGS="$OPT $FPU -fno-pie -fno-common -fdata-sections -fsigned-char -fno-strict-aliasing -w $DEFS -include $HERE/fmath.h $GLINC -I$C/thirdparty/zlib-1.3.1 -I$PROGRAMS/mc -I$REPO/linux/libmedia -I$HERE -I$C"
 ALIGN16="--set-section-alignment .data*=16 --set-section-alignment .sdata*=16 --set-section-alignment .bss*=16 --set-section-alignment .sbss*=16"
@@ -82,7 +94,7 @@ mkdir -p "$BUILD/engine" "$BUILD/game" "$BUILD/cgame" "$BUILD/ui" && cd "$BUILD"
 # one object a source, made again when the source, the patch, this script or a header of ours is newer
 compile() {   # folder, then sources (paths without .c)
     local dir=$1; shift
-    printf '%s\n' "$@" | xargs -P "$(nproc)" -I{} sh -c 'o='"$dir"'/$(basename {}).o; [ "$o" -nt {}.c ] && [ "$o" -nt "$HERE/quake3.patch" ] && [ "$o" -nt "$HERE/build.sh" ] && [ "$o" -nt "$HERE/fmath.h" ] && [ "$o" -nt "$HERE/se_q3.h" ] && [ "$o" -nt "$HERE/se_data.h" ] && [ "$o" -nt "$HERE/gpu_shaderemu.h" ] || { rv32-cc $CFLAGS -c {}.c -o "$o" && riscv32-linux-objcopy $ALIGN16 "$o"; }'
+    printf '%s\n' "$@" | xargs -P "$(nproc)" -I{} sh -c 'o='"$dir"'/$(basename {}).o; [ "$o" -nt {}.c ] && [ "$o" -nt "$HERE/quake3.patch" ] && [ "$o" -nt "$HERE/build.sh" ] && [ "$o" -nt "$HERE/fmath.h" ] && [ "$o" -nt "$HERE/se_q3.h" ] && [ "$o" -nt "$HERE/se_data.h" ] && [ "$o" -nt "$HERE/gpu_shaderemu.h" ] && [ "$o" -nt "$HERE/quake3.profile" ] || { rv32-cc $CFLAGS -c {}.c -o "$o" && riscv32-linux-objcopy $ALIGN16 "$o"; }'
 }
 compile engine $(for f in $ENGINE; do echo "$C/$f"; done) $(for f in $ZLIB; do echo "$C/thirdparty/zlib-1.3.1/$f"; done) \
     $(for f in $OURS; do echo "$HERE/$f"; done) "$REPO/linux/quake/fmath_shaderemu"
@@ -114,8 +126,9 @@ printf 'char se_pad_d[16] __attribute__((aligned(16))) = {1}; char se_pad_b[16] 
 rv32-cc -O2 -fno-pie -fno-common -fdata-sections -msmall-data-limit=0 -c zz_pad.c -o zz_pad_large.o
 sed 's/se_pad_/se_pad_s/g' zz_pad.c > zz_pads.c
 rv32-cc -O2 -fno-pie -fno-common -fdata-sections -msmall-data-limit=64 -c zz_pads.c -o zz_pad_small.o
+[ "${QUAKE3_PROFILE:-}" = count ] && rv32-cc -O2 -fno-pie -Wall -c "$REPO/linux/userland/pgo/gcov.c" -o gcov.o
 for o in gpu.o mcw.o mcwx.o zz_pad_large.o zz_pad_small.o; do riscv32-linux-objcopy $ALIGN16 "$o"; done
-rv32-cc -O2 $FPU -w ${QUAKE3_LINK:-} engine/*.o game.o cgame.o ui.o gpu.o mcw.o mcwx.o zz_pad_large.o zz_pad_small.o "$MW/src/lib/libnano-X.a" "$MEDIA/libmedia.a" -lm -o quake3
+rv32-cc -O2 $FPU -w ${QUAKE3_LINK:-} $PGO $COUNTS engine/*.o game.o cgame.o ui.o gpu.o mcw.o mcwx.o zz_pad_large.o zz_pad_small.o "$MW/src/lib/libnano-X.a" "$MEDIA/libmedia.a" -lm -o quake3
 mkdir -p "$OUT/usr/bin" "$OUT/usr/share"
 riscv32-linux-strip -o "$OUT/usr/bin/quake3.bin" quake3
 riscv32-linux-nm -n quake3 > "${QUAKE3_NM:-$WORK/src/quake3.nm}"
