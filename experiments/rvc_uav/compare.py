@@ -6,9 +6,9 @@ never to tools/rv_compare/results.jsonl.
     python experiments/rvc_uav/compare.py run --machines base,uav8 --parts doom --rounds 1 [--sections N]
     python experiments/rvc_uav/compare.py report base uav8 uav16
 
-Machines: base (experiments/rvc_opt, the harness without --uav); uavN (experiments/rvc_uav, --uav, --ticks N*1024);
-a suffix g: RVC_UAV_GLC=1 (the RAM's UAV globallycoherent); f: UAV_MBOX_FENCE."""
-import os, sys
+Machines: base[K] (experiments/rvc_opt, the harness without --uav, --ticks K*1024); uav[K][g][f][pN] (experiments/rvc_uav,
+--uav, --ticks K*1024; g: RVC_UAV_GLC=1, the RAM's UAV globallycoherent; f: UAV_MBOX_FENCE; pN: UAV_PITCH=N)."""
+import os, re, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 SE = os.path.dirname(os.path.dirname(HERE))
 DATA = os.path.join(SE, 'build', 'uav', 'cmp')
@@ -34,13 +34,16 @@ SHELL = os.path.join(SE, 'build', 'uav', 'shell.snap')
 def machine(name):
     args, env = [], {}
     if name.startswith('uav'):
-        spec = name[3:]
-        k = ''.join(c for c in spec if c.isdigit())
-        args = ['--rvc', 'experiments/rvc_uav', '--uav'] + (['--ticks', str(int(k) * 1024)] if k else [])
-        if 'g' in spec:
+        m = re.fullmatch(r'uav(\d*)(g?)(f?)(?:p(\d+))?', name)
+        if not m:
+            raise SystemExit(f'{name}: uav[K][g][f][pN]')
+        args = ['--rvc', 'experiments/rvc_uav', '--uav'] + (['--ticks', str(int(m[1]) * 1024)] if m[1] else [])
+        if m[2]:
             env['RVC_UAV_GLC'] = '1'
-        if 'f' in spec:
+        if m[3]:
             args += ['--define', 'UAV_MBOX_FENCE']
+        if m[4]:
+            args += ['--define', 'UAV_PITCH=' + m[4]]
     elif name.startswith('base'):
         k = ''.join(c for c in name[4:] if c.isdigit())
         args = ['--ticks', str(int(k) * 1024)] if k else []

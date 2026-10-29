@@ -297,21 +297,22 @@
                 uint2 pixel = uint2(i.vertex.xy);
                 _SelfTexture2D.GetDimensions(s_dim.x, s_dim.y);
                 _Data_ROM.GetDimensions(m_dim.x, m_dim.y);
-                // UAV_PITCH (8 unless a measurement says otherwise): pixels from one core's lane to the next
+                // UAV_PITCH (8 unless a measurement says otherwise): pixels from one core's lane to the next. Every other
+                // pixel returns before it reads anything.
                 uint core = pixel.x / UAV_PITCH;
+                if (pixel.x % UAV_PITCH != 0 || pixel.y != 0 || core >= CORES) return 0;
 #if CORES > 1
                 if (!_Init) {
                     MC_GEO_READ
                     if ((mc_geo.r & 1) != 0) {
-                        // the workers' strip being laid out anew: every pixel zeroes its share of it, and no worker runs
-                        uint p = pixel.y * (8 * CORES) + pixel.x, sw = 8 * MC_STRIP_TILES, n = sw * 8 * MC_STRIP_BANDS;
+                        // the workers' strip being laid out anew: every core's lane zeroes its share of it, and no worker runs
+                        uint sw = 8 * MC_STRIP_TILES, n = sw * 8 * MC_STRIP_BANDS;
                         [loop]
-                        for (uint j = p; j < n; j += 64 * CORES) _SelfTexture2D[uint2(MC_STRIP_X + j % sw, j / sw)] = 0;
+                        for (uint j = core; j < n; j += CORES) _SelfTexture2D[uint2(MC_STRIP_X + j % sw, j / sw)] = 0;
                         if (core != 0) return 0;
                     }
                 }
 #endif
-                if (pixel.x % UAV_PITCH != 0 || pixel.y != 0 || core >= CORES) return 0;
 #if CORES > 1
                 mc_select(0);
                 hart = 0;
