@@ -1,7 +1,0 @@
-# /etc/profile: a login shell's start
-export PATH=/bin:/sbin:/usr/bin:/usr/sbin
-export HOME=/root
-export TERM=vt100
-export PS1='\u@\h:\w\$ '
-[ -f /etc/motd ] && cat /etc/motd
-cd "$HOME"

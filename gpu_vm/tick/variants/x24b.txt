@@ -1,7 +1,0 @@
-# x24b: x23 with a register MRU of the last four stored texels (MRU) and a first-bucket filter for loads (BB), texels first
-x21       gpu_vm/tick/steps/x21.hlsl
-x22       gpu_vm/tick/steps/x22.hlsl
-x23       gpu_vm/tick/steps/x23.hlsl
-w11       gpu_vm/tick/steps/x24w.hlsl -D MRU=1 -D BB=1
-w01       gpu_vm/tick/steps/x24w.hlsl -D MRU=0 -D BB=1
-w10       gpu_vm/tick/steps/x24w.hlsl -D MRU=1 -D BB=0

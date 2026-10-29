@@ -1,9 +1,8 @@
-"""No MMU: a flat program's relocations made a word at a time where they lie (GPU-VM linux/drivers/flatreloc_hook.py).
+"""No MMU: a flat program's relocations made a word at a time where they lie.
 
-load_flat_file's loop took 37 bundles a relocation on gpu_vm: the entry and the pointer read and written a byte at a time
-(copy_from_user and copy_to_user of 4 bytes: no efficient unaligned access), the user range's bounds loaded again for
-every access, calc_reloc called twice. Red Alert's 153,564 relocations were 80% of core 0's bundles from its command
-to its first frame (gvm_cpu --profile, 6.6 million bundles). With no MMU the program's memory is the kernel's to read
+load_flat_file's loop read and wrote the entry and the pointer a byte at a time (copy_from_user and copy_to_user of 4
+bytes: no efficient unaligned access), loaded the user range's bounds again for every access and called calc_reloc
+twice; Red Alert has 153,564 relocations. With no MMU the program's memory is the kernel's to read
 and write: a pointer on a word inside the program is relocated with one load and one store, the bounds kept in
 registers; anything else (a pointer off a word, one outside the program, shared libraries) goes on in the generic
 loop from that entry, which says what is wrong as before. Idempotent.   python3 patch_flatreloc.py K"""

@@ -88,11 +88,7 @@ cycles(void)
 {
 	unsigned n;
 
-#ifdef __gpuvm__
-	__asm__ volatile("mfsr %0, cycle" : "=r"(n));
-#else
 	__asm__ volatile("rdcycle %0" : "=r"(n));
-#endif
 	return n;
 }
 
@@ -551,7 +547,7 @@ frame_paced(void)
 {
 	/* the emulating core's alone, in a texel of its own: a plain static lay in one with the first
 	 * core's `listing` (split into words by the link), and a whole texel stored by either core
-	 * loses the other's word (gpu_vm's GVM_RACES; volatile keeps the link from splitting it) */
+	 * loses the other's word (RVC_RACES; volatile keeps the link from splitting it) */
 	static volatile struct { unsigned due, pad[3]; } paced __attribute__((aligned(16)));
 	unsigned due = paced.due;
 	const volatile unsigned *clock = (const volatile unsigned *)((char *)seglPalette() - 0x400 + 0x34);

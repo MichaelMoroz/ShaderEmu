@@ -77,11 +77,7 @@ cycles(void)
 {
 	uint32_t v;
 
-#ifdef __gpuvm__
-	__asm__ volatile("mfsr %0, cycle" : "=r"(v));
-#else
 	__asm__ volatile("rdcycle %0" : "=r"(v));
-#endif
 	return v;
 }
 
@@ -502,11 +498,7 @@ doom_wait(void)
 	uint32_t began = cycles();
 
 	if (gpu)
-#ifdef __gpuvm__
-		__asm__ volatile("wait");
-#else
 		__asm__ volatile(".word 0x0100000f");
-#endif
 	all_wait += cycles() - began;
 }
 
@@ -725,11 +717,7 @@ show(void)
 
 /* ---- DOOM_SUM=1: at a held tic, a sum of all the GPU was given for the picture on show ---- */
 
-#ifdef __gpuvm__
-#define GPU_FROM	0x01000000u	/* gpu_vm: the device window moved down by 0x80000000 */
-#else
 #define GPU_FROM	0x81000000u
-#endif
 #define GPU_BYTES	0x00b00000u
 #define REG_SHOWN	0x300		/* the last whole frame: its list's address, how many commands */
 
@@ -853,11 +841,7 @@ I_FinishUpdate(void)
 		 * it in a buffer the server has not read yet, and an answer from the server
 		 * means it has drawn everything sent before the question */
 		for (wait = 0; gpu && wait < 4; wait++)
-#ifdef __gpuvm__
-			__asm__ volatile("wait");
-#else
 			__asm__ volatile(".word 0x0100000f");
-#endif
 		GrGetWindowInfo(doom_window(), &info);
 		if (gpu && getenv("DOOM_SUM"))
 			list_sum();

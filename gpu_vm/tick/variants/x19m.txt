@@ -1,4 +1,0 @@
-# x19m: the fast loop's budget and cap in one compare (LG)
-x18       gpu_vm/tick/steps/x18.hlsl
-v         gpu_vm/tick/steps/x19v.hlsl
-lg        gpu_vm/tick/steps/x19v.hlsl -D LG=1

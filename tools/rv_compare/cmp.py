@@ -1,5 +1,5 @@
-"""The RISC-V machine's comparison on the card, machine against machine, every part run as a world runs it: GPU-VM's
-compare/ (docs/COMPARE.md there) with RISC-V alone. `--unity 11.1,1.4,0.75`: the guest's clock 11.1 ms a host frame
+"""The RISC-V machine's comparison on the card, machine against machine, every part run as a world runs it.
+`--unity 11.1,1.4,0.75`: the guest's clock 11.1 ms a host frame
 (90 Hz), as many rounds a frame as fit 9.7 ms of the card, each round costing at least 0.75 ms (R, Unity's CPU a
 round, as COMPARE measured RISC-V's world), 8,192 instructions a pass.
 
@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from machines import MACHINES, BASE
 
 F_MS = 11.1
-ROUND_MS = 0.75   # Unity's CPU a round for RISC-V's world (GPU-VM compare/cmp.py, the machine-alone project, 24 October 2026)
+ROUND_MS = 0.75   # Unity's CPU a round for the machine's world (measured alone in a project, 24 October 2026)
 SECTION = 3000    # host frames a call: 33 s of the guest's clock, about 31 s of the wall
 TIMEOUT = 50      # the harness's own limit on the wall (--seconds: from its first frame; its start, the shader and the snapshot, is 3 to 5 s)
 HERE = os.path.dirname(os.path.abspath(__file__))

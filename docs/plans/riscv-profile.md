@@ -124,13 +124,13 @@ Each one comes with its evidence. The shares are of core 0 in the part's window.
 ## Plan items the profile says are worth little
 
 - **PIE/GOT (section 2b)** on core 0: GOT loads executed are 0.0 to 0.2% of core 0 in every game, and at most 1.4%
-  (micropython) anywhere. gpu_vm's figure was for Quake III's workers, which this profile did not count. Worth doing
+  (micropython) anywhere. The plan's figure was for Quake III's workers, which this profile did not count. Worth doing
   only if it is free; check the workers first.
 - **`/dev/zero` a megabyte a step**: neither `read_zero` nor `clear_user` is among any part's top kernel functions.
 - **`get_user`/`put_user` byte paths**: the kernel's byte stores are in `__memcpy` (item 4 above), `load_flat_binary`
   and `se_con_put`, not in the user-access helpers.
 - **Red Alert's `CellRedraw` clear** (section 1): in this window, core 0 ends 0.3 passes full a guest second and its
-  copies are 3.0% of instructions. The gain gpu_vm saw was in another scene. Worth porting, but small here.
+  copies are 3.0% of instructions. The gain the plan cites was in another scene. Worth porting, but small here.
 - **No fault-in of a write's buffer, no BLAKE2s self-test**: not in any part's top functions (boot-only, outside every
   window).
 

@@ -1,6 +1,0 @@
-# x18b: the write cache's size on real code (its entries in local memory: more lanes and a larger footprint)
-x17       gpu_vm/tick/steps/x17.hlsl
-w130      gpu_vm/tick/steps/x18v.hlsl -D WCN=130
-w258      gpu_vm/tick/steps/x18v.hlsl -D WCN=258
-w514      gpu_vm/tick/steps/x18v.hlsl -D WCN=514
-w1026     gpu_vm/tick/steps/x18v.hlsl -D WCN=1026

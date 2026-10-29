@@ -1,6 +1,6 @@
 # The RISC-V machine, machine against machine, every application on the card
 
-`tools/rv_compare/` (GPU-VM's `compare/` with RISC-V alone). Every part runs on the card (RTX 5070 Laptop, D3D11, fxc2)
+`tools/rv_compare/`. Every part runs on the card (RTX 5070 Laptop, D3D11, fxc2)
 as a VRChat world runs it: `rvc_harness --unity 11.1,1.4,0.75`, the guest's clock 11.1 ms a host frame (90 Hz), as many
 rounds (a tick of 8,192 instructions and its commit) a frame as fit 9.7 ms of the card, each round costing at least
 0.75 ms (Unity's CPU a round in RISC-V's world). Under it the guest's clock is the world's, so every time and rate
@@ -19,7 +19,7 @@ below is what a player in the world sees.
   is better; 3% either way is level.
 - **card ms**: the card's time a host frame, the run's mean (the budget is 9.7); **rounds**: rounds a frame.
   **ratio at the budget**: the ratio with each side's card ms a frame brought to the budget (A's card ms over B's
-  times the ratio), as GPU-VM's `grid.py`: a machine whose rounds overshot the budget is not paid for it.
+  times the ratio): a machine whose rounds overshot the budget is not paid for it.
 - Machines: `tools/rv_compare/machines.py`; `before` is frozen in the backport's `build/before` (its README.md).
 
 **Parts measured: before 51, after 51 of 51. after better than before in 121 metrics, worse in 46, level in 75 (3% either way).**
@@ -89,7 +89,7 @@ player 300 / 133), OpenTTD's first frame (5.0 / 3.7 s), Pinball's frames (23.1 /
 | gzip | gzip three times | s | 27.12 | 27.13, 27.11 | 9.24 | 7.20 |
 | glxgears | lists drawn from 3 s | fps | 44.34 | 44.03, 44.64 | 9.33 | 8.85 |
 
-Against GPU-VM's comparison of 26 October (RISC-V on `nommu_hl`, an older image): Doom 91.6 tics/s against 91.3-91.4,
+Against an earlier comparison of 26 October (on `nommu_hl`, an older image): Doom 91.6 tics/s against 91.3-91.4,
 nxray 19.19 pictures/s against 19.17-19.21, Quake III's level 64.5 fps against 64.7-66.5. The tool measures what that
 comparison measured.
 
@@ -103,9 +103,8 @@ of each part are within the usual spread of before's at the same card ms).
 Two "after" images were measured and dropped on the way (`build/after/build/images/nommu.v1`, `nommu.v2`, their rows in
 `build/rv_compare/results_v1.jsonl` and `results_v2.jsonl`), each for a regression found and fixed:
 
-- Quake III's server, 20.2 game frames a second to 10.7: `mcwx`'s calls to the lowest free worker (830fbdb, gpu_vm's,
-  25 October) put the server's job and the client's helpers on one core. RISC-V goes round the row again (19561b9);
-  gpu_vm keeps the lowest.
+- Quake III's server, 20.2 game frames a second to 10.7: `mcwx`'s calls to the lowest free worker (830fbdb,
+  25 October) put the server's job and the client's helpers on one core. They go round the row again (19561b9).
 - Red Alert's film, 12.8 s to 13.9: since 477bcc2 (21 October, lanes) a worker whose team job lingered out was posted
   again only in the round's wait, one worker a pass, and the film's frames are 66 ms apart. It is posted with the round
   now (4c405fe; the film 10.8 s).

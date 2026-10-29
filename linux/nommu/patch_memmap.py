@@ -1,5 +1,4 @@
-"""No MMU: the boot's struct pages made once and copied, and no BLAKE2s self-test (GPU-VM's linux/patches 0003 and
-0004, there behind CONFIG_GPUVM). On top of linux/kernel/bootpages_hook.py, which already starts a boot page's count
+"""No MMU: the boot's struct pages made once and copied, and no BLAKE2s self-test. On top of linux/kernel/bootpages_hook.py, which already starts a boot page's count
 at 0 and counts the pages kept in reserve_bootmem_region.
 
 - memmap_init_range: every page of a flat zone has the same struct page at first (the zone's and the node's flags,
@@ -98,7 +97,7 @@ patch('lib/crypto/blake2s.c', [
     ('''	if (!IS_ENABLED(CONFIG_CRYPTO_MANAGER_DISABLE_TESTS) &&
 	    WARN_ON(!blake2s_selftest()))
 		return -ENODEV;
-''', '''	/* (no self-test: a third of the first second of gpu_vm's boot, and no crypto manager to turn it off) */
+''', '''	/* (no self-test: a share of the boot's first second, and no crypto manager to turn it off) */
 	if (0 && WARN_ON(!blake2s_selftest()))
 		return -ENODEV;
 '''),

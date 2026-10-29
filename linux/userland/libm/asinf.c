@@ -1,6 +1,6 @@
-/* asinf: musl's (FreeBSD's e_asinf.c) with its double sqrt (compiler-rt's software, 240 bundles a call) replaced by
+/* asinf: musl's (FreeBSD's e_asinf.c) with its double sqrt (compiler-rt's software) replaced by
  * the float one and fdlibm's split of the root (e_asin.c's way for |x| near 1): about an ulp, float ops alone. */
-#include "gvm_libm.h"
+#include "flm_libm.h"
 
 static const float
 pio2_hi = 1.5707962513e+00f, /* 0x3fc90fda */
@@ -33,7 +33,7 @@ float asinf(float x)
 	}
 	/* 1 > |x| >= 0.5: asin = pi/2 - 2 asin(sqrt((1 - |x|) / 2)), the root s = df + c exactly to float's
 	 * precision twice over */
-	float z = (1 - __builtin_fabsf(x)) * 0.5f, s = gvm_sqrtf(z), df, c, p, q;
+	float z = (1 - __builtin_fabsf(x)) * 0.5f, s = flm_sqrtf(z), df, c, p, q;
 	union { float f; uint32_t i; } v = { s };
 	v.i &= 0xfffff000;
 	df = v.f;

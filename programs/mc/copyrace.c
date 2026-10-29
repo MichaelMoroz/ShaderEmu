@@ -1,6 +1,6 @@
 // copyrace FILE [CHUNK] [ROUNDS] [WORKERS]: a read()'s buffer summed by workers that wait already, posted the moment the
 // read returns, then by this core. Half-Life's packed files were inflated so (FS_InflateHere: pread, then the media
-// workers at once): with a kernel that returns to user mode with its copy still queued (no TIF_GVM_DRAIN), a worker
+// workers at once): with a kernel that returns to user mode with its copy still queued, a worker
 // reads the buffer as it was, while this core's own loads wait for its copy. Every slice must sum the same on both.
 #include <fcntl.h>
 #include <stdint.h>

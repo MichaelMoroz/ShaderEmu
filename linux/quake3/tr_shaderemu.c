@@ -1969,8 +1969,8 @@ int SE_SceneOut (int *on)
 	return 1;
 }
 
-/* Rests until the next pass: the scene's worker has the whole pass, and so have the client's game and its items (gpu_vm),
-   which are the frame's length in turn with it */
+/* Rests until the next pass, saying which workers have the jobs it waits for: the scene's, the client's game's and
+   its items', which are the frame's length in turn with it */
 static void scene_rest (void)
 {
 	mcw_handle	on[3] = { scene_out };

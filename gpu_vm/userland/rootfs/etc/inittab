@@ -1,6 +1,0 @@
-# busybox init (gpu_vm/userland/README.md, "The root file system")
-::sysinit:/etc/init.d/rcS
-# a login shell on the console (hvc0, so that it is the shell's controlling terminal: job control)
-hvc0::respawn:-/bin/sh
-::ctrlaltdel:/sbin/reboot
-::shutdown:/bin/umount -a -r

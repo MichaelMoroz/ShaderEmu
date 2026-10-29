@@ -21,13 +21,8 @@
 #include "mc.h"
 #include "sef.h"
 
-/* /dev/gpu maps GPU memory from GPU_PHYS; offsets below are from there (gpu_vm: the device window moved down by
- * 0x80000000, gpu_vm/GPU_VM.md "Memory") */
-#ifdef __gpuvm__
-#define GPU_PHYS	0x00000000u
-#else
+/* /dev/gpu maps GPU memory from GPU_PHYS; offsets below are from there */
 #define GPU_PHYS	0x80000000u
-#endif
 #define GPU_SIZE	0x01b00000u
 #define POOL_SIZE	0x00c00000u	/* window buffers, from offset 0; the worker cores' mailbox page is right above (programs/mc/mc.h) */
 #define REGS_OFFSET	0x01000000u	/* the machine's control words (physical 0x81000000) */
@@ -221,15 +216,6 @@ wm_job(uint32_t core)
 /* The worker starts here: the machine gives it a stack and its number, the program's global
  * pointer is ours to set. */
 void wm_entry(void);
-#ifdef __gpuvm__
-/* (gpu_vm has no global pointer) */
-__asm__(".text\n"
-	".globl wm_entry\n"
-	".p2align 4\n"
-	"wm_entry:\n"
-	"	call wm_job\n"
-	"	break\n");
-#else
 __asm__(".text\n"
 	".globl wm_entry\n"
 	"wm_entry:\n"
@@ -239,7 +225,6 @@ __asm__(".text\n"
 	".option pop\n"
 	"	call wm_job\n"
 	"	ebreak\n");
-#endif
 
 /* The kernel takes no core of ours while this says we write to one (mc.h): 0 if the worker's
  * core is another's by now. wm_ours(0) when the writing is done. */
@@ -2086,15 +2071,8 @@ gpu_open(PSD psd)
 		most_w = (f >> 8 & 255) * 16;
 		most_h = (f >> 16 & 255) * 16;
 	}
-#ifdef __gpuvm__
-	/* (gpu_vm: the window's first 64 KB, RISC-V 0x80000000 to 0x80010000, is the boot area, which no core may store
-	 * to: the pool begins after it; gpu_vm/platform.md) */
-	blocks[0].at = 0x10000;
-	blocks[0].bytes = POOL_SIZE - 0x10000;
-#else
 	blocks[0].at = 0;
 	blocks[0].bytes = POOL_SIZE;
-#endif
 	blocks[0].used = 0;
 	block_count = 1;
 

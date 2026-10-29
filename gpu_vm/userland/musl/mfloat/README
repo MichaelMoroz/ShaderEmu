@@ -1,5 +1,0 @@
-libmfloat.a (gpu_vm/userland/build.sh mfloat; gpu_vm/userland/README.md, "libm"): double math functions at float
-precision, for programs that call sin(), pow()... on values a float holds well enough (games): each converts its
-arguments to float, calls gpu_vm's float function (about an ulp of a float: 2^-24 relative) and converts back.
-Link it before libc: gpuvm-linux-cc ... -lmfloat. musl's double functions are compiler-rt's software doubles,
-1,300 to 4,600 bundles a call; these are 40 to 110.

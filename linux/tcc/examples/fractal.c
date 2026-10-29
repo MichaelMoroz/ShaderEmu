@@ -106,13 +106,8 @@ int main(int argc, char **argv)
 		return 1;
 	}
 	st = hlsl_stats(prog);
-#ifdef __gpuvm__
-	printf("fractal: %s compiled in %u ms for GPU-VM's interpreter, %u places a lane may stop, %u texels a step keeps, the longest "
-	       "step %u instructions\n", path, milliseconds() - t0, st.yields, st.texels, st.longest_step);
-#else
 	printf("fractal: %s compiled in %u ms: %u bytes of RISC-V, %u places a lane may stop, %u texels a step keeps, the longest step %u "
 	       "instructions\n", path, milliseconds() - t0, st.code_bytes, st.yields, st.texels, st.longest_step);
-#endif
 
 	if (GrOpen() < 0)
 		return 1;

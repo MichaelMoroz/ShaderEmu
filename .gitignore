@@ -11,4 +11,3 @@
 __pycache__/
 imgui.ini
 .vscode/settings.json
-/gpu_vm/cpu/build/

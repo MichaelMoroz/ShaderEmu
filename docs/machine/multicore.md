@@ -889,12 +889,12 @@ Before the bytes were compared, two places were a word read beside a word writte
 and `count` of `mcw.c`, in one 16 bytes); before the reads were given as the card gives them,
 every read of a picture after its publish word was reported too.
 
-**Passes apart** (`RVC_RACES_NEAR=N`, as gpu_vm's `GVM_RACES_NEAR`): `rvc_cpu` ends every core's pass at its
+**Passes apart** (`RVC_RACES_NEAR=N`): `rvc_cpu` ends every core's pass at its
 budget, but on the card a pass ends where it ends (the write cache full, a sync, a rest), so two stores of different
 cores that fall a pass or two apart here may fall in one pass there, and the whole-texel commit lose one. With it every
 change to a texel that another core changed other words of within N passes is counted and named (`near` lines in the
 file: the core, pc and words of each). Half-Life's three shared texels (632e982: `world_ahead` beside
-`iTouchLinkSemaphore`, the loopback's `get` and `send`, `net_drop`) were found so on gpu_vm, never by its own schedule.
+`iTouchLinkSemaphore`, the loopback's `get` and `send`, `net_drop`) are found so, never by `rvc_cpu`'s own schedule.
 It is a report, not a fault: a hand-over by a job word (core 0 fills a texel, the worker it wakes writes the next words)
 is one, and every game has thousands. `mctest 3 0 near` stores the two halves of one 16 bytes in turns, a pass each:
 `RVC_RACES` alone finds nothing (`50 0 50 0`, 0 undone), with `RVC_RACES_NEAR=4` 99 changes at `near_job`, 1 pass apart.

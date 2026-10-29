@@ -1,8 +1,0 @@
-# x12, probes: what x12's load bundles pay for (parts compiled out; timing only)
-best1        gpu_vm/tick/steps/x12.hlsl -D OK_MIN=1 -D INT_FIRST=1
-nosfu        gpu_vm/tick/steps/x12.hlsl -D OK_MIN=1 -D INT_FIRST=1 -D NO_SFU=1
-noconv       gpu_vm/tick/steps/x12.hlsl -D OK_MIN=1 -D INT_FIRST=1 -D NO_CONV=1
-nosfu+conv   gpu_vm/tick/steps/x12.hlsl -D OK_MIN=1 -D INT_FIRST=1 -D NO_SFU=1 -D NO_CONV=1
-nofloat      gpu_vm/tick/steps/x12.hlsl -D OK_MIN=1 -D INT_FIRST=1 -D NO_FLOAT=1
-nostore      gpu_vm/tick/steps/x12.hlsl -D OK_MIN=1 -D INT_FIRST=1 -D NO_STORE=1
-nofl+nost    gpu_vm/tick/steps/x12.hlsl -D OK_MIN=1 -D INT_FIRST=1 -D NO_FLOAT=1 -D NO_STORE=1

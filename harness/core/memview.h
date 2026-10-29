@@ -32,8 +32,7 @@ struct MemoryViewConstants {
     float bar;
     float split;   // x where the display ends and the memory image begins
     float ui;      // window pixels a 96 dpi pixel
-    uint32_t gvm;  // gpu_vm's RAM texture (gpu_vm/platform.md): 1 rows of 8192, 2 the strips (gpu_vm/isa.h GVM_STRIP_X)
-    float pad[2];
+    float pad[3];
 };
 // The window's dpi over 96, the bar's height in window pixels, and the x where the display panel ends.
 float memoryViewUi();
@@ -76,8 +75,6 @@ public:
     // Lines of text shown in the info bar under the memory image (speed counters).
     void setText(ID3D11DeviceContext* ctx, const MemoryViewText& columns);
     bool open() const { return hwnd_ != nullptr; }
-    // gpu_vm's RAM texture (gpu_vm/platform.md): no state rows, 8192 texels wide, its own addresses
-    void setGvm(bool on, uint32_t map = 0) { gvm_ = on; gvmMap_ = map; }   // (map: the tick's RAM_MAP)
     void close();
 
 private:
@@ -104,8 +101,6 @@ private:
     UINT width_ = 0, height_ = 0;
     UINT texWidth_ = 0, texHeight_ = 0, stateRows_ = 0;
     UINT frame_ = 0;
-    bool gvm_ = false;
-    uint32_t gvmMap_ = 0;
     int heatCur_ = 0;
     bool heatNeedsClear_ = true;
 };

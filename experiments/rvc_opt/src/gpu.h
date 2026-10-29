@@ -74,27 +74,6 @@
 //   4 opaque   5 alpha blend   6 additive   7 multiply     no depth
 #define FRAGMENT_PASS(mode) (((mode) >> 16) & 7)
 
-#ifdef GVM_RAM
-// gpu_vm (gpu_vm/platform.md): RAM is a texture of its own, 8192 texels wide from address 0, and the device window is
-// the RISC-V machine's moved down by DEV_AT (layout.h). Indices here stay the RISC-V machine's ((address - 0x80000000) / 16):
-// gpu_vm's texel is the index less DEV_T(0), and a guest's address below the ROM is a gpu_vm one (a constant of this
-// file, DEV_AT + 0x1000400 say, is the RISC-V machine's).
-// GVM_MAP 1 (the tick's RAM_MAP): texel t at the strips' place (gpu_vm/isa.h GVM_STRIP_X), the ROM's too
-#if defined(GVM_MAP) && GVM_MAP == 1
-uint2 gvm_at(uint t) { return uint2((t & 0x1ffu) | ((t >> 12) & ~0x1ffu), (t >> 9) & 0xfffu); }
-uint gvm_texel(uint2 p) { return (p.x & 0x1ffu) | ((p.y & 0xfffu) << 9) | ((p.x >> 9) << 21); }
-#else
-uint2 gvm_at(uint t) { return uint2(t % 8192u, t / 8192u); }
-uint gvm_texel(uint2 p) { return p.y * 8192u + p.x; }
-#endif
-uint4 ram(uint index) {
-    uint t = index - DEV_T(0u);
-    return GPU_STATE[gvm_at(t)];
-}
-uint texel_of(uint address) {
-    return ((address < 0x40000000u ? address + DEV_AT : address) & 0x7fffffff) >> 4;
-}
-#else
 #ifndef GPU_STATE_ROW
 #define GPU_STATE_ROW 64u   // the state texture's row RAM starts in
 #endif
@@ -104,7 +83,6 @@ uint4 ram(uint index) {
 uint texel_of(uint address) {
     return (address & 0x7fffffff) >> 4;
 }
-#endif
 uint ram_word(uint address) {
     uint4 t = ram(texel_of(address));
     uint k = (address >> 2) & 3;
@@ -112,21 +90,7 @@ uint ram_word(uint address) {
 }
 // A word of a texture: RAM, or with GPU_ROM the ROM (addresses from 0x40000000), read as the
 // CPU reads it: four textures, one for each word of a 16-byte texel, rows bottom up.
-#if defined(GPU_ROM) && defined(GVM_RAM)
-// (gpu_vm: the ROM is one texture as wide as RAM's, offset o at texel o >> 4, rows top down)
-uint texture_word(uint address) {
-    [branch]
-    if ((address >> 30) != 1) return ram_word(address);
-    uint o = address - 0x40000000u, t = o >> 4, k = (o >> 2) & 3;
-    uint4 v = _GvmRom.Load(int3(gvm_at(t), 0));
-    return k == 0 ? v.r : k == 1 ? v.g : k == 2 ? v.b : v.a;
-}
-uint4 texture_texel(uint address) {
-    [branch]
-    if ((address >> 30) != 1) return ram(texel_of(address));
-    return uint4(texture_word(address), texture_word(address + 4), texture_word(address + 8), texture_word(address + 12));
-}
-#elif defined(GPU_ROM)
+#if defined(GPU_ROM)
 uint texture_word(uint address) {
     [branch]
     if ((address >> 30) != 1) return ram_word(address);
@@ -803,35 +767,7 @@ bool gpu_writeback(uint2 pos, out uint4 result) {
 // What the host says of where the machine is shown (docs/world/holodeck.md): two texels.
 #define HOST_STATE  DEV_T(0x100036u)
 
-#if defined(GVM_RAM) && defined(CORES) && CORES > 1
-// (gpu_vm: a core is a row of the tick's state; the host starts workers 1 to _GvmWorkers at the firmware, which
-// parks a core in its loop at _GvmParkLo to _GvmParkHi: gpu_vm/platform.md)
-int3 gvm_s16(uint core) {   // the pixel of texels 16 to 23: a row a core, or (_GvmGeo, the step's GEO_BLOCKS) a block
-    return _GvmGeo != 0 ? int3((core & 127) * 8, (core >> 7) * 16 + 2, 0) : int3(2, core, 0);
-}
-// (every load made, whether or not the core is there, and the loop unrolled: the 64 loads of a texel of bits go out
-// together, not one core's after the last one's came back, 5 us a pass less: gpu_vm/IDEAS.md 38. A core past
-// _GvmWorkers reads a texel of the state that is there and is masked off.)
-uint mc_stat_count(uint core) {
-    uint count = _GvmS3.Load(gvm_s16(min(core, 255u))).g;
-    return core <= _GvmWorkers ? count : 0;
-}
-uint2 mc_stat_bits(uint from) {
-    uint running = 0, asleep = 0;
-    [unroll] for (uint n = 0; n < 32; n++) {
-        uint core = from + n;
-        uint4 s16 = _GvmS0.Load(gvm_s16(min(core, 255u))), s19 = _GvmS3.Load(gvm_s16(min(core, 255u)));
-        bool there = core <= _GvmWorkers;
-        bool parked = core != 0 && s16.x >= _GvmParkLo && s16.x < _GvmParkHi;
-        running |= (there && !parked ? 1u : 0u) << n;
-        asleep |= (there && !parked && core != 0 && s19.w == 2 && (s16.y & 8) == 0 ? 1u : 0u) << n;   // a user's wait ended its pass
-    }
-    return uint2(running, asleep);
-}
-uint mc_stat_cores() {
-    return 1 + _GvmWorkers;
-}
-#elif defined(CORES) && CORES > 1
+#if defined(CORES) && CORES > 1
 // Where worker `core`'s tiles begin in the strip (the geometry: src/types.h has the same), or
 // 0xffff when there is no such worker; core 0's state is at the left.
 uint mc_rows_of_bits(uint bits) {
@@ -930,8 +866,7 @@ uint mc_stat_count(uint core) {
 // Which of the 32 cores from `from` run, and which are asleep: a worker's state word
 // (41,0).a has bit 0 while it runs and bit 1 while it sleeps on its job word. (Every load
 // made, a core that is not there reading worker 1's texel and masked off, and the loop
-// unrolled: the 32 loads go out together, not one after the last came back; gpu_vm's
-// feaddd5, its zones 22 to 6.7 us a pass.)
+// unrolled: the 32 loads go out together, not one after the last came back.)
 uint2 mc_stat_bits(uint from) {
     uint running = 0, asleep = 0;
 #ifdef MC_HYBRID
@@ -1058,14 +993,9 @@ uint4 count_total(uint index) {
 }
 
 uint4 gpu_control(uint2 pos) {
-#ifdef GVM_RAM
-    uint index = gvm_texel(pos) + DEV_T(0u);   // (pos: a texel of gpu_vm's RAM texture)
-    uint4 keep = ram(index);
-#else
     uint4 keep = GPU_STATE[pos];
     if (pos.y < 64) return keep;
     uint index = (pos.y - 64) * 2048 + pos.x;
-#endif
     [branch]
     if (index >= COUNT_TOTAL && index < COUNT_REGIONS) return count_total(index);
     // A submitted list has been drawn by now: the GPU is free for the next one. A copy it asked
@@ -1073,9 +1003,7 @@ uint4 gpu_control(uint2 pos) {
     // (A list that needs passes the host is not drawing yet waits, submitted, until it is.)
 #ifdef GPU_INPUT
     bool served = (SUBMIT_PASSES(ram(GPU_CTRL).r) & ~_GpuPasses) == 0;
-#ifdef GVM_RAM
-    served = served && _GvmListDrawn != 0;   // (the harness's lazy list: a list not drawn this frame stays submitted)
-#elif defined(GPU_LIST_SKIP)
+#if defined(GPU_LIST_SKIP)
     served = served && _GpuListSkipped == 0;   // (rvc_harness's RVC_LIST_LAZY: the same; Unity draws it every frame)
 #endif
 #else
@@ -1084,13 +1012,7 @@ uint4 gpu_control(uint2 pos) {
     if (index == GPU_CTRL) return (keep.r == 0 || !served) ? keep : uint4(0, keep.g, keep.b, keep.a + 1);
     if (index == GPU_COPY) {
         uint4 ctrl = ram(GPU_CTRL), into = ram(GPU_INTO);
-#ifdef GVM_RAM
-        // (gpu_vm: the copy noted here was made by the writeback pass before this one: it is cleared here, not by
-        // the commit)
-        if (!served || (ctrl.r & SUBMIT_DRAW) == 0 || (ctrl.r & SUBMIT_COPIES) == 0) return keep.r != 0 ? (uint4)0 : keep;
-#else
         if (!served || (ctrl.r & SUBMIT_DRAW) == 0 || (ctrl.r & SUBMIT_COPIES) == 0) return keep;
-#endif
         return uint4(ctrl.r & SUBMIT_COPIES, into.r, (into.g & 0xffff) | (into.b << 16), into.a);
     }
 #if defined(CORES) && CORES > 1
@@ -1120,18 +1042,10 @@ uint4 gpu_control(uint2 pos) {
 #endif
 #ifdef GPU_INPUT
     if (index == CON_HOST) return uint4(CON_IN_TAG, CON_IN_CHARS, 0, 0);
-#ifdef GVM_RAM
-    if (index == GPU_CLOCK) return uint4(keep.r, _HostMs, keep.b + (ram(GPU_COPY).r != 0 ? 1u : 0u), _HostFlags);   // (and a copy made)
-#else
     if (index == GPU_CLOCK) return uint4(keep.r, _HostMs, keep.b, _HostFlags);
-#endif
     if (index == COUNT_HEAD) {
         // word 3: the commits so far, a pass each (a monitor's measure of what a core can run)
-#ifdef GVM_RAM
-        uint passes = _GvmPasses;
-#else
         uint passes = GPU_STATE[uint2(28, 0)].b;
-#endif
 #ifdef GPU_COUNT_MERGE
         if (_CountMerged != 0)
             return _CountMerged == 2 ? uint4(0, COUNT_MERGED, keep.b + 1, passes) : uint4(keep.r, COUNT_MERGED, keep.b, passes);

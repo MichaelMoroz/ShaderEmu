@@ -1,3 +1,0 @@
-#!/bin/sh
-# gcc as gpuvm-linux-cc
-exec "$(dirname "$(readlink -f "$0")")/gpuvm-linux-cc" "$@"

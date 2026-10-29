@@ -5294,24 +5294,6 @@ index c7651fe..e64da34 100644
          }
          Sound_Callback();
      }
-diff --git a/redalert/tile.h b/redalert/tile.h
-index 983807d..ee8aedc 100644
---- a/redalert/tile.h
-+++ b/redalert/tile.h
-@@ -53,7 +53,13 @@ void* Get_Icon_Set_Map(void const* iconset);
- */
- 
- // RA version of struct
-+#ifdef __gpuvm__
-+// (gpu_vm: an iconset lies in a mix file at any address, often an odd one, and a half or a word gpu_vm loads
-+// stays in its word: packed to bytes, the compiler reads the fields a byte at a time; the layout is the same)
-+#pragma pack(push, 1)
-+#else
- #pragma pack(push, 2)
-+#endif
- typedef struct
- {
-     uint16_t Width;     // Width of icons (pixels).
 diff --git a/redalert/vortex.cpp b/redalert/vortex.cpp
 index e1b15cc..cf75749 100644
 --- a/redalert/vortex.cpp

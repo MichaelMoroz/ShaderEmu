@@ -1,5 +1,0 @@
-# x19t: x19 with workers of 64 sets on 14 pixels (x19f: the state texel a set by its two ways), x19e (a set a texel in the tick too)
-x18       gpu_vm/tick/steps/x18.hlsl
-x19       gpu_vm/tick/steps/x19w1026.hlsl
-x19f      gpu_vm/tick/steps/x19f.hlsl
-x19e      gpu_vm/tick/steps/x19e.hlsl

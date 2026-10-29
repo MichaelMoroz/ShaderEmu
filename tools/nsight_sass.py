@@ -1,11 +1,11 @@
-"""The card's own code (SASS) of every shader of an Nsight Graphics GPU Trace (GPU-VM docs/nsight.md, "SASS"): the trace keeps
+"""The card's own code (SASS) of every shader of an Nsight Graphics GPU Trace (the nsight-gpu-trace skill, "SASS"): the trace keeps
 the driver's ELF of each shader; ngfx-trace (github.com/xirreal/nsight-gpu-trace, built with cargo) takes it out and
 CUDA's nvdisasm disassembles it. Writes NAME.sN.sass beside the trace and prints each shader's kind, registers and
 instructions, and for the pixel shaders their opcodes and local memory (LDL/STL: arrays and spills).
 
     python tools/nsight_sass.py logs/nsight/s1dxil/*.ngfx-gputrace [--top 30]
 
-A few seconds a shader. The trace must be of DXIL (GPU-VM tools/nsight.ps1 -Dxil: tools/gpu_trace.ps1 of rvc_trace12 is DXBC, which has none): of a DXBC one there is no code."""
+A few seconds a shader. The trace must be of DXIL (tools/gpu_trace.ps1 of rvc_trace12 is DXBC, which has none): of a DXBC one there is no code."""
 import argparse
 import collections
 import glob

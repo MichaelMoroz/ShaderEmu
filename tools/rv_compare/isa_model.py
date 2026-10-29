@@ -4,7 +4,7 @@ from RVC_PROF's pcs.txt (tools/rv_compare/prof_parts.py), each executed word wit
     python tools/rv_compare/isa_model.py DIR [DIR ...] [--csv FILE]     (DIR: a part's .prof folder)
 
 A pair of instructions next to each other runs min(count of each) times together: the model assumes the second
-follows the first, which holds inside a block and over-counts at a block's head. GPU-VM's lesson (its RESULTS.md, pairs):
+follows the first, which holds inside a block and over-counts at a block's head. A lesson of another machine's ISA work:
 a model of packing overrated the change 3-4x; programs built with the extension are the measure, this is the bound
 and the reason to build them. Counted, by class (0 core 0, 1 the workers):
 
@@ -149,7 +149,7 @@ def main():
                     # an add then a load or store using it as the base: an indexed access
                     if op == 0x33 and f3 == 0 and f7 in (0, 0x10) and o2 in (0x03, 0x23, 0x07, 0x27) and r12 == rd:
                         C['add+mem'] += both
-                    # addi then a branch reading the same register (a loop's counter: gpu_vm's addbnz)
+                    # addi then a branch reading the same register (a loop's counter: a fused add-and-branch)
                     if op == 0x13 and f3 == 0 and rs1 == rd and rd != 0 and o2 == 0x63 and rd in (r12, r22):
                         C['addi+branch'] += both
                     # pairs: two word stores (loads) from one base, offsets 4 apart, the lower on 8

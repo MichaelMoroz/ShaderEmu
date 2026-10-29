@@ -59,11 +59,7 @@ static void fps_locate(const GR_WINDOW_INFO* info) {
     if (own.y < FPS_ABOVE || own.width < 200) return;
     fps_state.width = own.width;
     if (fps_state.fd < 0 && (fps_state.fd = open("/dev/gpu", O_RDWR)) < 0) return;
-#ifdef __gpuvm__
-    first = info->surface_address - FPS_ABOVE * row * 4;   // (gpu_vm: the device window starts at 0)
-#else
     first = info->surface_address - 0x80000000u - FPS_ABOVE * row * 4;
-#endif
     bytes = (first & 4095) + FPS_ABOVE * row * 4;
     memory = mmap(0, bytes, PROT_READ | PROT_WRITE, MAP_SHARED, fps_state.fd, first & ~4095u);
     if (memory != MAP_FAILED) fps_state.caption = (uint32_t*)((char*)memory + (first & 4095));

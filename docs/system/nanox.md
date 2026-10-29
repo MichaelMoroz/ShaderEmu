@@ -234,9 +234,8 @@ they take no window and no buffer).
   Pictures, Music and Videos (`desktop_shortcuts` in `tools/make_linux_image.py`), a column a
   folder of the menu. `open` starts one too (`nxfiles --run FILE.app`).
 - **Docs**, alone in the last column, opens Files on `/usr/share/doc/shaderemu`: the
-  repository's `docs/` but for its plans, and gpu_vm's `GPU_VM.md` and `platform.md` in
-  `gpu_vm/`, copied by every image build (`documentation()` in `make_linux_image.py`; gpu_vm's
-  `image.sh` too), so they are the tree's. A file there opens in the editor as a page
+  repository's `docs/` but for its plans, copied by every image build (`documentation()` in
+  `make_linux_image.py`), so they are the tree's. A file there opens in the editor as a page
   ("The editor's reader"), `README.md` first, and its links go from file to file.
 - **Places.** Each icon stands where it was last put, in whole cells of 76 x 70
   (`/root/Desktop/.places`: `x y name` a line). The left button held moves the selected

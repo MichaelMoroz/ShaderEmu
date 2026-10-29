@@ -1,5 +1,0 @@
-# x18a: probes: the code fetched from a StructuredBuffer (t12) instead of RAM's texture; data too (DATABUF: wrong after a store)
-x17       gpu_vm/tick/steps/x17.hlsl
-v         gpu_vm/tick/steps/x18v.hlsl
-codebuf   gpu_vm/tick/steps/x18v.hlsl -D CODEBUF=1
-databuf   gpu_vm/tick/steps/x18v.hlsl -D CODEBUF=1 -D DATABUF=1

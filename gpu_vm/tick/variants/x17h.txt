@@ -1,4 +1,0 @@
-# x17h: the state the fast loop does not use in an indexable array (x17s.hlsl SYA)
-x16       gpu_vm/tick/steps/x16.hlsl
-x17       gpu_vm/tick/steps/x17.hlsl
-sya       gpu_vm/tick/steps/x17s.hlsl -D SYA=1

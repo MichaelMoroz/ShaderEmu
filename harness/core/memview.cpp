@@ -25,7 +25,6 @@ cbuffer C : register(b0) {
     float Bar;         // height of the info bar under the memory image
     float Split;       // the display is left of this x, the memory image right of it
     float Ui;          // window pixels a 96 dpi pixel: the bar's text and margins
-    uint Gvm;          // gpu_vm's RAM texture (gpu_vm/platform.md): texel t is index t (the devices lie from 0x80000000 in both), an address below the ROM gpu_vm's
 };
 
 float4 vs(uint id : SV_VertexID) : SV_Position {
@@ -53,12 +52,11 @@ uint word(uint4 t, uint i) {
 
 // RAM texel by index (physical address - 0x80000000) / 16.
 uint4 ram(uint index) {
-    if (Gvm == 2) return Cur.Load(int3((index & 0x1ffu) | ((index >> 12) & ~0x1ffu), (index >> 9) & 0xfffu, 0));
     return Cur.Load(int3(index % TexWidth, StateRows + index / TexWidth, 0));
 }
-// The index of a guest's address (gpu_vm's below the ROM are the RISC-V machine's less 0x80000000, the devices' first byte)
+// The index of a guest's address
 uint index_of(uint a) {
-    return ((Gvm && a < 0x40000000u ? a + 0x80000000u : a) & 0x7fffffff) >> 4;
+    return (a & 0x7fffffff) >> 4;
 }
 uint word_at(uint a) {
     uint4 t = ram(index_of(a));
@@ -583,7 +581,6 @@ bool MemoryView::render(ID3D11DeviceContext* ctx, ID3D11ShaderResourceView* cur,
     c.inset = c.bar - 16 * g_ui;
     c.split = memoryViewSplit(width_);
     c.ui = g_ui;
-    c.gvm = gvm_ ? 1u + gvmMap_ : 0u;
     c.textSize[0] = (float)textW_;
     c.textSize[1] = (float)textH_;
     ctx->UpdateSubresource(cb_.Get(), 0, nullptr, &c, 0, 0);

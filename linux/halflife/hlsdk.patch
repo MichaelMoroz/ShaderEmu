@@ -414,7 +414,7 @@ index 27c7ffe8..20b4215b 100644
  #include "weapons.h"
  #include "gamerules.h"
 +
-+// a saved field lies at any byte: read it by bytes (gpu_vm keeps a word read in its address's word)
++// a saved field lies at any byte: read it by bytes
 +template<typename T> static inline T SR_Read( const void *p ) { T v; memcpy( &v, p, sizeof( v )); return v; }
  #include "byteswap.h"
  
@@ -455,15 +455,6 @@ index 27c7ffe8..20b4215b 100644
  
  		if( !stricmp( pField->fieldName, pkvd->szKeyName ) )
  		{
-@@ -2167,7 +2183,7 @@ int CRestore::ReadField( void *pBaseData, TYPEDESCRIPTION *pFields, int fieldCou
- 					switch( pTest->fieldType )
- 					{
- 					case FIELD_TIME:
--					#if __VFP_FP__
-+					#if __VFP_FP__ || __gpuvm__
- 						memcpy( &timeData, pInputData, 4 );
- 						ULittleToHostSW( timeData );
- 						// Re-base time variables
 @@ -2216,7 +2232,7 @@ int CRestore::ReadField( void *pBaseData, TYPEDESCRIPTION *pFields, int fieldCou
  						}
  						break;
@@ -508,24 +499,6 @@ index 27c7ffe8..20b4215b 100644
  						pent = EntityFromIndex( entityIndex );
  						if( pent )
  							*( (EOFFSET *)pOutputData ) = OFFSET( pent );
-@@ -2255,7 +2271,7 @@ int CRestore::ReadField( void *pBaseData, TYPEDESCRIPTION *pFields, int fieldCou
- 							*( (EOFFSET *)pOutputData ) = 0;
- 						break;
- 					case FIELD_VECTOR:
--						#if __VFP_FP__
-+						#if __VFP_FP__ || __gpuvm__
- 						memcpy( pOutputData, pInputData, sizeof( Vector ) );
- 						ULittleToHostSW( ( (float*)pOutputData)[0] );
- 						ULittleToHostSW( ( (float*)pOutputData)[1] );
-@@ -2267,7 +2283,7 @@ int CRestore::ReadField( void *pBaseData, TYPEDESCRIPTION *pFields, int fieldCou
- 						#endif
- 						break;
- 					case FIELD_POSITION_VECTOR:
--						#if  __VFP_FP__
-+						#if __VFP_FP__ || __gpuvm__
- 						{
- 							Vector tmp;
- 							memcpy( &tmp, pInputData, sizeof( Vector ) );
 @@ -2285,17 +2301,17 @@ int CRestore::ReadField( void *pBaseData, TYPEDESCRIPTION *pFields, int fieldCou
  						break;
  					case FIELD_BOOLEAN:
@@ -689,17 +662,3 @@ index 925d040c..3ca500cd 100644
  	// Bubble sort, yuck, but this only occurs at startup and it's only 512 elements...
  	//
  	int i, j;
-diff --git a/public/build.h b/public/build.h
-index a9489250..24de9f16 100644
---- a/public/build.h
-+++ b/public/build.h
-@@ -232,6 +232,9 @@ Then you can use another oneliner to query all variables:
- 	#else // __SOFTFP__
- 		#define XASH_ARM_HARDFP 1
- 	#endif // __SOFTFP__
-+#elif defined __gpuvm__ // gpu_vm: floats in integer registers, as the RISC-V machine's build (the same library names)
-+	#define XASH_RISCV 1
-+	#define XASH_RISCV_SOFTFP 1
- #elif defined __riscv
- 	#define XASH_RISCV 1
- 

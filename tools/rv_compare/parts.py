@@ -1,4 +1,4 @@
-"""The parts compared (tools/rv_compare/cmp.py; GPU-VM's compare/parts.py with RISC-V alone): each a command typed at the shell (nano-X up), how long it may run (host frames of
+"""The parts compared (tools/rv_compare/cmp.py): each a command typed at the shell (nano-X up), how long it may run (host frames of
 11.1 ms), the line that ends it, and its metrics: name -> (unit, better, metric); better is 'low' or 'high'.
 Metrics (cmp.measure): ('time', LINE) GO to a line, None the first list drawn; ('rate', FROM, COUNT, SCALE) lines (None:
 lists drawn) a second from a line (or seconds after GO) to the end; ('value', RE) / ('mean', RE) / ('last', RE): a

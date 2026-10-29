@@ -1,5 +1,0 @@
-x23       gpu_vm/tick/steps/x23.hlsl
-d4        gpu_vm/tick/steps/x24w.hlsl
-h1        gpu_vm/tick/steps/x24w.hlsl -D ORD35=1
-h2        gpu_vm/tick/steps/x24w.hlsl -D ORD6=1
-h3        gpu_vm/tick/steps/x24w.hlsl -D LD2X=1

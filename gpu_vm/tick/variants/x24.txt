@@ -1,5 +1,0 @@
-# x24: x23 with the common memory op's lookup skipped (README "x24"), against x21, x22 and x23
-x21       gpu_vm/tick/steps/x21.hlsl
-x22       gpu_vm/tick/steps/x22.hlsl
-x23       gpu_vm/tick/steps/x23.hlsl
-x24       gpu_vm/tick/steps/x24.hlsl

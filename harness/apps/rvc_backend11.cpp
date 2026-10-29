@@ -128,7 +128,7 @@ public:
                (!mboxLog() || mbox_.init(gpu_.device.Get(), DXGI_FORMAT_R32G32B32A32_UINT, 16, kMboxJobs, 1, 3, err, opt.readbackBatch)) &&
                watchInit(err);
     }
-    // RVC_MBOX_LOG=FILE (a measure, off by default; gpu_vm/PROFILE_Q3.md "Handoffs"): every pass, the frame's tag and each
+    // RVC_MBOX_LOG=FILE (a measure, off by default): every pass, the frame's tag and each
     // core's job, answer and taken words as the pass left them (programs/mc/mc.h: MC_JOB_AT(k) at rvlayout::kMbox + 0x4000 + 64 k), a
     // record of 2 + 6 x 256 words: tag (low, high), then for each core the job's seq, fn, a0, a1, the answer's done, the taken word
     static FILE* mboxLog() { static FILE* f = getenv("RVC_MBOX_LOG") ? fopen(getenv("RVC_MBOX_LOG"), "wb") : nullptr; return f; }
@@ -137,7 +137,7 @@ public:
         if (mboxLog()) mbox_.request(gpu_.ctx.Get(), src, kMboxX, kMboxRow, tag);
         watchRequest(src, tag);
     }
-    // RVC_WATCH=ADDR,ADDR,... and RVC_WATCH_LOG=FILE (a measure, off by default; gpu_vm/PROFILE_Q3.md "Handoffs"): the
+    // RVC_WATCH=ADDR,ADDR,... and RVC_WATCH_LOG=FILE (a measure, off by default): the
     // RAM texels of those guest addresses (up to 32) as each pass left them, a record of 2 + 4 x N words: the tag (low,
     // high), then each texel's four words
     std::vector<uint32_t> watch_;
@@ -984,7 +984,7 @@ private:
                 countsAdded = false;
             }
             mat.setInt("_CountMerged", merge ? 2 : 1);
-            // (the control words and, with workers, the cores' stats in one draw: gpu_vm's feaddd5; RVC_ZONES_APART=1 two)
+            // (the control words and, with workers, the cores' stats in one draw; RVC_ZONES_APART=1 two)
             if (cores_ > 16 && activeCores_ > 1) zonePairInplace(mat, kGpuControlZone, kCoreStatsZone);
             else zoneInplace(mat, kGpuControlZone);
             if (conDelivered) {

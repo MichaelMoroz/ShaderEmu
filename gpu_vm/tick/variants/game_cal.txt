@@ -1,6 +1,0 @@
-# the game bench calibration (GAMEBENCH.md): the steps whose game frame rates are known
-x21 gpu_vm/tick/steps/x21.hlsl
-x22 gpu_vm/tick/steps/x22.hlsl
-x23 gpu_vm/tick/steps/x23.hlsl
-x24 gpu_vm/tick/steps/x24.hlsl
-x25 gpu_vm/tick/steps/x25.hlsl

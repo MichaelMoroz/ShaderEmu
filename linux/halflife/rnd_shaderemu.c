@@ -46,16 +46,8 @@ static struct SE_APART { ref_viewpass_t rvp; lightstyle_t *styles; int have; } n
 static int mode = -1, worker, out, piped, sums = -1;
 static uint settles;
 static int ref_count;
-#ifdef __gpuvm__
-static inline uint32_t rd_time( void ) { uint32_t v; __asm__ volatile( "mfsr %0, time_lo" : "=r"( v )); return v; }
-#else
 static inline uint32_t rd_time( void ) { uint32_t v; __asm__ volatile( "rdtime %0" : "=r"( v )); return v; }
-#endif
-#ifdef __gpuvm__
-static inline uint32_t rd_ins( void ) { uint32_t v; __asm__ volatile( "mfsr %0, cycle" : "=r"( v )); return v; }
-#else
 static inline uint32_t rd_ins( void ) { uint32_t v; __asm__ volatile( "rdinstret %0" : "=r"( v )); return v; }
-#endif
 static struct SE_APART { uint32_t start, end, ins, waits; int most; } job_tl;
 unsigned hlglRingWaits( int *most );	// the worker's
 extern unsigned mcw_faults, mcw_calls;
@@ -168,16 +160,6 @@ static uint32_t job_body( uint32_t unused )
 }
 
 void se_ref_replay( void *fn, const uint32_t *w );
-#ifdef __gpuvm__
-// (gpu_vm: eight arguments in a0-a7 and the rest from 0(sp), as RISC-V's; callr for jalr)
-__asm__( ".text\n.p2align 4\n.globl se_ref_replay\nse_ref_replay:\n"
-	"	addi sp, sp, -32\n	sw ra, 28(sp)\n	mv t0, a0\n	mv t1, a1\n"
-	"	lw t2, 32(t1)\n	sw t2, 0(sp)\n	lw t2, 36(t1)\n	sw t2, 4(sp)\n"
-	"	lw t2, 40(t1)\n	sw t2, 8(sp)\n	lw t2, 44(t1)\n	sw t2, 12(sp)\n"
-	"	lw a0, 0(t1)\n	lw a1, 4(t1)\n	lw a2, 8(t1)\n	lw a3, 12(t1)\n"
-	"	lw a4, 16(t1)\n	lw a5, 20(t1)\n	lw a6, 24(t1)\n	lw a7, 28(t1)\n"
-	"	callr t0\n	lw ra, 28(sp)\n	addi sp, sp, 32\n	ret\n" );
-#else
 __asm__( ".text\n.balign 4\n.globl se_ref_replay\nse_ref_replay:\n"
 	"	addi sp, sp, -32\n	sw ra, 28(sp)\n	mv t0, a0\n	mv t1, a1\n"
 	"	lw t2, 32(t1)\n	sw t2, 0(sp)\n	lw t2, 36(t1)\n	sw t2, 4(sp)\n"
@@ -185,7 +167,6 @@ __asm__( ".text\n.balign 4\n.globl se_ref_replay\nse_ref_replay:\n"
 	"	lw a0, 0(t1)\n	lw a1, 4(t1)\n	lw a2, 8(t1)\n	lw a3, 12(t1)\n"
 	"	lw a4, 16(t1)\n	lw a5, 20(t1)\n	lw a6, 24(t1)\n	lw a7, 28(t1)\n"
 	"	jalr t0\n	lw ra, 28(sp)\n	addi sp, sp, 32\n	ret\n" );
-#endif
 
 static uint32_t render_job( uint32_t a0, uint32_t a1 )
 {
@@ -204,7 +185,7 @@ void SE_RenderSettle( void )
 		hlglRingsServe();
 		if( piped && cls.state == ca_active )
 			S_ExtraUpdate();	// (what the frame's start and 2D mix after it is then short)
-		mcw_rest_for( &worker, 1 );	// (gpu_vm: the drawing's worker has the whole pass)
+		mcw_rest_for( &worker, 1 );
 	}
 	out = 0;
 	if( se_render_light_level[0] >= 0 )
@@ -329,16 +310,6 @@ static uint ref_calls[REF_THUNKS], settled_by[REF_THUNKS];
 static int ref_window, ref_count = -1, ref_frames;
 
 // Each thunk asks se_ref_guard first: 0 and the call is not made (it returns 0).
-#ifdef __gpuvm__
-// (gpu_vm: a bundle on 16 bytes, se_ref_real's word by its address in a long immediate)
-#define SE_THUNK( n ) ".p2align 4\nse_ref_thunk_" #n ":\n" \
-	"	addi sp, sp, -48\n	sw a0, 0(sp)\n	sw a1, 4(sp)\n	sw a2, 8(sp)\n	sw a3, 12(sp)\n" \
-	"	sw a4, 16(sp)\n	sw a5, 20(sp)\n	sw a6, 24(sp)\n	sw a7, 28(sp)\n	sw ra, 32(sp)\n" \
-	"	mv a1, a0\n	mv a2, sp\n	li a0, " #n "\n	call se_ref_guard\n	mv t1, a0\n" \
-	"	lw a0, 0(sp)\n	lw a1, 4(sp)\n	lw a2, 8(sp)\n	lw a3, 12(sp)\n	lw a4, 16(sp)\n" \
-	"	lw a5, 20(sp)\n	lw a6, 24(sp)\n	lw a7, 28(sp)\n	lw ra, 32(sp)\n	addi sp, sp, 48\n" \
-	"	beqz t1, 1f\n	lw t0, se_ref_real+" #n "*4\n	jr t0\n1:\n	li a0, 0\n	ret\n"
-#else
 #define SE_THUNK( n ) ".balign 4\nse_ref_thunk_" #n ":\n" \
 	"	addi sp, sp, -48\n	sw a0, 0(sp)\n	sw a1, 4(sp)\n	sw a2, 8(sp)\n	sw a3, 12(sp)\n" \
 	"	sw a4, 16(sp)\n	sw a5, 20(sp)\n	sw a6, 24(sp)\n	sw a7, 28(sp)\n	sw ra, 32(sp)\n" \
@@ -346,7 +317,6 @@ static int ref_window, ref_count = -1, ref_frames;
 	"	lw a0, 0(sp)\n	lw a1, 4(sp)\n	lw a2, 8(sp)\n	lw a3, 12(sp)\n	lw a4, 16(sp)\n" \
 	"	lw a5, 20(sp)\n	lw a6, 24(sp)\n	lw a7, 28(sp)\n	lw ra, 32(sp)\n	addi sp, sp, 48\n" \
 	"	beqz t1, 1f\n	la t0, se_ref_real\n	lw t0, " #n "*4(t0)\n	jr t0\n1:\n	li a0, 0\n	ret\n"
-#endif
 #define SE_THUNKS( a ) SE_THUNK( a##0 ) SE_THUNK( a##1 ) SE_THUNK( a##2 ) SE_THUNK( a##3 ) SE_THUNK( a##4 ) \
 	SE_THUNK( a##5 ) SE_THUNK( a##6 ) SE_THUNK( a##7 ) SE_THUNK( a##8 ) SE_THUNK( a##9 )
 #define SE_WORD( n ) "	.word se_ref_thunk_" #n "\n"

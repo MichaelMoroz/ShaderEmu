@@ -1,3 +1,0 @@
-# x19h (a probe): one lane a core, its state written as UAVs (x19u's fragu) against x18's 38 lanes
-x18       gpu_vm/tick/steps/x18.hlsl
-uav       gpu_vm/tick/steps/x19u.hlsl

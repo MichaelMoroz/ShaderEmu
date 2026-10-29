@@ -1,4 +1,0 @@
-# x19n (a probe): the next bundle's select after the ops' results (LATESEL), so that the fetch's wait is behind the body
-x18       gpu_vm/tick/steps/x18.hlsl
-ls1       gpu_vm/tick/steps/x19v.hlsl -D LATESEL=1
-ls2       gpu_vm/tick/steps/x19v.hlsl -D LATESEL=2

@@ -1,6 +1,6 @@
 /*
  * Workloads: pieces of the machine's games and programs, each a kernel that does one unit of
- * the work again and again, for measuring the RISC-V machine against gpu_vm on the same C
+ * the work again and again, for measuring the machine and changes to it on the same C
  * (programs/wl/README.md). wl.c runs a kernel for some seconds and prints its units a second.
  *
  * A kernel:

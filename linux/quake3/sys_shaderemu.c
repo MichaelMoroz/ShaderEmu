@@ -63,11 +63,7 @@ unsigned SE_Cycles (void)
 {
 	unsigned v;
 
-#ifdef __gpuvm__
-	__asm__ volatile ("mfsr %0, cycle" : "=r"(v));
-#else
 	__asm__ volatile ("rdcycle %0" : "=r"(v));
-#endif
 	return v;
 }
 
@@ -123,11 +119,7 @@ void SE_FrameDone (void)
 		printf ("quake3: holding frame %u\n", frames);
 		fflush (stdout);
 		for (;;)
-#ifdef __gpuvm__
-			__asm__ volatile ("wait");	/* pause: the machine's pass ends */
-#else
 			__asm__ volatile (".word 0x0100000f");	/* pause: the machine's pass ends */
-#endif
 	}
 	n = frames - since_frames;
 	if (!every || n < every)

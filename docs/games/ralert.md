@@ -541,19 +541,16 @@ mapped, ... KB in use`); `TDAWN_AUTO` presses Return through the score screen to
   nothing). Linux and the game's heap were not short. The demo goes to its menu after the
   score screen now (`Is_Demo()` in `Do_Win`); from there a new game
   is the same mission again.
-- **The Soviet side's win crashed on gpu_vm** (27 October 2026, reported after the name in the
-  hall of fame and Return; `Segmentation fault`, at times a kernel fault after it). The score
+- **The score animation's frame table is read by bytes** (27 October 2026). The score
   animation (`SOV-TRAN.WSA`) is kept whole in its buffer, its frame table where the delta buffer
-  ends: `delta_buffer + largest_frame_size`, at any byte. `Get_Resident_Frame_Offset`
-  (`common/wsa.cpp`) read the table through a `uint32_t` pointer, so the compiler made each
-  `memcpy` of it one word load, and on gpu_vm a word load keeps only the bytes up to its word's
-  end: at 3 bytes into a word (the Soviet file, `largest_frame_size` 33,083) an offset came out a
-  byte (303 as 47), at 1 (the Allied file, 33,221) three bytes, all its offsets have. The frames
-  were decoded from the wrong places and drawn over the heap; where that showed (mallocng's check
-  in `free`, a load past RAM) moved with the heap's layout. The table is read by bytes now
-  (`vanilla-conquer.patch` of Tiberian Dawn, which has `common/`). `ralert-won-soviet` in
-  `tools/test_all.py`: both wins, the menu twice and state `01e0dd60` at frame 300 on `gvm_cpu`
-  (it crashed in every run before); `ralert-won` still `ea72a5d1`.
+  ends: `delta_buffer + largest_frame_size`, at any byte (3 bytes into a word in the Soviet file,
+  `largest_frame_size` 33,083; 1 in the Allied file, 33,221). `Get_Resident_Frame_Offset`
+  (`common/wsa.cpp`) read the table through a `uint32_t` pointer, so the compiler may make each
+  `memcpy` of it one word load at an address that is not a word's; a load that does not take
+  the bytes of the next word gives wrong offsets, the frames are decoded from the wrong places
+  and drawn over the heap. The table is read by bytes now (`vanilla-conquer.patch` of Tiberian
+  Dawn, which has `common/`). `ralert-won-soviet` in `tools/test_all.py`: both wins, the menu
+  twice and state `01e0dd60` at frame 300; `ralert-won` still `ea72a5d1`.
 
 `rvc_cpu --ips 2000000` with the card model, the Allied mission won at frame 100 (the build
 before had only the switch and the lines), seconds from `Do_Win`:

@@ -114,11 +114,7 @@ host_settle(void)
 		return;
 	}
 	while (*control(REG_SUBMIT))
-#ifdef __gpuvm__
-		__asm__ volatile("wait");	/* pause */
-#else
 		__asm__ volatile(".word 0x0100000f");	/* pause */
-#endif
 	flight = 0;
 }
 
@@ -176,11 +172,7 @@ void
 host_wait(void)
 {
 	scene_finish();	/* (a frame that waits for a worker core is shown first) */
-#ifdef __gpuvm__
-	__asm__ volatile("wait");	/* pause */
-#else
 	__asm__ volatile(".word 0x0100000f");	/* pause */
-#endif
 }
 
 unsigned int
@@ -188,11 +180,7 @@ host_cycles(void)
 {
 	uint32_t v;
 
-#ifdef __gpuvm__
-	__asm__ volatile("mfsr %0, cycle" : "=r"(v));
-#else
 	__asm__ volatile("rdcycle %0" : "=r"(v));
-#endif
 	return v;
 }
 
@@ -1367,11 +1355,7 @@ host_window_picture(int *width, int *height, int *row)
 	GrGetWindowInfo(window, &info);
 	if (!info.surface_address || info.width <= 0)
 		return NULL;
-#ifdef __gpuvm__
-	at = info.surface_address;	/* (the device's memory, from its start: 0 on gpu_vm) */
-#else
 	at = info.surface_address - 0x80000000u;	/* (the device's memory, from its start) */
-#endif
 	if (mapped != (at & ~0xfffu)) {
 		if (map)
 			munmap(map, 4 << 20);
@@ -1698,11 +1682,7 @@ held_late(void)
 		host_settle();
 		fprintf(stderr, "tdawn: held late after %d scenes\n", scenes_shown);
 		for (;;)
-#ifdef __gpuvm__
-			__asm__ volatile("wait");	/* pause */
-#else
 			__asm__ volatile(".word 0x0100000f");	/* pause */
-#endif
 	}
 	return 1;
 }

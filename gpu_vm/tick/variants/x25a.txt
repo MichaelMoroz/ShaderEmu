@@ -1,4 +1,0 @@
-# x25: core 0 own write cache (1,026 entries), the move on insertion; x25n without the move
-x23   gpu_vm/tick/steps/x23.hlsl
-x25n  gpu_vm/tick/steps/x25n.hlsl
-x25   gpu_vm/tick/steps/x25.hlsl

@@ -1,4 +1,0 @@
-# x19j: op 0's texel fetched for every bundle before the path's branch (HOIST=1), op 1's too (HOIST=2)
-x18       gpu_vm/tick/steps/x18.hlsl
-h1        gpu_vm/tick/steps/x19v.hlsl -D HOIST=1
-h2        gpu_vm/tick/steps/x19v.hlsl -D HOIST=2

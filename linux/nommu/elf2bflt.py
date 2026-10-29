@@ -36,7 +36,7 @@ wseg = [s for s in loads if s[4] & 2]
 # (loaded whole, the split is only where the loader puts data: rounded down, every address stays where it is)
 data_start = (wseg[0][0] if wseg else end_file) & ~31
 # binfmt_flat (5.17, BINFMT_FLAT_NO_DATA_START_OFFSET or not: fs/binfmt_flat.c's shared-library table) stores the
-# data's start into the word just below it: nothing of the program may lie there (on gpu_vm it overwrote musl's
+# data's start into the word just below it: nothing of the program may lie there (it can overwrite a variable such as musl's
 # decfloat and broke strtod). The linker leaves a page between text and data, so with it nothing ever does; where
 # something does (tcc's .eh_frame_hdr runs to its data), the data starts lower, at the first 32 bytes with a word of
 # nothing below (loaded whole, the split moves no address), and with none the program is refused

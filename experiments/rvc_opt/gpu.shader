@@ -112,7 +112,7 @@ Shader "ShaderEmu/gpu"
             #include "src/gpu.h"
 
             // From pixel _ZoneSplit (0: none) on, the row drawn is a second zone at (_Zone2X, _Zone2Y): the control
-            // words and the cores' stats (MC_STATS_ALL) in one draw (the harness's zonePair, gpu_vm's feaddd5)
+            // words and the cores' stats (MC_STATS_ALL) in one draw (the harness's zonePair)
             uniform uint _ZoneSplit, _Zone2X, _Zone2Y;
             uint4 frag(v2f_customrendertexture i) : SV_Target {
                 uint2 dim;

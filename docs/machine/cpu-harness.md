@@ -40,19 +40,19 @@ console has said TEXT. For samples fine enough, `--ticks 256 --pass-ms 0.0078`: 
 milliseconds must go down with its instructions, or the guest's clock runs four times as
 fast for each instruction and the kernel's timer is a quarter of the profile.
 
-Other logs, each a measure that leaves the run as it was (gpu_vm's names in brackets):
+Other logs, each a measure that leaves the run as it was:
 
-- `RVC_PASSLOG=FILE` (`GVM_PASSLOG`): from `--count-from`'s mark, a line a pass, `pass end ran pc ra ms`:
+- `RVC_PASSLOG=FILE`: from `--count-from`'s mark, a line a pass, `pass end ran pc ra ms`:
   how core 0's pass ended (0 its budget, 1 it ended the pass itself, 2 it waited, 4 the write cache was
   full, 5 a copy), its instructions, pc, `ra` and the guest's milliseconds (a jump is a sleep).
-  `RVC_PASSLOG_STACK=N` (`GVM_SYNCLOG_STACK`) adds, after an end of 1 or 4, the first N words above `sp`
+  `RVC_PASSLOG_STACK=N` adds, after an end of 1 or 4, the first N words above `sp`
   that could be return addresses: who ended the pass, not only the leaf. Doom's timedemo: 16,331 passes
   to their budget, 8,082 ended, 710 waits, 829 full.
 - `RVC_WC_LOG`'s records (with `RVC_WCACHE=1`) end with the address of the store that found the cache
   full, 0 for a pass that did not end so: Doom's 8,351 full records all had one.
 - `RVC_WC_BITS=N` (4 to 8, with `RVC_WCACHE=1`): core 0's tables of 2^N buckets, not the tick's 6
   (`L1_TABLE_BITS`). `python tools/wcsize.py model` runs Doom's timedemo at 5 to 8, `card` on the card with
-  the tick built at `L1_TABLE_BITS=N` under a world's frame (GPU-VM's `compare/wcsize.py`). On 28 October 2026:
+  the tick built at `L1_TABLE_BITS=N` under a world's frame. On 28 October 2026:
 
   | bits | texels (core 0) | core 0's passes ended full | workers' passes ended full | passes | realtics | fps (guest) |
   |---|---|---|---|---|---|---|
@@ -64,10 +64,10 @@ Other logs, each a measure that leaves the run as it was (gpu_vm's names in brac
   On the processor's clock a full end at 6 costs the demo nothing: the pass's budget is not what limits it.
   On the card under a VR frame (`--unity 11.1,7.1,1.0`, some 2.2 rounds a frame), the same: 40.1 fps (guest) at 6,
   40.0 at 7 (3.27 and 3.23 card ms a frame).
-- `RVC_DEVICE_EVERY=N` (`GVM_DEVICE_EVERY`): the devices' pass takes the GPU's list back every Nth pass
+- `RVC_DEVICE_EVERY=N`: the devices' pass takes the GPU's list back every Nth pass
   only, as a world does once a frame; every pass hides a game's waits for its list (Doom's timedemo 1,664
   realtics, 1,812 at 4).
-- `RVC_CON_TRACE=1` (`GVM_CON_TRACE`): each delivery of console input to the guest and each take, with
+- `RVC_CON_TRACE=1`: each delivery of console input to the guest and each take, with
   the pass and the guest's seconds (`[con] delivered`, `[con] taken`).
 
 `--count-from TEXT` prints every core's instructions from when the console said TEXT to the
@@ -133,7 +133,7 @@ snapshot lays them out as geotune does on the card (16 big, the rest small in bl
 goes by the guest's clock is not the card's at the same line (Quake III's frame 200 is 16 s in
 here), and a part measured just after `nano-X` starts is not settled: give it 10 s. Checked on the
 card against states reached there: Quake's timedemo 66.3 against 67.2 fps, nxray with its scene
-held still 19.4 against 19.2 (`GPU-VM/compare/short.md`). It goes one way only: under `--cpu`,
+held still 19.4 against 19.2. It goes one way only: under `--cpu`,
 `--load-state` still restores only the texture and the processor boots afresh.
 
 `rvc_harness --compute fast` is the same with the processor a compute shader on the card in
@@ -289,9 +289,9 @@ the end of each (`--save-state`) and resumed by the next, until its `--until` or
 (`mctest-255`, `cc-bytes`) then run too.
 
 The card runs a processor folder only when its `warp_ok` holds the folder's stamp, its sources hashed
-(`rvc_harness --stamp`; the devices' folder too when another; gpu_vm's `tick.hlsl.warp_ok`); otherwise
+(`rvc_harness --stamp`; the devices' folder too when another); otherwise
 `rvc_harness` says so and exits 3. `--warp` runs the cases on WARP, D3D11's software device, and with
 `--mark-ok` writes the stamp when every case passed: `python tools/test_card.py mctest-3 --warp --parts
 --max-wall 240 --mark-ok`. WARP is some 300 thousand instructions a second: `mctest 3` took 313 s in parts on
 28 October 2026 (`steptest` did not end in 240). The stamp is of the sources only: a define (`--define`,
-`--lazy`) is the same tick checked. `--cpu`, `--compute` and `--gvm` are not the card's tick and need none.
+`--lazy`) is the same tick checked. `--cpu` and `--compute` are not the card's tick and need none.

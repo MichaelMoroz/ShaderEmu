@@ -66,11 +66,7 @@ static inline void *snd_memory(uint32_t bytes, uint32_t *address)
 
 	if (ioctl(snd_fd, SND_IOCTL_MEMORY, &m))
 		return NULL;
-#ifdef __gpuvm__
-	at = mmap(NULL, bytes, PROT_READ | PROT_WRITE, MAP_SHARED, snd_fd, m.address - 0x01000000u);	/* (gpu_vm's window) */
-#else
 	at = mmap(NULL, bytes, PROT_READ | PROT_WRITE, MAP_SHARED, snd_fd, m.address - 0x81000000u);
-#endif
 
 	*address = m.address;
 	return at == MAP_FAILED ? NULL : at;

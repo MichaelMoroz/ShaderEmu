@@ -1,3 +1,0 @@
-# x18 against x17 (x17 on the real programs as compiled: X17PATHS; the probes are assembled with x18's paths, so only x18's count)
-x17       gpu_vm/tick/steps/x17.hlsl -D X17PATHS=1
-x18       gpu_vm/tick/steps/x18.hlsl

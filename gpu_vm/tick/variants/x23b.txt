@@ -1,4 +1,0 @@
-# x23b: buckets of four ways (x23w: two tables of 32 buckets) against x23v's DREAD 1
-d1b0      gpu_vm/tick/steps/x23v.hlsl -D DREAD=1 -D BLOOM=0
-w0        gpu_vm/tick/steps/x23w.hlsl -D BLOOM=0
-w1        gpu_vm/tick/steps/x23w.hlsl -D BLOOM=1

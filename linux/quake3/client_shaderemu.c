@@ -270,7 +270,7 @@ static void wait (unsigned frames)
 		{
 			mcw_handle	on[3] = { job, side_out };
 
-			mcw_rest_on (on, 2 + SE_SceneOut (on + 2));	/* (gpu_vm: those and the scene have the whole pass) */
+			mcw_rest_on (on, 2 + SE_SceneOut (on + 2));
 		}
 		se_client_passes++;
 		SE_ServerPoll ();	/* (the server's frame is not kept waiting for this core's) */

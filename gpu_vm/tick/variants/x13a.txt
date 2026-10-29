@@ -1,4 +1,0 @@
-# x13: two loops (the fast one integers and memory only) against x12's one
-x12best   gpu_vm/tick/steps/x12.hlsl -D OK_MIN=1 -D INT_FIRST=1
-x13       gpu_vm/tick/steps/x13.hlsl
-x13one    gpu_vm/tick/steps/x13.hlsl -D ONE_LOOP=1

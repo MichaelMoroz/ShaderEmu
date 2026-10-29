@@ -195,13 +195,12 @@ PLACES = [('Home', 'home', 'nxfiles /root'), ('Pictures', 'pictures', 'nxfiles /
 
 
 DOCS = '/usr/share/doc/shaderemu'   # the documentation, which the desktop's Docs folder opens
-GPU_VM_DOCS = (('GPU_VM.md', "gpu_vm, the machine's own instruction set"), ('platform.md', 'gpu_vm as a whole machine: devices, workers, drivers'))
 
 
 def documentation():
     """The repository's documentation for the machine's own reader (the editor reads Markdown: docs/system/nanox.md,
-    "The editor's reader"), at DOCS: docs/ as it is but for its plans, and gpu_vm's two docs for users in gpu_vm/. The index
-    (README.md) leaves the plans out and names gpu_vm's. A list of (bytes, folder, name), read anew at every build."""
+    "The editor's reader"), at DOCS: docs/ as it is but for its plans. The index (README.md) leaves the plans out.
+    A list of (bytes, folder, name), read anew at every build."""
     top, files = os.path.join(ROOT, 'docs'), []
     for folder, dirs, names in os.walk(top):
         dirs[:] = sorted(d for d in dirs if d != 'plans')
@@ -217,11 +216,9 @@ def documentation():
                         out.append(line)
                 while out and not out[-1].strip():
                     out.pop()
-                out += ['', '## gpu_vm', ''] + ['- [%s](gpu_vm/%s) – %s' % (n, n, title) for n, title in GPU_VM_DOCS] + ['']
+                out += ['']
                 text = '\n'.join(out).encode('utf-8')
             files.append((text, DOCS + ('' if rel == '.' else '/' + rel), name))
-    for name, _ in GPU_VM_DOCS:
-        files.append((open(os.path.join(ROOT, 'gpu_vm', name), 'rb').read(), DOCS + '/gpu_vm', name))
     # (and test_all.py nxedit-read's page of every kind of Markdown)
     files.append((open(os.path.join(ROOT, 'linux', 'apps', 'md-test.md'), 'rb').read(), '/usr/share', 'md-test.md'))
     return files

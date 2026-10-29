@@ -1,7 +1,0 @@
-# x17e: the fast loop's flag (x17r.hlsl: the pass made again in the next from the state it found)
-x16        gpu_vm/tick/steps/x16.hlsl
-x17        gpu_vm/tick/steps/x17.hlsl
-flag0      gpu_vm/tick/steps/x17r.hlsl -D FLAG=0
-flag1      gpu_vm/tick/steps/x17r.hlsl -D FLAG=1
-f1nomis    gpu_vm/tick/steps/x17r.hlsl -D FLAG=1 -D NOMIS=1
-f1thrc     gpu_vm/tick/steps/x17r.hlsl -D FLAG=1 -D THRC=1

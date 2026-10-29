@@ -1,5 +1,0 @@
-# x18q: cc 0's jumps in the fast loop, jr's bundle fetched from rs as found beside the two (CC0F=2; a jr whose ops write
-# rs is step12's)
-x17       gpu_vm/tick/steps/x17.hlsl
-o4s3      gpu_vm/tick/steps/x18v.hlsl -D ORD=4 -D S12X=3
-o4s3f2    gpu_vm/tick/steps/x18v.hlsl -D ORD=4 -D S12X=3 -D CC0F=2

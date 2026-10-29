@@ -1,5 +1,5 @@
 """tools/test_all.py's cases on the graphics card: bin/rvc_harness.exe (D3D11, fxc2, experiments/rvc_opt) one at a
-time through tools\\gpu_queue.ps1, each console checked by test_all's own rules (GPU-VM's userland/apps/card.py).
+time through tools\\gpu_queue.ps1, each console checked by test_all's own rules.
 
     python tools/test_card.py CASE_OR_TAG ... [--image build/images/nommu] [--max-wall 55] [--wall-scale 1]
     python tools/test_card.py games --list
@@ -13,8 +13,8 @@ cannot run it as rvc_cpu does: another image (`lazy`, `zero-tail`), the host's w
 --races is rvc_cpu's: a case here is checked by its own lines. Values the card gives otherwise (its floats are the
 tick's) go in CARD, each with the runs that showed them.
 
-The card runs a processor folder only when its warp_ok holds its stamp (its sources hashed, `rvc_harness --stamp`;
-gpu_vm's tick.hlsl.warp_ok): --warp runs the cases on WARP, and --mark-ok writes the stamp when every one passed.
+The card runs a processor folder only when its warp_ok holds its stamp (its sources hashed, `rvc_harness --stamp`):
+--warp runs the cases on WARP, and --mark-ok writes the stamp when every one passed.
 """
 import argparse, os, re, subprocess, sys, time
 

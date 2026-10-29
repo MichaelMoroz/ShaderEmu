@@ -223,15 +223,4 @@ void hl_gen(const char *entry);
 /* hlsl_back.c */
 void hl_back(void);
 
-/* hlsl_interp.c: the IR run as it is where the back end makes no code (gpu_vm, which has no RISC-V) */
-#if defined(__gpuvm__) && !defined(HLSL_INTERP)
-#define HLSL_INTERP 1
-#endif
-#ifdef HLSL_INTERP
-typedef struct hl_interp hl_interp;
-hl_interp *hl_interp_keep(void);
-void hl_interp_free(hl_interp *k);
-uint32_t hl_interp_step(uint32_t index, void *ctx, uint32_t round);
-#endif
-
 #endif

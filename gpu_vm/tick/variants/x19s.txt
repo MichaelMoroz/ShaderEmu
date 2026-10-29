@@ -1,5 +1,0 @@
-# x19s: a set a texel from texel 1 (the overflow slots texel 0), core 0 512 sets, workers 64 (x19e: their row 14 pixels)
-x18       gpu_vm/tick/steps/x18.hlsl
-x19       gpu_vm/tick/steps/x19w1026.hlsl
-x19e      gpu_vm/tick/steps/x19e.hlsl
-w130      gpu_vm/tick/steps/x19w130.hlsl

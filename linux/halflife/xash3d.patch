@@ -3757,7 +3757,7 @@ diff --git a/engine/server/sv_frame.c b/engine/server/sv_frame.c
 index 3ff8edbf..9deb3786 100644
 --- a/engine/server/sv_frame.c
 +++ b/engine/server/sv_frame.c
-@@ -53,6 +53,70 @@ SV_AddEntitiesToPacket
+@@ -53,6 +53,66 @@ SV_AddEntitiesToPacket
  
  =============
  */
@@ -3766,11 +3766,7 @@ index 3ff8edbf..9deb3786 100644
 +
 +// The packet's entities from a number on looked at by workers of the server's (sv_shaderemu.c), a part
 +// each, while the server looks at those before them: posted with the server's frame, they wait for the ask.
-+#ifdef __gpuvm__
-+#define END_PASS() __asm__ volatile( "sync" )	// (mc.h's mc_end_pass: gpu_vm's)
-+#else
 +#define END_PASS() __asm__ volatile( ".word 0x0000100f" )	// (mc.h's mc_end_pass)
-+#endif
 +#define SE_PACKERS 4
 +static struct __attribute__(( aligned( 16 ))) { volatile int go, done, unused[2]; edict_t *client; byte *pvs, *phs; int hostflags, from, to; } se_pack_ask[SE_PACKERS];	// go 1: the part; 2: none
 +static struct __attribute__(( aligned( 16 ))) { int count, portal; short number[MAX_VISIBLE_PACKET]; entity_state_t entities[MAX_VISIBLE_PACKET]; } se_pack_out[SE_PACKERS];	// each worker's
@@ -3828,7 +3824,7 @@ index 3ff8edbf..9deb3786 100644
  static void SV_AddEntitiesToPacket( edict_t *pViewEnt, edict_t *pClient, client_frame_t *frame, sv_ents_t *ents, qboolean from_client )
  {
  	byte		*clientpvs = NULL;
-@@ -86,7 +150,24 @@ static void SV_AddEntitiesToPacket( edict_t *pViewEnt, edict_t *pClient, client_
+@@ -86,7 +146,24 @@ static void SV_AddEntitiesToPacket( edict_t *pViewEnt, edict_t *pClient, client_
  	if( !clientpvs ) fullvis = true;
  
  	// g-cont: of course we can send world but not want to do it :-)
@@ -3853,7 +3849,7 @@ index 3ff8edbf..9deb3786 100644
  	{
  		byte	*pset;
  		edict_t	*ent = SV_EdictNum( e );
-@@ -112,9 +193,17 @@ static void SV_AddEntitiesToPacket( edict_t *pViewEnt, edict_t *pClient, client_
+@@ -112,9 +189,17 @@ static void SV_AddEntitiesToPacket( edict_t *pViewEnt, edict_t *pClient, client_
  				continue;
  		}
  
@@ -3871,7 +3867,7 @@ index 3ff8edbf..9deb3786 100644
  
  		state = &ents->entities[ents->num_entities];
  
-@@ -159,6 +248,40 @@ static void SV_AddEntitiesToPacket( edict_t *pViewEnt, edict_t *pClient, client_
+@@ -159,6 +244,40 @@ static void SV_AddEntitiesToPacket( edict_t *pViewEnt, edict_t *pClient, client_
  			ClearBits( sv.hostflags, SVF_MERGE_VISIBILITY );
  		}
  	}
@@ -3912,7 +3908,7 @@ index 3ff8edbf..9deb3786 100644
  }
  
  /*
-@@ -226,8 +349,28 @@ SV_EmitPacketEntities
+@@ -226,8 +345,28 @@ SV_EmitPacketEntities
  Writes a delta update of an entity_state_t list to the message->
  =============
  */
@@ -3941,7 +3937,7 @@ index 3ff8edbf..9deb3786 100644
  	entity_state_t	*oldent, *newent;
  	int		oldindex, newindex;
  	int		oldnum, newnum;
-@@ -525,6 +668,9 @@ static void SV_WriteClientdataToMessage( sv_client_t *cl, sizebuf_t *msg )
+@@ -525,6 +664,9 @@ static void SV_WriteClientdataToMessage( sv_client_t *cl, sizebuf_t *msg )
  	client_frame_t	*frame;
  	edict_t		*clent;
  
@@ -3951,7 +3947,7 @@ index 3ff8edbf..9deb3786 100644
  	memset( &nullcd, 0, sizeof( nullcd ));
  	frame = &cl->frames[cl->netchan.outgoing_sequence & SV_UPDATE_MASK];
  	frame->senttime = host.realtime;
-@@ -578,6 +724,15 @@ static void SV_WriteClientdataToMessage( sv_client_t *cl, sizebuf_t *msg )
+@@ -578,6 +720,15 @@ static void SV_WriteClientdataToMessage( sv_client_t *cl, sizebuf_t *msg )
  	// write clientdata_t
  	MSG_WriteClientData( msg, from_cd, to_cd, sv.time );
  
@@ -3967,7 +3963,7 @@ index 3ff8edbf..9deb3786 100644
  	if( FBitSet( cl->flags, FCL_LOCAL_WEAPONS ) && svgame.dllFuncs.pfnGetWeaponData( clent, frame->weapondata ))
  	{
  		memset( &nullwd, 0, sizeof( nullwd ));
-@@ -632,6 +787,12 @@ static void SV_WriteEntitiesToClient( sv_client_t *cl, sizebuf_t *msg )
+@@ -632,6 +783,12 @@ static void SV_WriteEntitiesToClient( sv_client_t *cl, sizebuf_t *msg )
  	// in the list which will need to be resorted for the delta compression
  	// to work correctly.  This also catches the error condition
  	// of an entity being included twice.
@@ -3980,7 +3976,7 @@ index 3ff8edbf..9deb3786 100644
  	qsort( frame_ents.entities, frame_ents.num_entities, sizeof( frame_ents.entities[0] ), SV_EntityNumbers );
  
  	// it will break all connected clients, but it takes more than one week to overflow it
-@@ -655,6 +816,10 @@ static void SV_WriteEntitiesToClient( sv_client_t *cl, sizebuf_t *msg )
+@@ -655,6 +812,10 @@ static void SV_WriteEntitiesToClient( sv_client_t *cl, sizebuf_t *msg )
  		svs.next_client_entities++;
  		frame->num_entities++;
  	}
@@ -3991,7 +3987,7 @@ index 3ff8edbf..9deb3786 100644
  
  	SV_EmitPacketEntities( cl, frame, msg );
  	SV_EmitEvents( cl, frame, msg );
-@@ -675,10 +840,18 @@ SV_SendClientDatagram
+@@ -675,10 +836,18 @@ SV_SendClientDatagram
  */
  static void SV_SendClientDatagram( sv_client_t *cl )
  {
@@ -4010,7 +4006,7 @@ index 3ff8edbf..9deb3786 100644
  	MSG_Init( &msg, "Datagram", msg_buf, sizeof( msg_buf ));
  
  	// always send servertime at new frame
-@@ -706,6 +879,9 @@ static void SV_SendClientDatagram( sv_client_t *cl )
+@@ -706,6 +875,9 @@ static void SV_SendClientDatagram( sv_client_t *cl )
  	}
  
  	MSG_Clear( &cl->datagram );

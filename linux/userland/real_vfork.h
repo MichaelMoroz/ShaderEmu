@@ -5,15 +5,9 @@
 #define REAL_VFORK_H
 #include <sys/types.h>
 
-#ifdef __gpuvm__
-/* gpu_vm's musl has the kernel's vfork (clone(CLONE_VM | CLONE_VFORK | SIGCHLD): gpu_vm/userland/README.md) */
-#include <unistd.h>
-#define real_vfork vfork
-#else
 /* clone(CLONE_VM | CLONE_VFORK | SIGCHLD) with no frame: both come back through ra */
 __asm__(".text\n.type real_vfork,%function\nreal_vfork:\n"
 	"\tli a7, 220\n\tli a0, 0x4111\n\tli a1, 0\n\tli a2, 0\n\tli a3, 0\n\tli a4, 0\n\tecall\n\tret\n");
 pid_t real_vfork(void) __attribute__((returns_twice));
-#endif
 
 #endif

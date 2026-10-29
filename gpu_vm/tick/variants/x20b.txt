@@ -1,4 +1,0 @@
-# x20b: one lane a core (x19u's UAV state) against x18's 38 pixels a core, and the cuckoo cache
-x18       gpu_vm/tick/steps/x18.hlsl
-x19u      gpu_vm/tick/steps/x19u.hlsl
-x20       gpu_vm/tick/steps/x20.hlsl
