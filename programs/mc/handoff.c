@@ -2,7 +2,7 @@
 // client_job), alone: core 0 writes a list's entry (two texels, each saying its frame) and then the count of frames
 // asked for; the worker, seeing the count, reads the entry. Between two frames core 0 stores up to FILL words of a
 // table, so that some of its passes end with the write cache full. An entry the worker reads as older than the count
-// says is the card-only n < cg.latestSnapshotNum's cause (GPU-VM docs/REGRESSIONS.md): it must say 0.
+// says is the card-only n < cg.latestSnapshotNum's cause: it must say 0.
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>

@@ -1,5 +1,5 @@
 """No MMU: a read of /dev/zero clears the reader's buffer up to a megabyte at a time, not a page, and a write does
-not touch its buffer's pages first (GPU-VM linux/drivers/zeroread_hook.py, a004391).
+not touch its buffer's pages first.
 
 From 4 KB up the kernel's memset is the machine's parallel fill (memset_hook.py), and a page a step asked for one a
 page: the page was "just for latency reasons", and a fill of a megabyte takes no longer to ask for than one of a

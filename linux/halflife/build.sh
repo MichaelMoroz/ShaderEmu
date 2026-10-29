@@ -63,7 +63,7 @@ HLDEFS="-DXASH_SHADEREMU=1 -DXASH_BUILD_COMMIT=\"$HLSDK_COMMIT\" -DHAVE_TGMATH_H
     -DHAVE_STRLCPY=1 -DHAVE_STRLCAT=1"
 HLINC="-I$H/dlls -I$H/common -I$H/engine -I$H/pm_shared -I$H/game_shared -I$H/public"
 # A variable a section (-fdata-sections), each starting on 16 bytes: the server's and the drawing's workers store
-# beside core 0, and two cores must not store to one 16-byte texel in a pass (gpu_vm's whole-texel commit, GVM_RACES)
+# beside core 0, and two cores must not store to one 16-byte texel in a pass (RVC_RACES)
 ALIGN16="--set-section-alignment .data*=16 --set-section-alignment .sdata*=16 --set-section-alignment .bss*=16 --set-section-alignment .sbss*=16"
 export HERE BUILD ALIGN16
 mkdir -p "$BUILD" && cd "$BUILD"

@@ -110,7 +110,7 @@ static inline uint32_t mc_time(void)
 // Between what another core reads and the word that tells it the data is there: the compiler keeps every store before
 // it before every store after. A pass ends at any instruction and its commit publishes what the pass stored, so a word
 // that says "ready" stored ahead of its data (the compiler may: C orders no plain stores) reaches the other core first
-// (GPU-VM's handoff.c: 293 of 20,000 frames on its card; Quake III's n < cg.latestSnapshotNum). A call to mcw_post
+// (handoff.c: 293 of 20,000 frames on a card; Quake III's n < cg.latestSnapshotNum). A call to mcw_post
 // orders what was stored before it (another file's function, or its own barrier); a volatile word does not hold back
 // plain stores, so a flag of a program's own wants this.
 #define mc_publish() __asm__ volatile("" ::: "memory")

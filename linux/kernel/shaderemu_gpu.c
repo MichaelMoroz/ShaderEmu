@@ -165,7 +165,7 @@ static void workers_layout(void)
 /*
  * The layout made at boot, in the background, not when the first program asks: its three sleeps
  * of 60 ms were paid by the first program with workers and by the window server at the
- * pointer's first move (GPU-VM c519897). Tried again every 100 ms, a few times, while the host
+ * pointer's first move. Tried again every 100 ms, a few times, while the host
  * has not yet said how many cores there could be; a program that asks first lays them out itself.
  */
 static void workers_layout_boot(struct work_struct *work);

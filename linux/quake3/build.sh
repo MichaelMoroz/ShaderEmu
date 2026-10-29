@@ -69,7 +69,7 @@ OURS="sys_shaderemu tr_shaderemu snd_shaderemu server_shaderemu client_shaderemu
 GLES="-DSEGL_FLOAT -DMAX_TEXTURES=64"
 GLINC="-idirafter $PROGRAMS/linux/include -I$MW/src/include"
 FPU="-fno-math-errno -fsingle-precision-constant"
-# GCC inlining more (gpu_vm inlines 3 times its compiler's threshold): fewer calls, fewer prologue saves, which are stores
+# GCC inlining more: fewer calls, fewer prologue saves, which are stores
 # (docs/plans/riscv-backport-plan.md, 2b). On rvc_cpu Quake's track 10 to 1200 2.1% fewer instructions on the first core,
 # Quake III's 600 frames 1.9% fewer on all cores and 2.4% less guest time; Doom and the NES gained nothing.
 OPT="-O3 -fno-tree-vectorize -fsched-pressure -funroll-loops --param max-inline-insns-auto=60 --param max-inline-insns-single=400 --param inline-unit-growth=80"

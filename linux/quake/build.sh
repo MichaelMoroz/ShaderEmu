@@ -56,7 +56,7 @@ FPU="-fno-math-errno -fsingle-precision-constant"
 # (QUAKE_DEFINES=-DSE_COUNT counts what the server does in a frame, for the quakestat: lines)
 # -O3 without its vectors (the machine has none), with loops unrolled: 6% fewer instructions a
 # frame of a timedemo than -O2 and 5% fewer to a level's first picture, for 190 KB of program.
-# GCC inlining more (gpu_vm inlines 3 times its compiler's threshold): fewer calls, fewer prologue saves, which are stores
+# GCC inlining more: fewer calls, fewer prologue saves, which are stores
 # (docs/plans/riscv-backport-plan.md, 2b). On rvc_cpu Quake's track 10 to 1200 2.1% fewer instructions on the first core,
 # Quake III's 600 frames 1.9% fewer on all cores and 2.4% less guest time; Doom and the NES gained nothing.
 OPT="-O3 -fno-tree-vectorize -fsched-pressure -funroll-loops --param max-inline-insns-auto=60 --param max-inline-insns-single=400 --param inline-unit-growth=80"

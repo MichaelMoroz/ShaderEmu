@@ -1076,7 +1076,7 @@ struct Worker { int state = MC_PARKED; u32 seen = 0, start_seen = 0, job_seen = 
 static std::vector<Worker> workers;
 static u32 geometry[256];   // each worker's cache bits as the machine's geometry has them; 0: no such worker
 // RVC_WC_BITS=N (4 to 8): core 0's tables of 2^N buckets, not the tick's 6 (L1_TABLE_BITS): the cache's size against
-// what a pass does (GPU-VM's compare/wcsize.py; tools/wcsize.py)
+// what a pass does (tools/wcsize.py)
 static u32 wc_bits0 = 6;
 static u32 wc_bits_of(int hart) { return hart ? geometry[hart] : wc_bits0; }
 
