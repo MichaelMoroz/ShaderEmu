@@ -688,6 +688,13 @@ a second and 1.46 ticks a second, 66 and 60 ms 9.17 and 1.28 (66 and 90: 8.49 an
 1.16); the played scroll 10.48 to 15.30 pictures a second (2.45 to 2.04 ticks a second), windows 8.97
 to 12.18 (0.90 to 1.01 ticks a second).
 
+On the card (rv_compare `openttd-play`, round 0 only, 29 October 2026; om3 is 9d77da6's image, of8 this tree's):
+scroll 7.16 to 12.31 pictures a second, zoomed out 1.47 to 2.46, windows 5.5 to 7.85, start to the game 53.9 to
+55.0 s, but game ticks while played 1.40 to 1.13 ticks a second. `rvc_cpu` at the card's speed said the ticks rose
+(1.09 to 1.28, the same metric): it does not model what holds the tick on the card, so the pace is to be tuned on
+the card (`OPENTTD_PACE`, the most between two ticks, 1000 ms; `OPENTTD_PACE_MS`) until the ticks are not lower.
+Round 1 of both and the paused part (`openttd`) were not measured yet.
+
 ## Not done
 
 - Pitch bend and other controllers in the music.
