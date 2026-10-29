@@ -13,6 +13,7 @@ Shader "ShaderEmu/Display"
         [ToggleUI] _Power ("Machine is on", Float) = 1
         [ToggleUI] _Raw ("One pixel a texel", Float) = 0
         _RawSize ("Size of the target with _Raw", Vector) = (2048, 1024, 0, 0)
+        _Rect ("With _Raw: the part of the target drawn, from its top left (EmuMachine: the display's mode)", Vector) = (1, 1, 0, 0)
         _StateRow ("Row of the state texture RAM starts in (EmuUdonCpu: its copy of the display)", Float) = 64
         _HostPointer ("The host's pointer in display pixels (z: it is on the display)", Vector) = (0, 0, 0, 0)
     }
@@ -31,7 +32,7 @@ Shader "ShaderEmu/Display"
             Texture2D<uint4> _State;
             Texture2D<float4> _GpuTarget;
             float _Aspect, _Brightness, _Power, _Raw, _StateRow;
-            float4 _RawSize, _HostPointer;
+            float4 _RawSize, _HostPointer, _Rect;
             float4 _Off;
 
             static const uint DispCtrl = 0x100000, DispPalette = 0x100040, DispPixels = 0x100100;
@@ -44,8 +45,14 @@ Shader "ShaderEmu/Display"
 
             v2f vert(appdata_base v) {
                 v2f o;
-                o.pos = UnityObjectToClipPos(v.vertex);
                 o.uv = v.texcoord.xy;
+                if (_Raw > 0.5) {
+                    // a blit's quad, 0 to 1 each way, made the target's top left _Rect of it: the rest keeps the _Off a
+                    // whole blit left there, and the same pixels get the same uv
+                    o.uv = float2(o.uv.x * _Rect.x, 1.0 - (1.0 - o.uv.y) * _Rect.y);
+                    v.vertex.xy = float2(v.vertex.x * _Rect.x, 1.0 - (1.0 - v.vertex.y) * _Rect.y);
+                }
+                o.pos = UnityObjectToClipPos(v.vertex);
                 return o;
             }
 

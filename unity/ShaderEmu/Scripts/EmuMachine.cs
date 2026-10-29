@@ -113,6 +113,9 @@ public class EmuMachine : UdonSharpBehaviour
     private VRCImageDownloader fetchTestImages;
 
     [HideInInspector] public int displayMode, displayWidth, displayHeight;
+    // the display texture outside this rectangle at its top left holds _Off (ShowDisplay), unless unknown
+    private int paintedWidth, paintedHeight;
+    private bool paintedUnknown = true;
     [HideInInspector] public bool keyboardOwned;   // a guest program reads the keyboard device
 
     // Another player's machine is on the screens (EmuShareHub): the wall is not this one's to
@@ -449,8 +452,26 @@ public class EmuMachine : UdonSharpBehaviour
         displayMaterial.SetVector("_HostPointer", new Vector4(theirs ? remoteX : pointerX, theirs ? remoteY : pointerY,
                                                               theirs || (pointerOn && (!inputAway || pointerOwn)) ? 1 : 0, 0));
         // off: black, as the picture is also the light the display gives the room (LTCGI)
-        if (powered || theirs) VRCGraphics.Blit(state, displayTexture, displayMaterial);
-        else VRCGraphics.Blit(blackTexture, displayTexture);
+        if (powered || theirs)
+        {
+            // Only the mode's rectangle at the texture's top left, where outside it a whole blit left _Off
+            // (Display.shader's _Rect): 800 x 600 is a quarter of 2048 x 1024. A whole blit after the mode
+            // shrinks, and for another's display, whose mode is not displayWidth.
+            int w = displayWidth, h = displayHeight;
+            bool part = !theirs && w > 0 && !paintedUnknown && w >= paintedWidth && h >= paintedHeight
+                        && w <= displayTexture.width && h <= displayTexture.height;
+            displayMaterial.SetVector("_Rect", part ? new Vector4((float)w / displayTexture.width, (float)h / displayTexture.height, 0, 0)
+                                                    : new Vector4(1, 1, 0, 0));
+            VRCGraphics.Blit(state, displayTexture, displayMaterial);
+            paintedUnknown = theirs || w == 0;
+            paintedWidth = w;
+            paintedHeight = h;
+        }
+        else
+        {
+            VRCGraphics.Blit(blackTexture, displayTexture);
+            paintedUnknown = true;
+        }
         if (showRemote) return;
         shownWidth = powered ? displayWidth : 0;
         shownHeight = powered ? displayHeight : 0;
