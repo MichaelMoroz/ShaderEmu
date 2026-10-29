@@ -23,6 +23,7 @@ void CallWindowGameTickEvent(); /* window.cpp, gfx.cpp */
 void DoPaletteAnimations();
 void YapfShipAheadService(); /* yapf_ship.cpp */
 void YapfShipAheadStop();
+void YapfShipAheadDrop();
 void YapfShipAheadGo();
 void YapfShipAheadCancel();
 void YapfShipAheadInit();
@@ -334,7 +335,10 @@ void TwPace(uint32_t work, uint32_t target, bool scrolling)
 	if (quiet > 8) {
 		pace = 0;
 	} else if (avg > target) {
-		pace = std::min(most, pace == 0 ? 1000 : pace + pace / 8 + 25);
+		/* (from half the most, a quarter more a picture: a tick a third cheaper than before filled the slower ramp of
+		 * before, from 200 ms an eighth more a picture, with twice the ticks while zoomed out, and every tick's moves
+		 * are parts drawn again: 1.84 pictures a second while played fell to 1.47) */
+		pace = std::min(most, pace == 0 ? most / 2 : pace + pace / 4 + 25);
 	} else if (avg < target * 7 / 8) {
 		pace = pace * 7 / 8;
 		if (pace < MILLISECONDS_PER_TICK * 5) pace = 0;
@@ -371,6 +375,7 @@ static void TwMain()
 		uint32_t i0;
 		asm volatile("rdinstret %0" : "=r"(i0));
 		const uint32_t park0 = _tw_park_time;
+		if (_pause_mode.Any()) YapfShipAheadDrop();
 		YapfShipAheadStop();
 		try {
 			StateGameLoop();

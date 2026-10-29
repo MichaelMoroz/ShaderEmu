@@ -265,9 +265,13 @@ delete the drawing could be reading waits until no worker draws (`TickExclusive`
   waits for the pieces at the flush.
 - While it scrolls, the ticks are spaced out to keep the picture's work at 90 ms
   (`OPENTTD_PACE_MS`): every tick costs the first core its sync, about 370 instructions a vehicle
-  moved, and the windows its texts and the status bar change; the space grows by an eighth while
-  pictures are late, to a tick a second at most (`OPENTTD_PACE`, 0 never), and is gone eight
-  pictures after the view stops (`OPENTTD_PACE_LOG=1` prints it).
+  moved, and the windows its texts and the status bar change; while pictures are late the space
+  starts at half a second and grows by a quarter a picture, to a tick a second at most
+  (`OPENTTD_PACE`, 0 never), and is gone eight pictures after the view stops (`OPENTTD_PACE_LOG=1`
+  prints it). It grew from 200 ms by an eighth before the link graph and the ships' paths left the
+  tick: the tick a third cheaper then filled that ramp with twice the ticks while zoomed out, every
+  tick's moves parts drawn again, and the card's played zoomed out fell from 1.84 pictures a second
+  to 1.47 (at once to the most: 1.86, but 1.20 ticks a second against 1.26 before).
 - A loaded game has none of its water regions, and each ship's first path made the regions it
   crossed one by one in the tick, half a million instructions each: ticks of 10 s and more in the
   first minute of `busy.sav`. They are all made at the start, one a job on the workers
@@ -510,7 +514,8 @@ the program's `operator new`, its blocks of up to 1 KB used again by size; what 
 nodes' annotations with their flows, is copied out of that heap by the core that finishes it
 (`SeFinish`), each tick for a job whose worker has ended (`SeReap`), so the slot takes the next
 job. A job with no worker is handed again the next tick, and one whose heap runs out is run where
-it is asked about. The game is the same: `6abca409` after 300 ticks of busy.sav, `503e40ee` after
+it is asked about. The jobs a load leaves are handed from the game's first tick on
+(`SeRunOnePending`), not at the load: a paused game's pictures pay nothing for them. The game is the same: `6abca409` after 300 ticks of busy.sav, `503e40ee` after
 1,300 (17 jobs on workers). Played (`OPENTTD_PLAY=1` on `rvc_cpu`), the 16 jobs a load leaves were
 600 thousand instructions each in the tick's first 16 ticks, and the longest hold of the first
 core by the tick 350 to 1,550 ms; with them on workers the tick's worker spends 226 to 285 ms a
@@ -562,6 +567,10 @@ of the tiles are the tick's alone there (mcw's calls are the first core's), and 
 water regions made invalid (`WaterRegionsMakeAll`). The game is the same: the played script's sum at
 tick 40 (`OPENTTD_SUM_AT=40`, `cfbecedf`, vehicles `fb8c297e`) with and without the paths ahead and
 the link graph's workers, and `OPENTTD_SHIP_AHEAD=check` says 6 checked, 0 differ.
+With no job out the stillness ends without a pass (a job posted later starts in a later pass and
+sees the word), and in a paused game the tick gives every path out up (`YapfShipAheadDrop`): a
+paused game takes none, and a job out made every hold of the tick wait a pass or two for it, 2 ms
+of each paused picture (the card's paused scroll 8.9 pictures a second to 7.9).
 
 The water regions made invalid are made at the end of each tick's vehicles, one region a job on the
 workers (`WaterRegionsMakeAll` in `water_regions.cpp`, from main's 5a3b851: the labeling `Make` into a

@@ -1116,7 +1116,7 @@ index 8c5cf4b..8454545 100644
  	OnTick_Companies();
  	OnTick_LinkGraph();
 diff --git a/src/linkgraph/linkgraphjob.cpp b/src/linkgraph/linkgraphjob.cpp
-index 365b035..4d79c84 100644
+index 365b035..66d04f6 100644
 --- a/src/linkgraph/linkgraphjob.cpp
 +++ b/src/linkgraph/linkgraphjob.cpp
 @@ -12,6 +12,203 @@
@@ -1323,7 +1323,7 @@ index 365b035..4d79c84 100644
  
  #include "../safeguards.h"
  
-@@ -56,8 +253,120 @@ void LinkGraphJob::EraseFlows(StationID from)
+@@ -56,8 +253,121 @@ void LinkGraphJob::EraseFlows(StationID from)
   * Spawn a thread if possible and run the link graph job in the thread. If
   * that's not possible run the job right now in the current thread.
   */
@@ -1436,7 +1436,8 @@ index 365b035..4d79c84 100644
 +	 * they run one a tick from the first, each before it is first asked about; docs/games/openttd.md, "The start")
 +	 * Each goes to a worker of its own if one is free (SeHand), as upstream runs it in a thread of its own. */
 +	if (_se_spawn_later) {
-+		this->se_pending = !this->SeHand();
++		/* (handed from the game's first tick on, SeRunOnePending: a paused game's pictures pay nothing for them) */
++		this->se_pending = true;
 +		return;
 +	}
 +	if (this->SeHand()) return;
@@ -1444,7 +1445,7 @@ index 365b035..4d79c84 100644
  	if (!StartNewThread(&this->thread, "ottd:linkgraph", &(LinkGraphSchedule::Run), this)) {
  		/* Of course this will hang a bit.
  		 * On the other hand, if you want to play games which make this hang noticeably
-@@ -75,6 +384,16 @@ void LinkGraphJob::SpawnThread()
+@@ -75,6 +385,16 @@ void LinkGraphJob::SpawnThread()
   */
  void LinkGraphJob::JoinThread()
  {
@@ -2478,7 +2479,7 @@ index 3f257e2..0392c91 100644
  			if (best_open_node == nullptr) break;
  
 diff --git a/src/pathfinder/yapf/yapf_ship.cpp b/src/pathfinder/yapf/yapf_ship.cpp
-index b024edb..accbb7f 100644
+index b024edb..9d5d961 100644
 --- a/src/pathfinder/yapf/yapf_ship.cpp
 +++ b/src/pathfinder/yapf/yapf_ship.cpp
 @@ -16,8 +16,416 @@
@@ -2992,7 +2993,7 @@ index b024edb..accbb7f 100644
  			c += count * 3 * YAPF_TILE_LENGTH;
  		}
  
-@@ -424,14 +885,533 @@ struct CYapfShip_TypesT {
+@@ -424,14 +885,552 @@ struct CYapfShip_TypesT {
  
  struct CYapfShip : CYapfT<CYapfShip_TypesT<CYapfShip>> {
  	explicit CYapfShip(int max_nodes) { this->max_search_nodes = max_nodes; }
@@ -3463,6 +3464,14 @@ index b024edb..accbb7f 100644
 +	const uint32_t q = _ahead_quiet.v;
 +	if ((q & 1) == 0) return;
 +	_ahead_quiet.v = q + 1;
++	/* (with no job out none can read: a job posted from here on starts in a later pass and sees the word stored; the
++	 * pass waited for nothing was most of the first core's holds of the tick, 3 ms a picture of a paused game's scroll) */
++	bool out = false;
++	for (int k = 0; k < AHEAD_SLOTS; k++) {
++		const uint32_t r = _ahead_slots[k].in.req;
++		if (_ahead_slots[k].out.ended != r && !(_ahead_post[k].decided == r && _ahead_post[k].posted != r)) out = true;
++	}
++	if (!out) return;
 +	const bool first = !TickOnWorker();
 +	auto pass = [first] { if (first) mcw_rest(); else mc_end_pass(); };
 +	pass();
@@ -3470,6 +3479,17 @@ index b024edb..accbb7f 100644
 +		const AheadSlot &s = _ahead_slots[k];
 +		while (s.out.ack == q && s.out.ended != s.in.req) pass();
 +	}
++}
++
++/**
++ * The tick on its worker, in a paused game: every path out is given up (a paused game takes none). A job out keeps
++ * every hold of the tick waiting a pass or two for it (YapfShipAheadStop): 2 ms of each paused picture.
++ */
++void YapfShipAheadDrop()
++{
++	if (_ahead_slots == nullptr || !_tw_on) return;
++	for (int k = 0; k < AHEAD_SLOTS; k++) AheadAbandon(k);
++	AheadReap();
 +}
 +
 +/** The tick on its worker waits, between two ticks or for a path: the map is still until YapfShipAheadStop. */
