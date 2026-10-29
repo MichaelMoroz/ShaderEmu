@@ -36,6 +36,7 @@ public:
         for (auto& d : opt.compile.defines)
             if (d.first == "NO_SCATTER") scatter_ = false;
         inplace_ = opt.ramInplace;
+        uav_ = opt.uavTick && opt.ramInplace;
         tickDirect_ = opt.tickDirect;
         laneField_ = opt.laneField && opt.ramInplace;
         scatter_ = scatter_ && mrt_ && bands_ && !inplace_;
@@ -109,7 +110,7 @@ public:
         }
         for (auto& d : opt.compile.defines)
             if (d.first == "TICK_LOAD") mrtLoad_ = (UINT)(std::max)(1, atoi(d.second.c_str()));
-        if (mrt_) {
+        if (mrt_ && !uav_) {
             // the tick's pass again, as the one that copies its eight targets into the state
             ShaderBuildOptions unpack = bo;
             unpack.settings.defines.push_back({"TICK_UNPACK", "1"});
@@ -117,7 +118,7 @@ public:
             unpackBo_ = unpack;
         }
         tickBo_ = bo;
-        tickVariants_.push_back({passes_[0], mrt_ ? unpackPasses_[0] : GpuPass{}});
+        tickVariants_.push_back({passes_[0], mrt_ && !uav_ ? unpackPasses_[0] : GpuPass{}});
         for (auto& d : opt.compile.defines)
             if (d.first == "RAM_DIRECT") csDirect_ = true;
         for (auto& d : opt.compile.defines)
@@ -956,6 +957,60 @@ private:
     ID3D11Texture2D* stateTex() const { return inplace_ ? ram_.Get() : crt_.current(); }
     ID3D11ShaderResourceView* stateSrv() const { return inplace_ ? ramSrv_.Get() : crt_.currentSRV(); }
 
+    // ---- --uav (experiments/rvc_uav/README.md): the tick as a pixel a core with R as its UAV ----
+    // The tick's viewport is kCoresMost blocks of 8 x 8 in a row, drawn by one triangle (main.shader's tick_geom), the
+    // first pixel of a block the core's; its render target is a dummy that nothing reads.
+    bool uav_ = false;
+    ComPtr<ID3D11UnorderedAccessView> ramTexUav_;
+    ComPtr<ID3D11Texture2D> uavDummy_;
+    ComPtr<ID3D11RenderTargetView> uavDummyRtv_;
+    bool createUavTick(std::string& err) {
+        D3D11_UNORDERED_ACCESS_VIEW_DESC ud{};
+        ud.Format = DXGI_FORMAT_R32G32B32A32_UINT;
+        ud.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+        HRESULT hr = gpu_.device->CreateUnorderedAccessView(ram_.Get(), &ud, &ramTexUav_);
+        D3D11_TEXTURE2D_DESC td{};
+        td.Width = 8 * kCoresMost;
+        td.Height = 8;
+        td.MipLevels = td.ArraySize = 1;
+        td.Format = DXGI_FORMAT_R32G32B32A32_UINT;
+        td.SampleDesc.Count = 1;
+        td.BindFlags = D3D11_BIND_RENDER_TARGET;
+        if (SUCCEEDED(hr)) hr = gpu_.device->CreateTexture2D(&td, nullptr, &uavDummy_);
+        if (SUCCEEDED(hr)) hr = gpu_.device->CreateRenderTargetView(uavDummy_.Get(), nullptr, &uavDummyRtv_);
+        D3D11_FEATURE_DATA_D3D11_OPTIONS2 o2{};
+        gpu_.device->CheckFeatureSupport(D3D11_FEATURE_D3D11_OPTIONS2, &o2, sizeof(o2));
+        if (FAILED(hr)) {
+            err = "--uav: " + hrToString(hr);
+            return false;
+        }
+        fprintf(stderr, "[harness] --uav: the tick has RAM as a UAV (typed loads of four words: %s)\n", o2.TypedUAVLoadAdditionalFormats ? "yes" : "NO");
+        return true;
+    }
+    void uavTickDraw(Material& mat) {
+        ID3D11DeviceContext* ctx = gpu_.ctx.Get();
+        GpuPass& pass = passes_[0];
+        mat.setVector("_CustomRenderTextureInfo", kWidth, kHeight, 1, 0);
+        ID3D11ShaderResourceView* nulls[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT] = {};
+        ctx->VSSetShaderResources(0, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT, nulls);
+        ctx->GSSetShaderResources(0, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT, nulls);
+        ctx->PSSetShaderResources(0, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT, nulls);
+        ID3D11RenderTargetView* rtv = uavDummyRtv_.Get();
+        ID3D11UnorderedAccessView* uav = ramTexUav_.Get();
+        ctx->OMSetRenderTargetsAndUnorderedAccessViews(1, &rtv, nullptr, 1, 1, &uav, nullptr);
+        D3D11_VIEWPORT vp{0, 0, (float)(8 * kCoresMost), 8, 0, 1};
+        ctx->RSSetViewports(1, &vp);
+        ctx->RSSetState(gpu_.rasterNoCull.Get());
+        ctx->OMSetBlendState(gpu_.blendOpaque.Get(), nullptr, 0xffffffff);
+        ctx->OMSetDepthStencilState(gpu_.depthOff.Get(), 0);
+        ctx->IASetInputLayout(nullptr);
+        ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        mat.bind(ctx, pass, gpu_);
+        ctx->Draw(3, 0);
+        ID3D11UnorderedAccessView* none = nullptr;
+        ctx->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 1, 1, &none, nullptr);
+    }
+
     bool createInplace(std::string& err) {
         struct T { ComPtr<ID3D11Texture2D>* tex; UINT rows; ComPtr<ID3D11ShaderResourceView>* srv; ComPtr<ID3D11RenderTargetView>* rtv; };
         T all[4] = {{&ram_, kHeight, &ramSrv_, &ramRtv_}, {&tickState_, 64, &tickStateSrv_, &tickStateRtv_},
@@ -967,7 +1022,7 @@ private:
             td.MipLevels = td.ArraySize = 1;
             td.Format = DXGI_FORMAT_R32G32B32A32_UINT;
             td.SampleDesc.Count = 1;
-            td.BindFlags = D3D11_BIND_RENDER_TARGET | (t.srv ? D3D11_BIND_SHADER_RESOURCE : 0);
+            td.BindFlags = D3D11_BIND_RENDER_TARGET | (t.srv ? D3D11_BIND_SHADER_RESOURCE : 0) | (uav_ && t.rows == kHeight ? (UINT)D3D11_BIND_UNORDERED_ACCESS : 0u);
             HRESULT hr = gpu_.device->CreateTexture2D(&td, nullptr, t.tex->GetAddressOf());
             if (SUCCEEDED(hr) && t.srv) hr = gpu_.device->CreateShaderResourceView(t.tex->Get(), nullptr, t.srv->GetAddressOf());
             if (SUCCEEDED(hr)) hr = gpu_.device->CreateRenderTargetView(t.tex->Get(), nullptr, t.rtv->GetAddressOf());
@@ -976,6 +1031,7 @@ private:
                 return false;
             }
         }
+        if (uav_ && !createUavTick(err)) return false;
         const float zero[4] = {0, 0, 0, 0};
         for (auto* r : {ramRtv_.Get(), tickStateRtv_.Get(), stageRtv_.Get()}) gpu_.ctx->ClearRenderTargetView(r, zero);
         fprintf(stderr, "[harness] RAM in one texture: %.0f MiB of state and RAM, %.1f MiB beside it\n",
@@ -1089,7 +1145,8 @@ private:
                 bool workers = cores_ > 1 && (workersNow || getenv("RVC_WORKERS_ALWAYS"));
                 activeCores_ = workers ? (UINT)cores_ : 1;
                 if (laneField_) mat.setInt("_LaneField", 1);
-                if (mrt_) tickDraw(mat, core0);
+                if (uav_) uavTickDraw(mat);
+                else if (mrt_) tickDraw(mat, core0);
             }
             prof_.mark(ctx);
             // RVC_FREEZE: as frame()'s, the tick alone, its state not written back (every pass the same instructions)
@@ -1106,7 +1163,7 @@ private:
             }
             D3D11_BOX rows{0, 0, 0, kWidth, 64, 1};
             ctx->CopySubresourceRegion(tickState_.Get(), 0, 0, 0, 0, ram_.Get(), 0, &rows);
-            if (ticks) drawInto(mrt_ ? unpackPasses_[0] : passes_[0], mat, tickStateRtv_.Get(), 0,
+            if (ticks && !uav_) drawInto(mrt_ ? unpackPasses_[0] : passes_[0], mat, tickStateRtv_.Get(), 0,
                                 (std::max)(6u, 3 * tickPrims()), D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST, &core0);
             prof_.mark(ctx);
             if (timeIt && round == rounds - 1) ctx->End(tsQuery_[1].Get());

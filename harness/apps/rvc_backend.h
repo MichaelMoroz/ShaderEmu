@@ -30,6 +30,7 @@ struct BackendOptions {
     std::string computeShader;    // D3D11 only, --compute: the processor as this compute shader (experiments/rv32_min)
     bool tickDirect = false;      // --unpack-in-place: the unpack draws into the state texture itself, no zone copied in and back (a tick that does not read the texture there)
     bool ramInplace = false;      // D3D11: RAM in one texture written in place, the commit's passes with RAM_INPLACE (src/ram.h)
+    bool uavTick = false;         // --uav (experiments/rvc_uav): the tick a pixel a core, RAM its UAV; no unpack, no write cache
     bool laneField = false;       // D3D11, RAM in place: the tick has the lanes' field (LANE_FIELD, experiments/rvc_lean; docs/machine/lanes.md)
     // --blits (D3D11, RAM in place): the gather, the RAM commit and the GPU's lists drawn as the world's blits draw them,
     // patches amplified by a geometry shader (src/amp.h; docs/machine/gpu.md, "Blits in place of cameras"), with

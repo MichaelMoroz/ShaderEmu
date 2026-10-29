@@ -217,6 +217,7 @@ struct Options {
     bool blits = false;       // --blits: the commit's points and the GPU's lists as the world's blits (src/amp.h)
     bool noBands = false;     // --no-bands: the commit rewrites all of RAM, not only the bands written to (COMMIT_BANDS off)
     bool unpackInPlace = false;   // --unpack-in-place: a tick that can (an rvc_lean variant) has its unpack drawn into the state texture, no zone copies
+    bool uav = false;         // --uav (experiments/rvc_uav): the tick stores into RAM through a UAV, a pixel a core, no write cache
     bool pingPong = false;    // --ping-pong: two state textures, as before RAM was written in place (RAM_INPLACE off)
     // --replay DIR;DIR;...: with --load-state, the tick of each folder (its CPUTick pass) beside the machine's own, each
     // run --replay-frames frames from the snapshot's state, --replay-rounds times in turn: wall time a frame, instructions a frame
@@ -547,6 +548,7 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--define") o.defines.push_back(next("--define"));
         else if (a == "--no-bands") o.noBands = true;
         else if (a == "--ping-pong") o.pingPong = true;
+        else if (a == "--uav") o.uav = true;
         else if (a == "--unpack-in-place") o.unpackInPlace = true;
         else if (a == "--lazy") o.lazy = true;
         else if (a == "--blits") o.blits = true;
@@ -679,7 +681,7 @@ const char* const kUpstream = "rvc/_Nix/rvc";
 bool isOpt(const std::string& dir) {
     // (experiments/rvc_lean: the same machine with the processor rewritten in the compute shader's shape)
     std::string name = fs::u8path(dir).filename().u8string();
-    return dir == "experiments/rvc_opt" || name.rfind("rvc_opt", 0) == 0 || name.rfind("rvc_lean", 0) == 0;
+    return dir == "experiments/rvc_opt" || name.rfind("rvc_opt", 0) == 0 || name.rfind("rvc_lean", 0) == 0 || name.rfind("rvc_uav", 0) == 0;
 }
 const char* const kPrograms = "programs/bin";   // our own programs, as raw memory images
 struct BootImage {
@@ -1045,6 +1047,15 @@ int main(int argc, char** argv) {
     if (!opt.dxc && !opt.pingPong && isOpt(opt.rvcDir) && !ownCommit && opt.compute.empty() && !getenv("RVC11_COMPUTE")) {
         if (lazyOn) fprintf(stderr, "[harness] --lazy has two state textures (RAM_INPLACE off)\n");
         else bo.ramInplace = true;
+    }
+    // --uav (experiments/rvc_uav/README.md): RAM in one texture, which the tick has as a UAV
+    if (opt.uav) {
+        if (!bo.ramInplace || std::find(opt.defines.begin(), opt.defines.end(), "TICK_MRT") == opt.defines.end()) {
+            fprintf(stderr, "[harness] --uav is the D3D11 harness's machine with RAM in one texture (no --ping-pong, --lazy, --cpu or --no-mrt)\n");
+            return 2;
+        }
+        opt.defines.push_back("TICK_UAV");
+        bo.uavTick = true;
     }
     // under DXC a local array is not zeroed at the start of every tick, a static one is
     if (opt.dxc) opt.defines.push_back("L1_LOCAL");
