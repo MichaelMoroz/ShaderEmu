@@ -54,18 +54,21 @@ index 16215e7..01f800e 100644
 +    CONDITION SHADEREMU
 +)
 diff --git a/src/blitter/8bpp_base.cpp b/src/blitter/8bpp_base.cpp
-index b32f98b..847f06c 100644
+index b32f98b..a5d435e 100644
 --- a/src/blitter/8bpp_base.cpp
 +++ b/src/blitter/8bpp_base.cpp
-@@ -11,6 +11,7 @@
+@@ -11,6 +11,10 @@
  #include "../gfx_func.h"
  #include "8bpp_base.hpp"
  #include "common.hpp"
 +#include "../debug.h"
++#ifdef WITH_SHADEREMU
++#include <mcwx.h>
++#endif
  
  #include "../safeguards.h"
  
-@@ -86,10 +87,77 @@ void Blitter_8bppBase::CopyImageToBuffer(const void *video, void *dst, int width
+@@ -86,10 +90,141 @@ void Blitter_8bppBase::CopyImageToBuffer(const void *video, void *dst, int width
  	}
  }
  
@@ -131,6 +134,70 @@ index b32f98b..847f06c 100644
 +}
 +#endif
 +
++#ifdef WITH_SHADEREMU
++/** A scroll's rows moved by every core (VpMovePixels). */
++static struct {
++	const uint8_t *src;
++	uint8_t *dst;
++	size_t width, height;
++	ptrdiff_t pitch;
++	uint8_t *temp;
++	size_t temp_pitch;
++} _vp_move;
++static std::vector<uint8_t> _vp_move_temp;
++
++static void VpMoveInRows(void *, uint32_t from, uint32_t to)
++{
++	for (size_t r = from * 16; r < std::min<size_t>(to * 16, _vp_move.height); r++) {
++		const uint8_t *src = _vp_move.src + r * _vp_move.pitch;
++		uint8_t *dst = _vp_move.dst + r * _vp_move.pitch;
++		if (src < dst) {
++			std::move_backward(src, src + _vp_move.width, dst + _vp_move.width);
++		} else {
++			std::move(src, src + _vp_move.width, dst);
++		}
++	}
++}
++
++static void VpMoveToTemp(void *, uint32_t from, uint32_t to)
++{
++	for (size_t r = from * 16; r < std::min<size_t>(to * 16, _vp_move.height); r++) {
++		std::copy_n(_vp_move.src + r * _vp_move.pitch, _vp_move.width, _vp_move.temp + r * _vp_move.temp_pitch);
++	}
++}
++
++static void VpMoveFromTemp(void *, uint32_t from, uint32_t to)
++{
++	for (size_t r = from * 16; r < std::min<size_t>(to * 16, _vp_move.height); r++) {
++		std::copy_n(_vp_move.temp + r * _vp_move.temp_pitch, _vp_move.width, _vp_move.dst + r * _vp_move.pitch);
++	}
++}
++
++/**
++ * Blitter::MovePixels by every core, 16 rows an item, so that no two write the same 16 bytes: a move within
++ * rows at once, a move across rows through a buffer (a row's source is another's destination). False: a small
++ * move, or none of the workers open, is the first core's as before.
++ */
++static bool VpMovePixels(const uint8_t *src, uint8_t *dst, size_t width, size_t height, ptrdiff_t pitch, bool within_rows)
++{
++	if (width * height < 16384 || mcw_count() == 0 || src == dst) return false;
++	_vp_move = { src, dst, width, height, pitch, nullptr, (width + 15) & ~size_t{15} };
++	mcw_for_opts opts = {};
++	opts.grain = 1;
++	const uint32_t items = static_cast<uint32_t>((height + 15) / 16);
++	if (within_rows) {
++		mcw_for_opt(items, VpMoveInRows, nullptr, &opts);
++		return true;
++	}
++	/* (the buffer grows on the first core, so that its pages are there before a worker writes them) */
++	if (_vp_move_temp.size() < _vp_move.temp_pitch * height + 16) _vp_move_temp.resize(_vp_move.temp_pitch * height * 2 + 16);
++	_vp_move.temp = reinterpret_cast<uint8_t *>((reinterpret_cast<uintptr_t>(_vp_move_temp.data()) + 15) & ~uintptr_t{15});
++	mcw_for_opt(items, VpMoveToTemp, nullptr, &opts);
++	mcw_for_opt(items, VpMoveFromTemp, nullptr, &opts);
++	return true;
++}
++#endif
++
  void Blitter_8bppBase::ScrollBuffer(void *video, int &left, int &top, int &width, int &height, int scroll_x, int scroll_y)
  {
  	const uint8_t *src;
@@ -143,29 +210,45 @@ index b32f98b..847f06c 100644
  
  	if (scroll_y > 0) {
  		/* Calculate pointers */
-@@ -111,7 +175,7 @@ void Blitter_8bppBase::ScrollBuffer(void *video, int &left, int &top, int &width
+@@ -111,7 +246,11 @@ void Blitter_8bppBase::ScrollBuffer(void *video, int &left, int &top, int &width
  			width += scroll_x;
  		}
  
 -		Blitter::MovePixels(src, dst, width, height, -_screen.pitch);
++#ifdef WITH_SHADEREMU
++		if (!moved && !VpMovePixels(src, dst, width, height, -_screen.pitch, scroll_y == 0)) Blitter::MovePixels(src, dst, width, height, -_screen.pitch);
++#else
 +		if (!moved) Blitter::MovePixels(src, dst, width, height, -_screen.pitch);
++#endif
  	} else {
  		/* Calculate pointers */
  		dst = (uint8_t *)video + left + top * _screen.pitch;
-@@ -131,7 +195,7 @@ void Blitter_8bppBase::ScrollBuffer(void *video, int &left, int &top, int &width
+@@ -131,7 +270,11 @@ void Blitter_8bppBase::ScrollBuffer(void *video, int &left, int &top, int &width
  			width += scroll_x;
  		}
  
 -		Blitter::MovePixels(src, dst, width, height, _screen.pitch);
++#ifdef WITH_SHADEREMU
++		if (!moved && !VpMovePixels(src, dst, width, height, _screen.pitch, scroll_y == 0)) Blitter::MovePixels(src, dst, width, height, _screen.pitch);
++#else
 +		if (!moved) Blitter::MovePixels(src, dst, width, height, _screen.pitch);
++#endif
  	}
  }
  
 diff --git a/src/blitter/8bpp_optimized.cpp b/src/blitter/8bpp_optimized.cpp
-index d1148b7..37aab8b 100644
+index d1148b7..eda444a 100644
 --- a/src/blitter/8bpp_optimized.cpp
 +++ b/src/blitter/8bpp_optimized.cpp
-@@ -110,7 +110,16 @@ void Blitter_8bppOptimized::Draw(Blitter::BlitterParams *bp, BlitterMode mode, Z
+@@ -9,6 +9,7 @@
+ 
+ #include "../stdafx.h"
+ #include "../zoom_func.h"
++#include "../gfx_func.h"
+ #include "../settings_type.h"
+ #include "8bpp_optimized.hpp"
+ 
+@@ -110,7 +111,16 @@ void Blitter_8bppOptimized::Draw(Blitter::BlitterParams *bp, BlitterMode mode, Z
  				}
  
  				default:
@@ -182,6 +265,40 @@ index d1148b7..37aab8b 100644
  					dst += pixels; src += pixels;
  					break;
  			}
+@@ -146,7 +156,12 @@ Sprite *Blitter_8bppOptimized::Encode(SpriteType sprite_type, const SpriteLoader
+ 	 * memory around as this function is called quite often
+ 	 * and the memory usage is quite low. */
+ 	static ReusableBuffer<uint8_t> temp_buffer;
++#ifdef WITH_SHADEREMU
++	/* (a core loading sprites in a round has memory of its own: VpLoadWanted) */
++	SpriteData *temp_dst = reinterpret_cast<SpriteData *>(VpArenaOn() ? VpArenaTemp(memory) : temp_buffer.ZeroAllocate(memory));
++#else
+ 	SpriteData *temp_dst = reinterpret_cast<SpriteData *>(temp_buffer.ZeroAllocate(memory));
++#endif
+ 	uint8_t *dst = temp_dst->data;
+ 
+ 	/* Make the sprites per zoom-level */
+diff --git a/src/framerate_gui.cpp b/src/framerate_gui.cpp
+index c1de3c5..9c42d29 100644
+--- a/src/framerate_gui.cpp
++++ b/src/framerate_gui.cpp
+@@ -233,8 +233,16 @@ namespace {
+  * The basis of the timestamp is implementation defined, but the value should be steady,
+  * so differences can be taken to reliably measure intervals.
+  */
++#ifdef WITH_SHADEREMU
++/** The machine's clock in milliseconds (the video driver's, once it is open): a system call a measurement was a tenth of a vehicle's tick. */
++const volatile uint32_t *_se_clock_ms;
++#endif
++
+ static TimingMeasurement GetPerformanceTimer()
+ {
++#ifdef WITH_SHADEREMU
++	if (_se_clock_ms != nullptr) return static_cast<TimingMeasurement>(*_se_clock_ms) * 1000;
++#endif
+ 	using namespace std::chrono;
+ 	return (TimingMeasurement)time_point_cast<microseconds>(high_resolution_clock::now()).time_since_epoch().count();
+ }
 diff --git a/src/gfx.cpp b/src/gfx.cpp
 index 2cae30c..233f229 100644
 --- a/src/gfx.cpp
@@ -254,10 +371,10 @@ index 2cae30c..233f229 100644
  	auto block = _dirty_blocks.begin();
  
 diff --git a/src/gfx_func.h b/src/gfx_func.h
-index 4254611..6f66afd 100644
+index 4254611..2110652 100644
 --- a/src/gfx_func.h
 +++ b/src/gfx_func.h
-@@ -184,6 +184,37 @@ std::pair<uint8_t, uint8_t> GetBroadestDigit(FontSize size);
+@@ -184,6 +184,49 @@ std::pair<uint8_t, uint8_t> GetBroadestDigit(FontSize size);
  
  int GetCharacterHeight(FontSize size);
  
@@ -290,6 +407,18 @@ index 4254611..6f66afd 100644
 +	return true;
 +}
 +#define _cur_dpi (_vp_core[VpCore()].cur_dpi)
++/**
++ * A core's memory while it loads sprites in a round (VpLoadWanted): temporaries from the bottom, made
++ * anew for each sprite, what is kept from the top; a worker may not allocate. In 32 bytes of its own.
++ */
++struct alignas(32) VpArena {
++	uint8_t *base;
++	size_t lo, hi, size;
++	bool on;
++};
++extern VpArena _vp_arena[VP_CORES];
++inline bool VpArenaOn() { return _vp_arena[VpCore()].on; }
++void *VpArenaTemp(size_t bytes, bool zero = true);
 +#else
  extern DrawPixelInfo *_cur_dpi;
 +#endif
@@ -381,6 +510,162 @@ index 8c5cf4b..f8b1cbe 100644
  
  	bool main_river = false;
  	if (found) {
+diff --git a/src/linkgraph/linkgraphjob.cpp b/src/linkgraph/linkgraphjob.cpp
+index 365b035..2628cbf 100644
+--- a/src/linkgraph/linkgraphjob.cpp
++++ b/src/linkgraph/linkgraphjob.cpp
+@@ -56,8 +56,29 @@ void LinkGraphJob::EraseFlows(StationID from)
+  * Spawn a thread if possible and run the link graph job in the thread. If
+  * that's not possible run the job right now in the current thread.
+  */
++#ifdef WITH_SHADEREMU
++/** Whether SpawnThread leaves the job to run later (LinkGraphSchedule::SpawnAll, of a load). */
++bool _se_spawn_later = false;
++
++/** A job a load spawned, run now: as a thread would have run it, on its own copy of the graph. */
++void LinkGraphJob::SeRunPending()
++{
++	if (!this->se_pending) return;
++	this->se_pending = false;
++	LinkGraphSchedule::Run(this);
++}
++#endif
++
+ void LinkGraphJob::SpawnThread()
+ {
++#ifdef WITH_SHADEREMU
++	/* (no threads here: a load's jobs, all spawned at once, were 18 million instructions of the start to the game;
++	 * they run one a tick from the first, each before it is first asked about; docs/games/openttd.md, "The start") */
++	if (_se_spawn_later) {
++		this->se_pending = true;
++		return;
++	}
++#endif
+ 	if (!StartNewThread(&this->thread, "ottd:linkgraph", &(LinkGraphSchedule::Run), this)) {
+ 		/* Of course this will hang a bit.
+ 		 * On the other hand, if you want to play games which make this hang noticeably
+@@ -75,6 +96,15 @@ void LinkGraphJob::SpawnThread()
+  */
+ void LinkGraphJob::JoinThread()
+ {
++#ifdef WITH_SHADEREMU
++	if (this->se_pending) {
++		if (CleaningPool() || this->IsJobAborted()) {
++			this->se_pending = false;
++		} else {
++			this->SeRunPending();
++		}
++	}
++#endif
+ 	if (this->thread.joinable()) {
+ 		this->thread.join();
+ 	}
+diff --git a/src/linkgraph/linkgraphjob.h b/src/linkgraph/linkgraphjob.h
+index b308211..1240805 100644
+--- a/src/linkgraph/linkgraphjob.h
++++ b/src/linkgraph/linkgraphjob.h
+@@ -170,6 +170,11 @@ protected:
+ 	void EraseFlows(StationID from);
+ 	void JoinThread();
+ 	void SpawnThread();
++#ifdef WITH_SHADEREMU
++	bool se_pending = false; ///< spawned by a load and not run yet: run a tick at a time, or when it is first asked about
++public:
++	void SeRunPending();
++#endif
+ 
+ public:
+ 	/**
+@@ -188,7 +193,15 @@ public:
+ 	 * This is allowed to spuriously return an incorrect value.
+ 	 * @return True if job has actually finished.
+ 	 */
++#ifdef WITH_SHADEREMU
++	inline bool IsJobCompleted() const
++	{
++		if (this->se_pending) const_cast<LinkGraphJob *>(this)->SeRunPending();
++		return this->job_completed.load(std::memory_order_acquire);
++	}
++#else
+ 	inline bool IsJobCompleted() const { return this->job_completed.load(std::memory_order_acquire); }
++#endif
+ 
+ 	/**
+ 	 * Check if job has been aborted.
+diff --git a/src/linkgraph/linkgraphschedule.cpp b/src/linkgraph/linkgraphschedule.cpp
+index ea7195e..523139f 100644
+--- a/src/linkgraph/linkgraphschedule.cpp
++++ b/src/linkgraph/linkgraphschedule.cpp
+@@ -108,11 +108,30 @@ void LinkGraphSchedule::JoinNext()
+  * Start all threads in the running list. This is only useful for save/load.
+  * Usually threads are started when the job is created.
+  */
++#ifdef WITH_SHADEREMU
++void LinkGraphSchedule::SeRunOnePending()
++{
++	for (LinkGraphJob *job : this->running) {
++		if (job->se_pending) {
++			job->SeRunPending();
++			return;
++		}
++	}
++}
++#endif
++
+ void LinkGraphSchedule::SpawnAll()
+ {
++#ifdef WITH_SHADEREMU
++	extern bool _se_spawn_later;
++	_se_spawn_later = true;
++#endif
+ 	for (auto &it : this->running) {
+ 		it->SpawnThread();
+ 	}
++#ifdef WITH_SHADEREMU
++	_se_spawn_later = false;
++#endif
+ }
+ 
+ /**
+@@ -201,6 +220,10 @@ void AfterLoad_LinkGraphPauseControl()
+  */
+ void OnTick_LinkGraph()
+ {
++#ifdef WITH_SHADEREMU
++	/* (a job a load spawned, one a tick: SpawnAll) */
++	LinkGraphSchedule::instance.SeRunOnePending();
++#endif
+ 	if (TimerGameEconomy::date_fract != LinkGraphSchedule::SPAWN_JOIN_TICK) return;
+ 	TimerGameEconomy::Date offset{TimerGameEconomy::date.base() % (_settings_game.linkgraph.recalc_interval / EconomyTime::SECONDS_PER_DAY)};
+ 	if (offset == 0) {
+diff --git a/src/linkgraph/linkgraphschedule.h b/src/linkgraph/linkgraphschedule.h
+index 3cd2b0d..f8446f7 100644
+--- a/src/linkgraph/linkgraphschedule.h
++++ b/src/linkgraph/linkgraphschedule.h
+@@ -47,6 +47,9 @@ protected:
+ 	JobList running;               ///< Currently running jobs.
+ 
+ public:
++#ifdef WITH_SHADEREMU
++	void SeRunOnePending();
++#endif
+ 	/* This is a tick where not much else is happening, so a small lag might go unnoticed. */
+ 	static const uint SPAWN_JOIN_TICK = 21; ///< Tick when jobs are spawned or joined every day.
+ 	static LinkGraphSchedule instance;
+diff --git a/src/music.cpp b/src/music.cpp
+index ee33585..03a3fb3 100644
+--- a/src/music.cpp
++++ b/src/music.cpp
+@@ -112,6 +112,9 @@ template <>
+ }
+ 
+ template class BaseMedia<MusicSet>;
++/* (and the content check's search of the sets: clang inlines it into HasSet and keeps no copy for
++ * network/core/tcp_content.cpp, which GCC's implicit instantiation gave) */
++template std::optional<std::string_view> TryGetBaseSetFile(const ContentInfo &, bool, std::span<const std::unique_ptr<MusicSet>>);
+ 
+ bool MusicSet::FillSetDetails(const IniFile &ini, const std::string &path, const std::string &full_filename)
+ {
 diff --git a/src/music/CMakeLists.txt b/src/music/CMakeLists.txt
 index cf60e78..81d4d3f 100644
 --- a/src/music/CMakeLists.txt
@@ -482,7 +767,7 @@ index dc20f33..61ceb18 100644
  	CallbackID callback{}; ///< Callback being resolved.
  	uint32_t callback_param1 = 0; ///< First parameter (var 10) of the callback.
 diff --git a/src/openttd.cpp b/src/openttd.cpp
-index 7d585b0..8e450f4 100644
+index 7d585b0..3cb1db3 100644
 --- a/src/openttd.cpp
 +++ b/src/openttd.cpp
 @@ -73,6 +73,11 @@
@@ -497,7 +782,44 @@ index 7d585b0..8e450f4 100644
  #include "misc_cmd.h"
  #include "timer/timer.h"
  #include "timer/timer_game_calendar.h"
-@@ -370,6 +375,30 @@ void OpenBrowser(const std::string &url)
+@@ -93,6 +98,8 @@
+ #	include <emscripten/html5.h>
+ #endif
+ 
++#include "language.h"
++
+ #include "safeguards.h"
+ 
+ void CallLandscapeTick();
+@@ -333,6 +340,13 @@ static void LoadIntroGame(bool load_newgrfs = true)
+ 	SetupColoursAndInitialWindow();
+ 
+ 	/* Load the default opening screen savegame */
++#ifdef WITH_SHADEREMU
++	/* (a game asked for at start, -g, is loaded at the first tick: the title's game, never seen, is not loaded before
++	 * it, which was a sixth of the start to the game; docs/games/openttd.md, "The start") */
++	if (!load_newgrfs && _switch_mode == SM_LOAD_GAME) {
++		SetLocalCompany(COMPANY_SPECTATOR);
++	} else
++#endif
+ 	if (SaveOrLoad("opntitle.dat", SLO_LOAD, DFT_GAME_FILE, BASESET_DIR) != SL_OK) {
+ 		GenerateWorld(GWM_EMPTY, 64, 64); // if failed loading, make empty world.
+ 		SetLocalCompany(COMPANY_SPECTATOR);
+@@ -344,7 +358,13 @@ static void LoadIntroGame(bool load_newgrfs = true)
+ 	_pause_mode = {};
+ 	_cursor.fix_at = false;
+ 
++#ifdef WITH_SHADEREMU
++	/* (every string of the language looked at for a glyph the font lacks, 11.5 million instructions of the start: the
++	 * image's English is drawn by the base set's own font, which has them all; docs/games/openttd.md, "The start") */
++	if (std::string_view(_current_language->isocode) != "en_GB") CheckForMissingGlyphs();
++#else
+ 	CheckForMissingGlyphs();
++#endif
+ 
+ 	MusicLoop(); // ensure music is correct
+ }
+@@ -370,6 +390,30 @@ void OpenBrowser(const std::string &url)
  	}
  }
  
@@ -528,7 +850,7 @@ index 7d585b0..8e450f4 100644
  /** Callback structure of statements to be executed after the NewGRF scan. */
  struct AfterNewGRFScan : NewGRFScanCallback {
  	TimerGameCalendar::Year startyear = CalendarTime::INVALID_YEAR; ///< The start year.
-@@ -433,6 +462,9 @@ struct AfterNewGRFScan : NewGRFScanCallback {
+@@ -433,6 +477,9 @@ struct AfterNewGRFScan : NewGRFScanCallback {
  		IConsoleInit();
  		InitializeGUI();
  		IConsoleCmdExec("exec scripts/autoexec.scr 0");
@@ -538,7 +860,7 @@ index 7d585b0..8e450f4 100644
  
  		/* Make sure _settings is filled with _settings_newgame if we switch to a game directly */
  		if (_switch_mode != SM_NONE) MakeNewgameSettingsLive();
-@@ -1173,6 +1205,14 @@ void SwitchToMode(SwitchMode new_mode)
+@@ -1173,6 +1220,14 @@ void SwitchToMode(SwitchMode new_mode)
  			}
  
  			UpdateSocialIntegration(GM_MENU);
@@ -670,6 +992,226 @@ index c0aaec4..3e79686 100644
  
  public:
  	RandomAccessFile(std::string_view filename, Subdirectory subdir);
+diff --git a/src/saveload/saveload.cpp b/src/saveload/saveload.cpp
+index ebec3d2..9613ccc 100644
+--- a/src/saveload/saveload.cpp
++++ b/src/saveload/saveload.cpp
+@@ -2684,17 +2684,118 @@ struct ZlibSaveFilter : SaveFilter {
+  */
+ static const lzma_stream _lzma_init = LZMA_STREAM_INIT;
+ 
++#ifdef WITH_SHADEREMU
++#include <mcwx.h>
++int VpWorkersOpen(); /* viewport.cpp */
++
++/**
++ * A load's LZMA decoded ahead by a worker into a ring the first core takes from, while it reads what it took
++ * (docs/games/openttd.md, "The start"): the stream's state is the worker's while it runs. Its memory comes from
++ * the first core (the decoder's dictionary, made when the first core decodes the first piece), and from a reserve
++ * here on the worker, which may not allocate. Each word in 16 bytes of its own: the core that stores it alone does.
++ */
++struct alignas(16) SeLzmaAhead {
++	static constexpr uint32_t CHUNK = 64 * 1024, RING = 16 * CHUNK, RESERVE = 64 * 1024, FREES = 32;
++	struct alignas(16) Word { volatile uint32_t value = 0; };
++	lzma_stream lzma = LZMA_STREAM_INIT;
++	lzma_allocator allocator{};
++	Word produced;      ///< bytes made (the worker's)
++	Word state;         ///< 0 on, 1 at the stream's end, 2 an error, 3 the reserve too small (the worker's)
++	Word consumed;      ///< bytes taken (the first core's)
++	Word stop;          ///< the first core gives up (the first core's)
++	alignas(16) uint8_t reserve[RESERVE];
++	uint32_t reserve_used = 0;
++	uint32_t frees = 0;
++	void *freed[FREES]; ///< blocks of the first core's the worker let go: freed when it has ended
++	uint8_t *ring = nullptr;
++};
++
++static void *SeLzmaAlloc(void *opaque, size_t nmemb, size_t size)
++{
++	SeLzmaAhead *a = static_cast<SeLzmaAhead *>(opaque);
++	size_t bytes = nmemb * size;
++	if (mcw_on_worker()) {
++		bytes = (bytes + 15) & ~size_t{15};
++		if (a->reserve_used + bytes > SeLzmaAhead::RESERVE) return nullptr;
++		void *p = a->reserve + a->reserve_used;
++		a->reserve_used += static_cast<uint32_t>(bytes);
++		return p;
++	}
++	uint8_t *p = static_cast<uint8_t *>(::operator new(bytes, std::nothrow));
++	/* (a store to each page here, so that a worker that writes it later does not stop there) */
++	if (p != nullptr) {
++		for (size_t i = 0; i < bytes; i += 4096) p[i] = 0;
++		if (bytes > 0) p[bytes - 1] = 0;
++	}
++	return p;
++}
++
++static void SeLzmaFree(void *opaque, void *p)
++{
++	SeLzmaAhead *a = static_cast<SeLzmaAhead *>(opaque);
++	uint8_t *q = static_cast<uint8_t *>(p);
++	if (p == nullptr || (q >= a->reserve && q < a->reserve + SeLzmaAhead::RESERVE)) return;
++	if (mcw_on_worker()) {
++		if (a->frees < SeLzmaAhead::FREES) a->freed[a->frees++] = p;
++		return;
++	}
++	::operator delete(p);
++}
++
++/** The worker's job: the rest of the stream into the ring, a chunk at a time, as room is left in it. */
++static uint32_t SeLzmaJob(uint32_t at, uint32_t)
++{
++	SeLzmaAhead *a = reinterpret_cast<SeLzmaAhead *>(at);
++	for (;;) {
++		const uint32_t made = a->produced.value;
++		while (made + SeLzmaAhead::CHUNK - a->consumed.value > SeLzmaAhead::RING) {
++			if (a->stop.value) return 0;
++			mc_end_pass();
++		}
++		a->lzma.next_out = a->ring + made % SeLzmaAhead::RING;
++		a->lzma.avail_out = SeLzmaAhead::CHUNK;
++		lzma_ret r = LZMA_OK;
++		while (a->lzma.avail_out != 0 && r == LZMA_OK) r = lzma_code(&a->lzma, LZMA_RUN);
++		a->produced.value = made + (SeLzmaAhead::CHUNK - static_cast<uint32_t>(a->lzma.avail_out));
++		if (r == LZMA_STREAM_END) {
++			a->state.value = 1;
++			return 0;
++		}
++		if (r != LZMA_OK) {
++			a->state.value = r == LZMA_MEM_ERROR ? 3 : 2;
++			return 0;
++		}
++	}
++}
++#endif
++
+ /** Filter without any compression. */
+ struct LZMALoadFilter : LoadFilter {
++#ifdef WITH_SHADEREMU
++	std::unique_ptr<SeLzmaAhead> ahead;
++	lzma_stream &lzma;                 ///< (ahead's)
++	std::vector<uint8_t> input;        ///< the whole file, read at the first Read
++	bool started = false;
++	mcw_handle job = 0;
++	uint32_t taken = 0;
++#else
+ 	lzma_stream lzma;                  ///< Stream state that we are reading from.
++#endif
+ 	uint8_t fread_buf[MEMORY_CHUNK_SIZE]; ///< Buffer for reading from the file.
+ 
+ 	/**
+ 	 * Initialise this filter.
+ 	 * @param chain The next filter in this chain.
+ 	 */
++#ifdef WITH_SHADEREMU
++	LZMALoadFilter(std::shared_ptr<LoadFilter> chain) : LoadFilter(std::move(chain)), ahead(std::make_unique<SeLzmaAhead>()), lzma(ahead->lzma)
++	{
++		this->ahead->allocator = { SeLzmaAlloc, SeLzmaFree, this->ahead.get() };
++		this->lzma.allocator = &this->ahead->allocator;
++#else
+ 	LZMALoadFilter(std::shared_ptr<LoadFilter> chain) : LoadFilter(std::move(chain)), lzma(_lzma_init)
+ 	{
++#endif
+ 		/* Allow saves up to 256 MB uncompressed */
+ 		if (lzma_auto_decoder(&this->lzma, 1 << 28, 0) != LZMA_OK) SlError(STR_GAME_SAVELOAD_ERROR_BROKEN_INTERNAL_ERROR, "cannot initialize decompressor");
+ 	}
+@@ -2702,11 +2803,85 @@ struct LZMALoadFilter : LoadFilter {
+ 	/** Clean everything up. */
+ 	~LZMALoadFilter()
+ 	{
++#ifdef WITH_SHADEREMU
++		if (this->job != 0) {
++			this->ahead->stop.value = 1;
++			mcw_join(this->job);
++		}
++		for (uint32_t i = 0; i < this->ahead->frees; i++) ::operator delete(this->ahead->freed[i]);
++		::operator delete(this->ahead->ring);
++#endif
+ 		lzma_end(&this->lzma);
+ 	}
+ 
++#ifdef WITH_SHADEREMU
++	/** What the worker made, taken into buf; the first core rests while it has made none. */
++	size_t ReadAhead(uint8_t *buf, size_t size)
++	{
++		SeLzmaAhead &a = *this->ahead;
++		size_t got = 0;
++		while (got < size) {
++			const uint32_t avail = a.produced.value - this->taken;
++			if (avail == 0) {
++				const uint32_t state = a.state.value;
++				if (state != 0 && a.produced.value == this->taken) {
++					if (state == 1) break;
++					SlError(STR_GAME_SAVELOAD_ERROR_BROKEN_INTERNAL_ERROR, state == 3 ? "liblzma wanted memory on a worker" : "liblzma returned error code");
++				}
++				/* (asking whether it is ready serves a worker stopped at a page) */
++				if (!mcw_ready(this->job)) mcw_rest();
++				continue;
++			}
++			const uint32_t at = this->taken % SeLzmaAhead::RING;
++			const size_t n = std::min<size_t>({ static_cast<size_t>(avail), size - got, static_cast<size_t>(SeLzmaAhead::RING - at) });
++			std::copy_n(a.ring + at, n, buf + got);
++			got += n;
++			this->taken += static_cast<uint32_t>(n);
++			a.consumed.value = this->taken;
++		}
++		return got;
++	}
++
++	/** At the first Read: the whole file read, for the decoder to take from at once. */
++	void Start()
++	{
++		this->started = true;
++		for (;;) {
++			const size_t at = this->input.size();
++			this->input.resize(at + MEMORY_CHUNK_SIZE);
++			const size_t n = this->chain->Read(this->input.data() + at, MEMORY_CHUNK_SIZE);
++			this->input.resize(at + n);
++			if (n == 0) break;
++		}
++		this->lzma.next_in = this->input.data();
++		this->lzma.avail_in = this->input.size();
++	}
++#endif
++
+ 	size_t Read(uint8_t *buf, size_t size) override
+ 	{
++#ifdef WITH_SHADEREMU
++		if (this->job != 0) return this->ReadAhead(buf, size);
++		const bool first = !this->started;
++		if (first) this->Start();
++		this->lzma.next_out = buf;
++		this->lzma.avail_out = size;
++		lzma_ret r = LZMA_OK;
++		while (this->lzma.avail_out != 0 && r == LZMA_OK) r = lzma_code(&this->lzma, LZMA_RUN);
++		if (r != LZMA_OK && r != LZMA_STREAM_END) SlError(STR_GAME_SAVELOAD_ERROR_BROKEN_INTERNAL_ERROR, "liblzma returned error code");
++		/* the first piece decoded here (the decoder's memory is made then), the rest by a worker where one is free */
++		if (first && r == LZMA_OK && VpWorkersOpen() > 0) {
++			this->ahead->ring = static_cast<uint8_t *>(::operator new(SeLzmaAhead::RING, std::nothrow));
++			if (this->ahead->ring != nullptr) {
++				for (uint32_t i = 0; i < SeLzmaAhead::RING; i += 4096) this->ahead->ring[i] = 0;
++				mcw_touch(this->ahead.get(), sizeof(SeLzmaAhead));
++				mcw_touch_code(reinterpret_cast<const void *>(SeLzmaJob), 256);
++				mcw_for_end(); /* (a team lingering after a round takes no call) */
++				this->job = mcw_try_call(SeLzmaJob, static_cast<uint32_t>(reinterpret_cast<uintptr_t>(this->ahead.get())), 0);
++			}
++		}
++		return size - this->lzma.avail_out;
++#endif
+ 		this->lzma.next_out  = buf;
+ 		this->lzma.avail_out = size;
+ 
+diff --git a/src/sound.cpp b/src/sound.cpp
+index 31a7ede..a28afc9 100644
+--- a/src/sound.cpp
++++ b/src/sound.cpp
+@@ -302,3 +302,6 @@ template <>
+ }
+ 
+ template class BaseMedia<SoundsSet>;
++/* (and the content check's search of the sets: clang inlines it into HasSet and keeps no copy for
++ * network/core/tcp_content.cpp, which GCC's implicit instantiation gave) */
++template std::optional<std::string_view> TryGetBaseSetFile(const ContentInfo &, bool, std::span<const std::unique_ptr<SoundsSet>>);
 diff --git a/src/sound/CMakeLists.txt b/src/sound/CMakeLists.txt
 index 0abd7c0..675f9c3 100644
 --- a/src/sound/CMakeLists.txt
@@ -685,10 +1227,10 @@ index 0abd7c0..675f9c3 100644
 +    CONDITION SHADEREMU
 +)
 diff --git a/src/spritecache.cpp b/src/spritecache.cpp
-index f26695a..30418c1 100644
+index f26695a..70d7e8d 100644
 --- a/src/spritecache.cpp
 +++ b/src/spritecache.cpp
-@@ -18,6 +18,7 @@
+@@ -18,11 +18,16 @@
  #include "core/math_func.hpp"
  #include "video/video_driver.hpp"
  #include "spritecache.h"
@@ -696,7 +1238,16 @@ index f26695a..30418c1 100644
  #include "spritecache_internal.h"
  
  #include "table/sprites.h"
-@@ -31,6 +32,15 @@ uint _sprite_cache_size = 4;
+ #include "table/palette_convert.h"
+ 
++#ifdef WITH_SHADEREMU
++#include <mcwx.h>
++#endif
++
+ #include "safeguards.h"
+ 
+ /* Default of 4MB spritecache */
+@@ -31,6 +36,15 @@ uint _sprite_cache_size = 4;
  
  static std::vector<SpriteCache> _spritecache;
  static size_t _spritecache_bytes_used = 0;
@@ -712,7 +1263,7 @@ index f26695a..30418c1 100644
  static uint32_t _sprite_lru_counter;
  static std::vector<std::unique_ptr<SpriteFile>> _sprite_files;
  
-@@ -361,8 +371,31 @@ static bool PadSprites(SpriteLoader::SpriteCollection &sprite, ZoomLevels sprite
+@@ -361,8 +375,102 @@ static bool PadSprites(SpriteLoader::SpriteCollection &sprite, ZoomLevels sprite
  	return true;
  }
  
@@ -726,6 +1277,75 @@ index f26695a..30418c1 100644
 +	bool ours = encoder == static_cast<SpriteEncoder *>(blitter) && (blitter->GetName() == "8bpp-optimized" || blitter->GetName() == "null");
 +	/* (a font's glyph is encoded from its font zoom level alone) */
 +	if (ours && sprite_type == SpriteType::Font && sprite_avail.Test(_font_zoom)) return true;
++	if (ours && sprite_type != SpriteType::Font && sprite_avail == ZoomLevels{ZoomLevel::Normal} && _settings_client.gui.zoom_min >= ZoomLevel::Normal &&
++			_settings_client.gui.sprite_zoom_min <= ZoomLevel::Normal && (sprite[ZoomLevel::In4x].width != 0 || sprite[ZoomLevel::In2x].width != 0)) {
++		/* The same with the sizes of the levels closer, whose pixels were not read (LoadSpriteV2): the root is made of the
++		 * closest as ResizeSpriteIn would, and every level padded as PadSprites would; only the normal level has pixels. */
++		auto &normal = sprite[ZoomLevel::Normal];
++		auto &root = sprite[ZoomLevel::Min];
++		if (sprite[ZoomLevel::In4x].width == 0) {
++			const auto &in2x = sprite[ZoomLevel::In2x];
++			uint8_t scaled_1 = AdjustByZoom(1, ZoomLevel::In2x - ZoomLevel::Min);
++			if (in2x.width * scaled_1 > UINT16_MAX || in2x.height * scaled_1 > UINT16_MAX) return false;
++			root.width = in2x.width * scaled_1;
++			root.height = in2x.height * scaled_1;
++			root.x_offs = in2x.x_offs * scaled_1;
++			root.y_offs = in2x.y_offs * scaled_1;
++			root.colours = in2x.colours;
++		}
++		ZoomLevels levels{ZoomLevel::Min, ZoomLevel::Normal};
++		if (sprite[ZoomLevel::In2x].width != 0) levels.Set(ZoomLevel::In2x);
++		int min_xoffs = INT32_MAX, min_yoffs = INT32_MAX;
++		for (ZoomLevel zoom : levels) {
++			min_xoffs = std::min(min_xoffs, ScaleByZoom(sprite[zoom].x_offs, zoom));
++			min_yoffs = std::min(min_yoffs, ScaleByZoom(sprite[zoom].y_offs, zoom));
++		}
++		int max_width = INT32_MIN, max_height = INT32_MIN;
++		for (ZoomLevel zoom : levels) {
++			max_width = std::max(max_width, ScaleByZoom(sprite[zoom].width + sprite[zoom].x_offs - UnScaleByZoom(min_xoffs, zoom), zoom));
++			max_height = std::max(max_height, ScaleByZoom(sprite[zoom].height + sprite[zoom].y_offs - UnScaleByZoom(min_yoffs, zoom), zoom));
++		}
++		uint align = encoder->GetSpriteAlignment();
++		if (align != 0) {
++			max_width = Align(max_width, align);
++			max_height = Align(max_height, align);
++		}
++		for (ZoomLevel zoom : levels) {
++			auto &cur = sprite[zoom];
++			int pad_left = std::max(0, cur.x_offs - UnScaleByZoom(min_xoffs, zoom));
++			int pad_top = std::max(0, cur.y_offs - UnScaleByZoom(min_yoffs, zoom));
++			int pad_right = std::max(0, UnScaleByZoom(max_width, zoom) - cur.width - pad_left);
++			int pad_bottom = std::max(0, UnScaleByZoom(max_height, zoom) - cur.height - pad_top);
++			if (pad_left == 0 && pad_right == 0 && pad_top == 0 && pad_bottom == 0) continue;
++			if (zoom == ZoomLevel::Normal && !VpArenaOn()) {
++				if (!PadSingleSprite(&cur, zoom, pad_left, pad_top, pad_right, pad_bottom)) return false;
++				continue;
++			}
++			if (zoom == ZoomLevel::Normal) {
++				/* (PadSingleSprite on a core loading in a round, which may not allocate: the arena's new memory leaves the old) */
++				const uint width = cur.width + pad_left + pad_right, height = cur.height + pad_top + pad_bottom;
++				if (width > UINT16_MAX || height > UINT16_MAX) return false;
++				const SpriteLoader::CommonPixel *src = cur.data;
++				cur.AllocateData(zoom, static_cast<size_t>(width) * height);
++				for (uint y = 0; y < cur.height; y++) {
++					std::copy_n(src + static_cast<size_t>(y) * cur.width, cur.width, cur.data + static_cast<size_t>(y + pad_top) * width + pad_left);
++				}
++				cur.width = width;
++				cur.height = height;
++				cur.x_offs -= pad_left;
++				cur.y_offs -= pad_top;
++				continue;
++			}
++			/* (a size alone: PadSingleSprite's sizes) */
++			if (cur.width + pad_left + pad_right > UINT16_MAX || cur.height + pad_top + pad_bottom > UINT16_MAX) return false;
++			cur.width += pad_left + pad_right;
++			cur.height += pad_top + pad_bottom;
++			cur.x_offs -= pad_left;
++			cur.y_offs -= pad_top;
++		}
++		for (ZoomLevel zoom = ZoomLevel::Out2x; zoom != ZoomLevel::End; zoom++) ResizeSpriteOut(sprite, zoom);
++		return true;
++	}
 +	if (ours && sprite_type != SpriteType::Font && sprite_avail == ZoomLevels{ZoomLevel::Normal} && _settings_client.gui.zoom_min >= ZoomLevel::Normal &&
 +			_settings_client.gui.sprite_zoom_min <= ZoomLevel::Normal) {
 +		const auto &normal = sprite[ZoomLevel::Normal];
@@ -741,11 +1361,13 @@ index f26695a..30418c1 100644
 +			return true;
 +		}
 +	}
++	/* (a core loading sprites in a round takes the case above alone: VpLoadWanted) */
++	if (VpArenaOn()) return VpRefuse(), false;
 +#endif
  	/* Create a fully zoomed image if it does not exist */
  	ZoomLevel first_avail = ZoomLevel::End;
  	for (ZoomLevel zoom = ZoomLevel::Min; zoom <= ZoomLevel::Max; ++zoom) {
-@@ -520,7 +553,7 @@ static void *ReadSprite(const SpriteCache *sc, SpriteID id, SpriteType sprite_ty
+@@ -520,7 +628,7 @@ static void *ReadSprite(const SpriteCache *sc, SpriteID id, SpriteType sprite_ty
  		return s;
  	}
  
@@ -754,7 +1376,7 @@ index f26695a..30418c1 100644
  		if (id == SPR_IMG_QUERY) UserError("Okay... something went horribly wrong. I couldn't resize the fallback sprite. What should I do?");
  		return (void*)GetRawSprite(SPR_IMG_QUERY, SpriteType::Normal, &allocator, encoder);
  	}
-@@ -539,7 +572,14 @@ struct GrfSpriteOffset {
+@@ -539,7 +647,14 @@ struct GrfSpriteOffset {
  };
  
  /** Map from sprite numbers to position in the GRF file. */
@@ -769,7 +1391,7 @@ index f26695a..30418c1 100644
  
  /**
   * Get the file offset for a specific sprite in the sprite section of a GRF.
-@@ -557,6 +597,14 @@ size_t GetGRFSpriteOffset(uint32_t id)
+@@ -557,6 +672,14 @@ size_t GetGRFSpriteOffset(uint32_t id)
   */
  void ReadGRFSpriteOffsets(SpriteFile &file)
  {
@@ -784,7 +1406,7 @@ index f26695a..30418c1 100644
  	_grf_sprite_offsets.clear();
  
  	if (file.GetContainerVersion() >= 2) {
-@@ -854,6 +902,23 @@ static void *HandleInvalidSpriteRequest(SpriteID sprite, SpriteType requested, S
+@@ -854,6 +977,23 @@ static void *HandleInvalidSpriteRequest(SpriteID sprite, SpriteType requested, S
   */
  void *GetRawSprite(SpriteID sprite, SpriteType type, SpriteAllocator *allocator, SpriteEncoder *encoder)
  {
@@ -808,7 +1430,7 @@ index f26695a..30418c1 100644
  	assert(type != SpriteType::MapGen || IsMapgenSpriteID(sprite));
  	assert(type < SpriteType::Invalid);
  
-@@ -894,6 +959,35 @@ void *GetRawSprite(SpriteID sprite, SpriteType type, SpriteAllocator *allocator,
+@@ -894,8 +1034,168 @@ void *GetRawSprite(SpriteID sprite, SpriteType type, SpriteAllocator *allocator,
  	}
  }
  
@@ -819,10 +1441,98 @@ index f26695a..30418c1 100644
 +	return _vp_wanted[k].refused;
 +}
 +
-+/** The sprites the workers found unloaded, loaded with the rest of their eight; returns how many were loaded. */
++VpArena _vp_arena[VP_CORES];
++static std::unique_ptr<uint8_t[]> _vp_arena_memory;
++static constexpr size_t VP_ARENA_BYTES = 256 * 1024;
++
++/** Memory of this core's arena, from the bottom (made anew for each sprite), zeroed unless asked not to. */
++void *VpArenaTemp(size_t bytes, bool zero)
++{
++	VpArena &a = _vp_arena[VpCore()];
++	bytes = (bytes + 15) & ~size_t{15};
++	/* (SpriteImageBound said the sprite fits) */
++	assert(a.hi - a.lo >= bytes);
++	uint8_t *p = a.base + a.lo;
++	a.lo += bytes;
++	if (zero) std::fill_n(p, bytes, 0);
++	return p;
++}
++
++/** A sprite made in a round: kept at the top of its core's arena until the first core copies it to the cache. */
++class VpArenaAllocator : public SpriteAllocator {
++public:
++	size_t size = 0;
++protected:
++	void *AllocatePtr(size_t bytes) override
++	{
++		VpArena &a = _vp_arena[VpCore()];
++		this->size = bytes;
++		bytes = (bytes + 15) & ~size_t{15};
++		assert(a.hi - a.lo >= bytes);
++		a.hi -= bytes;
++		return a.base + a.hi;
++	}
++};
++
++void SpriteLoader::Sprite::AllocateData(ZoomLevel zoom, size_t size)
++{
++	if (VpArenaOn()) {
++		this->data = static_cast<SpriteLoader::CommonPixel *>(VpArenaTemp(size * sizeof(SpriteLoader::CommonPixel)));
++		return;
++	}
++	this->data = Sprite::buffer[zoom].ZeroAllocate(size);
++}
++
++size_t SpriteImageBound(const SpriteFile &file, size_t file_pos);
++ZoomLevels LoadSpriteFromImage(SpriteLoader::SpriteCollection &sprite, const SpriteFile &file, size_t file_pos, SpriteType sprite_type, bool load_32bpp, SpriteCacheCtrlFlags control_flags, ZoomLevels &avail_8bpp, ZoomLevels &avail_32bpp);
++
++/** A sprite to load in a round: what its core made of it (nullptr: the first core loads it as before). */
++struct alignas(16) VpLoadJob {
++	SpriteID id;
++	uint32_t bytes;
++	const void *made;
++};
++static std::vector<VpLoadJob> _vp_load_jobs;
++
++/** Sprites from..to-1 of the round decoded, made smaller and encoded from their files' images, in this core's arena. */
++static void VpLoadJobs(void *, uint32_t from, uint32_t to)
++{
++	const int k = VpCore();
++	VpArena &a = _vp_arena[k];
++	SpriteEncoder *encoder = BlitterFactory::GetCurrentBlitter();
++	for (uint32_t i = from; i < to; i++) {
++		VpLoadJob &job = _vp_load_jobs[i];
++		const SpriteCache *sc = GetSpriteCache(job.id);
++		job.made = nullptr;
++		a.lo = 0;
++		size_t bound = SpriteImageBound(*sc->file, sc->file_pos);
++		if (bound == 0 || bound > a.hi) continue;
++		const bool failed = _vp_core[k].failed;
++		_vp_core[k].failed = false;
++		a.on = true;
++		SpriteLoader::SpriteCollection sprite;
++		ZoomLevels avail_8bpp, avail_32bpp;
++		ZoomLevels avail = LoadSpriteFromImage(sprite, *sc->file, sc->file_pos, SpriteType::Normal, false, sc->control_flags, avail_8bpp, avail_32bpp);
++		VpArenaAllocator allocator;
++		const void *made = nullptr;
++		if (avail.Any() && !_vp_core[k].failed && ResizeSprites(sprite, avail, encoder, SpriteType::Normal) && !_vp_core[k].failed) {
++			made = encoder->Encode(SpriteType::Normal, sprite, allocator);
++		}
++		a.on = false;
++		if (!_vp_core[k].failed) job.made = made, job.bytes = static_cast<uint32_t>(allocator.size);
++		_vp_core[k].failed = failed;
++	}
++}
++
++/**
++ * The sprites the workers found unloaded, loaded with the rest of their eight; returns how many were loaded.
++ * Every core decodes and encodes some from its file's image into an arena of its own; the first core then
++ * copies them to the cache, and loads as before any a core gave up (docs/games/openttd.md, "Sprites loaded").
++ */
 +uint32_t VpLoadWanted()
 +{
 +	uint32_t loaded = 0;
++	std::vector<SpriteID> plain;
 +	for (VpWanted &w : _vp_wanted) {
 +		for (uint32_t i = 0; i < w.n; i++) {
 +			SpriteType type = static_cast<SpriteType>(w.ids[i] >> 28);
@@ -831,19 +1541,427 @@ index f26695a..30418c1 100644
 +				if (!SpriteExists(id)) continue;
 +				SpriteCache *sc = GetSpriteCache(id);
 +				if (sc->type != type || sc->ptr != nullptr) continue;
++				if (type == SpriteType::Normal && sc->file != nullptr) {
++					sc->file->Image();
++					plain.push_back(id);
++					continue;
++				}
 +				GetRawSprite(id, type, nullptr, nullptr);
 +				loaded++;
 +			}
 +		}
 +		w.n = 0;
 +	}
++	if (plain.empty()) return loaded;
++	std::sort(plain.begin(), plain.end());
++	plain.erase(std::unique(plain.begin(), plain.end()), plain.end());
++
++	if (_vp_arena_memory == nullptr) {
++		/* (made and zeroed here, so that its pages are there before a worker writes them) */
++		_vp_arena_memory = std::make_unique<uint8_t[]>(VP_ARENA_BYTES * VP_CORES + 16);
++		uint8_t *base = reinterpret_cast<uint8_t *>((reinterpret_cast<uintptr_t>(_vp_arena_memory.get()) + 15) & ~uintptr_t{15});
++		for (int k = 0; k < VP_CORES; k++) _vp_arena[k].base = base + k * VP_ARENA_BYTES, _vp_arena[k].size = VP_ARENA_BYTES;
++	}
++	for (VpArena &a : _vp_arena) a.lo = 0, a.hi = a.size, a.on = false;
++	_vp_load_jobs.resize(plain.size());
++	for (size_t i = 0; i < plain.size(); i++) _vp_load_jobs[i] = { plain[i], 0, nullptr };
++	mcw_for_opts opts = {};
++	opts.grain = 1;
++	mcw_for_opt(static_cast<uint32_t>(_vp_load_jobs.size()), VpLoadJobs, nullptr, &opts);
++
++	for (const VpLoadJob &job : _vp_load_jobs) {
++		SpriteCache *sc = GetSpriteCache(job.id);
++		if (sc->ptr != nullptr) continue;
++		if (job.made == nullptr) {
++			GetRawSprite(job.id, SpriteType::Normal, nullptr, nullptr);
++		} else {
++			sc->ptr = std::make_unique_for_overwrite<std::byte[]>(job.bytes);
++			std::copy_n(static_cast<const std::byte *>(job.made), job.bytes, sc->ptr.get());
++			sc->length = job.bytes;
++			sc->lru = ++_sprite_lru_counter;
++			_spritecache_bytes_used += sc->length;
++		}
++		loaded++;
++	}
 +	return loaded;
 +}
 +#endif
 +
++#ifdef WITH_SHADEREMU
++uint32_t _sprite_bounds_gen = 1;
++#endif
++
  void GfxInitSpriteMem()
  {
++#ifdef WITH_SHADEREMU
++	_sprite_bounds_gen++;
++#endif
  	/* Reset the spritecache 'pool' */
+ 	_spritecache.clear();
+ 	_spritecache.shrink_to_fit();
+@@ -910,6 +1210,9 @@ void GfxInitSpriteMem()
+  */
+ void GfxClearSpriteCache()
+ {
++#ifdef WITH_SHADEREMU
++	_sprite_bounds_gen++;
++#endif
+ 	/* Clear sprite ptr for all cached items */
+ 	for (SpriteCache &sc : _spritecache) {
+ 		if (sc.ptr != nullptr) sc.ClearSpriteData();
+diff --git a/src/spriteloader/grf.cpp b/src/spriteloader/grf.cpp
+index a7ddcda..9648911 100644
+--- a/src/spriteloader/grf.cpp
++++ b/src/spriteloader/grf.cpp
+@@ -22,6 +22,23 @@
+ 
+ extern const uint8_t _palmap_w2d[];
+ 
++#ifdef WITH_SHADEREMU
++/** A sprite file read from its image in memory, as RandomAccessFile reads it, by any core. */
++struct SpriteMemReader {
++	const SpriteFile *file;
++	const uint8_t *image; ///< the byte at the file's start position
++	size_t start, end, pos;
++	uint8_t ReadByte() { return this->pos < this->end ? this->image[this->pos++ - this->start] : 0; }
++	uint16_t ReadWord() { uint8_t b = this->ReadByte(); return (this->ReadByte() << 8) | b; }
++	uint32_t ReadDword() { uint b = this->ReadWord(); return (this->ReadWord() << 16) | b; }
++	void SeekTo(size_t p, int mode) { this->pos = mode == SEEK_CUR ? this->pos + p : p; }
++	size_t GetPos() const { return this->pos; }
++	void SkipBytes(size_t n) { this->pos += n; }
++	bool NeedsPaletteRemap() const { return this->file->NeedsPaletteRemap(); }
++	const std::string &GetSimplifiedFilename() const { return this->file->GetSimplifiedFilename(); }
++};
++#endif
++
+ /**
+  * We found a corrupted sprite. This means that the sprite itself
+  * contains invalid data or is too small for the given dimensions.
+@@ -32,6 +49,9 @@ extern const uint8_t _palmap_w2d[];
+  */
+ static bool WarnCorruptSprite(const SpriteFile &file, size_t file_pos, int line)
+ {
++#ifdef WITH_SHADEREMU
++	if (VpArenaOn()) return VpRefuse(), false; /* (the first core loads it again, and says so) */
++#endif
+ 	static uint8_t warning_level = 0;
+ 	if (warning_level == 0) {
+ 		ShowErrorMessage(GetEncodedString(STR_NEWGRF_ERROR_CORRUPT_SPRITE, file.GetSimplifiedFilename()), {}, WL_ERROR);
+@@ -40,6 +60,9 @@ static bool WarnCorruptSprite(const SpriteFile &file, size_t file_pos, int line)
+ 	warning_level = 6;
+ 	return false;
+ }
++#ifdef WITH_SHADEREMU
++static bool WarnCorruptSprite(const SpriteMemReader &file, size_t file_pos, int line) { return WarnCorruptSprite(*file.file, file_pos, line); }
++#endif
+ 
+ /**
+  * Decode the image data of a single sprite.
+@@ -54,7 +77,8 @@ static bool WarnCorruptSprite(const SpriteFile &file, size_t file_pos, int line)
+  * @param container_format Container format of the GRF this sprite is in.
+  * @return True if the sprite was successfully loaded.
+  */
+-bool DecodeSingleSprite(SpriteLoader::Sprite *sprite, SpriteFile &file, size_t file_pos, SpriteType sprite_type, int64_t num, uint8_t type, ZoomLevel zoom_lvl, SpriteComponents colour_fmt, uint8_t container_format)
++template <class F>
++static bool DecodeSingleSpriteT(SpriteLoader::Sprite *sprite, F &file, size_t file_pos, SpriteType sprite_type, int64_t num, uint8_t type, ZoomLevel zoom_lvl, SpriteComponents colour_fmt, uint8_t container_format)
+ {
+ 	/*
+ 	 * Original sprite height was max 255 pixels, with 4x extra zoom => 1020 pixels.
+@@ -65,8 +89,14 @@ bool DecodeSingleSprite(SpriteLoader::Sprite *sprite, SpriteFile &file, size_t f
+ 	 */
+ 	if (num < 0 || num > 64 * 1024 * 1024) return WarnCorruptSprite(file, file_pos, __LINE__);
+ 
+-	std::unique_ptr<uint8_t[]> dest_orig = std::make_unique<uint8_t[]>(num);
+-	uint8_t *dest = dest_orig.get();
++#ifdef WITH_SHADEREMU
++	std::unique_ptr<uint8_t[]> dest_heap;
++	uint8_t *dest_orig = VpArenaOn() ? static_cast<uint8_t *>(VpArenaTemp(num, false)) : (dest_heap = std::make_unique<uint8_t[]>(num)).get();
++#else
++	std::unique_ptr<uint8_t[]> dest_heap = std::make_unique<uint8_t[]>(num);
++	uint8_t *dest_orig = dest_heap.get();
++#endif
++	uint8_t *dest = dest_orig;
+ 	const int64_t dest_size = num;
+ 
+ 	/* Read the file, which has some kind of compression */
+@@ -85,7 +115,7 @@ bool DecodeSingleSprite(SpriteLoader::Sprite *sprite, SpriteFile &file, size_t f
+ 		} else {
+ 			/* Copy bytes from earlier in the sprite */
+ 			const uint data_offset = ((code & 7) << 8) | file.ReadByte();
+-			if (dest - data_offset < dest_orig.get()) return WarnCorruptSprite(file, file_pos, __LINE__);
++			if (dest - data_offset < dest_orig) return WarnCorruptSprite(file, file_pos, __LINE__);
+ 			int size = -(code >> 3);
+ 			num -= size;
+ 			if (num < 0) return WarnCorruptSprite(file, file_pos, __LINE__);
+@@ -119,10 +149,10 @@ bool DecodeSingleSprite(SpriteLoader::Sprite *sprite, SpriteFile &file, size_t f
+ 			}
+ 
+ 			/* Go to that row */
+-			dest = dest_orig.get() + offset;
++			dest = dest_orig + offset;
+ 
+ 			do {
+-				if (dest + (container_format >= 2 && sprite->width > 256 ? 4 : 2) > dest_orig.get() + dest_size) {
++				if (dest + (container_format >= 2 && sprite->width > 256 ? 4 : 2) > dest_orig + dest_size) {
+ 					return WarnCorruptSprite(file, file_pos, __LINE__);
+ 				}
+ 
+@@ -148,7 +178,7 @@ bool DecodeSingleSprite(SpriteLoader::Sprite *sprite, SpriteFile &file, size_t f
+ 
+ 				data = &sprite->data[y * sprite->width + skip];
+ 
+-				if (skip + length > sprite->width || dest + length * bpp > dest_orig.get() + dest_size) {
++				if (skip + length > sprite->width || dest + length * bpp > dest_orig + dest_size) {
+ 					return WarnCorruptSprite(file, file_pos, __LINE__);
+ 				}
+ 
+@@ -185,7 +215,7 @@ bool DecodeSingleSprite(SpriteLoader::Sprite *sprite, SpriteFile &file, size_t f
+ 			warning_level = 6;
+ 		}
+ 
+-		dest = dest_orig.get();
++		dest = dest_orig;
+ 
+ 		for (int i = 0; i < sprite->width * sprite->height; i++) {
+ 			uint8_t *pixel = &dest[i * bpp];
+@@ -212,7 +242,13 @@ bool DecodeSingleSprite(SpriteLoader::Sprite *sprite, SpriteFile &file, size_t f
+ 	return true;
+ }
+ 
+-static ZoomLevels LoadSpriteV1(SpriteLoader::SpriteCollection &sprite, SpriteFile &file, size_t file_pos, SpriteType sprite_type, bool load_32bpp, ZoomLevels &avail_8bpp)
++bool DecodeSingleSprite(SpriteLoader::Sprite *sprite, SpriteFile &file, size_t file_pos, SpriteType sprite_type, int64_t num, uint8_t type, ZoomLevel zoom_lvl, SpriteComponents colour_fmt, uint8_t container_format)
++{
++	return DecodeSingleSpriteT(sprite, file, file_pos, sprite_type, num, type, zoom_lvl, colour_fmt, container_format);
++}
++
++template <class F>
++static ZoomLevels LoadSpriteV1(SpriteLoader::SpriteCollection &sprite, F &file, size_t file_pos, SpriteType sprite_type, bool load_32bpp, ZoomLevels &avail_8bpp)
+ {
+ 	/* Check the requested colour depth. */
+ 	if (load_32bpp) return {};
+@@ -245,7 +281,7 @@ static ZoomLevels LoadSpriteV1(SpriteLoader::SpriteCollection &sprite, SpriteFil
+ 	 * In case it is uncompressed, the size is 'num' - 8 (header-size). */
+ 	num = (type & 0x02) ? dest_sprite.width * dest_sprite.height : num - 8;
+ 
+-	if (DecodeSingleSprite(&dest_sprite, file, file_pos, sprite_type, num, type, zoom_lvl, SpriteComponent::Palette, 1)) {
++	if (DecodeSingleSpriteT(&dest_sprite, file, file_pos, sprite_type, num, type, zoom_lvl, SpriteComponent::Palette, 1)) {
+ 		avail_8bpp.Set(zoom_lvl);
+ 		return avail_8bpp;
+ 	}
+@@ -253,13 +289,46 @@ static ZoomLevels LoadSpriteV1(SpriteLoader::SpriteCollection &sprite, SpriteFil
+ 	return {};
+ }
+ 
+-static ZoomLevels LoadSpriteV2(SpriteLoader::SpriteCollection &sprite, SpriteFile &file, size_t file_pos, SpriteType sprite_type, bool load_32bpp, SpriteCacheCtrlFlags control_flags, ZoomLevels &avail_8bpp, ZoomLevels &avail_32bpp)
++#ifdef WITH_SHADEREMU
++#include "../blitter/factory.hpp"
++#include "../string_func.h"
++
++/**
++ * Whether a sprite's levels closer than normal zoom are shown nowhere: no viewport may zoom in, the windows are
++ * drawn at normal zoom and the blitter is the 8bpp one, whose encoder reads no level closer than the viewports'
++ * (spritecache.cpp's ResizeSprites, the case of a sprite of normal zoom alone).
++ */
++static bool SeCloseLevelsUnseen(SpriteType sprite_type, bool load_32bpp)
++{
++	/* (OPENTTD_SPRITES=whole: every level read, as upstream; the first call is the first core's, at start) */
++	static const bool whole = GetEnv("OPENTTD_SPRITES").value_or("") == "whole";
++	if (sprite_type != SpriteType::Normal || load_32bpp || whole) return false;
++	if (_settings_client.gui.zoom_min < ZoomLevel::Normal || _settings_client.gui.sprite_zoom_min > ZoomLevel::Normal || _gui_zoom < ZoomLevel::Normal) return false;
++	Blitter *blitter = BlitterFactory::GetCurrentBlitter();
++	return blitter != nullptr && (blitter->GetName() == "8bpp-optimized" || blitter->GetName() == "null");
++}
++#endif
++
++template <class F>
++static ZoomLevels LoadSpriteV2(SpriteLoader::SpriteCollection &sprite, F &file, size_t file_pos, SpriteType sprite_type, bool load_32bpp, SpriteCacheCtrlFlags control_flags, ZoomLevels &avail_8bpp, ZoomLevels &avail_32bpp
++#ifdef WITH_SHADEREMU
++		, bool skip_close = true
++#endif
++		)
+ {
+ 	static const ZoomLevel zoom_lvl_map[6] = {ZoomLevel::Normal, ZoomLevel::In4x, ZoomLevel::In2x, ZoomLevel::Out2x, ZoomLevel::Out4x, ZoomLevel::Out8x};
+ 
+ 	/* Is the sprite not present/stripped in the GRF? */
+ 	if (file_pos == SIZE_MAX) return {};
+ 
++#ifdef WITH_SHADEREMU
++	/* A level closer than normal zoom, where none is shown, is not decoded: its size alone is read into the sprite,
++	 * with no pixels, for ResizeSprites to pad the normal level as it would (docs/games/openttd.md, "Sprites loaded").
++	 * The windows' icons have a level at 2x: making it, and the 4x from it, was most of the time a window took to open. */
++	skip_close = skip_close && SeCloseLevelsUnseen(sprite_type, load_32bpp);
++	ZoomLevels skipped;
++#endif
++
+ 	/* Open the right file and go to the correct position */
+ 	file.SeekTo(file_pos, SEEK_SET);
+ 
+@@ -306,6 +375,26 @@ static ZoomLevels LoadSpriteV2(SpriteLoader::SpriteCollection &sprite, SpriteFil
+ 			is_wanted_zoom_lvl = (zoom == 0);
+ 		}
+ 
++#ifdef WITH_SHADEREMU
++		if (skip_close && is_wanted_colour_depth && is_wanted_zoom_lvl && zoom_lvl_map[zoom] < ZoomLevel::Normal) {
++			ZoomLevel zoom_lvl = zoom_lvl_map[zoom];
++			if (skipped.Test(zoom_lvl)) {
++				file.SkipBytes(num - 2);
++				continue;
++			}
++			skipped.Set(zoom_lvl);
++			auto &size = sprite[zoom_lvl];
++			size.height = file.ReadWord();
++			size.width = file.ReadWord();
++			size.x_offs = file.ReadWord();
++			size.y_offs = file.ReadWord();
++			size.colours = colour;
++			size.data = nullptr;
++			file.SkipBytes(num - 10);
++			if (size.width == 0 || size.height == 0 || size.width > INT16_MAX || size.height > INT16_MAX) skip_close = false;
++			continue;
++		}
++#endif
+ 		if (is_wanted_colour_depth && is_wanted_zoom_lvl) {
+ 			ZoomLevel zoom_lvl = (sprite_type != SpriteType::MapGen) ? zoom_lvl_map[zoom] : ZoomLevel::Min;
+ 
+@@ -339,7 +428,7 @@ static ZoomLevels LoadSpriteV2(SpriteLoader::SpriteCollection &sprite, SpriteFil
+ 			 * otherwise we can calculate it from the image dimensions. */
+ 			uint decomp_size = (type & 0x08) ? file.ReadDword() : dest_sprite.width * dest_sprite.height * bpp;
+ 
+-			bool valid = DecodeSingleSprite(&dest_sprite, file, file_pos, sprite_type, decomp_size, type, zoom_lvl, colour, 2);
++			bool valid = DecodeSingleSpriteT(&dest_sprite, file, file_pos, sprite_type, decomp_size, type, zoom_lvl, colour, 2);
+ 			if (file.GetPos() != start_pos + num) {
+ 				WarnCorruptSprite(file, file_pos, __LINE__);
+ 				return {};
+@@ -353,6 +442,16 @@ static ZoomLevels LoadSpriteV2(SpriteLoader::SpriteCollection &sprite, SpriteFil
+ 
+ 	} while (file.ReadDword() == id);
+ 
++#ifdef WITH_SHADEREMU
++	/* (the case ResizeSprites takes is the normal level alone, with the sizes of those closer: anything else, or a
++	 * size that cannot be, is read again whole; a core loading in a round has room for one reading) */
++	if (skipped.Any() && (loaded_sprites != ZoomLevels{ZoomLevel::Normal} || !skip_close)) {
++		sprite[ZoomLevel::In4x] = {};
++		sprite[ZoomLevel::In2x] = {};
++		if (VpArenaOn()) return VpRefuse(), ZoomLevels{};
++		return LoadSpriteV2(sprite, file, file_pos, sprite_type, load_32bpp, control_flags, avail_8bpp, avail_32bpp, false);
++	}
++#endif
+ 	return loaded_sprites;
+ }
+ 
+@@ -364,3 +463,53 @@ ZoomLevels SpriteLoaderGrf::LoadSprite(SpriteLoader::SpriteCollection &sprite, S
+ 		return LoadSpriteV1(sprite, file, file_pos, sprite_type, load_32bpp, avail_8bpp);
+ 	}
+ }
++
++#ifdef WITH_SHADEREMU
++/** SpriteLoaderGrf::LoadSprite from the file's image (SpriteFile::Image(), read already), on any core. */
++ZoomLevels LoadSpriteFromImage(SpriteLoader::SpriteCollection &sprite, const SpriteFile &file, size_t file_pos, SpriteType sprite_type, bool load_32bpp, SpriteCacheCtrlFlags control_flags, ZoomLevels &avail_8bpp, ZoomLevels &avail_32bpp)
++{
++	SpriteMemReader r{&file, file.ImageIfRead(), file.GetStartPos(), file.GetEndPos(), file_pos};
++	if (file.GetContainerVersion() >= 2) return LoadSpriteV2(sprite, r, file_pos, sprite_type, load_32bpp, control_flags, avail_8bpp, avail_32bpp);
++	return LoadSpriteV1(sprite, r, file_pos, sprite_type, load_32bpp, avail_8bpp);
++}
++#endif
++
++#ifdef WITH_SHADEREMU
++/**
++ * At most how much memory a core needs to load the sprite at file_pos from the file's image (VpLoadWanted):
++ * its records decoded, the levels out made and all encoded; 0 if it is not a plain sprite.
++ */
++size_t SpriteImageBound(const SpriteFile &file, size_t file_pos)
++{
++	if (file_pos == SIZE_MAX || file.ImageIfRead() == nullptr) return 0;
++	SpriteMemReader r{&file, file.ImageIfRead(), file.GetStartPos(), file.GetEndPos(), file_pos};
++	size_t bound = 0, most = 0;
++	if (file.GetContainerVersion() >= 2) {
++		uint32_t id = r.ReadDword();
++		do {
++			uint32_t num = r.ReadDword();
++			size_t start = r.GetPos();
++			uint8_t type = r.ReadByte();
++			if (type == 0xFF || start + num > r.end) return 0;
++			r.ReadByte(); /* (zoom) */
++			size_t h = r.ReadWord(), w = r.ReadWord();
++			r.SkipBytes(4);
++			size_t decomp = (type & 0x08) ? r.ReadDword() : w * h * 5;
++			if (decomp > 16 * 1024 * 1024) return 0;
++			bound += decomp + 16 + w * h * sizeof(SpriteLoader::CommonPixel) + 16;
++			most = std::max(most, w * h);
++			r.SeekTo(start + num, SEEK_SET);
++		} while (r.GetPos() + 4 <= r.end && r.ReadDword() == id);
++	} else {
++		size_t num = r.ReadWord();
++		uint8_t type = r.ReadByte();
++		if (type == 0xFF) return 0;
++		size_t h = r.ReadByte(), w = r.ReadWord();
++		size_t decomp = (type & 0x02) ? w * h : num;
++		bound = decomp + 16 + w * h * sizeof(SpriteLoader::CommonPixel) + 16;
++		most = w * h;
++	}
++	/* the levels out (a third more), the encoder's guess (five times the levels) and what it keeps */
++	return bound + most * sizeof(SpriteLoader::CommonPixel) / 2 + 16 * 4 + (most * 2 + 64) * 5 * 2 + 4096;
++}
++#endif
+diff --git a/src/spriteloader/sprite_file.cpp b/src/spriteloader/sprite_file.cpp
+index 47db5d4..30743f1 100644
+--- a/src/spriteloader/sprite_file.cpp
++++ b/src/spriteloader/sprite_file.cpp
+@@ -49,3 +49,19 @@ SpriteFile::SpriteFile(const std::string &filename, Subdirectory subdir, bool pa
+ 	this->container_version = GetGRFContainerVersion(*this);
+ 	this->content_begin = this->GetPos();
+ }
++
++#ifdef WITH_SHADEREMU
++/** The whole file in memory (its first byte the file's GetStartPos()), read at the first call, on the first core. */
++const uint8_t *SpriteFile::Image()
++{
++	if (this->image == nullptr) {
++		size_t at = this->GetPos();
++		size_t bytes = this->GetEndPos() - this->GetStartPos();
++		this->image = std::make_unique<uint8_t[]>(bytes + 8);
++		this->SeekTo(this->GetStartPos(), SEEK_SET);
++		this->ReadBlock(this->image.get(), bytes);
++		this->SeekTo(at, SEEK_SET);
++	}
++	return this->image.get();
++}
++#endif
+diff --git a/src/spriteloader/sprite_file_type.hpp b/src/spriteloader/sprite_file_type.hpp
+index 0a781f4..c74e15a 100644
+--- a/src/spriteloader/sprite_file_type.hpp
++++ b/src/spriteloader/sprite_file_type.hpp
+@@ -20,7 +20,14 @@ class SpriteFile : public RandomAccessFile {
+ 	bool palette_remap;     ///< Whether or not a remap of the palette is required for this file.
+ 	uint8_t container_version; ///< Container format of the sprite file.
+ 	size_t content_begin;   ///< The begin of the content of the sprite file, i.e. after the container metadata.
++#ifdef WITH_SHADEREMU
++	std::unique_ptr<uint8_t[]> image; ///< the whole file, read once: sprites are decoded from it on any core
+ public:
++	const uint8_t *Image();
++	const uint8_t *ImageIfRead() const { return this->image.get(); }
++#else
++public:
++#endif
+ 	SpriteFile(const std::string &filename, Subdirectory subdir, bool palette_remap);
+ 	SpriteFile(const SpriteFile&) = delete;
+ 	void operator=(const SpriteFile&) = delete;
+diff --git a/src/spriteloader/spriteloader.hpp b/src/spriteloader/spriteloader.hpp
+index c92d143..a069cfc 100644
+--- a/src/spriteloader/spriteloader.hpp
++++ b/src/spriteloader/spriteloader.hpp
+@@ -72,7 +72,11 @@ public:
+ 		 * @param zoom Zoom level to allocate the data for.
+ 		 * @param size the minimum size of the data field.
+ 		 */
++#ifdef WITH_SHADEREMU
++		void AllocateData(ZoomLevel zoom, size_t size);
++#else
+ 		void AllocateData(ZoomLevel zoom, size_t size) { this->data = Sprite::buffer[zoom].ZeroAllocate(size); }
++#endif
+ 	private:
+ 		/** Allocated memory to pass sprite data around */
+ 		static SpriteCollMap<ReusableBuffer<SpriteLoader::CommonPixel>> buffer;
 diff --git a/src/table/settings/gui_settings.ini b/src/table/settings/gui_settings.ini
 index 6989729..db7cd19 100644
 --- a/src/table/settings/gui_settings.ini
@@ -1011,7 +2129,7 @@ index b33a953..d84a33e 100644
  		static std::mutex thread_startup_mutex;
  		std::lock_guard<std::mutex> lock(thread_startup_mutex);
 diff --git a/src/vehicle.cpp b/src/vehicle.cpp
-index 91588a6..cbff8e8 100644
+index 91588a6..9bca4be 100644
 --- a/src/vehicle.cpp
 +++ b/src/vehicle.cpp
 @@ -1118,6 +1118,18 @@ static void DoDrawVehicle(const Vehicle *v)
@@ -1072,6 +2190,47 @@ index 91588a6..cbff8e8 100644
  				}
  
  				v = v->hash_viewport_next;
+@@ -1671,7 +1701,19 @@ void Vehicle::UpdatePosition()
+ void Vehicle::UpdateBoundingBoxCoordinates(bool update_cache) const
+ {
+ 	Rect new_coord;
++#ifdef WITH_SHADEREMU
++	/* (a vehicle moving keeps its sprite most ticks: its sizes are not looked up again; docs/games/openttd.md,
++	 * "The game's own speed") */
++	MutableSpriteCache &sc = this->sprite_cache;
++	if (sc.sprite_seq.count == 1 && sc.seq_bounds_of == sc.sprite_seq.seq[0].sprite && sc.seq_bounds_gen == _sprite_bounds_gen) {
++		new_coord = sc.seq_bounds;
++	} else {
++		sc.sprite_seq.GetBounds(&new_coord);
++		if (sc.sprite_seq.count == 1) sc.seq_bounds = new_coord, sc.seq_bounds_of = sc.sprite_seq.seq[0].sprite, sc.seq_bounds_gen = _sprite_bounds_gen;
++	}
++#else
+ 	this->sprite_cache.sprite_seq.GetBounds(&new_coord);
++#endif
+ 
+ 	/* z-bounds are not used. */
+ 	Point pt = RemapCoords(this->x_pos + this->bounds.origin.x + this->bounds.offset.x, this->y_pos + this->bounds.origin.y + this->bounds.offset.y, this->z_pos);
+diff --git a/src/vehicle_base.h b/src/vehicle_base.h
+index 7edf724..ab06bc4 100644
+--- a/src/vehicle_base.h
++++ b/src/vehicle_base.h
+@@ -160,7 +160,16 @@ struct MutableSpriteCache {
+ 	bool is_viewport_candidate = false; ///< This vehicle can potentially be drawn on a viewport
+ 	Rect old_coord{}; ///< Co-ordinates from the last valid bounding box
+ 	VehicleSpriteSeq sprite_seq{}; ///< Vehicle appearance.
++#ifdef WITH_SHADEREMU
++	/* the bounds of a sequence of one sprite, kept while the sprite and the sprite cache's generation are the same */
++	Rect seq_bounds{};
++	SpriteID seq_bounds_of = 0;
++	uint32_t seq_bounds_gen = 0;
++#endif
+ };
++#ifdef WITH_SHADEREMU
++extern uint32_t _sprite_bounds_gen; ///< raised whenever sprites may load anew with other sizes (spritecache.cpp)
++#endif
+ 
+ /** A vehicle pool for a little over 1 million vehicles. */
+ typedef Pool<Vehicle, VehicleID, 512> VehiclePool;
 diff --git a/src/vehicle_func.h b/src/vehicle_func.h
 index 9b69b13..4571a5f 100644
 --- a/src/vehicle_func.h
@@ -1101,7 +2260,7 @@ index e09c202..3319032 100644
 +    CONDITION SHADEREMU
 +)
 diff --git a/src/video/null_v.cpp b/src/video/null_v.cpp
-index 65fc9f3..2f39685 100644
+index 65fc9f3..61e230d 100644
 --- a/src/video/null_v.cpp
 +++ b/src/video/null_v.cpp
 @@ -12,6 +12,11 @@
@@ -1116,10 +2275,55 @@ index 65fc9f3..2f39685 100644
  #include "null_v.h"
  
  #include "../safeguards.h"
-@@ -56,6 +61,28 @@ void VideoDriver_Null::MainLoop()
+@@ -36,6 +41,13 @@ std::optional<std::string_view> VideoDriver_Null::Start(const StringList &parm)
+ 	_screen.dst_ptr = nullptr;
+ 	ScreenSizeChanged();
+ 
++#ifdef WITH_SHADEREMU
++	/* (no clock for the frame rate window's measurements: nothing shows them) */
++	extern const volatile uint32_t *_se_clock_ms;
++	static const uint32_t no_clock = 0;
++	_se_clock_ms = &no_clock;
++#endif
++
+ 	/* Do not render, nor blit */
+ 	Debug(misc, 1, "Forcing blitter 'null'...");
+ 	BlitterFactory::SelectBlitter("null");
+@@ -50,11 +62,57 @@ void VideoDriver_Null::MainLoop()
+ {
+ 	uint i;
+ 
++	/* OPENTTD_WARM=W: the game loop's time over the ticks after the first W (the first after a load warm caches
++	 * such as the ships' water regions), "openttd: ticks TK-GO" at the first of them: the simulation alone */
++	const bool timed = GetEnv("OPENTTD_WARM").has_value();
++	uint warm = 0;
++	for (char c : GetEnv("OPENTTD_WARM").value_or("")) warm = c >= '0' && c <= '9' ? warm * 10 + (c - '0') : warm;
++	warm = std::min<uint>(warm, this->ticks);
++	std::chrono::steady_clock::duration in_loop{};
++	auto timed_from = std::chrono::steady_clock::now();
+ 	for (i = 0; i < this->ticks; i++) {
+-		::GameLoop();
++		if (timed && i == warm) {
++			fmt::print("openttd: ticks TK-GO\n");
++			fflush(stdout);
++			timed_from = std::chrono::steady_clock::now();
++		}
++		if (timed && i >= warm) {
++			auto t = std::chrono::steady_clock::now();
++			::GameLoop();
++			in_loop += std::chrono::steady_clock::now() - t;
++		} else {
++			::GameLoop();
++		}
+ 		::InputLoop();
  		::UpdateWindows();
  	}
- 
++	if (timed) {
++		double s = std::chrono::duration<double>(in_loop).count();
++		double all = std::chrono::duration<double>(std::chrono::steady_clock::now() - timed_from).count();
++		fmt::print("openttd: ticks TK-DONE: {} in {:.2f} s of the game loop, {:.2f} a second ({:.2f} s in all)\n", this->ticks - warm, s, (this->ticks - warm) / s, all);
++	}
++
 +	/* OPENTTD_SUM: every tile, the game's random state, the date and the companies' money after
 +	 * the ticks, which a build for another computer must sum the same (docs/games/openttd.md) */
 +	if (GetEnv("OPENTTD_SUM").has_value()) {
@@ -1141,10 +2345,9 @@ index 65fc9f3..2f39685 100644
 +		fmt::print("openttd: {} ticks, map {} x {}, {} companies, date {}, sum {:08x}\n", this->ticks, Map::SizeX(), Map::SizeY(),
 +				Company::GetNumItems(), TimerGameCalendar::date.base(), h);
 +	}
-+
+ 
  	/* If requested, make a save just before exit. The normal exit-flow is
  	 * not triggered from this driver, so we have to do this manually. */
- 	if (_settings_client.gui.autosave_on_exit) {
 diff --git a/src/video/video_driver.cpp b/src/video/video_driver.cpp
 index 85cc2d5..439e51d 100644
 --- a/src/video/video_driver.cpp
@@ -1171,7 +2374,7 @@ index 85cc2d5..439e51d 100644
  	if (std::this_thread::get_id() != this->game_thread.get_id()) return;
  
 diff --git a/src/viewport.cpp b/src/viewport.cpp
-index 6427a14..0cc5107 100644
+index 6427a14..c019e53 100644
 --- a/src/viewport.cpp
 +++ b/src/viewport.cpp
 @@ -99,6 +99,11 @@
@@ -1549,7 +2752,7 @@ index 6427a14..0cc5107 100644
  	ViewportDrawParentSprites(&_vd.parent_sprites_to_sort, &_vd.child_screen_sprites_to_draw);
  
  	if (_draw_bounding_boxes) ViewportDrawBoundingBoxes(&_vd.parent_sprites_to_sort);
-@@ -1897,6 +2122,415 @@ static inline void ViewportDraw(const Viewport &vp, int left, int top, int right
+@@ -1897,6 +2122,426 @@ static inline void ViewportDraw(const Viewport &vp, int left, int top, int right
  	);
  }
  
@@ -1636,6 +2839,17 @@ index 6427a14..0cc5107 100644
 +	for (int k = 1; k <= got; k++) _vp_room[k] = 2048;
 +	_vp_workers = got;
 +	return got;
++}
++
++/** The workers, opened if they are not yet (for a load's LZMA decoded ahead, saveload.cpp). */
++int VpWorkersOpen()
++{
++	/* (as VpWorkers asks for them, whatever the blitter: the null video driver's too) */
++	const char *asked = getenv("OPENTTD_WORKERS");
++	int want = asked != nullptr ? 0 : VP_CORES - 1;
++	for (const char *c = asked; c != nullptr && *c >= '0' && *c <= '9'; c++) want = want * 10 + (*c - '0');
++	want = std::min(want, VP_CORES - 1);
++	return want > 0 ? std::max(mcw_open(want), 0) : 0;
 +}
 +
 +/** A part asked for while parts are kept: kept, to be made at the flush. */
@@ -2070,28 +3284,3 @@ index 3d07ff3..b8911ba 100644
  static const uint ZOOM_BASE_SHIFT = to_underlying(ZoomLevel::Normal);
  static uint const ZOOM_BASE = 1U << ZOOM_BASE_SHIFT;
  
-diff --git a/src/music.cpp b/src/music.cpp
-index ee33585..03a3fb3 100644
---- a/src/music.cpp
-+++ b/src/music.cpp
-@@ -112,6 +112,9 @@ template <>
- }
- 
- template class BaseMedia<MusicSet>;
-+/* (and the content check's search of the sets: clang inlines it into HasSet and keeps no copy for
-+ * network/core/tcp_content.cpp, which GCC's implicit instantiation gave) */
-+template std::optional<std::string_view> TryGetBaseSetFile(const ContentInfo &, bool, std::span<const std::unique_ptr<MusicSet>>);
- 
- bool MusicSet::FillSetDetails(const IniFile &ini, const std::string &path, const std::string &full_filename)
- {
-diff --git a/src/sound.cpp b/src/sound.cpp
-index 31a7ede..a28afc9 100644
---- a/src/sound.cpp
-+++ b/src/sound.cpp
-@@ -302,3 +302,6 @@ template <>
- }
- 
- template class BaseMedia<SoundsSet>;
-+/* (and the content check's search of the sets: clang inlines it into HasSet and keeps no copy for
-+ * network/core/tcp_content.cpp, which GCC's implicit instantiation gave) */
-+template std::optional<std::string_view> TryGetBaseSetFile(const ContentInfo &, bool, std::span<const std::unique_ptr<SoundsSet>>);

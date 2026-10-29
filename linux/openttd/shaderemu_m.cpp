@@ -125,7 +125,13 @@ static std::vector<Note> Convert(const MidiFile &file, const MusicSongInfo &song
 			int pitch = Clamp((channel == 9 || (flags & 1)) ? r[3] : key + offset, 0, 127);
 			uint32_t turns = _note_pitch[pitch];
 			/* the second voice is tuned apart by the bank's fine tune, in 32nds of a semitone */
-			if (k == 1) turns = static_cast<uint32_t>(turns * std::pow(2.0, ((r[2] / 2) - 64) / (32.0 * 12.0)));
+			if (k == 1) {
+				/* (the factor once an instrument: a pow in soft doubles was 29 million instructions of a game's load) */
+				static double tune[TONES];
+				static bool tuned[TONES];
+				if (!tuned[tone]) tune[tone] = std::pow(2.0, ((r[2] / 2) - 64) / (32.0 * 12.0)), tuned[tone] = true;
+				turns = static_cast<uint32_t>(turns * tune[tone]);
+			}
 			/* a voice that is silent, else one let go longest ago, else the oldest note */
 			int best = 0;
 			for (int v = 1; v < VOICES; v++) {
@@ -214,20 +220,21 @@ void MusicDriver_ShaderEmu::PlaySong(const MusicSongInfo &song)
 	std::vector<Note> notes = Convert(file, song);
 	Debug(driver, 1, "shaderemu music: {}, {} notes, {} s", song.songname, notes.size(), _song_samples / _out);
 
-	/* each voice's notes after its header */
+	/* each voice's notes after its header (counted first, then each placed: a pass over the notes a voice was a
+	 * third of the song's start) */
+	uint32_t count[VOICES] = {}, placed[VOICES] = {};
+	snd_note *first[VOICES];
+	for (const Note &n : notes) count[n.voice]++;
 	char *to = _memory;
 	for (int v = 0; v < VOICES; v++) {
 		snd_track *head = reinterpret_cast<snd_track *>(to);
-		snd_note *first = reinterpret_cast<snd_note *>(to + sizeof(*head));
-		uint32_t count = 0;
+		first[v] = reinterpret_cast<snd_note *>(to + sizeof(*head));
 		_track_of[v] = _memory_at + static_cast<uint32_t>(to - _memory);
-		for (const Note &n : notes) {
-			if (n.voice == v) first[count++] = n.note;
-		}
 		*head = {};
-		head->count = count;
-		to = reinterpret_cast<char *>(first + count);
+		head->count = count[v];
+		to = reinterpret_cast<char *>(first[v] + count[v]);
 	}
+	for (const Note &n : notes) first[n.voice][placed[n.voice]++] = n.note;
 	_looping = song.loop;
 	uint32_t loud = SND_VOLUME(_volume * 48 / 127, _volume * 48 / 127);
 	/* (every voice starts on the same sample: their keys change in one frame of the machine) */
