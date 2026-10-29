@@ -1,4 +1,4 @@
-"""The write cache's size against what a pass does (GPU-VM's compare/wcsize.py, 28 October 2026): does a bigger cache
+"""The write cache's size against what a pass does (28 October 2026): does a bigger cache
 give core 0 more of a pass, and a game more frames where a round costs a large fixed time (a VR frame, few rounds)?
 
     python tools/wcsize.py model [--bits 5,6,7,8]                    # rvc_cpu, RVC_WCACHE=1 RVC_WC_BITS=N

@@ -1,5 +1,5 @@
 """tools/test_all.py's cases on the graphics card: bin/rvc_harness.exe (D3D11, fxc2, experiments/rvc_opt) one at a
-time through tools\\gpu_queue.ps1, each console checked by test_all's own rules (GPU-VM's userland/apps/card.py).
+time through tools\\gpu_queue.ps1, each console checked by test_all's own rules.
 
     python tools/test_card.py CASE_OR_TAG ... [--image build/images/nommu] [--max-wall 55] [--wall-scale 1]
     python tools/test_card.py games --list

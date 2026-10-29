@@ -5,7 +5,7 @@ samples by basic block. The SASS of each line is in tools/nsight_sass.py's listi
 
     python tools/nsight_lines.py logs/nsight/N/*.ngfx-gputrace [-o lines.tsv] [--top 30] [--lines FROM-TO]
 
-A trace for this wants many samples: a DXIL trace (GPU-VM tools/nsight.ps1 -Dxil -PcInterval 64 -DurationMs 1000; tools/gpu_trace.ps1 of rvc_trace12 is DXBC) (0.01% a sample).
+A trace for this wants many samples: a DXIL trace taken with a PC sample every 64 cycles for a second (tools/gpu_trace.ps1 of rvc_trace12 is DXBC) (0.01% a sample).
 Under a minute: the UI is killed at 50 s. Needs pywinauto."""
 import argparse
 import glob

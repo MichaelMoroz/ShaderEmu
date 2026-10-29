@@ -1,4 +1,4 @@
-"""The Shader Pipelines table of an Nsight Graphics GPU Trace, as CSV, without a person (GPU-VM docs/nsight.md): opens the
+"""The Shader Pipelines table of an Nsight Graphics GPU Trace, as CSV, without a person (the nsight-gpu-trace skill): opens the
 .ngfx-gputrace in ngfx-ui, shows the table, selects it all and copies it (the UI's own copy writes CSV to the
 clipboard), and closes the UI. Each shader's registers a thread (# Reg), warps an SM (# Warp), live registers, samples
 and stall reasons.
