@@ -37,7 +37,7 @@ if [ "${OPENTTD_TREE:-}" != keep ]; then
     for f in $( [ -f "$OLD" ] && grep -vxFf "$P.files" "$OLD" ); do git -C "$SRC" checkout -q "$VER" -- "$f"; done
     mv "$P.files" "$OLD"; rm -rf "$P"
 fi
-for f in video/shaderemu_v.cpp video/shaderemu_v.h sound/shaderemu_s.cpp sound/shaderemu_s.h music/shaderemu_m.cpp music/shaderemu_m.h \
+for f in video/shaderemu_v.cpp video/shaderemu_v.h video/shaderemu_gpu.cpp video/shaderemu_gpu.h sound/shaderemu_s.cpp sound/shaderemu_s.h music/shaderemu_m.cpp music/shaderemu_m.h \
          mixer_shaderemu.cpp; do
     put "$HERE/$(basename "$f")" "$SRC/src/$f"
 done

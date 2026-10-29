@@ -23,6 +23,7 @@
 #include "../zoom_func.h"
 #include "../settings_type.h"
 #include "shaderemu_v.h"
+#include "shaderemu_gpu.h"
 #include <unistd.h>
 extern "C" {
 #include <GLES/segl.h>
@@ -52,6 +53,10 @@ static GR_KEYMOD _modifiers;
 
 std::optional<std::string_view> VideoDriver_ShaderEmu::Start(const StringList &)
 {
+	/* the GPU draws the picture (docs/games/openttd.md, "The picture on the GPU"); OPENTTD_DRAW=cpu: the 8-bit blitter */
+	static const char *draw = getenv("OPENTTD_DRAW");
+	bool gpu = draw == nullptr || std::string_view(draw) != "cpu";
+	if (gpu && BlitterFactory::SelectBlitter("8bpp-gpu") != nullptr) _blitter_autodetected = false;
 	if (BlitterFactory::GetCurrentBlitter()->GetScreenDepth() != 8) return "only the 8-bit blitters";
 	if (GrOpen() < 0) return "no Nano-X server (start one: nano-X -p &)";
 
@@ -91,7 +96,14 @@ std::optional<std::string_view> VideoDriver_ShaderEmu::Start(const StringList &)
 
 	_picture_w = std::max(_screen_cols, 640);
 	_picture_h = std::max(_screen_rows, 480);
-	_picture = static_cast<uint8_t *>(seglMemory(_picture_w * _picture_h));
+	_picture_w = std::min(_picture_w, 2040);
+	_picture_h = std::min(_picture_h, 2040);
+	if (BlitterFactory::GetCurrentBlitter()->GetName() == "8bpp-gpu" && !SeGpuStart(_picture_w, _picture_h)) {
+		/* (no GPU memory for its picture of words: the 8-bit blitter) */
+		BlitterFactory::SelectBlitter("8bpp-optimized");
+	}
+	/* (with the GPU's picture, only addresses into this one are made: the blitter tells where by them) */
+	_picture = SeGpuOn() ? new uint8_t[_picture_w * _picture_h]() : static_cast<uint8_t *>(seglMemory(_picture_w * _picture_h));
 	if (_picture == nullptr) return "no GPU memory for the screen";
 	/* (the GPU's memory is handed out from the same place to every program: it holds the last one's picture) */
 	std::fill_n(_picture, static_cast<size_t>(_picture_w) * _picture_h, uint8_t{0});
@@ -105,6 +117,7 @@ std::optional<std::string_view> VideoDriver_ShaderEmu::Start(const StringList &)
 
 void VideoDriver_ShaderEmu::Stop()
 {
+	SeGpuSettle();
 	if (_drawn) seglSettle();
 	GrClose();
 }
@@ -116,8 +129,12 @@ bool VideoDriver_ShaderEmu::Resize(int w, int h)
 	h = Clamp(h, 64, _picture_h);
 	if (_drawn) seglSettle(), _drawn = false;
 
-	glBindTexture(GL_TEXTURE_2D, _texture);
-	seglTexturePointer(_picture, w, h, GL_COLOR_INDEX8_EXT);
+	if (SeGpuOn()) {
+		SeGpuResize(w, h);
+	} else {
+		glBindTexture(GL_TEXTURE_2D, _texture);
+		seglTexturePointer(_picture, w, h, GL_COLOR_INDEX8_EXT);
+	}
 	_screen.width = w;
 	_screen.height = h;
 	_screen.pitch = w;
@@ -135,6 +152,7 @@ void VideoDriver_ShaderEmu::MakeDirty(int left, int top, int width, int height)
 {
 	Rect r = { left, top, left + width, top + height };
 	this->dirty_rect = BoundingRect(this->dirty_rect, r);
+	SeGpuPointerDrawn(); /* (DrawMouseCursor's MakeDirty ends the pointer's sprites) */
 }
 
 void VideoDriver_ShaderEmu::CheckPaletteAnim()
@@ -145,7 +163,7 @@ void VideoDriver_ShaderEmu::CheckPaletteAnim()
 
 bool VideoDriver_ShaderEmu::LockVideoBuffer()
 {
-	if (_drawn) seglSettle(), _drawn = false;
+	if (_drawn && !SeGpuOn()) seglSettle(), _drawn = false;
 	_screen.dst_ptr = _picture;
 	return false;
 }
@@ -183,14 +201,43 @@ static void CheckPicture()
 	static const char *hold = getenv("OPENTTD_HOLD");
 	int w = _screen.width, h = _screen.height;
 	if (!check || _game_mode != GM_NORMAL) {
-		if (hold != nullptr && _play_frame == Number(hold)) HoldHere(_picture, w, h);
+		if (hold != nullptr && _play_frame == Number(hold)) {
+			if (SeGpuOn()) {
+				/* (the GPU's picture, in the bytes the 8-bit blitter would have drawn) */
+				static std::vector<uint8_t> drawn;
+				SeGpuSubmit();
+				SeGpuSettle();
+				SeGpuPicture(drawn);
+				std::copy(drawn.begin(), drawn.end(), _picture);
+				/* OPENTTD_HOLD_WHO=x,y: the records that cover that pixel */
+				if (const char *who = getenv("OPENTTD_HOLD_WHO"); who != nullptr) {
+					const char *comma = strchr(who, ',');
+					if (comma != nullptr) SeGpuWho(Number(who), Number(comma + 1));
+				}
+			}
+			HoldHere(_picture, w, h);
+		}
 		return;
 	}
 	UndrawMouseCursor();
 	static std::vector<uint8_t> shown;
-	shown.assign(_picture, _picture + w * h);
-	MarkWholeScreenDirty();
-	DrawDirtyBlocks();
+	if (SeGpuOn()) {
+		/* the GPU's picture as drawn, then drawn again whole */
+		SeGpuSubmit();
+		SeGpuSettle();
+		SeGpuPicture(shown);
+		MarkWholeScreenDirty();
+		DrawDirtyBlocks();
+		SeGpuSubmit();
+		SeGpuSettle();
+		static std::vector<uint8_t> whole;
+		SeGpuPicture(whole);
+		std::copy(whole.begin(), whole.end(), _picture);
+	} else {
+		shown.assign(_picture, _picture + w * h);
+		MarkWholeScreenDirty();
+		DrawDirtyBlocks();
+	}
 	int bad = 0, l = w, t = h, r = -1, b = -1, line = 0;
 	static std::vector<int> down; /* differing pixels in a column so far, ending at this row */
 	down.assign(w, 0);
@@ -224,7 +271,7 @@ static void CheckPicture()
 	}
 	if (hold != nullptr && (_play_frame == Number(hold) || (bad != 0 && _play_frame >= 0 && std::string_view(hold) == "bad") ||
 			(bad > 1000 && _play_frame >= 0 && std::string_view(hold) == "big"))) HoldHere(shown.data(), w, h);
-	if (keep) std::copy(shown.begin(), shown.end(), _picture);
+	if (keep && !SeGpuOn()) std::copy(shown.begin(), shown.end(), _picture);
 	DrawMouseCursor();
 }
 
@@ -242,6 +289,18 @@ void VideoDriver_ShaderEmu::Paint()
 	if (_drawn) seglSettle(), _drawn = false;
 	_draws++;
 	CheckPicture();
+	if (SeGpuOn()) {
+		/* the frame's records drawn by the GPU, then shown through the palette */
+		static uint32_t words[256];
+		for (int i = 0; i < 256; i++) {
+			const Colour &c = this->local_palette.palette[i];
+			words[i] = static_cast<uint32_t>(c.r) << 16 | static_cast<uint32_t>(c.g) << 8 | c.b;
+		}
+		this->local_palette.count_dirty = 0;
+		SeGpuPaint(words, _window);
+		this->dirty_rect = {};
+		return;
+	}
 
 	if (this->local_palette.count_dirty != 0) {
 		unsigned *words = seglPalette();
@@ -499,6 +558,9 @@ static void PlayStep()
 		/* no autosave: one is minutes of LZMA at 2 MIPS, in whichever part it falls */
 		_settings_client.gui.autosave_interval = 0;
 		ChangeAutosaveFrequency(true);
+		/* OPENTTD_PLAY_JUMP=1: a scroll goes the whole way at once, so that a picture's view is its number's
+		 * whatever the speed (two ways of drawing compared by their sums) */
+		if (getenv("OPENTTD_PLAY_JUMP") != nullptr) _settings_client.gui.smooth_scroll = false;
 	}
 	static const bool short_play = getenv("OPENTTD_PLAY_SHORT") != nullptr;
 	const int len = short_play ? std::size(PLAY_SHORT) : 200;
@@ -512,7 +574,13 @@ static void PlayStep()
 		/* (=sums: and the last picture's sum, to compare two builds' pictures) */
 		static const bool sums = std::string_view(getenv("OPENTTD_PLAY_TIMES")) == "sums";
 		uint32_t sum = 2166136261u;
-		if (sums && _picture != nullptr) {
+		if (sums && SeGpuOn()) {
+			/* (the GPU's picture as drawn and copied out, its remaps made) */
+			static std::vector<uint8_t> drawn;
+			SeGpuSettle();
+			SeGpuPicture(drawn);
+			for (uint8_t b : drawn) sum = (sum ^ b) * 16777619u;
+		} else if (sums && _picture != nullptr) {
 			for (int i = 0; i < _screen.width * _screen.height; i++) sum = (sum ^ _picture[i]) * 16777619u;
 		}
 		fmt::print(stderr, "openttd: picture {} took {:.1f} ms, sum {:08x}\n", f, std::chrono::duration<double, std::milli>(now - last).count(), sum);

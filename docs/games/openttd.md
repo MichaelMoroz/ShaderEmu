@@ -5,9 +5,9 @@ Deluxe, on the desktop, with the open base sets in place of the original game's 
 OpenGFX 8.0 (pictures, GPL-2.0), OpenSFX 1.0.3 (sounds, CC BY-SA 3.0) and OpenMSX 0.4.2 (music,
 GPL-2.0). Nothing of the 1995 game is in the image. The engine is upstream's, compiled with
 the patch below; the window, the sound, the music and the mixer are new (`linux/openttd/shaderemu_v.cpp`,
-`shaderemu_s.cpp`, `shaderemu_m.cpp`, `mixer_shaderemu.cpp`). The picture is drawn by the 8-bit blitter into a
-paletted texture that the GPU draws as one quad; sounds are voices of the sound card, and the
-music is its FM voices.
+`shaderemu_s.cpp`, `shaderemu_m.cpp`, `mixer_shaderemu.cpp`). The picture is drawn by the GPU from lists the
+processor makes ("The picture on the GPU"; `OPENTTD_DRAW=cpu` is the 8-bit blitter into a paletted texture that the
+GPU shows as one quad); sounds are voices of the sound card, and the music is its FM voices.
 
     / # openttd                                         # the title screen
     / # openttd -g                                      # straight into a new game
@@ -189,6 +189,41 @@ too far to scroll, and the whole view drawn again was kept over them in the same
 pieces of both were copied out, then the texts of both, the old rectangles' station names last.
 A part asked for over a kept one now flushes first (`ViewportKept`), as upstream draws one after
 the other.
+
+## The picture on the GPU
+
+The blitter is `8bpp-gpu` (`linux/openttd/shaderemu_gpu.cpp`): it draws no pixel. A sprite's zoom levels
+stay in the sprite cache as plain rows of palette indices, where the GPU reads them; a sprite, a fill, a
+line's pixels (a run of `SetPixel`s on one row joined), a remapped rectangle and a scroll become records of
+the GPU's sprite command (`CMD_SPRITES`, `docs/machine/gpu.md`, "Sprites of a paletted picture"), a texel
+each, in the order the game draws them. The GPU draws a list's records the later nearer into its target and
+copies it into a picture of words in GPU memory (red the index); the next list starts with that picture as
+its first record (kind 7), and a second list shows it through the palette in the window. The palette and its
+animation are the show list's 256 words: a palette change draws nothing again.
+
+- Company colours and recolours are a record's remap table (kind 1); a table a worker may change again is
+  copied beside its records first.
+- The transparent buildings and a shaded window remap what is already there: they are drawn in the list's
+  second, blended pass and add to green, 1 for the first table and 16 for the second (words 7 and 8 of the
+  command). Whoever reads the picture next makes the remaps, the next list's first record or the CPU's copy.
+  A third table ends the list.
+- A scroll is the picture's own record shifted, after the list so far is drawn: no pixel is moved by the
+  processor.
+- The viewport's pieces are recorded by the worker cores into records of their own, which the first core puts
+  in the list after the round in the pieces' order ("One order"): a piece that runs out of room, or meets a
+  remap the first core has not seen, is given up and drawn again by the first core.
+- The pointer's sprites go to an overlay that only the show list draws.
+
+A list is submitted at the frame's end, and the game's tick runs while the GPU draws it: the processor waits
+only at the next frame's first drawing, if the list is not drawn by then (its records' chunks are used again).
+
+`OPENTTD_CHECK=1` reads the GPU's picture back for each comparison. `OPENTTD_HOLD_WHO=x,y` with a hold prints
+every list's records that cover that pixel. `OPENTTD_PLAY_JUMP=1` turns smooth scrolling off: a smooth
+scroll's step goes by the time between pictures, so two runs' pictures are compared only with it. The
+CPU's blitter moves a scroll's whole rows (`ScrollAsBlock`), including the few pixels right of the
+rectangle that upstream leaves as they were: compare with `OPENTTD_DRAW=cpu OPENTTD_MEMOP=0`. Under
+`rvc_harness --cpu` the GPU reads RAM that the processor wrote outside the GPU's memory only every 0.25
+s: run with `--cpu-fresh`.
 
 ## Is it the same game
 
