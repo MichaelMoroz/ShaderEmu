@@ -150,4 +150,37 @@ if [ ! -f "$SYSROOT/lib/libcompiler_rt.a" ]; then
     rm -f "$SYSROOT/lib/libcompiler_rt.a"
     riscv32-linux-ar rcs "$SYSROOT/lib/libcompiler_rt.a" rt-obj/*.o
 fi
+# Faster 64-bit division and doubles in place of compiler-rt's members (rt/ beside this file), each measured in
+# instructions a call under qemu and checked bit for bit against the host (rt/test_rt.c, rt/test_df.c, rt/fpcheck.c):
+# - rt/divdi3.c: __udivdi3, __divdi3, __umoddi3, __moddi3, __udivmoddi4, __divmoddi4 by two steps of the 32-bit divide
+#   (compiler-rt's go a bit a turn: a 64-bit value by a 32-bit one 1,028 instructions, now 80);
+# - rt/dfast.c: a double's sum, difference and product on 32-bit words for normal operands (a sum 155 instructions in
+#   compiler-rt, 96 in libgcc's soft-fp, some 80 here; a product 107, 81), everything else by the slow routines:
+#   soft-fp's sum (__adddf3_slow) and compiler-rt's product (__muldf3_slow); and an int or unsigned made a double
+#   (__floatsidf, __floatunsidf: compiler-rt's some 70, these some 20);
+# - libgcc's soft-fp for the comparisons and the conversions to and from 64-bit integers (compiler-rt: __floatdidf
+#   513, __fixdfdi 368, __fixsfdi 324; soft-fp: 99, 29, 25), built with no rounding mode read (-U__riscv_flen: round
+#   to nearest, as compiler-rt). compiler-rt's quotient and the other conversions stay, being the faster.
+# Put in again when the library or a file is newer.
+RT_SFP="eqdf2 gedf2 ledf2 unorddf2 fixdfdi fixunsdfdi floatdidf floatundidf fixsfdi fixunssfdi floatdisf floatundisf adddf3"
+RT_THEIRS="udivdi3.o umoddi3.o divdi3.o moddi3.o udivmoddi4.o divmoddi4.o adddf3.o subdf3.o muldf3.o floatsidf.o floatunsidf.o comparedf2.o fixdfdi.o
+           fixunsdfdi.o floatdidf.o floatundidf.o fixsfdi.o fixunssfdi.o floatdisf.o floatundisf.o sfp_subdf3.o"
+if [ ! -f "$SYSROOT/lib/rt-ours" ] || [ -n "$(find "$OURS/rt" -newer "$SYSROOT/lib/rt-ours")" ] || [ "$SYSROOT/lib/libcompiler_rt.a" -nt "$SYSROOT/lib/rt-ours" ]; then
+    echo "== 64-bit division, doubles"
+    base=https://raw.githubusercontent.com/gcc-mirror/gcc/$GCC/libgcc/soft-fp
+    mkdir -p soft-fp-df   # (not in soft-fp/, whose every file the runtime's build above takes)
+    for f in $RT_SFP; do
+        [ -f "soft-fp-df/$f.c" ] || curl -sSfL "$base/$f.c" -o "soft-fp-df/$f.c"
+    done
+    rm -rf rt-ours && mkdir rt-ours
+    rv32-cc -O2 -c "$OURS/rt/divdi3.c" -o rt-ours/divdi3.o
+    rv32-cc -O2 -c "$OURS/rt/dfast.c" -o rt-ours/dfast.o
+    for f in $RT_SFP; do
+        rv32-cc -O2 -w -fno-builtin -U__riscv_flen -D__adddf3=__adddf3_slow -Isoft-fp -c "soft-fp-df/$f.c" -o "rt-ours/sfp_$f.o"
+    done
+    rv32-cc -O2 -w -fno-builtin -D__muldf3=__muldf3_slow -c compiler-rt/lib/builtins/muldf3.c -o rt-ours/slow_muldf3.o
+    riscv32-linux-ar d "$SYSROOT/lib/libcompiler_rt.a" $RT_THEIRS $(cd rt-ours && ls) 2>/dev/null || true
+    riscv32-linux-ar rs "$SYSROOT/lib/libcompiler_rt.a" rt-ours/*.o
+    touch "$SYSROOT/lib/rt-ours"
+fi
 echo "$ARCH_FLAGS" > "$SYSROOT/lib/arch-flags"

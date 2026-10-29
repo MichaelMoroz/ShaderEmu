@@ -51,9 +51,19 @@ int vfork(void) __attribute__((returns_twice));	/* (pid_t is int: no header, whi
 #define fork vfork
 #endif
 EOF
-FILTER='args=(); link=1
+# Every global hidden, declarations too: a program is one static image, so a global declared `extern` is the
+# program's own and is reached PC-relative (auipc and its use), not through the GOT (auipc, a load of its address,
+# then its use). -fvisibility=hidden covers only what a file defines; the pragma covers what it declares. Not in
+# a profile-guided C++ build (-fprofile-generate, -fprofile-use: Tiberian Dawn's and Red Alert's): GCC 13.3 stopped there
+# on an internal error (a segmentation fault in TD's expand.cpp). C is (Quake's, Quake III's and Doom's).
+cat > "$S/include/nommu_hidden.h" <<'EOF'
+#ifndef __ASSEMBLER__
+#pragma GCC visibility push(hidden)
+#endif
+EOF
+FILTER='args=(); link=1; hidden="-include nommu_hidden.h"; hiddenxx=$hidden
 for a in "$@"; do
-    case "$a" in -c|-S|-E|-M|-MM) link=0 ;; esac
+    case "$a" in -c|-S|-E|-M|-MM) link=0 ;; -fprofile-use*|-fprofile-generate*) hiddenxx= ;; esac
     case "$a" in -fno-pie|-fno-PIE|-no-pie|-fno-pic|-fno-PIC|-Wl,-Ttext-segment=*) ;; *) args+=("$a") ;; esac
 done'
 LINK="-static -Wl,-pie,--no-dynamic-linker,-z,text -nostdlib -L$S/lib $S/lib/flatcrt.o $S/lib/crti.o"
@@ -61,7 +71,7 @@ LIBS="-Wl,--start-group -lc -lcompiler_rt -Wl,--end-group $S/lib/crtn.o"
 cat > "$W/bin/rv32-cc" <<EOF
 #!/usr/bin/env bash
 $FILTER
-inc="-nostdinc -isystem $S/include -isystem $GCCINC -include nommu_fork.h"
+inc="-nostdinc -isystem $S/include -isystem $GCCINC -include nommu_fork.h \$hidden"
 [ \$link = 1 ] && exec riscv32-linux-gcc $ARCH -fPIE \$inc $LINK "\${args[@]}" $LIBS
 exec riscv32-linux-gcc $ARCH -fPIE \$inc "\${args[@]}"
 EOF
@@ -70,8 +80,8 @@ CXXF="-fno-exceptions -fno-rtti -fno-threadsafe-statics '-D__GLIBC_PREREQ(a,b)=0
 cat > "$W/bin/rv32-c++" <<EOF
 #!/usr/bin/env bash
 $FILTER
-[ \$link = 1 ] && exec riscv32-linux-g++ $ARCH $CXXF -fPIE $CXXINC $LINK "\${args[@]}" $LIBS
-exec riscv32-linux-g++ $ARCH $CXXF -fPIE $CXXINC "\${args[@]}"
+[ \$link = 1 ] && exec riscv32-linux-g++ $ARCH $CXXF -fPIE $CXXINC \$hiddenxx $LINK "\${args[@]}" $LIBS
+exec riscv32-linux-g++ $ARCH $CXXF -fPIE $CXXINC \$hiddenxx "\${args[@]}"
 EOF
 chmod +x "$W/bin/rv32-cc" "$W/bin/rv32-c++"
 printf 'int main(void) { return fork() == 0 ? 0 : 0; }\n' > "$W/t.c"

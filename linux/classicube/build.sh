@@ -31,7 +31,7 @@ FPU="-fno-math-errno -fsingle-precision-constant"
 # -fno-common -fdata-sections, and ALIGN16 below: a variable is a section of its own that starts
 # on 16 bytes. A worker core builds chunk meshes (MapRenderer.h, docs/machine/multicore.md), and two
 # cores must not store to the same 16 bytes.
-CFLAGS="-O2 $FPU -fno-pie -fno-common -fdata-sections -fno-strict-aliasing -w -DPLAT_SHADEREMU -I$C/src -I$MW/src/include -I$REPO/programs/mc -I$REPO/linux/libmedia -idirafter $REPO/programs/linux/include ${CLASSICUBE_DEFINES:-}"
+CFLAGS="-O2 $FPU -DCC_API= -DCC_VAR= -fno-pie -fno-common -fdata-sections -fno-strict-aliasing -w -DPLAT_SHADEREMU -I$C/src -I$MW/src/include -I$REPO/programs/mc -I$REPO/linux/libmedia -idirafter $REPO/programs/linux/include ${CLASSICUBE_DEFINES:-}"
 ALIGN16="--set-section-alignment .data*=16 --set-section-alignment .sdata*=16 --set-section-alignment .bss*=16 --set-section-alignment .sbss*=16"
 # The files a profile is full of get more of the compiler (no vectors: the machine has none).
 # With it a frame is 3% fewer instructions, a chunk's mesh 14% and digging 20%; the meshes are the same.
