@@ -9,6 +9,7 @@
 #include "../blitter/factory.hpp"
 #include "../core/geometry_func.hpp"
 #include "../core/math_func.hpp"
+#include "../core/random_func.hpp"
 #include "../framerate_type.h"
 #include "../progress.h"
 #include "../window_func.h"
@@ -16,15 +17,26 @@
 #include "../network/network.h"
 #include "../window_gui.h"
 #include "../viewport_func.h"
+#include "../tilehighlight_func.h"
 #include "../vehicle_gui.h"
 #include "../station_func.h"
 #include "../station_base.h"
 #include "../train.h"
 #include "../zoom_func.h"
 #include "../settings_type.h"
+#include "../command_func.h"
+#include "../company_func.h"
+#include "../company_base.h"
+#include "../genworld.h"
+#include "../map_func.h"
+#include "../vehicle_base.h"
+#include "../vehicle_func.h"
+#include "../timer/timer_game_calendar.h"
 #include "shaderemu_v.h"
 #include "shaderemu_gpu.h"
 #include <unistd.h>
+#include <cerrno>
+#include <utility>
 extern "C" {
 #include <GLES/segl.h>
 #include <nano-X.h>
@@ -193,6 +205,10 @@ static void HoldHere(const uint8_t *shown, int w, int h)
 	for (;;) usleep(1000000);
 }
 
+void InvalidateDirtyCompanyFinances();
+void NetworkDrawChatMessage();
+void UpdateWindowsEarly();
+
 static void CheckPicture()
 {
 	static const char *check_how = getenv("OPENTTD_CHECK");
@@ -219,8 +235,19 @@ static void CheckPicture()
 		}
 		return;
 	}
+	VpFlushFinish();
 	UndrawMouseCursor();
+	const bool worker = TwActive();
+	if (worker) {
+		TwHold(false);
+		VehiclesSync(true); /* (what the tick said it moved since the picture's flush, as the next picture would) */
+		InvalidateDirtyCompanyFinances(); /* (as the next picture's window timer would) */
+		DrawDirtyBlocks();
+	}
 	static std::vector<uint8_t> shown;
+	/* (every vehicle's copy made anew: one the tick changed and did not say so differs) */
+	VehiclesChangedAll();
+	VehiclesSync(worker);
 	if (SeGpuOn()) {
 		/* the GPU's picture as drawn, then drawn again whole */
 		SeGpuSubmit();
@@ -261,6 +288,18 @@ static void CheckPicture()
 		if (_play_frame >= 2) _check_part_line = std::max(_check_part_line, line); /* (the first shows "paused") */
 		fmt::print(stderr, "openttd: check: picture {} (play {}): {} pixels differ, in {},{} to {},{}, longest line {}\n",
 				_checked, _play_frame, bad, l, t, r, b, line);
+		Window *mw = std::string_view(check_how) == "list" ? FindWindowById(WC_MAIN_WINDOW, 0) : nullptr;
+		if (mw != nullptr && mw->viewport != nullptr) { /* (the vehicles near the difference) */
+			const Viewport &vp = *mw->viewport;
+			for (const Vehicle *v : Vehicle::Iterate()) {
+				if (v->coord.left == INVALID_COORD) continue;
+				int vl = UnScaleByZoom(v->coord.left - vp.virtual_left, vp.zoom) + vp.left, vt = UnScaleByZoom(v->coord.top - vp.virtual_top, vp.zoom) + vp.top;
+				int vr = UnScaleByZoom(v->coord.right - vp.virtual_left, vp.zoom) + vp.left, vb = UnScaleByZoom(v->coord.bottom - vp.virtual_top, vp.zoom) + vp.top;
+				if (vr < l - 8 || vl > r + 8 || vb < t - 8 || vt > b + 8) continue;
+				fmt::print(stderr, "openttd: near {} type {} sub {} screen {},{} to {},{} status {:x} hidden {} pos {},{},{} rev {}\n", v->index.base(), (int)v->type, v->subtype,
+						vl, vt, vr, vb, v->vehstatus.base(), v->drawn.hidden, v->x_pos, v->y_pos, v->z_pos, v->sprite_cache.revalidate_before_draw);
+			}
+		}
 		if (std::string_view(check_how) == "list") { /* where, and the colour shown and drawn whole */
 			int n = 0;
 			for (int i = 0; i < w * h && n < 12; i++) {
@@ -273,6 +312,7 @@ static void CheckPicture()
 			(bad > 1000 && _play_frame >= 0 && std::string_view(hold) == "big"))) HoldHere(shown.data(), w, h);
 	if (keep && !SeGpuOn()) std::copy(shown.begin(), shown.end(), _picture);
 	DrawMouseCursor();
+	if (worker) TwRelease();
 }
 
 /** The picture over the whole window, submitted and not waited for: the next lock settles. */
@@ -516,17 +556,184 @@ bool VideoDriver_ShaderEmu::PollEvent()
  * and a station's open with the main view following a train. It prints each part's pictures a
  * second and exits; OPENTTD_PLAY=N repeats the script N times. OPENTTD_PLAY_SHORT=1: 30 pictures
  * scrolling, 20 zoomed out and 20 with the windows, for a run on the card. */
+/* OPENTTD_PLAY_PART=scroll|follow: that part alone, the scroll's 60 pictures or 60 following a train */
+static const int PLAY_SCROLL[] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29,
+		30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 199 };
+static const int PLAY_FOLLOW[] = { 200, 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219,
+		220, 221, 222, 223, 224, 225, 226, 227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239,
+		240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 199 };
 static const int PLAY_SHORT[] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44,
 		60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 80, 81, 82, 83, 84, 85, 86, 87, 88, 100,
 		110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 199 };
 extern uint32_t _vp_stat_jobs, _vp_stat_pieces, _vp_stat_again, _vp_stat_redrawn, _vp_stat_loaded; /* viewport.cpp */
+extern uint64_t _vp_stat_spent, _vp_stat_most;
+extern uint32_t _vp_stat_flushes;
+extern uint32_t _vp_stat_tiles[4];
 
 struct PlayPart {
 	const char *name;
 	int from;
 	std::chrono::steady_clock::time_point start;
 	uint64_t ticks;
+	uint64_t instructions, tick_instructions; ///< core 0's at its start, and in game ticks
+	uint32_t phase[VP_PHASES];
+	uint32_t tw_tick, tw_park, tw_instret, tw_hold, tw_holds; ///< the tick's worker's (TwTimes), the first core's waits for it
 };
+
+static inline uint64_t Instructions()
+{
+	uint32_t hi, lo, again;
+	do {
+		asm volatile("rdinstreth %0" : "=r"(hi));
+		asm volatile("rdinstret %0" : "=r"(lo));
+		asm volatile("rdinstreth %0" : "=r"(again));
+	} while (hi != again);
+	return static_cast<uint64_t>(hi) << 32 | lo;
+}
+static uint64_t _tick_instructions; ///< core 0's in game ticks so far
+
+/* The game tick in slices (docs/games/openttd.md, "The tick in slices"): ::GameLoop runs on a stack of
+ * its own and gives way at TickYieldPoint() once its slice of a picture is spent; the drawing between
+ * changes no game state, and a command first finishes the tick. */
+struct TickRegs { uint32_t r[26]; }; ///< ra, sp, s0 to s11, fs0 to fs11
+extern "C" void ottd_tick_swap(TickRegs *save, const TickRegs *load);
+asm(R"(
+	.text
+	.globl ottd_tick_swap
+	.type ottd_tick_swap, @function
+ottd_tick_swap:
+	sw ra, 0(a0); sw sp, 4(a0); sw s0, 8(a0); sw s1, 12(a0); sw s2, 16(a0); sw s3, 20(a0); sw s4, 24(a0)
+	sw s5, 28(a0); sw s6, 32(a0); sw s7, 36(a0); sw s8, 40(a0); sw s9, 44(a0); sw s10, 48(a0); sw s11, 52(a0)
+	fsw fs0, 56(a0); fsw fs1, 60(a0); fsw fs2, 64(a0); fsw fs3, 68(a0); fsw fs4, 72(a0); fsw fs5, 76(a0)
+	fsw fs6, 80(a0); fsw fs7, 84(a0); fsw fs8, 88(a0); fsw fs9, 92(a0); fsw fs10, 96(a0); fsw fs11, 100(a0)
+	lw ra, 0(a1); lw sp, 4(a1); lw s0, 8(a1); lw s1, 12(a1); lw s2, 16(a1); lw s3, 20(a1); lw s4, 24(a1)
+	lw s5, 28(a1); lw s6, 32(a1); lw s7, 36(a1); lw s8, 40(a1); lw s9, 44(a1); lw s10, 48(a1); lw s11, 52(a1)
+	flw fs0, 56(a1); flw fs1, 60(a1); flw fs2, 64(a1); flw fs3, 68(a1); flw fs4, 72(a1); flw fs5, 76(a1)
+	flw fs6, 80(a1); flw fs7, 84(a1); flw fs8, 88(a1); flw fs9, 92(a1); flw fs10, 96(a1); flw fs11, 100(a1)
+	ret
+	.size ottd_tick_swap, .-ottd_tick_swap
+)");
+
+enum class TickState : uint8_t { Between, Running, Out }; ///< Out: given way in the middle
+static TickState _tick_state = TickState::Between;
+static TickRegs _tick_main, _tick_regs;
+static uint8_t *_tick_stack;
+static constexpr size_t TICK_STACK = 512 * 1024;
+static CompanyID _tick_company, _gui_company; ///< _current_company of the tick, and of the drawing
+static bool _tick_whole; ///< OPENTTD_TICK=whole: every tick at once, as upstream's
+bool _tick_slicing;
+uint32_t _tick_yield_at;
+static uint64_t _tick_budgets, _tick_slices, _tick_finishes; ///< for the play lines: slices, their budgets, ticks finished at once
+static float _tick_draw_sum; ///< the pictures but for the tick, summed at each slice
+
+void TickYield()
+{
+	if (_tick_state != TickState::Running || _generating_world || RecursiveCommandCounter::Depth() != 0 || _game_mode == GM_BOOTSTRAP) return;
+	_tick_company = _current_company;
+	_current_company = _gui_company;
+	_tick_state = TickState::Out;
+	ottd_tick_swap(&_tick_regs, &_tick_main);
+	_gui_company = _current_company;
+	_current_company = _tick_company;
+	_tick_state = TickState::Running;
+}
+
+/** OPENTTD_SUM_AT=N: at the end of tick N, null_v.cpp's sum and one of every vehicle's place, speed and cargo. */
+static void TickSumAt()
+{
+	static const uint64_t at = std::max(Number(getenv("OPENTTD_SUM_AT")), 0);
+	static const uint64_t base = TimerGameTick::counter - 1;
+	if (at == 0 || TimerGameTick::counter - base != at) return;
+	uint32_t h = 2166136261u, hv = 2166136261u;
+	auto add = [](uint32_t &h, uint32_t v) { for (int k = 0; k < 4; k++) h = (h ^ ((v >> (8 * k)) & 0xff)) * 16777619u; };
+	for (uint t = 0; t < Map::Size(); t++) {
+		Tile tile(t);
+		add(h, tile.type() | tile.height() << 8 | tile.m1() << 16 | tile.m3() << 24);
+		add(h, tile.m2() | tile.m4() << 16 | tile.m5() << 24);
+		add(h, tile.m6() | tile.m7() << 8 | tile.m8() << 16);
+	}
+	add(h, _random.state[0]);
+	add(h, _random.state[1]);
+	add(h, TimerGameCalendar::date.base());
+	for (const Company *c : Company::Iterate()) {
+		add(h, static_cast<uint32_t>(static_cast<int64_t>(c->money)));
+		add(h, static_cast<uint32_t>(static_cast<int64_t>(c->money) >> 32));
+	}
+	for (const Vehicle *v : Vehicle::Iterate()) {
+		add(hv, v->index.base());
+		add(hv, static_cast<uint32_t>(v->x_pos));
+		add(hv, static_cast<uint32_t>(v->y_pos));
+		add(hv, static_cast<uint32_t>(v->z_pos) | v->cur_speed << 16);
+		add(hv, v->cargo.StoredCount() | v->progress << 24);
+	}
+	std::string line = fmt::format("openttd: tick {}, sum {:08x}, vehicles {} sum {:08x}\n", at, h, Vehicle::GetNumItems(), hv);
+	TickDefer([line] { fmt::print(stderr, "{}", line); });
+}
+
+void TickAfter() { TickSumAt(); }
+
+void VideoDriver_ShaderEmu::TickEntry()
+{
+	for (;;) {
+		try {
+			static_cast<VideoDriver_ShaderEmu *>(VideoDriver::GetInstance())->GameLoop();
+		} catch (...) {
+			fmt::print(stderr, "openttd: an exception out of a game tick\n");
+			std::abort();
+		}
+		TickSumAt();
+		_tick_state = TickState::Between;
+		ottd_tick_swap(&_tick_regs, &_tick_main);
+	}
+}
+
+/** Runs the tick (a new one when none is out) until it is through (true) or its slice of budget is spent. */
+bool VideoDriver_ShaderEmu::TickRun(uint32_t budget)
+{
+	if (_tick_stack == nullptr) {
+		_tick_stack = static_cast<uint8_t *>(::operator new(TICK_STACK, std::align_val_t{16}));
+		_tick_regs = {};
+		_tick_regs.r[0] = reinterpret_cast<uint32_t>(&VideoDriver_ShaderEmu::TickEntry);
+		_tick_regs.r[1] = reinterpret_cast<uint32_t>(_tick_stack + TICK_STACK - 16);
+	}
+	if (_tick_state == TickState::Between) _gui_company = _current_company;
+	uint32_t now;
+	asm volatile("rdinstret %0" : "=r"(now));
+	_tick_yield_at = now + budget;
+	_tick_slicing = budget != UINT32_MAX;
+	_tick_state = TickState::Running;
+	ottd_tick_swap(&_tick_main, &_tick_regs);
+	_tick_slicing = false;
+	return _tick_state == TickState::Between;
+}
+
+void TickFinish()
+{
+	VpFlushFinish(); /* (a command or a new game: nothing drawn is out) */
+	TwAfterFlush();
+	if (TwActive()) {
+		if (!TickOnWorker()) TwHold(true);
+		return;
+	}
+	if (_tick_state != TickState::Out) return;
+	uint64_t from = Instructions();
+	VideoDriver_ShaderEmu::TickRun(UINT32_MAX);
+	_tick_instructions += Instructions() - from;
+	_tick_finishes++;
+}
+
+/** A play line written whole (the console's descriptor may be one that does not wait). */
+static void PlayLine(const std::string &line)
+{
+	const char *p = line.data();
+	size_t left = line.size();
+	while (left > 0) {
+		ssize_t w = write(2, p, left);
+		if (w > 0) p += w, left -= w;
+		else if (w < 0 && (errno == EAGAIN || errno == EINTR)) usleep(2000);
+		else break;
+	}
+}
 
 static void PlayScroll(int dx, int dy)
 {
@@ -563,9 +770,35 @@ static void PlayStep()
 		if (getenv("OPENTTD_PLAY_JUMP") != nullptr) _settings_client.gui.smooth_scroll = false;
 	}
 	static const bool short_play = getenv("OPENTTD_PLAY_SHORT") != nullptr;
-	const int len = short_play ? std::size(PLAY_SHORT) : 200;
-	int f = _play_frame++ % len;
-	if (short_play) f = PLAY_SHORT[f];
+	static const char *play_part = getenv("OPENTTD_PLAY_PART");
+	static const int *list = short_play ? PLAY_SHORT : play_part == nullptr ? nullptr :
+			std::string_view(play_part) == "follow" ? PLAY_FOLLOW : PLAY_SCROLL;
+	static const int len = list == PLAY_SHORT ? std::size(PLAY_SHORT) : list == PLAY_SCROLL ? std::size(PLAY_SCROLL) :
+			list == PLAY_FOLLOW ? std::size(PLAY_FOLLOW) : 200;
+	/* OPENTTD_PICTURE_LOG=1: each picture's ms, the first core's instructions, ticks, and its phases' ms */
+	static const bool picture_log = getenv("OPENTTD_PICTURE_LOG") != nullptr;
+	if (picture_log) {
+		static uint32_t last_t, last_phase[VP_PHASES];
+		static uint64_t last_i, last_ticks;
+		const uint32_t now = VpTime();
+		const uint64_t i = Instructions();
+		std::string line = fmt::format("openttd: picture {} {:.1f} ms, {}k, {} ticks:", _play_frame, (now - last_t) / 5.0,
+				(i - last_i) / 1000, TimerGameTick::counter - last_ticks);
+		for (int k = 0; k < VP_PHASES; k++) line += fmt::format(" {:.1f}", (_vp_phase[k] - last_phase[k]) / 5.0), last_phase[k] = _vp_phase[k];
+		extern uint32_t _odd_stat[3];
+		static uint32_t last_odd[3];
+		line += fmt::format("; odd moves {}, {:.1f} ms to their wait, {:.1f} waited", _odd_stat[0] - last_odd[0],
+				(_odd_stat[1] - last_odd[1]) / 5.0, (_odd_stat[2] - last_odd[2]) / 5.0);
+		std::copy_n(_odd_stat, 3, last_odd);
+		extern uint32_t _veh_synced, _veh_ahead;
+		static uint32_t last_synced, last_ahead;
+		line += fmt::format("; vehicles synced {}, as the tick made them {}", _veh_synced - last_synced, _veh_ahead - last_ahead);
+		last_synced = _veh_synced, last_ahead = _veh_ahead;
+		PlayLine(line + "\n");
+		last_t = now, last_i = i, last_ticks = TimerGameTick::counter;
+	}
+	const int at = _play_frame++ % len;
+	const int f = list != nullptr ? list[at] : at;
 	/* OPENTTD_PLAY_TIMES=1: each picture's time, to see where a part's time goes */
 	static const bool times = getenv("OPENTTD_PLAY_TIMES") != nullptr;
 	if (times) {
@@ -586,9 +819,9 @@ static void PlayStep()
 		fmt::print(stderr, "openttd: picture {} took {:.1f} ms, sum {:08x}\n", f, std::chrono::duration<double, std::milli>(now - last).count(), sum);
 		last = now;
 	}
-	if (f == 0) {
+	if (at == 0) {
 		/* the rounds before the last warm the sprite cache and the ships' water regions */
-		if (_play_frame / len + 1 == rounds) fmt::print(stderr, "openttd: play PL-GO\n");
+		if (_play_frame / len + 1 == rounds) PlayLine(fmt::format("openttd: play PL-GO\n"));
 		began = std::chrono::steady_clock::now();
 		began_ticks = TimerGameTick::counter;
 		_checked = _check_bad = _check_line = 0, _check_pixels = 0;
@@ -598,19 +831,64 @@ static void PlayStep()
 		if (in_part) {
 			const PlayPart &p = cur;
 			double s = std::chrono::duration<double>(now - p.start).count();
-			fmt::print(stderr, "openttd: play {}: {} pictures in {:.2f} s, {:.2f} a second, {} ticks; viewport {} parts in {} pieces, "
-					"{} made again by workers ({} sprites loaded), {} by the first core; longest line differing {}\n",
-					p.name, _play_frame - 1 - p.from, s, (_play_frame - 1 - p.from) / s, TimerGameTick::counter - p.ticks,
-					_vp_stat_jobs, _vp_stat_pieces, _vp_stat_again, _vp_stat_loaded, _vp_stat_redrawn, _check_part_line);
+			const int pictures = _play_frame - 1 - p.from;
+			auto ms = [&](int k) { return (_vp_phase[k] - p.phase[k]) / 5.0 / std::max(pictures, 1); };
+			PlayLine(fmt::format("openttd: play {}: {} pictures in {:.2f} s, {:.2f} a second, {} ticks; viewport {} parts in {} pieces, "
+					"{} made again by workers ({} sprites loaded), {} by the first core; longest line differing {}; "
+					"core 0 {}k instructions a picture, {}k in game ticks\n",
+					p.name, pictures, s, pictures / s, TimerGameTick::counter - p.ticks,
+					_vp_stat_jobs, _vp_stat_pieces, _vp_stat_again, _vp_stat_loaded, _vp_stat_redrawn, _check_part_line,
+					(Instructions() - p.instructions) / 1000 / std::max(pictures, 1),
+					(_tick_instructions - p.tick_instructions) / 1000 / std::max(pictures, 1)));
+			/* (a line of its own: the console loses the end of a long one) */
+			PlayLine(fmt::format("openttd: play {} ms a picture: flush {:.1f} (pieces {:.1f}, again {:.1f}, "
+					"first core {:.1f}, copy {:.1f}, texts {:.1f}), move {:.1f}, windows {:.1f}, paint {:.1f}, tick {:.1f}; "
+					"{:.2f} flushes a picture, a piece {}k, the dearest of a flush {}k; tiles a piece: drawn {} ({} known), "
+					"passed {}, not learned {}\n", p.name,
+					ms(VP_PHASE_FLUSH), ms(VP_PHASE_PIECES), ms(VP_PHASE_AGAIN), ms(VP_PHASE_FIRST), ms(VP_PHASE_COPY), ms(VP_PHASE_TEXTS),
+					ms(VP_PHASE_MOVE), ms(VP_PHASE_WINDOWS), ms(VP_PHASE_PAINT), ms(VP_PHASE_TICK),
+					static_cast<double>(_vp_stat_flushes) / std::max(pictures, 1), _vp_stat_spent / 1000 / std::max<uint64_t>(_vp_stat_pieces, 1),
+					_vp_stat_most / 1000 / std::max<uint32_t>(_vp_stat_flushes, 1),
+					_vp_stat_tiles[0] / std::max<uint32_t>(_vp_stat_pieces, 1), _vp_stat_tiles[1] / std::max<uint32_t>(_vp_stat_pieces, 1),
+					_vp_stat_tiles[2] / std::max<uint32_t>(_vp_stat_pieces, 1), _vp_stat_tiles[3] / std::max<uint32_t>(_vp_stat_pieces, 1)));
 		}
+		if (in_part && TwActive()) {
+			const PlayPart &p = cur;
+			uint32_t tick, park, instret;
+			TwTimes(tick, park, instret);
+			const double s = std::chrono::duration<double>(now - p.start).count();
+			const uint64_t ticks = TimerGameTick::counter - p.ticks;
+			PlayLine(fmt::format("openttd: play {} tick on a worker: {:.2f} ticks a second, {:.0f} ms of the worker's a tick, waiting {:.0f}% "
+					"of the time, {:.2f} MIPS in ticks; the first core waited {:.1f} ms a picture for it ({:.1f} holds, the longest {:.1f} ms)\n",
+					p.name, ticks / s, (tick - p.tw_tick) / 5.0 / std::max<uint64_t>(ticks, 1), (park - p.tw_park) / 5.0 / s / 10.0,
+					(instret - p.tw_instret) / std::max((tick - p.tw_tick) / 5.0, 1.0) / 1000.0,
+					(_tw_hold_time - p.tw_hold) / 5.0 / std::max(_play_frame - 1 - p.from, 1),
+					static_cast<double>(_tw_holds - p.tw_holds) / std::max(_play_frame - 1 - p.from, 1), _tw_hold_most / 5.0));
+		} else if (in_part) {
+			const PlayPart &p = cur;
+			PlayLine(fmt::format("openttd: play {} tick: {} slices, {}k instructions given each, the picture but the tick {:.1f} ms; finished at once {} times\n",
+					p.name, _tick_slices, _tick_budgets / 1000 / std::max<uint64_t>(_tick_slices, 1),
+					_tick_draw_sum / std::max<uint64_t>(_tick_slices, 1), _tick_finishes));
+		}
+		_tick_draw_sum = 0;
+		_tw_hold_most = 0;
+		_tick_budgets = _tick_slices = _tick_finishes = 0;
 		_check_part_line = 0;
 		_vp_stat_jobs = _vp_stat_pieces = _vp_stat_again = _vp_stat_redrawn = _vp_stat_loaded = 0;
+		_vp_stat_spent = _vp_stat_most = 0;
+		_vp_stat_flushes = 0;
+		std::fill_n(_vp_stat_tiles, 4, 0);
 		in_part = name != nullptr;
-		if (in_part) cur = { name, _play_frame - 1, now, TimerGameTick::counter };
+		if (in_part) {
+			cur = { name, _play_frame - 1, now, TimerGameTick::counter, Instructions(), _tick_instructions, {}, 0, 0, 0, _tw_hold_time, _tw_holds };
+			std::copy_n(_vp_phase, VP_PHASES, cur.phase);
+			TwTimes(cur.tw_tick, cur.tw_park, cur.tw_instret);
+		}
 	};
 	Window *main = GetMainWindow();
 	static std::vector<VehicleID> trains;
-	if (f == 0) begin_part("scroll");
+	if (f == 60 || f == 80 || f == 100 || f == 110 || f == 170 || f == 200) VpFlushFinish(); /* (zooms, windows: nothing out) */
+	if (f == 0) begin_part("scroll"), PlayLine(fmt::format("openttd: play highlight {}\n", static_cast<int>(_thd.drawstyle)));
 	/* OPENTTD_PLAY_ODD=1: the way back a pixel longer a step, a move the machine's copy does not make */
 	static const int odd = getenv("OPENTTD_PLAY_ODD") != nullptr;
 	if (f < 60) PlayScroll(f < 30 ? 24 : -24 - odd, f < 30 ? 12 : -12);
@@ -633,15 +911,24 @@ static void PlayStep()
 		CloseAllNonVitalWindows();
 		if (main != nullptr && main->viewport != nullptr) main->viewport->follow_vehicle = VehicleID::Invalid();
 	}
-	if (f >= 170) PlayScroll(f < 185 ? -24 : 24, 0);
+	if (f >= 170 && f < 200) PlayScroll(f < 185 ? -24 : 24, 0);
+	if (f == 200) {
+		begin_part("follow");
+		for (const Train *t : Train::Iterate()) {
+			if (t->IsFrontEngine() && t->cur_speed > 0 && main != nullptr && main->viewport != nullptr) {
+				main->viewport->follow_vehicle = t->index;
+				break;
+			}
+		}
+	}
 	if (f == 199) {
 		begin_part(nullptr);
 		double s = std::chrono::duration<double>(std::chrono::steady_clock::now() - began).count();
-		fmt::print(stderr, "openttd: play round {}: {} pictures in {:.2f} s, {:.2f} a second, {} ticks; checked {}, {} differ ({} pixels, longest line {})\n",
-				_play_frame / len, len, s, len / s, TimerGameTick::counter - began_ticks, _checked, _check_bad, _check_pixels, _check_line);
+		PlayLine(fmt::format("openttd: play round {}: {} pictures in {:.2f} s, {:.2f} a second, {} ticks; checked {}, {} differ ({} pixels, longest line {})\n",
+				_play_frame / len, len, s, len / s, TimerGameTick::counter - began_ticks, _checked, _check_bad, _check_pixels, _check_line));
 		if (short_play) CloseAllNonVitalWindows(); /* (the next round opens them again) */
 		if (_play_frame / len < rounds) return;
-		fmt::print(stderr, "openttd: play PL-DONE\n");
+		PlayLine(fmt::format("openttd: play PL-DONE\n"));
 		_exit_game = true;
 	}
 }
@@ -672,14 +959,194 @@ void VideoDriver_ShaderEmu::InputLoop()
 	if (old_ctrl_pressed != _ctrl_pressed) HandleCtrlChanged();
 }
 
+/** Whether the game tick runs on a worker of its own (OPENTTD_TICK=whole|slices: on the first core). */
+static bool WantWorkerTick()
+{
+	static const char *how = getenv("OPENTTD_TICK");
+	static const bool first_core = how != nullptr && (std::string_view(how) == "whole" || std::string_view(how) == "slices");
+	return !first_core && _game_mode == GM_NORMAL && !_networking && _switch_mode == SM_NONE && !HasModalProgress();
+}
+
+/** A picture with the tick on its worker: it waits while the first core reads and changes the game, and
+ * goes on while the viewports are drawn (docs/games/openttd.md, "The tick on a worker"). */
+void VideoDriver_ShaderEmu::WorkerTick()
+{
+	static const float frame_ms = [] { int n = Number(getenv("OPENTTD_FRAME_MS")); return n > 0 ? n : 95.0f; }();
+	auto now = std::chrono::steady_clock::now();
+	if (now < this->next_draw_tick) return;
+	const auto interval = std::chrono::microseconds(static_cast<int>(frame_ms * 1000));
+	this->next_draw_tick += interval;
+	if (this->next_draw_tick < now - ALLOWED_DRIFT * interval) this->next_draw_tick = now;
+
+	uint32_t t = VpTime();
+	const uint32_t work_from = t;
+	extern uint32_t _vp_scrolls;
+	const uint32_t scrolls = _vp_scrolls;
+	TwHold(false);
+	TwSync();
+	::GameLoop(); /* (the first core's parts: the tick itself is the worker's) */
+	_vp_phase[VP_PHASE_TICK] += VpTime() - t;
+	if (!WantWorkerTick()) TwStop();
+	this->LockVideoBuffer();
+	InteractiveRandom();
+	this->DrainCommandQueue();
+	while (this->PollEvent()) {}
+	this->InputLoop();
+	if (this->fast_forward_key_pressed && !_networking && _game_mode != GM_MENU) {
+		ChangeGameSpeed(true);
+		this->fast_forward_via_key = true;
+	} else if (this->fast_forward_via_key) {
+		ChangeGameSpeed(false);
+		this->fast_forward_via_key = false;
+	}
+	::InputLoop();
+	VehiclesSync(TwActive());
+	/* the last picture's flush, left out while all this ran, made whole, and that picture shown */
+	static bool paint_owed = false;
+	t = VpTime();
+	if (_game_mode == GM_BOOTSTRAP || _switch_mode == SM_NONE || HasModalProgress()) UpdateWindowsEarly();
+	if (!VpFlushReady()) { /* (the tick runs while its pieces are drawn, and waits again for the drawing) */
+		TwRelease();
+		VpFlushFinish();
+		TwHold(false);
+		VehiclesSync(TwActive());
+	}
+	VpFlushFinish();
+	TwAfterFlush();
+	_vp_phase[VP_PHASE_WINDOWS] += VpTime() - t;
+	if (std::exchange(paint_owed, false)) {
+		NetworkDrawChatMessage();
+		DrawMouseCursor();
+		t = VpTime();
+		this->Paint();
+		_vp_phase[VP_PHASE_PAINT] += VpTime() - t;
+	}
+	t = VpTime();
+	if (_game_mode == GM_BOOTSTRAP || _switch_mode == SM_NONE || HasModalProgress()) ::UpdateWindows();
+	_vp_phase[VP_PHASE_WINDOWS] += VpTime() - t;
+	TwRelease(); /* (the viewports' last flush let it go, if there was one) */
+	this->PopulateSystemSprites();
+	this->CheckPaletteAnim();
+	if (VpFlushOut()) {
+		paint_owed = true;
+	} else {
+		t = VpTime();
+		this->Paint();
+		_vp_phase[VP_PHASE_PAINT] += VpTime() - t;
+	}
+	this->UnlockVideoBuffer();
+	TwService();
+	TwGrant();
+	/* (OPENTTD_PACE_MS: the picture's work the pace keeps to while it scrolls, 90 ms: ten pictures a second) */
+	static const uint32_t pace_ms = [] { int n = Number(getenv("OPENTTD_PACE_MS")); return n > 0 ? n : 90; }();
+	TwPace(VpTime() - work_from, pace_ms * 5, _vp_scrolls != scrolls);
+}
+
+/** Upstream's Tick, with core 0's instructions in game ticks counted. */
+void VideoDriver_ShaderEmu::DriverTick()
+{
+	static bool operational = false;
+	if (!operational) { /* (upstream's marks the driver working at its first picture) */
+		auto was = this->next_draw_tick;
+		this->Tick();
+		operational = this->next_draw_tick != was;
+		return;
+	}
+	static bool no_worker = false;
+	if (WantWorkerTick() && !no_worker) {
+		if (!TwActive()) {
+			TickFinish(); /* (a tick in slices is through first) */
+			no_worker = !TwStart();
+			if (no_worker) fmt::print(stderr, "openttd: no worker for the game tick: it runs in slices\n");
+		}
+		if (TwActive()) {
+			this->WorkerTick();
+			return;
+		}
+	} else if (TwActive()) {
+		TwStop();
+	}
+	/* (float, not double: the machine has single precision only, a double's operation is 200 instructions) */
+	static float frame_ms = [] { int n = Number(getenv("OPENTTD_FRAME_MS")); return n > 0 ? n : 100.0f; }();
+	static float least_ms = [] { int n = Number(getenv("OPENTTD_TICK_LEAST")); return n > 0 ? n : 10.0f; }(); ///< the least slice, its overrun in it
+	static float draw_ms = 0, tick_ms = 0, rate = 2000; ///< the last picture's but for the tick, the tick's since, core 0's instructions a ms in it
+	static float over_ms = 0; ///< how far a slice runs past its budget, on average (it gives way only at its yield points)
+	static uint32_t last_from = 0;
+	auto now = std::chrono::steady_clock::now();
+	if (_tick_whole) {
+		if (now >= this->next_game_tick) {
+			uint64_t from = Instructions();
+			this->GameLoop();
+			_tick_instructions += Instructions() - from;
+			TickSumAt();
+		}
+	} else if (_tick_state == TickState::Out || now >= this->next_game_tick) {
+		const uint32_t t = VpTime();
+		/* the tick's slice: what the picture leaves of frame_ms, at least OPENTTD_TICK_LEAST ms */
+		const uint32_t budget = static_cast<uint32_t>(rate * std::max({frame_ms - draw_ms - over_ms, least_ms - over_ms, 2.0f}));
+		const uint64_t from = Instructions();
+		bool started = false; /* (one new tick a picture, as upstream's Tick) */
+		for (;;) {
+			const uint64_t spent = Instructions() - from;
+			if (spent >= budget) break;
+			if (_tick_state != TickState::Out && (started || std::chrono::steady_clock::now() < this->next_game_tick)) break;
+			started |= _tick_state == TickState::Between;
+			if (!TickRun(static_cast<uint32_t>(budget - spent))) break;
+		}
+		const uint32_t spent = static_cast<uint32_t>(Instructions() - from);
+		const float ms = (VpTime() - t) / 5.0f; /* (the machine's 5 kHz time: the clock's is coarser) */
+		if (ms >= 2 && spent > 0) rate = std::clamp(0.75f * rate + 0.25f * (spent / ms), 200.0f, 50000.0f);
+		over_ms = 0.75f * over_ms + 0.25f * (spent > budget ? (spent - budget) / rate : 0.0f);
+		_tick_instructions += spent;
+		tick_ms += ms;
+		_tick_budgets += budget, _tick_slices++, _tick_draw_sum += draw_ms;
+		_vp_phase[VP_PHASE_TICK] += VpTime() - t;
+	}
+
+	now = std::chrono::steady_clock::now();
+	if (now < this->next_draw_tick) return;
+	this->next_draw_tick += this->GetDrawInterval();
+	if (this->next_draw_tick < now - ALLOWED_DRIFT * this->GetDrawInterval()) this->next_draw_tick = now;
+
+	const uint32_t draw_from = VpTime();
+	/* (an average over pictures: a cheap one after dear ones leaves the tick less) */
+	if (last_from != 0) draw_ms = 0.75f * draw_ms + 0.25f * std::max((draw_from - last_from) / 5.0f - tick_ms, 0.0f);
+	last_from = draw_from, tick_ms = 0;
+	this->LockVideoBuffer();
+	InteractiveRandom();
+	this->DrainCommandQueue();
+	while (this->PollEvent()) {}
+	this->InputLoop();
+	if (this->fast_forward_key_pressed && !_networking && _game_mode != GM_MENU) {
+		ChangeGameSpeed(true);
+		this->fast_forward_via_key = true;
+	} else if (this->fast_forward_via_key) {
+		ChangeGameSpeed(false);
+		this->fast_forward_via_key = false;
+	}
+	::InputLoop();
+	VehiclesSync(false); /* (what the viewports draw of the vehicles: their copies) */
+	uint32_t t = VpTime();
+	if (_game_mode == GM_BOOTSTRAP || _switch_mode == SM_NONE || HasModalProgress()) ::UpdateWindows();
+	_vp_phase[VP_PHASE_WINDOWS] += VpTime() - t;
+	this->PopulateSystemSprites();
+	this->CheckPaletteAnim();
+	t = VpTime();
+	this->Paint();
+	_vp_phase[VP_PHASE_PAINT] += VpTime() - t;
+	this->UnlockVideoBuffer();
+}
+
 void VideoDriver_ShaderEmu::MainLoop()
 {
 	/* OPENTTD_RATE=1: pictures drawn and game ticks run, every ten seconds */
 	bool rate = getenv("OPENTTD_RATE") != nullptr;
+	const char *how = getenv("OPENTTD_TICK");
+	_tick_whole = how != nullptr && std::string_view(how) == "whole";
 	auto rate_from = std::chrono::steady_clock::now();
 	uint64_t ticks_from = TimerGameTick::counter;
 	while (!_exit_game) {
-		this->Tick();
+		this->DriverTick();
 		if (rate && std::chrono::steady_clock::now() - rate_from >= std::chrono::seconds(10)) {
 			fmt::print(stderr, "openttd: {} draws, {} ticks in 10 s\n", _draws, TimerGameTick::counter - std::min(ticks_from, TimerGameTick::counter));
 			rate_from += std::chrono::seconds(10);
@@ -688,16 +1155,19 @@ void VideoDriver_ShaderEmu::MainLoop()
 		}
 
 		/* until the next tick or draw, or an event */
-		auto next = std::min(this->next_draw_tick, this->next_game_tick);
+		auto next = TwActive() ? this->next_draw_tick : std::min(this->next_draw_tick, this->next_game_tick);
 		auto now = std::chrono::steady_clock::now();
-		if (next > now && !_have_pending) {
+		if (next > now && !_have_pending && _tick_state != TickState::Out) {
 			long ms = std::chrono::duration_cast<std::chrono::milliseconds>(next - now).count();
+			if (TwActive()) ms = std::min(ms, 5L), TwService(), TwGrant();
 			if (ms > 0) {
 				GrGetNextEventTimeout(&_pending, ms);
 				_have_pending = _pending.type != GR_EVENT_TYPE_NONE && _pending.type != GR_EVENT_TYPE_TIMEOUT;
 			}
 		}
 	}
+	TwStop();
+	TickFinish();
 }
 
 bool VideoDriver_ShaderEmu::ChangeResolution(int w, int h)

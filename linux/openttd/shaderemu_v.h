@@ -16,6 +16,7 @@ public:
 	bool AfterBlitterChange() override;
 	bool HasEfficient8Bpp() const override { return true; }
 	std::string_view GetName() const override { return "shaderemu"; }
+	static bool TickRun(uint32_t budget);
 
 protected:
 	Dimension GetScreenSize() const override;
@@ -30,7 +31,26 @@ private:
 	Palette local_palette{};
 	Rect dirty_rect{};
 	bool Resize(int w, int h);
+	void DriverTick();
+	void WorkerTick();
+	static void TickEntry();
 };
+
+/* The game tick on a worker of its own (shaderemu_t.cpp; docs/games/openttd.md, "The tick on a worker") */
+bool TwStart();
+void TwStop();
+bool TwActive();
+bool TwHeld();
+void TwHold(bool between); ///< the tick waits from now on (between: between two ticks), what it left made
+void TwRelease();
+void TwSync();
+void TwService();
+void TwGrant();
+void TwAfterFlush(); ///< the tick's frees made, once no flush is out
+void TwPace(uint32_t work, uint32_t target, bool scrolling); ///< after a picture: the ticks spaced out while it scrolls late
+void TwTimes(uint32_t &tick, uint32_t &park, uint32_t &instret);
+extern uint32_t _tw_hold_time, _tw_holds, _tw_hold_most;
+void TickAfter(); ///< at the end of each game tick (OPENTTD_SUM_AT)
 
 class FVideoDriver_ShaderEmu : public DriverFactoryBase {
 public:

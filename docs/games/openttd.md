@@ -99,11 +99,14 @@ drawn, round a viewport drawn without transparency or shaded, and a part asked f
 kept, which must be drawn after it, its texts too) the parts are cut in pieces and every core
 finds, sorts and draws pieces (`mcw_for`, the dearest first):
 
-- A piece's tiles reach 128 pixels to its sides and 250 below it (buildings stand above their
-  tile; at normal zoom), so a piece costs (width + 128) x (height + 250). The dearest piece of the
-  flush is cut again, in columns or in rows, while the flush gets shorter, the flush being its
-  dearest piece or all the work over the cores. A strip a scroll exposed, 24 pixels by 458, is so
-  cut in rows: as one column it was one core's.
+- A piece costs (width + 4) x (height + 4) + 240, in pixels at normal zoom: the tiles round it
+  that draw nothing in it are passed over by their reach ("A tile's reach"), and the 240 is its
+  tiles passed and its sprites sorted (fitted to `OPENTTD_PIECE_LOG`'s pieces, spent about 12k
+  instructions + 50 a pixel; `OPENTTD_CUT_M=4,4,240` changes the three). The dearest piece of the
+  flush is cut again, in columns or in rows, while the flush gets no longer (a tie is cut), the
+  flush being its dearest piece or all the work over the cores, and never into more pieces than
+  workers (a second wave cost as much as the first). A strip a scroll exposed, 24 pixels by 458,
+  is so cut in rows. Parts of the sizes of one of the last 16 flushes' are cut as they were.
 - A piece is drawn into a buffer of its own (copied from the screen first); then all cores copy
   the buffers to the screen by 16 rows each, so no two write the same 16 bytes in a pass. Before,
   pieces of two parts that shared 16 bytes of the screen were one core's, and a chain of them
@@ -136,6 +139,20 @@ parent sprite outside the part was dropped with its children, which can draw in 
 kept within 128 pixels (`VP_REACH`; children reach up to 68 in the play script) and dropped at the sort
 when it and its children miss the part.
 
+### A tile's reach
+
+A part is drawn by visiting every tile whose sprites could reach into it: upstream looks 250
+pixels below the part for buildings and the highest bridge the settings allow, and as far to the
+sides, so a strip of 24 pixels a scroll exposed passed many more tiles than drew in it.
+Each tile now has its reach at each zoom, in three bytes (how far its sprites, what was culled of
+them too, end above its north corner, to its left and to its right, in steps of 8), learned when
+it is drawn (`VpReachLearn`, a worker's sent to the first core with its piece) and forgotten when
+the tile is marked dirty (`MarkTileDirtyByTile`, all of them in `MarkWholeScreenDirty`). A tile
+whose known reach ends below or beside the part, by 2 pixels at its zoom and a step more, is
+passed over; while a tile highlight is shown, none below 64 pixels (its sprites are not the
+tile's). The search below a part stops at the highest bridge on the map (`VpBridgeMost`), not
+the highest one could build.
+
 ### One order
 
 Upstream's sorter orders two sprites by the others of the rectangle drawn: it compares every two
@@ -162,6 +179,20 @@ kept was a pixel off (6,000 to 16,000 pixels, once in a few runs). A move now is
 it is whole words, and the copy is of the destination's whole texels, the ends by the processor.
 `OPENTTD_PLAY_ODD=1` makes the play script's way back a pixel longer a step, an odd move.
 
+A scroll costs what it exposes:
+
+- The move of the screen is the workers', and not waited for: the machine copies the rows aside,
+  the workers copy them back moved (`MoveOdd`), and the first core goes on to find what the
+  scroll exposed. `ScrollSettle()` waits for it before anything reads or writes the screen: the
+  pieces' round of a flush, `GfxScroll`, the mouse pointer undrawn, a move as a block, another
+  move, the end of `UpdateWindows`' keep. In the scroll a move is 7.6 ms a picture, 2.4 of it the
+  first core's own.
+- A view narrower than the screen (a vehicle's window following it) moved row by row on the
+  first core, 286k instructions a scroll; its rows are now copied aside and moved back by the
+  workers, 4 rows a job (`MoveRows`).
+- A kept part wholly inside the scrolled rectangle, before and after the move, moves with it
+  (`ViewportScrollKept`); any other kept part flushes first, as before.
+
 ### Checking a picture
 
 `OPENTTD_CHECK=1`: at every picture of the play script the screen is drawn again whole and the
@@ -187,8 +218,68 @@ When the windows closed, station names could stay on the screen with workers (3,
 `=keep` to the end of the script): the closed windows' rectangles were kept, the view then jumped
 too far to scroll, and the whole view drawn again was kept over them in the same flush; the
 pieces of both were copied out, then the texts of both, the old rectangles' station names last.
-A part asked for over a kept one now flushes first (`ViewportKept`), as upstream draws one after
-the other.
+A part asked for over a kept one of another view, or of the same view moved since, now flushes
+first (`ViewportKept`), as upstream draws one after the other; over one of the same view, only
+what the kept one does not cover is kept (`OPENTTD_KEEP_FLUSH=1`: always flushed). Taking that
+from a vehicle's window over the main view lost the window's view where the two met, 67,557
+pixels at the windows' opening.
+
+## The tick in slices
+
+A game tick of `busy.sav` is 1.2 to 1.7 million instructions of the first core, most of a second
+at 2 MIPS, and upstream's loop draws only between ticks: a scroll showed a picture a tick. The
+tick (`::GameLoop`) now runs on a stack of its own on the first core (`ottd_tick_swap`,
+`shaderemu_v.cpp`) and gives way at `TickYieldPoint()` once its slice of a picture is spent: in
+the vehicles' loop, between a train's two handler calls and its steps, at every step of YAPF's
+search, in the loading of a station's vehicles and in the landscape's tile loop. The slice is
+what the last pictures left of 100 ms (`OPENTTD_FRAME_MS`), at least 10 ms (`OPENTTD_TICK_LEAST`),
+less how far slices ran past theirs, all in the machine's 5 kHz time (`VpTime`; the clock's is
+too coarse). The drawing between two slices changes no game state; the company is the drawing's
+while the tick is out, and a command or a save first finishes the tick (a world being made does
+not give way).
+`OPENTTD_TICK=whole` is upstream's, every tick at once.
+
+The game is the same: `OPENTTD_SUM_AT=N` sums the map and every vehicle at the end of tick N, and
+the play script's follow part gives the same (`240cf69c`, 837 vehicles, `892eac93`) whole and
+sliced. The price is the game's own speed: while the picture is dear, as in a scroll, a tick is
+spread over some 60 pictures, so the game runs at about a sixtieth of its speed until the view
+stops moving. `OPENTTD_TICK=slices` is this way now; by default the tick is on a worker.
+
+## The tick on a worker
+
+The tick runs on a worker core of its own (`shaderemu_t.cpp`), on a stack and a 16 MB heap of
+its own, while the first core draws. It waits where the first core holds it (`TwHold`): while
+the first core reads the input, runs commands and the windows' timers, and finds the viewports'
+parts; it runs while the pieces are drawn and between two pictures. Whatever of the window
+system it would touch is left for the first core (`TickDeferTask`), and what the viewports draw
+of a vehicle is a copy (`Vehicle::drawn`) made at the first core's sync for every vehicle the
+tick said it changed (`VehicleChanged`, from `UpdateViewport` and `MarkAllViewportsDirty`). A
+delete the drawing could be reading waits until no worker draws (`TickExclusive`).
+
+- Its pictures overlap with the tick: a picture's last flush is left out (`VpFlushOut`) and the
+  next picture's input, commands and timers run while the workers draw its pieces; the pieces
+  draw the vehicles from a copy of their own made at the flush (`VehiclesKeptBegin`), the reach
+  of a tile forgotten meanwhile is forgotten after it, the tick's frees wait until no piece is
+  out (`TwAfterFlush`), and anything that reads or writes the screen finishes the flush first
+  (`VpFlushFinish`: a command, the pointer, a sprite cache's deletes, a check). `OPENTTD_PIPE=0`
+  waits for the pieces at the flush.
+- While it scrolls, the ticks are spaced out to keep the picture's work at 90 ms
+  (`OPENTTD_PACE_MS`): every tick costs the first core its sync, about 370 instructions a vehicle
+  moved, and the windows its texts and the status bar change; the space grows by an eighth while
+  pictures are late, to a tick a second at most (`OPENTTD_PACE`, 0 never), and is gone eight
+  pictures after the view stops (`OPENTTD_PACE_LOG=1` prints it).
+- A loaded game has none of its water regions, and each ship's first path made the regions it
+  crossed one by one in the tick, half a million instructions each: ticks of 10 s and more in the
+  first minute of `busy.sav`. They are all made at the start, one a job on the workers
+  (`WaterRegionsMakeAll`; the labelling into `WaterRegionMade`, kept by the first core).
+- 47 workers by default (`OPENTTD_WORKERS`): 127 cost the first core more a round than their
+  pieces gave back (12.95 pictures a second paused against 13.9).
+
+The game is the same: `OPENTTD_SUM_AT=36` on the scroll gives `d4e04e63`, 846 vehicles,
+`26aae0d5` on the worker, whole and sliced (`OPENTTD_TICK_LEAST=300` for slices that end ticks).
+`OPENTTD_CHECK=1` is 0 pixels paused; with the game running a sprite of a ship (z 56, an aqueduct's
+height) differs now and then from the picture drawn whole, with the worker's flush and without it
+(`OPENTTD_PIPE=0`), and every vehicle's copy is as it is: three boxes in a circle ("One order").
 
 ## The picture on the GPU
 
@@ -474,10 +565,33 @@ the second start showed the first one's last picture until it drew. `test_all.py
 plays busy.sav, then plays it again paused with every picture checked (0 pixels, the workers
 drawing), then starts it a third time for the state's sum after a tick (`e49e18e3`).
 
+### Scrolling at 10 pictures a second
+
+`OPENTTD_PLAY_PART=scroll` is the script's 60 scrolling pictures alone, `follow` its 60 with the
+windows and the view following a train; `OPENTTD_PAUSE=1` pauses the game. `rvc_cpu --ips 2000000`
+with the card's model (`RVC_ADFAULT`, `RVC_WCACHE`, `RVC_SOUND`), `OPENTTD_PLAY=8`, rounds 2 to 8;
+pictures a second, game ticks a second and the first core's instructions a picture (21 October):
+
+| Part | Before | After |
+|---|---|---|
+| scroll | 0.75, 0.75 ticks, 2,199k | 10.46, 1.17 ticks, 145k |
+| scroll, paused | 2.57, 581k | 10.56, 110k |
+| follow | 0.49, 0.49 ticks, 3,454k | 10.84, 1.50 ticks, 110k |
+
+A scroll's picture in ms: the flush 70 (the pieces' round 44, the dearest piece 75k instructions,
+the copy 3.5, the texts 3.3), the move 6.5, the windows' timers and the rest about 10, the tick's
+part of the first core (its sync) 9. The tick's worker waits about half the time, held by the pace:
+without it (`OPENTTD_PACE=0`) the game makes more ticks and the picture is late by their syncs.
+The paused scroll is held to 10.5 pictures a second by the picture's interval (`OPENTTD_FRAME_MS`,
+95); at 20 it is 13.9.
+
 ## Not done
 
 - Pitch bend and other controllers in the music.
-- The game's tick (but for ships' paths made ahead), signs, texts and windows' widgets are the first core's.
+- The tick is one worker's ("The tick on a worker"): its vehicles, paths, tile loop, stations and
+  towns are not split over more workers (but for ships' paths made ahead, when the tick is the first
+  core's), and the first core's sync of the vehicles it moved bounds how many ticks a scrolling
+  picture can take. Signs, texts and windows' widgets are the first core's.
 - A NewGRF chain other than canals' is resolved by the first core: only canals' resolver was
   read through for stores outside a core's own registers (`WorkerSafe` in `newgrf_spritegroup.h`).
 - One order is not proved for every scene: sprites whose boxes order them in a circle ("One order").

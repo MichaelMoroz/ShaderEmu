@@ -96,6 +96,18 @@ void MusicDriver_ShaderEmu::Stop()
 	this->StopSong();
 }
 
+/** The second voice's tuning factor of a tone, made once (a pow is 7,000 instructions here). */
+static double FineTune(int tone, uint8_t fine)
+{
+	static double factor[TONES];
+	static bool made[TONES];
+	if (!made[tone]) {
+		factor[tone] = std::pow(2.0, ((fine / 2) - 64) / (32.0 * 12.0));
+		made[tone] = true;
+	}
+	return factor[tone];
+}
+
 /** The song's notes in the order they start, each given to a voice. */
 static std::vector<Note> Convert(const MidiFile &file, const MusicSongInfo &song)
 {
@@ -125,13 +137,7 @@ static std::vector<Note> Convert(const MidiFile &file, const MusicSongInfo &song
 			int pitch = Clamp((channel == 9 || (flags & 1)) ? r[3] : key + offset, 0, 127);
 			uint32_t turns = _note_pitch[pitch];
 			/* the second voice is tuned apart by the bank's fine tune, in 32nds of a semitone */
-			if (k == 1) {
-				/* (the factor once an instrument: a pow in soft doubles was 29 million instructions of a game's load) */
-				static double tune[TONES];
-				static bool tuned[TONES];
-				if (!tuned[tone]) tune[tone] = std::pow(2.0, ((r[2] / 2) - 64) / (32.0 * 12.0)), tuned[tone] = true;
-				turns = static_cast<uint32_t>(turns * tune[tone]);
-			}
+			if (k == 1) turns = static_cast<uint32_t>(turns * FineTune(tone, r[2]));
 			/* a voice that is silent, else one let go longest ago, else the oldest note */
 			int best = 0;
 			for (int v = 1; v < VOICES; v++) {

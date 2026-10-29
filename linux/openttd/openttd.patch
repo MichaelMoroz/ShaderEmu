@@ -1,5 +1,5 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 2891bee..3b2ede8 100644
+index 2891bee..a974099 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -182,7 +182,7 @@ check_ipo_supported(RESULT IPO_FOUND)
@@ -11,7 +11,7 @@ index 2891bee..3b2ede8 100644
          message(FATAL_ERROR "SDL2 or Allegro is required for this platform")
      endif()
      if(HARFBUZZ_FOUND AND NOT ICU_i18n_FOUND)
-@@ -340,6 +340,15 @@ endif()
+@@ -340,6 +340,17 @@ endif()
  
  include(3rdparty/llvm/CheckAtomic)
  
@@ -21,6 +21,8 @@ index 2891bee..3b2ede8 100644
 +    foreach(DIR ${SHADEREMU_INCLUDES})
 +        target_compile_options(openttd_lib PRIVATE "SHELL:-idirafter ${DIR}")
 +    endforeach()
++    # a variable a section (on 16 bytes, by build.sh's launcher): the game's tick and drawing run on worker cores
++    target_compile_options(openttd_lib PRIVATE -fno-common -fdata-sections)
 +    target_link_libraries(openttd ${SHADEREMU_LIBS})
 +endif()
 +
@@ -68,7 +70,7 @@ index bde4e71..25efee6 100644
  	this->tick_counter++;
  
 diff --git a/src/blitter/8bpp_base.cpp b/src/blitter/8bpp_base.cpp
-index b32f98b..9306f93 100644
+index b32f98b..3f6fd20 100644
 --- a/src/blitter/8bpp_base.cpp
 +++ b/src/blitter/8bpp_base.cpp
 @@ -11,6 +11,10 @@
@@ -82,7 +84,7 @@ index b32f98b..9306f93 100644
  
  #include "../safeguards.h"
  
-@@ -86,10 +90,137 @@ void Blitter_8bppBase::CopyImageToBuffer(const void *video, void *dst, int width
+@@ -86,10 +90,179 @@ void Blitter_8bppBase::CopyImageToBuffer(const void *video, void *dst, int width
  	}
  }
  
@@ -102,11 +104,112 @@ index b32f98b..9306f93 100644
 + * texels of the destination from words of the source: a move by other than whole words is row by row,
 + * and the part texels at the ends are the processor's (docs/games/openttd.md, "Scrolls").
 + */
++/* A move by other than whole words: the part copied aside by the machine, then put back moved by the workers. */
++static constexpr size_t ODD_CHUNK = 4096; ///< bytes a piece, whole texels
++static struct { uint8_t *to, *end; const uint8_t *from; } _odd; ///< destination [to, end) from from on
++static uint8_t *_odd_aside;
++static size_t _odd_room;
++
++/** The room aside for a move, its pages there before a worker reads them. */
++static uint8_t *OddAside(size_t total)
++{
++	if (_odd_room < total + 32) {
++		if (_odd_aside != nullptr) ::operator delete(_odd_aside, std::align_val_t{16});
++		_odd_room = (total + 32) * 2;
++		_odd_aside = static_cast<uint8_t *>(::operator new(_odd_room, std::align_val_t{16}));
++		std::fill_n(_odd_aside, _odd_room, 0);
++	}
++	return _odd_aside;
++}
++
++
++static void OddMovePieces(void *, uint32_t lo, uint32_t hi)
++{
++	for (uint32_t i = lo; i < hi; i++) {
++		uint8_t *at = _odd.to + i * ODD_CHUNK, *until = std::min(at + ODD_CHUNK, _odd.end);
++		std::copy_n(_odd.from + (at - _odd.to), until - at, at);
++	}
++}
++
++static bool _odd_out; ///< a move begun on the workers and not waited for
++static uint32_t _odd_began;
++uint32_t _odd_stat[3]; ///< moves by other than whole words, the time from each one's start to its wait, and waited
++
++void ScrollSettle()
++{
++	if (!_odd_out) return;
++	const uint32_t t = VpTime();
++	mcw_for_wait();
++	_odd_out = false;
++	_odd_stat[0]++, _odd_stat[1] += t - _odd_began, _odd_stat[2] += VpTime() - t;
++	_vp_phase[VP_PHASE_MOVE] += VpTime() - t;
++}
++
++/* (the workers' part is not waited for: the first core cuts the viewport's parts meanwhile) */
++static void MoveOdd(uint8_t *base, size_t total, ptrdiff_t d, uint8_t *to, uint8_t *end)
++{
++	const uintptr_t off = reinterpret_cast<uintptr_t>(base) & 15;
++	uint8_t *aside = OddAside(total) + off;
++	uint8_t *a = reinterpret_cast<uint8_t *>((reinterpret_cast<uintptr_t>(base) + 15) & ~uintptr_t{15});
++	uint8_t *b = reinterpret_cast<uint8_t *>(reinterpret_cast<uintptr_t>(base + total) & ~uintptr_t{15});
++	std::copy_n(base, a - base, aside);
++	MachineCopy(aside + (a - base), a, static_cast<uint32_t>(b - a));
++	std::copy_n(b, base + total - b, aside + (b - base));
++	/* (the first texel's bytes before a whole one are this core's, the rest in whole texels the workers') */
++	uint8_t *first = reinterpret_cast<uint8_t *>((reinterpret_cast<uintptr_t>(to) + 15) & ~uintptr_t{15});
++	const uint8_t *from = aside + (to - d - base);
++	std::copy_n(from, first - to, to);
++	_odd = { first, end, from + (first - to) };
++	mcw_for_opts opts = {};
++	opts.grain = 1;
++	opts.first_idle = 1;
++	mcw_for_begin(static_cast<uint32_t>((end - first + ODD_CHUNK - 1) / ODD_CHUNK), OddMovePieces, nullptr, &opts);
++	_odd_out = true;
++	_odd_began = VpTime();
++}
++
++/* A part narrower than the screen: its rows copied aside by the machine, then put back moved by the workers. */
++static struct { const uint8_t *from; uint8_t *to; size_t width; ptrdiff_t pitch; uint32_t height; } _rows;
++static constexpr uint32_t ROWS_A_JOB = 4;
++
++static void MoveRowsPieces(void *, uint32_t lo, uint32_t hi)
++{
++	for (uint32_t i = lo * ROWS_A_JOB; i < std::min(hi * ROWS_A_JOB, _rows.height); i++) {
++		std::copy_n(_rows.from + i * _rows.pitch, _rows.width, _rows.to + i * _rows.pitch);
++	}
++}
++
++static bool MoveRows(const uint8_t *src, uint8_t *dst, int width, int height, ptrdiff_t pitch)
++{
++	ScrollSettle();
++	static const char *how = getenv("OPENTTD_MEMOP");
++	if ((how != nullptr && how[0] == '0') || width < 64 || static_cast<size_t>(width) * height < 16384) return false;
++	const uint8_t *lo = pitch > 0 ? src : src + (height - 1) * pitch;
++	const size_t total = static_cast<size_t>(height - 1) * std::abs(pitch) + width;
++	uint8_t *base = const_cast<uint8_t *>(lo);
++	const uintptr_t off = reinterpret_cast<uintptr_t>(base) & 15;
++	uint8_t *aside = OddAside(total) + off;
++	uint8_t *a = reinterpret_cast<uint8_t *>((reinterpret_cast<uintptr_t>(base) + 15) & ~uintptr_t{15});
++	uint8_t *b = reinterpret_cast<uint8_t *>(reinterpret_cast<uintptr_t>(base + total) & ~uintptr_t{15});
++	std::copy_n(base, a - base, aside);
++	MachineCopy(aside + (a - base), a, static_cast<uint32_t>(b - a));
++	std::copy_n(b, base + total - b, aside + (b - base));
++	_rows = { aside + (src - lo), dst, static_cast<size_t>(width), pitch, static_cast<uint32_t>(height) };
++	const uint32_t t = VpTime();
++	mcw_for_opts opts = {};
++	opts.grain = 1;
++	opts.first_idle = 1;
++	mcw_for_opt((static_cast<uint32_t>(height) + ROWS_A_JOB - 1) / ROWS_A_JOB, MoveRowsPieces, nullptr, &opts);
++	_vp_phase[VP_PHASE_MOVE] += VpTime() - t;
++	return true;
++}
++
 +static bool ScrollAsBlock(void *video, int left, int top, int width, int height, int scroll_x, int scroll_y)
 +{
++	ScrollSettle();
 +	static const char *how = getenv("OPENTTD_MEMOP");
 +	ptrdiff_t d = static_cast<ptrdiff_t>(scroll_y) * _screen.pitch + scroll_x;
-+	if (left != 0 || width != _screen.pitch || (how != nullptr && how[0] == '0') || d % 4 != 0 || std::abs(d) < 64) return false;
++	if (left != 0 || width != _screen.pitch || (how != nullptr && how[0] == '0') || std::abs(d) < 64) return false;
 +	uint8_t *base = static_cast<uint8_t *>(video) + top * _screen.pitch;
 +	size_t total = static_cast<size_t>(height) * _screen.pitch;
 +	/* the destination [to, end), its texels [a, b) */
@@ -126,7 +229,11 @@ index b32f98b..9306f93 100644
 +		if (d > 0) std::copy_backward(from - d, until - d, until);
 +		else std::copy(from - d, until - d, from);
 +	};
-+	if (d > 0) { /* (ahead: the end first) */
++	if (d % 4 != 0) {
++		const uint32_t t = VpTime();
++		MoveOdd(base, total, d, to, end);
++		_vp_phase[VP_PHASE_MOVE] += VpTime() - t;
++	} else if (d > 0) { /* (ahead: the end first) */
 +		move(b, end);
 +		MachineCopy(a, a - d, static_cast<uint32_t>(b - a));
 +		move(to, a);
@@ -136,74 +243,11 @@ index b32f98b..9306f93 100644
 +		move(b, end);
 +	}
 +	if (check) {
++		ScrollSettle();
 +		size_t wrong = 0;
 +		for (size_t i = 0; i < total; i++) wrong += base[i] != want[i];
 +		fmt::print(stderr, "openttd: scroll by {},{} of {} bytes, {} wrong\n", scroll_x, scroll_y, total, wrong);
 +	}
-+	return true;
-+}
-+#endif
-+
-+#ifdef WITH_SHADEREMU
-+/** A scroll's rows moved by every core (VpMovePixels). */
-+static struct {
-+	const uint8_t *src;
-+	uint8_t *dst;
-+	size_t width, height;
-+	ptrdiff_t pitch;
-+	uint8_t *temp;
-+	size_t temp_pitch;
-+} _vp_move;
-+static std::vector<uint8_t> _vp_move_temp;
-+
-+static void VpMoveInRows(void *, uint32_t from, uint32_t to)
-+{
-+	for (size_t r = from * 16; r < std::min<size_t>(to * 16, _vp_move.height); r++) {
-+		const uint8_t *src = _vp_move.src + r * _vp_move.pitch;
-+		uint8_t *dst = _vp_move.dst + r * _vp_move.pitch;
-+		if (src < dst) {
-+			std::move_backward(src, src + _vp_move.width, dst + _vp_move.width);
-+		} else {
-+			std::move(src, src + _vp_move.width, dst);
-+		}
-+	}
-+}
-+
-+static void VpMoveToTemp(void *, uint32_t from, uint32_t to)
-+{
-+	for (size_t r = from * 16; r < std::min<size_t>(to * 16, _vp_move.height); r++) {
-+		std::copy_n(_vp_move.src + r * _vp_move.pitch, _vp_move.width, _vp_move.temp + r * _vp_move.temp_pitch);
-+	}
-+}
-+
-+static void VpMoveFromTemp(void *, uint32_t from, uint32_t to)
-+{
-+	for (size_t r = from * 16; r < std::min<size_t>(to * 16, _vp_move.height); r++) {
-+		std::copy_n(_vp_move.temp + r * _vp_move.temp_pitch, _vp_move.width, _vp_move.dst + r * _vp_move.pitch);
-+	}
-+}
-+
-+/**
-+ * Blitter::MovePixels by every core, 16 rows an item, so that no two write the same 16 bytes: a move within
-+ * rows at once, a move across rows through a buffer (a row's source is another's destination). False: a small
-+ * move, or none of the workers open, is the first core's as before.
-+ */
-+static bool VpMovePixels(const uint8_t *src, uint8_t *dst, size_t width, size_t height, ptrdiff_t pitch, bool within_rows)
-+{
-+	if (width * height < 16384 || mcw_count() == 0 || src == dst) return false;
-+	_vp_move = { src, dst, width, height, pitch, nullptr, (width + 15) & ~size_t{15} };
-+	mcw_for_opts opts = {};
-+	opts.grain = 1;
-+	const uint32_t items = static_cast<uint32_t>((height + 15) / 16);
-+	if (within_rows) {
-+		mcw_for_opt(items, VpMoveInRows, nullptr, &opts);
-+		return true;
-+	}
-+	/* (the buffer grows on the first core, so that its pages are there before a worker writes them) */
-+	if (_vp_move_temp.size() < _vp_move.temp_pitch * height + 16) _vp_move_temp.resize(_vp_move.temp_pitch * height * 2 + 16);
-+	_vp_move.temp = reinterpret_cast<uint8_t *>((reinterpret_cast<uintptr_t>(_vp_move_temp.data()) + 15) & ~uintptr_t{15});
-+	mcw_for_opt(items, VpMoveToTemp, nullptr, &opts);
-+	mcw_for_opt(items, VpMoveFromTemp, nullptr, &opts);
 +	return true;
 +}
 +#endif
@@ -220,29 +264,27 @@ index b32f98b..9306f93 100644
  
  	if (scroll_y > 0) {
  		/* Calculate pointers */
-@@ -111,7 +242,11 @@ void Blitter_8bppBase::ScrollBuffer(void *video, int &left, int &top, int &width
+@@ -111,7 +284,10 @@ void Blitter_8bppBase::ScrollBuffer(void *video, int &left, int &top, int &width
  			width += scroll_x;
  		}
  
 -		Blitter::MovePixels(src, dst, width, height, -_screen.pitch);
 +#ifdef WITH_SHADEREMU
-+		if (!moved && !VpMovePixels(src, dst, width, height, -_screen.pitch, scroll_y == 0)) Blitter::MovePixels(src, dst, width, height, -_screen.pitch);
-+#else
-+		if (!moved) Blitter::MovePixels(src, dst, width, height, -_screen.pitch);
++		if (!moved) moved = MoveRows(src, dst, width, height, -_screen.pitch);
 +#endif
++		if (!moved) Blitter::MovePixels(src, dst, width, height, -_screen.pitch);
  	} else {
  		/* Calculate pointers */
  		dst = (uint8_t *)video + left + top * _screen.pitch;
-@@ -131,7 +266,11 @@ void Blitter_8bppBase::ScrollBuffer(void *video, int &left, int &top, int &width
+@@ -131,7 +307,10 @@ void Blitter_8bppBase::ScrollBuffer(void *video, int &left, int &top, int &width
  			width += scroll_x;
  		}
  
 -		Blitter::MovePixels(src, dst, width, height, _screen.pitch);
 +#ifdef WITH_SHADEREMU
-+		if (!moved && !VpMovePixels(src, dst, width, height, _screen.pitch, scroll_y == 0)) Blitter::MovePixels(src, dst, width, height, _screen.pitch);
-+#else
-+		if (!moved) Blitter::MovePixels(src, dst, width, height, _screen.pitch);
++		if (!moved) moved = MoveRows(src, dst, width, height, _screen.pitch);
 +#endif
++		if (!moved) Blitter::MovePixels(src, dst, width, height, _screen.pitch);
  	}
  }
  
@@ -288,11 +330,221 @@ index d1148b7..eda444a 100644
  	uint8_t *dst = temp_dst->data;
  
  	/* Make the sprites per zoom-level */
+diff --git a/src/command.cpp b/src/command.cpp
+index ce4a948..a15a657 100644
+--- a/src/command.cpp
++++ b/src/command.cpp
+@@ -206,6 +206,9 @@ void CommandHelperBase::InternalDoAfter(CommandCost &res, DoCommandFlags flags,
+  */
+ std::tuple<bool, bool, bool> CommandHelperBase::InternalPostBefore(Commands cmd, CommandFlags flags, TileIndex tile, StringID err_message, bool network_command)
+ {
++#ifdef WITH_SHADEREMU
++	TickFinish(); /* (a command runs between ticks, as upstream's) */
++#endif
+ 	/* Cost estimation is generally only done when the
+ 	 * local user presses shift while doing something.
+ 	 * However, in case of incoming network commands,
+diff --git a/src/command_func.h b/src/command_func.h
+index ecbaba2..6e9f236 100644
+--- a/src/command_func.h
++++ b/src/command_func.h
+@@ -62,6 +62,9 @@ struct RecursiveCommandCounter {
+ 
+ 	/** Are we in the top-level command execution? */
+ 	bool IsTopLevel() const { return _counter == 1; }
++#ifdef WITH_SHADEREMU
++	static int Depth() { return _counter; }
++#endif
+ private:
+ 	static int _counter;
+ };
+diff --git a/src/company_cmd.cpp b/src/company_cmd.cpp
+index 501cee2..f6b1e1f 100644
+--- a/src/company_cmd.cpp
++++ b/src/company_cmd.cpp
+@@ -47,6 +47,9 @@
+ #include "table/strings.h"
+ #include "table/company_face.h"
+ 
++#ifdef WITH_SHADEREMU
++#include "gfx_func.h"
++#endif
+ #include "safeguards.h"
+ 
+ void ClearEnginesHiddenFlagOfCompany(CompanyID cid);
+@@ -81,6 +84,9 @@ Company::Company(StringID name_1, bool is_ai)
+ /** Destructor. */
+ Company::~Company()
+ {
++#ifdef WITH_SHADEREMU
++	if (TickOnWorker()) TickExclusive();
++#endif
+ 	if (CleaningPool()) return;
+ 
+ 	CloseCompanyWindows(this->index);
+@@ -212,7 +218,12 @@ void InvalidateCompanyWindows(const Company *company)
+ /**
+  * Refresh all company finance windows previously marked dirty.
+  */
++#ifdef WITH_SHADEREMU
++void InvalidateDirtyCompanyFinances() /* (also before a picture is checked, the tick on its worker) */
++{
++#else
+ static const IntervalTimer<TimerWindow> invalidate_company_windows_interval(std::chrono::milliseconds(1), [](auto) {
++#endif
+ 	for (CompanyID cid : _dirty_company_finances) {
+ 		if (cid == _local_company) SetWindowWidgetDirty(WC_STATUS_BAR, 0, WID_S_RIGHT);
+ 		Window *w = FindWindowById(WC_FINANCES, cid);
+@@ -226,7 +237,12 @@ static const IntervalTimer<TimerWindow> invalidate_company_windows_interval(std:
+ 		SetWindowWidgetDirty(WC_COMPANY, cid, WID_C_DESC_COMPANY_VALUE);
+ 	}
+ 	_dirty_company_finances.Reset();
++#ifdef WITH_SHADEREMU
++}
++static const IntervalTimer<TimerWindow> invalidate_company_windows_interval(std::chrono::milliseconds(1), [](auto) { InvalidateDirtyCompanyFinances(); });
++#else
+ });
++#endif
+ 
+ /**
+  * Get the amount of money that a company has available, or INT64_MAX
+diff --git a/src/console.cpp b/src/console.cpp
+index 814ec8b..4ebdb4f 100644
+--- a/src/console.cpp
++++ b/src/console.cpp
+@@ -18,6 +18,9 @@
+ #include "console_func.h"
+ #include "settings_type.h"
+ 
++#ifdef WITH_SHADEREMU
++#include "gfx_func.h"
++#endif
+ #include "safeguards.h"
+ 
+ static const uint ICON_MAX_RECURSE = 10;     ///< Maximum number of recursion
+@@ -89,6 +92,9 @@ void IConsoleFree()
+  */
+ void IConsolePrint(TextColour colour_code, const std::string &string)
+ {
++#ifdef WITH_SHADEREMU
++	TICK_DEFER(IConsolePrint(colour_code, string));
++#endif
+ 	assert(IsValidConsoleColour(colour_code));
+ 
+ 	if (_redirect_console_to_client != INVALID_CLIENT_ID) {
+diff --git a/src/debug.cpp b/src/debug.cpp
+index 6d1e2aa..4cf2a61 100644
+--- a/src/debug.cpp
++++ b/src/debug.cpp
+@@ -24,6 +24,9 @@
+ 
+ #include "network/network_admin.h"
+ 
++#ifdef WITH_SHADEREMU
++#include "gfx_func.h"
++#endif
+ #include "safeguards.h"
+ 
+ /** Element in the queue of debug messages that have to be passed to either NetworkAdminConsole or IConsolePrint.*/
+@@ -109,6 +112,12 @@ void DumpDebugFacilityNames(std::back_insert_iterator<std::string> &output_itera
+  */
+ void DebugPrint(std::string_view category, int level, std::string &&message)
+ {
++#ifdef WITH_SHADEREMU
++	if (TickOnWorker()) {
++		TickDefer([category, level, m = std::move(message)]() mutable { DebugPrint(category, level, std::move(m)); });
++		return;
++	}
++#endif
+ 	if (category == "desync" && level != 0) {
+ 		static auto f = FioFOpenFile("commands-out.log", "wb", AUTOSAVE_DIR);
+ 		if (!f.has_value()) return;
+diff --git a/src/depot.cpp b/src/depot.cpp
+index a69be5f..8fabe45 100644
+--- a/src/depot.cpp
++++ b/src/depot.cpp
+@@ -16,6 +16,9 @@
+ #include "vehicle_gui.h"
+ #include "vehiclelist.h"
+ 
++#ifdef WITH_SHADEREMU
++#include "gfx_func.h"
++#endif
+ #include "safeguards.h"
+ 
+ /** All our depots tucked away in a pool. */
+@@ -27,6 +30,9 @@ INSTANTIATE_POOL_METHODS(Depot)
+  */
+ Depot::~Depot()
+ {
++#ifdef WITH_SHADEREMU
++	if (TickOnWorker()) TickExclusive();
++#endif
+ 	if (CleaningPool()) return;
+ 
+ 	if (!IsDepotTile(this->xy) || GetDepotIndex(this->xy) != this->index) {
+diff --git a/src/economy.cpp b/src/economy.cpp
+index a82ccc1..150ae2c 100644
+--- a/src/economy.cpp
++++ b/src/economy.cpp
+@@ -1895,11 +1895,23 @@ static void LoadUnloadVehicle(Vehicle *front)
+ 	if (_game_mode != GM_MENU && (_settings_client.gui.loading_indicators > (uint)(front->owner != _local_company && _local_company != COMPANY_SPECTATOR))) {
+ 		StringID percent_up_down = STR_NULL;
+ 		int percent = CalcPercentVehicleFilled(front, &percent_up_down);
++#ifdef WITH_SHADEREMU
++		/* (on the tick's worker made by the first core: it alone writes fill_percent_te_id) */
++		auto show = [](Vehicle *front, int percent, StringID percent_up_down) {
++#endif
+ 		if (front->fill_percent_te_id == INVALID_TE_ID) {
+ 			front->fill_percent_te_id = ShowFillingPercent(front->x_pos, front->y_pos, front->z_pos + 20, percent, percent_up_down);
+ 		} else {
+ 			UpdateFillingPercent(front->fill_percent_te_id, percent, percent_up_down);
+ 		}
++#ifdef WITH_SHADEREMU
++		};
++		if (TickOnWorker()) {
++			TickDefer([=] { show(front, percent, percent_up_down); });
++		} else {
++			show(front, percent, percent_up_down);
++		}
++#endif
+ 	}
+ 
+ 	if (completely_emptied) {
+@@ -1951,6 +1963,9 @@ void LoadUnloadStation(Station *st)
+ 	if (last_loading == nullptr) return;
+ 
+ 	for (Vehicle *v : st->loading_vehicles) {
++#ifdef WITH_SHADEREMU
++		TickYieldPoint();
++#endif
+ 		if (!v->vehstatus.Any({VehState::Stopped, VehState::Crashed})) LoadUnloadVehicle(v);
+ 		if (v == last_loading) break;
+ 	}
+diff --git a/src/error_gui.cpp b/src/error_gui.cpp
+index cf396be..4bf7ff0 100644
+--- a/src/error_gui.cpp
++++ b/src/error_gui.cpp
+@@ -313,6 +313,14 @@ void ShowErrorMessage(EncodedString &&summary_msg, int x, int y, CommandCost &cc
+  */
+ void ShowErrorMessage(EncodedString &&summary_msg, EncodedString &&detailed_msg, WarningLevel wl, int x, int y, EncodedString &&extra_msg, CompanyID company)
+ {
++#ifdef WITH_SHADEREMU
++	if (TickOnWorker()) {
++		TickDefer([s = std::move(summary_msg), d = std::move(detailed_msg), wl, x, y, e = std::move(extra_msg), company]() mutable {
++			ShowErrorMessage(std::move(s), std::move(d), wl, x, y, std::move(e), company);
++		});
++		return;
++	}
++#endif
+ 	if (wl != WL_INFO) {
+ 		/* Print message to console */
+ 
 diff --git a/src/framerate_gui.cpp b/src/framerate_gui.cpp
-index c1de3c5..9c42d29 100644
+index c1de3c5..8f78196 100644
 --- a/src/framerate_gui.cpp
 +++ b/src/framerate_gui.cpp
-@@ -233,8 +233,16 @@ namespace {
+@@ -233,8 +233,23 @@ namespace {
   * The basis of the timestamp is implementation defined, but the value should be steady,
   * so differences can be taken to reliably measure intervals.
   */
@@ -304,13 +556,70 @@ index c1de3c5..9c42d29 100644
  static TimingMeasurement GetPerformanceTimer()
  {
 +#ifdef WITH_SHADEREMU
-+	if (_se_clock_ms != nullptr) return static_cast<TimingMeasurement>(*_se_clock_ms) * 1000;
++	/* (the machine's 5 kHz time: the clock is a system call, 900 instructions, 500 of them a tick) */
++	uint32_t hi, lo, again;
++	do {
++		asm volatile("rdtimeh %0" : "=r"(hi));
++		asm volatile("rdtime %0" : "=r"(lo));
++		asm volatile("rdtimeh %0" : "=r"(again));
++	} while (hi != again);
++	return (static_cast<uint64_t>(hi) << 32 | lo) * (TIMESTAMP_PRECISION / 5000);
 +#endif
  	using namespace std::chrono;
  	return (TimingMeasurement)time_point_cast<microseconds>(high_resolution_clock::now()).time_since_epoch().count();
  }
+@@ -255,6 +270,9 @@ PerformanceMeasurer::PerformanceMeasurer(PerformanceElement elem)
+ /** Finish a cycle of a measured element and store the measurement taken. */
+ PerformanceMeasurer::~PerformanceMeasurer()
+ {
++#ifdef WITH_SHADEREMU
++	if (TickOnWorker()) return;
++#endif
+ 	if (this->elem == PFE_ALLSCRIPTS) {
+ 		/* Hack to not record scripts total when no scripts are active */
+ 		bool any_active = _pf_data[PFE_GAMESCRIPT].num_valid > 0;
+@@ -290,6 +308,9 @@ void PerformanceMeasurer::SetExpectedRate(double rate)
+ /** Mark a performance element as not currently in use. */
+ /* static */ void PerformanceMeasurer::SetInactive(PerformanceElement elem)
+ {
++#ifdef WITH_SHADEREMU
++	if (TickOnWorker()) return;
++#endif
+ 	_pf_data[elem].num_valid = 0;
+ 	_pf_data[elem].next_index = 0;
+ 	_pf_data[elem].prev_index = 0;
+@@ -301,6 +322,9 @@ void PerformanceMeasurer::SetExpectedRate(double rate)
+  */
+ /* static */ void PerformanceMeasurer::Paused(PerformanceElement elem)
+ {
++#ifdef WITH_SHADEREMU
++	if (TickOnWorker()) return;
++#endif
+ 	PerformanceMeasurer::SetInactive(elem);
+ 	_pf_data[elem].AddPause(GetPerformanceTimer());
+ }
+@@ -321,6 +345,9 @@ PerformanceAccumulator::PerformanceAccumulator(PerformanceElement elem)
+ /** Finish and add one block of the accumulating value. */
+ PerformanceAccumulator::~PerformanceAccumulator()
+ {
++#ifdef WITH_SHADEREMU
++	if (TickOnWorker()) return;
++#endif
+ 	_pf_data[this->elem].AddAccumulate(GetPerformanceTimer() - this->start_time);
+ }
+ 
+@@ -331,6 +358,9 @@ PerformanceAccumulator::~PerformanceAccumulator()
+  */
+ void PerformanceAccumulator::Reset(PerformanceElement elem)
+ {
++#ifdef WITH_SHADEREMU
++	if (TickOnWorker()) return;
++#endif
+ 	_pf_data[elem].BeginAccumulate(GetPerformanceTimer());
+ }
+ 
 diff --git a/src/gfx.cpp b/src/gfx.cpp
-index 2cae30c..fbd450c 100644
+index 2cae30c..675a196 100644
 --- a/src/gfx.cpp
 +++ b/src/gfx.cpp
 @@ -51,7 +51,12 @@ PauseModes _pause_mode;
@@ -340,17 +649,18 @@ index 2cae30c..fbd450c 100644
  
  static const uint DIRTY_BLOCK_HEIGHT   = 8;
  static const uint DIRTY_BLOCK_WIDTH    = 64;
-@@ -88,6 +98,9 @@ void GfxScroll(int left, int top, int width, int height, int xo, int yo)
+@@ -88,6 +98,10 @@ void GfxScroll(int left, int top, int width, int height, int xo, int yo)
  
  	if (xo == 0 && yo == 0) return;
  
 +#ifdef WITH_SHADEREMU
-+	ViewportFlushOver(left, top, left + width, top + height);
++	ScrollSettle();
++	ViewportScrollKept(left, top, width, height, xo, yo);
 +#endif
  	if (_cursor.visible) UndrawMouseCursor();
  
  	if (_networking) NetworkUndrawChatMessage();
-@@ -1241,6 +1254,9 @@ std::unique_ptr<uint32_t[]> DrawSpriteToRgbaBuffer(SpriteID spriteId, ZoomLevel
+@@ -1241,6 +1255,9 @@ std::unique_ptr<uint32_t[]> DrawSpriteToRgbaBuffer(SpriteID spriteId, ZoomLevel
  
  static void GfxMainBlitterViewport(const Sprite *sprite, int x, int y, BlitterMode mode, const SubSprite *sub, SpriteID sprite_id)
  {
@@ -360,7 +670,33 @@ index 2cae30c..fbd450c 100644
  	GfxBlitter<ZOOM_BASE, false>(sprite, x, y, mode, sub, sprite_id, _cur_dpi->zoom);
  }
  
-@@ -1361,6 +1377,9 @@ void DrawMouseCursor()
+@@ -1337,9 +1354,15 @@ void UndrawMouseCursor()
+ {
+ 	/* Don't undraw mouse cursor if it is handled by the video driver. */
+ 	if (VideoDriver::GetInstance()->UseSystemCursor()) return;
++#ifdef WITH_SHADEREMU
++	if (_cursor.visible) VpFlushFinish();
++#endif
+ 
+ 	/* Don't undraw the mouse cursor if the screen is not ready */
+ 	if (_screen.dst_ptr == nullptr) return;
++#ifdef WITH_SHADEREMU
++	ScrollSettle();
++#endif
+ 
+ 	if (_cursor.visible) {
+ 		Blitter *blitter = BlitterFactory::GetCurrentBlitter();
+@@ -1353,6 +1376,9 @@ void DrawMouseCursor()
+ {
+ 	/* Don't draw mouse cursor if it is handled by the video driver. */
+ 	if (VideoDriver::GetInstance()->UseSystemCursor()) return;
++#ifdef WITH_SHADEREMU
++	VpFlushFinish();
++#endif
+ 
+ 	/* Don't draw the mouse cursor if the screen is not ready */
+ 	if (_screen.dst_ptr == nullptr) return;
+@@ -1361,6 +1387,9 @@ void DrawMouseCursor()
  
  	/* Redraw mouse cursor but only when it's inside the window */
  	if (!_cursor.in_window) return;
@@ -370,7 +706,7 @@ index 2cae30c..fbd450c 100644
  
  	/* Don't draw the mouse cursor if it's already drawn */
  	if (_cursor.visible) {
-@@ -1449,8 +1468,22 @@ void RedrawScreenRect(int left, int top, int right, int bottom)
+@@ -1449,8 +1478,22 @@ void RedrawScreenRect(int left, int top, int right, int bottom)
   *
   * @ingroup dirty
   */
@@ -393,7 +729,17 @@ index 2cae30c..fbd450c 100644
  	auto is_dirty = [](auto block) -> bool { return block != 0; };
  	auto block = _dirty_blocks.begin();
  
-@@ -1534,6 +1567,19 @@ void AddDirtyBlock(int left, int top, int right, int bottom)
+@@ -1515,6 +1558,9 @@ void DrawDirtyBlocks()
+  */
+ void AddDirtyBlock(int left, int top, int right, int bottom)
+ {
++#ifdef WITH_SHADEREMU
++	TICK_DEFER(AddDirtyBlock(left, top, right, bottom));
++#endif
+ 	if (left < 0) left = 0;
+ 	if (top < 0) top = 0;
+ 	if (right > _screen.width) right = _screen.width;
+@@ -1534,6 +1580,19 @@ void AddDirtyBlock(int left, int top, int right, int bottom)
  
  	assert(left < right && height > 0);
  
@@ -413,18 +759,29 @@ index 2cae30c..fbd450c 100644
  	for (; left < right; ++left) {
  		size_t offset = _dirty_blocks_per_column * left + top;
  		std::fill_n(_dirty_blocks.begin() + offset, height, 0xFF);
+@@ -1548,6 +1607,10 @@ void AddDirtyBlock(int left, int top, int right, int bottom)
+  */
+ void MarkWholeScreenDirty()
+ {
++#ifdef WITH_SHADEREMU
++	TICK_DEFER(MarkWholeScreenDirty());
++	ViewportReachForgetAll();
++#endif
+ 	AddDirtyBlock(0, 0, _screen.width, _screen.height);
+ }
+ 
 diff --git a/src/gfx_func.h b/src/gfx_func.h
-index 4254611..2110652 100644
+index 4254611..e2208c9 100644
 --- a/src/gfx_func.h
 +++ b/src/gfx_func.h
-@@ -184,6 +184,49 @@ std::pair<uint8_t, uint8_t> GetBroadestDigit(FontSize size);
+@@ -184,6 +184,122 @@ std::pair<uint8_t, uint8_t> GetBroadestDigit(FontSize size);
  
  int GetCharacterHeight(FontSize size);
  
 +#ifdef WITH_SHADEREMU
 +/* The viewport is drawn on worker cores too (docs/games/openttd.md): what each core draws with,
 + * in 16 bytes of its own. VpCore() is the core that runs, by its stack: 0 the first. */
-+static constexpr int VP_CORES = 32;
++static constexpr int VP_CORES = 128;
 +struct alignas(16) VpCoreState {
 +	DrawPixelInfo *cur_dpi;
 +	const uint8_t *colour_remap;
@@ -434,13 +791,52 @@ index 4254611..2110652 100644
 +};
 +extern VpCoreState _vp_core[VP_CORES];
 +extern uintptr_t _vp_stacks, _vp_stacks_bytes;
++/* The game tick on a worker core of its own (docs/games/openttd.md, "The tick on a worker"): its stack */
++static constexpr uintptr_t TW_STACK = 512 * 1024;
++extern uintptr_t _tw_stack;
++extern int _tw_core; ///< the tick's worker, which draws nothing
 +inline int VpCore()
 +{
 +	uintptr_t sp;
 +	asm("mv %0, sp" : "=r"(sp));
 +	uintptr_t d = sp - _vp_stacks;
-+	return d < _vp_stacks_bytes ? static_cast<int>(d >> 16) + 1 : 0;
++	if (d < _vp_stacks_bytes) return static_cast<int>(d >> 16) + 1;
++	return sp - _tw_stack < TW_STACK ? _tw_core : 0;
 +}
++/** Whether this code runs in the game tick on its worker (then it leaves what the window system does to the first core). */
++inline bool TickOnWorker()
++{
++	uintptr_t sp;
++	asm("mv %0, sp" : "=r"(sp));
++	return sp - _tw_stack < TW_STACK;
++}
++/** What the tick on its worker leaves the first core: made there in the order asked, while the tick waits. */
++struct TickTask {
++	virtual ~TickTask() = default;
++	virtual void Run() = 0;
++};
++template <class F>
++struct TickTaskOf final : TickTask {
++	F f;
++	template <class G> explicit TickTaskOf(G &&g) : f(std::forward<G>(g)) {}
++	void Run() override { this->f(); }
++};
++void TickDeferTask(TickTask *task);
++template <class F>
++void TickDefer(F &&f) { TickDeferTask(new TickTaskOf<std::decay_t<F>>(std::forward<F>(f))); }
++/** In a function the window system's: on the tick's worker the call is made later by the first core. */
++#define TICK_DEFER(call) do { if (TickOnWorker()) { TickDefer([=]() mutable { call; }); return; } } while (false)
++#define TICK_DEFER_THIS(call) do { if (TickOnWorker()) { TickDefer([=, this]() mutable { call; }); return; } } while (false)
++/** Where the tick on its worker reaches what only the first core may use (OPENTTD_TRAPS=1 lists them at the end). */
++void TickTrap(const void *caller);
++#define TICK_TRAP() do { if (TickOnWorker()) TickTrap(__builtin_return_address(0)); } while (false)
++void TickExclusive(); ///< on the tick's worker: no worker draws from here to the tick's next wait
++extern void *_tw_dying; ///< a vehicle the tick deletes: its memory is freed by the first core, once out of the viewports
++void TickReleaseForFlush(); ///< the viewport's last flush of a picture: the tick goes on while it is drawn
++extern bool _tw_running; ///< the first core's: the tick on its worker is not waiting
++inline bool TickRunning() { return _tw_running; }
++extern bool _tw_on; ///< the first core's: the game's state is the tick's worker's to change
++inline bool TickElsewhere() { return _tw_on && !TickOnWorker(); }
 +/** On a worker: what it is drawing is given up (true); on the first core: false. */
 +inline bool VpRefuse()
 +{
@@ -462,6 +858,40 @@ index 4254611..2110652 100644
 +extern VpArena _vp_arena[VP_CORES];
 +inline bool VpArenaOn() { return _vp_arena[VpCore()].on; }
 +void *VpArenaTemp(size_t bytes, bool zero = true);
++
++/* The game tick runs in slices between pictures (docs/games/openttd.md, "The tick in slices"):
++ * where the tick may give way to the drawing it calls TickYieldPoint(). */
++/** The machine's time (5 kHz), and where a picture's went, by phase (VP_PHASE_*; the play lines print them). */
++inline uint32_t VpTime()
++{
++	uint32_t t;
++	asm volatile("rdtime %0" : "=r"(t));
++	return t;
++}
++enum { VP_PHASE_FLUSH, VP_PHASE_PIECES, VP_PHASE_AGAIN, VP_PHASE_FIRST, VP_PHASE_COPY, VP_PHASE_TEXTS, VP_PHASE_MOVE,
++	VP_PHASE_WINDOWS, VP_PHASE_PAINT, VP_PHASE_TICK, VP_PHASES };
++extern uint32_t _vp_phase[VP_PHASES];
++extern bool _tick_slicing;
++extern uint32_t _tick_yield_at; ///< core 0's instructions (the low word) at which a slice is spent
++void TickYield();
++void TickFinish();
++void ScrollSettle(); ///< waits for the screen move the workers make while the first core goes on, if one is out
++bool VpFlushOut(); ///< a picture's last flush is out: its pieces drawn while the next picture begins
++bool VpFlushReady(); ///< no flush is out, or its pieces are all drawn
++void VpFlushFinish(); ///< the flush that is out waited for and made whole (the screen and the drawn state free again)
++bool TwExclusiveWanted(); ///< the tick waits to delete something alone
++struct alignas(16) TickWord { volatile uint32_t v; }; ///< a word in 16 bytes of its own
++extern TickWord _tw_req; ///< the first core's: it asks the tick on its worker to wait (bit 0: between two ticks)
++extern TickWord _tw_ack; ///< the tick's: the request it waits for
++void TickWorkerYield();
++inline void TickYieldPoint()
++{
++	if (_tw_req.v != _tw_ack.v) TickWorkerYield();
++	if (!_tick_slicing) return;
++	uint32_t now;
++	asm volatile("rdinstret %0" : "=r"(now));
++	if (static_cast<int32_t>(now - _tick_yield_at) >= 0) TickYield();
++}
 +#else
  extern DrawPixelInfo *_cur_dpi;
 +#endif
@@ -538,10 +968,30 @@ index 7962aa8..33d7821 100644
  }
  
 diff --git a/src/industry_cmd.cpp b/src/industry_cmd.cpp
-index bdf2bfc..27c3279 100644
+index bdf2bfc..d4223c1 100644
 --- a/src/industry_cmd.cpp
 +++ b/src/industry_cmd.cpp
-@@ -1245,10 +1245,11 @@ void OnTick_Industry()
+@@ -55,6 +55,9 @@
+ #include "table/industry_land.h"
+ #include "table/build_industry.h"
+ 
++#ifdef WITH_SHADEREMU
++#include "gfx_func.h"
++#endif
+ #include "safeguards.h"
+ 
+ IndustryPool _industry_pool("Industry");
+@@ -145,6 +148,9 @@ const IndustryTileSpec *GetIndustryTileSpec(IndustryGfx gfx)
+ 
+ Industry::~Industry()
+ {
++#ifdef WITH_SHADEREMU
++	if (TickOnWorker()) TickExclusive();
++#endif
+ 	if (CleaningPool()) return;
+ 
+ 	/* Industry can also be destroyed when not fully initialized.
+@@ -1245,10 +1251,11 @@ void OnTick_Industry()
  
  	if (_game_mode == GM_EDITOR) return;
  
@@ -594,10 +1044,30 @@ index 4373c92..19bb57d 100644
  
  static constexpr std::initializer_list<NWidgetPart> _nested_build_industry_widgets = {
 diff --git a/src/landscape.cpp b/src/landscape.cpp
-index 8c5cf4b..f8b1cbe 100644
+index 8c5cf4b..8454545 100644
 --- a/src/landscape.cpp
 +++ b/src/landscape.cpp
-@@ -1378,7 +1378,17 @@ static std::tuple<bool, bool> FlowRiver(TileIndex spring, TileIndex begin, uint
+@@ -45,6 +45,9 @@
+ #include "table/sprites.h"
+ 
+ #include <unordered_set>
++#ifdef WITH_SHADEREMU
++#include "gfx_func.h"
++#endif
+ 
+ #include "safeguards.h"
+ 
+@@ -826,6 +829,9 @@ void RunTileLoop()
+ 	}
+ 
+ 	while (count--) {
++#ifdef WITH_SHADEREMU
++		TickYieldPoint();
++#endif
+ 		_tile_type_procs[GetTileType(tile)]->tile_loop_proc(tile);
+ 
+ 		/* Get the next tile in sequence using a Galois LFSR. */
+@@ -1378,7 +1384,17 @@ static std::tuple<bool, bool> FlowRiver(TileIndex spring, TileIndex begin, uint
  
  	int height_begin = TileHeight(begin);
  
@@ -615,7 +1085,7 @@ index 8c5cf4b..f8b1cbe 100644
  	marks.insert(begin);
  
  	std::vector<TileIndex> queue;
-@@ -1428,6 +1438,9 @@ static std::tuple<bool, bool> FlowRiver(TileIndex spring, TileIndex begin, uint
+@@ -1428,6 +1444,9 @@ static std::tuple<bool, bool> FlowRiver(TileIndex spring, TileIndex begin, uint
  			}
  		}
  	}
@@ -625,6 +1095,26 @@ index 8c5cf4b..f8b1cbe 100644
  
  	bool main_river = false;
  	if (found) {
+@@ -1720,10 +1739,19 @@ void CallLandscapeTick()
+ 		PerformanceAccumulator framerate(PFE_GL_LANDSCAPE);
+ 
+ 		OnTick_Town();
++#ifdef WITH_SHADEREMU
++		TickYieldPoint();
++#endif
+ 		OnTick_Trees();
+ 		OnTick_Station();
++#ifdef WITH_SHADEREMU
++		TickYieldPoint();
++#endif
+ 		OnTick_Industry();
+ 	}
++#ifdef WITH_SHADEREMU
++	TickYieldPoint();
++#endif
+ 
+ 	OnTick_Companies();
+ 	OnTick_LinkGraph();
 diff --git a/src/linkgraph/linkgraphjob.cpp b/src/linkgraph/linkgraphjob.cpp
 index 365b035..2628cbf 100644
 --- a/src/linkgraph/linkgraphjob.cpp
@@ -797,6 +1287,70 @@ index ea215f3..dce2389 100644
  	UnInitWindowSystem();
  
  	Map::Allocate(size_x, size_y);
+diff --git a/src/misc_gui.cpp b/src/misc_gui.cpp
+index 2b3643e..3344b02 100644
+--- a/src/misc_gui.cpp
++++ b/src/misc_gui.cpp
+@@ -41,6 +41,9 @@
+ 
+ #include "table/strings.h"
+ 
++#ifdef WITH_SHADEREMU
++#include "gfx_func.h"
++#endif
+ #include "safeguards.h"
+ 
+ /** Method to open the OSK. */
+@@ -512,6 +515,9 @@ void ShowEstimatedCostOrIncome(Money cost, int x, int y)
+  */
+ void ShowCostOrIncomeAnimation(int x, int y, int z, Money cost)
+ {
++#ifdef WITH_SHADEREMU
++	TICK_DEFER(ShowCostOrIncomeAnimation(x, y, z, cost));
++#endif
+ 	if (cost == 0) {
+ 		return;
+ 	}
+@@ -535,6 +541,9 @@ void ShowCostOrIncomeAnimation(int x, int y, int z, Money cost)
+  */
+ void ShowFeederIncomeAnimation(int x, int y, int z, Money transfer, Money income)
+ {
++#ifdef WITH_SHADEREMU
++	TICK_DEFER(ShowFeederIncomeAnimation(x, y, z, transfer, income));
++#endif
+ 	Point pt = RemapCoords(x, y, z);
+ 
+ 	if (income == 0) {
+@@ -560,6 +569,9 @@ void ShowFeederIncomeAnimation(int x, int y, int z, Money transfer, Money income
+  */
+ TextEffectID ShowFillingPercent(int x, int y, int z, uint8_t percent, StringID string)
+ {
++#ifdef WITH_SHADEREMU
++	TICK_TRAP();
++#endif
+ 	Point pt = RemapCoords(x, y, z);
+ 
+ 	assert(string != STR_NULL);
+@@ -574,6 +586,9 @@ TextEffectID ShowFillingPercent(int x, int y, int z, uint8_t percent, StringID s
+  */
+ void UpdateFillingPercent(TextEffectID te_id, uint8_t percent, StringID string)
+ {
++#ifdef WITH_SHADEREMU
++	TICK_DEFER(UpdateFillingPercent(te_id, percent, string));
++#endif
+ 	assert(string != STR_NULL);
+ 
+ 	UpdateTextEffect(te_id, GetEncodedString(string, percent));
+@@ -585,6 +600,9 @@ void UpdateFillingPercent(TextEffectID te_id, uint8_t percent, StringID string)
+  */
+ void HideFillingPercent(TextEffectID *te_id)
+ {
++#ifdef WITH_SHADEREMU
++	TICK_DEFER(HideFillingPercent(te_id)); /* (by its place: the first core alone writes it) */
++#endif
+ 	if (*te_id == INVALID_TE_ID) return;
+ 
+ 	RemoveTextEffect(*te_id);
 diff --git a/src/music.cpp b/src/music.cpp
 index ee33585..03a3fb3 100644
 --- a/src/music.cpp
@@ -844,6 +1398,40 @@ index 480ab51..ea8df23 100644
  };
  
  /* virtual */ uint32_t CanalScopeResolver::GetRandomBits() const
+diff --git a/src/newgrf_debug_gui.cpp b/src/newgrf_debug_gui.cpp
+index 79d977c..8cc2962 100644
+--- a/src/newgrf_debug_gui.cpp
++++ b/src/newgrf_debug_gui.cpp
+@@ -47,6 +47,9 @@
+ 
+ #include "table/strings.h"
+ 
++#ifdef WITH_SHADEREMU
++#include "gfx_func.h"
++#endif
+ #include "safeguards.h"
+ 
+ /** The sprite picker. */
+@@ -709,6 +712,9 @@ void ShowNewGRFInspectWindow(GrfSpecFeature feature, uint index, const uint32_t
+  */
+ void InvalidateNewGRFInspectWindow(GrfSpecFeature feature, uint index)
+ {
++#ifdef WITH_SHADEREMU
++	TICK_DEFER(InvalidateNewGRFInspectWindow(feature, index));
++#endif
+ 	if (feature == GSF_INVALID) return;
+ 
+ 	WindowNumber wno = GetInspectWindowNumber(feature, index);
+@@ -725,6 +731,9 @@ void InvalidateNewGRFInspectWindow(GrfSpecFeature feature, uint index)
+  */
+ void DeleteNewGRFInspectWindow(GrfSpecFeature feature, uint index)
+ {
++#ifdef WITH_SHADEREMU
++	TICK_DEFER(DeleteNewGRFInspectWindow(feature, index));
++#endif
+ 	if (feature == GSF_INVALID) return;
+ 
+ 	WindowNumber wno = GetInspectWindowNumber(feature, index);
 diff --git a/src/newgrf_spritegroup.cpp b/src/newgrf_spritegroup.cpp
 index a5c5d07..445276d 100644
 --- a/src/newgrf_spritegroup.cpp
@@ -911,8 +1499,87 @@ index dc20f33..61ceb18 100644
  
  	CallbackID callback{}; ///< Callback being resolved.
  	uint32_t callback_param1 = 0; ///< First parameter (var 10) of the callback.
+diff --git a/src/news_gui.cpp b/src/news_gui.cpp
+index 9f92375..990d8b2 100644
+--- a/src/news_gui.cpp
++++ b/src/news_gui.cpp
+@@ -42,6 +42,9 @@
+ 
+ #include "table/strings.h"
+ 
++#ifdef WITH_SHADEREMU
++#include "gfx_func.h"
++#endif
+ #include "safeguards.h"
+ 
+ static const uint MIN_NEWS_AMOUNT = 30; ///< preferred minimum amount of news messages.
+@@ -899,6 +902,14 @@ std::string NewsItem::GetStatusText() const
+  */
+ void AddNewsItem(EncodedString &&headline, NewsType type, NewsStyle style, NewsFlags flags, NewsReference ref1, NewsReference ref2, std::unique_ptr<NewsAllocatedData> &&data, AdviceType advice_type)
+ {
++#ifdef WITH_SHADEREMU
++	if (TickOnWorker()) {
++		TickDefer([headline = std::move(headline), type, style, flags, ref1, ref2, data = std::move(data), advice_type]() mutable {
++			AddNewsItem(std::move(headline), type, style, flags, ref1, ref2, std::move(data), advice_type);
++		});
++		return;
++	}
++#endif
+ 	if (_game_mode == GM_MENU) return;
+ 
+ 	/* Create new news item node */
+@@ -1014,6 +1025,9 @@ static bool HasReferenceObject(const NewsItem &ni, T id)
+  */
+ void DeleteVehicleNews(VehicleID vid, AdviceType advice_type)
+ {
++#ifdef WITH_SHADEREMU
++	TICK_DEFER(DeleteVehicleNews(vid, advice_type));
++#endif
+ 	DeleteNews([&](const auto &ni) {
+ 		return HasReferenceObject(ni, vid) && (advice_type == AdviceType::Invalid || ni.advice_type == advice_type);
+ 	});
+@@ -1026,6 +1040,9 @@ void DeleteVehicleNews(VehicleID vid, AdviceType advice_type)
+  */
+ void DeleteStationNews(StationID sid)
+ {
++#ifdef WITH_SHADEREMU
++	TICK_DEFER(DeleteStationNews(sid));
++#endif
+ 	DeleteNews([&](const auto &ni) {
+ 		return HasReferenceObject(ni, sid);
+ 	});
+@@ -1037,6 +1054,9 @@ void DeleteStationNews(StationID sid)
+  */
+ void DeleteIndustryNews(IndustryID iid)
+ {
++#ifdef WITH_SHADEREMU
++	TICK_DEFER(DeleteIndustryNews(iid));
++#endif
+ 	DeleteNews([&](const auto &ni) {
+ 		return HasReferenceObject(ni, iid);
+ 	});
+@@ -1055,6 +1075,9 @@ bool IsInvalidEngineNews(const NewsReference &reference)
+  */
+ void DeleteInvalidEngineNews()
+ {
++#ifdef WITH_SHADEREMU
++	TICK_DEFER(DeleteInvalidEngineNews());
++#endif
+ 	DeleteNews([](const auto &ni) {
+ 		return IsInvalidEngineNews(ni.ref1) || IsInvalidEngineNews(ni.ref2);
+ 	});
+@@ -1082,6 +1105,9 @@ static void ChangeObject(NewsReference reference, T from, T to)
+  */
+ void ChangeVehicleNews(VehicleID from_index, VehicleID to_index)
+ {
++#ifdef WITH_SHADEREMU
++	TICK_DEFER(ChangeVehicleNews(from_index, to_index));
++#endif
+ 	for (auto &ni : _news) {
+ 		ChangeObject(ni.ref1, from_index, to_index);
+ 		ChangeObject(ni.ref2, from_index, to_index);
 diff --git a/src/openttd.cpp b/src/openttd.cpp
-index 7d585b0..3cb1db3 100644
+index 7d585b0..5138ceb 100644
 --- a/src/openttd.cpp
 +++ b/src/openttd.cpp
 @@ -73,6 +73,11 @@
@@ -927,16 +1594,19 @@ index 7d585b0..3cb1db3 100644
  #include "misc_cmd.h"
  #include "timer/timer.h"
  #include "timer/timer_game_calendar.h"
-@@ -93,6 +98,8 @@
+@@ -93,6 +98,11 @@
  #	include <emscripten/html5.h>
  #endif
  
 +#include "language.h"
 +
++#ifdef WITH_SHADEREMU
++#include "gfx_func.h"
++#endif
  #include "safeguards.h"
  
  void CallLandscapeTick();
-@@ -333,6 +340,13 @@ static void LoadIntroGame(bool load_newgrfs = true)
+@@ -333,6 +343,13 @@ static void LoadIntroGame(bool load_newgrfs = true)
  	SetupColoursAndInitialWindow();
  
  	/* Load the default opening screen savegame */
@@ -950,7 +1620,7 @@ index 7d585b0..3cb1db3 100644
  	if (SaveOrLoad("opntitle.dat", SLO_LOAD, DFT_GAME_FILE, BASESET_DIR) != SL_OK) {
  		GenerateWorld(GWM_EMPTY, 64, 64); // if failed loading, make empty world.
  		SetLocalCompany(COMPANY_SPECTATOR);
-@@ -344,7 +358,13 @@ static void LoadIntroGame(bool load_newgrfs = true)
+@@ -344,7 +361,13 @@ static void LoadIntroGame(bool load_newgrfs = true)
  	_pause_mode = {};
  	_cursor.fix_at = false;
  
@@ -964,7 +1634,7 @@ index 7d585b0..3cb1db3 100644
  
  	MusicLoop(); // ensure music is correct
  }
-@@ -370,6 +390,30 @@ void OpenBrowser(const std::string &url)
+@@ -370,6 +393,30 @@ void OpenBrowser(const std::string &url)
  	}
  }
  
@@ -995,7 +1665,7 @@ index 7d585b0..3cb1db3 100644
  /** Callback structure of statements to be executed after the NewGRF scan. */
  struct AfterNewGRFScan : NewGRFScanCallback {
  	TimerGameCalendar::Year startyear = CalendarTime::INVALID_YEAR; ///< The start year.
-@@ -433,6 +477,9 @@ struct AfterNewGRFScan : NewGRFScanCallback {
+@@ -433,6 +480,9 @@ struct AfterNewGRFScan : NewGRFScanCallback {
  		IConsoleInit();
  		InitializeGUI();
  		IConsoleCmdExec("exec scripts/autoexec.scr 0");
@@ -1005,7 +1675,7 @@ index 7d585b0..3cb1db3 100644
  
  		/* Make sure _settings is filled with _settings_newgame if we switch to a game directly */
  		if (_switch_mode != SM_NONE) MakeNewgameSettingsLive();
-@@ -1173,6 +1220,14 @@ void SwitchToMode(SwitchMode new_mode)
+@@ -1173,6 +1223,14 @@ void SwitchToMode(SwitchMode new_mode)
  			}
  
  			UpdateSocialIntegration(GM_MENU);
@@ -1020,21 +1690,90 @@ index 7d585b0..3cb1db3 100644
  			break;
  
  		case SM_SAVE_GAME: // Save game.
+@@ -1241,8 +1299,13 @@ void StateGameLoop()
+ 		BasePersistentStorageArray::SwitchMode(PSM_LEAVE_GAMELOOP);
+ 		UpdateLandscapingLimits();
+ 
+-		CallWindowGameTickEvent();
+-		NewsLoop();
++#ifdef WITH_SHADEREMU
++		if (!TickOnWorker())
++#endif
++		{
++			CallWindowGameTickEvent();
++			NewsLoop();
++		}
+ 	} else {
+ 		if (_debug_desync_level > 2 && TimerGameEconomy::date_fract == 0 && (TimerGameEconomy::date.base() & 0x1F) == 0) {
+ 			/* Save the desync savegame if needed. */
+@@ -1277,8 +1340,13 @@ void StateGameLoop()
+ #endif
+ 		UpdateLandscapingLimits();
+ 
+-		CallWindowGameTickEvent();
+-		NewsLoop();
++#ifdef WITH_SHADEREMU
++		if (!TickOnWorker()) /* (the first core makes them for each tick, docs/games/openttd.md "The tick on a worker") */
++#endif
++		{
++			CallWindowGameTickEvent();
++			NewsLoop();
++		}
+ 		cur_company.Restore();
+ 	}
+ 
+@@ -1342,6 +1410,9 @@ void GameLoop()
+ 	}
+ 
+ 	if (_request_newgrf_scan) {
++#ifdef WITH_SHADEREMU
++		TickFinish();
++#endif
+ 		ScanNewGRFFiles(_request_newgrf_scan_callback);
+ 		_request_newgrf_scan = false;
+ 		_request_newgrf_scan_callback = nullptr;
+@@ -1363,6 +1434,9 @@ void GameLoop()
+ 
+ 	/* switch game mode? */
+ 	if (_switch_mode != SM_NONE && !HasModalProgress()) {
++#ifdef WITH_SHADEREMU
++		TickFinish();
++#endif
+ 		SwitchToMode(_switch_mode);
+ 		_switch_mode = SM_NONE;
+ 		if (_exit_game) return;
+@@ -1385,9 +1459,15 @@ void GameLoop()
+ 			NetworkClientConnectGame(_settings_client.network.last_joined, COMPANY_SPECTATOR);
+ 		}
+ 		/* Singleplayer */
++#ifdef WITH_SHADEREMU
++		if (!TickElsewhere()) /* (the tick on its worker: docs/games/openttd.md, "The tick on a worker") */
++#endif
+ 		StateGameLoop();
+ 	}
+ 
++#ifdef WITH_SHADEREMU
++	if (!TickElsewhere())
++#endif
+ 	if (_pause_mode.None() && HasBit(_display_opt, DO_FULL_ANIMATION)) DoPaletteAnimations();
+ 
+ 	SoundDriver::GetInstance()->MainLoop();
 diff --git a/src/pathfinder/water_regions.cpp b/src/pathfinder/water_regions.cpp
-index e725401..9eb5298 100644
+index e725401..5c8f21e 100644
 --- a/src/pathfinder/water_regions.cpp
 +++ b/src/pathfinder/water_regions.cpp
-@@ -20,6 +20,9 @@
+@@ -20,6 +20,10 @@
  #include "../debug.h"
  #include "../3rdparty/fmt/ranges.h"
  #include "../core/convertible_through_base.hpp"
 +#ifdef WITH_SHADEREMU
++#include "../gfx_func.h"
 +#include <mcwx.h>
 +#endif
  #include "../safeguards.h"
  
  using WaterRegionTraversabilityBits = uint16_t;
-@@ -54,6 +57,16 @@ class WaterRegionData {
+@@ -54,6 +58,16 @@ class WaterRegionData {
  	WaterRegionPatchLabel::BaseType number_of_patches{0}; // 0 = no water, 1 = one single patch of water, etc...
  };
  
@@ -1051,7 +1790,7 @@ index e725401..9eb5298 100644
  /**
   * Represents a square section of the map of a fixed size. Within this square individual unconnected patches of water are
   * identified using a Connected Component Labeling (CCL) algorithm. Note that all information stored in this class applies
-@@ -124,6 +137,46 @@ public:
+@@ -124,6 +138,46 @@ public:
  	 * Performs the connected component labeling and other data gathering.
  	 * @see WaterRegion
  	 */
@@ -1098,7 +1837,7 @@ index e725401..9eb5298 100644
  	void ForceUpdate()
  	{
  		Debug(map, 3, "Updating water region ({},{})", GetWaterRegionX(this->tile_area.tile), GetWaterRegionY(this->tile_area.tile));
-@@ -136,6 +189,7 @@ public:
+@@ -136,6 +190,7 @@ public:
  
  		this->data.tile_patch_labels->fill(INVALID_WATER_REGION_PATCH);
  		this->data.edge_traversability_bits.fill(0);
@@ -1106,7 +1845,7 @@ index e725401..9eb5298 100644
  
  		WaterRegionPatchLabel current_label = FIRST_REGION_LABEL;
  		WaterRegionPatchLabel highest_assigned_label = INVALID_WATER_REGION_PATCH;
-@@ -143,7 +197,11 @@ public:
+@@ -143,7 +198,11 @@ public:
  		/* Perform connected component labeling. This uses a flooding algorithm that expands until no
  		 * additional tiles can be added. Only tiles inside the water region are considered. */
  		for (const TileIndex start_tile : this->tile_area) {
@@ -1118,7 +1857,7 @@ index e725401..9eb5298 100644
  			tiles_to_check.clear();
  			tiles_to_check.push_back(start_tile);
  
-@@ -155,7 +213,11 @@ public:
+@@ -155,7 +214,11 @@ public:
  				const TrackdirBits valid_dirs = TrackBitsToTrackdirBits(GetWaterTracks(tile));
  				if (valid_dirs == TRACKDIR_BIT_NONE) continue;
  
@@ -1130,7 +1869,7 @@ index e725401..9eb5298 100644
  				if (tile_patch != INVALID_WATER_REGION_PATCH) continue;
  
  				tile_patch = current_label;
-@@ -172,10 +234,17 @@ public:
+@@ -172,10 +235,17 @@ public:
  							assert(DistanceManhattan(ft.new_tile, tile) == 1);
  							const auto side = DiagdirBetweenTiles(tile, ft.new_tile);
  							const int local_x_or_y = DiagDirToAxis(side) == AXIS_X ? TileY(tile) - TileY(this->tile_area.tile) : TileX(tile) - TileX(this->tile_area.tile);
@@ -1148,7 +1887,7 @@ index e725401..9eb5298 100644
  					}
  				}
  			}
-@@ -183,6 +252,10 @@ public:
+@@ -183,6 +253,10 @@ public:
  			if (increase_label) current_label++;
  		}
  
@@ -1159,7 +1898,7 @@ index e725401..9eb5298 100644
  		this->data.number_of_patches = highest_assigned_label.base();
  
  		if (this->NumberOfPatches() == 0 || (this->NumberOfPatches() == 1 &&
-@@ -191,6 +264,7 @@ public:
+@@ -191,6 +265,7 @@ public:
  			this->data.tile_patch_labels.reset();
  		}
  	}
@@ -1167,7 +1906,7 @@ index e725401..9eb5298 100644
  
  	void PrintDebugInfo()
  	{
-@@ -221,6 +295,12 @@ public:
+@@ -221,6 +296,12 @@ public:
  	}
  };
  
@@ -1180,7 +1919,7 @@ index e725401..9eb5298 100644
  TypedIndexContainer<std::vector<WaterRegionData>, WaterRegionIndex> _water_region_data;
  TypedIndexContainer<std::vector<bool>, WaterRegionIndex> _is_water_region_valid;
  
-@@ -243,11 +323,39 @@ static TileIndex GetEdgeTileCoordinate(int region_x, int region_y, DiagDirection
+@@ -243,11 +324,39 @@ static TileIndex GetEdgeTileCoordinate(int region_x, int region_y, DiagDirection
  	}
  }
  
@@ -1220,7 +1959,7 @@ index e725401..9eb5298 100644
  		water_region.ForceUpdate();
  		_is_water_region_valid[index] = true;
  	}
-@@ -318,6 +426,10 @@ void InvalidateWaterRegion(TileIndex tile)
+@@ -318,6 +427,10 @@ void InvalidateWaterRegion(TileIndex tile)
  		const WaterRegionIndex water_region_index = GetWaterRegionIndex(tile);
  		if (!_is_water_region_valid[water_region_index]) Debug(map, 3, "Invalidated water region ({},{})", GetWaterRegionX(tile), GetWaterRegionY(tile));
  		_is_water_region_valid[water_region_index] = false;
@@ -1231,7 +1970,7 @@ index e725401..9eb5298 100644
  	};
  
  	invalidate_region(tile);
-@@ -365,7 +477,13 @@ static inline void VisitAdjacentWaterRegionPatchNeighbours(const WaterRegionPatc
+@@ -365,7 +478,13 @@ static inline void VisitAdjacentWaterRegionPatchNeighbours(const WaterRegionPatc
  	}
  
  	/* Multiple water patches can be reached from the current patch. Check each edge tile individually. */
@@ -1245,7 +1984,7 @@ index e725401..9eb5298 100644
  	unique_labels.clear();
  	for (int x_or_y = 0; x_or_y < WATER_REGION_EDGE_LENGTH; ++x_or_y) {
  		if (!HasBit(traversability_bits, x_or_y)) continue;
-@@ -399,15 +517,81 @@ void VisitWaterRegionPatchNeighbours(const WaterRegionPatchDesc &water_region_pa
+@@ -399,15 +518,81 @@ void VisitWaterRegionPatchNeighbours(const WaterRegionPatchDesc &water_region_pa
  
  	/* Visit neighbouring water patches accessible via cross-region aqueducts */
  	if (current_region.HasCrossRegionAqueducts()) {
@@ -1327,7 +2066,7 @@ index e725401..9eb5298 100644
  /**
   * Allocates the appropriate amount of water regions for the current map size
   */
-@@ -420,6 +604,10 @@ void AllocateWaterRegions()
+@@ -420,6 +605,10 @@ void AllocateWaterRegions()
  
  	_is_water_region_valid.clear();
  	_is_water_region_valid.resize(number_of_regions, false);
@@ -1364,10 +2103,20 @@ index cbb39fb..0c3e5db 100644
  void VisitWaterRegionPatchNeighbours(const WaterRegionPatchDesc &water_region_patch, VisitWaterRegionPatchCallback &callback);
  
 diff --git a/src/pathfinder/yapf/yapf_base.hpp b/src/pathfinder/yapf/yapf_base.hpp
-index 3f257e2..32d6ddc 100644
+index 3f257e2..0392c91 100644
 --- a/src/pathfinder/yapf/yapf_base.hpp
 +++ b/src/pathfinder/yapf/yapf_base.hpp
-@@ -44,6 +44,11 @@
+@@ -14,6 +14,9 @@
+ #include "../../settings_type.h"
+ #include "../../misc/dbg_helpers.h"
+ #include "yapf_type.hpp"
++#ifdef WITH_SHADEREMU
++#include "../../gfx_func.h"
++#endif
+ 
+ /**
+  * CYapfBaseT - A-star type path finder base class.
+@@ -44,6 +47,11 @@
   *  declaration. There are some examples. For another example look at
   *  test_yapf.h (part or unittest project).
   */
@@ -1379,7 +2128,7 @@ index 3f257e2..32d6ddc 100644
  template <class Types>
  class CYapfBaseT {
  public:
-@@ -71,7 +76,11 @@ public:
+@@ -71,7 +79,11 @@ public:
  
  public:
  	/** default constructor */
@@ -1391,11 +2140,21 @@ index 3f257e2..32d6ddc 100644
  
  	/** default destructor */
  	~CYapfBaseT() {}
+@@ -105,6 +117,9 @@ public:
+ 
+ 		for (;;) {
+ 			this->num_steps++;
++#ifdef WITH_SHADEREMU
++			TickYieldPoint();
++#endif
+ 			Node *best_open_node = this->nodes.GetBestOpenNode();
+ 			if (best_open_node == nullptr) break;
+ 
 diff --git a/src/pathfinder/yapf/yapf_ship.cpp b/src/pathfinder/yapf/yapf_ship.cpp
-index b024edb..9c31e16 100644
+index b024edb..881689d 100644
 --- a/src/pathfinder/yapf/yapf_ship.cpp
 +++ b/src/pathfinder/yapf/yapf_ship.cpp
-@@ -16,8 +16,399 @@
+@@ -16,8 +16,400 @@
  #include "yapf_ship_regions.h"
  #include "../water_regions.h"
  
@@ -1404,6 +2163,7 @@ index b024edb..9c31e16 100644
 +#include "../../tunnelbridge_map.h"
 +#include "../../timer/timer_game_tick.h"
 +#include "../../openttd.h"
++#include "../../gfx_func.h"
 +#include "../../string_func.h"
 +#include <csetjmp>
 +#include <new>
@@ -1795,7 +2555,7 @@ index b024edb..9c31e16 100644
  constexpr int NUMBER_OR_WATER_REGIONS_LOOKAHEAD = 4;
  constexpr int MAX_SHIP_PF_NODES = (NUMBER_OR_WATER_REGIONS_LOOKAHEAD + 1) * WATER_REGION_NUMBER_OF_TILES * 4; // 4 possible exit dirs per tile.
  
-@@ -43,6 +434,17 @@ protected:
+@@ -43,6 +435,17 @@ protected:
  public:
  	void SetDestination(const Ship *v)
  	{
@@ -1813,7 +2573,7 @@ index b024edb..9c31e16 100644
  		if (v->current_order.IsType(OT_GOTO_STATION)) {
  			this->dest_station = v->current_order.GetDestination().ToStationID();
  			this->dest_tile = CalcClosestStationTile(this->dest_station, v->tile, StationType::Dock);
-@@ -83,6 +485,19 @@ public:
+@@ -83,6 +486,19 @@ public:
  			return GetWaterRegionPatchInfo(tile) == this->intermediate_dest_region_patch;
  		}
  
@@ -1833,7 +2593,7 @@ index b024edb..9c31e16 100644
  		if (this->dest_station != StationID::Invalid()) return IsDockingTile(tile) && IsShipDestinationTile(tile, this->dest_station);
  
  		return tile == this->dest_tile && ((this->dest_trackdirs & TrackdirToTrackdirBits(trackdir)) != TRACKDIR_BIT_NONE);
-@@ -134,6 +549,24 @@ public:
+@@ -134,6 +550,24 @@ public:
  	inline void PfFollowNode(Node &old_node)
  	{
  		TrackFollower follower{Yapf().GetVehicle()};
@@ -1858,7 +2618,7 @@ index b024edb..9c31e16 100644
  		if (follower.Follow(old_node.key.tile, old_node.key.td)) {
  			if (this->water_region_corridor.empty()
  					|| std::ranges::find(this->water_region_corridor, GetWaterRegionInfo(follower.new_tile)) != this->water_region_corridor.end()) {
-@@ -158,6 +591,9 @@ public:
+@@ -158,6 +592,9 @@ public:
  	/** Returns a random trackdir out of a set of trackdirs. */
  	static Trackdir GetRandomTrackdir(TrackdirBits trackdirs)
  	{
@@ -1868,7 +2628,7 @@ index b024edb..9c31e16 100644
  		const int strip_amount = RandomRange(CountBits(trackdirs));
  		for (int s = 0; s < strip_amount; ++s) RemoveFirstTrackdir(&trackdirs);
  		return FindFirstTrackdir(trackdirs);
-@@ -368,12 +804,20 @@ public:
+@@ -368,12 +805,20 @@ public:
  		/* Additional penalty for curves. */
  		c += this->CurveCost(n.parent->GetTrackdir(), n.GetTrackdir());
  
@@ -1889,7 +2649,7 @@ index b024edb..9c31e16 100644
  			c += count * 3 * YAPF_TILE_LENGTH;
  		}
  
-@@ -424,14 +868,417 @@ struct CYapfShip_TypesT {
+@@ -424,14 +869,419 @@ struct CYapfShip_TypesT {
  
  struct CYapfShip : CYapfT<CYapfShip_TypesT<CYapfShip>> {
  	explicit CYapfShip(int max_nodes) { this->max_search_nodes = max_nodes; }
@@ -2158,6 +2918,8 @@ index b024edb..9c31e16 100644
 +		AheadReap();
 +		WaterRegionsMakeAll(); /* (the regions made invalid since, on the workers: a ship's path then makes none) */
 +	}
++	/* (the tick on a worker of its own changes the map while the first core draws: no path is made ahead) */
++	if (TickOnWorker()) return;
 +	if (AheadMode() == 0 || _game_mode != GM_NORMAL || !AheadInit()) return;
 +	AheadReap();
 +	bool team_ended = false;
@@ -2453,6 +3215,30 @@ index c0aaec4..3e79686 100644
  
  public:
  	RandomAccessFile(std::string_view filename, Subdirectory subdir);
+diff --git a/src/roadstop.cpp b/src/roadstop.cpp
+index 7cbefe6..988fdac 100644
+--- a/src/roadstop.cpp
++++ b/src/roadstop.cpp
+@@ -15,6 +15,9 @@
+ #include "station_base.h"
+ #include "vehicle_func.h"
+ 
++#ifdef WITH_SHADEREMU
++#include "gfx_func.h"
++#endif
+ #include "safeguards.h"
+ 
+ /** The pool of roadstops. */
+@@ -26,6 +29,9 @@ INSTANTIATE_POOL_METHODS(RoadStop)
+  */
+ RoadStop::~RoadStop()
+ {
++#ifdef WITH_SHADEREMU
++	if (TickOnWorker()) TickExclusive();
++#endif
+ 	/* When we are the head we need to free the entries */
+ 	if (this->status.Test(RoadStopStatusFlag::BaseEntry)) {
+ 		delete this->entries;
 diff --git a/src/roadveh_cmd.cpp b/src/roadveh_cmd.cpp
 index 9070e07..8c35392 100644
 --- a/src/roadveh_cmd.cpp
@@ -2468,10 +3254,18 @@ index 9070e07..8c35392 100644
  	this->tick_counter++;
  
 diff --git a/src/saveload/saveload.cpp b/src/saveload/saveload.cpp
-index ebec3d2..14f25ca 100644
+index ebec3d2..c6e72ae 100644
 --- a/src/saveload/saveload.cpp
 +++ b/src/saveload/saveload.cpp
-@@ -2684,17 +2684,118 @@ struct ZlibSaveFilter : SaveFilter {
+@@ -70,6 +70,7 @@
+ 
+ #include "table/strings.h"
+ 
++#include "../gfx_func.h"
+ #include "../safeguards.h"
+ 
+ extern const SaveLoadVersion SAVEGAME_VERSION = (SaveLoadVersion)(SL_MAX_VERSION - 1); ///< Current savegame version of OpenTTD.
+@@ -2684,17 +2685,118 @@ struct ZlibSaveFilter : SaveFilter {
   */
  static const lzma_stream _lzma_init = LZMA_STREAM_INIT;
  
@@ -2590,7 +3384,7 @@ index ebec3d2..14f25ca 100644
  		/* Allow saves up to 256 MB uncompressed */
  		if (lzma_auto_decoder(&this->lzma, 1 << 28, 0) != LZMA_OK) SlError(STR_GAME_SAVELOAD_ERROR_BROKEN_INTERNAL_ERROR, "cannot initialize decompressor");
  	}
-@@ -2702,11 +2803,85 @@ struct LZMALoadFilter : LoadFilter {
+@@ -2702,11 +2804,85 @@ struct LZMALoadFilter : LoadFilter {
  	/** Clean everything up. */
  	~LZMALoadFilter()
  	{
@@ -2676,7 +3470,7 @@ index ebec3d2..14f25ca 100644
  		this->lzma.next_out  = buf;
  		this->lzma.avail_out = size;
  
-@@ -3162,6 +3337,10 @@ static SaveOrLoadResult DoLoad(std::shared_ptr<LoadFilter> reader, bool load_che
+@@ -3162,6 +3338,10 @@ static SaveOrLoadResult DoLoad(std::shared_ptr<LoadFilter> reader, bool load_che
  	_next_offs = 0;
  
  	if (!load_check) {
@@ -2687,6 +3481,16 @@ index ebec3d2..14f25ca 100644
  		ResetSaveloadData();
  
  		/* Old maps were hardcoded to 256x256 and thus did not contain
+@@ -3257,6 +3437,9 @@ SaveOrLoadResult LoadWithFilter(std::shared_ptr<LoadFilter> reader)
+  */
+ SaveOrLoadResult SaveOrLoad(std::string_view filename, SaveLoadOperation fop, DetailedFileType dft, Subdirectory sb, bool threaded)
+ {
++#ifdef WITH_SHADEREMU
++	TickFinish(); /* (a save from the console is made between ticks) */
++#endif
+ 	/* An instance of saving is already active, so don't go saving again */
+ 	if (_sl.saveinprogress && fop == SLO_SAVE && dft == DFT_GAME_FILE && threaded) {
+ 		/* if not an autosave, but a user action, show error message */
 diff --git a/src/ship_cmd.cpp b/src/ship_cmd.cpp
 index 7b4446d..0efa64e 100644
 --- a/src/ship_cmd.cpp
@@ -2701,21 +3505,86 @@ index 7b4446d..0efa64e 100644
  
  	if (!this->vehstatus.Test(VehState::Stopped)) this->running_ticks++;
  
+diff --git a/src/signs.cpp b/src/signs.cpp
+index 41cfd2e..f33c002 100644
+--- a/src/signs.cpp
++++ b/src/signs.cpp
+@@ -18,6 +18,9 @@
+ 
+ #include "table/strings.h"
+ 
++#ifdef WITH_SHADEREMU
++#include "gfx_func.h"
++#endif
+ #include "safeguards.h"
+ 
+ /** Initialize the sign-pool */
+@@ -27,6 +30,9 @@ INSTANTIATE_POOL_METHODS(Sign)
+ /** Destroy the sign */
+ Sign::~Sign()
+ {
++#ifdef WITH_SHADEREMU
++	if (TickOnWorker()) TickExclusive();
++#endif
+ 	if (CleaningPool()) return;
+ 
+ 	DeleteRenameSignWindow(this->index);
+@@ -37,6 +43,9 @@ Sign::~Sign()
+  */
+ void Sign::UpdateVirtCoord()
+ {
++#ifdef WITH_SHADEREMU
++	if (TickOnWorker()) { SignID id = this->index; TickDefer([id] { if (Sign *si = Sign::GetIfValid(id); si != nullptr) si->UpdateVirtCoord(); }); return; }
++#endif
+ 	Point pt = RemapCoords(this->x, this->y, this->z);
+ 
+ 	if (this->sign.kdtree_valid) _viewport_sign_kdtree.Remove(ViewportSignKdtreeItem::MakeSign(this->index));
 diff --git a/src/sound.cpp b/src/sound.cpp
-index 31a7ede..49e1914 100644
+index 31a7ede..a8ca13d 100644
 --- a/src/sound.cpp
 +++ b/src/sound.cpp
-@@ -236,6 +236,9 @@ void SndPlayTileFx(SoundID sound, TileIndex tile)
+@@ -20,6 +20,9 @@
+ #include "base_media_func.h"
+ #include "base_media_sounds.h"
+ 
++#ifdef WITH_SHADEREMU
++#include "gfx_func.h"
++#endif
+ #include "safeguards.h"
+ 
+ static std::array<SoundEntry, ORIGINAL_SAMPLE_COUNT> _original_sounds;
+@@ -224,6 +227,9 @@ static void SndPlayScreenCoordFx(SoundID sound, int left, int right, int top, in
+ 
+ void SndPlayTileFx(SoundID sound, TileIndex tile)
+ {
++#ifdef WITH_SHADEREMU
++	TICK_DEFER(SndPlayTileFx(sound, tile));
++#endif
+ 	/* emits sound from center of the tile */
+ 	int x = std::min(Map::MaxX() - 1, TileX(tile)) * TILE_SIZE + TILE_SIZE / 2;
+ 	int y = std::min(Map::MaxY() - 1, TileY(tile)) * TILE_SIZE - TILE_SIZE / 2;
+@@ -236,6 +242,10 @@ void SndPlayTileFx(SoundID sound, TileIndex tile)
  
  void SndPlayVehicleFx(SoundID sound, const Vehicle *v)
  {
 +#ifdef WITH_SHADEREMU
 +	const_cast<Vehicle *>(v)->UpdateViewportPending();
++	TICK_DEFER(SndPlayVehicleFx(sound, v));
 +#endif
  	SndPlayScreenCoordFx(sound,
  		v->coord.left, v->coord.right,
  		v->coord.top, v->coord.bottom
-@@ -302,3 +305,6 @@ template <>
+@@ -244,6 +254,9 @@ void SndPlayVehicleFx(SoundID sound, const Vehicle *v)
+ 
+ void SndPlayFx(SoundID sound)
+ {
++#ifdef WITH_SHADEREMU
++	TICK_DEFER(SndPlayFx(sound));
++#endif
+ 	StartSound(sound, 0.5, UINT8_MAX);
+ }
+ 
+@@ -302,3 +315,6 @@ template <>
  }
  
  template class BaseMedia<SoundsSet>;
@@ -2737,7 +3606,7 @@ index 0abd7c0..675f9c3 100644
 +    CONDITION SHADEREMU
 +)
 diff --git a/src/spritecache.cpp b/src/spritecache.cpp
-index f26695a..bee5c79 100644
+index f26695a..77ddf8b 100644
 --- a/src/spritecache.cpp
 +++ b/src/spritecache.cpp
 @@ -18,11 +18,16 @@
@@ -2916,11 +3785,22 @@ index f26695a..bee5c79 100644
  	_grf_sprite_offsets.clear();
  
  	if (file.GetContainerVersion() >= 2) {
-@@ -854,6 +977,23 @@ static void *HandleInvalidSpriteRequest(SpriteID sprite, SpriteType requested, S
+@@ -703,6 +826,9 @@ void DupSprite(SpriteID old_spr, SpriteID new_spr)
+  */
+ static void DeleteEntriesFromSpriteCache(size_t to_remove)
+ {
++#ifdef WITH_SHADEREMU
++	VpFlushFinish();
++#endif
+ 	const size_t initial_in_use = _spritecache_bytes_used;
+ 
+ 	struct SpriteInfo {
+@@ -854,6 +980,24 @@ static void *HandleInvalidSpriteRequest(SpriteID sprite, SpriteType requested, S
   */
  void *GetRawSprite(SpriteID sprite, SpriteType type, SpriteAllocator *allocator, SpriteEncoder *encoder)
  {
 +#ifdef WITH_SHADEREMU
++	TICK_TRAP();
 +	if (VpCore() != 0) {
 +		/* (a sprite not loaded, or anything but a plain read, is the first core's: it draws the part again) */
 +		if (allocator == nullptr && encoder == nullptr && SpriteExists(sprite)) {
@@ -2940,7 +3820,7 @@ index f26695a..bee5c79 100644
  	assert(type != SpriteType::MapGen || IsMapgenSpriteID(sprite));
  	assert(type < SpriteType::Invalid);
  
-@@ -894,8 +1034,168 @@ void *GetRawSprite(SpriteID sprite, SpriteType type, SpriteAllocator *allocator,
+@@ -894,8 +1038,171 @@ void *GetRawSprite(SpriteID sprite, SpriteType type, SpriteAllocator *allocator,
  	}
  }
  
@@ -3100,25 +3980,40 @@ index f26695a..bee5c79 100644
 +#ifdef WITH_SHADEREMU
 +uint32_t _sprite_bounds_gen = 1;
 +#endif
++void VehicleSpriteSizesForget();
 +
  void GfxInitSpriteMem()
  {
 +#ifdef WITH_SHADEREMU
 +	_sprite_bounds_gen++;
++	VpFlushFinish();
++	VehicleSpriteSizesForget();
 +#endif
  	/* Reset the spritecache 'pool' */
  	_spritecache.clear();
  	_spritecache.shrink_to_fit();
-@@ -910,6 +1210,9 @@ void GfxInitSpriteMem()
+@@ -910,6 +1217,11 @@ void GfxInitSpriteMem()
   */
  void GfxClearSpriteCache()
  {
 +#ifdef WITH_SHADEREMU
 +	_sprite_bounds_gen++;
++	VpFlushFinish();
++	VehicleSpriteSizesForget();
 +#endif
  	/* Clear sprite ptr for all cached items */
  	for (SpriteCache &sc : _spritecache) {
  		if (sc.ptr != nullptr) sc.ClearSpriteData();
+@@ -924,6 +1236,9 @@ void GfxClearSpriteCache()
+  */
+ void GfxClearFontSpriteCache()
+ {
++#ifdef WITH_SHADEREMU
++	VpFlushFinish();
++#endif
+ 	/* Clear sprite ptr for all cached font items */
+ 	for (SpriteCache &sc : _spritecache) {
+ 		if (sc.type == SpriteType::Font && sc.ptr != nullptr) sc.ClearSpriteData();
 diff --git a/src/spriteloader/grf.cpp b/src/spriteloader/grf.cpp
 index a7ddcda..ee0b2de 100644
 --- a/src/spriteloader/grf.cpp
@@ -3472,11 +4367,65 @@ index c92d143..a069cfc 100644
  	private:
  		/** Allocated memory to pass sprite data around */
  		static SpriteCollMap<ReusableBuffer<SpriteLoader::CommonPixel>> buffer;
+diff --git a/src/station.cpp b/src/station.cpp
+index cf99043..89e156a 100644
+--- a/src/station.cpp
++++ b/src/station.cpp
+@@ -30,6 +30,9 @@
+ 
+ #include "table/strings.h"
+ 
++#ifdef WITH_SHADEREMU
++#include "gfx_func.h"
++#endif
+ #include "safeguards.h"
+ 
+ /** The pool of stations. */
+@@ -51,6 +54,9 @@ void RebuildStationKdtree()
+ 
+ BaseStation::~BaseStation()
+ {
++#ifdef WITH_SHADEREMU
++	if (TickOnWorker()) TickExclusive();
++#endif
+ 	if (CleaningPool()) return;
+ 
+ 	CloseWindowById(WC_TRAINS_LIST,   VehicleListIdentifier(VL_STATION_LIST, VEH_TRAIN,    this->owner, this->index).ToWindowNumber());
+@@ -83,6 +89,9 @@ Station::Station(TileIndex tile) :
+  */
+ Station::~Station()
+ {
++#ifdef WITH_SHADEREMU
++	if (TickOnWorker()) TickExclusive();
++#endif
+ 	if (CleaningPool()) {
+ 		for (GoodsEntry &ge : this->goods) {
+ 			if (!ge.HasData()) continue;
 diff --git a/src/station_cmd.cpp b/src/station_cmd.cpp
-index d754b2f..f7ae6f6 100644
+index d754b2f..993e323 100644
 --- a/src/station_cmd.cpp
 +++ b/src/station_cmd.cpp
-@@ -4343,22 +4343,25 @@ void OnTick_Station()
+@@ -79,6 +79,9 @@
+ 
+ #include <bitset>
+ 
++#ifdef WITH_SHADEREMU
++#include "gfx_func.h"
++#endif
+ #include "safeguards.h"
+ 
+ /**
+@@ -431,6 +434,9 @@ TileArea Station::GetTileArea(StationType type) const
+  */
+ void Station::UpdateVirtCoord()
+ {
++#ifdef WITH_SHADEREMU
++	if (TickOnWorker()) { StationID id = this->index; TickDefer([id] { if (Station *st = Station::GetIfValid(id); st != nullptr) st->UpdateVirtCoord(); }); return; }
++#endif
+ 	Point pt = RemapCoords2(TileX(this->xy) * TILE_SIZE, TileY(this->xy) * TILE_SIZE);
+ 
+ 	pt.y -= 32 * ZOOM_BASE;
+@@ -4343,22 +4349,25 @@ void OnTick_Station()
  {
  	if (_game_mode == GM_EDITOR) return;
  
@@ -3505,6 +4454,30 @@ index d754b2f..f7ae6f6 100644
  			TriggerStationAnimation(st, st->xy, StationAnimationTrigger::AcceptanceTick);
  			TriggerRoadStopAnimation(st, st->xy, StationAnimationTrigger::AcceptanceTick);
  			if (Station::IsExpected(st)) TriggerAirportAnimation(Station::From(st), AirportAnimationTrigger::AcceptanceTick);
+diff --git a/src/strings.cpp b/src/strings.cpp
+index 955b5bd..cfb71f1 100644
+--- a/src/strings.cpp
++++ b/src/strings.cpp
+@@ -47,6 +47,9 @@
+ 
+ #include "strings_internal.h"
+ 
++#ifdef WITH_SHADEREMU
++#include "gfx_func.h"
++#endif
+ #include "safeguards.h"
+ 
+ std::string _config_language_file;                ///< The file (name) stored in the configuration.
+@@ -335,6 +338,9 @@ std::string_view GetStringPtr(StringID string)
+  */
+ void GetStringWithArgs(StringBuilder &builder, StringID string, StringParameters &args, uint case_index, bool game_script)
+ {
++#ifdef WITH_SHADEREMU
++	TICK_TRAP();
++#endif
+ 	if (string == 0) {
+ 		GetStringWithArgs(builder, STR_UNDEFINED, args);
+ 		return;
 diff --git a/src/table/settings/gui_settings.ini b/src/table/settings/gui_settings.ini
 index 6989729..db7cd19 100644
 --- a/src/table/settings/gui_settings.ini
@@ -3657,20 +4630,41 @@ index 5c5012c..4ad3af1 100644
  max      = MAX_MAP_SIZE_BITS
  cat      = SC_BASIC
 diff --git a/src/texteff.cpp b/src/texteff.cpp
-index 18c93ab..6c0a7b4 100644
+index 18c93ab..2e5fc97 100644
 --- a/src/texteff.cpp
 +++ b/src/texteff.cpp
-@@ -24,6 +24,9 @@ struct TextEffect : public ViewportSign {
+@@ -17,6 +17,9 @@
+ #include "timer/timer.h"
+ #include "timer/timer_window.h"
+ 
++#ifdef WITH_SHADEREMU
++#include "gfx_func.h"
++#endif
+ #include "safeguards.h"
+ 
+ /** Container for all information about a text effect */
+@@ -24,6 +27,10 @@ struct TextEffect : public ViewportSign {
  	TextEffectMode mode; ///< Type of text effect.
  	uint8_t duration; ///< How long the text effect should stay, in ticks (applies only when mode == TE_RISING)
  	EncodedString msg; ///< Encoded message for text effect.
 +#ifdef WITH_SHADEREMU
 +	bool stale = false; ///< msg changed while no viewport could show it: its place and width are made when one can
++	std::string decoded; ///< msg as it was last placed (each part drawn formatted it again)
 +#endif
  
  	/** Reset the text effect */
  	void Reset()
-@@ -56,9 +59,21 @@ TextEffectID AddTextEffect(EncodedString &&msg, int center, int y, uint8_t durat
+@@ -41,6 +48,9 @@ static std::vector<TextEffect> _text_effects; ///< Text effects are stored there
+ /* Text Effects */
+ TextEffectID AddTextEffect(EncodedString &&msg, int center, int y, uint8_t duration, TextEffectMode mode)
+ {
++#ifdef WITH_SHADEREMU
++	TICK_TRAP();
++#endif
+ 	if (_game_mode == GM_MENU) return INVALID_TE_ID;
+ 
+ 	auto it = std::ranges::find_if(_text_effects, [](const TextEffect &te) { return !te.IsValid(); });
+@@ -56,35 +66,86 @@ TextEffectID AddTextEffect(EncodedString &&msg, int center, int y, uint8_t durat
  	te.msg = std::move(msg);
  	te.duration = duration;
  	te.mode = mode;
@@ -3688,11 +4682,22 @@ index 18c93ab..6c0a7b4 100644
 +	extern bool ViewportSignSeen(const ViewportSign &sign);
 +	te.stale = !ViewportSignSeen(te);
 +	if (te.stale) return static_cast<TextEffectID>(it - std::begin(_text_effects));
-+#endif
++	te.decoded = te.msg.GetDecodedString();
++	te.UpdatePosition(center, y, te.decoded);
++#else
  	te.UpdatePosition(center, y, te.msg.GetDecodedString());
++#endif
  
  	return static_cast<TextEffectID>(it - std::begin(_text_effects));
-@@ -71,14 +86,37 @@ void UpdateTextEffect(TextEffectID te_id, EncodedString &&msg)
+ }
+ 
+ void UpdateTextEffect(TextEffectID te_id, EncodedString &&msg)
+ {
++#ifdef WITH_SHADEREMU
++	TICK_TRAP();
++#endif
+ 	/* Update details */
+ 	TextEffect &te = _text_effects[te_id];
  	if (msg == te.msg) return;
  	te.msg = std::move(msg);
  
@@ -3702,8 +4707,11 @@ index 18c93ab..6c0a7b4 100644
 +	extern bool ViewportSignSeen(const ViewportSign &sign);
 +	te.stale = !ViewportSignSeen(te);
 +	if (te.stale) return;
-+#endif
++	te.decoded = te.msg.GetDecodedString();
++	te.UpdatePosition(te.center, te.top, te.decoded);
++#else
  	te.UpdatePosition(te.center, te.top, te.msg.GetDecodedString());
++#endif
  }
  
 +#ifdef WITH_SHADEREMU
@@ -3714,7 +4722,8 @@ index 18c93ab..6c0a7b4 100644
 +	for (TextEffect &te : _text_effects) {
 +		if (!te.stale || !te.IsValid() || !ViewportSignSeen(te)) continue;
 +		te.stale = false;
-+		te.UpdatePosition(te.center, te.top, te.msg.GetDecodedString());
++		te.decoded = te.msg.GetDecodedString();
++		te.UpdatePosition(te.center, te.top, te.decoded);
 +	}
 +}
 +#endif
@@ -3726,8 +4735,32 @@ index 18c93ab..6c0a7b4 100644
  
 +#ifdef WITH_SHADEREMU
 +		te.stale = false;
-+#endif
++		te.decoded = te.msg.GetDecodedString();
++		te.UpdatePosition(te.center, te.top, te.decoded);
++#else
  		te.UpdatePosition(te.center, te.top, te.msg.GetDecodedString());
++#endif
+ 	}
+ }
+ 
+ void RemoveTextEffect(TextEffectID te_id)
+ {
++#ifdef WITH_SHADEREMU
++	TICK_TRAP();
++#endif
+ 	_text_effects[te_id].Reset();
+ }
+ 
+@@ -130,7 +191,11 @@ void DrawTextEffects(DrawPixelInfo *dpi)
+ 			std::string *str = ViewportAddString(dpi, &te, flags, INVALID_COLOUR);
+ 			if (str == nullptr) continue;
+ 
++#ifdef WITH_SHADEREMU
++			*str = te.decoded;
++#else
+ 			*str = te.msg.GetDecodedString();
++#endif
+ 		}
  	}
  }
 diff --git a/src/thread.h b/src/thread.h
@@ -3745,11 +4778,55 @@ index b33a953..d84a33e 100644
  	try {
  		static std::mutex thread_startup_mutex;
  		std::lock_guard<std::mutex> lock(thread_startup_mutex);
+diff --git a/src/town_cmd.cpp b/src/town_cmd.cpp
+index ae00db2..0b114cc 100644
+--- a/src/town_cmd.cpp
++++ b/src/town_cmd.cpp
+@@ -66,6 +66,9 @@
+ #include "table/strings.h"
+ #include "table/town_land.h"
+ 
++#ifdef WITH_SHADEREMU
++#include "gfx_func.h"
++#endif
+ #include "safeguards.h"
+ 
+ /* Initialize the town-pool */
+@@ -114,6 +117,9 @@ static bool TestTownOwnsBridge(TileIndex tile, const Town *t)
+ 
+ Town::~Town()
+ {
++#ifdef WITH_SHADEREMU
++	if (TickOnWorker()) TickExclusive();
++#endif
+ 	if (CleaningPool()) return;
+ 
+ 	/* Delete town authority window
+@@ -397,6 +403,9 @@ static bool IsCloseToTown(TileIndex tile, uint dist)
+ /** Resize the sign (label) of the town after it changes population. */
+ void Town::UpdateVirtCoord()
+ {
++#ifdef WITH_SHADEREMU
++	if (TickOnWorker()) { TownID id = this->index; TickDefer([id] { if (Town *t = Town::GetIfValid(id); t != nullptr) t->UpdateVirtCoord(); }); return; }
++#endif
+ 	Point pt = RemapCoords2(TileX(this->xy) * TILE_SIZE, TileY(this->xy) * TILE_SIZE);
+ 
+ 	if (this->cache.sign.kdtree_valid) _viewport_sign_kdtree.Remove(ViewportSignKdtreeItem::MakeTown(this->index));
 diff --git a/src/train_cmd.cpp b/src/train_cmd.cpp
-index 91a1111..9e2ba5f 100644
+index 91a1111..9d12b4f 100644
 --- a/src/train_cmd.cpp
 +++ b/src/train_cmd.cpp
-@@ -4117,7 +4117,9 @@ bool Train::Tick()
+@@ -4059,6 +4059,9 @@ static bool TrainLocoHandler(Train *v, bool mode)
+ 
+ 			/* No more moving this tick */
+ 			if (j < adv_spd || v->cur_speed == 0) break;
++#ifdef WITH_SHADEREMU
++			TickYieldPoint(); /* (the whole train has moved a step) */
++#endif
+ 
+ 			OrderType order_type = v->current_order.GetType();
+ 			/* Do not skip waypoints (incl. 'via' stations) when passing through at full speed. */
+@@ -4117,13 +4120,18 @@ bool Train::Tick()
  	this->tick_counter++;
  
  	if (this->IsFrontEngine()) {
@@ -3759,11 +4836,20 @@ index 91a1111..9e2ba5f 100644
  
  		if (!this->vehstatus.Test(VehState::Stopped) || this->cur_speed > 0) this->running_ticks++;
  
+ 		this->current_order_time++;
+ 
+ 		if (!TrainLocoHandler(this, false)) return false;
++#ifdef WITH_SHADEREMU
++		TickYieldPoint();
++#endif
+ 
+ 		return TrainLocoHandler(this, true);
+ 	} else if (this->IsFreeWagon() && this->vehstatus.Test(VehState::Crashed)) {
 diff --git a/src/vehicle.cpp b/src/vehicle.cpp
-index 91588a6..51a9f7f 100644
+index 91588a6..c9a7f40 100644
 --- a/src/vehicle.cpp
 +++ b/src/vehicle.cpp
-@@ -60,9 +60,18 @@
+@@ -60,9 +60,19 @@
  #include "timer/timer_game_calendar.h"
  #include "timer/timer_game_economy.h"
  #include "timer/timer_game_tick.h"
@@ -3777,12 +4863,230 @@ index 91588a6..51a9f7f 100644
  
 +#ifdef WITH_SHADEREMU
 +#include <mcwx.h>
++#include "gfx_func.h"
 +#endif
 +
  #include "safeguards.h"
  
  /* Number of bits in the hash to use from each vehicle coord */
-@@ -867,6 +876,9 @@ Vehicle::~Vehicle()
+@@ -107,6 +117,67 @@ VehiclePool _vehicle_pool("Vehicle");
+ INSTANTIATE_POOL_METHODS(Vehicle)
+ 
+ 
++#ifdef WITH_SHADEREMU
++/* The sizes of the sprites vehicles were drawn with, kept by the first core (no sprite is looked up for them again) */
++struct VbDims { uint32_t key; int16_t x_offs, y_offs; uint16_t width, height; };
++static std::vector<VbDims> _vb_dims;
++static uint32_t _vb_dims_used;
++bool TwHeld();
++bool TwActive();
++
++void VehicleSpriteSizesForget()
++{
++	_vb_dims.clear();
++	_vb_dims_used = 0;
++}
++
++/** A sprite's sizes as GetSprite has them: from the copy on the first core, the copy made where it lacks them. */
++static VbDims VbSprite(SpriteID sprite)
++{
++	if (VpCore() != 0 || TickOnWorker()) {
++		const Sprite *spr = GetSprite(sprite, SpriteType::Normal);
++		return { 0, spr->x_offs, spr->y_offs, spr->width, spr->height };
++	}
++	if (_vb_dims.empty()) _vb_dims.resize(8192, VbDims{});
++	const uint32_t key = sprite + 1, mask = static_cast<uint32_t>(_vb_dims.size()) - 1;
++	for (uint32_t i = (key * 2654435761u) >> 19 & mask;; i = (i + 1) & mask) {
++		VbDims &d = _vb_dims[i];
++		if (d.key == key) return d;
++		if (d.key != 0) continue;
++		const Sprite *spr = GetSprite(sprite, SpriteType::Normal);
++		VbDims made{ key, spr->x_offs, spr->y_offs, spr->width, spr->height };
++		/* (kept only while the tick waits: it reads them) */
++		if (_vb_dims_used < _vb_dims.size() / 2 && (!TwActive() || TwHeld())) d = made, _vb_dims_used++;
++		return made;
++	}
++}
++
++/** The bounds of a sequence from the sizes kept, on any core; false if one is not kept. */
++static bool VbBoundsKept(const VehicleSpriteSeq &seq, Rect *bounds)
++{
++	bounds->left = bounds->top = bounds->right = bounds->bottom = 0;
++	if (_vb_dims.empty()) return false;
++	const uint32_t mask = static_cast<uint32_t>(_vb_dims.size()) - 1;
++	for (uint i = 0; i < seq.count; ++i) {
++		const uint32_t key = seq.seq[i].sprite + 1;
++		const VbDims *spr = nullptr;
++		for (uint32_t j = (key * 2654435761u) >> 19 & mask;; j = (j + 1) & mask) {
++			const VbDims &d = _vb_dims[j];
++			if (d.key == key) { spr = &d; break; }
++			if (d.key == 0) return false;
++		}
++		int right = spr->width + spr->x_offs - 1, bottom = spr->height + spr->y_offs - 1;
++		if (i == 0) {
++			bounds->left = spr->x_offs, bounds->top = spr->y_offs, bounds->right = right, bounds->bottom = bottom;
++		} else {
++			bounds->left = std::min<int>(bounds->left, spr->x_offs), bounds->top = std::min<int>(bounds->top, spr->y_offs);
++			bounds->right = std::max(bounds->right, right), bounds->bottom = std::max(bounds->bottom, bottom);
++		}
++	}
++	return true;
++}
++#endif
++
+ /**
+  * Determine shared bounds of all sprites.
+  * @param[out] bounds Shared bounds.
+@@ -115,7 +186,12 @@ void VehicleSpriteSeq::GetBounds(Rect *bounds) const
+ {
+ 	bounds->left = bounds->top = bounds->right = bounds->bottom = 0;
+ 	for (uint i = 0; i < this->count; ++i) {
++#ifdef WITH_SHADEREMU
++		const VbDims dims = VbSprite(this->seq[i].sprite);
++		const VbDims *spr = &dims;
++#else
+ 		const Sprite *spr = GetSprite(this->seq[i].sprite, SpriteType::Normal);
++#endif
+ 		if (i == 0) {
+ 			bounds->left = spr->x_offs;
+ 			bounds->top  = spr->y_offs;
+@@ -656,8 +732,135 @@ void ResetVehicleHash()
+ void ResetVehicleColourMap()
+ {
+ 	for (Vehicle *v : Vehicle::Iterate()) { v->colourmap = PAL_NONE; }
++#ifdef WITH_SHADEREMU
++	VehiclesChangedAll();
++#endif
++}
++
++#ifdef WITH_SHADEREMU
++/* What the viewports draw of a vehicle is its copy (Vehicle::drawn), made anew at the first core's
++ * sync for every vehicle listed since (docs/games/openttd.md, "The tick on a worker"). */
++static std::vector<VehicleID> _veh_changed;
++static std::vector<Vehicle *> _veh_dead; ///< deleted by the tick on its worker: still in the viewports' hash
++static uint32_t _veh_epoch = 1;
++static bool _veh_all;
++
++void VehicleChanged(const Vehicle *v)
++{
++	if (v->drawn_epoch == _veh_epoch) return;
++	v->drawn_epoch = _veh_epoch;
++	_veh_changed.push_back(v->index);
+ }
+ 
++void VehiclesChangedAll() { _veh_all = true; }
++
++static void VehicleDrawMake(const Vehicle *v, Vehicle::Drawn &d)
++{
++	d.seq.count = v->sprite_cache.sprite_seq.count;
++	std::copy_n(v->sprite_cache.sprite_seq.seq.begin(), d.seq.count, d.seq.seq.begin());
++	d.bounds = v->bounds;
++	d.x = v->x_pos, d.y = v->y_pos, d.z = v->z_pos;
++	d.hidden = v->vehstatus.Test(VehState::Hidden);
++	d.shadow = v->vehstatus.Test(VehState::Shadow);
++	d.crashed = v->vehstatus.Test(VehState::Crashed);
++	d.pal = PAL_NONE;
++	if (v->vehstatus.Test(VehState::DefaultPalette)) d.pal = d.crashed ? PALETTE_CRASH : GetVehiclePalette(v);
++	d.transparency = 0xff;
++	if (v->type == VEH_EFFECT) {
++		TransparencyOption to = EffectVehicle::From(v)->GetTransparencyOption();
++		if (to != TO_INVALID) d.transparency = static_cast<uint8_t>(to);
++	}
++	d.revalidate = v->sprite_cache.revalidate_before_draw;
++}
++
++static void VehicleDrawRefresh(Vehicle *v) { VehicleDrawMake(v, v->drawn); }
++
++/** A copy, but for the sequence's sprites past its count (a whole copy is 84 instructions). */
++static inline void DrawnCopy(Vehicle::Drawn &d, const Vehicle::Drawn &s)
++{
++	d.seq.count = s.seq.count;
++	std::copy_n(s.seq.seq.begin(), s.seq.count, d.seq.seq.begin());
++	d.bounds = s.bounds;
++	d.x = s.x, d.y = s.y, d.z = s.z;
++	d.pal = s.pal;
++	d.transparency = s.transparency;
++	d.hidden = s.hidden, d.shadow = s.shadow, d.crashed = s.crashed, d.revalidate = s.revalidate;
++}
++
++uint32_t _veh_synced, _veh_ahead; ///< vehicles made anew at syncs, and of them from what the tick made (OPENTTD_PICTURE_LOG)
++
++static void VehicleViewportNow(Vehicle *v, bool dirty);
++
++/** Whether a vehicle is as it was when the tick made its copy and rectangle ahead. */
++static bool VehicleAsMade(const Vehicle *v)
++{
++	const Vehicle::Made &m = v->tw_made;
++	const Vehicle::Drawn &d = m.drawn;
++	const SpriteBounds &b = v->bounds;
++	return m.ok && v->x_pos == d.x && v->y_pos == d.y && v->z_pos == d.z && v->vehstatus == m.status && v->colourmap == m.colourmap &&
++			v->sprite_cache.revalidate_before_draw == d.revalidate && v->sprite_cache.sprite_seq == d.seq &&
++			b.origin.x == d.bounds.origin.x && b.origin.y == d.bounds.origin.y && b.origin.z == d.bounds.origin.z &&
++			b.extent.x == d.bounds.extent.x && b.extent.y == d.bounds.extent.y && b.extent.z == d.bounds.extent.z &&
++			b.offset.x == d.bounds.offset.x && b.offset.y == d.bounds.offset.y && b.offset.z == d.bounds.offset.z;
++}
++
++/** On the tick's worker: what the next sync makes of the vehicle as it is now (VehicleAsMade). */
++static void VehicleMakeAhead(Vehicle *v)
++{
++	Vehicle::Made &m = v->tw_made;
++	m.ok = false;
++	extern bool _draw_bounding_boxes;
++	if (_draw_bounding_boxes || v->vehstatus.Test(VehState::DefaultPalette) && v->colourmap == PAL_NONE) return;
++	Rect r;
++	if (!VbBoundsKept(v->sprite_cache.sprite_seq, &r)) return;
++	Point pt = RemapCoords(v->x_pos + v->bounds.origin.x + v->bounds.offset.x, v->y_pos + v->bounds.origin.y + v->bounds.offset.y, v->z_pos);
++	m.coord = { r.left + pt.x, r.top + pt.y, r.right + pt.x + 2 * ZOOM_BASE, r.bottom + pt.y + 2 * ZOOM_BASE };
++	VehicleDrawMake(v, m.drawn);
++	m.colourmap = v->colourmap;
++	m.status = v->vehstatus;
++	m.ok = true;
++}
++
++static void VehicleViewportNow(Vehicle *v, bool dirty);
++
++/** The first core, the tick waiting or none on a worker: the viewports made as the vehicles listed are now. */
++void VehiclesSync(bool viewports)
++{
++	for (Vehicle *v : _veh_dead) {
++		if (!v->vehstatus.Test(VehState::Hidden)) ::MarkAllViewportsDirty(v->coord.left, v->coord.top, v->coord.right, v->coord.bottom);
++		UpdateVehicleViewportHash(v, INVALID_COORD, 0, v->sprite_cache.old_coord.left, v->sprite_cache.old_coord.top);
++		free(v);
++	}
++	_veh_dead.clear();
++	_veh_epoch++;
++	if (_veh_all) {
++		_veh_all = false;
++		_veh_changed.clear();
++		for (Vehicle *v : Vehicle::Iterate()) {
++			if (viewports) VehicleViewportNow(v, true);
++			VehicleDrawRefresh(v);
++		}
++		return;
++	}
++	for (VehicleID id : _veh_changed) {
++		Vehicle *v = Vehicle::GetIfValid(id);
++		if (v == nullptr) continue;
++		_veh_synced++;
++		if (viewports && VehicleAsMade(v)) {
++			_veh_ahead++;
++			v->tw_made.ok = false;
++			v->Vehicle::UpdateViewportNow(true, &v->tw_made.coord);
++			DrawnCopy(v->drawn, v->tw_made.drawn);
++			continue;
++		}
++		v->tw_made.ok = false;
++		if (viewports) VehicleViewportNow(v, true);
++		VehicleDrawRefresh(v);
++	}
++	_veh_changed.clear();
++}
++#endif
++
+ /**
+  * List of vehicles that should check for autoreplace this tick.
+  * Mapping of vehicle -> leave depot immediately after autoreplace.
+@@ -867,6 +1070,9 @@ Vehicle::~Vehicle()
  		return;
  	}
  
@@ -3792,18 +5096,57 @@ index 91588a6..51a9f7f 100644
  	/* sometimes, eg. for disaster vehicles, when company bankrupts, when removing crashed/flooded vehicles,
  	 * it may happen that vehicle chain is deleted when visible */
  	if (!this->vehstatus.Test(VehState::Hidden)) this->MarkAllViewportsDirty();
-@@ -966,6 +978,10 @@ void CallVehicleTicks()
+@@ -877,6 +1083,19 @@ Vehicle::~Vehicle()
+ 	delete v;
+ 
+ 	UpdateVehicleTileHash(this, true);
++#ifdef WITH_SHADEREMU
++	if (TickOnWorker()) {
++		/* (out of the viewports' hash, and freed, by the first core: a worker may be drawing it) */
++		_veh_dead.push_back(this);
++		_tw_dying = this;
++		if (this->type != VEH_EFFECT) {
++			VehicleID id = this->index;
++			GrfSpecFeature feature = GetGrfSpecFeature(this->type);
++			TickDefer([=] { DeleteVehicleNews(id); DeleteNewGRFInspectWindow(feature, id); });
++		}
++		return;
++	}
++#endif
+ 	UpdateVehicleViewportHash(this, INVALID_COORD, 0, this->sprite_cache.old_coord.left, this->sprite_cache.old_coord.top);
+ 	if (this->type != VEH_EFFECT) {
+ 		DeleteVehicleNews(this->index);
+@@ -959,15 +1178,28 @@ void CallVehicleTicks()
+ 
+ 	{
+ 		PerformanceMeasurer framerate(PFE_GL_ECONOMY);
+-		for (Station *st : Station::Iterate()) LoadUnloadStation(st);
++		for (Station *st : Station::Iterate()) {
++#ifdef WITH_SHADEREMU
++			TickYieldPoint();
++#endif
++			LoadUnloadStation(st);
++		}
+ 	}
+ 	PerformanceAccumulator::Reset(PFE_GL_TRAINS);
+ 	PerformanceAccumulator::Reset(PFE_GL_ROADVEHS);
  	PerformanceAccumulator::Reset(PFE_GL_SHIPS);
  	PerformanceAccumulator::Reset(PFE_GL_AIRCRAFT);
  
 +#ifdef WITH_SHADEREMU
 +	static const bool vp_now = GetEnv("OPENTTD_VP_NOW").has_value();
-+	if (!vp_now) VpDeferBegin();
++	/* (the tick on a worker or in slices has its own: VehiclesSync, docs/games/openttd.md "The tick on a worker") */
++	if (!vp_now && !TickOnWorker() && !_tick_slicing) VpDeferBegin();
 +#endif
  	for (Vehicle *v : Vehicle::Iterate()) {
  		[[maybe_unused]] VehicleID vehicle_index = v->index;
++#ifdef WITH_SHADEREMU
++		TickYieldPoint();
++#endif
  
-@@ -1039,6 +1055,11 @@ void CallVehicleTicks()
+ 		/* Vehicle could be deleted in this tick */
+ 		if (!v->Tick()) {
+@@ -1039,6 +1271,11 @@ void CallVehicleTicks()
  		}
  	}
  
@@ -3815,7 +5158,69 @@ index 91588a6..51a9f7f 100644
  	Backup<CompanyID> cur_company(_current_company);
  	for (auto &it : _vehicles_to_autoreplace) {
  		Vehicle *v = Vehicle::Get(it.first);
-@@ -1118,6 +1139,18 @@ static void DoDrawVehicle(const Vehicle *v)
+@@ -1089,8 +1326,61 @@ void CallVehicleTicks()
+  * Add vehicle sprite for drawing to the screen.
+  * @param v Vehicle to draw.
+  */
++#ifdef WITH_SHADEREMU
++static void DoDrawDrawn(const Vehicle::Drawn &d)
++{
++	if (d.transparency != 0xff) {
++		TransparencyOption to = static_cast<TransparencyOption>(d.transparency);
++		if (IsTransparencySet(to) || IsInvisibilitySet(to)) return;
++	}
++	StartSpriteCombine();
++	for (uint i = 0; i < d.seq.count; ++i) {
++		PaletteID pal2 = d.seq.seq[i].pal;
++		if (!pal2 || d.crashed) pal2 = d.pal;
++		AddSortableSpriteToDraw(d.seq.seq[i].sprite, pal2, d.x, d.y, d.z, d.bounds, d.shadow);
++	}
++	EndSpriteCombine();
++}
++
++/* What a flush's parts may draw of the vehicles, copied at its start: the pieces draw these, so that the
++ * first core may sync the vehicles (and free them) while they are drawn (VpFlushOut) */
++struct VehKept { Rect coord; Vehicle::Drawn drawn; };
++static std::vector<VehKept> _veh_kept;
++static std::vector<uint32_t> _veh_kept_from; ///< a part's first copy, and the end after the last part's
++static bool _veh_kept_collect;
++struct alignas(16) VehKeptJob { int job = -1; };
++static VehKeptJob _veh_kept_job[VP_CORES];
++
++void VehiclesKeptBegin() { _veh_kept.clear(), _veh_kept_from.clear(), _veh_kept_collect = true; }
++void VehiclesKeptPart() { _veh_kept_from.push_back(static_cast<uint32_t>(_veh_kept.size())); }
++void VehiclesKeptEnd() { _veh_kept_collect = false; }
++void VehiclesKeptUse(int job) { _veh_kept_job[VpCore()].job = job; }
++
++/** A piece's vehicles from its part's copies (false: none are kept for the core, the hash is read). */
++static bool VehiclesKeptDraw(const DrawPixelInfo *dpi)
++{
++	const int j = _veh_kept_job[VpCore()].job;
++	if (j < 0 || static_cast<size_t>(j) + 1 >= _veh_kept_from.size()) return false;
++	const int l = dpi->left, r = dpi->left + dpi->width, t = dpi->top, b = dpi->top + dpi->height;
++	const int xb = MAX_VEHICLE_PIXEL_X * ZOOM_BASE, yb = MAX_VEHICLE_PIXEL_Y * ZOOM_BASE;
++	const int slack = 2 * (ScaleByZoom(1, dpi->zoom) - 1); /* (as AddSortableSpriteToDraw's) */
++	for (uint32_t i = _veh_kept_from[j]; i < _veh_kept_from[j + 1]; i++) {
++		const VehKept &k = _veh_kept[i];
++		const Rect &c = k.coord;
++		if (!(l <= c.right + xb && t <= c.bottom + yb && r >= c.left - xb && b >= c.top - yb)) continue;
++		if (k.drawn.revalidate && VpRefuse()) return true;
++		if (l <= c.right + slack && t <= c.bottom + slack && r >= c.left && b >= c.top) DoDrawDrawn(k.drawn);
++	}
++	return true;
++}
++#endif
++
+ static void DoDrawVehicle(const Vehicle *v)
+ {
++#ifdef WITH_SHADEREMU
++	DoDrawDrawn(v->drawn);
++	return;
++#endif
+ 	PaletteID pal = PAL_NONE;
+ 
+ 	if (v->vehstatus.Test(VehState::DefaultPalette)) pal = v->vehstatus.Test(VehState::Crashed) ? PALETTE_CRASH : GetVehiclePalette(v);
+@@ -1118,8 +1408,23 @@ static void DoDrawVehicle(const Vehicle *v)
   * Add the vehicle sprites that should be drawn at a part of the screen.
   * @param dpi Rectangle being drawn.
   */
@@ -3833,24 +5238,55 @@ index 91588a6..51a9f7f 100644
 +
  void ViewportAddVehicles(DrawPixelInfo *dpi)
  {
++#ifdef WITH_SHADEREMU
++	if (VehiclesKeptDraw(dpi)) return;
++#endif
  	/* The bounding rectangle */
-@@ -1167,6 +1200,9 @@ void ViewportAddVehicles(DrawPixelInfo *dpi)
+ 	const int l = dpi->left;
+ 	const int r = dpi->left + dpi->width;
+@@ -1157,7 +1462,11 @@ void ViewportAddVehicles(DrawPixelInfo *dpi)
+ 
+ 			while (v != nullptr) {
+ 
++#ifdef WITH_SHADEREMU
++				if (!v->drawn.hidden &&
++#else
+ 				if (!v->vehstatus.Test(VehState::Hidden) &&
++#endif
+ 					l <= v->coord.right + xb &&
+ 					t <= v->coord.bottom + yb &&
+ 					r >= v->coord.left - xb &&
+@@ -1167,7 +1476,13 @@ void ViewportAddVehicles(DrawPixelInfo *dpi)
  					 * This vehicle can potentially be drawn as part of this viewport and
  					 * needs to be revalidated, as the sprite may not be correct.
  					 */
 +#ifdef WITH_SHADEREMU
-+					if (v->sprite_cache.revalidate_before_draw && VpRefuse()) return;
-+#endif
++					/* (made by the first core before a round, the tick waiting; while it runs the copy is drawn as it is) */
++					if (v->drawn.revalidate && VpRefuse()) return;
++					if (v->drawn.revalidate && !TickRunning()) {
++#else
  					if (v->sprite_cache.revalidate_before_draw) {
++#endif
  						VehicleSpriteSeq seq;
  						v->GetImage(v->direction, EIT_ON_MAP, &seq);
-@@ -1189,10 +1225,25 @@ void ViewportAddVehicles(DrawPixelInfo *dpi)
+ 
+@@ -1187,12 +1502,31 @@ void ViewportAddVehicles(DrawPixelInfo *dpi)
+ 						}
+ 
  						v->sprite_cache.revalidate_before_draw = false;
++#ifdef WITH_SHADEREMU
++						VehicleDrawRefresh(const_cast<Vehicle *>(v));
++#endif
  					}
  
 -					if (l <= v->coord.right &&
 -						t <= v->coord.bottom &&
 +#ifdef WITH_SHADEREMU
++					if (_veh_kept_collect && _vp_revalidate_only) {
++						VehKept &k = _veh_kept.emplace_back();
++						k.coord = v->coord;
++						DrawnCopy(k.drawn, v->drawn);
++					}
 +					const int slack = 2 * (ScaleByZoom(1, dpi->zoom) - 1); /* (as AddSortableSpriteToDraw's) */
 +#else
 +					const int slack = 0;
@@ -3861,11 +5297,7 @@ index 91588a6..51a9f7f 100644
 -						b >= v->coord.top) DoDrawVehicle(v);
 +						b >= v->coord.top) {
 +#ifdef WITH_SHADEREMU
-+						if (!_vp_revalidate_only) {
-+							DoDrawVehicle(v);
-+						} else if (v->vehstatus.Test(VehState::DefaultPalette) && !v->vehstatus.Test(VehState::Crashed)) {
-+							GetVehiclePalette(v); /* (its colour map is kept in the vehicle: made here, not by a worker) */
-+						}
++						if (!_vp_revalidate_only) DoDrawVehicle(v);
 +#else
 +						DoDrawVehicle(v);
 +#endif
@@ -3873,11 +5305,18 @@ index 91588a6..51a9f7f 100644
  				}
  
  				v = v->hash_viewport_next;
-@@ -1671,7 +1722,19 @@ void Vehicle::UpdatePosition()
- void Vehicle::UpdateBoundingBoxCoordinates(bool update_cache) const
+@@ -1668,10 +2002,25 @@ void Vehicle::UpdatePosition()
+  * Update the bounding box co-ordinates of the vehicle
+  * @param update_cache Update the cached values for previous co-ordinate values
+  */
+-void Vehicle::UpdateBoundingBoxCoordinates(bool update_cache) const
++void Vehicle::UpdateBoundingBoxCoordinates(bool update_cache, const Rect *made) const
  {
  	Rect new_coord;
 +#ifdef WITH_SHADEREMU
++	if (made != nullptr) {
++		new_coord = *made;
++	} else {
 +	/* (a vehicle moving keeps its sprite most ticks: its sizes are not looked up again; docs/games/openttd.md,
 +	 * "The game's own speed") */
 +	MutableSpriteCache &sc = this->sprite_cache;
@@ -3893,7 +5332,17 @@ index 91588a6..51a9f7f 100644
  
  	/* z-bounds are not used. */
  	Point pt = RemapCoords(this->x_pos + this->bounds.origin.x + this->bounds.offset.x, this->y_pos + this->bounds.origin.y + this->bounds.offset.y, this->z_pos);
-@@ -1713,12 +1776,102 @@ void Vehicle::UpdateBoundingBoxCoordinates(bool update_cache) const
+@@ -1690,6 +2039,9 @@ void Vehicle::UpdateBoundingBoxCoordinates(bool update_cache) const
+ 		new_coord.top    = std::min(new_coord.top, RemapCoords(x, y, z + bounds.extent.z).y);
+ 		new_coord.bottom = std::max(new_coord.bottom, RemapCoords(x + bounds.extent.x, y + bounds.extent.y, z).y + 1);
+ 	}
++#ifdef WITH_SHADEREMU
++	}
++#endif
+ 
+ 	if (update_cache) {
+ 		/*
+@@ -1713,12 +2065,114 @@ void Vehicle::UpdateBoundingBoxCoordinates(bool update_cache) const
   * Update the vehicle on the viewport, updating the right hash and setting the new coordinates.
   * @param dirty Mark the (new and old) coordinates of the vehicle as dirty.
   */
@@ -3906,8 +5355,15 @@ index 91588a6..51a9f7f 100644
 +static bool _vp_defer = false;
 +static std::vector<VehicleID> _vp_pending;
 +
++static void VehicleViewportNow(Vehicle *v, bool dirty);
++
 +void Vehicle::UpdateViewport(bool dirty)
 +{
++	VehicleChanged(this);
++	if (TickOnWorker()) {
++		VehicleMakeAhead(this);
++		return;
++	}
 +	if (_vp_defer) {
 +		if (!this->sprite_cache.vp_pending) {
 +			this->sprite_cache.vp_pending = true;
@@ -3916,7 +5372,12 @@ index 91588a6..51a9f7f 100644
 +		this->sprite_cache.vp_dirty |= dirty;
 +		return;
 +	}
-+	this->UpdateViewportNow(dirty);
++	VehicleViewportNow(this, dirty);
++}
++
++static void VehicleViewportNow(Vehicle *v, bool dirty)
++{
++	v->Vehicle::UpdateViewportNow(dirty);
 +}
 +
 +static void VpDeferBegin()
@@ -3971,7 +5432,7 @@ index 91588a6..51a9f7f 100644
 +	_vp_pending.clear();
 +}
 +
-+void Vehicle::UpdateViewportNow(bool dirty)
++void Vehicle::UpdateViewportNow(bool dirty, const Rect *made)
 +#else
  void Vehicle::UpdateViewport(bool dirty)
 +#endif
@@ -3986,7 +5447,7 @@ index 91588a6..51a9f7f 100644
 +		unseen = this->sprite_cache.vp_unseen;
 +	} else {
 +		ignore_cached_coords = this->sprite_cache.old_coord.left == INVALID_COORD;
-+		this->UpdateBoundingBoxCoordinates(true);
++		this->UpdateBoundingBoxCoordinates(true, made);
 +	}
 +#else
  	bool ignore_cached_coords = this->sprite_cache.old_coord.left == INVALID_COORD;
@@ -3996,7 +5457,7 @@ index 91588a6..51a9f7f 100644
  
  	if (ignore_cached_coords) {
  		UpdateVehicleViewportHash(this, this->coord.left, this->coord.top, INVALID_COORD, INVALID_COORD);
-@@ -1726,6 +1879,11 @@ void Vehicle::UpdateViewport(bool dirty)
+@@ -1726,6 +2180,11 @@ void Vehicle::UpdateViewport(bool dirty)
  		UpdateVehicleViewportHash(this, this->coord.left, this->coord.top, this->sprite_cache.old_coord.left, this->sprite_cache.old_coord.top);
  	}
  
@@ -4008,8 +5469,19 @@ index 91588a6..51a9f7f 100644
  	if (dirty) {
  		if (ignore_cached_coords) {
  			this->sprite_cache.is_viewport_candidate = this->MarkAllViewportsDirty();
+@@ -1754,6 +2213,10 @@ void Vehicle::UpdatePositionAndViewport()
+  */
+ bool Vehicle::MarkAllViewportsDirty() const
+ {
++#ifdef WITH_SHADEREMU
++	VehicleChanged(this);
++	if (TickOnWorker()) return this->sprite_cache.is_viewport_candidate;
++#endif
+ 	return ::MarkAllViewportsDirty(this->coord.left, this->coord.top, this->coord.right, this->coord.bottom);
+ }
+ 
 diff --git a/src/vehicle_base.h b/src/vehicle_base.h
-index 7edf724..1156d7d 100644
+index 7edf724..05c0c81 100644
 --- a/src/vehicle_base.h
 +++ b/src/vehicle_base.h
 @@ -160,7 +160,22 @@ struct MutableSpriteCache {
@@ -4035,19 +5507,48 @@ index 7edf724..1156d7d 100644
  
  /** A vehicle pool for a little over 1 million vehicles. */
  typedef Pool<Vehicle, VehicleID, 512> VehiclePool;
-@@ -781,6 +796,11 @@ public:
+@@ -247,6 +262,26 @@ public:
+ 	Vehicle **hash_tile_current = nullptr; ///< NOSAVE: Cache of the current hash chain.
+ 
+ 	SpriteID colourmap{}; ///< NOSAVE: cached colour mapping
++#ifdef WITH_SHADEREMU
++	/** NOSAVE: what the viewports draw of it, made by the first core while the tick waits (docs/games/openttd.md, "The tick on a worker") */
++	struct alignas(16) Drawn {
++		VehicleSpriteSeq seq{};
++		SpriteBounds bounds{};
++		int32_t x = 0, y = 0, z = 0;
++		PaletteID pal = PAL_NONE; ///< for sprites without their own
++		uint8_t transparency = 0xff; ///< an effect's TransparencyOption, 0xff none
++		bool hidden = true, shadow = false, crashed = false, revalidate = false;
++	} drawn;
++	mutable uint32_t drawn_epoch = 0; ///< NOSAVE: the sync it was last listed for (VehicleChanged)
++	/** NOSAVE: its copy and its rectangle as the tick on its worker made them when it last moved, used by the sync if it is as it was then */
++	struct alignas(16) Made {
++		Drawn drawn;
++		Rect coord;
++		SpriteID colourmap;
++		VehStates status;
++		bool ok = false;
++	} tw_made;
++#endif
+ 
+ 	/* Related to age and service time */
+ 	TimerGameCalendar::Year build_year{}; ///< Year the vehicle has been built.
+@@ -781,7 +816,12 @@ public:
  
  	void UpdatePosition();
  	void UpdateViewport(bool dirty);
+-	void UpdateBoundingBoxCoordinates(bool update_cache) const;
 +#ifdef WITH_SHADEREMU
-+	void UpdateViewportNow(bool dirty);
++	void UpdateViewportNow(bool dirty, const Rect *made = nullptr); ///< what UpdateViewport makes, on the first core (made: its rectangle)
 +	void UpdateViewportBox();
 +	void UpdateViewportPending() { if (this->sprite_cache.vp_pending) { this->sprite_cache.vp_pending = false; this->UpdateViewportNow(this->sprite_cache.vp_dirty); this->sprite_cache.vp_dirty = false; } }
 +#endif
- 	void UpdateBoundingBoxCoordinates(bool update_cache) const;
++	void UpdateBoundingBoxCoordinates(bool update_cache, const Rect *made = nullptr) const;
  	void UpdatePositionAndViewport();
  	bool MarkAllViewportsDirty() const;
-@@ -1171,7 +1191,15 @@ struct SpecializedVehicle : public Vehicle {
+ 
+@@ -1171,7 +1211,15 @@ struct SpecializedVehicle : public Vehicle {
  		 * to resolve a new sprite.
  		 */
  		if (this->direction != this->sprite_cache.last_direction || this->sprite_cache.is_viewport_candidate) {
@@ -4064,24 +5565,51 @@ index 7edf724..1156d7d 100644
  			((T*)this)->T::GetImage(this->direction, EIT_ON_MAP, &seq);
  			if (this->sprite_cache.sprite_seq != seq) {
 diff --git a/src/vehicle_func.h b/src/vehicle_func.h
-index 9b69b13..4571a5f 100644
+index 9b69b13..0bd2115 100644
 --- a/src/vehicle_func.h
 +++ b/src/vehicle_func.h
-@@ -194,6 +194,9 @@ void ResetVehicleColourMap();
+@@ -194,6 +194,12 @@ void ResetVehicleColourMap();
  uint8_t GetBestFittingSubType(Vehicle *v_from, Vehicle *v_for, CargoType dest_cargo_type);
  
  void ViewportAddVehicles(DrawPixelInfo *dpi);
 +#ifdef WITH_SHADEREMU
 +void ViewportRevalidateVehicles(DrawPixelInfo *dpi);
++void VehicleChanged(const Vehicle *v); ///< what the viewports draw of it is made anew at the next sync
++void VehiclesChangedAll();
++void VehiclesSync(bool viewports);
 +#endif
  
  void ShowNewGrfVehicleError(EngineID engine, StringID part1, StringID part2, GRFBug bug_type, bool critical);
  CommandCost TunnelBridgeIsFree(TileIndex tile, TileIndex endtile, const Vehicle *ignore = nullptr);
+diff --git a/src/vehicle_gui.cpp b/src/vehicle_gui.cpp
+index 1e9eb0a..c53046f 100644
+--- a/src/vehicle_gui.cpp
++++ b/src/vehicle_gui.cpp
+@@ -47,6 +47,9 @@
+ 
+ #include "table/strings.h"
+ 
++#ifdef WITH_SHADEREMU
++#include "gfx_func.h"
++#endif
+ #include "safeguards.h"
+ 
+ 
+@@ -1588,6 +1591,9 @@ static inline void ChangeVehicleWindow(WindowClass window_class, VehicleID from_
+  */
+ void ChangeVehicleViewWindow(VehicleID from_index, VehicleID to_index)
+ {
++#ifdef WITH_SHADEREMU
++	TICK_DEFER(ChangeVehicleViewWindow(from_index, to_index));
++#endif
+ 	ChangeVehicleWindow(WC_VEHICLE_VIEW,      from_index, to_index);
+ 	ChangeVehicleWindow(WC_VEHICLE_ORDERS,    from_index, to_index);
+ 	ChangeVehicleWindow(WC_VEHICLE_REFIT,     from_index, to_index);
 diff --git a/src/video/CMakeLists.txt b/src/video/CMakeLists.txt
-index e09c202..ebad8f9 100644
+index e09c202..4b56817 100644
 --- a/src/video/CMakeLists.txt
 +++ b/src/video/CMakeLists.txt
-@@ -42,3 +42,11 @@ add_files(
+@@ -42,3 +42,12 @@ add_files(
      video_driver.cpp
      video_driver.hpp
  )
@@ -4091,6 +5619,7 @@ index e09c202..ebad8f9 100644
 +    shaderemu_v.h
 +    shaderemu_gpu.cpp
 +    shaderemu_gpu.h
++    shaderemu_t.cpp
 +    CONDITION SHADEREMU
 +)
 diff --git a/src/video/null_v.cpp b/src/video/null_v.cpp
@@ -4187,14 +5716,15 @@ index 65fc9f3..df95ca1 100644
  	/* If requested, make a save just before exit. The normal exit-flow is
  	 * not triggered from this driver, so we have to do this manually. */
 diff --git a/src/video/video_driver.cpp b/src/video/video_driver.cpp
-index 85cc2d5..439e51d 100644
+index 85cc2d5..3f07900 100644
 --- a/src/video/video_driver.cpp
 +++ b/src/video/video_driver.cpp
-@@ -67,6 +67,20 @@ void VideoDriver::GameThread()
+@@ -67,6 +67,21 @@ void VideoDriver::GameThread()
   */
  void VideoDriver::GameLoopPause()
  {
 +#ifdef WITH_SHADEREMU
++	if (TickOnWorker()) return;
 +	/* No game thread: the progress of a world being made is drawn from here, once a second (a picture is 400,000 instructions). */
 +	if (!this->is_game_threaded) {
 +		static std::chrono::steady_clock::time_point next;
@@ -4211,8 +5741,29 @@ index 85cc2d5..439e51d 100644
  	/* If we are not called from the game-thread, ignore this request. */
  	if (std::this_thread::get_id() != this->game_thread.get_id()) return;
  
+diff --git a/src/video/video_driver.hpp b/src/video/video_driver.hpp
+index 7aafcbd..2b5a339 100644
+--- a/src/video/video_driver.hpp
++++ b/src/video/video_driver.hpp
+@@ -355,11 +355,16 @@ protected:
+ 
+ 	static void GameThreadThunk(VideoDriver *drv);
+ 
++#ifdef WITH_SHADEREMU
++	void GameLoop(); ///< (the machine's driver runs it as it chooses: docs/games/openttd.md)
++#endif
+ private:
+ 	std::mutex cmd_queue_mutex;
+ 	std::vector<std::function<void()>> cmd_queue;
+ 
++#ifndef WITH_SHADEREMU
+ 	void GameLoop();
++#endif
+ 	void GameThread();
+ };
+ 
 diff --git a/src/viewport.cpp b/src/viewport.cpp
-index 6427a14..a5643b6 100644
+index 6427a14..cb063ce 100644
 --- a/src/viewport.cpp
 +++ b/src/viewport.cpp
 @@ -99,6 +99,11 @@
@@ -4268,7 +5819,7 @@ index 6427a14..a5643b6 100644
  	ChildScreenSpriteToDrawVector child_screen_sprites_to_draw;
  
  	int last_child;
-@@ -184,14 +211,39 @@ struct ViewportDrawer {
+@@ -184,14 +211,198 @@ struct ViewportDrawer {
  	FoundationPart foundation_part;                  ///< Currently active foundation for ground sprite drawing.
  	int last_foundation_child[FOUNDATION_PART_END];  ///< Tail of ChildSprite list of the foundations. (index into child_screen_sprites_to_draw)
  	Point foundation_offset[FOUNDATION_PART_END];    ///< Pixel offset for ground sprites on the foundations.
@@ -4277,6 +5828,13 @@ index 6427a14..a5643b6 100644
 +	VpVector<std::pair<int64_t, ParentSpriteToDraw *>> sort_list; ///< the sorter's list by xmin + ymin, linked by sort_next
 +	VpVector<int> sort_next;
 +	VpVector<ParentSpriteToDraw *> sort_stack, sort_preceding;
++	bool reach_incomplete; ///< a sprite of the tile being drawn was left out, where it lay not known
++	bool reach_parent_culled; ///< a parent sprite of the tile was left out
++	int reach_culled_top, reach_culled_left, reach_culled_right; ///< how far what was left out of the tile would draw
++	int culled_top, culled_y; ///< the least top and y of the parents left out of the tile
++	int culled_left[2], culled_x[2]; ///< the least and most left and x of the parents left out of the tile
++	uint32_t count[4];     ///< tiles drawn, of them with their reach known, tiles passed by their reach, tiles that could not be learned
++	VpVector<std::pair<uint32_t, uint32_t>> reach_new; ///< reaches a worker learned: tile, zoom << 8 | reach
 +#endif
  };
  
@@ -4287,6 +5845,158 @@ index 6427a14..a5643b6 100644
 +static VpDrawerOfCore _vd_of[VP_CORES];
 +#define _vd (_vd_of[VpCore()])
 +#define _cur_ti (_vd.cur_ti)
++/* (a function that uses _vd much takes it once: VpCore() is ten instructions) */
++#define VP_HERE ViewportDrawer &vd_here = _vd_of[VpCore()]
++
++/* How far a tile's sprites reach above its north corner, left and right of it, by zoom, learned when
++ * the tile is drawn and forgotten when it is marked dirty (docs/games/openttd.md, "A tile's reach"): a
++ * tile whose sprites end below or beside a part is not drawn for it. The first core's. */
++static constexpr uint8_t VP_REACH_UNKNOWN = 255;
++static constexpr int VP_REACH_UNIT = 8; ///< virtual pixels a step
++static uint8_t *_vp_reach[to_underlying(ZoomLevel::End)];
++static uint32_t _vp_reach_tiles;
++
++/** The reach of tiles at zoom z (nullptr: none known); made on the first core for the map as it is. */
++static uint8_t *VpReachTable(ZoomLevel z)
++{
++	if (VpCore() != 0) return _vp_reach[to_underlying(z)];
++	if (_vp_reach_tiles != Map::Size()) {
++		for (auto &t : _vp_reach) delete[] t, t = nullptr;
++		_vp_reach_tiles = Map::Size();
++	}
++	uint8_t *&t = _vp_reach[to_underlying(z)];
++	if (t == nullptr) {
++		t = new uint8_t[3 * _vp_reach_tiles];
++		std::fill_n(t, 3 * _vp_reach_tiles, VP_REACH_UNKNOWN);
++	}
++	return t;
++}
++
++/*
++ * How far the highest bridge on the map is above the ground under it (ZOOM_BASE units; -1: not known),
++ * for how far below a part ViewportAddLandscape looks: made on the first core, raised by what is marked dirty.
++ */
++static int _vp_bridge_most = -1;
++
++static int VpBridgeAbove(TileIndex t)
++{
++	return ZOOM_BASE * (GetBridgePixelHeight(GetNorthernBridgeEnd(t)) - TilePixelHeight(t));
++}
++
++static int VpBridgeMost()
++{
++	if (_vp_bridge_most >= 0 || VpCore() != 0) return _vp_bridge_most;
++	int most = 0;
++	for (uint i = 0; i < Map::Size(); i++) {
++		if (IsBridgeAbove(TileIndex{i})) most = std::max(most, VpBridgeAbove(TileIndex{i}));
++	}
++	_vp_bridge_most = most;
++	return most;
++}
++
++/* A flush left out (VpFlushFinish): its round of pieces, and the reach forgotten meanwhile, forgotten again after its merge */
++struct VpOut { bool out; uint32_t t, flush_from; };
++void VehiclesKeptBegin();
++void VehiclesKeptPart();
++void VehiclesKeptEnd();
++void VehiclesKeptUse(int job);
++static VpOut _vp_out;
++static std::vector<TileIndex> _vp_forget_late;
++static bool _vp_forget_all_late;
++
++bool VpFlushOut() { return _vp_out.out; }
++bool VpFlushReady() { return !_vp_out.out || mcw_for_ready() != 0; }
++
++void ViewportReachForget(TileIndex tile)
++{
++	if (_vp_bridge_most >= 0 && tile.base() < Map::Size() && IsBridgeAbove(tile)) _vp_bridge_most = std::max(_vp_bridge_most, VpBridgeAbove(tile));
++	if (tile.base() >= _vp_reach_tiles) return;
++	for (uint8_t *t : _vp_reach) {
++		if (t != nullptr) t[3 * tile.base()] = VP_REACH_UNKNOWN;
++	}
++	if (_vp_out.out) _vp_forget_late.push_back(tile);
++}
++
++void ViewportReachForgetAll()
++{
++	_vp_bridge_most = -1;
++	for (uint8_t *t : _vp_reach) {
++		if (t != nullptr) std::fill_n(t, 3 * _vp_reach_tiles, VP_REACH_UNKNOWN);
++	}
++	if (_vp_out.out) _vp_forget_all_late = true;
++}
++
++/** What the tile just drawn reaches, from the sprites it added (after the first t0, p0 and c0 of the lists). */
++#ifdef WITH_SHADEREMU
++#pragma push_macro("_vd")
++#undef _vd
++#define _vd (vd_here)
++#endif
++static void VpReachLearn(uint8_t *table, uint32_t tile, size_t t0, size_t p0, size_t c0, int viewport_y, int tile_x)
++{
++#ifdef WITH_SHADEREMU
++	VP_HERE;
++#endif
++	const int k = VpCore();
++	if (_vd.reach_incomplete || _vp_core[k].failed) return;
++	int top = std::min(viewport_y, _vd.reach_culled_top);
++	int left = std::min(tile_x, _vd.reach_culled_left), right = std::max(tile_x, _vd.reach_culled_right);
++	for (size_t i = t0; i < _vd.tile_sprites_to_draw.size(); i++) {
++		const TileSpriteToDraw &ts = _vd.tile_sprites_to_draw[i];
++		const Sprite *spr = GetSprite(ts.image & SPRITE_MASK, SpriteType::Normal);
++		top = std::min(top, ts.y + spr->y_offs);
++		left = std::min(left, ts.x + spr->x_offs);
++		right = std::max(right, ts.x + spr->x_offs + spr->width);
++	}
++	size_t children = 0;
++	for (size_t i = p0; i < _vd.parent_sprites_to_draw.size(); i++) {
++		const ParentSpriteToDraw &ps = _vd.parent_sprites_to_draw[i];
++		top = std::min<int>(top, ps.st);
++		left = std::min<int>(left, ps.sl);
++		right = std::max<int>(right, ps.sr);
++		for (int c = ps.first_child; c >= 0;) {
++			const ChildScreenSpriteToDraw &cs = _vd.child_screen_sprites_to_draw[c];
++			if (static_cast<size_t>(c) >= c0) children++;
++			const Sprite *spr = GetSprite(cs.image & SPRITE_MASK, SpriteType::Normal);
++			top = std::min(top, (cs.relative ? ps.top : ps.y) + cs.y + spr->y_offs);
++			const int x = (cs.relative ? ps.left : ps.x) + cs.x + spr->x_offs;
++			left = std::min(left, x);
++			right = std::max(right, x + static_cast<int>(spr->width));
++			c = cs.next;
++		}
++	}
++	/* (a child given to a parent of a tile drawn before) */
++	if (children != _vd.child_screen_sprites_to_draw.size() - c0 || _vp_core[k].failed) return;
++	auto units = [](int d) { return static_cast<uint32_t>(std::min((d + VP_REACH_UNIT - 1) / VP_REACH_UNIT, 254)); };
++	const uint32_t up = units(viewport_y - top), l = units(tile_x - left), r = units(right - tile_x);
++	if (k == 0) {
++		table[3 * tile] = static_cast<uint8_t>(up);
++		table[3 * tile + 1] = static_cast<uint8_t>(l);
++		table[3 * tile + 2] = static_cast<uint8_t>(r);
++	} else if (_vd.reach_new.size() < _vd.reach_new.capacity()) {
++		_vd.reach_new.emplace_back(tile, static_cast<uint32_t>(to_underlying(_vd.dpi.zoom)) << 24 | up << 16 | l << 8 | r);
++	}
++}
++#ifdef WITH_SHADEREMU
++#pragma pop_macro("_vd")
++#endif
++
++/** The reaches the workers learned, into the tables. */
++static void VpReachMerge()
++{
++	for (int k = 1; k < VP_CORES; k++) {
++		for (const auto &[tile, v] : _vd_of[k].reach_new) {
++			uint8_t *t = _vp_reach[v >> 24];
++			if (t != nullptr && tile < _vp_reach_tiles) {
++				t[3 * tile] = static_cast<uint8_t>(v >> 16), t[3 * tile + 1] = static_cast<uint8_t>(v >> 8), t[3 * tile + 2] = static_cast<uint8_t>(v);
++			}
++		}
++		_vd_of[k].reach_new.clear();
++	}
++	if (_vp_out.out) return;
++	if (_vp_forget_all_late) ViewportReachForgetAll();
++	for (TileIndex tile : _vp_forget_late) ViewportReachForget(tile);
++}
 +
 +/** On a worker, whether v has room for one more (else the part is given up and the lists grow). */
 +template <class V>
@@ -4308,7 +6018,28 @@ index 6427a14..a5643b6 100644
  bool _draw_bounding_boxes = false;
  bool _draw_dirty_blocks = false;
  uint _dirty_block_colour = 0;
-@@ -392,6 +444,9 @@ static void SetViewportPosition(Window *w, int x, int y)
+@@ -340,6 +551,10 @@ static void DoSetViewportPosition(Window::IteratorToFront it, int left, int top,
+ 	}
+ }
+ 
++#ifdef WITH_SHADEREMU
++uint32_t _vp_scrolls; ///< viewports moved, for the tick's pace (TwPace)
++#endif
++
+ static void SetViewportPosition(Window *w, int x, int y)
+ {
+ 	Viewport &vp = *w->viewport;
+@@ -347,6 +562,9 @@ static void SetViewportPosition(Window *w, int x, int y)
+ 	int old_top = vp.virtual_top;
+ 	int i;
+ 	int left, top, width, height;
++#ifdef WITH_SHADEREMU
++	if (x != old_left || y != old_top) _vp_scrolls++;
++#endif
+ 
+ 	vp.virtual_left = x;
+ 	vp.virtual_top = y;
+@@ -392,6 +610,9 @@ static void SetViewportPosition(Window *w, int x, int y)
  		if (height > 0) {
  			Window::IteratorToFront it(w);
  			++it;
@@ -4318,8 +6049,20 @@ index 6427a14..a5643b6 100644
  			DoSetViewportPosition(it, left, top, width, height);
  		}
  	}
-@@ -508,6 +563,9 @@ static void AddTileSpriteToDraw(SpriteID image, PaletteID pal, int32_t x, int32_
+@@ -504,10 +725,21 @@ void HandleZoomMessage(Window *w, const Viewport &vp, WidgetID widget_zoom_in, W
+  * @param extra_offs_x Pixel X offset for the sprite position.
+  * @param extra_offs_y Pixel Y offset for the sprite position.
+  */
++#ifdef WITH_SHADEREMU
++#pragma push_macro("_vd")
++#undef _vd
++#define _vd (vd_here)
++#endif
+ static void AddTileSpriteToDraw(SpriteID image, PaletteID pal, int32_t x, int32_t y, int z, const SubSprite *sub = nullptr, int extra_offs_x = 0, int extra_offs_y = 0)
  {
++#ifdef WITH_SHADEREMU
++	VP_HERE;
++#endif
  	assert((image & SPRITE_MASK) < MAX_SPRITES);
  
 +#ifdef WITH_SHADEREMU
@@ -4328,8 +6071,111 @@ index 6427a14..a5643b6 100644
  	TileSpriteToDraw &ts = _vd.tile_sprites_to_draw.emplace_back();
  	ts.image = image;
  	ts.pal = pal;
-@@ -624,11 +682,16 @@ static void AddCombinedSprite(SpriteID image, PaletteID pal, int x, int y, int z
+@@ -516,6 +748,9 @@ static void AddTileSpriteToDraw(SpriteID image, PaletteID pal, int32_t x, int32_
+ 	ts.x = pt.x + extra_offs_x;
+ 	ts.y = pt.y + extra_offs_y;
+ }
++#ifdef WITH_SHADEREMU
++#pragma pop_macro("_vd")
++#endif
+ 
+ /**
+  * Adds a child sprite to the active foundation.
+@@ -529,8 +764,16 @@ static void AddTileSpriteToDraw(SpriteID image, PaletteID pal, int32_t x, int32_
+  * @param extra_offs_x Pixel X offset for the sprite position.
+  * @param extra_offs_y Pixel Y offset for the sprite position.
+  */
++#ifdef WITH_SHADEREMU
++#pragma push_macro("_vd")
++#undef _vd
++#define _vd (vd_here)
++#endif
+ static void AddChildSpriteToFoundation(SpriteID image, PaletteID pal, const SubSprite *sub, FoundationPart foundation_part, int extra_offs_x, int extra_offs_y)
  {
++#ifdef WITH_SHADEREMU
++	VP_HERE;
++#endif
+ 	assert(IsInsideMM(foundation_part, 0, FOUNDATION_PART_END));
+ 	assert(_vd.foundation[foundation_part] != -1);
+ 	Point offs = _vd.foundation_offset[foundation_part];
+@@ -539,6 +782,9 @@ static void AddChildSpriteToFoundation(SpriteID image, PaletteID pal, const SubS
+ 	AutoRestoreBackup backup(_vd.last_child, _vd.last_foundation_child[foundation_part]);
+ 	AddChildSpriteScreen(image, pal, offs.x + extra_offs_x, offs.y + extra_offs_y, false, sub, false, false);
+ }
++#ifdef WITH_SHADEREMU
++#pragma pop_macro("_vd")
++#endif
+ 
+ /**
+  * Draws a ground sprite at a specific world-coordinate relative to the current tile.
+@@ -553,8 +799,16 @@ static void AddChildSpriteToFoundation(SpriteID image, PaletteID pal, const SubS
+  * @param extra_offs_x Pixel X offset for the sprite position.
+  * @param extra_offs_y Pixel Y offset for the sprite position.
+  */
++#ifdef WITH_SHADEREMU
++#pragma push_macro("_vd")
++#undef _vd
++#define _vd (vd_here)
++#endif
+ void DrawGroundSpriteAt(SpriteID image, PaletteID pal, int32_t x, int32_t y, int z, const SubSprite *sub, int extra_offs_x, int extra_offs_y)
+ {
++#ifdef WITH_SHADEREMU
++	VP_HERE;
++#endif
+ 	/* Switch to first foundation part, if no foundation was drawn */
+ 	if (_vd.foundation_part == FOUNDATION_PART_NONE) _vd.foundation_part = FOUNDATION_PART_NORMAL;
+ 
+@@ -565,6 +819,9 @@ void DrawGroundSpriteAt(SpriteID image, PaletteID pal, int32_t x, int32_t y, int
+ 		AddTileSpriteToDraw(image, pal, _cur_ti.x + x, _cur_ti.y + y, _cur_ti.z + z, sub, extra_offs_x * ZOOM_BASE, extra_offs_y * ZOOM_BASE);
+ 	}
+ }
++#ifdef WITH_SHADEREMU
++#pragma pop_macro("_vd")
++#endif
+ 
+ /**
+  * Draws a ground sprite for the current tile.
+@@ -588,8 +845,16 @@ void DrawGroundSprite(SpriteID image, PaletteID pal, const SubSprite *sub, int e
+  * @param x sprite x-offset (screen coordinates) of ground sprites relative to the "foundation"-ParentSprite.
+  * @param y sprite y-offset (screen coordinates) of ground sprites relative to the "foundation"-ParentSprite.
+  */
++#ifdef WITH_SHADEREMU
++#pragma push_macro("_vd")
++#undef _vd
++#define _vd (vd_here)
++#endif
+ void OffsetGroundSprite(int x, int y)
+ {
++#ifdef WITH_SHADEREMU
++	VP_HERE;
++#endif
+ 	/* Switch to next foundation part */
+ 	switch (_vd.foundation_part) {
+ 		case FOUNDATION_PART_NONE:
+@@ -608,6 +873,9 @@ void OffsetGroundSprite(int x, int y)
+ 	_vd.foundation_offset[_vd.foundation_part].y = y * ZOOM_BASE;
+ 	_vd.last_foundation_child[_vd.foundation_part] = _vd.last_child;
+ }
++#ifdef WITH_SHADEREMU
++#pragma pop_macro("_vd")
++#endif
+ 
+ /**
+  * Adds a child sprite to a parent sprite.
+@@ -620,20 +888,42 @@ void OffsetGroundSprite(int x, int y)
+  * @param z position z of the sprite.
+  * @param sub Only draw a part of the sprite.
+  */
++#ifdef WITH_SHADEREMU
++#pragma push_macro("_vd")
++#undef _vd
++#define _vd (vd_here)
++#endif
+ static void AddCombinedSprite(SpriteID image, PaletteID pal, int x, int y, int z, const SubSprite *sub)
+ {
++#ifdef WITH_SHADEREMU
++	VP_HERE;
++#endif
  	Point pt = RemapCoords(x, y, z);
  	const Sprite *spr = GetSprite(image & SPRITE_MASK, SpriteType::Normal);
 +#ifdef WITH_SHADEREMU
@@ -4343,21 +6189,45 @@ index 6427a14..a5643b6 100644
 +			pt.x + spr->x_offs + spr->width + slack <= _vd.dpi.left ||
  			pt.y + spr->y_offs >= _vd.dpi.top + _vd.dpi.height ||
 -			pt.y + spr->y_offs + spr->height <= _vd.dpi.top)
-+			pt.y + spr->y_offs + spr->height + slack <= _vd.dpi.top)
++			pt.y + spr->y_offs + spr->height + slack <= _vd.dpi.top) {
++#ifdef WITH_SHADEREMU
++		_vd.reach_culled_top = std::min(_vd.reach_culled_top, pt.y + spr->y_offs);
++		_vd.reach_culled_left = std::min(_vd.reach_culled_left, pt.x + spr->x_offs);
++		_vd.reach_culled_right = std::max(_vd.reach_culled_right, pt.x + spr->x_offs + spr->width);
++#endif
  		return;
++	}
  
  	const ParentSpriteToDraw &pstd = _vd.parent_sprites_to_draw.back();
-@@ -660,6 +723,9 @@ static void AddCombinedSprite(SpriteID image, PaletteID pal, int x, int y, int z
+ 	AddChildSpriteScreen(image, pal, pt.x - pstd.left, pt.y - pstd.top, false, sub, false);
+ }
++#ifdef WITH_SHADEREMU
++#pragma pop_macro("_vd")
++#endif
+ 
+ /**
+  * Draw a (transparent) sprite at given coordinates with a given bounding box.
+@@ -660,8 +950,19 @@ static void AddCombinedSprite(SpriteID image, PaletteID pal, int x, int y, int z
   * @param bb_offset_z bounding box extent towards negative Z (world)
   * @param sub Only draw a part of the sprite.
   */
 +#ifdef WITH_SHADEREMU
 +static const int VP_REACH = 128 * ZOOM_BASE; /* how far a parent's children may draw from it */
 +#endif
++#ifdef WITH_SHADEREMU
++#pragma push_macro("_vd")
++#undef _vd
++#define _vd (vd_here)
++#endif
  void AddSortableSpriteToDraw(SpriteID image, PaletteID pal, int x, int y, int z, const SpriteBounds &bounds, bool transparent, const SubSprite *sub)
  {
++#ifdef WITH_SHADEREMU
++	VP_HERE;
++#endif
  	int32_t left, right, top, bottom;
-@@ -709,20 +775,32 @@ void AddSortableSpriteToDraw(SpriteID image, PaletteID pal, int x, int y, int z,
+ 
+ 	assert((image & SPRITE_MASK) < MAX_SPRITES);
+@@ -709,20 +1010,44 @@ void AddSortableSpriteToDraw(SpriteID image, PaletteID pal, int x, int y, int z,
  		bottom = std::max(bottom, RemapCoords(x + bounds.extent.x, y + bounds.extent.y, z).y + 1);
  	}
  
@@ -4376,6 +6246,18 @@ index 6427a14..a5643b6 100644
 +	    right + slack <= _vd.dpi.left          ||
 +	    top - lead >= _vd.dpi.top + _vd.dpi.height ||
 +	    bottom + slack <= _vd.dpi.top) {
++#ifdef WITH_SHADEREMU
++		_vd.reach_culled_top = std::min(_vd.reach_culled_top, top);
++		_vd.reach_culled_left = std::min(_vd.reach_culled_left, left);
++		_vd.reach_culled_right = std::max(_vd.reach_culled_right, right);
++		_vd.culled_top = std::min(_vd.culled_top, tmp_top);
++		_vd.culled_y = std::min(_vd.culled_y, tmp_y);
++		_vd.culled_left[0] = std::min(_vd.culled_left[0], tmp_left);
++		_vd.culled_left[1] = std::max(_vd.culled_left[1], tmp_left);
++		_vd.culled_x[0] = std::min(_vd.culled_x[0], tmp_x);
++		_vd.culled_x[1] = std::max(_vd.culled_x[1], tmp_x);
++		_vd.reach_parent_culled = true;
++#endif
  		return;
  	}
  
@@ -4394,7 +6276,98 @@ index 6427a14..a5643b6 100644
  
  	ps.image = image;
  	ps.pal = pal;
-@@ -834,6 +912,9 @@ void AddChildSpriteScreen(SpriteID image, PaletteID pal, int x, int y, bool tran
+@@ -742,6 +1067,9 @@ void AddSortableSpriteToDraw(SpriteID image, PaletteID pal, int x, int y, int z,
+ 
+ 	if (_vd.combine_sprites == SPRITE_COMBINE_PENDING) _vd.combine_sprites = SPRITE_COMBINE_ACTIVE;
+ }
++#ifdef WITH_SHADEREMU
++#pragma pop_macro("_vd")
++#endif
+ 
+ /**
+  * Starts a block of sprites, which are "combined" into a single bounding box.
+@@ -761,21 +1089,43 @@ void AddSortableSpriteToDraw(SpriteID image, PaletteID pal, int x, int y, int z,
+  *
+  * You cannot nest "combined" blocks.
+  */
++#ifdef WITH_SHADEREMU
++#pragma push_macro("_vd")
++#undef _vd
++#define _vd (vd_here)
++#endif
+ void StartSpriteCombine()
+ {
++#ifdef WITH_SHADEREMU
++	VP_HERE;
++#endif
+ 	assert(_vd.combine_sprites == SPRITE_COMBINE_NONE);
+ 	_vd.combine_sprites = SPRITE_COMBINE_PENDING;
+ }
++#ifdef WITH_SHADEREMU
++#pragma pop_macro("_vd")
++#endif
+ 
+ /**
+  * Terminates a block of sprites started by #StartSpriteCombine.
+  * Take a look there for details.
+  */
++#ifdef WITH_SHADEREMU
++#pragma push_macro("_vd")
++#undef _vd
++#define _vd (vd_here)
++#endif
+ void EndSpriteCombine()
+ {
++#ifdef WITH_SHADEREMU
++	VP_HERE;
++#endif
+ 	assert(_vd.combine_sprites != SPRITE_COMBINE_NONE);
+ 	_vd.combine_sprites = SPRITE_COMBINE_NONE;
+ }
++#ifdef WITH_SHADEREMU
++#pragma pop_macro("_vd")
++#endif
+ 
+ /**
+  * Check if the parameter "check" is inside the interval between
+@@ -821,12 +1171,35 @@ bool IsInsideRotatedRectangle(int x, int y)
+  * @param scale if true, scale offsets to base zoom level.
+  * @param relative if true, draw sprite relative to parent sprite offsets.
+  */
++#ifdef WITH_SHADEREMU
++#pragma push_macro("_vd")
++#undef _vd
++#define _vd (vd_here)
++#endif
+ void AddChildSpriteScreen(SpriteID image, PaletteID pal, int x, int y, bool transparent, const SubSprite *sub, bool scale, bool relative)
+ {
++#ifdef WITH_SHADEREMU
++	VP_HERE;
++#endif
+ 	assert((image & SPRITE_MASK) < MAX_SPRITES);
+ 
+ 	/* If the ParentSprite was clipped by the viewport bounds, do not draw the ChildSprites either */
+-	if (_vd.last_child == LAST_CHILD_NONE) return;
++	if (_vd.last_child == LAST_CHILD_NONE) {
++#ifdef WITH_SHADEREMU
++		/* (where a child of a parent left out of this tile would draw, at most; of another tile's, not known) */
++		if (_vd.reach_parent_culled) {
++			const Sprite *spr = GetSprite(image & SPRITE_MASK, SpriteType::Normal);
++			const int top = (relative ? _vd.culled_top : _vd.culled_y) + (scale ? y * ZOOM_BASE : y) + spr->y_offs;
++			_vd.reach_culled_top = std::min(_vd.reach_culled_top, top);
++			const int dx = (scale ? x * ZOOM_BASE : x) + spr->x_offs;
++			_vd.reach_culled_left = std::min(_vd.reach_culled_left, (relative ? _vd.culled_left[0] : _vd.culled_x[0]) + dx);
++			_vd.reach_culled_right = std::max(_vd.reach_culled_right, (relative ? _vd.culled_left[1] : _vd.culled_x[1]) + dx + spr->width);
++		} else {
++			_vd.reach_incomplete = true;
++		}
++#endif
++		return;
++	}
+ 
+ 	/* make the sprites transparent with the right palette */
+ 	if (transparent) {
+@@ -834,6 +1207,9 @@ void AddChildSpriteScreen(SpriteID image, PaletteID pal, int x, int y, bool tran
  		pal = PALETTE_TO_TRANSPARENT;
  	}
  
@@ -4404,7 +6377,17 @@ index 6427a14..a5643b6 100644
  	int32_t child_id = static_cast<int32_t>(_vd.child_screen_sprites_to_draw.size());
  	if (_vd.last_child != LAST_CHILD_PARENT) {
  		_vd.child_screen_sprites_to_draw[_vd.last_child].next = child_id;
-@@ -870,6 +951,9 @@ void AddChildSpriteScreen(SpriteID image, PaletteID pal, int x, int y, bool tran
+@@ -857,6 +1233,9 @@ void AddChildSpriteScreen(SpriteID image, PaletteID pal, int x, int y, bool tran
+ 	if (_vd.last_foundation_child[1] == _vd.last_child) _vd.last_foundation_child[1] = child_id;
+ 	_vd.last_child = child_id;
+ }
++#ifdef WITH_SHADEREMU
++#pragma pop_macro("_vd")
++#endif
+ 
+ /**
+  * Add a string to draw to a viewport.
+@@ -870,6 +1249,9 @@ void AddChildSpriteScreen(SpriteID image, PaletteID pal, int x, int y, bool tran
  static std::string &AddStringToDraw(int x, int y, Colours colour, ViewportStringFlags flags, uint16_t width)
  {
  	assert(width != 0);
@@ -4414,7 +6397,136 @@ index 6427a14..a5643b6 100644
  	StringSpriteToDraw &ss = _vd.string_sprites_to_draw.emplace_back();
  	ss.colour = colour;
  	ss.flags = flags;
-@@ -1552,6 +1636,25 @@ void ViewportSign::UpdatePosition(int center, int top, std::string_view str, std
+@@ -1207,8 +1589,16 @@ static int GetViewportY(Point tile)
+ /**
+  * Add the landscape to the viewport, i.e. all ground tiles and buildings.
+  */
++#ifdef WITH_SHADEREMU
++#pragma push_macro("_vd")
++#undef _vd
++#define _vd (vd_here)
++#endif
+ static void ViewportAddLandscape()
+ {
++#ifdef WITH_SHADEREMU
++	VP_HERE;
++#endif
+ 	assert(_vd.dpi.top <= _vd.dpi.top + _vd.dpi.height);
+ 	assert(_vd.dpi.left <= _vd.dpi.left + _vd.dpi.width);
+ 
+@@ -1232,6 +1622,14 @@ static void ViewportAddLandscape()
+ 	int right_column = (upper_right.y - upper_right.x) / (int)TILE_SIZE + 2;
+ 
+ 	int potential_bridge_height = ZOOM_BASE * TILE_HEIGHT * _settings_game.construction.max_bridge_height;
++#ifdef WITH_SHADEREMU
++	/* (no bridge on the map is higher than the highest there is) */
++	if (VpBridgeMost() >= 0) potential_bridge_height = std::min(potential_bridge_height, VpBridgeMost());
++	uint8_t *reach = VpReachTable(_vd.dpi.zoom);
++	const int reach_slack = 2 * ScaleByZoom(1, _vd.dpi.zoom) + VP_REACH_UNIT;
++	/* (the tile selection's sprites reach above the tile: SetSelectionTilesDirty's rectangle) */
++	const int reach_least = _thd.drawstyle != HT_NONE ? 64 * ZOOM_BASE : 0;
++#endif
+ 
+ 	/* Rows overlap with neighbouring rows by a half tile.
+ 	 * The first row that could possibly be visible is the row above upper_left (if it is at height 0).
+@@ -1241,9 +1639,14 @@ static void ViewportAddLandscape()
+ 	bool last_row = false;
+ 	for (; !last_row; row++) {
+ 		last_row = true;
++#ifdef WITH_SHADEREMU
++		/* (only the columns that make a tile with this row) */
++		for (int column = left_column + ((row + left_column) & 1); column <= right_column; column += 2) {
++#else
+ 		for (int column = left_column; column <= right_column; column++) {
+ 			/* Valid row/column? */
+ 			if ((row + column) % 2 != 0) continue;
++#endif
+ 
+ 			Point tilecoord;
+ 			tilecoord.x = (row - column) / 2;
+@@ -1264,6 +1667,7 @@ static void ViewportAddLandscape()
+ 				tile_type = MP_VOID;
+ 			}
+ 
++#ifndef WITH_SHADEREMU
+ 			if (tile_type != MP_VOID) {
+ 				/* We are inside the map => paint landscape. */
+ 				std::tie(_cur_ti.tileh, _cur_ti.z) = GetTilePixelSlope(_cur_ti.tile);
+@@ -1271,6 +1675,7 @@ static void ViewportAddLandscape()
+ 				/* We are outside the map => paint black. */
+ 				std::tie(_cur_ti.tileh, _cur_ti.z) = GetTilePixelSlopeOutsideMap(tilecoord.x, tilecoord.y);
+ 			}
++#endif
+ 
+ 			int viewport_y = GetViewportY(tilecoord);
+ 
+@@ -1304,20 +1709,65 @@ static void ViewportAddLandscape()
+ 				if ((tilecoord.x <= 0 || tilecoord.y <= 0) && min_visible_height < potential_bridge_height + MAX_TILE_EXTENT_TOP) last_row = false;
+ 			}
+ 
++#ifdef WITH_SHADEREMU
++			uint8_t known = VP_REACH_UNKNOWN;
++			if (tile_visible && reach != nullptr && tile_type != MP_VOID && !IsBridgeAbove(_cur_ti.tile)) known = reach[3 * _cur_ti.tile.base()];
++			if (tile_visible && known != VP_REACH_UNKNOWN && min_visible_height > 0 &&
++					min_visible_height >= std::max(known * VP_REACH_UNIT + reach_slack, reach_least)) {
++				last_row = false; /* (its sprites end below the part: not drawn) */
++				_vd.count[2]++;
++				continue;
++			}
++			const int tile_x = column * static_cast<int>(TILE_SIZE * 2 * ZOOM_BASE);
++			if (tile_visible && known != VP_REACH_UNKNOWN && reach_least == 0 &&
++					(tile_x - reach[3 * _cur_ti.tile.base() + 1] * VP_REACH_UNIT >= _vd.dpi.left + _vd.dpi.width + reach_slack ||
++					tile_x + reach[3 * _cur_ti.tile.base() + 2] * VP_REACH_UNIT + reach_slack <= _vd.dpi.left)) {
++				last_row = false; /* (its sprites end beside the part) */
++				_vd.count[2]++;
++				continue;
++			}
++#endif
+ 			if (tile_visible) {
+ 				last_row = false;
++#ifdef WITH_SHADEREMU
++				/* (its slope only now: the tests above do not need it) */
++				if (tile_type != MP_VOID) {
++					std::tie(_cur_ti.tileh, _cur_ti.z) = GetTilePixelSlope(_cur_ti.tile);
++				} else {
++					std::tie(_cur_ti.tileh, _cur_ti.z) = GetTilePixelSlopeOutsideMap(tilecoord.x, tilecoord.y);
++				}
++#endif
+ 				_vd.foundation_part = FOUNDATION_PART_NONE;
+ 				_vd.foundation[0] = -1;
+ 				_vd.foundation[1] = -1;
+ 				_vd.last_foundation_child[0] = LAST_CHILD_NONE;
+ 				_vd.last_foundation_child[1] = LAST_CHILD_NONE;
+ 
++#ifdef WITH_SHADEREMU
++				const size_t t0 = _vd.tile_sprites_to_draw.size(), p0 = _vd.parent_sprites_to_draw.size(), c0 = _vd.child_screen_sprites_to_draw.size();
++				_vd.reach_incomplete = false;
++				_vd.reach_parent_culled = false;
++				_vd.reach_culled_top = _vd.culled_top = _vd.culled_y = INT_MAX;
++				_vd.reach_culled_left = _vd.culled_left[0] = _vd.culled_x[0] = INT_MAX;
++				_vd.reach_culled_right = _vd.culled_left[1] = _vd.culled_x[1] = INT_MIN;
++				_tile_type_procs[tile_type]->draw_tile_proc(&_cur_ti);
++				_vd.count[0]++;
++				_vd.count[1] += known != VP_REACH_UNKNOWN;
++				_vd.count[3] += _vd.reach_incomplete;
++				if (reach != nullptr && tile_type != MP_VOID && known == VP_REACH_UNKNOWN && !IsBridgeAbove(_cur_ti.tile)) {
++					VpReachLearn(reach, _cur_ti.tile.base(), t0, p0, c0, viewport_y, tile_x);
++				}
++#else
+ 				_tile_type_procs[tile_type]->draw_tile_proc(&_cur_ti);
++#endif
+ 				if (_cur_ti.tile != INVALID_TILE) DrawTileSelection(&_cur_ti);
+ 			}
+ 		}
+ 	}
+ }
++#ifdef WITH_SHADEREMU
++#pragma pop_macro("_vd")
++#endif
+ 
+ /**
+  * Add a string to draw in the current viewport.
+@@ -1552,6 +2002,25 @@ void ViewportSign::UpdatePosition(int center, int top, std::string_view str, std
   *
   * @ingroup dirty
   */
@@ -4440,7 +6552,7 @@ index 6427a14..a5643b6 100644
  void ViewportSign::MarkDirty(ZoomLevel maxzoom) const
  {
  	Rect zoomlevels[to_underlying(ZoomLevel::End)];
-@@ -1713,7 +1816,136 @@ static void ViewportSortParentSprites(ParentSpriteToSortVector *psdv)
+@@ -1713,7 +2182,158 @@ static void ViewportSortParentSprites(ParentSpriteToSortVector *psdv)
  }
  
  
@@ -4458,8 +6570,16 @@ index 6427a14..a5643b6 100644
 +}
 +
 +/** A parent's screen extent with its children's, two pixels wider each way; false when it misses the part. */
++#ifdef WITH_SHADEREMU
++#pragma push_macro("_vd")
++#undef _vd
++#define _vd (vd_here)
++#endif
 +static bool VpScreenExtent(ParentSpriteToDraw *ps, int pad)
 +{
++#ifdef WITH_SHADEREMU
++	VP_HERE;
++#endif
 +	int l = ps->sl, t = ps->st, r = ps->sr, b = ps->sb;
 +	for (int i = ps->first_child; i >= 0;) {
 +		const ChildScreenSpriteToDraw &cs = _vd.child_screen_sprites_to_draw[i];
@@ -4473,14 +6593,25 @@ index 6427a14..a5643b6 100644
 +	const int slack = pad - 2; /* (the blitter rounds a sprite's ends up to whole pixels) */
 +	return l < _vd.dpi.left + _vd.dpi.width && r + slack > _vd.dpi.left && t < _vd.dpi.top + _vd.dpi.height && b + slack > _vd.dpi.top;
 +}
++#ifdef WITH_SHADEREMU
++#pragma pop_macro("_vd")
++#endif
 +
 +/**
 + * ViewportSortParentSprites' order made the same in any part (docs/games/openttd.md, "One order"): the
 + * sprites that miss the part are dropped, the rest taken in an order of their own, and only two that
 + * meet on the screen compared. Made without allocating: a worker whose lists are full gives up its piece.
 + */
++#ifdef WITH_SHADEREMU
++#pragma push_macro("_vd")
++#undef _vd
++#define _vd (vd_here)
++#endif
 +static void ViewportSortParentSpritesKept(VpVector<ParentSpriteToDraw *> *psdv)
 +{
++#ifdef WITH_SHADEREMU
++	VP_HERE;
++#endif
 +	const int pad = 2 * ScaleByZoom(1, _vd.dpi.zoom);
 +	psdv->erase(std::remove_if(psdv->begin(), psdv->end(), [&](ParentSpriteToDraw *p) { return !VpScreenExtent(p, pad); }), psdv->end());
 +	const size_t n = psdv->size();
@@ -4571,6 +6702,9 @@ index 6427a14..a5643b6 100644
 +		}
 +	}
 +}
++#ifdef WITH_SHADEREMU
++#pragma pop_macro("_vd")
++#endif
 +#endif
 +
 +template <class SortVector>
@@ -4578,7 +6712,7 @@ index 6427a14..a5643b6 100644
  {
  	for (const ParentSpriteToDraw *ps : *psd) {
  		if (ps->image != SPR_EMPTY_BOUNDING_BOX) DrawSpriteViewport(ps->image, ps->pal, ps->x, ps->y, ps->sub);
-@@ -1735,7 +1967,8 @@ static void ViewportDrawParentSprites(const ParentSpriteToSortVector *psd, const
+@@ -1735,7 +2355,8 @@ static void ViewportDrawParentSprites(const ParentSpriteToSortVector *psd, const
   * Draws the bounding boxes of all ParentSprites
   * @param psd Array of ParentSprites
   */
@@ -4588,7 +6722,7 @@ index 6427a14..a5643b6 100644
  {
  	for (const ParentSpriteToDraw *ps : *psd) {
  		Point pt1 = RemapCoords(ps->xmax + 1, ps->ymax + 1, ps->zmax + 1); // top front corner
-@@ -1808,8 +2041,15 @@ static void ViewportDrawStrings(ZoomLevel zoom, const StringSpriteToDrawVector *
+@@ -1808,8 +2429,15 @@ static void ViewportDrawStrings(ZoomLevel zoom, const StringSpriteToDrawVector *
  	}
  }
  
@@ -4604,7 +6738,7 @@ index 6427a14..a5643b6 100644
  	_vd.dpi.zoom = vp.zoom;
  	int mask = ScaleByZoom(-1, vp.zoom);
  
-@@ -1841,7 +2081,11 @@ void ViewportDoDraw(const Viewport &vp, int left, int top, int right, int bottom
+@@ -1841,7 +2469,11 @@ void ViewportDoDraw(const Viewport &vp, int left, int top, int right, int bottom
  		_vd.parent_sprites_to_sort.push_back(&psd);
  	}
  
@@ -4616,7 +6750,7 @@ index 6427a14..a5643b6 100644
  	ViewportDrawParentSprites(&_vd.parent_sprites_to_sort, &_vd.child_screen_sprites_to_draw);
  
  	if (_draw_bounding_boxes) ViewportDrawBoundingBoxes(&_vd.parent_sprites_to_sort);
-@@ -1897,6 +2141,472 @@ static inline void ViewportDraw(const Viewport &vp, int left, int top, int right
+@@ -1897,6 +2529,855 @@ static inline void ViewportDraw(const Viewport &vp, int left, int top, int right
  	);
  }
  
@@ -4643,6 +6777,10 @@ index 6427a14..a5643b6 100644
 +	uint8_t *buf;     ///< where it is drawn, 16-aligned
 +	int pitch;        ///< of buf
 +	uint32_t refused; ///< sprites its core was refused while making it
++	uint32_t spent;   ///< instructions its core spent on it
++	int tc0, tc1;     ///< the screen columns of its 16-byte texels
++	bool self;        ///< shares no 16 bytes of the screen with another piece: copied out when made
++	bool copied;
 +	bool failed;
 +	bool full;        ///< its core's lists had no room
 +};
@@ -4661,6 +6799,9 @@ index 6427a14..a5643b6 100644
 +static int _vp_workers = -1;
 +static size_t _vp_room[VP_CORES];
 +uint32_t _vp_stat_jobs, _vp_stat_pieces, _vp_stat_again, _vp_stat_redrawn, _vp_stat_loaded; ///< for OPENTTD_PLAY's report
++uint64_t _vp_stat_spent, _vp_stat_most; ///< instructions of the pieces, and of each flush's dearest
++uint32_t _vp_stat_flushes;
++uint32_t _vp_stat_tiles[4];
 +uint32_t VpSpritesRefused(int k);
 +uint32_t VpLoadWanted();
 +
@@ -4706,18 +6847,24 @@ index 6427a14..a5643b6 100644
 +	return got;
 +}
 +
-+/** The worker cores asked for (OPENTTD_WORKERS, 31 by default, 0 draws as upstream), opened once. */
++/** The worker cores asked for (OPENTTD_WORKERS, 47 by default, 0 draws as upstream), opened once. */
 +static int VpWorkers()
 +{
 +	if (_vp_workers >= 0) return _vp_workers;
++	ScrollSettle();
 +	const char *asked = getenv("OPENTTD_WORKERS");
-+	int want = asked != nullptr ? 0 : VP_CORES - 1;
++	int want = asked != nullptr ? 0 : 47; /* (more cost the first core more than they gain: docs/games/openttd.md) */
 +	for (const char *c = asked; c != nullptr && *c >= '0' && *c <= '9'; c++) want = want * 10 + (*c - '0');
 +	want = std::min(want, VP_CORES - 1);
 +	_vp_workers = 0;
 +	if (want <= 0 || BlitterFactory::GetCurrentBlitter()->GetScreenDepth() != 8) return 0;
 +	int got = VpOpen(want);
 +	if (got <= 0) return 0;
++	/* (a team waits a picture's worth of passes for its next round: one that left it is posted again late) */
++	const char *linger = getenv("OPENTTD_LINGER");
++	int passes = linger != nullptr ? 0 : 64;
++	for (const char *c = linger; c != nullptr && *c >= '0' && *c <= '9'; c++) passes = passes * 10 + (*c - '0');
++	mcw_for_linger(passes);
 +	/* A worker's stack is the k-th 64 KB from the first, its top on a page: its sp says where they begin. */
 +	mcw_for_opts opts = {};
 +	opts.grain = 1;
@@ -4737,9 +6884,12 @@ index 6427a14..a5643b6 100644
 +	return got;
 +}
 +
-+/** The workers, opened if they are not yet (for a load's LZMA decoded ahead, saveload.cpp). */
++/** The workers, opened if they are not yet: the drawing's (VpWorkers) under a video driver of 8 bits (the tick on a
++ * worker, shaderemu_t.cpp), otherwise as many as there are (a load's LZMA decoded ahead, saveload.cpp; ships' paths
++ * made ahead under the null driver). */
 +int VpWorkersOpen()
 +{
++	if (BlitterFactory::GetCurrentBlitter() != nullptr && BlitterFactory::GetCurrentBlitter()->GetScreenDepth() == 8) return VpWorkers();
 +	/* (as VpWorkers asks for them, whatever the blitter: the null video driver's too) */
 +	const char *asked = getenv("OPENTTD_WORKERS");
 +	int want = asked != nullptr ? 0 : VP_CORES - 1;
@@ -4751,16 +6901,77 @@ index 6427a14..a5643b6 100644
 +/** A part asked for while parts are kept: kept, to be made at the flush. */
 +static void VpJobPlace(const VpJob &job, int &row, int &col, int &w, int &h);
 +
++struct VpRect { int c0, r0, c1, r1; }; ///< on the screen: columns and rows, the ends excluded
++static const bool _vp_keep_flush = getenv("OPENTTD_KEEP_FLUSH") != nullptr;
++
++/** What of a is not in b, as up to four rectangles added to out. */
++static void VpRectMinus(const VpRect &a, const VpRect &b, std::vector<VpRect> &out)
++{
++	if (b.c0 >= a.c1 || b.c1 <= a.c0 || b.r0 >= a.r1 || b.r1 <= a.r0) {
++		out.push_back(a);
++		return;
++	}
++	const int r0 = std::max(a.r0, b.r0), r1 = std::min(a.r1, b.r1);
++	if (a.r0 < r0) out.push_back({ a.c0, a.r0, a.c1, r0 });
++	if (r1 < a.r1) out.push_back({ a.c0, r1, a.c1, a.r1 });
++	if (a.c0 < b.c0) out.push_back({ a.c0, r0, b.c0, r1 });
++	if (b.c1 < a.c1) out.push_back({ b.c1, r0, a.c1, r1 });
++}
++
++/** The part of job (placed at col, row) that lies on the screen's rectangle r. */
++static VpJob VpSubJob(const VpJob &job, int col, int row, const VpRect &r)
++{
++	VpJob s = job;
++	ZoomLevel z = job.vp.zoom;
++	int mask = ScaleByZoom(-1, z);
++	const int vl = job.left & mask, vt = job.top & mask;
++	s.left = vl + ScaleByZoom(r.c0 - col, z);
++	s.right = vl + ScaleByZoom(r.c1 - col, z);
++	s.top = vt + ScaleByZoom(r.r0 - row, z);
++	s.bottom = vt + ScaleByZoom(r.r1 - row, z);
++	return s;
++}
++
 +static bool ViewportKept(const Viewport &vp, int left, int top, int right, int bottom)
 +{
 +	if (_vp_keep_depth == 0 || VpCore() != 0 || _draw_bounding_boxes || _draw_dirty_blocks) return false;
++	VpFlushFinish();
 +	if (_newgrf_debug_sprite_picker.mode == SPM_REDRAW || VpWorkers() == 0) return false;
 +	/* a part over one kept is drawn after it, its texts too: the kept ones are made first */
 +	VpJob job{ vp, *_cur_dpi, left, top, right, bottom };
 +	int row, col, w, h;
 +	VpJobPlace(job, row, col, w, h);
-+	ViewportFlushOver(col, row, col + w, row + h);
-+	_vp_jobs.push_back(job);
++	/* (only the same view's pixels are the same: over another view's kept part, that part is made first) */
++	auto same_view = [&vp](const Viewport &k) {
++		return k.left == vp.left && k.top == vp.top && k.virtual_left == vp.virtual_left && k.virtual_top == vp.virtual_top && k.zoom == vp.zoom;
++	};
++	bool other = _vp_keep_flush;
++	for (size_t i = 0; i < _vp_jobs.size() && !other; i++) {
++		int kr, kc, kw, kh;
++		VpJobPlace(_vp_jobs[i], kr, kc, kw, kh);
++		other = !same_view(_vp_jobs[i].vp) && kc < col + w && col < kc + kw && kr < row + h && row < kr + kh;
++	}
++	if (other) { /* (OPENTTD_KEEP_FLUSH=1: always so, as before) */
++		ViewportFlushOver(col, row, col + w, row + h);
++		_vp_jobs.push_back(job);
++		return true;
++	}
++	static std::vector<VpRect> rects, next;
++	rects.assign(1, VpRect{ col, row, col + w, row + h });
++	for (const VpJob &kept : _vp_jobs) {
++		int kr, kc, kw, kh;
++		VpJobPlace(kept, kr, kc, kw, kh);
++		next.clear();
++		for (const VpRect &r : rects) VpRectMinus(r, VpRect{ kc, kr, kc + kw, kr + kh }, next);
++		rects.swap(next);
++		if (rects.empty()) return true;
++	}
++	if (rects.size() > 16) { /* (too many pieces: the kept ones are made first) */
++		ViewportFlush();
++		_vp_jobs.push_back(job);
++		return true;
++	}
++	for (const VpRect &r : rects) _vp_jobs.push_back(VpSubJob(job, col, row, r));
 +	return true;
 +}
 +
@@ -4771,8 +6982,16 @@ index 6427a14..a5643b6 100644
 +}
 +
 +/** What ViewportDoDraw draws of sprites, into this core's lists and dst (its first pixel): no signs or texts. */
++#ifdef WITH_SHADEREMU
++#pragma push_macro("_vd")
++#undef _vd
++#define _vd (vd_here)
++#endif
 +static void VpDrawSprites(const Viewport &vp, int left, int top, int right, int bottom, uint8_t *dst, int pitch)
 +{
++#ifdef WITH_SHADEREMU
++	VP_HERE;
++#endif
 +	VpCoreState &me = _vp_core[VpCore()];
 +	_vd.dpi.zoom = vp.zoom;
 +	int mask = ScaleByZoom(-1, vp.zoom);
@@ -4801,6 +7020,9 @@ index 6427a14..a5643b6 100644
 +	_vd.parent_sprites_to_sort.clear();
 +	_vd.child_screen_sprites_to_draw.clear();
 +}
++#ifdef WITH_SHADEREMU
++#pragma pop_macro("_vd")
++#endif
 +
 +/** A piece of a part, into its buffer, on whichever core runs it. */
 +static void VpDrawPiece(VpPiece &piece)
@@ -4812,8 +7034,12 @@ index 6427a14..a5643b6 100644
 +	}
 +	VpCoreState &me = _vp_core[k];
 +	me.failed = false;
++	uint32_t i0;
++	asm volatile("rdinstret %0" : "=r"(i0));
 +	const uint32_t refused = k != 0 ? VpSpritesRefused(k) : 0;
++	const size_t learned = _vd_of[k].reach_new.size();
 +	const VpJob &job = _vp_jobs[piece.job];
++	VehiclesKeptUse(piece.job);
 +	/* (what no sprite covers stays as the screen was; on the GPU a piece is records: SeGpuPieceBegin) */
 +	const bool gpu = SeGpuOn();
 +	for (int r = 0; r < piece.row1 - piece.row0 && !gpu; r++) {
@@ -4825,12 +7051,23 @@ index 6427a14..a5643b6 100644
 +	DrawPixelInfo *was = me.cur_dpi;
 +	me.cur_dpi = &outer;
 +	VpDrawSprites(job.vp, piece.left, piece.top, piece.right, piece.bottom, piece.buf, piece.pitch);
++	VehiclesKeptUse(-1);
 +	me.cur_dpi = was;
 +	if (gpu) SeGpuPieceEnd(index, me.failed);
 +	piece.failed = me.failed;
 +	piece.full = me.full;
++	if (me.failed) _vd_of[k].reach_new.resize(learned); /* (what a piece given up learned may lack sprites) */
 +	piece.refused = k != 0 ? VpSpritesRefused(k) - refused : 0;
 +	me.failed = false;
++	if (!piece.failed && (piece.self || k == 0)) {
++		for (int r = 0; r < piece.row1 - piece.row0; r++) {
++			std::copy_n(piece.buf + r * piece.pitch, piece.width, piece.screen + r * _screen.pitch);
++		}
++		piece.copied = true;
++	}
++	uint32_t i1;
++	asm volatile("rdinstret %0" : "=r"(i1));
++	piece.spent = i1 - i0;
 +}
 +
 +static void VpDrawPieces(void *, uint32_t from, uint32_t to)
@@ -4843,6 +7080,7 @@ index 6427a14..a5643b6 100644
 +{
 +	const int top = static_cast<int>(from) * 16, bottom = static_cast<int>(to) * 16;
 +	for (const VpPiece &p : _vp_pieces) {
++		if (p.copied) continue;
 +		int r0 = std::max(top, p.row0), r1 = std::min(bottom, p.row1);
 +		for (int r = r0; r < r1; r++) {
 +			std::copy_n(p.buf + (r - p.row0) * p.pitch, p.width, p.screen + (r - p.row0) * _screen.pitch);
@@ -4850,8 +7088,13 @@ index 6427a14..a5643b6 100644
 +	}
 +}
 +
-+/** A part's signs, texts and overlay over its sprites, by the first core (they format strings and load glyphs). */
-+static void VpDrawTexts(const VpJob &job)
++static std::vector<StringSpriteToDrawVector> _vp_texts; ///< each kept part's strings, made before they are drawn
++
++/**
++ * A part's signs, texts and overlay over its sprites, by the first core (they format strings and load glyphs):
++ * made (its strings into _vp_texts[j]) while the workers draw, drawn after.
++ */
++static void VpDrawTexts(const VpJob &job, size_t j, bool make)
 +{
 +	const Viewport &vp = job.vp;
 +	DrawPixelInfo outer = job.outer;
@@ -4868,8 +7111,16 @@ index 6427a14..a5643b6 100644
 +	_vd.dpi.dst_ptr = BlitterFactory::GetCurrentBlitter()->MoveTo(_cur_dpi->dst_ptr, x - _cur_dpi->left, y - _cur_dpi->top);
 +	AutoRestoreBackup dpi_backup(_cur_dpi, &_vd.dpi);
 +
-+	ViewportAddKdtreeSigns(&_vd.dpi);
-+	DrawTextEffects(&_vd.dpi);
++	if (make) {
++		ViewportAddKdtreeSigns(&_vd.dpi);
++		DrawTextEffects(&_vd.dpi);
++		if (_vp_texts.size() <= j) _vp_texts.resize(j + 1);
++		_vp_texts[j].swap(_vd.string_sprites_to_draw);
++		_vd.string_sprites_to_draw.clear();
++		return;
++	}
++	_vd.string_sprites_to_draw.swap(_vp_texts[j]);
++	_vp_texts[j].clear();
 +
 +	DrawPixelInfo dp = _vd.dpi;
 +	ZoomLevel zoom = _vd.dpi.zoom;
@@ -4896,6 +7147,10 @@ index 6427a14..a5643b6 100644
 +{
 +	ViewportDrawer &d = _vd_of[k];
 +	size_t n = _vp_room[k];
++	/* (the lists keep their room: made again only when it grew) */
++	static size_t made[VP_CORES];
++	if (made[k] == n) return;
++	made[k] = n;
 +	d.tile_sprites_to_draw.reserve(n);
 +	d.parent_sprites_to_draw.reserve(n);
 +	d.parent_sprites_to_sort.reserve(n);
@@ -4904,6 +7159,7 @@ index 6427a14..a5643b6 100644
 +	d.sort_next.reserve(n);
 +	d.sort_preceding.reserve(n);
 +	d.sort_stack.reserve(4 * n);
++	d.reach_new.reserve(4 * n);
 +}
 +
 +/** Where a part lies on the screen: its first pixel's row and column, and its size in pixels. */
@@ -4935,30 +7191,169 @@ index 6427a14..a5643b6 100644
 +	}
 +}
 +
++/**
++ * A scroll of the screen's rectangle by (xo, yo): the parts kept in it move with what they show, so they
++ * need not be made first; if one lies over its edge, before or after, all are made now.
++ */
++void ViewportScrollKept(int left, int top, int width, int height, int xo, int yo)
++{
++	const int right = left + width, bottom = top + height;
++	const VpRect area{ left, top, right, bottom };
++	if (_vp_keep_flush) {
++		for (const VpJob &job : _vp_jobs) {
++			int row, col, w, h;
++			VpJobPlace(job, row, col, w, h);
++			if (!(col < right && col + w > left && row < bottom && row + h > top)) continue;
++			const bool inside = col >= left && col + w <= right && row >= top && row + h <= bottom &&
++					col + xo >= left && col + w + xo <= right && row + yo >= top && row + h + yo <= bottom;
++			if (!inside) {
++				ViewportFlush();
++				return;
++			}
++		}
++	}
++	static std::vector<VpJob> jobs;
++	static std::vector<VpRect> outside;
++	jobs.clear();
++	for (const VpJob &job : _vp_jobs) {
++		int row, col, w, h;
++		VpJobPlace(job, row, col, w, h);
++		if (!(col < right && col + w > left && row < bottom && row + h > top)) {
++			jobs.push_back(job);
++			continue;
++		}
++		/* what lies outside stays; what lies inside moves, as much of it as stays inside */
++		outside.clear();
++		VpRectMinus(VpRect{ col, row, col + w, row + h }, area, outside);
++		for (const VpRect &r : outside) jobs.push_back(VpSubJob(job, col, row, r));
++		VpRect in{ std::max(col, left) + xo, std::max(row, top) + yo, std::min(col + w, right) + xo, std::min(row + h, bottom) + yo };
++		in = { std::max(in.c0, left) - xo, std::max(in.r0, top) - yo, std::min(in.c1, right) - xo, std::min(in.r1, bottom) - yo };
++		if (in.c0 >= in.c1 || in.r0 >= in.r1) continue;
++		VpJob moved = VpSubJob(job, col, row, in);
++		moved.vp.left += xo, moved.vp.top += yo;
++		jobs.push_back(moved);
++	}
++	_vp_jobs.assign(jobs.begin(), jobs.end());
++}
++
++uint32_t _vp_phase[VP_PHASES];
++
++bool _vp_flush_last; ///< the flush UpdateWindows ends with: the tick on its worker goes on from its pieces
++
++/* OPENTTD_FLUSH_COST=1: the first core's instructions in each step of a flush, every 64 flushes */
++static uint64_t _fc_sum[13];
++static uint32_t _fc_at, _fc_n;
++static void FcMark(int i)
++{
++	uint32_t now;
++	asm volatile("rdinstret %0" : "=r"(now));
++	_fc_sum[i] += now - _fc_at;
++	_fc_at = now;
++}
++
++static void VpFlushRest(uint32_t t, uint32_t flush_from);
++
 +void ViewportFlush()
 +{
++	VpFlushFinish();
++	const bool last = std::exchange(_vp_flush_last, false);
 +	if (_vp_jobs.empty()) return;
 +	assert(VpCore() == 0);
-+	const int cores = _vp_workers + 1;
++	static const bool fc = getenv("OPENTTD_FLUSH_COST") != nullptr;
++	FcMark(12);
++	const uint32_t flush_from = VpTime();
++	VpBridgeMost(); /* (made here: a worker only reads it) */
++	/* sprites of vehicles that change when drawn are made here, not on the workers, the tick waiting;
++	 * the vehicles a part may draw copied for it (VehiclesKeptPart) */
++	VehiclesKeptBegin();
++	for (const VpJob &job : _vp_jobs) {
++		VehiclesKeptPart();
++		int row0, col0, w, h;
++		VpJobPlace(job, row0, col0, w, h);
++		if (w <= 0 || h <= 0) continue;
++		ZoomLevel z = job.vp.zoom;
++		int mask = ScaleByZoom(-1, z);
++		DrawPixelInfo whole = {};
++		whole.left = job.left & mask;
++		whole.top = job.top & mask;
++		whole.width = ScaleByZoom(w, z);
++		whole.height = ScaleByZoom(h, z);
++		whole.zoom = z;
++		ViewportRevalidateVehicles(&whole);
++	}
++	VehiclesKeptPart();
++	VehiclesKeptEnd();
++	FcMark(0);
++	if (last) TickReleaseForFlush();
++	/* (the first core hands the pieces out: at most one a worker, OPENTTD_CUT=old one a core) */
++	static const bool cut_old = getenv("OPENTTD_CUT") != nullptr;
++	const int cores = _vp_workers + (cut_old ? 1 : 0) - (_tw_on ? 1 : 0); /* (the tick's worker draws nothing) */
 +	_vp_pieces.clear();
 +
 +	/* how each part is cut: the dearest piece of all is cut again (in columns or rows) while the flush, the
-+	 * dearest piece or all work over the cores, gets shorter; a column's tiles reach 128 pixels to its sides
-+	 * and a row's 250 below it, at normal zoom */
-+	struct Cut { int w, h, mh, mv, cols, rows; int64_t Cost(int c, int r) const { return int64_t{w / c + mh} * (h / r + mv); } };
-+	std::vector<Cut> cuts(_vp_jobs.size());
++	 * dearest piece or all work over the cores, gets shorter; a piece costs as its pixels with margins of 4
++	 * and as 240 more (its tiles passed and sorted), at normal zoom: fitted to the pieces of OPENTTD_PIECE_LOG */
++	/* OPENTTD_CUT_M=MH,MV,K: the margins and the piece's own in pixels at normal zoom */
++	static int _vp_cut_mh = 4, _vp_cut_mv = 4, _vp_cut_k = 240;
++	static bool margins_read = false;
++	if (!margins_read) {
++		margins_read = true;
++		if (const char *e = getenv("OPENTTD_CUT_M"); e != nullptr) {
++			int v[3] = {0, 0, 0}, i = 0;
++			for (; *e != 0 && i < 3; e++) {
++				if (*e == ',') i++;
++				else if (*e >= '0' && *e <= '9') v[i] = v[i] * 10 + (*e - '0');
++			}
++			_vp_cut_mh = v[0], _vp_cut_mv = v[1], _vp_cut_k = v[2];
++		}
++	}
++	struct Cut { int w, h, mh, mv, k, cols, rows; int64_t Cost(int c, int r) const { return int64_t{w / c + mh} * (h / r + mv) + k; } };
++	/* (a 64-bit division is 50 instructions here) */
++	auto per_core = [&](int64_t t) { return t < INT32_MAX ? int64_t{static_cast<int32_t>(t) / cores} : t / cores; };
++	static std::vector<Cut> cuts;
++	cuts.resize(_vp_jobs.size());
 +	int64_t total = 0;
 +	for (size_t j = 0; j < _vp_jobs.size(); j++) {
 +		ZoomLevel z = _vp_jobs[j].vp.zoom;
 +		int row, col;
 +		Cut &c = cuts[j];
 +		VpJobPlace(_vp_jobs[j], row, col, c.w, c.h);
-+		c.mh = 128 * 4 / ScaleByZoom(1, z);
-+		c.mv = 250 * 4 / ScaleByZoom(1, z);
++		c.mh = _vp_cut_mh * 4 / ScaleByZoom(1, z);
++		c.mv = _vp_cut_mv * 4 / ScaleByZoom(1, z);
++		c.k = _vp_cut_k * 16 / (ScaleByZoom(1, z) * ScaleByZoom(1, z));
 +		c.cols = c.rows = 1;
 +		if (c.w > 0 && c.h > 0) total += c.Cost(1, 1);
 +	}
-+	for (;;) {
++	/* each part its share of the cores by its cost, cut in the columns and rows that make its pieces cheapest
++	 * (OPENTTD_CUT_GREEDY=1: the dearest piece cut again while that shortens the flush, as before) */
++	static const bool greedy = getenv("OPENTTD_CUT_GREEDY") != nullptr;
++	if (!greedy) {
++		for (Cut &c : cuts) {
++			if (c.w <= 0 || c.h <= 0) continue;
++			const int share = std::max<int>(1, static_cast<int>(c.Cost(1, 1) * cores / std::max<int64_t>(1, total)));
++			int64_t best = c.Cost(1, 1);
++			for (int cols = 1; cols <= std::max(1, std::min(share, c.w / 16)); cols++) {
++				const int rows = std::max(1, std::min(share / cols, c.h / 8));
++				if (c.Cost(cols, rows) < best) best = c.Cost(cols, rows), c.cols = cols, c.rows = rows;
++			}
++		}
++	}
++	/* (parts of the same sizes as one of the last 16 flushes' are cut as they were: a scroll's strips are) */
++	struct Made { std::vector<Cut> in, out; };
++	static Made made[16];
++	static uint32_t made_next;
++	auto same = [](const Cut &a, const Cut &b) { return a.w == b.w && a.h == b.h && a.mh == b.mh && a.mv == b.mv && a.k == b.k; };
++	bool as_last = !greedy;
++	for (const Made &m : made) {
++		if (m.in.size() == cuts.size() && std::equal(cuts.begin(), cuts.end(), m.in.begin(), same)) {
++			cuts = m.out, as_last = true;
++			break;
++		}
++	}
++	Made &now_made = made[made_next % std::size(made)];
++	if (!as_last) now_made.in = cuts, made_next++;
++	int pieces_now = static_cast<int>(std::count_if(cuts.begin(), cuts.end(), [](const Cut &c) { return c.w > 0 && c.h > 0; }));
++	for (; !as_last;) {
 +		size_t worst = 0;
 +		int64_t worst_cost = -1;
 +		for (size_t j = 0; j < cuts.size(); j++) {
@@ -4967,20 +7362,23 @@ index 6427a14..a5643b6 100644
 +		}
 +		if (worst_cost < 0) break;
 +		Cut &c = cuts[worst];
-+		const int64_t was = std::max(worst_cost, total / cores);
++		const int64_t was = std::max(worst_cost, per_core(total));
 +		int64_t best = INT64_MAX;
 +		int bc = 0, br = 0;
-+		if ((c.cols + 1) * c.rows <= cores && c.w / (c.cols + 1) >= 16 && c.Cost(c.cols + 1, c.rows) < best) best = c.Cost(c.cols + 1, c.rows), bc = c.cols + 1, br = c.rows;
-+		if (c.cols * (c.rows + 1) <= cores && c.h / (c.rows + 1) >= 8 && c.Cost(c.cols, c.rows + 1) < best) best = c.Cost(c.cols, c.rows + 1), bc = c.cols, br = c.rows + 1;
++		if (pieces_now + c.rows <= cores && c.w / (c.cols + 1) >= 16 && c.Cost(c.cols + 1, c.rows) < best) best = c.Cost(c.cols + 1, c.rows), bc = c.cols + 1, br = c.rows;
++		if (pieces_now + c.cols <= cores && c.h / (c.rows + 1) >= 8 && c.Cost(c.cols, c.rows + 1) < best) best = c.Cost(c.cols, c.rows + 1), bc = c.cols, br = c.rows + 1;
 +		if (bc == 0) break;
 +		int64_t now_total = total - c.Cost(c.cols, c.rows) * c.cols * c.rows + best * bc * br;
 +		int64_t next_worst = best;
 +		for (size_t j = 0; j < cuts.size(); j++) {
 +			if (j != worst && cuts[j].w > 0 && cuts[j].h > 0) next_worst = std::max(next_worst, cuts[j].Cost(cuts[j].cols, cuts[j].rows));
 +		}
-+		if (std::max(next_worst, now_total / cores) >= was) break;
++		if (std::max(next_worst, per_core(now_total)) > was) break; /* (as long: another part as dear is cut next) */
++		pieces_now += bc * br - c.cols * c.rows;
 +		c.cols = bc, c.rows = br, total = now_total;
 +	}
++	if (!as_last) now_made.out = cuts;
++	FcMark(1);
 +
 +	size_t buffer_bytes = 0;
 +	for (size_t j = 0; j < _vp_jobs.size(); j++) {
@@ -4994,18 +7392,12 @@ index 6427a14..a5643b6 100644
 +		if (w <= 0 || h <= 0) continue;
 +		uint8_t *at = static_cast<uint8_t *>(_screen.dst_ptr) + row0 * _screen.pitch + col0;
 +
-+		/* sprites of vehicles that change when drawn are made here, not on the workers */
-+		DrawPixelInfo whole = {};
-+		whole.left = vl;
-+		whole.top = vt;
-+		whole.width = ScaleByZoom(w, z);
-+		whole.height = ScaleByZoom(h, z);
-+		whole.zoom = z;
-+		ViewportRevalidateVehicles(&whole);
-+
-+		const int cols = cuts[j].cols, rows = cuts[j].rows, mh = cuts[j].mh, mv = cuts[j].mv;
++		const int cols = cuts[j].cols, rows = cuts[j].rows, mh = cuts[j].mh, mv = cuts[j].mv, pk = cuts[j].k;
++		/* (a cut between columns falls on 16 bytes of the screen) */
++		auto cut = [&](int p) { return p == 0 ? 0 : p == cols ? w : std::clamp(((col0 + w * p / cols + 8) & ~15) - col0, 0, w); };
 +		for (int p = 0; p < cols; p++) {
-+			int a = w * p / cols, b = w * (p + 1) / cols;
++			int a = cut(p), b = cut(p + 1);
++			if (b <= a) continue;
 +			for (int q = 0; q < rows; q++) {
 +				int r0 = h * q / rows, r1 = h * (q + 1) / rows;
 +				VpPiece piece = {};
@@ -5017,14 +7409,47 @@ index 6427a14..a5643b6 100644
 +				piece.row0 = row0 + r0;
 +				piece.row1 = row0 + r1;
 +				piece.width = b - a;
-+				piece.cost = (b - a + mh) * (r1 - r0 + mv);
++				piece.cost = (b - a + mh) * (r1 - r0 + mv) + pk;
 +				piece.screen = at + r0 * _screen.pitch + a;
++				piece.tc0 = (col0 + a) & ~15;
++				piece.tc1 = (col0 + b + 15) & ~15;
 +				piece.pitch = (b - a + 15) & ~15;
 +				buffer_bytes += static_cast<size_t>(piece.pitch) * (r1 - r0);
 +				_vp_pieces.push_back(piece);
 +			}
 +		}
 +	}
++	FcMark(2);
++	/* a piece that shares no 16 bytes of the screen with another copies itself out (a part's are cut on them) */
++	/* (only the pieces of two parts whose rectangles meet are compared) */
++	struct Ext { int r0, r1, c0, c1; size_t first, last; };
++	static std::vector<Ext> ext;
++	ext.assign(_vp_jobs.size(), Ext{INT_MAX, INT_MIN, INT_MAX, INT_MIN, 0, 0});
++	const bool aligned = _screen.pitch % 16 == 0 && reinterpret_cast<uintptr_t>(_screen.dst_ptr) % 16 == 0;
++	for (size_t i = 0; i < _vp_pieces.size(); i++) {
++		VpPiece &p = _vp_pieces[i];
++		p.self = aligned;
++		Ext &e = ext[p.job];
++		if (e.r0 == INT_MAX) e.first = i;
++		e.last = i + 1;
++		e.r0 = std::min(e.r0, p.row0), e.r1 = std::max(e.r1, p.row1), e.c0 = std::min(e.c0, p.tc0), e.c1 = std::max(e.c1, p.tc1);
++	}
++	for (size_t a = 0; a < ext.size(); a++) {
++		for (size_t b = a + 1; b < ext.size(); b++) {
++			const Ext &x = ext[a], &y = ext[b];
++			if (x.r0 == INT_MAX || y.r0 == INT_MAX || !(x.r0 < y.r1 && y.r0 < x.r1 && x.c0 < y.c1 && y.c0 < x.c1)) continue;
++			for (size_t i = x.first; i < x.last; i++) {
++				VpPiece &p = _vp_pieces[i];
++				if (!(y.r0 < p.row1 && p.row0 < y.r1 && y.c0 < p.tc1 && p.tc0 < y.c1)) continue;
++				for (size_t k = y.first; k < y.last; k++) {
++					VpPiece &q = _vp_pieces[k];
++					if (q.row0 < p.row1 && p.row0 < q.row1 && q.tc0 < p.tc1 && p.tc0 < q.tc1) p.self = q.self = false;
++				}
++			}
++		}
++	}
++
++	FcMark(3);
 +	/* (the buffers grow on the first core, so that their pages are there before a worker writes them) */
 +	if (SeGpuOn()) {
 +		/* (the GPU's pieces are records, drawn where they lie: SeGpuPieceBegin) */
@@ -5039,12 +7464,66 @@ index 6427a14..a5643b6 100644
 +	const int n = static_cast<int>(_vp_pieces.size());
 +	_vp_order.resize(n);
 +	for (int i = 0; i < n; i++) _vp_order[i] = i;
-+	std::sort(_vp_order.begin(), _vp_order.end(), [](int a, int b) { return _vp_pieces[a].cost > _vp_pieces[b].cost; });
++	if (n > cores) std::sort(_vp_order.begin(), _vp_order.end(), [](int a, int b) { return _vp_pieces[a].cost > _vp_pieces[b].cost; });
 +
 +	for (int k = 1; k <= _vp_workers; k++) VpMakeRoom(k);
 +	mcw_for_opts opts = {};
 +	opts.grain = 1;
-+	mcw_for_opt(static_cast<uint32_t>(n), VpDrawPieces, nullptr, &opts);
++	opts.first_idle = 1; /* (the first core hands out and waits: its own piece was the dearest) */
++	FcMark(4);
++	ScrollSettle(); /* (the move the scroll began, made while the parts were cut) */
++	FcMark(5);
++	uint32_t t = VpTime();
++	mcw_for_begin(static_cast<uint32_t>(n), VpDrawPieces, nullptr, &opts);
++	FcMark(6);
++	for (size_t j = 0; j < _vp_jobs.size(); j++) VpDrawTexts(_vp_jobs[j], j, true);
++	FcMark(11);
++	/* a picture's last flush is left out while the tick is on its worker: the next picture's first steps run
++	 * while the workers draw (OPENTTD_PIPE=0: waited for here) */
++	static const bool pipe = getenv("OPENTTD_PIPE") == nullptr || getenv("OPENTTD_PIPE")[0] != '0';
++	if (last && pipe && _tw_on && !TwExclusiveWanted()) {
++		_vp_out = { true, t, flush_from };
++		return;
++	}
++	VpFlushRest(t, flush_from);
++}
++
++/** The pieces' round waited for, and the flush made whole. */
++static void VpFlushRest(uint32_t t, uint32_t flush_from)
++{
++	static const bool fc = getenv("OPENTTD_FLUSH_COST") != nullptr;
++	const int n = static_cast<int>(_vp_pieces.size());
++	mcw_for_opts opts = {};
++	opts.grain = 1;
++	opts.first_idle = 1;
++	mcw_for_wait();
++	FcMark(6);
++	_vp_phase[VP_PHASE_PIECES] += VpTime() - t;
++	static const bool piece_log = getenv("OPENTTD_PIECE_LOG") != nullptr;
++	static uint32_t flushes = 0;
++	static const bool piece_log_dear = piece_log && getenv("OPENTTD_PIECE_LOG")[0] == '2';
++	uint32_t dearest = 0;
++	for (const VpPiece &p : _vp_pieces) dearest = std::max(dearest, p.spent);
++	if (piece_log && (piece_log_dear ? dearest > 80000 : (flushes++ & 15) == 0)) {
++		std::string line;
++		for (size_t i = 0; i < _vp_pieces.size(); i++) {
++			const VpPiece &p = _vp_pieces[i];
++			line += fmt::format(" {}:{}x{}:{}:{}", p.job, p.width, p.row1 - p.row0, p.cost / 1000, p.spent / 1000);
++			if (i % 8 == 7 || i + 1 == _vp_pieces.size()) fmt::print(stderr, "openttd: pieces{}\n", line), line.clear();
++		}
++	}
++	{
++		uint32_t most = 0;
++		for (const VpPiece &p : _vp_pieces) most = std::max(most, p.spent), _vp_stat_spent += p.spent;
++		_vp_stat_most += most;
++		_vp_stat_flushes++;
++		for (int k = 0; k < VP_CORES; k++) {
++			for (int c = 0; c < 4; c++) _vp_stat_tiles[c] += _vd_of[k].count[c], _vd_of[k].count[c] = 0;
++		}
++	}
++	FcMark(7);
++	VpReachMerge();
++	FcMark(8);
 +
 +	/* pieces that lacked sprites or room are made again by the workers once those are loaded and made */
 +	for (int k = 1; k <= _vp_workers; k++) {
@@ -5056,10 +7535,12 @@ index 6427a14..a5643b6 100644
 +		const VpPiece &p = _vp_pieces[i];
 +		if (p.failed && (p.refused != 0 || p.full)) again.push_back(i);
 +	}
++	t = VpTime();
 +	if (!again.empty()) {
 +		_vp_order.swap(again);
 +		for (int k = 1; k <= _vp_workers; k++) VpMakeRoom(k);
 +		mcw_for_opt(static_cast<uint32_t>(_vp_order.size()), VpDrawPieces, nullptr, &opts);
++		VpReachMerge();
 +		_vp_stat_again += static_cast<uint32_t>(_vp_order.size());
 +		for (int k = 1; k <= _vp_workers; k++) {
 +			if (_vp_core[k].full) _vp_room[k] *= 2, _vp_core[k].full = false;
@@ -5067,21 +7548,57 @@ index 6427a14..a5643b6 100644
 +		VpLoadWanted();
 +	}
 +
++	_vp_phase[VP_PHASE_AGAIN] += VpTime() - t;
++	t = VpTime();
 +	/* what a worker gave up twice, then the buffers to the screen, then the texts */
 +	for (VpPiece &p : _vp_pieces) {
 +		if (!p.failed) continue;
 +		VpDrawPiece(p);
 +		_vp_stat_redrawn++;
 +	}
++	_vp_phase[VP_PHASE_FIRST] += VpTime() - t;
++	t = VpTime();
++	static uint32_t _fc_left, _fc_left_bytes, _fc_rounds;
++	uint32_t left_bytes = 0;
++	for (const VpPiece &p : _vp_pieces) {
++		if (!p.copied) _fc_left++, left_bytes += p.width * (p.row1 - p.row0);
++	}
++	_fc_left_bytes += left_bytes;
++	/* (a few KB the first core copies itself: a round is two passes) */
 +	if (SeGpuOn()) {
 +		SeGpuPiecesEnd();
-+	} else {
++	} else if (left_bytes > 16384) {
++		_fc_rounds++;
 +		mcw_for_opt(static_cast<uint32_t>((_screen.height + 15) / 16), VpCopyOut, nullptr, &opts);
++	} else if (left_bytes > 0) {
++		VpCopyOut(nullptr, 0, static_cast<uint32_t>((_screen.height + 15) / 16));
 +	}
-+	for (const VpJob &job : _vp_jobs) VpDrawTexts(job);
++	_vp_phase[VP_PHASE_COPY] += VpTime() - t;
++	t = VpTime();
++	FcMark(9);
++	for (size_t j = 0; j < _vp_jobs.size(); j++) VpDrawTexts(_vp_jobs[j], j, false);
++	FcMark(10);
++	if (fc && ++_fc_n % 64 == 0) {
++		std::string line = "openttd: flush steps (k a flush): revalidate, cut, pieces made, their copies, sort and room, scroll waited, pieces, stats, reach, again and copy, texts drawn, texts made:";
++		for (int i = 0; i < 12; i++) line += fmt::format(" {:.1f}", _fc_sum[i] / 64000.0), _fc_sum[i] = 0;
++		fmt::print(stderr, "{}; not copied by their workers: {} pieces, {} bytes, {} rounds (64 flushes)\n", line, _fc_left, _fc_left_bytes, _fc_rounds);
++		_fc_left = _fc_left_bytes = _fc_rounds = 0;
++	}
++	_vp_phase[VP_PHASE_TEXTS] += VpTime() - t;
++	_vp_phase[VP_PHASE_FLUSH] += VpTime() - flush_from;
 +	_vp_stat_jobs += static_cast<uint32_t>(_vp_jobs.size());
 +	_vp_stat_pieces += static_cast<uint32_t>(n);
 +	_vp_jobs.clear();
++	_vp_forget_late.clear();
++	_vp_forget_all_late = false;
++}
++
++void VpFlushFinish()
++{
++	if (!_vp_out.out) return;
++	_vp_out.out = false;
++	asm volatile("rdinstret %0" : "=r"(_fc_at)); /* (what the first core made meanwhile is no step's) */
++	VpFlushRest(_vp_out.t, _vp_out.flush_from);
 +}
 +#endif
 +
@@ -5089,7 +7606,29 @@ index 6427a14..a5643b6 100644
  /**
   * Draw the viewport of this window.
   */
-@@ -2091,10 +2801,53 @@ static bool MarkViewportDirty(const Viewport &vp, int left, int top, int right,
+@@ -1965,7 +3446,21 @@ static void ClampSmoothScroll(uint32_t delta_ms, int64_t delta_hi, int64_t delta
+ 	assert(delta_hi != 0);
+ 
+ 	/* Move at most 75% of the distance every 30ms, for a smooth experience */
++#ifdef WITH_SHADEREMU
++	/* (a pow is 10,000 instructions here: the same value, made once a number of milliseconds) */
++	static double kept[1024];
++	static uint32_t kept_ms[1024];
++	double f;
++	if (delta_ms < 1024 && kept_ms[delta_ms] == delta_ms + 1) {
++		f = kept[delta_ms];
++	} else {
++		f = std::pow(0.75, delta_ms / 30.0);
++		if (delta_ms < 1024) kept[delta_ms] = f, kept_ms[delta_ms] = delta_ms + 1;
++	}
++	int64_t delta_left = delta_hi * f;
++#else
+ 	int64_t delta_left = delta_hi * std::pow(0.75, delta_ms / 30.0);
++#endif
+ 	/* Move never more than 16 tiles per 30ms. */
+ 	int max_scroll = Map::ScaleBySize1D(16 * PIXELS_PER_TILE * delta_ms / 30);
+ 
+@@ -2091,10 +3586,59 @@ static bool MarkViewportDirty(const Viewport &vp, int left, int top, int right,
   * @return true if at least one viewport has a dirty block
   * @ingroup dirty
   */
@@ -5130,6 +7669,12 @@ index 6427a14..a5643b6 100644
 +
  bool MarkAllViewportsDirty(int left, int top, int right, int bottom)
  {
++#ifdef WITH_SHADEREMU
++	if (TickOnWorker()) {
++		TickDefer([=] { MarkAllViewportsDirty(left, top, right, bottom); });
++		return true;
++	}
++#endif
  	bool dirty = false;
  
 +#ifdef WITH_SHADEREMU
@@ -5143,11 +7688,22 @@ index 6427a14..a5643b6 100644
  	for (const Window *w : Window::Iterate()) {
  		if (w->viewport != nullptr) {
  			assert(w->viewport->width != 0);
+@@ -2127,6 +3671,10 @@ void ConstrainAllViewportsZoom()
+  */
+ void MarkTileDirtyByTile(TileIndex tile, int bridge_level_offset, int tile_height_override)
+ {
++#ifdef WITH_SHADEREMU
++	TICK_DEFER(MarkTileDirtyByTile(tile, bridge_level_offset, tile_height_override));
++	ViewportReachForget(tile);
++#endif
+ 	Point pt = RemapCoords(TileX(tile) * TILE_SIZE, TileY(tile) * TILE_SIZE, tile_height_override * TILE_HEIGHT);
+ 	MarkAllViewportsDirty(
+ 			pt.x - MAX_TILE_EXTENT_LEFT,
 diff --git a/src/viewport_func.h b/src/viewport_func.h
-index 05acc3f..0a48e83 100644
+index 05acc3f..da9dd5f 100644
 --- a/src/viewport_func.h
 +++ b/src/viewport_func.h
-@@ -31,6 +31,16 @@ void UpdateViewportPosition(Window *w, uint32_t delta_ms);
+@@ -31,6 +31,19 @@ void UpdateViewportPosition(Window *w, uint32_t delta_ms);
  bool MarkAllViewportsDirty(int left, int top, int right, int bottom);
  
  bool DoZoomInOutWindow(ZoomStateChange how, Window *w);
@@ -5155,6 +7711,9 @@ index 05acc3f..0a48e83 100644
 +#ifdef WITH_SHADEREMU
 +void ViewportFlush();
 +void ViewportFlushOver(int left, int top, int right, int bottom);
++void ViewportScrollKept(int left, int top, int width, int height, int xo, int yo);
++void ViewportReachForget(TileIndex tile);
++void ViewportReachForgetAll();
 +/** While one lives, the viewport's parts asked for are kept and made at once by every core when the last one goes. */
 +struct ViewportKeep {
 +	ViewportKeep();
@@ -5178,6 +7737,54 @@ index 591ecfb..1137828 100644
  };
  
  typedef std::vector<ParentSpriteToDraw*> ParentSpriteToSortVector;
+diff --git a/src/waypoint.cpp b/src/waypoint.cpp
+index 2f2def1..41a6714 100644
+--- a/src/waypoint.cpp
++++ b/src/waypoint.cpp
+@@ -15,6 +15,9 @@
+ #include "waypoint_base.h"
+ #include "viewport_kdtree.h"
+ 
++#ifdef WITH_SHADEREMU
++#include "gfx_func.h"
++#endif
+ #include "safeguards.h"
+ 
+ /**
+@@ -44,6 +47,9 @@ TileArea Waypoint::GetTileArea(StationType type) const
+ 
+ Waypoint::~Waypoint()
+ {
++#ifdef WITH_SHADEREMU
++	if (TickOnWorker()) TickExclusive();
++#endif
+ 	if (CleaningPool()) return;
+ 	CloseWindowById(WC_WAYPOINT_VIEW, this->index);
+ 	RemoveOrderFromAllVehicles(OT_GOTO_WAYPOINT, this->index);
+diff --git a/src/waypoint_cmd.cpp b/src/waypoint_cmd.cpp
+index 3478370..b7869b2 100644
+--- a/src/waypoint_cmd.cpp
++++ b/src/waypoint_cmd.cpp
+@@ -40,6 +40,9 @@
+ 
+ #include "table/strings.h"
+ 
++#ifdef WITH_SHADEREMU
++#include "gfx_func.h"
++#endif
+ #include "safeguards.h"
+ 
+ /**
+@@ -47,6 +50,9 @@
+  */
+ void Waypoint::UpdateVirtCoord()
+ {
++#ifdef WITH_SHADEREMU
++	if (TickOnWorker()) { StationID id = this->index; TickDefer([id] { if (Waypoint *wp = Waypoint::GetIfValid(id); wp != nullptr) wp->UpdateVirtCoord(); }); return; }
++#endif
+ 	Point pt = RemapCoords2(TileX(this->xy) * TILE_SIZE, TileY(this->xy) * TILE_SIZE);
+ 	if (this->sign.kdtree_valid) _viewport_sign_kdtree.Remove(ViewportSignKdtreeItem::MakeWaypoint(this->index));
+ 
 diff --git a/src/widget.cpp b/src/widget.cpp
 index daf0172..9f144b4 100644
 --- a/src/widget.cpp
@@ -5208,10 +7815,132 @@ index daf0172..9f144b4 100644
  	}
  
 diff --git a/src/window.cpp b/src/window.cpp
-index ea6dc5b..8e8484f 100644
+index ea6dc5b..fc453f8 100644
 --- a/src/window.cpp
 +++ b/src/window.cpp
-@@ -3153,12 +3153,19 @@ void UpdateWindows()
+@@ -557,6 +557,9 @@ void Window::RaiseButtons(bool autoraise)
+  */
+ void Window::SetWidgetDirty(WidgetID widget_index) const
+ {
++#ifdef WITH_SHADEREMU
++	TICK_DEFER_THIS(this->SetWidgetDirty(widget_index));
++#endif
+ 	/* Sometimes this function is called before the window is even fully initialized */
+ 	auto it = this->widget_lookup.find(widget_index);
+ 	if (it == std::end(this->widget_lookup)) return;
+@@ -967,6 +970,9 @@ void DrawOverlappedWindowForAll(int left, int top, int right, int bottom)
+  */
+ void Window::SetDirty() const
+ {
++#ifdef WITH_SHADEREMU
++	TICK_DEFER_THIS(this->SetDirty());
++#endif
+ 	AddDirtyBlock(this->left, this->top, this->left + this->width, this->top + this->height);
+ }
+ 
+@@ -1152,6 +1158,9 @@ Window::~Window()
+  */
+ Window *FindWindowById(WindowClass cls, WindowNumber number)
+ {
++#ifdef WITH_SHADEREMU
++	TICK_TRAP();
++#endif
+ 	for (Window *w : Window::Iterate()) {
+ 		if (w->window_class == cls && w->window_number == number) return w;
+ 	}
+@@ -1167,6 +1176,9 @@ Window *FindWindowById(WindowClass cls, WindowNumber number)
+  */
+ Window *FindWindowByClass(WindowClass cls)
+ {
++#ifdef WITH_SHADEREMU
++	TICK_TRAP();
++#endif
+ 	for (Window *w : Window::Iterate()) {
+ 		if (w->window_class == cls) return w;
+ 	}
+@@ -1194,6 +1206,9 @@ Window *GetMainWindow()
+  */
+ void CloseWindowById(WindowClass cls, WindowNumber number, bool force, int data)
+ {
++#ifdef WITH_SHADEREMU
++	TICK_DEFER(CloseWindowById(cls, number, force, data));
++#endif
+ 	Window *w = FindWindowById(cls, number);
+ 	if (w != nullptr && (force || !w->flags.Test(WindowFlag::Sticky))) {
+ 		w->Close(data);
+@@ -1206,6 +1221,9 @@ void CloseWindowById(WindowClass cls, WindowNumber number, bool force, int data)
+  */
+ void CloseWindowByClass(WindowClass cls, int data)
+ {
++#ifdef WITH_SHADEREMU
++	TICK_DEFER(CloseWindowByClass(cls, data));
++#endif
+ 	/* Note: the container remains stable, even when deleting windows. */
+ 	for (Window *w : Window::Iterate()) {
+ 		if (w->window_class == cls) {
+@@ -1222,6 +1240,9 @@ void CloseWindowByClass(WindowClass cls, int data)
+  */
+ void CloseCompanyWindows(CompanyID id)
+ {
++#ifdef WITH_SHADEREMU
++	TICK_DEFER(CloseCompanyWindows(id));
++#endif
+ 	/* Note: the container remains stable, even when deleting windows. */
+ 	for (Window *w : Window::Iterate()) {
+ 		if (w->owner == id) {
+@@ -1242,6 +1263,9 @@ void CloseCompanyWindows(CompanyID id)
+  */
+ void ChangeWindowOwner(Owner old_owner, Owner new_owner)
+ {
++#ifdef WITH_SHADEREMU
++	TICK_DEFER(ChangeWindowOwner(old_owner, new_owner));
++#endif
+ 	for (Window *w : Window::Iterate()) {
+ 		if (w->owner != old_owner) continue;
+ 
+@@ -3124,6 +3148,23 @@ static const IntervalTimer<TimerWindow> white_border_interval(std::chrono::milli
+ /**
+  * Update the continuously changing contents of the windows, such as the viewports
+  */
++#ifdef WITH_SHADEREMU
++static std::chrono::milliseconds _windows_early_ms{0}; ///< the windows' timers made early, for so long
++
++/** UpdateWindows' timers, made before it (the video driver's: while the last picture's flush is out). */
++void UpdateWindowsEarly()
++{
++	static auto last_time = std::chrono::steady_clock::now();
++	auto now = std::chrono::steady_clock::now();
++	auto delta_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_time);
++	if (delta_ms.count() == 0) return;
++	last_time = now;
++	TimerManager<TimerWindow>::Elapsed(delta_ms);
++	CallWindowRealtimeTickEvent(delta_ms.count());
++	_windows_early_ms += delta_ms;
++}
++#endif
++
+ void UpdateWindows()
+ {
+ 	static auto last_time = std::chrono::steady_clock::now();
+@@ -3139,8 +3180,17 @@ void UpdateWindows()
+ 
+ 	ProcessPendingPerformanceMeasurements();
+ 
++#ifdef WITH_SHADEREMU
++	/* (what UpdateWindowsEarly made of the time is not made again) */
++	const auto timers_ms = delta_ms - std::min(delta_ms, std::exchange(_windows_early_ms, std::chrono::milliseconds{0}));
++	if (timers_ms.count() != 0) {
++		TimerManager<TimerWindow>::Elapsed(timers_ms);
++		CallWindowRealtimeTickEvent(timers_ms.count());
++	}
++#else
+ 	TimerManager<TimerWindow>::Elapsed(delta_ms);
+ 	CallWindowRealtimeTickEvent(delta_ms.count());
++#endif
+ 
+ 	/* Process invalidations before anything else. */
+ 	for (Window *w : Window::Iterate()) {
+@@ -3153,12 +3203,23 @@ void UpdateWindows()
  	 * But still empty the invalidation queues above. */
  	if (_network_dedicated) return;
  
@@ -5226,11 +7955,111 @@ index ea6dc5b..8e8484f 100644
  		if (w->viewport != nullptr && !w->IsShaded()) UpdateViewportPosition(w, delta_ms.count());
  	}
 +#ifdef WITH_SHADEREMU
++	extern bool _vp_flush_last;
++	_vp_flush_last = true;
 +	}
++	ScrollSettle();
++	if (VpFlushOut()) return; /* (the video driver draws them when it is in) */
 +#endif
  	NetworkDrawChatMessage();
  	/* Redraw mouse cursor in case it was hidden */
  	DrawMouseCursor();
+@@ -3178,6 +3239,9 @@ void UpdateWindows()
+  */
+ void SetWindowDirty(WindowClass cls, WindowNumber number)
+ {
++#ifdef WITH_SHADEREMU
++	TICK_DEFER(SetWindowDirty(cls, number));
++#endif
+ 	for (const Window *w : Window::Iterate()) {
+ 		if (w->window_class == cls && w->window_number == number) w->SetDirty();
+ 	}
+@@ -3191,6 +3255,9 @@ void SetWindowDirty(WindowClass cls, WindowNumber number)
+  */
+ void SetWindowWidgetDirty(WindowClass cls, WindowNumber number, WidgetID widget_index)
+ {
++#ifdef WITH_SHADEREMU
++	TICK_DEFER(SetWindowWidgetDirty(cls, number, widget_index));
++#endif
+ 	for (const Window *w : Window::Iterate()) {
+ 		if (w->window_class == cls && w->window_number == number) {
+ 			w->SetWidgetDirty(widget_index);
+@@ -3204,6 +3271,9 @@ void SetWindowWidgetDirty(WindowClass cls, WindowNumber number, WidgetID widget_
+  */
+ void SetWindowClassesDirty(WindowClass cls)
+ {
++#ifdef WITH_SHADEREMU
++	TICK_DEFER(SetWindowClassesDirty(cls));
++#endif
+ 	for (const Window *w : Window::Iterate()) {
+ 		if (w->window_class == cls) w->SetDirty();
+ 	}
+@@ -3236,6 +3306,9 @@ void Window::ProcessScheduledResize()
+  */
+ void Window::InvalidateData(int data, bool gui_scope)
+ {
++#ifdef WITH_SHADEREMU
++	TICK_DEFER_THIS(this->InvalidateData(data, gui_scope));
++#endif
+ 	this->SetDirty();
+ 	if (!gui_scope) {
+ 		/* Schedule GUI-scope invalidation for next redraw. */
+@@ -3296,6 +3369,9 @@ void Window::ProcessHighlightedInvalidations()
+  */
+ void InvalidateWindowData(WindowClass cls, WindowNumber number, int data, bool gui_scope)
+ {
++#ifdef WITH_SHADEREMU
++	TICK_DEFER(InvalidateWindowData(cls, number, data, gui_scope));
++#endif
+ 	for (Window *w : Window::Iterate()) {
+ 		if (w->window_class == cls && w->window_number == number) {
+ 			w->InvalidateData(data, gui_scope);
+@@ -3313,6 +3389,9 @@ void InvalidateWindowData(WindowClass cls, WindowNumber number, int data, bool g
+  */
+ void InvalidateWindowClassesData(WindowClass cls, int data, bool gui_scope)
+ {
++#ifdef WITH_SHADEREMU
++	TICK_DEFER(InvalidateWindowClassesData(cls, data, gui_scope));
++#endif
+ 	for (Window *w : Window::Iterate()) {
+ 		if (w->window_class == cls) {
+ 			w->InvalidateData(data, gui_scope);
+@@ -3512,6 +3591,9 @@ int PositionNetworkChatWindow(Window *w)
+  */
+ void ChangeVehicleViewports(VehicleID from_index, VehicleID to_index)
+ {
++#ifdef WITH_SHADEREMU
++	TICK_DEFER(ChangeVehicleViewports(from_index, to_index));
++#endif
+ 	for (const Window *w : Window::Iterate()) {
+ 		if (w->viewport != nullptr && w->viewport->follow_vehicle == from_index) {
+ 			w->viewport->follow_vehicle = to_index;
+diff --git a/src/window_gui.h b/src/window_gui.h
+index 934df38..4eb38a6 100644
+--- a/src/window_gui.h
++++ b/src/window_gui.h
+@@ -17,6 +17,9 @@
+ #include "tile_type.h"
+ #include "widget_type.h"
+ #include "string_type.h"
++#ifdef WITH_SHADEREMU
++#include "gfx_func.h"
++#endif
+ 
+ /**
+  * Flags to describe the look of the frame
+@@ -917,7 +920,11 @@ public:
+ 	 */
+ 	template <bool Tfront>
+ 	struct AllWindows {
++#ifdef WITH_SHADEREMU
++		AllWindows() { TICK_TRAP(); }
++#else
+ 		AllWindows() {}
++#endif
+ 		WindowIterator<Tfront> begin()
+ 		{
+ 			if constexpr (Tfront) {
 diff --git a/src/zoom_type.h b/src/zoom_type.h
 index 3d07ff3..b8911ba 100644
 --- a/src/zoom_type.h
