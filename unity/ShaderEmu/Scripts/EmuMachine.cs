@@ -493,6 +493,7 @@ public class EmuMachine : UdonSharpBehaviour
             pointsBlitMaterial.SetTexture("_Data_RAM_A", Pick(3));
         }
         if (gpuBlitMaterial != null) gpuBlitMaterial.SetTexture("_Data_ROM", Pick(4));
+        if (volumeMaterial != null) volumeMaterial.SetTexture("_Data_ROM", Pick(4));   // the holodeck's light maps
         if (romViewMaterial != null) romViewMaterial.SetTexture("_Data_ROM", Pick(4));
         if (sound != null)
         {
