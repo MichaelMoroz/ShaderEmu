@@ -194,6 +194,9 @@ struct Core {
     // core runs no instruction until it is made, as the shader machine's (src/ram.h)
     bool copying = false;
     u32 copy_dst = 0, copy_src = 0, copy_n = 0;
+    // RVC_BESIDE: a fill or a copy from the ROM asked for in a pass the cores' logs are kept, made after them
+    bool pend_op = false;
+    u32 pend_what = 0, pend_dst = 0, pend_src = 0, pend_n = 0;
     // A flush starts a new generation of the table's tags; the fetch keeps its page while the pc stays on it
     u32 gen = 1, genbits = 1u << 20, fetch_vpn = ~0u;
     const uint8_t* fetch_host = nullptr;
@@ -316,6 +319,13 @@ static void device_write(Core& c, u32 phys, u32 value, int size) {
 // began, noting each such read. After the pass (race_settle) the reads and the first changes are
 // held against the lower cores' changes, in core order, and the highest core's texels go to RAM.
 static bool races_on = false;
+// RVC_BESIDE=1: core 0 runs beside the workers, on the threads too, as on the card: in a pass where any worker runs,
+// every core reads RAM as the pass began and its own stores, each keeps the texels it changes in a log of its own (the
+// race check's, below), and the logs go to RAM after the pass, lowest core first, the highest core's 16 bytes winning.
+// A worker no longer sees what core 0 stored earlier in the same pass, nor core 0 a worker's. A pass where no worker
+// runs is core 0's alone, as without it. Core 0's fills and copies from the ROM are made after the logs (memop).
+static bool beside_on = false;
+static bool logged = false;   // this pass's stores go to the cores' logs: RVC_RACES, or RVC_BESIDE with workers running
 // RVC_RACES_AT=TEXT, RVC_RACES_UNTIL=TEXT: the check from where the console says one text (full speed to it), the
 // run's end where it says the other (AGENTS.md: a long program checked in sections under the minute)
 static bool races_armed = false, races_ended = false;
@@ -332,6 +342,9 @@ static inline bool race_watched(u32 phys) {
     return phys - RAM_BASE < RAM_SIZE && phys - rvlayout::kMbox >= 0x8000u && phys - ATOM_BASE >= ATOM_END - ATOM_BASE &&
            (phys & ~15u) != ATOM_HEAD;
 }
+// What goes to the cores' logs: under RVC_BESIDE all of RAM, the mailboxes and counters too (a worker sees core 0's
+// job word, and core 0 a worker's answer, from the next pass, as on the card); under RVC_RACES alone what it watches.
+static inline bool routed(u32 phys) { return beside_on ? phys - RAM_BASE < RAM_SIZE : race_watched(phys); }
 static inline u32 byte_mask(u32 phys, int size) { return ((1u << size) - 1) << (phys & 15); }
 static inline u32 texel_hash(u32 t, u32 bits) { return (t * 0x9e3779b1u) >> (32 - bits); }
 
@@ -395,7 +408,8 @@ static void races_begin(size_t n) {
 static inline const uint8_t* race_seen(Core& c, u32 t, bool& own) {
     if (TexelEntry* e = texel_logs[(size_t)c.hart].find(t)) { own = true; return e->view; }
     own = false;
-    if (TexelEntry* z = texel_logs[0].find(t)) return z->view;
+    if (!beside_on)   // (else core 0's stores are in its log, and RAM is as the pass began)
+        if (TexelEntry* z = texel_logs[0].find(t)) return z->view;
     return &ram[(t << 4) - RAM_BASE];
 }
 static u32 race_load(Core& c, u32 phys, int size) {
@@ -404,13 +418,13 @@ static u32 race_load(Core& c, u32 phys, int size) {
         for (int i = 0; i < size; i++) value |= race_load(c, phys + (u32)i, 1) << (8 * i);
         return value;
     }
-    if (c.hart == 0) {   // (core 0, the first, sees RAM as it leaves it)
+    if (c.hart == 0 && !beside_on) {   // (core 0, the first, sees RAM as it leaves it)
         memcpy(&value, &ram[phys - RAM_BASE], (size_t)size);
         return value;
     }
     bool own;
     const uint8_t* from = race_seen(c, phys >> 4, own);
-    if (!own) race_reads[(size_t)c.hart].push_back(RaceRead{phys, c.pc, byte_mask(phys, size), c.satp});
+    if (!own && races_on && c.hart != 0 && race_watched(phys)) race_reads[(size_t)c.hart].push_back(RaceRead{phys, c.pc, byte_mask(phys, size), c.satp});
     memcpy(&value, from + (phys & 15), (size_t)size);
     return value;
 }
@@ -424,7 +438,8 @@ static void race_store(Core& c, u32 phys, u32 value, int size) {
     bool own = true;
     TexelEntry* e = log.find(t);
     uint8_t* texel = &ram[(t << 4) - RAM_BASE];
-    const uint8_t* seen = c.hart == 0 ? texel : e ? e->view : race_seen(c, t, own);
+    bool direct = c.hart == 0 && !beside_on;   // (core 0 stores into RAM, but under RVC_BESIDE)
+    const uint8_t* seen = direct ? texel : e ? e->view : race_seen(c, t, own);
     u32 changed = 0;
     for (int i = 0; i < size; i++)
         if (seen[(phys & 15) + i] != (uint8_t)(value >> (8 * i))) changed |= byte_mask(phys + (u32)i, 1);
@@ -436,7 +451,7 @@ static void race_store(Core& c, u32 phys, u32 value, int size) {
         n.key = e->key;
         *e = n;
     }
-    uint8_t* to = c.hart == 0 ? texel : e->view;
+    uint8_t* to = direct ? texel : e->view;
     for (int i = 0; i < size; i++) to[(phys & 15) + i] = (uint8_t)(value >> (8 * i));
     e->bytes |= changed;
     e->pc = c.pc;
@@ -472,6 +487,7 @@ static u64 race_settle_core(int hart) {
     TexelLog& log = texel_logs[(size_t)hart];
     for (u32 i : log.used) {
         const TexelEntry& e = log.slot[i];
+        if (!race_watched(e.first_phys)) continue;   // (RVC_BESIDE's mailboxes and counters: by design)
         if (const RaceChange* o = race_owner(e.key - 1, hart))
             notes.push_back(RaceNote{1, o->core, e.first_pc, o->e->pc, e.first_phys, e.satp, o->e->satp});
     }
@@ -499,7 +515,7 @@ static void race_settle(u64 pass) {
             }
     }
     int list[256], n = 0;
-    for (size_t c = 1; c < texel_logs.size(); c++)
+    for (size_t c = 1; races_on && c < texel_logs.size(); c++)
         if (!race_reads[c].empty() || !texel_logs[c].used.empty()) list[n++] = (int)c;
     race_settle_on(list, n);
     // the notes in the order the cores ran
@@ -514,10 +530,11 @@ static void race_settle(u64 pass) {
         race_reads[(size_t)list[k]].clear();
     }
     // RVC_RACES_NEAR: each texel's changes in core order against its last change of an earlier pass
-    if (near_passes)
+    if (near_passes && races_on)
         for (u32 slot : race_index_used) {
             u32* s = &race_index[3 * (size_t)slot];
             u32 t = s[0] - 1, i = t - (RAM_BASE >> 4), now = (u32)pass & 0xfffff;
+            if (!race_watched(t << 4)) continue;   // (RVC_BESIDE's mailboxes and counters)
             for (u32 k = s[1]; k != ~0u; k = race_changes[k].next) {
                 const RaceChange& ch = race_changes[k];
                 u32 b = ch.e->bytes, w = (b & 0xf ? 1 : 0) | (b & 0xf0 ? 2 : 0) | (b & 0xf00 ? 4 : 0) | (b & 0xf000 ? 8 : 0);
@@ -539,7 +556,7 @@ static void race_settle(u64 pass) {
     for (u32 slot : race_index_used) {
         u32* s = &race_index[3 * (size_t)slot];
         const RaceChange& last = race_changes[s[2]];
-        if (last.core != 0) memcpy(&ram[((s[0] - 1) << 4) - RAM_BASE], last.e->view, 16);
+        if (last.core != 0 || beside_on) memcpy(&ram[((s[0] - 1) << 4) - RAM_BASE], last.e->view, 16);
         s[0] = 0;
     }
     race_index_used.clear();
@@ -563,7 +580,7 @@ static inline bool load(Core& c, u32 va, int size, u32& value, Trap& t) {
     if (phys - RAM_BASE < RAM_SIZE) {
         const uint8_t* p = &ram[phys - RAM_BASE];
         if (prof::mem_on) prof::mem(c, va, phys, size, false);
-        if (races_on && race_watched(phys)) {
+        if (logged && routed(phys)) {
             value = race_load(c, phys, size);
             return true;
         }
@@ -630,7 +647,7 @@ static inline bool store(Core& c, u32 va, int size, u32 value, Trap& t) {
         }
         dirty(c, phys);
         if (prof::mem_on) prof::mem(c, va, phys, size, true, memcmp(p, &value, (size_t)size) != 0);
-        if (races_on && race_watched(phys)) {
+        if (logged && routed(phys)) {
             race_store(c, phys, value, size);
             return true;
         }
@@ -788,16 +805,25 @@ static void copy_pass() {
 
 // The parallel copy (CSRs 0x0b0 to 0x0b3): whole words from one place to another, or one word
 // over a range, made between two passes. The source may be the ROM.
+static void memop_make(Core& c, u32 what, u32 dst, u32 src, u32 nbytes);
 static void memop(Core& c, u32 what, Trap& t) {
     u32 dst = 0, src = 0;
     if (what != 2 && !walk(c, c.memop_src, READ, src, t)) return;
     if (!walk(c, c.memop_dst, WRITE, dst, t)) return;
+    if (beside_on && logged) {   // (RVC_BESIDE: after the cores' logs, in machine_pass)
+        c.pend_op = true, c.pend_what = what, c.pend_dst = dst, c.pend_src = what == 2 ? c.memop_src : src, c.pend_n = c.memop_n;
+        c.end_pass = true;
+        return;
+    }
+    memop_make(c, what, dst, what == 2 ? c.memop_src : src, c.memop_n);
+}
+static void memop_make(Core& c, u32 what, u32 dst, u32 src, u32 nbytes) {
     // the card's copy is of texels: a part texel at either end can differ there (it lost bytes)
     static std::atomic<int> told_unaligned{0};
-    if (((dst | c.memop_n | (what != 2 ? src : 0)) & 15) && told_unaligned < 8 && ++told_unaligned)
-        fprintf(stderr, "[memop] %s off a texel at pc %08x: %08x <- %08x, %u bytes\n", what == 2 ? "fill" : "copy", c.pc, dst, src, c.memop_n);
+    if (((dst | nbytes | (what != 2 ? src : 0)) & 15) && told_unaligned < 8 && ++told_unaligned)
+        fprintf(stderr, "[memop] %s off a texel at pc %08x: %08x <- %08x, %u bytes\n", what == 2 ? "fill" : "copy", c.pc, dst, src, nbytes);
     // whole words, as the machine's commit makes them: a word is written when its address is in the range
-    u32 words = (c.memop_n + 3) / 4, fill = c.memop_src;
+    u32 words = (nbytes + 3) / 4, fill = src;
     dst &= ~3u;
     src &= ~3u;
     // (up to the end of RAM, where the word at a time stopped; a source wholly in RAM or in the
@@ -1246,7 +1272,7 @@ static __declspec(noinline) int general_step(Core& c, u32 ins) {
     case 0x2f: {   // atomics, on words
         u32 kind = f7 >> 2, v;
         if (f3 != 2) { illegal = true; break; }
-        if (c.hart && workers_threaded && amo_threaded(c, kind, a, b, result, t, illegal)) break;
+        if ((c.hart || beside_on) && workers_threaded && amo_threaded(c, kind, a, b, result, t, illegal)) break;
         if (kind == 2) {   // lr
             if (!load(c, a, 4, v, t)) break;
             c.reserved = true, c.reservation = a, c.reserved_value = v;
@@ -1396,6 +1422,9 @@ static __declspec(noinline) int general_step(Core& c, u32 ins) {
         return STEP_BREAK;
     }
     if (W && ins == 0x0000100f) return STEP_OUT;   // fence.i ends its pass, as on the shader machine: it goes on in the next
+    // (core 0's too, beside the workers: its stores wait for the pass's end, and code it wrote, a signal's
+    // return on the stack, is fetched from RAM; as on the card, where every core's fence.i ends its pass)
+    if (!W && ins == 0x0000100f && logged && beside_on) { c.end_pass = true; return STEP_BREAK; }
     return STEP_ON;
 }
 
@@ -1621,7 +1650,7 @@ static __declspec(noinline) bool store_side(Run* R, u32* x, u64 st, u32 ins) {
         (!wc_take(R->c->hart, phys) || ((phys & 15) + N > 16 && !wc_take(R->c->hart, phys + N - 1))))
         return false;
     R->bands |= 1ull << (((e.ppage - RAM_BASE) >> 22) & 63);
-    if (races_on && race_watched(phys)) {
+    if (logged && routed(phys)) {
         run_sync(R, st);   // (its pc)
         race_store(*R->c, phys, v, N);
         return true;
@@ -1645,7 +1674,7 @@ static __declspec(noinline) void load_side(Run* R, u32* x, u64 st, u32 ins) {
     u32 va = RS1 + IMM_I;
     const TlbEntry& e = R->reads[(va >> 12) & (TLB_N - 1)];
     u32 phys = e.ppage + (va & 0xfff), v;
-    if (race_watched(phys)) {
+    if (routed(phys)) {
         run_sync(R, st);   // (its pc)
         v = race_load(*R->c, phys, N);
     } else if (N == 4) memcpy(&v, R->mem + phys, 4);
@@ -1833,7 +1862,7 @@ static int run_some(Core& c, u64 n, const uint8_t* kinds) {
     Run R;
     R.c = &c;
     // (under RVC_RACES core 0, which runs first, reads RAM as the fast loads do)
-    R.table = handler_table<W>((races_on && c.hart != 0 ? 1 : 0) | (races_on || wc_on ? 2 : 0));
+    R.table = handler_table<W>((logged && (c.hart != 0 || beside_on) ? 1 : 0) | (logged || wc_on ? 2 : 0));
     R.kinds = kinds;
     R.end = c.clock + n;
     R.mem = ramp - RAM_BASE;
@@ -1908,7 +1937,7 @@ static int native_gen(Core& c, u32 X, u32 Y, u32 Z, u32 Wd, u32 pc, Trap& t, u32
     case G_AMOMIN: case G_AMOMAX: case G_AMOMINU: case G_AMOMAXU: {
         static const u32 kinds[] = {2, 3, 1, 0, 4, 12, 8, 16, 20, 24, 28};
         u32 kind = kinds[g - G_LR];
-        if (c.hart && workers_threaded && amo_threaded(c, kind, a, b, result, t, illegal)) break;
+        if ((c.hart || beside_on) && workers_threaded && amo_threaded(c, kind, a, b, result, t, illegal)) break;
         if (kind == 2) {
             if (!load(c, a, 4, v, t)) break;
             c.reserved = true, c.reservation = a, c.reserved_value = v;
@@ -2203,6 +2232,7 @@ static int native_step(Core& c) {
     if (!W && nc.on && c.hart == 0) native_check(c, pc, X, Z, cnt);
     if (c.recheck) { c.recheck = false; return STEP_BREAK; }
     if (W && kind == K_GEN && Z_OPG(Z) == G_FENCEI) return STEP_OUT;   // (ends its pass, as fence.i)
+    if (!W && kind == K_GEN && Z_OPG(Z) == G_FENCEI && logged && beside_on) { c.end_pass = true; return STEP_BREAK; }
     return STEP_ON;
 }
 
@@ -2294,15 +2324,17 @@ bool mc_fault(Core& c, const Trap& t) {
     Worker& w = workers[c.hart];
     u32 seen = word(mc_resume_at(c.hart));
     bool call = t.cause == 8;
+    // (under RVC_BESIDE into the worker's log, as its stores: core 0 sees them from the next pass)
+    auto put = [&](u32 at, u32 v) { if (beside_on && logged) race_store(c, at, v, 4); else word(at) = v; };
     if (call) {
-        word(mc_call_at(c.hart)) = c.x[17];
-        for (int i = 0; i < 6; i++) word(mc_call_at(c.hart) + 4 + 4 * i) = c.x[10 + i];
+        put(mc_call_at(c.hart), c.x[17]);
+        for (int i = 0; i < 6; i++) put(mc_call_at(c.hart) + 4 + 4 * i, c.x[10 + i]);
     }
     if (!call) note_stop(c, t);
-    word(mc_fault_at(c.hart) + 4) = t.cause;
-    word(mc_fault_at(c.hart) + 8) = t.value;
-    word(mc_fault_at(c.hart) + 12) = c.pc;
-    word(mc_fault_at(c.hart)) = seen + 1;
+    put(mc_fault_at(c.hart) + 4, t.cause);
+    put(mc_fault_at(c.hart) + 8, t.value);
+    put(mc_fault_at(c.hart) + 12, c.pc);
+    put(mc_fault_at(c.hart), seen + 1);
     dirty(c, MC_MBOX);
     w.state = call ? MC_CALLING : MC_FAULTED;
     w.seen = seen;
@@ -2502,7 +2534,7 @@ static bool amo_threaded(Core& c, u32 kind, u32 a, u32 b, u32& result, Trap& t, 
     u32 pr, pw;
     if (kind != 3) {   // (an sc does not read: as store() alone)
         if (!page_of(c, a, READ, pr, t)) return true;
-        if (pr - RAM_BASE >= RAM_SIZE || (races_on && race_watched(pr))) return false;   // (RVC_RACES: in its own log)
+        if (pr - RAM_BASE >= RAM_SIZE || (logged && routed(pr))) return false;   // (RVC_RACES: in its own log)
     }
     if (kind == 2) {   // lr
         result = c.reserved_value = *(volatile u32*)(ramp + (pr - RAM_BASE));
@@ -2513,7 +2545,7 @@ static bool amo_threaded(Core& c, u32 kind, u32 a, u32 b, u32& result, Trap& t, 
     if (!((kinds >> kind) & 1)) { illegal = true; return true; }
     if (kind == 3 && !(c.reserved && c.reservation == a)) { result = 1; c.reserved = false; return true; }
     if (!page_of(c, a, WRITE, pw, t)) return true;
-    if (pw - RAM_BASE >= RAM_SIZE || (races_on && race_watched(pw))) return false;
+    if (pw - RAM_BASE >= RAM_SIZE || (logged && routed(pw))) return false;
     volatile long* p = (volatile long*)(ramp + (pw - RAM_BASE));
     for (;;) {
         u32 v = (u32)*p, n = b;
@@ -2977,6 +3009,46 @@ static void pass_log_put(int end, u64 ran) {
     fputc(10, pass_log);
 }
 
+// RVC_BESIDE: a pass where a worker runs, core 0 among them on the threads, every core's stores in its log (race_store)
+// until machine_pass settles them. False when no worker runs: core 0's pass alone, as without it.
+static u64 beside_core0 = 0;
+static u64 beside_parked_stores = 0, beside_parked_passes = 0;   // RVC_BESIDE: texels stored by a worker in the pass it was parked   // core 0's instructions in the pass
+static u64 beside_exec(int hart) {
+    if (hart == 0) return beside_core0 = run(cores[0], pool_budget);
+    return worker_exec(cores[(size_t)hart], pool_budget);
+}
+static bool beside_pass(u32 ticks, u64& most) {
+    if (prof::on || check_on || native_on) return false;   // (one thread, or the cores in turn: as without it)
+    if (pool_size == 0) pool_size = threads_wanted();
+    int list[257], n = 0;
+    if (!cores[0].copying) list[n++] = 0;
+    for (size_t i = 1; i < cores.size(); i++)
+        if (worker_wake(cores[i]) && !cores[i].copying) list[n++] = (int)i;
+    beside_core0 = 0;
+    if (n == 0 || list[n - 1] == 0) {   // (no worker: core 0 alone, its stores into RAM)
+        logged = races_on;
+        most = n ? beside_core0 = run(cores[0], ticks) : 0;
+        return true;
+    }
+    if (texel_logs.size() < cores.size()) texel_logs.resize(cores.size()), race_reads.resize(cores.size()), race_notes.resize(cores.size());
+    logged = true;
+    if (n > 1 && pool_size > 1) {
+        while ((int)pool.size() < pool_size - 1) pool.emplace_back(pool_helper), pool.back().detach();
+        pool_budget = ticks;
+        pool_run(list, n, ticks, beside_exec);
+    } else {
+        pool_budget = ticks;
+        for (int k = 0; k < n; k++) pool_done[list[k]] = beside_exec(list[k]);
+    }
+    most = 0;
+    for (int k = 0; k < n; k++) {
+        u64 d = pool_done[list[k]];
+        if (list[k] != 0) worker_instr += d;
+        most = std::max(most, d);
+    }
+    return true;
+}
+
 // One pass of every core, after the host's part of it; the most instructions a core ran.
 static u64 machine_pass(u32 ticks) {
     control_pass();
@@ -2986,14 +3058,35 @@ static u64 machine_pass(u32 ticks) {
     if (races_on) mbox_keep();
     if (prof::on) prof::pass_begin();
     bool copying0 = cores[0].copying;
-    u64 most = copying0 ? 0 : check_on ? checked(cores[0], ticks, run) : run(cores[0], ticks);
+    u64 most = 0;
+    if (beside_on && beside_pass(ticks, most)) {
+        if (pass_log && count_marked_now())
+            pass_log_put(copying0 ? 5 : cores[0].wc_full ? 4 : cores[0].waiting ? 2 : cores[0].end_pass ? 1 : 0, beside_core0);
+    } else {
+    logged = races_on;
+    most = copying0 ? 0 : check_on ? checked(cores[0], ticks, run) : run(cores[0], ticks);
     if (pass_log && count_marked_now())
         pass_log_put(copying0 ? 5 : cores[0].wc_full ? 4 : cores[0].waiting ? 2 : cores[0].end_pass ? 1 : 0, most);
     most = std::max(most, workers_pass(ticks));
+    }
+    // (the stores, then the copies and the counters' merge, as the card's commit and what follows it)
+    if (logged && beside_on)   // (a worker's stores in the very pass core 0 parked it: they land in what its program had)
+        for (size_t k = 1; k < cores.size(); k++) {
+            if (texel_logs[k].used.empty()) continue;
+            u32 at = mc_start_at((int)k);
+            const TexelEntry* z = texel_logs[0].find(at >> 4);
+            u32 v = 0;
+            if (z) memcpy(&v, z->view + (at & 15), 4);
+            if (z && v == MC_STOP) beside_parked_stores += texel_logs[k].used.size(), beside_parked_passes++;
+        }
+    if (logged) race_settle(frame_no);
+    if (logged && beside_on)
+        for (Core& c : cores)   // (a fill or a copy from the ROM asked for in the pass: after the logs, as the commit's draws)
+            if (c.pend_op) c.pend_op = false, memop_make(c, c.pend_what, c.pend_dst, c.pend_src, c.pend_n);
+    logged = false;
     copy_pass();
     for (Core& c : cores) dirty_bands |= c.dirty, c.dirty = 0;
     atom_merge();
-    if (races_on) race_settle(frame_no);
     if (prof::on) prof::pass_end();
     if (wc_log && count_marked)
         for (size_t i = 0; i < cores.size() && i < 256; i++) {
@@ -3300,6 +3393,7 @@ int main(int argc, char** argv) {
         races_on = races_at.empty();
     }
     atom_merging = !getenv("RVC_COUNT_MERGE") || atoi(getenv("RVC_COUNT_MERGE")) != 0;
+    beside_on = getenv("RVC_BESIDE") && atoi(getenv("RVC_BESIDE")) != 0;
     calls_on = calls_file && *calls_file;
     // RVC_PROF_PASS=N: the profile from N passes after --count-from's mark (or the start)
     prof_wait = getenv("RVC_PROF_PASS") ? std::max(0, atoi(getenv("RVC_PROF_PASS"))) : 0;
@@ -3434,6 +3528,8 @@ int main(int argc, char** argv) {
     if (wc_on)
         fprintf(stderr, "[cpu] write cache: %llu passes of core 0 and %llu of workers ended full (RVC_WCACHE)\n",
                 (unsigned long long)wc_full_passes[0], (unsigned long long)wc_full_passes[1]);
+    if (beside_on) fprintf(stderr, "[beside] core 0 beside the workers: %llu texels stored by workers in the pass core 0 parked them (%llu times)\n",
+                           (unsigned long long)beside_parked_stores, (unsigned long long)beside_parked_passes);
     if (check_on) fprintf(stderr, "[check] RVC_FAST_CHECK: %llu passes of a core alike both ways\n", (unsigned long long)fc.checks);
     if (zb_on || zbs_on || zicond_on) fprintf(stderr, "[cpu] Zba, Zbb, Zbs and Zicond instructions run (RVC_ZB, RVC_ISA): %llu\n", (unsigned long long)zb_run);
     if (copies_long || copy_waits || getenv("RVC_COPY_STATS"))

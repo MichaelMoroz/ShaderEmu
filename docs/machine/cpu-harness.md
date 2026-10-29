@@ -22,6 +22,18 @@ run to run (Quake's and nxphys's statistics, Quake III's passes); its sums do no
 `RVC_PROF` runs the workers in order on one thread; under `RVC_RACES` each worker keeps the texels
 it changes apart and they run on the threads too, with the reports of the cores in order.
 
+`RVC_BESIDE=1` runs core 0 beside the workers, as the card does, in a pass where any worker runs:
+core 0 is one more job on the threads. Every core keeps the texels it changes in a log of its own
+(RVC_RACES' logs) and reads the rest of RAM as the pass began, the mailboxes and counters too. The
+logs go to RAM when the pass ends, lowest core first, so the highest core's 16 bytes win. Core 0's
+fills and copies from the ROM are made after the logs, and its `fence.i` ends its pass, as every
+core's does on the card: code it has just written (a signal's return on the stack) is fetched from
+RAM, so it can run only in the next pass. Without it, core 0 runs first and stores
+into RAM, and a worker sees in the same pass what core 0 stored and the job words it posted, which
+the card shows only in the next pass. At the end it says how many texels workers stored in the
+pass that core 0 parked them in: such a store lands in memory the program may no longer have.
+A pass where no worker runs is core 0's alone, as without it.
+
     bin\rvc_cpu.exe --quiet --uart-log logs\uart_x.log --expect "/ # " ^
         --send "nano-X -p & sleep 2; TDAWN_AUTO=1 RALERT_SIDE=soviet RALERT_SEED=7 RALERT_FRAMES=300 ralert; echo LX-''DONE\n" ^
         --until "LX-DONE"

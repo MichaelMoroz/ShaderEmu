@@ -35,7 +35,13 @@ In WSL, after the MMU build (`linux/kernel/build.sh` and the programs' build scr
   word at a time), `patch_sysfs.py` (no sysfs for the boot's slab caches and built-in
   parameters: the boot 9.9 to 8.0 million), `patch_zeroread.py` (`/dev/zero` a megabyte a step,
   no fault-in of a write's buffer) and `patch_timekeeping.py` (with one processor the tick
-  advances the timekeeper in place, not a shadow copied whole). The configuration has no VM event
+  advances the timekeeper in place, not a shadow copied whole), and `patch_exitpark.py`. That last
+  one calls `shaderemu_gpu_exiting` in `do_exit` before `exit_mm`. It parks a dying program's
+  worker cores and its lanes' job, then ends the pass. A worker reads its start word as its pass
+  begins, so one already in that pass stores into the program's memory when the pass ends.
+  Parked only at the release, after `exit_mm`, the workers ran on through the passes between, in
+  memory already freed. No failure was traced to it: the shell's crash in nes-kill and nxphys-kill
+  under `RVC_BESIDE=1` was `rvc_cpu`'s, whose core 0 went on past a `fence.i`. The configuration has no VM event
   counters, kallsyms, AIO, io_uring or core dumps and a 16 KB log, and trusts the device tree's
   `rng-seed`, which `image.py` writes (128 bytes; `RNG_SEED` in hex gives a fixed one): without
   it a `getrandom()` without `GRND_NONBLOCK` never returned.
