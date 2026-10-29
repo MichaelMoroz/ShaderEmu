@@ -298,6 +298,12 @@ stay `6abca409`, and `503e40ee` with 1,300 ticks, as upstream's.
 | 64-bit divisions in 32 bits where both fit, no vehicle's frame rate timer | 4.38 |
 | the viewports listed once while vehicles are marked, a loading percent out of sight not made | 4.49 |
 | nine ships' paths made ahead at once, not six | 4.53 |
+| a ship's path's indexes cleared where it logged, its tiles compared by words | 4.60 |
+| a ship's path's tiles checked on the workers | 4.79 |
+| an income out of sight not formatted, a few dirty blocks stored, not `memset`, a vehicle's new sprites not zeroed first | 4.87 |
+| the vehicles' boxes made on the workers | 4.99 |
+| the ships listed every 64 ticks | 5.03 |
+| a vehicle out of every viewport marks no blocks | 5.21 |
 
 - The frame rate window's timer reads the machine's clock word, not `clock_gettime`.
 - `UpdateBoundingBoxCoordinates` keeps the bounds of a sequence of one sprite while the sprite
@@ -318,10 +324,21 @@ stay `6abca409`, and `503e40ee` with 1,300 ticks, as upstream's.
 - A text effect changed where no viewport can show it (a loading vehicle's percent) keeps its new
   text and makes its string and width only when a viewport can show it (`RefreshStaleTextEffects`,
   before the dirty blocks are drawn). Each was a string formatted and measured, 5,900 instructions.
+- An income added where no viewport can show it is made the same way (`AddTextEffect`): its string
+  was formatted and measured, 48 thousand instructions each.
+- `AddDirtyBlock` stores the bytes of up to four blocks a column itself: `memset`'s start alone was
+  70 instructions. A vehicle's new sprite sequence is not zeroed before `GetImage` sets it
+  (`SpecializedVehicle::UpdateViewport`): only the sprites it counts are read.
+- In `VpDeferEnd` the boxes of the vehicles whose sprite's bounds are kept are made on the workers
+  (`VpBoxes`, `Vehicle::UpdateViewportBox`), with whether any viewport shows the area that would be
+  marked (`ViewportsFixedSee`, the tests of `MarkViewportDirty`). Each stores to its own vehicle.
+  The first core then puts each vehicle in the viewport hash and marks its blocks in the same order
+  as before, and skips the marking of a vehicle no viewport shows: 68.7 thousand calls of
+  `MarkAllViewportsDirty` in 200 ticks became 6.7 thousand.
 
-What was left of a tick's 0.82 million instructions (with ships' paths made ahead) (`RVC_PROF`, the same run): trains 260
-thousand, road vehicles 136, loading and unloading 48, aircraft 38, and the ships' own ticks
-with the paths not made ahead. The vehicles tick in one order on one core. Their random
+What was left of a tick's 0.61 million instructions on the first core (`RVC_PROF`, the same run, 29 October
+2026): trains 246 thousand, road vehicles 115, loading and unloading 27, aircraft 36, the tile loop 31, the
+ships' own ticks 21, the vehicles' places 26. The vehicles tick in one order on one core. Their random
 numbers come from one state in that order, so they cannot tick on workers and keep the same
 game.
 
@@ -355,7 +372,12 @@ docking tile counted. Otherwise, and for a lost ship's random path, the first co
 path itself. A load or a new map first stops every worker (`YapfShipAheadCancel`).
 
 `OPENTTD_SHIP_AHEAD=check` makes every path taken again on the first core and compares the two:
-0 differ. `OPENTTD_SHIP_AHEAD=0` is without. Over 1,300 ticks, 144 of about 210 calls were taken.
+0 differ. `OPENTTD_SHIP_AHEAD=0` is without. The check of the tiles logged is cut in parts of at
+least 128 tiles, each part on a free worker and the first on the first core (`AheadValidTiles`): the
+map is still while the first core waits there, and the reason given is the first part's that has one,
+as in one pass. A slot's heap gives the same places every job, so a job clears its indexes only where
+the last job logged (`clean_size`). Ships are listed again every 64 ticks, not walked in the whole
+vehicle pool each tick. Over 1,300 ticks, 144 of about 210 calls were taken.
 17 were invalid, 13 of them because a docking tile's count had changed. 49 had none made,
 because they were not foreseen.
 
