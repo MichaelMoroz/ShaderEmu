@@ -229,13 +229,22 @@ with its command (from `ls` of the machine's `/bin`, `/usr/bin`, `/sbin`, `/usr/
 more besides ours), which files each opens, the NES mappers, the samples and how to start things.
 Its words are `unity/ShaderEmu/Editor/ShaderEmuSheet.txt` (columns, headings, `NAME | TEXT`
 lines; ASCII only), laid out by `ShaderEmuSheet.cs` in mono type at the largest size at which
-every column fits (21 on 15 October 2026). "ShaderEmu/Write the system sheet into the open
+every column fits (21 on 15 October 2026, 18.5 on 29 October with the terminal's programs). "ShaderEmu/Write the system sheet into the open
 scene" puts it there styled as the board's paper, or, when it has its plate, letters that plate
 again from the file: no build, no bake. The frame is the board's mesh ("Board" of `Computer.fbx`)
 turned and stretched, not static, on copies of its materials without the light volume
 (`Generated/* by probes.mat`): with it the wood was black this close to the wall. The plate and
 the frame take the probes' light. After a change to `linux/apps/nxopen.conf`, a program's
 `nxopen.*` or `nxapps.*` line, or a program added to the image, edit the file and run the command.
+
+## The power warning
+
+Where a visitor powers on, the world says that the machine crashes the game on Windows with an AMD card
+(its shader is too much for that driver's compiler), that other cards have problems at times, and which
+work so far. `EmuMachine.PowerWarning` is on the console while the machine is off and on the control
+panel's read-out beside "Power on" (the visitor's own; the line sent to others stays "off");
+`PowerWarningShort` (`ShaderEmuConsole.cs`) is a sign over the storage sign on the tower, in the power
+sign's leaning plane and as wide: "ShaderEmu/Add the power warning to the open scene", no bake.
 
 ## Physical buttons
 

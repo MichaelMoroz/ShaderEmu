@@ -46,9 +46,9 @@ public static partial class ShaderEmuBuilder
         Object.DestroyImmediate(legend.GetComponent<VRC.SDK3.Components.VRCUiShape>());
         Object.DestroyImmediate(legend.GetComponent<BoxCollider>());
         Object.DestroyImmediate(legend.GetComponent<GraphicRaycaster>());
-        string[] names = { "Linux: the kernel, then its memory", "Linux", "window buffers", "display, GPU lists, fonts, textures", "a 3D program's", "sound", "Linux, above the devices" };
-        // megabytes at which each name's region is centred; the first is in the left strip
-        float[] middle = { 6.5f, 52f, 104f, 115.5f, 120.5f, 125f, 240f };
+        string[] names = { "window buffers", "display, GPU lists, fonts, textures", "a 3D program's", "sound", "Linux: the kernel, then its memory", "Linux", "Linux", "Linux" };
+        // megabytes from 0x80000000 at which each name's region is centred (docs/system/nommu.md, "Memory")
+        float[] middle = { 8f, 19.5f, 25f, 28.5f, 36.5f, 64f, 144f, 240f };
         for (int i = 0; i < names.Length; i++)
         {
             float strip = Mathf.Floor(middle[i] / 96f), y = (middle[i] / 96f - strip) * high;

@@ -4,14 +4,14 @@
 # NAME | TEXT: a line whose text wraps under itself, NAME padded to the column's widest.
 # Any other line is printed as it is, wrapped; an empty line is an empty line.
 # ASCII only: the panels' fonts have nothing else.
-# What is installed was read from the machine itself (ls of its bin folders, 15 October 2026).
+# What is installed was read from the machine itself (ls of its bin folders, 29 October 2026).
 title: THIS MACHINE: ITS PROGRAMS, AND WHAT OPENS WHAT
 
 column
 head: GAMES (its command in brackets)
 Doom | (doom) the shareware episode; a network game with other players
 Quake | (quake) the shareware episode; host or join over the network
-Quake III | (quake3) the demo's The Longest Yard, against bots
+Quake III | (quake3) the demo's The Longest Yard, against bots; host or join over the network
 Half-Life | (halflife) the Uplink demo
 Tiberian Dawn | (tdawn) Command & Conquer (1995), the demo's missions
 Red Alert | (ralert) the 1996 demo: a Soviet and an Allied mission, skirmish
@@ -19,11 +19,13 @@ ClassiCube | (classicube) Minecraft Classic: dig and build
 Micropolis | (nxmicropolis) the city simulator of 1989: build a city; eight scenarios with disasters
 OpenTTD | (openttd) Transport Tycoon's open remake: railways, roads, ships and planes, with music; host or join over the network; saved games kept in /persistence
 NES | (nes FILE.nes) Thwaite, Nova the Squirrel, any cartridge of mappers 0 1 2 3 4 5 7 8 9 11 15 16 18 19 21-25 32-34 40 64-66 70 75 78 79 85 94 99 231; arrows, X, Z, Enter, Tab
+Pinball | (nxpinball) a table after Windows' 3D Pinball, flat; the best score is kept
 Tetris, Mines | (nxtetris, nxmine)
 
 head: DESKTOP PROGRAMS
 Files | (nxfiles) folders, the desktop; opens any file
-Editor | (nxedit) text, with menus, undo, Save as
+Editor | (nxedit) text, with menus, undo, Save as; reads Markdown, links followed
+Docs | (on the desktop) how this machine works, read in the Editor
 Paint | (nxpaint) opens any picture; saves PNG JPEG GIF BMP PPM
 Viewer | (nxview) pictures; animated GIFs play
 Web | (nxweb) real pages, no scripts; a fixed list of sites (VRChat fetches only addresses a world was built with)
@@ -37,11 +39,12 @@ Calculator, Clock | (nxcalc, nxclock)
 
 column
 head: PROGRAMMING
-IDE | (nxide) write, build, run and debug C; three examples in the Start menu
-C | cc / tcc (TinyCC): cc hello.c -o hello, with the C library, the window system and OpenGL ES; example NAME builds and runs one; bcc
+IDE | (nxide) write, build, run and debug C and Python, run JavaScript, build HLSL shaders; four examples in the Start menu
+C | cc / tcc (TinyCC): cc hello.c -o hello, with the C library, the window system and OpenGL ES; example NAME builds and runs one
+HLSL | hlslc checks a pixel shader, hlslview runs it on every core: compiled inside the machine
 Python | micropython (MicroPython)
 JavaScript | qjs (QuickJS), qjsc compiles a script, qjscalc
-Scripts | sh (ash), zsh, awk, sed, bc, dc
+Scripts | sh (ash), awk, sed, bc, dc; dialog (menus and boxes for scripts)
 
 head: DEMOS ON EVERY CORE
 Rays | (nxray) a traced picture
@@ -51,10 +54,10 @@ Others | imdemo (Dear ImGui), glxgears, nxeyes, demo-blit, demo-polygon
 
 head: COMMAND LINE (console, Terminal)
 Editors | vi, nano, mg, ed, mcedit; mc (Midnight Commander)
-Files | ls cp mv rm find grep diff patch file xxd hexedit hexdump less tar unzip gzip xz
-Network | ping wget curl nc socat telnet ssh scp sftp tftp traceroute ip ifconfig; servers sshd telnetd thttpd (between the players' machines)
-System | top htop ps free df dmesg kill watch tmux screen sudo
-This machine | open FILE, nxkey (types into the desktop), nxreg (settings), nxpersist (/persistence), media_test, nxbench, geotune; and sl
+Files | ls cp mv rm find grep pcregrep diff patch file xxd hexedit hexdump less sort tar unzip gzip xz unarc md5sum sha256sum
+Network | ping wget curl nc socat telnet ssh scp sftp tftp traceroute nslookup ip ss ifconfig; servers dropbear (ssh), telnetd, thttpd with makeweb and htpasswd (between the players' machines)
+System | top htop ps free df du dmesg lsof kill watch uptime; at and crontab (jobs for later)
+This machine | open FILE, nxkey (types into the desktop), nxreg (settings), nxpersist (/persistence), media_test, nxbench, geotune; its tests mctest, lanetest, steptest, fptest, sndtest, hlsl_bench; and sl
 
 column
 head: FILES: WHAT OPENS WHAT
@@ -63,7 +66,7 @@ Sound | .wav .mp3 .flac .ogg .oga .mod: Music player
 Films | .mpg .mpeg, .avi, .vqa: Video player
 Pages | .html .htm: Web
 Text | .txt .md .sh .conf .log .cfg .ini: Editor
-C | .c .h: IDE
+Source | .c .h .py .js .hlsl: IDE
 3D | .obj .ply .scene: Path tracer
 Games | .nes: NES; .wad: Doom (a game or a patch); .cty: Micropolis; .sav: OpenTTD
 Archives | .zip .tar .gz .tgz: unpacked, shown in Files
@@ -78,7 +81,7 @@ Videos | Big Buck Bunny (MPEG-1, AVI); Models: teapot, rabbit, knot
 
 head: THE MACHINE
 Processor | 32-bit RISC-V (RV32IMAF), 256 cores: the first runs Linux, 255 workers take shares of a program's work; a few million instructions a second, as fast as your graphics card runs it
-Memory | 252 MB, kept in textures, as is its disk
+Memory | 256 MB, kept in textures, as is its disk
 System | Linux 5.17, BusyBox, musl; Nano-X windows; its own GPU (OpenGL ES) and sound card; a network between the players' machines; /persistence kept between visits (SAVE on the sign by the power button)
 
 head: HOW TO START

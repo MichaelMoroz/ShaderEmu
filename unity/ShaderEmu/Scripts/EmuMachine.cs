@@ -264,8 +264,19 @@ public class EmuMachine : UdonSharpBehaviour
         ShowLabels();
         if (powerOnAtStart) PowerOn();
         if (fetchTest && fetchTestUrl != null) SendCustomEventDelayedSeconds(nameof(FetchTestRun), 8f);
-        else Say("The computer is off.\r\n\r\nPress the red POWER button on the computer\r\n(the tower by the desk's right end), or \"Power on\" on the panel.\r\n");
+        else Say("The computer is off.\r\n\r\nPress the red POWER button on the computer\r\n(the tower by the desk's right end), or \"Power on\" on the panel.\r\n\r\n" + PowerWarning);
+        if (statsText != null && !powered && !statsRemote) statsText.text = "off\n\n" + PowerWarning.Replace("\r", "");
     }
+
+    // Shown wherever the machine is about to be powered on (the console, the panel), 76 columns a line.
+    public const string PowerWarning =
+        "WARNING: on Windows with an AMD graphics card, powering on will crash\r\n" +
+        "your game. The machine is one extremely complex shader, and some drivers'\r\n" +
+        "shader compilers cannot cope with it. Other cards have problems at times\r\n" +
+        "too: the machine's kernel can panic, and its GPU's shaders can crash AMD\r\n" +
+        "cards elsewhere as well. Intel and other cards have not been tested. So far\r\n" +
+        "every Nvidia card works, and so do AMD cards on Linux with Mesa's drivers.\r\n" +
+        "I hope to fix the crashes in the future.\r\n";
 
     private void Say(string text)
     {
@@ -609,9 +620,9 @@ public class EmuMachine : UdonSharpBehaviour
         soundEnabled = false;
         if (sound != null) sound.Quiet();
         ShowLabels();
-        Say("The computer is off.\r\n");
+        Say("The computer is off.\r\n\r\n" + PowerWarning);
         statsLine = "off";
-        if (statsText != null && !statsRemote) statsText.text = "off";
+        if (statsText != null && !statsRemote) statsText.text = "off\n\n" + PowerWarning.Replace("\r", "");
         mipsAll = 0f;
         mipsCore = 0f;
         activity = 0;
@@ -1772,7 +1783,7 @@ public class EmuMachine : UdonSharpBehaviour
     {
         if (!statsRemote) return;
         statsRemote = false;
-        if (statsText != null) statsText.text = statsLine + (powered ? RegisterText(registers) : "");
+        if (statsText != null) statsText.text = statsLine + (powered ? RegisterText(registers) : "\n\n" + PowerWarning.Replace("\r", ""));
     }
 
     // What one round left in the row at rowAt.

@@ -205,6 +205,37 @@ public static partial class ShaderEmuBuilder
         Apply(machine);
     }
 
+    // A warning over the storage sign (or the power sign), in their leaning plane and as wide.
+    public const string PowerWarningShort =
+        "On Windows with an AMD graphics card, powering on will crash your game: the machine is one extremely " +
+        "complex shader, too much for some drivers' compilers. Other cards have problems at times too, and Intel " +
+        "and others are untested. Every Nvidia card works so far, and AMD on Linux with Mesa. I hope to fix the crashes.";
+
+    static void WarningSign(Transform computer)
+    {
+        Gone(computer, "Power warning");
+        Transform below = computer.Find("Storage sign") ?? computer.Find("Power sign");
+        if (below == null) return;
+        Vector3 up = Quaternion.Euler(32f, 0, 0) * Vector3.up;
+        float under = below.GetComponent<RectTransform>().sizeDelta.y * below.localScale.y / 2;
+        RectTransform sign = Panel(computer, "Power warning", below.localPosition + up * (under + 0.006f + 0.09f), new Vector3(32f, 0, 0),
+                                   240, 180, new Color(0.05f, 0.055f, 0.07f));
+        Label(sign, "Title", "BEFORE YOU POWER ON", 6, 4, 228, 24, 17, TextAnchor.MiddleCenter, new Color(0.98f, 0.75f, 0.2f));
+        Label(sign, "Says", PowerWarningShort, 8, 30, 224, 146, 12, TextAnchor.UpperLeft, new Color(0.85f, 0.87f, 0.9f));
+    }
+
+    [MenuItem("ShaderEmu/Add the power warning to the open scene")]
+    public static void AddWarningSign()
+    {
+        Transform computer = Den();
+        if (computer == null) throw new System.Exception("no computer in the open scene: run ShaderEmu/Build world");
+        WarningSign(computer);
+        RetroNewPanels();   // never left as a bare canvas
+        EditorSceneManager.MarkSceneDirty(computer.gameObject.scene);
+        EditorSceneManager.SaveScene(computer.gameObject.scene);
+        Debug.Log("[ShaderEmu] power warning added");
+    }
+
     [MenuItem("ShaderEmu/Add the power button to the open scene")]
     public static void AddPowerSign()
     {
