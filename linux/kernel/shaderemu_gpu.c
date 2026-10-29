@@ -692,6 +692,7 @@ void shaderemu_gpu_exiting(void)
 {
 	bool parked = false;
 	unsigned long pass;
+	u32 k;
 
 	if (!workers || !current->mm || atomic_read(&current->mm->mm_users) != 1 || !current->files)
 		return;
@@ -703,6 +704,15 @@ void shaderemu_gpu_exiting(void)
 	pass = csr_read(CSR_TIME);	/* (one value a pass) */
 	while (csr_read(CSR_TIME) == pass)
 		__asm__ __volatile__(".word 0x0100000f" ::: "memory");	/* pause: the machine's pass ends */
+	/* Parked now, they store nothing more: what they last said is taken back. A parked core's answer
+	 * still said MC_ALIVE, which the next program to start it took for its own worker there at once
+	 * (programs/mc/mcw.c, arrived()): the start word taken away before the core had seen it, or a job
+	 * "done" by the old answer's number. */
+	mutex_lock(&workers_lock);
+	for (k = 1; k < WORKERS_MOST; k++)
+		if (readl(workers + 16 * k) == WORKERS_STOP)
+			writel(0, workers + WORKERS_BOX(k) + 24);
+	mutex_unlock(&workers_lock);
 }
 
 static struct miscdevice shaderemu_gpu_dev = {
