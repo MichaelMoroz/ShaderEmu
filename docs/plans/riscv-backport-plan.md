@@ -97,6 +97,11 @@ each commit is ShaderEmu's byte for byte, except where noted.
 | Doom | a06f225 (`doom_gl.c`, `doom_fast.c`) | a level's wall pictures made ahead on the workers, no 64-bit divide in `clip`, texture names' answers kept | core 0's level load 3.68M to 2.86M; the load's freeze 175 to 143 host frames |
 | Quake III | 75c98c8, f1e36dd (`programs/mc/handoff.c`, `mc.h`, `client_shaderemu.c`; the latter differs from ShaderEmu's by f1e36dd's own lines) | `mc_publish()`: the compiler stored a count before its entry, and a pass that ended between them gave the worker an old snapshot; the client's worker waits for both texels of its list | `n < cg.latestSnapshotNum` in 293 of 20,000 frames on the card, 0 after. A RISC-V pass can end between two stores too, and GCC may order them the same way |
 
+**Done on rv-pg (29 October 2026).** nano-X's filled shapes as one command were taken over and measured: on RISC-V
+Pinball's server does not fill the write cache (rvc_cpu, the 1,800 demo frames: core 0's passes ended full 38 and 37 of
+5,389), the spans and masks cost core 0 43.65 M instructions to 50.20 M (+15%), and on the card its frames drawn went
+3.40 to 4.81 fps to 1.46 and 1.56, its 1,800 frames 9.6 s to 11.1. Not taken.
+
 Two more, not straight ports:
 
 - **Every other "data, then a ready word" hand-off** between cores wants `mc_publish` as Quake III's did. `mcw_post` is
@@ -119,11 +124,20 @@ Two more, not straight ports:
 - **Quake III's scene job is the frame's chain** (PROFILE_Q3.md sections 3, 6, 7): its 45 thousand instructions fill
   94% of a frame's 5.83 x 8,192, and it ends last in 97% of frames. Posted earlier (it starts 3.3 passes into the
   frame) or split over two workers.
+  *Measured on rv-pg (29 October 2026):* the frame is not the scene's now. With the scene's entities not drawn at all
+  (a build of its own, rvc_cpu with `RVC_DEVICE_EVERY=5`, frames 300 to 700, two typings) a frame took 6.03 and 6.21
+  passes against 6.23 and 6.35 (-2 to -3%), the busiest worker 9.1 and 8.0 M instructions against 11.8 and 14.1. The
+  scene is 34 thousand a frame in `scene_draw` (`entity_draw` 705 an entity, 38 a frame) and 13.5 in the flat
+  pictures (300 each, 45 a frame); the client's game (39 to 42 thousand) and the hand-offs are the frame. Splitting
+  or posting the scene earlier can give at most those 2 to 3%: not done.
 - **Profile-guided builds** (b86e265: Quake III 82.4 to 85.5 fps on gpu_vm). RISC-V has GCC's `-fprofile-use` in
   `linux/ralert` and `linux/tdawn` only; Quake III, Half-Life, Doom and Quake have none.
 - **Half-Life's `R_SceneCopyTo` storing only the words that changed** (`gpu_vm/IDEAS.md` row 32, never committed;
   `linux/halflife/gl_kept.c`): +5.6% on gpu_vm, inside its layout noise. To be written again here, with
   `game_par.py halflife` at 0 undone.
+  *Measured on rv-pg (29 October 2026), on the -O3 build:* rvc_cpu's fight (31 to 45 s) 185 and 193 frames as it
+  was, 177, 188 and 190 with only the changed words stored; core 0's passes ended full 5,452 to 5,458 against 5,433
+  to 5,450 (the level's load: in the fight core 0 ends 1.7 passes a guest second full). Nothing to gain: not taken.
 
 Check: the programs' own sums (`DOOM_SUM` at tic 260 `bfc19200`, Pinball's state at frame 600, Red Alert's state sum),
 their `test_all` cases and `--races`.
@@ -197,6 +211,9 @@ Read from gpu_vm's compiler code and wrappers (`llvm/Target/GPUVM/*.cpp`'s optio
 - **Half-Life is still `-O2 -fno-tree-vectorize`.** The others' measured recipe is `-O3 -fno-tree-vectorize
   -fsched-pressure -funroll-loops` (Quake -6% instructions a frame, Doom -3% a tic and -11% a frame, the NES -5 to -7%).
   Checked by `se_sum_exact`'s sums and `game_par.py halflife`.
+  *Done on rv-pg (e1ec859), with the inlining above:* on the card, frames in the level 16.17 fps (after, four rounds)
+  to 16.93 with -O3 alone and 17.36 with the inlining (+7.4%), the start to the level drawn 69.19 s to 67.85;
+  `RVC_RACES` 0 undone with the drawing on its worker and with `HL_RENDER=core`.
 - **The NES may post a job before its data.** It compiles `mcw.c` and `mcwx.c` inside its `-flto -flto-partition=one`
   link (`nes/build.sh:38,48`): once `mcw_post` is inlined, GCC may move the program's stores past the volatile `seq`
   store, which C allows. That is Quake III's `mc_publish` bug. `mcw_post` gets a compiler barrier before `seq`
