@@ -45,6 +45,11 @@ int mcw_most(void);
 int mcw_open(int limit);
 /* Whether worker k has a core now (a job posted to it will not be run by this one). */
 int mcw_bound(int k);
+/* The machine's core worker k is on now (0: none): for a program's statistics. */
+int mcw_core(int k);
+/* Whether worker k is on one of the first 16 cores, which RISC-V's hybrid geometry gives the larger write caches: a
+ * long job that stores much runs up to twice as fast there. */
+int mcw_fast(int k);
 /*
  * For a program that can do without (a monitor that draws with them): called before
  * mcw_open(), its workers are only lent: it has what the programs that keep theirs leave.

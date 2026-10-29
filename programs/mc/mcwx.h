@@ -72,6 +72,8 @@ mcw_handle mcw_call(mcw_fn fn, uint32_t a0, uint32_t a1);
 /* The same only where a worker has nothing to do: 0, and nothing made, where none has. */
 mcw_handle mcw_try_call(mcw_fn fn, uint32_t a0, uint32_t a1);
 int mcw_ready(mcw_handle h);
+/* The worker a call went to (0: made here, or no such call): for a program's statistics. */
+int mcw_call_worker(mcw_handle h);
 uint32_t mcw_join(mcw_handle h);
 /* mcw_rest_for() the workers of these calls (handles of 0 or made here are passed over). */
 void mcw_rest_on(const mcw_handle *h, int n);

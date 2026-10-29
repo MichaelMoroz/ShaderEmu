@@ -152,6 +152,35 @@ void SE_FrameDone (void)
 			se_scene_jobs, n, se_scene_cycles / se_scene_jobs / 1000, se_scene_passes / se_scene_jobs, se_scene_passes * 10 / se_scene_jobs % 10);
 		se_scene_jobs = se_scene_cycles = se_scene_passes = 0;
 	}
+	if (mcw_count () && getenv ("QUAKE3_CORES")) {
+		/* each worker's instructions a pass of the machine's since the last (MC_STATS_ALL; docs/machine/multicore.md) */
+		static const volatile unsigned	*words, *more;
+		static unsigned			before[256], passes_before;
+		unsigned			passes, k, c, d;
+		char				line[1024] = "";
+		int				at = 0;
+
+		if (!words)
+			words = mcw_map (0x01000000, 4096), more = mcw_map (0x016ba000, 4096);
+		if (words && more) {
+			passes = words[0x32c / 4];
+			for (k = 1; k <= (unsigned)mcw_count () && at < (int)sizeof line - 32; k++) {
+				c = (unsigned)mcw_core ((int)k);
+				if (!c || c > 255)
+					continue;
+				d = more[c] - before[c], before[c] = more[c];
+				if (passes_before && passes != passes_before && d)
+					at += snprintf (line + at, sizeof line - at, " %u/%u:%u", k, c, d / (passes - passes_before));
+			}
+			if (!passes_before)
+				printf ("q3cores: geometry %08x %08x %08x %08x, cores %u\n", words[0x3d0 / 4], words[0x3d4 / 4], words[0x3d8 / 4],
+					words[0x3dc / 4], words[0x3c0 / 4]);
+			if (passes_before)
+				printf ("q3cores: %u passes; worker/core:instructions a pass%s\n", passes - passes_before, line[0] && at ? line : " none");
+			passes_before = passes;
+			line[0] = 0;
+		}
+	}
 	if (mcw_count ()) {
 		extern unsigned mcw_faults, mcw_calls;	/* mcw.c */
 

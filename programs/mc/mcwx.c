@@ -701,18 +701,30 @@ typedef struct { uint32_t fn, a0, a1, k; } call_rec;
 static call_rec calls[CALLS] __attribute__((aligned(16)));
 static uint8_t call_state[CALLS];	/* 0 free, 1 out on a worker, 2 made here */
 static uint32_t call_answer[CALLS];
-/* A call goes to the next worker round the row. The lowest free worker instead (the busy cores together) halved
- * Quake III's server (q3dm17 with a bot on the card: 22.9 game frames a second to 11.8, its worker 3.59 M
- * instructions a second to 1.45; 7624f55's Quake III built with each). */
-static int next_worker = 1;
-
-static int call_worker(int tries, int workers)
+/* A call goes to the lowest free worker of those with the largest write cache (mcw_fast: the card's hybrid geometry's
+ * first 16 cores, 2^5 buckets against 2^3), then to the lowest free one: a program that calls a few at a time keeps to
+ * the same few, and a job that stores much does not end its passes on a small core's full cache (Quake III's server ran
+ * 2.9 thousand instructions a pass on a small core against 7.6 on a big one). Round the row (19561b9) spread the calls
+ * over small cores too, and woke a cold worker a call. */
+static int call_free(int w)
 {
-	int w = next_worker;
+	if (busy[w] || !mcw_bound(w)) return 0;
+	if (in_team[w]) {
+		if (!mcw_done(w)) return 0;
+		in_team[w] = 0;
+	}
+	return mcw_done(w) && side_for(w) != 0;
+}
 
-	(void)tries;
-	next_worker = next_worker % workers + 1;
-	return w;
+static int call_pick(int workers)
+{
+	int w;
+
+	for (w = 1; w <= workers; w++)
+		if (!busy[w] && mcw_fast(w) && call_free(w)) return w;
+	for (w = 1; w <= workers; w++)
+		if (!busy[w] && !mcw_fast(w) && call_free(w)) return w;
+	return 0;
 }
 
 static uint32_t call_job(uint32_t rec_at, uint32_t unused)
@@ -725,7 +737,7 @@ static uint32_t call_job(uint32_t rec_at, uint32_t unused)
 
 mcw_handle mcw_call(mcw_fn fn, uint32_t a0, uint32_t a1)
 {
-	int h, k = 0, tries, workers = mcw_count();
+	int h, k = 0, workers = mcw_count();
 	call_rec *c;
 
 	for (h = 0; h < CALLS && call_state[h]; h++) {}
@@ -734,17 +746,7 @@ mcw_handle mcw_call(mcw_fn fn, uint32_t a0, uint32_t a1)
 	c->fn = (uint32_t)fn;
 	c->a0 = a0;
 	c->a1 = a1;
-	if (workers && !mcw_self() && setup())
-		for (tries = 0; tries < workers && !k; tries++) {
-			int w = call_worker(tries, workers);
-
-			if (busy[w] || !mcw_bound(w)) continue;
-			if (in_team[w]) {
-				if (!mcw_done(w)) continue;
-				in_team[w] = 0;
-			}
-			if (mcw_done(w) && side_for(w)) k = w;
-		}
+	if (workers && !mcw_self() && setup()) k = call_pick(workers);
 	c->k = (uint32_t)k;
 	if (k) {
 		busy[k] = 1;
@@ -760,22 +762,12 @@ mcw_handle mcw_call(mcw_fn fn, uint32_t a0, uint32_t a1)
 /* mcw_call() on a worker with nothing to do, or nothing at all (0): for work only a worker pays for. */
 mcw_handle mcw_try_call(mcw_fn fn, uint32_t a0, uint32_t a1)
 {
-	int h, k = 0, tries, workers = mcw_count();
+	int h, k, workers = mcw_count();
 
 	if (!workers || mcw_self() || !setup()) return 0;
 	for (h = 0; h < CALLS && call_state[h]; h++) {}
 	if (h == CALLS) return 0;
-	for (tries = 0; tries < workers && !k; tries++) {
-		int w = call_worker(tries, workers);
-
-		if (busy[w] || !mcw_bound(w)) continue;
-		if (in_team[w]) {
-			if (!mcw_done(w)) continue;
-			in_team[w] = 0;
-		}
-		if (mcw_done(w) && side_for(w)) k = w;
-	}
-	if (!k) return 0;
+	if (!(k = call_pick(workers))) return 0;
 	calls[h].fn = (uint32_t)fn;
 	calls[h].a0 = a0;
 	calls[h].a1 = a1;
@@ -784,6 +776,11 @@ mcw_handle mcw_try_call(mcw_fn fn, uint32_t a0, uint32_t a1)
 	call_state[h] = 1;
 	mcw_post(k, call_job, (uint32_t)&calls[h], 0);
 	return h + 1;
+}
+
+int mcw_call_worker(mcw_handle h)
+{
+	return h >= 1 && h <= CALLS && call_state[h - 1] == 1 ? (int)calls[h - 1].k : 0;
 }
 
 int mcw_ready(mcw_handle h)

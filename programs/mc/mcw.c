@@ -231,6 +231,17 @@ int mcw_recalled(int k)
 
 int mcw_bound(int k) { return k >= 1 && k <= count && core_of[k] != 0; }
 
+int mcw_core(int k) { return k >= 1 && k <= count ? core_of[k] : 0; }
+
+/* RISC-V's hybrid geometry (docs/machine/multicore.md, "Packing the small workers"): cores 1 to 16 have the larger
+ * write cache (geotune's BIG_COUNT, 2^5 buckets against the others' 2^3). Not read from the geometry's words: a map
+ * and unmap of the control page at every open moved what came after and cost nxvideo's AVI 2% on the card (27.4
+ * frames a second to 26.8). Where every core is alike, the first 16 are as good as any, and a call still goes to
+ * the lowest free worker. */
+#define MC_BIG_CORES 16
+
+int mcw_fast(int k) { return k >= 1 && k <= count && core_of[k] && core_of[k] <= MC_BIG_CORES; }
+
 static volatile uint32_t *owner_of_core(int core) { return (volatile uint32_t *)(page + MC_OWNER_AT(core)); }
 
 /* This program is about to write to a core's mailbox: none of its cores is taken meanwhile. */

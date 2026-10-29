@@ -747,10 +747,12 @@ m_mpeg_open(struct media_video *v, const uint8_t *data, uint32_t size, int worke
 	if (m->unit_count > m->sounds + decoders)
 		m->unit_count = m->sounds + decoders;
 	/* the decoders, all before a worker has a job: memory brought in on this core while workers
-	 * run holds them up */
+	 * run holds them up. The pictures' on the lowest workers, the sound's after them: on the
+	 * card the first 16 cores have the large write caches (mcw_fast), and a group's pictures are
+	 * the stores that fill a small one; the sound is decoded once, ahead */
 	for (k = 1; k <= m->unit_count; k++) {
 		m->units[k].video = m->units[k].audio = -1;
-		if (k <= m->sounds)
+		if (k > m->unit_count - m->sounds)
 			m->units[k].audio = audio_new(m);
 		else
 			m->units[k].video = video_new(m, k);
