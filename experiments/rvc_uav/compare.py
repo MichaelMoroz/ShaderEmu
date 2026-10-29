@@ -22,6 +22,10 @@ from parts import PARTS  # noqa: E402
 PARTS['shell-loop'] = dict(group='terminal', cmd='i=0; while [ $i -lt 10000 ]; do i=$((i+1)); done; echo LO""OPDONE', frames=2700,
                            until='LOOPDONE', what='ash: 10,000 turns of a while loop',
                            metrics={'10,000 turns': ('s', 'low', r'^LOOPDONE')})
+# Doom's timedemo with no drawing: the tics alone (the drawn timedemo holds at a list a host frame, 90 a second)
+PARTS['doom-nodraw'] = dict(group='game', cmd='DOOM_HASH_TICS=100 doom -1 -timedemo demo1 -nodraw', frames=3000, until='timed ',
+                            what='Doom: timedemo demo1 -nodraw (tics only)',
+                            metrics={'timedemo tics a second': ('tics/s', 'high', ('rate', r'^doom: tic 100 ', r'^doom: tic \d+ state', 100))})
 
 IMAGE = os.path.join(SE, 'build', 'images', 'nommu')
 SHELL = os.path.join(SE, 'build', 'uav', 'shell.snap')
@@ -79,6 +83,33 @@ if __name__ == '__main__':
         report.main = lambda *a, **k: None   # (its REPORT.md is the tree's: `compare.py report` writes ours)
         sys.argv = ['run.py'] + sys.argv[2:]
         run.main()
+    elif what == 'table':
+        # every run's sections summed: guest instructions a second of the world's clock, rounds a frame, card ms a round
+        import glob, json, re
+        rows = {}
+        for meta in sorted(glob.glob(os.path.join(DATA, 'logs', '*.meta'))):
+            tag = os.path.basename(meta)[:-5]
+            secs = json.load(open(meta))
+            ins = fr = rnd = 0
+            card = []
+            for s in secs:
+                for l in s.get('stats', []):
+                    m = re.search(r'(\d+) frames in [\d.]+s, (\d+) guest instructions.*?, (\d+) commits', l)
+                    if m:
+                        fr += int(m[1]); ins += int(m[2]); rnd += int(m[3])
+                    m = re.search(r'([\d.]+) ms on the card a frame', l)
+                    if m:
+                        card.append((float(m[1]), s['frames']))
+            if not fr:
+                continue
+            cms = sum(c * f for c, f in card) / max(1, sum(f for c, f in card))
+            res = [json.loads(l) for l in open(cmp.RESULTS)] if os.path.exists(cmp.RESULTS) else []
+            mach, _, rest = tag.partition('_')
+            part, _, r = rest.rpartition('_r')
+            met = next((x.get('metrics') for x in res if x['machine'] == mach and x['part'] == part and str(x.get('round', 0)) == r), {})
+            print(f"{tag:34} {ins / (fr * cmp.F_MS / 1000) / 1e6:6.2f} M instr/s  {rnd / fr:5.2f} rounds/frame  {cms:6.3f} card ms/frame  "
+                  f"{cms * fr / rnd:6.3f} card ms/round  {ins / rnd:7.0f} instr/round  " +
+                  json.dumps({k: v for k, v in (met or {}).items() if not k.startswith(('frame time', 'hitches'))}))
     elif what == 'report':
         install(sys.argv[2:])
         import report

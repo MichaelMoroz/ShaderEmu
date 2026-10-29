@@ -1305,7 +1305,8 @@ private:
             if (!dj.Disjoint && dj.Frequency) {
                 for (int k = 1; k < prof_.at; k++) prof_.sum[k] += (double)(ts[k] - ts[k - 1]) * 1000.0 / (double)dj.Frequency;
                 prof_.n++;
-                if (prof_.n >= 200) { prof_.print(); for (auto& v : prof_.sum) v = 0; prof_.n = 0; }
+                static const double every = getenv("RVC_PASS_PROF_N") ? atof(getenv("RVC_PASS_PROF_N")) : 200;   // (frames timed a print)
+                if (prof_.n >= every) { prof_.print(); for (auto& v : prof_.sum) v = 0; prof_.n = 0; }
             }
         }
         if ((frame & 15) != 0) return;
