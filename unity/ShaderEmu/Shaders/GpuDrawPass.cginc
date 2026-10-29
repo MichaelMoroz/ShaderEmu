@@ -17,7 +17,17 @@ float _StateRow;
 // the picture is 1280x720 at most here
 #define GPU_TARGET_W 1280.0
 #define GPU_TARGET_H 720.0
+#ifdef GPU_AMP
+// GpuDrawBlit.shader: the mesh's triangles made by a blit's calls (gpu_amp_geom in src/gpu.cginc, src/amp.cginc),
+// their depth turned as the camera's geometry shader below turns it
+#include "src/fxc2_check.cginc"
+#if defined(UNITY_REVERSED_Z)
+#define GPU_AMP_Z(o) o.position.z = o.position.w - o.position.z
+#endif
+#endif
 #include "src/gpu.cginc"
+
+#ifndef GPU_AMP
 
 struct gpu_point {
     uint triangle_id : TEXCOORD0;
@@ -48,6 +58,8 @@ void geom(point gpu_point i[1], inout TriangleStream<gpu_varyings> stream) {
         stream.Append(o);
     }
 }
+
+#endif
 
 float4 frag(gpu_varyings i) : SV_Target {
     return gpu_fragment(i);

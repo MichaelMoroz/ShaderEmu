@@ -259,6 +259,24 @@ public static partial class ShaderEmuBuilder
         return rt;
     }
 
+    // A float a texel, for the blits' order probe (BlitOrder.shader).
+    static RenderTexture FloatTarget(string name, int width, int height)
+    {
+        RenderTexture rt = LoadOrCreate(Generated + "/" + name + ".renderTexture",
+            () => new RenderTexture(width, height, 0, RenderTextureFormat.RFloat, RenderTextureReadWrite.Linear));
+        if (rt.width != width || rt.height != height)
+        {
+            rt.Release();
+            rt.width = width;
+            rt.height = height;
+        }
+        rt.antiAliasing = 1;
+        rt.filterMode = FilterMode.Point;
+        rt.wrapMode = TextureWrapMode.Clamp;
+        EditorUtility.SetDirty(rt);
+        return rt;
+    }
+
     // The tick and the commit's points are cameras' passes (docs/machine/multicore.md, "In Unity"): a
     // pass with several targets, or one of a mesh of points, is a camera's in VRChat. Each
     // camera sees its meshes on a layer of its own, and EmuMachine renders it. RAM is one
@@ -325,6 +343,30 @@ public static partial class ShaderEmuBuilder
         machine.tickMaterial = tickMat;
         machine.pointsMaterial = pointsMat;
         machine.gatherMaterial = gatherMat;
+
+        // The commit's points and the GPU's lists as blits, with no camera (docs/machine/gpu.md, "Blits in place
+        // of cameras"): the meshes and the two cameras stay for oldPaths' bits 5 and 6.
+        Material gatherBlitMat = Mat("MachineGatherBlit", "ShaderEmu/MachineCommitBlit");
+        Material pointsBlitMat = Mat("MachineCommitBlit", "ShaderEmu/MachineCommitBlit");
+        Material gpuBlitMat = Mat("GpuDrawBlit", "ShaderEmu/GpuDrawBlit");
+        Material orderMat = Mat("BlitOrder", "ShaderEmu/BlitOrder");
+        machine.orderTexture = FloatTarget("BlitOrder", 81, 81);
+        machine.rankTexture = FloatTarget("BlitRank", 81, 1);
+        orderMat.SetTexture("_AmpOrder", machine.orderTexture);
+        gatherBlitMat.SetTexture("_Ram", machine.state);
+        gatherBlitMat.SetTexture("_TickState", tickState);
+        gatherBlitMat.SetTexture("_GpuTarget", gpuTarget);
+        gatherBlitMat.SetTexture("_AmpRank", machine.rankTexture);
+        pointsBlitMat.SetTexture("_TickState", tickState);
+        pointsBlitMat.SetTexture("_Stage", machine.stage);
+        pointsBlitMat.SetTexture("_GpuTarget", gpuTarget);
+        pointsBlitMat.SetTexture("_AmpRank", machine.rankTexture);
+        gpuBlitMat.SetTexture("_State", machine.state);
+        gpuBlitMat.SetTexture("_AmpRank", machine.rankTexture);
+        machine.gatherBlitMaterial = gatherBlitMat;
+        machine.pointsBlitMaterial = pointsBlitMat;
+        machine.gpuBlitMaterial = gpuBlitMat;
+        machine.orderMaterial = orderMat;
     }
 
     static Mesh PointsMesh(string name, int count)

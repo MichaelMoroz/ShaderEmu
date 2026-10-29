@@ -11,8 +11,8 @@ using VRC.SDKBase;
 using VRC.Udon.Common.Interfaces;
 
 // Runs the machine. Every Unity frame, several rounds of what the harness does per frame:
-// CPUTick and Commit (Machine.shader and its cameras, RAM in one texture written in place),
-// a readback of state row 0 and the control words, the GPU's camera drawing the list the
+// CPUTick (Machine.shader's tick camera) and Commit (blits, RAM in one texture written in place),
+// a readback of state row 0 and the control words, the GPU's blits drawing the list the
 // guest submitted, and the GPU's control pass. Around that this script does what
 // rvc_harness.cpp does: boots the image and feeds the console and the input device.
 // The machine is local: every player runs their own, and EmuShareHub shows it to the others.
@@ -38,7 +38,17 @@ public class EmuMachine : UdonSharpBehaviour
     public Material gpuMaterial;            // the GPU mesh's material
     public Material volumeMaterial;         // the holodeck's: the same lists, seen from the room
     public Material volumeMaskMaterial;     // and what marks where they show, which looks whether there is a frame
-    public Camera gpuCamera;                // disabled: rendered from here, once a round
+    public Camera gpuCamera;                // disabled: rendered from here, once a round (with oldPaths' bit 6; its target is the blits')
+    // Blits in place of the points' and the GPU's cameras (docs/machine/gpu.md, "Blits in place of cameras"): a
+    // camera's Render is some 0.13 ms of the main thread, a blit next to nothing. A blit's two triangles are two
+    // patches, tessellated into points, and a geometry shader's instances are calls that make the meshes' points
+    // and triangles, in the meshes' order: BlitOrder.shader measures the order the card draws a patch's points in.
+    public Material gatherBlitMaterial;     // MachineCommitBlit.shader, its pass 0: the gather into the stage
+    public Material pointsBlitMaterial;     // the same shader, its pass 1: the RAM commit into the state
+    public Material gpuBlitMaterial;        // GpuDrawBlit.shader: the depth cleared (pass 8), then the GPU's 8 passes
+    public Material orderMaterial;          // BlitOrder.shader
+    public RenderTexture orderTexture;      // 81 x 81: its pass 0's
+    public RenderTexture rankTexture;       // 81 x 1: each point's place, which the blits' calls go by (_AmpRank)
     public Material displayMaterial;        // Display.shader: decodes the display from the state
     public RenderTexture displayTexture;    // the decoded picture, a pixel a texel, with mipmaps
     public Material displayShowMaterial;    // DisplayShow.shader, on the wall
@@ -148,9 +158,14 @@ public class EmuMachine : UdonSharpBehaviour
     private const int PassCommit = 0, PassControl = 1, PassUnpack = 2, PassWindowBack = 3;
     private const int FieldPoints = 2 * 3968;   // the lanes' field's buckets (FIELD_MAX in lean/tick.hlsl)
     private const int CommitPoints = 1 + 258 + 255 * 130 + FieldPoints + 1;   // MachineCommitPoints.shader's mesh
+    private const int GatherPoints = 1 + 256;                                 // MachineGather.shader's: 1 + CORES
+    private const int CommitCalls = (CommitPoints - 1 + 8) / 9 + 1;           // MachineCommitBlit's: nine points a call, the last alone
+    private const int BlitCalls = 2 * 81 * 8;                                 // a blit's calls at its AMP_INST 8
     // To compare (docs/machine/multicore.md, "In Unity"): bit 0 the three cameras as game cameras, which
     // prepare every canvas of the room at each Render; bit 1 the GPU's camera every round;
-    // bit 4, a test: that camera in a frame's last round only, whatever comes.
+    // bit 4, a test: that camera in a frame's last round only, whatever comes;
+    // bit 5 the commit's gather and points by the points camera, bit 6 the GPU's lists by its camera,
+    // where both are blits now (docs/machine/gpu.md, "Blits in place of cameras").
     [HideInInspector] public int oldPaths;
     private int pathsSet = -1;
     private bool gpuDrew = true;       // what the control pass was last told of this round's camera
@@ -457,6 +472,16 @@ public class EmuMachine : UdonSharpBehaviour
         pointsMaterial.SetTexture("_Data_RAM_B", Pick(2));
         pointsMaterial.SetTexture("_Data_RAM_A", Pick(3));
         gpuMaterial.SetTexture("_Data_ROM", Pick(4));
+        if (pointsBlitMaterial != null)
+        {
+            pointsBlitMaterial.SetTexture("_Data_ROM", Pick(4));
+            gatherBlitMaterial.SetTexture("_Data_ROM", Pick(4));
+            pointsBlitMaterial.SetTexture("_Data_RAM_R", Pick(0));
+            pointsBlitMaterial.SetTexture("_Data_RAM_G", Pick(1));
+            pointsBlitMaterial.SetTexture("_Data_RAM_B", Pick(2));
+            pointsBlitMaterial.SetTexture("_Data_RAM_A", Pick(3));
+        }
+        if (gpuBlitMaterial != null) gpuBlitMaterial.SetTexture("_Data_ROM", Pick(4));
         if (romViewMaterial != null) romViewMaterial.SetTexture("_Data_ROM", Pick(4));
         if (sound != null)
         {
@@ -501,6 +526,21 @@ public class EmuMachine : UdonSharpBehaviour
         // the lanes' field (docs/machine/lanes.md): its primitive is the tick mesh's last, its points the mesh's
         // before the picture's; with no job posted the first draws no pixel and the others no texel
         pointsMaterial.SetInt("_FieldPoints", FieldPoints);
+        if (pointsBlitMaterial != null)
+        {
+            // the same for the blits, which make the meshes' points (no mesh: how many is a number)
+            gatherBlitMaterial.SetTexture("_Ram", state);
+            gatherBlitMaterial.SetTexture("_TickState", tickState);
+            gatherBlitMaterial.SetInt("_GatherPoints", GatherPoints);
+            gatherBlitMaterial.SetTexture("_AmpRank", rankTexture);
+            pointsBlitMaterial.SetTexture("_TickState", tickState);
+            pointsBlitMaterial.SetTexture("_Stage", stage);
+            pointsBlitMaterial.SetInt("_CommitPoints", CommitPoints);
+            pointsBlitMaterial.SetInt("_FieldPoints", FieldPoints);
+            pointsBlitMaterial.SetTexture("_AmpRank", rankTexture);
+        }
+        if (gpuBlitMaterial != null) gpuBlitMaterial.SetTexture("_AmpRank", rankTexture);
+        if (orderMaterial != null) orderMaterial.SetTexture("_AmpOrder", orderTexture);
         tickMaterial.SetInt("_LaneField", 1);
         // the tick camera's eight targets, which the unpack pass then reads: bound at every power on,
         // since a remade render texture (an asset save, a lost device) leaves the camera on the old buffers
@@ -518,9 +558,11 @@ public class EmuMachine : UdonSharpBehaviour
         tickMaterial.SetInt("_Init", 1);
         pointsMaterial.SetInt("_Init", 1);
         gatherMaterial.SetInt("_Init", 1);
+        BlitsInt("_Init", 1);
         machineMaterial.SetInt("_InitRaw", 0);
         tickMaterial.SetInt("_InitRaw", 0);
         pointsMaterial.SetInt("_InitRaw", 0);
+        BlitsInt("_InitRaw", 0);
         tickMaterial.SetInt("_DoTick", 0);
         tickMaterial.SetInt("_Ticks", ticks);
         machineMaterial.SetInt("_UartInLo", 0);
@@ -612,6 +654,11 @@ public class EmuMachine : UdonSharpBehaviour
         zapHead++;
         ZapSet(gatherMaterial, at);   // (the square as it was, into the stage)
         ZapSet(pointsMaterial, at);
+        if (pointsBlitMaterial != null)
+        {
+            ZapSet(gatherBlitMaterial, at);
+            ZapSet(pointsBlitMaterial, at);
+        }
         return true;
     }
 
@@ -1203,6 +1250,19 @@ public class EmuMachine : UdonSharpBehaviour
     // into the state from the tick's texture and the stage, which none of them draws.
     private void Commit()
     {
+        if ((oldPaths & 32) == 0 && pointsBlitMaterial != null)
+        {
+            // as blits (MachineCommitBlit.shader): the same points, no camera
+            VRCGraphics.Blit(blackTexture, stage, gatherBlitMaterial, 0);
+            VRCGraphics.Blit(tickState, state, machineMaterial, PassCommit);
+            // the points' 4,595 calls (nine points each): four blits of 1,296, one after another in their order
+            for (int first = 0; first < CommitCalls; first += BlitCalls)
+            {
+                pointsBlitMaterial.SetInt("_AmpFirst", first);
+                VRCGraphics.Blit(blackTexture, state, pointsBlitMaterial, 1);
+            }
+            return;
+        }
         gatherRenderer.enabled = true;
         pointsRenderer.enabled = false;
         pointsCamera.targetTexture = stage;
@@ -1212,6 +1272,38 @@ public class EmuMachine : UdonSharpBehaviour
         pointsRenderer.enabled = true;
         pointsCamera.targetTexture = state;
         pointsCamera.Render();
+    }
+
+    // The gather's and the RAM commit's blit materials take what their cameras' materials are told.
+    private void BlitsInt(string name, int value)
+    {
+        if (pointsBlitMaterial == null) return;
+        gatherBlitMaterial.SetInt(name, value);
+        pointsBlitMaterial.SetInt(name, value);
+    }
+
+    // The order the card draws a patch's points in (BlitOrder.shader), which every blit of points goes by: measured
+    // every frame before the rounds, two small blits, so that a texture lost with the device is made again.
+    private void BlitOrder()
+    {
+        if (orderMaterial == null || (oldPaths & 96) == 96) return;
+        VRCGraphics.Blit(blackTexture, orderTexture, orderMaterial, 0);
+        VRCGraphics.Blit(orderTexture, rankTexture, orderMaterial, 1);
+    }
+
+    // The GPU's list: the camera's mesh, or as blits into its target and depth (GpuDrawBlit.shader).
+    private void GpuDraw()
+    {
+        if ((oldPaths & 64) == 0 && gpuBlitMaterial != null)
+        {
+            RenderTexture target = gpuCamera.targetTexture;
+            gpuBlitMaterial.SetTexture("_State", state);
+            VRCGraphics.Blit(blackTexture, target, gpuBlitMaterial, 8);
+            for (int p = 0; p < 8; p++) VRCGraphics.Blit(blackTexture, target, gpuBlitMaterial, p);
+            return;
+        }
+        gpuMaterial.SetTexture("_State", state);
+        gpuCamera.Render();
     }
 
     // A preview camera prepares none of the room's canvases when it renders (82 of them: half
@@ -1245,6 +1337,7 @@ public class EmuMachine : UdonSharpBehaviour
         if (running) NetFrame();
         int n = !running ? 1 : steady ? SteadyRounds() : rounds;
         machineMaterial.SetInt("_SoundMixed", 0);
+        BlitOrder();
         for (int i = 0; i < n; i++)
         {
             // The tick camera draws what the cores keep of their state (core 0's pixels, and a
@@ -1260,6 +1353,7 @@ public class EmuMachine : UdonSharpBehaviour
             {
                 gatherMaterial.SetInt("_ZapKind", 0);
                 pointsMaterial.SetInt("_ZapKind", 0);
+                BlitsInt("_ZapKind", 0);
             }
             // What that round left, into its own row: the console's output is only there
             // until the next tick. The rows are read back together when the frame's rounds are done.
@@ -1271,11 +1365,7 @@ public class EmuMachine : UdonSharpBehaviour
                 // The GPU: draw the list the guest has submitted, if any; the control pass
                 // then takes the submit word back and delivers the input.
                 bool draws = gpuAlways || i == n - 1;
-                if (draws)
-                {
-                    gpuMaterial.SetTexture("_State", state);
-                    gpuCamera.Render();
-                }
+                if (draws) GpuDraw();
                 if (draws != gpuDrew)
                 {
                     gpuDrew = draws;
@@ -1302,6 +1392,7 @@ public class EmuMachine : UdonSharpBehaviour
                 tickMaterial.SetInt("_Init", 0);
                 pointsMaterial.SetInt("_Init", 0);
                 gatherMaterial.SetInt("_Init", 0);
+                BlitsInt("_Init", 0);
                 ignoreUntil = requestsSent;   // init frames leave junk in the UART buffer
             }
         }
