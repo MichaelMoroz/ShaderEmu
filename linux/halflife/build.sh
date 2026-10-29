@@ -49,7 +49,7 @@ fi
 git -C "$H" submodule update -q --init freevgui
 
 FPU="-fno-math-errno -fsingle-precision-constant"
-OPT="-O2 -fno-tree-vectorize"
+OPT="-O3 -fno-tree-vectorize -fsched-pressure -funroll-loops --param max-inline-insns-auto=60 --param max-inline-insns-single=400 --param inline-unit-growth=80"
 HAVE="-D_GNU_SOURCE -DALLOCA_H=<alloca.h> -DHAVE_TGMATH_H=1 -DHAVE_STRNCASECMP=1 -DHAVE_STRCASECMP=1 -DHAVE_STRCASESTR=1
     -DHAVE_STRCHRNUL=1 -DHAVE_STRLCPY=1 -DHAVE_STRLCAT=1 -DHAVE_STRNLEN=1 -DHAVE_DIRENT_D_TYPE=1"
 XDEFS="-DXASH_SHADEREMU=1 -DXASH_STATIC_LIBS=1 -DXASH_GAMEDIR=\"valve\" -DXASH_LOW_MEMORY=1 -DXASH_MINIZ=1
