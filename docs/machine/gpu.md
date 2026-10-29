@@ -371,6 +371,34 @@ In D3D12 the state texture must be in the non-pixel-shader-resource state as wel
 pixel-shader one while GPUDraw runs: without it the vertex shader reads stale data, with no
 error.
 
+## The picture's rectangle
+
+A list's picture is the top-left part of the GPU's target (`gpu_picture_size`: the display's size, or the rectangle
+it is drawn into), and the target is larger: 1280 x 720 in the world (Half-Life's 640 x 480 is a third of it), 2048
+square in the harness. Nothing reads past the picture: the display (mode 3), the copies into RAM and the commit
+read its rectangle. What the target's size still cost, and what is done (29 October 2026):
+
+- CMD_CLEAR's one triangle reaches twice the picture each way and painted as much again past it (glxgears' black
+  over the desktop's pixels in the target). It is cut at the picture's right and bottom edges by two clip
+  distances (`GPU_EDGE`, `--define GPU_NO_EDGE` in the harness is the old clear). Its colour and depth are the same
+  at every corner, so no pixel inside changes. 3D triangles past a program's view are not cut: a cut triangle's
+  new corners move the interpolation inside it (113 of Half-Life's pixels changed on the card), and cutting them
+  saved no time we could measure.
+- The world's depth clear (GpuDrawBlit's pass 8, a draw where the camera's clear was a clear) covers the list's
+  picture, not the whole target: depth past it is tested only by pixels past it.
+- The world's display blit draws the mode's rectangle of its 2048 x 1024 texture (Display.shader's `_Rect`; 800
+  x 600 is a quarter), and a whole one when the mode shrinks, after power off and for another's display: outside
+  the rectangle the texture keeps the `_Off` a whole blit wrote, so the mipmaps (made over the whole texture) are
+  as before.
+- The harness clears the depth with `ClearDepthStencilView`, a clear of the whole surface, which a card makes
+  without drawing; the readback and the sound never read the target. The targets' memory stays: 7.4 MB in the
+  world (colour and depth), 32 MB in the harness; a target of another size moves every vertex's place (`part` in
+  `gpu_vertex_sized`) and so the pictures.
+
+On the card (RTX 5090, harness, `RVC_PASS_PROF`, the mean of 200 timed frames of 4,000 at `--fixed-dt 0.02`), the
+devices' passes with and without the cut clear: Half-Life's hldemo1 0.078 and 0.078 ms, glxgears on the desktop
+0.084 and 0.083 ms. The states are the same bytes, and the target is the same inside the picture.
+
 ## RAM in one texture
 
 The machine's state and RAM were two textures of 2048 x 9280 (290 MiB each), each commit
