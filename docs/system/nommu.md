@@ -40,7 +40,9 @@ In WSL, after the MMU build (`linux/kernel/build.sh` and the programs' build scr
   worker cores and its lanes' job, then ends the pass. A worker reads its start word as its pass
   begins, so one already in that pass stores into the program's memory when the pass ends.
   Parked only at the release, after `exit_mm`, the workers ran on through the passes between, in
-  memory already freed. No failure was traced to it: the shell's crash in nes-kill and nxphys-kill
+  memory already freed. Once they are parked, their answers' alive word is cleared: a parked core still said
+  `MC_ALIVE`, which the next program to start it took for its own worker there (`arrived()` in
+  `programs/mc/mcw.c`, which also wants the program's tag now). No failure was traced to it: the shell's crash in nes-kill and nxphys-kill
   under `RVC_BESIDE=1` was `rvc_cpu`'s, whose core 0 went on past a `fence.i`. The configuration has no VM event
   counters, kallsyms, AIO, io_uring or core dumps and a 16 KB log, and trusts the device tree's
   `rng-seed`, which `image.py` writes (128 bytes; `RNG_SEED` in hex gives a fixed one): without
