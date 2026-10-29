@@ -1191,10 +1191,10 @@ index 3f257e2..32d6ddc 100644
  	/** default destructor */
  	~CYapfBaseT() {}
 diff --git a/src/pathfinder/yapf/yapf_ship.cpp b/src/pathfinder/yapf/yapf_ship.cpp
-index b024edb..1134065 100644
+index b024edb..410bf79 100644
 --- a/src/pathfinder/yapf/yapf_ship.cpp
 +++ b/src/pathfinder/yapf/yapf_ship.cpp
-@@ -16,8 +16,398 @@
+@@ -16,8 +16,399 @@
  #include "yapf_ship_regions.h"
  #include "../water_regions.h"
  
@@ -1202,6 +1202,7 @@ index b024edb..1134065 100644
 +#include "../../station_base.h"
 +#include "../../tunnelbridge_map.h"
 +#include "../../timer/timer_game_tick.h"
++#include "../../openttd.h"
 +#include "../../string_func.h"
 +#include <csetjmp>
 +#include <new>
@@ -1593,7 +1594,7 @@ index b024edb..1134065 100644
  constexpr int NUMBER_OR_WATER_REGIONS_LOOKAHEAD = 4;
  constexpr int MAX_SHIP_PF_NODES = (NUMBER_OR_WATER_REGIONS_LOOKAHEAD + 1) * WATER_REGION_NUMBER_OF_TILES * 4; // 4 possible exit dirs per tile.
  
-@@ -43,6 +433,17 @@ protected:
+@@ -43,6 +434,17 @@ protected:
  public:
  	void SetDestination(const Ship *v)
  	{
@@ -1611,7 +1612,7 @@ index b024edb..1134065 100644
  		if (v->current_order.IsType(OT_GOTO_STATION)) {
  			this->dest_station = v->current_order.GetDestination().ToStationID();
  			this->dest_tile = CalcClosestStationTile(this->dest_station, v->tile, StationType::Dock);
-@@ -83,6 +484,19 @@ public:
+@@ -83,6 +485,19 @@ public:
  			return GetWaterRegionPatchInfo(tile) == this->intermediate_dest_region_patch;
  		}
  
@@ -1631,7 +1632,7 @@ index b024edb..1134065 100644
  		if (this->dest_station != StationID::Invalid()) return IsDockingTile(tile) && IsShipDestinationTile(tile, this->dest_station);
  
  		return tile == this->dest_tile && ((this->dest_trackdirs & TrackdirToTrackdirBits(trackdir)) != TRACKDIR_BIT_NONE);
-@@ -134,6 +548,24 @@ public:
+@@ -134,6 +549,24 @@ public:
  	inline void PfFollowNode(Node &old_node)
  	{
  		TrackFollower follower{Yapf().GetVehicle()};
@@ -1656,7 +1657,7 @@ index b024edb..1134065 100644
  		if (follower.Follow(old_node.key.tile, old_node.key.td)) {
  			if (this->water_region_corridor.empty()
  					|| std::ranges::find(this->water_region_corridor, GetWaterRegionInfo(follower.new_tile)) != this->water_region_corridor.end()) {
-@@ -158,6 +590,9 @@ public:
+@@ -158,6 +591,9 @@ public:
  	/** Returns a random trackdir out of a set of trackdirs. */
  	static Trackdir GetRandomTrackdir(TrackdirBits trackdirs)
  	{
@@ -1666,7 +1667,7 @@ index b024edb..1134065 100644
  		const int strip_amount = RandomRange(CountBits(trackdirs));
  		for (int s = 0; s < strip_amount; ++s) RemoveFirstTrackdir(&trackdirs);
  		return FindFirstTrackdir(trackdirs);
-@@ -368,12 +803,20 @@ public:
+@@ -368,12 +804,20 @@ public:
  		/* Additional penalty for curves. */
  		c += this->CurveCost(n.parent->GetTrackdir(), n.GetTrackdir());
  
@@ -1687,7 +1688,7 @@ index b024edb..1134065 100644
  			c += count * 3 * YAPF_TILE_LENGTH;
  		}
  
-@@ -424,14 +867,399 @@ struct CYapfShip_TypesT {
+@@ -424,14 +868,411 @@ struct CYapfShip_TypesT {
  
  struct CYapfShip : CYapfT<CYapfShip_TypesT<CYapfShip>> {
  	explicit CYapfShip(int max_nodes) { this->max_search_nodes = max_nodes; }
@@ -2019,10 +2020,22 @@ index b024edb..1134065 100644
 +}
 +
 +/** The first core begins (true) or ends drawing the dirty blocks: ends, and waits until every path made ahead waits. */
++void YapfShipAheadCancel();
++
 +void YapfShipAheadQuiet(bool on)
 +{
 +	if (_ahead_slots == nullptr) return;
 +	if (on) {
++		/* A picture with no tick since the last (the game paused, or drawn faster than it ticks): the paths are
++		 * given up, not made on, so that every worker draws. The jobs launched at a tick held up to nine workers
++		 * in every paused picture after it, and the first core waited at each picture's end for them to stop
++		 * (paused scroll 7.8 pictures a second to 1.9). A path given up is made again or by the first core. */
++		static uint64_t opened_at = UINT64_MAX;
++		if (TimerGameTick::counter == opened_at || _pause_mode.Any()) {
++			YapfShipAheadCancel();
++			return;
++		}
++		opened_at = TimerGameTick::counter;
 +		_ahead_quiet.v = (_ahead_gen << 1) | 1;
 +		return;
 +	}
@@ -2517,7 +2530,7 @@ index 0abd7c0..675f9c3 100644
 +    CONDITION SHADEREMU
 +)
 diff --git a/src/spritecache.cpp b/src/spritecache.cpp
-index f26695a..70d7e8d 100644
+index f26695a..bee5c79 100644
 --- a/src/spritecache.cpp
 +++ b/src/spritecache.cpp
 @@ -18,11 +18,16 @@
@@ -2900,7 +2913,7 @@ index f26695a..70d7e8d 100644
  	for (SpriteCache &sc : _spritecache) {
  		if (sc.ptr != nullptr) sc.ClearSpriteData();
 diff --git a/src/spriteloader/grf.cpp b/src/spriteloader/grf.cpp
-index a7ddcda..9648911 100644
+index a7ddcda..ee0b2de 100644
 --- a/src/spriteloader/grf.cpp
 +++ b/src/spriteloader/grf.cpp
 @@ -22,6 +22,23 @@
@@ -3858,7 +3871,7 @@ index 9b69b13..4571a5f 100644
  void ShowNewGrfVehicleError(EngineID engine, StringID part1, StringID part2, GRFBug bug_type, bool critical);
  CommandCost TunnelBridgeIsFree(TileIndex tile, TileIndex endtile, const Vehicle *ignore = nullptr);
 diff --git a/src/video/CMakeLists.txt b/src/video/CMakeLists.txt
-index e09c202..3319032 100644
+index e09c202..ebad8f9 100644
 --- a/src/video/CMakeLists.txt
 +++ b/src/video/CMakeLists.txt
 @@ -42,3 +42,11 @@ add_files(
@@ -3992,7 +4005,7 @@ index 85cc2d5..439e51d 100644
  	if (std::this_thread::get_id() != this->game_thread.get_id()) return;
  
 diff --git a/src/viewport.cpp b/src/viewport.cpp
-index 6427a14..eb48315 100644
+index 6427a14..a5643b6 100644
 --- a/src/viewport.cpp
 +++ b/src/viewport.cpp
 @@ -99,6 +99,11 @@
