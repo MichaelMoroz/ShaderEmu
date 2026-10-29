@@ -19,6 +19,8 @@ struct SLPass {
     std::string vertexEntry;     // #pragma vertex
     std::string fragmentEntry;   // #pragma fragment
     std::string geometryEntry;   // #pragma geometry (optional)
+    std::string hullEntry;       // #pragma hull (optional, with domain)
+    std::string domainEntry;     // #pragma domain (optional)
     std::string target = "5.0";  // #pragma target
 };
 

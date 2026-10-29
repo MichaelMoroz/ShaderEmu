@@ -101,7 +101,7 @@ bool buildPasses(Gpu& gpu, const SLShader& shader, const std::vector<std::string
     std::string rootDir = std::filesystem::u8path(shader.path).parent_path().u8string();
     struct Job {
         size_t passIdx;
-        char stage;  // 'v', 'g', 'p'
+        char stage;  // 'v', 'g', 'p', 'h', 'd'
         std::string entry;
         std::future<StageResult> fut;
     };
@@ -122,6 +122,8 @@ bool buildPasses(Gpu& gpu, const SLShader& shader, const std::vector<std::string
         }
         launch('v', p.vertexEntry, "vs_", "SHADER_STAGE_VERTEX");
         if (!p.geometryEntry.empty()) launch('g', p.geometryEntry, "gs_", "SHADER_STAGE_GEOMETRY");
+        if (!p.hullEntry.empty()) launch('h', p.hullEntry, "hs_", "SHADER_STAGE_HULL");
+        if (!p.domainEntry.empty()) launch('d', p.domainEntry, "ds_", "SHADER_STAGE_DOMAIN");
         launch('p', p.fragmentEntry, "ps_", "SHADER_STAGE_FRAGMENT");
     }
     fprintf(stderr, "[harness] compiling %zu shader stage(s) of '%s' (uncached FXC builds of large shaders can take minutes)...\n",
@@ -133,7 +135,7 @@ bool buildPasses(Gpu& gpu, const SLShader& shader, const std::vector<std::string
     bool ok = true;
     for (auto& j : jobs) {
         StageResult r = j.fut.get();
-        const char* stageName = j.stage == 'v' ? "vertex" : j.stage == 'g' ? "geometry" : "fragment";
+        const char* stageName = j.stage == 'v' ? "vertex" : j.stage == 'g' ? "geometry" : j.stage == 'h' ? "hull" : j.stage == 'd' ? "domain" : "fragment";
         GpuPass& gp = out[j.passIdx];
         if (!r.ok) {
             fprintf(stderr, "[harness] pass '%s' %s (%s) FAILED:\n%s\n", gp.name.c_str(), stageName, j.entry.c_str(),
@@ -151,6 +153,8 @@ bool buildPasses(Gpu& gpu, const SLShader& shader, const std::vector<std::string
         StageLayout* layout = nullptr;
         if (j.stage == 'v') { hr = gpu.device->CreateVertexShader(bc, bcSize, nullptr, &gp.vs); layout = &gp.vsLayout; }
         else if (j.stage == 'g') { hr = gpu.device->CreateGeometryShader(bc, bcSize, nullptr, &gp.gs); layout = &gp.gsLayout; }
+        else if (j.stage == 'h') { hr = gpu.device->CreateHullShader(bc, bcSize, nullptr, &gp.hs); layout = &gp.hsLayout; }
+        else if (j.stage == 'd') { hr = gpu.device->CreateDomainShader(bc, bcSize, nullptr, &gp.ds); layout = &gp.dsLayout; }
         else { hr = gpu.device->CreatePixelShader(bc, bcSize, nullptr, &gp.ps); layout = &gp.psLayout; }
         if (FAILED(hr)) {
             fprintf(stderr, "[harness] Create%sShader failed: %s\n", stageName, hrToString(hr).c_str());
@@ -278,6 +282,8 @@ void Material::bindStage(ID3D11DeviceContext* ctx, StageLayout& L, int stage, co
         if (stage == 0) ctx->VSSetConstantBuffers(L.globalsSlot, 1, &cb);
         else if (stage == 1) ctx->GSSetConstantBuffers(L.globalsSlot, 1, &cb);
         else if (stage == 3) ctx->CSSetConstantBuffers(L.globalsSlot, 1, &cb);
+        else if (stage == 4) ctx->HSSetConstantBuffers(L.globalsSlot, 1, &cb);
+        else if (stage == 5) ctx->DSSetConstantBuffers(L.globalsSlot, 1, &cb);
         else ctx->PSSetConstantBuffers(L.globalsSlot, 1, &cb);
     }
     for (auto& t : L.textures) {
@@ -286,6 +292,8 @@ void Material::bindStage(ID3D11DeviceContext* ctx, StageLayout& L, int stage, co
         if (stage == 0) ctx->VSSetShaderResources(t.slot, 1, &srv);
         else if (stage == 1) ctx->GSSetShaderResources(t.slot, 1, &srv);
         else if (stage == 3) ctx->CSSetShaderResources(t.slot, 1, &srv);
+        else if (stage == 4) ctx->HSSetShaderResources(t.slot, 1, &srv);
+        else if (stage == 5) ctx->DSSetShaderResources(t.slot, 1, &srv);
         else ctx->PSSetShaderResources(t.slot, 1, &srv);
     }
     for (auto& s : L.samplers) {
@@ -295,6 +303,8 @@ void Material::bindStage(ID3D11DeviceContext* ctx, StageLayout& L, int stage, co
         if (stage == 0) ctx->VSSetSamplers(s.slot, 1, &ss);
         else if (stage == 1) ctx->GSSetSamplers(s.slot, 1, &ss);
         else if (stage == 3) ctx->CSSetSamplers(s.slot, 1, &ss);
+        else if (stage == 4) ctx->HSSetSamplers(s.slot, 1, &ss);
+        else if (stage == 5) ctx->DSSetSamplers(s.slot, 1, &ss);
         else ctx->PSSetSamplers(s.slot, 1, &ss);
     }
 }
@@ -303,7 +313,12 @@ void Material::bind(ID3D11DeviceContext* ctx, GpuPass& pass, const Gpu& gpu) {
     ctx->VSSetShader(pass.vs.Get(), nullptr, 0);
     ctx->GSSetShader(pass.gs.Get(), nullptr, 0);
     ctx->PSSetShader(pass.ps.Get(), nullptr, 0);
+    // (null for every pass that has none: a pass of patches leaves them bound otherwise)
+    ctx->HSSetShader(pass.hs.Get(), nullptr, 0);
+    ctx->DSSetShader(pass.ds.Get(), nullptr, 0);
     bindStage(ctx, pass.vsLayout, 0, gpu);
     bindStage(ctx, pass.gsLayout, 1, gpu);
     bindStage(ctx, pass.psLayout, 2, gpu);
+    bindStage(ctx, pass.hsLayout, 4, gpu);
+    bindStage(ctx, pass.dsLayout, 5, gpu);
 }

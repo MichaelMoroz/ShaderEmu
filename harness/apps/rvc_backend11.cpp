@@ -64,6 +64,30 @@ public:
             r.settings.defines.push_back({"COMMIT_RAM", "1"});
             if (!buildPasses(gpu_, gather, {"Commit"}, g, gatherPasses_, err) || !buildPasses(gpu_, points, {"Commit"}, r, ramPasses_, err))
                 return false;
+            if (opt.ampShader) {
+                // --blits: the same two as the world's blits draw them (src/amp.h): patches, and the points made by
+                // calls of a geometry shader, a call a point for the gather and nine for the RAM commit
+                SLShader gatherAmp = shader, pointsAmp = shader;
+                auto patches = [](SLShader& sh, const char* geometry) {
+                    for (auto& p : sh.passes)
+                        if (p.name == "Commit") {
+                            p.vertexEntry = "amp_vert";
+                            p.hullEntry = "amp_hull";
+                            p.domainEntry = "amp_dom";
+                            p.geometryEntry = geometry;
+                        }
+                };
+                patches(gatherAmp, "ram_gather_amp_geom");
+                patches(pointsAmp, "ram_commit_amp_geom");
+                ShaderBuildOptions ga = g, ra = r;
+                ga.settings.defines.push_back({"RAM_AMP", "1"});
+                ga.settings.defines.push_back({"AMP_INST", "2"});
+                ra.settings.defines.push_back({"RAM_AMP", "1"});
+                ra.settings.defines.push_back({"AMP_INST", getenv("RVC_AMP_INST") ? getenv("RVC_AMP_INST") : "8"});   // (RVC_AMP_INST: a test)
+                if (!buildPasses(gpu_, gatherAmp, {"Commit"}, ga, gatherAmp_, err) || !buildPasses(gpu_, pointsAmp, {"Commit"}, ra, ramAmp_, err) ||
+                    !buildPasses(gpu_, *opt.ampShader, {"AmpOrder", "AmpRank"}, bo, ampProbe_, err))
+                    return false;
+            }
             for (GpuPass* p : {&passes_[1], &gatherPasses_[0], &ramPasses_[0]})
                 for (StageLayout* l : {&p->vsLayout, &p->gsLayout, &p->psLayout})
                     for (auto& t : l->textures)
@@ -106,6 +130,20 @@ public:
             fprintf(stderr, "[harness] GPU device disabled: %s\n", gpuErr.c_str());
             gpuPasses_.clear();
         }
+        if (opt.gpuShader && opt.ampShader && !gpuPasses_.empty()) {
+            // --blits: the lists drawn by a blit's calls, 13 of the mesh's triangles each (src/gpu.h, GPU_AMP)
+            SLShader amp = *opt.gpuShader;
+            for (auto& p : amp.passes)
+                if (p.name == "GPUDraw") {
+                    p.vertexEntry = "amp_vert";
+                    p.hullEntry = "amp_hull";
+                    p.domainEntry = "amp_dom";
+                    p.geometryEntry = "gpu_amp_geom";
+                }
+            ShaderBuildOptions a = bo;
+            a.settings.defines.push_back({"GPU_AMP", "1"});
+            if (!buildPasses(gpu_, amp, {"GPUDraw"}, a, gpuAmp_, err)) return false;
+        }
         if (opt.soundShader && !gpuPasses_.empty() &&
             (!buildPasses(gpu_, *opt.soundShader, {"SoundMix"}, bo, soundPasses_, gpuErr) || !createSoundTarget(gpuErr))) {
             fprintf(stderr, "[harness] sound card disabled: %s\n", gpuErr.c_str());
@@ -118,9 +156,14 @@ public:
         if (inplace_) {
             if (!createInplace(err)) return false;
         } else {
+            if (opt.ampShader) {
+                err = "--blits is for RAM in one texture (no --ping-pong, --lazy or --compute)";
+                return false;
+            }
             if (!crt_.init(gpu_.device.Get(), kWidth, kHeight, DXGI_FORMAT_R32G32B32A32_UINT, err)) return false;
             crt_.clear(gpu_.ctx.Get());
         }
+        if (opt.ampShader && !ampProbe(mat, err)) return false;
         return rows_.init(gpu_.device.Get(), DXGI_FORMAT_R32G32B32A32_UINT, 16, 64, 1, 3, err, opt.readbackBatch) &&
                control_.init(gpu_.device.Get(), DXGI_FORMAT_R32G32B32A32_UINT, 16, kControlTexels, 1, 3, err, opt.readbackBatch) &&
                net_.init(gpu_.device.Get(), DXGI_FORMAT_R32G32B32A32_UINT, 16, kNetRead, 1, 3, err, opt.readbackBatch) &&
@@ -620,14 +663,16 @@ private:
     // picture stays until the guest submits another list.
     void gpuDraw(Material& mat) {
         ID3D11DeviceContext* ctx = gpu_.ctx.Get();
-        GpuPass& pass = gpuPasses_[0];
+        static const char* blitsOnly = getenv("RVC_BLITS");
+        bool amp = !gpuAmp_.empty() && (!blitsOnly || strstr(blitsOnly, "gpu") != nullptr);
+        GpuPass& pass = amp ? gpuAmp_[0] : gpuPasses_[0];
         ctx->OMSetRenderTargets(1, gpuRtv_.GetAddressOf(), gpuDsv_.Get());
         ctx->ClearDepthStencilView(gpuDsv_.Get(), D3D11_CLEAR_DEPTH, 1.0f, 0);
         D3D11_VIEWPORT vp{0, 0, (float)kGpuTarget, (float)kGpuTarget, 0, 1};
         ctx->RSSetViewports(1, &vp);
         ctx->RSSetState(gpu_.rasterNoCull.Get());
         ctx->IASetInputLayout(nullptr);
-        ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        ctx->IASetPrimitiveTopology(amp ? D3D11_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST : D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         ID3D11ShaderResourceView* state = stateSrv();
         // one draw per pass in use, in order: each has its own blending and depth use
         for (int p = 0; p < 8; ++p) {
@@ -640,13 +685,17 @@ private:
                 if (t.name == "_State") ctx->VSSetShaderResources(t.slot, 1, &state);
             for (auto& t : pass.psLayout.textures)
                 if (t.name == "_State") ctx->PSSetShaderResources(t.slot, 1, &state);
+            for (auto& t : pass.gsLayout.textures)
+                if (t.name == "_State") ctx->GSSetShaderResources(t.slot, 1, &state);
             ctx->OMSetBlendState(gpuBlend_[p & 3].Get(), nullptr, 0xffffffff);
             ctx->OMSetDepthStencilState(gpuDepthState_[p == 0 ? 0 : p < 4 ? 1 : 2].Get(), 0);
-            ctx->Draw(kGpuTriangles * 3, 0);
+            ctx->Draw(amp ? 6 : kGpuTriangles * 3, 0);
         }
         ID3D11ShaderResourceView* none = nullptr;
         for (auto& t : pass.vsLayout.textures) ctx->VSSetShaderResources(t.slot, 1, &none);
         for (auto& t : pass.psLayout.textures) ctx->PSSetShaderResources(t.slot, 1, &none);
+        for (auto& t : pass.gsLayout.textures) ctx->GSSetShaderResources(t.slot, 1, &none);
+        if (amp) ampUnbind();
         ctx->OMSetRenderTargets(0, nullptr, nullptr);
     }
 
@@ -793,6 +842,114 @@ private:
         return true;
     }
     std::vector<GpuPass> gatherPasses_, ramPasses_;
+    // --blits (src/amp.h): the gather's and the RAM commit's passes as patches, the GPU's draw, the order probe's
+    // two passes, and its targets: texel (i, j) the later of points i and j plus one, then each point's place
+    std::vector<GpuPass> gatherAmp_, ramAmp_, gpuAmp_, ampProbe_;
+    ComPtr<ID3D11Texture2D> ampOrder_, ampRank_;
+    ComPtr<ID3D11RenderTargetView> ampOrderRtv_, ampRankRtv_;
+    ComPtr<ID3D11ShaderResourceView> ampOrderSrv_, ampRankSrv_;
+
+    // The order probe (src/amp.h): which order this device's tessellator gives a patch's 81 points. Drawn once;
+    // the ranks are read back and must be 0 to 80 once each.
+    bool ampProbe(Material& mat, std::string& err) {
+        ID3D11Device* dev = gpu_.device.Get();
+        ID3D11DeviceContext* ctx = gpu_.ctx.Get();
+        D3D11_TEXTURE2D_DESC td{};
+        td.Width = 81;
+        td.Height = 81;
+        td.MipLevels = td.ArraySize = 1;
+        td.Format = DXGI_FORMAT_R32_FLOAT;
+        td.SampleDesc.Count = 1;
+        td.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+        HRESULT hr = dev->CreateTexture2D(&td, nullptr, &ampOrder_);
+        if (SUCCEEDED(hr)) hr = dev->CreateRenderTargetView(ampOrder_.Get(), nullptr, &ampOrderRtv_);
+        if (SUCCEEDED(hr)) hr = dev->CreateShaderResourceView(ampOrder_.Get(), nullptr, &ampOrderSrv_);
+        td.Height = 1;
+        if (SUCCEEDED(hr)) hr = dev->CreateTexture2D(&td, nullptr, &ampRank_);
+        if (SUCCEEDED(hr)) hr = dev->CreateRenderTargetView(ampRank_.Get(), nullptr, &ampRankRtv_);
+        if (SUCCEEDED(hr)) hr = dev->CreateShaderResourceView(ampRank_.Get(), nullptr, &ampRankSrv_);
+        if (FAILED(hr)) {
+            err = "the blits' order probe: " + hrToString(hr);
+            return false;
+        }
+        const float zero[4] = {0, 0, 0, 0};
+        ctx->ClearRenderTargetView(ampOrderRtv_.Get(), zero);
+        ID3D11ShaderResourceView* nulls[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT] = {};
+        auto draw = [&](GpuPass& pass, ID3D11RenderTargetView* rtv, float w, float h, D3D11_PRIMITIVE_TOPOLOGY topology, UINT n) {
+            ctx->PSSetShaderResources(0, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT, nulls);
+            ctx->OMSetRenderTargets(1, &rtv, nullptr);
+            D3D11_VIEWPORT vp{0, 0, w, h, 0, 1};
+            ctx->RSSetViewports(1, &vp);
+            ctx->RSSetState(gpu_.rasterNoCull.Get());
+            ctx->OMSetBlendState(gpu_.blendOpaque.Get(), nullptr, 0xffffffff);
+            ctx->OMSetDepthStencilState(gpu_.depthOff.Get(), 0);
+            ctx->IASetInputLayout(nullptr);
+            ctx->IASetPrimitiveTopology(topology);
+            mat.bind(ctx, pass, gpu_);
+            ctx->Draw(n, 0);
+            ctx->OMSetRenderTargets(0, nullptr, nullptr);
+            ampUnbind();
+        };
+        draw(ampProbe_[0], ampOrderRtv_.Get(), 81, 81, D3D11_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST, 6);
+        mat.setTexture("_AmpOrder", ampOrderSrv_.Get(), 81, 81);
+        draw(ampProbe_[1], ampRankRtv_.Get(), 81, 1, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST, 3);
+        mat.setTexture("_AmpRank", ampRankSrv_.Get(), 81, 1);
+        // read the ranks back
+        D3D11_TEXTURE2D_DESC sd = td;
+        sd.BindFlags = 0;
+        sd.Usage = D3D11_USAGE_STAGING;
+        sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        ComPtr<ID3D11Texture2D> staging;
+        D3D11_MAPPED_SUBRESOURCE m{};
+        if (FAILED(dev->CreateTexture2D(&sd, nullptr, &staging))) {
+            err = "the blits' order probe: no staging texture";
+            return false;
+        }
+        ctx->CopyResource(staging.Get(), ampRank_.Get());
+        if (FAILED(ctx->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &m))) {
+            err = "the blits' order probe: no readback";
+            return false;
+        }
+        const float* rank = (const float*)m.pData;
+        int seen[81] = {}, first = -1, last = -1;
+        bool ok = true;
+        std::string ranks;
+        for (int i = 0; i < 81; i++) {
+            int r = (int)rank[i];
+            ranks += " " + std::to_string(rank[i]).substr(0, 5);
+            if (r < 0 || r > 80 || (float)r != rank[i] || seen[r]++) ok = false;
+            else if (r == 0) first = i;
+            else if (r == 80) last = i;
+        }
+        ctx->Unmap(staging.Get(), 0);
+        if (!ok) {
+            // (what the first pass drew, for a look)
+            D3D11_TEXTURE2D_DESC od = sd;
+            od.Height = 81;
+            ComPtr<ID3D11Texture2D> ostaging;
+            int drawn = -1;
+            if (SUCCEEDED(dev->CreateTexture2D(&od, nullptr, &ostaging))) {
+                ctx->CopyResource(ostaging.Get(), ampOrder_.Get());
+                if (SUCCEEDED(ctx->Map(ostaging.Get(), 0, D3D11_MAP_READ, 0, &m))) {
+                    drawn = 0;
+                    for (UINT y = 0; y < 81; y++)
+                        for (UINT x = 0; x < 81; x++) drawn += ((const float*)((const char*)m.pData + y * m.RowPitch))[x] != 0;
+                    ctx->Unmap(ostaging.Get(), 0);
+                }
+            }
+            err = "the blits' order probe: the tessellator's points are not in one order (" + std::to_string(drawn) + " of 6,561 texels drawn; " +
+                  (ampProbe_[0].hs ? "a hull shader" : "no hull shader") + "; ranks, v * 9 + u:" + ranks + ")";
+            return false;
+        }
+        fprintf(stderr, "[harness] blits: a patch's points drawn from (u %d, v %d) to (u %d, v %d)\n", first % 9, first / 9, last % 9,
+                last / 9);
+        return true;
+    }
+    // A pass of patches leaves the hull and domain shaders bound: draws that bind no material of their own would use them.
+    void ampUnbind() {
+        gpu_.ctx->HSSetShader(nullptr, nullptr, 0);
+        gpu_.ctx->DSSetShader(nullptr, nullptr, 0);
+    }
     ComPtr<ID3D11Texture2D> ram_, tickState_, stage_, zone_;
     ComPtr<ID3D11ShaderResourceView> ramSrv_, tickStateSrv_, stageSrv_;
     ComPtr<ID3D11RenderTargetView> ramRtv_, tickStateRtv_, stageRtv_, zoneRtv_;
@@ -858,6 +1015,7 @@ private:
         mat.bind(ctx, pass, gpu_);
         ctx->Draw(vertices, 0);
         ctx->OMSetRenderTargets(0, nullptr, nullptr);
+        if (pass.hs) ampUnbind();
     }
     // A control zone: drawn into Z from R, then copied into R.
     void zoneInplace(Material& mat, const float* zf) {
@@ -956,7 +1114,14 @@ private:
             if (!gpuPasses_.empty()) mat.setTexture("_GpuTarget", gpuSrv_.Get(), kGpuTarget, kGpuTarget);
             mat.setTexture("_TickState", tickStateSrv_.Get(), kWidth, 64);
             mat.setTexture("_Ram", ramSrv_.Get(), kWidth, kHeight);
-            drawInto(gatherPasses_[0], mat, stageRtv_.Get(), 0, 1 + activeCores_, D3D11_PRIMITIVE_TOPOLOGY_POINTLIST, nullptr, kStageRows);
+            // (RVC_BLITS=gather,points,gpu: only those drawn as blits, to look at one alone)
+            static const char* blitsOnly = getenv("RVC_BLITS");
+            auto blit = [&](const char* what) { return !blitsOnly || strstr(blitsOnly, what) != nullptr; };
+            if (!gatherAmp_.empty() && blit("gather")) {
+                mat.setInt("_GatherPoints", 1 + activeCores_);
+                drawInto(gatherAmp_[0], mat, stageRtv_.Get(), 0, 6, D3D11_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST, nullptr, kStageRows);
+            } else
+                drawInto(gatherPasses_[0], mat, stageRtv_.Get(), 0, 1 + activeCores_, D3D11_PRIMITIVE_TOPOLOGY_POINTLIST, nullptr, kStageRows);
             prof_.mark(ctx);
             mat.setTexture("_Stage", stageSrv_.Get(), kWidth, kStageRows);
             drawInto(passes_[1], mat, ramRtv_.Get(), 0, 6, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -965,7 +1130,17 @@ private:
             UINT points = 1 + 258 + (activeCores_ - 1) * 130 + (field ? kFieldPoints : 0) + 1;   // ram_commit_geom: the zap, the cores' places, the field's buckets, the picture
             mat.setInt("_CommitPoints", points);
             if (laneField_) mat.setInt("_FieldPoints", field ? kFieldPoints : 0);
-            drawInto(ramPasses_[0], mat, ramRtv_.Get(), 0, points, D3D11_PRIMITIVE_TOPOLOGY_POINTLIST);
+            if (!ramAmp_.empty() && blit("points")) {
+                // nine points a call and the last alone, 1,296 calls a blit (AMP_INST 8 in src/ram.h)
+                static const UINT each = 2 * 81 * (getenv("RVC_AMP_INST") ? atoi(getenv("RVC_AMP_INST")) : 8);
+                UINT calls = (points - 1 + 8) / 9 + 1;
+                for (UINT first = 0; first < calls; first += each) {
+                    mat.setInt("_AmpFirst", first);
+                    drawInto(ramAmp_[0], mat, ramRtv_.Get(), 0, 6, D3D11_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST);
+                }
+                mat.setInt("_AmpFirst", 0);
+            }
+            else drawInto(ramPasses_[0], mat, ramRtv_.Get(), 0, points, D3D11_PRIMITIVE_TOPOLOGY_POINTLIST);
             prof_.mark(ctx);
         }
         if (timeIt) ctx->End(tsQuery_[2].Get());

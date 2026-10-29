@@ -213,6 +213,7 @@ struct Options {
     double netLoss = 0, netDelay = 0;   // --net-loss percent, --net-delay milliseconds: of every packet sent
     int cores = 1;            // core 0 and the worker cores: kCores wherever the machine has workers (docs/machine/multicore.md)
     bool lazy = false;        // --lazy: a fill or copy is left to the commit and the pass goes on (LAZY_MEMOP)
+    bool blits = false;       // --blits: the commit's points and the GPU's lists as the world's blits (src/amp.h)
     bool noBands = false;     // --no-bands: the commit rewrites all of RAM, not only the bands written to (COMMIT_BANDS off)
     bool unpackInPlace = false;   // --unpack-in-place: a tick that can (an rvc_lean variant) has its unpack drawn into the state texture, no zone copies
     bool pingPong = false;    // --ping-pong: two state textures, as before RAM was written in place (RAM_INPLACE off)
@@ -319,6 +320,8 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
                        RAM in one texture written in place (docs/machine/gpu.md, "RAM in one texture")
   --lazy               leave a parallel fill or copy to the commit and run on (LAZY_MEMOP, docs/machine/boot.md):
                        fewer passes end early, every instruction is some 1.5 percent slower
+  --blits              D3D11: the commit's gather and RAM points and the GPU's lists drawn as Unity's world
+                       draws them, patches of a blit amplified by a geometry shader (src/amp.h)
   --readback-batch N   D3D11: read the rows of N frames back with one Map (1); the console's
                        output and typed input then come N frames later
   --gpu-capture FILE   save the GPU device's whole colour target as a BMP at exit
@@ -541,6 +544,7 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--ping-pong") o.pingPong = true;
         else if (a == "--unpack-in-place") o.unpackInPlace = true;
         else if (a == "--lazy") o.lazy = true;
+        else if (a == "--blits") o.blits = true;
         else if (a == "--no-mrt") o.noMrt = true;
         else if (a == "--readback-batch") o.readbackBatch = atoi(next("--readback-batch").c_str());
         else if (a == "--holodeck") o.holodeck = true;
@@ -1002,6 +1006,15 @@ int main(int argc, char** argv) {
             return 1;
         }
         bo.soundShader = &soundShader;
+    }
+    // The world's blits (src/amp.h): their order probe is a shader of its own.
+    SLShader ampShader;
+    if (opt.blits) {
+        if (!loadShaderLab((deviceDir / "amp.shader").u8string(), ampShader, err)) {
+            fprintf(stderr, "[harness] %s\n", err.c_str());
+            return 1;
+        }
+        bo.ampShader = &ampShader;
     }
     // both backends keep two state buffers, which is what lets the commit skip unwritten bands
     if (opt.sbi) opt.defines.push_back("SBI_HLE");

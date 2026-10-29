@@ -465,3 +465,41 @@ texel load where it was four.
   denormals and -0, and 0 of 281,828,352 in the ROM (2048 x 8601).
 - The Udon model still reads the ROM from lanes: "ShaderEmu/Import the ROM's lanes for the Udon
   model" makes them. The device tree is still four lanes (a row).
+
+## Blits in place of cameras
+
+In the world every round's pass but the tick is a blit (`VRCGraphics.Blit`): the commit's gather and RAM points
+(`MachineCommitBlit.shader`) and the GPU's lists (`GpuDrawBlit.shader`) were meshes of points drawn by two cameras,
+and a camera's `Render` is some 0.13 ms of the main thread where a blit is next to nothing. The tick stays a camera's: it draws eight targets at once.
+
+- **Points from a blit** (`experiments/rvc_opt/src/amp.h`). A blit's two triangles are two patches of three points;
+  the hull shader asks for a quad domain at factor 8 (never more: a driver may clamp a larger factor), 81 points a
+  patch, and a geometry shader of `AMP_INST` instances makes a call of each point and instance: 5,184 calls a blit
+  at 32. The calls make the meshes' points and triangles. The hull shader returns no control point by its index
+  (fxc2 before patch 64 wrote `I[id]` as a temp the card did not draw, and the device was removed), and every
+  shader of patches includes `src/fxc2_check.h`, which refuses an fxc2 older than 65.
+- **In the meshes' order.** Where two points write one texel the later wins (the zap's square, then each core's
+  buckets and lone store, then its fill or copy, then the picture; the gather's highest core with a copy), and the
+  GPU's triangles blend and are tested in their order. The patches come in order and so do a point's instances,
+  but not a patch's points: the tessellator emits them in an order of its own, and it is not every card's. Measured
+  by stream output (28 October 2026): WARP goes from the corner (u 0, v 1) round the outer ring and inwards ring by
+  ring; an RTX 5090 emits the 49 inner points row by row first and the ring after. So the order is measured on the
+  card: `BlitOrder.shader`'s first pass is a blit into an 81 x 81 target in which point i draws texels (i, j) and
+  (j, i), i + 1 in each, so that (i, j) ends as the later of the two; its second counts, for each point, the points
+  drawn before it (an 81 x 1 target, `_AmpRank`). A call's number is `(patch * 81 + rank) * AMP_INST + instance`,
+  in the order the card draws. EmuMachine blits both every frame before its rounds; the harness draws them once
+  and checks that the ranks are 0 to 80 once each.
+- **The gather**: a point a call, `AMP_INST` 2 (324 calls for 257 points). **The RAM commit**: nine points a call,
+  and the last point (the picture, up to 20 vertices) a call of its own. A texel the commit writes alone is one
+  triangle of three vertices (`ram_tri`: its corner and 1.5 texels along each side) where it was a quad of four, so
+  that nine points (nine buckets of three entries, or a fill's three rows, a lone store and seven buckets) are at
+  most 81 vertices, under the 85 that 1,024 values of `ram_v2f` allow. `AMP_INST` 8: a blit is 1,296 calls, and four
+  blits (`_AmpFirst` 0, 1,296, 2,592 and 3,888) are 46,000 points; the mesh had 41,346. At 32 instances, one blit,
+  WARP compiled the geometry shader for more than 18 minutes (1 instance 1.3 s, 8 4.6 s, 16 24.5 s). **The GPU's lists**: 13 of the device's triangles a call (39 vertices of 20 values), 67,392 triangles; pass 8
+  clears the depth to far first, as the camera's clear did, then the 8 passes are a blit each into the GPU's target
+  and its depth buffer.
+- `EmuMachine.oldPaths` bit 5 is the points' camera again, bit 6 the GPU's (both: no order probe either), for a
+  before and after in one session. The meshes and both cameras stay in the scene for that.
+- In the harness `--blits` draws the gather, the RAM commit and the GPU's lists so (`gatherAmp_`, `ramAmp_`,
+  `gpuAmp_` in `rvc_backend11.cpp`, the probe from `experiments/rvc_opt/amp.shader`), for WARP and the card;
+  `tools/test_card.py --with=--blits` runs the cases with it.

@@ -232,7 +232,7 @@ bool loadShaderLab(const std::string& path, SLShader& out, std::string& err) {
     // 4. Passes.
     std::string includeCode;  // accumulated CGINCLUDE/HLSLINCLUDE code
     std::regex nameRe("Name\\s*\"([^\"]*)\"");
-    std::regex pragmaRe("^[ \\t]*#[ \\t]*pragma[ \\t]+(vertex|fragment|geometry|target)[ \\t]+([^ \\t\\n]+)");
+    std::regex pragmaRe("^[ \\t]*#[ \\t]*pragma[ \\t]+(vertex|fragment|geometry|hull|domain|target)[ \\t]+([^ \\t\\n]+)");
     for (auto& b : blocks) {
         std::string body = src.substr(b.bodyStart, b.bodyEnd - b.bodyStart);
         int bodyLine = lineOf(src, b.bodyStart);
@@ -261,6 +261,8 @@ bool loadShaderLab(const std::string& path, SLShader& out, std::string& err) {
                 if (kind == "vertex") pass.vertexEntry = val;
                 else if (kind == "fragment") pass.fragmentEntry = val;
                 else if (kind == "geometry") pass.geometryEntry = val;
+                else if (kind == "hull") pass.hullEntry = val;
+                else if (kind == "domain") pass.domainEntry = val;
                 else if (kind == "target") pass.target = val;
             }
         }
