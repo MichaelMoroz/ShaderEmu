@@ -973,7 +973,7 @@ void SpritesAheadTake(); /* spritecache.cpp */
 
 void VideoDriver_ShaderEmu::WorkerTick()
 {
-	static const float frame_ms = [] { int n = Number(getenv("OPENTTD_FRAME_MS")); return n > 0 ? n : 95.0f; }();
+	static const float frame_ms = [] { int n = Number(getenv("OPENTTD_FRAME_MS")); return n > 0 ? n : 66.0f; }();
 	auto now = std::chrono::steady_clock::now();
 	if (now < this->next_draw_tick) return;
 	const auto interval = std::chrono::microseconds(static_cast<int>(frame_ms * 1000));
@@ -1040,8 +1040,8 @@ void VideoDriver_ShaderEmu::WorkerTick()
 	this->UnlockVideoBuffer();
 	TwService();
 	TwGrant();
-	/* (OPENTTD_PACE_MS: the picture's work the pace keeps to while it scrolls, 90 ms: ten pictures a second) */
-	static const uint32_t pace_ms = [] { int n = Number(getenv("OPENTTD_PACE_MS")); return n > 0 ? n : 90; }();
+	/* (OPENTTD_PACE_MS: the picture's work the pace keeps to while it scrolls, 60 ms: under the picture interval of 66 ms) */
+	static const uint32_t pace_ms = [] { int n = Number(getenv("OPENTTD_PACE_MS")); return n > 0 ? n : 60; }();
 	TwPace(VpTime() - work_from, pace_ms * 5, _vp_scrolls != scrolls);
 }
 

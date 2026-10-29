@@ -300,7 +300,7 @@ delete the drawing could be reading waits until no worker draws (`TickExclusive`
   out (`TwAfterFlush`), and anything that reads or writes the screen finishes the flush first
   (`VpFlushFinish`: a command, the pointer, a sprite cache's deletes, a check). `OPENTTD_PIPE=0`
   waits for the pieces at the flush.
-- While it scrolls, the ticks are spaced out to keep the picture's work at 90 ms
+- While it scrolls, the ticks are spaced out to keep the picture's work at 60 ms
   (`OPENTTD_PACE_MS`): every tick costs the first core its sync, about 370 instructions a vehicle
   moved, and the windows its texts and the status bar change; while pictures are late the space
   starts at half a second and grows by a quarter a picture, to a tick a second at most
@@ -681,8 +681,12 @@ A scroll's picture in ms: the flush 70 (the pieces' round 44, the dearest piece 
 the copy 3.5, the texts 3.3), the move 6.5, the windows' timers and the rest about 10, the tick's
 part of the first core (its sync) 9. The tick's worker waits about half the time, held by the pace:
 without it (`OPENTTD_PACE=0`) the game makes more ticks and the picture is late by their syncs.
-The paused scroll is held to 10.5 pictures a second by the picture's interval (`OPENTTD_FRAME_MS`,
-95); at 20 it is 13.9.
+The picture's interval is 66 ms (`OPENTTD_FRAME_MS`; 95 before 29 October 2026, which held the paused
+scroll to 10.5 pictures a second) and the pace keeps the picture's work to 60 ms (90 before). On `rvc_cpu`
+at the card's speed (3.7 MIPS, 0.25 ms passes) the played round, 200 pictures: 95 and 90 ms 7.32 pictures
+a second and 1.46 ticks a second, 66 and 60 ms 9.17 and 1.28 (66 and 90: 8.49 and 1.27; 9d77da6 4.74 and
+1.16); the played scroll 10.48 to 15.30 pictures a second (2.45 to 2.04 ticks a second), windows 8.97
+to 12.18 (0.90 to 1.01 ticks a second).
 
 ## Not done
 
