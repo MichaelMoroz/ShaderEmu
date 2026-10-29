@@ -54,7 +54,7 @@ index 16215e7..01f800e 100644
 +    CONDITION SHADEREMU
 +)
 diff --git a/src/blitter/8bpp_base.cpp b/src/blitter/8bpp_base.cpp
-index b32f98b..a5d435e 100644
+index b32f98b..9306f93 100644
 --- a/src/blitter/8bpp_base.cpp
 +++ b/src/blitter/8bpp_base.cpp
 @@ -11,6 +11,10 @@
@@ -296,7 +296,7 @@ index c1de3c5..9c42d29 100644
  	return (TimingMeasurement)time_point_cast<microseconds>(high_resolution_clock::now()).time_since_epoch().count();
  }
 diff --git a/src/gfx.cpp b/src/gfx.cpp
-index 2cae30c..233f229 100644
+index 2cae30c..e1de9bb 100644
 --- a/src/gfx.cpp
 +++ b/src/gfx.cpp
 @@ -51,7 +51,12 @@ PauseModes _pause_mode;
@@ -356,11 +356,22 @@ index 2cae30c..233f229 100644
  
  	/* Don't draw the mouse cursor if it's already drawn */
  	if (_cursor.visible) {
-@@ -1451,6 +1470,9 @@ void RedrawScreenRect(int left, int top, int right, int bottom)
+@@ -1449,8 +1468,20 @@ void RedrawScreenRect(int left, int top, int right, int bottom)
+  *
+  * @ingroup dirty
   */
++#ifdef WITH_SHADEREMU
++/** The map is not changed while the dirty blocks are drawn: ships' paths are made ahead on workers then. */
++struct ShipAheadQuiet {
++	ShipAheadQuiet() { extern void YapfShipAheadQuiet(bool); YapfShipAheadQuiet(true); }
++	~ShipAheadQuiet() { extern void YapfShipAheadQuiet(bool); YapfShipAheadQuiet(false); }
++};
++#endif
++
  void DrawDirtyBlocks()
  {
 +#ifdef WITH_SHADEREMU
++	ShipAheadQuiet quiet;
 +	ViewportKeep keep;
 +#endif
  	auto is_dirty = [](auto block) -> bool { return block != 0; };
@@ -648,6 +659,36 @@ index 3cd2b0d..f8446f7 100644
  	/* This is a tick where not much else is happening, so a small lag might go unnoticed. */
  	static const uint SPAWN_JOIN_TICK = 21; ///< Tick when jobs are spawned or joined every day.
  	static LinkGraphSchedule instance;
+diff --git a/src/map.cpp b/src/map.cpp
+index f39d83d..a06709a 100644
+--- a/src/map.cpp
++++ b/src/map.cpp
+@@ -36,6 +36,10 @@
+  */
+ /* static */ void Map::Allocate(uint size_x, uint size_y)
+ {
++#ifdef WITH_SHADEREMU
++	extern void YapfShipAheadCancel();
++	YapfShipAheadCancel(); /* (a worker reads the map) */
++#endif
+ 	/* Make sure that the map size is within the limits and that
+ 	 * size of both axes is a power of 2. */
+ 	if (!IsInsideMM(size_x, MIN_MAP_SIZE, MAX_MAP_SIZE + 1) ||
+diff --git a/src/misc.cpp b/src/misc.cpp
+index ea215f3..dce2389 100644
+--- a/src/misc.cpp
++++ b/src/misc.cpp
+@@ -93,6 +93,10 @@ void InitializeGame(uint size_x, uint size_y, bool reset_date, bool reset_settin
+ {
+ 	/* Make sure there isn't any window that can influence anything
+ 	 * related to the new game we're about to start/load. */
++#ifdef WITH_SHADEREMU
++	extern void YapfShipAheadCancel();
++	YapfShipAheadCancel(); /* (a worker reads the map and the engines) */
++#endif
+ 	UnInitWindowSystem();
+ 
+ 	Map::Allocate(size_x, size_y);
 diff --git a/src/music.cpp b/src/music.cpp
 index ee33585..03a3fb3 100644
 --- a/src/music.cpp
@@ -871,6 +912,1040 @@ index 7d585b0..3cb1db3 100644
  			break;
  
  		case SM_SAVE_GAME: // Save game.
+diff --git a/src/pathfinder/water_regions.cpp b/src/pathfinder/water_regions.cpp
+index e725401..314061b 100644
+--- a/src/pathfinder/water_regions.cpp
++++ b/src/pathfinder/water_regions.cpp
+@@ -142,8 +142,16 @@ public:
+ 
+ 		/* Perform connected component labeling. This uses a flooding algorithm that expands until no
+ 		 * additional tiles can be added. Only tiles inside the water region are considered. */
++#ifdef WITH_SHADEREMU
++		std::vector<TileIndex> worker_tiles; /* (a worker making a ship's path ahead makes a region of its own) */
++#endif
+ 		for (const TileIndex start_tile : this->tile_area) {
++#ifdef WITH_SHADEREMU
++			static std::vector<TileIndex> first_core_tiles;
++			std::vector<TileIndex> &tiles_to_check = SeShipAhead() ? worker_tiles : first_core_tiles;
++#else
+ 			static std::vector<TileIndex> tiles_to_check;
++#endif
+ 			tiles_to_check.clear();
+ 			tiles_to_check.push_back(start_tile);
+ 
+@@ -221,6 +229,11 @@ public:
+ 	}
+ };
+ 
++#ifdef WITH_SHADEREMU
++static std::vector<uint32_t> _water_region_gen;
++uint32_t SeWaterRegionGen(uint32_t index) { return _water_region_gen[index]; }
++#endif
++
+ TypedIndexContainer<std::vector<WaterRegionData>, WaterRegionIndex> _water_region_data;
+ TypedIndexContainer<std::vector<bool>, WaterRegionIndex> _is_water_region_valid;
+ 
+@@ -246,8 +259,29 @@ static TileIndex GetEdgeTileCoordinate(int region_x, int region_y, DiagDirection
+ static WaterRegion GetUpdatedWaterRegion(uint16_t region_x, uint16_t region_y)
+ {
+ 	const WaterRegionIndex index = GetWaterRegionIndex(region_x, region_y);
++#ifdef WITH_SHADEREMU
++	if (SeShipAhead()) {
++		/* A worker making a ship's path ahead: a valid region as it is (its generation noted), an invalid one made
++		 * anew in the worker's own memory, every tile it may read logged (the shared one is the first core's). */
++		if (_is_water_region_valid[index]) {
++			SeShipAheadRegion(index.base(), _water_region_gen[index.base()]);
++			return WaterRegion(region_x, region_y, _water_region_data[index]);
++		}
++		void *&mine = SeShipAheadOwnRegion(index.base());
++		if (mine == nullptr) {
++			SeShipAheadRegionTiles(region_x * WATER_REGION_EDGE_LENGTH, region_y * WATER_REGION_EDGE_LENGTH, WATER_REGION_EDGE_LENGTH);
++			WaterRegionData *data = new WaterRegionData();
++			WaterRegion(region_x, region_y, *data).ForceUpdate();
++			mine = data;
++		}
++		return WaterRegion(region_x, region_y, *static_cast<WaterRegionData *>(mine));
++	}
++#endif
+ 	WaterRegion water_region(region_x, region_y, _water_region_data[index]);
+ 	if (!_is_water_region_valid[index]) {
++#ifdef WITH_SHADEREMU
++		_water_region_gen[index.base()]++;
++#endif
+ 		water_region.ForceUpdate();
+ 		_is_water_region_valid[index] = true;
+ 	}
+@@ -318,6 +352,9 @@ void InvalidateWaterRegion(TileIndex tile)
+ 		const WaterRegionIndex water_region_index = GetWaterRegionIndex(tile);
+ 		if (!_is_water_region_valid[water_region_index]) Debug(map, 3, "Invalidated water region ({},{})", GetWaterRegionX(tile), GetWaterRegionY(tile));
+ 		_is_water_region_valid[water_region_index] = false;
++#ifdef WITH_SHADEREMU
++		_water_region_gen[water_region_index.base()]++;
++#endif
+ 	};
+ 
+ 	invalidate_region(tile);
+@@ -365,7 +402,13 @@ static inline void VisitAdjacentWaterRegionPatchNeighbours(const WaterRegionPatc
+ 	}
+ 
+ 	/* Multiple water patches can be reached from the current patch. Check each edge tile individually. */
++#ifdef WITH_SHADEREMU
++	static std::vector<WaterRegionPatchLabel> first_core_labels; // static and vector-instead-of-map for performance reasons
++	std::vector<WaterRegionPatchLabel> worker_labels; // (a worker's own, in its heap)
++	std::vector<WaterRegionPatchLabel> &unique_labels = SeShipAhead() ? worker_labels : first_core_labels;
++#else
+ 	static std::vector<WaterRegionPatchLabel> unique_labels; // static and vector-instead-of-map for performance reasons
++#endif
+ 	unique_labels.clear();
+ 	for (int x_or_y = 0; x_or_y < WATER_REGION_EDGE_LENGTH; ++x_or_y) {
+ 		if (!HasBit(traversability_bits, x_or_y)) continue;
+@@ -399,9 +442,19 @@ void VisitWaterRegionPatchNeighbours(const WaterRegionPatchDesc &water_region_pa
+ 
+ 	/* Visit neighbouring water patches accessible via cross-region aqueducts */
+ 	if (current_region.HasCrossRegionAqueducts()) {
++#ifdef WITH_SHADEREMU
++		const bool ahead = SeShipAhead(); /* (every tile read is logged) */
++#endif
+ 		for (const TileIndex tile : current_region) {
++#ifdef WITH_SHADEREMU
++			if (ahead) SeShipAheadTile(tile);
++#endif
+ 			if (GetWaterRegionPatchInfo(tile) == water_region_patch && IsAqueductTile(tile)) {
++#ifdef WITH_SHADEREMU
++				const TileIndex other_end_tile = ahead ? SeShipAheadBridgeEnd(tile) : GetOtherBridgeEnd(tile);
++#else
+ 				const TileIndex other_end_tile = GetOtherBridgeEnd(tile);
++#endif
+ 				if (GetWaterRegionIndex(tile) != GetWaterRegionIndex(other_end_tile)) callback(GetWaterRegionPatchInfo(other_end_tile));
+ 			}
+ 		}
+@@ -420,6 +473,9 @@ void AllocateWaterRegions()
+ 
+ 	_is_water_region_valid.clear();
+ 	_is_water_region_valid.resize(number_of_regions, false);
++#ifdef WITH_SHADEREMU
++	_water_region_gen.assign(number_of_regions, 0);
++#endif
+ 
+ 	Debug(map, 2, "Allocating {} x {} water regions", GetWaterRegionMapSizeX(), GetWaterRegionMapSizeY());
+ 	assert(_is_water_region_valid.size() == _water_region_data.size());
+diff --git a/src/pathfinder/water_regions.h b/src/pathfinder/water_regions.h
+index cbb39fb..0c3e5db 100644
+--- a/src/pathfinder/water_regions.h
++++ b/src/pathfinder/water_regions.h
+@@ -55,6 +55,20 @@ WaterRegionPatchDesc GetWaterRegionPatchInfo(TileIndex tile);
+ 
+ void InvalidateWaterRegion(TileIndex tile);
+ 
++#ifdef WITH_SHADEREMU
++/* A ship's path made ahead on a worker (yapf_ship.cpp, docs/games/openttd.md, "Ships' paths made ahead") */
++uint32_t SeWaterRegionGen(uint32_t index); ///< raised whenever the region is made invalid or made anew
++void SeShipAheadRegion(uint32_t index, uint32_t gen); ///< the worker read the region
++void *&SeShipAheadOwnRegion(uint32_t index); ///< the worker's own copy of an invalid region, nullptr until made
++void SeShipAheadRegionTiles(uint x, uint y, uint size); ///< the worker logs every tile of a region, its ring and aqueducts
++void SeShipAheadTile(TileIndex tile); ///< the worker reads the tile (logged)
++TileIndex SeShipAheadBridgeEnd(TileIndex tile); ///< GetOtherBridgeEnd, every tile on the way logged
++bool SeShipAhead(); ///< whether this is a worker making a ship's path ahead
++[[noreturn]] void SeShipAheadRefuse(int why); ///< the worker gives up: the first core makes the path itself
++void SeShipAheadPoll(); ///< the worker waits here while the first core may change the map
++const WaterRegionPatchDesc *SeShipAheadOrigins(int &count); ///< the destination's patches, found by the first core
++#endif
++
+ using VisitWaterRegionPatchCallback = std::function<void(const WaterRegionPatchDesc &)>;
+ void VisitWaterRegionPatchNeighbours(const WaterRegionPatchDesc &water_region_patch, VisitWaterRegionPatchCallback &callback);
+ 
+diff --git a/src/pathfinder/yapf/yapf_base.hpp b/src/pathfinder/yapf/yapf_base.hpp
+index 3f257e2..32d6ddc 100644
+--- a/src/pathfinder/yapf/yapf_base.hpp
++++ b/src/pathfinder/yapf/yapf_base.hpp
+@@ -44,6 +44,11 @@
+  *  declaration. There are some examples. For another example look at
+  *  test_yapf.h (part or unittest project).
+  */
++#ifdef WITH_SHADEREMU
++/** The settings: on a worker making a ship's path ahead, the copy made when it was asked for (yapf_ship.cpp). */
++const YAPFSettings *SeYapfSettings();
++#endif
++
+ template <class Types>
+ class CYapfBaseT {
+ public:
+@@ -71,7 +76,11 @@ public:
+ 
+ public:
+ 	/** default constructor */
++#ifdef WITH_SHADEREMU
++	inline CYapfBaseT() : settings(SeYapfSettings()), max_search_nodes(PfGetSettings().max_search_nodes) {}
++#else
+ 	inline CYapfBaseT() : settings(&_settings_game.pf.yapf), max_search_nodes(PfGetSettings().max_search_nodes) {}
++#endif
+ 
+ 	/** default destructor */
+ 	~CYapfBaseT() {}
+diff --git a/src/pathfinder/yapf/yapf_ship.cpp b/src/pathfinder/yapf/yapf_ship.cpp
+index b024edb..4e19fc2 100644
+--- a/src/pathfinder/yapf/yapf_ship.cpp
++++ b/src/pathfinder/yapf/yapf_ship.cpp
+@@ -16,8 +16,388 @@
+ #include "yapf_ship_regions.h"
+ #include "../water_regions.h"
+ 
++#ifdef WITH_SHADEREMU
++#include "../../station_base.h"
++#include "../../tunnelbridge_map.h"
++#include "../../string_func.h"
++#include <csetjmp>
++#include <new>
++#include <mcwx.h>
++int VpWorkersOpen(); /* viewport.cpp */
++
++/*
++ * The heap of a worker making a ship's path ahead (docs/games/openttd.md, "Ships' paths made ahead"): a worker may
++ * not allocate, so while it makes one, what the pathfinder asks for comes from a piece of memory of the first
++ * core's, and is let go of all at once. Every other allocation is malloc's, as it was.
++ */
++struct alignas(16) SeAheadCore {
++	uint8_t *lo = nullptr; ///< the heap's piece, nullptr while this core makes no path ahead
++	uint32_t used = 0, size = 0;
++	void *slot = nullptr;
++};
++static SeAheadCore _se_ahead_core[MC_MAX_CORES + 1];
++static uint8_t *_se_ahead_heap = nullptr;
++static size_t _se_ahead_heap_bytes = 0;
++
++static void *SeAheadAlloc(size_t n)
++{
++	SeAheadCore &c = _se_ahead_core[mcw_self()];
++	if (c.lo == nullptr) return nullptr;
++	n = (n + 15) & ~size_t{15};
++	if (n > c.size - c.used) SeShipAheadRefuse(3);
++	void *p = c.lo + c.used;
++	c.used += static_cast<uint32_t>(n);
++	return p;
++}
++
++void *operator new(std::size_t n)
++{
++	if (mcw_on_worker()) {
++		if (void *p = SeAheadAlloc(n)) return p;
++	}
++	if (n == 0) n = 1;
++	for (;;) {
++		if (void *p = malloc(n)) return p;
++		std::new_handler handler = std::get_new_handler();
++		if (handler == nullptr) throw std::bad_alloc();
++		handler();
++	}
++}
++
++void operator delete(void *p) noexcept
++{
++	if (static_cast<size_t>(static_cast<uint8_t *>(p) - _se_ahead_heap) < _se_ahead_heap_bytes) return;
++	free(p);
++}
++
++void operator delete(void *p, std::size_t) noexcept
++{
++	::operator delete(p);
++}
++
++static uint8_t *SeAheadHeapMake(size_t bytes)
++{
++	uint8_t *p = static_cast<uint8_t *>(malloc(bytes));
++	if (p == nullptr) return nullptr;
++	for (size_t i = 0; i < bytes; i += 4096) p[i] = 0; /* (a store by the first core first, to every page a worker writes) */
++	_se_ahead_heap = p;
++	_se_ahead_heap_bytes = bytes;
++	return p;
++}
++static void *SeAheadRaw(size_t bytes) { return malloc(bytes); }
++static void SeAheadRawFree(void *p) { free(p); }
++static bool SeSameBytes(const void *a, const void *b, size_t n) { return memcmp(a, b, n) == 0; }
++#endif
++
+ #include "../../safeguards.h"
+ 
++#ifdef WITH_SHADEREMU
++/*
++ * A ship's path made ahead (docs/games/openttd.md, "Ships' paths made ahead"). A ship whose cached path is empty asks
++ * the pathfinder when it enters its next tile: after the vehicles have ticked, a worker makes that path ahead of it,
++ * from a copy of the ship, only while the first core draws the dirty blocks (the map changes nowhere else: it waits
++ * here in between). It logs every tile it reads, and each read of a tile again must find it as logged. When the ship
++ * asks, the path made ahead is taken only if every input is as it was: the ship's own, the settings, the water
++ * regions (no region made invalid or anew since), every tile logged, and the ships counted on each docking tile.
++ * Anything else (a region to be made anew, an aqueduct, a lost ship's random path) and the first core makes the path
++ * itself. OPENTTD_SHIP_AHEAD=0 is without, =check makes every path taken again on the first core and compares.
++ */
++namespace {
++
++constexpr int AHEAD_SLOTS = 6;
++constexpr uint32_t AHEAD_HEAP = 3072 * 1024;
++constexpr uint32_t AHEAD_TILES = 32768;
++constexpr int AHEAD_SNAP = 128;
++constexpr int AHEAD_ORIGINS = 64;
++
++/** A tile as a worker read it: its words, and the heights of the three corners its slope takes from its neighbours. */
++struct TileRec {
++	uint32_t tile;
++	uint8_t data[15];
++	uint8_t dock; ///< the ships on it were counted (a docking tile's cost)
++	uint8_t kind; ///< 0 the tile's words, 1 only its water tracks and whether it is a tunnel or bridge, 2 its type
++};
++
++struct alignas(64) AheadIn { ///< the first core's: written before the job is posted
++	alignas(Ship) uint8_t ship[sizeof(Ship)];
++	YAPFSettings settings;
++	VehicleID id;
++	TileIndex v_tile;
++	TileIndex tile;
++	TrackdirBits origin;
++	StationID dest_station;
++	TileIndex dest_closest;
++	int origins;
++	WaterRegionPatchDesc origin_patch[AHEAD_ORIGINS];
++	int snaps;
++	uint32_t snap_tile[AHEAD_SNAP];
++	uint32_t snap_count[AHEAD_SNAP];
++	uint8_t *heap;
++	uint32_t map_size;
++	alignas(16) volatile uint32_t cancel;
++};
++
++struct alignas(64) AheadOut { ///< the worker's
++	jmp_buf jb;
++	int refused;
++	Trackdir result;
++	bool path_found;
++	const ShipPathElement *path;
++	uint32_t path_len;
++	TileRec *tiles;
++	uint32_t n_tiles;
++	uint16_t *index; ///< a tile's place in tiles, + 1
++	uint16_t *status_index; ///< a tile's place in tiles as its water tracks, + 1
++	uint16_t *type_index; ///< a tile's place in tiles as its type, + 1
++	uint32_t regions; ///< the water regions read
++	void *own_region[256]; ///< regions invalid on the map, made anew by the worker
++	uint32_t region_index[256];
++	uint32_t region_gen[256];
++	uint32_t region_seen[8];
++	alignas(16) volatile uint32_t ack;
++};
++
++struct AheadSlot {
++	AheadIn in;
++	AheadOut out;
++};
++
++struct alignas(16) QuietWord { volatile uint32_t v = 0; };
++
++enum AheadState : uint8_t { AHEAD_FREE, AHEAD_RUNNING, AHEAD_ABANDONED };
++
++AheadSlot *_ahead_slots = nullptr;
++QuietWord _ahead_quiet;
++uint32_t _ahead_gen = 0;
++AheadState _ahead_state[AHEAD_SLOTS] = {};
++mcw_handle _ahead_handle[AHEAD_SLOTS] = {};
++bool _ahead_broken = false;
++struct { uint32_t launched, taken, none, moved, late, refused[12], invalid, checked, differ, why[12]; } _ahead_stats;
++
++int AheadMode()
++{
++	static const int mode = [] {
++		auto e = GetEnv("OPENTTD_SHIP_AHEAD");
++		if (e.has_value() && *e == "0") return 0;
++		if (e.has_value() && *e == "check") return 2;
++		return 1;
++	}();
++	return mode;
++}
++
++inline AheadSlot *AheadOf()
++{
++	if (!mcw_on_worker()) return nullptr;
++	return static_cast<AheadSlot *>(_se_ahead_core[mcw_self()].slot);
++}
++
++void TileRecOf(TileIndex t, TileRec &r)
++{
++	Tile tt(t);
++	r.tile = t.base();
++	std::copy_n(&tt.type(), 8, r.data);
++	std::copy_n(&tt.m6(), 4, r.data + 8);
++	const uint x = TileX(t), y = TileY(t);
++	const bool px = x < Map::MaxX(), py = y < Map::MaxY();
++	r.data[12] = px ? TileHeight(TileXY(x + 1, y)) : 0;
++	r.data[13] = py ? TileHeight(TileXY(x, y + 1)) : 0;
++	r.data[14] = px && py ? TileHeight(TileXY(x + 1, y + 1)) : 0;
++	r.dock = 0;
++	r.kind = 0;
++}
++
++TileRec &AheadRead(AheadSlot &s, TileIndex t);
++
++/** What a region made anew reads of a tile: its water tracks, and whether it is a tunnel or bridge. */
++void TileStatusOf(TileIndex t, TileRec &r)
++{
++	r = {};
++	r.tile = t.base();
++	const TrackStatus ts = GetTileTrackStatus(t, TRANSPORT_WATER, 0);
++	for (int i = 0; i < 4; i++) r.data[i] = static_cast<uint8_t>(ts >> (8 * i));
++	r.data[4] = IsTileType(t, MP_TUNNELBRIDGE);
++	r.kind = 1;
++}
++
++/** Of a tile next to a docking tile or in a region with aqueducts: its type alone. */
++void TileTypeOf(TileIndex t, TileRec &r)
++{
++	r = {};
++	r.tile = t.base();
++	r.data[0] = static_cast<uint8_t>(GetTileType(t));
++	if (IsTileType(t, MP_TUNNELBRIDGE)) {
++		r.data[1] = IsBridge(t);
++		r.data[2] = static_cast<uint8_t>(GetTunnelBridgeTransportType(t));
++		r.data[3] = static_cast<uint8_t>(GetTunnelBridgeDirection(t));
++	}
++	r.kind = 2;
++}
++
++/** A tile's water tracks (or type) the worker reads: logged once, the same every time after. */
++void AheadDerived(AheadSlot &s, TileIndex t, uint16_t *index, void (*of)(TileIndex, TileRec &))
++{
++	AheadOut &o = s.out;
++	const uint32_t i = t.base();
++	if (i >= s.in.map_size) SeShipAheadRefuse(5);
++	TileRec r;
++	of(t, r);
++	const uint32_t k = index[i];
++	if (k != 0) {
++		if (!std::equal(r.data, r.data + sizeof(r.data), o.tiles[k - 1].data)) SeShipAheadRefuse(6);
++		return;
++	}
++	if (o.n_tiles >= AHEAD_TILES) SeShipAheadRefuse(7);
++	o.tiles[o.n_tiles] = r;
++	index[i] = static_cast<uint16_t>(++o.n_tiles);
++}
++
++void AheadStatus(AheadSlot &s, TileIndex t) { AheadDerived(s, t, s.out.status_index, TileStatusOf); }
++
++/** A tile whose type alone is read (a tunnel's or bridge's, whether it is an aqueduct), unless it is a station's: then its words. */
++void AheadType(AheadSlot &s, TileIndex t)
++{
++	if (IsTileType(t, MP_STATION)) {
++		AheadRead(s, t);
++	} else {
++		AheadDerived(s, t, s.out.type_index, TileTypeOf);
++	}
++}
++
++/** A tile the worker reads: logged the first time, and the same as logged every time after. */
++TileRec &AheadRead(AheadSlot &s, TileIndex t)
++{
++	AheadOut &o = s.out;
++	const uint32_t i = t.base();
++	if (i >= s.in.map_size) SeShipAheadRefuse(5);
++	TileRec r;
++	TileRecOf(t, r);
++	const uint32_t k = o.index[i];
++	if (k != 0) {
++		if (!std::equal(r.data, r.data + sizeof(r.data), o.tiles[k - 1].data)) SeShipAheadRefuse(6);
++		return o.tiles[k - 1];
++	}
++	if (o.n_tiles >= AHEAD_TILES) SeShipAheadRefuse(7);
++	o.tiles[o.n_tiles] = r;
++	o.index[i] = static_cast<uint16_t>(++o.n_tiles);
++	return o.tiles[o.n_tiles - 1];
++}
++
++/** The ships on a docking tile, as the pathfinder counts them. */
++uint DockShips(TileIndex t)
++{
++	return static_cast<uint>(std::ranges::count_if(VehiclesOnTile(t), [](const Vehicle *v) {
++		/* Ignore other vehicles (aircraft) and ships inside depot. */
++		return v->type == VEH_SHIP && !v->vehstatus.Test(VehState::Hidden);
++	}));
++}
++
++/** On the worker: the ships on a docking tile when the path was asked for. */
++uint AheadDockShips(AheadSlot &s, TileIndex t)
++{
++	AheadRead(s, t).dock = 1;
++	for (int i = 0; i < s.in.snaps; i++) {
++		if (s.in.snap_tile[i] == t.base()) return s.in.snap_count[i];
++	}
++	return 0;
++}
++
++} // namespace
++
++const YAPFSettings *SeYapfSettings()
++{
++	AheadSlot *s = AheadOf();
++	return s != nullptr ? &s->in.settings : &_settings_game.pf.yapf;
++}
++
++bool SeShipAhead()
++{
++	return AheadOf() != nullptr;
++}
++
++void SeShipAheadRefuse(int why)
++{
++	AheadSlot *s = AheadOf();
++	s->out.refused = why;
++	longjmp(s->out.jb, 1);
++}
++
++void SeShipAheadPoll()
++{
++	AheadSlot *s = AheadOf();
++	for (;;) {
++		if (s->in.cancel) SeShipAheadRefuse(4);
++		const uint32_t q = _ahead_quiet.v;
++		if (q & 1) return;
++		s->out.ack = q;
++		mc_end_pass();
++	}
++}
++
++void *&SeShipAheadOwnRegion(uint32_t index)
++{
++	AheadOut &o = AheadOf()->out;
++	if (index >= 256) SeShipAheadRefuse(5);
++	return o.own_region[index];
++}
++
++void SeShipAheadRegionTiles(uint x0, uint y0, uint size)
++{
++	AheadSlot &a = *AheadOf();
++	for (uint y = (y0 > 0 ? y0 - 1 : 0); y <= std::min(y0 + size, Map::MaxY()); y++) {
++		for (uint x = (x0 > 0 ? x0 - 1 : 0); x <= std::min(x0 + size, Map::MaxX()); x++) {
++			/* (a region is made of its tiles' water tracks and its ring's, followed from them: an aqueduct's head
++			 * onto its other end, its words read) */
++			const TileIndex t = TileXY(x, y);
++			AheadStatus(a, t);
++			const bool inside = x >= x0 && x < x0 + size && y >= y0 && y < y0 + size;
++			if (inside && IsTileType(t, MP_TUNNELBRIDGE)) {
++				AheadDerived(a, t, a.out.type_index, TileTypeOf);
++				if (IsBridge(t) && GetTunnelBridgeTransportType(t) == TRANSPORT_WATER) SeShipAheadBridgeEnd(t);
++			}
++		}
++	}
++}
++
++void SeShipAheadTile(TileIndex tile)
++{
++	AheadType(*AheadOf(), tile);
++}
++
++TileIndex SeShipAheadBridgeEnd(TileIndex tile)
++{
++	AheadSlot &a = *AheadOf();
++	AheadDerived(a, tile, a.out.type_index, TileTypeOf);
++	const DiagDirection dir = GetTunnelBridgeDirection(tile);
++	const DiagDirection back = ReverseDiagDir(dir);
++	const TileIndexDiff delta = TileOffsByDiagDir(dir);
++	do {
++		tile += delta;
++		if (!IsValidTile(tile)) SeShipAheadRefuse(2);
++		AheadDerived(a, tile, a.out.type_index, TileTypeOf);
++	} while (!IsBridgeTile(tile) || GetTunnelBridgeDirection(tile) != back);
++	return tile;
++}
++
++void SeShipAheadRegion(uint32_t index, uint32_t gen)
++{
++	AheadOut &o = AheadOf()->out;
++	if (index >= 256) SeShipAheadRefuse(5);
++	if (HasBit(o.region_seen[index / 32], index % 32)) return;
++	SetBit(o.region_seen[index / 32], index % 32);
++	o.region_index[o.regions] = index;
++	o.region_gen[o.regions++] = gen;
++}
++
++const WaterRegionPatchDesc *SeShipAheadOrigins(int &count)
++{
++	AheadSlot *s = AheadOf();
++	if (s->in.dest_station == StationID::Invalid()) return nullptr;
++	count = s->in.origins;
++	return s->in.origin_patch;
++}
++#endif
++
++
+ constexpr int NUMBER_OR_WATER_REGIONS_LOOKAHEAD = 4;
+ constexpr int MAX_SHIP_PF_NODES = (NUMBER_OR_WATER_REGIONS_LOOKAHEAD + 1) * WATER_REGION_NUMBER_OF_TILES * 4; // 4 possible exit dirs per tile.
+ 
+@@ -43,6 +423,17 @@ protected:
+ public:
+ 	void SetDestination(const Ship *v)
+ 	{
++#ifdef WITH_SHADEREMU
++		if (AheadSlot *a = Yapf().ahead) {
++			if (v->current_order.IsType(OT_GOTO_STATION)) {
++				this->dest_station = v->current_order.GetDestination().ToStationID();
++				this->dest_tile = a->in.dest_closest; /* (the station's tiles, looked at by the first core) */
++				this->dest_trackdirs = INVALID_TRACKDIR_BIT;
++				return;
++			}
++			if (IsValidTile(v->dest_tile)) AheadRead(*a, v->dest_tile);
++		}
++#endif
+ 		if (v->current_order.IsType(OT_GOTO_STATION)) {
+ 			this->dest_station = v->current_order.GetDestination().ToStationID();
+ 			this->dest_tile = CalcClosestStationTile(this->dest_station, v->tile, StationType::Dock);
+@@ -83,6 +474,19 @@ public:
+ 			return GetWaterRegionPatchInfo(tile) == this->intermediate_dest_region_patch;
+ 		}
+ 
++#ifdef WITH_SHADEREMU
++		if (AheadSlot *a = Yapf().ahead) {
++			AheadRead(*a, tile);
++			if (this->dest_station != StationID::Invalid() && IsDockingTile(tile)) {
++				for (DiagDirection d = DIAGDIR_BEGIN; d != DIAGDIR_END; d++) {
++					const TileIndex t = tile + TileOffsByDiagDir(d);
++					if (!IsValidTile(t)) continue;
++					AheadType(*a, t);
++					if (IsTileType(t, MP_INDUSTRY)) SeShipAheadRefuse(8); /* (an industry's neutral station: a pool) */
++				}
++			}
++		}
++#endif
+ 		if (this->dest_station != StationID::Invalid()) return IsDockingTile(tile) && IsShipDestinationTile(tile, this->dest_station);
+ 
+ 		return tile == this->dest_tile && ((this->dest_trackdirs & TrackdirToTrackdirBits(trackdir)) != TRACKDIR_BIT_NONE);
+@@ -134,6 +538,24 @@ public:
+ 	inline void PfFollowNode(Node &old_node)
+ 	{
+ 		TrackFollower follower{Yapf().GetVehicle()};
++#ifdef WITH_SHADEREMU
++		if (AheadSlot *a = Yapf().ahead) {
++			SeShipAheadPoll();
++			const TileIndex t = old_node.key.tile;
++			AheadRead(*a, t);
++			const DiagDirection exitdir = TrackdirToExitdir(old_node.key.td);
++			if (IsTileType(t, MP_TUNNELBRIDGE) && GetTunnelBridgeDirection(t) == exitdir) {
++				/* (onto an aqueduct: its other end is found by a walk, every tile of it read) */
++				if (!IsBridge(t)) SeShipAheadRefuse(2);
++				SeShipAheadBridgeEnd(t);
++			} else {
++				/* (of the tile entered the follower reads its water tracks alone: what a node's cost reads of it is
++				 * logged there) */
++				const TileIndex n = TileAddByDiagDir(t, exitdir);
++				if (IsValidTile(n)) AheadStatus(*a, n);
++			}
++		}
++#endif
+ 		if (follower.Follow(old_node.key.tile, old_node.key.td)) {
+ 			if (this->water_region_corridor.empty()
+ 					|| std::ranges::find(this->water_region_corridor, GetWaterRegionInfo(follower.new_tile)) != this->water_region_corridor.end()) {
+@@ -158,6 +580,9 @@ public:
+ 	/** Returns a random trackdir out of a set of trackdirs. */
+ 	static Trackdir GetRandomTrackdir(TrackdirBits trackdirs)
+ 	{
++#ifdef WITH_SHADEREMU
++		if (SeShipAhead()) SeShipAheadRefuse(0); /* (the game's random numbers are the first core's) */
++#endif
+ 		const int strip_amount = RandomRange(CountBits(trackdirs));
+ 		for (int s = 0; s < strip_amount; ++s) RemoveFirstTrackdir(&trackdirs);
+ 		return FindFirstTrackdir(trackdirs);
+@@ -368,12 +793,20 @@ public:
+ 		/* Additional penalty for curves. */
+ 		c += this->CurveCost(n.parent->GetTrackdir(), n.GetTrackdir());
+ 
++#ifdef WITH_SHADEREMU
++		AheadSlot *a = Yapf().ahead;
++		if (a != nullptr) AheadRead(*a, n.GetTile());
++#endif
+ 		if (IsDockingTile(n.GetTile())) {
+ 			/* Check docking tile for occupancy. */
++#ifdef WITH_SHADEREMU
++			uint count = a != nullptr ? AheadDockShips(*a, n.GetTile()) : DockShips(n.GetTile());
++#else
+ 			uint count = std::ranges::count_if(VehiclesOnTile(n.GetTile()), [](const Vehicle *v) {
+ 				/* Ignore other vehicles (aircraft) and ships inside depot. */
+ 				return v->type == VEH_SHIP && !v->vehstatus.Test(VehState::Hidden);
+ 			});
++#endif
+ 			c += count * 3 * YAPF_TILE_LENGTH;
+ 		}
+ 
+@@ -424,14 +857,347 @@ struct CYapfShip_TypesT {
+ 
+ struct CYapfShip : CYapfT<CYapfShip_TypesT<CYapfShip>> {
+ 	explicit CYapfShip(int max_nodes) { this->max_search_nodes = max_nodes; }
++#ifdef WITH_SHADEREMU
++	AheadSlot *ahead = AheadOf(); ///< on a worker making a ship's path ahead: what it makes
++#endif
+ };
+ 
++#ifdef WITH_SHADEREMU
++namespace {
++
++/** The patches the region pathfinder starts from for a ship going to a station (as FindWaterRegionPath finds them). */
++int StationOrigins(StationID station_id, WaterRegionPatchDesc *out)
++{
++	const BaseStation *station = BaseStation::Get(station_id);
++	int n = 0;
++	for (const auto &tile : station->GetTileArea(StationType::Dock)) {
++		if (IsDockingTile(tile) && IsShipDestinationTile(tile, station_id)) {
++			if (n == AHEAD_ORIGINS) return -1;
++			out[n++] = GetWaterRegionPatchInfo(tile);
++		}
++	}
++	return n;
++}
++
++bool AheadInit()
++{
++	if (_ahead_slots != nullptr) return true;
++	if (_ahead_broken || VpWorkersOpen() <= 0 || Map::Size() > 65536) return false;
++	_ahead_slots = static_cast<AheadSlot *>(SeAheadRaw(sizeof(AheadSlot) * AHEAD_SLOTS + 64));
++	uint8_t *heap = SeAheadHeapMake(static_cast<size_t>(AHEAD_HEAP) * AHEAD_SLOTS);
++	if (_ahead_slots == nullptr || heap == nullptr) {
++		_ahead_broken = true;
++		SeAheadRawFree(_ahead_slots);
++		_ahead_slots = nullptr;
++		return false;
++	}
++	_ahead_slots = reinterpret_cast<AheadSlot *>((reinterpret_cast<uintptr_t>(_ahead_slots) + 63) & ~uintptr_t{63});
++	std::fill_n(reinterpret_cast<uint8_t *>(_ahead_slots), sizeof(AheadSlot) * AHEAD_SLOTS, uint8_t{0});
++	for (int k = 0; k < AHEAD_SLOTS; k++) _ahead_slots[k].in.heap = heap + static_cast<size_t>(k) * AHEAD_HEAP;
++	mcw_touch(_se_ahead_core, sizeof(_se_ahead_core));
++	for (SeAheadCore &c : _se_ahead_core) c.lo = nullptr, c.slot = nullptr;
++	return true;
++}
++
++uint32_t AheadJob(uint32_t at, uint32_t)
++{
++	AheadSlot &s = *reinterpret_cast<AheadSlot *>(at);
++	AheadOut &o = s.out;
++	SeAheadCore &c = _se_ahead_core[mcw_self()];
++	c.lo = s.in.heap;
++	c.used = 0;
++	c.size = AHEAD_HEAP;
++	c.slot = &s;
++	o.refused = 0;
++	o.n_tiles = 0;
++	o.regions = 0;
++	std::fill_n(o.own_region, 256, nullptr);
++	std::fill_n(o.region_seen, 8, 0u);
++	if (setjmp(o.jb) == 0) {
++		o.index = static_cast<uint16_t *>(SeAheadAlloc(s.in.map_size * sizeof(uint16_t)));
++		std::fill_n(o.index, s.in.map_size, uint16_t{0});
++		o.status_index = static_cast<uint16_t *>(SeAheadAlloc(s.in.map_size * sizeof(uint16_t)));
++		std::fill_n(o.status_index, s.in.map_size, uint16_t{0});
++		o.type_index = static_cast<uint16_t *>(SeAheadAlloc(s.in.map_size * sizeof(uint16_t)));
++		std::fill_n(o.type_index, s.in.map_size, uint16_t{0});
++		o.tiles = static_cast<TileRec *>(SeAheadAlloc(AHEAD_TILES * sizeof(TileRec)));
++		SeShipAheadPoll();
++		ShipPathCache path;
++		bool found = false;
++		Trackdir best = INVALID_TRACKDIR;
++		o.result = CYapfShip::ChooseShipTrack(reinterpret_cast<const Ship *>(s.in.ship), s.in.tile, s.in.origin, TRACKDIR_BIT_NONE, found, path, best);
++		o.path_found = found;
++		o.path = path.data();
++		o.path_len = static_cast<uint32_t>(path.size());
++	}
++	c.slot = nullptr;
++	c.lo = nullptr;
++	return 0;
++}
++
++int AheadFind(VehicleID id)
++{
++	if (_ahead_slots == nullptr) return -1;
++	for (int k = 0; k < AHEAD_SLOTS; k++) {
++		if (_ahead_state[k] != AHEAD_FREE && _ahead_slots[k].in.id == id) return k;
++	}
++	return -1;
++}
++
++void AheadAbandon(int k)
++{
++	if (_ahead_state[k] != AHEAD_RUNNING) return;
++	_ahead_slots[k].in.cancel = 1;
++	_ahead_state[k] = AHEAD_ABANDONED;
++}
++
++void AheadReap()
++{
++	for (int k = 0; k < AHEAD_SLOTS; k++) {
++		if (_ahead_state[k] == AHEAD_ABANDONED && mcw_ready(_ahead_handle[k])) {
++			mcw_join(_ahead_handle[k]);
++			_ahead_state[k] = AHEAD_FREE;
++		}
++	}
++}
++
++/** The tile a ship enters next and the trackdirs it leaves its own on, if it will ask the pathfinder there. */
++bool AheadWanted(const Ship *v, TileIndex &next, TrackdirBits &origin)
++{
++	if (v->dest_tile == 0 || !v->path.empty()) return false;
++	if (v->vehstatus.Any({VehState::Stopped, VehState::Crashed, VehState::Hidden}) || v->IsInDepot()) return false;
++	if (v->state == TRACK_BIT_WORMHOLE || v->direction != v->rotation) return false;
++	if (v->current_order.IsType(OT_LOADING) || v->current_order.IsType(OT_LEAVESTATION)) return false;
++	const DiagDirection exitdir = VehicleExitDir(v->direction, v->state);
++	if (exitdir == INVALID_DIAGDIR) return false;
++	next = TileAddByDiagDir(v->tile, exitdir);
++	if (!IsValidTile(next)) return false;
++	if ((TrackStatusToTrackBits(GetTileTrackStatus(next, TRANSPORT_WATER, 0)) & DiagdirReachesTracks(exitdir)) == TRACK_BIT_NONE) return false;
++	const Trackdir td = v->GetVehicleTrackdir();
++	if (td == INVALID_TRACKDIR) return false;
++	origin = TrackdirToTrackdirBits(td);
++	return true;
++}
++
++bool AheadSameShip(const AheadIn &in, const Ship *v)
++{
++	const Ship *c = reinterpret_cast<const Ship *>(in.ship);
++	return c->dest_tile == v->dest_tile && c->current_order.GetType() == v->current_order.GetType() &&
++		c->current_order.GetDestination() == v->current_order.GetDestination() && c->engine_type == v->engine_type && c->owner == v->owner;
++}
++
++/** Whether everything the worker read is as it is now. */
++int AheadValid(AheadSlot &s, const Ship *v)
++{
++	const AheadIn &in = s.in;
++	const AheadOut &o = s.out;
++	for (uint32_t i = 0; i < o.regions; i++) {
++		if (SeWaterRegionGen(o.region_index[i]) != o.region_gen[i]) return 1;
++	}
++	if (!SeSameBytes(&in.settings, &_settings_game.pf.yapf, sizeof(YAPFSettings))) return 2;
++	if (!AheadSameShip(in, v)) return 3;
++	if (in.dest_station != StationID::Invalid()) {
++		if (CalcClosestStationTile(in.dest_station, v->tile, StationType::Dock) != in.dest_closest) return 4;
++		WaterRegionPatchDesc now[AHEAD_ORIGINS];
++		const int n = StationOrigins(in.dest_station, now);
++		if (n != in.origins) return 5;
++		for (int i = 0; i < n; i++) {
++			if (!(now[i] == in.origin_patch[i])) return 6;
++		}
++	}
++	for (uint32_t i = 0; i < o.n_tiles; i++) {
++		const TileRec &was = o.tiles[i];
++		TileRec r;
++		if (was.kind == 1) {
++			TileStatusOf(TileIndex{was.tile}, r);
++		} else if (was.kind == 2) {
++			TileTypeOf(TileIndex{was.tile}, r);
++		} else {
++			TileRecOf(TileIndex{was.tile}, r);
++		}
++		if (!std::equal(r.data, r.data + sizeof(r.data), was.data)) {
++			if (AheadMode() == 2) Debug(misc, 0, "ship ahead: tile {} ({},{}) kind {} type {} changed: {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} to {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x}, {} logged",
++				was.tile, TileX(TileIndex{was.tile}), TileY(TileIndex{was.tile}), was.kind, (int)GetTileType(TileIndex{was.tile}),
++				was.data[0], was.data[1], was.data[2], was.data[3], was.data[4], was.data[5], was.data[6], was.data[7], was.data[8], was.data[9], was.data[10], was.data[11], was.data[12], was.data[13], was.data[14],
++				r.data[0], r.data[1], r.data[2], r.data[3], r.data[4], r.data[5], r.data[6], r.data[7], r.data[8], r.data[9], r.data[10], r.data[11], r.data[12], r.data[13], r.data[14], o.n_tiles);
++			return 8;
++		}
++		if (was.dock) {
++			uint count = 0;
++			for (int j = 0; j < in.snaps; j++) {
++				if (in.snap_tile[j] == was.tile) count = in.snap_count[j];
++			}
++			if (DockShips(TileIndex{was.tile}) != count) return 9;
++		}
++	}
++	return 0;
++}
++
++/** The path made ahead for this ship, if there is one and all it read is as it was. */
++bool AheadTake(const Ship *v, TileIndex tile, TrackdirBits origin, bool &path_found, ShipPathCache &path_cache, Trackdir &td)
++{
++	const int k = AheadFind(v->index);
++	if (k < 0) {
++		_ahead_stats.none++;
++		return false;
++	}
++	AheadSlot &s = _ahead_slots[k];
++	if (_ahead_state[k] != AHEAD_RUNNING || s.in.v_tile != v->tile || s.in.origin != origin || s.in.tile != tile) {
++		_ahead_stats.moved++;
++		AheadAbandon(k);
++		return false;
++	}
++	if (!mcw_ready(_ahead_handle[k])) {
++		_ahead_stats.late++;
++		AheadAbandon(k);
++		return false;
++	}
++	mcw_join(_ahead_handle[k]);
++	_ahead_state[k] = AHEAD_FREE;
++	if (s.out.refused != 0) {
++		_ahead_stats.refused[std::clamp(s.out.refused, 0, 11)]++;
++		return false;
++	}
++	if (const int why = AheadValid(s, v); why != 0) {
++		_ahead_stats.invalid++;
++		_ahead_stats.why[std::min(why, 11)]++;
++		return false;
++	}
++	path_cache.assign(s.out.path, s.out.path + s.out.path_len);
++	path_found = s.out.path_found;
++	td = s.out.result;
++	_ahead_stats.taken++;
++	return true;
++}
++
++} // namespace
++
++/** After the vehicles' tick: a path made ahead for each ship that will ask for one at its next tile. */
++void YapfShipAhead()
++{
++	if (AheadMode() == 0 || _game_mode != GM_NORMAL || !AheadInit()) return;
++	AheadReap();
++	bool team_ended = false;
++	for (const Ship *v : Ship::Iterate()) {
++		TileIndex next;
++		TrackdirBits origin;
++		if (!AheadWanted(v, next, origin)) continue;
++		int k = AheadFind(v->index);
++		if (k >= 0) {
++			const AheadIn &in = _ahead_slots[k].in;
++			if (_ahead_state[k] == AHEAD_RUNNING && in.v_tile == v->tile && in.tile == next && in.origin == origin && AheadSameShip(in, v)) continue;
++			AheadAbandon(k);
++		}
++		for (k = 0; k < AHEAD_SLOTS && _ahead_state[k] != AHEAD_FREE; k++) {}
++		if (k == AHEAD_SLOTS) break;
++
++		AheadSlot &s = _ahead_slots[k];
++		AheadIn &in = s.in;
++		std::copy_n(reinterpret_cast<const uint8_t *>(v), sizeof(Ship), in.ship);
++		in.settings = _settings_game.pf.yapf;
++		in.id = v->index;
++		in.v_tile = v->tile;
++		in.tile = next;
++		in.origin = origin;
++		in.map_size = Map::Size();
++		in.dest_station = StationID::Invalid();
++		in.origins = 0;
++		if (v->current_order.IsType(OT_GOTO_STATION)) {
++			in.dest_station = v->current_order.GetDestination().ToStationID();
++			in.dest_closest = CalcClosestStationTile(in.dest_station, v->tile, StationType::Dock);
++			in.origins = StationOrigins(in.dest_station, in.origin_patch);
++			if (in.origins < 0) continue;
++		}
++		GetWaterRegionPatchInfo(v->tile); /* (the region the ship is in made now, where it is to be made: a worker refuses to) */
++		in.snaps = 0;
++		for (const Ship *u : Ship::Iterate()) {
++			if (in.snaps == AHEAD_SNAP || !IsDockingTile(u->tile)) continue;
++			bool have = false;
++			for (int i = 0; i < in.snaps; i++) have |= in.snap_tile[i] == u->tile.base();
++			if (have) continue;
++			in.snap_tile[in.snaps] = u->tile.base();
++			in.snap_count[in.snaps++] = DockShips(u->tile);
++		}
++		in.cancel = 0;
++		s.out.ack = ~0u;
++		if (!team_ended) {
++			mcw_for_end(); /* (a lingering team takes no calls) */
++			team_ended = true;
++		}
++		const mcw_handle h = mcw_try_call(AheadJob, static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&s)), 0);
++		if (h == 0) break;
++		_ahead_handle[k] = h;
++		_ahead_state[k] = AHEAD_RUNNING;
++		_ahead_stats.launched++;
++	}
++}
++
++/** The first core begins (true) or ends drawing the dirty blocks: ends, and waits until every path made ahead waits. */
++void YapfShipAheadQuiet(bool on)
++{
++	if (_ahead_slots == nullptr) return;
++	if (on) {
++		_ahead_quiet.v = (_ahead_gen << 1) | 1;
++		return;
++	}
++	_ahead_gen++;
++	const uint32_t q = _ahead_gen << 1;
++	_ahead_quiet.v = q;
++	for (int k = 0; k < AHEAD_SLOTS; k++) {
++		if (_ahead_state[k] == AHEAD_FREE) continue;
++		while (_ahead_slots[k].out.ack != q && !mcw_ready(_ahead_handle[k])) mcw_rest();
++	}
++}
++
++/** Before the map or the engines are made anew: every path made ahead ends, and is waited for. */
++void YapfShipAheadCancel()
++{
++	if (_ahead_slots == nullptr) return;
++	for (int k = 0; k < AHEAD_SLOTS; k++) {
++		if (_ahead_state[k] == AHEAD_FREE) continue;
++		_ahead_slots[k].in.cancel = 1;
++		mcw_join(_ahead_handle[k]);
++		_ahead_state[k] = AHEAD_FREE;
++	}
++}
++
++void YapfShipAheadStats()
++{
++	if (_ahead_slots == nullptr) return;
++	const auto &a = _ahead_stats;
++	Debug(misc, 0, "ship paths ahead: {} made, {} taken, {} with none, {} moved, {} late, {} invalid, refused {} {} {} {} {} {} {} {} {} {} {} {}, {} checked, {} differ; invalid by {} {} {} {} {} {} {} {} {} {}",
++		a.launched, a.taken, a.none, a.moved, a.late, a.invalid, a.refused[0], a.refused[1], a.refused[2], a.refused[3], a.refused[4], a.refused[5], a.refused[6], a.refused[7], a.refused[8], a.refused[9], a.refused[10], a.refused[11], a.checked, a.differ, a.why[1], a.why[2], a.why[3], a.why[4], a.why[5], a.why[6], a.why[7], a.why[8], a.why[9], a.why[10]);
++}
++#endif
++
+ /** Ship controller helper - path finder invoker. */
+ Track YapfShipChooseTrack(const Ship *v, TileIndex tile, bool &path_found, ShipPathCache &path_cache)
+ {
+ 	Trackdir best_origin_dir = INVALID_TRACKDIR;
+ 	const TrackdirBits origin_dirs = TrackdirToTrackdirBits(v->GetVehicleTrackdir());
++#ifdef WITH_SHADEREMU
++	Trackdir td_ret;
++	if (AheadMode() != 0 && AheadTake(v, tile, origin_dirs, path_found, path_cache, td_ret)) {
++		if (AheadMode() == 2) {
++			bool found = false;
++			ShipPathCache cache;
++			const Trackdir td = CYapfShip::ChooseShipTrack(v, tile, origin_dirs, TRACKDIR_BIT_NONE, found, cache, best_origin_dir);
++			_ahead_stats.checked++;
++			bool same = td == td_ret && found == path_found && cache.size() == path_cache.size();
++			for (size_t i = 0; same && i < cache.size(); i++) same = cache[i].trackdir == path_cache[i].trackdir;
++			if (!same) {
++				_ahead_stats.differ++;
++				path_cache = cache;
++				path_found = found;
++				td_ret = td;
++			}
++		}
++	} else {
++		td_ret = CYapfShip::ChooseShipTrack(v, tile, origin_dirs, TRACKDIR_BIT_NONE, path_found, path_cache, best_origin_dir);
++	}
++#else
+ 	const Trackdir td_ret = CYapfShip::ChooseShipTrack(v, tile, origin_dirs, TRACKDIR_BIT_NONE, path_found, path_cache, best_origin_dir);
++#endif
+ 	return (td_ret != INVALID_TRACKDIR) ? TrackdirToTrack(td_ret) : INVALID_TRACK;
+ }
+ 
+diff --git a/src/pathfinder/yapf/yapf_ship_regions.cpp b/src/pathfinder/yapf/yapf_ship_regions.cpp
+index 9e36a0a..dc81b16 100644
+--- a/src/pathfinder/yapf/yapf_ship_regions.cpp
++++ b/src/pathfinder/yapf/yapf_ship_regions.cpp
+@@ -133,6 +133,9 @@ public:
+ 
+ 	inline void PfFollowNode(Node &old_node)
+ 	{
++#ifdef WITH_SHADEREMU
++		if (SeShipAhead()) SeShipAheadPoll();
++#endif
+ 		VisitWaterRegionPatchCallback visit_func = [&](const WaterRegionPatchDesc &water_region_patch) {
+ 			Node &node = Yapf().CreateNewNode();
+ 			node.Set(&old_node, water_region_patch);
+@@ -184,6 +187,14 @@ public:
+ 		YapfShipRegions pf(node_limit);
+ 		pf.SetDestination(start_water_region_patch);
+ 
++#ifdef WITH_SHADEREMU
++		int ahead_origins = 0;
++		const WaterRegionPatchDesc *ahead_origin = SeShipAhead() ? SeShipAheadOrigins(ahead_origins) : nullptr;
++		if (ahead_origin != nullptr) {
++			/* (the station's docking tiles were looked at by the first core: a worker reads no pool) */
++			for (int i = 0; i < ahead_origins; i++) pf.AddOrigin(ahead_origin[i]);
++		} else
++#endif
+ 		if (v->current_order.IsType(OT_GOTO_STATION)) {
+ 			StationID station_id = v->current_order.GetDestination().ToStationID();
+ 			const BaseStation *station = BaseStation::Get(station_id);
 diff --git a/src/random_access_file.cpp b/src/random_access_file.cpp
 index 75aa52f..396f240 100644
 --- a/src/random_access_file.cpp
@@ -989,7 +2064,7 @@ index c0aaec4..3e79686 100644
  public:
  	RandomAccessFile(std::string_view filename, Subdirectory subdir);
 diff --git a/src/saveload/saveload.cpp b/src/saveload/saveload.cpp
-index ebec3d2..9613ccc 100644
+index ebec3d2..14f25ca 100644
 --- a/src/saveload/saveload.cpp
 +++ b/src/saveload/saveload.cpp
 @@ -2684,17 +2684,118 @@ struct ZlibSaveFilter : SaveFilter {
@@ -1197,11 +2272,32 @@ index ebec3d2..9613ccc 100644
  		this->lzma.next_out  = buf;
  		this->lzma.avail_out = size;
  
+@@ -3162,6 +3337,10 @@ static SaveOrLoadResult DoLoad(std::shared_ptr<LoadFilter> reader, bool load_che
+ 	_next_offs = 0;
+ 
+ 	if (!load_check) {
++#ifdef WITH_SHADEREMU
++		extern void YapfShipAheadCancel();
++		YapfShipAheadCancel(); /* (a worker reads the map and the engines) */
++#endif
+ 		ResetSaveloadData();
+ 
+ 		/* Old maps were hardcoded to 256x256 and thus did not contain
 diff --git a/src/sound.cpp b/src/sound.cpp
-index 31a7ede..a28afc9 100644
+index 31a7ede..49e1914 100644
 --- a/src/sound.cpp
 +++ b/src/sound.cpp
-@@ -302,3 +302,6 @@ template <>
+@@ -236,6 +236,9 @@ void SndPlayTileFx(SoundID sound, TileIndex tile)
+ 
+ void SndPlayVehicleFx(SoundID sound, const Vehicle *v)
+ {
++#ifdef WITH_SHADEREMU
++	const_cast<Vehicle *>(v)->UpdateViewportPending();
++#endif
+ 	SndPlayScreenCoordFx(sound,
+ 		v->coord.left, v->coord.right,
+ 		v->coord.top, v->coord.bottom
+@@ -302,3 +305,6 @@ template <>
  }
  
  template class BaseMedia<SoundsSet>;
@@ -2125,10 +3221,55 @@ index b33a953..d84a33e 100644
  		static std::mutex thread_startup_mutex;
  		std::lock_guard<std::mutex> lock(thread_startup_mutex);
 diff --git a/src/vehicle.cpp b/src/vehicle.cpp
-index 91588a6..9bca4be 100644
+index 91588a6..fff968a 100644
 --- a/src/vehicle.cpp
 +++ b/src/vehicle.cpp
-@@ -1118,6 +1118,18 @@ static void DoDrawVehicle(const Vehicle *v)
+@@ -60,6 +60,11 @@
+ #include "timer/timer_game_calendar.h"
+ #include "timer/timer_game_economy.h"
+ #include "timer/timer_game_tick.h"
++#include "string_func.h"
++#ifdef WITH_SHADEREMU
++static void VpDeferBegin();
++static void VpDeferEnd();
++#endif
+ 
+ #include "table/strings.h"
+ 
+@@ -867,6 +872,9 @@ Vehicle::~Vehicle()
+ 		return;
+ 	}
+ 
++#ifdef WITH_SHADEREMU
++	this->UpdateViewportPending();
++#endif
+ 	/* sometimes, eg. for disaster vehicles, when company bankrupts, when removing crashed/flooded vehicles,
+ 	 * it may happen that vehicle chain is deleted when visible */
+ 	if (!this->vehstatus.Test(VehState::Hidden)) this->MarkAllViewportsDirty();
+@@ -966,6 +974,10 @@ void CallVehicleTicks()
+ 	PerformanceAccumulator::Reset(PFE_GL_SHIPS);
+ 	PerformanceAccumulator::Reset(PFE_GL_AIRCRAFT);
+ 
++#ifdef WITH_SHADEREMU
++	static const bool vp_now = GetEnv("OPENTTD_VP_NOW").has_value();
++	if (!vp_now) VpDeferBegin();
++#endif
+ 	for (Vehicle *v : Vehicle::Iterate()) {
+ 		[[maybe_unused]] VehicleID vehicle_index = v->index;
+ 
+@@ -1039,6 +1051,11 @@ void CallVehicleTicks()
+ 		}
+ 	}
+ 
++#ifdef WITH_SHADEREMU
++	VpDeferEnd();
++	extern void YapfShipAhead();
++	YapfShipAhead();
++#endif
+ 	Backup<CompanyID> cur_company(_current_company);
+ 	for (auto &it : _vehicles_to_autoreplace) {
+ 		Vehicle *v = Vehicle::Get(it.first);
+@@ -1118,6 +1135,18 @@ static void DoDrawVehicle(const Vehicle *v)
   * Add the vehicle sprites that should be drawn at a part of the screen.
   * @param dpi Rectangle being drawn.
   */
@@ -2147,7 +3288,7 @@ index 91588a6..9bca4be 100644
  void ViewportAddVehicles(DrawPixelInfo *dpi)
  {
  	/* The bounding rectangle */
-@@ -1167,6 +1179,9 @@ void ViewportAddVehicles(DrawPixelInfo *dpi)
+@@ -1167,6 +1196,9 @@ void ViewportAddVehicles(DrawPixelInfo *dpi)
  					 * This vehicle can potentially be drawn as part of this viewport and
  					 * needs to be revalidated, as the sprite may not be correct.
  					 */
@@ -2157,7 +3298,7 @@ index 91588a6..9bca4be 100644
  					if (v->sprite_cache.revalidate_before_draw) {
  						VehicleSpriteSeq seq;
  						v->GetImage(v->direction, EIT_ON_MAP, &seq);
-@@ -1189,10 +1204,25 @@ void ViewportAddVehicles(DrawPixelInfo *dpi)
+@@ -1189,10 +1221,25 @@ void ViewportAddVehicles(DrawPixelInfo *dpi)
  						v->sprite_cache.revalidate_before_draw = false;
  					}
  
@@ -2186,7 +3327,7 @@ index 91588a6..9bca4be 100644
  				}
  
  				v = v->hash_viewport_next;
-@@ -1671,7 +1701,19 @@ void Vehicle::UpdatePosition()
+@@ -1671,7 +1718,19 @@ void Vehicle::UpdatePosition()
  void Vehicle::UpdateBoundingBoxCoordinates(bool update_cache) const
  {
  	Rect new_coord;
@@ -2206,11 +3347,59 @@ index 91588a6..9bca4be 100644
  
  	/* z-bounds are not used. */
  	Point pt = RemapCoords(this->x_pos + this->bounds.origin.x + this->bounds.offset.x, this->y_pos + this->bounds.origin.y + this->bounds.offset.y, this->z_pos);
+@@ -1713,7 +1772,47 @@ void Vehicle::UpdateBoundingBoxCoordinates(bool update_cache) const
+  * Update the vehicle on the viewport, updating the right hash and setting the new coordinates.
+  * @param dirty Mark the (new and old) coordinates of the vehicle as dirty.
+  */
++#ifdef WITH_SHADEREMU
++/* While the vehicles tick, an update of a vehicle's place on the viewports is only noted, and made once for each
++ * vehicle when they all have: a train moves several steps a tick and a car's every step was a box, a hash update and
++ * a mark of dirty blocks (docs/games/openttd.md, "The game's own speed"). The boxes are the drawing's alone (and a
++ * sound's place: SndPlayVehicleFx makes the update first); the blocks marked are the old and the last box, the ones
++ * a picture can have shown. */
++static bool _vp_defer = false;
++static std::vector<VehicleID> _vp_pending;
++
++void Vehicle::UpdateViewport(bool dirty)
++{
++	if (_vp_defer) {
++		if (!this->sprite_cache.vp_pending) {
++			this->sprite_cache.vp_pending = true;
++			_vp_pending.push_back(this->index);
++		}
++		this->sprite_cache.vp_dirty |= dirty;
++		return;
++	}
++	this->UpdateViewportNow(dirty);
++}
++
++static void VpDeferBegin()
++{
++	_vp_defer = true;
++}
++
++static void VpDeferEnd()
++{
++	_vp_defer = false;
++	for (VehicleID id : _vp_pending) {
++		Vehicle *v = Vehicle::GetIfValid(id);
++		if (v != nullptr) v->UpdateViewportPending();
++	}
++	_vp_pending.clear();
++}
++
++void Vehicle::UpdateViewportNow(bool dirty)
++#else
+ void Vehicle::UpdateViewport(bool dirty)
++#endif
+ {
+ 	/* If the existing cache is invalid we should ignore it, as it will be set to the current coords by UpdateBoundingBoxCoordinates */
+ 	bool ignore_cached_coords = this->sprite_cache.old_coord.left == INVALID_COORD;
 diff --git a/src/vehicle_base.h b/src/vehicle_base.h
-index 7edf724..ab06bc4 100644
+index 7edf724..382de9c 100644
 --- a/src/vehicle_base.h
 +++ b/src/vehicle_base.h
-@@ -160,7 +160,16 @@ struct MutableSpriteCache {
+@@ -160,7 +160,19 @@ struct MutableSpriteCache {
  	bool is_viewport_candidate = false; ///< This vehicle can potentially be drawn on a viewport
  	Rect old_coord{}; ///< Co-ordinates from the last valid bounding box
  	VehicleSpriteSeq sprite_seq{}; ///< Vehicle appearance.
@@ -2219,6 +3408,9 @@ index 7edf724..ab06bc4 100644
 +	Rect seq_bounds{};
 +	SpriteID seq_bounds_of = 0;
 +	uint32_t seq_bounds_gen = 0;
++	/* an update of the viewport asked for while the vehicles tick, made once when they have (vehicle.cpp) */
++	bool vp_pending = false;
++	bool vp_dirty = false;
 +#endif
  };
 +#ifdef WITH_SHADEREMU
@@ -2227,6 +3419,17 @@ index 7edf724..ab06bc4 100644
  
  /** A vehicle pool for a little over 1 million vehicles. */
  typedef Pool<Vehicle, VehicleID, 512> VehiclePool;
+@@ -781,6 +793,10 @@ public:
+ 
+ 	void UpdatePosition();
+ 	void UpdateViewport(bool dirty);
++#ifdef WITH_SHADEREMU
++	void UpdateViewportNow(bool dirty);
++	void UpdateViewportPending() { if (this->sprite_cache.vp_pending) { this->sprite_cache.vp_pending = false; this->UpdateViewportNow(this->sprite_cache.vp_dirty); this->sprite_cache.vp_dirty = false; } }
++#endif
+ 	void UpdateBoundingBoxCoordinates(bool update_cache) const;
+ 	void UpdatePositionAndViewport();
+ 	bool MarkAllViewportsDirty() const;
 diff --git a/src/vehicle_func.h b/src/vehicle_func.h
 index 9b69b13..4571a5f 100644
 --- a/src/vehicle_func.h
@@ -2256,7 +3459,7 @@ index e09c202..3319032 100644
 +    CONDITION SHADEREMU
 +)
 diff --git a/src/video/null_v.cpp b/src/video/null_v.cpp
-index 65fc9f3..61e230d 100644
+index 65fc9f3..df95ca1 100644
 --- a/src/video/null_v.cpp
 +++ b/src/video/null_v.cpp
 @@ -12,6 +12,11 @@
@@ -2285,7 +3488,7 @@ index 65fc9f3..61e230d 100644
  	/* Do not render, nor blit */
  	Debug(misc, 1, "Forcing blitter 'null'...");
  	BlitterFactory::SelectBlitter("null");
-@@ -50,11 +62,57 @@ void VideoDriver_Null::MainLoop()
+@@ -50,11 +62,61 @@ void VideoDriver_Null::MainLoop()
  {
  	uint i;
  
@@ -2319,6 +3522,10 @@ index 65fc9f3..61e230d 100644
 +		double all = std::chrono::duration<double>(std::chrono::steady_clock::now() - timed_from).count();
 +		fmt::print("openttd: ticks TK-DONE: {} in {:.2f} s of the game loop, {:.2f} a second ({:.2f} s in all)\n", this->ticks - warm, s, (this->ticks - warm) / s, all);
 +	}
++#ifdef WITH_SHADEREMU
++	extern void YapfShipAheadStats();
++	if (timed) YapfShipAheadStats();
++#endif
 +
 +	/* OPENTTD_SUM: every tile, the game's random state, the date and the companies' money after
 +	 * the ticks, which a build for another computer must sum the same (docs/games/openttd.md) */
