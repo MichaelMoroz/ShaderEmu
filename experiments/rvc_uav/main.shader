@@ -263,7 +263,7 @@
                 return _TickOut7.Load(at);
             }
 #elif defined(TICK_UAV)
-            // TICK_UAV (experiments/rvc_uav/README.md): a pixel a core, the first of its block of 8 x 8; it reads its
+            // TICK_UAV (experiments/rvc_uav/README.md): a pixel a core, one a 4 x 8 warp (UAV_PITCH); it reads its
             // state, RAM and the mailboxes from the UAV, stores to RAM there at once (src/mem.h: no write cache), and
             // writes its state texels there at the end of its pass. The other 63 pixels of a block return at once.
 #if !defined(NO_PAGING)
@@ -273,7 +273,7 @@
 #error TICK_UAV has no lazy fills and copies
 #endif
 #ifndef UAV_PITCH
-#define UAV_PITCH 8
+#define UAV_PITCH 4
 #endif
             // State texel w of the core selected (mc_select): where it is, and which texel of core 0's layout it is.
             void uav_state_write(L1P uint w) {
@@ -297,7 +297,7 @@
                 uint2 pixel = uint2(i.vertex.xy);
                 _SelfTexture2D.GetDimensions(s_dim.x, s_dim.y);
                 _Data_ROM.GetDimensions(m_dim.x, m_dim.y);
-                // UAV_PITCH (8 unless a measurement says otherwise): pixels from one core's lane to the next. Every other
+                // UAV_PITCH (4: one lane a 4 x 8 warp; 8 left every other warp empty and nxray 42% slower): pixels from lane to lane. Every other
                 // pixel returns before it reads anything.
                 uint core = pixel.x / UAV_PITCH;
                 if (pixel.x % UAV_PITCH != 0 || pixel.y != 0 || core >= CORES) return 0;

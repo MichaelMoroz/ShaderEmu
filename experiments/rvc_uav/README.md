@@ -1,14 +1,207 @@
-# rvc_opt
+# rvc_uav
 
-A patched copy of the shader from [pimaker/rvc](https://github.com/pimaker/rvc) (`_Nix/rvc`,
-MIT License, Copyright (c) 2021 PiMaker). It still runs upstream's payloads, but its state
-layout and Commit pass are its own now (a write cache of texels, below; the commit as points,
-`docs/machine/multicore.md`), so upstream's snapshots and state hashes no longer apply: the
-bit-identical results below were measured before those changes, and guest output is what is
-compared since.
+An experiment, not for merging (branch `exp-uav`, from riscv-backport `ccab9af`). It asks one question: if VRChat
+one day let a fragment shader write a `RWTexture2D`, how much faster would the machine be with RAM written in place
+by the tick? The answer, on an RTX 5070 Laptop under `--unity 11.1,1.4,0.75` (29 October 2026):
 
-    tools\perf_test.ps1 -Rvc experiments\rvc_opt
-    bin\rvc_harness.exe --rvc experiments\rvc_opt --payload rvc\_Nix\rvc\data-net --load-state build\snapshots\rvc_shell.snap
+- The machine runs 16% more instructions a second on one core, and up to 25% with 12K-instruction passes.
+- Loading is 1.14 to 1.27 times faster.
+- Half-Life plays 1.73 times as many frames.
+- The two worker-heavy programs run 1.66x (nxray) and 2.17x (nxphys).
+- Doom's drawn timedemo does not move: it is held at 90 lists a second. Without drawing it is 1.17x.
+
+This folder started as a copy of `experiments/rvc_opt`. Its notes are kept below, under "The tick it came from".
+
+    bin\rvc_harness.exe --d3d11 --rvc experiments\rvc_uav --uav --define NO_PAGING ...    (the tick)
+    bin\rvc_harness.exe --d3d11 --define NO_PAGING ...                                      (the tick it is measured against)
+    python experiments\rvc_uav\compare.py run --machines base,uav --parts doom,quake --rounds 1
+    python experiments\rvc_uav\compare.py table
+
+## The design
+
+- **RAM is a UAV.** The state texture (2048 x 9280, RAM and every core's state, `src/ram.h`) is created with
+  `D3D11_BIND_UNORDERED_ACCESS`. The tick binds it as `RWTexture2D<uint4> _SelfTexture2D : register(u1)`, after a
+  dummy 2048 x 8 target at slot 0 (`OMSetRenderTargetsAndUnorderedAccessViews`).
+  - Every read goes through the UAV: instruction fetches, loads, the mailboxes and the state.
+  - Every store to RAM is written at once (`mem_set_ram_l1` in `src/mem.h`). The texel is read, merged and written
+    only if it changed; the TLB's last texel (`dr_tex`) is kept in step.
+- **One pixel a core.** The tick draws one triangle over a 2048 x 8 viewport, with its long edge outside it.
+  - Core c is pixel (4c, 0). Every other pixel returns before it reads anything.
+  - A worker checks whether it is idle in the fragment shader: a geometry shader cannot read a UAV.
+  - At the end of its pass a core writes its 44 state texels and the 8 after its cache's end (`uav_state_write`).
+  - There is no `TICK_MRT` redundancy and no unpack pass.
+- **Harness.** `rvc_harness --uav` (`opt.uav`, `BackendOptions::uavTick`) requires the D3D11 machine with RAM in one
+  texture, defines `TICK_UAV` and draws the tick that way (`uavTickDraw` in `rvc_backend11.cpp`). Without `--uav`
+  nothing changes: the same binary is the "base" of every table below.
+- **What stays.** The devices' passes are unchanged: the GPU's lists, sound, the control zone, and the commit's
+  gather, state rows and points for what the devices write. They read the texture as before, as a shader resource
+  in later draws.
+
+## What was removed
+
+| Removed | It was |
+|---|---|
+| The write cache (3 tables, 448 texels a core; `encode`'s cache branch under `#ifndef TICK_UAV`) | stores held until the commit |
+| The commit of RAM stores (`ram_core_stored` false, `ram_seen_texel` reads RAM directly) | a pass's stores drawn as points |
+| The unpack pass (`TICK_UNPACK`) | the tick's 8 targets copied into the state texture |
+| `TICK_MRT`'s 8 targets and the lanes' redundant pixels | 8 texels a pixel, a core's pixels running the same code |
+| A pass ending because the cache is full | the most common early end of a pass |
+
+`LAZY_MEMOP` is refused (`#error`). The machine is the no-MMU one only (`NO_PAGING`).
+
+## One core a wave
+
+A warp on this card is a 4 x 8 pixel tile of one big triangle (`gpu_vm/tick/WAVES.md` of the custom_isa tree).
+The triangle has no edge inside the viewport, so `UAV_PITCH`, the pixels from one core's lane to the next, decides
+how many cores share a warp:
+
+| `UAV_PITCH` | Cores a warp | nxray (pictures/s) | Card ms a round | Rounds a Unity frame |
+|---|---|---|---|---|
+| 1 | 4 | 16.06 | 3.34 | 2.28 |
+| 2 | 2 | 22.99 | 2.50 | 3.27 |
+| **4** (default) | 1 | **36.40** | 1.79 | 5.11 |
+| 8 | 1, every other warp empty | 21.09 | 2.91 | 2.98 |
+
+- Pitches 1 and 2 put two or four cores in one warp, and they are slower: the measured cost of mixing.
+- Pitch 8 keeps the rule too, but it is 42% slower than 4. The likely cause is the card's mapping of screen tiles to
+  its SMs: busy warps 8 pixels apart may land on fewer SMs. That was not checked with Nsight.
+- Every other part runs the same at 4 and 8 (the tables below).
+- WARP passed for pitches 1, 4 and 8 (`warp_ok`).
+
+## Memory ordering
+
+The programs keep their pass-level protocol, and nothing synchronizes cores within a pass.
+
+- A core's own stores: it reads them back through the same UAV in the same thread, so it always sees them.
+- Another core's stores: they may be seen within the same pass, or only in the next. A UAV that is not
+  `globallycoherent` may hold a stale line in another SM's L1 until the draw ends. D3D11 makes every UAV write of a
+  draw visible to the next draw (the tick's next pass and the devices' passes).
+- So no program can see a store later than it did with the commit: at worst at the next pass, as before. Seeing one
+  earlier is something the old tick could not do. The programs only wait for a word to change, so earlier does not
+  break them.
+- The checks:
+  - Doom's 52 state sums through the whole timedemo are identical (base, pitch 8 and pitch 4, with workers).
+  - copytest says `sum 0e7f76c3` on both ticks, with the same 109,683,506 instructions.
+  - mctest-3 passes on WARP.
+  - Every game and program in the tables loaded and ran its part to its end.
+  - Not done: `RVC_RACES` has no UAV machine (`rvc_cpu` is the commit's model), and nxpath's and the browser's own
+    checks were not run.
+- Atomics were not used: nothing needed them.
+- **`globallycoherent`** costs 17% of the tick (shell loop: 1.449 ms a round against 1.239) and takes back all of the
+  gain. fxc2 rejects the keyword, so `RVC_UAV_GLC=1` sets the flag in the DXBC (`dcl_uav_typed`, bit 0x10000) and
+  recomputes its checksum (`harness/core/material.cpp`).
+- **`UAV_MBOX_FENCE`** puts a `DeviceMemoryBarrier()` before every store to the mailbox page. It costs nothing on
+  the shell loop but changes nothing either, so it is off.
+
+## Fetches through the UAV, not an SRV
+
+- A shader resource view of the same texture, bound while the texture is a UAV of the draw, is not valid in D3D11:
+  the runtime unbinds it. Every fetch and load therefore reads the UAV.
+- Reading RAM through a second texture would mean copying it each pass, which is what the commit did.
+- What reading through the UAV costs is in the tick's time. A round with the same instructions is 0.15 ms shorter
+  than the current tick's (shell loop, `RVC_PASS_PROF`: tick 1.239 ms against 1.387).
+
+## Tick sizes
+
+8K, 12K, 16K, 24K, 32K, 48K and 64K instructions a pass, on the shell loop (`build/uav/loop.sh`: 1,800 frames,
+`RVC_PASS_PROF`). Instructions a second are per Unity frame of 11.1 ms.
+
+| Tick (instructions a pass) | Instructions a frame | M instructions/s | Rounds a frame | Card ms a frame | Instructions a card ms |
+|---|---|---|---|---|---|
+| base 8K | 49,480 | 4.46 | 6.01 | 8.93 | 5,543 |
+| UAV 8K | 57,583 | 5.19 (+16%) | 7.01 | 9.13 | 6,307 |
+| UAV 8K, `globallycoherent` | 49,405 | 4.45 | 6.01 | 9.08 | 5,441 |
+| UAV 12K | 61,641 | 5.55 (+24.6%) | 4.99 | 9.52 | 6,477 |
+| UAV 16K | 49,897 | 4.50 | 3.02 | 7.65 | 6,522 |
+| UAV 24K | 50,136 | 4.52 | 2.02 | 7.60 | 6,599 |
+| UAV 32K | 34,437 | 3.10 | 1.03 | 5.23 | 6,584 |
+| UAV 64K | 68,040 | 6.13 | 1.01 | 10.12 (over the 9.7 budget) | 6,723 |
+
+- A larger tick is a little cheaper an instruction: 6,307 instructions a card ms at 8K, 6,723 at 64K.
+- The world gives `floor(9.7 ms / card ms a round)` rounds a frame, so the remainder is lost. 12K fits five rounds
+  with little left over. 16K to 48K fit fewer rounds and lose most of what they gain.
+- In the games 12K is level or worse: Quake III's and Half-Life's frames are slower at 12K. 8K is the best tick
+  overall, and 12K is better only for one core alone.
+
+## Speed per game
+
+The current tick ("base": `experiments/rvc_opt`, the same harness without `--uav`, 8K) against the UAV tick (8K,
+pitch 4) and the UAV tick at 12K. Logs and rows are in `build/uav/cmp`; each part runs one round from the
+snapshot, in sections under a minute. Rounds are per Unity frame; card ms are per round (the tick and every device
+pass, `RVC_PASS_PROF`).
+
+| Part | Unit | base | UAV 8K | UAV 12K | UAV 8K against base |
+|---|---|---|---|---|---|
+| Shell loop | M instructions/s | 4.46 | 5.19 | 5.55 | 1.16x |
+| Doom timedemo, drawn | tics/s | 92.02 | 91.29 | 90.51 | 0.99x (90 lists/s cap) |
+| Doom timedemo, `-nodraw` | tics/s | 197.39 | 231.48 | | 1.17x |
+| Quake, start to e1m1 | s | 16.36 | 14.37 | 13.64 | 1.14x |
+| Quake, server ticks in e1m1 | ticks/s | 57.97 | 72.16 | 74.92 | 1.24x |
+| Quake III, start to the level | s | 27.83 (2 rounds) | 21.99 (3) | 21.0 | 1.27x |
+| Quake III, frames in the level | fps | 73.1 (78.6, 67.6) | 80.0 (78.9, 86.3, 75.0) | 71.3 | 1.09x (noisy) |
+| Half-Life, start to the level drawn | s | 68.91 | 59.35 | 58.87 | 1.16x |
+| Half-Life, frames in the level | fps | 16.08 | 27.77 | 25.67 | 1.73x |
+| nxphys, 600 substeps | s | 6.56 | 3.02 | 3.30 (pitch 8) | 2.17x |
+| nxphys, a picture while it runs | ms | 58.1 | 32.5 | 35.1 (pitch 8) | 1.79x |
+| nxray | pictures/s | 21.94 (2 rounds) | 36.40 | 33.37 | 1.66x |
+
+The Quake III frame rates of UAV 8K mix pitch 4's round with pitch 8's two; the pitches run Quake III the same.
+
+| Part | Rounds a frame, base / UAV 8K / UAV 12K | Card ms a round, base / UAV 8K / UAV 12K |
+|---|---|---|
+| Shell loop | 6.35 / 7.28 / 5.37 | 1.41 / 1.26 / 1.77 |
+| Doom, drawn | 19.08 / 20.58 / 20.14 | 0.487 / 0.445 / 0.458 |
+| Doom, `-nodraw` | 6.39 / 7.35 / | 1.414 / 1.217 / |
+| Quake | 13.87 / 7.96 / 5.84 | 0.685 / 1.177 / 1.601 |
+| Quake III | 12.30 / 6.98 / 5.06 | 0.755 / 1.300 / 1.762 |
+| Half-Life | 19.67 / 21.85 / 15.05 | 0.478 / 0.416 / 0.581 |
+| nxphys | 10.08 / 7.40 / 5.83 | 0.938 / 1.237 / 1.575 |
+| nxray | 3.14 / 5.11 / 3.17 | 2.870 / 1.790 / 2.602 |
+
+The shell loop's row in the first table is `loop.sh`'s, where the loop is already running. `compare.py`'s
+shell-loop part, which includes the loop's start, gives 4.22, 4.90 and 5.22 M instructions/s.
+
+## Where the gain comes from
+
+- **The tick is cheaper an instruction.** With no cache to search, no unpack and no RAM points, a round of the
+  shell loop's instructions takes 0.15 ms less: tick 1.239 ms against 1.387, points 0.028 against 0.036, unpack
+  0.006 against 0.021. That is the 16% of one core alone.
+- **Passes no longer end early.** A pass that fills the write cache ends there. The UAV tick has nothing to fill, so
+  Quake and Quake III run about 4,450 and 6,250 instructions a round against 2,260 and 3,030. They run fewer and
+  longer rounds.
+- **Workers see a word sooner.** Half-Life (a server and a renderer on workers) runs 16% more instructions a second
+  and 73% more frames. nxphys runs about as many instructions a second and finishes in half the time. Both point to
+  less time spent waiting on another core's word. A store a worker waits for can arrive within the same pass instead
+  of the next one, and a waiting core reaches its own pass's end sooner. This is inferred from the numbers, not
+  traced.
+
+## What limits it now
+
+- **The cost of an instruction.** About 0.16 us a guest instruction in the tick's loop (a 1.24 ms round runs about
+  7,500). Removing the cache saved about 11%; the rest is the interpreter itself.
+- **The rounds' floor.** The world runs whole rounds. A larger tick is cheaper an instruction but loses the
+  remainder of 9.7 ms. Only 12K fits better than 8K, and only for one core.
+- **The devices and the frame.** Doom's drawn timedemo is held at 90 lists a second (one a host frame), and Quake
+  draws 89.7. The tick's speed shows there only without drawing.
+- **The card's warps.** 256 lanes of one pixel each fill 256 warps with one live lane. Pitches below 4 mix cores,
+  and pitch 8 is slower again. A tick that ran several lanes of a core in one warp would need the lanes' work, not
+  the UAV.
+- **Coherence.** Correctness rests on the pass boundary, not on `globallycoherent`. If a program ever needed a store
+  seen within the pass, the coherent UAV costs 17%.
+
+## What VRChat would have to allow
+
+- A `RWTexture2D<uint4>` (a render texture of `RGBA32_UInt`, or `ARGBFloat` read as bits) bound as a UAV to a
+  fragment shader of the world: Unity's `Graphics.SetRandomWriteTarget(1, rt)` with a Custom Render Texture's or a
+  camera's material, slot 1 after one render target.
+- Typed UAV loads of four 32-bit components (`TypedUAVLoadAdditionalFormats`, D3D11.3). Every current desktop card
+  has it, and the harness checks it at start. Without it the RAM would have to be `R32_UINT`: four loads a texel and
+  another layout.
+- Nothing else. Structured buffers, atomics, `globallycoherent` and memory barriers were not needed. The device
+  passes keep reading the texture as a plain texture in later draws, which Unity does already.
+
+
+# The tick it came from (experiments/rvc_opt notes)
 
 ## Build switches
 
