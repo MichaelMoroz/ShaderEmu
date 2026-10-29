@@ -18,7 +18,7 @@ The tick was prototyped for the two that need it.
 | 3 | Zicond | at most 0.1 to 0.2 on core 0 (counted, not built: GCC 13.3 makes no `czero`) | - | GCC 14 or clang | not now |
 | - | Zfinx | -1.4 (Quake) to +0.6 (nxray); nxray's workers +11.4 and their stores 2.8x | +3.9 (nxray) | every library, the kernel's floats, a tcc backend; GNU ld will not link it with F objects | no |
 | - | C or Zcb (compressed) | none; the fetch is not where the time goes | - | a decoder on every instruction's path | no |
-| - | load and store pairs (Zilsd and the like) | stores: 10-34% are a pair; no texel fewer | none for VR | a compiler pass; GCC and LLVM make `ld`/`sd` only for 64-bit values | no (gpu_vm tried it: 0.99x) |
+| - | load and store pairs (Zilsd and the like) | stores: 10-34% are a pair; no texel fewer | none for VR | a compiler pass; GCC and LLVM make `ld`/`sd` only for 64-bit values | no (a bundled ISA tried it: 0.99x) |
 | - | a 64/32 divide step, the copy as an instruction, a cheaper `mcw_rest` | the divides are up to 33.6% of a part (`video-mpg`); the copy and the rest under 0.1% | - | - | no: each is cheaper fixed in the source or the kernel (below) |
 
 "Passes" are `rvc_cpu`'s passes for the same work: its model of the harness's time. In that model each instruction
@@ -122,7 +122,7 @@ costs the same, so a Zba or Zbb instruction counts as one fast instruction. That
 
 ## 3. Zicond
 
-GCC 13.3 (Buildroot's) accepts `_zicond` but makes no `czero`. Clang 21 and gpu_vm's LLVM do make it. The count model
+GCC 13.3 (Buildroot's) accepts `_zicond` but makes no `czero`. Clang 21 does make it. The count model
 bounds what it could replace (a branch over one move, or `and` with a mask from `slt`/`seqz`):
 
 - 0.03 to 0.16% of core 0's instructions (Doom 0.09, Quake 0.06, Tiberian Dawn 0.03, cc 0.16);
@@ -155,12 +155,12 @@ float registers):
 - **What it needs.**
   - Every library and program built again. GNU ld refuses to link a zfinx object with an F one ("`zfinx' is conflict
     with the `f/d/q/zfh/zfhmin' extension"), so nothing prebuilt can be mixed in.
-  - musl's riscv32 float asm (`src/math/riscv32/*f.c`) and `linux/userland/libm/gvm_libm.h` take `"r"` for `"f"`.
+  - musl's riscv32 float asm (`src/math/riscv32/*f.c`) and `linux/userland/libm/flm_libm.h` take `"r"` for `"f"`.
   - tcc needs a zfinx backend. Its own float code is F, and its runtime links F objects. That is why cc did not run
     in this study: the image's `cc` stopped on an illegal instruction.
   - The kernel would lose its float context switch (no `CONFIG_FPU`).
-  - The gain the plan expected from gpu_vm (64 to 32 registers cost 0.5%) does not hold here. gpu_vm went from 64 to
-    32; Zfinx goes from 64 (32 + 32) to 32.
+  - The gain the plan expected (on a bundled ISA, 64 to 32 registers cost 0.5%) does not hold here. That ISA went
+    from 64 to 32; Zfinx goes from 64 (32 + 32) to 32.
 
 ## 5. Compressed instructions (C, Zcb)
 
@@ -174,8 +174,8 @@ Fetch is not the limit:
   would pass one more test (16 to 19 ns a test passed, `tick-costs.md`) and an expansion.
 - Four-byte instructions would lie on two-byte boundaries, some across two texels. The window would turn by
   halfwords.
-- gpu_vm measured the same trade, smaller code against dearer steps. Its E2 and E1 encodings (code 53-56% and 44-48%
-  of E4's) ran half and a third of E4's work a second (GPU-VM RESULTS, "the ISA search, part 4").
+- A bundled ISA on the same card measured the same trade, smaller code against dearer steps. Its E2 and E1 encodings
+  (code 53-56% and 44-48% of E4's) ran half and a third of E4's work a second.
 
 Not recommended. The ROM's size is not a limit worth that.
 
@@ -191,7 +191,7 @@ Loads pair less often. As instructions, store pairs are 1.9% of Doom's core 0 (2
 
 - **No gain for VR.** A pair writes one texel either way, so the write cache's entries, and the passes that end on
   them, do not change.
-- **gpu_vm already tried it.** It built `ld2`/`sd2` with a post-RA pass in LLVM. Core 0's bundles fell 0.7%, the
+- **A bundled ISA already tried it.** It built `ld2`/`sd2` with a post-RA pass in LLVM. Core 0's bundles fell 0.7%, the
   image ran at 0.99x, and its model had overrated the change 3 to 4 times. It was rejected.
 - **No compiler makes them.** GCC and LLVM make Zilsd's `ld`/`sd` only for 64-bit values, never for two `int` stores,
   so a compiler pass would be needed.
@@ -216,9 +216,9 @@ Not recommended.
 - **A cheaper `mcw_rest`.** Its 322 instructions a call are the ioctl's path through the kernel and the idle loop's
   work, not an instruction's cost (`docs/machine/multicore.md`, "A core that rests"). It belongs to the kernel and
   userland: a direct entry like a vDSO, or a lighter ioctl.
-- **gpu_vm's E4 wins.** Per instruction, E4 runs arithmetic 2.40x, loads 1.44x and stores 1.31x as fast as lean
+- **A bundled ISA's E4 wins.** Per instruction, E4 runs arithmetic 2.40x, loads 1.44x and stores 1.31x as fast as lean
   RISC-V, but games carried by core 0 only 1.1-1.2x.
-  - GPU-VM's measurements say why: a step's cost is its fetch, decode and control chain, nearly the same for two ops as
+  - Its measurements say why: a step's cost is its fetch, decode and control chain, nearly the same for two ops as
     for one. The win is the bundle: two ops a step.
   - RISC-V can have a little of it with fused custom opcodes that are one fast kind each. The model's bounds on what
     they would take away, as % of a class's instructions:
