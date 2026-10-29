@@ -95,12 +95,10 @@ public:
                 err = base.u8string() + ".bin: cannot read the ROM";
                 return false;
             }
-            const UINT w = 2048, h = (std::max)(1u, (UINT)((bin.size() / 16 + w - 1) / w));
+            const UINT w = kStateWidth, h = (std::max)(1u, (UINT)((bin.size() / 16 + w - 1) / w));
             const size_t pitch = (size_t)w * 16;
-            std::vector<uint8_t> texels((size_t)h * pitch, 0);   // row 0 = the bottom: texel 0 in the last row
-            for (UINT y = 0; y < h && (size_t)y * pitch < bin.size(); ++y)
-                memcpy(texels.data() + (size_t)(h - 1 - y) * pitch, bin.data() + (size_t)y * pitch,
-                       (std::min)(pitch, bin.size() - (size_t)y * pitch));
+            std::vector<uint8_t> texels((size_t)h * pitch, 0);   // texel t at (t % w, t / w)
+            memcpy(texels.data(), bin.data(), bin.size());
             textures_["_Data_ROM"] = uploadTexture(dx_, w, h, DXGI_FORMAT_R32G32B32A32_FLOAT, 16, texels.data(),
                                                    D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             mat.setVector("_Data_ROM_TexelSize", 1.0 / w, 1.0 / h, w, h);
@@ -239,7 +237,7 @@ public:
             auto toRead = transition(gpuColor_.Get(), gpuRt, gpuRead);
             cl_->ResourceBarrier(1, &toRead);
         }
-        draw(1, 1024, kHeight / 2.0f, 2048, (float)kHeight);
+        draw(1, kWidth / 2.0f, kHeight / 2.0f, (float)kWidth, (float)kHeight);
         if (passCount_ == 3) {
             auto toDraw = transition(gpuColor_.Get(), gpuRead, gpuRt);
             cl_->ResourceBarrier(1, &toDraw);
@@ -359,9 +357,9 @@ public:
         rsrc.pResource = state_[dst].Get();
         D3D12_BOX rowBox{0, 0, 0, 64, 1, 1};
         cl_->CopyTextureRegion(&rdst, 0, 0, 0, &rsrc, &rowBox);
-        D3D12_BOX controlBox{0, kControlRow, 0, kControlTexels, kControlRow + 1, 1};
+        D3D12_BOX controlBox{kControlX, kControlRow, 0, kControlX + kControlTexels, kControlRow + 1, 1};
         cl_->CopyTextureRegion(&rdst, 0, 1, 0, &rsrc, &controlBox);
-        D3D12_BOX netBox{0, kNetRow, 0, 64, kNetRow + 1, 1};
+        D3D12_BOX netBox{kNetX, kNetRow, 0, kNetX + 64, kNetRow + 1, 1};
         cl_->CopyTextureRegion(&rdst, 0, 2, 0, &rsrc, &netBox);
         if (zoneBuf_[slot]) {
             D3D12_TEXTURE_COPY_LOCATION zdst = rdst;

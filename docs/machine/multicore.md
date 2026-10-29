@@ -1374,8 +1374,9 @@ own write cache (336 texels: 64 + 32 + 16 buckets of three) and passes of 8,192 
   at a time. A copy out of the ROM is a point too: the points' material needs the ROM's
   textures (without them Linux started and could not read `/emuinit`), and RAM at start is
   point 0, from the image's textures.
-- **The control pass** draws its 11 rows of RAM into a window of their own (2048 x 11:
-  `MachineWindow.cginc`), which the `WindowBack` pass copies into the state.
+- **The control pass** draws its 11 runs of 2,048 texels of RAM into a window of their own (2048 x 11:
+  `MachineWindow.cginc`), which the `WindowBack` pass copies into the state, each where it lies in the
+  state's rows of 8,192 (`docs/machine/gpu.md`, "Rows of 8192").
 - **The readback** has state row 0, the first 64 control texels and 130 texels of the
   network's row, its window, what the cores ran and which sleep, then the console's words and
   ring (`Readback.shader`, 1032 words; `console.md`, "Words in memory"), where the counts are: the panel's statistics have a line for the workers and for all cores together.

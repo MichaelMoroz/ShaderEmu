@@ -20,7 +20,9 @@ import numpy as np
 
 RING = 16384
 SNAP_HEADER = 32
-RAM_AT = SNAP_HEADER + 64 * 2048 * 16
+# RAM from row 64 of the state texture, whose width is the header's third word (8192; 2048 before 29 October 2026)
+def ram_at(snap):
+    return SNAP_HEADER + 64 * int(np.fromfile(snap, dtype=np.uint32, count=4)[2]) * 16
 PCM8, PCM16, STREAM, ADPCM, FM = 1, 2, 3, 4, 5
 STEPS = [7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45, 50, 55, 60, 66, 73, 80, 88, 97, 107, 118,
          130, 143, 157, 173, 190, 209, 230, 253, 279, 307, 337, 371, 408, 449, 494, 544, 598, 658, 724, 796, 876, 963, 1060,
@@ -32,7 +34,7 @@ M32 = 0xffffffff
 
 class Memory:
     def __init__(self, snap, rom, stream_test):
-        self.ram = np.memmap(snap, dtype=np.uint8, mode='r', offset=RAM_AT)
+        self.ram = np.memmap(snap, dtype=np.uint8, mode='r', offset=ram_at(snap))
         self.rom = np.fromfile(rom, dtype=np.uint8) if rom else np.zeros(0, np.uint8)
         self.stream_test = stream_test
 

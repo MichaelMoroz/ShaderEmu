@@ -56,7 +56,7 @@ Shader "ShaderEmu/UdonAotScatter"
     void pages(uint which, uint inst, bool common, inout TriangleStream<g2f> stream)
     {
         if (which != 0) return;
-        float rows = 9280.0;   // the state's height, 2,048 texels wide
+        float rows = 2368.0;   // the state's height, 8,192 texels wide (docs/machine/gpu.md, "Rows of 8192")
         uint count = (uint)_Pages;
         [loop]
         for (uint j = 0; j < 40; j++)
@@ -65,10 +65,10 @@ Shader "ShaderEmu/UdonAotScatter"
             if (s >= count) return;
             uint page = word_at(s, 0), t = page * 256;
             if (common && page != 0x7000 && page != 0x76b8 && page != 0x76b9) continue;
-            float x0 = t % 2048, y = 64 + t / 2048;
+            float x0 = t % 8192, y = 64 + t / 8192;
             g2f o;
             o.slot = uint2(1 + s, (uint)x0);
-            float l = x0 / 1024.0 - 1.0, r = (x0 + 256.0) / 1024.0 - 1.0;
+            float l = x0 / 4096.0 - 1.0, r = (x0 + 256.0) / 4096.0 - 1.0;
             float top = 1.0 - 2.0 * y / rows, bottom = 1.0 - 2.0 * (y + 1.0) / rows;
             o.pos = float4(l, top, 0.5, 1.0); stream.Append(o);
             o.pos = float4(r, top, 0.5, 1.0); stream.Append(o);
@@ -86,7 +86,7 @@ Shader "ShaderEmu/UdonAotScatter"
     uint4 page_texel(g2f i, uint wanted)
     {
         uint2 p = (uint2)i.pos.xy;
-        if (texel_class((p.y - 64) * 2048 + p.x) != wanted) discard;
+        if (texel_class((p.y - 64) * 8192 + p.x) != wanted) discard;
         uint at = (p.x - i.slot.y) * 4;
         return uint4(word_at(at, i.slot.x), word_at(at + 1, i.slot.x), word_at(at + 2, i.slot.x), word_at(at + 3, i.slot.x));
     }

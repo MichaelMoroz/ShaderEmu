@@ -3,13 +3,13 @@ using UnityEditor.AssetImporters;
 using UnityEngine;
 
 // A file of 16-byte texels (the ROM, build/images/nommu/rootfs.bin, copied in as NAME_rom.texels) as one RGBAFloat
-// texture: 2048 texels a row, texel 0 in the last row, every byte as it is, NaNs included; the shaders read a texel
+// texture: 8192 texels a row, texel t at (t % 8192, t / 8192), every byte as it is, NaNs included; the shaders read a texel
 // back with asuint (docs/machine/gpu.md, "The ROM as one texture"). It is made in the import's own binary cache: the
 // project saves its assets as text, and the ROM is some 280 MB. (A UInt texture cannot be a Texture2D in Unity 2022.3.)
-[ScriptedImporter(1, "texels")]
+[ScriptedImporter(2, "texels")]   // (2: rows of 8,192 from row 0; 1 was rows of 2,048, texel 0 in the last row)
 public class ShaderEmuTexelsImporter : ScriptedImporter
 {
-    public const int Width = 2048;
+    public const int Width = 8192;
     public bool readable;   // (a check reads the pixels back: docs/machine/gpu.md)
 
     public override void OnImportAsset(AssetImportContext ctx)
@@ -17,12 +17,7 @@ public class ShaderEmuTexelsImporter : ScriptedImporter
         byte[] bin = File.ReadAllBytes(ctx.assetPath);
         int texels = (bin.Length + 15) / 16, height = Mathf.Max((texels + Width - 1) / Width, 1), pitch = Width * 16;
         byte[] raw = new byte[(long)height * pitch];
-        for (int y = 0; y < height; y++)
-        {
-            long from = (long)y * pitch;
-            if (from >= bin.Length) break;
-            System.Buffer.BlockCopy(bin, (int)from, raw, (height - 1 - y) * pitch, (int)System.Math.Min(pitch, bin.Length - from));
-        }
+        System.Buffer.BlockCopy(bin, 0, raw, 0, bin.Length);
         Texture2D tex = new Texture2D(Width, height, TextureFormat.RGBAFloat, false, true);
         tex.filterMode = FilterMode.Point;
         tex.wrapMode = TextureWrapMode.Clamp;
@@ -40,7 +35,7 @@ public class ShaderEmuTexelsImporter : ScriptedImporter
         for (long i = 0; i < bin.Length; i++)
         {
             long y = i / pitch, x = i % pitch;
-            if (raw[(height - 1 - y) * pitch + x] != bin[i]) wrong++;
+            if (raw[y * pitch + x] != bin[i]) wrong++;
         }
         return wrong;
     }

@@ -1400,10 +1400,10 @@ bool memop_lazy_l1(L1P bool fill, uint src_p, uint dst) {
     }
     uint dt = dst >> 4, nt = n >> 4, st = src >> 4, ft = (fetch_page & 0x7fffffff) >> 4;
     ok = ok && (ft + 256 <= dt || dt + nt <= ft);
-    // the destination's rows as rectangles of the RAM texture, 2,048 texels a row
-    uint row0 = dt >> 11, row1 = (dt + nt - 1) >> 11;
+    // the destination's rows as rectangles of the RAM texture, RAM_W texels a row
+    uint row0 = dt / RAM_W, row1 = (dt + nt - 1) / RAM_W;
     uint rects = row0 == row1 ? 1 : row1 > row0 + 1 ? 3 : 2;
-    uint first0 = pend_dst_t >> 11, first1 = (pend_dst_t + pend_n_t - 1) >> 11;
+    uint first0 = pend_dst_t / RAM_W, first1 = (pend_dst_t + pend_n_t - 1) / RAM_W;
     uint rects_first = pend_n_t == 0 ? 0 : first0 == first1 ? 1 : first1 > first0 + 1 ? 3 : 2;
     ok = ok && rects_first + rects <= 3;   // (the commit's point for these has twelve vertices)
     // (pend_n_t 0: these hold; a source that is the first one's destination would need its result)

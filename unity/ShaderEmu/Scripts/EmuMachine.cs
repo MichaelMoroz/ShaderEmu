@@ -19,10 +19,10 @@ using VRC.Udon.Common.Interfaces;
 [UdonBehaviourSyncMode(BehaviourSyncMode.None)]
 public class EmuMachine : UdonSharpBehaviour
 {
-    public RenderTexture state;             // 2048 x 9280, four 32-bit words a texel: no pass reads what it draws
+    public RenderTexture state;             // 8192 x 2368, four 32-bit words a texel: no pass reads what it draws
     public RenderTexture tickState;         // 2048 x 64: the state rows after a tick
     public RenderTexture stage;             // 2048 x 21: what the commit needs of RAM as it was (MachineGather.shader)
-    public RenderTexture window;            // 2048 x 11: the rows the control pass draws, then copies into the state
+    public RenderTexture window;            // 2048 x 11: the runs of RAM the control pass draws, then copies into the state
     public Material tickMaterial;           // MachineTickLean.shader: CPUTick, on the tick camera's mesh
     // The tick is a camera's pass into eight targets, eight state texels a pixel, and what the
     // cores stored is committed as points by another camera (docs/machine/multicore.md, "In Unity").

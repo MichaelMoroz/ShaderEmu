@@ -2,11 +2,8 @@
 #define FB_H
 
 
-// RAM_ADDR / RAM_LIN: see types.h
-#ifndef STATE_TEX_HEIGHT
-#define STATE_TEX_HEIGHT 9280   // the state texture's rows: 64 of state, then RAM to 0x92000000
-#endif
-#define RAM_MAX (2048 * (STATE_TEX_HEIGHT - 64) * 4 * 4)
+// RAM_ADDR / RAM_LIN: see types.h; STATE_TEX_HEIGHT and RAM_MAX: layout.h
+#include "layout.h"
 
 
 /* shift by two to ignore byte offset */

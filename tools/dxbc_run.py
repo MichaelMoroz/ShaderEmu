@@ -137,8 +137,8 @@ class Machine:
             op = m.group(2).lower()
             ops = [Operand(o) for o in split_operands(m.group(3))] if not op.startswith('dcl_') else []
             self.ins.append((op, ops, m.group(3)))
-        rows = int(np.fromfile(snapshot, dtype=np.uint32, count=4)[3])   # the header's height
-        self.state = np.memmap(snapshot, dtype=np.uint32, mode='r', offset=32).reshape(rows, 2048, 4)
+        width, rows = (int(v) for v in np.fromfile(snapshot, dtype=np.uint32, count=4)[2:4])   # the header's width and height
+        self.state = np.memmap(snapshot, dtype=np.uint32, mode='r', offset=32).reshape(rows, width, 4)
         cb = open(constants, 'rb').read()
         self.cb = [list(struct.unpack_from('<4I', cb, 16 * i)) for i in range(len(cb) // 16)]
         self.pixel = pixel
@@ -269,7 +269,7 @@ class Machine:
         if tex != 0:
             return [0, 0, 0, 0]
         x, y = coord[0], coord[1]
-        if x >= 2048 or y >= self.state.shape[0]:
+        if x >= self.state.shape[1] or y >= self.state.shape[0]:
             return [0, 0, 0, 0]
         return [int(v) for v in self.state[y, x]]
 
@@ -421,7 +421,7 @@ class Machine:
                 s = o[2].sw4
                 self.write(o[0], [t[s[0]], t[s[1]], t[s[2]], t[s[3]]])
             elif op == 'resinfo_uint':
-                t = [2048, self.state.shape[0], 0, 1]
+                t = [self.state.shape[1], self.state.shape[0], 0, 1]
                 s = o[2].sw4
                 self.write(o[0], [t[s[0]], t[s[1]], t[s[2]], t[s[3]]])
             elif op in ('add', 'mul', 'div', 'lt', 'ge', 'eq', 'ne', 'min', 'max'):

@@ -50,7 +50,7 @@ Shader "ShaderEmu/Display"
             }
 
             uint4 ram(uint index) {
-                return _State[uint2(index % 2048, (uint)((int)_StateRow + (int)(index / 2048)))];
+                return _State[uint2(index % 8192, (uint)((int)_StateRow + (int)(index / 8192)))];   // (rows of 8,192: docs/machine/gpu.md)
             }
             uint word(uint4 t, uint i) {
                 return i == 0 ? t.r : i == 1 ? t.g : i == 2 ? t.b : t.a;

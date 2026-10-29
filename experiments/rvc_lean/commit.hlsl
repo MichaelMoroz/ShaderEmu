@@ -21,12 +21,13 @@ uniform uint _ZapKind, _ZapX, _ZapY, _ZapR, _ZapWord, _ZapMaskLo, _ZapMaskHi, _Z
 #define CORES 256
 #endif
 #define TEX(p) _SelfTexture2D[p]
-#define RAM_ADDR(t) uint2((t) % 2048, 64 + (t) / 2048)
+#define RAM_W 8192u   // the state texture's texels a row (tick.hlsl)
+#define RAM_ADDR(t) uint2((t) % RAM_W, 64 + (t) / RAM_W)
 #ifndef STATE_TEX_HEIGHT
-#define STATE_TEX_HEIGHT 9280u   // the state texture's rows: 64 of state, then RAM to 0x92000000
+#define STATE_TEX_HEIGHT 2368u   // the state texture's rows: 64 of state, then RAM to 0x92000000
 #endif
-#define RAM_TEXELS (2048u * (STATE_TEX_HEIGHT - 64u))
-#define CTRL_ROW (64u + 0x100000u / 2048u)   // the control words' row (0x81000000), the control pass's
+#define RAM_TEXELS (RAM_W * (STATE_TEX_HEIGHT - 64u))
+#define CTRL_ROW (64u + 0x100000u / RAM_W)   // the control words' row (0x81000000, its first 2,048 texels), the control pass's
 #define L1_AT 44
 #define FP_AT 492
 #ifndef CORE0_BITS
@@ -136,15 +137,14 @@ uint source_word(uint a) {
         return idx(cached(t, c) ? c : TEX(RAM_ADDR(t)), (a >> 2) & 3);
     }
     [branch] if ((a & 0x40000000) == 0) return 0;
-    uint2 d; _Data_ROM.GetDimensions(d.x, d.y);
     uint t = (a - 0x40000000) >> 4, i = (a >> 2) & 3;
-    uint2 p = uint2(t % d.x, d.y - 1 - t / d.x);
+    uint2 p = uint2(t % RAM_W, t / RAM_W);
     return asuint(_Data_ROM[p])[i];   // (the ROM: a texel a pixel)
 }
 // RAM texel at pos as the selected core's pass leaves it: its copy or fill, or its cache's texel
 // and the one store the cache had no room for. False when the core stored nothing there.
 bool core_texel(uint2 pos, inout uint4 r) {
-    uint o = ((pos.y - 64) * 2048 + pos.x) << 4, bloom = st(41).x, stall = st(28).x;
+    uint o = ((pos.y - 64) * RAM_W + pos.x) << 4, bloom = st(41).x, stall = st(28).x;
     uint4 t37 = st(37), t8 = st(8);
     uint dst = t37.w & 0x7fffffff, n = st(38).z;
     bool op = stall == STALL_COPY || stall == STALL_FILL;
@@ -180,7 +180,7 @@ uint copy_bands() {
 }
 bool writeback(uint2 pos, out uint4 r) {
     r = 0;
-    uint t = (pos.y - 64) * 2048 + pos.x;
+    uint t = (pos.y - 64) * RAM_W + pos.x;
     uint4 c = ram(GPU_COPY);
     if (pos.y < 64 || t >= 0x1e0000u || c.r == 0) return false;   // (what a GPU program may own: 0x80000000 to 0x81e00000)
     if (t == GPU_COPY) return true;                          // made: cleared
@@ -205,15 +205,15 @@ bool writeback(uint2 pos, out uint4 r) {
 uint zap_hash(uint n) { n ^= n >> 16; n *= 0x7feb352du; n ^= n >> 15; n *= 0x846ca68bu; n ^= n >> 16; return n; }
 uint zap_bands() {
     uint reach = _ZapKind == 2 ? _ZapR : 0;
-    return _ZapKind == 0 ? 0 : ram_bands((_ZapY - min(_ZapY, reach)) >> 7, min((_ZapY + reach) >> 7, (STATE_TEX_HEIGHT - 65) >> 7));
+    return _ZapKind == 0 ? 0 : ram_bands((_ZapY - min(_ZapY, reach)) >> 5, min((_ZapY + reach) >> 5, (STATE_TEX_HEIGHT - 65) >> 5));   // (32 rows a band)
 }
 uint4 zap(uint2 pos, uint4 r) {
-    uint row = pos.y - 64, reach = _ZapKind == 2 ? _ZapR : 0, mb = row >> 5, mask = _ZapMaskLo | _ZapMaskHi << 16;
+    uint row = pos.y - 64, reach = _ZapKind == 2 ? _ZapR : 0, mb = row >> 3, mask = _ZapMaskLo | _ZapMaskHi << 16;
     uint zone = mb < 9 ? 0 : mb < 96 ? 1 : mb < 112 ? 2 : mb < 119 ? 3 : mb < 123 ? 4 : 5;   // whose a row is
     if (_ZapKind == 0 || pos.x + reach < _ZapX || pos.x > _ZapX + reach || row + reach < _ZapY || row > _ZapY + reach) return r;
     if (((_ZapZones >> zone) & 1) == 0) return r;
     if (_ZapKind == 1) return r ^ uint4(_ZapWord == 0 ? mask : 0, _ZapWord == 1 ? mask : 0, _ZapWord == 2 ? mask : 0, _ZapWord == 3 ? mask : 0);
-    uint seed = zap_hash(pos.x + pos.y * 2048u + _ZapSeed * 0x9e3779b9u);
+    uint seed = zap_hash(pos.x + pos.y * RAM_W + _ZapSeed * 0x9e3779b9u);
     return r ^ (uint4(zap_hash(seed), zap_hash(seed + 1), zap_hash(seed + 2), zap_hash(seed + 3)) & mask);
 }
 // the bands the plain draw makes whole: all at _Init, else what the host changes
@@ -227,7 +227,7 @@ uint copy_rows() {
     uint bytes = (c.r & SUBMIT_INTO) ? max(c.a, c.b & 0xffff) * (c.b >> 16) * 4 : d.g * d.b * 4;
     if (bytes == 0 || first >= RAM_TEXELS * 16) return 0;
     uint last = min(first + bytes - 1, RAM_TEXELS * 16 - 1);
-    return (64 + (first >> 15)) | ((64 + (last >> 15)) << 16);
+    return (64 + (first >> 17)) | ((64 + (last >> 17)) << 16);   // (128 KB a row)
 }
 
 struct v2f { float4 vertex : SV_POSITION; nointerpolation uint core : TEXCOORD0; };
@@ -236,16 +236,16 @@ v2f commit_vert(uint id : SV_VertexID) {
     o.core = id;
     o.vertex = float4(0, 0, 0, 1);
 #ifndef COMMIT_POINTS
-    // the state rows, and each band of RAM that is drawn (quad 0, then 32 of 128 rows)
+    // the state rows (as wide as the cores' block), and each band of RAM that is drawn (quad 0, then bands of 32 rows)
     static const float2 corners[6] = {{0, 0}, {0, 1}, {1, 1}, {1, 0}, {0, 0}, {1, 1}};
     uint q = id / 6;
     float2 c = corners[id % 6], size;
     _SelfTexture2D.GetDimensions(size.x, size.y);
-    float top = q == 0 ? 0.0 : 64.0 + (q - 1) * 128.0, rows = q == 0 ? 64.0 : 128.0;
+    float top = q == 0 ? 0.0 : 64.0 + (q - 1) * 32.0, rows = q == 0 ? 64.0 : 32.0;
     core = 0;
     bool on = q == 0 || (((bands() | TEX(uint2(41, 0)).z) >> ((q - 1) & 31)) & 1) != 0;
     // a band otherwise only of the picture copy (this commit's and the last's) and the control words
-    // (_CommitAlways: the control pass's row, CTRL_ROW): those rows of it, not all 128
+    // (_CommitAlways: the control pass's row, CTRL_ROW): those rows of it, not all 32
     uint now = copy_rows(), was = TEX(uint2(39, 0)).x, ctrl = q - 1 < 32 && ((_CommitAlways >> (q - 1)) & 1) != 0 ? CTRL_ROW | CTRL_ROW << 16 : 0;
     [branch] if (!on && (now | was | ctrl) != 0) {
         uint lo = min(min(now != 0 ? now & 0xffff : 0xffff, was != 0 ? was & 0xffff : 0xffff), ctrl != 0 ? CTRL_ROW : 0xffff);
@@ -253,7 +253,7 @@ v2f commit_vert(uint id : SV_VertexID) {
         float a = max(top, (float)lo), b = min(top + rows, (float)hi + 1.0);
         if (a < b) { on = true; top = a; rows = b - a; }
     }
-    float2 uv = float2(c.x, (top + c.y * rows) / size.y);
+    float2 uv = float2(c.x * (q == 0 ? 2048.0 / size.x : 1.0), (top + c.y * rows) / size.y);
     o.vertex = on ? float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0) : float4(2.0, 2.0, 0.0, 1.0);
 #endif
     return o;
@@ -278,12 +278,12 @@ void rect(inout TriangleStream<v2f> s, uint k, uint x, uint y, uint w, uint h) {
 }
 // RAM texels t0 to t1, row by row
 void rows(inout TriangleStream<v2f> s, uint k, uint t0, uint t1) {
-    uint y0 = t0 / 2048, y1 = t1 / 2048, x0 = t0 % 2048, x1 = t1 % 2048;
+    uint y0 = t0 / RAM_W, y1 = t1 / RAM_W, x0 = t0 % RAM_W, x1 = t1 % RAM_W;
     if (t0 > t1) return;
     if (y0 == y1) { rect(s, k, x0, 64 + y0, x1 - x0 + 1, 1); return; }
-    rect(s, k, x0, 64 + y0, 2048 - x0, 1);
+    rect(s, k, x0, 64 + y0, RAM_W - x0, 1);
     rect(s, k, 0, 64 + y1, x1 + 1, 1);
-    if (y1 > y0 + 1) rect(s, k, 0, 64 + y0 + 1, 2048, y1 - y0 - 1);
+    if (y1 > y0 + 1) rect(s, k, 0, 64 + y0 + 1, RAM_W, y1 - y0 - 1);
 }
 // point n: core 0's bucket n (256 places), its store with no room, its copy; from 258, 130 a worker
 [maxvertexcount(12)]
@@ -303,11 +303,11 @@ void commit_geom(point v2f IN[1], inout TriangleStream<v2f> s) {
         uint4 tags = tick_state(k, L1_AT + 4 * e);
         for (uint n = 0; n < 3; n++) {
             uint tag = idx(tags, n);
-            if (tag != 0 && tag - 1 < RAM_TEXELS) rect(s, k, (tag - 1) % 2048, 64 + (tag - 1) / 2048, 1, 1);
+            if (tag != 0 && tag - 1 < RAM_TEXELS) rect(s, k, (tag - 1) % RAM_W, 64 + (tag - 1) / RAM_W, 1, 1);
         }
     } else if (e == last) {
         uint t = tick_state(k, 8).x >> 4;
-        if (t < RAM_TEXELS) rect(s, k, t % 2048, 64 + t / 2048, 1, 1);
+        if (t < RAM_TEXELS) rect(s, k, t % RAM_W, 64 + t / RAM_W, 1, 1);
     } else {
         uint stall = tick_state(k, 28).x, dst = tick_state(k, 37).w & 0x7fffffff, n = tick_state(k, 38).z;
         if ((stall == STALL_COPY || stall == STALL_FILL) && n != 0) rows(s, k, dst >> 4, min((dst + n - 1) >> 4, RAM_TEXELS - 1));

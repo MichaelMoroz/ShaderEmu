@@ -122,6 +122,13 @@ public:
             if (d.first == "RAM_DIRECT") csDirect_ = true;
         for (auto& d : opt.compile.defines)
             if (d.first == "RAM_BUFFER") csBuffer_ = true;
+        // (the compute processors, experiments/rvc_compute and experiments/rv32_min, still lay RAM out in rows of
+        // 2,048 texels: docs/machine/gpu.md, "Rows of 8192")
+        if ((getenv("RVC11_COMPUTE") || !opt.computeShader.empty()) && kWidth != 2048) {
+            err = "--compute and RVC11_COMPUTE: their shaders lay RAM out in rows of 2,048 texels, the state texture's are " +
+                  std::to_string(kWidth);
+            return false;
+        }
         if (getenv("RVC11_COMPUTE") && !buildComputeTick(shader, bo, err)) return false;
         if (!opt.computeShader.empty() && !buildComputeCpu(opt.computeShader, bo, err)) return false;
         std::string gpuErr;
@@ -175,7 +182,7 @@ public:
     // core's job, answer and taken words as the pass left them (programs/mc/mc.h: MC_JOB_AT(k) at rvlayout::kMbox + 0x4000 + 64 k), a
     // record of 2 + 6 x 256 words: tag (low, high), then for each core the job's seq, fn, a0, a1, the answer's done, the taken word
     static FILE* mboxLog() { static FILE* f = getenv("RVC_MBOX_LOG") ? fopen(getenv("RVC_MBOX_LOG"), "wb") : nullptr; return f; }
-    static const UINT kMboxJobs = 1024, kMboxX = 1024, kMboxRow = 64 + rvlayout::devT(0xc0400) / 2048;   // (rvlayout::kMbox + 0x4000)
+    static const UINT kMboxJobs = 1024, kMboxX = ramX(rvlayout::devT(0xc0400)), kMboxRow = ramRow(rvlayout::devT(0xc0400));   // (rvlayout::kMbox + 0x4000)
     void mboxRequest(ID3D11Texture2D* src, uint64_t tag) {
         if (mboxLog()) mbox_.request(gpu_.ctx.Get(), src, kMboxX, kMboxRow, tag);
         watchRequest(src, tag);
@@ -206,8 +213,8 @@ public:
     void watchRequest(ID3D11Texture2D* src, uint64_t tag) {
         if (!watchLog_) return;
         for (UINT k = 0; k < watch_.size(); k++) {
-            uint32_t t = (watch_[k] - 0x80000000u) >> 4;   // (RAM texel t from 0x80000000: row 64 + t / 2048)
-            D3D11_BOX b = {t % 2048, 64 + t / 2048, 0, t % 2048 + 1, 64 + t / 2048 + 1, 1};
+            uint32_t t = (watch_[k] - 0x80000000u) >> 4;   // (RAM texel t from 0x80000000)
+            D3D11_BOX b = {ramX(t), ramRow(t), 0, ramX(t) + 1, ramRow(t) + 1, 1};
             gpu_.ctx->CopySubresourceRegion(watchTex_.Get(), 0, k, 0, 0, src, 0, &b);
         }
         watchRb_.request(gpu_.ctx.Get(), watchTex_.Get(), 0, 0, tag);
@@ -247,11 +254,11 @@ public:
                 return false;
             }
             UINT height = 0;
-            auto srv = createTextureTexels(gpu_.device.Get(), bin, 2048, /*flipY=*/true, height, err);
+            auto srv = createTextureTexels(gpu_.device.Get(), bin, kStateWidth, /*flipY=*/false, height, err);
             if (!srv) return false;
-            mat.setTexture("_Data_ROM", srv.Get(), 2048, height);
+            mat.setTexture("_Data_ROM", srv.Get(), kStateWidth, height);
             keep_.push_back(srv);
-            fprintf(stderr, "[harness] _Data_ROM <- %s (2048x%u, RGBAFloat)\n", prefix.c_str(), height);
+            fprintf(stderr, "[harness] _Data_ROM <- %s (%ux%u, RGBAFloat)\n", prefix.c_str(), kStateWidth, height);
             return true;
         }
         const char* lanes[4] = {"r", "g", "b", "a"};
@@ -368,7 +375,7 @@ public:
             // the state rows and the bands other things wrote, then what the cores stored as
             // points (a geometry shader makes each the rectangle it stands for); and the same
             // points into the other buffer, as copies, so that both have them
-            UpdateZone all{1024, kHeight / 2.0f, 2048, (float)kHeight, 1};
+            UpdateZone all{kWidth / 2.0f, kHeight / 2.0f, (float)kWidth, (float)kHeight, 1};
             UINT points = 258 + (activeCores_ - 1) * 130;   // a bucket a point: commit_geom
             crt_.runZone(gpu_, passes_[1], mat, all, 6 * kCommitQuads, false);
             prof_.mark(gpu_.ctx.Get());
@@ -378,7 +385,7 @@ public:
             crt_.runZone(gpu_, copyPasses_[0], mat, all, points, false, D3D11_PRIMITIVE_TOPOLOGY_POINTLIST);
             prof_.mark(gpu_.ctx.Get());
         } else
-        crt_.runZone(gpu_, passes_[1], mat, UpdateZone{1024, kHeight / 2.0f, 2048, (float)kHeight, 1}, bands_ ? 6 * kCommitQuads : 6);
+        crt_.runZone(gpu_, passes_[1], mat, UpdateZone{kWidth / 2.0f, kHeight / 2.0f, (float)kWidth, (float)kHeight, 1}, bands_ ? 6 * kCommitQuads : 6);
         }
         }
         if (rounds > 1) { mat.setInt("_TimePass", 0); mat.setInt("_ZapKind", (int)zapKind); }
@@ -435,8 +442,8 @@ public:
             while (PeekMessageW(&msg, presentWnd_, 0, 0, PM_REMOVE)) DispatchMessageW(&msg);
         }
         rows_.request(gpu_.ctx.Get(), crt_.current(), 0, 0, tag);
-        control_.request(gpu_.ctx.Get(), crt_.current(), 0, kControlRow, tag);
-        net_.request(gpu_.ctx.Get(), crt_.current(), 0, kNetRow, tag);
+        control_.request(gpu_.ctx.Get(), crt_.current(), kControlX, kControlRow, tag);
+        net_.request(gpu_.ctx.Get(), crt_.current(), kNetX, kNetRow, tag);
         field_.request(gpu_.ctx.Get(), crt_.current(), kFieldAt, kFieldRow, tag);
         mboxRequest(crt_.current(), tag);
         // hand the frame to the GPU now, as ExecuteCommandLists does on D3D12: without this it
@@ -819,7 +826,7 @@ private:
     // R: the state rows and RAM, written in place; A: the 64 state rows after the tick; T: the
     // stage, what the commit's gather leaves its other passes; Z: a control zone's rows, drawn
     // there from R and copied back.
-    static const UINT kStageRows = 21, kZoneRows = 8;   // STAGE_ROWS in src/ram.h; the tallest zone
+    static const UINT kStageRows = 21, kStageWidth = 2048, kZoneRows = 8;   // STAGE_ROWS and STAGE_W in src/ram.h; the tallest zone
     bool inplace_ = false;
     bool tickDirect_ = false;
     bool laneField_ = false;   // the tick has the lanes' field: its primitive and points while fieldNow
@@ -957,12 +964,13 @@ private:
     ID3D11ShaderResourceView* stateSrv() const { return inplace_ ? ramSrv_.Get() : crt_.currentSRV(); }
 
     bool createInplace(std::string& err) {
-        struct T { ComPtr<ID3D11Texture2D>* tex; UINT rows; ComPtr<ID3D11ShaderResourceView>* srv; ComPtr<ID3D11RenderTargetView>* rtv; };
-        T all[4] = {{&ram_, kHeight, &ramSrv_, &ramRtv_}, {&tickState_, 64, &tickStateSrv_, &tickStateRtv_},
-                    {&stage_, kStageRows, &stageSrv_, &stageRtv_}, {&zone_, kZoneRows, nullptr, &zoneRtv_}};
+        struct T { ComPtr<ID3D11Texture2D>* tex; UINT width, rows; ComPtr<ID3D11ShaderResourceView>* srv; ComPtr<ID3D11RenderTargetView>* rtv; };
+        // (the state after the tick is the cores' block alone, the stage 2,048 texels wide: src/ram.h)
+        T all[4] = {{&ram_, kWidth, kHeight, &ramSrv_, &ramRtv_}, {&tickState_, kBlockWidth, kRamRow, &tickStateSrv_, &tickStateRtv_},
+                    {&stage_, kStageWidth, kStageRows, &stageSrv_, &stageRtv_}, {&zone_, kWidth, kZoneRows, nullptr, &zoneRtv_}};
         for (T& t : all) {
             D3D11_TEXTURE2D_DESC td{};
-            td.Width = kWidth;
+            td.Width = t.width;
             td.Height = t.rows;
             td.MipLevels = td.ArraySize = 1;
             td.Format = DXGI_FORMAT_R32G32B32A32_UINT;
@@ -979,14 +987,14 @@ private:
         const float zero[4] = {0, 0, 0, 0};
         for (auto* r : {ramRtv_.Get(), tickStateRtv_.Get(), stageRtv_.Get()}) gpu_.ctx->ClearRenderTargetView(r, zero);
         fprintf(stderr, "[harness] RAM in one texture: %.0f MiB of state and RAM, %.1f MiB beside it\n",
-                kWidth * (double)kHeight * 16 / 1048576.0, kWidth * (64.0 + kStageRows + kZoneRows) * 16 / 1048576.0);
+                kWidth * (double)kHeight * 16 / 1048576.0, (kBlockWidth * (double)kRamRow + kStageWidth * kStageRows + kWidth * kZoneRows) * 16 / 1048576.0);
         return true;
     }
 
     // One draw into `rtv`, its row 0 at the viewport's row `top` (a viewport as tall as the
-    // state texture unless `rows` says, so that the passes' own coordinates hold), with R as _SelfTexture2D.
+    // state texture unless `rows` and `width` say, so that the passes' own coordinates hold), with R as _SelfTexture2D.
     void drawInto(GpuPass& pass, Material& mat, ID3D11RenderTargetView* rtv, float top, UINT vertices,
-                  D3D11_PRIMITIVE_TOPOLOGY topology, const UpdateZone* z = nullptr, UINT rows = kHeight) {
+                  D3D11_PRIMITIVE_TOPOLOGY topology, const UpdateZone* z = nullptr, UINT rows = kHeight, UINT width = kWidth) {
         ID3D11DeviceContext* ctx = gpu_.ctx.Get();
         if (z) {
             mat.setVector("CustomRenderTextureCenters", z->centerX, z->centerY, 0.5, 0);
@@ -1005,7 +1013,7 @@ private:
             ctx->OMSetRenderTargetsAndUnorderedAccessViews(1, &rtv, nullptr, pass.psLayout.uavs[0].slot, 1, &uav, nullptr);
         else
             ctx->OMSetRenderTargets(1, &rtv, nullptr);
-        D3D11_VIEWPORT vp{0, -top, (float)kWidth, (float)rows, 0, 1};
+        D3D11_VIEWPORT vp{0, -top, (float)width, (float)rows, 0, 1};
         ctx->RSSetViewports(1, &vp);
         ctx->RSSetState(gpu_.rasterNoCull.Get());
         ctx->OMSetBlendState(gpu_.blendOpaque.Get(), nullptr, 0xffffffff);
@@ -1097,14 +1105,14 @@ private:
             if (freezeAsked && !init) {
                 profEnd();
                 rows_.request(ctx, ram_.Get(), 0, 0, tag);
-                control_.request(ctx, ram_.Get(), 0, kControlRow, tag);
-                net_.request(ctx, ram_.Get(), 0, kNetRow, tag);
+                control_.request(ctx, ram_.Get(), kControlX, kControlRow, tag);
+                net_.request(ctx, ram_.Get(), kNetX, kNetRow, tag);
                 field_.request(ctx, ram_.Get(), kFieldAt, kFieldRow, tag);
             mboxRequest(ram_.Get(), tag);
                 if (!getenv("RVC11_NO_FLUSH")) ctx->Flush();
                 return true;
             }
-            D3D11_BOX rows{0, 0, 0, kWidth, 64, 1};
+            D3D11_BOX rows{0, 0, 0, kBlockWidth, kRamRow, 1};
             ctx->CopySubresourceRegion(tickState_.Get(), 0, 0, 0, 0, ram_.Get(), 0, &rows);
             if (ticks) drawInto(mrt_ ? unpackPasses_[0] : passes_[0], mat, tickStateRtv_.Get(), 0,
                                 (std::max)(6u, 3 * tickPrims()), D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST, &core0);
@@ -1112,18 +1120,18 @@ private:
             if (timeIt && round == rounds - 1) ctx->End(tsQuery_[1].Get());
             // the commit: the gather into T, then the state rows and the points into R
             if (!gpuPasses_.empty()) mat.setTexture("_GpuTarget", gpuSrv_.Get(), kGpuTarget, kGpuTarget);
-            mat.setTexture("_TickState", tickStateSrv_.Get(), kWidth, 64);
+            mat.setTexture("_TickState", tickStateSrv_.Get(), kBlockWidth, kRamRow);
             mat.setTexture("_Ram", ramSrv_.Get(), kWidth, kHeight);
             // (RVC_BLITS=gather,points,gpu: only those drawn as blits, to look at one alone)
             static const char* blitsOnly = getenv("RVC_BLITS");
             auto blit = [&](const char* what) { return !blitsOnly || strstr(blitsOnly, what) != nullptr; };
             if (!gatherAmp_.empty() && blit("gather")) {
                 mat.setInt("_GatherPoints", 1 + activeCores_);
-                drawInto(gatherAmp_[0], mat, stageRtv_.Get(), 0, 6, D3D11_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST, nullptr, kStageRows);
+                drawInto(gatherAmp_[0], mat, stageRtv_.Get(), 0, 6, D3D11_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST, nullptr, kStageRows, kStageWidth);
             } else
-                drawInto(gatherPasses_[0], mat, stageRtv_.Get(), 0, 1 + activeCores_, D3D11_PRIMITIVE_TOPOLOGY_POINTLIST, nullptr, kStageRows);
+                drawInto(gatherPasses_[0], mat, stageRtv_.Get(), 0, 1 + activeCores_, D3D11_PRIMITIVE_TOPOLOGY_POINTLIST, nullptr, kStageRows, kStageWidth);
             prof_.mark(ctx);
-            mat.setTexture("_Stage", stageSrv_.Get(), kWidth, kStageRows);
+            mat.setTexture("_Stage", stageSrv_.Get(), kStageWidth, kStageRows);
             drawInto(passes_[1], mat, ramRtv_.Get(), 0, 6, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             prof_.mark(ctx);
             bool field = ticks && fieldDraw_;
@@ -1187,8 +1195,8 @@ private:
             while (PeekMessageW(&msg, presentWnd_, 0, 0, PM_REMOVE)) DispatchMessageW(&msg);
         }
         rows_.request(ctx, ram_.Get(), 0, 0, tag);
-        control_.request(ctx, ram_.Get(), 0, kControlRow, tag);
-        net_.request(ctx, ram_.Get(), 0, kNetRow, tag);
+        control_.request(ctx, ram_.Get(), kControlX, kControlRow, tag);
+        net_.request(ctx, ram_.Get(), kNetX, kNetRow, tag);
         field_.request(ctx, ram_.Get(), kFieldAt, kFieldRow, tag);
         mboxRequest(ram_.Get(), tag);
         if (!getenv("RVC11_NO_FLUSH")) ctx->Flush();
@@ -1299,7 +1307,7 @@ private:
     // which holds the zone before the dispatch and is copied back after it.
     ComPtr<ID3D11ComputeShader> cs_;
     bool csDirect_ = false, csBuffer_ = false, ramImported_ = false;
-    static const UINT kRamTexels = 2048 * (kHeight - 64);
+    static const UINT kRamTexels = kWidth * (kHeight - kRamRow);
     ComPtr<ID3D11ComputeShader> csImport_;
     StageLayout csImportLayout_;
     ComPtr<ID3D11Buffer> ramBuf_;
@@ -1557,8 +1565,8 @@ private:
             setSync(0, 0, from, count);
             ctx->Dispatch((count + 255) / 256, 1, 1);
         };
-        const uint32_t net0 = (kNetRow - 64) * 2048;
-        texels((kControlRow - 64) * 2048, kControlTexels);
+        const uint32_t net0 = (kNetRow - kRamRow) * kStateWidth + kNetX;
+        texels((kControlRow - kRamRow) * kStateWidth + kControlX, kControlTexels);
         if (con) texels(net0 + kConHost, 1);
         if (net) texels(net0 + kNetRing, kNetSlot * kNetSlots);
         if (fetch) texels(rvlayout::devT(0x16c000), 0x4000);   // FETCH_DATA (src/gpu.h); its words are control words

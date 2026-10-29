@@ -24,7 +24,7 @@ Shader "ShaderEmu/PersistRead"
 
             Texture2D<uint4> _State;
 
-            static const uint DataRow = 64 + 0x16c000 / 2048;
+            static const uint DataRow = 64 + 0x16c000 / 8192;   // (a row's start: rows of 8,192 texels)
 
             // Blit's rectangle over the whole target: clip space as the card has it, row 0 at y = 1.
             float4 vert(appdata_img v) : SV_Position {
@@ -34,7 +34,7 @@ Shader "ShaderEmu/PersistRead"
             float4 frag(float4 at : SV_Position) : SV_Target {
                 uint n = (uint)at.y * 256 + (uint)at.x;
                 uint texel = n / 4, k = n & 3;
-                uint4 t = _State[uint2(texel % 2048, DataRow + texel / 2048)];
+                uint4 t = _State[uint2(texel % 8192, DataRow + texel / 8192)];
                 uint v = k == 0 ? t.r : k == 1 ? t.g : k == 2 ? t.b : t.a;
                 return float4(v & 0xff, (v >> 8) & 0xff, (v >> 16) & 0xff, v >> 24) / 255.0;
             }

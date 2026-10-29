@@ -26,7 +26,9 @@ Shader "ShaderEmu/Readback"
 
             Texture2D<uint4> _State;
 
-            static const uint Words = 1032, ControlRow = 64 + 0x100000 / 2048, WindowRow = 64 + 0x16b800 / 2048;
+            // (the state's rows are 8,192 texels: the control words the first 2,048 of theirs, the network's row the last)
+            static const uint Words = 1032, ControlRow = 64 + 0x100000 / 8192, ControlX = 0x100000 % 8192;
+            static const uint WindowRow = 64 + 0x16b800 / 8192, WindowX = 0x16b800 % 8192;
             static const float Rows = 32;   // the target's height: EmuMachine's MaxRounds
             uniform uint _Row;
 
@@ -40,7 +42,7 @@ Shader "ShaderEmu/Readback"
                 uint texel = n / 4, k = n & 3;
                 uint more = texel - 128;
                 more = more < 40 ? more : more < 112 ? 0x200 + (more - 40) : 40 + (more - 112);   // (the counts and the bits, the console)
-                uint4 t = texel < 64 ? _State[uint2(texel, 0)] : texel < 128 ? _State[uint2(texel - 64, ControlRow)] : _State[uint2(more, WindowRow)];
+                uint4 t = texel < 64 ? _State[uint2(texel, 0)] : texel < 128 ? _State[uint2(ControlX + texel - 64, ControlRow)] : _State[uint2(WindowX + more, WindowRow)];
                 uint v = k == 0 ? t.r : k == 1 ? t.g : k == 2 ? t.b : t.a;
                 return float4(v & 0xff, (v >> 8) & 0xff, (v >> 16) & 0xff, v >> 24) / 255.0;
             }

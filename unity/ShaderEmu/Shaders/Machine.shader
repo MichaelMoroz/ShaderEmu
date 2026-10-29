@@ -99,7 +99,7 @@ Shader "ShaderEmu/Machine"
 
             [maxvertexcount(4)]
             void state_geom(triangle blit_v2f corners[3], uint which : SV_PrimitiveID, inout TriangleStream<blit_v2f> stream) {
-                if (which == 0) machine_rows(stream, 0.0, 64.0, STATE_TEX_HEIGHT);
+                if (which == 0) machine_rect(stream, 0.0, STATE_BLOCK_W, RAM_W, 0.0, RAM_ROW, STATE_TEX_HEIGHT);   // (the cores' block: layout.h)
             }
 
             uint4 frag(blit_v2f i) : SV_Target {
@@ -110,7 +110,7 @@ Shader "ShaderEmu/Machine"
 
         Pass
         {
-            // From the state into the window: pixel (x, r) is the state's (x, window_state_row(r)).
+            // From the state into the window: pixel (x, r) is the state's window_state_pos(x, r).
             Name "GPUControl"
 
             CGPROGRAM
@@ -181,9 +181,9 @@ Shader "ShaderEmu/Machine"
                 _NetTxAck = (_NetTxAckLo & 0xffff) | (_NetTxAckHi << 16);
                 _NetRxSeq = (_NetRxSeqLo & 0xffff) | (_NetRxSeqHi << 16);
                 uint2 pos = (uint2)i.vertex.xy;
-                pos.y = window_state_row(pos.y);
+                pos = window_state_pos(pos);
                 if (_GpuDrawn == 0 && pos.y >= 64) {
-                    uint index = (pos.y - 64) * 2048 + pos.x;
+                    uint index = (pos.y - 64) * RAM_W + pos.x;
                     if (index == GPU_CTRL || index == GPU_COPY) return _SelfTexture2D[pos];
                 }
                 return gpu_control(pos);
@@ -253,7 +253,7 @@ Shader "ShaderEmu/Machine"
                 // the lanes' field (lean/tick.hlsl, docs/machine/lanes.md): rows 48 to 63, lane F's texel from its
                 // pixel in the targets (rows 8 to 15 of the bands, from column 16), while a job is posted
                 [branch] if (pos.y >= WORKER_BAND_ROWS) {
-                    uint4 job = _SelfTexture2D[uint2(0x0C0190u % 2048u, 64u + 0x0C0190u / 2048u)];
+                    uint4 job = _SelfTexture2D[uint2(0x0C0190u % 8192u, 64u + 0x0C0190u / 8192u)];
                     uint F = ((pos.y - WORKER_BAND_ROWS) * 2048u + pos.x) >> 3, r = F / 248u;
                     if (_Init || job.x == 0 || F >= (min(job.z, 3968u) + 247u) / 248u * 248u) return _SelfTexture2D[pos];
                     return tick_out(pos.x & 7, uint2(16u + F % 248u, (r >> 3) * TICK_STATE_ROWS + 8u + (r & 7u)));
@@ -289,19 +289,14 @@ Shader "ShaderEmu/Machine"
 
             Texture2D<uint4> _Window;
 
-            [maxvertexcount(12)]
+            [maxvertexcount(44)]
             void window_geom(triangle blit_v2f corners[3], uint which : SV_PrimitiveID, inout TriangleStream<blit_v2f> stream) {
                 if (which != 0) return;
-                float rows = 9280.0;   // STATE_TEX_HEIGHT (src/types.cginc)
-                machine_rows(stream, WINDOW_CONTROL, 1.0, rows);
-                machine_rows(stream, WINDOW_COUNTS, 1.0, rows);
-                machine_rows(stream, WINDOW_NET, WINDOW_ROWS - 2.0, rows);
+                for (uint r = 0; r < WINDOW_ROWS; r++) window_run(stream, r);
             }
 
             uint4 frag(blit_v2f i) : SV_Target {
-                uint2 pos = (uint2)i.vertex.xy;
-                uint r = pos.y == WINDOW_CONTROL ? 0 : pos.y == WINDOW_COUNTS ? 1 : 2 + pos.y - WINDOW_NET;
-                return _Window[uint2(pos.x, r)];
+                return _Window[window_of((uint2)i.vertex.xy)];
             }
             ENDCG
         }

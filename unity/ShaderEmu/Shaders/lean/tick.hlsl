@@ -34,11 +34,14 @@ uniform uint _HostMtimeLo, _HostMtimeHi;
 #define CORES 256
 #endif
 #define TEX(p) _SelfTexture2D[p]
-#define RAM_ADDR(t) uint2((t) % 2048, 64 + (t) / 2048)
+// The state texture: rows of RAM_W texels, RAM's texel t at (t % RAM_W, 64 + t / RAM_W), the ROM's texel t at
+// (t % RAM_W, t / RAM_W) of its own (experiments/rvc_opt/src/layout.h; docs/machine/gpu.md, "Rows of 8192").
+#define RAM_W 8192u
+#define RAM_ADDR(t) uint2((t) % RAM_W, 64 + (t) / RAM_W)
 #ifndef STATE_TEX_HEIGHT
-#define STATE_TEX_HEIGHT 9280u   // the state texture's rows: 64 of state, then RAM to 0x92000000
+#define STATE_TEX_HEIGHT 2368u   // the state texture's rows: 64 of state, then RAM to 0x92000000
 #endif
-#define RAM_MAX (2048u * (STATE_TEX_HEIGHT - 64u) * 16u)
+#define RAM_MAX (RAM_W * (STATE_TEX_HEIGHT - 64u) * 16u)
 // A core's state, as texels numbered 64 to a row of core 0's block: 0-2 the CSRs, 8 the store a
 // full cache had no room for and the privilege, 10 the timer's compare, 28 the stall, the count
 // and the passes, 29-36 x1-x31 and pc, 37 the reservation and a copy's source and destination,
@@ -348,9 +351,8 @@ uint load_word(inout uint4 c[C_N], uint a) {
         return o < RAM_MAX ? ram_word(c, o) : 0;
     }
     [branch] if (a & 0x40000000) {
-        uint2 d; _Data_ROM.GetDimensions(d.x, d.y);
         uint t = (a - 0x40000000) >> 4;
-        return asuint(_Data_ROM[uint2(t % d.x, d.y - 1 - t / d.x)])[(a >> 2) & 3];   // (the ROM: a texel a pixel)
+        return asuint(_Data_ROM[uint2(t % RAM_W, t / RAM_W)])[(a >> 2) & 3];   // (the ROM: a texel a pixel)
     }
     [branch] if (a - 0x1020 < 0xfe0)
         return unpack(rom4(_Data_DTB_R, _Data_DTB_G, _Data_DTB_B, _Data_DTB_A, uint2((a - 0x1020) >> 4, 0), (a >> 2) & 3));

@@ -25,7 +25,8 @@ Shader "ShaderEmu/MemHeat"
             Texture2D<uint4> _State;
             uint _Strips;
 
-            static const uint TexWidth = 2048, StateRows = 64, RamRows = 9216;   // RAM to 0x92000000
+            // RAM to 0x92000000 in the state's rows of 8,192 texels, shown in rows of ViewW (docs/machine/gpu.md, "Rows of 8192")
+            static const uint TexWidth = 8192, StateRows = 64, RamRows = 2304, ViewW = 2048, ViewRows = RamRows * TexWidth / ViewW;
 
             uint hash(uint x) {
                 x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16;
@@ -39,18 +40,19 @@ Shader "ShaderEmu/MemHeat"
                 float2 uv = i.globalTexcoord.xy;
                 float2 dim = _CustomRenderTextureInfo.xy;
                 uint strips = max(_Strips, 1);
-                float rowsPerStrip = (float)RamRows / strips;
+                float rowsPerStrip = (float)ViewRows / strips;
                 float sx = uv.x * strips;
                 uint strip = min((uint)sx, strips - 1);
-                float2 texel = float2(frac(sx) * TexWidth, StateRows + (strip + uv.y) * rowsPerStrip);
-                float2 footprint = float2(TexWidth * strips / dim.x, rowsPerStrip / dim.y);
+                float2 texel = float2(frac(sx) * ViewW, (strip + uv.y) * rowsPerStrip);
+                float2 footprint = float2(ViewW * strips / dim.x, rowsPerStrip / dim.y);
 
                 uint h = 0;
                 uint4 first = 0;
                 for (uint k = 0; k < 16; k++) {
                     float2 cell = (float2(k & 3, k >> 2) + 0.5) / 4.0;
-                    int2 t = clamp(int2(texel + (cell - 0.5) * footprint), int2(0, StateRows), int2(TexWidth - 1, StateRows + RamRows - 1));
-                    uint4 a = _State.Load(int3(t, 0));
+                    int2 v = clamp(int2(texel + (cell - 0.5) * footprint), int2(0, 0), int2(ViewW - 1, ViewRows - 1));
+                    uint index = (uint)v.y * ViewW + (uint)v.x;
+                    uint4 a = _State.Load(int3(index % TexWidth, StateRows + index / TexWidth, 0));
                     h = hash(h ^ a.r) + hash(a.g + 0x9e3779b9u) + hash(a.b ^ 0x85ebca6bu) + hash(a.a + k);
                     if (k == 5) first = a;
                 }

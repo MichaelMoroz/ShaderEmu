@@ -36,7 +36,7 @@ Shader "ShaderEmu/MachineGather"
             #define GPU_DEVICE
             #define COMMIT_GATHER
             // only the points camera draws them, into the stage (its target's size says which that is)
-            #define RAM_GEOM_GUARD if ((uint)_ScreenParams.x != 2048u || (uint)_ScreenParams.y != STAGE_ROWS) return;
+            #define RAM_GEOM_GUARD if ((uint)_ScreenParams.x != STAGE_W || (uint)_ScreenParams.y != STAGE_ROWS) return;
 
             #include "UnityCG.cginc"
             #include "MachineBlit.cginc"

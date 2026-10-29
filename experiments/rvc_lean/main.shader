@@ -165,10 +165,10 @@ Shader "Nix/rvc_lean"
             ram_point commit_vert(uint id : SV_VertexID) { return ram_point_vert(id); }
             uint4 frag(ram_v2f i) : SV_Target { return ram_commit_texel(i); }
             #else
-            // the state commit: one quad of the 64 state rows
+            // the state commit: one quad of the 64 state rows, as wide as the cores' block (layout.h)
             ram_v2f commit_vert(uint id : SV_VertexID) {
                 static const float2 corners[6] = {{0, 0}, {0, 1}, {1, 1}, {1, 0}, {0, 0}, {1, 1}};
-                float2 p = float2(corners[id % 6].x, corners[id % 6].y * 64.0 / STATE_TEX_HEIGHT);
+                float2 p = float2(corners[id % 6].x * STATE_BLOCK_W / RAM_W, corners[id % 6].y * RAM_ROW / STATE_TEX_HEIGHT);
                 ram_v2f o;
                 o.vertex = float4(p.x * 2.0 - 1.0, 1.0 - p.y * 2.0, 0.5, 1.0);
                 o.value = 0;
@@ -183,7 +183,7 @@ Shader "Nix/rvc_lean"
 #if RAM_TILE_BITS != 0
 #error COMMIT_BANDS needs RAM in row order
 #endif
-            // RAM in 4 MB bands (128 rows), as ram_bands (types.h): those this commit changes. The other
+            // RAM in 4 MB bands (RAM_BAND_ROWS rows), as ram_bands (types.h): those this commit changes. The other
             // buffer holds the state of two commits ago, so a band neither this commit nor the
             // last one changes is already right there and is not drawn. The GPU's control words'
             // band is drawn every commit (_CommitAlways), not through these bits.
@@ -245,7 +245,7 @@ Shader "Nix/rvc_lean"
             }
 #endif
 
-            // One quad for the whole texture, or with COMMIT_BANDS (1 + RAM's rows / 128 quads) the
+            // One quad for the whole texture, or with COMMIT_BANDS (1 + RAM's rows / RAM_BAND_ROWS quads) the
             // state rows and each band of RAM that has to be drawn.
             // COMMIT_POINTS (the D3D11 harness with the tick in eight targets, docs/machine/multicore.md):
             // what the cores stored is drawn as points, each made the rectangle it stands for
@@ -288,17 +288,17 @@ Shader "Nix/rvc_lean"
                 }
                 stream.RestartStrip();
             }
-            #define COMMIT_RAM_TEXELS (2048u * (STATE_TEX_HEIGHT - 64u))
+            #define COMMIT_RAM_TEXELS RAM_TEXELS
             // the texels from t0 to t1, row by row
             void commit_rows(inout TriangleStream<v2f_customrendertexture> stream, uint t0, uint t1) {
                 if (t0 > t1) return;
-                uint y0 = t0 / 2048, y1 = t1 / 2048, x0 = t0 % 2048, x1 = t1 % 2048;
+                uint y0 = t0 / RAM_W, y1 = t1 / RAM_W, x0 = t0 % RAM_W, x1 = t1 % RAM_W;
                 if (y0 == y1) {
-                    commit_quad(stream, x0, 64 + y0, x1 - x0 + 1, 1);
+                    commit_quad(stream, x0, RAM_ROW + y0, x1 - x0 + 1, 1);
                 } else {
-                    commit_quad(stream, x0, 64 + y0, 2048 - x0, 1);
-                    commit_quad(stream, 0, 64 + y1, x1 + 1, 1);
-                    if (y1 > y0 + 1) commit_quad(stream, 0, 64 + y0 + 1, 2048, y1 - y0 - 1);
+                    commit_quad(stream, x0, RAM_ROW + y0, RAM_W - x0, 1);
+                    commit_quad(stream, 0, RAM_ROW + y1, x1 + 1, 1);
+                    if (y1 > y0 + 1) commit_quad(stream, 0, RAM_ROW + y0 + 1, RAM_W, y1 - y0 - 1);
                 }
             }
             [maxvertexcount(12)]
@@ -325,12 +325,12 @@ Shader "Nix/rvc_lean"
                     uint4 tags = tick_state(core, L1_STATE_AT + e * L1_STRIDE);
                     for (uint n = 0; n < 3; n++) {
                         uint tag = idx_uint4(tags, n);
-                        if (tag != 0 && tag - 1 < COMMIT_RAM_TEXELS) commit_quad(stream, (tag - 1) % 2048, 64 + (tag - 1) / 2048, 1, 1);
+                        if (tag != 0 && tag - 1 < COMMIT_RAM_TEXELS) commit_quad(stream, (tag - 1) % RAM_W, RAM_ROW + (tag - 1) / RAM_W, 1, 1);
                     }
                 } else if (e == last) {
                     // the store a full cache had no room for
                     uint addr = tick_state(core, 8).r;
-                    if ((addr >> 4) < COMMIT_RAM_TEXELS) commit_quad(stream, (addr >> 4) % 2048, 64 + (addr >> 4) / 2048, 1, 1);
+                    if ((addr >> 4) < COMMIT_RAM_TEXELS) commit_quad(stream, (addr >> 4) % RAM_W, RAM_ROW + (addr >> 4) / RAM_W, 1, 1);
                 } else {
                     // a copy or a fill: the texels from its destination to its end, row by row
                     // (the ones the pass left to the commit, two at most and three rectangles between
@@ -365,10 +365,11 @@ Shader "Nix/rvc_lean"
                 static const float2 corners[6] = {{0, 0}, {0, 1}, {1, 1}, {1, 0}, {0, 0}, {1, 1}};
                 uint quad = IN.vertexID / 6;
                 float2 corner = corners[IN.vertexID % 6];
-                float top = quad == 0 ? 0.0 : 64.0 + (quad - 1) * 128.0, rows = quad == 0 ? 64.0 : 128.0;
+                float top = quad == 0 ? 0.0 : RAM_ROW + (quad - 1) * RAM_BAND_ROWS, rows = quad == 0 ? RAM_ROW : RAM_BAND_ROWS;
                 uint drawn = commit_bands_changed() | STATE_TEX_HART(uint2(41, 0), 0).b, band = quad - 1;
                 bool on = quad == 0 || ((drawn >> (band & 31)) & 1) != 0 || (band < 32 && ((_CommitAlways >> band) & 1) != 0);
-                float2 uv = float2(corner.x, (top + corner.y * rows) / _CustomRenderTextureInfo.y);
+                // (the state rows as wide as the cores' block: the rest of them is no one's)
+                float2 uv = float2(corner.x * (quad == 0 ? (float)STATE_BLOCK_W / RAM_W : 1.0), (top + corner.y * rows) / _CustomRenderTextureInfo.y);
                 v2f_customrendertexture OUT;
                 OUT.vertex = on ? float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0) : float4(2.0, 2.0, 0.0, 1.0);
                 OUT.localTexcoord = float3(uv, 0);
@@ -407,8 +408,9 @@ Shader "Nix/rvc_lean"
 #if CORES > 1
                 uint4 result;
                 MC_GEO_READ
-                if (pos.y < 64) {
-                    // a core's own state, as with one core
+                if (pos.y < RAM_ROW) {
+                    // a core's own state, as with one core (and no one's beside the cores' block)
+                    if (pos.x >= STATE_BLOCK_W) return (uint4)0;
                     uint hb = 0;
                     uint4 own = RAM_TEX(pos);
                     mc_select(0);
@@ -451,7 +453,7 @@ Shader "Nix/rvc_lean"
                             uint stored = STATE_TEX(uint2(41, 0)).r;
                             if (stored == 0) continue;
                             uint stalled = STATE_TEX(uint2(28, 0)).r;
-                            if (((RAM_LIN(pos.x, pos.y - 64) << 4) & ~stored) != 0 && stalled != STALL_MEMOP_COPY && stalled != STALL_MEMOP_FILL) continue;
+                            if (((RAM_LIN(pos.x, pos.y - RAM_ROW) << 4) & ~stored) != 0 && stalled != STALL_MEMOP_COPY && stalled != STALL_MEMOP_FILL) continue;
                         }
                         decode_for_commit();
                         result = commit(pos, result);
@@ -472,7 +474,7 @@ Shader "Nix/rvc_lean"
 #else
                 decode_for_commit();
                 uint4 result = commit(pos, STATE_TEX_HART(pos, 0));
-                if (pos.y >= 64) result = zap(pos, result);
+                if (pos.y >= RAM_ROW) result = zap(pos, result);
 #endif
 #ifdef COMMIT_BANDS
                 if (pos.x == 41 && pos.y == 0) result.b = commit_bands_changed();   // for the next commit

@@ -24,7 +24,7 @@ costs what it did). For one commit the host sets:
 | Uniform | |
 |---|---|
 | `_ZapKind` | 0 nothing, 1 one word of one texel, 2 a square of texels |
-| `_ZapX`, `_ZapY` | the texel: its column, and its row among RAM's rows |
+| `_ZapX`, `_ZapY` | the texel: its column (0 to 8,191), and its row among RAM's rows (128 KB each: `docs/machine/gpu.md`, "Rows of 8192") |
 | `_ZapR` | kind 2: how many texels the square reaches each way |
 | `_ZapWord` | kind 1: which of the texel's four words |
 | `_ZapMaskLo`, `_ZapMaskHi` | the bits that flip (kind 2: of a pattern made from the place and `_ZapSeed`) |
@@ -51,12 +51,12 @@ behaviour: `AGENTS.md`).
 ## Checking it
 
     bin\rvc_harness.exe ... --fixed-dt 0.004 --frames 2600 --bench 0 --save-state A.snap
-    ... --save-state B.snap --zap "1,100,3973,0,2,00ff00ff,0,32" --zap-frame 2000
+    ... --save-state B.snap --zap "1,100,224,0,2,00ff00ff,0,32" --zap-frame 2000
 
 `--zap KIND,X,Y,REACH,WORD,MASK,SEED,ZONES` (mask and seed in hex) is the same hand from the
 harness. Two such boots differ in exactly the texels asked for: one word with the mask's
 bits for kind 1, 49 texels for kind 2 with reach 3, none at all with the zone's bit clear,
-and no state texel. Row 3973 is in the sound card's megabytes, which an idle guest leaves alone.
+and no state texel. Row 224 (0x81c00000) is in the sound card's megabytes, which an idle guest leaves alone.
 
 In play mode: power on, then `ToggleRadiation` on the "Danger" behaviour; its `flips` rises
 and the machine's `zapHead` follows `zapTail`. With the kernel and Linux exposed (`Zone0`,

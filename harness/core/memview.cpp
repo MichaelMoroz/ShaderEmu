@@ -50,6 +50,8 @@ uint word(uint4 t, uint i) {
     return i == 0 ? t.r : i == 1 ? t.g : i == 2 ? t.b : t.a;
 }
 
+static const uint ViewW = 2048;   // the memory image's texels a row
+
 // RAM texel by index (physical address - 0x80000000) / 16.
 uint4 ram(uint index) {
     return Cur.Load(int3(index % TexWidth, StateRows + index / TexWidth, 0));
@@ -181,13 +183,15 @@ Out ps(float4 pos : SV_Position) {
                        max(Heat.Load(int3(px + int2(0, 1), 0)), Heat.Load(int3(px - int2(0, 1), 0))));
     prevHeat = max(prevHeat, around * 0.5);
 
-    // RAM: strip s covers rows [s, s+1) * rowsPerStrip
-    float rowsPerStrip = (float)RamRows / Strips;
+    // RAM, shown in rows of ViewW texels whatever the texture's (rows of 8,192: docs/machine/gpu.md):
+    // strip s covers rows [s, s+1) * rowsPerStrip of them
+    float viewRows = (float)RamRows * TexWidth / ViewW;
+    float rowsPerStrip = viewRows / Strips;
     float memWidth = WinSize.x - Split;
     float sx = (pos.x - Split) / memWidth * Strips;
     uint strip = min((uint)sx, Strips - 1);
-    float2 texel = float2(frac(sx) * TexWidth, StateRows + (strip + pos.y / memHeight) * rowsPerStrip);
-    float2 footprint = float2(TexWidth * Strips / memWidth, rowsPerStrip / memHeight);
+    float2 texel = float2(frac(sx) * ViewW, (strip + pos.y / memHeight) * rowsPerStrip);
+    float2 footprint = float2(ViewW * Strips / memWidth, rowsPerStrip / memHeight);
 
     // A window pixel covers several texels: a 4x4 grid of taps over its footprint, nudged per
     // frame so larger footprints are covered over time.
@@ -197,8 +201,10 @@ Out ps(float4 pos : SV_Position) {
     float2 nudge = float2(h & 0xffff, h >> 16) / 65536.0 * 0.25;
     for (uint k = 0; k < 16; k++) {
         float2 cell = (float2(k & 3, k >> 2) + nudge * 4.0) / 4.0;
-        int2 t = clamp(int2(texel + (cell - 0.5) * footprint), int2(0, StateRows), int2(TexWidth - 1, StateRows + RamRows - 1));
-        uint4 a = Cur.Load(int3(t, 0)), b = Prev.Load(int3(t, 0));
+        int2 v = clamp(int2(texel + (cell - 0.5) * footprint), int2(0, 0), int2(ViewW - 1, (int)viewRows - 1));
+        uint index = (uint)v.y * ViewW + (uint)v.x;
+        int3 t = int3(index % TexWidth, StateRows + index / TexWidth, 0);
+        uint4 a = Cur.Load(t), b = Prev.Load(t);
         if (any(a != b)) changed = true;
         if (k == 5) first = a;
     }

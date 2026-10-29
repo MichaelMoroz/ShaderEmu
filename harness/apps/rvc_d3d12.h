@@ -23,7 +23,7 @@
 
 namespace {
 
-const UINT W = 2048, H = 9280;   // the state texture (rvc_backend.h, kStateHeight)
+const UINT W = 8192, H = 2368;   // the state texture (rvc_backend.h, kStateWidth and kStateHeight)
 const DXGI_FORMAT kStateFormat = DXGI_FORMAT_R32G32B32A32_UINT;
 const UINT kSlots = 3;         // frames in flight
 const UINT kTableSize = 16;    // SRV slots t0..t15 per pass

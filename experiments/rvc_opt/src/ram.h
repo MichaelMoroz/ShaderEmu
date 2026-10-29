@@ -5,13 +5,14 @@
 #ifndef RAM_H
 #define RAM_H
 
-#define RAM_TEXELS (2048u * (STATE_TEX_HEIGHT - 64u))
-// The stage: rows 0-7 a copy's chunk (256 KB: a longer copy takes a pass a chunk), row 8 three
+// (RAM_TEXELS, RAM_W, RAM_ROW: layout.h)
+// The stage, STAGE_W texels a row: rows 0-7 a copy's chunk (256 KB: a longer copy takes a pass a chunk), row 8 three
 // texels a core (its lone store's texel; its fill's or ROM copy's first and last texels) and
 // the head, row 9 the control words before the commit, rows 10-11 the picture's part texels
 // (two a row of the picture), rows 12-20 the zap's square (up to 129 x 129).
+#define STAGE_W 2048u
 #define STAGE_COPY_ROWS 8
-#define STAGE_CHUNK (STAGE_COPY_ROWS * 2048u)
+#define STAGE_CHUNK (STAGE_COPY_ROWS * STAGE_W)
 #define STAGE_SLOT_ROW 8
 #define STAGE_HEAD_X 1024
 #define STAGE_CONTROL_ROW 9
@@ -19,7 +20,9 @@
 #define STAGE_ZAP_ROW 12
 #define STAGE_ROWS 21
 #define STAGE_ZAP_REACH 64
-#define CONTROL_ROW (64 + DEV_T(0x100000u) / 2048)
+// the control words' 2,048 texels (32 KB from 0x81000000): the first of the row CONTROL_ROW
+#define CONTROL_ROW (RAM_ROW + DEV_T(0x100000u) / RAM_W)
+#define CONTROL_X (DEV_T(0x100000u) % RAM_W)
 
 #ifndef RAM_GEOM_GUARD
 #define RAM_GEOM_GUARD
@@ -35,7 +38,7 @@
 
 // RAM as the commit's passes other than the gather have it: the control words alone.
 uint4 ram_stage_read(uint2 pos) {
-    return pos.y == CONTROL_ROW ? _Stage[uint2(pos.x, STAGE_CONTROL_ROW)] : (uint4)0;
+    return pos.y == CONTROL_ROW && pos.x - CONTROL_X < STAGE_W ? _Stage[uint2(pos.x - CONTROL_X, STAGE_CONTROL_ROW)] : (uint4)0;
 }
 
 // Texel w of a core's state as the tick left it, in the layout of its own rows.
@@ -225,11 +228,14 @@ struct ram_v2f {
     nointerpolation uint4 info : TEXCOORD1;
 };
 
-// A rectangle of a target `height` rows high (2048 wide), as two triangles.
-void ram_quad(inout TriangleStream<ram_v2f> stream, uint x, uint y, uint w, uint h, uint height, uint4 value, uint4 info) {
+// A rectangle of a target `size` texels, as two triangles: the state texture (RAM_W x STATE_TEX_HEIGHT)
+// or the stage (STAGE_W x STAGE_ROWS).
+#define RAM_TARGET uint2(RAM_W, STATE_TEX_HEIGHT)
+#define STAGE_TARGET uint2(STAGE_W, STAGE_ROWS)
+void ram_quad(inout TriangleStream<ram_v2f> stream, uint x, uint y, uint w, uint h, uint2 size, uint4 value, uint4 info) {
     if (w == 0 || h == 0) return;
     for (uint corner = 0; corner < 4; corner++) {
-        float2 p = float2(x + (corner & 1) * w, y + (corner >> 1) * h) / float2(2048.0, height);
+        float2 p = float2(x + (corner & 1) * w, y + (corner >> 1) * h) / (float2)size;
         ram_v2f o;
         o.vertex = float4(p.x * 2.0 - 1.0, 1.0 - p.y * 2.0, 0.5, 1.0);   // the target's row 0 at the top
         o.value = value;
@@ -238,17 +244,17 @@ void ram_quad(inout TriangleStream<ram_v2f> stream, uint x, uint y, uint w, uint
     }
     stream.RestartStrip();
 }
-// `count` texels from the start of row `row`
-void ram_span(inout TriangleStream<ram_v2f> stream, uint row, uint count, uint height, uint4 value, uint4 info) {
-    ram_quad(stream, 0, row, 2048, count / 2048, height, value, info);
-    ram_quad(stream, 0, row + count / 2048, count % 2048, 1, height, value, info);
+// `count` texels of the stage from the start of row `row`
+void ram_span(inout TriangleStream<ram_v2f> stream, uint row, uint count, uint4 value, uint4 info) {
+    ram_quad(stream, 0, row, STAGE_W, count / STAGE_W, STAGE_TARGET, value, info);
+    ram_quad(stream, 0, row + count / STAGE_W, count % STAGE_W, 1, STAGE_TARGET, value, info);
 }
 #ifdef RAM_AMP
 // One texel as one triangle, three vertices where a quad is four: its corner and 1.5 texels along each side, which
 // covers that texel's centre and no other (a blit's call has 85 vertices of ram_v2f to make nine points with).
-void ram_tri(inout TriangleStream<ram_v2f> stream, uint x, uint y, uint height, uint4 value, uint4 info) {
+void ram_tri(inout TriangleStream<ram_v2f> stream, uint x, uint y, uint4 value, uint4 info) {
     for (uint corner = 0; corner < 3; corner++) {
-        float2 p = float2(x + (corner == 1 ? 1.5 : 0.0), y + (corner == 2 ? 1.5 : 0.0)) / float2(2048.0, height);
+        float2 p = float2(x + (corner == 1 ? 1.5 : 0.0), y + (corner == 2 ? 1.5 : 0.0)) / (float2)RAM_TARGET;
         ram_v2f o;
         o.vertex = float4(p.x * 2.0 - 1.0, 1.0 - p.y * 2.0, 0.5, 1.0);
         o.value = value;
@@ -261,19 +267,19 @@ void ram_tri(inout TriangleStream<ram_v2f> stream, uint x, uint y, uint height, 
 // RAM texels t0 to t1, row by row
 void ram_rows(inout TriangleStream<ram_v2f> stream, uint t0, uint t1, uint4 value, uint4 info) {
     if (t0 > t1) return;
-    uint y0 = t0 / 2048, y1 = t1 / 2048, x0 = t0 % 2048, x1 = t1 % 2048;
+    uint y0 = t0 / RAM_W, y1 = t1 / RAM_W, x0 = t0 % RAM_W, x1 = t1 % RAM_W;
 #ifdef RAM_AMP
     if (t0 == t1) {
-        ram_tri(stream, x0, 64 + y0, STATE_TEX_HEIGHT, value, info);
+        ram_tri(stream, x0, RAM_ROW + y0, value, info);
         return;
     }
 #endif
     if (y0 == y1) {
-        ram_quad(stream, x0, 64 + y0, x1 - x0 + 1, 1, STATE_TEX_HEIGHT, value, info);
+        ram_quad(stream, x0, RAM_ROW + y0, x1 - x0 + 1, 1, RAM_TARGET, value, info);
     } else {
-        ram_quad(stream, x0, 64 + y0, 2048 - x0, 1, STATE_TEX_HEIGHT, value, info);
-        ram_quad(stream, 0, 64 + y0 + 1, 2048, y1 - y0 - 1, STATE_TEX_HEIGHT, value, info);
-        ram_quad(stream, 0, 64 + y1, x1 + 1, 1, STATE_TEX_HEIGHT, value, info);
+        ram_quad(stream, x0, RAM_ROW + y0, RAM_W - x0, 1, RAM_TARGET, value, info);
+        ram_quad(stream, 0, RAM_ROW + y0 + 1, RAM_W, y1 - y0 - 1, RAM_TARGET, value, info);
+        ram_quad(stream, 0, RAM_ROW + y1, x1 + 1, 1, RAM_TARGET, value, info);
     }
 }
 
@@ -299,31 +305,31 @@ bool ram_core_stored(uint core) {
 #define RAM_GATHER_MOST 24   // vertices a point makes at most
 void ram_gather_point(uint id, inout TriangleStream<ram_v2f> stream) {
     if (id == 0) {
-        ram_quad(stream, STAGE_HEAD_X, STAGE_SLOT_ROW, 1, 1, STAGE_ROWS, uint4(0xffffffff, 0, 0, 0), uint4(RK_VALUE, 0, 0, 0));
-        ram_quad(stream, 0, STAGE_CONTROL_ROW, 2048, 1, STAGE_ROWS, 0, uint4(RK_CONTROL, 0, 0, 0));
+        ram_quad(stream, STAGE_HEAD_X, STAGE_SLOT_ROW, 1, 1, STAGE_TARGET, uint4(0xffffffff, 0, 0, 0), uint4(RK_VALUE, 0, 0, 0));
+        ram_quad(stream, 0, STAGE_CONTROL_ROW, STAGE_W, 1, STAGE_TARGET, 0, uint4(RK_CONTROL, 0, 0, 0));
 #ifdef GPU_DEVICE
         ram_pic p;
-        if (ram_picture(p)) ram_span(stream, STAGE_PICTURE_ROW, 2 * p.height, STAGE_ROWS, 0, uint4(RK_PICSLOT, 0, 0, 0));
+        if (ram_picture(p)) ram_span(stream, STAGE_PICTURE_ROW, 2 * p.height, 0, uint4(RK_PICSLOT, 0, 0, 0));
 #endif
         uint side = 2 * ram_zap_reach() + 1;
-        if (_ZapKind != 0) ram_span(stream, STAGE_ZAP_ROW, side * side, STAGE_ROWS, 0, uint4(RK_ZAPSLOT, side, 0, 0));
+        if (_ZapKind != 0) ram_span(stream, STAGE_ZAP_ROW, side * side, 0, uint4(RK_ZAPSLOT, side, 0, 0));
         return;
     }
     uint core = id - 1;
     if (!ram_core_on(core)) return;
     if (ram_core_stored(core) && (tick_state(core, 8).r >> 4) < RAM_TEXELS)
-        ram_quad(stream, 3 * core, STAGE_SLOT_ROW, 1, 1, STAGE_ROWS, 0, uint4(RK_LONE, core, 0, 0));
+        ram_quad(stream, 3 * core, STAGE_SLOT_ROW, 1, 1, STAGE_TARGET, 0, uint4(RK_LONE, core, 0, 0));
     ram_op op = ram_op_of(core);
     uint t0, t1;
     if ((op.kind == RAM_OP_FILL || op.kind == RAM_OP_ROM) && ram_op_texels(op, t0, t1)) {
-        ram_quad(stream, 3 * core + 1, STAGE_SLOT_ROW, 1, 1, STAGE_ROWS, ram_op_pack(op), uint4(RK_EDGE, core, t0, 0));
-        ram_quad(stream, 3 * core + 2, STAGE_SLOT_ROW, 1, 1, STAGE_ROWS, ram_op_pack(op), uint4(RK_EDGE, core, t1, 0));
+        ram_quad(stream, 3 * core + 1, STAGE_SLOT_ROW, 1, 1, STAGE_TARGET, ram_op_pack(op), uint4(RK_EDGE, core, t0, 0));
+        ram_quad(stream, 3 * core + 2, STAGE_SLOT_ROW, 1, 1, STAGE_TARGET, ram_op_pack(op), uint4(RK_EDGE, core, t1, 0));
     } else if (op.kind == RAM_OP_STAGED) {
         uint c0, c1;
         ram_op rest;
         if (ram_chunk(op, c0, c1, rest)) {
-            ram_quad(stream, STAGE_HEAD_X, STAGE_SLOT_ROW, 1, 1, STAGE_ROWS, uint4(core, c0, c1, rest.n == 0 ? 1 : 0), uint4(RK_VALUE, 0, 0, 0));
-            ram_span(stream, 0, c1 - c0 + 1, STAGE_ROWS, ram_op_pack(op), uint4(RK_CHUNK, core, c0, 0));
+            ram_quad(stream, STAGE_HEAD_X, STAGE_SLOT_ROW, 1, 1, STAGE_TARGET, uint4(core, c0, c1, rest.n == 0 ? 1 : 0), uint4(RK_VALUE, 0, 0, 0));
+            ram_span(stream, 0, c1 - c0 + 1, ram_op_pack(op), uint4(RK_CHUNK, core, c0, 0));
         }
     }
 }
@@ -356,30 +362,30 @@ void ram_gather_amp_geom(point amp_d I[1], inout TriangleStream<ram_v2f> stream,
 
 uint4 ram_gather_texel(ram_v2f i) {
     uint2 pos = (uint2)i.vertex.xy;
-    s_dim = uint2(2048, STATE_TEX_HEIGHT);
+    s_dim = RAM_TARGET;
     _Data_ROM.GetDimensions(m_dim.x, m_dim.y);
 #if CORES > 1
     MC_GEO_READ
 #endif
     uint kind = i.info.x, core = i.info.y;
     [branch]
-    if (kind == RK_CONTROL) return _Ram[uint2(pos.x, CONTROL_ROW)];
+    if (kind == RK_CONTROL) return _Ram[uint2(CONTROL_X + pos.x, CONTROL_ROW)];
 #ifdef GPU_DEVICE
     [branch]
     if (kind == RK_PICSLOT) {
         ram_pic p;
         uint covered;
         ram_picture(p);
-        uint t = ram_picture_slot_texel(p, pos.x + (pos.y - STAGE_PICTURE_ROW) * 2048);
+        uint t = ram_picture_slot_texel(p, pos.x + (pos.y - STAGE_PICTURE_ROW) * STAGE_W);
         return t < RAM_TEXELS ? ram_picture_texel(p, t, RAM_TEX(RAM_ADDR(t)), covered) : (uint4)0;
     }
 #endif
     [branch]
     if (kind == RK_ZAPSLOT) {
-        uint s = pos.x + (pos.y - STAGE_ZAP_ROW) * 2048, side = i.info.y, reach = ram_zap_reach();
+        uint s = pos.x + (pos.y - STAGE_ZAP_ROW) * STAGE_W, side = i.info.y, reach = ram_zap_reach();
         int x = (int)_ZapX - (int)reach + (int)(s % side), row = (int)_ZapY - (int)reach + (int)(s / side);
-        if (x < 0 || x >= 2048 || row < 0 || row >= (int)(STATE_TEX_HEIGHT - 64)) return (uint4)0;
-        uint2 at = uint2(x, row + 64);
+        if (x < 0 || x >= (int)RAM_W || row < 0 || row >= (int)(STATE_TEX_HEIGHT - RAM_ROW)) return (uint4)0;
+        uint2 at = uint2(x, row + RAM_ROW);
         return zap(at, _Ram[at]);
     }
     [branch]
@@ -392,7 +398,7 @@ uint4 ram_gather_texel(ram_v2f i) {
     [branch]
     if (kind == RK_EDGE) return ram_op_texel(core, ram_op_unpack(i.value), i.info.z);
     [branch]
-    if (kind == RK_CHUNK) return ram_op_texel(core, ram_op_unpack(i.value), i.info.z + pos.x + pos.y * 2048);
+    if (kind == RK_CHUNK) return ram_op_texel(core, ram_op_unpack(i.value), i.info.z + pos.x + pos.y * STAGE_W);
     return i.value;
 }
 #endif
@@ -401,7 +407,7 @@ uint4 ram_gather_texel(ram_v2f i) {
 uint4 ram_init_raw(uint2 pos) {
     float3 raw[6];
     for (uint off = 0; off < 6; off++)
-        raw[off] = _Data_RAM_RAW[pos + uint2((off * 2048u) % (2048u * 3), (off / 3) * STATE_TEX_HEIGHT)].rgb;
+        raw[off] = _Data_RAM_RAW[pos + uint2((off * RAM_W) % (RAM_W * 3), (off / 3) * STATE_TEX_HEIGHT)].rgb;
     return unpack_uint4(raw);
 }
 // A staged copy's place in what its core keeps: the stall stays until its last chunk is made,
@@ -429,7 +435,7 @@ uint4 ram_progress(uint core, uint x, uint4 result) {
     return result;
 }
 uint4 ram_state_texel(uint2 pos) {
-    s_dim = uint2(2048, STATE_TEX_HEIGHT);
+    s_dim = RAM_TARGET;
     _Data_ROM.GetDimensions(m_dim.x, m_dim.y);
     if (_Init && _InitRaw) return ram_init_raw(pos);
     uint4 own = _TickState[pos], result;
@@ -478,13 +484,13 @@ uniform uint _FieldPoints;    // of them, before the picture's, the lanes' field
 void ram_commit_point(uint id, inout TriangleStream<ram_v2f> stream) {
     if (id == 0) {
         if (_Init) {
-            ram_quad(stream, 0, 64, 2048, STATE_TEX_HEIGHT - 64, STATE_TEX_HEIGHT, 0, uint4(RK_INIT, 0, 0, 0));
+            ram_quad(stream, 0, RAM_ROW, RAM_W, STATE_TEX_HEIGHT - RAM_ROW, RAM_TARGET, 0, uint4(RK_INIT, 0, 0, 0));
         } else if (_ZapKind != 0) {
             int reach = (int)ram_zap_reach(), x0 = (int)_ZapX - reach, y0 = (int)_ZapY - reach;
-            int x1 = min(x0 + 2 * reach, 2047), y1 = min(y0 + 2 * reach, (int)(STATE_TEX_HEIGHT - 65));
+            int x1 = min(x0 + 2 * reach, (int)RAM_W - 1), y1 = min(y0 + 2 * reach, (int)(STATE_TEX_HEIGHT - RAM_ROW - 1));
             int xa = max(x0, 0), ya = max(y0, 0);
             if (xa <= x1 && ya <= y1)
-                ram_quad(stream, xa, 64 + ya, x1 - xa + 1, y1 - ya + 1, STATE_TEX_HEIGHT, uint4(asuint(x0), asuint(y0), 0, 0), uint4(RK_ZAP, 2 * reach + 1, 0, 0));
+                ram_quad(stream, xa, RAM_ROW + ya, x1 - xa + 1, y1 - ya + 1, RAM_TARGET, uint4(asuint(x0), asuint(y0), 0, 0), uint4(RK_ZAP, 2 * reach + 1, 0, 0));
         }
         return;
     }
@@ -585,10 +591,10 @@ void ram_commit_amp_geom(point amp_d I[1], inout TriangleStream<ram_v2f> stream,
 
 uint4 ram_init_texel(uint2 pos) {
     if (_InitRaw) return ram_init_raw(pos);
-    uint lin = RAM_LIN(pos.x, pos.y - 64);
+    uint lin = RAM_LIN(pos.x, pos.y - RAM_ROW);
     uint2 ram_dim;
     _Data_RAM_A.GetDimensions(ram_dim.x, ram_dim.y);
-    uint2 pos2 = uint2(lin % 2048, lin / 2048);   // the payload image is row-major, rows bottom up
+    uint2 pos2 = uint2(lin % 2048, lin / 2048);   // the payload image is row-major, 2,048 texels a row, rows bottom up
     pos2.y = ram_dim.y - pos2.y - 1;
     if (pos2.y >= ram_dim.y) return (uint4)0;
     return uint4(unpack_raw_float4(_Data_RAM_R[pos2]), unpack_raw_float4(_Data_RAM_G[pos2]),
@@ -597,22 +603,22 @@ uint4 ram_init_texel(uint2 pos) {
 
 uint4 ram_commit_texel(ram_v2f i) {
     uint2 pos = (uint2)i.vertex.xy;
-    s_dim = uint2(2048, STATE_TEX_HEIGHT);
+    s_dim = RAM_TARGET;
     _Data_ROM.GetDimensions(m_dim.x, m_dim.y);
-    uint kind = i.info.x, t = (pos.y - 64) * 2048 + pos.x;
+    uint kind = i.info.x, t = (pos.y - RAM_ROW) * RAM_W + pos.x;
     [branch]
     if (kind == RK_SLOT) return _Stage[i.info.yz];
     [branch]
     if (kind == RK_INIT) return ram_init_texel(pos);
     [branch]
     if (kind == RK_ZAP) {
-        uint s = (uint)((int)pos.x - asint(i.value.x)) + (uint)((int)(pos.y - 64) - asint(i.value.y)) * i.info.y;
-        return _Stage[uint2(s % 2048, STAGE_ZAP_ROW + s / 2048)];
+        uint s = (uint)((int)pos.x - asint(i.value.x)) + (uint)((int)(pos.y - RAM_ROW) - asint(i.value.y)) * i.info.y;
+        return _Stage[uint2(s % STAGE_W, STAGE_ZAP_ROW + s / STAGE_W)];
     }
     [branch]
     if (kind == RK_CHUNKOUT) {
         uint s = t - i.info.y;
-        return _Stage[uint2(s % 2048, s / 2048)];
+        return _Stage[uint2(s % STAGE_W, s / STAGE_W)];
     }
     [branch]
     if (kind == RK_MEMOP) {
@@ -640,7 +646,7 @@ uint4 ram_commit_texel(ram_v2f i) {
         while (k < 3 && (t * 4 + k < p.first || (t * 4 + k - p.first) % p.row >= p.width)) k++;
         uint y = (t * 4 + k - p.first) / p.row;
         uint s = 2 * y + ((p.first + y * p.row) >> 2 == t ? 0 : 1);
-        return _Stage[uint2(s % 2048, STAGE_PICTURE_ROW + s / 2048)];
+        return _Stage[uint2(s % STAGE_W, STAGE_PICTURE_ROW + s / STAGE_W)];
     }
 #endif
     return i.value;

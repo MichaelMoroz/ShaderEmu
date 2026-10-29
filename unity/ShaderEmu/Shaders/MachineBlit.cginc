@@ -32,7 +32,7 @@ blit_v2f blit_vert(appdata_base v) {
 // The control pass writes the device's words and a page the host fetched: RAM bands 4 and 5,
 // drawn by every pass that draws bands.
 #define CONTROL_BANDS (3u << 4)
-// The bands of RAM (4 MB, 128 rows from row 64 + 128 b) the pass has to draw: what it changes,
+// The bands of RAM (4 MB, 32 rows of 8,192 texels from row 64 + 32 b) the pass has to draw: what it changes,
 // and what the pass before it changed, which the texture drawn into lacks. The other texels
 // there are right already. Bit b & 31 stands for bands b, b + 32 and b + 64 (ram_bands, src/types.h).
 uint blit_bands();
@@ -56,14 +56,14 @@ void blit_bands_geom(triangle blit_v2f corners[3], uint which : SV_PrimitiveID, 
     if (which != 0) return;
     uint width, height;
     _SelfTexture2D.GetDimensions(width, height);
-    uint bands = blit_bands(), count = (height - 64) / 128, from = 0;
+    uint bands = blit_bands(), count = (height - 64) / 32, from = 0;
     bool run = false;
     blit_rows(stream, 0.0, 64.0, height);
     [loop]
     for (uint b = 0; b <= count; b++) {
         bool on = b < count && (((bands >> (b & 31)) & 1) != 0 || (b < 32 && ((CONTROL_BANDS >> b) & 1) != 0));
         if (on && !run) from = b;
-        if (!on && run) blit_rows(stream, 64.0 + from * 128.0, (b - from) * 128.0, height);
+        if (!on && run) blit_rows(stream, 64.0 + from * 32.0, (b - from) * 32.0, height);
         run = on;
     }
 }

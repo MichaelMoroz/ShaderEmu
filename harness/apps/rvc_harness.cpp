@@ -1,7 +1,7 @@
 // rvc_harness: runs pimaker's rvc (RISC-V Linux in a VRChat pixel shader) outside Unity.
 //
 // It loads rvc's unmodified _Nix/rvc/main.shader, compiles both passes with FXC, and drives
-// them the way the Unity scene does: a 2048x9280 RGBA32_UINT double-buffered Custom Render
+// them the way the Unity scene does: an 8192x2368 RGBA32_UINT double-buffered Custom Render
 // Texture with two update zones per frame (CPUTick on the 64x64 state area, then Commit on
 // the whole texture). The emulated UART is wired to this console.
 //
@@ -73,7 +73,7 @@ static int cpuSnapshotCores(std::vector<uint8_t>& data, uint32_t W, uint32_t wid
     for (uint32_t a = RAM_BASE; a - RAM_BASE < RAM_SIZE; a += 0x400000u) {
         if (a >= rvlayout::kDevAt && a < rvlayout::kDevEnd) continue;
         uint32_t lin = (a - RAM_BASE) / 16;
-        memcpy(tex(lin % 2048, 64 + lin / 2048), &ram[a - RAM_BASE], 0x400000);
+        memcpy(tex(ramX(lin), ramRow(lin)), &ram[a - RAM_BASE], 0x400000);
     }
     // the workers' geometry (MC_HYBRID; STATE_ROWS 16, MC_STRIP_TILES 248, TICK_COLS 1024, 6 strip bands, 2 tick bands)
     const uint32_t L1_AT = 44, TILES = 248, COLS = 1024, SBANDS = 6, TBANDS = 2, LAST = 255;
@@ -86,7 +86,7 @@ static int cpuSnapshotCores(std::vector<uint8_t>& data, uint32_t W, uint32_t wid
     if (width && (geo[1] > 16 || geo[1] == 0) && geo[3] == 0 && (geo[0] & 1) == 0) {
         uint32_t laid[4] = {width << 8, geo[1] ? geo[1] : 255u, width == 8 ? 5u : 3u, 16u | 5u << 8 | width << 16 | 8u << 24};   // (geotune.c: hybrid(1, width, WIDE))
         memcpy(geo, laid, 16);
-        memcpy(tex(rvlayout::devT(0x10003du) % 2048, 64 + rvlayout::devT(0x10003du) / 2048), laid, 16);
+        memcpy(tex(ramX(rvlayout::devT(0x10003du)), ramRow(rvlayout::devT(0x10003du))), laid, 16);
     }
     uint32_t ws = (geo[3] >> 16) & 0xff, wb = geo[3] >> 24;
     uint32_t rows = geo[2] < 3 || geo[2] > 6 ? 0 : rowsOf(geo[2]);
@@ -1160,6 +1160,22 @@ int main(int argc, char** argv) {
                     opt.loadState.c_str());
             return 1;
         }
+        // (one in rows of 2,048 texels, from before 29 October 2026: the cores' state rows at the left of the
+        // first 64 rows, RAM's texels one after another from row 64 on, as in rows of 8,192)
+        if (ok && memcmp(hdr.magic, rvlayout::kSnapshotMagicRows2048, 8) == 0 && hdr.width == 2048 && hdr.height >= kRamRow &&
+            snap.size() == sizeof hdr + (size_t)2048 * hdr.height * 16 && (size_t)2048 * (hdr.height - kRamRow) <= (size_t)W * (H - kRamRow)) {
+            std::string laid(sizeof hdr + (size_t)W * H * 16, '\0');
+            const char* from = snap.data() + sizeof hdr;
+            char* to = &laid[sizeof hdr];
+            for (UINT y = 0; y < kRamRow; y++) memcpy(to + (size_t)y * W * 16, from + (size_t)y * 2048 * 16, 2048 * 16);
+            memcpy(to + (size_t)kRamRow * W * 16, from + (size_t)kRamRow * 2048 * 16, (size_t)2048 * (hdr.height - kRamRow) * 16);
+            memcpy(hdr.magic, rvlayout::kSnapshotMagic, 8);
+            hdr.width = W;
+            hdr.height = H;
+            memcpy(&laid[0], &hdr, sizeof hdr);
+            snap.swap(laid);
+            fprintf(stderr, "[harness] %s: a snapshot in rows of 2,048 texels, laid out in rows of %u\n", opt.loadState.c_str(), W);
+        }
         if (!ok || memcmp(hdr.magic, rvlayout::kSnapshotMagic, 8) != 0 || hdr.width != W || hdr.height > H ||
             snap.size() != sizeof hdr + (size_t)W * hdr.height * 16) {
             fprintf(stderr, "[harness] %s is not a %ux%u snapshot\n", opt.loadState.c_str(), W, H);
@@ -1434,13 +1450,13 @@ int main(int argc, char** argv) {
                 bool held = !kept && offset != 0 && url == fetch.url;   // a further part of what is held
                 if (kept) {
                     // the guest's kept folder (docs/system/persist.md): answered here, from the file; what
-                    // it hands over lies in the fetch's own 256 KB (four rows are the 100,000 bytes)
+                    // it hands over lies in the fetch's own 256 KB (one row of 128 KB holds the 100,000 bytes)
                     PersistHost keeper;
                     std::vector<uint8_t> data(PersistHost::kLimit + 32768, 0), rows, reply;
                     keeper.file = opt.persist;
                     bool read = true;
                     if (opt.cpu) memcpy(data.data(), &cpuemu::ram[rvlayout::kFetchData - cpuemu::RAM_BASE], PersistHost::kLimit);
-                    else if (url == "persist:save" && (read = backend.readRows(64 + rvlayout::devT(0x16c000) / 2048, 4, rows)))
+                    else if (url == "persist:save" && (read = backend.readRows(kFetchRow, 1, rows)))
                         memcpy(data.data(), rows.data(), (std::min)(rows.size(), data.size()));
                     fetch.status = read ? keeper.answer(url, offset, data.data(), reply) : 500;
                     fetch.offset = 0;
@@ -1825,8 +1841,8 @@ int main(int argc, char** argv) {
             }
             if (cpuFirst) upload = ~0ull;
             cpuFirst = false;
-            for (unsigned b = 0; b < (kStateHeight - 64) / 128; ++b)
-                if (upload >> (b & 63) & 1) backend.uploadRows(64 + 128 * b, 128, ram.data() + (size_t)b * 0x400000);
+            for (unsigned b = 0; b < (kStateHeight - kRamRow) / kBandRows; ++b)
+                if (upload >> (b & 63) & 1) backend.uploadRows(kRamRow + kBandRows * b, kBandRows, ram.data() + (size_t)b * 0x400000);
             // which bands the commit is to carry over into the buffer it draws: these, and for
             // the buffer of two frames ago the last ones, as the shader's 32 bits (ram_bands in
             // src/types.h); the GPU's are drawn every commit (_CommitAlways)
@@ -2119,8 +2135,9 @@ int main(int argc, char** argv) {
                 // the ring as the control pass left it
                 std::vector<uint8_t> rows;
                 size_t ring = (size_t)kNetRing * 16, bytes = (size_t)kNetSlot * kNetSlots * 16;
+                ring += (size_t)kNetX * 16;
                 if (backend.readRows(kNetRow, 1, rows) && rows.size() >= ring + bytes)
-                    memcpy(ram.data() + (size_t)(kNetRow - 64) * 32768 + ring, rows.data() + ring, bytes);
+                    memcpy(ram.data() + (size_t)(kNetRow - kRamRow) * kStateWidth * 16 + ring, rows.data() + ring, bytes);
             }
             if (cpuCopy[0]) {
                 uint32_t address = CTRL + 0x1000, bytes = cpuDisplay[0] * cpuDisplay[1] * 4;
@@ -2130,10 +2147,11 @@ int main(int argc, char** argv) {
                     bytes = (std::max)(cpuCopy[3], width) * height * 4;
                 }
                 if (address >= rvlayout::kDevAt && bytes && address + bytes <= rvlayout::kGpuMemEnd) {   // (where a copy may go: src/gpu.h)
-                    uint32_t offset = address - RAM_BASE, first = offset / 32768, last = (offset + bytes - 1) / 32768;
+                    const uint32_t rowBytes = kStateWidth * 16;
+                    uint32_t offset = address - RAM_BASE, first = offset / rowBytes, last = (offset + bytes - 1) / rowBytes;
                     std::vector<uint8_t> rows;
-                    if (backend.readRows(64 + first, last - first + 1, rows) && rows.size() >= (size_t)(last - first + 1) * 32768)
-                        memcpy(ram.data() + offset, rows.data() + (offset - first * 32768), bytes);
+                    if (backend.readRows(kRamRow + first, last - first + 1, rows) && rows.size() >= (size_t)(last - first + 1) * rowBytes)
+                        memcpy(ram.data() + offset, rows.data() + (offset - first * rowBytes), bytes);
                 }
             }
             // --screen-log: the picture as tools/snapshot_screen.py makes it of a snapshot, from the
@@ -2143,12 +2161,13 @@ int main(int argc, char** argv) {
             if (screenOn && sw > 0 && sh > 0 && sw <= 2048 && sh <= 2048 && (guest_seconds - screenAt) * 1000.0 >= opt.screenEvery) {
                 screenAt = guest_seconds;
                 auto words = [&](uint32_t address, size_t count, std::vector<uint32_t>& out) {
-                    uint32_t offset = (address & 0x7ffffffcu), first = offset / 32768, last = (uint32_t)((offset + count * 4 - 1) / 32768);
+                    const uint32_t rowBytes = kStateWidth * 16;
+                    uint32_t offset = (address & 0x7ffffffcu), first = offset / rowBytes, last = (uint32_t)((offset + count * 4 - 1) / rowBytes);
                     std::vector<uint8_t> rows;
                     out.assign(count, 0);
-                    if (address < RAM_BASE || offset + count * 4 > 2048u * (kStateHeight - 64) * 16) return false;
-                    if (!backend.readRows(64 + first, last - first + 1, rows) || rows.size() < (size_t)(last - first + 1) * 32768) return false;
-                    memcpy(out.data(), rows.data() + (offset - first * 32768), count * 4);
+                    if (address < RAM_BASE || offset + count * 4 > kStateWidth * (kStateHeight - kRamRow) * 16) return false;
+                    if (!backend.readRows(kRamRow + first, last - first + 1, rows) || rows.size() < (size_t)(last - first + 1) * rowBytes) return false;
+                    memcpy(out.data(), rows.data() + (offset - first * rowBytes), count * 4);
                     return true;
                 };
                 std::vector<uint32_t> screen((size_t)sw * sh, 0), part;

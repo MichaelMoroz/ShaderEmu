@@ -12,8 +12,10 @@ from PIL import Image
 
 
 def main():
-    rows = int(np.fromfile(sys.argv[1], dtype=np.uint32, count=4)[3])   # the header's height: 9280, or 4096 before
-    tex = np.memmap(sys.argv[1], dtype=np.uint32, mode='r', offset=32).reshape(rows, 2048, 4)
+    # the header's width and height: 8192 x 2368 (SX86SNP3), or 2048 x 9280 before (docs/machine/gpu.md, "Rows of 8192");
+    # RAM is its texels one after another from row 64 in either
+    width, rows = (int(v) for v in np.fromfile(sys.argv[1], dtype=np.uint32, count=4)[2:4])
+    tex = np.memmap(sys.argv[1], dtype=np.uint32, mode='r', offset=32).reshape(rows, width, 4)
     words = tex[64:].reshape(-1)
 
     def w(address, n=1):

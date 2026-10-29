@@ -378,7 +378,7 @@ drawing one from the other. Now they are one, written in place (`RAM_INPLACE`,
 `experiments/rvc_opt/src/ram.h`), and no pass reads the texture it draws: the D3D11 harness's
 default (`--ping-pong` for the two; `--lazy` and D3D12 still have two) and the world's.
 Beside it: the state rows after the tick (2048 x 64), a stage (2048 x 21) and the control
-pass's rows. 580 MiB became 290 MiB and 2.9 MiB.
+pass's rows. 580 MiB became 290 MiB and 2.9 MiB. (The texture is 8192 x 2368 since: "Rows of 8192", below.)
 
 A pass, after the tick (which reads the state) and the unpack into the tick's texture:
 
@@ -444,11 +444,59 @@ timedemo (`quake +timedemo demo1`, from its command to its fps line, `RVC_WCACHE
 `programs\copytest`'s case 10 (after its sum, which stays `0e7f76c3`) is such a copy with a byte
 stored beside it in its pass; `-DPROGRAM_COPY_ONLY` builds it alone for a quick look on WARP.
 
+## Rows of 8192
+
+Since 29 October 2026 the state texture is 8,192 texels wide and 2,368 high, where it was 2,048 by 9,280, and the
+ROM's texture is as wide (`src/layout.h`: `RAM_W`, `RAM_ROW`, `STATE_TEX_HEIGHT`, `STATE_BLOCK_W`, `RAM_BAND_ROWS`;
+`harness/apps/rvc_backend.h`: `kStateWidth`, `kRamRow`, `kBlockWidth`, `kBandRows`, `ramX`, `ramRow`):
+
+| | before | now |
+|---|---|---|
+| the state texture (texels) | 2048 x 9280 | 8192 x 2368 |
+| RAM's texel t | (t % 2048, 64 + t / 2048) | (t % 8192, 64 + t / 8192) |
+| a row of RAM | 32 KB | 128 KB |
+| a 4 MB band | 128 rows | 32 rows |
+| the ROM's texel t | (t % 2048, rows - 1 - t / 2048) | (t % 8192, t / 8192) |
+| the ROM's texture (texels, the 269 MiB of 28 October) | 2048 x 8601 | 8192 x 2151 |
+| video memory of the state (MiB) | 290 | 296 |
+
+- **What stays.** The cores' state is the block it was, 2048 x 64 at the left of rows 0-63 (core 0's 64 x 32, the
+  workers' tiles in bands of eight rows, the lanes' field in rows 48-63): the tick, its targets and its geometry are
+  as they were, and one core a wave holds. The rest of those rows, 6,144 x 64 (6 MiB), is no one's: the state commit
+  draws the block alone (`commit_vert` in `main.shader`, `state_geom` in Unity's `Machine.shader`), and a pixel there
+  of a whole-texture draw is zero. The tick's texture after the tick (2048 x 64), the stage (2048 x 21, `STAGE_W`:
+  a copy's chunk is still 256 KB) and Unity's window (2048 x 11) are as wide as before.
+- **The addresses.** RAM's texel is a mask and a shift of the address, as before (8,192 is a power of two: `RAM_ADDR`
+  is `t & 8191` and `t >> 13`). The ROM's was a division by the texture's width, read at run time
+  (`GetDimensions`), and a row counted from the bottom: it is a mask and a shift now, in the tick, the commit, the
+  GPU's `texture_word` and the lean tick, with no `GetDimensions` for it.
+- **The bands.** A band is still 4 MB, 32 rows now, and `ram_bands` is the mask it was: bit b for bands b, b + 32 and
+  b + 64, 72 bands, the control words' 4 and 5 drawn every commit. The commit's quads (`kCommitQuads`) are as many.
+- **The device rows.** The control words (0x81000000) and the counters' totals (0x80c10000) are 2,048-texel runs of a
+  row: the control words the first quarter of row 192, the totals the third quarter of row 160; the network's and the console's run (0x816b8000) is the last quarter of row 245, and a fetch's 256 KB
+  (0x816c0000) are rows 246 and 247 whole. The harness's zones and readbacks take their column with their row
+  (`RAM_ZONE`, `kNetX`, `kControlX`), Unity's window holds the same eleven runs of 2,048 as before and puts each where
+  it lies (`window_state_pos`, `window_of` in `MachineWindow.cginc`), and `Readback.shader` and `PersistRead.shader` read
+  them so.
+- **The views.** The memory view (`harness/core/memview.cpp`, Unity's `MemHeat.shader`) still shows RAM in rows of
+  2,048: a pixel's texel index is made from its place, then read where the texture has it. The danger panel's laser
+  aims at the same picture and sends the texture's column and row (`EmuDanger.Point`); a square zap is a square of
+  the texture, 8,192 texels a row (`_ZapX` up to 8,191, `_ZapY` a row of 128 KB).
+- **Snapshots.** `rvc_harness --save-state` writes `SX86SNP3` (8192 x 2368). One of rows of 2,048 (`SX86SNP2`, the
+  address layout of 28 October) loads: its state rows go to the block, its RAM texels one after another from row 64,
+  which they were in either. The tools read the width from the header (`snapshot_screen.py`, `gpu_reference.py`,
+  `sound_reference.py`, `dxbc_run.py`).
+- **The ROM** in the world is made by `ShaderEmuTexelsImporter` (version 2), 8,192 texels a row from row 0; the
+  harness makes it so from `rootfs.bin` (`createTextureTexels`, D3D12 and `rvc_trace12` too).
+- **Not ported**: the compute processors (`--compute`, `RVC11_COMPUTE`; `experiments/rv32_min`, `experiments/rvc_compute`)
+  lay RAM out in rows of 2,048 and are refused by the harness.
+
 ## The ROM as one texture
 
 The ROM (the image's `rootfs.bin`) was four RGBA8 textures, one for each word of a texel
 (`_Data_MTD_R/G/B/A`, PNGs made from the file). It is one RGBAFloat texture now, `_Data_ROM`:
-2048 texels a row, texel 0 in the last row, a 16-byte texel a pixel read back by its bits
+8192 texels a row from row 0 (2048 a row and texel 0 in the last row until 29 October 2026: "Rows of 8192"),
+a 16-byte texel a pixel read back by its bits
 (`asuint`). The tick, the commit, the gather, the GPU's draw (`texture_word`), the sound, the
 lean tick and the world's shaders take a word as `asuint(_Data_ROM[p])[k]`: one load where a
 load of the ROM was a switch over four textures and an unpack, and a copy out of the ROM one

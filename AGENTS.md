@@ -263,10 +263,13 @@
   a lack of memory in one piece too. `tools/test_all.py unarc` packs a folder with busybox and unpacks it both ways.
 - The devices are 0x80000000 to 0x82000000 and RAM is one range, 0x82000000 to 0x92000000, the kernel at its start
   (28 October 2026; `docs/system/nommu.md`, "Memory"): the layout is `experiments/rvc_opt/src/layout.h` for the tick and
-  `harness/apps/rvc_layout.h` for the host. The state texture is 2048 x 9280 (`STATE_TEX_HEIGHT`, `kStateHeight`, Unity's
-  StateA). The commit's band mask stays 32 bits, bit b for bands b, b + 32 and b + 64 (`ram_bands`); the control words'
-  bands (4 and 5) are drawn apart (`_CommitAlways`, `CONTROL_BANDS`). A GPU copy into RAM goes only below 0x81e00000. A
-  snapshot of the layout before (devices at 0x86000000) is refused: make it again.
+  `harness/apps/rvc_layout.h` for the host. The state texture is 8192 x 2368 (29 October 2026; `RAM_W`, `STATE_TEX_HEIGHT`,
+  `kStateWidth`, `kStateHeight`, Unity's StateA; `docs/machine/gpu.md`, "Rows of 8192"): the cores' state is a block 2048
+  wide at the left of rows 0-63, RAM's texel t is at (t % 8192, 64 + t / 8192), the ROM's texel t at (t % 8192, t / 8192)
+  of its own texture. A 4 MB band is 32 rows; the commit's band mask stays 32 bits, bit b for bands b, b + 32 and b + 64
+  (`ram_bands`); the control words' bands (4 and 5) are drawn apart (`_CommitAlways`, `CONTROL_BANDS`). A GPU copy into
+  RAM goes only below 0x81e00000. A snapshot in rows of 2048 (`SX86SNP2`) is laid out anew as it loads; one of the layout
+  before that (devices at 0x86000000) is refused: make it again.
 - RAM is one texture written in place (`src/ram.h`, `docs/machine/gpu.md`, "RAM in one texture"; Unity has StateA alone):
   no commit pass reads what it draws, what it needs of RAM is gathered into a stage first, and a copy from RAM to RAM
   is 256 KB a pass, in `rvc_cpu` too (`copy_pass`). `programs\copytest` must say `sum 0e7f76c3` on both; `--ping-pong`

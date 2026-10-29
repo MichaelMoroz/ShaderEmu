@@ -37,50 +37,61 @@ struct BackendOptions {
     const SLShader* ampShader = nullptr;
 };
 
-// The state texture's rows: 64 of the cores' state, then RAM from 0x80000000 to 0x92000000, 32 KB a
-// row (STATE_TEX_HEIGHT in src/types.h). Zones are in Unity's pixel space, y up from its bottom.
-const unsigned kStateHeight = 9280;
+// The state texture (src/layout.h; docs/machine/gpu.md, "Rows of 8192"): kStateWidth texels a row. Its
+// first kRamRow rows are the cores' state, a block kBlockWidth wide at their left; then RAM from 0x80000000
+// to 0x92000000, 128 KB a row: RAM's texel t at (ramX(t), ramRow(t)) (STATE_TEX_HEIGHT, RAM_W). A 4 MB band
+// is kBandRows rows. Zones are in Unity's pixel space, y up from its bottom.
+const unsigned kStateWidth = 8192, kStateHeight = 2368, kRamRow = 64, kBlockWidth = 2048;
+const unsigned kBandRows = 0x400000 / 16 / kStateWidth;
+constexpr unsigned ramRow(uint32_t t) { return kRamRow + t / kStateWidth; }
+constexpr unsigned ramX(uint32_t t) { return t % kStateWidth; }
+// a zone of n texels in one row from RAM's texel t
+#define RAM_ZONE(t, n) {ramX(t) + (n) / 2.0f, kStateHeight - ramRow(t) - 0.5f, (float)(n), 1}
 // The GPU device (docs/machine/gpu.md): a mesh of kGpuTriangles triangles drawn into a square colour and
 // depth target of kGpuTarget pixels, then one small update zone on the state texture (Unity
 // pixel space, y up) holding the control words: RAM rvlayout::kCtrl to + 0xfff.
 const UINT kGpuTriangles = 65536;
 const UINT kGpuTarget = 2048;
-const float kGpuControlZone[4] = {128, kStateHeight - (64 + rvlayout::devT(0x100000) / 2048) - 0.5f, 256, 1};
+const float kGpuControlZone[4] = RAM_ZONE(rvlayout::devT(0x100000), 256);
 // The sound card's mix target (docs/machine/sound.md): kSoundSide squared samples, two floats each.
 const UINT kSoundSide = 128;
-// The rows of RAM an answer to the guest's request is written to (docs/system/fetch.md), as a zone.
-const float kFetchZone[4] = {1024, kStateHeight - (64 + rvlayout::devT(0x16c000) / 2048) - 4, 2048, 8};
+// The rows of RAM an answer to the guest's request is written to (docs/system/fetch.md), as a zone: 256 KB
+// from a row's start.
+const unsigned kFetchRow = ramRow(rvlayout::devT(0x16c000)), kFetchRows = 0x40000 / 16 / kStateWidth;
+static_assert(ramX(rvlayout::devT(0x16c000)) == 0, "a fetch's answer starts a row");
+const float kFetchZone[4] = {kStateWidth / 2.0f, (float)(kStateHeight - kFetchRow) - kFetchRows / 2.0f, (float)kStateWidth, (float)kFetchRows};
 const UINT kFetchSide = 256;   // the answer's texture: one word a texel, 256 KB
 // The network device (docs/system/lan.md): a row of RAM at rvlayout::kNet. Its first kNetSlot texels are the
 // packet the guest sends, which popRow() returns after the control words; from kNetRing on is
 // the ring of kNetSlots packets for the guest, written as a zone when deliverNet() was called.
-const unsigned kNetRow = 64 + rvlayout::devT(0x16b800) / 2048, kNetSlot = 40, kNetRing = 64, kNetSlots = 8, kNetMost = 4;
+// (its 2,048 texels are the last quarter of a row of the state texture: from kNetX)
+const unsigned kNetRow = ramRow(rvlayout::devT(0x16b800)), kNetX = ramX(rvlayout::devT(0x16b800)), kNetSlot = 40, kNetRing = 64,
+               kNetSlots = 8, kNetMost = 4;
 // What every core ran (MC_STATS_ALL in src/gpu.h): 72 texels after the ring, which the control
 // pass writes every frame. kNetRead texels of the row are read back: the window, the ring, those.
 const unsigned kCoreStatsAt = 0x200, kNetRead = kCoreStatsAt + 72;
-const float kCoreStatsZone[4] = {kCoreStatsAt + 36.0f, kStateHeight - (64 + rvlayout::devT(0x16b800) / 2048) - 0.5f, 72, 1};
-const float kNetZone[4] = {kNetRing + kNetSlot * kNetSlots / 2.0f, kStateHeight - kNetRow - 0.5f, (float)(kNetSlot * kNetSlots), 1};
+const float kCoreStatsZone[4] = RAM_ZONE(rvlayout::devT(0x16b800) + kCoreStatsAt, 72);
+const float kNetZone[4] = RAM_ZONE(rvlayout::devT(0x16b800) + kNetRing, kNetSlot * kNetSlots);
 // The counters' totals (programs/mc/mc.h, MC_COUNT_*): RAM rvlayout::kCountTotal to + 0x1000, drawn after
 // the commit when the control words read back say a core added (src/gpu.h).
-const float kCountZone[4] = {128, kStateHeight - (64 + rvlayout::devT(0xc1000) / 2048) - 0.5f, 256, 1};
+const float kCountZone[4] = RAM_ZONE(rvlayout::devT(0xc1000), 256);
 // Quads the Commit pass draws when its vertex shader chooses them: the state rows and RAM's 4 MB bands.
-const unsigned kCommitQuads = 1 + (kStateHeight - 64) / 128;
+const unsigned kCommitQuads = 1 + (kStateHeight - kRamRow) / kBandRows;
 // The machine's control words (display, GPU, input, sound: RAM from rvlayout::kCtrl) as a row of the
 // state texture. popRow() returns them after the 64 texels of row 0.
-const unsigned kControlRow = 64 + rvlayout::devT(0x100000) / 2048, kControlTexels = 256;
+const unsigned kControlRow = ramRow(rvlayout::devT(0x100000)), kControlX = ramX(rvlayout::devT(0x100000)), kControlTexels = 256;
 // The console (docs/machine/console.md): texel kConHost of the network's row is the host's words, the
 // next the guest's, then the ring of kConRing bytes; the control pass writes the first.
 const unsigned kConHost = 40, kConRing = 256;
-const float kConZone[4] = {kConHost + 0.5f, kStateHeight - kNetRow - 0.5f, 1, 1};
+const float kConZone[4] = RAM_ZONE(rvlayout::devT(0x16b800) + kConHost, 1);
 // The lanes' field (docs/machine/lanes.md, experiments/rvc_lean/tick.hlsl): its job's texel and its groups'
 // words in the mailboxes' page (rvlayout::kMbox + 0x1900 and + 0x1a00), which popRow() returns after the network's
 // texels: kFieldRead of them from the job's. The tick's primitive after the cores' draws it; the commit has
 // a point for each of its buckets, before the picture's.
-const unsigned kFieldRow = 64 + rvlayout::devT(0xc0000) / 2048, kFieldAt = 0x190, kFieldRead = 0x10 + 62;
+const unsigned kFieldRow = ramRow(rvlayout::devT(0xc0000)), kFieldAt = ramX(rvlayout::devT(0xc0000)) + 0x190, kFieldRead = 0x10 + 62;
 const unsigned kFieldLanes = 3968, kFieldPoints = 2 * kFieldLanes;
 const int kCoresMost = 256;   // what the shader, the kernel and the library have room for
 const int kCores = 256;       // core 0 and 255 workers: the only machine there is (docs/machine/multicore.md)
-// The display's RAM framebuffer (rvlayout::kCtrl, 128 texture rows), for writing the picture back.
 
 class RvcBackend {
 public:
@@ -99,7 +110,7 @@ public:
     bool conDelivered = false;  // the console's input changed: kConZone is drawn in the next frame
     // Draw the sound card's mix in the next frame and read it back with that frame's row.
     bool soundMix = false;
-    static const UINT kWidth = 2048, kHeight = kStateHeight;   // rvc's vm_state_crt.asset, taller
+    static const UINT kWidth = kStateWidth, kHeight = kStateHeight;   // the state texture (Unity's StateA)
     static const UINT kProfCount = 256;
 
     // --cpu (docs/machine/cpu-harness.md): the instructions run on the processor. The tick pass is not

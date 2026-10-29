@@ -2,11 +2,8 @@
 #define MEM_H
 
 
-// RAM_ADDR / RAM_LIN: see types.h
-#ifndef STATE_TEX_HEIGHT
-#define STATE_TEX_HEIGHT 9280   // the state texture's rows: 64 of state, then RAM to 0x92000000
-#endif
-#define RAM_MAX (2048 * (STATE_TEX_HEIGHT - 64) * 4 * 4)
+// RAM_ADDR / RAM_LIN: see types.h; STATE_TEX_HEIGHT and RAM_MAX: layout.h
+#include "layout.h"
 
 
 /* shift by two to ignore byte offset */
@@ -98,8 +95,7 @@ uint4 pend_texel(uint t) {
     [branch]
     if ((in1 || in2) && !fill && (src & 0x80000000) == 0) {
         // the ROM: one texture, a texel a pixel
-        uint2 p = uint2(at % m_dim.x, m_dim.y - at / m_dim.x - 1);
-        texel = asuint(_Data_ROM[p]);
+        texel = asuint(_Data_ROM[ROM_ADDR(at)]);
     } else {
         texel = RAM_TEX(RAM_ADDR((in1 || in2) && !fill ? ((src & 0x7fffffff) >> 4) + (in2 ? rel2 : rel) : t));
         if ((in1 || in2) && fill) texel = uint4(src, src, src, src);
@@ -253,10 +249,7 @@ uint mem_get_word_l1(L1P uint addr) {
             uint mtd_addr = addr - 0x40000000;
             uint mtd_idx = (mtd_addr >> 2) & 0x3;
             mtd_addr = mtd_addr >> 4;
-            uint2 mtd_lin = uint2(mtd_addr % m_dim.x, mtd_addr / m_dim.x);
-            mtd_lin.y = m_dim.y - mtd_lin.y - 1;
-            //[branch] if (mtd_lin.y >= m_dim.y) return 0;
-            return idx_uint4(asuint(_Data_ROM[mtd_lin]), mtd_idx);   // (the ROM: one texture, a texel a pixel)
+            return idx_uint4(asuint(_Data_ROM[ROM_ADDR(mtd_addr)]), mtd_idx);   // (the ROM: one texture, a texel a pixel)
         }
 
         [branch]

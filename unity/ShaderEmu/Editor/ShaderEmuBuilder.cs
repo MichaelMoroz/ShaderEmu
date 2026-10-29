@@ -294,12 +294,12 @@ public static partial class ShaderEmuBuilder
         Material tickMat = Mat("MachineTick", "ShaderEmu/MachineTickLean");
         Material pointsMat = Mat("MachineCommitPoints", "ShaderEmu/MachineCommitPoints");
         Material gatherMat = Mat("MachineGather", "ShaderEmu/MachineGather");
-        machine.state = StateTexture("StateA", 2048, 9280);
+        machine.state = StateTexture("StateA", 8192, 2368);   // rows of 8,192 texels (src/layout.cginc; docs/machine/gpu.md, "Rows of 8192")
         AssetDatabase.DeleteAsset(Generated + "/StateB.renderTexture");   // (the second state of before)
         RenderTexture tickState = StateTexture("TickState", 2048, 64);
         machine.tickState = tickState;
-        machine.stage = StateTexture("Stage", 2048, 21);     // STAGE_ROWS (src/ram.cginc)
-        machine.window = StateTexture("Window", 2048, 11);   // WINDOW_ROWS (MachineWindow.cginc)
+        machine.stage = StateTexture("Stage", 2048, 21);     // STAGE_W x STAGE_ROWS (src/ram.cginc)
+        machine.window = StateTexture("Window", 2048, 11);   // WINDOW_W x WINDOW_ROWS (MachineWindow.cginc)
         machine.tickTargets = new RenderTexture[8];
         for (int i = 0; i < 8; i++) machine.tickTargets[i] = StateTexture("TickOut" + i, 1040, 32);   // TICK_MRT_W x TICK_STATE_ROWS x TICK_MRT_BANDS
         machine.tickDepth = Target("TickDepth", 1040, 32, 16);
@@ -884,7 +884,7 @@ public static partial class ShaderEmuBuilder
         Material readbackMat = Mat("Readback", "ShaderEmu/Readback");
         Material terminalMat = Mat("Terminal", "ShaderEmu/Terminal");
 
-        RenderTexture state = StateTexture("StateA", 2048, 9280);   // 64 rows of state, then RAM to 0x92000000 (docs/system/nommu.md), written in place
+        RenderTexture state = StateTexture("StateA", 8192, 2368);   // 64 rows of state, then RAM to 0x92000000 (docs/system/nommu.md) in rows of 8,192, written in place
         RenderTexture tickState = StateTexture("TickState", 2048, 64);   // the state rows after a tick
         AssetDatabase.DeleteAsset(Generated + "/MachineState.asset");
         RenderTexture gpuTarget = Target("GpuTarget", 1280, 720, 32);   // the picture is 720p at most

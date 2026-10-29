@@ -11,34 +11,30 @@
 #define glsl_mod(x,y) (((x)-(y)*floor((x)/(y)))) 
 
 
-// Where RAM texel number `lin` (16 bytes each) lives in the state texture.
-// RAM_TILE_BITS = 0: upstream's row-major order, 2048 texels (32 KB) per row.
+// Where RAM texel number `lin` (16 bytes each) lives in the state texture (layout.h).
+// RAM_TILE_BITS = 0: row-major order, RAM_W texels (128 KB) per row, from row RAM_ROW.
 // RAM_TILE_BITS = b: square tiles of 2^b x 2^b texels laid out row by row, so nearby addresses
 // are near each other in both directions (b = 4: one 4 KB page per 16x16 tile).
 #ifndef RAM_TILE_BITS
 #define RAM_TILE_BITS 0
 #endif
 #if RAM_TILE_BITS == 0
-#define RAM_ADDR(lin) uint2((lin) % 2048, 64 + ((lin) / 2048))
-#define RAM_LIN(x, y) ((x) + (y) * 2048)
+#define RAM_ADDR(lin) uint2((lin) % RAM_W, RAM_ROW + ((lin) / RAM_W))
+#define RAM_LIN(x, y) ((x) + (y) * RAM_W)
 #else
 #define RAM_TILE (1 << RAM_TILE_BITS)
-#define RAM_TILES_PER_ROW (2048 >> RAM_TILE_BITS)
+#define RAM_TILES_PER_ROW (RAM_W >> RAM_TILE_BITS)
 #define RAM_IN_X(i) ((i) & (RAM_TILE - 1))
 #define RAM_IN_Y(i) ((i) >> RAM_TILE_BITS)
 #define RAM_IN(x, y) ((x) | ((y) << RAM_TILE_BITS))
 #define RAM_TILE_OF(lin) ((lin) >> (2 * RAM_TILE_BITS))
 #define RAM_WITHIN(lin) ((lin) & (RAM_TILE * RAM_TILE - 1))
-#define RAM_ADDR(lin) uint2(((RAM_TILE_OF(lin) % RAM_TILES_PER_ROW) << RAM_TILE_BITS) | RAM_IN_X(RAM_WITHIN(lin)), \
-                            64 + ((RAM_TILE_OF(lin) / RAM_TILES_PER_ROW) << RAM_TILE_BITS) + RAM_IN_Y(RAM_WITHIN(lin)))
-#define RAM_LIN(x, y) (((((y) >> RAM_TILE_BITS) * RAM_TILES_PER_ROW + ((x) >> RAM_TILE_BITS)) << (2 * RAM_TILE_BITS)) | \
-                       RAM_IN((x) & (RAM_TILE - 1), (y) & (RAM_TILE - 1)))
+#define RAM_ADDR(lin) uint2(((RAM_TILE_OF(lin) % RAM_TILES_PER_ROW) << RAM_TILE_BITS) | RAM_IN_X(RAM_WITHIN(lin)),                             RAM_ROW + ((RAM_TILE_OF(lin) / RAM_TILES_PER_ROW) << RAM_TILE_BITS) + RAM_IN_Y(RAM_WITHIN(lin)))
+#define RAM_LIN(x, y) (((((y) >> RAM_TILE_BITS) * RAM_TILES_PER_ROW + ((x) >> RAM_TILE_BITS)) << (2 * RAM_TILE_BITS)) |                        RAM_IN((x) & (RAM_TILE - 1), (y) & (RAM_TILE - 1)))
 #endif
-#ifndef STATE_TEX_HEIGHT
-#define STATE_TEX_HEIGHT 9280   // the state texture's rows: 64 of state, then RAM to 0x92000000
-#endif
-#define RAM_MAX (2048 * (STATE_TEX_HEIGHT - 64) * 4 * 4)
-// RAM's 4 MB bands (128 rows) from lo to hi as the commit's mask of 32 bits: bit b & 31 stands
+// The ROM's texel t in its texture (layout.h): rows of RAM_W, texel 0 in row 0.
+#define ROM_ADDR(t) uint2((t) % RAM_W, (t) / RAM_W)
+// RAM's 4 MB bands (RAM_BAND_ROWS rows) from lo to hi as the commit's mask of 32 bits: bit b & 31 stands
 // for bands b, b + 32 and b + 64 (the devices' 32 MB are bands 0 to 7: layout.h).
 uint ram_bands(uint lo, uint hi) {
     if (hi < lo) return 0;
@@ -1543,10 +1539,7 @@ uint mem_get_cached_or_tex_from_state_cache_or_mtd(uint addr) {
         uint mtd_addr = addr - 0x40000000;
         uint mtd_idx = (mtd_addr >> 2) & 0x3;
         mtd_addr = mtd_addr >> 4;
-        uint2 mtd_lin = uint2(mtd_addr % m_dim.x, mtd_addr / m_dim.x);
-        mtd_lin.y = m_dim.y - mtd_lin.y - 1;
-        //[branch] if (mtd_lin.y >= m_dim.y) return 0;
-        return idx_uint4(asuint(_Data_ROM[mtd_lin]), mtd_idx);   // (the ROM: one texture, a texel a pixel)
+        return idx_uint4(asuint(_Data_ROM[ROM_ADDR(mtd_addr)]), mtd_idx);   // (the ROM: one texture, a texel a pixel)
     }
     return 0;
 }
@@ -1679,8 +1672,8 @@ uint4 commit(uint2 pos, uint4 ret) {
 #endif
 
     // RAM
-    if (pos.y >= 64) {
-        uint2 pos_ram = uint2(pos.x, pos.y - 64);
+    if (pos.y >= RAM_ROW) {
+        uint2 pos_ram = uint2(pos.x, pos.y - RAM_ROW);
         uint lin = RAM_LIN(pos_ram.x, pos_ram.y);
 
         if (_Init) {

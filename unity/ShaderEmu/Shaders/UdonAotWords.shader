@@ -28,7 +28,7 @@ Shader "ShaderEmu/UdonAotWords"
             {
                 uint n = (uint)i.pos.y * 1024 + (uint)i.pos.x, a = (uint)_CountA;
                 uint t = n / 4 < a ? (uint)_TexelA + n / 4 : (uint)_TexelB + (n / 4 - a);
-                uint4 x = _State[uint2(t % 2048, 64 + t / 2048)];
+                uint4 x = _State[uint2(t % 8192, 64 + t / 8192)];
                 uint k = n & 3, v = k == 0 ? x.r : k == 1 ? x.g : k == 2 ? x.b : x.a;
                 return float4(v & 0xff, (v >> 8) & 0xff, (v >> 16) & 0xff, v >> 24) / 255.0;
             }

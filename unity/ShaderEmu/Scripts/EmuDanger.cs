@@ -104,7 +104,10 @@ public class EmuDanger : UdonSharpBehaviour
         if (fire && !exposed && countLabel != null) countLabel.text = zoneNames[zone] + " is safe: its key is dark";
         if (!fire || !exposed || machine == null || !machine.IsOn()) return;
         shots++;
-        if (machine.Zap(2, column, row, reach, 0, 0xffff, 0xffff, (shots * 7919) & 0xffffff, zones))
+        // (the screen's rows of 2,048 texels; the state texture's are 8,192: docs/machine/gpu.md, "Rows of 8192", where the
+        // square lies round the same texel)
+        int texel = row * 2048 + column;
+        if (machine.Zap(2, texel & 8191, texel >> 13, reach, 0, 0xffff, 0xffff, (shots * 7919) & 0xffffff, zones))
         {
             flips += (2 * reach + 1) * (2 * reach + 1);
             told = false;
@@ -137,11 +140,11 @@ public class EmuDanger : UdonSharpBehaviour
                 if (megabyte < size) { megabyte += zoneFrom[z]; break; }
                 megabyte -= size;
             }
-            int row = megabyte * 32 + Random.Range(0, 32), bits = Mathf.Min(each, Mathf.FloorToInt(owed)), mask = 0;
+            int row = megabyte * 8 + Random.Range(0, 8), bits = Mathf.Min(each, Mathf.FloorToInt(owed)), mask = 0;
             for (int b = 0; b < bits; b++) mask |= 1 << ((bit + b * 7) & 31);   // (spread over the word)
             int got = 0;
             for (int b = 0; b < 32; b++) got += (mask >> b) & 1;
-            if (!machine.Zap(1, Random.Range(0, 2048), row, 0, Random.Range(0, 4), mask & 0xffff, (mask >> 16) & 0xffff, 0, zones))
+            if (!machine.Zap(1, Random.Range(0, 8192), row, 0, Random.Range(0, 4), mask & 0xffff, (mask >> 16) & 0xffff, 0, zones))
             {
                 owed = Mathf.Min(owed, 32f);
                 break;

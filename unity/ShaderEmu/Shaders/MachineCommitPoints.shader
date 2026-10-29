@@ -43,7 +43,7 @@ Shader "ShaderEmu/MachineCommitPoints"
             #define GPU_DEVICE
             #define COMMIT_RAM
             // only the points camera draws them, into the state (its target's size says which that is)
-            #define RAM_GEOM_GUARD if ((uint)_ScreenParams.x != 2048u || (uint)_ScreenParams.y != STATE_TEX_HEIGHT) return;
+            #define RAM_GEOM_GUARD if ((uint)_ScreenParams.x != RAM_W || (uint)_ScreenParams.y != STATE_TEX_HEIGHT) return;
 
             #include "UnityCG.cginc"
             #include "MachineBlit.cginc"

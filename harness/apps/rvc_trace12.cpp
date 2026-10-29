@@ -2,7 +2,7 @@
 //
 // It exists for profilers that only attach to D3D12 (Nsight GPU Trace). The shader bytecode
 // is the same FXC output rvc_harness uses (shared cache), and the frame is the same two
-// draws: CPUTick on the 64x64 state area, then Commit on the whole 2048x9280 texture.
+// draws: CPUTick on the 64x64 state area, then Commit on the whole 8192x2368 texture.
 // There is no console I/O here; use rvc_harness --dxc to interact with the guest. At exit it
 // prints the same BENCH line as rvc_harness --bench, so the state hash can be compared.
 
@@ -170,7 +170,7 @@ int main(int argc, char** argv) {
     } else {
         if (!readFileBinary(opt.snapshot, snap) || snap.size() != sizeof hdr + (size_t)W * H * 16) die("cannot read snapshot");
         memcpy(&hdr, snap.data(), sizeof hdr);
-        if (memcmp(hdr.magic, "SX86SNP2", 8) != 0 || hdr.width != W || hdr.height != H) die("not a snapshot");
+        if (memcmp(hdr.magic, "SX86SNP3", 8) != 0 || hdr.width != W || hdr.height != H) die("not a snapshot");
     }
     ComPtr<ID3D12Resource> state[2];
     for (int i = 0; i < 2; ++i)
@@ -193,11 +193,10 @@ int main(int argc, char** argv) {
         if (std::string(pr.second) == "_Data_MTD") {   // the ROM: one RGBAFloat texture, a 16-byte texel a pixel
             std::string bin;
             if (!readFileBinary((fs::u8path(opt.payloadDir) / "rootfs.bin").u8string(), bin)) die("rootfs.bin: cannot read the ROM");
-            const UINT w = 2048, h = (std::max)(1u, (UINT)((bin.size() / 16 + w - 1) / w));
+            const UINT w = W, h = (std::max)(1u, (UINT)((bin.size() / 16 + w - 1) / w));
             const size_t pitch = (size_t)w * 16;
-            std::vector<uint8_t> rows((size_t)h * pitch, 0);   // row 0 = the bottom: texel 0 in the last row
-            for (UINT y = 0; y < h && (size_t)y * pitch < bin.size(); ++y)
-                memcpy(rows.data() + (size_t)(h - 1 - y) * pitch, bin.data() + (size_t)y * pitch, (std::min)(pitch, bin.size() - (size_t)y * pitch));
+            std::vector<uint8_t> rows((size_t)h * pitch, 0);   // texel t at (t % w, t / w), as the state texture's rows
+            memcpy(rows.data(), bin.data(), bin.size());
             textures["_Data_ROM"] = uploadTexture(dx, w, h, DXGI_FORMAT_R32G32B32A32_FLOAT, 16, rows.data(), D3D12_RESOURCE_FLAG_NONE,
                                                   D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             continue;
@@ -363,7 +362,7 @@ int main(int argc, char** argv) {
         cl->ResourceBarrier(2, fromCopy);
 
         // Zone 2: Commit on the whole texture, then the buffers swap roles.
-        draw(1, 1024, H / 2.0f, 2048, (float)H);
+        draw(1, W / 2.0f, H / 2.0f, (float)W, (float)H);
         D3D12_RESOURCE_BARRIER swapStates[2] = {
             transition(state[dst].Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE),
             transition(state[cur].Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET)};

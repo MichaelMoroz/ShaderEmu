@@ -3,7 +3,7 @@
 #include "layout.h"
 
 // The GPU device. See docs/machine/gpu.md for the guest's view; programs/common/gpu.h has the same
-// numbers for C. GPU_STATE is the machine's state texture (RAM from row 64 on).
+// numbers for C. GPU_STATE is the machine's state texture (RAM from row 64 on, RAM_W texels a row).
 //
 // Addresses below are RAM texel indices: (physical address - 0x80000000) / 16; a device's are
 // DEV_T of its offset from the devices' first texel (layout.h).
@@ -78,7 +78,7 @@
 #define GPU_STATE_ROW 64u   // the state texture's row RAM starts in
 #endif
 uint4 ram(uint index) {
-    return GPU_STATE[uint2(index % 2048, GPU_STATE_ROW + index / 2048)];
+    return GPU_STATE[uint2(index % RAM_W, GPU_STATE_ROW + index / RAM_W)];
 }
 uint texel_of(uint address) {
     return (address & 0x7fffffff) >> 4;
@@ -89,16 +89,13 @@ uint ram_word(uint address) {
     return k == 0 ? t.r : k == 1 ? t.g : k == 2 ? t.b : t.a;
 }
 // A word of a texture: RAM, or with GPU_ROM the ROM (addresses from 0x40000000), read as the
-// CPU reads it: four textures, one for each word of a 16-byte texel, rows bottom up.
+// CPU reads it: one texture, a 16-byte texel a pixel, RAM_W of them a row from row 0 (layout.h).
 #if defined(GPU_ROM)
 uint texture_word(uint address) {
     [branch]
     if ((address >> 30) != 1) return ram_word(address);
-    uint2 dim;
-    _Data_ROM.GetDimensions(dim.x, dim.y);
     uint texel = (address - 0x40000000) >> 4, k = (address >> 2) & 3;
-    uint2 at = uint2(texel % dim.x, dim.y - 1 - texel / dim.x);
-    return asuint(_Data_ROM[at])[k];   // (the ROM: one texture, a texel a pixel)
+    return asuint(_Data_ROM[uint2(texel % RAM_W, texel / RAM_W)])[k];   // (the ROM: one texture, a texel a pixel)
 }
 // A 16-byte texel there.
 uint4 texture_texel(uint address) {
@@ -738,8 +735,8 @@ uint gpu_copy_bands() {
 // pixel) and GPU_COPY is cleared. False for every other texel.
 bool gpu_writeback(uint2 pos, out uint4 result) {
     result = 0;
-    if (pos.y < 64) return false;
-    uint index = (pos.y - 64) * 2048 + pos.x;
+    if (pos.y < RAM_ROW) return false;
+    uint index = (pos.y - RAM_ROW) * RAM_W + pos.x;
     if (index - DEV_T(0u) >= ((GPU_MEM_END - DEV_AT) >> 4)) return false;   // outside what a GPU program may own (DEV_AT to GPU_MEM_END)
     uint4 copy = ram(GPU_COPY);
     if (copy.r == 0) return false;
@@ -1030,8 +1027,8 @@ uint4 count_total(uint index) {
 
 uint4 gpu_control(uint2 pos) {
     uint4 keep = GPU_STATE[pos];
-    if (pos.y < 64) return keep;
-    uint index = (pos.y - 64) * 2048 + pos.x;
+    if (pos.y < RAM_ROW) return keep;
+    uint index = (pos.y - RAM_ROW) * RAM_W + pos.x;
     [branch]
     if (index >= COUNT_TOTAL && index < COUNT_REGIONS) return count_total(index);
     // A submitted list has been drawn by now: the GPU is free for the next one. A copy it asked

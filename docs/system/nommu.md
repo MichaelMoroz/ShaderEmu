@@ -181,13 +181,15 @@ and one for the host (`harness/apps/rvc_layout.h`):
 
 The boot image still loads from 0x80000000 (its first 32 MB are zeros), the kernel at +32 MB and the
 device tree at +62 MB (0x83e00000; `tools/make_linux_image.py`, `image.py`'s `TREE_AT`), whose
-memory node is that one range. The state texture is 2048 x 9280 (`STATE_TEX_HEIGHT` in `src/types.h`,
-`kStateHeight` in `harness/apps/rvc_backend.h`), RAM in it what is under `RAM_MAX` (0x12000000
+memory node is that one range. The state texture is 8192 x 2368 (`RAM_W` and `STATE_TEX_HEIGHT` in
+`src/layout.h`, `kStateWidth` and `kStateHeight` in `harness/apps/rvc_backend.h`; 2048 x 9280 until
+29 October 2026: `docs/machine/gpu.md`, "Rows of 8192"), RAM in it what is under `RAM_MAX` (0x12000000
 bytes), and `rvc_cpu` has 288 MB. A copy of the GPU's picture goes only to 0x80000000 to 0x81e00000,
 as a GPU program's buffers do (`gpu_writeback` in `src/gpu.h`), and a program's parallel copy or fill
 only there or to RAM (`UOP_IN_RAM` in `linux/userland/uop.h`). The drivers find their devices with
 `page_is_ram` (`patch_drivers.py`), false below the kernel. A snapshot is marked with the layout it
-was taken in (`SX86SNP2`, `RVCSNAP2`): one of the layout before is refused, to be made again.
+was taken in (`SX86SNP2`, `RVCSNAP2`): one of the layout before is refused, to be made again. (Since 29
+October 2026 the harness writes `SX86SNP3`, rows of 8192, and lays an `SX86SNP2` one out anew as it loads.)
 
 Before 28 October 2026 the devices lay at 0x86000000 to 0x88000000 and RAM was two ranges, from the
 kernel at 0x80400000 to them (92 MB) and from 0x88000000 to 0x92000000 (160 MB): `MemTotal` was
@@ -201,12 +203,13 @@ ranges was 8,192 of them) and frees each (`memmap_init_range`, `memset` of each 
 presses it at 20 s where it was 16 (`classicube-seat-*`), and ClassiCube's `classicube-pack`
 draws one text fewer by `classicube: steady`.
 
-The commit's bands of RAM stay 4 MB and a mask of 32 bits: bit b stands for bands b, b + 32 and
+The commit's bands of RAM stay 4 MB (32 rows of 8192 texels) and a mask of 32 bits: bit b stands for bands b, b + 32 and
 b + 64 (`ram_bands`), so the tick's store marks its band as it did, at no cost an instruction. A
 band the commit must draw draws its two others too; the control words' band (4, and 5 for a fetch's
 answer) is drawn every commit apart from the mask (`_CommitAlways` in the harness, `CONTROL_BANDS` in Unity's
 `MachineBlit.cginc`, which draws runs of bands). The state texture is 290 MiB where it was 128,
-twice that with its other buffer: 580 MiB of video memory a machine where it was 256.
+twice that with its other buffer: 580 MiB of video memory a machine where it was 256 (296 MiB and one
+buffer since: "RAM in one texture" and "Rows of 8192" in `docs/machine/gpu.md`).
 
 A program's memory is taken whole and in runs of pages: a mapping wants one run as long as
 itself. Quake III is the largest, 46 MB in four runs (its data and bss 22, the hunk 8, the
