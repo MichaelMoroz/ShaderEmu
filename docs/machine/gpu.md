@@ -75,6 +75,7 @@ mesh order.
 | 2 | rectangle | 6 | 1: colour, 2: key, 4-7: x0, y0, x1, y1 (exclusive), 8: fragment mode, 9-11: texture address, width, height, 12-15: u0, v0, u1, v1. Drawn at the near plane |
 | 3 | draw | count | 1: vertex buffer, 2: count, 4: vertex mode, 5: fragment mode, 6: uniforms address, 7-9: texture address, width, height, 10: key, 11: colour (compact vertices), 12-15: where a laid texture lies |
 | 4 | text | 6 a character | 1: colour, 2: font table, 4-5: x, y of the string's top left, 6: characters, 7: address of the string, 8: fragment word (its pass; mode 7 for glyphs of coverage, 8 for distance fields; `0x100`: words 9-11 are there), 9: a scale (16.16; 0: none), 10: a slant in 256ths of a pixel a row, and from bit 16 the row that stays where it is, 11: what the table's bitmap addresses are counted from, 12 (mode 8): the distance range in pixels before the scale (16.16). Drawn at the near plane |
+| 5 | sprites | 6 a record | 1: the records, 2: how many, 4: the passes it is drawn in (bit p: pass p), 5: the first record's place in the order, 6: a palette (256 words) or 0, 7 and 8: the two remaps a picture's green counts (256 bytes each). See "Sprites of a paletted picture" |
 
 A string for command 4 is a word a character: the glyph's number in its low half and, in the
 high half, how many pixels right of x the character starts (the program adds the widths up;
@@ -194,6 +195,39 @@ A window system uses the GPU as a 2D accelerator this way (`nanox.md`): each lis
 a rectangle textured with the buffer it draws on and is copied back into that buffer, so the
 CPU and the GPU take turns drawing on the same pixels. The screen is then one more list: a
 textured rectangle per window, copied into the display's framebuffer.
+
+## Sprites of a paletted picture
+
+Command 5 draws the picture of a game that draws paletted sprites in an order (OpenTTD, `docs/games/openttd.md`,
+"The picture on the GPU"): a record a sprite, a texel each, and the GPU makes its six vertices. The picture is of
+indices, red the index, unless the command names a palette, when a pixel is that entry's colour. A record is:
+
+| Word | Contents |
+|---|---|
+| 0 | the address of the record's first pixel (a byte each, rows `stride` bytes apart), or a colour (fills, checkers) |
+| 1 | a table of 256 bytes (remap), or what a shade adds to green |
+| 2 | x, from bit 11 y, from bit 22 the stride's low 10 bits |
+| 3 | width, from bit 11 height, from bit 22 the kind, from bit 26 the stride's high bits |
+
+| Kind | The pixel |
+|---|---|
+| 0 copy | the byte; 0 is a hole |
+| 1 remap | the byte through the table; a 0 there is a hole |
+| 2 black | index 0 where the sprite has a pixel |
+| 3 shade | where the sprite has a pixel, word 1 added to green (pass 2) |
+| 4 fill | the colour over the rectangle |
+| 5 fill shade | word 1 added to green over the rectangle (pass 2) |
+| 6 checker | the colour where x + y is odd (bit 8 of word 0) or even |
+| 7 words | a picture of words a command 5 drew and a copy wrote: red the index, green the remaps still to make of it: word 7's table green & 15 times, then word 8's green >> 4 times |
+| 8 raw | the byte, 0 too |
+
+Record k of a command lies at depth 1 - (word 5 + k + 1) / 2^22: a later record is nearer. A shade cannot read the
+index under it, so it is drawn in the added pass (2), tested against the depth of what pass 0 drew: what is drawn
+after it hides it. Green then counts the remaps made of what is there since its index was drawn, and whoever reads
+the picture next (a kind 7 record, or the processor) makes them: a shade adds 1 for the first of the command's two
+tables and 16 for the second, and the reader makes the first as often as the low four bits say, then the second
+(a program that has a third ends the list there). One command is
+drawn in the passes word 4 names; a record in pass 2 only if it is a shade, in pass 0 only if it is not.
 
 ## For C programs
 
