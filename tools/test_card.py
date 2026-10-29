@@ -13,8 +13,8 @@ cannot run it as rvc_cpu does: another image (`lazy`, `zero-tail`), the host's w
 --races is rvc_cpu's: a case here is checked by its own lines. Values the card gives otherwise (its floats are the
 tick's) go in CARD, each with the runs that showed them.
 
-The card runs a processor folder only when its warp_ok holds its stamp (its sources hashed, `rvc_harness --stamp`;
-gpu_vm's tick.hlsl.warp_ok): --warp runs the cases on WARP, and --mark-ok writes the stamp when every one passed.
+The card runs a processor folder only when its warp_ok holds its stamp (its sources hashed, `rvc_harness --stamp`):
+--warp runs the cases on WARP, and --mark-ok writes the stamp when every one passed.
 """
 import argparse, os, re, subprocess, sys, time
 

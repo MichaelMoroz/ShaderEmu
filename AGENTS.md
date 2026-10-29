@@ -1,26 +1,13 @@
 - The rules of the work (23 October 2026). We own the whole stack, from the games' and programs' sources down to the
-  tick's DXBC instructions: the games and userland, the LLVM backend, gpu_vm's ISA, the tick and the other shaders, and
+  tick's DXBC instructions: the games and userland, the toolchain, the tick and the other shaders, and
   fxc2 (`C:\Users\micha\Documents\FXC2`, `tools/fxc2`), so a cost is fixed at whichever layer it is cheapest.
   - Any sacrifice that makes userland programs faster is worth it.
   - The shaders can be rewritten completely if needed.
   - Everything must work under VRChat's constraints (no UAVs in the fragment shader, no texture arrays, D3D11 DXBC).
-  - gpu_vm's ISA can be changed freely, and so can the LLVM backend.
   - fxc2 can be changed freely for the tick, as long as it still works on all its uses (the harness, Unity, the
     ShaderEmu and Poiyomi shaders its README measures).
   - Optimizations are weighed together, not one at a time: one that loses alone may win with another (a layout and the
     compiler's address, a cache and the ISA's stores), and one that wins alone may not add up with the rest.
-- One core a wave (25 October 2026, `gpu_vm/tick/WAVES.md`): every wave of the tick's draw holds the lanes of one core
-  only. Cores that share a wave run two programs, and the wave pays for both paths. A tick is valid only with a geometry
-  (block, draw, harness, Unity) measured to keep this on the card. Padding lanes are kept out of the geometry, not
-  discarded. Measured with `bin\waves.exe`: on NVIDIA a warp is a 4 x 8 pixel tile under one big triangle, so blocks of
-  whole tiles (4 x 8, 4 x 16, 8 x 8) drawn by one triangle never mix; a primitive edge inside the cores' area does.
-  The new tick's cores are 8 x 8 blocks in one row (2,048 x 8 for 256), one triangle. Its commit is one draw of whole
-  texels: two cores must not store to one texel in a pass. `python3 gpu_vm/userland/apps/test_all.py --races` must say 0
-  undone and 0 texels for every case (140 on 25 October 2026; `gpu_vm/tick/CACHE.md`). A long program is checked by
-  sections under 5 minutes each: full speed to `GVM_RACES_AT`'s console text, the check to `GVM_RACES_UNTIL`'s.
-- gpu_vm's fastest machine and how to measure it (its tick, the image and checkpoints for each game, the commands and
-  the numbers): `gpu_vm/bench_games/README.md`, "The fastest machine today". run.py's defaults (img-cur, gvm-cur) are
-  the image to use; the harness's own default tick (x18) is not the tick: give `--gvm-tick` (v0009).
 - Linux with the MMU is no longer supported or developed for (21 October 2026): build, test, measure and document the
   no-MMU machine only (`linux/nommu`, `build/images/nommu`). Do not fix, rebuild, test or keep in step anything that only
   the MMU image uses, and do not add MMU paths to new work.
@@ -347,8 +334,8 @@
   played on the drawing's worker froze hldemo1's first corridor (`docs/games/halflife.md`). A static both may write
   is indexed by `SE_Who()`, and what a worker writes lies in texels apart from what another core writes (`SE_APART`):
   `world_ahead`, the loopback's `get` and `send` and `net_drop` shared texels and broke the card's connect only in
-  one link's layout (27 October 2026). gpu_vm's check: `gvm_cpu --card-budget` with `GVM_RACES` and `GVM_RACES_NEAR=4`
-  (GPU-VM `docs/REGRESSIONS.md`). A change to the game is also walked: `HL_SCRIPT` with `+forward`, turns and shots for
+  one link's layout (27 October 2026): `RVC_RACES` with `RVC_RACES_NEAR=4` on `rvc_cpu` finds such texels
+  (docs/machine/multicore.md, "Passes apart"). A change to the game is also walked: `HL_SCRIPT` with `+forward`, turns and shots for
   1,200 s of the guest's on the desktop with `RVC_RACES` (standing in the fight never played a sequence group).
   A level that goes settles the server, the drawing and every job first (`SE_LevelSettle`), and off core 0 a group
   is loaded when its pointer is set (`Mod_CacheCheck` walked pools core 0 moves): a change to either is run through

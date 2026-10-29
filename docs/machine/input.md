@@ -124,8 +124,7 @@ hand.
 
 `--record-input FILE` writes the window's input with its wall seconds, a line an event: `S P x y w h buttons`
 when the pointer changes, `S K code` a key event (hex), `S T bytes` what was typed (hex). `--replay-input
-FILE` plays such a file instead of the window's input (Ctrl+], the harness's own quit, still quits; gpu_vm's
-a338987). A file written by hand works too: `0.5 T` with an `echo`'s bytes types it into a shell snapshot.
+FILE` plays such a file instead of the window's input (Ctrl+], the harness's own quit, still quits). A file written by hand works too: `0.5 T` with an `echo`'s bytes types it into a shell snapshot.
 
 Under Linux the owner word is written by the program through `/dev/gpu` (Nano-X's screen
 driver does), and the kernel clears it, and the cursor, when that file is closed, so a

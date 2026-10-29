@@ -536,104 +536,14 @@ walks a pass). `mmu_translate` called where the fast step declines such an instr
 the instruction run again on the fast path, was written down and not built; so was a second
 level of more than 256 pages (it moves the state's texels).
 
-## gpu_vm's floor: what the pieces of a step cost (23 October 2026)
-
-Before a new gpu_vm tick was designed (x30), its pieces were timed alone: `gpu_vm/tick/probes/floor.hlsl` is a loop
-whose turn is one bundle of a synthetic program, its parts chosen by defines, and `floor.cpp` (`bin\floor.exe`,
-`probes\build_floor.bat`) times it on the card by the GPU's clock (two lengths, the difference; the best of five or
-seven rounds), one warp a core (8 x 4 pixels), and checks its output against WARP's. The probe lists are
-`probes/floor1.txt` to `floor6.txt`. RTX 5070 Laptop at 2.8 GHz, one core (as gvmbench's ns cases; two runs agree to
-0.1 ns), ns a bundle and the timed loop's DXBC instructions; v0009's integer bundle is 103 ns:
-
-| Probe | ns | DXBC |
-|---|---|---|
-| straight code: the next bundle fetched, no work (its address does not wait for it) | 16.9 | 13 |
-| both next bundles fetched, the taken one chosen by a bit of the bundle (the tick's shape) | 48.5 | 19 |
-| ... the fall-through fetched a bundle ahead, chosen | 53.6 | 28 |
-| ... the target fetched by a branch only when taken | 55.0 | 36 |
-| one add (two register reads, a write), straight code | 27.7 | 22 |
-| two adds, straight code | 42.9 | 31 |
-| one add, both bundles fetched | 52.7 | 28 |
-| two adds | 63.9 | 37 |
-| ... no register writes | 52.8 | 39 |
-| two ops of a unit of 2, 4, 8, 16 functions chosen by selects | 65.7, 69.4, 70.5, 67.5 | 45-98 |
-| two ops of x23's mid unit; with the I/R choice | 75.3; 74.6 | 110; 112 |
-| two ops of 8 float functions; an add and the float unit behind a branch | 68.9; 70.5 | 86; 65 |
-| the 8-function unit and a branch on a register != 0, read with the ops' operands | 77.6 | 81 |
-| ... on lt/ltu/eq of two registers, a sense bit; x23's 16 kinds | 88.4; 93.9 | 94; 104 |
-| ... the same three with the registers read after the ops' writes | 116.1, 125.0, 126.7 | 82-105 |
-| ... on op 1's result != 0 (forwarded, no read) | 102.0 | 79 |
-| x23's mid unit, I/R, 16 kinds read first (the tick's integer path without its bookkeeping) | 112.2 | 142 |
-| two adds with 8 or 16 registers in the GPU's own registers (a tree of selects); with a branch on one | 52.1, 67.2; 74.9, 93.0 | 96-239 |
-| two chains of two adds a turn (two cores' bundles in one warp) | 97.1 (48.6 each) | 79 |
-| a load (the data texel, no write cache) and an add | 83.4 | 48 |
-| ... through a direct-mapped write cache of one tag; two buckets of four (x23's eight tags); behind the bloom word | 170.3; 110.7; 113.2 | 56; 103; 113 |
-| a store into the direct-mapped cache (tag and word written) and an add | 422.2 | 61 |
-
-A dependent chase through a local array (`CHASE`): 17 ns a read in the L1 cache, 106-117 in L2. One warp an SM keeps
-256 words a lane (32 KB a warp) in L1 and not 1,024; at 255 cores (7 warps an SM) 64 words a lane are already 33 ns and
-256 are 116. With all 255 cores busy every probe above is 1.2-4x dearer (two adds 77, the 8-unit 103, a branch on a
-register 115, x23's buckets 393): the 32 lanes of a core each keep the same registers and write cache, so a warp's
-local memory is 32 times its state.
-
-So, for one core, a bundle's floor is the fetch: its next bundle's address waits for the bundle (48.5 ns, 47% of
-v0009's 103), and a bundle that does anything useful costs more: two ops 64, two ops and a branch on a register 78 (the
-cheapest test, read with the operands), the same with x23's branch kinds 94. Half of today's bundle (52 ns) is the
-fetch and one op; a step of two ops and a branch cannot be 2x v0009's on this card in a fragment shader with the
-registers in local memory, and the GPU's registers (a tree of selects) are no cheaper past 8. What a unit holds is
-nearly free (2 to 16 functions: 66-71 ns); what costs is every dependence on a fetched or loaded value: the branch's
-register reads after a store (+38-50 ns), the write cache's tag reads (+27-87 ns over the texel alone), a store into
-local memory that the next bundle reads (+250 ns). Not measured: SASS counts (the GPU trace exports no shader's code;
-its SASS view is the Nsight UI's only), so the DXBC counts are the proxy.
-
-### Blocks: the fetch paid once a block (phase 1b)
-
-The fetch's chain is paid once a block rather than once a bundle when K bundles are fetched together from addresses that
-do not wait for them and run straight, with one decision at the block's end (`BLOCK=K`, `floor7.txt` to `floor9.txt`;
-two ops of the 8-function unit a bundle, the decision a register != 0). One core, ns a bundle:
-
-| K | 1 | 2 | 3 | 4 | 6 | 8 |
-|---|---|---|---|---|---|---|
-| the decision on the last bundle's register, after the ops | 113.2 | 81.8 | 69.4 | 64.2 | 59.3 | 57.6 |
-| the decision from the first bundle, before the ops (the next block in flight while they run) | 79.4 | 62.3 | 58.9 | 57.0 | 55.2 | 52.8 |
-
-Today's shape with the same unit and test is 77.7. Loads in blocks (op 0 a load in every bundle, or in every other; K 4):
-the data texel alone 86.4 and 68.3 (today's shape 83.5 every bundle), x23's two buckets of four 125.3 and 93.8 (110.4).
-In a block a bundle's register write of a loaded value holds every later bundle (a store of a value still in flight
-stops the warp's issue), so the loads that overlapped the fetch are on the path now. Written at the block's end instead
-(`DEFER`, the compiler keeping a load's uses in later blocks): every other bundle a load, K 2, 4, 8: the texel 68.9,
-61.8, 64.4; two buckets 78.4, 83.2, 77.7.
-
-Guest blocks (`gpu_vm/tick/x30/blocks.py` on gvm_cpu's profiles of the po builds, `build/bench_games/prof_lay/po`):
-bundles a run between decisions (a branch, addbnz, a j, a call, a return) are 3.09 for Quake III's core 0, 3.95 its
-workers, 3.33 Half-Life's core 0, 4.00 its workers; of the bundles 10-12% are in runs of 1, 11-16% of 2, 14-26% of 3-4,
-16-34% of 5-8, 18-42% longer; 48-59% hold a load or store. Weighed so, a block step costs about 59.5 ns an integer bundle
-against 77.7 (1.31x) and about 81 ns a bundle of the games' mix with the write cache and deferred loads against 94
-(1.16x; 1.06x without deferral, 1.2x with no write cache at all). The fetch is not where the rest of the time is: a
-block of straight bundles is bound by its registers' and loads' chains through local memory, which the in-order warp
-cannot overlap. Short of 1.6x: x30 not built on it.
-
-### Blocks with fast registers and hoisted loads (the last round)
-
-`floor10.txt` and `floor11.txt` (`--hot 70`: 70% of register fields name one of the fast registers, as a compiler's choice
-would), one core, ns a bundle. Fast registers (`FILE=6`: r0-r7 or r0-r3 in the GPU's registers by a tree of selects, the
-rest in local memory; `FILE=7` a branch an operand; `FILE=5` all 8 in GPU registers, the bound) are dearer in every
-shape: integer blocks of 1, 2, 4, 8 bundles 79.4, 62.3, 57.0, 52.8 with local memory, 100.8, 91.1, 83.1, 82.0 with 8 fast
-registers, 98.4, 76.6, 71.3, 66.6 with 4, 79.5, 66.9, 61.1, 58.3 with all 8 in GPU registers; today's shape 77.8, with 8
-fast registers 104.4. In a block the selects' issue is on the path that local memory's latency had overlapped.
-Loads (x23's buckets, every other bundle a load, written at the block's end; `HOIST=1` issues the block's loads at its
-start): K 2, 4, 8 78.4, 83.1, 74.7; hoisted 78.6, 82.4 (68.1 in a second batch), 65.5; with fast registers 106-135.
-Weighed by the guest runs (Quake III core 0; Half-Life core 0 in brackets): integers 58.8 ns against 77.8 (1.32x), the
-games' mix 74 ns against 94.4 (1.27x; 1.31x). Under 1.4x: the tick-side search is closed.
-
 ## Each way of fetching a word, and exchanging one between lanes (23 October 2026)
 
-`gpu_vm/tick/probes/fetchlat.hlsl`, `fetchlat.cpp` (`bin\fetchlat.exe`): a dependent chain of fetches, each address the
-last fetch's word, in 512 words (L1's), one core (an 8 x 4 block), RTX 5070 Laptop at 2,835 MHz, two runs alike to 0.1 ns:
+A probe shader timed on the card by the GPU's clock: a dependent chain of fetches, each address the
+last fetch's word, in 512 words (L1's), one warp (an 8 x 4 block), RTX 5070 Laptop at 2,835 MHz, two runs alike to 0.1 ns:
 
 | Fetch | ns |
 |---|---|
-| Texture2D<uint4> Load, the 8192-wide RAM texture (today) | 35.2 |
+| Texture2D<uint4> Load, an 8192-wide texture | 35.2 |
 | Texture2D<uint> (R32_UINT) Load; Texture2D<uint2> (R32G32) Load | 34.8; 34.8 |
 | Load with a constant offset (int2(1, 0)) | 39.4 |
 | GatherRed of R32_UINT (four words) | 49.1 |
@@ -650,23 +560,13 @@ infinities, denormals and -0 among them, none changed. So the texture path is 35
 the texture was last written; an offset costs 4, a sampler 6, a gather 14; the load path (buffers, the cbuffer) is 18-23,
 and a cbuffer (64 KB, read-only in a pass) is the one of those a VRChat shader can have.
 
-`xlane.hlsl`, `xlane.cpp` (`bin\xlane.exe`): exchange between a core's lanes. An InterlockedAdd on a RWStructuredBuffer
+A second probe: exchange between a core's lanes. An InterlockedAdd on a RWStructuredBuffer
 at u8 with nothing bound (feature level 11_1; the debug layer says nothing about it) gives every lane 0 on the card and on
 WARP, whatever the lanes add: no aggregate comes back. A dependent chain of them is 58.4 ns a step. A quad's exchange by
 ddx_fine / ddy_fine (a 32-bit word as two 16-bit halves in floats) is exact on all 32 pixels, and 38 ns a step (a chain
 43.6 against 5.5 for the same loop without it). Neither is a cross-lane primitive under 20 ns.
 
-### Blocks as a real tick would run them: a length and a kind a bundle known only from the code
-
-The blocks above were straight code made for one K and one pattern of loads at compile time. A tick reads both from the
-bundles: `VBLOCK=1` (`floor12.txt`) fetches 8 bundles a block, runs the first K (1-8, from the first bundle; 4.2-4.9 a
-block as run) each behind a test, and each bundle's op 0 is a load or not by a bit of it (half of them, `--fpct 50`;
-x23's two buckets). One core, ns a bundle: integers 94.8 against 77.6 in today's shape (and 57.0 for the fixed K 4);
-the mix 176.3 (167.0 with the loads written at the block's end) against 112.1. The per-bundle tests take back more than
-the block gives: a block design pays only where its shape is the shader's, which a fixed tick cannot have for every
-block. x30 not built.
-
-## gpu_vm's lessons tried on this tick (28 October 2026)
+## Local arrays and the stalled store's test tried on this tick (28 October 2026)
 
 Each variant beside the tree's tick in one run (`RVC_TICK_ALT`, every frame's tick picked by a hash, every
 frame timed: `--stats-after 3`, about 2,000 to 4,500 frames timed each), RTX 5090, D3D11, fxc2: the shell loop
@@ -683,9 +583,9 @@ frame's tick, the tree's first:
 | `l1_has` (1,024 bits in local memory) as 128 bits in a `uint4`, with the `uint4` above | 1.4336 → 1.4315 | 1.4631 → 1.4772 (+1.0%) | 1.4406 → 1.4422 | no |
 | the same as 256 bits in two `uint4`s | 1.4336 → 1.4385 | 1.4631 → 1.4764 (+0.9%) | 1.4406 → 1.4439 | no |
 | no `l1_has` filter at all | 1.4336 → 1.4217 (-0.8%) | 1.4631 → 1.4741 (+0.8%) | 1.4406 → 1.4330 (-0.5%) | no: Doom slower |
-| a pad, a static array of N words declared before `l1_has` and used after the loop (gpu_vm's 880f7d1), N = 1, 3, 5, 9, 13, 17, 24 (with the `uint4`) | +0.9, +0.4, +1.1, +0.6, +0.2, +0.2, -0.8%; N 24 again -0.6, -0.7% | -1.6, -2.7, -4.6, -1.3, -1.9, -1.0, -1.5%; N 24 again -0.4, +0.2% | -1.0, -0.8, -1.0, -1.6, -0.6, -1.3, -1.0%; N 24 again -0.9, -1.1% | no: N 5 slows the shell loop, N 24 under 1% and level on Doom |
+| a pad, a static array of N words declared before `l1_has` and used after the loop, N = 1, 3, 5, 9, 13, 17, 24 (with the `uint4`) | +0.9, +0.4, +1.1, +0.6, +0.2, +0.2, -0.8%; N 24 again -0.6, -0.7% | -1.6, -2.7, -4.6, -1.3, -1.9, -1.0, -1.5%; N 24 again -0.4, +0.2% | -1.0, -0.8, -1.0, -1.6, -0.6, -1.3, -1.0%; N 24 again -0.9, -1.1% | no: N 5 slows the shell loop, N 24 under 1% and level on Doom |
 
 The first array of four words was what cost: the stalled store's test and the one store site gain alone and
-lose with it, as gpu_vm's layouts did (a change to the local arrays moves the others). The COMMIT_BANDS mask
+lose with it (a change to the local arrays moves the others). The COMMIT_BANDS mask
 dropped from the in-place tick was level too (shell loop runs in turn: 4,505.7, 4,935.4 and 4,937.0 thousand
 instructions a second without it against 4,487.0, 4,955.7 and 4,970.0 with it).

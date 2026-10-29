@@ -29,9 +29,9 @@ In WSL, after the MMU build (`linux/kernel/build.sh` and the programs' build scr
   numbers): `patch_uaccess.py` (`access_ok` checks the ROM and RAM, a `get_user` or `put_user` is
   one load or store), `patch_memmap.py` (the boot's `struct page`s copied from one, frees that
   store only what changes: the boot 14.5 to 10.2 million instructions), `patch_fastrun.py`
-  (GPU-VM's: a program's memory one block of the buddy allocator, freed in aligned blocks),
+  (a program's memory one block of the buddy allocator, freed in aligned blocks),
   `patch_memcpy.py` (no byte loops for misaligned copies; the commit's parallel copy for any
-  large copy whose two ends lie alike in a texel), `patch_flatreloc.py` (GPU-VM's: relocations a
+  large copy whose two ends lie alike in a texel), `patch_flatreloc.py` (relocations a
   word at a time), `patch_sysfs.py` (no sysfs for the boot's slab caches and built-in
   parameters: the boot 9.9 to 8.0 million), `patch_zeroread.py` (`/dev/zero` a megabyte a step,
   no fault-in of a write's buffer) and `patch_timekeeping.py` (with one processor the tick
@@ -43,8 +43,8 @@ In WSL, after the MMU build (`linux/kernel/build.sh` and the programs' build scr
   repository's build scripts run there with the flat drivers, a line each.
 - `bash linux/nommu/root.sh`: mctest and the machine's `elf2flt`, then every program of the root
   made flat (`flat.py`, `elf2bflt.py`) into `build/nommu/flatroot`. binfmt_flat writes the data's start into
-  the word just below it (its shared-library table, `NO_DATA_START_OFFSET` or not; on gpu_vm it overwrote musl's
-  `decfloat`): both converters start the data at the first 32 bytes, from the first writable segment down to the
+  the word just below it (its shared-library table, `NO_DATA_START_OFFSET` or not; it can overwrite a variable such as
+  musl's `decfloat`): both converters start the data at the first 32 bytes, from the first writable segment down to the
   text's end, with no section in that word, and refuse a program with none. The linker leaves a page between text
   and data, so every program of the root keeps its bytes; `tcc -shared` does not, and the example cube's
   `.eh_frame_hdr` ran into its `.dynamic`: its data now starts at 0x27500 for 0x2d000 (only the header's word
