@@ -669,6 +669,20 @@ public:
 		*r = MakeRec(colour.p, 0, x, y, width, height, K_FILL, 0);
 	}
 
+	/** A checker (FILLRECT_CHECKER) of width x height at video, its first row's first pixel at first: one record. */
+	bool DrawChecker(void *video, int width, int height, uint8_t colour, int first)
+	{
+		int x, y;
+		if (!Where(video, x, y)) return false;
+		if (width <= 0 || height <= 0) return true;
+		int k = VpCore();
+		if (k == 0) EnsureFrame();
+		Rec *r = NewRec(_streams[k], k);
+		if (r == nullptr) return true;
+		*r = MakeRec(colour | static_cast<uint32_t>((x + first + y) & 1) << 8, 0, x, y, width, height, K_CHECKER, 0);
+		return true;
+	}
+
 	/** The pointer is put back (or a chat message taken away): the GPU never drew it into the picture. */
 	void CopyFromBuffer(void *, const void *, int, int) override
 	{
@@ -750,6 +764,12 @@ public:
 	std::unique_ptr<Blitter> CreateInstance() override { return std::make_unique<Blitter_8bppGpu>(); }
 };
 static FBlitter_8bppGpu iFBlitter_8bppGpu;
+
+/** A checker drawn as one record, where the GPU draws the picture (gfx.cpp's FILLRECT_CHECKER); false: pixel by pixel. */
+bool SeGpuChecker(void *video, int width, int height, uint8_t colour, int first)
+{
+	return SeGpuOn() && static_cast<Blitter_8bppGpu *>(BlitterFactory::GetCurrentBlitter())->DrawChecker(video, width, height, colour, first);
+}
 
 bool SeGpuOn()
 {

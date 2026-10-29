@@ -619,7 +619,7 @@ index c1de3c5..8f78196 100644
  }
  
 diff --git a/src/gfx.cpp b/src/gfx.cpp
-index 2cae30c..675a196 100644
+index 2cae30c..d7f07d2 100644
 --- a/src/gfx.cpp
 +++ b/src/gfx.cpp
 @@ -51,7 +51,12 @@ PauseModes _pause_mode;
@@ -660,7 +660,19 @@ index 2cae30c..675a196 100644
  	if (_cursor.visible) UndrawMouseCursor();
  
  	if (_networking) NetworkUndrawChatMessage();
-@@ -1241,6 +1255,9 @@ std::unique_ptr<uint32_t[]> DrawSpriteToRgbaBuffer(SpriteID spriteId, ZoomLevel
+@@ -151,6 +165,11 @@ void GfxFillRect(int left, int top, int right, int bottom, const std::variant<Pi
+ 		case FILLRECT_CHECKER: {
+ 			uint8_t bo = (oleft - left + dpi->left + otop - top + dpi->top) & 1;
+ 			PixelColour pc = std::get<PixelColour>(colour);
++#ifdef WITH_SHADEREMU
++			/* (one record of the GPU's, not a pixel at a time) */
++			extern bool SeGpuChecker(void *video, int width, int height, uint8_t colour, int first);
++			if (SeGpuChecker(dst, right, bottom, pc.p, bo ^ 1)) break;
++#endif
+ 			do {
+ 				for (int i = (bo ^= 1); i < right; i += 2) blitter->SetPixel(dst, i, 0, pc);
+ 				dst = blitter->MoveTo(dst, 0, 1);
+@@ -1241,6 +1260,9 @@ std::unique_ptr<uint32_t[]> DrawSpriteToRgbaBuffer(SpriteID spriteId, ZoomLevel
  
  static void GfxMainBlitterViewport(const Sprite *sprite, int x, int y, BlitterMode mode, const SubSprite *sub, SpriteID sprite_id)
  {
@@ -670,7 +682,7 @@ index 2cae30c..675a196 100644
  	GfxBlitter<ZOOM_BASE, false>(sprite, x, y, mode, sub, sprite_id, _cur_dpi->zoom);
  }
  
-@@ -1337,9 +1354,15 @@ void UndrawMouseCursor()
+@@ -1337,9 +1359,15 @@ void UndrawMouseCursor()
  {
  	/* Don't undraw mouse cursor if it is handled by the video driver. */
  	if (VideoDriver::GetInstance()->UseSystemCursor()) return;
@@ -686,7 +698,7 @@ index 2cae30c..675a196 100644
  
  	if (_cursor.visible) {
  		Blitter *blitter = BlitterFactory::GetCurrentBlitter();
-@@ -1353,6 +1376,9 @@ void DrawMouseCursor()
+@@ -1353,6 +1381,9 @@ void DrawMouseCursor()
  {
  	/* Don't draw mouse cursor if it is handled by the video driver. */
  	if (VideoDriver::GetInstance()->UseSystemCursor()) return;
@@ -696,7 +708,7 @@ index 2cae30c..675a196 100644
  
  	/* Don't draw the mouse cursor if the screen is not ready */
  	if (_screen.dst_ptr == nullptr) return;
-@@ -1361,6 +1387,9 @@ void DrawMouseCursor()
+@@ -1361,6 +1392,9 @@ void DrawMouseCursor()
  
  	/* Redraw mouse cursor but only when it's inside the window */
  	if (!_cursor.in_window) return;
@@ -706,7 +718,7 @@ index 2cae30c..675a196 100644
  
  	/* Don't draw the mouse cursor if it's already drawn */
  	if (_cursor.visible) {
-@@ -1449,8 +1478,22 @@ void RedrawScreenRect(int left, int top, int right, int bottom)
+@@ -1449,8 +1483,26 @@ void RedrawScreenRect(int left, int top, int right, int bottom)
   *
   * @ingroup dirty
   */
@@ -725,11 +737,39 @@ index 2cae30c..675a196 100644
 +	RefreshStaleTextEffects();
 +	ShipAheadQuiet quiet;
 +	ViewportKeep keep;
++	/* the rectangles painted together, each window but a viewport's once (window.cpp, RedrawScreenRects;
++	 * OPENTTD_WINDOW_CUT=1: one rectangle after another, as upstream) */
++	static const bool cut = getenv("OPENTTD_WINDOW_CUT") != nullptr;
++	static std::vector<Rect> rects;
 +#endif
  	auto is_dirty = [](auto block) -> bool { return block != 0; };
  	auto block = _dirty_blocks.begin();
  
-@@ -1515,6 +1558,9 @@ void DrawDirtyBlocks()
+@@ -1489,10 +1541,23 @@ void DrawDirtyBlocks()
+ 			bottom = std::min(_invalid_rect.bottom, bottom);
+ 
+ 			if (left < right && top < bottom) {
++#ifdef WITH_SHADEREMU
++				if (!cut) {
++					rects.push_back({left, top, right, bottom});
++					continue;
++				}
++#endif
+ 				RedrawScreenRect(left, top, right, bottom);
+ 			}
+ 		}
+ 	}
++#ifdef WITH_SHADEREMU
++	if (!rects.empty()) {
++		extern void RedrawScreenRects(std::vector<Rect> &rects);
++		RedrawScreenRects(rects);
++		rects.clear();
++	}
++#endif
+ 
+ 	++_dirty_block_colour;
+ 	_invalid_rect.left = _screen.width;
+@@ -1515,6 +1580,9 @@ void DrawDirtyBlocks()
   */
  void AddDirtyBlock(int left, int top, int right, int bottom)
  {
@@ -739,7 +779,7 @@ index 2cae30c..675a196 100644
  	if (left < 0) left = 0;
  	if (top < 0) top = 0;
  	if (right > _screen.width) right = _screen.width;
-@@ -1534,6 +1580,19 @@ void AddDirtyBlock(int left, int top, int right, int bottom)
+@@ -1534,6 +1602,19 @@ void AddDirtyBlock(int left, int top, int right, int bottom)
  
  	assert(left < right && height > 0);
  
@@ -759,7 +799,7 @@ index 2cae30c..675a196 100644
  	for (; left < right; ++left) {
  		size_t offset = _dirty_blocks_per_column * left + top;
  		std::fill_n(_dirty_blocks.begin() + offset, height, 0xFF);
-@@ -1548,6 +1607,10 @@ void AddDirtyBlock(int left, int top, int right, int bottom)
+@@ -1548,6 +1629,10 @@ void AddDirtyBlock(int left, int top, int right, int bottom)
   */
  void MarkWholeScreenDirty()
  {
@@ -3874,6 +3914,22 @@ index 9070e07..8c35392 100644
  
  	this->tick_counter++;
  
+diff --git a/src/saveload/afterload.cpp b/src/saveload/afterload.cpp
+index 2f9e10c..85c8bf7 100644
+--- a/src/saveload/afterload.cpp
++++ b/src/saveload/afterload.cpp
+@@ -799,6 +799,11 @@ bool AfterLoadGame()
+ 
+ 	/* Load the sprites */
+ 	GfxLoadSprites();
++#ifdef WITH_SHADEREMU
++	/* (made on idle workers while the rest is loaded: docs/games/openttd.md, "Sprites loaded ahead") */
++	extern void SpritesAheadStart();
++	SpritesAheadStart();
++#endif
+ 	LoadStringWidthTable();
+ 
+ 	/* Copy temporary data to Engine pool */
 diff --git a/src/saveload/saveload.cpp b/src/saveload/saveload.cpp
 index ebec3d2..c6e72ae 100644
 --- a/src/saveload/saveload.cpp
@@ -4227,7 +4283,7 @@ index 0abd7c0..675f9c3 100644
 +    CONDITION SHADEREMU
 +)
 diff --git a/src/spritecache.cpp b/src/spritecache.cpp
-index f26695a..77ddf8b 100644
+index f26695a..11abc75 100644
 --- a/src/spritecache.cpp
 +++ b/src/spritecache.cpp
 @@ -18,11 +18,16 @@
@@ -4416,7 +4472,43 @@ index f26695a..77ddf8b 100644
  	const size_t initial_in_use = _spritecache_bytes_used;
  
  	struct SpriteInfo {
-@@ -854,6 +980,24 @@ static void *HandleInvalidSpriteRequest(SpriteID sprite, SpriteType requested, S
+@@ -807,6 +933,9 @@ void *UniquePtrSpriteAllocator::AllocatePtr(size_t size)
+  * @return fallback sprite
+  * @note this function will do UserError() in the case the fallback sprite isn't available
+  */
++#ifdef WITH_SHADEREMU
++static bool SpritesAheadHeld(const std::byte *p);
++#endif
+ static void *HandleInvalidSpriteRequest(SpriteID sprite, SpriteType requested, SpriteCache *sc, SpriteAllocator *allocator, SpriteEncoder *encoder)
+ {
+ 	static const std::string_view sprite_types[] = {
+@@ -818,6 +947,11 @@ static void *HandleInvalidSpriteRequest(SpriteID sprite, SpriteType requested, S
+ 
+ 	SpriteType available = sc->type;
+ 	if (requested == SpriteType::Font && available == SpriteType::Normal) {
++#ifdef WITH_SHADEREMU
++		/* (a glyph is made from its font's zoom: one loaded ahead as a normal sprite is made again as a glyph, as
++		 * upstream makes a sprite first asked for as one) */
++		if (sc->ptr != nullptr && SpritesAheadHeld(sc->ptr.get())) sc->ClearSpriteData();
++#endif
+ 		if (sc->ptr == nullptr) sc->type = SpriteType::Font;
+ 		return GetRawSprite(sprite, sc->type, allocator, encoder);
+ 	}
+@@ -843,6 +977,13 @@ static void *HandleInvalidSpriteRequest(SpriteID sprite, SpriteType requested, S
+ 	}
+ }
+ 
++#ifdef WITH_SHADEREMU
++void SpritesAheadTake();
++void SpritesAheadEnd();
++static void SpritesAheadFree();
++static bool SpritesAheadHeld(const std::byte *p);
++#endif
++
+ /**
+  * Reads a sprite (from disk or sprite cache).
+  * If the sprite is not available or of wrong type, a fallback sprite is returned.
+@@ -854,6 +995,24 @@ static void *HandleInvalidSpriteRequest(SpriteID sprite, SpriteType requested, S
   */
  void *GetRawSprite(SpriteID sprite, SpriteType type, SpriteAllocator *allocator, SpriteEncoder *encoder)
  {
@@ -4441,7 +4533,29 @@ index f26695a..77ddf8b 100644
  	assert(type != SpriteType::MapGen || IsMapgenSpriteID(sprite));
  	assert(type < SpriteType::Invalid);
  
-@@ -894,8 +1038,171 @@ void *GetRawSprite(SpriteID sprite, SpriteType type, SpriteAllocator *allocator,
+@@ -874,6 +1033,9 @@ void *GetRawSprite(SpriteID sprite, SpriteType type, SpriteAllocator *allocator,
+ 		/* Update LRU */
+ 		sc->lru = ++_sprite_lru_counter;
+ 
++#ifdef WITH_SHADEREMU
++		if (sc->ptr == nullptr && type == SpriteType::Normal) SpritesAheadTake();
++#endif
+ 		/* Load the sprite, if it is not loaded, yet */
+ 		if (sc->ptr == nullptr) {
+ 			UniquePtrSpriteAllocator cache_allocator;
+@@ -882,7 +1044,11 @@ void *GetRawSprite(SpriteID sprite, SpriteType type, SpriteAllocator *allocator,
+ 			} else {
+ 				ReadSprite(sc, sprite, type, cache_allocator, nullptr);
+ 			}
++#ifdef WITH_SHADEREMU
++			sc->ptr.reset(cache_allocator.data.release());
++#else
+ 			sc->ptr = std::move(cache_allocator.data);
++#endif
+ 			sc->length = static_cast<uint32_t>(cache_allocator.size);
+ 			_spritecache_bytes_used += sc->length;
+ 		}
+@@ -894,14 +1060,416 @@ void *GetRawSprite(SpriteID sprite, SpriteType type, SpriteAllocator *allocator,
  	}
  }
  
@@ -4505,34 +4619,271 @@ index f26695a..77ddf8b 100644
 +};
 +static std::vector<VpLoadJob> _vp_load_jobs;
 +
-+/** Sprites from..to-1 of the round decoded, made smaller and encoded from their files' images, in this core's arena. */
-+static void VpLoadJobs(void *, uint32_t from, uint32_t to)
++/**
++ * A normal sprite decoded, made smaller and encoded from its file's image in this core's arena (its temporaries from the
++ * bottom, what is made at the top): nullptr where the core gave up (the first core loads it as before).
++ */
++static const void *VpLoadOne(SpriteID id, uint32_t &bytes)
 +{
 +	const int k = VpCore();
 +	VpArena &a = _vp_arena[k];
 +	SpriteEncoder *encoder = BlitterFactory::GetCurrentBlitter();
++	const SpriteCache *sc = GetSpriteCache(id);
++	a.lo = 0;
++	size_t bound = SpriteImageBound(*sc->file, sc->file_pos);
++	if (bound == 0 || bound > a.hi) return nullptr;
++	const bool failed = _vp_core[k].failed;
++	_vp_core[k].failed = false;
++	a.on = true;
++	SpriteLoader::SpriteCollection sprite;
++	ZoomLevels avail_8bpp, avail_32bpp;
++	ZoomLevels avail = LoadSpriteFromImage(sprite, *sc->file, sc->file_pos, SpriteType::Normal, false, sc->control_flags, avail_8bpp, avail_32bpp);
++	VpArenaAllocator allocator;
++	const void *made = nullptr;
++	if (avail.Any() && !_vp_core[k].failed && ResizeSprites(sprite, avail, encoder, SpriteType::Normal) && !_vp_core[k].failed) {
++		made = encoder->Encode(SpriteType::Normal, sprite, allocator);
++	}
++	a.on = false;
++	if (_vp_core[k].failed) made = nullptr;
++	bytes = static_cast<uint32_t>(allocator.size);
++	_vp_core[k].failed = failed;
++	return made;
++}
++
++/** Sprites from..to-1 of the round decoded, made smaller and encoded from their files' images, in this core's arena. */
++static void VpLoadJobs(void *, uint32_t from, uint32_t to)
++{
 +	for (uint32_t i = from; i < to; i++) {
 +		VpLoadJob &job = _vp_load_jobs[i];
-+		const SpriteCache *sc = GetSpriteCache(job.id);
-+		job.made = nullptr;
-+		a.lo = 0;
-+		size_t bound = SpriteImageBound(*sc->file, sc->file_pos);
-+		if (bound == 0 || bound > a.hi) continue;
-+		const bool failed = _vp_core[k].failed;
-+		_vp_core[k].failed = false;
-+		a.on = true;
-+		SpriteLoader::SpriteCollection sprite;
-+		ZoomLevels avail_8bpp, avail_32bpp;
-+		ZoomLevels avail = LoadSpriteFromImage(sprite, *sc->file, sc->file_pos, SpriteType::Normal, false, sc->control_flags, avail_8bpp, avail_32bpp);
-+		VpArenaAllocator allocator;
-+		const void *made = nullptr;
-+		if (avail.Any() && !_vp_core[k].failed && ResizeSprites(sprite, avail, encoder, SpriteType::Normal) && !_vp_core[k].failed) {
-+			made = encoder->Encode(SpriteType::Normal, sprite, allocator);
-+		}
-+		a.on = false;
-+		if (!_vp_core[k].failed) job.made = made, job.bytes = static_cast<uint32_t>(allocator.size);
-+		_vp_core[k].failed = failed;
++		job.made = VpLoadOne(job.id, job.bytes);
 +	}
++}
++
++/** Every core's arena, made and zeroed on the first core (so that its pages are there before a worker writes them). */
++static void VpArenasMake()
++{
++	if (_vp_arena_memory != nullptr) return;
++	_vp_arena_memory = std::make_unique<uint8_t[]>(VP_ARENA_BYTES * VP_CORES + 16);
++	uint8_t *base = reinterpret_cast<uint8_t *>((reinterpret_cast<uintptr_t>(_vp_arena_memory.get()) + 15) & ~uintptr_t{15});
++	for (int k = 0; k < VP_CORES; k++) _vp_arena[k].base = base + k * VP_ARENA_BYTES, _vp_arena[k].size = VP_ARENA_BYTES;
++}
++
++/*
++ * Sprites loaded ahead (docs/games/openttd.md, "Sprites loaded ahead"). When a game's sprites are placed (GfxLoadSprites
++ * in AfterLoadGame), every normal sprite of a file is decoded and encoded on idle workers while the first core goes on:
++ * each call takes every n-th of them into a heap of its own. The first core takes what is made into the cache when it
++ * next looks (SpritesAheadTake: each picture, and before sprites are loaded in a round); a sprite asked for meanwhile is
++ * loaded as before, and what was made of it is left. The cache's entries point into the heaps, which a cleared cache
++ * lets go (SpriteBytesFree); the calls are stopped before the cache is cleared or its files go (SpritesAheadEnd).
++ */
++namespace {
++
++constexpr int AHEAD_SHARES_MOST = 64;
++
++struct alignas(16) AheadMade {
++	const void *data; ///< in its share's heap, nullptr: not made
++	uint32_t bytes;
++};
++
++struct alignas(64) AheadShare {
++	struct alignas(16) { uint8_t *lo, *hi; uint32_t first; } f; ///< the first core's, set before the call
++	struct alignas(16) { volatile uint32_t at, done; uint32_t full; } w; ///< the worker's: the next index it makes, and whether it is through
++	struct alignas(16) { mcw_handle h; uint32_t taken; bool live; } t; ///< the first core's: the call (0: joined), the next index to take, whether it has more
++};
++
++std::vector<SpriteID> _ahead_ids; ///< the sprites to make, by file and place
++AheadMade *_ahead_made = nullptr; ///< one an id, each written by its share's worker
++AheadShare _ahead_shares[AHEAD_SHARES_MOST];
++uint32_t _ahead_step = 0; ///< how many shares there are (each takes every _ahead_step-th id)
++alignas(16) volatile uint32_t _ahead_stop = 0; ///< the first core's: the calls stop at their next sprite
++std::unique_ptr<uint8_t[]> _ahead_heap; ///< every share's heap, in one piece
++size_t _ahead_heap_bytes = 0;
++bool _ahead_core_busy[VP_CORES]; ///< the first core's: which cores' arenas a call uses (VpLoadWanted leaves them be)
++struct { uint32_t ids, made, taken, late, full; uint64_t bytes; uint32_t from, to; } _ahead_stats;
++
++uint32_t AheadRun(uint32_t share, uint32_t)
++{
++	AheadShare &s = _ahead_shares[share];
++	uint8_t *lo = s.f.lo, *hi = s.f.hi;
++	const uint32_t n = static_cast<uint32_t>(_ahead_ids.size()), step = _ahead_step;
++	uint32_t i = s.f.first;
++	for (; i < n; i += step) {
++		if (_ahead_stop != 0) break;
++		uint32_t bytes = 0;
++		_vp_arena[VpCore()].hi = _vp_arena[VpCore()].size; /* (what it makes is copied out at once) */
++		const void *made = VpLoadOne(_ahead_ids[i], bytes);
++		AheadMade m = { nullptr, 0 };
++		if (made != nullptr) {
++			const size_t room = (bytes + 15) & ~size_t{15};
++			if (static_cast<size_t>(hi - lo) < room) {
++				s.w.full = 1;
++				break;
++			}
++			std::copy_n(static_cast<const uint8_t *>(made), bytes, lo);
++			m = { lo, bytes };
++			lo += room;
++		}
++		_ahead_made[i] = m;
++		s.w.at = i + step;
++	}
++	s.w.at = std::max(i, n);
++	s.w.done = 1;
++	return 0;
++}
++
++} // namespace
++
++/** Whether a sprite's bytes lie in a heap of the sprites loaded ahead. */
++static bool SpritesAheadHeld(const std::byte *p)
++{
++	const uint8_t *b = reinterpret_cast<const uint8_t *>(p);
++	return _ahead_heap != nullptr && b >= _ahead_heap.get() && b < _ahead_heap.get() + _ahead_heap_bytes;
++}
++
++/** A sprite's bytes let go, but for those in a heap of the sprites loaded ahead (the cache must not free them). */
++void SpriteBytesFree::operator()(std::byte *p) const
++{
++	if (!SpritesAheadHeld(p)) delete[] p;
++}
++
++/** What the calls have made since the last look, taken into the cache (the first core's). */
++void SpritesAheadTake()
++{
++	if (_ahead_step == 0 || VpCore() != 0) return;
++	bool all = true;
++	for (uint32_t k = 0; k < _ahead_step; k++) {
++		AheadShare &s = _ahead_shares[k];
++		if (!s.t.live) continue;
++		const uint32_t at = s.w.at;
++		for (uint32_t i = s.t.taken; i < at && i < _ahead_ids.size(); i += _ahead_step) {
++			const AheadMade m = _ahead_made[i];
++			if (m.data == nullptr) continue;
++			SpriteCache *sc = GetSpriteCache(_ahead_ids[i]);
++			if (sc->ptr != nullptr || sc->type != SpriteType::Normal) {
++				_ahead_stats.late++;
++				continue;
++			}
++			sc->ptr.reset(static_cast<std::byte *>(const_cast<void *>(m.data)));
++			sc->length = m.bytes;
++			sc->lru = ++_sprite_lru_counter;
++			_spritecache_bytes_used += sc->length;
++			_ahead_stats.taken++;
++			_ahead_stats.bytes += m.bytes;
++		}
++		s.t.taken = std::max(s.t.taken, at);
++		if (s.w.done != 0) {
++			if (s.t.h != 0) {
++				_ahead_core_busy[mcw_call_worker(s.t.h)] = false;
++				mcw_join(s.t.h);
++				s.t.h = 0;
++			}
++			s.t.live = false;
++			if (s.w.full != 0) _ahead_stats.full++;
++		} else {
++			all = false;
++		}
++	}
++	if (all) {
++		_ahead_step = 0;
++		std::fill(std::begin(_ahead_core_busy), std::end(_ahead_core_busy), false);
++		_ahead_stats.to = VpTime();
++		static const bool log = getenv("OPENTTD_AHEAD_LOG") != nullptr;
++		if (log) {
++			fmt::print(stderr, "openttd: sprites ahead: {} of {} taken ({} KB of a {} KB heap), {} loaded meanwhile, {} shares full, in {:.0f} ms\n",
++					_ahead_stats.taken, _ahead_stats.ids, _ahead_stats.bytes / 1024, _ahead_heap_bytes / 1024, _ahead_stats.late, _ahead_stats.full,
++					(_ahead_stats.to - _ahead_stats.from) / 5.0);
++		}
++	}
++}
++
++/** The calls stopped (at their next sprite) and joined, what they made taken; before the cache is cleared or its files go. */
++void SpritesAheadEnd()
++{
++	if (_ahead_step == 0) return;
++	_ahead_stop = 1;
++	for (uint32_t k = 0; k < _ahead_step; k++) {
++		AheadShare &s = _ahead_shares[k];
++		if (s.t.h == 0) continue;
++		_ahead_core_busy[mcw_call_worker(s.t.h)] = false;
++		mcw_join(s.t.h);
++		s.t.h = 0;
++		s.w.done = 1;
++	}
++	SpritesAheadTake();
++	_ahead_stop = 0;
++}
++
++/** The heaps let go, once no sprite of the cache points into them (after the cache is cleared). */
++static void SpritesAheadFree()
++{
++	SpritesAheadEnd();
++	_ahead_heap.reset();
++	_ahead_heap_bytes = 0;
++	delete[] _ahead_made;
++	_ahead_made = nullptr;
++	_ahead_ids.clear();
++}
++
++/** Every normal sprite of a file not in the cache, made on idle workers from now on (the first core goes on). */
++void SpritesAheadStart()
++{
++	/* OPENTTD_SPRITES_AHEAD=0: none; =N: N MB of heap (16) */
++	static const int mb = [] { const char *e = getenv("OPENTTD_SPRITES_AHEAD"); int n = e != nullptr ? 0 : 16; for (const char *c = e; c != nullptr && *c >= 0x30 && *c <= 0x39; c++) n = n * 10 + (*c - 0x30); return n; }();
++	if (mb <= 0 || VpCore() != 0 || _ahead_step != 0 || _ahead_heap != nullptr) return;
++	if (BlitterFactory::GetCurrentBlitter()->GetScreenDepth() != 8) return;
++	extern int VpWorkersOpen();
++	const int workers = VpWorkersOpen();
++	if (workers <= 2) return;
++	_ahead_ids.clear();
++	for (SpriteID id = 0; id < _spritecache.size(); id++) {
++		const SpriteCache &sc = _spritecache[id];
++		if (sc.type == SpriteType::Normal && sc.file != nullptr && sc.ptr == nullptr) _ahead_ids.push_back(id);
++	}
++	if (_ahead_ids.empty()) return;
++	std::stable_sort(_ahead_ids.begin(), _ahead_ids.end(), [](SpriteID a, SpriteID b) {
++		const SpriteCache &x = _spritecache[a], &y = _spritecache[b];
++		return x.file != y.file ? x.file < y.file : x.file_pos < y.file_pos;
++	});
++	for (SpriteID id : _ahead_ids) _spritecache[id].file->Image(); /* (read by the first core: a worker reads it where it lies) */
++	VpArenasMake();
++	_ahead_heap_bytes = static_cast<size_t>(mb) << 20;
++	_ahead_heap.reset(new (std::nothrow) uint8_t[_ahead_heap_bytes]);
++	if (_ahead_heap == nullptr) {
++		_ahead_heap_bytes = 0;
++		return;
++	}
++	_ahead_made = new AheadMade[_ahead_ids.size()];
++	mcw_touch(_ahead_heap.get(), static_cast<unsigned>(_ahead_heap_bytes));
++	mcw_touch(_ahead_made, static_cast<unsigned>(_ahead_ids.size() * sizeof(AheadMade)));
++	mcw_touch_code(reinterpret_cast<const void *>(AheadRun), 256);
++	const uint32_t shares = static_cast<uint32_t>(std::min(workers - 2, AHEAD_SHARES_MOST));
++	_ahead_step = shares;
++	_ahead_stop = 0;
++	_ahead_stats = {};
++	_ahead_stats.ids = static_cast<uint32_t>(_ahead_ids.size());
++	_ahead_stats.from = VpTime();
++	const size_t each = (_ahead_heap_bytes / shares) & ~size_t{15};
++	uint8_t *base = reinterpret_cast<uint8_t *>((reinterpret_cast<uintptr_t>(_ahead_heap.get()) + 15) & ~uintptr_t{15});
++	mcw_for_end(); /* (a team lingering after a round takes no call) */
++	for (uint32_t k = 0; k < shares; k++) {
++		AheadShare &s = _ahead_shares[k];
++		s.f.lo = base + k * each;
++		s.f.hi = s.f.lo + each - 16;
++		s.f.first = k;
++		s.w.at = k;
++		s.w.done = 0;
++		s.w.full = 0;
++		s.t.taken = k;
++		s.t.h = mcw_try_call(AheadRun, k, 0);
++		s.t.live = s.t.h != 0;
++		if (s.t.h != 0) _ahead_core_busy[mcw_call_worker(s.t.h)] = true;
++	}
++}
++
++/** Whether core k's arena is a call's of the sprites loaded ahead (VpLoadWanted leaves it be). */
++static bool AheadBusy(int k)
++{
++	return _ahead_step != 0 && _ahead_core_busy[k];
 +}
 +
 +/**
@@ -4542,6 +4893,7 @@ index f26695a..77ddf8b 100644
 + */
 +uint32_t VpLoadWanted()
 +{
++	SpritesAheadTake();
 +	uint32_t loaded = 0;
 +	std::vector<SpriteID> plain;
 +	for (VpWanted &w : _vp_wanted) {
@@ -4567,13 +4919,10 @@ index f26695a..77ddf8b 100644
 +	std::sort(plain.begin(), plain.end());
 +	plain.erase(std::unique(plain.begin(), plain.end()), plain.end());
 +
-+	if (_vp_arena_memory == nullptr) {
-+		/* (made and zeroed here, so that its pages are there before a worker writes them) */
-+		_vp_arena_memory = std::make_unique<uint8_t[]>(VP_ARENA_BYTES * VP_CORES + 16);
-+		uint8_t *base = reinterpret_cast<uint8_t *>((reinterpret_cast<uintptr_t>(_vp_arena_memory.get()) + 15) & ~uintptr_t{15});
-+		for (int k = 0; k < VP_CORES; k++) _vp_arena[k].base = base + k * VP_ARENA_BYTES, _vp_arena[k].size = VP_ARENA_BYTES;
++	VpArenasMake();
++	for (int k = 0; k < VP_CORES; k++) {
++		if (!AheadBusy(k)) _vp_arena[k].lo = 0, _vp_arena[k].hi = _vp_arena[k].size, _vp_arena[k].on = false;
 +	}
-+	for (VpArena &a : _vp_arena) a.lo = 0, a.hi = a.size, a.on = false;
 +	_vp_load_jobs.resize(plain.size());
 +	for (size_t i = 0; i < plain.size(); i++) _vp_load_jobs[i] = { plain[i], 0, nullptr };
 +	mcw_for_opts opts = {};
@@ -4586,7 +4935,7 @@ index f26695a..77ddf8b 100644
 +		if (job.made == nullptr) {
 +			GetRawSprite(job.id, SpriteType::Normal, nullptr, nullptr);
 +		} else {
-+			sc->ptr = std::make_unique_for_overwrite<std::byte[]>(job.bytes);
++			sc->ptr.reset(new std::byte[job.bytes]);
 +			std::copy_n(static_cast<const std::byte *>(job.made), job.bytes, sc->ptr.get());
 +			sc->length = job.bytes;
 +			sc->lru = ++_sprite_lru_counter;
@@ -4606,6 +4955,7 @@ index f26695a..77ddf8b 100644
  void GfxInitSpriteMem()
  {
 +#ifdef WITH_SHADEREMU
++	SpritesAheadEnd();
 +	_sprite_bounds_gen++;
 +	VpFlushFinish();
 +	VehicleSpriteSizesForget();
@@ -4613,11 +4963,21 @@ index f26695a..77ddf8b 100644
  	/* Reset the spritecache 'pool' */
  	_spritecache.clear();
  	_spritecache.shrink_to_fit();
-@@ -910,6 +1217,11 @@ void GfxInitSpriteMem()
+ 
+ 	_sprite_files.clear();
+ 	_spritecache_bytes_used = 0;
++#ifdef WITH_SHADEREMU
++	SpritesAheadFree();
++#endif
+ }
+ 
+ /**
+@@ -910,10 +1478,19 @@ void GfxInitSpriteMem()
   */
  void GfxClearSpriteCache()
  {
 +#ifdef WITH_SHADEREMU
++	SpritesAheadEnd();
 +	_sprite_bounds_gen++;
 +	VpFlushFinish();
 +	VehicleSpriteSizesForget();
@@ -4625,7 +4985,14 @@ index f26695a..77ddf8b 100644
  	/* Clear sprite ptr for all cached items */
  	for (SpriteCache &sc : _spritecache) {
  		if (sc.ptr != nullptr) sc.ClearSpriteData();
-@@ -924,6 +1236,9 @@ void GfxClearSpriteCache()
+ 	}
++#ifdef WITH_SHADEREMU
++	SpritesAheadFree();
++#endif
+ 
+ 	VideoDriver::GetInstance()->ClearSystemSprites();
+ }
+@@ -924,6 +1501,9 @@ void GfxClearSpriteCache()
   */
  void GfxClearFontSpriteCache()
  {
@@ -4635,6 +5002,28 @@ index f26695a..77ddf8b 100644
  	/* Clear sprite ptr for all cached font items */
  	for (SpriteCache &sc : _spritecache) {
  		if (sc.type == SpriteType::Font && sc.ptr != nullptr) sc.ClearSpriteData();
+diff --git a/src/spritecache_internal.h b/src/spritecache_internal.h
+index 1ef83e9..360f66f 100644
+--- a/src/spritecache_internal.h
++++ b/src/spritecache_internal.h
+@@ -19,8 +19,17 @@
+ 
+ /* These declarations are internal to spritecache but need to be exposed for unit-tests. */
+ 
++#ifdef WITH_SHADEREMU
++/** The bytes of a sprite let go, but for those in a heap of the sprites loaded ahead (spritecache.cpp). */
++struct SpriteBytesFree { void operator()(std::byte *p) const; };
++#endif
++
+ struct SpriteCache {
++#ifdef WITH_SHADEREMU
++	std::unique_ptr<std::byte[], SpriteBytesFree> ptr;
++#else
+ 	std::unique_ptr<std::byte[]> ptr;
++#endif
+ 	size_t file_pos = 0;
+ 	SpriteFile *file = nullptr; ///< The file the sprite in this entry can be found in.
+ 	uint32_t length; ///< Length of sprite data.
 diff --git a/src/spriteloader/grf.cpp b/src/spriteloader/grf.cpp
 index a7ddcda..ee0b2de 100644
 --- a/src/spriteloader/grf.cpp
@@ -6385,7 +6774,7 @@ index 7aafcbd..2b5a339 100644
  };
  
 diff --git a/src/viewport.cpp b/src/viewport.cpp
-index 6427a14..cb063ce 100644
+index 6427a14..b505cd5 100644
 --- a/src/viewport.cpp
 +++ b/src/viewport.cpp
 @@ -99,6 +99,11 @@
@@ -6460,8 +6849,9 @@ index 6427a14..cb063ce 100644
 +#endif
  };
  
- static bool MarkViewportDirty(const Viewport &vp, int left, int top, int right, int bottom);
- 
+-static bool MarkViewportDirty(const Viewport &vp, int left, int top, int right, int bottom);
++static bool MarkViewportDirty(const Window *w, const Viewport &vp, int left, int top, int right, int bottom);
++
 +#ifdef WITH_SHADEREMU
 +struct alignas(64) VpDrawerOfCore : ViewportDrawer {};
 +static VpDrawerOfCore _vd_of[VP_CORES];
@@ -6602,7 +6992,7 @@ index 6427a14..cb063ce 100644
 +#ifdef WITH_SHADEREMU
 +#pragma pop_macro("_vd")
 +#endif
-+
+ 
 +/** The reaches the workers learned, into the tables. */
 +static void VpReachMerge()
 +{
@@ -7174,6 +7564,15 @@ index 6427a14..cb063ce 100644
  void ViewportSign::MarkDirty(ZoomLevel maxzoom) const
  {
  	Rect zoomlevels[to_underlying(ZoomLevel::End)];
+@@ -1574,7 +2043,7 @@ void ViewportSign::MarkDirty(ZoomLevel maxzoom) const
+ 		if (vp.zoom <= maxzoom) {
+ 			assert(vp.width != 0);
+ 			Rect &zl = zoomlevels[to_underlying(vp.zoom)];
+-			MarkViewportDirty(vp, zl.left, zl.top, zl.right, zl.bottom);
++			MarkViewportDirty(w, vp, zl.left, zl.top, zl.right, zl.bottom);
+ 		}
+ 	}
+ }
 @@ -1713,7 +2182,158 @@ static void ViewportSortParentSprites(ParentSpriteToSortVector *psdv)
  }
  
@@ -7372,7 +7771,7 @@ index 6427a14..cb063ce 100644
  	ViewportDrawParentSprites(&_vd.parent_sprites_to_sort, &_vd.child_screen_sprites_to_draw);
  
  	if (_draw_bounding_boxes) ViewportDrawBoundingBoxes(&_vd.parent_sprites_to_sort);
-@@ -1897,6 +2529,855 @@ static inline void ViewportDraw(const Viewport &vp, int left, int top, int right
+@@ -1897,6 +2529,860 @@ static inline void ViewportDraw(const Viewport &vp, int left, int top, int right
  	);
  }
  
@@ -7452,7 +7851,9 @@ index 6427a14..cb063ce 100644
 +static void VpWorkersAtExit()
 +{
 +	extern void YapfShipAheadCancel();
++	extern void SpritesAheadEnd();
 +	YapfShipAheadCancel();
++	SpritesAheadEnd();
 +	mcw_for_end();
 +	mcw_close();
 +}
@@ -8088,6 +8489,9 @@ index 6427a14..cb063ce 100644
 +	for (int i = 0; i < n; i++) _vp_order[i] = i;
 +	if (n > cores) std::sort(_vp_order.begin(), _vp_order.end(), [](int a, int b) { return _vp_pieces[a].cost > _vp_pieces[b].cost; });
 +
++	/* (each zoom's table of reaches made here: a worker learns into one only once the first core made it, and
++	 * the first core draws no piece, so zoomed out none was ever made and every tile in reach was drawn) */
++	for (const VpJob &job : _vp_jobs) VpReachTable(job.vp.zoom);
 +	for (int k = 1; k <= _vp_workers; k++) VpMakeRoom(k);
 +	mcw_for_opts opts = {};
 +	opts.grain = 1;
@@ -8228,7 +8632,7 @@ index 6427a14..cb063ce 100644
  /**
   * Draw the viewport of this window.
   */
-@@ -1965,7 +3446,21 @@ static void ClampSmoothScroll(uint32_t delta_ms, int64_t delta_hi, int64_t delta
+@@ -1965,7 +3451,21 @@ static void ClampSmoothScroll(uint32_t delta_ms, int64_t delta_hi, int64_t delta
  	assert(delta_hi != 0);
  
  	/* Move at most 75% of the distance every 30ms, for a smooth experience */
@@ -8250,13 +8654,36 @@ index 6427a14..cb063ce 100644
  	/* Move never more than 16 tiles per 30ms. */
  	int max_scroll = Map::ScaleBySize1D(16 * PIXELS_PER_TILE * delta_ms / 30);
  
-@@ -2091,10 +3586,59 @@ static bool MarkViewportDirty(const Viewport &vp, int left, int top, int right,
+@@ -2052,7 +3552,7 @@ void UpdateViewportPosition(Window *w, uint32_t delta_ms)
+  * @return true if the viewport contains a dirty block
+  * @ingroup dirty
+  */
+-static bool MarkViewportDirty(const Viewport &vp, int left, int top, int right, int bottom)
++static bool MarkViewportDirty([[maybe_unused]] const Window *w, const Viewport &vp, int left, int top, int right, int bottom)
+ {
+ 	/* Rounding wrt. zoom-out level */
+ 	right += (1 << to_underlying(vp.zoom)) - 1;
+@@ -2072,7 +3572,13 @@ static bool MarkViewportDirty(const Viewport &vp, int left, int top, int right,
+ 
+ 	if (top >= vp.virtual_height) return false;
+ 
++#ifdef WITH_SHADEREMU
++	/* (not where a window in front covers it: docs/games/openttd.md, "Under the windows") */
++	extern void AddDirtyBlockSeen(const Window *w, int left, int top, int right, int bottom);
++	AddDirtyBlockSeen(w,
++#else
+ 	AddDirtyBlock(
++#endif
+ 		UnScaleByZoomLower(left, vp.zoom) + vp.left,
+ 		UnScaleByZoomLower(top, vp.zoom) + vp.top,
+ 		UnScaleByZoom(right, vp.zoom) + vp.left + 1,
+@@ -2091,14 +3597,63 @@ static bool MarkViewportDirty(const Viewport &vp, int left, int top, int right,
   * @return true if at least one viewport has a dirty block
   * @ingroup dirty
   */
 +#ifdef WITH_SHADEREMU
 +/** The viewports, listed once while no window comes or goes (ViewportsFixed): -1 when not listed. */
-+static const Viewport *_vp_fixed[8];
++static const Window *_vp_fixed[8];
 +static int _vp_fixed_count = -1;
 +
 +void ViewportsFixed(bool on)
@@ -8267,7 +8694,7 @@ index 6427a14..cb063ce 100644
 +	for (const Window *w : Window::Iterate()) {
 +		if (w->viewport == nullptr) continue;
 +		if (n == 8) return;
-+		_vp_fixed[n++] = w->viewport.get();
++		_vp_fixed[n++] = w;
 +	}
 +	_vp_fixed_count = n;
 +}
@@ -8278,7 +8705,7 @@ index 6427a14..cb063ce 100644
 +{
 +	if (_vp_fixed_count < 0) return true;
 +	for (int i = 0; i < _vp_fixed_count; i++) {
-+		const Viewport &vp = *_vp_fixed[i];
++		const Viewport &vp = *_vp_fixed[i]->viewport;
 +		if (right + (1 << to_underlying(vp.zoom)) - 1 - vp.virtual_left <= 0) continue;
 +		if (bottom + (1 << to_underlying(vp.zoom)) - 1 - vp.virtual_top <= 0) continue;
 +		if (std::max(0, left - vp.virtual_left) >= vp.virtual_width) continue;
@@ -8302,7 +8729,7 @@ index 6427a14..cb063ce 100644
 +#ifdef WITH_SHADEREMU
 +	if (_vp_fixed_count >= 0) {
 +		for (int i = 0; i < _vp_fixed_count; i++) {
-+			if (MarkViewportDirty(*_vp_fixed[i], left, top, right, bottom)) dirty = true;
++			if (MarkViewportDirty(_vp_fixed[i], *_vp_fixed[i]->viewport, left, top, right, bottom)) dirty = true;
 +		}
 +		return dirty;
 +	}
@@ -8310,7 +8737,12 @@ index 6427a14..cb063ce 100644
  	for (const Window *w : Window::Iterate()) {
  		if (w->viewport != nullptr) {
  			assert(w->viewport->width != 0);
-@@ -2127,6 +3671,10 @@ void ConstrainAllViewportsZoom()
+-			if (MarkViewportDirty(*w->viewport, left, top, right, bottom)) dirty = true;
++			if (MarkViewportDirty(w, *w->viewport, left, top, right, bottom)) dirty = true;
+ 		}
+ 	}
+ 
+@@ -2127,6 +3682,10 @@ void ConstrainAllViewportsZoom()
   */
  void MarkTileDirtyByTile(TileIndex tile, int bridge_level_offset, int tile_height_override)
  {
@@ -8408,10 +8840,23 @@ index 3478370..b7869b2 100644
  	if (this->sign.kdtree_valid) _viewport_sign_kdtree.Remove(ViewportSignKdtreeItem::MakeWaypoint(this->index));
  
 diff --git a/src/widget.cpp b/src/widget.cpp
-index daf0172..9f144b4 100644
+index daf0172..67771de 100644
 --- a/src/widget.cpp
 +++ b/src/widget.cpp
-@@ -2397,8 +2397,14 @@ void NWidgetViewport::Draw(const Window *w)
+@@ -950,7 +950,12 @@ void NWidgetBase::SetDirty(const Window *w) const
+ {
+ 	int abs_left = w->left + this->pos_x;
+ 	int abs_top = w->top + this->pos_y;
++#ifdef WITH_SHADEREMU
++	extern void AddDirtyBlockSeen(const Window *w, int left, int top, int right, int bottom);
++	AddDirtyBlockSeen(w, abs_left, abs_top, abs_left + this->current_x, abs_top + this->current_y);
++#else
+ 	AddDirtyBlock(abs_left, abs_top, abs_left + this->current_x, abs_top + this->current_y);
++#endif
+ }
+ 
+ /**
+@@ -2397,8 +2402,14 @@ void NWidgetViewport::Draw(const Window *w)
  
  	if (this->disp_flags.Test(NWidgetDisplayFlag::NoTransparency)) {
  		TransparencyOptionBits to_backup = _transparency_opt;
@@ -8426,7 +8871,7 @@ index daf0172..9f144b4 100644
  		_transparency_opt = to_backup;
  	} else {
  		w->DrawViewport();
-@@ -2406,6 +2412,9 @@ void NWidgetViewport::Draw(const Window *w)
+@@ -2406,6 +2417,9 @@ void NWidgetViewport::Draw(const Window *w)
  
  	/* Optionally shade the viewport. */
  	if (this->disp_flags.Any({NWidgetDisplayFlag::ShadeGrey, NWidgetDisplayFlag::ShadeDimmed})) {
@@ -8437,7 +8882,7 @@ index daf0172..9f144b4 100644
  	}
  
 diff --git a/src/window.cpp b/src/window.cpp
-index ea6dc5b..fc453f8 100644
+index ea6dc5b..f741c52 100644
 --- a/src/window.cpp
 +++ b/src/window.cpp
 @@ -557,6 +557,9 @@ void Window::RaiseButtons(bool autoraise)
@@ -8450,17 +8895,148 @@ index ea6dc5b..fc453f8 100644
  	/* Sometimes this function is called before the window is even fully initialized */
  	auto it = this->widget_lookup.find(widget_index);
  	if (it == std::end(this->widget_lookup)) return;
-@@ -967,6 +970,9 @@ void DrawOverlappedWindowForAll(int left, int top, int right, int bottom)
+@@ -886,6 +889,14 @@ static void DrawOverlappedWindow(Window *w, int left, int top, int right, int bo
+ {
+ 	Window::IteratorToFront it(w);
+ 	++it;
++#ifdef WITH_SHADEREMU
++	/* A window with no viewport is painted once over the whole rectangle, the windows in front of it after it: a
++	 * window's paint is its strings made and laid out whatever is clipped, and each piece it was cut in for the windows
++	 * in front made them all again (docs/games/openttd.md, "Under the windows"). A viewport is still drawn only where
++	 * it is seen. */
++	static const bool cut = getenv("OPENTTD_WINDOW_CUT") != nullptr;
++	if (w->viewport == nullptr && !cut) it = Window::IteratorToFront(_z_windows.end());
++#endif
+ 	for (; !it.IsEnd(); ++it) {
+ 		const Window *v = *it;
+ 		if (MayBeShown(v) &&
+@@ -924,6 +935,15 @@ static void DrawOverlappedWindow(Window *w, int left, int top, int right, int bo
+ 		}
+ 	}
+ 
++#ifdef WITH_SHADEREMU
++	static const bool probe = getenv("OPENTTD_REDRAW_LOG") != nullptr;
++	uint32_t probe_i0 = 0;
++	if (probe) asm volatile("rdinstret %0" : "=r"(probe_i0));
++	struct ProbeEnd {
++		bool on; uint32_t i0; const Window *w; int l, t, r, b;
++		~ProbeEnd() { if (!on) return; uint32_t i1; asm volatile("rdinstret %0" : "=r"(i1)); fmt::print(stderr, "openttd: redraw class {} at {},{} {}x{}: {}k\n", static_cast<int>(w->window_class), l, t, r - l, b - t, (i1 - i0) / 1000); }
++	} probe_end{probe, probe_i0, w, left, top, right, bottom};
++#endif
+ 	/* Setup blitter, and dispatch a repaint event to window *wz */
+ 	DrawPixelInfo *dp = _cur_dpi;
+ 	dp->width = right - left;
+@@ -944,6 +964,90 @@ static void DrawOverlappedWindow(Window *w, int left, int top, int right, int bo
+  * @param right Right edge of the rectangle that should be repainted
+  * @param bottom Bottom edge of the rectangle that should be repainted
   */
++#ifdef WITH_SHADEREMU
++/**
++ * A rectangle of the window w's marked dirty but where the windows in front of it cover it (as DrawOverlappedWindow cuts
++ * it): a viewport's change under a window paints nothing again (docs/games/openttd.md, "Under the windows").
++ */
++void AddDirtyBlockSeen(const Window *w, int left, int top, int right, int bottom)
++{
++	static const bool all = getenv("OPENTTD_DIRTY_ALL") != nullptr;
++	if (!all && w != nullptr && !TickOnWorker()) {
++		Window::IteratorToFront it(w);
++		++it;
++		for (; !it.IsEnd(); ++it) {
++			const Window *v = *it;
++			if (!MayBeShown(v) || right <= v->left || bottom <= v->top || left >= v->left + v->width || top >= v->top + v->height) continue;
++			int x;
++			if (left < (x = v->left)) {
++				AddDirtyBlockSeen(w, left, top, x, bottom);
++				AddDirtyBlockSeen(w, x, top, right, bottom);
++			} else if (right > (x = v->left + v->width)) {
++				AddDirtyBlockSeen(w, left, top, x, bottom);
++				AddDirtyBlockSeen(w, x, top, right, bottom);
++			} else if (top < (x = v->top)) {
++				AddDirtyBlockSeen(w, left, top, right, x);
++				AddDirtyBlockSeen(w, left, x, right, bottom);
++			} else if (bottom > (x = v->top + v->height)) {
++				AddDirtyBlockSeen(w, left, top, right, x);
++				AddDirtyBlockSeen(w, left, x, right, bottom);
++			}
++			return;
++		}
++	}
++	AddDirtyBlock(left, top, right, bottom);
++}
++#endif
++
++#ifdef WITH_SHADEREMU
++/**
++ * The dirty rectangles of a picture painted together (rects: left, top, right, bottom exclusive), from the back window
++ * to the front: a window with a viewport where each rectangle shows it, as upstream, but any other window once, over
++ * the box of every rectangle on it, and that box then painted again by the windows in front of it. A window's paint
++ * makes and lays out all its strings however little of it is shown, and the station's was made again for every
++ * rectangle a picture's moves left on it (docs/games/openttd.md, "Under the windows").
++ */
++void RedrawScreenRects(std::vector<Rect> &rects)
++{
++	auto meets = [](const Rect &r, int l, int t, int rr, int b) { return r.left < rr && l < r.right && r.top < b && t < r.bottom; };
++	auto pointer = [&](const Rect &r) {
++		if (_cursor.visible && meets(r, _cursor.draw_pos.x, _cursor.draw_pos.y, _cursor.draw_pos.x + _cursor.draw_size.x, _cursor.draw_pos.y + _cursor.draw_size.y)) {
++			UndrawMouseCursor();
++		}
++	};
++	for (const Rect &r : rects) pointer(r);
++	if (_networking) NetworkUndrawChatMessage();
++
++	DrawPixelInfo bk;
++	AutoRestoreBackup dpi_backup(_cur_dpi, &bk);
++	for (Window *w : Window::IterateFromBack()) {
++		if (!MayBeShown(w)) continue;
++		const int wl = w->left, wt = w->top, wr = w->left + w->width, wb = w->top + w->height;
++		if (w->viewport != nullptr) {
++			for (size_t i = 0; i < rects.size(); i++) {
++				const Rect r = rects[i];
++				if (!meets(r, wl, wt, wr, wb)) continue;
++				DrawOverlappedWindow(w, std::max(r.left, wl), std::max(r.top, wt), std::min(r.right, wr), std::min(r.bottom, wb));
++			}
++			continue;
++		}
++		Rect box = { INT_MAX, INT_MAX, INT_MIN, INT_MIN };
++		for (const Rect &r : rects) {
++			if (!meets(r, wl, wt, wr, wb)) continue;
++			box.left = std::min(box.left, std::max(r.left, wl));
++			box.top = std::min(box.top, std::max(r.top, wt));
++			box.right = std::max(box.right, std::min(r.right, wr));
++			box.bottom = std::max(box.bottom, std::min(r.bottom, wb));
++		}
++		if (box.left >= box.right || box.top >= box.bottom) continue;
++		pointer(box);
++		DrawOverlappedWindow(w, box.left, box.top, box.right, box.bottom);
++		rects.push_back(box);
++	}
++	for (const Rect &r : rects) VideoDriver::GetInstance()->MakeDirty(r.left, r.top, r.right - r.left, r.bottom - r.top);
++}
++#endif
++
+ void DrawOverlappedWindowForAll(int left, int top, int right, int bottom)
+ {
+ 	DrawPixelInfo bk;
+@@ -965,9 +1069,18 @@ void DrawOverlappedWindowForAll(int left, int top, int right, int bottom)
+  * Mark entire window as dirty (in need of re-paint)
+  * @ingroup dirty
+  */
++#ifdef WITH_SHADEREMU
++void AddDirtyBlockSeen(const Window *w, int left, int top, int right, int bottom);
++#endif
++
  void Window::SetDirty() const
  {
 +#ifdef WITH_SHADEREMU
 +	TICK_DEFER_THIS(this->SetDirty());
-+#endif
++	AddDirtyBlockSeen(this, this->left, this->top, this->left + this->width, this->top + this->height);
++#else
  	AddDirtyBlock(this->left, this->top, this->left + this->width, this->top + this->height);
++#endif
  }
  
-@@ -1152,6 +1158,9 @@ Window::~Window()
+ /**
+@@ -1152,6 +1265,9 @@ Window::~Window()
   */
  Window *FindWindowById(WindowClass cls, WindowNumber number)
  {
@@ -8470,7 +9046,7 @@ index ea6dc5b..fc453f8 100644
  	for (Window *w : Window::Iterate()) {
  		if (w->window_class == cls && w->window_number == number) return w;
  	}
-@@ -1167,6 +1176,9 @@ Window *FindWindowById(WindowClass cls, WindowNumber number)
+@@ -1167,6 +1283,9 @@ Window *FindWindowById(WindowClass cls, WindowNumber number)
   */
  Window *FindWindowByClass(WindowClass cls)
  {
@@ -8480,7 +9056,7 @@ index ea6dc5b..fc453f8 100644
  	for (Window *w : Window::Iterate()) {
  		if (w->window_class == cls) return w;
  	}
-@@ -1194,6 +1206,9 @@ Window *GetMainWindow()
+@@ -1194,6 +1313,9 @@ Window *GetMainWindow()
   */
  void CloseWindowById(WindowClass cls, WindowNumber number, bool force, int data)
  {
@@ -8490,7 +9066,7 @@ index ea6dc5b..fc453f8 100644
  	Window *w = FindWindowById(cls, number);
  	if (w != nullptr && (force || !w->flags.Test(WindowFlag::Sticky))) {
  		w->Close(data);
-@@ -1206,6 +1221,9 @@ void CloseWindowById(WindowClass cls, WindowNumber number, bool force, int data)
+@@ -1206,6 +1328,9 @@ void CloseWindowById(WindowClass cls, WindowNumber number, bool force, int data)
   */
  void CloseWindowByClass(WindowClass cls, int data)
  {
@@ -8500,7 +9076,7 @@ index ea6dc5b..fc453f8 100644
  	/* Note: the container remains stable, even when deleting windows. */
  	for (Window *w : Window::Iterate()) {
  		if (w->window_class == cls) {
-@@ -1222,6 +1240,9 @@ void CloseWindowByClass(WindowClass cls, int data)
+@@ -1222,6 +1347,9 @@ void CloseWindowByClass(WindowClass cls, int data)
   */
  void CloseCompanyWindows(CompanyID id)
  {
@@ -8510,7 +9086,7 @@ index ea6dc5b..fc453f8 100644
  	/* Note: the container remains stable, even when deleting windows. */
  	for (Window *w : Window::Iterate()) {
  		if (w->owner == id) {
-@@ -1242,6 +1263,9 @@ void CloseCompanyWindows(CompanyID id)
+@@ -1242,6 +1370,9 @@ void CloseCompanyWindows(CompanyID id)
   */
  void ChangeWindowOwner(Owner old_owner, Owner new_owner)
  {
@@ -8520,7 +9096,7 @@ index ea6dc5b..fc453f8 100644
  	for (Window *w : Window::Iterate()) {
  		if (w->owner != old_owner) continue;
  
-@@ -3124,6 +3148,23 @@ static const IntervalTimer<TimerWindow> white_border_interval(std::chrono::milli
+@@ -3124,6 +3255,23 @@ static const IntervalTimer<TimerWindow> white_border_interval(std::chrono::milli
  /**
   * Update the continuously changing contents of the windows, such as the viewports
   */
@@ -8544,7 +9120,7 @@ index ea6dc5b..fc453f8 100644
  void UpdateWindows()
  {
  	static auto last_time = std::chrono::steady_clock::now();
-@@ -3139,8 +3180,17 @@ void UpdateWindows()
+@@ -3139,8 +3287,17 @@ void UpdateWindows()
  
  	ProcessPendingPerformanceMeasurements();
  
@@ -8562,7 +9138,7 @@ index ea6dc5b..fc453f8 100644
  
  	/* Process invalidations before anything else. */
  	for (Window *w : Window::Iterate()) {
-@@ -3153,12 +3203,23 @@ void UpdateWindows()
+@@ -3153,12 +3310,23 @@ void UpdateWindows()
  	 * But still empty the invalidation queues above. */
  	if (_network_dedicated) return;
  
@@ -8586,7 +9162,7 @@ index ea6dc5b..fc453f8 100644
  	NetworkDrawChatMessage();
  	/* Redraw mouse cursor in case it was hidden */
  	DrawMouseCursor();
-@@ -3178,6 +3239,9 @@ void UpdateWindows()
+@@ -3178,6 +3346,9 @@ void UpdateWindows()
   */
  void SetWindowDirty(WindowClass cls, WindowNumber number)
  {
@@ -8596,7 +9172,7 @@ index ea6dc5b..fc453f8 100644
  	for (const Window *w : Window::Iterate()) {
  		if (w->window_class == cls && w->window_number == number) w->SetDirty();
  	}
-@@ -3191,6 +3255,9 @@ void SetWindowDirty(WindowClass cls, WindowNumber number)
+@@ -3191,6 +3362,9 @@ void SetWindowDirty(WindowClass cls, WindowNumber number)
   */
  void SetWindowWidgetDirty(WindowClass cls, WindowNumber number, WidgetID widget_index)
  {
@@ -8606,7 +9182,7 @@ index ea6dc5b..fc453f8 100644
  	for (const Window *w : Window::Iterate()) {
  		if (w->window_class == cls && w->window_number == number) {
  			w->SetWidgetDirty(widget_index);
-@@ -3204,6 +3271,9 @@ void SetWindowWidgetDirty(WindowClass cls, WindowNumber number, WidgetID widget_
+@@ -3204,6 +3378,9 @@ void SetWindowWidgetDirty(WindowClass cls, WindowNumber number, WidgetID widget_
   */
  void SetWindowClassesDirty(WindowClass cls)
  {
@@ -8616,7 +9192,7 @@ index ea6dc5b..fc453f8 100644
  	for (const Window *w : Window::Iterate()) {
  		if (w->window_class == cls) w->SetDirty();
  	}
-@@ -3236,6 +3306,9 @@ void Window::ProcessScheduledResize()
+@@ -3236,6 +3413,9 @@ void Window::ProcessScheduledResize()
   */
  void Window::InvalidateData(int data, bool gui_scope)
  {
@@ -8626,7 +9202,7 @@ index ea6dc5b..fc453f8 100644
  	this->SetDirty();
  	if (!gui_scope) {
  		/* Schedule GUI-scope invalidation for next redraw. */
-@@ -3296,6 +3369,9 @@ void Window::ProcessHighlightedInvalidations()
+@@ -3296,6 +3476,9 @@ void Window::ProcessHighlightedInvalidations()
   */
  void InvalidateWindowData(WindowClass cls, WindowNumber number, int data, bool gui_scope)
  {
@@ -8636,7 +9212,7 @@ index ea6dc5b..fc453f8 100644
  	for (Window *w : Window::Iterate()) {
  		if (w->window_class == cls && w->window_number == number) {
  			w->InvalidateData(data, gui_scope);
-@@ -3313,6 +3389,9 @@ void InvalidateWindowData(WindowClass cls, WindowNumber number, int data, bool g
+@@ -3313,6 +3496,9 @@ void InvalidateWindowData(WindowClass cls, WindowNumber number, int data, bool g
   */
  void InvalidateWindowClassesData(WindowClass cls, int data, bool gui_scope)
  {
@@ -8646,7 +9222,7 @@ index ea6dc5b..fc453f8 100644
  	for (Window *w : Window::Iterate()) {
  		if (w->window_class == cls) {
  			w->InvalidateData(data, gui_scope);
-@@ -3512,6 +3591,9 @@ int PositionNetworkChatWindow(Window *w)
+@@ -3512,6 +3698,9 @@ int PositionNetworkChatWindow(Window *w)
   */
  void ChangeVehicleViewports(VehicleID from_index, VehicleID to_index)
  {

@@ -164,6 +164,10 @@ whose known reach ends below or beside the part, by 2 pixels at its zoom and a s
 passed over; while a tile highlight is shown, none below 64 pixels (its sprites are not the
 tile's). The search below a part stops at the highest bridge on the map (`VpBridgeMost`), not
 the highest one could build.
+Each zoom's table is made by the first core before a round (`ViewportFlush`): a worker learns into a
+table only once it is there, and the first core draws no piece, so zoomed out none was ever made and
+every tile in reach was drawn (186 tiles a piece of the played script's zoomed out part, 101 since; on
+`rvc_cpu` at the card's speed 3.68 pictures a second to 4.38).
 
 ### One order
 
@@ -235,6 +239,27 @@ first (`ViewportKept`), as upstream draws one after the other; over one of the s
 what the kept one does not cover is kept (`OPENTTD_KEEP_FLUSH=1`: always flushed). Taking that
 from a vehicle's window over the main view lost the window's view where the two met, 67,557
 pixels at the windows' opening.
+
+## Under the windows
+
+A window's paint makes and lays out all its strings however little of it is shown: the station's was 130
+thousand instructions, a vehicle's 25 thousand, the toolbar's 1.1 million (its checker a pixel at a time).
+Upstream paints each dirty rectangle by itself, and each window in it once for every piece the windows in
+front cut it in. With the windows of the play script open the first core spent half its picture there.
+
+- A viewport's change under a window marks nothing (`AddDirtyBlockSeen` in `window.cpp`: a vehicle that
+  moves, a sign, from `MarkViewportDirty`), nor does a window's own or a widget's change where a window in
+  front covers it (`Window::SetDirty`, `NWidgetBase::SetDirty`); a window that moves or closes marks what it
+  uncovers, as before. `OPENTTD_DIRTY_ALL=1` marks everything.
+- A picture's dirty rectangles are painted together (`RedrawScreenRects`, from `DrawDirtyBlocks`), from the
+  back window to the front: a window with a viewport where each rectangle shows it, as upstream, and any
+  other window once, over the box of every rectangle on it and not cut for the windows in front, which paint
+  that box again after it. `OPENTTD_WINDOW_CUT=1` is upstream's way.
+- A checker (`FILLRECT_CHECKER`) is one record of the GPU's (`SeGpuChecker`), not a pixel a call.
+
+The play script's windows part on `rvc_cpu` at the card's speed: the windows' paints 252 thousand
+instructions a picture to 132, the first core 559 thousand to some 330, 6.55 pictures a second to 8.59;
+`OPENTTD_REDRAW_LOG=1` prints each window paint, its rectangle and its cost.
 
 ## The tick in slices
 
@@ -454,6 +479,25 @@ A sprite's levels closer than the normal zoom are shown nowhere in the image's s
 pixels are not decoded; only their sizes are recorded, so that `ResizeSprites` pads the normal
 level exactly as before (`SeCloseLevelsUnseen` in `grf.cpp`). The pictures are the same: every
 picture's sum matched, skipped against whole. `OPENTTD_SPRITES=whole` is the old way.
+
+## Sprites loaded ahead
+
+A game's first pictures loaded every sprite they lacked: a worker that met one gave its piece up, the first
+core loaded it with the rest of its eight on the workers (`VpLoadWanted`), and the piece was drawn again;
+the first round of the play script scrolled, zoomed out and drew windows at 20 to 45% less than the second.
+Now, when a game's sprites are placed (`GfxLoadSprites` in `AfterLoadGame`), every normal sprite of a file
+is decoded and encoded on idle workers while the first core loads the rest (`SpritesAheadStart` in
+`spritecache.cpp`): each call takes every n-th of them, sorted by file and place, into a share of a heap of
+16 MB (`OPENTTD_SPRITES_AHEAD=MB`, 0: none), with `VpLoadOne`, the round's own loader. The first core takes
+what is made into the cache when it next looks (`SpritesAheadTake`: each picture, before a round's loads,
+and at a sprite it lacks), and the cache's entries point into the heap, which a cleared cache lets go
+(`SpriteBytesFree`); the calls stop at their next sprite and are joined before the cache is cleared, its
+files go, or the program ends (`SpritesAheadEnd`). A sprite the first core loads meanwhile is loaded as
+before and what was made of it is left; a glyph asked for as one (`SpriteType::Font`) is made again from its
+font's zoom, as upstream makes a sprite first asked for as one (a station sign's letters were a pixel off
+otherwise). busy.sav: 8,879 sprites, 8,167 taken, 9.7 MB, in 2.9 s of 45 workers while `AfterLoadGame`
+runs (`OPENTTD_AHEAD_LOG=1` says so). On `rvc_cpu` at the card's speed, played (pictures a second): scroll
+8.73 to 10.47 (the picture's interval), zoomed out 2.22 to 3.48, windows 6.06 to 6.55.
 
 ## The game's own speed
 

@@ -969,6 +969,8 @@ static bool WantWorkerTick()
 
 /** A picture with the tick on its worker: it waits while the first core reads and changes the game, and
  * goes on while the viewports are drawn (docs/games/openttd.md, "The tick on a worker"). */
+void SpritesAheadTake(); /* spritecache.cpp */
+
 void VideoDriver_ShaderEmu::WorkerTick()
 {
 	static const float frame_ms = [] { int n = Number(getenv("OPENTTD_FRAME_MS")); return n > 0 ? n : 95.0f; }();
@@ -1001,6 +1003,7 @@ void VideoDriver_ShaderEmu::WorkerTick()
 	}
 	::InputLoop();
 	VehiclesSync(TwActive());
+	SpritesAheadTake(); /* (what idle workers loaded meanwhile: spritecache.cpp) */
 	/* the last picture's flush, left out while all this ran, made whole, and that picture shown */
 	static bool paint_owed = false;
 	t = VpTime();
@@ -1126,6 +1129,7 @@ void VideoDriver_ShaderEmu::DriverTick()
 	}
 	::InputLoop();
 	VehiclesSync(false); /* (what the viewports draw of the vehicles: their copies) */
+	SpritesAheadTake();
 	uint32_t t = VpTime();
 	if (_game_mode == GM_BOOTSTRAP || _switch_mode == SM_NONE || HasModalProgress()) ::UpdateWindows();
 	_vp_phase[VP_PHASE_WINDOWS] += VpTime() - t;
