@@ -251,10 +251,105 @@ lean tick of b935841), seconds, against `rvc_cpu` at 2 MIPS (the same, and its s
 
 The card gives the cold round's gain `rvc_cpu` gives, about 3 times as fast.
 
+## The start
+
+From the program's start to a game loaded with `-g` (`busy.sav`), the card's `start to the game`:
+95.1 s before, 58.7 s after (two rounds, 58.69 and 58.67; `tools/rv_compare`, 29 October 2026).
+On `rvc_cpu` the guest's seconds to the game went 126.1, 101.9, 97.7, 86.9, 83.1 as these came in:
+
+- The title's own game (`opntitle.dat`) is not loaded before a game asked for with `-g`
+  (`LoadIntroGame`): it was loaded only to be thrown away.
+- A load's LZMA is decoded ahead on a worker into a ring of 16 pieces of 64 KB that the first
+  core copies from while it reads what it took (`SeLzmaAhead` in `saveload.cpp`). The decoder's
+  memory is made by the first core when it decodes the first piece. The worker allocates only
+  from a reserve of 64 KB, and the blocks it lets go are freed by the first core.
+- The link graph's jobs a load starts are not run at once. One runs each tick, and each runs
+  before it is first asked about (`SeRunPending`). The game state is the same:
+  `503e40ee` after 1,300 ticks.
+- The missing-glyph check reads every string of the language (11.5 million instructions). It is
+  skipped for the image's English, whose base font has every glyph.
+- The music's fine tune is a `pow` once a tone, not once a note. A song's notes are put in
+  buckets by voice, not looked through once a voice (`shaderemu_m.cpp`).
+
+What is left of the first core's 275 million instructions: the savegame's objects read
+(`SlObject`) 104 million, `AfterLoadGame` 35, the empty world made before the load 34, the
+sprites loaded twice 16 each, and the music's first song 23.
+
+## Sprites loaded
+
+A sprite's levels closer than the normal zoom are shown nowhere in the image's settings. Their
+pixels are not decoded; only their sizes are recorded, so that `ResizeSprites` pads the normal
+level exactly as before (`SeCloseLevelsUnseen` in `grf.cpp`). The pictures are the same: every
+picture's sum matched, skipped against whole. `OPENTTD_SPRITES=whole` is the old way.
+
+## The game's own speed
+
+The simulation is measured by `OPENTTD_WARM=100 OPENTTD_SUM=1 openttd -v null:ticks=300 -g
+/usr/share/openttd/busy.sav` on `rvc_cpu`. It reports the game loop's ticks per second over
+ticks 100 to 300 (the first warm the ships' water regions) and the state's sum. The sum must
+stay `6abca409`, and `503e40ee` with 1,300 ticks, as upstream's.
+
+| Build | Game ticks a second (`rvc_cpu`, ticks 100 to 300) |
+|---|---|
+| before | 2.52 |
+| a vehicle's sprite sizes kept while its sprite is the same | 3.49 |
+| a vehicle's place on the viewports updated once a tick | 3.62 |
+| ships' paths made ahead | 4.12 |
+
+- The frame rate window's timer reads the machine's clock word, not `clock_gettime`.
+- `UpdateBoundingBoxCoordinates` keeps the bounds of a sequence of one sprite while the sprite
+  and the sprite cache's generation are the same.
+- While the vehicles tick, `Vehicle::UpdateViewport` only notes the vehicle. Its box, its place
+  in the viewport hash and the dirty blocks are made once, after the last vehicle has ticked
+  (`VpDeferBegin`, `VpDeferEnd` in `vehicle.cpp`). A train moves several steps a tick, and each
+  step was a box, a hash update and a mark. The blocks marked are those of the old box and the
+  last one, the only ones a picture can have shown. A vehicle deleted, or a sound placed at a
+  vehicle, makes its update first. `OPENTTD_VP_NOW=1` is the old way.
+
+What is left of a tick's 0.82 million instructions (`RVC_PROF`, the same run): trains 260
+thousand, road vehicles 136, loading and unloading 48, aircraft 38, and the ships' own ticks
+with the paths not made ahead. The vehicles tick in one order on one core. Their random
+numbers come from one state in that order, so they cannot tick on workers and keep the same
+game.
+
+## Ships' paths made ahead
+
+A ship asks the pathfinder (YAPF) when it enters a tile with its cached path empty. Each call
+is about a million instructions, and the expensive ones are those that make water regions
+anew. After the vehicles have ticked, each ship that will ask at its next tile has that path
+made ahead on a worker (`YapfShipAhead` in `yapf_ship.cpp`). The worker starts from a copy of
+the ship and of the pathfinder's settings. The ships counted on each docking tile come from a
+snapshot. The station's docking tiles and the region patches the region search starts from
+are found by the first core. The worker reads no pool.
+
+- **The map is still while the worker reads.** The worker reads the map only while the first
+  core draws the dirty blocks (`DrawDirtyBlocks`), the one time the map does not change. At
+  the end of drawing the first core waits until every worker has stopped at its next node
+  (`YapfShipAheadQuiet`).
+- **Every tile read is logged.** Each read of a tile again must find it as logged, or the
+  worker gives up. A tile the search stands on is logged by its words and its neighbours'
+  heights. A tile only entered is logged by its water tracks. A docking tile's neighbours and
+  a bridge's walk are logged by their types.
+- **An invalid water region is made in the worker's own memory**, logged by its tiles' water
+  tracks. A valid region is noted with its generation.
+- **The worker allocates from a heap of its own.** A worker may not allocate. The program's
+  `operator new` gives a worker making a path a piece of a heap the first core made, which
+  is let go all at once.
+
+When the ship asks, the path is taken only if all of these are as they were: the ship's
+inputs, the settings, each region's generation, every tile logged, and the ships on every
+docking tile counted. Otherwise, and for a lost ship's random path, the first core makes the
+path itself. A load or a new map first stops every worker (`YapfShipAheadCancel`).
+
+`OPENTTD_SHIP_AHEAD=check` makes every path taken again on the first core and compares the two:
+0 differ. `OPENTTD_SHIP_AHEAD=0` is without. Over 1,300 ticks, 144 of about 210 calls were taken.
+17 were invalid, 13 of them because a docking tile's count had changed. 49 had none made,
+because they were not foreseen.
+
 ## Not done
 
 - Pitch bend and other controllers in the music.
-- The game's tick, signs, texts and windows' widgets are the first core's.
+- The game's tick (but for ships' paths made ahead), signs, texts and windows' widgets are the first core's.
 - A NewGRF chain other than canals' is resolved by the first core: only canals' resolver was
   read through for stores outside a core's own registers (`WorkerSafe` in `newgrf_spritegroup.h`).
 - One order is not proved for every scene: sprites whose boxes order them in a circle ("One order").
