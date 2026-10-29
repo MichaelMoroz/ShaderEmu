@@ -89,6 +89,18 @@ expression, pan and all-notes-off are read; pitch bend is not. A song's start an
 music set gives them are kept, and the volume slider sets the voices' volume. OpenMSX is
 unpacked into the base set folder: music sets are not looked for in tars.
 
+A song is made on a worker core (`SongService` in `shaderemu_m.cpp`): the first core reads the
+file and goes on, a free worker reads it from those bytes (`MidiFile::SeLoadData`, upstream's
+reader of a file given the bytes where they lie), makes the notes and writes the voices' tracks,
+and the first core starts the voices when it next looks (`IsSongPlaying`, which says the song
+plays meanwhile). What the worker allocates comes from a heap of 4 MB beside the link graph's
+(`SeWorkerHeap`, `SeWorkerArena` in `linkgraphjob.cpp`; OpenMSX's largest song takes 3.1 MB);
+a song whose heap runs out, or with no workers, is made by the first core as before, and so is
+every song with `OPENTTD_MUSIC=core`. A song was 26 million instructions of the first core's start
+to the game. `OPENTTD_MUSIC_SUM=1` prints each song's sum of its tracks, `=all` every song of the
+set's at the first: the 31 songs of OpenMSX give the same sums on the worker and with
+`OPENTTD_MUSIC=core`.
+
 ## The viewport on worker cores
 
 While a `ViewportKeep` lives (round a frame's dirty blocks and viewport scrolls in
@@ -428,7 +440,9 @@ On `rvc_cpu` the guest's seconds to the game went 126.1, 101.9, 97.7, 86.9, 83.1
 - The missing-glyph check reads every string of the language (11.5 million instructions). It is
   skipped for the image's English, whose base font has every glyph.
 - The music's fine tune is a `pow` once a tone, not once a note. A song's notes are put in
-  buckets by voice, not looked through once a voice (`shaderemu_m.cpp`).
+  buckets by voice, not looked through once a voice (`shaderemu_m.cpp`). The song is made on a
+  worker ("Music"): the card's start to the game 58.4 s to 53.5 (four rounds each, alternating;
+  the parts' pictures and ticks a second as they were).
 
 What is left of the first core's 275 million instructions: the savegame's objects read
 (`SlObject`) 104 million, `AfterLoadGame` 35, the empty world made before the load 34, the
