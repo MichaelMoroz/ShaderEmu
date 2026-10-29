@@ -1116,10 +1116,214 @@ index 8c5cf4b..8454545 100644
  	OnTick_Companies();
  	OnTick_LinkGraph();
 diff --git a/src/linkgraph/linkgraphjob.cpp b/src/linkgraph/linkgraphjob.cpp
-index 365b035..2628cbf 100644
+index 365b035..4d79c84 100644
 --- a/src/linkgraph/linkgraphjob.cpp
 +++ b/src/linkgraph/linkgraphjob.cpp
-@@ -56,8 +56,29 @@ void LinkGraphJob::EraseFlows(StationID from)
+@@ -12,6 +12,203 @@
+ #include "../window_func.h"
+ #include "linkgraphjob.h"
+ #include "linkgraphschedule.h"
++#ifdef WITH_SHADEREMU
++#include "../gfx_func.h"
++#include "../core/math_func.hpp"
++#include <csetjmp>
++#include <mcwx.h>
++#include "../debug.h"
++int VpWorkersOpen(); /* viewport.cpp */
++void SeLinkGraphService();
++
++/*
++ * A link graph job on a worker core (docs/games/openttd.md, "The link graph on the workers"): upstream runs each in a
++ * thread of its own, on its own copy of the graph, and joins it at a date set when it was spawned; here a job is
++ * handed to a slot, the first core gives the slot to a free worker (or says there is none: the job is then run where
++ * it is first asked about, as before), and the job is finished where upstream joins it. What the job allocates comes
++ * from the slot's heap, never malloc's; what it leaves (its nodes' annotations: the flows) is copied out of that heap
++ * by the core that finishes it, and the heap is used again by the next job.
++ */
++namespace {
++
++constexpr uint32_t LG_CLASSES = 64; ///< blocks of 16 to 1,024 bytes freed into lists by size; larger ones are not used again
++constexpr int LG_SLOTS_MOST = 8;
++
++struct alignas(16) LgCore { ///< a worker's, while it runs a job (indexed by mcw_self())
++	uint8_t *lo = nullptr; ///< the slot's heap, nullptr while it runs none
++	uint32_t used = 0, size = 0;
++	jmp_buf *jb = nullptr; ///< where a heap run out goes
++	void *free_[LG_CLASSES] = {};
++};
++
++struct alignas(64) LgSlot {
++	struct alignas(16) { LinkGraphJob *job; volatile uint32_t want; } g; ///< the game's core's: the job, and its request
++	struct alignas(16) { volatile uint32_t decided, launched; mcw_handle h; } f; ///< the first core's
++	struct alignas(16) { volatile uint32_t done; int refused; uint32_t most; jmp_buf jb; } w; ///< the worker's
++	uint8_t *heap;
++	uint32_t heap_size;
++};
++
++LgCore *_lg_core = nullptr;     ///< MC_MAX_CORES + 1 of them
++LgSlot *_lg_slots = nullptr;
++int _lg_count = 0;
++uint8_t *_lg_lo = nullptr, *_lg_hi = nullptr; ///< every slot's heap, in one piece
++bool _lg_broken = false;
++struct LgStats { uint32_t handed, declined, refused, inline_runs, most; } _lg_stats; ///< the game's core's
++
++int LgMode()
++{
++	/* OPENTTD_LG=0: every job where upstream runs it without threads; OPENTTD_LG=N: N slots (4) */
++	static const int n = [] { const char *e = getenv("OPENTTD_LG"); return e != nullptr ? std::clamp(atoi(e), 0, LG_SLOTS_MOST) : 4; }();
++	return n;
++}
++
++/** The slots and their heaps (the first core, the tick not on a worker): whether there are any. */
++bool LgInit()
++{
++	if (_lg_slots != nullptr) return true;
++	if (_lg_broken || LgMode() == 0 || TickOnWorker() || mcw_on_worker() || VpWorkersOpen() <= 0) return false;
++	/* OPENTTD_LG_HEAP=MB: a slot's heap (1; busy.sav's jobs take 64 KB at most) */
++	const char *e = getenv("OPENTTD_LG_HEAP");
++	const size_t heap = static_cast<size_t>(e != nullptr && atoi(e) > 0 ? atoi(e) : 1) << 20;
++	const int n = LgMode();
++	uint8_t *raw = static_cast<uint8_t *>(malloc(heap * n + 64));
++	void *slots = malloc(sizeof(LgSlot) * n + 64);
++	void *cores = malloc(sizeof(LgCore) * (MC_MAX_CORES + 1) + 16);
++	if (raw == nullptr || slots == nullptr || cores == nullptr) {
++		free(raw), free(slots), free(cores);
++		_lg_broken = true;
++		return false;
++	}
++	/* (a store by the first core first, to every page a worker writes) */
++	mcw_touch(raw, static_cast<unsigned>(heap * n + 64));
++	_lg_lo = reinterpret_cast<uint8_t *>((reinterpret_cast<uintptr_t>(raw) + 63) & ~uintptr_t{63});
++	_lg_hi = _lg_lo + heap * n;
++	_lg_core = reinterpret_cast<LgCore *>((reinterpret_cast<uintptr_t>(cores) + 15) & ~uintptr_t{15});
++	for (int k = 0; k <= MC_MAX_CORES; k++) new (&_lg_core[k]) LgCore();
++	mcw_touch(_lg_core, sizeof(LgCore) * (MC_MAX_CORES + 1));
++	LgSlot *s = reinterpret_cast<LgSlot *>((reinterpret_cast<uintptr_t>(slots) + 63) & ~uintptr_t{63});
++	for (int k = 0; k < n; k++) {
++		std::fill_n(reinterpret_cast<uint8_t *>(&s[k]), sizeof(LgSlot), uint8_t{0});
++		s[k].heap = _lg_lo + heap * k;
++		s[k].heap_size = static_cast<uint32_t>(heap);
++	}
++	mcw_touch(s, sizeof(LgSlot) * n);
++	_lg_count = n;
++	_lg_slots = s;
++	return true;
++}
++
++/** On a worker: a job's run in a slot (a0 the slot, a1 the request). */
++uint32_t LgRun(uint32_t at, uint32_t want)
++{
++	LgSlot &s = *reinterpret_cast<LgSlot *>(at);
++	LgCore &c = _lg_core[mcw_self()];
++	c.lo = s.heap;
++	c.used = 0;
++	c.size = s.heap_size;
++	c.jb = &s.w.jb;
++	std::fill_n(c.free_, LG_CLASSES, nullptr);
++	int refused = 0;
++	if (setjmp(s.w.jb) == 0) {
++		LinkGraphSchedule::Run(s.g.job);
++	} else {
++		refused = 1;
++	}
++	s.w.most = std::max(s.w.most, c.used);
++	c.lo = nullptr;
++	c.jb = nullptr;
++	s.w.refused = refused;
++	s.w.done = want;
++	return 0;
++}
++
++/** The game's core waits for a slot's worker or the first core. */
++void LgWait()
++{
++	if (TickOnWorker()) {
++		TickWorkerYield();
++		mc_end_pass();
++	} else {
++		SeLinkGraphService();
++		mcw_rest();
++	}
++}
++
++} // namespace
++
++/** On a worker running a job: its block of n bytes, or nullptr on any other core. */
++void *SeLinkGraphAlloc(size_t n)
++{
++	if (_lg_core == nullptr) return nullptr;
++	LgCore &c = _lg_core[mcw_self()];
++	if (c.lo == nullptr) return nullptr;
++	n = (std::max<size_t>(n, 1) + 15) & ~size_t{15};
++	const uint32_t k = static_cast<uint32_t>(n >> 4) - 1;
++	if (k < LG_CLASSES && c.free_[k] != nullptr) {
++		void *p = c.free_[k];
++		c.free_[k] = *static_cast<void **>(p);
++		return p;
++	}
++	if (n > c.size - c.used) longjmp(*c.jb, 1);
++	void *p = c.lo + c.used;
++	c.used += static_cast<uint32_t>(n);
++	return p;
++}
++
++/** A block of a slot's heap let go of (n bytes, 0: not known): true if it is one; a worker running a job keeps its own. */
++bool SeLinkGraphFree(void *p, size_t n)
++{
++	if (static_cast<size_t>(static_cast<uint8_t *>(p) - _lg_lo) >= static_cast<size_t>(_lg_hi - _lg_lo)) return false;
++	if (n == 0 || !mcw_on_worker()) return true;
++	LgCore &c = _lg_core[mcw_self()];
++	if (c.lo == nullptr || static_cast<size_t>(static_cast<uint8_t *>(p) - c.lo) >= c.size) return true;
++	n = (std::max<size_t>(n, 1) + 15) & ~size_t{15};
++	const uint32_t k = static_cast<uint32_t>(n >> 4) - 1;
++	if (k < LG_CLASSES) {
++		*static_cast<void **>(p) = c.free_[k];
++		c.free_[k] = p;
++	}
++	return true;
++}
++
++/** The first core: each slot's worker joined once it has ended, and each request given a worker, or said to have none. */
++void SeLinkGraphService()
++{
++	if (_lg_slots == nullptr || TickOnWorker() || mcw_on_worker()) return;
++	bool ended = false;
++	for (int k = 0; k < _lg_count; k++) {
++		LgSlot &s = _lg_slots[k];
++		if (s.f.h != 0 && mcw_ready(s.f.h)) {
++			mcw_join(s.f.h);
++			s.f.h = 0;
++		}
++		const uint32_t want = s.g.want;
++		if (s.f.decided == want || s.f.h != 0) continue;
++		mcw_handle h = 0;
++		if (!VpFlushOut()) { /* (a lingering team is ended only while no flush's pieces are out) */
++			if (!ended) mcw_for_end();
++			ended = true;
++			h = mcw_try_call(LgRun, static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&s)), want);
++		}
++		if (h != 0) {
++			s.f.h = h;
++			s.f.launched = want;
++		}
++		s.f.decided = want;
++	}
++}
++
++/** For the end: what the link graph's workers did. */
++void SeLinkGraphStats()
++{
++	if (_lg_slots == nullptr) return;
++	uint32_t most = 0;
++	for (int k = 0; k < _lg_count; k++) most = std::max(most, _lg_slots[k].w.most);
++	Debug(misc, 0, "link graph jobs: {} handed to workers, {} with no worker, {} out of memory, {} run where asked; the most memory {} KB",
++		_lg_stats.handed, _lg_stats.declined, _lg_stats.refused, _lg_stats.inline_runs, most >> 10);
++}
++#endif
+ 
+ #include "../safeguards.h"
+ 
+@@ -56,8 +253,120 @@ void LinkGraphJob::EraseFlows(StationID from)
   * Spawn a thread if possible and run the link graph job in the thread. If
   * that's not possible run the job right now in the current thread.
   */
@@ -1130,30 +1334,122 @@ index 365b035..2628cbf 100644
 +/** A job a load spawned, run now: as a thread would have run it, on its own copy of the graph. */
 +void LinkGraphJob::SeRunPending()
 +{
++	if (this->se_slot >= 0) {
++		this->SeFinish(true);
++		return;
++	}
 +	if (!this->se_pending) return;
 +	this->se_pending = false;
 +	LinkGraphSchedule::Run(this);
 +}
++
++/** The job handed to a worker's slot (the first core gives it a worker): false if there is no slot, or no worker now. */
++bool LinkGraphJob::SeHand()
++{
++	if (this->se_slot >= 0) return true;
++	if (_lg_slots == nullptr && !LgInit()) return false;
++	for (int k = 0; k < _lg_count; k++) {
++		LgSlot &s = _lg_slots[k];
++		if (s.g.job != nullptr) continue;
++		s.g.job = this;
++		const uint32_t want = s.g.want + 1;
++		s.g.want = want;
++		this->se_slot = k;
++		if (!TickOnWorker()) {
++			SeLinkGraphService();
++			if (s.f.launched != want) { /* (no worker free: left as it was) */
++				s.g.job = nullptr;
++				this->se_slot = -1;
++				return false;
++			}
++		}
++		_lg_stats.handed++;
++		return true;
++	}
++	return false;
++}
++
++/**
++ * The job's worker waited for, and what the job leaves copied out of the slot's heap; run here (run) if it had no
++ * worker or its heap ran out.
++ */
++void LinkGraphJob::SeFinish(bool run)
++{
++	const int k = this->se_slot;
++	if (k < 0) return;
++	LgSlot &s = _lg_slots[k];
++	const uint32_t want = s.g.want;
++	while (s.f.decided != want) LgWait();
++	const bool launched = s.f.launched == want;
++	if (launched) {
++		while (s.w.done != want) LgWait();
++	}
++	bool again = !launched;
++	if (!launched) {
++		_lg_stats.declined++;
++	} else if (s.w.refused != 0 || this->IsJobAborted()) {
++		if (s.w.refused != 0) _lg_stats.refused++;
++		new (&this->nodes) NodeAnnotationVector(); /* (its blocks were the slot's heap's, used again by the next job) */
++		again = s.w.refused != 0;
++	} else {
++		NodeAnnotationVector out(this->nodes); /* (the annotations, the flows with them, out of the slot's heap) */
++		this->nodes.swap(out);
++	}
++	s.g.job = nullptr;
++	this->se_slot = -1;
++	if (again && run && !this->IsJobAborted()) {
++		_lg_stats.inline_runs++;
++		LinkGraphSchedule::Run(this);
++	}
++}
++
++/**
++ * The game's core, each tick: a job whose worker has ended is finished now, and its slot is free for the next; one the
++ * first core had no worker for is pending again (true: it is pending).
++ */
++bool LinkGraphJob::SeReap()
++{
++	const int k = this->se_slot;
++	if (k < 0) return this->se_pending;
++	LgSlot &s = _lg_slots[k];
++	const uint32_t want = s.g.want;
++	if (s.f.decided != want) return false;
++	if (s.f.launched != want) {
++		_lg_stats.declined++;
++		s.g.job = nullptr;
++		this->se_slot = -1;
++		this->se_pending = true;
++		return true;
++	}
++	if (s.w.done == want) this->SeFinish(true);
++	return false;
++}
++
++bool SeLinkGraphInit() { return LgInit(); }
++bool SeLinkGraphWorkers() { return _lg_slots != nullptr; }
 +#endif
 +
  void LinkGraphJob::SpawnThread()
  {
 +#ifdef WITH_SHADEREMU
 +	/* (no threads here: a load's jobs, all spawned at once, were 18 million instructions of the start to the game;
-+	 * they run one a tick from the first, each before it is first asked about; docs/games/openttd.md, "The start") */
++	 * they run one a tick from the first, each before it is first asked about; docs/games/openttd.md, "The start")
++	 * Each goes to a worker of its own if one is free (SeHand), as upstream runs it in a thread of its own. */
 +	if (_se_spawn_later) {
-+		this->se_pending = true;
++		this->se_pending = !this->SeHand();
 +		return;
 +	}
++	if (this->SeHand()) return;
 +#endif
  	if (!StartNewThread(&this->thread, "ottd:linkgraph", &(LinkGraphSchedule::Run), this)) {
  		/* Of course this will hang a bit.
  		 * On the other hand, if you want to play games which make this hang noticeably
-@@ -75,6 +96,15 @@ void LinkGraphJob::SpawnThread()
+@@ -75,6 +384,16 @@ void LinkGraphJob::SpawnThread()
   */
  void LinkGraphJob::JoinThread()
  {
 +#ifdef WITH_SHADEREMU
++	if (this->se_slot >= 0) this->SeFinish(!CleaningPool() && !this->IsJobAborted());
 +	if (this->se_pending) {
 +		if (CleaningPool() || this->IsJobAborted()) {
 +			this->se_pending = false;
@@ -1166,29 +1462,35 @@ index 365b035..2628cbf 100644
  		this->thread.join();
  	}
 diff --git a/src/linkgraph/linkgraphjob.h b/src/linkgraph/linkgraphjob.h
-index b308211..1240805 100644
+index b308211..6da0fc5 100644
 --- a/src/linkgraph/linkgraphjob.h
 +++ b/src/linkgraph/linkgraphjob.h
-@@ -170,6 +170,11 @@ protected:
+@@ -170,6 +170,17 @@ protected:
  	void EraseFlows(StationID from);
  	void JoinThread();
  	void SpawnThread();
 +#ifdef WITH_SHADEREMU
 +	bool se_pending = false; ///< spawned by a load and not run yet: run a tick at a time, or when it is first asked about
++	int se_slot = -1; ///< the worker's slot it was handed to (SeHand), -1: none
 +public:
 +	void SeRunPending();
++	bool SeHand();
++	void SeFinish(bool run);
++	bool SeReap();
++	bool SePending() const { return this->se_pending; }
++	void SeNotPending() { this->se_pending = false; }
 +#endif
  
  public:
  	/**
-@@ -188,7 +193,15 @@ public:
+@@ -188,7 +199,15 @@ public:
  	 * This is allowed to spuriously return an incorrect value.
  	 * @return True if job has actually finished.
  	 */
 +#ifdef WITH_SHADEREMU
 +	inline bool IsJobCompleted() const
 +	{
-+		if (this->se_pending) const_cast<LinkGraphJob *>(this)->SeRunPending();
++		if (this->se_pending || this->se_slot >= 0) const_cast<LinkGraphJob *>(this)->SeRunPending();
 +		return this->job_completed.load(std::memory_order_acquire);
 +	}
 +#else
@@ -1197,22 +1499,45 @@ index b308211..1240805 100644
  
  	/**
  	 * Check if job has been aborted.
+@@ -203,7 +222,16 @@ public:
+ 	 * After this method has been called the state of the job is undefined, and the only valid operation
+ 	 * is to join the thread and discard the job data.
+ 	 */
++#ifdef WITH_SHADEREMU
++	/* (a job on a worker ends first: the worker stores beside job_aborted, and its memory is let go of after it) */
++	inline void AbortJob()
++	{
++		if (this->se_slot >= 0) this->SeFinish(false);
++		this->job_aborted.store(true, std::memory_order_release);
++	}
++#else
+ 	inline void AbortJob() { this->job_aborted.store(true, std::memory_order_release); }
++#endif
+ 
+ 	/**
+ 	 * Check if job is supposed to be finished.
 diff --git a/src/linkgraph/linkgraphschedule.cpp b/src/linkgraph/linkgraphschedule.cpp
-index ea7195e..523139f 100644
+index ea7195e..b9877b0 100644
 --- a/src/linkgraph/linkgraphschedule.cpp
 +++ b/src/linkgraph/linkgraphschedule.cpp
-@@ -108,11 +108,30 @@ void LinkGraphSchedule::JoinNext()
+@@ -108,11 +108,36 @@ void LinkGraphSchedule::JoinNext()
   * Start all threads in the running list. This is only useful for save/load.
   * Usually threads are started when the job is created.
   */
 +#ifdef WITH_SHADEREMU
 +void LinkGraphSchedule::SeRunOnePending()
 +{
++	/* (each to a worker of its own while slots are free; with no workers, one a tick where it is) */
++	extern bool SeLinkGraphWorkers();
++	for (LinkGraphJob *job : this->running) job->SeReap();
 +	for (LinkGraphJob *job : this->running) {
-+		if (job->se_pending) {
-+			job->SeRunPending();
-+			return;
++		if (!job->se_pending) continue;
++		if (job->SeHand()) {
++			job->se_pending = false;
++			continue;
 +		}
++		if (!SeLinkGraphWorkers()) job->SeRunPending();
++		return;
 +	}
 +}
 +#endif
@@ -1232,7 +1557,7 @@ index ea7195e..523139f 100644
  }
  
  /**
-@@ -201,6 +220,10 @@ void AfterLoad_LinkGraphPauseControl()
+@@ -201,6 +226,10 @@ void AfterLoad_LinkGraphPauseControl()
   */
  void OnTick_LinkGraph()
  {
@@ -2151,10 +2476,10 @@ index 3f257e2..0392c91 100644
  			if (best_open_node == nullptr) break;
  
 diff --git a/src/pathfinder/yapf/yapf_ship.cpp b/src/pathfinder/yapf/yapf_ship.cpp
-index b024edb..881689d 100644
+index b024edb..deaa82d 100644
 --- a/src/pathfinder/yapf/yapf_ship.cpp
 +++ b/src/pathfinder/yapf/yapf_ship.cpp
-@@ -16,8 +16,400 @@
+@@ -16,8 +16,406 @@
  #include "yapf_ship_regions.h"
  #include "../water_regions.h"
  
@@ -2195,10 +2520,14 @@ index b024edb..881689d 100644
 +	return p;
 +}
 +
++void *SeLinkGraphAlloc(size_t n); /* linkgraphjob.cpp: a worker running a link graph job */
++bool SeLinkGraphFree(void *p, size_t n);
++
 +void *operator new(std::size_t n)
 +{
 +	if (mcw_on_worker()) {
 +		if (void *p = SeAheadAlloc(n)) return p;
++		if (void *p = SeLinkGraphAlloc(n)) return p;
 +	}
 +	if (n == 0) n = 1;
 +	for (;;) {
@@ -2212,11 +2541,13 @@ index b024edb..881689d 100644
 +void operator delete(void *p) noexcept
 +{
 +	if (static_cast<size_t>(static_cast<uint8_t *>(p) - _se_ahead_heap) < _se_ahead_heap_bytes) return;
++	if (SeLinkGraphFree(p, 0)) return;
 +	free(p);
 +}
 +
-+void operator delete(void *p, std::size_t) noexcept
++void operator delete(void *p, std::size_t n) noexcept
 +{
++	if (p != nullptr && SeLinkGraphFree(p, n)) return;
 +	::operator delete(p);
 +}
 +
@@ -2555,7 +2886,7 @@ index b024edb..881689d 100644
  constexpr int NUMBER_OR_WATER_REGIONS_LOOKAHEAD = 4;
  constexpr int MAX_SHIP_PF_NODES = (NUMBER_OR_WATER_REGIONS_LOOKAHEAD + 1) * WATER_REGION_NUMBER_OF_TILES * 4; // 4 possible exit dirs per tile.
  
-@@ -43,6 +435,17 @@ protected:
+@@ -43,6 +441,17 @@ protected:
  public:
  	void SetDestination(const Ship *v)
  	{
@@ -2573,7 +2904,7 @@ index b024edb..881689d 100644
  		if (v->current_order.IsType(OT_GOTO_STATION)) {
  			this->dest_station = v->current_order.GetDestination().ToStationID();
  			this->dest_tile = CalcClosestStationTile(this->dest_station, v->tile, StationType::Dock);
-@@ -83,6 +486,19 @@ public:
+@@ -83,6 +492,19 @@ public:
  			return GetWaterRegionPatchInfo(tile) == this->intermediate_dest_region_patch;
  		}
  
@@ -2593,7 +2924,7 @@ index b024edb..881689d 100644
  		if (this->dest_station != StationID::Invalid()) return IsDockingTile(tile) && IsShipDestinationTile(tile, this->dest_station);
  
  		return tile == this->dest_tile && ((this->dest_trackdirs & TrackdirToTrackdirBits(trackdir)) != TRACKDIR_BIT_NONE);
-@@ -134,6 +550,24 @@ public:
+@@ -134,6 +556,24 @@ public:
  	inline void PfFollowNode(Node &old_node)
  	{
  		TrackFollower follower{Yapf().GetVehicle()};
@@ -2618,7 +2949,7 @@ index b024edb..881689d 100644
  		if (follower.Follow(old_node.key.tile, old_node.key.td)) {
  			if (this->water_region_corridor.empty()
  					|| std::ranges::find(this->water_region_corridor, GetWaterRegionInfo(follower.new_tile)) != this->water_region_corridor.end()) {
-@@ -158,6 +592,9 @@ public:
+@@ -158,6 +598,9 @@ public:
  	/** Returns a random trackdir out of a set of trackdirs. */
  	static Trackdir GetRandomTrackdir(TrackdirBits trackdirs)
  	{
@@ -2628,7 +2959,7 @@ index b024edb..881689d 100644
  		const int strip_amount = RandomRange(CountBits(trackdirs));
  		for (int s = 0; s < strip_amount; ++s) RemoveFirstTrackdir(&trackdirs);
  		return FindFirstTrackdir(trackdirs);
-@@ -368,12 +805,20 @@ public:
+@@ -368,12 +811,20 @@ public:
  		/* Additional penalty for curves. */
  		c += this->CurveCost(n.parent->GetTrackdir(), n.GetTrackdir());
  
@@ -2649,7 +2980,7 @@ index b024edb..881689d 100644
  			c += count * 3 * YAPF_TILE_LENGTH;
  		}
  
-@@ -424,14 +869,419 @@ struct CYapfShip_TypesT {
+@@ -424,14 +875,419 @@ struct CYapfShip_TypesT {
  
  struct CYapfShip : CYapfT<CYapfShip_TypesT<CYapfShip>> {
  	explicit CYapfShip(int max_nodes) { this->max_search_nodes = max_nodes; }
@@ -5623,7 +5954,7 @@ index e09c202..4b56817 100644
 +    CONDITION SHADEREMU
 +)
 diff --git a/src/video/null_v.cpp b/src/video/null_v.cpp
-index 65fc9f3..df95ca1 100644
+index 65fc9f3..33a7b80 100644
 --- a/src/video/null_v.cpp
 +++ b/src/video/null_v.cpp
 @@ -12,6 +12,11 @@
@@ -5652,7 +5983,7 @@ index 65fc9f3..df95ca1 100644
  	/* Do not render, nor blit */
  	Debug(misc, 1, "Forcing blitter 'null'...");
  	BlitterFactory::SelectBlitter("null");
-@@ -50,11 +62,61 @@ void VideoDriver_Null::MainLoop()
+@@ -50,11 +62,62 @@ void VideoDriver_Null::MainLoop()
  {
  	uint i;
  
@@ -5688,7 +6019,8 @@ index 65fc9f3..df95ca1 100644
 +	}
 +#ifdef WITH_SHADEREMU
 +	extern void YapfShipAheadStats();
-+	if (timed) YapfShipAheadStats();
++	extern void SeLinkGraphStats();
++	if (timed) YapfShipAheadStats(), SeLinkGraphStats();
 +#endif
 +
 +	/* OPENTTD_SUM: every tile, the game's random state, the date and the companies' money after

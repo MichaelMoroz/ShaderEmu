@@ -401,9 +401,14 @@ static void ThDrainRing()
 	_tw_ring_tail.v = tail;
 }
 
-/** What the tick's worker waits for: its stops, its frees, memory it asked for. */
+void SeLinkGraphService(); /* linkgraphjob.cpp */
+bool SeLinkGraphInit();
+void SeLinkGraphStats();
+
+/** What the tick's worker waits for: its stops, its frees, memory it asked for; the link graph's workers. */
 void TwService()
 {
+	SeLinkGraphService();
 	if (!_tw_on) return;
 	if (mcw_ready(_tw_handle) && _tw_ended.v == 0) {
 		fmt::print(stderr, "openttd: the game tick's worker ended\n");
@@ -532,6 +537,7 @@ bool TwStart()
 	if (VpWorkersOpen() < 2) return false;
 	/* (a loaded game has none of its water regions: ships' first paths made them one by one in the tick) */
 	WaterRegionsMakeAll();
+	SeLinkGraphInit(); /* (the link graph's slots made here: the tick's worker hands its jobs to them) */
 	if (_tw_stack == 0) {
 		uint8_t *s = static_cast<uint8_t *>(__real_malloc(TW_STACK + 16));
 		const char *mb = getenv("OPENTTD_TICK_HEAP");
@@ -606,6 +612,7 @@ void TwStop()
 		if (h.count != 0) holds += fmt::format(" {:x}: {} (the longest {} ms)", h.site, h.count, h.most / 5);
 	}
 	if (!holds.empty()) fmt::print(stderr, "openttd: holds over 40 ms, by where the tick stopped:{}\n", holds);
+	SeLinkGraphStats();
 }
 
 bool TwActive() { return _tw_on; }

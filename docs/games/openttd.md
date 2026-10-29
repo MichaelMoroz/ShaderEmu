@@ -417,8 +417,9 @@ On `rvc_cpu` the guest's seconds to the game went 126.1, 101.9, 97.7, 86.9, 83.1
   core copies from while it reads what it took (`SeLzmaAhead` in `saveload.cpp`). The decoder's
   memory is made by the first core when it decodes the first piece. The worker allocates only
   from a reserve of 64 KB, and the blocks it lets go are freed by the first core.
-- The link graph's jobs a load starts are not run at once. One runs each tick, and each runs
-  before it is first asked about (`SeRunPending`). The game state is the same:
+- The link graph's jobs a load starts are not run at once: each goes to a worker of its own while
+  one is free ("The link graph on the workers"), and with no workers one runs each tick; each is
+  finished before it is first asked about (`SeRunPending`). The game state is the same:
   `503e40ee` after 1,300 ticks.
 - The missing-glyph check reads every string of the language (11.5 million instructions). It is
   skipped for the image's English, whose base font has every glyph.
@@ -495,6 +496,25 @@ What was left of a tick's 0.61 million instructions on the first core (`RVC_PROF
 ships' own ticks 21, the vehicles' places 26. The vehicles tick in one order on one core. Their random
 numbers come from one state in that order, so they cannot tick on workers and keep the same
 game.
+
+## The link graph on the workers
+
+Upstream runs each link graph job (cargo distribution: demands, the multi-commodity flow, the flows
+mapped) in a thread of its own, on a copy of the graph made when it is spawned, and joins it at a
+date set then. Here a job is handed to one of four slots (`SeHand` in `linkgraphjob.cpp`,
+`OPENTTD_LG=N` slots, 0 the old way), the first core gives the slot a free worker or says it has
+none (`SeLinkGraphService`, from `TwService`; never while a flush's pieces are out), and the job
+is finished where it is first asked about, as upstream joins its thread. A job on a worker
+allocates from its slot's heap (1 MB, `OPENTTD_LG_HEAP`; busy.sav's take 112 KB at most) through
+the program's `operator new`, its blocks of up to 1 KB used again by size; what it leaves, its
+nodes' annotations with their flows, is copied out of that heap by the core that finishes it
+(`SeFinish`), each tick for a job whose worker has ended (`SeReap`), so the slot takes the next
+job. A job with no worker is handed again the next tick, and one whose heap runs out is run where
+it is asked about. The game is the same: `6abca409` after 300 ticks of busy.sav, `503e40ee` after
+1,300 (17 jobs on workers). Played (`OPENTTD_PLAY=1` on `rvc_cpu`), the 16 jobs a load leaves were
+600 thousand instructions each in the tick's first 16 ticks, and the longest hold of the first
+core by the tick 350 to 1,550 ms; with them on workers the tick's worker spends 226 to 285 ms a
+tick in the scroll and zoomed out, not 294 to 383, and the longest hold is 18 ms.
 
 ## Ships' paths made ahead
 
