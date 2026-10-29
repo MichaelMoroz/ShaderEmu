@@ -110,7 +110,8 @@ CASES = [
     case('classicube-meshes-workers', 'games classicube', CC + 'CLASSICUBE_MESH=worker CLASSICUBE_MESH_SUM=1 CLASSICUBE_SEED=7 CLASSICUBE_STATS_MS=2000 classicube',
          True, until='classicube: steady', count=[(r'^ccmesh: ', 52)], digest=[(r'^ccmesh: at (\d+ \d+ \d+), \d+ vertices, sums \S+ (\S+)', '1f9d723c', 'sorted')]),
     case('classicube-pack', 'games classicube', CC + 'CLASSICUBE_TEXTURE_SUM=1 CLASSICUBE_SEED=7 CLASSICUBE_STATS_MS=2000 classicube',
-         True, until='classicube: steady', count=[(r'^cctex: ', 42)], digest=[(r'^(cctex: .*)', 'e51865ae')]),   # (RAM in one texture: 42 by then)
+         True, until='classicube: steady', count=[(r'^cctex: \d+ x (?!26,)\d+, ', 30), (r'^cctex: \d+ x 26,', (10, 12))],
+         digest=[(r'^(cctex: \d+ x (?!26,)\d+, .*)', '43d1cb6b')]),   # (RAM in one texture: 42 by then. The 26 high are lines of text, whose words and how many are made by steady go by how fast it starts: counted, not summed)
     case('classicube-kept', 'games classicube', CC + 'CLASSICUBE_CHECK_KEPT=1 CLASSICUBE_SEED=7 CLASSICUBE_STATS_MS=2000 classicube', True,
          until='cccheck:', more=['--expect', 'classicube: steady', '--send', 'turn 1200 0\\ndown W\\ndown Space\\n'],
          has=[r'cccheck: the outline kept \d+ times, 0 of them wrong; the held block kept \d+ times, 0 wrong']),
