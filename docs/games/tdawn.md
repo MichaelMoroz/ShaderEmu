@@ -844,12 +844,12 @@ without them (no warning: `-Wno-coverage-mismatch`), so a profile ages gracefull
 worth making again after a large change. The state sums are the same with and without.
 
 Quake and Quake III are compiled the same way (29 October 2026), with their own counts: `linux/quake/quake.profile`,
-`linux/quake3/quake3.profile`. Their counters are `linux/userland/pgo/gcov.c`'s
+`linux/quake3/quake3.profile`; so is the NES (below). Their counters are `linux/userland/pgo/gcov.c`'s
 (host.c's functions, the values kept in a pool of its own, not malloc'd, since worker cores run counted code too), and
 they are written at the program's end or at `kill -USR2`, so a game that never ends by itself is counted part way:
 
-- `QUAKE3_PROFILE=count linux/quake3/build.sh` (`QUAKE_PROFILE`, and `DOOM_PROFILE`, `HALFLIFE_PROFILE`
-  for the two below that keep none) builds the counting program in a folder of its own
+- `QUAKE3_PROFILE=count linux/quake3/build.sh` (`QUAKE_PROFILE`, `NES_PROFILE`, and `DOOM_PROFILE`,
+  `HALFLIFE_PROFILE` for the two below that keep none) builds the counting program in a folder of its own
   (`$WORK/src/*-count-build`); `=off` builds without the counts kept. The counting build has the same drivers and
   hidden globals as the one that uses the counts.
 - Counted on `rvc_cpu`, each under a minute: Quake III `QUAKE3_STATS_FRAMES=100 quake3 +set com_maxfps 0 +set fixedtime
@@ -860,6 +860,8 @@ they are written at the program's end or at `kill -USR2`, so a game that never e
   ticks in e1m1 58.0 to 68.0 a second, the start to the level 16.4 to 15.6 s, but its first frame 0.44 to 0.50 s (the
   start's code is run once in a count, and is compiled as rarely run: 1.25% more instructions to "Quake Initialized").
   Quake III's start to the level 27.8 to 25.8 s.
+- The NES (`linux/nes/nes.profile`): `NES_FRAMES=1500 nes thwaite` and `nova`, which end by themselves. Thwaite's 1,500
+  frames 26.5 to 24.1 million instructions (7.99 to 7.25 s of the guest's), the same picture.
 - Not kept: Doom (`doom -1 -timedemo demo1` and `demo2`, 110 s each): on `rvc_cpu` its timedemo 148.1 to 139.3 million
   instructions on the first core, but on the card 91.9 to 91.1 tics a second, at 11.2 rounds a frame for 10.5 (two
   rounds each). Half-Life (hldemo1 to second 43 of the level, in sections): 2% fewer instructions from second 31 to 43

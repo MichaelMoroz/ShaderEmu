@@ -33,10 +33,23 @@ INC="-I$HERE -I$N -I$N/cpu -I$N/nes -I$N/sndhrdw -I$N/libsnss -I$N/mappers -I$MW
 # (5 to 7% fewer instructions a frame than -O2, with the same sums)
 OPT="-O3 -fno-tree-vectorize -fsched-pressure -funroll-loops"
 CFLAGS="$OPT -flto -fno-pie -std=gnu99 -fgnu89-inline -fcommon -w -Dasm(x)=abort() -DNES_VISIBLE_HEIGHT=240 -DHOST_LITTLE_ENDIAN -DNES6502_JUMPTABLE $INC"
+# What played games ran, for the compiler (linux/userland/pgo/gcov.c; docs/games/tdawn.md, "What the compiler is told"):
+# NES_PROFILE=count builds the program that counts, in a folder of its own; otherwise nes.profile's counts.
+PGO=""; COUNTS=""
+if [ "${NES_PROFILE:-}" = count ]; then
+    BUILD=$WORK/src/nes-count-build
+    mkdir -p "$WORK/src/nogcov" && riscv32-linux-ar rc "$WORK/src/nogcov/libgcov.a"
+    PGO="-fprofile-generate -fprofile-update=single"; COUNTS="-L$WORK/src/nogcov"
+elif [ -f "$HERE/nes.profile" ] && [ "${NES_PROFILE:-}" != off ]; then
+    python3 "$REPO/linux/tdawn/profile.py" put "$HERE/nes.profile" "$BUILD"
+    PGO="-fprofile-use -fprofile-partial-training -fprofile-correction -Wno-missing-profile -Wno-coverage-mismatch"
+fi
+CFLAGS="$CFLAGS $PGO"
 export CFLAGS BUILD HERE
 mkdir -p "$BUILD" && cd "$BUILD"
+[ "${NES_PROFILE:-}" = count ] && rv32-cc -O2 -fno-pie -Wall -c "$REPO/linux/userland/pgo/gcov.c" -o gcov.o
 { find "$N" -name '*.c'; ls "$HERE"/*.c "$REPO/programs/mc/mcw.c" "$REPO/programs/mc/mcwx.c"; } |
-    xargs -P "$(nproc)" -I{} sh -c 'o=$(basename {} .c).o; [ "$o" -nt {} ] && [ "$o" -nt "$HERE/build.sh" ] && [ "$o" -nt "$HERE/nofrendo.patch" ] && [ "$o" -nt "$HERE/rc6502.h" ] || rv32-cc $CFLAGS -c {} -o "$o"'
+    xargs -P "$(nproc)" -I{} sh -c 'o=$(basename {} .c).o; [ "$o" -nt {} ] && [ "$o" -nt "$HERE/build.sh" ] && [ "$o" -nt "$HERE/nofrendo.patch" ] && [ "$o" -nt "$HERE/rc6502.h" ] && [ "$o" -nt "$HERE/nes.profile" ] || rv32-cc $CFLAGS -c {} -o "$o"'
 # The GPU's library apart, a section a variable and each on 16 bytes (as linux/tdawn/build.sh
 # has it): a worker core makes the lists with it while this one emulates, and two cores must
 # not store to the same 16 bytes (docs/machine/multicore.md). Optimised with the rest, its variables
@@ -45,7 +58,7 @@ mkdir -p "$BUILD" && cd "$BUILD"
     rv32-cc $OPT -fno-pie -w $INC -fno-common -fdata-sections -fno-toplevel-reorder -msmall-data-limit=0 -c "$REPO/programs/linux/gles.c" -o gles.o
     riscv32-linux-objcopy --set-section-alignment '.data*=16' --set-section-alignment '.bss*=16' gles.o
 }
-rv32-cc $OPT -flto -flto-partition=one *.o "$MW/src/lib/libnano-X.a" -lm -o nes
+rv32-cc $OPT $PGO $COUNTS -flto -flto-partition=one *.o "$MW/src/lib/libnano-X.a" -lm -o nes
 mkdir -p "$OUT/usr/bin" "$OUT/usr/share"
 riscv32-linux-strip -o "$OUT/usr/bin/nes.bin" nes
 riscv32-linux-nm -n nes > "$WORK/src/nes.nm"
