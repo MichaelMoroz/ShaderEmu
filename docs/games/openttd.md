@@ -433,6 +433,12 @@ When the ship asks, the path is taken only if all of these are as they were: the
 inputs, the settings, each region's generation, every tile logged, and the ships on every
 docking tile counted. Otherwise, and for a lost ship's random path, the first core makes the
 path itself. A load or a new map first stops every worker (`YapfShipAheadCancel`).
+A picture drawn with no tick since the last one, or while the game is paused, gives the paths up
+first (`YapfShipAheadQuiet`): the jobs launched at the last tick otherwise held up to nine workers
+through every paused picture, and the first core waited at each picture's end for them to stop.
+Paused, on `rvc_cpu` (`OPENTTD_PLAY_SHORT=1 OPENTTD_PAUSE=1`, pictures a second, the 8-bit blitter):
+scroll 1.85 with the paths kept to 7.42 (7.81 before the paths were made ahead), zoomed out 1.06 to
+1.67, windows 1.82 to 5.52.
 
 `OPENTTD_SHIP_AHEAD=check` makes every path taken again on the first core and compares the two:
 0 differ. `OPENTTD_SHIP_AHEAD=0` is without. The check of the tiles logged is cut in parts of at
