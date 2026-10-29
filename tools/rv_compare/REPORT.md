@@ -22,7 +22,7 @@ below is what a player in the world sees.
   times the ratio): a machine whose rounds overshot the budget is not paid for it.
 - Machines: `tools/rv_compare/machines.py`; `before` is frozen in the backport's `build/before` (its README.md).
 
-**Parts measured: before 51, after 51 of 51. after better than before in 121 metrics, worse in 46, level in 75 (3% either way).**
+**Parts measured: before 51, after 51 of 52. after better than before in 121 metrics, worse in 46, level in 75 (3% either way).**
 
 - Run-to-run spread on before over 255 metrics with two rounds or more: median 1.5%, 75th percentile 11.1%, largest 221.1%.
 - Run-to-run spread on after over 243 metrics with two rounds or more: median 1.1%, 75th percentile 6.5%, largest 300.0%.
