@@ -50,6 +50,9 @@ int mcw_core(int k);
 /* Whether worker k is on one of the first 16 cores, which RISC-V's hybrid geometry gives the larger write caches: a
  * long job that stores much runs up to twice as fast there. */
 int mcw_fast(int k);
+/* Called before mcw_open(): the workers named take the lowest cores the program is given first, in that order (the
+ * first 16 have the larger write caches: mcw_fast), the rest after them in their own order. */
+void mcw_prefer(const unsigned char *order, int n);
 /*
  * For a program that can do without (a monitor that draws with them): called before
  * mcw_open(), its workers are only lent: it has what the programs that keep theirs leave.

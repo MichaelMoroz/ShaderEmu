@@ -1223,7 +1223,17 @@ int hlglOpen(unsigned int nano_x_window) {
 
     // workers for the studio models: the program's text read and the frames' sets written here first
     const char* want = getenv("HLGL_WORKERS");
-    workers = mcw_open(want ? atoi(want) : 46);
+    int asked = want ? atoi(want) : 46;
+    // the roles on the first cores, which have the larger write caches (mcw_fast): the drawing's worker stores a
+    // frame's draws and is the frame's bound, the world's, the light maps' and the entities' next (HL_ROLES=last:
+    // the studio models' first, as before)
+    if (asked > ROLES && !(getenv("HL_ROLES") && !strcmp(getenv("HL_ROLES"), "last"))) {
+        static const unsigned char from_last[ROLES] = { 8, 1, 5, 3, 0, 4, 6, 2, 7, 9, 10, 11, 12, 13, 14, 15 };
+        unsigned char order[ROLES];
+        for (int i = 0; i < ROLES; i++) order[i] = (unsigned char)(asked - from_last[i]);
+        mcw_prefer(order, ROLES);
+    }
+    workers = mcw_open(asked);
     if (workers > 64) workers = 64;
     if (workers > 0) {
         extern char _start[], etext[];  // (a flat program's __executable_start is 0)

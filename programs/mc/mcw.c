@@ -212,6 +212,33 @@ int mcw_most(void)
 
 void mcw_lend(void) { lent = 1; }
 
+/* The workers that take the lowest cores first (mcw_prefer), then the rest in order: worker numbers. */
+static uint8_t pref[MC_MAX_CORES], in_pref[MC_MAX_CORES];
+static int pref_n;
+
+void mcw_prefer(const unsigned char *order, int n)
+{
+	pref_n = 0;
+	for (int k = 0; k < MC_MAX_CORES; k++) in_pref[k] = 0;
+	for (int i = 0; i < n && pref_n < MC_MAX_CORES - 1; i++)
+		if (order[i] >= 1 && order[i] < MC_MAX_CORES && !in_pref[order[i]]) in_pref[order[i]] = 1, pref[pref_n++] = order[i];
+}
+
+/* The next worker of the order that wants a core and may have one, from *at on; 0: none. */
+static int next_without(int *at, int want)
+{
+	for (; *at < pref_n + MC_MAX_CORES - 1; (*at)++) {
+		int k = *at < pref_n ? pref[*at] : *at - pref_n + 1;
+		if (*at >= pref_n && in_pref[k]) continue;
+		if (k > want || k > stack_count) {
+			if (*at >= pref_n) return 0;	/* (in order: those after are larger still) */
+			continue;
+		}
+		if (!core_of[k] && !starting[k]) return k;
+	}
+	return 0;
+}
+
 int mcw_asked(void)
 {
 	int k, asked = lost;
@@ -319,7 +346,7 @@ static int claim(int want)
 {
 	uint32_t answer[2 + MC_MASK_WORDS] = {(uint32_t)want};
 	uint8_t has[MC_MAX_CORES] = {0};	/* the cores a worker has or is being started on */
-	int core, k, n = 0, free_k = 1;
+	int core, k, n = 0, free_at = 0;
 
 	offer_seen = *(volatile uint32_t *)(page + MC_OFFER_AT);
 	if (call6(29, device, MC_WORKERS_ALL, (long)answer, 0, 0, 0) != 0) return 0;
@@ -340,10 +367,9 @@ static int claim(int want)
 		if (!(answer[2 + core / 32] >> (core % 32) & 1)) continue;
 		n++;
 		if (has[core]) continue;		/* one it has */
-		/* the first worker without a core: none before it loses one in here */
-		for (; free_k <= want && (core_of[free_k] || starting[free_k]); free_k++) {}
-		k = free_k;
-		if (k > want || k > stack_count) {
+		/* the first worker without a core (of mcw_prefer's order first): none before it loses one in here */
+		k = next_without(&free_at, want);
+		if (!k) {
 			/* (more than it has workers for: back it goes) */
 			uint32_t back[MC_MASK_WORDS] = {0};
 
