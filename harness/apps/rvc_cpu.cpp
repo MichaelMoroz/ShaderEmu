@@ -343,8 +343,14 @@ static inline bool race_watched(u32 phys) {
            (phys & ~15u) != ATOM_HEAD;
 }
 // What goes to the cores' logs: under RVC_BESIDE all of RAM, the mailboxes and counters too (a worker sees core 0's
-// job word, and core 0 a worker's answer, from the next pass, as on the card); under RVC_RACES alone what it watches.
-static inline bool routed(u32 phys) { return beside_on ? phys - RAM_BASE < RAM_SIZE : race_watched(phys); }
+// job word, and core 0 a worker's answer, from the next pass, as on the card); under RVC_RACES alone what it watches,
+// and the mailboxes: a worker that has not slept since its last job reads its job word itself, and saw a job core 0
+// posted in the same pass at once, which the card's worker sees a pass later. It then ran beside what core 0 stored
+// before posting (ClassiCube's frame job against the frame's set-up: undone stores no card makes). The mailboxes'
+// texels are logged and read as the pass began, never reported (race_watched).
+static inline bool routed(u32 phys) {
+    return beside_on ? phys - RAM_BASE < RAM_SIZE : race_watched(phys) || phys - rvlayout::kMbox < 0x8000u;
+}
 static inline u32 byte_mask(u32 phys, int size) { return ((1u << size) - 1) << (phys & 15); }
 static inline u32 texel_hash(u32 t, u32 bits) { return (t * 0x9e3779b1u) >> (32 - bits); }
 

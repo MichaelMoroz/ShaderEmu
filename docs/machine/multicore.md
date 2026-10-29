@@ -882,7 +882,11 @@ Since the program then runs as on the card, its own checks (sums, `mctest`) say 
 it was given mattered. A store that changes nothing is no store (the machine keeps none); the
 mailboxes and the counters are left out, being written by several cores by design. A worker is
 woken by its mailbox as the pass found it (a start, a job or an answer core 0 wrote in the pass
-is seen in the next). At the end it prints the counts and the eight commonest places; the file
+is seen in the next), and reads its mailbox's words so too: a worker that had not slept since its
+last job read its job word itself, and took a job core 0 posted in the same pass at once, a pass
+before the card's would, beside what core 0 stored before posting (ClassiCube's frame job against
+the next frame's set-up: 4 undone in one build's layout, 29 October 2026; none with `RVC_BESIDE=1`,
+which always kept the mailboxes so). At the end it prints the counts and the eight commonest places; the file
 has them all, and `python tools\mc_candidates.py CALLS ELF --races FILE` names them.
 
 `mctest 3 0 race`: two workers store to the two halves of one 16 bytes, pass after pass. Plain
