@@ -21,6 +21,8 @@ make -s defconfig >/dev/null
 # static; and without the applets that need headers or kernel features this machine lacks
 set_option() { sed -i "s/^# CONFIG_$1 is not set\$/CONFIG_$1=y/; s/^CONFIG_$1=.*\$/CONFIG_$1=$2/" .config; }
 set_option STATIC y
+# -O2 after busybox's own -Oz (CONFIG_EXTRA_CFLAGS comes last): the shell that runs every script, gzip and the rest
+set_option EXTRA_CFLAGS '"-O2"'
 for off in TC FEATURE_TC_INGRESS NANDWRITE NANDDUMP UBIATTACH UBIDETACH UBIMKVOL UBIRMVOL UBIRSVOL UBIUPDATEVOL \
            FEATURE_UTMP FEATURE_WTMP SELINUX PAM FEATURE_HAVE_RPC FEATURE_INETD_RPC HWCLOCK; do
     sed -i "s/^CONFIG_$off=y\$/# CONFIG_$off is not set/" .config
