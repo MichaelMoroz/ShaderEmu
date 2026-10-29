@@ -8,6 +8,10 @@
     ShaderEmu and Poiyomi shaders its README measures).
   - Optimizations are weighed together, not one at a time: one that loses alone may win with another (a layout and the
     compiler's address, a cache and the ISA's stores), and one that wins alone may not add up with the rest.
+- One core a wave (25 October 2026): cores whose lanes share a wave run two programs, and the wave pays for both paths.
+  On NVIDIA a warp is a 4 x 8 pixel tile under one big triangle, so blocks of whole tiles (4 x 8, 4 x 16, 8 x 8) drawn
+  by one triangle never mix; a primitive edge inside the cores' area does. Padding lanes are kept out of the geometry,
+  not discarded.
 - Linux with the MMU is no longer supported or developed for (21 October 2026): build, test, measure and document the
   no-MMU machine only (`linux/nommu`, `build/images/nommu`). Do not fix, rebuild, test or keep in step anything that only
   the MMU image uses, and do not add MMU paths to new work.
