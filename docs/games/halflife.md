@@ -278,6 +278,20 @@ its recording (some 40 characters a frame, three calls each). The replay was 28k
 there (700 instructions a character). A text character asks the font texture's size once in 256
 calls (`CL_DrawCharacter`). The titles' and the HUD's pixels at 12 s are the same as before.
 
+### A move predicted once
+
+The client predicted every command the server had not answered, again each frame, from what the
+server last said: 2.5 moves a frame at 24k each. The states lie by the command now (`cl_pmove.c`,
+`cl_parse.c`; a state is 2.3 KB, the weapons up to Half-Life's id 15, not 6.5), and a frame runs
+only the commands not run yet: the moves before them say the same while nothing came from the server, and
+when something did, they say the same while it says what was predicted for the command it answers
+(`SE_AsPredicted`: place within 0.05, speed within 1, every state that a server may change by itself
+exactly). Otherwise it is every move again. `HL_PREDICT=full` is the old way; `HL_PREDICT=check`
+runs every move again beside the states kept and prints how far they are apart (`hlpredict:`): 0 over
+0.1 and the most 0.016 units in a walk with turns, jumps and shots, 2 replays in 500 frames (a move that
+pushes the server's way, a teleport). 31 October 2026, the fight's 231.8k to 205.5k on core 0, 13.1 to
+13.8 fps; walking at 3 to 30 s, 164.6k to 133.4k, 19.6 to 24.1 fps.
+
 ## The controls
 
 On a desktop the left button held drags the view round, a quarter of a degree a pixel, as
