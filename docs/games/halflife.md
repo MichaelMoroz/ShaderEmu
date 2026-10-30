@@ -292,6 +292,20 @@ runs every move again beside the states kept and prints how far they are apart (
 pushes the server's way, a teleport). 31 October 2026, the fight's 231.8k to 205.5k on core 0, 13.1 to
 13.8 fps; walking at 3 to 30 s, 164.6k to 133.4k, 19.6 to 24.1 fps.
 
+### What core 0 did between the drawing's end and the next give
+
+A frame is as long as the drawing's job and what lies between its end and the next job's start, or
+as core 0's frame if that is longer: core 0 waiting at the swap does not shorten it. Of those 53 units
+of the clock (`HL_RENDER_CALLS=1`'s timeline; a frame then 335) the entities' copies were 26. They are made
+now at the frame's end while the drawing still draws, into the other of two sets (`R_SceneAhead`,
+`HL_SCENE=give` is at the give), and what its end writes back to the entities (attachments, the
+frame it was at, a muzzle flash shown) goes to the new copy too (`R_SceneTakeOne`). A cache of a
+copy's address breaks on the two sets: the glows' fractions go by the live entity (`R_SceneLive`).
+A paint of the sound is once a frame, or an eighth of a second after the last in a long frame, not
+at the HUD's end and each time core 0 looks at the drawing (`S_ExtraUpdate`: the card plays by
+itself; 2.5k a paint in doubles). 31 October 2026, the fight: core 0 205.2k to 195.1k, 29.55 to 28.05
+passes a frame, 13.8 to 14.6 fps.
+
 ## The controls
 
 On a desktop the left button held drags the view round, a quarter of a degree a pixel, as

@@ -23,7 +23,7 @@ void SE_LightsGive( void ), SE_LightsTaken( void ), SE_EfxGive( void ), SE_EfxTa
 extern void ( *SE_LightAhead )( void );
 
 // The renderer's (gl_kept.c): the drawing's lists copied, and what it wrote of the copies taken back.
-void ( *SE_ScenePipe )( int on ), ( *SE_SceneGive )( void ), ( *SE_SceneTaken )( cl_entity_t *( *by_index )( int ));
+void ( *SE_ScenePipe )( int on ), ( *SE_SceneGive )( void ), ( *SE_SceneAhead )( void ), ( *SE_SceneTaken )( cl_entity_t *( *by_index )( int ));
 const cl_entity_t *( *SE_SceneLive )( const cl_entity_t *e );
 
 static struct { volatile uint seq; uint32_t ( *fn )( void * ); void *args; uint unused; } ask __attribute__(( aligned( 16 )));	// the worker's
@@ -384,8 +384,12 @@ int se_ref_guard( int i, void *a0, const uint32_t *frame )
 		return 0;
 	}
 	settles++, settled_by[i]++;
-	if( i == REF_INDEX( R_EndFrame ) && play_2d && next.have )
-		hand_2d = 1;	// (left for the frame's own drawing, given next)
+	if( i == REF_INDEX( R_EndFrame ) && next.have )
+	{
+		if( play_2d )
+			hand_2d = 1;	// (left for the frame's own drawing, given next)
+		SE_SceneAhead();	// (the next frame's copies while this one still draws: 17k less between its end and the give)
+	}
 	SE_RenderSettle();
 	return 1;
 }

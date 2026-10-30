@@ -1796,10 +1796,18 @@ index 25e1e885..6ead1c0e 100644
  }
  
 diff --git a/engine/client/sound/s_main.c b/engine/client/sound/s_main.c
-index 2cd7030b..f3f68738 100644
+index 2cd7030b..f5f8e492 100644
 --- a/engine/client/sound/s_main.c
 +++ b/engine/client/sound/s_main.c
-@@ -1506,6 +1506,10 @@ update global soundtime
+@@ -1495,6 +1495,7 @@ void S_StopAllSounds( qboolean ambient )
+ 	memset( &soundfade, 0, sizeof( soundfade ));
+ }
+ 
++static int se_painted_at;
+ /*
+ ==============
+ S_GetSoundtime
+@@ -1506,6 +1507,10 @@ update global soundtime
  */
  static int S_GetSoundtime( void )
  {
@@ -1810,6 +1818,28 @@ index 2cd7030b..f3f68738 100644
  	static int buffers, oldsamplepos;
  
  	int fullsamples = snd.samples / 2;
+@@ -1567,6 +1572,9 @@ static void S_UpdateChannels( void )
+ 	else
+ 		S_PaintChannels( endtime );
+ 
++#if XASH_SHADEREMU
++	{ int SE_CardTime( void ); se_painted_at = SE_CardTime( ); }
++#endif
+ 	SNDDMA_Submit();
+ }
+ 
+@@ -1580,6 +1588,11 @@ Don't let sound skip if going slow
+ void S_ExtraUpdate( void )
+ {
+ 	if( !snd.initialized ) return;
++#if XASH_SHADEREMU	// (the card plays by itself: a paint now and then in a long frame, not three a frame, each 2.5k with its doubles)
++	int SE_CardTime( void );
++	if( !cls.disable_screen && cls.state == ca_active && SE_CardTime( ) - se_painted_at < SOUND_DMA_SPEED / 8 )
++		return;
++#endif
+ 	S_UpdateChannels ();
+ }
+ 
 diff --git a/engine/client/sound/s_mix.c b/engine/client/sound/s_mix.c
 index fe5ece45..53d89c4b 100644
 --- a/engine/client/sound/s_mix.c
