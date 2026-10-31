@@ -23,7 +23,7 @@ void SE_LightsGive( void ), SE_LightsTaken( void ), SE_EfxGive( void ), SE_EfxTa
 extern void ( *SE_LightAhead )( void );
 
 // The renderer's (gl_kept.c): the drawing's lists copied, and what it wrote of the copies taken back.
-void ( *SE_ScenePipe )( int on ), ( *SE_SceneGive )( void ), ( *SE_SceneTaken )( cl_entity_t *( *by_index )( int ));
+void ( *SE_ScenePipe )( int on ), ( *SE_SceneGive )( void ), ( *SE_SceneAhead )( void ), ( *SE_SceneTaken )( cl_entity_t *( *by_index )( int ));
 const cl_entity_t *( *SE_SceneLive )( const cl_entity_t *e );
 
 static struct { volatile uint seq; uint32_t ( *fn )( void * ); void *args; uint unused; } ask __attribute__(( aligned( 16 )));	// the worker's
@@ -155,7 +155,9 @@ static uint32_t job_body( uint32_t unused )
 		se_ref_replay( se_ref_real[given.play->at[i].fn], given.play->at[i].w );
 	if( sums )	// (else this core's ring jobs are waited for by the frame's swap)
 		hlglRenderJobsWait(), work.sum = hlglRenderSum();
-	job_tl.ins = rd_ins() - job_tl.ins, job_tl.end = rd_time(), job_tl.waits = hlglRingWaits( &job_tl.most );
+	job_tl.ins = rd_ins() - job_tl.ins, job_tl.end = rd_time();
+	if( ref_count > 0 )
+		job_tl.waits = hlglRingWaits( &job_tl.most );
 	return 0;
 }
 
@@ -384,8 +386,12 @@ int se_ref_guard( int i, void *a0, const uint32_t *frame )
 		return 0;
 	}
 	settles++, settled_by[i]++;
-	if( i == REF_INDEX( R_EndFrame ) && play_2d && next.have )
-		hand_2d = 1;	// (left for the frame's own drawing, given next)
+	if( i == REF_INDEX( R_EndFrame ) && next.have )
+	{
+		if( play_2d )
+			hand_2d = 1;	// (left for the frame's own drawing, given next)
+		SE_SceneAhead();	// (the next frame's copies while this one still draws: 17k less between its end and the give)
+	}
 	SE_RenderSettle();
 	return 1;
 }
@@ -416,6 +422,10 @@ void SE_RefGuard( void *table, size_t bytes )
 	for( int k = 0; later_2d && k < (int)ARRAYSIZE( later2d ); k++ ) ref_kind[later2d[k]] = REF_LATER;
 	for( int k = 0; k < (int)ARRAYSIZE( through ); k++ ) ref_kind[through[k]] = REF_THROUGH;
 	ref_kind[REF_INDEX( CL_RunLightStyles )] = REF_STYLES;
+	if( !getenv( "HL_RENDER_CALLS" ))	// (a call that goes through needs no thunk but to be counted: R_AddEntity, 50 a frame, 80 instructions each)
+		for( int k = 0; k < (int)ARRAYSIZE( through ); k++ )
+			if( se_ref_real[through[k]] )
+				fn[through[k]] = se_ref_real[through[k]];
 }
 
 // Between a frame's end and the next's drawing: HL_RENDER_CALLS=1 counts what this core calls of

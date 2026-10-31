@@ -683,7 +683,7 @@ index 35c2939c..0896df2e 100644
  		s++;
  	}
 diff --git a/engine/client/cl_frame.c b/engine/client/cl_frame.c
-index aace8cff..1153cc8f 100644
+index aace8cff..8fca63d9 100644
 --- a/engine/client/cl_frame.c
 +++ b/engine/client/cl_frame.c
 @@ -359,14 +359,28 @@ static qboolean CL_FindInterpolationUpdates( cl_entity_t *ent, double targettime
@@ -881,7 +881,17 @@ index aace8cff..1153cc8f 100644
  
  	if( newframe->num_entities != count && newframe->num_entities != 0 )
  		Con_Reportf( S_WARN "%s%s: (%i should be %i)\n", __func__, delta ? "Delta" : "", newframe->num_entities, count );
-@@ -1284,8 +1418,55 @@ add visible entities to refresh list
+@@ -1056,6 +1190,9 @@ static void CL_LinkPlayers( frame_t *frame )
+ 		if ( i == cl.playernum )
+ 		{
+ 			// using interpolation only for local player angles
++#if XASH_SHADEREMU	// (the view's own player, its place cl.simorg: its angles are seen only from outside)
++			if( cls.demoplayback || clgame.dllFuncs.CL_IsThirdPerson( ))
++#endif
+ 			CL_ComputePlayerOrigin( ent );
+ 
+ 			if( cls.demoplayback == DEMO_QUAKE1 )
+@@ -1284,8 +1421,55 @@ add visible entities to refresh list
  process frame interpolation etc
  ===============
  */
@@ -937,7 +947,7 @@ index aace8cff..1153cc8f 100644
  	if( cl.paused ) return; // don't waste time
  
  	// not in server yet, no entities to redraw
-@@ -1297,6 +1478,9 @@ void CL_EmitEntities( void )
+@@ -1297,6 +1481,9 @@ void CL_EmitEntities( void )
  		return;
  
  	// animate lightestyles
@@ -947,7 +957,7 @@ index aace8cff..1153cc8f 100644
  	ref.dllFuncs.CL_RunLightStyles( CL_GetLightStyle( 0 ));
  
  	// decay dynamic lights
-@@ -1330,6 +1514,11 @@ void CL_EmitEntities( void )
+@@ -1330,6 +1517,11 @@ void CL_EmitEntities( void )
  
  	// perfomance test
  	CL_TestLights();
@@ -1079,7 +1089,7 @@ index 6c550c7e..4cfd674b 100644
  
  /*
 diff --git a/engine/client/cl_tent.c b/engine/client/cl_tent.c
-index 95c85f7c..5d2f1eed 100644
+index 95c85f7c..2cba6245 100644
 --- a/engine/client/cl_tent.c
 +++ b/engine/client/cl_tent.c
 @@ -14,6 +14,10 @@ GNU General Public License for more details.
@@ -1093,7 +1103,7 @@ index 95c85f7c..5d2f1eed 100644
  #include "client.h"
  #include "r_efx.h"
  #include "entity_types.h"
-@@ -2431,6 +2435,25 @@ DLIGHT MANAGEMENT
+@@ -2431,6 +2435,32 @@ DLIGHT MANAGEMENT
  */
  static dlight_t cl_dlights[MAX_DLIGHTS];
  static dlight_t cl_elights[MAX_ELIGHTS];
@@ -1102,8 +1112,15 @@ index 95c85f7c..5d2f1eed 100644
 +static struct { int count; dlight_t *made[16]; int key[16]; } se_made __attribute__(( aligned( 16 )));	// the worker's
 +void SE_LightsGive( void )
 +{
-+	memcpy( se_render_dlights, cl_dlights, sizeof( cl_dlights ));
-+	memcpy( se_render_elights, cl_elights, sizeof( cl_elights ));
++	// (those lit: the drawing asks of one its radius first; a 3.4k copy between its last frame and its next)
++	for( int i = 0; i < MAX_DLIGHTS; i++ )
++		if( cl_dlights[i].radius != 0.0f && cl_dlights[i].die >= cl.time )
++			se_render_dlights[i] = cl_dlights[i];
++		else se_render_dlights[i].radius = 0.0f, se_render_dlights[i].die = 0.0f;
++	for( int i = 0; i < MAX_ELIGHTS; i++ )
++		if( cl_elights[i].radius != 0.0f && cl_elights[i].die >= cl.time )
++			se_render_elights[i] = cl_elights[i];
++		else se_render_elights[i].radius = 0.0f, se_render_elights[i].die = 0.0f;
 +	se_made.count = 0;
 +}
 +void SE_LightsTaken( void )
@@ -1119,7 +1136,7 @@ index 95c85f7c..5d2f1eed 100644
  
  /*
  ================
-@@ -2449,11 +2472,18 @@ CL_AllocDlight
+@@ -2449,11 +2479,18 @@ CL_AllocDlight
  
  ===============
  */
@@ -1138,7 +1155,7 @@ index 95c85f7c..5d2f1eed 100644
  	// first look for an exact key match
  	if( key )
  	{
-@@ -2494,10 +2524,28 @@ CL_AllocElight
+@@ -2494,10 +2531,28 @@ CL_AllocElight
  
  ===============
  */
@@ -1247,7 +1264,7 @@ index 993304fa..28c92a20 100644
  	return tx;
  }
 diff --git a/engine/client/dll_int/cl_pmove.c b/engine/client/dll_int/cl_pmove.c
-index 9ca1f797..216532d5 100644
+index 9ca1f797..922117a6 100644
 --- a/engine/client/dll_int/cl_pmove.c
 +++ b/engine/client/dll_int/cl_pmove.c
 @@ -19,6 +19,9 @@ GNU General Public License for more details.
@@ -1359,7 +1376,23 @@ index 9ca1f797..216532d5 100644
  
  	old_usehull = clgame.pmove->usehull;
  	clgame.pmove->usehull = 2;
-@@ -901,7 +963,11 @@ static void CL_RunUsercmd( local_state_t *from, local_state_t *to, usercmd_t *u,
+@@ -890,6 +952,15 @@ static const void CL_FinishPMove( const playermove_t *pmove, local_state_t *to )
+ 	VectorCopy( pmove->vuser4, cd->vuser4 );
+ }
+ 
++#if XASH_SHADEREMU
++// A state's weapons but those no weapon of Half-Life's has (its ids stop at 15): 2.3 KB, not 6.5.
++#define SE_WEAPONS 16
++static void SE_LocalCopy( local_state_t *to, const local_state_t *from )
++{
++	memcpy( to, from, offsetof( local_state_t, weapondata ) + SE_WEAPONS * sizeof( weapon_data_t ));
++}
++#endif
++
+ /*
+ =================
+ CL_RunUsercmd
+@@ -901,7 +972,11 @@ static void CL_RunUsercmd( local_state_t *from, local_state_t *to, usercmd_t *u,
  {
  	usercmd_t		cmd;
  
@@ -1371,11 +1404,51 @@ index 9ca1f797..216532d5 100644
  	{
  		local_state_t	temp;
  		usercmd_t		split;
-@@ -972,12 +1038,37 @@ CL_PredictMovement
+@@ -917,7 +992,11 @@ static void CL_RunUsercmd( local_state_t *from, local_state_t *to, usercmd_t *u,
+ 	}
+ 
+ 	cmd = *u;	// deal with local copy
++#if XASH_SHADEREMU
++	SE_LocalCopy( to, from );
++#else
+ 	*to = *from;
++#endif
+ 
+ 	if( CL_IsPredicted( ))
+ 	{
+@@ -972,12 +1051,65 @@ CL_PredictMovement
  Sets cl.predicted.origin and cl.predicted.angles
  =================
  */
 +#if XASH_SHADEREMU
++// What the moves predicted last frame still say (docs/games/halflife.md, "A move predicted once"): the states
++// lie by command, and a frame goes on from the last one while nothing came from the server, or while what came
++// says what was predicted for that command. HL_PREDICT=full is every move again, HL_PREDICT=check both, compared.
++static struct { int mode, parse; uint ack, done; qboolean valid; uint frames, moves, kept, differ, replays; float most; } chain = { .mode = -1 };
++
++#define SE_NEAR( a, b, far ) ( fabsf(( a ) - ( b )) <= ( far ))
++#define SE_NEARV( a, b, far ) ( SE_NEAR( a[0], b[0], far ) && SE_NEAR( a[1], b[1], far ) && SE_NEAR( a[2], b[2], far ))
++static qboolean SE_AsPredicted( const frame_t *frame, const local_state_t *p )
++{
++	const clientdata_t *c = &frame->clientdata, *q = &p->client;
++	const entity_state_t *e = &frame->playerstate[cl.playernum], *f = &p->playerstate;
++
++	if( !SE_NEARV( e->origin, f->origin, 0.05f ) || !SE_NEARV( c->velocity, q->velocity, 1.0f ) || !SE_NEARV( c->punchangle, q->punchangle, 0.1f )
++		|| !SE_NEARV( c->view_ofs, q->view_ofs, 0.1f ) || !SE_NEARV( e->basevelocity, f->basevelocity, 0.1f ) || !SE_NEAR( c->m_flNextAttack, q->m_flNextAttack, 0.2f ))
++		return false;
++	if( c->flags != q->flags || c->waterlevel != q->waterlevel || c->bInDuck != q->bInDuck || c->weapons != q->weapons
++		|| c->maxspeed != q->maxspeed || c->fov != q->fov || c->m_iId != q->m_iId || c->deadflag != q->deadflag || c->health != q->health
++		|| c->ammo_shells != q->ammo_shells || c->ammo_nails != q->ammo_nails || c->ammo_cells != q->ammo_cells || c->ammo_rockets != q->ammo_rockets
++		|| c->tfstate != q->tfstate || c->pushmsec != q->pushmsec || c->iuser1 != q->iuser1
++		|| e->movetype != f->movetype || e->usehull != f->usehull || e->effects != f->effects || e->gravity != f->gravity || e->friction != f->friction )
++		return false;
++	for( int i = 0; i < SE_WEAPONS; i++ )
++		if( frame->weapondata[i].m_iId != p->weapondata[i].m_iId || frame->weapondata[i].m_iClip != p->weapondata[i].m_iClip
++			|| frame->weapondata[i].m_fInReload != p->weapondata[i].m_fInReload )
++			return false;
++	return true;
++}
++
 +static void CL_PredictMovementTo( qboolean repredicting, uint stoppoint );
 +void CL_PredictMovement( qboolean repredicting )
 +{
@@ -1409,7 +1482,43 @@ index 9ca1f797..216532d5 100644
  	double		f = 1.0;
  	double		time;
  
-@@ -1025,7 +1116,9 @@ void CL_PredictMovement( qboolean repredicting )
+@@ -1017,15 +1149,45 @@ void CL_PredictMovement( qboolean repredicting )
+ 		else cl.local.onground = -1;
+ 	}
+ 
++#if XASH_SHADEREMU
++	// (by the command, not by the message: what a state is, however many commands a message answers)
++	uint ack = cls.netchan.incoming_acknowledged, ms = 0;
++	qboolean keep = false;
++
++	from = &cl.predicted_frames[ack & CL_UPDATE_MASK];
++	from_cmd = &cl.commands[ack & CL_UPDATE_MASK];
++	if( chain.mode < 0 )
++	{
++		const char *how = getenv( "HL_PREDICT" );
++		chain.mode = how ? !Q_strcmp( how, "full" ) ? 0 : !Q_strcmp( how, "check" ) ? 2 : 1 : 1;
++	}
++	if( chain.mode && !repredicting && !stoppoint && chain.valid && CL_IsPredicted( ) && !cls.demoplayback && frame->valid
++		&& (int)( ack - chain.ack ) >= 0 && (int)( chain.done - ack ) >= 0 && chain.done - ack < CL_UPDATE_MASK )
++	{
++		keep = chain.parse == cl.parsecount && chain.ack == ack;
++		if( !keep )
++			keep = SE_AsPredicted( frame, from );
++	}
++	chain.replays += !keep && chain.valid;
++	if( !keep )
++	{
++		memcpy( from->weapondata, frame->weapondata, SE_WEAPONS * sizeof( weapon_data_t ));
++		from->playerstate = frame->playerstate[cl.playernum];
++		from->client = frame->clientdata;
++	}
++#else
+ 	from = &cl.predicted_frames[cl.parsecountmod];
+ 	from_cmd = &cl.commands[cls.netchan.incoming_acknowledged & CL_UPDATE_MASK];
+ 	memcpy( from->weapondata, frame->weapondata, sizeof( from->weapondata ));
+ 	from->playerstate = frame->playerstate[cl.playernum];
+ 	from->client = frame->clientdata;
++#endif
  	if( !frame->valid ) return;
  
  	time = frame->time;
@@ -1419,8 +1528,78 @@ index 9ca1f797..216532d5 100644
  	cl.local.repredicting = repredicting;
  	cl.local.onground = -1;
  
-@@ -1059,7 +1152,11 @@ void CL_PredictMovement( qboolean repredicting )
+@@ -1042,6 +1204,27 @@ void CL_PredictMovement( qboolean repredicting )
+ 		current_command = cls.netchan.incoming_acknowledged + i;
+ 		current_command_mod = current_command & CL_UPDATE_MASK;
  
++#if XASH_SHADEREMU
++		to = &cl.predicted_frames[current_command_mod];
++		to_cmd = &cl.commands[current_command_mod];
++		runfuncs = ( !repredicting && !to_cmd->processedfuncs );
++
++		if( keep && (int)( chain.done - current_command ) >= 0 && to_cmd->processedfuncs )
++		{
++			ms += to_cmd->cmd.msec;	// (as it was: the time a move run after it starts at)
++			chain.kept++;
++		}
++		else
++		{
++			if( ms )
++				time += ms / 1000.0, ms = 0;
++			CL_RunUsercmd( from, to, &to_cmd->cmd, runfuncs, &time, current_command );
++			VectorCopy( to->playerstate.origin, cl.local.predicted_origins[current_command_mod] );
++			to_cmd->processedfuncs = true;
++			chain.moves++;
++			chain.done = current_command;
++		}
++#else
+ 		to = &cl.predicted_frames[(cl.parsecountmod + i) & CL_UPDATE_MASK];
+ 		to_cmd = &cl.commands[current_command_mod];
+ 		runfuncs = ( !repredicting && !to_cmd->processedfuncs );
+@@ -1049,6 +1232,7 @@ void CL_PredictMovement( qboolean repredicting )
+ 		CL_RunUsercmd( from, to, &to_cmd->cmd, runfuncs, &time, current_command );
+ 		VectorCopy( to->playerstate.origin, cl.local.predicted_origins[current_command_mod] );
+ 		to_cmd->processedfuncs = true;
++#endif
+ 
+ 		if( to_cmd->senttime >= host.realtime )
+ 			break;
+@@ -1057,9 +1241,45 @@ void CL_PredictMovement( qboolean repredicting )
+ 		from_cmd = to_cmd;
+ 	}
+ 
++#if XASH_SHADEREMU
++	chain.valid = !repredicting && !stoppoint && i < CL_UPDATE_MASK && frame->valid;
++	chain.parse = cl.parsecount, chain.ack = ack;
++	if( !to )
++		chain.done = ack;
++	if( chain.mode == 2 && chain.valid && to )
++	{
++		// every move again from what the server said, beside the states kept
++		static local_state_t a, b;
++		double t = frame->time;
++		int ground = cl.local.lastground;
++		memcpy( a.weapondata, frame->weapondata, SE_WEAPONS * sizeof( weapon_data_t ));
++		a.playerstate = frame->playerstate[cl.playernum];
++		a.client = frame->clientdata;
++		for( uint c = ack + 1; (int)( chain.done - c ) >= 0; c++ )
++		{
++			CL_RunUsercmd( &a, &b, &cl.commands[c & CL_UPDATE_MASK].cmd, false, &t, c );
++			SE_LocalCopy( &a, &b );
++		}
++		cl.local.lastground = ground;
++		if( (int)( chain.done - ack ) > 0 )
++		{
++			vec3_t d;
++			VectorSubtract( a.playerstate.origin, cl.local.predicted_origins[chain.done & CL_UPDATE_MASK], d );
++			float far = VectorLength( d );
++			chain.differ += far > 0.1f;
++			if( far > chain.most ) chain.most = far;
++		}
++		if( ++chain.frames % 100 == 0 )
++			fprintf( stderr, "hlpredict: %u frames, %u moves run, %u kept, %u replays; %u over 0.1 from every move again, the most %.3f\n", chain.frames, chain.moves, chain.kept, chain.replays, chain.differ, chain.most );
++	}
++#endif
  	CL_PopPMStates();
  
 +#if XASH_SHADEREMU
@@ -1431,7 +1610,7 @@ index 9ca1f797..216532d5 100644
  	{
  		cl.local.repredicting = false;
  		return; // net hasn't deliver packets in a long time...
-@@ -1099,12 +1196,17 @@ void CL_PredictMovement( qboolean repredicting )
+@@ -1099,12 +1319,17 @@ void CL_PredictMovement( qboolean repredicting )
  	}
  	else
  	{
@@ -1570,7 +1749,7 @@ index d2617170..0422717d 100644
  	if(( cls.key_dest == key_game ) && ( cls.state == ca_cinematic ) && ( key != K_ESCAPE || !down ))
  	{
 diff --git a/engine/client/parse/cl_parse.c b/engine/client/parse/cl_parse.c
-index 29acaf73..1cc58be2 100644
+index 29acaf73..ba770dec 100644
 --- a/engine/client/parse/cl_parse.c
 +++ b/engine/client/parse/cl_parse.c
 @@ -1006,8 +1006,8 @@ void CL_ParseClientData( sizebuf_t *msg, connprotocol_t proto )
@@ -1584,6 +1763,18 @@ index 29acaf73..1cc58be2 100644
  		{
  			if( cl.frames[j & CL_UPDATE_MASK].receivedtime >= 0.0 )
  			{
+@@ -1041,7 +1041,11 @@ void CL_ParseClientData( sizebuf_t *msg, connprotocol_t proto )
+ 
+ 		if( !cls.spectator )
+ 		{
++#if XASH_SHADEREMU
++			last_predicted = command_ack & CL_UPDATE_MASK;	// (CL_PredictMovementTo's states lie by the command)
++#else
+ 			last_predicted = ( cl.last_incoming_sequence + ( command_ack - cl.last_command_ack )) & CL_UPDATE_MASK;
++#endif
+ 
+ 			pps = &cl.predicted_frames[last_predicted].playerstate;
+ 			pwd = cl.predicted_frames[last_predicted].weapondata;
 diff --git a/engine/client/sound/s_load.c b/engine/client/sound/s_load.c
 index 25e1e885..6ead1c0e 100644
 --- a/engine/client/sound/s_load.c
@@ -1622,10 +1813,18 @@ index 25e1e885..6ead1c0e 100644
  }
  
 diff --git a/engine/client/sound/s_main.c b/engine/client/sound/s_main.c
-index 2cd7030b..f3f68738 100644
+index 2cd7030b..f5f8e492 100644
 --- a/engine/client/sound/s_main.c
 +++ b/engine/client/sound/s_main.c
-@@ -1506,6 +1506,10 @@ update global soundtime
+@@ -1495,6 +1495,7 @@ void S_StopAllSounds( qboolean ambient )
+ 	memset( &soundfade, 0, sizeof( soundfade ));
+ }
+ 
++static int se_painted_at;
+ /*
+ ==============
+ S_GetSoundtime
+@@ -1506,6 +1507,10 @@ update global soundtime
  */
  static int S_GetSoundtime( void )
  {
@@ -1636,6 +1835,28 @@ index 2cd7030b..f3f68738 100644
  	static int buffers, oldsamplepos;
  
  	int fullsamples = snd.samples / 2;
+@@ -1567,6 +1572,9 @@ static void S_UpdateChannels( void )
+ 	else
+ 		S_PaintChannels( endtime );
+ 
++#if XASH_SHADEREMU
++	{ int SE_CardTime( void ); se_painted_at = SE_CardTime( ); }
++#endif
+ 	SNDDMA_Submit();
+ }
+ 
+@@ -1580,6 +1588,11 @@ Don't let sound skip if going slow
+ void S_ExtraUpdate( void )
+ {
+ 	if( !snd.initialized ) return;
++#if XASH_SHADEREMU	// (the card plays by itself: a paint now and then in a long frame, not three a frame, each 2.5k with its doubles)
++	int SE_CardTime( void );
++	if( !cls.disable_screen && cls.state == ca_active && SE_CardTime( ) - se_painted_at < SOUND_DMA_SPEED / 8 )
++		return;
++#endif
+ 	S_UpdateChannels ();
+ }
+ 
 diff --git a/engine/client/sound/s_mix.c b/engine/client/sound/s_mix.c
 index fe5ece45..53d89c4b 100644
 --- a/engine/client/sound/s_mix.c
@@ -1941,7 +2162,7 @@ index d640a991..3a8ca8a5 100644
 +}
 +#endif
 diff --git a/engine/common/common.c b/engine/common/common.c
-index 50ebab64..4ad667e7 100644
+index 50ebab64..73b28161 100644
 --- a/engine/common/common.c
 +++ b/engine/common/common.c
 @@ -15,6 +15,9 @@ GNU General Public License for more details.
@@ -2436,9 +2657,10 @@ index 7179ca46..9f3a5e6e 100644
  		if( numcolors != 256 ) pal = NULL; // corrupted mip ?
  		else pal += sizeof( short ); // skip colorsize
 diff --git a/engine/common/infostring.c b/engine/common/infostring.c
+index 7b8c44c6..08556024 100644
 --- a/engine/common/infostring.c
 +++ b/engine/common/infostring.c
-@@ -183,12 +183,22 @@ Searches the string for the given
+@@ -183,11 +183,21 @@ Searches the string for the given
  key and returns the associated value, or an empty string.
  ===============
  */
@@ -2460,9 +2682,8 @@ diff --git a/engine/common/infostring.c b/engine/common/infostring.c
  	int	count;
  	char	*o;
  
- 	valueindex = (valueindex + 1) % 4;
 diff --git a/engine/common/mod_bmodel.c b/engine/common/mod_bmodel.c
-index d1fe48e2..7612f687 100644
+index d1fe48e2..096eaaa1 100644
 --- a/engine/common/mod_bmodel.c
 +++ b/engine/common/mod_bmodel.c
 @@ -347,7 +347,13 @@ le_struct_end();
@@ -2861,10 +3082,10 @@ index 287ef3b2..534d799c 100644
  
  	return string;
 diff --git a/engine/common/net_chan.c b/engine/common/net_chan.c
-index bd54e905..e4dfdc6c 100644
+index bd54e905..832ee1d6 100644
 --- a/engine/common/net_chan.c
 +++ b/engine/common/net_chan.c
-@@ -98,7 +98,13 @@
+@@ -98,7 +98,13 @@ static CVAR_DEFINE_AUTO( net_sequence_window, "256", 0, "reject sequenced packet
  CVAR_DEFINE_AUTO( net_send_debug, "0", FCVAR_PRIVILEGED, "enable debugging output for outgoing messages" );
  CVAR_DEFINE_AUTO( net_recv_debug, "0", FCVAR_PRIVILEGED, "enable debugging output for incoming messages" );
  
@@ -3003,25 +3224,8 @@ index 64bc35e7..6798546d 100644
  	int startBit = msg->iCurBit;
  
  	if( to->number < 0 || to->number >= GI->max_edicts )
-diff --git a/engine/common/netchan.h b/engine/common/netchan.h
---- a/engine/common/netchan.h
-+++ b/engine/common/netchan.h
-@@ -250,7 +250,13 @@
- extern byte		net_message_buffer[NET_MAX_MESSAGE];
- extern convar_t		sv_lan;
- extern convar_t		sv_lan_rate;
-+#if XASH_SHADEREMU
-+#include "se_server.h"
-+extern struct SE_APART se_net_drop_s { int v; } se_net_drop[3];
-+#define net_drop se_net_drop[SE_Who()].v
-+#else
- extern int		net_drop;
-+#endif
- 
- void Netchan_Init( void );
- void Netchan_Shutdown( void );
 diff --git a/engine/common/net_ws.c b/engine/common/net_ws.c
-index d139dff7..e951cf7d 100644
+index d139dff7..cdae2ad2 100644
 --- a/engine/common/net_ws.c
 +++ b/engine/common/net_ws.c
 @@ -14,6 +14,9 @@ GNU General Public License for more details.
@@ -3034,7 +3238,7 @@ index d139dff7..e951cf7d 100644
  #include "client.h" // ConnectionProgress
  #include "netchan.h"
  #include "xash3d_mathlib.h"
-@@ -49,7 +52,11 @@
+@@ -49,7 +52,11 @@ typedef struct
  typedef struct
  {
  	net_loopmsg_t	msgs[MAX_LOOPBACK];
@@ -3084,6 +3288,24 @@ index d139dff7..e951cf7d 100644
  	NET_AdjustLag();
  
  	if( NET_GetLoopPacket( sock, from, data, length ))
+diff --git a/engine/common/netchan.h b/engine/common/netchan.h
+index 1c55fd52..e461649a 100644
+--- a/engine/common/netchan.h
++++ b/engine/common/netchan.h
+@@ -250,7 +250,13 @@ extern sizebuf_t		net_message;
+ extern byte		net_message_buffer[NET_MAX_MESSAGE];
+ extern convar_t		sv_lan;
+ extern convar_t		sv_lan_rate;
++#if XASH_SHADEREMU
++#include "se_server.h"
++extern struct SE_APART se_net_drop_s { int v; } se_net_drop[3];
++#define net_drop se_net_drop[SE_Who()].v
++#else
+ extern int		net_drop;
++#endif
+ 
+ void Netchan_Init( void );
+ void Netchan_Shutdown( void );
 diff --git a/engine/common/pm_trace.c b/engine/common/pm_trace.c
 index b1e8e57b..b37e9b30 100644
 --- a/engine/common/pm_trace.c
@@ -3754,7 +3976,7 @@ index 7ddc2751..590d5f6e 100644
  	{
  		to = &cmds[i];
 diff --git a/engine/server/sv_frame.c b/engine/server/sv_frame.c
-index 3ff8edbf..9deb3786 100644
+index 3ff8edbf..96565b89 100644
 --- a/engine/server/sv_frame.c
 +++ b/engine/server/sv_frame.c
 @@ -53,6 +53,66 @@ SV_AddEntitiesToPacket
@@ -4406,7 +4628,7 @@ index ba1920d0..e64cebf5 100644
  		int	oldmsec = ucmd->msec;
  		cmd.msec = oldmsec / 2;
 diff --git a/engine/server/sv_world.c b/engine/server/sv_world.c
-index dbbb19ad..f05a19ac 100644
+index dbbb19ad..545d4db8 100644
 --- a/engine/server/sv_world.c
 +++ b/engine/server/sv_world.c
 @@ -458,8 +458,21 @@ SV_ClearWorld
@@ -4701,7 +4923,7 @@ index d30047fc..fce4e9c4 100644
  	{
  		Con_Printf( "%s: failed to delete file %s (%s): %s\n", __func__, real_path, path, strerror( errno ));
 diff --git a/filesystem/pak.c b/filesystem/pak.c
-index 302c3238..f988b944 100644
+index 302c3238..0c54d4c1 100644
 --- a/filesystem/pak.c
 +++ b/filesystem/pak.c
 @@ -85,6 +85,36 @@ static int FS_SortPak( const void *_a, const void *_b )

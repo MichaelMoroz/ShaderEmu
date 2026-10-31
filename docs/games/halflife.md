@@ -278,6 +278,44 @@ its recording (some 40 characters a frame, three calls each). The replay was 28k
 there (700 instructions a character). A text character asks the font texture's size once in 256
 calls (`CL_DrawCharacter`). The titles' and the HUD's pixels at 12 s are the same as before.
 
+### A move predicted once
+
+The client predicted every command the server had not answered, again each frame, from what the
+server last said: 2.5 moves a frame at 24k each. The states lie by the command now (`cl_pmove.c`,
+`cl_parse.c`; a state is 2.3 KB, the weapons up to Half-Life's id 15, not 6.5), and a frame runs
+only the commands not run yet: the moves before them say the same while nothing came from the server, and
+when something did, they say the same while it says what was predicted for the command it answers
+(`SE_AsPredicted`: place within 0.05, speed within 1, every state that a server may change by itself
+exactly). Otherwise it is every move again. `HL_PREDICT=full` is the old way; `HL_PREDICT=check`
+runs every move again beside the states kept and prints how far they are apart (`hlpredict:`): 0 over
+0.1 and the most 0.016 units in a walk with turns, jumps and shots, 2 replays in 500 frames (a move that
+pushes the server's way, a teleport). 31 October 2026, the fight's 231.8k to 205.5k on core 0, 13.1 to
+13.8 fps; walking at 3 to 30 s, 164.6k to 133.4k, 19.6 to 24.1 fps.
+
+### What core 0 did between the drawing's end and the next give
+
+A frame is as long as the drawing's job and what lies between its end and the next job's start, or
+as core 0's frame if that is longer: core 0 waiting at the swap does not shorten it. Of those 53 units
+of the clock (`HL_RENDER_CALLS=1`'s timeline; a frame then 335) the entities' copies were 26. They are made
+now at the frame's end while the drawing still draws, into the other of two sets (`R_SceneAhead`,
+`HL_SCENE=give` is at the give), and what its end writes back to the entities (attachments, the
+frame it was at, a muzzle flash shown) goes to the new copy too (`R_SceneTakeOne`). A cache of a
+copy's address breaks on the two sets: the glows' fractions go by the live entity (`R_SceneLive`).
+A paint of the sound is once a frame, or an eighth of a second after the last in a long frame, not
+at the HUD's end and each time core 0 looks at the drawing (`S_ExtraUpdate`: the card plays by
+itself; 2.5k a paint in doubles). 31 October 2026, the fight: core 0 205.2k to 195.1k, 29.55 to 28.05
+passes a frame, 13.8 to 14.6 fps.
+
+Then, in the same span: only the lights that are lit are copied to the drawing (`SE_LightsGive`, 3.4k
+whole), the rings' statistics are read only under `HL_RENDER_CALLS`, the bones' and light's slots are
+cleared by the keys kept and not whole, and the view's own player is not interpolated in first person
+(`CL_ComputePlayerOrigin`; a demo or a third-person view still is): core 0 192.9k to 184.5k, 28.13 to
+26.97 passes, 15.2 fps. A renderer call of a kind that goes through needs no thunk without
+`HL_RENDER_CALLS` (`R_AddEntity`, 50 a frame): 182.1k, 26.89 passes; walking 122.4k, 15.67 passes,
+26.2 fps. What bounds the fight now is the drawing's job (about 130k, 20 models at 4.4k) and the
+handover of about 2 passes; core 0 waits at the swap. A cache of a model's meshes by submodel and
+skin (1,668 to 1,618 a call) gave no frames and was not kept.
+
 ## The controls
 
 On a desktop the left button held drags the view round, a quarter of a degree a pixel, as

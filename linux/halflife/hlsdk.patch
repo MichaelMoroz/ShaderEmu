@@ -406,7 +406,7 @@ index 90dd62e1..8973287c 100644
  	int m_nCustomSprayFrames;// Custom clan logo frames for this player
  	float	m_flNextDecalTime;// next time this player can spray a decal
 diff --git a/dlls/util.cpp b/dlls/util.cpp
-index 27c7ffe8..20b4215b 100644
+index 27c7ffe8..9e911362 100644
 --- a/dlls/util.cpp
 +++ b/dlls/util.cpp
 @@ -30,6 +30,9 @@

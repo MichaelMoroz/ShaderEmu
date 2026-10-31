@@ -177,7 +177,10 @@ def run(name, g, image, log, calls, salt, show, profile=None, plain=False, guest
     c0, allc, ran, busiest, passes, secs = int(m[1]), int(m[2]), int(m[3]), int(m[4]), int(m[5]), float(m[6])
     text = open(log, encoding='latin-1').read()
     text = text[text.rfind('=== rvc_cpu ==='):]
-    frames = g['frames'](text)
+    try:
+        frames = g['frames'](text)
+    except TypeError:   # (--until matched a line the console had not finished: 62 characters a pass)
+        return run(name, g, image, log, calls, salt + 1000, show, profile, plain, guest) if salt < 3000 else None
     after = text[text.find(g['mark']):]
     r = dict(game=name, frames=frames, core0=c0 / frames, all=allc / frames, factor=allc / c0, workers=ran - 1,
              busiest=busiest / frames, seconds=secs, wall=wall, passes=passes / frames, fps=game_fps(g, after, frames, secs))

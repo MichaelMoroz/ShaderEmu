@@ -332,6 +332,7 @@ static struct __attribute__(( aligned( 16 )))
 } glows;
 // the fractions of the frame before, which this one draws with: its worker has the frame
 static struct { int count; const cl_entity_t *e[WORLD_GLOWS]; float fraction[WORLD_GLOWS]; } glows_before;
+static const cl_entity_t *R_SceneLive( const cl_entity_t *e );
 static void *glow_own;
 static cl_entity_t *world_taken[WORLD_ENTS];	// (this core's: drawn by R_KeptWorldFinish)
 static int world_numtaken, world_finishing;
@@ -796,7 +797,7 @@ static qboolean R_KeptWorldGive( uint clipflags )
 	hlglWait( glow_worker );
 	glows_before.count = glows.count;
 	for( int i = 0; i < glows.count; i++ )
-		glows_before.e[i] = glows.glow[i].e, glows_before.fraction[i] = glows.glow[i].fraction;
+		glows_before.e[i] = R_SceneLive( glows.glow[i].e ), glows_before.fraction[i] = glows.glow[i].fraction;
 	glows.count = 0;
 	if( tl.give )
 	{
@@ -1212,8 +1213,9 @@ static qboolean R_KeptBrushTaken( const cl_entity_t *e )
 // (true); a glow new to this frame is traced here.
 qboolean R_KeptGlowFraction( const cl_entity_t *e, const vec3_t origin, float *fraction )
 {
+	const cl_entity_t *live = R_SceneLive( e );	// (a copy lies in either of two sets)
 	for( int i = 0; i < glows_before.count; i++ )
-		if( glows_before.e[i] == e )
+		if( glows_before.e[i] == live )
 		{
 			*fraction = glows_before.fraction[i];
 			return true;
@@ -1237,7 +1239,7 @@ static struct __attribute__(( aligned( 16 )))
 	struct { const cl_entity_t *e; vec3_t origin; } in[AHEAD_MAX];
 } ahead;
 static struct __attribute__(( aligned( 16 ))) { vec3_t dir, spot, vec; colorVec light; uint64_t styles; int ready; } ahead_out[AHEAD_MAX];
-static short ahead_slot[1024 + 256];	// (this core's: an entity's place in ahead, plus one)
+static short ahead_slot[1024 + 256], ahead_key[AHEAD_MAX];	// (this core's: an entity's place in ahead, plus one)
 static int ahead_worker;
 
 static uint R_LightAheadJob( uint a0, uint a1 )
@@ -1274,7 +1276,7 @@ static struct __attribute__(( aligned( 16 ))) { float frame; int ready; } bones_
 static float bones_pool[BONES_FLOATS] __attribute__(( aligned( 16 )));
 static float bones_rotation[4][3][4] __attribute__(( aligned( 16 )));
 static float bones_rot[AHEAD_MAX][3][4] __attribute__(( aligned( 16 )));	// each entity's, kept for its draw
-static short bones_slot[1024 + 256];	// (this core's)
+static short bones_slot[1024 + 256], bones_key[AHEAD_MAX];	// (this core's)
 static int bones_posted;
 
 static uint R_BonesAheadJob( uint core, uint unused )
@@ -1338,8 +1340,8 @@ static void R_BonesAheadGive( void )
 	for( int k = 0; bones_posted && k < 4; k++ )
 		hlglWait( hlglBonesWorker( k ));
 	bones_posted = 0;
-	if( bones.count )
-		memset( bones_slot, 0, sizeof( bones_slot ));	// (whole: the entities may be copies written again since)
+	for( int i = 0; i < bones.count; i++ )
+		bones_slot[bones_key[i]] = 0;	// (by the keys kept: the entities may be copies written again since)
 	bones.count = 0;
 	if( off || !SE_StudioBonesAhead || hlglBonesWorker( 0 ) <= 0 )
 		return;
@@ -1360,6 +1362,7 @@ static void R_BonesAheadGive( void )
 		bones.in[bones.count].e = e, bones.in[bones.count].at = at, bones.in[bones.count].numbones = hdr->numbones;
 		bones_out[bones.count].ready = 0;
 		at += hdr->numbones * 24;
+		bones_key[bones.count] = R_LightKey( e );
 		bones_slot[R_LightKey( e )] = ++bones.count;
 	}
 	for( int k = 0; k < 4 && k < bones.count; k++ )
@@ -1375,8 +1378,8 @@ void R_LightAheadGive( void )
 	if( off < 0 ) off = getenv( "HL_LIGHT" ) && !strcmp( getenv( "HL_LIGHT" ), "inline" );
 	if( ahead_worker )
 		hlglWait( ahead_worker ), ahead_worker = 0;
-	if( ahead.count )
-		memset( ahead_slot, 0, sizeof( ahead_slot ));	// (whole: the entities may be copies written again since)
+	for( int i = 0; i < ahead.count; i++ )
+		ahead_slot[ahead_key[i]] = 0;	// (by the keys kept: the entities may be copies written again since)
 	ahead.count = 0;
 	se_studio_no_followers = 0;
 	if( off || !tr.draw_list || !WORLDMODEL || !WORLDMODEL->lightdata || r_fullbright->value || hlglLightWorker( ) <= 0 )
@@ -1391,6 +1394,7 @@ void R_LightAheadGive( void )
 		ahead.in[ahead.count].e = e;
 		VectorCopy( e->origin, ahead.in[ahead.count].origin );
 		ahead_out[ahead.count].ready = 0;
+		ahead_key[ahead.count - 0] = R_LightKey( e );
 		ahead_slot[R_LightKey( e )] = ++ahead.count;
 	}
 	se_studio_no_followers = !followers && ahead.count < AHEAD_MAX;	// (else the list was not seen whole)
@@ -1422,10 +1426,17 @@ qboolean R_LightAheadOf( const cl_entity_t *ent, const vec3_t origin, colorVec *
 #define SCENE_COPIES 256
 extern draw_list_t *se_add_list;
 extern dlight_t se_render_dlights[], se_render_elights[];
-static draw_list_t scene_list;	// the worker's, of the copies
-static cl_entity_t scene_ents[SCENE_COPIES + 1];	// the last the view model's
-static struct { cl_entity_t *live; int muzzle; } scene_of[SCENE_COPIES + 1];
-static int scene_count;
+// Two sets: the next frame's is copied while the drawing still draws from the other (R_SceneAhead).
+typedef struct { cl_entity_t *live; int muzzle; } scene_slot_t;
+static struct scene_set_s
+{
+	draw_list_t	list;	// the worker's, of the copies
+	cl_entity_t	ents[SCENE_COPIES + 1];	// the last the view model's
+	scene_slot_t	of[SCENE_COPIES + 1];
+	int		count;
+} scene_sets[2];
+static struct scene_set_s *scene = &scene_sets[0], *scene_next;	// what the drawing draws from; a next already copied
+static short scene_next_at[1024 + 256];	// (an entity's index: its place in scene_next, plus one)
 static cl_entity_t *scene_viewent;
 static dlight_t *scene_dlights, *scene_elights;
 
@@ -1435,22 +1446,23 @@ static void R_SceneCopyTo( cl_entity_t *c, cl_entity_t *e, int slot )
 	c->index = e->index, c->player = e->player;
 	memcpy( &c->curstate, &e->curstate, sizeof( c->curstate ));
 	memcpy( &c->mouth, &e->mouth, sizeof( cl_entity_t ) - offsetof( cl_entity_t, mouth ));
-	scene_of[slot].live = e, scene_of[slot].muzzle = FBitSet( e->curstate.effects, EF_MUZZLEFLASH );
 }
-static cl_entity_t *R_SceneCopy( cl_entity_t *e )
+static cl_entity_t *R_SceneCopy( struct scene_set_s *to, cl_entity_t *e )
 {
-	if( scene_count >= SCENE_COPIES )
+	if( to->count >= SCENE_COPIES )
 		return e;
-	R_SceneCopyTo( &scene_ents[scene_count], e, scene_count );
-	return &scene_ents[scene_count++];
+	R_SceneCopyTo( &to->ents[to->count], e, to->count );
+	to->of[to->count].live = e, to->of[to->count].muzzle = FBitSet( e->curstate.effects, EF_MUZZLEFLASH );
+	return &to->ents[to->count++];
 }
 
 static void R_ScenePipe( int on )
 {
 	if( on )
 	{
-		se_add_list = tr.draw_list, tr.draw_list = &scene_list;
-		scene_viewent = tr.viewent, tr.viewent = &scene_ents[SCENE_COPIES];
+		scene = &scene_sets[0], scene_next = NULL;
+		se_add_list = tr.draw_list, tr.draw_list = &scene->list;
+		scene_viewent = tr.viewent, tr.viewent = &scene->ents[SCENE_COPIES];
 		scene_dlights = gp_dlights, gp_dlights = se_render_dlights;
 		scene_elights = tr.elights, tr.elights = se_render_elights;
 		return;
@@ -1461,55 +1473,96 @@ static void R_ScenePipe( int on )
 	tr.viewent = scene_viewent, gp_dlights = scene_dlights, tr.elights = scene_elights;
 }
 
-// This core's list of the frame to draw, copied for the worker with its entities.
-static void R_SceneGive( void )
+// This core's list of the frame to draw, copied for the worker with its entities, into the set it is not drawing
+// from: at the frame's end while it still draws (its last pass and the next give meet sooner: HL_SCENE=give is at the give).
+static void R_SceneCopySet( struct scene_set_s *to )
 {
 	const draw_list_t *from = se_add_list;
 
-	scene_count = 0;
-	scene_list.num_solid_entities = from->num_solid_entities;
-	scene_list.num_trans_entities = from->num_trans_entities;
-	scene_list.num_beam_entities = from->num_beam_entities;
+	to->count = 0;
+	to->list.num_solid_entities = from->num_solid_entities;
+	to->list.num_trans_entities = from->num_trans_entities;
+	to->list.num_beam_entities = from->num_beam_entities;
 	for( int i = 0; i < from->num_solid_entities; i++ )
-		scene_list.solid_entities[i] = R_SceneCopy( from->solid_entities[i] );
+		to->list.solid_entities[i] = R_SceneCopy( to, from->solid_entities[i] );
 	for( int i = 0; i < from->num_trans_entities; i++ )
-		scene_list.trans_entities[i] = R_SceneCopy( from->trans_entities[i] );
+		to->list.trans_entities[i] = R_SceneCopy( to, from->trans_entities[i] );
 	for( int i = 0; i < from->num_beam_entities; i++ )
-		scene_list.beam_entities[i] = R_SceneCopy( from->beam_entities[i] );
-	R_SceneCopyTo( &scene_ents[SCENE_COPIES], scene_viewent, SCENE_COPIES );
+		to->list.beam_entities[i] = R_SceneCopy( to, from->beam_entities[i] );
+	R_SceneCopyTo( &to->ents[SCENE_COPIES], scene_viewent, SCENE_COPIES );
+	to->of[SCENE_COPIES].live = scene_viewent, to->of[SCENE_COPIES].muzzle = FBitSet( scene_viewent->curstate.effects, EF_MUZZLEFLASH );
+}
+static void R_SceneAhead( void )
+{
+	static int off = -1;
+
+	if( off < 0 ) off = getenv( "HL_SCENE" ) && !strcmp( getenv( "HL_SCENE" ), "give" );
+	if( off || scene_next || !se_add_list )
+		return;
+	scene_next = scene == &scene_sets[0] ? &scene_sets[1] : &scene_sets[0];
+	R_SceneCopySet( scene_next );
+	for( int i = 0; i < scene_next->count; i++ )
+		if( scene_next->ents[i].index >= 0 && scene_next->ents[i].index < 1024 + 256 )
+			scene_next_at[scene_next->ents[i].index] = i + 1;
+}
+static void R_SceneGive( void )
+{
+	if( !scene_next )
+		R_SceneCopySet( scene = scene == &scene_sets[0] ? &scene_sets[1] : &scene_sets[0] );
+	else
+	{
+		scene = scene_next, scene_next = NULL;
+		for( int i = 0; i < scene->count; i++ )
+			if( scene->ents[i].index >= 0 && scene->ents[i].index < 1024 + 256 )
+				scene_next_at[scene->ents[i].index] = 0;
+	}
+	tr.draw_list = &scene->list;
+	tr.viewent = &scene->ents[SCENE_COPIES];
 }
 
 // What the drawing wrote of its copies, back where they came from: attachments, the frame it
 // was at, a muzzle flash shown (only an entity of the client's: a temporary one may be another now).
 static void R_SceneTakeOne( cl_entity_t *c, int slot, cl_entity_t *( *by_index )( int ))
 {
-	cl_entity_t *e = scene_of[slot].live;
+	cl_entity_t *e = scene->of[slot].live, *n = NULL;
 
 	if( slot < SCENE_COPIES && by_index( c->index ) != e )
 		return;
+	if( scene_next )	// (its copy, made before this drawing ended, says the same as the entity now)
+	{
+		int at = slot == SCENE_COPIES ? SCENE_COPIES : c->index >= 0 && c->index < 1024 + 256 ? scene_next_at[c->index] - 1 : -1;
+		if( at >= 0 && scene_next->of[at].live == e )
+			n = &scene_next->ents[at];
+	}
 	memcpy( e->attachment, c->attachment, sizeof( e->attachment ));
 	e->latched.prevframe = c->latched.prevframe;
-	if( scene_of[slot].muzzle && !FBitSet( c->curstate.effects, EF_MUZZLEFLASH ))
+	if( n )
+		memcpy( n->attachment, c->attachment, sizeof( n->attachment )), n->latched.prevframe = c->latched.prevframe;
+	if( scene->of[slot].muzzle && !FBitSet( c->curstate.effects, EF_MUZZLEFLASH ))
+	{
 		ClearBits( e->curstate.effects, EF_MUZZLEFLASH );
+		if( n ) ClearBits( n->curstate.effects, EF_MUZZLEFLASH );
+	}
 }
 static void R_SceneTaken( cl_entity_t *( *by_index )( int ))
 {
-	for( int i = 0; i < scene_count; i++ )
-		R_SceneTakeOne( &scene_ents[i], i, by_index );
-	R_SceneTakeOne( &scene_ents[SCENE_COPIES], SCENE_COPIES, by_index );
+	for( int i = 0; i < scene->count; i++ )
+		R_SceneTakeOne( &scene->ents[i], i, by_index );
+	R_SceneTakeOne( &scene->ents[SCENE_COPIES], SCENE_COPIES, by_index );
 }
 
 // The entity a copy was made of.
 static const cl_entity_t *R_SceneLive( const cl_entity_t *e )
 {
-	if( e >= scene_ents && e <= &scene_ents[SCENE_COPIES] )
-		return scene_of[e - scene_ents].live;
+	for( int k = 0; k < 2; k++ )
+		if( e >= scene_sets[k].ents && e <= &scene_sets[k].ents[SCENE_COPIES] )
+			return scene_sets[k].of[e - scene_sets[k].ents].live;
 	return e;
 }
 
-extern void ( *SE_ScenePipe )( int on ), ( *SE_SceneGive )( void ), ( *SE_SceneTaken )( cl_entity_t *( *by_index )( int ));
+extern void ( *SE_ScenePipe )( int on ), ( *SE_SceneGive )( void ), ( *SE_SceneAhead )( void ), ( *SE_SceneTaken )( cl_entity_t *( *by_index )( int ));
 extern const cl_entity_t *( *SE_SceneLive )( const cl_entity_t *e );
 static void R_SceneSet( void )
 {
-	SE_ScenePipe = R_ScenePipe, SE_SceneGive = R_SceneGive, SE_SceneTaken = R_SceneTaken, SE_SceneLive = R_SceneLive;
+	SE_ScenePipe = R_ScenePipe, SE_SceneGive = R_SceneGive, SE_SceneAhead = R_SceneAhead, SE_SceneTaken = R_SceneTaken, SE_SceneLive = R_SceneLive;
 }
