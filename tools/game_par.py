@@ -63,6 +63,10 @@ def q3_server(log):
 # the first window after a level's first frame began while it loaded
 QUAKE_RATE = lines_rate(r'quakestat: (\d+) frames in (\d+) ms', skip=1)
 
+AOE_PLAY = '3000 click 400 245;3000 click 400 172;3000 click 237 568;2000 click 369 118;1000 rclick 505 170;1000 click 370 215;1000 click 163 508'
+AOE_FRAMES = lambda log: int(re.search(r'aoe: mark ends, (\d+) frames', log)[1])
+AOE_RATE = lambda log: tuple(int(x) for x in re.search(r'aoe: mark ends, (\d+) frames in (\d+) ms', log).groups())
+
 GAMES = {
     'doom': dict(
         what='-timedemo demo1, one tic a frame, from its first rate line to the end',
@@ -118,6 +122,19 @@ GAMES = {
         cmd='nano-X -p & sleep 2; NES_LIST=worker NES_SOUND=0 NES_MARK=100 NES_FRAMES=1000 NES_PRESS="20 start 50 start '
             '80 a 100 left 110 a 200 a 210 +right 300 a 400 a 420 +up 500 a 800 a 900 -right 1000 a 1100 +left 1300 a" nes thwaite',
         mark='nesmark', frames=lambda log: 900),
+    # (on an image made with --aoe; three scenes of one script: docs/games/aoe.md, "Speed")
+    'aoe': dict(
+        what='a Random Map game, 4 players, a villager sent and one trained, updates 50 to 300',
+        cmd='nano-X -p & sleep 2; AOE_MARK=${AOE_MARK:-50,300} AOE_SCRIPT="' + AOE_PLAY + '" aoe', wall=900,
+        mark='aoe: mark begins', until='aoe: mark ends', frames=AOE_FRAMES, rate=AOE_RATE),
+    'aoe-late': dict(
+        what='the same game left to the computer players, updates 4000 to 4300',
+        cmd='nano-X -p & sleep 2; AOE_MARK=4000,4300 AOE_SCRIPT="' + AOE_PLAY + '" aoe', wall=1800,
+        mark='aoe: mark begins', until='aoe: mark ends', frames=AOE_FRAMES, rate=AOE_RATE),
+    'aoe-scroll': dict(
+        what='the same game with the pointer at the right edge of the screen, updates 100 to 300',
+        cmd='nano-X -p & sleep 2; AOE_MARK=100,300 AOE_SCRIPT="' + AOE_PLAY + ';1000 move 799 300" aoe', wall=900,
+        mark='aoe: mark begins', until='aoe: mark ends', frames=AOE_FRAMES, rate=AOE_RATE),
     'halflife': dict(
         what='hldemo1, standing where it starts, the fight at 31 to 45 s of the level (docs/games/halflife.md, "Speed")',
         cmd='nano-X -p & sleep 2; HL_MARK=${HL_MARK:-31,45} halflife +map hldemo1', wall=600,
