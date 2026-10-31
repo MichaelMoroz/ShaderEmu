@@ -34,6 +34,14 @@
 #include "../timer/timer_game_calendar.h"
 #include "../gui.h"
 #include "../company_gui.h"
+#include "../landscape.h"
+#include "../table/sprites.h"
+#include "../rail_cmd.h"
+#include "../road_cmd.h"
+#include "../station_cmd.h"
+#include "../newgrf_station.h"
+#include "../newgrf_roadstop.h"
+#include "../company_cmd.h"
 #include "shaderemu_v.h"
 #include "shaderemu_gpu.h"
 #include <unistd.h>
@@ -579,6 +587,11 @@ static const int PLAY_FOLLOW[] = { 200, 201, 202, 203, 204, 205, 206, 207, 208, 
 static const int PLAY_WINDOW[] = { 300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319,
 		320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336, 337, 338, 339,
 		340, 341, 342, 343, 344, 345, 346, 347, 348, 349, 350, 351, 352, 353, 354, 355, 356, 357, 358, 359, 199 };
+/* OPENTTD_PLAY_PART=build: 60 pictures of the view standing still, the cursor's highlight moving over it, a road, a rail,
+ * a station or a bus stop placed every sixth picture by the commands the tools send */
+static const int PLAY_BUILD[] = { 400, 401, 402, 403, 404, 405, 406, 407, 408, 409, 410, 411, 412, 413, 414, 415, 416, 417, 418, 419,
+		420, 421, 422, 423, 424, 425, 426, 427, 428, 429, 430, 431, 432, 433, 434, 435, 436, 437, 438, 439,
+		440, 441, 442, 443, 444, 445, 446, 447, 448, 449, 450, 451, 452, 453, 454, 455, 456, 457, 458, 459, 199 };
 static const int PLAY_SHORT[] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44,
 		60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 80, 81, 82, 83, 84, 85, 86, 87, 88, 100,
 		110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 199 };
@@ -762,6 +775,82 @@ static void PlayScroll(int dx, int dy)
 	w->viewport->dest_scrollpos_y += ScaleByZoom(dy, w->viewport->zoom);
 }
 
+/** A free rectangle of flat clear land of w by h tiles near the tile, or INVALID_TILE. */
+static TileIndex PlayFreeLand(TileIndex near_tile, int w, int h)
+{
+	auto free_at = [&](int x, int y) {
+		for (int j = 0; j < h; j++) {
+			for (int i = 0; i < w; i++) {
+				if (x + i < 1 || y + j < 1 || x + i >= static_cast<int>(Map::MaxX()) || y + j >= static_cast<int>(Map::MaxY())) return false;
+				const TileIndex t = TileXY(x + i, y + j);
+				if (!IsTileType(t, MP_CLEAR) || GetTileSlope(t) != SLOPE_FLAT) return false;
+			}
+		}
+		return true;
+	};
+	const int cx = TileX(near_tile), cy = TileY(near_tile);
+	for (int r = 0; r < 24; r++) {
+		for (int y = cy - r; y <= cy + r; y++) {
+			for (int x = cx - r; x <= cx + r; x++) {
+				if (std::max(abs(x - cx), abs(y - cy)) == r && free_at(x, y)) return TileXY(x, y);
+			}
+		}
+	}
+	return INVALID_TILE;
+}
+
+/** The building part of the play script, its picture n: the cursor's highlight goes over the view, a thing placed every sixth. */
+static void PlayBuild(int n)
+{
+	Window *main = GetMainWindow();
+	if (main == nullptr || main->viewport == nullptr) return;
+	static int placed = 0;
+	static uint32_t made = 0;
+	if (n == 0) {
+		VpFlushFinish();
+		TickFinish();
+		for (const Company *c : Company::Iterate()) {
+			SetLocalCompany(c->index);
+			break;
+		}
+		_settings_game.difficulty.infinite_money = true;
+		SetObjectToPlace(SPR_CURSOR_ROAD_NESW, PAL_NONE, HT_RECT, WC_MAIN_WINDOW, 0);
+	}
+	const Viewport &vp = *main->viewport;
+	/* (the pointer across the view and back, a pixel's way each picture of a tile's width) */
+	const int span = vp.width / 2;
+	const int step = (n * 24) % span;
+	_cursor.pos.x = vp.left + vp.width / 4 + step;
+	_cursor.pos.y = vp.top + vp.height / 2 + (n % 8) * 8;
+	if (n % 6 != 5) return;
+	const Point at = RemapCoords2(0, 0); (void)at;
+	const Point p = InverseRemapCoords2(vp.virtual_left + vp.virtual_width / 2, vp.virtual_top + vp.virtual_height / 2);
+	const TileIndex centre = TileVirtXY(std::clamp<int>(p.x, 0, Map::MaxX() * TILE_SIZE), std::clamp<int>(p.y, 0, Map::MaxY() * TILE_SIZE));
+	switch (placed++ % 4) {
+		case 0:
+			if (TileIndex t = PlayFreeLand(centre, 5, 1); t != INVALID_TILE) {
+				made += Command<CMD_BUILD_LONG_ROAD>::Post(t + TileDiffXY(4, 0), t, ROADTYPE_ROAD, AXIS_X, DRD_NONE, false, false, false);
+			}
+			break;
+		case 1:
+			if (TileIndex t = PlayFreeLand(centre, 5, 1); t != INVALID_TILE) {
+				made += Command<CMD_BUILD_RAILROAD_TRACK>::Post(t + TileDiffXY(4, 0), t, RAILTYPE_RAIL, TRACK_X, false, false);
+			}
+			break;
+		case 2:
+			if (TileIndex t = PlayFreeLand(centre, 3, 1); t != INVALID_TILE) {
+				made += Command<CMD_BUILD_RAIL_STATION>::Post(t, RAILTYPE_RAIL, AXIS_X, 1, 3, STAT_CLASS_DFLT, 0, NEW_STATION, false);
+			}
+			break;
+		default:
+			if (TileIndex t = PlayFreeLand(centre, 1, 1); t != INVALID_TILE) {
+				made += Command<CMD_BUILD_ROAD_STOP>::Post(t, 1, 1, RoadStopType::Bus, false, DIAGDIR_NE, ROADTYPE_ROAD, ROADSTOP_CLASS_DFLT, 0, NEW_STATION, false);
+			}
+			break;
+	}
+	if (n == 59) PlayLine(fmt::format("openttd: play built {} of {} so far\n", made, placed));
+}
+
 static void PlayStep()
 {
 	static const char *play = getenv("OPENTTD_PLAY");
@@ -792,9 +881,11 @@ static void PlayStep()
 	static const bool short_play = getenv("OPENTTD_PLAY_SHORT") != nullptr;
 	static const char *play_part = getenv("OPENTTD_PLAY_PART");
 	static const int *list = short_play ? PLAY_SHORT : play_part == nullptr ? nullptr :
-			std::string_view(play_part) == "follow" ? PLAY_FOLLOW : std::string_view(play_part) == "window" ? PLAY_WINDOW : PLAY_SCROLL;
+			std::string_view(play_part) == "follow" ? PLAY_FOLLOW : std::string_view(play_part) == "window" ? PLAY_WINDOW :
+			std::string_view(play_part) == "build" ? PLAY_BUILD : PLAY_SCROLL;
 	static const int len = list == PLAY_SHORT ? std::size(PLAY_SHORT) : list == PLAY_SCROLL ? std::size(PLAY_SCROLL) :
-			list == PLAY_FOLLOW ? std::size(PLAY_FOLLOW) : list == PLAY_WINDOW ? std::size(PLAY_WINDOW) : 200;
+			list == PLAY_FOLLOW ? std::size(PLAY_FOLLOW) : list == PLAY_WINDOW ? std::size(PLAY_WINDOW) :
+			list == PLAY_BUILD ? std::size(PLAY_BUILD) : 200;
 	/* OPENTTD_PICTURE_LOG=1: each picture's ms, the first core's instructions, ticks, and its phases' ms */
 	static const bool picture_log = getenv("OPENTTD_PICTURE_LOG") != nullptr;
 	if (picture_log) {
@@ -819,6 +910,8 @@ static void PlayStep()
 	}
 	const int at = _play_frame++ % len;
 	const int f = list != nullptr ? list[at] : at;
+	/* (what the script does next but for scrolling wants the tick held) */
+	if (f == 60 || f == 80 || f == 100 || f == 110 || f == 170 || f == 199 || f == 200 || f >= 300 && (f == 300 || f == 305 || f == 320 || f == 340 || f >= 400)) TwHold(false);
 	/* OPENTTD_PLAY_TIMES=1: each picture's time, to see where a part's time goes */
 	static const bool times = getenv("OPENTTD_PLAY_TIMES") != nullptr;
 	if (times) {
@@ -985,6 +1078,8 @@ static void PlayStep()
 		}
 	}
 	if (f == 305) begin_part("window");
+	if (f == 400) begin_part("build");
+	if (f >= 400 && f < 460) PlayBuild(f - 400);
 	/* OPENTTD_PLAY_MOVE=1: at 320 the windows move as a drag moves them, at 340 they close (with OPENTTD_CHECK: each picture so) */
 	static const bool play_move = getenv("OPENTTD_PLAY_MOVE") != nullptr;
 	if (play_move && f == 320) {
@@ -1009,6 +1104,8 @@ static void PlayStep()
 		if (short_play) CloseAllNonVitalWindows(); /* (the next round opens them again) */
 		if (_play_frame / len < rounds) return;
 		PlayLine(fmt::format("openttd: play PL-DONE\n"));
+		/* OPENTTD_PLAY_QUICK=1: no settings saved or memory given back, so that a profile is of the play alone */
+		if (getenv("OPENTTD_PLAY_QUICK") != nullptr) _exit(0);
 		_exit_game = true;
 	}
 }
@@ -1051,7 +1148,7 @@ static bool WantWorkerTick()
  * goes on while the viewports are drawn (docs/games/openttd.md, "The tick on a worker"). */
 void VideoDriver_ShaderEmu::WorkerTick()
 {
-	static const float frame_ms = [] { int n = Number(getenv("OPENTTD_FRAME_MS")); return n > 0 ? n : 66.0f; }();
+	static const float frame_ms = [] { int n = Number(getenv("OPENTTD_FRAME_MS")); return n > 0 ? n : 33.0f; }();
 	auto now = std::chrono::steady_clock::now();
 	if (now < this->next_draw_tick) return;
 	const auto interval = std::chrono::microseconds(static_cast<int>(frame_ms * 1000));
@@ -1062,30 +1159,48 @@ void VideoDriver_ShaderEmu::WorkerTick()
 	const uint32_t work_from = t;
 	extern uint32_t _vp_scrolls;
 	const uint32_t scrolls = _vp_scrolls;
-	TwHold(false);
-	TwSync();
-	::GameLoop(); /* (the first core's parts: the tick itself is the worker's) */
+	/* (docs/games/openttd.md, "Pictures the tick does not wait for": mid-tick with nothing but views to draw it goes on) */
+	if (!_have_pending) {
+		GrCheckNextEvent(&_pending);
+		_have_pending = _pending.type != GR_EVENT_TYPE_NONE && _pending.type != GR_EVENT_TYPE_TIMEOUT;
+	}
+	_se_light = !_have_pending && !_left_button_down && !_right_button_down && TwLightPicture() && SeDirtyOnlyViews();
+	if (!_se_light) {
+		TwHold(false);
+		TwSync();
+		::GameLoop(); /* (the first core's parts: the tick itself is the worker's) */
+	}
 	_vp_phase[VP_PHASE_TICK] += VpTime() - t;
 	if (!WantWorkerTick()) TwStop();
 	this->LockVideoBuffer();
 	InteractiveRandom();
-	this->DrainCommandQueue();
-	while (this->PollEvent()) {}
+	if (!_se_light) {
+		this->DrainCommandQueue();
+		while (this->PollEvent()) {}
+	}
 	this->InputLoop();
-	if (this->fast_forward_key_pressed && !_networking && _game_mode != GM_MENU) {
+	if (!_se_light && this->fast_forward_key_pressed && !_networking && _game_mode != GM_MENU) {
 		ChangeGameSpeed(true);
 		this->fast_forward_via_key = true;
-	} else if (this->fast_forward_via_key) {
+	} else if (!_se_light && this->fast_forward_via_key) {
 		ChangeGameSpeed(false);
 		this->fast_forward_via_key = false;
 	}
-	::InputLoop();
-	VehiclesSync(TwActive());
+	if (!_se_light) ::InputLoop();
+	if (!_se_light) VehiclesSync(TwActive());
 	/* the last picture's flush, left out while all this ran, made whole, and that picture shown */
 	static bool paint_owed = false;
 	t = VpTime();
-	if (_game_mode == GM_BOOTSTRAP || _switch_mode == SM_NONE || HasModalProgress()) UpdateWindowsEarly();
-	if (!VpFlushReady()) { /* (the tick runs while its pieces are drawn, and waits again for the drawing) */
+	if (!_se_light && (_game_mode == GM_BOOTSTRAP || _switch_mode == SM_NONE || HasModalProgress())) UpdateWindowsEarly();
+	/* (what is left of a picture that draws only views needs no tick held: it goes on from here) */
+	if (!_se_light && _game_mode == GM_NORMAL && _switch_mode == SM_NONE && !HasModalProgress() && !_have_pending && !_left_button_down && !_right_button_down && TwMayGoLight()) {
+		SeHeldWork();
+		if (SeDirtyOnlyViews()) {
+			TwRelease();
+			_se_light = true;
+		}
+	}
+	if (!_se_light && !VpFlushReady()) { /* (the tick runs while its pieces are drawn, and waits again for the drawing) */
 		TwRelease();
 		VpFlushFinish();
 		TwHold(false);
@@ -1115,6 +1230,7 @@ void VideoDriver_ShaderEmu::WorkerTick()
 		_vp_phase[VP_PHASE_PAINT] += VpTime() - t;
 	}
 	this->UnlockVideoBuffer();
+	_se_light = false;
 	TwService();
 	TwGrant();
 	/* (OPENTTD_PACE_MS: the picture's work the pace keeps to while it scrolls, 90 ms: ten pictures a second) */

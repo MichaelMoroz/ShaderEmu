@@ -152,6 +152,7 @@ static void ThRingPush(void *p)
 }
 
 static bool _tw_held_now, _tw_held_between;
+static bool _tw_granted; ///< the first core's: the tick was told no worker draws until it next waits
 
 /** A block of the tick's freed by the first core. */
 static void ThFreeHere(void *p)
@@ -533,7 +534,7 @@ void TwService()
 /** The first core will not draw until the tick next waits: a delete the tick asked to make alone is made. */
 void TwGrant()
 {
-	if (_tw_on && _tw_excl.v != _tw_excl_done.v && !VpFlushOut()) _tw_excl_done.v = _tw_excl.v;
+	if (_tw_on && _tw_excl.v != _tw_excl_done.v && !VpFlushOut()) _tw_excl_done.v = _tw_excl.v, _tw_granted = true;
 }
 
 bool TwExclusiveWanted() { return _tw_on && _tw_excl.v != _tw_excl_done.v; }
@@ -571,9 +572,37 @@ static void TwLetGo()
 	_tw_release.v = _tw_req.v;
 }
 
+static uint32_t _tw_ticks_seen; ///< the first core's: ticks ended when it last held the tick
+static uint32_t _tw_light_run; ///< the first core's: pictures since it last held the tick
+
+/**
+ * Whether the next picture may leave the tick running: it is in the middle of a tick, none ended since the last hold, and
+ * what it asked for is not waiting. OPENTTD_LIGHT=0: never; OPENTTD_LIGHT_MOST=N: every Nth picture is held at least (8).
+ */
+static bool TwLightOff()
+{
+	static const bool off = getenv("OPENTTD_CHECK") != nullptr || (getenv("OPENTTD_LIGHT") != nullptr && getenv("OPENTTD_LIGHT")[0] == '0');
+	return off;
+}
+
+bool TwLightPicture()
+{
+	static const uint32_t most = [] { const char *e = getenv("OPENTTD_LIGHT_MOST"); return e != nullptr ? static_cast<uint32_t>(atoi(e)) : 8; }();
+	if (TwLightOff() || !_tw_on || _tw_held_now || _tw_granted || _tw_where.v == 0 || _tw_ticks.v != _tw_ticks_seen) return false;
+	if (_tw_excl.v != _tw_excl_done.v) return false;
+	return ++_tw_light_run < most;
+}
+
+/** The first core, holding the tick: whether the rest of this picture may let it go (the views' drawing and no more). */
+bool TwMayGoLight()
+{
+	return !TwLightOff() && _tw_on && _tw_held_now && !_pause_mode.Any() && _tw_excl.v == _tw_excl_done.v;
+}
+
 void TwHold(bool between)
 {
 	if (!_tw_on) return;
+	_se_light = false;
 	if (_tw_held_now) {
 		if (!between || _tw_held_between) return;
 		TwLetGo();
@@ -599,6 +628,9 @@ void TwHold(bool between)
 	}
 	YapfShipAheadStop(); /* (the first core may change the map while it holds the tick: no ship's path made ahead reads it) */
 	_tw_holds++;
+	_tw_ticks_seen = _tw_ticks.v;
+	_tw_light_run = 0;
+	_tw_granted = false;
 	_tw_held_now = true;
 	_tw_held_between = between || _tw_where.v == 0;
 	_tw_running = false;
