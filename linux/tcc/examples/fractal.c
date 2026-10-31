@@ -87,7 +87,7 @@ int main(int argc, char **argv)
 	GR_WINDOW_ID window;
 	GR_EVENT event;
 	GLuint texture[2];
-	int width, height, at = 0, stopped = 0, pictures = 0, dragging = 0, mx = 0, my = 0, frames = 0;
+	int resting = 0, changed = 0, width, height, at = 0, stopped = 0, pictures = 0, dragging = 0, mx = 0, my = 0, frames = 0;
 	unsigned since, t0;
 	float t = 0, yaw = 0.6f, pitch = 0.35f, distance = 3.6f;
 
@@ -150,7 +150,11 @@ int main(int argc, char **argv)
 	for (;;) {
 		int moved = 0;
 
-		GrCheckNextEvent(&event);
+		/* (stopped and shown: no core turns until an event comes) */
+		if (resting)
+			GrGetNextEvent(&event);
+		else
+			GrCheckNextEvent(&event);
 		if (event.type == GR_EVENT_TYPE_CLOSE_REQ)
 			break;
 		if (event.type == GR_EVENT_TYPE_KEY_DOWN) {
@@ -184,7 +188,7 @@ int main(int argc, char **argv)
 		if (pitch < -1.5f) pitch = -1.5f;
 		if (distance < 1.9f) distance = 1.9f;
 		if (distance > 9.0f) distance = 9.0f;
-		(void)moved;
+		changed |= moved;
 		if (!hlsl_draw_ready(prog)) {
 			mcw_rest();
 			continue;
@@ -194,6 +198,10 @@ int main(int argc, char **argv)
 		glViewport(0, 0, width, height);
 		seglQuad(corners, uv, texture[at], 255, 255, 0);
 		seglSwapEarly();
+		resting = stopped && !changed;
+		if (resting)
+			continue;
+		changed = 0;
 		if (!stopped) {
 			t += 1.0f;
 			if (!dragging) yaw += 0.01f;

@@ -459,6 +459,9 @@ none:
 	return 0;
 }
 
+static struct { void *at; uint32_t bytes; } mapped[8];
+void mcwx_closing(void) __attribute__((weak));	/* (mcwx.c, where it is linked: what it keeps of these workers) */
+
 void mcw_close(void)
 {
 	int k, passes, step;
@@ -466,6 +469,7 @@ void mcw_close(void)
 	/* (the field's job too: its lanes read and write this program's memory) */
 	mcw_field_wait();
 	if (!page) return;
+	if (mcwx_closing) mcwx_closing();
 	/* The workers leave their loops, in two steps: the jobs that are out end, then the leaving
 	 * is posted. A worker with a job out is never posted to: it would sleep on the new job's
 	 * word and never wake for it. All are waited for at once, their pages brought meanwhile. */
@@ -496,6 +500,11 @@ void mcw_close(void)
 	}
 	mc_next_pass();
 	call6(215, (long)page, MC_PAGE_SIZE, 0, 0, 0, 0);
+	for (k = 0; k < (int)(sizeof mapped / sizeof mapped[0]); k++)
+		if (mapped[k].at) {
+			call6(215, (long)mapped[k].at, (long)mapped[k].bytes, 0, 0, 0, 0);
+			mapped[k].at = 0;
+		}
 	call6(57, device, 0, 0, 0, 0, 0);
 	device = -1;
 	page = 0;
@@ -610,7 +619,21 @@ int mcw_self(void)
 
 int mcw_slot(void) { return page ? (int)(my_tag & 15) : -1; }
 
-void *mcw_map(uint32_t offset, uint32_t bytes) { return device >= 0 ? map((long)bytes, device, (long)offset) : 0; }
+/* (each given back at the close: a mapping keeps the device's file open, and with it this program's client and cores in
+ * the kernel, whatever close() said: the next open had half of them, and the others' workers were never parked) */
+
+void *mcw_map(uint32_t offset, uint32_t bytes)
+{
+	void *at = device >= 0 ? map((long)bytes, device, (long)offset) : 0;
+	unsigned i;
+
+	for (i = 0; at && i < sizeof mapped / sizeof mapped[0]; i++)
+		if (!mapped[i].at) {
+			mapped[i].at = at, mapped[i].bytes = bytes;
+			break;
+		}
+	return at;
+}
 
 int mcw_on_worker(void)
 {

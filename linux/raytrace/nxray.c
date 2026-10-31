@@ -328,13 +328,15 @@ static uint32_t
 trace_texels(const struct picture *sc, uint32_t from, uint32_t to, uint32_t core, int lanes, uint32_t frame)
 {
 	struct lane_job *job = &lane_jobs[frame % outs][core];
-	uint32_t rays = 0, i;
+	uint32_t rays = 0, i, n = to - from;
 
 	job->sc = sc, job->from = from, job->core = core;
+	/* (a picture given up, go.stop, ends at the next piece: with few workers a share is the whole picture, minutes of a closed window) */
 	if (lanes)
-		mcw_lanes(trace_texel, job, 0, to - from, sc->pixels + 4 * from, 1);
+		for (i = 0; i < n && !go.stop; i += 4096)
+			mcw_lanes(trace_texel, job, i, n - i < 4096 ? n - i : 4096, sc->pixels + 4 * (from + i), 1);
 	else
-		for (i = 0; i < to - from; i++) trace_texel(i, job);
+		for (i = 0; i < n && (i & 63 || !go.stop); i++) trace_texel(i, job);
 	for (i = from; i < to; i++) rays += sc->pixels[4 * i] >> 24;
 	return rays;
 }
@@ -407,6 +409,9 @@ trace_pictures(uint32_t k, uint32_t seen)
 	return 1;
 }
 
+static int keys_after(int wait_ms);
+#define keys() keys_after(0)
+
 /* ---- core 0 ---- */
 
 #define BAR 54		/* the bar under the picture: a row of buttons and a line of figures */
@@ -421,6 +426,9 @@ static char status[120] = "";
 static int width = 320, height = 240, room;	/* the picture, and how many pixels its memory holds */
 static int depth = DEPTH, shadows = 1;
 static int workers, wanted = MC_MAX_CORES, stopped, frames_left = -1, still, owners, even;
+static int rested;		/* stopped: the workers' jobs have ended, and this core waits for an event */
+static int one_more;		/* stopped, and what a picture shows has changed: one is traced */
+static int view_stale;		/* stopped, and the window was cleared: the last picture is shown again */
 static uint8_t running[MC_MAX_CORES];	/* worker k has its job out */
 static uint32_t jobs_now = 1;		/* goes up when a job begins or ends: a picture shared out before has other shares */
 
@@ -823,6 +831,7 @@ set_window(int w, int h)
 	seglWindowChanged();
 	seglSize(&view_w, &view_h);
 	glViewport(0, 0, view_w, view_h);
+	view_stale = 1;
 }
 
 /* The two pictures at another size, in the memory they have: called with no picture out. */
@@ -884,14 +893,17 @@ act(int key)
 
 /* Keys and buttons: what they ask for together, as act() says it. */
 static int
-keys(void)
+keys_after(int wait_ms)
 {
 	GR_EVENT e;
 	int again = 0, k;
 
 	for (;;) {
-		GrCheckNextEvent(&e);
-		if (e.type == GR_EVENT_TYPE_NONE)
+		if (wait_ms)
+			GrGetNextEventTimeout(&e, wait_ms), wait_ms = 0;
+		else
+			GrCheckNextEvent(&e);
+		if (e.type == GR_EVENT_TYPE_NONE || e.type == GR_EVENT_TYPE_TIMEOUT)
 			return again;
 		if (e.type == GR_EVENT_TYPE_CLOSE_REQ) {
 			go.stop = go.leave = 1;	/* (the shares end at their next tiles and the jobs with them: the workers are waited for) */
@@ -1029,8 +1041,12 @@ main(void)
 		if (!clock_from)
 			clock_from = said_at = jobs_at = whole_at = now;
 		/* a worker that lost its core is asked for again now and then */
-		if (workers && now - jobs_at >= 1000) {
+		if (workers && now - jobs_at >= 1000 && !rested) {
 			jobs_at = now;
+			start_jobs();
+		}
+		if (rested && (!stopped || one_more)) {
+			rested = 0;
 			start_jobs();
 		}
 		/* Two pictures are out while they follow each other freely: a worker goes from one to
@@ -1044,7 +1060,8 @@ main(void)
 			}
 		if (use_field && frames_left < 0 && !one_out)
 			ahead = 2;
-		while (!stopped && go.frame - done < (uint32_t)ahead) {
+		while ((!stopped || one_more) && go.frame - done < (uint32_t)ahead) {
+			one_more = 0;
 			/* the scene moves by the clock, so it moves as fast whatever a picture takes (a test's
 			 * pictures are a fixed step apart, to be the same pictures every time) */
 			began_at[(go.frame + 1) % outs] = now = now_ms();
@@ -1060,19 +1077,27 @@ main(void)
 				t += 0.35f;
 		}
 		if (go.frame == done) {
-			/* stopped, and nothing out */
-			pass();
-			if (now - keys_at >= 200) {
-				keys_at = now;
-				k = keys();
-				if (k & 4) {
-					seglSettle();
-					set_size(want_w, want_h);
-					draw_bar();
-				}
-				if (k & 2)
-					take_workers();
+			/* stopped, and nothing out: no core turns until an event comes */
+			if (!rested) {
+				end_jobs();
+				go.stop = 0;
+				rested = 1;
 			}
+			if (view_stale && done) {
+				seglQuad(corners, uv, texture[done % outs], 255, 255, 0);
+				seglSwapEarly();
+			}
+			view_stale = 0;
+			k = keys_after(1000);
+			if (k & 4) {
+				seglSettle();
+				set_size(want_w, want_h);
+				draw_bar();
+			}
+			if (k & 2)
+				take_workers();
+			if (k)
+				one_more = 1;
 			continue;
 		}
 		at = done + 1;
@@ -1165,6 +1190,7 @@ main(void)
 				look_at_jobs(done);
 			}
 			done = go.frame;
+			one_more = stopped;	/* (what was out was given up: nothing whole shows what was asked) */
 			if (again & 4) {
 				/* (what shows the last picture has been drawn before its texture is another size) */
 				seglSettle();

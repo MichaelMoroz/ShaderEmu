@@ -70,3 +70,5 @@ question is a program of its own, `nxask`), and compares with the start. Memory 
   40 s were over. `nxask` and `open` close what they were given above 2 first.
 - Micropolis asked for its events only after its first seconds' loading: an X in them went to nobody, and the bar then called it hung, for 200 s.
 - `--before 'export NANOX_SIZE=640x480;'` runs any set at another screen size.
+- A plan's few seconds on `rvc_cpu` are real: the guest's clock is counted, so 20 random plans in 25 s ran to their `end`. Seed 13 is run with `--count 100`.
+- `menus` clicks a program at fixed places: a row that shrinks the window (the terminal's text sizes) can put the next place outside it, and its rows are "not reached" there though another place reaches the same menu.
