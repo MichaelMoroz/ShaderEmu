@@ -40,8 +40,8 @@ demo's 19,423 sight checks were answered by a worker's walks.
 What makes it this fast:
 
 - **The compiler.** `doom.sh` builds `-O3 -fno-tree-vectorize -fsched-pressure -funroll-loops
-  -flto`, and with `doom.profile`'s counts (`DOOM_PROFILE=count` makes the program that counts,
-  `off` leaves them out: `docs/games/tdawn.md`, "What the compiler is told"). It keeps the flags
+  -flto`. No counts are kept for it (`doom.profile`, `DOOM_PROFILE=count`: `docs/games/tdawn.md`, "What the compiler
+  is told", says why not). It keeps the flags
   in a file of the build folder and builds every object again when they change. The flat
   drivers drop `-fno-pie` and compile `-fPIE` (`linux/nommu/setup.sh`, `docs/system/nommu.md`).
 - **Sight checks.** `doom_fast.c` asks whether the player is in front of a monster before
