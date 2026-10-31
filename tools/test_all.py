@@ -478,6 +478,17 @@ CASES = [
                 (r'^nxide: storm: \d+ made again: the text is as the storm left it', 3)]),
     case('launch-note', 'desktop', 'export UI_LAUNCH=print; nx; sleep 4; nxkey 266,94 266,94; sleep 4', wall=120,
          has=[r'^launch: Calculator', r'^launch: a window shown after \d+ ms']),   # docs/system/nanox.md, "A program starting"
+    # the desktop's fuzzer's short set (docs/system/fuzz.md; tools/app_fuzz.py for more): windows closed every way, a GPU program
+    # after another, one refused with the first left open and its Notice; OpenTTD's X answered by a click on Yes (no process left)
+    case('app-fuzz', 'desktop', 'nx; sleep 3; nxfuzz start:p:nxpaint wait:p:20 close:p:x start:g:glxgears wait:g:20 close:g:alt '
+         'start:c:nxcalc wait:c:20 start:t:nxterm wait:t:20 rand:c:6:3 close:t:bar close:c:term start:e:nxedit wait:e:20 key:e:h,i close:e:x '
+         'start:r:nxray wait:r:30 sleep:2000 close:r:kill start:g2:glxgears wait:g2:20 close:g2:x start:f:nxfiles,/root sleep:200 close:f:x end', True,
+         wall=120, has=[r'^FZ-DONE 0', r'FZ closed g2'], never=[r'FZ-BAD']),
+    case('app-fuzz-refused', 'desktop', 'nx; sleep 3; nxfuzz start:g:glxgears wait:g:20 start:r:nxray sleep:6000 wins close:g:term sleep:1000 wins start:i:imdemo wait:i:30 close:i:x end',
+         True, wall=120, has=[r'the GPU is drawing for glxgears', r'^FZ-DONE 0'], never=[r'FZ-BAD']),
+    case('app-fuzz-openttd', 'desktop games openttd', 'nx; sleep 3; nxfuzz ask:40:100 start:o:openttd,-g,/usr/share/openttd/busy.sav wait:o:60 sleep:30000 '
+         'tell:o:x sleep:2000 click:o:367,261 gone:o start:g:glxgears wait:g:20 close:g:x end', True, wall=240,
+         has=[r'FZ closed o \(gone\)', r'^FZ-DONE 0'], never=[r'FZ-BAD']),
 ]
 
 

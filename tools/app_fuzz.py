@@ -117,10 +117,10 @@ class Runner:
         # One program at a time draws: told to close one still open is as it should be, and then there is no window
         def open_at(name, at):
             for tag, command in re.findall(r'FZ started (\S+): process \d+: ([^\r\n]*)', console[:at]):
-                if name.replace('.bin', '') in command and not re.search(r'FZ closed %s \(' % re.escape(tag), console[:at]):
+                if (name == 'another' or name.replace('.bin', '') in command) and not re.search(r'FZ closed %s \(' % re.escape(tag), console[:at]):
                     return True
             return False
-        told = list(re.finditer(r'(?:GPU is drawing for|close) ((?!it\b)\S+)(?: \(process| first)', console))
+        told = list(re.finditer(r'(?:GPU is drawing for|close) ((?!it\b)\S+)(?: program)?(?: \(process| first)', console))
         if told and all(open_at(m.group(1), m.start()) for m in told):
             bad = [b for b in bad if b[0] != 'gpu-busy' and not (b[0] == 'bad' and b[1].startswith('no-window'))]
         if 'FZ-DONE' not in console:

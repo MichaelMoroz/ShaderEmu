@@ -39,6 +39,8 @@ its window gone is `left-running`, `gone_wait` seconds (40) after: the report th
   it is open a second program is meant to be told so, and then to have no window.
 - `RVC_RACES` undone with `--races`; no `FZ-DONE` within the wall (`wall`: inconclusive by itself, `--races` is many times slower).
 
+A window goes to a tag when its process is in the session its `start:` made; a question (`nxask`) is said and goes to nobody.
+
 `end` closes each tag, then whatever nobody started (random keys can start a program from the desktop's icons, and a
 question is a program of its own, `nxask`), and compares with the start. Memory is said (`FZ memory`), not judged.
 
@@ -48,9 +50,11 @@ question is a program of its own, `nxask`), and compares with the start. Memory 
   the lists drawn (some 5 M instructions a second), through `tools\gpu_queue.ps1`.
 - Random clicks do not know a program's menus: a menu's far end is reached rarely. What each program's own switches
   and tests reach is in `tools/test_all.py`.
-- A program's own windows are found by their process, the first that appears after `start:`. Started together, two
-  programs' windows can be taken for each other's: wait for one before starting the next, unless that is the case to try.
 
 ## What it found
 
-See "At exit" in `docs/games/openttd.md`: the child of OpenTTD's `OSOpenBrowser`.
+- OpenTTD's link by `fork` and `exit()`, and what was done about a program that stays: "At exit" in `docs/games/openttd.md`.
+- A child kept the GPU's file (`open` for that link, `nxask` from a refused program) and with it the drawing and the workers' places of
+  a program that had gone: `shaderemu_gpu_close_on_exec` in the kernel's driver sets close-on-exec at a file's first ioctl or mmap.
+- A child kept the window system's socket: a refused program's empty window stayed until its Notice was answered, and OpenTTD's until `open`'s
+  40 s were over. `nxask` and `open` close what they were given above 2 first.

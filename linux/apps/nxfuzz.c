@@ -322,6 +322,28 @@ process_is(int pid, const char *name)
 }
 
 static int
+session_of(int pid)
+{
+	char path[32], text[256], *c;
+	int fd, n, ppid, group, session = 0;
+	char state;
+
+	snprintf(path, sizeof path, "/proc/%d/stat", pid);
+	fd = open(path, O_RDONLY);
+	if (fd < 0)
+		return 0;
+	n = read(fd, text, sizeof text - 1);
+	close(fd);
+	if (n <= 0)
+		return 0;
+	text[n] = 0;
+	c = strrchr(text, ')');
+	if (c)
+		sscanf(c + 1, " %c %d %d %d", &state, &ppid, &group, &session);
+	return session;
+}
+
+static int
 find_window(struct tag *t)
 {
 	GR_WINDOW_ID parent, *children = NULL;
@@ -333,6 +355,9 @@ find_window(struct tag *t)
 		GR_WINDOW_INFO in;
 
 		if (is_known(children[i]) || !is_task(children[i], &in) || !in.mapped)
+			continue;
+		/* (the tag's program is in the session its start made: another's window, or a dialog of another's, is not its) */
+		if (session_of(in.processid) != t->child && t->child > 0)
 			continue;
 		if (process_is(in.processid, "nxask")) {
 			/* (what a program that could not start says, in a program of its own: not its window) */
@@ -802,13 +827,18 @@ check(int final)
 	for (i = 0; i < n; i++) {
 		for (j = 0; j < base_count && base_pids[j] != pids[i]; j++)
 			;
+		/* (a question nobody here has answered is no program left behind) */
+		if (j == base_count && !strcmp(pnames[i], "nxask")) {
+			kill(pids[i], SIGKILL);
+			continue;
+		}
 		/* (`open`, started for a link, waits for a host that rvc_cpu has not: 40 s) */
 		if (j == base_count && !strcmp(pnames[i], "open")) {
 			say("FZ open goes on, killed");
 			kill(pids[i], SIGKILL);
 			continue;
 		}
-		if (j == base_count && pids[i] != getpid())
+		if (j == base_count && pids[i] != getpid() && !strchr(pnames[i], '/'))	/* (a kernel worker has a slash) */
 			BAD("left-process %d %s after everything closed", pids[i], pnames[i]);
 	}
 	ms_sleep(200);
@@ -839,6 +869,16 @@ main(int argc, char **argv)
 
 	signal(SIGALRM, on_alarm);
 	signal(SIGCHLD, SIG_DFL);
+	{
+		/* (random keys in a terminal can bring this line back from the shell's history: one plan at a time) */
+		static int pids[MAX_PROCS];
+		static char pnames[MAX_PROCS][24];
+		int n = processes(pids, pnames, MAX_PROCS);
+
+		for (i = 0; i < n; i++)
+			if (pids[i] != getpid() && !strcmp(pnames[i], "nxfuzz"))
+				return 0;
+	}
 	if (GrOpen() < 0) {
 		say("FZ-BAD no window system");
 		say("FZ-DONE 1");
