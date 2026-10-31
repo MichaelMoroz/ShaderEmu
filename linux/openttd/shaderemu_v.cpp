@@ -1373,6 +1373,7 @@ void VideoDriver_ShaderEmu::MainLoop()
 		auto now = std::chrono::steady_clock::now();
 		if (next > now && !_have_pending && _tick_state != TickState::Out) {
 			long ms = std::chrono::duration_cast<std::chrono::milliseconds>(next - now).count();
+			SeGpuPoll();
 			if (TwActive()) ms = std::min(ms, 5L), TwService(), TwGrant();
 			if (ms > 0) {
 				GrGetNextEventTimeout(&_pending, ms);

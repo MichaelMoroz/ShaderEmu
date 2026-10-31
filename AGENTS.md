@@ -379,6 +379,9 @@
   reads a vehicle's drawn copy and changes no game state, and what it owes (stale texts, invalidations, new vehicles' sprites) is done by
   `SeHeldWork` at the next hold. Ships' paths are made during the tick by two workers of their own (`AheadLoop`, `OPENTTD_SHIP_LOOPS=0`
   is without): the map is not still under them, so all they read is compared when the path is taken, and `OPENTTD_SHIP_AHEAD=check` must say 0 differ.
+- OpenTTD's lists do not wait for the GPU, which in a world takes one a Unity frame (`docs/games/openttd.md`, "The card's lists"): records and
+  chunks live two frames, a list that finds the GPU busy waits on a queue. What a list reads and is changed later settles first (`SeGpuSettle`); run
+  `test_all.py openttd-scroll` with `RVC_DEVICE_EVERY=6` too, since `rvc_cpu` otherwise takes a list back at once: calibrated runs do not show this.
 - OpenTTD is compiled whole with `openttd.profile.gz` (`docs/games/openttd.md`, "The compiler"): its LTO link keeps
   `-fdata-sections -fno-common` and the 16-byte assembler, or statics a worker writes share texels (`RVC_RACES` undone), and
   after a large change to the source `linux/openttd/counts.py` makes the counts anew. `build.sh` puts the tree back from

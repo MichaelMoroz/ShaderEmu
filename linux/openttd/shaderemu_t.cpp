@@ -27,6 +27,7 @@ void YapfShipAheadDrop();
 void YapfShipAheadGo();
 void YapfShipAheadCancel();
 void YapfShipAheadInit();
+void SeGpuPoll(); /* shaderemu_gpu.cpp */
 
 extern "C" {
 void *__real_malloc(size_t n);
@@ -512,6 +513,7 @@ void TwService()
 {
 	SeLinkGraphService();
 	YapfShipAheadService();
+	SeGpuPoll();
 	if (!_tw_on) return;
 	if (mcw_ready(_tw_handle) && _tw_ended.v == 0) {
 		fmt::print(stderr, "openttd: the game tick's worker ended\n");

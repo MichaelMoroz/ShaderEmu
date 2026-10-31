@@ -4727,7 +4727,7 @@ index 0abd7c0..675f9c3 100644
 +    CONDITION SHADEREMU
 +)
 diff --git a/src/spritecache.cpp b/src/spritecache.cpp
-index f26695a..06039e3 100644
+index f26695a..5124f75 100644
 --- a/src/spritecache.cpp
 +++ b/src/spritecache.cpp
 @@ -18,11 +18,16 @@
@@ -4906,17 +4906,22 @@ index f26695a..06039e3 100644
  	_grf_sprite_offsets.clear();
  
  	if (file.GetContainerVersion() >= 2) {
-@@ -703,6 +826,9 @@ void DupSprite(SpriteID old_spr, SpriteID new_spr)
+@@ -703,6 +826,14 @@ void DupSprite(SpriteID old_spr, SpriteID new_spr)
   */
  static void DeleteEntriesFromSpriteCache(size_t to_remove)
  {
 +#ifdef WITH_SHADEREMU
 +	VpFlushFinish();
++	{
++		/* (the lists not yet drawn read the sprites where they lie) */
++		extern void SeGpuSettle();
++		SeGpuSettle();
++	}
 +#endif
  	const size_t initial_in_use = _spritecache_bytes_used;
  
  	struct SpriteInfo {
-@@ -852,8 +978,50 @@ static void *HandleInvalidSpriteRequest(SpriteID sprite, SpriteType requested, S
+@@ -852,8 +983,50 @@ static void *HandleInvalidSpriteRequest(SpriteID sprite, SpriteType requested, S
   * @param encoder Sprite encoder to use. Set to nullptr to use the currently active blitter.
   * @return Sprite raw data
   */
@@ -4967,7 +4972,7 @@ index f26695a..06039e3 100644
  	assert(type != SpriteType::MapGen || IsMapgenSpriteID(sprite));
  	assert(type < SpriteType::Invalid);
  
-@@ -894,8 +1062,173 @@ void *GetRawSprite(SpriteID sprite, SpriteType type, SpriteAllocator *allocator,
+@@ -894,8 +1067,173 @@ void *GetRawSprite(SpriteID sprite, SpriteType type, SpriteAllocator *allocator,
  	}
  }
  
@@ -5141,7 +5146,7 @@ index f26695a..06039e3 100644
  	/* Reset the spritecache 'pool' */
  	_spritecache.clear();
  	_spritecache.shrink_to_fit();
-@@ -910,6 +1243,11 @@ void GfxInitSpriteMem()
+@@ -910,6 +1248,11 @@ void GfxInitSpriteMem()
   */
  void GfxClearSpriteCache()
  {
@@ -5153,7 +5158,7 @@ index f26695a..06039e3 100644
  	/* Clear sprite ptr for all cached items */
  	for (SpriteCache &sc : _spritecache) {
  		if (sc.ptr != nullptr) sc.ClearSpriteData();
-@@ -924,6 +1262,9 @@ void GfxClearSpriteCache()
+@@ -924,6 +1267,9 @@ void GfxClearSpriteCache()
   */
  void GfxClearFontSpriteCache()
  {
