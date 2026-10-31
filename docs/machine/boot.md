@@ -2,7 +2,7 @@
 
 A cold boot of this project's image to the shell prompt takes 1.13 s of the guest's clock (calibrated, 31 October 2026:
 `rvc_cpu --pass-model`, `cat /proc/uptime` typed at the prompt) and 7.18 million instructions in 933 passes (`rvc_cpu`,
-`--until "/ # "`, the same day). `docs/machine/speed.md` has the other machines. On the card, `tools/boot_profile.py` measures it:
+`--until "/ # "`, the same day). `docs/machine/speed.md` has the shell's other loads. On the card, `tools/boot_profile.py` measures it:
 run the harness with `--frame-log FILE` and give it the file.
 
 ## No firmware
