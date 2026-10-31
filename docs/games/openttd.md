@@ -419,7 +419,7 @@ about 40 s to make, then 15 pictures and all 37 ticks a second.
 
 ### Speed on 31 October
 
-The picture's interval is 66 ms (`OPENTTD_FRAME_MS`): a picture that does not wait for it lets the pace space the ticks less.
+These figures are from before "Pictures the tick does not wait for", at an interval of 66 ms (`OPENTTD_FRAME_MS`, now 33): a picture that does not wait for it lets the pace space the ticks less.
 
 On the card, RTX 5090 (`rvc_harness --d3d11 --unity 11.1,1.4,0.75`, `OPENTTD_PLAY=2`, two runs):
 
@@ -432,6 +432,44 @@ On the card, RTX 5090 (`rvc_harness --d3d11 --unity 11.1,1.4,0.75`, `OPENTTD_PLA
 | the whole run, s | 68.7, 66.6 |
 
 Under a VR frame the card's game ticks are about two thirds of the calibrated run's 4.0 a second above.
+
+## Pictures the tick does not wait for
+
+Upstream's game holds the world still while it draws. Here the tick runs on a worker and was held while a picture's windows ran and
+through its flush, about 50 ms a hold; and the 66 ms interval, not the work, bounded pictures (uncapped, the scroll made 40 a second).
+So the interval is 33 ms (`OPENTTD_FRAME_MS`) and a picture with nothing dirty but views, no event and no button down, in the middle
+of a tick, is drawn with the tick running (`_se_light`, `TwLightPicture`, `SeDirtyOnlyViews`; `OPENTTD_LIGHT=0` is without, and
+`OPENTTD_CHECK` turns it off, as a picture to compare wants the map still). It reads each vehicle's drawn copy, not the vehicle, and a
+followed vehicle's too. What it owes (stale texts, scheduled invalidations, sprites of vehicles first seen) `SeHeldWork` does at the
+next hold, and a held picture with nothing else to draw lets the tick go at that point. At most `OPENTTD_LIGHT_MOST` (8) in a row.
+A pointer that only moves is seen at most every 66 ms (`pointer_waits`): each sight is a hold.
+
+Ships' paths ahead now run during the tick (below, "Ships' paths made ahead"), and the counts were made again, with the building part.
+
+## Gameplay scenes
+
+Calibrated, 31 October 2026, `rvc_cpu --pass-model tools/card_model.json`, `RVC_THREADS=8`, means of rounds 2 to 6, good to about 7%.
+Before is the tree of f037d43 in a private image; building's before is the same binary with `OPENTTD_LIGHT=0 OPENTTD_FRAME_MS=66
+OPENTTD_SHIP_LOOPS=0` (it has the new counts, 8 to 12% of the ticks in the scenes it was measured in, and the part did not exist). Parts: `OPENTTD_PLAY_PART=scroll`,
+`follow`, `window` with `OPENTTD_PLAY_SCENE=none|many|vehicle`, `build` (the highlight every 66 ms, a road, rails, a station or a bus stop every
+400 ms, by the clock so that faster pictures do not ask for more), `zoom`.
+
+| Scene | Pictures a second before, after | Ticks a second before, after | x pictures, ticks |
+|---|---|---|---|
+| scroll | 15.17, 30.46 | 5.66, 7.72 | 2.01, 1.36 |
+| following a vehicle | 15.18, 30.83 | 5.92, 8.12 | 2.03, 1.37 |
+| windows, none open | 15.17, 30.39 | 6.84, 8.40 | 2.00, 1.23 |
+| many windows open | 15.18, 26.52 | 5.74, 7.04 | 1.75, 1.23 |
+| vehicle windows | 15.09, 31.07 | 6.15, 8.36 | 2.06, 1.36 |
+| building | 14.06, 26.04 | 5.81, 6.16 | 1.85, 1.06 |
+| zoomed out | 7.51, 11.47 | 3.42, 4.08 | 1.53, 1.19 |
+
+Ticks are bounded by a tick's length on one core: about 100 ms (94 to 103) of the worker's, and it waits 21 to 34% of the time. With no
+wait at all that is 10 a second, under the 2x of 11 to 13. Vehicles run in pool order on one random stream, so a tick is not split
+without changing the game. Zoomed out is bounded by the pieces (6 million instructions a picture, the dearest 300k).
+
+On the card, RTX 5090, one run (`--d3d11 --unity 11.1,1.4,0.75`, `OPENTTD_PLAY=2`), round 2: 12.57 pictures and 3.77 game ticks a
+second, against the 10.29 to 11.21 and 2.57 to 2.86 of "Speed on 31 October"; a VR frame's rounds take much of the gain.
 
 ## The start
 
@@ -577,6 +615,11 @@ The water regions made invalid are made at the end of each tick's vehicles, one 
 workers (`WaterRegionsMakeAll` in `water_regions.cpp`, from main's 5a3b851: the labeling `Make` into a
 `WaterRegionMade` of its own, `Keep` on the first core). A ship's job that still makes a region of its own
 waits at every sixteenth tile of it (`SeShipAheadPoll`).
+
+While the tick runs on a worker, two workers of the paths' own (`AheadLoop`, started with the tick's worker; `OPENTTD_SHIP_LOOPS=0` is without)
+make the paths with the map not still, and `SeShipAheadPoll` does not wait: everything a job read is compared when the path is taken,
+and a region's generation moves when it goes invalid and when it is made, so what was read over a change is refused. Before, a tick that
+never stopped took almost none (21 made, 0 taken); with them 50 of 65 were taken and 0 differed, over 25 rounds of the follow part.
 
 `OPENTTD_SHIP_AHEAD=check` makes every path taken again on the first core and compares the two:
 0 differ; the `ship paths ahead` line at the end says how many were made, taken, invalid and why.

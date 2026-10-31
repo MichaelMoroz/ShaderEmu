@@ -374,6 +374,11 @@
   `AddDirtyView` (only windows with a viewport are drawn there, the viewport's widget alone), and what the tick says of a window's widgets
   waits in `AddDirtyLater` for `OPENTTD_WINDOW_MS`; what a click or a key marks, or a window that comes, goes or changes, is at once. Measure
   with `OPENTTD_PLAY_PART=window`, by the share of the time the tick is held, and `test_all.py openttd-windows` must say 0 pixels.
+- OpenTTD draws a picture every 33 ms and a picture with only views to draw does not hold the tick (`docs/games/openttd.md`, "Pictures
+  the tick does not wait for"; `_se_light`, `OPENTTD_LIGHT=0` and `OPENTTD_FRAME_MS=66` are the way before): what such a picture reaches
+  reads a vehicle's drawn copy and changes no game state, and what it owes (stale texts, invalidations, new vehicles' sprites) is done by
+  `SeHeldWork` at the next hold. Ships' paths are made during the tick by two workers of their own (`AheadLoop`, `OPENTTD_SHIP_LOOPS=0`
+  is without): the map is not still under them, so all they read is compared when the path is taken, and `OPENTTD_SHIP_AHEAD=check` must say 0 differ.
 - OpenTTD is compiled whole with `openttd.profile.gz` (`docs/games/openttd.md`, "The compiler"): its LTO link keeps
   `-fdata-sections -fno-common` and the 16-byte assembler, or statics a worker writes share texels (`RVC_RACES` undone), and
   after a large change to the source `linux/openttd/counts.py` makes the counts anew. `build.sh` puts the tree back from

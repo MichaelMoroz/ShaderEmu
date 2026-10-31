@@ -665,7 +665,7 @@ index c1de3c5..f0c5f07 100644
  	void UpdateData()
  	{
 diff --git a/src/gfx.cpp b/src/gfx.cpp
-index 2cae30c..62d6dd5 100644
+index 2cae30c..776af6a 100644
 --- a/src/gfx.cpp
 +++ b/src/gfx.cpp
 @@ -29,6 +29,9 @@
@@ -705,7 +705,7 @@ index 2cae30c..62d6dd5 100644
  
  static const uint DIRTY_BLOCK_HEIGHT   = 8;
  static const uint DIRTY_BLOCK_WIDTH    = 64;
-@@ -80,6 +93,13 @@ static const uint DIRTY_BLOCK_WIDTH    = 64;
+@@ -80,6 +93,14 @@ static const uint DIRTY_BLOCK_WIDTH    = 64;
  static size_t _dirty_blocks_per_row = 0;
  static size_t _dirty_blocks_per_column = 0;
  static std::vector<uint8_t> _dirty_blocks;
@@ -714,12 +714,13 @@ index 2cae30c..62d6dd5 100644
 +static constexpr uint8_t DIRTY_ALL = 0xFF;
 +static std::vector<uint8_t> _dirty_later; ///< a window's widgets the game's tick changed: marked at most every OPENTTD_WINDOW_MS
 +bool _se_tick_marks; ///< what marks a window now comes from the game's tick (docs/games/openttd.md, "Windows")
++bool _se_light;
 +bool _se_views_only; ///< the rectangle being drawn again is marked DIRTY_VIEW: only windows with a viewport are drawn in it
 +#endif
  extern uint _dirty_block_colour;
  
  void GfxScroll(int left, int top, int width, int height, int xo, int yo)
-@@ -88,6 +108,10 @@ void GfxScroll(int left, int top, int width, int height, int xo, int yo)
+@@ -88,6 +109,10 @@ void GfxScroll(int left, int top, int width, int height, int xo, int yo)
  
  	if (xo == 0 && yo == 0) return;
  
@@ -730,7 +731,7 @@ index 2cae30c..62d6dd5 100644
  	if (_cursor.visible) UndrawMouseCursor();
  
  	if (_networking) NetworkUndrawChatMessage();
-@@ -1241,6 +1265,9 @@ std::unique_ptr<uint32_t[]> DrawSpriteToRgbaBuffer(SpriteID spriteId, ZoomLevel
+@@ -1241,6 +1266,9 @@ std::unique_ptr<uint32_t[]> DrawSpriteToRgbaBuffer(SpriteID spriteId, ZoomLevel
  
  static void GfxMainBlitterViewport(const Sprite *sprite, int x, int y, BlitterMode mode, const SubSprite *sub, SpriteID sprite_id)
  {
@@ -740,7 +741,7 @@ index 2cae30c..62d6dd5 100644
  	GfxBlitter<ZOOM_BASE, false>(sprite, x, y, mode, sub, sprite_id, _cur_dpi->zoom);
  }
  
-@@ -1320,6 +1347,9 @@ void ScreenSizeChanged()
+@@ -1320,6 +1348,9 @@ void ScreenSizeChanged()
  	_dirty_blocks_per_row = CeilDiv(_screen.width, DIRTY_BLOCK_WIDTH);
  	_dirty_blocks_per_column = CeilDiv(_screen.height, DIRTY_BLOCK_HEIGHT);
  	_dirty_blocks.resize(_dirty_blocks_per_column * _dirty_blocks_per_row);
@@ -750,7 +751,7 @@ index 2cae30c..62d6dd5 100644
  
  	/* check the dirty rect */
  	if (_invalid_rect.right >= _screen.width) _invalid_rect.right = _screen.width;
-@@ -1337,9 +1367,15 @@ void UndrawMouseCursor()
+@@ -1337,9 +1368,15 @@ void UndrawMouseCursor()
  {
  	/* Don't undraw mouse cursor if it is handled by the video driver. */
  	if (VideoDriver::GetInstance()->UseSystemCursor()) return;
@@ -766,7 +767,7 @@ index 2cae30c..62d6dd5 100644
  
  	if (_cursor.visible) {
  		Blitter *blitter = BlitterFactory::GetCurrentBlitter();
-@@ -1353,6 +1389,9 @@ void DrawMouseCursor()
+@@ -1353,6 +1390,9 @@ void DrawMouseCursor()
  {
  	/* Don't draw mouse cursor if it is handled by the video driver. */
  	if (VideoDriver::GetInstance()->UseSystemCursor()) return;
@@ -776,7 +777,7 @@ index 2cae30c..62d6dd5 100644
  
  	/* Don't draw the mouse cursor if the screen is not ready */
  	if (_screen.dst_ptr == nullptr) return;
-@@ -1361,6 +1400,9 @@ void DrawMouseCursor()
+@@ -1361,6 +1401,9 @@ void DrawMouseCursor()
  
  	/* Redraw mouse cursor but only when it's inside the window */
  	if (!_cursor.in_window) return;
@@ -786,7 +787,7 @@ index 2cae30c..62d6dd5 100644
  
  	/* Don't draw the mouse cursor if it's already drawn */
  	if (_cursor.visible) {
-@@ -1437,6 +1479,10 @@ void RedrawScreenRect(int left, int top, int right, int bottom)
+@@ -1437,6 +1480,10 @@ void RedrawScreenRect(int left, int top, int right, int bottom)
  
  	if (_networking) NetworkUndrawChatMessage();
  
@@ -797,7 +798,7 @@ index 2cae30c..62d6dd5 100644
  	DrawOverlappedWindowForAll(left, top, right, bottom);
  
  	VideoDriver::GetInstance()->MakeDirty(left, top, right - left, bottom - top);
-@@ -1449,15 +1495,48 @@ void RedrawScreenRect(int left, int top, int right, int bottom)
+@@ -1449,15 +1496,50 @@ void RedrawScreenRect(int left, int top, int right, int bottom)
   *
   * @ingroup dirty
   */
@@ -818,11 +819,13 @@ index 2cae30c..62d6dd5 100644
 -	auto is_dirty = [](auto block) -> bool { return block != 0; };
 +#ifdef WITH_SHADEREMU
 +	extern void RefreshStaleTextEffects();
-+	RefreshStaleTextEffects();
++	if (!_se_light) RefreshStaleTextEffects();
 +	ShipAheadQuiet quiet;
 +	ViewportKeep keep;
-+#endif
++	if (!_se_light) SeDirtyLaterDue(false);
++#else
 +	SeDirtyLaterDue(false);
++#endif
 +#ifdef WITH_SHADEREMU
 +	/* (the columns and rows anything was marked in, not the whole grid at every picture) */
 +	const size_t first_x = _invalid_rect.left >= _invalid_rect.right ? _dirty_blocks_per_row : _invalid_rect.left / DIRTY_BLOCK_WIDTH;
@@ -848,7 +851,7 @@ index 2cae30c..62d6dd5 100644
  
  			/* First try coalescing downwards */
  			size_t height = std::find_if_not(block + 1, last_of_column, is_dirty) - block;
-@@ -1489,11 +1568,16 @@ void DrawDirtyBlocks()
+@@ -1489,11 +1571,16 @@ void DrawDirtyBlocks()
  			bottom = std::min(_invalid_rect.bottom, bottom);
  
  			if (left < right && top < bottom) {
@@ -865,7 +868,7 @@ index 2cae30c..62d6dd5 100644
  	++_dirty_block_colour;
  	_invalid_rect.left = _screen.width;
  	_invalid_rect.top = _screen.height;
-@@ -1515,6 +1599,9 @@ void DrawDirtyBlocks()
+@@ -1515,6 +1602,9 @@ void DrawDirtyBlocks()
   */
  void AddDirtyBlock(int left, int top, int right, int bottom)
  {
@@ -875,7 +878,7 @@ index 2cae30c..62d6dd5 100644
  	if (left < 0) left = 0;
  	if (top < 0) top = 0;
  	if (right > _screen.width) right = _screen.width;
-@@ -1534,12 +1621,98 @@ void AddDirtyBlock(int left, int top, int right, int bottom)
+@@ -1534,12 +1624,114 @@ void AddDirtyBlock(int left, int top, int right, int bottom)
  
  	assert(left < right && height > 0);
  
@@ -917,6 +920,22 @@ index 2cae30c..62d6dd5 100644
 +		if (_dirty_later[i] != 0) _dirty_blocks[i] = DIRTY_ALL, _dirty_later[i] = 0;
 +	}
 +	_invalid_rect = { 0, 0, _screen.width, _screen.height };
++}
++
++/** Whether all that is marked is viewports' and nothing that waits for later is due. */
++bool SeDirtyOnlyViews()
++{
++	if (_se_later_any && static_cast<int32_t>(VpTime() - _se_later_next) >= 0) return false;
++	if (_invalid_rect.left >= _invalid_rect.right) return true;
++	const size_t first_x = _invalid_rect.left / DIRTY_BLOCK_WIDTH, end_x = std::min<size_t>(_dirty_blocks_per_row, CeilDiv(_invalid_rect.right, DIRTY_BLOCK_WIDTH));
++	const size_t first_y = _invalid_rect.top / DIRTY_BLOCK_HEIGHT, end_y = std::min<size_t>(_dirty_blocks_per_column, CeilDiv(_invalid_rect.bottom, DIRTY_BLOCK_HEIGHT));
++	for (size_t x = first_x; x < end_x; ++x) {
++		const uint8_t *col = _dirty_blocks.data() + _dirty_blocks_per_column * x;
++		for (size_t y = first_y; y < end_y; ++y) {
++			if (col[y] != 0 && col[y] != DIRTY_VIEW) return false;
++		}
++	}
++	return true;
 +}
 +
 +/** A round of them is drawn: the next at OPENTTD_WINDOW_MS at least, and at 16 times what this one took (a few windows dear to draw, some 6% of the time at most). */
@@ -974,7 +993,7 @@ index 2cae30c..62d6dd5 100644
  /**
   * This function mark the whole screen as dirty. This results in repainting
   * the whole screen. Use this with care as this function will break the
-@@ -1548,6 +1721,10 @@ void AddDirtyBlock(int left, int top, int right, int bottom)
+@@ -1548,6 +1740,10 @@ void AddDirtyBlock(int left, int top, int right, int bottom)
   */
  void MarkWholeScreenDirty()
  {
@@ -986,10 +1005,10 @@ index 2cae30c..62d6dd5 100644
  }
  
 diff --git a/src/gfx_func.h b/src/gfx_func.h
-index 4254611..fdf9131 100644
+index 4254611..31b771b 100644
 --- a/src/gfx_func.h
 +++ b/src/gfx_func.h
-@@ -184,6 +184,126 @@ std::pair<uint8_t, uint8_t> GetBroadestDigit(FontSize size);
+@@ -184,6 +184,129 @@ std::pair<uint8_t, uint8_t> GetBroadestDigit(FontSize size);
  
  int GetCharacterHeight(FontSize size);
  
@@ -1053,6 +1072,9 @@ index 4254611..fdf9131 100644
 +extern void *_tw_dying; ///< a vehicle the tick deletes: its memory is freed by the first core, once out of the viewports
 +void TickReleaseForFlush(); ///< the viewport's last flush of a picture: the tick goes on while it is drawn
 +extern bool _tw_running; ///< the first core's: the tick on its worker is not waiting
++extern bool _se_light; ///< a picture the tick is not held for: only views are drawn (docs/games/openttd.md, "Pictures the tick does not wait for")
++void SeHeldWork(); ///< the tick held: what UpdateWindows reads of the game, made now
++bool SeDirtyOnlyViews(); ///< nothing but viewports wants drawing, now and from what waits for later
 +inline bool TickRunning() { return _tw_running; }
 +extern bool _tw_on; ///< the first core's: the game's state is the tick's worker's to change
 +inline bool TickElsewhere() { return _tw_on && !TickOnWorker(); }
@@ -2928,10 +2950,10 @@ index 3f257e2..0392c91 100644
  			if (best_open_node == nullptr) break;
  
 diff --git a/src/pathfinder/yapf/yapf_ship.cpp b/src/pathfinder/yapf/yapf_ship.cpp
-index b024edb..9d5d961 100644
+index b024edb..89d2718 100644
 --- a/src/pathfinder/yapf/yapf_ship.cpp
 +++ b/src/pathfinder/yapf/yapf_ship.cpp
-@@ -16,8 +16,416 @@
+@@ -16,8 +16,423 @@
  #include "yapf_ship_regions.h"
  #include "../water_regions.h"
  
@@ -3116,6 +3138,12 @@ index b024edb..9d5d961 100644
 +struct alignas(16) AheadPost { volatile uint32_t decided = 0, posted = 0; mcw_handle h = 0; };
 +AheadPost _ahead_post[AHEAD_SLOTS];
 +bool _ahead_broken = false;
++/* The tick on a worker: workers of the paths' own, which read the map while the tick runs (docs/games/openttd.md, "Ships' paths made ahead") */
++constexpr int AHEAD_LOOPS = 2;
++struct alignas(16) AheadLoopWord { volatile uint32_t v = 0; };
++AheadLoopWord _ahead_loop_stop;
++int _ahead_loops = 0;
++mcw_handle _ahead_loop_handle[AHEAD_LOOPS] = {};
 +struct { uint32_t launched, taken, none, moved, late, refused[12], invalid, checked, differ, why[12], waited, unposted; } _ahead_stats;
 +
 +int AheadMode()
@@ -3271,6 +3299,7 @@ index b024edb..9d5d961 100644
 +	AheadSlot *s = AheadOf();
 +	for (;;) {
 +		if (s->in.cancel) SeShipAheadRefuse(4);
++		if (_ahead_loops != 0) return; /* (what it reads is compared when the path is taken: the map need not be still) */
 +		const uint32_t q = _ahead_quiet.v;
 +		/* (it reads only once its word that it reads (ack) was stored in an earlier pass and the map is still still:
 +		 * whoever ends the stillness then waits for every job whose word says it reads; YapfShipAheadStop) */
@@ -3348,7 +3377,7 @@ index b024edb..9d5d961 100644
  constexpr int NUMBER_OR_WATER_REGIONS_LOOKAHEAD = 4;
  constexpr int MAX_SHIP_PF_NODES = (NUMBER_OR_WATER_REGIONS_LOOKAHEAD + 1) * WATER_REGION_NUMBER_OF_TILES * 4; // 4 possible exit dirs per tile.
  
-@@ -43,6 +451,17 @@ protected:
+@@ -43,6 +458,17 @@ protected:
  public:
  	void SetDestination(const Ship *v)
  	{
@@ -3366,7 +3395,7 @@ index b024edb..9d5d961 100644
  		if (v->current_order.IsType(OT_GOTO_STATION)) {
  			this->dest_station = v->current_order.GetDestination().ToStationID();
  			this->dest_tile = CalcClosestStationTile(this->dest_station, v->tile, StationType::Dock);
-@@ -83,6 +502,19 @@ public:
+@@ -83,6 +509,19 @@ public:
  			return GetWaterRegionPatchInfo(tile) == this->intermediate_dest_region_patch;
  		}
  
@@ -3386,7 +3415,7 @@ index b024edb..9d5d961 100644
  		if (this->dest_station != StationID::Invalid()) return IsDockingTile(tile) && IsShipDestinationTile(tile, this->dest_station);
  
  		return tile == this->dest_tile && ((this->dest_trackdirs & TrackdirToTrackdirBits(trackdir)) != TRACKDIR_BIT_NONE);
-@@ -134,6 +566,24 @@ public:
+@@ -134,6 +573,24 @@ public:
  	inline void PfFollowNode(Node &old_node)
  	{
  		TrackFollower follower{Yapf().GetVehicle()};
@@ -3411,7 +3440,7 @@ index b024edb..9d5d961 100644
  		if (follower.Follow(old_node.key.tile, old_node.key.td)) {
  			if (this->water_region_corridor.empty()
  					|| std::ranges::find(this->water_region_corridor, GetWaterRegionInfo(follower.new_tile)) != this->water_region_corridor.end()) {
-@@ -158,6 +608,9 @@ public:
+@@ -158,6 +615,9 @@ public:
  	/** Returns a random trackdir out of a set of trackdirs. */
  	static Trackdir GetRandomTrackdir(TrackdirBits trackdirs)
  	{
@@ -3421,7 +3450,7 @@ index b024edb..9d5d961 100644
  		const int strip_amount = RandomRange(CountBits(trackdirs));
  		for (int s = 0; s < strip_amount; ++s) RemoveFirstTrackdir(&trackdirs);
  		return FindFirstTrackdir(trackdirs);
-@@ -368,12 +821,20 @@ public:
+@@ -368,12 +828,20 @@ public:
  		/* Additional penalty for curves. */
  		c += this->CurveCost(n.parent->GetTrackdir(), n.GetTrackdir());
  
@@ -3442,7 +3471,7 @@ index b024edb..9d5d961 100644
  			c += count * 3 * YAPF_TILE_LENGTH;
  		}
  
-@@ -424,14 +885,552 @@ struct CYapfShip_TypesT {
+@@ -424,14 +892,606 @@ struct CYapfShip_TypesT {
  
  struct CYapfShip : CYapfT<CYapfShip_TypesT<CYapfShip>> {
  	explicit CYapfShip(int max_nodes) { this->max_search_nodes = max_nodes; }
@@ -3806,6 +3835,7 @@ index b024edb..9d5d961 100644
 +		in.cancel = 0;
 +		s.out.ack = ~0u;
 +		if (_tw_on) {
++			if (_ahead_loops != 0) _ahead_post[k].decided = _ahead_post[k].posted = in.req + 1;
 +			in.req = in.req + 1;
 +			_ahead_state[k] = AHEAD_RUNNING;
 +			_ahead_stats.launched++;
@@ -3828,7 +3858,7 @@ index b024edb..9d5d961 100644
 +
 +void YapfShipAheadQuiet(bool on)
 +{
-+	if (_ahead_slots == nullptr || _tw_on) return;
++	if (_ahead_slots == nullptr || _tw_on) return; /* (so also for a picture the tick is not held for) */
 +	if (on) {
 +		/* A picture with no tick since the last (the game paused, or drawn faster than it ticks): the paths are
 +		 * given up, not made on, so that every worker draws. The jobs launched at a tick held up to nine workers
@@ -3878,7 +3908,7 @@ index b024edb..9d5d961 100644
 + */
 +void YapfShipAheadService()
 +{
-+	if (_ahead_slots == nullptr || TickOnWorker() || mcw_on_worker()) return;
++	if (_ahead_slots == nullptr || TickOnWorker() || mcw_on_worker() || _ahead_loops != 0) return;
 +	bool ended = false;
 +	for (int k = 0; k < AHEAD_SLOTS; k++) {
 +		AheadPost &f = _ahead_post[k];
@@ -3909,7 +3939,7 @@ index b024edb..9d5d961 100644
 + */
 +void YapfShipAheadStop()
 +{
-+	if (_ahead_slots == nullptr) return;
++	if (_ahead_slots == nullptr || _ahead_loops != 0) return;
 +	const uint32_t q = _ahead_quiet.v;
 +	if ((q & 1) == 0) return;
 +	_ahead_quiet.v = q + 1;
@@ -3944,9 +3974,62 @@ index b024edb..9d5d961 100644
 +/** The tick on its worker waits, between two ticks or for a path: the map is still until YapfShipAheadStop. */
 +void YapfShipAheadGo()
 +{
-+	if (_ahead_slots == nullptr) return;
++	if (_ahead_slots == nullptr || _ahead_loops != 0) return;
 +	const uint32_t q = _ahead_quiet.v;
 +	if ((q & 1) == 0) _ahead_quiet.v = q + 1;
++}
++
++int YapfShipAheadLoops() { return _ahead_loops; }
++
++/** A worker of the paths' own: the jobs of its slots, as the tick asks for them. */
++static uint32_t AheadLoop(uint32_t who, uint32_t)
++{
++	while (_ahead_loop_stop.v == 0) {
++		bool any = false;
++		for (int k = who; k < AHEAD_SLOTS; k += AHEAD_LOOPS) {
++			AheadSlot &s = _ahead_slots[k];
++			const uint32_t r = s.in.req;
++			if (s.out.ended != r) {
++				AheadJob(static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&s)), r);
++				any = true;
++			}
++		}
++		if (!any) mc_end_pass();
++	}
++	return 0;
++}
++
++/** The first core, the tick waiting between two ticks and no path out: the paths' workers begin or end. OPENTTD_SHIP_LOOPS=0: none. */
++void YapfShipAheadWorkers(bool on)
++{
++	static const bool off = GetEnv("OPENTTD_SHIP_LOOPS").has_value();
++	if (_ahead_slots == nullptr || off || AheadMode() == 0) return;
++	if (!on) {
++		if (_ahead_loops == 0) return;
++		_ahead_loop_stop.v = 1;
++		for (int i = 0; i < _ahead_loops; i++) mcw_join(_ahead_loop_handle[i]);
++		_ahead_loops = 0;
++		return;
++	}
++	if (_ahead_loops != 0) return;
++	for (int k = 0; k < AHEAD_SLOTS; k++) {
++		_ahead_slots[k].out.ended = _ahead_slots[k].in.req;
++		_ahead_post[k].decided = _ahead_slots[k].in.req;
++		_ahead_post[k].h = 0;
++	}
++	_ahead_loop_stop.v = 0;
++	mcw_for_end();
++	int n = 0;
++	for (; n < AHEAD_LOOPS; n++) {
++		_ahead_loop_handle[n] = mcw_try_call(AheadLoop, n, 0);
++		if (_ahead_loop_handle[n] == 0) break;
++	}
++	if (n < AHEAD_LOOPS) { /* (all or none: a slot's worker is its number's) */
++		_ahead_loop_stop.v = 1;
++		for (int i = 0; i < n; i++) mcw_join(_ahead_loop_handle[i]);
++		return;
++	}
++	_ahead_loops = n;
 +}
 +
 +void YapfShipAheadInit()
@@ -5941,7 +6024,7 @@ index 91a1111..9d12b4f 100644
  		return TrainLocoHandler(this, true);
  	} else if (this->IsFreeWagon() && this->vehstatus.Test(VehState::Crashed)) {
 diff --git a/src/vehicle.cpp b/src/vehicle.cpp
-index 91588a6..c9a7f40 100644
+index 91588a6..391c73b 100644
 --- a/src/vehicle.cpp
 +++ b/src/vehicle.cpp
 @@ -60,9 +60,19 @@
@@ -6365,7 +6448,7 @@ index 91588a6..c9a7f40 100644
  						VehicleSpriteSeq seq;
  						v->GetImage(v->direction, EIT_ON_MAP, &seq);
  
-@@ -1187,12 +1502,31 @@ void ViewportAddVehicles(DrawPixelInfo *dpi)
+@@ -1187,12 +1502,32 @@ void ViewportAddVehicles(DrawPixelInfo *dpi)
  						}
  
  						v->sprite_cache.revalidate_before_draw = false;
@@ -6381,6 +6464,7 @@ index 91588a6..c9a7f40 100644
 +						VehKept &k = _veh_kept.emplace_back();
 +						k.coord = v->coord;
 +						DrawnCopy(k.drawn, v->drawn);
++						if (TickRunning()) k.drawn.revalidate = false; /* (drawn as it is: made at the next hold, SeHeldWork) */
 +					}
 +					const int slack = 2 * (ScaleByZoom(1, dpi->zoom) - 1); /* (as AddSortableSpriteToDraw's) */
 +#else
@@ -6400,7 +6484,7 @@ index 91588a6..c9a7f40 100644
  				}
  
  				v = v->hash_viewport_next;
-@@ -1668,10 +2002,25 @@ void Vehicle::UpdatePosition()
+@@ -1668,10 +2003,25 @@ void Vehicle::UpdatePosition()
   * Update the bounding box co-ordinates of the vehicle
   * @param update_cache Update the cached values for previous co-ordinate values
   */
@@ -6427,7 +6511,7 @@ index 91588a6..c9a7f40 100644
  
  	/* z-bounds are not used. */
  	Point pt = RemapCoords(this->x_pos + this->bounds.origin.x + this->bounds.offset.x, this->y_pos + this->bounds.origin.y + this->bounds.offset.y, this->z_pos);
-@@ -1690,6 +2039,9 @@ void Vehicle::UpdateBoundingBoxCoordinates(bool update_cache) const
+@@ -1690,6 +2040,9 @@ void Vehicle::UpdateBoundingBoxCoordinates(bool update_cache) const
  		new_coord.top    = std::min(new_coord.top, RemapCoords(x, y, z + bounds.extent.z).y);
  		new_coord.bottom = std::max(new_coord.bottom, RemapCoords(x + bounds.extent.x, y + bounds.extent.y, z).y + 1);
  	}
@@ -6437,7 +6521,7 @@ index 91588a6..c9a7f40 100644
  
  	if (update_cache) {
  		/*
-@@ -1713,12 +2065,114 @@ void Vehicle::UpdateBoundingBoxCoordinates(bool update_cache) const
+@@ -1713,12 +2066,114 @@ void Vehicle::UpdateBoundingBoxCoordinates(bool update_cache) const
   * Update the vehicle on the viewport, updating the right hash and setting the new coordinates.
   * @param dirty Mark the (new and old) coordinates of the vehicle as dirty.
   */
@@ -6552,7 +6636,7 @@ index 91588a6..c9a7f40 100644
  
  	if (ignore_cached_coords) {
  		UpdateVehicleViewportHash(this, this->coord.left, this->coord.top, INVALID_COORD, INVALID_COORD);
-@@ -1726,6 +2180,11 @@ void Vehicle::UpdateViewport(bool dirty)
+@@ -1726,6 +2181,11 @@ void Vehicle::UpdateViewport(bool dirty)
  		UpdateVehicleViewportHash(this, this->coord.left, this->coord.top, this->sprite_cache.old_coord.left, this->sprite_cache.old_coord.top);
  	}
  
@@ -6564,7 +6648,7 @@ index 91588a6..c9a7f40 100644
  	if (dirty) {
  		if (ignore_cached_coords) {
  			this->sprite_cache.is_viewport_candidate = this->MarkAllViewportsDirty();
-@@ -1754,6 +2213,10 @@ void Vehicle::UpdatePositionAndViewport()
+@@ -1754,6 +2214,10 @@ void Vehicle::UpdatePositionAndViewport()
   */
  bool Vehicle::MarkAllViewportsDirty() const
  {
@@ -6859,7 +6943,7 @@ index 7aafcbd..2b5a339 100644
  };
  
 diff --git a/src/viewport.cpp b/src/viewport.cpp
-index 6427a14..564e9a7 100644
+index 6427a14..5f27bfd 100644
 --- a/src/viewport.cpp
 +++ b/src/viewport.cpp
 @@ -99,6 +99,11 @@
@@ -7862,7 +7946,7 @@ index 6427a14..564e9a7 100644
  	ViewportDrawParentSprites(&_vd.parent_sprites_to_sort, &_vd.child_screen_sprites_to_draw);
  
  	if (_draw_bounding_boxes) ViewportDrawBoundingBoxes(&_vd.parent_sprites_to_sort);
-@@ -1897,6 +2539,855 @@ static inline void ViewportDraw(const Viewport &vp, int left, int top, int right
+@@ -1897,6 +2539,856 @@ static inline void ViewportDraw(const Viewport &vp, int left, int top, int right
  	);
  }
  
@@ -7965,7 +8049,7 @@ index 6427a14..564e9a7 100644
 +	if (_vp_workers >= 0) return _vp_workers;
 +	ScrollSettle();
 +	const char *asked = getenv("OPENTTD_WORKERS");
-+	int want = asked != nullptr ? 0 : 47; /* (more cost the first core more than they gain: docs/games/openttd.md) */
++	int want = asked != nullptr ? 0 : 47 + 2; /* (47 and the ships' paths' two; more cost the first core more than they gain: docs/games/openttd.md) */
 +	for (const char *c = asked; c != nullptr && *c >= '0' && *c <= '9'; c++) want = want * 10 + (*c - '0');
 +	want = std::min(want, VP_CORES - 1);
 +	_vp_workers = 0;
@@ -8399,7 +8483,8 @@ index 6427a14..564e9a7 100644
 +	if (last) TickReleaseForFlush();
 +	/* (the first core hands the pieces out: at most one a worker, OPENTTD_CUT=old one a core) */
 +	static const bool cut_old = getenv("OPENTTD_CUT") != nullptr;
-+	const int cores = _vp_workers + (cut_old ? 1 : 0) - (_tw_on ? 1 : 0); /* (the tick's worker draws nothing) */
++	extern int YapfShipAheadLoops();
++	const int cores = _vp_workers + (cut_old ? 1 : 0) - (_tw_on ? 1 : 0) - YapfShipAheadLoops(); /* (the tick's worker and the ships' paths' draw nothing) */
 +	_vp_pieces.clear();
 +
 +	/* how each part is cut: the dearest piece of all is cut again (in columns or rows) while the flush, the
@@ -8718,7 +8803,7 @@ index 6427a14..564e9a7 100644
  /**
   * Draw the viewport of this window.
   */
-@@ -1965,7 +3456,21 @@ static void ClampSmoothScroll(uint32_t delta_ms, int64_t delta_hi, int64_t delta
+@@ -1965,7 +3457,21 @@ static void ClampSmoothScroll(uint32_t delta_ms, int64_t delta_hi, int64_t delta
  	assert(delta_hi != 0);
  
  	/* Move at most 75% of the distance every 30ms, for a smooth experience */
@@ -8740,7 +8825,23 @@ index 6427a14..564e9a7 100644
  	/* Move never more than 16 tiles per 30ms. */
  	int max_scroll = Map::ScaleBySize1D(16 * PIXELS_PER_TILE * delta_ms / 30);
  
-@@ -2072,7 +3577,12 @@ static bool MarkViewportDirty(const Viewport &vp, int left, int top, int right,
+@@ -1990,8 +3496,15 @@ void UpdateViewportPosition(Window *w, uint32_t delta_ms)
+ 	ViewportData &vp = *w->viewport;
+ 
+ 	if (vp.follow_vehicle != VehicleID::Invalid()) {
++#ifdef WITH_SHADEREMU
++		const Vehicle *veh = Vehicle::GetIfValid(vp.follow_vehicle);
++		if (veh == nullptr) return; /* (a picture the tick is not held for: it is being deleted) */
++		/* (where it is drawn: the tick may be moving it) */
++		Point pt = _se_light ? MapXYZToViewport(vp, veh->drawn.x, veh->drawn.y, veh->drawn.z) : MapXYZToViewport(vp, veh->x_pos, veh->y_pos, veh->z_pos);
++#else
+ 		const Vehicle *veh = Vehicle::Get(vp.follow_vehicle);
+ 		Point pt = MapXYZToViewport(vp, veh->x_pos, veh->y_pos, veh->z_pos);
++#endif
+ 
+ 		vp.scrollpos_x = pt.x;
+ 		vp.scrollpos_y = pt.y;
+@@ -2072,7 +3585,12 @@ static bool MarkViewportDirty(const Viewport &vp, int left, int top, int right,
  
  	if (top >= vp.virtual_height) return false;
  
@@ -8753,7 +8854,7 @@ index 6427a14..564e9a7 100644
  		UnScaleByZoomLower(left, vp.zoom) + vp.left,
  		UnScaleByZoomLower(top, vp.zoom) + vp.top,
  		UnScaleByZoom(right, vp.zoom) + vp.left + 1,
-@@ -2091,10 +3601,59 @@ static bool MarkViewportDirty(const Viewport &vp, int left, int top, int right,
+@@ -2091,10 +3609,59 @@ static bool MarkViewportDirty(const Viewport &vp, int left, int top, int right,
   * @return true if at least one viewport has a dirty block
   * @ingroup dirty
   */
@@ -8813,7 +8914,7 @@ index 6427a14..564e9a7 100644
  	for (const Window *w : Window::Iterate()) {
  		if (w->viewport != nullptr) {
  			assert(w->viewport->width != 0);
-@@ -2127,6 +3686,10 @@ void ConstrainAllViewportsZoom()
+@@ -2127,6 +3694,10 @@ void ConstrainAllViewportsZoom()
   */
  void MarkTileDirtyByTile(TileIndex tile, int bridge_level_offset, int tile_height_override)
  {
@@ -8980,7 +9081,7 @@ index daf0172..1a64cdb 100644
  
  /**
 diff --git a/src/window.cpp b/src/window.cpp
-index ea6dc5b..67b849e 100644
+index ea6dc5b..f847749 100644
 --- a/src/window.cpp
 +++ b/src/window.cpp
 @@ -42,6 +42,9 @@
@@ -9151,7 +9252,7 @@ index ea6dc5b..67b849e 100644
  	if (allow_resize) {
  		def_width  = std::max(def_width,  this->width); // Don't allow default size to be smaller than smallest size
  		def_height = std::max(def_height, this->height);
-@@ -3124,6 +3187,23 @@ static const IntervalTimer<TimerWindow> white_border_interval(std::chrono::milli
+@@ -3124,6 +3187,48 @@ static const IntervalTimer<TimerWindow> white_border_interval(std::chrono::milli
  /**
   * Update the continuously changing contents of the windows, such as the viewports
   */
@@ -9172,17 +9273,46 @@ index ea6dc5b..67b849e 100644
 +}
 +#endif
 +
++#ifdef WITH_SHADEREMU
++void SeHeldWork()
++{
++	extern void RefreshStaleTextEffects();
++	RefreshStaleTextEffects();
++	for (Window *w : Window::Iterate()) {
++		w->ProcessScheduledResize();
++		w->ProcessScheduledInvalidations();
++		w->ProcessHighlightedInvalidations();
++	}
++	/* (what a vehicle makes when first drawn, for all that the views show: the drawing that follows lets the tick go) */
++	extern void ViewportRevalidateVehicles(DrawPixelInfo *dpi);
++	for (Window *w : Window::Iterate()) {
++		if (w->viewport == nullptr || w->IsShaded()) continue;
++		DrawPixelInfo whole = {};
++		whole.left = w->viewport->virtual_left;
++		whole.top = w->viewport->virtual_top;
++		whole.width = w->viewport->virtual_width;
++		whole.height = w->viewport->virtual_height;
++		whole.zoom = w->viewport->zoom;
++		ViewportRevalidateVehicles(&whole);
++	}
++}
++#endif
++
  void UpdateWindows()
  {
  	static auto last_time = std::chrono::steady_clock::now();
-@@ -3139,8 +3219,17 @@ void UpdateWindows()
+@@ -3139,8 +3244,21 @@ void UpdateWindows()
  
  	ProcessPendingPerformanceMeasurements();
  
 +#ifdef WITH_SHADEREMU
-+	/* (what UpdateWindowsEarly made of the time is not made again) */
-+	const auto timers_ms = delta_ms - std::min(delta_ms, std::exchange(_windows_early_ms, std::chrono::milliseconds{0}));
-+	if (timers_ms.count() != 0) {
++	/* (what UpdateWindowsEarly made of the time is not made again; a picture the tick is not held for owes it to the next) */
++	static std::chrono::milliseconds light_owed{0};
++	const auto timers_ms = delta_ms + std::exchange(light_owed, std::chrono::milliseconds{0}) - std::min(delta_ms, std::exchange(_windows_early_ms, std::chrono::milliseconds{0}));
++	if (_se_light) {
++		light_owed = timers_ms;
++		HandleKeyScrolling();
++	} else if (timers_ms.count() != 0) {
 +		TimerManager<TimerWindow>::Elapsed(timers_ms);
 +		CallWindowRealtimeTickEvent(timers_ms.count());
 +	}
@@ -9193,7 +9323,7 @@ index ea6dc5b..67b849e 100644
  
  	/* Process invalidations before anything else. */
  	for (Window *w : Window::Iterate()) {
-@@ -3153,12 +3242,23 @@ void UpdateWindows()
+@@ -3153,12 +3271,23 @@ void UpdateWindows()
  	 * But still empty the invalidation queues above. */
  	if (_network_dedicated) return;
  
@@ -9217,7 +9347,7 @@ index ea6dc5b..67b849e 100644
  	NetworkDrawChatMessage();
  	/* Redraw mouse cursor in case it was hidden */
  	DrawMouseCursor();
-@@ -3178,6 +3278,9 @@ void UpdateWindows()
+@@ -3178,6 +3307,9 @@ void UpdateWindows()
   */
  void SetWindowDirty(WindowClass cls, WindowNumber number)
  {
@@ -9227,7 +9357,7 @@ index ea6dc5b..67b849e 100644
  	for (const Window *w : Window::Iterate()) {
  		if (w->window_class == cls && w->window_number == number) w->SetDirty();
  	}
-@@ -3191,6 +3294,9 @@ void SetWindowDirty(WindowClass cls, WindowNumber number)
+@@ -3191,6 +3323,9 @@ void SetWindowDirty(WindowClass cls, WindowNumber number)
   */
  void SetWindowWidgetDirty(WindowClass cls, WindowNumber number, WidgetID widget_index)
  {
@@ -9237,7 +9367,7 @@ index ea6dc5b..67b849e 100644
  	for (const Window *w : Window::Iterate()) {
  		if (w->window_class == cls && w->window_number == number) {
  			w->SetWidgetDirty(widget_index);
-@@ -3204,6 +3310,9 @@ void SetWindowWidgetDirty(WindowClass cls, WindowNumber number, WidgetID widget_
+@@ -3204,6 +3339,9 @@ void SetWindowWidgetDirty(WindowClass cls, WindowNumber number, WidgetID widget_
   */
  void SetWindowClassesDirty(WindowClass cls)
  {
@@ -9247,7 +9377,7 @@ index ea6dc5b..67b849e 100644
  	for (const Window *w : Window::Iterate()) {
  		if (w->window_class == cls) w->SetDirty();
  	}
-@@ -3236,6 +3345,9 @@ void Window::ProcessScheduledResize()
+@@ -3236,6 +3374,9 @@ void Window::ProcessScheduledResize()
   */
  void Window::InvalidateData(int data, bool gui_scope)
  {
@@ -9257,7 +9387,7 @@ index ea6dc5b..67b849e 100644
  	this->SetDirty();
  	if (!gui_scope) {
  		/* Schedule GUI-scope invalidation for next redraw. */
-@@ -3296,6 +3408,9 @@ void Window::ProcessHighlightedInvalidations()
+@@ -3296,6 +3437,9 @@ void Window::ProcessHighlightedInvalidations()
   */
  void InvalidateWindowData(WindowClass cls, WindowNumber number, int data, bool gui_scope)
  {
@@ -9267,7 +9397,7 @@ index ea6dc5b..67b849e 100644
  	for (Window *w : Window::Iterate()) {
  		if (w->window_class == cls && w->window_number == number) {
  			w->InvalidateData(data, gui_scope);
-@@ -3313,6 +3428,9 @@ void InvalidateWindowData(WindowClass cls, WindowNumber number, int data, bool g
+@@ -3313,6 +3457,9 @@ void InvalidateWindowData(WindowClass cls, WindowNumber number, int data, bool g
   */
  void InvalidateWindowClassesData(WindowClass cls, int data, bool gui_scope)
  {
@@ -9277,7 +9407,7 @@ index ea6dc5b..67b849e 100644
  	for (Window *w : Window::Iterate()) {
  		if (w->window_class == cls) {
  			w->InvalidateData(data, gui_scope);
-@@ -3512,6 +3630,9 @@ int PositionNetworkChatWindow(Window *w)
+@@ -3512,6 +3659,9 @@ int PositionNetworkChatWindow(Window *w)
   */
  void ChangeVehicleViewports(VehicleID from_index, VehicleID to_index)
  {
