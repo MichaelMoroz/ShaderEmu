@@ -955,6 +955,8 @@ reshape(int w, int h)
 	if (frame.x <= 0 && frame.y <= 0 && frame.x + frame.width >= screen->cols)
 		return 0;
 	want = info.height * w / info.width + BAR;
+	if (want < MIN_H)
+		want = MIN_H;	/* (below it the test at the top sends it back up, and this down again, for ever) */
 	if (want - h <= 2 && h - want <= 2)
 		return 0;
 	if (frame.y + want + (frame.height - client.height) > screen->rows - UI_MENU_BAR)
@@ -1385,6 +1387,12 @@ empty_player(void)
 /* Why a file is not played, on the console and (on a desktop) in a window; then the player
  * stays, with nothing in it, unless `stay` is 0 (NXVIDEO_ONCE: a test). Returns 1, for main. */
 static int
+ask_closing(void)
+{
+	return closing;
+}
+
+static int
 refuse(const char *path, const char *why, int opened, int stay)
 {
 	static const char *const answers[] = { "OK" };
@@ -1397,7 +1405,13 @@ refuse(const char *path, const char *why, int opened, int stay)
 		ui_init();
 	snprintf(text, sizeof text, "%.150s\n%s", strrchr(path, '/') ? strrchr(path, '/') + 1 : path, why);
 	ui_ask_icon = "error";
+	ui_ask_over = ask_closing;
 	ui_ask("Video", text, answers, 1, opened ? while_choosing : NULL);
+	ui_ask_over = NULL;
+	if (closing) {
+		GrClose();
+		_exit(0);
+	}
 	if (!stay || getenv("NXVIDEO_ONCE")) {
 		GrClose();
 		return 1;
@@ -1518,6 +1532,13 @@ main(int argc, char **argv)
 		snprintf(title, sizeof title, "%.120s (%d of %d) - Video", name, list_at + 1, list_n);
 	else
 		snprintf(title, sizeof title, "%.120s - Video", name);
+	/* (the controls want room whatever the film's size; the picture is fitted within it) */
+	if (pic_h < 1)
+		pic_h = 1;
+	if (pic_w < MIN_W)
+		pic_w = MIN_W;
+	if (pic_h + BAR < MIN_H)
+		pic_h = MIN_H - BAR;
 	make_window(title, pic_w, pic_h);
 	say("opening it...");
 

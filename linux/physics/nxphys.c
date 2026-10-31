@@ -1253,7 +1253,7 @@ act(int key)
 			break;
 		sim.stop = 1; exit(0);
 	case 'p': stopped = !stopped; break;
-	case 'c': sim.owners = !sim.owners; break;
+	case 'c': sim.owners = !sim.owners; draw_bar(); break;
 	case 'r': return 1;
 	case '1': case '2': case '3': scene = key - '0'; return 1;
 	case MWKEY_ENTER: scene = scene % 3 + 1; return 1;	/* the next scene: a headset's jump button */
@@ -1853,9 +1853,9 @@ main(void)
 				share_out();
 			else
 				set_shares(sim.nshares);
-			draw_bar();
 			asked = 0;
 			stopped = 0;
+			draw_bar();
 			sim.limit = !steps ? ~0u : steps > sim.base ? steps - sim.base : 1;
 			start_jobs();
 			began = said_at = now_ms();

@@ -94,7 +94,7 @@ progress_show(unsigned long long done, unsigned long long total, const char *lin
 	snprintf(progress_line, sizeof progress_line, "%s", line);
 	ui_fill(progress_window, 0, 0, PROGRESS_W, PROGRESS_H, UI_FACE);
 	{	/* (cut with "..." to what fits: the font's widths as the window system measures them) */
-		char cut[sizeof progress_title];
+		char cut[sizeof progress_title + 4];	/* (room for its "...") */
 		int n = (int)strlen(progress_title), tw, th, tb;
 
 		strcpy(cut, progress_title);

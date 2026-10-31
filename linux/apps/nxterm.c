@@ -277,8 +277,11 @@ keep_line(const struct line *l)
 		free(back[back_first]);
 		back[back_first] = k;
 		back_first = (back_first + 1) % BACK_MOST;
-		if (view)
+		if (view) {
+			if (view < back_count)
+				view++;	/* (what is looked at stays where it is, until it is the oldest there is) */
 			mark_all();
+		}
 	} else {
 		back[(back_first + back_count) % BACK_MOST] = k;
 		back_count++;
@@ -734,6 +737,7 @@ pty_send(const char *s, int n)
 	while (n > 0) {
 		if ((w = (int)write(master, s, n)) > 0) {
 			s += w, n -= w;
+			tries = 0;
 			continue;
 		}
 		if (w < 0 && errno == EINTR)
@@ -1009,6 +1013,7 @@ reset_all(void)
 {
 	int i;
 
+	state = S_GROUND, esc_from = 0, utf_need = 0, osc_n = 0;	/* (the menu's Reset comes in any state: an open ESC ] swallows all) */
 	switch_screen(0);
 	modes_default();
 	clear_screen(0);
@@ -1584,6 +1589,29 @@ set_font(int size)
 }
 
 /* Another font, the window made the size that keeps its columns and rows. */
+/* As many cells as there are, or as fit on the screen under a caption, above the bar (6 and 55: the frame's). */
+static int
+fit_cols(int n)
+{
+	GR_SCREEN_INFO s;
+	int most;
+
+	GrGetScreenInfo(&s);
+	most = (s.cols - 6 - 2 * PAD - UI_SCROLL_W) / cw;
+	return n < most || most < 2 ? n : most;
+}
+
+static int
+fit_rows(int n)
+{
+	GR_SCREEN_INFO s;
+	int most;
+
+	GrGetScreenInfo(&s);
+	most = (s.rows - 55 - 2 * PAD) / chh;
+	return n < most || most < 2 ? n : most;
+}
+
 static void
 change_font(int size)
 {
@@ -1592,7 +1620,8 @@ change_font(int size)
 	set_font(size);
 	snprintf(text, sizeof text, "%d", font_size);
 	reg_set("terminal.size", text);
-	win_w = cols * cw + 2 * PAD + UI_SCROLL_W, win_h = rows * chh + 2 * PAD;
+	/* (a large size in fewer cells: the window's X and its last rows stay on the screen; its size event does the rest) */
+	win_w = fit_cols(cols) * cw + 2 * PAD + UI_SCROLL_W, win_h = fit_rows(rows) * chh + 2 * PAD;
 	GrResizeWindow(win, win_w, win_h);
 	tell_size();
 	paint_frame();
@@ -1713,6 +1742,18 @@ key_bytes(int ch, int mods, char *out)
 	int m = 1 + shift + 2 * altk + 4 * ctrl, number = 0, n = 0;
 	char final = 0, ss3 = 0;
 
+	switch (ch) {	/* the keypad with NumLock off, as the machine starts */
+	case MWKEY_KP8: ch = MWKEY_UP; break;
+	case MWKEY_KP2: ch = MWKEY_DOWN; break;
+	case MWKEY_KP6: ch = MWKEY_RIGHT; break;
+	case MWKEY_KP4: ch = MWKEY_LEFT; break;
+	case MWKEY_KP7: ch = MWKEY_HOME; break;
+	case MWKEY_KP1: ch = MWKEY_END; break;
+	case MWKEY_KP9: ch = MWKEY_PAGEUP; break;
+	case MWKEY_KP3: ch = MWKEY_PAGEDOWN; break;
+	case MWKEY_KP0: ch = MWKEY_INSERT; break;
+	}
+
 	switch (ch) {
 	case MWKEY_UP: final = 'A'; break;
 	case MWKEY_DOWN: final = 'B'; break;
@@ -1797,7 +1838,7 @@ new_terminal(void)
 	for (i = 3; i < 64; i++)
 		close(i);
 	if (folder[0] && chdir(folder) != 0)
-		_exit(126);
+		;	/* (the folder has gone: the new shell starts where this one was started) */
 	execlp("nxterm", "nxterm", (char *)NULL);
 	_exit(127);
 }
@@ -2263,6 +2304,7 @@ main(int argc, char **argv)
 	for (i = 0; i < COLS_MOST; i++)
 		tabs[i] = i % 8 == 0;
 	saved[0].pen = saved[1].pen = pen;
+	cols = fit_cols(cols), rows = fit_rows(rows);
 	if (!ensure(cols, rows))
 		return 1;
 	win_w = cols * cw + 2 * PAD + UI_SCROLL_W, win_h = rows * chh + 2 * PAD;

@@ -8,6 +8,7 @@
 #include "ui_icons.h"
 #include "ui_menu.h"
 #include "ui_ask.h"
+#include <ctype.h>
 #include <math.h>
 #include <stdint.h>
 #include <errno.h>
@@ -1659,6 +1660,33 @@ paste(void)
 
 	if (!text)
 		return;
+	if (mode != PROGRAMMER && n < 60) {
+		/* one number, as Copy gives it: its signs and its exponent are not operators */
+		char *end;
+		const char *s = text;
+
+		strtod(s, &end);
+		while (end > s && isspace((unsigned char)end[0]))
+			end++;
+		if (end > s && !*end && n < (int)sizeof entry - 1 && (isdigit((unsigned char)s[s[0] == '-']) || s[s[0] == '-'] == '.') &&
+		    strspn(s, "0123456789.eE+- \n") == (size_t)n) {
+			/* (the entry itself: Exp is no key of the standard pane, and a key that is not there is not pressed) */
+			int at = 0;
+
+			if (error[0])
+				clear_all();
+			if (!typing) {
+				new_operand();
+				typing = 1;
+			}
+			for (; s < end; s++)
+				entry[at++] = *s == 'E' ? 'e' : *s;
+			entry[at] = 0;
+			dirty |= D_DISPLAY;
+			free(text);
+			return;
+		}
+	}
 	for (i = 0; i < n && i < 400; i++)
 		if (text[i] > ' ' && text[i] < 127 && !(text[i] == ',' && mode != PROGRAMMER))	/* (a control byte is a Ctrl key: Ctrl+V pastes again) */
 			type_char((unsigned char)text[i], 0);

@@ -175,10 +175,15 @@ serve_all(void)
 			}
 		}
 		if (FD_ISSET(calls, &set) && (s = accept(calls, NULL, NULL)) >= 0) {
+			/* a program of its own: `fork` is a vfork here, and with serve() in the child this one stopped for a
+			 * whole transfer, or 20 s of a caller that says nothing: no other computer could find or reach it */
 			if (fork() == 0) {
+				dup2(s, 0);
+				close(s);
 				close(calls);
-				serve(s);
-				_exit(0);
+				close(asked);
+				execlp("nxnet", "nxnet", "--one", (char *)NULL);
+				_exit(127);
 			}
 			close(s);
 		}
@@ -462,6 +467,9 @@ show(const char *path)
 		entries.selected = item_count ? 0 : -1;
 		snprintf(notice, sizeof notice, "%d entries", item_count);
 	} else {
+		/* (what the list holds is the computer's before, and Open would ask this one for it) */
+		entries.count = 0;
+		entries.selected = -1;
 		say(why);
 	}
 	draw();
@@ -624,6 +632,8 @@ window_main(void)
 				else if (computers.selected >= 0)
 					show("/"), focus = 1, draw();
 			} else if (ui_list_key(focus ? &entries : &computers, ch)) {
+				if (!focus)
+					entries.count = 0, entries.selected = -1;	/* (another computer: its list is yet to be asked for) */
 				draw();
 			}
 			break;
@@ -640,6 +650,10 @@ main(int argc, char **argv)
 
 	if (argc > 1 && !strcmp(argv[1], "--serve"))
 		return serve_all();
+	if (argc > 1 && !strcmp(argv[1], "--one")) {
+		serve(0);
+		return 0;
+	}
 	if (argc > 1 && !strcmp(argv[1], "--find")) {
 		if (argc > 2 && atoi(argv[2]) > 0)
 			find_tenths = atoi(argv[2]) * 10;

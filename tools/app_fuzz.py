@@ -44,6 +44,7 @@ APPS = {
     'openttd': ('openttd', 120, 'game'), 'classicube': ('classicube', 90, 'game'), 'thwaite': ('nes thwaite', 40, 'game'), 'nova': ('nes nova', 40, 'game'),
 }
 WAYS = ('x', 'alt', 'bar', 'term', 'twice')
+NO_MENUS = ('clock', 'gears', 'net', 'settings', 'imdemo', 'view', 'phys', 'ray', 'eyes')   # (no menu of any kind: none calls ui_menu's)
 
 # What the console must not say. (Each a program's own word for having broken, or the kernel's.)
 NEVER = [
@@ -92,7 +93,7 @@ class Runner:
             e['RVC_RACES'] = races
         if env:
             e.update(env)
-        line = f"{before}nx; sleep 3; nxfuzz {flat(plan)}; echo LX-''DONE\\n"
+        line = f"{before or a.before}nx; sleep 3; nxfuzz {flat(plan)}; echo LX-''DONE\\n"
         if len(line) > 1000:   # (a longer line is cut by what types it, with no word: the plan's end is lost and the run looks clean)
             raise ValueError(f'a plan of {len(line)} characters: split it')
         cmd = [os.path.join(ROOT, 'bin', 'rvc_cpu.exe'), '--image', a.image, '--quiet', '--uart-log', log, '--expect', '/ # ', '--send', line,
@@ -109,7 +110,10 @@ class Runner:
             time.sleep(15)
         seconds = time.time() - t
         text = open(log, errors='replace').read() if os.path.exists(log) else ''
-        console = text[text.find('nxfuzz'):]
+        console = text[max(text.find('nxfuzz'), 0):]   # (a long line is folded on the console: the word may not be there whole)
+        if getattr(self, 'keep_lines', None):
+            for said in re.findall(self.keep_lines, console):
+                print(said, flush=True)
         bad = [['bad', m] for m in re.findall(r'FZ-BAD ([^\r\n]*)', console)]
         for pattern, kind in NEVER:
             m = re.search(pattern, console)
@@ -132,6 +136,10 @@ class Runner:
         told = list(re.finditer(r'(?:GPU is drawing for|close) ((?!it\b)\S+)(?: program)?(?: \(process| first)', console))
         if told and all(open_at(m.group(1), m.start()) for m in told):
             bad = [b for b in bad if b[0] != 'gpu-busy' and not (b[0] == 'bad' and b[1].startswith('no-window'))]
+        # a walk that found no menu has not done what it says (rows it could not open again: a context menu that goes with what a row changed, said on its line)
+        for tag, menus, rows, lost in re.findall(r'FZ menus (\S+): (\d+) menus, (\d+) rows;.*?(\d+) not reached', console):
+            if int(rows) == 0 and tag not in NO_MENUS:
+                bad.append(['menus-none', f'{tag}: the walk found no menu'])
         if 'FZ-DONE' in console and flat(plan).endswith(' end') and 'FZ op end' not in console:
             bad.append(['cut', 'the plan did not reach its end: its line was cut'])
         if 'FZ-DONE' not in console:
@@ -159,13 +167,14 @@ def all_plans(runner, plans, jobs):
     bad = done = 0
     t = time.time()
     with ThreadPoolExecutor(jobs) as pool:
-        futures = {pool.submit(runner.run, p): p for p in plans}
+        # (a plan, or what a shell makes first and a plan)
+        futures = {pool.submit(runner.run, *((p[1], False, None, p[0]) if isinstance(p, tuple) else (p,))): p for p in plans}
         for f in as_completed(futures):
             res, _ = f.result()
             done += 1
             if res['bad']:
                 bad += 1
-                print(f"FAIL {res['plan']}\n     {res['log']}: " + '; '.join(f'{k}: {v}' for k, v in res['bad'][:6]), flush=True)
+                print(f"FAIL {futures[f][0] if isinstance(futures[f], tuple) else ''}{res['plan']}\n     {res['log']}: " + '; '.join(f'{k}: {v}' for k, v in res['bad'][:6]), flush=True)
             if done % 50 == 0:
                 print(f'... {done} of {len(plans)}, {bad} failed, {time.time() - t:.0f} s', flush=True)
     print(f'{len(plans)} plans, {bad} failed, {time.time() - t:.0f} s')
@@ -191,16 +200,42 @@ def pair_plans(apps, group=2, ways=('x', 'alt', 'term')):
 
 
 def menu_plans(apps):
-    """Every item of a menu bar, by place: a plan a bar's stretch, so that an item that ends the program leaves the others tried."""
+    """Each program's menus and their rows, found and walked by nxfuzz's menus: (what it found is its FZ menus line)."""
     for tag in apps:
-        if not APPS[tag][1]:
+        if APPS[tag][1]:
+            yield [*start_ops(tag), 'sleep:500', f'menus:{tag}', f'close:{tag}:x', 'end']
+
+
+# Odd files: (the shell that makes it, the name it has). The first word of the command is the program; the plans start it on the file.
+ODD_READERS = {'edit': 'nxedit', 'view': 'nxview', 'play': 'nxplay', 'video': 'nxvideo', 'web': 'nxweb', 'paint': 'nxpaint', 'ide': 'nxide', 'open': 'open', 'files': 'nxfiles'}
+ODD_ENDINGS = ('.txt', '.c', '.png', '.jpg', '.gif', '.bmp', '.wav', '.mp3', '.flac', '.mpg', '.avi', '.vqa', '.html', '.zip', '.tar', '.gz', '.obj', '.scene', '.xyz', '')
+ODD_FILLS = {'empty': ': >', 'noise': 'head -c 3000 /dev/urandom >', 'zeros': 'head -c 3000000 /dev/zero >',
+             # (rvc_cpu's --send eats a backslash it does not know: no backslash here)
+             'nl': 'yes "" | head -c 400000 >', 'line': 'head -c 400000 /dev/zero | tr "[:cntrl:]" a >',
+             'head': 'echo iVBORw0KGgpJSERS | base64 -d >'}
+
+
+def input_plans(apps):
+    """Each reader on each kind of odd file under each ending that may lead it to a decoder; (before, plan)."""
+    for tag, program in ODD_READERS.items():
+        if apps and tag not in apps and len(apps) < len(APPS):
             continue
-        for x in range(12, 200, 28):
-            ops = [f'start:a:{APPS[tag][0].replace(" ", ",")}', f'wait:a:{APPS[tag][1]}', 'sleep:500']
-            for y in range(30, 224, 16):
-                ops += [f'iclick:a:{x},10', 'sleep:150', f'iclick:a:{x},{y}', 'sleep:400', 'key:a:escape']
-            ops += ['close:a:x', 'end']
-            yield ops
+        for fill, make in ODD_FILLS.items():
+            for ending in ODD_ENDINGS:
+                name = '/tmp/odd' + ending
+                yield (f'{make} {name}; ', [f'start:a:{program},{name}', 'sleep:3000', 'rand:a:6:5', 'close:a:x', 'end'])
+        name = '/tmp/' + 'n' * 200 + '.txt'
+        yield (f'echo hi > {name}; ', [f'start:a:{program},{name}', 'sleep:3000', 'close:a:x', 'end'])
+        yield ('', [f'start:a:{program},/tmp/missing.txt', 'sleep:3000', 'close:a:x', 'end'])
+        yield ('', [f'start:a:{program},/tmp', 'sleep:3000', 'close:a:x', 'end'])
+
+
+def size_plans(apps):
+    """Each program made as small and as large as a window can be asked to be, used there, and brought back."""
+    for tag in apps:
+        if APPS[tag][1]:
+            for w, h in ((1, 1), (40, 20), (20, 400), (900, 10), (800, 600)):
+                yield [*start_ops(tag), 'sleep:500', f'size:{tag}:{w},{h}', f'rand:{tag}:12:{w + h}', f'size:{tag}:500,400', f'rand:{tag}:6:3', f'close:{tag}:x', 'end']
 
 
 def random_plan(r, apps, length=None):
@@ -283,6 +318,7 @@ def main():
     p.add_argument('--jobs', type=int, default=3)
     p.add_argument('--threads', type=int, default=8)
     p.add_argument('--wall', type=int, default=120)
+    p.add_argument('--before', default='', help='shell text before nx, as: export NANOX_SIZE=640x480;')
     p.add_argument('--races', action='store_true')
     p.add_argument('--no-card-model', dest='card_model', action='store_false')
     p.add_argument('--log')
@@ -312,7 +348,12 @@ def main():
     elif a.what == 'triples':
         return 1 if all_plans(r, list(pair_plans(apps, 3)), a.jobs) else 0
     elif a.what == 'menus':
+        r.keep_lines = r'FZ menus [^\r\n]*'
         return 1 if all_plans(r, list(menu_plans(apps)), a.jobs) else 0
+    elif a.what == 'inputs':
+        return 1 if all_plans(r, list(input_plans(a.args)), a.jobs) else 0
+    elif a.what == 'sizes':
+        return 1 if all_plans(r, list(size_plans(apps)), a.jobs) else 0
     elif a.what == 'random':
         rng = random.Random(a.seed)
         return 1 if all_plans(r, [random_plan(rng, apps) for _ in range(a.count)], a.jobs) else 0
@@ -323,7 +364,7 @@ def main():
     elif a.what == 'smoke':
         return 1 if all_plans(r, SMOKE, a.jobs) else 0
     else:
-        p.error('what: list, plan, single, pairs, triples, menus, random, shrink, smoke')
+        p.error('what: list, plan, single, pairs, triples, menus, inputs, sizes, random, shrink, smoke')
     return 0
 
 

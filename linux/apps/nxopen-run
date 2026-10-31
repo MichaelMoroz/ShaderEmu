@@ -3,12 +3,15 @@
 f="$1"
 case "$f" in /*) ;; *) f="$PWD/$f" ;; esac
 chmod +x "$f" 2>/dev/null
+# (without a window system: here, and no waiting)
+[ -f /tmp/nano-X.lock ] || exec "$f"
 mkdir -p /tmp/open
 r="/tmp/open/run.$$"
 # (the name between single quotes, whatever is in it)
 q="'$(printf '%s' "$f" | sed "s/'/'\\\\''/g")'"
 {
     echo '#!/bin/sh'
+    echo 'rm -f "$0"'
     printf '%s\n' "$q"
     echo 's=$?'
     echo 'echo'
@@ -16,6 +19,4 @@ q="'$(printf '%s' "$f" | sed "s/'/'\\\\''/g")'"
     echo 'read x'
 } > "$r"
 chmod +x "$r"
-# (without a window system: here, and no waiting)
-[ -f /tmp/nano-X.lock ] || exec "$f"
 exec nxterm "$r"

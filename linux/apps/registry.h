@@ -122,7 +122,12 @@ reg_set(const char *key, const char *value)
 	}
 	if (n && out[n - 1] != '\n')
 		out[n++] = '\n';
-	if (value && n + k + v + 2 <= REG_MOST) {
+	if (value && n + k + v + 2 > REG_MOST) {	/* (the old value stays: nothing is lost by a set that does not fit) */
+		flock(lock, LOCK_UN);
+		close(lock);
+		return 0;
+	}
+	if (value) {
 		memcpy(out + n, key, k), n += (int)k;
 		out[n++] = '=';
 		memcpy(out + n, value, v), n += (int)v;

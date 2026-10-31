@@ -99,7 +99,8 @@ std::optional<std::string_view> VideoDriver_ShaderEmu::Start(const StringList &)
 	_screen_rows = info.rows;
 	if (_cur_resolution.width == 0 || _cur_resolution.height == 0) _cur_resolution = { 640, 480 };
 	_cur_resolution.width = Clamp<uint>(_cur_resolution.width, 640, _screen_cols);
-	_cur_resolution.height = Clamp<uint>(_cur_resolution.height, 480, _screen_rows);
+	/* (all of it above the bar under a caption, 26 and 29; at 640 x 480 the frame's sides go off the screen) */
+	_cur_resolution.height = Clamp<uint>(_cur_resolution.height, std::min(480, _screen_rows - 55), _screen_rows - 55);
 
 	_window = GrNewWindowEx(GR_WM_PROPS_APPWINDOW, "OpenTTD", GR_ROOT_WINDOW_ID, -1, -1, _cur_resolution.width,
 			_cur_resolution.height, 0);

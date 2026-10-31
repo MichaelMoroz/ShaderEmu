@@ -2024,6 +2024,9 @@ show_view(void)
 		return;
 	top = top > most ? most : top;
 	top = top < 0 ? 0 : top;
+	/* (a goal past the page never comes: the loop would draw for ever, and what waits for top == goal not run) */
+	goal = goal > most ? most : goal;
+	goal = goal < 0 ? 0 : goal;
 	if (!tile_make()) {
 		draw_rows(window, top - TOP, top, top + view);
 		draw_menus();
@@ -2426,7 +2429,8 @@ ask(const char *what, int kind)
 static int
 read_file(const char *path, const char *note)
 {
-	FILE *file = fopen(path, "rb");
+	struct stat info;
+	FILE *file = stat(path, &info) == 0 && S_ISREG(info.st_mode) ? fopen(path, "rb") : NULL;	/* (a fifo's open waits for ever) */
 	char *text;
 	int n;
 

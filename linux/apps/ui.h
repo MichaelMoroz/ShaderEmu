@@ -478,16 +478,21 @@ ui_slider_value(int px, int x, int width, int most)
  */
 #define UI_CLIPBOARD "/tmp/clipboard"
 
-static void
+static int
 ui_clip_set(const char *text, int length)
 {
 	FILE *file = fopen(UI_CLIPBOARD ".new", "wb");
+	int kept;
 
 	if (!file)
-		return;
-	fwrite(text, 1, length, file);
-	fclose(file);
-	rename(UI_CLIPBOARD ".new", UI_CLIPBOARD);
+		return 0;
+	kept = (int)fwrite(text, 1, length, file) == length;
+	kept = !fclose(file) && kept;
+	if (!kept) {	/* (the clipboard as it was, not a piece: memory is what /tmp lies in) */
+		remove(UI_CLIPBOARD ".new");
+		return 0;
+	}
+	return !rename(UI_CLIPBOARD ".new", UI_CLIPBOARD);
 }
 
 /* The clipboard's text, for the caller to free, or NULL when it has none. */
@@ -503,7 +508,7 @@ ui_clip_get(int *length)
 	fseek(file, 0, SEEK_END);
 	size = ftell(file);
 	rewind(file);
-	if (size <= 0 || size > 1 << 20 || !(text = malloc(size + 1))) {
+	if (size <= 0 || size > 1 << 24 || !(text = malloc(size + 1))) {
 		fclose(file);
 		return NULL;
 	}

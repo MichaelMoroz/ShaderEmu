@@ -475,4 +475,3 @@ Tiberian Dawn's movies are 320 x 200 in 4x2 blocks (`UnVQ_4x2`; Red Alert's are 
 - A soldier that walks is drawn anew every step, through the game's own `Draw_It`: the larger part of a scene with many of them moving (on a worker, "The objects a frame behind").
 - Music in the missions. The full game's data (the demo's is 6 MB; the CDs' movies and music are not wanted).
 - Red Alert is the same tree (`BUILD_VANILLARA`), built by `linux/ralert/build.sh` (`docs/games/ralert.md`).
-- With `NANOX_SIZE=640x480` the window has no frame (640x400 leaves no room for one) and is left through the game's own menu (Escape).

@@ -484,6 +484,64 @@ CASES = [
                 (r'^nxide: storm: \d+ made again: the text is as the storm left it', 3)]),
     case('launch-note', 'desktop', 'export UI_LAUNCH=print; nx; sleep 4; nxkey 266,94 266,94; sleep 4', wall=120,
          has=[r'^launch: Calculator', r'^launch: a window shown after \d+ ms']),   # docs/system/nanox.md, "A program starting"
+    # the desktop's fuzzer's short set (docs/system/fuzz.md; tools/app_fuzz.py for more): windows closed every way, a GPU program
+    # after another, one refused with the first left open and its Notice; OpenTTD's X answered by a click on Yes (no process left)
+    case('app-fuzz', 'desktop', 'nx; sleep 3; nxfuzz start:p:nxpaint wait:p:20 close:p:x start:g:glxgears wait:g:20 close:g:alt '
+         'start:c:nxcalc wait:c:20 start:t:nxterm wait:t:20 rand:c:6:3 close:t:bar close:c:term start:e:nxedit wait:e:20 key:e:h,i close:e:x '
+         'start:r:nxray wait:r:30 sleep:2000 close:r:kill start:g2:glxgears wait:g2:20 close:g2:x start:f:nxfiles,/root sleep:200 close:f:x end', True,
+         wall=120, has=[r'^FZ-DONE 0', r'FZ closed g2'], never=[r'FZ-BAD']),
+    case('app-fuzz-refused', 'desktop', 'nx; sleep 3; nxfuzz start:g:glxgears wait:g:20 start:r:nxray sleep:6000 wins close:g:term sleep:1000 wins start:i:imdemo wait:i:30 close:i:x end',
+         True, wall=120, has=[r'the GPU is drawing for glxgears', r'^FZ-DONE 0'], never=[r'FZ-BAD']),
+    # faults of the programs found going through them (docs/system/fuzz.md, "What it found"): each by its own window's keys and clicks
+    case('apps-edit-triple', 'desktop apps', r"nx; sleep 3; (echo aa; echo bb; echo cc) > /tmp/e.txt; nxfuzz start:e:nxedit,/tmp/e.txt wait:e:20 click:e:90,28 click:e:90,28 drag:e:90,28,90,31 key:e:delete,ctrl+s close:e:x end; cat /tmp/e.txt", True,
+         wall=120, has=[r'^FZ-DONE 0', r'^bb|^cc'], never=[r'FZ-BAD', r'^aa$']),
+    case('apps-edit-move', 'desktop apps', r"nx; sleep 3; (echo A; echo B; echo C; echo D) > /tmp/e.txt; nxfuzz start:e:nxedit,/tmp/e.txt wait:e:20 key:e:ctrl+shift+down,ctrl+shift+down,ctrl+s close:e:x end; echo $(cat /tmp/e.txt)", True,
+         wall=120, has=[r'^FZ-DONE 0', r'^B C A D']),
+    case('apps-edit-huge-cut', 'desktop apps', r"nx; sleep 3; yes abcdefghi | head -c 2000000 > /tmp/e.txt; nxfuzz ask:60:100 start:e:nxedit,/tmp/e.txt wait:e:60 sleep:2000 key:e:ctrl+a,ctrl+x sleep:2000 key:e:ctrl+v sleep:2000 key:e:ctrl+s sleep:3000 close:e:x end; echo bytes=$(wc -c < /tmp/e.txt)", True,
+         wall=240, has=[r'^FZ-DONE 0', r'^bytes=2000000']),
+    case('apps-view-close', 'desktop apps', "nx; sleep 3; nxfuzz start:v:nxview,/tmp/no.png wait:v:20 sleep:1000 close:v:x end", True,
+         wall=120, has=[r'^FZ-DONE 0', r'FZ closed v \(x\)'], never=[r'FZ-BAD']),
+    case('apps-reg-full', 'desktop apps', "nxreg set a.kept 1; i=0; while [ $i -lt 400 ]; do nxreg set k.$i 0123456789012345678901234567890123456789012345678901234567890 || break; i=$((i+1)); done; echo full=$i; nxreg set a.kept 01234567890123456789012345678901234567890123456789012345678901234567890; echo set=$?; echo a=$(nxreg get a.kept)", True,
+         wall=120, has=[r'^set=1', r'^a=1$']),
+    case('apps-desk-stale', 'desktop apps wm', "nx; sleep 3; nxclock & c=$!; sleep 3; nxkey hold:795,588 drop:795,588 1000; kill $c; sleep 2; nxkey hold:795,588 drop:795,588 1000; sleep 1; ps | grep -c '[n]xbar' | sed s/^/bars=/", True,
+         wall=120, has=[r'^bars=1']),
+    case('apps-edit-empty', 'desktop apps', r"nx; sleep 3; : > /tmp/e.txt; nxfuzz start:e:nxedit,/tmp/e.txt wait:e:20 key:e:a,backspace,ctrl+s close:e:x end; echo bytes=$(wc -c < /tmp/e.txt)", True,
+         wall=120, has=[r'^FZ-DONE 0', r'^bytes=0']),
+    case('apps-open-self', 'desktop apps', r"nx; sleep 3; printf hello > /root/z.xyz; nxfuzz start:o:open,/root/z.xyz wait:o:20 sleep:500 click:o:230,74 sleep:1000 end; echo bytes=$(wc -c < /root/z.xyz)", True,
+         wall=120, has=[r'^FZ-DONE 0', r'^bytes=5']),
+    case('apps-calc-paste', 'desktop apps', r"nx; sleep 3; printf 1e+20 > /tmp/clipboard; nxfuzz start:c:nxcalc wait:c:20 key:c:ctrl+v,enter,ctrl+c close:c:x end; echo got=$(cat /tmp/clipboard)", True,
+         wall=120, has=[r'^FZ-DONE 0', r'^got=.*e\+?20']),
+    case('apps-calc-negative', 'desktop apps', r"nx; sleep 3; printf -- -5 > /tmp/clipboard; nxfuzz start:c:nxcalc wait:c:20 key:c:ctrl+v,enter,ctrl+c close:c:x end; echo got=$(cat /tmp/clipboard)", True,
+         wall=120, has=[r'^FZ-DONE 0', r'^got=-5']),
+    case('apps-menu-escape', 'desktop apps', "nx; sleep 3; nxfuzz start:a:nxplay wait:a:20 sleep:500 click:a:24,10 sleep:300 key:a:escape sleep:800 wins close:a:x end", True,
+         wall=120, has=[r'^FZ-DONE 0', r'FZ closed a \(x\)', r'FZ win \d+ .*Music'], never=[r'FZ-BAD']),
+    case('apps-video-small', 'desktop apps', "nx; sleep 3; echo R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7 | base64 -d > /tmp/s.gif; nxfuzz start:v:nxvideo,/tmp/s.gif wait:v:20 wins close:v:x end", True,
+         wall=120, has=[r'^FZ-DONE 0', r'FZ win \d+ .* mapped at \S+ \d{3,}x'], never=[r'FZ-BAD']),
+    case('apps-web-fifo', 'desktop apps', "nx; sleep 3; mkfifo /tmp/f; nxfuzz start:w:nxweb,/tmp/f wait:w:30 close:w:x end", True,
+         wall=120, has=[r'^FZ-DONE 0', r'FZ closed w \(x\)'], never=[r'FZ-BAD']),
+    case('apps-net-stalled', 'desktop apps', "nx; sleep 3; nxnet --serve & sleep 2; (sleep 60 | nc 127.0.0.1 7474) & sleep 2; a=$(date +%s); nxnet --ls 127.0.0.1 /root | head -2; echo took=$(( $(date +%s) - a ))", True,
+         wall=120, has=[r'^took=\d$']),
+    case('apps-menus', 'desktop apps', "nx; sleep 3; nxfuzz start:e:nxedit wait:e:20 sleep:500 menus:e close:e:x end", True,
+         wall=200, has=[r'^FZ-DONE 0', r'FZ menus e: 1\d menus, \d{2,3} rows'], never=[r'FZ-BAD']),
+    case('apps-persist-big', 'desktop apps', "dd if=/dev/zero of=/persistence/big bs=1M count=9 2>/dev/null; nxpersist save; echo save=$?; rm /persistence/big", wall=120, has=[r'^save=1']),
+    case('apps-clock-kept', 'desktop apps', "nxreg set nxclock.alarm 09:30; nxreg set nxclock.size 500x420; nxreg set nxclock.24h 1; nxreg set nxclock.seconds 1; nxreg set nxclock.alarm_on 0; nxreg set nxclock.timer 300; nx; sleep 3; nxfuzz start:c:nxclock wait:c:20 wins close:c:x end", True,
+         wall=120, has=[r'FZ win \d+ .* 50\dx4\d\d "', r'^FZ-DONE 0']),
+    case('apps-icon-bad', 'desktop apps', "cp /usr/bin/nxreg /tmp/p; nxicon /tmp/p /root/Pictures/Fox.png; nxicon /tmp/p /nosuch; nxicon /tmp/p", wall=60, has=[r'/tmp/p has an icon of its own']),
+    case('apps-term-large', 'desktop apps', "nxreg set terminal.size 24; nx; sleep 3; nxfuzz start:t:nxterm wait:t:20 wins close:t:x end", True,
+         wall=120, has=[r'FZ closed t \(x\)', r'^FZ-DONE 0', r'FZ win \d+ .* mapped at \S+ [0-7]\d\dx[0-5]\d\d "'], never=[r'FZ-BAD']),
+    case('apps-micropolis-x-early', 'desktop apps micropolis', "nx; sleep 3; nxfuzz start:m:nxmicropolis wait:m:60 close:m:x end", True,
+         wall=120, has=[r'FZ closed m \(x\) in \d{1,4} ms', r'^FZ-DONE 0'], never=[r'FZ-BAD']),
+    # OpenTTD's other ways out (docs/games/openttd.md, "At exit"): the title's Exit, a link opened and the window then closed, the toolbar's Exit and Yes
+    case('app-fuzz-openttd-exit', 'desktop games openttd', 'nx; sleep 3; nxfuzz ask:60:100 start:o:openttd wait:o:120 sleep:8000 click:o:329,345 sleep:3000 click:o:247,225 sleep:6000 tell:o:x sleep:1000 click:o:319,375 gone:o start:g:glxgears wait:g:20 close:g:x end', True,
+         wall=240, has=[r'FZ closed o \(gone\)', r'^FZ-DONE 0'], never=[r'FZ-BAD', r'answered']),
+    case('app-fuzz-openttd-menu', 'desktop games openttd', 'nx; sleep 3; nxfuzz ask:60:100 start:o:openttd,-g wait:o:120 sleep:40000 click:o:72,10 sleep:40000 click:o:77,68 sleep:40000 click:o:367,261 gone:o start:g:glxgears wait:g:20 close:g:x end', True,
+         wall=240, has=[r'FZ closed o \(gone\)', r'^FZ-DONE 0'], never=[r'FZ-BAD', r'answered']),
+    # a program that dies holding the GPU's lock word: the window system goes on (shaderemu_gpu_exiting_one)
+    case('app-fuzz-lock', 'desktop', 'nx; sleep 3; nxfuzz start:l:nxfuzz,--die-with-gpu-lock sleep:500 start:g:glxgears wait:g:20 sleep:300 close:g:x end', True,
+         wall=120, has=[r'FZ closed g', r'^FZ-DONE 0'], never=[r'FZ-BAD']),
+    case('app-fuzz-openttd', 'desktop games openttd', 'nx; sleep 3; nxfuzz ask:40:100 start:o:openttd,-g,/usr/share/openttd/busy.sav wait:o:60 sleep:30000 '
+         'tell:o:x sleep:2000 click:o:367,261 gone:o start:g:glxgears wait:g:20 close:g:x end', True, wall=240,
+         has=[r'FZ closed o \(gone\)', r'^FZ-DONE 0'], never=[r'FZ-BAD']),
     # The window manager and the bar (docs/system/nanox.md, "The window manager and the bar"), on the real desktop, by keys and
     # the pointer; nxwintest list says each window's place and state, front first. tools/wm_shots.py has their pictures.
     case('wm-snap', 'desktop wm', WM + "nxwintest plain a & sleep 2; nxkey hold:150,32 to:300,200 to:60,200 to:2,200 1000 drop:2,200 1000; nxwintest list; "
@@ -536,22 +594,22 @@ CASES = [
     case('wm-gpu', 'desktop wm', "nxreg set bar.pinned 'sh -c glxgears'; export UI_ASK_PRINT=1 UI_LAUNCH=print; " + WM + "glxgears >/dev/null & P=$!; sleep 3; nxkey 49,586; sleep 4; nxwintest list; nxkey enter; sleep 6; nxwintest list; "
          "kill -0 $P 2>/dev/null || echo FIRST-GONE; cat /proc/gpu | head -3; nxreg unset bar.pinned", wall=120,
          has=[r'^FIRST-GONE', r'^win \d .*gears']),
+    # a pointer that has no edge (a beam: docs/system/nanox.md, "A drag that leaves the screen"): its moves stop short of the edge and the button comes up there,
+    # after a step that would have reached it. A mouse's slow last steps to the same place, or a wait there, do not snap
+    case('wm-snap-beam', 'desktop wm', WM + "nxwintest plain a & sleep 2; nxkey hold:150,32 to:400,100 to:690,100 to:750,100 drop:750,100 1000; nxwintest list", wall=120,
+         has=[r'^win 0 a 400,0 400x574 mapped tiled']),
+    case('wm-snap-mouse', 'desktop wm', WM + "nxwintest plain a & sleep 2; nxkey hold:150,32 to:400,100 to:740,100 to:745,100 to:750,100 drop:750,100 1000; nxwintest list; "
+         "nxkey hold:750,100 to:690,100 to:750,100 1000 drop:750,100 1000; nxwintest list", wall=120,
+         has=[r'^win 0 a \d+,\d+ 246x149 mapped'], never=[r'^win 0 a .*tiled']),
+    # a window as wide as the screen keeps its frame and its button, the frame's sides off the screen (wmclients.c); closed by its X, Alt+F4 and the bar
+    case('wm-640-game', 'desktop wm tdawn', 'export NANOX_SIZE=640x480; ' + WM + "nxfuzz ask:60:100 start:g:tdawn,FROMINSTALL wait:g:90 sleep:1000 wins close:g:x start:h:ralert,FROMINSTALL wait:h:90 sleep:1000 wins close:h:alt start:q:quake,+menu_main wait:q:60 sleep:1000 wins close:q:bar end", True, wall=240,
+         has=[r'mapped at -3,0 646x429 "Tiberian Dawn"', r'mapped at -3,0 646x429 "Red Alert"', r'mapped at -3,0 646x454 "Quake"', r'FZ closed g \(x\)', r'FZ closed h \(alt\)', r'FZ closed q \(bar\)',
+              r'^nxbar: buttons: \[Tiberian Dawn x1', r'^nxbar: buttons: \[Red Alert x1', r'^FZ-DONE 0'], never=[r'FZ-BAD']),
+    # a title said while another window has the keyboard reaches the bar's button (GR_WM_TELL_TITLE)
+    case('wm-retitle', 'desktop wm', WM + "echo 'BEGIN{printf \"%c]0;Retitled%c\",27,7}' > /tmp/a.awk; (echo '#!/bin/sh'; echo 'sleep 6'; echo 'awk -f /tmp/a.awk'; echo 'sleep 3') > /tmp/rt; chmod +x /tmp/rt; nxterm /tmp/rt & sleep 2; nxwintest plain b & sleep 8; killall nxterm", wall=120,
+         has=[r'^nxbar: buttons: .*\[Retitled x1']),
     case('wm-single', 'desktop wm', WM + "nxsettings & sleep 4; nxwintest plain b & sleep 2; nxwintest list; nxsettings; echo SECOND=$?; sleep 1; nxwintest list", wall=120,
          has=[r'^SECOND=0', r'^win 0 Settings .* focus'], count=[(r'^win \d Settings', 2)]),
-    # the desktop's fuzzer's short set (docs/system/fuzz.md; tools/app_fuzz.py for more): windows closed every way, a GPU program
-    # after another, one refused with the first left open and its Notice; OpenTTD's X answered by a click on Yes (no process left)
-    case('app-fuzz', 'desktop', 'nx; sleep 3; nxfuzz start:p:nxpaint wait:p:20 close:p:x start:g:glxgears wait:g:20 close:g:alt '
-         'start:c:nxcalc wait:c:20 start:t:nxterm wait:t:20 rand:c:6:3 close:t:bar close:c:term start:e:nxedit wait:e:20 key:e:h,i close:e:x '
-         'start:r:nxray wait:r:30 sleep:2000 close:r:kill start:g2:glxgears wait:g2:20 close:g2:x start:f:nxfiles,/root sleep:200 close:f:x end', True,
-         wall=120, has=[r'^FZ-DONE 0', r'FZ closed g2'], never=[r'FZ-BAD']),
-    case('app-fuzz-refused', 'desktop', 'nx; sleep 3; nxfuzz start:g:glxgears wait:g:20 start:r:nxray sleep:6000 wins close:g:term sleep:1000 wins start:i:imdemo wait:i:30 close:i:x end',
-         True, wall=120, has=[r'the GPU is drawing for glxgears', r'^FZ-DONE 0'], never=[r'FZ-BAD']),
-    # a program that dies holding the GPU's lock word: the window system goes on (shaderemu_gpu_exiting_one)
-    case('app-fuzz-lock', 'desktop', 'nx; sleep 3; nxfuzz start:l:nxfuzz,--die-with-gpu-lock sleep:500 start:g:glxgears wait:g:20 sleep:300 close:g:x end', True,
-         wall=120, has=[r'FZ closed g', r'^FZ-DONE 0'], never=[r'FZ-BAD']),
-    case('app-fuzz-openttd', 'desktop games openttd', 'nx; sleep 3; nxfuzz ask:40:100 start:o:openttd,-g,/usr/share/openttd/busy.sav wait:o:60 sleep:30000 '
-         'tell:o:x sleep:2000 click:o:367,261 gone:o start:g:glxgears wait:g:20 close:g:x end', True, wall=240,
-         has=[r'FZ closed o \(gone\)', r'^FZ-DONE 0'], never=[r'FZ-BAD']),
 ]
 
 
@@ -657,7 +715,7 @@ def zerotail_nommu():
 # (16-byte romfs packing): what the pool hands out is checked on copies in tmpfs
 ZERO_TAIL_NOMMU = ('zerotest 12 4; mkdir -p /tmp/t; find /usr/share /usr/bin /etc -maxdepth 1 -type f -size -256k | '
                    'while read f; do cp "$f" /tmp/t/; done; tailtest /tmp/t/*')
-CC_BYTES_NOMMU = '8f0167e6'   # mallocng keeping freed groups (malloc_keep.py, 31 October 2026, latest); 488c2419: elf2flt's relocations in the machine's order; 18ecf477: the build folder's name out of the libraries (-ffile-prefix-map in setup.sh's drivers, 31 October 2026): client.c's __FILE__ in libnano-X.a's strings went with the folder, /home/micha/bpcc 0650c8b3 and /home/micha/nm 1480ba8c from the same sources; before that libmcw.a with mcwx's lowest free worker (6af8737) too; before it f378920f: libmcw.a's worker entry writing the program's tag into its answer, with the toolchain below (29 October 2026, latest of all); libcompiler_rt.a's 64-bit division and double's sum, product and conversions of our own (rt/) and every global hidden in rv32-cc (nommu_hidden.h) (29 October 2026, latest); memset's range in the layout of RAM in one piece (2ecf76d) and mcwx's team job that lingered out posted with the round (28 October 2026, latest); memcpy's commit's copy from 4 KB and mcwx's calls round the row on RISC-V (28 October 2026, later); the devices at 0x80000000 (libmcw.a's and libgles.a's device addresses, uop.h's RAM test in memcpy and memset); libc.a's float libm (linux/userland/libm), memcpy and memset through the commit's copy, memmove and memcmp a word a turn, a double's printf in doubles; libmcw.a's mc_publish (28 October 2026)  # with libmcw.a's tagged answers (1ee0347) too it moves again: set anew from a build with both
+CC_BYTES_NOMMU = '870f1998'   # shader.c and fractal.c follow a resized window (31 October 2026; what the examples take moved in the archives: pack.py), latest; 8f0167e6: mallocng keeping freed groups (malloc_keep.py, 31 October 2026, latest); 488c2419: elf2flt's relocations in the machine's order; 18ecf477: the build folder's name out of the libraries (-ffile-prefix-map in setup.sh's drivers, 31 October 2026): client.c's __FILE__ in libnano-X.a's strings went with the folder, /home/micha/bpcc 0650c8b3 and /home/micha/nm 1480ba8c from the same sources; before that libmcw.a with mcwx's lowest free worker (6af8737) too; before it f378920f: libmcw.a's worker entry writing the program's tag into its answer, with the toolchain below (29 October 2026, latest of all); libcompiler_rt.a's 64-bit division and double's sum, product and conversions of our own (rt/) and every global hidden in rv32-cc (nommu_hidden.h) (29 October 2026, latest); memset's range in the layout of RAM in one piece (2ecf76d) and mcwx's team job that lingered out posted with the round (28 October 2026, latest); memcpy's commit's copy from 4 KB and mcwx's calls round the row on RISC-V (28 October 2026, later); the devices at 0x80000000 (libmcw.a's and libgles.a's device addresses, uop.h's RAM test in memcpy and memset); libc.a's float libm (linux/userland/libm), memcpy and memset through the commit's copy, memmove and memcmp a word a turn, a double's printf in doubles; libmcw.a's mc_publish (28 October 2026)  # with libmcw.a's tagged answers (1ee0347) too it moves again: set anew from a build with both
 
 
 def without_mmu(image):
