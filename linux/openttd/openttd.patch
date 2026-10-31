@@ -1609,10 +1609,28 @@ index 3cd2b0d..f8446f7 100644
  	static const uint SPAWN_JOIN_TICK = 21; ///< Tick when jobs are spawned or joined every day.
  	static LinkGraphSchedule instance;
 diff --git a/src/map.cpp b/src/map.cpp
-index f39d83d..a06709a 100644
+index f39d83d..9a112d7 100644
 --- a/src/map.cpp
 +++ b/src/map.cpp
-@@ -36,6 +36,10 @@
+@@ -14,6 +14,17 @@
+ #include "string_func.h"
+ #include "pathfinder/water_regions.h"
+ 
++#ifdef WITH_SHADEREMU
++/** Tiles cleared by whoever gives the memory: the kernel has cleared the map's megabytes, and a load writes all of them. */
++template <typename T>
++static T *ClearedTiles(size_t count)
++{
++	T *tiles = static_cast<T *>(calloc(count, sizeof(T)));
++	if (tiles == nullptr) throw std::bad_alloc();
++	return tiles;
++}
++#endif
++
+ #include "safeguards.h"
+ 
+ /* static */ uint Map::log_x;     ///< 2^_map_log_x == _map_size_x
+@@ -36,6 +47,10 @@
   */
  /* static */ void Map::Allocate(uint size_x, uint size_y)
  {
@@ -1623,6 +1641,22 @@ index f39d83d..a06709a 100644
  	/* Make sure that the map size is within the limits and that
  	 * size of both axes is a power of 2. */
  	if (!IsInsideMM(size_x, MIN_MAP_SIZE, MAX_MAP_SIZE + 1) ||
+@@ -54,8 +69,15 @@
+ 	Map::size = size_x * size_y;
+ 	Map::tile_mask = Map::size - 1;
+ 
++#ifdef WITH_SHADEREMU
++	Tile::base_tiles.reset();
++	Tile::extended_tiles.reset();
++	Tile::base_tiles.reset(ClearedTiles<Tile::TileBase>(Map::size));
++	Tile::extended_tiles.reset(ClearedTiles<Tile::TileExtended>(Map::size));
++#else
+ 	Tile::base_tiles = std::make_unique<Tile::TileBase[]>(Map::size);
+ 	Tile::extended_tiles = std::make_unique<Tile::TileExtended[]>(Map::size);
++#endif
+ 
+ 	AllocateWaterRegions();
+ }
 diff --git a/src/misc.cpp b/src/misc.cpp
 index ea215f3..dce2389 100644
 --- a/src/misc.cpp
@@ -2049,7 +2083,7 @@ index 9f92375..990d8b2 100644
  		ChangeObject(ni.ref1, from_index, to_index);
  		ChangeObject(ni.ref2, from_index, to_index);
 diff --git a/src/openttd.cpp b/src/openttd.cpp
-index 7d585b0..5138ceb 100644
+index 7d585b0..931b1c9 100644
 --- a/src/openttd.cpp
 +++ b/src/openttd.cpp
 @@ -73,6 +73,11 @@
@@ -2076,7 +2110,17 @@ index 7d585b0..5138ceb 100644
  #include "safeguards.h"
  
  void CallLandscapeTick();
-@@ -333,6 +343,13 @@ static void LoadIntroGame(bool load_newgrfs = true)
+@@ -322,6 +332,9 @@ static void ShutdownGame()
+  * Load the introduction game.
+  * @param load_newgrfs Whether to load the NewGRFs or not.
+  */
++#ifdef WITH_SHADEREMU
++static bool _no_first_world = false; ///< (a -g load has not made the sprites and windows yet: its failing makes the empty world then)
++#endif
+ static void LoadIntroGame(bool load_newgrfs = true)
+ {
+ 	_game_mode = GM_MENU;
+@@ -333,6 +346,13 @@ static void LoadIntroGame(bool load_newgrfs = true)
  	SetupColoursAndInitialWindow();
  
  	/* Load the default opening screen savegame */
@@ -2090,7 +2134,7 @@ index 7d585b0..5138ceb 100644
  	if (SaveOrLoad("opntitle.dat", SLO_LOAD, DFT_GAME_FILE, BASESET_DIR) != SL_OK) {
  		GenerateWorld(GWM_EMPTY, 64, 64); // if failed loading, make empty world.
  		SetLocalCompany(COMPANY_SPECTATOR);
-@@ -344,7 +361,13 @@ static void LoadIntroGame(bool load_newgrfs = true)
+@@ -344,7 +364,13 @@ static void LoadIntroGame(bool load_newgrfs = true)
  	_pause_mode = {};
  	_cursor.fix_at = false;
  
@@ -2104,7 +2148,7 @@ index 7d585b0..5138ceb 100644
  
  	MusicLoop(); // ensure music is correct
  }
-@@ -370,6 +393,30 @@ void OpenBrowser(const std::string &url)
+@@ -370,6 +396,30 @@ void OpenBrowser(const std::string &url)
  	}
  }
  
@@ -2135,7 +2179,7 @@ index 7d585b0..5138ceb 100644
  /** Callback structure of statements to be executed after the NewGRF scan. */
  struct AfterNewGRFScan : NewGRFScanCallback {
  	TimerGameCalendar::Year startyear = CalendarTime::INVALID_YEAR; ///< The start year.
-@@ -433,6 +480,9 @@ struct AfterNewGRFScan : NewGRFScanCallback {
+@@ -433,6 +483,9 @@ struct AfterNewGRFScan : NewGRFScanCallback {
  		IConsoleInit();
  		InitializeGUI();
  		IConsoleCmdExec("exec scripts/autoexec.scr 0");
@@ -2145,7 +2189,49 @@ index 7d585b0..5138ceb 100644
  
  		/* Make sure _settings is filled with _settings_newgame if we switch to a game directly */
  		if (_switch_mode != SM_NONE) MakeNewgameSettingsLive();
-@@ -1173,6 +1223,14 @@ void SwitchToMode(SwitchMode new_mode)
+@@ -802,8 +855,20 @@ int openttd_main(std::span<std::string_view> arguments)
+ 	if (musicdriver.empty() && !_ini_musicdriver.empty()) musicdriver = _ini_musicdriver;
+ 	DriverFactoryBase::SelectDriver(musicdriver, Driver::DT_MUSIC);
+ 
+-	GenerateWorld(GWM_EMPTY, 64, 64); // Make the viewport initialization happy
+-	LoadIntroGame(false);
++#ifdef WITH_SHADEREMU
++	/* (a game asked for at start, -g, is loaded at the first tick, whose load makes the windows and the sprites anew: the
++	 * empty world before it, its sprites and windows, were 33 million instructions; docs/games/openttd.md, "The start") */
++	if (_switch_mode == SM_LOAD_GAME && getenv("OPENTTD_EMPTY_FIRST") == nullptr) {
++		Map::Allocate(64, 64);
++		_game_mode = GM_MENU;
++		SetLocalCompany(COMPANY_SPECTATOR);
++		_no_first_world = true;
++	} else
++#endif
++	{
++		GenerateWorld(GWM_EMPTY, 64, 64); // Make the viewport initialization happy
++		LoadIntroGame(false);
++	}
+ 
+ 	/* ScanNewGRFFiles now has control over the scanner. */
+ 	RequestNewGRFScan(scanner.release());
+@@ -947,6 +1012,18 @@ bool SafeLoad(const std::string &filename, SaveLoadOperation fop, DetailedFileTy
+ 	_game_mode = newgm;
+ 
+ 	SaveOrLoadResult result = (lf == nullptr) ? SaveOrLoad(filename, fop, dft, subdir) : LoadWithFilter(std::move(lf));
++#ifdef WITH_SHADEREMU
++	if (_no_first_world) {
++		_no_first_world = false;
++		if (result != SL_OK) {
++			/* What was left out at the start for this load (without its sprites every picture asks for them in vain) */
++			GenerateWorld(GWM_EMPTY, 64, 64);
++			ResetWindowSystem();
++			SetupColoursAndInitialWindow();
++			_game_mode = newgm;
++		}
++	}
++#endif
+ 	if (result == SL_OK) return true;
+ 
+ 	if (_network_dedicated && ogm == GM_MENU) {
+@@ -1173,6 +1250,14 @@ void SwitchToMode(SwitchMode new_mode)
  			}
  
  			UpdateSocialIntegration(GM_MENU);
@@ -2160,7 +2246,7 @@ index 7d585b0..5138ceb 100644
  			break;
  
  		case SM_SAVE_GAME: // Save game.
-@@ -1241,8 +1299,13 @@ void StateGameLoop()
+@@ -1241,8 +1326,13 @@ void StateGameLoop()
  		BasePersistentStorageArray::SwitchMode(PSM_LEAVE_GAMELOOP);
  		UpdateLandscapingLimits();
  
@@ -2176,7 +2262,7 @@ index 7d585b0..5138ceb 100644
  	} else {
  		if (_debug_desync_level > 2 && TimerGameEconomy::date_fract == 0 && (TimerGameEconomy::date.base() & 0x1F) == 0) {
  			/* Save the desync savegame if needed. */
-@@ -1277,8 +1340,13 @@ void StateGameLoop()
+@@ -1277,8 +1367,13 @@ void StateGameLoop()
  #endif
  		UpdateLandscapingLimits();
  
@@ -2192,7 +2278,7 @@ index 7d585b0..5138ceb 100644
  		cur_company.Restore();
  	}
  
-@@ -1342,6 +1410,9 @@ void GameLoop()
+@@ -1342,6 +1437,9 @@ void GameLoop()
  	}
  
  	if (_request_newgrf_scan) {
@@ -2202,7 +2288,7 @@ index 7d585b0..5138ceb 100644
  		ScanNewGRFFiles(_request_newgrf_scan_callback);
  		_request_newgrf_scan = false;
  		_request_newgrf_scan_callback = nullptr;
-@@ -1363,6 +1434,9 @@ void GameLoop()
+@@ -1363,6 +1461,9 @@ void GameLoop()
  
  	/* switch game mode? */
  	if (_switch_mode != SM_NONE && !HasModalProgress()) {
@@ -2212,7 +2298,7 @@ index 7d585b0..5138ceb 100644
  		SwitchToMode(_switch_mode);
  		_switch_mode = SM_NONE;
  		if (_exit_game) return;
-@@ -1385,9 +1459,15 @@ void GameLoop()
+@@ -1385,9 +1486,15 @@ void GameLoop()
  			NetworkClientConnectGame(_settings_client.network.last_joined, COMPANY_SPECTATOR);
  		}
  		/* Singleplayer */
@@ -3875,7 +3961,7 @@ index 9070e07..8c35392 100644
  	this->tick_counter++;
  
 diff --git a/src/saveload/saveload.cpp b/src/saveload/saveload.cpp
-index ebec3d2..c6e72ae 100644
+index ebec3d2..9937635 100644
 --- a/src/saveload/saveload.cpp
 +++ b/src/saveload/saveload.cpp
 @@ -70,6 +70,7 @@
@@ -3886,7 +3972,98 @@ index ebec3d2..c6e72ae 100644
  #include "../safeguards.h"
  
  extern const SaveLoadVersion SAVEGAME_VERSION = (SaveLoadVersion)(SL_MAX_VERSION - 1); ///< Current savegame version of OpenTTD.
-@@ -2684,17 +2685,118 @@ struct ZlibSaveFilter : SaveFilter {
+@@ -131,6 +132,18 @@ struct ReadBuffer {
+ 		return *this->bufp++;
+ 	}
+ 
++#ifdef WITH_SHADEREMU
++	/** The next bytes, at least one of them in the buffer: how many there are. */
++	inline size_t Have()
++	{
++		if (this->bufp == this->bufe) {
++			this->ReadByte();
++			this->bufp--;
++		}
++		return this->bufe - this->bufp;
++	}
++#endif
++
+ 	/**
+ 	 * Get the size of the memory dump made so far.
+ 	 * @return The size.
+@@ -787,6 +800,17 @@ static void SlCopyBytes(void *ptr, size_t length)
+ 	switch (_sl.action) {
+ 		case SLA_LOAD_CHECK:
+ 		case SLA_LOAD:
++#ifdef WITH_SHADEREMU
++			/* (a byte a call was 6.6 million instructions of the start: docs/games/openttd.md, "The start") */
++			while (length != 0) {
++				const size_t n = std::min(length, _sl.reader->Have());
++				std::copy_n(_sl.reader->bufp, n, p);
++				_sl.reader->bufp += n;
++				p += n;
++				length -= n;
++			}
++			break;
++#endif
+ 			for (; length != 0; length--) *p++ = SlReadByte();
+ 			break;
+ 		case SLA_SAVE:
+@@ -861,6 +885,25 @@ void WriteValue(void *ptr, VarType conv, int64_t val)
+  */
+ static void SlSaveLoadConv(void *ptr, VarType conv)
+ {
++#ifdef WITH_SHADEREMU
++	/* A load of a field as it is in memory: 243,852 of them to load the busy game, of 50 instructions by two switches. */
++	if (_sl.action == SLA_LOAD && _sl.reader->bufe - _sl.reader->bufp >= 8) {
++		const uint8_t *p = _sl.reader->bufp;
++		switch (conv) {
++			case SLE_BOOL: *static_cast<bool *>(ptr) = p[0] != 0; _sl.reader->bufp += 1; return;
++			case SLE_INT8:
++			case SLE_UINT8: *static_cast<uint8_t *>(ptr) = p[0]; _sl.reader->bufp += 1; return;
++			case SLE_INT16:
++			case SLE_UINT16: *static_cast<uint16_t *>(ptr) = p[0] << 8 | p[1]; _sl.reader->bufp += 2; return;
++			case SLE_INT32:
++			case SLE_UINT32:
++				*static_cast<uint32_t *>(ptr) = uint32_t{p[0]} << 24 | p[1] << 16 | p[2] << 8 | p[3];
++				_sl.reader->bufp += 4;
++				return;
++			default: break;
++		}
++	}
++#endif
+ 	switch (_sl.action) {
+ 		case SLA_SAVE: {
+ 			int64_t x = ReadValue(ptr, conv);
+@@ -1131,6 +1174,27 @@ static void SlCopyInternal(void *object, size_t length, VarType conv)
+ 	} else {
+ 		uint8_t *a = (uint8_t*)object;
+ 		uint8_t mem_size = SlCalcConvMemLen(conv);
++#ifdef WITH_SHADEREMU
++		/* (arrays of words of the file's size, a map's above all, not read through the general conversion) */
++		if (_sl.action == SLA_LOAD && (conv == SLE_UINT16 || conv == SLE_INT16)) {
++			while (length != 0) {
++				const size_t n = std::min(length, _sl.reader->Have() / 2);
++				if (n == 0) { /* (a word across two buffers) */
++					SlSaveLoadConv(a, conv);
++					a += 2;
++					length--;
++					continue;
++				}
++				const uint8_t *from = _sl.reader->bufp;
++				uint16_t *to = reinterpret_cast<uint16_t *>(a);
++				for (size_t i = 0; i < n; i++) to[i] = (from[2 * i] << 8) | from[2 * i + 1];
++				_sl.reader->bufp += 2 * n;
++				a += 2 * n;
++				length -= n;
++			}
++			return;
++		}
++#endif
+ 
+ 		for (; length != 0; length --) {
+ 			SlSaveLoadConv(a, conv);
+@@ -2684,17 +2748,118 @@ struct ZlibSaveFilter : SaveFilter {
   */
  static const lzma_stream _lzma_init = LZMA_STREAM_INIT;
  
@@ -4005,7 +4182,7 @@ index ebec3d2..c6e72ae 100644
  		/* Allow saves up to 256 MB uncompressed */
  		if (lzma_auto_decoder(&this->lzma, 1 << 28, 0) != LZMA_OK) SlError(STR_GAME_SAVELOAD_ERROR_BROKEN_INTERNAL_ERROR, "cannot initialize decompressor");
  	}
-@@ -2702,11 +2804,85 @@ struct LZMALoadFilter : LoadFilter {
+@@ -2702,11 +2867,85 @@ struct LZMALoadFilter : LoadFilter {
  	/** Clean everything up. */
  	~LZMALoadFilter()
  	{
@@ -4091,7 +4268,7 @@ index ebec3d2..c6e72ae 100644
  		this->lzma.next_out  = buf;
  		this->lzma.avail_out = size;
  
-@@ -3162,6 +3338,10 @@ static SaveOrLoadResult DoLoad(std::shared_ptr<LoadFilter> reader, bool load_che
+@@ -3162,12 +3401,21 @@ static SaveOrLoadResult DoLoad(std::shared_ptr<LoadFilter> reader, bool load_che
  	_next_offs = 0;
  
  	if (!load_check) {
@@ -4102,7 +4279,18 @@ index ebec3d2..c6e72ae 100644
  		ResetSaveloadData();
  
  		/* Old maps were hardcoded to 256x256 and thus did not contain
-@@ -3257,6 +3437,9 @@ SaveOrLoadResult LoadWithFilter(std::shared_ptr<LoadFilter> reader)
+ 		 * any mapsize information. Pre-initialize to 256x256 to not to
+ 		 * confuse old games */
++#ifdef WITH_SHADEREMU
++		/* A game that names its size makes its map anew in its first chunk (a clear 256 x 256 was 3.7 million instructions) */
++		InitializeGame(IsSavegameVersionBefore(SLV_6) ? 256 : 64, IsSavegameVersionBefore(SLV_6) ? 256 : 64, true, true);
++#else
+ 		InitializeGame(256, 256, true, true);
++#endif
+ 
+ 		_gamelog.Reset();
+ 
+@@ -3257,6 +3505,9 @@ SaveOrLoadResult LoadWithFilter(std::shared_ptr<LoadFilter> reader)
   */
  SaveOrLoadResult SaveOrLoad(std::string_view filename, SaveLoadOperation fop, DetailedFileType dft, Subdirectory sb, bool threaded)
  {
@@ -4227,7 +4415,7 @@ index 0abd7c0..675f9c3 100644
 +    CONDITION SHADEREMU
 +)
 diff --git a/src/spritecache.cpp b/src/spritecache.cpp
-index f26695a..77ddf8b 100644
+index f26695a..06039e3 100644
 --- a/src/spritecache.cpp
 +++ b/src/spritecache.cpp
 @@ -18,11 +18,16 @@
@@ -4416,10 +4604,36 @@ index f26695a..77ddf8b 100644
  	const size_t initial_in_use = _spritecache_bytes_used;
  
  	struct SpriteInfo {
-@@ -854,6 +980,24 @@ static void *HandleInvalidSpriteRequest(SpriteID sprite, SpriteType requested, S
+@@ -852,8 +978,50 @@ static void *HandleInvalidSpriteRequest(SpriteID sprite, SpriteType requested, S
+  * @param encoder Sprite encoder to use. Set to nullptr to use the currently active blitter.
+  * @return Sprite raw data
   */
++#ifdef WITH_SHADEREMU
++static void *GetRawSpriteSlow(SpriteID sprite, SpriteType type, SpriteAllocator *allocator, SpriteEncoder *encoder);
++
++/** A sprite loaded, as a drawing core asks for it, with nothing saved: 1.7 million calls a played round, 58 instructions each. */
  void *GetRawSprite(SpriteID sprite, SpriteType type, SpriteAllocator *allocator, SpriteEncoder *encoder)
  {
++	if (allocator == nullptr && encoder == nullptr && sprite < _spritecache.size()) {
++		SpriteCache *sc = &_spritecache[sprite];
++		if (sc->type == type && sc->ptr != nullptr) {
++			uintptr_t sp;
++			asm("mv %0, sp" : "=r"(sp));
++			if (sp - _vp_stacks < _vp_stacks_bytes) return sc->ptr.get();
++			if (sp - _tw_stack >= TW_STACK) {
++				sc->lru = ++_sprite_lru_counter;
++				return sc->ptr.get();
++			}
++		}
++	}
++	return GetRawSpriteSlow(sprite, type, allocator, encoder);
++}
++
++static __attribute__((noinline)) void *GetRawSpriteSlow(SpriteID sprite, SpriteType type, SpriteAllocator *allocator, SpriteEncoder *encoder)
++#else
++void *GetRawSprite(SpriteID sprite, SpriteType type, SpriteAllocator *allocator, SpriteEncoder *encoder)
++#endif
++{
 +#ifdef WITH_SHADEREMU
 +	TICK_TRAP();
 +	if (VpCore() != 0) {
@@ -4441,7 +4655,7 @@ index f26695a..77ddf8b 100644
  	assert(type != SpriteType::MapGen || IsMapgenSpriteID(sprite));
  	assert(type < SpriteType::Invalid);
  
-@@ -894,8 +1038,171 @@ void *GetRawSprite(SpriteID sprite, SpriteType type, SpriteAllocator *allocator,
+@@ -894,8 +1062,173 @@ void *GetRawSprite(SpriteID sprite, SpriteType type, SpriteAllocator *allocator,
  	}
  }
  
@@ -4568,10 +4782,12 @@ index f26695a..77ddf8b 100644
 +	plain.erase(std::unique(plain.begin(), plain.end()), plain.end());
 +
 +	if (_vp_arena_memory == nullptr) {
-+		/* (made and zeroed here, so that its pages are there before a worker writes them) */
-+		_vp_arena_memory = std::make_unique<uint8_t[]>(VP_ARENA_BYTES * VP_CORES + 16);
++		/* (for the cores there are: 32 MB in one piece for all 128 was refused now and then, a crash at a sprite's load; no
++		 * paging here, so nothing is cleared. A core with none makes no sprite: the first core does) */
++		const int cores = std::min<int>(VP_CORES, static_cast<int>(_vp_stacks_bytes >> 16) + 2);
++		_vp_arena_memory = std::make_unique_for_overwrite<uint8_t[]>(VP_ARENA_BYTES * cores + 16);
 +		uint8_t *base = reinterpret_cast<uint8_t *>((reinterpret_cast<uintptr_t>(_vp_arena_memory.get()) + 15) & ~uintptr_t{15});
-+		for (int k = 0; k < VP_CORES; k++) _vp_arena[k].base = base + k * VP_ARENA_BYTES, _vp_arena[k].size = VP_ARENA_BYTES;
++		for (int k = 0; k < cores; k++) _vp_arena[k].base = base + k * VP_ARENA_BYTES, _vp_arena[k].size = VP_ARENA_BYTES;
 +	}
 +	for (VpArena &a : _vp_arena) a.lo = 0, a.hi = a.size, a.on = false;
 +	_vp_load_jobs.resize(plain.size());
@@ -4613,7 +4829,7 @@ index f26695a..77ddf8b 100644
  	/* Reset the spritecache 'pool' */
  	_spritecache.clear();
  	_spritecache.shrink_to_fit();
-@@ -910,6 +1217,11 @@ void GfxInitSpriteMem()
+@@ -910,6 +1243,11 @@ void GfxInitSpriteMem()
   */
  void GfxClearSpriteCache()
  {
@@ -4625,7 +4841,7 @@ index f26695a..77ddf8b 100644
  	/* Clear sprite ptr for all cached items */
  	for (SpriteCache &sc : _spritecache) {
  		if (sc.ptr != nullptr) sc.ClearSpriteData();
-@@ -924,6 +1236,9 @@ void GfxClearSpriteCache()
+@@ -924,6 +1262,9 @@ void GfxClearSpriteCache()
   */
  void GfxClearFontSpriteCache()
  {
@@ -6385,7 +6601,7 @@ index 7aafcbd..2b5a339 100644
  };
  
 diff --git a/src/viewport.cpp b/src/viewport.cpp
-index 6427a14..cb063ce 100644
+index 6427a14..8e9918d 100644
 --- a/src/viewport.cpp
 +++ b/src/viewport.cpp
 @@ -99,6 +99,11 @@
@@ -6898,7 +7114,15 @@ index 6427a14..cb063ce 100644
  
  	ps.image = image;
  	ps.pal = pal;
-@@ -742,6 +1067,9 @@ void AddSortableSpriteToDraw(SpriteID image, PaletteID pal, int x, int y, int z,
+@@ -737,11 +1062,17 @@ void AddSortableSpriteToDraw(SpriteID image, PaletteID pal, int x, int y, int z,
+ 	ps.zmax = z + bounds.extent.z - 1;
+ 
+ 	ps.first_child = LAST_CHILD_NONE;
++#ifdef WITH_SHADEREMU
++	ps.order = 0;
++#endif
+ 
+ 	_vd.last_child = LAST_CHILD_PARENT;
  
  	if (_vd.combine_sprites == SPRITE_COMBINE_PENDING) _vd.combine_sprites = SPRITE_COMBINE_ACTIVE;
  }
@@ -6908,7 +7132,7 @@ index 6427a14..cb063ce 100644
  
  /**
   * Starts a block of sprites, which are "combined" into a single bounding box.
-@@ -761,21 +1089,43 @@ void AddSortableSpriteToDraw(SpriteID image, PaletteID pal, int x, int y, int z,
+@@ -761,21 +1092,43 @@ void AddSortableSpriteToDraw(SpriteID image, PaletteID pal, int x, int y, int z,
   *
   * You cannot nest "combined" blocks.
   */
@@ -6952,7 +7176,7 @@ index 6427a14..cb063ce 100644
  
  /**
   * Check if the parameter "check" is inside the interval between
-@@ -821,12 +1171,35 @@ bool IsInsideRotatedRectangle(int x, int y)
+@@ -821,12 +1174,35 @@ bool IsInsideRotatedRectangle(int x, int y)
   * @param scale if true, scale offsets to base zoom level.
   * @param relative if true, draw sprite relative to parent sprite offsets.
   */
@@ -6989,7 +7213,7 @@ index 6427a14..cb063ce 100644
  
  	/* make the sprites transparent with the right palette */
  	if (transparent) {
-@@ -834,6 +1207,9 @@ void AddChildSpriteScreen(SpriteID image, PaletteID pal, int x, int y, bool tran
+@@ -834,6 +1210,9 @@ void AddChildSpriteScreen(SpriteID image, PaletteID pal, int x, int y, bool tran
  		pal = PALETTE_TO_TRANSPARENT;
  	}
  
@@ -6999,7 +7223,7 @@ index 6427a14..cb063ce 100644
  	int32_t child_id = static_cast<int32_t>(_vd.child_screen_sprites_to_draw.size());
  	if (_vd.last_child != LAST_CHILD_PARENT) {
  		_vd.child_screen_sprites_to_draw[_vd.last_child].next = child_id;
-@@ -857,6 +1233,9 @@ void AddChildSpriteScreen(SpriteID image, PaletteID pal, int x, int y, bool tran
+@@ -857,6 +1236,9 @@ void AddChildSpriteScreen(SpriteID image, PaletteID pal, int x, int y, bool tran
  	if (_vd.last_foundation_child[1] == _vd.last_child) _vd.last_foundation_child[1] = child_id;
  	_vd.last_child = child_id;
  }
@@ -7009,7 +7233,7 @@ index 6427a14..cb063ce 100644
  
  /**
   * Add a string to draw to a viewport.
-@@ -870,6 +1249,9 @@ void AddChildSpriteScreen(SpriteID image, PaletteID pal, int x, int y, bool tran
+@@ -870,6 +1252,9 @@ void AddChildSpriteScreen(SpriteID image, PaletteID pal, int x, int y, bool tran
  static std::string &AddStringToDraw(int x, int y, Colours colour, ViewportStringFlags flags, uint16_t width)
  {
  	assert(width != 0);
@@ -7019,7 +7243,7 @@ index 6427a14..cb063ce 100644
  	StringSpriteToDraw &ss = _vd.string_sprites_to_draw.emplace_back();
  	ss.colour = colour;
  	ss.flags = flags;
-@@ -1207,8 +1589,16 @@ static int GetViewportY(Point tile)
+@@ -1207,8 +1592,16 @@ static int GetViewportY(Point tile)
  /**
   * Add the landscape to the viewport, i.e. all ground tiles and buildings.
   */
@@ -7036,7 +7260,7 @@ index 6427a14..cb063ce 100644
  	assert(_vd.dpi.top <= _vd.dpi.top + _vd.dpi.height);
  	assert(_vd.dpi.left <= _vd.dpi.left + _vd.dpi.width);
  
-@@ -1232,6 +1622,14 @@ static void ViewportAddLandscape()
+@@ -1232,6 +1625,21 @@ static void ViewportAddLandscape()
  	int right_column = (upper_right.y - upper_right.x) / (int)TILE_SIZE + 2;
  
  	int potential_bridge_height = ZOOM_BASE * TILE_HEIGHT * _settings_game.construction.max_bridge_height;
@@ -7047,11 +7271,18 @@ index 6427a14..cb063ce 100644
 +	const int reach_slack = 2 * ScaleByZoom(1, _vd.dpi.zoom) + VP_REACH_UNIT;
 +	/* (the tile selection's sprites reach above the tile: SetSelectionTilesDirty's rectangle) */
 +	const int reach_least = _thd.drawstyle != HT_NONE ? 64 * ZOOM_BASE : 0;
++	/* (asked of each tile it was 57 instructions a tile, 3.5% of the drawing, for a selection that is seldom there) */
++	const bool any_selection = _town_local_authority_kdtree.Count() != 0 || _thd.redsq != INVALID_TILE ||
++			_viewport_highlight_station != nullptr || _viewport_highlight_station_rect != nullptr ||
++			_viewport_highlight_waypoint != nullptr || _viewport_highlight_waypoint_rect != nullptr ||
++			_viewport_highlight_town != nullptr || (_thd.drawstyle & HT_DRAG_MASK) != HT_NONE;
++#else
++	const bool any_selection = true;
 +#endif
  
  	/* Rows overlap with neighbouring rows by a half tile.
  	 * The first row that could possibly be visible is the row above upper_left (if it is at height 0).
-@@ -1241,9 +1639,14 @@ static void ViewportAddLandscape()
+@@ -1241,9 +1649,14 @@ static void ViewportAddLandscape()
  	bool last_row = false;
  	for (; !last_row; row++) {
  		last_row = true;
@@ -7066,7 +7297,7 @@ index 6427a14..cb063ce 100644
  
  			Point tilecoord;
  			tilecoord.x = (row - column) / 2;
-@@ -1264,6 +1667,7 @@ static void ViewportAddLandscape()
+@@ -1264,6 +1677,7 @@ static void ViewportAddLandscape()
  				tile_type = MP_VOID;
  			}
  
@@ -7074,7 +7305,7 @@ index 6427a14..cb063ce 100644
  			if (tile_type != MP_VOID) {
  				/* We are inside the map => paint landscape. */
  				std::tie(_cur_ti.tileh, _cur_ti.z) = GetTilePixelSlope(_cur_ti.tile);
-@@ -1271,6 +1675,7 @@ static void ViewportAddLandscape()
+@@ -1271,6 +1685,7 @@ static void ViewportAddLandscape()
  				/* We are outside the map => paint black. */
  				std::tie(_cur_ti.tileh, _cur_ti.z) = GetTilePixelSlopeOutsideMap(tilecoord.x, tilecoord.y);
  			}
@@ -7082,7 +7313,7 @@ index 6427a14..cb063ce 100644
  
  			int viewport_y = GetViewportY(tilecoord);
  
-@@ -1304,20 +1709,65 @@ static void ViewportAddLandscape()
+@@ -1304,20 +1719,65 @@ static void ViewportAddLandscape()
  				if ((tilecoord.x <= 0 || tilecoord.y <= 0) && min_visible_height < potential_bridge_height + MAX_TILE_EXTENT_TOP) last_row = false;
  			}
  
@@ -7127,7 +7358,8 @@ index 6427a14..cb063ce 100644
 +				_vd.reach_culled_top = _vd.culled_top = _vd.culled_y = INT_MAX;
 +				_vd.reach_culled_left = _vd.culled_left[0] = _vd.culled_x[0] = INT_MAX;
 +				_vd.reach_culled_right = _vd.culled_left[1] = _vd.culled_x[1] = INT_MIN;
-+				_tile_type_procs[tile_type]->draw_tile_proc(&_cur_ti);
+ 				_tile_type_procs[tile_type]->draw_tile_proc(&_cur_ti);
+-				if (_cur_ti.tile != INVALID_TILE) DrawTileSelection(&_cur_ti);
 +				_vd.count[0]++;
 +				_vd.count[1] += known != VP_REACH_UNKNOWN;
 +				_vd.count[3] += _vd.reach_incomplete;
@@ -7135,9 +7367,9 @@ index 6427a14..cb063ce 100644
 +					VpReachLearn(reach, _cur_ti.tile.base(), t0, p0, c0, viewport_y, tile_x);
 +				}
 +#else
- 				_tile_type_procs[tile_type]->draw_tile_proc(&_cur_ti);
++				_tile_type_procs[tile_type]->draw_tile_proc(&_cur_ti);
 +#endif
- 				if (_cur_ti.tile != INVALID_TILE) DrawTileSelection(&_cur_ti);
++				if (any_selection && _cur_ti.tile != INVALID_TILE) DrawTileSelection(&_cur_ti);
  			}
  		}
  	}
@@ -7148,7 +7380,7 @@ index 6427a14..cb063ce 100644
  
  /**
   * Add a string to draw in the current viewport.
-@@ -1552,6 +2002,25 @@ void ViewportSign::UpdatePosition(int center, int top, std::string_view str, std
+@@ -1552,6 +2012,25 @@ void ViewportSign::UpdatePosition(int center, int top, std::string_view str, std
   *
   * @ingroup dirty
   */
@@ -7174,7 +7406,7 @@ index 6427a14..cb063ce 100644
  void ViewportSign::MarkDirty(ZoomLevel maxzoom) const
  {
  	Rect zoomlevels[to_underlying(ZoomLevel::End)];
-@@ -1713,7 +2182,158 @@ static void ViewportSortParentSprites(ParentSpriteToSortVector *psdv)
+@@ -1713,7 +2192,158 @@ static void ViewportSortParentSprites(ParentSpriteToSortVector *psdv)
  }
  
  
@@ -7334,7 +7566,7 @@ index 6427a14..cb063ce 100644
  {
  	for (const ParentSpriteToDraw *ps : *psd) {
  		if (ps->image != SPR_EMPTY_BOUNDING_BOX) DrawSpriteViewport(ps->image, ps->pal, ps->x, ps->y, ps->sub);
-@@ -1735,7 +2355,8 @@ static void ViewportDrawParentSprites(const ParentSpriteToSortVector *psd, const
+@@ -1735,7 +2365,8 @@ static void ViewportDrawParentSprites(const ParentSpriteToSortVector *psd, const
   * Draws the bounding boxes of all ParentSprites
   * @param psd Array of ParentSprites
   */
@@ -7344,7 +7576,7 @@ index 6427a14..cb063ce 100644
  {
  	for (const ParentSpriteToDraw *ps : *psd) {
  		Point pt1 = RemapCoords(ps->xmax + 1, ps->ymax + 1, ps->zmax + 1); // top front corner
-@@ -1808,8 +2429,15 @@ static void ViewportDrawStrings(ZoomLevel zoom, const StringSpriteToDrawVector *
+@@ -1808,8 +2439,15 @@ static void ViewportDrawStrings(ZoomLevel zoom, const StringSpriteToDrawVector *
  	}
  }
  
@@ -7360,7 +7592,7 @@ index 6427a14..cb063ce 100644
  	_vd.dpi.zoom = vp.zoom;
  	int mask = ScaleByZoom(-1, vp.zoom);
  
-@@ -1841,7 +2469,11 @@ void ViewportDoDraw(const Viewport &vp, int left, int top, int right, int bottom
+@@ -1841,7 +2479,11 @@ void ViewportDoDraw(const Viewport &vp, int left, int top, int right, int bottom
  		_vd.parent_sprites_to_sort.push_back(&psd);
  	}
  
@@ -7372,7 +7604,7 @@ index 6427a14..cb063ce 100644
  	ViewportDrawParentSprites(&_vd.parent_sprites_to_sort, &_vd.child_screen_sprites_to_draw);
  
  	if (_draw_bounding_boxes) ViewportDrawBoundingBoxes(&_vd.parent_sprites_to_sort);
-@@ -1897,6 +2529,855 @@ static inline void ViewportDraw(const Viewport &vp, int left, int top, int right
+@@ -1897,6 +2539,855 @@ static inline void ViewportDraw(const Viewport &vp, int left, int top, int right
  	);
  }
  
@@ -8228,7 +8460,7 @@ index 6427a14..cb063ce 100644
  /**
   * Draw the viewport of this window.
   */
-@@ -1965,7 +3446,21 @@ static void ClampSmoothScroll(uint32_t delta_ms, int64_t delta_hi, int64_t delta
+@@ -1965,7 +3456,21 @@ static void ClampSmoothScroll(uint32_t delta_ms, int64_t delta_hi, int64_t delta
  	assert(delta_hi != 0);
  
  	/* Move at most 75% of the distance every 30ms, for a smooth experience */
@@ -8250,7 +8482,7 @@ index 6427a14..cb063ce 100644
  	/* Move never more than 16 tiles per 30ms. */
  	int max_scroll = Map::ScaleBySize1D(16 * PIXELS_PER_TILE * delta_ms / 30);
  
-@@ -2091,10 +3586,59 @@ static bool MarkViewportDirty(const Viewport &vp, int left, int top, int right,
+@@ -2091,10 +3596,59 @@ static bool MarkViewportDirty(const Viewport &vp, int left, int top, int right,
   * @return true if at least one viewport has a dirty block
   * @ingroup dirty
   */
@@ -8310,7 +8542,7 @@ index 6427a14..cb063ce 100644
  	for (const Window *w : Window::Iterate()) {
  		if (w->viewport != nullptr) {
  			assert(w->viewport->width != 0);
-@@ -2127,6 +3671,10 @@ void ConstrainAllViewportsZoom()
+@@ -2127,6 +3681,10 @@ void ConstrainAllViewportsZoom()
   */
  void MarkTileDirtyByTile(TileIndex tile, int bridge_level_offset, int tile_height_override)
  {
@@ -8346,10 +8578,20 @@ index 05acc3f..da9dd5f 100644
  void ConstrainAllViewportsZoom();
  Point GetTileZoomCenterWindow(bool in, Window * w);
 diff --git a/src/viewport_sprite_sorter.h b/src/viewport_sprite_sorter.h
-index 591ecfb..1137828 100644
+index 591ecfb..af46615 100644
 --- a/src/viewport_sprite_sorter.h
 +++ b/src/viewport_sprite_sorter.h
-@@ -35,6 +35,9 @@ struct ParentSpriteToDraw {
+@@ -14,6 +14,9 @@
+ 
+ /** Parent sprite that should be drawn */
+ struct ParentSpriteToDraw {
++#ifdef WITH_SHADEREMU
++	ParentSpriteToDraw() {} ///< (nothing cleared: AddSortableSpriteToDraw sets every field, memset was 2% of the workers)
++#endif
+ 	/* Block of 16B loadable in xmm register */
+ 	int32_t xmin;                     ///< minimal world X coordinate of bounding box
+ 	int32_t ymin;                     ///< minimal world Y coordinate of bounding box
+@@ -35,6 +38,9 @@ struct ParentSpriteToDraw {
  
  	int32_t first_child;              ///< the first child to draw.
  	uint32_t order;                   ///< Used during sprite sorting

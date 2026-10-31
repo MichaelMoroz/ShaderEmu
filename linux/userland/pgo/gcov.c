@@ -135,6 +135,13 @@ __gcov_exit(void)
 {
 	struct gcov_info *i;
 	unsigned int f, c, kind, kinds;
+#ifdef GCOV_ONCE
+	/* (each source file's destructor calls this too: OpenTTD's 723 made a dump each, 100 MB at the end of a run) */
+	static int dumped;
+	if (dumped)
+		return;
+	dumped = 1;
+#endif
 
 	for (i = gcov_list; i; i = i->next) {
 		for (kinds = 0, kind = 0; kind < 8; kind++)

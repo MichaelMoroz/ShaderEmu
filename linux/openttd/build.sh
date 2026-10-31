@@ -86,13 +86,43 @@ case "\$out" in *.o) exec "$CXXTC/bin/riscv32-linux-musl-objcopy" $ALIGN16 "\$ou
 EOF
 cmp -s "$WORK/bin/ottd-align16.new" "$WORK/bin/ottd-align16" && rm "$WORK/bin/ottd-align16.new" || mv "$WORK/bin/ottd-align16.new" "$WORK/bin/ottd-align16"
 chmod +x "$WORK/bin/ottd-align16"
+# the same on what a whole-program link compiles: its pieces reach no launcher, only the assembler (-B)
+mkdir -p "$WORK/bin/ottd-as"
+cat > "$WORK/bin/ottd-as/as.new" <<EOF
+#!/usr/bin/env bash
+"$CXXTC/$T/bin/as" "\$@" || exit \$?
+out=; prev=
+for a in "\$@"; do [ "\$prev" = -o ] && out=\$a; prev=\$a; done
+exec "$CXXTC/bin/riscv32-linux-musl-objcopy" $ALIGN16 "\$out"
+EOF
+cmp -s "$WORK/bin/ottd-as/as.new" "$WORK/bin/ottd-as/as" && rm "$WORK/bin/ottd-as/as.new" || mv "$WORK/bin/ottd-as/as.new" "$WORK/bin/ottd-as/as"
+chmod +x "$WORK/bin/ottd-as/as"
+# The whole program at once (docs/games/openttd.md, "The compiler"): a partition a source file and nothing reordered, as
+# Tiberian Dawn's, whose globals depend on the files' order as OpenTTD's factories may. OPENTTD_LTO=off: file by file
+OPT=
+[ "${OPENTTD_LTO:-on}" = off ] || OPT="-B$WORK/bin/ottd-as/ -fno-common -fdata-sections -flto=$(nproc) -flto-partition=1to1 -fno-toplevel-reorder --param inline-unit-growth=${OTTD_UG:-200} --param max-inline-insns-auto=${OTTD_AUTO:-60} --param max-inline-insns-single=${OTTD_SINGLE:-300} --param large-function-growth=${OTTD_LFG:-300} --param inline-min-speedup=${OTTD_SPEEDUP:-15}"
+# What a played game ran, for the compiler (linux/userland/pgo/gcov.c; docs/games/tdawn.md, "What the compiler is told"):
+# OPENTTD_PROFILE=count builds the program that counts, in a folder of its own; otherwise openttd.profile's counts.
+GCOV=
+if [ "${OPENTTD_PROFILE:-}" = count ]; then
+    BUILD=$WORK/src/openttd-count-build
+    mkdir -p "$WORK/src/nogcov" "$BUILD" && "$CXXTC/bin/riscv32-linux-musl-ar" rc "$WORK/src/nogcov/libgcov.a"
+    # (a compiler without thread-local storage makes the counters' tuple a plain global)
+    ottd-cc -O2 -w -D__thread= -DGCOV_ONCE -c "$REPO/linux/userland/pgo/gcov.c" -o "$DEPS/gcov.o"
+    OPT="-B$WORK/bin/ottd-as/ -fprofile-generate -fprofile-update=single -L$WORK/src/nogcov"; GCOV="$DEPS/gcov.o"
+elif [ -f "$HERE/openttd.profile.gz" ] && [ "${OPENTTD_PROFILE:-}" != off ]; then
+    # (6 MB of text: counts.py says how they are made)
+    mkdir -p "$BUILD"; gzip -dc "$HERE/openttd.profile.gz" > "$BUILD/openttd.profile"
+    python3 "$REPO/linux/tdawn/profile.py" put "$BUILD/openttd.profile" "$BUILD"
+    OPT="$OPT -fprofile-use -fprofile-partial-training -fprofile-correction -Wno-missing-profile -Wno-coverage-mismatch"
+fi
 printf 'char se_pad_d[16] __attribute__((aligned(16))) = {1}; char se_pad_b[16] __attribute__((aligned(16)));\n' > "$DEPS/zz_pad.c"
 ottd-cc -O2 -fno-common -fdata-sections -msmall-data-limit=0 -c "$DEPS/zz_pad.c" -o "$DEPS/zz_pad_large.o"
 sed 's/se_pad_/se_pad_s/g' "$DEPS/zz_pad.c" > "$DEPS/zz_pads.c"
 ottd-cc -O2 -fno-common -fdata-sections -msmall-data-limit=64 -c "$DEPS/zz_pads.c" -o "$DEPS/zz_pad_small.o"
 for o in zz_pad_large zz_pad_small; do "$CXXTC/bin/riscv32-linux-musl-objcopy" $ALIGN16 "$DEPS/$o.o"; done
 # the tick's worker takes its memory from a heap of its own (shaderemu_t.cpp)
-WRAP=; for f in malloc free calloc realloc aligned_alloc posix_memalign memalign malloc_usable_size; do WRAP="$WRAP;-Wl,--wrap=$f"; done
+WRAP=; for f in malloc free calloc realloc aligned_alloc posix_memalign memalign malloc_usable_size __register_frame_info __deregister_frame_info _Unwind_Find_FDE; do WRAP="$WRAP;-Wl,--wrap=$f"; done
 cat > "$WORK/src/openttd-toolchain.cmake" <<EOF
 set(CMAKE_SYSTEM_NAME Linux)
 set(CMAKE_SYSTEM_PROCESSOR riscv32)
@@ -117,6 +147,7 @@ cmake -S "$SRC" -B "$BUILD" -DCMAKE_TOOLCHAIN_FILE="$WORK/src/openttd-toolchain.
     -DHOST_BINARY_DIR="$HOSTB" -DOPTION_INSTALL_FHS=ON -DCMAKE_INSTALL_PREFIX=/usr -DGLOBAL_DIR=/usr/share/openttd -DSHADEREMU=ON $NONE \
     -DSHADEREMU_INCLUDES="$MW/src/include;$REPO/linux/userland;$REPO/programs/linux/include;$REPO/programs/mc" \
     -DCMAKE_CXX_COMPILER_LAUNCHER="$WORK/bin/ottd-align16" -DCMAKE_C_COMPILER_LAUNCHER="$WORK/bin/ottd-align16" \
+    -DCMAKE_CXX_FLAGS="$OPT" -DCMAKE_EXE_LINKER_FLAGS="$GCOV" \
     -DSHADEREMU_LIBS="$DEPS/gles.o;$DEPS/mcw.o;$DEPS/mcwx.o;$DEPS/zz_pad_large.o;$DEPS/zz_pad_small.o;$MW/src/lib/libnano-X.a$WRAP" > "$BUILD.configure.log" 2>&1 || { tail -30 "$BUILD.configure.log"; exit 1; }
 step "compile"
 cmake --build "$BUILD" -j"$(nproc)" --target openttd > "$BUILD.log" 2>&1 || { grep -E "error|Error" "$BUILD.log" | head -40; exit 1; }

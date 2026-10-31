@@ -363,3 +363,7 @@
   `d4e04e63`/`26aae0d5` on the worker, whole and sliced; `OPENTTD_CHECK=1` is 0 pixels paused (a running game can
   differ by "One order"). A scroll is measured with `OPENTTD_PLAY_PART=scroll|follow` and the card's model
   (`RVC_ADFAULT`, `RVC_WCACHE`), pictures and game ticks a second both.
+- OpenTTD is compiled whole with `openttd.profile.gz` (`docs/games/openttd.md`, "The compiler"): its LTO link keeps
+  `-fdata-sections -fno-common` and the 16-byte assembler, or statics a worker writes share texels (`RVC_RACES` undone), and
+  after a large change to the source `linux/openttd/counts.py` makes the counts anew. `build.sh` puts the tree back from
+  `openttd.patch` on every build: write the tree's diff to the patch first.

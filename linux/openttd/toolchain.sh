@@ -45,6 +45,9 @@ G=$CXXTC/bin/$T-
 EH=$WORK/src/ottd-eh
 mkdir -p "$EH"
 OTTD_FLAGS="-fno-stack-protector -ffp-contract=off -fPIE \${RV32_MARCH:+-march=\$RV32_MARCH}"
+# Every global hidden, declarations too (nommu_hidden.h, as rv32-cc): the program is one static image, so a global
+# declared extern is reached PC-relative, not through the GOT, one load less at every use (the flat build alone)
+HIDE=; [ -f "$SYSROOT/include/nommu_hidden.h" ] && HIDE="-include $SYSROOT/include/nommu_hidden.h"
 for k in begin end; do
     D=; [ $k = begin ] && D=-DEH_BEGIN
     ${G}gcc -O2 -fPIE -fno-asynchronous-unwind-tables -fno-unwind-tables $D -c "$(dirname "${BASH_SOURCE[0]}")/ehframe.c" -o "$EH/eh$k.o"
@@ -66,7 +69,7 @@ for a in "\$@"; do
 done
 [ \$link = 1 ] && exec ${G}$C $OTTD_FLAGS $START -nostdlib -L$SYSROOT/lib $SYSROOT/lib/crti.o $EH/ehbegin.o "\${args[@]}" \\
     $CXXLIB -Wl,--start-group -lc -lgcc -latomic -lcompiler_rt -Wl,--end-group $SYSROOT/lib/crtn.o $EH/ehend.o
-exec ${G}$C $OTTD_FLAGS $F "\${args[@]}"
+exec ${G}$C $OTTD_FLAGS $F $HIDE "\${args[@]}"
 EOF
     # (kept with its time when the same: a newer driver has build.sh configure again)
     cmp -s "$WORK/bin/ottd-$d.new" "$WORK/bin/ottd-$d" && rm "$WORK/bin/ottd-$d.new" || mv "$WORK/bin/ottd-$d.new" "$WORK/bin/ottd-$d"
