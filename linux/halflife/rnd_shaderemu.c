@@ -422,6 +422,10 @@ void SE_RefGuard( void *table, size_t bytes )
 	for( int k = 0; later_2d && k < (int)ARRAYSIZE( later2d ); k++ ) ref_kind[later2d[k]] = REF_LATER;
 	for( int k = 0; k < (int)ARRAYSIZE( through ); k++ ) ref_kind[through[k]] = REF_THROUGH;
 	ref_kind[REF_INDEX( CL_RunLightStyles )] = REF_STYLES;
+	if( !getenv( "HL_RENDER_CALLS" ))	// (a call that goes through needs no thunk but to be counted: R_AddEntity, 50 a frame, 80 instructions each)
+		for( int k = 0; k < (int)ARRAYSIZE( through ); k++ )
+			if( se_ref_real[through[k]] )
+				fn[through[k]] = se_ref_real[through[k]];
 }
 
 // Between a frame's end and the next's drawing: HL_RENDER_CALLS=1 counts what this core calls of
