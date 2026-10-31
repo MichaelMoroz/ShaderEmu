@@ -89,6 +89,8 @@ struct Options {
     u32 ticks = 8192;        // instructions a pass
     double ips = 3700000;    // what the shader machine runs while it runs
     double passMs = 0.25;    // and what a pass costs it besides
+    bool passModel = false;  // --pass-model: in their place, a card's ms a pass (tools/calibrate.py):
+    double model[4] = {};    // fixed + core 0's per thousand instructions + the workers' per thousand + per GPU list
     int cores = 256;         // core 0 and 255 workers, as the shader machine
     long long sweep = -1;
     int circleX = -1, circleY = 0, circleR = 0;    // --pointer-circle: the sweep's own circle
@@ -121,6 +123,7 @@ static bool count_marked = false;
 static int until_seen = 0;
 static std::vector<u64> count_at;   // each core's clock when --count-from was said
 static u64 count_pass = 0;
+static u32 count_lists = 0;
 static double count_seconds = 0;
 
 static void count_mark();
@@ -3122,6 +3125,7 @@ static void count_mark() {
     memcpy(stops_at, stops, sizeof stops);
     count_pass = frame_no;
     count_seconds = guest_seconds;
+    count_lists = word(CTRL + 0x1c);
     if (opt.untilTimes > 1 && script_at >= opt.script.size()) expect_from = console_text.size();
 }
 
@@ -3298,6 +3302,11 @@ int main(int argc, char** argv) {
         else if (a == "--max-passes") opt.maxPasses = strtoull(next("--max-passes").c_str(), nullptr, 10);
         else if (a == "--save-after") opt.saveAfter = atof(next("--save-after").c_str());
         else if (a == "--pass-ms") opt.passMs = atof(next("--pass-ms").c_str());
+        else if (a == "--pass-model") {
+            std::string v = next("--pass-model");
+            opt.passModel = sscanf(v.c_str(), "%lf,%lf,%lf,%lf", &opt.model[0], &opt.model[1], &opt.model[2], &opt.model[3]) == 4;
+            if (!opt.passModel) { fprintf(stderr, "rvc_cpu: --pass-model A,B,C,D\n"); return 2; }
+        }
         else if (a == "--pointer-sweep") opt.sweep = atoll(next("--pointer-sweep").c_str());
         else if (a == "--pointer-circle") sscanf(next("--pointer-circle").c_str(), "%d,%d,%d", &opt.circleX, &opt.circleY, &opt.circleR);
         else if (a == "--host") {
@@ -3342,6 +3351,7 @@ int main(int argc, char** argv) {
                    "  --pc-log FILE          core 0's pc at the end of each pass, for tools/pc_profile.py (a small --ticks\n"
                    "  --pc-from T            for finer samples); from when the console has said T\n"
                    "  --ips N --pass-ms M    the guest's clock: a pass takes M ms and its instructions 1/N s each\n"
+                   "  --pass-model A,B,C,D   in their place A ms + B a thousand of core 0's + C a thousand of the workers' + D a GPU list (tools/calibrate.py)\n"
                    "  --save-ram FILE        the RAM (288 MB from 0x80000000) as the run ends\n"
                    "  --save FILE            the whole machine as the run ends (but at --until), to go on with --load\n"
                    "  --load FILE            go on from a --save instead of booting (the same image, cores and arguments)\n"
@@ -3435,6 +3445,9 @@ int main(int argc, char** argv) {
     pc_sampling = !opt.pcLog.empty() && opt.pcFrom.empty();
     u64 passes_run = 0;
     bool stopped = false;   // (by --max-passes or --save-after: to be gone on with)
+    u64 model_workers = 0;
+    for (size_t i = 1; i < cores.size(); i++) model_workers += cores[i].clock;
+    u32 model_lists = word(CTRL + 0x1c);
     for (;;) {
         u64 clock_was = c0.clock;
         u64 most = machine_pass(opt.ticks);
@@ -3443,6 +3456,15 @@ int main(int argc, char** argv) {
             pc_samples.push_back(c0.pc);
             pc_samples.push_back((u32)(c0.clock - clock_was));
         }
+        if (opt.passModel) {
+            // --pass-model: a pass as the card takes it, by what it ran and drew (tools/calibrate.py)
+            u64 all_now = 0;
+            for (size_t i = 1; i < cores.size(); i++) all_now += cores[i].clock;
+            u32 lists_now = word(CTRL + 0x1c);
+            guest_seconds += (opt.model[0] + opt.model[1] * (double)(c0.clock - clock_was) / 1000.0 + opt.model[2] * (double)(all_now - model_workers) / 1000.0 +
+                              opt.model[3] * (double)(u32)(lists_now - model_lists)) / 1000.0;
+            model_workers = all_now, model_lists = lists_now;
+        } else
         guest_seconds += opt.passMs / 1000.0 + (double)most / opt.ips;
         if (most == 0 && c0.waiting && console_in.empty()) {
             // nothing to run: on to the timer's deadline (an idle machine's passes are all alike)
@@ -3510,9 +3532,9 @@ int main(int argc, char** argv) {
             if (n) ran++;
             if (i && n > most) most = n;
         }
-        fprintf(stderr, "COUNT from \"%s\": core 0 %llu, all cores %llu, %d cores ran, the busiest worker %llu, %llu passes, %.3f s of guest time\n",
+        fprintf(stderr, "COUNT from \"%s\": core 0 %llu, all cores %llu, %d cores ran, the busiest worker %llu, %llu passes, %.3f s of guest time, %u GPU lists\n",
                 opt.countFrom.c_str(), (unsigned long long)c0n, (unsigned long long)all, ran, (unsigned long long)most,
-                (unsigned long long)(frame_no - count_pass), guest_seconds - count_seconds);
+                (unsigned long long)(frame_no - count_pass), guest_seconds - count_seconds, (u32)(word(CTRL + 0x1c) - count_lists));
     } else if (!opt.countFrom.empty()) fprintf(stderr, "COUNT never: the console did not say \"%s\"\n", opt.countFrom.c_str());
     fprintf(stderr, "[cpu] stops: workers' faults %llu, %llu of them on a clear accessed or written bit; core 0's on such a bit %llu%s",
             (unsigned long long)stops[0], (unsigned long long)stops[1], (unsigned long long)stops[2], count_marked ? "" : "\n");
