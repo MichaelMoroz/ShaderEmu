@@ -31,6 +31,7 @@ void YapfShipAheadInit();
 extern "C" {
 void *__real_malloc(size_t n);
 void __real_free(void *p);
+void *__real_calloc(size_t m, size_t n);
 void *__real_realloc(void *p, size_t n);
 void *__real_aligned_alloc(size_t align, size_t n);
 size_t __real_malloc_usable_size(void *p);
@@ -233,9 +234,40 @@ void *__wrap_calloc(size_t m, size_t n)
 		errno = ENOMEM;
 		return nullptr;
 	}
+	/* What the kernel gives is cleared: the map's megabytes are not cleared twice */
+	if (m * n >= 1u << 20 && !TickOnWorker()) return __real_calloc(Pad(m * n), 1);
 	void *p = __wrap_malloc(m * n);
 	if (p != nullptr) memset(p, 0, m * n);
 	return p;
+}
+
+/* The tables of the unwinder: at a program's start libgcc reads every FDE of the program to file its range
+ * (5 million instructions for OpenTTD, which throws nothing to play). They are filed when the first throw looks. */
+void __real___register_frame_info(const void *begin, void *ob);
+void *__real___deregister_frame_info(const void *begin);
+const void *__real__Unwind_Find_FDE(void *pc, void *bases);
+static const void *_eh_begin;
+static void *_eh_ob;
+
+void __wrap___register_frame_info(const void *begin, void *ob)
+{
+	_eh_begin = begin;
+	_eh_ob = ob;
+}
+
+void *__wrap___deregister_frame_info(const void *begin)
+{
+	if (_eh_begin != nullptr) return nullptr; /* (never filed) */
+	return __real___deregister_frame_info(begin);
+}
+
+const void *__wrap__Unwind_Find_FDE(void *pc, void *bases)
+{
+	if (_eh_begin != nullptr) {
+		__real___register_frame_info(_eh_begin, _eh_ob);
+		_eh_begin = nullptr;
+	}
+	return __real__Unwind_Find_FDE(pc, bases);
 }
 
 void *__wrap_realloc(void *p, size_t n)

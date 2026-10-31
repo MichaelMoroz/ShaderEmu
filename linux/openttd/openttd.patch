@@ -1609,10 +1609,28 @@ index 3cd2b0d..f8446f7 100644
  	static const uint SPAWN_JOIN_TICK = 21; ///< Tick when jobs are spawned or joined every day.
  	static LinkGraphSchedule instance;
 diff --git a/src/map.cpp b/src/map.cpp
-index f39d83d..a06709a 100644
+index f39d83d..9a112d7 100644
 --- a/src/map.cpp
 +++ b/src/map.cpp
-@@ -36,6 +36,10 @@
+@@ -14,6 +14,17 @@
+ #include "string_func.h"
+ #include "pathfinder/water_regions.h"
+ 
++#ifdef WITH_SHADEREMU
++/** Tiles cleared by whoever gives the memory: the kernel has cleared the map's megabytes, and a load writes all of them. */
++template <typename T>
++static T *ClearedTiles(size_t count)
++{
++	T *tiles = static_cast<T *>(calloc(count, sizeof(T)));
++	if (tiles == nullptr) throw std::bad_alloc();
++	return tiles;
++}
++#endif
++
+ #include "safeguards.h"
+ 
+ /* static */ uint Map::log_x;     ///< 2^_map_log_x == _map_size_x
+@@ -36,6 +47,10 @@
   */
  /* static */ void Map::Allocate(uint size_x, uint size_y)
  {
@@ -1623,6 +1641,22 @@ index f39d83d..a06709a 100644
  	/* Make sure that the map size is within the limits and that
  	 * size of both axes is a power of 2. */
  	if (!IsInsideMM(size_x, MIN_MAP_SIZE, MAX_MAP_SIZE + 1) ||
+@@ -54,8 +69,15 @@
+ 	Map::size = size_x * size_y;
+ 	Map::tile_mask = Map::size - 1;
+ 
++#ifdef WITH_SHADEREMU
++	Tile::base_tiles.reset();
++	Tile::extended_tiles.reset();
++	Tile::base_tiles.reset(ClearedTiles<Tile::TileBase>(Map::size));
++	Tile::extended_tiles.reset(ClearedTiles<Tile::TileExtended>(Map::size));
++#else
+ 	Tile::base_tiles = std::make_unique<Tile::TileBase[]>(Map::size);
+ 	Tile::extended_tiles = std::make_unique<Tile::TileExtended[]>(Map::size);
++#endif
+ 
+ 	AllocateWaterRegions();
+ }
 diff --git a/src/misc.cpp b/src/misc.cpp
 index ea215f3..dce2389 100644
 --- a/src/misc.cpp
@@ -3897,7 +3931,7 @@ index 9070e07..8c35392 100644
  	this->tick_counter++;
  
 diff --git a/src/saveload/saveload.cpp b/src/saveload/saveload.cpp
-index ebec3d2..5a7792f 100644
+index ebec3d2..9937635 100644
 --- a/src/saveload/saveload.cpp
 +++ b/src/saveload/saveload.cpp
 @@ -70,6 +70,7 @@
@@ -3945,7 +3979,33 @@ index ebec3d2..5a7792f 100644
  			for (; length != 0; length--) *p++ = SlReadByte();
  			break;
  		case SLA_SAVE:
-@@ -1131,6 +1155,27 @@ static void SlCopyInternal(void *object, size_t length, VarType conv)
+@@ -861,6 +885,25 @@ void WriteValue(void *ptr, VarType conv, int64_t val)
+  */
+ static void SlSaveLoadConv(void *ptr, VarType conv)
+ {
++#ifdef WITH_SHADEREMU
++	/* A load of a field as it is in memory: 243,852 of them to load the busy game, of 50 instructions by two switches. */
++	if (_sl.action == SLA_LOAD && _sl.reader->bufe - _sl.reader->bufp >= 8) {
++		const uint8_t *p = _sl.reader->bufp;
++		switch (conv) {
++			case SLE_BOOL: *static_cast<bool *>(ptr) = p[0] != 0; _sl.reader->bufp += 1; return;
++			case SLE_INT8:
++			case SLE_UINT8: *static_cast<uint8_t *>(ptr) = p[0]; _sl.reader->bufp += 1; return;
++			case SLE_INT16:
++			case SLE_UINT16: *static_cast<uint16_t *>(ptr) = p[0] << 8 | p[1]; _sl.reader->bufp += 2; return;
++			case SLE_INT32:
++			case SLE_UINT32:
++				*static_cast<uint32_t *>(ptr) = uint32_t{p[0]} << 24 | p[1] << 16 | p[2] << 8 | p[3];
++				_sl.reader->bufp += 4;
++				return;
++			default: break;
++		}
++	}
++#endif
+ 	switch (_sl.action) {
+ 		case SLA_SAVE: {
+ 			int64_t x = ReadValue(ptr, conv);
+@@ -1131,6 +1174,27 @@ static void SlCopyInternal(void *object, size_t length, VarType conv)
  	} else {
  		uint8_t *a = (uint8_t*)object;
  		uint8_t mem_size = SlCalcConvMemLen(conv);
@@ -3973,7 +4033,7 @@ index ebec3d2..5a7792f 100644
  
  		for (; length != 0; length --) {
  			SlSaveLoadConv(a, conv);
-@@ -2684,17 +2729,118 @@ struct ZlibSaveFilter : SaveFilter {
+@@ -2684,17 +2748,118 @@ struct ZlibSaveFilter : SaveFilter {
   */
  static const lzma_stream _lzma_init = LZMA_STREAM_INIT;
  
@@ -4092,7 +4152,7 @@ index ebec3d2..5a7792f 100644
  		/* Allow saves up to 256 MB uncompressed */
  		if (lzma_auto_decoder(&this->lzma, 1 << 28, 0) != LZMA_OK) SlError(STR_GAME_SAVELOAD_ERROR_BROKEN_INTERNAL_ERROR, "cannot initialize decompressor");
  	}
-@@ -2702,11 +2848,85 @@ struct LZMALoadFilter : LoadFilter {
+@@ -2702,11 +2867,85 @@ struct LZMALoadFilter : LoadFilter {
  	/** Clean everything up. */
  	~LZMALoadFilter()
  	{
@@ -4178,7 +4238,7 @@ index ebec3d2..5a7792f 100644
  		this->lzma.next_out  = buf;
  		this->lzma.avail_out = size;
  
-@@ -3162,6 +3382,10 @@ static SaveOrLoadResult DoLoad(std::shared_ptr<LoadFilter> reader, bool load_che
+@@ -3162,12 +3401,21 @@ static SaveOrLoadResult DoLoad(std::shared_ptr<LoadFilter> reader, bool load_che
  	_next_offs = 0;
  
  	if (!load_check) {
@@ -4189,7 +4249,18 @@ index ebec3d2..5a7792f 100644
  		ResetSaveloadData();
  
  		/* Old maps were hardcoded to 256x256 and thus did not contain
-@@ -3257,6 +3481,9 @@ SaveOrLoadResult LoadWithFilter(std::shared_ptr<LoadFilter> reader)
+ 		 * any mapsize information. Pre-initialize to 256x256 to not to
+ 		 * confuse old games */
++#ifdef WITH_SHADEREMU
++		/* A game that names its size makes its map anew in its first chunk (a clear 256 x 256 was 3.7 million instructions) */
++		InitializeGame(IsSavegameVersionBefore(SLV_6) ? 256 : 64, IsSavegameVersionBefore(SLV_6) ? 256 : 64, true, true);
++#else
+ 		InitializeGame(256, 256, true, true);
++#endif
+ 
+ 		_gamelog.Reset();
+ 
+@@ -3257,6 +3505,9 @@ SaveOrLoadResult LoadWithFilter(std::shared_ptr<LoadFilter> reader)
   */
  SaveOrLoadResult SaveOrLoad(std::string_view filename, SaveLoadOperation fop, DetailedFileType dft, Subdirectory sb, bool threaded)
  {
@@ -6500,7 +6571,7 @@ index 7aafcbd..2b5a339 100644
  };
  
 diff --git a/src/viewport.cpp b/src/viewport.cpp
-index 6427a14..72f55ad 100644
+index 6427a14..8e9918d 100644
 --- a/src/viewport.cpp
 +++ b/src/viewport.cpp
 @@ -99,6 +99,11 @@
@@ -7159,7 +7230,7 @@ index 6427a14..72f55ad 100644
  	assert(_vd.dpi.top <= _vd.dpi.top + _vd.dpi.height);
  	assert(_vd.dpi.left <= _vd.dpi.left + _vd.dpi.width);
  
-@@ -1232,6 +1625,14 @@ static void ViewportAddLandscape()
+@@ -1232,6 +1625,21 @@ static void ViewportAddLandscape()
  	int right_column = (upper_right.y - upper_right.x) / (int)TILE_SIZE + 2;
  
  	int potential_bridge_height = ZOOM_BASE * TILE_HEIGHT * _settings_game.construction.max_bridge_height;
@@ -7170,11 +7241,18 @@ index 6427a14..72f55ad 100644
 +	const int reach_slack = 2 * ScaleByZoom(1, _vd.dpi.zoom) + VP_REACH_UNIT;
 +	/* (the tile selection's sprites reach above the tile: SetSelectionTilesDirty's rectangle) */
 +	const int reach_least = _thd.drawstyle != HT_NONE ? 64 * ZOOM_BASE : 0;
++	/* (asked of each tile it was 57 instructions a tile, 3.5% of the drawing, for a selection that is seldom there) */
++	const bool any_selection = _town_local_authority_kdtree.Count() != 0 || _thd.redsq != INVALID_TILE ||
++			_viewport_highlight_station != nullptr || _viewport_highlight_station_rect != nullptr ||
++			_viewport_highlight_waypoint != nullptr || _viewport_highlight_waypoint_rect != nullptr ||
++			_viewport_highlight_town != nullptr || (_thd.drawstyle & HT_DRAG_MASK) != HT_NONE;
++#else
++	const bool any_selection = true;
 +#endif
  
  	/* Rows overlap with neighbouring rows by a half tile.
  	 * The first row that could possibly be visible is the row above upper_left (if it is at height 0).
-@@ -1241,9 +1642,14 @@ static void ViewportAddLandscape()
+@@ -1241,9 +1649,14 @@ static void ViewportAddLandscape()
  	bool last_row = false;
  	for (; !last_row; row++) {
  		last_row = true;
@@ -7189,7 +7267,7 @@ index 6427a14..72f55ad 100644
  
  			Point tilecoord;
  			tilecoord.x = (row - column) / 2;
-@@ -1264,6 +1670,7 @@ static void ViewportAddLandscape()
+@@ -1264,6 +1677,7 @@ static void ViewportAddLandscape()
  				tile_type = MP_VOID;
  			}
  
@@ -7197,7 +7275,7 @@ index 6427a14..72f55ad 100644
  			if (tile_type != MP_VOID) {
  				/* We are inside the map => paint landscape. */
  				std::tie(_cur_ti.tileh, _cur_ti.z) = GetTilePixelSlope(_cur_ti.tile);
-@@ -1271,6 +1678,7 @@ static void ViewportAddLandscape()
+@@ -1271,6 +1685,7 @@ static void ViewportAddLandscape()
  				/* We are outside the map => paint black. */
  				std::tie(_cur_ti.tileh, _cur_ti.z) = GetTilePixelSlopeOutsideMap(tilecoord.x, tilecoord.y);
  			}
@@ -7205,7 +7283,7 @@ index 6427a14..72f55ad 100644
  
  			int viewport_y = GetViewportY(tilecoord);
  
-@@ -1304,20 +1712,65 @@ static void ViewportAddLandscape()
+@@ -1304,20 +1719,65 @@ static void ViewportAddLandscape()
  				if ((tilecoord.x <= 0 || tilecoord.y <= 0) && min_visible_height < potential_bridge_height + MAX_TILE_EXTENT_TOP) last_row = false;
  			}
  
@@ -7251,6 +7329,7 @@ index 6427a14..72f55ad 100644
 +				_vd.reach_culled_left = _vd.culled_left[0] = _vd.culled_x[0] = INT_MAX;
 +				_vd.reach_culled_right = _vd.culled_left[1] = _vd.culled_x[1] = INT_MIN;
  				_tile_type_procs[tile_type]->draw_tile_proc(&_cur_ti);
+-				if (_cur_ti.tile != INVALID_TILE) DrawTileSelection(&_cur_ti);
 +				_vd.count[0]++;
 +				_vd.count[1] += known != VP_REACH_UNKNOWN;
 +				_vd.count[3] += _vd.reach_incomplete;
@@ -7260,7 +7339,7 @@ index 6427a14..72f55ad 100644
 +#else
 +				_tile_type_procs[tile_type]->draw_tile_proc(&_cur_ti);
 +#endif
- 				if (_cur_ti.tile != INVALID_TILE) DrawTileSelection(&_cur_ti);
++				if (any_selection && _cur_ti.tile != INVALID_TILE) DrawTileSelection(&_cur_ti);
  			}
  		}
  	}
@@ -7271,7 +7350,7 @@ index 6427a14..72f55ad 100644
  
  /**
   * Add a string to draw in the current viewport.
-@@ -1552,6 +2005,25 @@ void ViewportSign::UpdatePosition(int center, int top, std::string_view str, std
+@@ -1552,6 +2012,25 @@ void ViewportSign::UpdatePosition(int center, int top, std::string_view str, std
   *
   * @ingroup dirty
   */
@@ -7297,7 +7376,7 @@ index 6427a14..72f55ad 100644
  void ViewportSign::MarkDirty(ZoomLevel maxzoom) const
  {
  	Rect zoomlevels[to_underlying(ZoomLevel::End)];
-@@ -1713,7 +2185,158 @@ static void ViewportSortParentSprites(ParentSpriteToSortVector *psdv)
+@@ -1713,7 +2192,158 @@ static void ViewportSortParentSprites(ParentSpriteToSortVector *psdv)
  }
  
  
@@ -7457,7 +7536,7 @@ index 6427a14..72f55ad 100644
  {
  	for (const ParentSpriteToDraw *ps : *psd) {
  		if (ps->image != SPR_EMPTY_BOUNDING_BOX) DrawSpriteViewport(ps->image, ps->pal, ps->x, ps->y, ps->sub);
-@@ -1735,7 +2358,8 @@ static void ViewportDrawParentSprites(const ParentSpriteToSortVector *psd, const
+@@ -1735,7 +2365,8 @@ static void ViewportDrawParentSprites(const ParentSpriteToSortVector *psd, const
   * Draws the bounding boxes of all ParentSprites
   * @param psd Array of ParentSprites
   */
@@ -7467,7 +7546,7 @@ index 6427a14..72f55ad 100644
  {
  	for (const ParentSpriteToDraw *ps : *psd) {
  		Point pt1 = RemapCoords(ps->xmax + 1, ps->ymax + 1, ps->zmax + 1); // top front corner
-@@ -1808,8 +2432,15 @@ static void ViewportDrawStrings(ZoomLevel zoom, const StringSpriteToDrawVector *
+@@ -1808,8 +2439,15 @@ static void ViewportDrawStrings(ZoomLevel zoom, const StringSpriteToDrawVector *
  	}
  }
  
@@ -7483,7 +7562,7 @@ index 6427a14..72f55ad 100644
  	_vd.dpi.zoom = vp.zoom;
  	int mask = ScaleByZoom(-1, vp.zoom);
  
-@@ -1841,7 +2472,11 @@ void ViewportDoDraw(const Viewport &vp, int left, int top, int right, int bottom
+@@ -1841,7 +2479,11 @@ void ViewportDoDraw(const Viewport &vp, int left, int top, int right, int bottom
  		_vd.parent_sprites_to_sort.push_back(&psd);
  	}
  
@@ -7495,7 +7574,7 @@ index 6427a14..72f55ad 100644
  	ViewportDrawParentSprites(&_vd.parent_sprites_to_sort, &_vd.child_screen_sprites_to_draw);
  
  	if (_draw_bounding_boxes) ViewportDrawBoundingBoxes(&_vd.parent_sprites_to_sort);
-@@ -1897,6 +2532,855 @@ static inline void ViewportDraw(const Viewport &vp, int left, int top, int right
+@@ -1897,6 +2539,855 @@ static inline void ViewportDraw(const Viewport &vp, int left, int top, int right
  	);
  }
  
@@ -8351,7 +8430,7 @@ index 6427a14..72f55ad 100644
  /**
   * Draw the viewport of this window.
   */
-@@ -1965,7 +3449,21 @@ static void ClampSmoothScroll(uint32_t delta_ms, int64_t delta_hi, int64_t delta
+@@ -1965,7 +3456,21 @@ static void ClampSmoothScroll(uint32_t delta_ms, int64_t delta_hi, int64_t delta
  	assert(delta_hi != 0);
  
  	/* Move at most 75% of the distance every 30ms, for a smooth experience */
@@ -8373,7 +8452,7 @@ index 6427a14..72f55ad 100644
  	/* Move never more than 16 tiles per 30ms. */
  	int max_scroll = Map::ScaleBySize1D(16 * PIXELS_PER_TILE * delta_ms / 30);
  
-@@ -2091,10 +3589,59 @@ static bool MarkViewportDirty(const Viewport &vp, int left, int top, int right,
+@@ -2091,10 +3596,59 @@ static bool MarkViewportDirty(const Viewport &vp, int left, int top, int right,
   * @return true if at least one viewport has a dirty block
   * @ingroup dirty
   */
@@ -8433,7 +8512,7 @@ index 6427a14..72f55ad 100644
  	for (const Window *w : Window::Iterate()) {
  		if (w->viewport != nullptr) {
  			assert(w->viewport->width != 0);
-@@ -2127,6 +3674,10 @@ void ConstrainAllViewportsZoom()
+@@ -2127,6 +3681,10 @@ void ConstrainAllViewportsZoom()
   */
  void MarkTileDirtyByTile(TileIndex tile, int bridge_level_offset, int tile_height_override)
  {

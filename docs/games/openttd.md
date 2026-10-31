@@ -471,6 +471,13 @@ On `rvc_cpu` the guest's seconds to the game went 126.1, 101.9, 97.7, 86.9, 83.1
   (`OPENTTD_EMPTY_FIRST=1` is the old way). 33 million instructions.
 - A savegame's arrays of bytes come by `std::copy_n` from the read buffer, of 16-bit words by a loop of their own: a call a
   byte and the general conversion a word were 6.6 and 12 million.
+- A field whose type in the file is its type in memory is read by one switch (`SlSaveLoadConv`; 50 instructions by two, 243,852
+  of them). A game that names its size has a first empty map of 64 x 64 (a clear 256 x 256 was 3.7 million: its first chunk makes
+  the map anew), and the map's megabytes come from `calloc` with what the kernel cleared not cleared again.
+- The unwinder's tables are filed at the first throw (`__wrap__Unwind_Find_FDE` in `shaderemu_t.cpp`): libgcc reads every FDE to
+  file its range when a program registers them, about 5 million instructions, and a played game throws nothing.
+
+Together `rvc_cpu`'s first core to the game 126 million instructions to 110 (222 at the start of 31 October).
 
 ## The first core's small blocks
 
@@ -683,7 +690,22 @@ to 8, no other change, pictures and ticks a second: scroll 10.66 and 1.07 at 95,
 for the interval lets the pace space the ticks less.
 
 `GetRawSprite` of a loaded sprite saves nothing and tests the stacks once (58 instructions to about 18, 1.7 million calls a played
-round), and a parent sprite is not cleared before all its fields are set (2% of the workers).
+round), and a parent sprite is not cleared before all its fields are set (2% of the workers). `ViewportAddLandscape` asks once a
+part whether any selection or highlight exists, not `DrawTileSelection` at each tile (57 instructions a tile, 3.5% of the workers).
+
+Everything of 31 October against the tree before it, on the card (`--unity 11.1,1.4,0.75`, `OPENTTD_PLAY=2`, two runs each,
+alternating):
+
+| | before | after |
+|---|---|---|
+| round 2, pictures a second | 7.32, 7.62 | 10.29, 11.21 |
+| round 2, game ticks a second | 2.05, 2.25 | 2.57, 2.86 |
+| round 1, pictures a second | 5.85, 6.05 | 8.30, 8.52 |
+| the run less its two rounds (boot and start), s | 41.5, 41.6 | 25.2, 25.2 |
+| the whole run, s | 103.0, 100.9 | 68.7, 66.6 |
+
+`rvc_cpu` at 2 MIPS: first core's simulation 2.60 ticks a second to 3.13 (sum `6abca409`), start to the game 122 guest seconds to
+71. After a large change to the source make the counts anew (`counts.py`): a function whose text changed loses its counts.
 
 ## Not done
 

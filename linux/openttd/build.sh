@@ -122,7 +122,7 @@ sed 's/se_pad_/se_pad_s/g' "$DEPS/zz_pad.c" > "$DEPS/zz_pads.c"
 ottd-cc -O2 -fno-common -fdata-sections -msmall-data-limit=64 -c "$DEPS/zz_pads.c" -o "$DEPS/zz_pad_small.o"
 for o in zz_pad_large zz_pad_small; do "$CXXTC/bin/riscv32-linux-musl-objcopy" $ALIGN16 "$DEPS/$o.o"; done
 # the tick's worker takes its memory from a heap of its own (shaderemu_t.cpp)
-WRAP=; for f in malloc free calloc realloc aligned_alloc posix_memalign memalign malloc_usable_size; do WRAP="$WRAP;-Wl,--wrap=$f"; done
+WRAP=; for f in malloc free calloc realloc aligned_alloc posix_memalign memalign malloc_usable_size __register_frame_info __deregister_frame_info _Unwind_Find_FDE; do WRAP="$WRAP;-Wl,--wrap=$f"; done
 cat > "$WORK/src/openttd-toolchain.cmake" <<EOF
 set(CMAKE_SYSTEM_NAME Linux)
 set(CMAKE_SYSTEM_PROCESSOR riscv32)
