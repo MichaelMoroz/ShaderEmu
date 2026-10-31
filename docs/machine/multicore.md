@@ -190,7 +190,20 @@ same for the control pass, whose count of cores (`0x810003c0`) is what the kerne
 block for is no worker.
 
 **Who sets it.** `geotune` (`linux/userland/geotune.c`), which the init runs before any program asks for workers (the layout
-may only change while every worker is parked). It does nothing if a layout is set already, the kernel's at boot too, and the kernel's work comes first: at a boot `geotune` says nothing and the workers are alike. `geotune again` lays its own out. On the card (31 October 2026, boots in turn): `media_test` on `play-test.mp3` with 63 workers 4.05 s on the kernel's, 7.23 s on `geotune`'s, `play-test.flac` level at 1.6 s, and `geotune again` itself about 6.5 s. It
+may only change while every worker is parked). It does nothing if a layout is set already, the kernel's at boot too, and the kernel's work comes first: at a boot `geotune` says nothing and the workers are alike. `geotune again` lays its own out (about 6.5 s). Which is faster depends on the program (the card, an RTX 5070 laptop, 31 October 2026, two boots each, means; every sum as ever):
+
+| | The kernel's (all 2^5, 8 columns) | 2 columns, 2^3 | 4 columns, 2^3 | 8 columns, 2^5 |
+|---|---|---|---|---|
+| `nxray`, a picture | 93 ms | 58 | 64 | 94 |
+| `nxpath`, its picture | 256 ms | 197 | 200 | 243 |
+| `nxpath`, its tree | 208 ms | 330 | 316 | 201 |
+| `nxphys` wall, 120 substeps on 255 | 1,207 ms | 1,500 | 1,374 | 1,195 |
+| `play-test.mp3`, 63 workers | 4.03 s | 7.08 | 6.62 | 3.87 |
+| `play-test.mp3`, 255 workers | 4.17 s | 7.33 | 6.79 | 4.09 |
+| `mctest`'s fill, 64 KB a worker | 12 passes | 41 | 41 | 12 |
+
+Reading work gains from dense blocks and storing work loses by its small cache. With 16 big workers or fewer (15 for the MP3, 7 for `nxphys`, `play-test.flac`) the four are level.
+ It
 first lays out a geometry that only a tick with `MC_HYBRID` gives 47 cores (small blocks 64 columns wide); one that gives
 every core is a tick without it, and `geotune` leaves the layout to the kernel. Then:
 
