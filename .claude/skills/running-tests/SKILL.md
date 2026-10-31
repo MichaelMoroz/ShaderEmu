@@ -20,7 +20,7 @@ Depth: `docs/machine/cpu-harness.md` ("The test set"). Comments at the head of `
 
 ## From a worktree
 
-A worktree has no `bin\` or `build\`, so name what the run needs. This was run on 31 October 2026:
+A worktree has no `bin\` or `build\`, so name what the run needs (`MAIN` below is the main checkout). This was run on 31 October 2026:
 
     python tools/test_all.py mctest-3 fptest --cpu MAIN\bin\rvc_cpu.exe --image MAIN\build\images\nommu --logs C:\...\scratchpad\ta
 
