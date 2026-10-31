@@ -306,6 +306,16 @@ at the HUD's end and each time core 0 looks at the drawing (`S_ExtraUpdate`: the
 itself; 2.5k a paint in doubles). 31 October 2026, the fight: core 0 205.2k to 195.1k, 29.55 to 28.05
 passes a frame, 13.8 to 14.6 fps.
 
+Then, in the same span: only the lights that are lit are copied to the drawing (`SE_LightsGive`, 3.4k
+whole), the rings' statistics are read only under `HL_RENDER_CALLS`, the bones' and light's slots are
+cleared by the keys kept and not whole, and the view's own player is not interpolated in first person
+(`CL_ComputePlayerOrigin`; a demo or a third-person view still is): core 0 192.9k to 184.5k, 28.13 to
+26.97 passes, 15.2 fps. A renderer call of a kind that goes through needs no thunk without
+`HL_RENDER_CALLS` (`R_AddEntity`, 50 a frame): 182.1k, 26.89 passes; walking 122.4k, 15.67 passes,
+26.2 fps. What bounds the fight now is the drawing's job (about 130k, 20 models at 4.4k) and the
+handover of about 2 passes; core 0 waits at the swap. A cache of a model's meshes by submodel and
+skin (1,668 to 1,618 a call) gave no frames and was not kept.
+
 ## The controls
 
 On a desktop the left button held drags the view round, a quarter of a degree a pixel, as

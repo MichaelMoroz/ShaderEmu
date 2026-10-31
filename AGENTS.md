@@ -344,6 +344,10 @@
   A level that goes settles the server, the drawing and every job first (`SE_LevelSettle`), and off core 0 a group
   is loaded when its pointer is set (`Mod_CacheCheck` walked pools core 0 moves): a change to either is run through
   the elevator and `changelevel`s, with the default and `HL_RENDER=core` (docs/games/halflife.md, "A level that goes").
+- Half-Life's client keeps its predicted states by the command and its drawing has two sets of entity copies
+  (`docs/games/halflife.md`, "A move predicted once", "What core 0 did between the drawing's end and the next give"):
+  a change to the prediction or to what `SE_AsPredicted` compares runs `HL_PREDICT=check` (0 over 0.1), and a cache in
+  the drawing goes by the live entity (`R_SceneLive`), not a copy's address.
 - OpenTTD's game tick runs on a worker while the first core draws (`docs/games/openttd.md`, "The tick on a worker";
   `OPENTTD_TICK=slices|whole` on the first core, "The tick in slices"): it yields at `TickYieldPoint()`, and what the
   drawing does while it is held must change no game state; a new path from the GUI into the game (a command, a save)
