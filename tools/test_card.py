@@ -26,7 +26,9 @@ import test_all as T   # noqa: E402
 CARD = {
     # the card's floats (the tick's), the same in two runs on 28 October 2026
     'hlsl': {'has': [r'hlsl_bench: compiled in \d+ ms: .* 0 spilled', r'hlsl_bench: sum a4b289dd']},
-    'nxpath-balls': {'has': [r'pathstat: 160 x 120, 2 samples.* sum 11e09363']},
+    # (11e09363 until the float libm, 66a6e82, as rvc_cpu's b85eb16e to 820f06bc: nxpath linked with musl's own float
+    # functions says 11e09363 here and b85eb16e there still, 31 October 2026; 5cd7620a in four runs)
+    'nxpath-balls': {'has': [r'pathstat: 160 x 120, 2 samples.* sum 5cd7620a']},
     # longer than one run may be (55 s; --parts runs them): mctest 255 was at its `calls` check, cc-bytes at its sixth program
     'mctest-255': {'long': True},
     'cc-bytes': {'long': True},

@@ -51,6 +51,9 @@ sef_glyph(const void *file, uint32_t code)
 	const struct sef_range *r = (const struct sef_range *)((const char *)file + h->ranges_at);
 	uint32_t lo = 0, hi = h->ranges;
 
+	/* (nearly every character is in the first range: 80 instructions a glyph by the halving, 2% of a desktop's start) */
+	if (hi && code - r[0].first < r[0].count)
+		return (int)(r[0].glyph + code - r[0].first);
 	while (lo < hi) {
 		uint32_t mid = (lo + hi) / 2;
 

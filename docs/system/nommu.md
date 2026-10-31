@@ -18,8 +18,12 @@ In WSL, after the MMU build (`linux/kernel/build.sh` and the programs' build scr
   nothing compiled, a copy of the built root in `~/nm/repo`, and compiler drivers (`rv32-cc`,
   `rv32-c++`) that compile every program position-independent and link it as a flat program
   (`flatcrt.c` is its start). `fork` is `vfork` there (`nommu_fork.h`, included in every file).
-  `RV32_MARCH=rv32imaf_zba_zbb` builds with Zba and Zbb.
-- `bash linux/nommu/kernel.sh`: the MMU kernel's tree copied with its hooks, seven patches
+  `RV32_MARCH=rv32imaf_zba_zbb` builds with Zba and Zbb. It can be run again: `libc.a` goes back to musl's and
+  toolchain.sh's members are put in anew by the new drivers, and a `__FILE__` says `/nm/...` wherever the folder is, so
+  the libraries' bytes and `cc-bytes` do not go by the folder's name (31 October 2026).
+- `bash linux/nommu/kernel.sh`: the MMU kernel's tree copied with this repository's drivers and hooks put in again
+  (the MMU build is not run any more, and that tree's driver was 28 October's: `patch_exitpark.py` failed to link and
+  the last `Image` was copied on, in the image and in `linux/prebuilt/nommu`; a failed make now stops it), seven patches
   (`patch_kconfig.py`: RV32 without the MMU, still in supervisor mode under the machine's SBI and
   linked at 0x82000000; `patch_signal.py`, `patch_drivers.py`, which also keeps `/proc/cpuinfo`'s
   "mmu" line out, `patch_ovl.py`, `patch_ramfs.py`, `patch_console.py`: the console in memory,
@@ -32,10 +36,13 @@ In WSL, after the MMU build (`linux/kernel/build.sh` and the programs' build scr
   (a program's memory one block of the buddy allocator, freed in aligned blocks),
   `patch_memcpy.py` (no byte loops for misaligned copies; the commit's parallel copy for any
   large copy whose two ends lie alike in a texel), `patch_flatreloc.py` (relocations a
-  word at a time), `patch_sysfs.py` (no sysfs for the boot's slab caches and built-in
+  word at a time, and since 31 October 2026, in a program whose header has flag `0x40000000`, the entries and the words
+  in the machine's order: `elf2bflt.py` and `elf2flt.c` write them so, no byte swap twice a relocation),
+  `patch_romfs.py` (a directory listed where it lies in the ROM, not an entry's three reads; a name found by its directory's table of names, which `slim.py` writes at the ROM's end for a directory of 32 entries or more, in place of a walk of the list), `patch_sysfs.py` (no sysfs for the boot's slab caches and built-in
   parameters: the boot 9.9 to 8.0 million), `patch_zeroread.py` (`/dev/zero` a megabyte a step,
   no fault-in of a write's buffer) and `patch_timekeeping.py` (with one processor the tick
-  advances the timekeeper in place, not a shadow copied whole), and `patch_exitpark.py`. That last
+  advances the timekeeper in place, not a shadow copied whole, and at every 16th tick: readers add
+  the clock's cycles since anyway, and the coarse clocks, a file's date, are a third of a second old at most), and `patch_exitpark.py`. That last
   one calls `shaderemu_gpu_exiting` in `do_exit` before `exit_mm`. It parks a dying program's
   worker cores and its lanes' job, then ends the pass. A worker reads its start word as its pass
   begins, so one already in that pass stores into the program's memory when the pass ends.

@@ -12,6 +12,11 @@
   On NVIDIA a warp is a 4 x 8 pixel tile under one big triangle, so blocks of whole tiles (4 x 8, 4 x 16, 8 x 8) drawn
   by one triangle never mix; a primitive edge inside the cores' area does. Padding lanes are kept out of the geometry,
   not discarded.
+- The no-MMU build goes by nothing of the build folder's name (31 October 2026; `-ffile-prefix-map` in `setup.sh`'s drivers:
+  `cc-bytes` must not move with a private `HOME`). `linux/nommu/kernel.sh` puts this repository's drivers and hooks into its
+  copy of the tree and stops at a failed make: before, the old `Image` was copied on. A flat program's relocations and the
+  words they name are in the machine's order (flag `0x40000000`, `elf2bflt.py`, `elf2flt.c`); a ROM directory of 32 entries
+  or more has a table of its names (`slim.py`, `patch_romfs.py`): what writes the ROM after `slim.py` keeps it.
 - Linux with the MMU is no longer supported or developed for (21 October 2026): build, test, measure and document the
   no-MMU machine only (`linux/nommu`, `build/images/nommu`). Do not fix, rebuild, test or keep in step anything that only
   the MMU image uses, and do not add MMU paths to new work.

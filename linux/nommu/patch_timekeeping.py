@@ -31,6 +31,17 @@ if MARK not in s:
 ''', '''	if (IS_ENABLED(CONFIG_SMP) && (action & TK_MIRROR))
 		memcpy(&shadow_timekeeper, &tk_core.timekeeper,
 '''),
+        # (every 16th: a reader adds the clock's cycles since anyway, and only the coarse clocks go by this: a file's date
+        # is a third of a second old at most. It was a third of a tick's 2,000 instructions, 1% of every program)
+        ('''void update_wall_time(void)
+{
+''', '''void update_wall_time(void)
+{
+	static unsigned int calls;
+
+	if (++calls & 15)
+		return;
+'''),
     ):
         assert s.count(old) == 1, old
         s = s.replace(old, new)
