@@ -34,8 +34,8 @@ of the machine's own network itself: `docs/apps/web.md`, "Addresses the machine 
   pixels: the guest asks for the rest with the same address and an offset in bytes, as for a
   file (below), and the host keeps the texture until the last part is delivered (`open.c`,
   and `check_reply` in `nxweb.c`, which writes a picture's parts to its file as they come).
-  The guest decodes nothing. Until 12 October 2026 a picture was shrunk to fit 256 x 256; the
-  harness still does (WIC, 65,536 pixels at most, `_FetchDeliver` 1). VRChat's own loader gives a world at most 2048 pixels a side.
+  The guest decodes nothing. The harness alone shrinks a picture to fit 256 x 256 (WIC, 65,536
+  pixels at most, `_FetchDeliver` 1). VRChat's own loader gives a world at most 2048 pixels a side.
 - Under Linux a program maps both through `/dev/gpu`: the words at offset `0x01000000`, the
   data at `0x016c0000`. Nano-X's texture area ends below that.
 - One request at a time; there is no lock between programs. A program waits until the
@@ -80,13 +80,10 @@ of the machine's own network itself: `docs/apps/web.md`, "Addresses the machine 
   `.jpg` or `.jpeg`, without smaller copies, and the control pass reads the file's bytes out
   of the texture itself (`packed_word` in `src/gpu.h`, `_FetchDeliver` 3, `_FetchOffset`):
   no Udon loop touches them. Any other address is a text download, whose bytes Udon packs
-  6,000 a frame. It hands a binary file over unchanged: in a real client (18 October 2026,
-  `EmuMachine.fetchTest`, which loads `fetchTestUrl` both ways eight seconds after start and logs
-  `[FetchTest]` lines) a GIF of 93,093 bytes from tenor came whole through the text loader in
-  0.2 s, and the picture loader refused it at once ("InvalidImage: UnsupportedOperation": it takes
-  no GIF), so a GIF stays a text download. The open the developer saw hang was a Discord
-  attachment without its signature (`?ex=...&is=...&hm=...`): the picture loader logged "HTTP/1.1
-  404 Not Found", as Discord answers any such address now; the loader did no wrong. A world can only load addresses it was built with, or one a visitor types into a
+  6,000 a frame. It hands a binary file over unchanged, and the picture loader refuses a GIF, so a
+  GIF stays a text download (`EmuMachine.fetchTest` loads `fetchTestUrl` both ways eight seconds
+  after start and logs `[FetchTest]` lines). Discord's attachments want their signature
+  (`?ex=...&is=...&hm=...`): without it Discord answers 404. A world can only load addresses it was built with, or one a visitor types into a
   `VRCUrlInputField`: so it knows the sites of `linux/apps/web/sites.txt` (the browser's home
   page is made from the same file). Any other address gets status 1 and a slot.
 - There are four slots: slot 0 is the page, 1 to 3 what it wants next, its style sheets before
@@ -113,8 +110,7 @@ number with no route. Over the host there is no POST and there are no cookies, t
 - **Text longer than 256 KB comes in parts.** The answer's length word is the whole answer's;
   the browser takes the first 256 KB and asks again with the same address, the same kind
   and the offset of the next part, up to 1.5 MB of a page and 768 KB of a sheet (`part_text`
-  in `nxweb.c`). The harness always answered so; the world (`EmuMachine.cs`) cut a page at
-  256 KB until 13 October 2026 and now keeps it whole as it keeps a file.
+  in `nxweb.c`). The world (`EmuMachine.cs`) keeps a page whole as it keeps a file.
 - A picture's pixels are written as a PPM file in `/tmp`; when it is first drawn it is decoded
   from that file to the size the page draws it at, into the GPU's memory, as the image's
   pictures are (`docs/apps/web.md`, "Pictures"). Its place is kept from the `width` and `height`
@@ -124,8 +120,8 @@ number with no route. Over the host there is no POST and there are no cookies, t
 ## What the image keeps of the network
 
 VRChat lets a world open only the addresses it was built with, and starts one download of
-each kind every five seconds: a listed site opened at a click, and then each of its sheets
-and pictures was a paste by hand and five seconds. `python linux/apps/web/preload.py` reads
+each kind every five seconds: without help each of a listed site's sheets and pictures would be a
+paste by hand and five seconds. `python linux/apps/web/preload.py` reads
 the sites of `linux/apps/web/sites.txt` as the browser would and writes two things:
 
 - **Addresses for the world**, `build/web/links.txt`: the listed pages, the pages one link
@@ -144,21 +140,14 @@ the sites of `linux/apps/web/sites.txt` as the browser would and writes two thin
   (`web_cache_find` in `web.h`, which halves the index where it lies): a sheet is read as a
   file and a picture is drawn from the ROM, with no host, no paste and no five seconds.
 - **A picture is kept** (`kept_file`) as a PPM when it has 4,096 pixels or fewer (`webc-N.ppm`:
-  the GPU samples it where it lies; decoded, a 40 x 40 JPEG cost the browser's first core 500
-  thousand instructions), as a PNG in segments when it has 256 colours or fewer (with a
+  the GPU samples it where it lies, with no decoding on the first core), as a PNG in segments when it has 256 colours or fewer (with a
   palette) or its PNG is no larger than 1.25 times its JPEG (`webc-N.png`), else as a JPEG of
   quality 80 with its colours at full size, in restart intervals (`webc-N.jpg`). Both are laid
   out for libmedia's workers (`docs/system/media.md`); the browser decodes them on the worker cores
   (`docs/apps/web.md`, "Pictures"). Full-size colours, since libmedia stretches half-size ones from
-  the nearest sample: of the cache's photographs, 4:2:0 at quality 85 was a mean of 4.9
-  levels from the picture as decoded there, 4:4:4 at 80 3.8, for 5% more bytes; libmedia's
-  decoding of the cache is Pillow's within 0.04 levels a JPEG, the same pixels a PNG.
-- **What the budget holds** (15 October 2026, three links a site): 382 pictures in 6.26 MB
-  (166 PPMs 0.68 MB, 25 PNGs 1.06 MB, 191 JPEGs 4.52 MB) and the sheets' 1.73 MB, pictures
-  that would be 55.7 MB as PPMs; the image's cache of 13 October held 201 pictures in 7.29 MB
-  of PPMs, and those 201 as kept now are 1.27 MB. The pictures are chosen smallest first by
-  a guess of their size (`GUESS_BYTES`, 0.3 bytes a pixel against 0.28 measured), then kept
-  smallest first while the budget lasts. `--pages` keeps the pages too, for tests of the browser on real sites in a
+  the nearest sample.
+- **What the budget holds**: the pictures are chosen smallest first by a guess of their size
+  (`GUESS_BYTES`), then kept smallest first while the budget lasts. `--pages` keeps the pages too, for tests of the browser on real sites in a
   machine without a network (`rvc_cpu`, `tools/web_test.c`); the browser shows a kept page
   and says so, and Reload asks the host.
 - Run it before the image and the world are made. What it fetches is not kept in this

@@ -7,7 +7,7 @@ stand by themselves is decoded on the worker cores (`multicore.md`); what cannot
 with them. A program links `/usr/lib/libmedia.a` with `mcw.c` and `mcwx.c` and includes
 `media.h`.
 
-    wsl -- bash linux/nommu/build.sh libmedia/build.sh    (8 s; after the kernel's)
+    wsl -- bash linux/nommu/build.sh libmedia/build.sh    (after the kernel's)
 
 The build also makes `media_test` (in the image, `/usr/bin/media_test`) and the same program for
 the build computer (`$WORK/src/libmedia/media_test-host`, workers as threads:
@@ -37,9 +37,7 @@ one), so the library never posts to a worker by number: every step is a loop (`m
 passes a busy worker by. A pipeline (a JPEG's or a PNG's one stream: this core reads, workers
 follow) is a loop too, `m_stages`: item i on the i-th core of the team, each core's items in
 order, so an item may wait for lower ones and the lowest unfinished one always runs; core 0
-has item 0, the reading. With 20 of 63 workers held by calls of the program's own
-(`MT_BUSY=20`) the fox's PNG in one stream takes 6.39 s against 6.41 with all free, its JPEG
-without markers 1.21 against 1.49.
+has item 0, the reading. `MT_BUSY=20` holds 20 of 63 workers by calls of the program's own, for a test.
 
 ## Pictures
 
@@ -88,8 +86,7 @@ jobs; otherwise strips of 16 rows, each read from the start of the interval it b
 at a half, a quarter or an eighth of it, the largest that is still at least the size shown, and
 then fitted. At an eighth a block is its mean (no transform); at a half and a quarter each sample
 is the mean of the transform's under it, so the colours and stores are four or sixteen times
-fewer. Against Pillow's decoding scaled down by area: within 0.4 levels at 4:4:4, within 1.5 to
-4.2 at 4:2:0, where a colour sample covers 16 pixels (the reference: Pillow over the whole blocks, as a smaller decoding is).
+fewer.
 
 **Files laid out for the workers.** A JPEG in restart intervals and a PNG in segments are any
 reader's files, and this library decodes them wholly in parallel:
@@ -97,7 +94,7 @@ reader's files, and this library decodes them wholly in parallel:
 - JPEG: a restart marker every so many MCUs (`DRI`). This library's encoder writes some 512
   intervals a picture; `tools/make_wallpaper.py`, `tools/make_media.py` and
   `tools/make_test_pictures.py` ask Pillow for the same (`restart_marker_blocks`). The cost is
-  under 1% of the file (the fox's desktop picture: 126,036 bytes plain, 127,927 in intervals).
+  a little of the file.
 - PNG: each IDAT holds rows of their own, in a deflate stream that refers to nothing before it
   and ends on a byte (an empty stored block, as zlib's full flush leaves), its first row
   filtered without the row above; the private chunk `mdPR` (ancillary, private, unsafe to copy)
@@ -115,8 +112,7 @@ it ends on a byte; the minimum code size is made even, so that first width is od
 number of clears under 8 always comes to a byte. The pieces are then bytes put one after
 another (in sub-blocks of 255, written by every core a page each), and a decoder sees one
 stream that clears now and then. The pieces are by the picture's size, not the workers': the
-same file from any number of them. They cost some 5% of the file (the fox at 1,600 x 1,200 in
-256 colours: 446,932 bytes, 426,342 in four pieces).
+same file from any number of them. They cost a little of the file.
 
 **Animations** (`media_gif_anim_encode`): each frame is the canvas whole, encoded as above over
 every core with its colours as a table of its own, after a control block with its delay and its
@@ -126,9 +122,8 @@ count. `media_test animenc IN.gif OUT.gif N` writes a GIF's frames again;
 `python linux/libmedia/test/check_gif_anim.py MEDIA_TEST --wsl` makes a pan over the fox (12
 frames, 320 x 240, a palette of its own each) and dots on see-through ground (8 frames, played 3
 times, cleared after each) with Pillow: every frame the same pixels, the delays and loop counts
-the same, the same bytes from 0, 4 or 16 workers; 0 bad. On `rvc_cpu` the pan takes 32.3 s on
-one core and 6.54 s with 63 workers (a frame of 76,800 pixels is five pieces), the file the
-host's byte for byte, `RVC_RACES` 0 undone.
+the same, the same bytes from 0, 4 or 16 workers; 0 bad. The file on `rvc_cpu` must be the host's
+byte for byte, `RVC_RACES` 0 undone.
 
 ### Checked
 
@@ -138,8 +133,8 @@ and 4 channels with 4 workers: PNG of every colour type and depth, palettes with
 interlaced, 16 bits; JPEG 4:4:4, 4:2:0, 4:2:2, grey, progressive, with restart markers by rows
 and by blocks, CMYK; GIF; BMP of 1, 8, 24 and 32 bits; PNM P4 to P6; TGA plain, RLE, grey and
 with alpha. PNG, GIF, BMP, PNM and TGA are the same pixels; JPEG within what two decoders'
-colour stretching differs by (a mean of 0.03 levels at 4:4:4, under 0.8 with colours at half
-size, where Pillow's stretching is smoothed and this one's is the nearest sample). An
+colour stretching differs by (Pillow's stretching is smoothed and this one's is the nearest
+sample). An
 animation's frames, each way of leaving a frame among them, have the sums of Pillow's. The
 encoders' files are read back by Pillow: PNG (levels 1, 6 and 9), BMP and PPM the same pixels; this library's JPEG
 at quality 90 is Pillow's own at that quality, coefficient for coefficient (the same sum when
@@ -148,7 +143,7 @@ the fixed colours as `gif_fixed` in the test dithers them, pixel for pixel. 0 ba
 
 `RVC_RACES` under `rvc_cpu` over the fox's JPEG in intervals, its plain and progressive JPEGs, its
 PNG in segments and in one stream (16 workers), an animated GIF (8), a fit to 400 x 266 and both
-encoders: 0 changes undone, every sum as without it; the reads "as it was" (3.7 million) are cores
+encoders: 0 changes undone, every sum as without it; the reads "as it was" are cores
 waiting on another's count.
 The same over the fox's plain, interval and uneven JPEGs (markers crowded into a third of the
 picture, more than a part of the scan has room for: found again on this core) and its PNG in one
@@ -159,41 +154,26 @@ The GIF encoder over 1,600 x 1,200 in 256 colours, 333 x 221 in 200 and the fox'
 
 ### What it costs
 
-The desktop's picture, 1623 x 1080 (the fox), under `rvc_cpu` with every pass a round of 8,192
-instructions a core (`--ips 1e12 --pass-ms 2.7307`: workers count as cores side by side), into
-pixels mapped beforehand, the workers already open (`MT_OPEN=63 MT_PREALLOC=1 MT_REPEAT=3
-media_test decode FILE OUT 63 4`; the second decoding of three):
+On `rvc_cpu`, 31 October 2026: `/usr/share/picture-fox.jpg` and `.png`, 640 x 480, in 4 channels into
+pixels mapped beforehand (`MT_OPEN=63 MT_PREALLOC=1 MT_REPEAT=3 media_test decode FILE OUT 63 4`; the
+second decoding of three). The times are calibrated, 31 October 2026, and the model's workers term
+rests on one game, so they are rough.
 
-| | One core | 63 workers |
+| | one core, million instructions | 63 workers, a decoding |
 |---|---|---|
-| JPEG in restart intervals (this library's or `make_wallpaper.py`'s) | 44.6 s | 0.82 s |
-| JPEG without restart markers (Pillow's plain file) | 44.6 s | 3.55 s before the guesses (4.0 with the list); see "Without markers" |
-| progressive JPEG | 75.7 s | 24.7 s |
-| PNG in segments (this library's, filters None, Sub, Up) | 69 s | 2.45 s |
-| PNG in one stream (Pillow's) | 95 s | 28.7 s |
-| PPM (the copy alone) | 20.9 s | 0.40 s |
-| encoding: JPEG at quality 85 | 88 s | 2.3 s |
-| encoding: PNG at level 1 (32 workers at most) | 251 s | 16.3 s |
-| encoding: PNG at level 6 | 484 s | 26.8 s |
-| encoding: GIF, the fox at 1,600 x 1,200 in 256 colours (workers opened in the call) | 48.2 s | 2.03 s (16 workers: 4.0 s) |
-| encoding: GIF, the fox's desktop picture (fixed colours) | 38.0 s | 1.98 s (3.18 s) |
+| JPEG in restart intervals | 68 | 196 ms |
+| PNG in one stream | 89 | 2.93 s |
 
-- A JPEG's instructions are some 60 a pixel: the colours 30 (from tables, the same numbers),
-  the transform 25, the codes 5. A progressive file waits for its scans, which one core reads.
-- What a first decoding in a program costs more: its workers opened (70 to 320 ms) and, where
-  the pixels are mapped in the call, their clearing by the kernel (6.9 MB: 434 ms). The desktop
-  decodes into a pixmap that is there already; Paint and ClassiCube touch their own pixels.
-- What was taken out on the way, measured on the same picture: the restart markers' places in
-  256 mappings of a page (470 ms of every decoding: one block now); strips of 16 rows as the jobs
-  where an MCU is whole 16 bytes of every row (2.18 s to 1.28: an interval a job); working memory
-  through `mcw_scratch` (a worker's first store to a new page waits for the first core: it is
-  mapped by the first core now, or kept from call to call under 1 MB); a PNG segment of 32 rows
-  (34 jobs: 16 rows, 68); Paeth's filter in this library's PNG files (most of the decoding: 0.1 to
-  1.7% larger without).
-- PNG encoding is the slow side: some 430 instructions a pixel at level 1 (filters chosen of
-  three by sums, a match looked for at every byte, codes built a block at a time). Paint saves at
-  level 1: a 1,600 x 1,200 picture is about 17 s with 32 workers; a drawing, with long matches,
-  much less.
+- A progressive file waits for its scans, which one core reads.
+- A first decoding in a program costs more: its workers opened and, where the pixels are mapped in
+  the call, their clearing by the kernel. The desktop decodes into a pixmap that is there already;
+  Paint and ClassiCube touch their own pixels.
+- Strips of 16 rows are not the jobs where an MCU is whole 16 bytes of every row: an interval is.
+  Working memory comes through `mcw_scratch` (a worker's first store to a new page waits for the
+  first core: it is mapped by the first core, or kept from call to call under 1 MB). A PNG segment
+  is 16 rows. This library's PNG files have no Paeth filter, most of a decoding where it is.
+- PNG encoding is the slow side (filters chosen of three by sums, a match looked for at every byte,
+  codes built a block at a time). Paint saves at level 1.
 
 ### Without markers
 
@@ -209,23 +189,9 @@ begins (pieces of whole 16 bytes, some four a core). The pieces are then read an
 intervals of a file with markers are. `MEDIA_JPEG_SERIAL=1` is the one core's reading before
 it, behind which workers draw strips.
 
-The fox at 1623 x 1080 from Pillow without markers (4:2:0, 155 KB), 3 bytes a pixel, the
-pixels mapped before, 63 workers, the second decoding (`media_test_st`, a build of this file
-that prints each stage's time):
-
-| | Time |
-|---|---|
-| one core | 45.3 s |
-| one core's reading, workers behind it (`MEDIA_JPEG_SERIAL=1`) | 4.12 s |
-| guessed parts: the three readings 93 + 104 + 153 ms, the pieces 1,021 ms | 1.76 s |
-| the same picture in restart intervals | 1.08 s |
-| 4:4:4 (324 KB): guessed parts, against one core's reading | 2.55 s against 9.55 |
-| grey (125 KB): the same | 1.00 s against 3.99 |
-
 Checked: the pixels are the one core's reading's, byte for byte, in 3 and 4 channels, 4:2:0,
-4:2:2, 4:4:4, grey and noise at 3, 15 and 63 workers (`media_test-host`); with parts of 40
-bytes, so that 137 guesses of 256 had not met the stream by their part's end, the same; on the
-machine with 20 of 63 workers busy (`MT_BUSY=20`) the same, and `RVC_RACES` 0 undone.
+4:2:2, 4:4:4, grey and noise at 3, 15 and 63 workers (`media_test-host`); with parts small enough
+that many guesses do not meet the stream by their part's end, the same; on the machine with 20 of 63 workers busy (`MT_BUSY=20`) the same, and `RVC_RACES` 0 undone.
 
 ## Sound
 
@@ -272,42 +238,31 @@ halved. `media_audio_mix_rate` is a tracker tune's mixing rate (22,050 Hz unless
 
 `media_test audio FILE OUT.raw [WORKERS [PIECE]]` (FNV-1a over the bytes; WORKERS -1 reads in
 order, -2 decodes the pieces backwards on one decoder, each a seek, -3 also seeks the reader to
-200 places and compares) gives the same sums on the build computer (`media_test-host`, built with
-the machine's single-precision constants) and the guest, with 0, 16 and 63 workers, in order and
-backwards:
+200 places and compares) must give the same sums on the build computer (`media_test-host`, built
+with the machine's single-precision constants) and the guest. Sums under `rvc_cpu` on 31 October
+2026, from the files in the image:
 
 | File (25 s of a sweep with noise, unless said) | Sum | Against ffmpeg's `-f s16le` |
 |---|---|---|
-| `f16.flac`, 16-bit stereo | `9eb75ab7` (= the WAV it was made of) | every sample |
-| `f24.flac`, 24-bit stereo | `de49ac9b` (= `w24.wav`) | every sample |
 | `play-test.flac` | `518c5ac8` | every sample |
 | `w8m.wav`, `w24.wav`, `wf32.wav`, `wf64.wav` | `52d7de09`, `de49ac9b`, `6aec9116`, `6aec9116` | every sample |
-| `v44.ogg`, 44.1 kHz stereo, q4 | `b606214b` | 99.79% the same, the rest by 1 |
-| `v22m.ogg`, 22,050 Hz mono | `5e1577eb` | 99.81%, the rest by 1 |
-| `play-test.mp3` | `aa07a2e5` (`c4627f73` at half rate, build computer) | 99.43% after minimp3's 2,257 frames of encoder delay, the rest by 1 |
-| `m22m.mp3`, 22,050 Hz mono (MPEG-2) | `32019b95` | 99.60%, by 2 at most |
+| `play-test.mp3` | `aa07a2e5`, in order and with 16 workers | nearly all the same after minimp3's encoder delay, the rest by 1 |
 | `play-test.mod` | `c714a845` | |
+| `Grieg - Hall of the Mountain King.ogg` | in pieces `b7a28c01` (16 and 63 workers), in order `a9b462a1` (-1 and 0 workers) | |
 
-`nxplay`'s own sums (`play.md`, "Checking it") are as they were, with workers and without; the
-two Ogg files give `4bc10ffb` and `303b2940`. `RVC_RACES` with 16 workers over Vorbis, FLAC, MP3
-and WAV: 0 undone.
+The Ogg file's two sums differ on this image, and `nxplay`'s do too (`34eeed95` with 48 workers,
+`01ba4206` without): Vorbis's pieces are not to the last bit an in-order decoding here, though the
+scheme says they should be. Not looked into. `play-test.flac` and `.mp3` agree both ways.
 
-Since 28 October 2026 a Vorbis block size's twiddle factors and window are made in floats
-(`vorbis_tables.py`, `m_vorbis_sinpi`), not by sines in software doubles: a file's setup was some 18
-million instructions on the first core (a third of the Music player's start), now well under one.
-The tables are nearer the true sines than before (28,544 values over every block size: at most 5
-units in the last place, before up to 713 where the old float angle was rounded), and the samples
-move by 1 in a few: the image's two Ogg files 0.05% and 0.12% of their samples, by 1 at most;
-`Beethoven - Moonlight Sonata.ogg` with 16 workers `49b4ad58` before, `113e5533` now, the same on
-the build computer and the guest. The sums of the table above and of `play.md` are of before
-(the files are not in the image).
+`RVC_RACES` with 16 workers over Vorbis, FLAC, MP3 and WAV must say 0 undone.
 
-Instructions for a second of 44.1 kHz stereo (`nxplay`'s `playstat`): Vorbis 15.6 million in
-order, 17.6 in pieces (each seek 12% more); FLAC 11.7 and 12.9; MP3 12.9 and 14.0, at half rate
-8.6 and 9.6; MOD 1.1; WAV 0.1. `nxplay` decodes the 25 s Vorbis file in 5.5 s with 48 workers,
-4.5 times as fast as it plays. (`media_test` decoding whole files under `rvc_cpu`'s own clock,
-which counts the workers' instructions one after another: `v44.ogg` 122 s alone, 15.2 with 16
-workers, 10.5 with 63, where 25 pieces of a second are 25 cores; `f16.flac` 70.7, 9.4, 6.9.)
+A Vorbis block size's twiddle factors and window are made in floats (`vorbis_tables.py`,
+`m_vorbis_sinpi`), not by sines in software doubles, which would be most of a file's setup
+(28,544 values over every block size, at most 5 units in the last place).
+
+Thousands of instructions for a second of 44.1 kHz stereo (`nxplay`'s `playstat`, 31 October 2026),
+in order and in pieces: Vorbis 15,560 and 18,103; FLAC 11,579 and 12,853; MP3 12,640 and 14,009, at
+half rate 9,573 in pieces; MOD 1,124; WAV 99.
 
 ## Films
 
@@ -350,17 +305,14 @@ in memory, and decodes it ahead on the workers. The first core asks for pictures
 
 ### MPEG-1
 
-`linux/video/mpeg.c` and the half of `nxvideo.c` that gave jobs out, moved into the library
-as they were (`video.md` has why each thing is so): the file is taken apart on the first core,
-a decoder is put back as it was made for every group, a picture is decoded where its group
-keeps it, a group is copied into its places a picture a job by its own worker and by every
-worker whose group waits, the sound's chunks start the filter's ring where an in-order
-decoding has it. pl_mpeg is fetched and changed by `linux/libmedia/build.sh` exactly as
-`linux/video/build.sh` did (the same sed, `plm_window.py`, `plm_fast.py`: the same
-`pl_mpeg.h`, compared byte for byte). The memory is the film's (mapped, all of it unmapped by
-`media_video_close`), not `mcw_alloc`'s, which is never given back. The jobs' words are 32
-bits, so a job is given a picture's number, not its place's address (an address on the
-build computer is 64 bits).
+`video.md` has why each thing is so: the file is taken apart on the first core, a decoder is put
+back as it was made for every group, a picture is decoded where its group keeps it, a group is
+copied into its places a picture a job by its own worker and by every worker whose group waits, the
+sound's chunks start the filter's ring where an in-order decoding has it. pl_mpeg is fetched and
+changed by `linux/libmedia/build.sh` (a sed, `plm_window.py`, `plm_fast.py`). The memory is the
+film's (mapped, all of it unmapped by `media_video_close`), not `mcw_alloc`'s, which is never given
+back. The jobs' words are 32 bits, so a job is given a picture's number, not its place's address (an
+address on the build computer is 64 bits).
 
 ### VQA
 
@@ -395,8 +347,7 @@ for a movie's rows and the next frame's pointers, and its build links `libmedia.
 
 `media_vq2_rows` is the same for 4x2 blocks (solid where the high pointer is 15): Tiberian
 Dawn's drawer calls it for every frame (`tdawn.md`, "Movies"). Both are byte for byte the
-game's `UnVQ_4x2` and `UnVQ_4x4` on the build computer: 1,152 random frames of four sizes, at
-three places in a page, with 0 to 8 workers, 172.8 million bytes, 0 differ.
+game's `UnVQ_4x2` and `UnVQ_4x4` on the build computer, on random frames of several sizes.
 
 ### GIF
 
@@ -422,90 +373,60 @@ Huffman tables (a camera's, `AVI1`) is given the standard ones before its scan.
   (the decoder writes 0xffRRGGBB; the GPU's top byte is transparency). Every picture stands by
   itself, so a seek goes to the picture itself, once the round out is back. The film needs two
   places, and keeps 25 of its own when the program gives none.
-- **Tried and left:** each picture over every core on its own (`m_jpeg_decode`: 8.3 s for the
-  sample at 63 workers); a picture a core in rounds (5.97 s, or 4.29 with rounds no larger than
-  the team, but a round is a picture's time, 1.3 s, and with 33 places the player still left 2
-  out); a call a picture (`mcw_try_call`, joined in order: 25 s at 16 workers, 75 s at 63, for a
-  reason not found).
+- Each picture over every core on its own, or a call a picture, is slower than rounds.
 - **The sound** is the file's bytes, copied out of its chunks as it is asked for (8 bits made
   16): all of it is there from the open.
 - `tools/make_avi.py` writes such files of Pillow's JPEGs in some 128 restart intervals each
   (`--no-tables` as a camera's, `--sample` the image's `/root/Videos/Big Buck Bunny.avi`).
 
-The sample (320 x 176, 96 pictures, `media_test video FILE N` with `MEDIA_TEST_NOSUM=1`, rounds
-of 8,192 instructions a core): 126.4 s with no workers (1.32 s a picture), 11.3 s with 16, 3.44 s
-with 63, 28 pictures a second (it was 15.0 and 14.7 a picture at a time over every core).
-`nxvideo` with 64 workers and room for 33 pictures plays it with none left out (73 before),
-20 to 30 pictures ahead of the film's clock. `RVC_RACES`: 0 undone, with 20 of 63 workers busy
-too (`MT_BUSY=20`), sums as above.
+The sample (320 x 176, 96 pictures, `MEDIA_TEST_NOSUM=1 media_test video FILE 63`): 354 million
+instructions on all cores, 2.3 s (calibrated, 31 October 2026; the workers term rests on one game).
+`RVC_RACES` must say 0 undone, with 20 of 63 workers busy too (`MT_BUSY=20`).
 
 ### The player
 
 `nxvideo` (`video.md`) is libmedia's: it gives the GPU memory it has as places, shows a
-YUV420 picture as before, a PAL8 one as a `GL_COLOR_INDEX8_EXT` texture with its palette
+YUV420 picture in the GPU's three planes, a PAL8 one as a `GL_COLOR_INDEX8_EXT` texture with its palette
 written to `seglPalette()` when it changes, and a GIF's canvas converted to the GPU's words
 (0xTTRRGGBB) into two places in turn. A film of one channel is put on both of the sound
-ring's. A WORDS picture is a `GL_RGBA` texture where it was decoded. `.vqa` and `.avi` are in its `open` line; a GIF goes to `nxview` by its first bytes, as before, and
+ring's. A WORDS picture is a `GL_RGBA` texture where it was decoded. `.vqa` and `.avi` are in its `open` line; a GIF goes to `nxview` by its first bytes, and
 `nxvideo FILE.gif` plays it. `nxvideo --decode FILE` decodes with no workers through the
 library. `NXVIDEO_SUM=1` sums every picture in its place as it comes there, once, on a film
-played from its start, in order: the same sum as `--decode`'s (`d124dc14` for the sample; it
-was a sum of groups' sums, `034e8a1b`, when the player knew the groups). `NXVIDEO_COPY` is
-gone (the copies are always shared) and the host build `nxvideo-host` with it:
-`media_test-host video FILE` gives the sums.
+played from its start, in order: the same sum as `--decode`'s (`d124dc14` for the sample).
+`media_test-host video FILE` gives the sums on the host.
 
 ### What it costs
 
-`rvc_cpu` on 15 October 2026 (`--count-from` over `media_test video FILE N` with
-`MEDIA_TEST_NOSUM=1`, which asks for every picture in order and sums nothing; instructions,
-and the guest's seconds by the interpreter's clock, not the card's):
-
-| | Workers | First core | All cores | The busiest worker | Guest seconds |
-|---|---|---|---|---|---|
-| ENGLISH.VQA, 160 frames and their sound | 0 | 129.1M (807k a frame) | 129.1M | | 38.9 |
-| | 4 | 19.4M | 130.0M | 35.6M | 13.2 |
-| | 16 | 18.2M (114k a frame) | 129.0M | 13.1M | 7.4 |
-| The sample, 480 pictures and their sound | 0 | 749.7M | 749.7M | | 225.5 |
-| | 24 | 59.2M | 754.3M | 32.8M | 19.4 |
-
-All cores together do what one core does alone: the sharing costs no instructions to speak of.
-`nxvideo` played both through once with no picture left out (`nxvideostat`), the MPEG-1
-sample in 27.2 guest seconds of its 20 (the first core 71.4M), the VQA in 16.4 of its 10.7
-(32.1M). `nxvideo --decode` (one core, the copies into places and the sound with the
-pictures): 1,867 thousand instructions a picture of the sample, 1,795 of the VQA.
-
-Red Alert with the library's pieces: the opening movie's 156 frames in 15.9 s (the tree's
-build 15.5 s, one run each), 329k instructions a frame on the first core (319k), the state
-sum at frame 300 the same (`01e0dd60`), `RALERT_MOVIE_CHECK=1`: 0 of 156 differ.
+`rvc_cpu` on 31 October 2026 (`--count-from` over `MEDIA_TEST_NOSUM=1 media_test video FILE 24`, which
+asks for every picture in order and sums nothing): the sample's 480 pictures and their sound are 47
+million instructions on the first core and 747 million on all cores, the busiest worker 36 million;
+11.4 s calibrated (the workers term rests on one game). All cores together do what one core does
+alone: the sharing costs no instructions to speak of.
 
 **Real Tiberian Dawn movies.** `python linux/libmedia/test/check_vqa.py MEDIA_TEST FFMPEG
 FILE.VQA... --wsl --game` decodes every picture with `media_test` and compares it, made colours by
 its own palette, with ffmpeg's decoding to RGB, and the sound with the games' own decoder
 (`linux/libmedia/test/vqa_sound_ref.cpp`, vanilla-conquer's `soscodec.cpp` as `vqaloader.cpp`
 calls it, which writes FILE.VQA.game.raw). ffmpeg is not the reference for the sound: its IMA
-steps are rounded otherwise and differ from the games' by 1 or 2. On `NOD1PRE.VQA` and
-`DINO.VQA` (the full game's, 320 x 156 at 15 a second with SND2 sound, from samples.mplayerhq.hu):
-32 and 116 pictures all ffmpeg's to the byte, 58,064 and 181,544 samples all the game's; 0 bad.
+steps are rounded otherwise. `NOD1PRE.VQA` and `DINO.VQA` (the full game's, from
+samples.mplayerhq.hu) must say 0 bad.
 
 ### Not done
 
 - Tiberian Dawn's movies are `media_vq2_rows`' (`tdawn.md`, "Movies"); its demo has none, and
   the full game's own were tried from the multimedia samples (below). The game's frame is not
   yet the GPU's picture.
-- MJPEG: why calls of a picture each were slower than rounds.
 - AVI: sound other than PCM, pictures other than MJPEG.
 - VQA version 1 (Tiberian Dawn's oldest, 8-bit sound at 22,050 Hz) is taken but not tried;
   stereo SND2 decodes the two channels' bytes in turn, as Westwood's format has them (the
   game's own decoder reads twice the bytes there), untried for want of a file.
-- On the card only the AVI, MPEG-1 and the player were timed ("On the card"); VQA, GIF and
-  sound times are `rvc_cpu`'s.
 - A GIF's canvas is made into the GPU's words on the player's first core.
 
 ### Checking it
 
     media_test video FILE [WORKERS [places]]   # every picture's sum, the pictures' and the sound's
 
-- The sample (`Big Buck Bunny.mpg`): pictures `d124dc14`, sound `96a296a2`, as
-  `nxvideo-host --decode` had them, on the build computer and the guest, with no workers,
+- The sample (`Big Buck Bunny.mpg`): pictures `d124dc14`, sound `96a296a2`, on the build computer and the guest, with no workers,
   with 8 and 24, and into places of the program's own.
 - Red Alert's ENGLISH.VQA of the demo (`nchires.mix`, 640 x 400, 160 frames, 22,050 Hz):
   every frame's sum with its palette the same as a reference made of the game's own
@@ -517,9 +438,8 @@ steps are rounded otherwise and differ from the games' by 1 or 2. On `NOD1PRE.VQ
   guest, with no workers, 4, 8, 16 and 63, and into places. `python
   linux/libmedia/test/check_avi.py MEDIA_TEST --wsl` writes films of the fox (333 x 221 with
   8-bit stereo sound; 320 x 240 without Huffman tables, 16-bit mono) and has every picture against
-  Pillow's decoding of the same JPEG (a mean of 1.03 levels at most, at most 0.4% of the values
-  off by more than 24, all at sharp colour edges: the nearest colour sample against Pillow's
-  smoothed one), against the still decoder's to the byte, and the sound sample for sample: 0 bad.
+  Pillow's decoding of the same JPEG (off at sharp colour edges: the nearest colour sample against
+  Pillow's smoothed one), against the still decoder's to the byte, and the sound sample for sample: 0 bad.
 - `RVC_RACES` on `rvc_cpu`: 0 undone for the MPEG-1 film (24 workers), the VQA (16) and the
   GIF (4); the VQA's and the GIF's reads "as it was" are the first core waiting on a word.
   The same for the three AVI films (16 and 8 workers, the sample into places).
@@ -534,9 +454,8 @@ Half-Life's pack has its maps, models and sprites so (`linux/halflife/repack.py`
     total = media_inflated_size(file, size);            /* 0: not deflate in segments */
     why = media_inflate(file, size, out, total, workers);
 
-`media_test inflate FILE OUT [WORKERS]` prints the bytes and their FNV-1a sum. On the card a
-piece of 8 KB is some 160 thousand instructions, about 40 ms of one worker, which a small file
-waits for whole: Half-Life leaves files under 32 KB as they are.
+`media_test inflate FILE OUT [WORKERS]` prints the bytes and their FNV-1a sum. A small file would wait
+for a whole piece on one worker: Half-Life leaves files under 32 KB as they are.
 
 ## One deflate stream on many cores
 
@@ -547,82 +466,49 @@ A deflate stream someone else made (a `.gz`, a zip's entry) has no pieces, and
     why = media_inflate_one(in, in_size, out, room, &made, &used, &crc, scratch);  /* one core: a small one */
 
 - The compressed bytes are cut in parts of 32 KB, a core each, fewer than gzip's dynamic blocks
-  are apart (some 68 KB packed in a tar of source): every block is then the first of some part.
+  are apart: every block is then the first of some part.
   A part finds the first dynamic block header in its bits (a table of 13 bits for the type
   and counts, one of 12 for the code lengths' code to be whole, then the whole header, its
   symbols to the end of its block, and a good header after it), and inflates from there to
-  the next part's block. With 64 KB parts every third or fourth part found no block and its
-  neighbour made two: the busiest worker was 30.4 million instructions, now 21.9.
+  the next part's block.
 - What it cannot know yet, a copy from the 32 KB before the part, it writes as a mark (16-bit
-  values: a byte, or 0x8000 and the place in the window before). Marks do not die out in text:
-  a part's last window still held 0 to 27,937 of them (a median of about 7,000), so the parts
-  are inflated twice. The first core walks the chain once, part after part, each part's last
+  values: a byte, or 0x8000 and the place in the window before). Marks do not die out in text, so the
+  parts are inflated twice. The first core walks the chain once, part after part, each part's last
   32 KB made bytes from the window before it, and posts each part's second inflate, into its
   place with its window known, to that part's worker as soon as its window is known.
 - The CRC-32 is sliced by eight on each part and the parts' sums joined (`media_crc32_join`);
   the texels two parts share are put back as each part made them.
 - Fixed and stored blocks are only followed, never looked for: a stream of those is one part.
 
-What it costs, `rvc_cpu`, 255 workers, the busybox source as a 2,121,744-byte `.tar.gz`
-(8,816,640 bytes of tar) and the same files as a 2,673,622-byte zip (`unarc`, `docs/system/open.md`):
-
-| | busybox | `unarc` |
-|---|---|---|
-| `.tar.gz` unpacked into 2,116 files (`tar xzf`, `unarc tgz`) | 831.7 M on core 0, 252 s | 87.3 M, 30.8 s |
-| the zip (`unzip -q`, `unarc zip`) | 683.5 M, 207 s | 60.4 M, 20.1 s |
-| the `.gz` alone into one file (`unarc gz`) | | 35.0 M, 15.2 s |
-
-Of the `.gz`'s 15 s: reading the file 1 s, the parts' search and first inflate 4.5 s, the chain
-on the first core with the second inflates beside it 4 s, writing 8.8 MB into `/tmp` about a
-pass a page (1.5 s; `cat` of the same bytes is 2.2 s). Only 37 cores have a block to start
-from: deflate's blocks are what the stream can be cut at. On one core the same stream is 224 M
-(`symbols`, the decoding loop, some 15 instructions a byte; the CRC 5.5).
 `media_test gunzip FILE [WORKERS [OUT]]` prints the bytes, the CRC and the FNV-1a sum.
 
 ## On the card
 
-The shader machine on an RTX 5090 (`rvc_harness`, D3D11 + fxc2, through `tools\gpu_queue.ps1`;
-its first core some 4.7 million instructions a second), 15 October 2026, real seconds, 63
-workers, `media_test` as above (the pixels mapped before, the second of two decodings):
-
-| | Card | `rvc_cpu`'s rounds |
-|---|---|---|
-| JPEG 1623 x 1080 in restart intervals | 0.57 to 0.69 s | 0.97 s |
-| the same without markers (guessed parts) | 1.17 to 1.40 s | 1.76 s |
-| the same, one core's reading before (`MEDIA_JPEG_SERIAL=1`) | 2.40 s | 4.12 s |
-| the same, progressive | 5.88 s | 9.96 s |
-| PNG 1623 x 1080 in segments | 1.33 s | 2.45 s |
-| PNG in one stream (Pillow's; a sum of the pixels on the first core in it) | 16.1 s | |
-| the JPEG in intervals on one core (the same sum in it) | 26.9 s | 44.6 s |
-| JPEG encoding at quality 85 | 1.52 s | 2.3 s |
-| PNG encoding at level 1 (32 workers) | 8.39 s | 16.3 s |
-| GIF encoding, fixed colours | 1.35 s | 1.98 s |
-| GIF animation, 12 frames of 320 x 240 | 3.96 s | 6.54 s |
-| MJPEG AVI, 96 pictures of 320 x 176 (`MEDIA_TEST_NOSUM=1`) | 2.20 s: 44 a second | 3.44 s |
-| MPEG-1, 480 pictures of 320 x 176 | 10.4 s: 46 a second | |
-| `nxvideo` playing the AVI | none left out | none left out |
-| the desktop's picture at its start, 800 x 600 (`UI_PICTURES_PRINT=1 nxfiles --desktop`) | 424 ms | 763 ms |
+The shader machine (`rvc_harness`, through `tools\gpu_queue.ps1`) runs `media_test` as above: real
+seconds there, the second of two decodings with the pixels mapped before. The figures above are
+calibrated, and nothing here has been timed on the card since the machine's memory changed. `nxvideo`
+playing the AVI, and the desktop's picture at its start (`UI_PICTURES_PRINT=1 nxfiles --desktop`),
+are the two worth looking at there.
 
 ## What the image ships
 
-| | Before | Now |
-|---|---|---|
-| the desktop's pictures (`tools/make_wallpaper.py`; `nanox.md`) | 11 PPM, 22 MB | JPEG in restart intervals, with twins for 800 x 600, 1280 x 720 and 1920 x 1080: 4.5 MB |
-| ClassiCube's texture pack (`classicube.md`) | 2.99 MB of the game's pixel words | 104 KB of PNG in segments |
-| the browser's cache of pictures (`web.md`, `fetch.md`) | 201 PPM, 7.3 MB | the same pictures, 24 JPEG, 7 PNG, 170 small PPM: 1.27 MB |
-| the sample pictures (`tools/make_media.py`) | baseline JPEG | JPEG in restart intervals |
-| Quake III's pictures (`quake3.md`) | texels in `quake3-se.dat`, 13.4 MB | 13 JPEG and 6 PNG sheets: 8.0 MB |
-| the sample music | MP3 and FLAC (no Vorbis decoder) | two of the tunes Ogg Vorbis |
+| | What |
+|---|---|
+| the desktop's pictures (`tools/make_wallpaper.py`; `nanox.md`) | JPEG in restart intervals, with twins for 800 x 600, 1280 x 720 and 1920 x 1080: 30 files, 4.5 MB |
+| ClassiCube's texture pack (`classicube.md`) | PNG in segments |
+| the browser's cache of pictures (`web.md`, `fetch.md`) | JPEG, PNG and small PPM, by `kept_file` |
+| the sample pictures (`tools/make_media.py`) | JPEG in restart intervals |
+| Quake III's pictures (`quake3.md`) | JPEG and PNG sheets |
+| the sample music | MP3, FLAC, MOD and Ogg Vorbis |
 
 ## Not done
 
-- JPEG: arithmetic coding, 12-bit samples, lossless. A JPEG without markers takes 1.6 times as
-  long as in restart intervals (three readings more); a progressive one waits for one core's pass
+- JPEG: arithmetic coding, 12-bit samples, lossless. A JPEG without markers takes longer than one in
+  restart intervals (three readings more); a progressive one waits for one core's pass
   through its scans. A colour sample at half size is the nearest one's, not smoothed (the browser
   keeps its JPEGs at 4:4:4 for that).
-- PNG: APNG, and encoding is some 430 instructions a pixel (above).
+- PNG: APNG; encoding is slow (above).
 - WebP; AVIF. GIF encoding: above 256 colours the fixed ones dithered, not a palette of the
   picture's own; an animation's frames one after another (each over every core), not side by
   side, and each the whole canvas (no rectangle of what changed).
-- Most times above are `rvc_cpu`'s (rounds of 8,192 instructions a core); the card's are in
-  "On the card", and the frames were captured with `rvc_harness --cpu --warp`.
+- The Ogg file's two sums (above).

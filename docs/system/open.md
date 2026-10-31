@@ -38,14 +38,11 @@ program registered for what it is. The file manager opens a file the same way.
    (`ui_progress.h`, from 0.7 s on): the seconds the host has been downloading it (VRChat
    gives a world the whole file or nothing, and says nothing meanwhile), then the megabytes
    handed over, a part of 256 KB at a time.
-   A picture given as pixels is written a part at a time from a buffer: a byte a `fputc` was
-   76 instructions a pixel and this is 12 (`rvc_cpu`, a million pixels), some 80 s against
-   13 for a picture of three megapixels at three million instructions a second. A file that came inside a picture
-   has its own name and a CRC-32, which is checked. A plain picture the host could only give
+   A picture given as pixels is written a part at a time from a buffer, not a byte a `fputc`.
+   A file that came inside a picture has its own name and a CRC-32, which is checked. A plain picture the host could only give
    as pixels becomes a PPM file.
    Closing that window (its frame's button, Alt+F4) ends `open` at once: the download is
-   left to the host and nothing is opened. Until 18 October 2026 the window took no close
-   request, and a link that did not come kept it up for as long as `open` waited.
+   left to the host and nothing is opened.
 3. When it does not come, a small window says why and goes at OK, Enter, Escape or by itself
    after 30 s (`tell`, a `ui_ask.h` question with one answer): "not found (404)", "refused
    (403)", "a picture the host could not decode (415)", "the host's download gave no answer
@@ -54,7 +51,7 @@ program registered for what it is. The file manager opens a file the same way.
    after a minute of asking again). A file that is not there or a program for another processor
    is said the same way. Without a window system it is only the console's line. How long each
    wait is: the host's answer 40 s, another program's request before this one 10 s, both
-   by the clock (they were counted in sleeps of 50 ms, and 40 s was 46 under `rvc_cpu`).
+   by the clock.
 4. Its kind: by its first bytes where a kind's marks say (after a byte order mark and blank
    lines too), else by its name's ending.
 5. The kind's command is run with the file. A page that came from an address is given to
@@ -68,7 +65,7 @@ as it adds its line to the Start menu (`nxapps.*`).
 
 | File | Kinds |
 |---|---|
-| `nxopen.15-ide` (`linux/ide/build.sh`) | source: a `.c`, `.h`, `.js` or `.py` file is the IDE's (`docs/apps/ide.md`). Files are read in their names' order and the first kind that fits is the file's, so this comes before text's |
+| `nxopen.15-ide` (`linux/ide/build.sh`) | source: a `.c`, `.h`, `.js`, `.py` or `.hlsl` file is the IDE's (`docs/apps/ide.md`). Files are read in their names' order and the first kind that fits is the file's, so this comes before text's |
 | `nxopen.20-apps` (`linux/apps/nxopen.conf`) | page, picture (PNG, JPEG, GIF, BMP, TGA, PNM, XPM), archive, program, text, shortcut (a desktop's `NAME.app`: `docs/system/nanox.md`) |
 | `nxopen.50-doom` (`linux/nanox/doom.sh`) | a whole game's WAD (`doom -iwad`), a patch WAD (`doom -file`) |
 | `nxopen.72-micropolis` (`linux/micropolis/build.sh`) | a city: `.cty` (`nxmicropolis`, `docs/games/micropolis.md`) |
@@ -81,70 +78,63 @@ as it adds its line to the Start menu (`nxapps.*`).
 - **A program** (`\x7fELF`, `#!`): made executable and run in a terminal window of its own
   (`nxopen-run`), which stays until Enter when the program has ended. A program for another
   processor is said to be that and is not run.
-- **An archive**: unpacked into `/tmp/open/NAME.d`, and the file manager opens on it
-  (`nxopen-archive`). `open --unpack` runs `unarc KIND FILE TO` first (`linux/apps/unarc.c`):
-  a zip's entries inflated a core each, a large one and a `.tar.gz` or `.gz` on every core
-  (libmedia's `media_inflate_stream`, `docs/system/media.md`, "One deflate stream on many cores"),
-  its `progress DONE TOTAL` lines shown as they come and the window looked at every 200 ms.
-  The busybox source as a 2.1 MB `.tar.gz` took 252 s of the machine's time with busybox's tar
-  and takes 31 s; as a zip 207 s and 20 s. unarc exits 3 for what it does not unpack (an
-  encrypted entry, a method other than stored and deflate, zip64) and for a lack of memory
-  in one piece (without an MMU it holds the archive and what it makes whole: after two
-  unpacked copies of that source in `/tmp` the largest free block was 4 MB), and `open` then
-  runs the image's own `unzip` or `tar`, with a window
-  that says how far: a zip by the bytes in its folder against its listing's total, counted
-  twice a second (by its lines it was a file a step, and a zip of a few large files showed
-  nothing), a tar, a `.tar.gz` or a `.gz` by the bytes it has been fed through a pipe, as
-  the pipe has room (a blocking write held the window while the unpacker was slow). A `.gz` of one file is unpacked and opened
-  as what it holds. Closing the window stops the unpacker, and nothing is opened.
+- **An archive**: see "Archives" below.
 - **Nobody's kind**: a small window that says so, with "Open as text" and "Save to /root".
 - The file manager starts a file with its execute bit itself only when it also begins as a
-  program does (`is_program` in `nxfiles.c`: every file of the image has that bit, and the
-  Ogg tunes and the AVI were run as programs, with a program's icon), and `open` for
-  everything else; its own list of endings is only for the icons. `nxfiles --kinds FOLDER`
+  program does (`is_program` in `nxfiles.c`: every file of the image has that bit), and `open`
+  for everything else; its own list of endings is only for the icons. `nxfiles --kinds FOLDER`
   prints each entry's kind and icon.
 
 Nothing of this outlasts power-off: `/tmp` and `/root` are the overlay's.
 
+## Archives
+
+An archive is unpacked into `/tmp/open/NAME.d`, and the file manager opens on it
+(`nxopen-archive`). `open --unpack` runs `unarc KIND FILE TO` first (`linux/apps/unarc.c`): a
+zip's entries inflated a core each, a large one and a `.tar.gz` or `.gz` on every core (libmedia's
+`media_inflate_stream`, `docs/system/media.md`, "One deflate stream on many cores"), its
+`progress DONE TOTAL` lines shown as they come and the window looked at every 200 ms.
+
+unarc exits 3 for what it does not unpack (an encrypted entry, a method other than stored and
+deflate, zip64) and for a lack of memory in one piece (without an MMU it holds the archive and
+what it makes whole), and `open` then runs the image's own `unzip` or `tar`, with a window that
+says how far: a zip by the bytes in its folder against its listing's total, counted twice a
+second, a tar, a `.tar.gz` or a `.gz` by the bytes it has been fed through a pipe, as the pipe has
+room. A `.gz` of one file is unpacked and opened as what it holds. Closing the window stops the
+unpacker, and nothing is opened.
+
 ## Checking it
 
-- What it decides, in the interpreter (0.7 s): `open --dry` over one file of each kind and
-  some with wrong endings or none. `python tools/test_all.py open-kinds nxfiles-kinds
-  nxview-unnamed` does it for every kind libmedia reads (`docs/system/media.md`), and the viewer
-  given a picture under a name with no ending.
+- What it decides, in the interpreter: `open --dry` over one file of each kind and some with
+  wrong endings or none (0.59 million instructions a file, `rvc_cpu`, 31 October 2026).
+  `python tools/test_all.py open-kinds nxfiles-kinds nxview-unnamed` does it for every kind
+  libmedia reads (`docs/system/media.md`), and the viewer given a picture under a name with no
+  ending.
 
       bin\rvc_cpu.exe --quiet --uart-log logs\ucpu_open.log --expect "/ # " --send "open --dry /usr/share/doom1.wad; cp /usr/share/nes-thwaite.nes /tmp/game; open --dry /tmp/game; echo LX-''DONE\n" --until "LX-DONE"
 
-- The whole way, in the harness (14 s from power-on): a file of 512 KB of noise that begins
-  `NES\x1a`, wrapped by `tools\file_to_png.py`, is asked for in three parts and arrives with
-  the host's own CRC-32.
+- The whole way, in the harness: a file of 512 KB of noise that begins `NES\x1a`, wrapped by
+  `tools\file_to_png.py`, is asked for in three parts and arrives with the host's own CRC-32.
 
-      bin\rvc_harness.exe --d3d11 --rvc experiments\rvc_opt --image linux-net --no-stdin --desktop --uart-log logs\uart.log --open "file://C:\...\big.nes.png" --open-after "GPU drawing" --until "is nes"
+      pwsh tools\gpu_queue.ps1 bin\rvc_harness.exe --d3d11 --rvc experiments\rvc_opt --no-stdin --desktop --uart-log logs\uart.log --open "file://C:\...\big.nes.png" --open-after "GPU drawing" --until "is nes"
 
 - In the world's play mode: `openField.SetUrl(new VRCUrl(...))` and the machine's `OpenLink`
   event. The editor cannot download a test file, so an editor hook hands the machine the PNG
   as a texture when its `fetchState` becomes loading (`hostImage`, `fetchW`, `fetchH`,
-  `fetchStatus` 200, `fetchState` 3). The same file arrived there with the same sum, which
-  is the control pass reading a file's bytes out of an sRGB texture exactly.
+  `fetchStatus` 200, `fetchState` 3): the control pass must read a file's bytes out of the sRGB
+  texture exactly, and the file must arrive with the same sum.
 - A closed window and a link that does not come, in the interpreter, which no host answers
-  (status 0 after 40 s): `nano-X -p &`, then `open https://...gif &`, `nxkey alt+f4` 5 s
-  later: "open: stopped: the window was closed" 0.3 s after the key. Left alone, with
-  `UI_ASK_PRINT=1`: the window that says why is up 42 s after the start ("ask: Open:
-  capoo-bug-cat.gif could not be opened: the host did not answer in 40 s") and goes at Enter.
-  A `.gz` of 8 MB unpacked by `open --unpack` ends 0.8 s after Alt+F4, and unpacks to the
-  same bytes in the same time as before when left alone.
-- A GIF from Tenor (370 x 270, 22 pictures, 93 KB), whole way in the harness with
-  `--cpu-ips 3000000`: `open` has written it 14.0 s from power-on and the viewer shows
-  its first picture by 21.3 s, then plays; the viewer's window closes at Alt+F4 while it
-  plays. Such a link is no picture to VRChat's picture loader, which takes PNG and JPEG
-  (`docs/system/fetch.md`): the world asks its text loader, and status 2 after 20 s is what came
-  back when VRChat gave nothing.
+  (status 0 after 40 s): `nano-X -p &`, then `open https://... &`, `nxkey alt+f4` 5 s later must
+  say "open: stopped: the window was closed" at once. Left alone, with `UI_ASK_PRINT=1`: the
+  window that says why is up after the 40 s ("could not be opened: the host did not answer in
+  40 s") and goes at Enter. A `.gz` unpacked by `open --unpack` also ends at Alt+F4.
+- A link that is no picture to VRChat's picture loader, which takes PNG and JPEG
+  (`docs/system/fetch.md`), goes to its text loader; status 2 after 20 s is what comes back when
+  VRChat gives nothing.
 - Not tried: a real download in VRChat itself, which needs the picture on a public https
   host. VRChat's own texture may differ from the editor's (its colour space, a size limit).
 
-`open --dry` is 0.71 million instructions (it was 0.87): the registry's scan keeps only the
-`nxopen.*` names and reads their lines without `sscanf`.
+The registry's scan keeps only the `nxopen.*` names and reads their lines without `sscanf`.
 
-"Open as text" starts the editor as a program of its own: started in `open`'s place, which had
-a window of its own, the editor's window got no frame (`open /tmp/file` of 2,048 random
-bytes and a click on the key, in the harness: no frame before, a frame now).
+"Open as text" starts the editor as a program of its own: started in `open`'s place, which has
+a window of its own, the editor's window would get no frame.

@@ -3,10 +3,8 @@
 The same system and programs on a kernel built without the MMU (`CONFIG_MMU` not set): every
 program is a flat (bFLT) one loaded whole into RAM, and the shader machine can run with no page
 walk at all (`NO_PAGING`). It is the machine everything runs by default: the harness, `rvc_cpu`,
-`tools/test_all.py` and the world. Linux with the MMU is no longer supported (21 October 2026): its
-kernel is not linked for RAM from 0x82000000 and does not run in this layout, and nothing is tested
-on it. What is left of it is a shared build: `linux/kernel/build.sh`'s toolchain and kernel tree, and the
-shared root, which `linux/nommu` takes and makes flat.
+`tools/test_all.py` and the world. What it builds on is shared: `linux/kernel/build.sh`'s toolchain
+and kernel tree, and the shared root, which `linux/nommu` takes and makes flat.
 
 ## Building it
 
@@ -30,38 +28,36 @@ Half-Life's data. The address `linux/pathtrace/build.sh` fetches the teapot from
   toolchain.sh's members are put in anew by the new drivers, and a `__FILE__` says `/nm/...` wherever the folder is, so
   the libraries' bytes and `cc-bytes` do not go by the folder's name (31 October 2026).
 - `bash linux/nommu/kernel.sh`: the tree of `linux/kernel/build.sh` copied with this repository's drivers and hooks put in again
-  (that tree's driver can be old: on 31 October 2026 `patch_exitpark.py` failed to link against 28 October's and
-  the last `Image` was copied on, in the image and in `linux/prebuilt/nommu`; a failed make now stops it), seven patches
+  (that tree's driver can be old), and a failed make stops it, seven patches
   (`patch_kconfig.py`: RV32 without the MMU, still in supervisor mode under the machine's SBI and
   linked at 0x82000000; `patch_signal.py`, `patch_drivers.py`, which also keeps `/proc/cpuinfo`'s
   "mmu" line out, `patch_ovl.py`, `patch_ramfs.py`, `patch_console.py`: the console in memory,
   `patch_procmaps.py`: a read of `/proc/PID/maps` gives PID's mmap lock back, as upstream since
-  6.8; before, PID's next `mmap` waited forever) and its configuration without the MMU, into
+  6.8) and its configuration without the MMU, into
   `build/nommu/Image`. Then the ones of the RISC-V backport (28 October 2026; each commit has its
   numbers): `patch_uaccess.py` (`access_ok` checks the ROM and RAM, a `get_user` or `put_user` is
   one load or store), `patch_memmap.py` (the boot's `struct page`s copied from one, frees that
-  store only what changes: the boot 14.5 to 10.2 million instructions), `patch_fastrun.py`
+  store only what changes), `patch_fastrun.py`
   (a program's memory one block of the buddy allocator, freed in aligned blocks),
   `patch_memcpy.py` (no byte loops for misaligned copies; the commit's parallel copy for any
   large copy whose two ends lie alike in a texel), `patch_flatreloc.py` (relocations a
   word at a time, and since 31 October 2026, in a program whose header has flag `0x40000000`, the entries and the words
   in the machine's order: `elf2bflt.py` and `elf2flt.c` write them so, no byte swap twice a relocation),
   `patch_romfs.py` (a directory listed where it lies in the ROM, not an entry's three reads; a name found by its directory's table of names, which `slim.py` writes at the ROM's end for a directory of 32 entries or more, in place of a walk of the list), `patch_sysfs.py` (no sysfs for the boot's slab caches and built-in
-  parameters: the boot 9.9 to 8.0 million), `patch_zeroread.py` (`/dev/zero` a megabyte a step,
+  parameters), `patch_zeroread.py` (`/dev/zero` a megabyte a step,
   no fault-in of a write's buffer) and `patch_timekeeping.py` (with one processor the tick
   advances the timekeeper in place, not a shadow copied whole, and at every 16th tick: readers add
   the clock's cycles since anyway, and the coarse clocks, a file's date, are a third of a second old at most), and `patch_exitpark.py`. That last
   one calls `shaderemu_gpu_exiting` in `do_exit` before `exit_mm`. It parks a dying program's
   worker cores and its lanes' job, then ends the pass. A worker reads its start word as its pass
-  begins, so one already in that pass stores into the program's memory when the pass ends.
-  Parked only at the release, after `exit_mm`, the workers ran on through the passes between, in
-  memory already freed. Once they are parked, their answers' alive word is cleared: a parked core still said
-  `MC_ALIVE`, which the next program to start it took for its own worker there (`arrived()` in
-  `programs/mc/mcw.c`, which also wants the program's tag now). No failure was traced to it: the shell's crash in nes-kill and nxphys-kill
-  under `RVC_BESIDE=1` was `rvc_cpu`'s, whose core 0 went on past a `fence.i`. The configuration has no VM event
+  begins, so one already in that pass stores into the program's memory when the pass ends: parked
+  only at the release, after `exit_mm`, the workers would run on in memory already freed. Once they
+  are parked, their answers' alive word is cleared, or the next program to start one would take a
+  parked core's `MC_ALIVE` for its own worker there (`arrived()` in `programs/mc/mcw.c`, which also
+  wants the program's tag). The configuration has no VM event
   counters, kallsyms, AIO, io_uring or core dumps and a 16 KB log, and trusts the device tree's
   `rng-seed`, which `image.py` writes (128 bytes; `RNG_SEED` in hex gives a fixed one): without
-  it a `getrandom()` without `GRND_NONBLOCK` never returned.
+  it a `getrandom()` without `GRND_NONBLOCK` never returns.
 - `bash linux/nommu/build.sh [script ...]`: the sources copied to `~/nm/repo` again and the
   repository's build scripts run there with the flat drivers, a line each.
 - `bash linux/nommu/root.sh`: mctest and the machine's `elf2flt`, then every program of the root
@@ -69,9 +65,8 @@ Half-Life's data. The address `linux/pathtrace/build.sh` fetches the teapot from
   the word just below it (its shared-library table, `NO_DATA_START_OFFSET` or not; it can overwrite a variable such as
   musl's `decfloat`): both converters start the data at the first 32 bytes, from the first writable segment down to the
   text's end, with no section in that word, and refuse a program with none. The linker leaves a page between text
-  and data, so every program of the root keeps its bytes; `tcc -shared` does not, and the example cube's
-  `.eh_frame_hdr` ran into its `.dynamic`: its data now starts at 0x27500 for 0x2d000 (only the header's word
-  differs), and `cc-bytes`' digest moves once the image's `elf2flt` is built from this.
+  and data, so every program of the root keeps its bytes; `tcc -shared` does not, so a program of
+  `cc`'s has its data start moved down.
 - `python linux/nommu/image.py [--save-prebuilt]`: `build/images/nommu`, the shared image with
   that root as its overlay, the kernel, and RAM in the device tree in one range from the kernel's
   address (0x82000000) to 0x92000000 ("Memory", below); without
@@ -107,15 +102,13 @@ then "Sync shader sources from the repository" and "Import boot images from the 
 - tmpfs is ramfs without the MMU, and it is the writable layer of the root's overlay. It has
   `RENAME_WHITEOUT` and `trusted.*` attributes as shmem has them (`patch_ramfs.py`), and the
   overlay has `redirect_dir`: a file or a folder of the ROM is renamed, moved and removed in
-  place (before, a rename was "Invalid argument", a folder's removal "I/O error", and `mv` of a
-  folder copied it). An attribute costs about 60 bytes of slab, on what was copied up or renamed.
+  place. An attribute costs about 60 bytes of slab, on what was copied up or renamed.
 - A program's whole memory is taken at its start: its data, bss and stack, and every anonymous
   mapping, cleared. A worker program gives its workers' stacks back when it closes them
   (`mcw_close`); a large pool is mapped at its size, not `calloc`'d (Quake III's zone and hunk).
-  Quake III's pools are what q3dm17 takes with headroom (`build.sh`): the hunk 8 MB (5.3 at
-  most), the zone 4 (42 KB), the server's 6 (3.2 with seven bots); `meminfo` says what is used.
-  The starter sets the hunk and the zone on the command line: a `q3config.cfg` an older world
-  kept in `/persistence` can say 32 and 16 MB, and 32 in one run failed once memory was in pieces.
+  Quake III's pools are what q3dm17 takes with headroom (`build.sh`): the hunk 8 MB, the zone 4,
+  the server's 6; `meminfo` says what is used. The starter sets the hunk and the zone on the command
+  line, so a `q3config.cfg` kept in `/persistence` cannot ask for more than memory in pieces gives.
 - The shader machine: `BARE_WORKERS` starts a worker whose page table root is 0 with no
   translation; `NO_PAGING` takes every address as physical. `ZB` runs Zba and Zbb;
   `X_NO_FAST_AMO` sends atomics to the general path (for measuring).
@@ -137,7 +130,7 @@ then "Sync shader sources from the repository" and "Import boot images from the 
 `image.py` ends with `slim.py`, which writes the romfs anew without what this machine can neither
 run nor read: upstream's dynamic ELF programs and shared libraries (the kernel has
 `CONFIG_BINFMT_FLAT` and no ELF loader), the copies of upstream's files that ours hid (renamed
-with a dot, still in the ROM), `/usr/local` (bcc and beluga, `docs/system/ports.md`), screen's
+with a dot, still in the ROM), `/usr/local` (bcc and beluga, a C compiler for i386), screen's
 encodings, GLib's valgrind list, sshd's `moduli`, a folder of `ORPHANS` whose program is gone
 (upstream zsh's functions when no flat zsh is built), and the links to any of them. Object files
 (`crt1.o`, `flatcrt.o`) and every flat program stay. Files of `SQUEEZE` are stored as deflate in
@@ -145,11 +138,7 @@ segments (`docs/system/media.md`) when their reader says it inflates them: `magi
 `file` (`linux/terminal/file-mdz.patch`). The kept files are the same bytes, in the same order,
 and the boot arguments' root device takes the new size.
 
-On 18 October 2026 that was 296,400,896 bytes to 255,211,520 (41.2 MB of files, 258 entries)
-and 248,428,544 with `magic.mgc` (7,254,168 bytes as 422,324): 7,582 rows of the world's ROM
-texture (2048 texels of 16 bytes) where it was 9,046; without zsh (6.1 MB) 242,377,728 bytes,
-7,397 rows. On 31 October 2026, with the games since, it is 304,339,456 bytes (`rootfs.bin` of
-`build/images/nommu`, Half-Life's data in it).
+On 31 October 2026 `rootfs.bin` of `build/images/nommu` is 304,336,384 bytes, Half-Life's data in it.
 
 ## The state
 
@@ -160,11 +149,8 @@ table under the state rows and no CSR cache, so a CSR write never stalls; the ma
 CSRs read as 0 and a write to one is dropped. `NO_PAGING` also leaves the TLBs' 409 texels
 out: the float registers follow the write cache, and the tick draws 8 of core 0's 16 rows
 (`CORE0_ROWS`), 500 texels, a worker's layout with a cache of 2^6 (8 x 8 pixels of the tick's
-targets; 9 rows and 564 texels before the cache's third table was a quarter, `docs/machine/multicore.md`). `CSR_TABLE` and
-`CORE0_TLB_ROWS` compile the old ones. On the card (D3D11, fxc2, 17 October 2026, two runs
-each, alternating): a shell loop 4,889k instructions a second before and 5,025k after (+2.8%),
-Doom's timedemo 1,176 realtics before and 1,165 after (+1%); mctest with 255 workers, fptest and
-Doom's state sums as before. Unity's commit (`MachineCommit.cginc`) has the tick's defines.
+targets; `docs/machine/multicore.md`). `CSR_TABLE` and `CORE0_TLB_ROWS` compile the other layouts.
+Unity's commit (`MachineCommit.cginc`) has the tick's defines.
 
 `CSR_FIELDS` also leaves out what only a machine with paging needs:
 
@@ -177,16 +163,12 @@ Doom's state sums as before. Unity's commit (`MachineCommit.cginc`) has the tick
 - No `mmu` words, no single step, no debug words but the last instruction and stall.
 - The copy's destination for the commit's geometry comes from texel 37 (no `memop_*_p`).
 
-The tick's device reads and writes are the general ones still (`mem.h`), but for the RTC: the
-paths cut down were 2 to 4% slower a pass under fxc. On the card, against the tree before
-(17 October 2026): 3,000 full passes from one Quake III snapshot (q3dm17 with three bots,
-frame 100) took 5.32 s against 5.56, means of two. Whole runs of a game vary 4% from run to
-run and did not tell the two apart. mctest with 255 workers, fptest, doom-1, nxray's sums and
-the boot's clock were as before.
+The tick's device reads and writes are the general ones still (`mem.h`), but for the RTC: paths cut
+down further are slower a pass under fxc.
 
 ## Memory
 
-The layout since 28 October 2026, in one place for the tick (`experiments/rvc_opt/src/layout.h`)
+The layout (28 October 2026), in one place for the tick (`experiments/rvc_opt/src/layout.h`)
 and one for the host (`harness/apps/rvc_layout.h`):
 
 | from | to | what |
@@ -205,52 +187,26 @@ only there or to RAM (`UOP_IN_RAM` in `linux/userland/uop.h`). The drivers find 
 `page_is_ram` (`patch_drivers.py`), false below the kernel. A snapshot is marked with the layout it
 was taken in (`SX86SNP2`, `RVCSNAP2`): one of the layout before is refused, to be made again.
 
-Before 28 October 2026 the devices lay at 0x86000000 to 0x88000000 and RAM was two ranges, from the
-kernel at 0x80400000 to them (92 MB) and from 0x88000000 to 0x92000000 (160 MB): `MemTotal` was
-250,956 kB and 240,936 of it free at the shell (18 October 2026), where they had been 88,752 and
-78,740 when RAM ended at the devices, as the MMU kernel's does.
-
-The boot to the shell is 14.5 million instructions where it was 10.0, 1.4 s more of the guest's
-time: the kernel sets up a page structure for each of 49,152 more pages (the gap between the
-ranges was 8,192 of them) and frees each (`memmap_init_range`, `memset` of each structure,
-`__free_pages_core`, `__free_pages_ok`). A test that presses a button once a game is loaded
-presses it at 20 s where it was 16 (`classicube-seat-*`), and ClassiCube's `classicube-pack`
-draws one text fewer by `classicube: steady`.
+The kernel sets up a page structure for each of RAM's pages: the boot to the shell is 7.5 million
+instructions, about 2 s of the guest's time, and `MemTotal` at the shell is 256,060 kB, 245,852 of it
+free (`rvc_cpu`, 31 October 2026).
 
 The commit's bands of RAM stay 4 MB and a mask of 32 bits: bit b stands for bands b, b + 32 and
 b + 64 (`ram_bands`), so the tick's store marks its band as it did, at no cost an instruction. A
 band the commit must draw draws its two others too; the control words' band (4, and 5 for a fetch's
 answer) is drawn every commit apart from the mask (`_CommitAlways` in the harness, `CONTROL_BANDS` in Unity's
-`MachineBlit.cginc`, which draws runs of bands). The state texture is 290 MiB where it was 128,
-twice that with its other buffer: 580 MiB of video memory a machine where it was 256.
+`MachineBlit.cginc`, which draws runs of bands). The state texture is 290 MiB of video memory.
 
 A program's memory is taken whole and in runs of pages: a mapping wants one run as long as
-itself. Quake III is the largest, 46 MB in four runs (its data and bss 22, the hunk 8, the
-server's zone 6, the zone 4). `python linux/nommu/memory.py` runs each large program and then
-Quake III, and all of them one after another in order and reversed, a machine each under
-`rvc_cpu`, in about two and a half minutes (18 s on 18 October): on 16 October 2026 all twelve fit,
-Quake III with 21.4 MB free at the least; with RAM to 0x92000000 (18 October) all twelve fit with
-178 MB free at the least (16 MB on the same image with RAM to 0x86000000). The script then flagged
-four runs whose console had a program's first line written into the echo of its command, where
-the `|` that marks an echo was on the next line: no allocation failed. Over 26 programs one after another the shell grew 25 KB, Nano-X 29 KB and
-the slab 156 KB. What a program leaves in a tmpfs file stays where it lies until the file goes:
-Red Alert and Tiberian Dawn run from a folder of their own in the ROM, no copy in `/tmp`.
+itself. Quake III is the largest, with its data and bss, the hunk 8 MB, the server's zone 6 and the
+zone 4. `python linux/nommu/memory.py` runs each large program and then Quake III, and all of them
+one after another in order and reversed, a machine each under `rvc_cpu` (minutes; all must fit). What
+a program leaves in a tmpfs file stays where it lies until the file goes: Red Alert and Tiberian Dawn
+run from a folder of their own in the ROM, no copy in `/tmp`.
 
 ## Speed on the card
 
-RTX 5090, D3D11, fxc2, 16 October 2026; one run a cell, guest time (repeated runs varied by 1 to 3%;
-`docs/machine/speed.md` has the no-MMU machine on an RTX 5070 laptop on 19 October against the compute
-machine, the CPU harness and upstream rvc, which has the MMU):
-
-| Program | MMU | no MMU, `NO_PAGING` | and Zba/Zbb |
-|---|---|---|---|
-| Doom (timedemo demo1) | 129.1 fps | +11.2% | +13.2% |
-| Quake (timedemo demo1) | 80.7 fps | +14.6% | +17.2% |
-| Quake III (q3dm17, 3 bots, frames 101 to 300) | 20.9 fps | +15.6% | +17.9% |
-| nxray (8 pictures 320 x 240) | 26.1 a second | +16.4% | +14.1% |
-| Red Alert (game frames 300 to 900) | 75.6 a second | +15.9% | +14.0% |
-
-Zba and Zbb take 1 to 2.5% of the instructions away (the programs built with them, musl not);
-over `NO_PAGING` alone they are within the noise. Without `NO_PAGING` the no-MMU kernel gave
-Doom 5.5% over the MMU one. On the card the float programs' sums are the card's (its division),
-the same with either kernel.
+`docs/machine/speed.md` has the machine against the compute machine, the CPU harness and upstream
+rvc. `linux/nommu/card.ps1` times the games on the card, a configuration a run (an image and the
+shader's defines), which is how `--isa zb` is told from the base set: the programs are built with
+Zba and Zbb, musl not. On the card the float programs' sums are the card's (its division).

@@ -45,7 +45,7 @@ programs share: `/persistence/registry`, a line a key, `program.name=value`. `re
 `reg_set_int` and `reg_changed`; `nxreg get | set | unset | list` is the same for a script.
 A set is in the file at once: under a lock, made of the file as it is then, written beside
 it and put in its place, so two programs' keys do not undo each other (forty keys set by
-forty programs at once were all there) and no reader finds half a file. `reg_changed()` says
+many programs at once all stay) and no reader finds half a file. `reg_changed()` says
 when another program has written it: the desktop looks once a second and takes a new
 wallpaper so. The file is 16 KB at most and a value 255 bytes; without `/persistence` a set
 fails and the program goes on with what it has. Like the rest of the folder it lasts beyond
@@ -69,10 +69,9 @@ where the desktop's icons stand (a file of lines), and whether the folder is loa
 ## The bytes
 
 `tar` of the folder, deflated as a gzip file by zlib inside `nxpersist`, after 16 bytes:
-`SEPD`, a version (1), the count of the bytes that follow, their CRC-32. BusyBox's own gzip
-was 24.5 s for 200 KB of a program's bytes and has no levels; zlib is 8.3 s at level 1 and
-1.8 s to unpack what BusyBox unpacks in 5.5 (guest seconds on `rvc_cpu`, 13 October 2026).
-Level 6 is tried only for a folder that level 1 leaves just over the limit.
+`SEPD`, a version (1), the count of the bytes that follow, their CRC-32. It is not BusyBox's
+gzip, which has no levels. Level 1 is the default; level 6
+is tried only for a folder that level 1 leaves just over the limit.
 
 `nxpersist` hands over 96,000 bytes at most. A folder that packs to more is not saved: the
 window says by how much and names the three largest files, and what the host kept before
@@ -113,44 +112,38 @@ doing and a bar; without one it prints lines.
   answers 404 at once.
 - `rvc_cpu --persist FILE` and `rvc_harness --persist FILE` (`rvc_persist.h`): the bytes are
   the file, `FILE.auto` holds the switch. These and `host:name` (below) are the only addresses
-`rvc_cpu` answers.
-  Without the option both say 404. (`rvc_harness --cpu` now puts every fetch's answer into the
-  processor's own memory: before, only its words came back, and a load there read old bytes.)
+  `rvc_cpu` answers. Without the option both say 404.
 
-## In the world, and in a real client
+## In a real client
 
-In the editor's play mode (13 October 2026, the world's machine on the card): the image
-boots, the guest's load is answered 404; a file and a registry key written at the console,
-Save pressed on the sign: "Saved. Kept: 1 KB of 100." and status 200; play stopped and
-started again: the sign says what is kept before the machine is on, the load is 200, the
-file and the key are there. "Load at start" goes off and on, Clear asks twice. `nxpath`
-there, 160 x 120 with 2 samples: 0 of 200 rays wrong, the tree 583 ms by 227 workers, the
-picture 166 ms with 255, the sum `f38bbd71` as on `rvc_cpu`.
+In the editor's play mode, the world's machine on the card: the guest's first load is answered
+404; a file and a registry key written at the console, Save pressed on the sign, says "Saved.
+Kept: 1 KB of 100." and status 200; with play stopped and started again the sign says what is
+kept before the machine is on, the load is 200, the file and the key are there. "Load at start"
+goes off and on, Clear asks twice.
 
 In a VRChat client, by `persistTest` on `EmuPersist` (set in the scene, "Build & Test", read
 the client's `output_log`: its lines are `[PersistTest]`; turned off again before the scene
 is saved). The client turns the machine on, reads the folder at the console, writes a file,
-presses Save, starts the machine again and reads the file: "Saved. Kept: 1 KB of 100." two
-seconds after the press, the second start's load answered, `from-vrchat` on the console.
+presses Save, starts the machine again and reads the file, which must say `from-vrchat`.
 
 A client of "Build & Test" keeps no PlayerData from one start of the client to the next (it
 restores "from 0 buckets", and writes nothing when it is closed): that the folder outlasts
-a session can only be seen in an uploaded world, and has not been.
+a session can only be seen in an uploaded world.
 
 ## Checked, and not
 
 On `rvc_cpu`, a private image: a folder saved in one run is there with the same sums after
 the next start; the file's header, sum and archive read by Python on the host; a flipped byte
-is refused; 244 KB of program bytes is refused with its sizes and the file is left; `auto 0`
-stops the start's load and `load!` does not mind; `clear`; Settings' three buttons by keys;
-each game's starter leaves its files in the folder. Through `rvc_harness --cpu --warp`: a
-save, a load of 166 bytes and of 87,628 with the file's sum after, and the windows' frames
-with their bars part-way.
+is refused; a folder that packs too large is refused with its sizes and the file is left;
+`auto 0` stops the start's load and `load!` does not mind; `clear`; Settings' three buttons by
+keys; each game's starter leaves its files in the folder. Through `rvc_harness --cpu --warp`: a
+save, loads small and large with the file's sum after, and the windows' frames with their bars
+part-way. The test set's `nxfiles-persist` has Save to persistence only.
 
 Not done: the folder across two sessions of an uploaded world; VRChat's own count of the
-bytes, and whether one key may hold 100 KB (1 KB was kept); a save of more than a few
-kilobytes on the card; Doom's and Quake's files after a quit by hand; a restart for a kept
-screen size; a headset.
+bytes, and whether one key may hold 100 KB; a save of more than a few kilobytes on the card;
+Doom's and Quake's files after a quit by hand; a restart for a kept screen size; a headset.
 
 ## The player's name
 
@@ -162,6 +155,6 @@ digits, `.`, `_` and `-` of it and 32 at most, in the registry's `user.name` and
 `USER` and `LOGNAME` to every program of the desktop: the bar shows it before its speed's box,
 Quake is started with `+name`, Quake III with `+set name`, ClassiCube with it as the
 launcher's name (`launcher-cc-username` in its options). A program that wants an identifier
-for its player reads `$USER`, or the registry's key outside the desktop. On `rvc_cpu` with
-`SHADEREMU_PLAYER="Mykhailo Test"` (14 October 2026): `user.name` was `MykhailoTest` and Quake
-III said `MykhailoTest entered the game`.
+for its player reads `$USER`, or the registry's key outside the desktop. On `rvc_cpu`,
+`SHADEREMU_PLAYER` with a space in it gives a `user.name` without the space, and Quake III enters
+under that name.

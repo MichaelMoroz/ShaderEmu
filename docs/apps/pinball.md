@@ -64,7 +64,6 @@ is near the flippers or the game is over and leaves the window as it is, for a p
 
 ## What it costs
 
-On `rvc_cpu` (18 October 2026), `PINBALL_DEMO=1800` from `pinball: go` to the end: 45.8
-million instructions on core 0 with the window system's, 25,400 a frame (300 frames: 26,000).
-At 3 million instructions a second that is 118 frames a second; the 30 the game draws take a
-quarter of the first core. The same 300 frames give the same sum in `rvc_harness --cpu --warp`.
+`PINBALL_DEMO=1800` from `pinball: go` to the end is 37.1 million instructions on core 0 with
+the window system's, 20,600 a frame (`rvc_cpu`, 31 October 2026). It plays 269 frames a second
+(calibrated, 31 October 2026); the 30 the game draws take about a ninth of the first core.

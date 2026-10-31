@@ -11,18 +11,14 @@ memory and the other hosts; nothing else about it is the host's business.
     / # quake -listen 4 +map e1m1                  (on one)      quake +connect 10.0.0.1
     / # doom -net 1 .10.0.0.2                      (on one)      doom -net 2 .10.0.0.1
 
-## What was there, and what was added
+## What the stack is
 
-- The kernel the image is built from (pimaker's fork, `linux.config`) has had `CONFIG_NET`,
-  `CONFIG_INET` (TCP, UDP, ICMP), Unix and packet sockets and the loopback device all along,
-  and BusyBox has had `ping`, `nc`, `telnet`, `telnetd`, `wget`, `ifconfig`, `route` and
-  `netstat` built in. Nothing of the stack was switched on for this; no IPv6, no netfilter.
-- The fork's own network card (`rvcnet`: an Ethernet device behind CSRs 0x0c0 to 0x0c3, which
-  this machine does not have) registered a dead interface at every boot. It is left out of the
-  build now (`install_drivers.py`), and `linux/kernel/shaderemu_net.c` takes its place.
-- `/dev/pts` is mounted by `emuinit` (telnetd opens its terminals by name), and `nc` and
-  `telnetd` have names in `/usr/bin` (two-line scripts: the ROM's BusyBox links lack them).
-  `ping` is upstream's, as it was.
+- The kernel the image is built from (`linux.config`) has `CONFIG_NET`, `CONFIG_INET` (TCP, UDP,
+  ICMP), Unix and packet sockets and the loopback device; no IPv6, no netfilter. BusyBox has `ping`,
+  `nc`, `telnet`, `telnetd`, `wget`, `ifconfig`, `route` and `netstat` built in.
+- The fork's own network card (`rvcnet`: CSRs this machine does not have) is left out of the
+  build (`install_drivers.py`), and `linux/kernel/shaderemu_net.c` takes its place.
+- `/dev/pts` is mounted by `emuinit` (telnetd opens its terminals by name).
 
 ## Addresses
 
@@ -58,8 +54,8 @@ wire, from the first byte of its IP header, byte i at the address of its first b
 The two control texels (`0x3e` and `0x3f` of the control row) are among the first 64 that
 every host reads back already. The window and the ring are one row of the state texture:
 RAM texel `0x16b800`, row 791 (64 + 727), the window at x 0 to 39 and the ring at x 64 to
-383. The console is x 40 to 57 (`docs/machine/console.md`). That row was the top of Nano-X's scratch textures (`DATA_END` in `scr_shaderemu.c`); it
-lies in band 5, which a control pass that draws bands 4 and 5 covers.
+383. The console is x 40 to 57 (`docs/machine/console.md`). Nano-X's scratch textures end below that
+row (`DATA_END` in `scr_shaderemu.c`); it lies in band 5, which a control pass that draws bands 4 and 5 covers.
 
 A packet's place, in the window or in the ring, is: a word with its length in bytes, a word
 with its number, two words that are not used, then its bytes. Packets are numbered from 1 in
@@ -168,52 +164,26 @@ pass defines `GPU_NET`).
   sync, one batch in flight). Every other client's hub hands each packet to its own machine,
   which keeps it if its address is the machine's or everybody's. Nothing is repeated: TCP
   repeats what it loses, and the games' UDP expects loss.
-- Until 21 October 2026 the packets rode in the share object (`EmuShare`) with the display, the
-  input and some 240 bytes of other fields every sending, and waited for that object's last
-  sending to go out and 50 ms after it. Measured that day between two real clients on one
-  computer (the hub's `lanTest`, below), `ping -c 20` each way one after the other on an
-  otherwise quiet link, round trip min / mean / max in ms, each client's:
-
-  | Session | in `EmuShare` (before) | `EmuNet` serialized | `EmuNet` events |
-  |---|---|---|---|
-  | 1 | 216 / 302 / 417, 250 / 308 / 377 | | |
-  | 2 | | 243 / 300 / 357, 239 / 282 / 395 | |
-  | 3 (both in one) | | 250 / 307 / 362, 238 / 297 / 363 | 198 / 231 / 280, 199 / 229 / 271 |
-  | 4 (both in one) | | 214 / 299 / 353, 192 / 330 / 822 | 201 / 226 / 278, 183 / 241 / 630 |
-
-  With both machines pinging at once and a fetch beside (the test before it was staggered),
-  the client that was not hit by the hold below had 279 / 505 / 1,158 and 235 / 394 / 887 in
-  `EmuShare`, 267 / 364 / 1,053 and 239 / 318 / 604 in `EmuNet` serialized.
-
-  A batch's time on the way (`sentMs` to its arrival) was 100 to 120 ms serialized, of which
-  some 40 is the wait for VRChat's next sending (`OnPostSerialization`), and 50 to 90 ms as an
-  event; the rest of a round trip, some 80 ms, is the two machines' readbacks, frames and ticks.
-  Under a fetch of a picture (TCP, full packets) either way had batches 0.4 to 1.2 s on the way.
-  Some 50 s after the clients start, VRChat once held everything 2 to 3 s (both clients at
-  once, either carrier): a ping then has seconds-long round trips.
+- A batch rides in `EmuNet` and not in the share object (`EmuShare`) with the display: its sendings
+  would make a packet wait for that object's other fields. The hub's `lanTest` and the `[Lan] times`
+  lines measure a round trip and a batch's time on the way; a batch as an event is quicker than a
+  serialized one, which waits for VRChat's next sending.
 - A batch goes out whether or not anybody watches the display, and while packets flow the
   display goes with one sending in six only (below, "A game has most of the world's link").
-- Checked in play mode with one visitor (before 21 October 2026, the packets then in `EmuShare`): `ifconfig lan0` says `10.0.0.1`; `ping -c 3 10.0.0.2`
-  leaves three packets of 84 bytes in the machine's queue (`netSent`), acked, and three
-  batches in the visitor's object; an echo request written into a spawned player's `net` (with
-  `netSeq` raised and `_onDeserialization` sent) is taken by the guest (`taken` 1) and its
-  36-byte reply comes out. `EmuMachine`'s `netSent`, `netReceived`, `netBad` and the hub's
-  `netBatches`, `netTaken` are there to read.
+- In play mode with one visitor: `ifconfig lan0` says `10.0.0.1`; `ping -c 3 10.0.0.2` leaves three
+  packets of 84 bytes in the machine's queue (`netSent`), acked. `EmuMachine`'s `netSent`,
+  `netReceived`, `netBad` and the hub's `netBatches`, `netTaken` are there to read.
 
 ## The guest's driver
 
 `linux/kernel/shaderemu_net.c` polls the device from the kernel's tick (`shaderemu_net_tick`,
 put into `update_process_times` by `tick_input_hook.py`, as the input's poll is), not from a
-timer of its own: a timer that expired every tick cost a running program some 320 instructions
-a tick in the timer wheel. An idle machine wakes at the next tick (`shaderemu_net_idle`, from
+timer of its own, which would cost a running program instructions every tick in the timer wheel.
+An idle machine wakes at the next tick (`shaderemu_net_idle`, from
 the idle loop) for five seconds after a packet went or came (`NET_AWAKE`), and after that polls
 on the ticks it has anyway (the input's, every fourth tick on a machine nobody touches): the
 first packet to a machine idle that long waits up to 40 ms of its time. A kernel without the
-hook polls from the timer as before. Measured on 21 October 2026 on `rvc_cpu` with the link up
-(`--net`, as every machine in the world has): an idle shell 229 thousand instructions a second
-to 157 (2,184 passes in 20 s to 1,277), a shell loop 628.67 million instructions to 622.66
-(-0.96%), the same count every run; ping and a file through `nc` on a clean link and on a bad
-one (5% loss, 250 ms each way) as before, the sums equal.
+hook polls from the timer.
 
 ## Programs
 
@@ -226,11 +196,10 @@ one (5% loss, 250 ms each way) as before, the sums equal.
   with more than one player has its server's frame on a worker core as a game for one has
   (`server_shaderemu.c`): what the worker would send is kept, a reliable message to each
   connection at most, and goes from the first core when the frame is taken; while a player
-  is still joining the first core makes the messages itself. On the serving machine the
-  first core's frame was 134 thousand instructions before its wait for the display and is
-  75 (the server's part 70 to 5; `QUAKE_SERVER=inline` is the old way). `QUAKE_NET=1` prints what packets cost, every 200 sent.
-- **Doom**'s port had its network file all along (`i_net.c`, linuxdoom's: every player sends
-  its moves to every other over UDP port 5029) and needs no change: `doom -net 1 .10.0.0.2`
+  is still joining the first core makes the messages itself. `QUAKE_SERVER=inline` keeps the
+  server on the first core. `QUAKE_NET=1` prints what packets cost, every 200 sent.
+- **Doom**'s port has its network file (`i_net.c`, linuxdoom's: every player sends
+  its moves to every other over UDP port 5029) : `doom -net 1 .10.0.0.2`
   on one machine and `doom -net 2 .10.0.0.1` on the other (the player's number, then the
   others' addresses, each after a dot). Both wait until all are there.
 - **The Network program** (`linux/apps/nxnet.c`; Utilities in the Start menu, an icon on the
@@ -245,20 +214,11 @@ one (5% loss, 250 ms each way) as before, the sums equal.
   a half (F5 or the first key asks again), then the folder of the one chosen; a file is
   fetched to `/tmp/net/ADDRESS/` and given to `open`, or copied into `/root` under a name
   that is free ("Copy to my Home"); Escape gives a file up while it comes. From a script:
-  `nxnet --find`, `--ls ADDRESS PATH`, `--get ADDRESS PATH FILE`. Between two interpreters
-  (`--net 47000 --net-id 1` and `2`): `--find` printed `10.0.0.1 Computer 1`, `--ls` its
-  Home, and an 83 KB picture came in 4 s, the same bytes. `NXNET_SELF=1` asks this computer
-  itself (the loopback), for a test with one machine. In the world's play mode with one
-  visitor, typed through "Console paste": `ps` has one `nxnet --serve`, `NXNET_SELF=1 nxnet
-  --find` prints `127.0.0.1 Computer 1`, `nxnet --ls 127.0.0.1 /` the Home's four folders,
-  and a plain `nxnet --find` leaves three packets in the machine's `netSent` and finds nobody.
-  Between two real clients (the hub's `lanTest`, a "Build & Test" with two clients on one
-  computer, 12 October 2026): each machine's `ping -c 5` of the other, 5 received; then each
-  one's `nxnet --find` printed the other (`10.0.0.1 Computer 1`, `10.0.0.2 Computer 2`), its
-  Home listed four entries, and a picture of 14 KB fetched from it was the same bytes as the
-  machine's own copy, some five seconds after the listing; 84 and 88 packets each way. The
-  hub's `lanDoom` asks for the game of Doom instead, as the test was before. A link that carries 600 bytes a
-  sending (the world's then; 1,000 now, below) is some 4 KB a second: a picture of 300 KB is over a minute.
+  `nxnet --find`, `--ls ADDRESS PATH`, `--get ADDRESS PATH FILE`, between two interpreters (`--net 47000 --net-id 1`
+  and `2`) too. `NXNET_SELF=1` asks this computer itself (the loopback), for a test with one machine.
+  Between two real clients: the hub's `lanTest`, a "Build & Test" with two clients on one computer;
+  its `lanDoom` asks for the game of Doom instead. The world's link is some 4 KB a second at a thousand
+  bytes a sending: a large picture is minutes.
 - **Games over the network** (`linux/apps/nxgame`; the Start menu's Games has a folder
   Network, and the desktop its shortcuts). A computer that hosts a game says so to whoever
   asks who is there: the word in `/tmp/nxhosting` follows its name in the answer (`NXNET!
@@ -270,38 +230,22 @@ one (5% loss, 250 ms each way) as before, the sums equal.
   `[quake3]`: the host is `quake3 +map q3dm17` for four, said to be hosted a minute after it
   starts, with a client on the LAN kept to 3,000 bytes a second as any other
   (`sv_lanForceRate 0`, `sv_maxRate`), and the join asks for that rate, ten snapshots and
-  fifteen packets a second. Between two `rvc_cpu` machines (`--net 47300 --net-id 1` and
-  `2`, `nxnet --serve` started by hand on the host, 14 October 2026): the join found
-  `10.0.0.1 Computer 1 [quake3]`, the host printed `Client 0 connecting` and `UnnamedPlayer
-  connected`, and both said the player entered the game. Not in the world, and not played. "Doom: network game"
+  fifteen packets a second; not tried in the world, and not played. "Doom: network game"
   (`nxgame doom host`) is started on every computer that plays and Start pressed on each:
   the players are the computers that say `[doom]`, numbered in their addresses' order, and
   each runs `doom -net N` with the others' addresses. `nxgame doom now` asks nothing and
   waits eight seconds instead (`NXGAME_WAIT`), for a test. A game looks for the others with
   `nxnet --find 12`: a computer busy with a game, over the world's link, answers seconds
-  late, and the default four are for the Network window. Checked on 12 October 2026 through
-  these scripts (the hub's `lanTest` with `lanDoom` or `lanQuake`, two clients on one
-  computer, the second of them at a fifth of the first's speed): Doom said `player 1 of 2 (2
-  nodes)` and `player 2 of 2` and ran 12 to 25 tics in five seconds on both; Quake's host
-  said `[quake]`, the other printed `joining Quake at 10.0.0.1` and `Connection accepted`,
-  and in one run of two went on into the level (787 packets one way and 257 the other in
-  the minute after), in the other neither sent a packet after the acceptance (not found
-  why). Between two harness machines the same host and join went into the level both
-  times, on the processor (6,600 packets each way in two minutes) and in the shader (1,312
-  and 895). Tiberian Dawn and Red Alert are built without the game's network code
+  late, and the default four are for the Network window. The hub's `lanTest` with `lanDoom` or
+  `lanQuake` runs these scripts between two clients on one computer. Tiberian Dawn and Red Alert are built without the game's network code
   (`-DNETWORKING=OFF`), and Tiberian Dawn's data is the demo's, which has no maps for
   several players: neither plays over the network.
-- **A game has most of the world's link, and Quake keeps to it.** Quake over the world's link
-  blinked its "nothing from the server" sign all the time: a move and an update a frame are
-  more packets than a client's eight or so sendings a second carry, and the machine's queue
-  of 32 overflowed (48 times in a minute). While a machine's packets flow, the hub now gives
-  them up to 1,000 bytes of every sending (`NetBatchMost`; it was 600) and the display one
-  sending in six (it was every other); the machine keeps 64 packets each way (`NetQueue`).
-  Quake sends a move to a server on another machine, and an update to a client on one, eight
-  times a second (`net_rate`; 0 for one a frame, as before), and shows the sign after a
-  second and a half without a packet (it was 0.3 s). Two clients on one computer after
-  this: 5.6 packets a second each way, what one sent the other received to within three in
-  450, no queue overflow, no batch missed; the picture of it is the developer's to judge.
+- **A game has most of the world's link, and Quake keeps to it.** A move and an update a frame are
+  more packets than a client's sendings carry. While a machine's packets flow, the hub gives them up
+  to 1,000 bytes of every sending (`NetBatchMost`) and the display one sending in six; the machine
+  keeps 64 packets each way (`NetQueue`). Quake sends a move to a server on another machine, and an
+  update to a client on one, eight times a second (`net_rate`; 0 for one a frame), and shows the
+  "nothing from the server" sign after a second and a half without a packet.
 - Anything else with sockets: `busybox httpd -p 80 -h /usr/share` on one machine and `wget
   -O /tmp/w http://10.0.0.1/web-css.html` on another gives the same file. Nothing outside
   10.0.0.0/16 exists.
@@ -311,12 +255,11 @@ one (5% loss, 250 ms each way) as before, the sums equal.
 `--until` texts and two machines at once want a script; these are the commands it runs, each
 machine with its own `--uart-log`. Start them from PowerShell.
 
-- **Ping, both ways** (interpreters, 13 s): each of
+- **Ping, both ways** (interpreters): each of
   `bin\rvc_cpu.exe --quiet --net 47000 --net-id N --uart-log logs\lan_N.log --expect "/ # " --send "sleep 4; ping -c 4 10.0.0.M\n" --until "packet loss"`
-  must say `4 received`. On the shader: `bin\rvc_harness.exe --rvc experiments\rvc_opt --image
-  linux-net --load-state build\snapshots\rvc_shell.snap --no-stdin --net 47000 --net-id N
+  must say `4 received`. On the shader: `bin\rvc_harness.exe --rvc experiments\rvc_opt --load-state build\snapshots\rvc_shell.snap --no-stdin --net 47000 --net-id N
   --input "..."`.
-- **A file through TCP on a bad link** (`--net-loss 5 --net-delay 250` on both, 60 s): on 1,
+- **A file through TCP on a bad link** (`--net-loss 5 --net-delay 250` on both): on 1,
   `nc -l -p 5000 < /dev/null > /tmp/f; md5sum /tmp/f`; on 2, `dd if=/bin/busybox of=/tmp/s
   bs=1024 count=200; md5sum /tmp/s; sleep 3; nc -w 3 10.0.0.1 5000 < /tmp/s`. The sums must
   be equal. (`nc -l` without `< /dev/null` waits for the console's end, not the
@@ -328,12 +271,10 @@ machine with its own `--uart-log`. Start them from PowerShell.
   e1m1`, and `status` typed when it says `two entered the game` must list two players, the
   second at `10.0.0.2`; on 2, `nano-X -p & sleep 50; QUAKE_NET=1 quake +name two +connect
   first` must say `Connection accepted`. The client must not start before the server has its
-  level (40 s at full speed): its search lasts a second and a half. Two shader machines at
-  once run at half speed each and need more than the five minutes a test may take here: the
-  server on `rvc_cpu` and the client on `rvc_harness` take 135 s.
-- **Doom** (two `rvc_harness`, 60 s; it needs the sound card, which `rvc_cpu` lacks): both
-  must print `player N of 2 (2 nodes)` and then `doomstat:` lines with about 170 tics each
-  (five seconds at 35 a second).
+  level: its search lasts a second and a half. Two shader machines at once run at half speed each: put
+  the server on `rvc_cpu` and the client on `rvc_harness`.
+- **Doom** (two `rvc_harness`; it wants the sound card): both must print `player N of 2 (2 nodes)` and
+  then `doomstat:` lines.
 - **Two real clients**: set the hub's `lanTest` and the gate's `testOpen` (`EmuGate`: a test
   client never walks out of the corridor, so the world's parts come on 5 s after it arrives),
   the SDK's number of clients to 2, and "Build & Test". Both machines go on; 60 and 85 s after
@@ -341,62 +282,25 @@ machine with its own `--uart-log`. Start them from PowerShell.
   then (from 110 s) both send batches as events and ping again at 115 and 140 s; then each finds
   the other with `nxnet`, lists its Home and fetches a picture. Each client's log has the
   `round-trip` lines and the `[Lan] times` lines. Turn both switches off and the clients back to
-  1 before saving the scene. A scene from before 21 October 2026 gets the network's player
-  object from "ShaderEmu/Add the network's player object to the open scene".
-- The single-player sums of `docs/games/quake.md` are as they were. `QUAKE_SUM` leaves a player's
-  name out now, as it left the world's model out: its place is counted from QuakeC's
-  strings and moved when the network drivers put console commands of their own on the heap.
-  With that, the build with `net_none` and this one print the same twelve sums on e1m5, and
-  so do `inline`, `late` and `wait`.
-
-## What it costs
-
-Measured on 10 October 2026 (`rvc_cpu` for instructions; RTX 5090, D3D11 and fxc2 for times).
-
-| | Before | After |
-|---|---|---|
-| Kernel `Image` | 4,770,320 bytes | 4,770,192 (the fork's card out, ours in) |
-| Instructions to the prompt | 10,707,092 | 10,701,127 |
-| An idle machine, no link (30 s from power-on, less the boot) | 205,500 a second | 203,300 |
-| An idle machine with a link and nobody on it | | 216,900: the tick's poll is 13,600 a second, 136 a tick |
-
-| | |
-|---|---|
-| `ping` between two interpreters | 20 to 40 ms |
-| `ping` between two shader machines | 40 to 68 ms from a cold boot, 21 to 42 from the snapshot |
-| 204,800 bytes through `nc`, a clean link, two shader machines | 7.6 s: 27 KB a second, 408 packets one way and 281 back |
-| the same with 5% loss and 250 ms each way | 24.4 s (interpreters: 25.7 s): 8 KB a second; 27 of 394 and 15 of 300 packets lost, sums equal |
-| Quake, a packet sent (`sendto`) | 4,650 instructions on a client, 5,800 on a server |
-| Quake, a packet received (`recvfrom`) | 1,240 to 1,480; a read that finds nothing 540 |
-| Quake, a client at 18 frames a second | 18 packets out, 14 in and 18 empty reads: 113,000 instructions a second, 4% of the machine |
-| Doom, two players, two shader machines | 159 to 175 tics in five seconds (alone: 175); about 24 packets a second each way |
+  1 before saving the scene. "ShaderEmu/Add the network's player object to the open scene" adds what
+  a scene lacks.
+- `QUAKE_SUM` leaves a player's name out, as it leaves the world's model out: its place is counted from
+  QuakeC's strings, which the network drivers' console commands move.
 
 ## What is not done, and what to know
 
-- **In the world `ping` and Doom have been run between two real clients** (the hub's `lanTest`,
-  a "Build & Test" with two clients on one computer, 10 October 2026): each machine's `ping -c
-  5` of the other, 5 received; then `doom -net`, both printing `player N of 2 (2 nodes)`, some
-  2,200 to 2,400 packets each way in two minutes, and 64 to 70 tics in five seconds on both
-  once the game had settled (alone: 175; two clients share this computer's graphics card). No
-  TCP and no second computer yet.
-- **One window a readback's round trip.** Before the window took several packets, Doom ran
-  at 2 tics a second between two shader machines: each packet waited for the last one's ack,
-  some 60 ms, and Doom sends 35 a second. A host whose readbacks take longer gets
-  proportionally less: 640 bytes a round trip is the ceiling.
-- TCP's first timeout is the kernel's own second; the link's round trip is under it, so it
-  was not raised. No congestion setting was changed.
-- Whether two Quake players see each other was checked by the server's `status` and the
-  packets, not by a picture. Nothing was played by hand, and connecting by address or from
-  the menu was not tried.
-- Doom on a link with VRChat's delay was not tried: its game waits for every player's moves.
-- `rvc_cpu` has no sound card and Doom there ends in its music code (`snd_page` is null after
-  "no sound card"), with or without a network: Doom's checks are the shader machine's.
+- **One window a readback's round trip.** A host whose readbacks take longer gets proportionally less:
+  640 bytes a round trip is the ceiling. In a world two clients on one computer also share one card.
+- TCP's first timeout is the kernel's own second; the link's round trip is under it. No congestion
+  setting is changed.
+- Whether two Quake players see each other is checked by the server's `status` and the packets, not by
+  a picture. Nothing has been played by hand, and connecting from the menu is not tried.
+- Doom on a link with VRChat's delay is not tried: its game waits for every player's moves.
+- `rvc_cpu` has no sound card without `RVC_SOUND=1`.
 - A machine's packets to `10.0.0.M` with M over 16, or to any other network, are dropped by
   the harness; in the world the number is the VRChat player's.
 - Limited broadcast and the network's broadcast leave on `lan0`; Linux does not answer
   `ping` to either (its default).
-- `linux/prebuilt` has had the network's kernel (`shaderemu_net`), `nc`, `telnetd`, `nxnet`
-  and `nxgame` since it was saved again.
 
 ## The panel on the wall
 
