@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The title screen's game, opntitle.dat: a 64 x 64 map of title.cfg made by the native build of
-# host_sum.sh, which loads in a tenth of upstream's (docs/games/openttd.md, "Starting").
+# host_sum.sh, which loads in a tenth of upstream's (docs/games/openttd.md, "The start").
 #   wsl -- bash /mnt/c/.../linux/openttd/make_title.sh   (after host_sum.sh; writes linux/openttd/opntitle.dat)
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
