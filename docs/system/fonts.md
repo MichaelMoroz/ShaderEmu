@@ -20,8 +20,8 @@ from where they lie; the processor's part of a string is still a word a characte
 - **The desktop's faces** are [Selawik](https://github.com/microsoft/Selawik) 1.01 (Microsoft's
   open stand-in for Segoe UI, SIL Open Font License), at 11, 12, 13, 15 and 17 pixels
   (`UI_SIZES`); `python tools\make_fonts.py --ui [FOLDER]` makes only these. Each glyph has at
-  least a pixel after its ink (`gap=1` in `outline_font`): at 12 pixels the colon's advance was
-  2 and the clock read "2054". `font-ui-12.sef` is the programs' and the captions' text
+  least a pixel after its ink (`gap=1` in `outline_font`), or a colon at 12 pixels touches what
+  follows it. `font-ui-12.sef` is the programs' and the captions' text
   (`UI_LOOK_FONT` in `linux/apps/ui_look.h`): height 15, ascent 12.
 - The window manager's caption draws in it when the look is smooth (`caption_title` in the
   patch's `nxpaintnc.c`); the screen driver's `romfont_draw` fills a background when the GC
@@ -32,7 +32,7 @@ from where they lie; the processor's part of a string is still a word a characte
   punctuation, arrows, mathematical signs and the box-drawing characters: about 1,450 glyphs
   each, rasterised by FreeType with the faces' own hinting (through Pillow), kept as four bits
   of coverage a pixel. Unifont is a bit a pixel and has the rest: Chinese, Japanese, Korean,
-  Arabic, Hebrew, the Indian scripts, 57 thousand glyphs. 55 files, 11.5 MB of ROM.
+  Arabic, Hebrew, the Indian scripts, 57 thousand glyphs. 79 files, 15.1 MB of ROM (31 October 2026).
 - The fonts are fetched once into `build\fetch\fonts` (Liberation 2.1.5, SIL Open Font
   License; Unifont 16.0.04, GPL 2+ with the font exception and OFL) and are not kept in this
   repository, like the desktop's pictures.
@@ -87,7 +87,7 @@ The outline faces are also made as multi-channel signed distance fields: one atl
 that draws at any size, sharp, instead of a bitmap a size that a scale makes blocky.
 
     python tools\make_fonts.py [OUT]               # distance fields for every size (the default)
-    python tools\make_fonts.py [OUT] --bitmap      # the bitmaps of before, for A/B
+    python tools\make_fonts.py [OUT] --bitmap      # bitmaps only, for A/B
     python tools\make_fonts.py [OUT] --msdf-from 15   # bitmaps below 15 pixels, fields from there
 
 - `font-NAME.msdf` is the face's atlas: a 64-byte header (`SEM1`, its pixels an em and its
@@ -106,8 +106,7 @@ that draws at any size, sharp, instead of a bitmap a size that a scale makes blo
   uneven). Lines, widths and layout are those of the bitmaps: `web_advance`,
   `tools/web_test.c` and the browser's counts are unchanged.
 - The desktop's faces have 20, 24 and 32 pixels too (`UI_LARGE`, 6 KB a size), so that large
-  text is scaled from hinted advances near its own size: 96 pixels from 17 spaced its letters
-  by the 17's rounding times 5.6.
+  text is scaled from hinted advances near its own size, not spaced by a small size's rounding.
 - The GPU draws such a glyph in fragment mode 8 (`docs/machine/gpu.md`): a pixel's coverage is the
   mean of four samples, one a quarter of its box (2 x 2), each the four atlas pixels round it,
   weighed, the median of their channels the distance, and the quarter's coverage that distance
@@ -118,11 +117,7 @@ that draws at any size, sharp, instead of a bitmap a size that a scale makes blo
   glyph's quad is shifted and stretched across and down, by up to half a pixel and 12%, until
   the outline's coverage of each pixel is nearest the bitmap FreeType hints at that size
   (`fit_quads` in `tools/make_fonts.py`): stems and the baseline land where the hinting puts
-  them, as one pixel and not two half-covered ones. The outline is not thickened. Against the
-  bitmaps, a line of Selawik at 11 to 17 pixels, regular and bold, and Liberation Mono at 13
-  differ pixel by pixel by 0.089 of the bitmaps' ink, summed, where the plain outline
-  differed by 0.56, with the same ink (0.99 of it) and as many half-covered pixels as the
-  bitmaps (0.54 of the inked ones; 0.71 before). Sizes from 20 are the outline as it is. The fit is 15 of the 23 s `make_fonts.py` takes (8 processes).
+  them, as one pixel and not two half-covered ones. The outline is not thickened. Sizes from 20 are the outline as it is.
 - **The window system** finds the atlas beside the file (`msdf_nearest` in `scr_shaderemu.c`);
   without it the font is none and the program gets the built-in one. A height asked of
   `GrCreateFontEx` takes the face's size whose line is nearest and scales it: sizes are not
