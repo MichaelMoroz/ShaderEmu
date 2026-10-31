@@ -11,9 +11,9 @@ How it is drawn:
   shader reads the machine's state texture: it looks up which command claims the vertex, reads
   that vertex from the guest's buffer and places it. Vertices no command claims collapse to
   nothing. The fragment shader reads the same texture for textures and the palette.
-- The target is a 2048x2048 colour and depth target; the picture is its top-left
-  width x height pixels. In the harness it is a render target; in a VRChat world it is a camera
-  that sees only this mesh, on a layer of its own, clearing depth only.
+- The target is a colour and depth target, 2048 x 2048 in the harness and 1280 x 720 in the world
+  ("The picture's rectangle"); the picture is its top-left width x height pixels. In the world the
+  lists are blits into it ("Blits in place of cameras").
 - **GPUControl** is one small extra update zone on the state texture. After a submitted list
   has been drawn it takes the submit word back and counts the frame, so the next list can be
   submitted at once. It also delivers the keyboard and pointer (`input.md`), the host's
@@ -98,7 +98,7 @@ median of their channels is the distance from the edge, 0.5 on it. Word 12 times
 how many of the screen's pixels the atlas's range is (times 1.2, `MSDF_SHARP`), worked out a
 command in the vertex stage with how far a screen pixel is in the quad: a quarter's coverage is
 twice that times (median - 0.5) + 0.5, clamped, and the colour's alpha is times the mean of the
-four, so the same quad is sharp at any scale. Mode 7 is as it was.
+four, so the same quad is sharp at any scale.
 
 A vertex is 64 bytes: position, normal, texture coordinates, colour, four numbers each.
 Numbers are 16.16 fixed point, or floats when the draw says so (the float flag below). A colour given as one word is `0xTTRRGGBB`, T being
@@ -182,7 +182,7 @@ use, and within a pass commands keep the list's order:
 | 4-7 | the same four | not used: for drawing on top |
 
 So a frame is at most eight draws however many commands and state changes it has, and a list
-that only uses pass 0 is one, as before. The host draws passes 1-7 only while lists ask for
+that only uses pass 0 is one. The host draws passes 1-7 only while lists ask for
 them: it reads the submit word back, sees the bits, and from then on draws those passes (and
 for some hundred frames after their last use). A list that needs a pass not being drawn yet
 stays submitted, undrawn, until it is; that delay happens once, not per frame. In the shader
@@ -271,7 +271,7 @@ float build, about an axis of the coordinate system in the other.
   the frame's matrices; `seglKeptLaid()` lays a run's texture on the picture. Doom's levels
   are drawn this way (`docs/games/doom.md`).
 - `seglQuad()` is one textured quad in one call, for the many small draws that differ in
-  texture: about 150 instructions against `glDrawArrays` and the state calls before it.
+  texture.
   `seglWindowTexture()` makes the window's own pixels a texture: the last frame, for free.
 - A window may be resized at any time, and a program that stretches a picture over it must
   not map the pointer by the size it asked for. `seglPicturePoint()` turns an event's x, y
@@ -292,28 +292,26 @@ float build, about an axis of the coordinate system in the other.
   or without; `seglPoints()` gives room for points (`docs/games/quake.md`: models and particles).
 - `seglMemorySpare()` is 3.9 MB more for one program: the display's own framebuffer
   (`docs/machine/display.md`), which nothing reads while the desktop is layers.
-- `seglSwap()` waits until the list is drawn, with `pause` (now the rest call, below), which ends the machine's pass:
-  what was left of that pass is not run (4,100 instructions a frame on average, 6% of Doom).
-  `seglSwapEarly()` submits and returns at once, for a program that does other work next.
-  The list, and every texture, kept vertex and palette entry it reads, must stay as they are
-  until it is drawn: `seglSettle()` waits for that, and the program calls it before it next
-  writes any such memory through a pointer. The library's own calls that write memory both
-  sets share (the kept commands, the palette, deleting textures, the window's own texture)
-  settle themselves. Doom swaps early, runs its tics, and settles when it begins to draw
-  (`D_Display` in `doom_video.c`): the wait is over by then, and 93.4% of its passes'
-  instructions became 99.8%. `glXSwapBuffers` (`gl.c`) never waited after its submit.
+- `seglSwap()` waits until the list is drawn (the rest call, below), which ends the machine's pass: what
+  was left of that pass is not run. `seglSwapEarly()` submits and returns at once, for a program that
+  does other work next. The list, and every texture, kept vertex and palette entry it reads, must stay
+  as they are until it is drawn: `seglSettle()` waits for that, and the program calls it before it next
+  writes any such memory through a pointer. The library's own calls that write memory both sets share
+  (the kept commands, the palette, deleting textures, the window's own texture) settle themselves. Doom
+  swaps early, runs its tics, and settles when it begins to draw (`D_Display` in `doom_video.c`).
+  `glXSwapBuffers` (`gl.c`) never waits after its submit.
 - A frame drawn on a worker core is swapped with `seglSwapHand()`: the worker leaves its set,
   command count and size in 16 bytes of its own, and the first core submits it with
   `seglSwapTake()`, which never waits. The lock word and the submit registers are the window
-  system's too, and two cores have no atomic instructions between them: Quake's worker that
-  swapped itself undid the window system's submits in the same pass, and its picture was
-  copied into the window system's buffers. A worker's `seglSettle()` waits for its hands.
+  system's too, and two cores have no atomic instructions between them: a worker that swaps
+  itself undoes the window system's submits in the same pass. A worker's `seglSettle()` waits
+  for its hands.
 - `glXSwapBuffers` does not wait before its submit either, when the list the GPU still has
   is the program's own last frame: the GPU draws one list a pass, and a frame shorter than a
   pass waited for it every time. The newer frame takes the older one's place (the submit
   word taken back first, then the list's words, then the submit), as on a card whose
   program swaps without waiting for the display: frames drawn are one a pass, frames made
-  as many as the program can. `GL_SWAP=wait` is the old way, every frame drawn; `GL_STATS=1`
+  as many as the program can. `GL_SWAP=wait` has every frame drawn; `GL_STATS=1`
   prints both counts every 1,024 frames. The caption's rate is of frames drawn.
 - `seglSwapAgain()` draws the last list once more. Its textures, and the commands and vertices
   `seglLastCommand()` and `seglLastVertices()` pointed at, are the program's memory: a
@@ -326,16 +324,15 @@ float build, about an axis of the coordinate system in the other.
   program's in the way) the first core rests (`rest()` in `gles.c` and `gl.c`: the `REST`
   call of `/dev/gpu`, `docs/machine/multicore.md`, "A core that rests"), so that another program
   has what is left of the pass and `tools/tick_util.py` counts the pass apart. On a
-  worker core's stack, on a kernel from before the call and with `GL_REST=pause` it is
-  the pause hint, as it was. It is 322 instructions a wait where the pause was one.
+  worker core's stack and with `GL_REST=pause` it is the pause hint.
 
 ## From Linux
 
-The stock `glxgears.c` from Mesa's demos runs under the Linux image, unmodified, at about 145
-frames a second with this project's kernel (about 80 on upstream's):
-
-    / # glxgears
-    / # glxgears -geometry 1280x720
+The stock `glxgears.c` from Mesa's demos runs under Nano-X, unmodified but for its time arithmetic
+(`programs/linux/gears_time.py`). Calibrated, 31 October 2026 (`rvc_cpu --pass-model`, in the window it
+opens, `RVC_WCACHE=1 RVC_ADFAULT=1 RVC_SOUND=1`, `nano-X -p & sleep 2; GL_STATS=1 glxgears`): 955 frames a
+second made, about 4,180 instructions of core 0 each, half of them replaced before they were drawn, as
+one list is drawn a pass and a pass is 2.05 ms.
 
 - `programs/linux/gl.c` is the driver: a small OpenGL 1.x library (immediate mode, display
   lists, the matrix stacks, one light, flat and smooth shading) with the GLX and Xlib calls a
@@ -344,9 +341,7 @@ frames a second with this project's kernel (about 80 on upstream's):
   exist, so such a program fails to link rather than misbehave.
 - This project's kernel (`linux/kernel`: pimaker's 5.17.11 fork plus our drivers) has
   `/dev/gpu`. It maps GPU memory, `0x80000000` to `0x81b00000` (the control words are 16 MiB
-  in), so buffers are written with plain stores. Its pages are mapped accessed and written:
-  the machine's walk faults on a clear bit (`src/mmu.h`), and a worker's first store to a
-  page stopped it until core 0 served it (`docs/machine/multicore.md`, "A game's speed"). One ioctl draws a list, copies the picture
+  in), so buffers are written with plain stores. One ioctl draws a list, copies the picture
   where asked and returns when that is done; it holds a lock, so several programs can use
   the GPU without stepping on each other's lists. An older ioctl only waits for a frame.
   Either way the kernel waits with `wfi`, which ends the emulator's frame. `/proc/gpu` has a
@@ -355,51 +350,34 @@ frames a second with this project's kernel (about 80 on upstream's):
 - A program can also submit with no system call: it takes the lock word, writes the registers
   through its mapping and ends the frame with `pause`. The OpenGL library and Nano-X do this,
   and the library reads the time from the clock word instead of asking the kernel.
-- Under Nano-X `glxgears` is a window: the library asks the server where the window's
-  pixels are and has each frame copied there (about 500 frames a second at 300x300 on an RTX
-  5090 with DXC, one emulator frame of about 8,000 instructions each). With no server running
-  it takes the whole display, as before. On 19 October 2026 on an RTX 5070 laptop with D3D11 and
-  fxc2 (`docs/machine/speed.md`), in the window it opens: 1,279 frames a second on the shader machine,
-  1,122 on `rvc_lean`, 1,986 on the compute machine, 1,530 on the CPU harness.
-- A frame of `glxgears` was 5,900 instructions and is 4,600 (13 October 2026; under
-  `rvc_cpu` at 3 million a second 507 frames made a second and 650): a frame's matrix
-  blocks and commands are written where the GPU reads them, not into arrays copied at the
-  swap; the sine and cosine of an angle are kept by the angle (the view's three turns are
-  the same every frame); the 16.16 product is the processor's two instructions (`mul` in
-  `gl.c`: the compiler made four multiplies of a product of numbers it had just converted
-  from floats); the window system is asked for events when a button or a key changed, while
-  a button is held and four times a second, where it was every sixth frame; and the
-  demo's milliseconds are 32-bit (`gears_time.py`). The numbers are the same numbers.
-  Frames drawn stay one a pass: more frames made are more frames replaced before the GPU
-  drew them (`GL_STATS=1`). On the shader machine its 5 s lines said 864 to 889 frames a
-  second before and 1,178 to 1,209 after, 37% and 51% of them replaced. A window's new
-  buffer is noticed by the machine's word for it (`REG_BUFFERS`), as `gles.c` does, not
-  only by the event.
-- Upstream's kernel has neither `/dev/gpu` nor `/dev/mem`. There the library falls back to
-  an MTD device: the phram driver makes one for a physical range written to
-  `/sys/module/phram/parameters/phram`, and the library uses `pread` and `pwrite` on it and
-  spins while it waits.
+- `glxgears` is a window: the library asks the server where the window's pixels are and has each
+  frame copied there. A frame's matrix blocks and commands are written where the GPU reads them, not
+  into arrays copied at the swap; the sine and cosine of an angle are kept by the angle (the view's
+  three turns are the same every frame); the 16.16 product is the processor's two instructions (`mul`
+  in `gl.c`); and the window system is asked for events when a button or a key changed, while a button
+  is held and four times a second. Frames drawn stay one a pass: more frames made are more frames
+  replaced before the GPU drew them (`GL_STATS=1`). A window's new buffer is noticed by the machine's
+  word for it (`REG_BUFFERS`), as `gles.c` does, not only by the event.
 - The GPU's memory must not be RAM the kernel uses, so the image's device tree starts RAM at
   `0x82000000`, above the devices, and ends it at `0x92000000` (`linux/nommu/image.py`;
   `tools/make_linux_image.py` also adds the binary to the root filesystem: `docs/system/nommu.md`, "Memory").
-- The binary is static and links no C library: `programs/linux/libc.c` is a tiny runtime, and
-  floating point comes from compiler-rt's soft-float routines, fetched at build time
-  (`programs/linux/fetch.py`). Inside, the driver works in 16.16 fixed point.
+- The binary is a flat program against musl (`rv32-cc`, `linux/nanox/build.sh`). Inside, the driver
+  works in 16.16 fixed point.
 
 ## Checking it
 
 `tools/gpu_reference.py SNAPSHOT TARGET.bmp` redraws the command list left in a snapshot's RAM
 in software and compares it with the colour target saved by `--gpu-capture` (`--rom FILE`:
-the ROM of another image than `build\images\linux`, the shared one, as `build\images\nommu`, for textures and vertices that are in it). Pause the guest
+the ROM to read textures and vertices from when it is not `build\images\linux`'s, the shared one: `build\images\nommu`'s). Pause the guest
 before snapshotting. The card's rasteriser is not bit-exact with the model: expect agreement
 away from triangle edges except for single-pixel shifts where a nearest-sampled texture changes
 texel.
 
 ## Cost
 
-The graphics card rasterises, so cost follows covered pixels, not pixels times triangles.
-Gears at 1280x720 takes about 0.02 ms on an RTX 5090. The vertex shader runs for all 196,608
-mesh vertices every frame, most of which exit after reading one word.
+The graphics card rasterises, so cost follows covered pixels, not pixels times triangles. The vertex
+shader runs for all 196,608 mesh vertices every frame, most of which exit after reading one word. The
+devices' passes on the card are in the next section and in `tick-costs.md`, "What a pass is made of".
 
 In D3D12 the state texture must be in the non-pixel-shader-resource state as well as the
 pixel-shader one while GPUDraw runs: without it the vertex shader reads stale data, with no
@@ -410,37 +388,32 @@ error.
 A list's picture is the top-left part of the GPU's target (`gpu_picture_size`: the display's size, or the rectangle
 it is drawn into), and the target is larger: 1280 x 720 in the world (Half-Life's 640 x 480 is a third of it), 2048
 square in the harness. Nothing reads past the picture: the display (mode 3), the copies into RAM and the commit
-read its rectangle. What the target's size still cost, and what is done (29 October 2026):
+read its rectangle. So:
 
-- CMD_CLEAR's one triangle reaches twice the picture each way and painted as much again past it (glxgears' black
+- CMD_CLEAR's one triangle reaches twice the picture each way and would paint as much again past it (glxgears' black
   over the desktop's pixels in the target). It is cut at the picture's right and bottom edges by two clip
-  distances (`GPU_EDGE`, `--define GPU_NO_EDGE` in the harness is the old clear). Its colour and depth are the same
+  distances (`GPU_EDGE`; `--define GPU_NO_EDGE` in the harness leaves it whole). Its colour and depth are the same
   at every corner, so no pixel inside changes. 3D triangles past a program's view are not cut: a cut triangle's
-  new corners move the interpolation inside it (113 of Half-Life's pixels changed on the card), and cutting them
-  saved no time we could measure.
-- The world's depth clear (GpuDrawBlit's pass 8, a draw where the camera's clear was a clear) covers the list's
+  new corners move the interpolation inside it.
+- The world's depth clear (GpuDrawBlit's pass 8, a draw) covers the list's
   picture, not the whole target: depth past it is tested only by pixels past it.
 - The world's display blit draws the mode's rectangle of its 2048 x 1024 texture (Display.shader's `_Rect`; 800
   x 600 is a quarter), and a whole one when the mode shrinks, after power off and for another's display: outside
-  the rectangle the texture keeps the `_Off` a whole blit wrote, so the mipmaps (made over the whole texture) are
-  as before.
+  the rectangle the texture keeps the `_Off` a whole blit wrote, so the mipmaps are made over the whole texture.
 - The harness clears the depth with `ClearDepthStencilView`, a clear of the whole surface, which a card makes
   without drawing; the readback and the sound never read the target. The targets' memory stays: 7.4 MB in the
   world (colour and depth), 32 MB in the harness; a target of another size moves every vertex's place (`part` in
   `gpu_vertex_sized`) and so the pictures.
 
-On the card (RTX 5090, harness, `RVC_PASS_PROF`, the mean of 200 timed frames of 4,000 at `--fixed-dt 0.02`), the
-devices' passes with and without the cut clear: Half-Life's hldemo1 0.078 and 0.078 ms, glxgears on the desktop
-0.084 and 0.083 ms. The states are the same bytes, and the target is the same inside the picture.
+On the card (RTX 5090, harness, `RVC_PASS_PROF`, 29 October 2026, the mean of 200 timed frames of 4,000 at `--fixed-dt
+0.02`), the devices' passes with the cut clear: Half-Life's hldemo1 0.078 ms, glxgears on the desktop 0.084 ms.
 
 ## RAM in one texture
 
-The machine's state and RAM were two textures of 2048 x 9280 (290 MiB each), each commit
-drawing one from the other. Now they are one, written in place (`RAM_INPLACE`,
-`experiments/rvc_opt/src/ram.h`), and no pass reads the texture it draws: the D3D11 harness's
-default (`--ping-pong` for the two; `--lazy` and D3D12 still have two) and the world's.
-Beside it: the state rows after the tick (2048 x 64), a stage (2048 x 21) and the control
-pass's rows. 580 MiB became 290 MiB and 2.9 MiB.
+The machine's state and RAM are one texture of 2048 x 9280 (290 MiB), written in place (`RAM_INPLACE`,
+`experiments/rvc_opt/src/ram.h`), and no pass reads the texture it draws: the D3D11 harness's default
+(`--ping-pong` is two textures, and `--lazy` and D3D12 have two) and the world's. Beside it: the state
+rows after the tick (2048 x 64), a stage (2048 x 21) and the control pass's rows, 2.9 MiB.
 
 A pass, after the tick (which reads the state) and the unpack into the tick's texture:
 
@@ -465,29 +438,20 @@ chunk never reads what an earlier one wrote (as `memmove`). `rvc_cpu` makes them
 way, after the cores' pass (`copy_pass`; `RVC_COPY_STATS=1` prints how many there were and
 how long cores waited).
 
-`programs\copytest` (`tools\make_lazy_image.py DIR --program copytest --rom-kb 1024`, then
-`rvc_harness --kernel mmu --image linux-net` in DIR) checks a copy of 4 KB, of 1 MB forward,
-overlapping ahead and behind, from an odd address over three chunks, across and onto
-`0x88000000` (where the commit's bands wrap: bit b is bands b, b + 32 and b + 64), 1 MB from the ROM, a fill of 2 MB, and a store beside a destination in its
-pass: every line `ok` and `copytest: sum 0e7f76c3` on the card and on `rvc_cpu`. Before,
-the card had the store beside it wrong and `rvc_cpu` the overlap ahead.
-
-On the RTX 5090 (D3D11, fxc2), in turn with the tree before, from a cold boot: a shell loop
-4.79 and 4.82 million instructions a second against 4.74 and 4.83; Doom's timedemo
-(`-nodraw`, its seconds 20 to 32) 4.44, 4.72, 4.71 and 4.73 against 4.71, 4.62, 4.57 and
-4.64. The commit, gather and both draws, is 0.023 to 0.039 ms a pass against 0.024 to 0.026.
-A loop of 4 MB copies takes 16 passes a copy (0.020 ms of commit each) where it took one
-(0.036 ms). Linux's own copies are pages: Doom's timedemo made 16 of up to 4 KB, a `cp` of
-8 MB 4,096 of 4 KB, and no core waited for another's.
+`programs\copytest` (`tools\make_lazy_image.py DIR --program copytest --rom-kb 1024`, then `rvc_cpu` or `rvc_harness`
+with `--image DIR\build\images\linux`: a program in the kernel's place, no paging) checks a copy of 4 KB, of 1 MB
+forward, overlapping ahead and behind, from an odd address over three chunks, across and onto `0x88000000` (where the
+commit's bands wrap: bit b is bands b, b + 32 and b + 64), 1 MB from the ROM, a fill of 2 MB, and a store beside a
+destination in its pass: every line `ok` and `copytest: sum 0e7f76c3` on the card and on `rvc_cpu` (`rvc_cpu`, 31 October
+2026: 8 copies from RAM to RAM, 25 chunks). A loop of 4 MB copies takes 16 passes a copy.
 
 ### A program's copy
 
 A program asks for the same copy and fill at CSRs 0x8b0 to 0x8b3, the custom range a user-mode program
 may use, which the tick and `rvc_cpu` take as 0x0b0 to 0x0b3 (`src/csr.h`, `CSR_UMEMOP_*`). Reading 0x8b0
 says whether asking is worth it: 1 on the first core, 0 on a worker, whose copy from RAM would wait for
-every other core's (one a pass), and 0 on a tick from before (it reads unknown CSRs as 0), so a program
-built with it runs on either. (0x0b0 to 0x0b3 were never kept from user mode: their privilege bits are
-a user's.)
+every other core's (one a pass), and 0 on a tick without them (it reads unknown CSRs as 0), so a program
+built with it runs on either.
 
 The image's C library asks from 4 KB up for a copy and 2 KB for a fill (`linux/userland/memcpy.S`, `memset.c`, `uop.h`;
 on the card a copy of 2 KB by words was faster, of 4 KB slower, 28 October 2026): a `memcpy`
@@ -508,13 +472,10 @@ stored beside it in its pass; `-DPROGRAM_COPY_ONLY` builds it alone for a quick 
 
 ## The ROM as one texture
 
-The ROM (the image's `rootfs.bin`) was four RGBA8 textures, one for each word of a texel
-(`_Data_MTD_R/G/B/A`, PNGs made from the file). It is one RGBAFloat texture now, `_Data_ROM`:
-2048 texels a row, texel 0 in the last row, a 16-byte texel a pixel read back by its bits
-(`asuint`). The tick, the commit, the gather, the GPU's draw (`texture_word`), the sound, the
-lean tick and the world's shaders take a word as `asuint(_Data_ROM[p])[k]`: one load where a
-load of the ROM was a switch over four textures and an unpack, and a copy out of the ROM one
-texel load where it was four.
+The ROM (the image's `rootfs.bin`) is one RGBAFloat texture, `_Data_ROM`: 2048 texels a row, texel 0 in the last
+row, a 16-byte texel a pixel read back by its bits (`asuint`). The tick, the commit, the gather, the GPU's draw
+(`texture_word`), the sound, the lean tick and the world's shaders take a word as `asuint(_Data_ROM[p])[k]`, one load,
+and a copy out of the ROM one texel load.
 
 - The harness makes it from `rootfs.bin` itself (`createTextureTexels` in `harness/core/image.cpp`;
   D3D12 and `rvc_trace12` the same way).
@@ -531,14 +492,14 @@ texel load where it was four.
 ## Blits in place of cameras
 
 In the world every round's pass but the tick is a blit (`VRCGraphics.Blit`): the commit's gather and RAM points
-(`MachineCommitBlit.shader`) and the GPU's lists (`GpuDrawBlit.shader`) were meshes of points drawn by two cameras,
-and a camera's `Render` is some 0.13 ms of the main thread where a blit is next to nothing. The tick stays a camera's: it draws eight targets at once.
+(`MachineCommitBlit.shader`) and the GPU's lists (`GpuDrawBlit.shader`), as a camera's `Render` is some 0.13 ms of the
+main thread where a blit is next to nothing. The tick stays a camera's: it draws eight targets at once.
 
 - **Points from a blit** (`experiments/rvc_opt/src/amp.h`). A blit's two triangles are two patches of three points;
   the hull shader asks for a quad domain at factor 8 (never more: a driver may clamp a larger factor), 81 points a
   patch, and a geometry shader of `AMP_INST` instances makes a call of each point and instance: 5,184 calls a blit
   at 32. The calls make the meshes' points and triangles. The hull shader returns no control point by its index
-  (fxc2 before patch 64 wrote `I[id]` as a temp the card did not draw, and the device was removed), and every
+  (an fxc2 before patch 64 writes `I[id]` as a temp the card does not draw, and the device is removed), and every
   shader of patches includes `src/fxc2_check.h`, which refuses an fxc2 older than 65.
 - **In the meshes' order.** Where two points write one texel the later wins (the zap's square, then each core's
   buckets and lone store, then its fill or copy, then the picture; the gather's highest core with a copy), and the
@@ -553,15 +514,15 @@ and a camera's `Render` is some 0.13 ms of the main thread where a blit is next 
   and checks that the ranks are 0 to 80 once each.
 - **The gather**: a point a call, `AMP_INST` 2 (324 calls for 257 points). **The RAM commit**: nine points a call,
   and the last point (the picture, up to 20 vertices) a call of its own. A texel the commit writes alone is one
-  triangle of three vertices (`ram_tri`: its corner and 1.5 texels along each side) where it was a quad of four, so
+  triangle of three vertices (`ram_tri`: its corner and 1.5 texels along each side), so
   that nine points (nine buckets of three entries, or a fill's three rows, a lone store and seven buckets) are at
   most 81 vertices, under the 85 that 1,024 values of `ram_v2f` allow. `AMP_INST` 8: a blit is 1,296 calls, and four
-  blits (`_AmpFirst` 0, 1,296, 2,592 and 3,888) are 46,000 points; the mesh had 41,346. At 32 instances, one blit,
+  blits (`_AmpFirst` 0, 1,296, 2,592 and 3,888) are 46,000 points. At 32 instances, one blit,
   WARP compiled the geometry shader for more than 18 minutes (1 instance 1.3 s, 8 4.6 s, 16 24.5 s). **The GPU's lists**: 13 of the device's triangles a call (39 vertices of 20 values), 67,392 triangles; pass 8
-  clears the depth to far first, as the camera's clear did, then the 8 passes are a blit each into the GPU's target
+  clears the depth to far first, then the 8 passes are a blit each into the GPU's target
   and its depth buffer.
-- `EmuMachine.oldPaths` bit 5 is the points' camera again, bit 6 the GPU's (both: no order probe either), for a
-  before and after in one session. The meshes and both cameras stay in the scene for that.
+- `EmuMachine.oldPaths` bit 5 draws the points by a camera, bit 6 the GPU's lists (both: no order probe either), for a
+  comparison in one session. The meshes and both cameras stay in the scene for that.
 - In the harness `--blits` draws the gather, the RAM commit and the GPU's lists so (`gatherAmp_`, `ramAmp_`,
   `gpuAmp_` in `rvc_backend11.cpp`, the probe from `experiments/rvc_opt/amp.shader`), for WARP and the card;
   `tools/test_card.py --with=--blits` runs the cases with it.
