@@ -68,4 +68,8 @@ else:
                             }
                         }
 """)
+if int(a.shape) & (1 << 29):
+    # (a test for the shell loop only: the whole shader smaller, is the doubling a limit of its size? the floats' long path gone)
+    sub('src/emu.h', "val = fp_exec(w, fp_a, fp_b, to_f, ok);", "ok = false;")
+    sub('src/emu.h', "uint fp_val = fp_exec(ins_word, xr[ins_FormatR.rs1 + (fp_int_source ? 0 : XR_F)], xr[XR_F + ins_FormatR.rs2], fp_to_float, fp_ok);", "uint fp_val = 0; fp_ok = false;")
 print('wrote', a.dir)

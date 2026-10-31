@@ -1,5 +1,5 @@
-// wide.h's loop for experiments/rvc_lean (the world's tick): the same bundles (make with xlate_snap.py --sink 64: f0 is xr[32]
-// there), its names: pc, clock, budget, ram_word, ram_store. An old step's word leaves to the lean fast loop.
+// wide.h's loop for experiments/rvc_lean (the world's tick): the same bundles (their sink is 32, f0 here: 64 by a shift, which is no test)
+//, its names: pc, clock, budget, ram_word, ram_store. An old step's word leaves to the lean fast loop.
 #define WIDE_B0 (2304u * 2048u)
 #define WIDE_PCT (5000u * 2048u)
 #define CODE_TEX(c) asuint(_Data_ROM[uint2((c) & 2047, (c) >> 11)])
@@ -21,7 +21,8 @@ uint wide_run(inout uint4 c[C_N], uint room) {
     while (true) {
         uint ctl = cur.w, X = cur.x, path = ctl & 7;
         uint a = xr[(X >> 6) & 0x1f], y = xr[(X >> 11) & 0x1f];
-        uint v = 0, dst = X & 0x7f;
+        uint v = 0, dst = X & 0x3f;
+        dst <<= dst >> 5;
         [branch]
         if (path < 2) {
             uint bv = y + cur.z;
@@ -60,7 +61,8 @@ uint wide_run(inout uint4 c[C_N], uint room) {
         }
         xr[dst] = v;
         uint Y = cur.y;
-        xr[Y & 0x7f] = xr[(Y >> 6) & 0x1f] + xr[(Y >> 11) & 0x1f] + asuint(asint(Y) >> 20);
+        uint dy = Y & 0x3f;
+        xr[dy << (dy >> 5)] = xr[(Y >> 6) & 0x1f] + xr[(Y >> 11) & 0x1f] + asuint(asint(Y) >> 20);
         rv += (ctl >> 3) & 7;
         trips++;
         [branch]
