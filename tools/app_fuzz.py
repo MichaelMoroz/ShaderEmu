@@ -122,6 +122,8 @@ class Runner:
                 if (name == 'another' or (name == 'game' and re.match(r'tdawn|ralert', command)) or name.replace('.bin', '') in command) and not re.search(r'FZ closed %s \(' % re.escape(tag), console[:at]):
                     return True
             return False
+        if 'given to the player that is open' in console:   # (nxplay: one player, a second start hands it over)
+            bad = [b for b in bad if not (b[0] == 'bad' and b[1].startswith('no-window'))]
         told = list(re.finditer(r'(?:GPU is drawing for|close) ((?!it\b)\S+)(?: program)?(?: \(process| first)', console))
         if told and all(open_at(m.group(1), m.start()) for m in told):
             bad = [b for b in bad if b[0] != 'gpu-busy' and not (b[0] == 'bad' and b[1].startswith('no-window'))]
