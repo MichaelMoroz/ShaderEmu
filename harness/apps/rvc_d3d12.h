@@ -320,6 +320,73 @@ struct Build12 {
     std::string dxcDir;          // folder with dxcompiler.dll; default: newest Windows SDK bin
 };
 
+// RVC_DXIL=1: what Nsight can read. DXBC to DXIL by dxilconv, the container signed by hand (the skill nsight-gpu-trace, "DXBC vs DXIL").
+inline void dxbcHashBlock(uint32_t st[4], const uint8_t* b) {
+    static const uint8_t R[16] = {7, 12, 17, 22, 5, 9, 14, 20, 4, 11, 16, 23, 6, 10, 15, 21};
+    uint32_t x[16];
+    memcpy(x, b, 64);
+    uint32_t A = st[0], B = st[1], C = st[2], D = st[3];
+    for (int i = 0; i < 64; ++i) {
+        uint32_t f;
+        int g;
+        if (i < 16) { f = (B & C) | (~B & D); g = i; }
+        else if (i < 32) { f = (D & B) | (~D & C); g = (5 * i + 1) & 15; }
+        else if (i < 48) { f = B ^ C ^ D; g = (3 * i + 5) & 15; }
+        else { f = C ^ (B | ~D); g = (7 * i) & 15; }
+        uint32_t k = (uint32_t)(fabs(sin((double)(i + 1))) * 4294967296.0);
+        uint32_t t = A + f + k + x[g];
+        int r = R[(i / 16) * 4 + i % 4];
+        A = D; D = C; C = B;
+        B = B + ((t << r) | (t >> (32 - r)));
+    }
+    st[0] += A; st[1] += B; st[2] += C; st[3] += D;
+}
+inline void dxbcSign(std::vector<uint8_t>& c) {
+    uint32_t st[4] = {0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476};
+    const uint8_t* d = c.data() + 20;
+    size_t n = c.size() - 20, at = 0;
+    for (; n - at >= 64; at += 64) dxbcHashBlock(st, d + at);
+    size_t tail = n - at;
+    uint32_t bits = (uint32_t)n * 8, last = (bits >> 2) | 1;
+    uint8_t b[64] = {};
+    if (tail < 56) {
+        memcpy(b, &bits, 4);
+        memcpy(b + 4, d + at, tail);
+        b[4 + tail] = 0x80;
+        memcpy(b + 60, &last, 4);
+        dxbcHashBlock(st, b);
+    } else {
+        memcpy(b, d + at, tail);
+        b[tail] = 0x80;
+        dxbcHashBlock(st, b);
+        memset(b, 0, 64);
+        memcpy(b, &bits, 4);
+        memcpy(b + 60, &last, 4);
+        dxbcHashBlock(st, b);
+    }
+    memcpy(c.data() + 4, st, 16);
+}
+struct __declspec(uuid("5F956ED5-78D1-4B15-8247-F7187614A041")) IDxbcConverterLocal : public IUnknown {
+    virtual HRESULT STDMETHODCALLTYPE Convert(LPCVOID, UINT32, LPCWSTR, LPVOID*, UINT32*, LPWSTR*) = 0;
+};
+inline std::vector<uint8_t> dxbcToDxil(const std::vector<uint8_t>& in) {
+    static HMODULE m = LoadLibraryA("C:\\Windows\\System32\\dxilconv.dll");
+    if (!m) die("dxilconv.dll");
+    typedef HRESULT(WINAPI * Create)(REFCLSID, REFIID, LPVOID*);
+    Create create = (Create)GetProcAddress(m, "DxcCreateInstance");
+    static const GUID clsid = {0x4900391E, 0xB752, 0x4EDD, {0xA8, 0x85, 0x6F, 0xB7, 0x6E, 0x25, 0xAD, 0xDB}};
+    ComPtr<IDxbcConverterLocal> conv;
+    check(create(clsid, __uuidof(IDxbcConverterLocal), (LPVOID*)conv.GetAddressOf()), "dxilconv");
+    void* out = nullptr;
+    UINT32 n = 0;
+    LPWSTR diag = nullptr;
+    check(conv->Convert(in.data(), (UINT32)in.size(), nullptr, &out, &n, &diag), "dxbc to dxil");
+    std::vector<uint8_t> r((uint8_t*)out, (uint8_t*)out + n);
+    CoTaskMemFree(out);
+    dxbcSign(r);
+    return r;
+}
+
 // Compiles `count` (1 or 2) passes of a shader (FXC bytecode from the shared cache, or DXC) into passes[].
 void buildPasses12(Dx& dx, const SLShader& shader, const CompileSettings& cs, const Build12& opt, Pass12 passes[2],
                    const char* first = "CPUTick", const char* second = "Commit", int count = 2) {
@@ -356,6 +423,22 @@ void buildPasses12(Dx& dx, const SLShader& shader, const CompileSettings& cs, co
         if (!P.vs.reflect(nullptr, vs.bytecode.Get(), err) || !P.ps.reflect(nullptr, ps.bytecode.Get(), err)) die(err.c_str());
         vsBytes.assign((const uint8_t*)vs.bytecode->GetBufferPointer(), (const uint8_t*)vs.bytecode->GetBufferPointer() + vs.bytecode->GetBufferSize());
         psBytes.assign((const uint8_t*)ps.bytecode->GetBufferPointer(), (const uint8_t*)ps.bytecode->GetBufferPointer() + ps.bytecode->GetBufferSize());
+        // RVC_PS_CSO=FILE: the first pass's pixel shader is this blob of build\\shadercache (D3D11's tick, as it is, for its code)
+        if (getenv("RVC_PS_CSO") && p == 0) {
+            std::string blob;
+            if (!readFileBinary(getenv("RVC_PS_CSO"), blob)) die("RVC_PS_CSO");
+            psBytes.assign(blob.begin(), blob.end());
+            ComPtr<ID3DBlob> pb;
+            D3DCreateBlob(blob.size(), &pb);
+            memcpy(pb->GetBufferPointer(), blob.data(), blob.size());
+            P.ps = decltype(P.ps){};
+            if (!P.ps.reflect(nullptr, pb.Get(), err)) die(err.c_str());
+        }
+        if (getenv("RVC_DXIL")) {
+            vsBytes = dxbcToDxil(vsBytes);
+            psBytes = dxbcToDxil(psBytes);
+            fprintf(stderr, "[d3d12] pass '%s': DXIL %zu bytes\n", P.name.c_str(), psBytes.size());
+        }
         }
         if (P.vs.textures.size() == 1 && P.vs.textures[0].name == "_SelfTexture2D") P.vsSelf = (int)P.vs.textures[0].slot;
         else if (!P.vs.textures.empty()) die("a vertex shader may read no texture but _SelfTexture2D");

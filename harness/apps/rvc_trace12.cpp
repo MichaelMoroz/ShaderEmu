@@ -205,7 +205,7 @@ int main(int argc, char** argv) {
         for (int i = 0; i < 4; ++i) {
             ImageRGBA8 img;
             std::string path = (fs::u8path(opt.payloadDir) / (std::string(pr.first) + "." + lanes[i] + ".png")).u8string();
-            if (!loadImageRGBA8(path, img, err)) die(err.c_str());
+            if (!loadImageRGBA8(path, img, err)) { if (getenv("RVC_DXIL")) continue; die(err.c_str()); }
             std::vector<uint8_t> flipped(img.pixels.size());  // Unity layout: row 0 = bottom of the image
             size_t pitch = (size_t)img.width * 4;
             for (UINT y = 0; y < img.height; ++y)

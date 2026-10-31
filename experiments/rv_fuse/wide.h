@@ -89,8 +89,26 @@ uint wide_run_l1(L1P uint room) {
 #if WIDE_SHAPE & 512
     return 0;     // (bisecting what costs: only the old loop by stretches of 24)
 #endif
+#if WIDE_SHAPE & 1073741824
+    if (cpu.pc != 3u) return 0;   // (a test: the guard of the loop that costs nothing)
+#endif
+#if WIDE_TEST == 1
+    if (cpu.pc == 3u) return 0;   // (a test: as much text, and the lookup still made)
+#elif WIDE_TEST == 2
+    if (wide_lookup(cpu.pc) == 7u) cpu.clock += 1;   // (a test: the lookup alone, no loop)
+    return 0;
+#elif WIDE_TEST == 3
+    if (cpu.pc < 0x82000000u) return 0;   // (a test: the map's lookup only where a program can be... never here, all pcs pass)
+#endif
     uint b = wide_lookup(cpu.pc);
+#if WIDE_TEST == 4
+    uint b_has = b != 0 ? 1u : 0u;
+    if (b_has != 1u) return 0;   // (a test: the same, the return the likely side by the look of the test)
+#elif WIDE_TEST == 5
+    if (b < 1u) return 0;
+#else
     if (b == 0) return 0;
+#endif
 #if WIDE_SHAPE & 64
     return 0;     // (and the lookup)
 #endif
