@@ -33,15 +33,24 @@ done
 # (tcc's hooks skip a file with their mark: the copy's source is upstream's, for these hooks to patch)
 git -C "$W/src/tinycc" checkout -q -- . 2>/dev/null
 # nothing compiled for the MMU machine is reused
-find "$W/src" \( -name '*.o' -o -name '*.lo' -o -name '*.obj' \) -delete
+# (pathtrace-data's .obj are the example meshes, not objects: the teapot's address is gone from the net)
+find "$W/src" \( -name '*.o' -o -name '*.lo' -o -name '*.obj' \) ! -path '*/pathtrace-data/*' -delete
 find "$W/src" -name '*.a' ! -path '*/musl/*' -delete
 du -sh "$W/src"
 
 step "start file, the fork header and the drivers"
 S=$W/sysroot
 GCCINC=$("$SH/toolchain/bin/riscv32-linux-gcc" -print-file-name=include)
-BASE="-mabi=ilp32 -fno-stack-protector -ffp-contract=off"
+# (-ffile-prefix-map: a __FILE__ says /nm/..., wherever the build folder is: client.c's assert put this folder's name
+# in Nano-X's strings, and every window program's bytes went by it)
+BASE="-mabi=ilp32 -fno-stack-protector -ffp-contract=off -ffile-prefix-map=$NM=/nm"
 ARCH="-march=\${RV32_MARCH:-rv32imaf} $BASE"   # (RV32_MARCH: rv32imaf_zba_zbb for a Zb build)
+# What toolchain.sh put into the libraries with the drivers before these is put in again by those below (a libc.a
+# with its memcpy and libm of 20 October's drivers, globals not hidden and through the GOT, otherwise stays), into
+# musl's own libc.a: put into one that has them, the members would lie in another order (and renamed ones stay),
+# and the guest's linker, which goes by the index, would write other programs.
+[ -f "$W/src/musl/lib/libc.a" ] && cp "$W/src/musl/lib/libc.a" "$S/lib/libc.a"
+rm -f "$S/lib/memcpy-ours" "$S/lib/libm-ours" "$S/lib/vfprintf-ours" "$S/lib/rt-ours"
 cp "$HERE/flatcrt.c" "$W/flatcrt.c"
 "$SH/toolchain/bin/riscv32-linux-gcc" -march=rv32imaf $BASE -O2 -fPIC -nostdinc -isystem "$S/include" -isystem "$GCCINC" -c "$W/flatcrt.c" -o "$S/lib/flatcrt.o" || exit 1
 cat > "$S/include/nommu_fork.h" <<'EOF'

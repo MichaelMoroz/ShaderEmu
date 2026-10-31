@@ -18,8 +18,12 @@ In WSL, after the MMU build (`linux/kernel/build.sh` and the programs' build scr
   nothing compiled, a copy of the built root in `~/nm/repo`, and compiler drivers (`rv32-cc`,
   `rv32-c++`) that compile every program position-independent and link it as a flat program
   (`flatcrt.c` is its start). `fork` is `vfork` there (`nommu_fork.h`, included in every file).
-  `RV32_MARCH=rv32imaf_zba_zbb` builds with Zba and Zbb.
-- `bash linux/nommu/kernel.sh`: the MMU kernel's tree copied with its hooks, seven patches
+  `RV32_MARCH=rv32imaf_zba_zbb` builds with Zba and Zbb. It can be run again: `libc.a` goes back to musl's and
+  toolchain.sh's members are put in anew by the new drivers, and a `__FILE__` says `/nm/...` wherever the folder is, so
+  the libraries' bytes and `cc-bytes` do not go by the folder's name (31 October 2026).
+- `bash linux/nommu/kernel.sh`: the MMU kernel's tree copied with this repository's drivers and hooks put in again
+  (the MMU build is not run any more, and that tree's driver was 28 October's: `patch_exitpark.py` failed to link and
+  the last `Image` was copied on, in the image and in `linux/prebuilt/nommu`; a failed make now stops it), seven patches
   (`patch_kconfig.py`: RV32 without the MMU, still in supervisor mode under the machine's SBI and
   linked at 0x82000000; `patch_signal.py`, `patch_drivers.py`, which also keeps `/proc/cpuinfo`'s
   "mmu" line out, `patch_ovl.py`, `patch_ramfs.py`, `patch_console.py`: the console in memory,
