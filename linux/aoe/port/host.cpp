@@ -143,8 +143,8 @@ void aoe_events(void) {
         stats_at = timeGetTime(); stats_frames = frames; stats_updates = aoe_updates; stats_world = aoe_world_ms;
     }
     // AOE_MARK=A,B: the span of world updates A to B, for tools/game_par.py and tools/prof.py
-    static int mark_a = -1, mark_b;
-    if (mark_a < 0) { const char* e = getenv("AOE_MARK"); mark_a = 0; if (e) sscanf(e, "%d,%d", &mark_a, &mark_b); }
+    static int mark_read, mark_a, mark_b;
+    if (!mark_read) { const char* e = getenv("AOE_MARK"); mark_read = 1; if (e) sscanf(e, "%d,%d", &mark_a, &mark_b); }
     if (mark_a) {
         static unsigned long m_ms, m_world; static long m_frames; static unsigned long m_updates;
         if (mark_a > 0 && aoe_updates >= (unsigned long) mark_a) {

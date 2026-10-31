@@ -1,5 +1,5 @@
 diff --git a/include/drawarea.h b/include/drawarea.h
-index 591015c52..af59bdc11 100644
+index 591015c52..427960cf4 100644
 --- a/include/drawarea.h
 +++ b/include/drawarea.h
 @@ -97,6 +97,7 @@ class TSpan_List_Manager {
@@ -10,11 +10,12 @@ index 591015c52..af59bdc11 100644
      void AddSpan(int LeftPx, int RightPx, int Line);
      void AddShape(TShape* theShape, int shape_num, int Xpos, int Ypos, int Mirror);
      void AddShape_Align(unsigned char* Shape_Base, Shape_Info* SI, int Xpos, int Ypos, int Mirror);
-@@ -151,6 +152,7 @@ class TDrawArea {
+@@ -151,6 +152,8 @@ class TDrawArea {
      void** CurDisplayOffsets;            // +0xC0
      void** FloatOffsets;                 // +0xC4
      RGE_Color_Table* shadow_color_table; // +0xC8
 +    int aoe_whole_clip_owed;
++    long aoe_clip_made[5];   // the rectangle SpanList holds, and [4] that it holds one
      TSpan_List_Manager* SpanList;        // +0xCC
      TSpan_List_Manager* CurSpanList;     // +0xD0
      int Float_X_Delta;                   // +0xD4
@@ -67,7 +68,7 @@ index 5dc3f00ad..f4278b85a 100644
      return insert_line((int) num_lines, text_in, text2_in, id_in);
  }
 diff --git a/src/drawarea.cpp b/src/drawarea.cpp
-index 9f77ab2ed..3c368e7f8 100644
+index 9f77ab2ed..ac6d81e70 100644
 --- a/src/drawarea.cpp
 +++ b/src/drawarea.cpp
 @@ -964,6 +964,7 @@ TDrawArea::TDrawArea(char* SurfaceName, int ForceSystemMem) {
@@ -112,7 +113,20 @@ index 9f77ab2ed..3c368e7f8 100644
      if (span_list != 0 && span_list->Num_Lines != this->Height) {
          if (this->SpanList != 0) {
              delete this->SpanList;
-@@ -1533,6 +1546,13 @@ void TDrawArea::SetClipRect(long x1, long y1, long x2, long y2) {
+@@ -1527,12 +1540,26 @@ void TDrawArea::SetClipRect(long x1, long y1, long x2, long y2) {
+     if (this->SpanList == 0) {
+         span_list = new TSpan_List_Manager(this->Width, this->Height);
+         this->SpanList = span_list;
++        this->aoe_clip_made[4] = 0;
+     }
+ 
++    // The port: the same rectangle again is on the list already (a panel's start every frame: 600 nodes)
++    if (this->aoe_clip_made[4] == 1 && this->aoe_clip_made[0] == x1 && this->aoe_clip_made[1] == y1 && this->aoe_clip_made[2] == x2 && this->aoe_clip_made[3] == y2) {
++        this->CurSpanList = this->SpanList;
++        return;
++    }
++    this->aoe_clip_made[0] = x1; this->aoe_clip_made[1] = y1; this->aoe_clip_made[2] = x2; this->aoe_clip_made[3] = y2; this->aoe_clip_made[4] = 1;
+     this->SpanList->ResetAll();
      span_list = this->SpanList;
      span_list->SetSpanRegions(this->ClipRect.left, this->ClipRect.top, this->ClipRect.right, this->ClipRect.bottom);
  
@@ -126,7 +140,7 @@ index 9f77ab2ed..3c368e7f8 100644
      int y = this->ClipRect.top;
      if (y <= this->ClipRect.bottom) {
          do {
-@@ -2286,3 +2306,9 @@ void TDrawArea::take_snapshot(char* filespec, int& index_no) {
+@@ -2286,3 +2313,9 @@ void TDrawArea::take_snapshot(char* filespec, int& index_no) {
      }
      free(row);
  }
@@ -149,6 +163,39 @@ index b672d36a5..05d2733f2 100644
      info.max_players_per_cd = 3;
      info.instance = prog_inst;
      info.prev_instance = prev_inst;
+diff --git a/src/move_obj.cpp b/src/move_obj.cpp
+index 8833dbaff..3e9b7114b 100644
+--- a/src/move_obj.cpp
++++ b/src/move_obj.cpp
+@@ -11,6 +11,7 @@
+ #include "../include/rge_fio.h"
+ #include "../include/xyz_point.h"
+ #include <math.h>
++#include <string.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+ 
+@@ -1140,8 +1141,18 @@ int RGE_Moving_Object::doTrivialMove(float x, float y) {
+     this->boundAngle(&this->angle, numberFacets);
+     this->set_angle();
+ 
+-    this->velocity_x = (float) cos((double) this->angle) * distanceToCover;
+-    this->velocity_y = (float) sin((double) this->angle) * distanceToCover;
++    // The port: an object's angle is one of its facets', so the same few come again; a sine is 4,000 instructions here
++    static struct { unsigned key; float c, s; } angle_seen[64];
++    unsigned angle_bits;
++    memcpy(&angle_bits, &this->angle, 4);
++    unsigned angle_slot = (angle_bits * 2654435761u) >> 26;
++    if (angle_seen[angle_slot].key != angle_bits || angle_bits == 0) {
++        angle_seen[angle_slot].key = angle_bits;
++        angle_seen[angle_slot].c = (float) cos((double) this->angle);
++        angle_seen[angle_slot].s = (float) sin((double) this->angle);
++    }
++    this->velocity_x = angle_seen[angle_slot].c * distanceToCover;
++    this->velocity_y = angle_seen[angle_slot].s * distanceToCover;
+     float newX = this->world_x + this->velocity_x;
+     float newY = this->world_y + this->velocity_y;
+ 
 diff --git a/src/rmm_dbct.cpp b/src/rmm_dbct.cpp
 index f3e0cf3a4..212817f2a 100644
 --- a/src/rmm_dbct.cpp
@@ -168,7 +215,7 @@ index f3e0cf3a4..212817f2a 100644
      this->update_map_info(in_map);
      this->create_shared_resources();
 diff --git a/src/scr_game.cpp b/src/scr_game.cpp
-index 92412fb64..f49e4603e 100644
+index 92412fb64..8d13a0513 100644
 --- a/src/scr_game.cpp
 +++ b/src/scr_game.cpp
 @@ -167,7 +167,7 @@ TRIBE_Screen_Game::TRIBE_Screen_Game() : TScreenPanel(s_Game_Screen) {
@@ -244,6 +291,48 @@ index 92412fb64..f49e4603e 100644
                  if (out_of_sync2 != 0) {
                      return;
                  }
+@@ -3520,12 +3570,41 @@ void TRIBE_Screen_Game::draw() {
+         this->draw_setup(flag);
+         if (this->game_screen_pic) {
+             if (this->render_area->Lock(s_scr_game_draw3, 1)) {
++                // The port: under a button the picture is copied from what was kept at the last whole drawing (150,000
++                // instructions a frame through the pictures' rows). Only the bottom panel, which is opaque.
++                static unsigned char* kept_bottom;
++                static unsigned char kept_top[800 * 20];
++                static TDrawArea* kept_area;
++                int kept_w = this->pnl_wid;
++                tagRECT r = this->clip_rect;
++                if (kept_bottom && kept_area == this->render_area && flag == 0 && this->pnl_wid == 800 && this->pnl_hgt == 600
++                    && r.top >= 0 && r.bottom < 20 && r.left >= 0 && r.right < 800) {
++                    for (long y = r.top; y <= r.bottom; y++)
++                        memcpy((unsigned char*) this->render_area->DisplayOffsets[y] + r.left, kept_top + y * 800 + r.left, r.right - r.left + 1);
++                    this->render_area->Unlock(s_scr_game_draw3);
++                    this->draw_finish();
++                    return;
++                }
++                if (kept_bottom && kept_area == this->render_area && flag == 0 && this->pnl_wid == 800 && this->pnl_hgt == 600
++                    && r.top >= 474 && r.left >= 0 && r.right < 800 && r.bottom < 600) {
++                    for (long y = r.top; y <= r.bottom; y++)
++                        memcpy((unsigned char*) this->render_area->DisplayOffsets[y] + r.left, kept_bottom + (y - 474) * 800 + r.left, r.right - r.left + 1);
++                    this->render_area->Unlock(s_scr_game_draw3);
++                    this->draw_finish();
++                    return;
++                }
+                 if (this->pnl_wid >= 1024 && this->pnl_hgt >= 768) {
+                     this->game_screen_pic->shape_draw(this->render_area, 0, 0, 0, 0, 0);
+                     this->game_screen_pic->shape_draw(this->render_area, 0, 642, 1, 0, 0);
+                 } else if (this->pnl_wid >= 800 && this->pnl_hgt >= 600) {
+                     this->game_screen_pic->shape_draw(this->render_area, 0, 0, 0, 0, 0);
+                     this->game_screen_pic->shape_draw(this->render_area, 0, 474, 1, 0, 0);
++                    if (r.left <= 0 && r.top <= 474 && r.right >= 799 && r.bottom >= 599 && kept_w == 800) {
++                        if (!kept_bottom) kept_bottom = (unsigned char*) malloc(800 * 126);
++                        kept_area = this->render_area;
++                        for (long y = 474; y < 600; y++) memcpy(kept_bottom + (y - 474) * 800, this->render_area->DisplayOffsets[y], 800);
++                        for (long y = 0; y < 20; y++) memcpy(kept_top + y * 800, this->render_area->DisplayOffsets[y], 800);
++                    }
+                 } else {
+                     this->game_screen_pic->shape_draw(this->render_area, 0, 0, 0, 0, 0);
+                     this->game_screen_pic->shape_draw(this->render_area, 0, 354, 1, 0, 0);
 diff --git a/src/scr_mps.cpp b/src/scr_mps.cpp
 index ba309be4a..b37bad5d2 100644
 --- a/src/scr_mps.cpp
@@ -337,7 +426,7 @@ index 0d961d41b..c6978b038 100644
          }
      }
 diff --git a/src/tpnl_btn.cpp b/src/tpnl_btn.cpp
-index 76606b50a..7fb0bca86 100644
+index 76606b50a..144ce0b74 100644
 --- a/src/tpnl_btn.cpp
 +++ b/src/tpnl_btn.cpp
 @@ -1,3 +1,5 @@
@@ -346,14 +435,6 @@ index 76606b50a..7fb0bca86 100644
  
  #include "../include/scr_game.h"
  #include "../include/tpnl_btn.h"
-@@ -77,6 +79,7 @@ void TRIBE_Panel_Button::draw() {
-         return;
-     }
- 
-+    if (getenv("AOE_BTN")) fprintf(stderr, "aoebtn %p type %d rect %ld %ld %ld %ld parent rect %ld %ld %ld %ld\n", this, tribe_button_type, clip_rect.left, clip_rect.top, clip_rect.right, clip_rect.bottom, parent_panel->clip_rect.left, parent_panel->clip_rect.top, parent_panel->clip_rect.right, parent_panel->clip_rect.bottom);
-     draw_setup(0);
-     parent_panel->draw_rect(&clip_rect);
- 
 diff --git a/src/tribegam.cpp b/src/tribegam.cpp
 index a600fe043..1a52df678 100644
 --- a/src/tribegam.cpp
