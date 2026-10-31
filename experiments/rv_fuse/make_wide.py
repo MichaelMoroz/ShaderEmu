@@ -6,6 +6,8 @@ import argparse, os, shutil, sys
 ap = argparse.ArgumentParser()
 ap.add_argument('dir')
 ap.add_argument('--src', default='experiments/rvc_opt')
+ap.add_argument('--count', default='0')
+ap.add_argument('--shape', default='0')
 a = ap.parse_args()
 if os.path.exists(a.dir):
     shutil.rmtree(a.dir)
@@ -25,7 +27,7 @@ def sub(path, old, new):
 
 
 # after the fast step (its names: fast_exec, xr, fast_budget)
-sub('src/cpu.h', 'void cpu_tick_l1(L1P0) {', '#include "wide.h"\n\nvoid cpu_tick_l1(L1P0) {')
+sub('src/cpu.h', 'void cpu_tick_l1(L1P0) {', f'#define WIDE_COUNT {a.count}\n#define WIDE_SHAPE {a.shape}\n#include "wide.h"\n\nvoid cpu_tick_l1(L1P0) {{')
 sub('main.shader', """                        i += fast_run(_Ticks - i);
                         if (i < _Ticks && !cpu.stall) {
                             cpu_tick_l1(L1A0);

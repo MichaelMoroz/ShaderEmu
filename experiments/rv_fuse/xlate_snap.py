@@ -124,6 +124,7 @@ def x_word(rd, ra, rb, fn=0):
 
 
 stats = collections.Counter()
+pending = []
 weight = collections.Counter()
 for pc in sorted(code):
     if pc in start_of or (pc not in starts and pc - 4 in code): continue
@@ -218,7 +219,16 @@ for pc in sorted(code):
                     B.update(n=B['n'] + 1, ctl=3, cra=ra_of(w2), off=sx(w2 >> 20, 12))
                     i += 4
         bundles.append(B)
+        B['w'] = n0
         weight[B['n']] += n0
+        # a target nothing translated: a leaving bundle beside the code, within a branch's reach
+        if B['ctl'] == 1 and (B['target'] & 0xffffffff) not in code:
+            pending.append(B)
+        if B['ctl'] in (2, 3) and pending:
+            for P in pending:
+                P['tb'] = len(bundles)
+                bundles.append(dict(X=x_word(SINK, 0, 0), Y=Y_NONE, Z=0, path=P_LEAVE, n=0, ctl=0, f3=0, cra=0, crb=0, target=None, rv=P['target'] & 0xffffffff, off=0))
+            pending = []
         if B['path'] == P_LEAVE:
             at = i
             continue
@@ -240,11 +250,13 @@ def leave_bundle(t):
 
 
 far = 0
+far_w = 0
 for idx in range(len(bundles)):
     B = bundles[idx]
     if B['target'] is not None:
         t = B['target'] & 0xffffffff
-        B['tb'] = start_of[t] if t in start_of else leave_bundle(t)
+        if 'tb' not in B:
+            B['tb'] = start_of[t] if t in start_of else leave_bundle(t)
     B['idx'] = idx
 n = len(bundles)
 print(f'{n:,} bundles; {len(code):,} RV words ({stale:,} no longer in RAM); by the profile {sum(k * v for k, v in weight.items()) / max(sum(weight.values()), 1):.3f} RV a bundle (first word counts)')
@@ -260,6 +272,7 @@ for idx, B in enumerate(bundles):
             # out of reach: the old loop takes it, from this bundle's start
             ctl = P_LEAVE
             far += 1
+            far_w += B.get('w', 0)
         else:
             ctl |= B['f3'] << 8 | B['cra'] << 11 | B['crb'] << 16 | (off & 0x7ff) << 21
     elif B['ctl'] == 2:
@@ -280,4 +293,7 @@ for pc, b in start_of.items():
     area[t, (pc >> 2) & 3] = B0 + b
 # the code area's rows go in the texture's order: the file's last row is y = 0 (the harness flips it)
 area.reshape(ROWS, 2048, 4)[::-1].tofile(a.out)
+tot = sum(B.get('w', 0) for B in bundles)
+print('bundles by the profile: ' + ', '.join(f"{nm} {100 * sum(B.get('w', 0) for B in bundles if B['path'] == q) / tot:.1f}%" for q, nm in enumerate(('sum', 'unit', 'load', 'store', 'old step', 'leave'))))
+print(f"RV a bundle {sum(B.get('w', 0) * B['n'] for B in bundles) / tot:.3f}; far branches {far_w / tot * 100:.1f}% of bundles; op 1 in {100 * sum(B.get('w', 0) for B in bundles if B['Y'] != SINK) / tot:.1f}%; control in {100 * sum(B.get('w', 0) for B in bundles if B['ctl']) / tot:.1f}%")
 print(f'{far} branches out of reach left to the old loop; wrote {a.out}')

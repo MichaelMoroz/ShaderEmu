@@ -11,6 +11,14 @@
 //   W: path 0-2 (0 sum, 1 unit, 2 load, 3 store, 4 the RISC-V word in X by the old step, 5 leave), RV instructions 3-5,
 //      control 6-7 (0 on, 1 branch, 2 jump, 3 ret), branch's funct3 8-10, ra 11-15, rb 16-20, offset 21-31; jump's offset 8-31;
 //      ret: ra 11-15, offset 21-31 as bytes.
+#ifndef WIDE_COUNT
+#define WIDE_COUNT 0
+#endif
+// WIDE_SHAPE, bits: 1 the old step is not inlined here (its words leave to the old loop); 2 op 1 is behind a test;
+// 4 no reading ahead: the bundle is read at the top of its trip; 8 two bundles ahead (a read is done before its bundle is wanted)
+#ifndef WIDE_SHAPE
+#define WIDE_SHAPE 0
+#endif
 #define WIDE_B0 (2304u * 2048u)
 #define WIDE_PCT (5000u * 2048u)
 #define CODE_TEX(c) asuint(_Data_ROM[uint2((c) & 2047, (c) >> 11)])
@@ -30,7 +38,13 @@ uint wide_run_l1(L1P uint room) {
     if (b == 0) return 0;
     fast_budget = room;
     uint trips = 0, rv = 0;
-    uint4 cur = CODE_TEX(b), nx = CODE_TEX(b + 1);
+    uint4 cur = CODE_TEX(b);
+#if !(WIDE_SHAPE & 4)
+    uint4 nx = CODE_TEX(b + 1);
+#endif
+#if WIDE_SHAPE & 8
+    uint4 nx2 = CODE_TEX(b + 2);
+#endif
     [loop]
     while (true) {
         uint ctl = cur.w, X = cur.x, path = ctl & 7;
@@ -71,6 +85,9 @@ uint wide_run_l1(L1P uint room) {
                 mem_set_ram(va & 0x7ffffffc, c << (off * 8), s_mask, false);
             }
         } else {
+#if WIDE_SHAPE & 1
+            break;
+#else
             [branch]
             if (path != 4) break;
             cpu.pc = cur.z;
@@ -88,9 +105,14 @@ uint wide_run_l1(L1P uint room) {
                 nx = CODE_TEX(b + 1);
                 continue;
             }
+#endif
         }
         xr[dst] = v;
         uint Y = cur.y;
+#if WIDE_SHAPE & 2
+        [branch]
+        if (Y != 32)
+#endif
         xr[Y & 0x3f] = xr[(Y >> 6) & 0x1f] + xr[(Y >> 11) & 0x1f] + AS_UNSIGNED(AS_SIGNED(Y) >> 20);
         rv += (ctl >> 3) & 7;
         trips++;
@@ -120,21 +142,43 @@ uint wide_run_l1(L1P uint room) {
                 b = next;
                 [branch]
                 if (trips >= fast_budget) break;
+#if WIDE_SHAPE & 4
+                cur = CODE_TEX(b);
+#else
                 cur = CODE_TEX(b);
                 nx = CODE_TEX(b + 1);
+#if WIDE_SHAPE & 8
+                nx2 = CODE_TEX(b + 2);
+#endif
+#endif
                 continue;
             }
         }
         b++;
         [branch]
         if (trips >= fast_budget) break;
+#if WIDE_SHAPE & 4
+        cur = CODE_TEX(b);
+#elif WIDE_SHAPE & 8
+        cur = nx;
+        nx = nx2;
+        nx2 = CODE_TEX(b + 2);
+#else
         cur = nx;
         nx = CODE_TEX(b + 1);
+#endif
     }
     [branch]
     if (b != 0) {
         cpu.pc = idx_uint4(CODE_TEX(WIDE_PCT + ((b - WIDE_B0) >> 2)), (b - WIDE_B0) & 3);
     }
+#if WIDE_COUNT == 1
+    rv = 0;                  // the clock says what the other loops ran
+#elif WIDE_COUNT == 2
+    rv = 1;                  // the clock says that and how many times this loop was entered and did not stop at once
+#elif WIDE_COUNT == 3
+    rv = trips;              // that and the bundles
+#endif
     cpu.clock += rv;
     return trips;
 }
