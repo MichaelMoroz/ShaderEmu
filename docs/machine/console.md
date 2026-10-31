@@ -26,11 +26,8 @@ the shader has no part in it. It lies in the network's row, between the window a
 - The guest puts at most 254 bytes while the host's clock word (`0x81000034`, `GPU_CLOCK`) is as
   it was: every host changes it only between two reads of the ring. It puts and tells one byte at
   a time after looking at the clock, so a pass that ends inside a write miscounts one byte at
-  most. A full ring ends the pass with the pause hint. (The processor's time CSR was the measure
-  until 28 October 2026: it moves every round, and `rvc_harness --tick-rounds` read a frame's
-  rounds of 255 bytes each once; and a write that ran over a pass's end told its bytes in the next
-  pass while it counted them in the last, so 510 bytes came between two reads even at one round a
-  frame: 344 of 1,500 numbers lost.)
+  most. A full ring ends the pass with the pause hint. The processor's time CSR
+  is no measure here: it moves every round, and `rvc_harness --tick-rounds` reads the ring once a frame.
 - The kernel's side is `linux/nommu/patch_console.py`: the hvc driver's `put_chars` and
   `get_chars`, and earlycon's `putc`. The SBI console calls are not answered.
 
@@ -47,14 +44,14 @@ them all over the console.
   Each is 80 x 30 to the programs in it, as the world's screen is.
 - `emuinit` starts `emumux` in the shell's place when the host asks: bit 1 of the host flags
   (`0x8100003c`, `docs/machine/gpu.md`). The world sets it; the harness does with `--tabs`, and
-  without it the console is the one shell it was (snapshots and tests are as they were).
+  without it the console is one shell.
 - What the kernel prints goes to the console itself, untagged: it lands in whichever
   terminal spoke last.
 
-To check it in the harness (a cold boot, 5 s):
+To check it in the harness (`--send` knows `\xNN` there, not in `rvc_cpu`):
 
     bin\rvc_harness.exe --rvc experiments\rvc_opt --image linux-net --tabs --no-stdin ^
-        --input "echo one-''tab\n" --expect "one-tab" --send "<0x1e>2tty\n" --until "/dev/pts/1"
+        --input "echo one-''tab\n" --expect "one-tab" --send "\x1e2tty\n" --until "/dev/pts/1"
 
 ## In the world
 
@@ -66,12 +63,12 @@ To check it in the harness (a cold boot, 5 s):
   after it goes there.
 - The field above the console's keyboard (`EmuPaste`) takes text typed or pasted into it
   (Ctrl+V on a desktop; VRChat's own keyboard in a headset). "Type as Text" sends it to the
-  console's keyboard as if typed, a little at a time, and "+Enter" with Return after it: the
-  guest takes about 27 characters a second, so a page of text takes a while. "Open Link" has
+  console's keyboard as if typed, a little at a time, as the guest takes it, and "+Enter" with Return after it: a page
+  of text takes a while. "Open Link" has
   the machine open the field's text as an address (`docs/system/open.md`).
 - What other players see of the console (`docs/world/share.md`) is the terminal shown, at its end.
 - "ShaderEmu/Add the console's tabs and paste field to the open scene" puts both into a
-  scene without building the world again (run it twice the first time: the new behaviour's
+  scene without building the world again (run it twice the first time: a behaviour's
   program has to exist before it can be filled in).
 
 To test in play mode: `SendCustomEvent("Tab2")` on "Terminal screen", set the field's text
