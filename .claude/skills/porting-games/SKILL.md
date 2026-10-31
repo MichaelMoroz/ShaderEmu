@@ -5,10 +5,9 @@ description: Step-by-step tutorial for porting a game (or any large C/C++ progra
 
 # Porting a game to ShaderX86
 
-The machine runs 2 to 3 million instructions a second on its first core (the world's speed; the
-target for a game is "playable at 2 MIPS a core", e.g. 15 frames a second for the C&C games), plus
-up to 255 worker cores that are free but see each other's stores one pass (8,192 instructions)
-later. Everything below is how the existing ports got there. Read the newest port first: OpenTTD
+The machine runs about 5.5 million instructions a second on its first core at full passes on an RTX 5090
+(calibrated), and 2 to 3 in the world's rounds under a VR frame, so design for 2 MIPS a core; it also has up to 255 worker cores that are free but
+see each other's stores one pass (8,192 instructions) later. Everything below is how the existing ports got there. Read the newest port first: OpenTTD
 (`linux/openttd/`, `docs/games/openttd.md`) is the cleanest template of the whole path.
 
 Reference files beside this one:
@@ -18,12 +17,13 @@ Reference files beside this one:
 - `hotspots.md` - what was slow in every port and the fix that was measured, the write-cache and
   texel rules, and the worker-core patterns and their checks.
 
-Standing rules that apply to every step (from `AGENTS.md` and the developer's global rules):
-never commit unless asked; every `rvc_harness` run (also `--cpu --warp`) goes through
-`pwsh tools\gpu_queue.ps1`; the shared image is made only through `pwsh tools\make_image.ps1`;
-time every build and test (over 30 s is a defect to look into); delete private images when done
-(keep 50 GB free on C:); render-visible results are reported with a local HTML page of the
-captured frames, opened once at the end.
+Once it runs: the `optimizing-games` skill for speed, `worker-core-bugs` for workers, `debugging-the-machine` for crashes,
+`building-the-system` for the build chain and private trees, `running-tests` for the test set.
+
+Standing rules that apply to every step (from `AGENTS.md`):
+every `rvc_harness` run (also `--cpu --warp`) goes through `pwsh tools\gpu_queue.ps1`; the shared image
+is made only through `pwsh tools\make_image.ps1`; delete private images when done; commits carry no
+attribution to any AI tool. Look at captures of what you changed: sums and counts pass on a blank window.
 
 ## Step 0: is it viable
 
@@ -55,7 +55,7 @@ Answer these before writing any code; `docs/plans/aoe-plan.md` is a worked examp
 6. **Dynamic loading.** None. Link game modules into one program: Quake III's three modules are
    each one object with its names kept inside and their variables reset at each "load"
    (`linux/quake3/sys_shaderemu.c`); Half-Life links client and server in (`XASH_STATIC_LIBS`).
-7. **Memory.** ~240 MB free, but a no-MMU program takes all its data, bss, stack and every
+7. **Memory.** ~240 MB free at the shell, but a no-MMU program takes all its data, bss, stack and every
    anonymous mapping at start, and each mapping needs one contiguous run of pages. Size big pools
    to what is used (Quake III's hunk 8 MB on no-MMU, set by `sed` in `linux/nommu/build.sh`) and
    map them, do not `calloc` them. `python linux/nommu/memory.py` checks that all big programs
@@ -68,8 +68,8 @@ Answer these before writing any code; `docs/plans/aoe-plan.md` is a worked examp
 
 ## Step 1: the build script, reproducible
 
-`linux/NAME/build.sh`, run in WSL (`wsl -- bash /mnt/c/Development/ShaderX86/linux/NAME/build.sh`)
-and, for the image the world runs, through `bash linux/nommu/build.sh NAME/build.sh`. Copy the
+`linux/NAME/build.sh`, run from the repository's folder through the flat drivers:
+`wsl -- bash linux/nommu/build.sh NAME/build.sh`. Copy the
 shape of `linux/quake/build.sh` (C) or `linux/openttd/build.sh` (CMake, C++):
 
 - `set -euo pipefail`; `HERE`/`REPO`; `source "$HERE/../userland/toolchain.sh"` (gives `$WORK`,
@@ -116,13 +116,13 @@ shape of `linux/quake/build.sh` (C) or `linux/openttd/build.sh` (CMake, C++):
 |---|---|
 | `-O3 -fno-tree-vectorize -fsched-pressure -funroll-loops` | 3-6% fewer instructions than `-O2` (Doom, Quake) |
 | `-flto`, with C++ `-flto-partition=1to1 -fno-toplevel-reorder` | a fifth of a C&C frame; global constructors must keep source order or the start fails "out of memory" |
-| `-fno-pie` (MMU build only) | a global without a GOT load; the flat build forces PIE anyway |
+| hidden globals (`nommu_hidden.h` in the drivers) | a global without a GOT load, as the flat build is PIE |
 | `-fsigned-char`, `-fno-strict-aliasing` | x86-era code (Doom's tables end with -1; Quake reads floats as ints) |
 | `-fno-math-errno -fsingle-precision-constant` | `sqrt` one instruction; `x * 0.5` not a double call (Quake, Half-Life) |
 | `-fwrapv` | sums that overflow were compiled differently on host and guest (Micropolis) |
 | `-fno-lifetime-dse` | a custom `operator new` that marks objects before construction (C&C: missions with no walls without it) |
 | `-fno-common -fdata-sections` + `objcopy --set-section-alignment .data*=16 ...` + `zz_pad` objects | what a worker writes lies in its own 16-byte texels (Doom's `APART`, Quake's `ALIGN16`) |
-| PGO (`TDAWN_PROFILE=count`, `linux/tdawn/profile.py`) | 2-9% of a C&C frame; counters printed to the console because the toolchain's libgcov is another float ABI |
+| PGO (`TDAWN_PROFILE=count`, `linux/tdawn/profile.py`; `linux/userland/pgo/gcov.c` for any program) | 2-9% of a C&C frame; counters printed to the console because the toolchain's libgcov is another float ABI. Late: `optimizing-games`, section 7 |
 
 ## Step 2: the platform layer
 
@@ -243,7 +243,7 @@ The canonical 2D driver is `linux/openttd/shaderemu_v.cpp` (and Doom's `doom_vid
 
 `bin\rvc_cpu.exe` is the machine as an interpreter (100-200M instructions a second, no card;
 instructions are the speed). From PowerShell, not Git Bash (it turns `"/ # "` into a path;
-otherwise `export MSYS_NO_PATHCONV=1`):
+a worktree has no `bin\` or `build\`: `running-tests`):
 
 ```
 bin\rvc_cpu.exe --quiet --uart-log logs\NAME.log --wall 120 --expect "/ # " ^
@@ -252,8 +252,8 @@ bin\rvc_cpu.exe --quiet --uart-log logs\NAME.log --wall 120 --expect "/ # " ^
 
 The `''` keeps the echoed command from matching `--until`. `--image build/images/PRIVATE` runs a
 private image (`python tools/private_image.py PRIVATE` after building with `NAME_OUT`).
-`--ips 2000000` holds it to the world's speed; `--count-from TEXT` counts every core from a mark
-the game prints. Read the log before concluding anything about a run. Pictures: `rvc_harness
+`--pass-model` with `tools/card_model.json` gives a pass the card's time (the `calibrated-measurements` skill);
+`--ips 2000000` holds it to the world's speed; `--count-from TEXT` counts every core from a mark the game prints. Read the log before concluding anything about a run. Pictures: `rvc_harness
 --cpu --warp` (through the queue) with `--save-state` and `tools\snapshot_screen.py`, or
 `--gpu-capture` and `tools\gpu_reference.py SNAP BMP --size WxH` against the software model.
 
@@ -294,8 +294,9 @@ The machine must give the native build's sums; this is what catches compiler, UB
 
 ## Step 6: make it fast enough
 
-Measure core 0's instructions a frame and frames a second at 2 MIPS; a change that is faster
-but adds worker instructions is kept ("faster beats fewer instructions").
+The whole of this is the `optimizing-games` skill. In short: measure passes a frame and calibrated frames a second
+(`python tools/game_par.py GAME --calibrated`), not only core 0's instructions; a change that is faster but adds worker
+instructions is kept ("faster beats fewer instructions").
 
 - `python tools/prof.py run OUT -- --image build/images/nommu --quiet --expect "/ # " --send "echo FL-''GO; ...; echo LX-''DONE\n" --count-from FL-GO --until LX-DONE`,
   then `prof.py report OUT --elf ~/nm/work/src/.../NAME` (the unstripped build the image has;
@@ -304,13 +305,13 @@ but adds worker instructions is kept ("faster beats fewer instructions").
 - `python tools/game_par.py` (core 0 and all cores a frame), `pwsh tools\tick_util.ps1` (what
   ended passes early), `RVC_CALLS=FILE` + `tools/mc_candidates.py` (calls worth a job).
 - A start is measured as a one-tick run (`openttd -v null:ticks=1 -g` under `prof.py`).
-- The card only to validate the metric, through `tools\gpu_queue.ps1`, after checking for the
-  developer's own `rvc_harness.exe` with no arguments, never while they are in VR.
+- The card only to validate the metric (`game_par.py GAME --card`, through `tools\gpu_queue.ps1`), after checking for the
+  developer's own `rvc_harness.exe` with no arguments; it refuses while VRChat or SteamVR runs.
 
 `hotspots.md` has the list of what was slow before. The four that every port hit: the clock
 and 64-bit division; file searches and data hashes at start; redrawing what did not change
 (status bars, messages, whole screens: draw only on change); and the write cache - one core
-keeps ~6 KB of distinct 16-byte texels a pass (a worker 1.5-3 KB), so stores 64 bytes apart,
+keeps about 5.25 KB of distinct 16-byte texels a pass (a large worker 2.6 KB, a small one 0.66), so stores 64 bytes apart,
 column-major copies and wide structures end passes (lay hot structures out by texel; Quake's
 `particle_t` is three texels). Large moves go to the machine's copy (CSRs `0x0b1` src,
 `0x0b2` dst, `0x0b3` bytes, write 1 to `0x0b0`; 256 KB a pass; OpenTTD's `MachineCopy` for
@@ -347,9 +348,9 @@ drawing reads and marks.
 - Keep a `NAME_X=inline` switch whose sums must equal the worker's, and a `NAME_CHECK=1` that
   recomputes what the worker gave and prints `0 of them wrong` (Doom's `DOOM_VIEW_CHECK`,
   C&C's `TDAWN_CHECK_PATHS`, Half-Life's `HL_ROTATION=check`).
-- Run once with `RVC_RACES=FILE` on `rvc_cpu`: **0 undone** (reads "as it was" are fine) and the
-  same sums; `python tools/test_all.py --races` for the cases with `workers=True`. A switch
-  that races stays off by default (`HL_RENDER=worker`).
+- Run once with `RVC_RACES=FILE` and `RVC_RACES_NEAR=4` on `rvc_cpu`: **0 undone** (reads "as it was" are fine) and the
+  same sums; `python tools/test_all.py --races`. Walk the game, too: standing still plays little of it. A switch
+  that races stays off by default. The `worker-core-bugs` skill reads its output.
 - `mctest 3 120000` must PASS before and after the game in one boot, also after
   `killall -9` mid-run (the NES's `nes-kill` case).
 
@@ -375,26 +376,24 @@ All written by the game's `build.sh` into `$OUT`:
 
 ## Step 9: in the image, tested, documented
 
-1. `bash linux/nommu/build.sh NAME/build.sh` (prints one line, exit code and seconds; the log is
-   in `~/nm/logs`), `bash linux/nommu/root.sh`, then `pwsh tools\make_image.ps1`
+1. `wsl -- bash linux/nommu/build.sh NAME/build.sh` (prints one line, exit code and seconds; the log is
+   in `~/nm/logs`), `wsl -- bash linux/nommu/root.sh`, then `pwsh tools\make_image.ps1`
    (`--save-prebuilt` keeps `linux/prebuilt`, never with data we may not pass on).
 2. `python tools/test_all.py` (two minutes): every case passes, yours included; `--races` if
    it uses workers; `python linux/nommu/memory.py` if it is large (add it to its `BIG`).
 3. Run it on the desktop under `rvc_harness --cpu --cpu-ips 2000000` through the queue; capture
-   with `--save-state` and `snapshot_screen.py`; report with the frames page.
+   with `--save-state` and `snapshot_screen.py`, and look at the pictures.
 4. `docs/games/NAME.md` in the docs' own style (plain sentences, numbers with their date and
-   how they were measured), in the sections the others have: the commands (MMU build, no-MMU
-   build, guest usage), what the build is made of / what the patch changes, how it is drawn,
-   sound, speed (tables of core 0 a frame, fps at 2 MIPS), "Is it the same game" / "Checking
-   it" (the sums), "Not done". Add it to `docs/README.md`.
+   how they were measured, calibrated for speed), in the sections the others have: the commands,
+   what the build is made of / what the patch changes, how it is drawn, sound, speed, "Is it the
+   same game" / "Checking it" (the sums), "Not done". Add it to `docs/README.md`, and to `README.md`'s table.
 5. `AGENTS.md`: one dense line only for an invariant a later change could break (what must
    still say `0 of them wrong`, what must be rebuilt after what), as the existing lines do.
-6. Leave the work in the tree and say it is ready; do not commit.
+6. Commit in the repository's style (the change and its numbers), no attribution; `merging-agent-work` for branches.
 
 ## Pitfalls that cost rounds before
 
-- Git Bash path mangling of `"/ # "` and of `/mnt/...` paths: run `rvc_cpu` from PowerShell or
-  `export MSYS_NO_PATHCONV=1`.
+- Git Bash path mangling of `"/ # "` and of `/mnt/...` paths: run `rvc_cpu` from PowerShell.
 - In WSL `$NAME` is the computer's name: never name a build variable `NAME`.
 - Python edits of repo files: open `rb`/`wb` (text mode writes CRLF). A Bash-tool heredoc loses
   a level of backslashes: write such scripts with the Write tool.

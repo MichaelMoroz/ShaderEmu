@@ -6,11 +6,11 @@ new port's first profile (`tools/prof.py report`; its pattern library is
 
 ## The machine's costs to keep in mind
 
-- **A pass** is up to 8,192 instructions; a wait, `fence.i`, a parallel copy or a full write
-  cache ends it early. In the world's fixed rounds an early end costs the rest of the pass
+- **A pass** is up to 8,192 instructions, about 1.5 ms on an RTX 5090 (calibrated: 1.40 + 0.011 a thousand of core 0's + 0.57 a
+  GPU list); a wait, `fence.i`, a parallel copy or a full write cache ends it early. In the world's fixed rounds an early end costs the rest of the pass
   (`docs/machine/boot.md`, "Passes that end early"; `pwsh tools\tick_util.ps1`).
-- **The write cache**: core 0 keeps about 6 KB (some 384 texels) of distinct 16-byte texels a
-  pass, a worker 1.5 to 3 KB. More distinct texels stored in a pass ends it.
+- **The write cache**: core 0 keeps about 5.25 KB (336 texels) of distinct 16-byte texels a
+  pass, a large worker 2.6 KB, a small one 0.66. More distinct texels stored in a pass ends it.
 - **A system call** ~200-400 instructions; `GrGetWindowInfo` and other Nano-X questions two
   system calls and two task switches each.
 - **Doubles** are library calls (~100 add, 200+ divide); **64-bit division** ~400.
@@ -103,3 +103,5 @@ team waiting on a round word: `mcw_for`).
   whole-program LTO link the library's worker-written statics land beside the program's
   (the NES had `line_news` in one texel with `matrices_dirty`).
 - `mctest 3 120000` PASS before and after the game, and after `killall -9` mid-run.
+
+How to go about all this, and what was learnt lately (Half-Life's prediction and second set of copies, OpenTTD's tick on a worker, windows, compiled whole): the `optimizing-games` skill.

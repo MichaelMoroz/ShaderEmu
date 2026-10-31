@@ -22,8 +22,9 @@ checked. Paths are from the repository root; each game's doc is `docs/games/NAME
   on lock, keys, pointer, `GrGetNextEventTimeout` wait, `OPENTTD_RATE`, `OPENTTD_SCROLL`);
   `shaderemu_s.cpp` + `mixer_shaderemu.cpp` (a channel a voice, sounds copied into a 1 MB pool
   once); `shaderemu_m.cpp` (MIDI on FM voices with DMXOPL `genmidi.op2`).
-- **Workers**: the first core finds and sorts a viewport's sprites and keeps its blits; every
-  core then blits them into a band of rows (`ViewportBlitsEnd` in `gfx.cpp`, `OPENTTD_WORKERS`).
+- **Workers**: a viewport's parts, each found, sorted and drawn by a core into a buffer of its own (`ViewportFlush`, `OPENTTD_WORKERS`);
+  the game tick on a worker (`shaderemu_t.cpp`, `TickYieldPoint`, `OPENTTD_TICK=slices|whole`), the link graph's jobs, ships' paths ahead. Compiled whole with
+  played counts (`openttd.profile.gz`, `counts.py`). `docs/games/openttd.md`.
 - **Desktop**: starter with `XDG_DATA_HOME`/`XDG_CONFIG_HOME` to `/persistence/openttd`;
   `nxapps.73-openttd`; `nxopen.73-openttd` (`openttd sav OTT openttd -g %s`); icon
   `media/openttd.128.png`.
@@ -92,13 +93,13 @@ checked. Paths are from the repository root; each game's doc is `docs/games/NAME
   segments for maps/models/sprites, textures once in a WAD, 24-bit pictures as JPEG. Never in
   `linux/prebuilt`; `HALFLIFE_DATA=0` builds without it.
 - **Files**: `gl_shaderemu.c` (GL 1.1), `gl_kept.c` (level kept, bones ahead on workers),
-  `gl_studio_job.c`, `rnd_shaderemu.c` (drawing a frame behind, `HL_RENDER=worker`, off: races),
+  `gl_studio_job.c`, `rnd_shaderemu.c` (the 3D drawn a frame behind on a worker, the default; `HL_RENDER=core|wait`),
   `sv_shaderemu.c` (paced server on a worker), `vid_shaderemu.c` (window, splash, seat),
   `avi_shaderemu.c` (films), `snd_shaderemu.c`, `img_media.c`/`snd_media.c` (libmedia).
 - **Tricks**: a 28 MB RAM pool the GPU reads directly (no MMU: a pointer is its address,
   `HL_POOL_MB`); spillable textures; text drawn again from captured quads; workers cannot open
   packed files, so a level change goes to core 0.
-- **Checks**: `HL_ROTATION=check` (0 wrong), `HLGL_PICSUM=1`, `HL_MARK=FROM,TO` for counting.
+- **Checks**: `HL_ROTATION=check` (0 wrong), `HL_PREDICT=check` (0 over 0.1), `HLGL_PICSUM=1`, `HL_MARK=FROM,TO` for counting; walked with `HL_SCRIPT` under `RVC_RACES`.
 
 ## Tiberian Dawn and Red Alert (Vanilla Conquer)
 
