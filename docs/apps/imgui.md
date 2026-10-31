@@ -5,13 +5,10 @@ OpenGL: `imdemo` is a Nano-X window with a cube drawn through `programs/linux/gl
 ImGui's windows on top of it. The library is as it comes (v1.91.5, fetched by the build, no
 file of it changed); this repository has its platform and renderer, some 600 lines.
 
-    wsl -- bash /mnt/c/Development/ShaderX86/linux/tdawn/build.sh    (once: it makes the C++ driver)
-    wsl -- bash /mnt/c/Development/ShaderX86/linux/imgui/build.sh    (12 s the first time)
-    python tools\make_linux_image.py                                 (then a new shell snapshot)
-
-That is the image with the MMU. The world and `rvc_harness` with no arguments run Linux
-without one, where the program is flat: `bash linux/nommu/build.sh imgui/build.sh`, then
-`root.sh` and `image.py` (`docs/system/nommu.md`, "Building it").
+    wsl -- bash linux/nommu/build.sh tdawn/build.sh    (once: it makes the C++ driver)
+    wsl -- bash linux/nommu/build.sh imgui/build.sh    (12 s the first time)
+    wsl -- bash linux/nommu/root.sh
+    pwsh tools\make_image.ps1                                 (then a new shell snapshot)
 
 In the guest: `nano-X -p & imdemo`, or "Dear ImGui" in the Start menu's Other.
 `IMDEMO_SHOW=1` starts with ImGui's own demo window open and `IMDEMO_FRAMES=N` ends after N

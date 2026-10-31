@@ -1,7 +1,8 @@
 # Booting Linux
 
-A cold boot of this project's image to the shell prompt takes about 2.8 s and 10.5 million
-instructions on an RTX 5090 with DXC (it was 10 s and 35 million). On an RTX 5070 laptop with
+A cold boot of this project's image to the shell prompt takes 1.41 s of the guest's clock, calibrated
+(31 October 2026, `rvc_cpu --pass-model`, `/proc/uptime` at the prompt; `docs/machine/speed.md`, "Calibrated"),
+and about 8 million instructions (`docs/system/nommu.md`). On an RTX 5070 laptop with
 D3D11 and fxc2 (19 October 2026, `docs/machine/speed.md`, `/proc/uptime` at the prompt): 5.0 s on the
 shader machine, geotune's layout of the workers with it; 1.6 s on the compute machine, 1.1 s on the
 CPU harness, and 107.6 s for upstream rvc's own image on its shader. `tools/boot_profile.py`
@@ -36,7 +37,7 @@ Upstream's own images still boot their OpenSBI: they are compiled without `SBI_H
   file lists all of those as kept. After changing it, compare the enabled options of the old
   and new `.config`.
 - The root device is mapped a page at a time, so the image builder sizes it to the image
-  (56 MiB) instead of 256 MiB.
+  instead of 256 MiB.
 - `linux/userland/emuinit.c` does what upstream's `/rvcinit` script does, as one static
   program. The script started a dozen dynamically linked processes: 12 million instructions.
   Build it with `linux/userland/build.sh`; the image builder then makes it the kernel's init.
@@ -52,8 +53,7 @@ Upstream's own images still boot their OpenSBI: they are compiled without `SBI_H
 ## Passes that end early
 
 A pass runs 8,192 instructions unless something ends it: a parallel copy or fill, `fence.i`, a
-full write cache, 64 characters of console output (the machine with the MMU; without it the
-console is a ring in memory: `console.md`), `wfi` or `pause`. What is left of the pass
+full write cache, `wfi` or `pause` (the console is a ring in memory: `console.md`). What is left of the pass
 is not run. `tools\tick_util.ps1` runs a workload and prints its utilization (instructions
 run over what the busy passes could have run) and the passes that ended early by reason; a
 pass that ended in the kernel's idle loop had nothing to run and is counted apart, and so is

@@ -1,12 +1,11 @@
 # The console
 
-The machine has one console (`/dev/hvc0` in Linux): words in memory on the machine without an
-MMU, which the world runs, and the UART on the one with it. In the VRChat world it
+The machine has one console (`/dev/hvc0` in Linux): words in memory. In the VRChat world it
 is four terminals, with the lines that scrolled off each, and a field to paste text into.
 
 ## Words in memory
 
-On the machine without an MMU (`NO_PAGING` with `SBI_HLE`, `CSR_FIELDS` in `types.h`) the
+With `NO_PAGING`, `SBI_HLE` and `CSR_FIELDS` (`types.h`) the
 console is memory and nothing else. The kernel reads and writes it with loads and stores, and
 the shader has no part in it. It lies in the network's row, between the window and the ring
 (`docs/system/lan.md`):
@@ -34,9 +33,6 @@ the shader has no part in it. It lies in the network's row, between the window a
   frame: 344 of 1,500 numbers lost.)
 - The kernel's side is `linux/nommu/patch_console.py`: the hvc driver's `put_chars` and
   `get_chars`, and earlycon's `putc`. The SBI console calls are not answered.
-
-The machine with the MMU keeps the UART: its receive register and the buffer of 64 characters
-in the CPU's state, which the SBI console calls use.
 
 ## Four terminals on one line
 

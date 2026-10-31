@@ -72,7 +72,7 @@ parked it.
 ## The test (`programs/mc`)
 
 `mctest.c` is a Linux program whose own functions are the jobs: it has the library start the
-workers and checks them (`programs\mc\build.bat`, then `python tools\make_linux_image.py`):
+workers and checks them (`linux/nommu/root.sh` builds it, then `pwsh tools\make_image.ps1`):
 
 | Test | What it shows |
 |---|---|
@@ -745,7 +745,7 @@ What a program has to keep to:
   picture whose width is a multiple of 16, buffers from `mcw_alloc()` or `posix_memalign(16)`
   rounded up to 16, its own stack. Globals that a job writes want `aligned(16)` and a size
   of whole 16s.
-- **Memory the program has not touched yet stops a worker** (with the MMU; without it a
+- **Memory the program has not touched yet stops a worker** (with paging, as a program's first touch was; without it a
   program's memory is all there from its start, `docs/system/nommu.md`) until core 0 looks
   (`mcw_wait()`, `mcw_done()`): two passes a page. Touch a job's buffers first where that
   matters (`workers_alloc` in `linux/ralert/workers.c`).

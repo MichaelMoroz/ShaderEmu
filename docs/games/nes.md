@@ -1,16 +1,14 @@
 # A NES
 
 An emulator inside the emulated machine: Nofrendo (Matthew Conte's, as Espressif keep it for
-the ESP32) as a Nano-X client, with two games anyone may pass on. On the four-core machine it
-runs at a NES's speed or near it; on one core at a third.
+the ESP32) as a Nano-X client, with two games anyone may pass on. Held to a NES's 60 frames a second it
+has room to spare: unheld, 373% of a NES on an RTX 5070 laptop (19 October 2026, `docs/machine/speed.md`), 378%
+calibrated (31 October 2026, `game_par.py nes --calibrated`, 226.8 frames a second); on one core at a third.
 
-    wsl -- bash /mnt/c/Development/ShaderX86/linux/nanox/build.sh     (once)
-    wsl -- bash /mnt/c/Development/ShaderX86/linux/nes/build.sh       (2 s; the first time it also fetches)
-    python tools\make_linux_image.py                                  (then a new shell snapshot)
-
-That is the image with the MMU. The world and `rvc_harness` with no arguments run Linux
-without one, where the program is flat: `bash linux/nommu/build.sh nes/build.sh`, then
-`root.sh` and `image.py` (`docs/system/nommu.md`, "Building it").
+    wsl -- bash linux/nommu/build.sh nanox/build.sh     (once)
+    wsl -- bash linux/nommu/build.sh nes/build.sh       (2 s; the first time it also fetches)
+    wsl -- bash linux/nommu/root.sh
+    pwsh tools\make_image.ps1                                  (then a new shell snapshot)
 
 In the guest: `nano-X -p & nes thwaite` or `nes nova` (the Start menu's Games has both), or
 `nes FILE.nes` for any other cartridge of a mapper Nofrendo has. Arrows are the pad, X is A,
@@ -38,6 +36,8 @@ The games are Thwaite by Damian Yerrick (mapper 0) and Nova the Squirrel by Nova
   ("Lines ahead", below).
 
 ## Speed
+
+The tables here follow the work as it went; where it stands is the head of this page.
 
 Instructions of the first core for a frame of the NES (`nesstat:` lines), and the speed that
 is of a NES's 60 frames a second at about 4M instructions a second:
@@ -648,7 +648,7 @@ To check it:
   (`NES_PRESS="20 start 50 start 80 a 100 left 110 a"`) has pulse period 253 (440 Hz).
 - The card itself, as any program's sound: `--fixed-dt 0.004 --sound-capture F.wav
   --save-state F.snap` with `nes thwaite & sleep 14`, then `tools\sound_reference.py F.wav
-  F.snap --rom build\images\linux\rootfs.bin` must say MATCH.
+  F.snap --rom build\images\nommu\rootfs.bin` must say MATCH.
 - `NES_APU_TEST=1 nes thwaite` on the shader machine plays a recording made of the
   cartridge's first bytes (neither game of the image has one) and must print `the same as
   this core's` for what the worker decoded; `mctest 255 20000` passes beside it.

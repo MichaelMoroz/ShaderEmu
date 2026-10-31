@@ -390,7 +390,7 @@ frames a second with this project's kernel (about 80 on upstream's):
 
 `tools/gpu_reference.py SNAPSHOT TARGET.bmp` redraws the command list left in a snapshot's RAM
 in software and compares it with the colour target saved by `--gpu-capture` (`--rom FILE`:
-the ROM of another image than `build\images\linux`, for textures and vertices that are in it). Pause the guest
+the ROM of another image than `build\images\linux`, the shared one, as `build\images\nommu`, for textures and vertices that are in it). Pause the guest
 before snapshotting. The card's rasteriser is not bit-exact with the model: expect agreement
 away from triangle edges except for single-pixel shifts where a nearest-sampled texture changes
 texel.

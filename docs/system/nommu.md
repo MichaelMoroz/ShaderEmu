@@ -3,26 +3,34 @@
 The same system and programs on a kernel built without the MMU (`CONFIG_MMU` not set): every
 program is a flat (bFLT) one loaded whole into RAM, and the shader machine can run with no page
 walk at all (`NO_PAGING`). It is the machine everything runs by default: the harness, `rvc_cpu`,
-`tools/test_all.py` and the world. `linux/nommu/` builds it beside the MMU build, which it is
-made from and does not change; Linux with the MMU is legacy (`--kernel mmu`).
+`tools/test_all.py` and the world. Linux with the MMU is no longer supported (21 October 2026): its
+kernel is not linked for RAM from 0x82000000 and does not run in this layout, and nothing is tested
+on it. What is left of it is a shared build: `linux/kernel/build.sh`'s toolchain and kernel tree, and the
+shared root, which `linux/nommu` takes and makes flat.
 
 ## Building it
 
-Without a compiler: `pwsh tools\make_image.ps1` makes the MMU image from `linux/prebuilt` and
-then this one from `linux/prebuilt/nommu` (its kernel and the files that differ from the MMU
-root). `pwsh tools\make_image.ps1 --save-prebuilt` keeps a build there.
+Without a compiler: `pwsh tools\make_image.ps1` makes the shared image from `rvc/` (a clone of
+upstream rvc: its root file system is the ROM's start) and `linux/prebuilt`, and then this one from
+`linux/prebuilt/nommu` (its kernel and the files that differ from the shared root).
+`pwsh tools\make_image.ps1 --save-prebuilt` keeps a build there.
 
-In WSL, after the MMU build (`linux/kernel/build.sh` and the programs' build scripts):
+In WSL, from nothing: `linux/kernel/build.sh` (the cross compiler and the kernel's tree, in
+`~/shaderemu-linux`), `linux/userland/build.sh` (musl's sysroot, init), and the shared image above, then
+the steps below. WSL's `python3` wants numpy (Quake III's bake, ClassiCube's sound; `python3-numpy`), and
+`ffmpeg` is wanted once for ClassiCube's tune (`linux/classicube/sound/make_sound.py`, then cached) and for
+Half-Life's data. The address `linux/pathtrace/build.sh` fetches the teapot from no longer answers: put
+`linux/prebuilt/root/root/Models/teapot.obj` in `~/nm/work/src/pathtrace-data/` first.
 
-- `bash linux/nommu/setup.sh` once: `~/nm/work`, a build folder of the MMU one's sources with
+- `bash linux/nommu/setup.sh` once: `~/nm/work`, a build folder of the shared sources with
   nothing compiled, a copy of the built root in `~/nm/repo`, and compiler drivers (`rv32-cc`,
   `rv32-c++`) that compile every program position-independent and link it as a flat program
   (`flatcrt.c` is its start). `fork` is `vfork` there (`nommu_fork.h`, included in every file).
   `RV32_MARCH=rv32imaf_zba_zbb` builds with Zba and Zbb. It can be run again: `libc.a` goes back to musl's and
   toolchain.sh's members are put in anew by the new drivers, and a `__FILE__` says `/nm/...` wherever the folder is, so
   the libraries' bytes and `cc-bytes` do not go by the folder's name (31 October 2026).
-- `bash linux/nommu/kernel.sh`: the MMU kernel's tree copied with this repository's drivers and hooks put in again
-  (the MMU build is not run any more, and that tree's driver was 28 October's: `patch_exitpark.py` failed to link and
+- `bash linux/nommu/kernel.sh`: the tree of `linux/kernel/build.sh` copied with this repository's drivers and hooks put in again
+  (that tree's driver can be old: on 31 October 2026 `patch_exitpark.py` failed to link against 28 October's and
   the last `Image` was copied on, in the image and in `linux/prebuilt/nommu`; a failed make now stops it), seven patches
   (`patch_kconfig.py`: RV32 without the MMU, still in supervisor mode under the machine's SBI and
   linked at 0x82000000; `patch_signal.py`, `patch_drivers.py`, which also keeps `/proc/cpuinfo`'s
@@ -74,9 +82,8 @@ In WSL, after the MMU build (`linux/kernel/build.sh` and the programs' build scr
 
 `rvc_harness` boots this image once it has been made, on the machine without paging
 (`NO_PAGING`), with its window, desktop and sound; so does `rvc_cpu`, whose workers with a page
-table root of 0 run untranslated unless `RVC_BARE_WORKERS=0`. `--kernel mmu|nommu` and
-`--isa base|zb` choose the kernel and the instruction set (`zb` takes `build/images/nommu-zb` and
-the shader's `ZB`), as `k` and `i` do in the start menu.
+table root of 0 run untranslated unless `RVC_BARE_WORKERS=0`. `--isa base|zb` chooses the instruction
+set (`zb` takes `build/images/nommu-zb` and the shader's `ZB`), as `i` does in the start menu.
 
 `pwsh linux/nommu/all.ps1 [-Kernel]` is the whole round. The machine's own `cc` links a flat
 program as a library and makes it flat with `elf2flt` (`linux/nommu/cc`). `linux/nommu/card.ps1`
@@ -107,8 +114,8 @@ then "Sync shader sources from the repository" and "Import boot images from the 
   (`mcw_close`); a large pool is mapped at its size, not `calloc`'d (Quake III's zone and hunk).
   Quake III's pools are what q3dm17 takes with headroom (`build.sh`): the hunk 8 MB (5.3 at
   most), the zone 4 (42 KB), the server's 6 (3.2 with seven bots); `meminfo` says what is used.
-  The starter sets the hunk and the zone on the command line: a `q3config.cfg` the MMU world
-  kept in `/persistence` says 32 and 16 MB, and 32 in one run failed once memory was in pieces.
+  The starter sets the hunk and the zone on the command line: a `q3config.cfg` an older world
+  kept in `/persistence` can say 32 and 16 MB, and 32 in one run failed once memory was in pieces.
 - The shader machine: `BARE_WORKERS` starts a worker whose page table root is 0 with no
   translation; `NO_PAGING` takes every address as physical. `ZB` runs Zba and Zbb;
   `X_NO_FAST_AMO` sends atomics to the general path (for measuring).
@@ -141,8 +148,8 @@ and the boot arguments' root device takes the new size.
 On 18 October 2026 that was 296,400,896 bytes to 255,211,520 (41.2 MB of files, 258 entries)
 and 248,428,544 with `magic.mgc` (7,254,168 bytes as 422,324): 7,582 rows of the world's ROM
 texture (2048 texels of 16 bytes) where it was 9,046; without zsh (6.1 MB) 242,377,728 bytes,
-7,397 rows. The MMU image keeps all of it: its
-upstream programs run there.
+7,397 rows. On 31 October 2026, with the games since, it is 304,339,456 bytes (`rootfs.bin` of
+`build/images/nommu`, Half-Life's data in it).
 
 ## The state
 
@@ -159,7 +166,7 @@ each, alternating): a shell loop 4,889k instructions a second before and 5,025k 
 Doom's timedemo 1,176 realtics before and 1,165 after (+1%); mctest with 255 workers, fptest and
 Doom's state sums as before. Unity's commit (`MachineCommit.cginc`) has the tick's defines.
 
-`CSR_FIELDS` also leaves out what only the MMU machine has:
+`CSR_FIELDS` also leaves out what only a machine with paging needs:
 
 - A trap or interrupt goes to supervisor mode only: no delegation, no machine-mode entry.
   Interrupts are SEIP, SSIP and STIP.
@@ -170,7 +177,7 @@ Doom's state sums as before. Unity's commit (`MachineCommit.cginc`) has the tick
 - No `mmu` words, no single step, no debug words but the last instruction and stall.
 - The copy's destination for the commit's geometry comes from texel 37 (no `memop_*_p`).
 
-The tick's device reads and writes are the MMU machine's still (`mem.h`), but for the RTC: the
+The tick's device reads and writes are the general ones still (`mem.h`), but for the RTC: the
 paths cut down were 2 to 4% slower a pass under fxc. On the card, against the tree before
 (17 October 2026): 3,000 full passes from one Quake III snapshot (q3dm17 with three bots,
 frame 100) took 5.32 s against 5.56, means of two. Whole runs of a game vary 4% from run to

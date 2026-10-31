@@ -6,10 +6,11 @@ tracker tunes play as they are decoded. FLAC, MP3 and Vorbis at 44.1 kHz stereo 
 the machine has, with every core at work: the player decodes them ahead, a file's pieces on
 worker cores (`multicore.md`), and plays when what is left can be decoded while it plays.
 
-    wsl -- bash /mnt/c/Development/ShaderX86/linux/nanox/build.sh     (once)
-    wsl -- bash /mnt/c/Development/ShaderX86/linux/libmedia/build.sh  (the decoders; the first time it also fetches)
-    wsl -- bash /mnt/c/Development/ShaderX86/linux/play/build.sh      (3 s)
-    python tools\make_linux_image.py                                  (then a new shell snapshot)
+    wsl -- bash linux/nommu/build.sh nanox/build.sh     (once)
+    wsl -- bash linux/nommu/build.sh libmedia/build.sh  (the decoders; the first time it also fetches)
+    wsl -- bash linux/nommu/build.sh play/build.sh      (3 s)
+    wsl -- bash linux/nommu/root.sh
+    pwsh tools\make_image.ps1                                  (then a new shell snapshot)
 
 In the guest: `nxplay FILE` plays at once; the Start menu's Other has it as "Music player", and
 `open` starts it for a sound file (`nxopen.84-play`). The window has the file's name, the
@@ -39,7 +40,7 @@ and rows are.
 ## What the build is made of (`linux/play`)
 
 - `nxplay.c`: the window, the pieces and the ring, the card. It links
-  `~/shaderemu-linux/src/libmedia/libmedia.a` (`-Wl,--gc-sections`: the pictures' decoders
+  `~/nm/work/src/libmedia/libmedia.a` (`-Wl,--gc-sections`: the pictures' decoders
   are left out).
 - The decoders were here until 15 October 2026 and are libmedia's now (`linux/libmedia`,
   `media.md`): the tracker (`m_audio_mod.c`: 31 samples; 4 channels, or the tags `6CHN`,
@@ -255,7 +256,7 @@ Under `rvc_cpu`, a few seconds each (start it from PowerShell):
   without them, and with them after an `nxplay` that had them was ended by `kill -9`).
 - The card: `NXPLAY_SECONDS=1 NXPLAY_EXIT=1 nxplay /usr/share/play-test.wav` with
   `--fixed-dt 0.004 --sound-capture F.wav --save-state F.snap`, then
-  `python tools\sound_reference.py F.wav F.snap --rom build\images\linux\rootfs.bin`: every
+  `python tools\sound_reference.py F.wav F.snap --rom build\images\nommu\rootfs.bin`: every
   sample and device word matches. (A second fits the ring, so the snapshot still has it.)
   The same holds for a second of the MP3 and of the MOD file decoded in the ring, and their
   captures are those of the build that copied, sample for sample (the MOD's but for the

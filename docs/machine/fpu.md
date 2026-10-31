@@ -1,6 +1,6 @@
 # Float instructions
 
-The machines Linux runs on (with the MMU and without, `nommu.md`) have RISC-V's F extension: single-precision floats in
+The machine Linux runs on (`nommu.md`) has RISC-V's F extension: single-precision floats in
 32 registers of their own. A program built for it does a float addition in one instruction
 where the compiler's runtime took about a hundred, which is what made Quake playable
 (`docs/games/quake.md`). The smaller machines for bare-metal programs do not have it.

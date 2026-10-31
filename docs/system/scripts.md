@@ -8,8 +8,8 @@ do not run on the machine without an MMU: QuickJS's `qjs` (and `qjsc`) and Micro
     / # qjs --std -e 'print(std.getenv("HOME"))'
     / # micropython -c 'import json; print(json.dumps([1, 2]))'
 
-    wsl -- bash /mnt/c/.../linux/quickjs/build.sh        # 50 s the first time, 3 s with nothing changed
-    wsl -- bash /mnt/c/.../linux/micropython/build.sh    # under a minute the first time
+    wsl -- bash linux/nommu/build.sh quickjs/build.sh        # 50 s the first time, 3 s with nothing changed
+    wsl -- bash linux/nommu/build.sh micropython/build.sh    # under a minute the first time
 
 Both scripts take their source at a fixed commit, are among `linux/nommu/build.sh`'s, and put
 the program's licence in `/usr/share/quickjs/LICENSE` and `/usr/share/micropython/LICENSE`.

@@ -7,13 +7,10 @@ its sidebar, its text and its menus itself, on its own 320x200 screen, which the
 The window is the largest whole multiple of that the display has room for: 960x600 on the
 desktop's 1280x720, which costs the game nothing (the GPU does the stretching).
 
-    wsl -- bash /mnt/c/Development/ShaderX86/linux/nanox/build.sh     (once)
-    wsl -- bash /mnt/c/Development/ShaderX86/linux/tdawn/build.sh     (a minute when a file changed; the first time it also fetches)
-    python tools\make_linux_image.py                                  (then a new shell snapshot)
-
-That is the image with the MMU. The world and `rvc_harness` with no arguments run Linux
-without one, where the program is flat: `bash linux/nommu/build.sh tdawn/build.sh`, then
-`root.sh` and `image.py` (`docs/system/nommu.md`, "Building it").
+    wsl -- bash linux/nommu/build.sh nanox/build.sh     (once)
+    wsl -- bash linux/nommu/build.sh tdawn/build.sh     (a minute when a file changed; the first time it also fetches)
+    wsl -- bash linux/nommu/root.sh
+    pwsh tools\make_image.ps1                                  (then a new shell snapshot)
 
 In the guest: `nano-X -p & tdawn` at the console (it is also listed for the desktop's Start
 menu, which was not tried). The data is the 1995 demo's (GDI missions 1, 3, 5, 6 and 10; the
@@ -228,6 +225,10 @@ pixels by a few levels, 0.05% by more than 32, which are the pointer.
 
 ## Speed
 
+Where it stands: mission 3's frames 301 to 1200 at 52.1 game frames a second on an RTX 5070 laptop (19 October 2026,
+`docs/machine/speed.md`), 60.4 on an RTX 5090 (October 2026), 60.8 calibrated (31 October 2026, `game_par.py tdawn
+--calibrated`), nobody holding them back. What follows goes as the work went.
+
 The game wants 20 frames a second here, and a frame of the game is one step of its logic and
 one drawing of what changed. On D3D11 with fxc2 (4.0M instructions a second with the PC's GPU
 otherwise idle), 300 frames with no delay between them, nobody playing:
@@ -258,7 +259,7 @@ The figures below are the game's own drawing (`TDAWN_RENDER=soft`), from before:
 | 3 | 82 | 177k to 207k (466k as it starts) | 67k to 162k | 280k to 567k | 5.4 to 10.3 | 7.8 to 13.1 |
 | 10 | 75 | 133k to 213k (356k at times) | 115k to 468k | 281k to 701k | 4.4 to 10.3 | 6.4 to 12.5 |
 
-So it plays, at a half to two thirds of its speed where it matters (FXC is what VRChat runs).
+So it played then, at a half to two thirds of its speed where it mattered (FXC is what VRChat runs).
 Starting takes about 25 seconds to the first mission's first frame (DXC). Where a frame goes
 in mission 10:
 
