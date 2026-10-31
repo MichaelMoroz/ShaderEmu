@@ -2083,7 +2083,7 @@ index 9f92375..990d8b2 100644
  		ChangeObject(ni.ref1, from_index, to_index);
  		ChangeObject(ni.ref2, from_index, to_index);
 diff --git a/src/openttd.cpp b/src/openttd.cpp
-index 7d585b0..309b908 100644
+index 7d585b0..931b1c9 100644
 --- a/src/openttd.cpp
 +++ b/src/openttd.cpp
 @@ -73,6 +73,11 @@
@@ -2110,7 +2110,17 @@ index 7d585b0..309b908 100644
  #include "safeguards.h"
  
  void CallLandscapeTick();
-@@ -333,6 +343,13 @@ static void LoadIntroGame(bool load_newgrfs = true)
+@@ -322,6 +332,9 @@ static void ShutdownGame()
+  * Load the introduction game.
+  * @param load_newgrfs Whether to load the NewGRFs or not.
+  */
++#ifdef WITH_SHADEREMU
++static bool _no_first_world = false; ///< (a -g load has not made the sprites and windows yet: its failing makes the empty world then)
++#endif
+ static void LoadIntroGame(bool load_newgrfs = true)
+ {
+ 	_game_mode = GM_MENU;
+@@ -333,6 +346,13 @@ static void LoadIntroGame(bool load_newgrfs = true)
  	SetupColoursAndInitialWindow();
  
  	/* Load the default opening screen savegame */
@@ -2124,7 +2134,7 @@ index 7d585b0..309b908 100644
  	if (SaveOrLoad("opntitle.dat", SLO_LOAD, DFT_GAME_FILE, BASESET_DIR) != SL_OK) {
  		GenerateWorld(GWM_EMPTY, 64, 64); // if failed loading, make empty world.
  		SetLocalCompany(COMPANY_SPECTATOR);
-@@ -344,7 +361,13 @@ static void LoadIntroGame(bool load_newgrfs = true)
+@@ -344,7 +364,13 @@ static void LoadIntroGame(bool load_newgrfs = true)
  	_pause_mode = {};
  	_cursor.fix_at = false;
  
@@ -2138,7 +2148,7 @@ index 7d585b0..309b908 100644
  
  	MusicLoop(); // ensure music is correct
  }
-@@ -370,6 +393,30 @@ void OpenBrowser(const std::string &url)
+@@ -370,6 +396,30 @@ void OpenBrowser(const std::string &url)
  	}
  }
  
@@ -2169,7 +2179,7 @@ index 7d585b0..309b908 100644
  /** Callback structure of statements to be executed after the NewGRF scan. */
  struct AfterNewGRFScan : NewGRFScanCallback {
  	TimerGameCalendar::Year startyear = CalendarTime::INVALID_YEAR; ///< The start year.
-@@ -433,6 +480,9 @@ struct AfterNewGRFScan : NewGRFScanCallback {
+@@ -433,6 +483,9 @@ struct AfterNewGRFScan : NewGRFScanCallback {
  		IConsoleInit();
  		InitializeGUI();
  		IConsoleCmdExec("exec scripts/autoexec.scr 0");
@@ -2179,7 +2189,7 @@ index 7d585b0..309b908 100644
  
  		/* Make sure _settings is filled with _settings_newgame if we switch to a game directly */
  		if (_switch_mode != SM_NONE) MakeNewgameSettingsLive();
-@@ -802,8 +852,19 @@ int openttd_main(std::span<std::string_view> arguments)
+@@ -802,8 +855,20 @@ int openttd_main(std::span<std::string_view> arguments)
  	if (musicdriver.empty() && !_ini_musicdriver.empty()) musicdriver = _ini_musicdriver;
  	DriverFactoryBase::SelectDriver(musicdriver, Driver::DT_MUSIC);
  
@@ -2192,6 +2202,7 @@ index 7d585b0..309b908 100644
 +		Map::Allocate(64, 64);
 +		_game_mode = GM_MENU;
 +		SetLocalCompany(COMPANY_SPECTATOR);
++		_no_first_world = true;
 +	} else
 +#endif
 +	{
@@ -2201,7 +2212,26 @@ index 7d585b0..309b908 100644
  
  	/* ScanNewGRFFiles now has control over the scanner. */
  	RequestNewGRFScan(scanner.release());
-@@ -1173,6 +1234,14 @@ void SwitchToMode(SwitchMode new_mode)
+@@ -947,6 +1012,18 @@ bool SafeLoad(const std::string &filename, SaveLoadOperation fop, DetailedFileTy
+ 	_game_mode = newgm;
+ 
+ 	SaveOrLoadResult result = (lf == nullptr) ? SaveOrLoad(filename, fop, dft, subdir) : LoadWithFilter(std::move(lf));
++#ifdef WITH_SHADEREMU
++	if (_no_first_world) {
++		_no_first_world = false;
++		if (result != SL_OK) {
++			/* What was left out at the start for this load (without its sprites every picture asks for them in vain) */
++			GenerateWorld(GWM_EMPTY, 64, 64);
++			ResetWindowSystem();
++			SetupColoursAndInitialWindow();
++			_game_mode = newgm;
++		}
++	}
++#endif
+ 	if (result == SL_OK) return true;
+ 
+ 	if (_network_dedicated && ogm == GM_MENU) {
+@@ -1173,6 +1250,14 @@ void SwitchToMode(SwitchMode new_mode)
  			}
  
  			UpdateSocialIntegration(GM_MENU);
@@ -2216,7 +2246,7 @@ index 7d585b0..309b908 100644
  			break;
  
  		case SM_SAVE_GAME: // Save game.
-@@ -1241,8 +1310,13 @@ void StateGameLoop()
+@@ -1241,8 +1326,13 @@ void StateGameLoop()
  		BasePersistentStorageArray::SwitchMode(PSM_LEAVE_GAMELOOP);
  		UpdateLandscapingLimits();
  
@@ -2232,7 +2262,7 @@ index 7d585b0..309b908 100644
  	} else {
  		if (_debug_desync_level > 2 && TimerGameEconomy::date_fract == 0 && (TimerGameEconomy::date.base() & 0x1F) == 0) {
  			/* Save the desync savegame if needed. */
-@@ -1277,8 +1351,13 @@ void StateGameLoop()
+@@ -1277,8 +1367,13 @@ void StateGameLoop()
  #endif
  		UpdateLandscapingLimits();
  
@@ -2248,7 +2278,7 @@ index 7d585b0..309b908 100644
  		cur_company.Restore();
  	}
  
-@@ -1342,6 +1421,9 @@ void GameLoop()
+@@ -1342,6 +1437,9 @@ void GameLoop()
  	}
  
  	if (_request_newgrf_scan) {
@@ -2258,7 +2288,7 @@ index 7d585b0..309b908 100644
  		ScanNewGRFFiles(_request_newgrf_scan_callback);
  		_request_newgrf_scan = false;
  		_request_newgrf_scan_callback = nullptr;
-@@ -1363,6 +1445,9 @@ void GameLoop()
+@@ -1363,6 +1461,9 @@ void GameLoop()
  
  	/* switch game mode? */
  	if (_switch_mode != SM_NONE && !HasModalProgress()) {
@@ -2268,7 +2298,7 @@ index 7d585b0..309b908 100644
  		SwitchToMode(_switch_mode);
  		_switch_mode = SM_NONE;
  		if (_exit_game) return;
-@@ -1385,9 +1470,15 @@ void GameLoop()
+@@ -1385,9 +1486,15 @@ void GameLoop()
  			NetworkClientConnectGame(_settings_client.network.last_joined, COMPANY_SPECTATOR);
  		}
  		/* Singleplayer */
