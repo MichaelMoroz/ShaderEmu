@@ -1,3 +1,7 @@
+- The window manager and the bar know programs (`docs/system/nanox.md`, "The window manager and the bar"; 31 October 2026): a new
+  key or state is told over `GR_WMC_*`/`GR_WM_TELL` (no new request, no change to the client's library), what changes the window tree
+  raises `gd_scene_gen`, and `python tools/test_all.py wm` must pass, with a look at `tools/wm_shots.py`'s pictures: the cases say places
+  and states, not what is drawn. A program of which one window is enough calls `ui_single_instance()` (`ui_single.h`).
 - The rules of the work (23 October 2026). We own the whole stack, from the games' and programs' sources down to the
   tick's DXBC instructions: the games and userland, the toolchain, the tick and the other shaders, and
   fxc2 (`C:\Users\micha\Documents\FXC2`, `tools/fxc2`), so a cost is fixed at whichever layer it is cheapest.
@@ -252,6 +256,9 @@
   MEDIA_TEST --wsl` at 0 bad and the sums of `docs/system/media.md` (sound, films) and of `nxplay` and `nxvideo`.
   The image's pictures are JPEG in restart intervals or PNG in segments (`png_segments.py`), which every
   core decodes by itself: a tool that writes one asks for that (`restart_marker_blocks`), not a PPM.
+- `python tools/app_fuzz.py` opens, uses and closes the desktop's programs in plans that replay (`docs/system/fuzz.md`), and its oracles
+  are what is left behind: a process, a window, the GPU's drawing. On this machine a `fork` is a vfork: a child that does not exec calls `_exit`, never `exit`,
+  or it runs the parent's atexit functions on the parent's memory (OpenTTD's links), and a program a program starts should close what it was handed.
 - After a change, `python tools/test_all.py` (`docs/machine/cpu-harness.md`, "The test set"; two minutes): every
   case must pass, and `--races` too for a change to work on the workers. A value moved on purpose is set anew there.
 - The overlay over the ROM could not rename a file or folder of the image: its upper file system (memory on the
@@ -370,6 +377,14 @@
   `AddDirtyView` (only windows with a viewport are drawn there, the viewport's widget alone), and what the tick says of a window's widgets
   waits in `AddDirtyLater` for `OPENTTD_WINDOW_MS`; what a click or a key marks, or a window that comes, goes or changes, is at once. Measure
   with `OPENTTD_PLAY_PART=window`, by the share of the time the tick is held, and `test_all.py openttd-windows` must say 0 pixels.
+- OpenTTD draws a picture every 33 ms and a picture with only views to draw does not hold the tick (`docs/games/openttd.md`, "Pictures
+  the tick does not wait for"; `_se_light`, `OPENTTD_LIGHT=0` and `OPENTTD_FRAME_MS=66` are the way before): what such a picture reaches
+  reads a vehicle's drawn copy and changes no game state, and what it owes (stale texts, invalidations, new vehicles' sprites) is done by
+  `SeHeldWork` at the next hold. Ships' paths are made during the tick by two workers of their own (`AheadLoop`, `OPENTTD_SHIP_LOOPS=0`
+  is without): the map is not still under them, so all they read is compared when the path is taken, and `OPENTTD_SHIP_AHEAD=check` must say 0 differ.
+- OpenTTD's lists do not wait for the GPU, which in a world takes one a Unity frame (`docs/games/openttd.md`, "The card's lists"): records and
+  chunks live two frames, a list that finds the GPU busy waits on a queue. What a list reads and is changed later settles first (`SeGpuSettle`); run
+  `test_all.py openttd-scroll` with `RVC_DEVICE_EVERY=6` too, since `rvc_cpu` otherwise takes a list back at once: calibrated runs do not show this.
 - OpenTTD is compiled whole with `openttd.profile.gz` (`docs/games/openttd.md`, "The compiler"): its LTO link keeps
   `-fdata-sections -fno-common` and the 16-byte assembler, or statics a worker writes share texels (`RVC_RACES` undone), and
   after a large change to the source `linux/openttd/counts.py` makes the counts anew. `build.sh` puts the tree back from

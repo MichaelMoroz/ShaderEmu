@@ -1137,6 +1137,18 @@ open_entry(int i, int edit)
 	/* what was clicked says it is starting, first, until a window comes (ui_launch.h) */
 	icon.cell = e->icon;
 	snprintf(icon.file, sizeof icon.file, "%s", e->icon_file);
+	if (e->kind == K_SHORTCUT && !edit)
+		ui_launch_will_run(e->run);
+	else if (e->kind == K_PROGRAM && !edit && !strchr(path, ' '))
+		ui_launch_will_run(path);
+	else if (!edit && kind_of(i) != K_FOLDER && !strchr(path, ' ')) {
+		char line[64];
+
+		if (strlen(path) < 50) {
+			snprintf(line, sizeof line, "open %s", path);
+			ui_launch_will_run(line);
+		}
+	}
 	ui_launch_begin(e->label[0] ? e->label : e->name, &icon, desktop ? DESK_EVENTS : 0);
 	if (kind_of(i) == K_FOLDER) {
 		child = ui_run("nxfiles", path);

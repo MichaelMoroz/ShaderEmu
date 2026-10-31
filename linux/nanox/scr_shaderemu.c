@@ -1849,7 +1849,12 @@ show(PSD psd)
 	if ((int)layer[0] != x) layer[0] = x, layer_stores++;
 	if ((int)layer[1] != y) layer[1] = y, layer_stores++;
 	if ((int)layer[2] != s->w) layer[2] = s->w, layer_stores++;
-	if ((int)layer[3] != s->h) layer[3] = s->h, layer_stores++;
+	/* (a window rolled up to its caption keeps its buffer: gd_show_height) */
+	{
+		int h = gd_show_height && gd_show_height < s->h ? gd_show_height : s->h;
+
+		if ((int)layer[3] != h) layer[3] = h, layer_stores++;
+	}
 	if (layer[4] != GPU_PHYS + s->at) layer[4] = GPU_PHYS + s->at, layer_stores++;
 	layer_count++;
 }

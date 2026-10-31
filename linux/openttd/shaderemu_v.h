@@ -43,6 +43,8 @@ bool TwActive();
 bool TwHeld();
 void TwHold(bool between); ///< the tick waits from now on (between: between two ticks), what it left made
 void TwRelease();
+bool TwLightPicture(); ///< the next picture may leave the tick running (docs/games/openttd.md, "Pictures the tick does not wait for")
+bool TwMayGoLight(); ///< holding the tick: the rest of this picture may let it go
 void TwSync();
 void TwService();
 void TwGrant();

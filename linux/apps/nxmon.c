@@ -18,6 +18,7 @@
 #include "registry.h"
 #include "ui.h"
 #include "ui_ask.h"
+#include "ui_single.h"
 #include "ui_menu.h"
 #include "mcw.h"
 
@@ -2239,6 +2240,8 @@ main(void)
 	if (GrOpen() < 0)
 		return 1;
 	ui_init();
+	if (ui_single_instance())
+		return 0;
 	signal(SIGCHLD, SIG_IGN);	/* (what New Task started is nobody's to wait for) */
 	{
 		extern char __DATA_BEGIN__[], _end[];

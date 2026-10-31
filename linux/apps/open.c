@@ -730,6 +730,10 @@ main(int argc, char **argv)
 	struct stat info;
 	int dry = argc > 2 && !strcmp(argv[1], "--dry"), n, fd, i, o = 0;
 
+	/* What this program's starter had open is not this program's. Its window system's socket, kept, held the window of a
+	 * game that had gone until this ended (a program refused the GPU, and its Notice; a link: docs/system/fuzz.md). */
+	for (i = 3; i < 64; i++)
+		close(i);
 	signal(SIGCHLD, SIG_DFL);	/* (the bar that starts this ignores it: the opened program must not) */
 
 	if (argc == 5 && !strcmp(argv[1], "--unpack")) {

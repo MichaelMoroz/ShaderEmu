@@ -19,6 +19,7 @@ CMDS = {
     'world': 'cp /usr/share/openttd/test.cfg /tmp/t.cfg; openttd.bin -v null:ticks=200 -s null -m null -g -G 1 -c /tmp/t.cfg',
     'paused': f'OPENTTD_PLAY=1 OPENTTD_PLAY_SHORT=1 OPENTTD_WORKERS=7 OPENTTD_PAUSE=1 openttd -g {B}',
     'follow': f'OPENTTD_PLAY=1 OPENTTD_PLAY_PART=follow OPENTTD_WORKERS=2 openttd -g {B}',
+    'build': f'OPENTTD_PLAY=2 OPENTTD_PLAY_PART=build OPENTTD_WORKERS=2 openttd -g {B}',
 }
 
 

@@ -34,6 +34,7 @@ One file per subject. A doc names another by its file name, which is unique acro
 - [fetch.md](system/fetch.md) – Fetch: pages from the host
 - [persist.md](system/persist.md) – Persist: a folder the host keeps between sessions
 - [open.md](system/open.md) – Open: a link or a file, with the program for its kind
+- [fuzz.md](system/fuzz.md) – The desktop's fuzzer: plans of opening, using and closing programs that replay
 
 ## apps
 

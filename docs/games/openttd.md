@@ -419,7 +419,7 @@ about 40 s to make, then 15 pictures and all 37 ticks a second.
 
 ### Speed on 31 October
 
-The picture's interval is 66 ms (`OPENTTD_FRAME_MS`): a picture that does not wait for it lets the pace space the ticks less.
+These figures are from before "Pictures the tick does not wait for", at an interval of 66 ms (`OPENTTD_FRAME_MS`, now 33): a picture that does not wait for it lets the pace space the ticks less.
 
 On the card, RTX 5090 (`rvc_harness --d3d11 --unity 11.1,1.4,0.75`, `OPENTTD_PLAY=2`, two runs):
 
@@ -432,6 +432,67 @@ On the card, RTX 5090 (`rvc_harness --d3d11 --unity 11.1,1.4,0.75`, `OPENTTD_PLA
 | the whole run, s | 68.7, 66.6 |
 
 Under a VR frame the card's game ticks are about two thirds of the calibrated run's 4.0 a second above.
+
+## Pictures the tick does not wait for
+
+Upstream's game holds the world still while it draws. Here the tick runs on a worker and was held while a picture's windows ran and
+through its flush, about 50 ms a hold; and the 66 ms interval, not the work, bounded pictures (uncapped, the scroll made 40 a second).
+So the interval is 33 ms (`OPENTTD_FRAME_MS`) and a picture with nothing dirty but views, no event and no button down, in the middle
+of a tick, is drawn with the tick running (`_se_light`, `TwLightPicture`, `SeDirtyOnlyViews`; `OPENTTD_LIGHT=0` is without, and
+`OPENTTD_CHECK` turns it off, as a picture to compare wants the map still). It reads each vehicle's drawn copy, not the vehicle, and a
+followed vehicle's too. What it owes (stale texts, scheduled invalidations, sprites of vehicles first seen) `SeHeldWork` does at the
+next hold, and a held picture with nothing else to draw lets the tick go at that point. At most `OPENTTD_LIGHT_MOST` (8) in a row.
+A pointer that only moves is seen at most every 66 ms (`pointer_waits`): each sight is a hold.
+
+Ships' paths ahead now run during the tick (below, "Ships' paths made ahead"), and the counts were made again, with the building part.
+
+## Gameplay scenes
+
+Calibrated, 31 October 2026, `rvc_cpu --pass-model tools/card_model.json`, `RVC_THREADS=8`, means of rounds 2 to 6, good to about 7%.
+Before is the tree of f037d43 in a private image; building's before is the same binary with `OPENTTD_LIGHT=0 OPENTTD_FRAME_MS=66
+OPENTTD_SHIP_LOOPS=0` (it has the new counts, 8 to 12% of the ticks in the scenes it was measured in, and the part did not exist). Parts: `OPENTTD_PLAY_PART=scroll`,
+`follow`, `window` with `OPENTTD_PLAY_SCENE=none|many|vehicle`, `build` (the highlight every 66 ms, a road, rails, a station or a bus stop every
+400 ms, by the clock so that faster pictures do not ask for more), `zoom`.
+
+| Scene | Pictures a second before, after | Ticks a second before, after | x pictures, ticks |
+|---|---|---|---|
+| scroll | 15.17, 29.82 | 5.66, 7.55 | 1.97, 1.33 |
+| following a vehicle | 15.18, 30.77 | 5.92, 8.21 | 2.03, 1.39 |
+| windows, none open | 15.17, 30.42 | 6.84, 8.63 | 2.01, 1.26 |
+| many windows open | 15.18, 26.83 | 5.74, 7.22 | 1.77, 1.26 |
+| vehicle windows | 15.09, 30.83 | 6.15, 8.18 | 2.04, 1.33 |
+| building | 14.06, 26.11 | 5.81, 6.01 | 1.86, 1.03 |
+| zoomed out | 7.51, 11.09 | 3.42, 4.35 | 1.48, 1.27 |
+
+Ticks are bounded by a tick's length on one core: about 100 ms (94 to 103) of the worker's, and it waits 21 to 34% of the time. With no
+wait at all that is 10 a second, under the 2x of 11 to 13. Vehicles run in pool order on one random stream, so a tick is not split
+without changing the game. Zoomed out is bounded by the pieces (6 million instructions a picture, the dearest 300k).
+
+On the card, RTX 5090, one run (`--d3d11 --unity 11.1,1.4,0.75`, `OPENTTD_PLAY=2`), round 2: 12.57 pictures and 3.77 game ticks a
+second, against the 10.29 to 11.21 and 2.57 to 2.86 of "Speed on 31 October". With the lists below: round 2 13.64 pictures and
+3.55 ticks a second, the scroll 29.06 pictures (it was 20.63), windows closed 30.03 (21.41), windows 17.00 (18.51), one run each.
+
+### The card's lists
+
+The card made 21 pictures a second of the scroll where the calibrated run said 30: `rvc_cpu` takes a list back in the pass it was
+given, and a world's GPU takes one a Unity frame. A picture is two lists (what is drawn, and the showing of it), so the showing waited
+for a frame, `paint` 11.8 ms of 45 against 2. Giving that wait to the next picture's start moved it (`windows` 25 to 36 ms) and made
+nothing faster: a frame's first drawing waited for every list before it, as its records are read until drawn. So now (`Submit`,
+`FrameBegin` in `shaderemu_gpu.cpp`) a list the GPU has no room for waits on a queue, posted at the next look (`SeGpuPoll`), and a frame
+waits only for the frame before the last, the workers having two sets of records and the first core's chunks kept a frame longer; a list
+is reused only when drawn, and the sprite cache's deletes settle. `OPENTTD_GPU_OWED=0` is the way before. `RVC_DEVICE_EVERY=6` on
+`rvc_cpu` holds a list back as a world does: `openttd-scroll`, `openttd-windows` and `openttd-gpu` pass under it.
+
+Cuts by what the last pictures' pieces measured (a town's tiles cost twice the sea's) were tried for the zoomed out view and dropped:
+core 0's 279k a picture became 392k, and pieces cut elsewhere than last time were made again (11 ms a picture).
+
+### What a tick spends
+
+On the tick's worker, 530k instructions a tick in the quiet window scene, `prof.py`: vehicles 486k. Trains 45% of the tick (`TrainController` own
+127k), road vehicles 20%, aircraft 11%, `CallVehicleTicks` own 56k, the tile loop 28k, a rail or road search 25k and 22k on average.
+Each of those is many small things that go in the order of the pool and its one random stream. A hold costs the tick 18 ms each tick, of which
+`VehiclesSync` 11: it stores to `Vehicle`, so doing it with the tick running needs those fields in texels of their own and a second `tw_made`:
+about 6% of the ticks, not done.
 
 ## The start
 
@@ -578,6 +639,11 @@ workers (`WaterRegionsMakeAll` in `water_regions.cpp`, from main's 5a3b851: the 
 `WaterRegionMade` of its own, `Keep` on the first core). A ship's job that still makes a region of its own
 waits at every sixteenth tile of it (`SeShipAheadPoll`).
 
+While the tick runs on a worker, two workers of the paths' own (`AheadLoop`, started with the tick's worker; `OPENTTD_SHIP_LOOPS=0` is without)
+make the paths with the map not still, and `SeShipAheadPoll` does not wait: everything a job read is compared when the path is taken,
+and a region's generation moves when it goes invalid and when it is made, so what was read over a change is refused. Before, a tick that
+never stopped took almost none (21 made, 0 taken); with them 50 of 65 were taken and 0 differed, over 25 rounds of the follow part.
+
 `OPENTTD_SHIP_AHEAD=check` makes every path taken again on the first core and compares the two:
 0 differ; the `ship paths ahead` line at the end says how many were made, taken, invalid and why.
 `OPENTTD_SHIP_AHEAD=0` is without. The check of the tiles logged is cut in parts of at
@@ -597,6 +663,28 @@ for the drawing stores its answer only when it changes. The GPU's memory is hand
 place to every program (`seglMemory`), so the screen's picture is cleared at start. `test_all.py
 openttd-twice` plays busy.sav, then plays it again paused with every picture checked (0 pixels, the
 workers drawing), then starts it a third time for the state's sum after a tick (`e49e18e3`).
+
+Once the window has gone nothing keeps a program that is going, and nobody can see or close one that stays: it holds the GPU, and
+the next program that draws says "The GPU is drawing for openttd.bin" of a program with no window (a player's report; only Monitor's End
+Process would help). So (31 October 2026):
+
+- `PostMainLoop` saves the settings, shuts the network and the drivers, and `_exit`s (`SeExitNow`): upstream's `ShutdownGame` after the
+  window's going (the window system, the scripts, every pool, the new GRFs) and then the C++ destructors had no use here. From
+  `WaitTillSaved`'s end an alarm of 60 s ends it whatever it does (`SeExitWatch`).
+- No crash handler (`CrashLog::InitialiseCrashLog`): the handler's log has no stack here, its saved game is minutes of LZMA over memory
+  that may be broken, and it ended with the window gone. A crash is now the kernel's line with `epc` and `ra`, and the desktop's
+  "stopped working".
+- A link (`OSOpenBrowser`) is `open`, by a vfork that execs or `_exit`s. It was a `fork`, which is a vfork here, whose child
+  found no `xdg-open` and called `exit()`: on the parent's memory, with the parent's atexit functions: workers closed, statics destroyed, under
+  a game that then failed later or never ended: a process named openttd.bin with no window and no workers, holding the GPU.
+
+`tools/app_fuzz.py` found that child (random clicks, `docs/system/fuzz.md`): before, a plan of 13 minutes of random use ended with "Crash encountered", a
+process left and the GPU held, every time; `start:o:openttd,-g wait:o:60 sleep:400000 rand:o:50:36864 sleep:400000 rand:o:23:62212 sleep:30000
+rand:o:42:69146 sleep:30000 rand:o:60:416 sleep:2000 key:o:escape sleep:500 close:o:x end` with that day's first `nxfuzz`. X and a click on Yes
+from a new game, from busy.sav and from the title, with long play, on `rvc_cpu` and with the lists drawn under `--cpu --warp`, left nothing even
+before the change: `test_all.py app-fuzz-openttd` keeps that.
+
+Not seen: the report's own session on the card. Which click it was is not known either; no click found in a menu or a play by hand was tried.
 
 ## Not done
 
