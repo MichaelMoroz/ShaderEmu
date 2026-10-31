@@ -6,6 +6,7 @@
 #include <linux/cpu.h>
 #include <linux/delay.h>
 #include <linux/fdtable.h>
+#include <linux/file.h>
 #include <linux/fs.h>
 #include <linux/init.h>
 #include <linux/io.h>
@@ -32,6 +33,7 @@
 #define GPU_COUNT	0x18
 #define GPU_FRAMES	0x1c	/* lists drawn so far */
 #define GPU_INTO	0x50	/* where a copy goes: address, width, height, row length */
+#define GPU_LOCK	0x60	/* taken with an atomic swap by a program that writes the words above */
 #define KEYBOARD_OWNER	0x30	/* set by a program that takes the keyboard (docs/machine/input.md) */
 #define DISPLAY_CURSOR	0x48	/* 1 while the display shows a cursor (docs/machine/display.md) */
 #define VOLUME_LIST	0x300	/* the frame the volume display shows (docs/world/volume.md) */
@@ -435,8 +437,33 @@ static noinline void shaderemu_gpu_rest(void)
 	arch_cpu_idle_exit();
 }
 
+static int shaderemu_gpu_fd_of(const void *wanted, struct file *file, unsigned int fd)
+{
+	return file == wanted ? fd + 1 : 0;
+}
+
+/*
+ * The GPU's file goes with its program, never into a program it starts. A child that had it held the drawing and
+ * the workers' places under the name of a program that had gone, until it ended: `open`, started by OpenTTD for a link
+ * and waiting for the host, kept the next program from drawing (docs/system/fuzz.md). No caller asks for O_CLOEXEC, and
+ * the fd is not known at open: it is looked for at a file's first ioctl or mmap (bit 8 of private_data).
+ */
+static void shaderemu_gpu_close_on_exec(struct file *file)
+{
+	uintptr_t at_open = (uintptr_t)file->private_data;
+	int n;
+
+	if (at_open & 8)
+		return;
+	file->private_data = (void *)(at_open | 8);
+	n = iterate_fd(current->files, 0, shaderemu_gpu_fd_of, file);
+	if (n > 0)
+		set_close_on_exec(n - 1, 1);
+}
+
 static long shaderemu_gpu_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
+	shaderemu_gpu_close_on_exec(file);
 	if (cmd == SHADEREMU_GPU_REST) {
 		shaderemu_gpu_rest();
 		return 0;
@@ -551,6 +578,7 @@ static int shaderemu_gpu_mmap(struct file *file, struct vm_area_struct *vma)
 	unsigned long size = vma->vm_end - vma->vm_start;
 	unsigned long offset = vma->vm_pgoff << PAGE_SHIFT;
 
+	shaderemu_gpu_close_on_exec(file);
 	if (offset > GPU_SIZE || size > GPU_SIZE - offset)
 		return -EINVAL;
 	vma->vm_flags |= VM_IO | VM_DONTEXPAND | VM_DONTDUMP;
@@ -675,6 +703,15 @@ static int shaderemu_gpu_exiting_one(const void *parked, struct file *file, unsi
 
 	if (file->f_op != &shaderemu_gpu_fops)
 		return 0;
+	/*
+	 * The word programs swap to write a list's registers (some twenty instructions) has no owner in it: a
+	 * signal between the swap and the release left it taken for good, and the window system and every
+	 * program turning on it for ever (1 kill of a drawing program in 160, tools/app_fuzz.py). Only a
+	 * process that is off the processor can hold it, so this is wrong only if another is stopped inside
+	 * those instructions just as this one ends: at worst one list with another's registers.
+	 */
+	if (readl(gpu_regs + GPU_LOCK))
+		writel(0, gpu_regs + GPU_LOCK);
 	for (k = 1; k < WORKERS_MOST; k++)
 		if (worker_owner[k] == file) {
 			workers_park(k);

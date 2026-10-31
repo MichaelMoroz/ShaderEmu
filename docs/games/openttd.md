@@ -664,6 +664,28 @@ place to every program (`seglMemory`), so the screen's picture is cleared at sta
 openttd-twice` plays busy.sav, then plays it again paused with every picture checked (0 pixels, the
 workers drawing), then starts it a third time for the state's sum after a tick (`e49e18e3`).
 
+Once the window has gone nothing keeps a program that is going, and nobody can see or close one that stays: it holds the GPU, and
+the next program that draws says "The GPU is drawing for openttd.bin" of a program with no window (a player's report; only Monitor's End
+Process would help). So (31 October 2026):
+
+- `PostMainLoop` saves the settings, shuts the network and the drivers, and `_exit`s (`SeExitNow`): upstream's `ShutdownGame` after the
+  window's going (the window system, the scripts, every pool, the new GRFs) and then the C++ destructors had no use here. From
+  `WaitTillSaved`'s end an alarm of 60 s ends it whatever it does (`SeExitWatch`).
+- No crash handler (`CrashLog::InitialiseCrashLog`): the handler's log has no stack here, its saved game is minutes of LZMA over memory
+  that may be broken, and it ended with the window gone. A crash is now the kernel's line with `epc` and `ra`, and the desktop's
+  "stopped working".
+- A link (`OSOpenBrowser`) is `open`, by a vfork that execs or `_exit`s. It was a `fork`, which is a vfork here, whose child
+  found no `xdg-open` and called `exit()`: on the parent's memory, with the parent's atexit functions: workers closed, statics destroyed, under
+  a game that then failed later or never ended: a process named openttd.bin with no window and no workers, holding the GPU.
+
+`tools/app_fuzz.py` found that child (random clicks, `docs/system/fuzz.md`): before, a plan of 13 minutes of random use ended with "Crash encountered", a
+process left and the GPU held, every time; `start:o:openttd,-g wait:o:60 sleep:400000 rand:o:50:36864 sleep:400000 rand:o:23:62212 sleep:30000
+rand:o:42:69146 sleep:30000 rand:o:60:416 sleep:2000 key:o:escape sleep:500 close:o:x end` with that day's first `nxfuzz`. X and a click on Yes
+from a new game, from busy.sav and from the title, with long play, on `rvc_cpu` and with the lists drawn under `--cpu --warp`, left nothing even
+before the change: `test_all.py app-fuzz-openttd` keeps that.
+
+Not seen: the report's own session on the card. Which click it was is not known either; no click found in a menu or a play by hand was tried.
+
 ## Not done
 
 - Pitch bend and other controllers in the music.

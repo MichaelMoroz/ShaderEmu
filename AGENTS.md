@@ -256,6 +256,9 @@
   MEDIA_TEST --wsl` at 0 bad and the sums of `docs/system/media.md` (sound, films) and of `nxplay` and `nxvideo`.
   The image's pictures are JPEG in restart intervals or PNG in segments (`png_segments.py`), which every
   core decodes by itself: a tool that writes one asks for that (`restart_marker_blocks`), not a PPM.
+- `python tools/app_fuzz.py` opens, uses and closes the desktop's programs in plans that replay (`docs/system/fuzz.md`), and its oracles
+  are what is left behind: a process, a window, the GPU's drawing. On this machine a `fork` is a vfork: a child that does not exec calls `_exit`, never `exit`,
+  or it runs the parent's atexit functions on the parent's memory (OpenTTD's links), and a program a program starts should close what it was handed.
 - After a change, `python tools/test_all.py` (`docs/machine/cpu-harness.md`, "The test set"; two minutes): every
   case must pass, and `--races` too for a change to work on the workers. A value moved on purpose is set anew there.
 - The overlay over the ROM could not rename a file or folder of the image: its upper file system (memory on the

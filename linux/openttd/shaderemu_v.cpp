@@ -46,6 +46,8 @@
 #include "shaderemu_gpu.h"
 #include <unistd.h>
 #include <cerrno>
+#include <csignal>
+#include <cstdio>
 #include <utility>
 extern "C" {
 #include <GLES/segl.h>
@@ -1383,6 +1385,24 @@ void VideoDriver_ShaderEmu::MainLoop()
 	}
 	TwStop();
 	TickFinish();
+}
+
+/**
+ * The program has said it goes (PostMainLoop): whatever it does from here on, it goes. A process that stays holds the
+ * GPU's drawing, and the next program that draws is told to close a program with no window (docs/games/openttd.md, "At exit").
+ * SIGALRM is one no handler here takes.
+ */
+void SeExitWatch()
+{
+	signal(SIGALRM, SIG_DFL);
+	alarm(60);
+}
+
+/** The drivers are stopped: the kernel takes everything back at once, workers first (shaderemu_gpu_exiting). */
+void SeExitNow()
+{
+	fflush(nullptr);
+	_exit(0);
 }
 
 bool VideoDriver_ShaderEmu::ChangeResolution(int w, int h)

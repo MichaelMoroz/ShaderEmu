@@ -189,6 +189,10 @@ main(int argc, char **argv)
 	const char *title = NULL;
 	int i, o = 0, answer;
 
+	/* What this program's starter had open is not this program's. Its window system's socket, kept, held the window of a
+	 * game that had gone until this ended (a program refused the GPU, and its Notice; a link: docs/system/fuzz.md). */
+	for (i = 3; i < 64; i++)
+		close(i);
 	while (argc > 3 && (!strcmp(argv[1], "--icon") || !strcmp(argv[1], "--title"))) {
 		if (argv[1][2] == 'i')
 			ui_ask_icon = argv[2];
