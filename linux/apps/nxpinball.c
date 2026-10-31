@@ -1195,11 +1195,14 @@ static const struct ui_menu_item game_items[] = {
 };
 static const struct ui_menu_item help_items[] = { { "Keys", -1, 4 }, { "About Pinball", -1, 5 } };
 
+static int menu_paused;	/* the menu open now paused the game */
+
 static void
 open_menu(int which, int keyboard)
 {
 	int x, y;
 
+	menu_paused = state != PAUSED;
 	pause_game();
 	ui_window_origin(window, &x, &y);
 	if (which)
@@ -1227,7 +1230,8 @@ command(int id)
 		tick_due = frame_due = now_us();
 		break;
 	case 2:
-		if (state == PAUSED)
+		/* (the menu paused it to show itself: Pause from there is to stay so) */
+		if (state == PAUSED && !menu_paused)
 			go();
 		else
 			pause_game();

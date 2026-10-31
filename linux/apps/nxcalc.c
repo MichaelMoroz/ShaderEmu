@@ -8,6 +8,7 @@
 #include "ui_icons.h"
 #include "ui_menu.h"
 #include "ui_ask.h"
+#include <ctype.h>
 #include <math.h>
 #include <stdint.h>
 #include <errno.h>
@@ -1659,6 +1660,35 @@ paste(void)
 
 	if (!text)
 		return;
+	if (mode != PROGRAMMER && n < 60) {
+		/* one number, as Copy gives it: its signs and its exponent are not operators */
+		char *end;
+		const char *s = text;
+
+		strtod(s, &end);
+		while (end > s && isspace((unsigned char)end[0]))
+			end++;
+		if (end > s && !*end && (isdigit((unsigned char)s[s[0] == '-']) || s[s[0] == '-'] == '.')) {
+			int negative = s[0] == '-', typed = 0;
+
+			for (s += negative; *s && *s != ' ' && *s != '\n'; s++) {
+				if (*s == 'e' || *s == 'E') {
+					press(K_EXP);
+					if (s[1] == '-' || s[1] == '+') {
+						if (s[1] == '-')
+							press(K_NEG);
+						s++;
+					}
+				} else {
+					type_char((unsigned char)*s, 0);
+					if (negative && !typed++)
+						press(K_NEG);
+				}
+			}
+			free(text);
+			return;
+		}
+	}
 	for (i = 0; i < n && i < 400; i++)
 		if (text[i] > ' ' && text[i] < 127 && !(text[i] == ',' && mode != PROGRAMMER))	/* (a control byte is a Ctrl key: Ctrl+V pastes again) */
 			type_char((unsigned char)text[i], 0);

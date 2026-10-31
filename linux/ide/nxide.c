@@ -1960,8 +1960,11 @@ job_ended(int kind, int status)
 			say("not built: elf2flt did not make the program");
 			then_do = 0;
 			draw_all();
-		} else
+		} else {
+			if (run_doc >= 0 && run_doc != doc_now)
+				doc_show(run_doc);	/* (the program is that file's, whichever tab is shown now) */
 			built_ok();
+		}
 		return;
 	}
 	if (kind == J_RUN || kind == J_PYDBG) {
@@ -2743,8 +2746,13 @@ command_done(int id)
 		/* from the project's folder, or else the shown file's */
 		snprintf(where, sizeof where, "%.*s", project[0] ? (int)strlen(project) : strrchr(path, '/') && strrchr(path, '/') != path ? (int)(strrchr(path, '/') - path) : 5,
 			 project[0] ? project : strrchr(path, '/') && strrchr(path, '/') != path ? path : "/root");
-		if (ui_choose_file("Open", where, ".c .h .js .py .hlsl .txt", chosen, sizeof chosen, others))
-			open_file(chosen);
+		if (ui_choose_file("Open", where, ".c .h .js .py .hlsl .txt", chosen, sizeof chosen, others)) {
+			/* (as a click in the tree does: a binary or huge file loses its bytes here, or the memory) */
+			if (looks_like_text(chosen))
+				open_file(chosen);
+			else
+				say("not opened: it is over 1 MB, or not text");
+		}
 		draw_all();
 		return;
 	case C_SAVE:
@@ -2752,13 +2760,14 @@ command_done(int id)
 		draw_tree();
 		break;
 	case C_SAVE_ALL:
-		for (i = 0, x0 = doc_now; i < doc_count; i++)
+		for (i = 0, y0 = 0, x0 = doc_now; i < doc_count; i++)
 			if (i == doc_now ? tx_modified : docs[i].modified) {
 				doc_show(i);
 				save();
+				y0 += tx_modified;
 			}
 		doc_show(x0);
-		say("every file saved");
+		say(y0 ? "NOT every file saved: the marked tabs could not be written" : "every file saved");
 		draw_all();
 		return;
 	case C_CLOSE:

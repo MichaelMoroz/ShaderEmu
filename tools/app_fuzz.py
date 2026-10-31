@@ -109,7 +109,10 @@ class Runner:
             time.sleep(15)
         seconds = time.time() - t
         text = open(log, errors='replace').read() if os.path.exists(log) else ''
-        console = text[text.find('nxfuzz'):]
+        console = text[max(text.find('nxfuzz'), 0):]   # (a long line is folded on the console: the word may not be there whole)
+        if getattr(self, 'keep_lines', None):
+            for said in re.findall(self.keep_lines, console):
+                print(said, flush=True)
         bad = [['bad', m] for m in re.findall(r'FZ-BAD ([^\r\n]*)', console)]
         for pattern, kind in NEVER:
             m = re.search(pattern, console)
@@ -154,13 +157,14 @@ def all_plans(runner, plans, jobs):
     bad = done = 0
     t = time.time()
     with ThreadPoolExecutor(jobs) as pool:
-        futures = {pool.submit(runner.run, p): p for p in plans}
+        # (a plan, or what a shell makes first and a plan)
+        futures = {pool.submit(runner.run, *((p[1], False, None, p[0]) if isinstance(p, tuple) else (p,))): p for p in plans}
         for f in as_completed(futures):
             res, _ = f.result()
             done += 1
             if res['bad']:
                 bad += 1
-                print(f"FAIL {res['plan']}\n     {res['log']}: " + '; '.join(f'{k}: {v}' for k, v in res['bad'][:6]), flush=True)
+                print(f"FAIL {futures[f][0] if isinstance(futures[f], tuple) else ''}{res['plan']}\n     {res['log']}: " + '; '.join(f'{k}: {v}' for k, v in res['bad'][:6]), flush=True)
             if done % 50 == 0:
                 print(f'... {done} of {len(plans)}, {bad} failed, {time.time() - t:.0f} s', flush=True)
     print(f'{len(plans)} plans, {bad} failed, {time.time() - t:.0f} s')
@@ -186,16 +190,41 @@ def pair_plans(apps, group=2, ways=('x', 'alt', 'term')):
 
 
 def menu_plans(apps):
-    """Every item of a menu bar, by place: a plan a bar's stretch, so that an item that ends the program leaves the others tried."""
+    """Each program's menus and their rows, found and walked by nxfuzz's menus: (what it found is its FZ menus line)."""
     for tag in apps:
-        if not APPS[tag][1]:
+        if APPS[tag][1]:
+            yield [*start_ops(tag), 'sleep:500', f'menus:{tag}', f'close:{tag}:x', 'end']
+
+
+# Odd files: (the shell that makes it, the name it has). The first word of the command is the program; the plans start it on the file.
+ODD_READERS = {'edit': 'nxedit', 'view': 'nxview', 'play': 'nxplay', 'video': 'nxvideo', 'web': 'nxweb', 'paint': 'nxpaint', 'ide': 'nxide', 'open': 'open', 'files': 'nxfiles'}
+ODD_ENDINGS = ('.txt', '.c', '.png', '.jpg', '.gif', '.bmp', '.wav', '.mp3', '.flac', '.mpg', '.avi', '.vqa', '.html', '.zip', '.tar', '.gz', '.obj', '.scene', '.xyz', '')
+ODD_FILLS = {'empty': ': >', 'noise': 'head -c 3000 /dev/urandom >', 'zeros': 'head -c 3000000 /dev/zero >',
+             'nl': r'head -c 400000 /dev/zero | tr "\000" "\012" >', 'line': r'head -c 400000 /dev/zero | tr "\000" a >',
+             'head': r"printf '\211PNG\015\012\032\012IHDR' >"}
+
+
+def input_plans(apps):
+    """Each reader on each kind of odd file under each ending that may lead it to a decoder; (before, plan)."""
+    for tag, program in ODD_READERS.items():
+        if apps and tag not in apps and len(apps) < len(APPS):
             continue
-        for x in range(12, 200, 28):
-            ops = [f'start:a:{APPS[tag][0].replace(" ", ",")}', f'wait:a:{APPS[tag][1]}', 'sleep:500']
-            for y in range(30, 224, 16):
-                ops += [f'iclick:a:{x},10', 'sleep:150', f'iclick:a:{x},{y}', 'sleep:400', 'key:a:escape']
-            ops += ['close:a:x', 'end']
-            yield ops
+        for fill, make in ODD_FILLS.items():
+            for ending in ODD_ENDINGS:
+                name = '/tmp/odd' + ending
+                yield (f'{make} {name}; ', [f'start:a:{program},{name}', 'sleep:3000', 'rand:a:6:5', 'close:a:x', 'end'])
+        name = '/tmp/' + 'n' * 200 + '.txt'
+        yield (f'echo hi > {name}; ', [f'start:a:{program},{name}', 'sleep:3000', 'close:a:x', 'end'])
+        yield ('', [f'start:a:{program},/tmp/missing.txt', 'sleep:3000', 'close:a:x', 'end'])
+        yield ('', [f'start:a:{program},/tmp', 'sleep:3000', 'close:a:x', 'end'])
+
+
+def size_plans(apps):
+    """Each program made as small and as large as a window can be asked to be, used there, and brought back."""
+    for tag in apps:
+        if APPS[tag][1]:
+            for w, h in ((1, 1), (40, 20), (20, 400), (900, 10), (800, 600)):
+                yield [*start_ops(tag), 'sleep:500', f'size:{tag}:{w},{h}', f'rand:{tag}:12:{w + h}', f'size:{tag}:500,400', f'rand:{tag}:6:3', f'close:{tag}:x', 'end']
 
 
 def random_plan(r, apps, length=None):
@@ -307,7 +336,12 @@ def main():
     elif a.what == 'triples':
         return 1 if all_plans(r, list(pair_plans(apps, 3)), a.jobs) else 0
     elif a.what == 'menus':
+        r.keep_lines = r'FZ menus [^\r\n]*'
         return 1 if all_plans(r, list(menu_plans(apps)), a.jobs) else 0
+    elif a.what == 'inputs':
+        return 1 if all_plans(r, list(input_plans(a.args)), a.jobs) else 0
+    elif a.what == 'sizes':
+        return 1 if all_plans(r, list(size_plans(apps)), a.jobs) else 0
     elif a.what == 'random':
         rng = random.Random(a.seed)
         return 1 if all_plans(r, [random_plan(rng, apps) for _ in range(a.count)], a.jobs) else 0
@@ -318,7 +352,7 @@ def main():
     elif a.what == 'smoke':
         return 1 if all_plans(r, SMOKE, a.jobs) else 0
     else:
-        p.error('what: list, plan, single, pairs, triples, menus, random, shrink, smoke')
+        p.error('what: list, plan, single, pairs, triples, menus, inputs, sizes, random, shrink, smoke')
     return 0
 
 

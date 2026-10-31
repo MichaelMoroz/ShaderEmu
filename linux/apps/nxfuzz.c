@@ -818,6 +818,337 @@ window_area(struct tag *t, int *x, int *y, int *w, int *h)
 	*h = in.height;
 }
 
+/*
+ * menus:TAG: every menu the program's window opens and every row of it, by what the window system says is there:
+ * a menu is a window of its process at the root with no frame, of 4 + 20 rows' height (ui_menu.h), however far below the program's
+ * window it reaches. A place along the top of the window opens the bar's menus, a right click its context menu. Each row is
+ * chosen from a menu opened anew, a menu it opens is walked in turn, what the row did is said, and what it left open is closed;
+ * a row that ended the program (Exit) starts it again, and one that ended its window and left the process is a fault.
+ */
+#define WALK_STEPS 4
+struct walk_point { int x, y, button; };
+static struct walk_stats { int menus, rows, windows, subs, ended, nothing, lost; } walk;
+static GR_WINDOW_ID walk_frames[64];
+static int walk_frame_count;
+
+static int
+popup_of(struct tag *t, GR_WINDOW_INFO *out, GR_WINDOW_ID *except, int excepted)
+{
+	GR_WINDOW_ID parent, *children = NULL;
+	GR_COUNT n = 0, i;
+	int found = 0, j;
+
+	GrQueryTree(GR_ROOT_WINDOW_ID, &parent, &children, &n);
+	for (i = 0; i < n; i++) {
+		GR_WINDOW_INFO in;
+
+		GrGetWindowInfo(children[i], &in);
+		if (in.wid != children[i] || !in.mapped || (int)in.processid != t->pid || children[i] == t->frame || children[i] == t->client)
+			continue;
+		if (in.height < 24 || (in.height - 4) % 20 || !(in.props & GR_WM_PROPS_NODECORATE))
+			continue;
+		for (j = 0; j < excepted && except[j] != children[i]; j++)
+			;
+		if (j == excepted) {
+			*out = in;
+			found = 1;
+		}
+	}
+	free(children);
+	return found;
+}
+
+static void
+walk_note_frames(void)
+{
+	GR_WINDOW_ID parent, *children = NULL;
+	GR_COUNT n = 0, i;
+
+	walk_frame_count = 0;
+	GrQueryTree(GR_ROOT_WINDOW_ID, &parent, &children, &n);
+	for (i = 0; i < n && walk_frame_count < 64; i++) {
+		GR_WINDOW_INFO in;
+
+		if (is_task(children[i], &in))
+			walk_frames[walk_frame_count++] = children[i];
+	}
+	free(children);
+}
+
+/* the frames that were not there when the walk began: how many, and each asked to close */
+static int
+walk_new_frames(struct tag *t, int close_them)
+{
+	GR_WINDOW_ID parent, *children = NULL;
+	GR_COUNT n = 0, i;
+	int count = 0, j;
+
+	GrQueryTree(GR_ROOT_WINDOW_ID, &parent, &children, &n);
+	for (i = 0; i < n; i++) {
+		GR_WINDOW_INFO in;
+
+		if (!is_task(children[i], &in) || children[i] == t->frame)
+			continue;
+		for (j = 0; j < walk_frame_count && walk_frames[j] != children[i]; j++)
+			;
+		if (j < walk_frame_count)
+			continue;
+		count++;
+		if (close_them)
+			GrCloseWindow(client_of(children[i]));
+	}
+	free(children);
+	GrFlush();
+	return count;
+}
+
+static void
+walk_again(struct tag *t, char *line)
+{
+	int child;
+
+	say("FZ menu: starts %s again", t->name);
+	child = vfork();
+	if (child == 0) {
+		setsid();
+		execl("/bin/sh", "sh", "-c", t->command, (char *)0);
+		_exit(127);
+	}
+	t->child = child;
+	t->frame = t->client = 0;
+	t->pid = 0;
+	(void)line;
+	if (!wait_window(t, 60))
+		BAD("no-window %s started again by the menus' walk", t->name);
+	ms_sleep(500);
+}
+
+/* What a row left: the program's own questions and windows closed, the program started again if it has gone. 0: it had ended. */
+static int
+walk_settle(struct tag *t)
+{
+	int tries;
+	GR_WINDOW_INFO left;
+
+	/* (Escape only for what it closes: in many programs it ends them) */
+	if (popup_of(t, &left, NULL, 0)) {
+		press("escape");
+		ms_sleep(150);
+	}
+	for (tries = 0; tries < 6 && walk_new_frames(t, 0); tries++) {
+		walk_new_frames(t, 1);
+		ms_sleep(300);
+		if (walk_new_frames(t, 0)) {
+			press("escape");
+			ms_sleep(200);
+		}
+		reap();
+	}
+	if (walk_new_frames(t, 0)) {
+		GR_WINDOW_ID parent, *children = NULL;
+		GR_COUNT n = 0, i;
+		int j;
+
+		GrQueryTree(GR_ROOT_WINDOW_ID, &parent, &children, &n);
+		for (i = 0; i < n; i++) {
+			GR_WINDOW_INFO in;
+
+			if (!is_task(children[i], &in) || children[i] == t->frame)
+				continue;
+			for (j = 0; j < walk_frame_count && walk_frames[j] != children[i]; j++)
+				;
+			if (j == walk_frame_count && (int)in.processid != t->pid) {
+				say("FZ menu: a window of process %d stays when closed: killed", in.processid);
+				kill(in.processid, SIGKILL);
+			}
+		}
+		free(children);
+		ms_sleep(300);
+	}
+	reap();
+	refresh(t);
+	if (frame_alive(t->frame) && pid_alive(t->pid))
+		return 1;
+	if (!frame_alive(t->frame)) {
+		long until = now_ms() + gone_wait * 1000L;
+
+		/* (a program may be making its window again: a film of another size) */
+		while (pid_alive(t->pid) && !frame_alive(t->frame) && now_ms() < until) {
+			reap();
+			refresh(t);
+			ms_sleep(100);
+		}
+		if (frame_alive(t->frame) && pid_alive(t->pid))
+			return 1;
+		if (pid_alive(t->pid)) {
+			BAD("left-running %s: a menu's row took its window, process %d stayed", t->name, t->pid);
+			kill(t->pid, SIGKILL);
+		}
+	}
+	walk.ended++;
+	walk_again(t, NULL);
+	return 0;
+}
+
+static void
+walk_click(struct tag *t, const struct walk_point *p, int relative)
+{
+	int x = 0, y = 0, w, h;
+
+	if (relative)
+		window_area(t, &x, &y, &w, &h);
+	click_at(x + p->x, y + p->y, p->button);
+}
+
+/* steps[0] (a place of the window) and the rows after it: is a menu open at the end of them? */
+static int
+walk_open(struct tag *t, const struct walk_point *steps, int count, GR_WINDOW_INFO *menu)
+{
+	GR_WINDOW_ID seen[WALK_STEPS];
+	int i, n = 0;
+
+	for (i = 0; i < count; i++) {
+		int waited;
+
+		walk_click(t, &steps[i], i == 0);
+		/* (a program at work comes to its events late: nxpath tracing) */
+		for (waited = 0; !popup_of(t, menu, seen, n) && waited < 12; waited++)
+			ms_sleep(100);
+		if (waited == 12)
+			return 0;
+		ms_sleep(100);
+		if (n < WALK_STEPS)
+			seen[n++] = menu->wid;
+	}
+	return 1;
+}
+
+static void
+walk_menu(struct tag *t, struct walk_point *steps, int count, const char *where)
+{
+	GR_WINDOW_INFO menu;
+	int rows, r;
+
+	if (!walk_open(t, steps, count, &menu))
+		return;
+	rows = (menu.height - 4) / 20;
+	press("escape");
+	if (count > 1)
+		press("escape");
+	ms_sleep(100);
+	walk.menus++;
+	say("FZ menu %s depth %d: %d rows at %d,%d", where, count, rows, menu.x, menu.y);
+	for (r = 0; r < rows; r++) {
+		GR_WINDOW_INFO now, next;
+		struct walk_point row;
+		GR_WINDOW_ID seen[1];
+		char title[64], after[64];
+		int w0, h0, w1 = 0, h1 = 0;
+		GR_WINDOW_INFO in;
+
+		alarm(240);
+		if (!walk_open(t, steps, count, &now)) {
+			/* (a row may have changed the program: another film, a resized window) */
+			walk_settle(t);
+			ms_sleep(1000);
+			if (!walk_open(t, steps, count, &now)) {
+				say("FZ menu %s row %d: the menu does not open again", where, r);
+				walk.lost++;
+				walk_settle(t);
+				continue;
+			}
+		}
+		GrGetWindowInfo(t->frame, &in);
+		w0 = in.width;
+		h0 = in.height;
+		title_of(t->client, title, sizeof title);
+		row.x = now.x + now.width / 2;
+		row.y = now.y + 2 + r * 20 + 10;
+		row.button = 0x110;
+		click_at(row.x, row.y, row.button);
+		ms_sleep(400);
+		walk.rows++;
+		seen[0] = now.wid;
+		if (count < WALK_STEPS && popup_of(t, &next, seen, 1) && next.wid != now.wid) {
+			say("FZ menu %s row %d: a menu of its own", where, r);
+			walk.subs++;
+			press("escape");
+			press("escape");
+			ms_sleep(100);
+			steps[count] = row;
+			walk_menu(t, steps, count + 1, where);
+			continue;
+		}
+		reap();
+		refresh(t);
+		if (frame_alive(t->frame)) {
+			GrGetWindowInfo(t->frame, &in);
+			w1 = in.width;
+			h1 = in.height;
+			title_of(t->client, after, sizeof after);
+		} else
+			after[0] = 0;
+		if (walk_new_frames(t, 0)) {
+			walk.windows++;
+			say("FZ menu %s row %d: a window", where, r);
+		} else if (!frame_alive(t->frame) || !pid_alive(t->pid))
+			say("FZ menu %s row %d: ended the program (window %d, process %d)", where, r, frame_alive(t->frame), pid_alive(t->pid));
+		else if (w0 != w1 || h0 != h1 || strcmp(title, after))
+			say("FZ menu %s row %d: the window changed", where, r);
+		else {
+			walk.nothing++;
+			say("FZ menu %s row %d: no window", where, r);
+		}
+		walk_settle(t);
+	}
+}
+
+static void
+walk_program(struct tag *t)
+{
+	static struct walk_point steps[WALK_STEPS + 1];
+	int x, y, w, h, last = -1, seen_x[32], seen = 0, j;
+	char where[32];
+
+	memset(&walk, 0, sizeof walk);
+	walk_note_frames();
+	window_area(t, &x, &y, &w, &h);
+	for (x = 4; x < w && x < 400; x += 10) {
+		GR_WINDOW_INFO menu;
+
+		alarm(240);
+		steps[0].x = x;
+		steps[0].y = 10;
+		steps[0].button = 0x110;
+		if (!walk_open(t, steps, 1, &menu)) {
+			walk_settle(t);
+			continue;
+		}
+		for (j = 0; j < seen && seen_x[j] != menu.x; j++)
+			;
+		press("escape");
+		ms_sleep(100);
+		if (j < seen || seen >= 32)
+			continue;
+		seen_x[seen++] = menu.x;
+		last = x;
+		snprintf(where, sizeof where, "bar:%d", x);
+		walk_menu(t, steps, 1, where);
+	}
+	(void)last;
+	window_area(t, &x, &y, &w, &h);
+	for (j = 0; j < 4; j++) {
+		steps[0].x = j == 1 ? w / 2 : j == 2 ? 170 : j == 3 ? w - 60 : 40;
+		steps[0].y = j == 1 ? h / 2 : j == 2 ? 90 : j == 3 ? h - 60 : 60;
+		steps[0].button = 0x111;
+		snprintf(where, sizeof where, "right:%d", j);
+		walk_menu(t, steps, 1, where);
+		walk_settle(t);
+	}
+	say("FZ menus %s: %d menus, %d rows; %d opened a window, %d a menu, %d ended it, %d no window, %d not reached", t->name, walk.menus, walk.rows, walk.windows, walk.subs, walk.ended, walk.nothing, walk.lost);
+	alarm(240);
+}
+
 static void
 random_use(struct tag *t, int count, unsigned seed)
 {
@@ -1062,6 +1393,14 @@ main(int argc, char **argv)
 				drag_at(x + a[0], y + a[1], x + a[2], y + a[3]);
 			else
 				click_at(x + a[0], y + a[1], IS("click") ? 0x110 : 0x111);
+		} else if (IS("hclick")) {	/* held as a hand holds it: a game's slow picture sees a quick click or not */
+			int a[3] = { 0, 0, 400 }, x, y, w, h;
+
+			sscanf(rest, "%d,%d,%d", &a[0], &a[1], &a[2]);
+			window_area(t, &x, &y, &w, &h);
+			point(x + a[0], y + a[1], 0x110, 1);
+			ms_sleep(a[2]);
+			point(x + a[0], y + a[1], 0x110, 0);
 		} else if (IS("iclick")) {	/* (a click only if it falls inside: outside it is the desktop's, whose icons start programs) */
 			int a[2] = { 0 }, x, y, w, h;
 
@@ -1069,6 +1408,15 @@ main(int argc, char **argv)
 			window_area(t, &x, &y, &w, &h);
 			if (a[0] < w && a[1] < h)
 				click_at(x + a[0], y + a[1], 0x110);
+		} else if (IS("menus")) {
+			walk_program(t);
+		} else if (IS("size")) {	/* the client's size, as a drag of the frame's corner asks it */
+			int a[2] = { 0 };
+
+			sscanf(rest, "%d,%d", &a[0], &a[1]);
+			GrResizeWindow(t->client, a[0], a[1]);
+			GrFlush();
+			ms_sleep(500);
 		} else if (IS("rand")) {
 			int count = 0, seed = 0;
 

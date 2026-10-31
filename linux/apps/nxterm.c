@@ -734,6 +734,7 @@ pty_send(const char *s, int n)
 	while (n > 0) {
 		if ((w = (int)write(master, s, n)) > 0) {
 			s += w, n -= w;
+			tries = 0;
 			continue;
 		}
 		if (w < 0 && errno == EINTR)

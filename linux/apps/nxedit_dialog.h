@@ -173,6 +173,8 @@ dlg_field_key(struct dlg_control *c, int ch, int ctrl)
 		free(clip);
 		return 1;
 	}
+	if (c->at > n)
+		c->at = n;	/* (the text can be written from outside: Ctrl+F3) */
 	switch (ch) {
 	case MWKEY_LEFT: c->at -= c->at > 0 && !c->offered; break;
 	case MWKEY_RIGHT: c->at += c->at < n && !c->offered; break;

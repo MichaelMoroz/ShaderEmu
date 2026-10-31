@@ -24,7 +24,8 @@ static int workers, no_room;
 static void *
 room_for(size_t bytes)
 {
-	void *m = aligned_alloc(16, (bytes + 15) & ~(size_t)15);
+	/* (more than the machine has is a size read from a damaged file) */
+	void *m = bytes > 0x0f000000u ? NULL : aligned_alloc(16, (bytes + 15) & ~(size_t)15);
 
 	no_room |= !m;
 	return m;
@@ -162,7 +163,7 @@ pax_value(const uint8_t *p, uint32_t size, const char *key, char *out, size_t ro
 
 		while (s < size && p[s] >= '0' && p[s] <= '9')
 			len = len * 10 + (uint32_t)(p[s++] - '0');
-		if (!len || at + len > size)
+		if (!len || len > size - at)
 			return;
 		if (s + 1 + k + 1 < at + len && !memcmp(p + s + 1, key, k) && p[s + 1 + k] == '=') {
 			uint32_t from = s + 2 + (uint32_t)k, n = at + len - 1 - from;
@@ -410,6 +411,8 @@ unzip(const uint8_t *f, uint32_t size, const char *to)
 		e->data = f + local + 30 + le16(f + local + 26) + le16(f + local + 28);
 		if (e->data + e->packed > f + size)
 			return 1;
+		if (e->size > 0x40000000u || total + e->size > 0x40000000u)
+			return 1;	/* (the sizes are the file's word: their sum must not wrap, or an entry has room it has not) */
 		e->out = total;
 		total += (e->size + 15) & ~15u;	/* (each its own texels: a core writes it) */
 	}

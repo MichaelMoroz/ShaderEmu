@@ -1050,11 +1050,14 @@ go(long long now)
 		new_game(now);
 }
 
+static int menu_paused;	/* the menu open now paused the game */
+
 static void
 open_menu(int which, int keyboard)
 {
 	int x, y, i;
 
+	menu_paused = state != PAUSED;
 	pause_game();
 	for (i = 0; i < 15; i++)
 		level_items[i].flags = i + 1 == start_level ? UI_MENU_CHECK : 0;
@@ -1094,7 +1097,8 @@ command(int id, long long now)
 		new_game(now);
 		break;
 	case C_PAUSE:
-		if (state == PAUSED)
+		/* (the menu paused it to show itself: Pause from there is to stay so) */
+		if (state == PAUSED && !menu_paused)
 			resume(now);
 		else
 			pause_game();
