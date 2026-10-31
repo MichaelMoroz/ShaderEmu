@@ -1,12 +1,9 @@
 # The volume display
 
-The wall screen described here is gone from the world, with `EmuVolume`: the holodecks
-(`docs/world/holodeck.md`) show the same frame as a room round a seat. What a program gives, and the passes, are as below.
-
-A 3D program's picture is one view of its scene. The volume display shows the scene itself: in
-the VRChat world a third screen hangs on the left wall, by the console, and it is a window. Behind it a
-visitor sees the program's geometry from wherever their own eyes are, in stereo, in depth. The
-picture on the machine's display is unchanged; this is a second look at the same frame.
+A program's last whole frame as geometry, seen from a visitor's own eyes in stereo: what the holodecks
+(`docs/world/holodeck.md`) show as a room round a seat. There is no wall screen for it in the
+world; `GpuVolume.shader` stays as the passes' plain form, and `GpuHolodeck.shader` is what is drawn.
+The picture on the machine's display is unchanged; this is a second look at the same frame.
 
 ## What a program gives
 
@@ -29,37 +26,30 @@ Nothing new is drawn by the guest. A program's last whole frame is a command lis
 
 ## What the host draws
 
-`GpuVolume.shader` draws the same point mesh as the GPU device, one point a triangle, with the
+`GpuVolumePass.cginc` draws the same point mesh as the GPU device, one point a triangle, with the
 visitor's camera. Of the frame's commands it takes only draws in perspective with a modelview
 of their own (`VERTEX_MODELVIEW`, and a projection whose w comes from z): those have a place in
 space. Clears, rectangles and what a program draws flat over its picture (Doom's status bar
 and weapon) are left out. A vertex goes through the modelview only, which leaves it in the
-program's camera space (`volume_vertex` in `src/gpu.h`), and from there behind the screen.
+program's camera space (`volume_vertex` in `src/gpu.h`).
 
-- **Where the scene is.** The screen is a plane of the program's own view: its near plane,
-  with the picture's rectangle on that plane fitted to the screen. The program's camera then
-  stands its near distance in front of the screen, and a visitor whose eye is there sees the
-  program's picture exactly; anywhere else they see the same scene from the side. The
-  projection gives all of it: near and far from its third row, the rectangle from its scales.
-- **The slider** under the screen moves that plane from near (the default) towards far, in
-  equal ratios. A near plane is often tiny, which makes the scene huge and far behind the
-  wall: glxgears' is 2 units wide, 35 units in front of gears 8 units across. With the plane
-  among the gears they are at the wall, and what is nearer than the plane is cut away at it
-  (a clip distance in `GpuVolume.shader`): the screen is a window, and nothing is before it.
+- **Where the scene is.** A plane of the program's own view, `_Plane` of the way from near to far
+  in equal ratios, is fitted to a rectangle of the room (`_ScreenSize`). The projection gives all
+  of it: near and far from its third row, the picture's rectangle from its scales. A near plane is
+  often tiny, which makes the scene huge: the holodeck's World slider moves that plane
+  (`docs/world/holodeck.md`, "The world's size").
 - Four passes, the GPU's own (`docs/machine/gpu.md`) in its order: solid, blended, added, multiplied,
   all with the depth test and only the first writing depth. Quake's light maps multiply its
   walls here as they do in its picture, and its glows are added. A command for one of the
   GPU's passes without depth (4 to 7) is drawn in the pass that blends alike. Textures, keyed
   texels and lit colours are as the GPU's. Blending is in Unity's linear colours, the GPU's is
   in the picture's own: a product comes out the same, a sum or a mix a little lighter.
-- **Stencil.** `VolumeMask.shader` on the screen's quad marks the stencil where it is in view
-  and empties colour and depth there, so the scene shows however far it reaches behind the
-  wall; the scene is drawn where the mark is; `VolumeSeal.shader` then gives those pixels the
-  screen's own depth and removes the mark. All three come after everything solid and the sky
-  (queues 2501 to 2503).
-- The button under the screen turns the three off.
+- **Stencil.** A mask (`HolodeckMask.shader`) marks the stencil where the place the scene shows
+  through is in view and empties colour and depth there, so the scene shows however far it
+  reaches; the scene is drawn where the mark is; `VolumeSeal.shader` then gives those pixels the
+  place's own depth and removes the mark.
 
-A box that one could walk round was tried first. It does not work: a program sends only what
-its camera sees, so from behind or beside there is nothing to show.
+A program sends only what its camera sees, so from behind or beside there is nothing to show:
+a box to walk round does not work.
 
 The harness has no room and no such display.

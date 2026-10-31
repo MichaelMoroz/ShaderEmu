@@ -8,7 +8,7 @@ started and everything on its desktop run without building anything.
 
 | File | Built by | From |
 |---|---|---|
-| `Image` | `linux/kernel/build.sh` | Linux 5.17.11 with the MMU, pimaker's fork, plus the drivers and hooks in `linux/kernel`; no longer run: `nommu/Image` is the machine's kernel |
+| `Image` | `linux/kernel/build.sh` | Linux 5.17.11 with the MMU, pimaker's fork, plus the drivers and hooks in `linux/kernel`; not run: `nommu/Image` is the machine's kernel |
 | `root/usr/bin/nano-X`, `nx*`, `demo-*` | `linux/nanox/build.sh` | Microwindows, with `linux/nanox/microwindows.patch` and the drivers and programs in `linux/nanox` |
 | `root/usr/bin/glxgears` | `linux/nanox/build.sh` | `glxgears.c` from Mesa's demos, unmodified, on `programs/linux/gl.c` |
 | `root/usr/bin/nx` | | the script `linux/nanox/nx` |
@@ -32,6 +32,7 @@ started and everything on its desktop run without building anything.
 | `root/usr/share/tdawn-*.MIX`, `tdawn-sound.pak` | `linux/tdawn/build.sh` | the Command & Conquer demo; the pack is its sounds decoded (`tools/make_tdawn_sound.py`) |
 | `root/usr/share/ralert-*.MIX`, `ralert-sound.pak` | `linux/ralert/build.sh` | the Red Alert demo; the pack is its sounds decoded |
 | `root/usr/bin/quake.bin` | `linux/quake/build.sh` | id Software's Quake (GLQuake), with `linux/quake/quake.patch` and the files in `linux/quake` |
+| `root/usr/bin/quake3.bin`, `root/usr/share/quake3-se.dat`, `nxapps.71-quake3` | `linux/quake3/build.sh` | ioquake3, with the patch and files in `linux/quake3` (`docs/games/quake3.md`) |
 | `root/usr/lib/tdawn/game`, `root/usr/lib/ralert/game` | `linux/tdawn/build.sh`, `linux/ralert/build.sh` | Vanilla Conquer, with the `vanilla-conquer.patch` of each and the files in `linux/tdawn` and `linux/ralert` |
 | `nano`, `htop`, `mc`, `mg`, `dialog`, `file`, `sl` | `linux/terminal/build.sh` | upstream's releases, `docs/system/terminal.md` |
 | `qjs`, `qjsc`; `micropython` | `linux/quickjs/build.sh`; `linux/micropython/build.sh` | QuickJS; MicroPython (`docs/system/scripts.md`) |
@@ -62,6 +63,7 @@ as above, position-independent, in the bFLT format), and `elf2flt`, `mctest`, `f
 | compiler-rt 18.1.8 builtins | Apache-2.0 with LLVM exception | https://github.com/llvm/llvm-project |
 | soft-fp (128-bit float routines, from GCC 13.3.0's libgcc) | LGPL-2.1-or-later with the soft-fp linking exception | https://github.com/gcc-mirror/gcc, `libgcc/soft-fp` |
 | Quake | GPL-2.0 | https://github.com/id-Software/Quake, commit `bf4ac42`; our changes: `linux/quake/quake.patch` |
+| ioquake3 (Quake III Arena) | GPL-2.0 | https://github.com/ioquake/ioq3, the commit `linux/quake3/build.sh` names |
 | Vanilla Conquer (Tiberian Dawn, Red Alert) | GPL-3.0 with EA's additional terms | https://github.com/TheAssemblyArmada/Vanilla-Conquer, the commit `linux/tdawn/build.sh` names; our changes: `linux/tdawn/vanilla-conquer.patch`, `linux/ralert/vanilla-conquer.patch` |
 | libstdc++ (headers, from GCC 13.3.0) | GPL-3.0 with the GCC runtime library exception | https://github.com/gcc-mirror/gcc |
 | BusyBox 1.36.1 | GPL-2.0 | https://busybox.net/downloads/busybox-1.36.1.tar.bz2; configuration: `linux/userland` |
@@ -92,8 +94,7 @@ sources did not change is the same file after a rebuild and adds nothing to the 
 when this folder is saved again. The files are kept as they are, not packed: git packs them
 itself, and packing them better by hand would only save anything in a history written again without
 the files as they are now. This folder is 322 MB on 31 October 2026, 215 of the shared root and 103 of
-`nommu`. (The games' data as one solid archive would be 33 MB where git kept 53; that was weighed in
-October 2026 and the files were left as they are.)
+`nommu`.
 
 ## The games' data
 
@@ -108,13 +109,16 @@ Command & Conquer demos, their sounds decoded into a pack beside them).
 | `nes-thwaite.nes` | Damian Yerrick: Thwaite 0.04 (GPL-3.0) | https://github.com/pinobatch/thwaite-nes/releases/download/v0.04/thwaite.nes |
 | `root/root/Models/teapot.obj`, `bunny.ply` | the Utah teapot, as Stanford's CS148 course had it (its address no longer answers: this is the copy to build from, `docs/system/nommu.md`); the Stanford Bunny | `linux/pathtrace/build.sh` |
 | `nes-nova.nes` | NovaSquirrel: Nova the Squirrel 1.0.6a (GPL-3.0) | https://github.com/NovaSquirrel/NovaTheSquirrel/releases/download/v1.0.6a/nova.nes |
+| `quake3-pak0.pk3`, and `quake3-se.dat` made from it | id Software: the Quake III Arena demo's data | `linux/quake3/build.sh` names the address |
 | `tdawn-*.MIX`, `tdawn-sound.pak` | Electronic Arts (Westwood): the Command & Conquer demo | https://archive.org/download/CommandConquerDemo/cc1demo1.zip |
 | `ralert-*.MIX`, `ralert-sound.pak` | Electronic Arts (Westwood): the Red Alert demo | https://archive.org/download/CommandConquerRedAlert_1020/ra95demo.zip |
 | `classicube-default.zip` | ClassiCube's default texture pack | the game's own site, fetched by `linux/classicube/build.sh` |
 | `classicube-sound.pak`, `classicube-music.mp3` | Mojang: Minecraft's dig and step sounds and the tune `calm3`, as ClassiCube fetches them | `resources.download.minecraft.net` by the SHA-1s in ClassiCube's `Resources.c`, `linux/classicube/sound/make_sound.py` |
 | `wallpaper-*.ppm` | their photographers, under the Unsplash licence | `tools/make_wallpaper.py` names each |
 | `icons32.ppm`, `icons16.ppm`, `icons.idx` | the Chicago95 icon theme (GPL-3.0+/MIT), the cells `linux/apps/icons.txt` names; and the games' own icons: Chocolate Doom's (GPL-2.0), Quake's and Quake III's (GPL-2.0), ClassiCube's (BSD-3-Clause), Vanilla Conquer's two (GPL-3.0), Micropolis's (GPL-3.0) | https://github.com/grassmunk/Chicago95 at the commit in `tools/make_icons.py`; `linux/apps/icons/README.md` |
-| `caption-on.ppm`, `caption-off.ppm` | ours: a window caption's colours | `tools/make_icons.py` |
+| `icons7-*`, `icons7.idx` | Oxygen's icons (KDE, LGPL-3.0), the cells `linux/apps/icons7.txt` names | https://github.com/KDE/oxygen-icons; `tools/make_icons.py` |
+| `caption-on.ppm`, `caption-off.ppm`, `caption7-*.ppm` | ours: a window caption's colours | `tools/make_icons.py` |
+| `font-*.sef`, `font-*.msdf` | the image's fonts, Selawik (Microsoft) among them | `tools/make_fonts.py`; `docs/system/fonts.md` |
 | `root/Pictures/*.jpg` | public domain: NASA (Earthrise, Blue Marble, Deep Field), Hokusai, van Gogh | Wikimedia Commons, each named with its SHA-1 in `linux/media/media.txt` |
 | `root/Music/Grieg - *.mp3` | public domain: Musopen Symphony Orchestra's recordings, 50 s each | Wikimedia Commons (`linux/media/media.txt`) |
 | `root/Music/Beethoven - *.mp3` | public domain: the Moonlight Sonata's first movement, and the Fifth Symphony's by the Fulda Symphonic Orchestra (Simon Schindler), 50 s each | Wikimedia Commons (`linux/media/media.txt`) |

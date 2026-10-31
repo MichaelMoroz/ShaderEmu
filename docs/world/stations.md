@@ -20,12 +20,11 @@ lettering is decals. The picture is on the glass itself: the glass's texture coo
 the picture's, and the glass is a lit, reflecting surface (`CRT.shader`).
 
 What is small on the monitor and the tower is not geometry in the room. `blender -b --python
-world/bake_pc.py` (60 s) builds them twice from `world/pc.py`: whole (`MODE = "high"`), and as
+world/bake_pc.py` builds them twice from `world/pc.py`: whole (`MODE = "high"`), and as
 bare shells in one material (`"low"`), and bakes the first onto the second: colour, normals,
 roughness and occlusion, and the lamps' light (`Textures/Assets/PH_pc_station_*`). The set it
 writes (`build/polyhaven/pc_station`: shells, glass, keyboard, mouse, leads) is placed by
-`world/build.py` as any downloaded model is. A place is 7,500 triangles where it was 19,000,
-and its slots and lettering are filtered as a texture is. Run it before `build.py` after any
+`world/build.py` as any downloaded model is. Its slots and lettering are filtered as a texture is. Run it before `build.py` after any
 change to `pc.py`.
 
 ## Typing and pointing at a place
@@ -45,8 +44,7 @@ To test it in play mode: press a key by the keyboard's program variables (`__1_h
 `__1_key__param`, `__0_Press`; `__2_hand__param`, `__0_Release`) and read the tube; for the
 pointer, `TeleportTo` before the place, turn "PlayerCamera" at a point of "Station N tube" and
 read `EmuPointer`'s `px`, `py`: they must be where the head's ray meets the glass's ball
-(centre `tubeGap + tubeBulge` behind the plate), in the plate's own right and up. At a place
-turned 3 degrees, from the side and above, that gave 574, 396 for 574, 398. Untried in a headset.
+(centre `tubeGap + tubeBulge` behind the plate), in the plate's own right and up.
 
 ## How the places lie, and their own keys
 
@@ -82,8 +80,7 @@ sends the press to `EmuStations.Act` with the place's number):
 A lamp over LINKS ON is lit while the owner's browser wants addresses pasted.
 
 POWER has its name over it in lit letters, and a bar under it that beckons while the place is
-free (`beacons`): nobody found the key before. The capture key is the keyboard's; until 12
-October 2026 a "Use my keyboard" button stood beside the place's key on the tower.
+free (`beacons`). The capture key is the keyboard's.
 
 **The fields.** One strip ("Station fields") stands between a visitor's own keyboard and its
 monitor, for them alone: an address for the machine to open (`placeField`, as the display
@@ -102,24 +99,22 @@ forgotten when the place changes hands. Their console comes in their stream what
 
 The tower's third lamp, the disk's, is a dull red lens, and before it a red lamp that flickers
 (`Blink.shader`, `diskLamps`): sixteen bits, an eighth of a second each, set where core 0's
-registers had changed (`EmuMachine.activity`; three in four while the machine is busy, one in
-eight while Linux idles). Its owner's machine's bits travel in the stream's status
+registers had changed (`EmuMachine.activity`). Its owner's machine's bits travel in the stream's status
 (`docs/world/share.md`), so everybody sees a place's lamp, two seconds late. The card's lamp and its
 hub port's are lit while the machine is on and flicker when it sends (`docs/system/lan.md`). A monitor's lamp and its tower's power lamp are lit while the place's owner's machine is on, and
 dark on a place nobody has: they are objects the builder puts before the model's lenses
 (`PowerLamps`, `EmuStations.powerLamps`; the den's own tower has one too). The bake leaves every
-lamp of the set dark (`world/bake_pc.py`): baked into its picture of light, they glowed on
-machines that were off.
+lamp of the set dark (`world/bake_pc.py`): baked into its picture of light, they would glow on
+machines that are off.
 
-**The speed window** on each tower (`SevenSeg.shader`) has two rows of three digits: MIPS ALL,
+**The speed window** on each tower (`SevenSeg.shader`) has two rows of four digits: MIPS ALL,
 what all the machine's cores ran in the last second, and MIPS CPU, core 0 alone, in millions
-of instructions a second with one decimal (from 100 on, whole millions and no point: the
-workers take a machine past 99.9). It is its owner's machine's speed, to everybody:
+of instructions a second, the point where the number puts it (3.752, 37.52, 375.2, 3752). It is its owner's machine's speed, to everybody:
 the two numbers travel in the display stream's header (`docs/world/share.md`), and a place nobody
 has, or whose machine is off, is dark. The den's own tower shows this visitor's. The DX2-66
 badge stays.
 
-**The speed's slider** on each tower stands where its floppy drive was, under the place's key
+**The speed's slider** on each tower stands under the place's key
 (`StationSpeed` in `ShaderEmuStations.cs`, "Station N speed"): Snail to Turbo over it, and under
 it the instructions a frame of each step, 4k, 8k, 16k, 32k, 64k, 128k and 256k: steps 1 to 7 of the
 control panel's speed slider (`EmuMachine.speedSlider`, 2,048 doubled a step), which moves with
@@ -204,9 +199,8 @@ tower's back `tower_back()`; the leads in `station()` end at those places, each 
 shell reaches the panel (`dsub_plug`, `rca_plug`, `jack_plug`). Sockets are built to their
 standards' sizes (`DSUB`: a flange 12.55 mm high, 30.81 wide for 9 and 15 pins, 53.04 for 25;
 BNC 9.7 mm; phono 8.3; DIN 13.2; IEC C14 and C13), and so are the plugs: a 3.5 mm plug's grip
-6.4 mm across, a phono plug's 10.4, a supply's barrel plug's 9.6. The tower's front has no
-floppy drive since 18 October 2026: under the blank bay it is plain, and Unity lays the speed
-slider there (a plate of about 146 x 42 mm round the old drive's middle, `TowerSpeedBay` in
+6.4 mm across, a phono plug's 10.4, a supply's barrel plug's 9.6. The tower's front is plain
+under the blank bay, and Unity lays the speed slider there (a plate of about 146 x 42 mm, `TowerSpeedBay` in
 `ShaderEmuStations.cs`). The den's own tower is the same case: the bake writes the tower
 alone as `pc_tower`, which `world/computer.py` places. The key in the tower's spare bay says
 whose the place is and, under it, what a press does (`EmuStations.modes`).
@@ -216,8 +210,7 @@ all cut from one recording of a computer being started and stopped: its first tw
 when it is switched on (the switch, and its loudspeaker's beep five seconds in), eight quiet
 seconds as a loop while it runs, four of its busy moments with the steady sound taken out for
 the disk at work, and its end when it is switched off. The cuts were placed by measurement
-(where the tone is, which half seconds have knocks in them). Computed sounds were tried first
-and were wrong: for a sound, find a recording.
+(where the tone is, which half seconds have knocks in them). For a sound, find a recording: computed ones are wrong.
 
 Where the sizes are from: the drive bays (146.1 x 41.3 mm, and 101.6 x 26.1 mm) from
 Wikipedia's "Drive bay"; the power supply's 150 x 86 mm from Corsair's and Advantech's PS/2
@@ -239,8 +232,7 @@ states it; the keys' 19.05 mm is ISO 1091's 19 mm +- 1 (0.75 inch), per Deskthor
   owner can write, so nobody moves anybody else. A place is a running machine's:
   `EmuStations` gives a visitor the first free one when their machine is switched on, takes it
   back when it is switched off, and counts another visitor's claim only while their machine
-  is on (with eleven visitors and eight places, places stood dark for machines that were
-  off). The key in the tower's bay takes that place if it is free (and starts the machine),
+  is on (so no place stands dark for a machine that is off). The key in the tower's bay takes that place if it is free (and starts the machine),
   and at a visitor's own turns the tube between display and console (`stationMode`, synced
   the same way); EXIT beside it gives the place up, and none is found for that visitor again
   until they take one or switch their machine on (`left`). Two who name one place: the

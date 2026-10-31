@@ -3,52 +3,32 @@
 VRChat on Linux runs under Proton, where Direct3D is a layer over Vulkan: DXVK for
 Direct3D 11, vkd3d-proton for Direct3D 12. Either way the world's shaders arrive as the
 DXBC bytecode our compiler made (`fxc2.md`), and the layer turns each into SPIR-V before the
-graphics card's driver sees it. Both layers now do that with one library, dxbc-spirv.
+graphics card's driver sees it. Both layers do that with one library, dxbc-spirv.
 
-## What crashed (October 2026)
+## What must not ship
 
-The tick's bytecode had six instructions the library gets wrong: `imul` and `umul` with a
-high result and no low one,
+`imul` and `umul` with a high result and no low one,
 
     imul r436.x, null, r440.xxxx, r443.xxxx
-    umul r436.x, null, r440.xxxx, r443.xxxx
 
-which is `mulhi()`, the one-instruction MULH that `src/emu.h` used whenever fxc2 compiled
-it. Microsoft's compiler has no way to be asked for it, so no game's shaders have it, and
-the library's path for it was never walked: its scalarize pass takes the two-part result
-for a vector and splits the instruction (`ir/passes/ir_pass_scalarize.cpp`,
+which is fxc2's `mulhi()`. Microsoft's compiler has no way to be asked for it, so no game's
+shaders have it, and the library gets it wrong: its scalarize pass takes the two-part
+result for a vector and splits the instruction (`ir/passes/ir_pass_scalarize.cpp`,
 `handleGenericOp` for `SMulExtended`).
 
 - Built with assertions, the library stops there:
   `extractOperandComponents: Assertion 'first + count <= operandType.getVectorSize()' failed`.
-- Built as the layers ship it, it goes on and writes SPIR-V that is not valid,
+- Built as the layers ship it, it goes on and writes SPIR-V that is not valid
+  (`spirv-val`: "Expected Result Type to be a composite type"). A driver handed that may do
+  anything, which fits the crash VRChat had on Linux on every make of card.
 
-      %5874 = OpSMulExtended %_struct_5873 %2093 %2088
-      %5875 = OpCompositeExtract %int %5874 0
-      %5876 = OpCompositeExtract %int %5874 1
-      %5877 = OpCompositeConstruct %int %5875 %5876
-
-  (`spirv-val`: "Expected Result Type to be a composite type"), six times, once for each of
-  those instructions. A driver handed that may do anything, which fits a crash on every
-  make of card.
-
-Not seen here, only reasoned: the crash itself (this was found in WSL, which has no Vulkan
-driver to hand the module to), and which of the two layers VRChat is on. The library also
-makes a signed multiply of `umul` as far as its converter reads (`dxbc_converter.cpp`,
-`handleIntMultiply`), so MULHU might be wrong there even once the module is valid; that was
-not tested either.
-
-## What was done
-
-The instruction is out of the shader for good: `mulhu32()` and `mulhs32()` are the 16-bit
-partial products under both compilers, as they always were under Microsoft's. With that all
-eleven stages the machine has (tick, commit, GPU, sound) go through the library with
-assertions on and pass `spirv-val`; with the instruction the tick was the one that did not.
-It cost nothing that can be measured (Doom's demo: 3.60M instructions a second without the
-instruction, 3.67M with it, the same state sum; MULH is a rare instruction).
-
+So `mulhu32()` and `mulhs32()` in `src/emu.h` are the 16-bit partial products under both compilers.
 fxc2 still has `mulhi()`, `umulExtended()` and `imulExtended()`. Nothing of the machine's
-calls them, and nothing that ships to players should.
+calls them, and nothing that ships to players should. Upstream vkd3d (Wine's, which Proton does not
+use for games) refuses the same instruction outright: "Extended multiplication is not implemented".
+
+Not seen here, only reasoned: the crash itself (WSL has no Vulkan driver to hand a module to), and
+which of the two layers VRChat is on.
 
 ## Checking a shader before it ships
 
@@ -67,5 +47,3 @@ Compile the machine into an empty cache folder first, with the world's switches:
 
 and `check_cache.sh` must end in "0 do not". Anything new that fxc2 can write and
 Microsoft's compiler cannot is a thing to run through this before a world is uploaded.
-Upstream vkd3d (Wine's, which Proton does not use for games) refuses the same instruction
-outright: "Extended multiplication is not implemented".

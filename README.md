@@ -11,9 +11,8 @@ The emulated CPU runs a few million instructions a second, one after another, an
 tuning changes what kind of machine that is. The shader around it is massively parallel. So
 anything that touches many bytes or many pixels is given to hardware devices that run in their
 own shader passes, and the CPU only says what it wants: drawing, window composition, text,
-3D, copies and fills of memory, pictures sampled from the ROM where they lie. That is the
-difference between a desktop picture that takes 6 seconds to appear and one that takes 15 ms,
-and it is the only way this computer becomes usable.
+3D, copies and fills of memory, pictures sampled from the ROM where they lie. That is the only
+way this computer becomes usable.
 
 ## What it does today
 
@@ -129,23 +128,10 @@ rest (`docs/system/nommu.md`).
 
 ## How fast
 
-Every machine on an RTX 5070 laptop on 19 October 2026 (`docs/machine/speed.md`, with the
-commands and more loads): a game's frame by the guest's clock, and core 0's millions of emulated
-instructions a second on `factor 999999999989`:
-
-| | Quake, `timedemo demo1` | Quake III, q3dm17 timedemo, a bot | Red Alert, a battle | nxray, a picture | Doom, `timedemo demo1` | core 0 |
-|---|---|---|---|---|---|---|
-| the shader machine (`experiments/rvc_opt`, what the world runs) | 11.7 ms | 13.1 ms | 21.7 ms | 44.2 ms | 16.7 ms | 7.1M |
-| the same written again (`experiments/rvc_lean`) | 13.1 | 14.2 | 24.4 | 46.1 | 18.7 | 7.2M |
-| the processor as a compute shader (`--compute fast`) | 8.0 | 8.9 | 14.1 | 12.2 | 9.9 | 12.0M |
-| a plain compute shader, one core (`--compute plain`) | 36.2 | 57.9 | 40.5 | 6,567 | 21.8 | 4.5M |
-| the machine on the host's processor (`--cpu`, an i7-13650HX) | 6.8 | 6.4 | 6.1 | 60.2 | 3.4 | 111M |
-| upstream rvc, its own Linux | | | | | | 0.35M |
-
-The games now, frames a second by the guest's clock: `python tools/game_par.py GAME` on the image of
-31 October 2026 with `rvc_cpu`'s clock fitted to an RTX 5090 (calibrated, good to about 7%; a run of
-under a minute: `docs/machine/speed.md`, "Calibrated"), beside the card itself in October 2026 where
-the fit has its run:
+The games, frames a second by the guest's clock: `python tools/game_par.py GAME --calibrated` on the image
+of 31 October 2026, `rvc_cpu`'s clock fitted to an RTX 5090 (calibrated, 31 October 2026, good to about 7%:
+`docs/machine/speed.md`, "Calibrated"), beside that card's own run where the fit has one. Core 0 alone at
+full passes is about 5.5 million instructions a second.
 
 | Game, the load | RTX 5090 | calibrated |
 |---|---|---|
@@ -163,9 +149,8 @@ VR frame, a played round 10.3 to 11.2 pictures and 2.6 to 2.9 game ticks a secon
 (`docs/games/openttd.md`, "Speed on 31 October").
 
 The D3D11 build needs no FXC: [fxc2](https://github.com/MichaelMoroz/FXC2) compiles the CPU shader
-in seconds where FXC takes minutes, and because it can compile what FXC cannot (the write cache as
-local arrays, MULH as one instruction) its build is faster too (`docs/machine/fxc2.md`).
-`experiments/rvc_opt/README.md` lists the changes to the CPU shader and what each measured.
+in seconds where FXC takes minutes (`docs/machine/fxc2.md`). `experiments/rvc_opt/README.md` says how the
+CPU shader is built and why.
 
 ## Try it (Windows)
 
@@ -197,14 +182,14 @@ mouse, and all of its memory on the right, with what is being written glowing.
 | `raycast` | our Wolfenstein-style raycaster: w/a/s/d or the arrows, `x` walks on its own |
 | `raytrace` | our C raytracer: asks for resolution, bounces and shadows on the console |
 | `sound`, `classes`, `fpcheck` | a sound test card; loops of one kind of instruction; float instructions' sum |
-| `linux`, `micropython`, `rust`, `rvc-raytrace`, `bare` | upstream rvc's images |
+| `micropython`, `rust`, `rvc-raytrace`, `bare` | upstream rvc's images |
 
 The bare-metal images run on smaller machines compiled without paging, or with machine mode
 only, which are faster and end in the same state; `--machine` overrides the choice.
 One harness on the card runs alone: it refuses to start beside another or beside any
 `--cpu` one, which run together (`docs/machine/cpu-harness.md`, "One card, many processors").
-`rvc_harness --help` lists every option, and `AGENTS.md` holds the working notes: how to script
-runs, measure speed, and what has been tried.
+`rvc_harness --help` lists every option, and `AGENTS.md` holds the rules of the work: how to script
+runs, measure speed, and what each subsystem's change must keep.
 
 To rebuild the guest software (WSL with rsync, no root; from the repository's folder, after
 `make_image.ps1` above; everything goes to `~/shaderemu-linux` and `~/nm`). `docs/system/nommu.md`,
@@ -235,7 +220,7 @@ longer answers: before the first build, `mkdir -p ~/nm/work/src/pathtrace-data` 
 
 - `experiments/rvc_opt/` – the machine: the CPU's tick and commit passes (`main.shader`,
   `src/`) and the GPU device (`gpu.shader`). A patched copy of rvc's shader (MIT, see its
-  `LICENSE`).
+  `LICENSE`). The world's own tick is `experiments/rvc_lean`'s (`MachineTickLean`).
 - `harness/` – runs the shaders outside Unity. `apps/rvc_harness.cpp` is the frontend over two
   backends: D3D11 with FXC bytecode, as VRChat runs it, and D3D12 with DXC; `apps/rvc_cpu.cpp`
   is the machine as an interpreter on the processor (`docs/machine/cpu-harness.md`). `core/` is the
@@ -258,8 +243,9 @@ longer answers: before the first build, `mkdir -p ~/nm/work/src/pathtrace-data` 
 - `programs/` – bare-metal programs in C, `programs/linux`: the OpenGL library and
   `glxgears`, `programs/mc`: the worker cores' library (`mcw.c`, `mcwx.h`) and its tests,
   `programs/hlsl`: the HLSL compiler, `programs/wl`: the machine's workloads piece by piece.
-- `experiments/` – beside `rvc_opt`: `rvc_lean` and `rv32_min` (the processor written again, as fragment
-  and compute shaders), `rvc_compute`, `isa_proto` and `udon_aot` (studies; each has its own notes).
+- `experiments/` – beside `rvc_opt`: `rvc_lean` (the same processor written again, a shader a draw), and the
+  studies `rv32_min` (a compute shader, with its devices at 0x86000000; it does not run this image), `rvc_compute`,
+  `isa_proto` and `udon_aot`.
 - `unity/ShaderEmu/` – the VRChat world: UdonSharp scripts, shaders and the editor scripts
   that build the scene.
 - `world/` – the Blender scripts that model the room, its computers and the city (`docs/world/world.md`).

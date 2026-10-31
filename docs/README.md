@@ -16,8 +16,8 @@ One file per subject. A doc names another by its file name, which is unique acro
 - [multicore.md](machine/multicore.md) – More than one core
 - [profiling.md](machine/profiling.md) – Profiling the programs the machine runs
 - [sound.md](machine/sound.md) – The sound card
-- [speed.md](machine/speed.md) – Every machine's speed (19 October 2026)
-- [tick-costs.md](machine/tick-costs.md) – What an instruction costs (October 2026)
+- [speed.md](machine/speed.md) – The machine's speed
+- [tick-costs.md](machine/tick-costs.md) – What an instruction costs
 
 ## system
 

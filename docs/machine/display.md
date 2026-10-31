@@ -18,8 +18,8 @@ window, or the display's material in the VRChat world, `Display.shader`) reads t
 | `0x81001000` | pixels, rows top to bottom, no padding between rows |
 
 - **Mode 1**: one word per pixel, `0x00RRGGBB`.
-- **Mode 2**: one byte per pixel, an index into the palette. This is the layout Doom renders
-  into, and it packs 16 pixels into each 16-byte RAM texel.
+- **Mode 2**: one byte per pixel, an index into the palette. It packs 16 pixels into each
+  16-byte RAM texel.
 - **Mode 3**: the pixels are not in RAM: the display shows what the GPU drew (`gpu.md`), at
   this width and height.
 - **Mode 4**: the picture is up to 16 rectangles of 32-bit pixels anywhere in RAM, composed
@@ -34,8 +34,8 @@ window, or the display's material in the VRChat world, `Display.shader`) reads t
 - The control words share one RAM texel (16 bytes), so a reader gets all four with one fetch.
 
 `programs/common/platform.h` has the definitions for C programs. The harness shows the display
-to the left of the memory image, scaled by the largest whole factor that fits (shrunk, when it
-does not fit at 1).
+to the left of the memory image, as large as its panel holds it, centred, with a box filter
+(`display()` in `harness/core/memview.cpp`; the tick's pointer goes by the same rule).
 
 Under Linux with this project's kernel the display is also `/dev/fb0`
 (`linux/kernel/shaderemu_fb.c`): 32 bits per pixel, 640x480 until a program sets another mode,
