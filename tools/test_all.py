@@ -254,7 +254,7 @@ CASES = [
     # against one drawn whole, not a pixel apart; with the way back an odd move, and on the first core alone. The 8-bit
     # blitter's (OPENTTD_DRAW=cpu): rvc_cpu draws no GPU list, and the GPU's picture is checked under rvc_harness --cpu --warp
     # ("The picture on the GPU")
-    # Age of Empires is on private images only (docs/games/aoe.md): an image without its data says so and passes
+    # Age of Empires is on images made with --aoe only (docs/games/aoe.md): an image without its data says so and passes
     case('aoe', 'games aoe', X + 'if [ -f /usr/share/aoe/Empires.dat ]; then AOE_TICK_MS=33 AOE_SUM_EVERY=500 AOE_SUM_END=1000 '
          'AOE_SCRIPT="3000 click 400 245;3000 click 400 172;3000 click 237 568;2000 click 369 118;1000 rclick 505 170;1000 click 370 215;1000 click 163 508" aoe; else echo AOE-NO-DATA; fi',
          wall=120, has=[r'aoesum: update 1000 time 99900 objects 4357 sum aa8906c1|AOE-NO-DATA']),

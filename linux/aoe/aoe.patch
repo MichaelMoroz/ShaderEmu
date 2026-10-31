@@ -288,7 +288,7 @@ index 1d48af6a4..3396f6707 100644
      int temp;
  
 diff --git a/src/taiinfmd.cpp b/src/taiinfmd.cpp
-index 0d961d41b..df770ecbd 100644
+index 0d961d41b..c6978b038 100644
 --- a/src/taiinfmd.cpp
 +++ b/src/taiinfmd.cpp
 @@ -155,7 +155,7 @@ TribeInformationAIModule::TribeInformationAIModule(void* pW, int pID) :
@@ -300,7 +300,34 @@ index 0d961d41b..df770ecbd 100644
          this->resources[k] = 0;
          this->maxResources[k] = 0;
          this->numResources[k] = 0;
-@@ -2418,7 +2418,7 @@ void TribeInformationAIModule::removeObject(int objID) {
+@@ -485,21 +485,18 @@ TribeInformationAIModule::~TribeInformationAIModule() {
+ #include <string.h>
+ 
+ int TribeInformationAIModule::initialize() {
+-    // This is md->player->world->map, then map_width and map_height, and 0xFF90 below is
+-    // unitHistoryFilename. Typed member access keeps this function exact but changes the later
+-    // objectToTradeWith (004DEA80) and storeAttackMemory (004E0FD0), so the raw offsets stay.
+-    void* terrain = *(void**) (*(char**) (*(char**) ((char*) this->md + 0xF0) + 0x3C) + 0x28);
+-    this->mapXSizeValue = *(int*) ((char*) terrain + 8);
+-    this->mapYSizeValue = *(int*) ((char*) terrain + 0x0C);
++    // The port: members by name, as the objects here do not lie where they did in the Windows build
++    this->mapXSizeValue = this->md->player->world->map->map_width;
++    this->mapYSizeValue = this->md->player->world->map->map_height;
+ 
+     // Get player game info from global
+     RGE_Game_Info* game_info = rge_base_game->player_game_info;
+ 
+     // Check if player name exists
+     if (game_info->get_current_player_name()) {
+-        sprintf((char*) this + 0xFF90, "learn\\%s.uh", game_info->get_current_player_name());
++        sprintf(this->unitHistoryFilename, "learn\\%s.uh", game_info->get_current_player_name());
+     } else {
+-        strcpy((char*) this + 0xFF90, "learn\\Default.uh");
++        strcpy(this->unitHistoryFilename, "learn\\Default.uh");
+     }
+ 
+     return 1;
+@@ -2418,7 +2415,7 @@ void TribeInformationAIModule::removeObject(int objID) {
          ObjectMemory* mem = objectMemory(objID);
          if (mem != 0) {
              // obj->owner->id, kept raw for the same reason as in initialize.

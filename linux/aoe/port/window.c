@@ -20,11 +20,9 @@ unsigned aoe_win_clock(void) { return control_words[0x34 / 4]; }
 uint8_t *aoe_win_open(int w, int h, const char *title)
 {
     if (GrOpen() < 0) { fprintf(stderr, "aoe: no Nano-X server (start one: nano-X -p &)\n"); exit(1); }
-    GR_SCREEN_INFO info;
-    GrGetScreenInfo(&info);
-    int bare = w + 8 > info.cols || h + 30 > info.rows;   /* the whole screen: no frame, or the bottom would be off it */
-    window = GrNewWindowEx(bare ? GR_WM_PROPS_NODECORATE | GR_WM_PROPS_NOAUTOMOVE : GR_WM_PROPS_APPWINDOW, (char *) title,
-        GR_ROOT_WINDOW_ID, bare ? 0 : -1, bare ? 0 : -1, w, h, 0);
+    /* A frame like any program's: what the screen has no room for of it is off the screen (docs/system/nanox.md,
+     * "A window wider or taller than the screen has room for"), and the game's picture stays whole, above the bar. */
+    window = GrNewWindowEx(GR_WM_PROPS_APPWINDOW | GR_WM_PROPS_ONTOP, (char *) title, GR_ROOT_WINDOW_ID, -1, -1, w, h, 0);
     GrSelectEvents(window, GR_EVENT_MASK_KEY_DOWN | GR_EVENT_MASK_KEY_UP | GR_EVENT_MASK_BUTTON_DOWN |
         GR_EVENT_MASK_BUTTON_UP | GR_EVENT_MASK_MOUSE_POSITION | GR_EVENT_MASK_CLOSE_REQ | GR_EVENT_MASK_UPDATE);
     GrMapWindow(window);

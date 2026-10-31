@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Age of Empires (dcostap/aoe1-decomp on the machine, the 1997 trial's data). docs/games/aoe.md.
 #   wsl -- bash linux/nommu/build.sh aoe/build.sh
-# Neither the code nor the data is kept in this repository: both are fetched here, and an image
-# with them is a private one until the developer has decided (docs/plans/aoe-plan.md, "The licences").
+# Neither the code nor the data is kept in this repository. The code is fetched here; the data only
+# when an image asks for the game (data.py, image.py --aoe).
 # AOE_TREE=keep leaves the tree as it is (then write its diff to aoe.patch). AOE_CHECK=1 only says
 # what does not compile, one line a kind of error.
 set -euo pipefail
@@ -12,7 +12,7 @@ source "$HERE/../userland/toolchain.sh"
 UP=$WORK/src/aoe1
 SRC=$WORK/src/aoe-tree
 OBJ=$WORK/src/aoe-build
-OUT=${AOE_OUT:-$REPO/build/images/linux/root}
+OUT=${AOE_OUT:-$REPO/build/aoe/out}   # (never the shared root: docs/games/aoe.md)
 COMMIT=6d6d8b14023aa74e6ac30a6c88229d5b818fb805
 
 if [ ! -d "$UP/.git" ]; then
@@ -80,8 +80,7 @@ riscv32-linux-g++ -march=rv32imaf -mabi=ilp32 -static -no-pie -nostdlib -L"$S" -
 riscv32-linux-nm -n "$OBJ/aoe.elf" > "$WORK/src/aoe.nm"
 echo "linked: $(riscv32-linux-size "$OBJ/aoe.elf" | tail -1)"
 
-# Install: the program, its starter, and the data if the folder of made data is given (AOE_DATA_DIR,
-# from make_data.py over the unpacked trial): none of it is kept in the repository.
+# Install: the program and its starter. The data comes when an image asks for it (data.py).
 riscv32-linux-strip -o "$OBJ/aoe.bin" "$OBJ/aoe.elf"
 mkdir -p "$OUT/usr/bin"
 cp "$OBJ/aoe.bin" "$OUT/usr/bin/aoe.bin"
@@ -91,10 +90,6 @@ P=/persistence; mkdir -p $P/aoe 2>/dev/null || P=/tmp; mkdir -p $P/aoe
 AOE_HOME=${AOE_HOME:-$P/aoe} exec aoe.bin "$@"
 EOF
 chmod +x "$OUT/usr/bin/aoe"
-if [ -n "${AOE_DATA_DIR:-}" ]; then
-    mkdir -p "$OUT/usr/share/aoe"
-    rsync -a --delete "$AOE_DATA_DIR/" "$OUT/usr/share/aoe/"
-fi
 mkdir -p "$OUT/usr/share"
 echo "Games/Age of Empires=aoe" > "$OUT/usr/share/nxapps.76-aoe"
 echo "installed in $OUT"

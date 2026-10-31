@@ -149,7 +149,7 @@ void aoe_events(void) {
     fprintf(stderr, "aoe: step %.30s at %lu\n", script, step_from);
     int x, y;
     char what[16];
-    sscanf(script, "%d %15s %d %d", &at, what, &x, &y);
+    sscanf(script, "%d %15[^ ;] %d %d", &at, what, &x, &y);
     if (!strcmp(what, "click")) {
         aoe_mouse_x = x; aoe_mouse_y = y;
         aoe_post(WM_MOUSEMOVE, 0, MAKELONG(x, y));
