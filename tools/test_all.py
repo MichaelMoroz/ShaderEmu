@@ -230,6 +230,16 @@ CASES = [
         ('heap', 'PHYS_WORKERS=0 PHYS_SCENE=3 PHYS_BODIES=150 PHYS_STEPS=90 ', 'ed123738', []),
         ('scene-2', 'PHYS_WORKERS=0 PHYS_SCENE=2 PHYS_STEPS=60 ', '51fae5a5', []),
         ('throw', 'PHYS_SCENE=1 PHYS_LAUNCH=40:1 PHYS_STEPS=120 ', '8cccf9ba', []))],
+    # nxchess (docs/games/chess.md): moves against the known numbers; the plain search's sum is the build computer's
+    # (linux/chess/test/chess_host.c 6); on the workers no sum: nodes go by who was first, so the right moves
+    case('chess-perft', 'games chess', 'nxchess perft; nxchess book', count=[(r'as known', 6)], has=[r'nxchess: perft PASS', r'nxchess: book PASS']),
+    case('chess-plain', 'games chess', 'NXCHESS_WORKERS=0 nxchess search 6', sums=[(r'nxchess: sum ([0-9a-f]+)', ['6faa2f74'])]),
+    case('chess-workers', 'games chess workers', 'nxchess solve 6000; mctest 15 2000', True, has=[r'nxchess: 6 of 6 right', r'mctest: PASS']),
+    case('chess-15', 'games chess workers', 'NXCHESS_WORKERS=15 nxchess solve 12000', True, has=[r'nxchess: 6 of 6 right']),
+    case('chess-level', 'games chess desktop', X + "NXCHESS_PRINT=1 nxchess & sleep 2; nxkey 150,56; sleep 1; nxkey 190,157; sleep 1; nxreg get nxchess.level; killall -9 nxchess; sleep 1; NXCHESS_PRINT=1 nxchess & sleep 2; killall -9 nxchess; nxreg unset nxchess.level",
+         has=[r'(?m)^5\s*$', r'level 5, as 0']),
+    case('chess-window', 'games chess desktop', X + "NXCHESS_PRINT=1 NXCHESS_BOOK=0 NXCHESS_MS=800 nxchess & sleep 2; nxkey 281,386 500 281,290; sleep 3; nxkey u; sleep 1; nxkey n; sleep 1; killall -9 nxchess; sleep 1; mctest 15 2000", True,
+         has=[r'nxchess: played: 1 moves, last e4 e2e4', r'nxchess: engine: 2 moves', r'nxchess: undo: 0 moves', r'nxchess: new game: 0 moves', r'mctest: PASS']),
     case('nxphys-kill', 'games nxphys', X + 'nxphys & sleep 5; killall -9 nxphys; sleep 1; mctest 15 2000', True, has=[r'mctest: PASS']),
     case('nxphys-none', 'games nxphys long', X + 'PHYS_WORKERS=0 PHYS_SCENE=1 PHYS_STEPS=120 nxphys', has=[r'sum b28b77b4']),
     # Micropolis (docs/games/micropolis.md): a city and two scenarios with a fixed seed, the sums of the build computer's run
@@ -482,7 +492,7 @@ CASES = [
     case('nxide-storm', 'desktop ide', X + "NXIDE_PRINT=1 NXIDE_SCRIPT='storm:400 example:pi storm:400 example:primes storm:400 quit quit quit quit' nxide",
          count=[(r'^nxide: storm: 400 steps; \d+ changes taken back: the text is as it was', 3),
                 (r'^nxide: storm: \d+ made again: the text is as the storm left it', 3)]),
-    case('launch-note', 'desktop', 'export UI_LAUNCH=print; nx; sleep 4; nxkey 266,94 266,94; sleep 4', wall=120,
+    case('launch-note', 'desktop', 'export UI_LAUNCH=print; nx; sleep 4; nxkey 341,94 341,94; sleep 4', wall=120,
          has=[r'^launch: Calculator', r'^launch: a window shown after \d+ ms']),   # docs/system/nanox.md, "A program starting"
     # the desktop's fuzzer's short set (docs/system/fuzz.md; tools/app_fuzz.py for more): windows closed every way, a GPU program
     # after another, one refused with the first left open and its Notice; OpenTTD's X answered by a click on Yes (no process left)
@@ -715,7 +725,7 @@ def zerotail_nommu():
 # (16-byte romfs packing): what the pool hands out is checked on copies in tmpfs
 ZERO_TAIL_NOMMU = ('zerotest 12 4; mkdir -p /tmp/t; find /usr/share /usr/bin /etc -maxdepth 1 -type f -size -256k | '
                    'while read f; do cp "$f" /tmp/t/; done; tailtest /tmp/t/*')
-CC_BYTES_NOMMU = '870f1998'   # shader.c and fractal.c follow a resized window (31 October 2026; what the examples take moved in the archives: pack.py), latest; 8f0167e6: mallocng keeping freed groups (malloc_keep.py, 31 October 2026, latest); 488c2419: elf2flt's relocations in the machine's order; 18ecf477: the build folder's name out of the libraries (-ffile-prefix-map in setup.sh's drivers, 31 October 2026): client.c's __FILE__ in libnano-X.a's strings went with the folder, /home/micha/bpcc 0650c8b3 and /home/micha/nm 1480ba8c from the same sources; before that libmcw.a with mcwx's lowest free worker (6af8737) too; before it f378920f: libmcw.a's worker entry writing the program's tag into its answer, with the toolchain below (29 October 2026, latest of all); libcompiler_rt.a's 64-bit division and double's sum, product and conversions of our own (rt/) and every global hidden in rv32-cc (nommu_hidden.h) (29 October 2026, latest); memset's range in the layout of RAM in one piece (2ecf76d) and mcwx's team job that lingered out posted with the round (28 October 2026, latest); memcpy's commit's copy from 4 KB and mcwx's calls round the row on RISC-V (28 October 2026, later); the devices at 0x80000000 (libmcw.a's and libgles.a's device addresses, uop.h's RAM test in memcpy and memset); libc.a's float libm (linux/userland/libm), memcpy and memset through the commit's copy, memmove and memcmp a word a turn, a double's printf in doubles; libmcw.a's mc_publish (28 October 2026)  # with libmcw.a's tagged answers (1ee0347) too it moves again: set anew from a build with both
+CC_BYTES_NOMMU = '1681c282'   # shader.c and fractal.c follow a resized window (31 October 2026; what the examples take moved in the archives: pack.py), latest; 8f0167e6: mallocng keeping freed groups (malloc_keep.py, 31 October 2026, latest); 488c2419: elf2flt's relocations in the machine's order; 18ecf477: the build folder's name out of the libraries (-ffile-prefix-map in setup.sh's drivers, 31 October 2026): client.c's __FILE__ in libnano-X.a's strings went with the folder, /home/micha/bpcc 0650c8b3 and /home/micha/nm 1480ba8c from the same sources; before that libmcw.a with mcwx's lowest free worker (6af8737) too; before it f378920f: libmcw.a's worker entry writing the program's tag into its answer, with the toolchain below (29 October 2026, latest of all); libcompiler_rt.a's 64-bit division and double's sum, product and conversions of our own (rt/) and every global hidden in rv32-cc (nommu_hidden.h) (29 October 2026, latest); memset's range in the layout of RAM in one piece (2ecf76d) and mcwx's team job that lingered out posted with the round (28 October 2026, latest); memcpy's commit's copy from 4 KB and mcwx's calls round the row on RISC-V (28 October 2026, later); the devices at 0x80000000 (libmcw.a's and libgles.a's device addresses, uop.h's RAM test in memcpy and memset); libc.a's float libm (linux/userland/libm), memcpy and memset through the commit's copy, memmove and memcmp a word a turn, a double's printf in doubles; libmcw.a's mc_publish (28 October 2026)  # with libmcw.a's tagged answers (1ee0347) too it moves again: set anew from a build with both
 
 
 def without_mmu(image):
