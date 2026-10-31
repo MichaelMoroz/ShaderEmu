@@ -15,7 +15,7 @@ The game goes into an image only when asked:
 
 `linux/aoe/data.py OVERLAY` then does this:
 
-1. It fetches `MSAoE.exe` into the cache (`AOE_CACHE`, by default `~/.cache/shaderx86/aoe`), and refuses it unless its md5 and sha256 are those in the script.
+1. It fetches `MSAoE.exe` into the cache (`AOE_CACHE`, by default `~/.cache/shaderemu/aoe`), and refuses it unless its md5 and sha256 are those in the script.
 2. It unpacks it with 7-Zip and makes the data (`make_data.py`: `language.txt`, `aoe-fonts.bin`, and the files copied flat). A mark says which scripts made it, and a cache with the same mark is used as it is, with no network.
 3. It builds the program (`program.sh`, into `build/aoe/out`; `AOE_WSL_HOME` is a private home, `AOE_PROGRAM` a folder already made).
 4. It puts the data, `aoe.bin`, `aoe` and the Start menu's line into that image's overlay, and never into the root.
