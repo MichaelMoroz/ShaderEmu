@@ -155,7 +155,9 @@ static uint32_t job_body( uint32_t unused )
 		se_ref_replay( se_ref_real[given.play->at[i].fn], given.play->at[i].w );
 	if( sums )	// (else this core's ring jobs are waited for by the frame's swap)
 		hlglRenderJobsWait(), work.sum = hlglRenderSum();
-	job_tl.ins = rd_ins() - job_tl.ins, job_tl.end = rd_time(), job_tl.waits = hlglRingWaits( &job_tl.most );
+	job_tl.ins = rd_ins() - job_tl.ins, job_tl.end = rd_time();
+	if( ref_count > 0 )
+		job_tl.waits = hlglRingWaits( &job_tl.most );
 	return 0;
 }
 

@@ -1239,7 +1239,7 @@ static struct __attribute__(( aligned( 16 )))
 	struct { const cl_entity_t *e; vec3_t origin; } in[AHEAD_MAX];
 } ahead;
 static struct __attribute__(( aligned( 16 ))) { vec3_t dir, spot, vec; colorVec light; uint64_t styles; int ready; } ahead_out[AHEAD_MAX];
-static short ahead_slot[1024 + 256];	// (this core's: an entity's place in ahead, plus one)
+static short ahead_slot[1024 + 256], ahead_key[AHEAD_MAX];	// (this core's: an entity's place in ahead, plus one)
 static int ahead_worker;
 
 static uint R_LightAheadJob( uint a0, uint a1 )
@@ -1276,7 +1276,7 @@ static struct __attribute__(( aligned( 16 ))) { float frame; int ready; } bones_
 static float bones_pool[BONES_FLOATS] __attribute__(( aligned( 16 )));
 static float bones_rotation[4][3][4] __attribute__(( aligned( 16 )));
 static float bones_rot[AHEAD_MAX][3][4] __attribute__(( aligned( 16 )));	// each entity's, kept for its draw
-static short bones_slot[1024 + 256];	// (this core's)
+static short bones_slot[1024 + 256], bones_key[AHEAD_MAX];	// (this core's)
 static int bones_posted;
 
 static uint R_BonesAheadJob( uint core, uint unused )
@@ -1340,8 +1340,8 @@ static void R_BonesAheadGive( void )
 	for( int k = 0; bones_posted && k < 4; k++ )
 		hlglWait( hlglBonesWorker( k ));
 	bones_posted = 0;
-	if( bones.count )
-		memset( bones_slot, 0, sizeof( bones_slot ));	// (whole: the entities may be copies written again since)
+	for( int i = 0; i < bones.count; i++ )
+		bones_slot[bones_key[i]] = 0;	// (by the keys kept: the entities may be copies written again since)
 	bones.count = 0;
 	if( off || !SE_StudioBonesAhead || hlglBonesWorker( 0 ) <= 0 )
 		return;
@@ -1362,6 +1362,7 @@ static void R_BonesAheadGive( void )
 		bones.in[bones.count].e = e, bones.in[bones.count].at = at, bones.in[bones.count].numbones = hdr->numbones;
 		bones_out[bones.count].ready = 0;
 		at += hdr->numbones * 24;
+		bones_key[bones.count] = R_LightKey( e );
 		bones_slot[R_LightKey( e )] = ++bones.count;
 	}
 	for( int k = 0; k < 4 && k < bones.count; k++ )
@@ -1377,8 +1378,8 @@ void R_LightAheadGive( void )
 	if( off < 0 ) off = getenv( "HL_LIGHT" ) && !strcmp( getenv( "HL_LIGHT" ), "inline" );
 	if( ahead_worker )
 		hlglWait( ahead_worker ), ahead_worker = 0;
-	if( ahead.count )
-		memset( ahead_slot, 0, sizeof( ahead_slot ));	// (whole: the entities may be copies written again since)
+	for( int i = 0; i < ahead.count; i++ )
+		ahead_slot[ahead_key[i]] = 0;	// (by the keys kept: the entities may be copies written again since)
 	ahead.count = 0;
 	se_studio_no_followers = 0;
 	if( off || !tr.draw_list || !WORLDMODEL || !WORLDMODEL->lightdata || r_fullbright->value || hlglLightWorker( ) <= 0 )
@@ -1393,6 +1394,7 @@ void R_LightAheadGive( void )
 		ahead.in[ahead.count].e = e;
 		VectorCopy( e->origin, ahead.in[ahead.count].origin );
 		ahead_out[ahead.count].ready = 0;
+		ahead_key[ahead.count - 0] = R_LightKey( e );
 		ahead_slot[R_LightKey( e )] = ++ahead.count;
 	}
 	se_studio_no_followers = !followers && ahead.count < AHEAD_MAX;	// (else the list was not seen whole)

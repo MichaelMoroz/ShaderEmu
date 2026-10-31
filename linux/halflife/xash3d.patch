@@ -683,7 +683,7 @@ index 35c2939c..0896df2e 100644
  		s++;
  	}
 diff --git a/engine/client/cl_frame.c b/engine/client/cl_frame.c
-index aace8cff..1153cc8f 100644
+index aace8cff..8fca63d9 100644
 --- a/engine/client/cl_frame.c
 +++ b/engine/client/cl_frame.c
 @@ -359,14 +359,28 @@ static qboolean CL_FindInterpolationUpdates( cl_entity_t *ent, double targettime
@@ -881,7 +881,17 @@ index aace8cff..1153cc8f 100644
  
  	if( newframe->num_entities != count && newframe->num_entities != 0 )
  		Con_Reportf( S_WARN "%s%s: (%i should be %i)\n", __func__, delta ? "Delta" : "", newframe->num_entities, count );
-@@ -1284,8 +1418,55 @@ add visible entities to refresh list
+@@ -1056,6 +1190,9 @@ static void CL_LinkPlayers( frame_t *frame )
+ 		if ( i == cl.playernum )
+ 		{
+ 			// using interpolation only for local player angles
++#if XASH_SHADEREMU	// (the view's own player, its place cl.simorg: its angles are seen only from outside)
++			if( cls.demoplayback || clgame.dllFuncs.CL_IsThirdPerson( ))
++#endif
+ 			CL_ComputePlayerOrigin( ent );
+ 
+ 			if( cls.demoplayback == DEMO_QUAKE1 )
+@@ -1284,8 +1421,55 @@ add visible entities to refresh list
  process frame interpolation etc
  ===============
  */
@@ -937,7 +947,7 @@ index aace8cff..1153cc8f 100644
  	if( cl.paused ) return; // don't waste time
  
  	// not in server yet, no entities to redraw
-@@ -1297,6 +1478,9 @@ void CL_EmitEntities( void )
+@@ -1297,6 +1481,9 @@ void CL_EmitEntities( void )
  		return;
  
  	// animate lightestyles
@@ -947,7 +957,7 @@ index aace8cff..1153cc8f 100644
  	ref.dllFuncs.CL_RunLightStyles( CL_GetLightStyle( 0 ));
  
  	// decay dynamic lights
-@@ -1330,6 +1514,11 @@ void CL_EmitEntities( void )
+@@ -1330,6 +1517,11 @@ void CL_EmitEntities( void )
  
  	// perfomance test
  	CL_TestLights();
@@ -1079,7 +1089,7 @@ index 6c550c7e..4cfd674b 100644
  
  /*
 diff --git a/engine/client/cl_tent.c b/engine/client/cl_tent.c
-index 95c85f7c..5d2f1eed 100644
+index 95c85f7c..2cba6245 100644
 --- a/engine/client/cl_tent.c
 +++ b/engine/client/cl_tent.c
 @@ -14,6 +14,10 @@ GNU General Public License for more details.
@@ -1093,7 +1103,7 @@ index 95c85f7c..5d2f1eed 100644
  #include "client.h"
  #include "r_efx.h"
  #include "entity_types.h"
-@@ -2431,6 +2435,25 @@ DLIGHT MANAGEMENT
+@@ -2431,6 +2435,32 @@ DLIGHT MANAGEMENT
  */
  static dlight_t cl_dlights[MAX_DLIGHTS];
  static dlight_t cl_elights[MAX_ELIGHTS];
@@ -1102,8 +1112,15 @@ index 95c85f7c..5d2f1eed 100644
 +static struct { int count; dlight_t *made[16]; int key[16]; } se_made __attribute__(( aligned( 16 )));	// the worker's
 +void SE_LightsGive( void )
 +{
-+	memcpy( se_render_dlights, cl_dlights, sizeof( cl_dlights ));
-+	memcpy( se_render_elights, cl_elights, sizeof( cl_elights ));
++	// (those lit: the drawing asks of one its radius first; a 3.4k copy between its last frame and its next)
++	for( int i = 0; i < MAX_DLIGHTS; i++ )
++		if( cl_dlights[i].radius != 0.0f && cl_dlights[i].die >= cl.time )
++			se_render_dlights[i] = cl_dlights[i];
++		else se_render_dlights[i].radius = 0.0f, se_render_dlights[i].die = 0.0f;
++	for( int i = 0; i < MAX_ELIGHTS; i++ )
++		if( cl_elights[i].radius != 0.0f && cl_elights[i].die >= cl.time )
++			se_render_elights[i] = cl_elights[i];
++		else se_render_elights[i].radius = 0.0f, se_render_elights[i].die = 0.0f;
 +	se_made.count = 0;
 +}
 +void SE_LightsTaken( void )
@@ -1119,7 +1136,7 @@ index 95c85f7c..5d2f1eed 100644
  
  /*
  ================
-@@ -2449,11 +2472,18 @@ CL_AllocDlight
+@@ -2449,11 +2479,18 @@ CL_AllocDlight
  
  ===============
  */
@@ -1138,7 +1155,7 @@ index 95c85f7c..5d2f1eed 100644
  	// first look for an exact key match
  	if( key )
  	{
-@@ -2494,10 +2524,28 @@ CL_AllocElight
+@@ -2494,10 +2531,28 @@ CL_AllocElight
  
  ===============
  */
