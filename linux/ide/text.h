@@ -6,7 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define TX_HISTORY 1024
+#define TX_HISTORY 16384	/* changes; a command's many are one Undo, and the oldest drop out */
 #define TX_TAB 4
 
 static char **tx_lines;		/* each allocated, no newline, no tabs */

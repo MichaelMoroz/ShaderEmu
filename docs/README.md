@@ -49,6 +49,7 @@ One file per subject. A doc names another by its file name, which is unique acro
 
 ## games
 
+- [chess.md](games/chess.md) – Chess
 - [classicube.md](games/classicube.md) – ClassiCube
 - [doom.md](games/doom.md) – Doom
 - [halflife.md](games/halflife.md) – Half-Life: Uplink

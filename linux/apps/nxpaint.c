@@ -464,6 +464,8 @@ back_room(size_t bytes)
 	}
 }
 
+#define HISTORY_BYTES (64u << 20)
+
 static void
 forget(struct change *stack, int *count, int from)
 {
@@ -495,7 +497,34 @@ keep(int x0, int y0, int x1, int y1)
 	if (x0 >= x1 || y0 >= y1)
 		return;
 	c.x = x0, c.y = y0, c.w = x1 - x0, c.h = y1 - y0;
-	c.data = malloc((size_t)c.w * (size_t)c.h * 4);
+	/* 48 changes of a large picture are more than the machine has: the oldest go first */
+	{
+		size_t have, size = (size_t)c.w * (size_t)c.h * 4;
+		int i;
+
+		forget(undone, &undone_count, 0);
+		do {
+			for (have = size, i = 0; i < done_count; i++)
+				have += (size_t)done[i].w * (size_t)done[i].h * 4;
+			c.data = have <= HISTORY_BYTES ? malloc(size) : NULL;
+			if (!c.data && done_count) {
+				free(done[0].data);
+				memmove(done, done + 1, (size_t)(--done_count) * sizeof done[0]);
+			}
+		} while (!c.data && (done_count || have > HISTORY_BYTES + size));
+		if (!c.data)
+			c.data = malloc(size);
+		if (!c.data) {
+			/* no way back from this one: the picture's copy made equal row by row */
+			int y;
+
+			for (y = y0; y < y1; y++)
+				memcpy(back + y * pw + x0, pix + y * pw + x0, (size_t)c.w * 4);
+			modified = 1;
+			snprintf(notice, sizeof notice, "no memory to undo that");
+			return;
+		}
+	}
 	bulk_rows_kept(c.data, back + y0 * pw + x0, pix + y0 * pw + x0, (uint32_t)pw * 4, (uint32_t)c.w * 4, (uint32_t)c.h);
 	forget(undone, &undone_count, 0);
 	push(done, &done_count, c);
@@ -870,11 +899,13 @@ float_end(int drop)
 static uint32_t *
 copy_of(int x0, int y0, int x1, int y1)
 {
-	uint32_t *copy = malloc((size_t)(x1 - x0) * (size_t)(y1 - y0) * 4);
-	int y;
+	uint32_t *copy = malloc(x1 > x0 && y1 > y0 ? (size_t)(x1 - x0) * (size_t)(y1 - y0) * 4 : 4);
+	int y, x;
 
-	for (y = y0; y < y1; y++)
-		memcpy(copy + (y - y0) * (x1 - x0), pix + y * pw + x0, (size_t)(x1 - x0) * 4);
+	/* (what lies past the picture, for a selection that does, is white) */
+	for (y = y0; copy && y < y1; y++)
+		for (x = x0; x < x1; x++)
+			copy[(y - y0) * (x1 - x0) + (x - x0)] = y >= 0 && y < ph && x >= 0 && x < pw ? pix[y * pw + x] : 0xffffffu;
 	return copy;
 }
 
@@ -887,6 +918,11 @@ lift(void)
 	memset(&fl, 0, sizeof fl);
 	fl.on = 1, fl.x = s_x0, fl.y = s_y0, fl.w = s_x1 - s_x0, fl.h = s_y1 - s_y0;
 	fl.buf = copy_of(s_x0, s_y0, s_x1, s_y1);
+	if (!fl.buf) {
+		fl.on = 0;
+		snprintf(notice, sizeof notice, "no memory for that piece");
+		return;
+	}
 	fl.hole = 1, fl.hx0 = s_x0, fl.hy0 = s_y0, fl.hx1 = s_x1, fl.hy1 = s_y1;
 	d_x1 = d_x0 = 0;
 }
@@ -1533,6 +1569,12 @@ command(int id)
 	if (id != C_COPY && id != C_CUT && id != C_DELETE && id != C_CROP && id != C_INVERT && id != C_ZOOM_IN && id != C_ZOOM_OUT && id != C_ZOOM_1)
 		float_end(0);
 	x0 = sel_on ? s_x0 : 0, y0 = sel_on ? s_y0 : 0, x1 = sel_on ? s_x1 : pw, y1 = sel_on ? s_y1 : ph;
+	/* (a piece moved or pasted may lie past the picture's edges, and the selection with it) */
+	x0 = x0 < 0 ? 0 : x0, y0 = y0 < 0 ? 0 : y0, x1 = x1 > pw ? pw : x1, y1 = y1 > ph ? ph : y1;
+	if (x1 < x0)
+		x1 = x0;
+	if (y1 < y0)
+		y1 = y0;
 	switch (id) {
 	case C_NEW:
 		/* a white picture of this one's size at once: "Canvas size" is where another is asked for */

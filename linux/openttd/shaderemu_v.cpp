@@ -42,6 +42,14 @@
 #include "../newgrf_station.h"
 #include "../newgrf_roadstop.h"
 #include "../company_cmd.h"
+#include "../roadveh.h"
+#include "../road_map.h"
+#include "../engine_base.h"
+#include "../engine_func.h"
+#include "../town.h"
+#include "../industry.h"
+#include "../gui.h"
+#include "../vehicle_cmd.h"
 #include "shaderemu_v.h"
 #include "shaderemu_gpu.h"
 #include <unistd.h>
@@ -91,7 +99,8 @@ std::optional<std::string_view> VideoDriver_ShaderEmu::Start(const StringList &)
 	_screen_rows = info.rows;
 	if (_cur_resolution.width == 0 || _cur_resolution.height == 0) _cur_resolution = { 640, 480 };
 	_cur_resolution.width = Clamp<uint>(_cur_resolution.width, 640, _screen_cols);
-	_cur_resolution.height = Clamp<uint>(_cur_resolution.height, 480, _screen_rows);
+	/* (all of it above the bar under a caption, 26 and 29; at 640 x 480 the frame's sides go off the screen) */
+	_cur_resolution.height = Clamp<uint>(_cur_resolution.height, std::min(480, _screen_rows - 55), _screen_rows - 55);
 
 	_window = GrNewWindowEx(GR_WM_PROPS_APPWINDOW, "OpenTTD", GR_ROOT_WINDOW_ID, -1, -1, _cur_resolution.width,
 			_cur_resolution.height, 0);
@@ -810,6 +819,98 @@ static TileIndex PlayFreeLand(TileIndex near_tile, int w, int h)
 static constexpr uint32_t PLAY_POINTER_TIME = 66 * 5, PLAY_PLACE_TIME = 400 * 5;
 
 /** The building part of the play script, its picture n: the cursor's highlight goes over the view, a thing placed by the clock. */
+/* OPENTTD_PLAY_SCENE=depot: a road vehicle built in a depot, stopped and hidden as a new one is, and its window, an extra viewport, a town's and
+ * an industry's. Run with light pictures (no OPENTTD_CHECK, which turns them off): the window's view must stay at the vehicle, and no view be
+ * nearly all black (docs/games/openttd.md, "Pictures the tick does not wait for"). */
+void ShowIndustryViewWindow(IndustryID industry);
+static VehicleID _depot_vehicle = VehicleID::Invalid();
+static TileIndex _depot_tile = INVALID_TILE;
+static uint32_t _depot_looks, _depot_off, _depot_light;
+static const bool play_scene_depot = [] { const char *e = getenv("OPENTTD_PLAY_SCENE"); return e != nullptr && std::string_view(e) == "depot"; }();
+
+/* (the company first, and a picture's sync after it: SetLocalCompany lists every vehicle, which would make the new one's copy) */
+static void PlayDepotBegin()
+{
+	VpFlushFinish();
+	TickFinish();
+	_settings_game.difficulty.infinite_money = true;
+	for (TileIndex t : Map::Iterate()) {
+		if (!IsTileType(t, MP_ROAD) || !IsRoadDepot(t) || !Company::IsValidID(GetTileOwner(t))) continue;
+		SetLocalCompany(GetTileOwner(t));
+		_depot_tile = t;
+		return;
+	}
+}
+
+static void PlayDepotBuild()
+{
+	if (_depot_tile == INVALID_TILE) return;
+	VpFlushFinish();
+	TickFinish();
+	for (const Engine *e : Engine::IterateType(VEH_ROAD)) {
+		if (!IsEngineBuildable(e->index, VEH_ROAD, _local_company)) continue;
+		if (Command<CMD_BUILD_VEHICLE>::Post(_depot_tile, e->index, false, INVALID_CARGO, INVALID_CLIENT_ID)) return;
+	}
+}
+
+static void PlayDepotShow()
+{
+	if (_depot_tile == INVALID_TILE) return;
+	for (const RoadVehicle *v : RoadVehicle::Iterate()) {
+		if (v->IsFrontEngine() && v->tile == _depot_tile && v->vehstatus.Test(VehState::Stopped) && v->vehstatus.Test(VehState::Hidden)) _depot_vehicle = v->index;
+	}
+	if (_depot_vehicle == VehicleID::Invalid()) return;
+	{
+		const Vehicle *d = Vehicle::Get(_depot_vehicle);
+		PlayLine(fmt::format("openttd: depot vehicle {} at {},{},{}; its copy at {},{},{} hidden {}\n", d->index.base(), d->x_pos, d->y_pos, d->z_pos, d->drawn.x, d->drawn.y, d->drawn.z, d->drawn.hidden));
+	}
+	ShowVehicleViewWindow(Vehicle::Get(_depot_vehicle));
+	ShowExtraViewportWindow(_depot_tile);
+	for (const Town *t : Town::Iterate()) { ShowTownViewWindow(t->index); break; }
+	for (const Industry *i : Industry::Iterate()) { ShowIndustryViewWindow(i->index); break; }
+}
+
+static void PlayDepotLook(bool last)
+{
+	if (_depot_vehicle == VehicleID::Invalid()) {
+		if (last) PlayLine("openttd: depot views: no vehicle built\n");
+		return;
+	}
+	const Vehicle *v = Vehicle::GetIfValid(_depot_vehicle);
+	const Window *w = FindWindowById(WC_VEHICLE_VIEW, _depot_vehicle);
+	if (v != nullptr && w != nullptr && w->viewport != nullptr) {
+		Point pt = RemapCoords(v->x_pos, v->y_pos, v->z_pos); /* (as upstream's MapXYZToViewport) */
+		pt.x -= w->viewport->virtual_width / 2;
+		pt.y -= w->viewport->virtual_height / 2;
+		_depot_looks++;
+		_depot_light += _se_light;
+		if (std::abs(w->viewport->scrollpos_x - pt.x) > 64 || std::abs(w->viewport->scrollpos_y - pt.y) > 64) _depot_off++;
+	}
+	if (!last) return;
+	VpFlushFinish();
+	SeGpuSettle();
+	uint32_t least = 100, kept_off = 0;
+	std::string each;
+	for (const Vehicle *h : Vehicle::Iterate()) { /* (none of these moves: its copy must say where it is) */
+		if (h->vehstatus.Test(VehState::Hidden) && h->vehstatus.Test(VehState::Stopped) && (h->drawn.x != h->x_pos || h->drawn.y != h->y_pos || h->drawn.z != h->z_pos)) kept_off++;
+	}
+	for (const Window *o : Window::Iterate()) {
+		if (o->viewport == nullptr || o->window_class == WC_MAIN_WINDOW) continue;
+		const Viewport &vp = *o->viewport;
+		uint32_t lit = 0, all = 0;
+		if (static_cast<uint8_t *>(_screen.dst_ptr) != nullptr) {
+			for (int y = vp.top; y < vp.top + vp.height && y < _screen.height; y++) {
+				const uint8_t *row = static_cast<const uint8_t *>(_screen.dst_ptr) + y * _screen.pitch;
+				for (int x = vp.left; x < vp.left + vp.width && x < _screen.width; x++, all++) lit += row[x] > 1;
+			}
+		}
+		const uint32_t percent = all != 0 ? lit * 100 / all : 0;
+		least = std::min(least, percent);
+		each += fmt::format(" {}:{}%", static_cast<int>(o->window_class), percent);
+	}
+	PlayLine(fmt::format("openttd: depot views: {} pictures, {} light, {} off the vehicle, {} stopped and hidden with their copies elsewhere; not black{}, the least {}%\n", _depot_looks, _depot_light, _depot_off, kept_off, each, least));
+}
+
 static void PlayBuild(int n)
 {
 	Window *main = GetMainWindow();
@@ -820,7 +921,9 @@ static void PlayBuild(int n)
 	const uint32_t now = VpTime();
 	if (n != 0 && now - pointer_at < PLAY_POINTER_TIME) return;
 	pointer_at = now;
-	TwHold(false);
+	static const bool pointer_light_on = getenv("OPENTTD_POINTER_LIGHT") == nullptr;
+	const bool place_now = now - placed_at >= PLAY_PLACE_TIME;
+	if (n == 0 || place_now || !pointer_light_on) TwHold(false);
 	if (n == 0) {
 		VpFlushFinish();
 		TickFinish();
@@ -837,7 +940,8 @@ static void PlayBuild(int n)
 	const int step = (n * 24) % span;
 	_cursor.pos.x = vp.left + vp.width / 4 + step;
 	_cursor.pos.y = vp.top + vp.height / 2 + (n % 8) * 8;
-	if (now - placed_at < PLAY_PLACE_TIME) return;
+	if (_se_light) UpdateTileSelection();
+	if (!place_now) return;
 	placed_at = now;
 	const Point at = RemapCoords2(0, 0); (void)at;
 	const Point p = InverseRemapCoords2(vp.virtual_left + vp.virtual_width / 2, vp.virtual_top + vp.virtual_height / 2);
@@ -1006,6 +1110,8 @@ static void PlayStep()
 			TwTimes(tick, park, instret);
 			const double s = std::chrono::duration<double>(now - p.start).count();
 			const uint64_t ticks = TimerGameTick::counter - p.ticks;
+extern uint32_t _veh_made_wrong, _veh_synced, _veh_ahead, _veh_copies_off, _veh_copies_seen;
+if (GetEnv("OPENTTD_MADE_CHECK").has_value()) PlayLine(fmt::format("openttd: vehicles listed {}, as the tick made them {}, the short look not agreeing {}; copies looked at {}, not as the vehicle {}\n", _veh_synced, _veh_ahead, _veh_made_wrong, _veh_copies_seen, _veh_copies_off));
 			PlayLine(fmt::format("openttd: play {} tick on a worker: {:.2f} ticks a second, {:.0f} ms of the worker's a tick, waiting {:.0f}% "
 					"of the time, {:.2f} MIPS in ticks; the first core waited {:.1f} ms a picture for it ({:.1f} holds, the longest {:.1f} ms)\n",
 					p.name, ticks / s, (tick - p.tw_tick) / 5.0 / std::max<uint64_t>(ticks, 1), (park - p.tw_park) / 5.0 / s / 10.0,
@@ -1092,7 +1198,11 @@ static void PlayStep()
 			}
 			if (any != nullptr) ShowVehicleViewWindow(any);
 		}
+		if (s == "depot") PlayDepotBegin();
 	}
+	if (play_scene_depot && f == 302) PlayDepotBuild();
+	if (play_scene_depot && f == 304) PlayDepotShow();
+	if (play_scene_depot && f >= 308 && f < 360) PlayDepotLook(f == 359);
 	if (f == 305) begin_part("window");
 	if (f == 400) begin_part("build");
 	if (f >= 400 && f < 460) PlayBuild(f - 400);
@@ -1182,6 +1292,18 @@ void VideoDriver_ShaderEmu::WorkerTick()
 	}
 	/* (a pointer that only moves is seen at most every 66 ms: it costs the tick a hold) */
 	static uint32_t held_at = 0;
+	/* (over the view with a building tool in hand it is seen with the tick running: the highlight reads only tiles' heights and types, which a tick's own moves leave) */
+	static const bool pointer_light_on = getenv("OPENTTD_POINTER_LIGHT") == nullptr;
+	bool pointer_seen = false;
+	if (pointer_light_on && _have_pending && _pending.type == GR_EVENT_TYPE_MOUSE_MOTION && _thd.place_mode != HT_NONE && !_left_button_down && !_right_button_down) {
+		const Window *under = FindWindowFromPt(_pending.mouse.x, _pending.mouse.y);
+		if (under != nullptr && under->window_class == WC_MAIN_WINDOW) {
+			_modifiers = _pending.mouse.modifiers;
+			PointerAt(_pending.mouse.x, _pending.mouse.y);
+			_have_pending = false;
+			pointer_seen = true;
+		}
+	}
 	const bool pointer_waits = _have_pending && _pending.type == GR_EVENT_TYPE_MOUSE_MOTION && t - held_at < 66 * 5;
 	_se_light = (!_have_pending || pointer_waits) && !_left_button_down && !_right_button_down && TwLightPicture() && SeDirtyOnlyViews();
 	if (!_se_light) {
@@ -1190,6 +1312,7 @@ void VideoDriver_ShaderEmu::WorkerTick()
 		TwSync();
 		::GameLoop(); /* (the first core's parts: the tick itself is the worker's) */
 	}
+	if (_se_light && pointer_seen) UpdateTileSelection();
 	_vp_phase[VP_PHASE_TICK] += VpTime() - t;
 	if (!WantWorkerTick()) TwStop();
 	this->LockVideoBuffer();
@@ -1220,6 +1343,7 @@ void VideoDriver_ShaderEmu::WorkerTick()
 			_se_light = true;
 		}
 	}
+	VehiclesApply(); /* (the tick let go first, if this picture lets it go: docs/games/openttd.md, "A sync with the tick running") */
 	if (!_se_light && !VpFlushReady()) { /* (the tick runs while its pieces are drawn, and waits again for the drawing) */
 		TwRelease();
 		VpFlushFinish();
@@ -1253,8 +1377,8 @@ void VideoDriver_ShaderEmu::WorkerTick()
 	_se_light = false;
 	TwService();
 	TwGrant();
-	/* (OPENTTD_PACE_MS: the picture's work the pace keeps to while it scrolls, 90 ms: ten pictures a second) */
-	static const uint32_t pace_ms = [] { int n = Number(getenv("OPENTTD_PACE_MS")); return n > 0 ? n : 90; }();
+	/* (OPENTTD_PACE_MS: the picture's work the pace keeps to while it scrolls; only zoomed out comes near it: 90 ms and 130 differ by 6% and less, both ways up) */
+	static const uint32_t pace_ms = [] { int n = Number(getenv("OPENTTD_PACE_MS")); return n > 0 ? n : 130; }();
 	TwPace(VpTime() - work_from, pace_ms * 5, _vp_scrolls != scrolls);
 }
 
@@ -1399,8 +1523,11 @@ void SeExitWatch()
 }
 
 /** The drivers are stopped: the kernel takes everything back at once, workers first (shaderemu_gpu_exiting). */
+extern "C" void __gcov_exit(void) __attribute__((weak)); /* (a counting build: its counts go at the exit, linux/userland/pgo/gcov.c) */
+
 void SeExitNow()
 {
+	if (__gcov_exit != nullptr) __gcov_exit();
 	fflush(nullptr);
 	_exit(0);
 }

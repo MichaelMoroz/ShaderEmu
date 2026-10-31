@@ -286,6 +286,10 @@ ui_menu_event(GR_EVENT *event, int *chosen)
 		event->type == GR_EVENT_TYPE_CLOSE_REQ ? event->general.wid : 0;
 	int k, row;
 
+	/* a key while a menu is open is the menu's, wherever the pointer is: a press of Escape over the bar went on to
+	 * the program's window, whose Escape (nxplay's, nxvideo's) ends it */
+	if (event->type == GR_EVENT_TYPE_KEY_DOWN && ui_menu_depth > 0)
+		wid = ui_menu_level[ui_menu_depth - 1].window;
 	for (k = 0; k < ui_menu_depth && ui_menu_level[k].window != wid; k++)
 		;
 	if (!wid || k == ui_menu_depth)

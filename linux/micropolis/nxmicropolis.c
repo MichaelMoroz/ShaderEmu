@@ -11,6 +11,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <limits.h>
 #include <time.h>
 #include <GLES/gl.h>
 #include <GLES/segl.h>
@@ -796,13 +797,24 @@ hear(void)
 		}
 }
 
+/* The speed kept: one a menu has (0 would be a pause no menu shows). */
+static int
+reg_speed(void)
+{
+	int speed = reg_int("micropolis.speed", 2);
+
+	return speed < 1 || speed > 3 ? 2 : speed;
+}
+
 static void
 new_city(void)
 {
 	scroll_x = (MP_W * TILE - map_w) / 2, scroll_y = (MP_H * TILE - map_h) / 2;
 	clamp_scroll();
 	fill_ring(0);
-	mp_set_speed(reg_int("micropolis.speed", 2));	/* the player's, not the city file's */
+	/* the player's, not the city file's */
+	mp_set_speed(reg_speed());
+	mp_set_auto_budget(reg_int("micropolis.autobudget", 1));
 	memset(&shown, -1, sizeof shown);
 	status_now();
 	dirty = 1;
@@ -832,6 +844,11 @@ others(GR_EVENT *event)
 	}
 	if (event->type == GR_EVENT_TYPE_EXPOSURE && extra_of(event->exposure.wid) >= 0)
 		draw_extra(extra_of(event->exposure.wid));
+	/* (the X under a question: not forgotten) */
+	if (event->type == GR_EVENT_TYPE_CLOSE_REQ && event->general.wid == window)
+		exit(0);
+	if (event->type == GR_EVENT_TYPE_CLOSE_REQ && extra_of(event->general.wid) >= 0)
+		close_extra(extra_of(event->general.wid));
 }
 
 static void
@@ -882,6 +899,7 @@ act(int id)
 	case A_OPEN: {
 		char path[512];
 
+		mkdir(SAVED, 0777);
 		if (ui_choose_file("Open a city", city_path[0] ? SAVED : DATA "/cities", ".cty", path, sizeof path, others))
 			open_city(path);
 		break;
@@ -1163,7 +1181,7 @@ events(int wait_ms)
 						open_menu(i);
 			} else if (e.button.y < BAR + view_h) {
 				if (ui_wheel(&e))
-					scroll_by(0, ui_wheel(&e) > 0 ? -64 : 64);
+					scroll_by(0, ui_wheel(&e) > 0 ? 64 : -64);
 				else
 					press(e.button.x, e.button.y - BAR, e.button.changebuttons);
 			}
@@ -1195,7 +1213,11 @@ main(int argc, char **argv)
 	const char *text;
 	unsigned now, report_at;
 	int refresh = 0;
+	static char first_city[PATH_MAX];
 
+	/* (a city named on the command line is where it is from here) */
+	if (argc > 1 && argv[1][0] != '/' && realpath(argv[1], first_city))
+		argv[1] = first_city;
 	if (chdir(DATA) < 0) {
 		fprintf(stderr, "nxmicropolis: no %s\n", DATA);
 		return 1;
@@ -1219,6 +1241,7 @@ main(int argc, char **argv)
 	GrMapWindow(window);
 	GrSetFocus(window);
 	ui_framed();
+	GrSelectEvents(window, EVENTS);	/* (before the seconds it loads: an X with nobody listening was lost, and the bar called it hung) */
 	if (seglInit(view) < 0) {
 		fprintf(stderr, "nxmicropolis: this machine has no GPU\n");
 		return 1;
@@ -1234,7 +1257,7 @@ main(int argc, char **argv)
 	load_strings(2, "stri.202.txt");
 	load_overview();
 	load_sounds();
-	mp_set_speed(reg_int("micropolis.speed", 2));
+	mp_set_speed(reg_speed());
 	mp_set_auto_budget(reg_int("micropolis.autobudget", 1));
 	mp_set_disasters(reg_int("micropolis.disasters", 1));
 	if (argc > 1)
@@ -1242,7 +1265,14 @@ main(int argc, char **argv)
 	if (argc <= 1 || !city_path[0]) {
 		mp_generate((int)now_ms());
 		new_city();
-		say("Micropolis is a registered trademark of Micropolis GmbH, licensed here as a courtesy of the owner.");
+		if (argc <= 1)
+			say("Micropolis is a registered trademark of Micropolis GmbH, licensed here as a courtesy of the owner.");
+		else {	/* (what the city could not be, not over-written: the city here is a new one) */
+			char text[600];
+
+			snprintf(text, sizeof text, "%s could not be read as a city: this is a new one.", argv[1]);
+			say(text);
+		}
 	}
 	draw_bar();
 	/* (MICROPOLIS_REPORT=1, for a test: where the window is, then what was done every five seconds) */

@@ -1118,3 +1118,28 @@ OpenGL program can run at a time: the GPU's memory for programs has fixed places
 gives it to the first that asks (`SHADEREMU_GPU_DRAW` on `/dev/gpu`, kept until the program
 closes or ends), and a second one says whose it is ("the GPU is drawing for doom (process
 41)...") and ends.
+
+## A window wider or taller than the screen has room for
+
+A frame the screen has no room for is placed so that the program's window shows whole, with what does not fit of the frame off the screen
+(`wm_new_client_window`): a game of 640 x 400 on a screen of 640 x 480 has its frame at -3,0, keeps its caption, its close box and the bar's button, and
+a click lands where it should (its origin is the frame's place plus the frame's margins, as for any window). Such a window has that one place to come up in,
+not a remembered one. (`GrNewWindow` at a negative place puts the window where the server likes: the frame is made at 0,0 and moved. That, not the program's
+flags, is what sent an earlier try at -3,0 to 20,10.) Tiberian Dawn, Red Alert, Quake, Quake III and ClassiCube no longer go frameless: Quake, Quake III,
+ClassiCube, Half-Life and OpenTTD, which ask for 640 x 480, take 425 rows on such a screen (the caption's 29 and the bar's 26), so that all of the picture
+is above the bar. `test_all.py wm-640-game` holds it. The desktop still shows, cut, in what is left between a 640 x 400 game's frame and the bar: a window
+is not stretched to fill that.
+
+## A drag that leaves the screen
+
+A mouse rests on an edge. A beam in the world (`EmuPointer.cs`) does not: the sample after the last one on the picture is off it, and there the host let the
+button go, at that last place, usually tens of pixels short of the 8 that snap (more with the steady pointer's lag). Two things answer it.
+
+- In the guest: a dragged frame's pointer is heard 64 pixels from the edges (`WM_SNAP_HEARD`; the preview still goes by the 8 of `WM_SNAP_EDGE`), and a drop within
+  300 ms of a last step that, taken once more, would have reached the edge snaps there (`wm_thrown_zone`). A mouse slows down by small steps, or waits, and does not
+  snap short of the edge: `test_all.py wm-snap-beam` and `wm-snap-mouse`.
+- In the world: a button pressed on the room's display stays down when the beam runs off the picture, the pointer on the edge where the beam's line meets the display's
+  plane, unsmoothed there (`EdgeOf`). Written but never run: no editor was at hand when this was done (31 October 2026).
+
+A title set while another window has the keyboard reaches the bar by `GR_WM_TELL_TITLE`: the server's old word for a new title is about the window with the
+keyboard, and so the browser's button stayed "Loading: Page" under its Notice (`test_all.py wm-retitle`; that case fails on the window system of before).

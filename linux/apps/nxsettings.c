@@ -1086,6 +1086,7 @@ main(int argc, char **argv)
 {
 	GR_EVENT event;
 	char path[512];
+	int i;
 
 	/* nxsettings system: what the System tab says, printed (it needs no desktop) */
 	if (argc > 1 && !strcmp(argv[1], "system")) {
@@ -1157,6 +1158,9 @@ main(int argc, char **argv)
 	find_choices();
 	find_current();
 	find_sizes();
+	for (i = 0; i < screens.count; i++)	/* (the size it is now: "Use the selected size" has a row from the start) */
+		if (atoi(sizes[fits[i]]) == ui_screen()->cols && atoi(strchr(sizes[fits[i]], 'x') + 1) == ui_screen()->rows)
+			screens.selected = i;
 	if (getenv("NXSETTINGS_TAB")) {		/* the tab to open on, for tests */
 		tab = atoi(getenv("NXSETTINGS_TAB")) % TABS;
 		if (tab == TAB_SOUND)

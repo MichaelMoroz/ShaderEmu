@@ -948,6 +948,13 @@ others(GR_EVENT *event)
 		ui_files_stop = closing = 1;
 }
 
+/* (a question goes with the window: its box pressed while one is up) */
+static int
+ask_over_closing(void)
+{
+	return closing;
+}
+
 /* The picture shown is the desktop's from now on: the file itself, kept in the registry with
  * the turns it is shown with (the desktop decodes it turned so). */
 static void
@@ -957,6 +964,10 @@ as_desktop(void)
 
 	if (kind != PPM && kind != CODED) {
 		snprintf(notice, sizeof notice, "this picture cannot be the desktop's");
+		return;
+	}
+	if (strlen(path) > 250) {	/* (the registry gives back 255 bytes) */
+		snprintf(notice, sizeof notice, "the picture's path is too long for the desktop");
 		return;
 	}
 	snprintf(turn, sizeof turn, "%d:%s", turns & 3, path);
@@ -1143,10 +1154,14 @@ main(int argc, char **argv)
 		printf("nxview: %s, %d x %d%s\n", path, pic_w, pic_h, kind == PPM || kind == CODED || kind == ANIM ? "" : kind == XPM ? " (not a PPM)" : " (not shown)");
 		fflush(stdout);
 	}
+	ui_ask_over = ask_over_closing;
 	if (argc > 1 && kind == NONE)
 		cannot_open();
 	for (;;) {
 		long now = now_ms(), due = -1;
+
+		if (closing)
+			goto leave;
 
 		if (anim && !hidden)
 			due = anim_due;

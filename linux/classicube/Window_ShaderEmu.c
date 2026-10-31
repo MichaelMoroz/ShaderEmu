@@ -34,8 +34,6 @@
 #include "../../programs/linux/fps_caption.h"
 #include <GLES/segl.h>	/* (seglWorldEye, the host words) */
 
-#define CAPTION 22      /* the window manager's caption and frame (nanowm.h) */
-#define FRAME   4
 #define GPU_SIZE  0x00b00000u
 #define REG_INPUT 0x20  /* the machine's input counters (docs/machine/input.md) */
 #define REG_CLOCK 0x34
@@ -126,15 +124,13 @@ void Window_Free(void) { }
 
 static void DoCreateWindow(int width, int height) {
 	const char* s = getenv("CLASSICUBE_SIZE");
-	int bare;
 	if (s) { width = atoi(s); s = strchr(s, 'x'); if (s) height = atoi(s + 1); }
 	if (width  > DisplayInfo.Width)  width  = DisplayInfo.Width;
 	if (height > DisplayInfo.Height) height = DisplayInfo.Height;
 
-	/* a window that leaves no room for a frame and caption has none, and sits in the corner */
-	bare   = width + 2 * FRAME > DisplayInfo.Width || height + CAPTION + FRAME > DisplayInfo.Height;
-	window = GrNewWindowEx(bare ? GR_WM_PROPS_NODECORATE | GR_WM_PROPS_NOAUTOMOVE : GR_WM_PROPS_APPWINDOW,
-		"ClassiCube", GR_ROOT_WINDOW_ID, bare ? 0 : -1, bare ? 0 : -1, width, height, 0);
+	/* its picture all above the bar under a caption (55: the caption's 29 and the bar's 26); the frame's sides may go off the screen (the window manager) */
+	if (height > DisplayInfo.Height - 55) height = DisplayInfo.Height - 55;
+	window = GrNewWindowEx(GR_WM_PROPS_APPWINDOW, "ClassiCube", GR_ROOT_WINDOW_ID, -1, -1, width, height, 0);
 	GrSelectEvents(window, GR_EVENT_MASK_KEY_DOWN | GR_EVENT_MASK_KEY_UP | GR_EVENT_MASK_BUTTON_DOWN |
 		GR_EVENT_MASK_BUTTON_UP | GR_EVENT_MASK_MOUSE_ENTER | GR_EVENT_MASK_MOUSE_EXIT | GR_EVENT_MASK_CLOSE_REQ |
 		GR_EVENT_MASK_UPDATE | GR_EVENT_MASK_FOCUS_IN | GR_EVENT_MASK_FOCUS_OUT);

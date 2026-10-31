@@ -63,7 +63,7 @@ void SE_Splash( void )
 	if( Sys_GetParmFromCmdLine( "-height", size ))
 		win_h = Q_atoi( size );
 	if( win_w > info.cols ) win_w = info.cols;
-	if( win_h > info.rows ) win_h = info.rows;
+	if( win_h > info.rows - 55 ) win_h = info.rows - 55;	/* all of it above the bar under a caption: 29 and 26 */
 	window = GrNewWindowEx( GR_WM_PROPS_APPWINDOW, "Half-Life: Uplink", GR_ROOT_WINDOW_ID, -1, -1, win_w, win_h, 0 );
 	GrSetWindowBackgroundColor( window, GR_RGB( 0, 0, 0 ));
 	GrMapWindow( window );

@@ -588,6 +588,8 @@ reveal(int r0, int c0)
 	static short stack[MOST_H * MOST_W];
 	int top = 0, r, c, dr, dc;
 
+	if (cell[r0][c0] & C_FLAG)
+		return;		/* (before the mines are laid: the first square opened is never one) */
 	if (state == READY) {
 		lay_mines(r0, c0);
 		state = PLAYING;
@@ -715,6 +717,10 @@ other_event(GR_EVENT *event)
 {
 	if (event->type == GR_EVENT_TYPE_EXPOSURE && event->exposure.wid == window)
 		draw_all();
+	if (event->type == GR_EVENT_TYPE_CLOSE_REQ && event->general.wid == window) {
+		GrClose();
+		exit(0);
+	}
 }
 
 /*

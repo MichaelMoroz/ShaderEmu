@@ -51,8 +51,9 @@ question is a program of its own, `nxask`), and compares with the start. Memory 
 
 - `rvc_cpu` draws no GPU list, so a wait for the GPU is never long there. `rvc_harness --cpu --warp` runs the same line with
   the lists drawn (some 5 M instructions a second), through `tools\gpu_queue.ps1`.
-- `menus` clicks by place (`iclick`, nothing outside the window: the desktop's icons would start programs). Nothing checks that a click found an item, or that a
-  menu opened, and an item below the window's own height is not reached.
+- `menus` is `nxfuzz`'s `menus:`: it finds a menu as a window of the program's process (a menu that reaches below the program's window is walked like any), chooses each row from a
+  menu opened anew and says what the row did (`FZ menus TAG: N menus, N rows; ...`). A walk that found no menu fails unless the program has none (`NO_MENUS`). "Not reached" rows are said,
+  no failure: a context menu may go with what the row before it changed. What a row did inside the program is not checked.
 - Random clicks do not know a program's menus: a menu's far end is reached rarely. What each program's own switches
   and tests reach is in `tools/test_all.py`.
 
@@ -67,3 +68,5 @@ question is a program of its own, `nxask`), and compares with the start. Memory 
   1 run of 160 (3 of 480 plans); the driver now frees the word when a process with `/dev/gpu` ends (0 of 1,440). `nxfuzz --die-with-gpu-lock` does it every time: `test_all.py app-fuzz-lock`.
 - A child kept the window system's socket: a refused program's empty window stayed until its Notice was answered, and OpenTTD's until `open`'s
   40 s were over. `nxask` and `open` close what they were given above 2 first.
+- Micropolis asked for its events only after its first seconds' loading: an X in them went to nobody, and the bar then called it hung, for 200 s.
+- `--before 'export NANOX_SIZE=640x480;'` runs any set at another screen size.

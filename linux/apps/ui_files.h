@@ -230,7 +230,8 @@ ui_files_named(const char *kinds, char *path, int size)
 		return 0;
 	}
 	snprintf(path, size, "%.*s", size - 1, full);
-	if (kinds)
+	/* the name it will write: as typed if it is of a kind asked for (photo.jpg among .png .jpg), else with the first ending */
+	if (kinds && !ui_files_wanted(strrchr(full, '/') ? strrchr(full, '/') + 1 : full, kinds))
 		ui_files_ending(full, sizeof full, kinds);
 	if (access(full, F_OK) == 0 && strcmp(full, ui_files_sure)) {
 		snprintf(ui_files_sure, sizeof ui_files_sure, "%.*s", (int)sizeof ui_files_sure - 1, full);

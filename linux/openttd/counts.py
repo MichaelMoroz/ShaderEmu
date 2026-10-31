@@ -12,9 +12,13 @@ from concurrent.futures import ThreadPoolExecutor
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 image, out = sys.argv[1:3]
+only = sys.argv[3:] # (names of CMDS: only these runs, the others' counts kept)
 B = '/usr/share/openttd/busy.sav'
 CMDS = {
-    'play': f'OPENTTD_PLAY=2 OPENTTD_WORKERS=2 openttd -g {B}',
+    # (one run of all the parts: std::bad_alloc in the counting build, 51 MB of program, by when it zooms out; a process each)
+    'scroll': f'OPENTTD_PLAY=1 OPENTTD_PLAY_PART=scroll OPENTTD_WORKERS=2 openttd -g {B}',
+    'zoom': f'OPENTTD_PLAY=1 OPENTTD_PLAY_PART=zoom OPENTTD_WORKERS=2 openttd -g {B}',
+    'window': f'OPENTTD_PLAY=1 OPENTTD_PLAY_PART=window OPENTTD_PLAY_SCENE=many OPENTTD_WORKERS=2 openttd -g {B}',
     'ticks': f'OPENTTD_WARM=100 openttd -v null:ticks=300 -s null -m null -g {B}',
     'world': 'cp /usr/share/openttd/test.cfg /tmp/t.cfg; openttd.bin -v null:ticks=200 -s null -m null -g -G 1 -c /tmp/t.cfg',
     'paused': f'OPENTTD_PLAY=1 OPENTTD_PLAY_SHORT=1 OPENTTD_WORKERS=7 OPENTTD_PAUSE=1 openttd -g {B}',
@@ -29,9 +33,10 @@ def run(k):
         os.remove(log)
     cmd = '(' + CMDS[k] + ') 2>/tmp/gc >/tmp/gco; gzip -1 /tmp/gc; echo B6-GO; base64 /tmp/gc.gz; echo B6-END'
     env = dict(os.environ, RVC_THREADS='4')
-    subprocess.run([os.path.join(ROOT, 'bin', 'rvc_cpu.exe'), '--quiet', '--ips', '2000000', '--uart-log', log, '--wall', '2400',
+    while subprocess.run([os.path.join(ROOT, 'bin', 'rvc_cpu.exe'), '--quiet', '--ips', '2000000', '--uart-log', log, '--wall', '2400',
                     '--image', image, '--expect', '/ # ', '--send', "nano-X -p & sleep 2; " + cmd + "; echo LX-''DONE\\n",
-                    '--until', 'LX-DONE'], cwd=ROOT, env=env, capture_output=True)
+                    '--until', 'LX-DONE'], cwd=ROOT, env=env, capture_output=True).returncode == 75:
+        time.sleep(20) # (a GPU run holds the lock)
     m = re.search(r'B6-GO\r?\n(.*?)B6-END', open(log, encoding='latin-1').read(), re.S)
     data = gzip.decompress(base64.b64decode(re.sub(r'\s', '', m[1])))
     open(os.path.join(out, k + '.gc'), 'wb').write(data)
@@ -40,5 +45,5 @@ def run(k):
 
 os.makedirs(out, exist_ok=True)
 with ThreadPoolExecutor(len(CMDS)) as ex:
-    for r in ex.map(run, CMDS):
+    for r in ex.map(run, only or CMDS):
         print(r, flush=True)
