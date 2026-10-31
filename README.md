@@ -1,7 +1,7 @@
 # ShaderEmu
 
 A computer emulated entirely in a pixel shader: a 32-bit RISC-V machine that boots Linux to a
-desktop, with its own GPU, and runs Doom. The target is VRChat, which allows only Direct3D 11
+desktop, with its own GPU, and runs Half-Life. The target is VRChat, which allows only Direct3D 11
 graphics shaders (no compute shaders, no UAVs), so the whole machine lives in textures that
 fragment shaders rewrite each frame.
 
@@ -19,73 +19,40 @@ and it is the only way this computer becomes usable.
 
 - **The machine** is RV32IMAF with supervisor mode, derived from
   [pimaker's rvc](https://github.com/pimaker/rvc). Its processor state, RAM and the GPU's
-  memory are one 2048x9280 texture (256 MB of RAM for Linux); the root file system is a ROM in four more.
+  memory are one 2048 x 9280 texture (256 MB of RAM, 0x82000000 to 0x92000000, the devices' 32 MB
+  below it); the root file system is a ROM in four more.
 - **256 cores** (`docs/machine/multicore.md`): Linux runs on core 0, and programs borrow worker cores
   for their loops: decoding pictures, sound and films, physics, path tracing, the browser's
-  strips, a game's server or its view.
+  strips, a game's server or its view. A worker's pixels can run lanes of their own
+  (`docs/machine/lanes.md`).
 - **Linux without an MMU** (`docs/system/nommu.md`): 5.17, our build of pimaker's fork, built without
-  `CONFIG_MMU`, every program a flat one, and the machine with no page walk at all. It is
-  11 to 16% faster in the games than the same Linux with the MMU, which is now legacy: it still
-  builds and boots (`--kernel mmu`), and is no longer tested. Either boots without firmware:
-  the emulator answers the kernel's SBI calls itself (`docs/machine/boot.md`). The shell and tools are
-  a static busybox on musl.
+  `CONFIG_MMU`, every program a flat one, and the machine with no page walk at all. It boots without
+  firmware: the emulator answers the kernel's SBI calls itself (`docs/machine/boot.md`). The shell and
+  tools are a static busybox on musl. Linux with the MMU is no longer supported.
 - **A GPU device** (`docs/machine/gpu.md`): the guest writes vertex buffers, textures and a command
   list into memory, and a mesh whose shaders read them is rasterised by the real graphics
   card, in up to eight passes with depth and blending. A small fixed-point OpenGL ES 1.x
   library sits on it (`programs/linux/gles.c`).
+- **Devices**: keyboard, pointer and wheel as Linux input devices (`docs/machine/input.md`), a display
+  the guest describes in a few control words (`docs/machine/display.md`), a sound card
+  (`docs/machine/sound.md`), a console (`docs/machine/console.md`), float instructions
+  (`docs/machine/fpu.md`).
 - **A desktop** (`docs/system/nanox.md`): Nano-X, with every window in a buffer of its own and the
-  screen composed by the GPU. A bar with a Start menu, pinned programs, task buttons, a
-  calendar and the volume; an xterm-like terminal, a tabbed editor, a file manager, a browser
-  with CSS (`docs/apps/web.md`), paint, a photo viewer, a music player with a playlist
-  (`docs/apps/play.md`), a video player (`docs/apps/video.md`), an IDE with a debugger (`docs/apps/ide.md`),
-  Windows 7's calculator, Task Manager and clock, Tetris, Mines, Pinball (`docs/apps/pinball.md`),
-  settings kept in a registry,
-  photographs for a desktop, and `glxgears`.
-  The machine starts it by itself at boot. Two looks, chosen in Settings: Windows 7 (Oxygen
-  icons, glass frames, the Selawik font) and classic; a program that fails to start is reported
-  in a window. Where each part of the desktop is: the table at the top of `docs/system/nanox.md`.
+  screen composed by the GPU, a bar with a Start menu, pinned programs, task buttons, a calendar and
+  the volume. The machine starts it by itself at boot. Two looks, chosen in Settings: Windows 7
+  (Oxygen icons, glass frames, the Selawik font, `docs/system/fonts.md`) and classic. A program that
+  fails to start is reported in a window, and a file opens with the program for its kind
+  (`docs/system/open.md`).
 - **Pictures, sound and films** (`docs/system/media.md`): one library, libmedia, decodes and encodes
-  them on the worker cores for every program, and inflates one deflate stream on many cores:
-  `unarc` unpacks zip, tar and `.tar.gz` archives with it, eight to ten times faster than busybox.
-- **Pages from the web** (`docs/system/fetch.md`): the machine has no way out of its own, so the
-  browser asks the host, which fetches the page and writes it into memory in one shader pass.
+  them on the worker cores for every program, and inflates one deflate stream on many cores.
 - **A network between machines** (`docs/system/lan.md`): TCP/IP with Linux's own stack, each machine a
   host of one network; the harnesses and the players of the VRChat world are its hosts.
+- **Pages from the web** (`docs/system/fetch.md`): the machine has no way out of its own, so the
+  browser asks the host, which fetches the page and writes it into memory in one shader pass. An
+  `http` address on the machines' own network it opens over its own sockets (`docs/apps/web.md`).
 - **A folder that persists** (`docs/system/persist.md`): `/persistence`, which the host keeps between
-  sessions when asked; in the world, as the player's PlayerData.
-- **Doom** (`docs/games/doom.md`): Microwindows' port, with the level drawn by the machine's GPU
-  through OpenGL instead of by its CPU.
-- **Half-Life: Uplink** (`docs/games/halflife.md`): Xash3D FWGS with the HLSDK, the level kept in
-  GPU memory with its light maps; Valve's demo data is fetched from archive.org when an image is
-  made, never committed.
-- **Red Alert** (`docs/games/ralert.md`): the same source tree's Red Alert with the 1996 demo's data
-  (a Soviet and an Allied mission), on Tiberian Dawn's layer: the map on the GPU, sound and music.
-- **Command & Conquer** (`docs/games/tdawn.md`): Vanilla Conquer's Tiberian Dawn with the 1995 demo's
-  missions, drawn in software and shown by the GPU: it plays, at a half to two thirds of its speed.
-- **Quake** (`docs/games/quake.md`): id's GLQuake with the shareware episode, everything drawn by the
-  GPU, on float instructions the machine gained for it (`docs/machine/fpu.md`).
-- **Quake III Arena** (`docs/games/quake3.md`): ioquake3 with the free demo's The Longest Yard and its
-  bots, the server's frame on a worker core and every picture drawn by the machine's GPU.
-- **A NES** (`docs/games/nes.md`): Nofrendo with two free games, at a NES's speed or near it.
-- **Micropolis** (`docs/games/micropolis.md`): the city simulator of 1989 (MicropolisCore's engine) with
-  its cities and scenarios, the map drawn by the GPU, the budget, evaluation, graphs and overview
-  map in windows of their own, and its sounds.
-- **ClassiCube** (`docs/games/classicube.md`): the Minecraft Classic client, a world of blocks to dig and
-  build in, drawn by the GPU from chunks kept in its memory: 50 to 70 frames a second walking.
-- **Programs for every core**: rigid boxes on every core (`docs/apps/physics.md`), a path tracer of
-  meshes (`docs/apps/raytrace.md`), and Dear ImGui over the machine's OpenGL (`docs/apps/imgui.md`).
-- **A C compiler in the machine** (`docs/system/cc.md`): TinyCC, with the C library, Nano-X,
-  OpenGL ES and the worker cores, and examples it builds there.
-- **An IDE for it** (`docs/apps/ide.md`): tabs and a project's tree, coloured text with undo and
-  redo, the compiler's errors marked at their lines as you type, Build and Run, and a debugger
-  that steps a line at a time and shows the variables and the call stack; JavaScript and Python
-  too, Python with the same debugger.
-- **Scripts** (`docs/system/scripts.md`): QuickJS's `qjs` and MicroPython.
-- **Upstream's programs, built flat** for Linux without an MMU, where its own dynamic ones do not
-  run: nano, htop, Midnight Commander, mg, dialog, file and sl (`docs/system/terminal.md`), and
-  Dropbear's ssh, sftp, curl with TLS, socat, thttpd, at and iproute2 (`docs/system/ports.md`).
-- **Keyboard, pointer and wheel** as Linux input devices (`docs/machine/input.md`), a display the guest
-  describes in a few control words (`docs/machine/display.md`).
+  sessions when asked (in the world, as the player's PlayerData), with a registry of settings all
+  programs share.
 - **A VRChat world** (`unity/ShaderEmu`, `docs/world/world.md`): the same shaders run by UdonSharp
   scripts, a machine for every player, in a den of the 1990s. On its wall the display, a
   console, keyboards and a live view of memory, and a screen that is a window onto a 3D
@@ -94,6 +61,73 @@ and it is the only way this computer becomes usable.
   (`docs/world/stations.md`), and in the holodecks a 3D game's frame is a world round one's seat
   (`docs/world/holodeck.md`). The Control panel sets the speed and the instructions a tick, and
   shows how much of a tick the machine reaches.
+
+## What is in the image
+
+Every program below is in `build/images/nommu`, and flat (`ls /usr/bin` in the machine). The Start
+menu lists those with a window; the machine's own reader has these docs at `/usr/share/doc/shaderemu`.
+
+### Games
+
+| In the Start menu | What it is | Doc |
+|---|---|---|
+| Half-Life: Uplink (`halflife`) | Xash3D FWGS with the HLSDK, its 3D on a worker core a frame behind; Valve's demo data is fetched from archive.org when an image is made, never committed | `docs/games/halflife.md` |
+| Quake (`quake`) | id's GLQuake with the shareware episode, everything drawn by the GPU, the server on a worker | `docs/games/quake.md` |
+| Quake III Arena (`quake3`) | ioquake3 with the free demo's The Longest Yard and its bots, the server's frame on a worker | `docs/games/quake3.md` |
+| Doom (`doom`) | Microwindows' port, the level drawn by the GPU, the view made on up to four workers | `docs/games/doom.md` |
+| Tiberian Dawn (`tdawn`) | Vanilla Conquer with the 1995 Command & Conquer demo's missions, the map on the GPU | `docs/games/tdawn.md` |
+| Red Alert (`ralert`) | the same source tree with the 1996 demo's data (a Soviet and an Allied mission), sound and music | `docs/games/ralert.md` |
+| OpenTTD (`openttd`) | OpenTTD 15.3 with the open base sets, the picture on the GPU, viewports on the workers, the game's tick on a worker | `docs/games/openttd.md` |
+| ClassiCube (`classicube`) | the Minecraft Classic client, a world of blocks to dig and build in, chunks kept in GPU memory | `docs/games/classicube.md` |
+| Micropolis (`nxmicropolis`) | the city simulator of 1989 (MicropolisCore's engine) with its cities and scenarios, the map on the GPU | `docs/games/micropolis.md` |
+| Thwaite, Nova the Squirrel (`nes`) | a NES: Nofrendo with two free games, or any `.nes` of a mapper it has | `docs/games/nes.md` |
+| Pinball (`nxpinball`) | a table of our own | `docs/apps/pinball.md` |
+| Tetris, Mines (`nxtetris`, `nxmine`) | small games on the desktop | `docs/system/nanox.md` |
+| Network (`nxgame`) | Quake, Quake III, OpenTTD and Doom hosted and joined between machines | `docs/system/lan.md` |
+
+### The desktop's programs
+
+| Program | What it is | Doc |
+|---|---|---|
+| `nxterm` | a terminal, xterm-like | `docs/system/nanox.md` |
+| `nxfiles` | the file manager and the desktop itself | `docs/system/nanox.md` |
+| `nxedit` | a tabbed editor, with a reader for Markdown | `docs/system/nanox.md` |
+| `nxweb` | a browser: HTML, CSS, forms, cookies, no scripts; `http` over the machine's own sockets, the rest through the host | `docs/apps/web.md` |
+| `nxpaint`, `nxview` | paint; a photo viewer | `docs/system/nanox.md` |
+| `nxplay` | a music player with a playlist (MP3, FLAC, Ogg, WAV, MOD) | `docs/apps/play.md` |
+| `nxvideo` | a video player (MPEG-1, VQA, Motion JPEG, GIF) | `docs/apps/video.md` |
+| `nxcalc`, `nxclock`, `nxmon` | Windows 7's calculator and clock; Task Manager | `docs/system/nanox.md` |
+| `nxsettings`, `nxreg`, `nxpersist` | settings; the registry; what `/persistence` keeps | `docs/system/nanox.md`, `docs/system/persist.md` |
+| `nxnet` | the machines of the network and their shared folders | `docs/system/lan.md` |
+| `open`, `unarc` | a file with the program for its kind; zip, tar and `.gz` unpacked on the workers, eight to ten times busybox's speed | `docs/system/open.md`, `docs/system/media.md` |
+| `nxphys` | rigid boxes on every core | `docs/apps/physics.md` |
+| `nxray`, `nxpath` | rays on every core; a path tracer and viewer of meshes | `docs/apps/raytrace.md` |
+| `imdemo` | Dear ImGui over the machine's OpenGL | `docs/apps/imgui.md` |
+| `glxgears`, `nxeyes`, `nxev`, `demo-*` | Mesa's gears; Nano-X's eyes, event viewer and demos | `docs/system/nanox.md` |
+
+The bar (`nxbar`), questions (`nxask`), the shutdown (`nxoff`), program icons (`nxicon`) and typed keys
+for tests (`nxkey`) are the desktop's parts: `docs/system/nanox.md`.
+
+### Developer tools
+
+| Program | What it is | Doc |
+|---|---|---|
+| `nxide` | an IDE: a project's tree, coloured text, errors marked as you type, Build and Run, a debugger for C and Python, JavaScript and HLSL too | `docs/apps/ide.md` |
+| `cc`, `tcc`, `elf2flt`, `example` | TinyCC with the C library, Nano-X, OpenGL ES and the worker cores, and examples it builds there | `docs/system/cc.md` |
+| `hlslc`, `hlslview` | HLSL compiled in the machine to steps on the lanes | `docs/system/hlsl.md` |
+| `qjs`, `qjsc`, `micropython` | QuickJS and MicroPython | `docs/system/scripts.md` |
+| `nano`, `mg`, `mc`, `htop`, `dialog`, `file`, `sl` | upstream's terminal programs, built flat | `docs/system/terminal.md` |
+| `mctest`, `lanetest`, `steptest`, `fptest`, `sndtest`, `media_test`, `hlsl_bench`, `nxbench`, `geotune`, `handoff`, `printf_check` | the machine's own tests and benchmarks | `docs/machine/multicore.md`, `docs/machine/lanes.md`, `docs/machine/cpu-harness.md` |
+
+### Ports
+
+Upstream's network and system programs, built flat (`docs/system/ports.md`): Dropbear's `ssh`, `scp`,
+`dbclient` and server, OpenSSH's `sftp`, `curl` with TLS, `socat` with `filan` and `procan`, `thttpd` with
+`makeweb` and `htpasswd`, `pcregrep` and `pcretest`, `dotlockfile` and lockfile-progs, `at` and `atd`, and
+iproute2's `ss`, `bridge`, `tc`, `genl`, `ifstat`, `lnstat`, `nstat`, `rtacct` and `rtmon`. BusyBox has the
+rest (`docs/system/nommu.md`).
+
+## How fast
 
 Every machine on an RTX 5070 laptop on 19 October 2026 (`docs/machine/speed.md`, with the
 commands and more loads): a game's frame by the guest's clock, and core 0's millions of emulated
@@ -108,50 +142,46 @@ instructions a second on `factor 999999999989`:
 | the machine on the host's processor (`--cpu`, an i7-13650HX) | 6.8 | 6.4 | 6.1 | 60.2 | 3.4 | 111M |
 | upstream rvc, its own Linux | | | | | | 0.35M |
 
-Speed on an RTX 5090, in emulated instructions per second (measured earlier, with the MMU):
+The games now, frames a second by the guest's clock: `python tools/game_par.py GAME` on the image of
+31 October 2026 with `rvc_cpu`'s clock fitted to an RTX 5090 (calibrated, good to about 7%; a run of
+under a minute: `docs/machine/speed.md`, "Calibrated"), beside the card itself in October 2026 where
+the fit has its run:
 
-| Shader | Compiler / API | Speed |
+| Game, the load | RTX 5090 | calibrated |
 |---|---|---|
-| upstream rvc | FXC, D3D11 | about 0.5M |
-| `experiments/rvc_opt` | FXC, D3D11 (what VRChat runs) | 2.6M to 3.4M under Linux |
-| `experiments/rvc_opt` | DXC, D3D12 | 3.4M to 4.5M under Linux |
-| the VRChat world | Unity, D3D11 | 2.7M to 2.9M |
+| Doom, `-timedemo demo1` | 145.4 | 145.9 |
+| Quake, `+timedemo demo1` | | 109.7 |
+| Quake III, q3dm17 with a bot, frames 300 to 700 | 79.4 | 77.4 |
+| Tiberian Dawn, mission 3, frames 301 to 1200 (it wants 20) | 60.4 | 60.8 |
+| Red Alert, the Soviet mission, frames 301 to 1200 | 86.2 | 86.8 |
+| ClassiCube, walking into a hill, 854 x 480 | | 176.2 |
+| the NES, Thwaite, its frames 100 to 1000 (it wants 60) | | 226.8 |
 
-What that buys, in frames per second: `glxgears` in a window about 580 (DXC) and 420 (FXC);
-Doom played in real time at the start of the first level about 31 (DXC) and 23 (FXC).
+Half-Life and OpenTTD have their own figures, from 31 October 2026: Half-Life's fight on `rvc_cpu`
+15.2 frames a second and walking 26.2 (`docs/games/halflife.md`, "Speed"); OpenTTD on the card under a
+VR frame, a played round 10.3 to 11.2 pictures and 2.6 to 2.9 game ticks a second
+(`docs/games/openttd.md`, "Speed on 31 October").
+
+The D3D11 build needs no FXC: [fxc2](https://github.com/MichaelMoroz/FXC2) compiles the CPU shader
+in seconds where FXC takes minutes, and because it can compile what FXC cannot (the write cache as
+local arrays, MULH as one instruction) its build is faster too (`docs/machine/fxc2.md`).
 `experiments/rvc_opt/README.md` lists the changes to the CPU shader and what each measured.
-
-The games on the card (RTX 5090, D3D11 with fxc2, guest time, 16 October 2026; `docs/system/nommu.md`):
-
-| Program | Linux with the MMU | without it |
-|---|---|---|
-| Doom, `timedemo demo1` | 129.1 fps | 143.6 fps |
-| Quake, `timedemo demo1` | 80.7 fps | 92.5 fps |
-| Quake III, q3dm17 with 3 bots | 20.9 fps | 24.2 fps |
-| Red Alert, game frames | 75.6 a second | 87.6 a second |
-
-The D3D11 build no longer needs FXC: [fxc2](https://github.com/MichaelMoroz/FXC2) compiles the
-CPU shader in 9 seconds instead of 9 minutes and, because it can compile what FXC cannot (the
-write cache and TLB as local arrays, MULH as one instruction), its build is faster too: on an
-RTX 5070 laptop 1,970k against 1,528k instructions per second at 2,048 instructions a frame, and
-a Linux cold boot in 22.6 s against 30.2 s, with the same emulated state. `docs/machine/fxc2.md` has the
-how and the numbers.
 
 ## Try it (Windows)
 
 Needs CMake 3.20+ and Visual Studio 2022 (MSVC) with the Windows SDK, Python with Pillow, and
-upstream rvc cloned next to the sources for its boot images:
+upstream rvc cloned next to the sources: the image is made on its root file system.
 
     git clone https://github.com/pimaker/rvc rvc
-    build.bat                          # the harness: bin\rvc_harness.exe, bin\rvc_harness_dxc.exe
-    pwsh tools\make_image.ps1          # the Linux images, from linux\prebuilt (no compiler needed)
+    build.bat                          # the harness: bin\rvc_harness.exe, bin\rvc_harness_dxc.exe, bin\rvc_cpu.exe
+    pwsh tools\make_image.ps1          # the Linux image, from linux\prebuilt (no compiler needed)
 
 Then double-click `bin\rvc_harness.exe` (D3D11, as VRChat runs it, with the worker cores; the
 build puts fxc2's `d3dcompiler_47.dll` next to it, so the shader compiles in seconds, where FXC
 takes minutes: `docs/machine/fxc2.md`) or `bin\rvc_harness_dxc.exe` (D3D12 + DXC, one core only).
-A menu asks what to boot; `linux-net` is Linux with the desktop, without the MMU
-(`build\images\nommu`). `k` and `i` in the menu, or `--kernel mmu|nommu` and `--isa base|zb`,
-choose; Linux with the MMU (`build\images\linux`) is legacy, and what the other is made on.
+A menu asks what to boot; `linux-net` is Linux with the desktop (`build\images\nommu`). `i` in the
+menu, or `--isa base|zb`, chooses the instruction set. `bin\rvc_cpu.exe` is the machine on the processor,
+no card needed (`docs/machine/cpu-harness.md`).
 
 Two windows appear. The console is the machine's serial terminal: every key goes to the guest,
 Ctrl+C and the arrows included, and **Ctrl+]** quits. The other window is the machine's screen:
@@ -161,7 +191,7 @@ mouse, and all of its memory on the right, with what is being written glowing.
 
 | image | what it is |
 |---|---|
-| `linux-net` | Linux with our kernel, tools and the desktop: without the MMU (`build\images\nommu`) or with it (`build\images\linux`, legacy) |
+| `linux-net` | Linux with our kernel, tools and the desktop (`build\images\nommu`) |
 | `gears` | three lit, textured gears drawn by the GPU device, bare metal (`programs/gears`) |
 | `blend`, `rects` | GPU test cards: passes and blending; 3,600 rectangles copied back to RAM |
 | `raycast` | our Wolfenstein-style raycaster: w/a/s/d or the arrows, `x` walks on its own |
@@ -176,26 +206,29 @@ One harness on the card runs alone: it refuses to start beside another or beside
 `rvc_harness --help` lists every option, and `AGENTS.md` holds the working notes: how to script
 runs, measure speed, and what has been tried.
 
-To rebuild the guest software (WSL, no root; everything goes to `~/shaderemu-linux`):
+To rebuild the guest software (WSL, no root; from the repository's folder; everything goes to
+`~/shaderemu-linux` and `~/nm`). `docs/system/nommu.md`, "Building it", has each step:
 
-    wsl -- bash /mnt/c/.../linux/kernel/build.sh       # toolchain and kernel
-    wsl -- bash /mnt/c/.../linux/userland/build.sh     # init
-    wsl -- bash /mnt/c/.../linux/userland/busybox.sh   # shell and tools
-    wsl -- bash /mnt/c/.../linux/nanox/build.sh        # Nano-X and its programs
-    wsl -- bash /mnt/c/.../linux/apps/build.sh         # the desktop's own programs
-    wsl -- bash /mnt/c/.../linux/nanox/doom.sh         # Doom
-    wsl -- bash /mnt/c/.../linux/tcc/build.sh          # the C compiler for the guest, its examples
-    python tools\make_wallpaper.py                     # desktop pictures (fetched, not kept here)
-    python tools\make_icons.py                         # both looks' icons and frame pictures (fetched)
-    python tools\make_fonts.py                         # the ROM fonts, the desktop's Selawik among them (fetched)
-    python tools\make_linux_image.py
+    wsl -- bash linux/kernel/build.sh      # once: the cross compiler and the kernel's tree
+    wsl -- bash linux/userland/build.sh    # once: the C library, init
+    wsl -- bash linux/nommu/setup.sh       # once: compiler drivers for flat programs, ~/nm
+    pwsh linux\nommu\all.ps1 -Kernel       # the kernel, every program, the root, the image, the test set
 
-The games and programs with a folder of their own have a `build.sh` each, and their docs say
-when to run it. That is Linux with the MMU, which Linux without it is made from, with the same
-sources (`docs/system/nommu.md`): `bash linux/nommu/setup.sh` once in WSL, then `pwsh
-linux\nommu\all.ps1 -Kernel` makes its kernel, programs, root and image and runs the test set.
-`python tools\test_all.py` is the test set (about a minute), on Linux without the MMU; `pwsh
-tools\make_image.ps1 --save-prebuilt` keeps both builds in `linux\prebuilt`.
+`all.ps1` is `linux/nommu/kernel.sh`, `build.sh` (one script a game or program; names after it build
+only those), `root.sh`, the icons and fonts, `image.py` and `test.py`. A change to one program:
+
+    wsl -- bash linux/nommu/build.sh quake/build.sh
+    wsl -- bash linux/nommu/root.sh
+    pwsh tools\make_image.ps1
+
+WSL's `python3` wants numpy (Quake III's level, ClassiCube's sound) and `ffmpeg` is wanted once, for
+ClassiCube's tune, and for Half-Life's data. The address the path tracer's teapot is fetched from no
+longer answers: before the first build, `mkdir -p ~/nm/work/src/pathtrace-data` and copy
+`linux/prebuilt/root/root/Models/teapot.obj` there. Desktop pictures are `python tools\make_wallpaper.py`
+(fetched, not kept here).
+
+`python tools\test_all.py` is the test set (152 cases on `rvc_cpu`, about two minutes; `--list` names them).
+`pwsh tools\make_image.ps1 --save-prebuilt` keeps a build in `linux\prebuilt`.
 
 ## Layout
 
@@ -206,28 +239,31 @@ tools\make_image.ps1 --save-prebuilt` keeps both builds in `linux\prebuilt`.
   backends: D3D11 with FXC bytecode, as VRChat runs it, and D3D12 with DXC; `apps/rvc_cpu.cpp`
   is the machine as an interpreter on the processor (`docs/machine/cpu-harness.md`). `core/` is the
   ShaderLab parser, compiler cache, materials by reflection, readback and the memory view.
-- `linux/kernel/` – build script for the kernel and our drivers: the GPU (`/dev/gpu`), the
+- `linux/kernel/` – the kernel's tree and our drivers, which `linux/nommu/kernel.sh` builds: the GPU (`/dev/gpu`), the
   display (`/dev/fb0`), keyboard and pointer, and hooks that send large copies and fills to
   the machine's parallel copy.
-- `linux/nommu/` – Linux without the MMU: its kernel's patches, the flat programs' compiler
+- `linux/nommu/` – the machine's Linux: its kernel's patches, the flat programs' compiler
   drivers and loader format, the image, its test set and memory test.
 - `linux/userland/` – the musl toolchain, the image's init and busybox.
 - `linux/libmedia/` – pictures, sound and films for every program, on the worker cores.
 - `linux/nanox/` – Nano-X: its screen, keyboard and pointer drivers for this machine, our
   patch to Microwindows, the bar, and Doom's video and OpenGL renderer.
 - `linux/apps/` – the desktop's programs: editor, files, browser, paint, viewer, settings, monitor.
-- `linux/quake/`, `linux/quake3/`, `linux/halflife/`, `linux/tdawn/`, `linux/ralert/`, `linux/classicube/`,
-  `linux/nes/`, `linux/physics/` and the rest – the ports and programs that have a folder of their own.
-- `linux/prebuilt/` – the kernels and programs already built: the root with the MMU, and in
-  `nommu/` the kernel without it and the programs that differ (sources and licences in its
-  README).
+- `linux/quake/`, `linux/quake3/`, `linux/halflife/`, `linux/tdawn/`, `linux/ralert/`, `linux/openttd/`,
+  `linux/classicube/`, `linux/micropolis/`, `linux/nes/`, `linux/physics/`, `linux/ports/` and the rest –
+  the ports and programs that have a folder of their own.
+- `linux/prebuilt/` – the kernels and programs already built: a shared root, and in `nommu/` the
+  machine's kernel and flat programs (sources and licences in its README).
 - `programs/` – bare-metal programs in C, `programs/linux`: the OpenGL library and
-  `glxgears`, and `programs/mc`: the worker cores' library (`mcw.c`, `mcwx.h`) and its test.
+  `glxgears`, `programs/mc`: the worker cores' library (`mcw.c`, `mcwx.h`) and its tests,
+  `programs/hlsl`: the HLSL compiler, `programs/wl`: the machine's workloads piece by piece.
+- `experiments/` – beside `rvc_opt`: `rvc_lean` and `rv32_min` (the processor written again, as fragment
+  and compute shaders), `rvc_compute`, `isa_proto` and `udon_aot` (studies; each has its own notes).
 - `unity/ShaderEmu/` – the VRChat world: UdonSharp scripts, shaders and the editor scripts
   that build the scene.
 - `world/` – the Blender scripts that model the room, its computers and the city (`docs/world/world.md`).
-- `tools/` – the image builder, the test set (`test_all.py`), a software model of the GPU
-  (`gpu_reference.py`), profilers (`prof.py`: `docs/machine/profiling.md`; `pc_profile.py`,
+- `tools/` – the image builder, the test set (`test_all.py`), games' speeds (`game_par.py`,
+  `calibrate.py`), a software model of the GPU (`gpu_reference.py`), profilers (`prof.py`: `docs/machine/profiling.md`; `pc_profile.py`,
   `boot_profile.py`, `tick_util.ps1`), the
   queue every run on the card goes through (`gpu_queue.ps1`), the speed test and the console
   viewer.
@@ -242,8 +278,7 @@ tools\make_image.ps1 --save-prebuilt` keeps both builds in `linux\prebuilt`.
 - A way out to the internet: the machines reach each other (`docs/system/lan.md`), and pages reach the
   browser through the host (`docs/system/fetch.md`); nothing else leaves.
 - `linux/prebuilt` lags behind the sources between refreshes.
-- The Unity world runs one machine configuration (Linux without the MMU); the bare-metal
-  images run only in the harness.
+- The bare-metal images run only in the harness.
 
 An earlier plan targeted an 8086 PC running MS-DOS and Windows 3.0. It was dropped as too slow;
 the design notes are kept in `docs/plans/original-x86-plan.md`.

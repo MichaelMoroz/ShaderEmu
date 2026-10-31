@@ -12,6 +12,7 @@ One file per subject. A doc names another by its file name, which is unique acro
 - [fxc2.md](machine/fxc2.md) – fxc2: the D3D11 build without FXC
 - [gpu.md](machine/gpu.md) – GPU
 - [input.md](machine/input.md) – Input
+- [lanes.md](machine/lanes.md) – Lanes: a worker's pixels each on an index of their own
 - [multicore.md](machine/multicore.md) – More than one core
 - [profiling.md](machine/profiling.md) – Profiling the programs the machine runs
 - [sound.md](machine/sound.md) – The sound card
@@ -76,3 +77,6 @@ One file per subject. A doc names another by its file name, which is unique acro
 - [cpu-benchmarks-plan.md](plans/cpu-benchmarks-plan.md) – Plan: the benchmarks of the era, on the machine
 - [simd-lanes-plan.md](plans/simd-lanes-plan.md) – Plan: lanes, a worker's pixels each on an index of their own
 - [original-x86-plan.md](plans/original-x86-plan.md) – Windows in a VRChat Shader — Project Handoff
+- [riscv-backport-plan.md](plans/riscv-backport-plan.md) – What the week of another machine could give this one (28 October 2026)
+- [riscv-isa.md](plans/riscv-isa.md) – The machine's instruction set, studied
+- [riscv-profile.md](plans/riscv-profile.md) – Where the programs' instructions go, program by program
