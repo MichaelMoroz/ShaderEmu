@@ -239,9 +239,9 @@ the frame take the probes' light. After a change to `linux/apps/nxopen.conf`, a 
 
 ## The power warning
 
-Where a visitor powers on, the world says that the machine crashes the game on Windows with an AMD card
-(its shader is too much for that driver's compiler), that other cards have problems at times, and which
-work so far. `EmuMachine.PowerWarning` is on the console while the machine is off and on the control
+Where a visitor powers on, the world says that the machine used to crash the game on Windows with an AMD
+card (its shader was too much for that driver's compiler), that this may now be fixed though few AMD cards
+have run it, that other cards have problems at times, and which work so far. `EmuMachine.PowerWarning` is on the console while the machine is off and on the control
 panel's read-out beside "Power on" (the visitor's own; the line sent to others stays "off");
 `PowerWarningShort` (`ShaderEmuConsole.cs`) is a sign over the storage sign on the tower, in the power
 sign's leaning plane and as wide: "ShaderEmu/Add the power warning to the open scene", no bake.
