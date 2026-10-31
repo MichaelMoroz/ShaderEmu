@@ -389,3 +389,4 @@
   `-fdata-sections -fno-common` and the 16-byte assembler, or statics a worker writes share texels (`RVC_RACES` undone), and
   after a large change to the source `linux/openttd/counts.py` makes the counts anew. `build.sh` puts the tree back from
   `openttd.patch` on every build: write the tree's diff to the patch first.
+- Age of Empires (`linux/aoe`, `docs/games/aoe.md`) is decompiled code with the trial's data: until the developer decides, it stays out of `ALL` in `linux/nommu/build.sh`, out of `linux/prebuilt`, and on private images. Upstream's code holds offsets of the Windows build's objects (`0x194` in `vis_unit.cpp` broke memory after 700 updates): take a member's place from the compiler. `test_all.py aoe --image` a private image must say its sum; a change that draws differently keeps the pictures' bytes under qemu (`AOE_DUMP`).

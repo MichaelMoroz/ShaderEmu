@@ -77,6 +77,7 @@ menu lists those with a window; the machine's own reader has these docs at `/usr
 | Tiberian Dawn (`tdawn`) | Vanilla Conquer with the 1995 Command & Conquer demo's missions, the map on the GPU | `docs/games/tdawn.md` |
 | Red Alert (`ralert`) | the same source tree with the 1996 demo's data (a Soviet and an Allied mission), sound and music | `docs/games/ralert.md` |
 | OpenTTD (`openttd`) | OpenTTD 15.3 with the open base sets, the picture on the GPU, viewports on the workers, the game's tick on a worker | `docs/games/openttd.md` |
+| Age of Empires (`aoe`, private images only) | The decompiled game on the first core with the 1997 trial's data, no sound yet | `docs/games/aoe.md` |
 | ClassiCube (`classicube`) | the Minecraft Classic client, a world of blocks to dig and build in, chunks kept in GPU memory | `docs/games/classicube.md` |
 | Micropolis (`nxmicropolis`) | the city simulator of 1989 (MicropolisCore's engine) with its cities and scenarios, the map on the GPU | `docs/games/micropolis.md` |
 | Thwaite, Nova the Squirrel (`nes`) | a NES: Nofrendo with two free games, or any `.nes` of a mapper it has | `docs/games/nes.md` |

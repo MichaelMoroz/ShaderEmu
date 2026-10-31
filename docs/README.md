@@ -55,6 +55,7 @@ One file per subject. A doc names another by its file name, which is unique acro
 - [micropolis.md](games/micropolis.md) – Micropolis
 - [nes.md](games/nes.md) – A NES
 - [openttd.md](games/openttd.md) – OpenTTD
+- [aoe.md](games/aoe.md) – Age of Empires, the 1997 trial (private images only)
 - [quake.md](games/quake.md) – Quake
 - [quake3.md](games/quake3.md) – Quake III Arena
 - [ralert.md](games/ralert.md) – Red Alert

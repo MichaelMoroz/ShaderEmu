@@ -1,6 +1,8 @@
 # Plan: Age of Empires, the 1997 trial
 
-Written 17 October 2026. Nothing here is built. It comes from reading the trees below at the
+Where it got to, 31 October 2026: `docs/games/aoe.md`. A game starts and plays on the machine, on private images, without sound and on the first core alone; where that page and this plan differ the page is right.
+
+Written 17 October 2026. Nothing was built then. It comes from reading the trees below at the
 commits given, from unpacking the trial's installer, and from reading `linux/tdawn`,
 `docs/games/tdawn.md`, `docs/machine/sound.md` and `docs/system/fonts.md`. What the reading did not settle is under
 "To find out first".
