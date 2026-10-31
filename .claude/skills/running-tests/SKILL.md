@@ -1,6 +1,6 @@
 ---
 name: running-tests
-description: Run ShaderX86's test sets and read them - tools/test_all.py (tags, --races, --long, --sections, --card-model, --doubles, --cpu, --image, --logs, walls), tools/test_card.py (--parts, --warp, --mark-ok, --snapshot), running from a git worktree, adding a case, setting a value moved on purpose, and what to do with a failure. Use after a change, before a merge, when a case fails or times out, when adding a test to a program, or when asked whether something still passes. Triggers on: test_all, test_card, the test set, a case failed, cc-bytes, --races, --parts, WARP, CC_BYTES_NOMMU, CARD table, regression, FAIL.
+description: Run ShaderEmu's test sets and read them - tools/test_all.py (tags, --races, --long, --sections, --card-model, --doubles, --cpu, --image, --logs, walls), tools/test_card.py (--parts, --warp, --mark-ok, --snapshot), running from a git worktree, adding a case, setting a value moved on purpose, and what to do with a failure. Use after a change, before a merge, when a case fails or times out, when adding a test to a program, or when asked whether something still passes. Triggers on: test_all, test_card, the test set, a case failed, cc-bytes, --races, --parts, WARP, CC_BYTES_NOMMU, CARD table, regression, FAIL.
 ---
 
 # Running the tests
@@ -22,7 +22,7 @@ Depth: `docs/machine/cpu-harness.md` ("The test set"). Comments at the head of `
 
 A worktree has no `bin\` or `build\`, so name what the run needs. This was run on 31 October 2026:
 
-    python tools/test_all.py mctest-3 fptest --cpu D:\Development\ShaderX86\bin\rvc_cpu.exe --image D:\Development\ShaderX86\build\images\nommu --logs C:\...\scratchpad\ta
+    python tools/test_all.py mctest-3 fptest --cpu MAIN\bin\rvc_cpu.exe --image MAIN\build\images\nommu --logs C:\...\scratchpad\ta
 
 The tests then test *that* image, not the worktree's sources: a change to the program needs a private image. The `--logs` folder keeps from writing the checkout's `build\test_all`. `times.json` there orders the longest cases first.
 

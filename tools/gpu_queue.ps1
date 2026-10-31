@@ -8,8 +8,8 @@
 # folder): its process, the process that started it, since when, the folder and the command, and
 # GPU_QUEUE_WHO if the caller set it (a session's or a script's name). A run that has to wait prints
 # that first, so a wait says whose run it is behind.
-$mutex = [Threading.Mutex]::new($false, 'Global\ShaderX86-gpu-run')
-$holder = Join-Path ([IO.Path]::GetTempPath()) 'ShaderX86-gpu-run.holder'
+$mutex = [Threading.Mutex]::new($false, 'Global\ShaderEmu-gpu-run')
+$holder = Join-Path ([IO.Path]::GetTempPath()) 'ShaderEmu-gpu-run.holder'
 $waited = [Diagnostics.Stopwatch]::StartNew()
 $got = $false
 try { $got = $mutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $got = $true }   # its holder died: the turn is ours

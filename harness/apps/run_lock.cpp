@@ -12,7 +12,7 @@
 #include <cstdlib>
 #include <string>
 
-// A shared or exclusive LockFileEx on one byte of %LOCALAPPDATA%\ShaderX86\harness.lock; each
+// A shared or exclusive LockFileEx on one byte of %LOCALAPPDATA%\ShaderEmu\harness.lock; each
 // holder also keeps holders\PID.txt open delete-on-close, saying what it is, for the refusal.
 static std::wstring lock_dir() {
     wchar_t buf[MAX_PATH];
@@ -20,7 +20,7 @@ static std::wstring lock_dir() {
     if (n == 0 || n >= MAX_PATH) n = GetTempPathW(MAX_PATH, buf);
     std::wstring d(buf, n);
     if (!d.empty() && d.back() != L'\\') d += L'\\';
-    d += L"ShaderX86";
+    d += L"ShaderEmu";
     CreateDirectoryW(d.c_str(), nullptr);
     CreateDirectoryW((d + L"\\holders").c_str(), nullptr);
     return d;

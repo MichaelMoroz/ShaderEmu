@@ -1,6 +1,6 @@
 ---
 name: desktop-apps
-description: Write or change a program for the ShaderX86 Nano-X desktop - where programs live, the window, events and the first frame, drawing cheaply, nxkey tests, captures, the registry, /persistence, the Start menu, icons, opening files, starting from the ROM, and test_all cases of the desktop kind. Use when adding or fixing a desktop application (nxfiles, nxedit, nxpaint, nxweb, nxview, nxmon, nxide, nxsettings), a window system change, or a program's start time. Triggers on: Nano-X, nx program, linux/apps, nxapps, nxopen, nxkey, GrOpen, ui.h, registry.h, nxreg, persist, desktop app, a window with no frame, capture of the desktop, a program's start.
+description: Write or change a program for the ShaderEmu Nano-X desktop - where programs live, the window, events and the first frame, drawing cheaply, nxkey tests, captures, the registry, /persistence, the Start menu, icons, opening files, starting from the ROM, and test_all cases of the desktop kind. Use when adding or fixing a desktop application (nxfiles, nxedit, nxpaint, nxweb, nxview, nxmon, nxide, nxsettings), a window system change, or a program's start time. Triggers on: Nano-X, nx program, linux/apps, nxapps, nxopen, nxkey, GrOpen, ui.h, registry.h, nxreg, persist, desktop app, a window with no frame, capture of the desktop, a program's start.
 ---
 
 # Desktop applications

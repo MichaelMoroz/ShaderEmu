@@ -1,3 +1,4 @@
+- The project's name is ShaderEmu (31 October 2026): no other name for it, and none of its old ones, in anything in this repository: code, docs, skills, lock names, a tool's text, a default path. A script finds the tree from where it lies, not from a folder of one computer.
 - The window manager and the bar know programs (`docs/system/nanox.md`, "The window manager and the bar"; 31 October 2026): a new
   key or state is told over `GR_WMC_*`/`GR_WM_TELL` (no new request, no change to the client's library), what changes the window tree
   raises `gd_scene_gen`, and `python tools/test_all.py wm` must pass, with a look at `tools/wm_shots.py`'s pictures: the cases say places

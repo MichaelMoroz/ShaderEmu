@@ -157,7 +157,7 @@ together (`bin\rvc_cpu.exe`, `rvc_harness --cpu` with or without `--warp`, altho
 and `rvc_harness_dxc` without `--cpu`, the bare double-click one too). A harness that would
 break that does nothing, prints one line naming who holds the lock (`[lock] rvc_harness refused
 (GPU mode): held by CPU harness rvc_cpu pid 32856`) and exits with 75. It is a `LockFileEx` on
-`%LOCALAPPDATA%\ShaderX86\harness.lock`, shared or exclusive, and each holder keeps
+`%LOCALAPPDATA%\ShaderEmu\harness.lock`, shared or exclusive, and each holder keeps
 `holders\PID.txt` open beside it: both go when the process ends, killed or crashed, so no lock
 is ever stale. It is for every checkout on the computer. It does not wait: `tools\gpu_queue.ps1`
 still gives the card's runs their turns one at a time, and says `REFUSED` under a run the lock

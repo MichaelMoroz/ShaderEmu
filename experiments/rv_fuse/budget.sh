@@ -2,8 +2,8 @@
 # How a longer pass in RISC-V instructions (8,192 trips of fused words) meets the write cache: rvc_cpu with the card's
 # cache, --ticks over 8192, each load: passes, instructions a pass, passes ended full. No profile: plain speed.
 export MSYS2_ARG_CONV_EXCL="*" MSYS_NO_PATHCONV=1 RVC_THREADS=8 RVC_WCACHE=1
-EXE=${EXE:-D:/Development/ShaderX86/bin/rvc_cpu.exe}
-IMG=${IMG:-D:/Development/ShaderX86/build/images/nommu}
+EXE=${EXE:-$(cd "$(dirname "$0")/../.." && pwd -W)/bin/rvc_cpu.exe}
+IMG=${IMG:-$(cd "$(dirname "$0")/../.." && pwd -W)/build/images/nommu}
 one() {
     name=$1; cmd=$2; secs=$3; ticks=$4
     o=$("$EXE" --image "$IMG" --quiet --ticks "$ticks" --expect "/ # " --send "echo FL-''GO; $cmd; echo LX-''DONE\n" --count-from FL-GO --until LX-DONE --seconds "$secs" 2>&1)

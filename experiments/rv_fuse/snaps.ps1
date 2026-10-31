@@ -1,7 +1,7 @@
 # A snapshot of each of the study's loads in its steady part, made on the processor with a profile of what ran
 # (RVC_PROF), for fuse_snap.py and the card: pwsh experiments\rv_fuse\snaps.ps1 [-Only shell,doom] [-Out DIR]
 param([string[]]$Only = @('shell', 'doom', 'quake', 'nxray'), [string]$Out = 'C:\Users\micha\agents_isa\snap',
-      [string]$Exe = 'D:\Development\ShaderX86\bin\rvc_harness.exe', [string]$Image = 'D:\Development\ShaderX86\build\images\nommu')
+      [string]$Exe = (Join-Path $PSScriptRoot '..\..\bin\rvc_harness.exe'), [string]$Image = (Join-Path $PSScriptRoot '..\..\build\images\nommu'))
 New-Item -ItemType Directory -Force $Out | Out-Null
 $loads = @{
     shell = '(sleep 2; echo SN""AP) & i=0; while [ $i -lt 2000000 ]; do i=$((i+1)); done'
