@@ -93,6 +93,7 @@ struct alignas(64) Stream {
 	uint32_t n, cap;
 	uint8_t *side;    ///< bytes the records point at: pixel runs, remaps copied
 	uint32_t side_n, side_cap;
+	Rec *recs_other; uint8_t *side_other; uint32_t cap_other, side_cap_other; ///< (a worker) the last frame's, which the GPU may not have drawn yet
 	uint32_t shades;  ///< shade records made so far, to tell a range has any
 	bool overflow;    ///< (a worker) it had no room: its piece is given up, and it has more room next frame
 	/* the first core's */
@@ -116,6 +117,7 @@ struct List {
 	bool content;     ///< anything but the picture it starts from
 	Rec *bg;          ///< that picture as a record
 	uint32_t frame;   ///< (debugging) the frame it was made in
+	uint32_t asked;   ///< _lists_asked when it was given to the GPU
 };
 uint32_t _frame;
 
@@ -123,6 +125,8 @@ bool _on;
 Stream _streams[VP_CORES];
 std::vector<Rec *> _chunks_used, _chunks_free;   ///< the first core's, this frame and spare
 std::vector<uint8_t *> _sides_used, _sides_free;
+std::vector<Rec *> _chunks_last;  ///< the last frame's: the GPU may not have drawn them yet
+std::vector<uint8_t *> _sides_last;
 std::vector<Piece, std::allocator<Piece>> _pieces_v;
 Piece *_pieces;
 int _piece_count;
@@ -165,38 +169,93 @@ void Rest()
 	mcw_rest();
 }
 
+/* Lists waiting for the GPU to be free. In a world the GPU takes one list a Unity frame, so a picture's second list waited a whole frame
+ * (11 ms of 48 a picture on the card, 2 of 33 on rvc_cpu): now the first core goes on and it is posted at the next look. OPENTTD_GPU_OWED=0: waited for. */
+struct Owed { const uint32_t *cmds; int n; uint32_t passes, into; int w, h, row; };
+Owed _owed[8];
+int _owed_n;
+uint32_t _lists_asked, _lists_posted; ///< lists of ours given to Submit, and of them to the GPU
+uint32_t _frame_began_at;             ///< _lists_asked when the frame began: the last frame's come after it
+bool _owed_off;                       ///< OPENTTD_GPU_OWED=0: each list waited for, and a frame's first drawing for all of them
+bool TryPost(const Owed &o);
+void PostOwed();
+bool ListsDrawn(uint32_t asked);
+void WaitLists(uint32_t asked);
+
 /** The GPU is free: our last list is drawn (and its copy made once the copies counter moves). */
 bool Drawn()
 {
-	return !_pending || static_cast<int32_t>(_regs[REG_DRAWN] - _drawn_at) > 0;
+	return _owed_n == 0 && (!_pending || static_cast<int32_t>(_regs[REG_DRAWN] - _drawn_at) > 0);
 }
 
 void WaitDrawn()
 {
-	while (!Drawn()) Rest();
+	for (PostOwed(); !Drawn(); PostOwed()) Rest();
 }
 
 /** A list to the GPU, its picture copied into (into, w, h, row): it waits for the lists before it. */
 void Submit(const uint32_t *cmds, int n, uint32_t passes, uint32_t into, int w, int h, int row)
 {
+	static const bool off = getenv("OPENTTD_GPU_OWED") != nullptr && getenv("OPENTTD_GPU_OWED")[0] == '0';
+	_owed_off = off;
 	_se_gpu_counts.lists++;
-	for (;;) {
-		while (__atomic_exchange_n(&_regs[REG_LOCK], 1u, __ATOMIC_ACQUIRE)) sched_yield();
-		if (_regs[REG_SUBMIT] == 0) break;
-		__atomic_store_n(&_regs[REG_LOCK], 0u, __ATOMIC_RELEASE);
+	_lists_asked++;
+	PostOwed();
+	while (_owed_n == static_cast<int>(std::size(_owed))) {
 		Rest();
+		PostOwed();
+	}
+	_owed[_owed_n++] = { cmds, n, passes, into, w, h, row };
+	PostOwed();
+	while (off && _owed_n != 0) {
+		Rest();
+		PostOwed();
+	}
+}
+
+/** To the GPU, if it is free. */
+bool TryPost(const Owed &o)
+{
+	if (__atomic_exchange_n(&_regs[REG_LOCK], 1u, __ATOMIC_ACQUIRE)) return false;
+	if (_regs[REG_SUBMIT] != 0) {
+		__atomic_store_n(&_regs[REG_LOCK], 0u, __ATOMIC_RELEASE);
+		return false;
 	}
 	_drawn_at = _regs[REG_DRAWN];
 	_copies_at = _regs[REG_COPIES] + (_regs[REG_COPY] != 0 ? 1 : 0);   /* (a copy still to make is another's) */
-	_regs[REG_INTO] = into;
-	_regs[REG_INTO + 1] = w;
-	_regs[REG_INTO + 2] = h;
-	_regs[REG_INTO + 3] = row;
-	_regs[REG_LIST] = Address(cmds);
-	_regs[REG_COUNT] = n;
-	_regs[REG_SUBMIT] = 1 | 4 | (passes & 0xfe) << 8;
+	_regs[REG_INTO] = o.into;
+	_regs[REG_INTO + 1] = o.w;
+	_regs[REG_INTO + 2] = o.h;
+	_regs[REG_INTO + 3] = o.row;
+	_regs[REG_LIST] = Address(o.cmds);
+	_regs[REG_COUNT] = o.n;
+	_regs[REG_SUBMIT] = 1 | 4 | (o.passes & 0xfe) << 8;
 	__atomic_store_n(&_regs[REG_LOCK], 0u, __ATOMIC_RELEASE);
 	_pending = true;
+	_lists_posted++;
+	return true;
+}
+
+void PostOwed()
+{
+	while (_owed_n != 0 && TryPost(_owed[0])) {
+		_owed_n--;
+		std::copy_n(_owed + 1, _owed_n, _owed);
+	}
+}
+
+/** Whether our lists up to this one (of _lists_asked) are drawn. */
+bool ListsDrawn(uint32_t asked)
+{
+	PostOwed();
+	const int32_t posted = static_cast<int32_t>(_lists_posted - asked);
+	if (posted > 0) return true;
+	return posted == 0 && (!_pending || static_cast<int32_t>(_regs[REG_DRAWN] - _drawn_at) > 0);
+}
+
+void WaitLists(uint32_t asked)
+{
+	while (!ListsDrawn(asked)) Rest();
 }
 
 /** A command of `count` records at `order` in the list being made; false when it has no room. */
@@ -228,6 +287,7 @@ void StartList()
 {
 	_cur = (_last + 1) % LISTS;
 	List &l = _lists[_cur];
+	WaitLists(l.asked); /* (the GPU reads it until it is drawn) */
 	l.n = 0;
 	l.vertices = 0;
 	l.order = 1;
@@ -245,6 +305,7 @@ void SubmitList()
 	l.ta = Address(_shade_a);
 	l.tb = Address(_shade_b);
 	Submit(l.cmds, l.n, l.passes, Address(_words), _width, _height, _row);
+	l.asked = _lists_asked;
 	_last = _cur;
 	_cur = -1;
 }
@@ -340,22 +401,37 @@ void NewSide(Stream &s)
 /** A frame's first drawing: the frame before is drawn, the records start again. */
 void FrameBegin()
 {
-	WaitDrawn();
+	/* (only the frame before the last must be drawn: the records and pixel runs of the last go on being read by the GPU, and this
+	 * frame's are others. The GPU takes a list a Unity frame, and a picture is two: a wait here was a third of a picture on the card) */
+	if (_owed_off) WaitDrawn();
+	else WaitLists(_frame_began_at);
+	_frame_began_at = _lists_asked;
 	_frame++;
 	Stream &s = _streams[0];
-	for (Rec *c : _chunks_used) _chunks_free.push_back(c);
+	for (Rec *c : _chunks_last) _chunks_free.push_back(c);
+	_chunks_last.swap(_chunks_used);
 	_chunks_used.clear();
-	for (uint8_t *c : _sides_used) _sides_free.push_back(c);
+	for (uint8_t *c : _sides_last) _sides_free.push_back(c);
+	_sides_last.swap(_sides_used);
 	_sides_used.clear();
+	if (s.recs != nullptr) _chunks_last.push_back(s.recs);
+	if (s.side != nullptr) _sides_last.push_back(s.side);
+	s.recs = nullptr;
+	s.side = nullptr;
+	s.cap = s.side_cap = 0;
 	s.n = s.run = 0;
 	s.side_n = 0;
 	s.shades = s.run_shades = 0;
 	for (int k = 1; k < VP_CORES; k++) {
 		Stream &w = _streams[k];
+		std::swap(w.recs, w.recs_other);
+		std::swap(w.side, w.side_other);
+		std::swap(w.cap, w.cap_other);
+		std::swap(w.side_cap, w.side_cap_other);
 		if (w.overflow || w.recs == nullptr) {
 			/* (here, on the first core: a worker may not allocate) */
-			uint32_t cap = w.recs == nullptr ? WORKER_RECORDS : w.cap * 2;
-			uint32_t side = w.side == nullptr ? WORKER_SIDE : w.side_cap * 2;
+			uint32_t cap = w.recs == nullptr ? std::max(WORKER_RECORDS, w.cap_other) : std::max(w.cap * 2, w.cap_other);
+			uint32_t side = w.side == nullptr ? std::max(WORKER_SIDE, w.side_cap_other) : std::max(w.side_cap * 2, w.side_cap_other);
 			if (w.recs != nullptr) AlignedDelete(w.recs);
 			if (w.side != nullptr) AlignedDelete(w.side);
 			w.recs = AlignedNew<Rec>(cap);
@@ -822,6 +898,7 @@ void SeGpuPaint(const uint32_t *palette, unsigned window)
 	if (!_window_info.realized || _window_info.surface_address == 0) return;
 	_show = (_show + 1) % LISTS;
 	List &l = _shows[_show];
+	WaitLists(l.asked);
 	uint32_t *pal = _palettes + 256 * _show;
 	std::copy_n(palette, 256, pal);
 	l.n = 0;
@@ -832,7 +909,13 @@ void SeGpuPaint(const uint32_t *palette, unsigned window)
 	Command(l, l.bg, 1, 0, false, Address(pal), LastA(), LastB());
 	if (_overlay_n != 0 && !_capturing) Command(l, _overlay, _overlay_n, 1, false, Address(pal), 0);
 	Submit(l.cmds, l.n, l.passes, _window_info.surface_address, _window_info.width, _window_info.height, _window_info.surface_row);
+	l.asked = _lists_asked;
 	if (!_capturing) se_fps_caption(&_window_info, _regs[REG_CLOCK]);   /* (the frames shown, as the machine's OpenGL counts its own) */
+}
+
+void SeGpuPoll()
+{
+	if (_owed_n != 0) PostOwed();
 }
 
 void SeGpuSubmit()

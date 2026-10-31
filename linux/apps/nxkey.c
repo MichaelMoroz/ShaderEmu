@@ -3,7 +3,8 @@
  * shift+ before it for keys held meanwhile, a number of milliseconds to wait, X,Y (or ctrl+X,Y) for a click
  * of the left button there, r:X,Y for the right one, or drag:X,Y:X,Y for the left one held
  * from the first place to the second, wheel:X,Y:N for N notches of the wheel there (up is
- * positive):   nxkey meta down enter 500 alt+tab 60,200 r:300,200 wheel:300,200:-2 */
+ * positive), down:KEY and up:KEY for a key held over what comes between:
+ *   nxkey meta down enter 500 alt+tab 60,200 r:300,200 wheel:300,200:-2 down:ctrl tab tab 800 up:ctrl */
 #include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -141,6 +142,10 @@ main(int argc, char **argv)
 			if (strchr(argv[i], ','))
 				click(atoi(argv[i]), atoi(strchr(argv[i], ',') + 1), 0x110);
 			usleep(strchr(argv[i], ',') ? 150000 : atoi(argv[i]) * 1000);
+			continue;
+		}
+		if ((!strncmp(argv[i], "down:", 5) || !strncmp(argv[i], "up:", 3)) && (code = code_of(strchr(argv[i], ':') + 1)) != 0) {
+			send(code, argv[i][0] == 'd');
 			continue;
 		}
 		snprintf(text, sizeof text, "%s", argv[i]);

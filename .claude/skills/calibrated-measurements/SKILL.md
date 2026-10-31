@@ -41,11 +41,14 @@ Use PowerShell. Git Bash mangles `/ # ` and WSL paths.
 $env:RVC_THREADS='8'; python tools\game_par.py doom --calibrated
 ```
 
-Read the game's frames a second and passes a frame from its line. A timing shifts with where the
+Read the game's frames a second and passes a frame from its line, and `workers stopped 0 times`. On 31 October 2026 `doom --calibrated`
+said 145.8 frames a second, 4.26 passes a frame, from the main checkout. A worktree has no `bin\` and `game_par.py` has no option for
+another emulator: run it from a checkout with `bin\` (a junction will do), `--image` for your image and `--log` for a log of your own. A timing shifts with where the
 program's work falls: for a small difference, compare means with `--runs N` (it uses `--salt`) and
 take turns between the change and the tree. `--runs` multiplies the time, so mind the minute.
 
-The games listed are in `GAMES` at the top of `tools/game_par.py`.
+The games listed are in `GAMES` at the top of `tools/game_par.py` (`--help` names them). `--guest NAME=VALUE` exports a switch in the guest:
+`--guest HL_MARK=3,30` is Half-Life's other span.
 
 ## Anything else
 
@@ -81,6 +84,9 @@ Fitted in October 2026 to an RTX 5090 with the new fxc2:
   out gives a 462% error for it (`worst_left_out` in `card_model.json`). Do not trust the absolute
   speed of a program that leans on many workers until a card run has checked it.
 - Say "calibrated" with any number you report, and give the card run instead when you have one.
+- Never mix clocks in one table. Half-Life's fight read 15.2 fps on a fixed clock and 24.3 calibrated, of about the same tree: side by side they say nothing.
+- A flat-out card run is what the model is fitted to. Under a VR frame (`rvc_harness --d3d11 --unity 11.1,1.4,0.75`) OpenTTD ran about two thirds of the calibrated game ticks: for the world, measure the world's rounds.
+- Played runs that go by the clock vary among themselves (OpenTTD by about 10% in instructions): judge a small change on a paused run (`OPENTTD_PAUSE=1`) or a fixed load, and take two runs each way.
 - The model belongs to one card and one fxc2. It does not describe the AMD iGPU or the world's
   fixed rounds.
 
@@ -95,7 +101,8 @@ python tools\calibrate.py check doom ralert-allies quake3
 ```
 
 - `card` appends to `build/calibrate/card.jsonl`, one run per game of up to 240 s, and refuses while
-  VRChat or SteamVR runs. This is well over a minute, so ask first and give one game at a time.
+  VRChat or SteamVR runs. This is well over a minute, so ask first and give one game at a time. Run it with nothing else on the card:
+  a timing beside another agent's run spoils the fit.
   That file is not in git. Delete it when fitting for another card, or the runs are averaged together.
 - `fit` writes `tools/card_model.json` and prints each game's left-out error. It runs each game once
   on `rvc_cpu` for its GPU lists, so it is long as well.

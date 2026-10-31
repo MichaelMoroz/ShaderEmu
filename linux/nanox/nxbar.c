@@ -11,6 +11,13 @@
  * it, the middle one closes it, and the wheel goes from window to window. The bar is drawn
  * in the desktop's look, classic or Windows 7 (../apps/ui_look.h), and follows a change of it.
  * nxbar --look sets the look from the registry and exits (the nx script, before the desktop).
+ *
+ * The bar knows programs, not only windows (docs/system/nanox.md, "The window manager and the
+ * bar"): one button for all the windows of a program, a button for what is still starting, a
+ * program that does not answer a close or outlives its window is offered for ending. The window
+ * manager (in the server) tells it things as events of the Windows key (GR_WM_TELL): the
+ * switcher, a window's menu, where a dragged frame would snap, the desktop shown.
+ * NXBAR_PRINT=1 says on the standard error what it shows and does, for a test.
  */
 #include <ctype.h>
 #include "../userland/real_vfork.h"
@@ -29,6 +36,9 @@
 #include "../apps/gameid.h"
 #include "../apps/ui_icons.h"
 #include "../apps/ui_menu.h"
+#define UI_LAUNCH_IS_BAR
+static void reaped(pid_t pid, int status);
+#define UI_LAUNCH_REAPED reaped
 #include "../apps/ui_launch.h"
 #include "../userland/shaderemu_sound.h"
 
@@ -43,7 +53,13 @@
 #define NAME_MOST 120	/* the player's name before that, at most so wide */
 #define TASK_WIDTH (ui_seven ? 140 : 110)
 #define MAX_ITEMS 96
-#define MAX_TASKS 12
+#define MAX_TASKS 32	/* windows */
+#define MAX_BUTTONS 16
+#define MAX_STARTING 6
+#define PAGER_CELL 13	/* a desktop's cell in the bar */
+#define CLOSE_MS 5000	/* how long a window has to go after it was asked (NXBAR_CLOSE_MS) */
+#define START_MS 60000	/* and a program to show one (NXBAR_START_MS) */
+#define SWITCH_MS 150	/* the switcher is shown if the key is held so long */
 #define REGISTRY "/usr/share"
 #define FACE MWRGB(192, 192, 192)
 #define SHADOW MWRGB(128, 128, 128)
@@ -56,6 +72,16 @@
 #define TASK_MINIMISE 1001
 #define TASK_CLOSE 1002
 #define TASK_PIN 1003
+#define TASK_MAXIMISE 1004
+#define TASK_SHADE 1005
+#define TASK_ONTOP 1006
+#define TASK_NEW 1007
+#define TASK_END 1008
+#define TASK_CLOSE_ALL 1009
+#define TASK_LEFT 1010
+#define TASK_RIGHT 1011
+#define TASK_TO_DESK 1020	/* + which */
+#define TASK_WINDOW 1300	/* a window of a program's list: + its task */
 #define PIN_REMOVE 1100		/* a pinned program's menu: + which */
 #define PIN_START 1200
 
@@ -68,8 +94,17 @@ static struct ui_icon_ref row_icons[MAX_ITEMS + 32];
 static int row_count;
 static const struct ui_menu_item *top;
 static int top_count;
-static struct { GR_WINDOW_ID frame, client; char title[20]; int hidden, process; struct ui_icon_ref icon; } tasks[MAX_TASKS];
+static struct { GR_WINDOW_ID frame, client; char title[20], program[24]; int hidden, process, desk; unsigned state; struct ui_icon_ref icon; } tasks[MAX_TASKS];
 static int task_count, task_asked = -1, pin_asked = -1;
+static GR_WINDOW_ID asked_frame;	/* the window a menu of windows is about */
+/* What the bar shows: a program's windows are one button, what starts is one too. */
+static struct { int task, count, active, hidden, start; } buttons[MAX_BUTTONS];
+static int button_count;
+static struct { pid_t pid, asker; unsigned began; int asked; char name[20]; struct ui_icon_ref icon; } starting[MAX_STARTING];
+static int starting_count;
+static int desktop;		/* the desktop shown (the window manager's) */
+static int stale = 1;		/* a window came or went since the buttons were looked for */
+static GR_WINDOW_ID mru[MAX_TASKS];	/* the frames, the one last with the keyboard first */
 static GR_WINDOW_ID active_frame;	/* the window with the keyboard's frame, when it has a button */
 static struct { char command[64]; struct ui_icon_ref icon; } pinned[MAX_PINNED];
 static int pinned_count;
@@ -77,6 +112,7 @@ static GR_WINDOW_ID desk_hidden[MAX_TASKS];	/* windows the strip put away, to br
 static int desk_hidden_count;
 
 static GR_WINDOW_ID bar, calendar, volume;	/* calendar, volume: the popups, while they are open */
+static GR_WINDOW_ID preview_window, switcher;	/* where a frame would snap; the windows to go to */
 static GR_GC_ID gc;
 static GR_SCREEN_INFO screen;
 
@@ -276,6 +312,21 @@ name_width(void)
 #define VOLUME_X (SPEED_X - 2 - VOLUME_W)
 #define NAME_X (VOLUME_X - 1 - name_width())
 
+#define PAGER_W (GR_WM_DESKTOPS * PAGER_CELL)
+#define PAGER_X (NAME_X - 4 - PAGER_W)
+
+/* What a test reads. */
+static void
+say(const char *format, const char *text)
+{
+	static int print = -1;
+
+	if (print < 0)
+		print = getenv("NXBAR_PRINT") != NULL;
+	if (print)
+		fprintf(stderr, format, text);
+}
+
 static int
 quick_x(int i)
 {
@@ -292,8 +343,8 @@ tasks_x(void)
 static int
 task_width(void)
 {
-	int room = NAME_X - 6 - tasks_x();
-	int width = task_count ? room / task_count - 4 : TASK_WIDTH;
+	int room = PAGER_X - 6 - tasks_x();
+	int width = button_count ? room / button_count - 4 : TASK_WIDTH;
 
 	return width > TASK_WIDTH ? TASK_WIDTH : width < 8 ? 8 : width;
 }
@@ -386,14 +437,73 @@ active_task(void)
 	return -1;
 }
 
+/* The buttons as they stand: the windows of the desktop shown by program, then what starts. */
+static void
+make_buttons(void)
+{
+	int i, j, active = active_task();
+
+	button_count = 0;
+	for (i = 0; i < task_count; i++) {
+		if (tasks[i].desk != desktop)
+			continue;
+		for (j = 0; j < button_count; j++)
+			if (tasks[i].program[0] && !strcmp(tasks[buttons[j].task].program, tasks[i].program))
+				break;
+		if (j < button_count) {
+			buttons[j].count++;
+			buttons[j].hidden &= tasks[i].hidden;
+			if (i == active)
+				buttons[j].task = i, buttons[j].active = 1;
+		} else if (button_count < MAX_BUTTONS) {
+			buttons[j].task = i;
+			buttons[j].count = 1;
+			buttons[j].hidden = tasks[i].hidden;
+			buttons[j].active = i == active;
+			buttons[j].start = -1;
+			button_count++;
+		}
+	}
+	for (i = 0; i < MAX_STARTING && button_count < MAX_BUTTONS; i++)
+		if (starting[i].pid) {
+			buttons[button_count].task = -1;
+			buttons[button_count].count = 0;
+			buttons[button_count].hidden = 1;
+			buttons[button_count].active = 0;
+			buttons[button_count].start = i;
+			button_count++;
+		}
+	if (getenv("NXBAR_PRINT")) {
+		static char before[300];
+		char line[300] = "";
+
+		for (i = 0; i < button_count; i++) {
+			char one[48];
+
+			if (buttons[i].start >= 0)
+				snprintf(one, sizeof one, "[starting %s] ", starting[buttons[i].start].name);
+			else
+				snprintf(one, sizeof one, "[%s x%d%s%s] ", tasks[buttons[i].task].title, buttons[i].count, buttons[i].active ? " active" : "", buttons[i].hidden ? " hidden" : "");
+			if (strlen(line) + strlen(one) < sizeof line)
+				strcat(line, one);
+		}
+		if (strcmp(line, before)) {
+			strcpy(before, line);
+			say("nxbar: buttons: %s\n", line);
+		}
+	}
+}
+
 static void
 draw_bar(void)
 {
 	char text[16];
 	time_t now = time(NULL);
 	struct tm *tm = localtime(&now);
-	int i, width = task_width(), active = active_task(), open = ui_menu_is_open() && task_asked < 0 && pin_asked < 0;
+	int i, width, open = ui_menu_is_open() && task_asked < 0 && pin_asked < 0;
 
+	make_buttons();
+	width = task_width();
 	GrSetGCForeground(gc, ui_seven ? MWRGB(36, 52, 74) : FACE);
 	GrFillRect(bar, gc, 0, 0, screen.cols, BAR_HEIGHT);
 	if (ui_seven) {
@@ -417,26 +527,55 @@ draw_bar(void)
 		GrSetGCForeground(gc, ui_seven ? MWRGB(90, 110, 140) : WHITE);
 		GrLine(bar, gc, quick_x(pinned_count) + 3, 4, quick_x(pinned_count) + 3, BAR_HEIGHT - 5);
 	}
-	for (i = 0; i < task_count; i++) {
-		int count = strlen(tasks[i].title);
+	for (i = 0; i < button_count; i++) {
+		int on = buttons[i].active, start = buttons[i].start;
+		const char *title = start >= 0 ? starting[start].name : tasks[buttons[i].task].title;
+		const struct ui_icon_ref *icon = start >= 0 ? &starting[start].icon : &tasks[buttons[i].task].icon;
+		int count = strlen(title), room = width - 28 - (buttons[i].count > 1 ? 16 : 0);
 
 		/* as much of the title as the button has room for */
-		while (count > 0 && ui_width(&ui_menu_widths, ui_menu_font, tasks[i].title, count) > width - 28)
+		while (count > 0 && ui_width(&ui_menu_widths, ui_menu_font, title, count) > room)
 			count--;
 		if (ui_seven)
-			glass(task_x(i), 2, width, BAR_HEIGHT - 4, tasks[i].hidden ? -1 : i == active);
+			glass(task_x(i), 2, width, BAR_HEIGHT - 4, start >= 0 ? 0 : buttons[i].hidden ? -1 : on);
 		else {
-			if (i == active) {	/* the window in front: its button stays pressed */
+			if (on) {	/* the window in front: its button stays pressed */
 				GrSetGCForeground(gc, MWRGB(224, 224, 224));
 				GrFillRect(bar, gc, task_x(i) + 1, 4, width - 2, BAR_HEIGHT - 8);
 			}
-			bevel(bar, task_x(i), 3, width, BAR_HEIGHT - 6, i == active);
+			bevel(bar, task_x(i), 3, width, BAR_HEIGHT - 6, on);
 		}
 		if (width >= 28)
-			ui_icon_draw(bar, gc, task_x(i) + 4 + (i == active && !ui_seven), 5 + (i == active && !ui_seven), &tasks[i].icon, 16);
-		/* minimised: greyed */
-		GrSetGCForeground(gc, tasks[i].hidden ? (ui_seven ? MWRGB(150, 162, 178) : SHADOW) : INK);
-		GrText(bar, gc, task_x(i) + 24, TEXT_Y, tasks[i].title, count, GR_TFASCII | GR_TFTOP);
+			ui_icon_draw(bar, gc, task_x(i) + 4 + (on && !ui_seven), 5 + (on && !ui_seven), icon, 16);
+		/* minimised or starting: greyed */
+		GrSetGCForeground(gc, buttons[i].hidden ? (ui_seven ? MWRGB(150, 162, 178) : SHADOW) : INK);
+		GrText(bar, gc, task_x(i) + 24, TEXT_Y, (void *)title, count, GR_TFASCII | GR_TFTOP);
+		/* how many windows the button stands for */
+		if (buttons[i].count > 1 && width >= 44) {
+			snprintf(text, sizeof text, "%d", buttons[i].count);
+			GrSetGCForeground(gc, ui_seven ? MWRGB(20, 28, 40) : SHADOW);
+			GrFillRect(bar, gc, task_x(i) + width - 16, 6, 13, BAR_HEIGHT - 12);
+			GrSetGCForeground(gc, WHITE);
+			GrText(bar, gc, task_x(i) + width - 13, TEXT_Y, text, strlen(text), GR_TFASCII | GR_TFTOP);
+		}
+	}
+	/* the desktops, a cell each: the one shown lit, a line under one with windows on it */
+	for (i = 0; i < GR_WM_DESKTOPS; i++) {
+		int x = PAGER_X + i * PAGER_CELL, j, some = 0;
+
+		for (j = 0; j < task_count; j++)
+			some |= tasks[j].desk == i;
+		GrSetGCForeground(gc, i == desktop ? (ui_seven ? MWRGB(118, 150, 192) : WHITE) : (ui_seven ? MWRGB(44, 58, 80) : FACE));
+		GrFillRect(bar, gc, x, 5, PAGER_CELL - 1, BAR_HEIGHT - 10);
+		GrSetGCForeground(gc, ui_seven ? MWRGB(20, 28, 40) : SHADOW);
+		GrRect(bar, gc, x, 5, PAGER_CELL - 1, BAR_HEIGHT - 10);
+		text[0] = '1' + i;
+		GrSetGCForeground(gc, ui_seven ? WHITE : BLACK);
+		GrText(bar, gc, x + 3, TEXT_Y, text, 1, GR_TFASCII | GR_TFTOP);
+		if (some) {
+			GrSetGCForeground(gc, ui_seven ? MWRGB(206, 218, 232) : BLACK);
+			GrLine(bar, gc, x + 2, BAR_HEIGHT - 7, x + PAGER_CELL - 4, BAR_HEIGHT - 7);
+		}
 	}
 	/* the volume's button: its icon, muted when the card is silent */
 	ui_icon(bar, gc, VOLUME_X + (VOLUME_W - 16) / 2, 5, ui_icon_of(snd_page && SND_MASTER == 0 ? "volume-muted" : "volume"), 16);
@@ -522,9 +661,10 @@ static int
 find_tasks(int all)
 {
 	static GR_WINDOW_ID before[MAX_TASKS], seen[64];
-	static struct { GR_WINDOW_ID frame, client; int plain, mapped, process; char title[sizeof tasks[0].title]; } known[64];
+	static struct { GR_WINDOW_ID frame, client; int plain, mapped, process, desk; unsigned state; char title[sizeof tasks[0].title], program[24]; } known[64];
 	static int known_count;
-	static int before_hidden[MAX_TASKS], before_count = -1, seen_count;
+	static int before_hidden[MAX_TASKS], before_desk[MAX_TASKS], before_count = -1, seen_count;
+	static unsigned before_state[MAX_TASKS];
 	static char before_title[MAX_TASKS][sizeof tasks[0].title];
 	GR_WINDOW_ID still[64];
 	int still_count = 0, k;
@@ -543,7 +683,7 @@ find_tasks(int all)
 		GR_WM_PROPERTIES props;
 		int at, ask = all, j;
 
-		if (children[i] == bar || children[i] == calendar || children[i] == volume)
+		if (children[i] == bar || children[i] == calendar || children[i] == volume || children[i] == preview_window || children[i] == switcher)
 			continue;
 		for (at = 0; at < known_count && known[at].frame != children[i]; at++)
 			;
@@ -555,6 +695,7 @@ find_tasks(int all)
 			known[at].frame = children[i];
 			known[at].client = 0;
 			known[at].plain = 0;
+			known[at].program[0] = 0;
 			ask = 1;
 		}
 		if (ask) {
@@ -562,6 +703,19 @@ find_tasks(int all)
 			known[at].plain = (info.props & GR_WM_PROPS_NODECORATE) != 0;
 			known[at].mapped = info.mapped;
 			known[at].process = info.processid;	/* (a frame is made as its program: the same process) */
+			known[at].state = info.props;
+			known[at].desk = (info.props & GR_WM_PROPS_DESK) >> GR_WM_PROPS_DESK_SHIFT;
+			if (!known[at].program[0] && !known[at].plain) {
+				char path[40], file[96];
+				const char *slash;
+				int got;
+
+				snprintf(path, sizeof path, "/proc/%d/exe", info.processid);
+				got = (int)readlink(path, file, sizeof file - 1);
+				file[got > 0 ? got : 0] = 0;
+				slash = strrchr(file, '/');
+				snprintf(known[at].program, sizeof known[at].program, "%s", slash ? slash + 1 : file);
+			}
 		}
 		if (known[at].plain)
 			continue;
@@ -590,9 +744,21 @@ find_tasks(int all)
 		tasks[task_count].client = known[at].client ? known[at].client : children[i];
 		tasks[task_count].hidden = !known[at].mapped;
 		tasks[task_count].process = known[at].process;
+		tasks[task_count].desk = known[at].desk;
+		tasks[task_count].state = known[at].state;
+		strcpy(tasks[task_count].program, known[at].program);
 		tasks[task_count].icon = *icon_of_frame(children[i], known[at].process);
 		strcpy(tasks[task_count].title, known[at].title);
 		task_count++;
+	}
+	/* what the bar knew of windows that have gone: their numbers may come again, for others */
+	for (k = 0; k < known_count; ) {
+		for (i = 0; i < n && children[i] != known[k].frame; i++)
+			;
+		if (i == n)
+			known[k] = known[--known_count];
+		else
+			k++;
 	}
 	free(children);
 	noted_count = 0;
@@ -600,14 +766,42 @@ find_tasks(int all)
 	seen_count = still_count;
 	changed = task_count != before_count;
 	for (i = 0; i < task_count && !changed; i++)
-		changed = before[i] != tasks[i].frame || before_hidden[i] != tasks[i].hidden || strcmp(before_title[i], tasks[i].title);
+		changed = before[i] != tasks[i].frame || before_hidden[i] != tasks[i].hidden || before_desk[i] != tasks[i].desk ||
+			before_state[i] != tasks[i].state || strcmp(before_title[i], tasks[i].title);
 	for (i = 0; i < task_count; i++) {
 		before[i] = tasks[i].frame;
 		before_hidden[i] = tasks[i].hidden;
+		before_desk[i] = tasks[i].desk;
+		before_state[i] = tasks[i].state;
 		strcpy(before_title[i], tasks[i].title);
 	}
 	before_count = task_count;
 	return changed;
+}
+
+/* A frame had the keyboard last. */
+static void
+mru_touch(GR_WINDOW_ID frame)
+{
+	int i;
+
+	if (!frame)
+		return;
+	for (i = 0; i < MAX_TASKS - 1 && mru[i] && mru[i] != frame; i++)
+		;
+	memmove(&mru[1], &mru[0], i * sizeof mru[0]);
+	mru[0] = frame;
+}
+
+static int
+task_by_frame(GR_WINDOW_ID frame)
+{
+	int i;
+
+	for (i = 0; i < task_count; i++)
+		if (tasks[i].frame == frame)
+			return i;
+	return -1;
 }
 
 /* The frame of the window with the keyboard, which an activation may have changed. */
@@ -627,6 +821,7 @@ find_active(void)
 			;
 	}
 	active_frame = i < task_count ? tasks[i].frame : 0;
+	mru_touch(active_frame);
 }
 
 /* Opens the Start menu, its first row picked out when a key opened it, or closes whatever
@@ -635,6 +830,7 @@ static void
 show_menu(int open, int keyboard)
 {
 	task_asked = pin_asked = -1;
+	asked_frame = 0;
 	if (open)
 		ui_menu_open(top, top_count, 0, screen.rows - BAR_HEIGHT, 1, keyboard);
 	else
@@ -670,29 +866,88 @@ pinned_index(const char *command)
 	return i < pinned_count ? i : -1;
 }
 
-/* A window's own menu, above its button. */
+/* What the window manager is told of a frame (GR_WMC_). */
 static void
-show_task_menu(int task, int x)
+wm_word(GR_WINDOW_ID window, int command, unsigned arg)
 {
-	static struct ui_menu_item menu[4];
+	GR_WM_PROPERTIES word;
+
+	word.flags = GR_WM_FLAGS_COMMAND;
+	word.props = command;
+	word.background = arg;
+	word.title = NULL;
+	GrSetWMProperties(window, &word);
+}
+
+/* A window's own menu: above its button (above 1), or below a place of its caption. */
+static void
+show_task_menu(int task, int x, int y, int above, int keyboard)
+{
+	static struct ui_menu_item menu[12], desks[GR_WM_DESKTOPS];
+	static char names[GR_WM_DESKTOPS][12];
 	char command[64];
-	int can_pin = task_command(task, command, sizeof command);
+	int can_pin = task_command(task, command, sizeof command), n = 0, i;
+	unsigned state = tasks[task].state;
 
 	memset(menu, 0, sizeof menu);
-	menu[0].label = tasks[task].hidden ? "Restore" : "Bring to front";
-	menu[0].id = TASK_RESTORE;
-	menu[1].label = "Minimise";
-	menu[1].id = TASK_MINIMISE;
-	menu[1].flags = tasks[task].hidden ? UI_MENU_GREY : 0;
-	menu[2].label = can_pin && pinned_index(command) >= 0 ? "Unpin from the bar" : "Pin to the bar";
-	menu[2].id = TASK_PIN;
-	menu[2].flags = UI_MENU_LINE | (can_pin && (pinned_index(command) >= 0 || pinned_count < MAX_PINNED) ? 0 : UI_MENU_GREY);
-	menu[3].label = "Close";
-	menu[3].id = TASK_CLOSE;
-	menu[3].flags = UI_MENU_LINE;
-	menu[0].icon = menu[1].icon = menu[2].icon = menu[3].icon = -1;
-	ui_menu_open(menu, 4, x, screen.rows - BAR_HEIGHT, 1, 0);
+	memset(desks, 0, sizeof desks);
+	for (i = 0; i < GR_WM_DESKTOPS; i++) {
+		snprintf(names[i], sizeof names[i], "Desktop %d", i + 1);
+		desks[i].label = names[i];
+		desks[i].id = TASK_TO_DESK + i;
+		desks[i].icon = -1;
+		desks[i].flags = i == tasks[task].desk ? UI_MENU_CHECK : 0;
+	}
+#define ROW(text, what, how) (menu[n].label = (text), menu[n].id = (what), menu[n].flags = (how), menu[n].icon = -1, n++)
+	ROW(tasks[task].hidden ? "Restore" : "Bring to front", TASK_RESTORE, 0);
+	ROW("Minimise", TASK_MINIMISE, tasks[task].hidden ? UI_MENU_GREY : 0);
+	ROW(state & GR_WM_PROPS_MAXED ? "Put back" : "Maximise", TASK_MAXIMISE, 0);
+	ROW("Left half", TASK_LEFT, 0);
+	ROW("Right half", TASK_RIGHT, 0);
+	ROW(state & GR_WM_PROPS_SHADED ? "Unroll" : "Roll up", TASK_SHADE, 0);
+	ROW("Keep on top", TASK_ONTOP, state & GR_WM_PROPS_ONTOP ? UI_MENU_CHECK : 0);
+	menu[n].sub = desks;
+	menu[n].sub_count = GR_WM_DESKTOPS;
+	ROW("Desktop", 0, UI_MENU_LINE);
+	ROW("New window", TASK_NEW, can_pin ? 0 : UI_MENU_GREY);
+	ROW(can_pin && pinned_index(command) >= 0 ? "Unpin from the bar" : "Pin to the bar", TASK_PIN,
+		can_pin && (pinned_index(command) >= 0 || pinned_count < MAX_PINNED) ? 0 : UI_MENU_GREY);
+	ROW("Close", TASK_CLOSE, UI_MENU_LINE);
+	ROW("End the program", TASK_END, 0);
+	ui_menu_open(menu, n, x, y, above, keyboard);
 	task_asked = task;
+	asked_frame = tasks[task].frame;
+}
+
+/* The windows of a program's button, to go to one, or all closed. */
+static void
+show_group_menu(int button)
+{
+	static struct ui_menu_item menu[MAX_TASKS + 2];
+	int first = buttons[button].task, n = 0, i;
+
+	memset(menu, 0, sizeof menu);
+	for (i = 0; i < task_count && n < MAX_TASKS; i++)
+		if (tasks[i].desk == desktop && !strcmp(tasks[i].program, tasks[first].program)) {
+			menu[n].label = tasks[i].title;
+			menu[n].id = TASK_WINDOW + i;
+			menu[n].icon = tasks[i].icon.cell;
+			menu[n].icon_file = tasks[i].icon.file;
+			menu[n].flags = i == active_task() ? UI_MENU_CHECK : 0;
+			n++;
+		}
+	menu[n].label = "New window";
+	menu[n].id = TASK_NEW;
+	menu[n].icon = -1;
+	menu[n].flags = UI_MENU_LINE;
+	n++;
+	menu[n].label = "Close all";
+	menu[n].id = TASK_CLOSE_ALL;
+	menu[n].icon = -1;
+	n++;
+	ui_menu_open(menu, n, task_x(button), screen.rows - BAR_HEIGHT, 1, 1);
+	task_asked = first;
+	asked_frame = tasks[first].frame;
 }
 
 /* A pinned program's menu: start it, or take it off the bar. */
@@ -727,6 +982,7 @@ task_front(int task)
 	GrRaiseWindow(tasks[task].frame);
 	GrSetFocus(tasks[task].client);
 	active_frame = tasks[task].frame;
+	mru_touch(active_frame);
 	desk_hidden_count = 0;	/* (a window brought back: the strip starts over) */
 }
 
@@ -746,7 +1002,7 @@ show_desktop(void)
 		return;
 	}
 	for (i = 0; i < task_count; i++)
-		if (!tasks[i].hidden) {
+		if (!tasks[i].hidden && tasks[i].desk == desktop) {
 			GrUnmapWindow(tasks[i].frame);
 			desk_hidden[desk_hidden_count++] = tasks[i].frame;
 		}
@@ -774,6 +1030,32 @@ launch(const char *command)
 	ui_exec_failed();
 }
 
+static void starting_add(pid_t pid, const char *label, const struct ui_icon_ref *icon);
+static void closing_add(GR_WINDOW_ID frame);
+static void close_popups(void);
+static unsigned milliseconds(void);
+
+/* Whether a window without a frame of a process, or of one started since, is shown. */
+static int
+ui_launch_any_window(pid_t pid)
+{
+	GR_WINDOW_ID parent, *kids = NULL;
+	GR_COUNT n = 0, i;
+	int shown = 0;
+
+	GrQueryTree(GR_ROOT_WINDOW_ID, &parent, &kids, &n);
+	for (i = 0; i < n && !shown; i++) {
+		GR_WINDOW_INFO info;
+
+		if (!(kids[i] & 0x40000000) || (pid_t)((kids[i] >> 15) & 0x7fff) < pid || kids[i] == ui_launch_note)
+			continue;
+		GrGetWindowInfo(kids[i], &info);
+		shown = info.mapped;
+	}
+	free(kids);
+	return shown;
+}
+
 /* Starts a command for a click: the note says so until a window comes (ui_launch.h), and a
  * failure is reported. */
 static void
@@ -781,9 +1063,535 @@ start(const char *label, const char *command)
 {
 	struct ui_icon_ref icon;
 
+	pid_t child;
+
 	ui_icon_of_command(command, &icon);
+	ui_launch_will_run(command);
 	ui_launch_begin(label, &icon, GR_EVENT_MASK_CHLD_UPDATE);
-	ui_launch_started(launch(command));
+	child = launch(command);
+	ui_launch_started(child);
+	if (child > 0 && !ui_exec_errno)
+		starting_add(child, label, &icon);
+}
+
+/* ---- programs: starting, not answering, outliving their windows */
+
+/* A process's state letter ('Z' for one that has ended and is not reaped), or 0 when it is gone. */
+static int
+process_state(int pid)
+{
+	char path[40], text[128], *end;
+	int fd, n;
+
+	snprintf(path, sizeof path, "/proc/%d/stat", pid);
+	if ((fd = open(path, O_RDONLY)) < 0)
+		return 0;
+	n = (int)read(fd, text, sizeof text - 1);
+	close(fd);
+	text[n > 0 ? n : 0] = 0;
+	end = strrchr(text, ')');
+	return end && end[1] ? end[2] : 0;
+}
+
+static int
+process_alive(int pid)
+{
+	int state = process_state(pid);
+
+	return state && state != 'Z';
+}
+
+static int
+process_parent(int pid)
+{
+	char path[40], text[128], *end;
+	int fd, n;
+
+	snprintf(path, sizeof path, "/proc/%d/stat", pid);
+	if ((fd = open(path, O_RDONLY)) < 0)
+		return 0;
+	n = (int)read(fd, text, sizeof text - 1);
+	close(fd);
+	text[n > 0 ? n : 0] = 0;
+	end = strrchr(text, ')');
+	return end && end[1] && end[2] ? atoi(end + 3) : 0;
+}
+
+/* nxask's question, not waited for: its answer comes as it ends (reaped). */
+static pid_t
+ask(const char *icon, const char *title, const char *text, const char *yes, const char *no)
+{
+	pid_t child;
+
+	if ((child = real_vfork()) == 0) {
+		signal(SIGCHLD, SIG_DFL);
+		execlp("nxask", "nxask", "--icon", icon, "--title", title, text, yes, no, (char *)NULL);
+		_exit(127);
+	}
+	return child;
+}
+
+/* A button for a program on its way, until a window of it, or of one it started, comes. */
+static void
+starting_add(pid_t pid, const char *label, const struct ui_icon_ref *icon)
+{
+	static unsigned start_ms;
+	char comm[20] = "", path[40], name[48];
+	int i, fd, n;
+
+	if (!start_ms)
+		start_ms = getenv("NXBAR_START_MS") ? (unsigned)atoi(getenv("NXBAR_START_MS")) : START_MS;
+	for (i = 0; i < MAX_STARTING; i++)
+		if (starting[i].pid == pid)
+			return;
+	for (i = 0; i < MAX_STARTING && starting[i].pid; i++)
+		;
+	if (i == MAX_STARTING)
+		return;
+	starting[i].pid = pid;
+	starting[i].asker = 0;
+	starting[i].asked = 0;
+	starting[i].began = milliseconds() + start_ms;
+	if (!label) {
+		snprintf(path, sizeof path, "/proc/%d/comm", (int)pid);
+		if ((fd = open(path, O_RDONLY)) >= 0) {
+			n = (int)read(fd, comm, sizeof comm - 1);
+			close(fd);
+			comm[n > 0 ? n : 0] = 0;
+			comm[strcspn(comm, "\n")] = 0;
+		}
+		label_of(comm, name, sizeof name);
+		label = name;
+		ui_icon_of_command(comm, &starting[i].icon);
+	} else
+		starting[i].icon = *icon;
+	snprintf(starting[i].name, sizeof starting[i].name, "%.13s", label);
+	starting_count++;
+	stale = 1;
+	draw_bar();
+	say("nxbar: starting %s\n", starting[i].name);
+}
+
+/* Once a second while something starts. */
+static int
+starting_tick(void)
+{
+	int i, j, changed = 0;
+	unsigned now = milliseconds();
+
+	for (i = 0; i < MAX_STARTING && starting_count; i++) {
+		pid_t pid = starting[i].pid;
+		int done = 0;
+
+		if (!pid)
+			continue;
+		for (j = 0; j < task_count && !done; j++)
+			done = tasks[j].process >= pid;
+		if (!done)
+			done = ui_launch_any_window(pid);
+		if (!done)
+			done = !process_alive(pid);
+		if (done) {
+			if (starting[i].asker)
+				kill(starting[i].asker, SIGTERM);
+			starting[i].pid = 0;
+			starting_count--;
+			changed = 1;
+			continue;
+		}
+		if (!starting[i].asked && (int)(now - starting[i].began) >= 0) {
+			char text[120];
+
+			starting[i].asked = 1;
+			snprintf(text, sizeof text, "%s has shown no window yet.\nIt may still be loading.", starting[i].name);
+			say("nxbar: slow to start: %s\n", starting[i].name);
+			starting[i].asker = ask("warning", "Slow to start", text, "Keep waiting", "End it");
+		}
+	}
+	return changed;
+}
+
+/* A window asked to close that may not: looked at when its time is up. */
+#define CLOSINGS 8
+enum { WATCH, ASKED_ANSWER, ENDING, GONE_WAIT, GONE_ANSWER };
+static struct {
+	GR_WINDOW_ID frame, had[32];
+	int had_count, pid, phase;
+	unsigned at;
+	pid_t asker;
+	char name[20];
+} closings[CLOSINGS];
+static int closing_count;
+static unsigned close_ms;
+
+/* Whether a window that was not there at the close, of the program or one it started, is shown:
+ * a program asking about what is not saved has answered. And whether the frame is still there. */
+static void
+closing_look(int k, int *frame_there, int *asking, int *others)
+{
+	GR_WINDOW_ID parent, *kids = NULL;
+	GR_COUNT n = 0, i;
+	int j;
+
+	*frame_there = *asking = *others = 0;
+	GrQueryTree(GR_ROOT_WINDOW_ID, &parent, &kids, &n);
+	for (i = 0; i < n; i++) {
+		GR_WINDOW_INFO info;
+
+		if (kids[i] == closings[k].frame) {
+			*frame_there = 1;
+			continue;
+		}
+		if (kids[i] == bar || kids[i] == preview_window || kids[i] == switcher)
+			continue;
+		GrGetWindowInfo(kids[i], &info);
+		if (!(info.props & GR_WM_PROPS_NODECORATE) && info.processid == closings[k].pid)
+			*others = 1;
+		for (j = 0; j < closings[k].had_count && closings[k].had[j] != kids[i]; j++)
+			;
+		if (j == closings[k].had_count && info.mapped && (info.processid == closings[k].pid ||
+		    process_parent(info.processid) == closings[k].pid))
+			*asking = 1;
+	}
+	free(kids);
+}
+
+static void
+closing_end(int k)
+{
+	if (closings[k].asker)
+		kill(closings[k].asker, SIGTERM);
+	closings[k].frame = 0;
+	closings[k].pid = 0;
+	closing_count--;
+}
+
+/* The program is told to end, and in 2 s made to. */
+static void
+closing_kill(int k)
+{
+	char text[64];
+
+	snprintf(text, sizeof text, "%s", closings[k].name);
+	say("nxbar: SIGTERM to %s\n", text);
+	kill(closings[k].pid, SIGTERM);
+	closings[k].phase = ENDING;
+	closings[k].asker = 0;
+	closings[k].at = milliseconds() + 2000;
+}
+
+/* A slot for a frame's program: 0 or more, -1 when it has one, or there is no room. */
+static int
+closing_slot(int task)
+{
+	int k;
+
+	for (k = 0; k < CLOSINGS; k++)
+		if (closings[k].pid == tasks[task].process && closings[k].frame == tasks[task].frame)
+			return -1;
+	for (k = 0; k < CLOSINGS && closings[k].pid; k++)
+		;
+	if (k == CLOSINGS)
+		return -1;
+	closings[k].frame = tasks[task].frame;
+	closings[k].pid = tasks[task].process;
+	closings[k].asker = 0;
+	snprintf(closings[k].name, sizeof closings[k].name, "%s", tasks[task].title);
+	closing_count++;
+	return k;
+}
+
+/* A window was asked to close: what it does is looked at when its time is up. */
+static void
+closing_add(GR_WINDOW_ID frame)
+{
+	GR_WINDOW_ID parent, *kids = NULL;
+	GR_COUNT n = 0, i;
+	int task = task_by_frame(frame), k;
+
+	if (task < 0 || (k = closing_slot(task)) < 0)
+		return;
+	if (!close_ms)
+		close_ms = getenv("NXBAR_CLOSE_MS") ? (unsigned)atoi(getenv("NXBAR_CLOSE_MS")) : CLOSE_MS;
+	closings[k].phase = WATCH;
+	closings[k].at = milliseconds() + close_ms;
+	closings[k].had_count = 0;
+	GrQueryTree(GR_ROOT_WINDOW_ID, &parent, &kids, &n);
+	for (i = 0; i < n && closings[k].had_count < 32; i++)
+		closings[k].had[closings[k].had_count++] = kids[i];
+	free(kids);
+}
+
+/* Once a second while a window is being closed. */
+static void
+closing_tick(void)
+{
+	unsigned now = milliseconds();
+	char text[120];
+	int k;
+
+	for (k = 0; k < CLOSINGS && closing_count; k++) {
+		int frame_there, asking, others;
+
+		if (!closings[k].pid)
+			continue;
+		if (!process_alive(closings[k].pid)) {
+			closing_end(k);
+			continue;
+		}
+		switch (closings[k].phase) {
+		case WATCH:
+			if ((int)(now - closings[k].at) < 0)
+				break;
+			closing_look(k, &frame_there, &asking, &others);
+			if (asking) {
+				say("nxbar: %s asks about the close\n", closings[k].name);
+				closing_end(k);
+			} else if (!frame_there && others)
+				closing_end(k);
+			else if (!frame_there) {
+				closings[k].phase = GONE_WAIT;
+				closings[k].at = now + close_ms;
+			} else {
+				snprintf(text, sizeof text, "%s does not answer.\nEnd it? What is not saved in it is lost.", closings[k].name);
+				say("nxbar: not responding: %s\n", closings[k].name);
+				closings[k].phase = ASKED_ANSWER;
+				closings[k].asker = ask("warning", "Not responding", text, "End it", "Wait");
+			}
+			break;
+		case ASKED_ANSWER:
+			/* (it answered after all: the question goes) */
+			closing_look(k, &frame_there, &asking, &others);
+			if (!frame_there) {
+				kill(closings[k].asker, SIGTERM);
+				closings[k].asker = 0;
+				closings[k].phase = GONE_WAIT;
+				closings[k].at = now + close_ms;
+			}
+			break;
+		case GONE_WAIT:
+			if ((int)(now - closings[k].at) < 0)
+				break;
+			closing_look(k, &frame_there, &asking, &others);
+			if (others || frame_there) {
+				closing_end(k);
+				break;
+			}
+			snprintf(text, sizeof text, "%s closed its window and is still running.\nEnd it?", closings[k].name);
+			say("nxbar: outlives its window: %s\n", closings[k].name);
+			closings[k].phase = GONE_ANSWER;
+			closings[k].asker = ask("warning", "Still running", text, "End it", "Leave it");
+			break;
+		case ENDING:
+			if ((int)(now - closings[k].at) >= 0) {
+				say("nxbar: SIGKILL to %s\n", closings[k].name);
+				kill(closings[k].pid, SIGKILL);
+				closing_end(k);
+			}
+			break;
+		}
+	}
+}
+
+/* A child of the bar's ended: was it a question's answer? */
+static void
+reaped(pid_t pid, int status)
+{
+	int k, yes = WIFEXITED(status) && WEXITSTATUS(status) == 0;
+
+	for (k = 0; k < CLOSINGS; k++)
+		if (closings[k].pid && closings[k].asker == pid) {
+			closings[k].asker = 0;
+			if (yes)
+				closing_kill(k);
+			else if (closings[k].phase == ASKED_ANSWER) {
+				/* wait, and ask again */
+				closings[k].phase = WATCH;
+				closings[k].at = milliseconds() + 3 * close_ms;
+			} else
+				closing_end(k);
+			return;
+		}
+	for (k = 0; k < MAX_STARTING; k++)
+		if (starting[k].pid && starting[k].asker == pid) {
+			starting[k].asker = 0;
+			/* (0 keeps waiting; 1 ends it) */
+			if (WIFEXITED(status) && WEXITSTATUS(status) == 1)
+				kill(starting[k].pid, SIGTERM);
+			return;
+		}
+}
+
+/* ---- where a frame being dragged would go, under it */
+
+static void
+preview(GR_WINDOW_ID frame, int zone)
+{
+	int cols = screen.cols, rows = screen.rows - BAR_HEIGHT, x = 0, y = 0, w = cols / 2, h = rows / 2;
+
+	if (preview_window)
+		GrDestroyWindow(preview_window);
+	preview_window = 0;
+	if (zone) {
+		char text[16];
+
+		if (zone == 7)
+			w = cols, h = rows;
+		else if (zone <= 2)
+			h = rows, x = zone == 2 ? cols - w : 0;
+		else
+			x = zone & 1 ? 0 : cols - w, y = zone >= 5 ? rows - h : 0;
+		preview_window = GrNewWindowEx(GR_WM_PROPS_NODECORATE | GR_WM_PROPS_NOMOVE | GR_WM_PROPS_NOAUTOMOVE | GR_WM_PROPS_NOFOCUS,
+			"snap", GR_ROOT_WINDOW_ID, x, y, w, h, MWRGB(153, 196, 240));
+		GrMapWindow(preview_window);
+		GrSetGCForeground(gc, MWRGB(51, 120, 200));
+		GrRect(preview_window, gc, 0, 0, w, h);
+		GrRect(preview_window, gc, 1, 1, w - 2, h - 2);
+		GrRaiseWindow(preview_window);
+		GrRaiseWindow(frame);
+		snprintf(text, sizeof text, "%d", zone);
+		say("nxbar: snap preview %s\n", text);
+	} else
+		say("nxbar: snap preview %s\n", "gone");
+}
+
+/* ---- the switcher: the windows of the desktop shown, the one last with the keyboard first */
+
+static int switching, switch_order[MAX_TASKS], switch_count, switch_at;
+static unsigned switch_began;
+
+static void
+switcher_draw(void)
+{
+	int cell = 40, across = switch_count < 12 ? switch_count : 12, width = across * cell + 12, i;
+	const char *title = tasks[switch_order[switch_at]].title;
+
+	GrSetGCForeground(gc, ui_seven ? MWRGB(36, 52, 74) : FACE);
+	GrFillRect(switcher, gc, 0, 0, width < 200 ? 200 : width, 72);
+	GrSetGCForeground(gc, ui_seven ? MWRGB(118, 138, 166) : BLACK);
+	GrRect(switcher, gc, 0, 0, width < 200 ? 200 : width, 72);
+	for (i = 0; i < across; i++) {
+		if (i == switch_at % 12) {
+			GrSetGCForeground(gc, ui_seven ? MWRGB(118, 150, 192) : WHITE);
+			GrFillRect(switcher, gc, 6 + i * cell, 4, cell, cell);
+		}
+		ui_icon_draw(switcher, gc, 6 + i * cell + 4, 8, &tasks[switch_order[i]].icon, 32);
+	}
+	GrSetGCForeground(gc, INK);
+	GrText(switcher, gc, 8, 50, (void *)title, -1, GR_TFASCII | GR_TFTOP);
+}
+
+static void
+switcher_show(void)
+{
+	int across = switch_count < 12 ? switch_count : 12, width = across * 40 + 12;
+
+	if (width < 200)
+		width = 200;
+	if (!switcher) {
+		switcher = GrNewWindowEx(GR_WM_PROPS_NODECORATE | GR_WM_PROPS_NOMOVE | GR_WM_PROPS_NOAUTOMOVE | GR_WM_PROPS_NOFOCUS,
+			"switch", GR_ROOT_WINDOW_ID, (screen.cols - width) / 2, (screen.rows - 72) / 2, width, 72, MWRGB(36, 52, 74));
+		GrSelectEvents(switcher, GR_EVENT_MASK_EXPOSURE);
+		GrMapWindow(switcher);
+		GrRaiseWindow(switcher);
+	}
+	switcher_draw();
+	say("nxbar: switcher at %s\n", tasks[switch_order[switch_at]].title);
+}
+
+/* Tab, with the key held: the first press takes the window before this one, each next the next. */
+static void
+switch_key(int shift)
+{
+	int i, j;
+
+	if (!switching) {
+		find_tasks(0);
+		find_active();
+		switch_count = 0;
+		/* those that had the keyboard, last first; then the rest */
+		for (i = 0; i < MAX_TASKS && mru[i]; i++)
+			if ((j = task_by_frame(mru[i])) >= 0 && tasks[j].desk == desktop)
+				switch_order[switch_count++] = j;
+		for (j = 0; j < task_count; j++) {
+			for (i = 0; i < switch_count && switch_order[i] != j; i++)
+				;
+			if (i == switch_count && tasks[j].desk == desktop)
+				switch_order[switch_count++] = j;
+		}
+		if (!switch_count)
+			return;
+		switching = 1;
+		switch_began = milliseconds();
+		switch_at = switch_count == 1 ? 0 : shift ? switch_count - 1 : tasks[switch_order[0]].frame == active_frame ? 1 : 0;
+		return;
+	}
+	switch_at = (switch_at + (shift ? switch_count - 1 : 1)) % switch_count;
+	switcher_show();
+}
+
+static void
+switch_end(void)
+{
+	if (!switching)
+		return;
+	switching = 0;
+	if (switcher)
+		GrDestroyWindow(switcher);
+	switcher = 0;
+	say("nxbar: switched to %s\n", tasks[switch_order[switch_at]].title);
+	task_front(switch_order[switch_at]);
+	draw_bar();
+}
+
+/* A word from the window manager. */
+static void
+told(GR_EVENT_KEYSTROKE *key)
+{
+	int task;
+
+	switch (key->ch - GR_WM_TELL(0)) {
+	case GR_WM_TELL_SWITCH:
+		switch_key(key->rootx);
+		break;
+	case GR_WM_TELL_SWITCH_END:
+		switch_end();
+		break;
+	case GR_WM_TELL_MENU:
+		note_window(key->subwid);
+		find_tasks(0);
+		close_popups();
+		if ((task = task_by_frame(key->subwid)) >= 0) {
+			show_task_menu(task, key->rootx, key->rooty, 0, 1);
+			say("nxbar: the menu of %s\n", tasks[task].title);
+		}
+		break;
+	case GR_WM_TELL_CLOSE:
+		closing_add(key->subwid);
+		break;
+	case GR_WM_TELL_PREVIEW:
+		preview(key->subwid, key->rootx);
+		break;
+	case GR_WM_TELL_DESKTOP:
+		desktop = key->rootx;
+		desk_hidden_count = 0;
+		find_tasks(1);
+		find_active();
+		draw_bar();
+		break;
+	case GR_WM_TELL_SHOW_DESK:
+		show_desktop();
+		draw_bar();
+		break;
+	case GR_WM_TELL_STATE:
+		note_window(key->subwid);
+		if (find_tasks(0))
+			draw_bar();
+		break;
+	case GR_WM_TELL_STARTING:
+		starting_add(key->rootx, NULL, NULL);
+		break;
+	}
 }
 
 /* "Open this" from the host (docs/system/open.md): a count among the machine's control words, and an
@@ -1157,10 +1965,12 @@ popup_event(GR_EVENT *event)
 static void
 chosen(int id)
 {
-	int task = task_asked, pin = pin_asked;
+	int task = asked_frame ? task_by_frame(asked_frame) : -1, pin = pin_asked, k;
 	char command[64];
+	char label[48];
 
 	task_asked = pin_asked = -1;
+	asked_frame = 0;
 	if (id >= 1 && id <= item_count) {
 		const char *label = strrchr(items[id - 1].path, '/');
 
@@ -1169,8 +1979,37 @@ chosen(int id)
 		task_front(task);
 	else if (task >= 0 && task < task_count && id == TASK_MINIMISE)
 		GrUnmapWindow(tasks[task].frame);
-	else if (task >= 0 && task < task_count && id == TASK_CLOSE)
+	else if (task >= 0 && id == TASK_CLOSE) {
 		GrCloseWindow(tasks[task].client);
+		closing_add(tasks[task].frame);
+	} else if (id >= TASK_WINDOW && id < TASK_WINDOW + task_count)
+		task_front(id - TASK_WINDOW);
+	else if (task >= 0 && id == TASK_MAXIMISE)
+		wm_word(tasks[task].frame, GR_WMC_TILE, tasks[task].state & GR_WM_PROPS_MAXED ? 0 : 7);
+	else if (task >= 0 && (id == TASK_LEFT || id == TASK_RIGHT))
+		wm_word(tasks[task].frame, GR_WMC_TILE, id == TASK_LEFT ? 1 : 2);
+	else if (task >= 0 && id == TASK_SHADE)
+		wm_word(tasks[task].frame, GR_WMC_SHADE, 0);
+	else if (task >= 0 && id == TASK_ONTOP)
+		wm_word(tasks[task].frame, GR_WMC_ONTOP, 0);
+	else if (task >= 0 && id >= TASK_TO_DESK && id < TASK_TO_DESK + GR_WM_DESKTOPS)
+		wm_word(tasks[task].frame, GR_WMC_DESKTOP, id - TASK_TO_DESK);
+	else if (task >= 0 && id == TASK_NEW && task_command(task, command, sizeof command)) {
+		label_of(command, label, sizeof label);
+		start(label, command);
+	} else if (task >= 0 && id == TASK_CLOSE_ALL) {
+		for (k = 0; k < task_count; k++)
+			if (tasks[k].desk == desktop && !strcmp(tasks[k].program, tasks[task].program)) {
+				GrCloseWindow(tasks[k].client);
+				closing_add(tasks[k].frame);
+			}
+	} else if (task >= 0 && id == TASK_END && (k = closing_slot(task)) >= 0) {
+		char text[120];
+
+		snprintf(text, sizeof text, "End %s? What is not saved in it is lost.", tasks[task].title);
+		closings[k].phase = GONE_ANSWER;
+		closings[k].asker = ask("warning", "End the program", text, "End it", "Cancel");
+	}
 	else if (task >= 0 && task < task_count && id == TASK_PIN && task_command(task, command, sizeof command)) {
 		int at = pinned_index(command);
 
@@ -1188,8 +2027,6 @@ chosen(int id)
 		pinned_count--;
 		save_pinned();
 	} else if (pin >= 0 && pin < pinned_count && id == PIN_START) {
-		char label[48];
-
 		label_of(pinned[pin].command, label, sizeof label);
 		start(label, pinned[pin].command);
 	}
@@ -1223,33 +2060,68 @@ bar_pressed(GR_EVENT_BUTTON *b, unsigned closed_at)
 			if (b->buttons & GR_BUTTON_R)
 				show_pin_menu(i);
 			else {
-				label_of(pinned[i].command, label, sizeof label);
-				start(label, pinned[i].command);
+				/* a program that is up comes forward, its next window if one has the keyboard; the
+				 * middle button or Shift start another */
+				char word[24];
+				int t, at = -1;
+
+				snprintf(word, sizeof word, "%.*s", (int)strcspn(pinned[i].command, " "), pinned[i].command);
+				for (t = 0; t < task_count; t++)
+					if (tasks[t].desk == desktop && !strcmp(tasks[t].program, word) && (at < 0 || at == active_task()))
+						at = t;
+				if (at >= 0 && !(b->buttons & GR_BUTTON_M) && !(b->modifiers & MWKMOD_SHIFT)) {
+					task_front(at);
+					draw_bar();
+				} else {
+					label_of(pinned[i].command, label, sizeof label);
+					start(label, pinned[i].command);
+				}
 			}
 			return;
 		}
-	if (b->x >= tasks_x() && b->x < NAME_X && wheel && task_count) {
-		/* the wheel: the window after (or before) the one in front */
-		int at = active_task(), step = b->buttons & GR_BUTTON_SCROLLUP ? task_count - 1 : 1;
+	if (b->x >= tasks_x() && b->x < PAGER_X && wheel && task_count) {
+		/* the wheel: the window after (or before) the one in front, of the desktop shown */
+		int at = active_task(), step = b->buttons & GR_BUTTON_SCROLLUP ? task_count - 1 : 1, k;
 
-		task_front(at < 0 ? 0 : (at + step) % task_count);
+		at = at < 0 ? 0 : at;
+		for (k = 0; k < task_count; k++) {
+			at = (at + step) % task_count;
+			if (tasks[at].desk == desktop)
+				break;
+		}
+		if (tasks[at].desk == desktop)
+			task_front(at);
 		draw_bar();
 		return;
 	}
-	for (i = 0; i < task_count && !wheel; i++)
+	for (i = 0; i < button_count && !wheel; i++)
 		if (b->x >= task_x(i) && b->x < task_x(i) + task_width()) {
-			if (b->buttons & GR_BUTTON_R)
-				show_task_menu(i, task_x(i));
-			else if (b->buttons & GR_BUTTON_M)
-				GrCloseWindow(tasks[i].client);
-			else if (i == active_task()) {	/* the window in front: put away, as Windows does */
-				GrUnmapWindow(tasks[i].frame);
+			int t = buttons[i].task;
+
+			if (buttons[i].start >= 0)
+				return;
+			if (buttons[i].count > 1) {
+				show_group_menu(i);
+			} else if (b->buttons & GR_BUTTON_R)
+				show_task_menu(t, task_x(i), screen.rows - BAR_HEIGHT, 1, 0);
+			else if (b->buttons & GR_BUTTON_M) {
+				GrCloseWindow(tasks[t].client);
+				closing_add(tasks[t].frame);
+			} else if (t == active_task()) {	/* the window in front: put away, as Windows does */
+				GrUnmapWindow(tasks[t].frame);
 				active_frame = 0;
 			} else
-				task_front(i);
+				task_front(t);
 			draw_bar();
 			return;
 		}
+	if (b->x >= PAGER_X && b->x < PAGER_X + PAGER_W) {
+		if (!wheel)
+			wm_word(bar, GR_WMC_GOTO, (b->x - PAGER_X) / PAGER_CELL);
+		else
+			wm_word(bar, GR_WMC_GOTO, desktop + (b->buttons & GR_BUTTON_SCROLLUP ? GR_WM_DESKTOPS - 1 : 1));
+		return;
+	}
 	if (b->x >= VOLUME_X && b->x < VOLUME_X + VOLUME_W) {
 		if (!wheel)
 			volume ? close_popups() : show_volume();
@@ -1340,6 +2212,7 @@ main(int argc, char **argv)
 	/* the Windows key, whatever window has the keyboard */
 	GrGrabKey(bar, MWKEY_LMETA, GR_GRAB_HOTKEY);
 	GrGrabKey(bar, MWKEY_RMETA, GR_GRAB_HOTKEY);
+	wm_word(bar, GR_WMC_GOTO, 0);
 	/* NXBAR_SHOW=1 starts with the menu open, NXBAR_SHOW=Folder with that folder's beside it: for a test without a pointer */
 	if (getenv("NXBAR_SHOW")) {
 		show_menu(1, 0);
@@ -1348,15 +2221,16 @@ main(int argc, char **argv)
 
 	for (;;) {
 		static time_t looked, listed;
-		static int stale = 1;	/* a window came or went since the buttons were looked for */
 		static int moved = 1;	/* the keyboard may be another window's: every such change is a child update */
 		static time_t asked;
 		static unsigned retitle;	/* buttons whose windows' titles are asked again */
 		time_t now;
 		int i;
 
-		GrGetNextEventTimeout(&event, ui_launch_wait(1000));
+		GrGetNextEventTimeout(&event, switching && !switcher ? SWITCH_MS : ui_launch_wait(1000));
 		ui_launch_tick();
+		if (switching && !switcher && milliseconds() - switch_began >= SWITCH_MS)
+			switcher_show();
 		if (ui_launch_event(&event))
 			continue;
 		if (popup_event(&event))
@@ -1377,9 +2251,13 @@ main(int argc, char **argv)
 		case GR_EVENT_TYPE_EXPOSURE:
 			if (event.exposure.wid == bar)
 				draw_bar();
+			else if (event.exposure.wid == switcher && switcher)
+				switcher_draw();
 			break;
 		case GR_EVENT_TYPE_KEY_DOWN:
-			if (event.keystroke.hotkey) {
+			if (event.keystroke.hotkey && event.keystroke.ch >= GR_WM_TELL(0) && event.keystroke.ch < GR_WM_TELL(32))
+				told(&event.keystroke);
+			else if (event.keystroke.hotkey) {
 				close_popups();
 				show_menu(!ui_menu_is_open(), 1);	/* opened by a key: the first row is picked out */
 			}
@@ -1424,6 +2302,13 @@ main(int argc, char **argv)
 			continue;
 		looked = now;
 		watch_open();
+		if (closing_count)
+			closing_tick();
+		if (starting_count) {
+			stale = 1;
+			if (starting_tick())
+				draw_bar();
+		}
 		if (moved || now - asked >= 15) {
 			moved = 0;
 			asked = now;
