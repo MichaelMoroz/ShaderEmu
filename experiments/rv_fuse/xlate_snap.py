@@ -14,7 +14,6 @@ HDR, W, ROW0 = 32, 2048, 64
 B0 = 2304 * 2048
 PCT = 5000 * 2048
 ROWS = 5700
-SINK = 32
 K_LO, K_HI, P_LO, P_HI = 0x82000000, 0x82800000, 0x84000000, 0x88000000
 P_SUM, P_ALU, P_LOAD, P_STORE, P_RV, P_LEAVE = range(6)
 ap = argparse.ArgumentParser()
@@ -22,7 +21,10 @@ ap.add_argument('snap')
 ap.add_argument('pcs')
 ap.add_argument('out')
 ap.add_argument('--no-fold', action='store_true')
+ap.add_argument('--sink', type=int, default=32)
+ap.add_argument('--check', action='store_true')
 a = ap.parse_args()
+SINK = a.sink
 
 raw = np.fromfile(a.snap, dtype=np.uint8)
 base = HDR + ROW0 * W * 16
@@ -280,6 +282,8 @@ for idx, B in enumerate(bundles):
     elif B['ctl'] == 3:
         if B['path'] == P_RV:
             ctl = B['path'] | B['n'] << 3 | 3 << 6
+        elif not -1024 <= B['off'] < 1024:
+            ctl = P_LEAVE   # (the offset has eleven bits here)
         else:
             ctl |= B['cra'] << 11 | (B['off'] & 0x7ff) << 21
     X = B['X']
@@ -297,3 +301,122 @@ tot = sum(B.get('w', 0) for B in bundles)
 print('bundles by the profile: ' + ', '.join(f"{nm} {100 * sum(B.get('w', 0) for B in bundles if B['path'] == q) / tot:.1f}%" for q, nm in enumerate(('sum', 'unit', 'load', 'store', 'old step', 'leave'))))
 print(f"RV a bundle {sum(B.get('w', 0) * B['n'] for B in bundles) / tot:.3f}; far branches {far_w / tot * 100:.1f}% of bundles; op 1 in {100 * sum(B.get('w', 0) for B in bundles if B['Y'] != SINK) / tot:.1f}%; control in {100 * sum(B.get('w', 0) for B in bundles if B['ctl']) / tot:.1f}%")
 print(f'{far} branches out of reach left to the old loop; wrote {a.out}')
+
+
+# --check: every bundle against its RISC-V words, from random registers: registers, stores and where it goes the same
+if a.check:
+    import random
+    M = 0xffffffff
+
+    def sg(v): return v - (1 << 32) if v & 0x80000000 else v
+
+    def mem(addr):
+        w = (addr & ~3) * 2654435761 & M
+        return w ^ (w >> 13)
+
+    def load_v(va, f3):
+        m = mem(va) >> ((va & 3) * 8)
+        if f3 == 0: return ((m & 0xff) ^ 0x80) - 0x80 & M
+        if f3 == 1: return ((m & 0xffff) ^ 0x8000) - 0x8000 & M
+        if f3 == 2: return m & M
+        if f3 == 4: return m & 0xff
+        return m & 0xffff
+
+    def rv_step(w, pc, r, st):
+        k, f3 = kind(w), f3_of(w)
+        A, Bv = r[ra_of(w)], r[rb_of(w)]
+        d = rd_of(w)
+        nx = pc + 4
+        v = None
+        if k in ('alui', 'alur'):
+            y = sx(w >> 20, 12) & M if k == 'alui' else Bv
+            sh = (w >> 20) & 31 if k == 'alui' else Bv & 31
+            alt = (w >> 30) & 1
+            if f3 == 0: v = (A - y if k == 'alur' and alt else A + y) & M
+            elif f3 == 1: v = A << sh & M
+            elif f3 == 2: v = int(sg(A) < sg(y))
+            elif f3 == 3: v = int(A < y)
+            elif f3 == 4: v = A ^ y
+            elif f3 == 5: v = (sg(A) >> sh) & M if alt else A >> sh
+            elif f3 == 6: v = A | y
+            else: v = A & y
+        elif k == 'lui': v = w & 0xfffff000
+        elif k == 'auipc': v = (w & 0xfffff000) + pc & M
+        elif k == 'load': v = load_v(A + sx(w >> 20, 12) & M, f3)
+        elif k == 'store': st.append((A + imm_s(w) & M, Bv, f3))
+        elif k == 'branch':
+            lt = A < Bv if f3 & 2 else sg(A) < sg(Bv)
+            if ((lt if f3 & 4 else A == Bv) != bool(f3 & 1)): nx = pc + imm_b(w)
+        elif k == 'jal':
+            v = pc + 4
+            nx = pc + imm_j(w)
+        elif k == 'jalr':
+            v = pc + 4
+            nx = (A + sx(w >> 20, 12)) & 0xfffffffe
+        else: raise KeyError(k)
+        if v is not None and d: r[d] = v
+        return nx & M
+
+    def bundle_step(idx, r, st):
+        X, Y, Z, W = (int(q) for q in area[B0 + idx])
+        path = W & 7
+        q = dict(enumerate(r))
+        def wr(rg, val):
+            if rg != SINK and rg: r[rg] = val & M
+        A, C = r[(X >> 6) & 31], r[(X >> 11) & 31]
+        Z &= M
+        val = 0
+        if path < 2:
+            bv = C + Z & M
+            if path == 0: val = A + bv & M
+            else:
+                f = (X >> 16) & 15
+                sh = bv & 31
+                val = {0: A + bv, 1: A - bv, 2: A & bv, 3: A | bv, 4: A ^ bv, 5: A << sh, 6: A >> sh, 7: (sg(A) >> sh), 8: int(sg(A) < sg(bv)), 9: int(A < bv)}[f] & M
+        elif path == 2:
+            val = load_v(A + Z & M, (X >> 16) & 7)
+        elif path == 3:
+            st.append((A + Z & M, C, (X >> 16) & 7))
+        wr(X & 63, val)
+        wr(Y & 63, r[(Y >> 6) & 31] + r[(Y >> 11) & 31] + (sx(Y >> 20, 12)))
+        kindc = W & 0xc0
+        if kindc == 0x40:
+            ca, cb = r[(W >> 11) & 31], r[(W >> 16) & 31]
+            f = (W >> 8) & 7
+            lt = ca < cb if f & 2 else sg(ca) < sg(cb)
+            if ((lt if f & 4 else ca == cb) != bool(f & 1)):
+                return ('b', idx + sx(W >> 21, 11))
+        elif kindc == 0x80:
+            return ('b', idx + sx(W >> 8, 24))
+        elif kindc == 0xc0:
+            return ('p', (r[(W >> 11) & 31] + sx(W >> 21, 11)) & 0xfffffffe)
+        return ('b', idx + 1)
+
+    bad = collections.Counter()
+    shown = 0
+    random.seed(1)
+    for idx, B in enumerate(bundles):
+        W = int(area[B0 + idx][3])
+        if (W & 7) >= 4: continue
+        for trial in range(6):
+            r0 = [0] + [random.choice((random.getrandbits(32), random.getrandbits(5), 0x82000000 + random.getrandbits(12) * 4, 0xffffffff, 0, 1)) for _ in range(31)]
+            r1, st1 = list(r0), []
+            pc = B['rv']
+            nx = pc
+            for _ in range((W >> 3) & 7):
+                nx = rv_step(code[nx][0], nx, r1, st1)
+            r2, st2 = list(r0), []
+            how, to = bundle_step(idx, r2, st2)
+            topc = to if how == 'p' else bundles[to]['rv']
+            why = None
+            if r1 != r2: why = 'registers'
+            elif st1 != st2: why = 'stores'
+            elif topc & M != nx & M: why = 'goes'
+            if why:
+                bad[why] += 1
+                if shown < 12:
+                    shown += 1
+                    print('   target', hex(B['target'] or 0), 'tb', B.get('tb'), 'rv of tb', hex(bundles[B['tb']]['rv']) if 'tb' in B else '', 'how', how, to, 'W', hex(W))
+                    print(f"{why}: bundle {idx} rv {pc:08x} n {(W >> 3) & 7} words {[hex(code[pc + 4 * q][0]) for q in range((W >> 3) & 7)]} -> {topc & M:08x} against {nx & M:08x}; regs differ {[(i, hex(r1[i]), hex(r2[i])) for i in range(32) if r1[i] != r2[i]][:3]}")
+                break
+    print('checked: ' + (', '.join(f'{v} {k}' for k, v in bad.items()) or 'none differ'))
