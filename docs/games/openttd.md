@@ -37,7 +37,30 @@ and has emulated thread-local storage, since a flat program's loader sets up non
 `ottd-cc` and `ottd-c++` link a flat program where the work folder is no-MMU Linux's, a static
 one otherwise, and put `ehframe.c`'s two marks round `.eh_frame` with a constructor that
 registers it: without auxv there is no `PT_GNU_EH_FRAME` for the unwinder to find. The
-binary is 14.8 MB, its data 21 MB (13 MB of it OpenSFX).
+binary is 31 MB, its data 21 MB (13 MB of it OpenSFX).
+
+It is compiled as one program with a played game's counts (31 October 2026), as Tiberian Dawn's
+(`docs/games/tdawn.md`, "The whole program at once", "What the compiler is told"):
+
+- Every global hidden (`nommu_hidden.h` in the drivers, a load from the GOT less at every use).
+- `-flto -flto-partition=1to1 -fno-toplevel-reorder` and larger inlining limits (`OPT` in `build.sh`; `OPENTTD_LTO=off` is
+  file by file). What the link compiles reaches no launcher, so the 16 bytes a variable are given by an assembler of the
+  game's own (`-B`, `ottd-as/as`, the objcopy after it), and `-fdata-sections` must be on the link's line too: without it
+  the pieces had no variable a section, statics of the tick's and of the first core's lay in one texel, and `RVC_RACES`
+  said 4 and 11 undone (`_tw_tick_time`, `_tw_next`).
+- `-fprofile-use` with `openttd.profile.gz`; `OPENTTD_PROFILE=off` is without, `=count` builds the counting program in a
+  folder of its own. `linux/openttd/counts.py` says how the counts are made and carried out of the machine: played, with the
+  drawing on two workers, since stores of many workers to one counter in a pass lose all but one, and a run of the
+  first core's ticks, a new world and the windows. They age gracefully (a function changed since has no counts): make
+  them again after a large change. A compiler without thread-local storage makes `__gcov_indirect_call` a plain global,
+  and every file's destructor calls `__gcov_exit`: `gcov.c` is compiled `-D__thread= -DGCOV_ONCE`, or a run ends with
+  100 MB of counts on the console.
+
+The tree in `~/nm/work/src/openttd` with the patch applied gives the patch back: `git diff 15.3`.
+
+Before and after on `rvc_cpu` at 2 MIPS and on the card (`rvc_harness --d3d11 --unity 11.1,1.4,0.75`), the patch of 29
+October against this section with "The first core's small blocks", "The start" and the picture's interval below:
+see "Speed on 31 October".
 
 ## What the patch changes
 
@@ -444,9 +467,21 @@ On `rvc_cpu` the guest's seconds to the game went 126.1, 101.9, 97.7, 86.9, 83.1
   worker ("Music"): the card's start to the game 58.4 s to 53.5 (four rounds each, alternating;
   the parts' pictures and ticks a second as they were).
 
-What is left of the first core's 275 million instructions: the savegame's objects read
-(`SlObject`) 104 million, `AfterLoadGame` 35, the empty world made before the load 34, the
-sprites loaded twice 16 each, and the music's first song 23.
+- The empty world before a load asked for with `-g`, its sprites and windows, is not made: the load makes them anew
+  (`OPENTTD_EMPTY_FIRST=1` is the old way). 33 million instructions.
+- A savegame's arrays of bytes come by `std::copy_n` from the read buffer, of 16-bit words by a loop of their own: a call a
+  byte and the general conversion a word were 6.6 and 12 million.
+
+## The first core's small blocks
+
+Up to 1 KB the first core's `malloc` and `free` are lists by size, in steps of 16, in 8 MB of its own (`shaderemu_t.cpp`, `FhNew`;
+`busy.sav` takes 2.9 MB; when they are out, musl's; `OPENTTD_MALLOC=musl` is musl's always). musl's were 157 and about 110
+instructions a call, 8% of the first core's start and of its share of a played round: 13 million of a start now. `free` of the
+first core's block on the tick's worker still goes by the ring.
+
+A machine without paging runs out of memory in one piece, not of memory: the sprites' arenas were 32 MB at once for 128
+cores, zeroed, refused now and then with 96 MB free (a `bad_alloc` at the first sprite a round loads), and are 256 KB for the
+cores there are, not cleared; the tick's heap is 4 MB (it takes 136 KB; more comes from the first core).
 
 ## Sprites loaded
 
@@ -639,6 +674,16 @@ part of the first core (its sync) 9. The tick's worker waits about half the time
 without it (`OPENTTD_PACE=0`) the game makes more ticks and the picture is late by their syncs.
 The paused scroll is held to 10.5 pictures a second by the picture's interval (`OPENTTD_FRAME_MS`,
 95); at 20 it is 13.9.
+
+### Speed on 31 October
+
+The picture's interval is 66 ms (`OPENTTD_FRAME_MS`, 95 before). `rvc_cpu` with the card's model, `OPENTTD_PLAY=8`, rounds 2
+to 8, no other change, pictures and ticks a second: scroll 10.66 and 1.07 at 95, 11.60 and 1.33 at 66 (11.78 and 1.30 at 80,
+11.87 and 1.31 at 50), follow 10.67 and 1.27 at 95, 15.17 and 1.31 at 66, 18.34 and 1.12 at 50. A picture that does not wait
+for the interval lets the pace space the ticks less.
+
+`GetRawSprite` of a loaded sprite saves nothing and tests the stacks once (58 instructions to about 18, 1.7 million calls a played
+round), and a parent sprite is not cleared before all its fields are set (2% of the workers).
 
 ## Not done
 

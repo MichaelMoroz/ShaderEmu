@@ -160,10 +160,51 @@ static void ThFreeHere(void *p)
 	_th_pending->push_back(p);
 }
 
+/* ---- the first core's small blocks ---- */
+
+/* Up to 1 KB, by size in steps of 16 after a header of 16, from 8 MB of its own, never given back but to their size's
+ * list: musl's malloc and free were 8% of the first core's instructions, 157 and 110 a call (docs/games/openttd.md,
+ * "The first core's small blocks"). Only the first core takes and gives back here; what the tick frees of it comes by the
+ * ring. A block keeps its texels to itself, as Pad does. When the 8 MB are out, musl's. OPENTTD_MALLOC=musl: none. */
+static constexpr size_t FH_BYTES = 8 * 1024 * 1024; /* (busy.sav takes 2.9 MB) */
+static uint8_t *_fh_base, *_fh_top, *_fh_end;
+static size_t _fh_size;
+static bool _fh_tried;
+static void *_fh_free[TH_SMALL];
+static inline bool FhOurs(const void *p) { return static_cast<size_t>(static_cast<const uint8_t *>(p) - _fh_base) < _fh_size; }
+
+static __attribute__((noinline)) void *FhNew(uint32_t c, size_t n)
+{
+	if (!_fh_tried) {
+		_fh_tried = true;
+		if (getenv("OPENTTD_MALLOC") == nullptr) {
+			if (void *m = __real_aligned_alloc(16, FH_BYTES)) {
+				_fh_base = _fh_top = static_cast<uint8_t *>(m);
+				_fh_size = FH_BYTES;
+				_fh_end = _fh_base + FH_BYTES;
+			}
+		}
+	}
+	const size_t cap = size_t{c + 1} << 4;
+	if (static_cast<size_t>(_fh_end - _fh_top) < cap + 16) return __real_malloc(Pad(n));
+	uint32_t *h = reinterpret_cast<uint32_t *>(_fh_top);
+	h[0] = c;
+	_fh_top += cap + 16;
+	return h + 4;
+}
+
 extern "C" {
 void *__wrap_malloc(size_t n)
 {
 	if (TickOnWorker()) return ThAlloc(n);
+	if (n - 1 < 16 * TH_SMALL) {
+		const uint32_t c = static_cast<uint32_t>(n - 1) >> 4;
+		if (void *p = _fh_free[c]; p != nullptr) {
+			_fh_free[c] = *static_cast<void **>(p);
+			return p;
+		}
+		return FhNew(c, n);
+	}
 	return __real_malloc(Pad(n));
 }
 
@@ -174,6 +215,12 @@ void __wrap_free(void *p)
 		if (p == _tw_dying) { _tw_dying = nullptr; return; } /* (a vehicle: the first core frees it at the next wait) */
 		if (Ours(p)) ThFree(p);
 		else ThRingPush(p);
+		return;
+	}
+	if (FhOurs(p)) {
+		const uint32_t c = (static_cast<uint32_t *>(p) - 4)[0];
+		*static_cast<void **>(p) = _fh_free[c];
+		_fh_free[c] = p;
 		return;
 	}
 	if (Ours(p)) return ThFreeHere(p);
@@ -194,6 +241,15 @@ void *__wrap_calloc(size_t m, size_t n)
 void *__wrap_realloc(void *p, size_t n)
 {
 	if (p == nullptr) return __wrap_malloc(n);
+	if (FhOurs(p)) {
+		const size_t cap = size_t{(static_cast<uint32_t *>(p) - 4)[0] + 1} << 4;
+		if (n <= cap) return p;
+		void *q = __wrap_malloc(n);
+		if (q == nullptr) return nullptr;
+		memcpy(q, p, cap);
+		__wrap_free(p); /* (on the tick's worker, by the ring) */
+		return q;
+	}
 	if (Ours(p)) {
 		const size_t cap = ThUsable(p);
 		if (n <= cap) return p;
@@ -232,6 +288,7 @@ int __wrap_posix_memalign(void **res, size_t align, size_t n)
 size_t __wrap_malloc_usable_size(void *p)
 {
 	if (p == nullptr) return 0;
+	if (FhOurs(p)) return size_t{(static_cast<uint32_t *>(p) - 4)[0] + 1} << 4;
 	if (Ours(p)) return ThUsable(p);
 	return __real_malloc_usable_size(p) - 16;
 }
@@ -409,7 +466,7 @@ static void ThDrainRing()
 	uint32_t tail = _tw_ring_tail.v;
 	const uint32_t head = _tw_ring_head.v;
 	if (tail == head) return;
-	for (; tail != head; tail++) __real_free(_th_ring[tail % RING]);
+	for (; tail != head; tail++) __wrap_free(_th_ring[tail % RING]);
 	_tw_ring_tail.v = tail;
 }
 
@@ -557,7 +614,7 @@ bool TwStart()
 	if (_tw_stack == 0) {
 		uint8_t *s = static_cast<uint8_t *>(__real_malloc(TW_STACK + 16));
 		const char *mb = getenv("OPENTTD_TICK_HEAP");
-		size_t size = static_cast<size_t>(mb != nullptr && atoi(mb) > 0 ? atoi(mb) : 16) << 20;
+		size_t size = static_cast<size_t>(mb != nullptr && atoi(mb) > 0 ? atoi(mb) : 4) << 20; /* (it takes 136 KB; memory in one piece is what a machine without paging runs out of) */
 		uint8_t *h = nullptr;
 		for (; size >= (4u << 20) && h == nullptr; size /= 2) h = static_cast<uint8_t *>(__real_malloc(size + 16));
 		if (s == nullptr || h == nullptr) return false;
@@ -624,6 +681,7 @@ void TwStop()
 			_tw_loops, _tw_tick_time / 5, _tw_park_time / 5, _tw_idle_time / 5, _tw_excl_time / 5);
 	fmt::print(stderr, "openttd: the tick's heap: {} KB taken, {} blocks of musl's asked for, {} given back\n",
 			(_th_top - _th_base) >> 10, _th_remote, _th_ring_frees);
+	fmt::print(stderr, "openttd: the first core's small blocks: {} KB of {} MB taken\n", (_fh_top - _fh_base) >> 10, _fh_size >> 20);
 	std::string holds;
 	for (const LongHold &h : _tw_long) {
 		if (h.count != 0) holds += fmt::format(" {:x}: {} (the longest {} ms)", h.site, h.count, h.most / 5);

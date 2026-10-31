@@ -971,7 +971,7 @@ static bool WantWorkerTick()
  * goes on while the viewports are drawn (docs/games/openttd.md, "The tick on a worker"). */
 void VideoDriver_ShaderEmu::WorkerTick()
 {
-	static const float frame_ms = [] { int n = Number(getenv("OPENTTD_FRAME_MS")); return n > 0 ? n : 95.0f; }();
+	static const float frame_ms = [] { int n = Number(getenv("OPENTTD_FRAME_MS")); return n > 0 ? n : 66.0f; }();
 	auto now = std::chrono::steady_clock::now();
 	if (now < this->next_draw_tick) return;
 	const auto interval = std::chrono::microseconds(static_cast<int>(frame_ms * 1000));
