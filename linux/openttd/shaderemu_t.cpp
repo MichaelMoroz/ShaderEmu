@@ -485,6 +485,7 @@ static void TwMain()
 			std::abort();
 		}
 		TickAfter();
+		VehiclesMakeLater(false); /* (the copies of what this tick moved: without this no moved vehicle's copy was ever made) */
 		uint32_t i1;
 		asm volatile("rdinstret %0" : "=r"(i1));
 		_tw_tick_instret += i1 - i0;

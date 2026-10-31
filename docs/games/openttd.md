@@ -503,6 +503,11 @@ new counts neither (kept: they are of the tree as it is).
 
 ### A sync with the tick running
 
+**Corrected 31 October 2026.** The commit that brought this section never called `VehiclesMakeLater` at the tick's end, only where a held tick does nothing unless `OPENTTD_CHECK`: outside the check runs, a vehicle's copy was
+not made again once it had moved, so vehicles stood still in the picture, a window's view stayed where its vehicle had been (a new one's in its depot, hidden: the user's "stuck on the depot, and no bus"), and held pictures, which read the live place, jumped back and forth. `TwMain` calls it now.
+The numbers below for that commit left out the copies' cost: see the table's own note. A following view now reads the copy in every picture. A vehicle that the tick cannot make (a sprite with no kept bounds) is made by the sync even if the tick moved it since.
+`test_all.py openttd-depot` follows the vehicle out of a depot and back and one already on the road, every picture: the view against the place, the copy, and the sprite's pixels in the view.
+
 A sync of the vehicles was the hold's largest part (30k of 44k instructions a hold) and the copy made ahead of it 12 to 20% of a tick. So (`vehicle.cpp`):
 
 - A copy is made once, at the tick's end, not at each step (`VehicleMakeLater`, `VehiclesMakeLater`): a wagon moves more than a step a tick and only the last step is read. A hold in the middle
