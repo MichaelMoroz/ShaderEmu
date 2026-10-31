@@ -66,7 +66,7 @@ and UBSan, Haight-Ashbury for 3,000 ticks and every scenario for 1,500 ran clean
   colours. Its cells are the engine's own tile numbers, kept in a ring of 64 x 64 cells that
   the view scrolls through: a scroll writes only the cells that came into view, and a tick
   writes the cells the view shows. Animated tiles (fire, traffic, the radar) are stepped only
-  where the view is: the whole map's animation was a third of a tick.
+  where the view is.
 - **The sprites** (train, helicopter, aeroplane, ship, monster, tornado, explosion, bus; 61
   frames) are a second tile layer, byte 0 a hole, drawn with `seglSprite`.
 - **The tools** are the original's 64 x 64 icons halved, over the window's grey.
@@ -107,10 +107,9 @@ heard quietly. A sound still playing is not started again (a drag of roads is on
 
 ## Speed
 
-One core runs the simulation and the window. Haight-Ashbury, about 200,000 people, at the
-middle speed on `rvc_cpu`: ten ticks and ten frames a second, 1.7 million instructions a
-second of the 2 to 3 the machine has, nearly all of them the simulation's scans (`mapScan`,
-the traffic's `tryGo`, power). The scans that write only their own map (pollution, crime,
+One core runs the simulation and the window. Haight-Ashbury at the middle speed: ten ticks and
+ten frames a second (calibrated, 31 October 2026, `MICROPOLIS_REPORT=1` under `rvc_cpu --pass-model`),
+nearly all of its instructions the simulation's scans (`mapScan`, the traffic's `tryGo`, power). The scans that write only their own map (pollution, crime,
 land value, population density, the fire and police cover) are the candidates for the
 worker cores; that is not done.
 
