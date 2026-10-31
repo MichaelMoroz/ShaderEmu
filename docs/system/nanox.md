@@ -213,8 +213,20 @@ bits of its properties, which any program reads with `GrGetWindowInfo` (`GR_WM_P
 - **The window manager tells the bar** with a hotkey event to whoever grabbed the Windows key (`wm_tell_bar`): `ch` is
   `GR_WM_TELL(what)`, `subwid` the frame, `rootx` and `rooty` the arguments. With no bar, Tab goes round as it did.
 
-What it adds to the machine: every one of these is a request or two at the moment of the key or the click. Nothing runs
-between them; an idle desktop was 122 and is 125 thousand instructions a second (`rvc_cpu`, 30 s, 31 October 2026, one run each).
+What it adds to the machine, before and after on `rvc_cpu` on 31 October 2026, the prebuilt root against the same with these programs (instructions of
+the first core; a run gave the same count each of three times):
+
+| | before | after |
+|---|---|---|
+| an idle desktop, thousands a second (30 s) | 122 | 125 |
+| Calculator's start under `nx`, thousands: first window, later one | 1,192, 1,200 | 1,219, 1,241 |
+| Terminal's | 1,169, 1,250 | 1,199, 1,271 |
+| Files' | 738, 883 | 764, 938 |
+| 16 s of a drag by the pointer's words, thousands (a worker moves the layer) | 3,719 | 3,890 (3,815 with `wm.remember` 0) |
+
+glxgears' 5 s lines on the card's calibrated clock (`--pass-model` of `tools/card_model.json`, one run each), 953 frames a second with nothing else: the Start menu opened
+and shut every 0.7 s, 900 before and 891 after (94 and 93%); three programs starting, 898 to 950 and 895 to 952. Nothing runs between a key and a click but the
+bar's once-a-second look, while something starts or closes.
 
 **Snapping.** A frame dragged to an edge goes to half the screen, to a corner to a quarter (48 pixels from it), to the top
 to all of it; a frame that does not resize does not snap. Under the drag the bar shows where in one plain window under the
