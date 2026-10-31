@@ -6123,7 +6123,7 @@ index 91a1111..9d12b4f 100644
  		return TrainLocoHandler(this, true);
  	} else if (this->IsFreeWagon() && this->vehstatus.Test(VehState::Crashed)) {
 diff --git a/src/vehicle.cpp b/src/vehicle.cpp
-index 91588a6..8a67437 100644
+index 91588a6..98ed998 100644
 --- a/src/vehicle.cpp
 +++ b/src/vehicle.cpp
 @@ -60,9 +60,19 @@
@@ -6227,7 +6227,7 @@ index 91588a6..8a67437 100644
  		if (i == 0) {
  			bounds->left = spr->x_offs;
  			bounds->top  = spr->y_offs;
-@@ -656,7 +732,244 @@ void ResetVehicleHash()
+@@ -656,7 +732,246 @@ void ResetVehicleHash()
  void ResetVehicleColourMap()
  {
  	for (Vehicle *v : Vehicle::Iterate()) { v->colourmap = PAL_NONE; }
@@ -6456,7 +6456,9 @@ index 91588a6..8a67437 100644
 +		Vehicle *v = Vehicle::GetIfValid(id);
 +		if (v == nullptr) continue;
 +		_veh_synced++;
-+		if (later && v->made_stamp == _veh_make_stamp) continue;
++		/* (listed because the tick could not make it, a sprite whose bounds no core has kept yet, it must be made here: the tick never can, and a vehicle
++		 * that moves every tick would stay where its copy was, in a depot, hidden) */
++		if (later && v->made_stamp == _veh_make_stamp && v->tw_made[slot].ok) continue;
 +		if (viewports && VehicleAsMade(v)) {
 +			_veh_ahead++;
 +			continue;
@@ -6472,7 +6474,7 @@ index 91588a6..8a67437 100644
  
  /**
   * List of vehicles that should check for autoreplace this tick.
-@@ -867,6 +1180,9 @@ Vehicle::~Vehicle()
+@@ -867,6 +1182,9 @@ Vehicle::~Vehicle()
  		return;
  	}
  
@@ -6482,7 +6484,7 @@ index 91588a6..8a67437 100644
  	/* sometimes, eg. for disaster vehicles, when company bankrupts, when removing crashed/flooded vehicles,
  	 * it may happen that vehicle chain is deleted when visible */
  	if (!this->vehstatus.Test(VehState::Hidden)) this->MarkAllViewportsDirty();
-@@ -877,6 +1193,20 @@ Vehicle::~Vehicle()
+@@ -877,6 +1195,20 @@ Vehicle::~Vehicle()
  	delete v;
  
  	UpdateVehicleTileHash(this, true);
@@ -6503,7 +6505,7 @@ index 91588a6..8a67437 100644
  	UpdateVehicleViewportHash(this, INVALID_COORD, 0, this->sprite_cache.old_coord.left, this->sprite_cache.old_coord.top);
  	if (this->type != VEH_EFFECT) {
  		DeleteVehicleNews(this->index);
-@@ -959,15 +1289,34 @@ void CallVehicleTicks()
+@@ -959,15 +1291,34 @@ void CallVehicleTicks()
  
  	{
  		PerformanceMeasurer framerate(PFE_GL_ECONOMY);
@@ -6539,7 +6541,7 @@ index 91588a6..8a67437 100644
  
  		/* Vehicle could be deleted in this tick */
  		if (!v->Tick()) {
-@@ -1039,6 +1388,11 @@ void CallVehicleTicks()
+@@ -1039,6 +1390,11 @@ void CallVehicleTicks()
  		}
  	}
  
@@ -6551,7 +6553,7 @@ index 91588a6..8a67437 100644
  	Backup<CompanyID> cur_company(_current_company);
  	for (auto &it : _vehicles_to_autoreplace) {
  		Vehicle *v = Vehicle::Get(it.first);
-@@ -1089,8 +1443,61 @@ void CallVehicleTicks()
+@@ -1089,8 +1445,61 @@ void CallVehicleTicks()
   * Add vehicle sprite for drawing to the screen.
   * @param v Vehicle to draw.
   */
@@ -6613,7 +6615,7 @@ index 91588a6..8a67437 100644
  	PaletteID pal = PAL_NONE;
  
  	if (v->vehstatus.Test(VehState::DefaultPalette)) pal = v->vehstatus.Test(VehState::Crashed) ? PALETTE_CRASH : GetVehiclePalette(v);
-@@ -1118,8 +1525,23 @@ static void DoDrawVehicle(const Vehicle *v)
+@@ -1118,8 +1527,23 @@ static void DoDrawVehicle(const Vehicle *v)
   * Add the vehicle sprites that should be drawn at a part of the screen.
   * @param dpi Rectangle being drawn.
   */
@@ -6637,7 +6639,7 @@ index 91588a6..8a67437 100644
  	/* The bounding rectangle */
  	const int l = dpi->left;
  	const int r = dpi->left + dpi->width;
-@@ -1157,7 +1579,11 @@ void ViewportAddVehicles(DrawPixelInfo *dpi)
+@@ -1157,7 +1581,11 @@ void ViewportAddVehicles(DrawPixelInfo *dpi)
  
  			while (v != nullptr) {
  
@@ -6649,7 +6651,7 @@ index 91588a6..8a67437 100644
  					l <= v->coord.right + xb &&
  					t <= v->coord.bottom + yb &&
  					r >= v->coord.left - xb &&
-@@ -1167,7 +1593,13 @@ void ViewportAddVehicles(DrawPixelInfo *dpi)
+@@ -1167,7 +1595,13 @@ void ViewportAddVehicles(DrawPixelInfo *dpi)
  					 * This vehicle can potentially be drawn as part of this viewport and
  					 * needs to be revalidated, as the sprite may not be correct.
  					 */
@@ -6663,7 +6665,7 @@ index 91588a6..8a67437 100644
  						VehicleSpriteSeq seq;
  						v->GetImage(v->direction, EIT_ON_MAP, &seq);
  
-@@ -1187,12 +1619,32 @@ void ViewportAddVehicles(DrawPixelInfo *dpi)
+@@ -1187,12 +1621,32 @@ void ViewportAddVehicles(DrawPixelInfo *dpi)
  						}
  
  						v->sprite_cache.revalidate_before_draw = false;
@@ -6699,7 +6701,7 @@ index 91588a6..8a67437 100644
  				}
  
  				v = v->hash_viewport_next;
-@@ -1662,16 +2114,38 @@ void VehicleEnterDepot(Vehicle *v)
+@@ -1662,16 +2116,38 @@ void VehicleEnterDepot(Vehicle *v)
  void Vehicle::UpdatePosition()
  {
  	UpdateVehicleTileHash(this, false);
@@ -6739,7 +6741,7 @@ index 91588a6..8a67437 100644
  
  	/* z-bounds are not used. */
  	Point pt = RemapCoords(this->x_pos + this->bounds.origin.x + this->bounds.offset.x, this->y_pos + this->bounds.origin.y + this->bounds.offset.y, this->z_pos);
-@@ -1690,6 +2164,9 @@ void Vehicle::UpdateBoundingBoxCoordinates(bool update_cache) const
+@@ -1690,6 +2166,9 @@ void Vehicle::UpdateBoundingBoxCoordinates(bool update_cache) const
  		new_coord.top    = std::min(new_coord.top, RemapCoords(x, y, z + bounds.extent.z).y);
  		new_coord.bottom = std::max(new_coord.bottom, RemapCoords(x + bounds.extent.x, y + bounds.extent.y, z).y + 1);
  	}
@@ -6749,7 +6751,7 @@ index 91588a6..8a67437 100644
  
  	if (update_cache) {
  		/*
-@@ -1713,12 +2190,115 @@ void Vehicle::UpdateBoundingBoxCoordinates(bool update_cache) const
+@@ -1713,12 +2192,115 @@ void Vehicle::UpdateBoundingBoxCoordinates(bool update_cache) const
   * Update the vehicle on the viewport, updating the right hash and setting the new coordinates.
   * @param dirty Mark the (new and old) coordinates of the vehicle as dirty.
   */
@@ -6865,7 +6867,7 @@ index 91588a6..8a67437 100644
  
  	if (ignore_cached_coords) {
  		UpdateVehicleViewportHash(this, this->coord.left, this->coord.top, INVALID_COORD, INVALID_COORD);
-@@ -1726,9 +2306,19 @@ void Vehicle::UpdateViewport(bool dirty)
+@@ -1726,9 +2308,19 @@ void Vehicle::UpdateViewport(bool dirty)
  		UpdateVehicleViewportHash(this, this->coord.left, this->coord.top, this->sprite_cache.old_coord.left, this->sprite_cache.old_coord.top);
  	}
  
@@ -6885,7 +6887,7 @@ index 91588a6..8a67437 100644
  		} else {
  			this->sprite_cache.is_viewport_candidate = ::MarkAllViewportsDirty(
  				std::min(this->sprite_cache.old_coord.left, this->coord.left),
-@@ -1754,6 +2344,11 @@ void Vehicle::UpdatePositionAndViewport()
+@@ -1754,6 +2346,11 @@ void Vehicle::UpdatePositionAndViewport()
   */
  bool Vehicle::MarkAllViewportsDirty() const
  {
@@ -7210,7 +7212,7 @@ index 7aafcbd..2b5a339 100644
  };
  
 diff --git a/src/viewport.cpp b/src/viewport.cpp
-index 6427a14..5f27bfd 100644
+index 6427a14..e8c0b62 100644
 --- a/src/viewport.cpp
 +++ b/src/viewport.cpp
 @@ -99,6 +99,11 @@
@@ -9099,8 +9101,8 @@ index 6427a14..5f27bfd 100644
 +#ifdef WITH_SHADEREMU
 +		const Vehicle *veh = Vehicle::GetIfValid(vp.follow_vehicle);
 +		if (veh == nullptr) return; /* (a picture the tick is not held for: it is being deleted) */
-+		/* (where it is drawn: the tick may be moving it) */
-+		Point pt = _se_light ? MapXYZToViewport(vp, veh->drawn.x, veh->drawn.y, veh->drawn.z) : MapXYZToViewport(vp, veh->x_pos, veh->y_pos, veh->z_pos);
++		/* (where it is drawn, in every picture: a held one in the middle of a tick has the vehicle further on than its copy) */
++		Point pt = MapXYZToViewport(vp, veh->drawn.x, veh->drawn.y, veh->drawn.z);
 +#else
  		const Vehicle *veh = Vehicle::Get(vp.follow_vehicle);
  		Point pt = MapXYZToViewport(vp, veh->x_pos, veh->y_pos, veh->z_pos);

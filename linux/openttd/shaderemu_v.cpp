@@ -911,6 +911,130 @@ static void PlayDepotLook(bool last)
 	PlayLine(fmt::format("openttd: depot views: {} pictures, {} light, {} off the vehicle, {} stopped and hidden with their copies elsewhere; not black{}, the least {}%\n", _depot_looks, _depot_light, _depot_off, kept_off, each, least));
 }
 
+/* OPENTTD_PLAY_SCENE=depot, after the looks: the script waits while the vehicle drives out with its window open, goes back into a depot, and then a
+ * window is opened on one already on the road. Every picture: the view's centre against the vehicle, its copy against it, and its pixels in the view
+ * (OPENTTD_DRAW=cpu) against its sprite drawn alone. */
+struct DriveStage { uint32_t looks = 0, off = 0, max_off = 0, stale = 0, stale_run = 0, stale_most = 0, shown = 0, unseen = 0, moved = 0; int32_t from_x = 0, from_y = 0; };
+static int _drive = -1;
+static uint32_t _drive_pictures;
+static DriveStage _drive_stage[3];
+static VehicleID _drive_other = VehicleID::Invalid();
+
+static bool DriveSeen(const Vehicle *v, const Viewport &vp)
+{
+	static std::vector<uint8_t> alone;
+	constexpr int ROWS = 96, HALF = 48;
+	if (_screen.dst_ptr == nullptr) return true;
+	const int pitch = _screen.pitch;
+	alone.assign(static_cast<size_t>(pitch) * ROWS, 0);
+	DrawPixelInfo d{};
+	d.dst_ptr = alone.data();
+	d.left = -ScaleByZoom(HALF, vp.zoom), d.top = -ScaleByZoom(HALF, vp.zoom);
+	d.width = HALF * 2, d.height = ROWS, d.pitch = pitch, d.zoom = vp.zoom;
+	{
+		AutoRestoreBackup dpi(_cur_dpi, &d);
+		for (uint i = 0; i < v->drawn.seq.count; i++) {
+			const PalSpriteID &q = v->drawn.seq.seq[i];
+			DrawSpriteViewport(q.sprite, q.pal != 0 ? q.pal : v->drawn.pal, 0, 0);
+		}
+	}
+	const Point pt = RemapCoords(v->drawn.x, v->drawn.y, v->drawn.z);
+	const int cx = vp.left + UnScaleByZoom(pt.x - vp.virtual_left, vp.zoom), cy = vp.top + UnScaleByZoom(pt.y - vp.virtual_top, vp.zoom);
+	const uint8_t *screen = static_cast<const uint8_t *>(_screen.dst_ptr);
+	int best = 0, all = 0;
+	for (int oy = -6; oy <= 6; oy++) for (int ox = -6; ox <= 6; ox++) {
+		int same = 0, n = 0;
+		for (int y = 0; y < ROWS; y++) for (int x = 0; x < HALF * 2; x++) {
+			const uint8_t p = alone[y * pitch + x];
+			if (p == 0) continue;
+			const int sx = cx + ox + x - HALF, sy = cy + oy + y - HALF;
+			if (sx < vp.left || sy < vp.top || sx >= vp.left + vp.width || sy >= vp.top + vp.height) continue;
+			n++;
+			same += screen[sy * pitch + sx] == p;
+		}
+		if (same > best) best = same, all = n;
+	}
+	return all == 0 || best * 10 >= all * 4;
+}
+
+static void DriveLook(DriveStage &s, const Vehicle *v, const Window *w)
+{
+	if (w == nullptr || w->viewport == nullptr) return;
+	VpFlushFinish();
+	Point pt = RemapCoords(v->x_pos, v->y_pos, v->z_pos); /* (as upstream's MapXYZToViewport) */
+	pt.x -= w->viewport->virtual_width / 2;
+	pt.y -= w->viewport->virtual_height / 2;
+	const uint32_t off = std::max(std::abs(w->viewport->scrollpos_x - pt.x), std::abs(w->viewport->scrollpos_y - pt.y));
+	if (s.looks == 0) s.from_x = v->x_pos, s.from_y = v->y_pos;
+	s.looks++;
+	if (off > 64) s.off++;
+	s.max_off = std::max(s.max_off, off);
+	s.moved = std::max<uint32_t>(s.moved, std::abs(v->x_pos - s.from_x) + std::abs(v->y_pos - s.from_y));
+	const bool hidden = v->vehstatus.Test(VehState::Hidden);
+	if (hidden != v->drawn.hidden || std::abs(v->x_pos - v->drawn.x) + std::abs(v->y_pos - v->drawn.y) > 16) {
+		s.stale++;
+		s.stale_most = std::max(s.stale_most, ++s.stale_run);
+	} else {
+		s.stale_run = 0;
+	}
+	if (!hidden && !v->drawn.hidden) {
+		s.shown++;
+		if (!DriveSeen(v, *w->viewport)) s.unseen++;
+	}
+}
+
+/** One picture of the wait, while it goes on. */
+static bool PlayDriveStep()
+{
+	if (_drive < 0) return false;
+	const Vehicle *v = Vehicle::GetIfValid(_depot_vehicle);
+	if (v == nullptr) { _drive = -1; return false; }
+	_drive_pictures++;
+	if (_drive == 0) {
+		DriveLook(_drive_stage[0], v, FindWindowById(WC_VEHICLE_VIEW, _depot_vehicle));
+		if (_drive_pictures >= 500) {
+			VpFlushFinish();
+			TickFinish();
+			Command<CMD_SEND_VEHICLE_TO_DEPOT>::Post(StringID{0}, _depot_vehicle, DepotCommandFlags{}, VehicleListIdentifier{});
+			_drive = 1, _drive_pictures = 0;
+		}
+	} else if (_drive == 1) {
+		DriveLook(_drive_stage[1], v, FindWindowById(WC_VEHICLE_VIEW, _depot_vehicle));
+		if (_drive_pictures >= 500) {
+			VpFlushFinish();
+			TickFinish();
+			for (const RoadVehicle *o : RoadVehicle::Iterate()) {
+				if (o->IsFrontEngine() && o->cur_speed > 0 && !o->vehstatus.Test(VehState::Hidden) && o->index != _depot_vehicle) { _drive_other = o->index; break; }
+			}
+			if (_drive_other != VehicleID::Invalid()) ShowVehicleViewWindow(Vehicle::Get(_drive_other));
+			_drive = 2, _drive_pictures = 0;
+		}
+	} else {
+		const Vehicle *o = Vehicle::GetIfValid(_drive_other);
+		if (o != nullptr) DriveLook(_drive_stage[2], o, FindWindowById(WC_VEHICLE_VIEW, _drive_other));
+		if (_drive_pictures >= 300 || o == nullptr) {
+			static const char *const names[] = { "out of the depot", "back to a depot", "on the road" };
+			for (int i = 0; i < 3; i++) {
+				const DriveStage &s = _drive_stage[i];
+				PlayLine(fmt::format("openttd: depot drive, {}: {} pictures, moved {}, {} off the vehicle (most {}), copy stale {} (at most {} together), shown {} and not seen {}\n",
+						names[i], s.looks, s.moved, s.off, s.max_off, s.stale, s.stale_most, s.shown, s.unseen));
+			}
+			_drive = -1;
+			return false;
+		}
+	}
+	return true;
+}
+
+static void PlayDriveBegin()
+{
+	if (_depot_vehicle == VehicleID::Invalid()) return;
+	VpFlushFinish();
+	TickFinish();
+	Command<CMD_START_STOP_VEHICLE>::Post(StringID{0}, Vehicle::Get(_depot_vehicle)->tile, _depot_vehicle, false);
+	_drive = 0, _drive_pictures = 0;
+}
+
 static void PlayBuild(int n)
 {
 	Window *main = GetMainWindow();
@@ -1028,6 +1152,7 @@ static void PlayStep()
 		PlayLine(line + "\n");
 		last_t = now, last_i = i, last_ticks = TimerGameTick::counter;
 	}
+	if (PlayDriveStep()) return;
 	const int at = _play_frame++ % len;
 	const int f = list != nullptr ? list[at] : at;
 	/* (what the script does next but for scrolling wants the tick held) */
@@ -1203,6 +1328,7 @@ if (GetEnv("OPENTTD_MADE_CHECK").has_value()) PlayLine(fmt::format("openttd: veh
 	if (play_scene_depot && f == 302) PlayDepotBuild();
 	if (play_scene_depot && f == 304) PlayDepotShow();
 	if (play_scene_depot && f >= 308 && f < 360) PlayDepotLook(f == 359);
+	if (play_scene_depot && f == 359) PlayDriveBegin();
 	if (f == 305) begin_part("window");
 	if (f == 400) begin_part("build");
 	if (f >= 400 && f < 460) PlayBuild(f - 400);
