@@ -385,6 +385,8 @@
 - OpenTTD's lists do not wait for the GPU, which in a world takes one a Unity frame (`docs/games/openttd.md`, "The card's lists"): records and
   chunks live two frames, a list that finds the GPU busy waits on a queue. What a list reads and is changed later settles first (`SeGpuSettle`); run
   `test_all.py openttd-scroll` with `RVC_DEVICE_EVERY=6` too, since `rvc_cpu` otherwise takes a list back at once: calibrated runs do not show this.
+- A vehicle in OpenTTD must always have a drawn copy: light pictures and a following view read it (`Vehicle::drawn`; a new one in a depot had none, and its window showed the map's corner; `test_all.py openttd-depot`). A sync runs with the tick
+  (`docs/games/openttd.md`, "A sync with the tick running"): copies are made at the tick's end and listed by the tick; what changes a vehicle apart from `UpdateViewport` on the tick's worker sets `tw_made[...].told` and `VehicleChanged`, and `OPENTTD_MADE_CHECK=1` must not rise after the first hold.
 - OpenTTD is compiled whole with `openttd.profile.gz` (`docs/games/openttd.md`, "The compiler"): its LTO link keeps
   `-fdata-sections -fno-common` and the 16-byte assembler, or statics a worker writes share texels (`RVC_RACES` undone), and
   after a large change to the source `linux/openttd/counts.py` makes the counts anew. `build.sh` puts the tree back from
