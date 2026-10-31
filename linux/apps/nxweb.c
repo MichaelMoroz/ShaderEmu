@@ -795,6 +795,8 @@ draw_rows(GR_DRAW_ID to, int dy, int y0, int y1)
  * in its slot's memory by a worker (or this core); one with a field or a picture not in the ROM is
  * drawn by requests on `scratch` and copied in (docs/apps/web.md, "Strips"). */
 #define STRIP 64
+#define STRIP_ROOM 32		/* rows of the scratch pixmap over and under a strip: the window system draws no string that a
+				 * pixmap's edge cuts, so a text across two strips was in neither (a field's label first of all) */
 #define SLOTS_MOST 32
 #define STRIP_COMMANDS 256
 #define STRIP_CHARS 2048
@@ -1432,10 +1434,10 @@ strip_requests(int k, int s)
 {
 	int i;
 
-	ui_fill(scratch, 0, 0, tile_w, STRIP, mw(web_page_bg));
+	ui_fill(scratch, 0, 0, tile_w, STRIP + 2 * STRIP_ROOM, mw(web_page_bg));
 	for (i = strip_at[k]; i < strip_at[k + 1]; i++)
-		draw_item(scratch, &web_items[strip_items[i]], k * STRIP);
-	GrCopyArea(tile, ui_gc, 0, s * STRIP, tile_w, STRIP, scratch, 0, 0, MWROP_COPY);
+		draw_item(scratch, &web_items[strip_items[i]], k * STRIP - STRIP_ROOM);
+	GrCopyArea(tile, ui_gc, 0, s * STRIP, tile_w, STRIP, scratch, 0, STRIP_ROOM, MWROP_COPY);
 	slots[s].strip = k;
 	slots[s].state = SLOT_THERE;
 	slots[s].requested = 1;
@@ -1788,7 +1790,7 @@ tile_make(void)
 	tile_w = w;
 	slot_count = h / STRIP < SLOTS_MOST ? h / STRIP : SLOTS_MOST;
 	if (!regs || slot_count < need || getenv("NXWEB_DIRECT") || !(tile = gpu_pixmap(w, slot_count * STRIP)) ||
-	    !(scratch = gpu_pixmap(w, STRIP))) {
+	    !(scratch = gpu_pixmap(w, STRIP + 2 * STRIP_ROOM))) {
 		tile_free();
 		return 0;
 	}
@@ -1836,7 +1838,7 @@ strips_check(void)
 	}
 	GrGetWindowInfo(scratch, &info);
 	ring_bytes = (tile_phys & 4095) + (size_t)tile_h * tile_w * 4;
-	scratch_bytes = (info.surface_address & 4095) + (size_t)STRIP * tile_w * 4;
+	scratch_bytes = (info.surface_address & 4095) + (size_t)(STRIP + 2 * STRIP_ROOM) * tile_w * 4;
 	a = mmap(NULL, ring_bytes, PROT_READ | PROT_WRITE, MAP_SHARED, gpu_fd, (tile_phys - GPU_PHYS) & ~4095u);
 	b = mmap(NULL, scratch_bytes, PROT_READ | PROT_WRITE, MAP_SHARED, gpu_fd, (info.surface_address - GPU_PHYS) & ~4095u);
 	if (a == MAP_FAILED || b == MAP_FAILED) {
@@ -1845,7 +1847,7 @@ strips_check(void)
 		return;
 	}
 	ring = (const uint32_t *)((char *)a + (tile_phys & 4095));
-	drawn = (const uint32_t *)((char *)b + (info.surface_address & 4095));
+	drawn = (const uint32_t *)((char *)b + (info.surface_address & 4095)) + STRIP_ROOM * tile_w;
 	strips_forget();
 	strips_shown();
 	pictures_now = 1;	/* (every picture decoded as its strip is made) */
@@ -1864,9 +1866,9 @@ strips_check(void)
 			mcw_rest();
 		while ((int32_t)(regs[REG_COPIES] - slots[s].landed) < 0)
 			mcw_rest();
-		ui_fill(scratch, 0, 0, tile_w, STRIP, mw(web_page_bg));
+		ui_fill(scratch, 0, 0, tile_w, STRIP + 2 * STRIP_ROOM, mw(web_page_bg));
 		for (i = strip_at[k]; i < strip_at[k + 1]; i++)
-			draw_item(scratch, &web_items[strip_items[i]], k * STRIP);
+			draw_item(scratch, &web_items[strip_items[i]], k * STRIP - STRIP_ROOM);
 		GrReadArea(scratch, 0, 0, 1, 1, &pixel);	/* (answered once that is drawn) */
 		for (i = 0; i < STRIP * tile_w; i++) {
 			uint32_t p = ring[s * STRIP * tile_w + i], q = drawn[i];
@@ -2453,7 +2455,7 @@ static const char keys_page[] =
 	"<tr><td><b>Ctrl+O</b>, <b>Ctrl+S</b><td>open a file, save the page as one"
 	"<tr><td><b>Ctrl+U</b><td>the page's source, in the editor"
 	"<tr><td><b>Ctrl+C</b>, <b>Ctrl+V</b><td>the address to the clipboard, an address from it"
-	"<tr><td><b>Tab</b>, <b>Enter</b><td>from link to link, and follow the one picked"
+	"<tr><td><b>Tab</b>, <b>Enter</b><td>from link to link and field to field, and follow the one picked"
 	"<tr><td>arrows, <b>Page Up</b>, <b>Page Down</b>, <b>Space</b>, <b>Home</b>, <b>End</b><td>scroll"
 	"<tr><td><b>F10</b><td>the menus: arrows, Enter, Escape"
 	"<tr><td><b>Ctrl+Q</b><td>close"

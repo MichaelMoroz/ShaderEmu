@@ -58,6 +58,12 @@ WEB_HTTP = ("echo '127.0.0.1 webhost' >> /etc/hosts; NXWEB_DUMP=1 NXWEB_PRINT=1 
             "nxkey ctrl+l l o c a l h o s t 'shift+;' 8 0 8 0 / p l a i n . t x t enter; sleep 6; nxkey alt+left; sleep 3; killall nxweb; sleep 1; "
             "NXWEB_TIME=1 NXWEB_DUMP=1 nxweb http://webhost:8080/ & sleep 15; killall nxweb; sleep 1; NXWEB_DUMP=1 nxweb http://10.0.0.12:8080/ & sleep 15; killall nxweb; echo WEB-''ENDED\\n")
 
+WEB_HEAD = "printf 'HTTP/1.1 200 OK\\\\r\\\\nContent-Type: text/plain\\\\r\\\\n\\\\r\\\\n'; seq 1 900; "
+WEB_SLOW = ("(" + WEB_HEAD + "sleep 12; echo last) | nc -l -p 8081 > /dev/null & sleep 1; NXWEB_DUMP=1 NXWEB_PRINT=1 nxweb http://127.0.0.1:8081/ & sleep 7; nxkey pagedown; sleep 1; nxkey pagedown; sleep 12; killall nxweb; "
+            "(" + WEB_HEAD + "sleep 30) | nc -l -p 8082 > /dev/null & sleep 1; NXWEB_DUMP=1 NXWEB_PRINT=1 nxweb http://127.0.0.1:8082/ & sleep 1; nxkey escape; sleep 5; killall nxweb; killall nc; "
+            "printf 'HTTP/1.1 200 OK\\\\r\\\\nTransfer-Encoding: chunked\\\\r\\\\nContent-Type: text/html\\\\r\\\\n\\\\r\\\\n5\\\\r\\\\n<p>ab\\\\r\\\\n0\\\\r\\\\n\\\\r\\\\n' | nc -l -p 8083 > /dev/null & "
+            "sleep 1; NXWEB_DUMP=1 nxweb http://127.0.0.1:8083/ & sleep 7; killall nxweb")
+
 CASES = [
     # the machine (docs/machine/multicore.md; programs/mc/mctest.c)
     case('mctest-3', 'machine', 'mctest 3', True, has=[r'mctest: PASS', r'\(0 pages brought for their start\)']),
@@ -372,6 +378,12 @@ CASES = [
               r'^POSTED who=abcxyz1&box=on', r'^SAW sid=s1', r'nxweb: http: http://localhost:8080/none: 404',
               r'nxweb: saved http://localhost:8080/a\.bin as /root/Downloads/a\.bin, 2000 bytes', r'^SAVED 2000',
               r'nxweb: http: http://localhost:8080/plain\.txt: 200 text/plain']),
+    # the page shown while it comes, and the window alive meanwhile (a key scrolls it; Escape keeps what came); chunks
+    case('nxweb-slow', 'desktop web', X + WEB_SLOW, wall=180,
+         has=[r'nxweb: http://127\.0\.0\.1:8081/: \d+ nodes.* 586 x \d+; \d+ texts', r'^nxweb: at http://127\.0\.0\.1:8081/, page 1 of 1, top [1-9]\d*, .*status "still loading"',
+              r'nxweb: http: http://127\.0\.0\.1:8081/: 200 text/plain, 3\d\d\d bytes', r'nxweb: http: http://127\.0\.0\.1:8082/: 200 text/plain, \d+ bytes$',
+              r'at http://127\.0\.0\.1:8082/.*status "stopped"', r'nxweb: http: http://127\.0\.0\.1:8083/: 200 text/html, 5 bytes, chunked',
+              r'nxweb: http://127\.0\.0\.1:8083/: 4 nodes']),
     case('nxweb-short', 'desktop', X + 'NXWEB_TIME=1 nxweb /usr/share/web-nowhere.html & sleep 10; killall nxweb', has=[r'nxweb: the first picture \d+ ms after']),
     # the editor's reader (docs/system/nanox.md, "The editor's reader"): a page of every kind of Markdown as tools/web_test.c
     # --sections lays it out; a file of the documentation is read at once, another .md only with --read (or Ctrl+R)

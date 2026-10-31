@@ -1,8 +1,10 @@
 # Fetch: pages from the host
 
-The machine has no network. A program that wants a page asks the host for it through a few
+The machine's own network is its LAN and itself (`docs/system/lan.md`); it has no way to the internet.
+A program that wants a page from there asks the host for it through a few
 words of the control block, and the host puts the answer into the machine's memory in one
-pass of the GPU device's control shader. `nxweb`, the browser, asks for pages; `open`
+pass of the GPU device's control shader. `nxweb`, the browser, asks for pages (and opens `http` addresses
+of the machine's own network itself: `docs/apps/web.md`, "Addresses the machine reaches itself"); `open`
 (`docs/system/open.md`) for files.
 
 | Address | Contents |
@@ -101,7 +103,8 @@ pass of the GPU device's control shader. `nxweb`, the browser, asks for pages; `
 ## The browser
 
 `linux/apps/nxweb.c`, `docs/apps/web.md`: what it does with a page is there. What it asks of the
-host:
+host is what it cannot reach itself (`net_route` in `web_net.h`): `https`, and `http` to a name nothing here resolves or a
+number with no route. Over the host there is no POST and there are no cookies, the words above having no room for either:
 
 - **The page** (kind 0), then its style sheets (kind 2), then its pictures (kind 1), each in
   the page's order, at most three such requests open at a time (the host has that many
