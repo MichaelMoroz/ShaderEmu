@@ -257,6 +257,8 @@ static int reopen_test(int lend, int passes) {
         mcw_counters();
         mcw_set(0, 0);
         mcw_add(0, 7);
+        // (a merge at the pass's end between the add and the read can leave the read off for a moment)
+        mcw_counters_settle();
         if (mcw_get(0) != 7) bad = 1;
         for (int k = 0; k < MC_MAX_CORES; k++) total += sums[k * 4];
         printf("mctest: open %d: %d workers, sum %u\n", i + 1, got, total);
