@@ -8,7 +8,7 @@
  *	nxwintest ignore [TITLE]	takes its events, and does nothing when asked to close
  *	nxwintest hang [TITLE]		takes no event after its window is shown
  *	nxwintest linger [TITLE]	closes its window when asked and goes on running
- *	nxwintest crash [TITLE]		its window, then a bad store 3 s later
+ *	nxwintest crash [TITLE]		its window, then SIGSEGV 3 s later
  *	nxwintest slow SECONDS		no window for that long, then a plain one
  */
 #include <signal.h>
@@ -103,14 +103,18 @@ main(int argc, char **argv)
 	}
 	GrFlush();
 	if (!strcmp(mode, "hang")) {
-		/* its frame is framed as the server takes the map; nothing is taken from here on */
+		/* its window framed and drawn; nothing is taken from here on */
+		while (GrGetNextEventTimeout(&event, 500), event.type != GR_EVENT_TYPE_TIMEOUT)
+			if (event.type == GR_EVENT_TYPE_EXPOSURE)
+				draw(event.exposure.wid, title);
+		GrFlush();
 		for (;;)
 			sleep(1000);
 	}
 	for (;;) {
 		GrGetNextEventTimeout(&event, !strcmp(mode, "crash") ? 3000 : 100000);
 		if (event.type == GR_EVENT_TYPE_TIMEOUT && !strcmp(mode, "crash"))
-			*(volatile int *)(0x10) = 1;
+			raise(SIGSEGV);	/* (without an MMU a store to a low address need not fault) */
 		if (event.type == GR_EVENT_TYPE_EXPOSURE)
 			draw(event.exposure.wid, event.exposure.wid == one ? title : "second");
 		if (event.type == GR_EVENT_TYPE_UPDATE && event.update.utype == GR_UPDATE_SIZE && event.update.wid == one)

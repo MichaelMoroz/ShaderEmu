@@ -15,10 +15,10 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # The screen is 800 x 600 unless the image says otherwise; the bar is its last 28 rows.
 A = "nxwintest plain a & sleep 2; "
 B = A + "nxwintest plain b & sleep 2; "
-CAPTION = "150,50"   # on the caption of a window nxwintest made, not on its buttons
+CAPTION = "150,32"   # on the caption of a window nxwintest made, not on its buttons
 SCENES = {
     # a frame held at the left edge, with where it would go under it
-    "snap-preview": A + "nxkey hold:%s to:300,200 to:60,200 to:2,200 2000 & sleep 6; nxwintest list" % CAPTION,
+    "snap-preview": A + "nxkey hold:%s to:300,200 to:60,200 to:2,200 3000 & sleep 5; nxwintest list" % CAPTION,
     "snap-left": A + "nxkey drag:%s:2,200 2000; nxwintest list" % CAPTION,
     "quarters": B + "nxkey ctrl+alt+u 1500; nxwintest plain c & sleep 2; nxkey ctrl+alt+k 1500; nxwintest list",
     "maximised": A + "nxkey ctrl+alt+up 1500; nxwintest list",
@@ -29,10 +29,10 @@ SCENES = {
     "caption-menu": A + "nxkey r:%s 2000; nxwintest list" % CAPTION,
     "desktops": A + "nxkey ctrl+alt+2 1000; nxwintest plain two & sleep 2; nxkey ctrl+alt+shift+3 1000 ctrl+alt+1 1500; nxwintest list",
     "group": "nxwintest two a & sleep 2; nxwintest plain c & sleep 2; nxwintest list",
-    "group-menu": "nxwintest two a & sleep 3; nxkey 90,588 2000; nxwintest list",
+    "group-menu": "nxwintest two a & sleep 3; nxkey 180,586 2000; nxwintest list",
     "starting": "nxwintest slow 30 & sleep 2; nxwintest list",
-    "not-responding": "nxwintest hang h & sleep 2; nxkey alt+f4 14000; nxwintest list",
-    "still-running": "nxwintest linger l & sleep 2; nxkey alt+f4 22000; nxwintest list",
+    "not-responding": "nxwintest hang h & sleep 2; nxkey alt+f4 7000; nxwintest list",
+    "still-running": "nxwintest linger l & sleep 2; nxkey alt+f4 12000; nxwintest list",
     "crash": "nxwintest crash c & sleep 8; nxwintest list",
 }
 

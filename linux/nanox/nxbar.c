@@ -945,7 +945,7 @@ show_group_menu(int button)
 	menu[n].id = TASK_CLOSE_ALL;
 	menu[n].icon = -1;
 	n++;
-	ui_menu_open(menu, n, task_x(button), screen.rows - BAR_HEIGHT, 1, 0);
+	ui_menu_open(menu, n, task_x(button), screen.rows - BAR_HEIGHT, 1, 1);
 	task_asked = first;
 	asked_frame = tasks[first].frame;
 }

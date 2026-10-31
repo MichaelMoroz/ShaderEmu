@@ -4303,10 +4303,10 @@ index fae5bfa..cfe3a3f 100644
  
  /*
 diff --git a/src/nanox/wmaction.c b/src/nanox/wmaction.c
-index 27dcbe8..fd891d7 100644
+index 27dcbe8..6998032 100644
 --- a/src/nanox/wmaction.c
 +++ b/src/nanox/wmaction.c
-@@ -11,6 +11,18 @@
+@@ -11,6 +11,19 @@
  #include "nanowm.h"
  
  static void set_resize_cursor(int wid);
@@ -4315,6 +4315,7 @@ index 27dcbe8..fd891d7 100644
 +int GsDragWindow(GR_WINDOW_ID wid, int xoff, int yoff);
 +int GsDraggedTo(GR_WINDOW_ID wid, int *x, int *y);
 +static GR_WINDOW_ID wm_dragged;	/* the frame the screen driver has follow the pointer */
++static GR_WINDOW_ID wm_snapping;	/* the frame being moved, whoever moves it */
 +int wm_ontop_count;		/* frames kept on top */
 +int wm_desktop;			/* the desktop shown, 0 to 3 */
 +MWTIMEOUT GdGetTickCount(void);
@@ -4325,7 +4326,7 @@ index 27dcbe8..fd891d7 100644
  
  /*
   * This function performs a depth first search on window 
-@@ -67,14 +79,33 @@ void wm_redraw_ncarea(win *window)
+@@ -67,14 +80,33 @@ void wm_redraw_ncarea(win *window)
   	 	 * A window is active even if any of its ancestors has focus
   	 	 * --Amit Kulkarni
   	 	 */	 
@@ -4361,7 +4362,7 @@ index 27dcbe8..fd891d7 100644
  	}
  
  	/* free title returned from GrGetWMProperties*/
-@@ -86,6 +117,14 @@ void wm_container_exposure(win *window, GR_EVENT_EXPOSURE *event)
+@@ -86,6 +118,14 @@ void wm_container_exposure(win *window, GR_EVENT_EXPOSURE *event)
  {
  	Dprintf("wm_container_exposure window %d\n", window->wid);
  
@@ -4376,7 +4377,7 @@ index 27dcbe8..fd891d7 100644
  	wm_redraw_ncarea(window);
  }
  
-@@ -138,6 +177,18 @@ void wm_container_buttondown(win *window, GR_EVENT_BUTTON *event)
+@@ -138,6 +178,18 @@ void wm_container_buttondown(win *window, GR_EVENT_BUTTON *event)
  			window->close = GR_TRUE;
        		return;
  		}
@@ -4395,7 +4396,7 @@ index 27dcbe8..fd891d7 100644
  	}
  
  	/* 
-@@ -149,8 +200,8 @@ void wm_container_buttondown(win *window, GR_EVENT_BUTTON *event)
+@@ -149,8 +201,8 @@ void wm_container_buttondown(win *window, GR_EVENT_BUTTON *event)
  	 * the focus themself.
  	 * -- Amit Kulkarni
  	 */
@@ -4406,7 +4407,7 @@ index 27dcbe8..fd891d7 100644
  
  	/* check for corner resize */
  	r.x = info.width - 5;
-@@ -158,7 +209,7 @@ void wm_container_buttondown(win *window, GR_EVENT_BUTTON *event)
+@@ -158,7 +210,7 @@ void wm_container_buttondown(win *window, GR_EVENT_BUTTON *event)
  	r.width = 5;
  	r.height = 5;
  
@@ -4415,7 +4416,7 @@ index 27dcbe8..fd891d7 100644
  	   && !(info.props & GR_WM_PROPS_NORESIZE) && !(cinfo.props & GR_WM_PROPS_NORESIZE)) {
  #if !NO_CORNER_RESIZE
  	  struct pos_size * pos;
-@@ -215,6 +266,26 @@ void wm_container_buttondown(win *window, GR_EVENT_BUTTON *event)
+@@ -215,6 +267,26 @@ void wm_container_buttondown(win *window, GR_EVENT_BUTTON *event)
  	/* Check for mousedn in caption box*/
  	if (!PtInRect(&r, event->x, event->y))
  		return;
@@ -4442,7 +4443,7 @@ index 27dcbe8..fd891d7 100644
  	
  	/*
  	 * Now we have a click on the caption. 
-@@ -231,6 +302,9 @@ void wm_container_buttondown(win *window, GR_EVENT_BUTTON *event)
+@@ -231,6 +303,9 @@ void wm_container_buttondown(win *window, GR_EVENT_BUTTON *event)
  	/* Don't allow window move if NOMOVE property set*/
  	if ((info.props & GR_WM_PROPS_NOMOVE) || (cinfo.props & GR_WM_PROPS_NOMOVE))
  		return;
@@ -4452,7 +4453,7 @@ index 27dcbe8..fd891d7 100644
  
  	if(!window->data)
  		if(!(window->data = malloc(sizeof(struct pos_size))))
-@@ -252,9 +326,243 @@ void wm_container_buttondown(win *window, GR_EVENT_BUTTON *event)
+@@ -252,9 +327,247 @@ void wm_container_buttondown(win *window, GR_EVENT_BUTTON *event)
  	GrRect(GR_ROOT_WINDOW_ID, gc,info.x, info.y, info.width, info.height);
  	GrDestroyGC(gc);
  #endif	
@@ -4461,6 +4462,7 @@ index 27dcbe8..fd891d7 100644
 +	window->zone = 0;
 +	GsDragInset(window->snaps ? WM_SNAP_EDGE : 0);
 +	wm_dragged = GsDragWindow(window->wid, pos->xoff, pos->yoff) ? window->wid : 0;
++	wm_snapping = window->wid;
  	window->active = GR_TRUE;
  }
  
@@ -4673,7 +4675,7 @@ index 27dcbe8..fd891d7 100644
 +	win *window;
 +	int zone;
 +
-+	if (!wm_dragged || !(window = wm_find_window(wm_dragged)) || !window->snaps)
++	if (!wm_snapping || !(window = wm_find_window(wm_snapping)) || !window->snaps || !window->active)
 +		return;
 +	zone = wm_zone_at(x, y);
 +	if (zone != window->zone) {
@@ -4685,10 +4687,13 @@ index 27dcbe8..fd891d7 100644
 +/* A frame goes while it is dragged: its program ended, or was ended. */
 +void wm_drag_gone(win *window)
 +{
-+	if (wm_dragged != window->wid)
++	if (wm_snapping != window->wid)
 +		return;
-+	GsDragWindow(0, 0, 0);
-+	wm_dragged = 0;
++	wm_snapping = 0;
++	if (wm_dragged == window->wid) {
++		GsDragWindow(0, 0, 0);
++		wm_dragged = 0;
++	}
 +	if (window->zone)
 +		wm_tell_bar(GR_WM_TELL_PREVIEW, window->wid, 0, 0);
 +}
@@ -4696,7 +4701,7 @@ index 27dcbe8..fd891d7 100644
  void wm_container_buttonup(win *window, GR_EVENT_BUTTON *event)
  {
  	GR_RECT		r;
-@@ -295,12 +603,30 @@ void wm_container_buttonup(win *window, GR_EVENT_BUTTON *event)
+@@ -295,12 +608,30 @@ void wm_container_buttonup(win *window, GR_EVENT_BUTTON *event)
  				 * atom, causing the window to close.
  				 */
  				GrCloseWindow(window->clientid);
@@ -4727,7 +4732,7 @@ index 27dcbe8..fd891d7 100644
  
  	if(window->active) {
  #if OUTLINE_MOVE
-@@ -312,6 +638,35 @@ void wm_container_buttonup(win *window, GR_EVENT_BUTTON *event)
+@@ -312,6 +643,35 @@ void wm_container_buttonup(win *window, GR_EVENT_BUTTON *event)
  	  GrMoveWindow(window->wid, pos->xorig, pos->yorig);
  	  GrDestroyGC(gc);
  #endif
@@ -4763,7 +4768,7 @@ index 27dcbe8..fd891d7 100644
  	  free(window->data);
  	  window->active = GR_FALSE;
  	  window->data = 0;
-@@ -330,8 +685,18 @@ void wm_container_buttonup(win *window, GR_EVENT_BUTTON *event)
+@@ -330,8 +690,18 @@ void wm_container_buttonup(win *window, GR_EVENT_BUTTON *event)
  
  	  w = info.width + (event->x - pos->xorig);
  	  h = info.height + (event->y - pos->yorig);
@@ -4782,7 +4787,7 @@ index 27dcbe8..fd891d7 100644
  
  	  free(window->data);
  	  window->sizing = GR_FALSE;
-@@ -397,7 +762,13 @@ void wm_container_mousemoved(win *window, GR_EVENT_MOUSE *event)
+@@ -397,7 +767,13 @@ void wm_container_mousemoved(win *window, GR_EVENT_MOUSE *event)
  	
  	GrDestroyGC(gc);
  #else	
@@ -4798,10 +4803,10 @@ index 27dcbe8..fd891d7 100644
  }
  
 diff --git a/src/nanox/wmclients.c b/src/nanox/wmclients.c
-index 9214904..fc50948 100644
+index 9214904..d131acb 100644
 --- a/src/nanox/wmclients.c
 +++ b/src/nanox/wmclients.c
-@@ -9,6 +9,181 @@
+@@ -9,6 +9,187 @@
  #include "nano-X.h"
  #include "nxdraw.h"
  #include "nanowm.h"
@@ -4958,8 +4963,14 @@ index 9214904..fc50948 100644
 +	if (!file[0])
 +		return 0;
 +	for (other = wm_first(); other; other = other->next)
-+		if (other->type == WINDOW_TYPE_CONTAINER && !strcmp(other->icon_file, file))
-+			return 0;
++		if (other->type == WINDOW_TYPE_CONTAINER && !strcmp(other->icon_file, file)) {
++			/* (a program's end is heard in a queue: one whose window has gone does not count) */
++			GR_WINDOW_INFO client;
++
++			GrGetWindowInfo(other->clientid, &client);
++			if (client.wid)
++				return 0;
++		}
 +	reg_changed();
 +	snprintf(key, sizeof key, "wm.place.%.48s", place_name(file));
 +	if (!reg_int("wm.remember", 1) || !(value = reg_get(key, NULL)) ||
@@ -4983,7 +4994,7 @@ index 9214904..fc50948 100644
  
  /*
   * A new client window has been mapped, so we need to reparent and decorate it.
-@@ -22,10 +197,13 @@ int wm_new_client_window(GR_WINDOW_ID wid)
+@@ -22,10 +203,13 @@ int wm_new_client_window(GR_WINDOW_ID wid)
  	GR_COORD x, y, width, height, xoffset, yoffset;
  	GR_WM_PROPS style;
  	GR_WM_PROPERTIES props;
@@ -4997,7 +5008,7 @@ index 9214904..fc50948 100644
  
  	/* if not redecorating or not child of root window, return*/
  	if (winfo.parent != GR_ROOT_WINDOW_ID || (style & GR_WM_PROPS_NODECORATE))
-@@ -94,7 +272,7 @@ int wm_new_client_window(GR_WINDOW_ID wid)
+@@ -94,7 +278,7 @@ int wm_new_client_window(GR_WINDOW_ID wid)
  		}
  	}
  
@@ -5006,7 +5017,7 @@ index 9214904..fc50948 100644
  	x = MWABS(winfo.x - xoffset);
  	y = MWABS(winfo.y - yoffset);
  #else
-@@ -109,16 +287,31 @@ int wm_new_client_window(GR_WINDOW_ID wid)
+@@ -109,16 +293,31 @@ int wm_new_client_window(GR_WINDOW_ID wid)
  
  		/* We could proably use a more intelligent algorithm here */
  		GrGetScreenInfo(&si);
@@ -5042,7 +5053,7 @@ index 9214904..fc50948 100644
  	/* create container window*/
  	pid = GrNewWindow(GR_ROOT_WINDOW_ID, x, y, width, height,
  		0, LTGRAY, BLACK);
-@@ -133,7 +326,7 @@ int wm_new_client_window(GR_WINDOW_ID wid)
+@@ -133,7 +332,7 @@ int wm_new_client_window(GR_WINDOW_ID wid)
  
  	/* don't erase background of container window*/
  	props.flags = GR_WM_FLAGS_PROPS;
@@ -5051,7 +5062,7 @@ index 9214904..fc50948 100644
  	GrSetWMProperties(pid, &props);
  
  	Dprintf("New client window %d container %d\n", wid, pid);
-@@ -157,11 +350,27 @@ int wm_new_client_window(GR_WINDOW_ID wid)
+@@ -157,11 +356,29 @@ int wm_new_client_window(GR_WINDOW_ID wid)
  
  	/* reparent client to container window (child is already mapped)*/
  	GrReparentWindow(wid, pid, xoffset, yoffset);
@@ -5060,6 +5071,8 @@ index 9214904..fc50948 100644
  
  	/* map container window*/
  	GrMapWindow(pid);
++	if (wm_ontop_count)
++		wm_raise_ontop();
  
  	GrSetFocus(wid);	/* force fixed focus*/
 +	/* the frame now: its exposure waits in the program's queue, and a program slow to start
@@ -5079,7 +5092,7 @@ index 9214904..fc50948 100644
  
  #if 0000
  	/* add system utility button*/
-@@ -355,7 +564,8 @@ void wm_client_window_remap(win *window)
+@@ -355,7 +572,8 @@ void wm_client_window_remap(win *window)
  	Dprintf("client_window_remap %d (parent %d)\n", window->wid, window->pid);
  
  	GrGetWindowInfo(pwin->wid, &winfo);
@@ -5089,7 +5102,7 @@ index 9214904..fc50948 100644
  		GrMapWindow(pwin->wid);
  }
  
-@@ -440,6 +650,9 @@ void wm_client_window_destroy(win *window)
+@@ -440,6 +658,9 @@ void wm_client_window_destroy(win *window)
  		Dprintf("nanowm: Couldn't find parent of destroyed window %d\n", window->wid);
  		return;
  	}
