@@ -131,10 +131,57 @@ def slim(rom):
     return out, [hs[at][0] for at in sorted(drop)], sum(hs[at][3] for at in drop)
 
 
+def name_tables(out):
+    """A table of each directory of 32 entries or more, at the ROM's end, its place in the directory's header's size
+    (linux/nommu/patch_romfs.py): the mask, then that many + 1 words, each an entry's offset or 0, at the name's hash."""
+    out = bytearray(out)
+    tables = bytearray()
+    start = (len(out) + 15) & ~15
+    root = name_end(out, 16)
+    todo, seen = [root], set()
+    while todo:
+        d = todo.pop()
+        if d in seen:
+            continue
+        seen.add(d)
+        entries, at = [], be32(out, d + 4) & ~15
+        while at:
+            nxt = be32(out, at)
+            end = out.index(0, at + 16)
+            name = bytes(out[at + 16:end])
+            entries.append((at, name))
+            if nxt & 7 == 1 and name not in (b'.', b'..'):
+                todo.append(at)
+            at = nxt & ~15
+        if len(entries) < 32:
+            continue
+        mask = 63
+        while mask < len(entries) * 2:
+            mask = mask * 2 + 1
+        tab = [0] * (mask + 1)
+        for at, name in entries:
+            h = 0
+            for c in name:
+                h = (h * 31 + c) & 0xffffffff
+            while tab[h & mask]:
+                h += 1
+            tab[h & mask] = at
+        struct.pack_into('>I', out, d + 8, start + len(tables))
+        checksum_fix(out, d, name_end(out, d + 16) - d, d + 12)
+        tables += struct.pack('<%dI' % (mask + 2), mask, *tab)
+        tables += bytes(-len(tables) & 15)
+    out += bytes(start - len(out)) + tables
+    size = len(out)
+    struct.pack_into('>I', out, 8, size)
+    checksum_fix(out, 0, 512, 12)
+    return bytes(out)
+
+
 def main(image):
     path = os.path.join(image, 'rootfs.bin')
     rom = open(path, 'rb').read()
     out, dropped, total = slim(rom)
+    out = name_tables(out)
     open(path, 'wb').write(out)
     # the root device's size in the boot arguments follows the ROM (tools/make_linux_image.py)
     for name in ('dts.bin', 'linux_payload.bin'):

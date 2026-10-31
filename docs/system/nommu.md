@@ -38,7 +38,7 @@ In WSL, after the MMU build (`linux/kernel/build.sh` and the programs' build scr
   large copy whose two ends lie alike in a texel), `patch_flatreloc.py` (relocations a
   word at a time, and since 31 October 2026, in a program whose header has flag `0x40000000`, the entries and the words
   in the machine's order: `elf2bflt.py` and `elf2flt.c` write them so, no byte swap twice a relocation),
-  `patch_romfs.py` (a directory listed where it lies in the ROM, not an entry's three reads), `patch_sysfs.py` (no sysfs for the boot's slab caches and built-in
+  `patch_romfs.py` (a directory listed where it lies in the ROM, not an entry's three reads; a name found by its directory's table of names, which `slim.py` writes at the ROM's end for a directory of 32 entries or more, in place of a walk of the list), `patch_sysfs.py` (no sysfs for the boot's slab caches and built-in
   parameters: the boot 9.9 to 8.0 million), `patch_zeroread.py` (`/dev/zero` a megabyte a step,
   no fault-in of a write's buffer) and `patch_timekeeping.py` (with one processor the tick
   advances the timekeeper in place, not a shadow copied whole, and at every 16th tick: readers add

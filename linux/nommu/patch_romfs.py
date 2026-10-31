@@ -40,4 +40,39 @@ if 'shaderemu romfs_readdir' not in s:
 ''' + old
     assert s.count(old) == 1
     open(p, 'w', newline='\n').write(s.replace(old, new))
-print('romfs: a directory listed where it lies')
+
+# A name looked up in its directory's table of names, which the image has (slim.py, a directory of 32 entries or more:
+# its header's size is where the table lies): the entries are a list in the ROM, and /usr/bin or /usr/share walked to the
+# end, a name that is not there too (the shell's PATH), was 4,100 instructions a lookup: 3.6% of a desktop's start, 4% of
+# nxweb's page, 2.2% of nxview's picture.
+s = open(p).read()
+if 'shaderemu romfs_hashed' not in s:
+    old = """		while (rom && len > 0 && offset && offset < maxoff && offset + ROMFH_SIZE + len + 1 <= size) {
+			const u_char *entry = rom + offset;
+			u32 next = be32_to_cpup((const __be32 *)entry);
+
+			if (entry[ROMFH_SIZE] == (u_char)name[0]"""
+    assert s.count(old) == 1
+    s = s.replace(old, """		u32 table = be32_to_cpu(ri.size);	/* shaderemu romfs_hashed */
+
+		if (rom && len > 0 && table && !(table & 3) && table + 8 <= size) {
+			const u32 *tab = (const u32 *)(rom + table);
+			u32 mask = tab[0], h = 0;
+			int k;
+
+			for (k = 0; k < len; k++)
+				h = h * 31 + (u_char)name[k];
+			for (tab++;; h++) {
+				const u_char *e;
+
+				offset = tab[h & mask];
+				if (!offset)
+					break;
+				e = rom + offset + ROMFH_SIZE;
+				if (offset + ROMFH_SIZE + len + 1 <= size && !e[len] && !memcmp(e, name, len))
+					break;
+			}
+		}
+""" + old)
+    open(p, 'w', newline='\n').write(s)
+print('romfs: a directory listed where it lies, a name found by its table')
