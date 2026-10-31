@@ -1,14 +1,14 @@
 # Prebuilt Linux kernel and programs
 
-Binaries for the machine (RV32IMAF), so that `python tools\make_linux_image.py` can
+Binaries for the machine (RV32IMAF), so that `pwsh tools\make_image.ps1` can
 build the Linux image without a compiler. They are replaced by
-`python tools\make_linux_image.py --save-prebuilt` after a build. It is the whole image: every
+`pwsh tools\make_image.ps1 --save-prebuilt` after a build. It is the whole image: every
 program the build scripts make, and the data the games play, so that the machine can be
 started and everything on its desktop run without building anything.
 
 | File | Built by | From |
 |---|---|---|
-| `Image` | `linux/kernel/build.sh` | Linux 5.17.11, pimaker's fork, plus the drivers and hooks in `linux/kernel` |
+| `Image` | `linux/kernel/build.sh` | Linux 5.17.11 with the MMU, pimaker's fork, plus the drivers and hooks in `linux/kernel`; no longer run: `nommu/Image` is the machine's kernel |
 | `root/usr/bin/nano-X`, `nx*`, `demo-*` | `linux/nanox/build.sh` | Microwindows, with `linux/nanox/microwindows.patch` and the drivers and programs in `linux/nanox` |
 | `root/usr/bin/glxgears` | `linux/nanox/build.sh` | `glxgears.c` from Mesa's demos, unmodified, on `programs/linux/gl.c` |
 | `root/usr/bin/nx` | | the script `linux/nanox/nx` |
@@ -16,7 +16,7 @@ started and everything on its desktop run without building anything.
 | `root/bin/busybox` | `linux/userland/busybox.sh` | BusyBox 1.36.1 |
 | `root/usr/bin/nc`, `telnetd` | `linux/userland/build.sh` | two-line scripts that start BusyBox's applets of those names (`docs/system/lan.md`) |
 | `root/usr/bin/nxfiles`, `nxweb`, `nxedit`, `nxpaint`, `nxview`, `nxmon`, `nxsettings`, `nxkey`, `nxicon` (a program's own icon, `docs/system/nanox.md`), `nxoff`, `root/usr/share/web-*`, `nxapps.90-system`, `open`, `nxopen-archive`, `nxopen-run`, `nxopen.20-apps` (what opens which kind of file, `docs/system/open.md`), `picture-fox.png`, `picture-fox.jpg` (cut from the desktop's picture by `tools/make_test_pictures.py`) | `linux/apps/build.sh` | this repository |
-| `root/usr/bin/nxray`, `nxpath`, `root/usr/share/nxapps.82-raytrace`, `nxapps.83-pathtrace` | `linux/raytrace/build.sh`, `linux/pathtrace/build.sh` | this repo; in `nxpath`, the Utah teapot (Martin Newell) and the Stanford Bunny (Stanford Computer Graphics Laboratory)sitory; `nxpath` with Dear ImGui (below) |
+| `root/usr/bin/nxray`, `nxpath`, `root/usr/share/nxapps.82-raytrace`, `nxapps.83-pathtrace` | `linux/raytrace/build.sh`, `linux/pathtrace/build.sh` | this repo; `nxpath` with Dear ImGui (below) and, in `root/Models`, the Utah teapot (Martin Newell) and the Stanford Bunny (Stanford Computer Graphics Laboratory) |
 | `root/usr/bin/nxplay`, `root/usr/share/play-test.wav`, `.mp3`, `.flac`, `.mod` (made by `linux/play/make_test.py`), `nxapps.84-play`, `nxopen.84-play` | `linux/play/build.sh` | this repository, with minimp3 and dr_flac (below) |
 | `root/usr/share/wallpaper-*.ppm` | `tools/make_wallpaper.py` | photographs from Unsplash |
 | `root/usr/bin/doom.bin`, `root/usr/share/nxopen.50-doom` | `linux/nanox/doom.sh` | the Doom in Microwindows' `contrib`, with the files in `linux/nanox` |
@@ -33,6 +33,10 @@ started and everything on its desktop run without building anything.
 | `root/usr/share/ralert-*.MIX`, `ralert-sound.pak` | `linux/ralert/build.sh` | the Red Alert demo; the pack is its sounds decoded |
 | `root/usr/bin/quake.bin` | `linux/quake/build.sh` | id Software's Quake (GLQuake), with `linux/quake/quake.patch` and the files in `linux/quake` |
 | `root/usr/lib/tdawn/game`, `root/usr/lib/ralert/game` | `linux/tdawn/build.sh`, `linux/ralert/build.sh` | Vanilla Conquer, with the `vanilla-conquer.patch` of each and the files in `linux/tdawn` and `linux/ralert` |
+| `nano`, `htop`, `mc`, `mg`, `dialog`, `file`, `sl` | `linux/terminal/build.sh` | upstream's releases, `docs/system/terminal.md` |
+| `qjs`, `qjsc`; `micropython` | `linux/quickjs/build.sh`; `linux/micropython/build.sh` | QuickJS; MicroPython (`docs/system/scripts.md`) |
+| `dropbearmulti` and its links, `sftp`, `curl`, `socat`, `thttpd`, `pcregrep`, `dotlockfile`, `at`, iproute2's | `linux/ports/*.sh` | upstream's releases, `docs/system/ports.md` |
+| `root/usr/bin/openttd.bin`, `openttd`, `root/usr/share/openttd/` | `linux/openttd/build.sh` | OpenTTD 15.3 with the open base sets, `docs/games/openttd.md` |
 | `nommu/root/usr/bin/halflife.bin`, `halflife`, `root/usr/share/halflife/` (its own files, the HLSDK's licence), `nxapps.72-halflife` | `linux/halflife/build.sh` | Xash3D FWGS and hlsdk-portable, with `linux/halflife/xash3d.patch`, `hlsdk.patch` and the files in `linux/halflife`; Uplink's data is not here: `linux/halflife/data.py` fetches it when an image is made (`docs/games/halflife.md`) |
 
 Every program is statically linked, so each also contains the parts of the C library and
@@ -69,8 +73,11 @@ as above, position-independent, in the bFLT format), and `elf2flt`, `mctest`, `f
 | ClassiCube | BSD-3-Clause | https://github.com/ClassiCube/ClassiCube, commit `d41c3f7`; our changes: `linux/classicube/classicube.patch` |
 | Dear ImGui 1.91.5 | MIT | https://github.com/ocornut/imgui, tag `v1.91.5` |
 | Nofrendo | LGPL-2.0 | https://github.com/espressif/esp32-nesemu, commit `693e378`; our changes: `linux/nes/nofrendo.patch` |
-| minimp3 | CC0-1.0 | https://github.com/lieff/minimp3, commit `ea99364`; our changes: `linux/play/minimp3.patch` |
+| minimp3 | CC0-1.0 | https://github.com/lieff/minimp3, commit `ea99364`; our changes: `linux/libmedia/minimp3.patch` |
 | dr_flac 0.13.4 | public domain (Unlicense) or MIT No Attribution | https://github.com/mackron/dr_libs, commit `dfe8377` |
+| OpenTTD 15.3, OpenGFX, OpenSFX, OpenMSX | GPL-2.0; OpenSFX CC BY-SA 3.0 (`usr/share/openttd/COPYING.md`) | https://www.openttd.org; `linux/openttd/build.sh` names each; our changes: `linux/openttd/openttd.patch` |
+| QuickJS; MicroPython | MIT | the commits `linux/quickjs/build.sh` and `linux/micropython/build.sh` name |
+| nano, htop, mc, mg, dialog, file, sl; Dropbear, OpenSSH's sftp, curl, Mbed TLS, socat, thttpd, pcre, lockfile-progs, at, iproute2 | each its own | the releases and sha256 sums in `linux/terminal/build.sh` and `linux/ports/*.sh` |
 | glxgears | MIT (Brian Paul) | https://gitlab.freedesktop.org/mesa/demos, tag `mesa-demos-8.4.0` |
 | Drivers and programs of this repository | MIT (`LICENSE`); the kernel drivers GPL-2.0 | this repository |
 
@@ -83,9 +90,9 @@ The build scripts give every program one build date (`SOURCE_DATE_EPOCH` in
 `linux/userland/toolchain.sh`, `KBUILD_BUILD_TIMESTAMP` for the kernel), so a program whose
 sources did not change is the same file after a rebuild and adds nothing to the repository
 when this folder is saved again. The files are kept as they are, not packed: git packs them
-itself (the 100 MB here are 60 in the repository), and packing them better by hand (xz: 51)
-would only save anything in a history written again without the files as they are now.
-(The games' data as one solid archive would be 33 MB where git keeps 53; that was weighed in
+itself, and packing them better by hand would only save anything in a history written again without
+the files as they are now. This folder is 322 MB on 31 October 2026, 215 of the shared root and 103 of
+`nommu`. (The games' data as one solid archive would be 33 MB where git kept 53; that was weighed in
 October 2026 and the files were left as they are.)
 
 ## The games' data
@@ -99,6 +106,7 @@ Command & Conquer demos, their sounds decoded into a pack beside them).
 | `doom1.wad` | id Software: Doom's shareware episode | https://archive.org/download/DoomsharewareEpisode/doom.ZIP |
 | `quake-pak0.pak` | id Software: Quake's shareware episode, 1.06 | https://ftp.netbsd.org/pub/pkgsrc/distfiles/quake106.zip |
 | `nes-thwaite.nes` | Damian Yerrick: Thwaite 0.04 (GPL-3.0) | https://github.com/pinobatch/thwaite-nes/releases/download/v0.04/thwaite.nes |
+| `root/root/Models/teapot.obj`, `bunny.ply` | the Utah teapot, as Stanford's CS148 course had it (its address no longer answers: this is the copy to build from, `docs/system/nommu.md`); the Stanford Bunny | `linux/pathtrace/build.sh` |
 | `nes-nova.nes` | NovaSquirrel: Nova the Squirrel 1.0.6a (GPL-3.0) | https://github.com/NovaSquirrel/NovaTheSquirrel/releases/download/v1.0.6a/nova.nes |
 | `tdawn-*.MIX`, `tdawn-sound.pak` | Electronic Arts (Westwood): the Command & Conquer demo | https://archive.org/download/CommandConquerDemo/cc1demo1.zip |
 | `ralert-*.MIX`, `ralert-sound.pak` | Electronic Arts (Westwood): the Red Alert demo | https://archive.org/download/CommandConquerRedAlert_1020/ra95demo.zip |

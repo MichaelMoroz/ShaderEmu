@@ -11,7 +11,7 @@ a `.c`, `.h`, `.js`, `.py` or `.hlsl` file opened anywhere is its (`/usr/share/n
     / # nxide FILE.c
     / # nxide FOLDER            # the folder as the project
 
-    wsl -- bash /mnt/c/.../linux/ide/build.sh      # 6 s, after Nano-X's; then the image
+    wsl -- bash linux/nommu/build.sh ide/build.sh      # 6 s, after Nano-X's; then the image
 
 ## What it is made of (`linux/ide`)
 

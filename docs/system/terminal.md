@@ -5,7 +5,7 @@ dynamic ELF programs and do not run on the machine without an MMU: nano 8.2, hto
 5.02, dialog 1.3-20240619, mg 3.7 (Troglobit's), file 5.41 and Midnight Commander 4.8.27, all
 at upstream's paths, each from its release's tarball checked by its sha256.
 
-    wsl -- bash /mnt/c/.../linux/terminal/build.sh    # 332 s the first time, 12 s with nothing changed
+    wsl -- bash linux/nommu/build.sh terminal/build.sh    # 332 s the first time, 12 s with nothing changed
 
 They are linked static against one ncurses 6.5 with wide characters, which reads the terminal
 descriptions already in the ROM (`/usr/share/terminfo`; the console says `linux`). file is the

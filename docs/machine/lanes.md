@@ -225,17 +225,6 @@ in a word that is carried already, not in a new static. `lanetest` passes with 1
 texels an index, with 3 workers and with 255, on its lanes and on the field, and on `rvc_cpu`
 under `RVC_RACES` (0 undone); `mctest 255 30000` PASS and `fptest` 0 of 15 wrong on the card.
 
-## The image
-
-`linux/prebuilt/nommu/root` has the flat `nxray`, `nxpath`, `mctest`, `lanetest` and `tcc` with the libraries `tcc` was
-packed with (`libmcw.a`, `libgles.a`, `libnano-X.a`), the headers and the shader example, and
-`linux/prebuilt/nommu/Image` is the no-MMU kernel built again (`linux/kernel/build.sh`, then
-`linux/nommu/kernel.sh`, 20 October 2026): the one before (17 October) was from before RAM above the devices,
-and with the device tree `image.py` writes now it took the GPU's memory for RAM and no worker started.
-`build/images/nommu` is made from those (`linux/nommu/image.py nommu linux/prebuilt/nommu/root
-build/nommu/Image`). On it `tools/test_all.py` passes 111 of 139; the 28 others failed so before, their
-programs not being in this checkout's prebuilt root (`sl`, `at`, `qjs`, `micropython`, `nxpinball`, the ports,
-the IDE's cases), and `cc-bytes` is `716cecf0` now.
 ## Not done
 
 - The field in Unity is wired and not yet run there: `MachineTickLean.shader` defines `LANE_FIELD`, the tick's

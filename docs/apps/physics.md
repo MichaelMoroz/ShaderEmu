@@ -5,8 +5,9 @@ boxes: a wall of bricks with a heavy box thrown at it, towers, a heap let fall. 
 core (`multicore.md`) moves its share of the boxes, and nothing in it needs a lock: the
 machine has none to give.
 
-    wsl -- bash /mnt/c/Development/ShaderX86/linux/physics/build.sh     (7 s; after Nano-X's build)
-    python tools\make_linux_image.py
+    wsl -- bash linux/nommu/build.sh physics/build.sh     (7 s; after Nano-X's build)
+    wsl -- bash linux/nommu/root.sh
+    pwsh tools\make_image.ps1
     / # nano-X -p & nxphys
 
     arrows  turn the view          space  throw the heavy box      1 2 3  a wall, towers, a heap
@@ -20,10 +21,6 @@ holodeck's seat both hands do. All of it is in "The controls" below. The window 
 size: the picture has all of it but the bar, and the buttons share the bar's width.
 
 Until 13 October 2026 `w` was the colours and `a` all the workers.
-
-That image has the MMU. The world and `rvc_harness` with no arguments run Linux without one,
-where the program is flat: `bash linux/nommu/build.sh physics/build.sh`, then `root.sh` and
-`image.py` (`docs/system/nommu.md`, "Building it").
 
 ## What the workers allow
 

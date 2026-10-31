@@ -7,7 +7,7 @@ stand by themselves is decoded on the worker cores (`multicore.md`); what cannot
 with them. A program links `/usr/lib/libmedia.a` with `mcw.c` and `mcwx.c` and includes
 `media.h`.
 
-    wsl -- bash /mnt/c/Development/ShaderX86/linux/libmedia/build.sh    (8 s; after the kernel's)
+    wsl -- bash linux/nommu/build.sh libmedia/build.sh    (8 s; after the kernel's)
 
 The build also makes `media_test` (in the image, `/usr/bin/media_test`) and the same program for
 the build computer (`$WORK/src/libmedia/media_test-host`, workers as threads:

@@ -3,13 +3,10 @@
 The Doom that comes with Microwindows (`src/contrib/doom`, a Nano-X client) runs in the Linux
 image with the GPU drawing its picture.
 
-    wsl -- bash /mnt/c/Development/ShaderX86/linux/nanox/build.sh     (once)
-    wsl -- bash /mnt/c/Development/ShaderX86/linux/nanox/doom.sh
-    python tools\make_linux_image.py                                  (then a new shell snapshot)
-
-That is the image with the MMU. The world and `rvc_harness` with no arguments run Linux
-without one, where the program is flat: `bash linux/nommu/build.sh nanox/doom.sh`, then
-`root.sh` and `image.py` (`docs/system/nommu.md`, "Building it").
+    wsl -- bash linux/nommu/build.sh nanox/build.sh     (once)
+    wsl -- bash linux/nommu/build.sh nanox/doom.sh
+    wsl -- bash linux/nommu/root.sh
+    pwsh tools\make_image.ps1                                  (then a new shell snapshot)
 
 In the guest: start it from the desktop's Start menu or a terminal, or `nano-X -p & doom` at
 the console. `-playdemo demo1` plays the first demo in real time, `-timedemo demo1` one tic a
@@ -21,8 +18,9 @@ The shareware `doom1.wad` is fetched by the build and is not kept in this reposi
 
 ## Speed
 
-The machine runs 2.7 to 2.9 million instructions a second where it matters (FXC on D3D11,
-which is what VRChat runs), and Doom wants 35 game tics a second whatever the frame rate. So
+Where it stands: `-timedemo demo1` at 145.4 frames a second on an RTX 5090 (October 2026), 145.9 calibrated
+(31 October 2026, `game_par.py doom --calibrated`). What follows goes as the work went: at its start the machine
+ran 2.7 to 2.9 million instructions a second where it matters (FXC on D3D11, which is what VRChat runs), and Doom wants 35 game tics a second whatever the frame rate. So
 a frame rate is `(instructions a second - 35 x a tic) / a frame`, and both had to shrink.
 Every five seconds Doom prints its frame rate and those two costs (`doomstat:` lines;
 `DOOM_STATS_MS=1000` prints every second).

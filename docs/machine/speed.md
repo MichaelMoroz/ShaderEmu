@@ -100,6 +100,27 @@ The fxc2 bytecode of each draw and dispatch, as the harness compiled it (its log
 The devices are the same on all but the old rvc: the GPU device's draw 77,476 and its control
 88,032, the sound card's mix 46,764.
 
+## Calibrated (31 October 2026)
+
+The tree of that day, no card: `rvc_cpu --pass-model` with `tools/card_model.json` (fitted to an RTX 5090 and fxc2),
+`python tools/game_par.py GAME --calibrated`, one run each. Good to about 7%; it says nothing of the world's
+fixed rounds, and nxray and nxphys, which lean on many workers, are left out (the skill
+`calibrated-measurements`, "How far to trust it"). Frames a second by the guest's clock, passes a frame, and core 0's and all
+cores' thousands of instructions a frame; beside them the card's run the fit has, where it has one:
+
+| | calibrated | passes a frame | core 0, all cores | RTX 5090 |
+|---|---|---|---|---|
+| Doom, `-timedemo demo1` | 145.9 | 4.25 | 26.3, 64.3 | 145.4 |
+| Quake, `+timedemo demo1` (969 frames in 8.8 s) | 109.7 | | | |
+| Quake III, q3dm17 with a bot, frames 300 to 700 | 77.4 | 8.52 | 26.2, 165.5 | 79.4 |
+| Tiberian Dawn, mission 3, frames 301 to 1200 | 60.8 | 10.67 | 80.1, 125.2 | 60.4 |
+| Red Alert, the Soviet mission, frames 301 to 1200 | 86.8 | 7.38 | 54.4, 78.2 | 86.2 |
+| ClassiCube, seed 7, walking into a hill | 176.2 | 3.51 | 12.9, 70.5 | |
+| the NES, Thwaite, its frames 100 to 1000 (378% of a NES) | 226.8 | 2.76 | 2.7, 30.3 | |
+
+And Linux to its prompt 1.41 s (`/proc/uptime`), `time factor 999999999989` 2.71 s, both once. Half-Life and OpenTTD have
+theirs in their docs, of the same day.
+
 ## Measured in one run
 
 `RVC_MARK=TEXT` prints the card's tick time a frame each time TEXT comes on the console, since the last

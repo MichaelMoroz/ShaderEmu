@@ -5,14 +5,10 @@ Tiberian Dawn ([Vanilla Conquer](https://github.com/TheAssemblyArmada/Vanilla-Co
 on the same layer under it (`docs/games/tdawn.md`, `linux/tdawn`): a Nano-X window, the map drawn by
 the GPU, the sound card. Its screen is 640 x 400, shown one to one.
 
-    wsl -- bash /mnt/c/Development/ShaderX86/linux/tdawn/build.sh     (first: it makes the C++ driver)
-    wsl -- bash /mnt/c/Development/ShaderX86/linux/ralert/build.sh    (two minutes; the first time it also fetches)
-    python tools\make_linux_image.py                                  (then a new shell snapshot)
-
-That is the image with the MMU. The world and `rvc_harness` with no arguments run Linux
-without one, where the program is flat:
-`bash linux/nommu/build.sh tdawn/build.sh ralert/build.sh`, then `root.sh` and `image.py`
-(`docs/system/nommu.md`, "Building it").
+    wsl -- bash linux/nommu/build.sh tdawn/build.sh     (first: it makes the C++ driver)
+    wsl -- bash linux/nommu/build.sh ralert/build.sh    (two minutes; the first time it also fetches)
+    wsl -- bash linux/nommu/root.sh
+    pwsh tools\make_image.ps1                                  (then a new shell snapshot)
 
 In the guest: `nano-X -p & ralert` at the console, or Red Alert in the Start menu's Games (not
 tried from there). The data is the 1996 demo's: one Soviet and one Allied mission and
@@ -571,6 +567,10 @@ shapes and count as busy), the next mission's start from the menu (31 s, of whic
 million a second) was not looked at, and a lost mission's screens were not tried.
 
 ## Speed
+
+Where it stands: the Soviet mission's frames 301 to 1200 at 86.2 game frames a second on an RTX 5090 (October 2026),
+86.8 calibrated (31 October 2026, `game_par.py ralert --calibrated`), nobody holding them back. What follows goes
+as the work went.
 
 On D3D11 with fxc2 (3.5M to 4.1M instructions a second), no delay between frames, nobody
 playing, in thousands of instructions a game frame:

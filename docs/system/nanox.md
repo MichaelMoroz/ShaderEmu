@@ -37,19 +37,18 @@ two looks, Windows 7 (the default) and classic, chosen in Settings ("Looks").
 
 ## Building it
 
-    wsl -- bash /mnt/c/.../linux/kernel/build.sh    # once: cross compiler, kernel
-    wsl -- bash /mnt/c/.../linux/nanox/build.sh     # about 10 s after the first time
-    python tools\make_linux_image.py
+    wsl -- bash linux/kernel/build.sh    # once: cross compiler, kernel's tree (docs/system/nommu.md)
+    wsl -- bash linux/nommu/build.sh nanox/build.sh     # about 10 s after the first time
+    wsl -- bash linux/nommu/root.sh
+    pwsh tools\make_image.ps1
 
 - `linux/userland/toolchain.sh` builds the C library the programs link: musl, static, for
   RV32IMAF (`docs/machine/fpu.md`). The integer and soft-float helpers come from compiler-rt and the 128-bit `long double` ones from libgcc's
   soft-fp sources. `rv32-cc` is the resulting compiler driver.
 - `linux/nanox/build.sh` fetches Microwindows at a fixed commit, applies
   `microwindows.patch`, adds the three drivers in that directory, builds with
-  `linux/nanox/config` and leaves stripped binaries in `build/images/linux/root`, a tree the
-  image builder copies into the root filesystem.
-- That is the build of Linux with the MMU. `linux/nommu/build.sh` runs the same scripts for
-  Linux without one, the world's (`docs/system/nommu.md`).
+  `linux/nanox/config` and leaves stripped binaries in the root `linux/nommu/root.sh` makes
+  flat (`docs/system/nommu.md`).
 - Nothing fetched is kept in this repository.
 
 ## Drivers

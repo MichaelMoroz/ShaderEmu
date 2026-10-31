@@ -5,13 +5,10 @@ a 64 x 64 x 64 world it generates at start, to walk, dig and build in. Everythin
 is drawn by the machine's GPU. It was chosen because a frame of it is almost all drawing: the
 world is chunks of quads that stay in GPU memory, and the CPU works when a block changes.
 
-    wsl -- bash /mnt/c/Development/ShaderX86/linux/nanox/build.sh        (once)
-    wsl -- bash /mnt/c/Development/ShaderX86/linux/classicube/build.sh   (6 s; the first time it also fetches)
-    python tools\make_linux_image.py                                     (then a new shell snapshot)
-
-That is the image with the MMU. The world and `rvc_harness` with no arguments run Linux
-without one, where the program is flat: `bash linux/nommu/build.sh classicube/build.sh`, then
-`root.sh` and `image.py` (`docs/system/nommu.md`, "Building it").
+    wsl -- bash linux/nommu/build.sh nanox/build.sh        (once)
+    wsl -- bash linux/nommu/build.sh classicube/build.sh   (6 s; the first time it also fetches)
+    wsl -- bash linux/nommu/root.sh
+    pwsh tools\make_image.ps1                                     (then a new shell snapshot)
 
 In the guest: `nano-X -p & classicube` at the console, or ClassiCube in the Start menu's Games
 (not tried from there). It starts in single player. W, A, S and D walk, Space jumps, the left
@@ -138,6 +135,9 @@ still, no lines (the block outline is the game's quads, so it is there), nearest
 no smooth lighting.
 
 ## Speed
+
+Where it stands: seed 7, walking and jumping into a hill, at 176.2 frames a second, calibrated (31 October 2026,
+`game_par.py classicube --calibrated`), 3.51 passes a frame. What follows goes as the work went.
 
 Instructions a frame in a 854 x 480 window, standing where the game starts with seed 7. The
 machine runs 3.9 million a second on D3D11 with fxc2:

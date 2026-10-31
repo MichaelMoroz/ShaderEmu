@@ -6,14 +6,11 @@ renderer and a sound layer of our own. Everything on the screen is drawn by the 
 GPU: its pictures from GPU memory, where they are decoded when a level or the menu loads, and
 the rest where a file lies in the ROM.
 
-    wsl -- bash /mnt/c/Development/ShaderX86/linux/nanox/build.sh     (once)
-    wsl -- bash /mnt/c/Development/ShaderX86/linux/libmedia/build.sh  (once: docs/system/media.md)
-    wsl -- bash /mnt/c/Development/ShaderX86/linux/quake3/build.sh    (17 s; 25 s when it bakes; the first time it also fetches)
-    python tools\make_linux_image.py
-
-That is the image with the MMU. The world and `rvc_harness` with no arguments run Linux
-without one, where the program is flat and its pools smaller (below):
-`bash linux/nommu/build.sh quake3/build.sh`, then `root.sh` and `image.py` (`docs/system/nommu.md`).
+    wsl -- bash linux/nommu/build.sh nanox/build.sh     (once)
+    wsl -- bash linux/nommu/build.sh libmedia/build.sh  (once: docs/system/media.md)
+    wsl -- bash linux/nommu/build.sh quake3/build.sh    (17 s; 25 s when it bakes; the first time it also fetches)
+    wsl -- bash linux/nommu/root.sh
+    pwsh tools\make_image.ps1
 
 In the guest: `nano-X -p & quake3 +map q3dm17 +addbot sarge 3`, or Quake III Arena in the
 Start menu's Games, which opens the main menu. Lines typed at the terminal it was started
@@ -107,6 +104,10 @@ flares; no reflections; `tcMod turb` and vertex deforms stand still; rail rings 
 no mipmaps; the weapon can poke into a wall; a 2D shader's first stage only; no music or videos.
 
 ## Speed
+
+Where it stands: q3dm17 with a bot, frames 300 to 700, at 79.4 frames a second on an RTX 5090 (October 2026), 77.4
+calibrated (31 October 2026, `game_par.py quake3 --calibrated`; the server 25.5 frames of the game a second). What
+follows goes as the work went.
 
 Instructions a frame of the first core, on `rvc_cpu`, the player standing with 25 models in view:
 

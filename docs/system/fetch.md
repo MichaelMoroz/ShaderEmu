@@ -136,7 +136,7 @@ the sites of `linux/apps/web/sites.txt` as the browser would and writes two thin
   the world's builder (`ShaderEmuBuilder.cs`) adds it to the sites, and `EmuMachine` finds
   an address among them by halving (they are sorted). A hashed address is right until its
   site next changes its sheet: then that sheet is a paste again, and nothing breaks.
-- **Copies in the ROM**, with `--cache DIR` (`build/images/linux/root/usr/share` for the
+- **Copies in the ROM**, with `--cache DIR` (`build/images/linux/root/usr/share`, the shared root, for the
   image; `--budget BYTES`, 8 MB if not said): the sheets as they came (`webc-N.css`), the
   pictures (any format the host's Pillow reads, SVG too where it can, laid on white, no wider
   than 800) and `web-cache.idx`, a line an address in the order of their bytes: kind, file, a

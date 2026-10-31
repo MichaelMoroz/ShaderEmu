@@ -4,13 +4,10 @@ Quake (1996) runs in the Linux image: id Software's released source, GLQuake, as
 client. Everything on the screen is drawn by the machine's GPU; there is no software renderer
 in the build. The machine's float instructions (`docs/machine/fpu.md`) were added for it.
 
-    wsl -- bash /mnt/c/Development/ShaderX86/linux/nanox/build.sh     (once)
-    wsl -- bash /mnt/c/Development/ShaderX86/linux/quake/build.sh     (3 s; the first time it also fetches)
-    python tools\make_linux_image.py                                  (then a new shell snapshot)
-
-That is the image with the MMU. The world and `rvc_harness` with no arguments run Linux
-without one, where the program is flat: `bash linux/nommu/build.sh quake/build.sh`, then
-`root.sh` and `image.py` (`docs/system/nommu.md`, "Building it").
+    wsl -- bash linux/nommu/build.sh nanox/build.sh     (once)
+    wsl -- bash linux/nommu/build.sh quake/build.sh     (3 s; the first time it also fetches)
+    wsl -- bash linux/nommu/root.sh
+    pwsh tools\make_image.ps1                                  (then a new shell snapshot)
 
 In the guest: `nano-X -p & quake` at the console, or Quake in the Start menu's Games (not
 tried from there by hand). With no arguments it plays its three demos in turn, as Quake does,
@@ -58,7 +55,7 @@ how loud it is in each ear by distance and side, worked out once a frame.
   at the game's level, and does in 0.1% at this. `volume` is the game's setting, as before.
 - No music: the game's was a CD's tracks.
 - To check it: `--fixed-dt 0.004 --sound-capture F.wav --save-state F.snap` on a timedemo and
-  `python tools\sound_reference.py F.wav F.snap --rom build\images\linux\rootfs.bin`. A minute
+  `python tools\sound_reference.py F.wav F.snap --rom build\images\nommu\rootfs.bin`. A minute
   of demo1 is 3,072,768 samples, every one the model's.
 
 ## How it is drawn
@@ -112,6 +109,10 @@ that can be measured (the same frames a second on e1m5), the picture agrees with
 picture as it was.
 
 ## Speed
+
+Where it stands: `+timedemo demo1` at 109.7 frames a second, calibrated (31 October 2026, `game_par.py quake-timedemo
+--calibrated`: 969 frames in 8.8 s); 85.4 on an RTX 5070 laptop (19 October 2026, `docs/machine/speed.md`). What follows
+goes as the work went.
 
 A frame standing still at the start of the first level, in instructions:
 
@@ -251,7 +252,7 @@ frame's length is now the milliseconds times 0.001 in a float, where it was a di
 doubles: the last bit may differ, and a typed `+forward` lands a frame earlier or later,
 because every frame is shorter. The play checks below and the two machines' game of
 `docs/system/lan.md` pass as before. To find such a routine's callers: `objdump -d` of
-`~/shaderemu-linux/src/quake-build/quake`, every `jal` to a `__...df...` by the function it
+`~/nm/work/src/quake-build/quake`, every `jal` to a `__...df...` by the function it
 is in, beside that function's share of a profile.
 
 ## A pass's instructions

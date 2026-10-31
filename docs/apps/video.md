@@ -12,7 +12,7 @@ What follows of MPEG-1 was written of `mpeg.c` and holds of the library's copy.
     / # nxvideo FILE.mpg        # or FILE.vqa, FILE.avi, FILE.gif
     / # nxvideo --decode FILE   # no window: every picture decoded on this core, with sums
 
-    wsl -- bash /mnt/c/.../linux/video/build.sh     # 7 s, after Nano-X's; then the image
+    wsl -- bash linux/nommu/build.sh video/build.sh     # 7 s, after Nano-X's; then the image
     python tools\make_video.py [WIDTHxHEIGHT [SECONDS [KBITS]]]   # the sample, on the host
     python tools\make_avi.py --sample [SECONDS]                   # its MJPEG twin, from the same trailer
 
