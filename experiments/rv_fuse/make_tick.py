@@ -5,7 +5,12 @@ word, a plain instruction of a kind FUSE_SET says, on one trip of the fast loop.
     python make_tick.py DIR [--set SECOND] [--from experiments/rvc_opt]
         SECOND: addi (default), arith (addi, add, sub), ...
 
-The patch is kept as a script while it is an experiment: DIR is a copy of the tree's tick with these edits.
+The patch is kept as a script because it lost: DIR is a copy of the tree's tick with these edits. RTX 5070 Laptop, D3D11,
+fxc2, 31 October 2026, from one snapshot each (snaps.ps1, fuse_snap.py), in turn with the tree, millions of instructions a
+second tree -> fused: --shape inkind --set addi (11% merged on the shell): shell 5.25 -> 5.38, Doom 4.91 -> 4.92, Quake 8.15
+-> 8.10, nxray 627 -> 624. --set addbr (22, 19, 17%): shell 5.21 -> 5.34, Doom -> 5.05, Quake -> 8.34. --straddle --fp --fp2
+(27, 24, 25, 27%): shell 5.21 -> 5.16 to 5.21, Doom -> 4.95, nxray 630 -> 626. On plain code (RVC_TICK_ALT): inkind addi +1.3%,
+addbr +2.6%, the last +5.3%, --shape noret +10%, ret +12%. A merged instruction saves 25 to 65 ns of a mean 175.
 """
 import argparse, os, re, shutil, sys
 
@@ -18,6 +23,7 @@ ap.add_argument('--first', default='alu,load,store', help='shape inkind: the kin
 ap.add_argument('--straddle', action='store_true', help='a pair may lie across two texels')
 ap.add_argument('--fp', action='store_true', help='float kinds may be a first op')
 ap.add_argument('--fp2', action='store_true', help='fadd, fsub, fmul may be a second op')
+ap.add_argument('--mem', action='store_true', help='a load may take a second word of its texel, a store likewise')
 ap.add_argument('--edits', default='mask,n,gen', help='which of the fused tick edits are made')
 a = ap.parse_args()
 if os.path.exists(a.dir):
@@ -156,10 +162,72 @@ elif a.shape == 'inkind':
 """
     sub('emu.h', "    uint npc = pc + 4;\n    uint val = 0;\n    bool wr = true;\n    bool ok = true;\n    // A switch is", "    uint npc = pc + 4;\n    uint seq = npc;\n    uint val = 0;\n    bool wr = true;\n    bool ok = true;\n    // A switch is")
     sub('emu.h', "    fast_same = npc == pc + 4 && (npc & 12) != 0;", "    fast_same = npc == seq && (npc & 12) != 0;")
+    if a.mem:
+        LOAD_TAIL = """
+                    [branch]
+                    if ((w & 1) == 0) {
+                        xr[rd] = val;
+                        wr = false;
+                        uint f2 = fw_cur.y;
+                        bool took = true;
+                        [branch]
+                        if ((f2 & 0x10) == 0) {
+                            uint a2 = xreg((f2 >> 15) & 0x1f) + AS_UNSIGNED(AS_SIGNED(f2) >> 20);
+                            took = (a2 >> 4) == ((pa & 0x7fffffff) >> 4) && (a2 & 3) == 0;
+                            xr[took ? ((f2 >> 7) & 0x1f) : 32] = idx_uint4(mem_tx, (a2 >> 2) & 3);
+                        } else {
+                            xr[(f2 >> 7) & 0x1f] = xreg((f2 >> 15) & 0x1f) + AS_UNSIGNED(AS_SIGNED(f2) >> 20);
+                        }
+                        [branch]
+                        if (took) {
+                            fast_n++;
+                            npc = pc + 8;
+                            seq = npc;
+                            fw_cur = fw_cur.yzwx;
+                        }
+                    }
+"""
+        STORE_TAIL = """
+                    [branch]
+                    if ((w & 1) == 0) {
+                        uint f2 = fw_cur.y;
+                        bool took = true;
+                        [branch]
+                        if ((f2 & 0x10) == 0) {
+                            uint a2 = xreg((f2 >> 15) & 0x1f) + ((AS_UNSIGNED(AS_SIGNED(f2) >> 20) & 0xffffffe0) | ((f2 >> 7) & 0x1f));
+                            uint t2 = (a2 & 0x7fffffff) >> 4;
+                            took = t2 == ((pa & 0x7fffffff) >> 4) && (a2 & 3) == 0 && t2 == l1_last_t;
+                            [branch]
+                            if (took) {
+                                uint b2 = xreg((f2 >> 20) & 0x1f);
+                                uint k2 = (a2 >> 2) & 3;
+                                mem_cache_bloom |= a2 & 0x7ffffffc;
+                                [branch]
+                                if (k2 < 2) {
+                                    if (k2 == 0) { L1_DATA(l1_last_at).x = b2; } else { L1_DATA(l1_last_at).y = b2; }
+                                } else {
+                                    if (k2 == 2) { L1_DATA(l1_last_at).z = b2; } else { L1_DATA(l1_last_at).w = b2; }
+                                }
+                            }
+                        } else {
+                            xr[(f2 >> 7) & 0x1f] = xreg((f2 >> 15) & 0x1f) + AS_UNSIGNED(AS_SIGNED(f2) >> 20);
+                        }
+                        [branch]
+                        if (took) {
+                            fast_n++;
+                            npc = pc + 8;
+                            seq = npc;
+                            fw_cur = fw_cur.yzwx;
+                        }
+                    }
+"""
+        TAILL = LOAD_TAIL
+    else:
+        TAILL = TAIL
     if 'alu' in FIRST:
         sub('emu.h', "                ok = ((exist >> (((w >> 2) & 8) | f3)) & 1) != 0;\n", "                ok = ((exist >> (((w >> 2) & 8) | f3)) & 1) != 0;\n" + TAIL)
     if 'load' in FIRST:
-        sub('emu.h', "                    val = (f3 & 4) ? v >> up : AS_UNSIGNED(AS_SIGNED(v) >> up);\n                    ok = true;\n", "                    val = (f3 & 4) ? v >> up : AS_UNSIGNED(AS_SIGNED(v) >> up);\n                    ok = true;\n" + TAIL)
+        sub('emu.h', "                    val = (f3 & 4) ? v >> up : AS_UNSIGNED(AS_SIGNED(v) >> up);\n                    ok = true;\n", "                    val = (f3 & 4) ? v >> up : AS_UNSIGNED(AS_SIGNED(v) >> up);\n                    ok = true;\n" + TAILL)
     if a.fp:
         sub('emu.h', "                xr[(ok && to_f) ? XR_F + ((w >> 7) & 0x1f) : 32] = val;   // (or to the scratch slot)\n",
             "                xr[(ok && to_f) ? XR_F + ((w >> 7) & 0x1f) : 32] = val;   // (or to the scratch slot)\n" + STORE_TAIL.replace('if ((w & 1) == 0) {', 'if ((w & 1) == 0 && ok) {'))
@@ -167,6 +235,9 @@ elif a.shape == 'inkind':
         sub('emu.h', "                    mem_set_ram(pa & 0x7ffffffc, rs2v << (s_off * 8), s_mask, false);\n                    ok = true;\n", "                    mem_set_ram(pa & 0x7ffffffc, rs2v << (s_off * 8), s_mask, false);\n                    ok = true;\n" + STORE_TAIL)
 else:
     assert a.shape == 'none'
+if a.mem:
+    sub('emu.h', 'static bool fast_same = false;', 'static uint4 mem_tx = 0;'+chr(10)+'static bool fast_same = false;')
+    sub('mem.h', '    uint v = idx_uint4(tx, (addr >> 2) & 0x3);'+chr(10)+'    // (the word the cache', '    mem_tx = tx;'+chr(10)+'    uint v = idx_uint4(tx, (addr >> 2) & 0x3);'+chr(10)+'    // (the word the cache')
 TAG = 'n'
 # one count of a run's instructions, which a fused word adds to
 sub('emu.h', 'static bool fast_same = false;', 'static uint fast_n = 0;\nstatic bool fast_same = false;')

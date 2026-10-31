@@ -26,6 +26,7 @@ ap.add_argument('out')
 ap.add_argument('--set', default='addi')
 ap.add_argument('--straddle', action='store_true')
 ap.add_argument('--fp', action='store_true', help='flw, fsw, F ops as first ops')
+ap.add_argument('--mem', action='store_true', help='lw + lw and sw + sw of one base, near')
 ap.add_argument('--min', type=int, default=1, help='fuse only pairs run so many times')
 a = ap.parse_args()
 S = SETS[a.set]
@@ -62,8 +63,20 @@ for pc, (w, n) in pcs.items():
     nx = pcs.get(pc + 4)
     if not nx: continue
     nn = 'fsimple' if kind(nx[0]) == 'fp' and (nx[0] >> 25) in (0, 4, 8) else name(nx[0])
-    if nn not in S: continue
-    if (nx[0] >> 7) & 31 == 0 and kind(nx[0]) not in ('branch', 'fp'): continue
+    near = False
+    if a.mem and (w >> 15) & 31 == (nx[0] >> 15) & 31:
+        ik, ik2 = kind(w), kind(nx[0])
+        if ik == 'load' and ik2 == 'load' and name(nx[0]) == 'lw' and (nx[0] >> 7) & 31:
+            i1, i2 = (w if False else w) >> 20, nx[0] >> 20
+            near = abs(((i1 ^ 0x800) - 0x800) - ((i2 ^ 0x800) - 0x800)) <= 12 and (i2 & 3) == 0
+            if (w >> 15) & 31 == 2: near = near and (i1 >> 4) == (i2 >> 4)
+        if ik == 'store' and ik2 == 'store' and name(w) == 'sw' and name(nx[0]) == 'sw':
+            i1 = ((w >> 25) << 5) | ((w >> 7) & 31)
+            i2 = ((nx[0] >> 25) << 5) | ((nx[0] >> 7) & 31)
+            near = abs(((i1 ^ 0x800) - 0x800) - ((i2 ^ 0x800) - 0x800)) <= 12 and (i2 & 3) == 0
+            if (w >> 15) & 31 == 2: near = near and (i1 >> 4) == (i2 >> 4)
+    if nn not in S and not near: continue
+    if (nx[0] >> 7) & 31 == 0 and kind(nx[0]) not in ('branch', 'fp', 'store'): continue
     if min(n, nx[1]) < a.min: continue
     cands.append((min(n, nx[1]), pc))
 cands.sort(reverse=True)
