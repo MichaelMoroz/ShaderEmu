@@ -1976,7 +1976,11 @@ copy_selection(void)
 		say("too large to copy");
 		return 0;
 	}
-	ui_clip_set(text, length);
+	if (length >= 1 << 24 || !ui_clip_set(text, length)) {	/* (a Cut then keeps its text) */
+		free(text);
+		say("too large to copy");
+		return 0;
+	}
 	free(text);
 	say("copied");
 	return 1;

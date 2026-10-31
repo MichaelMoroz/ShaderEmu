@@ -1614,6 +1614,10 @@ new_entry(int folder)
 		if (access(name, F_OK) != 0)
 			break;
 	}
+	if (n == 100) {	/* (`fopen` of new99.txt would have emptied it) */
+		report("Cannot make a file", "%.100s has a hundred new files already.", where);
+		return;
+	}
 	if (folder) {
 		if (mkdir(name, 0755) != 0)
 			report("Cannot make a folder", "A new folder could not be made in %.100s:\n%s.", where, strerror(errno));

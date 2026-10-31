@@ -1668,23 +1668,21 @@ paste(void)
 		strtod(s, &end);
 		while (end > s && isspace((unsigned char)end[0]))
 			end++;
-		if (end > s && !*end && (isdigit((unsigned char)s[s[0] == '-']) || s[s[0] == '-'] == '.')) {
-			int negative = s[0] == '-', typed = 0;
+		if (end > s && !*end && n < (int)sizeof entry - 1 && (isdigit((unsigned char)s[s[0] == '-']) || s[s[0] == '-'] == '.') &&
+		    strspn(s, "0123456789.eE+- \n") == (size_t)n) {
+			/* (the entry itself: Exp is no key of the standard pane, and a key that is not there is not pressed) */
+			int at = 0;
 
-			for (s += negative; *s && *s != ' ' && *s != '\n'; s++) {
-				if (*s == 'e' || *s == 'E') {
-					press(K_EXP);
-					if (s[1] == '-' || s[1] == '+') {
-						if (s[1] == '-')
-							press(K_NEG);
-						s++;
-					}
-				} else {
-					type_char((unsigned char)*s, 0);
-					if (negative && !typed++)
-						press(K_NEG);
-				}
+			if (error[0])
+				clear_all();
+			if (!typing) {
+				new_operand();
+				typing = 1;
 			}
+			for (; s < end; s++)
+				entry[at++] = *s == 'E' ? 'e' : *s;
+			entry[at] = 0;
+			dirty |= D_DISPLAY;
 			free(text);
 			return;
 		}

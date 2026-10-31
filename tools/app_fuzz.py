@@ -200,8 +200,9 @@ def menu_plans(apps):
 ODD_READERS = {'edit': 'nxedit', 'view': 'nxview', 'play': 'nxplay', 'video': 'nxvideo', 'web': 'nxweb', 'paint': 'nxpaint', 'ide': 'nxide', 'open': 'open', 'files': 'nxfiles'}
 ODD_ENDINGS = ('.txt', '.c', '.png', '.jpg', '.gif', '.bmp', '.wav', '.mp3', '.flac', '.mpg', '.avi', '.vqa', '.html', '.zip', '.tar', '.gz', '.obj', '.scene', '.xyz', '')
 ODD_FILLS = {'empty': ': >', 'noise': 'head -c 3000 /dev/urandom >', 'zeros': 'head -c 3000000 /dev/zero >',
-             'nl': r'head -c 400000 /dev/zero | tr "\000" "\012" >', 'line': r'head -c 400000 /dev/zero | tr "\000" a >',
-             'head': r"printf '\211PNG\015\012\032\012IHDR' >"}
+             # (rvc_cpu's --send eats a backslash it does not know: no backslash here)
+             'nl': 'yes "" | head -c 400000 >', 'line': 'head -c 400000 /dev/zero | tr "[:cntrl:]" a >',
+             'head': 'echo iVBORw0KGgpJSERS | base64 -d >'}
 
 
 def input_plans(apps):

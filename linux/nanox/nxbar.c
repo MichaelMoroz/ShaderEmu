@@ -110,6 +110,7 @@ static struct { char command[64]; struct ui_icon_ref icon; } pinned[MAX_PINNED];
 static int pinned_count;
 static GR_WINDOW_ID desk_hidden[MAX_TASKS];	/* windows the strip put away, to bring back */
 static int desk_hidden_count;
+static int volume_silent;	/* (the card's page is mapped only while the popup is up) */
 
 static GR_WINDOW_ID bar, calendar, volume;	/* calendar, volume: the popups, while they are open */
 static GR_WINDOW_ID preview_window, switcher;	/* where a frame would snap; the windows to go to */
@@ -578,7 +579,7 @@ draw_bar(void)
 		}
 	}
 	/* the volume's button: its icon, muted when the card is silent */
-	ui_icon(bar, gc, VOLUME_X + (VOLUME_W - 16) / 2, 5, ui_icon_of(snd_page && SND_MASTER == 0 ? "volume-muted" : "volume"), 16);
+	ui_icon(bar, gc, VOLUME_X + (VOLUME_W - 16) / 2, 5, ui_icon_of(volume_silent ? "volume-muted" : "volume"), 16);
 	if (!ui_seven)
 		bevel(bar, CLOCK_X, 3, CLOCK_WIDTH, BAR_HEIGHT - 6, 1);
 	snprintf(text, sizeof(text), "%02d:%02d", tm->tm_hour, tm->tm_min);
@@ -1128,7 +1129,7 @@ ask(const char *icon, const char *title, const char *text, const char *yes, cons
 		execlp("nxask", "nxask", "--icon", icon, "--title", title, text, yes, no, (char *)NULL);
 		_exit(127);
 	}
-	return child;
+	return child > 0 ? child : 0;	/* (-1 kept here would be a signal to every process) */
 }
 
 /* A button for a program on its way, until a window of it, or of one it started, comes. */
@@ -1363,7 +1364,8 @@ closing_tick(void)
 			/* (it answered after all: the question goes) */
 			closing_look(k, &frame_there, &asking, &others);
 			if (!frame_there) {
-				kill(closings[k].asker, SIGTERM);
+				if (closings[k].asker)
+					kill(closings[k].asker, SIGTERM);
 				closings[k].asker = 0;
 				closings[k].phase = GONE_WAIT;
 				closings[k].at = now + close_ms;
@@ -1877,6 +1879,7 @@ volume_set(int level)
 	}
 	level = level < 0 ? 0 : level > 100 ? 100 : level;
 	SND_MASTER = (uint32_t)level * 256 / 100;
+	volume_silent = !level;
 	reg_set_int("sound.volume", level);
 	draw_volume();
 	draw_bar();
@@ -2196,6 +2199,7 @@ main(int argc, char **argv)
 		return 1;
 	}
 	ui_launch_watch();	/* started programs are reaped as they end, and a failure is reported */
+	volume_silent = reg_get("sound.volume", NULL) && !atoi(reg_get("sound.volume", NULL));
 	GrGetScreenInfo(&screen);
 	gc = GrNewGC();
 	GrSetGCUseBackground(gc, GR_FALSE);

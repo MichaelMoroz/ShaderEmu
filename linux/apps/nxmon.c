@@ -1699,10 +1699,18 @@ switch_to(struct task *t)
 {
 	if (!t)
 		return;
-	if (t->hidden)
-		GrMapWindow(t->frame);
-	GrRaiseWindow(t->frame);
-	GrSetFocus(t->client);
+	if (t->hidden) {	/* (minimised, or on another desktop: the window manager's word brings it and shows its desktop) */
+		GR_WM_PROPERTIES word;
+
+		word.flags = GR_WM_FLAGS_COMMAND;
+		word.props = GR_WMC_ACTIVATE;
+		word.background = 0;
+		word.title = NULL;
+		GrSetWMProperties(t->frame, &word);
+	} else {
+		GrRaiseWindow(t->frame);
+		GrSetFocus(t->client);
+	}
 	windows_dirty = 1;
 }
 
@@ -1716,6 +1724,8 @@ findable(const char *line)
 
 	while (*line == ' ')
 		line++;
+	if (line[strcspn(line, "=;&|()<>$")])
+		return 1;	/* (the shell's to say: an assignment, a list, a redirection) */
 	while (line[n] && line[n] != ' ' && n < (int)sizeof name - 1) {
 		name[n] = line[n];
 		n++;
