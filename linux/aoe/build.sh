@@ -47,7 +47,7 @@ if [ "${AOE_CHECK:-}" = 1 ]; then
 fi
 # Objects: a file again when it, a header or the flags changed
 echo "$FLAGS" > "$OBJ/flags.new"; cmp -s "$OBJ/flags.new" "$OBJ/flags" || { rm -f "$OBJ"/*.o; mv "$OBJ/flags.new" "$OBJ/flags"; }
-newest=$(ls -t "$SRC"/include/*.h "$HERE"/win/*.h | head -1)
+newest=$(ls -t "$SRC"/include/*.h "$HERE"/win/*.h | sed -n 1p)   # (not head: under pipefail ls then dies of SIGPIPE, exit 141)
 one() {
     f=$1; o=$OBJ/$(basename "${f%.*}").o
     if [ ! -f "$o" ] || [ "$f" -nt "$o" ] || [ "$newest" -nt "$o" ]; then
