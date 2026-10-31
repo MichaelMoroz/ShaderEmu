@@ -27,7 +27,6 @@ struct BackendOptions {
     unsigned tickRows = 64;       // rows of the 64 texels wide state block that the tick pass draws (16: rvc_opt)
     int readbackBatch = 1;        // D3D11: frames whose rows are read back with one Map (--readback-batch)
     bool stateLog = false;        // D3D12 only: read the CPU's 64 x 64 state texels back every frame (--l1-log)
-    std::string computeShader;    // D3D11 only, --compute: the processor as this compute shader (experiments/rv32_min)
     bool tickDirect = false;      // --unpack-in-place: the unpack draws into the state texture itself, no zone copied in and back (a tick that does not read the texture there)
     bool ramInplace = false;      // D3D11: RAM in one texture written in place, the commit's passes with RAM_INPLACE (src/ram.h)
     bool laneField = false;       // D3D11, RAM in place: the tick has the lanes' field (LANE_FIELD, experiments/rvc_lean; docs/machine/lanes.md)
@@ -112,26 +111,11 @@ public:
     // useTickVariant puts variant i in the tick's place
     virtual bool addTickVariant(const SLShader& shader, std::string& err) { (void)shader; err = "tick variants are D3D11's"; return false; }
     virtual bool useTickVariant(size_t i) { (void)i; return false; }
-    // --compute (experiments/rv32_min/README.md, "The whole machine"): as --cpu, but the processor is
-    // a compute shader with RAM in a buffer of its own on the card. A frame runs one of its passes,
-    // puts the bands of RAM it stored to into the state texture (the commit carries them over as
-    // the processor's), and after the devices' passes takes back what they wrote: the control
-    // words, the picture the commit copied back, the console's, the network's and a fetch's words.
-    bool computeMode = false;
-    uint32_t computeMask = 0xffffffffu;   // the bands that may go into the texture this frame
-    uint32_t computeCores = 1;   // core 0 and the workers: a thread group each (set before computeStart)
-    uint32_t computePasses = 1;  // the processor's passes a frame at most
-    uint32_t computeSplit = 0;
     uint32_t tickRounds = 1;     // the fragment tick: its rounds (a tick and its commit) a frame
     // --unity: a timed frame's whole time on the card (its first query to its last) and its rounds; frameTimes counts them
     double frameMs = -1; uint32_t frameRounds = 0; uint64_t frameTimes = 0;
     size_t frameVariant = 0;     // the tick variant (useTickVariant) of the frame timed last: RVC_TICK_ALT
     uint32_t tickSplit = 0;      // of them the first so many always run, the rest while core 0 rests (0: all)   // of them the first so many always run, a core's at most the frame's instructions over them
-    // Loads <imageDir>/linux_payload.bin into RAM and rootfs.bin as the ROM, and starts the hart.
-    virtual bool computeStart(const std::string& imageDir, std::string& err) { (void)imageDir; err = "--compute is for the D3D11 backend"; return false; }
-    // The processor's words (rv32_min*.hlsl's State), read back now.
-    virtual bool computeState(std::vector<uint32_t>& out) { (void)out; return false; }
-
     virtual ~RvcBackend() {}
     // Creates the device and compiles both passes. Prints its own progress lines.
     virtual bool init(const BackendOptions& opt, const SLShader& shader, Material& mat, std::string& err) = 0;

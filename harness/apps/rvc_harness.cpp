@@ -229,15 +229,11 @@ struct Options {
     bool sbi = false;         // compile with SBI_HLE
     bool cpu = false;         // --cpu: the instructions run on the processor, the devices on the graphics card
     double cpuIps = 0;        // --cpu-ips N: no more than N instructions a second (0: as fast as it goes)
-    std::string compute;      // --compute FILE: the processor as a compute shader, the devices the shader's (experiments/rv32_min)
-    int computeCores = 256;   // --compute-cores N: core 0 and N - 1 workers, a thread group each
-    int computePasses = 0;    // --compute-passes N: the processor's passes a frame at most (0: 4 for the fast shader, else 1)
-    int computeSplit = -1;    // --compute-split F: of them the first F always run, a core's at most --ticks over F (-1: 2 for the fast shader)
     bool ticksSet = false;
     int tickRounds = 1;       // --tick-rounds N: the tick and its commit N times a frame (the fragment machine)
     double unityMs = 0, unityOverMs = 1.4;   // --unity F[,U[,R]]: a world's frame of F ms, U of them Unity's own (below)
     double unityRoundMs = 0;  // R: Unity's CPU a round (its cameras and blits), which the card's time a round cannot go under
-    int tickSplit = 0;        // --tick-split F: of them the first F always run (0: all), the rest while core 0 rests    // --ticks was given (--compute's fast shader then takes 8192 a pass of its split)
+    int tickSplit = 0;        // --tick-split F: of them the first F always run (0: all), the rest while core 0 rests
     bool noGpu = false;       // --no-gpu: leave out the GPU device's passes (gpu.shader)
     bool noSound = false;     // --no-sound: leave out the sound card (sound.shader)
     bool sound = false;       // play the sound card: the terminal mode, or --sound
@@ -342,19 +338,12 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
                        faster; the display, the GPU, the keys and the pointer are the shader's as before
                        (D3D11, the Linux image in build\\images\\linux)
   --cpu-ips N          the same, at no more than N instructions a second (3000000: the world's speed)
-  --compute FILE       the processor as one thread of a compute shader (experiments/rv32_min/README.md,
-                       "The whole machine"): fast or plain for rv32_min_fast.hlsl or rv32_min.hlsl.
-                       A pass a frame; the display, the GPU, sound, keys and pointer as ever
-  --compute-cores N    with --compute: core 0 and N - 1 workers (256; plain has core 0 alone)
-  --compute-passes N   with --compute: the processor's passes a frame at most, before the devices' (fast: 4, plain: 1)
   --tick-rounds N      the tick and its commit N times a frame before the devices' passes (1)
   --unity F[,U[,R]]    run as a world does: the guest's clock F ms a frame, and each frame as many rounds as fit
                        F - U ms on the card (U: Unity's own part of a frame, default 1.4), the devices once a frame;
                        R: Unity's CPU a round in ms (default 0): a frame's rounds cost at least R each
   --tick-split F       of them the first F always run; the others give core 0 the rest of its F x --ticks,
                        and run the workers only while core 0 rests (experiments/rvc_lean: 0, all)
-  --compute-split F    with --compute: the first F of them always run, each core's at most --ticks / F; the rest
-                       only while core 0 rests (fast: 2, and --ticks 16384 unless given)
   --open ADDRESS       tell the guest to open an address, or a file of this computer (file:// and its path);
                        several are told ten seconds apart (docs/system/open.md)
   --open-after TEXT    not before the console has shown TEXT
@@ -563,13 +552,6 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--net-loss") o.netLoss = atof(next("--net-loss").c_str());
         else if (a == "--net-delay") o.netDelay = atof(next("--net-delay").c_str());
         else if (a == "--cpu") o.cpu = true;
-        else if (a == "--compute") {
-            o.compute = next("--compute");
-            if (o.compute == "fast" || o.compute == "plain")
-                o.compute = o.compute == "fast" ? "experiments/rv32_min/rv32_min_fast.hlsl" : "experiments/rv32_min/rv32_min.hlsl";
-        }
-        else if (a == "--compute-cores") o.computeCores = (std::max)(1, (std::min)(256, atoi(next("--compute-cores").c_str())));
-        else if (a == "--compute-passes") o.computePasses = (std::max)(1, (std::min)(64, atoi(next("--compute-passes").c_str())));
         else if (a == "--tick-split") o.tickSplit = (std::max)(0, (std::min)(16, atoi(next("--tick-split").c_str())));
         else if (a == "--unity") {
             std::string v = next("--unity");
@@ -583,7 +565,6 @@ bool parseArgs(int argc, char** argv, Options& o) {
             o.fixedDt = o.unityMs / 1000.0;
         }
         else if (a == "--tick-rounds") o.tickRounds = (std::max)(1, (std::min)(16, atoi(next("--tick-rounds").c_str())));
-        else if (a == "--compute-split") o.computeSplit = (std::max)(0, (std::min)(64, atoi(next("--compute-split").c_str())));
         else if (a == "--cpu-ips") { o.cpu = true; o.cpuIps = atof(next("--cpu-ips").c_str()); }
         else if (a == "--core-pitch" || a == "--small-cores") next(a.c_str());   // (of the layouts before the geometry: taken and ignored)
         else { fprintf(stderr, "unknown option %s\n", a.c_str()); usage(); return false; }
@@ -835,20 +816,20 @@ int main(int argc, char** argv) {
     bool terminalMode = true;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
-        if (a == "--image" || a == "--cpu-ips" || a == "--kernel" || a == "--isa" || a == "--compute" || a == "--compute-cores" || a == "--compute-passes") ++i;
+        if (a == "--image" || a == "--cpu-ips" || a == "--kernel" || a == "--isa") ++i;
         // (--cpu is the same terminal on the interpreter: its desktop and view come up too)
         else if (a != "--resume" && a != "--no-viz" && a != "--dxc" && a != "--d3d11" && a != "--no-desktop" && a != "--cpu") terminalMode = false;
     }
     std::error_code ec;
     bool haveOpt = fs::exists("experiments/rvc_opt/main.shader", ec);
     // (--cpu needs the shader with the GPU device and the display: upstream's has neither)
-    if ((terminalMode || opt.dxc || opt.cpu || !opt.compute.empty()) && !opt.rvcDirSet && haveOpt) opt.rvcDir = "experiments/rvc_opt";
+    if ((terminalMode || opt.dxc || opt.cpu) && !opt.rvcDirSet && haveOpt) opt.rvcDir = "experiments/rvc_opt";
     const char* shellSnap = "build/snapshots/rvc_shell.snap";
     bool canResume = terminalMode && fs::exists(shellSnap, ec);
     // Nothing on the command line says what to boot: ask, if there is someone to ask.
     DWORD conMode = 0;
     bool interactive = opt.readStdin && GetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), &conMode) != 0;
-    if ((opt.cpu || !opt.compute.empty()) && opt.image.empty()) opt.image = "linux-net";   // (the interpreter boots that one: nothing to ask)
+    if (opt.cpu && opt.image.empty()) opt.image = "linux-net";   // (the interpreter boots that one: nothing to ask)
     // Linux is the no-MMU build once it has been made, the MMU one (legacy) only by --kernel mmu
     if (opt.kernel.empty()) {
         opt.kernel = "nommu";
@@ -955,7 +936,7 @@ int main(int argc, char** argv) {
         // The harness's machine: the shader's own write cache (384 texels), and on D3D11 the
         // tick in eight targets, a pixel for every eight texels of state (docs/machine/multicore.md).
         // With the eight targets the machine has all its cores, and so has the interpreter.
-        if (!opt.dxc && !opt.noMrt && !opt.cpu && opt.compute.empty() && !opt.profile && !getenv("RVC11_COMPUTE")) {
+        if (!opt.dxc && !opt.noMrt && !opt.cpu && !opt.profile && !getenv("RVC11_COMPUTE")) {
             opt.defines.push_back("TICK_MRT");
             // (RVC_CORES=N: a machine of fewer cores, to measure what the others cost core 0)
             int cores = getenv("RVC_CORES") ? atoi(getenv("RVC_CORES")) : kCores;
@@ -963,17 +944,6 @@ int main(int argc, char** argv) {
             opt.cores = cores;
         }
         if (opt.cpu) opt.cores = kCores;
-        // (the plain shader is core 0 alone)
-        if (!opt.compute.empty()) opt.cores = opt.compute.find("rv32_min.hlsl") != std::string::npos ? 1 : opt.computeCores;
-        if (!opt.compute.empty()) {
-            // the fast shader: two passes of 8,192 a frame, and up to two more while core 0 rests
-            // (experiments/rv32_min/README.md, "Passes a frame"); the plain one a pass a frame
-            bool plain = opt.compute.find("rv32_min.hlsl") != std::string::npos;
-            if (opt.computePasses == 0) opt.computePasses = plain ? 1 : 4;
-            if (opt.computeSplit < 0) opt.computeSplit = plain ? 0 : 2;
-            opt.computeSplit = (std::min)(opt.computeSplit, opt.computePasses);
-            if (!opt.ticksSet && opt.computeSplit > 0) opt.ticks = 8192 * opt.computeSplit;
-        }
         unsigned ways = 3, tableBits = 6;
         for (auto& d : opt.defines) {
             if (d.rfind("L1_WAYS=", 0) == 0) ways = (unsigned)atoi(d.c_str() + 8);
@@ -988,7 +958,6 @@ int main(int argc, char** argv) {
     bo.dxcOpt = opt.dxcOpt;
     bo.dxcSm = opt.dxcSm;
     bo.dxcDir = opt.dxcDir;
-    bo.computeShader = opt.compute;
     // The GPU device is a second shader next to the CPU's; upstream rvc has none.
     SLShader gpuShader;
     // (a processor folder without devices of its own, experiments/rvc_lean, has experiments/rvc_opt's)
@@ -1023,26 +992,24 @@ int main(int argc, char** argv) {
     }
     // both backends keep two state buffers, which is what lets the commit skip unwritten bands
     if (opt.sbi) opt.defines.push_back("SBI_HLE");
-    if (opt.cpu || !opt.compute.empty()) {
+    if (opt.cpu) {
         // the interpreter has the cores: the shader is one core's, and runs none
-        // (--compute: the control pass reports no cores; the compute shader's sync pass reports its own)
         opt.defines.erase(std::remove_if(opt.defines.begin(), opt.defines.end(), [](const std::string& d) {
             return d.rfind("CORES=", 0) == 0 || d.rfind("CORE_PITCH=", 0) == 0 || d.rfind("MC_", 0) == 0; }), opt.defines.end());
-        if (opt.dxc) { fprintf(stderr, "[harness] --cpu and --compute are for the D3D11 backend\n"); return 2; }
-        if (opt.cpu && !opt.compute.empty()) { fprintf(stderr, "[harness] --cpu or --compute, not both\n"); return 2; }
+        if (opt.dxc) { fprintf(stderr, "[harness] --cpu is for the D3D11 backend\n"); return 2; }
     }
     if (!opt.noBands) opt.defines.push_back("COMMIT_BANDS");
     // RAM in one texture, written in place (src/ram.h): D3D11, with no fill or copy left to the commit
     bool lazyOn = std::find(opt.defines.begin(), opt.defines.end(), "LAZY_MEMOP") != opt.defines.end();
-    // (--compute, and a rvc_lean folder with a commit of its own, keep two state textures: their commits have no
+    // (a rvc_lean folder with a commit of its own, keep two state textures: their commits have no
     // RAM_INPLACE passes; experiments/rvc_lean now takes rvc_opt's commit, whose main.shader brings in src/ram.h)
     bool lean = fs::u8path(opt.rvcDir).filename().u8string().rfind("rvc_lean", 0) == 0;
     std::string shaderText;
     readFileBinary(shaderPath, shaderText);
     bool ownCommit = lean && shaderText.find("ram.h") == std::string::npos;
-    bo.tickDirect = ownCommit && opt.unpackInPlace && opt.compute.empty();
-    bo.laneField = lean && shaderText.find("LANE_FIELD") != std::string::npos && opt.compute.empty() && !opt.cpu;
-    if (!opt.dxc && !opt.pingPong && isOpt(opt.rvcDir) && !ownCommit && opt.compute.empty() && !getenv("RVC11_COMPUTE")) {
+    bo.tickDirect = ownCommit && opt.unpackInPlace;
+    bo.laneField = lean && shaderText.find("LANE_FIELD") != std::string::npos && !opt.cpu;
+    if (!opt.dxc && !opt.pingPong && isOpt(opt.rvcDir) && !ownCommit && !getenv("RVC11_COMPUTE")) {
         if (lazyOn) fprintf(stderr, "[harness] --lazy has two state textures (RAM_INPLACE off)\n");
         else bo.ramInplace = true;
     }
@@ -1063,7 +1030,7 @@ int main(int argc, char** argv) {
     // The WARP stamp: the card runs a processor folder only when its warp_ok holds the
     // hash of its sources (and of the devices' folder), written by tools/test_card.py --warp --mark-ok after WARP
     // passed its cases: a tick the card has never run is checked in software first. --stamp prints the hash.
-    if (opt.compute.empty() && !opt.cpu && (opt.printStamp || !opt.gpu.warp)) {
+    if (!opt.cpu && (opt.printStamp || !opt.gpu.warp)) {
         std::vector<std::pair<std::string, fs::path>> files;
         for (const fs::path& dir : {fs::u8path(opt.rvcDir), deviceDir}) {
             for (auto it = fs::recursive_directory_iterator(dir, ec); !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
@@ -1844,15 +1811,6 @@ int main(int argc, char** argv) {
         }
 
         backend.tickRounds = opt.unityMs > 0 ? (uint32_t)unityRounds : (uint32_t)opt.tickRounds; backend.tickSplit = (uint32_t)opt.tickSplit;   // (--tick-rounds: the fragment tick's rounds a frame)
-        // --compute: the processor's RAM and hart, once the frames that set the state texture up are
-        // over; from then on a frame is a pass of it, and the rest is the harness's as without it
-        if (!opt.compute.empty() && frame >= (uint64_t)opt.initFrames && !backend.computeMode &&
-            ((backend.computeCores = (uint32_t)opt.cores), (backend.computePasses = (uint32_t)(std::max)(1, opt.computePasses)), (backend.computeSplit = (uint32_t)opt.computeSplit),
-             !backend.computeStart(linuxDir(opt), err))) {
-            fprintf(stderr, "[harness] --compute: %s\n", err.c_str());
-            exitCode = 1;
-            break;
-        }
 
         // Feed one input character per handshake.
         if (frame >= (uint64_t)opt.initFrames && sentTag == consumedTag && !cpuRunning) {
@@ -2483,10 +2441,6 @@ int main(int argc, char** argv) {
             (unsigned long long)frame, wall, (unsigned long long)guestInstructions,
             wall > 0 ? guestInstructions / wall / 1000.0 : 0.0, commits,
             untilHit ? ", --until matched" : (exitCode == 3 ? ", --until NOT matched" : ""));
-    std::vector<uint32_t> hart;
-    if (backend.computeMode && backend.computeState(hart))
-        fprintf(stderr, "[harness] the compute processor: pc %08x, privilege %u, %llu instructions in %u passes\n", hart[80], hart[81],
-                (unsigned long long)hart[93] | (unsigned long long)hart[94] << 32, hart[95]);
     if (opt.cores > 1)
         fprintf(stderr, "[harness] %d workers: %llu instructions more, all cores avg %.1fk IPS\n", opt.cores - 1,
                 (unsigned long long)workerInstructions, wall > 0 ? (guestInstructions + workerInstructions) / wall / 1000.0 : 0.0);

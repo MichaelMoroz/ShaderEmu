@@ -1,4 +1,4 @@
-// The no-MMU machine of experiments/rv32_min/rv32_min.hlsl in C#: the reference the Udon
+// The no-MMU machine in C#: the reference the Udon
 // translation is checked against, and the host side (memory, console, clock) both share.
 using System;
 using System.Collections.Generic;

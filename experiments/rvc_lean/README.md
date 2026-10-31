@@ -1,7 +1,7 @@
 # The machine's processor, a shader a draw (an experiment)
 
 `experiments/rvc_opt`'s processor written again, for Linux without an MMU only, in the shape of
-the compute shader `experiments/rv32_min/rv32_min_fast.hlsl`: the tick one file with no includes.
+a compute shader of before: the tick one file with no includes.
 Since 20 October 2026 it runs on `rvc_opt`'s commit, RAM in one texture written in place, and is
 faster than `rvc_opt` ("Faster than rvc_opt", below).
 
@@ -129,8 +129,7 @@ How it got there, from 2 to 6% behind:
 
 ## Measured
 
-On the RTX 5070 laptop, 19 October 2026, D3D11 and fxc2, the four loads of
-`experiments/rv32_min/README.md` ("Measured"): fps or ms, and millions of instructions a second
+On the RTX 5070 laptop, 19 October 2026, D3D11 and fxc2, four loads: fps or ms, and millions of instructions a second
 over the window each measures (all cores, core 0, the workers).
 
 Bytecode (fxc2):
@@ -256,7 +255,7 @@ Quake 10.89 ms against 10.75. Red Alert's 300 frames `ea72a5d1`, fptest 0 of 15 
 clock a tick on for each (`_TimePass`) and the host's zap in the first only. `--tick-split F`: the
 first F always run; a later one gives core 0 what is left of its F x `--ticks` (texel 39.y, its
 instructions in this frame) and draws a worker only when core 0 ended the round before early
-(39.z): what `rvc_harness --compute` does with its passes (`experiments/rv32_min/README.md`), with
+(39.z), with
 no readback, the tick's geometry shader leaving the workers out. Off by default: four rounds with
 one always run made nxray 2.4 times as fast (47.3 to 19.5 ms a picture) and Quake, Quake III and
 Red Alert 5 to 15% slower, a round costing its draws whether anything runs in it or not.
@@ -273,7 +272,7 @@ millions of instructions a second, all cores / core 0 / the workers, over the wi
 | nxray, 60 pictures | 45.3 (183 / 4.5 / 178) | 47.0 (177 / 4.5 / 172) | 20.2 (150 / 3.9 / 146) | 29.9 (296 / 7.2 / 288) | 11.5 (354 / 8.7 / 345) |
 
 (compute now's nxray from a run of the day before that did not meet the compute machine's start
-race: experiments/rv32_min/README.md, "Cores".) `rvc_lean` is `rvc_opt`'s speed to 2 to 6% in this
+race.) `rvc_lean` is `rvc_opt`'s speed to 2 to 6% in this
 round (in the A/B rounds before it, Quake 12.6 to 13.1 against 12.3, Red Alert's 300 frames 19.9
 against 20.5), with two fifths of the tick's bytecode and a sixth of the commit's. The compute
 machine is 1.8 to 2 times either on what core 0 does (measured again with every machine the same

@@ -126,7 +126,7 @@ are now, and in the word at `0x810003cc` how many there could be (256).
 
 Programs do not lay workers out: the `SHAPE` calls of `/dev/gpu` do nothing. The kernel's `workers_layout()` writes every
 core but the first at size 5, in a delayed work of the driver's at boot, or in the first `WORKERS` call if nothing has
-laid them out by then. `geotune`'s layout replaces that where it runs first.
+laid them out by then.
 
 **The tick's geometry shader draws the strips** (`tick_geom` in `main.shader`). The pass is handed a primitive for every
 sixteen cores; the shader reads the geometry and puts out a quad for core 0 and one for each worker that has something to
@@ -170,7 +170,7 @@ next, and a worker wait some passes between tiles.
 
 The geometry is hybrid: workers 1 to 16 big (caches of 2^5 buckets), which keeps a game's few workers at full speed,
 and the rest small (2^3) or, on a card that can run them all, big too. How the small ones' blocks lie in the tick's targets
-depends on the card, and `geotune` measures it at boot. `--define MC_UNIFORM` compiles the uniform geometry.
+depends on the card, and `geotune again` measures it. `--define MC_UNIFORM` compiles the uniform geometry.
 
 **The field.** The geometry's texel (`0x810003d0`) says the rest in `.a`:
 
@@ -190,7 +190,7 @@ same for the control pass, whose count of cores (`0x810003c0`) is what the kerne
 block for is no worker.
 
 **Who sets it.** `geotune` (`linux/userland/geotune.c`), which the init runs before any program asks for workers (the layout
-may only change while every worker is parked). It does nothing if a layout is set already, the kernel's at boot too. It
+may only change while every worker is parked). It does nothing if a layout is set already, the kernel's at boot too, and the kernel's work comes first: at a boot `geotune` says nothing and the workers are alike. `geotune again` lays its own out. On the card (31 October 2026, boots in turn): `media_test` on `play-test.mp3` with 63 workers 4.05 s on the kernel's, 7.23 s on `geotune`'s, `play-test.flac` level at 1.6 s, and `geotune again` itself about 6.5 s. It
 first lays out a geometry that only a tick with `MC_HYBRID` gives 47 cores (small blocks 64 columns wide); one that gives
 every core is a tick without it, and `geotune` leaves the layout to the kernel. Then:
 

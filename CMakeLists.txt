@@ -47,14 +47,9 @@ add_executable(rvc_harness_dxc ${RVC_HARNESS_SOURCES})
 target_compile_definitions(rvc_harness_dxc PRIVATE RVC_DEFAULT_DXC)
 target_link_libraries(rvc_harness_dxc PRIVATE harness_core d3d12 xaudio2)
 
-# The processor alone as one compute shader thread (experiments/rv32_min): the console, no devices.
-add_executable(rvc_compute_harness harness/apps/rvc_compute_harness.cpp harness/apps/run_lock.cpp)
-target_compile_definitions(rvc_compute_harness PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
-target_link_libraries(rvc_compute_harness PRIVATE d3d11 dxgi d3dcompiler)
-
 # The D3D11 compiler is fxc2 (docs/machine/fxc2.md): its d3dcompiler_47.dll beside an executable is the
 # one Windows loads for it. Without it the harness still runs, on FXC, and compiles for minutes.
-foreach(exe rvc_harness rvc_harness_dxc rvc_compute_harness)
+foreach(exe rvc_harness rvc_harness_dxc)
   add_custom_command(TARGET ${exe} POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
     ${CMAKE_SOURCE_DIR}/tools/fxc2/d3dcompiler_47.dll $<TARGET_FILE_DIR:${exe}>)
 endforeach()

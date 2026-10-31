@@ -1,5 +1,5 @@
 // The tick: RV32IMAF for Linux without an MMU, every core of the machine, in one fragment shader
-// (README.md). Written in the shape of experiments/rv32_min/rv32_min_fast.hlsl: one loop that
+// (README.md). Written as one loop that
 // tests the kinds of instruction most common first, arithmetic as one test with the result
 // chosen by selects, one indexed register write; a general step of its own for the rest. The
 // state texture is the machine's as before (docs/machine/multicore.md): RAM from row 64, and in

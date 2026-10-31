@@ -59,7 +59,7 @@ its mix is 64% arithmetic, 17% multiplies (16.16 fixed point), 9% loads, 4% stor
 and the text of programs in the ROM into Udon bytecode, and adds an interpreter written in Udon for
 the rest: the system instructions, code it did not translate, and programs not named.
 `editor/UdonLinux.cs` loads it into the editor's VM and runs it slice by slice with
-`editor/RvRef.cs`'s console and clock; `RvRef.cs` is also the reference (`rv32_min.hlsl` in C#).
+`editor/RvRef.cs`'s console and clock; `RvRef.cs` is also the reference (the no-MMU processor in C#).
 
     python experiments/udon_aot/linux2udon.py IMG/linux_payload.bin OUT [IMG/rootfs.bin /bin/busybox ...]
     UdonAot.UdonLinux.Run(OUT, IMG, "/ # ", 40000, 120.0, "/ # ", "uname -a

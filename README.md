@@ -244,7 +244,7 @@ longer answers: before the first build, `mkdir -p ~/nm/work/src/pathtrace-data` 
   `glxgears`, `programs/mc`: the worker cores' library (`mcw.c`, `mcwx.h`) and its tests,
   `programs/hlsl`: the HLSL compiler, `programs/wl`: the machine's workloads piece by piece.
 - `experiments/` – beside `rvc_opt`: `rvc_lean` (the same processor written again, a shader a draw), and the
-  studies `rv32_min` (a compute shader, with its devices at 0x86000000; it does not run this image), `rvc_compute`,
+  studies `rvc_compute`,
   `isa_proto` and `udon_aot`.
 - `unity/ShaderEmu/` – the VRChat world: UdonSharp scripts, shaders and the editor scripts
   that build the scene.

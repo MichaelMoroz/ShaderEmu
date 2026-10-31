@@ -145,11 +145,6 @@ card against states reached there (card, 26 October 2026): Quake's timedemo 66.3
 held still 19.4 against 19.2. It goes one way only: under `--cpu`,
 `--load-state` still restores only the texture and the processor boots afresh.
 
-`rvc_harness --compute fast` is the same with the processor a compute shader on the card in
-place of this interpreter (`experiments/rv32_min/README.md`, "The whole machine"): core 0 and 255
-workers, a thread group each, RAM in buffers of their own (core 0's and the workers', merged
-after every pass) kept in step with the state texture there.
-
 Not in this mode: D3D12. Sound has not been tried in it.
 The shader's own cores are not used (the cores are the interpreter's), so nothing here says
 anything about the shader machine's passes.
@@ -299,4 +294,4 @@ The card runs a processor folder only when its `warp_ok` holds the folder's stam
 `--mark-ok` writes the stamp when every case passed: `python tools/test_card.py mctest-3 --warp --parts
 --max-wall 240 --mark-ok`. WARP is some 300 thousand instructions a second: `mctest 3` took 313 s in parts on
 28 October 2026 (`steptest` did not end in 240). The stamp is of the sources only: a define (`--define`,
-`--lazy`) is the same tick checked. `--cpu` and `--compute` are not the card's tick and need none.
+`--lazy`) is the same tick checked. `--cpu` is not the card's tick and needs none.
