@@ -9,10 +9,10 @@ function One($name, $tick, $snap, $extra) {
     $flags = @('--d3d11') + $(if ($Warp) { @('--warp') } else { @() }) + @('--rvc', $tick, '--define', 'NO_PAGING', '--image', $Image, '--no-desktop', '--no-viz', '--no-stdin',
         '--load-state', $snap, '--frames', "$Frames", '--stats-after', '0.5', '--frame-log', "logs\fuse_$name.frames") + $extra
     $t = [Diagnostics.Stopwatch]::StartNew()
-    for ($try = 0; $try -lt 120; $try++) {   # (the harness lock refuses a GPU run beside CPU runs of other sessions)
+    for ($try = 0; $try -lt 1500; $try++) {   # (the harness lock refuses a GPU run beside CPU runs of other sessions)
         $o = & pwsh -NoProfile -File tools\gpu_queue.ps1 $Exe @flags 2>&1 | ForEach-Object { "$_" }
         if (-not ($o | Where-Object { $_ -match 'REFUSED by the harness lock' })) { break }
-        Start-Sleep -Seconds 10
+        Start-Sleep -Seconds 2
     }
     $t.Stop()
     $lines = $o | Where-Object { $_ -match '^(STATS|\[harness\] [0-9]+ frames|\[harness\] [0-9]+ workers)|refused|not run on|error|FAILED' }

@@ -1183,6 +1183,7 @@ enum { STEP_ON, STEP_BREAK, STEP_OUT };   // went on; the run of instructions en
 // and c.clock up to date. W: a worker in user mode, whose fence.i ends its pass; else any core.
 template <bool W>
 static __declspec(noinline) int general_step(Core& c, u32 ins) {
+    if ((ins & 3) == 2) ins |= 1;   // (a fused word: experiments/rv_fuse)
     Trap t;
     u32 pc = c.pc;
     if (!W && c.hart == 0 && keep_last) { last_pc[c.clock & 31] = pc; last_ins[c.clock & 31] = ins; }
@@ -1554,6 +1555,8 @@ static void run_edge(Run* R, u32* x, u64 st, u32 ins) {
 }
 
 HANDLER(h_general) {
+    // (a fused word, bit 0 clear: experiments/rv_fuse. Here it is its instruction, and the next word runs by itself)
+    if ((ins & 3) == 2) { ins |= 1; [[msvc::musttail]] return R->table[R->kinds[step_key(ins)]](R, x, st, ins); }
     Core& c = *R->c;
     if (W && (ins == 0x0100000f || ins == 0x00100073)) {   // (neither is counted)
         Worker& w = workers[c.hart];

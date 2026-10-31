@@ -11,17 +11,21 @@ import argparse, os, sys
 import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from second import name, FIRST  # noqa: E402  (its body runs on no folders here)
-from study import kind, load  # noqa: E402
+from study import kind, load, rd  # noqa: E402
 
 HDR, W, ROW0 = 32, 2048, 64
 ARITH = {'addi', 'add', 'sub'}
-SETS = {'addi': {'addi'}, 'arith': ARITH}
+BR = {'b.eq', 'b.ne', 'b.lt', 'b.ge', 'b.ltu', 'b.geu'}
+FADD = 'fadd.s'
+SETS = {'addi': {'addi'}, 'arith': ARITH, 'addbr': ARITH | BR, 'addbrf': ARITH | BR | {'fsimple'}}
 
 ap = argparse.ArgumentParser()
 ap.add_argument('snap')
 ap.add_argument('pcs')
 ap.add_argument('out')
 ap.add_argument('--set', default='addi')
+ap.add_argument('--straddle', action='store_true')
+ap.add_argument('--fp', action='store_true', help='flw, fsw, F ops as first ops')
 ap.add_argument('--min', type=int, default=1, help='fuse only pairs run so many times')
 a = ap.parse_args()
 S = SETS[a.set]
@@ -50,12 +54,16 @@ cands = []
 stale = 0
 for pc, (w, n) in pcs.items():
     if pc < 0x80000000: continue
-    if kind(w) not in FIRST: continue
+    if kind(w) not in ('alui', 'alur', 'load', 'store') + (('flw', 'fsw', 'fp') if a.fp else ()): continue
+    if kind(w) in ('alui', 'alur', 'load') and (w >> 7) & 31 == 0: continue
     if (w & 3) != 3: continue
-    if (pc >> 2) & 3 == 3 or pc & 3: continue
+    if kind(w) == 'fp' and rd(w) < 32: continue   # (a float op's integer result is written after the second op)
+    if ((pc >> 2) & 3 == 3 and not a.straddle) or pc & 3: continue
     nx = pcs.get(pc + 4)
-    if not nx or name(nx[0]) not in S: continue
-    if (nx[0] >> 7) & 31 == 0: continue
+    if not nx: continue
+    nn = 'fsimple' if kind(nx[0]) == 'fp' and (nx[0] >> 25) in (0, 4, 8) else name(nx[0])
+    if nn not in S: continue
+    if (nx[0] >> 7) & 31 == 0 and kind(nx[0]) not in ('branch', 'fp'): continue
     if min(n, nx[1]) < a.min: continue
     cands.append((min(n, nx[1]), pc))
 cands.sort(reverse=True)
