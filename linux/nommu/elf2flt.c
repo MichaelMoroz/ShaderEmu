@@ -10,6 +10,7 @@
 static uint32_t rd(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; }
 static uint16_t rd16(const uint8_t *p) { return p[0] | p[1] << 8; }
 static void wr_be(uint8_t *p, uint32_t v) { p[0] = v >> 24; p[1] = v >> 16; p[2] = v >> 8; p[3] = v; }
+static void wr_le(uint8_t *p, uint32_t v) { p[3] = v >> 24; p[2] = v >> 16; p[1] = v >> 8; p[0] = v; }
 
 static int fail(const char *why) { fprintf(stderr, "elf2flt: %s\n", why); return 1; }
 
@@ -131,14 +132,14 @@ int main(int argc, char **argv)
 			add += rd(s + 4);
 		} else if (kind != 3)
 			return fail("a relocation other than R_RISCV_32, R_RISCV_RELATIVE and R_RISCV_JUMP_SLOT");
-		wr_be(img + off, add);	/* big-endian until relocated */
+		wr_le(img + off, add);
 		rel[nrel++] = off;
 	}
 	/* the loader takes addresses from the end of the 64-byte header, its entry from the file's start */
 	memset(hdr, 0, sizeof hdr);
 	memcpy(hdr, "bFLT", 4);
 	wr_be(hdr + 4, 4), wr_be(hdr + 8, 64 + entry), wr_be(hdr + 12, 64 + data_start), wr_be(hdr + 16, 64 + end_file);
-	wr_be(hdr + 20, 64 + end_mem), wr_be(hdr + 24, stack), wr_be(hdr + 28, 64 + end_file), wr_be(hdr + 32, nrel), wr_be(hdr + 36, 1);
+	wr_be(hdr + 20, 64 + end_mem), wr_be(hdr + 24, stack), wr_be(hdr + 28, 64 + end_file), wr_be(hdr + 32, nrel), wr_be(hdr + 36, 1 | 0x40000000);	/* the relocations in the machine's order: patch_flatreloc.py */
 	if (!(f = fopen(argv[2], "wb")))
 		return fail("cannot write the program");
 	fwrite(hdr, 1, 64, f);
@@ -146,7 +147,7 @@ int main(int argc, char **argv)
 	for (i = 0; i < nrel; i++) {
 		uint8_t b[4];
 
-		wr_be(b, rel[i]);
+		wr_le(b, rel[i]);
 		fwrite(b, 1, 4, f);
 	}
 	if (fclose(f))

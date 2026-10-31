@@ -36,10 +36,13 @@ In WSL, after the MMU build (`linux/kernel/build.sh` and the programs' build scr
   (a program's memory one block of the buddy allocator, freed in aligned blocks),
   `patch_memcpy.py` (no byte loops for misaligned copies; the commit's parallel copy for any
   large copy whose two ends lie alike in a texel), `patch_flatreloc.py` (relocations a
-  word at a time), `patch_sysfs.py` (no sysfs for the boot's slab caches and built-in
+  word at a time, and since 31 October 2026, in a program whose header has flag `0x40000000`, the entries and the words
+  in the machine's order: `elf2bflt.py` and `elf2flt.c` write them so, no byte swap twice a relocation),
+  `patch_romfs.py` (a directory listed where it lies in the ROM, not an entry's three reads), `patch_sysfs.py` (no sysfs for the boot's slab caches and built-in
   parameters: the boot 9.9 to 8.0 million), `patch_zeroread.py` (`/dev/zero` a megabyte a step,
   no fault-in of a write's buffer) and `patch_timekeeping.py` (with one processor the tick
-  advances the timekeeper in place, not a shadow copied whole), and `patch_exitpark.py`. That last
+  advances the timekeeper in place, not a shadow copied whole, and at every 16th tick: readers add
+  the clock's cycles since anyway, and the coarse clocks, a file's date, are a third of a second old at most), and `patch_exitpark.py`. That last
   one calls `shaderemu_gpu_exiting` in `do_exit` before `exit_mm`. It parks a dying program's
   worker cores and its lanes' job, then ends the pass. A worker reads its start word as its pass
   begins, so one already in that pass stores into the program's memory when the pass ends.

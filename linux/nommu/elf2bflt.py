@@ -79,16 +79,18 @@ if dynamic:
                     struct.pack_into('<I', img, r_off, r_add & 0xffffffff)
                     continue
                 r_add += st_value
-            struct.pack_into('>I', img, r_off, r_add & 0xffffffff)   # big-endian until relocated
+            struct.pack_into('<I', img, r_off, r_add & 0xffffffff)
             relocs.append(r_off)
 
 # The loader takes addresses from the end of the 64-byte header: the image follows it, its address 0 there,
 # and the header's offsets are the file's (the image's plus 64).
 H = 0x40
+# (the relocations and the words they name in the machine's order: patch_flatreloc.py; the kernel made a word by four shifts, twice a relocation)
+LE_RELOCS = 0x40000000
 # (but the entry is taken from the file's start, header included)
-hdr = struct.pack('>4sIIIIIIIIII', b'bFLT', 4, H + e_entry, H + data_start, H + end_file, H + end_mem, stack, H + len(img), len(relocs), 1, 0)
+hdr = struct.pack('>4sIIIIIIIIII', b'bFLT', 4, H + e_entry, H + data_start, H + end_file, H + end_mem, stack, H + len(img), len(relocs), 1 | LE_RELOCS, 0)
 out = bytearray(hdr) + bytes(H - len(hdr)) + img
 for r in relocs:
-    out += struct.pack('>I', r)
+    out += struct.pack('<I', r)
 open(sys.argv[2], 'wb').write(out)
 print('%s: text %#x, data %#x..%#x, bss to %#x, %d relocations, entry %#x' % (sys.argv[2], data_start, data_start, end_file, end_mem, len(relocs), e_entry))
