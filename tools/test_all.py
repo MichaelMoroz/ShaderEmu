@@ -448,7 +448,7 @@ CASES = [
          'bridge link; tc -V; rtmon -V',
          has=[r'^Total: \d+', r'^IpInReceives\s+\d+', r'^lo\s+\d+', r'^Name: nlctrl', r'^/proc/net/stat/arp_cache:',
               r'^tc utility, iproute2-6\.16\.0', r'^rtmon utility, iproute2-6\.16\.0']),
-    # the IDE (docs/apps/ide.md, "Testing"): C built, run and debugged, JavaScript run, Python debugged,
+    # the IDE (docs/apps/ide.md, "Checking it"): C built, run and debugged, JavaScript run, Python debugged,
     # each language's problems, the tree only with a project, and the storm of edits taken back
     case('nxide-c', 'desktop ide', X + "NXIDE_PRINT=1 NXIDE_SCRIPT='build wait run wait mark:9 debug over over out into go quit quit' nxide",
          has=[r'^nxide\| 5 squared is 25, and the sum so far 55', r'^nxide: stopped at line 11, in square', r'^nxide: variable: result = 1',

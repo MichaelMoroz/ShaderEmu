@@ -1,5 +1,5 @@
 """rvc_cpu's clock fitted to a card, so that a program's speed is read in seconds and not a card's minutes
-(docs/machine/cpu-harness.md, "A card's clock"). What a program does with the clock changes what it runs, so the model
+(docs/machine/cpu-harness.md, "What it is not"). What a program does with the clock changes what it runs, so the model
 goes into the run (--pass-model), not over its counts.
 
     python tools/calibrate.py card GAME [GAME ...]   the games on the card through game_par.py, once each: build/calibrate/card.jsonl

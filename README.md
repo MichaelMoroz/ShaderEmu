@@ -143,8 +143,8 @@ full passes is about 5.5 million instructions a second.
 | ClassiCube, walking into a hill, 854 x 480 | | 176.2 |
 | the NES, Thwaite, its frames 100 to 1000 (it wants 60) | | 226.8 |
 
-Half-Life and OpenTTD have their own figures, from 31 October 2026: Half-Life's fight on `rvc_cpu`
-15.2 frames a second and walking 26.2 (`docs/games/halflife.md`, "Speed"); OpenTTD on the card under a
+Half-Life and OpenTTD have their own figures, from 31 October 2026: Half-Life's fight, calibrated,
+24.3 frames a second and walking 50.5 (`docs/games/halflife.md`, "Speed"); OpenTTD on the card under a
 VR frame, a played round 10.3 to 11.2 pictures and 2.6 to 2.9 game ticks a second
 (`docs/games/openttd.md`, "Speed on 31 October").
 

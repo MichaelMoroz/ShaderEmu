@@ -105,7 +105,7 @@ public class EmuMachine : UdonSharpBehaviour
     public TextMeshProUGUI workersLabel;
     public float minFrameRate = 45f;   // "steady" gives up instructions before frames come slower than this
     public bool powerOnAtStart;        // off until someone presses Power
-    // A real client's test (docs/system/fetch.md, "In VRChat itself"): with fetchTest on, the
+    // A real client's test (docs/system/fetch.md, "Hosts"): with fetchTest on, the
     // address is loaded as text and as a picture eight seconds after start, and what came is logged.
     public bool fetchTest;
     public VRCUrl fetchTestUrl;
