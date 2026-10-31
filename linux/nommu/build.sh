@@ -9,7 +9,7 @@ export WORK=$NM/work
 L=$NM/logs; mkdir -p "$L"
 # the sources as they are here (the built root stays: setup.sh made it), the toolchain's drivers renamed as setup.sh does
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
-rsync -a --delete --exclude /build --exclude /.git --exclude /experiments --exclude /logs --exclude /unity --exclude /rvc "$REPO/" "$R/"
+rsync -a --delete --exclude /build --exclude /.git --exclude /experiments --exclude /logs --exclude /unity --exclude /rvc --exclude /.claude "$REPO/" "$R/"
 sed -i 's|cat > "\$WORK/bin/rv32-cc" <<EOF|cat > "$WORK/bin/rv32-cc.mmu" <<EOF|; s|chmod +x "\$WORK/bin/rv32-cc"$|chmod +x "$WORK/bin/rv32-cc.mmu"|' "$R/linux/userland/toolchain.sh"
 sed -i 's|cat > "\$WORK/bin/rv32-c++" <<EOF|cat > "$WORK/bin/rv32-c++.mmu" <<EOF|; s|chmod +x "\$WORK/bin/rv32-c++"$|chmod +x "$WORK/bin/rv32-c++.mmu"|' "$R/linux/tdawn/build.sh"
 # the copy's changes for no MMU: Quake III's pools are all memory there, so they are what q3dm17 takes

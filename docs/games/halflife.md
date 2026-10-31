@@ -214,7 +214,9 @@ under `HL_RENDER=core` it and core 0's prediction wrote the same planes (88 undo
 On 21 October 2026 the game died in the Unity world when the elevator took the player from hldemo1 to
 hldemo2. Three things were wrong, each found on `rvc_cpu` with the card's model (the walk's switches,
 `HL_SCRIPT` with `-dev 1`: `ent_fire 1 set origin`, `ent_fire startdometalk_mm use`, the elevator's
-`startele1` used):
+`startele1` used; `ent_fire` wants `+sv_enttools_enable 1`, or the console says `Unknown command: ent_fire`
+and nothing happens, and the player must be inside `hldemo1to2`, as at `-2530 -160 200`: `startele1` opens the
+doors, and used again closes them, which is the change):
 
 - A level that goes waits first for the server's frame, the drawing and every job (`SE_LevelSettle` in
   `rnd_shaderemu.c`, from `COM_Frame` whenever the host's state is not a running frame). Before, the

@@ -11,7 +11,7 @@ mkdir -p "$NM" "$W/bin" "$W/src"
 T0=$(date +%s); step() { echo "== [$(( $(date +%s) - T0 )) s] $*"; }
 
 step "repository copy"
-rsync -a --delete --exclude /build --exclude /.git --exclude /experiments --exclude /logs --exclude /unity --exclude /rvc "$REPO/" "$NM/repo/"
+rsync -a --delete --exclude /build --exclude /.git --exclude /experiments --exclude /logs --exclude /unity --exclude /rvc --exclude /.claude "$REPO/" "$NM/repo/"
 mkdir -p "$NM/repo/build/images/linux"
 rsync -a --delete "$REPO/build/images/linux/root/" "$NM/repo/build/images/linux/root/"
 # the toolchain's own drivers are written under other names: ours below are the ones on the path
