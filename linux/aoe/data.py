@@ -43,7 +43,7 @@ def fetch(cache):
     print('aoe: fetching', url)
     part = exe + '.part'
     try:
-        request = urllib.request.Request(url, headers={'User-Agent': 'ShaderX86 image build'})
+        request = urllib.request.Request(url, headers={'User-Agent': 'ShaderEmu image build'})
         with urllib.request.urlopen(request, timeout=60) as r, open(part, 'wb') as f:
             shutil.copyfileobj(r, f, 1 << 20)
     except OSError as e:
