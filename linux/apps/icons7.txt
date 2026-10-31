@@ -11,6 +11,7 @@ nxcalc                  apps/accessories-calculator
 nxclock                 apps/clock
 nxtetris                actions/games-config-tiles
 nxmine                  actions/games-config-board
+nxchess                 nxchess
 nxpinball               categories/applications-games
 nxeyes                  nxeyes
 glxgears                glxgears

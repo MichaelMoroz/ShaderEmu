@@ -11,6 +11,7 @@ nxcalc                  apps/accessories-calculator
 nxclock                 apps/clock
 nxtetris                apps/quadrapassel apps/gnome-tetravex apps/gnome-sudoku
 nxmine                  apps/gnome-mines apps/mines
+nxchess                 nxchess
 nxpinball               devices/joystick categories/gnome-joystick
 nxeyes                  nxeyes
 glxgears                glxgears

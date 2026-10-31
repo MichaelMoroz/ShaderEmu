@@ -76,6 +76,7 @@ menu lists those with a window; the machine's own reader has these docs at `/usr
 | Doom (`doom`) | Microwindows' port, the level drawn by the GPU, the view made on up to four workers | `docs/games/doom.md` |
 | Tiberian Dawn (`tdawn`) | Vanilla Conquer with the 1995 Command & Conquer demo's missions, the map on the GPU | `docs/games/tdawn.md` |
 | Red Alert (`ralert`) | the same source tree with the 1996 demo's data (a Soviet and an Allied mission), sound and music | `docs/games/ralert.md` |
+| Chess (`nxchess`) | chess in a window, an engine of its own searching on 63 workers | `docs/games/chess.md` |
 | OpenTTD (`openttd`) | OpenTTD 15.3 with the open base sets, the picture on the GPU, viewports on the workers, the game's tick on a worker | `docs/games/openttd.md` |
 | ClassiCube (`classicube`) | the Minecraft Classic client, a world of blocks to dig and build in, chunks kept in GPU memory | `docs/games/classicube.md` |
 | Micropolis (`nxmicropolis`) | the city simulator of 1989 (MicropolisCore's engine) with its cities and scenarios, the map on the GPU | `docs/games/micropolis.md` |
