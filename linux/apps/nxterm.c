@@ -1490,8 +1490,9 @@ feed(const unsigned char *s, int n)
 static void
 resize(int nc, int nr)
 {
-	struct line moved[ROWS_MOST];
+	struct line moved[ROWS_MOST], *main_lines = screens[0];
 	int r, s, n, pull, old_cols = cols;
+	int *main_cy = alt ? &saved[0].cy : &cy;	/* (under a full-screen program the main screen is cut and comes back too) */
 
 	nc = clamp(nc, 2, COLS_MOST), nr = clamp(nr, 1, ROWS_MOST);
 	if (nc == cols && nr == rows)
@@ -1510,31 +1511,31 @@ resize(int nc, int nr)
 			screens[s][r].wrapped = 0;
 		}
 	cols = nc;
-	if (!alt && nr < rows && cy >= nr) {
+	if (nr < rows && *main_cy >= nr) {
 		/* fewer rows: those over the cursor go to be looked back to */
-		n = cy - nr + 1;
+		n = *main_cy - nr + 1;
 		for (r = 0; r < n; r++)
-			keep_line(&scr[r]);
-		memcpy(moved, scr, n * sizeof *moved);
-		memmove(scr, scr + n, (rows - n) * sizeof *moved);
-		memcpy(scr + rows - n, moved, n * sizeof *moved);
-		cy -= n;
-	} else if (!alt && nr > rows && (pull = nr - rows < back_count ? nr - rows : back_count) > 0) {
+			keep_line(&main_lines[r]);
+		memcpy(moved, main_lines, n * sizeof *moved);
+		memmove(main_lines, main_lines + n, (rows - n) * sizeof *moved);
+		memcpy(main_lines + rows - n, moved, n * sizeof *moved);
+		*main_cy -= n;
+	} else if (nr > rows && (pull = nr - rows < back_count ? nr - rows : back_count) > 0) {
 		/* more rows: the last lines looked back to come down onto the screen again */
-		memcpy(moved, scr + rows, pull * sizeof *moved);
-		memmove(scr + pull, scr, rows * sizeof *moved);
-		memcpy(scr, moved, pull * sizeof *moved);
+		memcpy(moved, main_lines + rows, pull * sizeof *moved);
+		memmove(main_lines + pull, main_lines, rows * sizeof *moved);
+		memcpy(main_lines, moved, pull * sizeof *moved);
 		for (r = pull - 1; r >= 0; r--) {
 			struct kept *k = kept_at(back_count - 1);
 
 			n = k->n < cols ? k->n : cols;
-			memcpy(scr[r].c, k->c, n * sizeof(struct cell));
-			blank(scr[r].c + n, cols - n, 0);
-			scr[r].wrapped = k->wrapped;
+			memcpy(main_lines[r].c, k->c, n * sizeof(struct cell));
+			blank(main_lines[r].c + n, cols - n, 0);
+			main_lines[r].wrapped = k->wrapped;
 			free(k);
 			back_count--, back_total--;
 		}
-		cy += pull;
+		cy = alt ? cy : cy + pull;
 		saved[0].cy += pull;
 	}
 	rows = nr;
