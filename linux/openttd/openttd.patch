@@ -657,7 +657,7 @@ index c1de3c5..0832bae 100644
  		this->SetDirty();
  	}};
 diff --git a/src/gfx.cpp b/src/gfx.cpp
-index 2cae30c..c2c9f1e 100644
+index 2cae30c..62d6dd5 100644
 --- a/src/gfx.cpp
 +++ b/src/gfx.cpp
 @@ -29,6 +29,9 @@
@@ -789,7 +789,7 @@ index 2cae30c..c2c9f1e 100644
  	DrawOverlappedWindowForAll(left, top, right, bottom);
  
  	VideoDriver::GetInstance()->MakeDirty(left, top, right - left, bottom - top);
-@@ -1449,15 +1495,36 @@ void RedrawScreenRect(int left, int top, int right, int bottom)
+@@ -1449,15 +1495,48 @@ void RedrawScreenRect(int left, int top, int right, int bottom)
   *
   * @ingroup dirty
   */
@@ -815,12 +815,24 @@ index 2cae30c..c2c9f1e 100644
 +	ViewportKeep keep;
 +#endif
 +	SeDirtyLaterDue(false);
++#ifdef WITH_SHADEREMU
++	/* (the columns and rows anything was marked in, not the whole grid at every picture) */
++	const size_t first_x = _invalid_rect.left >= _invalid_rect.right ? _dirty_blocks_per_row : _invalid_rect.left / DIRTY_BLOCK_WIDTH;
++	const size_t end_x = std::min<size_t>(_dirty_blocks_per_row, CeilDiv(_invalid_rect.right, DIRTY_BLOCK_WIDTH));
++	const size_t first_y = _invalid_rect.top / DIRTY_BLOCK_HEIGHT;
++	const size_t end_y = std::min<size_t>(_dirty_blocks_per_column, CeilDiv(_invalid_rect.bottom, DIRTY_BLOCK_HEIGHT));
++	for (size_t x = first_x; x < end_x; ++x) {
++		auto block = _dirty_blocks.begin() + _dirty_blocks_per_column * x + first_y;
++		auto last_of_column = _dirty_blocks.begin() + _dirty_blocks_per_column * (x + 1);
++		for (size_t y = first_y; y < end_y; ++y, ++block) {
++#else
  	auto block = _dirty_blocks.begin();
  
  	for (size_t x = 0; x < _dirty_blocks_per_row; ++x) {
  		auto last_of_column = block + _dirty_blocks_per_column;
  		for (size_t y = 0; y < _dirty_blocks_per_column; ++y, ++block) {
 -			if (!is_dirty(*block)) continue;
++#endif
 +			if (*block == 0) continue;
 +			/* (blocks of one kind together: a rectangle of DIRTY_VIEW leaves the windows without a view alone) */
 +			const uint8_t kind = *block;
@@ -828,7 +840,7 @@ index 2cae30c..c2c9f1e 100644
  
  			/* First try coalescing downwards */
  			size_t height = std::find_if_not(block + 1, last_of_column, is_dirty) - block;
-@@ -1489,11 +1556,16 @@ void DrawDirtyBlocks()
+@@ -1489,11 +1568,16 @@ void DrawDirtyBlocks()
  			bottom = std::min(_invalid_rect.bottom, bottom);
  
  			if (left < right && top < bottom) {
@@ -845,7 +857,7 @@ index 2cae30c..c2c9f1e 100644
  	++_dirty_block_colour;
  	_invalid_rect.left = _screen.width;
  	_invalid_rect.top = _screen.height;
-@@ -1515,6 +1587,9 @@ void DrawDirtyBlocks()
+@@ -1515,6 +1599,9 @@ void DrawDirtyBlocks()
   */
  void AddDirtyBlock(int left, int top, int right, int bottom)
  {
@@ -855,7 +867,7 @@ index 2cae30c..c2c9f1e 100644
  	if (left < 0) left = 0;
  	if (top < 0) top = 0;
  	if (right > _screen.width) right = _screen.width;
-@@ -1534,12 +1609,98 @@ void AddDirtyBlock(int left, int top, int right, int bottom)
+@@ -1534,12 +1621,98 @@ void AddDirtyBlock(int left, int top, int right, int bottom)
  
  	assert(left < right && height > 0);
  
@@ -954,7 +966,7 @@ index 2cae30c..c2c9f1e 100644
  /**
   * This function mark the whole screen as dirty. This results in repainting
   * the whole screen. Use this with care as this function will break the
-@@ -1548,6 +1709,10 @@ void AddDirtyBlock(int left, int top, int right, int bottom)
+@@ -1548,6 +1721,10 @@ void AddDirtyBlock(int left, int top, int right, int bottom)
   */
  void MarkWholeScreenDirty()
  {

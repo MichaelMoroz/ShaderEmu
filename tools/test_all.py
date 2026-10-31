@@ -246,6 +246,10 @@ CASES = [
          True, wall=400, has=[r'openttd: play round 1: .*checked (19\d|200), 0 differ \(0 pixels']),
     case('openttd-scroll-serial', 'games openttd', X + 'OPENTTD_DRAW=cpu OPENTTD_PLAY=1 OPENTTD_PAUSE=1 OPENTTD_CHECK=1 OPENTTD_WORKERS=0 openttd -g /usr/share/openttd/busy.sav',
          True, wall=400, has=[r'openttd: play round 1: .*checked (19\d|200), 0 differ \(0 pixels']),
+    # windows standing, moved and closed over the view standing still (docs/games/openttd.md, "Windows"), every picture against one drawn whole
+    case('openttd-windows', 'games openttd', X + 'OPENTTD_DRAW=cpu OPENTTD_PLAY=1 OPENTTD_PLAY_PART=window OPENTTD_PLAY_SCENE=many OPENTTD_PLAY_MOVE=1 OPENTTD_PAUSE=1 OPENTTD_CHECK=1 openttd -g /usr/share/openttd/busy.sav; '
+         'OPENTTD_DRAW=cpu OPENTTD_PLAY=1 OPENTTD_PLAY_PART=window OPENTTD_PLAY_SCENE=vehicle OPENTTD_PLAY_MOVE=1 OPENTTD_PAUSE=1 OPENTTD_CHECK=1 openttd -g /usr/share/openttd/busy.sav',
+         True, wall=400, has=[r'openttd: play round 1: .*checked \d+, 0 differ \(0 pixels']),
     # started twice in one boot (docs/games/openttd.md, "At exit"): the first played with its ships' paths made ahead, the
     # second must find its sprites as they are (a worker left running at exit once wrote into the next program's pages)
     case('openttd-twice', 'games openttd', X + 'OPENTTD_PLAY=1 OPENTTD_PLAY_SHORT=1 openttd -g /usr/share/openttd/busy.sav; '

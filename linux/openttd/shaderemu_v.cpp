@@ -985,6 +985,22 @@ static void PlayStep()
 		}
 	}
 	if (f == 305) begin_part("window");
+	/* OPENTTD_PLAY_MOVE=1: at 320 the windows move as a drag moves them, at 340 they close (with OPENTTD_CHECK: each picture so) */
+	static const bool play_move = getenv("OPENTTD_PLAY_MOVE") != nullptr;
+	if (play_move && f == 320) {
+		VpFlushFinish();
+		for (Window *w : Window::Iterate()) {
+			if (w->window_class == WC_MAIN_WINDOW || w->window_class == WC_MAIN_TOOLBAR || w->window_class == WC_STATUS_BAR) continue;
+			w->SetDirty();
+			if (w->viewport != nullptr) w->viewport->left += 40, w->viewport->top += 24;
+			w->left += 40, w->top += 24;
+			w->SetDirty();
+		}
+	}
+	if (play_move && f == 340) {
+		VpFlushFinish();
+		CloseAllNonVitalWindows();
+	}
 	if (f == 199) {
 		begin_part(nullptr);
 		double s = std::chrono::duration<double>(std::chrono::steady_clock::now() - began).count();

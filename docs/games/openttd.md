@@ -267,13 +267,18 @@ instruction of a window's paint is such work. The same view standing still (`OPE
 window class), calibrated (`rvc_cpu --pass-model`), means of rounds 2 to 6 at the 66 ms pace, so pictures a second say little
 here and game ticks a second say what is left:
 
-| Scene | Before: ticks/s, core 0 a picture | After | |
-|---|---|---|---|
-| no window | 5.73, 132k | 6.52, 123k | the status bar's and spilled paints |
-| the finances | 2.89, 218k | 6.03, 138k | |
-| finances, station list, a station, towns | 2.23, 262k | 5.23, 138k | |
-| a train's window following it | 4.83, 169k | 5.82, 154k | |
-| the same, paused | no ticks, 48k | no ticks, 49k | |
+| Scene | Before: ticks/s, held, core 0 a picture, lists a picture | After |
+|---|---|---|
+| no window | 6.15, 31%, 144k, 1.61 | 6.77, 26%, 126k, 1.55 |
+| the finances | 3.16, 60%, 223k, 0.97 | 6.29, 31%, 141k, 1.47 |
+| finances, station list, a station, towns | 2.29, 71%, 268k, 0.84 | 5.48, 33%, 149k, 1.16 |
+| a train's window following it | 5.12, 41%, 177k, 2.03 | 6.18, 33%, 157k, 1.95 |
+| the same, paused | no ticks, 7%, 49k, 0.36 | no ticks, 7%, 46k, 0.37 |
+
+"Held" is the share of the time the tick waits for the first core: a tick's own length goes by the game (106 to 500 ms a tick
+in one run's rounds), so that share says more than ticks a second. Two turns of tree and change gave the same numbers: a run
+of the same image and switches is the same run. Lists rise after because more pictures draw: the view under the windows is drawn
+more often now that the tick moves its vehicles more often.
 
 What it was: none of the suspects of area. A window adds few lists (a list is 0.57 ms, and the fewer main-view pieces under a
 window pay for them) and a view cut round it costs little. It was the strings: formatting and laying out a text is thousands of
@@ -292,6 +297,17 @@ instructions, 120 thousand a paint of the finances, whose money changes at every
 - A vehicle's view (`NWidgetDisplayFlag::NoTransparency`) flushed the kept parts twice at each paint for a transparency that is the same
   unless something transparent is set: not any more then.
 - A number's digits are made in 32 bits once they fit (`FormatNumber`: twenty 64-bit divisions and remainders were most of it).
+- `DrawDirtyBlocks` looks only at the columns and rows of `_invalid_rect`, not the whole grid at every picture.
+
+A following window's cost that is left is its view: a train's boxes in blocks of 64 by 8, old and new, are most of a small
+view at each tick (the workers ran 2.5 times the instructions of no window; the flush 44 ms against 37, and the tick goes on
+in it). Tried: blocks 16 pixels wide, a quarter fewer pixels with the vehicle's window (flush 41 ms to 35), but more rectangles and
+parts, and zoomed out the first core 601k to 694k a picture: not kept. `OPENTTD_WINDOW_MS` 500 instead of 1,000 without the
+16 times: the finances 5.0 game ticks a second against no window's 6.3.
+
+`tools/test_all.py openttd-windows` (`OPENTTD_PLAY_MOVE=1`: moved at picture 20 of the part, closed at 40) checks every picture against
+one drawn whole. Paused captures against the tree on the software device are the same to the pixel with four windows.
+
 
 ## The tick in slices
 
