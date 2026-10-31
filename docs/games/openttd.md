@@ -16,16 +16,16 @@ GPU shows as one quad); sounds are voices of the sound card, and the music is it
     / # OPENTTD_SCROLL=1 OPENTTD_RATE=1 openttd -g      # the map scrolled to and fro, 2 s each way
     / # OPENTTD_PLAY=2 openttd -g /usr/share/openttd/busy.sav   # the play benchmark ("Speed")
 
-    wsl -- bash /mnt/c/.../linux/openttd/build.sh   # after Nano-X's build; the first time builds GCC as well
+    wsl -- bash linux/nommu/build.sh openttd/build.sh   # after Nano-X's build; the first time builds GCC as well
 
-For Linux without an MMU, which the world runs:
-`bash linux/nommu/build.sh openttd/build.sh`, then `root.sh` and `image.py`
-(`docs/system/nommu.md`, "Building it").
+then `root.sh` and `image.py` (`docs/system/nommu.md`, "Building it").
 
 The Start menu has it under Games, the desktop has its icon (upstream's `media/openttd.128.png`,
 `linux/apps/icons/openttd.png`), and a `.sav` file opens in it (`docs/system/open.md`). Its
 settings and saved games are in `/persistence/openttd` (`docs/system/persist.md`), or in `/tmp`
-when there is no such folder.
+when there is no such folder. `OPENTTD_HOST=1` makes the game `-g` starts or loads a server,
+`OPENTTD_JOIN=1` opens the server list at once, and `OPENTTD_HOSTING=FILE` has `openttd` written
+there once the server's game runs (`nxgame`, `docs/system/lan.md`).
 
 ## The compiler
 
@@ -34,70 +34,63 @@ OpenTTD is C++20 and wants the whole of libstdc++: exceptions, run-time types,
 for `riscv32-linux-musl` once (about eight minutes) over the toolchain's binutils and musl,
 with libstdc++ and libatomic (RV32 has no 64-bit atomics). It is position-independent by default
 and has emulated thread-local storage, since a flat program's loader sets up none. Its drivers
-`ottd-cc` and `ottd-c++` link a flat program where the work folder is no-MMU Linux's, a static
-one otherwise, and put `ehframe.c`'s two marks round `.eh_frame` with a constructor that
-registers it: without auxv there is no `PT_GNU_EH_FRAME` for the unwinder to find. The
-binary is 31 MB, its data 21 MB (13 MB of it OpenSFX).
+`ottd-cc` and `ottd-c++` link a flat program where the work folder is no-MMU Linux's, and put
+`ehframe.c`'s two marks round `.eh_frame` with a constructor that registers it: without auxv
+there is no `PT_GNU_EH_FRAME` for the unwinder to find. The binary is 31 MB, its data 21 MB (13 MB
+of it OpenSFX).
 
-It is compiled as one program with a played game's counts (31 October 2026), as Tiberian Dawn's
+It is compiled as one program with a played game's counts, as Tiberian Dawn's
 (`docs/games/tdawn.md`, "The whole program at once", "What the compiler is told"):
 
 - Every global hidden (`nommu_hidden.h` in the drivers, a load from the GOT less at every use).
 - `-flto -flto-partition=1to1 -fno-toplevel-reorder` and larger inlining limits (`OPT` in `build.sh`; `OPENTTD_LTO=off` is
   file by file). What the link compiles reaches no launcher, so the 16 bytes a variable are given by an assembler of the
   game's own (`-B`, `ottd-as/as`, the objcopy after it), and `-fdata-sections` must be on the link's line too: without it
-  the pieces had no variable a section, statics of the tick's and of the first core's lay in one texel, and `RVC_RACES`
-  said 4 and 11 undone (`_tw_tick_time`, `_tw_next`).
+  the pieces have no variable a section, statics of the tick's and of the first core's lie in one texel, and `RVC_RACES`
+  says undone (`_tw_tick_time`, `_tw_next`).
 - `-fprofile-use` with `openttd.profile.gz`; `OPENTTD_PROFILE=off` is without, `=count` builds the counting program in a
   folder of its own. `linux/openttd/counts.py` says how the counts are made and carried out of the machine: played, with the
   drawing on two workers, since stores of many workers to one counter in a pass lose all but one, and a run of the
-  first core's ticks, a new world and the windows. They age gracefully (a function changed since has no counts): make
-  them again after a large change. A compiler without thread-local storage makes `__gcov_indirect_call` a plain global,
-  and every file's destructor calls `__gcov_exit`: `gcov.c` is compiled `-D__thread= -DGCOV_ONCE`, or a run ends with
-  100 MB of counts on the console.
+  first core's ticks, a new world and the windows. A function changed since has no counts: make them again after a large
+  change to the source. A compiler without thread-local storage makes `__gcov_indirect_call` a plain global, and every
+  file's destructor calls `__gcov_exit`: `gcov.c` is compiled `-D__thread= -DGCOV_ONCE`, or a run ends with 100 MB of counts
+  on the console.
 
 The tree in `~/nm/work/src/openttd` with the patch applied gives the patch back: `git diff 15.3`.
-
-Before and after on `rvc_cpu` at 2 MIPS and on the card (`rvc_harness --d3d11 --unity 11.1,1.4,0.75`), the patch of 29
-October against this section with "The first core's small blocks", "The start" and the picture's interval below:
-see "Speed on 31 October".
+`build.sh` puts the tree back from the patch on every build (`OPENTTD_TREE=keep` leaves it as it stands).
 
 ## What the patch changes
 
 `openttd.patch` is applied to the release by `build.sh`, which writes only the files whose text
-changes (a patched header otherwise rebuilt everything: 210 s against 10). With
-`-DSHADEREMU=ON` the build defines `WITH_SHADEREMU`, and the changes are under it but for the
-industry list's sort and seeks inside `RandomAccessFile`'s buffer, which `host_sum.sh`'s build has
-too:
+changes, so a patched header does not rebuild everything. With `-DSHADEREMU=ON` the build defines
+`WITH_SHADEREMU`, and the changes are under it but for the industry list's sort and seeks inside
+`RandomAccessFile`'s buffer, which `host_sum.sh`'s build has too:
 
 - The build takes the video and sound drivers and `mixer_shaderemu.cpp` in place of `mixer.cpp`,
   needs neither SDL nor Allegro, leaves out `extmidi` (it forks a player), and links Nano-X and
-  `gles.o`. `StartNewThread` says no: the game runs on the first core alone.
+  `gles.o`. `StartNewThread` says no: what would be a thread's is done where it is asked for, or
+  handed to a worker core by the port's own code.
 - `null_v.cpp`: with `OPENTTD_SUM` set, a sum over every tile, the random state, the date and
   the companies' money, at the end of a `-v null:ticks=N` run.
-- Defaults: the 8-bit blitter (`support8bpp` hardware), no zoom closer than normal (its sprites
-  are 16 times the pixels), and a map of 64 by 64 for a new game (256 takes some sixteen minutes
-  to make at 2 MIPS).
-- Starting, measured with a one-tick run (`-v null:ticks=1 -g`) from 1.39 billion instructions
-  to 350 million:
+- Defaults: 8-bit hardware (`support8bpp`), no zoom closer than normal (its sprites are 16 times
+  the pixels), and a map of 64 by 64 for a new game (`MAP_SIZE_DEFAULT`).
+- Starting, measured with a one-tick run (`-v null:ticks=1 -g`):
   - The base sets' MD5 sums are not checked (a whole pass over 20 MB).
   - A sprite drawn only at normal zoom, with no closer zoom shown, makes its zoomed-out levels
     from normal and the closest level is only its size; a font's glyph is encoded from its font
-    zoom alone. Making the 4x level of every sprite was a third of a start.
+    zoom alone.
   - `RandomAccessFile` reads 8 KB at a time (each read from the ROM costs some 8,000
     instructions however small), seeks inside what it holds without reading, reads from an
-    8-byte boundary (the kernel copies a misaligned read a byte at a time: 100 million of a
-    start) and has stdio unbuffered under it.
+    8-byte boundary (the kernel copies a misaligned read a byte at a time) and has stdio
+    unbuffered under it.
   - Each base set's sprite offset table is read once, not at every load of the sprites.
   - The industry list is sorted on names made once, not made at every comparison.
   - A river's search marks tiles in a bit a tile, not a hash set (most of making a river).
-  - The title screen's game is `make_title.sh`'s, 64 by 64 with two towns (13.7 KB):
-    upstream's took 226 million instructions to load.
+  - The title screen's game is `make_title.sh`'s, 64 by 64 with two towns (13.7 KB).
 - Without a game thread `GameLoopPause` draws a world being made, once a second: a picture is
-  some 400,000 instructions, and four a second were a third of the making.
-
-- A viewport is drawn by worker cores (below), and a scroll as wide as the screen is
-  one move by the machine's copy (CSRs `0xb0` to `0xb3`, `docs/machine/gpu.md`) in place of a
+  dear against the making.
+- A viewport is drawn by worker cores (below), and with `OPENTTD_DRAW=cpu` a scroll as wide as the
+  screen is one move by the machine's copy (CSRs `0xb0` to `0xb3`, `docs/machine/gpu.md`) in place of a
   `memmove` a row: what wraps round a row's end lands in the strips drawn anew ("Scrolls").
   `OPENTTD_MEMOP=0` moves it row by row, `=check` compares the two at every scroll.
 
@@ -118,11 +111,9 @@ reader of a file given the bytes where they lie), makes the notes and writes the
 and the first core starts the voices when it next looks (`IsSongPlaying`, which says the song
 plays meanwhile). What the worker allocates comes from a heap of 4 MB beside the link graph's
 (`SeWorkerHeap`, `SeWorkerArena` in `linkgraphjob.cpp`; OpenMSX's largest song takes 3.1 MB);
-a song whose heap runs out, or with no workers, is made by the first core as before, and so is
-every song with `OPENTTD_MUSIC=core`. A song was 26 million instructions of the first core's start
-to the game. `OPENTTD_MUSIC_SUM=1` prints each song's sum of its tracks, `=all` every song of the
-set's at the first: the 31 songs of OpenMSX give the same sums on the worker and with
-`OPENTTD_MUSIC=core`.
+a song whose heap runs out, or with no workers, is made by the first core, and so is every song
+with `OPENTTD_MUSIC=core`. `OPENTTD_MUSIC_SUM=1` prints each song's sum of its tracks, `=all` every
+song of the set's at the first: the sums on the worker and with `OPENTTD_MUSIC=core` must be the same.
 
 ## The viewport on worker cores
 
@@ -136,16 +127,14 @@ finds, sorts and draws pieces (`mcw_for`, the dearest first):
 
 - A piece costs (width + 4) x (height + 4) + 240, in pixels at normal zoom: the tiles round it
   that draw nothing in it are passed over by their reach ("A tile's reach"), and the 240 is its
-  tiles passed and its sprites sorted (fitted to `OPENTTD_PIECE_LOG`'s pieces, spent about 12k
-  instructions + 50 a pixel; `OPENTTD_CUT_M=4,4,240` changes the three). The dearest piece of the
-  flush is cut again, in columns or in rows, while the flush gets no longer (a tie is cut), the
-  flush being its dearest piece or all the work over the cores, and never into more pieces than
-  workers (a second wave cost as much as the first). A strip a scroll exposed, 24 pixels by 458,
-  is so cut in rows. Parts of the sizes of one of the last 16 flushes' are cut as they were.
+  tiles passed and its sprites sorted (fitted to `OPENTTD_PIECE_LOG`'s pieces; `OPENTTD_CUT_M=4,4,240`
+  changes the three). Each part gets its share of the cores by its cost and is cut in the columns
+  and rows that make its pieces cheapest, a column at least 16 pixels and a row at least 8, so a
+  strip a scroll exposed, 24 pixels by 458, is cut in rows. `OPENTTD_CUT_GREEDY=1` cuts the dearest
+  piece again while that shortens the flush, and remembers the cuts of the last 16 flushes' sizes.
 - A piece is drawn into a buffer of its own (copied from the screen first); then all cores copy
-  the buffers to the screen by 16 rows each, so no two write the same 16 bytes in a pass. Before,
-  pieces of two parts that shared 16 bytes of the screen were one core's, and a chain of them
-  (parts cut round a window) was a third of a flush.
+  the buffers to the screen by 16 rows each, so no two write the same 16 bytes in a pass. Under
+  the GPU's blitter a piece is records instead ("The picture on the GPU").
 - Each core has its own drawer (`_vd`), `_cur_dpi`, `_cur_ti`, colour remaps and NewGRF
   registers; `VpCore()` tells the cores by their stack (`gfx_func.h`).
 - A worker may not allocate: its lists get room before a round (`_vp_room`), and one that fills
@@ -154,32 +143,34 @@ finds, sorts and draws pieces (`mcw_for`, the dearest first):
   the workers; given up twice, by the first core. It may resolve canals and rivers (OpenTTD's own
   water sprites are a NewGRF's: `WorkerSafe`), no other NewGRF chain. A vehicle's sprites made
   anew when drawn and its colour map, which it keeps, are made by the first core over the whole
-  part before the round (`ViewportRevalidateVehicles`).
+  part before the round (`ViewportRevalidateVehicles`): two workers drawing one vehicle would both
+  write its colour map.
 - Signs, text effects, the cargo overlay and strings are the first core's, after the copy.
+- `GetRawSprite` of a loaded sprite saves nothing and tests the stacks once, a parent sprite is not
+  cleared before all its fields are set, and `ViewportAddLandscape` asks once a part whether any
+  selection or highlight exists, not `DrawTileSelection` at each tile.
 
-`OPENTTD_WORKERS=N` asks for N workers (31 by default, `VP_CORES` - 1; 0 draws as upstream).
-`RVC_RACES` over two rounds of the play script (below): 0 undone; the reads as they were are the
-team's round word. Before the colour maps were made first, two workers drawing one vehicle
-both wrote its colour map (29 undone).
+`OPENTTD_WORKERS=N` asks for N workers (47 by default, at most `VP_CORES` - 1; 0 draws as upstream):
+more than the default cost the first core more a round than their pieces give back.
+`RVC_RACES` over two rounds of the play script: 0 undone; the reads as they were are a core waiting on
+another's word.
 
 ### Lines left behind
 
 The blitter rounds a sprite's ends up to whole pixels, so a sprite whose box ends up to two
-pixels before a part's top or left still draws its last row or column in it, but
-`AddSortableSpriteToDraw`, `AddCombinedSprite` and `ViewportAddVehicles` dropped it: the part
-showed a row of pixels missing where it met the next. Upstream's dirty rectangles meet where they
-meet; bands of rows cut every scrolled strip, so the rows lined up across the screen as it
-scrolled. They now keep a sprite ending up to 2 x (`ScaleByZoom(1)` - 1) before the part. A
-parent sprite outside the part was dropped with its children, which can draw in it: a parent is
-kept within 128 pixels (`VP_REACH`; children reach up to 68 in the play script) and dropped at the sort
-when it and its children miss the part.
+pixels before a part's top or left still draws its last row or column in it. Upstream's dirty
+rectangles meet where they meet, but bands of rows cut every scrolled strip, and a row missing
+where parts meet would line up across the screen as it scrolls. So `AddSortableSpriteToDraw`,
+`AddCombinedSprite` and `ViewportAddVehicles` keep a sprite ending up to 2 x (`ScaleByZoom(1)` - 1)
+before the part. A parent sprite outside the part can have children that draw in it: a parent is
+kept within 128 pixels (`VP_REACH`) and dropped at the sort when it and its children miss the part.
 
 ### A tile's reach
 
 A part is drawn by visiting every tile whose sprites could reach into it: upstream looks 250
 pixels below the part for buildings and the highest bridge the settings allow, and as far to the
-sides, so a strip of 24 pixels a scroll exposed passed many more tiles than drew in it.
-Each tile now has its reach at each zoom, in three bytes (how far its sprites, what was culled of
+sides, so a strip of 24 pixels a scroll exposed would pass many more tiles than draw in it.
+Each tile has its reach at each zoom, in three bytes (how far its sprites, what was culled of
 them too, end above its north corner, to its left and to its right, in steps of 8), learned when
 it is drawn (`VpReachLearn`, a worker's sent to the first core with its piece) and forgotten when
 the tile is marked dirty (`MarkTileDirtyByTile`, all of them in `MarkWholeScreenDirty`). A tile
@@ -193,26 +184,25 @@ the highest one could build.
 Upstream's sorter orders two sprites by the others of the rectangle drawn: it compares every two
 whose boxes do not lie apart, takes them in the order the tiles were visited, and two whose boxes
 lie apart on two axes the opposite way round (one behind on x, the other on y) are in no order of
-their own. A scrolled strip and the whole screen sorted the same two sprites differently: single
-pixels apart, 96 in the scroll part on the first core alone, 904 on workers. The sort
-(`ViewportSortParentSpritesKept`) is upstream's search with three changes: the sprites are first
-put in an order of their own (by x + y of the box, then the rest of it and the sprite), only two
-that meet on the screen (with their children, two pixels wider) are compared, and the shortcut for
-a sprite with one before it is gone. Breaking upstream's "no order" by a key of each sprite made
-it worse (cycles: a pole above and behind a wagon by the key, the wagon under a roof under the
-pole by the boxes, and the cycle broken differently in each part). In the checks below every
-picture is now the same as one drawn whole; it is not proved for every scene: three sprites whose
-boxes order them round in a circle can still come out by the part.
+their own. Under it a scrolled strip and the whole screen sort the same two sprites differently.
+The sort (`ViewportSortParentSpritesKept`) is upstream's search with three changes: the sprites
+are first put in an order of their own (by x + y of the box, then the rest of it and the sprite),
+only two that meet on the screen (with their children, two pixels wider) are compared, and the
+shortcut for a sprite with one before it is gone. Do not break upstream's "no order" by a key of each
+sprite: that makes cycles, broken differently in each part. In the checks below every picture is the
+same as one drawn whole; it is not proved for every scene: three sprites whose boxes order them round
+in a circle can still come out by the part.
 
 ### Scrolls
 
+Under the GPU's blitter a scroll is a record ("The picture on the GPU"), and no pixel is moved by the
+processor. This section is `OPENTTD_DRAW=cpu`'s.
+
 The machine's copy writes whole texels of the destination from words of the source
-(`harness/apps/rvc_cpu.cpp`, `memop`): a move by a number of bytes not a multiple of 4 came out
-shifted, a pixel in four. The play script scrolls by 24 and 16 pixels; when the view stopped
-following a train it jumped by whatever it took (609 by -209 in one run), and the part the jump
-kept was a pixel off (6,000 to 16,000 pixels, once in a few runs). A move now is row by row unless
-it is whole words, and the copy is of the destination's whole texels, the ends by the processor.
-`OPENTTD_PLAY_ODD=1` makes the play script's way back a pixel longer a step, an odd move.
+(`harness/apps/rvc_cpu.cpp`, `memop`), so a move by a number of bytes not a multiple of 4 would come
+out shifted, a pixel in four. A move is row by row unless it is whole words, and the copy is of the
+destination's whole texels, the ends by the processor. `OPENTTD_PLAY_ODD=1` makes the play script's
+way back a pixel longer a step, an odd move.
 
 A scroll costs what it exposes:
 
@@ -220,13 +210,11 @@ A scroll costs what it exposes:
   the workers copy them back moved (`MoveOdd`), and the first core goes on to find what the
   scroll exposed. `ScrollSettle()` waits for it before anything reads or writes the screen: the
   pieces' round of a flush, `GfxScroll`, the mouse pointer undrawn, a move as a block, another
-  move, the end of `UpdateWindows`' keep. In the scroll a move is 7.6 ms a picture, 2.4 of it the
-  first core's own.
-- A view narrower than the screen (a vehicle's window following it) moved row by row on the
-  first core, 286k instructions a scroll; its rows are now copied aside and moved back by the
-  workers, 4 rows a job (`MoveRows`).
+  move, the end of `UpdateWindows`' keep.
+- A view narrower than the screen (a vehicle's window following it) has its rows copied aside and
+  moved back by the workers, 4 rows a job (`MoveRows`).
 - A kept part wholly inside the scrolled rectangle, before and after the move, moves with it
-  (`ViewportScrollKept`); any other kept part flushes first, as before.
+  (`ViewportScrollKept`); any other kept part flushes first.
 
 ### Checking a picture
 
@@ -236,35 +224,24 @@ where, and the longest line of them in a row or a column; `=keep` shows the pict
 errors kept, `=list` names the first differing pixels with both colours. `OPENTTD_HOLD=N|bad|big`
 stops at picture N of the play script, at the first that differs or the first by over 1,000
 pixels, and says where both pictures are in memory (`rvc_cpu --save-ram`). The round's line says
-how many differ. Over the paused play script (`OPENTTD_PAUSE=1`, which draws the screen again
-for the status bar's "paused"):
+how many differ; the program's first picture, before the play script, is no fault of it.
+`OPENTTD_PAUSE=1` pauses the game, which draws the screen again for the status bar's "paused".
 
-| | Pictures differing, pixels |
-|---|---|
-| upstream's sort, 31 workers (20 October) | 127 of 132, 27,323 |
-| upstream's sort, the first core alone | 74 of 132, 1,855 |
-| one order, 31 workers or the first core alone, `OPENTTD_PLAY_ODD` too | 0 of 199, 0 |
-| one order, the card (`rvc_harness --d3d11`, `rvc_lean`, the scroll part, odd way back) | 0 of 60 |
+`tools/test_all.py openttd-scroll` (with workers and the odd way back, 198 pictures checked on
+31 October 2026) and `openttd-scroll-serial` (the first core alone, 199) run it and want 0 pixels.
 
-`tools/test_all.py openttd-scroll` (with workers and the odd way back) and `openttd-scroll-serial`
-(the first core alone) run it and want 0 pixels.
-
-When the windows closed, station names could stay on the screen with workers (3,814 pixels, in
-`=keep` to the end of the script): the closed windows' rectangles were kept, the view then jumped
-too far to scroll, and the whole view drawn again was kept over them in the same flush; the
-pieces of both were copied out, then the texts of both, the old rectangles' station names last.
-A part asked for over a kept one of another view, or of the same view moved since, now flushes
-first (`ViewportKept`), as upstream draws one after the other; over one of the same view, only
-what the kept one does not cover is kept (`OPENTTD_KEEP_FLUSH=1`: always flushed). Taking that
-from a vehicle's window over the main view lost the window's view where the two met, 67,557
-pixels at the windows' opening.
+A part asked for over a kept one of another view, or of the same view moved since, flushes first
+(`ViewportKept`), as upstream draws one after the other: the pieces of both would be copied out, then
+the texts of both, and the old rectangles' station names would come last. Over one of the same view,
+only what the kept one does not cover is kept (`OPENTTD_KEEP_FLUSH=1`: always flushed). A vehicle's
+window over the main view must not take that way, or the window's view is lost where the two meet.
 
 ## Windows
 
 An open window cost the game its tick: the tick waits while the first core works on a picture (`TwHold`), and every
 instruction of a window's paint is such work. The same view standing still (`OPENTTD_PLAY_PART=window`,
 `OPENTTD_PLAY_SCENE=none|one|many|vehicle`, `OPENTTD_PAUSE=1` for a paused one; `OPENTTD_PLAY_WHO=1` prints the paints by
-window class), calibrated (`rvc_cpu --pass-model`), means of rounds 2 to 6 at the 66 ms pace, so pictures a second say little
+window class), calibrated, 31 October 2026 (`rvc_cpu --pass-model`), means of rounds 2 to 6 at the 66 ms pace, so pictures a second say little
 here and game ticks a second say what is left:
 
 | Scene | Before: ticks/s, held, core 0 a picture, lists a picture | After |
@@ -308,38 +285,31 @@ parts, and zoomed out the first core 601k to 694k a picture: not kept. `OPENTTD_
 `tools/test_all.py openttd-windows` (`OPENTTD_PLAY_MOVE=1`: moved at picture 20 of the part, closed at 40) checks every picture against
 one drawn whole. Paused captures against the tree on the software device are the same to the pixel with four windows.
 
-
 ## The tick in slices
 
-A game tick of `busy.sav` is 1.2 to 1.7 million instructions of the first core, most of a second
-at 2 MIPS, and upstream's loop draws only between ticks: a scroll showed a picture a tick. The
-tick (`::GameLoop`) now runs on a stack of its own on the first core (`ottd_tick_swap`,
-`shaderemu_v.cpp`) and gives way at `TickYieldPoint()` once its slice of a picture is spent: in
+`OPENTTD_TICK=slices` runs the tick on the first core, on a stack of its own (`ottd_tick_swap`,
+`shaderemu_v.cpp`): it gives way at `TickYieldPoint()` once its slice of a picture is spent, in
 the vehicles' loop, between a train's two handler calls and its steps, at every step of YAPF's
 search, in the loading of a station's vehicles and in the landscape's tile loop. The slice is
 what the last pictures left of 100 ms (`OPENTTD_FRAME_MS`), at least 10 ms (`OPENTTD_TICK_LEAST`),
 less how far slices ran past theirs, all in the machine's 5 kHz time (`VpTime`; the clock's is
 too coarse). The drawing between two slices changes no game state; the company is the drawing's
 while the tick is out, and a command or a save first finishes the tick (a world being made does
-not give way).
-`OPENTTD_TICK=whole` is upstream's, every tick at once.
-
-The game is the same: `OPENTTD_SUM_AT=N` sums the map and every vehicle at the end of tick N, and
-the play script's follow part gives the same (`240cf69c`, 837 vehicles, `892eac93`) whole and
-sliced. The price is the game's own speed: while the picture is dear, as in a scroll, a tick is
-spread over some 60 pictures, so the game runs at about a sixtieth of its speed until the view
-stops moving. `OPENTTD_TICK=slices` is this way now; by default the tick is on a worker.
+not give way). `OPENTTD_TICK=whole` is upstream's, every tick at once. Slices are the way when no
+worker is free for the tick; by default the tick is on a worker.
 
 ## The tick on a worker
 
-The tick runs on a worker core of its own (`shaderemu_t.cpp`), on a stack and a 16 MB heap of
-its own, while the first core draws. It waits where the first core holds it (`TwHold`): while
-the first core reads the input, runs commands and the windows' timers, and finds the viewports'
-parts; it runs while the pieces are drawn and between two pictures. Whatever of the window
-system it would touch is left for the first core (`TickDeferTask`), and what the viewports draw
-of a vehicle is a copy (`Vehicle::drawn`) made at the first core's sync for every vehicle the
-tick said it changed (`VehicleChanged`, from `UpdateViewport` and `MarkAllViewportsDirty`). A
-delete the drawing could be reading waits until no worker draws (`TickExclusive`).
+The tick runs on a worker core of its own (`shaderemu_t.cpp`), on a stack and a heap of its own
+(4 MB, `OPENTTD_TICK_HEAP`; more comes from the first core) while the first core draws. It waits where
+the first core holds it (`TwHold`): while the first core reads the input, runs commands and the
+windows' timers, and finds the viewports' parts; it runs while the pieces are drawn and between two
+pictures. Whatever of the window system it would touch is left for the first core (`TickDeferTask`),
+and what the viewports draw of a vehicle is a copy (`Vehicle::drawn`) made at the first core's sync for
+every vehicle the tick said it changed (`VehicleChanged`, from `UpdateViewport` and
+`MarkAllViewportsDirty`). A delete the drawing could be reading waits until no worker draws
+(`TickExclusive`). `OPENTTD_TRAPS=1` lists at the end where the tick reached what only the first core
+may use.
 
 - Its pictures overlap with the tick: a picture's last flush is left out (`VpFlushOut`) and the
   next picture's input, commands and timers run while the workers draw its pieces; the pieces
@@ -349,25 +319,19 @@ delete the drawing could be reading waits until no worker draws (`TickExclusive`
   (`VpFlushFinish`: a command, the pointer, a sprite cache's deletes, a check). `OPENTTD_PIPE=0`
   waits for the pieces at the flush.
 - While it scrolls, the ticks are spaced out to keep the picture's work at 90 ms
-  (`OPENTTD_PACE_MS`): every tick costs the first core its sync, about 370 instructions a vehicle
-  moved, and the windows its texts and the status bar change; while pictures are late the space
-  starts at half a second and grows by a quarter a picture, to a tick a second at most
-  (`OPENTTD_PACE`, 0 never), and is gone eight pictures after the view stops (`OPENTTD_PACE_LOG=1`
-  prints it). It grew from 200 ms by an eighth before the link graph and the ships' paths left the
-  tick: the tick a third cheaper then filled that ramp with twice the ticks while zoomed out, every
-  tick's moves parts drawn again, and the card's played zoomed out fell from 1.84 pictures a second
-  to 1.47 (at once to the most: 1.86, but 1.20 ticks a second against 1.26 before).
-- A loaded game has none of its water regions, and each ship's first path made the regions it
-  crossed one by one in the tick, half a million instructions each: ticks of 10 s and more in the
-  first minute of `busy.sav`. They are all made at the start, one a job on the workers
+  (`OPENTTD_PACE_MS`): every tick costs the first core its sync, and the windows its texts and the
+  status bar change. While pictures are late the space starts at half a second and grows by a quarter a
+  picture, to a tick a second at most (`OPENTTD_PACE`, 0 never), and is gone eight pictures after the
+  view stops (`OPENTTD_PACE_LOG=1` prints it; `OPENTTD_TICK_MS=N` is no more than a tick every N ms).
+  The ramp starts high and steep since a slower one fills up with ticks while zoomed out, every tick's
+  moves being parts drawn again.
+- A loaded game has none of its water regions: they are all made at the start, one a job on the workers
   (`WaterRegionsMakeAll`; the labelling into `WaterRegionMade`, kept by the first core).
-- 47 workers by default (`OPENTTD_WORKERS`): 127 cost the first core more a round than their
-  pieces gave back (12.95 pictures a second paused against 13.9).
 
 The game is the same: `OPENTTD_SUM_AT=36` on the scroll gives `d4e04e63`, 846 vehicles,
 `26aae0d5` on the worker, whole and sliced (`OPENTTD_TICK_LEAST=300` for slices that end ticks).
 `OPENTTD_CHECK=1` is 0 pixels paused; with the game running a sprite of a ship (z 56, an aqueduct's
-height) differs now and then from the picture drawn whole, with the worker's flush and without it
+height) can differ from the picture drawn whole, with the worker's flush and without it
 (`OPENTTD_PIPE=0`), and every vehicle's copy is as it is: three boxes in a circle ("One order").
 
 ## The picture on the GPU
@@ -405,33 +369,10 @@ rectangle that upstream leaves as they were: compare with `OPENTTD_DRAW=cpu OPEN
 `rvc_harness --cpu` the GPU reads RAM that the processor wrote outside the GPU's memory only every 0.25
 s: run with `--cpu-fresh`.
 
-Checked (29 October 2026): `OPENTTD_PLAY_SHORT=1 OPENTTD_PLAY_ODD=1 OPENTTD_PAUSE=1 OPENTTD_CHECK=1` under
-`rvc_harness --cpu --warp --cpu-fresh` checked 70 pictures, 0 differ; the 200 pictures' sums of the paused
-script with `OPENTTD_PLAY_JUMP=1` are the 8-bit blitter's but for picture 113, which shows picture 114's
-window a picture early in both GPU runs (a window that is drawn again by the wall's time: WARP's pictures are
-slower). `tools/test_all.py openttd-gpu --races`: 0 undone.
-
-On the card (`tools/rv_compare`, `rvc_harness --d3d11 --unity 11.1,1.4,0.75`, two rounds alternating; GPU
-and CPU are the same binary and image, `OPENTTD_DRAW=cpu` the second; "after" the frozen image of
-`build/after`):
-
-| Part | GPU | CPU | after |
-|---|---|---|---|
-| `openttd` (paused): scroll, pictures/s | 3.46, 3.21 | 2.50, 2.57 | 3.19, 3.21, 3.22 |
-| zoomed out, pictures/s | 2.36, 2.49 | 2.23, 2.35 | 2.33, 2.25, 2.21 |
-| windows, pictures/s | 20.0, 26.2 | 20.3, 17.7 | 17.9, 18.1, 18.0 |
-| start to the game, s | 59.9, 59.7 | 61.7, 61.5 | 95.1 |
-| `openttd-play` (played): game ticks/s | 1.26, 1.26 | 1.16, 1.15 | 1.05, 1.05 |
-| scroll, pictures/s | 1.06, 1.05 | 1.02, 1.02 | 1.08, 1.09 |
-| zoomed out, pictures/s | 1.23, 1.23 | 1.15, 1.15 | 1.02, 1.02 |
-| windows, pictures/s | 1.59, 1.58 | 1.34, 1.33 | - |
-| `openttd-title`: title frames/s | 33.1, 33.3 | 28.3, 28.7 | 27.1, 27.4 |
-| start to the title drawn, s | 44.4, 44.1 | 46.2, 46.3 | 58.1 |
-
-The CPU column is slower than the image of 28 October 23:58 (`rvc_cpu`, the paused short script: 1.62
-pictures a second against 3.77), a loss of the CPU's path in the same commits. A played picture is about
-half the game's tick on the first core (three ships' path searches that rebuilt water regions were 30% of
-it, `RVC_PROF`) and collecting the viewport's sprites; the GPU's records are some 5% of the first core.
+The check: `OPENTTD_PLAY_SHORT=1 OPENTTD_PLAY_ODD=1 OPENTTD_PAUSE=1 OPENTTD_CHECK=1` under
+`rvc_harness --cpu --warp --cpu-fresh`, 0 differ; a window drawn again by the wall's time can come a
+picture early under WARP against the 8-bit blitter's sums. `tools/test_all.py openttd-gpu --races`: 0 undone.
+Calibrated (31 October 2026, the play benchmark, alternating), the two blitters are within the model's 7%.
 
 ## Is it the same game
 
@@ -446,201 +387,160 @@ its sums (`tools/test_all.py`, case `openttd`):
 
 ## Speed
 
-At 2 MIPS on the desktop (`rvc_harness --cpu --cpu-ips 2000000`): the window says "Loading
-OpenTTD..." until the title screen is up, some 85 seconds after the program starts, and Generate
-makes a world of 64 by 64 in about 50 seconds, its progress drawn once a second (its Abort
-button is not read meanwhile). A game on that map then runs at full speed, every game tick it
-asks for, with 28 pictures a second; zoomed all the
-way out about 20. Making a world of 128 by 128 takes about four times as long, 256 by 256 sixteen.
-
 Play is measured on upstream's title game (`busy.sav`: towns, trains, ships and canals) with
 `OPENTTD_PLAY=N`: a script of 200 pictures run N times, the same views at any speed, the game
 running: 60 scrolling, 50 zoomed out twice and scrolling, 60 with three trains' and a station's
 windows open and the view following a train, 29 after they close. Each part prints its pictures
-a second; the first round warms the sprite cache, the second is the one read. The autosave is
-off under it (one is 358 million instructions of LZMA, a third of a round where it fell).
-`rvc_cpu --ips 2000000`, the second of two rounds, seconds of the machine's time:
+a second, and what those were spent on; the first round warms the sprite cache, the second is the
+one read. The autosave is off under it (one is minutes of LZMA at 2 MIPS, in whichever part it falls).
+`OPENTTD_PLAY_PART=scroll` is the script's 60 scrolling pictures alone, `follow` its 60 with the
+windows and the view following a train; `OPENTTD_PLAY_SHORT=1` is 30 of the scroll's pictures, 20
+zoomed out and 20 with the windows, for one round on the card, with the sprite cache cold;
+`OPENTTD_PAUSE=1` pauses the game.
 
-| Part | Upstream's drawing | Viewport on 31 workers |
-|---|---|---|
-| scroll, 60 pictures | 116.2 (0.52 a second) | 73.0 (0.82) |
-| zoomed out, 50 | 352.8 (0.14) | 109.1 (0.46) |
-| windows, 60 | 251.3 (0.24) | 149.5 (0.40) |
-| windows closed, 29 | 37.4 (0.78) | 37.3 (0.78) |
-| the round, 200 | 757.8 (0.26) | 368.9 (0.54) |
+Calibrated, 31 October 2026 (`rvc_cpu --pass-model` with `tools/card_model.json`, `RVC_SOUND`, `RVC_WCACHE`, `RVC_ADFAULT`,
+two runs alike, `OPENTTD_PLAY=2`, the second round; another run of the same command gave 11.6 a round). The model is good to
+about 7% and rests on one program for its workers' term, so it says most of the shares, and the card's figures below are
+the speed:
 
-The first core's instructions in the round went from 1,361 million to 550 million, all cores'
-from 1,613 to 2,232 million. On the way: whole pieces on 7 workers 619 s, canals on workers 543,
-15 workers 484, columns and rows cut together 418, 31 workers 384; the parts of a picture flushed
-together with pieces sharing 16 bytes one core's 411, in buffers of their own 347; one order,
-parents kept within a reach and a part over a kept one flushing first 368.9 (21 October).
-What is left of the first core's (`RVC_PROF`, the same two rounds): the game's tick, 0.98 million
-instructions a tick (vehicles' ticks 0.92), is 36%; the windows' widgets and texts 14%; keeping,
-cutting and flushing the viewport's parts and waiting for the workers, with the scrolls'
-copies, most of the rest of `UpdateWindows`' 45%.
-
-On the card the whole round does not fit a run of five minutes. `OPENTTD_PLAY_SHORT=1` is 30 of the
-scroll's pictures, 20 zoomed out and 20 with the windows; one round, the sprite cache cold, so the
-first pictures load sprites. Upstream's drawing (the patch before the viewport on workers, its
-blits on them) against 31 workers, run before, after, after, before (`rvc_harness --d3d11`, the
-lean tick of b935841), seconds, against `rvc_cpu` at 2 MIPS (the same, and its second round, warm):
-
-| Part | Card, upstream's | Card, workers | `rvc_cpu`, cold | `rvc_cpu`, warm |
+| Part | Pictures | Seconds | Pictures a second | Game ticks |
 |---|---|---|---|---|
-| scroll, 30 | 29.8, 30.0 | 25.1, 25.1 (1.19 times) | 93.8 against 76.8 (1.22) | 53.3 against 33.0 (1.62) |
-| zoomed out, 20 | 77.2, 78.6 | 36.2, 36.3 (2.15) | 234.8 against 113.5 (2.07) | 174.7 against 48.8 (3.58) |
-| windows, 20 | 30.7, 30.4 | 18.0, 18.0 (1.70) | 91.3 against 55.5 (1.64) | 80.3 against 53.1 (1.51) |
-| the round, 71 | 137.7, 139.0 | 79.3, 79.4 (1.74) | 419.9 against 245.9 (1.71) | 308.4 against 134.9 (2.29) |
+| scroll | 60 | 3.99 | 15.0 | 25 |
+| zoomed out | 50 | 8.02 | 6.2 | 22 |
+| windows | 60 | 3.96 | 15.2 | 15 |
+| windows closed | 29 | 1.92 | 15.1 | 10 |
+| the round | 200 | 17.90 | 11.2 | 72 |
 
-The card gives the cold round's gain `rvc_cpu` gives, about 3 times as fast.
+The scroll and the windows stand at the picture's interval of 66 ms (a part of 60 in 3.96 s): a part's own cost shows as
+the zoomed out's, whose first core is 466k instructions a picture, a scroll's 185k. The paused scroll is the same 15.3 a second.
+
+Calibrated, the same day: the title screen 29 pictures and all its 37 game ticks a second; a new game of 64 by 64 (`openttd -g`)
+about 40 s to make, then 15 pictures and all 37 ticks a second.
+
+### Speed on 31 October
+
+The picture's interval is 66 ms (`OPENTTD_FRAME_MS`): a picture that does not wait for it lets the pace space the ticks less.
+
+On the card, RTX 5090 (`rvc_harness --d3d11 --unity 11.1,1.4,0.75`, `OPENTTD_PLAY=2`, two runs):
+
+| | |
+|---|---|
+| round 2, pictures a second | 10.29, 11.21 |
+| round 2, game ticks a second | 2.57, 2.86 |
+| round 1, pictures a second | 8.30, 8.52 |
+| the run less its two rounds (boot and start), s | 25.2, 25.2 |
+| the whole run, s | 68.7, 66.6 |
+
+Under a VR frame the card's game ticks are about two thirds of the calibrated run's 4.0 a second above.
 
 ## The start
 
-From the program's start to a game loaded with `-g` (`busy.sav`), the card's `start to the game`:
-95.1 s before, 58.7 s after (two rounds, 58.69 and 58.67; `tools/rv_compare`, 29 October 2026).
-On `rvc_cpu` the guest's seconds to the game went 126.1, 101.9, 97.7, 86.9, 83.1 as these came in:
+From the program's start to a game loaded with `-g` (`busy.sav`) is 35 s, calibrated, 31 October 2026 (`/proc/uptime` round a
+run, less its round).
 
 - The title's own game (`opntitle.dat`) is not loaded before a game asked for with `-g`
-  (`LoadIntroGame`): it was loaded only to be thrown away.
+  (`LoadIntroGame`).
 - A load's LZMA is decoded ahead on a worker into a ring of 16 pieces of 64 KB that the first
   core copies from while it reads what it took (`SeLzmaAhead` in `saveload.cpp`). The decoder's
   memory is made by the first core when it decodes the first piece. The worker allocates only
   from a reserve of 64 KB, and the blocks it lets go are freed by the first core.
 - The link graph's jobs a load starts are not run at once: each goes to a worker of its own while
   one is free ("The link graph on the workers"), and with no workers one runs each tick; each is
-  finished before it is first asked about (`SeRunPending`). The game state is the same:
-  `503e40ee` after 1,300 ticks.
-- The missing-glyph check reads every string of the language (11.5 million instructions). It is
-  skipped for the image's English, whose base font has every glyph.
+  finished before it is first asked about (`SeRunPending`).
+- The missing-glyph check reads every string of the language. It is skipped for the image's English,
+  whose base font has every glyph.
 - The music's fine tune is a `pow` once a tone, not once a note. A song's notes are put in
   buckets by voice, not looked through once a voice (`shaderemu_m.cpp`). The song is made on a
-  worker ("Music"): the card's start to the game 58.4 s to 53.5 (four rounds each, alternating;
-  the parts' pictures and ticks a second as they were).
-
+  worker ("Music").
 - The empty world before a load asked for with `-g`, its sprites and windows, is not made: the load makes them anew
-  (`OPENTTD_EMPTY_FIRST=1` is the old way). 33 million instructions.
-- A savegame's arrays of bytes come by `std::copy_n` from the read buffer, of 16-bit words by a loop of their own: a call a
-  byte and the general conversion a word were 6.6 and 12 million.
-- A field whose type in the file is its type in memory is read by one switch (`SlSaveLoadConv`; 50 instructions by two, 243,852
-  of them). A game that names its size has a first empty map of 64 x 64 (a clear 256 x 256 was 3.7 million: its first chunk makes
-  the map anew), and the map's megabytes come from `calloc` with what the kernel cleared not cleared again.
+  (`OPENTTD_EMPTY_FIRST=1` makes it).
+- A savegame's arrays of bytes come by `std::copy_n` from the read buffer, of 16-bit words by a loop of their own.
+- A field whose type in the file is its type in memory is read by one switch (`SlSaveLoadConv`). A game that names its size has
+  a first empty map of 64 x 64 (its first chunk makes the map anew), and the map's megabytes come from `calloc` with what the
+  kernel cleared not cleared again.
 - The unwinder's tables are filed at the first throw (`__wrap__Unwind_Find_FDE` in `shaderemu_t.cpp`): libgcc reads every FDE to
-  file its range when a program registers them, about 5 million instructions, and a played game throws nothing.
-
-Together `rvc_cpu`'s first core to the game 126 million instructions to 110 (222 at the start of 31 October).
+  file its range when a program registers them, and a played game throws nothing.
 
 ## The first core's small blocks
 
 Up to 1 KB the first core's `malloc` and `free` are lists by size, in steps of 16, in 8 MB of its own (`shaderemu_t.cpp`, `FhNew`;
-`busy.sav` takes 2.9 MB; when they are out, musl's; `OPENTTD_MALLOC=musl` is musl's always). musl's were 157 and about 110
-instructions a call, 8% of the first core's start and of its share of a played round: 13 million of a start now. `free` of the
-first core's block on the tick's worker still goes by the ring.
+a played `busy.sav` takes 2.6 MB; when they are out, musl's; `OPENTTD_MALLOC=musl` is musl's always). `free` of the first core's
+block on the tick's worker goes by the ring.
 
-A machine without paging runs out of memory in one piece, not of memory: the sprites' arenas were 32 MB at once for 128
-cores, zeroed, refused now and then with 96 MB free (a `bad_alloc` at the first sprite a round loads), and are 256 KB for the
-cores there are, not cleared; the tick's heap is 4 MB (it takes 136 KB; more comes from the first core).
+A machine without paging runs out of memory in one piece, not of memory: the sprites' arenas are 256 KB for the cores there are,
+not cleared; the tick's heap is 4 MB (a played run takes 211 KB; more comes from the first core).
 
 ## Sprites loaded
 
 A sprite's levels closer than the normal zoom are shown nowhere in the image's settings. Their
 pixels are not decoded; only their sizes are recorded, so that `ResizeSprites` pads the normal
-level exactly as before (`SeCloseLevelsUnseen` in `grf.cpp`). The pictures are the same: every
-picture's sum matched, skipped against whole. `OPENTTD_SPRITES=whole` is the old way.
+level exactly as whole (`SeCloseLevelsUnseen` in `grf.cpp`). `OPENTTD_SPRITES=whole` decodes them.
 
 ## The game's own speed
 
 The simulation is measured by `OPENTTD_WARM=100 OPENTTD_SUM=1 openttd -v null:ticks=300 -g
 /usr/share/openttd/busy.sav` on `rvc_cpu`. It reports the game loop's ticks per second over
 ticks 100 to 300 (the first warm the ships' water regions) and the state's sum. The sum must
-stay `6abca409`, and `503e40ee` with 1,300 ticks, as upstream's.
-
-| Build | Game ticks a second (`rvc_cpu`, ticks 100 to 300) |
-|---|---|
-| before | 2.52 |
-| a vehicle's sprite sizes kept while its sprite is the same | 3.49 |
-| a vehicle's place on the viewports updated once a tick | 3.62 |
-| ships' paths made ahead | 4.12 |
-| 64-bit divisions in 32 bits where both fit, no vehicle's frame rate timer | 4.38 |
-| the viewports listed once while vehicles are marked, a loading percent out of sight not made | 4.49 |
-| nine ships' paths made ahead at once, not six | 4.53 |
-| a ship's path's indexes cleared where it logged, its tiles compared by words | 4.60 |
-| a ship's path's tiles checked on the workers | 4.79 |
-| an income out of sight not formatted, a few dirty blocks stored, not `memset`, a vehicle's new sprites not zeroed first | 4.87 |
-| the vehicles' boxes made on the workers | 4.99 |
-| the ships listed every 64 ticks | 5.03 |
-| a vehicle out of every viewport marks no blocks | 5.21 |
+stay `6abca409`, and `503e40ee` with 1,300 ticks, as upstream's. Calibrated, 31 October 2026:
+8.04 ticks a second.
 
 - The frame rate window's timer reads the machine's clock word, not `clock_gettime`.
 - `UpdateBoundingBoxCoordinates` keeps the bounds of a sequence of one sprite while the sprite
   and the sprite cache's generation are the same.
 - While the vehicles tick, `Vehicle::UpdateViewport` only notes the vehicle. Its box, its place
   in the viewport hash and the dirty blocks are made once, after the last vehicle has ticked
-  (`VpDeferBegin`, `VpDeferEnd` in `vehicle.cpp`). A train moves several steps a tick, and each
-  step was a box, a hash update and a mark. The blocks marked are those of the old box and the
+  (`VpDeferBegin`, `VpDeferEnd` in `vehicle.cpp`). The blocks marked are those of the old box and the
   last one, the only ones a picture can have shown. A vehicle deleted, or a sound placed at a
-  vehicle, makes its update first. `OPENTTD_VP_NOW=1` is the old way.
-- `GetAcceleration` divides by the processor's 32-bit division when both sides fit (`SeDiv64`):
-  libgcc's 64-bit one was 50 instructions, 78 thousand calls in 200 ticks. The station and
-  industry ticks take the 64-bit tick counter's remainder once, not once a station.
-- A vehicle's tick has no `PerformanceAccumulator`: the machine's clock is in milliseconds, so a
-  vehicle's tick read 0 or 1 ms for 56 instructions. The frame rate window shows no vehicle times.
+  vehicle, makes its update first. `OPENTTD_VP_NOW=1` updates at once.
+- `GetAcceleration` divides by the processor's 32-bit division when both sides fit (`SeDiv64`).
+  The station and industry ticks take the 64-bit tick counter's remainder once, not once a station.
+- A vehicle's tick has no `PerformanceAccumulator`: the machine's clock is in milliseconds. The frame
+  rate window shows no vehicle times.
 - While the vehicles' places are marked (`VpDeferEnd`), the viewports are listed once
   (`ViewportsFixed`), not by walking every window for each vehicle.
 - A text effect changed where no viewport can show it (a loading vehicle's percent) keeps its new
   text and makes its string and width only when a viewport can show it (`RefreshStaleTextEffects`,
-  before the dirty blocks are drawn). Each was a string formatted and measured, 5,900 instructions.
-- An income added where no viewport can show it is made the same way (`AddTextEffect`): its string
-  was formatted and measured, 48 thousand instructions each.
-- `AddDirtyBlock` stores the bytes of up to four blocks a column itself: `memset`'s start alone was
-  70 instructions. A vehicle's new sprite sequence is not zeroed before `GetImage` sets it
-  (`SpecializedVehicle::UpdateViewport`): only the sprites it counts are read.
+  before the dirty blocks are drawn). An income added where no viewport can show it is made the same
+  way (`AddTextEffect`).
+- `AddDirtyBlock` stores the bytes of up to four blocks a column itself. A vehicle's new sprite
+  sequence is not zeroed before `GetImage` sets it (`SpecializedVehicle::UpdateViewport`): only the
+  sprites it counts are read.
 - In `VpDeferEnd` the boxes of the vehicles whose sprite's bounds are kept are made on the workers
   (`VpBoxes`, `Vehicle::UpdateViewportBox`), with whether any viewport shows the area that would be
   marked (`ViewportsFixedSee`, the tests of `MarkViewportDirty`). Each stores to its own vehicle.
-  The first core then puts each vehicle in the viewport hash and marks its blocks in the same order
-  as before, and skips the marking of a vehicle no viewport shows: 68.7 thousand calls of
-  `MarkAllViewportsDirty` in 200 ticks became 6.7 thousand.
+  The first core then puts each vehicle in the viewport hash and marks its blocks in order, and skips
+  the marking of a vehicle no viewport shows.
 
-What was left of a tick's 0.61 million instructions on the first core (`RVC_PROF`, the same run, 29 October
-2026): trains 246 thousand, road vehicles 115, loading and unloading 27, aircraft 36, the tile loop 31, the
-ships' own ticks 21, the vehicles' places 26. The vehicles tick in one order on one core. Their random
-numbers come from one state in that order, so they cannot tick on workers and keep the same
-game.
+The vehicles tick in one order on one core. Their random numbers come from one state in that order, so
+they cannot tick on workers and keep the same game.
 
 ## The link graph on the workers
 
 Upstream runs each link graph job (cargo distribution: demands, the multi-commodity flow, the flows
 mapped) in a thread of its own, on a copy of the graph made when it is spawned, and joins it at a
 date set then. Here a job is handed to one of four slots (`SeHand` in `linkgraphjob.cpp`,
-`OPENTTD_LG=N` slots, 0 the old way), the first core gives the slot a free worker or says it has
-none (`SeLinkGraphService`, from `TwService`; never while a flush's pieces are out), and the job
-is finished where it is first asked about, as upstream joins its thread. A job on a worker
-allocates from its slot's heap (1 MB, `OPENTTD_LG_HEAP`; busy.sav's take 112 KB at most) through
-the program's `operator new`, its blocks of up to 1 KB used again by size; what it leaves, its
-nodes' annotations with their flows, is copied out of that heap by the core that finishes it
-(`SeFinish`), each tick for a job whose worker has ended (`SeReap`), so the slot takes the next
-job. A job with no worker is handed again the next tick, and one whose heap runs out is run where
-it is asked about. The jobs a load leaves are handed from the game's first tick on
-(`SeRunOnePending`), not at the load: a paused game's pictures pay nothing for them. The game is the same: `6abca409` after 300 ticks of busy.sav, `503e40ee` after
-1,300 (17 jobs on workers). Played (`OPENTTD_PLAY=1` on `rvc_cpu`), the 16 jobs a load leaves were
-600 thousand instructions each in the tick's first 16 ticks, and the longest hold of the first
-core by the tick 350 to 1,550 ms; with them on workers the tick's worker spends 226 to 285 ms a
-tick in the scroll and zoomed out, not 294 to 383, and the longest hold is 18 ms.
+`OPENTTD_LG=N` slots, 0 runs each where upstream does without threads), the first core gives the slot a
+free worker or says it has none (`SeLinkGraphService`, from `TwService`; never while a flush's pieces are
+out), and the job is finished where it is first asked about, as upstream joins its thread. A job on a worker
+allocates from its slot's heap (1 MB, `OPENTTD_LG_HEAP`) through the program's `operator new`, its blocks of
+up to 1 KB used again by size; what it leaves, its nodes' annotations with their flows, is copied out of
+that heap by the core that finishes it (`SeFinish`), each tick for a job whose worker has ended (`SeReap`),
+so the slot takes the next job. A job with no worker is handed again the next tick, and one whose heap runs
+out is run where it is asked about. The jobs a load leaves are handed from the game's first tick on
+(`SeRunOnePending`), not at the load: a paused game's pictures pay nothing for them. The game is the same:
+`6abca409` after 300 ticks of busy.sav, `503e40ee` after 1,300.
 
 ## Ships' paths made ahead
 
-A ship asks the pathfinder (YAPF) when it enters a tile with its cached path empty. Each call
-is about a million instructions, and the expensive ones are those that make water regions
-anew. After the vehicles have ticked, each ship that will ask at its next tile has that path
-made ahead on a worker (`YapfShipAhead` in `yapf_ship.cpp`). The worker starts from a copy of
-the ship and of the pathfinder's settings. The ships counted on each docking tile come from a
-snapshot. The station's docking tiles and the region patches the region search starts from
-are found by the first core. The worker reads no pool.
+A ship asks the pathfinder (YAPF) when it enters a tile with its cached path empty, and the expensive
+calls are those that make water regions anew. After the vehicles have ticked, each ship that will ask at
+its next tile has that path made ahead on a worker (`YapfShipAhead` in `yapf_ship.cpp`). The worker starts
+from a copy of the ship and of the pathfinder's settings. The ships counted on each docking tile come from
+a snapshot. The station's docking tiles and the region patches the region search starts from are found by
+the first core. The worker reads no pool.
 
-- **The map is still while the worker reads.** The worker reads the map only while the first
-  core draws the dirty blocks (`DrawDirtyBlocks`), the one time the map does not change. At
-  the end of drawing the first core waits until every worker has stopped at its next node
-  (`YapfShipAheadQuiet`).
+- **The map is still while the worker reads.** The worker reads the map only while it does not change
+  (below), and whoever ends the stillness waits until every worker has stopped at its next node.
 - **Every tile read is logged.** Each read of a tile again must find it as logged, or the
   worker gives up. A tile the search stands on is logged by its words and its neighbours'
   heights. A tile only entered is logged by its water tracks. A docking tile's neighbours and
@@ -656,11 +556,7 @@ inputs, the settings, each region's generation, every tile logged, and the ships
 docking tile counted. Otherwise, and for a lost ship's random path, the first core makes the
 path itself. A load or a new map first stops every worker (`YapfShipAheadCancel`).
 A picture drawn with no tick since the last one, or while the game is paused, gives the paths up
-first (`YapfShipAheadQuiet`): the jobs launched at the last tick otherwise held up to nine workers
-through every paused picture, and the first core waited at each picture's end for them to stop.
-Paused, on `rvc_cpu` (`OPENTTD_PLAY_SHORT=1 OPENTTD_PAUSE=1`, pictures a second, the 8-bit blitter):
-scroll 1.85 with the paths kept to 7.42 (7.81 before the paths were made ahead), zoomed out 1.06 to
-1.67, windows 1.82 to 5.52.
+first (`YapfShipAheadQuiet`), or the jobs of the last tick would hold workers through every paused picture.
 
 With the tick on a worker of its own the map is still only while the tick waits, between two ticks
 (`YapfShipAheadGo` in `TwMain`), or mid-tick for a path made ahead that it is about to take. The tick
@@ -672,90 +568,35 @@ reads only once its word that it reads was stored a pass before and the map is s
 of the tiles are the tick's alone there (mcw's calls are the first core's), and so is the making of
 water regions made invalid (`WaterRegionsMakeAll`). The game is the same: the played script's sum at
 tick 40 (`OPENTTD_SUM_AT=40`, `cfbecedf`, vehicles `fb8c297e`) with and without the paths ahead and
-the link graph's workers, and `OPENTTD_SHIP_AHEAD=check` says 6 checked, 0 differ.
+the link graph's workers, and `OPENTTD_SHIP_AHEAD=check` says 0 differ.
 With no job out the stillness ends without a pass (a job posted later starts in a later pass and
 sees the word), and in a paused game the tick gives every path out up (`YapfShipAheadDrop`): a
-paused game takes none, and a job out made every hold of the tick wait a pass or two for it, 2 ms
-of each paused picture (the card's paused scroll 8.9 pictures a second to 7.9).
+paused game takes none, and a job out would make every hold of the tick wait a pass or two for it.
 
 The water regions made invalid are made at the end of each tick's vehicles, one region a job on the
 workers (`WaterRegionsMakeAll` in `water_regions.cpp`, from main's 5a3b851: the labeling `Make` into a
-`WaterRegionMade` of its own, `Keep` on the first core). A loaded game has none made, and each ship's
-first path made them one by one, half a million instructions each, on the first core or in a ship's
-job while the first core waited at the picture's end. A ship's job that still makes a region of its own
-waits at every sixteenth tile of it (`SeShipAheadPoll`). Played on `rvc_cpu` (`OPENTTD_PLAY_SHORT=1`,
-pictures a second): scroll 0.60 to 1.57, zoomed out 0.48 to 0.77; with `OPENTTD_SHIP_AHEAD=0` the
-same pictures are 1.52 and 0.83 (they were 0.83 and 0.56).
+`WaterRegionMade` of its own, `Keep` on the first core). A ship's job that still makes a region of its own
+waits at every sixteenth tile of it (`SeShipAheadPoll`).
 
 `OPENTTD_SHIP_AHEAD=check` makes every path taken again on the first core and compares the two:
-0 differ. `OPENTTD_SHIP_AHEAD=0` is without. The check of the tiles logged is cut in parts of at
+0 differ; the `ship paths ahead` line at the end says how many were made, taken, invalid and why.
+`OPENTTD_SHIP_AHEAD=0` is without. The check of the tiles logged is cut in parts of at
 least 128 tiles, each part on a free worker and the first on the first core (`AheadValidTiles`): the
 map is still while the first core waits there, and the reason given is the first part's that has one,
 as in one pass. A slot's heap gives the same places every job, so a job clears its indexes only where
 the last job logged (`clean_size`). Ships are listed again every 64 ticks, not walked in the whole
-vehicle pool each tick. Over 1,300 ticks, 144 of about 210 calls were taken.
-17 were invalid, 13 of them because a docking tile's count had changed. 49 had none made,
-because they were not foreseen.
+vehicle pool each tick.
 
 ## At exit
 
 The program gives its workers back itself at exit (`VpWorkersAtExit` in `viewport.cpp`,
 registered with `atexit` at the first `mcw_open`): the ships' paths made ahead are cancelled
 and joined, a lingering team is ended, and `mcw_close` runs while the memory is still the
-program's. A kernel from before its own fix (`patch_exitpark.py`) parked the workers only when
-`/dev/gpu` closed, after the memory had been given back. A ship's path waiting for the drawing
-stored its answer every pass, into pages the next program got. The second start of the game
-then found its sprites broken ("Tried to load  sprite #0 as a normal sprite", the 'query'
-sprite's error). The wait stores its answer only when it changes. The GPU's memory is handed out
-from the same place to every program (`seglMemory`), so the screen's picture is cleared at start:
-the second start showed the first one's last picture until it drew. `test_all.py openttd-twice`
-plays busy.sav, then plays it again paused with every picture checked (0 pixels, the workers
-drawing), then starts it a third time for the state's sum after a tick (`e49e18e3`).
-
-### Scrolling at 10 pictures a second
-
-`OPENTTD_PLAY_PART=scroll` is the script's 60 scrolling pictures alone, `follow` its 60 with the
-windows and the view following a train; `OPENTTD_PAUSE=1` pauses the game. `rvc_cpu --ips 2000000`
-with the card's model (`RVC_ADFAULT`, `RVC_WCACHE`, `RVC_SOUND`), `OPENTTD_PLAY=8`, rounds 2 to 8;
-pictures a second, game ticks a second and the first core's instructions a picture (21 October):
-
-| Part | Before | After |
-|---|---|---|
-| scroll | 0.75, 0.75 ticks, 2,199k | 10.46, 1.17 ticks, 145k |
-| scroll, paused | 2.57, 581k | 10.56, 110k |
-| follow | 0.49, 0.49 ticks, 3,454k | 10.84, 1.50 ticks, 110k |
-
-A scroll's picture in ms: the flush 70 (the pieces' round 44, the dearest piece 75k instructions,
-the copy 3.5, the texts 3.3), the move 6.5, the windows' timers and the rest about 10, the tick's
-part of the first core (its sync) 9. The tick's worker waits about half the time, held by the pace:
-without it (`OPENTTD_PACE=0`) the game makes more ticks and the picture is late by their syncs.
-The paused scroll is held to 10.5 pictures a second by the picture's interval (`OPENTTD_FRAME_MS`,
-95); at 20 it is 13.9.
-
-### Speed on 31 October
-
-The picture's interval is 66 ms (`OPENTTD_FRAME_MS`, 95 before). `rvc_cpu` with the card's model, `OPENTTD_PLAY=8`, rounds 2
-to 8, no other change, pictures and ticks a second: scroll 10.66 and 1.07 at 95, 11.60 and 1.33 at 66 (11.78 and 1.30 at 80,
-11.87 and 1.31 at 50), follow 10.67 and 1.27 at 95, 15.17 and 1.31 at 66, 18.34 and 1.12 at 50. A picture that does not wait
-for the interval lets the pace space the ticks less.
-
-`GetRawSprite` of a loaded sprite saves nothing and tests the stacks once (58 instructions to about 18, 1.7 million calls a played
-round), and a parent sprite is not cleared before all its fields are set (2% of the workers). `ViewportAddLandscape` asks once a
-part whether any selection or highlight exists, not `DrawTileSelection` at each tile (57 instructions a tile, 3.5% of the workers).
-
-Everything of 31 October against the tree before it, on the card (`--unity 11.1,1.4,0.75`, `OPENTTD_PLAY=2`, two runs each,
-alternating):
-
-| | before | after |
-|---|---|---|
-| round 2, pictures a second | 7.32, 7.62 | 10.29, 11.21 |
-| round 2, game ticks a second | 2.05, 2.25 | 2.57, 2.86 |
-| round 1, pictures a second | 5.85, 6.05 | 8.30, 8.52 |
-| the run less its two rounds (boot and start), s | 41.5, 41.6 | 25.2, 25.2 |
-| the whole run, s | 103.0, 100.9 | 68.7, 66.6 |
-
-`rvc_cpu` at 2 MIPS: first core's simulation 2.60 ticks a second to 3.13 (sum `6abca409`), start to the game 122 guest seconds to
-71. After a large change to the source make the counts anew (`counts.py`): a function whose text changed loses its counts.
+program's: a worker left running writes into pages the next program gets. A ship's path waiting
+for the drawing stores its answer only when it changes. The GPU's memory is handed out from the same
+place to every program (`seglMemory`), so the screen's picture is cleared at start. `test_all.py
+openttd-twice` plays busy.sav, then plays it again paused with every picture checked (0 pixels, the
+workers drawing), then starts it a third time for the state's sum after a tick (`e49e18e3`).
 
 ## Not done
 
@@ -766,4 +607,4 @@ alternating):
 - A NewGRF chain other than canals' is resolved by the first core: only canals' resolver was
   read through for stores outside a core's own registers (`WorkerSafe` in `newgrf_spritegroup.h`).
 - One order is not proved for every scene: sprites whose boxes order them in a circle ("One order").
-- Online content, the network game and screenshots in PNG (no libpng) are not built.
+- Online content and screenshots in PNG (no libcurl, no libpng) are not built.
