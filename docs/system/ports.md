@@ -26,8 +26,7 @@ again; thttpd writes a listing itself and runs a CGI through itself started agai
 which feeds it the POST data and parses its headers. socat has no fork option, EXEC, SYSTEM or
 SHELL, and says so. The kernel's random pool is never ready, so Dropbear and Mbed TLS read
 `/dev/urandom` instead of waiting in `getrandom()`. Dropbear's X25519 and Ed25519 are
-Monocypher's and its post-quantum key exchanges are left out, since on this machine the slower
-ones are minutes a login: `ssh` to the machine itself with a new host key, one command run, takes
+Monocypher's and its post-quantum key exchanges are left out, for a login's time: `ssh` to the machine itself with a new host key, one command run, takes
 6.5 s (calibrated, 31 October 2026).
 
 Not working: `tc`, which needs `CONFIG_NET_SCHED`; `rtacct`, which maps its history file shared
