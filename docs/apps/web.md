@@ -354,7 +354,10 @@ next event (`strips_meanwhile`), the view's first, then the way the scroll goes.
   the pixmap is read: the window system's drawing there must reach the GPU before the list.
   That pixmap has 32 rows more over and under the strip (`STRIP_ROOM`): the window system draws no string a
   pixmap's edge would cut, and until 31 October 2026 a field's text across two strips was in neither (a blank field,
-  a button with no words, as the capture of a form showed; `NXWEB_CHECK` looks only at strips that are lists).
+  a button with no words, as the capture of a form showed; `NXWEB_CHECK` looks only at strips that are lists). On
+  `web-layout.html` under WARP `NXWEB_CHECK=1` said 7 strips, 7,591 pixels differ, 7,048 by more than 8 levels at the commit before
+  (so the 0 above no longer held, and the text across strips was the difference); with the room 10 strips, 61 pixels, none by more than 8
+  levels: not 0, the same drawing 32 rows lower in the target rounding otherwise, which was not chased.
 - A field typed into, a picture that came and a page laid out anew make their strips again
   (`strips_forget_rows`, `strips_forget`); every change waits for the jobs out first.
 - **The window system says where a pixmap's pixels are**: `GrGetWindowInfo` on a pixmap the
