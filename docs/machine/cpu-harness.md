@@ -298,7 +298,7 @@ rules. The card boots in some 50 s, so a case resumes a snapshot of the shell ma
 is skipped for another image, for host words that change as it runs, for `rvc_cpu`'s own devices (its `env`),
 or when it is longer than a run may be. The card's own values are in its `CARD` table, each the same in two
 runs. On 28 October 2026 the `machine` tag with `doom-3`, `nxpath-balls` and `nxpaint` passed 10 of 10 in
-some 5 minutes (`mctest-255` and `cc-bytes` over 55 s; `hlsl` sums `a4b289dd` and `nxpath-balls` `11e09363`
+some 5 minutes (`mctest-255` and `cc-bytes` over 55 s; `hlsl` sums `a4b289dd` and `nxpath-balls` `5cd7620a`
 on the card, the tick's floats). `--parts` runs a case in runs of `--part-secs` (45 s), the machine saved at
 the end of each (`--save-state`) and resumed by the next, until its `--until` or its wall: the long cases
 (`mctest-255`, `cc-bytes`) then run too.
