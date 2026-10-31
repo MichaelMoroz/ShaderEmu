@@ -1,7 +1,7 @@
 # The sound card
 
-The CPU cannot afford to mix sound: one of Doom's channels at 11 kHz would cost a quarter of a
-million instructions a second. So sound is a device with a shader pass of its own, a wavetable
+The CPU cannot afford to mix sound: a channel at 11 kHz is a few instructions for each of eleven
+thousand samples a second, on a machine of a few million. So sound is a device with a shader pass of its own, a wavetable
 card: a program points a voice at samples that are already in memory, or in the ROM, and the
 card mixes. Starting a sound is a few stores.
 
@@ -19,7 +19,7 @@ a sample: the mix of every voice at that sample.
 - Every few milliseconds the host names a **cursor** a little ahead of the audio thread, and the
   card draws every sample from the cursor on, as the voices will sound if nothing changes.
   A frame that comes late leaves that prediction playing instead of a gap, and a sound started
-  now replaces it at the next mix: latency is the lead, about 20 ms in the harness.
+  now replaces it at the next mix: latency is the lead, 1,024 samples (21 ms) in the harness (`kSoundLead`).
 - The GPU device's control pass (`sound_control` in `gpu.shader`'s GPUControl) then moves the
   card's clock and each voice's position up to the cursor. It does that only in a frame the
   host mixed, and only while the guest has the card enabled, so a machine that makes no sound
@@ -84,20 +84,29 @@ so its samples can be played where they lie.
   WAV in the pak file in the ROM, looped where the WAV says; 28 voices (8 for things, 2 for
   water and sky, 18 for the loudest of a level's own).
 - **ClassiCube** (`linux/classicube/Audio_ShaderEmu.c`, `docs/games/classicube.md` "Sound"): its dig
-  and step sounds as ADPCM in a pack of the ROM (385 KB), and one tune, an MP3 that libmedia
+  and step sounds as ADPCM in a pack of the ROM, and one tune, an MP3 that libmedia
   decodes on the worker cores into a stream voice's ring.
 - **Micropolis** (`linux/micropolis/nxmicropolis.c`, `docs/games/micropolis.md` "Sound"): 13 sounds
-  as unsigned bytes in `sounds.bin` (330 KB), each a voice pointed at the ROM, on four voices.
+  as unsigned bytes in `sounds.bin`, each a voice pointed at the ROM, on four voices.
 - **Red Alert** (`docs/games/ralert.md`): Tiberian Dawn's driver and tool, with a pack of its own
-  (`ralert-sound.pak`: 294 sounds, among them the demo's two tunes, 12.8 MB).
+  (`ralert-sound.pak`, the demo's two tunes among its sounds).
 - **Tiberian Dawn** (`linux/tdawn/soundio_shaderemu.cpp`): `tools/make_tdawn_sound.py` turns the
-  game's AUD files into ADPCM with checkpoints when the image is built (3.8 MB). The game's
+  game's AUD files into ADPCM with checkpoints when the image is built. The game's
   sounds are found in that pack by a hash of how their AUD file begins. A sound out of view
   is played at a tenth of the volume, so a game left to itself is quiet; `TDAWN_SAY=1` makes
   EVA speak. No music in the missions: the demo's data has none, only the map screen's and
   the score screen's tunes (`MAP1.AUD`, `WIN1.AUD`), which are in the pack too and play on a
   voice of their own (`File_Stream_Sample_Vol`; the build installs only each file's first 64
   bytes, by which the tune is found).
+- **Half-Life** (`linux/halflife/snd_shaderemu.c`): a sound is a voice pointed at its WAV where pak0 lies
+  in the ROM, or at its MP3 decoded into RAM, on 30 voices.
+- **Quake III** (`linux/quake3/snd_shaderemu.c`): a voice pointed at its samples where `bake.py`'s file
+  lies in the ROM.
+- **The NES** (`linux/nes/apu_shaderemu.c`, `docs/games/nes.md`, "Sound"): each of its five channels a
+  voice playing a wave already in sound memory.
+- **OpenTTD** (`linux/openttd/mixer_shaderemu.cpp`): a channel is a voice; a sound is copied into sound
+  memory the first time it plays.
+- **`nxplay` and `nxvideo`** (`docs/apps/play.md`, `docs/apps/video.md`): a stream voice's ring, decoded by libmedia.
 
 ## The host
 
@@ -111,8 +120,8 @@ so its samples can be played where they lie.
   Only the player whose machine it is hears it.
   A mix's cursor is never before the last one (`lastCursor` in `EmuSound`): the lead comes down
   eight samples at a time while the audio thread's place stands still for a frame, and a
-  cursor that went back made the card move its voices by a negative count, which put every
-  voice that does not loop past its end. A looping tone does not show it; test with one that ends.
+  cursor that goes back would move the card's voices by a negative count, past the end of every
+  voice that does not loop. A looping tone does not show that; test with one that ends.
 
 ## Checking it
 
