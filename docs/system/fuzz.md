@@ -10,6 +10,7 @@ from its line.
     python tools/app_fuzz.py single [APP ...]    # each program, each way of closing: at once, during its start, after a use
     python tools/app_fuzz.py pairs [APP ...]     # every pair open together, in turn closed in either order; then Gears must start
     python tools/app_fuzz.py triples --light     # the same with three of the small programs
+    python tools/app_fuzz.py menus --no-games    # a menu bar's every place and every item under it, by clicks
     python tools/app_fuzz.py random --seed 1 --count 200 [--no-games]
     python tools/app_fuzz.py file PLANS.txt      # a plan a line
     python tools/app_fuzz.py shrink "PLAN"       # as few operations as still fail the same way
@@ -37,6 +38,8 @@ its window gone is `left-running`, `gone_wait` seconds (40) after: the report th
 - What the console says: an oops or a panic, a segfault, `a worker wanted`, `Sys_Error`, `Could not start`, a crash, an
   assertion, an out of memory. "One program at a time" is a failure only if the program it names has been closed: while
   it is open a second program is meant to be told so, and then to have no window.
+- `cut`: the plan's `end` was never reached. A line typed at the shell is cut at about 1,024 characters with no word, the plan's closes lost and the run
+  clean to look at (it hid two whole menu sweeps), so `app_fuzz.py` refuses a plan over 1,000. A `hang` also prints each process's `/proc/PID/stat` (`FZ stat`): a process in `R` with a large system time is one turning on a call.
 - `RVC_RACES` undone with `--races`; no `FZ-DONE` within the wall (`wall`: inconclusive by itself, `--races` is many times slower).
 
 A window goes to a tag when its process is in the session its `start:` made; a question (`nxask`) is said and goes to nobody.
@@ -48,6 +51,8 @@ question is a program of its own, `nxask`), and compares with the start. Memory 
 
 - `rvc_cpu` draws no GPU list, so a wait for the GPU is never long there. `rvc_harness --cpu --warp` runs the same line with
   the lists drawn (some 5 M instructions a second), through `tools\gpu_queue.ps1`.
+- `menus` clicks by place (`iclick`, nothing outside the window: the desktop's icons would start programs). Nothing checks that a click found an item, or that a
+  menu opened, and an item below the window's own height is not reached.
 - Random clicks do not know a program's menus: a menu's far end is reached rarely. What each program's own switches
   and tests reach is in `tools/test_all.py`.
 
@@ -56,5 +61,9 @@ question is a program of its own, `nxask`), and compares with the start. Memory 
 - OpenTTD's link by `fork` and `exit()`, and what was done about a program that stays: "At exit" in `docs/games/openttd.md`.
 - A child kept the GPU's file (`open` for that link, `nxask` from a refused program) and with it the drawing and the workers' places of
   a program that had gone: `shaderemu_gpu_close_on_exec` in the kernel's driver sets close-on-exec at a file's first ioctl or mmap.
+- `nxplay` asking a question (a file it could not open) ignored its window's X and SIGTERM until the question was answered: `ui_ask_over`.
+- A drawing program killed between its swap of the GPU's lock word and its release (`REG_LOCK`, some twenty instructions) left the word taken, and the
+  window system turned on it for good: no window, no pointer, the desktop gone, with nothing said. glxgears and SIGTERM, Monitor's End Process, did it in about
+  1 run of 160 (3 of 480 plans); the driver now frees the word when a process with `/dev/gpu` ends (0 of 1,440). `nxfuzz --die-with-gpu-lock` does it every time: `test_all.py app-fuzz-lock`.
 - A child kept the window system's socket: a refused program's empty window stayed until its Notice was answered, and OpenTTD's until `open`'s
   40 s were over. `nxask` and `open` close what they were given above 2 first.

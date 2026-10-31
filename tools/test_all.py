@@ -486,6 +486,9 @@ CASES = [
          wall=120, has=[r'^FZ-DONE 0', r'FZ closed g2'], never=[r'FZ-BAD']),
     case('app-fuzz-refused', 'desktop', 'nx; sleep 3; nxfuzz start:g:glxgears wait:g:20 start:r:nxray sleep:6000 wins close:g:term sleep:1000 wins start:i:imdemo wait:i:30 close:i:x end',
          True, wall=120, has=[r'the GPU is drawing for glxgears', r'^FZ-DONE 0'], never=[r'FZ-BAD']),
+    # a program that dies holding the GPU's lock word: the window system goes on (shaderemu_gpu_exiting_one)
+    case('app-fuzz-lock', 'desktop', 'nx; sleep 3; nxfuzz start:l:nxfuzz,--die-with-gpu-lock sleep:500 start:g:glxgears wait:g:20 sleep:300 close:g:x end', True,
+         wall=120, has=[r'FZ closed g', r'^FZ-DONE 0'], never=[r'FZ-BAD']),
     case('app-fuzz-openttd', 'desktop games openttd', 'nx; sleep 3; nxfuzz ask:40:100 start:o:openttd,-g,/usr/share/openttd/busy.sav wait:o:60 sleep:30000 '
          'tell:o:x sleep:2000 click:o:367,261 gone:o start:g:glxgears wait:g:20 close:g:x end', True, wall=240,
          has=[r'FZ closed o \(gone\)', r'^FZ-DONE 0'], never=[r'FZ-BAD']),

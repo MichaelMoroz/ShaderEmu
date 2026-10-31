@@ -32,6 +32,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/wait.h>
@@ -93,6 +94,27 @@ on_alarm(int s)
 {
 	(void)s;
 	say("FZ-BAD hang in %s", current);
+	{	/* who was doing what: each process's line of /proc */
+		DIR *d = opendir("/proc");
+		struct dirent *e;
+
+		while (d && (e = readdir(d)) != NULL) {
+			char path[64], text[120];
+			int fd, n;
+
+			if (e->d_name[0] < '0' || e->d_name[0] > '9' || atoi(e->d_name) < 17)
+				continue;
+			snprintf(path, sizeof path, "/proc/%s/stat", e->d_name);
+			if ((fd = open(path, O_RDONLY)) < 0)
+				continue;
+			n = read(fd, text, sizeof text - 1);
+			close(fd);
+			if (n > 0) {
+				text[n] = 0;
+				say("FZ stat %s", text);
+			}
+		}
+	}
 	say("FZ-DONE %d", bads + 1);
 	_exit(3);
 }
@@ -894,6 +916,15 @@ main(int argc, char **argv)
 {
 	int i;
 
+	if (argc > 1 && !strcmp(argv[1], "--die-with-gpu-lock")) {
+		/* what SIGTERM or SIGKILL does now and then between a program's swap of the GPU's lock word and its release */
+		int fd = open("/dev/gpu", O_RDWR);
+		char *gpu = fd < 0 ? MAP_FAILED : mmap(NULL, 0x01001000, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+
+		if (gpu != MAP_FAILED)
+			((volatile uint32_t *)(gpu + 0x01000000))[24] = 1;
+		_exit(gpu == MAP_FAILED);
+	}
 	signal(SIGALRM, on_alarm);
 	signal(SIGCHLD, SIG_DFL);
 	{
@@ -1031,6 +1062,13 @@ main(int argc, char **argv)
 				drag_at(x + a[0], y + a[1], x + a[2], y + a[3]);
 			else
 				click_at(x + a[0], y + a[1], IS("click") ? 0x110 : 0x111);
+		} else if (IS("iclick")) {	/* (a click only if it falls inside: outside it is the desktop's, whose icons start programs) */
+			int a[2] = { 0 }, x, y, w, h;
+
+			sscanf(rest, "%d,%d", &a[0], &a[1]);
+			window_area(t, &x, &y, &w, &h);
+			if (a[0] < w && a[1] < h)
+				click_at(x + a[0], y + a[1], 0x110);
 		} else if (IS("rand")) {
 			int count = 0, seed = 0;
 

@@ -33,6 +33,7 @@
 #define GPU_COUNT	0x18
 #define GPU_FRAMES	0x1c	/* lists drawn so far */
 #define GPU_INTO	0x50	/* where a copy goes: address, width, height, row length */
+#define GPU_LOCK	0x60	/* taken with an atomic swap by a program that writes the words above */
 #define KEYBOARD_OWNER	0x30	/* set by a program that takes the keyboard (docs/machine/input.md) */
 #define DISPLAY_CURSOR	0x48	/* 1 while the display shows a cursor (docs/machine/display.md) */
 #define VOLUME_LIST	0x300	/* the frame the volume display shows (docs/world/volume.md) */
@@ -702,6 +703,15 @@ static int shaderemu_gpu_exiting_one(const void *parked, struct file *file, unsi
 
 	if (file->f_op != &shaderemu_gpu_fops)
 		return 0;
+	/*
+	 * The word programs swap to write a list's registers (some twenty instructions) has no owner in it: a
+	 * signal between the swap and the release left it taken for good, and the window system and every
+	 * program turning on it for ever (1 kill of a drawing program in 160, tools/app_fuzz.py). Only a
+	 * process that is off the processor can hold it, so this is wrong only if another is stopped inside
+	 * those instructions just as this one ends: at worst one list with another's registers.
+	 */
+	if (readl(gpu_regs + GPU_LOCK))
+		writel(0, gpu_regs + GPU_LOCK);
 	for (k = 1; k < WORKERS_MOST; k++)
 		if (worker_owner[k] == file) {
 			workers_park(k);

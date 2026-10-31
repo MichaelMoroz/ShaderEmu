@@ -93,6 +93,8 @@ class Runner:
         if env:
             e.update(env)
         line = f"{before}nx; sleep 3; nxfuzz {flat(plan)}; echo LX-''DONE\\n"
+        if len(line) > 1000:   # (a longer line is cut by what types it, with no word: the plan's end is lost and the run looks clean)
+            raise ValueError(f'a plan of {len(line)} characters: split it')
         cmd = [os.path.join(ROOT, 'bin', 'rvc_cpu.exe'), '--image', a.image, '--quiet', '--uart-log', log, '--expect', '/ # ', '--send', line,
                '--until', 'LX-DONE', '--wall', str(wall or a.wall)]
         t = time.time()
@@ -123,6 +125,8 @@ class Runner:
         told = list(re.finditer(r'(?:GPU is drawing for|close) ((?!it\b)\S+)(?: program)?(?: \(process| first)', console))
         if told and all(open_at(m.group(1), m.start()) for m in told):
             bad = [b for b in bad if b[0] != 'gpu-busy' and not (b[0] == 'bad' and b[1].startswith('no-window'))]
+        if 'FZ-DONE' in console and flat(plan).endswith(' end') and 'FZ op end' not in console:
+            bad.append(['cut', 'the plan did not reach its end: its line was cut'])
         if 'FZ-DONE' not in console:
             at = re.findall(r'FZ op ([^\r\n]*)', console)
             bad.append(['wall', 'no FZ-DONE in the wall, last op ' + (at[-1] if at else '?')])
@@ -177,6 +181,19 @@ def pair_plans(apps, group=2, ways=('x', 'alt', 'term')):
         ops += [f'close:{t}:{ways[(k + i) % len(ways)]}' for i, t in enumerate(order)]
         ops += [*start_ops('gears'), 'close:gears:x', 'end'] if 'gears' not in combo else ['end']
         yield ops
+
+
+def menu_plans(apps):
+    """Every item of a menu bar, by place: a plan a bar's stretch, so that an item that ends the program leaves the others tried."""
+    for tag in apps:
+        if not APPS[tag][1]:
+            continue
+        for x in range(12, 200, 28):
+            ops = [f'start:a:{APPS[tag][0].replace(" ", ",")}', f'wait:a:{APPS[tag][1]}', 'sleep:500']
+            for y in range(30, 224, 16):
+                ops += [f'iclick:a:{x},10', 'sleep:150', f'iclick:a:{x},{y}', 'sleep:400', 'key:a:escape']
+            ops += ['close:a:x', 'end']
+            yield ops
 
 
 def random_plan(r, apps, length=None):
@@ -287,6 +304,8 @@ def main():
         return 1 if all_plans(r, list(pair_plans(apps, 2)), a.jobs) else 0
     elif a.what == 'triples':
         return 1 if all_plans(r, list(pair_plans(apps, 3)), a.jobs) else 0
+    elif a.what == 'menus':
+        return 1 if all_plans(r, list(menu_plans(apps)), a.jobs) else 0
     elif a.what == 'random':
         rng = random.Random(a.seed)
         return 1 if all_plans(r, [random_plan(rng, apps) for _ in range(a.count)], a.jobs) else 0
@@ -297,7 +316,7 @@ def main():
     elif a.what == 'smoke':
         return 1 if all_plans(r, SMOKE, a.jobs) else 0
     else:
-        p.error('what: list, plan, single, pairs, triples, random, shrink, smoke')
+        p.error('what: list, plan, single, pairs, triples, menus, random, shrink, smoke')
     return 0
 
 
