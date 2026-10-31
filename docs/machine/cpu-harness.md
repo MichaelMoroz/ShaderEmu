@@ -1,22 +1,20 @@
 # The machine on the processor
 
-`bin\rvc_cpu.exe` (`harness/apps/rvc_cpu.cpp`) is the machine as an ordinary interpreter. The
-shader machine runs three to four million instructions a second; what a program costs on it
-is a number of instructions, and that number does not depend on what runs them. So work that
-is about instructions (a game's logic, a frame's cost, a state sum, a test that a program
-still runs) does not need the graphics card. The interpreter runs 100 to 200 million
-instructions a second on one thread (on 18 October 2026, 2.2 to 4 times what it ran before:
-the common instructions in handlers that jump to each other, the rest in the old step): Red
-Alert's check, from the shell prompt through the window system's start, the opening movie on
-three worker cores and 300 frames of a mission, is under 3 seconds here and 90 in
-`rvc_harness`, with the same state sum. `rvc_harness --cpu` on an i7-13650HX (19 October 2026,
-`docs/machine/speed.md`): `factor 999999999989` at 111 million a second, `seq | gzip` at 49, Quake's
-timedemo 146 frames a second and Doom's 295.
+`bin\rvc_cpu.exe` (`harness/apps/rvc_cpu.cpp`) is the machine as an ordinary interpreter. A
+full pass of core 0's on the card is about 1.5 ms, about five million instructions a second
+(`tools/card_model.json`, calibrated, 31 October 2026); what a program costs on it is a number of
+instructions, and that number does not depend on what runs them. So work that is about instructions
+(a game's logic, a frame's cost, a state sum, a test that a program still runs) does not need
+the graphics card. On 31 October 2026, `RVC_THREADS=8`, by `rvc_cpu`'s last line: `factor 999999999989`
+and `seq 1 40000 | gzip` from power-on, one core, 202 million instructions a second; Doom's timedemo, 342
+million instructions on core 0 and its workers, 2.1 s; Red Alert's check, from the shell prompt through
+the window system's start, the opening movie on worker cores and 300 frames of a mission, 345 million
+instructions, 1.1 s.
 
 The worker cores run on host threads (`--threads N`, or `RVC_THREADS`; the default is half the
 computer's threads, at most 8), after core 0's part of each pass and only when the last pass's
-workers ran 16,384 instructions or more. `--threads 1` gives the old order exactly, the same
-instructions on every core and the same console as before. With threads, a program whose
+workers ran 16,384 instructions or more. `--threads 1` runs them one after another: the same
+instructions on every core and the same console from run to run. With threads, a program whose
 workers wait on each other's words inside a pass counts other numbers of instructions from
 run to run (Quake's and nxphys's statistics, Quake III's passes); its sums do not change.
 `RVC_PROF` runs the workers in order on one thread; under `RVC_RACES` each worker keeps the texels
@@ -42,8 +40,10 @@ It boots the image in `build\images\nommu` from power-on every time (`docs/syste
 `--image DIR` boots another), takes the harness's `--expect`, `--send`, `--until`,
 `--uart-log`, `--ticks`, `--pointer-sweep`, `--desktop` and `--tabs`, and ends with
 what each core ran, the firmware calls and the traps by cause. `--seconds` is the guest's
-time, `--wall` this computer's. Start it from PowerShell or cmd: Git Bash turns `"/ # "` into
-a path.
+time, `--wall` this computer's, `--instructions` core 0's. `--help` lists the rest: the host's
+words (`--host`, `docs/world/holodeck.md`), the network (`--net`, `docs/system/lan.md`), `--native`
+(`experiments/isa_proto/ISA.md`). `\n`, `\r` and `\t` are `--send`'s only escapes here; the
+harness's has `\xNN` as well. Start it from PowerShell or cmd: Git Bash turns `"/ # "` into a path.
 
 `--pc-log FILE` writes the first core's pc at the end of every pass and the instructions the
 pass ran, as the harness's does, for `tools\pc_profile.py`; `--pc-from TEXT` begins when the
@@ -57,10 +57,10 @@ Other logs, each a measure that leaves the run as it was:
   how core 0's pass ended (0 its budget, 1 it ended the pass itself, 2 it waited, 4 the write cache was
   full, 5 a copy), its instructions, pc, `ra` and the guest's milliseconds (a jump is a sleep).
   `RVC_PASSLOG_STACK=N` adds, after an end of 1 or 4, the first N words above `sp`
-  that could be return addresses: who ended the pass, not only the leaf. Doom's timedemo: 16,331 passes
-  to their budget, 8,082 ended, 710 waits, 829 full.
+  that could be return addresses: who ended the pass, not only the leaf. Doom's timedemo on 28 October 2026: 16,331
+  passes to their budget, 8,082 ended, 710 waits, 829 full.
 - `RVC_WC_LOG`'s records (with `RVC_WCACHE=1`) end with the address of the store that found the cache
-  full, 0 for a pass that did not end so: Doom's 8,351 full records all had one.
+  full, 0 for a pass that did not end so: Doom's 8,351 full records all had one (28 October 2026).
 - `RVC_WC_BITS=N` (4 to 8, with `RVC_WCACHE=1`): core 0's tables of 2^N buckets, not the tick's 6
   (`L1_TABLE_BITS`). `python tools/wcsize.py model` runs Doom's timedemo at 5 to 8, `card` on the card with
   the tick built at `L1_TABLE_BITS=N` under a world's frame. On 28 October 2026:
@@ -77,7 +77,7 @@ Other logs, each a measure that leaves the run as it was:
   40.0 at 7 (3.27 and 3.23 card ms a frame).
 - `RVC_DEVICE_EVERY=N`: the devices' pass takes the GPU's list back every Nth pass
   only, as a world does once a frame; every pass hides a game's waits for its list (Doom's timedemo 1,664
-  realtics, 1,812 at 4).
+  realtics, 1,812 at 4, on 28 October 2026).
 - `RVC_CON_TRACE=1`: each delivery of console input to the guest and each take, with
   the pass and the guest's seconds (`[con] delivered`, `[con] taken`).
 
@@ -115,25 +115,22 @@ input and the control words stay the shader's passes, which is where they are ch
   processor's again; and when the commit copied a picture into a window's buffer, those rows
   of the texture are read back into the processor's RAM.
 
-The guest's clock is this computer's, so a game runs at its own speed with a processor
-thirty times the shader machine's: `--cpu-ips 3000000` holds it to the world's speed, to see
-what a thing feels like there. Tiberian Dawn's check runs in it at the game's full 20 frames
-a second with the same state sum, and `python tools\snapshot_screen.py SNAPSHOT OUT.png`
+The guest's clock is this computer's, so a game runs at its own speed with a processor far
+faster than the shader machine: `--cpu-ips 3000000` holds it to the world's speed, to see
+what a thing feels like there. `python tools\snapshot_screen.py SNAPSHOT OUT.png`
 shows the screen a `--save-state` snapshot holds. `--screen-log FILE` writes the display as it
 is shown (its layers, the cursor over them) every frame: 16 bytes (width, height, frame, the
 guest's milliseconds), then red, green, blue a pixel; `--screen-from TEXT` not before the
 console has shown TEXT, `--screen-every MS` one not sooner than that after the last,
-`--screen-frames N` stops after N. It reads the layers back from the state texture, where the
-GPU draws them: `tools/share_motion.py` plays such a recording (`docs/world/share.md`). On 17
-October 2026 it showed a desktop with no windows where the layer table had a calculator at
-40,20 and a snapshot of the same run showed it drawn: a capture of what programs look like is
-taken with `--save-state` at the run's end and `snapshot_screen.py`, never from the log.
+`--screen-frames N` stops after N. `tools/share_motion.py` plays such a recording
+(`docs/world/share.md`). It reads the layers back from the state texture, where the GPU draws them,
+and can miss a window a snapshot of the same run shows drawn: a capture of what programs look like
+is taken with `--save-state` at the run's end and `snapshot_screen.py`, never from the log.
 
-Since 26 October 2026 that snapshot is one the shader machine resumes from: `--save-state` writes
+That snapshot is one the shader machine resumes from: `--save-state` writes
 the processor's RAM and every core's registers, CSRs, timer and worker word where
 `experiments/rvc_opt` keeps them, with empty write caches (`cpuSnapshotCores`), and the guest's
-clock goes on from the processor's. So a moment reached here in seconds (Quake's timedemo, boot
-included, in 9) is measured on the card from the same state:
+clock goes on from the processor's. So a moment reached here in seconds is measured on the card from the same state:
 
     bin\rvc_harness.exe --d3d11 --rvc experiments\rvc_opt --define NO_PAGING --image linux-net --cpu --no-desktop
         --input "nano-X -p & sleep 10; quake +timedemo demo1\n" --until "You got the nails" --save-state Q.snap
@@ -144,7 +141,7 @@ snapshot lays them out as geotune does on the card (16 big, the rest small in bl
 `--workers` says), or nxray draws 12.9 lists a second where it draws 19.2. A program's state that
 goes by the guest's clock is not the card's at the same line (Quake III's frame 200 is 16 s in
 here), and a part measured just after `nano-X` starts is not settled: give it 10 s. Checked on the
-card against states reached there: Quake's timedemo 66.3 against 67.2 fps, nxray with its scene
+card against states reached there (card, 26 October 2026): Quake's timedemo 66.3 against 67.2 fps, nxray with its scene
 held still 19.4 against 19.2. It goes one way only: under `--cpu`,
 `--load-state` still restores only the texture and the processor boots afresh.
 
@@ -153,7 +150,7 @@ place of this interpreter (`experiments/rv32_min/README.md`, "The whole machine"
 workers, a thread group each, RAM in buffers of their own (core 0's and the workers', merged
 after every pass) kept in step with the state texture there.
 
-Not there yet in this mode: sound (not tried), pages from the host for the browser, D3D12.
+Not in this mode: D3D12. Sound has not been tried in it.
 The shader's own cores are not used (the cores are the interpreter's), so nothing here says
 anything about the shader machine's passes.
 
@@ -176,15 +173,14 @@ to a folder of its own.
 ## What it is
 
 - **The processor**: RV32IMA with the float instructions (the host's own floats, which are
-  IEEE single precision too; `fptest` passes), supervisor and user mode, Sv32 with the
-  accessed and written bits set by the walk, and a table of the last pages a core used for
-  each of fetch, read and write. No machine mode: as in the shader machine with `SBI_HLE`,
+  IEEE single precision too; `fptest` passes), supervisor and user mode, no page tables under
+  the no-MMU kernel. No machine mode: as in the shader machine with `SBI_HLE`,
   every trap is the supervisor's and its `ecall` is answered in place (timer, console, the
-  base extension).
+  base extension). `RVC_ZB=1` and `RVC_ISA=zb,zbs,zicond,zfinx` add instructions, to try them.
 - **Memory**: 288 MB from `0x80000000` (the GPU's memory and the control words to `0x82000000`,
   which are RAM too, then Linux's to `0x92000000`), the ROM at `0x40000000`, the parallel copy and fill (CSRs `0x0b0` to `0x0b3`, whose
   source may be the ROM), the clock chip and a UART that prints; the console ring of the
-  kernel without an MMU (`docs/machine/console.md`, "Words in memory") is read in the control pass.
+  kernel (`docs/machine/console.md`, "Words in memory") is read in the control pass.
   A copy from RAM to RAM is made after the cores' pass, 256 KB a pass for one core a pass, as
   the shader machine makes it with RAM in one texture (`docs/machine/gpu.md`): its core runs
   nothing until it is made (`RVC_COPY_STATS=1`: how many, and how many passes cores waited).
@@ -193,15 +189,17 @@ to a folder of its own.
   passes: the clock word, the host flags, the pointer, what each core ran, and the GPU's
   submit word.
 - **The worker cores** (`docs/machine/multicore.md`) follow the same mailbox: a start texel, sleeping
-  on the job word, stopping at a fault or a system call until core 0 answers. They run one
-  after another inside a pass and see each other's stores at once; on the shader machine a
-  store is seen a pass later. A program that is right there is right here, not the other way
-  round: `mctest` and the games' own checks belong to `rvc_harness`.
+  on the job word, stopping at a fault or a system call until core 0 answers. They run after core 0
+  inside a pass and see each other's stores at once; on the shader machine a store is seen a
+  pass later (`RVC_BESIDE`, `RVC_RACES`). A program that is right there is right here, not the
+  other way round: `mctest` and the games' own checks belong to the card too (`tools/test_card.py`).
 - **The guest's clock** is counted, not measured: a pass takes `--pass-ms` (0.25) and its
-  instructions `1 / --ips` seconds each (3,700,000), which is about what the harness's
-  machine does; an idle machine goes straight to its timer's next deadline. A game's
-  "frames a second" printed under it are therefore the shader machine's, roughly; its
-  instructions a frame are exact.
+  instructions `1 / --ips` seconds each (3,700,000); an idle machine goes straight to its timer's
+  next deadline. A game's instructions a frame are exact; its frames a second under this clock are
+  not the card's. `--pass-model A,B,C,D` with the numbers of `tools/card_model.json` gives a pass the
+  card's time: Doom's timedemo is 115.5 frames a second on the plain clock and 146.1 on that one
+  (calibrated, 31 October 2026, with `RVC_SOUND`, `RVC_WCACHE`, `RVC_ADFAULT`;
+  the `calibrated-measurements` skill says how far to trust it).
 
 ## What it is not
 
@@ -211,14 +209,14 @@ to a folder of its own.
   stay there: `rvc_harness --cpu` (above) runs them as the shader's passes. Without a sound
   card `/dev/sound` does not open and a game's own sound code never runs: `RVC_SOUND=1` moves
   the card's clock and voices as its control pass does (nothing is mixed), so a game counts
-  what it counts on the card (Quake: 9 thousand instructions of core 0 a frame more).
+  what it counts on the card.
   `tools\game_par.py` sets it, with `RVC_WCACHE`, `RVC_ADFAULT` and `RVC_RACES`
   (`docs/machine/multicore.md`, "A game's speed"; `--plain` drops all four, `RVC_ADFAULT=0` that one).
-- No keys yet. The pointer goes round (`--pointer-sweep N`, from pass N; `--pointer-circle
+- No keys from the host (`nxkey` in the guest makes them). The pointer goes round (`--pointer-sweep N`, from pass N; `--pointer-circle
   X,Y,R` for a circle of its own on the display) and its buttons word is set for a while
   (`--pointer-button B,S,T`: B from second S to T of the guest's). No pages from the host
-  (`docs/system/fetch.md`) but the kept folder's (`--persist FILE`, `docs/system/persist.md`), no snapshots.
-- Not a model of the shader machine's limits: no write cache that fills, no one-writer-per-16
+  (`docs/system/fetch.md`) but the kept folder's (`--persist FILE`, `docs/system/persist.md`).
+- As it stands, not a model of the shader machine's limits: no write cache that fills, no one-writer-per-16
   -bytes rule for workers. It answers "how many instructions", not "does it run there";
   `RVC_RACES=FILE` gives the cores memory as the card has it, and says where that mattered
   (`docs/machine/multicore.md`, "Races"); `RVC_CALLS=FILE` what core 0's calls cost ("Finding the
@@ -226,9 +224,8 @@ to a folder of its own.
   buckets of three texels, 6 bits for core 0 and the geometry's for a worker,
   `experiments/rvc_opt/src/mem.h`): a store that changes a texel no bucket has room for ends that
   core's pass before it, and the end says how many passes ended so. `RVC_ADFAULT=1` makes a
-  clear accessed or written bit in a page table entry fault, as the shader machine's walk does
-  (`src/mmu.h`): the kernel sets it, and a worker stops there until core 0 serves the page
-  (without it `rvc_cpu` sets the bit itself; `docs/machine/multicore.md`, "A game's speed"). Every run
+  clear accessed or written bit in a page table entry fault, as a walk on the shader machine does
+  (`src/mmu.h`); under the no-MMU kernel there is no walk and it changes nothing. Every run
   ends with a `[cpu] stops:` line: the workers' faults, those on such a bit, and core 0's on
   one, from the mark too; `RVC_ADFAULT=2` prints each (`[adfault]`: core, cause, address, pc).
 - `--save-ram FILE` writes the 288 MB of RAM as the run ends: a picture in GPU memory at a
@@ -236,8 +233,8 @@ to a folder of its own.
 - `--save FILE` writes the whole machine as the run ends (unless at `--until`): RAM, every core and worker, the
   devices' counts and the console's and the script's place, 315 MB; `--load FILE` goes on from one with the same
   image, cores and arguments. `--max-passes N` and `--save-after S` (seconds of this computer's) stop the run there,
-  and with `--save` it exits 5, to be gone on with. Doom's first timedemo stopped at pass 15,000 and gone on with ends
-  at the same pass (28,295) with every core's instructions and the console the same bytes as one run. Not kept:
+  and with `--save` it exits 5, to be gone on with. A run stopped and gone on with ends
+  at the same pass with every core's instructions and the console the same bytes as one run. Not kept:
   `RVC_RACES`', `RVC_PROF`'s and `RVC_CALLS`' tables (each call reports its own part), the write caches' lines (empty at
   a pass's start), the network. `tools/test_all.py --sections` runs every case in calls of `--section-secs` (40 s)
   through it: a case not yet ended prints `part`, and the next call of the same line goes on with it.
@@ -248,8 +245,8 @@ to a folder of its own.
 ## Checking it
 
 `fptest` in the guest (every float instruction against the runtime's integer routines), the
-games' state sums (`docs/games/ralert.md`, `docs/games/tdawn.md`), and the workers' instruction counts,
-which for Red Alert's movie agree with the shader machine's to five digits.
+games' state sums (`docs/games/ralert.md`, `docs/games/tdawn.md`), and `tools/test_card.py` below, which
+holds the same cases to the card.
 
 `RVC_FAST_CHECK=1` checks the fast handlers against the general step: every core's pass is run
 both ways from the same state (RAM read-only meanwhile, a page copied at its first store, so the
@@ -262,18 +259,16 @@ thread, about four times slower; with `RVC_WCACHE` too, not with `RVC_RACES`, `R
 `python tools/test_all.py` runs every program's own checks on the image under `rvc_cpu`, half
 the computer's threads at once: the machine (`mctest`, `fptest`, `lazy`, `cc`'s bytes,
 libmedia in the image), the games' state and picture sums (Doom, Quake, Quake III, ClassiCube,
-Tiberian Dawn, Red Alert, the NES, nxphys), nxray and nxpath, libmedia and the players, and the
+Tiberian Dawn, Red Alert, the NES, OpenTTD, nxphys), nxray and nxpath, libmedia and the players, and the
 desktop's programs (Paint's undo, the viewer's sums, Files' box, a question, the browser's
 counts, the monitor, the launch note). One PASS or FAIL line a case with why and its seconds,
-a summary, and exit 1 on any failure; the consoles are in `build/test_all`. On 15 October 2026
-the default set was 65 cases in 55 to 70 s; on 17 October 109 in 130 s; on 18
-October 111 in 56 s; on 31 October there are 152 (`--list`), about two minutes. The longest cases start first, by the seconds each took last time
-(`build/test_all/times.json`), and each case's `rvc_cpu` gets the threads left over
-(`RVC_THREADS`); `--cpu FILE` runs another build of `rvc_cpu`. Red Alert's atlas, 3.8 billion
-instructions on core 0, is the 43 s at its end.
+a summary, and exit 1 on any failure; the consoles are in `build/test_all`. On 31 October 2026 there
+are 152 cases by default (`--list`), about two minutes, and 161 with `--long`. The longest cases start
+first, by the seconds each took last time (`build/test_all/times.json`), and each case's `rvc_cpu` gets
+the threads left over (`RVC_THREADS`); `--cpu FILE` runs another build of `rvc_cpu`.
 
     python tools/test_all.py                 # the default set
-    python tools/test_all.py games nes-cells # tags (machine, games, doom, quake, ..., workers, media, desktop) or names
+    python tools/test_all.py games nes-cells # tags (machine, games, doom, quake, ..., workers, media, programs, desktop) or names
     python tools/test_all.py --long          # and the long cases: no workers, zerotest and tailtest, three bots
     python tools/test_all.py --races         # RVC_RACES on every case: 0 changes undone (RVC_RACES_NEAR=4 said)
     python tools/test_all.py --sections      # each case in calls of 40 s (--section-secs): run it again till none is left
@@ -281,10 +276,9 @@ instructions on core 0, is the 43 s at its end.
     python tools/test_all.py --card-model    # RVC_SOUND, RVC_WCACHE, RVC_ADFAULT as game_par.py has them
     python tools/test_all.py --image build/images/NAME --list
 
-A case's expected values are in the script, each with the doc it comes from; where a doc says
-only "as before" (Doom's, Quake's and Quake III's server sums, Quake's particles, ClassiCube's
-meshes and pack, `cc`'s outputs) a case keeps the md5 of every such line, as the image of 15
-October 2026 and, but for ClassiCube's leaves, the last commit's printed them. A change that
+A case's expected values are in the script, each with the doc it comes from; where no doc gives
+a value (Doom's, Quake's and Quake III's server sums, Quake's particles, ClassiCube's
+meshes and pack, `cc`'s outputs) a case keeps the md5 of every such line. A change that
 moves one on purpose sets the new value with the reason. Captures are not in it.
 
 `python tools/test_card.py CASE_OR_TAG ...` runs the same cases on the card: `bin/rvc_harness.exe --d3d11`
@@ -293,7 +287,7 @@ rules. The card boots in some 50 s, so a case resumes a snapshot of the shell ma
 (`build/test_card/shell.snap`; `--snapshot` makes it again) and its wall is at most 55 s (`--max-wall`). A case
 is skipped for another image, for host words that change as it runs, for `rvc_cpu`'s own devices (its `env`),
 or when it is longer than a run may be. The card's own values are in its `CARD` table, each the same in two
-runs. On 28 October 2026 the `machine` tag with `doom-3`, `nxpath-balls` and `nxpaint` passed 10 of 10 in
+runs. On the card on 28 October 2026 the `machine` tag with `doom-3`, `nxpath-balls` and `nxpaint` passed 10 of 10 in
 some 5 minutes (`mctest-255` and `cc-bytes` over 55 s; `hlsl` sums `a4b289dd` and `nxpath-balls` `5cd7620a`
 on the card, the tick's floats). `--parts` runs a case in runs of `--part-secs` (45 s), the machine saved at
 the end of each (`--save-state`) and resumed by the next, until its `--until` or its wall: the long cases
