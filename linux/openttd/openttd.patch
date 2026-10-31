@@ -4025,7 +4025,7 @@ index 9e36a0a..dc81b16 100644
  			StationID station_id = v->current_order.GetDestination().ToStationID();
  			const BaseStation *station = BaseStation::Get(station_id);
 diff --git a/src/random_access_file.cpp b/src/random_access_file.cpp
-index 75aa52f..396f240 100644
+index 75aa52f..40f06e0 100644
 --- a/src/random_access_file.cpp
 +++ b/src/random_access_file.cpp
 @@ -35,6 +35,10 @@ RandomAccessFile::RandomAccessFile(std::string_view filename, Subdirectory subdi
@@ -4039,7 +4039,17 @@ index 75aa52f..396f240 100644
  
  	/* Store the filename without path and extension */
  	auto t = filename.rfind(PATHSEPCHAR);
-@@ -91,6 +95,18 @@ void RandomAccessFile::SeekTo(size_t pos, int mode)
+@@ -42,6 +46,9 @@ RandomAccessFile::RandomAccessFile(std::string_view filename, Subdirectory subdi
+ 	this->simplified_filename = name_without_path.substr(0, name_without_path.rfind('.'));
+ 	strtolower(this->simplified_filename);
+ 
++	/* (SeekTo looks in the buffer first: nothing is there yet, whatever this memory held) */
++	this->pos = 0;
++	this->buffer = this->buffer_end = this->buffer_start;
+ 	this->SeekTo(static_cast<size_t>(pos), SEEK_SET);
+ }
+ 
+@@ -91,6 +98,18 @@ void RandomAccessFile::SeekTo(size_t pos, int mode)
  {
  	if (mode == SEEK_CUR) pos += this->GetPos();
  
@@ -4058,7 +4068,7 @@ index 75aa52f..396f240 100644
  	this->pos = pos;
  	if (fseek(*this->file_handle, this->pos, SEEK_SET) < 0) {
  		Debug(misc, 0, "Seeking in {} failed", this->filename);
-@@ -98,6 +114,22 @@ void RandomAccessFile::SeekTo(size_t pos, int mode)
+@@ -98,6 +117,22 @@ void RandomAccessFile::SeekTo(size_t pos, int mode)
  
  	/* Reset the buffer, so the next ReadByte will read bytes from the file. */
  	this->buffer = this->buffer_end = this->buffer_start;
@@ -4081,7 +4091,7 @@ index 75aa52f..396f240 100644
  }
  
  /**
-@@ -107,12 +139,7 @@ void RandomAccessFile::SeekTo(size_t pos, int mode)
+@@ -107,12 +142,7 @@ void RandomAccessFile::SeekTo(size_t pos, int mode)
  uint8_t RandomAccessFile::ReadByte()
  {
  	if (this->buffer == this->buffer_end) {
@@ -4095,7 +4105,7 @@ index 75aa52f..396f240 100644
  	}
  	return *this->buffer++;
  }
-@@ -153,7 +180,18 @@ void RandomAccessFile::ReadBlock(void *ptr, size_t size)
+@@ -153,7 +183,18 @@ void RandomAccessFile::ReadBlock(void *ptr, size_t size)
  		ptr = static_cast<char *>(ptr) + to_copy;
  	}
  
