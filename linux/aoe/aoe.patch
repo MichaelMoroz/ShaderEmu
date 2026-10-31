@@ -15,14 +15,19 @@ index d47ed773c..913cb4f2e 100644
  // Square map dimensions, in tiles. MapSize stores a separate option index.
  #define TRIBE_MAP_DIMENSION_TINY      72
 diff --git a/src/Panel.cpp b/src/Panel.cpp
-index 6fcfc515c..5986bbc32 100644
+index 6fcfc515c..ef25cb5ba 100644
 --- a/src/Panel.cpp
 +++ b/src/Panel.cpp
-@@ -151,6 +151,7 @@ int TPanelSystem::setCurrentPanel(char* n, int makeModal) {
+@@ -147,10 +147,12 @@ int TPanelSystem::removePanel(char* n) {
+     return 1;
+ }
+ 
++extern void aoe_panel_changed(const char*);
+ int TPanelSystem::setCurrentPanel(char* n, int makeModal) {
      PanelNode* node;
  
      node = findPanelNode(n);
-+    if (getenv("AOE_DEBUG")) fprintf(stderr, "aoe: panel %s%s\n", n, node ? "" : " is none");
++    aoe_panel_changed(n);
      if (node != 0) {
          if (mouse_owner != 0) {
              mouse_owner->release_mouse();
@@ -41,6 +46,18 @@ index 5dc3f00ad..f4278b85a 100644
  int TTextPanel::append_line(char* text_in, char* text2_in, long id_in) {
      return insert_line((int) num_lines, text_in, text2_in, id_in);
  }
+diff --git a/src/drawarea.cpp b/src/drawarea.cpp
+index 9f77ab2ed..98f60b93d 100644
+--- a/src/drawarea.cpp
++++ b/src/drawarea.cpp
+@@ -453,6 +453,7 @@ unsigned char TDrawSystem::CheckSurfaces() {
+ 
+         DrawAreaNode* node = this->DrawAreaList;
+         while (node != 0) {
++            if (getenv("AOE_AREAS") && (unsigned long) node->DrawArea->DrawSurface > 0x60000000ul) fprintf(stderr, "area %p node %p surface %p w %d h %d name %p\n", node->DrawArea, node, node->DrawArea->DrawSurface, node->DrawArea->Width, node->DrawArea->Height, node->DrawArea->Name);
+             if (node->DrawArea != this->PrimaryArea && node->DrawArea->CheckSurface() == 3)
+                 return 3;
+             node = node->NextNode;
 diff --git a/src/main.cpp b/src/main.cpp
 index b672d36a5..05d2733f2 100644
 --- a/src/main.cpp

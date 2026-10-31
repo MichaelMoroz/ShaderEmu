@@ -4,10 +4,13 @@
 #include "ddraw.h"
 #include "aoe_port.h"
 #include "aoe_fonts.h"
+#include "aoe_window.h"
 #undef open
 #undef fopen
 
+static int window_open;
 unsigned long aoe_clock_ms(void) {
+    if (window_open) return aoe_win_clock();
     struct timeval t;
     gettimeofday(&t, 0);
     static long start;
@@ -48,23 +51,90 @@ const AoeFont* aoe_font_get(const char* face, int size, int bold) {
     return best;
 }
 
-// ------------------------------------------------------------------ with no window
+// ------------------------------------------------------------------ the window, or under AOE_NOWINDOW=1 none
 static unsigned char* page;
-unsigned char* aoe_page(int w, int h) { page = (unsigned char*) calloc(w, h + 1); return page; }
-void aoe_palette_set(const PALETTEENTRY*) {}
+static int no_window = -1;
+static int windowed(void) {
+    if (no_window < 0) no_window = getenv("AOE_NOWINDOW") != 0;
+    return !no_window;
+}
+static const char* wtitle = "Age of Empires";
+unsigned char* aoe_page(int w, int h) {
+    if (windowed()) { page = aoe_win_open(w, h, wtitle); window_open = 1; }
+    else page = (unsigned char*) calloc(w, h + 1);
+    return page;
+}
+void aoe_palette_set(const PALETTEENTRY* p) { if (window_open) aoe_win_palette((const unsigned char*) p); }
 static long frames;
-void aoe_present(void) { frames++; }
+long aoe_frames(void) { return frames; }
+void aoe_present(void) {
+    frames++;
+    if (window_open) aoe_win_present();
+}
+void aoe_before_blit(void) { if (window_open) aoe_win_settle(); }
 void aoe_window_make(int, int, const char*) {}
-void aoe_window_close(void) {}
+void aoe_window_close(void) { if (window_open) aoe_win_close(); window_open = 0; }
 
-// A script of input (AOE_SCRIPT="MS click X Y;MS key K"): for the tests and for first light
+static void events_of_window(void) {
+    static unsigned last;
+    unsigned now = aoe_win_clock();
+    if (now - last < 10) return;   // a look at the window system is a call to another program
+    last = now;
+    struct aoe_event e;
+    while (aoe_win_event(&e)) {
+        switch (e.kind) {
+        case AOE_KEY_DOWN:
+            if (e.a) { aoe_keys[e.a] = 1; aoe_post(WM_KEYDOWN, e.a, 1); }
+            if (e.b >= 32 || e.b == 8 || e.b == 13 || e.b == 27) aoe_post(WM_CHAR, e.b, 1);
+            break;
+        case AOE_KEY_UP:
+            if (e.a) { aoe_keys[e.a] = 0; aoe_post(WM_KEYUP, e.a, 1); }
+            break;
+        case AOE_BUTTON_DOWN:
+            aoe_mouse_x = e.a; aoe_mouse_y = e.b;
+            aoe_keys[e.c == 1 ? 1 : 2] = 1;
+            aoe_post(e.c == 1 ? WM_LBUTTONDOWN : WM_RBUTTONDOWN, e.c == 1 ? MK_LBUTTON : MK_RBUTTON, MAKELONG(e.a, e.b));
+            break;
+        case AOE_BUTTON_UP:
+            aoe_mouse_x = e.a; aoe_mouse_y = e.b;
+            aoe_keys[e.c == 1 ? 1 : 2] = 0;
+            aoe_post(e.c == 1 ? WM_LBUTTONUP : WM_RBUTTONUP, 0, MAKELONG(e.a, e.b));
+            break;
+        case AOE_MOVE:
+            aoe_mouse_x = e.a; aoe_mouse_y = e.b;
+            aoe_post(WM_MOUSEMOVE, (aoe_keys[1] ? MK_LBUTTON : 0) | (aoe_keys[2] ? MK_RBUTTON : 0), MAKELONG(e.a, e.b));
+            break;
+        case AOE_CLOSE:
+            aoe_post(WM_CLOSE, 0, 0);
+            break;
+        }
+    }
+}
+
+// A script of input (AOE_SCRIPT="MS click X Y;MS key K"), each step MS after the screen last changed or the
+// step before: for the tests. AOE_STATS_MS: a line of frames and the clock.
 static const char* script;
+static unsigned long step_from;
+void aoe_panel_changed(const char* n) {
+    step_from = timeGetTime();
+    if (getenv("AOE_DEBUG")) fprintf(stderr, "aoe: panel %s at %lu, frame %ld\n", n, step_from, frames);
+}
 void aoe_events(void) {
+    if (window_open) events_of_window();
     static int read_env;
     if (!read_env) { read_env = 1; script = getenv("AOE_SCRIPT"); }
+    static int stats = -1;
+    static unsigned long stats_at; static long stats_frames;
+    if (stats < 0) { const char* e = getenv("AOE_STATS_MS"); stats = e ? atoi(e) : 0; }
+    if (stats && timeGetTime() - stats_at >= (unsigned long) stats) {
+        fprintf(stderr, "aoestat: %lu ms, frames %ld (+%ld)\n", timeGetTime(), frames, frames - stats_frames);
+        stats_at = timeGetTime(); stats_frames = frames;
+    }
     if (!script || !*script) return;
     int at;
-    if (sscanf(script, "%d", &at) != 1 || (long) timeGetTime() < at) return;
+    if (sscanf(script, "%d", &at) != 1 || timeGetTime() - step_from < (unsigned long) at) return;
+    step_from = timeGetTime();
+    fprintf(stderr, "aoe: step %.30s at %lu\n", script, step_from);
     int x, y;
     char what[16];
     sscanf(script, "%d %15s %d %d", &at, what, &x, &y);
@@ -80,7 +150,8 @@ void aoe_events(void) {
         aoe_post(WM_CHAR, x, 1);
     } else if (!strcmp(what, "quit")) {
         fprintf(stderr, "aoe: script's end, frames %ld\n", frames);
-        exit(0);
+        aoe_window_close();
+        _exit(0);
     }
     const char* e = strchr(script, ';');
     script = e ? e + 1 : "";

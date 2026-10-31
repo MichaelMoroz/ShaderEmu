@@ -737,7 +737,8 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; i++) { strncat(cmd_line, argv[i], 200); strcat(cmd_line, " "); }
     int r = WinMain((HINSTANCE) 1, 0, cmd_line, SW_SHOW);
     aoe_window_close();
-    return r;
+    fflush(0);
+    _exit(r);
 }
 
 static unsigned rand_state = 1;

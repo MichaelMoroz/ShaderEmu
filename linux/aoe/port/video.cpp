@@ -18,6 +18,7 @@ static long blits;
 extern unsigned char* aoe_page(int w, int h);       // the window's page, or memory
 extern void aoe_palette_set(const PALETTEENTRY* p); // the window's palette
 extern void aoe_present(void);                      // the picture to the GPU
+extern void aoe_before_blit(void);                  // what the GPU reads of the page is done with
 
 static void dump_picture(void) {
     const char* name = getenv("AOE_DUMP");
@@ -60,6 +61,7 @@ HRESULT IDirectDrawSurface::Blt(LPRECT dr, IDirectDrawSurface* src, LPRECT sr, D
     RECT all = {0, 0, w, h};
     if (!dr) dr = &all;
     if (getenv("AOE_BLITS")) fprintf(stderr, "blt %p primary %p from %p fl %x %ld,%ld,%ld,%ld\n", this, primary, src, (unsigned) fl, (long) dr->left, (long) dr->top, (long) dr->right, (long) dr->bottom);
+    if (this == primary) aoe_before_blit();
     if (fl & DDBLT_COLORFILL) {
         for (int y = dr->top; y < dr->bottom; y++) memset(bits + y * pitch + dr->left, fx->dwFillColor, dr->right - dr->left);
     } else if (src) {
