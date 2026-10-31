@@ -2408,7 +2408,33 @@ index 7d585b0..931b1c9 100644
  
  		/* Make sure _settings is filled with _settings_newgame if we switch to a game directly */
  		if (_switch_mode != SM_NONE) MakeNewgameSettingsLive();
-@@ -802,8 +855,20 @@ int openttd_main(std::span<std::string_view> arguments)
+@@ -453,14 +506,25 @@ void PostMainLoop()
+ {
+ 	WaitTillSaved();
+ 
++#ifdef WITH_SHADEREMU
++	void SeExitWatch();
++	SeExitWatch();
++#endif
+ 	/* only save config if we have to */
+ 	if (_save_config) {
+ 		SaveToConfig();
+ 		SaveHotkeysToConfig();
+ 		WindowDesc::SaveToConfig();
+ 		SaveToHighScore();
+ 	}
+ 
++#ifdef WITH_SHADEREMU
++	/* Nothing below is any use to a program that is going, and it was all that ran with the window gone: docs/games/openttd.md, "At exit" */
++	void SeExitNow();
++	if (_network_available) NetworkShutDown();
++	DriverFactoryBase::ShutdownDrivers();
++	SeExitNow();
++#endif
+ 	/* Reset windowing system, stop drivers, free used memory, ... */
+ 	ShutdownGame();
+ }
+@@ -802,8 +866,20 @@ int openttd_main(std::span<std::string_view> arguments)
  	if (musicdriver.empty() && !_ini_musicdriver.empty()) musicdriver = _ini_musicdriver;
  	DriverFactoryBase::SelectDriver(musicdriver, Driver::DT_MUSIC);
  
@@ -2431,7 +2457,7 @@ index 7d585b0..931b1c9 100644
  
  	/* ScanNewGRFFiles now has control over the scanner. */
  	RequestNewGRFScan(scanner.release());
-@@ -947,6 +1012,18 @@ bool SafeLoad(const std::string &filename, SaveLoadOperation fop, DetailedFileTy
+@@ -947,6 +1023,18 @@ bool SafeLoad(const std::string &filename, SaveLoadOperation fop, DetailedFileTy
  	_game_mode = newgm;
  
  	SaveOrLoadResult result = (lf == nullptr) ? SaveOrLoad(filename, fop, dft, subdir) : LoadWithFilter(std::move(lf));
@@ -2450,7 +2476,7 @@ index 7d585b0..931b1c9 100644
  	if (result == SL_OK) return true;
  
  	if (_network_dedicated && ogm == GM_MENU) {
-@@ -1173,6 +1250,14 @@ void SwitchToMode(SwitchMode new_mode)
+@@ -1173,6 +1261,14 @@ void SwitchToMode(SwitchMode new_mode)
  			}
  
  			UpdateSocialIntegration(GM_MENU);
@@ -2465,7 +2491,7 @@ index 7d585b0..931b1c9 100644
  			break;
  
  		case SM_SAVE_GAME: // Save game.
-@@ -1241,8 +1326,13 @@ void StateGameLoop()
+@@ -1241,8 +1337,13 @@ void StateGameLoop()
  		BasePersistentStorageArray::SwitchMode(PSM_LEAVE_GAMELOOP);
  		UpdateLandscapingLimits();
  
@@ -2481,7 +2507,7 @@ index 7d585b0..931b1c9 100644
  	} else {
  		if (_debug_desync_level > 2 && TimerGameEconomy::date_fract == 0 && (TimerGameEconomy::date.base() & 0x1F) == 0) {
  			/* Save the desync savegame if needed. */
-@@ -1277,8 +1367,13 @@ void StateGameLoop()
+@@ -1277,8 +1378,13 @@ void StateGameLoop()
  #endif
  		UpdateLandscapingLimits();
  
@@ -2497,7 +2523,7 @@ index 7d585b0..931b1c9 100644
  		cur_company.Restore();
  	}
  
-@@ -1342,6 +1437,9 @@ void GameLoop()
+@@ -1342,6 +1448,9 @@ void GameLoop()
  	}
  
  	if (_request_newgrf_scan) {
@@ -2507,7 +2533,7 @@ index 7d585b0..931b1c9 100644
  		ScanNewGRFFiles(_request_newgrf_scan_callback);
  		_request_newgrf_scan = false;
  		_request_newgrf_scan_callback = nullptr;
-@@ -1363,6 +1461,9 @@ void GameLoop()
+@@ -1363,6 +1472,9 @@ void GameLoop()
  
  	/* switch game mode? */
  	if (_switch_mode != SM_NONE && !HasModalProgress()) {
@@ -2517,7 +2543,7 @@ index 7d585b0..931b1c9 100644
  		SwitchToMode(_switch_mode);
  		_switch_mode = SM_NONE;
  		if (_exit_game) return;
-@@ -1385,9 +1486,15 @@ void GameLoop()
+@@ -1385,9 +1497,15 @@ void GameLoop()
  			NetworkClientConnectGame(_settings_client.network.last_joined, COMPANY_SPECTATOR);
  		}
  		/* Singleplayer */
@@ -9339,4 +9365,53 @@ index 3d07ff3..b8911ba 100644
 +
  static const uint ZOOM_BASE_SHIFT = to_underlying(ZoomLevel::Normal);
  static uint const ZOOM_BASE = 1U << ZOOM_BASE_SHIFT;
+ 
+diff --git a/src/os/unix/crashlog_unix.cpp b/src/os/unix/crashlog_unix.cpp
+--- a/src/os/unix/crashlog_unix.cpp
++++ b/src/os/unix/crashlog_unix.cpp
+@@ -215,6 +215,12 @@
+ 
+ /* static */ void CrashLog::InitialiseCrashLog()
+ {
++#ifdef WITH_SHADEREMU
++	/* (A crash here ends the program at once: the kernel says where, the desktop says it stopped, and the GPU and the workers
++	 * are free. The log has no stack here, the saved game is minutes of LZMA over memory that may be broken, and meanwhile the
++	 * window has gone and the program holds the GPU: docs/games/openttd.md, "At exit".) */
++	return;
++#endif
+ 	SetSignals(HandleCrash);
+ }
+ 
+diff --git a/src/os/unix/unix.cpp b/src/os/unix/unix.cpp
+--- a/src/os/unix/unix.cpp
++++ b/src/os/unix/unix.cpp
+@@ -8,6 +8,10 @@
+ /** @file unix.cpp Implementation of Unix specific file handling. */
+ 
+ #include "../../stdafx.h"
++#ifdef WITH_SHADEREMU
++#include <csignal>
++#include <unistd.h>
++#endif
+ #include "../../textbuf_gui.h"
+ #include "../../debug.h"
+ #include "../../string_func.h"
+@@ -229,6 +233,18 @@
+ #elif !defined( __APPLE__)
+ void OSOpenBrowser(const std::string &url)
+ {
++#ifdef WITH_SHADEREMU
++	/* (no MMU: a fork is a vfork, whose child runs on this program's memory, and exit() below ran this program's atexit
++	 * functions there: its workers closed, its statics destroyed, under a game that went on and failed later, or stayed
++	 * without a window; docs/games/openttd.md, "At exit". The machine's `open` takes an address.) */
++	const char *open_args[3] = { "open", url.c_str(), nullptr };
++	signal(SIGCHLD, SIG_IGN);
++	if (vfork() == 0) {
++		execvp(open_args[0], const_cast<char * const *>(open_args));
++		_exit(127);
++	}
++	return;
++#endif
+ 	pid_t child_pid = fork();
+ 	if (child_pid != 0) return;
  

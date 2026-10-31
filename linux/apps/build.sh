@@ -37,7 +37,7 @@ build_one() {
     riscv32-linux-strip -o "$OUT/bin/$p" "$WORK/src/apps/$p"
 }
 pids=()
-for p in nxedit nxfiles nxpaint nxview nxsettings nxmon nxweb nxkey nxicon nxask nxnet open nxpersist nxreg nxtetris nxmine nxpinball nxeyes nxclock nxterm nxcalc; do
+for p in nxedit nxfiles nxpaint nxview nxsettings nxmon nxweb nxkey nxfuzz nxicon nxask nxnet open nxpersist nxreg nxtetris nxmine nxpinball nxeyes nxclock nxterm nxcalc; do
     build_one $p & pids+=($!)
 done
 # archives unpacked on the worker cores (unarc.c: open --unpack runs it first, docs/system/open.md)

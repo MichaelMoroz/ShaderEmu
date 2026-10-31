@@ -303,6 +303,25 @@ frame_alive(GR_WINDOW_ID frame)
 
 /* What of the root's frames is new gets to be noted for `t`; only a mapped one with its client. */
 static int
+process_is(int pid, const char *name)
+{
+	char path[32], text[32];
+	int fd, n;
+
+	snprintf(path, sizeof path, "/proc/%d/comm", pid);
+	fd = open(path, O_RDONLY);
+	if (fd < 0)
+		return 0;
+	n = read(fd, text, sizeof text - 1);
+	close(fd);
+	if (n <= 0)
+		return 0;
+	text[n] = 0;
+	text[strcspn(text, "\n")] = 0;
+	return !strcmp(text, name);
+}
+
+static int
 find_window(struct tag *t)
 {
 	GR_WINDOW_ID parent, *children = NULL;
@@ -315,6 +334,18 @@ find_window(struct tag *t)
 
 		if (is_known(children[i]) || !is_task(children[i], &in) || !in.mapped)
 			continue;
+		if (process_is(in.processid, "nxask")) {
+			/* (what a program that could not start says, in a program of its own: not its window) */
+			char title[64];
+
+			static int said;
+
+			title_of(client_of(children[i]), title, sizeof title);
+			if (said != in.processid)
+				say("FZ a question, process %d: \"%s\"", in.processid, title);
+			said = in.processid;
+			continue;
+		}
 		t->frame = children[i];
 		t->client = client_of(children[i]);
 		t->pid = in.processid;
@@ -723,27 +754,33 @@ random_use(struct tag *t, int count, unsigned seed)
 
 	rng_state = seed * 2654435761u + 7;
 	for (i = 0; i < count && frame_alive(t->frame); i++) {
-		int x, y, w, h;
+		int x, y, w, h, kind;
 
 		window_area(t, &x, &y, &w, &h);
 		if (w < 4 || h < 4)
 			return;
-		switch (rnd(8)) {
-		case 0: case 1: case 2:
-			press(keys[rnd(sizeof keys / sizeof keys[0])]);
-			break;
-		case 3: case 4:
-			click_at(x + rnd(w), y + rnd(h), 0x110);
-			break;
-		case 5:
-			click_at(x + rnd(w), y + rnd(h), 0x111);
-			break;
-		case 6:
-			drag_at(x + rnd(w), y + rnd(h), x + rnd(w), y + rnd(h));
-			break;
-		default:
-			wheel_at(x + rnd(w), y + rnd(h), rnd(2) ? 1 : -1);
-			break;
+		/* (each action said, to tell which of a plan's did it) */
+		kind = rnd(8);
+		if (kind <= 2) {
+			const char *k = keys[rnd(sizeof keys / sizeof keys[0])];
+
+			say("FZ r key %s", k);
+			press(k);
+		} else if (kind <= 5) {
+			int ay = y + rnd(h), ax = x + rnd(w);
+
+			say("FZ r %s %d,%d", kind == 5 ? "rclick" : "click", ax - x, ay - y);
+			click_at(ax, ay, kind == 5 ? 0x111 : 0x110);
+		} else if (kind == 6) {
+			int by = y + rnd(h), bx = x + rnd(w), ay = y + rnd(h), ax = x + rnd(w);
+
+			say("FZ r drag %d,%d %d,%d", ax - x, ay - y, bx - x, by - y);
+			drag_at(ax, ay, bx, by);
+		} else {
+			int n = rnd(2) ? 1 : -1, ay = y + rnd(h), ax = x + rnd(w);
+
+			say("FZ r wheel %d,%d", ax - x, ay - y);
+			wheel_at(ax, ay, n);
 		}
 		ms_sleep(30 + rnd(200));
 	}
@@ -757,16 +794,26 @@ check(int final)
 	int n, i, j;
 
 	canary();
-	check_gpu(!final);
-	if (!final)
+	if (!final) {
+		check_gpu(1);
 		return;
+	}
 	n = processes(pids, pnames, MAX_PROCS);
 	for (i = 0; i < n; i++) {
 		for (j = 0; j < base_count && base_pids[j] != pids[i]; j++)
 			;
+		/* (`open`, started for a link, waits for a host that rvc_cpu has not: 40 s) */
+		if (j == base_count && !strcmp(pnames[i], "open")) {
+			say("FZ open goes on, killed");
+			kill(pids[i], SIGKILL);
+			continue;
+		}
 		if (j == base_count && pids[i] != getpid())
 			BAD("left-process %d %s after everything closed", pids[i], pnames[i]);
 	}
+	ms_sleep(200);
+	reap();
+	check_gpu(0);
 	{
 		long now = free_kb();
 
@@ -843,6 +890,31 @@ main(int argc, char **argv)
 					continue;
 				do_close(e, "x");
 				wait_gone(e, "x at the end");
+			}
+			/* what nobody here started: a question (nxask), or a program started from the desktop by random keys */
+			{
+				GR_WINDOW_ID parent, *children = NULL;
+				GR_COUNT n = 0, w;
+				static int strays[32];
+				int stray_count = 0;
+
+				GrQueryTree(GR_ROOT_WINDOW_ID, &parent, &children, &n);
+				for (w = 0; w < n; w++) {
+					GR_WINDOW_INFO in;
+
+					if (is_known(children[w]) || !is_task(children[w], &in))
+						continue;
+					say("FZ a window of nobody's: process %d: closed", in.processid);
+					GrCloseWindow(client_of(children[w]));
+					if (stray_count < 32)
+						strays[stray_count++] = in.processid;
+				}
+				free(children);
+				GrFlush();
+				ms_sleep(2000);
+				while (stray_count > 0)
+					if (pid_alive(strays[--stray_count]))
+						kill(strays[stray_count], SIGKILL);
 			}
 			/* a program with no window yet: its process's group */
 			for (k = 0; k < tag_count; k++) {

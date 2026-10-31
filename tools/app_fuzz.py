@@ -32,7 +32,7 @@ APPS = {
     # the small programs
     'tetris': ('nxtetris', 20, 'light'), 'mines': ('nxmine', 20, 'light'), 'pinball': ('nxpinball', 20, 'light'),
     'term': ('nxterm', 20, 'light'), 'calc': ('nxcalc', 20, 'light'), 'clock': ('nxclock', 20, 'light'),
-    'eyes': ('nxeyes', 20, 'light'), 'gears': ('glxgears', 20, 'gpu'), 'edit': ('nxedit', 20, 'light'),
+    'eyes': ('nxeyes', 0, 'light'), 'gears': ('glxgears', 20, 'gpu'), 'edit': ('nxedit', 20, 'light'),
     'files': ('nxfiles /root', 20, 'light'), 'paint': ('nxpaint', 20, 'light'), 'web': ('nxweb /usr/share/web-test.html', 30, 'light'),
     'mon': ('nxmon', 20, 'light'), 'net': ('nxnet', 20, 'light'), 'settings': ('nxsettings', 20, 'light'),
     'ide': ('nxide', 30, 'light'), 'imdemo': ('imdemo', 30, 'gpu'),
@@ -49,10 +49,10 @@ WAYS = ('x', 'alt', 'bar', 'term', 'twice')
 NEVER = [
     (r'Kernel panic', 'kernel-panic'), (r'Oops', 'kernel-oops'), (r'Unable to handle kernel', 'kernel-oops'), (r'BUG: ', 'kernel-bug'),
     (r'WARNING: CPU', 'kernel-warn'), (r'segfault|Segmentation fault', 'segfault'), (r'a worker wanted', 'worker-wanted'),
-    (r'Sys_Error', 'sys-error'), (r'Could not start', 'could-not-start'), (r'One program at a time', 'gpu-busy'),
+    (r'Sys_Error', 'sys-error'), (r'Could not start', 'could-not-start'), (r'One program at a time|the GPU is drawing for', 'gpu-busy'),
     (r'stopped before its window', 'stopped-early'), (r'Illegal instruction', 'illegal-instruction'), (r'unhandled signal', 'signal'),
     (r'Bus error', 'bus-error'), (r'Aborted', 'aborted'), (r'an exception out of', 'exception'),
-    (r'Fatal error|FatalError|fatal error', 'fatal'), (r'assert(ion)? failed|Assertion', 'assert'),
+    (r'Crash encountered', 'crash'), (r'Fatal error|FatalError|fatal error', 'fatal'), (r'assert(ion)? failed|Assertion', 'assert'),
     (r'double free|invalid (free|pointer)', 'heap'), (r'Out of memory|invoked oom-killer|page allocation failure', 'oom'),
 ]
 
@@ -64,8 +64,8 @@ def flat(plan):
 def start_ops(tag, wait=True):
     cmd, seconds, _ = APPS[tag]
     ops = [f'start:{tag}:{cmd.replace(" ", ",")}']
-    if wait:
-        ops.append(f'wait:{tag}:{seconds}')
+    if wait:   # (the eyes have no frame: no task of the desktop's, closed by a signal to their process)
+        ops.append(f'wait:{tag}:{seconds}' if seconds else 'sleep:1000')
     return ops
 
 
@@ -114,9 +114,18 @@ class Runner:
             if m:
                 s = console.rfind('\n', 0, m.start()) + 1
                 bad.append([kind, console[s:console.find('\n', m.end())].strip()[:200]])
+        # One program at a time draws: told to close one still open is as it should be, and then there is no window
+        def open_at(name, at):
+            for tag, command in re.findall(r'FZ started (\S+): process \d+: ([^\r\n]*)', console[:at]):
+                if name.replace('.bin', '') in command and not re.search(r'FZ closed %s \(' % re.escape(tag), console[:at]):
+                    return True
+            return False
+        told = list(re.finditer(r'(?:GPU is drawing for|close) ((?!it\b)\S+)(?: \(process| first)', console))
+        if told and all(open_at(m.group(1), m.start()) for m in told):
+            bad = [b for b in bad if b[0] != 'gpu-busy' and not (b[0] == 'bad' and b[1].startswith('no-window'))]
         if 'FZ-DONE' not in console:
             at = re.findall(r'FZ op ([^\r\n]*)', console)
-            bad.append(['hang', 'no FZ-DONE, last op ' + (at[-1] if at else '?')])
+            bad.append(['wall', 'no FZ-DONE in the wall, last op ' + (at[-1] if at else '?')])
         if a.races:
             m = re.search(r'(\d+) (?:changes? )?undone', tail)
             if m and int(m.group(1)):
@@ -151,7 +160,7 @@ def all_plans(runner, plans, jobs):
 
 def single_plans(apps):
     for tag in apps:
-        for way in WAYS:
+        for way in WAYS if APPS[tag][1] else ('term',):
             yield [*start_ops(tag), f'close:{tag}:{way}', 'end']     # as soon as there is a window
             yield [f'start:{tag}:{APPS[tag][0].replace(" ", ",")}', 'sleep:300', f'close:{tag}:{way}', 'end']  # while it starts
             yield [*start_ops(tag), 'sleep:3000', f'rand:{tag}:12:{len(tag)}', f'close:{tag}:{way}', 'end']
@@ -178,7 +187,7 @@ def random_plan(r, apps, length=None):
             tag = f'{base}{serial}'
             cmd = APPS[base][0].replace(' ', ',')
             ops.append(f'start:{tag}:{cmd}')
-            if r.random() < 0.85:
+            if APPS[base][1] and r.random() < 0.85:
                 ops.append(f'wait:{tag}:{APPS[base][1]}')
             open_tags.append(tag)
         elif choice < 0.6 and open_tags:
