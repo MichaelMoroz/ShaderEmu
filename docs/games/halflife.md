@@ -288,7 +288,9 @@ server last said: 2.5 moves a frame at 24k each. The states lie by the command n
 only the commands not run yet: the moves before them say the same while nothing came from the server, and
 when something did, they say the same while it says what was predicted for the command it answers
 (`SE_AsPredicted`: place within 0.05, speed within 1, every state that a server may change by itself
-exactly). Otherwise it is every move again. `HL_PREDICT=full` is the old way; `HL_PREDICT=check`
+exactly). Then what the server said replaces the state kept for that command, near as they are: a new move starts as
+every move again's, since 1/256 of a unit at a step's edge is whether it climbs the step (`HL_PREDICT=check` said up to
+274 units now and then; a fight's frames as they were, calibrated). Otherwise it is every move again. `HL_PREDICT=full` is the old way; `HL_PREDICT=check`
 runs every move again beside the states kept and prints how far they are apart (`hlpredict:`): 0 over
 0.1 and the most 0.016 units in a walk with turns, jumps and shots, 2 replays in 500 frames (a move that
 pushes the server's way, a teleport). 31 October 2026, the fight's 231.8k to 205.5k on core 0, 13.1 to
