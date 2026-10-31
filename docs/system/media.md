@@ -248,11 +248,14 @@ with the machine's single-precision constants) and the guest. Sums under `rvc_cp
 | `w8m.wav`, `w24.wav`, `wf32.wav`, `wf64.wav` | `52d7de09`, `de49ac9b`, `6aec9116`, `6aec9116` | every sample |
 | `play-test.mp3` | `aa07a2e5`, in order and with 16 workers | nearly all the same after minimp3's encoder delay, the rest by 1 |
 | `play-test.mod` | `c714a845` | |
-| `Grieg - Hall of the Mountain King.ogg` | in pieces `b7a28c01` (16 and 63 workers), in order `a9b462a1` (-1 and 0 workers) | |
+| `Grieg - Hall of the Mountain King.ogg` | `a9b462a1`, in order and with 16 and 63 workers | |
 
-The Ogg file's two sums differ on this image, and `nxplay`'s do too (`34eeed95` with 48 workers,
-`01ba4206` without): Vorbis's pieces are not to the last bit an in-order decoding here, though the
-scheme says they should be. Not looked into. `play-test.flac` and `.mp3` agree both ways.
+A page of that file says a frame 412 past its true end (`2143260`, where the blocks before it make
+`2142848`), and `stb_vorbis_seek` counts from what the page says. `m_vorbis_find_liars` walks the
+pages at opening for a position that no blocks can add up to (not a multiple of a quarter of the
+short block; the last page cuts the file's end and may say anything), and a frame that would count
+from one is sought from the page before it and decoded up to. A wrong position that is such a
+multiple is not found.
 
 `RVC_RACES` with 16 workers over Vorbis, FLAC, MP3 and WAV must say 0 undone.
 

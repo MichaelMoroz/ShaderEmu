@@ -199,7 +199,7 @@ Under `rvc_cpu`, a few seconds each (start it from PowerShell):
 | `play-test.mod` | `98e66905` of 1,354,752 |
 | `play-test.mp3` | `809816e7` of 1,594,368, with any number of workers and with none |
 | the same with `NXPLAY_HALF=1` | `9efedb8f` of 797,184 |
-| `Grieg - Hall of the Mountain King.ogg` | `34eeed95` of 4,410,000 with 48 workers, `01ba4206` with none (they differ: `media.md`, "Sound") |
+| `Grieg - Hall of the Mountain King.ogg` | `01ba4206` of 4,410,000, with 48 workers and with none |
 
 - The MP3 sums are also what the same two files compiled on the host give (x86-64, gcc):
   the machine's float instructions under `rvc_cpu` decode as the host does.
