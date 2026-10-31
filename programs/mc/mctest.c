@@ -228,7 +228,48 @@ static void check(const char* what, int ok) {
     printf("mctest: %-7s %s\n", what, ok ? "ok" : "FAILED");
 }
 
+// "mctest reopen [lend] [PASSES]": workers closed and opened again in one program, as many each time, rounds on
+// all of them (the team left lingering PASSES passes at each close, or lent)
+static void reopen_body(void* ctx, uint32_t from, uint32_t to) {
+    volatile uint32_t* sums = (volatile uint32_t*)ctx;
+    uint32_t sum = 0;
+    for (uint32_t i = from; i < to; i++) sum += i;
+    // (a texel a core: 16 bytes)
+    sums[mcw_self() * 4] += sum;
+}
+
+static int reopen_test(int lend, int passes) {
+    static uint32_t sums[MC_MAX_CORES * 4] __attribute__((aligned(16)));
+    int first = 0, bad = 0;
+    if (passes) mcw_for_linger(passes);
+    for (int i = 0; i < 4; i++) {
+        uint32_t total = 0, n = 100000;
+        int got;
+        if (lend) mcw_lend();
+        got = mcw_open(MC_MAX_CORES - 1);
+        memset(sums, 0, sizeof sums);
+        mcw_touch(sums, sizeof sums);
+        if (!i) first = got;
+        mcw_for(n, reopen_body, sums);
+        mcw_for_begin(n, reopen_body, sums, 0);
+        mcw_for_wait();
+        // (the counters' memory is mapped from the workers' device: it must not keep that open past the close)
+        mcw_counters();
+        mcw_set(0, 0);
+        mcw_add(0, 7);
+        if (mcw_get(0) != 7) bad = 1;
+        for (int k = 0; k < MC_MAX_CORES; k++) total += sums[k * 4];
+        printf("mctest: open %d: %d workers, sum %u\n", i + 1, got, total);
+        fflush(stdout);
+        if (got != first || total != n * (n - 1)) bad = 1;
+        mcw_close();
+    }
+    printf("mctest: reopen %s\n", bad ? "FAIL" : "PASS");
+    return bad;
+}
+
 int main(int argc, char** argv) {
+    if (argc > 1 && !strcmp(argv[1], "reopen")) return reopen_test(argc > 2 && !strcmp(argv[2], "lend"), argc > 2 ? atoi(argv[argc - 1]) : 0);
     int want = argc > 1 ? atoi(argv[1]) : MC_MAX_CORES - 1;
     uint32_t limit = argc > 2 ? (uint32_t)atoi(argv[2]) : 60000;
     if (argc > 4 && !strcmp(argv[3], "share") && !strcmp(argv[4], "lend")) mcw_lend();

@@ -902,6 +902,25 @@ void mcw_counters_settle(void)
 	while (head[2] == merges) mcw_rest();
 }
 
+/* The workers are about to be closed: their team ends, and the counters go on in plain words, their memory given back
+ * (asked again after the next mcw_open()). */
+void mcwx_closing(void)
+{
+	int i;
+
+	mcw_for_end();
+	if (count_base >= 0) {
+		uint32_t kept[MC_COUNTERS];
+
+		mcw_counters_settle();
+		for (i = 0; i < MC_COUNTERS; i++) kept[i] = mcw_get(i);
+		count_base = -1;
+		for (i = 0; i < MC_COUNTERS; i++) words[i] = kept[i];
+	}
+	counting = 0;
+	for (i = 0; i < MC_MAX_CORES; i++) in_team[i] = busy[i] = 0;
+}
+
 void mcw_set(int i, uint32_t value)
 {
 	if (count_base < 0) words[i] = value;

@@ -71,6 +71,8 @@ CASES = [
     # the machine (docs/machine/multicore.md; programs/mc/mctest.c)
     case('mctest-3', 'machine', 'mctest 3', True, has=[r'mctest: PASS', r'\(0 pages brought for their start\)']),
     case('mctest-255', 'machine', 'mctest 255 30000', True, has=[r'mctest: PASS', r'\(0 pages brought for their start\)']),
+    # workers closed and opened again in one program (the counters mapped at each): as many every time, and rounds on them
+    case('mctest-reopen', 'machine workers', 'mctest reopen; mctest reopen lend 100000', True, count=[(r'^mctest: open \d: 255 workers, sum 1409965408', 8), (r'^mctest: reopen PASS', 2)]),
     # lanes (docs/machine/lanes.md): none on rvc_cpu, so plain calls on every worker, compared with themselves;
     # one index a share longer than a pass, which a lane would leave to its worker
     case('lanetest', 'machine', 'lanetest 255 50 1 40; lanetest 31 40 3 20', True, count=[(r'^lanetest: PASS', 2)]),
@@ -537,6 +539,11 @@ CASES = [
     case('apps-clock-kept', 'desktop apps', "nxreg set nxclock.alarm 09:30; nxreg set nxclock.size 500x420; nxreg set nxclock.24h 1; nxreg set nxclock.seconds 1; nxreg set nxclock.alarm_on 0; nxreg set nxclock.timer 300; nx; sleep 3; nxfuzz start:c:nxclock wait:c:20 wins close:c:x end", True,
          wall=120, has=[r'FZ win \d+ .* 50\dx4\d\d "', r'^FZ-DONE 0']),
     case('apps-icon-bad', 'desktop apps', "cp /usr/bin/nxreg /tmp/p; nxicon /tmp/p /root/Pictures/Fox.png; nxicon /tmp/p /nosuch; nxicon /tmp/p", wall=60, has=[r'/tmp/p has an icon of its own']),
+    # nxray closed with one worker on a whole picture at the largest size: at the next tiles, not when the picture is whole
+    case('apps-ray-one-worker-close', 'desktop apps', "export RAY_WORKERS=1 NANOX_SIZE=1024x768; nx; sleep 3; nxfuzz start:r:nxray wait:r:30 sleep:1000 key:r:r sleep:500 key:r:r sleep:1000 close:r:x end", True,
+         wall=200, has=[r'FZ closed r \(x\)', r'^FZ-DONE 0'], never=[r'FZ-BAD']),
+    case('wm-640-click', 'desktop wm', "export NANOX_SIZE=640x480 TDAWN_INPUT_LOG=1; nx; sleep 3; nxfuzz start:t:tdawn wait:t:90 sleep:30000 hclick:t:100,200 sleep:3000 close:t:kill start:r:ralert wait:r:90 sleep:30000 hclick:r:639,399 sleep:3000 close:r:kill", True,
+         wall=280, has=[r'tdinput: button 1 down at 50,100 \(100,200 in the 640x400 window\)', r'tdinput: button 1 down at 639,399 \(639,399 in the 640x400 window\)']),
     case('apps-term-large', 'desktop apps', "nxreg set terminal.size 24; nx; sleep 3; nxfuzz start:t:nxterm wait:t:20 wins close:t:x end", True,
          wall=120, has=[r'FZ closed t \(x\)', r'^FZ-DONE 0', r'FZ win \d+ .* mapped at \S+ [0-7]\d\dx[0-5]\d\d "'], never=[r'FZ-BAD']),
     case('apps-micropolis-x-early', 'desktop apps micropolis', "nx; sleep 3; nxfuzz start:m:nxmicropolis wait:m:60 close:m:x end", True,
