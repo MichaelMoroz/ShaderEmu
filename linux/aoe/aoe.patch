@@ -1,0 +1,485 @@
+diff --git a/include/tribegam.h b/include/tribegam.h
+index d47ed773c..913cb4f2e 100644
+--- a/include/tribegam.h
++++ b/include/tribegam.h
+@@ -27,9 +27,9 @@ struct RGE_Prog_Info;
+ #define CIVILIZATION_MACEDONIAN   16
+ 
+ #define CIVILIZATION_FIRST       CIVILIZATION_EGYPTIAN
+-#define CIVILIZATION_LAST        CIVILIZATION_MACEDONIAN
++#define CIVILIZATION_LAST        CIVILIZATION_CHOSON
+ // Count the playable civilizations only. Gaia is not included.
+-#define CIVILIZATION_COUNT       16
++#define CIVILIZATION_COUNT       12
+ 
+ // Square map dimensions, in tiles. MapSize stores a separate option index.
+ #define TRIBE_MAP_DIMENSION_TINY      72
+diff --git a/src/Panel.cpp b/src/Panel.cpp
+index 6fcfc515c..5986bbc32 100644
+--- a/src/Panel.cpp
++++ b/src/Panel.cpp
+@@ -151,6 +151,7 @@ int TPanelSystem::setCurrentPanel(char* n, int makeModal) {
+     PanelNode* node;
+ 
+     node = findPanelNode(n);
++    if (getenv("AOE_DEBUG")) fprintf(stderr, "aoe: panel %s%s\n", n, node ? "" : " is none");
+     if (node != 0) {
+         if (mouse_owner != 0) {
+             mouse_owner->release_mouse();
+diff --git a/src/Pnl_txt.cpp b/src/Pnl_txt.cpp
+index 5dc3f00ad..f4278b85a 100644
+--- a/src/Pnl_txt.cpp
++++ b/src/Pnl_txt.cpp
+@@ -1108,6 +1108,10 @@ int TTextPanel::append_line(char* text_in, long id_in) {
+     return insert_line((int) num_lines, text_in, id_in);
+ }
+ 
++int TTextPanel::append_line(const char* text_in, long id_in) {
++    return insert_line((int) num_lines, (char*) text_in, id_in);
++}
++
+ int TTextPanel::append_line(char* text_in, char* text2_in, long id_in) {
+     return insert_line((int) num_lines, text_in, text2_in, id_in);
+ }
+diff --git a/src/main.cpp b/src/main.cpp
+index b672d36a5..05d2733f2 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -26,7 +26,7 @@ extern "C" int __stdcall WinMain(HINSTANCE prog_inst, HINSTANCE prev_inst, char*
+     strcpy(info.cursor_file, "mcursors");
+     strcpy(info.vol_name, "AOE");
+     info.vol_ser_num = 0;
+-    info.verify_cd = 1;
++    info.verify_cd = 0;
+     info.max_players_per_cd = 3;
+     info.instance = prog_inst;
+     info.prev_instance = prev_inst;
+diff --git a/src/player.cpp b/src/player.cpp
+index a2acee207..09ebed225 100644
+--- a/src/player.cpp
++++ b/src/player.cpp
+@@ -147,6 +147,7 @@ RGE_Player::RGE_Player(
+         this->master_objects = (RGE_Master_Static_Object**) calloc((int) this->master_object_num, 4);
+         for (short i = 0; i < this->master_object_num; ++i) {
+             if (prototype->master_objects[i] != 0) {
++                if (getenv("AOE_MASTERS")) fprintf(stderr, "master %d of %d: %p vt %p\n", i, (int) this->master_object_num, prototype->master_objects[i], *(void**) prototype->master_objects[i]);
+                 this->master_objects[i] = prototype->master_objects[i]->make_new_master();
+             }
+         }
+diff --git a/src/rge_fio.cpp b/src/rge_fio.cpp
+index cc3742cac..d9793720b 100644
+--- a/src/rge_fio.cpp
++++ b/src/rge_fio.cpp
+@@ -147,7 +147,9 @@ void __cdecl rge_write_uncompressed(int handle, void* data, int size) {
+     }
+ }
+ 
++long aoe_read_total;
+ void __cdecl rge_read(int handle, void* data, int size) {
++    aoe_read_total += size;
+     int temp_size;
+     int temp_max;
+     void* temp = data;
+diff --git a/src/rmm_dbct.cpp b/src/rmm_dbct.cpp
+index f3e0cf3a4..212817f2a 100644
+--- a/src/rmm_dbct.cpp
++++ b/src/rmm_dbct.cpp
+@@ -270,6 +270,13 @@ uchar RGE_RMM_Database_Controller::init(
+ ) {
+     this->world = in_world;
+     this->map_type = type;
++    // the trial's world has one map of each kind it offers: the others are not there
++    if (getenv("AOE_DEBUG")) {
++        fprintf(stderr, "aoe: map type %d of %d:", (int) type, (int) this->map_info.map_num);
++        for (int i = 0; i < this->map_info.map_num; i++) fprintf(stderr, " %d", (int) this->map_info.maps[i].map_id);
++        fprintf(stderr, "\n");
++    }
++    if (type >= this->map_info.map_num) this->map_type = 0;
+     this->number_of_players = player_num;
+     this->update_map_info(in_map);
+     this->create_shared_resources();
+diff --git a/src/scr_game.cpp b/src/scr_game.cpp
+index 92412fb64..6d03223ae 100644
+--- a/src/scr_game.cpp
++++ b/src/scr_game.cpp
+@@ -138,7 +138,7 @@ TRIBE_Screen_Game::TRIBE_Screen_Game() : TScreenPanel(s_Game_Screen) {
+     this->last_pause_change = 0;
+ 
+     if (!this->setup(rge_base_game->draw_area, "scr6", 0xc388, 1)) {
+-        this->error_code = 1;
++        this->error_code = 1; if (getenv("AOE_DEBUG")) fprintf(stderr, "aoe: game screen fails at line %d\n", __LINE__);
+         return;
+     }
+ 
+@@ -146,19 +146,19 @@ TRIBE_Screen_Game::TRIBE_Screen_Game() : TScreenPanel(s_Game_Screen) {
+ 
+     this->button_unit_pic = new TShape(s_btnunit_shp, 0xc62a);
+     if (this->button_unit_pic == 0 || !(this->button_unit_pic)->is_loaded()) {
+-        this->error_code = 1;
++        this->error_code = 1; if (getenv("AOE_DEBUG")) fprintf(stderr, "aoe: game screen fails at line %d\n", __LINE__);
+         return;
+     }
+ 
+     this->button_tech_pic = new TShape("btntech.shp", 0xc629);
+     if (this->button_tech_pic == 0 || !this->button_tech_pic->is_loaded()) {
+-        this->error_code = 1;
++        this->error_code = 1; if (getenv("AOE_DEBUG")) fprintf(stderr, "aoe: game screen fails at line %d\n", __LINE__);
+         return;
+     }
+ 
+     this->button_cmd_pic = new TShape("btncmd.shp", 0xc621);
+     if (this->button_cmd_pic == 0 || !this->button_cmd_pic->is_loaded()) {
+-        this->error_code = 1;
++        this->error_code = 1; if (getenv("AOE_DEBUG")) fprintf(stderr, "aoe: game screen fails at line %d\n", __LINE__);
+         return;
+     }
+ 
+@@ -167,10 +167,10 @@ TRIBE_Screen_Game::TRIBE_Screen_Game() : TScreenPanel(s_Game_Screen) {
+         if (i < RGE_CULTURE_ROMAN) {
+             this->button_bldg_pics[i] = new TShape(str, i + 0xc610);
+         } else {
+-            this->button_bldg_pics[i] = new TShape(str, 0xcf0d);
++            this->button_bldg_pics[i] = new TShape(str, 0xc610);
+         }
+         if (this->button_bldg_pics[i] == 0 || !(this->button_bldg_pics[i])->is_loaded()) {
+-            this->error_code = 1;
++            this->error_code = 1; if (getenv("AOE_DEBUG")) fprintf(stderr, "aoe: game screen fails at line %d\n", __LINE__);
+             return;
+         }
+     }
+@@ -178,11 +178,11 @@ TRIBE_Screen_Game::TRIBE_Screen_Game() : TScreenPanel(s_Game_Screen) {
+     TRIBE_Main_View* main_tmp = new TRIBE_Main_View;
+     this->main_view = main_tmp;
+     if (main_tmp == 0 || main_tmp->error_code != 0) {
+-        this->error_code = 1;
++        this->error_code = 1; if (getenv("AOE_DEBUG")) fprintf(stderr, "aoe: game screen fails at line %d\n", __LINE__);
+         return;
+     }
+     if (!this->main_view->setup(this->render_area, this, 0, 0, 0, 0, 0, 1, "bordline")) {
+-        this->error_code = 1;
++        this->error_code = 1; if (getenv("AOE_DEBUG")) fprintf(stderr, "aoe: game screen fails at line %d\n", __LINE__);
+         return;
+     }
+     this->main_view->set_world(this->world);
+@@ -190,11 +190,11 @@ TRIBE_Screen_Game::TRIBE_Screen_Game() : TScreenPanel(s_Game_Screen) {
+ 
+     this->map_view = new TRIBE_Diamond_Map_View;
+     if (this->map_view == 0 || this->map_view->error_code != 0) {
+-        this->error_code = 1;
++        this->error_code = 1; if (getenv("AOE_DEBUG")) fprintf(stderr, "aoe: game screen fails at line %d\n", __LINE__);
+         return;
+     }
+     if (!this->map_view->setup(this->render_area, this, 0, 0, 0, 0, 0, 0, rge_base_game->map_save_area)) {
+-        this->error_code = 1;
++        this->error_code = 1; if (getenv("AOE_DEBUG")) fprintf(stderr, "aoe: game screen fails at line %d\n", __LINE__);
+         return;
+     }
+     this->map_view->set_help_info(STRING_ID_HELP_DIAMOND_MAP, -1);
+@@ -207,7 +207,7 @@ TRIBE_Screen_Game::TRIBE_Screen_Game() : TScreenPanel(s_Game_Screen) {
+     RGE_Font* font = rge_base_game->get_font(RGE_FONT_STANDARD);
+     this->inven_panel = new TRIBE_Panel_Inven(this->render_area, this, font->font, (TRIBE_Player*) rge_base_game->get_player());
+     if (this->inven_panel == 0 || this->inven_panel->error_code != 0) {
+-        this->error_code = 1;
++        this->error_code = 1; if (getenv("AOE_DEBUG")) fprintf(stderr, "aoe: game screen fails at line %d\n", __LINE__);
+         return;
+     }
+     this->inven_panel->set_help_info(STRING_ID_HELP_INVENTORY, -1);
+@@ -218,7 +218,7 @@ TRIBE_Screen_Game::TRIBE_Screen_Game() : TScreenPanel(s_Game_Screen) {
+         (TRIBE_Player*) rge_base_game->get_player()
+     );
+     if (this->object_panel == 0 || this->object_panel->error_code != 0) {
+-        this->error_code = 1;
++        this->error_code = 1; if (getenv("AOE_DEBUG")) fprintf(stderr, "aoe: game screen fails at line %d\n", __LINE__);
+         return;
+     }
+     this->object_panel->set_help_info(STRING_ID_HELP_OBJECT_PANEL, STRING_ID_HELP_OBJECT_PANEL_MORE);
+@@ -231,7 +231,7 @@ TRIBE_Screen_Game::TRIBE_Screen_Game() : TScreenPanel(s_Game_Screen) {
+             (i < 0x0c) ? this->button_border1_pic : this->button_border2_pic
+         );
+         if (this->button_panel[i] == 0 || (this->button_panel[i])->error_code != 0) {
+-            this->error_code = 1;
++            this->error_code = 1; if (getenv("AOE_DEBUG")) fprintf(stderr, "aoe: game screen fails at line %d\n", __LINE__);
+             return;
+         }
+         this->button_panel[i]->set_text_color(0, 0, 0xffffff);
+@@ -282,11 +282,11 @@ TRIBE_Screen_Game::TRIBE_Screen_Game() : TScreenPanel(s_Game_Screen) {
+         font = rge_base_game->get_font(RGE_FONT_STANDARD);
+         this->text_line_panel = new TMessagePanel(font->font, font->font_wid, font->font_hgt);
+         if (this->text_line_panel == 0 || this->text_line_panel->error_code != 0) {
+-            this->error_code = 1;
++            this->error_code = 1; if (getenv("AOE_DEBUG")) fprintf(stderr, "aoe: game screen fails at line %d\n", __LINE__);
+             return;
+         }
+         if (!(this->text_line_panel)->setup(this->render_area, this->main_view, 0, 0, 0, 0, 0)) {
+-            this->error_code = 1;
++            this->error_code = 1; if (getenv("AOE_DEBUG")) fprintf(stderr, "aoe: game screen fails at line %d\n", __LINE__);
+             return;
+         }
+         this->text_line_panel->set_justification(TMessagePanel::LeftJust, TMessagePanel::BottomJust, 1);
+@@ -312,7 +312,7 @@ TRIBE_Screen_Game::TRIBE_Screen_Game() : TScreenPanel(s_Game_Screen) {
+         TRIBE_Panel_Time* time_panel = new TRIBE_Panel_Time(this->render_area, this->main_view);
+         this->time_panel = time_panel;
+         if (time_panel == 0 || time_panel->error_code != 0) {
+-            this->error_code = 1;
++            this->error_code = 1; if (getenv("AOE_DEBUG")) fprintf(stderr, "aoe: game screen fails at line %d\n", __LINE__);
+             return;
+         }
+         time_panel->set_active(0);
+@@ -320,7 +320,7 @@ TRIBE_Screen_Game::TRIBE_Screen_Game() : TScreenPanel(s_Game_Screen) {
+         TRIBE_Panel_Pop* pop_panel = new TRIBE_Panel_Pop(this->render_area, this->main_view);
+         this->pop_panel = pop_panel;
+         if (pop_panel == 0 || pop_panel->error_code != 0) {
+-            this->error_code = 1;
++            this->error_code = 1; if (getenv("AOE_DEBUG")) fprintf(stderr, "aoe: game screen fails at line %d\n", __LINE__);
+             return;
+         }
+         pop_panel->set_active(0);
+@@ -329,7 +329,7 @@ TRIBE_Screen_Game::TRIBE_Screen_Game() : TScreenPanel(s_Game_Screen) {
+             TRIBE_Panel_Time* clock = new TRIBE_Panel_Time(this->render_area, this->main_view);
+             this->countdown_clock[i] = clock;
+             if (clock == 0 || clock->error_code != 0) {
+-                this->error_code = 1;
++                this->error_code = 1; if (getenv("AOE_DEBUG")) fprintf(stderr, "aoe: game screen fails at line %d\n", __LINE__);
+                 return;
+             }
+             clock->set_active(0);
+@@ -350,7 +350,7 @@ TRIBE_Screen_Game::TRIBE_Screen_Game() : TScreenPanel(s_Game_Screen) {
+         || message_check->error_code != 0 || (message_check = this->message_panel3) == 0 || message_check->error_code != 0
+         || (message_check = this->message_panel4) == 0 || this->message_panel5 == 0 || this->message_panel6 == 0
+         || message_check->error_code != 0) {
+-        this->error_code = 1;
++        this->error_code = 1; if (getenv("AOE_DEBUG")) fprintf(stderr, "aoe: game screen fails at line %d\n", __LINE__);
+         return;
+     }
+     if (!(this->message_panel)->setup(this->render_area, this->main_view, 0, 0, 0, 0, 0)
+@@ -359,7 +359,7 @@ TRIBE_Screen_Game::TRIBE_Screen_Game() : TScreenPanel(s_Game_Screen) {
+         || !(this->message_panel4)->setup(this->render_area, this->main_view, 0, 0, 0, 0, 0)
+         || !(this->message_panel5)->setup(this->render_area, this->main_view, 0, 0, 0, 0, 0)
+         || !(this->message_panel6)->setup(this->render_area, this->main_view, 0, 0, 0, 0, 0)) {
+-        this->error_code = 1;
++        this->error_code = 1; if (getenv("AOE_DEBUG")) fprintf(stderr, "aoe: game screen fails at line %d\n", __LINE__);
+         return;
+     }
+ 
+@@ -368,7 +368,7 @@ TRIBE_Screen_Game::TRIBE_Screen_Game() : TScreenPanel(s_Game_Screen) {
+         TMessagePanel* chat = new TMessagePanel(font->font, font->font_wid, font->font_hgt);
+         this->chat_panel[i] = chat;
+         if (chat == 0 || chat->error_code != 0 || !chat->setup(this->render_area, this->main_view, 0, 0, 0, 0, 0)) {
+-            this->error_code = 1;
++            this->error_code = 1; if (getenv("AOE_DEBUG")) fprintf(stderr, "aoe: game screen fails at line %d\n", __LINE__);
+             return;
+         }
+     }
+@@ -378,13 +378,13 @@ TRIBE_Screen_Game::TRIBE_Screen_Game() : TScreenPanel(s_Game_Screen) {
+         font = rge_base_game->get_font(RGE_FONT_STANDARD);
+         this->age_panel = new TTextPanel;
+         if (this->age_panel == 0 || this->age_panel->error_code != 0) {
+-            this->error_code = 1;
++            this->error_code = 1; if (getenv("AOE_DEBUG")) fprintf(stderr, "aoe: game screen fails at line %d\n", __LINE__);
+             return;
+         }
+         if (!this->age_panel->setup(
+                 this->render_area, this, 0, 0, 0, 0, font->font, font->font_wid, font->font_hgt, 0, 0, 0, 0, 0, 0, initial_text
+             )) {
+-            this->error_code = 1;
++            this->error_code = 1; if (getenv("AOE_DEBUG")) fprintf(stderr, "aoe: game screen fails at line %d\n", __LINE__);
+             return;
+         }
+         this->age_panel->set_alignment(TTextPanel::AlignCenter, TTextPanel::AlignCenter);
+@@ -396,13 +396,13 @@ TRIBE_Screen_Game::TRIBE_Screen_Game() : TScreenPanel(s_Game_Screen) {
+         font = rge_base_game->get_font(RGE_FONT_ARIAL_10_NORMAL_ALT);
+         this->fps_panel = new TTextPanel;
+         if (this->fps_panel == 0 || this->fps_panel->error_code != 0) {
+-            this->error_code = 1;
++            this->error_code = 1; if (getenv("AOE_DEBUG")) fprintf(stderr, "aoe: game screen fails at line %d\n", __LINE__);
+             return;
+         }
+         if (!this->fps_panel->setup(
+                 this->render_area, this, 0, 0, 0, 0, font->font, font->font_wid, font->font_hgt, 0, 1, 0, 0, 0, 0, initial_text
+             )) {
+-            this->error_code = 1;
++            this->error_code = 1; if (getenv("AOE_DEBUG")) fprintf(stderr, "aoe: game screen fails at line %d\n", __LINE__);
+             return;
+         }
+         this->fps_panel->set_alignment(TTextPanel::AlignCenter, TTextPanel::AlignLeft);
+@@ -439,14 +439,14 @@ TRIBE_Screen_Game::TRIBE_Screen_Game() : TScreenPanel(s_Game_Screen) {
+         this->score_panel[i] = score;
+         if (!score->setup(this->render_area, this->main_view, 0, 0, 0, 0, 0) || this->score_panel[i] == 0
+             || this->score_panel[i]->error_code != 0) {
+-            this->error_code = 1;
++            this->error_code = 1; if (getenv("AOE_DEBUG")) fprintf(stderr, "aoe: game screen fails at line %d\n", __LINE__);
+             return;
+         }
+     }
+ 
+     {
+         if (!this->create_text(this, &this->log_text, s_empty_string, 10, 300, 400, 96, RGE_FONT_ARIAL_10_NORMAL, 0, 0, 0)) {
+-            this->error_code = 1;
++            this->error_code = 1; if (getenv("AOE_DEBUG")) fprintf(stderr, "aoe: game screen fails at line %d\n", __LINE__);
+             return;
+         }
+         this->log_text->set_back_pic(0);
+@@ -454,7 +454,7 @@ TRIBE_Screen_Game::TRIBE_Screen_Game() : TScreenPanel(s_Game_Screen) {
+         this->log_text->set_style(TTextPanel::NormalStyle);
+         this->log_text->set_text_color(0xffffff, 0);
+         if (!this->create_auto_scrollbar(&this->log_scrollbar, this->log_text, 20)) {
+-            this->error_code = 1;
++            this->error_code = 1; if (getenv("AOE_DEBUG")) fprintf(stderr, "aoe: game screen fails at line %d\n", __LINE__);
+             return;
+         }
+         this->log_scrollbar->set_bevel_info(1, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff);
+@@ -471,7 +471,7 @@ TRIBE_Screen_Game::TRIBE_Screen_Game() : TScreenPanel(s_Game_Screen) {
+         );
+         this->tool_box = tool_box;
+         if (tool_box == 0 || tool_box->error_code != 0) {
+-            this->error_code = 1;
++            this->error_code = 1; if (getenv("AOE_DEBUG")) fprintf(stderr, "aoe: game screen fails at line %d\n", __LINE__);
+             return;
+         }
+         tool_box->set_active(0);
+diff --git a/src/scr_mps.cpp b/src/scr_mps.cpp
+index ba309be4a..b37bad5d2 100644
+--- a/src/scr_mps.cpp
++++ b/src/scr_mps.cpp
+@@ -142,10 +142,6 @@ TribeMPSetupScreen::TribeMPSetupScreen() : TScreenPanel("MP Setup Screen") {
+         this->playerCivDrop[i]->append_line(STRING_ID_CIVILIZATION_SHANG, CIVILIZATION_SHANG);
+         this->playerCivDrop[i]->append_line(STRING_ID_CIVILIZATION_YAMATO, CIVILIZATION_YAMATO);
+         this->playerCivDrop[i]->append_line(STRING_ID_CIVILIZATION_CHOSON, CIVILIZATION_CHOSON);
+-        this->playerCivDrop[i]->append_line(STRING_ID_CIVILIZATION_ROMAN, CIVILIZATION_ROMAN);
+-        this->playerCivDrop[i]->append_line(STRING_ID_CIVILIZATION_CARTHAGINIAN, CIVILIZATION_CARTHAGINIAN);
+-        this->playerCivDrop[i]->append_line(STRING_ID_CIVILIZATION_PALMYRAN, CIVILIZATION_PALMYRAN);
+-        this->playerCivDrop[i]->append_line(STRING_ID_CIVILIZATION_MACEDONIAN, CIVILIZATION_MACEDONIAN);
+         // This empty resource slot has no verified civilization name.
+         this->playerCivDrop[i]->append_line(0x280A, 17);
+ 
+diff --git a/src/taiinfmd.cpp b/src/taiinfmd.cpp
+index 0d961d41b..319dd1d27 100644
+--- a/src/taiinfmd.cpp
++++ b/src/taiinfmd.cpp
+@@ -155,7 +155,7 @@ TribeInformationAIModule::TribeInformationAIModule(void* pW, int pID) :
+         }
+     }
+ 
+-    for (k = 0; k < 4; k++) {
++    for (int k = 0; k < 4; k++) {
+         this->resources[k] = 0;
+         this->maxResources[k] = 0;
+         this->numResources[k] = 0;
+diff --git a/src/tribegam.cpp b/src/tribegam.cpp
+index a600fe043..1a52df678 100644
+--- a/src/tribegam.cpp
++++ b/src/tribegam.cpp
+@@ -453,6 +453,7 @@ int TRIBE_Game::setup() {
+         }
+     }
+ 
++    if (getenv("AOE_LOAD_TEST")) { int ok = this->load_game_data(); fprintf(stderr, "aoe: load_game_data %d\n", ok); exit(0); }
+     this->set_interface_messages();
+ 
+     run_log("------------------------------", 0);
+@@ -2166,7 +2167,9 @@ int TRIBE_Game::start_game(int skip_startup_screens) {
+     }
+ 
+     this->show_status_message(STRING_ID_STATUS_STARTING_GAME, info_file, info_id);
+-    if (this->create_game(0) == 0) {
++    int created = this->create_game(0);
++    if (getenv("AOE_DEBUG")) fprintf(stderr, "aoe: create_game %d\n", created);
++    if (created == 0) {
+         this->close_status_message();
+         this->enable_input();
+         return 0;
+@@ -2960,6 +2963,7 @@ int TRIBE_Game::create_game(int not_used) {
+             player_info.tribe[i] = (char) scenario_info->Get_player_Civ(color);
+         } else {
+             player_info.tribe[i] = (char) this->civilization(player_index);
++            if (player_info.tribe[i] > CIVILIZATION_LAST) player_info.tribe[i] = (player_info.tribe[i] - 1) % CIVILIZATION_COUNT + 1;
+         }
+ 
+         if (this->multiplayerGame() && humanity == ME_HUMAN) {
+@@ -3055,6 +3059,7 @@ int TRIBE_Game::create_game(int not_used) {
+ 
+ int TRIBE_Game::create_game_screen() {
+     TRIBE_Screen_Game* screen;
++    if (getenv("AOE_DEBUG")) fprintf(stderr, "aoe: create_game_screen\n");
+ 
+     this->disable_input();
+     this->set_game_mode(RGE_GAME_MODE_NORMAL, 0);
+diff --git a/src/tworld.cpp b/src/tworld.cpp
+index a3c3afc39..642263986 100644
+--- a/src/tworld.cpp
++++ b/src/tworld.cpp
+@@ -181,6 +181,8 @@ void TRIBE_World::world_init(int infile, TSound_Driver* sound_dvr, TCommunicatio
+ 
+     TRIBE_Tech* new_tech = new TRIBE_Tech(infile, this);
+     this->tech = new_tech;
++    extern long aoe_read_total;
++    if (getenv("AOE_DEBUG")) fprintf(stderr, "aoe: world tech at %ld\n", aoe_read_total);
+     this->victory_type = 0;
+     this->artifact_count = 0;
+     this->ruin_count = 0;
+@@ -238,6 +240,7 @@ void TRIBE_World::setup_players(RGE_Player_Info& info) {
+             TRIBE_Player* player;
+ 
+             char type = info.type[index - 1];
++            if (getenv("AOE_DEBUG")) fprintf(stderr, "aoe: player %d type %d tribe %d of %d\n", index, (int) type, (int) info.tribe[index - 1], (int) this->master_player_num);
+             switch (type) {
+                 case 0:
+                     player = new TRIBE_Player(
+diff --git a/src/view.cpp b/src/view.cpp
+index 6439e31fe..c00582694 100644
+--- a/src/view.cpp
++++ b/src/view.cpp
+@@ -2011,7 +2011,7 @@ long RGE_View::view_function_terrain(unsigned char function_mode_in, tagRECT sav
+ 
+                             draw_this_tile: {
+                                 Tile_FogEdge_Table* edge_table = this->Tile_Edge_Tables[tile->tile_type];
+-                                Tile_BlackEdge_Table* black_table = this->Black_Edge_Tables[tile->tile_type];
++                                Tile_BlackEdge_Table* black_table = this->Black_Edge_Tables ? this->Black_Edge_Tables[tile->tile_type] : 0;
+                                 VSpanMiniList* normal_draw_data;
+                                 VSpanMiniList* fog_draw_data;
+                                 VSpanMiniList* black_draw_data;
+@@ -2044,7 +2044,7 @@ long RGE_View::view_function_terrain(unsigned char function_mode_in, tagRECT sav
+ 
+                                 normal_draw_data = edge_table[black_tile_mask_num].normal_draw;
+                                 fog_draw_data = edge_table[black_tile_mask_num].fog_draw;
+-                                black_draw_data = black_table[tile_mask_num].black_UNdraw;
++                                black_draw_data = black_table ? black_table[tile_mask_num].black_UNdraw : 0;
+ 
+                                 if (MapVis == RGE_TILE_FOGGED) {
+                                     fog_draw_data = edge_table[0].normal_draw;
+diff --git a/src/world.cpp b/src/world.cpp
+index 0b7cd1ad5..a6b0f4312 100644
+--- a/src/world.cpp
++++ b/src/world.cpp
+@@ -623,13 +623,22 @@ void RGE_Game_World::command_init(int infile, TCommunications_Handler* com_hand)
+ }
+ 
+ void RGE_Game_World::world_init(int infile, TSound_Driver* sound_dvr, TCommunications_Handler* com_hand) {
++    extern long aoe_read_total;
++#define AOE_STAGE(x) if (getenv("AOE_DEBUG")) fprintf(stderr, "aoe: world %s at %ld\n", x, aoe_read_total);
+     this->terrain_tables_init(infile);
++    AOE_STAGE("tables")
+     this->color_table_init(infile);
++    AOE_STAGE("colours")
+     this->init_sounds(infile, sound_dvr);
++    AOE_STAGE("sounds")
+     this->init_sprites(infile);
++    AOE_STAGE("sprites")
+     this->map_init(infile, sound_dvr);
++    AOE_STAGE("map")
+     this->effects_init(infile);
++    AOE_STAGE("effects")
+     this->master_player_init(infile);
++    AOE_STAGE("masters")
+     this->command_init(infile, com_hand);
+ }
+ 
+@@ -643,7 +652,7 @@ unsigned char RGE_Game_World::init(char* base_name, TSound_Driver* sound_dvr, TC
+     if (fd != -1) {
+         rge_read(fd, version, 8);
+ 
+-        if (strcmp(version, "VER 3.7") != 0) {
++        if (strcmp(version, "VER 3.7") != 0 && strcmp(version, "VER 3.4") != 0) {
+             rge_close(fd);
+             return 0;
+         }
