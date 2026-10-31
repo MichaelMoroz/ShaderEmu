@@ -23,6 +23,7 @@
 #include "ui.h"
 #include "ui_files.h"
 #include "ui_ask.h"
+#include "ui_single.h"
 #include "shaderemu_sound.h"
 
 #define WIDTH 600
@@ -1125,6 +1126,8 @@ main(int argc, char **argv)
 	if (GrOpen() < 0)
 		return 1;
 	ui_init();
+	if (argc == 1 && ui_single_instance())
+		return 0;
 	/* nxsettings look seven|classic [smooth|classic]: the look, as the Look tab sets it */
 	if (argc > 2 && !strcmp(argv[1], "look")) {
 		set_look(strcmp(argv[2], "classic") != 0, argc > 3 ? strcmp(argv[3], "classic") != 0 : ui_smooth);
