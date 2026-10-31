@@ -32,17 +32,14 @@ is separate.
 
 ## A beam as the pointer, steadied (the VRChat world)
 
-A hand in a headset shakes by a few pixels of the display, and a click with a beam was often a
-small drag, or a double click two clicks apart (a unit missed in Command & Conquer, a move-to
-that did not take). `EmuPointer.Steady` stands between the beam and the pointer words while the
-control panel's "Steady pointer" is on (it is unless a player turns it off; kept in their
-PlayerData as `pointer.steady`), in a headset only:
+A hand in a headset shakes by a few pixels of the display, which makes a click with a beam a
+small drag, or a double click two clicks apart. `EmuPointer.Steady` stands between the beam and the
+pointer words while the control panel's "Steady pointer" is on (it is unless a player turns it off;
+kept in their PlayerData as `pointer.steady`), in a headset only:
 
 - The beam's pixel goes through a one-euro filter: its cut-off is `steadyCutoff` (1.2 Hz) plus
   `steadyBeta` (0.012) times its speed in pixels a second, so a still hand is held and a fast
-  sweep follows. Simulated at 90 frames a second with a hand's shake of 2.5 pixels (rms), the
-  pointer shook by 0.63; a sweep of 400 pixels in 0.4 s was 7 pixels behind at its end and
-  where the beam was 0.1 s after.
+  sweep follows.
 - A press holds the pointer where it went down until the beam has moved `dragSlop` (7) pixels
   from there: a click stays a click, a drag starts after those pixels.
 - A press within `doubleTime` (0.5 s) of the last release and within `doubleSlop` (10) pixels of
@@ -58,12 +55,10 @@ This project's kernel (`linux/kernel/shaderemu_input.c`) presents the block as t
 devices, polled every timer tick (100 Hz; every fourth tick on an idle machine nobody has
 touched for a second, `IDLE_POLL`). A key or a button is reported in its tick. A
 pointer that only moves is reported 50 times a second while the machine is idle and 10 times
-a second while a program is running: every report wakes the window system, and with a game
-running that was 17 thousand instructions a report of a machine that has three million a
-second, and not at all inside the window system's quiet rectangle (`pointer_hushed`;
-`nanox.md`, "The pointer on a core of its own"). The cursor does not wait for it where the
-display is drawn under the host's own pointer (below), and a program that wants every move
-reads the words above itself:
+a second while a program is running, since every report wakes the window system, and not at all
+inside the window system's quiet rectangle (`pointer_hushed`; `nanox.md`, "The pointer on a core of
+its own"). The cursor does not wait for it where the display is drawn under the host's own pointer
+(below), and a program that wants every move reads the words above itself:
 
 | Device | Events |
 |---|---|
@@ -71,8 +66,7 @@ reads the words above itself:
 | `/dev/input/event1` "ShaderEmu pointer" | `EV_ABS` `ABS_X`, `ABS_Y` in display pixels; `EV_KEY` `BTN_LEFT`, `BTN_RIGHT`, `BTN_MIDDLE`; `EV_REL` `REL_WHEEL` |
 
 Nano-X's keyboard driver (`kbd_shaderemu.c`) reports a key's release as the key its press
-was: a letter let go while Ctrl or Shift had come down meanwhile was another key's release
-(W under Ctrl is 0x17), which a game drops, and it went on walking.
+was, whatever Ctrl or Shift have done meanwhile: another key's release is one a game drops.
 
 Nano-X's pointer driver turns a notch into one of Microwindows' scroll buttons, down in one
 report and up in the next; a program sees a button-down event with `GR_BUTTON_SCROLLUP` or
@@ -85,26 +79,20 @@ the pointer's place from the words at `0x81000020`, which cost two loads (`point
 `linux/tdawn/host.c`, `Sys_SendKeyEvents` in `linux/quake/vid_shaderemu.c`,
 `ReadPointer` in `linux/classicube/Window_ShaderEmu.c`). It asks the window system for events
 only when the button word or the key count has changed, and a few times a second. It does
-not select the pointer's moves: each was a message to read after a question to ask, two
-system calls and two task switches, wherever the game looked for input. What the window
+not select the pointer's moves: each is a message to read after a question to ask, two
+system calls and two task switches, wherever the game looks for input. What the window
 system is still asked for is the pointer coming over the window and leaving it (another
 window may lie over this one), and where the window is (`GrGetWindowInfo` up to the root:
 when the pointer comes in, at a change of the window, and every three seconds, since a
 frame can be moved without a word to the window in it).
 
-Measured on Red Alert's first Soviet mission with the pointer going round (`--pointer-sweep`
-below): 10 to 11 frames a second with events for every move, 100 a second from the kernel;
-17 as it is now; 19 to 20 with the pointer at rest. The whole run, from the command to frame
-300, was 365 million instructions and is 304 million; it is 300 with the pointer at rest.
-
 ## A 3D game's view on a flat screen
 
-The pointer is a place on the display, not a mouse that can be held: its travel turned the
-view wherever it went and stopped at the window's edge. Doom, Quake, Quake III and ClassiCube
-turn the view only while the left button is held on the game, as a finger drags a picture
+The pointer is a place on the display, not a mouse that can be held. Doom, Quake, Quake III,
+Half-Life and ClassiCube turn the view only while the left button is held on the game, as a finger drags a picture
 (a quarter of a degree a pixel; the drag goes on outside the window). The right button
-fires in the three shooters. In ClassiCube it places as before, and a left press let go where
-it began, within 0.4 s, is the left click. A menu has both buttons as they were.
+fires in the shooters. In ClassiCube it places, and a left press let go where
+it began, within 0.4 s, is the left click. In a menu both buttons are what they are.
 `rvc_cpu --pointer-sweep 0 --pointer-circle X,Y,R --pointer-button 1,S,T` drags it round.
 
 ## In the harness
@@ -129,9 +117,7 @@ FILE` plays such a file instead of the window's input (Ctrl+], the harness's own
 Under Linux the owner word is written by the program through `/dev/gpu` (Nano-X's screen
 driver does), and the kernel clears it, and the cursor, when that file is closed, so a
 program that dies does not keep the keyboard. Only a file opened while the word was 0 clears
-it (15 October 2026): every other program's close of `/dev/gpu` (a worker program, a game
-refused the GPU, Files' pictures) cleared Nano-X's, and keys typed into windows reached the
-console as well.
+it: another program's close of `/dev/gpu` (a worker program, Files' pictures) leaves Nano-X's.
 
 In a VRChat world the same uniforms (`_InputPointer`, `_InputButtons`, `_InputKeySeq`,
 `_InputKeyCount` on the machine's material, and the keys as `_InputKeyCode0`..`_InputKeyCode3`,
