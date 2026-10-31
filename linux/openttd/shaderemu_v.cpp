@@ -920,7 +920,9 @@ static void PlayBuild(int n)
 	const uint32_t now = VpTime();
 	if (n != 0 && now - pointer_at < PLAY_POINTER_TIME) return;
 	pointer_at = now;
-	TwHold(false);
+	static const bool pointer_light_on = getenv("OPENTTD_POINTER_LIGHT") == nullptr;
+	const bool place_now = now - placed_at >= PLAY_PLACE_TIME;
+	if (n == 0 || place_now || !pointer_light_on) TwHold(false);
 	if (n == 0) {
 		VpFlushFinish();
 		TickFinish();
@@ -937,7 +939,8 @@ static void PlayBuild(int n)
 	const int step = (n * 24) % span;
 	_cursor.pos.x = vp.left + vp.width / 4 + step;
 	_cursor.pos.y = vp.top + vp.height / 2 + (n % 8) * 8;
-	if (now - placed_at < PLAY_PLACE_TIME) return;
+	if (_se_light) UpdateTileSelection();
+	if (!place_now) return;
 	placed_at = now;
 	const Point at = RemapCoords2(0, 0); (void)at;
 	const Point p = InverseRemapCoords2(vp.virtual_left + vp.virtual_width / 2, vp.virtual_top + vp.virtual_height / 2);
@@ -1106,6 +1109,8 @@ static void PlayStep()
 			TwTimes(tick, park, instret);
 			const double s = std::chrono::duration<double>(now - p.start).count();
 			const uint64_t ticks = TimerGameTick::counter - p.ticks;
+extern uint32_t _veh_made_wrong, _veh_synced, _veh_ahead, _veh_copies_off, _veh_copies_seen;
+if (GetEnv("OPENTTD_MADE_CHECK").has_value()) PlayLine(fmt::format("openttd: vehicles listed {}, as the tick made them {}, the short look not agreeing {}; copies looked at {}, not as the vehicle {}\n", _veh_synced, _veh_ahead, _veh_made_wrong, _veh_copies_seen, _veh_copies_off));
 			PlayLine(fmt::format("openttd: play {} tick on a worker: {:.2f} ticks a second, {:.0f} ms of the worker's a tick, waiting {:.0f}% "
 					"of the time, {:.2f} MIPS in ticks; the first core waited {:.1f} ms a picture for it ({:.1f} holds, the longest {:.1f} ms)\n",
 					p.name, ticks / s, (tick - p.tw_tick) / 5.0 / std::max<uint64_t>(ticks, 1), (park - p.tw_park) / 5.0 / s / 10.0,
@@ -1286,6 +1291,18 @@ void VideoDriver_ShaderEmu::WorkerTick()
 	}
 	/* (a pointer that only moves is seen at most every 66 ms: it costs the tick a hold) */
 	static uint32_t held_at = 0;
+	/* (over the view with a building tool in hand it is seen with the tick running: the highlight reads only tiles' heights and types, which a tick's own moves leave) */
+	static const bool pointer_light_on = getenv("OPENTTD_POINTER_LIGHT") == nullptr;
+	bool pointer_seen = false;
+	if (pointer_light_on && _have_pending && _pending.type == GR_EVENT_TYPE_MOUSE_MOTION && _thd.place_mode != HT_NONE && !_left_button_down && !_right_button_down) {
+		const Window *under = FindWindowFromPt(_pending.mouse.x, _pending.mouse.y);
+		if (under != nullptr && under->window_class == WC_MAIN_WINDOW) {
+			_modifiers = _pending.mouse.modifiers;
+			PointerAt(_pending.mouse.x, _pending.mouse.y);
+			_have_pending = false;
+			pointer_seen = true;
+		}
+	}
 	const bool pointer_waits = _have_pending && _pending.type == GR_EVENT_TYPE_MOUSE_MOTION && t - held_at < 66 * 5;
 	_se_light = (!_have_pending || pointer_waits) && !_left_button_down && !_right_button_down && TwLightPicture() && SeDirtyOnlyViews();
 	if (!_se_light) {
@@ -1294,6 +1311,7 @@ void VideoDriver_ShaderEmu::WorkerTick()
 		TwSync();
 		::GameLoop(); /* (the first core's parts: the tick itself is the worker's) */
 	}
+	if (_se_light && pointer_seen) UpdateTileSelection();
 	_vp_phase[VP_PHASE_TICK] += VpTime() - t;
 	if (!WantWorkerTick()) TwStop();
 	this->LockVideoBuffer();
@@ -1324,6 +1342,7 @@ void VideoDriver_ShaderEmu::WorkerTick()
 			_se_light = true;
 		}
 	}
+	VehiclesApply(); /* (the tick let go first, if this picture lets it go: docs/games/openttd.md, "A sync with the tick running") */
 	if (!_se_light && !VpFlushReady()) { /* (the tick runs while its pieces are drawn, and waits again for the drawing) */
 		TwRelease();
 		VpFlushFinish();
@@ -1357,8 +1376,8 @@ void VideoDriver_ShaderEmu::WorkerTick()
 	_se_light = false;
 	TwService();
 	TwGrant();
-	/* (OPENTTD_PACE_MS: the picture's work the pace keeps to while it scrolls, 90 ms: ten pictures a second) */
-	static const uint32_t pace_ms = [] { int n = Number(getenv("OPENTTD_PACE_MS")); return n > 0 ? n : 90; }();
+	/* (OPENTTD_PACE_MS: the picture's work the pace keeps to while it scrolls; only zoomed out comes near it: 90 ms and 130 differ by 6% and less, both ways up) */
+	static const uint32_t pace_ms = [] { int n = Number(getenv("OPENTTD_PACE_MS")); return n > 0 ? n : 130; }();
 	TwPace(VpTime() - work_from, pace_ms * 5, _vp_scrolls != scrolls);
 }
 
@@ -1503,8 +1522,11 @@ void SeExitWatch()
 }
 
 /** The drivers are stopped: the kernel takes everything back at once, workers first (shaderemu_gpu_exiting). */
+extern "C" void __gcov_exit(void) __attribute__((weak)); /* (a counting build: its counts go at the exit, linux/userland/pgo/gcov.c) */
+
 void SeExitNow()
 {
+	if (__gcov_exit != nullptr) __gcov_exit();
 	fflush(nullptr);
 	_exit(0);
 }

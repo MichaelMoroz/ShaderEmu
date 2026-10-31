@@ -211,6 +211,15 @@ void *__wrap_malloc(size_t n)
 	return __real_malloc(Pad(n));
 }
 
+/* A static first made on the tick's worker says nothing of its end: musl's table of them is one, and the first core adds to it too
+ * (statics first reached in one pass, with the pointer seen while the tick runs: RVC_RACES undone). At the exit they only give back memory. */
+extern "C" int __real___cxa_atexit(void (*f)(void *), void *a, void *d);
+extern "C" int __wrap___cxa_atexit(void (*f)(void *), void *a, void *d)
+{
+	if (TickOnWorker()) return 0;
+	return __real___cxa_atexit(f, a, d);
+}
+
 void __wrap_free(void *p)
 {
 	if (p == nullptr) return;
@@ -368,6 +377,7 @@ void TickTrap(const void *caller)
 /** On the tick's worker: wait here until the first core lets go (request r); mid: in a tick. */
 static void TwPark(uint32_t r, bool mid)
 {
+	VehiclesMakeLater(true);
 	const CompanyID tick_company = _current_company;
 	_current_company = _tw_gui_company;
 	_tw_excl_have = false;
