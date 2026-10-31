@@ -42,6 +42,14 @@
 #include "../newgrf_station.h"
 #include "../newgrf_roadstop.h"
 #include "../company_cmd.h"
+#include "../roadveh.h"
+#include "../road_map.h"
+#include "../engine_base.h"
+#include "../engine_func.h"
+#include "../town.h"
+#include "../industry.h"
+#include "../gui.h"
+#include "../vehicle_cmd.h"
 #include "shaderemu_v.h"
 #include "shaderemu_gpu.h"
 #include <unistd.h>
@@ -810,6 +818,98 @@ static TileIndex PlayFreeLand(TileIndex near_tile, int w, int h)
 static constexpr uint32_t PLAY_POINTER_TIME = 66 * 5, PLAY_PLACE_TIME = 400 * 5;
 
 /** The building part of the play script, its picture n: the cursor's highlight goes over the view, a thing placed by the clock. */
+/* OPENTTD_PLAY_SCENE=depot: a road vehicle built in a depot, stopped and hidden as a new one is, and its window, an extra viewport, a town's and
+ * an industry's. Run with light pictures (no OPENTTD_CHECK, which turns them off): the window's view must stay at the vehicle, and no view be
+ * nearly all black (docs/games/openttd.md, "Pictures the tick does not wait for"). */
+void ShowIndustryViewWindow(IndustryID industry);
+static VehicleID _depot_vehicle = VehicleID::Invalid();
+static TileIndex _depot_tile = INVALID_TILE;
+static uint32_t _depot_looks, _depot_off, _depot_light;
+static const bool play_scene_depot = [] { const char *e = getenv("OPENTTD_PLAY_SCENE"); return e != nullptr && std::string_view(e) == "depot"; }();
+
+/* (the company first, and a picture's sync after it: SetLocalCompany lists every vehicle, which would make the new one's copy) */
+static void PlayDepotBegin()
+{
+	VpFlushFinish();
+	TickFinish();
+	_settings_game.difficulty.infinite_money = true;
+	for (TileIndex t : Map::Iterate()) {
+		if (!IsTileType(t, MP_ROAD) || !IsRoadDepot(t) || !Company::IsValidID(GetTileOwner(t))) continue;
+		SetLocalCompany(GetTileOwner(t));
+		_depot_tile = t;
+		return;
+	}
+}
+
+static void PlayDepotBuild()
+{
+	if (_depot_tile == INVALID_TILE) return;
+	VpFlushFinish();
+	TickFinish();
+	for (const Engine *e : Engine::IterateType(VEH_ROAD)) {
+		if (!IsEngineBuildable(e->index, VEH_ROAD, _local_company)) continue;
+		if (Command<CMD_BUILD_VEHICLE>::Post(_depot_tile, e->index, false, INVALID_CARGO, INVALID_CLIENT_ID)) return;
+	}
+}
+
+static void PlayDepotShow()
+{
+	if (_depot_tile == INVALID_TILE) return;
+	for (const RoadVehicle *v : RoadVehicle::Iterate()) {
+		if (v->IsFrontEngine() && v->tile == _depot_tile && v->vehstatus.Test(VehState::Stopped) && v->vehstatus.Test(VehState::Hidden)) _depot_vehicle = v->index;
+	}
+	if (_depot_vehicle == VehicleID::Invalid()) return;
+	{
+		const Vehicle *d = Vehicle::Get(_depot_vehicle);
+		PlayLine(fmt::format("openttd: depot vehicle {} at {},{},{}; its copy at {},{},{} hidden {}\n", d->index.base(), d->x_pos, d->y_pos, d->z_pos, d->drawn.x, d->drawn.y, d->drawn.z, d->drawn.hidden));
+	}
+	ShowVehicleViewWindow(Vehicle::Get(_depot_vehicle));
+	ShowExtraViewportWindow(_depot_tile);
+	for (const Town *t : Town::Iterate()) { ShowTownViewWindow(t->index); break; }
+	for (const Industry *i : Industry::Iterate()) { ShowIndustryViewWindow(i->index); break; }
+}
+
+static void PlayDepotLook(bool last)
+{
+	if (_depot_vehicle == VehicleID::Invalid()) {
+		if (last) PlayLine("openttd: depot views: no vehicle built\n");
+		return;
+	}
+	const Vehicle *v = Vehicle::GetIfValid(_depot_vehicle);
+	const Window *w = FindWindowById(WC_VEHICLE_VIEW, _depot_vehicle);
+	if (v != nullptr && w != nullptr && w->viewport != nullptr) {
+		Point pt = RemapCoords(v->x_pos, v->y_pos, v->z_pos); /* (as upstream's MapXYZToViewport) */
+		pt.x -= w->viewport->virtual_width / 2;
+		pt.y -= w->viewport->virtual_height / 2;
+		_depot_looks++;
+		_depot_light += _se_light;
+		if (std::abs(w->viewport->scrollpos_x - pt.x) > 64 || std::abs(w->viewport->scrollpos_y - pt.y) > 64) _depot_off++;
+	}
+	if (!last) return;
+	VpFlushFinish();
+	SeGpuSettle();
+	uint32_t least = 100, kept_off = 0;
+	std::string each;
+	for (const Vehicle *h : Vehicle::Iterate()) { /* (none of these moves: its copy must say where it is) */
+		if (h->vehstatus.Test(VehState::Hidden) && h->vehstatus.Test(VehState::Stopped) && (h->drawn.x != h->x_pos || h->drawn.y != h->y_pos || h->drawn.z != h->z_pos)) kept_off++;
+	}
+	for (const Window *o : Window::Iterate()) {
+		if (o->viewport == nullptr || o->window_class == WC_MAIN_WINDOW) continue;
+		const Viewport &vp = *o->viewport;
+		uint32_t lit = 0, all = 0;
+		if (static_cast<uint8_t *>(_screen.dst_ptr) != nullptr) {
+			for (int y = vp.top; y < vp.top + vp.height && y < _screen.height; y++) {
+				const uint8_t *row = static_cast<const uint8_t *>(_screen.dst_ptr) + y * _screen.pitch;
+				for (int x = vp.left; x < vp.left + vp.width && x < _screen.width; x++, all++) lit += row[x] > 1;
+			}
+		}
+		const uint32_t percent = all != 0 ? lit * 100 / all : 0;
+		least = std::min(least, percent);
+		each += fmt::format(" {}:{}%", static_cast<int>(o->window_class), percent);
+	}
+	PlayLine(fmt::format("openttd: depot views: {} pictures, {} light, {} off the vehicle, {} stopped and hidden with their copies elsewhere; not black{}, the least {}%\n", _depot_looks, _depot_light, _depot_off, kept_off, each, least));
+}
+
 static void PlayBuild(int n)
 {
 	Window *main = GetMainWindow();
@@ -1092,7 +1192,11 @@ static void PlayStep()
 			}
 			if (any != nullptr) ShowVehicleViewWindow(any);
 		}
+		if (s == "depot") PlayDepotBegin();
 	}
+	if (play_scene_depot && f == 302) PlayDepotBuild();
+	if (play_scene_depot && f == 304) PlayDepotShow();
+	if (play_scene_depot && f >= 308 && f < 360) PlayDepotLook(f == 359);
 	if (f == 305) begin_part("window");
 	if (f == 400) begin_part("build");
 	if (f >= 400 && f < 460) PlayBuild(f - 400);

@@ -2324,7 +2324,7 @@ index 9f92375..990d8b2 100644
  		ChangeObject(ni.ref1, from_index, to_index);
  		ChangeObject(ni.ref2, from_index, to_index);
 diff --git a/src/openttd.cpp b/src/openttd.cpp
-index 7d585b0..931b1c9 100644
+index 7d585b0..556a332 100644
 --- a/src/openttd.cpp
 +++ b/src/openttd.cpp
 @@ -73,6 +73,11 @@
@@ -2430,7 +2430,7 @@ index 7d585b0..931b1c9 100644
  
  		/* Make sure _settings is filled with _settings_newgame if we switch to a game directly */
  		if (_switch_mode != SM_NONE) MakeNewgameSettingsLive();
-@@ -453,14 +506,25 @@ void PostMainLoop()
+@@ -453,6 +506,10 @@ void PostMainLoop()
  {
  	WaitTillSaved();
  
@@ -2441,8 +2441,7 @@ index 7d585b0..931b1c9 100644
  	/* only save config if we have to */
  	if (_save_config) {
  		SaveToConfig();
- 		SaveHotkeysToConfig();
- 		WindowDesc::SaveToConfig();
+@@ -461,6 +518,13 @@ void PostMainLoop()
  		SaveToHighScore();
  	}
  
@@ -2581,6 +2580,57 @@ index 7d585b0..931b1c9 100644
  	if (_pause_mode.None() && HasBit(_display_opt, DO_FULL_ANIMATION)) DoPaletteAnimations();
  
  	SoundDriver::GetInstance()->MainLoop();
+diff --git a/src/os/unix/crashlog_unix.cpp b/src/os/unix/crashlog_unix.cpp
+index 4b1ef6c..2260ce3 100644
+--- a/src/os/unix/crashlog_unix.cpp
++++ b/src/os/unix/crashlog_unix.cpp
+@@ -215,6 +215,12 @@ static void CDECL HandleCrash(int signum)
+ 
+ /* static */ void CrashLog::InitialiseCrashLog()
+ {
++#ifdef WITH_SHADEREMU
++	/* (A crash here ends the program at once: the kernel says where, the desktop says it stopped, and the GPU and the workers
++	 * are free. The log has no stack here, the saved game is minutes of LZMA over memory that may be broken, and meanwhile the
++	 * window has gone and the program holds the GPU: docs/games/openttd.md, "At exit".) */
++	return;
++#endif
+ 	SetSignals(HandleCrash);
+ }
+ 
+diff --git a/src/os/unix/unix.cpp b/src/os/unix/unix.cpp
+index 6032756..21fe4a0 100644
+--- a/src/os/unix/unix.cpp
++++ b/src/os/unix/unix.cpp
+@@ -8,6 +8,10 @@
+ /** @file unix.cpp Implementation of Unix specific file handling. */
+ 
+ #include "../../stdafx.h"
++#ifdef WITH_SHADEREMU
++#include <csignal>
++#include <unistd.h>
++#endif
+ #include "../../textbuf_gui.h"
+ #include "../../debug.h"
+ #include "../../string_func.h"
+@@ -229,6 +233,18 @@ void OSOpenBrowser(const std::string &url)
+ #elif !defined( __APPLE__)
+ void OSOpenBrowser(const std::string &url)
+ {
++#ifdef WITH_SHADEREMU
++	/* (no MMU: a fork is a vfork, whose child runs on this program's memory, and exit() below ran this program's atexit
++	 * functions there: its workers closed, its statics destroyed, under a game that went on and failed later, or stayed
++	 * without a window; docs/games/openttd.md, "At exit". The machine's `open` takes an address.) */
++	const char *open_args[3] = { "open", url.c_str(), nullptr };
++	signal(SIGCHLD, SIG_IGN);
++	if (vfork() == 0) {
++		execvp(open_args[0], const_cast<char * const *>(open_args));
++		_exit(127);
++	}
++	return;
++#endif
+ 	pid_t child_pid = fork();
+ 	if (child_pid != 0) return;
+ 
 diff --git a/src/pathfinder/water_regions.cpp b/src/pathfinder/water_regions.cpp
 index e725401..e67f5ee 100644
 --- a/src/pathfinder/water_regions.cpp
@@ -6055,7 +6105,7 @@ index 91a1111..9d12b4f 100644
  		return TrainLocoHandler(this, true);
  	} else if (this->IsFreeWagon() && this->vehstatus.Test(VehState::Crashed)) {
 diff --git a/src/vehicle.cpp b/src/vehicle.cpp
-index 91588a6..391c73b 100644
+index 91588a6..7015666 100644
 --- a/src/vehicle.cpp
 +++ b/src/vehicle.cpp
 @@ -60,9 +60,19 @@
@@ -6515,7 +6565,17 @@ index 91588a6..391c73b 100644
  				}
  
  				v = v->hash_viewport_next;
-@@ -1668,10 +2003,25 @@ void Vehicle::UpdatePosition()
+@@ -1662,16 +1997,35 @@ void VehicleEnterDepot(Vehicle *v)
+ void Vehicle::UpdatePosition()
+ {
+ 	UpdateVehicleTileHash(this, false);
++#ifdef WITH_SHADEREMU
++	/* (a vehicle built or moving in a depot says no more: hidden, it has no UpdateViewport, and a view following it reads this copy) */
++	VehicleChanged(this);
++#endif
+ }
+ 
+ /**
   * Update the bounding box co-ordinates of the vehicle
   * @param update_cache Update the cached values for previous co-ordinate values
   */
@@ -6542,7 +6602,7 @@ index 91588a6..391c73b 100644
  
  	/* z-bounds are not used. */
  	Point pt = RemapCoords(this->x_pos + this->bounds.origin.x + this->bounds.offset.x, this->y_pos + this->bounds.origin.y + this->bounds.offset.y, this->z_pos);
-@@ -1690,6 +2040,9 @@ void Vehicle::UpdateBoundingBoxCoordinates(bool update_cache) const
+@@ -1690,6 +2044,9 @@ void Vehicle::UpdateBoundingBoxCoordinates(bool update_cache) const
  		new_coord.top    = std::min(new_coord.top, RemapCoords(x, y, z + bounds.extent.z).y);
  		new_coord.bottom = std::max(new_coord.bottom, RemapCoords(x + bounds.extent.x, y + bounds.extent.y, z).y + 1);
  	}
@@ -6552,7 +6612,7 @@ index 91588a6..391c73b 100644
  
  	if (update_cache) {
  		/*
-@@ -1713,12 +2066,114 @@ void Vehicle::UpdateBoundingBoxCoordinates(bool update_cache) const
+@@ -1713,12 +2070,114 @@ void Vehicle::UpdateBoundingBoxCoordinates(bool update_cache) const
   * Update the vehicle on the viewport, updating the right hash and setting the new coordinates.
   * @param dirty Mark the (new and old) coordinates of the vehicle as dirty.
   */
@@ -6667,7 +6727,7 @@ index 91588a6..391c73b 100644
  
  	if (ignore_cached_coords) {
  		UpdateVehicleViewportHash(this, this->coord.left, this->coord.top, INVALID_COORD, INVALID_COORD);
-@@ -1726,6 +2181,11 @@ void Vehicle::UpdateViewport(bool dirty)
+@@ -1726,6 +2185,11 @@ void Vehicle::UpdateViewport(bool dirty)
  		UpdateVehicleViewportHash(this, this->coord.left, this->coord.top, this->sprite_cache.old_coord.left, this->sprite_cache.old_coord.top);
  	}
  
@@ -6679,7 +6739,7 @@ index 91588a6..391c73b 100644
  	if (dirty) {
  		if (ignore_cached_coords) {
  			this->sprite_cache.is_viewport_candidate = this->MarkAllViewportsDirty();
-@@ -1754,6 +2214,10 @@ void Vehicle::UpdatePositionAndViewport()
+@@ -1754,6 +2218,10 @@ void Vehicle::UpdatePositionAndViewport()
   */
  bool Vehicle::MarkAllViewportsDirty() const
  {
@@ -9500,53 +9560,4 @@ index 3d07ff3..b8911ba 100644
 +
  static const uint ZOOM_BASE_SHIFT = to_underlying(ZoomLevel::Normal);
  static uint const ZOOM_BASE = 1U << ZOOM_BASE_SHIFT;
- 
-diff --git a/src/os/unix/crashlog_unix.cpp b/src/os/unix/crashlog_unix.cpp
---- a/src/os/unix/crashlog_unix.cpp
-+++ b/src/os/unix/crashlog_unix.cpp
-@@ -215,6 +215,12 @@
- 
- /* static */ void CrashLog::InitialiseCrashLog()
- {
-+#ifdef WITH_SHADEREMU
-+	/* (A crash here ends the program at once: the kernel says where, the desktop says it stopped, and the GPU and the workers
-+	 * are free. The log has no stack here, the saved game is minutes of LZMA over memory that may be broken, and meanwhile the
-+	 * window has gone and the program holds the GPU: docs/games/openttd.md, "At exit".) */
-+	return;
-+#endif
- 	SetSignals(HandleCrash);
- }
- 
-diff --git a/src/os/unix/unix.cpp b/src/os/unix/unix.cpp
---- a/src/os/unix/unix.cpp
-+++ b/src/os/unix/unix.cpp
-@@ -8,6 +8,10 @@
- /** @file unix.cpp Implementation of Unix specific file handling. */
- 
- #include "../../stdafx.h"
-+#ifdef WITH_SHADEREMU
-+#include <csignal>
-+#include <unistd.h>
-+#endif
- #include "../../textbuf_gui.h"
- #include "../../debug.h"
- #include "../../string_func.h"
-@@ -229,6 +233,18 @@
- #elif !defined( __APPLE__)
- void OSOpenBrowser(const std::string &url)
- {
-+#ifdef WITH_SHADEREMU
-+	/* (no MMU: a fork is a vfork, whose child runs on this program's memory, and exit() below ran this program's atexit
-+	 * functions there: its workers closed, its statics destroyed, under a game that went on and failed later, or stayed
-+	 * without a window; docs/games/openttd.md, "At exit". The machine's `open` takes an address.) */
-+	const char *open_args[3] = { "open", url.c_str(), nullptr };
-+	signal(SIGCHLD, SIG_IGN);
-+	if (vfork() == 0) {
-+		execvp(open_args[0], const_cast<char * const *>(open_args));
-+		_exit(127);
-+	}
-+	return;
-+#endif
- 	pid_t child_pid = fork();
- 	if (child_pid != 0) return;
  

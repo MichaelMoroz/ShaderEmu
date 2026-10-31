@@ -444,6 +444,11 @@ followed vehicle's too. What it owes (stale texts, scheduled invalidations, spri
 next hold, and a held picture with nothing else to draw lets the tick go at that point. At most `OPENTTD_LIGHT_MOST` (8) in a row.
 A pointer that only moves is seen at most every 66 ms (`pointer_waits`): each sight is a hold.
 
+A following view reads that copy too, so a vehicle must never be without one. A vehicle built in a depot had none: hidden, it has no `UpdateViewport`, and `UpdatePosition`
+said nothing, so a light picture put its window's view on the copy's 0,0,0, the map's north corner: black with the tip of the map rising from the bottom (a player's report;
+since f16da98). `Vehicle::UpdatePosition` now lists it (`VehicleChanged`). `test_all.py openttd-depot` plays `OPENTTD_PLAY_SCENE=depot`: the checks with `OPENTTD_CHECK`
+turn light pictures off, and the windows' scenes had no vehicle in a depot; `SetLocalCompany` lists every vehicle, which hid it until the scene built the vehicle a sync later.
+
 Ships' paths ahead now run during the tick (below, "Ships' paths made ahead"), and the counts were made again, with the building part.
 
 ## Gameplay scenes
