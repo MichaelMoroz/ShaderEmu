@@ -21,6 +21,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DONE = "echo LX-''DONE"
 X = 'nano-X -p & sleep 2; '
+WM = 'export NXBAR_PRINT=1; nx; sleep 3; '   # the real desktop
+WMC = 'export NXBAR_CLOSE_MS=1000; ' + WM   # a second for a close
 F10 = '\x1b[21~'   # (the console's TERM is linux)
 CC = 'mkdir -p /tmp/classicube; echo singleplayerphysics=false >> /tmp/classicube/options.txt; ' + X
 TD = 'TDAWN_AUTO=1 TDAWN_SEED=7 TDAWN_NO_DELAY=1 '
@@ -478,6 +480,60 @@ CASES = [
                 (r'^nxide: storm: \d+ made again: the text is as the storm left it', 3)]),
     case('launch-note', 'desktop', 'export UI_LAUNCH=print; nx; sleep 4; nxkey 266,94 266,94; sleep 4', wall=120,
          has=[r'^launch: Calculator', r'^launch: a window shown after \d+ ms']),   # docs/system/nanox.md, "A program starting"
+    # The window manager and the bar (docs/system/nanox.md, "The window manager and the bar"), on the real desktop, by keys and
+    # the pointer; nxwintest list says each window's place and state, front first. tools/wm_shots.py has their pictures.
+    case('wm-snap', 'desktop wm', WM + "nxwintest plain a & sleep 2; nxkey hold:150,32 to:300,200 to:60,200 to:2,200 1000 drop:2,200 1000; nxwintest list; "
+         "nxkey drag:100,12:400,200 1000; nxwintest list; nxkey hold:400,200 to:600,100 to:797,3 1000 drop:797,3 1000; nxwintest list; nxkey hold:600,12 to:400,100 to:400,0 1000 drop:400,0 1000; nxwintest list", wall=120,
+         has=[r'^nxbar: snap preview 1', r'^nxbar: snap preview gone', r'^win 0 a 0,0 400x574 mapped tiled', r'^win 0 a 400,0 400x287 mapped tiled',
+              r'^win 0 a 0,0 800x574 mapped maximised']),
+    case('wm-keys', 'desktop wm', WM + "nxwintest plain a & sleep 2; L='nxwintest list'; nxkey ctrl+alt+up 800; $L; nxkey ctrl+alt+down 800; $L; nxkey ctrl+alt+right 800; $L; "
+         "nxkey ctrl+alt+u 800; $L; nxkey ctrl+alt+k 800; $L; nxkey ctrl+alt+j 800; $L; nxkey ctrl+alt+i 800; $L; nxkey ctrl+alt+down 800; $L; nxkey ctrl+alt+shift+right ctrl+alt+shift+down 800; $L", wall=120,
+         has=[r'^win 0 a 0,0 800x574 mapped maximised', r'^win 0 a 400,0 400x574 mapped tiled', r'^win 0 a 0,0 400x287 mapped tiled',
+              r'^win 0 a 400,287 400x287 mapped tiled', r'^win 0 a 0,287 400x287 mapped tiled', r'^win 0 a 400,0 400x287 mapped tiled',
+              r'^win 0 a 40,20 246x149 mapped', r'^win 0 a 56,36 246x149 mapped']),
+    case('wm-double', 'desktop wm', WM + "nxwintest plain a & sleep 2; nxkey 150,32 150,32 1000; nxwintest list; nxkey 150,12 150,12 1000; nxwintest list", wall=120,
+         has=[r'^win 0 a 0,0 800x574 mapped maximised', r'^win 0 a 40,20 246x149 mapped focus']),
+    case('wm-shade', 'desktop wm', WM + "nxwintest plain a & sleep 2; nxkey ctrl+alt+s 800; nxwintest list; nxkey ctrl+alt+s 800; nxwintest list", wall=120,
+         has=[r'^win 0 a 40,20 246x149 mapped shaded', r'^win 0 a 40,20 246x149 mapped focus']),
+    case('wm-ontop', 'desktop wm', WM + "nxwintest plain a & sleep 2; nxkey ctrl+alt+t 800; nxwintest plain b & sleep 2; nxwintest list", wall=120,
+         has=[r'^win 0 a 40,20 246x149 mapped ontop', r'^win 1 b ']),
+    case('wm-desktops', 'desktop wm', WM + "nxwintest plain a & sleep 2; nxkey ctrl+alt+2 800; nxwintest plain b & sleep 2; nxwintest list; nxkey ctrl+alt+shift+3 800; nxwintest list; "
+         "nxkey ctrl+alt+1 800; nxwintest list", wall=120,
+         has=[r'^win \d a [\d,]+ 246x149 unmapped desk 0', r'^win \d b [\d,]+ 246x149 mapped focus desk 1', r'^win \d b [\d,]+ 246x149 unmapped desk 2', r'^win \d a [\d,]+ 246x149 mapped.* desk 0']),
+    case('wm-switch', 'desktop wm', WM + "nxwintest plain a & sleep 2; nxwintest plain b & sleep 2; nxwintest plain c & sleep 2; nxkey down:ctrl tab 500 tab 500 up:ctrl 800; nxwintest list; "
+         "nxkey ctrl+tab 800; nxwintest list", wall=120,
+         has=[r'^nxbar: switcher at b', r'^nxbar: switcher at a', r'^nxbar: switched to a', r'^win 0 a .* focus', r'^nxbar: switched to c', r'^win 0 c .* focus']),
+    case('wm-menu', 'desktop wm', WM + "nxwintest plain a & sleep 2; nxkey r:150,32 800 escape 500 ctrl+alt+space 800 down down enter 800; nxwintest list", wall=120,
+         has=[r'^nxbar: the menu of a', r'^win 0 a 0,0 800x574 mapped maximised']),
+    case('wm-remember', 'desktop wm', WM + "nxwintest plain a & sleep 2; nxkey drag:150,32:350,132 800 alt+f4 2000; nxreg list | grep wm.place; nxwintest plain a & sleep 2; nxwintest list; nxreg set wm.remember 0; nxkey alt+f4 2000; nxwintest plain a & sleep 2; nxwintest list", wall=120,
+         has=[r'^wm\.place\.nxwintest', r'^win 0 a 240,120 246x149 mapped', r'^win 0 a 120,60 246x149 mapped']),
+    case('wm-group', 'desktop wm', WM + "nxwintest two a & sleep 2; nxwintest plain c & sleep 2; nxkey 180,586 800 enter 800; nxwintest list", wall=120,
+         has=[r'^nxbar: buttons: \[c x3 active\]', r'^win \d (a|second) .* focus']),
+    # a program that does not answer a close: asked, then ended: it took SIGTERM (ignore) or it took SIGKILL (stopped)
+    case('wm-hang', 'desktop wm', WMC + "nxwintest hang h & P=$!; sleep 2; kill -STOP $P; nxkey alt+f4 3000 enter 4000; ps | grep -c 'nxwintes[t] hang'; nxwintest list", wall=120,
+         has=[r'^nxbar: not responding: h', r'^nxbar: SIGTERM to h', r'^nxbar: SIGKILL to h', r'^0\s*$'], never=[r'^win \d h ']),
+    case('wm-ignore', 'desktop wm', WMC + "nxwintest ignore i & sleep 2; nxkey alt+f4 3000 enter 2000; ps | grep -c 'nxwintes[t] ignore'; nxwintest list", wall=120,
+         has=[r'^nxbar: not responding: i', r'^nxbar: SIGTERM to i', r'^0\s*$'], never=[r'^win \d i ']),
+    case('wm-linger', 'desktop wm', WMC + "nxwintest linger l & sleep 2; nxkey alt+f4 4000 enter 2000; ps | grep -c 'nxwintes[t] linger'", wall=120,
+         has=[r'^nxbar: outlives its window: l', r'^nxbar: SIGTERM to l', r'^0\s*$']),
+    # a clean close asks nothing
+    case('wm-close', 'desktop wm', WMC + "nxwintest plain p & sleep 2; nxkey alt+f4 4000; nxwintest list", wall=120,
+         has=[r'^wins \d'], never=[r'^nxbar: not responding', r'^nxbar: outlives', r'^win \d p ']),
+    # a dead client's windows go, with its button
+    case('wm-kill', 'desktop wm', WM + "nxwintest two a & P=$!; sleep 2; nxwintest list; kill -9 $P; sleep 2; nxwintest list", wall=120,
+         has=[r'^win 0 second', r'^nxbar: buttons: \s*$'], count=[(r'^win \d second', 1)]),
+    # from the bar's pinned button (first at 49,586): a program on its way has a button, and after NXBAR_START_MS a question
+    case('wm-slow', 'desktop wm', "nxreg set bar.pinned 'nxwintest slow 15'; export NXBAR_START_MS=4000; " + WM + "nxkey 49,586; sleep 2; nxwintest list; sleep 4; nxkey enter 500; sleep 14; nxwintest list; nxreg unset bar.pinned", wall=120,
+         has=[r'^nxbar: starting ', r'^nxbar: slow to start', r'^win 0 slow '], never=[r'^nxbar: buttons: \[starting [^]]*\] \[starting']),
+    # a program that crashes after its window: said so, with Start again (the first button) starting it anew
+    case('wm-crash', 'desktop wm', "nxreg set bar.pinned 'nxwintest crash c'; export UI_LAUNCH=print; " + WM + "nxkey 49,586; sleep 8; nxwintest list; nxreg unset bar.pinned", wall=120,
+         has=[r'^launch: Stopped working']),
+    # the GPU's one drawer: a second program started from the bar is not a dead end; the question offers to close the first and starts it again
+    case('wm-gpu', 'desktop wm', "nxreg set bar.pinned 'sh -c glxgears'; export UI_ASK_PRINT=1 UI_LAUNCH=print; " + WM + "glxgears >/dev/null & P=$!; sleep 3; nxkey 49,586; sleep 4; nxwintest list; nxkey enter; sleep 6; nxwintest list; "
+         "kill -0 $P 2>/dev/null || echo FIRST-GONE; cat /proc/gpu | head -3; nxreg unset bar.pinned", wall=120,
+         has=[r'^FIRST-GONE', r'^win \d .*gears']),
+    case('wm-single', 'desktop wm', WM + "nxsettings & sleep 4; nxwintest plain b & sleep 2; nxwintest list; nxsettings; echo SECOND=$?; sleep 1; nxwintest list", wall=120,
+         has=[r'^SECOND=0', r'^win 0 Settings .* focus'], count=[(r'^win \d Settings', 2)]),
 ]
 
 

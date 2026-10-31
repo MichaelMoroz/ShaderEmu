@@ -7,7 +7,9 @@
 #ifndef UI_LAUNCH_H
 #define UI_LAUNCH_H
 #include <errno.h>
+#include <fcntl.h>
 #include <signal.h>
+#include <sys/ioctl.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
@@ -23,6 +25,7 @@ static GR_WINDOW_ID ui_launch_note;
 static GR_CURSOR_ID ui_launch_busy;
 static GR_GC_ID ui_launch_gc;
 static GR_EVENT_MASK ui_launch_root;	/* the root's events as this program has them otherwise */
+static GR_EVENT_MASK ui_launch_root_asked;	/* and as the last start said, the note's or not */
 static pid_t ui_launch_pid;
 static unsigned ui_launch_began, ui_launch_shown_s, ui_launch_looked;
 static int ui_launch_w, ui_launch_fresh;	/* fresh: drawn at its map, its first exposure is no news */
@@ -31,13 +34,20 @@ static struct ui_icon_ref ui_launch_icon;
 
 /* The programs started for clicks, while they run: a name each, and whether a window came. */
 #define UI_WATCHED 16
-static struct { pid_t pid; int shown; char name[33]; } ui_watched[UI_WATCHED];
+static struct { pid_t pid; int shown; char name[33], command[64]; } ui_watched[UI_WATCHED];
 static int ui_watched_next, ui_watching;
+static char ui_launch_cmd[64];		/* the next program's command, to start it again (ui_launch_will_run) */
+/* the questions that may start a program again: nxask's process, and what it would start */
+static struct { pid_t pid; char name[33], command[64]; } ui_again[4];
 /* children reaped by the handler, for the program's loop to look at (ui_launch_tick) */
 static volatile pid_t ui_reaped_pid[32];
 static volatile int ui_reaped_status[32];
 static volatile unsigned ui_reaped_in;
 static unsigned ui_reaped_out;
+
+static void ui_launch_again(const char *name, const char *command);
+static void ui_launch_begin(const char *name, const struct ui_icon_ref *icon, GR_EVENT_MASK root_events);
+static void ui_launch_started(pid_t pid);
 
 static void
 ui_children_reap(int sig)
@@ -71,6 +81,16 @@ ui_launch_watch(void)
 	sigemptyset(&sa.sa_mask);
 	sigaction(SIGCHLD, &sa, NULL);
 	ui_watching = 1;
+	/* what is started from here is watched: a program the GPU refuses leaves the question to this
+	 * launcher, which can offer to close the holder (ui_launch_gpu), not a notice of its own (nxask.c) */
+	setenv("UI_LAUNCHED", "1", 1);
+}
+
+/* The command the next ui_launch_begin's program is started by, words parted by spaces. */
+static void
+ui_launch_will_run(const char *command)
+{
+	snprintf(ui_launch_cmd, sizeof ui_launch_cmd, "%s", command);
 }
 
 /* Holds the handler off (1) while the program waits for a child of its own, and lets it go (0). */
@@ -95,6 +115,76 @@ ui_launch_report(const char *title, const char *text)
 		execlp("nxask", "nxask", "--icon", "error", "--title", title, text, "OK", (char *)NULL);
 		_exit(127);
 	}
+}
+
+/* The same, with a button that starts the command again; the answer is read as nxask ends. */
+static void
+ui_launch_report_again(const char *title, const char *text, const char *name, const char *command)
+{
+	unsigned k;
+	pid_t pid;
+
+	if (getenv("UI_LAUNCH") && !strcmp(getenv("UI_LAUNCH"), "print"))
+		fprintf(stderr, "launch: %s: %s\n", title, text);
+	for (k = 0; k < 4 && ui_again[k].pid; k++)
+		;
+	if (k == 4 || !command[0]) {
+		ui_launch_report(title, text);
+		return;
+	}
+	if ((pid = real_vfork()) == 0) {
+		signal(SIGCHLD, SIG_DFL);
+		execlp("nxask", "nxask", "--icon", "error", "--title", title, text, "Start again", "OK", (char *)NULL);
+		_exit(127);
+	}
+	ui_again[k].pid = pid;
+	snprintf(ui_again[k].name, sizeof ui_again[k].name, "%s", name);
+	snprintf(ui_again[k].command, sizeof ui_again[k].command, "%s", command);
+}
+
+/* The process the GPU is drawing for, when another has it: 0 when nobody has (the kernel's claim,
+ * given back at the close). */
+static unsigned
+ui_launch_gpu_holder(void)
+{
+	unsigned other = 0;
+	int fd = open("/dev/gpu", O_RDWR | O_CLOEXEC), busy;
+
+	if (fd < 0)
+		return 0;
+	busy = ioctl(fd, 0x80044705u, &other) < 0 && errno == EBUSY;	/* SEGL_DRAW_CLAIM */
+	close(fd);
+	return busy ? other : 0;
+}
+
+/* A program that ended with no window while the GPU draws for another: nxask --gpu offers what
+ * can be done. True if it does. */
+static int
+ui_launch_gpu(int k)
+{
+	char text[64], *words[12];
+	unsigned other;
+	int n = 3;
+	char number[16];
+
+	if (!ui_watched[k].command[0] || !(other = ui_launch_gpu_holder()))
+		return 0;
+	snprintf(text, sizeof text, "%s", ui_watched[k].command);
+	snprintf(number, sizeof number, "%u", other);
+	words[0] = "nxask";
+	words[1] = "--gpu";
+	words[2] = number;
+	for (words[n] = strtok(text, " "); words[n] && n < 10; words[n] = strtok(NULL, " "))
+		n++;
+	words[n] = NULL;
+	if (getenv("UI_LAUNCH") && !strcmp(getenv("UI_LAUNCH"), "print"))
+		fprintf(stderr, "launch: the GPU draws for process %u\n", other);
+	if (real_vfork() == 0) {
+		signal(SIGCHLD, SIG_DFL);
+		execvp("nxask", words);
+		_exit(127);
+	}
+	return 1;
 }
 
 /* What the report says of a program that could not become one: the exec's error. */
@@ -124,7 +214,9 @@ ui_launch_ended(int k, int status)
 	char text[200];
 	int sig = WIFSIGNALED(status) ? WTERMSIG(status) : 0;
 
-	if (!ui_watched[k].shown && WIFEXITED(status) && WEXITSTATUS(status) != 0) {
+	if (!ui_watched[k].shown && WIFEXITED(status) && WEXITSTATUS(status) == 1 && ui_launch_gpu(k))
+		;
+	else if (!ui_watched[k].shown && WIFEXITED(status) && WEXITSTATUS(status) != 0) {
 		int code = WEXITSTATUS(status);
 
 		snprintf(text, sizeof text, "%s stopped before its window opened.\n%s (status %d).", ui_watched[k].name,
@@ -135,7 +227,7 @@ ui_launch_ended(int k, int status)
 		   sig == SIGABRT || sig == SIGSYS)) {
 		snprintf(text, sizeof text, ui_watched[k].shown ? "%s stopped working:\n%s (signal %d).\nWhat was not saved in it is lost." :
 			"%s stopped before its window opened:\n%s (signal %d).", ui_watched[k].name, strsignal(sig), sig);
-		ui_launch_report(ui_watched[k].shown ? "Stopped working" : "Could not start", text);
+		ui_launch_report_again(ui_watched[k].shown ? "Stopped working" : "Could not start", text, ui_watched[k].name, ui_watched[k].command);
 	}
 	ui_watched[k].pid = 0;
 }
@@ -258,6 +350,7 @@ ui_launch_begin(const char *name, const struct ui_icon_ref *icon, GR_EVENT_MASK 
 	GR_SIZE tw, th, tb;
 
 	ui_launch_end("another started");
+	ui_launch_root_asked = root_events;
 	snprintf(ui_launch_name, sizeof ui_launch_name, "%s", name);
 	ui_exec_errno = 0;
 	ui_launch_pid = -1;	/* (not known yet) */
@@ -309,8 +402,23 @@ ui_launch_started(pid_t pid)
 		ui_watched[k].pid = pid;
 		ui_watched[k].shown = 0;
 		snprintf(ui_watched[k].name, sizeof ui_watched[k].name, "%s", ui_launch_name);
+		snprintf(ui_watched[k].command, sizeof ui_watched[k].command, "%s", ui_launch_cmd);
+		ui_launch_cmd[0] = 0;
+#ifndef UI_LAUNCH_IS_BAR
+		{
+			/* the bar shows what is starting (linux/nanox/nxbar.c) */
+			GR_WM_PROPERTIES word;
+
+			word.flags = GR_WM_FLAGS_COMMAND;
+			word.props = GR_WMC_STARTING;
+			word.background = pid;
+			word.title = NULL;
+			GrSetWMProperties(GR_ROOT_WINDOW_ID, &word);
+		}
+#endif
 		return;
 	}
+	ui_launch_cmd[0] = 0;
 	ui_launch_end("not started");
 	if (error)
 		ui_launch_exec_report(ui_launch_name, error);
@@ -363,6 +471,32 @@ ui_launch_bare_shown(void)
 	return shown;
 }
 
+/* "Start again" was the answer: the command, words parted by spaces, with the note as at a click. */
+static void
+ui_launch_again(const char *name, const char *command)
+{
+	char text[64], *words[8];
+	struct ui_icon_ref icon;
+	int n = 0;
+	pid_t child;
+
+	snprintf(text, sizeof text, "%s", command);
+	for (words[n] = strtok(text, " "); words[n] && n < 6; words[n] = strtok(NULL, " "))
+		n++;
+	words[n] = NULL;
+	if (!n)
+		return;
+	ui_icon_of_command(command, &icon);
+	ui_launch_will_run(command);
+	ui_launch_begin(name, &icon, ui_launch_root_asked);
+	if ((child = real_vfork()) == 0) {
+		signal(SIGCHLD, SIG_DFL);
+		execvp(words[0], words);
+		ui_exec_failed();
+	}
+	ui_launch_started(child);
+}
+
 /* How long the program's event loop may wait now: a quarter second while a program starts. */
 static int
 ui_launch_wait(int otherwise)
@@ -383,6 +517,15 @@ ui_launch_tick(void)
 		int status = ui_reaped_status[ui_reaped_out & 31], k;
 
 		ui_reaped_out++;
+#ifdef UI_LAUNCH_REAPED
+		UI_LAUNCH_REAPED(pid, status);
+#endif
+		for (k = 0; k < 4; k++)
+			if (ui_again[k].pid == pid) {
+				ui_again[k].pid = 0;
+				if (WIFEXITED(status) && WEXITSTATUS(status) == 0)
+					ui_launch_again(ui_again[k].name, ui_again[k].command);
+			}
 		if (ui_launch_pid > 0 && pid == ui_launch_pid)
 			ui_launch_end("the program gone");
 		for (k = 0; k < UI_WATCHED; k++)

@@ -1,3 +1,7 @@
+- The window manager and the bar know programs (`docs/system/nanox.md`, "The window manager and the bar"; 31 October 2026): a new
+  key or state is told over `GR_WMC_*`/`GR_WM_TELL` (no new request, no change to the client's library), what changes the window tree
+  raises `gd_scene_gen`, and `python tools/test_all.py wm` must pass, with a look at `tools/wm_shots.py`'s pictures: the cases say places
+  and states, not what is drawn. A program of which one window is enough calls `ui_single_instance()` (`ui_single.h`).
 - The rules of the work (23 October 2026). We own the whole stack, from the games' and programs' sources down to the
   tick's DXBC instructions: the games and userland, the toolchain, the tick and the other shaders, and
   fxc2 (`C:\Users\micha\Documents\FXC2`, `tools/fxc2`), so a cost is fixed at whichever layer it is cheapest.
