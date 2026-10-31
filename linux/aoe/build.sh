@@ -28,7 +28,7 @@ python3 "$HERE/tree.py" "$UP" "$SRC"
 mkdir -p "$SRC/third_party"; rsync -a --delete "$UP/third_party/" "$SRC/third_party/"
 # Asm_draw.asm, Inf32.asm and Drawarea_asm.asm are in port/aoe_asm.cpp; getdxver.cpp asks Windows what it has
 OUTS="${AOE_OUTS:-getdxver.cpp Dsutil.c}"
-COMMON="-O2 -fno-pie -w -fsigned-char -fno-strict-aliasing -fwrapv -fno-delete-null-pointer-checks -fno-tree-vectorize -g -DAOE_SHADEREMU"
+COMMON="${AOE_OPT:--O2} -fno-pie -w -fsigned-char -fno-strict-aliasing -fwrapv -fno-delete-null-pointer-checks -fno-tree-vectorize -g -DAOE_SHADEREMU"
 INC="-I$HERE/win -I$SRC/include -I$WORK/src/microwindows/src/include -I$REPO/linux/userland -idirafter $REPO/programs/linux/include"
 FLAGS="$COMMON -fpermissive -std=gnu++98 -fms-extensions -fno-lifetime-dse -include $HERE/win/aoe_prefix.h $INC"
 CFLAGS="$COMMON -include $HERE/win/aoe_prefix.h $INC"

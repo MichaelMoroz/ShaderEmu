@@ -126,15 +126,15 @@ GAMES = {
     'aoe': dict(
         what='a Random Map game, 4 players, a villager sent and one trained, updates 50 to 300',
         cmd='nano-X -p & sleep 2; AOE_MARK=${AOE_MARK:-50,300} AOE_SCRIPT="' + AOE_PLAY + '" aoe', wall=900,
-        mark='aoe: mark begins', until='aoe: mark ends', frames=AOE_FRAMES, rate=AOE_RATE),
+        mark='aoe: mark begins', until='aoe: mark over', frames=AOE_FRAMES, rate=AOE_RATE),
     'aoe-late': dict(
         what='the same game left to the computer players, updates 4000 to 4300',
         cmd='nano-X -p & sleep 2; AOE_MARK=4000,4300 AOE_SCRIPT="' + AOE_PLAY + '" aoe', wall=1800,
-        mark='aoe: mark begins', until='aoe: mark ends', frames=AOE_FRAMES, rate=AOE_RATE),
+        mark='aoe: mark begins', until='aoe: mark over', frames=AOE_FRAMES, rate=AOE_RATE),
     'aoe-scroll': dict(
-        what='the same game with the pointer at the right edge of the screen, updates 100 to 300',
-        cmd='nano-X -p & sleep 2; AOE_MARK=100,300 AOE_SCRIPT="' + AOE_PLAY + ';1000 move 799 300" aoe', wall=900,
-        mark='aoe: mark begins', until='aoe: mark ends', frames=AOE_FRAMES, rate=AOE_RATE),
+        what='the same game, the pointer at the right and left edges in turn for 1.5 s each (over what is explored), updates 100 to 300',
+        cmd='nano-X -p & sleep 2; AOE_MARK=100,300 AOE_SCRIPT="' + AOE_PLAY + ';1000 move 799 300' + ';1500 move 0 300;1500 move 799 300' * 12 + '" aoe', wall=900,
+        mark='aoe: mark begins', until='aoe: mark over', frames=AOE_FRAMES, rate=AOE_RATE),
     'halflife': dict(
         what='hldemo1, standing where it starts, the fight at 31 to 45 s of the level (docs/games/halflife.md, "Speed")',
         cmd='nano-X -p & sleep 2; HL_MARK=${HL_MARK:-31,45} halflife +map hldemo1', wall=600,

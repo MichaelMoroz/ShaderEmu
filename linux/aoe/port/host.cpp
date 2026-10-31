@@ -155,6 +155,7 @@ void aoe_events(void) {
             mark_a = 0;
             fprintf(stderr, "aoe: mark ends, %ld frames in %lu ms, updates %lu, game ms %lu\n", frames - m_frames, timeGetTime() - m_ms,
                 aoe_updates - m_updates, aoe_world_ms - m_world);
+            fprintf(stderr, "aoe: mark over\n");   // (what a run stops at: the line before is whole by then)
         }
     }
     if (!script || !*script) return;
