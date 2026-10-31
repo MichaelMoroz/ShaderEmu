@@ -699,7 +699,7 @@ wait_gone(struct tag *t, const char *how)
 {
 	long from = now_ms(), asked_at = 0;
 	int answers = 0, x, y, w, h;
-	long window_gone_at = 0;
+	long window_gone_at = 0, dead_at = 0;
 
 	for (;;) {
 		int alive, shown;
@@ -713,7 +713,11 @@ wait_gone(struct tag *t, const char *how)
 			t->closed = 1;
 			return;
 		}
-		if (!alive && shown && now_ms() - from > 3000) {
+		if (alive || !shown)
+			dead_at = 0;
+		else if (!dead_at)
+			dead_at = now_ms();	/* (from its going: a process may take seconds over its end, and the server hears at once after) */
+		if (dead_at && now_ms() - dead_at > 3000) {
 			BAD("window-of-dead %s: process %d has gone, its window has not", t->name, t->pid);
 			t->closed = 1;
 			return;
