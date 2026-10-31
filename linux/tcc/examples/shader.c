@@ -217,6 +217,8 @@ int main(void)
 			stopped = !stopped;
 		/* the picture being made is whole: it is shown, and the next is begun in the other memory */
 		mcw_shade_wait();
+		seglSize(&width, &height);	/* (the window may have another size) */
+		glViewport(0, 0, width, height);
 		seglQuad(corners, uv, texture[at], 255, 255, 0);
 		seglSwapEarly();
 		if (!stopped)

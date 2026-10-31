@@ -190,6 +190,8 @@ int main(int argc, char **argv)
 			continue;
 		}
 		/* the picture is whole: shown, and the next begun in the other memory */
+		seglSize(&width, &height);	/* (the window may have another size) */
+		glViewport(0, 0, width, height);
 		seglQuad(corners, uv, texture[at], 255, 255, 0);
 		seglSwapEarly();
 		if (!stopped) {

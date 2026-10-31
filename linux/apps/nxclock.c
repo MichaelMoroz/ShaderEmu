@@ -92,7 +92,7 @@ local_now(time_t *at)
 static void
 read_settings(void)
 {
-	const char *alarm = reg_get("nxclock.alarm", "07:00"), *size = reg_get("nxclock.size", "360x380");
+	const char *alarm, *size;
 	int h = 7, m = 0, w, ht;
 	int i;
 
@@ -101,6 +101,7 @@ read_settings(void)
 	alarm_on = reg_int("nxclock.alarm_on", 0);
 	timer_set = reg_int("nxclock.timer", 300);
 	timer_set = timer_set < 1 || timer_set > 86399 ? 300 : timer_set;
+	alarm = reg_get("nxclock.alarm", "07:00"), size = reg_get("nxclock.size", "360x380");	/* (after those: reg_get has four slots) */
 	if (sscanf(alarm, "%d:%d", &h, &m) == 2 && h >= 0 && h < 24 && m >= 0 && m < 60)
 		alarm_hm = h * 60 + m;
 	if (sscanf(size, "%dx%d", &w, &ht) == 2 && w >= 200 && ht >= 200 && w <= 1920 && ht <= 1080)
@@ -786,10 +787,29 @@ show_tab(int which)
 /* ---- ringing ---- */
 
 static void tick(void);
+static int kept_w, kept_h;
+static int alarm_due;
+
+/* The window's X: its size kept, the sound stopped, gone. */
+static void
+quit(void)
+{
+	if (width != kept_w || height != kept_h) {
+		char size[24];
+
+		snprintf(size, sizeof size, "%dx%d", width, height);
+		reg_set("nxclock.size", size);
+	}
+	sound_stop();
+	GrClose();
+	exit(0);
+}
 
 static void
 ask_others(GR_EVENT *event)
 {
+	if (event->type == GR_EVENT_TYPE_CLOSE_REQ && event->general.wid == window)
+		quit();
 	if (event->type == GR_EVENT_TYPE_EXPOSURE && event->exposure.wid == window)
 		draw();
 	else if (event->type == GR_EVENT_TYPE_UPDATE && event->update.wid == window && event->update.utype == GR_UPDATE_SIZE) {
@@ -861,8 +881,10 @@ alarm_ring(void)
 {
 	static const char *const answers[] = { "Stop", "Snooze 5 min" };
 	char text[64];
+	time_t now = time(NULL);
+	struct tm *tm = localtime(&now);
 
-	snprintf(text, sizeof text, "It is %02d:%02d: the alarm.", alarm_hm / 60, alarm_hm % 60);
+	snprintf(text, sizeof text, "It is %02d:%02d: the alarm.", tm->tm_hour, tm->tm_min);	/* (after a snooze, not the alarm's time) */
 	if (ring("Alarm", text, answers, 2) == 1)
 		snooze_until = time(NULL) + 300;
 	if (tab == TAB_ALARM)
@@ -893,11 +915,19 @@ tick(void)
 		draw_watch();
 	if (tab == TAB_TIMER && timer_started && (timer_ms() + 999) / 1000 != shown_left)
 		draw_timer();
-	if (ringing)
+	if (ringing) {	/* (an alarm whose minute comes under a notice rings after it) */
+		if (alarm_on && tm.tm_hour * 60 + tm.tm_min == alarm_hm && rung_minute != now / 60) {
+			rung_minute = now / 60;
+			alarm_due = 1;
+		}
 		return;
+	}
 	if (timer_running && timer_ms() <= 0)
 		timer_done();
-	else if (alarm_on && tm.tm_hour * 60 + tm.tm_min == alarm_hm && rung_minute != now / 60) {
+	else if (alarm_due) {
+		alarm_due = 0;
+		alarm_ring();
+	} else if (alarm_on && tm.tm_hour * 60 + tm.tm_min == alarm_hm && rung_minute != now / 60) {
 		rung_minute = now / 60;
 		alarm_ring();
 	} else if (snooze_until && now >= snooze_until) {
@@ -1112,7 +1142,7 @@ int
 main(int argc, char **argv)
 {
 	GR_EVENT event;
-	int i, kept_w, kept_h;
+	int i;
 
 	print = getenv("NXCLOCK_PRINT") != NULL;
 	read_settings();
@@ -1159,15 +1189,7 @@ main(int argc, char **argv)
 			key(&event);
 			break;
 		case GR_EVENT_TYPE_CLOSE_REQ:
-			if (width != kept_w || height != kept_h) {
-				char size[24];
-
-				snprintf(size, sizeof size, "%dx%d", width, height);
-				reg_set("nxclock.size", size);
-			}
-			sound_stop();
-			GrClose();
-			return 0;
+			quit();
 		}
 		tick();
 	}

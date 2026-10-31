@@ -13,7 +13,10 @@ if [ -z "$own" ]; then
     exit 1
 fi
 later=""
-trap 'rm -f /tmp/nxhosting; [ -n "$later" ] && kill $later 2>/dev/null' EXIT INT TERM
+# (the word is taken away by the run that said it: not by a join, nor by a second start beside a game hosted here)
+mine=""
+[ "$how" != join ] && [ ! -f /tmp/nxhosting ] && mine=1
+trap '[ -n "$mine" ] && rm -f /tmp/nxhosting; [ -n "$later" ] && kill $later 2>/dev/null' EXIT INT TERM
 case "$game $how" in
 "quake host")
     # said to be hosting once the level is up: a join before that finds no game

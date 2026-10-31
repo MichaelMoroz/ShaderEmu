@@ -174,7 +174,7 @@ deflated(const unsigned char *in, long n, unsigned char *out, long room, int lev
 		at += here;
 		if (deflate(&z, at == n ? Z_FINISH : Z_NO_FLUSH) == Z_STREAM_ERROR || (z.avail_out == 0 && at < n))
 			break;
-		show(doing, n ? (int)(at * 256 / n) : 256);
+		show(doing, n ? (int)((long long)at * 256 / n) : 256);
 	} while (at < n);
 	at = z.avail_in == 0 && z.avail_out ? (long)z.total_out : 0;
 	deflateEnd(&z);
@@ -194,11 +194,19 @@ save(void)
 	open_window("Compressing data...");
 	mkdir(FOLDER, 0777);
 	if (!tar("-cf") || (file = fopen(TAR, "rb")) == NULL) {
+		unlink(TAR);
 		say("The folder could not be read.", 1);
 		return 1;
 	}
 	fseek(file, 0, SEEK_END);
 	n = ftell(file);
+	if (n > RAW_MOST) {	/* (load would call it damaged, and what the host keeps now would be lost) */
+		fclose(file);
+		unlink(TAR);
+		snprintf(text, sizeof text, "Not saved: the folder holds %ld KB and %d KB can be unpacked.", (n + 999) / 1000, RAW_MOST / 1000);
+		say(text, 1);
+		return 1;
+	}
 	rewind(file);
 	room = n + 4096;
 	raw = malloc(n + 1), packed = malloc(HEADER + room);
@@ -228,6 +236,9 @@ save(void)
 	words[0] = 1, words[1] = (uint32_t)length, words[2] = crc32(0, packed + HEADER, length);
 	memcpy(packed + 4, words, 12);
 	show("Handing the data to the host...", 256);
+	/* (after another program's request has been answered: its answer lands in the same memory) */
+	for (status = 0; regs[REG_ASKED] != regs[REG_REPLY] && status < 200; status++)
+		usleep(50000);
 	memcpy(fetched, packed, HEADER + length);
 	status = ask("persist:save", HEADER + length, 30);
 	if (status != 200) {

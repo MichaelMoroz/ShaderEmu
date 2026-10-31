@@ -1593,6 +1593,10 @@ told(GR_EVENT_KEYSTROKE *key)
 	case GR_WM_TELL_STARTING:
 		starting_add(key->rootx, NULL, NULL);
 		break;
+	case GR_WM_TELL_TITLE:
+		note_window(key->subwid);
+		stale = 1;	/* (asked with the second's look: a program may say a title often) */
+		break;
 	}
 }
 
@@ -2326,6 +2330,9 @@ main(int argc, char **argv)
 			stale = 1;
 		}
 		if (stale || noted_count || now - listed >= 60) {
+			for (id = 0; retitle && id < task_count; id++)
+				if (retitle & (1u << (id & 31)))
+					note_window(tasks[id].frame);	/* (the same second's other change must not lose a new title) */
 			i |= find_tasks(now - listed >= 60 || i);
 			if (now - listed >= 60)
 				listed = now;

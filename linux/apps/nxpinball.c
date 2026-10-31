@@ -208,6 +208,8 @@ new_game(void)
 	say("Ball 1", "Hold Space, let go");
 }
 
+static int new_high;	/* this game's score beat the old one (a tie does not) */
+
 static void
 game_over(void)
 {
@@ -215,6 +217,7 @@ game_over(void)
 
 	state = OVER;
 	charging = 0;
+	new_high = score > high;
 	if (score > high) {
 		high = score;
 		if (!demo)
@@ -885,7 +888,7 @@ draw_overlay(void)
 	else {
 		number(value, sizeof value, score);
 		snprintf(line[0], 40, "Score %s", value);
-		snprintf(line[1], 40, "%s", score >= high && score ? "A new high score!" : "Press Space to play");
+		snprintf(line[1], 40, "%s", new_high ? "A new high score!" : "Press Space to play");
 	}
 	ui_fill(window, x, y, w, h, ui_seven ? WHITE : UI_FACE);
 	if (ui_seven)
@@ -1217,6 +1220,10 @@ others(GR_EVENT *event)
 {
 	if (event->type == GR_EVENT_TYPE_EXPOSURE && event->exposure.wid == window)
 		draw_all();
+	if (event->type == GR_EVENT_TYPE_CLOSE_REQ && event->general.wid == window) {
+		GrClose();
+		exit(0);
+	}
 }
 
 static void

@@ -50,16 +50,17 @@ main(int argc, char **argv)
 		printf("%s has %s\n", argv[1], has_icon(fd, &length) ? "an icon of its own" : "no icon of its own");
 		return 0;
 	}
+	/* (the old icon goes only when there is a new one to put) */
+	if (strcmp(argv[2], "--none") && (why = media_image_load(argv[2], &picture, 4, 0)) != NULL) {
+		fprintf(stderr, "nxicon: %s: %s\n", argv[2], why);
+		return 1;
+	}
 	if (has_icon(fd, &length) && ftruncate(fd, length -= ICON_BYTES) != 0) {
 		perror(argv[1]);
 		return 1;
 	}
 	if (!strcmp(argv[2], "--none"))
 		return 0;
-	if ((why = media_image_load(argv[2], &picture, 4, 0)) != NULL) {
-		fprintf(stderr, "nxicon: %s: %s\n", argv[2], why);
-		return 1;
-	}
 	w = picture.width, h = picture.height;
 	for (size = 32; size >= 16; size /= 2)
 		for (y = 0; y < size; y++)

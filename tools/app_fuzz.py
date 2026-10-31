@@ -44,6 +44,7 @@ APPS = {
     'openttd': ('openttd', 120, 'game'), 'classicube': ('classicube', 90, 'game'), 'thwaite': ('nes thwaite', 40, 'game'), 'nova': ('nes nova', 40, 'game'),
 }
 WAYS = ('x', 'alt', 'bar', 'term', 'twice')
+NO_MENUS = ('clock', 'gears', 'net', 'settings', 'imdemo', 'view', 'phys', 'ray', 'eyes')   # (no menu of any kind: none calls ui_menu's)
 
 # What the console must not say. (Each a program's own word for having broken, or the kernel's.)
 NEVER = [
@@ -92,7 +93,7 @@ class Runner:
             e['RVC_RACES'] = races
         if env:
             e.update(env)
-        line = f"{before}nx; sleep 3; nxfuzz {flat(plan)}; echo LX-''DONE\\n"
+        line = f"{before or a.before}nx; sleep 3; nxfuzz {flat(plan)}; echo LX-''DONE\\n"
         if len(line) > 1000:   # (a longer line is cut by what types it, with no word: the plan's end is lost and the run looks clean)
             raise ValueError(f'a plan of {len(line)} characters: split it')
         cmd = [os.path.join(ROOT, 'bin', 'rvc_cpu.exe'), '--image', a.image, '--quiet', '--uart-log', log, '--expect', '/ # ', '--send', line,
@@ -135,6 +136,10 @@ class Runner:
         told = list(re.finditer(r'(?:GPU is drawing for|close) ((?!it\b)\S+)(?: program)?(?: \(process| first)', console))
         if told and all(open_at(m.group(1), m.start()) for m in told):
             bad = [b for b in bad if b[0] != 'gpu-busy' and not (b[0] == 'bad' and b[1].startswith('no-window'))]
+        # a walk that found no menu has not done what it says (rows it could not open again: a context menu that goes with what a row changed, said on its line)
+        for tag, menus, rows, lost in re.findall(r'FZ menus (\S+): (\d+) menus, (\d+) rows;.*?(\d+) not reached', console):
+            if int(rows) == 0 and tag not in NO_MENUS:
+                bad.append(['menus-none', f'{tag}: the walk found no menu'])
         if 'FZ-DONE' in console and flat(plan).endswith(' end') and 'FZ op end' not in console:
             bad.append(['cut', 'the plan did not reach its end: its line was cut'])
         if 'FZ-DONE' not in console:
@@ -313,6 +318,7 @@ def main():
     p.add_argument('--jobs', type=int, default=3)
     p.add_argument('--threads', type=int, default=8)
     p.add_argument('--wall', type=int, default=120)
+    p.add_argument('--before', default='', help='shell text before nx, as: export NANOX_SIZE=640x480;')
     p.add_argument('--races', action='store_true')
     p.add_argument('--no-card-model', dest='card_model', action='store_false')
     p.add_argument('--log')

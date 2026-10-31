@@ -17,7 +17,7 @@ zip | tar | tgz | gz) ;;
 esac
 mkdir -p /tmp/open
 case "$kind" in
-zip | tar | tgz) mkdir -p "$d" && open --unpack "$kind" "$f" "$d" || exit 1 ;;
+zip | tar | tgz) rm -rf "$d"; mkdir -p "$d" && open --unpack "$kind" "$f" "$d" || exit 1 ;;
 gz)
     out="/tmp/open/${n%.gz}"
     [ "$out" = "/tmp/open/$n" ] && out="$out.out"

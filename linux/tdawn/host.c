@@ -17,8 +17,6 @@
 
 #define ONE		65536
 #define CURSOR_MAX	128		/* the largest pointer picture, a side */
-#define CAPTION		22		/* the window manager's caption and frame (nanowm.h) */
-#define FRAME		4
 #define REG_PALETTE	0x400		/* offsets in the machine's control words (docs/machine/gpu.md) */
 #define REG_INPUT	0x20
 #define REG_CLOCK	0x34
@@ -212,7 +210,7 @@ int
 host_open(int width, int height)
 {
 	GR_SCREEN_INFO info;
-	int page, bare, scale;
+	int page, scale;
 
 	if (GrOpen() < 0) {
 		fprintf(stderr, "tdawn: no Nano-X server (start one: nano-X -p &)\n");
@@ -220,15 +218,13 @@ host_open(int width, int height)
 	}
 	/*
 	 * The GPU stretches the screen over the window: the largest whole scale that fits the
-	 * display. Where a frame and caption would not fit as well (640x400 on a 640x480
-	 * display) the window has none and sits in the corner.
+	 * display. Where the frame's sides would not fit as well (640x400 on a 640x480 display)
+	 * the window manager puts them off the screen.
 	 */
 	GrGetScreenInfo(&info);
 	for (scale = 4; scale > 1 && (width * scale > info.cols || height * scale > info.rows); scale--)
 		;
-	bare = width * scale + 2 * FRAME > info.cols || height * scale + CAPTION + FRAME > info.rows;
-	window = GrNewWindowEx(bare ? GR_WM_PROPS_NODECORATE | GR_WM_PROPS_NOAUTOMOVE : GR_WM_PROPS_APPWINDOW,
-		TITLE, GR_ROOT_WINDOW_ID, bare ? 0 : -1, bare ? 0 : -1, width * scale, height * scale, 0);
+	window = GrNewWindowEx(GR_WM_PROPS_APPWINDOW, TITLE, GR_ROOT_WINDOW_ID, -1, -1, width * scale, height * scale, 0);
 	/* (not the pointer's moves: pointer_read()) */
 	GrSelectEvents(window, GR_EVENT_MASK_KEY_DOWN | GR_EVENT_MASK_KEY_UP | GR_EVENT_MASK_BUTTON_DOWN |
 		GR_EVENT_MASK_BUTTON_UP | GR_EVENT_MASK_MOUSE_ENTER | GR_EVENT_MASK_MOUSE_EXIT | GR_EVENT_MASK_CLOSE_REQ |
