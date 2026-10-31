@@ -2,8 +2,9 @@
 
 `nxweb` (`linux/apps/nxweb.c`) shows pages of the web as they are written: HTML read into a
 tree, style sheets, text in the fonts of the ROM (`docs/system/fonts.md`), tables, boxes side by
-side, floats, forms that search. It runs no scripts. Where its pages come from is in
-`docs/system/fetch.md`; this is what it does with them.
+side, floats, forms. It runs no scripts ("Scripts" below). An `http` address the machine can reach
+itself it opens over Linux's sockets ("Addresses the machine reaches itself" below); every other
+goes through the host (`docs/system/fetch.md`).
 
     nxweb [ADDRESS or FILE]
 
@@ -23,7 +24,10 @@ opens and closes what it folds away.
 - **The bar**: Back, Forward, Reload (Stop while something is still to come), Home, Bookmark
   (pressed in when the page has one; a click adds it or takes it away), then the address. A
   click, Ctrl+L or F6 opens the address shown selected: a typed character replaces it, a
-  second click or Backspace edits it; a long one shows its end. A bare name is a site.
+  second click or Backspace edits it; a long one shows its end. What is typed may be a path, an address
+  with its scheme, `10.0.0.11`, `localhost:8080/x` or a word with no dot or a name `/etc/hosts` has
+  (a machine of this network, by `http`), or a name with dots (a site, by `https`). A line with spaces in
+  it stays in the field and the status line says why: the browser has no search of its own. `nxweb ADDRESS` takes the same.
 - **The status line**: what the browser has to say (where the page came from, a link picked
   with Tab, what a command did, what Find is told), and in its right part what is still to
   come ("3 of 8", "Loading...", "Loading" below), how many of the page's pictures and sheets
@@ -97,7 +101,8 @@ What did not come is said, never left blank:
 | Ctrl+F, F3 | find in the page, the next place |
 | Ctrl+O, Ctrl+S, Ctrl+U | open a file, save the page, its source in the editor |
 | Ctrl+C, Ctrl+V | the address to the clipboard, an address from it |
-| Tab, Shift+Tab, Enter | from link to link (its address in the status line), follow it |
+| Tab, Shift+Tab, Enter | from link to link and field to field (a link's address in the status line), follow the link or send the form |
+| Space on a field | a check box, a radio button, the next option of a select, a file's window, a button |
 | arrows, Page Up, Page Down, Space, Home, End | scroll |
 | F10; Ctrl+Q | the menus; close |
 
@@ -112,6 +117,69 @@ The start with the home page was 1,799 thousand instructions and is 1,873 (13 Oc
 line's cells are some hundred requests more. An icon in the address field, as Files has one,
 was 56 thousand more for the icons' list read and was left out.
 
+## Addresses the machine reaches itself
+
+GitHub issue 1: a page served in the machine, by `nc` in a shell loop, was fetched by `curl` and `wget`
+there and refused by the browser, which sent every address to the host. `web_net.h` is HTTP/1.1 over
+the machine's own sockets; `net_route` says where each address goes, a page's sheets and pictures too:
+
+| Address | Goes |
+|---|---|
+| `http://` a number, `localhost`, the machine's own name, a name in `/etc/hosts`, with a route in the kernel (`10.0.x.x`, `127.x.x.x`, what `route` added) | this machine's socket |
+| `http://` a name a name server gives, if `/etc/resolv.conf` names one (none does in the image): a UDP question that does not wait | this machine's socket |
+| `http://` any other name, or a number with no route | the host's fetch: as before in the harness, status 3 in the world (it opens `https` alone) |
+| `http://10.0.x.x` with the link down | a page that says so: never the host's fetch, which would open a real 10.0.x.x of the host's |
+| `https://` to the machine's own network | a page that says so: there is no TLS in the machine |
+| `https://` any other | the host's fetch, the slots, the pastes, all as before |
+
+- **Nothing waits** (`net_poll`): connect, send and read are non-blocking, a read takes 16 KB at most, and
+  the socket is in the window system's wait once it can have something to read (`GrRegisterInput`,
+  `net_watch`; 30 ms polls until then). The page scrolls, menus open and Escape stops meanwhile.
+  While a window of the browser's own is up (a file's, the options) the event still reads the socket (`others`).
+- **What it reads**: a status line and headers ended by `\r\n` or `\n`; a body by its `Content-Length`,
+  by chunks or by the connection's end; `100 Continue`; a reply with no head at all (the first five bytes are
+  not `HTTP/`), which is the page. One request at a time, `Connection: close`, no compression asked for.
+  A connection refused is tried three times, 350 ms apart: a shell's `nc -l` loop is not listening between
+  two answers. 15 s to connect, 30 s to a first byte and between two bytes, then what came is the page.
+- **A page that takes its time** is shown as far as it came 1.5 s after its head, once, and again at its end
+  where the view was (`net_shown`), not again if nothing more came. Escape keeps what came. Its sheets and pictures are asked for after it ends.
+- **What the head's kind makes of it** (`net_kind_of`): HTML is the page. `text/*`, JSON, XML and the like are a listing
+  (`Save` and the source give what came, not the listing). `image/*` is a page with that picture. A kind not said is looked at (`net_sniff`).
+  Anything else, or `Content-Disposition: attachment`, is saved in `/root/Downloads` under its own name
+  (a name taken gets a number), the page shown stays, and the status line says where. A file cut short is not kept.
+- **An answer's status**: a redirect (301, 302, 303, 307, 308, relative too, eight in a row) moves the address and the
+  history's entry; 303 and the others but 307 and 308 turn a POST into a GET. An error with a body is its body, the status
+  line saying which; with none, a page says it. What failed is one page in words, with "Try again"
+  ("refused the connection: nothing listens on its port 81", "No answer ... in 15 seconds: is a machine there?").
+- **Pictures and sheets** go by the same way, a picture written to `/tmp` as it comes and decoded by libmedia on
+  the workers as the ROM's are. They are kept for the session (48 files, 8 MB, the oldest go; `cached_*`), so a
+  site's next page does not ask again; `Cache-Control: no-store` is not kept, and Reload asks anew.
+- **Cookies** (`net_cookie_set`, `net_cookie_header`): `Path`, `Domain` (never an address's, never a name's top), `Max-Age`, `Expires`,
+  the longest path first, 64 at most, `Secure` ones never sent (no TLS here), in `/tmp/.nxweb-cookies` so that the browser
+  opened again in the session has them. Not across a machine's stop. The host's fetch carries none: `https` has no cookies.
+- **Forms**: GET as before; POST as `application/x-www-form-urlencoded` or `multipart/form-data` (a file field opens the
+  file's window), to machines reached this way only, since the host's fetch only asks for addresses: elsewhere the status line says so.
+  Radio buttons exclude each other, Reset resets, `type=button` does nothing, `disabled`, `readonly`, `maxlength` and
+  `<button name value>` are honoured, a `<textarea>` has lines and Enter is a line in it, Ctrl+V pastes into a field.
+  Back to a form's answer, or Reload of it, does not send it again by itself: a page offers to.
+- **Back** puts a page where it was left, also one that had to be fetched (`top_wanted`). A page from the
+  network may not open this computer's files by a link.
+
+The start with the home page: 3,422 thousand instructions of the whole run before and 3,396 after (13,649,874 and
+13,623,793 less 10,228,001 of the run with no browser, the same each of three runs, 31 October 2026, `rvc_cpu`):
+the sockets' code costs nothing until an address needs it (the cookies' table is made at the first request). The program is 632 KB, 45 more.
+
+    gcc -O1 -g -fsanitize=address,undefined -Ilinux/apps tools/web_net_test.c -o web_net_test && ./web_net_test
+
+serves each kind of answer from a child over a socket in pieces of 1 to 37 bytes, and tries addresses,
+cookies and kinds of bytes: `PASS`. In the machine `tools/test_all.py web`: `nxweb-issue` is the issue's
+shell loop by `127.0.0.1` and by the LAN address, `nxweb-http` is `thttpd` by name, by `/etc/hosts` and by the LAN
+address with a sheet, a picture, a POST through a 303 with a cookie that comes back, a 404, a file saved, text, Back; `nxweb-slow` a page
+that takes its time, scrolled meanwhile and stopped, and chunks. Two machines (`--net 47340 --net-id 11` serving the
+loop, `--net-id 2` with `nxweb http://10.0.0.11`): the same page across the link.
+
+The reporter's steps now: serve the loop on one machine; on another (or the same) type `10.0.0.11` into the address bar and Enter.
+
 ## The parts
 
 | File | What |
@@ -119,6 +187,7 @@ was 56 thousand more for the icons' list read and was left out.
 | `css.h` | style sheets: rules read from text, kept by the last step of their selector, found for an element of the tree |
 | `web.h` | the page: HTML into a tree, each element's style, addresses made whole, the fonts' advances, the sheets a page names, the copies the image keeps |
 | `web_layout.h` | the tree laid out for a width: a list of things to draw at places of the page |
+| `web_net.h` | HTTP over the machine's sockets, a step at a time, and the cookies |
 | `nxweb.c` | the window, the host, the pixmap the page is drawn in, the keys and the pointer |
 | `tools/web_test.c` | the first three on the host, with no window system and no machine |
 
@@ -222,8 +291,8 @@ framed box, a picture, a form's field. Their order is the order to draw them in.
   not shown. A listing wider than the page (`white-space: pre`) is the one thing that runs
   off the right edge.
 - **Forms**: text fields, buttons, check boxes, selects (a click takes the next option). A
-  form whose method is GET is sent as an address with the fields' values after it
-  (`submit` in `nxweb.c`): a search field works. POST is not done.
+  form whose method is GET is sent as an address with the fields' values after it, one whose
+  method is POST to a machine of this network as a request's body (`submit` in `nxweb.c`, above).
 - A page that sends its reader on at once (`<meta http-equiv=refresh>`, often inside
   `<noscript>`) is followed, three times in a row at most.
 
@@ -283,6 +352,12 @@ next event (`strips_meanwhile`), the view's first, then the way the scroll goes.
   memory, or more than its list holds is drawn by requests** (`strip_requests`): on a pixmap of 64 rows, then copied into its slot, so that
   nothing of it reaches the strips beside. Before the next list into a slot drawn so, a pixel of
   the pixmap is read: the window system's drawing there must reach the GPU before the list.
+  That pixmap has 32 rows more over and under the strip (`STRIP_ROOM`): the window system draws no string a
+  pixmap's edge would cut, and until 31 October 2026 a field's text across two strips was in neither (a blank field,
+  a button with no words, as the capture of a form showed; `NXWEB_CHECK` looks only at strips that are lists). On
+  `web-layout.html` under WARP `NXWEB_CHECK=1` said 7 strips, 7,591 pixels differ, 7,048 by more than 8 levels at the commit before
+  (so the 0 above no longer held, and the text across strips was the difference); with the room 10 strips, 61 pixels, none by more than 8
+  levels: not 0, the same drawing 32 rows lower in the target rounding otherwise, which was not chased.
 - A field typed into, a picture that came and a page laid out anew make their strips again
   (`strips_forget_rows`, `strips_forget`); every change waits for the jobs out first.
 - **The window system says where a pixmap's pixels are**: `GrGetWindowInfo` on a pixmap the
@@ -454,7 +529,24 @@ picture is the 2,048-row harness's pixel for pixel.
 
 ## Scripts
 
-Not run, and measured before deciding (13 October 2026; QuickJS, quickjs-ng, MuJS, Duktape
+Not run. Measured again on 31 October 2026 with the image's own `qjs` (1.2 MB) under `rvc_cpu`, core 0's
+instructions less the same line with `true`, a script's run less `qjs -e 0`:
+
+| | thousands of instructions | at 3 million a second |
+|---|---|---|
+| the engine's start (`qjs -e 0`) | 1,499 | 0.5 s |
+| 180 functions of the DOM calls below, parsed and not called (about 24 KB) | 13,676 (570 a byte) | 4.6 s |
+| a class toggled on 50 objects, no DOM behind them | 547 | 0.2 s |
+| a list of 200 rows built as text | 889 | 0.3 s |
+| 100 thousand additions | 36,851 | 12.3 s |
+
+So a page's small script (Hacker News' 5 KB) would be some 4.5 million before it does anything, jQuery's 90 KB 50 million,
+17 s, before any page drawn; and each change it makes to the tree means the layout again (1.5 to 4 million, "What a page costs") and a
+binding of some forty calls that does not exist, in a program five times the browser's size or a process beside it. It
+cannot be made a feature in a session and half of one helps nobody: a local server's pages, which this browser now
+reaches, work without. The earlier measurement, and what the first step would be:
+
+Measured before (13 October 2026; QuickJS, quickjs-ng, MuJS, Duktape
 and mquickjs built for the machine and counted with `rdcycle` under `rvc_cpu`):
 
 - **What sites ship.** Of the 24 sites of `web/sites.txt`, 12 send no script at all and all 24
@@ -480,7 +572,7 @@ and mquickjs built for the machine and counted with `rdcycle` under `rvc_cpu`):
   nothing with jQuery or a framework. In the VRChat world it is less still: every script is
   one more address of a kind the world must have been built with, their names carry the
   version's hash, and there are no cookies and no POST for what the small scripts mostly do
-  (vote, log in, load more).
+  (vote, log in, load more). (POST and cookies there are this machine's own network's since 31 October 2026.)
 - What was taken from it without an engine: `<noscript>` is shown, `<details>` opens and
   closes, a redirect for readers without scripts is followed. The next step, if one is wanted:
   QuickJS in a process of its own with a budget of instructions (`JS_SetInterruptHandler`),
@@ -489,7 +581,7 @@ and mquickjs built for the machine and counted with `rdcycle` under `rvc_cpu`):
   about forty calls (`querySelector`, `classList`, `addEventListener`, `getAttribute`,
   `innerHTML`, `style.display` lead the count in the scripts looked at).
 
-Not done: scripts, POST, cookies, pictures as backgrounds, SVG drawn (a page's inline `<svg>`
+Not done: scripts, POST and cookies through the host, https in the machine, several connections at a time, keep-alive, HTTP authentication, a caret inside a field, `<label>`, pictures as backgrounds, SVG drawn (a page's inline `<svg>`
 is passed over, which is Google's own logo), positioned boxes, clipping and scrolling inside
 a box, text selection, text larger or smaller (the 13 of 16 is a constant of `css.h`), a find across
 two pieces of text.
