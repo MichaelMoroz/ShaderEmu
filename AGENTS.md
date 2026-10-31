@@ -389,3 +389,6 @@
   `-fdata-sections -fno-common` and the 16-byte assembler, or statics a worker writes share texels (`RVC_RACES` undone), and
   after a large change to the source `linux/openttd/counts.py` makes the counts anew. `build.sh` puts the tree back from
   `openttd.patch` on every build: write the tree's diff to the patch first.
+- Chess (`nxchess`, `docs/games/chess.md`): a searcher stores only to its core, its table, its ring and its status; keepers alone store to the shared
+  table, each to its shard; the first core stores only `ch_stop` and `ch_deepest`. So a result on workers has no sum: the check is `nxchess solve`, and
+  `NXCHESS_WORKERS=0 nxchess search 6` must be `chess_host 6`'s. It asks for 63 workers because 255 has more nodes and less depth on the card: measure depth in fixed time, not nodes.
