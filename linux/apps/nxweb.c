@@ -2,8 +2,9 @@
  * nxweb: a browser (docs/apps/web.md). The page is HTML laid out by web.h and web_layout.h with
  * the sheets css.h reads, in the fonts of the ROM; no scripts. It is drawn once into a pixmap
  * the GPU keeps, and scrolling copies from that. A page in the image is read as a file; any
- * other address is asked of the host (docs/system/fetch.md), which is the only part of this machine
- * that has a network, unless the image keeps a copy (web/preload.py).
+ * http address the machine can reach (its LAN, itself) is fetched over its own sockets (web_net.h, a
+ * step at a time: the window never waits for one), and any other is asked of the host
+ * (docs/system/fetch.md), unless the image keeps a copy (web/preload.py).
  *   nxweb [ADDRESS or FILE]
  */
 #define _GNU_SOURCE
@@ -23,6 +24,7 @@
 #include "ui_glyph.h"
 #include "ui_launch.h"
 #include "web_layout.h"
+#include "web_net.h"
 #include "mcw.h"
 #include "media.h"
 
@@ -60,7 +62,7 @@ static char address[256], typed[256], status[200];
 static int editing;		/* the address field has the keyboard */
 static int offered;		/* its text is still the one it opened with: a typed character replaces it */
 static int picked = -1;		/* the link the keyboard is on (Tab): its element, or -1 */
-static struct { char address[256], title[60]; int top; } history[HISTORY];
+static struct { char address[256], title[60]; int top; char *post; int post_n; char post_type[80]; } history[HISTORY];	/* post: the form it came of */
 static int history_count, history_at;	/* the pages of this session, and which of them is shown */
 static struct bookmark { char address[256], title[60]; } bookmarks[BOOKMARKS];
 static int bookmark_count;
@@ -129,13 +131,31 @@ static int failed_told;		/* failures the status line has said */
 static int part_total;		/* bytes of the page that comes in parts */
 static int spin;		/* the loading bar's step while nothing can be counted */
 
+/* A request over this machine's own sockets (web_net.h): `loading` is -1 while it is out. */
+static struct net_fetch net;
+static int net_watched = -1;	/* the socket the window system's wait also looks at */
+static int net_kind;		/* 0 a page, 1 a picture, 2 a sheet */
+static int net_sink;		/* the body goes to `net_file`: 1 the picture a page is, 2 saved */
+static int net_hops;		/* redirects in a row */
+static int net_shown;		/* bytes of the page already shown while it came, or 0 */
+static int net_posting;		/* the page's request sends the form its history entry keeps */
+static char net_file[128];
+static char *post_next;		/* the form go() is about to send */
+static int post_next_n;
+static char post_next_type[80];
+static int post_again;		/* go(): the visitor said to send the form again */
+static int top_wanted = -1;	/* where the next page shown is to be scrolled to */
+static int page_ours;		/* the page is the browser's own words: it may link to this computer */
+static char *raw, *raw_next;	/* what came, when the page shown is that as HTML (text/plain): saved and shown as source */
+static int raw_n, raw_next_n;
+
 /* The page as drawn, in a pixmap `tile_h` rows high: strips of it (tile_make). */
 static GR_WINDOW_ID tile;
 static int tile_w, tile_h, tile_gpu;
 static GR_FONT_ID fonts[WEB_FACES][2];
 
 /* What a visitor has typed into the page's fields. */
-static struct field { int node, n, checked, option; unsigned short text[128]; } *fields;
+static struct field { int node, n, room, checked, option; unsigned short *text; } *fields;
 static int field_count, focus = -1;
 
 static void show_view(void);
@@ -260,6 +280,74 @@ picture_local(struct picture *p, const char *where)
 		picture_fail(p, data ? "unsupported format" : why);	/* (what libmedia does not read) */
 }
 
+/* A picture of a file: a PPM as the window system draws it, any other as libmedia decodes it. */
+static void
+picture_from(struct picture *p, const char *file)
+{
+	snprintf(p->file, sizeof p->file, "%.60s", file);
+	p->state = PICTURE_WANTED;
+	if (ui_picture_size(file, &p->w, &p->h)) {
+		memcpy(p->source, p->file, sizeof p->source);
+		p->state = PICTURE_HERE;
+	} else
+		picture_local(p, file);
+}
+
+/* What came over this machine's sockets of the pictures and sheets, in /tmp for this session:
+ * another page of the site has the same ones. Reload asks again; "no-store" is never found. */
+#define CACHED 48
+#define CACHED_BYTES (8 << 20)
+static struct cached { char address[256], file[40]; int size, gone; } *cached;
+static int cached_count, cached_serial;
+
+/* (the browser closes) */
+static void
+cached_remove(void)
+{
+	while (cached_count)
+		unlink(cached[--cached_count].file);
+}
+
+static const char *
+cached_file(const char *where)
+{
+	int i;
+
+	for (i = 0; i < cached_count; i++)
+		if (!cached[i].gone && !strcmp(cached[i].address, where))
+			return cached[i].file;
+	return NULL;
+}
+
+static void
+cached_name(char *name, int room)
+{
+	snprintf(name, room, "/tmp/nxweb-%d-c%d", (int)getpid(), cached_serial++);
+}
+
+static void
+cached_add(const char *where, const char *file, int size, int gone)
+{
+	int i, all = size;
+
+	if (!cached && (cached = malloc(CACHED * sizeof *cached)) == NULL)
+		return;
+	for (i = 0; i < cached_count; i++)
+		all += cached[i].size;
+	while (cached_count && (cached_count == CACHED || all > CACHED_BYTES)) {
+		unlink(cached[0].file);
+		all -= cached[0].size;
+		memmove(&cached[0], &cached[1], sizeof *cached * --cached_count);
+	}
+	for (i = 0; i < cached_count; i++)
+		if (!strcmp(cached[i].address, where))
+			cached[i].gone = 1;
+	snprintf(cached[cached_count].address, sizeof cached[0].address, "%s", where);
+	snprintf(cached[cached_count].file, sizeof cached[0].file, "%s", file);
+	cached[cached_count].size = size;
+	cached[cached_count++].gone = gone;
+}
+
 /* What a picture that is not here says in its box: its description and why, on one line. */
 static void
 broken_label(int node, const struct picture *p, char *label, int room)
@@ -276,6 +364,7 @@ static int
 web_picture(int node, const char *where, int *w, int *h)
 {
 	struct picture *p;
+	const char *here;
 	int i, said_w = web_attr_int(node, "width", -1), said_h = web_attr_int(node, "height", -1);
 
 	if (!load_pictures)
@@ -297,6 +386,8 @@ web_picture(int node, const char *where, int *w, int *h)
 				p->state = PICTURE_HERE;
 			else
 				picture_local(p, where);
+		} else if ((here = cached_file(where)) != NULL) {
+			picture_from(p, here);
 		} else if (web_cache_find(where, 'I', p->file, sizeof p->file, &p->w, &p->h)) {
 			const char *dot = strrchr(p->file, '.');
 
@@ -337,6 +428,22 @@ web_picture(int node, const char *where, int *w, int *h)
 
 /* ---- fields ---- */
 
+/* A character more of a field's text. */
+static void
+field_put(struct field *f, int c)
+{
+	if (f->n == f->room) {
+		int room = f->room ? f->room * 2 : 64;
+		unsigned short *more = room <= 32768 ? realloc(f->text, room * sizeof *more) : NULL;
+
+		if (!more)
+			return;
+		f->text = more;
+		f->room = room;
+	}
+	f->text[f->n++] = c;
+}
+
 static struct field *
 field_of(int node)
 {
@@ -354,8 +461,13 @@ field_of(int node)
 	f->node = node;
 	f->checked = web_attr(node, "checked", &v, &i);
 	if (web_nodes[node].c.tag == T_input && web_attr_text(node, "value", value, sizeof value))
-		for (v = value, left = strlen(value); left > 0 && f->n < 127; v += used, left -= used)
-			f->text[f->n++] = web_char((const unsigned char *)v, left, &used);
+		for (v = value, left = strlen(value); left > 0; v += used, left -= used)
+			field_put(f, web_char((const unsigned char *)v, left, &used));
+	if (web_nodes[node].c.tag == T_textarea)
+		for (i = web_nodes[node].first; i >= 0; i = web_nodes[i].next)
+			if (web_nodes[i].c.tag == T_TEXT)
+				for (used = 0; used < web_nodes[i].text_n; used++)
+					field_put(f, web_u[web_nodes[i].text + used]);
 	if (web_nodes[node].c.tag == T_select) {
 		int kid, k = 0;
 
@@ -385,6 +497,7 @@ field_type(int node)
 static int
 field_is_button(const char *type)
 {
+	/* (<input type=file> is not one: a click chooses a file) */
 	return !strcasecmp(type, "submit") || !strcasecmp(type, "button") || !strcasecmp(type, "reset") || !strcasecmp(type, "image");
 }
 
@@ -447,6 +560,41 @@ draw_field(GR_DRAW_ID to, const struct web_item *it, int y)
 	int face = plain_face(), n = 0, w = 0, i, grey = 0, used, left;
 	const char *v;
 
+	if (web_nodes[it->node].c.tag == T_textarea) {
+		/* its lines as they wrap: the first ones, or the last ones while it is typed into */
+		int rows = (it->h - 6) / web_faces[face].height, room = it->w - 8, starts[64], lines = 0, at = 0, first;
+
+		ui_fill(to, it->x, y, it->w, it->h, WHITE);
+		GrSetGCForeground(ui_gc, focus == it->node ? BLACK : UI_SHADOW);
+		GrRect(to, ui_gc, it->x, y, it->w, it->h);
+		rows = rows < 1 ? 1 : rows > 32 ? 32 : rows;
+		starts[lines++ % 64] = 0;
+		for (i = 0; i < f->n; i++) {
+			int adv = f->text[i] == '\n' ? 0 : web_most(0, web_advance(face, f->text[i]));
+
+			if (f->text[i] == '\n' || w + adv > room) {
+				starts[lines++ % 64] = i + (f->text[i] == '\n');
+				w = 0;
+				if (focus != it->node && lines > rows)
+					break;
+			}
+			w += adv;
+		}
+		first = focus == it->node && lines > rows ? lines - rows : 0;
+		if (lines - first > 64)
+			first = lines - 64;
+		for (at = 0; at < rows && first + at < lines; at++) {
+			int from = starts[(first + at) % 64], end = first + at + 1 < lines ? starts[(first + at + 1) % 64] : f->n;
+
+			while (end > from && f->text[end - 1] == '\n')
+				end--;
+			if (end > from)
+				page_text(to, it->x + 4, y + 3 + at * web_faces[face].height, f->text + from, end - from, face, 0, 0);
+		}
+		if (focus == it->node)
+			ui_fill(to, it->x + 5 + (f->n && f->text[f->n - 1] != '\n' ? w : 0), y + 3 + (lines - first - 1) * web_faces[face].height, 1, web_faces[face].height, BLACK);
+		return;
+	}
 	if (field_is_button(type)) {
 		ui_fill(to, it->x, y, it->w, it->h, UI_FACE);
 		ui_bevel(to, it->x, y, it->w, it->h, 0);
@@ -482,8 +630,10 @@ draw_field(GR_DRAW_ID to, const struct web_item *it, int y)
 		label[127] = 'v';
 		page_text(to, it->x + it->w - 12, y + 3, label + 127, 1, face, 0, 0);
 	} else {
-		n = f->n;
-		memcpy(label, f->text, n * sizeof *label);
+		/* (a field's last 127 characters: as many as could be seen of it and more) */
+		n = web_least(f->n, 127);
+		if (n)
+			memcpy(label, f->text + (focus == it->node ? f->n - n : 0), n * sizeof *label);
 		if (!n && web_attr_text(it->node, "placeholder", text, sizeof text)) {
 			for (v = text, left = strlen(text); left > 0 && n < 127; v += used, left -= used)
 				label[n++] = web_char((const unsigned char *)v, left, &used);
@@ -2124,10 +2274,16 @@ show_kept(char *html, int n, const char *note)
 	free(page);
 	page = html;
 	page_length = n;
+	free(raw);
+	raw = raw_next;
+	raw_n = raw_next_n;
+	raw_next = NULL;
 	top = goal = 0;
 	picked = focus = -1;
 	/* another page: the last one's pictures and what was typed go */
 	pictures_drop();
+	for (i = 0; i < field_count; i++)
+		free(fields[i].text);
 	field_count = 0;
 	asking = -1;
 	snprintf(web_address, sizeof web_address, "%s", address);
@@ -2145,6 +2301,8 @@ show_kept(char *html, int n, const char *note)
 		/* one in the image, or one the image keeps a copy of, is read at once */
 		if (sh->address[0] == '/')
 			snprintf(file, sizeof file, "%.79s", sh->address);
+		else if (cached_file(sh->address))
+			snprintf(file, sizeof file, "%s", cached_file(sh->address));
 		else if (!web_cache_find(sh->address, 'S', file, sizeof file, NULL, NULL))
 			file[0] = 0;
 		sh->state = regs && sh->address[0] != '/' ? SHEET_WANTED : SHEET_FAILED;
@@ -2168,6 +2326,11 @@ show_kept(char *html, int n, const char *note)
 	set_title();
 	if (hash && (i = anchor(hash + 1)) >= 0)
 		top = goal = i;
+	if (top_wanted >= 0) {
+		/* (back to a page, or the rest of one that was shown as it came) */
+		top = goal = top_wanted > web_page_h - view_height() ? web_most(web_page_h - view_height(), 0) : top_wanted;
+		top_wanted = -1;
+	}
 	check_due = getenv("NXWEB_CHECK") != NULL;
 	if (window)
 		draw_all();
@@ -2183,13 +2346,52 @@ show(const char *html, int n, const char *note)
 	show_kept(copy, n, note);
 }
 
+/* A text as HTML's text. One at a time. */
+static const char *
+esc(const char *text)
+{
+	static char out[1000];
+	int n = 0;
+
+	for (; *text && n < (int)sizeof out - 7; text++)
+		if (*text == '<' || *text == '>' || *text == '&' || *text == '"')
+			n += sprintf(out + n, "&#%d;", *text);
+		else
+			out[n++] = *text;
+	out[n] = 0;
+	return out;
+}
+
+/* The browser's own page: what happened, the address again if it is one to try again, and home. */
 static void
 say(const char *heading_text, const char *text)
 {
-	char html[1100];
-	int n = snprintf(html, sizeof html, "<body style=\"font-family:sans-serif\"><h2>%s</h2><p>%s</p><p><a href=\"%s\">Home</a></p>", heading_text, text, home);
+	char html[2400], again[700] = "";
+	int n;
 
+	if (strstr(address, "://"))
+		snprintf(again, sizeof again, "<a href=\"%s\">Try again</a> &nbsp; ", esc(address));
+	n = snprintf(html, sizeof html, "<html><head><title>%s</title></head><body style=\"font-family:sans-serif\"><h2>%s</h2><p>%s</p><p>%s<a href=\"%s%s\">Home</a></p>",
+		     heading_text, heading_text, text, again, home[0] == '/' ? "file://" : "", home);
 	show(html, n, "");
+	page_ours = 1;
+}
+
+static void request(const char *what, int kind);
+
+/* A picture is here: the page laid out for it if it could not be before, else its rows made again. */
+static void
+picture_arrived(struct picture *p, int k)
+{
+	int i;
+
+	if (!p->sized)
+		lay_out(0, 0);
+	else
+		for (i = 0; i < web_item_count; i++)
+			if (web_items[i].kind == I_IMAGE && web_items[i].a == k)
+				strips_forget_rows(web_items[i].y, web_items[i].y + web_items[i].h);
+	show_view();
 }
 
 /* Asks the host for what is at an address, a page (kind 0), a picture (1) or a sheet (2), from
@@ -2258,27 +2460,511 @@ static const char keys_page[] =
 	"</table><p>The right button on a link or on the page has a menu of its own. "
 	"Bookmarks and options are kept in the registry, which lasts when the machine's storage is saved.</p>";
 
-/* Goes to an address. `how`: 1 remembers the page left behind, 2 asks the host even for a
- * page the image keeps a copy of. */
+/* ---- over this machine's own sockets (web_net.h, docs/apps/web.md) ---- */
+
+/* The window system's wait looks at the socket once there is something to read from it. Before a
+ * socket that was closed is waited on: a wait with a closed one in its set says only that. */
+static void
+net_watch(void)
+{
+	int fd = net.state >= NET_HEAD && net.state < NET_DONE ? net.fd : -1;
+
+	if (fd == net_watched)
+		return;
+	if (net_watched >= 0)
+		GrUnregisterInput(net_watched);
+	if (fd >= 0)
+		GrRegisterInput(fd);
+	net_watched = fd;
+}
+
+/* What is out is given up, and what it was writing goes. */
+static void
+net_cancel(void)
+{
+	int was = net.state && net.state < NET_DONE;
+
+	net_forget(&net);
+	net_watch();
+	if (was && net_file[0])
+		unlink(net_file);
+	net_file[0] = 0;
+	net_sink = 0;
+}
+
+/* Why what was asked for will not come. */
+static void
+net_failed(const char *why)
+{
+	char text[700];
+
+	loading = 0;
+	if (asking >= SHEET)
+		sheet_fail(asking - SHEET, why);
+	else if (asking >= 0)
+		picture_fail(&pictures[asking], why);
+	else {
+		if (dump) {
+			printf("nxweb: failed: %s: %s\n", address, why);
+			fflush(stdout);
+		}
+		snprintf(text, sizeof text, "<b>%s</b><br><br>%s", esc(address), why);
+		say("This page could not be opened", text);
+	}
+	asking = -1;
+}
+
+/* Asks for what is at an address, over this machine's sockets when it can reach it, else of the
+ * host; in the end a page, or a picture's or a sheet's `asking`, as check_reply has them. */
+static void
+request(const char *what, int kind)
+{
+	char why[200];
+	uint32_t ip;
+	int route = net_route(what, &ip, why, sizeof why);
+	int post = kind == 0 && net_posting;
+
+	if (route == ROUTE_NONE) {
+		net_failed(why);
+		return;
+	}
+	if (route == ROUTE_HOST) {
+		if (post)
+			net_failed("A form is posted only to machines this one reaches itself: the host's fetch asks for addresses, and sends nothing.");
+		else if (!regs)
+			net_failed("This machine has no way to ask its host for it.");
+		else
+			ask(what, kind);
+		return;
+	}
+	net_kind = kind;
+	net_sink = 0;
+	net_shown = 0;
+	net_file[0] = 0;
+	part_have = part_total = 0;
+	net_start(&net, what, ip, post ? "POST" : NULL, post ? history[history_at].post : NULL, post ? history[history_at].post_n : 0,
+		  post ? history[history_at].post_type : NULL);
+	loading = -1;
+	waited = 0;
+}
+
+/* The name to save an answer under: what it says, or the end of its address, in /root/Downloads. */
+static void
+save_name(char *file, int room)
+{
+	char name[64] = "";
+	const char *at = strcasestr(net.disposition, "filename="), *slash;
+	int i, k, tried;
+	struct stat st;
+
+	if (at) {
+		at += 9 + (at[9] == '"');
+		snprintf(name, sizeof name, "%.*s", (int)strcspn(at, "\";"), at);
+	} else if ((at = strstr(net.address, "://")) != NULL && (slash = strchr(at + 3, '/')) != NULL) {
+		const char *end = slash + strcspn(slash, "?#");
+
+		while (end > slash && end[-1] != '/')
+			end--;
+		snprintf(name, sizeof name, "%.*s", (int)strcspn(end, "?#"), end);
+	}
+	for (i = k = 0; name[i]; i++)
+		if (isalnum((unsigned char)name[i]) || (name[i] && strchr("._-", name[i]) && (k || name[i] != '.')))
+			name[k++] = name[i];
+	name[k] = 0;
+	if (!k)
+		strcpy(name, "download");
+	mkdir("/root/Downloads", 0755);
+	for (tried = 0; tried < 1000; tried++) {
+		if (tried)
+			snprintf(file, room, "/root/Downloads/%d-%s", tried, name);
+		else
+			snprintf(file, room, "/root/Downloads/%s", name);
+		if (stat(file, &st))
+			return;
+	}
+}
+
+/* The head has come: where the body goes. */
+static void
+net_headed(void)
+{
+	if (net.code >= 300 && net.code < 400 && net.code != 304 && net.location[0]) {
+		net_end(&net, NET_DONE);	/* (a redirect's own text is not wanted) */
+		return;
+	}
+	if (net_kind == 2) {
+		net_body(&net, NULL, SHEET_MOST);
+	} else if (net_kind == 1) {
+		if (net.code != 200) {
+			net_end(&net, NET_DONE);
+			return;
+		}
+		cached_name(net_file, sizeof net_file);
+		net_body(&net, net_file, 32 << 20);
+	} else {
+		int kind = net_kind_of(&net);
+
+		if (net.code == 200 && kind == NK_IMAGE) {
+			net_sink = 1;
+			cached_name(net_file, sizeof net_file);
+			net_body(&net, net_file, 32 << 20);
+		} else if (net.code == 200 && kind == NK_SAVE) {
+			net_sink = 2;
+			save_name(net_file, sizeof net_file);
+			net_body(&net, net_file, 64 << 20);
+		} else
+			net_body(&net, NULL, PAGE_MOST);
+	}
+}
+
+static void
+net_pump(void)
+{
+	if (net.state && net.state < NET_DONE && net_poll(&net) == NET_HEADED)
+		net_headed();
+	net_watch();
+}
+
+/* What came of a page, as the page to show: its own bytes if they are HTML, else as a listing. */
+static char *
+net_page(const char *from, int n, int kind, int *size)
+{
+	char *html;
+	int i, k;
+
+	if (kind == NK_HTML) {
+		html = malloc(n + 1);
+		memcpy(html, from, n);
+		html[n] = 0;
+		*size = n;
+		return html;
+	}
+	html = malloc(strlen(address) * 6 + 256 + n * 5 + 1);
+	k = sprintf(html, "<html><head><title>%s</title></head><body><pre style=\"white-space:pre-wrap;font-family:monospace\">", esc(address));
+	for (i = 0; i < n; i++) {
+		char c = from[i];
+
+		if (c == '<')
+			k += sprintf(html + k, "&lt;");
+		else if (c == '&')
+			k += sprintf(html + k, "&amp;");
+		else if (c != '\r')
+			html[k++] = c;
+	}
+	k += sprintf(html + k, "</pre>");
+	*size = k;
+	raw_next = malloc(n + 1);
+	if (raw_next) {
+		memcpy(raw_next, from, n);
+		raw_next_n = n;
+	}
+	return html;
+}
+
+/* The page as far as it came. `note` for the status line. */
+static void
+net_show(const char *note)
+{
+	int kind = net_kind_of(&net), size;
+	char *html;
+
+	if (kind == NK_SNIFF)
+		kind = net_sniff(net.body, net.n);
+	snprintf(web_http_charset, sizeof web_http_charset, "%s", net.charset);
+	html = net_page(net.body, net.n, kind == NK_HTML ? NK_HTML : NK_TEXT, &size);
+	if (net_shown)
+		top_wanted = top;
+	show_kept(html, size, note);
+}
+
+/* An answer whose head said nothing of its kind and whose bytes are not text, or one to be saved:
+ * it is a file now, and the page that was shown stays. */
+static void
+net_saved(long long bytes)
+{
+	char text[500];
+	int back = history_at > 0 && page_length;
+
+	if (dump) {
+		printf("nxweb: saved %s as %s, %lld bytes\n", net.address, net_file, bytes);
+		fflush(stdout);
+	}
+	if (back) {
+		history_count = history_at--;
+		snprintf(address, sizeof address, "%s", history[history_at].address);
+		snprintf(status, sizeof status, "saved as %.100s, %lld bytes", net_file, bytes);
+		snprintf(page_note, sizeof page_note, "%s", status);
+		set_title();
+		draw_bar();
+		draw_status();
+		return;
+	}
+	snprintf(text, sizeof text, "%lld bytes, of a kind this browser does not show, are saved as <b>%s</b>.", bytes, net_file);
+	say("Saved", text);
+}
+
+/* A form's or a redirect's address made whole against another than the page's. */
+static int
+resolve_from(const char *base, const char *href, char *whole)
+{
+	char a[256], b[256];
+	int fine;
+
+	strcpy(a, web_address);
+	strcpy(b, web_base);
+	snprintf(web_address, sizeof web_address, "%s", base);
+	web_base[0] = 0;
+	fine = web_resolve(href, whole);
+	strcpy(web_address, a);
+	strcpy(web_base, b);
+	return fine;
+}
+
+/* The answer is all here, or `stopped` takes it for that: what it was asked for gets it. */
+static void
+net_finish(int stopped)
+{
+	char note[240], whole[256];
+
+	loading = 0;
+	net_watch();
+	if (net.state == NET_FAILED) {
+		char why[160];
+
+		if (net.no_name && regs && !(net_kind == 0 && net_posting)) {
+			/* no name server here knows it: the host may */
+			strcpy(whole, net.address);
+			net_forget(&net);
+			ask(whole, net_kind);
+			return;
+		}
+		snprintf(why, sizeof why, "%s", net.why);
+		if (net_file[0])
+			unlink(net_file);
+		net_file[0] = 0;
+		net_failed(why);
+		net_forget(&net);
+		return;
+	}
+	if (dump) {
+		printf("nxweb: http: %s: %d%s%s, %lld bytes%s%s\n", net.address, net.code, net.type[0] ? " " : "", net.type, net.got,
+		       net.chunked ? ", chunked" : "", net.short_ended ? ", cut short" : "");
+		fflush(stdout);
+	}
+	if (net.code >= 300 && net.code < 400 && net.code != 304 && net.location[0]) {
+		if (++net_hops > 8) {
+			net_forget(&net);
+			net_failed("It sends its reader on and on: eight redirects in a row.");
+			return;
+		}
+		if (!resolve_from(net.address, net.location, whole)) {
+			net_forget(&net);
+			net_failed("It sends its reader to an address that is none, or too long.");
+			return;
+		}
+		if (net.code != 307 && net.code != 308)
+			net_posting = 0;
+		net_forget(&net);
+		if (net_kind == 0) {
+			/* the address is where the page came from: what its links are made whole with */
+			snprintf(address, sizeof address, "%s", whole);
+			strcpy(history[history_at].address, whole);
+			if (window)
+				draw_bar();
+		}
+		if (whole[0] == '/')
+			net_failed("It sends its reader to a file of this computer.");
+		else
+			request(whole, net_kind);
+		return;
+	}
+	if (net_kind == 2) {
+		struct web_sheet *sh = &web_sheets[asking - SHEET];
+
+		if (net.code != 200 || net.n <= 0) {
+			why_of(note, sizeof note, net.code == 200 ? 204 : net.code);
+			sheet_fail(asking - SHEET, net.code == 200 ? "empty" : note);
+			asking = -1;
+			net_forget(&net);
+			return;
+		}
+		asking = -1;
+		if (!net.no_store) {
+			/* (kept for the site's next page) */
+			char name[40];
+			FILE *f;
+
+			cached_name(name, sizeof name);
+			if ((f = fopen(name, "wb")) != NULL) {
+				fwrite(net.body, 1, net.n, f);
+				fclose(f);
+				cached_add(sh->address, name, net.n, 0);
+			}
+		}
+		sh->text = net.body;
+		sh->length = net.n;
+		sh->own = 1;
+		sh->state = SHEET_HERE;
+		net.body = NULL;
+		net_forget(&net);
+		lay_out(1, 1);
+		show_view();
+		return;
+	}
+	if (net_kind == 1) {
+		struct picture *p = &pictures[asking];
+		int k = asking;
+
+		asking = -1;
+		p->asked = time(NULL);
+		if (net.code != 200) {
+			why_of(note, sizeof note, net.code);
+			picture_fail(p, note);
+		} else {
+			cached_add(p->address, net_file, (int)net.got, net.no_store);
+			p->ours = 0;
+			p->file[0] = p->source[0] = 0;
+			picture_from(p, net_file);
+			if (p->state == PICTURE_HERE)
+				picture_arrived(p, k);
+		}
+		net_forget(&net);
+		net_file[0] = 0;
+		return;
+	}
+	if (net_sink == 2) {
+		if (net.short_ended || stopped) {
+			unlink(net_file);
+			net_failed(stopped ? "The file was being saved, and the saving was stopped." : "The file ended before its end: nothing was saved.");
+		} else
+			net_saved(net.got);
+		net_forget(&net);
+		net_file[0] = 0;
+		net_sink = 0;
+		return;
+	}
+	if (net_sink == 1) {
+		/* a picture is the page */
+		char html[800];
+		int n = snprintf(html, sizeof html, "<html><head><title>%s</title></head><body><img src=\"%s\">", esc(address), esc(address));
+
+		cached_add(address, net_file, (int)net.got, 0);
+		snprintf(note, sizeof note, "a picture, %lld bytes", net.got);
+		net_forget(&net);
+		net_file[0] = 0;
+		net_sink = 0;
+		show(html, n, note);
+		return;
+	}
+	if (net.code >= 400 && !net.n) {
+		char text[600];
+
+		snprintf(text, sizeof text, "<b>%s</b><br><br>The server said %d %s.", esc(address), net.code, net.reason);
+		net_forget(&net);
+		say("This page could not be opened", text);
+		return;
+	}
+	if (net_shown && net_shown == net.n) {
+		/* (all of it was on the screen already) */
+		snprintf(status, sizeof status, "%d bytes from %.100s", net.n, net.host);
+		snprintf(page_note, sizeof page_note, "%s", status);
+		if (window)
+			draw_status();
+		net_forget(&net);
+		return;
+	}
+	if (net_kind_of(&net) == NK_SNIFF && net.n && net_sniff(net.body, net.n) == NK_SAVE) {
+		FILE *f;
+
+		save_name(net_file, sizeof net_file);
+		if ((f = fopen(net_file, "wb")) != NULL) {
+			fwrite(net.body, 1, net.n, f);
+			fclose(f);
+		}
+		net_saved(net.n);
+		net_forget(&net);
+		net_file[0] = 0;
+		return;
+	}
+	if (net.code == 200 && !net.n && !stopped) {
+		char text[600];
+
+		snprintf(text, sizeof text, "<b>%s</b><br><br>The server answered, and sent nothing.", esc(address));
+		net_forget(&net);
+		say("An empty page", text);
+		return;
+	}
+	if (!net.n) {
+		net_forget(&net);
+		return;
+	}
+	snprintf(note, sizeof note, "%s%.32s%s%d bytes from %.100s%s%s%s", net.code == 200 ? "" : "the server said ", net.code == 200 ? "" : net.reason, net.code == 200 ? "" : ": ", net.n, net.host,
+		 net.cut ? " (cut short here)" : "", net.short_ended ? " (the connection ended early)" : "", stopped ? " (stopped)" : "");
+	net_show(note);
+	net_forget(&net);
+}
+
+/* While a request of ours is out: as far as it has got, and the page as it comes. */
+static void
+net_check(void)
+{
+	net_pump();
+	if (net.state >= NET_DONE) {
+		net_finish(0);
+		return;
+	}
+	/* a page that takes its time is shown as far as it is here, once; the rest when it ends */
+	if (net_kind == 0 && !net_sink && net.state == NET_BODY && net.n > 0 && !net_shown && net_ms() - net.head_at > 1500 &&
+	    (net_kind_of(&net) != NK_SNIFF || net_sniff(net.body, net.n) != NK_SAVE)) {
+		net_shown = net.n;
+		net_show("still loading");
+	}
+}
+
+/* Goes to an address. `how`: 1 remembers the page left behind, 2 asks again rather than show a
+ * copy kept. A new page's form to send is in post_next. */
 static void
 go(const char *where, int how)
 {
-	char file[80], plain[256];
+	char file[80], plain[256], why[200], next[256];
 	char *hash;
+	uint32_t ip;
+	int route, i;
 
 	if (how)
 		sent_on = 0;
+	snprintf(next, sizeof next, "%s", strncmp(where, "file://", 7) ? where : where + 7);
+	net_cancel();
+	net_hops = 0;
+	net_posting = 0;
+	web_http_charset[0] = 0;
+	page_ours = 0;
 	if (how == 1 && history_count) {
 		/* a new page: the ones Forward would have gone to are forgotten */
 		history[history_at].top = top;
+		for (i = history_at + 1; i < history_count; i++) {
+			free(history[i].post);
+			history[i].post = NULL;
+		}
 		history_count = history_at + 1;
-		if (history_count == HISTORY)
+		if (history_count == HISTORY) {
+			free(history[0].post);
 			memmove(&history[0], &history[1], sizeof history[0] * --history_count);
+			history[history_count].post = NULL;
+		}
 		history_at = history_count++;
 		history[history_at].title[0] = 0;
 	}
 	history_count += !history_count;
-	snprintf(address, sizeof address, "%s", strncmp(where, "file://", 7) ? where : where + 7);
+	if (how == 1 || strcmp(history[history_at].address, next)) {
+		/* (this entry no longer is that form's answer) */
+		free(history[history_at].post);
+		history[history_at].post = post_next;
+		history[history_at].post_n = post_next_n;
+		snprintf(history[history_at].post_type, sizeof history[0].post_type, "%s", post_next_type);
+		post_next = NULL;
+	}
+	snprintf(address, sizeof address, "%s", next);
 	strcpy(history[history_at].address, address);
 	editing = finding = loading = by_hand = 0;
 	picked = -1;
@@ -2293,18 +2979,48 @@ go(const char *where, int how)
 		return;
 	}
 	if (address[0] == '/') {
-		if (!read_file(plain, "from this computer"))
-			say("No such page", address);
-		return;
-	}
-	if (how != 2 && web_cache_find(plain, 'P', file, sizeof file, NULL, NULL) && read_file(file, "a copy this computer keeps (Reload asks the network)"))
-		return;
-	if (!regs) {
-		say("No network", "This machine has no way to ask its host for a page.");
+		if (!read_file(plain, "from this computer")) {
+			char text[600];
+
+			snprintf(text, sizeof text, "%s", esc(address));
+			say("No such page", text);
+		}
 		return;
 	}
 	asking = -1;
-	ask(address, 0);
+	if (history[history_at].post && how != 1 && !post_again) {
+		/* back to, or Reload of, the answer to a form: it is not sent twice unasked */
+		char text[800];
+
+		snprintf(text, sizeof text, "<b>%s</b> is what a form sent answered. Going back to it, or loading it again, sends that form again. "
+			 "<a href=\"about:resend\">Send the form again</a>", esc(address));
+		say("A form's answer", text);
+		return;
+	}
+	net_posting = history[history_at].post != NULL;
+	post_again = 0;
+	route = net_route(plain, &ip, why, sizeof why);
+	if (route == ROUTE_DIRECT) {
+		if (how == 2)
+			for (i = 0; i < cached_count; i++)
+				cached[i].gone = 1;	/* (Reload: the sheets and pictures from their server too) */
+		request(plain, 0);
+		snprintf(status, sizeof status, "connecting to %.150s ...", address);
+		if (window) {
+			draw_bar();
+			draw_status();
+		}
+		return;
+	}
+	if (how != 2 && route == ROUTE_HOST && !net_posting && web_cache_find(plain, 'P', file, sizeof file, NULL, NULL) && read_file(file, "a copy this computer keeps (Reload asks the network)"))
+		return;
+	if (!regs && route == ROUTE_HOST && !net_posting) {
+		say("No network", "This machine has no way to ask its host for a page.");
+		return;
+	}
+	request(address, 0);
+	if (!loading)
+		return;
 	snprintf(status, sizeof status, "asking the host for %.150s ...", address);
 	if (window) {
 		draw_bar();
@@ -2351,6 +3067,10 @@ check_reply(void)
 	char note[80];
 	int n, code;
 
+	if (net.state) {
+		net_check();
+		return;
+	}
 	if ((int)regs[REG_REPLY] != loading) {
 		if ((waited += ticked) > 300) {	/* (tenths of a second: other events are not time) */
 			loading = 0;
@@ -2449,13 +3169,7 @@ check_reply(void)
 		p->w = w;
 		p->h = h;
 		p->state = PICTURE_HERE;
-		if (!p->sized)
-			lay_out(0, 0);
-		else
-			for (i = 0; i < web_item_count; i++)
-				if (web_items[i].kind == I_IMAGE && web_items[i].a == (int)(p - pictures))
-					strips_forget_rows(web_items[i].y, web_items[i].y + web_items[i].h);
-		show_view();
+		picture_arrived(p, (int)(p - pictures));
 		return;
 	}
 	if (code == 1) {
@@ -2474,8 +3188,8 @@ check_reply(void)
 	if (code != 200) {
 		char text[480];
 
-		snprintf(text, sizeof text, "The host could not get %.180s (%d).%s", address, code,
-			 code == 3 ? " VRChat opens only addresses that begin with https." : "");
+		snprintf(text, sizeof text, "The host could not get %.180s (%d).%s", esc(address), code,
+			 code == 3 ? " VRChat opens only addresses that begin with https, and this machine has no way to it itself." : "");
 		say("Page not loaded", text);
 		return;
 	}
@@ -2498,8 +3212,20 @@ follow(const char *href)
 			scroll_to(y, 0);
 		return;
 	}
-	if (web_resolve(href, whole))
-		go(whole, 1);
+	if (!strcmp(href, "about:resend")) {
+		post_again = 1;
+		strcpy(whole, address);
+		go(whole, 0);
+		return;
+	}
+	if (!web_resolve(href, whole))
+		return;
+	/* (a page from elsewhere does not open this computer's files) */
+	if (whole[0] == '/' && strstr(address, "://") && !page_ours) {
+		note("a page from the network may not open this computer's files");
+		return;
+	}
+	go(whole, 1);
 }
 
 /* The sheet or picture to ask the host for next, or -1: the first three it does not have yet,
@@ -2568,6 +3294,23 @@ progress(char *text, int room, char *cell, int cell_room, int *done, int *total)
 	at = at ? at + 3 : strrchr(address, '/') ? strrchr(address, '/') + 1 : address;
 	snprintf(host, sizeof host, "%.*s", (int)strcspn(at, "/?#"), at);
 	snprintf(cell, cell_room, "Loading...");
+	if (loading == -1 && asking == -1) {
+		i = net.got >> 12 << 2;	/* (in 4 KB: a line of the status every few packets, not every one) */
+		if (net.state < NET_SEND)
+			snprintf(text, room, "Connecting to %s ...", host);
+		else if (net.state < NET_HEADED)
+			snprintf(text, room, "Waiting for an answer from %s ...", host);
+		else if (net.length > 0) {
+			*done = i;
+			*total = (int)(net.length >> 12 << 2) + 4;
+			snprintf(text, room, "%s %s: %d of %d KB", net_sink == 2 ? "Saving from" : "Loading", host, *done, *total);
+			snprintf(cell, cell_room, "%d of %d KB", *done, *total);
+		} else {
+			snprintf(text, room, "%s %s: %d KB", net_sink == 2 ? "Saving from" : "Loading", host, i);
+			snprintf(cell, cell_room, "%d KB", i);
+		}
+		return 1;
+	}
 	if ((loading || by_hand) && asking == -1) {
 		if (by_hand)
 			snprintf(text, room, "Waiting for %s: its address is to be pasted (the button by the screen)", host);
@@ -2778,123 +3521,295 @@ failures_list(void)
 
 /* ---- forms ---- */
 
+/* What a form sends, growing. */
+struct form_out { char *s; int n, room; };
+
 static void
-query_add(char *query, int room, const char *name, const unsigned short *value, int n)
+form_bytes(struct form_out *o, const void *bytes, int n)
+{
+	if (o->n + n + 1 > o->room) {
+		int room = (o->n + n + 1) * 2 + 256;
+		char *more = realloc(o->s, room);
+
+		if (!more)
+			return;
+		o->s = more;
+		o->room = room;
+	}
+	memcpy(o->s + o->n, bytes, n);
+	o->n += n;
+	o->s[o->n] = 0;
+}
+
+static void
+form_text(struct form_out *o, const char *text)
+{
+	form_bytes(o, text, (int)strlen(text));
+}
+
+/* Text as UTF-8, escaped for an address and a form's body, or not. */
+static void
+form_chars(struct form_out *o, const unsigned short *value, int n, int escaped)
 {
 	static const char hex[] = "0123456789ABCDEF";
-	int k = strlen(query), i;
+	int i;
 
-	if (k && k < room - 1)
-		query[k++] = '&';
-	for (; *name && k < room - 4; name++)
-		query[k++] = *name;
-	if (k < room - 1)
-		query[k++] = '=';
-	for (i = 0; i < n && k < room - 10; i++) {
+	for (i = 0; i < n; i++) {
 		unsigned c = value[i];
 		unsigned char utf[3];
 		int bytes = c < 0x80 ? 1 : c < 0x800 ? 2 : 3, b;
 
-		if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
-			query[k++] = c;
+		if (escaped && c == '\n') {
+			form_text(o, "%0D%0A");
 			continue;
 		}
-		if (c == ' ') {
-			query[k++] = '+';
+		if (!escaped && c == '\n') {
+			form_text(o, "\r\n");
+			continue;
+		}
+		if (escaped && c == ' ') {
+			form_text(o, "+");
 			continue;
 		}
 		utf[0] = bytes == 1 ? c : bytes == 2 ? 0xc0 | c >> 6 : 0xe0 | c >> 12;
 		utf[1] = bytes == 2 ? 0x80 | (c & 0x3f) : 0x80 | (c >> 6 & 0x3f);
 		utf[2] = 0x80 | (c & 0x3f);
+		if (!escaped || (bytes == 1 && (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~'))) {
+			form_bytes(o, utf, bytes);
+			continue;
+		}
 		for (b = 0; b < bytes; b++) {
-			query[k++] = '%';
-			query[k++] = hex[utf[b] >> 4];
-			query[k++] = hex[utf[b] & 15];
+			char three[3] = { '%', hex[utf[b] >> 4], hex[utf[b] & 15] };
+
+			form_bytes(o, three, 3);
 		}
 	}
-	query[k] = 0;
 }
 
-/* Sends the form a field is in, as an address with the fields' values after it. `pressed` is
- * the button that was pressed, or -1. */
+/* A name and its value in the form's way of sending: `boundary` for multipart/form-data. */
 static void
-submit(int node, int pressed)
+form_add(struct form_out *o, const char *name, const unsigned short *value, int n, const char *boundary, const char *filename)
 {
-	char query[1200] = "", action[600] = "", method[16] = "get", name[80], whole[256], value[200];
-	unsigned short wide[128];
-	int form, i, end, used, left, n;
-	const char *v;
-	char *cut;
+	unsigned short wide[80];
+	int k;
 
-	for (form = node; form >= 0 && web_nodes[form].c.tag != T_form; form = web_nodes[form].c.parent)
-		;
-	if (form < 0)
-		return;
-	web_attr_text(form, "method", method, sizeof method);
-	if (strcasecmp(method, "get")) {
-		snprintf(status, sizeof status, "this form is sent as a post, which this browser cannot do");
-		draw_status();
+	if (!boundary) {
+		if (o->n)
+			form_text(o, "&");
+		for (k = 0; name[k] && k < 80; k++)
+			wide[k] = (unsigned char)name[k];
+		form_chars(o, wide, k, 1);
+		form_text(o, "=");
+		form_chars(o, value, n, 1);
 		return;
 	}
-	/* (the form's elements are the nodes after it, up to the first that is not inside it) */
+	form_text(o, "--");
+	form_text(o, boundary);
+	form_text(o, "\r\nContent-Disposition: form-data; name=\"");
+	form_text(o, name);
+	form_text(o, "\"");
+	if (filename) {
+		const char *base = strrchr(filename, '/');
+
+		form_text(o, "; filename=\"");
+		form_text(o, base ? base + 1 : filename);
+		form_text(o, "\"\r\nContent-Type: application/octet-stream");
+	}
+	form_text(o, "\r\n\r\n");
+	if (filename) {
+		/* a file, as it lies */
+		FILE *f = fopen(filename, "rb");
+		char part[1024];
+		size_t got;
+
+		while (f && (got = fread(part, 1, sizeof part, f)) > 0)
+			form_bytes(o, part, (int)got);
+		if (f)
+			fclose(f);
+	} else
+		form_chars(o, value, n, 0);
+	form_text(o, "\r\n");
+}
+
+/* The nodes inside a form: from `form` + 1 up to the first that is not. */
+static int
+form_end(int form)
+{
+	int end, i;
+
 	for (end = form + 1; end < web_node_count; end++) {
 		for (i = end; i >= 0 && i != form; i = web_nodes[i].c.parent)
 			;
 		if (i < 0)
 			break;
 	}
-	for (i = form + 1; i < end; i++) {
-		const char *type;
-		struct field *f;
+	return end;
+}
 
-		if (!web_is_field(i) || !web_attr_text(i, "name", name, sizeof name) || !name[0])
+/* The form of a field or a button, or -1. */
+static int
+form_of(int node)
+{
+	while (node >= 0 && web_nodes[node].c.tag != T_form)
+		node = web_nodes[node].c.parent;
+	return node;
+}
+
+/* What a <select>'s chosen option sends. */
+static int
+select_value(int node, const struct field *f, unsigned short *wide, int room)
+{
+	char value[200];
+	const char *v;
+	int kid, k = 0, n = 0, used, left;
+
+	for (kid = web_nodes[node].first; kid >= 0; kid = web_nodes[kid].next)
+		if (web_nodes[kid].c.tag == T_option && k++ == f->option) {
+			if (web_attr_text(kid, "value", value, sizeof value)) {
+				for (v = value, left = strlen(value); left > 0 && n < room; v += used, left -= used)
+					wide[n++] = web_char((const unsigned char *)v, left, &used);
+			} else if (web_nodes[kid].first >= 0) {
+				n = web_least(web_nodes[web_nodes[kid].first].text_n, room);
+				memcpy(wide, web_u + web_nodes[web_nodes[kid].first].text, n * sizeof *wide);
+			}
+		}
+	return n;
+}
+
+/* A form's fields as the page gave them. */
+static void
+form_reset(int form)
+{
+	int end = form_end(form), i;
+
+	for (i = 0; i < field_count; i++)
+		if (fields[i].node > form && fields[i].node < end) {
+			free(fields[i].text);
+			fields[i--] = fields[--field_count];
+		}
+	strips_forget();
+	show_view();
+}
+
+/* Sends the form a field is in: as an address with the fields' values after it, or by POST with
+ * them as the request's body. `pressed` is the button that was pressed, or -1. */
+static void
+submit(int node, int pressed)
+{
+	struct form_out out = { NULL, 0, 0 };
+	char action[600] = "", method[16] = "get", enctype[48] = "", name[80], whole[256], boundary[40] = "", type[24], *cut;
+	unsigned short wide[128];
+	int form = form_of(node), end, i, n, post, multi;
+	const char *why = NULL;
+
+	if (form < 0)
+		return;
+	if (pressed >= 0) {
+		strcpy(type, web_nodes[pressed].c.tag == T_button ? "submit" : "");
+		web_attr_text(pressed, "type", type, sizeof type);
+		if (!strcasecmp(type, "reset")) {
+			form_reset(form);
+			return;
+		}
+		if (!strcasecmp(type, "button"))
+			return;	/* (it would be a script's) */
+	}
+	web_attr_text(form, "method", method, sizeof method);
+	web_attr_text(form, "enctype", enctype, sizeof enctype);
+	post = !strcasecmp(method, "post");
+	multi = post && !strcasecmp(enctype, "multipart/form-data");
+	if (multi)
+		snprintf(boundary, sizeof boundary, "----nxweb%08x", (unsigned)net_ms());
+	end = form_end(form);
+	for (i = form + 1; i < end; i++) {
+		const char *t, *v;
+		struct field *f;
+		int is_button = web_nodes[i].c.tag == T_button;
+
+		if ((!web_is_field(i) && !is_button) || !web_attr_text(i, "name", name, sizeof name) || !name[0] || web_attr(i, "disabled", &v, &n))
 			continue;
-		type = field_type(i);
-		f = field_of(i);
-		if (field_is_button(type)) {
+		if (is_button) {
+			char value[200];
+			int used, left;
+
 			if (i != pressed)
 				continue;
-		} else if ((!strcasecmp(type, "checkbox") || !strcasecmp(type, "radio")) && !f->checked) {
+			n = 0;
+			if (web_attr_text(i, "value", value, sizeof value))
+				for (v = value, left = strlen(value); left > 0 && n < 127; v += used, left -= used)
+					wide[n++] = web_char((const unsigned char *)v, left, &used);
+			form_add(&out, name, wide, n, multi ? boundary : NULL, NULL);
 			continue;
 		}
-		n = f->n;
-		memcpy(wide, f->text, n * sizeof *wide);
-		if (!strcasecmp(type, "select")) {
-			int kid, k = 0;
+		t = field_type(i);
+		f = field_of(i);
+		if (field_is_button(t) && i != pressed)
+			continue;
+		if ((!strcasecmp(t, "checkbox") || !strcasecmp(t, "radio")) && !f->checked)
+			continue;
+		if (!strcasecmp(t, "select")) {
+			n = select_value(i, f, wide, 127);
+			form_add(&out, name, wide, n, multi ? boundary : NULL, NULL);
+		} else if (!strcasecmp(t, "file")) {
+			char path[200];
+			int k;
 
-			n = 0;
-			for (kid = web_nodes[i].first; kid >= 0; kid = web_nodes[kid].next)
-				if (web_nodes[kid].c.tag == T_option && k++ == f->option) {
-					if (web_attr_text(kid, "value", value, sizeof value)) {
-						for (v = value, left = strlen(value); left > 0 && n < 127; v += used, left -= used)
-							wide[n++] = web_char((const unsigned char *)v, left, &used);
-					} else if (web_nodes[kid].first >= 0) {
-						n = web_least(web_nodes[web_nodes[kid].first].text_n, 127);
-						memcpy(wide, web_u + web_nodes[web_nodes[kid].first].text, n * sizeof *wide);
-					}
-				}
-		} else if (!n && (!strcasecmp(type, "checkbox") || !strcasecmp(type, "radio"))) {
-			wide[0] = 'o', wide[1] = 'n', n = 2;
-		}
-		query_add(query, sizeof query, name, wide, n);
+			for (k = 0; k < f->n && k < 199; k++)
+				path[k] = (char)f->text[k];
+			path[k] = 0;
+			if (multi)
+				form_add(&out, name, wide, 0, boundary, path);
+			else
+				form_add(&out, name, f->text, f->n, NULL, NULL);
+		} else if (!f->n && (!strcasecmp(t, "checkbox") || !strcasecmp(t, "radio"))) {
+			wide[0] = 'o', wide[1] = 'n';
+			form_add(&out, name, wide, 2, multi ? boundary : NULL, NULL);
+		} else
+			form_add(&out, name, f->text, f->n, multi ? boundary : NULL, NULL);
+	}
+	if (multi) {
+		form_text(&out, "--");
+		form_text(&out, boundary);
+		form_text(&out, "--\r\n");
 	}
 	if (!web_attr_text(form, "action", action, sizeof action) || !action[0])
 		snprintf(action, sizeof action, "%s", address);
-	if ((cut = strpbrk(action, "?#")) != NULL)
+	if (!post && (cut = strpbrk(action, "?#")) != NULL)
 		*cut = 0;
-	if (strlen(action) + strlen(query) + 2 > sizeof action) {
-		snprintf(status, sizeof status, "the form's address is longer than the host can be asked for");
+	if (!post && strlen(action) + out.n + 2 > sizeof action)
+		why = "the form's address is longer than this browser keeps";
+	else if (!post) {
+		strcat(action, "?");
+		if (out.s)
+			strcat(action, out.s);
+	}
+	if (!why && !web_resolve(action, whole))
+		why = "the form's address is longer than this browser keeps";
+	if (why) {
+		snprintf(status, sizeof status, "%s", why);
 		draw_status();
+		free(out.s);
 		return;
 	}
-	strcat(action, "?");
-	strcat(action, query);
-	if (web_resolve(action, whole))
-		go(whole, 1);
-	else {
-		snprintf(status, sizeof status, "the form's address is longer than the host can be asked for");
-		draw_status();
-	}
+	if (post) {
+		uint32_t ip;
+		char no[200];
+
+		if (net_route(whole, &ip, no, sizeof no) != ROUTE_DIRECT) {
+			snprintf(status, sizeof status, "this form is posted, and the host's fetch only asks for addresses: it goes only to machines this one reaches itself");
+			draw_status();
+			free(out.s);
+			return;
+		}
+		post_next = out.s ? out.s : strdup("");
+		post_next_n = out.n;
+		if (multi)
+			snprintf(post_next_type, sizeof post_next_type, "multipart/form-data; boundary=%s", boundary);
+		else
+			snprintf(post_next_type, sizeof post_next_type, "application/x-www-form-urlencoded");
+	} else
+		free(out.s);
+	go(whole, 1);
 }
 
 /* A field drawn again where it is: its strips made again, and the view. */
@@ -3016,6 +3931,17 @@ stop(void)
 {
 	int i;
 
+	if (net.state && net.state < NET_DONE) {
+		if (net_kind == 0 && !net_sink && net.n > net_shown) {
+			/* the page as far as it came */
+			net_end(&net, NET_DONE);
+			net_finish(1);
+		} else if (net_kind == 0 && net_sink == 2) {
+			net_end(&net, NET_DONE);
+			net_finish(1);
+		} else
+			net_cancel();
+	}
 	loading = by_hand = 0;
 	for (i = 0; i < picture_count; i++)
 		if (pictures[i].state == PICTURE_WANTED || pictures[i].state == PICTURE_BY_HAND ||
@@ -3036,6 +3962,7 @@ static void
 pictures_again(void)
 {
 	if (loading && asking >= 0 && asking < SHEET) {
+		net_cancel();
 		loading = 0;
 		if (part_file)
 			fclose(part_file);
@@ -3126,27 +4053,57 @@ field_open(const char *text, int select)
 		draw_status();
 }
 
-/* What was typed as an address, as one to go to: a bare name is a site. */
+/* What was typed as an address, as one to go to. A file's path and an address with its scheme are
+ * what they say. 10.0.0.11, localhost, a word with no dot in it, a name /etc/hosts has and anything
+ * with a port are machines of this network, by http; a bare name with dots is a site, by https. */
 static void
 typed_address(const char *text, char *where, int room)
 {
-	snprintf(where, room, "%s%s", text[0] == '/' || strstr(text, ":") ? "" : "https://", text);
-	where[255] = 0;
-	if (where[0] != '/' && strlen(where) < 254 && (strlen(where) < 8 || !strchr(where + 8, '/')))
+	char word[256], host[128];
+	const char *scheme, *at;
+	int n, port, k;
+
+	while (isspace((unsigned char)*text))
+		text++;
+	snprintf(word, sizeof word, "%.253s", text);
+	for (n = (int)strlen(word); n > 0 && isspace((unsigned char)word[n - 1]); n--)
+		word[n - 1] = 0;
+	scheme = strstr(word, "://");
+	if (word[0] == '/' || !strncasecmp(word, "about:", 6) || !strncasecmp(word, "world:", 6) || !strncasecmp(word, "file:", 5) ||
+	    !strncasecmp(word, "persist:", 8) || !strncasecmp(word, "host:", 5) || (scheme && strncasecmp(word, "http", 4))) {
+		snprintf(where, room, "%s", word);
+		return;
+	}
+	if (scheme) {
+		/* the scheme in small letters, as the rest of the browser compares it */
+		for (k = 0; word + k < scheme; k++)
+			word[k] = tolower((unsigned char)word[k]);
+		snprintf(where, room, "%s", word);
+	} else {
+		at = word + strcspn(word, ":/?#");
+		k = (int)(at - word);
+		port = *at == ':' && isdigit((unsigned char)at[1]);
+		snprintf(host, sizeof host, "%.*s", k < 127 ? k : 127, word);
+		snprintf(where, room, "%s%s", net_typed_is_local(host, port) ? "http://" : "https://", word);
+	}
+	/* a site with no path is its root */
+	at = strstr(where, "://") + 3;
+	if (!strchr(at, '/') && !strpbrk(at, "?#") && strlen(where) < 254)
 		strcat(where, "/");
+	where[255] = 0;
 }
 
 /* To another page of this session's, where it was left. */
 static void
 travel(int to)
 {
+	char where[256];
+
 	history[history_at].top = top;
 	history_at = to;
-	go(history[to].address, 0);
-	if (!loading) {
-		top = goal = history[to].top;
-		show_view();
-	}
+	top_wanted = history[to].top;
+	strcpy(where, history[to].address);
+	go(where, 0);
 }
 
 static void
@@ -3167,7 +4124,9 @@ resized(int w, int h)
 static void
 others(GR_EVENT *event)
 {
-	if (event->type == GR_EVENT_TYPE_UPDATE && event->update.wid == window && event->update.utype == GR_UPDATE_SIZE)
+	if (event->type == GR_EVENT_TYPE_FDINPUT)
+		net_pump();	/* (a page coming while a window is up: it is read, and shown when the window goes) */
+	else if (event->type == GR_EVENT_TYPE_UPDATE && event->update.wid == window && event->update.utype == GR_UPDATE_SIZE)
 		resized(event->update.width, event->update.height);
 	else if (event->type == GR_EVENT_TYPE_EXPOSURE && event->exposure.wid == window)
 		draw_all();
@@ -3431,6 +4390,22 @@ command(int id)
 			note("the clipboard is empty");
 			break;
 		}
+		if (focus >= 0 && !editing) {
+			/* into the page's field */
+			const unsigned char *at = (const unsigned char *)text;
+			int used, left = (int)strlen(text), lines = web_nodes[focus].c.tag == T_textarea;
+			struct field *f = field_of(focus);
+
+			for (; left > 0; at += used, left -= used) {
+				int c = web_char(at, left, &used);
+
+				if (c >= 32 || (lines && c == '\n'))
+					field_put(f, c);
+			}
+			free(text);
+			field_again(focus);
+			break;
+		}
 		text[strcspn(text, "\r\n\t")] = 0;
 		field_open(text, 0);
 		free(text);
@@ -3451,7 +4426,8 @@ command(int id)
 		if (!page_length || !ui_save_file("Save the page as", "/root", NULL, name, chosen, sizeof chosen, others))
 			break;
 		file = fopen(chosen, "wb");
-		n = file && fwrite(page, 1, page_length, file) == (size_t)page_length;
+		/* (what came, when what is shown is that as HTML) */
+		n = raw ? file && fwrite(raw, 1, raw_n, file) == (size_t)raw_n : file && fwrite(page, 1, page_length, file) == (size_t)page_length;
 		if (file && fclose(file))
 			n = 0;
 		if (n)
@@ -3461,6 +4437,7 @@ command(int id)
 		draw_status();
 		break;
 	case C_CLOSE:
+		cached_remove();
 		GrClose();
 		exit(0);
 	case C_FIND:
@@ -3478,6 +4455,7 @@ command(int id)
 		break;
 	case C_RELOAD:
 		strcpy(again, address);
+		top_wanted = top;
 		go(again, 2);
 		break;
 	case C_PICTURES:
@@ -3489,7 +4467,10 @@ command(int id)
 	case C_SOURCE:
 		if (!page_length || (file = fopen("/tmp/nxweb-source.html", "wb")) == NULL)
 			break;
-		fwrite(page, 1, page_length, file);
+		if (raw)
+			fwrite(raw, 1, raw_n, file);
+		else
+			fwrite(page, 1, page_length, file);
 		fclose(file);
 		ui_run("nxedit", "/tmp/nxweb-source.html");
 		break;
@@ -3584,6 +4565,60 @@ context(const GR_EVENT *event)
 	menu_say("pointer");
 }
 
+/* A radio button of a form: the others of its name go off. */
+static void
+radio_choose(int node)
+{
+	char name[80], other[80], type[24];
+	int form = form_of(node), end, i;
+
+	if (form >= 0 && web_attr_text(node, "name", name, sizeof name) && name[0]) {
+		for (i = form + 1, end = form_end(form); i < end; i++)
+			if (i != node && web_nodes[i].c.tag == T_input && web_attr_text(i, "type", type, sizeof type) && !strcasecmp(type, "radio") &&
+			    web_attr_text(i, "name", other, sizeof other) && !strcmp(name, other) && field_of(i)->checked) {
+				field_of(i)->checked = 0;
+				field_again(i);
+			}
+	}
+	field_of(node)->checked = 1;
+	field_again(node);
+}
+
+/* What a click, or Space on the keyboard, does to a field that is no text: true if it was one. */
+static int
+field_press(int node)
+{
+	const char *type = field_type(node);
+	struct field *f = field_of(node);
+
+	if (!strcasecmp(type, "radio")) {
+		radio_choose(node);
+	} else if (!strcasecmp(type, "checkbox")) {
+		f->checked = !f->checked;
+		field_again(node);
+	} else if (!strcasecmp(type, "select")) {
+		int kid, options = 0;
+
+		for (kid = web_nodes[node].first; kid >= 0; kid = web_nodes[kid].next)
+			options += web_nodes[kid].c.tag == T_option;
+		f->option = options ? (f->option + 1) % options : 0;
+		field_again(node);
+	} else if (!strcasecmp(type, "file")) {
+		char path[256];
+
+		if (ui_choose_file("A file to send", "/root", NULL, path, sizeof path, others)) {
+			int k;
+
+			f->n = 0;
+			for (k = 0; path[k]; k++)
+				field_put(f, (unsigned char)path[k]);
+			field_again(node);
+		}
+	} else
+		return 0;
+	return 1;
+}
+
 static void
 click(int x, int y)
 {
@@ -3630,28 +4665,20 @@ click(int x, int y)
 	/* the thing drawn last at that place is the one on top */
 	for (i = web_item_count - 1; i >= 0; i--) {
 		const struct web_item *it = &web_items[i];
-		int node = it->node, link, up;
+		int node = it->node, link, up, disabled_n;
+		const char *disabled;
 		char href[600];
 
 		if (it->kind == I_BOX || !ui_inside(x, y - TOP + top, it->x, it->y, it->w, it->h))
 			continue;
 		if (it->kind == I_FIELD) {
 			const char *type = field_type(node);
-			struct field *f = field_of(node);
 
+			if (web_attr(node, "disabled", &disabled, &disabled_n))
+				break;
 			if (field_is_button(type)) {
 				submit(node, node);
-			} else if (!strcasecmp(type, "checkbox") || !strcasecmp(type, "radio")) {
-				f->checked = !f->checked;
-				field_again(node);
-			} else if (!strcasecmp(type, "select")) {
-				int kid, options = 0;
-
-				for (kid = web_nodes[node].first; kid >= 0; kid = web_nodes[kid].next)
-					options += web_nodes[kid].c.tag == T_option;
-				f->option = options ? (f->option + 1) % options : 0;
-				field_again(node);
-			} else {
+			} else if (!field_press(node)) {
 				focus = node;
 				field_again(node);
 			}
@@ -3679,40 +4706,47 @@ click(int x, int y)
 		field_again(was);
 }
 
-/* Moves the keyboard to the page's next link, or the one before, and brings it into view.
- * Past the last one no link has it, and the next press starts over. */
+/* Moves the keyboard to the page's next link or field, or the one before, and brings it into view.
+ * Past the last one nothing has it, and the next press starts over. */
 static void
 pick_link(int back)
 {
-	int i, found_link = -1, seen = picked < 0, last = -1, y = 0;
+	int i, at = -1, link_was = picked, focus_was = focus, y = -1, step = back ? -1 : 1;
 	char href[600];
 
-	for (i = 0; i < web_item_count; i++) {
+	for (i = 0; i < web_item_count && at < 0; i++)
+		if (focus >= 0 ? web_items[i].kind == I_FIELD && web_items[i].node == focus :
+		    picked >= 0 && (web_items[i].kind == I_TEXT || web_items[i].kind == I_IMAGE) && web_link_of(web_items[i].node) == picked)
+			at = i;
+	focus = picked = -1;
+	for (i = at >= 0 ? at + step : back ? web_item_count - 1 : 0; i >= 0 && i < web_item_count; i += step) {
 		int link = web_items[i].kind == I_TEXT || web_items[i].kind == I_IMAGE ? web_link_of(web_items[i].node) : -1;
 
-		if (link < 0 || link == last)
-			continue;
-		if (back) {
-			if (link == picked)
-				break;
-			found_link = link, y = web_items[i].y;
-		} else if (seen && link != picked) {
-			found_link = link, y = web_items[i].y;
+		if (web_items[i].kind == I_FIELD) {
+			focus = web_items[i].node;
+			y = web_items[i].y;
 			break;
 		}
-		seen |= link == picked;
-		last = link;
+		if (link >= 0 && link != link_was) {
+			picked = link;
+			y = web_items[i].y;
+			break;
+		}
 	}
-	picked = found_link;
-	strips_forget();
-	if (picked >= 0) {
-		if (web_attr_text(picked, "href", href, sizeof href))
-			snprintf(status, sizeof status, "%.190s", href);
+	if (focus_was >= 0)
+		field_again(focus_was);
+	if (picked >= 0 || link_was >= 0)
+		strips_forget();
+	if (picked >= 0 && web_attr_text(picked, "href", href, sizeof href)) {
+		snprintf(status, sizeof status, "%.190s", href);
 		draw_status();
-		if (y < top || y + line_h > top + view_height())
-			top = goal = y - view_height() / 3;
 	}
-	show_view();
+	if (y >= 0 && (y < top || y + line_h > top + view_height()))
+		top = goal = web_most(y - view_height() / 3, 0);
+	if (focus >= 0)
+		field_again(focus);
+	else
+		show_view();
 }
 
 /* The command a letter with Ctrl is, or 0. */
@@ -3762,21 +4796,42 @@ key(int ch, int modifiers)
 	if (focus >= 0 && !editing) {
 		struct field *f = field_of(focus);
 
+		const char *fixed, *type = field_type(focus);
+		int lines = web_nodes[focus].c.tag == T_textarea, most = web_attr_int(focus, "maxlength", 32767), fixed_n;
+
+		if (field_is_button(type) && (ch == MWKEY_ENTER || ch == '\n' || ch == '\r' || ch == ' ')) {
+			submit(focus, focus);
+			return;
+		}
+		if (ch == ' ' && field_press(focus))
+			return;
 		if (ch == MWKEY_ENTER || ch == '\n' || ch == '\r') {
+			if (lines && !web_attr(focus, "readonly", &fixed, &fixed_n)) {
+				field_put(f, '\n');
+				field_again(focus);
+				return;
+			}
 			submit(focus, -1);
 			return;
 		}
-		if (ch == MWKEY_ESCAPE || ch == MWKEY_TAB) {
+		if (ch == MWKEY_TAB) {
+			pick_link(modifiers & MWKMOD_SHIFT);
+			return;
+		}
+		if (ch == MWKEY_ESCAPE) {
 			int was = focus;
 
 			focus = -1;
 			field_again(was);
 			return;
 		}
+		if (web_attr(focus, "readonly", &fixed, &fixed_n) || field_is_button(type) || !strcasecmp(type, "checkbox") || !strcasecmp(type, "radio") ||
+		    !strcasecmp(type, "select") || !strcasecmp(type, "file"))
+			return;
 		if ((ch == MWKEY_BACKSPACE || ch == 127) && f->n > 0)
 			f->n--;
-		else if (ch >= 32 && ch < 127 && f->n < 127)
-			f->text[f->n++] = ch;
+		else if (ch >= 32 && ch < 127 && f->n < most)
+			field_put(f, ch);
 		else
 			return;
 		field_again(focus);
@@ -3814,7 +4869,12 @@ key(int ch, int modifiers)
 	}
 	if (ch == MWKEY_ENTER || ch == '\n' || ch == '\r') {
 		char where[280];
+		const char *space = typed + strspn(typed, " ");
 
+		if (strchr(space, ' ') && strspn(space + strcspn(space, " "), " ") != strlen(space + strcspn(space, " "))) {
+			note("an address has no spaces in it (this browser has no search of its own: a site's page has)");
+			return;
+		}
 		typed_address(typed, where, sizeof where);
 		go(where, 1);
 		return;
@@ -3894,14 +4954,21 @@ main(int argc, char **argv)
 	/* (the elements' styles on workers too; NXWEB_STYLES=here: on this core alone) */
 	web_style_elsewhere = getenv("NXWEB_STYLES") && !strcmp(getenv("NXWEB_STYLES"), "here") ? NULL : styles_elsewhere;
 	web_page_bg = 0xffffff;	/* (a view before the first page comes) */
-	go(argc > 1 ? argv[1] : home, 0);
+	if (argc > 1 && access(argv[1], F_OK)) {
+		/* an address as one would type it (not a file of the folder it was started in) */
+		char where[280];
+
+		typed_address(argv[1], where, sizeof where);
+		go(where, 0);
+	} else
+		go(argc > 1 ? argv[1] : home, 0);
 	window = GrNewWindowEx(GR_WM_PROPS_APPWINDOW, "Web", GR_ROOT_WINDOW_ID, -1, -1, WIDTH, HEIGHT, WHITE);
 	set_title();
 	GrSelectEvents(window, EVENTS);
 	GrMapWindow(window);
 	GrSetFocus(window);
 	for (;;) {
-		int menu, wait = top != goal ? 15 : loading ? 100 : by_hand ? 3000 : regs && wanted_open() ? 400 : 60000;
+		int menu, wait = top != goal ? 15 : loading == -1 && net.state < NET_HEAD ? 30 : loading ? 100 : by_hand ? 3000 : regs && wanted_open() ? 400 : 60000;
 
 		/* (the pictures waited for are decoded, not in a scroll or with an event there, then the
 		 * strips ahead of the view made, while the wait lasts) */
@@ -3918,6 +4985,7 @@ main(int argc, char **argv)
 			wait = 0;
 		}
 		wait = strips_meanwhile(wait);
+		net_watch();
 		GrGetNextEventTimeout(&event, wait ? wait : GR_TIMEOUT_POLL);
 		ui_origin_note(&event);
 		if (menu_at >= 0 && ui_menu_depth == 1 && event.type == GR_EVENT_TYPE_KEY_DOWN &&
@@ -3974,6 +5042,7 @@ main(int argc, char **argv)
 		case GR_EVENT_TYPE_CLOSE_REQ:
 			if (event.general.wid != window)	/* (a menu's may come after the menu went) */
 				break;
+			cached_remove();
 			GrClose();
 			return 0;
 		}
@@ -4012,9 +5081,9 @@ main(int argc, char **argv)
 		else if (by_hand && event.type == GR_EVENT_TYPE_TIMEOUT)
 			ask(address, 0);
 		else if (!by_hand && regs && (asking = next_wanted()) >= SHEET)
-			ask(web_sheets[asking - SHEET].address, 2);
+			request(web_sheets[asking - SHEET].address, 2);
 		else if (!by_hand && regs && asking >= 0)
-			ask(pictures[asking].address, 1);
+			request(pictures[asking].address, 1);
 		if (failed_due && window)
 			failures_show();
 		if (top == goal)

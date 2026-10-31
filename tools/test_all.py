@@ -40,6 +40,24 @@ def case(name, tags, cmd, workers=False, until='LX-DONE', more=(), wall=240, ima
                 image=image, env=env or {}, **checks)
 
 
+# GitHub issue 1's server, as its reporter wrote it (its `test` printing what it serves), and what they typed
+WEB_ISSUE = ("printf 'echo hello from the issue %s server\\\\n' shell > /tmp/test; (while :; do { printf 'HTTP/1.1 200 OK\\\\r\\\\n'; "
+             "printf 'Content-Type: text/plain\\\\r\\\\n'; printf 'Connection: close\\\\r\\\\n'; printf '\\\\r\\\\n'; sh /tmp/test; } | nc -l -p 80 >/dev/null; done) & "
+             "sleep 2; echo CURL $(curl -s http://127.0.0.1/); NXWEB_DUMP=1 nxweb http://127.0.0.1/ & sleep 15; killall nxweb; sleep 1; "
+             "NXWEB_DUMP=1 nxweb http://10.0.0.11 & sleep 15; killall nxweb; sleep 1; NXWEB_DUMP=1 nxweb http://127.0.0.1:81/ & sleep 8; killall nxweb")
+# thttpd's site: a page with a sheet, a picture and a form; a CGI that sets a cookie and sends the form on by a 303; one that shows it
+WEB_SITE = ("mkdir -p /tmp/www/cgi-bin; cd /tmp/www; cp /root/Pictures/Fox.png .; chmod 644 Fox.png; dd if=/dev/zero of=a.bin bs=100 count=20 2>/dev/null; echo plain text > plain.txt; "
+            "echo 'body{color:#800}' > page.css; echo '<title>Local</title><link rel=stylesheet href=page.css><h1>A page</h1><img src=Fox.png width=64 height=64>"
+            "<form method=post action=cgi-bin/go.cgi><input name=who value=abc><input type=checkbox name=box checked><input type=submit></form>' > index.html; "
+            "printf '#!/bin/sh\\\\nread -n $CONTENT_LENGTH q; echo POSTED $q > /dev/console; echo Status: 303 See; echo Location: /cgi-bin/show.cgi; echo Set-Cookie: sid=s1; echo\\\\n' > cgi-bin/go.cgi; "
+            "printf '#!/bin/sh\\\\necho SAW $HTTP_COOKIE > /dev/console; echo Content-Type: text/html; echo; echo shown\\\\n' > cgi-bin/show.cgi; "
+            "chmod 755 cgi-bin/*; thttpd -p 8080 -d /tmp/www -c '**.cgi' -u root -l /dev/null & ")
+WEB_HTTP = ("echo '127.0.0.1 webhost' >> /etc/hosts; NXWEB_DUMP=1 NXWEB_PRINT=1 nxweb http://localhost:8080/ & sleep 25; nxkey tab x y z 1 tab tab enter; sleep 10; "
+            "nxkey ctrl+l h t t p 'shift+;' / / l o c a l h o s t 'shift+;' 8 0 8 0 / n o n e enter; sleep 6; "
+            "nxkey ctrl+l l o c a l h o s t 'shift+;' 8 0 8 0 / a . b i n enter; sleep 6; echo SAVED $(wc -c < /root/Downloads/a.bin); "
+            "nxkey ctrl+l l o c a l h o s t 'shift+;' 8 0 8 0 / p l a i n . t x t enter; sleep 6; nxkey alt+left; sleep 3; killall nxweb; sleep 1; "
+            "NXWEB_TIME=1 NXWEB_DUMP=1 nxweb http://webhost:8080/ & sleep 15; killall nxweb; sleep 1; NXWEB_DUMP=1 nxweb http://10.0.0.12:8080/ & sleep 15; killall nxweb; echo WEB-''ENDED\\n")
+
 CASES = [
     # the machine (docs/machine/multicore.md; programs/mc/mctest.c)
     case('mctest-3', 'machine', 'mctest 3', True, has=[r'mctest: PASS', r'\(0 pages brought for their start\)']),
@@ -338,6 +356,22 @@ CASES = [
          has=[r'nxweb: loading: Loading web-test\.html: 0 of 1 picture$', r'nxweb: not loaded: picture https://example\.com/x\.png: no answer in 30 s',
               r'nxweb: /usr/share/web-test\.html: 88 nodes, 1 rules, 586 x 636; 40 texts \(520 characters\), 1 boxes, 1 pictures']),
     # a short first page ("No such page"): its strips were never made, nothing was shown
+    # a server in the machine (docs/apps/web.md, "Addresses the machine reaches itself"): GitHub issue 1's shell loop,
+    # then thttpd: by 127.0.0.1, by name, by the machine's LAN address, with a port, a form, a cookie, a redirect
+    case('nxweb-issue', 'desktop web', X + WEB_ISSUE, more=['--net', '47310', '--net-id', '11'], wall=300,
+         has=[r'nxweb: http: http://127\.0\.0\.1/: 200 text/plain, 34 bytes', r'nxweb: http: http://10\.0\.0\.11/?: 200 text/plain, 34 bytes',
+              r'nxweb: http://10\.0\.0\.11/: \d+ nodes, \d+ rules, 586 x \d+; 1 texts \(33 characters\)', r'^CURL hello from the issue',
+              r'nxweb: failed: http://127\.0\.0\.1:81/: 127\.0\.0\.1 \(127\.0\.0\.1\) refused the connection']),
+    case('nxweb-http', 'desktop web', X + WEB_SITE + 'sleep 1', more=['--net', '47320', '--net-id', '12', '--expect', 'LX-DONE', '--send', WEB_HTTP], until='WEB-ENDED', wall=300,
+         has=[r'nxweb: http: http://localhost:8080/: 200 text/html, \d+ bytes', r'nxweb: http: http://webhost:8080/: 200 text/html, \d+ bytes',
+              r'nxweb: http: http://10\.0\.0\.12:8080/: 200 text/html, \d+ bytes',
+              r'nxweb: http://localhost:8080/: \d+ nodes, 1 rules, 586 x \d+; \d+ texts \(\d+ characters\), \d+ boxes, 1 pictures, 3 fields',
+              r'nxweb: http: http://localhost:8080/page\.css: 200 text/css', r'nxweb: http: http://localhost:8080/Fox\.png: 200 image/png',
+              r'nxweb: the pictures waited for \d+ ms after the page.s text',
+              r'nxweb: http: http://localhost:8080/cgi-bin/go\.cgi: 303', r'nxweb: http: http://localhost:8080/cgi-bin/show\.cgi: 200',
+              r'^POSTED who=abcxyz1&box=on', r'^SAW sid=s1', r'nxweb: http: http://localhost:8080/none: 404',
+              r'nxweb: saved http://localhost:8080/a\.bin as /root/Downloads/a\.bin, 2000 bytes', r'^SAVED 2000',
+              r'nxweb: http: http://localhost:8080/plain\.txt: 200 text/plain']),
     case('nxweb-short', 'desktop', X + 'NXWEB_TIME=1 nxweb /usr/share/web-nowhere.html & sleep 10; killall nxweb', has=[r'nxweb: the first picture \d+ ms after']),
     # the editor's reader (docs/system/nanox.md, "The editor's reader"): a page of every kind of Markdown as tools/web_test.c
     # --sections lays it out; a file of the documentation is read at once, another .md only with --read (or Ctrl+R)

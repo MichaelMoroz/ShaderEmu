@@ -42,6 +42,7 @@ static char web_address[256];		/* the page's own */
 static char web_base[256];		/* what its addresses are made whole with */
 static char web_refresh[256];		/* where the page sends its reader on at once (<meta http-equiv=refresh>), or "" */
 static int web_latin;			/* its bytes are Latin-1, not UTF-8 */
+static char web_http_charset[24];	/* what the answer's own head says of that ("": see the page) */
 static int web_body = -1;
 
 /* ---- fonts ---- */
@@ -531,6 +532,8 @@ web_parse(const char *html, int n)
 	if (!charset)
 		charset = memmem(html, n < 2048 ? n : 2048, "CHARSET=", 8);
 	charset = charset ? charset + 8 + (charset[8] == '"' || charset[8] == '\'') : "utf-8";
+	if (web_http_charset[0])
+		charset = web_http_charset;
 	web_latin = !strncasecmp(charset, "iso-8859", 8) || !strncasecmp(charset, "windows-125", 11) || !strncasecmp(charset, "latin", 5) ||
 		    !strncasecmp(charset, "us-ascii", 8);
 	web_u = web_grow(web_u, &web_u_room, n + 64, sizeof *web_u);
