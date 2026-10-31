@@ -127,6 +127,11 @@ class Runner:
             return False
         if 'given to the player that is open' in console:   # (nxplay: one player, a second start hands it over)
             bad = [b for b in bad if not (b[0] == 'bad' and b[1].startswith('no-window'))]
+        # One window is enough of these (ui_single.h): a second start brings the first forward and ends
+        started = re.findall(r'FZ started (\S+): process \d+: ([^\r\n]*)', console)
+        singles = [tag for tag, command in started if re.match(r'(nxsettings|nxmon)\b', command)]
+        if len(singles) > 1:
+            bad = [b for b in bad if not (b[0] == 'bad' and re.match(r'no-window (%s) ' % '|'.join(map(re.escape, singles)), b[1]))]
         told = list(re.finditer(r'(?:GPU is drawing for|close) ((?!it\b)\S+)(?: program)?(?: \(process| first)', console))
         if told and all(open_at(m.group(1), m.start()) for m in told):
             bad = [b for b in bad if b[0] != 'gpu-busy' and not (b[0] == 'bad' and b[1].startswith('no-window'))]
