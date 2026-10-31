@@ -49,13 +49,14 @@ eight folds, ray marched. The program compiles the `.hlsl` when it starts and on
 camera; drag, the arrows or w a s d go round it, the wheel or + and - come nearer, space stops
 it.
 
-- The compile in the machine takes 7.6 million instructions: 1.3 s on the card.
 - 10,828 bytes of code, 2 places a lane may stop, 3 texels an index, the longest step 2,662
-  instructions, about 5,800 instructions a pixel.
-- 160 x 120 on the card's field: 86 ms a picture in 14 rounds (`hlsl_bench`). The example on
-  the desktop shows 9 to 11.8 pictures a second, and 6.6 to 8.3 when close, where rays take more
-  steps. `cc` builds it in the machine in 7.7 s. On `rvc_cpu` a picture takes 34.5 s on the
-  first core alone and 4.3 s on 8 workers.
+  instructions.
+- From the eye of `test_all.py hlsl`, `hlsl_bench` at 160 x 120 is about 9 million instructions
+  on the first core, nearly all of them the compile: 1.3 s (calibrated, 31 October 2026), and 650
+  million on the workers, some 34,000 a pixel.
+- That picture on 31 workers takes 4.1 s (calibrated, 31 October 2026; the model's workers term
+  rests on one game, so that is a rough figure). `rvc_cpu` has no field: how fast the field is
+  wants `hlsl_bench` on the card, where it also must say 0 steps too long.
 
 ## In the IDE
 
