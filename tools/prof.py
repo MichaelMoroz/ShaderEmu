@@ -3,6 +3,7 @@
     python tools/prof.py run OUT [--exe EXE] -- RVC_CPU_ARGS...      a run with RVC_PROF=OUT
     python tools/prof.py report OUT [--elf PATH[=NM]] [--find NAME] [--top N] [--lines]
     python tools/prof.py deps OUT [--elf ...]                         what RVC_PROF_DEPS found
+    python tools/prof.py doubles OUT [--elf ...] [--limit PERCENT]    the share in soft doubles and who calls them; exit 1 over the limit
     python tools/prof.py auto OUT [--elf ...] -- RVC_CPU_ARGS...     run, choose loops and calls, run again with
                                                                        RVC_PROF_DEPS on them, and say which are independent
     python tools/prof.py search --cmd "CMD" --param NAME=1,2,4 [--param NAME=16..64:16] [--check TEXT]
@@ -32,8 +33,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # (the distribution's name: Ubuntu-24.04 once, Ubuntu on 28 October 2026)
 WSL = next((p for p in (r'\\wsl.localhost\Ubuntu-24.04', r'\\wsl.localhost\Ubuntu') if os.path.isdir(p + r'\home')),
            r'\\wsl.localhost\Ubuntu')
-WSL_HOME = '/home/micha'
-KERNEL = WSL + r'\home\micha\nm\k-rom\vmlinux'
+# (the home of WSL's default user: /root where the distribution has no user of its own)
+WSL_HOME = next((h for h in ('/home/micha', '/root') if os.path.isdir(WSL + h.replace('/', '\\') + r'\nm')), '/home/micha')
+KERNEL = WSL + WSL_HOME.replace('/', '\\') + r'\nm\k-rom\vmlinux'
 TOOLBIN = WSL_HOME + '/shaderemu-linux/toolchain/bin'
 PATTERNS = os.path.join(ROOT, 'tools', 'prof_patterns.ini')
 CORE0_TEXELS, WORKER_TEXELS = 384, 192   # what a core's write cache keeps a pass, about (AGENTS.md)
@@ -852,6 +854,55 @@ def cmd_report(args):
     return P
 
 
+# What a double costs where there is no double hardware (rt/dfast.c, compiler-rt, soft-fp): loud, so that it is seen.
+SOFT_DOUBLE = re.compile(r'__(add|sub|mul|div|neg|eq|ne|ge|gt|le|lt|unord|cmp)(df|tf|dc|tc)\d?(_slow)?'
+                         r'|__(extend|trunc)(sf|df|tf)(df|sf|tf)2|__float(un)?(si|di|ti)(df|tf)|__fix(uns)?(df|tf)(si|di|ti)|__powidf2')
+
+
+def double_name(name):
+    return SOFT_DOUBLE.fullmatch(name.split(':')[-1].split('+')[0].strip()) is not None
+
+
+def cmd_doubles(args):
+    """Each side's instructions in soft doubles and who calls them; exit 1 when a share is over --limit (percent)."""
+    P = load(args)
+    worst, named = 0.0, 0
+    for k in (0, 1):
+        sel = P.cls == k
+        total = int(P.exec[sel].sum())
+        if not total:
+            continue
+        by = collections.Counter()
+        for pc, ex in zip(P.pc[sel], P.exec[sel]):
+            f, _ = P.func_key(int(pc))
+            if ':' in f:
+                named += int(ex)
+            if double_name(f):
+                by[f] += int(ex)
+        soft = sum(by.values())
+        share = pct(soft, total)
+        worst = max(worst, share)
+        who = 'core 0' if k == 0 else 'the workers'
+        print(f'\n== {who}: {share:.1f}% in soft doubles, {soft:,} of {total:,} instructions'
+              f' ({"OVER THE LIMIT" if share > args.limit else "ok"}, limit {args.limit:g}%)')
+        for f, n in by.most_common(args.top):
+            print(f'  {pct(n, total):5.1f}%  {n:>14,}  {f}')
+        callers = collections.Counter()
+        for c, a, b, n, i in P.edges:
+            if c == k and a and double_name(P.name(b, False)) and not double_name(P.name(a, False)):
+                callers[P.name(a, False)] += i
+        if callers:
+            print('   who calls them (inclusive):')
+            for f, i in callers.most_common(args.top):
+                print(f'  {pct(i, total):5.1f}%  {f}')
+    if not named:
+        print('\nNO NAMES: no ELF of the program was placed, so nothing could be counted (--find or --elf)')
+        sys.exit(2)
+    print(f'\nSOFT DOUBLES: {worst:.1f}% at most, limit {args.limit:g}%')
+    if worst > args.limit:
+        sys.exit(1)
+
+
 def cmd_deps(args):
     P = load(args)
     total0 = int(P.exec[P.cls == 0].sum())
@@ -980,6 +1031,7 @@ def main():
     p = sub.add_parser('run'); common(p); p.set_defaults(fn=cmd_run)
     p = sub.add_parser('report'); common(p); p.set_defaults(fn=cmd_report)
     p = sub.add_parser('deps'); common(p); p.set_defaults(fn=cmd_deps)
+    p = sub.add_parser('doubles'); common(p); p.add_argument('--limit', type=float, default=5.0, help="percent of a side's instructions: over it, exit 1"); p.set_defaults(fn=cmd_doubles)
     p = sub.add_parser('auto'); common(p); p.set_defaults(fn=cmd_auto)
     p = sub.add_parser('search')
     p.add_argument('--cmd', required=True, help='the command typed at the prompt, after the switches')

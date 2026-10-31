@@ -147,6 +147,9 @@ def run_locked(args, **kw):
     return p
 
 
+PASS_MODEL = ''   # --calibrated: rvc_cpu's --pass-model from tools/card_model.json (tools/calibrate.py)
+
+
 def run(name, g, image, log, calls, salt, show, profile=None, plain=False, guest=()):
     exe = os.path.join(ROOT, 'bin', 'rvc_cpu.exe')
     if os.path.exists(log):
@@ -155,6 +158,8 @@ def run(name, g, image, log, calls, salt, show, profile=None, plain=False, guest
             '--send', (f': {salt}; ' if salt else '') + ''.join(f'export {v}; ' for v in guest) + g['cmd'] + '; ' + DONE + '\\n', '--until', g.get('until', 'LX-DONE'), '--count-from', g['mark']] + g.get('more', [])
     if image:
         args += ['--image', image]
+    if PASS_MODEL:
+        args += ['--pass-model', PASS_MODEL]
     if profile:   # (fine samples change the timing: a profile's counts are not the baseline's)
         args += ['--pc-log', profile, '--pc-from', g['mark'], '--ticks', '256', '--pass-ms', '0.0078']
     env = dict(os.environ)
@@ -184,8 +189,11 @@ def run(name, g, image, log, calls, salt, show, profile=None, plain=False, guest
     after = text[text.find(g['mark']):]
     r = dict(game=name, frames=frames, core0=c0 / frames, all=allc / frames, factor=allc / c0, workers=ran - 1,
              busiest=busiest / frames, seconds=secs, wall=wall, passes=passes / frames, fps=game_fps(g, after, frames, secs))
+    lists = re.search(r'of guest time, (\d+) GPU lists', err)
+    if lists:
+        r.update(lists=int(lists[1]) / frames, passes_total=passes)
     extra = g['extra'](after) if 'extra' in g else ''
-    s = re.search(r'\[cpu\] stops: .*; from the mark (\d+), (\d+), (\d+)', err)
+    s = re.search(r'\[cpu\] stops:.*; from the mark (\d+), (\d+), (\d+)', err)
     if s:   # (workers' faults from the mark, those on a clear accessed or written bit, core 0's on one)
         r.update(stops=int(s[1]), ad_stops=int(s[2]), ad_core0=int(s[3]))
         extra = (extra + '; ' if extra else '') + f"workers stopped {s[1]} times, {s[2]} on a page's written bit (core 0 {s[3]})"
@@ -303,9 +311,14 @@ def main():
     ap.add_argument('--card', action='store_true', help='on the graphics card in real time, through tools/gpu_queue.ps1')
     ap.add_argument('--limit', type=int, default=240, help='with --card: seconds a run may take at most')
     ap.add_argument('--rvc', default='experiments/rvc_opt', help='with --card: the processor folder (e.g. a copy of experiments/rvc_lean)')
+    ap.add_argument('--calibrated', action='store_true', help="rvc_cpu's clock as a card's: tools/card_model.json (tools/calibrate.py)")
     a = ap.parse_args()
     if a.card:
         return card_main(a)
+    if a.calibrated:
+        import json
+        global PASS_MODEL
+        PASS_MODEL = ','.join(f'{v:.6f}' for v in json.load(open(os.path.join(ROOT, 'tools', 'card_model.json')))['model'])
     image = a.image[-1] if a.image else None
     names = list(GAMES) if a.game == 'all' else [a.game]
     os.makedirs(os.path.join(ROOT, 'build', 'game_par'), exist_ok=True)

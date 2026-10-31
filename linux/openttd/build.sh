@@ -69,6 +69,7 @@ fi
 
 INC="-I$MW/src/include -I$REPO/linux/userland -idirafter $REPO/programs/linux/include"
 ottd-cc -O2 -w $INC -c "$REPO/programs/linux/gles.c" -o "$DEPS/gles.o"
+ottd-cc -O2 -w $INC -I"$REPO/programs/linux" -c "$HERE/shaderemu_fps.c" -o "$DEPS/shaderemu_fps.o"
 # the worker cores' library (viewports are blitted in bands): a variable a section on 16 bytes
 for m in mcw mcwx; do
     ottd-cc -O2 -w -fno-common -fdata-sections -I"$REPO/programs/mc" -c "$REPO/programs/mc/$m.c" -o "$DEPS/$m.o"
@@ -148,7 +149,7 @@ cmake -S "$SRC" -B "$BUILD" -DCMAKE_TOOLCHAIN_FILE="$WORK/src/openttd-toolchain.
     -DSHADEREMU_INCLUDES="$MW/src/include;$REPO/linux/userland;$REPO/programs/linux/include;$REPO/programs/mc" \
     -DCMAKE_CXX_COMPILER_LAUNCHER="$WORK/bin/ottd-align16" -DCMAKE_C_COMPILER_LAUNCHER="$WORK/bin/ottd-align16" \
     -DCMAKE_CXX_FLAGS="$OPT" -DCMAKE_EXE_LINKER_FLAGS="$GCOV" \
-    -DSHADEREMU_LIBS="$DEPS/gles.o;$DEPS/mcw.o;$DEPS/mcwx.o;$DEPS/zz_pad_large.o;$DEPS/zz_pad_small.o;$MW/src/lib/libnano-X.a$WRAP" > "$BUILD.configure.log" 2>&1 || { tail -30 "$BUILD.configure.log"; exit 1; }
+    -DSHADEREMU_LIBS="$DEPS/shaderemu_fps.o;$DEPS/gles.o;$DEPS/mcw.o;$DEPS/mcwx.o;$DEPS/zz_pad_large.o;$DEPS/zz_pad_small.o;$MW/src/lib/libnano-X.a$WRAP" > "$BUILD.configure.log" 2>&1 || { tail -30 "$BUILD.configure.log"; exit 1; }
 step "compile"
 cmake --build "$BUILD" -j"$(nproc)" --target openttd > "$BUILD.log" 2>&1 || { grep -E "error|Error" "$BUILD.log" | head -40; exit 1; }
 step "install"

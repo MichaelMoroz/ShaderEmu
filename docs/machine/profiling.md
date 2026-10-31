@@ -109,6 +109,24 @@ many small library calls, stdio a character at a time, allocation in a loop, `pr
 path, busybox's and zlib's inflate, and loops that store every trip. Add one whenever a
 profile shows a slow thing that has a known better form.
 
+## Soft doubles
+
+`python tools/test_all.py --doubles` runs `game_par.py`'s workloads profiled, one at a time on one thread, and each
+game over its limit (`DOUBLES` in `test_all.py`, each a little over what it measured) is a FAIL with its callers. It
+stops before a minute: run it again to go on (`doubles.json` in its log folder). On 31 October 2026: Half-Life's fight
+5.4% of core 0 (`CL_ComputePlayerOrigin`, `CL_RunUsercmd`), ClassiCube 1.9%, the rest 0.0%. Not in it: OpenTTD
+and the two Command & Conquer games, whose unstripped programs and workloads it does not name yet.
+
+The machine has float instructions and no double ones, so a double is a call: some 80 to 100 instructions a sum
+or a product, against one for a float. `python tools/prof.py doubles OUT --find NAME [--limit PERCENT]` says what
+share of each side's instructions went to those routines (`SOFT_DOUBLE` in `prof.py`) and who called them, and
+exits 1 over the limit (5% by default), and 2 when no ELF was placed, since nothing could be counted then. On 31
+October 2026: QuickJS's loop of doubles 39.3% (its numbers are doubles), Half-Life's `hldemo1` load and first
+seconds 4.6% (`Mod_PointVecsProduct`, `atof`), OpenTTD's play with its frame rate window open 1.2%, Quake's
+timedemo and Doom's 0%. The frame rate window was the slow form it is there to find: every 100 ms 512 sums of
+doubles for each element, a million instructions, which held the game's tick (`GetAverageDurationMilliseconds`,
+now summed in whole numbers).
+
 ## Searching a layout
 
 `search` runs a command at every combination of its switches (`NAME=a,b,c` or `NAME=lo..hi:step`),

@@ -207,9 +207,9 @@ public static partial class ShaderEmuBuilder
 
     // A warning over the storage sign (or the power sign), in their leaning plane and as wide.
     public const string PowerWarningShort =
-        "On Windows with an AMD graphics card, powering on will crash your game: the machine is one extremely " +
-        "complex shader, too much for some drivers' compilers. Other cards have problems at times too, and Intel " +
-        "and others are untested. Every Nvidia card works so far, and AMD on Linux with Mesa. I hope to fix the crashes.";
+        "On Windows with an AMD graphics card, powering on used to crash your game. This may now be fixed, but it has " +
+        "run on few AMD cards yet, so it may still crash. Other cards have problems at times too, and Intel and " +
+        "others are untested. Every Nvidia card works so far, and AMD on Linux with Mesa.";
 
     static void WarningSign(Transform computer)
     {

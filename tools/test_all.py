@@ -6,6 +6,7 @@ any failure.
     python tools/test_all.py games doom-1 ...   # cases by name or tag (machine, games, desktop, media, long, ...)
     python tools/test_all.py --long             # the default set and the long cases
     python tools/test_all.py --races            # RVC_RACES on every case: 0 undone (and RVC_RACES_NEAR=4's count said)
+    python tools/test_all.py --doubles          # each game's share in soft doubles under its limit (run again to go on)
     python tools/test_all.py --image DIR --jobs 8 --list
 
 A case is the line typed at the guest's shell, what ends it, and what its console must say:
@@ -673,7 +674,10 @@ def main():
                     help='a case in calls of --section-secs: run again to go on from its snapshot (each call under a minute)')
     ap.add_argument('--section-secs', type=float, default=40, help="a section's seconds (default 40)")
     ap.add_argument('--call-secs', type=float, default=52, help="with --sections, a call's seconds: no case starts or goes on past them")
+    ap.add_argument('--doubles', action='store_true', help='each game under its limit of soft doubles, one at a time; run again to go on')
     a = ap.parse_args()
+    if a.doubles:
+        return doubles_round(a)
     done_before = {}
     if a.select:
         a.run = [c for c in CASES if c['name'] in a.select or c['tags'] & set(a.select)]
@@ -766,6 +770,61 @@ def main():
     print(f'{len(a.run) - len(failed) - len(parts)} of {len(a.run)} passed in {time.time() - t0:.0f} s' + (f'; failed: {" ".join(failed)}' if failed else '') +
           (f'; {len(parts)} to go on (run again): {" ".join(parts)}' if parts else '') + f' (consoles in {a.logs})')
     return 1 if failed else 0
+
+
+# --doubles: each game's share of its instructions in soft doubles (docs/machine/profiling.md, "Soft doubles"), over its
+# limit a FAIL. game_par.py's workloads, profiled, one at a time on one thread; each limit a little over what it measured.
+DOUBLES = {'doom': ('doom', 1.0), 'quake-timedemo': ('quake', 1.0), 'halflife': ('halflife', 6.0), 'nes': ('nes', 1.0),
+           'classicube': ('classicube', 3.0), 'quake3': ('quake3', 3.0), 'nxphys': ('nxphys', 1.0)}
+
+
+def doubles_round(a):
+    """Stops before --call-secs and goes on from there when run again (doubles.json); exit 1 when any is over."""
+    sys.path.insert(0, os.path.join(ROOT, 'tools'))
+    import game_par
+    os.makedirs(a.logs, exist_ok=True)
+    state_file, t0 = os.path.join(a.logs, 'doubles.json'), time.time()
+    try:
+        state = json.load(open(state_file))
+    except (OSError, ValueError):
+        state = {}
+    prof = os.path.join(ROOT, 'tools', 'prof.py')
+    for name, (elf, limit) in DOUBLES.items():
+        if name in state:
+            continue
+        left = a.call_secs - (time.time() - t0)
+        if left < 20:
+            break
+        g = dict(game_par.GAMES[name], **game_par.GAMES[name].get('cpu', {}))
+        out = os.path.join(a.logs, 'doubles_' + name)
+        send = g['cmd'] + '; ' + game_par.DONE + '\\n'
+        args = ['--image', a.image, '--quiet', '--expect', '/ # ', '--send', send, '--count-from', g['mark'], '--until', g.get('until', 'LX-DONE'),
+                '--wall', str(int(left - 12))] + list(g.get('more', []))
+        env = dict(os.environ, **g.get('env', {}))
+        begun = time.time()
+        r = subprocess.run([sys.executable, prof, 'run', out, '--'] + args, cwd=ROOT, env=env, capture_output=True, text=True, errors='replace')
+        if re.search(r'exit [1-9]', r.stdout + r.stderr):   # (the wall came first: too little of it to judge; the next call has the whole of its time)
+            if not state and left >= a.call_secs - 1:
+                state[name] = dict(ok=False, say='never reached its end in a whole call')
+                print(f'FAIL doubles {name:21} {time.time() - begun:5.0f} s  never reached its end in a whole call', flush=True)
+                continue
+            break
+        r = subprocess.run([sys.executable, prof, 'doubles', out, '--find', elf, '--limit', str(limit)], cwd=ROOT, capture_output=True, text=True, errors='replace')
+        said = re.search(r'SOFT DOUBLES: .*', r.stdout)
+        ok = r.returncode == 0
+        top = re.findall(r'^\s+[\d.]+%\s+(\S+)$', r.stdout, re.M)[:2]
+        say = said[0] if said else ' '.join(r.stdout.strip().splitlines()[-1:])[:100]
+        state[name] = dict(ok=ok, say=say)
+        print(f"{'PASS' if ok else 'FAIL'} doubles {name:21} {time.time() - begun:5.0f} s  {say}" + ('' if ok else '  callers: ' + ' '.join(top)), flush=True)
+        json.dump(state, open(state_file, 'w'), indent=0)
+    json.dump(state, open(state_file, 'w'), indent=0)
+    to_go = [n for n in DOUBLES if n not in state]
+    bad = [n for n, s in state.items() if not s['ok']]
+    print(f'doubles: {len(state) - len(bad)} of {len(DOUBLES)} under their limits' + (f'; over: {" ".join(bad)}' if bad else '') +
+          (f'; {len(to_go)} to go (run again): {" ".join(to_go)}' if to_go else ''))
+    if not to_go:
+        os.remove(state_file)
+    return 1 if bad else 0
 
 
 if __name__ == '__main__':

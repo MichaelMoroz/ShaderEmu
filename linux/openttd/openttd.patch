@@ -541,10 +541,32 @@ index cf396be..4bf7ff0 100644
  		/* Print message to console */
  
 diff --git a/src/framerate_gui.cpp b/src/framerate_gui.cpp
-index c1de3c5..8f78196 100644
+index c1de3c5..0832bae 100644
 --- a/src/framerate_gui.cpp
 +++ b/src/framerate_gui.cpp
-@@ -233,8 +233,23 @@ namespace {
+@@ -134,7 +134,12 @@ namespace {
+ 			if (first_point < 0) first_point += NUM_FRAMERATE_POINTS;
+ 
+ 			/* Sum durations, skipping invalid points */
++#ifdef WITH_SHADEREMU
++			/* (in whole numbers: 512 sums of doubles a term of each element, ten times a second, were a million instructions) */
++			uint64_t sumtime = 0;
++#else
+ 			double sumtime = 0;
++#endif
+ 			for (int i = first_point; i < first_point + count; i++) {
+ 				auto d = this->durations[i % NUM_FRAMERATE_POINTS];
+ 				if (d != INVALID_DURATION) {
+@@ -146,7 +151,7 @@ namespace {
+ 			}
+ 
+ 			if (count == 0) return 0; // avoid div by zero
+-			return sumtime * 1000 / count / TIMESTAMP_PRECISION;
++			return static_cast<double>(sumtime) * 1000 / count / TIMESTAMP_PRECISION;
+ 		}
+ 
+ 		/** Get current rate of a performance element, based on approximately the past one second of data */
+@@ -233,8 +238,23 @@ namespace {
   * The basis of the timestamp is implementation defined, but the value should be steady,
   * so differences can be taken to reliably measure intervals.
   */
@@ -568,7 +590,7 @@ index c1de3c5..8f78196 100644
  	using namespace std::chrono;
  	return (TimingMeasurement)time_point_cast<microseconds>(high_resolution_clock::now()).time_since_epoch().count();
  }
-@@ -255,6 +270,9 @@ PerformanceMeasurer::PerformanceMeasurer(PerformanceElement elem)
+@@ -255,6 +275,9 @@ PerformanceMeasurer::PerformanceMeasurer(PerformanceElement elem)
  /** Finish a cycle of a measured element and store the measurement taken. */
  PerformanceMeasurer::~PerformanceMeasurer()
  {
@@ -578,7 +600,7 @@ index c1de3c5..8f78196 100644
  	if (this->elem == PFE_ALLSCRIPTS) {
  		/* Hack to not record scripts total when no scripts are active */
  		bool any_active = _pf_data[PFE_GAMESCRIPT].num_valid > 0;
-@@ -290,6 +308,9 @@ void PerformanceMeasurer::SetExpectedRate(double rate)
+@@ -290,6 +313,9 @@ void PerformanceMeasurer::SetExpectedRate(double rate)
  /** Mark a performance element as not currently in use. */
  /* static */ void PerformanceMeasurer::SetInactive(PerformanceElement elem)
  {
@@ -588,7 +610,7 @@ index c1de3c5..8f78196 100644
  	_pf_data[elem].num_valid = 0;
  	_pf_data[elem].next_index = 0;
  	_pf_data[elem].prev_index = 0;
-@@ -301,6 +322,9 @@ void PerformanceMeasurer::SetExpectedRate(double rate)
+@@ -301,6 +327,9 @@ void PerformanceMeasurer::SetExpectedRate(double rate)
   */
  /* static */ void PerformanceMeasurer::Paused(PerformanceElement elem)
  {
@@ -598,7 +620,7 @@ index c1de3c5..8f78196 100644
  	PerformanceMeasurer::SetInactive(elem);
  	_pf_data[elem].AddPause(GetPerformanceTimer());
  }
-@@ -321,6 +345,9 @@ PerformanceAccumulator::PerformanceAccumulator(PerformanceElement elem)
+@@ -321,6 +350,9 @@ PerformanceAccumulator::PerformanceAccumulator(PerformanceElement elem)
  /** Finish and add one block of the accumulating value. */
  PerformanceAccumulator::~PerformanceAccumulator()
  {
@@ -608,7 +630,7 @@ index c1de3c5..8f78196 100644
  	_pf_data[this->elem].AddAccumulate(GetPerformanceTimer() - this->start_time);
  }
  
-@@ -331,6 +358,9 @@ PerformanceAccumulator::~PerformanceAccumulator()
+@@ -331,6 +363,9 @@ PerformanceAccumulator::~PerformanceAccumulator()
   */
  void PerformanceAccumulator::Reset(PerformanceElement elem)
  {
@@ -618,6 +640,19 @@ index c1de3c5..8f78196 100644
  	_pf_data[elem].BeginAccumulate(GetPerformanceTimer());
  }
  
+@@ -457,7 +492,12 @@ struct FramerateWindow : Window {
+ 	}
+ 
+ 	/** Update the window on a regular interval. */
++#ifdef WITH_SHADEREMU
++	/* (once a second: what it adds up and draws would otherwise hold the game's tick most of the time) */
++	const IntervalTimer<TimerWindow> update_interval = {std::chrono::milliseconds(1000), [this](auto) {
++#else
+ 	const IntervalTimer<TimerWindow> update_interval = {std::chrono::milliseconds(100), [this](auto) {
++#endif
+ 		this->UpdateData();
+ 		this->SetDirty();
+ 	}};
 diff --git a/src/gfx.cpp b/src/gfx.cpp
 index 2cae30c..675a196 100644
 --- a/src/gfx.cpp

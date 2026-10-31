@@ -768,6 +768,8 @@ static void PlayStep()
 		/* OPENTTD_PLAY_JUMP=1: a scroll goes the whole way at once, so that a picture's view is its number's
 		 * whatever the speed (two ways of drawing compared by their sums) */
 		if (getenv("OPENTTD_PLAY_JUMP") != nullptr) _settings_client.gui.smooth_scroll = false;
+		/* OPENTTD_PLAY_FRAMERATE=1: the frame rate window open through the play, to weigh what it costs */
+		if (getenv("OPENTTD_PLAY_FRAMERATE") != nullptr) ShowFramerateWindow();
 	}
 	static const bool short_play = getenv("OPENTTD_PLAY_SHORT") != nullptr;
 	static const char *play_part = getenv("OPENTTD_PLAY_PART");

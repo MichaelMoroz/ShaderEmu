@@ -273,13 +273,13 @@ public class EmuMachine : UdonSharpBehaviour
 
     // Shown wherever the machine is about to be powered on (the console, the panel), 76 columns a line.
     public const string PowerWarning =
-        "WARNING: on Windows with an AMD graphics card, powering on will crash\r\n" +
-        "your game. The machine is one extremely complex shader, and some drivers'\r\n" +
-        "shader compilers cannot cope with it. Other cards have problems at times\r\n" +
-        "too: the machine's kernel can panic, and its GPU's shaders can crash AMD\r\n" +
-        "cards elsewhere as well. Intel and other cards have not been tested. So far\r\n" +
-        "every Nvidia card works, and so do AMD cards on Linux with Mesa's drivers.\r\n" +
-        "I hope to fix the crashes in the future.\r\n";
+        "NOTE: on Windows with an AMD graphics card, powering on used to crash\r\n" +
+        "your game, and this may now be fixed: it has run on some AMD cards here,\r\n" +
+        "but not on many yet, so it may still crash. The machine is one extremely\r\n" +
+        "complex shader, and some drivers' shader compilers cannot cope with it.\r\n" +
+        "Other cards have problems at times too: the machine's kernel can panic.\r\n" +
+        "Intel and other cards have not been tested. So far every Nvidia card\r\n" +
+        "works, and so do AMD cards on Linux with Mesa's drivers.\r\n";
 
     private void Say(string text)
     {
