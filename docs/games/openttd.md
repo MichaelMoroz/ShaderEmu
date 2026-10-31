@@ -259,6 +259,40 @@ what the kept one does not cover is kept (`OPENTTD_KEEP_FLUSH=1`: always flushed
 from a vehicle's window over the main view lost the window's view where the two met, 67,557
 pixels at the windows' opening.
 
+## Windows
+
+An open window cost the game its tick: the tick waits while the first core works on a picture (`TwHold`), and every
+instruction of a window's paint is such work. The same view standing still (`OPENTTD_PLAY_PART=window`,
+`OPENTTD_PLAY_SCENE=none|one|many|vehicle`, `OPENTTD_PAUSE=1` for a paused one; `OPENTTD_PLAY_WHO=1` prints the paints by
+window class), calibrated (`rvc_cpu --pass-model`), means of rounds 2 to 6 at the 66 ms pace, so pictures a second say little
+here and game ticks a second say what is left:
+
+| Scene | Before: ticks/s, core 0 a picture | After | |
+|---|---|---|---|
+| no window | 5.73, 132k | 6.52, 123k | the status bar's and spilled paints |
+| the finances | 2.89, 218k | 6.03, 138k | |
+| finances, station list, a station, towns | 2.23, 262k | 5.23, 138k | |
+| a train's window following it | 4.83, 169k | 5.82, 154k | |
+| the same, paused | no ticks, 48k | no ticks, 49k | |
+
+What it was: none of the suspects of area. A window adds few lists (a list is 0.57 ms, and the fewer main-view pieces under a
+window pay for them) and a view cut round it costs little. It was the strings: formatting and laying out a text is thousands of
+instructions, 120 thousand a paint of the finances, whose money changes at every tick of any vehicle.
+
+- A block of the dirty grid says who marked it: `DIRTY_VIEW` a viewport (`AddDirtyView`, from `MarkViewportDirty`), else
+  anything. A rectangle of `DIRTY_VIEW` blocks draws only the windows with a viewport, and of those the viewport's widget
+  alone, no `OnPaint` and no other widget (`view_alone` in `DrawOverlappedWindow`): a vehicle passing beside a window, or by the
+  64 pixels of a block under its edge, painted all of the window's texts in that rectangle, and a window's picture stays as it
+  is under the view's change, on the GPU and in the 8-bit picture. Rectangles are made of blocks of one kind.
+- What the tick says of a window's widgets (its deferred tasks, `TwDrain`, and the company's finances, `_se_tick_marks`) goes
+  to a second grid (`AddDirtyLater`), joined to the dirty blocks at most every `OPENTTD_WINDOW_MS` (1,000; 0 at once), and at 16
+  times what the last such round took (`SeDirtyLaterDrawn`: windows dear to draw take some 6% of the time at most). With it at
+  4,000 the finances are as no window. A window that comes, goes or changes its size is drawn at once (`Window::Close`,
+  `ReInit`, `FindWindowPlacementAndResize`), and all that a click or a key marks; `CheckPicture` joins them first.
+- A vehicle's view (`NWidgetDisplayFlag::NoTransparency`) flushed the kept parts twice at each paint for a transparency that is the same
+  unless something transparent is set: not any more then.
+- A number's digits are made in 32 bits once they fit (`FormatNumber`: twenty 64-bit divisions and remainders were most of it).
+
 ## The tick in slices
 
 A game tick of `busy.sav` is 1.2 to 1.7 million instructions of the first core, most of a second

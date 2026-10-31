@@ -552,10 +552,12 @@ void TwAfterFlush()
 /** What the tick left while it ran, made now that it waits. */
 static void TwDrain()
 {
+	_se_tick_marks = true; /* (what the tick says of a window's widgets is drawn at most every OPENTTD_WINDOW_MS) */
 	for (TickTask *t : _tw_tasks) {
 		t->Run();
 		delete t;
 	}
+	_se_tick_marks = false;
 	_tw_tasks.clear();
 	TwAfterFlush();
 	VehiclesSync(true);

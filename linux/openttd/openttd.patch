@@ -359,7 +359,7 @@ index ecbaba2..6e9f236 100644
  	static int _counter;
  };
 diff --git a/src/company_cmd.cpp b/src/company_cmd.cpp
-index 501cee2..f6b1e1f 100644
+index 501cee2..45b8f9d 100644
 --- a/src/company_cmd.cpp
 +++ b/src/company_cmd.cpp
 @@ -47,6 +47,9 @@
@@ -382,7 +382,7 @@ index 501cee2..f6b1e1f 100644
  	if (CleaningPool()) return;
  
  	CloseCompanyWindows(this->index);
-@@ -212,7 +218,12 @@ void InvalidateCompanyWindows(const Company *company)
+@@ -212,7 +218,15 @@ void InvalidateCompanyWindows(const Company *company)
  /**
   * Refresh all company finance windows previously marked dirty.
   */
@@ -392,10 +392,13 @@ index 501cee2..f6b1e1f 100644
 +#else
  static const IntervalTimer<TimerWindow> invalidate_company_windows_interval(std::chrono::milliseconds(1), [](auto) {
 +#endif
++#ifdef WITH_SHADEREMU
++	AutoRestoreBackup later_backup(_se_tick_marks, true);
++#endif
  	for (CompanyID cid : _dirty_company_finances) {
  		if (cid == _local_company) SetWindowWidgetDirty(WC_STATUS_BAR, 0, WID_S_RIGHT);
  		Window *w = FindWindowById(WC_FINANCES, cid);
-@@ -226,7 +237,12 @@ static const IntervalTimer<TimerWindow> invalidate_company_windows_interval(std:
+@@ -226,7 +240,12 @@ static const IntervalTimer<TimerWindow> invalidate_company_windows_interval(std:
  		SetWindowWidgetDirty(WC_COMPANY, cid, WID_C_DESC_COMPANY_VALUE);
  	}
  	_dirty_company_finances.Reset();
@@ -654,10 +657,20 @@ index c1de3c5..0832bae 100644
  		this->SetDirty();
  	}};
 diff --git a/src/gfx.cpp b/src/gfx.cpp
-index 2cae30c..675a196 100644
+index 2cae30c..c2c9f1e 100644
 --- a/src/gfx.cpp
 +++ b/src/gfx.cpp
-@@ -51,7 +51,12 @@ PauseModes _pause_mode;
+@@ -29,6 +29,9 @@
+ #include "table/sprites.h"
+ #include "table/control_codes.h"
+ 
++#ifdef WITH_SHADEREMU
++#include "video/shaderemu_gpu.h"
++#endif
+ #include "safeguards.h"
+ 
+ uint8_t _dirkeys;        ///< 1 = left, 2 = up, 4 = right, 8 = down
+@@ -51,7 +54,12 @@ PauseModes _pause_mode;
  GameSessionStats _game_session_stats; ///< Statistics about the current session.
  
  static uint8_t _stringwidth_table[FS_END][224]; ///< Cache containing width of often used characters. @see GetCharacterWidth()
@@ -670,7 +683,7 @@ index 2cae30c..675a196 100644
  
  static void GfxMainBlitterViewport(const Sprite *sprite, int x, int y, BlitterMode mode, const SubSprite *sub = nullptr, SpriteID sprite_id = SPR_CURSOR_MOUSE);
  static void GfxMainBlitter(const Sprite *sprite, int x, int y, BlitterMode mode, const SubSprite *sub = nullptr, SpriteID sprite_id = SPR_CURSOR_MOUSE, ZoomLevel zoom = ZoomLevel::Min);
-@@ -71,8 +76,13 @@ int _gui_scale_cfg;                         ///< GUI scale in config.
+@@ -71,8 +79,13 @@ int _gui_scale_cfg;                         ///< GUI scale in config.
   * @ingroup dirty
   */
  static Rect _invalid_rect;
@@ -684,7 +697,21 @@ index 2cae30c..675a196 100644
  
  static const uint DIRTY_BLOCK_HEIGHT   = 8;
  static const uint DIRTY_BLOCK_WIDTH    = 64;
-@@ -88,6 +98,10 @@ void GfxScroll(int left, int top, int width, int height, int xo, int yo)
+@@ -80,6 +93,13 @@ static const uint DIRTY_BLOCK_WIDTH    = 64;
+ static size_t _dirty_blocks_per_row = 0;
+ static size_t _dirty_blocks_per_column = 0;
+ static std::vector<uint8_t> _dirty_blocks;
++#ifdef WITH_SHADEREMU
++static constexpr uint8_t DIRTY_VIEW = 1; ///< a block's mark: only what a viewport shows changed, the windows over it are as they were
++static constexpr uint8_t DIRTY_ALL = 0xFF;
++static std::vector<uint8_t> _dirty_later; ///< a window's widgets the game's tick changed: marked at most every OPENTTD_WINDOW_MS
++bool _se_tick_marks; ///< what marks a window now comes from the game's tick (docs/games/openttd.md, "Windows")
++bool _se_views_only; ///< the rectangle being drawn again is marked DIRTY_VIEW: only windows with a viewport are drawn in it
++#endif
+ extern uint _dirty_block_colour;
+ 
+ void GfxScroll(int left, int top, int width, int height, int xo, int yo)
+@@ -88,6 +108,10 @@ void GfxScroll(int left, int top, int width, int height, int xo, int yo)
  
  	if (xo == 0 && yo == 0) return;
  
@@ -695,7 +722,7 @@ index 2cae30c..675a196 100644
  	if (_cursor.visible) UndrawMouseCursor();
  
  	if (_networking) NetworkUndrawChatMessage();
-@@ -1241,6 +1255,9 @@ std::unique_ptr<uint32_t[]> DrawSpriteToRgbaBuffer(SpriteID spriteId, ZoomLevel
+@@ -1241,6 +1265,9 @@ std::unique_ptr<uint32_t[]> DrawSpriteToRgbaBuffer(SpriteID spriteId, ZoomLevel
  
  static void GfxMainBlitterViewport(const Sprite *sprite, int x, int y, BlitterMode mode, const SubSprite *sub, SpriteID sprite_id)
  {
@@ -705,7 +732,17 @@ index 2cae30c..675a196 100644
  	GfxBlitter<ZOOM_BASE, false>(sprite, x, y, mode, sub, sprite_id, _cur_dpi->zoom);
  }
  
-@@ -1337,9 +1354,15 @@ void UndrawMouseCursor()
+@@ -1320,6 +1347,9 @@ void ScreenSizeChanged()
+ 	_dirty_blocks_per_row = CeilDiv(_screen.width, DIRTY_BLOCK_WIDTH);
+ 	_dirty_blocks_per_column = CeilDiv(_screen.height, DIRTY_BLOCK_HEIGHT);
+ 	_dirty_blocks.resize(_dirty_blocks_per_column * _dirty_blocks_per_row);
++#ifdef WITH_SHADEREMU
++	_dirty_later.assign(_dirty_blocks.size(), 0);
++#endif
+ 
+ 	/* check the dirty rect */
+ 	if (_invalid_rect.right >= _screen.width) _invalid_rect.right = _screen.width;
+@@ -1337,9 +1367,15 @@ void UndrawMouseCursor()
  {
  	/* Don't undraw mouse cursor if it is handled by the video driver. */
  	if (VideoDriver::GetInstance()->UseSystemCursor()) return;
@@ -721,7 +758,7 @@ index 2cae30c..675a196 100644
  
  	if (_cursor.visible) {
  		Blitter *blitter = BlitterFactory::GetCurrentBlitter();
-@@ -1353,6 +1376,9 @@ void DrawMouseCursor()
+@@ -1353,6 +1389,9 @@ void DrawMouseCursor()
  {
  	/* Don't draw mouse cursor if it is handled by the video driver. */
  	if (VideoDriver::GetInstance()->UseSystemCursor()) return;
@@ -731,7 +768,7 @@ index 2cae30c..675a196 100644
  
  	/* Don't draw the mouse cursor if the screen is not ready */
  	if (_screen.dst_ptr == nullptr) return;
-@@ -1361,6 +1387,9 @@ void DrawMouseCursor()
+@@ -1361,6 +1400,9 @@ void DrawMouseCursor()
  
  	/* Redraw mouse cursor but only when it's inside the window */
  	if (!_cursor.in_window) return;
@@ -741,7 +778,18 @@ index 2cae30c..675a196 100644
  
  	/* Don't draw the mouse cursor if it's already drawn */
  	if (_cursor.visible) {
-@@ -1449,8 +1478,22 @@ void RedrawScreenRect(int left, int top, int right, int bottom)
+@@ -1437,6 +1479,10 @@ void RedrawScreenRect(int left, int top, int right, int bottom)
+ 
+ 	if (_networking) NetworkUndrawChatMessage();
+ 
++#ifdef WITH_SHADEREMU
++	_se_gpu_counts.rects++;
++	_se_gpu_counts.pixels += (right - left) * (bottom - top);
++#endif
+ 	DrawOverlappedWindowForAll(left, top, right, bottom);
+ 
+ 	VideoDriver::GetInstance()->MakeDirty(left, top, right - left, bottom - top);
+@@ -1449,15 +1495,36 @@ void RedrawScreenRect(int left, int top, int right, int bottom)
   *
   * @ingroup dirty
   */
@@ -753,18 +801,51 @@ index 2cae30c..675a196 100644
 +};
 +#endif
 +
++#ifdef WITH_SHADEREMU
++static void SeDirtyLaterDrawn();
++#endif
++
  void DrawDirtyBlocks()
  {
+-	auto is_dirty = [](auto block) -> bool { return block != 0; };
 +#ifdef WITH_SHADEREMU
 +	extern void RefreshStaleTextEffects();
 +	RefreshStaleTextEffects();
 +	ShipAheadQuiet quiet;
 +	ViewportKeep keep;
 +#endif
- 	auto is_dirty = [](auto block) -> bool { return block != 0; };
++	SeDirtyLaterDue(false);
  	auto block = _dirty_blocks.begin();
  
-@@ -1515,6 +1558,9 @@ void DrawDirtyBlocks()
+ 	for (size_t x = 0; x < _dirty_blocks_per_row; ++x) {
+ 		auto last_of_column = block + _dirty_blocks_per_column;
+ 		for (size_t y = 0; y < _dirty_blocks_per_column; ++y, ++block) {
+-			if (!is_dirty(*block)) continue;
++			if (*block == 0) continue;
++			/* (blocks of one kind together: a rectangle of DIRTY_VIEW leaves the windows without a view alone) */
++			const uint8_t kind = *block;
++			auto is_dirty = [kind](auto b) -> bool { return b == kind; };
+ 
+ 			/* First try coalescing downwards */
+ 			size_t height = std::find_if_not(block + 1, last_of_column, is_dirty) - block;
+@@ -1489,11 +1556,16 @@ void DrawDirtyBlocks()
+ 			bottom = std::min(_invalid_rect.bottom, bottom);
+ 
+ 			if (left < right && top < bottom) {
++				_se_views_only = kind == DIRTY_VIEW;
+ 				RedrawScreenRect(left, top, right, bottom);
++				_se_views_only = false;
+ 			}
+ 		}
+ 	}
+ 
++#ifdef WITH_SHADEREMU
++	SeDirtyLaterDrawn();
++#endif
+ 	++_dirty_block_colour;
+ 	_invalid_rect.left = _screen.width;
+ 	_invalid_rect.top = _screen.height;
+@@ -1515,6 +1587,9 @@ void DrawDirtyBlocks()
   */
  void AddDirtyBlock(int left, int top, int right, int bottom)
  {
@@ -774,7 +855,7 @@ index 2cae30c..675a196 100644
  	if (left < 0) left = 0;
  	if (top < 0) top = 0;
  	if (right > _screen.width) right = _screen.width;
-@@ -1534,6 +1580,19 @@ void AddDirtyBlock(int left, int top, int right, int bottom)
+@@ -1534,12 +1609,98 @@ void AddDirtyBlock(int left, int top, int right, int bottom)
  
  	assert(left < right && height > 0);
  
@@ -794,7 +875,86 @@ index 2cae30c..675a196 100644
  	for (; left < right; ++left) {
  		size_t offset = _dirty_blocks_per_column * left + top;
  		std::fill_n(_dirty_blocks.begin() + offset, height, 0xFF);
-@@ -1548,6 +1607,10 @@ void AddDirtyBlock(int left, int top, int right, int bottom)
+ 	}
+ }
+ 
++#ifdef WITH_SHADEREMU
++static bool _se_later_any;
++
++static uint32_t _se_later_next; ///< when they are due next
++static uint32_t _se_later_from; ///< the start of the round that drew them, 0: none
++
++/** The blocks of what the tick changed in windows join the dirty ones when their time has come, or now. */
++void SeDirtyLaterDue(bool now)
++{
++	if (!_se_later_any) return;
++	const uint32_t t = VpTime();
++	if (!now && static_cast<int32_t>(t - _se_later_next) < 0) return;
++	_se_later_next = t;
++	_se_later_from = t;
++	_se_later_any = false;
++	for (size_t i = 0; i < _dirty_later.size(); i++) {
++		if (_dirty_later[i] != 0) _dirty_blocks[i] = DIRTY_ALL, _dirty_later[i] = 0;
++	}
++	_invalid_rect = { 0, 0, _screen.width, _screen.height };
++}
++
++/** A round of them is drawn: the next at OPENTTD_WINDOW_MS at least, and at 16 times what this one took (a few windows dear to draw, some 6% of the time at most). */
++static void SeDirtyLaterDrawn()
++{
++	if (_se_later_from == 0) return;
++	extern uint32_t SeWindowEvery();
++	static const uint32_t every = SeWindowEvery();
++	_se_later_next = _se_later_from + std::max(every, (VpTime() - _se_later_from) * 16);
++	_se_later_from = 0;
++}
++
++/** A window's widgets marked, by the tick: not at once. */
++void AddDirtyLater(int left, int top, int right, int bottom)
++{
++	if (left < 0) left = 0;
++	if (top < 0) top = 0;
++	if (right > _screen.width) right = _screen.width;
++	if (bottom > _screen.height) bottom = _screen.height;
++	if (left >= right || top >= bottom) return;
++	left /= DIRTY_BLOCK_WIDTH;
++	top /= DIRTY_BLOCK_HEIGHT;
++	right = CeilDiv(right, DIRTY_BLOCK_WIDTH);
++	const int height = CeilDiv(bottom, DIRTY_BLOCK_HEIGHT) - top;
++	for (; left < right; ++left) {
++		std::fill_n(_dirty_later.begin() + _dirty_blocks_per_column * left + top, height, uint8_t{1});
++	}
++	_se_later_any = true;
++}
++
++/** What a viewport shows changed in the rectangle: blocks marked already keep their mark. */
++void AddDirtyView(int left, int top, int right, int bottom)
++{
++	TICK_DEFER(AddDirtyView(left, top, right, bottom));
++	if (left < 0) left = 0;
++	if (top < 0) top = 0;
++	if (right > _screen.width) right = _screen.width;
++	if (bottom > _screen.height) bottom = _screen.height;
++	if (left >= right || top >= bottom) return;
++	_invalid_rect.left = std::min(_invalid_rect.left, left);
++	_invalid_rect.top = std::min(_invalid_rect.top, top);
++	_invalid_rect.right = std::max(_invalid_rect.right, right);
++	_invalid_rect.bottom = std::max(_invalid_rect.bottom, bottom);
++	left /= DIRTY_BLOCK_WIDTH;
++	top /= DIRTY_BLOCK_HEIGHT;
++	right = CeilDiv(right, DIRTY_BLOCK_WIDTH);
++	const int height = CeilDiv(bottom, DIRTY_BLOCK_HEIGHT) - top;
++	uint8_t *col = _dirty_blocks.data() + _dirty_blocks_per_column * left + top;
++	for (; left < right; ++left, col += _dirty_blocks_per_column) {
++		for (int i = 0; i < height; i++) col[i] |= DIRTY_VIEW;
++	}
++}
++#endif
++
+ /**
+  * This function mark the whole screen as dirty. This results in repainting
+  * the whole screen. Use this with care as this function will break the
+@@ -1548,6 +1709,10 @@ void AddDirtyBlock(int left, int top, int right, int bottom)
   */
  void MarkWholeScreenDirty()
  {
@@ -806,10 +966,10 @@ index 2cae30c..675a196 100644
  }
  
 diff --git a/src/gfx_func.h b/src/gfx_func.h
-index 4254611..e2208c9 100644
+index 4254611..fdf9131 100644
 --- a/src/gfx_func.h
 +++ b/src/gfx_func.h
-@@ -184,6 +184,122 @@ std::pair<uint8_t, uint8_t> GetBroadestDigit(FontSize size);
+@@ -184,6 +184,126 @@ std::pair<uint8_t, uint8_t> GetBroadestDigit(FontSize size);
  
  int GetCharacterHeight(FontSize size);
  
@@ -864,6 +1024,10 @@ index 4254611..e2208c9 100644
 +#define TICK_DEFER_THIS(call) do { if (TickOnWorker()) { TickDefer([=, this]() mutable { call; }); return; } } while (false)
 +/** Where the tick on its worker reaches what only the first core may use (OPENTTD_TRAPS=1 lists them at the end). */
 +void TickTrap(const void *caller);
++extern bool _se_tick_marks; ///< what marks a window now comes from the game's tick: drawn at most every OPENTTD_WINDOW_MS
++extern bool _se_views_only;
++void AddDirtyLater(int left, int top, int right, int bottom);
++void SeDirtyLaterDue(bool now);
 +#define TICK_TRAP() do { if (TickOnWorker()) TickTrap(__builtin_return_address(0)); } while (false)
 +void TickExclusive(); ///< on the tick's worker: no worker draws from here to the tick's next wait
 +extern void *_tw_dying; ///< a vehicle the tick deletes: its memory is freed by the first core, once out of the viewports
@@ -5327,7 +5491,7 @@ index d754b2f..993e323 100644
  			TriggerRoadStopAnimation(st, st->xy, StationAnimationTrigger::AcceptanceTick);
  			if (Station::IsExpected(st)) TriggerAirportAnimation(Station::From(st), AirportAnimationTrigger::AcceptanceTick);
 diff --git a/src/strings.cpp b/src/strings.cpp
-index 955b5bd..cfb71f1 100644
+index 955b5bd..6fd5d6a 100644
 --- a/src/strings.cpp
 +++ b/src/strings.cpp
 @@ -47,6 +47,9 @@
@@ -5350,6 +5514,35 @@ index 955b5bd..cfb71f1 100644
  	if (string == 0) {
  		GetStringWithArgs(builder, STR_UNDEFINED, args);
  		return;
+@@ -490,6 +496,28 @@ static void FormatNumber(StringBuilder &builder, int64_t number, std::string_vie
+ 		number = -number;
+ 	}
+ 
++#ifdef WITH_SHADEREMU
++	/* (the digits from the right, in 32 bits as soon as they fit: twenty 64-bit divisions and remainders were most of a number) */
++	{
++		uint64_t rest = number;
++		char digits[max_digits];
++		int at = max_digits;
++		while ((rest >> 32) != 0) {
++			digits[--at] = '0' + static_cast<char>(rest % 10);
++			rest /= 10;
++		}
++		uint32_t low = static_cast<uint32_t>(rest);
++		do {
++			digits[--at] = '0' + static_cast<char>(low % 10);
++			low /= 10;
++		} while (low != 0);
++		for (int i = at; i < max_digits; i++) {
++			builder.PutChar(digits[i]);
++			if ((i % 3) == thousands_offset && i < max_digits - 1) builder += separator;
++		}
++		return;
++	}
++#endif
+ 	uint64_t num = number;
+ 	uint64_t tot = 0;
+ 	for (int i = 0; i < max_digits; i++) {
 diff --git a/src/table/settings/gui_settings.ini b/src/table/settings/gui_settings.ini
 index 6989729..db7cd19 100644
 --- a/src/table/settings/gui_settings.ini
@@ -6636,7 +6829,7 @@ index 7aafcbd..2b5a339 100644
  };
  
 diff --git a/src/viewport.cpp b/src/viewport.cpp
-index 6427a14..8e9918d 100644
+index 6427a14..564e9a7 100644
 --- a/src/viewport.cpp
 +++ b/src/viewport.cpp
 @@ -99,6 +99,11 @@
@@ -7393,8 +7586,7 @@ index 6427a14..8e9918d 100644
 +				_vd.reach_culled_top = _vd.culled_top = _vd.culled_y = INT_MAX;
 +				_vd.reach_culled_left = _vd.culled_left[0] = _vd.culled_x[0] = INT_MAX;
 +				_vd.reach_culled_right = _vd.culled_left[1] = _vd.culled_x[1] = INT_MIN;
- 				_tile_type_procs[tile_type]->draw_tile_proc(&_cur_ti);
--				if (_cur_ti.tile != INVALID_TILE) DrawTileSelection(&_cur_ti);
++				_tile_type_procs[tile_type]->draw_tile_proc(&_cur_ti);
 +				_vd.count[0]++;
 +				_vd.count[1] += known != VP_REACH_UNKNOWN;
 +				_vd.count[3] += _vd.reach_incomplete;
@@ -7402,7 +7594,8 @@ index 6427a14..8e9918d 100644
 +					VpReachLearn(reach, _cur_ti.tile.base(), t0, p0, c0, viewport_y, tile_x);
 +				}
 +#else
-+				_tile_type_procs[tile_type]->draw_tile_proc(&_cur_ti);
+ 				_tile_type_procs[tile_type]->draw_tile_proc(&_cur_ti);
+-				if (_cur_ti.tile != INVALID_TILE) DrawTileSelection(&_cur_ti);
 +#endif
 +				if (any_selection && _cur_ti.tile != INVALID_TILE) DrawTileSelection(&_cur_ti);
  			}
@@ -8517,7 +8710,20 @@ index 6427a14..8e9918d 100644
  	/* Move never more than 16 tiles per 30ms. */
  	int max_scroll = Map::ScaleBySize1D(16 * PIXELS_PER_TILE * delta_ms / 30);
  
-@@ -2091,10 +3596,59 @@ static bool MarkViewportDirty(const Viewport &vp, int left, int top, int right,
+@@ -2072,7 +3577,12 @@ static bool MarkViewportDirty(const Viewport &vp, int left, int top, int right,
+ 
+ 	if (top >= vp.virtual_height) return false;
+ 
++#ifdef WITH_SHADEREMU
++	extern void AddDirtyView(int left, int top, int right, int bottom);
++	AddDirtyView(
++#else
+ 	AddDirtyBlock(
++#endif
+ 		UnScaleByZoomLower(left, vp.zoom) + vp.left,
+ 		UnScaleByZoomLower(top, vp.zoom) + vp.top,
+ 		UnScaleByZoom(right, vp.zoom) + vp.left + 1,
+@@ -2091,10 +3601,59 @@ static bool MarkViewportDirty(const Viewport &vp, int left, int top, int right,
   * @return true if at least one viewport has a dirty block
   * @ingroup dirty
   */
@@ -8577,7 +8783,7 @@ index 6427a14..8e9918d 100644
  	for (const Window *w : Window::Iterate()) {
  		if (w->viewport != nullptr) {
  			assert(w->viewport->width != 0);
-@@ -2127,6 +3681,10 @@ void ConstrainAllViewportsZoom()
+@@ -2127,6 +3686,10 @@ void ConstrainAllViewportsZoom()
   */
  void MarkTileDirtyByTile(TileIndex tile, int bridge_level_offset, int tile_height_override)
  {
@@ -8685,12 +8891,32 @@ index 3478370..b7869b2 100644
  	if (this->sign.kdtree_valid) _viewport_sign_kdtree.Remove(ViewportSignKdtreeItem::MakeWaypoint(this->index));
  
 diff --git a/src/widget.cpp b/src/widget.cpp
-index daf0172..9f144b4 100644
+index daf0172..1a64cdb 100644
 --- a/src/widget.cpp
 +++ b/src/widget.cpp
-@@ -2397,8 +2397,14 @@ void NWidgetViewport::Draw(const Window *w)
+@@ -950,6 +950,12 @@ void NWidgetBase::SetDirty(const Window *w) const
+ {
+ 	int abs_left = w->left + this->pos_x;
+ 	int abs_top = w->top + this->pos_y;
++#ifdef WITH_SHADEREMU
++	if (_se_tick_marks) {
++		AddDirtyLater(abs_left, abs_top, abs_left + this->current_x, abs_top + this->current_y);
++		return;
++	}
++#endif
+ 	AddDirtyBlock(abs_left, abs_top, abs_left + this->current_x, abs_top + this->current_y);
+ }
  
+@@ -2395,10 +2401,21 @@ void NWidgetViewport::Draw(const Window *w)
+ {
+ 	if (this->current_x == 0 || this->current_y == 0) return;
+ 
++#ifdef WITH_SHADEREMU
++	/* (nothing it takes away is set, as by default: no flush for a transparency that is the same) */
++	if (this->disp_flags.Test(NWidgetDisplayFlag::NoTransparency) && (_transparency_opt & ~((1 << TO_SIGNS) | (1 << TO_TEXT))) != 0) {
++#else
  	if (this->disp_flags.Test(NWidgetDisplayFlag::NoTransparency)) {
++#endif
  		TransparencyOptionBits to_backup = _transparency_opt;
 +#ifdef WITH_SHADEREMU
 +		ViewportFlush(); /* (parts kept are made with the transparency they were asked with) */
@@ -8703,7 +8929,7 @@ index daf0172..9f144b4 100644
  		_transparency_opt = to_backup;
  	} else {
  		w->DrawViewport();
-@@ -2406,6 +2412,9 @@ void NWidgetViewport::Draw(const Window *w)
+@@ -2406,6 +2423,9 @@ void NWidgetViewport::Draw(const Window *w)
  
  	/* Optionally shade the viewport. */
  	if (this->disp_flags.Any({NWidgetDisplayFlag::ShadeGrey, NWidgetDisplayFlag::ShadeDimmed})) {
@@ -8713,11 +8939,31 @@ index daf0172..9f144b4 100644
  		GfxFillRect(this->GetCurrentRect(), this->disp_flags.Test(NWidgetDisplayFlag::ShadeDimmed) ? PALETTE_TO_TRANSPARENT : PALETTE_NEWSPAPER, FILLRECT_RECOLOUR);
  	}
  
+@@ -2421,6 +2441,9 @@ void NWidgetViewport::Draw(const Window *w)
+ void NWidgetViewport::InitializeViewport(Window *w, std::variant<TileIndex, VehicleID> focus, ZoomLevel zoom)
+ {
+ 	InitializeWindowViewport(w, this->pos_x, this->pos_y, this->current_x, this->current_y, focus, zoom);
++#ifdef WITH_SHADEREMU
++	w->se_nvp = this;
++#endif
+ }
+ 
+ /**
 diff --git a/src/window.cpp b/src/window.cpp
-index ea6dc5b..fc453f8 100644
+index ea6dc5b..67b849e 100644
 --- a/src/window.cpp
 +++ b/src/window.cpp
-@@ -557,6 +557,9 @@ void Window::RaiseButtons(bool autoraise)
+@@ -42,6 +42,9 @@
+ 
+ #include "table/strings.h"
+ 
++#ifdef WITH_SHADEREMU
++#include "video/shaderemu_gpu.h"
++#endif
+ #include "safeguards.h"
+ 
+ /** Values for _settings_client.gui.auto_scrolling */
+@@ -557,6 +560,9 @@ void Window::RaiseButtons(bool autoraise)
   */
  void Window::SetWidgetDirty(WidgetID widget_index) const
  {
@@ -8727,17 +8973,85 @@ index ea6dc5b..fc453f8 100644
  	/* Sometimes this function is called before the window is even fully initialized */
  	auto it = this->widget_lookup.find(widget_index);
  	if (it == std::end(this->widget_lookup)) return;
-@@ -967,6 +970,9 @@ void DrawOverlappedWindowForAll(int left, int top, int right, int bottom)
+@@ -924,6 +930,18 @@ static void DrawOverlappedWindow(Window *w, int left, int top, int right, int bo
+ 		}
+ 	}
+ 
++#ifdef WITH_SHADEREMU
++	/* (only what the view shows changed here: its widget alone, none of the window's others or its OnPaint) */
++	const bool view_alone = _se_views_only && w->se_nvp != nullptr && _game_mode == GM_NORMAL && !w->flags.Test(WindowFlag::WhiteBorder);
++	if (view_alone) {
++		const Viewport &vp = *w->viewport;
++		left = std::max(left, vp.left);
++		top = std::max(top, vp.top);
++		right = std::min(right, vp.left + vp.width);
++		bottom = std::min(bottom, vp.top + vp.height);
++		if (left >= right || top >= bottom) return;
++	}
++#endif
+ 	/* Setup blitter, and dispatch a repaint event to window *wz */
+ 	DrawPixelInfo *dp = _cur_dpi;
+ 	dp->width = right - left;
+@@ -933,6 +951,14 @@ static void DrawOverlappedWindow(Window *w, int left, int top, int right, int bo
+ 	dp->pitch = _screen.pitch;
+ 	dp->dst_ptr = BlitterFactory::GetCurrentBlitter()->MoveTo(_screen.dst_ptr, left, top);
+ 	dp->zoom = ZoomLevel::Min;
++#ifdef WITH_SHADEREMU
++	_se_gpu_counts.paints++;
++	_se_paints_of[w->window_class & 255]++;
++	if (view_alone) {
++		w->se_nvp->Draw(w);
++		return;
++	}
++#endif
+ 	w->OnPaint();
+ }
+ 
+@@ -950,6 +976,9 @@ void DrawOverlappedWindowForAll(int left, int top, int right, int bottom)
+ 	AutoRestoreBackup dpi_backup(_cur_dpi, &bk);
+ 
+ 	for (Window *w : Window::IterateFromBack()) {
++#ifdef WITH_SHADEREMU
++		if (_se_views_only && w->viewport == nullptr) continue;
++#endif
+ 		if (MayBeShown(w) &&
+ 				right > w->left &&
+ 				bottom > w->top &&
+@@ -967,6 +996,13 @@ void DrawOverlappedWindowForAll(int left, int top, int right, int bottom)
   */
  void Window::SetDirty() const
  {
 +#ifdef WITH_SHADEREMU
 +	TICK_DEFER_THIS(this->SetDirty());
++	if (_se_tick_marks) {
++		AddDirtyLater(this->left, this->top, this->left + this->width, this->top + this->height);
++		return;
++	}
 +#endif
  	AddDirtyBlock(this->left, this->top, this->left + this->width, this->top + this->height);
  }
  
-@@ -1152,6 +1158,9 @@ Window::~Window()
+@@ -979,6 +1015,9 @@ void Window::SetDirty() const
+  */
+ void Window::ReInit(int rx, int ry, bool reposition)
+ {
++#ifdef WITH_SHADEREMU
++	AutoRestoreBackup at_once(_se_tick_marks, false); /* (a window that comes, goes or changes is drawn at once) */
++#endif
+ 	this->SetDirty(); // Mark whole current window as dirty.
+ 
+ 	/* Save current size. */
+@@ -1103,6 +1142,9 @@ void Window::CloseChildWindowById(WindowClass wc, WindowNumber number) const
+  */
+ void Window::Close([[maybe_unused]] int data)
+ {
++#ifdef WITH_SHADEREMU
++	AutoRestoreBackup at_once(_se_tick_marks, false); /* (a window that comes, goes or changes is drawn at once) */
++#endif
+ 	/* Don't close twice. */
+ 	if (*this->z_position == nullptr) return;
+ 
+@@ -1152,6 +1194,9 @@ Window::~Window()
   */
  Window *FindWindowById(WindowClass cls, WindowNumber number)
  {
@@ -8747,7 +9061,7 @@ index ea6dc5b..fc453f8 100644
  	for (Window *w : Window::Iterate()) {
  		if (w->window_class == cls && w->window_number == number) return w;
  	}
-@@ -1167,6 +1176,9 @@ Window *FindWindowById(WindowClass cls, WindowNumber number)
+@@ -1167,6 +1212,9 @@ Window *FindWindowById(WindowClass cls, WindowNumber number)
   */
  Window *FindWindowByClass(WindowClass cls)
  {
@@ -8757,7 +9071,7 @@ index ea6dc5b..fc453f8 100644
  	for (Window *w : Window::Iterate()) {
  		if (w->window_class == cls) return w;
  	}
-@@ -1194,6 +1206,9 @@ Window *GetMainWindow()
+@@ -1194,6 +1242,9 @@ Window *GetMainWindow()
   */
  void CloseWindowById(WindowClass cls, WindowNumber number, bool force, int data)
  {
@@ -8767,7 +9081,7 @@ index ea6dc5b..fc453f8 100644
  	Window *w = FindWindowById(cls, number);
  	if (w != nullptr && (force || !w->flags.Test(WindowFlag::Sticky))) {
  		w->Close(data);
-@@ -1206,6 +1221,9 @@ void CloseWindowById(WindowClass cls, WindowNumber number, bool force, int data)
+@@ -1206,6 +1257,9 @@ void CloseWindowById(WindowClass cls, WindowNumber number, bool force, int data)
   */
  void CloseWindowByClass(WindowClass cls, int data)
  {
@@ -8777,7 +9091,7 @@ index ea6dc5b..fc453f8 100644
  	/* Note: the container remains stable, even when deleting windows. */
  	for (Window *w : Window::Iterate()) {
  		if (w->window_class == cls) {
-@@ -1222,6 +1240,9 @@ void CloseWindowByClass(WindowClass cls, int data)
+@@ -1222,6 +1276,9 @@ void CloseWindowByClass(WindowClass cls, int data)
   */
  void CloseCompanyWindows(CompanyID id)
  {
@@ -8787,7 +9101,7 @@ index ea6dc5b..fc453f8 100644
  	/* Note: the container remains stable, even when deleting windows. */
  	for (Window *w : Window::Iterate()) {
  		if (w->owner == id) {
-@@ -1242,6 +1263,9 @@ void CloseCompanyWindows(CompanyID id)
+@@ -1242,6 +1299,9 @@ void CloseCompanyWindows(CompanyID id)
   */
  void ChangeWindowOwner(Owner old_owner, Owner new_owner)
  {
@@ -8797,7 +9111,17 @@ index ea6dc5b..fc453f8 100644
  	for (Window *w : Window::Iterate()) {
  		if (w->owner != old_owner) continue;
  
-@@ -3124,6 +3148,23 @@ static const IntervalTimer<TimerWindow> white_border_interval(std::chrono::milli
+@@ -1475,6 +1535,9 @@ void Window::InitializePositionSize(int x, int y, int sm_width, int sm_height)
+  */
+ void Window::FindWindowPlacementAndResize(int def_width, int def_height, bool allow_resize)
+ {
++#ifdef WITH_SHADEREMU
++	AutoRestoreBackup at_once(_se_tick_marks, false); /* (a window that comes, goes or changes is drawn at once) */
++#endif
+ 	if (allow_resize) {
+ 		def_width  = std::max(def_width,  this->width); // Don't allow default size to be smaller than smallest size
+ 		def_height = std::max(def_height, this->height);
+@@ -3124,6 +3187,23 @@ static const IntervalTimer<TimerWindow> white_border_interval(std::chrono::milli
  /**
   * Update the continuously changing contents of the windows, such as the viewports
   */
@@ -8821,7 +9145,7 @@ index ea6dc5b..fc453f8 100644
  void UpdateWindows()
  {
  	static auto last_time = std::chrono::steady_clock::now();
-@@ -3139,8 +3180,17 @@ void UpdateWindows()
+@@ -3139,8 +3219,17 @@ void UpdateWindows()
  
  	ProcessPendingPerformanceMeasurements();
  
@@ -8839,7 +9163,7 @@ index ea6dc5b..fc453f8 100644
  
  	/* Process invalidations before anything else. */
  	for (Window *w : Window::Iterate()) {
-@@ -3153,12 +3203,23 @@ void UpdateWindows()
+@@ -3153,12 +3242,23 @@ void UpdateWindows()
  	 * But still empty the invalidation queues above. */
  	if (_network_dedicated) return;
  
@@ -8863,7 +9187,7 @@ index ea6dc5b..fc453f8 100644
  	NetworkDrawChatMessage();
  	/* Redraw mouse cursor in case it was hidden */
  	DrawMouseCursor();
-@@ -3178,6 +3239,9 @@ void UpdateWindows()
+@@ -3178,6 +3278,9 @@ void UpdateWindows()
   */
  void SetWindowDirty(WindowClass cls, WindowNumber number)
  {
@@ -8873,7 +9197,7 @@ index ea6dc5b..fc453f8 100644
  	for (const Window *w : Window::Iterate()) {
  		if (w->window_class == cls && w->window_number == number) w->SetDirty();
  	}
-@@ -3191,6 +3255,9 @@ void SetWindowDirty(WindowClass cls, WindowNumber number)
+@@ -3191,6 +3294,9 @@ void SetWindowDirty(WindowClass cls, WindowNumber number)
   */
  void SetWindowWidgetDirty(WindowClass cls, WindowNumber number, WidgetID widget_index)
  {
@@ -8883,7 +9207,7 @@ index ea6dc5b..fc453f8 100644
  	for (const Window *w : Window::Iterate()) {
  		if (w->window_class == cls && w->window_number == number) {
  			w->SetWidgetDirty(widget_index);
-@@ -3204,6 +3271,9 @@ void SetWindowWidgetDirty(WindowClass cls, WindowNumber number, WidgetID widget_
+@@ -3204,6 +3310,9 @@ void SetWindowWidgetDirty(WindowClass cls, WindowNumber number, WidgetID widget_
   */
  void SetWindowClassesDirty(WindowClass cls)
  {
@@ -8893,7 +9217,7 @@ index ea6dc5b..fc453f8 100644
  	for (const Window *w : Window::Iterate()) {
  		if (w->window_class == cls) w->SetDirty();
  	}
-@@ -3236,6 +3306,9 @@ void Window::ProcessScheduledResize()
+@@ -3236,6 +3345,9 @@ void Window::ProcessScheduledResize()
   */
  void Window::InvalidateData(int data, bool gui_scope)
  {
@@ -8903,7 +9227,7 @@ index ea6dc5b..fc453f8 100644
  	this->SetDirty();
  	if (!gui_scope) {
  		/* Schedule GUI-scope invalidation for next redraw. */
-@@ -3296,6 +3369,9 @@ void Window::ProcessHighlightedInvalidations()
+@@ -3296,6 +3408,9 @@ void Window::ProcessHighlightedInvalidations()
   */
  void InvalidateWindowData(WindowClass cls, WindowNumber number, int data, bool gui_scope)
  {
@@ -8913,7 +9237,7 @@ index ea6dc5b..fc453f8 100644
  	for (Window *w : Window::Iterate()) {
  		if (w->window_class == cls && w->window_number == number) {
  			w->InvalidateData(data, gui_scope);
-@@ -3313,6 +3389,9 @@ void InvalidateWindowData(WindowClass cls, WindowNumber number, int data, bool g
+@@ -3313,6 +3428,9 @@ void InvalidateWindowData(WindowClass cls, WindowNumber number, int data, bool g
   */
  void InvalidateWindowClassesData(WindowClass cls, int data, bool gui_scope)
  {
@@ -8923,7 +9247,7 @@ index ea6dc5b..fc453f8 100644
  	for (Window *w : Window::Iterate()) {
  		if (w->window_class == cls) {
  			w->InvalidateData(data, gui_scope);
-@@ -3512,6 +3591,9 @@ int PositionNetworkChatWindow(Window *w)
+@@ -3512,6 +3630,9 @@ int PositionNetworkChatWindow(Window *w)
   */
  void ChangeVehicleViewports(VehicleID from_index, VehicleID to_index)
  {
@@ -8934,7 +9258,7 @@ index ea6dc5b..fc453f8 100644
  		if (w->viewport != nullptr && w->viewport->follow_vehicle == from_index) {
  			w->viewport->follow_vehicle = to_index;
 diff --git a/src/window_gui.h b/src/window_gui.h
-index 934df38..4eb38a6 100644
+index 934df38..a2ffdd7 100644
 --- a/src/window_gui.h
 +++ b/src/window_gui.h
 @@ -17,6 +17,9 @@
@@ -8947,7 +9271,17 @@ index 934df38..4eb38a6 100644
  
  /**
   * Flags to describe the look of the frame
-@@ -917,7 +920,11 @@ public:
+@@ -317,6 +320,9 @@ public:
+ 	Owner owner = INVALID_OWNER; ///< The owner of the content shown in this window. Company colour is acquired from this variable.
+ 
+ 	std::unique_ptr<ViewportData> viewport; ///< Pointer to viewport data, if present.
++#ifdef WITH_SHADEREMU
++	class NWidgetViewport *se_nvp = nullptr; ///< its widget: a rectangle only the view changed in draws only that
++#endif
+ 	const NWidgetCore *nested_focus = nullptr; ///< Currently focused nested widget, or \c nullptr if no nested widget has focus.
+ 	std::map<WidgetID, QueryString*> querystrings{}; ///< QueryString associated to WWT_EDITBOX widgets.
+ 	std::unique_ptr<NWidgetBase> nested_root{}; ///< Root of the nested tree.
+@@ -917,7 +923,11 @@ public:
  	 */
  	template <bool Tfront>
  	struct AllWindows {
