@@ -503,6 +503,12 @@ open_extra(int k)
 	int x, y;
 
 	if (extra[k]) {
+		GR_WINDOW_INFO info;
+
+		/* (its frame, if it was minimised: nothing else brings it back from this menu) */
+		GrGetWindowInfo(extra[k], &info);
+		if (info.parent && info.parent != GR_ROOT_WINDOW_ID)
+			GrMapWindow(info.parent);
 		raise_extras();
 		draw_extra(k);
 		return;

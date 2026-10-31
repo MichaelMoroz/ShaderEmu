@@ -28,10 +28,53 @@ index 6d41d5e..099d951 100644
          }
          loopCount++;
 diff --git a/packages/micropolis-engine/src/fileio.cpp b/packages/micropolis-engine/src/fileio.cpp
-index 30e91a0..1dab045 100644
+index 30e91a0..5f6a617 100644
 --- a/packages/micropolis-engine/src/fileio.cpp
 +++ b/packages/micropolis-engine/src/fileio.cpp
-@@ -471,8 +471,8 @@ bool Micropolis::saveFile(const std::string &filename)
+@@ -222,13 +222,11 @@ static bool save_short(short *buf, int len, FILE *f)
+ {
+     SWAP_SHORTS(buf, len);        /* host order -> file big-endian */
+ 
+-    if ((int)fwrite(buf, sizeof(short), len, f) != len) {
+-        return false;
+-    }
++    bool written = (int)fwrite(buf, sizeof(short), len, f) == len;
+ 
+-    SWAP_SHORTS(buf, len);        /* restore host order in memory */
++    SWAP_SHORTS(buf, len);        /* restore host order in memory: this is the live city, a save that fails too */
+ 
+-    return true;
++    return written;
+ }
+ 
+ /**
+@@ -404,7 +402,10 @@ bool Micropolis::saveFile(const std::string &filename)
+     long n;
+     FILE *f;
+ 
+-    if ((f = fopen(filename.c_str(), "wb")) == NULL) {
++    /* to a file beside it, and over it when whole: a full disk leaves the old city as it was */
++    const std::string partial = filename + ".partial";
++
++    if ((f = fopen(partial.c_str(), "wb")) == NULL) {
+         /// @todo Report error saving file.
+         return false;
+     }
+@@ -458,7 +459,12 @@ bool Micropolis::saveFile(const std::string &filename)
+         save_short(((short *)&map[0][0]), WORLD_W * WORLD_H, f) &&
+         save_short(((short *)&mop[0][0]), WORLD_W * WORLD_H, f);
+ 
+-    fclose(f);
++    if (fclose(f) != 0)
++        result = false;
++    if (result && rename(partial.c_str(), filename.c_str()) != 0)
++        result = false;
++    if (!result)
++        remove(partial.c_str());
+ 
+     return result;
+ }
+@@ -471,8 +477,8 @@ bool Micropolis::saveFile(const std::string &filename)
   */
  void Micropolis::loadScenario(Scenario s)
  {

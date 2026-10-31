@@ -2,7 +2,7 @@
 #   pwsh experiments\rv_fuse\card.ps1 -Load shell -Rvc experiments\rvc_opt_fuse -Fused shell.addi.snap [-Rounds 2] [-Frames 4000] [-Warp] [-More '--ticks','10000']
 param([string]$Code = '', [string]$Load, [string]$Rvc = 'experiments\rvc_opt_fuse', [string]$Fused, [int]$Rounds = 2, [int]$Frames = 4000, [switch]$Warp, [switch]$OnlyB,
       [string]$More = '', [string]$MoreA = '', [string]$Base = 'experiments\rvc_opt', [string]$Dir = 'C:\Users\micha\agents_isa\snap',
-      [string]$Image = 'D:\Development\ShaderX86\build\images\nommu', [string]$Exe = 'bin\rvc_harness.exe')
+      [string]$Image = (Join-Path $PSScriptRoot '..\..\build\images\nommu'), [string]$Exe = 'bin\rvc_harness.exe')
 $plain = Join-Path $Dir "$Load\$Load.snap"
 $snapB = Join-Path $Dir "$Load\$Fused"
 function One($name, $tick, $snap, $extra) {

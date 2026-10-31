@@ -42,6 +42,8 @@ static int h24 = 1, show_seconds = 1, alarm_on, alarm_hm = 7 * 60, timer_set = 3
 /* the stopwatch: time gathered before the last start, and when that was */
 static int watch_running, nlaps;
 static long long watch_base, watch_start, laps[LAPS];
+static int laps_gone;		/* the oldest laps, gone from the list at LAPS */
+static long long lap_before;	/* the time of the last of them */
 static struct ui_list lap_list;
 
 /* the timer: idle (showing timer_set), running to timer_end, or paused with timer_left */
@@ -677,9 +679,9 @@ lap_label(int row)
 	char split[24], total[24];
 	int n = nlaps - 1 - row;	/* the newest first */
 
-	format_watch(split, sizeof split, laps[n] - (n ? laps[n - 1] : 0));
+	format_watch(split, sizeof split, laps[n] - (n ? laps[n - 1] : lap_before));
 	format_watch(total, sizeof total, laps[n]);
-	snprintf(text, sizeof text, "Lap %d:   %s    (%s in all)", n + 1, split, total);
+	snprintf(text, sizeof text, "Lap %d:   %s    (%s in all)", n + 1 + laps_gone, split, total);
 	return text;
 }
 
@@ -1003,13 +1005,15 @@ act(int id)
 	case B_LAP:
 		if (!watch_running && !watch_base)
 			return;
-		if (nlaps == LAPS)
+		if (nlaps == LAPS) {
+			lap_before = laps[0], laps_gone++;
 			memmove(laps, laps + 1, sizeof laps[0] * --nlaps);
+		}
 		laps[nlaps++] = watch_ms();
 		lap_list.top = 0, lap_list.selected = -1;
 		break;
 	case B_WATCH_RESET:
-		watch_running = 0, watch_base = 0, nlaps = 0;
+		watch_running = 0, watch_base = 0, nlaps = 0, laps_gone = 0, lap_before = 0;
 		lap_list.top = 0, lap_list.selected = -1;
 		break;
 	case B_TIMER_GO:

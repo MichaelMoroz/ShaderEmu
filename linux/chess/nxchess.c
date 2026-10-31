@@ -1254,7 +1254,7 @@ command(int id)
 		GrSetFocus(window);
 		break;
 	case C_ABOUT:
-		ui_ask("About Chess", "Chess for the ShaderX86 desktop.\nThe search is on every worker core.\nPieces from DejaVu Sans.", ok, 1, NULL);
+		ui_ask("About Chess", "Chess for the ShaderEmu desktop.\nThe search is on every worker core.\nPieces from DejaVu Sans.", ok, 1, NULL);
 		GrSetFocus(window);
 		break;
 	case C_EXIT:

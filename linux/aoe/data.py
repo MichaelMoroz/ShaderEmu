@@ -4,7 +4,7 @@ program built (program.sh). Nothing of it goes into the repository or linux/preb
 accepts the trial's EULA: docs/games/aoe.md.
    python linux/aoe/data.py OVERLAY
 Exit 0: both are in OVERLAY. Otherwise OVERLAY is as it was, and a line says what is missing.
-   AOE_CACHE    the cache (~/.cache/shaderx86/aoe)
+   AOE_CACHE    the cache (~/.cache/shaderemu/aoe)
    AOE_URL      where the trial comes from
    AOE_PROGRAM  a folder with usr/bin/aoe.bin already made flat, in place of building it
    AOE_WSL_HOME a private WSL home to build in"""
@@ -43,7 +43,7 @@ def fetch(cache):
     print('aoe: fetching', url)
     part = exe + '.part'
     try:
-        request = urllib.request.Request(url, headers={'User-Agent': 'ShaderX86 image build'})
+        request = urllib.request.Request(url, headers={'User-Agent': 'ShaderEmu image build'})
         with urllib.request.urlopen(request, timeout=60) as r, open(part, 'wb') as f:
             shutil.copyfileobj(r, f, 1 << 20)
     except OSError as e:
@@ -129,7 +129,7 @@ def program():
 
 def main():
     overlay = sys.argv[1]
-    cache = os.environ.get('AOE_CACHE') or os.path.join(os.path.expanduser('~'), '.cache', 'shaderx86', 'aoe')
+    cache = os.environ.get('AOE_CACHE') or os.path.join(os.path.expanduser('~'), '.cache', 'shaderemu', 'aoe')
     os.makedirs(cache, exist_ok=True)
     try:
         made = data(cache)

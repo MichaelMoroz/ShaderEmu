@@ -353,6 +353,21 @@ void mp_set_budget(const int percent[3])
     city->roadSpend = (Quad)(city->roadFund * city->roadPercent);
     city->fireSpend = (Quad)(city->fireFund * city->firePercent);
     city->policeSpend = (Quad)(city->policeFund * city->policePercent);
+    {
+        /* no more than there is: what would pass the funds comes off the police, the fire, then the roads */
+        Quad over = city->roadSpend + city->fireSpend + city->policeSpend - before - city->totalFunds;
+        Quad *spend[3] = { &city->policeSpend, &city->fireSpend, &city->roadSpend };
+        float *share[3] = { &city->policePercent, &city->firePercent, &city->roadPercent };
+        Quad fund[3] = { city->policeFund, city->fireFund, city->roadFund };
+
+        for (int i = 0; i < 3 && over > 0; i++) {
+            Quad off = over < *spend[i] ? over : *spend[i];
+
+            *spend[i] -= off;
+            over -= off;
+            *share[i] = fund[i] ? (float)*spend[i] / fund[i] : 0.0f;
+        }
+    }
     city->spend(city->roadSpend + city->fireSpend + city->policeSpend - before);
     city->updateFundEffects();
 }

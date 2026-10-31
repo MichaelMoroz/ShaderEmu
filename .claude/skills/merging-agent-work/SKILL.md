@@ -1,6 +1,6 @@
 ---
 name: merging-agent-work
-description: Run several agents on ShaderX86 and bring their work together - what a brief must say, worktrees and private build trees, who owns which files, the machine's shared limits, merging branches into main, rebuilding and testing the merged tree, conflicts in patches, test values and generated files, checking what a report claims, and when to push. Use when starting parallel subagents on this repository, when merging a worktree branch, when several branches change the same game or library, or before pushing main. Triggers on: subagent, parallel agents, worktree branch, merge into main, merge and test, push main, git merge, conflict in openttd.patch, cc-bytes after a merge, brief for an agent.
+description: Run several agents on ShaderEmu and bring their work together - what a brief must say, worktrees and private build trees, who owns which files, the machine's shared limits, merging branches into main, rebuilding and testing the merged tree, conflicts in patches, test values and generated files, checking what a report claims, and when to push. Use when starting parallel subagents on this repository, when merging a worktree branch, when several branches change the same game or library, or before pushing main. Triggers on: subagent, parallel agents, worktree branch, merge into main, merge and test, push main, git merge, conflict in openttd.patch, cc-bytes after a merge, brief for an agent.
 ---
 
 # Agents and merging
@@ -15,7 +15,7 @@ Each gets a worktree (`isolation: "worktree"`). Give the brief:
 
 - **Goal and measure**, and how before and after are to be read. "AGENTS.md is binding."
 - **Who owns what.** One owner for shared libraries; others stay out, or say what they need. Two agents optimizing one game conflict in its patch.
-- **The tree**: no `bin\`, `build\`, `rvc\` in a worktree; `build.bat`; a copy of `rvc`. `D:\Development\ShaderX86\bin` and `build\` are read-only baselines. A private WSL home (`building-the-system`): `~/nm` is shared.
+- **The tree**: no `bin\`, `build\`, `rvc\` in a worktree; `build.bat`; a copy of `rvc`. The main checkout's `bin\` and `build\` are read-only baselines. A private WSL home (`building-the-system`): `~/nm` is shared.
 - **The computer**: `RVC_THREADS=8`, one card through `tools\gpu_queue.ps1`, timings beside others' suspect. Instruction counts first; card last.
 - **Delegation**: an agent spawning its own subagents goes past the limit on parallel runs: say no.
 - **What to report**: commits; numbers with their images; tests as printed; what was not done and what was tried and lost; files that others must change. No `linux/prebuilt`.

@@ -1017,7 +1017,7 @@ command(int id)
 		GrSetFocus(window);
 		break;
 	case C_ABOUT:
-		ui_ask("About Minesweeper", "Minesweeper\nThe classic game, for the ShaderX86 desktop.", ok, 1, other_event);
+		ui_ask("About Minesweeper", "Minesweeper\nThe classic game, for the ShaderEmu desktop.", ok, 1, other_event);
 		GrSetFocus(window);
 		break;
 	case C_EXIT:
