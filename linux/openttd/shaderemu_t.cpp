@@ -707,6 +707,10 @@ bool TwStart()
 	_tw_handle = mcw_try_call(TwJob, 0, 0);
 	if (_tw_handle == 0) return false;
 	_tw_on = true;
+	{
+		extern void YapfShipAheadWorkers(bool on);
+		YapfShipAheadWorkers(true);
+	}
 	while (_tw_ack.v != _tw_req.v) {
 		TwService();
 		mcw_rest();
@@ -724,6 +728,10 @@ void TwStop()
 	VpFlushFinish();
 	TwHold(true);
 	YapfShipAheadCancel(); /* (the paths made ahead go by the tick's place: every job ends) */
+	{
+		extern void YapfShipAheadWorkers(bool on);
+		YapfShipAheadWorkers(false);
+	}
 	_tw_stop.v = 1;
 	TwLetGo();
 	while (_tw_ended.v == 0) {

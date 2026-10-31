@@ -587,6 +587,9 @@ static const int PLAY_FOLLOW[] = { 200, 201, 202, 203, 204, 205, 206, 207, 208, 
 static const int PLAY_WINDOW[] = { 300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319,
 		320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336, 337, 338, 339,
 		340, 341, 342, 343, 344, 345, 346, 347, 348, 349, 350, 351, 352, 353, 354, 355, 356, 357, 358, 359, 199 };
+/* OPENTTD_PLAY_PART=zoom: the script's 50 pictures zoomed out twice and scrolling */
+static const int PLAY_ZOOM[] = { 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89,
+		90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 199 };
 /* OPENTTD_PLAY_PART=build: 60 pictures of the view standing still, the cursor's highlight moving over it, a road, a rail,
  * a station or a bus stop placed every sixth picture by the commands the tools send */
 static const int PLAY_BUILD[] = { 400, 401, 402, 403, 404, 405, 406, 407, 408, 409, 410, 411, 412, 413, 414, 415, 416, 417, 418, 419,
@@ -789,7 +792,9 @@ static TileIndex PlayFreeLand(TileIndex near_tile, int w, int h)
 		return true;
 	};
 	const int cx = TileX(near_tile), cy = TileY(near_tile);
-	for (int r = 0; r < 24; r++) {
+	/* (the search goes on where the last ended: what has been built is not looked over again, and the script's cost is kept out of the scene) */
+	static int from = 0;
+	for (int r = from; r < 24; from = ++r) {
 		for (int y = cy - r; y <= cy + r; y++) {
 			for (int x = cx - r; x <= cx + r; x++) {
 				if (std::max(abs(x - cx), abs(y - cy)) == r && free_at(x, y)) return TileXY(x, y);
@@ -799,13 +804,21 @@ static TileIndex PlayFreeLand(TileIndex near_tile, int w, int h)
 	return INVALID_TILE;
 }
 
-/** The building part of the play script, its picture n: the cursor's highlight goes over the view, a thing placed every sixth. */
+/** A pointer's move is seen this often at most, and a thing is placed this often, in units of VpTime (5 a ms): by the clock, so that faster pictures do not ask for more. */
+static constexpr uint32_t PLAY_POINTER_TIME = 66 * 5, PLAY_PLACE_TIME = 400 * 5;
+
+/** The building part of the play script, its picture n: the cursor's highlight goes over the view, a thing placed by the clock. */
 static void PlayBuild(int n)
 {
 	Window *main = GetMainWindow();
 	if (main == nullptr || main->viewport == nullptr) return;
 	static int placed = 0;
 	static uint32_t made = 0;
+	static uint32_t pointer_at = 0, placed_at = 0;
+	const uint32_t now = VpTime();
+	if (n != 0 && now - pointer_at < PLAY_POINTER_TIME) return;
+	pointer_at = now;
+	TwHold(false);
 	if (n == 0) {
 		VpFlushFinish();
 		TickFinish();
@@ -822,7 +835,8 @@ static void PlayBuild(int n)
 	const int step = (n * 24) % span;
 	_cursor.pos.x = vp.left + vp.width / 4 + step;
 	_cursor.pos.y = vp.top + vp.height / 2 + (n % 8) * 8;
-	if (n % 6 != 5) return;
+	if (now - placed_at < PLAY_PLACE_TIME) return;
+	placed_at = now;
 	const Point at = RemapCoords2(0, 0); (void)at;
 	const Point p = InverseRemapCoords2(vp.virtual_left + vp.virtual_width / 2, vp.virtual_top + vp.virtual_height / 2);
 	const TileIndex centre = TileVirtXY(std::clamp<int>(p.x, 0, Map::MaxX() * TILE_SIZE), std::clamp<int>(p.y, 0, Map::MaxY() * TILE_SIZE));
@@ -882,10 +896,10 @@ static void PlayStep()
 	static const char *play_part = getenv("OPENTTD_PLAY_PART");
 	static const int *list = short_play ? PLAY_SHORT : play_part == nullptr ? nullptr :
 			std::string_view(play_part) == "follow" ? PLAY_FOLLOW : std::string_view(play_part) == "window" ? PLAY_WINDOW :
-			std::string_view(play_part) == "build" ? PLAY_BUILD : PLAY_SCROLL;
+			std::string_view(play_part) == "build" ? PLAY_BUILD : std::string_view(play_part) == "zoom" ? PLAY_ZOOM : PLAY_SCROLL;
 	static const int len = list == PLAY_SHORT ? std::size(PLAY_SHORT) : list == PLAY_SCROLL ? std::size(PLAY_SCROLL) :
 			list == PLAY_FOLLOW ? std::size(PLAY_FOLLOW) : list == PLAY_WINDOW ? std::size(PLAY_WINDOW) :
-			list == PLAY_BUILD ? std::size(PLAY_BUILD) : 200;
+			list == PLAY_BUILD ? std::size(PLAY_BUILD) : list == PLAY_ZOOM ? std::size(PLAY_ZOOM) : 200;
 	/* OPENTTD_PICTURE_LOG=1: each picture's ms, the first core's instructions, ticks, and its phases' ms */
 	static const bool picture_log = getenv("OPENTTD_PICTURE_LOG") != nullptr;
 	if (picture_log) {
@@ -911,7 +925,7 @@ static void PlayStep()
 	const int at = _play_frame++ % len;
 	const int f = list != nullptr ? list[at] : at;
 	/* (what the script does next but for scrolling wants the tick held) */
-	if (f == 60 || f == 80 || f == 100 || f == 110 || f == 170 || f == 199 || f == 200 || f >= 300 && (f == 300 || f == 305 || f == 320 || f == 340 || f >= 400)) TwHold(false);
+	if (f == 60 || f == 80 || f == 100 || f == 110 || f == 170 || f == 199 || f == 200 || f >= 300 && (f == 300 || f == 305 || f == 320 || f == 340)) TwHold(false);
 	/* OPENTTD_PLAY_TIMES=1: each picture's time, to see where a part's time goes */
 	static const bool times = getenv("OPENTTD_PLAY_TIMES") != nullptr;
 	if (times) {
@@ -1164,8 +1178,12 @@ void VideoDriver_ShaderEmu::WorkerTick()
 		GrCheckNextEvent(&_pending);
 		_have_pending = _pending.type != GR_EVENT_TYPE_NONE && _pending.type != GR_EVENT_TYPE_TIMEOUT;
 	}
-	_se_light = !_have_pending && !_left_button_down && !_right_button_down && TwLightPicture() && SeDirtyOnlyViews();
+	/* (a pointer that only moves is seen at most every 66 ms: it costs the tick a hold) */
+	static uint32_t held_at = 0;
+	const bool pointer_waits = _have_pending && _pending.type == GR_EVENT_TYPE_MOUSE_MOTION && t - held_at < 66 * 5;
+	_se_light = (!_have_pending || pointer_waits) && !_left_button_down && !_right_button_down && TwLightPicture() && SeDirtyOnlyViews();
 	if (!_se_light) {
+		held_at = t;
 		TwHold(false);
 		TwSync();
 		::GameLoop(); /* (the first core's parts: the tick itself is the worker's) */

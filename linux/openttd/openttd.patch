@@ -2950,10 +2950,10 @@ index 3f257e2..0392c91 100644
  			if (best_open_node == nullptr) break;
  
 diff --git a/src/pathfinder/yapf/yapf_ship.cpp b/src/pathfinder/yapf/yapf_ship.cpp
-index b024edb..d536628 100644
+index b024edb..89d2718 100644
 --- a/src/pathfinder/yapf/yapf_ship.cpp
 +++ b/src/pathfinder/yapf/yapf_ship.cpp
-@@ -16,8 +16,416 @@
+@@ -16,8 +16,423 @@
  #include "yapf_ship_regions.h"
  #include "../water_regions.h"
  
@@ -3138,6 +3138,12 @@ index b024edb..d536628 100644
 +struct alignas(16) AheadPost { volatile uint32_t decided = 0, posted = 0; mcw_handle h = 0; };
 +AheadPost _ahead_post[AHEAD_SLOTS];
 +bool _ahead_broken = false;
++/* The tick on a worker: workers of the paths' own, which read the map while the tick runs (docs/games/openttd.md, "Ships' paths made ahead") */
++constexpr int AHEAD_LOOPS = 2;
++struct alignas(16) AheadLoopWord { volatile uint32_t v = 0; };
++AheadLoopWord _ahead_loop_stop;
++int _ahead_loops = 0;
++mcw_handle _ahead_loop_handle[AHEAD_LOOPS] = {};
 +struct { uint32_t launched, taken, none, moved, late, refused[12], invalid, checked, differ, why[12], waited, unposted; } _ahead_stats;
 +
 +int AheadMode()
@@ -3293,6 +3299,7 @@ index b024edb..d536628 100644
 +	AheadSlot *s = AheadOf();
 +	for (;;) {
 +		if (s->in.cancel) SeShipAheadRefuse(4);
++		if (_ahead_loops != 0) return; /* (what it reads is compared when the path is taken: the map need not be still) */
 +		const uint32_t q = _ahead_quiet.v;
 +		/* (it reads only once its word that it reads (ack) was stored in an earlier pass and the map is still still:
 +		 * whoever ends the stillness then waits for every job whose word says it reads; YapfShipAheadStop) */
@@ -3370,7 +3377,7 @@ index b024edb..d536628 100644
  constexpr int NUMBER_OR_WATER_REGIONS_LOOKAHEAD = 4;
  constexpr int MAX_SHIP_PF_NODES = (NUMBER_OR_WATER_REGIONS_LOOKAHEAD + 1) * WATER_REGION_NUMBER_OF_TILES * 4; // 4 possible exit dirs per tile.
  
-@@ -43,6 +451,17 @@ protected:
+@@ -43,6 +458,17 @@ protected:
  public:
  	void SetDestination(const Ship *v)
  	{
@@ -3388,7 +3395,7 @@ index b024edb..d536628 100644
  		if (v->current_order.IsType(OT_GOTO_STATION)) {
  			this->dest_station = v->current_order.GetDestination().ToStationID();
  			this->dest_tile = CalcClosestStationTile(this->dest_station, v->tile, StationType::Dock);
-@@ -83,6 +502,19 @@ public:
+@@ -83,6 +509,19 @@ public:
  			return GetWaterRegionPatchInfo(tile) == this->intermediate_dest_region_patch;
  		}
  
@@ -3408,7 +3415,7 @@ index b024edb..d536628 100644
  		if (this->dest_station != StationID::Invalid()) return IsDockingTile(tile) && IsShipDestinationTile(tile, this->dest_station);
  
  		return tile == this->dest_tile && ((this->dest_trackdirs & TrackdirToTrackdirBits(trackdir)) != TRACKDIR_BIT_NONE);
-@@ -134,6 +566,24 @@ public:
+@@ -134,6 +573,24 @@ public:
  	inline void PfFollowNode(Node &old_node)
  	{
  		TrackFollower follower{Yapf().GetVehicle()};
@@ -3433,7 +3440,7 @@ index b024edb..d536628 100644
  		if (follower.Follow(old_node.key.tile, old_node.key.td)) {
  			if (this->water_region_corridor.empty()
  					|| std::ranges::find(this->water_region_corridor, GetWaterRegionInfo(follower.new_tile)) != this->water_region_corridor.end()) {
-@@ -158,6 +608,9 @@ public:
+@@ -158,6 +615,9 @@ public:
  	/** Returns a random trackdir out of a set of trackdirs. */
  	static Trackdir GetRandomTrackdir(TrackdirBits trackdirs)
  	{
@@ -3443,7 +3450,7 @@ index b024edb..d536628 100644
  		const int strip_amount = RandomRange(CountBits(trackdirs));
  		for (int s = 0; s < strip_amount; ++s) RemoveFirstTrackdir(&trackdirs);
  		return FindFirstTrackdir(trackdirs);
-@@ -368,12 +821,20 @@ public:
+@@ -368,12 +828,20 @@ public:
  		/* Additional penalty for curves. */
  		c += this->CurveCost(n.parent->GetTrackdir(), n.GetTrackdir());
  
@@ -3464,7 +3471,7 @@ index b024edb..d536628 100644
  			c += count * 3 * YAPF_TILE_LENGTH;
  		}
  
-@@ -424,14 +885,552 @@ struct CYapfShip_TypesT {
+@@ -424,14 +892,606 @@ struct CYapfShip_TypesT {
  
  struct CYapfShip : CYapfT<CYapfShip_TypesT<CYapfShip>> {
  	explicit CYapfShip(int max_nodes) { this->max_search_nodes = max_nodes; }
@@ -3828,6 +3835,7 @@ index b024edb..d536628 100644
 +		in.cancel = 0;
 +		s.out.ack = ~0u;
 +		if (_tw_on) {
++			if (_ahead_loops != 0) _ahead_post[k].decided = _ahead_post[k].posted = in.req + 1;
 +			in.req = in.req + 1;
 +			_ahead_state[k] = AHEAD_RUNNING;
 +			_ahead_stats.launched++;
@@ -3900,7 +3908,7 @@ index b024edb..d536628 100644
 + */
 +void YapfShipAheadService()
 +{
-+	if (_ahead_slots == nullptr || TickOnWorker() || mcw_on_worker()) return;
++	if (_ahead_slots == nullptr || TickOnWorker() || mcw_on_worker() || _ahead_loops != 0) return;
 +	bool ended = false;
 +	for (int k = 0; k < AHEAD_SLOTS; k++) {
 +		AheadPost &f = _ahead_post[k];
@@ -3931,7 +3939,7 @@ index b024edb..d536628 100644
 + */
 +void YapfShipAheadStop()
 +{
-+	if (_ahead_slots == nullptr) return;
++	if (_ahead_slots == nullptr || _ahead_loops != 0) return;
 +	const uint32_t q = _ahead_quiet.v;
 +	if ((q & 1) == 0) return;
 +	_ahead_quiet.v = q + 1;
@@ -3966,9 +3974,62 @@ index b024edb..d536628 100644
 +/** The tick on its worker waits, between two ticks or for a path: the map is still until YapfShipAheadStop. */
 +void YapfShipAheadGo()
 +{
-+	if (_ahead_slots == nullptr) return;
++	if (_ahead_slots == nullptr || _ahead_loops != 0) return;
 +	const uint32_t q = _ahead_quiet.v;
 +	if ((q & 1) == 0) _ahead_quiet.v = q + 1;
++}
++
++int YapfShipAheadLoops() { return _ahead_loops; }
++
++/** A worker of the paths' own: the jobs of its slots, as the tick asks for them. */
++static uint32_t AheadLoop(uint32_t who, uint32_t)
++{
++	while (_ahead_loop_stop.v == 0) {
++		bool any = false;
++		for (int k = who; k < AHEAD_SLOTS; k += AHEAD_LOOPS) {
++			AheadSlot &s = _ahead_slots[k];
++			const uint32_t r = s.in.req;
++			if (s.out.ended != r) {
++				AheadJob(static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&s)), r);
++				any = true;
++			}
++		}
++		if (!any) mc_end_pass();
++	}
++	return 0;
++}
++
++/** The first core, the tick waiting between two ticks and no path out: the paths' workers begin or end. OPENTTD_SHIP_LOOPS=0: none. */
++void YapfShipAheadWorkers(bool on)
++{
++	static const bool off = GetEnv("OPENTTD_SHIP_LOOPS").has_value();
++	if (_ahead_slots == nullptr || off || AheadMode() == 0) return;
++	if (!on) {
++		if (_ahead_loops == 0) return;
++		_ahead_loop_stop.v = 1;
++		for (int i = 0; i < _ahead_loops; i++) mcw_join(_ahead_loop_handle[i]);
++		_ahead_loops = 0;
++		return;
++	}
++	if (_ahead_loops != 0) return;
++	for (int k = 0; k < AHEAD_SLOTS; k++) {
++		_ahead_slots[k].out.ended = _ahead_slots[k].in.req;
++		_ahead_post[k].decided = _ahead_slots[k].in.req;
++		_ahead_post[k].h = 0;
++	}
++	_ahead_loop_stop.v = 0;
++	mcw_for_end();
++	int n = 0;
++	for (; n < AHEAD_LOOPS; n++) {
++		_ahead_loop_handle[n] = mcw_try_call(AheadLoop, n, 0);
++		if (_ahead_loop_handle[n] == 0) break;
++	}
++	if (n < AHEAD_LOOPS) { /* (all or none: a slot's worker is its number's) */
++		_ahead_loop_stop.v = 1;
++		for (int i = 0; i < n; i++) mcw_join(_ahead_loop_handle[i]);
++		return;
++	}
++	_ahead_loops = n;
 +}
 +
 +void YapfShipAheadInit()
@@ -6882,7 +6943,7 @@ index 7aafcbd..2b5a339 100644
  };
  
 diff --git a/src/viewport.cpp b/src/viewport.cpp
-index 6427a14..52f630a 100644
+index 6427a14..5f27bfd 100644
 --- a/src/viewport.cpp
 +++ b/src/viewport.cpp
 @@ -99,6 +99,11 @@
@@ -7885,7 +7946,7 @@ index 6427a14..52f630a 100644
  	ViewportDrawParentSprites(&_vd.parent_sprites_to_sort, &_vd.child_screen_sprites_to_draw);
  
  	if (_draw_bounding_boxes) ViewportDrawBoundingBoxes(&_vd.parent_sprites_to_sort);
-@@ -1897,6 +2539,855 @@ static inline void ViewportDraw(const Viewport &vp, int left, int top, int right
+@@ -1897,6 +2539,856 @@ static inline void ViewportDraw(const Viewport &vp, int left, int top, int right
  	);
  }
  
@@ -7988,7 +8049,7 @@ index 6427a14..52f630a 100644
 +	if (_vp_workers >= 0) return _vp_workers;
 +	ScrollSettle();
 +	const char *asked = getenv("OPENTTD_WORKERS");
-+	int want = asked != nullptr ? 0 : 47; /* (more cost the first core more than they gain: docs/games/openttd.md) */
++	int want = asked != nullptr ? 0 : 47 + 2; /* (47 and the ships' paths' two; more cost the first core more than they gain: docs/games/openttd.md) */
 +	for (const char *c = asked; c != nullptr && *c >= '0' && *c <= '9'; c++) want = want * 10 + (*c - '0');
 +	want = std::min(want, VP_CORES - 1);
 +	_vp_workers = 0;
@@ -8422,7 +8483,8 @@ index 6427a14..52f630a 100644
 +	if (last) TickReleaseForFlush();
 +	/* (the first core hands the pieces out: at most one a worker, OPENTTD_CUT=old one a core) */
 +	static const bool cut_old = getenv("OPENTTD_CUT") != nullptr;
-+	const int cores = _vp_workers + (cut_old ? 1 : 0) - (_tw_on ? 1 : 0); /* (the tick's worker draws nothing) */
++	extern int YapfShipAheadLoops();
++	const int cores = _vp_workers + (cut_old ? 1 : 0) - (_tw_on ? 1 : 0) - YapfShipAheadLoops(); /* (the tick's worker and the ships' paths' draw nothing) */
 +	_vp_pieces.clear();
 +
 +	/* how each part is cut: the dearest piece of all is cut again (in columns or rows) while the flush, the
@@ -8741,7 +8803,7 @@ index 6427a14..52f630a 100644
  /**
   * Draw the viewport of this window.
   */
-@@ -1965,7 +3456,21 @@ static void ClampSmoothScroll(uint32_t delta_ms, int64_t delta_hi, int64_t delta
+@@ -1965,7 +3457,21 @@ static void ClampSmoothScroll(uint32_t delta_ms, int64_t delta_hi, int64_t delta
  	assert(delta_hi != 0);
  
  	/* Move at most 75% of the distance every 30ms, for a smooth experience */
@@ -8763,7 +8825,7 @@ index 6427a14..52f630a 100644
  	/* Move never more than 16 tiles per 30ms. */
  	int max_scroll = Map::ScaleBySize1D(16 * PIXELS_PER_TILE * delta_ms / 30);
  
-@@ -1990,8 +3495,15 @@ void UpdateViewportPosition(Window *w, uint32_t delta_ms)
+@@ -1990,8 +3496,15 @@ void UpdateViewportPosition(Window *w, uint32_t delta_ms)
  	ViewportData &vp = *w->viewport;
  
  	if (vp.follow_vehicle != VehicleID::Invalid()) {
@@ -8779,7 +8841,7 @@ index 6427a14..52f630a 100644
  
  		vp.scrollpos_x = pt.x;
  		vp.scrollpos_y = pt.y;
-@@ -2072,7 +3584,12 @@ static bool MarkViewportDirty(const Viewport &vp, int left, int top, int right,
+@@ -2072,7 +3585,12 @@ static bool MarkViewportDirty(const Viewport &vp, int left, int top, int right,
  
  	if (top >= vp.virtual_height) return false;
  
@@ -8792,7 +8854,7 @@ index 6427a14..52f630a 100644
  		UnScaleByZoomLower(left, vp.zoom) + vp.left,
  		UnScaleByZoomLower(top, vp.zoom) + vp.top,
  		UnScaleByZoom(right, vp.zoom) + vp.left + 1,
-@@ -2091,10 +3608,59 @@ static bool MarkViewportDirty(const Viewport &vp, int left, int top, int right,
+@@ -2091,10 +3609,59 @@ static bool MarkViewportDirty(const Viewport &vp, int left, int top, int right,
   * @return true if at least one viewport has a dirty block
   * @ingroup dirty
   */
@@ -8852,7 +8914,7 @@ index 6427a14..52f630a 100644
  	for (const Window *w : Window::Iterate()) {
  		if (w->viewport != nullptr) {
  			assert(w->viewport->width != 0);
-@@ -2127,6 +3693,10 @@ void ConstrainAllViewportsZoom()
+@@ -2127,6 +3694,10 @@ void ConstrainAllViewportsZoom()
   */
  void MarkTileDirtyByTile(TileIndex tile, int bridge_level_offset, int tile_height_override)
  {
