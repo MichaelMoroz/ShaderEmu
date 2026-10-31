@@ -279,11 +279,11 @@ static unsigned long virtual_now;
 static int tick_ms = -1;
 extern "C" DWORD timeGetTime(void) {
     if (tick_ms < 0) { const char* e = getenv("AOE_TICK_MS"); tick_ms = e ? atoi(e) : 0; }
-    if (tick_ms) return virtual_now;
+    if (tick_ms) return virtual_now++;   // and a wait on the clock itself ends
     return aoe_clock_ms();
 }
 extern "C" DWORD GetTickCount(void) { return timeGetTime(); }
-extern "C" void Sleep(DWORD ms) { if (!tick_ms) aoe_idle(ms); }
+extern "C" void Sleep(DWORD ms) { if (tick_ms > 0) virtual_now += ms; else aoe_idle(ms); }
 extern "C" void GlobalMemoryStatus(LPMEMORYSTATUS m) {
     memset(m, 0, sizeof *m);
     m->dwTotalPhys = m->dwAvailPhys = 200u << 20;
@@ -639,7 +639,9 @@ BOOL SetWindowText(HWND h, LPCSTR s) { if (h) strncpy(((Wnd*) h)->text, s, 511);
 int GetWindowText(HWND h, LPSTR b, int n) { if (!h || !n) return 0; strncpy(b, ((Wnd*) h)->text, n); b[n - 1] = 0; return strlen(b); }
 BOOL TranslateMessage(const MSG*) { return 1; }
 LRESULT DispatchMessage(const MSG* m) {
-    if (getenv("AOE_MSGS")) fprintf(stderr, "aoemsg %x %x %lx at %lu\n", m->message, (unsigned) m->wParam, (long) m->lParam, (unsigned long) timeGetTime());
+    static int msgs = -1;
+    if (msgs < 0) msgs = getenv("AOE_MSGS") != 0;
+    if (msgs) fprintf(stderr, "aoemsg %x %x %lx at %lu\n", m->message, (unsigned) m->wParam, (long) m->lParam, (unsigned long) timeGetTime());
     if (m->message == WM_PAINT) need_paint = 0;
     Wnd* w = (Wnd*) m->hwnd;
     if (!w) w = main_wnd;
@@ -711,6 +713,7 @@ static char cmd_line[256];
 #include <signal.h>
 #include <sys/time.h>
 #include <ucontext.h>
+#include <sys/mman.h>
 static void on_fault(int s, siginfo_t* i, void* c) {
     ucontext_t* u = (ucontext_t*) c;
     fprintf(stderr, "aoe: signal %d at pc %lx ra %lx addr %lx\n", s, (long) u->uc_mcontext.__gregs[0], (long) u->uc_mcontext.__gregs[1], (long) i->si_addr);
@@ -744,3 +747,4 @@ int main(int argc, char** argv) {
 static unsigned rand_state = 1;
 extern "C" int aoe_rand(void) { rand_state = rand_state * 214013 + 2531011; return (rand_state >> 16) & 0x7fff; }
 extern "C" void aoe_srand(unsigned s) { rand_state = s; }
+unsigned aoe_rand_state(void) { return rand_state; }

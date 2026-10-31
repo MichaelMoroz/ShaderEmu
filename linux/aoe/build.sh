@@ -95,4 +95,6 @@ if [ -n "${AOE_DATA_DIR:-}" ]; then
     mkdir -p "$OUT/usr/share/aoe"
     rsync -a --delete "$AOE_DATA_DIR/" "$OUT/usr/share/aoe/"
 fi
+mkdir -p "$OUT/usr/share"
+echo "Games/Age of Empires=aoe" > "$OUT/usr/share/nxapps.76-aoe"
 echo "installed in $OUT"

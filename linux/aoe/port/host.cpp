@@ -37,6 +37,8 @@ static void fonts_read(void) {
     font_count = *(const int*) aoe_font_file;
 }
 const AoeFont* aoe_font_get(const char* face, int size, int bold) {
+    static const char* last_face; static int last_size, last_bold; static const AoeFont* last;
+    if (face == last_face && size == last_size && bold == last_bold) return last;
     fonts_read();
     if (!aoe_font_file) return 0;
     const AoeFont* fonts = (const AoeFont*) (aoe_font_file + 16);
@@ -48,6 +50,7 @@ const AoeFont* aoe_font_get(const char* face, int size, int bold) {
         if (strncasecmp(f->face, face, 4)) d += 1000;   // "Arial", "Copperplate", "Comic Sans"
         if (d < bd) { bd = d; best = f; }
     }
+    last_face = face; last_size = size; last_bold = bold; last = best;
     return best;
 }
 
@@ -115,20 +118,29 @@ static void events_of_window(void) {
 // step before: for the tests. AOE_STATS_MS: a line of frames and the clock.
 static const char* script;
 static unsigned long step_from;
+extern unsigned long aoe_updates, aoe_world_ms;
 void aoe_panel_changed(const char* n) {
     step_from = timeGetTime();
     if (getenv("AOE_DEBUG")) fprintf(stderr, "aoe: panel %s at %lu, frame %ld\n", n, step_from, frames);
 }
 void aoe_events(void) {
-    if (window_open) events_of_window();
+    if (window_open) {
+        events_of_window();
+        // nothing drawn since the last look: the rest of the pass is another program's
+        static long frames_seen;
+        if (frames == frames_seen) aoe_win_rest();
+        frames_seen = frames;
+    }
     static int read_env;
     if (!read_env) { read_env = 1; script = getenv("AOE_SCRIPT"); }
     static int stats = -1;
     static unsigned long stats_at; static long stats_frames;
     if (stats < 0) { const char* e = getenv("AOE_STATS_MS"); stats = e ? atoi(e) : 0; }
     if (stats && timeGetTime() - stats_at >= (unsigned long) stats) {
-        fprintf(stderr, "aoestat: %lu ms, frames %ld (+%ld)\n", timeGetTime(), frames, frames - stats_frames);
-        stats_at = timeGetTime(); stats_frames = frames;
+        static unsigned long stats_updates, stats_world;
+        fprintf(stderr, "aoestat: %lu ms, frames %ld (+%ld), updates +%lu, game ms +%lu\n", timeGetTime(), frames, frames - stats_frames,
+            aoe_updates - stats_updates, aoe_world_ms - stats_world);
+        stats_at = timeGetTime(); stats_frames = frames; stats_updates = aoe_updates; stats_world = aoe_world_ms;
     }
     if (!script || !*script) return;
     int at;
@@ -143,6 +155,13 @@ void aoe_events(void) {
         aoe_post(WM_MOUSEMOVE, 0, MAKELONG(x, y));
         aoe_post(WM_LBUTTONDOWN, MK_LBUTTON, MAKELONG(x, y));
         aoe_post(WM_LBUTTONUP, 0, MAKELONG(x, y));
+    } else if (!strcmp(what, "rclick")) {
+        aoe_mouse_x = x; aoe_mouse_y = y;
+        aoe_post(WM_MOUSEMOVE, 0, MAKELONG(x, y));
+        aoe_post(WM_RBUTTONDOWN, MK_RBUTTON, MAKELONG(x, y));
+        aoe_post(WM_RBUTTONUP, 0, MAKELONG(x, y));
+    } else if (!strcmp(what, "close")) {
+        aoe_post(WM_CLOSE, 0, 0);
     } else if (!strcmp(what, "key")) {
         aoe_post(WM_KEYDOWN, x, 1);
         aoe_post(WM_KEYUP, x, 1);

@@ -104,6 +104,81 @@ static inline void put_run(int op, unsigned char* row, long a, long b, const uns
     }
 }
 
+// A big picture's rows have hundreds of commands, and a button at the right of the screen has its piece of
+// the picture behind it drawn from each row's start. Where each row stands every 64 columns, made once.
+struct RowMark { unsigned offset; int column; };
+struct RowIndex { const unsigned* data; long width, height; unsigned check; int columns; RowMark* marks; };
+enum { INDEX_FROM = 256, INDEX_STEP = 64, INDEXES = 8 };
+static RowIndex indexes[INDEXES];
+static int index_next;
+
+// One command of a row, left to right; 0 at the row's end.
+static inline int row_command(const unsigned char*& s, long& at) {
+    unsigned c = *s++;
+    long n;
+    switch (c & 15) {
+        case 0: case 4: case 8: case 12: n = c >> 2; s += n; at += n; return 1;
+        case 1: case 5: case 9: case 13: at += c >> 2; return 1;
+        case 2: n = (c & 0xf0) << 4 | *s++; s += n; at += n; return 1;
+        case 3: n = (c & 0xf0) << 4 | *s++; at += n; return 1;
+        case 6: n = c >> 4; if (!n) n = *s++; s += n; at += n; return 1;
+        case 7: case 10: n = c >> 4; if (!n) n = *s++; s++; at += n; return 1;
+        case 11: n = c >> 4; if (!n) n = *s++; at += n; return 1;
+        case 14:
+            switch (c >> 4) {
+                case 1: at += 1; return 1;
+                case 2: at += *s++; return 1;
+                case 4: {
+                    unsigned e = *s++;
+                    switch (e & 15) {
+                        case 0: case 4: case 8: case 12: n = e >> 2; s += n; at += n; break;
+                        case 1: case 5: case 9: case 13: at += e >> 2; break;
+                        case 2: n = (e & 0xf0) << 4 | *s++; s += n; at += n; break;
+                        case 3: n = (e & 0xf0) << 4 | *s++; at += n; break;
+                        case 6: n = e >> 4; if (!n) n = *s++; s += n; at += n; break;
+                        case 7: case 10: n = e >> 4; if (!n) n = *s++; s++; at += n; break;
+                        case 11: n = e >> 4; if (!n) n = *s++; at += n; break;
+                        case 14:
+                            if ((e >> 4) == 1) at += 1;
+                            else if ((e >> 4) == 2) at += *s++;
+                            break;
+                        default: break;
+                    }
+                    return 1;
+                }
+                default: return 1;
+            }
+        default: return 0;   // 15: the row's end
+    }
+}
+
+static const RowIndex* row_index(unsigned char* base, const unsigned* data, long width, long height) {
+    unsigned check = data[0] * 31 + data[height / 2] * 7 + data[height - 1] + (unsigned) width * 65599 + (unsigned) height;
+    for (int i = 0; i < INDEXES; i++)
+        if (indexes[i].data == data && indexes[i].check == check) return &indexes[i];
+    RowIndex* x = &indexes[index_next];
+    index_next = (index_next + 1) % INDEXES;
+    free(x->marks);
+    x->data = data; x->width = width; x->height = height; x->check = check;
+    x->columns = width / INDEX_STEP + 1;
+    x->marks = (RowMark*) malloc(height * x->columns * sizeof(RowMark));
+    if (!x->marks) { x->data = 0; return 0; }
+    for (long row = 0; row < height; row++) {
+        const unsigned char* start = base + data[row];
+        const unsigned char* s = start;
+        RowMark* marks = x->marks + row * x->columns;
+        long at = 0, before_at = 0;
+        const unsigned char* before = s;
+        int c = 0;
+        while (row_command(s, at)) {
+            while (c < x->columns && c * INDEX_STEP < at) { marks[c].offset = before - start; marks[c].column = before_at; c++; }
+            before = s; before_at = at;
+        }
+        for (; c < x->columns; c++) { marks[c].offset = before - start; marks[c].column = before_at; }
+    }
+    return x;
+}
+
 extern "C" void ASMDraw_Sprite(void* base_, long x, long y, long width, long height, long data_offsets, long outline_offset, int flags) {
     unsigned char* base = (unsigned char*) base_;
     long skip = 0;
@@ -122,6 +197,7 @@ extern "C" void ASMDraw_Sprite(void* base_, long x, long y, long width, long hei
     unsigned short* outline = (unsigned short*) (base + outline_offset) + skip * 2;
     int fog = flags & 1, mirror = flags & 2;
     unsigned m = 0xffffffff, v = 0;
+    const RowIndex* index = !mirror && width >= INDEX_FROM && height + skip > 0 ? row_index(base, data - skip, width, height + (last > max_line ? last - max_line : 0) + skip) : 0;
 
     for (long row = 0; row < height; row++) {
         long line = y + row;
@@ -143,6 +219,11 @@ extern "C" void ASMDraw_Sprite(void* base_, long x, long y, long width, long hei
             if (!span || left > span->x1) continue;
         }
         long at = mirror ? rt : left;  // the column the next command starts at
+        if (index && span->x0 - left >= INDEX_STEP) {
+            const RowMark* mark = index->marks + (row + skip) * index->columns + (span->x0 - left) / INDEX_STEP;
+            s += mark->offset;
+            at = left + mark->column;
+        }
         for (;;) {
             unsigned c = *s++;
             long n;
@@ -191,6 +272,7 @@ extern "C" void ASMDraw_Sprite(void* base_, long x, long y, long width, long hei
                 long a = at, b = at + n - 1;
                 at += n;
                 while (span && span->x1 < a) span = span->next;
+                if (!span) goto next_row;   // nothing more of this row shows
                 for (Span* t = span; t && t->x0 <= b; t = t->next) {
                     long p = a < t->x0 ? t->x0 : a, q = b > t->x1 ? t->x1 : b;
                     if (p <= q) put_run(op, line_base, p, q, px, value, fog, m, v, 1, a);

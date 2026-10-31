@@ -14,6 +14,10 @@ int aoe_w = 640, aoe_h = 480;
 static PALETTEENTRY cur_pal[256];
 static IDirectDrawSurface* primary;
 static long blits;
+// The surface the game draws on is the page itself (AOE_BACK=copy: a surface of its own, as on Windows): a
+// frame's copy of up to 480 KB was a pass's stores many times over.
+static IDirectDrawSurface* back_on_page;
+static int back_copied = -1;
 
 extern unsigned char* aoe_page(int w, int h);       // the window's page, or memory
 extern void aoe_palette_set(const PALETTEENTRY* p); // the window's palette
@@ -21,7 +25,8 @@ extern void aoe_present(void);                      // the picture to the GPU
 extern void aoe_before_blit(void);                  // what the GPU reads of the page is done with
 
 static void dump_picture(void) {
-    const char* name = getenv("AOE_DUMP");
+    static const char* name; static int read;
+    if (!read) { read = 1; name = getenv("AOE_DUMP"); }
     if (!name || !primary) return;
     static int every = -1, count;
     if (every < 0) { const char* e = getenv("AOE_DUMP_EVERY"); every = e ? atoi(e) : 1; }
@@ -47,11 +52,13 @@ HRESULT IDirectDrawPalette::GetEntries(DWORD, DWORD s, DWORD n, LPPALETTEENTRY p
 
 ULONG IDirectDrawSurface::Release() {
     if (this == primary) primary = 0;
+    else if (this == back_on_page) back_on_page = 0;
     else free(bits);
     delete this;
     return 0;
 }
 HRESULT IDirectDrawSurface::Lock(LPRECT r, LPDDSURFACEDESC d, DWORD, HANDLE) {
+    if (this == primary || this == back_on_page) aoe_before_blit();
     d->dwWidth = w; d->dwHeight = h; d->lPitch = pitch;
     d->lpSurface = bits + (r ? r->top * pitch + r->left : 0);
     return DD_OK;
@@ -60,8 +67,14 @@ HRESULT IDirectDrawSurface::Unlock(LPVOID) { return DD_OK; }
 HRESULT IDirectDrawSurface::Blt(LPRECT dr, IDirectDrawSurface* src, LPRECT sr, DWORD fl, LPDDBLTFX fx) {
     RECT all = {0, 0, w, h};
     if (!dr) dr = &all;
-    if (getenv("AOE_BLITS")) fprintf(stderr, "blt %p primary %p from %p fl %x %ld,%ld,%ld,%ld\n", this, primary, src, (unsigned) fl, (long) dr->left, (long) dr->top, (long) dr->right, (long) dr->bottom);
-    if (this == primary) aoe_before_blit();
+    static int trace = -1;
+    if (trace < 0) trace = getenv("AOE_BLITS") != 0;
+    if (trace) fprintf(stderr, "blt %p primary %p from %p fl %x %ld,%ld,%ld,%ld\n", this, primary, src, (unsigned) fl, (long) dr->left, (long) dr->top, (long) dr->right, (long) dr->bottom);
+    if (this == primary || this == back_on_page) aoe_before_blit();
+    if (this == primary && src && src == back_on_page) {
+        blits++; dump_picture(); aoe_present();
+        return DD_OK;
+    }
     if (fl & DDBLT_COLORFILL) {
         for (int y = dr->top; y < dr->bottom; y++) memset(bits + y * pitch + dr->left, fx->dwFillColor, dr->right - dr->left);
     } else if (src) {
@@ -114,6 +127,11 @@ HRESULT IDirectDraw::CreateSurface(LPDDSURFACEDESC d, IDirectDrawSurface** out, 
         primary = s;
     } else {
         s->w = d->dwWidth; s->h = d->dwHeight; s->pitch = (s->w + 3) & ~3;
+        if (back_copied < 0) { const char* e = getenv("AOE_BACK"); back_copied = e && !strcmp(e, "copy"); }
+        if (primary && !back_on_page && !back_copied && s->w == primary->w && s->h == primary->h && s->pitch == primary->pitch) {
+            s->bits = primary->bits;
+            back_on_page = s;
+        } else
         s->bits = (unsigned char*) calloc(s->pitch, s->h + 1);
     }
     *out = s;
@@ -430,6 +448,7 @@ UINT GetSystemPaletteEntries(HDC, UINT s, UINT n, LPPALETTEENTRY o) { memcpy(o, 
 }
 void aoe_gdi_surface(HDC h, IDirectDrawSurface* s) { ((Dc*) h)->s = s; }
 HRESULT IDirectDrawSurface::GetDC(HDC* out) {
+    if (this == primary || this == back_on_page) aoe_before_blit();
     *out = ::GetDC(0);
     aoe_gdi_surface(*out, this);
     return DD_OK;
