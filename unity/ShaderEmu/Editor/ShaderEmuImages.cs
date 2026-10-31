@@ -3,7 +3,7 @@ using System.Text.RegularExpressions;
 using UnityEditor;
 using UnityEngine;
 
-// Brings the machine's shader sources and boot images from the ShaderX86 repository into this
+// Brings the machine's shader sources and boot images from the ShaderEmu repository into this
 // project. A memory image becomes four PNGs, one per word of a 16-byte texel (r, g, b, a), 2048
 // texels a row, first row at the bottom: what rvc's importer made and the shaders read.
 public static class ShaderEmuImages
@@ -28,7 +28,7 @@ public static class ShaderEmuImages
 
     public static string Repo
     {
-        get { return EditorPrefs.GetString("ShaderEmu.Repo", "C:/Development/ShaderX86"); }
+        get { return EditorPrefs.GetString("ShaderEmu.Repo", "C:/Development/ShaderEmu"); }
     }
 
     public static string LanePath(string name, string part, int lane)

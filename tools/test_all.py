@@ -71,6 +71,8 @@ CASES = [
     # the machine (docs/machine/multicore.md; programs/mc/mctest.c)
     case('mctest-3', 'machine', 'mctest 3', True, has=[r'mctest: PASS', r'\(0 pages brought for their start\)']),
     case('mctest-255', 'machine', 'mctest 255 30000', True, has=[r'mctest: PASS', r'\(0 pages brought for their start\)']),
+    # workers closed and opened again in one program (the counters mapped at each): as many every time, and rounds on them
+    case('mctest-reopen', 'machine workers', 'mctest reopen; mctest reopen lend 100000', True, count=[(r'^mctest: open \d: 255 workers, sum 1409965408', 8), (r'^mctest: reopen PASS', 2)]),
     # lanes (docs/machine/lanes.md): none on rvc_cpu, so plain calls on every worker, compared with themselves;
     # one index a share longer than a pass, which a lane would leave to its worker
     case('lanetest', 'machine', 'lanetest 255 50 1 40; lanetest 31 40 3 20', True, count=[(r'^lanetest: PASS', 2)]),
@@ -254,6 +256,10 @@ CASES = [
     # against one drawn whole, not a pixel apart; with the way back an odd move, and on the first core alone. The 8-bit
     # blitter's (OPENTTD_DRAW=cpu): rvc_cpu draws no GPU list, and the GPU's picture is checked under rvc_harness --cpu --warp
     # ("The picture on the GPU")
+    # Age of Empires is on images made with --aoe only (docs/games/aoe.md): an image without its data says so and passes
+    case('aoe', 'games aoe', X + 'if [ -f /usr/share/aoe/Empires.dat ]; then AOE_TICK_MS=33 AOE_SUM_EVERY=500 AOE_SUM_END=1000 '
+         'AOE_SCRIPT="3000 click 400 245;3000 click 400 172;3000 click 237 568;2000 click 369 118;1000 rclick 505 170;1000 click 370 215;1000 click 163 508" aoe; else echo AOE-NO-DATA; fi',
+         wall=120, has=[r'aoesum: update 1000 time 99900 objects 4357 sum aa8906c1|AOE-NO-DATA']),
     case('openttd-scroll', 'games openttd', X + 'OPENTTD_DRAW=cpu OPENTTD_PLAY=1 OPENTTD_PLAY_ODD=1 OPENTTD_PAUSE=1 OPENTTD_CHECK=1 openttd -g /usr/share/openttd/busy.sav',
          True, wall=400, has=[r'openttd: play round 1: .*checked (19\d|200), 0 differ \(0 pixels']),
     case('openttd-scroll-serial', 'games openttd', X + 'OPENTTD_DRAW=cpu OPENTTD_PLAY=1 OPENTTD_PAUSE=1 OPENTTD_CHECK=1 OPENTTD_WORKERS=0 openttd -g /usr/share/openttd/busy.sav',
@@ -541,6 +547,11 @@ CASES = [
     case('apps-clock-kept', 'desktop apps', "nxreg set nxclock.alarm 09:30; nxreg set nxclock.size 500x420; nxreg set nxclock.24h 1; nxreg set nxclock.seconds 1; nxreg set nxclock.alarm_on 0; nxreg set nxclock.timer 300; nx; sleep 3; nxfuzz start:c:nxclock wait:c:20 wins close:c:x end", True,
          wall=120, has=[r'FZ win \d+ .* 50\dx4\d\d "', r'^FZ-DONE 0']),
     case('apps-icon-bad', 'desktop apps', "cp /usr/bin/nxreg /tmp/p; nxicon /tmp/p /root/Pictures/Fox.png; nxicon /tmp/p /nosuch; nxicon /tmp/p", wall=60, has=[r'/tmp/p has an icon of its own']),
+    # nxray closed with one worker on a whole picture at the largest size: at the next tiles, not when the picture is whole
+    case('apps-ray-one-worker-close', 'desktop apps', "export RAY_WORKERS=1 NANOX_SIZE=1024x768; nx; sleep 3; nxfuzz start:r:nxray wait:r:30 sleep:1000 key:r:r sleep:500 key:r:r sleep:1000 close:r:x end", True,
+         wall=200, has=[r'FZ closed r \(x\)', r'^FZ-DONE 0'], never=[r'FZ-BAD']),
+    case('wm-640-click', 'desktop wm', "export NANOX_SIZE=640x480 TDAWN_INPUT_LOG=1; nx; sleep 3; nxfuzz start:t:tdawn wait:t:90 sleep:30000 hclick:t:100,200 sleep:3000 close:t:kill start:r:ralert wait:r:90 sleep:30000 hclick:r:639,399 sleep:3000 close:r:kill", True,
+         wall=280, has=[r'tdinput: button 1 down at 50,100 \(100,200 in the 640x400 window\)', r'tdinput: button 1 down at 639,399 \(639,399 in the 640x400 window\)']),
     case('apps-term-large', 'desktop apps', "nxreg set terminal.size 24; nx; sleep 3; nxfuzz start:t:nxterm wait:t:20 wins close:t:x end", True,
          wall=120, has=[r'FZ closed t \(x\)', r'^FZ-DONE 0', r'FZ win \d+ .* mapped at \S+ [0-7]\d\dx[0-5]\d\d "'], never=[r'FZ-BAD']),
     case('apps-micropolis-x-early', 'desktop apps micropolis', "nx; sleep 3; nxfuzz start:m:nxmicropolis wait:m:60 close:m:x end", True,
@@ -729,7 +740,7 @@ def zerotail_nommu():
 # (16-byte romfs packing): what the pool hands out is checked on copies in tmpfs
 ZERO_TAIL_NOMMU = ('zerotest 12 4; mkdir -p /tmp/t; find /usr/share /usr/bin /etc -maxdepth 1 -type f -size -256k | '
                    'while read f; do cp "$f" /tmp/t/; done; tailtest /tmp/t/*')
-CC_BYTES_NOMMU = '1681c282'   # shader.c and fractal.c follow a resized window (31 October 2026; what the examples take moved in the archives: pack.py), latest; 8f0167e6: mallocng keeping freed groups (malloc_keep.py, 31 October 2026, latest); 488c2419: elf2flt's relocations in the machine's order; 18ecf477: the build folder's name out of the libraries (-ffile-prefix-map in setup.sh's drivers, 31 October 2026): client.c's __FILE__ in libnano-X.a's strings went with the folder, /home/micha/bpcc 0650c8b3 and /home/micha/nm 1480ba8c from the same sources; before that libmcw.a with mcwx's lowest free worker (6af8737) too; before it f378920f: libmcw.a's worker entry writing the program's tag into its answer, with the toolchain below (29 October 2026, latest of all); libcompiler_rt.a's 64-bit division and double's sum, product and conversions of our own (rt/) and every global hidden in rv32-cc (nommu_hidden.h) (29 October 2026, latest); memset's range in the layout of RAM in one piece (2ecf76d) and mcwx's team job that lingered out posted with the round (28 October 2026, latest); memcpy's commit's copy from 4 KB and mcwx's calls round the row on RISC-V (28 October 2026, later); the devices at 0x80000000 (libmcw.a's and libgles.a's device addresses, uop.h's RAM test in memcpy and memset); libc.a's float libm (linux/userland/libm), memcpy and memset through the commit's copy, memmove and memcmp a word a turn, a double's printf in doubles; libmcw.a's mc_publish (28 October 2026)  # with libmcw.a's tagged answers (1ee0347) too it moves again: set anew from a build with both
+CC_BYTES_NOMMU = '93ad561a'   # shader.c and fractal.c follow a resized window (31 October 2026; what the examples take moved in the archives: pack.py), latest; 8f0167e6: mallocng keeping freed groups (malloc_keep.py, 31 October 2026, latest); 488c2419: elf2flt's relocations in the machine's order; 18ecf477: the build folder's name out of the libraries (-ffile-prefix-map in setup.sh's drivers, 31 October 2026): client.c's __FILE__ in libnano-X.a's strings went with the folder, /home/micha/bpcc 0650c8b3 and /home/micha/nm 1480ba8c from the same sources; before that libmcw.a with mcwx's lowest free worker (6af8737) too; before it f378920f: libmcw.a's worker entry writing the program's tag into its answer, with the toolchain below (29 October 2026, latest of all); libcompiler_rt.a's 64-bit division and double's sum, product and conversions of our own (rt/) and every global hidden in rv32-cc (nommu_hidden.h) (29 October 2026, latest); memset's range in the layout of RAM in one piece (2ecf76d) and mcwx's team job that lingered out posted with the round (28 October 2026, latest); memcpy's commit's copy from 4 KB and mcwx's calls round the row on RISC-V (28 October 2026, later); the devices at 0x80000000 (libmcw.a's and libgles.a's device addresses, uop.h's RAM test in memcpy and memset); libc.a's float libm (linux/userland/libm), memcpy and memset through the commit's copy, memmove and memcmp a word a turn, a double's printf in doubles; libmcw.a's mc_publish (28 October 2026)  # with libmcw.a's tagged answers (1ee0347) too it moves again: set anew from a build with both
 
 
 def without_mmu(image):

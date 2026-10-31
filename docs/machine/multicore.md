@@ -297,6 +297,8 @@ A job is a function of the program and two words for it:
     for (k = 1; k <= n; k++) { mcw_wait(k); total += mcw_result(k); }
     mcw_close();                                              // before leaving: atexit(mcw_close) will do
 
+Workers may be closed and opened again in one program: `mcw_close` ends the team (`mcwx_closing`) and gives back what `mcw_map` mapped, as a mapping keeps the device's file open, and with it the program's cores (the next open had half of them). `mctest reopen` holds it.
+
 `mcw.c` uses nothing of the C library (it makes its system calls itself), so it links into a
 program with any runtime: `programs/mc/build.bat` and `linux/ralert/build.sh` show two (clang
 with the small runtime, and the image's toolchain with musl).

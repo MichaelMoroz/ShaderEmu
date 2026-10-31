@@ -1744,6 +1744,7 @@ int main(int argc, char** argv) {
                 word(CTRL + 0x3c) = (opt.desktop ? 1u : 0u) | (opt.tabs ? 2u : 0u) | (uint32_t)(kGpuTarget / 16) << 8 | (uint32_t)(kGpuTarget / 16) << 16;
                 console_hook = cpuConsoleHook;
                 cpuRunning = true;
+                if (const char* d = getenv("RVC_PROF"); d && *d) prof::ticks = 8192, prof::init(d, cores.size(), true);   // (a profile up to --save-state: experiments/rv_fuse)
                 backend.cpuMode = true;
                 cpuT0 = wall;
             }
@@ -2344,6 +2345,7 @@ int main(int argc, char** argv) {
         bool ok = backend.readState(W, H, data);
         if (ok && cpuRunning) {
             // (--cpu: the processor's state put where the shader machine keeps it, its clock the guest's)
+            if (cpuemu::prof::on) cpuemu::prof::report();
             int workers = cpuSnapshotCores(data, W, opt.workers ? 1u << opt.workers : 2u);   // (2: geotune's pick on this card)
             hdr.time = cpuemu::guest_seconds;
             hdr.sentTag = cpuemu::word(rvlayout::kCon);

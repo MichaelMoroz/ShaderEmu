@@ -221,8 +221,19 @@ int main(void)
 		glViewport(0, 0, width, height);
 		seglQuad(corners, uv, texture[at], 255, 255, 0);
 		seglSwapEarly();
-		if (!stopped)
-			t += 0.25f;
+		/* stopped: this picture stays, shown again for what clears the window, and no core turns */
+		while (stopped) {
+			GrGetNextEvent(&event);
+			if (event.type == GR_EVENT_TYPE_CLOSE_REQ || (event.type == GR_EVENT_TYPE_KEY_DOWN && event.keystroke.ch == 'q'))
+				goto out;
+			if (event.type == GR_EVENT_TYPE_KEY_DOWN && event.keystroke.ch == ' ')
+				stopped = 0;
+			seglSize(&width, &height);
+			glViewport(0, 0, width, height);
+			seglQuad(corners, uv, texture[at], 255, 255, 0);
+			seglSwapEarly();
+		}
+		t += 0.25f;
 		at ^= 1;
 		scene(&frames[at], t);
 		seglSettle();	/* (the list that shows this memory's last picture has been drawn) */
@@ -236,6 +247,7 @@ int main(void)
 			since += ms;
 		}
 	}
+out:
 	mcw_shade_wait();
 	mcw_close();
 	GrClose();

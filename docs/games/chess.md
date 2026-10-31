@@ -103,6 +103,6 @@ So **63 workers is the default** (`MOST_WORKERS`): 255 has more nodes and less d
 
 - Reversi, checkers and small-board Go: chess took the budget. They could share the window's board code.
 - The engine does not see zugzwang past its null move (Morphy's mate in two with a rook given was not solved).
-- A second `mcw_open` after `mcw_close` in one process gave 127 workers and hung in `mcw_for_begin`. nxchess keeps its
-  workers open instead; the cause in `mcw` was not looked for.
+- nxchess keeps its workers open between searches. (A second `mcw_open` after `mcw_close` once gave 127 workers and hung: the
+  counters' mappings kept the device's file open, fixed in `mcw_close`; `mctest reopen` holds it.)
 - No endgame tables; no pondering in the player's time; no clock.

@@ -1,6 +1,6 @@
 ---
 name: tick-and-shader-changes
-description: Change and measure the ShaderX86 tick and its shaders (experiments/rvc_opt, experiments/rvc_lean, Unity's copy, fxc2) - measuring a change whole and alternating, the three loads, RVC_TICK_ALT in one run, the shape the fast loop must keep, HLSL traps, the WARP stamp (warp_ok, --stamp, --mark-ok), rvc_cpu in step with the tick, bringing it to Unity, VRChat's constraints, and changing fxc2 itself. Use before editing tick code, main.shader, src/*.h, tick.hlsl, gpu.shader, a commit pass, or fxc2, or when asked what a tick change is worth. Triggers on: tick, fast loop, fast_exec_l1, fxc2, DXBC, warp_ok, stamp, RVC_TICK_ALT, shell loop and Doom, rvc_lean, MachineTickLean, Sync shader sources, cso_loops, tick_path.
+description: Change and measure the ShaderEmu tick and its shaders (experiments/rvc_opt, experiments/rvc_lean, Unity's copy, fxc2) - measuring a change whole and alternating, the three loads, RVC_TICK_ALT in one run, the shape the fast loop must keep, HLSL traps, the WARP stamp (warp_ok, --stamp, --mark-ok), rvc_cpu in step with the tick, bringing it to Unity, VRChat's constraints, and changing fxc2 itself. Use before editing tick code, main.shader, src/*.h, tick.hlsl, gpu.shader, a commit pass, or fxc2, or when asked what a tick change is worth. Triggers on: tick, fast loop, fast_exec_l1, fxc2, DXBC, warp_ok, stamp, RVC_TICK_ALT, shell loop and Doom, rvc_lean, MachineTickLean, Sync shader sources, cso_loops, tick_path.
 ---
 
 # Changing the tick

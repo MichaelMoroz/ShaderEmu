@@ -1,6 +1,6 @@
 ---
 name: building-the-system
-description: Build the ShaderX86 guest system - the harness (build.bat), the WSL toolchain and ~/nm tree, a private WSL home for parallel work, linux/nommu/setup.sh, kernel.sh, build.sh, root.sh, image.py, tools/make_image.ps1, private images, linux/prebuilt and --save-prebuilt, the kernel hook rules, relinking after a library change, cc-bytes, and remaking snapshots after a layout change. Use when a change must reach the image, when building in a worktree or beside other agents, when a kernel or hook changes, or when a build fails or seems to have no effect. Triggers on: build.sh, kernel.sh, root.sh, image.py, make_image, setup.sh, private image, prebuilt, save-prebuilt, hook, ~/nm, WSL build, build.bat, program not updated in the image, cc-bytes.
+description: Build the ShaderEmu guest system - the harness (build.bat), the WSL toolchain and ~/nm tree, a private WSL home for parallel work, linux/nommu/setup.sh, kernel.sh, build.sh, root.sh, image.py, tools/make_image.ps1, private images, linux/prebuilt and --save-prebuilt, the kernel hook rules, relinking after a library change, cc-bytes, and remaking snapshots after a layout change. Use when a change must reach the image, when building in a worktree or beside other agents, when a kernel or hook changes, or when a build fails or seems to have no effect. Triggers on: build.sh, kernel.sh, root.sh, image.py, make_image, setup.sh, private image, prebuilt, save-prebuilt, hook, ~/nm, WSL build, build.bat, program not updated in the image, cc-bytes.
 ---
 
 # Building the system
@@ -59,7 +59,7 @@ Then in every WSL command: `export HOME=~/agents/X PYTHONUSERBASE=/home/micha/.l
 - `$HOME` inside a command: use `bash -c '...'` so WSL expands it, and check `readlink ~/agents/X/shaderemu-linux`.
 - WSL has no sudo. `ffmpeg` is wanted once for ClassiCube's tune and Half-Life's data, and caches copied with `~/nm` have them. The teapot: `linux/prebuilt/root/root/Models/teapot.obj` into `~/nm/work/src/pathtrace-data/`.
 - Bytes must not go by the folder: `-ffile-prefix-map=$NM=/nm` is in the drivers, so `cc-bytes` holds under any `HOME`. A new `__FILE__` or path in a library breaks that.
-- A worktree has no `bin\`, `build\` or `rvc\`. `build.bat` makes the harness; copy `D:\Development\ShaderX86\rvc`, or `git clone https://github.com/pimaker/rvc rvc`. Never write into the main checkout's `build\`.
+- A worktree has no `bin\`, `build\` or `rvc\`. `build.bat` makes the harness; copy the main checkout's `rvc`, or `git clone https://github.com/pimaker/rvc rvc`. Never write into the main checkout's `build\`.
 
 Builds copy no `.claude` (`--exclude /.claude`): a worktree there held 15 GB.
 

@@ -245,6 +245,13 @@ public:
                 err = base.u8string() + ".bin: cannot read the ROM";
                 return false;
             }
+            // RVC_CODE_FILE: rows under the ROM's, from the texture's first (experiments/rv_fuse/wide.h)
+            if (const char* cf = getenv("RVC_CODE_FILE"); cf && *cf) {
+                std::string code;
+                if (!readFileBinary(cf, code)) { err = std::string(cf) + ": cannot read"; return false; }
+                bin.resize((bin.size() + 2048 * 16 - 1) / (2048 * 16) * (2048 * 16));
+                bin += code;
+            }
             UINT height = 0;
             auto srv = createTextureTexels(gpu_.device.Get(), bin, 2048, /*flipY=*/true, height, err);
             if (!srv) return false;

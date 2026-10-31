@@ -2,12 +2,17 @@
 no-MMU kernel (kernel.sh), and RAM in the device tree from the kernel's address, after the devices, to
 0x92000000 (docs/system/nommu.md, "Memory"). Without a build
 in build/nommu, linux/prebuilt/nommu: its kernel and the files that differ from linux/prebuilt/root.
-   python linux/nommu/image.py [NAME [ROOT [KERNEL]]] [--save-prebuilt]"""
+   python linux/nommu/image.py [NAME [ROOT [KERNEL]]] [--save-prebuilt] [--aoe]
+--aoe (or AOE_IMAGE=1) fetches the Age of Empires trial and accepts its EULA (docs/games/aoe.md); not with --save-prebuilt."""
 import filecmp, os, shutil, struct, subprocess, sys
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PREBUILT = os.path.join(ROOT, 'linux', 'prebuilt', 'nommu')
 save = '--save-prebuilt' in sys.argv
-argv = [a for a in sys.argv[1:] if a != '--save-prebuilt']
+aoe = '--aoe' in sys.argv or os.environ.get('AOE_IMAGE') == '1'
+argv = [a for a in sys.argv[1:] if a not in ('--save-prebuilt', '--aoe')]
+if aoe and save:
+    print('Age of Empires is never saved with a prebuilt: this image is made without it')
+    aoe = False
 built = os.path.join(ROOT, 'build', 'nommu')
 own = os.path.exists(os.path.join(built, 'Image')) and os.path.isdir(os.path.join(built, 'flatroot'))
 name = argv[0] if len(argv) > 0 else 'nommu'
@@ -32,6 +37,9 @@ shutil.copy(kernel, os.path.join(D, 'Image'))
 if os.path.exists(os.path.join(D, 'overlay', 'usr', 'bin', 'halflife.bin')) and os.environ.get('HALFLIFE_DATA') != '0':
     if subprocess.run([sys.executable, os.path.join(ROOT, 'linux', 'halflife', 'data.py'), os.path.join(D, 'overlay')]).returncode:
         print('Uplink\'s data could not be fetched: the image has Half-Life without it')
+# Age of Empires only when asked: linux/aoe/data.py says why not, and the image goes on without it
+if aoe:
+    subprocess.run([sys.executable, os.path.join(ROOT, 'linux', 'aoe', 'data.py'), os.path.join(D, 'overlay')])
 r = subprocess.run([sys.executable, os.path.join(ROOT, 'tools', 'private_image.py'), name], cwd=ROOT, capture_output=True, text=True)
 print(r.stdout[-600:], r.stderr[-600:])
 if r.returncode:

@@ -101,6 +101,8 @@ byte (which the display does not draw and the sum leaves out).
 `RAY_SHARES=1` prints each picture's shares (the workers'), or on the field what the first core's part
 of the picture took and how many texels the lanes left it.
 
+Stopped, no core runs: the workers' jobs end and the first core waits for an event; a change of what is shown or of the size traces one picture. A picture given up ends at the next 64 tiles or 4,096 lanes (`go.stop`): with one worker a share is the whole picture.
+
 ## `nxpath`: a mesh viewer with a path tracer
 
 `linux/pathtrace` (`build.sh` after Dear ImGui's; Start menu: Other, "Path tracer (every

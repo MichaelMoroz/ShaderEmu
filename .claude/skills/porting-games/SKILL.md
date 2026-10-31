@@ -1,9 +1,9 @@
 ---
 name: porting-games
-description: Step-by-step tutorial for porting a game (or any large C/C++ program) to the ShaderX86 machine - RISC-V in a GPU shader, no-MMU Linux with bFLT flat programs, a Nano-X desktop, worker cores, GPU drawing through gles.c/segl, a sound card and ROM files. Distilled from the ports already in the tree (Doom, Quake, Quake III, Half-Life, Tiberian Dawn, Red Alert, the NES, ClassiCube, Micropolis, OpenTTD). Use when asked whether a game can run on the machine, when starting a new port under linux/NAME, when writing its build.sh, patch, video/sound/input drivers or state sums, when making a port fast enough at 2 to 3 MIPS a core, when moving its work to worker cores, or when putting it on the desktop, in the image and in tools/test_all.py. Triggers on: port a game, new game, linux/NAME/build.sh, flat program, bFLT, nommu build, seglSwapEarly, sound card driver, host_sum, state sum, test_all case, nxapps, nxopen, game too slow on the machine.
+description: Step-by-step tutorial for porting a game (or any large C/C++ program) to the ShaderEmu machine - RISC-V in a GPU shader, no-MMU Linux with bFLT flat programs, a Nano-X desktop, worker cores, GPU drawing through gles.c/segl, a sound card and ROM files. Distilled from the ports already in the tree (Doom, Quake, Quake III, Half-Life, Tiberian Dawn, Red Alert, the NES, ClassiCube, Micropolis, OpenTTD). Use when asked whether a game can run on the machine, when starting a new port under linux/NAME, when writing its build.sh, patch, video/sound/input drivers or state sums, when making a port fast enough at 2 to 3 MIPS a core, when moving its work to worker cores, or when putting it on the desktop, in the image and in tools/test_all.py. Triggers on: port a game, new game, linux/NAME/build.sh, flat program, bFLT, nommu build, seglSwapEarly, sound card driver, host_sum, state sum, test_all case, nxapps, nxopen, game too slow on the machine.
 ---
 
-# Porting a game to ShaderX86
+# Porting a game to ShaderEmu
 
 The machine runs about 5.5 million instructions a second on its first core at full passes on an RTX 5090
 (calibrated), and 2 to 3 in the world's rounds under a VR frame, so design for 2 MIPS a core; it also has up to 255 worker cores that are free but
