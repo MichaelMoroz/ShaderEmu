@@ -63,7 +63,7 @@ the model replaces that clock. The game's own lines then give the rates (`Select
 
 ## How far to trust it
 
-Fitted on 30 October 2026 to an RTX 5090 with the new fxc2:
+Fitted in October 2026 to an RTX 5090 with the new fxc2:
 
     ms a pass = 1.4005 + 0.0111 core 0 + 0.00079 workers + 0.5705 a GPU list
 
