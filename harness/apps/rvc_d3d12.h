@@ -438,6 +438,11 @@ void buildPasses12(Dx& dx, const SLShader& shader, const CompileSettings& cs, co
             vsBytes = dxbcToDxil(vsBytes);
             psBytes = dxbcToDxil(psBytes);
             fprintf(stderr, "[d3d12] pass '%s': DXIL %zu bytes\n", P.name.c_str(), psBytes.size());
+            // RVC_DXIL_DUMP=FILE: the known plaintext ngfx-trace takes to read a shader longer than its own XOR stream
+            if (getenv("RVC_DXIL_DUMP") && p == 0) {
+                FILE* f = fopen(getenv("RVC_DXIL_DUMP"), "wb");
+                if (f) { fwrite(psBytes.data(), 1, psBytes.size(), f); fclose(f); }
+            }
         }
         }
         if (P.vs.textures.size() == 1 && P.vs.textures[0].name == "_SelfTexture2D") P.vsSelf = (int)P.vs.textures[0].slot;

@@ -23,6 +23,8 @@ ap.add_argument('out')
 ap.add_argument('--no-fold', action='store_true')
 ap.add_argument('--sink', type=int, default=32)
 ap.add_argument('--check', action='store_true')
+ap.add_argument('--stride', type=int, default=1, help='a bundle every N texels: what the density of the code is worth')
+ap.add_argument('--hot', action='store_true', help='runs of code laid out by how hot they are: the texture cache holds what is near')
 a = ap.parse_args()
 SINK = a.sink
 
@@ -128,11 +130,32 @@ def x_word(rd, ra, rb, fn=0):
 stats = collections.Counter()
 pending = []
 weight = collections.Counter()
-for pc in sorted(code):
-    if pc in start_of or (pc not in starts and pc - 4 in code): continue
+order = sorted(code)
+if a.hot:
+    run_of, heat = {}, collections.Counter()
+    r = None
+    for pc in order:
+        if pc - 4 not in code or pc in starts:
+            r = pc
+        run_of[pc] = r
+        heat[r] = max(heat[r], code[pc][1])
+    order = sorted(heat, key=lambda p: (-heat[p], p)) + order
+for pc in order:
+    if pc in start_of or (pc not in starts and pc - 4 in code and not a.hot): continue
+    if a.hot and pc not in heat: continue
     # a run from here, while the words are known
     at = pc
     while at in code:
+        if a.hot and at != pc and (at in start_of or (at in heat and heat[at] * 8 < heat[pc])):
+            # what comes next lies elsewhere: a jump to it, in the last bundle if it has no control, or one of its own
+            L = bundles[-1]
+            if L['path'] != P_LEAVE and L['ctl'] in (2, 3):
+                pass
+            elif L['path'] != P_LEAVE and L['ctl'] == 0 and L['path'] != P_RV:
+                L.update(ctl=2, target=at)
+            else:
+                bundles.append(dict(X=x_word(SINK, 0, 0), Y=Y_NONE, Z=0, path=P_SUM, n=0, ctl=2, f3=0, cra=0, crb=0, target=at, rv=at, off=0))
+            break
         w, n0 = code[at]
         k = kind(w)
         start_of[at] = len(bundles)
@@ -240,6 +263,24 @@ for pc in sorted(code):
             bundles.append(dict(X=x_word(SINK, 0, 0), Y=Y_NONE, Z=0, path=P_LEAVE, n=0, ctl=0, f3=0, cra=0, crb=0, target=None, rv=at, off=0))
     # a run that ended in a jump goes on from the next start the loop finds
 
+# a branch too far: the opposite branch over a jump of its own
+if a.hot:
+    out, moved = [], {}
+    for idx, B in enumerate(bundles):
+        moved[idx] = len(out)
+        out.append(B)
+        if B['ctl'] == 1 and B['path'] != P_LEAVE and 'tb' not in B:
+            t = B['target'] & 0xffffffff
+            if t in start_of and abs(start_of[t] - idx) >= 900:
+                out.append(dict(X=x_word(SINK, 0, 0), Y=Y_NONE, Z=0, path=P_SUM, n=0, ctl=2, f3=0, cra=0, crb=0, target=t, rv=t, off=0))
+                B.update(f3=B['f3'] ^ 1, target=None, skip=True)
+    for idx, B in enumerate(out):
+        if B.get('skip'):
+            B['tb'] = idx + 2
+        elif 'tb' in B:
+            B['tb'] = moved[B['tb']]
+    start_of = {pc: moved[i] for pc, i in start_of.items()}
+    bundles = out
 # targets
 leave_at = {}
 
@@ -266,10 +307,10 @@ assert B0 + n < PCT
 
 area = np.zeros((ROWS * 2048, 4), dtype=np.uint32)
 for idx, B in enumerate(bundles):
-    c = B0 + idx
+    c = B0 + idx * a.stride
     ctl = B['path'] | B['n'] << 3 | B['ctl'] << 6
     if B['ctl'] == 1:
-        off = B['tb'] - idx
+        off = (B['tb'] - idx) * a.stride
         if not -1024 <= off < 1024:
             # out of reach: the old loop takes it, from this bundle's start
             ctl = P_LEAVE
@@ -278,7 +319,7 @@ for idx, B in enumerate(bundles):
         else:
             ctl |= B['f3'] << 8 | B['cra'] << 11 | B['crb'] << 16 | (off & 0x7ff) << 21
     elif B['ctl'] == 2:
-        ctl |= ((B['tb'] - idx) & 0xffffff) << 8
+        ctl |= (((B['tb'] - idx) * a.stride) & 0xffffff) << 8
     elif B['ctl'] == 3:
         if B['path'] == P_RV:
             ctl = B['path'] | B['n'] << 3 | 3 << 6
@@ -294,7 +335,7 @@ for pc, b in start_of.items():
         t = (pc - K_LO) >> 4
     else:
         t = 256 * 2048 + ((pc - P_LO) >> 4)
-    area[t, (pc >> 2) & 3] = B0 + b
+    area[t, (pc >> 2) & 3] = B0 + b * a.stride
 # the code area's rows go in the texture's order: the file's last row is y = 0 (the harness flips it)
 area.reshape(ROWS, 2048, 4)[::-1].tofile(a.out)
 tot = sum(B.get('w', 0) for B in bundles)

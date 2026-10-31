@@ -9,6 +9,12 @@ ap.add_argument('--src', default='experiments/rvc_opt')
 ap.add_argument('--count', default='0')
 ap.add_argument('--shape', default='0')
 ap.add_argument('--test', default='0')
+ap.add_argument('--probe', default='')
+ap.add_argument('--fake', default='')
+ap.add_argument('--v2', action='store_true')
+ap.add_argument('--synth', default='')
+ap.add_argument('--stride', default='')
+ap.add_argument('--fake-mask', default='')
 a = ap.parse_args()
 if os.path.exists(a.dir):
     shutil.rmtree(a.dir)
@@ -28,7 +34,7 @@ def sub(path, old, new):
 
 
 # after the fast step (its names: fast_exec, xr, fast_budget)
-sub('src/cpu.h', 'void cpu_tick_l1(L1P0) {', f'#define WIDE_COUNT {a.count}\n#define WIDE_SHAPE {a.shape}\n#define WIDE_TEST {a.test}\n#include "wide.h"\n\nvoid cpu_tick_l1(L1P0) {{')
+sub('src/cpu.h', 'void cpu_tick_l1(L1P0) {', (f'#define WIDE_PROBE {a.probe}\n' if a.probe else '') + (f'#define WIDE_FAKE {a.fake}\n' if a.fake else '') + ('#define WIDE_V2\n' if a.v2 else '') + (f'#define WIDE_SYNTH {a.synth}u\n' if a.synth else '') + (f'#define WIDE_STRIDE {a.stride}u\n' if a.stride else '') + (f'#define WIDE_FAKE_MASK {a.fake_mask}u\n' if a.fake_mask else '') + f'#define WIDE_COUNT {a.count}\n#define WIDE_SHAPE {a.shape}\n#define WIDE_TEST {a.test}\n#include "wide.h"\n\nvoid cpu_tick_l1(L1P0) {{')
 OLD = """                        i += fast_run(_Ticks - i);
                         if (i < _Ticks && !cpu.stall) {
                             cpu_tick_l1(L1A0);
