@@ -29,7 +29,7 @@ def main():
         count = int(w(table)[0])
         for k in range(count):
             x, y, lw, lh, address = (int(v) for v in w(table + 16 + 32 * k, 5))
-            x, y = np.int32(x), np.int32(y)
+            x, y = x - (x >> 31 << 32), y - (y >> 31 << 32)   # (a layer dragged past the left or top edge)
             print('  layer %d: %d x %d at %d, %d from %08x' % (k, lw, lh, x, y, address))
             pixels = w(address, lw * lh).reshape(lh, lw)
             x0, y0, x1, y1 = max(0, x), max(0, y), min(width, x + lw), min(height, y + lh)

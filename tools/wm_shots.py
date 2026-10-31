@@ -30,10 +30,10 @@ SCENES = {
     "desktops": A + "nxkey ctrl+alt+2 1000; nxwintest plain two & sleep 2; nxkey ctrl+alt+shift+3 1000 ctrl+alt+1 1500; nxwintest list",
     "group": "nxwintest two a & sleep 2; nxwintest plain c & sleep 2; nxwintest list",
     "group-menu": "nxwintest two a & sleep 3; nxkey 180,586 2000; nxwintest list",
-    "starting": "nxwintest slow 30 & sleep 2; nxwintest list",
+    "starting": ("nxreg set bar.pinned 'nxwintest slow 30'; ", "nxkey 49,586; sleep 2; nxwintest list"),
     "not-responding": "nxwintest hang h & sleep 2; nxkey alt+f4 7000; nxwintest list",
     "still-running": "nxwintest linger l & sleep 2; nxkey alt+f4 12000; nxwintest list",
-    "crash": "nxwintest crash c & sleep 8; nxwintest list",
+    "crash": ("nxreg set bar.pinned 'nxwintest crash c'; ", "nxkey 49,586; sleep 8; nxwintest list"),
 }
 
 
@@ -48,7 +48,8 @@ def main():
     for name in args.scene or SCENES:
         snap = os.path.join(args.out, name + ".snap")
         # (the bar's words go to the console; nx comes back with the desktop up)
-        send = "export NXBAR_PRINT=1 NXBAR_CLOSE_MS=${NXBAR_CLOSE_MS:-5000}; nx; sleep 4; %s; sleep 1; echo LX-''DONE\\n" % SCENES[name]
+        before, scene = SCENES[name] if isinstance(SCENES[name], tuple) else ("", SCENES[name])
+        send = "%sexport NXBAR_PRINT=1; nx; sleep 4; %s; sleep 1; echo LX-''DONE\\n" % (before, scene)
         cmd = ["pwsh", "-NoProfile", "-File", os.path.join(ROOT, "tools", "gpu_queue.ps1"), harness, "--d3d11", "--rvc", "experiments\\rvc_opt",
                "--image", args.image, "--cpu", "--warp", "--no-desktop", "--expect", "/ # ", "--send", send,
                "--until", "LX-DONE", "--save-state", snap]

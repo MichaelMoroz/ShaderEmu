@@ -37,6 +37,8 @@ draw(GR_WINDOW_ID w, const char *title)
 	GR_WINDOW_INFO info;
 
 	GrGetWindowInfo(w, &info);
+	GrSetGCForeground(gc, MWRGB(230, 236, 244));
+	GrFillRect(w, gc, 0, 0, info.width, info.height);
 	GrSetGCForeground(gc, MWRGB(40, 90, 160));
 	GrRect(w, gc, 0, 0, info.width, info.height);
 	GrLine(w, gc, 0, 0, info.width - 1, info.height - 1);

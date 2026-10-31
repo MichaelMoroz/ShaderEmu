@@ -146,13 +146,15 @@ scratch textures up to `0x81700000`; the last 4 MiB are left to one OpenGL progr
 
 `nxbar` has, from the left: the Start button and menu; the programs pinned to it (an icon each,
 the registry's `bar.pinned`, commands parted by commas, `nxfiles,nxterm,nxweb` by default; the
-right button there unpins); a button for every open window; then the player's name, the
+right button there unpins); a button for each program's windows and each that is starting ("The window manager and the bar");
+four cells for the desktops; then the player's name, the
 volume, the machine's speed, the clock and, at the right end, a strip that shows the desktop.
 
 - A window's button: a click brings the window to the front, or puts it away when it is in
   front already (that button is drawn pressed: the window with the keyboard, from the
-  activations the bar hears); the right button offers Restore, Minimise, Pin / Unpin and
-  Close; the middle button closes it; the wheel over the buttons goes from window to window.
+  activations the bar hears); the right button offers the window's menu; the middle button closes it (and it is watched:
+  "A close that is not answered"); the wheel over the buttons goes from window to window. Several windows of a program: a list.
+  Up to 32 windows and 16 buttons.
 - The volume's button opens a slider (`/dev/sound` is opened only while it is up, so the card
   is not kept on), with a mute button under it; the wheel and Up/Down step by 5. It writes
   `sound.volume` as Settings does.
@@ -197,6 +199,102 @@ went or was put away: it selects the root's `GR_EVENT_MASK_CHLD_UPDATE` and look
 second of such an event, and every 60 s besides; a title is asked again when its window is
 activated ("One program's windows are not every program's news"). Whose window has the keyboard is asked after an update and
 every 15 s otherwise, and the program's name is read only when another window has it.
+
+## The window manager and the bar
+
+The window manager is in the server (`wm*.c`, `window_key` in `srvevent.c`) and knows frames; the bar (`nxbar`) knows
+programs: which process a window is of, what is still starting, what was asked to close and has not. A frame's state is in
+bits of its properties, which any program reads with `GrGetWindowInfo` (`GR_WM_PROPS_ONTOP`, `_SHADED`, `_MAXED`, `_TILED`,
+`_AWAY`, the desktop in `GR_WM_PROPS_DESK`). No request was added and the client's library is as it was:
+
+- **A program or the bar tells the window manager** with `GrSetWMProperties(window, flags GR_WM_FLAGS_COMMAND, props GR_WMC_*,
+  background its argument)`: a frame to a zone, shaded, on top, to a desktop, a desktop shown, a window brought forward from
+  wherever it is, a process that is starting.
+- **The window manager tells the bar** with a hotkey event to whoever grabbed the Windows key (`wm_tell_bar`): `ch` is
+  `GR_WM_TELL(what)`, `subwid` the frame, `rootx` and `rooty` the arguments. With no bar, Tab goes round as it did.
+
+What it adds to the machine: every one of these is a request or two at the moment of the key or the click. Nothing runs
+between them; an idle desktop was 122 and is 125 thousand instructions a second (`rvc_cpu`, 30 s, 31 October 2026, one run each).
+
+**Snapping.** A frame dragged to an edge goes to half the screen, to a corner to a quarter (48 pixels from it), to the top
+to all of it; a frame that does not resize does not snap. Under the drag the bar shows where in one plain window under the
+frame (blue, no buffer kept once it goes). The worker that follows the pointer still moves the layer: the quiet rectangle
+is the screen less 8 pixels at its edges while a frame is dragged (`GsDragInset`), so the kernel reports only moves there
+and the first core hears nothing in between. A frame dragged off a half or a quarter takes its old size back.
+
+**Keys**, Ctrl+Alt held (by key code: Ctrl makes letters control characters):
+
+| Key | |
+|---|---|
+| Left, Right | half of the screen |
+| Up | all of it; Down: back, and from there minimised |
+| U, I, J, K | the quarters: top left, top right, bottom left, bottom right |
+| Shift + arrows | 16 pixels that way |
+| S | rolled up to its caption, or down again |
+| T | kept above the others, or not |
+| D | the desktop shown, windows away; again and they come back |
+| Space | the window's menu |
+| 1 to 4 | that desktop; with Shift the window goes there |
+| Page Up, Page Down | the desktop before or after |
+
+**The caption.** A double press (under 500 ms, under 5 pixels) maximises and puts back; the right button opens the window's
+menu (the bar's `show_task_menu`): Bring to front, Minimise, Maximise or Put back, Left half, Right half,
+Roll up, Keep on top, Desktop (a submenu), New window, Pin to the bar, Close, End the program.
+
+**Rolled up** (`GsShadeWindow`): the frame's buffer stays, the layer shows its first 28 rows (`gd_show_height`) and the rest does not
+take the pointer. The program sees no change of size.
+
+**Kept on top**: a frame raised is put back under those on top (`wm_raise_ontop`), a new one too. The cost is a loop in `GrRaiseWindow`
+only while one exists.
+
+**Desktops**, four: a frame has one in its properties and the others are unmapped by the window manager (`GR_WM_PROPS_AWAY`
+says a frame is hidden by that and not minimised). The bar shows four cells left of the name: lit is the one shown, a line
+under one is one with windows on it; a click or the wheel changes it. Its buttons, Tab and "show the desktop" are of the desktop
+shown. A window brought forward shows its desktop.
+
+**The switcher.** Ctrl or Alt + Tab with the key held is the bar's: the windows of this desktop, the one last with the keyboard
+first, shown after 150 ms or a second Tab (a quick press goes to the last window with nothing drawn); letting the key go goes there.
+Shift goes backward.
+
+**Where a window was.** A window moved, resized or tiled by hand writes `wm.place.PROGRAM` =
+`asked width,asked height,x,y,width,height,zone` in the registry, and the first window of that program with the same asked
+size opens there (`place_found` in `wmclients.c`); a window that asks for a place (`GR_WM_PROPS_NOAUTOMOVE`) keeps it, a window that
+cannot resize keeps its size. `wm.remember` 0 is off. Nothing is written until the frame is let go: the file is 96,000 packed bytes shared.
+
+**A program's button.** The windows of one program on the desktop shown are one button with their count, showing the one that last had
+the keyboard; a click or the right button lists them, with New window and Close all. A single window keeps Windows' click and the
+full window menu. A pinned program that is up comes forward; the middle button or Shift starts another.
+
+**Starting.** What the bar starts, or what a program says it started (`ui_launch_started` sends `GR_WMC_STARTING`), has a grey button
+until a window of it, or of a program it started, shows; the note (`ui_launch.h`) stays too. After a minute (`NXBAR_START_MS`) nothing
+has come: "has shown no window yet", Keep waiting or End it.
+
+**A close that is not answered.** Alt+F4, the box, or the bar's Close tells the bar (`GR_WM_TELL_CLOSE`). After 5 s
+(`NXBAR_CLOSE_MS`) it looks:
+
+- the process has gone: nothing;
+- a new window of it or of a child: it is asking about what is not saved: nothing;
+- the frame is still there: "does not answer", End it or Wait (and asked again in 15 s). The question goes by itself if the window does;
+- the frame has gone, no other window of it, and 5 s later it runs still: "closed its window and is still running", End it or Leave it.
+
+End it is SIGTERM and, 2 s later, SIGKILL. "End the program" in the window menu asks the same without a wait. A process stopped (`kill -STOP`) or
+hanging gets no different words: only its queue's answer is looked at.
+
+**A program that dies.** Its windows go with its socket, and with them its button. Started from the bar or Files, a fault is said
+("stopped working", which signal) with **Start again** (`ui_launch_report_again`), not only OK.
+
+**One of a kind and the one drawer.** `ui_single_instance()` (`ui_single.h`): Settings without arguments and the Monitor bring the running one
+forward, across desktops, and end. A program started by the launcher that ends at once because another draws with the GPU is not a dead end:
+`nxask --gpu PID COMMAND` asks "Close NAME, start THIS" or "Go to NAME", closes the holder, kills it after a wait if it stays, and starts the program;
+its own notice is left out under `UI_LAUNCHED`.
+
+Tests: `python tools/test_all.py wm`, by keys and the pointer on the real desktop, with `nxwintest` (`linux/nanox/nxwintest.c`), which prints each
+window's place and state and acts as a program that behaves badly: `hang`, `ignore`, `linger`, `crash`, `slow`, `two`. `NXBAR_PRINT=1` has the bar say what it
+shows. `python tools/wm_shots.py --image build/images/NAME --out DIR` makes a picture of each feature (with no card time).
+
+Not done: a window's picture in the switcher (a layer is one opaque buffer the composer cannot scale, so icons and a title); keys to move a
+window between screens' edges beyond the nudge; `nxvideo`'s own GPU question stays the notice it was; restart of a program that was not started by a
+launcher (from a shell, nothing watches it); a program that opens its window with no event ever taken has no frame, so its close cannot be asked.
 
 ## Menus
 
@@ -540,7 +638,7 @@ Everything on the desktop can be worked without a pointer.
   Alt+F4 for itself, so use Ctrl there): Tab is the next window (the one in front goes to the
   back; with Shift the one at the back comes forward; a minimised window is shown again), F4
   closes the window, F9 minimises it, F10 maximises it and puts it back. These keys reach no
-  program.
+  program. Ctrl+Alt with an arrow, a letter or a number tiles, moves and changes desktop ("The window manager and the bar").
 - **The Start menu** has the keyboard while it is open, and opened by the Windows key it has
   its first row picked out: Up, Down, Home and End move, a letter goes to the next row that
   starts with it, Enter or Right opens a folder or starts a program, Left or Backspace leaves
