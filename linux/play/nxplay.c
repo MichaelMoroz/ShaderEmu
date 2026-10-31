@@ -1553,6 +1553,13 @@ other_windows(GR_EVENT *event)
 		quit = 1;
 }
 
+/* (a question asked goes when the program is told to: its window's box pressed, or SIGTERM from the monitor) */
+static int
+ask_over_quit(void)
+{
+	return quit;
+}
+
 static void
 ask_error(const char *path, const char *why)
 {
@@ -2372,6 +2379,7 @@ main(int argc, char **argv)
 		return 0;
 	signal(SIGINT, leave);
 	signal(SIGTERM, leave);
+	ui_ask_over = ask_over_quit;
 	signal(SIGPIPE, SIG_IGN);
 	atexit(mcw_close);
 	window_on = window_on && GrOpen() >= 0;

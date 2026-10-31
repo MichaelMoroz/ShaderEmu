@@ -117,7 +117,7 @@ class Runner:
         # One program at a time draws: told to close one still open is as it should be, and then there is no window
         def open_at(name, at):
             for tag, command in re.findall(r'FZ started (\S+): process \d+: ([^\r\n]*)', console[:at]):
-                if (name == 'another' or name.replace('.bin', '') in command) and not re.search(r'FZ closed %s \(' % re.escape(tag), console[:at]):
+                if (name == 'another' or (name == 'game' and re.match(r'tdawn|ralert', command)) or name.replace('.bin', '') in command) and not re.search(r'FZ closed %s \(' % re.escape(tag), console[:at]):
                     return True
             return False
         told = list(re.finditer(r'(?:GPU is drawing for|close) ((?!it\b)\S+)(?: program)?(?: \(process| first)', console))
@@ -126,6 +126,9 @@ class Runner:
         if 'FZ-DONE' not in console:
             at = re.findall(r'FZ op ([^\r\n]*)', console)
             bad.append(['wall', 'no FZ-DONE in the wall, last op ' + (at[-1] if at else '?')])
+        m = re.search(r'FZ memory: free\+cached (\d+) KB at the start, (\d+) KB now', console)
+        if m and int(m.group(1)) - int(m.group(2)) > 8192:
+            bad.append(['memory', m.group(0)])
         if a.races:
             m = re.search(r'(\d+) (?:changes? )?undone', tail)
             if m and int(m.group(1)):

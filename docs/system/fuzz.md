@@ -42,7 +42,7 @@ its window gone is `left-running`, `gone_wait` seconds (40) after: the report th
 A window goes to a tag when its process is in the session its `start:` made; a question (`nxask`) is said and goes to nobody.
 
 `end` closes each tag, then whatever nobody started (random keys can start a program from the desktop's icons, and a
-question is a program of its own, `nxask`), and compares with the start. Memory is said (`FZ memory`), not judged.
+question is a program of its own, `nxask`), and compares with the start. Memory that has not come back by 8 MB (`FZ memory`) is `memory`.
 
 ## Limits
 

@@ -567,6 +567,31 @@ canary(void)
 
 /* ---- closing ---- */
 
+/* A program can make its window again (a film's size, a mode): the tag goes on with the window its process has now. */
+static void
+refresh(struct tag *t)
+{
+	GR_WINDOW_ID parent, *children = NULL;
+	GR_COUNT n = 0, i;
+
+	if (frame_alive(t->frame) || !t->pid || !pid_alive(t->pid))
+		return;
+	GrQueryTree(GR_ROOT_WINDOW_ID, &parent, &children, &n);
+	for (i = 0; i < n; i++) {
+		GR_WINDOW_INFO in;
+
+		if (is_task(children[i], &in) && in.mapped && (int)in.processid == t->pid) {
+			say("FZ %s has a new window", t->name);
+			t->frame = children[i];
+			t->client = client_of(children[i]);
+			if (known_count < 64)
+				known[known_count++] = children[i];
+			break;
+		}
+	}
+	free(children);
+}
+
 static void
 caption_click(struct tag *t, int frame_x, int button)
 {
@@ -604,6 +629,7 @@ close_button(struct tag *t)
 static void
 do_close(struct tag *t, const char *how)
 {
+	refresh(t);
 	if (!strcmp(how, "x"))
 		close_button(t);
 	else if (!strcmp(how, "twice")) {
@@ -657,6 +683,7 @@ wait_gone(struct tag *t, const char *how)
 		int alive, shown;
 
 		reap();
+		refresh(t);
 		alive = t->pid > 0 && pid_alive(t->pid);
 		shown = frame_alive(t->frame);
 		if (!alive && !shown) {
@@ -778,7 +805,7 @@ random_use(struct tag *t, int count, unsigned seed)
 	int i;
 
 	rng_state = seed * 2654435761u + 7;
-	for (i = 0; i < count && frame_alive(t->frame); i++) {
+	for (i = 0; i < count && (refresh(t), frame_alive(t->frame)); i++) {
 		int x, y, w, h, kind;
 
 		window_area(t, &x, &y, &w, &h);
