@@ -8,6 +8,11 @@
 #include <cstdint>
 #include <vector>
 
+/** For OPENTTD_PLAY's lines: lists to the GPU, records, and the rectangles and window paints of the dirty blocks. */
+struct SeGpuCounts { uint32_t lists, records, rects, pixels, paints; };
+extern SeGpuCounts _se_gpu_counts;
+extern uint32_t _se_paints_of[256];
+
 /** Whether the GPU draws the picture (the blitter is "8bpp-gpu"). */
 bool SeGpuOn();
 /** The video driver's part: the picture's size, and where its rows of words lie in GPU memory. */

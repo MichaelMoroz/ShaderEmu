@@ -366,6 +366,10 @@
   `d4e04e63`/`26aae0d5` on the worker, whole and sliced; `OPENTTD_CHECK=1` is 0 pixels paused (a running game can
   differ by "One order"). A scroll is measured with `OPENTTD_PLAY_PART=scroll|follow` and the card's model
   (`RVC_ADFAULT`, `RVC_WCACHE`), pictures and game ticks a second both.
+- A window in OpenTTD costs the game its tick, which waits while the first core paints (`docs/games/openttd.md`, "Windows"): a viewport marks
+  `AddDirtyView` (only windows with a viewport are drawn there, the viewport's widget alone), and what the tick says of a window's widgets
+  waits in `AddDirtyLater` for `OPENTTD_WINDOW_MS`; what a click or a key marks, or a window that comes, goes or changes, is at once. Measure
+  with `OPENTTD_PLAY_PART=window`, by the share of the time the tick is held, and `test_all.py openttd-windows` must say 0 pixels.
 - OpenTTD is compiled whole with `openttd.profile.gz` (`docs/games/openttd.md`, "The compiler"): its LTO link keeps
   `-fdata-sections -fno-common` and the 16-byte assembler, or statics a worker writes share texels (`RVC_RACES` undone), and
   after a large change to the source `linux/openttd/counts.py` makes the counts anew. `build.sh` puts the tree back from

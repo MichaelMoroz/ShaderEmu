@@ -32,6 +32,8 @@
 #include "../vehicle_base.h"
 #include "../vehicle_func.h"
 #include "../timer/timer_game_calendar.h"
+#include "../gui.h"
+#include "../company_gui.h"
 #include "shaderemu_v.h"
 #include "shaderemu_gpu.h"
 #include <unistd.h>
@@ -54,6 +56,7 @@ static int _screen_cols, _screen_rows;
 static GR_EVENT _pending;          ///< an event that ended a wait, handled next
 static bool _have_pending;
 static int _draws;                 ///< pictures drawn, for OPENTTD_RATE
+static int _paints;                ///< pictures painted, for the play lines
 static bool _drawn;                ///< a list is with the GPU: settle before writing the picture
 static int _pointer_x, _pointer_y; ///< where the pointer was last, for moves while OpenTTD holds it
 static unsigned _keys_down;        ///< bit 0-3 the arrows (as _dirkeys), 4 Tab
@@ -198,6 +201,13 @@ static int Number(const char *s)
 	return n;
 }
 
+/** OPENTTD_WINDOW_MS: how often what the tick changed in windows is drawn, 1,000 ms; in the machine's 5 kHz time. */
+uint32_t SeWindowEvery()
+{
+	const int n = Number(getenv("OPENTTD_WINDOW_MS"));
+	return (n >= 0 ? n : 1000) * 5;
+}
+
 static void HoldHere(const uint8_t *shown, int w, int h)
 {
 	fmt::print(stderr, "openttd: hold at picture {}: picture {:x} shown {:x} {}x{} palette {:x}\n", _play_frame,
@@ -242,6 +252,7 @@ static void CheckPicture()
 		TwHold(false);
 		VehiclesSync(true); /* (what the tick said it moved since the picture's flush, as the next picture would) */
 		InvalidateDirtyCompanyFinances(); /* (as the next picture's window timer would) */
+		SeDirtyLaterDue(true);
 		DrawDirtyBlocks();
 	}
 	static std::vector<uint8_t> shown;
@@ -328,6 +339,7 @@ void VideoDriver_ShaderEmu::Paint()
 	if (IsEmptyRect(this->dirty_rect) && this->local_palette.count_dirty == 0 && !(check_all && _play_frame >= 0)) return;
 	if (_drawn) seglSettle(), _drawn = false;
 	_draws++;
+	_paints++;
 	CheckPicture();
 	if (SeGpuOn()) {
 		/* the frame's records drawn by the GPU, then shown through the palette */
@@ -562,6 +574,11 @@ static const int PLAY_SCROLL[] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
 static const int PLAY_FOLLOW[] = { 200, 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219,
 		220, 221, 222, 223, 224, 225, 226, 227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239,
 		240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 199 };
+/* OPENTTD_PLAY_PART=window: 60 pictures of the view standing still, with OPENTTD_PLAY_SCENE=none (no window), one (the
+ * finances), many (finances, a station list, a station, the towns) or vehicle (a train's window, following it) */
+static const int PLAY_WINDOW[] = { 300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319,
+		320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336, 337, 338, 339,
+		340, 341, 342, 343, 344, 345, 346, 347, 348, 349, 350, 351, 352, 353, 354, 355, 356, 357, 358, 359, 199 };
 static const int PLAY_SHORT[] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44,
 		60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 80, 81, 82, 83, 84, 85, 86, 87, 88, 100,
 		110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 199 };
@@ -578,6 +595,7 @@ struct PlayPart {
 	uint64_t instructions, tick_instructions; ///< core 0's at its start, and in game ticks
 	uint32_t phase[VP_PHASES];
 	uint32_t tw_tick, tw_park, tw_instret, tw_hold, tw_holds; ///< the tick's worker's (TwTimes), the first core's waits for it
+	int paints;
 };
 
 static inline uint64_t Instructions()
@@ -774,9 +792,9 @@ static void PlayStep()
 	static const bool short_play = getenv("OPENTTD_PLAY_SHORT") != nullptr;
 	static const char *play_part = getenv("OPENTTD_PLAY_PART");
 	static const int *list = short_play ? PLAY_SHORT : play_part == nullptr ? nullptr :
-			std::string_view(play_part) == "follow" ? PLAY_FOLLOW : PLAY_SCROLL;
+			std::string_view(play_part) == "follow" ? PLAY_FOLLOW : std::string_view(play_part) == "window" ? PLAY_WINDOW : PLAY_SCROLL;
 	static const int len = list == PLAY_SHORT ? std::size(PLAY_SHORT) : list == PLAY_SCROLL ? std::size(PLAY_SCROLL) :
-			list == PLAY_FOLLOW ? std::size(PLAY_FOLLOW) : 200;
+			list == PLAY_FOLLOW ? std::size(PLAY_FOLLOW) : list == PLAY_WINDOW ? std::size(PLAY_WINDOW) : 200;
 	/* OPENTTD_PICTURE_LOG=1: each picture's ms, the first core's instructions, ticks, and its phases' ms */
 	static const bool picture_log = getenv("OPENTTD_PICTURE_LOG") != nullptr;
 	if (picture_log) {
@@ -842,6 +860,25 @@ static void PlayStep()
 					_vp_stat_jobs, _vp_stat_pieces, _vp_stat_again, _vp_stat_loaded, _vp_stat_redrawn, _check_part_line,
 					(Instructions() - p.instructions) / 1000 / std::max(pictures, 1),
 					(_tick_instructions - p.tick_instructions) / 1000 / std::max(pictures, 1)));
+			{
+				static SeGpuCounts last;
+				const SeGpuCounts counts = _se_gpu_counts;
+				const int n = std::max(pictures, 1);
+				PlayLine(fmt::format("openttd: play {} a picture: {:.2f} painted, {:.2f} GPU lists, {:.0f} records; {:.1f} rects of {:.0f} pixels, {:.1f} window paints\n", p.name,
+						static_cast<double>(_paints - p.paints) / n, static_cast<double>(counts.lists - last.lists) / n,
+						static_cast<double>(counts.records - last.records) / n,
+						static_cast<double>(counts.rects - last.rects) / n, static_cast<double>(counts.pixels - last.pixels) / n,
+						static_cast<double>(counts.paints - last.paints) / n));
+				last = counts;
+				if (getenv("OPENTTD_PLAY_WHO") != nullptr) {
+					std::string who = fmt::format("openttd: play {} paints by window class:", p.name);
+					for (int c = 0; c < 256; c++) {
+						if (_se_paints_of[c] != 0) who += fmt::format(" {}:{}", c, _se_paints_of[c]);
+						_se_paints_of[c] = 0;
+					}
+					PlayLine(who + "\n");
+				}
+			}
 			/* (a line of its own: the console loses the end of a long one) */
 			PlayLine(fmt::format("openttd: play {} ms a picture: flush {:.1f} (pieces {:.1f}, again {:.1f}, "
 					"first core {:.1f}, copy {:.1f}, texts {:.1f}), move {:.1f}, windows {:.1f}, paint {:.1f}, tick {:.1f}; "
@@ -882,7 +919,7 @@ static void PlayStep()
 		std::fill_n(_vp_stat_tiles, 4, 0);
 		in_part = name != nullptr;
 		if (in_part) {
-			cur = { name, _play_frame - 1, now, TimerGameTick::counter, Instructions(), _tick_instructions, {}, 0, 0, 0, _tw_hold_time, _tw_holds };
+			cur = { name, _play_frame - 1, now, TimerGameTick::counter, Instructions(), _tick_instructions, {}, 0, 0, 0, _tw_hold_time, _tw_holds, _paints };
 			std::copy_n(_vp_phase, VP_PHASES, cur.phase);
 			TwTimes(cur.tw_tick, cur.tw_park, cur.tw_instret);
 		}
@@ -922,6 +959,47 @@ static void PlayStep()
 				break;
 			}
 		}
+	}
+	if (f == 300) {
+		VpFlushFinish();
+		static const char *scene = getenv("OPENTTD_PLAY_SCENE");
+		const std::string_view s = scene != nullptr ? scene : "none";
+		if (s == "one" || s == "many") {
+			for (const Company *c : Company::Iterate()) {
+				ShowCompanyFinances(c->index);
+				if (s == "many") {
+					ShowCompanyStations(c->index);
+					for (const Station *st : Station::Iterate()) { ShowStationViewWindow(st->index); break; }
+					ShowTownDirectory();
+				}
+				break;
+			}
+		}
+		if (s == "vehicle") {
+			const Train *any = nullptr;
+			for (const Train *t : Train::Iterate()) {
+				if (!t->IsFrontEngine()) continue;
+				if (any == nullptr || (any->cur_speed == 0 && t->cur_speed > 0)) any = t;
+			}
+			if (any != nullptr) ShowVehicleViewWindow(any);
+		}
+	}
+	if (f == 305) begin_part("window");
+	/* OPENTTD_PLAY_MOVE=1: at 320 the windows move as a drag moves them, at 340 they close (with OPENTTD_CHECK: each picture so) */
+	static const bool play_move = getenv("OPENTTD_PLAY_MOVE") != nullptr;
+	if (play_move && f == 320) {
+		VpFlushFinish();
+		for (Window *w : Window::Iterate()) {
+			if (w->window_class == WC_MAIN_WINDOW || w->window_class == WC_MAIN_TOOLBAR || w->window_class == WC_STATUS_BAR) continue;
+			w->SetDirty();
+			if (w->viewport != nullptr) w->viewport->left += 40, w->viewport->top += 24;
+			w->left += 40, w->top += 24;
+			w->SetDirty();
+		}
+	}
+	if (play_move && f == 340) {
+		VpFlushFinish();
+		CloseAllNonVitalWindows();
 	}
 	if (f == 199) {
 		begin_part(nullptr);

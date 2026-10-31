@@ -35,6 +35,9 @@ static void SeGpuLog(const char *f, ...) { va_list a; va_start(a, f); vfprintf(s
 
 #include "../safeguards.h"
 
+SeGpuCounts _se_gpu_counts;
+uint32_t _se_paints_of[256];
+
 namespace {
 
 /** A record of the sprite command: a texel. */
@@ -176,6 +179,7 @@ void WaitDrawn()
 /** A list to the GPU, its picture copied into (into, w, h, row): it waits for the lists before it. */
 void Submit(const uint32_t *cmds, int n, uint32_t passes, uint32_t into, int w, int h, int row)
 {
+	_se_gpu_counts.lists++;
 	for (;;) {
 		while (__atomic_exchange_n(&_regs[REG_LOCK], 1u, __ATOMIC_ACQUIRE)) sched_yield();
 		if (_regs[REG_SUBMIT] == 0) break;
@@ -210,6 +214,7 @@ bool Command(List &l, const Rec *recs, uint32_t count, uint32_t order, bool shad
 	c[7] = ta;
 	c[8] = tb;
 	l.vertices += 6 * count;
+	_se_gpu_counts.records += count;
 	if (shades) l.passes |= 4;
 	return true;
 }
