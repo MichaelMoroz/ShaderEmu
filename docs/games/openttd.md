@@ -319,7 +319,7 @@ may use.
   (`VpFlushFinish`: a command, the pointer, a sprite cache's deletes, a check). `OPENTTD_PIPE=0`
   waits for the pieces at the flush.
 - While it scrolls, the ticks are spaced out to keep the picture's work at 90 ms
-  (`OPENTTD_PACE_MS`): every tick costs the first core its sync, and the windows its texts and the
+  (`OPENTTD_PACE_MS`, 130 now: only zoomed out comes near it, and 90 and 130 differ by 6% and less): every tick costs the first core its sync, and the windows its texts and the
   status bar change. While pictures are late the space starts at half a second and grows by a quarter a
   picture, to a tick a second at most (`OPENTTD_PACE`, 0 never), and is gone eight pictures after the
   view stops (`OPENTTD_PACE_LOG=1` prints it; `OPENTTD_TICK_MS=N` is no more than a tick every N ms).
@@ -444,6 +444,11 @@ followed vehicle's too. What it owes (stale texts, scheduled invalidations, spri
 next hold, and a held picture with nothing else to draw lets the tick go at that point. At most `OPENTTD_LIGHT_MOST` (8) in a row.
 A pointer that only moves is seen at most every 66 ms (`pointer_waits`): each sight is a hold.
 
+A following view reads that copy too, so a vehicle must never be without one. A vehicle built in a depot had none: hidden, it has no `UpdateViewport`, and `UpdatePosition`
+said nothing, so a light picture put its window's view on the copy's 0,0,0, the map's north corner: black with the tip of the map rising from the bottom (a player's report;
+since f16da98). `Vehicle::UpdatePosition` now lists it (`VehicleChanged`). `test_all.py openttd-depot` plays `OPENTTD_PLAY_SCENE=depot`: the checks with `OPENTTD_CHECK`
+turn light pictures off, and the windows' scenes had no vehicle in a depot; `SetLocalCompany` lists every vehicle, which hid it until the scene built the vehicle a sync later.
+
 Ships' paths ahead now run during the tick (below, "Ships' paths made ahead"), and the counts were made again, with the building part.
 
 ## Gameplay scenes
@@ -488,11 +493,44 @@ core 0's 279k a picture became 392k, and pieces cut elsewhere than last time wer
 
 ### What a tick spends
 
-On the tick's worker, 530k instructions a tick in the quiet window scene, `prof.py`: vehicles 486k. Trains 45% of the tick (`TrainController` own
-127k), road vehicles 20%, aircraft 11%, `CallVehicleTicks` own 56k, the tile loop 28k, a rail or road search 25k and 22k on average.
-Each of those is many small things that go in the order of the pool and its one random stream. A hold costs the tick 18 ms each tick, of which
-`VehiclesSync` 11: it stores to `Vehicle`, so doing it with the tick running needs those fields in texels of their own and a second `tw_made`:
-about 6% of the ticks, not done.
+On the tick's worker, 406k instructions a tick in the quiet window scene (`prof.py`, 31 October 2026; 533k before "A sync with the tick running"), vehicles 372k: trains
+170k (`TrainController` own 75k), road vehicles 75k, aircraft 37k, `CallVehicleTicks` own 55k, the tile loop 28k, rail and road searches about 44k a tick on average, in few long ones. Each of
+those is many small things that go in the order of the pool and its one random stream. The worker runs 5.6 MIPS (8,192 instructions a pass of about 1.46 ms), so that is 75 to 85 ms a tick.
+
+Not done, by what it would give: rail and road searches made ahead as ships' are (at most 11% of a tick, compared when taken; rail's read reservations and signals the tick changes);
+`Train::UpdateDeltaXY` only when the direction changes (about 2%), `ShowVisualEffect`'s loop (3%). A wagon's `Tick` without its call gave nothing measurable beyond the model's noise, and the
+new counts neither (kept: they are of the tree as it is).
+
+### A sync with the tick running
+
+A sync of the vehicles was the hold's largest part (30k of 44k instructions a hold) and the copy made ahead of it 12 to 20% of a tick. So (`vehicle.cpp`):
+
+- A copy is made once, at the tick's end, not at each step (`VehicleMakeLater`, `VehiclesMakeLater`): a wagon moves more than a step a tick and only the last step is read. A hold in the middle
+  of a tick does not wait for them: what the tick moved since its last copy goes to the next sync, as a light picture would see it. `OPENTTD_CHECK` makes them at every hold.
+- The tick lists what it made as it makes it (`_veh_ready`, one list a side, with `tw_made`), so a sync costs the first core only what the tick did not make (`_veh_changed`: a sprite with no bounds
+  kept, a command, `MarkAllViewportsDirty`, which set `told` and compare whole); the first core does not store to `tw_made` when it applies, and `Made::round` says which sync's it is.
+- The hash, the dirty blocks and the copy are applied with the tick running (`VehiclesApply`; `coord`, the hash's links, `old_coord` and `is_viewport_candidate` lie in texels of the first core's). A vehicle the tick
+  deleted is freed a sync later (`_veh_free_next`), when no list names it.
+
+`OPENTTD_MADE_CHECK=1` prints how many copies looked at, the tick held, were not as their vehicle though not moved since: it must not rise after the first hold, and `openttd-depot`'s view must stay at the vehicle.
+
+Other cuts of the hold: a pointer over the view with a building tool is seen with the tick running (`OPENTTD_POINTER_LIGHT=0` is without; the highlight reads only tiles' heights and types); a window with a widget waiting for later
+is drawn whole once (`SeDirtyLaterWhole`: 5 to 8 clipped paints of the finances a round, each formatting all its strings). `SeExitNow` writes a counting build's counts (`__gcov_exit`): since the quick exit `counts.py` got none.
+
+Calibrated, 31 October 2026, same model and rounds as "Gameplay scenes", before as there:
+
+| Scene | Pictures a second before, after | Ticks a second before, after | x pictures, ticks |
+|---|---|---|---|
+| scroll | 15.17, 30.43 | 5.66, 10.65 | 2.01, 1.88 |
+| following a vehicle | 15.18, 30.71 | 5.92, 11.46 | 2.02, 1.94 |
+| windows, none open | 15.17, 30.42 | 6.84, 11.62 | 2.01, 1.70 |
+| many windows open | 15.18, 26.99 | 5.74, 9.42 | 1.78, 1.64 |
+| vehicle windows | 15.09, 30.90 | 6.15, 10.79 | 2.05, 1.75 |
+| building | 14.06, 25.36 | 5.81, 8.96 | 1.80, 1.54 |
+| zoomed out | 7.51, 14.09 | 3.42, 5.98 | 1.88, 1.75 |
+
+Pictures stand at the 33 ms interval but where noted. Ticks are a tick's 78 to 84 ms and a wait of 11% to 15%; many windows and building wait 23% and 25% (windows' texts, commands), zoomed out 30% (a hold costs what its parts cost).
+On the card, RTX 5090, one run (`--d3d11 --unity 11.1,1.4,0.75`, `OPENTTD_PLAY=2`), round 2: 15.89 pictures and 5.80 ticks a second (13.64, 3.55 before this section).
 
 ## The start
 
@@ -690,8 +728,7 @@ Not seen: the report's own session on the card. Which click it was is not known 
 
 - Pitch bend and other controllers in the music.
 - The tick is one worker's ("The tick on a worker"): its vehicles, paths, tile loop, stations and
-  towns are not split over more workers (but for ships' paths made ahead and the link graph's jobs), and the first core's sync of the vehicles it moved bounds how many ticks a scrolling
-  picture can take. Signs, texts and windows' widgets are the first core's.
+  towns are not split over more workers (but for ships' paths made ahead and the link graph's jobs), Signs, texts and windows' widgets are the first core's.
 - A NewGRF chain other than canals' is resolved by the first core: only canals' resolver was
   read through for stores outside a core's own registers (`WorkerSafe` in `newgrf_spritegroup.h`).
 - One order is not proved for every scene: sprites whose boxes order them in a circle ("One order").

@@ -1071,10 +1071,30 @@ scroll_to(int row)
 
 /* Starts a command: words separated by spaces, no shell (which would cost half a second). The
  * child's number, or 0. */
+static pid_t run_command(const char *command);
+
+/* A shortcut's command as its file says it: `run` keeps only as much as a list's entry has room for. */
+static pid_t
+start_shortcut(const struct entry *e)
+{
+	static char line[720];
+	FILE *file = fopen(e->name, "r");
+
+	while (file && fgets(line, sizeof line, file))
+		if (!strncmp(line, "run=", 4)) {
+			line[strcspn(line, "\r\n")] = 0;
+			fclose(file);
+			return run_command(line + 4);
+		}
+	if (file)
+		fclose(file);
+	return run_command(e->run);
+}
+
 static pid_t
 run_command(const char *command)
 {
-	char text[64], *words[8];
+	char text[700], *words[8], *at = text;
 	int n = 0;
 	pid_t child;
 
@@ -1082,8 +1102,22 @@ run_command(const char *command)
 		return 0;
 	/* the words first: the child (vfork, as ui_run's) has this program's memory until its exec */
 	snprintf(text, sizeof text, "%s", command);
-	for (words[n] = strtok(text, " "); words[n] && n < 7; words[n] = strtok(NULL, " "))
-		n++;
+	/* (a word in double quotes may hold spaces: a shortcut to a file) */
+	while (n < 7) {
+		char end = ' ';
+
+		while (*at == ' ')
+			at++;
+		if (!*at)
+			break;
+		if (*at == '"')
+			end = *at++;
+		words[n++] = at;
+		at = strchr(at, end);
+		if (!at)
+			break;
+		*at++ = 0;
+	}
 	words[n] = NULL;
 	if (!n || (child = real_vfork()) != 0)
 		return n ? child : 0;
@@ -1163,7 +1197,7 @@ open_entry(int i, int edit)
 			report("Could not start", "The shortcut %.60s names no program to start\n(it has no run= line).", e->name);
 			return;
 		}
-		child = run_command(e->run);
+		child = start_shortcut(e);
 	} else if (e->kind == K_PROGRAM) {
 		child = ui_run(path, NULL);
 	} else {
@@ -1332,6 +1366,16 @@ paste(const char *into)
 			base = strrchr(from, '/') ? strrchr(from, '/') + 1 : from;
 			dot = strrchr(base, '.');
 			stem = dot && dot != base ? (int)(dot - base) : (int)strlen(base);
+			{
+				/* cut and pasted where it lies: nothing is to happen to it (it became name-2) */
+				struct stat a, b;
+
+				if (how[1] == 'u' && stat(from, &a) == 0 && stat(base, &b) == 0 && a.st_dev == b.st_dev && a.st_ino == b.st_ino) {
+					snprintf(name, sizeof name, "%.127s", base);
+					done++;
+					continue;
+				}
+			}
 			for (n = 0; n < 100; n++) {
 				if (n == 0)
 					snprintf(name, sizeof name, "%.127s", base);
@@ -1355,7 +1399,7 @@ paste(const char *into)
 		strcpy(notice, "nothing was copied or cut");
 		return;
 	}
-	if (how[1] == 'u')
+	if (how[1] == 'u' && !failed)	/* (what could not be moved can be pasted elsewhere) */
 		unlink(CARRIED);
 	read_folder();
 	select_name(into ? into : name);
@@ -1570,6 +1614,10 @@ new_entry(int folder)
 		if (access(name, F_OK) != 0)
 			break;
 	}
+	if (n == 100) {	/* (`fopen` of new99.txt would have emptied it) */
+		report("Cannot make a file", "%.100s has a hundred new files already.", where);
+		return;
+	}
 	if (folder) {
 		if (mkdir(name, 0755) != 0)
 			report("Cannot make a folder", "A new folder could not be made in %.100s:\n%s.", where, strerror(errno));
@@ -1643,19 +1691,26 @@ shortcut_of(int i)
 	entry_path(i, path, sizeof path);
 	snprintf(file_name, sizeof file_name, DESKTOP "/%.60s.app", e->label);
 	mkdir(DESKTOP, 0755);
+	{
+		/* (another file of that name has one already: it stays) */
+		int n;
+
+		for (n = 2; n < 100 && access(file_name, F_OK) == 0; n++)
+			snprintf(file_name, sizeof file_name, DESKTOP "/%.60s-%d.app", e->label, n);
+	}
 	if ((file = fopen(file_name, "w")) == NULL) {
 		report("Cannot make a shortcut", "The shortcut %.80s could not be made:\n%s.", file_name, strerror(errno));
 		return;
 	}
 	fprintf(file, "name=%s\n", e->label);
 	if (kind_of(i) == K_FOLDER)
-		fprintf(file, "icon=folder\nrun=nxfiles %s\n", path);
+		fprintf(file, "icon=folder\nrun=nxfiles \"%s\"\n", path);
 	else if (e->kind == K_SHORTCUT)
 		fprintf(file, "run=%s\n", e->run);
 	else if (e->kind == K_PROGRAM)
 		fprintf(file, "run=%s\n", path);
 	else
-		fprintf(file, "icon=%s\nrun=open %s\n", e->kind == K_PICTURE ? "picture" : e->kind == K_SOUND ? "sound" :
+		fprintf(file, "icon=%s\nrun=open \"%s\"\n", e->kind == K_PICTURE ? "picture" : e->kind == K_SOUND ? "sound" :
 			e->kind == K_VIDEO ? "video" : e->kind == K_PAGE ? "page" : "file", path);
 	fclose(file);
 	strcpy(notice, "a shortcut is on the desktop");
@@ -2516,7 +2571,7 @@ run_shortcut(const char *path)
 		return 1;
 	signal(SIGCHLD, SIG_IGN);
 	chdir("/root");
-	run_command(e.run);
+	start_shortcut(&e);
 	return 0;
 }
 

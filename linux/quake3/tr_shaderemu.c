@@ -390,7 +390,6 @@ static void window_open (void)
 {
 	GR_SCREEN_INFO	info;
 	const char	*s;
-	int		bare;
 
 	if (GrOpen () < 0)
 		ri.Error (ERR_FATAL, "no Nano-X server (start one: nano-X -p &)");
@@ -401,10 +400,10 @@ static void window_open (void)
 		width = info.cols;
 	if (height > info.rows)
 		height = info.rows;
-	/* a window that leaves no room for a frame and caption has none, and sits in the corner */
-	bare = width + 8 > info.cols || height + 26 > info.rows;
-	window = GrNewWindowEx (bare ? GR_WM_PROPS_NODECORATE | GR_WM_PROPS_NOAUTOMOVE : GR_WM_PROPS_APPWINDOW,
-		"Quake III Arena", GR_ROOT_WINDOW_ID, bare ? 0 : -1, bare ? 0 : -1, width, height, 0);
+	/* its picture all above the bar under a caption (55: the caption's 29 and the bar's 26); the frame's sides may go off the screen (the window manager) */
+	if (height > info.rows - 55)
+		height = info.rows - 55;
+	window = GrNewWindowEx (GR_WM_PROPS_APPWINDOW, "Quake III Arena", GR_ROOT_WINDOW_ID, -1, -1, width, height, 0);
 	GrSelectEvents (window, GR_EVENT_MASK_KEY_DOWN | GR_EVENT_MASK_KEY_UP | GR_EVENT_MASK_BUTTON_DOWN |
 		GR_EVENT_MASK_BUTTON_UP | GR_EVENT_MASK_MOUSE_ENTER | GR_EVENT_MASK_MOUSE_EXIT | GR_EVENT_MASK_CLOSE_REQ |
 		GR_EVENT_MASK_UPDATE);

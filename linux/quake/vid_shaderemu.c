@@ -8,8 +8,7 @@
 #include "nano-X.h"
 #include "mcwx.h"
 
-#define CAPTION		22		/* the window manager's caption and frame (nanowm.h) */
-#define FRAME		4
+#define ABOVE_BAR	55		/* the window manager's caption (nanowm.h, 29) and the bar (26) */
 #define REG_INPUT	0x20		/* the machine's input counters (docs/machine/input.md) */
 #define REG_CLOCK	0x34
 #define WARP_WIDTH	320
@@ -346,7 +345,7 @@ static void gamma_palette (unsigned char *palette)
 void VID_Init (unsigned char *palette)
 {
 	GR_SCREEN_INFO	info;
-	int		i, width = 640, height = 480, bare;
+	int		i, width = 640, height = 480;
 	const char	*s;
 
 	Cvar_RegisterVariable (&in_mouse);
@@ -369,10 +368,10 @@ void VID_Init (unsigned char *palette)
 		width = info.cols;
 	if (height > info.rows)
 		height = info.rows;
-	/* a window that leaves no room for a frame and caption has none, and sits in the corner */
-	bare = width + 2 * FRAME > info.cols || height + CAPTION + FRAME > info.rows;
-	window = GrNewWindowEx (bare ? GR_WM_PROPS_NODECORATE | GR_WM_PROPS_NOAUTOMOVE : GR_WM_PROPS_APPWINDOW,
-		"Quake", GR_ROOT_WINDOW_ID, bare ? 0 : -1, bare ? 0 : -1, width, height, 0);
+	/* its picture all above the bar under a caption; the frame's sides may go off the screen (the window manager) */
+	if (height > info.rows - ABOVE_BAR)
+		height = info.rows - ABOVE_BAR;
+	window = GrNewWindowEx (GR_WM_PROPS_APPWINDOW, "Quake", GR_ROOT_WINDOW_ID, -1, -1, width, height, 0);
 	GrSelectEvents (window, GR_EVENT_MASK_KEY_DOWN | GR_EVENT_MASK_KEY_UP | GR_EVENT_MASK_BUTTON_DOWN |
 		GR_EVENT_MASK_BUTTON_UP | GR_EVENT_MASK_MOUSE_ENTER | GR_EVENT_MASK_MOUSE_EXIT | GR_EVENT_MASK_CLOSE_REQ |
 		GR_EVENT_MASK_UPDATE);

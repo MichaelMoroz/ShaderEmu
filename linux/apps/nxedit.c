@@ -169,6 +169,8 @@ open_lines(int at, int n)
 	d->count += n;
 }
 
+static int mixed_endings;	/* lines of a CR LF text that had no CR: a save gives them one */
+
 static void
 add_line(char *text, int length, int room)
 {
@@ -176,6 +178,8 @@ add_line(char *text, int length, int room)
 		d->crlf = 1;
 	if (d->crlf && length && text[length - 1] == '\r')
 		length--;
+	else if (d->crlf)
+		mixed_endings++;
 	d->lines = grow(d->lines, &d->room, d->count + 1, sizeof *d->lines);
 	d->lines[d->count].text = text, d->lines[d->count].length = length, d->lines[d->count].room = room;
 	d->count++;
@@ -882,6 +886,9 @@ load(const char *file)
 	if (!d->count)
 		add_line(empty, 0, 0);
 	d->readonly = access(file, W_OK) != 0;
+	if (d->crlf && mixed_endings > !d->final_newline)
+		snprintf(notice, sizeof notice, "mixed line endings: %d lines with no CR will get one when saved", mixed_endings);
+	mixed_endings = 0;
 	if (d->c_code && info.st_size > COLOUR_MOST) {
 		d->c_code = 0;
 		say("a large file: shown without colours");
@@ -914,7 +921,8 @@ write_to(const char *to)
 		setvbuf(file, NULL, _IOFBF, 65536);
 	for (i = 0; file && i < d->count; i++) {
 		fwrite(d->lines[i].text, 1, d->lines[i].length, file);
-		if (i + 1 < d->count || d->final_newline)
+		/* (an empty text is one empty line: a file of nothing stays one) */
+		if (i + 1 < d->count || (d->final_newline && (d->count > 1 || d->lines[0].length)))
 			fputs(ending, file);
 	}
 	fine = file && !ferror(file);
@@ -1313,6 +1321,9 @@ flush(void)
 		} else if (moved) {
 			dirty(d->top, FAR);
 		}
+		/* (wrapped, a line's rows change as it is typed in: those below it move) */
+		if (wrap && dirty_to >= d->top)
+			dirty_to = FAR;
 		if (dirty_to >= FAR)
 			draw_from(dirty_from > d->top ? dirty_from : d->top);
 		else if (dirty_to >= d->top) {
@@ -1965,7 +1976,11 @@ copy_selection(void)
 		say("too large to copy");
 		return 0;
 	}
-	ui_clip_set(text, length);
+	if (length >= 1 << 24 || !ui_clip_set(text, length)) {	/* (a Cut then keeps its text) */
+		free(text);
+		say("too large to copy");
+		return 0;
+	}
 	free(text);
 	say("copied");
 	return 1;
@@ -2075,7 +2090,7 @@ delete_lines(void)
 static void
 move_lines(int dir)
 {
-	int first, last, length, ax = d->ax, cx = d->cx, marked = d->marked;
+	int first, last, length, ax = d->ax, cx = d->cx, ay = d->ay, cy = d->cy, marked = d->marked;
 	char *text, *more;
 
 	lines_chosen(&first, &last);
@@ -2101,7 +2116,7 @@ move_lines(int dir)
 		text_insert(0, first, text, length + 1);
 	}
 	free(text);
-	d->ay += dir, d->cy += dir, d->ax = ax, d->cx = cx, d->marked = marked;
+	d->ay = ay + dir, d->cy = cy + dir, d->ax = ax, d->cx = cx, d->marked = marked;
 	dirty(first - 1, last + 1);
 }
 
@@ -2766,8 +2781,8 @@ click(const GR_EVENT *event)
 		go(x, y, 1);
 	} else
 		go(x, y, 0);
-	if (clicks != 2)
-		word_ax = -1;
+	if (clicks != 2 && clicks != 3)
+		word_ax = -1;	/* (three clicks keep it: the line a drag selects from) */
 }
 
 /* The pointer moved with the button held, or it is held outside the text: the selection follows. */

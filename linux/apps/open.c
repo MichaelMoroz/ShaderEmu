@@ -413,7 +413,15 @@ fetch(const char *address, char *path, size_t room)
 			return 0;
 		}
 	}
-	fclose(file);
+	{
+		int failed = ferror(file);
+
+		if (fclose(file) != 0 || failed) {
+			printf("open: %s could not be written whole: %s\n", name, strerror(errno));
+			snprintf(why, sizeof why, "it could not be written whole (%s)", strerror(errno));
+			return 0;
+		}
+	}
 	if (packed && crc != want_crc) {
 		printf("open: %s arrived damaged (sum %08x, should be %08x): was the picture changed on its way?\n", name,
 		       (unsigned)crc, (unsigned)want_crc);
@@ -614,6 +622,16 @@ save(const char *path, const char *name)
 	int fine = 1;
 
 	snprintf(to, sizeof to, "/root/%.280s", name);
+	{
+		/* it lies there already: opening it to write would empty what is being copied */
+		struct stat a, b;
+
+		if (stat(path, &a) == 0 && stat(to, &b) == 0 && a.st_dev == b.st_dev && a.st_ino == b.st_ino) {
+			if (in)
+				fclose(in);
+			return 1;
+		}
+	}
 	if (!in || (out = fopen(to, "wb")) == NULL) {
 		if (in)
 			fclose(in);

@@ -584,7 +584,7 @@ trace_more(void)
 	return 1;
 }
 
-static void
+static int
 write_picture(const char *path)
 {
 	FILE *file = fopen(path, "wb");
@@ -592,7 +592,7 @@ write_picture(const char *path)
 
 	if (!file) {
 		say("The picture could not be written there.");
-		return;
+		return 0;
 	}
 	fprintf(file, "P6\n%d %d\n255\n", pt.width, pt.height);
 	for (i = 0; i < pt.width * pt.height; i++) {
@@ -600,7 +600,12 @@ write_picture(const char *path)
 		fputc(pt.pixels[i] >> 8 & 255, file);
 		fputc(pt.pixels[i] & 255, file);
 	}
-	fclose(file);
+	i = ferror(file);
+	if (fclose(file) != 0 || i) {
+		say("The picture could not be written whole.");
+		return 0;
+	}
+	return 1;
 }
 
 /* The picture has its samples, or was stopped: its figures, and what a test asked of it. */
@@ -1319,8 +1324,8 @@ export_dialog(void)
 	if (!ui_save_file("Export the picture", "/root/Pictures", ".ppm", "render.ppm", path, sizeof path, others))
 		return;
 	ui_files_ending(path, sizeof path, ".ppm");
-	write_picture(path);
-	say("The picture is written.");
+	if (write_picture(path))
+		say("The picture is written.");
 }
 
 /* A menu of the bar, opened under its name. */

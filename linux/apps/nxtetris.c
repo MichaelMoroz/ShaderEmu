@@ -450,6 +450,12 @@ clear_rows(long long now)
 	if (level < 1 + lines / 10)
 		level = 1 + lines / 10;
 	state = PLAYING;
+	/* (what was pressed during the flash: its repeats are not looked at) */
+	if (!dir && keys_held[0] != keys_held[1]) {	/* K_LEFT, K_RIGHT */
+		dir = keys_held[0] ? -1 : 1;
+		das_next = now + das_us;
+	}
+	soft = keys_held[2];	/* K_DOWN */
 	next_piece(now);
 }
 
@@ -1050,11 +1056,14 @@ go(long long now)
 		new_game(now);
 }
 
+static int menu_paused;	/* the menu open now paused the game */
+
 static void
 open_menu(int which, int keyboard)
 {
 	int x, y, i;
 
+	menu_paused = state != PAUSED;
 	pause_game();
 	for (i = 0; i < 15; i++)
 		level_items[i].flags = i + 1 == start_level ? UI_MENU_CHECK : 0;
@@ -1074,6 +1083,10 @@ others(GR_EVENT *event)
 {
 	if (event->type == GR_EVENT_TYPE_EXPOSURE && event->exposure.wid == window)
 		draw_all();
+	if (event->type == GR_EVENT_TYPE_CLOSE_REQ && event->general.wid == window) {
+		GrClose();
+		exit(0);
+	}
 }
 
 static void
@@ -1094,7 +1107,8 @@ command(int id, long long now)
 		new_game(now);
 		break;
 	case C_PAUSE:
-		if (state == PAUSED)
+		/* (the menu paused it to show itself: Pause from there is to stay so) */
+		if (state == PAUSED && !menu_paused)
 			resume(now);
 		else
 			pause_game();
@@ -1160,8 +1174,14 @@ key_down(int ch, long long now)
 		return;
 	}
 	if (state != PLAYING && state != CLEARING) {
-		if (ch == MWKEY_ENTER || ch == '\n' || ch == '\r' || (ch == ' ' && state != PAUSED) || (state == PAUSED && ch == 'p'))
+		if (ch == MWKEY_ENTER || ch == '\n' || ch == '\r' || (ch == ' ' && state != PAUSED) || (state == PAUSED && ch == 'p')) {
+			if (ch == ' ') {	/* (the key's repeat, from the last drop or into the first piece, is not a press) */
+				if (keys_held[K_DROP])
+					return;
+				keys_held[K_DROP] = 1;
+			}
 			go(now);
+		}
 		return;
 	}
 	if (ch == 'p' || ch == MWKEY_ESCAPE || ch == MWKEY_PAUSE) {

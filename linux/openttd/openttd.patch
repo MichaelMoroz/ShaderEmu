@@ -665,7 +665,7 @@ index c1de3c5..f0c5f07 100644
  	void UpdateData()
  	{
 diff --git a/src/gfx.cpp b/src/gfx.cpp
-index 2cae30c..776af6a 100644
+index 2cae30c..ad67b4b 100644
 --- a/src/gfx.cpp
 +++ b/src/gfx.cpp
 @@ -29,6 +29,9 @@
@@ -878,7 +878,7 @@ index 2cae30c..776af6a 100644
  	if (left < 0) left = 0;
  	if (top < 0) top = 0;
  	if (right > _screen.width) right = _screen.width;
-@@ -1534,12 +1624,114 @@ void AddDirtyBlock(int left, int top, int right, int bottom)
+@@ -1534,12 +1624,132 @@ void AddDirtyBlock(int left, int top, int right, int bottom)
  
  	assert(left < right && height > 0);
  
@@ -907,6 +907,22 @@ index 2cae30c..776af6a 100644
 +static uint32_t _se_later_next; ///< when they are due next
 +static uint32_t _se_later_from; ///< the start of the round that drew them, 0: none
 +
++/** Whether any block of the rectangle waits for later. */
++bool SeDirtyLaterIn(int left, int top, int right, int bottom)
++{
++	left = std::max(left, 0) / DIRTY_BLOCK_WIDTH;
++	top = std::max(top, 0) / DIRTY_BLOCK_HEIGHT;
++	right = CeilDiv(std::min(right, _screen.width), DIRTY_BLOCK_WIDTH);
++	bottom = CeilDiv(std::min(bottom, _screen.height), DIRTY_BLOCK_HEIGHT);
++	for (int x = left; x < right; x++) {
++		const uint8_t *col = _dirty_later.data() + _dirty_blocks_per_column * x;
++		for (int y = top; y < bottom; y++) {
++			if (col[y] != 0) return true;
++		}
++	}
++	return false;
++}
++
 +/** The blocks of what the tick changed in windows join the dirty ones when their time has come, or now. */
 +void SeDirtyLaterDue(bool now)
 +{
@@ -915,6 +931,8 @@ index 2cae30c..776af6a 100644
 +	if (!now && static_cast<int32_t>(t - _se_later_next) < 0) return;
 +	_se_later_next = t;
 +	_se_later_from = t;
++	extern void SeDirtyLaterWhole();
++	SeDirtyLaterWhole();
 +	_se_later_any = false;
 +	for (size_t i = 0; i < _dirty_later.size(); i++) {
 +		if (_dirty_later[i] != 0) _dirty_blocks[i] = DIRTY_ALL, _dirty_later[i] = 0;
@@ -993,7 +1011,7 @@ index 2cae30c..776af6a 100644
  /**
   * This function mark the whole screen as dirty. This results in repainting
   * the whole screen. Use this with care as this function will break the
-@@ -1548,6 +1740,10 @@ void AddDirtyBlock(int left, int top, int right, int bottom)
+@@ -1548,6 +1758,10 @@ void AddDirtyBlock(int left, int top, int right, int bottom)
   */
  void MarkWholeScreenDirty()
  {
@@ -2324,7 +2342,7 @@ index 9f92375..990d8b2 100644
  		ChangeObject(ni.ref1, from_index, to_index);
  		ChangeObject(ni.ref2, from_index, to_index);
 diff --git a/src/openttd.cpp b/src/openttd.cpp
-index 7d585b0..931b1c9 100644
+index 7d585b0..556a332 100644
 --- a/src/openttd.cpp
 +++ b/src/openttd.cpp
 @@ -73,6 +73,11 @@
@@ -2430,7 +2448,7 @@ index 7d585b0..931b1c9 100644
  
  		/* Make sure _settings is filled with _settings_newgame if we switch to a game directly */
  		if (_switch_mode != SM_NONE) MakeNewgameSettingsLive();
-@@ -453,14 +506,25 @@ void PostMainLoop()
+@@ -453,6 +506,10 @@ void PostMainLoop()
  {
  	WaitTillSaved();
  
@@ -2441,8 +2459,7 @@ index 7d585b0..931b1c9 100644
  	/* only save config if we have to */
  	if (_save_config) {
  		SaveToConfig();
- 		SaveHotkeysToConfig();
- 		WindowDesc::SaveToConfig();
+@@ -461,6 +518,13 @@ void PostMainLoop()
  		SaveToHighScore();
  	}
  
@@ -2581,6 +2598,57 @@ index 7d585b0..931b1c9 100644
  	if (_pause_mode.None() && HasBit(_display_opt, DO_FULL_ANIMATION)) DoPaletteAnimations();
  
  	SoundDriver::GetInstance()->MainLoop();
+diff --git a/src/os/unix/crashlog_unix.cpp b/src/os/unix/crashlog_unix.cpp
+index 4b1ef6c..2260ce3 100644
+--- a/src/os/unix/crashlog_unix.cpp
++++ b/src/os/unix/crashlog_unix.cpp
+@@ -215,6 +215,12 @@ static void CDECL HandleCrash(int signum)
+ 
+ /* static */ void CrashLog::InitialiseCrashLog()
+ {
++#ifdef WITH_SHADEREMU
++	/* (A crash here ends the program at once: the kernel says where, the desktop says it stopped, and the GPU and the workers
++	 * are free. The log has no stack here, the saved game is minutes of LZMA over memory that may be broken, and meanwhile the
++	 * window has gone and the program holds the GPU: docs/games/openttd.md, "At exit".) */
++	return;
++#endif
+ 	SetSignals(HandleCrash);
+ }
+ 
+diff --git a/src/os/unix/unix.cpp b/src/os/unix/unix.cpp
+index 6032756..21fe4a0 100644
+--- a/src/os/unix/unix.cpp
++++ b/src/os/unix/unix.cpp
+@@ -8,6 +8,10 @@
+ /** @file unix.cpp Implementation of Unix specific file handling. */
+ 
+ #include "../../stdafx.h"
++#ifdef WITH_SHADEREMU
++#include <csignal>
++#include <unistd.h>
++#endif
+ #include "../../textbuf_gui.h"
+ #include "../../debug.h"
+ #include "../../string_func.h"
+@@ -229,6 +233,18 @@ void OSOpenBrowser(const std::string &url)
+ #elif !defined( __APPLE__)
+ void OSOpenBrowser(const std::string &url)
+ {
++#ifdef WITH_SHADEREMU
++	/* (no MMU: a fork is a vfork, whose child runs on this program's memory, and exit() below ran this program's atexit
++	 * functions there: its workers closed, its statics destroyed, under a game that went on and failed later, or stayed
++	 * without a window; docs/games/openttd.md, "At exit". The machine's `open` takes an address.) */
++	const char *open_args[3] = { "open", url.c_str(), nullptr };
++	signal(SIGCHLD, SIG_IGN);
++	if (vfork() == 0) {
++		execvp(open_args[0], const_cast<char * const *>(open_args));
++		_exit(127);
++	}
++	return;
++#endif
+ 	pid_t child_pid = fork();
+ 	if (child_pid != 0) return;
+ 
 diff --git a/src/pathfinder/water_regions.cpp b/src/pathfinder/water_regions.cpp
 index e725401..e67f5ee 100644
 --- a/src/pathfinder/water_regions.cpp
@@ -6055,7 +6123,7 @@ index 91a1111..9d12b4f 100644
  		return TrainLocoHandler(this, true);
  	} else if (this->IsFreeWagon() && this->vehstatus.Test(VehState::Crashed)) {
 diff --git a/src/vehicle.cpp b/src/vehicle.cpp
-index 91588a6..391c73b 100644
+index 91588a6..8a67437 100644
 --- a/src/vehicle.cpp
 +++ b/src/vehicle.cpp
 @@ -60,9 +60,19 @@
@@ -6159,7 +6227,7 @@ index 91588a6..391c73b 100644
  		if (i == 0) {
  			bounds->left = spr->x_offs;
  			bounds->top  = spr->y_offs;
-@@ -656,8 +732,135 @@ void ResetVehicleHash()
+@@ -656,7 +732,244 @@ void ResetVehicleHash()
  void ResetVehicleColourMap()
  {
  	for (Vehicle *v : Vehicle::Iterate()) { v->colourmap = PAL_NONE; }
@@ -6181,8 +6249,8 @@ index 91588a6..391c73b 100644
 +	if (v->drawn_epoch == _veh_epoch) return;
 +	v->drawn_epoch = _veh_epoch;
 +	_veh_changed.push_back(v->index);
- }
- 
++}
++
 +void VehiclesChangedAll() { _veh_all = true; }
 +
 +static void VehicleDrawMake(const Vehicle *v, Vehicle::Drawn &d)
@@ -6218,14 +6286,24 @@ index 91588a6..391c73b 100644
 +	d.hidden = s.hidden, d.shadow = s.shadow, d.crashed = s.crashed, d.revalidate = s.revalidate;
 +}
 +
++static uint32_t _veh_made_slot = 0; ///< which of a vehicle's tw_made the tick stores to (the first core's, the tick held)
++static uint32_t _veh_round = 1; ///< the first core's, the tick held: which round of copies the tick is making
++/** What the tick made in a round, in texels of its own as each list is the tick's, then the first core's. */
++struct alignas(16) VehReady {
++	std::vector<Vehicle *> list;
++	char pad[4];
++};
++static VehReady _veh_ready[2];
++static std::vector<Vehicle *> _veh_free_next; ///< out of the hash at the last sync: freed at the next, when no list names them
++uint32_t _veh_copies_off, _veh_copies_seen;
 +uint32_t _veh_synced, _veh_ahead; ///< vehicles made anew at syncs, and of them from what the tick made (OPENTTD_PICTURE_LOG)
 +
 +static void VehicleViewportNow(Vehicle *v, bool dirty);
 +
 +/** Whether a vehicle is as it was when the tick made its copy and rectangle ahead. */
-+static bool VehicleAsMade(const Vehicle *v)
++static bool VehicleAsMadeWhole(const Vehicle *v)
 +{
-+	const Vehicle::Made &m = v->tw_made;
++	const Vehicle::Made &m = v->tw_made[_veh_made_slot ^ 1];
 +	const Vehicle::Drawn &d = m.drawn;
 +	const SpriteBounds &b = v->bounds;
 +	return m.ok && v->x_pos == d.x && v->y_pos == d.y && v->z_pos == d.z && v->vehstatus == m.status && v->colourmap == m.colourmap &&
@@ -6235,10 +6313,31 @@ index 91588a6..391c73b 100644
 +			b.offset.x == d.bounds.offset.x && b.offset.y == d.bounds.offset.y && b.offset.z == d.bounds.offset.z;
 +}
 +
++/**
++ * Whether a vehicle listed is as the tick made it: what changes a vehicle goes through UpdateViewport, which makes it anew, or says
++ * so by MarkAllViewportsDirty (Made::told), and only then is it compared (a whole comparison of every vehicle listed, a tenth of the
++ * time the tick was held). OPENTTD_MADE_CHECK=1: all are compared, and the play lines say how many did not agree.
++ */
++uint32_t _veh_made_wrong;
++static inline bool VehicleAsMade(const Vehicle *v)
++{
++	static const bool check = GetEnv("OPENTTD_MADE_CHECK").has_value();
++	const Vehicle::Made &m = v->tw_made[_veh_made_slot ^ 1];
++	if (m.round + 1 != _veh_round) return false;
++	if (check) {
++		const bool whole = VehicleAsMadeWhole(v);
++		if (whole != (m.ok && (!m.told || whole))) _veh_made_wrong++;
++		return whole;
++	}
++	if (!m.ok) return false;
++	return !m.told || VehicleAsMadeWhole(v);
++}
++
 +/** On the tick's worker: what the next sync makes of the vehicle as it is now (VehicleAsMade). */
 +static void VehicleMakeAhead(Vehicle *v)
 +{
-+	Vehicle::Made &m = v->tw_made;
++	Vehicle::Made &m = v->tw_made[_veh_made_slot];
++	if (m.round != _veh_round) m.round = _veh_round, m.listed = false;
 +	m.ok = false;
 +	extern bool _draw_bounding_boxes;
 +	if (_draw_bounding_boxes || v->vehstatus.Test(VehState::DefaultPalette) && v->colourmap == PAL_NONE) return;
@@ -6249,53 +6348,131 @@ index 91588a6..391c73b 100644
 +	VehicleDrawMake(v, m.drawn);
 +	m.colourmap = v->colourmap;
 +	m.status = v->vehstatus;
++	m.told = false;
 +	m.ok = true;
++}
++
++/* A wagon moves more than a step a tick, and only the last step's copy is read: a copy is made when the tick ends, or when it is held (a copy a step
++ * was 12% of a tick). */
++static std::vector<VehicleID> _veh_make_later;
++static uint32_t _veh_make_stamp = 1;
++
++static inline void VehicleMakeLater(const Vehicle *v)
++{
++	if (v->made_stamp == _veh_make_stamp) return;
++	v->made_stamp = _veh_make_stamp;
++	_veh_make_later.push_back(v->index);
++}
++
++/** On the tick's worker, the tick ended or held. */
++void VehiclesMakeLater(bool held)
++{
++	static const bool at_once = GetEnv("OPENTTD_CHECK").has_value() || GetEnv("OPENTTD_APPLY").has_value();
++	if (held && !at_once) return;
++	if (_veh_make_later.empty()) return;
++	for (VehicleID id : _veh_make_later) {
++		Vehicle *v = Vehicle::GetIfValid(id);
++		if (v == nullptr) continue;
++		VehicleMakeAhead(v);
++		Vehicle::Made &m = v->tw_made[_veh_made_slot];
++		if (!m.ok) {
++			VehicleChanged(v);
++		} else if (!m.listed) {
++			m.listed = true;
++			_veh_ready[_veh_made_slot].list.push_back(v);
++		}
++	}
++	_veh_make_later.clear();
++	_veh_make_stamp++;
 +}
 +
 +static void VehicleViewportNow(Vehicle *v, bool dirty);
 +
-+/** The first core, the tick waiting or none on a worker: the viewports made as the vehicles listed are now. */
++/**
++ * The first core: the hash and the dirty blocks and the drawn copy of the vehicles that are as the tick made them. The tick may be running:
++ * it stores to the other tw_made, and these stores lie in texels of the first core's own. OPENTTD_APPLY=0: while it is held, as before.
++ */
++void VehiclesApply()
++{
++	const uint32_t slot = _veh_made_slot ^ 1;
++	std::vector<Vehicle *> &ready = _veh_ready[slot].list;
++	if (ready.empty()) return;
++	for (Vehicle *v : ready) {
++		const Vehicle::Made &m = v->tw_made[slot];
++		if (!m.ok) continue;
++		v->Vehicle::UpdateViewportNow(true, &m.coord);
++		DrawnCopy(v->drawn, m.drawn);
++	}
++	ready.clear();
++}
++
++/** The first core, the tick waiting or none on a worker: the viewports made as the vehicles listed are now, or as the tick made them, for VehiclesApply. */
 +void VehiclesSync(bool viewports)
 +{
++	/* (nothing since the sync of the wait that began this hold: what that sync left is still applied with the tick running) */
++	if (_veh_changed.empty() && _veh_dead.empty() && !_veh_all && _veh_ready[_veh_made_slot].list.empty()) return;
++	VehiclesApply();
++	/* OPENTTD_MADE_CHECK=1: the tick held, every copy is as its vehicle unless the tick moved it since it last made one (and that one is listed for this sync) */
++	static const bool copies_check = GetEnv("OPENTTD_MADE_CHECK").has_value();
++	if (copies_check && TickElsewhere()) {
++		for (const Vehicle *v : Vehicle::Iterate()) {
++			const Vehicle::Made &m = v->tw_made[_veh_made_slot];
++			if (v->made_stamp == _veh_make_stamp || (m.round == _veh_round && m.ok && m.listed)) continue;
++			if (v->vehstatus.Test(VehState::Hidden) && v->drawn.hidden) continue;
++			if (v->x_pos != v->drawn.x || v->y_pos != v->drawn.y || v->z_pos != v->drawn.z || v->vehstatus.Test(VehState::Hidden) != v->drawn.hidden) _veh_copies_off++;
++			_veh_copies_seen++;
++		}
++	}
++	for (Vehicle *v : _veh_free_next) free(v);
++	_veh_free_next.clear();
 +	for (Vehicle *v : _veh_dead) {
 +		if (!v->vehstatus.Test(VehState::Hidden)) ::MarkAllViewportsDirty(v->coord.left, v->coord.top, v->coord.right, v->coord.bottom);
 +		UpdateVehicleViewportHash(v, INVALID_COORD, 0, v->sprite_cache.old_coord.left, v->sprite_cache.old_coord.top);
-+		free(v);
++		_veh_free_next.push_back(v);
 +	}
 +	_veh_dead.clear();
 +	_veh_epoch++;
++	const uint32_t slot = _veh_made_slot;
++	_veh_made_slot ^= 1; /* (what the tick stored so far is read now, and until VehiclesApply) */
++	_veh_round++;
 +	if (_veh_all) {
 +		_veh_all = false;
 +		_veh_changed.clear();
++		_veh_ready[0].list.clear();
++		_veh_ready[1].list.clear();
 +		for (Vehicle *v : Vehicle::Iterate()) {
++			v->tw_made[0].ok = v->tw_made[1].ok = false;
 +			if (viewports) VehicleViewportNow(v, true);
 +			VehicleDrawRefresh(v);
 +		}
 +		return;
 +	}
++	/* (stored to the vehicle at once when no tick runs on, or a picture is to be compared with one drawn whole) */
++	static const bool at_once = GetEnv("OPENTTD_CHECK").has_value() || GetEnv("OPENTTD_APPLY").has_value();
++	/* (only what the tick did not make: the rest is listed as it was made, and this is a hold of the tick; a vehicle it moved since, in the middle of
++	 * a tick, is made at the tick's end and goes to the next sync) */
++	const bool later = !at_once && TickElsewhere();
 +	for (VehicleID id : _veh_changed) {
 +		Vehicle *v = Vehicle::GetIfValid(id);
 +		if (v == nullptr) continue;
 +		_veh_synced++;
++		if (later && v->made_stamp == _veh_make_stamp) continue;
 +		if (viewports && VehicleAsMade(v)) {
 +			_veh_ahead++;
-+			v->tw_made.ok = false;
-+			v->Vehicle::UpdateViewportNow(true, &v->tw_made.coord);
-+			DrawnCopy(v->drawn, v->tw_made.drawn);
 +			continue;
 +		}
-+		v->tw_made.ok = false;
++		v->tw_made[slot].ok = false;
 +		if (viewports) VehicleViewportNow(v, true);
 +		VehicleDrawRefresh(v);
 +	}
 +	_veh_changed.clear();
-+}
++	if (at_once || !TickElsewhere()) VehiclesApply();
+ }
 +#endif
-+
+ 
  /**
   * List of vehicles that should check for autoreplace this tick.
-  * Mapping of vehicle -> leave depot immediately after autoreplace.
-@@ -867,6 +1070,9 @@ Vehicle::~Vehicle()
+@@ -867,6 +1180,9 @@ Vehicle::~Vehicle()
  		return;
  	}
  
@@ -6305,13 +6482,14 @@ index 91588a6..391c73b 100644
  	/* sometimes, eg. for disaster vehicles, when company bankrupts, when removing crashed/flooded vehicles,
  	 * it may happen that vehicle chain is deleted when visible */
  	if (!this->vehstatus.Test(VehState::Hidden)) this->MarkAllViewportsDirty();
-@@ -877,6 +1083,19 @@ Vehicle::~Vehicle()
+@@ -877,6 +1193,20 @@ Vehicle::~Vehicle()
  	delete v;
  
  	UpdateVehicleTileHash(this, true);
 +#ifdef WITH_SHADEREMU
 +	if (TickOnWorker()) {
 +		/* (out of the viewports' hash, and freed, by the first core: a worker may be drawing it) */
++		this->tw_made[_veh_made_slot].ok = false;
 +		_veh_dead.push_back(this);
 +		_tw_dying = this;
 +		if (this->type != VEH_EFFECT) {
@@ -6325,7 +6503,7 @@ index 91588a6..391c73b 100644
  	UpdateVehicleViewportHash(this, INVALID_COORD, 0, this->sprite_cache.old_coord.left, this->sprite_cache.old_coord.top);
  	if (this->type != VEH_EFFECT) {
  		DeleteVehicleNews(this->index);
-@@ -959,15 +1178,28 @@ void CallVehicleTicks()
+@@ -959,15 +1289,34 @@ void CallVehicleTicks()
  
  	{
  		PerformanceMeasurer framerate(PFE_GL_ECONOMY);
@@ -6350,12 +6528,18 @@ index 91588a6..391c73b 100644
  	for (Vehicle *v : Vehicle::Iterate()) {
  		[[maybe_unused]] VehicleID vehicle_index = v->index;
 +#ifdef WITH_SHADEREMU
-+		TickYieldPoint();
++		/* (a wagon's Tick is its counter: half of the vehicles, no call; a hold waits for the next eighth) */
++		static uint32_t yield_in = 0;
++		if ((++yield_in & 7) == 0) TickYieldPoint();
++		if ((v->type == VEH_TRAIN && !Train::From(v)->IsFrontEngine() && !Train::From(v)->IsFreeWagon()) ||
++				(v->type == VEH_ROAD && !RoadVehicle::From(v)->IsFrontEngine())) {
++			v->tick_counter++;
++		} else
 +#endif
  
  		/* Vehicle could be deleted in this tick */
  		if (!v->Tick()) {
-@@ -1039,6 +1271,11 @@ void CallVehicleTicks()
+@@ -1039,6 +1388,11 @@ void CallVehicleTicks()
  		}
  	}
  
@@ -6367,7 +6551,7 @@ index 91588a6..391c73b 100644
  	Backup<CompanyID> cur_company(_current_company);
  	for (auto &it : _vehicles_to_autoreplace) {
  		Vehicle *v = Vehicle::Get(it.first);
-@@ -1089,8 +1326,61 @@ void CallVehicleTicks()
+@@ -1089,8 +1443,61 @@ void CallVehicleTicks()
   * Add vehicle sprite for drawing to the screen.
   * @param v Vehicle to draw.
   */
@@ -6429,7 +6613,7 @@ index 91588a6..391c73b 100644
  	PaletteID pal = PAL_NONE;
  
  	if (v->vehstatus.Test(VehState::DefaultPalette)) pal = v->vehstatus.Test(VehState::Crashed) ? PALETTE_CRASH : GetVehiclePalette(v);
-@@ -1118,8 +1408,23 @@ static void DoDrawVehicle(const Vehicle *v)
+@@ -1118,8 +1525,23 @@ static void DoDrawVehicle(const Vehicle *v)
   * Add the vehicle sprites that should be drawn at a part of the screen.
   * @param dpi Rectangle being drawn.
   */
@@ -6453,7 +6637,7 @@ index 91588a6..391c73b 100644
  	/* The bounding rectangle */
  	const int l = dpi->left;
  	const int r = dpi->left + dpi->width;
-@@ -1157,7 +1462,11 @@ void ViewportAddVehicles(DrawPixelInfo *dpi)
+@@ -1157,7 +1579,11 @@ void ViewportAddVehicles(DrawPixelInfo *dpi)
  
  			while (v != nullptr) {
  
@@ -6465,7 +6649,7 @@ index 91588a6..391c73b 100644
  					l <= v->coord.right + xb &&
  					t <= v->coord.bottom + yb &&
  					r >= v->coord.left - xb &&
-@@ -1167,7 +1476,13 @@ void ViewportAddVehicles(DrawPixelInfo *dpi)
+@@ -1167,7 +1593,13 @@ void ViewportAddVehicles(DrawPixelInfo *dpi)
  					 * This vehicle can potentially be drawn as part of this viewport and
  					 * needs to be revalidated, as the sprite may not be correct.
  					 */
@@ -6479,7 +6663,7 @@ index 91588a6..391c73b 100644
  						VehicleSpriteSeq seq;
  						v->GetImage(v->direction, EIT_ON_MAP, &seq);
  
-@@ -1187,12 +1502,32 @@ void ViewportAddVehicles(DrawPixelInfo *dpi)
+@@ -1187,12 +1619,32 @@ void ViewportAddVehicles(DrawPixelInfo *dpi)
  						}
  
  						v->sprite_cache.revalidate_before_draw = false;
@@ -6515,7 +6699,20 @@ index 91588a6..391c73b 100644
  				}
  
  				v = v->hash_viewport_next;
-@@ -1668,10 +2003,25 @@ void Vehicle::UpdatePosition()
+@@ -1662,16 +2114,38 @@ void VehicleEnterDepot(Vehicle *v)
+ void Vehicle::UpdatePosition()
+ {
+ 	UpdateVehicleTileHash(this, false);
++#ifdef WITH_SHADEREMU
++	/* (a vehicle built or moving in a depot says no more: hidden, it has no UpdateViewport, and a view following it reads this copy) */
++	if (this->vehstatus.Test(VehState::Hidden)) {
++		VehicleChanged(this);
++		this->tw_made[_veh_made_slot].told = true;
++	}
++#endif
+ }
+ 
+ /**
   * Update the bounding box co-ordinates of the vehicle
   * @param update_cache Update the cached values for previous co-ordinate values
   */
@@ -6542,7 +6739,7 @@ index 91588a6..391c73b 100644
  
  	/* z-bounds are not used. */
  	Point pt = RemapCoords(this->x_pos + this->bounds.origin.x + this->bounds.offset.x, this->y_pos + this->bounds.origin.y + this->bounds.offset.y, this->z_pos);
-@@ -1690,6 +2040,9 @@ void Vehicle::UpdateBoundingBoxCoordinates(bool update_cache) const
+@@ -1690,6 +2164,9 @@ void Vehicle::UpdateBoundingBoxCoordinates(bool update_cache) const
  		new_coord.top    = std::min(new_coord.top, RemapCoords(x, y, z + bounds.extent.z).y);
  		new_coord.bottom = std::max(new_coord.bottom, RemapCoords(x + bounds.extent.x, y + bounds.extent.y, z).y + 1);
  	}
@@ -6552,7 +6749,7 @@ index 91588a6..391c73b 100644
  
  	if (update_cache) {
  		/*
-@@ -1713,12 +2066,114 @@ void Vehicle::UpdateBoundingBoxCoordinates(bool update_cache) const
+@@ -1713,12 +2190,115 @@ void Vehicle::UpdateBoundingBoxCoordinates(bool update_cache) const
   * Update the vehicle on the viewport, updating the right hash and setting the new coordinates.
   * @param dirty Mark the (new and old) coordinates of the vehicle as dirty.
   */
@@ -6567,13 +6764,14 @@ index 91588a6..391c73b 100644
 +
 +static void VehicleViewportNow(Vehicle *v, bool dirty);
 +
-+void Vehicle::UpdateViewport(bool dirty)
+ void Vehicle::UpdateViewport(bool dirty)
 +{
-+	VehicleChanged(this);
 +	if (TickOnWorker()) {
-+		VehicleMakeAhead(this);
++		VehicleMakeLater(this);
 +		return;
 +	}
++	VehicleChanged(this);
++	this->tw_made[_veh_made_slot].told = true; /* (a command, the tick held: what the tick made is not as it is now) */
 +	if (_vp_defer) {
 +		if (!this->sprite_cache.vp_pending) {
 +			this->sprite_cache.vp_pending = true;
@@ -6644,7 +6842,7 @@ index 91588a6..391c73b 100644
 +
 +void Vehicle::UpdateViewportNow(bool dirty, const Rect *made)
 +#else
- void Vehicle::UpdateViewport(bool dirty)
++void Vehicle::UpdateViewport(bool dirty)
 +#endif
  {
  	/* If the existing cache is invalid we should ignore it, as it will be set to the current coords by UpdateBoundingBoxCoordinates */
@@ -6667,7 +6865,7 @@ index 91588a6..391c73b 100644
  
  	if (ignore_cached_coords) {
  		UpdateVehicleViewportHash(this, this->coord.left, this->coord.top, INVALID_COORD, INVALID_COORD);
-@@ -1726,6 +2181,11 @@ void Vehicle::UpdateViewport(bool dirty)
+@@ -1726,9 +2306,19 @@ void Vehicle::UpdateViewport(bool dirty)
  		UpdateVehicleViewportHash(this, this->coord.left, this->coord.top, this->sprite_cache.old_coord.left, this->sprite_cache.old_coord.top);
  	}
  
@@ -6678,31 +6876,48 @@ index 91588a6..391c73b 100644
 +#endif
  	if (dirty) {
  		if (ignore_cached_coords) {
++#ifdef WITH_SHADEREMU
++			/* (not the vehicle's own: that lists it, and this may be VehiclesApply with the tick running, which lists to the same vector) */
++			this->sprite_cache.is_viewport_candidate = ::MarkAllViewportsDirty(this->coord.left, this->coord.top, this->coord.right, this->coord.bottom);
++#else
  			this->sprite_cache.is_viewport_candidate = this->MarkAllViewportsDirty();
-@@ -1754,6 +2214,10 @@ void Vehicle::UpdatePositionAndViewport()
++#endif
+ 		} else {
+ 			this->sprite_cache.is_viewport_candidate = ::MarkAllViewportsDirty(
+ 				std::min(this->sprite_cache.old_coord.left, this->coord.left),
+@@ -1754,6 +2344,11 @@ void Vehicle::UpdatePositionAndViewport()
   */
  bool Vehicle::MarkAllViewportsDirty() const
  {
 +#ifdef WITH_SHADEREMU
 +	VehicleChanged(this);
++	this->tw_made[_veh_made_slot].told = true;
 +	if (TickOnWorker()) return this->sprite_cache.is_viewport_candidate;
 +#endif
  	return ::MarkAllViewportsDirty(this->coord.left, this->coord.top, this->coord.right, this->coord.bottom);
  }
  
 diff --git a/src/vehicle_base.h b/src/vehicle_base.h
-index 7edf724..05c0c81 100644
+index 7edf724..de46941 100644
 --- a/src/vehicle_base.h
 +++ b/src/vehicle_base.h
-@@ -160,7 +160,22 @@ struct MutableSpriteCache {
+@@ -157,10 +157,30 @@ struct VehicleSpriteSeq {
+ struct MutableSpriteCache {
+ 	Direction last_direction = INVALID_DIR; ///< Last direction we obtained sprites for
+ 	bool revalidate_before_draw = false; ///< We need to do a GetImage() and check bounds before drawing this sprite
++#ifndef WITH_SHADEREMU
  	bool is_viewport_candidate = false; ///< This vehicle can potentially be drawn on a viewport
  	Rect old_coord{}; ///< Co-ordinates from the last valid bounding box
++#endif
  	VehicleSpriteSeq sprite_seq{}; ///< Vehicle appearance.
 +#ifdef WITH_SHADEREMU
 +	/* the bounds of a sequence of one sprite, kept while the sprite and the sprite cache's generation are the same */
 +	Rect seq_bounds{};
 +	SpriteID seq_bounds_of = 0;
 +	uint32_t seq_bounds_gen = 0;
++	/* (the first core's, stored while the tick runs on its worker: in texels of their own, VehiclesApply) */
++	alignas(16) Rect old_coord{}; ///< Co-ordinates from the last valid bounding box
++	bool is_viewport_candidate = false; ///< This vehicle can potentially be drawn on a viewport
 +	/* an update of the viewport asked for while the vehicles tick, made once when they have (vehicle.cpp) */
 +	bool vp_pending = false;
 +	bool vp_dirty = false;
@@ -6717,10 +6932,26 @@ index 7edf724..05c0c81 100644
  
  /** A vehicle pool for a little over 1 million vehicles. */
  typedef Pool<Vehicle, VehicleID, 512> VehiclePool;
-@@ -247,6 +262,26 @@ public:
+@@ -237,17 +257,40 @@ public:
+ 
+ 	CargoPayment *cargo_payment = nullptr; ///< The cargo payment we're currently in
+ 
+-	mutable Rect coord{}; ///< NOSAVE: Graphical bounding box of the vehicle, i.e. what to redraw on moves.
+-
+-	Vehicle *hash_viewport_next = nullptr; ///< NOSAVE: Next vehicle in the visual location hash.
+-	Vehicle **hash_viewport_prev = nullptr; ///< NOSAVE: Previous vehicle in the visual location hash.
+-
+ 	Vehicle *hash_tile_next = nullptr; ///< NOSAVE: Next vehicle in the tile location hash.
+ 	Vehicle **hash_tile_prev = nullptr; ///< NOSAVE: Previous vehicle in the tile location hash.
  	Vehicle **hash_tile_current = nullptr; ///< NOSAVE: Cache of the current hash chain.
  
  	SpriteID colourmap{}; ///< NOSAVE: cached colour mapping
+ 
++	/* (the first core's, stored while the tick runs on its worker: in texels of their own, VehiclesApply) */
++	alignas(16) mutable Rect coord{}; ///< NOSAVE: Graphical bounding box of the vehicle, i.e. what to redraw on moves.
++
++	Vehicle *hash_viewport_next = nullptr; ///< NOSAVE: Next vehicle in the visual location hash.
++	Vehicle **hash_viewport_prev = nullptr; ///< NOSAVE: Previous vehicle in the visual location hash.
 +#ifdef WITH_SHADEREMU
 +	/** NOSAVE: what the viewports draw of it, made by the first core while the tick waits (docs/games/openttd.md, "The tick on a worker") */
 +	struct alignas(16) Drawn {
@@ -6732,19 +6963,22 @@ index 7edf724..05c0c81 100644
 +		bool hidden = true, shadow = false, crashed = false, revalidate = false;
 +	} drawn;
 +	mutable uint32_t drawn_epoch = 0; ///< NOSAVE: the sync it was last listed for (VehicleChanged)
++	mutable uint32_t made_stamp = 0; ///< NOSAVE: the tick's: the round of makes it was last listed for (VehiclesMakeLater)
 +	/** NOSAVE: its copy and its rectangle as the tick on its worker made them when it last moved, used by the sync if it is as it was then */
 +	struct alignas(16) Made {
 +		Drawn drawn;
 +		Rect coord;
 +		SpriteID colourmap;
 +		VehStates status;
-+		bool ok = false;
-+	} tw_made;
++		uint32_t round = 0; ///< the sync's round it was made in (VehiclesSync): only the tick stores here
++		bool ok = false, told = false, listed = false;
++	} mutable tw_made[2]; ///< (one the tick stores to, the other the first core applies with the tick running: VehiclesSync, VehiclesApply)
 +#endif
- 
++
  	/* Related to age and service time */
  	TimerGameCalendar::Year build_year{}; ///< Year the vehicle has been built.
-@@ -781,7 +816,12 @@ public:
+ 	TimerGameCalendar::Date age{}; ///< Age in calendar days.
+@@ -781,7 +824,12 @@ public:
  
  	void UpdatePosition();
  	void UpdateViewport(bool dirty);
@@ -6758,7 +6992,7 @@ index 7edf724..05c0c81 100644
  	void UpdatePositionAndViewport();
  	bool MarkAllViewportsDirty() const;
  
-@@ -1171,7 +1211,15 @@ struct SpecializedVehicle : public Vehicle {
+@@ -1171,7 +1219,15 @@ struct SpecializedVehicle : public Vehicle {
  		 * to resolve a new sprite.
  		 */
  		if (this->direction != this->sprite_cache.last_direction || this->sprite_cache.is_viewport_candidate) {
@@ -6775,10 +7009,10 @@ index 7edf724..05c0c81 100644
  			((T*)this)->T::GetImage(this->direction, EIT_ON_MAP, &seq);
  			if (this->sprite_cache.sprite_seq != seq) {
 diff --git a/src/vehicle_func.h b/src/vehicle_func.h
-index 9b69b13..0bd2115 100644
+index 9b69b13..f244f01 100644
 --- a/src/vehicle_func.h
 +++ b/src/vehicle_func.h
-@@ -194,6 +194,12 @@ void ResetVehicleColourMap();
+@@ -194,6 +194,14 @@ void ResetVehicleColourMap();
  uint8_t GetBestFittingSubType(Vehicle *v_from, Vehicle *v_for, CargoType dest_cargo_type);
  
  void ViewportAddVehicles(DrawPixelInfo *dpi);
@@ -6787,6 +7021,8 @@ index 9b69b13..0bd2115 100644
 +void VehicleChanged(const Vehicle *v); ///< what the viewports draw of it is made anew at the next sync
 +void VehiclesChangedAll();
 +void VehiclesSync(bool viewports);
++void VehiclesApply();
++void VehiclesMakeLater(bool held);
 +#endif
  
  void ShowNewGrfVehicleError(EngineID engine, StringID part1, StringID part2, GRFBug bug_type, bool critical);
@@ -9112,7 +9348,7 @@ index daf0172..1a64cdb 100644
  
  /**
 diff --git a/src/window.cpp b/src/window.cpp
-index ea6dc5b..f847749 100644
+index ea6dc5b..5fc66f4 100644
 --- a/src/window.cpp
 +++ b/src/window.cpp
 @@ -42,6 +42,9 @@
@@ -9179,7 +9415,28 @@ index ea6dc5b..f847749 100644
  		if (MayBeShown(w) &&
  				right > w->left &&
  				bottom > w->top &&
-@@ -967,6 +996,13 @@ void DrawOverlappedWindowForAll(int left, int top, int right, int bottom)
+@@ -961,12 +990,34 @@ void DrawOverlappedWindowForAll(int left, int top, int right, int bottom)
+ 	}
+ }
+ 
++#ifdef WITH_SHADEREMU
++/**
++ * A window with a widget that waits for later is drawn whole, once: a rectangle's paint formats all of its strings whatever it shows, and its widgets'
++ * blocks are rectangles of their own (5 to 8 paints of the finances a round). Not the main window, whose blocks are the view's.
++ */
++void SeDirtyLaterWhole()
++{
++	extern bool SeDirtyLaterIn(int left, int top, int right, int bottom);
++	for (const Window *w : Window::Iterate()) {
++		if (w->window_class == WC_MAIN_WINDOW || !MayBeShown(w)) continue;
++		if (SeDirtyLaterIn(w->left, w->top, w->left + w->width, w->top + w->height)) AddDirtyLater(w->left, w->top, w->left + w->width, w->top + w->height);
++	}
++}
++#endif
++
+ /**
+  * Mark entire window as dirty (in need of re-paint)
+  * @ingroup dirty
   */
  void Window::SetDirty() const
  {
@@ -9193,7 +9450,7 @@ index ea6dc5b..f847749 100644
  	AddDirtyBlock(this->left, this->top, this->left + this->width, this->top + this->height);
  }
  
-@@ -979,6 +1015,9 @@ void Window::SetDirty() const
+@@ -979,6 +1030,9 @@ void Window::SetDirty() const
   */
  void Window::ReInit(int rx, int ry, bool reposition)
  {
@@ -9203,7 +9460,7 @@ index ea6dc5b..f847749 100644
  	this->SetDirty(); // Mark whole current window as dirty.
  
  	/* Save current size. */
-@@ -1103,6 +1142,9 @@ void Window::CloseChildWindowById(WindowClass wc, WindowNumber number) const
+@@ -1103,6 +1157,9 @@ void Window::CloseChildWindowById(WindowClass wc, WindowNumber number) const
   */
  void Window::Close([[maybe_unused]] int data)
  {
@@ -9213,7 +9470,7 @@ index ea6dc5b..f847749 100644
  	/* Don't close twice. */
  	if (*this->z_position == nullptr) return;
  
-@@ -1152,6 +1194,9 @@ Window::~Window()
+@@ -1152,6 +1209,9 @@ Window::~Window()
   */
  Window *FindWindowById(WindowClass cls, WindowNumber number)
  {
@@ -9223,7 +9480,7 @@ index ea6dc5b..f847749 100644
  	for (Window *w : Window::Iterate()) {
  		if (w->window_class == cls && w->window_number == number) return w;
  	}
-@@ -1167,6 +1212,9 @@ Window *FindWindowById(WindowClass cls, WindowNumber number)
+@@ -1167,6 +1227,9 @@ Window *FindWindowById(WindowClass cls, WindowNumber number)
   */
  Window *FindWindowByClass(WindowClass cls)
  {
@@ -9233,7 +9490,7 @@ index ea6dc5b..f847749 100644
  	for (Window *w : Window::Iterate()) {
  		if (w->window_class == cls) return w;
  	}
-@@ -1194,6 +1242,9 @@ Window *GetMainWindow()
+@@ -1194,6 +1257,9 @@ Window *GetMainWindow()
   */
  void CloseWindowById(WindowClass cls, WindowNumber number, bool force, int data)
  {
@@ -9243,7 +9500,7 @@ index ea6dc5b..f847749 100644
  	Window *w = FindWindowById(cls, number);
  	if (w != nullptr && (force || !w->flags.Test(WindowFlag::Sticky))) {
  		w->Close(data);
-@@ -1206,6 +1257,9 @@ void CloseWindowById(WindowClass cls, WindowNumber number, bool force, int data)
+@@ -1206,6 +1272,9 @@ void CloseWindowById(WindowClass cls, WindowNumber number, bool force, int data)
   */
  void CloseWindowByClass(WindowClass cls, int data)
  {
@@ -9253,7 +9510,7 @@ index ea6dc5b..f847749 100644
  	/* Note: the container remains stable, even when deleting windows. */
  	for (Window *w : Window::Iterate()) {
  		if (w->window_class == cls) {
-@@ -1222,6 +1276,9 @@ void CloseWindowByClass(WindowClass cls, int data)
+@@ -1222,6 +1291,9 @@ void CloseWindowByClass(WindowClass cls, int data)
   */
  void CloseCompanyWindows(CompanyID id)
  {
@@ -9263,7 +9520,7 @@ index ea6dc5b..f847749 100644
  	/* Note: the container remains stable, even when deleting windows. */
  	for (Window *w : Window::Iterate()) {
  		if (w->owner == id) {
-@@ -1242,6 +1299,9 @@ void CloseCompanyWindows(CompanyID id)
+@@ -1242,6 +1314,9 @@ void CloseCompanyWindows(CompanyID id)
   */
  void ChangeWindowOwner(Owner old_owner, Owner new_owner)
  {
@@ -9273,7 +9530,7 @@ index ea6dc5b..f847749 100644
  	for (Window *w : Window::Iterate()) {
  		if (w->owner != old_owner) continue;
  
-@@ -1475,6 +1535,9 @@ void Window::InitializePositionSize(int x, int y, int sm_width, int sm_height)
+@@ -1475,6 +1550,9 @@ void Window::InitializePositionSize(int x, int y, int sm_width, int sm_height)
   */
  void Window::FindWindowPlacementAndResize(int def_width, int def_height, bool allow_resize)
  {
@@ -9283,7 +9540,7 @@ index ea6dc5b..f847749 100644
  	if (allow_resize) {
  		def_width  = std::max(def_width,  this->width); // Don't allow default size to be smaller than smallest size
  		def_height = std::max(def_height, this->height);
-@@ -3124,6 +3187,48 @@ static const IntervalTimer<TimerWindow> white_border_interval(std::chrono::milli
+@@ -3124,6 +3202,48 @@ static const IntervalTimer<TimerWindow> white_border_interval(std::chrono::milli
  /**
   * Update the continuously changing contents of the windows, such as the viewports
   */
@@ -9332,7 +9589,7 @@ index ea6dc5b..f847749 100644
  void UpdateWindows()
  {
  	static auto last_time = std::chrono::steady_clock::now();
-@@ -3139,8 +3244,21 @@ void UpdateWindows()
+@@ -3139,8 +3259,21 @@ void UpdateWindows()
  
  	ProcessPendingPerformanceMeasurements();
  
@@ -9354,7 +9611,7 @@ index ea6dc5b..f847749 100644
  
  	/* Process invalidations before anything else. */
  	for (Window *w : Window::Iterate()) {
-@@ -3153,12 +3271,23 @@ void UpdateWindows()
+@@ -3153,12 +3286,23 @@ void UpdateWindows()
  	 * But still empty the invalidation queues above. */
  	if (_network_dedicated) return;
  
@@ -9378,7 +9635,7 @@ index ea6dc5b..f847749 100644
  	NetworkDrawChatMessage();
  	/* Redraw mouse cursor in case it was hidden */
  	DrawMouseCursor();
-@@ -3178,6 +3307,9 @@ void UpdateWindows()
+@@ -3178,6 +3322,9 @@ void UpdateWindows()
   */
  void SetWindowDirty(WindowClass cls, WindowNumber number)
  {
@@ -9388,7 +9645,7 @@ index ea6dc5b..f847749 100644
  	for (const Window *w : Window::Iterate()) {
  		if (w->window_class == cls && w->window_number == number) w->SetDirty();
  	}
-@@ -3191,6 +3323,9 @@ void SetWindowDirty(WindowClass cls, WindowNumber number)
+@@ -3191,6 +3338,9 @@ void SetWindowDirty(WindowClass cls, WindowNumber number)
   */
  void SetWindowWidgetDirty(WindowClass cls, WindowNumber number, WidgetID widget_index)
  {
@@ -9398,7 +9655,7 @@ index ea6dc5b..f847749 100644
  	for (const Window *w : Window::Iterate()) {
  		if (w->window_class == cls && w->window_number == number) {
  			w->SetWidgetDirty(widget_index);
-@@ -3204,6 +3339,9 @@ void SetWindowWidgetDirty(WindowClass cls, WindowNumber number, WidgetID widget_
+@@ -3204,6 +3354,9 @@ void SetWindowWidgetDirty(WindowClass cls, WindowNumber number, WidgetID widget_
   */
  void SetWindowClassesDirty(WindowClass cls)
  {
@@ -9408,7 +9665,7 @@ index ea6dc5b..f847749 100644
  	for (const Window *w : Window::Iterate()) {
  		if (w->window_class == cls) w->SetDirty();
  	}
-@@ -3236,6 +3374,9 @@ void Window::ProcessScheduledResize()
+@@ -3236,6 +3389,9 @@ void Window::ProcessScheduledResize()
   */
  void Window::InvalidateData(int data, bool gui_scope)
  {
@@ -9418,7 +9675,7 @@ index ea6dc5b..f847749 100644
  	this->SetDirty();
  	if (!gui_scope) {
  		/* Schedule GUI-scope invalidation for next redraw. */
-@@ -3296,6 +3437,9 @@ void Window::ProcessHighlightedInvalidations()
+@@ -3296,6 +3452,9 @@ void Window::ProcessHighlightedInvalidations()
   */
  void InvalidateWindowData(WindowClass cls, WindowNumber number, int data, bool gui_scope)
  {
@@ -9428,7 +9685,7 @@ index ea6dc5b..f847749 100644
  	for (Window *w : Window::Iterate()) {
  		if (w->window_class == cls && w->window_number == number) {
  			w->InvalidateData(data, gui_scope);
-@@ -3313,6 +3457,9 @@ void InvalidateWindowData(WindowClass cls, WindowNumber number, int data, bool g
+@@ -3313,6 +3472,9 @@ void InvalidateWindowData(WindowClass cls, WindowNumber number, int data, bool g
   */
  void InvalidateWindowClassesData(WindowClass cls, int data, bool gui_scope)
  {
@@ -9438,7 +9695,7 @@ index ea6dc5b..f847749 100644
  	for (Window *w : Window::Iterate()) {
  		if (w->window_class == cls) {
  			w->InvalidateData(data, gui_scope);
-@@ -3512,6 +3659,9 @@ int PositionNetworkChatWindow(Window *w)
+@@ -3512,6 +3674,9 @@ int PositionNetworkChatWindow(Window *w)
   */
  void ChangeVehicleViewports(VehicleID from_index, VehicleID to_index)
  {
@@ -9500,53 +9757,4 @@ index 3d07ff3..b8911ba 100644
 +
  static const uint ZOOM_BASE_SHIFT = to_underlying(ZoomLevel::Normal);
  static uint const ZOOM_BASE = 1U << ZOOM_BASE_SHIFT;
- 
-diff --git a/src/os/unix/crashlog_unix.cpp b/src/os/unix/crashlog_unix.cpp
---- a/src/os/unix/crashlog_unix.cpp
-+++ b/src/os/unix/crashlog_unix.cpp
-@@ -215,6 +215,12 @@
- 
- /* static */ void CrashLog::InitialiseCrashLog()
- {
-+#ifdef WITH_SHADEREMU
-+	/* (A crash here ends the program at once: the kernel says where, the desktop says it stopped, and the GPU and the workers
-+	 * are free. The log has no stack here, the saved game is minutes of LZMA over memory that may be broken, and meanwhile the
-+	 * window has gone and the program holds the GPU: docs/games/openttd.md, "At exit".) */
-+	return;
-+#endif
- 	SetSignals(HandleCrash);
- }
- 
-diff --git a/src/os/unix/unix.cpp b/src/os/unix/unix.cpp
---- a/src/os/unix/unix.cpp
-+++ b/src/os/unix/unix.cpp
-@@ -8,6 +8,10 @@
- /** @file unix.cpp Implementation of Unix specific file handling. */
- 
- #include "../../stdafx.h"
-+#ifdef WITH_SHADEREMU
-+#include <csignal>
-+#include <unistd.h>
-+#endif
- #include "../../textbuf_gui.h"
- #include "../../debug.h"
- #include "../../string_func.h"
-@@ -229,6 +233,18 @@
- #elif !defined( __APPLE__)
- void OSOpenBrowser(const std::string &url)
- {
-+#ifdef WITH_SHADEREMU
-+	/* (no MMU: a fork is a vfork, whose child runs on this program's memory, and exit() below ran this program's atexit
-+	 * functions there: its workers closed, its statics destroyed, under a game that went on and failed later, or stayed
-+	 * without a window; docs/games/openttd.md, "At exit". The machine's `open` takes an address.) */
-+	const char *open_args[3] = { "open", url.c_str(), nullptr };
-+	signal(SIGCHLD, SIG_IGN);
-+	if (vfork() == 0) {
-+		execvp(open_args[0], const_cast<char * const *>(open_args));
-+		_exit(127);
-+	}
-+	return;
-+#endif
- 	pid_t child_pid = fork();
- 	if (child_pid != 0) return;
  

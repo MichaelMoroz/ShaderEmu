@@ -338,7 +338,7 @@ seek_to(uint32_t frame)
 	out.written = 0;
 	if (out.on)
 		snd_play(out.voice, SND_STREAM | SND_SMOOTH | (tune.channels == 2 ? SND_STEREO : 0), out.ring_at, RING, 0, 0,
-			 SND_VOLUME(out.volume, out.volume));
+			 muted ? 0 : SND_VOLUME(out.volume, out.volume));
 	out.running = 0;
 	state = BUFFERING, buffered = 0;
 }
@@ -1557,6 +1557,10 @@ other_windows(GR_EVENT *event)
 static int
 ask_over_quit(void)
 {
+	int ran_dry = underruns;
+
+	pump();	/* (twice a second: a question does not stop the music, and is no underrun of the decoder's) */
+	underruns = ran_dry;
 	return quit;
 }
 

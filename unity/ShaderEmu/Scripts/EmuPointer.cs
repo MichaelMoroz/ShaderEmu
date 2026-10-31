@@ -112,6 +112,8 @@ public class EmuPointer : UdonSharpBehaviour
     private bool[] grip = new bool[2];
     private int[] pressedOn = new int[2];   // the keyboard a hand holds a key on, or -1
     private bool[] onTube = new bool[2];    // the display it points at is its own classroom tube
+    private bool[] onMain = new bool[2];    // it was last on the room's display
+    private bool[] onEdge = new bool[2];    // it has run off that display with a button held: at its edge
     private int owner = 1;                  // the hand the machine's pointer follows
     private float stick;                    // the right stick, up positive
     private float turned;                   // notches of the wheel not sent yet
@@ -219,6 +221,25 @@ public class EmuPointer : UdonSharpBehaviour
         return inDen && avatarSeen && Time.time - avatarAt > avatarSettle;
     }
 
+    // Where the ray meets the display's plane, kept to the picture: false for a ray that goes away from it.
+    private bool EdgeOf(int h, Vector3 origin, Vector3 direction)
+    {
+        int w = machine.shownWidth, ht = machine.shownHeight;
+        if (w <= 0 || ht <= 0 || away) return false;
+        Transform t = screen.transform;
+        Vector3 from = t.InverseTransformPoint(origin), way = t.InverseTransformDirection(direction);
+        if (Mathf.Abs(way.z) < 1e-5f) return false;
+        float along = -from.z / way.z;
+        if (along <= 0f) return false;
+        Vector3 local = from + way * along;
+        float shape = (float)w / ht;
+        float x = local.x * Mathf.Max(1f, aspect / shape) + 0.5f;
+        float y = -local.y * Mathf.Max(1f, shape / aspect) + 0.5f;
+        px[h] = Mathf.Clamp((int)(x * w), 0, w - 1);
+        py[h] = Mathf.Clamp((int)(y * ht), 0, ht - 1);
+        return true;
+    }
+
     // What the ray meets first of the display and the keyboards.
     private void Aim(int h, Vector3 origin, Vector3 direction, bool drawBeam)
     {
@@ -226,7 +247,7 @@ public class EmuPointer : UdonSharpBehaviour
         RaycastHit hit;
         float best = maxDistance;
         int found = Nothing, foundKey = -1;
-        bool landed = false, tube = false;
+        bool landed = false, tube = false, mainHit = false;
         Vector3 at = origin;
         // a beam that meets the open links panel is VRChat's to use, not the machine's pointer
         bool covered = linksPlate != null && machine.linksPanel.activeSelf && linksPlate.Raycast(ray, out hit, best);
@@ -248,6 +269,7 @@ public class EmuPointer : UdonSharpBehaviour
                     px[h] = (int)(x * w);
                     py[h] = (int)(y * ht);
                     found = Display;
+                    mainHit = true;
                 }
             }
         }
@@ -377,6 +399,18 @@ public class EmuPointer : UdonSharpBehaviour
             found = Nothing;
             foundKey = -1;
         }
+
+        // A button held since it was pressed on the display: a beam that runs off the picture stays
+        // on its edge as a mouse does, the button down, so that a dragged window can snap there
+        // (docs/system/nanox.md, "A drag that leaves the screen"). Only on the room's display.
+        if (found == Display) onMain[h] = mainHit && !tube;
+        if (found != Display && onMain[h] && (trigger[h] || grip[h]) && EdgeOf(h, origin, direction))
+        {
+            found = Display;
+            foundKey = -1;
+            onEdge[h] = true;
+        }
+        else onEdge[h] = false;
 
         // the key under the beam lights up; the one it left goes dark
         int was = target[h];
@@ -580,8 +614,8 @@ public class EmuPointer : UdonSharpBehaviour
             int buttons = (trigger[owner] ? 1 : 0) | (grip[owner] ? 2 : 0);
             outX = px[owner];
             outY = py[owner];
-            if (steady && player.IsUserInVR()) Steady(buttons);
-            else steadyFrom = false;
+            if (steady && player.IsUserInVR() && !onEdge[owner]) Steady(buttons);
+            else steadyFrom = false;   // (at the edge, not smoothed: a lag there would stop short of it)
             machine.SetPointer(outX, outY, buttons);
             machine.pointerOwn = onTube[owner];
             drove = away;
