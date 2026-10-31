@@ -24,6 +24,7 @@
 extern "C" {
 #include <GLES/segl.h>
 #include <nano-X.h>
+void se_fps_caption(const GR_WINDOW_INFO *info, uint32_t now);   /* shaderemu_fps.c */
 #include <mcw.h>
 }
 
@@ -71,7 +72,7 @@ constexpr uint32_t WORKER_RECORDS = 8192;
 constexpr uint32_t WORKER_SIDE = 4096;
 
 /* the machine's GPU registers (docs/machine/gpu.md) */
-enum : int { REG_SUBMIT = 0x10 / 4, REG_LIST = 0x14 / 4, REG_COUNT = 0x18 / 4, REG_DRAWN = 0x1c / 4, REG_COPIES = 0x38 / 4,
+enum : int { REG_SUBMIT = 0x10 / 4, REG_LIST = 0x14 / 4, REG_COUNT = 0x18 / 4, REG_DRAWN = 0x1c / 4, REG_CLOCK = 0x34 / 4, REG_COPIES = 0x38 / 4,
 	REG_INTO = 0x50 / 4, REG_COPY = 0x70 / 4, REG_LOCK = 0x60 / 4, REG_BUFFERS = 0x64 / 4 };
 
 template <class T> T *AlignedNew(size_t n)
@@ -826,6 +827,7 @@ void SeGpuPaint(const uint32_t *palette, unsigned window)
 	Command(l, l.bg, 1, 0, false, Address(pal), LastA(), LastB());
 	if (_overlay_n != 0 && !_capturing) Command(l, _overlay, _overlay_n, 1, false, Address(pal), 0);
 	Submit(l.cmds, l.n, l.passes, _window_info.surface_address, _window_info.width, _window_info.height, _window_info.surface_row);
+	if (!_capturing) se_fps_caption(&_window_info, _regs[REG_CLOCK]);   /* (the frames shown, as the machine's OpenGL counts its own) */
 }
 
 void SeGpuSubmit()
