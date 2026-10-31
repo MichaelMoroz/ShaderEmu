@@ -366,8 +366,9 @@ every list's records that cover that pixel. `OPENTTD_PLAY_JUMP=1` turns smooth s
 scroll's step goes by the time between pictures, so two runs' pictures are compared only with it. The
 CPU's blitter moves a scroll's whole rows (`ScrollAsBlock`), including the few pixels right of the
 rectangle that upstream leaves as they were: compare with `OPENTTD_DRAW=cpu OPENTTD_MEMOP=0`. Under
-`rvc_harness --cpu` the GPU reads RAM that the processor wrote outside the GPU's memory only every 0.25
-s: run with `--cpu-fresh`.
+`rvc_harness --cpu` the GPU reads what the processor wrote every frame, as on the card. Until 31 October 2026 it read RAM outside the GPU's memory only every 0.25 s unless the run had `--cpu-fresh` (now the default; `--cpu-stale` is the old way): a list read
+records of a quarter of a second before, and a window drawn once stayed navy and black (the title, every window), in every build since the lists, only in such a capture and not on the card. `tools/openttd_title.py` holds the title's window under
+`--cpu --warp` against `OPENTTD_DRAW=cpu`, with its yellow and brown.
 
 The check: `OPENTTD_PLAY_SHORT=1 OPENTTD_PLAY_ODD=1 OPENTTD_PAUSE=1 OPENTTD_CHECK=1` under
 `rvc_harness --cpu --warp --cpu-fresh`, 0 differ; a window drawn again by the wall's time can come a
@@ -493,7 +494,7 @@ core 0's 279k a picture became 392k, and pieces cut elsewhere than last time wer
 
 ### What a tick spends
 
-On the tick's worker, 406k instructions a tick in the quiet window scene (`prof.py`, 31 October 2026; 533k before "A sync with the tick running"), vehicles 372k: trains
+On the tick's worker, 406k instructions a tick in the quiet window scene without the vehicles' copies (`prof.py`, 31 October 2026; 533k before "A sync with the tick running", which did not make them: see there), vehicles 372k: trains
 170k (`TrainController` own 75k), road vehicles 75k, aircraft 37k, `CallVehicleTicks` own 55k, the tile loop 28k, rail and road searches about 44k a tick on average, in few long ones. Each of
 those is many small things that go in the order of the pool and its one random stream. The worker runs 5.6 MIPS (8,192 instructions a pass of about 1.46 ms), so that is 75 to 85 ms a tick.
 
@@ -505,7 +506,7 @@ new counts neither (kept: they are of the tree as it is).
 
 **Corrected 31 October 2026.** The commit that brought this section never called `VehiclesMakeLater` at the tick's end, only where a held tick does nothing unless `OPENTTD_CHECK`: outside the check runs, a vehicle's copy was
 not made again once it had moved, so vehicles stood still in the picture, a window's view stayed where its vehicle had been (a new one's in its depot, hidden: the user's "stuck on the depot, and no bus"), and held pictures, which read the live place, jumped back and forth. `TwMain` calls it now.
-The numbers below for that commit left out the copies' cost: see the table's own note. A following view now reads the copy in every picture. A vehicle that the tick cannot make (a sprite with no kept bounds) is made by the sync even if the tick moved it since.
+A following view now reads the copy in every picture. A vehicle that the tick cannot make (a sprite with no kept bounds) is made by the sync even if the tick moved it since.
 `test_all.py openttd-depot` follows the vehicle out of a depot and back and one already on the road, every picture: the view against the place, the copy, and the sprite's pixels in the view.
 
 A sync of the vehicles was the hold's largest part (30k of 44k instructions a hold) and the copy made ahead of it 12 to 20% of a tick. So (`vehicle.cpp`):
@@ -522,20 +523,19 @@ A sync of the vehicles was the hold's largest part (30k of 44k instructions a ho
 Other cuts of the hold: a pointer over the view with a building tool is seen with the tick running (`OPENTTD_POINTER_LIGHT=0` is without; the highlight reads only tiles' heights and types); a window with a widget waiting for later
 is drawn whole once (`SeDirtyLaterWhole`: 5 to 8 clipped paints of the finances a round, each formatting all its strings). `SeExitNow` writes a counting build's counts (`__gcov_exit`): since the quick exit `counts.py` got none.
 
-Calibrated, 31 October 2026, same model and rounds as "Gameplay scenes", before as there:
+Calibrated, 31 October 2026 (the call at the tick's end in, same model and rounds as "Gameplay scenes", before as there; the first table written here, without the copies' cost, said 1.54 to 1.94 times in ticks and was wrong):
 
 | Scene | Pictures a second before, after | Ticks a second before, after | x pictures, ticks |
 |---|---|---|---|
-| scroll | 15.17, 30.43 | 5.66, 10.65 | 2.01, 1.88 |
-| following a vehicle | 15.18, 30.71 | 5.92, 11.46 | 2.02, 1.94 |
-| windows, none open | 15.17, 30.42 | 6.84, 11.62 | 2.01, 1.70 |
-| many windows open | 15.18, 26.99 | 5.74, 9.42 | 1.78, 1.64 |
-| vehicle windows | 15.09, 30.90 | 6.15, 10.79 | 2.05, 1.75 |
-| building | 14.06, 25.36 | 5.81, 8.96 | 1.80, 1.54 |
-| zoomed out | 7.51, 14.09 | 3.42, 5.98 | 1.88, 1.75 |
+| scroll | 15.17, 30.67 | 5.66, 8.49 | 2.02, 1.50 |
+| following a vehicle | 15.18, 30.71 | 5.92, 9.42 | 2.02, 1.59 |
+| windows, none open | 15.17, 30.49 | 6.84, 9.65 | 2.01, 1.41 |
+| many windows open | 15.18, 29.07 | 5.74, 8.46 | 1.92, 1.47 |
+| vehicle windows | 15.09, 31.18 | 6.15, 8.50 | 2.07, 1.38 |
+| building | 14.06, 25.84 | 5.81, 7.84 | 1.84, 1.35 |
+| zoomed out | 7.51, 11.44 | 3.42, 4.35 | 1.52, 1.27 |
 
-Pictures stand at the 33 ms interval but where noted. Ticks are a tick's 78 to 84 ms and a wait of 11% to 15%; many windows and building wait 23% and 25% (windows' texts, commands), zoomed out 30% (a hold costs what its parts cost).
-On the card, RTX 5090, one run (`--d3d11 --unity 11.1,1.4,0.75`, `OPENTTD_PLAY=2`), round 2: 15.89 pictures and 5.80 ticks a second (13.64, 3.55 before this section).
+A tick is 92 to 103 ms, a wait 12% to 18%, building 23%, zoomed out 28%: the copies are 15 to 20 ms of a tick, so a tick's length is about what it was before this section, and the gain in ticks is the hold's. Not measured again on the card.
 
 ## The start
 

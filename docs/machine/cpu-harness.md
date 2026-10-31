@@ -104,9 +104,7 @@ input and the control words stay the shader's passes, which is where they are ch
   `src/types.h`, and the GPU's bands are drawn every commit, `_CommitAlways`): the
   GPU's memory and the control words every time they changed, Linux's own RAM four times a
   second (the memory view shows it, and a GPU draw may read a texture there: Half-Life's pool), or every
-  frame with `--cpu-fresh`. A GPU list that reads the program's own memory a frame after it wrote it (commands
-  or records there, as OpenTTD's: `docs/games/openttd.md`, "The picture on the GPU") draws what was there up to
-  a quarter of a second before without it, and on the card never does. The commit pass is told those bands (state
+  every frame, as on the card, since a GPU list reads the program's own memory (`--cpu-stale`: four times a second, which drew what was there up to a quarter of a second before). The commit pass is told those bands (state
   texel (41, 0), where the tick pass says which it wrote) and carries them into the buffer it
   draws, as it does the tick's.
 - The frame is then the harness's own without the tick: the commit (which copies a drawn
