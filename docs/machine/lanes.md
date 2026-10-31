@@ -1,9 +1,9 @@
 # Lanes: pixels of the tick, each running a function on an index of its own
 
-Built 20 October 2026, from the plan (`docs/plans/simd-lanes-plan.md`), in the lean tick only
-(`experiments/rvc_lean/tick.hlsl`; Unity's `lean/tick.hlsl` is a verbatim copy, without the field).
-`rvc_cpu`, `rvc_harness --cpu`, `rvc_opt` and the compute machine have no lanes: there the CSRs
-read 0 and the library makes every index a plain call, which gives the same output.
+The lean tick has them (`experiments/rvc_lean/tick.hlsl`, which the world's `MachineTickLean.shader` runs from a
+verbatim copy, `lean/tick.hlsl`; in the harness `--rvc experiments\rvc_lean`). `rvc_cpu`, `rvc_harness --cpu`,
+`experiments/rvc_opt` and the compute machine have none: the library makes every index a plain call there, which
+gives the same output.
 
 A worker is a block of the tick's pixels, and every one of them runs the whole pass to write back
 its own eight texels: one instruction stream a block. A lane is a pixel that runs a stream of its
@@ -87,11 +87,10 @@ that sees another number starts the new job's order from its beginning. The firs
 before into the group's texel (`0x80C01A00 + 16 g`, 62 of them): the number of the job; bit 0 busy,
 and bits 1 to 31 which of lanes 0 to 30 skipped or stopped; its lanes' instructions for the job in
 sixteens; and which of lanes 31 to 62 did. The first core asks the 62 texels whether the job is
-through, and looks at the stuck texels of those lanes alone (one scan of every lane's took 290 ms of
-the first core's a job of `nxpath`); the harness reads them back each frame with the job's texel,
-counts their instructions with the workers', and draws the field while it has seen a job posted in
-the last eight frames (the readback is frames behind; with no job posted the primitive draws no
-pixel).
+through, and looks at the stuck texels of those lanes alone: a scan of every lane's at every job
+would take most of its time. The harness reads them back each frame with the job's texel, counts their
+instructions with the workers', and draws the field while it has seen a job posted in the last eight
+frames (the readback is frames behind; with no job posted the primitive draws no pixel).
 
 One job is out at a time, of one program at a time: a program whose job is out has its texel, and
 another waits for it to clear (`mcw_field_begin`). The library posts every job on all 3,968 lanes,
@@ -115,26 +114,28 @@ so that every lane's number is the last job's.
   one for every other job, so a job's skips are kept until the job after the next is begun: the
   workers make one job's while the field runs the next.
 
+`mcw_for`'s wait (`round_through` in `mcwx.c`) asks one worker a pass, the first not through, and every
+one at every eighth: asking all 255 every pass would be most of the first core's time in a round.
+
+## Shaders
+
 `mcwx.h` (`programs/mc/mcwx.c`): `mcw_shade(pixels, width, height, fn, ctx)` and
 `mcw_shade_begin` / `mcw_shade_wait`: `fn(x, y, ctx)` is a pixel's colour, called for every pixel of
 a picture of words (16-byte aligned, the width a multiple of four), four pixels side by side an
 index: one job of the field where there is one, else a piece a worker (`mcw_for`, the first core
 taking none), each on its lanes. The example `linux/tcc/examples/shader.c` is a shader written so,
-compiled in the machine by `tcc` and linked with its `libmcw.a`.
-
-`mcw_for`'s wait (`round_through`) asks one worker a pass, the first not through, and every one
-at every eighth: asking all 255 every pass was most of the first core's time in a round.
+compiled in the machine by `tcc` and linked with its `libmcw.a`. HLSL compiled in the machine runs on
+the lanes in steps (`docs/system/hlsl.md`).
 
 ## Steps
 
-An index that may need more than a pass is written as **steps** (21 October 2026): the function
+An index that may need more than a pass is written as **steps**: the function
 does what fits, stores in its output what it needs to go on, and says it is not through; the job is
 posted again, a **round**, until every index is. Nothing of a lane outlives its pass, so the
 program decides what its state is: no registers are saved for it.
 
 - `mcw_step_fn(index, ctx, round)` returns 0 when its index is through. Round 0 is its first call;
-  in a later one it reads its output back, and one through in an earlier round returns at once
-  (some 40 instructions).
+  in a later one it reads its output back, and one through in an earlier round returns at once.
 - `mcw_steps_left()` is CSR `0x0ba`: how many of the pass's 8,192 instructions the lane has left.
   A step looks at it where it can stop, and stops while what is left still covers the longest
   stretch to its next such place. Off the lanes it is `0xffffffff` and a step never stops.
@@ -163,8 +164,8 @@ through sets bit 29 of its lane's place (a lane's order goes on, so the bit is o
 mine is not through"); the group's leader gathers it into bit 31 of its third word, and a worker's
 lanes into bit 2 of the job's end. The lane's clock starts at 0 for `0x0ba`. `steptest` (index i is
 up to a few hundred thousand instructions of hashing, one in 997 with a first stretch longer than a
-pass) checks the field, the workers' lanes and the self-test: 20,000 indices in 20 rounds on the
-field, the 21 long ones made by the first core and said so, every index right.
+pass) checks the field, the workers' lanes and the self-test: every index right, and the long ones
+made by a core and said so.
 
 ## Rules for an index
 
@@ -172,80 +173,43 @@ field, the 21 long ones made by the first core and said so, every index right.
   index's, so that holds by itself).
 - One pass: an index must end within 8,192 instructions (all of a lane's indices of a pass share
   them): about 2,000 instructions a pixel is what four pixels of a texel can have. Code that `tcc`
-  compiles is much longer than GCC's: the shader example's floor thrown back once more took its
-  texels over a pass there. An index that takes longer costs its lane a pass and is made by the core
-  that asked, or by the workers it gives them to: work that can be longer is written in steps
-  ("Steps"; `nxpath`'s path of a pixel was 1,465 instructions on average, 2.5% over a pass, the longest
-  48 thousand, and 22% to 57% of a scene's instructions were in paths over a pass).
-- A page of the program's code no core has run stops a lane as it stops a worker: the library reads
-  the function's first page, and a program reads the rest of its code first (`take_workers` in
-  `nxray.c`).
+  compiles is much longer than GCC's. An index that takes longer costs its lane a pass and is made by
+  the core that asked, or by the workers it gives them to: work that can be longer is written in steps
+  ("Steps"; `nxpath`'s long paths are, `docs/apps/raytrace.md`).
 - HLSL makes both sides of an `||` and an `&&`: in the tick, the lanes' loop asks whether the pixel
   is a lane before it calls `lane_next`, in two tests. With one, every lane through with its order
-  called it, took itself for stuck, and the first core scanned every stuck word for nothing (63
-  thousand instructions a picture of `nxray` on the field).
+  would call it and take itself for stuck.
+- A value a lane keeps from before its run to after it belongs in a word that is carried already
+  (the skipped flag is bit 30 of `lane_j`, K is read again from the descriptor where a lane is
+  stuck), not in a new static: a static the tick sets before a pass's loop and reads after it is
+  carried through every core's loop, and costs every program whether or not a lane runs.
 
-## Measured (RTX 5070 laptop, D3D11, fxc2, 20 October 2026)
+## Checks
 
-geotune's layout for this card: 16 workers of 2^5 and 239 of 2^3 (1,866 workers' lanes);
-`--workers 8` lays out every worker at 2^5 (6,885).
+`nxray`'s sums are the same with lanes, with the field, with `RAY_LANES=0` and with no worker, and `nxpath`'s
+are the same on the field as on its workers (`NXPATH_FIELD=0`). `tools/test_all.py` has
+`lanetest 255 50 1 40; lanetest 31 40 3 20` and `steptest 31 3000`, which on `rvc_cpu` compare plain calls with
+themselves and check the library's paths. What only the card can show is run under
+`--rvc experiments\rvc_lean`: `lanetest` with 1, 3 and 6 texels an index, with 3 workers and with 255, on the
+workers' lanes and on the field, and `steptest`. `rvc_cpu` has no lanes: a program's output is checked there, its
+speed only on the card.
 
-| | instructions a second (all cores) | |
-|---|---|---|
-| `lanetest 255 3000 1 40`, plain calls | 786 million | 4,571 ms |
-| the same, workers' lanes | 1,759 million | 2,768 ms |
-| the same, `--workers 8`: plain / lanes | 577 / 2,972 million | 6,221 / 1,635 ms |
-| `nxray` 320 x 240, before lanes (`docs/machine/speed.md`, lean) | 175 million | 21.7 a second (60 pictures one at a time) |
-| `nxray` 320 x 240, workers' lanes | 1,370 million | 55 pictures a second |
-| `nxray` 320 x 240, workers' lanes, `--workers 8` | 2,280 million | 95 to 105 |
-| `nxray` 320 x 240, the field (no worker) | 2,300 to 2,750 million | 105 to 125 |
-| `nxray` 640 x 480, workers' lanes / `--workers 8` / the field | 1,500 / 3,300 / 3,400 million | 16 / 35 / 32 to 38 |
-| the shader example, before (160 x 120, waves) | 450 million | 26 pictures a second |
-| the shader example now (240 x 180, traced), compiled by `tcc`, the field | 5,300 million | 63 to 80 |
-| `nxpath` 320 x 240, 8 samples, 255 workers / the field and the workers | | 1,583 / 899 ms |
-| `nxpath` 640 x 480, 16 samples, 255 workers / the field and the workers | | 13,761 / 5,193 ms |
+How many lanes the workers have together goes by geotune's layout ("Packing the small workers" in
+[multicore.md](multicore.md)): its dense one, 16 workers of 2^5 and 239 of 2^3, has 1,866, and every worker
+at 2^5 (`--workers 8`) 6,885. Lanes gain from large caches, the field from neither.
 
-`nxray`'s sums are the same with lanes, with the field, with `RAY_LANES=0` and with no worker; the
-first core's part of a picture went from about 95 thousand instructions to 12 (on the field), and it
-is what bounds 320 x 240. `nxpath`'s are the same on the field as on its workers (`NXPATH_FIELD=0`);
-its lanes run about a billion instructions a second, a path's way through the scene's tree being
-another in every lane (`docs/apps/raytrace.md`, "On the field").
+## What is not done
 
-What a pass costs the tick: from one snapshot each of a shell loop, Doom's timedemo and Quake's
-(`--replay`, the tree's tick and this one in turn, six rounds of 1,500 frames), the medians level
-(the shell 1.5249 ms a frame against 1.5255 and 1.5291, Doom 1.6302 against 1.6282 and 1.6336,
-Quake level a guest instruction), the means up to 1% apart. With the skips (the same day, later)
-Doom was 0.7% slower, 1.8871 ms a frame against the tree's 1.8739 in 12 rounds, though it runs no
-lane: the skipped flag was a static of its own (`lane_skip`), set before a pass's loop and read after
-it, and so carried through every core's loop, and K (`lane_K`) the same. The flag is now bit 30 of
-`lane_j`, which is carried anyway, and K is read again from the descriptor where a lane is stuck:
-Doom 1.8589 against 1.8564 and 1.8577 (16 rounds, the tree twice), the shell 1.6358 against 1.6327,
-Quake 0.5% faster a guest instruction. A value a lane keeps from before its run to after it belongs
-in a word that is carried already, not in a new static. `lanetest` passes with 1, 3 and 6
-texels an index, with 3 workers and with 255, on its lanes and on the field, and on `rvc_cpu`
-under `RVC_RACES` (0 undone); `mctest 255 30000` PASS and `fptest` 0 of 15 wrong on the card.
-
-## Not done
-
-- The field in Unity is wired and not yet run there: `MachineTickLean.shader` defines `LANE_FIELD`, the tick's
-  mesh has the field's primitive (`ShaderEmuBuilder`: 17 triangles), `Machine.shader`'s Unpack fills rows 48 to 63
-  from the targets while a job is posted, `MachineCommit.cginc` defines `LANE_FIELD` for `src/ram.cginc` (synced
-  from `experiments/rvc_opt/src/ram.h`), and the points mesh and `EmuMachine` have the field's 7,936 points
-  (`_FieldPoints`). Unlike the harness, the world draws the primitive and the points every round, a job
-  posted or not, and does not count the field's instructions in its figures. No Unity editor with the
-  project was at hand (20 October 2026): run "Sync shader sources from the repository" and the builder,
-  then `example shader` in the world. A scratch project compiling every pass in batch mode
-  (`ShaderUtil.CompilePass`, Unity 2022.3.22, D3D11) gave the same errors for the tree's shaders and
-  for these but MachineTickLean, which neither compiled there: the tree's over 4,096 registers (X4505),
-  this one past a 30-minute timeout; that check is stricter than the world's build.
+- The field in the world is wired and has not been run there: `MachineTickLean.shader` defines `LANE_FIELD`, the
+  tick's mesh has the field's primitive (`ShaderEmuBuilder`: 17 triangles), `Machine.shader`'s Unpack fills rows 48 to
+  63 from the targets while a job is posted, `MachineCommit.cginc` defines `LANE_FIELD` for `src/ram.cginc` (synced from
+  `experiments/rvc_opt/src/ram.h`), and the commit's points and `EmuMachine` have the field's 7,936 points
+  (`_FieldPoints`). Unlike the harness, the world draws the primitive and the points every round, a job posted or
+  not (with none posted they draw nothing), and does not count the field's instructions in its figures. To run it:
+  "Sync shader sources from the repository" and the builder, then `example shader` in the world.
 - A queue of the field's jobs: a job's end is seen two passes after its last lane, and the next
   one waits for that.
-- geotune still lays out its small workers of 2^3 on this card, where a worker has 6 lanes: lanes
-  gain more from large caches than the small ones' capacity gave. With the field, programs need
-  not care.
 - An index longer than a pass that is not written in steps: a lane's registers and stack do not
   outlive its pass. It is skipped and made elsewhere, which is right but costs.
-- A round is the whole job posted again: a lane walks past the done indices of its order (some 40
-  instructions each) to find the ones not through. A job with few indices left could be posted as
-  those alone.
-- `rvc_cpu` has no lanes: a program's output is checked there, its speed only on the card.
+- A round is the whole job posted again: a lane walks past the done indices of its order to find the
+  ones not through. A job with few indices left could be posted as those alone.
