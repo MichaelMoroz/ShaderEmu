@@ -50,7 +50,7 @@ ARCH="-march=\${RV32_MARCH:-rv32imaf} $BASE"   # (RV32_MARCH: rv32imaf_zba_zbb f
 # musl's own libc.a: put into one that has them, the members would lie in another order (and renamed ones stay),
 # and the guest's linker, which goes by the index, would write other programs.
 [ -f "$W/src/musl/lib/libc.a" ] && cp "$W/src/musl/lib/libc.a" "$S/lib/libc.a"
-rm -f "$S/lib/memcpy-ours" "$S/lib/libm-ours" "$S/lib/vfprintf-ours" "$S/lib/rt-ours"
+rm -f "$S/lib/memcpy-ours" "$S/lib/libm-ours" "$S/lib/vfprintf-ours" "$S/lib/malloc-ours" "$S/lib/rt-ours"
 cp "$HERE/flatcrt.c" "$W/flatcrt.c"
 "$SH/toolchain/bin/riscv32-linux-gcc" -march=rv32imaf $BASE -O2 -fPIC -nostdinc -isystem "$S/include" -isystem "$GCCINC" -c "$W/flatcrt.c" -o "$S/lib/flatcrt.o" || exit 1
 cat > "$S/include/nommu_fork.h" <<'EOF'

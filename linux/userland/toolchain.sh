@@ -112,6 +112,23 @@ if [ ! -f "$SYSROOT/lib/vfprintf-ours" ] || [ "$OURS/vfprintf_double.py" -nt "$S
     touch "$SYSROOT/lib/memcpy-ours" "$SYSROOT/lib/libm-ours" "$SYSROOT/lib/vfprintf-ours"   # (the others are still in)
 fi
 
+# A group's freed memory kept for the next group of its length (malloc_keep.py beside this file), the members of
+# mallocng's malloc.c and free.c out of libc.a (free.lo is also src/malloc/free.c's: the one with __libc_free goes).
+if [ ! -f "$SYSROOT/lib/malloc-ours" ] || [ "$OURS/malloc_keep.py" -nt "$SYSROOT/lib/malloc-ours" ] || [ "$SYSROOT/lib/libc.a" -nt "$SYSROOT/lib/malloc-ours" ]; then
+    echo "== malloc"
+    M=$WORK/src/musl
+    K=$WORK/src/malloc-obj; rm -rf "$K"; mkdir -p "$K"
+    python3 "$OURS/malloc_keep.py" "$M/src/malloc/mallocng" "$K"
+    MUSLF="-O2 -std=c99 -ffreestanding -fexcess-precision=standard -frounding-math -fno-strict-aliasing -D_XOPEN_SOURCE=700 -w
+           -I$K -I$M/src/malloc/mallocng -I$M/arch/riscv32 -I$M/arch/generic -I$M/obj/src/internal -I$M/src/include -I$M/src/internal -I$M/obj/include -I$M/include"
+    rv32-cc $MUSLF -c "$K/malloc_keep.c" -o "$K/malloc_keep.lo"
+    rv32-cc $MUSLF -c "$K/free_keep.c" -o "$K/free_keep.lo"
+    (cd "$K" && riscv32-linux-ar d "$SYSROOT/lib/libc.a" malloc.lo &&
+        for n in 1 2; do riscv32-linux-ar xN $n "$SYSROOT/lib/libc.a" free.lo; riscv32-linux-nm free.lo | grep -q ' T __libc_free' && { riscv32-linux-ar dN $n "$SYSROOT/lib/libc.a" free.lo; break; }; done &&
+        riscv32-linux-ar d "$SYSROOT/lib/libc.a" malloc_keep.lo free_keep.lo; riscv32-linux-ar rs "$SYSROOT/lib/libc.a" malloc_keep.lo free_keep.lo)
+    touch "$SYSROOT/lib/memcpy-ours" "$SYSROOT/lib/libm-ours" "$SYSROOT/lib/vfprintf-ours" "$SYSROOT/lib/malloc-ours"
+fi
+
 # The compiler's own runtime is built for a CPU with an FPU, so the integer and soft-float
 # routines come from compiler-rt, and the 128-bit long double ones (which compiler-rt lacks
 # on a 32-bit CPU) from libgcc's soft-fp.
