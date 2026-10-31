@@ -19,11 +19,11 @@ For example, Doom's timedemo:
     python tools/prof.py run C:\...\b_doom -- --image build/images/nommu --quiet --expect "/ # " --send "echo FL-''GO; nano-X -p & sleep 2; doom -1 -timedemo demo1; echo LX-''DONE\n" --count-from FL-GO --until LX-DONE --seconds 120
 
 `RVC_PROF` runs the workers in order on one thread (whatever `--threads` says): Doom's
-timedemo takes 19 s of the host's time profiled, the first 150 s of Quake III 97 s. Before
-`--count-from`'s line the run is a plain one (since 28 October 2026: the fast handlers, the
-workers on their threads), so a window late in a long program costs only its own instructions
-profiled: Quake III's 600 frames from its level's first frame take 11 s of the host's time,
-OpenTTD's play from `play PL-GO` reaches its game in seconds.
+timedemo takes 8.2 s of the host's time profiled, against 2.1 s plain (31 October 2026). Before
+`--count-from`'s line the run is a plain one (the fast handlers, the workers on their threads), so a
+window late in a long program costs only its own instructions profiled: Quake III's 600 frames from
+its level's first frame take 11 s of the host's time (28 October 2026), and OpenTTD's play from
+`play PL-GO` reaches its game in seconds.
 
 ## What `rvc_cpu` writes
 
@@ -46,25 +46,22 @@ OpenTTD's play from `play PL-GO` reaches its game in seconds.
 - `RVC_PROF_DEPS=f:ADDR,l:LO-HI,...` watches calls of a function or a loop's runs on core 0
   and writes `deps.txt` (below). `RVC_PROF_MEM=0` leaves the memory out.
 - `RVC_PROF_PASS=N` starts the profile N passes after `--count-from`'s mark (or the start), so
-  a level's load or a demo's first seconds stay out: Doom's timedemo
-  from 20,000 passes on had 52,583 pcs against 133,419 from the mark.
-
-A profiled run takes about twice as long as a plain one.
+  a level's load or a demo's first seconds stay out.
 
 ## The report
 
 The program's pcs are physical (the kernel puts a flat program where it has room), so
 `report` places each ELF given by its words: anchors are hot pcs whose word is rare in the ELF,
 and a base counts when at least 32 and three quarters of the hot pcs it covers have the ELF's
-words there. The ELF must be the build the image has (an ELF rebuilt after the image matched
-72% and was refused). The kernel (`~/nm/k-rom/vmlinux`) is added by itself; it is not quite
-the build that runs (84 to 94% of its words), so its function names near a change are a guess.
+words there. The ELF must be the build the image has: an ELF rebuilt after the image does not match and is
+refused. The kernel (`~/nm/k-rom/vmlinux`, `linux/nommu/kernel.sh`'s) is added by itself; on Doom's
+timedemo on 31 October 2026 both matched 100% of their hottest pcs.
 `--find NAME` looks for an unstripped NAME under `~/nm/work/src`.
 
 - Where core 0 ran and where the workers ran, by function, with loads and stores an instruction.
 - Calls on core 0 and on the workers: inclusive instructions, the heaviest edges.
 - Memory: the busiest pages, stores by function, and how often a core stored more distinct
-  texels a pass than its write cache keeps (`AGENTS.md`: some 384 for core 0, 192 a worker).
+  texels a pass than its write cache keeps (`CORE0_TEXELS`, `WORKER_TEXELS` in `prof.py`: 384 and 192).
 - Passes: what ended them early (a wait in the kernel, `workers_client` being core 0 waiting
   for its workers, the idle loop), and over twenty stretches of the run how busy core 0 was,
   how many workers ran and how full their passes were.
@@ -106,7 +103,7 @@ expression over its features: `n`, `loads`, `stores`, `calls`, `divs`, `floats`,
 functions (by name: `calls`, `per`, `share`, `inclusive`). There are byte copies and fills, a
 byte-wise CRC, a wait in place, a division in a loop, soft floats, large clears and copies,
 many small library calls, stdio a character at a time, allocation in a loop, `printf` in a hot
-path, busybox's and zlib's inflate, and loops that store every trip. Add one whenever a
+path, busybox's and zlib's inflate, and independent loops over pixels. Add one whenever a
 profile shows a slow thing that has a known better form.
 
 ## Soft doubles
@@ -123,9 +120,7 @@ share of each side's instructions went to those routines (`SOFT_DOUBLE` in `prof
 exits 1 over the limit (5% by default), and 2 when no ELF was placed, since nothing could be counted then. On 31
 October 2026: QuickJS's loop of doubles 39.3% (its numbers are doubles), Half-Life's `hldemo1` load and first
 seconds 4.6% (`Mod_PointVecsProduct`, `atof`), OpenTTD's play with its frame rate window open 1.2%, Quake's
-timedemo and Doom's 0%. The frame rate window was the slow form it is there to find: every 100 ms 512 sums of
-doubles for each element, a million instructions, which held the game's tick (`GetAverageDurationMilliseconds`,
-now summed in whole numbers).
+timedemo and Doom's 0%.
 
 ## Searching a layout
 
@@ -133,60 +128,4 @@ now summed in whole numbers).
 several at once (half the host's processors), and ranks them by the machine's seconds, the
 passes, core 0's instructions, the busiest worker's or all of them. `--check REGEX` must match
 what the console said after the command, or the layout is wrong whatever its time. It says
-what the search will take first and refuses more than five minutes without `--yes`. On
-nxphys's first scene (16 s): `PHYS_WORKERS` 191 2.925 s of the machine's time, 255 the same,
-127 1,147 passes against 1,130, 63 1,294, 31 1,526; every sum right.
-
-## What could be parallel: the main programs (18 October 2026)
-
-Profiles on `rvc_cpu` of the shared image's programs of that morning, the commands of
-`tools/test_all.py` (without the test sums, which were 66% of nxview's first core and 85% of
-nxvideo's). Ranked by what is to be had.
-
-1. **Archives** (done: `unarc`, `docs/system/media.md`, "One deflate stream on many cores").
-   busybox's `tar xzf` of the busybox source, 2.1 MB: 831.7 million instructions on core 0
-   and 252 s of the machine's time (`fill_bitbuffer` 17%, `inflate_codes` 13%, CRC 12%, a group
-   lookup a file 17%); `unarc` 31 s, the zip 207 s to 20 s.
-2. **A program's text read from address 0** (done: every one reads from `_start` now). A flat
-   program's `__executable_start` is 0 at run time (a GOT word of 0, which the loader leaves
-   alone) while `etext` is relocated, so `mcw_touch_code(__executable_start, etext -
-   __executable_start)` reads every page from physical 0 up to the program: 529 thousand
-   loads, 1.6 million instructions, half a second of the machine's time, at the first worker
-   start of every program. `nxview --decode` of Earthrise.jpg went from 1.75 s to 1.23 s with
-   libmedia's (`m_core.c`, from `_start`'s page) and 0 page stops of workers as before. The same
-   line was in `nxweb.c`, `nxphys.c`, `nxray.c`, Quake III's `tr_shaderemu.c` and Half-Life's
-   `gl_shaderemu.c`, which read from `_start` too since 18 October 2026; programs that link
-   libmedia must be linked again to have its.
-3. **The kernel's copy a byte at a time.** When source and destination lie differently in
-   their words, the kernel's `memcpy` copies byte by byte (5 instructions a byte, at 0x806b25bc):
-   10% of Quake's core 0 while e1m1 loads and its first 150 frames (1.9 million bytes, 9.7
-   million instructions), 5% of Red Alert's start (11.2 million). Words shifted together would
-   be some 1.5 instructions a byte. Red Alert's `MapClass::Read_Binary` makes 32,768 reads of
-   a cell each through it, and `OverlayClass::Read_INI` 16,384.
-4. **Quake's level load.** `AllocBlock` (light maps' places) is 8.6 million of e1m1's start (9%,
-   about 3 s of the machine's time): a search for the lowest row over every column for every
-   surface, carrying its best in memory (`prof.py deps`: a sum), 1,660 instructions a call, too
-   short for workers; a skyline of each sheet's heights would make it a few hundred. Then
-   `BuildSurfaceDisplayList` 4.5 million, `CRC_ProcessBlock` 3.9 million (a byte at a time),
-   `GL_MakeAliasModelDisplayLists` 2.6 million, all on core 0, and `Mod_FloodFillSkin` 8.8 on
-   the workers already.
-5. **Red Alert's start and its movies.** On core 0: `VQA_DrawFrame_Buffer` 16.4 million (7%),
-   the frames copied to the screen while the workers decode them (`frames_job` 64 and
-   `m_vq_rows` 60 million there); `Build_Fading_Table` 5.6 million (each entry of a table its
-   own: a `mcw_for`); `PKey::Decrypt` 5.5; `INIClass::Load` 5.2.
-6. **Quake III is waiting for its workers.** Core 0 ended 28,303 of 58,379 passes waiting in
-   `workers_client`; the busiest worker ran 354 million against core 0's 320 (the level's
-   pictures decoded, `idct`, `mcu_pixels` and `restart_strips` 211 million together, the server's
-   `MSG_WriteDeltaEntity` 47, `entity_draw` 85). More cores on the pictures and fewer jobs on one
-   core are what is left there. On core 0: `CL_ParsePacketEntities` 34 million (11%), and soft
-   doubles (`__adddf3`, `__muldf3` 13 million) under the bots' script parser (`PC_ReadToken`).
-7. **Doom's timedemo**: core 0 154.5 million, `P_CheckPosition` 19.5 and `P_RunThinkers` 16.3
-   (the game's own, one thinker after another, each moving what others read); the view on at
-   most 5 workers as designed (`docs/games/doom.md`). Little left.
-8. **The compiler** (`cc example-cube.c`): 25.8 million, one core, 7.8 s; `strcmp` 2.2 million
-   (104 thousand calls, the archive's symbols looked up one by one in `tcc_load_alacarte`):
-   a hash of them would take most of that.
-9. **nxvideo, nxplay, nxview, nxweb, nxfiles**: the work is on the workers already. nxvideo's
-   core 0 waits for its 64 workers in 2,446 of 3,661 passes while it plays in time; nxplay's
-   core 0 is 5.5 million, a third of it polling its workers; the desktop programs' starts are
-   the idle loop waiting for their `sleep`, and the text read of point 2.
+what the search will take first and refuses more than five minutes without `--yes`.
