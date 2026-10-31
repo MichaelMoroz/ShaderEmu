@@ -206,8 +206,9 @@ One harness on the card runs alone: it refuses to start beside another or beside
 `rvc_harness --help` lists every option, and `AGENTS.md` holds the working notes: how to script
 runs, measure speed, and what has been tried.
 
-To rebuild the guest software (WSL, no root; from the repository's folder; everything goes to
-`~/shaderemu-linux` and `~/nm`). `docs/system/nommu.md`, "Building it", has each step:
+To rebuild the guest software (WSL with rsync, no root; from the repository's folder, after
+`make_image.ps1` above; everything goes to `~/shaderemu-linux` and `~/nm`). `docs/system/nommu.md`,
+"Building it", has each step:
 
     wsl -- bash linux/kernel/build.sh      # once: the cross compiler and the kernel's tree
     wsl -- bash linux/userland/build.sh    # once: the C library, init
