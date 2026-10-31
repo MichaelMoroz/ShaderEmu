@@ -19,9 +19,22 @@
 #ifndef WIDE_SHAPE
 #define WIDE_SHAPE 0
 #endif
+#if WIDE_SHAPE & 16384
+#define WIDE_ROOM room
+#else
+#define WIDE_ROOM fast_budget
+#endif
 #define WIDE_B0 (2304u * 2048u)
 #define WIDE_PCT (5000u * 2048u)
 #define CODE_TEX(c) asuint(_Data_ROM[uint2((c) & 2047, (c) >> 11)])
+
+// 2^28: the wide loop has an array of registers of its own
+#if WIDE_SHAPE & 268435456
+static uint wr[33];
+#define WR wr
+#else
+#define WR xr
+#endif
 
 uint wide_lookup(uint pc) {
     uint k = pc - 0x82000000u, p = pc - 0x84000000u;
@@ -34,9 +47,56 @@ uint wide_run_l1(L1P uint room) {
     pre_valid = false;
     fast_same = false;
     if (!irq_quiet) return 0;
+#if WIDE_SHAPE & 131072
+    // (a test: a loop that never runs, of nothing of the machine's)
+    uint k_t = 0, k_s = room;
+    [branch]
+    if (cpu.pc == 3u) {
+#if WIDE_SHAPE & 4194304
+        uint4 k_c = CODE_TEX(k_s), k_n = CODE_TEX(k_s + 1);
+#endif
+#if WIDE_SHAPE & 2097152
+        fast_budget = room;
+#endif
+        [loop]
+        while (k_t < room) {
+            k_s = k_s * 3 + k_t;
+#if WIDE_SHAPE & 4194304
+#if WIDE_SHAPE & 134217728
+            k_s += xr[(k_c.x >> 6) & 0x1f] + xr[(k_c.x >> 11) & 0x1f];
+#endif
+            k_s += k_c.x ^ k_c.y ^ k_c.z ^ k_c.w;
+            k_c = k_n;
+            k_n = CODE_TEX(k_s + 1);
+#endif
+#if WIDE_SHAPE & 262144
+            k_s += xr[k_s & 31];
+#endif
+#if WIDE_SHAPE & 524288
+            k_s += CODE_TEX(k_s).x;
+#endif
+            k_t++;
+            [branch]
+            if (k_s == 7u) break;
+        }
+        cpu.clock += k_s;
+#if WIDE_SHAPE & 1048576
+        cpu.pc = k_s;
+#endif
+    }
+    return 0;
+#endif
+#if WIDE_SHAPE & 512
+    return 0;     // (bisecting what costs: only the old loop by stretches of 24)
+#endif
     uint b = wide_lookup(cpu.pc);
     if (b == 0) return 0;
+#if WIDE_SHAPE & 64
+    return 0;     // (and the lookup)
+#endif
+#if !(WIDE_SHAPE & 16384)
     fast_budget = room;
+#endif
     uint trips = 0, rv = 0;
     uint4 cur = CODE_TEX(b);
 #if !(WIDE_SHAPE & 4)
@@ -45,11 +105,34 @@ uint wide_run_l1(L1P uint room) {
 #if WIDE_SHAPE & 8
     uint4 nx2 = CODE_TEX(b + 2);
 #endif
+#if WIDE_SHAPE & 268435456
+    for (uint wr_k = 0; wr_k < 32; wr_k++) wr[wr_k] = xr[wr_k];
+#endif
     [loop]
     while (true) {
         uint ctl = cur.w, X = cur.x, path = ctl & 7;
-        uint a = xr[(X >> 6) & 0x1f], c = xr[(X >> 11) & 0x1f];
+#if WIDE_SHAPE & 16
+        // (a test: one read more a trip, of the texel just read, its result used)
+        ctl ^= CODE_TEX(b).w ^ cur.w;
+#endif
+#if WIDE_SHAPE & 33554432
+        uint a = 0, c = 0;
+#elif WIDE_SHAPE & 16777216
+        uint a = X, c = ctl;
+#else
+        uint a = WR[(X >> 6) & 0x1f], c = WR[(X >> 11) & 0x1f];
+#endif
         uint v = 0, dst = X & 0x3f;
+#if WIDE_SHAPE & 8388608
+        v = a + c + cur.z;
+#else
+#if WIDE_SHAPE & 33554432
+        [branch]
+        if (path < 4) {
+            a = WR[(X >> 6) & 0x1f];
+            c = WR[(X >> 11) & 0x1f];
+        }
+#endif
         [branch]
         if (path < 2) {
             uint bv = c + cur.z;
@@ -57,6 +140,9 @@ uint wide_run_l1(L1P uint room) {
             if (path == 0) {
                 v = a + bv;
             } else {
+#if WIDE_SHAPE & 1024
+                break;
+#endif
                 uint f = (X >> 16) & 15;
                 uint sh = bv & 0x1f;
                 uint r0 = (f & 1) ? a - bv : a + bv;
@@ -70,6 +156,9 @@ uint wide_run_l1(L1P uint room) {
         } else if (path < 4) {
             uint va = a + cur.z;
             uint f3 = (X >> 16) & 7, off = va & 3;
+#if WIDE_SHAPE & 256
+            break;    // (the loop without memory)
+#endif
             [branch]
             if (path == 2) {
                 [branch]
@@ -107,24 +196,35 @@ uint wide_run_l1(L1P uint room) {
             }
 #endif
         }
-        xr[dst] = v;
+#endif
+#if WIDE_SHAPE & 67108864
+        rv += (X * 3) ^ (ctl * 5) ^ (X >> 7) ^ (ctl >> 9) ^ (a * 7) ^ (c * 11);
+#endif
+#if WIDE_SHAPE & 8192
+        rv += v + dst;
+#else
+        WR[dst] = v;
+#endif
         uint Y = cur.y;
 #if WIDE_SHAPE & 2
         [branch]
         if (Y != 32)
 #endif
-        xr[Y & 0x3f] = xr[(Y >> 6) & 0x1f] + xr[(Y >> 11) & 0x1f] + AS_UNSIGNED(AS_SIGNED(Y) >> 20);
+#if !(WIDE_SHAPE & 4096)
+        WR[Y & 0x3f] = WR[(Y >> 6) & 0x1f] + WR[(Y >> 11) & 0x1f] + AS_UNSIGNED(AS_SIGNED(Y) >> 20);
+#endif
         rv += (ctl >> 3) & 7;
         trips++;
+#if !(WIDE_SHAPE & 2048)
         [branch]
         if ((ctl & 0xc0) != 0) {
-            uint ca = xr[(ctl >> 11) & 0x1f];
+            uint ca = WR[(ctl >> 11) & 0x1f];
             uint kind = ctl & 0xc0;
             bool go = true;
             uint next = b;
             [branch]
             if (kind == 0x40) {
-                uint cb = xr[(ctl >> 16) & 0x1f];
+                uint cb = WR[(ctl >> 16) & 0x1f];
                 uint f = (ctl >> 8) & 7;
                 bool lt = (f & 2) ? ca < cb : AS_SIGNED(ca) < AS_SIGNED(cb);
                 go = ((f & 4) ? lt : ca == cb) != ((f & 1) != 0);
@@ -154,9 +254,10 @@ uint wide_run_l1(L1P uint room) {
                 continue;
             }
         }
+#endif
         b++;
         [branch]
-        if (trips >= fast_budget) break;
+        if (trips >= WIDE_ROOM) break;
 #if WIDE_SHAPE & 4
         cur = CODE_TEX(b);
 #elif WIDE_SHAPE & 8
@@ -168,10 +269,15 @@ uint wide_run_l1(L1P uint room) {
         nx = CODE_TEX(b + 1);
 #endif
     }
+#if WIDE_SHAPE & 268435456
+    for (uint wr_j = 1; wr_j < 32; wr_j++) xr[wr_j] = wr[wr_j];
+#endif
+#if !(WIDE_SHAPE & 16384)
     [branch]
     if (b != 0) {
         cpu.pc = idx_uint4(CODE_TEX(WIDE_PCT + ((b - WIDE_B0) >> 2)), (b - WIDE_B0) & 3);
     }
+#endif
 #if WIDE_COUNT == 1
     rv = 0;                  // the clock says what the other loops ran
 #elif WIDE_COUNT == 2
@@ -179,7 +285,9 @@ uint wide_run_l1(L1P uint room) {
 #elif WIDE_COUNT == 3
     rv = trips;              // that and the bundles
 #endif
+#if !(WIDE_SHAPE & 16384)
     cpu.clock += rv;
+#endif
     return trips;
 }
 #endif

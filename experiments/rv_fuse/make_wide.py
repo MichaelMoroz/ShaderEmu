@@ -28,12 +28,36 @@ def sub(path, old, new):
 
 # after the fast step (its names: fast_exec, xr, fast_budget)
 sub('src/cpu.h', 'void cpu_tick_l1(L1P0) {', f'#define WIDE_COUNT {a.count}\n#define WIDE_SHAPE {a.shape}\n#include "wide.h"\n\nvoid cpu_tick_l1(L1P0) {{')
-sub('main.shader', """                        i += fast_run(_Ticks - i);
+OLD = """                        i += fast_run(_Ticks - i);
                         if (i < _Ticks && !cpu.stall) {
                             cpu_tick_l1(L1A0);
                             i++;
                         }
-""", """                        i += wide_run_l1(L1A _Ticks - i);
+"""
+if int(a.shape) & 65536:
+    # the old loop first in the text (a test of what a loop before it costs it)
+    sub('main.shader', OLD, """                        uint f_ran = fast_run(min(_Ticks - i, 24u));
+                        i += f_ran;
+                        bool f_pre = pre_valid;
+                        if (i < _Ticks && !cpu.stall && !f_pre) {
+                            i += wide_run_l1(L1A _Ticks - i);
+                        }
+                        if (i < _Ticks && !cpu.stall && (f_ran == 0 || f_pre)) {
+                            pre_valid = f_pre;
+                            cpu_tick_l1(L1A0);
+                            i++;
+                        }
+""")
+elif int(a.shape) & 32:
+    # the old loop is not in the shader: what is not translated goes by the general step, one at a time
+    sub('main.shader', OLD, """                        i += wide_run_l1(L1A _Ticks - i);
+                        if (i < _Ticks && !cpu.stall) {
+                            cpu_tick_l1(L1A0);
+                            i++;
+                        }
+""")
+else:
+    sub('main.shader', OLD, """                        i += wide_run_l1(L1A _Ticks - i);
                         if (i < _Ticks && !cpu.stall) {
                             // (where nothing is translated a short stretch by the old loop, then the map again)
                             uint f_ran = fast_run(min(_Ticks - i, 24u));

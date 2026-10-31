@@ -1,6 +1,6 @@
 # wide.h's shapes on one load: each made, run under WARP a few frames, stamped, then all and the tree in turn on the card.
 #   pwsh experiments\rv_fuse\shapes.ps1 -Load shell -Shapes "1 3 5" [-Rounds 2] [-Frames 3000] [-More "--unity 11.1,7.1,1.0"] [-Src experiments\rvc_opt]
-param([string]$Load, [string]$Shapes = '0', [int]$Rounds = 2, [int]$Frames = 3000, [string]$More = '', [string]$Src = 'experiments\rvc_opt', [int]$WarpFrames = 8,
+param([string]$Load, [string]$Shapes = '0', [int]$Rounds = 2, [int]$Frames = 3000, [string]$More = '', [string]$Src = 'experiments\rvc_opt', [int]$WarpFrames = 8, [string]$NoCode = '',
       [string]$Dir = 'C:\Users\micha\agents_isa\snap', [string]$Image = 'C:\Users\micha\agents_isa\img')
 $snap = Join-Path $Dir "$Load\$Load.snap"
 $code = Join-Path $Dir "$Load\$Load.code"
@@ -26,6 +26,6 @@ foreach ($s in $Shapes -split ' ') {
 }
 for ($r = 0; $r -lt $Rounds; $r++) {
     Run "$Load-tree-$r" $Src $false (@('--frames', "$Frames") + $extra)
-    foreach ($s in $Shapes -split ' ') { Run "$Load-s$s-$r" "experiments\rvc_opt_s$s" $true (@('--frames', "$Frames") + $extra) }
+    foreach ($s in $Shapes -split ' ') { Run "$Load-s$s-$r" "experiments\rvc_opt_s$s" (" $NoCode " -notmatch " $s ") (@('--frames', "$Frames") + $extra) }
 }
 $env:RVC_CODE_FILE = ''
