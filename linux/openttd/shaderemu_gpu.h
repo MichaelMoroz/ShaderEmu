@@ -22,6 +22,8 @@ void SeGpuResize(int w, int h);
 void SeGpuPaint(const uint32_t *palette, unsigned window);
 /** The frame drawn so far to the GPU, into the picture (no showing): SeGpuSettle, then SeGpuPicture reads it. */
 void SeGpuSubmit();
+/** A list that found the GPU busy, posted if it is free now. */
+void SeGpuPoll();
 /** Every list of ours drawn and its picture copied out. */
 void SeGpuSettle();
 /** The picture's indices as the GPU drew them (its remaps made), after a settle: w x h bytes. */

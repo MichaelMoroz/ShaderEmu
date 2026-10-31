@@ -456,20 +456,43 @@ OPENTTD_SHIP_LOOPS=0` (it has the new counts, 8 to 12% of the ticks in the scene
 
 | Scene | Pictures a second before, after | Ticks a second before, after | x pictures, ticks |
 |---|---|---|---|
-| scroll | 15.17, 30.46 | 5.66, 7.72 | 2.01, 1.36 |
-| following a vehicle | 15.18, 30.83 | 5.92, 8.12 | 2.03, 1.37 |
-| windows, none open | 15.17, 30.39 | 6.84, 8.40 | 2.00, 1.23 |
-| many windows open | 15.18, 26.52 | 5.74, 7.04 | 1.75, 1.23 |
-| vehicle windows | 15.09, 31.07 | 6.15, 8.36 | 2.06, 1.36 |
-| building | 14.06, 26.04 | 5.81, 6.16 | 1.85, 1.06 |
-| zoomed out | 7.51, 11.47 | 3.42, 4.08 | 1.53, 1.19 |
+| scroll | 15.17, 29.82 | 5.66, 7.55 | 1.97, 1.33 |
+| following a vehicle | 15.18, 30.77 | 5.92, 8.21 | 2.03, 1.39 |
+| windows, none open | 15.17, 30.42 | 6.84, 8.63 | 2.01, 1.26 |
+| many windows open | 15.18, 26.83 | 5.74, 7.22 | 1.77, 1.26 |
+| vehicle windows | 15.09, 30.83 | 6.15, 8.18 | 2.04, 1.33 |
+| building | 14.06, 26.11 | 5.81, 6.01 | 1.86, 1.03 |
+| zoomed out | 7.51, 11.09 | 3.42, 4.35 | 1.48, 1.27 |
 
 Ticks are bounded by a tick's length on one core: about 100 ms (94 to 103) of the worker's, and it waits 21 to 34% of the time. With no
 wait at all that is 10 a second, under the 2x of 11 to 13. Vehicles run in pool order on one random stream, so a tick is not split
 without changing the game. Zoomed out is bounded by the pieces (6 million instructions a picture, the dearest 300k).
 
 On the card, RTX 5090, one run (`--d3d11 --unity 11.1,1.4,0.75`, `OPENTTD_PLAY=2`), round 2: 12.57 pictures and 3.77 game ticks a
-second, against the 10.29 to 11.21 and 2.57 to 2.86 of "Speed on 31 October"; a VR frame's rounds take much of the gain.
+second, against the 10.29 to 11.21 and 2.57 to 2.86 of "Speed on 31 October". With the lists below: round 2 13.64 pictures and
+3.55 ticks a second, the scroll 29.06 pictures (it was 20.63), windows closed 30.03 (21.41), windows 17.00 (18.51), one run each.
+
+### The card's lists
+
+The card made 21 pictures a second of the scroll where the calibrated run said 30: `rvc_cpu` takes a list back in the pass it was
+given, and a world's GPU takes one a Unity frame. A picture is two lists (what is drawn, and the showing of it), so the showing waited
+for a frame, `paint` 11.8 ms of 45 against 2. Giving that wait to the next picture's start moved it (`windows` 25 to 36 ms) and made
+nothing faster: a frame's first drawing waited for every list before it, as its records are read until drawn. So now (`Submit`,
+`FrameBegin` in `shaderemu_gpu.cpp`) a list the GPU has no room for waits on a queue, posted at the next look (`SeGpuPoll`), and a frame
+waits only for the frame before the last, the workers having two sets of records and the first core's chunks kept a frame longer; a list
+is reused only when drawn, and the sprite cache's deletes settle. `OPENTTD_GPU_OWED=0` is the way before. `RVC_DEVICE_EVERY=6` on
+`rvc_cpu` holds a list back as a world does: `openttd-scroll`, `openttd-windows` and `openttd-gpu` pass under it.
+
+Cuts by what the last pictures' pieces measured (a town's tiles cost twice the sea's) were tried for the zoomed out view and dropped:
+core 0's 279k a picture became 392k, and pieces cut elsewhere than last time were made again (11 ms a picture).
+
+### What a tick spends
+
+On the tick's worker, 530k instructions a tick in the quiet window scene, `prof.py`: vehicles 486k. Trains 45% of the tick (`TrainController` own
+127k), road vehicles 20%, aircraft 11%, `CallVehicleTicks` own 56k, the tile loop 28k, a rail or road search 25k and 22k on average.
+Each of those is many small things that go in the order of the pool and its one random stream. A hold costs the tick 18 ms each tick, of which
+`VehiclesSync` 11: it stores to `Vehicle`, so doing it with the tick running needs those fields in texels of their own and a second `tw_made`:
+about 6% of the ticks, not done.
 
 ## The start
 
