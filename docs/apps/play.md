@@ -148,6 +148,7 @@ October 2026:
 | FLAC, 44.1 kHz stereo | 11,579 | the first core; 12,853 on 24 workers |
 | MP3, 44.1 kHz stereo | 12,640 | in order, the first core; 14,009 on 48 workers |
 | MP3 at half rate | | 9,573 on 48 workers |
+| Ogg Vorbis, 44.1 kHz stereo | 15,560 | the first core; 18,103 on 48 workers |
 
 Under the calibrated clock with a sound card (31 October 2026; the model's workers term rests on
 one game, so these are rough), with no window: `play-test.mp3` plays 678 ms after it is opened, on 48
@@ -198,16 +199,13 @@ Under `rvc_cpu`, a few seconds each (start it from PowerShell):
 | `play-test.mod` | `98e66905` of 1,354,752 |
 | `play-test.mp3` | `809816e7` of 1,594,368, with any number of workers and with none |
 | the same with `NXPLAY_HALF=1` | `9efedb8f` of 797,184 |
-| `v44.ogg` of `media.md` (25 s, 44.1 kHz stereo) | `4bc10ffb` of 2,205,000, with 48 workers and with none |
-| `v22m.ogg` (22,050 Hz mono) | `303b2940` of 551,250, the same |
+| `Grieg - Hall of the Mountain King.ogg` | `34eeed95` of 4,410,000 with 48 workers, `01ba4206` with none (they differ: `media.md`, "Sound") |
 
 - The MP3 sums are also what the same two files compiled on the host give (x86-64, gcc):
   the machine's float instructions under `rvc_cpu` decode as the host does.
-- **On the shader machine an MP3 file's sum is another** (`a6c2aba3`, `c1e4a1b9` at half
-  rate): its floats are the card's (`fpu.md`). In the first second of the test file 2 of
-  88,200 samples differ from the host's, by 1. What must hold there is that the sum with
-  workers is the sum with `NXPLAY_WORKERS=0` (`NXPLAY_SECONDS=3`: `45c4a9a9`
-  without them, and with them after an `nxplay` that had them was ended by `kill -9`).
+- **On the shader machine an MP3 file's sum is another**: its floats are the card's (`fpu.md`). What must
+  hold there is that the sum with workers is the sum with `NXPLAY_WORKERS=0` (`NXPLAY_SECONDS=3`), also
+  after an `nxplay` that had them was ended by `kill -9`.
 - The card: `NXPLAY_SECONDS=1 NXPLAY_EXIT=1 nxplay /usr/share/play-test.wav` with
   `--fixed-dt 0.004 --sound-capture F.wav --save-state F.snap`, then
   `python tools\sound_reference.py F.wav F.snap --rom build\images\nommu\rootfs.bin`: every
