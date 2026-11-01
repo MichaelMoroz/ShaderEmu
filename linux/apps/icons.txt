@@ -35,6 +35,7 @@ ralert,ralert.bin       ralert
 halflife,halflife.bin   halflife
 nxmicropolis            micropolis
 openttd,openttd.bin     openttd
+aoe,aoe.bin             aoe
 nes,nes.bin             devices/input-gaming
 imdemo                  apps/desktop-effects apps/glade
 nxray                   apps/multimedia-photo-manager
