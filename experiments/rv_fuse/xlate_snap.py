@@ -23,6 +23,7 @@ ap.add_argument('out')
 ap.add_argument('--no-fold', action='store_true')
 ap.add_argument('--sink', type=int, default=32)
 ap.add_argument('--check', action='store_true')
+ap.add_argument('--near', action='store_true', help='a jump within reach as beq x0, x0 (the WIDE_F loop)')
 ap.add_argument('--stride', type=int, default=1, help='a bundle every N texels: what the density of the code is worth')
 ap.add_argument('--hot', action='store_true', help='runs of code laid out by how hot they are: the texture cache holds what is near')
 a = ap.parse_args()
@@ -318,6 +319,8 @@ for idx, B in enumerate(bundles):
             far_w += B.get('w', 0)
         else:
             ctl |= B['f3'] << 8 | B['cra'] << 11 | B['crb'] << 16 | (off & 0x7ff) << 21
+    elif B['ctl'] == 2 and a.near and -1024 <= (B['tb'] - idx) * a.stride < 1024:
+        ctl = B['path'] | B['n'] << 3 | 1 << 6 | (((B['tb'] - idx) * a.stride) & 0x7ff) << 21
     elif B['ctl'] == 2:
         ctl |= (((B['tb'] - idx) * a.stride) & 0xffffff) << 8
     elif B['ctl'] == 3:
