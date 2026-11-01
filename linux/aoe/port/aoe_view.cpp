@@ -27,6 +27,8 @@ void _start(void);
 
 // What the two sides watch lie in texels of their own.
 static struct { volatile int v; char pad[12]; } walked __attribute__((aligned(16)));
+static struct { unsigned start, walked_at, end; char pad[4]; } job_counts __attribute__((aligned(16)));
+static inline unsigned my_instructions(void) { unsigned n; __asm__ volatile("rdinstret %0" : "=r"(n)); return n; }
 static struct { RGE_View* view; int busy, inline_job, workers, opened, wanted; char pad[8]; } st __attribute__((aligned(16)));
 
 int aoe_view_wanted(void) {
@@ -48,7 +50,7 @@ int aoe_view_wanted(void) {
 
 int aoe_view_busy(void) { return st.busy; }
 int aoe_view_in_job(void) { return st.inline_job || (st.workers && mcw_on_worker()); }
-void aoe_view_walked(void) { walked.v = 1; }
+void aoe_view_walked(void) { job_counts.walked_at = my_instructions(); walked.v = 1; }
 void aoe_view_poll(void) { if (st.busy && st.workers) mcw_done(1); }
 
 // A list that grows in the job: a piece of this, which is never given back. A big picture's row index asks too.
@@ -76,8 +78,10 @@ static TDrawSystem* system_copy;
 static TDrawArea* area_real;
 
 static void job(uint32_t view, uint32_t) {
+    job_counts.start = my_instructions();
     ((RGE_View*) view)->RGE_View::draw();
     walked.v = 1;
+    job_counts.end = my_instructions();
 }
 
 void aoe_view_post(RGE_View* view) {
@@ -141,7 +145,7 @@ void aoe_view_join(void) {
     if (!st.busy) return;
     aoe_lat('j', 0, 0);
     if (st.workers > 0) mcw_wait(1);
-    aoe_lat('k', 0, 0);
+    aoe_lat('k', (job_counts.walked_at - job_counts.start) / 1000, (job_counts.end - job_counts.walked_at) / 1000);
     st.busy = 0;
 }
 

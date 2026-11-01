@@ -1274,10 +1274,29 @@ index 8b843ae6c..09dd55910 100644
          if (do_draw_log != 0)
              write_draw_log2("<vf>\n");
 diff --git a/src/world.cpp b/src/world.cpp
-index 0b7cd1ad5..5fba4e362 100644
+index 0b7cd1ad5..725cb81cd 100644
 --- a/src/world.cpp
 +++ b/src/world.cpp
-@@ -623,7 +623,7 @@ void RGE_Game_World::command_init(int infile, TCommunications_Handler* com_hand)
+@@ -57,6 +57,8 @@ int __cdecl debug_rand(char*, int);
+ void __cdecl debug_srand(char*, int, unsigned int);
+ unsigned long __cdecl debug_timeGetTime(char*, int);
+ 
++// The port: the game's log of every change of alliances, a file in the machine's memory and 900 lines a time, is not written.
++#define AOE_DV(...) ((void) 0)
+ RGE_Game_World::RGE_Game_World() :
+     objectsValue(0), numberObjectsValue(0), maxNumberObjectsValue(10000), negativeObjectsValue(0), numberNegativeObjectsValue(0),
+     maxNumberNegativeObjectsValue(1000), maximumComputerPlayerUpdateTime(2), availableComputerPlayerUpdateTime(2),
+@@ -111,9 +113,6 @@ RGE_Game_World::RGE_Game_World() :
+     reusable_missile_objects = new RGE_Object_List;
+     reusable_doppleganger_objects = new RGE_Object_List;
+     scenario_object_flag = 0;
+-    if (DVlogf == 0) {
+-        DVlogf = fopen("c:\\aoeWVlog.txt", "w");
+-    }
+ }
+ 
+ RGE_Game_World::~RGE_Game_World() {
+@@ -623,7 +622,7 @@ void RGE_Game_World::command_init(int infile, TCommunications_Handler* com_hand)
  }
  
  void RGE_Game_World::world_init(int infile, TSound_Driver* sound_dvr, TCommunications_Handler* com_hand) {
@@ -1286,7 +1305,7 @@ index 0b7cd1ad5..5fba4e362 100644
      this->color_table_init(infile);
      this->init_sounds(infile, sound_dvr);
      this->init_sprites(infile);
-@@ -643,7 +643,7 @@ unsigned char RGE_Game_World::init(char* base_name, TSound_Driver* sound_dvr, TC
+@@ -643,7 +642,7 @@ unsigned char RGE_Game_World::init(char* base_name, TSound_Driver* sound_dvr, TC
      if (fd != -1) {
          rge_read(fd, version, 8);
  
@@ -1295,6 +1314,72 @@ index 0b7cd1ad5..5fba4e362 100644
              rge_close(fd);
              return 0;
          }
+@@ -3215,7 +3214,12 @@ void RGE_Game_World::update_mutual_allies() {
+     int one = 1;
+     int i, j;
+     int pNum, index;
+-    fprintf(DVlogf, s_update_visibilities, world_time);
++    // The port: the whole view and map are drawn again only if what the player sees changes. Any player's change of
++    // alliances asked for it: 5 million instructions on the view's worker and 2 on the first core, with the game at a stop.
++    unsigned long aoe_saw[2] = {0, 0};
++    int aoe_viewer = this->curr_player >= 0 && this->curr_player < player_num ? this->curr_player : -1;
++    if (aoe_viewer >= 0) { aoe_saw[0] = this->players[aoe_viewer]->mutualVisibleMask; aoe_saw[1] = this->players[aoe_viewer]->mutualExploredMask; }
++    AOE_DV( s_update_visibilities, world_time);
+     i = 0;
+     if (i < player_num)
+         do {
+@@ -3275,34 +3279,36 @@ void RGE_Game_World::update_mutual_allies() {
+     }
+ 
+     for (i = 0; i < player_num; i++) {
+-        fprintf(DVlogf, s_player, i);
+-        fprintf(DVlogf, s_masks, players[i]->mutualExploredMask, players[i]->mutualVisibleMask, players[i]->nonMutualVisibleMask);
+-        fprintf(DVlogf, s_player_flags, players[i]->allied_LOS_Enable, players[i]->allied_victory);
+-        fprintf(DVlogf, s_diplomacy);
++        AOE_DV( s_player, i);
++        AOE_DV( s_masks, players[i]->mutualExploredMask, players[i]->mutualVisibleMask, players[i]->nonMutualVisibleMask);
++        AOE_DV( s_player_flags, players[i]->allied_LOS_Enable, players[i]->allied_victory);
++        AOE_DV( s_diplomacy);
+         for (j = 0; j < 9; j++) {
+-            fprintf(DVlogf, s_decimal, players[i]->unitDiplomacy[j]);
++            AOE_DV( s_decimal, players[i]->unitDiplomacy[j]);
+             if (j < 8)
+-                fprintf(DVlogf, s_separator);
++                AOE_DV( s_separator);
+             else
+-                fprintf(DVlogf, s_list_end);
++                AOE_DV( s_list_end);
+         }
+-        fprintf(DVlogf, s_mutual_allies);
++        AOE_DV( s_mutual_allies);
+         for (j = 0; j < 9; j++) {
+-            fprintf(DVlogf, s_decimal, players[i]->mutualAlly[j]);
++            AOE_DV( s_decimal, players[i]->mutualAlly[j]);
+             if (j < 8)
+-                fprintf(DVlogf, s_separator);
++                AOE_DV( s_separator);
+             else
+-                fprintf(DVlogf, s_list_end);
++                AOE_DV( s_list_end);
+         }
+-        fprintf(DVlogf, s_removed_visible_bits);
++        AOE_DV( s_removed_visible_bits);
+         for (j = 0; j < 9; j++) {
+-            fprintf(DVlogf, s_hex, players[i]->RemoveVisibleBits[j]);
++            AOE_DV( s_hex, players[i]->RemoveVisibleBits[j]);
+             if (j < 8)
+-                fprintf(DVlogf, s_separator);
++                AOE_DV( s_separator);
+             else
+-                fprintf(DVlogf, s_list_end);
++                AOE_DV( s_list_end);
+         }
+     }
++    if (!getenv("AOE_ALLIES_REDRAW") && aoe_viewer >= 0 && aoe_saw[0] == this->players[aoe_viewer]->mutualVisibleMask && aoe_saw[1] == this->players[aoe_viewer]->mutualExploredMask)
++        return;
+     TPanel* panel;
+     if ((panel = rge_base_game->get_view_panel()) != 0)
+         panel->set_redraw(TPanel::RedrawImmediate);
 diff --git a/src/zone_map.cpp b/src/zone_map.cpp
 index b57eb84fd..3db09910e 100644
 --- a/src/zone_map.cpp
