@@ -1,7 +1,7 @@
 ## Before (28 October 2026)
 
 The machine at riscv-backport's base, 7624f55, frozen in `ShaderEmu-rvbp/build/before` (its README.md): the harness
-built from 7624f55 with the backend half of `--unity` (7624f55 alone does not build), the old tick of 7624f55,
+built from 7624f55 with the backend half of `--unity` (7624f55 alone does not build), the tick of 7624f55,
 and an image made of 7624f55's `linux/prebuilt` with Uplink's data. Every one of the 51 parts ran in two rounds, the
 second with the parts in the other order (`run.py --machines before --rounds 2`, 06:54 to 08:52); 8 parts ran a third
 time (below). Host: two Unity editors open and idle, no developer's harness, CPU load about 1%; another session's
@@ -104,5 +104,5 @@ Tiberian Dawn's "game frames" reads only the last short `tdstat` window (spread 
     python tools/rv_compare/report.py before after
 
 `machines.py`'s `after` is the backport's checkout (`bin
-vc_harness.exe`, `build/images/nommu`, the old tick);
+vc_harness.exe`, `build/images/nommu`, the tick of then);
 `RVCMP_AFTER_ROOT` and `RVCMP_AFTER_IMAGE` move it (here `RVCMP_AFTER_ROOT=ShaderEmu-rvbp/build/after`).

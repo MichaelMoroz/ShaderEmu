@@ -215,10 +215,10 @@ to a folder of its own.
   (`docs/machine/multicore.md`, "Races"); `RVC_CALLS=FILE` what core 0's calls cost ("Finding the
   work"). `RVC_WCACHE=1` gives every core the shader machine's write cache (three tables of
   buckets of three texels, 6 bits for core 0 and the geometry's for a worker,
-  `experiments/rvc_lean/src/mem.h`): a store that changes a texel no bucket has room for ends that
+  `experiments/rvc_lean/tick.hlsl`): a store that changes a texel no bucket has room for ends that
   core's pass before it, and the end says how many passes ended so. `RVC_ADFAULT=1` makes a
   clear accessed or written bit in a page table entry fault, as a walk on the shader machine does
-  (`src/mmu.h`); under the no-MMU kernel there is no walk and it changes nothing. Every run
+ ; under the no-MMU kernel there is no walk and it changes nothing. Every run
   ends with a `[cpu] stops:` line: the workers' faults, those on such a bit, and core 0's on
   one, from the mark too; `RVC_ADFAULT=2` prints each (`[adfault]`: core, cause, address, pc).
 - `--save-ram FILE` writes the 288 MB of RAM as the run ends: a picture in GPU memory at a

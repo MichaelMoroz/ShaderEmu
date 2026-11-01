@@ -447,7 +447,7 @@ destination in its pass: every line `ok` and `copytest: sum 0e7f76c3` on the car
 ### A program's copy
 
 A program asks for the same copy and fill at CSRs 0x8b0 to 0x8b3, the custom range a user-mode program
-may use, which the tick and `rvc_cpu` take as 0x0b0 to 0x0b3 (`src/csr.h`, `CSR_UMEMOP_*`). Reading 0x8b0
+may use, which the tick and `rvc_cpu` take as 0x0b0 to 0x0b3. Reading 0x8b0
 says whether asking is worth it: 1 on the first core, 0 on a worker, whose copy from RAM would wait for
 every other core's (one a pass), and 0 on a tick without them (it reads unknown CSRs as 0), so a program
 built with it runs on either.

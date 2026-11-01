@@ -107,7 +107,7 @@ Two more, not straight ports:
 - **Every other "data, then a ready word" hand-off** between cores wants `mc_publish` as Quake III's did. `mcw_post` is
   safe (the call orders the stores); a flag a program keeps for another core itself is not. Not yet audited.
 - **nxray's cost floor only for workers with lanes** (GPU-VM `nxray.c`, `least[]`). The floor of a sixth of a pass a
-  texel is a lane's rule, but it was applied to every worker. the old tick, the world's tick, has no lanes, so on it every
+  texel is a lane's rule, but it was applied to every worker. the tick of then, the world's tick, has no lanes, so on it every
   share came out at the floor and even. On gpu_vm the dearest share went to 54-58 thousand instructions and a picture
   from 124 passes to 110. This is the app's own path, not only its test.
 - **nxray with one picture out** (c13b2cb, `__gpuvm__` only): 38.4 to 40.6 pictures a second, the worst picture's
@@ -313,7 +313,7 @@ it goes with an image of its own, and a snapshot from before does not load.
 | ticks alternated in one run | 5fa6f70 (`GVM_TICK_ALT`, `_SHIFT`, `GVM_TICK_PAIRED`) | each frame's tick picked by a hash, the card times kept apart; paired runs every tick each pass and checks they agree | partial: `--replay DIR;DIR` from a snapshot | M |
 | segment timing | `GVM_MARK`, `GVM_STATS_EVERY` (`vm.cpp`) | the card's tick time a console mark: two programs in one run timed apart | missing | S |
 | `--unity`'s logs | be87943, a2ea5a3 | `--frame-log`'s `.rounds` and `.timed`; `GVM_UNITY_PACE=world` as `EmuMachine.SteadyRounds` | partial: the model, not these | S |
-| the WARP stamp | `tick.hlsl.warp_ok`, `gvm.exe --warp --mark-ok`, `gvm12 --check` (RAM's FNV after 20 passes) | the card refuses a tick WARP has not checked against the reference | missing for the old tick (`--warp` only) | M |
+| the WARP stamp | `tick.hlsl.warp_ok`, `gvm.exe --warp --mark-ok`, `gvm12 --check` (RAM's FNV after 20 passes) | the card refuses a tick WARP has not checked against the reference | missing for the tick of then (`--warp` only) | M |
 
 A likely bug, not verified: under `--unity` or `--tick-rounds N`, rvc_harness moves the clock every round but reads the
 console's ring once a frame (`rvc_backend11.cpp:1320`), so a guest may write 255 bytes a round and lose what is past
@@ -400,16 +400,16 @@ as one blit. If a world's main thread is the limit, gpu_vm's two largest:
 Both draw patches at tessellation factor 8 and amplify in the geometry shader. They need fxc2 65 or later: the hull
 shader's relative index before fxc2 patch 64 reset the card (6d6588d), and `fxc2.cginc` refuses an older fxc2 (f96b392).
 
-## The tick's DXBC: gpu_vm's lessons, to look for in the old tick
+## The tick's DXBC: gpu_vm's lessons, to look for in the tick of then
 
 Not audited on RISC-V's DXBC yet:
-- fxc2 does not fold `(j * 8 + k) & 7` to `k`: an 8-way switch of loads, 325 instructions (f0dfc60). the old tick indexes
+- fxc2 does not fold `(j * 8 + k) & 7` to `k`: an 8-way switch of loads, 325 instructions (f0dfc60). the tick of then indexes
   its eight targets the same way.
 - the exit's outputs in a loop and an empty entry's data not read: DXBC 16% smaller, integer loops 1% faster (fa57740);
 - a local pad array holds the card's local-memory layout: without it the fast loop was 10% slower (880f7d1). Any change
   to `L1_LOCAL`'s arrays is measured on the fast loop, however cold the code it touches.
 
-From the two ticks read side by side (`GPU-VM/tick/tick.hlsl` against the old tick; nothing compiled or
+From the two ticks read side by side (`GPU-VM/tick/tick.hlsl` against the tick of then; nothing compiled or
 timed). Most of gpu_vm's savings are in the RISC-V tick already or lost there before (`docs/machine/tick-costs.md`
 369-526: both next texels fetched every step -3.2%, the cache as words -3%). RISC-V's skip of stores that change
 nothing (`mem.h:446`) stays: gpu_vm dropped silent stores for their cost a bundle, but in VR a round ends when the

@@ -3,7 +3,7 @@
 // Commit (the state rows), MachineGather.shader and MachineCommitPoints.shader (RAM). Include
 // after UnityCG.cginc and MachineBlit.cginc; MachineGather.shader defines COMMIT_GATHER first.
 float _Init, _InitRaw;
-// MachineTick.shader's machine: its CSRs are fields of the state, with no table to commit
+// MachineTickLean.shader's machine: its CSRs are fields of the state, with no table to commit
 #define SBI_HLE
 #define NO_PAGING
 

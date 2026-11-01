@@ -566,7 +566,7 @@ A copy cost measured, 31 October to 1 November 2026, `prof.py` on the quiet wind
 
 Not built, by what the profile bounds: rail and road searches ahead, 18k a tick here (4%), with the ships' 1,060 lines to copy and rail's reservations read under a moving tick; retained land layers, since the land's tile loop (`ViewportAddLandscape` own, half of a piece) makes the parents too and is not saved by keeping ground pixels. More workers than 47 die of `bad_alloc` (`OPENTTD_WORKERS=95`).
 
-Calibrated, 1 November 2026, model of October (fitted on the old tick: ratios between builds, not speeds on today's), before as "Gameplay scenes":
+Calibrated, 1 November 2026, model of October (fitted before the harness ran this tick: ratios between builds, not speeds on today's), before as "Gameplay scenes":
 
 | Scene | Pictures a second before, after | Ticks a second before, after | x pictures, ticks |
 |---|---|---|---|
@@ -578,7 +578,7 @@ Calibrated, 1 November 2026, model of October (fitted on the old tick: ratios be
 | building | 14.06, 26.88 | 5.81, 9.41 | 1.91, 1.62 |
 | zoomed out | 7.51, 11.17 | 3.42, 6.52 | 1.49, 1.91 |
 
-On the card (RTX 5070 Laptop, lean tick, `--d3d11 --unity 11.1,1.4,0.75`, `OPENTTD_PLAY=2`, second rounds, two runs each alternating with main): the table above does not hold there, the model being the old tick's.
+On the card (RTX 5070 Laptop, lean tick, `--d3d11 --unity 11.1,1.4,0.75`, `OPENTTD_PLAY=2`, second rounds, two runs each alternating with main): the table above does not hold there, the model having been fitted before the harness ran this tick.
 
 | Scene | Pictures a second, main | after | Ticks a picture, main | after |
 |---|---|---|---|---|

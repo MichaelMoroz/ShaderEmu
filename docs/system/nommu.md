@@ -87,7 +87,7 @@ image is `RV32_MARCH=rv32imaf_zba_zbb` through `build.sh` and `root.sh`, then `i
 
 ## In the world
 
-The VRChat world runs this Linux and no other: `MachineTick.shader` defines `NO_PAGING` (with
+The VRChat world runs this Linux and no other: `MachineTickLean.shader` defines `NO_PAGING` (with
 `SBI_HLE` and `FPU`, no `ZB`), and "ShaderEmu/Import boot images from the repository" takes the
 "linux" image from `build/images/nommu`. After a no-MMU build: `python linux/nommu/image.py`,
 then "Sync shader sources from the repository" and "Import boot images from the repository".
@@ -144,7 +144,7 @@ On 31 October 2026 `rootfs.bin` of `build/images/nommu` is 304,336,384 bytes, Ha
 
 With `NO_PAGING` and `SBI_HLE` (the world's machine, and `rvc_harness`'s for this kernel) the
 CSRs Linux uses are fields of core 0's first three texels: mstatus, mie, mip, stvec; sscratch,
-sepc, scause, stval; scounteren and fcsr (`CSR_FIELDS` in `types.h`, `csr.h`). There is no CSR
+sepc, scause, stval; scounteren and fcsr (`CSR_FIELDS` in `types.h`). There is no CSR
 table under the state rows and no CSR cache, so a CSR write never stalls; the machine's own
 CSRs read as 0 and a write to one is dropped. `NO_PAGING` also leaves the TLBs' 409 texels
 out: the float registers follow the write cache, and the tick draws 8 of core 0's 16 rows
@@ -163,7 +163,7 @@ Unity's commit (`MachineCommit.cginc`) has the tick's defines.
 - No `mmu` words, no single step, no debug words but the last instruction and stall.
 - The copy's destination for the commit's geometry comes from texel 37 (no `memop_*_p`).
 
-The tick's device reads and writes are the general ones still (`mem.h`), but for the RTC: paths cut
+The tick's device reads and writes are the general ones still, but for the RTC: paths cut
 down further are slower a pass under fxc.
 
 ## Memory

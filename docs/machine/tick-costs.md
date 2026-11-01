@@ -32,7 +32,7 @@ instruction. The RAM points cost the same with 260 points as with 33,410, so the
 work: the first draw of that shader in a round pays about 0.03 ms that an identical second draw does not.
 
 To fit a pass's time to kinds of event on the card: `tools\pass_costs.ps1` times one pass of each of seven kinds of work
-on a frozen state and counted the same pass with `--profile`, which the old tick had and this one has not (the script stops there now), and `python tools\pass_regress.py logs\pass_costs.csv` fits a
+on a frozen state and counted the same pass with `--profile`, which this tick does not have (the script stops there now), and `python tools\pass_regress.py logs\pass_costs.csv` fits a
 cost to each kind. A load or store costs several times an instruction that is neither, and an instruction on the general
 path many times either: run it for today's figures.
 
@@ -53,8 +53,7 @@ A count is a guide, never a verdict: only the two builds run in turn say what a 
 
 ## The shape the code must keep
 
-These are the fast step's rules (`fast_run_l1` in `cpu.h`, `fast_exec_l1` in `emu.h`, `mem_get_cached_or_tex_l1` in
-`mem.h`). The text's form is the gain, and most of the time goes to which blocks an instruction passes on its way, which
+These are the fast step's rules (`experiments/rvc_lean/tick.hlsl`). The text's form is the gain, and most of the time goes to which blocks an instruction passes on its way, which
 operations counted do not predict.
 
 - **The kinds are a tree of tests written in the `if`s** (`K_ALU`, `K_FP`): arithmetic, loads, stores and floats a group,
@@ -82,8 +81,7 @@ operations counted do not predict.
   tick's last loop that asked for a texel this way wrote zeros over state nothing counted.
 - **A static set before a pass's loop and read after it is carried through every core's loop**: keep such a value in a
   word carried already, or read it again after the loop.
-- A smaller pass is not a faster one, and taking code out of the function can cost as much as adding it: see "The same
-  loop, compiled slower" in `experiments/rvc_lean/NOTES.md`.
+- A smaller pass is not a faster one, and taking code out of the function can cost as much as adding it.
 - After any change to the fast loop's control flow, bring the function to Unity's copy verbatim.
 
 ## Measure with the card's clock high

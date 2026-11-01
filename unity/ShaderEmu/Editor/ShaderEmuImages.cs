@@ -18,7 +18,7 @@ public static class ShaderEmuImages
 
     public static readonly BootImage[] Images =
     {
-        // Linux without an MMU (docs/system/nommu.md), for MachineTick.shader's NO_PAGING machine.
+        // Linux without an MMU (docs/system/nommu.md), for MachineTickLean.shader's machine.
         new BootImage { name = "linux", title = "Linux: shell, Nano-X desktop (nx), Doom, glxgears",
                         ram = "build/images/nommu/linux_payload.bin", rom = "build/images/nommu/rootfs.bin",
                         tree = "build/images/nommu/dts.bin" },

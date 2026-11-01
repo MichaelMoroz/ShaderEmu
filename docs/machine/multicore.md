@@ -10,7 +10,7 @@ they need ("What the card does with pixels" and the sections after it).
 
 The D3D11 harness with its eight targets, `rvc_cpu` and the world all compile `CORES=256`; the harness's
 `RVC_CORES=N` is a measurement, for what the others cost. The one-core machine is what is left where
-there are no workers (the code is under `#if CORES > 1`): `experiments/rvc_compute` on D3D12; the tick itself is always eight targets.
+there are no workers (the code is under `#if CORES > 1`); the tick itself is always eight targets.
 
 ## How it is made
 
@@ -710,7 +710,7 @@ The VRChat machine is the one without an MMU (`NO_PAGING`, `docs/system/nommu.md
 256 cores, the guest's geometry, the tick in eight targets, the commit as points, the shader's
 own write cache (336 texels: 64 + 32 + 16 buckets of three) and passes of 8,192 (the control panel's `tickSlider` sets 1,024 to 32,768)
 (`CORES`, `L1_TABLE_BITS` and the sizes in `MachineBlit.cginc`). Its tick is the lean one (`MachineTickLean.shader`,
-`lean/tick.hlsl`, a verbatim copy of `experiments/rvc_lean/tick.hlsl`), `MachineTick.shader` being the one it replaced.
+`lean/tick.hlsl`, a verbatim copy of `experiments/rvc_lean/tick.hlsl`), the only tick.
 
 - **The tick is a camera's pass.** The tick's shader is on a mesh of seventeen triangles (one for every sixteen cores and one
   for the lanes' field) that only the tick's camera sees (a layer of its own); `EmuMachine` gives the

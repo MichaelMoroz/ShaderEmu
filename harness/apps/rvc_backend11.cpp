@@ -1293,7 +1293,7 @@ private:
     ComPtr<ID3D11ShaderResourceView> netData_;
     bool deliverNet_ = false;   // the ring's zone is drawn in the next frame
 
-    // RVC11_COMPUTE=1 (experiments/rvc_compute): the tick as one thread of a compute shader, the
+    // RVC11_COMPUTE=1: the tick as one thread of a compute shader, the
     // pass's entry tick_cs. It writes the CPU zone's texels into a 64 x 64 texture of its own,
     // which holds the zone before the dispatch and is copied back after it.
     ComPtr<ID3D11ComputeShader> cs_;

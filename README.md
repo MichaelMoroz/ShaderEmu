@@ -151,7 +151,7 @@ VR frame, a played round 10.3 to 11.2 pictures and 2.6 to 2.9 game ticks a secon
 (`docs/games/openttd.md`, "Speed on 31 October").
 
 The D3D11 build needs no FXC: [fxc2](https://github.com/MichaelMoroz/FXC2) compiles the CPU shader
-in seconds where FXC takes minutes (`docs/machine/fxc2.md`). `experiments/rvc_lean/README.md` and `NOTES.md` say how the
+in seconds where FXC takes minutes (`docs/machine/fxc2.md`). `experiments/rvc_lean/README.md` says how the
 CPU shader is built and why.
 
 ## Try it (Windows)
@@ -245,8 +245,7 @@ longer answers: before the first build, `mkdir -p ~/nm/work/src/pathtrace-data` 
 - `programs/` – bare-metal programs in C, `programs/linux`: the OpenGL library and
   `glxgears`, `programs/mc`: the worker cores' library (`mcw.c`, `mcwx.h`) and its tests,
   `programs/hlsl`: the HLSL compiler, `programs/wl`: the machine's workloads piece by piece.
-- `experiments/` – beside `rvc_lean`, the studies `rvc_compute`,
-  `isa_proto` and `udon_aot`.
+- `experiments/` – beside `rvc_lean`, the studies `isa_proto` and `udon_aot`.
 - `unity/ShaderEmu/` – the VRChat world: UdonSharp scripts, shaders and the editor scripts
   that build the scene.
 - `world/` – the Blender scripts that model the room, its computers and the city (`docs/world/world.md`).

@@ -1,7 +1,7 @@
 Shader "ShaderEmu/MachineTickLean"
 {
     // The machine's CPUTick pass written again (experiments/rvc_lean/tick.hlsl, copied verbatim to
-    // lean/): the same state, targets and geometry as MachineTick.shader, which it replaces.
+    // lean/): the same state, targets and geometry as the machine has them.
     // HLSLPROGRAM: no Unity headers, which declare names the tick declares itself (_Time).
     Properties
     {

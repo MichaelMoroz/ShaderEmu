@@ -6,7 +6,7 @@ where the compiler's runtime took about a hundred, which is what made Quake play
 (`docs/games/quake.md`). The smaller machines for bare-metal programs do not have it.
 
 In the shader it is the define `FPU`, which the harness sets for the Linux machine and
-`MachineTick.shader` has by hand.
+`MachineTickLean.shader` has by hand.
 
 ## What is there
 
@@ -70,7 +70,7 @@ The float registers are 32 more entries of the array the integer registers are i
 f0 at `XR_F`), kept as bits, so `flw`, `fsw` and the moves never go through a float. An
 instruction's two source indices get `XR_F` added when they name float registers, and its
 result goes to one indexed store with the integers': the fast loop carries nothing more for them.
-`fp_exec` in `emu.h` works every result out and chooses one, for the general path and for
+`experiments/rvc_lean/tick.hlsl` works every result out and chooses one, for the general path and for
 the fast step's rarer float instructions; the fast step does a sum, a difference, a product
 and `fp_light`'s moves, signs and comparisons each by itself (`tick-costs.md`). Between passes the registers are eight texels of the state zone, from
 `FP_STATE_AT`, right after the write cache (`NO_PAGING` has no TLBs' texels before them), and `fcsr` is a

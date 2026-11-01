@@ -245,7 +245,7 @@ static bool walk(Core& c, u32 va, int access, u32& phys, Trap& t) {
             if (c.priv == PRIV_U ? !user : (user && (access == FETCH || !sum))) break;
             if (access == FETCH ? !(pte & 8) : access == READ ? !((pte & 2) || (mxr && (pte & 8))) : !(pte & 4)) break;
             u32 want = 0x40 | (access == WRITE ? 0x80 : 0);
-            // (RVC_ADFAULT=1: a clear accessed or written bit faults, as on the shader machine (mmu.h),
+            // (RVC_ADFAULT=1: a clear accessed or written bit faults, as on the shader machine,
             // and the kernel sets it; a worker stops there until core 0 serves the page)
             static const bool ad_fault = getenv("RVC_ADFAULT") && atoi(getenv("RVC_ADFAULT")) != 0;
             if ((pte & want) != want) {
@@ -603,7 +603,7 @@ static inline bool load(Core& c, u32 va, int size, u32& value, Trap& t) {
     return true;
 }
 
-// RVC_WCACHE=1: each core's write cache as the shader machine's (experiments/rvc_lean/src/mem.h):
+// RVC_WCACHE=1: each core's write cache as the shader machine's (experiments/rvc_lean/tick.hlsl):
 // three tables (2^bits buckets, half and a quarter) of three texels a bucket; a store that changes a texel no
 // bucket has room for ends the core's pass before it, and the instruction runs in the next.
 static bool wc_on = false;
@@ -669,7 +669,7 @@ static inline bool store(Core& c, u32 va, int size, u32 value, Trap& t) {
     return true;
 }
 
-// ---- the firmware's calls (experiments/rvc_lean/src/emu.h, sbi_call) ----
+// ---- the firmware's calls (experiments/rvc_lean/tick.hlsl) ----
 
 static u64 sbi_counts[16];
 static void sbi_call(Core& c) {
@@ -1191,7 +1191,7 @@ static __declspec(noinline) int general_step(Core& c, u32 ins) {
     bool write = true, illegal = false;
     if (!W && calls_on && c.hart == 0) call_fast(c, c.clock - 1);   // (this one is counted in c.clock already)
     if ((zb_on || zbs_on || zicond_on) && (op == 0x13 || op == 0x33) && zb(ins, op, f3, f7, rs2, a, b, result)) { _InterlockedIncrement64((volatile long long*)&zb_run); op = 0x80; }   // (no opcode is 0x80)
-    // which funct7 each op and op-imm has, as the tick's general path (emu.h): the rest are illegal
+    // which funct7 each op and op-imm has, as the tick's general path: the rest are illegal
     if ((op == 0x13 || (op == 0x33 && f7 != 1)) &&
         !(((f7 == 0 ? 0xffffu : f7 == 0x20 ? 0x21fdu : 0x00ddu) >> (((ins >> 2) & 8) | f3)) & 1)) op = 0x81;
     switch (op) {

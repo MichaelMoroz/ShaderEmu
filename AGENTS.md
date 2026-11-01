@@ -90,10 +90,7 @@
   editing a hook, `git checkout` the files it patches in the kernel tree first.
 - `GrGetWindowInfo` does not wait for the GPU any more. A program that writes its window's
   buffer reads a pixel first (`GrReadArea`), as `nxmon` and `nxpaint` do.
-- `LAZY_MEMOP` (a fill or a copy left to the commit) was the old tick's, and is gone with it: it cost 1% of a shell loop
-  and 3% of Doom though the fast loop was instruction for instruction the same (`tools\cso_loops.py`;
-  `experiments/rvc_lean/NOTES.md`, "The same loop, compiled slower"). Its test `programs\lazy`, 20 lines ok, sum
-  `1a4a1226`, runs on `rvc_cpu`.
+- `programs\lazy` tests fills and copies in every order on `rvc_cpu`: 20 lines ok, sum `1a4a1226`.
 - A change to the tick is measured whole, alternating with the tree, on the shell loop AND on
   Doom's timedemo: they disagree (two SBI calls in the general path: level, and 1.9% under).
   Nearly every change to the tick's function, however far from the fast loop, has cost 1 to
@@ -186,7 +183,7 @@
   `rvc_harness --cpu --warp`, still through `tools\gpu_queue.ps1`.
 
 - The fast step tells an instruction's kind by a tree of tests and a load has one way out
-  (`fast_exec_l1` in `emu.h`, `mem_get_cached_or_tex_l1` in `mem.h`; `docs/machine/tick-costs.md`, the
+  (`experiments/rvc_lean/tick.hlsl`; `docs/machine/tick-costs.md`, the
   sections of 13 October 2026). The text's form is the gain: the same tests as bools computed
   first were 4% slower, and operations counted do not say which way a shape goes. After any
   change to the fast loop's control flow run the three loads in turn from one snapshot (a

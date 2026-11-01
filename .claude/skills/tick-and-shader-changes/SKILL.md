@@ -5,7 +5,7 @@ description: Change and measure the ShaderEmu tick and its shaders (experiments/
 
 # Changing the tick
 
-Depth: `docs/machine/tick-costs.md` (costs and shape), `docs/machine/speed.md`, `docs/machine/fxc2.md`, `experiments/rvc_lean/README.md`, `experiments/rvc_lean/NOTES.md`.
+Depth: `docs/machine/tick-costs.md` (costs and shape), `docs/machine/speed.md`, `docs/machine/fxc2.md`, `experiments/rvc_lean/README.md`.
 
 Limits: VRChat, D3D11 DXBC, no UAVs in the fragment shader, no texture arrays. fxc2 may change, as long as it still compiles the harness, Unity, and the ShaderEmu and Poiyomi shaders its README measures. The whole stack is ours, so fix a cost at the cheapest layer: often a guest's source, not the tick.
 

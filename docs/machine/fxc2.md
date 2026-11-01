@@ -31,8 +31,7 @@ a newer FXC2 checkout and run the check at the end of this page.
 - The harness commits in bands (`COMMIT_BANDS`, a quad per 4 MB band something wrote to), and
   what the cores stored is drawn as points, a texel each (`multicore.md`, "The commit as points").
   `--no-bands` has the commit rewrite all of RAM; hashes taken without bands need it.
-- The fast loop leaves from where a thing is found out (`experiments/rvc_lean/NOTES.md`,
-  "How the tick is shaped"), and fxc2 puts the code behind a test of a flag where the flag
+- The fast loop leaves from where a thing is found out and fxc2 puts the code behind a test of a flag where the flag
   was set, when both sides of the branch before it leave a constant there: what is left of
   `if (!step()) break;` is one test.
 - The harness flushes at the end of a frame, so the GPU is not handed the frame only when the
@@ -51,7 +50,7 @@ states; with `--no-doubles` on D3D11 the hashes are equal.
 
 fxc2 also has `mulhi(a, b)`, `umulExtended(a, b, hi, lo)` and `imulExtended` (both halves of the
 product from one instruction), and struct member functions. The shader uses none of them:
-`mulhu32()` and `mulhs32()` in `src/emu.h` are four multiplications and a carry chain under both
+`mulhu32()` and `mulhs32()` in `experiments/rvc_lean/tick.hlsl` are four multiplications and a carry chain under both
 compilers, as a `umul` or `imul` is turned into an invalid SPIR-V module by the layers that run
 Direct3D on Linux (`docs/world/linux.md`).
 
