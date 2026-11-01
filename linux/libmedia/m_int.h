@@ -38,6 +38,9 @@ enum { M_PNG_RAW, M_PNG_ROWS, M_PNG_TABLES, M_JPEG_INTERVALS, M_JPEG_FOUND, M_JP
 void *m_scratch(int slot, uint32_t bytes);
 void m_scratch_done(int slot, void *memory, uint32_t bytes);
 
+/* One deflate stream on every core, without its CRC-32 (m_inflate.c): what `made` says is all of it, or a reason. */
+const char *m_inflate_stream_plain(const void *in, uint32_t in_size, void *out, uint32_t out_size, uint32_t *made, int workers);
+
 /* The output's pixel for red, green, blue, alpha (3 or 4 channels, either order). */
 static inline void
 m_put(const struct media_image *o, uint8_t *to, int r, int g, int b, int a)

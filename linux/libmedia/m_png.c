@@ -5,8 +5,11 @@
  *              deflate stream that refers to nothing before it and a first row filtered without
  *              the row above. Every core inflates and unfilters segments, in place; then the
  *              pixels are made over every core.
- *   one stream this core inflates (the longest step: it waits for nobody); workers follow it
- *              and take the filters off a band of the row each, and the last writes the pixels.
+ *   one stream a stream of 64 KB or more is inflated on every core (m_inflate.c), then workers take
+ *              the filters off a band of the row each, each a row behind the band before it, into
+ *              the pixels themselves where they are the rows, or then over every core. Smaller, or
+ *              a stream that cannot be shared: this core inflates, the workers follow it and the
+ *              last writes the pixels.
  *   interlaced this core inflates; the seven passes are unfiltered by a core each, and the
  *              pixels gathered from them over every core.
  */
@@ -16,6 +19,9 @@
 /* The private chunk: segments (a word), then each segment's first row (a word each). */
 #define SEGMENTS_CHUNK "mdPR"
 #define SEGMENTS_MOST 256
+#define M_BANDS 16
+#define WHOLE_LEAST 65536	/* a stream shorter than this is one core's: a part is 16 KB of it (m_inflate.c) */
+#define WHOLE_CHUNKS 4096	/* a stream in more IDATs than this too */
 
 struct png {
 	const uint8_t *file;
@@ -30,8 +36,8 @@ struct png {
 	uint8_t *raw, *rows;
 	uint32_t raw_bytes, rows_bytes;
 	int row_pitch;
-	volatile uint32_t *inflated, *banded[8];
-	int bands, band_at[9];
+	volatile uint32_t *inflated, *banded[M_BANDS];
+	int bands, band_at[M_BANDS + 1], whole;	/* whole: the stream is inflated already */
 	/* segments */
 	int segments;
 	struct codes *seg_tables;	/* three tables a core, made here before the jobs */
@@ -583,7 +589,98 @@ one_stream_stage(uint32_t k, uint32_t unused)
 	struct png *p = P;
 
 	(void)unused;
-	return !k ? inflate_job(0, 0) : k <= (uint32_t)p->bands ? unfilter_job(k - 1, 0) : pixels_job(0, 0);
+	if (!k)
+		return p->whole ? 0 : inflate_job(0, 0);
+	return k <= (uint32_t)p->bands ? unfilter_job(k - 1, 0) : pixels_job(0, 0);
+}
+
+/* The rows' pixels over every core, once all are unfiltered. */
+static void
+stream_pixels(void *ctx, uint32_t from, uint32_t to)
+{
+	struct png *p = ctx;
+	uint32_t y;
+
+	for (y = from; y < to; y++)
+		row_pixels(p, p->rows + y * (uint32_t)p->row_pitch, p->out->pixels + y * (uint32_t)p->out->stride);
+}
+
+/* Whether rows without their filters are the output's pixels as they stand, a band whole 16 bytes of them. */
+static int
+rows_are_pixels(const struct png *p)
+{
+	const struct media_image *o = p->out;
+
+	return p->depth == 8 && !((uintptr_t)o->pixels & 15) && o->stride == p->row_pitch &&
+	       ((p->type == 2 && !p->trns && o->channels == 3) || (p->type == 6 && o->channels == 4 && !o->bgr && !o->opaque));
+}
+
+/* The IDATs put together, whole 16 bytes on a core: 300 KB on one core ended 60 passes full. */
+struct joining { const uint8_t *file; uint8_t *to; uint32_t bytes, chunks; const uint32_t *at; };
+
+static void
+join_pieces(void *ctx, uint32_t from, uint32_t to)
+{
+	const struct joining *j = ctx;
+	uint32_t place = from * 16, end = to * 16 < j->bytes ? to * 16 : j->bytes, c = 0;
+
+	/* (at: pairs of where a chunk's bytes lie in the file, and where they go) */
+	while (c + 1 < j->chunks && j->at[2 * c + 3] <= place)
+		c++;
+	while (place < end) {
+		uint32_t in = place - j->at[2 * c + 1], left = (c + 1 < j->chunks ? j->at[2 * c + 3] : j->bytes) - place;
+
+		if (left > end - place)
+			left = end - place;
+		memcpy(j->to + place, j->file + j->at[2 * c] + in, left);
+		place += left, c++;
+	}
+}
+
+/*
+ * The whole stream into p->raw on every core. The IDAT chunks lie with headers between: a stream of
+ * one chunk is read where it lies, others are put together first. 0: not so, and one core is to do it.
+ */
+static int
+inflate_whole(struct png *p, uint32_t total, int workers)
+{
+	const uint8_t *f = p->file;
+	uint32_t at = p->first_idat, bytes = 0, chunks = 0, made = 0, length = 0, room = 0;
+	uint8_t *joined = NULL;
+	const uint8_t *in = f + at + 8;
+	int ok;
+
+	while (at + 12 <= p->size && !memcmp(f + at + 4, "IDAT", 4)) {
+		length = m_be32(f + at);
+		if (length > p->size - at - 12)
+			return 0;
+		bytes += length, chunks++;
+		at += 12 + length;
+	}
+	if (bytes < WHOLE_LEAST || workers < 1 || chunks > WHOLE_CHUNKS)
+		return 0;
+	if (chunks > 1) {
+		struct joining j;
+		uint32_t *table, c, put = 0;
+
+		room = ((bytes + 15) & ~15u) + chunks * 8;
+		if (!(joined = m_map(room)))
+			return 0;
+		table = (uint32_t *)(joined + ((bytes + 15) & ~15u));
+		for (at = p->first_idat, c = 0; c < chunks; c++, at += 12 + length) {
+			length = m_be32(f + at);
+			table[2 * c] = at + 8, table[2 * c + 1] = put;
+			put += length;
+		}
+		j.file = f, j.to = joined, j.bytes = bytes, j.chunks = chunks, j.at = table;
+		m_for((bytes + 15) / 16, join_pieces, &j, 16, workers);
+		in = joined;
+	}
+	/* (past the zlib header; a stream that cannot be shared or says otherwise is read again by one core) */
+	ok = !m_inflate_stream_plain(in + 2, bytes - 2, p->raw, total, &made, workers) && made == total;
+	if (joined)
+		m_unmap(joined, room);
+	return ok;
 }
 
 /* ---------------------------------------------------------------- segments */
@@ -805,15 +902,15 @@ m_png_decode(const uint8_t *f, uint32_t size, struct media_image *out, int worke
 	line = (uint32_t)p->row_bytes + 1;
 	/* (the stages' counts, made once and kept) */
 	{
-		static volatile uint32_t *failed, *inflated, *banded[8];
+		static volatile uint32_t *failed, *inflated, *banded[M_BANDS];
 
 		if (!failed) {
 			failed = mcw_alloc(16), inflated = mcw_alloc(16);
-			for (k = 0; k < 8; k++)
+			for (k = 0; k < M_BANDS; k++)
 				banded[k] = mcw_alloc(16);
 		}
 		p->failed = failed, p->inflated = inflated;
-		for (k = 0; k < 8; k++)
+		for (k = 0; k < M_BANDS; k++)
 			p->banded[k] = banded[k];
 	}
 	*p->failed = 0;
@@ -883,17 +980,35 @@ m_png_decode(const uint8_t *f, uint32_t size, struct media_image *out, int worke
 				m_for((uint32_t)p->h, interlaced_pixels, p, (uint32_t)out->stride, got);
 		}
 	} else {
+		uint32_t total = line * (uint32_t)p->h;
+		int want = workers > M_BANDS ? M_BANDS : workers, direct;
+
 		p->row_pitch = (p->row_bytes + 15) & ~15;
-		p->raw_bytes = line * (uint32_t)p->h + 16;
+		p->raw_bytes = total + 16;
 		p->rows_bytes = (uint32_t)p->row_pitch * (uint32_t)p->h;
-		p->raw = m_scratch(M_PNG_RAW, p->raw_bytes + 16);
-		p->rows = m_scratch(M_PNG_ROWS, p->rows_bytes + 3 * sizeof(struct codes) + 16);
-		if (!p->raw || !p->rows)
+		if (!(p->raw = m_scratch(M_PNG_RAW, p->raw_bytes + 16)))
 			return "not enough memory for the picture";
 		*p->inflated = 0;
-		got = m_workers_begin(workers > 5 ? 5 : workers);
-		/* a band a worker but the last, which writes the pixels; a band is 96 bytes of a row or more */
-		p->bands = got >= 2 ? got - 1 : 1;
+		/* (a large stream has a part a core, up to all it is given) */
+		if (workers > want && size / 16384 > (uint32_t)want)
+			want = (int)(size / 16384) < workers ? (int)(size / 16384) : workers;
+		got = m_workers_begin(size >= WHOLE_LEAST ? want : workers > 5 ? 5 : workers);
+		p->whole = !getenv("MEDIA_PNG_ONE") && inflate_whole(p, total, got);
+		direct = p->whole && rows_are_pixels(p);
+		p->rows = direct ? out->pixels : m_scratch(M_PNG_ROWS, p->rows_bytes + 3 * sizeof(struct codes) + 16);
+		if (!p->rows) {
+			m_workers_end();
+			m_scratch_done(M_PNG_RAW, p->raw, p->raw_bytes + 16);
+			return "not enough memory for the picture";
+		}
+		/* a band a worker (the last writes the pixels, with one core inflating); a band is 96 bytes of a row or more */
+		p->bands = p->whole ? got : got - 1;
+		if (!p->whole && p->bands > 4)
+			p->bands = 4;
+		if (p->bands > M_BANDS)
+			p->bands = M_BANDS;
+		if (p->bands < 1)
+			p->bands = 1;
 		while (p->bands > 1 && p->row_bytes / p->bands < 96)
 			p->bands--;
 		for (k = 0; k < p->bands; k++) {
@@ -901,8 +1016,18 @@ m_png_decode(const uint8_t *f, uint32_t size, struct media_image *out, int worke
 			*p->banded[k] = 0;
 		}
 		p->band_at[p->bands] = p->row_bytes;
-		/* the longest stage is this core's own: it waits for nobody until the end */
-		m_stages((uint32_t)p->bands + 2, one_stream_stage, got);
+		if (p->whole) {
+			*p->inflated = total;
+			/* (no stage of pixels: those come after, or are these) */
+			m_stages((uint32_t)p->bands + 1, one_stream_stage, got);
+			if (!direct && !*p->failed)
+				m_for((uint32_t)p->h, stream_pixels, p, (uint32_t)out->stride, got);
+		} else {
+			/* the longest stage is this core's own: it waits for nobody until the end */
+			m_stages((uint32_t)p->bands + 2, one_stream_stage, got);
+		}
+		if (direct)
+			p->rows = NULL;
 	}
 	if (!why && *p->failed)
 		why = "the picture is damaged";
