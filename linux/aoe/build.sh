@@ -53,7 +53,7 @@ one() {
     if [ ! -f "$o" ] || [ "$f" -nt "$o" ] || [ "$newest" -nt "$o" ]; then
         rm -f "$o"
         case "$f" in
-            */window.c) rv32-cc -O2 -fno-pie -w -g -I$HERE/port -idirafter $REPO/programs/linux/include -I$WORK/src/microwindows/src/include -I$REPO/linux/userland -c "$f" -o "$o" 2>&1 | grep -E 'error' | head -20 || true ;;
+            */window.c) rv32-cc -O2 -fno-pie -w -g -I$HERE/port -I$REPO/linux/apps -idirafter $REPO/programs/linux/include -I$WORK/src/microwindows/src/include -I$REPO/linux/userland -c "$f" -o "$o" 2>&1 | grep -E 'error' | head -20 || true ;;
             *.cpp) rv32-c++ $FLAGS -c "$f" -o "$o" 2>&1 | grep -E 'error' | head -20 || true ;;
             *) rv32-cc $CFLAGS -c "$f" -o "$o" 2>&1 | grep -E 'error' | head -20 || true ;;
         esac

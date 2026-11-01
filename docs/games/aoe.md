@@ -1,6 +1,6 @@
 # Age of Empires, the 1997 trial
 
-The decompiled game (`github.com/dcostap/aoe1-decomp`, pinned at `6d6d8b1`; the plan read `f4fdf3f`) over a Win32 and DirectDraw layer of our own, with the data of the trial (`docs/plans/aoe-plan.md`). It starts on the desktop and plays. It has no sound, draws its view on a worker core, and plays at 11 to 15 frames a second on the card ("Speed in play").
+The decompiled game (`github.com/dcostap/aoe1-decomp`, pinned at `6d6d8b1`; the plan read `f4fdf3f`) over a Win32 and DirectDraw layer of our own, with the data of the trial (`docs/plans/aoe-plan.md`). It opens as a window of 640 x 480 on the desktop and plays, with its sound effects on the sound card and the map dragged by the right button ("Windowed", "Sound", "Controls"). It draws its view on a worker core, and at 800 x 600 played at 11 to 15 frames a second on the card ("Speed in play").
 
 **No game data in the repository.** The data is under the trial's EULA, and the code is recovered from Microsoft's binary. Nothing of the game or the trial is committed: only the port, the patch and the tools. The program is not in `ALL` in `linux/nommu/build.sh` or in `linux/prebuilt`. The trial's `Empires.exe` is not read at all. The game's own `verify_cd` is set to 0, because the trial has no CD.
 
@@ -34,7 +34,7 @@ The program alone:
 
 - Its `Empires.dat` says `VER 3.4`, and the game's 3.7 reader reads it to the exact byte (758,114). Only the version check changed, so no converter is needed: `dat34.py` copies.
 - 12 civilizations and Gaia, and 5 random maps; a type past the last is map 0.
-- Full pictures only for 800 x 600, so that is the only mode. On an 800 x 600 desktop the window has a frame like any program's, with its sides off the screen (`docs/system/nanox.md`), and it is kept above the bar, so the game's picture is whole.
+- Full pictures only for 800 x 600: `0xC62D` to `0xC630`, the game screens for 640 x 480, and the menus' are not in `Interfac.drs` ("Windowed").
 - No `BLKEDGE.DAT` (edges black) and no Roman button (`0xcf0d` is `0xc610`). Other `0xCF..` resources of the game screen are the Rise of Rome cultures' and have not been checked one by one.
 - `data2\*.drs` are reported missing at each start. It is harmless.
 - `rand()` is MSVC's (`aoe_rand`): the game divides by `0x7FFF`.
@@ -49,10 +49,14 @@ The program alone:
 | `AOE_STATS_MS=N`, `AOE_PLAYERS=1`, `AOE_DEBUG=1` | `aoestat:`, players' resources, panels by time |
 | `AOE_DUMP=FILE`, `AOE_DUMP_EVERY=N` | pictures under qemu |
 | `AOE_BACK=copy` | the drawing surface apart from the page, as on Windows |
+| `AOE_SIZE=800` | 800 x 600, above the bar: the way before; else the window of 640 x 480 ("Windowed") |
+| `AOE_SCROLL=edge` | the map scrolls at the window's edges, and by the game's own right drag with nothing selected: the way before ("Controls") |
+| `AOE_SOUND=0`, `AOE_SOUND_LOG=1` | no sound; `aoesnd:` each wave found, played and seen to end (`python tools/aoe_sound_check.py LOG IMAGE`, "Sound") |
+| `AOE_INPUT_LOG=1` | `aoeinput:` an order, a box and a drag, each with its places; the script's `view` step prints `aoeview:` where the view stands and how many are selected |
 
-`test_all.py aoe --image build/images/NAME` plays the script below to update 1000. An image with no data prints `AOE-NO-DATA` and passes.
+`test_all.py aoe --image build/images/NAME` plays the script below to update 1000 (at 800 x 600), `aoe-640` the same at the window's size, and `aoe-drag` the controls. An image with no data prints `AOE-NO-DATA` and passes.
 
-The script starts a Random Map game, sends a villager to a tree and trains a villager:
+The script starts a Random Map game, sends a villager to a tree and trains a villager. At 640 x 480 the menus' places are times 0.8, the view's 80 and 60 less and the bottom panel's 120 up (`AOE_PLAY_640` in `tools/game_par.py`), and the sums are the same: `5032c153` at update 1000.
 
     3000 click 400 245;3000 click 400 172;3000 click 237 568;2000 click 369 118;1000 rclick 505 170;1000 click 370 215;1000 click 163 508
 
@@ -215,6 +219,43 @@ undone in the game's script run; 3 near places not named. On the desktop one und
 pointer worker (`wm_job`, `scr_shaderemu.c`) and its first core (`cursor_put`) on the cursor's registers, not the game's;
 `wm_job` writes again what differs, so it heals.
 
+## Windowed
+
+The game opens as an ordinary window of 640 x 480, the size its code calls its least, in the frame and with the bar's button of any program; the frame is 646 x 509 on the 800 x 600 desktop. It is `GR_WM_PROPS_ONTOP` only on a screen with no room for the frame and the bar (under 538 rows), one copy runs (`ui_single_instance`: a second start brings the first forward), and an unmapped window draws no list. `AOE_SIZE=800` is the way before, on top of the bar.
+
+The game's code has a layout for 640 x 480 (`TRIBE_Screen_Game::handle_size`), but the trial has no pictures for it. So:
+
+- The game screen's two bands are cut from the 800 x 600 picture (`aoe_picture_cut`): the top bar without its columns 376 to 535, the bottom panel without 406 to 565, which the layout's places fit to the pixel. What is drawn is kept as before.
+- A menu's background is the middle of the picture for 800 x 600 (`background_pos` 1, in `TEasy_Panel::setup`): the title's top is cut off.
+- At that size the buttons are five columns, with "more" and "cancel" over the map's corners (`button_other_pic`), as the code lays them out.
+- The victory and "history" screens ask for `bgA640` (`scr_end.cpp`, `scr_trb.cpp`): they were not looked at, and are likely to have no picture.
+
+The smaller view is faster. `game_par.py aoe-play` and `aoe-play-800` calibrated, on a model fitted to an older tick so only the comparison counts, six timings each, alternating, frames a second over the acts: 12.3 at 800 x 600 before this work, 12.1 at 800 x 600 now, 15.5 in the window (14.7 to 17.0). The acts are not quite the same: the window's two scroll acts are drags, the 800's rest at the edges.
+
+## Controls
+
+The rules are the porting skill's ("Controls for VR"). What a hand has is a beam that drives the pointer: trigger the left button, grip the right one, and no edge to rest on.
+
+- **No scrolling at the edges** (`info.auto_scroll` 0): a pointer resting on the window's edge moves nothing.
+- **The right button dragged moves the map**, a pixel for a pixel (scroll action 10, `RGE_View::handle_scroll_view`; a tile is 64 x 32): the map goes with the hand, from where it stood at the press. The right button, because the left drag is the game's box, because the grip is a hand's natural hold, and because Tiberian Dawn and Red Alert already do the same. It works because the game gives its right-click order at the release: `TPanel` holds a press back for 10 pixels, past them `mouse_action` is 3 and the release orders nothing. So a press that stays within 10 pixels is an order (the steady pointer holds a press for 7), the selection stays through a drag, and a building being placed stays. The game's own right drag worked only with nothing selected, and moved the cursor back with `SetCursorPos`, which a beam does not follow.
+- **While a button is held** the pointer and the release come from the machine's words (`held_by_words` in `host.cpp`), which go on past the window's sides, where a beam stays on the display's edge with the button down (`EmuPointer`, `onEdge`). Only for a press those words have shown: `nxkey`'s presses are not in them.
+- The minimap's click and the keyboard's arrows move the view as ever.
+- `AOE_SCROLL=edge` is the way before.
+
+`test_all.py aoe-drag` holds this: a right click is an order, a drag by -200,-100 moves the view 0, +6.25 tiles and gives no order, the unit stays selected for the next one, a left drag is a box, and the pointer at the window's right edge for 9 s moves nothing. `tools/aoe_play.py`'s `scroll` acts are that drag by `nxkey rdrag:`. `aoe_play.py` prints the view's place for each drag. A pointer's move came to the game in about 80 ms on those acts, as on the others.
+
+Not tried in a headset, nor at all in Unity: the beam, the grip and the steady pointer are read from `EmuPointer.cs` only. Dragged in the machine's words by `rvc_cpu --pointer-button`: `--pointer-circle 620,250,120 --pointer-button 2,77,78.5` pressed at 457,195 of the window and logged a drag of 239,3, which ends past the window's right side, and the view moved. A press logs the buttons word (`aoeinput: press`), which said 0 in these runs, and the case does not separate the words' path from Nano-X's own hold on the pointer. The game's start is about 40 s of the guest's in, and a right button held during the menus stopped the script's clicks from starting a game..
+
+## Sound
+
+A sound is a voice pointed at its wave where it lies in the ROM (`port/sound.cpp`, the game's `DirectSound` buffers; `TDigital::load` in `Sounddrv.cpp` asks `aoe_sound_load` and copies nothing). 141 waves of `Sounds.drs`, 14 of `Interfac.drs` and five files of their own; 16 voices, the one begun longest ago given up; the game's pan and volume by its numbers, and the options' slider where Windows had a mixer. No memory: a wave's first bytes are read once, and `Play` is a few stores.
+
+A card's 16-bit samples must lie on an even address and most of the trial's waves did not, so `make_data.py` writes the two DRS files with every item on an even offset (`write_drs_even`), padding only. An image made from an older cache says so. A plain image is not touched by any of this.
+
+`AOE_SOUND_LOG=1` says each wave played and when its voice was seen to end, and `python tools/aoe_sound_check.py LOG IMAGE` reads each address from the image's ROM as the card will and finds that the samples are a wave of the trial, whole: on `aoe-play`, 8 plays of 6 waves, 0 not of the trial, 0 of silence, 8 seen to end and none in under half their length, each after the act that asks for one. What was heard was not checked: the check goes by the addresses, and no mix was captured. Over the same six timings the window gave 15.5 frames a second with sound and 16.1 with `AOE_SOUND=0`, inside the spread between timings (14.3 to 17.9 silent).
+
+Music is not played. The trial has 12 MIDI files and no instruments, and Windows' MCI played them: on this machine it means OpenTTD's driver (`shaderemu_m.cpp`, 450 lines, a MIDI reader), DMXOPL's bank fetched at build time, 20 voices of the card's 32, and a worker that makes a song's tracks. `info.use_music` is 0. That is the cost of it, and none of it is in the game's frames once a song is made; it was not tried.
+
 ## What ends a round
 
 A world runs a fixed number of rounds a Unity frame, so a pass that ends early loses the rest of its instructions there; in the harness it costs 0.2 ms, and the card's figures do not show it. `RVC_PASSLOG` on `rvc_cpu` says who ended each pass, and `reached` in `EmuMachine` is the share a round ran in the world.
@@ -246,6 +287,6 @@ The cursor is the game's own, drawn into its picture, and it is in captures from
 
 ## Not done
 
-- Sound and music: `DirectSoundCreate` fails and the game runs silent. `docs/machine/sound.md` is the way.
+- Music ("Sound").
 - `linux/nommu/memory.py`.
 - Saving, multiplayer (DirectPlay stubs) and scenarios were not tried. Computer players gather and build over 5 game minutes; a whole game was not played.

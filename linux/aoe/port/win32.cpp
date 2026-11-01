@@ -229,7 +229,9 @@ extern "C" LPVOID MapViewOfFile(HANDLE m, DWORD, DWORD, DWORD, DWORD) {
     int fd = (int) (long) m - 1;
     long n = lseek(fd, 0, SEEK_END);
     void* p = mmap(0, n, PROT_READ, MAP_PRIVATE, fd, 0);
-    return p == MAP_FAILED ? 0 : p;
+    if (p == MAP_FAILED) return 0;
+    aoe_sound_mapped(p, n, fd);
+    return p;
 }
 extern "C" BOOL UnmapViewOfFile(LPCVOID) { return 1; }
 extern "C" BOOL FileTimeToSystemTime(const FILETIME*, LPSYSTEMTIME t) { memset(t, 0, sizeof *t); t->wYear = 1997; t->wMonth = 10; t->wDay = 1; return 1; }
@@ -649,7 +651,7 @@ LRESULT DispatchMessage(const MSG* m) {
     if (m->message == WM_CHAR && focus_wnd && focus_wnd->proc == edit_proc) return send_to(focus_wnd, m->message, m->wParam, m->lParam);
     return send_to(w, m->message, m->wParam, m->lParam);
 }
-void PostQuitMessage(int) { quitting = 1; }
+void PostQuitMessage(int) { fprintf(stderr, "aoe: quit asked from %p\n", __builtin_return_address(0)); quitting = 1; }
 BOOL PostMessage(HWND h, UINT m, WPARAM a, LPARAM b) {
     // As Windows does: moves not yet taken are one move. Each message is a look at the game's idle work, a whole frame.
     static int moves_all = -1;

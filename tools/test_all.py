@@ -38,6 +38,10 @@ KINDS_T = ('mkdir -p /tmp/t; cd /tmp/t; cp "/root/Music/Grieg - Hall of the Moun
            'for e in tga pnm pbm oga vqa xyz; do echo x > a.$e; done; chmod +x *; cd /; ')
 
 
+# Age of Empires' script at its window's size (tools/game_par.py has the same)
+AOE_640 = '3000 click 320 196;3000 click 320 138;3000 click 190 454;2000 click 289 58;1000 rclick 425 110;1000 click 290 155;1000 click 163 388'
+
+
 def case(name, tags, cmd, workers=False, until='LX-DONE', more=(), wall=240, image=None, env=None, **checks):
     return dict(name=name, tags=set(tags.split()), cmd=cmd, workers=workers, until=until, more=list(more), wall=wall,
                 image=image, env=env or {}, **checks)
@@ -257,9 +261,21 @@ CASES = [
     # blitter's (OPENTTD_DRAW=cpu): rvc_cpu draws no GPU list, and the GPU's picture is checked under rvc_harness --cpu --warp
     # ("The picture on the GPU")
     # Age of Empires is on images made with --aoe only (docs/games/aoe.md): an image without its data says so and passes
-    case('aoe', 'games aoe', X + 'if [ -f /usr/share/aoe/Empires.dat ]; then AOE_VIEW=inline AOE_TICK_MS=33 AOE_SUM_EVERY=500 AOE_SUM_END=1000 '
+    case('aoe', 'games aoe', X + 'if [ -f /usr/share/aoe/Empires.dat ]; then AOE_SIZE=800 AOE_VIEW=inline AOE_TICK_MS=33 AOE_SUM_EVERY=500 AOE_SUM_END=1000 '
          'AOE_SCRIPT="3000 click 400 245;3000 click 400 172;3000 click 237 568;2000 click 369 118;1000 rclick 505 170;1000 click 370 215;1000 click 163 508" aoe; else echo AOE-NO-DATA; fi',
          wall=120, has=[r'^(aoesum: update 1000 time 99900 objects 4357 sum 5032c153|AOE-NO-DATA)']),
+    # the window it opens as, 640 x 480 (docs/games/aoe.md, "Windowed"): the same game by the same script, at this size's places
+    case('aoe-640', 'games aoe', X + 'if [ -f /usr/share/aoe/Empires.dat ]; then AOE_VIEW=inline AOE_TICK_MS=33 AOE_SUM_EVERY=500 AOE_SUM_END=1000 '
+         'AOE_SCRIPT="' + AOE_640 + '" aoe; else echo AOE-NO-DATA; fi',
+         wall=120, has=[r'^(aoesum: update 1000 time 99900 objects 4357 sum 5032c153|AOE-NO-DATA)']),
+    # the map by the right button ("Controls"): a click is an order, a drag moves the view a pixel for a pixel and gives none, the selection stays
+    # (the order after the drag has 1 selected), the left button's box is a box, the pointer at the window's edge and held there moves nothing
+    case('aoe-drag', 'games aoe', X + 'if [ -f /usr/share/aoe/Empires.dat ]; then AOE_TICK_MS=33 AOE_INPUT_LOG=1 AOE_SCRIPT="' + AOE_640.rsplit(';', 4)[0] + ';3000 ready;9000 view;9000 view;9000 view" aoe & '
+         'while [ ! -e /tmp/aoe-ready ];do sleep 1;done;read OX OY </tmp/aoe-ready;sleep 2;nxkey $((OX+289)),$((OY+58));sleep 1;nxkey wheel:$((OX+639)),$((OY+200)):0;sleep 10;nxkey wheel:$((OX+300)),$((OY+200)):0;sleep 2;'
+         'nxkey r:$((OX+425)),$((OY+110));sleep 3;nxkey rdrag:$((OX+400)),$((OY+200)):$((OX+200)),$((OY+100));sleep 4;nxkey r:$((OX+380)),$((OY+150));sleep 3;'
+         'nxkey drag:$((OX+220)),$((OY+40)):$((OX+420)),$((OY+240));sleep 4;killall aoe.bin;else echo AOE-NO-DATA; fi', wall=300,
+         has=[r'^(aoeinput: order 425 110 1 0|AOE-NO-DATA)', r'^(aoeinput: drag -200 -100 0 625|AOE-NO-DATA)', r'^(aoeinput: order 380 150 1 0|AOE-NO-DATA)', r'^(aoeinput: box 220 40 420 240|AOE-NO-DATA)',
+              r'^(aoeview: (\d+ \d+) selected 1\s+(?:aoe: step.*\s+)?aoeview: \2 selected 1|AOE-NO-DATA)']),
     case('openttd-scroll', 'games openttd', X + 'OPENTTD_DRAW=cpu OPENTTD_PLAY=1 OPENTTD_PLAY_ODD=1 OPENTTD_PAUSE=1 OPENTTD_CHECK=1 openttd -g /usr/share/openttd/busy.sav',
          True, wall=400, has=[r'openttd: play round 1: .*checked (19\d|200), 0 differ \(0 pixels']),
     case('openttd-scroll-serial', 'games openttd', X + 'OPENTTD_DRAW=cpu OPENTTD_PLAY=1 OPENTTD_PAUSE=1 OPENTTD_CHECK=1 OPENTTD_WORKERS=0 openttd -g /usr/share/openttd/busy.sav',

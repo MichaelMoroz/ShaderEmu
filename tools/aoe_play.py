@@ -34,6 +34,12 @@ def main(path):
         print(f'{name:18} {ms(came):>6} {ms(taken):>6} {taken[4] if taken else 0:>5} {ms(after[0] if after else None):>6} '
               f'{ms(after[1] if len(after) > 1 else None):>6} {ms(shown):>6} {fps:>5.1f} {per:>8.0f} {len(moves):>6} '
               f'{max((r[4] for r in moves), default=0):>8} {worst:>11}')
+    # (V: the view's place, hundredths of a tile, at each step of a drag of the map by the right button: "Controls")
+    for i, (name, t0) in enumerate(acts):
+        t1 = acts[i + 1][1] if i + 1 < len(acts) else t0 + 5000
+        steps = [r for r in rec if r[3] == 'V' and t0 <= r[0] < t1]
+        if steps:
+            print(f'{name}: the map dragged, {len(steps)} steps in {steps[-1][0] - steps[0][0]} ms, the view to {steps[-1][4]} {steps[-1][5]}')
     pics = [r for r in rec if r[3] == 'P' and acts and r[0] >= acts[0][1]]
     if len(pics) > 1:
         span = pics[-1][0] - pics[0][0]
