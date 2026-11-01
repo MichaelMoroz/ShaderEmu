@@ -2128,10 +2128,10 @@ index f9c20ea..7ba7870 100644
  #endif
 \ No newline at end of file
 diff --git a/tiberiandawn/conquer.cpp b/tiberiandawn/conquer.cpp
-index a8aebd8..912d76b 100644
+index a8aebd8..2c95ebb 100644
 --- a/tiberiandawn/conquer.cpp
 +++ b/tiberiandawn/conquer.cpp
-@@ -98,6 +98,660 @@ extern void Send_Statistics_Packet(void);
+@@ -98,6 +98,663 @@ extern void Send_Statistics_Packet(void);
  extern char* __nheapbeg;
  bool InMainLoop = false;
  
@@ -2696,13 +2696,15 @@ index a8aebd8..912d76b 100644
 +        ** the scene drew anew and put into the atlas, said when the run ends */
 +        static unsigned (*log)[10], logged, was[10];
 +        static int on = -1;
-+        unsigned now[10] = {cycles, ShaderEmu_Logic_Cycles, ShaderEmu_Draw_Cycles, ShaderEmu_GL_Cycles,
-+                            ShaderEmu_GL_Parts[0], ShaderEmu_GL_Parts[1], ShaderEmu_GL_Parts[2],
-+                            ShaderEmu_GL_Objects[2], ShaderEmu_GL_Put[0], ShaderEmu_GL_Put[1]};
 +        if (on < 0) {
 +            on = getenv("TDAWN_FRAME_LOG") != NULL;
 +            log = on ? (unsigned (*)[10])calloc(8192, sizeof *log) : NULL;
-+        } else if (log && logged < 8192) {
++        }
++        if (on) {
++        unsigned now[10] = {cycles, ShaderEmu_Logic_Cycles, ShaderEmu_Draw_Cycles, ShaderEmu_GL_Cycles,
++                            ShaderEmu_GL_Parts[0], ShaderEmu_GL_Parts[1], ShaderEmu_GL_Parts[2],
++                            ShaderEmu_GL_Objects[2], ShaderEmu_GL_Put[0], ShaderEmu_GL_Put[1]};
++        if (log && logged < 8192) {
 +            for (int i = 0; i < 10; i++) {
 +                log[logged][i] = now[i] >= was[i] ? now[i] - was[i] : now[i];
 +            }
@@ -2715,6 +2717,7 @@ index a8aebd8..912d76b 100644
 +                        log[i][0], log[i][1], log[i][2], log[i][3], log[i][4], log[i][5], log[i][6], log[i][7], log[i][8],
 +                        log[i][9]);
 +            }
++        }
 +        }
 +    }
 +    if (cap || (stop && getenv("TDAWN_NO_DELAY"))) {
@@ -2792,7 +2795,7 @@ index a8aebd8..912d76b 100644
  #ifndef ARRAY_SIZE
  #define ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
  #endif
-@@ -1126,12 +1780,31 @@ bool Color_Cycle(void)
+@@ -1126,12 +1783,31 @@ bool Color_Cycle(void)
      static CountDownTimerClass _ftimer(BT_SYSTEM, 0);
      static bool _up = false;
      bool changed = false;
@@ -2825,7 +2828,7 @@ index a8aebd8..912d76b 100644
          _ftimer.Set(TIMER_SECOND / 8);
  
  /*
-@@ -1165,7 +1838,7 @@ bool Color_Cycle(void)
+@@ -1165,7 +1841,7 @@ bool Color_Cycle(void)
      /*
      **	Process the color cycling effects -- water.
      */
@@ -2834,7 +2837,7 @@ index a8aebd8..912d76b 100644
          unsigned char colors[3];
  
          _timer.Set(TIMER_SECOND / 4);
-@@ -1184,6 +1857,12 @@ bool Color_Cycle(void)
+@@ -1184,6 +1860,12 @@ bool Color_Cycle(void)
      */
      if (changed) {
          Wait_Vert_Blank();
@@ -2847,7 +2850,7 @@ index a8aebd8..912d76b 100644
          Set_Palette(GamePalette);
          return (true);
      }
-@@ -1222,6 +1901,20 @@ void Call_Back(void)
+@@ -1222,6 +1904,20 @@ void Call_Back(void)
      if (SampleType) {
          Theme.AI();
          Speak_AI();
@@ -2868,7 +2871,7 @@ index a8aebd8..912d76b 100644
      }
  
  #ifdef NETWORKING
-@@ -1516,7 +2209,7 @@ static void Sync_Delay(void)
+@@ -1516,7 +2212,7 @@ static void Sync_Delay(void)
              if (input) {
                  Keyboard_Process(input);
              }
@@ -2877,7 +2880,7 @@ index a8aebd8..912d76b 100644
          }
  
          Frame_Limiter(FL_NONE);
-@@ -1611,12 +2304,18 @@ bool Main_Loop()
+@@ -1611,12 +2307,18 @@ bool Main_Loop()
      } else {
          FrameTimer.Set(Options.GameSpeed);
      }
@@ -2896,7 +2899,7 @@ index a8aebd8..912d76b 100644
  
              WWMouse->Erase_Mouse(&HidPage, true);
              Map.Input(input, x, y);
-@@ -1624,7 +2323,24 @@ bool Main_Loop()
+@@ -1624,7 +2326,24 @@ bool Main_Loop()
                  Keyboard_Process(input);
              }
              //			HidPage.Lock();
@@ -2922,7 +2925,7 @@ index a8aebd8..912d76b 100644
              //			HidPage.Unlock();
          }
      }
-@@ -1650,7 +2366,17 @@ bool Main_Loop()
+@@ -1650,7 +2369,17 @@ bool Main_Loop()
      /*
      **	AI logic operations are performed here.
      */
@@ -2941,7 +2944,7 @@ index a8aebd8..912d76b 100644
  
      //	Heap_Dump_Check( "After Logic.AI" );
  
-@@ -1659,8 +2385,24 @@ bool Main_Loop()
+@@ -1659,8 +2388,24 @@ bool Main_Loop()
      **	a message has expired & been removed, and the entire map must be updated.
      */
      if (Messages.Manage()) {
@@ -2968,7 +2971,7 @@ index a8aebd8..912d76b 100644
      }
  
      //
-@@ -1710,6 +2452,9 @@ bool Main_Loop()
+@@ -1710,6 +2455,9 @@ bool Main_Loop()
          PlayerRestarts = false;
          Map.Help_Text(TXT_NONE);
          Set_Video_Cursor_Clip(false);
@@ -2978,7 +2981,7 @@ index a8aebd8..912d76b 100644
          Do_Win();
          Set_Video_Cursor_Clip(true);
      }
-@@ -1726,6 +2471,9 @@ bool Main_Loop()
+@@ -1726,6 +2474,9 @@ bool Main_Loop()
          PlayerRestarts = false;
          Map.Help_Text(TXT_NONE);
          Set_Video_Cursor_Clip(false);
@@ -2988,7 +2991,7 @@ index a8aebd8..912d76b 100644
          Do_Lose();
          Set_Video_Cursor_Clip(true);
      }
-@@ -1736,6 +2484,9 @@ bool Main_Loop()
+@@ -1736,6 +2487,9 @@ bool Main_Loop()
          PlayerRestarts = false;
          Map.Help_Text(TXT_NONE);
          Set_Video_Cursor_Clip(false);
@@ -2998,7 +3001,7 @@ index a8aebd8..912d76b 100644
          Do_Restart();
          Set_Video_Cursor_Clip(true);
      }
-@@ -2242,6 +2993,10 @@ void Play_Movie(char const* name, ThemeType theme, bool clrscrn)
+@@ -2242,6 +2996,10 @@ void Play_Movie(char const* name, ThemeType theme, bool clrscrn)
                  InMovie = true;
                  VQA_Play(vqa, VQAMODE_RUN);
                  VQA_Close(vqa);
@@ -3009,7 +3012,7 @@ index a8aebd8..912d76b 100644
                  // Resume_Audio_Thread();
                  InMovie = false;
                  Free_Interpolated_Palettes();
-@@ -2642,6 +3397,70 @@ void CC_Draw_Line(int x, int y, int x1, int y1, unsigned char color, int frame,
+@@ -2642,6 +3400,70 @@ void CC_Draw_Line(int x, int y, int x1, int y1, unsigned char color, int frame,
   *   02/21/1995 JLB : Created.                                                                 *
   *=============================================================================================*/
  //#pragma off(unreferenced)
@@ -3080,7 +3083,7 @@ index a8aebd8..912d76b 100644
  void CC_Draw_Shape(void const* shapefile,
                     int shapenum,
                     int x,
-@@ -2656,6 +3475,19 @@ void CC_Draw_Shape(void const* shapefile,
+@@ -2656,6 +3478,19 @@ void CC_Draw_Shape(void const* shapefile,
      char* shape_pointer;
      uintptr_t shape_size;
  
@@ -3100,7 +3103,7 @@ index a8aebd8..912d76b 100644
      if (shapefile && shapenum != -1) {
  
          /*
-@@ -3976,6 +4808,21 @@ void Shake_The_Screen(int shakes, HousesType house)
+@@ -3976,6 +4811,21 @@ void Shake_The_Screen(int shakes, HousesType house)
      }
  #else
      shakes += shakes;
