@@ -550,7 +550,7 @@ Measured on `rvc_cpu` at 2 MIPS, a save and the load of what it wrote, the sum a
 | new, 64 x 64 | `none` | 91,923 | 1.6 s | 10.1 s | 20.8 KB, the game's file alone |
 | | `lzma:2` | 15,576 | 8.8 s | 11.5 s | about its file's size |
 
-So a kept folder holds about four small games and not six. `OPENTTD_SAVE_AT=N:FILE` (`OPENTTD_SAVE_FORMAT=lzma`) saves at tick N as the Save window does and writes the sum beside it, `OPENTTD_LOAD_CHECK=FILE.sum` compares after a load: `test_all.py openttd-save`.
+It happened as the player saw it: on the desktop with the game loaded, `lzma:2` said `lzma_ret 5` (out of memory), 16,879,783 bytes asked, without the switch, and the game was saved in `none`. So a kept folder holds about four small games and not six. `OPENTTD_SAVE_AT=N:FILE` (`OPENTTD_SAVE_FORMAT=lzma`) saves at tick N as the Save window does and writes the sum beside it, `OPENTTD_LOAD_CHECK=FILE.sum` compares after a load: `test_all.py openttd-save`.
 
 ### Round four: copies near the views, a tick's end without a hold
 
@@ -577,6 +577,18 @@ Calibrated, 1 November 2026, model of October (fitted on the old tick: ratios be
 | vehicle windows | 15.09, 31.00 | 6.15, 10.48 | 2.05, 1.70 |
 | building | 14.06, 26.88 | 5.81, 9.41 | 1.91, 1.62 |
 | zoomed out | 7.51, 11.17 | 3.42, 6.52 | 1.49, 1.91 |
+
+On the card (RTX 5070 Laptop, lean tick, `--d3d11 --unity 11.1,1.4,0.75`, `OPENTTD_PLAY=2`, second rounds, two runs each alternating with main): the table above does not hold there, the model being the old tick's.
+
+| Scene | Pictures a second, main | after | Ticks a picture, main | after |
+|---|---|---|---|---|
+| scroll | 25.2, 26.1 | 30.0, 31.6 | 0.30 | 0.22 |
+| zoomed out | 5.2, 5.8 | 5.6, 5.7 | 0.44 | 0.54 |
+| windows | 16.3, 13.6 | 9.9, 10.3 | 0.33 | 0.63 |
+| windows closed | 26.1, 31.5 | 27.8, 28.7 | 0.17 | 0.24 |
+| round 2 whole | 11.8, 12.2 | 11.1, 11.4 | 0.33 | 0.43 |
+
+So on the card a round has 6% fewer pictures and 32% more ticks: the tick goes on more while they are drawn, windows lose pictures to it. 2x was not reached on the card.
 
 ## The start
 
