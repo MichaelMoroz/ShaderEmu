@@ -77,6 +77,25 @@ What is left: `ASMDraw_Sprite` 23%, clip spans 17% (before the deferral), terrai
 
 Speed on the calibrated clock (`--pass-model`, not checked on the card), at the start of a game with few units: 4.4 to 5.2 frames a second in steady stretches, and game time at about half of real time (0.48 to 0.52). An earlier build, with no rest when idle, held 6.2 frames and 0.62 further into a game; the two were not compared turn about, so the difference is not explained. A start reached the main menu at 17 s and the game screen at 138 s of the calibrated clock, about 9 s of that the script's waits. Most of it is loading the data.
 
+## What ends a round
+
+A world runs a fixed number of rounds a Unity frame, so a pass that ends early loses the rest of its instructions there; in the harness it costs 0.2 ms, and the card's figures do not show it. `RVC_PASSLOG` on `rvc_cpu` says who ended each pass, and `reached` in `EmuMachine` is the share a round ran in the world.
+
+`TSpan_List_Manager::ResetAll` cleared five arrays of 600 lines, 2,400 bytes each. A `memset` from 2 KB up is a parallel fill, which ends the pass, so a clip of a few lines could end five. It now clears only the lines written since the last reset (`aoe_dirty_lo`, `aoe_dirty_hi`: the regions set since then, and every line after a scroll or a merge), in pieces under 2 KB. `TRIGONOMETRY` makes only the two tables anything reads. On the calibrated clock, from power-on through the script above to update 300:
+
+| | before | after |
+|---|---|---|
+| instructions lost to passes ended by those `memset`s | 66 million | about 1 million |
+| share of the pass run, the last quarter of the run | 84.3% | 99.1% |
+| the main menu | 17.0 s | 8.8 s |
+| the game screen | 116 s | 107 s |
+
+The sums and the menu's picture stayed the same. A rest when nothing was drawn (`aoe_events`) is a program at its menu with nothing to do: `reached` of about 0.12 and stall 9 there is idle, not stuck. The largest cost left in the start is drawing: each panel's 800-pixel picture is painted twice on the way to the menu, by `set_focus` and by `UpdateWindow`.
+
+## A window made again
+
+The window manager gives a new window its frame after the program has mapped it, and the window then has other memory (800 x 600 at 20, 20 became 806 x 629 at -3, -26). A game at its menu draws nothing more, so the window stayed black in the world with the program resting. A capture taken before the manager has done this shows the menu, so it says nothing. The port now shows its page again on any update of the window but an unmap, and on an exposure: the page is still the picture.
+
 ## A bug to remember
 
 `Visible_Unit_Manager::Update_Unit_Info` took the place of `VUR_Ptrs` in an object as `0x194`, the Windows build's. Here it is `0x190`, so a list that grew left stale pointers, and `RGE_Combat_Object::teleport` wrote tile coordinates through them into freed memory. It showed after about 700 updates as a `TDrawArea::CheckSurface` crash on a surface like `0x707359c0`. Found by a write-protected page under qemu, as qemu's gdb stub in user mode has no watchpoints. `obj + 0x0C` in `taiinfmd.cpp` went the same way. `(char*) this + 0xFF90` and the map's sizes there are by name now, and the sums did not move: they had been right.
