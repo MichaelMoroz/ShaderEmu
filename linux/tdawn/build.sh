@@ -89,7 +89,7 @@ fi
 cmake -S "$SRC" -B "$BUILD" -DCMAKE_TOOLCHAIN_FILE="$WORK/src/tdawn-toolchain.cmake" -DCMAKE_BUILD_TYPE=Release \
     -DSDL2=OFF -DOPENAL=OFF -DNETWORKING=OFF -DBUILD_VANILLARA=OFF -DSHADEREMU=ON \
     -DSHADEREMU_GLES="$WORK/src/tdawn-gles.o" -DSHADEREMU_NANOX="$MW/src/lib/libnano-X.a" \
-    -DCMAKE_CXX_FLAGS="-O2 -fno-pie -fno-lifetime-dse -w -DSHADEREMU $GLINC $LTO $PGO" -DCMAKE_CXX_FLAGS_RELEASE="-DNDEBUG" \
+    -DCMAKE_CXX_FLAGS="-O2 -fno-pie -fno-lifetime-dse -w -DSHADEREMU $GLINC $LTO $PGO ${TDAWN_XFLAGS:-}" -DCMAKE_CXX_FLAGS_RELEASE="-DNDEBUG" \
     -DCMAKE_C_FLAGS="-O2 -fno-pie -w -DSHADEREMU $COUNTS $GLINC" -DCMAKE_C_FLAGS_RELEASE="-DNDEBUG" \
     -DCMAKE_CXX_STANDARD_LIBRARIES="$MEDIA" > "$WORK/src/tdawn-configure.log" 2>&1 \
     || { tail -20 "$WORK/src/tdawn-configure.log"; exit 1; }

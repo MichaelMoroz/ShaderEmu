@@ -1,0 +1,7 @@
+--param=hot-bb-count-ws-permille=999
+--param=hot-bb-count-ws-permille=1000
+--param=early-inlining-insns=40
+--param=max-inline-insns-small=80
+--param=inline-min-speedup=0
+-fno-exceptions
+-fno-rtti

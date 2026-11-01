@@ -1,0 +1,71 @@
+==  
+COUNT from "H2H A": core 0 137660651, all cores 256655226, 43 cores ran, the busiest worker 30091576, 17934 passes, 41.996 s of guest time, 1343 GPU lists
+tdawn: done at frame 1300: SCG03EA, 10 units, 54 infantry, 18 buildings, 188 overlays, state 1a9a814b
+6320562	  54568	1663392	8038522	 7aa87a	~/agents/fewer/nm/work/src/tdawn-build/vanillatd
+== -flto-partition=one
+COUNT from "H2H A": core 0 137585616, all cores 257906178, 43 cores ran, the busiest worker 31252966, 17934 passes, 42.011 s of guest time, 1343 GPU lists
+tdawn: done at frame 1300: SCG03EA, 10 units, 54 infantry, 18 buildings, 188 overlays, state 1a9a814b
+6301302	  54552	1663312	8019166	 7a5cde	~/agents/fewer/nm/work/src/tdawn-build/vanillatd
+== -fno-strict-aliasing
+COUNT from "H2H A": core 0 138615120, all cores 258870115, 43 cores ran, the busiest worker 29845263, 18054 passes, 42.285 s of guest time, 1343 GPU lists
+tdawn: done at frame 1300: SCG03EA, 10 units, 54 infantry, 18 buildings, 188 overlays, state 1a9a814b
+6387958	  54568	1663392	8105918	 7bafbe	~/agents/fewer/nm/work/src/tdawn-build/vanillatd
+== -fipa-pta
+COUNT from "H2H A": core 0 137716506, all cores 256828710, 43 cores ran, the busiest worker 31315646, 17941 passes, 42.032 s of guest time, 1343 GPU lists
+tdawn: done at frame 1300: SCG03EA, 10 units, 54 infantry, 18 buildings, 188 overlays, state 1a9a814b
+6312810	  54568	1663392	8030770	 7a8a32	~/agents/fewer/nm/work/src/tdawn-build/vanillatd
+== -frename-registers
+COUNT from "H2H A": core 0 2974376961, all cores 2974376961, 1 cores ran, the busiest worker 0, 363160 passes, 894.676 s of guest time, 3 GPU lists
+6298334	  54568	1663408	8016310	 7a51b6	~/agents/fewer/nm/work/src/tdawn-build/vanillatd
+== --param=hot-bb-count-ws-permille=999
+COUNT from "H2H A": core 0 117947748, all cores 238345838, 43 cores ran, the busiest worker 29808168, 15581 passes, 36.181 s of guest time, 1343 GPU lists
+tdawn: done at frame 1300: SCG03EA, 10 units, 54 infantry, 18 buildings, 188 overlays, state 1a9a814b
+6698370	  54584	1664800	8417754	 8071da	~/agents/fewer/nm/work/src/tdawn-build/vanillatd
+== --param=hot-bb-count-ws-permille=1000
+COUNT from "H2H A": core 0 117250501, all cores 238482399, 43 cores ran, the busiest worker 29308976, 15493 passes, 35.933 s of guest time, 1343 GPU lists
+tdawn: done at frame 1300: SCG03EA, 10 units, 54 infantry, 18 buildings, 188 overlays, state 1a9a814b
+7919826	  54584	1664816	9639226	 93153a	~/agents/fewer/nm/work/src/tdawn-build/vanillatd
+== --param=early-inlining-insns=40
+COUNT from "H2H A": core 0 121983788, all cores 244035609, 43 cores ran, the busiest worker 29487985, 16070 passes, 37.299 s of guest time, 1343 GPU lists
+tdawn: done at frame 1300: SCG03EA, 10 units, 54 infantry, 18 buildings, 188 overlays, state 1a9a814b
+7272638	  54568	1664800	8992006	 893506	~/agents/fewer/nm/work/src/tdawn-build/vanillatd
+== --param=max-inline-insns-small=80
+COUNT from "H2H A": core 0 117950151, all cores 239296857, 43 cores ran, the busiest worker 30733069, 15589 passes, 36.141 s of guest time, 1343 GPU lists
+tdawn: done at frame 1300: SCG03EA, 10 units, 54 infantry, 18 buildings, 188 overlays, state 1a9a814b
+6425854	  54584	1664800	8145238	 7c4956	~/agents/fewer/nm/work/src/tdawn-build/vanillatd
+== --param=inline-min-speedup=0
+COUNT from "H2H A": core 0 116368555, all cores 238518840, 43 cores ran, the busiest worker 31295247, 15390 passes, 35.700 s of guest time, 1343 GPU lists
+tdawn: done at frame 1300: SCG03EA, 10 units, 54 infantry, 18 buildings, 188 overlays, state 1a9a814b
+8195810	  54584	1664800	9915194	 974b3a	~/agents/fewer/nm/work/src/tdawn-build/vanillatd
+== -fno-exceptions
+COUNT from "H2H A": core 0 117950151, all cores 239296857, 43 cores ran, the busiest worker 30733069, 15589 passes, 36.141 s of guest time, 1343 GPU lists
+tdawn: done at frame 1300: SCG03EA, 10 units, 54 infantry, 18 buildings, 188 overlays, state 1a9a814b
+6425854	  54584	1664800	8145238	 7c4956	~/agents/fewer/nm/work/src/tdawn-build/vanillatd
+== -fno-rtti
+COUNT from "H2H A": core 0 117950151, all cores 239296857, 43 cores ran, the busiest worker 30733069, 15589 passes, 36.141 s of guest time, 1343 GPU lists
+tdawn: done at frame 1300: SCG03EA, 10 units, 54 infantry, 18 buildings, 188 overlays, state 1a9a814b
+6425854	  54584	1664800	8145238	 7c4956	~/agents/fewer/nm/work/src/tdawn-build/vanillatd
+== -fsched-pressure
+COUNT from "H2H A": core 0 110605675, all cores 229672820, 43 cores ran, the busiest worker 30574208, 14693 passes, 33.937 s of guest time, 1343 GPU lists
+tdawn: done at frame 1300: SCG03EA, 10 units, 54 infantry, 18 buildings, 188 overlays, state 1a9a814b
+6235262	  54584	1664800	7954646	 7960d6	~/agents/fewer/nm/work/src/tdawn-build/vanillatd
+== -fno-tree-vectorize
+COUNT from "H2H A": core 0 110709093, all cores 226287057, 43 cores ran, the busiest worker 30836741, 14721 passes, 33.974 s of guest time, 1343 GPU lists
+tdawn: done at frame 1300: SCG03EA, 10 units, 54 infantry, 18 buildings, 188 overlays, state 1a9a814b
+6161166	  54584	1664800	7880550	 783f66	~/agents/fewer/nm/work/src/tdawn-build/vanillatd
+== -fno-schedule-insns2
+COUNT from "H2H A": core 0 110470084, all cores 228398471, 43 cores ran, the busiest worker 30559063, 14680 passes, 33.918 s of guest time, 1343 GPU lists
+tdawn: done at frame 1300: SCG03EA, 10 units, 54 infantry, 18 buildings, 188 overlays, state 1a9a814b
+6239418	  54584	1664800	7958802	 797112	~/agents/fewer/nm/work/src/tdawn-build/vanillatd
+== -fno-tree-pre
+COUNT from "H2H A": core 0 112031539, all cores 229834121, 43 cores ran, the busiest worker 29613649, 14843 passes, 34.371 s of guest time, 1343 GPU lists
+tdawn: done at frame 1300: SCG03EA, 10 units, 54 infantry, 18 buildings, 188 overlays, state 1a9a814b
+6192298	  54584	1664800	7911682	 78b902	~/agents/fewer/nm/work/src/tdawn-build/vanillatd
+== -fno-ivopts
+COUNT from "H2H A": core 0 111980951, all cores 232511112, 43 cores ran, the busiest worker 30915610, 14830 passes, 34.355 s of guest time, 1343 GPU lists
+tdawn: done at frame 1300: SCG03EA, 10 units, 54 infantry, 18 buildings, 188 overlays, state 1a9a814b
+6315030	  54584	1664800	8034414	 7a986e	~/agents/fewer/nm/work/src/tdawn-build/vanillatd
+== -fno-gcse
+COUNT from "H2H A": core 0 111985751, all cores 231595989, 43 cores ran, the busiest worker 30815190, 14861 passes, 34.390 s of guest time, 1343 GPU lists
+tdawn: done at frame 1300: SCG03EA, 10 units, 54 infantry, 18 buildings, 188 overlays, state 1a9a814b
+6317930	  54584	1664800	8037314	 7aa3c2	~/agents/fewer/nm/work/src/tdawn-build/vanillatd

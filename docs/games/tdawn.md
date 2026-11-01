@@ -396,6 +396,18 @@ In the two games' shared code (`common/`):
 
 Not done: the two `.ini` files read a line at a time in Red Alert, the key arithmetic for its encrypted mixes, its map's zones filled at a scenario's start, the intro's first frames.
 
+## Fewer instructions, 1 November 2026
+
+`experiments/rv_fewer/NOTES.md` has every number. h2h's load on the card went from 27,393 ms to 21,914 (1.250x, two runs a side, with nothing to spare), ended full 4.3% to 1.8%, core 0 on `rvc_cpu` 137.66 to 108.77 million, state `1a9a814b`: play 1.152x, the level's load about 1.59x.
+
+- What a start asked for and nobody read goes when first asked: multi-player scenario names, a scenario's digest and its SHA (`ScenarioCRC`, network games only), radar icons (`Radar_Icon`), the themes' files (`Is_Allowed`). The cells are cleared once before a scenario (`ShaderEmu_Cells_Clean`, unset at the end of `DisplayClass::Read_INI` and at a load).
+- The houses' scan bits come from a table made again only when `ShaderEmu_Scan_Gen` says something they read has changed (`ShaderEmu_Scan_Objects`; `TDAWN_CHECK_SCANS=1` makes it every time and counts how often it differs).
+- `CellRedraw` is cleared only if `ShaderEmu_Cell_Flagged`: its 2,048 bytes are exactly what `memset` gives the machine's fill, and that ended a pass every frame. A cleared table of 2,048 bytes or more a frame is worth looking for (`passes.ps1`).
+- The layers' sort says what it moved (`ShaderEmu_Sort_Job`'s answer: count, first, last), and the first core copies that.
+- Counts go stale fast: a change to a small function all callers inline loses its callers' counts (`Coord_Cell` by shifts: +5 million until they were made again, then -1). `experiments/rv_fewer/counts.ps1` makes them again in about two minutes. Counts of missions 1, 3 and 5; mission 10, which they did not see, is -20.9% too.
+- `prof`'s names by the innermost frame are lines, not calls: `VectorClass::operator[]` and `Cell_Y` there are inlined.
+- Tried and lost: compiler settings (none kept), a list of who is awake in the logic's loop, `Is_Ally` forced inline. Left in on purpose: the fades, which wait by the clock and could go only for the measure's sake under `TDAWN_NO_DELAY`.
+
 ## What the compiler is told
 
 Both games are compiled with counts from played games (profile-guided optimisation): how often every branch was taken, and which function each virtual call reached. On this machine that is all instruction count: which calls are inlined (a virtual call that

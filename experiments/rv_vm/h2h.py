@@ -25,6 +25,8 @@ LOADS = {   # the command, seconds at most, the lines kept as the work's proof
     'mpeg': (A + 'media_test video "/root/Videos/Big Buck Bunny.mpg" 8' + B, 170, r'sum'),
     'avi': (A + 'media_test video "/root/Videos/Big Buck Bunny.avi" 16' + B, 170, r'sum'),
     'tdawn': (PRE + A + TD + 'TDAWN_SCEN=3 TDAWN_FRAMES=1300 tdawn FROMINSTALL' + B, 280, r'done at frame'),
+    # (play alone: frames 1 to 1299; with --env "RVC_MARK=: mark " the work is what lies between them, a level's load outside it)
+    'tdawn_play': (PRE + TD + 'TDAWN_MARK=1,1299 TDAWN_SCEN=3 TDAWN_FRAMES=1300 tdawn FROMINSTALL' + B, 280, r'done at frame'),
     'doom': (PRE + A + 'DOOM_VIEW=told DOOM_HASH_TICS=100 doom -1 -timedemo demo1' + B, 150, r'timed \d+'),
     # no test's sum in what is timed, at the players' worker counts (experiments/rv_acct/NOTES.md)
     'jpeg_ns': (A + 'nxview --decode /usr/share/picture-fox.jpg /tmp/b.ppm' + B, 120, r'nxview: '),

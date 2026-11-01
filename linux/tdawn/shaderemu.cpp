@@ -100,17 +100,28 @@ void Wait_Blit(void)
 {
 }
 
+// (Color_Cycle's say: the words from [0] to [1] and the last are all it changed in the palette it gave last)
+int ShaderEmu_Palette_Few[2];
+
 // The game's palette is 6 bits a colour; the machine's is a word of 0x00RRGGBB.
 void Set_DD_Palette(void* palette)
 {
     static unsigned last[192]; // the 768 bytes it was given last
     static bool set;
+    static const void* last_from;
+    static unsigned char few_turn;
     const unsigned char* from = (const unsigned char*)palette;
     unsigned int* to = host_palette();
 
     // (the game sets it every frame, to cycle a few of its colours: only those are made again)
     const unsigned* whole = ((uintptr_t)from & 3) == 0 && set ? (const unsigned*)palette : NULL;
-    for (int word = 0; word < 192; word++) {
+    int few0 = 0, few1 = 192;
+    if (ShaderEmu_Palette_Few[1] && last_from == palette && whole && ++few_turn) { // (one in 256 looks at them all)
+        few0 = ShaderEmu_Palette_Few[0] & ~1, few1 = (ShaderEmu_Palette_Few[1] + 2) & ~1;
+    }
+    ShaderEmu_Palette_Few[1] = 0;
+    last_from = palette;
+    for (int word = few0; word < 192; word = word + 1 == few1 && few1 < 190 ? 190 : word + 1) {
         unsigned now;
         if (whole) {
             // (two words at a look: nearly all of them are as they were)

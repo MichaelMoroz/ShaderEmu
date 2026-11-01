@@ -29,6 +29,9 @@
   no-MMU image after the shared one (`linux/nommu/image.py`, from `build/nommu` or
   `linux/prebuilt/nommu`), and with `--save-prebuilt` keeps that build too: Linux without the MMU
   is what the harness, `rvc_cpu` and `tools/test_all.py` run by default; with the MMU is legacy.
+- Tiberian Dawn's scan bits come from a table (`docs/games/tdawn.md`, "Fewer instructions"): a new write of `IsLocked`, `IsInLimbo`, `IsDiscoveredByPlayer`, `IsHuman` or a techno's `House` raises
+  `ShaderEmu_Scan_Gen` (`TDAWN_CHECK_SCANS=1` must say 0 wrong), a new `CellRedraw` setter sets `ShaderEmu_Cell_Flagged`, and what writes cells outside `DisplayClass::Read_INI` and a load unsets `ShaderEmu_Cells_Clean`.
+  After a change to a function many inline, make the counts again (`experiments/rv_fewer/counts.ps1`), or its callers run without them. h2h's 27.4 s to 21.9 s: a load is 1.59x, play 1.15x; say which.
 - Tiberian Dawn makes a unit's second path search on a worker core while the first core makes
   the first, and does not run a search that must come out as one already made (`docs/games/tdawn.md`,
   "A unit's path searches"). Code a search reaches (`Can_Enter_Cell` of units and infantry,

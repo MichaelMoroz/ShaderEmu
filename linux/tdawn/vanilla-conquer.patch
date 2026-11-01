@@ -54,6 +54,23 @@ index 3dc5acd..f5a66ee 100644
      for (int i = 0; i < height; ++i) {
          memset(offset, color, width);
          offset += (vp.Get_Pitch() + vp.Get_XAdd() + vp.Get_Width());
+diff --git a/common/fading.cpp b/common/fading.cpp
+index 690e0d1..b755585 100644
+--- a/common/fading.cpp
++++ b/common/fading.cpp
+@@ -63,6 +63,12 @@ void* Build_Fading_Table(void const* palette, void* dest, int color, int frac)
+             // Build a distance of our current color to the ideal faded color.
+             signed char diff = *fade++ - idealred;
+             unsigned value = diff * diff;
++#ifdef SHADEREMU
++            if (value > matchvalue) {
++                fade += 2;
++                continue;
++            }
++#endif
+             diff = *fade++ - idealgreen;
+             value += diff * diff;
+             diff = *fade++ - idealblue;
 diff --git a/common/file.cpp b/common/file.cpp
 index d2e727d..f7dbec5 100644
 --- a/common/file.cpp
@@ -325,6 +342,19 @@ index 2a46e07..de9ec8e 100644
      }
  }
 +#endif
+diff --git a/common/ftimer.h b/common/ftimer.h
+index c812619..b64c20f 100644
+--- a/common/ftimer.h
++++ b/common/ftimer.h
+@@ -721,7 +721,7 @@ public:
+     {
+         return (Time() == 0);
+     };
+-    int Time(void) const
++    __attribute__((always_inline)) int Time(void) const
+     {
+         int remain = DelayTime - (Frame - Started);
+         if (remain < 0)
 diff --git a/common/graphicsviewport.cpp b/common/graphicsviewport.cpp
 index 1dda825..c77c3fc 100644
 --- a/common/graphicsviewport.cpp
@@ -352,7 +382,7 @@ index 1dda825..c77c3fc 100644
          Buffer_Draw_Stamp_Clip(this,
                                 icondata,
 diff --git a/common/interpal.cpp b/common/interpal.cpp
-index 6091774..7b558fc 100644
+index 6091774..105931a 100644
 --- a/common/interpal.cpp
 +++ b/common/interpal.cpp
 @@ -118,11 +118,196 @@ void Write_Interpolation_Palette(char const* palette_file_name)
@@ -1156,7 +1186,7 @@ index b0e0525..76b572b 100644
  #include "file.h"
  #include "wwstd.h"
  
-@@ -268,10 +315,12 @@ int RawFileClass::Open(int rights)
+@@ -268,10 +321,12 @@ int RawFileClass::Open(int rights)
  
          case WRITE:
              Handle = raw_fopen(Filename, "wb");
@@ -1169,7 +1199,7 @@ index b0e0525..76b572b 100644
              break;
          }
  
-@@ -341,10 +390,19 @@ int RawFileClass::Is_Available(int forced)
+@@ -341,10 +396,19 @@ int RawFileClass::Is_Available(int forced)
      **	CD-ROM, this routine will return a failure condition. In all but the missing file
      **	condition, go through the normal error recover channels.
      */
@@ -1189,7 +1219,7 @@ index b0e0525..76b572b 100644
  
      /*
      **	Since the file could be opened, then close it and return that the file exists.
-@@ -795,6 +853,7 @@ int RawFileClass::Delete(void)
+@@ -795,6 +859,7 @@ int RawFileClass::Delete(void)
              Error(errno, false, Filename);
              return (false);
          }
@@ -1311,8 +1341,26 @@ index ea6a5c0..31c6e4b 100644
      return duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
  }
  
+diff --git a/common/vector.h b/common/vector.h
+index cd86400..ff271fd 100644
+--- a/common/vector.h
++++ b/common/vector.h
+@@ -76,11 +76,11 @@ public:
+     VectorClass(VectorClass<T> const&); // Copy constructor.
+     virtual ~VectorClass(void);
+ 
+-    T& operator[](unsigned index)
++    __attribute__((always_inline)) T& operator[](unsigned index)
+     {
+         return (Vector[index]);
+     };
+-    T const& operator[](unsigned index) const
++    __attribute__((always_inline)) T const& operator[](unsigned index) const
+     {
+         return (Vector[index]);
+     };
 diff --git a/common/vqadrawer.cpp b/common/vqadrawer.cpp
-index cd3b404..68dc9f1 100644
+index cd3b404..f0d1108 100644
 --- a/common/vqadrawer.cpp
 +++ b/common/vqadrawer.cpp
 @@ -184,6 +184,74 @@ void VQA_SetDrawBuffer(VQAHandle* handle, uint8_t* buffer, unsigned width, unsig
@@ -1442,6 +1490,49 @@ index ca9dd27..3eaab0f 100644
      if (!strcasecmp(ext, ".PCX"))
          load_buffer = Read_PCX_File(name, (char*)palette, NULL, 0); // Load 640x400 title
      else if (!strcasecmp(ext, ".CPS")) {
+diff --git a/common/wsa.cpp b/common/wsa.cpp
+index 0bfd76e..8202e1e 100644
+--- a/common/wsa.cpp
++++ b/common/wsa.cpp
+@@ -830,6 +830,18 @@ unsigned int Get_Animation_Size(void const* handle)
+ static unsigned int Get_Resident_Frame_Offset(char* file_buffer, int frame)
+ {
+     unsigned int frame0_size;
++#ifdef SHADEREMU
++    /* (bytes: the table lies where the delta buffer ends, at any byte, and a copy through a uint32_t pointer
++    ** may be compiled as a word load, which an address at any byte breaks: the Soviet score screen's
++    ** offsets came out a byte each, its frames were drawn over the heap) */
++    const char* lptr;
++
++    // If there is a frame 0, the calculate its size.
++    lptr = file_buffer;
++    uint32_t x1, x0;
++    memcpy(&x0, lptr, sizeof(uint32_t));
++    memcpy(&x1, lptr + sizeof(uint32_t), sizeof(uint32_t));
++#else
+     uint32_t* lptr;
+ 
+     // If there is a frame 0, the calculate its size.
+@@ -837,6 +849,7 @@ static unsigned int Get_Resident_Frame_Offset(char* file_buffer, int frame)
+     uint32_t x1, x0;
+     memcpy(&x0, lptr, sizeof(uint32_t));
+     memcpy(&x1, lptr + 1, sizeof(uint32_t));
++#endif
+ 
+     x0 = le32toh(x0);
+     x1 = le32toh(x1);
+@@ -848,7 +861,11 @@ static unsigned int Get_Resident_Frame_Offset(char* file_buffer, int frame)
+     }
+ 
+     // Return the offset into RAM for the frame.
++#ifdef SHADEREMU
++    lptr += frame * sizeof(uint32_t);
++#else
+     lptr += frame;
++#endif
+     memcpy(&x0, lptr, sizeof(uint32_t));
+     x0 = le32toh(x0);
+     if (x0)
 diff --git a/tiberiandawn/CMakeLists.txt b/tiberiandawn/CMakeLists.txt
 index a26cf46..e489e91 100644
 --- a/tiberiandawn/CMakeLists.txt
@@ -1454,6 +1545,28 @@ index a26cf46..e489e91 100644
      door.cpp
      drive.cpp
      drop.cpp
+diff --git a/tiberiandawn/aircraft.cpp b/tiberiandawn/aircraft.cpp
+index e27af1c..6d34c51 100644
+--- a/tiberiandawn/aircraft.cpp
++++ b/tiberiandawn/aircraft.cpp
+@@ -907,7 +907,7 @@ void AircraftClass::AI(void)
+             return;
+         }
+     } else {
+-        IsLocked = true;
++        ShaderEmu_Scan_Gen += !IsLocked, IsLocked = true;
+         //		House->NewAScan |= (1L << Class->Type);
+ 
+ #ifdef NEVER
+@@ -1147,7 +1147,7 @@ int AircraftClass::Mission_Unload(void)
+                                     Speak(VOX_REINFORCEMENTS, NULL, Cell_Coord(cell));
+                                 }
+                                 unit->IsALoaner = false;
+-                                unit->IsLocked = true;
++                                ShaderEmu_Scan_Gen += !unit->IsLocked, unit->IsLocked = true;
+                                 unit->Scatter(0, true);
+                             }
+                             ScenarioInit--;
 diff --git a/tiberiandawn/anim.cpp b/tiberiandawn/anim.cpp
 index 1360f92..755ba67 100644
 --- a/tiberiandawn/anim.cpp
@@ -1522,7 +1635,7 @@ index ae48da8..7a7f19f 100644
      virtual void Set_Owner(HousesType owner);
      virtual bool Can_Place_Here(COORDINATE) const
 diff --git a/tiberiandawn/building.cpp b/tiberiandawn/building.cpp
-index 91f1bec..26fcf88 100644
+index 91f1bec..d9e01d3 100644
 --- a/tiberiandawn/building.cpp
 +++ b/tiberiandawn/building.cpp
 @@ -638,9 +638,12 @@ void BuildingClass::Draw_It(int x, int y, WindowNumberType window)
@@ -1540,11 +1653,97 @@ index 91f1bec..26fcf88 100644
  
      /*
      ** Patch for adding overlay onto weapon factory.  Only add the overlay if
+@@ -2195,7 +2198,7 @@ int BuildingClass::Exit_Object(TechnoClass* base)
+     **	A unit exiting a building is always considered to be "locked". That means, it
+     **	will be considered as to have legally entered the visible map domain.
+     */
+-    base->IsLocked = true;
++    ShaderEmu_Scan_Gen += !base->IsLocked, base->IsLocked = true;
+ 
+     /*
+     **	Find a good cell to unload the object to. The object, probably a vehicle
+@@ -2722,11 +2725,11 @@ bool BuildingClass::Limbo(void)
+             if (bld_type != RTTI_NONE) {
+                 if (factory) {
+                     TechnoClass* object = factory->Get_Object();
+-                    IsInLimbo = true;
++                    ShaderEmu_Scan_Gen += !IsInLimbo, IsInLimbo = true;
+                     if (object && !object->Techno_Type_Class()->Who_Can_Build_Me(true, false, housep->Class->House)) {
+                         housep->Abandon_Production(bld_type);
+                     }
+-                    IsInLimbo = false;
++                    ShaderEmu_Scan_Gen += IsInLimbo, IsInLimbo = false;
+                 }
+             }
+         }
+@@ -2739,9 +2742,9 @@ bool BuildingClass::Limbo(void)
+         ** Otherwise, the sidebar won't properly remove non-available buildables.
+         */
+         if (IsOwnedByPlayer && !ScenarioInit) {
+-            IsInLimbo = true;
++            ShaderEmu_Scan_Gen += !IsInLimbo, IsInLimbo = true;
+             Map.Recalc();
+-            IsInLimbo = false;
++            ShaderEmu_Scan_Gen += IsInLimbo, IsInLimbo = false;
+         }
+ #ifdef NEVER
+         if (!House->IsHuman) {
+@@ -5368,11 +5371,11 @@ void BuildingClass::Detach_All(bool all)
+         */
+         if (factory) {
+             TechnoClass* object = factory->Get_Object();
+-            IsInLimbo = true;
++            ShaderEmu_Scan_Gen += !IsInLimbo, IsInLimbo = true;
+             if (object && !object->Techno_Type_Class()->Who_Can_Build_Me(true, false, House->Class->House)) {
+                 House->Abandon_Production(Class->ToBuild);
+             }
+-            IsInLimbo = false;
++            ShaderEmu_Scan_Gen += IsInLimbo, IsInLimbo = false;
+         }
+     }
+ 
+diff --git a/tiberiandawn/ccini.cpp b/tiberiandawn/ccini.cpp
+index e450a0a..2bf9265 100644
+--- a/tiberiandawn/ccini.cpp
++++ b/tiberiandawn/ccini.cpp
+@@ -149,6 +149,7 @@ int CCINIClass::Load(Straw& file, bool withdigest)
+             /*
+             **	Calculate the message digest for the INI data that was read.
+             */
++#ifndef SHADEREMU /* (a SHA over the whole file, written out again: 1.1 million instructions a mission; the ROM holds what it holds) */
+             Calculate_Message_Digest();
+ 
+             /*
+@@ -157,6 +158,7 @@ int CCINIClass::Load(Straw& file, bool withdigest)
+             if (memcmp(digest, Digest, sizeof(digest)) != 0) {
+                 return (2);
+             }
++#endif
+         }
+     }
+     return (ok);
 diff --git a/tiberiandawn/cell.cpp b/tiberiandawn/cell.cpp
-index c7ad7f4..17f0d9f 100644
+index c7ad7f4..1d17104 100644
 --- a/tiberiandawn/cell.cpp
 +++ b/tiberiandawn/cell.cpp
-@@ -138,6 +138,58 @@ CellClass::CellClass(void)
+@@ -127,8 +127,16 @@ int CellClass::Validate(void) const
+  * HISTORY:                                                                                    *
+  *   08/09/1994 JLB : Created.                                                                 *
+  *=============================================================================================*/
++#ifdef SHADEREMU
++bool ShaderEmu_Cells_Raw; /* (Alloc_Cells: Init_Cells makes them) */
++#endif
+ CellClass::CellClass(void)
+ {
++#ifdef SHADEREMU
++    if (ShaderEmu_Cells_Raw) {
++        return;
++    }
++#endif
+     memset(this, 0, sizeof(CellClass));
+     Overlay = OVERLAY_NONE;
+     Smudge = SMUDGE_NONE;
+@@ -138,6 +146,58 @@ CellClass::CellClass(void)
      OverrideLand = LAND_COUNT;
  }
  
@@ -1603,7 +1802,7 @@ index c7ad7f4..17f0d9f 100644
  /***********************************************************************************************
   * CellClass::Cell_Color   -- Determine what radar color to use for this cell.                 *
   *                                                                                             *
-@@ -367,6 +419,18 @@ void CellClass::Redraw_Objects(bool forced)
+@@ -367,6 +427,18 @@ void CellClass::Redraw_Objects(bool forced)
      Validate();
      CELL cell = Cell_Number();
  
@@ -1622,7 +1821,7 @@ index c7ad7f4..17f0d9f 100644
      if (Map.In_View(cell) && (forced || !Map.Is_Cell_Flagged(cell))) {
  
          /*
-@@ -566,6 +630,9 @@ void CellClass::Occupy_Down(ObjectClass* object)
+@@ -566,6 +638,9 @@ void CellClass::Occupy_Down(ObjectClass* object)
      object->Next = optr;
  
      OccupierPtr = object;
@@ -1632,7 +1831,7 @@ index c7ad7f4..17f0d9f 100644
      Map.Radar_Pixel(Cell_Number());
  
      /*
-@@ -640,6 +707,9 @@ void CellClass::Occupy_Up(ObjectClass* object)
+@@ -640,6 +715,9 @@ void CellClass::Occupy_Up(ObjectClass* object)
      }
      if (optr == object) {
          OccupierPtr = object->Next;
@@ -1642,7 +1841,7 @@ index c7ad7f4..17f0d9f 100644
          object->Next = 0;
      } else {
          while (optr) {
-@@ -780,6 +850,16 @@ void CellClass::Overlap_Down(ObjectClass* object)
+@@ -780,6 +858,16 @@ void CellClass::Overlap_Down(ObjectClass* object)
   * HISTORY:                                                                                    *
   *   07/18/1994 JLB : Created.                                                                 *
   *=============================================================================================*/
@@ -1659,7 +1858,7 @@ index c7ad7f4..17f0d9f 100644
  void CellClass::Overlap_Up(ObjectClass* object)
  {
      Validate();
-@@ -1860,11 +1940,165 @@ CellClass const* CellClass::Adjacent_Cell(FacingType face) const
+@@ -1860,11 +1948,165 @@ CellClass const* CellClass::Adjacent_Cell(FacingType face) const
   * HISTORY:                                                                *
   *   04/24/1995 PWG : Created.                                             *
   *=========================================================================*/
@@ -1825,7 +2024,7 @@ index c7ad7f4..17f0d9f 100644
      for (HousesType lp = HOUSE_FIRST; lp < HOUSE_COUNT; lp++) {
          if (lp == house)
              continue;
-@@ -1874,6 +2108,7 @@ void CellClass::Adjust_Threat(HousesType house, int threat_value)
+@@ -1874,6 +2116,7 @@ void CellClass::Adjust_Threat(HousesType house, int threat_value)
              house_ptr->Adjust_Threat(region, threat_value);
          }
      }
@@ -1833,7 +2032,7 @@ index c7ad7f4..17f0d9f 100644
      if (Debug_Threat) {
          Map.Flag_To_Redraw(true);
      }
-@@ -2547,14 +2782,33 @@ void CellClass::Shimmer(void)
+@@ -2547,14 +2790,33 @@ void CellClass::Shimmer(void)
   * HISTORY:                                                                                    *
   *   08/17/1995 JLB : Created.                                                                 *
   *=============================================================================================*/
@@ -1868,7 +2067,7 @@ index c7ad7f4..17f0d9f 100644
      return (ptr);
  }
 diff --git a/tiberiandawn/cell.h b/tiberiandawn/cell.h
-index f9c20ea..307e158 100644
+index f9c20ea..7ba7870 100644
 --- a/tiberiandawn/cell.h
 +++ b/tiberiandawn/cell.h
 @@ -191,6 +191,18 @@ public:
@@ -1890,6 +2089,15 @@ index f9c20ea..307e158 100644
  
      int operator==(CellClass const& cell) const
      {
+@@ -225,7 +237,7 @@ public:
+     COORDINATE Cell_Coord(void) const;
+     int Cell_Color(bool override = false) const;
+     CELL Cell_Number(void) const;
+-    LandType Land_Type(void) const
++    __attribute__((always_inline)) LandType Land_Type(void) const
+     {
+         return ((OverrideLand != LAND_COUNT) ? OverrideLand : Land);
+     };
 @@ -247,6 +259,9 @@ public:
      void Occupy_Down(ObjectClass* object);
      void Occupy_Up(ObjectClass* object);
@@ -1920,10 +2128,10 @@ index f9c20ea..307e158 100644
  #endif
 \ No newline at end of file
 diff --git a/tiberiandawn/conquer.cpp b/tiberiandawn/conquer.cpp
-index a8aebd8..b666023 100644
+index a8aebd8..2c95ebb 100644
 --- a/tiberiandawn/conquer.cpp
 +++ b/tiberiandawn/conquer.cpp
-@@ -98,6 +98,657 @@ extern void Send_Statistics_Packet(void);
+@@ -98,6 +98,663 @@ extern void Send_Statistics_Packet(void);
  extern char* __nheapbeg;
  bool InMainLoop = false;
  
@@ -2452,11 +2660,13 @@ index a8aebd8..b666023 100644
 +        /* TDAWN_SLOW=N (with TDAWN_STATS_MS=0): each frame of more than N thousand instructions, and where they went */
 +        static int slow = -1;
 +        static unsigned was[7];
-+        unsigned now[7] = {cycles, ShaderEmu_Logic_Cycles, ShaderEmu_Draw_Cycles, ShaderEmu_GL_Cycles,
-+                           ShaderEmu_GL_Put[0], ShaderEmu_GL_Put[1], ShaderEmu_GL_Objects[2]};
 +        if (slow < 0) {
 +            slow = getenv("TDAWN_SLOW") ? atoi(getenv("TDAWN_SLOW")) : 0;
-+        } else if (slow && now[0] - was[0] > (unsigned)slow * 1000) {
++        }
++        if (slow) {
++        unsigned now[7] = {cycles, ShaderEmu_Logic_Cycles, ShaderEmu_Draw_Cycles, ShaderEmu_GL_Cycles,
++                           ShaderEmu_GL_Put[0], ShaderEmu_GL_Put[1], ShaderEmu_GL_Objects[2]};
++        if (now[0] - was[0] > (unsigned)slow * 1000) {
 +            fprintf(stderr,
 +                    "tdslow: frame %d at %u ms: %uk = logic %uk + draw %uk (the map %uk: %u objects drawn, %u shapes put, %uk "
 +                    "pixels) + rest %uk; logic: teams %uk, objects %uk (one of kind %u took %uk from instruction %u), the map %uk; now %u\n",
@@ -2467,6 +2677,7 @@ index a8aebd8..b666023 100644
 +                    ShaderEmu_Logic_Worst[2], ShaderEmu_Logic_Parts[2] / 1000, host_cycles());
 +        }
 +        memcpy(was, now, sizeof(was));
++        }
 +    }
 +    {
 +        /* TDAWN_MARK=A,B: a line as frame A begins and as frame B does (rvc_cpu --pc-from, --until) */
@@ -2485,13 +2696,15 @@ index a8aebd8..b666023 100644
 +        ** the scene drew anew and put into the atlas, said when the run ends */
 +        static unsigned (*log)[10], logged, was[10];
 +        static int on = -1;
-+        unsigned now[10] = {cycles, ShaderEmu_Logic_Cycles, ShaderEmu_Draw_Cycles, ShaderEmu_GL_Cycles,
-+                            ShaderEmu_GL_Parts[0], ShaderEmu_GL_Parts[1], ShaderEmu_GL_Parts[2],
-+                            ShaderEmu_GL_Objects[2], ShaderEmu_GL_Put[0], ShaderEmu_GL_Put[1]};
 +        if (on < 0) {
 +            on = getenv("TDAWN_FRAME_LOG") != NULL;
 +            log = on ? (unsigned (*)[10])calloc(8192, sizeof *log) : NULL;
-+        } else if (log && logged < 8192) {
++        }
++        if (on) {
++        unsigned now[10] = {cycles, ShaderEmu_Logic_Cycles, ShaderEmu_Draw_Cycles, ShaderEmu_GL_Cycles,
++                            ShaderEmu_GL_Parts[0], ShaderEmu_GL_Parts[1], ShaderEmu_GL_Parts[2],
++                            ShaderEmu_GL_Objects[2], ShaderEmu_GL_Put[0], ShaderEmu_GL_Put[1]};
++        if (log && logged < 8192) {
 +            for (int i = 0; i < 10; i++) {
 +                log[logged][i] = now[i] >= was[i] ? now[i] - was[i] : now[i];
 +            }
@@ -2504,6 +2717,7 @@ index a8aebd8..b666023 100644
 +                        log[i][0], log[i][1], log[i][2], log[i][3], log[i][4], log[i][5], log[i][6], log[i][7], log[i][8],
 +                        log[i][9]);
 +            }
++        }
 +        }
 +    }
 +    if (cap || (stop && getenv("TDAWN_NO_DELAY"))) {
@@ -2581,7 +2795,7 @@ index a8aebd8..b666023 100644
  #ifndef ARRAY_SIZE
  #define ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
  #endif
-@@ -1126,12 +1777,31 @@ bool Color_Cycle(void)
+@@ -1126,12 +1783,31 @@ bool Color_Cycle(void)
      static CountDownTimerClass _ftimer(BT_SYSTEM, 0);
      static bool _up = false;
      bool changed = false;
@@ -2614,7 +2828,7 @@ index a8aebd8..b666023 100644
          _ftimer.Set(TIMER_SECOND / 8);
  
  /*
-@@ -1165,7 +1835,7 @@ bool Color_Cycle(void)
+@@ -1165,7 +1841,7 @@ bool Color_Cycle(void)
      /*
      **	Process the color cycling effects -- water.
      */
@@ -2623,7 +2837,20 @@ index a8aebd8..b666023 100644
          unsigned char colors[3];
  
          _timer.Set(TIMER_SECOND / 4);
-@@ -1222,6 +1892,20 @@ void Call_Back(void)
+@@ -1184,6 +1860,12 @@ bool Color_Cycle(void)
+     */
+     if (changed) {
+         Wait_Vert_Blank();
++#ifdef SHADEREMU
++        /* (only the water's colours and the last: Set_DD_Palette looks at no other) */
++        extern int ShaderEmu_Palette_Few[2];
++        ShaderEmu_Palette_Few[0] = CYCLE_COLOR_START * 3 / 4;
++        ShaderEmu_Palette_Few[1] = (CYCLE_COLOR_START + CYCLE_COLOR_COUNT) * 3 / 4;
++#endif
+         Set_Palette(GamePalette);
+         return (true);
+     }
+@@ -1222,6 +1904,20 @@ void Call_Back(void)
      if (SampleType) {
          Theme.AI();
          Speak_AI();
@@ -2644,7 +2871,7 @@ index a8aebd8..b666023 100644
      }
  
  #ifdef NETWORKING
-@@ -1516,7 +2200,7 @@ static void Sync_Delay(void)
+@@ -1516,7 +2212,7 @@ static void Sync_Delay(void)
              if (input) {
                  Keyboard_Process(input);
              }
@@ -2653,7 +2880,7 @@ index a8aebd8..b666023 100644
          }
  
          Frame_Limiter(FL_NONE);
-@@ -1611,12 +2295,18 @@ bool Main_Loop()
+@@ -1611,12 +2307,18 @@ bool Main_Loop()
      } else {
          FrameTimer.Set(Options.GameSpeed);
      }
@@ -2672,7 +2899,7 @@ index a8aebd8..b666023 100644
  
              WWMouse->Erase_Mouse(&HidPage, true);
              Map.Input(input, x, y);
-@@ -1624,7 +2314,24 @@ bool Main_Loop()
+@@ -1624,7 +2326,24 @@ bool Main_Loop()
                  Keyboard_Process(input);
              }
              //			HidPage.Lock();
@@ -2698,7 +2925,7 @@ index a8aebd8..b666023 100644
              //			HidPage.Unlock();
          }
      }
-@@ -1650,7 +2357,17 @@ bool Main_Loop()
+@@ -1650,7 +2369,17 @@ bool Main_Loop()
      /*
      **	AI logic operations are performed here.
      */
@@ -2717,7 +2944,7 @@ index a8aebd8..b666023 100644
  
      //	Heap_Dump_Check( "After Logic.AI" );
  
-@@ -1659,8 +2376,24 @@ bool Main_Loop()
+@@ -1659,8 +2388,24 @@ bool Main_Loop()
      **	a message has expired & been removed, and the entire map must be updated.
      */
      if (Messages.Manage()) {
@@ -2744,7 +2971,7 @@ index a8aebd8..b666023 100644
      }
  
      //
-@@ -1710,6 +2443,9 @@ bool Main_Loop()
+@@ -1710,6 +2455,9 @@ bool Main_Loop()
          PlayerRestarts = false;
          Map.Help_Text(TXT_NONE);
          Set_Video_Cursor_Clip(false);
@@ -2754,7 +2981,7 @@ index a8aebd8..b666023 100644
          Do_Win();
          Set_Video_Cursor_Clip(true);
      }
-@@ -1726,6 +2462,9 @@ bool Main_Loop()
+@@ -1726,6 +2474,9 @@ bool Main_Loop()
          PlayerRestarts = false;
          Map.Help_Text(TXT_NONE);
          Set_Video_Cursor_Clip(false);
@@ -2764,7 +2991,7 @@ index a8aebd8..b666023 100644
          Do_Lose();
          Set_Video_Cursor_Clip(true);
      }
-@@ -1736,6 +2475,9 @@ bool Main_Loop()
+@@ -1736,6 +2487,9 @@ bool Main_Loop()
          PlayerRestarts = false;
          Map.Help_Text(TXT_NONE);
          Set_Video_Cursor_Clip(false);
@@ -2774,7 +3001,7 @@ index a8aebd8..b666023 100644
          Do_Restart();
          Set_Video_Cursor_Clip(true);
      }
-@@ -2242,6 +2984,10 @@ void Play_Movie(char const* name, ThemeType theme, bool clrscrn)
+@@ -2242,6 +2996,10 @@ void Play_Movie(char const* name, ThemeType theme, bool clrscrn)
                  InMovie = true;
                  VQA_Play(vqa, VQAMODE_RUN);
                  VQA_Close(vqa);
@@ -2785,7 +3012,7 @@ index a8aebd8..b666023 100644
                  // Resume_Audio_Thread();
                  InMovie = false;
                  Free_Interpolated_Palettes();
-@@ -2642,6 +3388,70 @@ void CC_Draw_Line(int x, int y, int x1, int y1, unsigned char color, int frame,
+@@ -2642,6 +3400,70 @@ void CC_Draw_Line(int x, int y, int x1, int y1, unsigned char color, int frame,
   *   02/21/1995 JLB : Created.                                                                 *
   *=============================================================================================*/
  //#pragma off(unreferenced)
@@ -2856,7 +3083,7 @@ index a8aebd8..b666023 100644
  void CC_Draw_Shape(void const* shapefile,
                     int shapenum,
                     int x,
-@@ -2656,6 +3466,19 @@ void CC_Draw_Shape(void const* shapefile,
+@@ -2656,6 +3478,19 @@ void CC_Draw_Shape(void const* shapefile,
      char* shape_pointer;
      uintptr_t shape_size;
  
@@ -2876,7 +3103,7 @@ index a8aebd8..b666023 100644
      if (shapefile && shapenum != -1) {
  
          /*
-@@ -3976,6 +4799,21 @@ void Shake_The_Screen(int shakes, HousesType house)
+@@ -3976,6 +4811,21 @@ void Shake_The_Screen(int shakes, HousesType house)
      }
  #else
      shakes += shakes;
@@ -2898,8 +3125,28 @@ index a8aebd8..b666023 100644
  
      Hide_Mouse();
      SeenBuff.Blit(HidPage);
+diff --git a/tiberiandawn/coord.cpp b/tiberiandawn/coord.cpp
+index 277de17..9c9bd15 100644
+--- a/tiberiandawn/coord.cpp
++++ b/tiberiandawn/coord.cpp
+@@ -59,6 +59,7 @@
+  * HISTORY:                                                                                    *
+  *   06/17/1996 JLB : Created.                                                                 *
+  *=============================================================================================*/
++#ifndef SHADEREMU
+ CELL Coord_Cell(COORDINATE coord)
+ {
+     CELL_COMPOSITE cell;
+@@ -68,6 +69,7 @@ CELL Coord_Cell(COORDINATE coord)
+     return (cell.Cell);
+     //	return(XY_Cell(((COORD_COMPOSITE)coord).Sub.X, ((COORD_COMPOSITE)composite).Sub.Y));
+ }
++#endif
+ 
+ /***********************************************************************************************
+  * Distance -- Determines the lepton distance between two coordinates.                         *
 diff --git a/tiberiandawn/display.cpp b/tiberiandawn/display.cpp
-index 20ff4f6..719e623 100644
+index 20ff4f6..6cdac27 100644
 --- a/tiberiandawn/display.cpp
 +++ b/tiberiandawn/display.cpp
 @@ -76,6 +76,12 @@
@@ -2915,7 +3162,30 @@ index 20ff4f6..719e623 100644
  #include "common/fading.h"
  #include "ccini.h"
  
-@@ -1598,6 +1604,18 @@ bool DisplayClass::Scroll_Map(DirType facing, int& distance, bool really)
+@@ -109,6 +115,9 @@ unsigned char DisplayClass::ShadowTrans[(SHADOW_COL_COUNT + 1) * 256];
+ ** Bit array of cell redraw flags
+ */
+ BooleanVectorClass DisplayClass::CellRedraw;
++#ifdef SHADEREMU
++bool DisplayClass::ShaderEmu_Cell_Flagged = true;
++#endif
+ 
+ /*
+ ** The main button that intercepts user input to the map
+@@ -1389,6 +1398,12 @@ void DisplayClass::Read_INI(CCINIClass& ini)
+             }
+         }
+     }
++#ifdef SHADEREMU
++    {
++        extern bool ShaderEmu_Cells_Clean;
++        ShaderEmu_Cells_Clean = false; /* (from here the scenario writes cells) */
++    }
++#endif
+ }
+ 
+ /***********************************************************************************************
+@@ -1598,6 +1613,18 @@ bool DisplayClass::Scroll_Map(DirType facing, int& distance, bool really)
   *=============================================================================================*/
  void DisplayClass::Refresh_Cells(CELL cell, short const* list)
  {
@@ -2934,7 +3204,7 @@ index 20ff4f6..719e623 100644
      if (*list == REFRESH_SIDEBAR) {
          list++;
      }
-@@ -2092,6 +2110,15 @@ void DisplayClass::Draw_It(bool forced)
+@@ -2092,6 +2119,15 @@ void DisplayClass::Draw_It(bool forced)
  
      MapClass::Draw_It(forced);
  
@@ -2950,7 +3220,7 @@ index 20ff4f6..719e623 100644
      if (IsToRedraw || forced) {
          IsToRedraw = false;
  
-@@ -2146,6 +2173,26 @@ void DisplayClass::Draw_It(bool forced)
+@@ -2146,6 +2182,32 @@ void DisplayClass::Draw_It(bool forced)
          **	Check for a movement of the tactical map. If there has been some
          **	movement, then part (or all) of the icons must be redrawn.
          */
@@ -2970,15 +3240,45 @@ index 20ff4f6..719e623 100644
 +            if (IsRubberBand) {
 +                LogicPage->Draw_Rect(BandX + TacPixelX, BandY + TacPixelY, NewX + TacPixelX, NewY + TacPixelY, WHITE);
 +            }
++#ifdef SHADEREMU
++            if (ShaderEmu_Cell_Flagged)
++#endif
 +            CellRedraw.Reset();
++#ifdef SHADEREMU
++            ShaderEmu_Cell_Flagged = false;
++#endif
 +            return;
 +        }
 +#endif
          if (Lepton_To_Pixel(Coord_X(DesiredTacticalCoord)) != Lepton_To_Pixel(Coord_X(TacticalCoord))
              || Lepton_To_Pixel(Coord_Y(DesiredTacticalCoord)) != Lepton_To_Pixel(Coord_Y(TacticalCoord))) {
  
+@@ -2348,6 +2410,9 @@ void DisplayClass::Draw_It(bool forced)
+         **	and let the normal processing take care of the rest.
+         */
+         if (forced) {
++#ifdef SHADEREMU
++            ShaderEmu_Cell_Flagged = true;
++#endif
+             CellRedraw.Set();
+         }
+ 
+@@ -2403,7 +2468,13 @@ void DisplayClass::Draw_It(bool forced)
+         /*
+         **	Clear the redraw flags so that normal redraw flag setting can resume.
+         */
++#ifdef SHADEREMU
++        if (ShaderEmu_Cell_Flagged)
++#endif
+         CellRedraw.Reset();
++#ifdef SHADEREMU
++        ShaderEmu_Cell_Flagged = false;
++#endif
+         // Colour_Debug(0);
+ 
+ #ifdef SCENARIO_EDITOR
 diff --git a/tiberiandawn/display.h b/tiberiandawn/display.h
-index 42d052d..48bb75e 100644
+index 42d052d..d43bdc2 100644
 --- a/tiberiandawn/display.h
 +++ b/tiberiandawn/display.h
 @@ -145,6 +145,9 @@ public:
@@ -2991,7 +3291,7 @@ index 42d052d..48bb75e 100644
  
      /*
      **	Added functionality.
-@@ -197,6 +200,14 @@ public:
+@@ -197,8 +200,19 @@ public:
  
      void Flag_Cell(CELL cell)
      {
@@ -3005,7 +3305,22 @@ index 42d052d..48bb75e 100644
 +#endif
          Flag_To_Redraw(false);
          IsToRedraw = true;
++#ifdef SHADEREMU
++        ShaderEmu_Cell_Flagged = true;
++#endif
          CellRedraw[cell] = true;
+     };
+     bool Is_Cell_Flagged(CELL cell) const
+@@ -332,6 +346,9 @@ private:
+     **	be redrawn for a cell, then the corresponding flag will be true.
+     */
+     static BooleanVectorClass CellRedraw;
++#ifdef SHADEREMU
++    static bool ShaderEmu_Cell_Flagged; // (a bit of it may be set: Flag_Cell, its Set)
++#endif
+ 
+     //
+     // We need a way to bypass visible view checks when we are running in the context of GlyphX without using the
 diff --git a/tiberiandawn/externs.h b/tiberiandawn/externs.h
 index ff588bf..db7de79 100644
 --- a/tiberiandawn/externs.h
@@ -3784,6 +4099,28 @@ index 14320b1..c983722 100644
      void Debug_Draw_Map(const char* txt, CELL start, CELL dest, bool pause);
      void Debug_Draw_Path(PathType* path);
      bool Follow_Edge(CELL start,
+diff --git a/tiberiandawn/function.h b/tiberiandawn/function.h
+index d5df069..3361820 100644
+--- a/tiberiandawn/function.h
++++ b/tiberiandawn/function.h
+@@ -843,7 +843,7 @@ inline COORDINATE XYPixel_Coord(int x, int y)
+                                   (int)((x * ICON_LEPTON_W) / ICON_PIXEL_W) /*+LEPTON_OFFSET_X*/));
+ }
+ 
+-inline int Lepton_To_Pixel(int lepton)
++__attribute__((always_inline)) inline int Lepton_To_Pixel(int lepton)
+ {
+     return ((lepton * ICON_PIXEL_W) + (ICON_LEPTON_W / 2) - ((lepton < 0) ? (ICON_LEPTON_W - 1) : 0)) / ICON_LEPTON_W;
+ }
+@@ -928,7 +928,7 @@ inline COORDINATE Adjacent_Cell(COORDINATE coord, DirType dir)
+ {
+     return Adjacent_Cell(coord, Dir_Facing(dir));
+ }
+-inline CELL Adjacent_Cell(CELL cell, FacingType dir)
++__attribute__((always_inline)) inline CELL Adjacent_Cell(CELL cell, FacingType dir)
+ {
+     return (CELL)(cell + AdjacentCell[dir]);
+ }
 diff --git a/tiberiandawn/gscreen.cpp b/tiberiandawn/gscreen.cpp
 index 4efa828..9b98877 100644
 --- a/tiberiandawn/gscreen.cpp
@@ -3820,10 +4157,10 @@ index eb7bece..e7a4ef0 100644
          if (LogicPage->Lock()) {
  
 diff --git a/tiberiandawn/house.cpp b/tiberiandawn/house.cpp
-index 7e9f27c..96d7e73 100644
+index 7e9f27c..a0e7826 100644
 --- a/tiberiandawn/house.cpp
 +++ b/tiberiandawn/house.cpp
-@@ -179,6 +179,35 @@ HouseClass::operator HousesType(void) const
+@@ -179,6 +179,37 @@ HouseClass::operator HousesType(void) const
   *=============================================================================================*/
  HouseClass* HouseClass::As_Pointer(HousesType house)
  {
@@ -3834,21 +4171,23 @@ index 7e9f27c..96d7e73 100644
 +    */
 +    static int count = -1;
 +    static unsigned missing;
-+    static unsigned char where[32];
++    static HouseClass* where[32];
 +    if (count != Houses.Count()) {
 +        count = Houses.Count();
 +        missing = 0;
++        memset(where, 0, sizeof(where));
 +    }
 +    if ((unsigned)house < 32) {
 +        if (missing & (1u << house)) {
 +            return (0);
 +        }
-+        if (where[house] < count && Houses.Ptr(where[house])->Class->House == house) {
-+            return (Houses.Ptr(where[house]));
++        HouseClass* known = where[house];
++        if (known && known->Class->House == house) {
++            return (known);
 +        }
 +        for (int index = 0; index < count; index++) {
 +            if (Houses.Ptr(index)->Class->House == house) {
-+                where[house] = (unsigned char)index;
++                where[house] = Houses.Ptr(index);
 +                return (Houses.Ptr(index));
 +            }
 +        }
@@ -3859,7 +4198,7 @@ index 7e9f27c..96d7e73 100644
      for (int index = 0; index < Houses.Count(); index++) {
          if (Houses.Ptr(index)->Class->House == house) {
              return (Houses.Ptr(index));
-@@ -367,6 +396,10 @@ HouseClass::HouseClass(HousesType house)
+@@ -367,6 +398,10 @@ HouseClass::HouseClass(HousesType house)
      , CapturedBuildings()
      , TotalCrates()
  {
@@ -3870,8 +4209,141 @@ index 7e9f27c..96d7e73 100644
      for (int i = 0; i < MAP_TOTAL_REGIONS; ++i) {
          Regions[i].Init();
      }
+@@ -430,7 +465,7 @@ HouseClass::HouseClass(HousesType house)
+     IsCivEvacuated = false;
+     IsDefeated = false;
+     IsDiscovered = false;
+-    IsHuman = false;
++    ShaderEmu_Scan_Gen += IsHuman, IsHuman = false;
+     WasHuman = false;
+     IsMaxedOut = false;
+     IsStarted = false;
+@@ -7358,6 +7393,96 @@ ZoneType HouseClass::Which_Zone(CELL cell) const
+     return (Which_Zone(Cell_Coord(cell)));
+ }
+ 
++#ifdef SHADEREMU
++/*
++** What LogicClass::AI's second pass and Recalc_Attributes after it leave, from one walk over the objects into a table,
++** made again only when something they read has changed (ShaderEmu_Scan_Gen: objects that come or go, a change of owner,
++** IsLocked, IsInLimbo, IsDiscoveredByPlayer). TDAWN_CHECK_SCANS=1 makes it every time and counts the frames it differs.
++*/
++struct ShaderEmu_Scan {
++    unsigned b, ab, i, ai, u, au, a, aa, nb, nab, ni, nai, nu, nau, na, naa, ob;
++};
++#define SHADEREMU_SCAN(list, X, x)                                                                                     \
++    for (index = 0, count = list.Count(); index < count; index++) {                                                    \
++        auto const* object = list.Ptr(index);                                                                          \
++        HouseClass* house = object->House;                                                                             \
++        ShaderEmu_Scan& s = to[house->Class->House];                                                                             \
++        unsigned bit = 1L << object->Class->Type;                                                                      \
++        s.x |= bit;                                                                                                    \
++        if (object->IsLocked) {                                                                                        \
++            bool live = !object->IsInLimbo;                                                                            \
++            if (live) {                                                                                                \
++                s.a##x |= bit;                                                                                         \
++            }                                                                                                          \
++            if (multi || !house->IsHuman || object->IsDiscoveredByPlayer) {                                            \
++                s.n##x |= bit;                                                                                         \
++                if (live) {                                                                                            \
++                    s.na##x |= bit;                                                                                    \
++                }                                                                                                      \
++            }                                                                                                          \
++        }                                                                                                              \
++    }
++static void ShaderEmu_Scan_Make(ShaderEmu_Scan* to)
++{
++    int index, count;
++    bool multi = GameToPlay != GAME_NORMAL;
++    memset(to, 0, HOUSE_COUNT * sizeof(ShaderEmu_Scan));
++    SHADEREMU_SCAN(Units, U, u)
++    SHADEREMU_SCAN(Infantry, I, i)
++    SHADEREMU_SCAN(Aircraft, A, a)
++    for (index = 0, count = Buildings.Count(); index < count; index++) {
++        BuildingClass const* building = Buildings.Ptr(index);
++        HouseClass* house = building->House;
++        ShaderEmu_Scan& s = to[house->Class->House];
++        unsigned type = building->Class->Type, bit = 1L << type;
++        bool locked = building->IsLocked, live = !building->IsInLimbo;
++        if (locked && (multi || !house->IsHuman || building->IsDiscoveredByPlayer)) {
++            s.nb |= bit;
++            if (live) {
++                s.nab |= bit;
++            }
++        }
++        if (type < 32) {
++            s.b |= bit;
++            if (locked && live) {
++                s.ab |= bit;
++                s.ob |= bit;
++            }
++        }
++    }
++}
++void HouseClass::ShaderEmu_Scan_Objects(void)
++{
++    static ShaderEmu_Scan made[HOUSE_COUNT];
++    static unsigned made_at;
++    static int check = -1, wrong, checks;
++    if (check < 0) {
++        check = getenv("TDAWN_CHECK_SCANS") != NULL;
++        if (check) {
++            atexit([]() { fprintf(stderr, "tdawn: %d scans looked at again, %d of them wrong\n", checks, wrong); });
++        }
++    }
++    if (made_at != ShaderEmu_Scan_Gen) {
++        made_at = ShaderEmu_Scan_Gen;
++        ShaderEmu_Scan_Make(made);
++    } else if (check) {
++        static ShaderEmu_Scan again[HOUSE_COUNT];
++        ShaderEmu_Scan_Make(again);
++        checks++;
++        wrong += memcmp(again, made, sizeof(made)) != 0;
++    }
++    for (int index = 0, count = Houses.Count(); index < count; index++) {
++        HouseClass* house = Houses.Ptr(index);
++        ShaderEmu_Scan const& s = made[house->Class->House];
++        house->BScan = s.b, house->ActiveBScan = s.ab, house->IScan = s.i, house->ActiveIScan = s.ai;
++        house->UScan = s.u, house->ActiveUScan = s.au, house->AScan = s.a, house->ActiveAScan = s.aa;
++        house->NewBScan |= s.nb, house->NewActiveBScan |= s.nab, house->NewIScan |= s.ni, house->NewActiveIScan |= s.nai;
++        house->NewUScan |= s.nu, house->NewActiveUScan |= s.nau, house->NewAScan |= s.na, house->NewActiveAScan |= s.naa;
++        house->OldBScan |= s.ob;
++    }
++}
++#endif
++
+ /***********************************************************************************************
+  * HouseClass::Recalc_Attributes -- Recalcs all houses existence bits.                         *
+  *                                                                                             *
+diff --git a/tiberiandawn/house.h b/tiberiandawn/house.h
+index 1ffcb36..b48be04 100644
+--- a/tiberiandawn/house.h
++++ b/tiberiandawn/house.h
+@@ -665,6 +665,9 @@ public:
+     unsigned Get_Ally_Flags();
+ 
+     static void Recalc_Attributes(void);
++#ifdef SHADEREMU
++    static void ShaderEmu_Scan_Objects(void);
++#endif
+ #endif // USE_RA_AI
+ 
+     /*
+diff --git a/tiberiandawn/infantry.cpp b/tiberiandawn/infantry.cpp
+index 9b527ac..4f4b797 100644
+--- a/tiberiandawn/infantry.cpp
++++ b/tiberiandawn/infantry.cpp
+@@ -2486,7 +2486,7 @@ bool InfantryClass::Unlimbo(COORDINATE coord, DirType facing)
+         if (Class->SightRange == 0 && GameToPlay == GAME_NORMAL && !House->IsHuman
+             && !Map[Coord_Cell(coord)].Is_Visible(PlayerPtr)) {
+             IsDiscoveredByPlayerMask &= ~(1 << (int)PlayerPtr->Class->House);
+-            IsDiscoveredByPlayer = false;
++            ShaderEmu_Scan_Gen += IsDiscoveredByPlayer, IsDiscoveredByPlayer = false;
+         }
+ 
+         Set_Occupy_Bit(coord);
 diff --git a/tiberiandawn/init.cpp b/tiberiandawn/init.cpp
-index 8ae9955..d03bedc 100644
+index 8ae9955..6bc924f 100644
 --- a/tiberiandawn/init.cpp
 +++ b/tiberiandawn/init.cpp
 @@ -42,6 +42,9 @@
@@ -3896,6 +4368,15 @@ index 8ae9955..d03bedc 100644
      } else {
          CCDebugString("C&C95 - About to register CONQUER.MIX\n");
          new MFCD("CONQUER.MIX"); // Cached.
+@@ -580,7 +588,7 @@ bool Init_Game(int, char*[])
+     //#endif //FIX_ME_LATER
+     Call_Back();
+ 
+-#ifndef DEMO
++#if !defined(DEMO) && !defined(SHADEREMU)
+     /*
+     **	Load multiplayer scenario descriptions
+     */
 @@ -727,6 +735,9 @@ bool Select_Game(bool fade)
          display = false;
          Show_Mouse();
@@ -3948,10 +4429,10 @@ index f4f1ef3..ea8fa26 100644
      GScreenClass::Decode_Pointers();
  }
 diff --git a/tiberiandawn/layer.cpp b/tiberiandawn/layer.cpp
-index bb688bc..ae5f041 100644
+index bb688bc..f0d9087 100644
 --- a/tiberiandawn/layer.cpp
 +++ b/tiberiandawn/layer.cpp
-@@ -84,8 +84,139 @@ bool LayerClass::Submit(ObjectClass const* object, bool sort)
+@@ -84,8 +84,148 @@ bool LayerClass::Submit(ObjectClass const* object, bool sort)
   *   10/17/1994 JLB : Created.                                                                 *
   *   03/10/1995 JLB : Uses comparison operator.                                                *
   *=============================================================================================*/
@@ -3999,18 +4480,23 @@ index bb688bc..ae5f041 100644
 +    }
 +    ObjectClass* lower = out[0];
 +    COORDINATE lower_y = lower->ShaderEmu_SortState == 1 && lower->ShaderEmu_SortFor == lower->Coord ? lower->ShaderEmu_SortKey : lower->Sort_Y();
++    unsigned first = 0, last = 0; // (what it moved: [first, last) of the list; count below 1024, 10 bits each, then the count)
 +    for (int index = 0; index < (int)count - 1; index++) {
 +        ObjectClass* next = out[index + 1];
 +        COORDINATE next_y = next->ShaderEmu_SortState == 1 && next->ShaderEmu_SortFor == next->Coord ? next->ShaderEmu_SortKey : next->Sort_Y();
 +        if (next_y < lower_y) {
 +            out[index + 1] = lower;
 +            out[index] = next;
++            if (!last) {
++                first = index;
++            }
++            last = index + 2;
 +        } else {
 +            lower = next;
 +            lower_y = next_y;
 +        }
 +    }
-+    return count;
++    return count | first << 11 | last << 21;
 +}
 +
 +void ShaderEmu_Sort_Begin(LayerClass& layer)
@@ -4023,7 +4509,7 @@ index bb688bc..ae5f041 100644
 +            });
 +        }
 +    }
-+    if (!ShaderEmu_Sorting && layer.Count() > 1 && layer.Count() <= 1024) {
++    if (!ShaderEmu_Sorting && layer.Count() > 1 && layer.Count() < 1024) {
 +        ShaderEmu_Sorting = mcw_try_call(ShaderEmu_Sort_Job, (uint32_t)(uintptr_t)&layer, (uint32_t)layer.Count());
 +        ShaderEmu_Sort_Of = &layer;
 +    }
@@ -4055,7 +4541,8 @@ index bb688bc..ae5f041 100644
 +    ** that out from its type's size every time).
 +    */
 +    if (ShaderEmu_Sorting && ShaderEmu_Sort_Of == this) {
-+        int made = (int)mcw_join(ShaderEmu_Sorting);
++        unsigned said = mcw_join(ShaderEmu_Sorting);
++        int made = said & 0x7ff, first = (said >> 11) & 0x3ff, last = said >> 21;
 +        ShaderEmu_Sorting = 0;
 +        if (made == Count()) {
 +            if (ShaderEmu_Sort_Check) {
@@ -4064,8 +4551,11 @@ index bb688bc..ae5f041 100644
 +                ShaderEmu_Sort_Here(here, made);
 +                ShaderEmu_Sorts_Wrong += memcmp(here, ShaderEmu_Sorted, made * sizeof(here[0])) != 0;
 +            }
-+            for (int index = 0; index < made; index++) {
-+                (*this)[index] = ShaderEmu_Sorted[index];
++            if (last) {
++                ObjectClass** to = &(*this)[0];
++                for (int index = first; index < last; index++) {
++                    to[index] = ShaderEmu_Sorted[index];
++                }
 +            }
 +            ShaderEmu_Sorts_Made++;
 +            return;
@@ -4091,7 +4581,7 @@ index bb688bc..ae5f041 100644
      for (int index = 0; index < Count() - 1; index++) {
          if (*(*this)[index + 1] < *(*this)[index]) {
              ObjectClass* temp;
-@@ -138,11 +269,21 @@ int LayerClass::Sorted_Add(ObjectClass const* const object)
+@@ -138,11 +278,21 @@ int LayerClass::Sorted_Add(ObjectClass const* const object)
      **	There is room for the new object now. Add it to the right sorted position.
      */
      int index;
@@ -4114,7 +4604,7 @@ index bb688bc..ae5f041 100644
      /*
      **	Make room if the insertion spot is not at the end of the vector.
 diff --git a/tiberiandawn/logic.cpp b/tiberiandawn/logic.cpp
-index 3b894e4..729253e 100644
+index 3b894e4..2dd16a0 100644
 --- a/tiberiandawn/logic.cpp
 +++ b/tiberiandawn/logic.cpp
 @@ -175,9 +175,22 @@ void LogicClass::Debug_Dump(MonoClass* mono) const
@@ -4140,13 +4630,18 @@ index 3b894e4..729253e 100644
  
      FramesPerSecond++;
  
-@@ -201,11 +214,31 @@ void LogicClass::AI(void)
+@@ -201,11 +214,36 @@ void LogicClass::AI(void)
      /*
      **	AI for all sentient objects is processed.
      */
 +    SHADEREMU_MARK(0);
      for (index = 0; index < Count(); index++) {
          ObjectClass* obj = (*this)[index];
++#ifdef SHADEREMU
++        if (obj->ShaderEmu_Asleep) {
++            continue;
++        }
++#endif
          int count = Count();
  
 +#ifdef SHADEREMU
@@ -4172,15 +4667,25 @@ index 3b894e4..729253e 100644
  
          /*
          **	If the object was destroyed in the process of performing its AI, then
-@@ -218,6 +251,7 @@ void LogicClass::AI(void)
+@@ -218,7 +256,12 @@ void LogicClass::AI(void)
      }
  
      //	Heap_Dump_Check( "After Object AI" );
 +    SHADEREMU_MARK(1);
  
++#if defined(SHADEREMU) && defined(USE_RA_AI)
++    /* (the pass below and Recalc_Attributes after it are one walk over the objects here: 2.3 and 2.2 million instructions of a battle) */
++    HouseClass::ShaderEmu_Scan_Objects();
++#else
      /*
      **	A second pass through the sentient objects is required so that the appropriate scan
-@@ -271,7 +305,9 @@ void LogicClass::AI(void)
+     **	bits will be set for the owner house.
+@@ -267,11 +310,14 @@ void LogicClass::AI(void)
+     //
+     HouseClass::Recalc_Attributes();
+ #endif // USE_RA_AI
++#endif
+ 
      /*
      **	Map related logic is performed.
      */
@@ -4191,7 +4696,7 @@ index 3b894e4..729253e 100644
      //	Heap_Dump_Check( "After Map.Logic" );
  
 diff --git a/tiberiandawn/map.cpp b/tiberiandawn/map.cpp
-index 4d484e7..2006f69 100644
+index 4d484e7..e218790 100644
 --- a/tiberiandawn/map.cpp
 +++ b/tiberiandawn/map.cpp
 @@ -52,6 +52,55 @@
@@ -4250,11 +4755,40 @@ index 4d484e7..2006f69 100644
  #include "tile.h"
  
  #define MCW MAP_CELL_W
-@@ -527,9 +576,20 @@ void MapClass::Free_Cells(void)
+@@ -478,7 +527,16 @@ void MapClass::Alloc_Cells(void)
+     **	(it may have been loaded from a save-game file), so zero it out first.
+     */
+     new (&Array) VectorClass<CellClass>;
++#ifdef SHADEREMU
++    extern bool ShaderEmu_Cells_Raw, ShaderEmu_Cells_Clean;
++    ShaderEmu_Cells_Raw = true;
+     Array.Resize(Size);
++    ShaderEmu_Cells_Raw = false;
++    ShaderEmu_Cells_Clean = false;
++    memset(&Array[0], 0, MAP_CELL_TOTAL * sizeof(CellClass)); /* (as new memory would be taken for by what reads it before Init_Cells) */
++#else
++    Array.Resize(Size);
++#endif
+ }
+ 
+ /***********************************************************************************************
+@@ -524,12 +582,32 @@ void MapClass::Free_Cells(void)
+  * HISTORY:                                                                                    *
+  *   03/17/1995 BRR : Created.                                                                 *
+  *=============================================================================================*/
++#ifdef SHADEREMU
++bool ShaderEmu_Cells_Clean;
++#endif
  void MapClass::Init_Cells(void)
  {
      TotalValue = 0;
 +#ifdef SHADEREMU
++    /* (786 KB, and a start asks three times with nothing between: ShaderEmu_Cells_Clean is unset where cells begin to be written) */
++    extern bool ShaderEmu_Cells_Clean;
++    if (ShaderEmu_Cells_Clean) {
++        return;
++    }
++    ShaderEmu_Cells_Clean = true;
 +    /* (what CellClass's constructor does, the clearing in one piece: this is run 16 times before a mission's first frame) */
 +    memset(&Array[0], 0, MAP_CELL_TOTAL * sizeof(CellClass));
 +    for (int index = 0; index < MAP_CELL_TOTAL; index++) {
@@ -4271,7 +4805,7 @@ index 4d484e7..2006f69 100644
  }
  
  /***********************************************************************************************
-@@ -756,16 +816,28 @@ void MapClass::Place_Down(CELL cell, ObjectClass* object)
+@@ -756,16 +834,28 @@ void MapClass::Place_Down(CELL cell, ObjectClass* object)
          if ((unsigned)newcell < MAP_CELL_TOTAL) {
              (*this)[newcell].Occupy_Down(object);
              (*this)[newcell].Recalc_Attributes();
@@ -4302,7 +4836,7 @@ index 4d484e7..2006f69 100644
          }
      }
  }
-@@ -799,16 +871,21 @@ void MapClass::Pick_Up(CELL cell, ObjectClass* object)
+@@ -799,16 +889,21 @@ void MapClass::Pick_Up(CELL cell, ObjectClass* object)
          if ((unsigned)newcell < MAP_CELL_TOTAL) {
              (*this)[newcell].Occupy_Up(object);
              (*this)[newcell].Recalc_Attributes();
@@ -4326,7 +4860,7 @@ index 4d484e7..2006f69 100644
          }
      }
  }
-@@ -839,12 +916,25 @@ void MapClass::Overlap_Down(CELL cell, ObjectClass* object)
+@@ -839,12 +934,25 @@ void MapClass::Overlap_Down(CELL cell, ObjectClass* object)
      if (!object)
          return;
  
@@ -4353,7 +4887,7 @@ index 4d484e7..2006f69 100644
          }
      }
  }
-@@ -875,12 +965,18 @@ void MapClass::Overlap_Up(CELL cell, ObjectClass* object)
+@@ -875,12 +983,18 @@ void MapClass::Overlap_Up(CELL cell, ObjectClass* object)
      if (!object)
          return;
  
@@ -4373,7 +4907,27 @@ index 4d484e7..2006f69 100644
          }
      }
  }
-@@ -1384,6 +1480,15 @@ void MapClass::Logic(void)
+@@ -1379,11 +1493,35 @@ void MapClass::Logic(void)
+     int subcount = MAP_CELL_TOTAL / 136;
+     int index;
+     for (index = TiberiumScan; index < MAP_CELL_TOTAL; index++) {
++#ifdef SHADEREMU
++        /* (nearly every cell: 120 of them a frame, by a pointer and not by the cell's number each) */
++        {
++            int step = IsForwardScan ? 1 : -1;
++            CellClass const* walk = &(*this)[IsForwardScan ? index : (MAP_CELL_TOTAL - 1) - index];
++            while (index < MAP_CELL_TOTAL && subcount > 1 && !walk->OccupierPtr && walk->Land_Type() != LAND_TIBERIUM) {
++                walk += step;
++                index++;
++                subcount--;
++            }
++            if (index >= MAP_CELL_TOTAL) {
++                break;
++            }
++        }
++#endif
+         CELL cell = index;
+         if (!IsForwardScan)
              cell = (MAP_CELL_TOTAL - 1) - index;
          CellClass* ptr = &(*this)[cell];
  
@@ -4389,7 +4943,7 @@ index 4d484e7..2006f69 100644
          if (Special.IsTGrowth && ptr->Land_Type() == LAND_TIBERIUM && ptr->OverlayData < 11) {
              if (TiberiumGrowthCount < sizeof(TiberiumGrowth) / sizeof(TiberiumGrowth[0])) {
                  TiberiumGrowth[TiberiumGrowthCount++] = cell;
-@@ -1536,6 +1641,10 @@ int MapClass::Cell_Region(CELL cell)
+@@ -1536,6 +1674,10 @@ int MapClass::Cell_Region(CELL cell)
   *=========================================================================*/
  int MapClass::Cell_Threat(CELL cell, HousesType house)
  {
@@ -4400,6 +4954,46 @@ index 4d484e7..2006f69 100644
      int threat = HouseClass::As_Pointer(house)->Regions[Map.Cell_Region(Map[cell].Cell_Number())].Threat_Value();
      // using function for IsVisible so we have different results for different players - JAS 2019/09/30
      if (!threat && Map[cell].Is_Visible(house)) {
+diff --git a/tiberiandawn/mapeddlg.cpp b/tiberiandawn/mapeddlg.cpp
+index 967688e..76dce7c 100644
+--- a/tiberiandawn/mapeddlg.cpp
++++ b/tiberiandawn/mapeddlg.cpp
+@@ -93,6 +93,7 @@ int MapEditClass::New_Scenario(void)
+     -------------------------- Blow away everything --------------------------
+     */
+     Clear_Scenario();
++    {extern bool ShaderEmu_Cells_Clean; ShaderEmu_Cells_Clean = false;}
+ 
+     /*
+     ----------------------------- Set parameters -----------------------------
+@@ -228,6 +229,7 @@ int MapEditClass::Load_Scenario(void)
+     -------------------------- Blow away everything --------------------------
+     */
+     Clear_Scenario();
++    {extern bool ShaderEmu_Cells_Clean; ShaderEmu_Cells_Clean = false;}
+ 
+     /*
+     ------------------------------ Read the INI ------------------------------
+diff --git a/tiberiandawn/miscasm.h b/tiberiandawn/miscasm.h
+index ec90a58..838f708 100644
+--- a/tiberiandawn/miscasm.h
++++ b/tiberiandawn/miscasm.h
+@@ -4,7 +4,15 @@
+ class GraphicViewPortClass;
+ 
+ int Distance_Coord(COORDINATE coord1, COORDINATE coord2);
++#ifdef SHADEREMU
++/* (X's cell byte, then Y's, in the MAP_CELL_MAX_X_BITS each has of a cell (defines.h, 7), what the composites say: everywhere inline) */
++__attribute__((always_inline)) inline CELL Coord_Cell(COORDINATE coord)
++{
++    return (CELL)((((unsigned)coord >> 8) & 127) | ((((unsigned)coord >> 24) & 127) << 7));
++}
++#else
+ CELL Coord_Cell(COORDINATE coord);
++#endif
+ void Fat_Put_Pixel(int x, int y, int color, int siz, GraphicViewPortClass& gpage);
+ 
+ #endif
 diff --git a/tiberiandawn/msglist.cpp b/tiberiandawn/msglist.cpp
 index 01b705d..0a29bdd 100644
 --- a/tiberiandawn/msglist.cpp
@@ -4448,27 +5042,76 @@ index 86ef937..153a1c9 100644
      void Set_Width(int width);
  
  private:
+diff --git a/tiberiandawn/netdlg.cpp b/tiberiandawn/netdlg.cpp
+index 3c74ae4..5956467 100644
+--- a/tiberiandawn/netdlg.cpp
++++ b/tiberiandawn/netdlg.cpp
+@@ -388,7 +388,7 @@ void Destroy_Connection(int id, int error)
+             ..................................................................*/
+             house = MPlayerHouses[i];
+             housep = HouseClass::As_Pointer(house);
+-            housep->IsHuman = false;
++            ShaderEmu_Scan_Gen += housep->IsHuman, housep->IsHuman = false;
+             housep->IsStarted = true;
+ 
+             /*..................................................................
 diff --git a/tiberiandawn/object.cpp b/tiberiandawn/object.cpp
-index 72ed3e5..dd45585 100644
+index 72ed3e5..08c996c 100644
 --- a/tiberiandawn/object.cpp
 +++ b/tiberiandawn/object.cpp
-@@ -289,6 +289,11 @@ ObjectClass::ObjectClass(void)
+@@ -283,12 +283,18 @@ ObjectClass::ObjectClass(void)
+     Trigger = 0;        // No associated trigger.
+     IsToDamage = false;
+     IsToDisplay = false;    // Redraw is presumed unnecessary.
+-    IsInLimbo = true;       // Always presumed to start in limbo state.
++    ShaderEmu_Scan_Gen += !IsInLimbo && Is_Techno(), IsInLimbo = true;       // Always presumed to start in limbo state.
+     IsSelected = false;     // Limboed units cannot be selected.
+     IsDown = false;         // Limboed units cannot be on the map.
      IsAnimAttached = false; // Anim is not attached.
      Strength = 255;         // nominal strength value
      IsSelectedMask = 0;     // Mask showing who has selected this object
 +#ifdef SHADEREMU
 +    ShaderEmu_SortState = 0;
++    ShaderEmu_Asleep = false;
 +    ShaderEmu_Kept = 0;
 +    ShaderEmu_Away = ~(COORDINATE)0;
 +#endif
  }
  
  /***********************************************************************************************
+@@ -1162,7 +1168,7 @@ bool ObjectClass::Limbo(void)
+         }
+ 
+         Hidden();
+-        IsInLimbo = true;
++        ShaderEmu_Scan_Gen += !IsInLimbo && Is_Techno(), IsInLimbo = true;
+         IsToDisplay = false;
+         return (true);
+     }
+@@ -1192,7 +1198,7 @@ bool ObjectClass::Unlimbo(COORDINATE coord, DirType)
+ {
+     if (GameActive && IsInLimbo && !IsDown) {
+         if (ScenarioInit || Can_Enter_Cell(Coord_Cell(coord), FACING_NONE) == MOVE_OK) {
+-            IsInLimbo = false;
++            ShaderEmu_Scan_Gen += IsInLimbo && Is_Techno(), IsInLimbo = false;
+             IsToDisplay = false;
+             Coord = Class_Of().Coord_Fixup(coord);
+ 
 diff --git a/tiberiandawn/object.h b/tiberiandawn/object.h
-index e822e3d..3518c13 100644
+index e822e3d..54f337a 100644
 --- a/tiberiandawn/object.h
 +++ b/tiberiandawn/object.h
-@@ -121,6 +121,17 @@ public:
+@@ -37,6 +37,9 @@
+ 
+ #include "abstract.h"
+ 
++#ifdef SHADEREMU
++extern unsigned ShaderEmu_Scan_Gen; /* raised by whatever a house's scan bits read: HouseClass::ShaderEmu_Scan_Objects */
++#endif
+ class ObjectClass;
+ class TechnoClass;
+ class ObjectTypeClass;
+@@ -121,6 +124,18 @@ public:
      */
      short Strength;
  
@@ -4478,6 +5121,7 @@ index e822e3d..3518c13 100644
 +    ** (layer.cpp), and where the GPU's scene keeps this object's rectangles (gl.cpp).
 +    */
 +    unsigned char ShaderEmu_SortState; // 0: not asked yet; 1: kept; 2: asked every time
++    bool ShaderEmu_Asleep; // nothing in its AI can happen until it is told (a tree: Start_To_Crumble); logic.cpp passes it over
 +    short ShaderEmu_Kept;
 +    COORDINATE ShaderEmu_SortFor, ShaderEmu_SortKey;
 +    COORDINATE ShaderEmu_Away; // the view at which gl.cpp found it to draw nothing (all ones: none)
@@ -4486,6 +5130,34 @@ index e822e3d..3518c13 100644
      /*
      ** Some additional padding in case we need to add data to the class and maintain backwards compatibility for
      *save/load
+diff --git a/tiberiandawn/odata.cpp b/tiberiandawn/odata.cpp
+index 13c33d4..1ce0c7d 100644
+--- a/tiberiandawn/odata.cpp
++++ b/tiberiandawn/odata.cpp
+@@ -694,6 +694,11 @@ short const* OverlayTypeClass::Occupy_List(bool) const
+  *=========================================================================*/
+ unsigned char* OverlayTypeClass::Radar_Icon(int data) const
+ {
++#ifdef SHADEREMU
++    if (!Get_Radar_Data()) {
++        ((void const*&)RadarIcon) = Get_Radar_Icon(Get_Image_Data(), 0, -1, 3); /* (made when first asked for, not for every type at a start) */
++    }
++#endif
+     unsigned char* icon = (unsigned char*)Get_Radar_Data(); // Get pointer to radar icons
+     icon += (data * 9) + 2;                                 // move icon ptr to correct icon
+     return (icon);                                          // Return the correct icon
+@@ -872,7 +877,11 @@ void OverlayTypeClass::Init(TheaterType theater)
+             IsTheaterShape = overlay.IsTheater;
+             if (overlay.RadarIcon)
+                 delete[](char*) overlay.RadarIcon;
++#ifdef SHADEREMU
++            ((void const*&)overlay.RadarIcon) = NULL;
++#else
+             ((void const*&)overlay.RadarIcon) = Get_Radar_Icon(overlay.Get_Image_Data(), 0, -1, 3);
++#endif
+             IsTheaterShape = false;
+         }
+     }
 diff --git a/tiberiandawn/options.cpp b/tiberiandawn/options.cpp
 index c4206a0..0a6f5a4 100644
 --- a/tiberiandawn/options.cpp
@@ -4513,8 +5185,21 @@ index c4206a0..0a6f5a4 100644
      ScrollRate = ini.Get_Int(OPTIONS, "ScrollRate", 4);
      Set_Brightness(ini.Get_Int(OPTIONS, "Brightness", 0x80));
      Set_Sound_Volume(ini.Get_Int(OPTIONS, "Volume", 0xA0), false);
+diff --git a/tiberiandawn/reinf.cpp b/tiberiandawn/reinf.cpp
+index 9d14c89..f3f9f89 100644
+--- a/tiberiandawn/reinf.cpp
++++ b/tiberiandawn/reinf.cpp
+@@ -441,7 +441,7 @@ bool Do_Reinforcements(TeamTypeClass* teamtype)
+             placed = object->Unlimbo(Cell_Coord(edge), DIR_N);
+             if (placed) {
+                 if (!team) {
+-                    object->IsLocked = false;
++                    ShaderEmu_Scan_Gen += object->IsLocked, object->IsLocked = false;
+                     object->Assign_Mission(MISSION_UNLOAD);
+                     object->Commence();
+                     object->Assign_Destination(::As_Target(cell));
 diff --git a/tiberiandawn/saveload.cpp b/tiberiandawn/saveload.cpp
-index 425890b..0463678 100644
+index 425890b..1e23f6b 100644
 --- a/tiberiandawn/saveload.cpp
 +++ b/tiberiandawn/saveload.cpp
 @@ -123,6 +123,10 @@ bool Save_Game(const char* file_name, const char* descr)
@@ -4539,11 +5224,35 @@ index 425890b..0463678 100644
  
      /*
      **	Open the file
+@@ -378,6 +386,7 @@ bool Load_Game(const char* file_name)
+     **	- The list of currently-selected objects is cleared
+     */
+     Clear_Scenario();
++    {extern bool ShaderEmu_Cells_Clean; ShaderEmu_Cells_Clean = false;}
+ 
+     /*
+     **	Read in & verify the save-game ID code
+@@ -522,6 +531,7 @@ bool Load_Game(const char* file_name)
+ #ifdef DEMO
+     if (Scen.Scenario != 10 && Scen.Scenario != 1 && Scen.Scenario != 6) {
+         Clear_Scenario();
++    {extern bool ShaderEmu_Cells_Clean; ShaderEmu_Cells_Clean = false;}
+         return (false);
+     }
+ #endif
 diff --git a/tiberiandawn/scenario.cpp b/tiberiandawn/scenario.cpp
-index 47f8b42..b24ae3e 100644
+index 47f8b42..e2548ba 100644
 --- a/tiberiandawn/scenario.cpp
 +++ b/tiberiandawn/scenario.cpp
-@@ -403,6 +403,16 @@ void Clear_Scenario(void)
+@@ -384,6 +384,7 @@ void Clear_Scenario(void)
+     Base.Init();
+ 
+     CurrentObject.Clear_All();
++    ShaderEmu_Scan_Gen++;
+ }
+ 
+ /***********************************************************************************************
+@@ -403,6 +404,16 @@ void Clear_Scenario(void)
   *=============================================================================================*/
  void Do_Win(void)
  {
@@ -4560,7 +5269,7 @@ index 47f8b42..b24ae3e 100644
      Map.Set_Default_Mouse(MOUSE_NORMAL);
      Hide_Mouse();
  
-@@ -435,6 +445,9 @@ void Do_Win(void)
+@@ -435,6 +446,9 @@ void Do_Win(void)
          Call_Back();
          Frame_Limiter();
      }
@@ -4570,6 +5279,88 @@ index 47f8b42..b24ae3e 100644
  
      /*
      ** Stop here if this is a multiplayer game.
+diff --git a/tiberiandawn/scenarioini.cpp b/tiberiandawn/scenarioini.cpp
+index 8e906f4..338008f 100644
+--- a/tiberiandawn/scenarioini.cpp
++++ b/tiberiandawn/scenarioini.cpp
+@@ -280,6 +280,10 @@ bool Read_Scenario_Ini(char* root, bool fresh)
+     /*
+     ** Init the Scenario CRC value
+     */
++#ifdef SHADEREMU
++    /* (a SHA over the whole file: only a network game's frames compare it) */
++    if (GameToPlay != GAME_NORMAL)
++#endif
+     ScenarioCRC = ini.Get_Unique_ID();
+ 
+     /*
+@@ -367,7 +371,7 @@ bool Read_Scenario_Ini(char* root, bool fresh)
+         Scen.CarryOverCap = ini.Get_Int("Basic", "CarryOverCap", -1);
+ 
+         PlayerPtr = HouseClass::As_Pointer(ini.Get_HousesType("Basic", "Player", HOUSE_GOOD));
+-        PlayerPtr->IsHuman = true;
++        ShaderEmu_Scan_Gen += !PlayerPtr->IsHuman, PlayerPtr->IsHuman = true;
+ 
+         int carryover;
+         if (Scen.CarryOverCap != -1) {
+@@ -388,7 +392,7 @@ bool Read_Scenario_Ini(char* root, bool fresh)
+ #ifdef OBSOLETE
+         if (GameToPlay == GAME_NORMAL && ScenPlayer == SCEN_PLAYER_JP) {
+             PlayerPtr = HouseClass::As_Pointer(HOUSE_MULTI4);
+-            PlayerPtr->IsHuman = true;
++            ShaderEmu_Scan_Gen += !PlayerPtr->IsHuman, PlayerPtr->IsHuman = true;
+             PlayerPtr->Credits += CarryOverMoney;
+             PlayerPtr->InitialCredits += CarryOverMoney;
+             PlayerPtr->ActLike = Whom;
+@@ -696,6 +700,10 @@ bool Read_Scenario_Ini_File(char* scenario_file_name, char* bin_file_name, const
+     /*
+     ** Init the Scenario CRC value
+     */
++#ifdef SHADEREMU
++    /* (a SHA over the whole file: only a network game's frames compare it) */
++    if (GameToPlay != GAME_NORMAL)
++#endif
+     ScenarioCRC = ini.Get_Unique_ID();
+ 
+     /*
+@@ -775,7 +783,7 @@ bool Read_Scenario_Ini_File(char* scenario_file_name, char* bin_file_name, const
+         Scen.CarryOverCap = ini.Get_Int("Basic", "CarryOverCap", -1);
+ 
+         PlayerPtr = HouseClass::As_Pointer(ini.Get_HousesType("Basic", "Player", HOUSE_GOOD));
+-        PlayerPtr->IsHuman = true;
++        ShaderEmu_Scan_Gen += !PlayerPtr->IsHuman, PlayerPtr->IsHuman = true;
+         int carryover;
+         if (Scen.CarryOverCap != -1) {
+             carryover = MIN((int)Fixed_To_Cardinal(Scen.CarryOverMoney, Scen.CarryOverPercent), Scen.CarryOverCap);
+@@ -1056,6 +1064,10 @@ bool Read_Movies_From_Scenario_Ini(char* root, bool fresh)
+     /*
+     ** Init the Scenario CRC value
+     */
++#ifdef SHADEREMU
++    /* (a SHA over the whole file: only a network game's frames compare it) */
++    if (GameToPlay != GAME_NORMAL)
++#endif
+     ScenarioCRC = ini.Get_Unique_ID();
+ 
+     /*
+@@ -1233,7 +1245,7 @@ static void Assign_Houses(void)
+         */
+         memset((char*)housep->Name, 0, MPLAYER_NAME_MAX);
+         strncpy((char*)housep->Name, MPlayerNames[i], MPLAYER_NAME_MAX - 1);
+-        housep->IsHuman = true;
++        ShaderEmu_Scan_Gen += !housep->IsHuman, housep->IsHuman = true;
+         housep->Init_Data(color, pref_house, MPlayerCredits);
+ 
+         /*
+@@ -1275,7 +1287,7 @@ static void Assign_Houses(void)
+             /*
+             **	Set the house's IsHuman, Credits, ActLike, & RemapTable
+             */
+-            housep->IsHuman = false;
++            ShaderEmu_Scan_Gen += housep->IsHuman, housep->IsHuman = false;
+             housep->Init_Data(color, pref_house, MPlayerCredits);
+ 
+             DiffType difficulty = Scen.CDifficulty;
 diff --git a/tiberiandawn/score.cpp b/tiberiandawn/score.cpp
 index d6caaea..6545e4d 100644
 --- a/tiberiandawn/score.cpp
@@ -4676,11 +5467,93 @@ index 596a8f7..cb485b6 100644
          if (!noscroll) {
  
              /*
+diff --git a/tiberiandawn/tdata.cpp b/tiberiandawn/tdata.cpp
+index b8bb9a7..ff78941 100644
+--- a/tiberiandawn/tdata.cpp
++++ b/tiberiandawn/tdata.cpp
+@@ -812,7 +812,11 @@ void TerrainTypeClass::Init(TheaterType theater)
+                 IsTheaterShape = true;
+                 if (terrain.RadarIcon)
+                     delete[](char*) terrain.RadarIcon;
++#ifdef SHADEREMU
++                ((void const*&)terrain.RadarIcon) = NULL;
++#else
+                 ((void const*&)terrain.RadarIcon) = Get_Radar_Icon(terrain.Get_Image_Data(), 0, 1, 3);
++#endif
+                 IsTheaterShape = false;
+             }
+         }
 diff --git a/tiberiandawn/techno.cpp b/tiberiandawn/techno.cpp
-index 07b96eb..d3ec50d 100644
+index 07b96eb..fad8665 100644
 --- a/tiberiandawn/techno.cpp
 +++ b/tiberiandawn/techno.cpp
-@@ -1048,7 +1048,36 @@ void TechnoClass::Draw_It(int x, int y, WindowNumberType window)
+@@ -492,11 +492,11 @@ TechnoClass::TechnoClass(void)
+     IsCloakable = false;
+     IsALemon = false;
+     IsALoaner = false;
+-    IsDiscoveredByPlayer = false;
++    ShaderEmu_Scan_Gen += IsDiscoveredByPlayer, IsDiscoveredByPlayer = false;
+     IsDiscoveredByComputer = false;
+     IsInRecoilState = false;
+     IsLeader = false;
+-    IsLocked = false;
++    ShaderEmu_Scan_Gen += IsLocked, IsLocked = false;
+     IsOwnedByPlayer = false;
+     IsSecondShot = true;
+     IsTethered = false;
+@@ -660,7 +660,7 @@ bool TechnoClass::Revealed(HouseClass* house)
+                 **	A newly revealed object will always perform a look operation.
+                 */
+                 if (house == PlayerPtr)
+-                    IsDiscoveredByPlayer = true;
++                    ShaderEmu_Scan_Gen += !IsDiscoveredByPlayer, IsDiscoveredByPlayer = true;
+                 if (house != PlayerPtr)
+                     IsDiscoveredByComputer = true;
+                 Look();
+@@ -668,7 +668,7 @@ bool TechnoClass::Revealed(HouseClass* house)
+         }
+ 
+         if (house == PlayerPtr)
+-            IsDiscoveredByPlayer = true;
++            ShaderEmu_Scan_Gen += !IsDiscoveredByPlayer, IsDiscoveredByPlayer = true;
+         if (house != PlayerPtr)
+             IsDiscoveredByComputer = true;
+ 
+@@ -883,6 +883,7 @@ RadioMessageType TechnoClass::Receive_Message(RadioClass* from, RadioMessageType
+  * HISTORY:                                                                                    *
+  *   10/17/1994 JLB : Created.                                                                 *
+  *=============================================================================================*/
++unsigned ShaderEmu_Scan_Gen = 1;
+ TechnoClass::TechnoClass(HousesType house)
+     : House(HouseClass::As_Pointer(house))
+     , TarCom(TARGET_NONE)
+@@ -903,10 +904,10 @@ TechnoClass::TechnoClass(HousesType house)
+     IsALoaner = false;
+     IsDiscoveredByComputer = false;
+     // IsOwnedByPlayer = (house == PlayerPtr->Class->House);  // ST - 4/24/2019 10:41AM
+-    IsDiscoveredByPlayer = false;
++    ShaderEmu_Scan_Gen += IsDiscoveredByPlayer, IsDiscoveredByPlayer = false;
+     IsInRecoilState = false;
+     IsLeader = false;
+-    IsLocked = false;
++    ShaderEmu_Scan_Gen += IsLocked, IsLocked = false;
+     IsSecondShot = false;
+     IsTethered = false;
+ 
+@@ -967,10 +968,10 @@ void TechnoClass::Per_Cell_Process(bool)
+             UnitClass* u = (UnitClass*)this;
+ 
+             if (*u != UNIT_HOVER && *u != UNIT_GUNBOAT) {
+-                IsLocked = true;
++                ShaderEmu_Scan_Gen += !IsLocked, IsLocked = true;
+             }
+         } else {
+-            IsLocked = true;
++            ShaderEmu_Scan_Gen += !IsLocked, IsLocked = true;
+         }
+     }
+ 
+@@ -1048,7 +1049,36 @@ void TechnoClass::Draw_It(int x, int y, WindowNumberType window)
          }
      }
  
@@ -4717,7 +5590,16 @@ index 07b96eb..d3ec50d 100644
          GraphicViewPortClass draw_window(LogicPage->Get_Graphic_Buffer(),
                                           WindowList[window][WINDOWX] + LogicPage->Get_XPos(),
                                           WindowList[window][WINDOWY] + LogicPage->Get_YPos(),
-@@ -1338,6 +1367,7 @@ bool TechnoClass::Evaluate_Object(ThreatType method, int mask, int range, Techno
+@@ -1152,7 +1182,7 @@ bool TechnoClass::Unlimbo(COORDINATE coord, DirType dir)
+         Enter_Idle_Mode(true);
+         Commence();
+ 
+-        IsLocked = Map.In_Radar(Coord_Cell(coord));
++        ShaderEmu_Scan_Gen++, IsLocked = Map.In_Radar(Coord_Cell(coord));
+         return (true);
+     }
+     return (false);
+@@ -1338,6 +1368,7 @@ bool TechnoClass::Evaluate_Object(ThreatType method, int mask, int range, Techno
      if (House->Is_Ally(object))
          return (false);
  
@@ -4725,7 +5607,7 @@ index 07b96eb..d3ec50d 100644
      /*
      **	If the object is farther away than allowed, bail.
      */
-@@ -1346,6 +1376,7 @@ bool TechnoClass::Evaluate_Object(ThreatType method, int mask, int range, Techno
+@@ -1346,6 +1377,7 @@ bool TechnoClass::Evaluate_Object(ThreatType method, int mask, int range, Techno
          return (false);
      if (range == 0 && !In_Range(object, 0) && !In_Range(object, 1))
          return (false);
@@ -4733,7 +5615,7 @@ index 07b96eb..d3ec50d 100644
  
      /*
      **	If the object is not visible, then bail. Human controled units
-@@ -1450,6 +1481,17 @@ bool TechnoClass::Evaluate_Object(ThreatType method, int mask, int range, Techno
+@@ -1450,6 +1482,17 @@ bool TechnoClass::Evaluate_Object(ThreatType method, int mask, int range, Techno
      **	target value then record this target for possible return as the
      **	best target available.
      */
@@ -4751,7 +5633,7 @@ index 07b96eb..d3ec50d 100644
      int rawval = object->Value();
      value = rawval + object->Kills;
  
-@@ -1598,6 +1640,48 @@ bool TechnoClass::Evaluate_Cell(ThreatType method,
+@@ -1598,6 +1641,48 @@ bool TechnoClass::Evaluate_Cell(ThreatType method,
   *   11/14/1994 JLB : Created.                                                                 *
   *   06/20/1995 JLB : Greatly optimized scan method.                                           *
   *=============================================================================================*/
@@ -4800,7 +5682,7 @@ index 07b96eb..d3ec50d 100644
  TARGET TechnoClass::Greatest_Threat(ThreatType method) const
  {
      ObjectClass const* bestobject = NULL;
-@@ -1681,7 +1765,61 @@ TARGET TechnoClass::Greatest_Threat(ThreatType method) const
+@@ -1681,7 +1766,61 @@ TARGET TechnoClass::Greatest_Threat(ThreatType method) const
          */
          TechnoClass const* object;
          int value;
@@ -4862,7 +5744,7 @@ index 07b96eb..d3ec50d 100644
  
              /*
              **	Scan the top and bottom rows of the "box".
-@@ -1742,6 +1880,7 @@ TARGET TechnoClass::Greatest_Threat(ThreatType method) const
+@@ -1742,6 +1881,7 @@ TARGET TechnoClass::Greatest_Threat(ThreatType method) const
                      }
                  }
              }
@@ -4870,7 +5752,7 @@ index 07b96eb..d3ec50d 100644
  
              /*
              **	Bail early if a target has already been found and the range is at
-@@ -1872,6 +2011,11 @@ void TechnoClass::Clicked_As_Target(HousesType house,
+@@ -1872,6 +2012,11 @@ void TechnoClass::Clicked_As_Target(HousesType house,
                                      int count) // 2019/09/20 JAS - Added record of who clicked on the object
  {
      FlashCount = count;
@@ -4882,8 +5764,90 @@ index 07b96eb..d3ec50d 100644
  
      // 2019/09/20 JAS - Flashing info needs to exist per player
      if (house < HOUSE_COUNT) {
+@@ -3021,7 +3166,7 @@ bool TechnoClass::Captured(HouseClass* newowner)
+         /*
+         **	Change ownership now.
+         */
+-        House = newowner;
++        ShaderEmu_Scan_Gen++, House = newowner;
+         IsOwnedByPlayer = (House == PlayerPtr);
+ 
+         return (true);
+@@ -4652,7 +4797,7 @@ void TechnoClass::Set_Discovered_By_Player(HouseClass* player)
+     IsDiscoveredByPlayerMask |= (1 << shift);
+ 
+     if (GameToPlay == GAME_NORMAL && player == PlayerPtr) {
+-        IsDiscoveredByPlayer = true;
++        ShaderEmu_Scan_Gen += !IsDiscoveredByPlayer, IsDiscoveredByPlayer = true;
+     }
+ }
+ 
+@@ -4671,7 +4816,7 @@ void TechnoClass::Set_Discovered_By_Player(HouseClass* player)
+ void TechnoClass::Clear_Discovered_By_Players()
+ {
+     IsDiscoveredByPlayerMask = 0;
+-    IsDiscoveredByPlayer = false;
++    ShaderEmu_Scan_Gen += IsDiscoveredByPlayer, IsDiscoveredByPlayer = false;
+ }
+ 
+ /***********************************************************************************************
+diff --git a/tiberiandawn/techno.h b/tiberiandawn/techno.h
+index 7387269..8cabe33 100644
+--- a/tiberiandawn/techno.h
++++ b/tiberiandawn/techno.h
+@@ -229,7 +229,10 @@ public:
+         , House(this->House)
+         , CloakingDevice(x)
+         , PrimaryFacing(x){};
+-    virtual ~TechnoClass(void){};
++    virtual ~TechnoClass(void)
++    {
++        ShaderEmu_Scan_Gen++;
++    };
+ 
+     /*
+     **	Query functions.
+diff --git a/tiberiandawn/terrain.cpp b/tiberiandawn/terrain.cpp
+index 2593e39..828cf49 100644
+--- a/tiberiandawn/terrain.cpp
++++ b/tiberiandawn/terrain.cpp
+@@ -527,6 +527,12 @@ void TerrainClass::AI(void)
+ {
+     Validate();
+     ObjectClass::AI();
++#ifdef SHADEREMU
++    if (!StageClass::Fetch_Rate() && !IsCrumbling && !Class->IsTransformable && !IsToDamage) {
++        ShaderEmu_Asleep = true;
++        return;
++    }
++#endif
+ 
+     if (StageClass::Graphic_Logic()) {
+         Mark();
+@@ -657,6 +663,9 @@ void TerrainClass::Start_To_Crumble(void)
+ {
+     Validate();
+     if (!IsCrumbling) {
++#ifdef SHADEREMU
++        ShaderEmu_Asleep = false;
++#endif
+         IsCrumbling = true;
+         Set_Rate(2);
+         Set_Stage(0);
+@@ -753,6 +762,11 @@ TerrainClass::TerrainClass(void)
+ unsigned char* TerrainClass::Radar_Icon(CELL cell)
+ {
+     Validate();
++#ifdef SHADEREMU
++    if (!Class->Get_Radar_Data()) {
++        ((void const*&)Class->RadarIcon) = Get_Radar_Icon(Class->Get_Image_Data(), 0, 1, 3); /* (when first asked for) */
++    }
++#endif
+     unsigned char* icon = (unsigned char*)Class->Get_Radar_Data(); // get a pointer to radar icons
+     int width = *icon++;                                           // extract the width from data
+     int height = *icon++;                                          // extract the width from data
 diff --git a/tiberiandawn/theme.cpp b/tiberiandawn/theme.cpp
-index 972a6dc..2e1a5ab 100644
+index 972a6dc..022ad31 100644
 --- a/tiberiandawn/theme.cpp
 +++ b/tiberiandawn/theme.cpp
 @@ -187,6 +187,14 @@ void ThemeClass::AI(void)
@@ -4901,45 +5865,50 @@ index 972a6dc..2e1a5ab 100644
              if (Pending == THEME_PICK_ANOTHER) {
                  Pending = Next_Song(Score);
              }
-diff --git a/common/wsa.cpp b/common/wsa.cpp
---- a/common/wsa.cpp
-+++ b/common/wsa.cpp
-@@ -830,6 +830,18 @@ unsigned int Get_Animation_Size(void const* handle)
- static unsigned int Get_Resident_Frame_Offset(char* file_buffer, int frame)
- {
-     unsigned int frame0_size;
-+#ifdef SHADEREMU
-+    /* (bytes: the table lies where the delta buffer ends, at any byte, and a copy through a uint32_t pointer
-+    ** may be compiled as a word load, which an address at any byte breaks: the Soviet score screen's
-+    ** offsets came out a byte each, its frames were drawn over the heap) */
-+    const char* lptr;
-+
-+    // If there is a frame 0, the calculate its size.
-+    lptr = file_buffer;
-+    uint32_t x1, x0;
-+    memcpy(&x0, lptr, sizeof(uint32_t));
-+    memcpy(&x1, lptr + sizeof(uint32_t), sizeof(uint32_t));
-+#else
-     uint32_t* lptr;
- 
-     // If there is a frame 0, the calculate its size.
-@@ -837,6 +849,7 @@ static unsigned int Get_Resident_Frame_Offset(char* file_buffer, int frame)
-     uint32_t x1, x0;
-     memcpy(&x0, lptr, sizeof(uint32_t));
-     memcpy(&x1, lptr + 1, sizeof(uint32_t));
-+#endif
- 
-     x0 = le32toh(x0);
-     x1 = le32toh(x1);
-@@ -848,7 +861,11 @@ static unsigned int Get_Resident_Frame_Offset(char* file_buffer, int frame)
+@@ -467,6 +475,12 @@ bool ThemeClass::Is_Allowed(ThemeType index) const
+         }
      }
  
-     // Return the offset into RAM for the frame.
 +#ifdef SHADEREMU
-+    lptr += frame * sizeof(uint32_t);
-+#else
-     lptr += frame;
++    extern bool ShaderEmu_Theme_Ask(void);
++    if (ShaderEmu_Theme_Ask()) {
++        ThemeClass::Scan();
++    }
 +#endif
-     memcpy(&x0, lptr, sizeof(uint32_t));
-     x0 = le32toh(x0);
-     if (x0)
+     return (_themes[index].Available
+             && (_themes[index].Normal ||
+                 //		(index == THEME_MAP1 && ScenarioInit) ||
+@@ -541,8 +555,25 @@ ThemeType ThemeClass::From_Name(char const* name)
+  * HISTORY:                                                                                    *
+  *   01/04/1996 JLB : Created.                                                                 *
+  *=============================================================================================*/
++#ifdef SHADEREMU
++static bool ShaderEmu_Theme_Scanned, ShaderEmu_Theme_Scanning;
++#endif
++bool ShaderEmu_Theme_Ask(void)
++{
++    if (ShaderEmu_Theme_Scanned) {
++        return false;
++    }
++    ShaderEmu_Theme_Scanned = ShaderEmu_Theme_Scanning = true;
++    return true;
++}
+ void ThemeClass::Scan(void)
+ {
++#ifdef SHADEREMU
++    if (!ShaderEmu_Theme_Scanning) {
++        ShaderEmu_Theme_Scanned = false; /* (1.3 million instructions a start: Is_Allowed asks) */
++        return;
++    }
++#endif
+     for (ThemeType theme = THEME_FIRST; theme < THEME_COUNT; theme++) {
+         //		if (theme == THEME_J1 && !Special.IsJurassic) {
+         //			_themes[theme].Available = false;
+@@ -550,4 +581,7 @@ void ThemeClass::Scan(void)
+         _themes[theme].Available = CCFileClass(Theme_File_Name(theme)).Is_Available();
+         //		}
+     }
++#ifdef SHADEREMU
++    ShaderEmu_Theme_Scanning = false;
++#endif
+ }
