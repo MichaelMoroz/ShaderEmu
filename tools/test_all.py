@@ -257,9 +257,9 @@ CASES = [
     # blitter's (OPENTTD_DRAW=cpu): rvc_cpu draws no GPU list, and the GPU's picture is checked under rvc_harness --cpu --warp
     # ("The picture on the GPU")
     # Age of Empires is on images made with --aoe only (docs/games/aoe.md): an image without its data says so and passes
-    case('aoe', 'games aoe', X + 'if [ -f /usr/share/aoe/Empires.dat ]; then AOE_TICK_MS=33 AOE_SUM_EVERY=500 AOE_SUM_END=1000 '
+    case('aoe', 'games aoe', X + 'if [ -f /usr/share/aoe/Empires.dat ]; then AOE_VIEW=inline AOE_TICK_MS=33 AOE_SUM_EVERY=500 AOE_SUM_END=1000 '
          'AOE_SCRIPT="3000 click 400 245;3000 click 400 172;3000 click 237 568;2000 click 369 118;1000 rclick 505 170;1000 click 370 215;1000 click 163 508" aoe; else echo AOE-NO-DATA; fi',
-         wall=120, has=[r'aoesum: update 1000 time 99900 objects 4357 sum 5032c153|AOE-NO-DATA']),
+         wall=120, has=[r'^(aoesum: update 1000 time 99900 objects 4357 sum 5032c153|AOE-NO-DATA)']),
     case('openttd-scroll', 'games openttd', X + 'OPENTTD_DRAW=cpu OPENTTD_PLAY=1 OPENTTD_PLAY_ODD=1 OPENTTD_PAUSE=1 OPENTTD_CHECK=1 openttd -g /usr/share/openttd/busy.sav',
          True, wall=400, has=[r'openttd: play round 1: .*checked (19\d|200), 0 differ \(0 pixels']),
     case('openttd-scroll-serial', 'games openttd', X + 'OPENTTD_DRAW=cpu OPENTTD_PLAY=1 OPENTTD_PAUSE=1 OPENTTD_CHECK=1 OPENTTD_WORKERS=0 openttd -g /usr/share/openttd/busy.sav',
