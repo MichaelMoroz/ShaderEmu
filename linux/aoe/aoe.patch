@@ -430,7 +430,7 @@ index f3e0cf3a4..212817f2a 100644
      this->update_map_info(in_map);
      this->create_shared_resources();
 diff --git a/src/scr_game.cpp b/src/scr_game.cpp
-index 92412fb64..6600578f6 100644
+index 92412fb64..2e54bd425 100644
 --- a/src/scr_game.cpp
 +++ b/src/scr_game.cpp
 @@ -167,7 +167,7 @@ TRIBE_Screen_Game::TRIBE_Screen_Game() : TScreenPanel(s_Game_Screen) {
@@ -442,7 +442,7 @@ index 92412fb64..6600578f6 100644
          }
          if (this->button_bldg_pics[i] == 0 || !(this->button_bldg_pics[i])->is_loaded()) {
              this->error_code = 1;
-@@ -1083,6 +1083,56 @@ long TRIBE_Screen_Game::handle_idle() {
+@@ -1083,6 +1083,66 @@ long TRIBE_Screen_Game::handle_idle() {
      return result;
  }
  
@@ -451,6 +451,7 @@ index 92412fb64..6600578f6 100644
 +#include "../include/player.h"
 +#include "../include/stat_obj.h"
 +#include "../include/obj_list.h"
++#include "../include/zone_map.h"
 +extern unsigned aoe_rand_state(void);
 +extern void aoe_window_close(void);
 +extern "C" void _exit(int);
@@ -462,6 +463,15 @@ index 92412fb64..6600578f6 100644
 +    if (every < 0) {
 +        const char* e = getenv("AOE_SUM_EVERY"); every = e ? atoi(e) : 0;
 +        e = getenv("AOE_SUM_END"); end = e ? atoi(e) : 0;
++    }
++    // The port: the zone maps are made on the game's first update, not when a unit first asks with the game running.
++    static void* aoe_zones_of;
++    if (w->map && w->map->map_zones != aoe_zones_of) {
++        aoe_zones_of = w->map->map_zones;
++        for (int i = 0; i < w->terrain_num; i++) {
++            int index;
++            if (w->terrains[i]) w->map->map_zones->get_zone_map(w->terrains[i], w->terrain_size, index);
++        }
 +    }
 +    aoe_updates++;
 +    { extern void aoe_lat(int, int, int); aoe_lat('U', 0, 0); }
@@ -499,7 +509,7 @@ index 92412fb64..6600578f6 100644
  void TRIBE_Screen_Game::handle_game_update() {
      int update_counter = 0;
  
-@@ -1143,6 +1193,7 @@ void TRIBE_Screen_Game::handle_game_update() {
+@@ -1143,6 +1203,7 @@ void TRIBE_Screen_Game::handle_game_update() {
                  game_state = 1;
              } else {
                  game_state = this->world->update();
@@ -507,7 +517,7 @@ index 92412fb64..6600578f6 100644
                  if (out_of_sync2 != 0) {
                      return;
                  }
-@@ -3520,12 +3571,41 @@ void TRIBE_Screen_Game::draw() {
+@@ -3520,12 +3581,41 @@ void TRIBE_Screen_Game::draw() {
          this->draw_setup(flag);
          if (this->game_screen_pic) {
              if (this->render_area->Lock(s_scr_game_draw3, 1)) {
@@ -518,22 +528,22 @@ index 92412fb64..6600578f6 100644
 +                static TDrawArea* kept_area;
 +                int kept_w = this->pnl_wid;
 +                tagRECT r = this->clip_rect;
-+                if (kept_bottom && kept_area == this->render_area && flag == 0 && this->pnl_wid == 800 && this->pnl_hgt == 600
-+                    && r.top >= 0 && r.bottom < 20 && r.left >= 0 && r.right < 800) {
-+                    for (long y = r.top; y <= r.bottom; y++)
-+                        memcpy((unsigned char*) this->render_area->DisplayOffsets[y] + r.left, kept_top + y * 800 + r.left, r.right - r.left + 1);
++                // Any place: the rows between the two pieces are the view's, which draws them whole (6 million instructions
++                // a whole screen through the pictures' rows, each time something asks for all of it).
++                if (kept_bottom && kept_area == this->render_area && flag == 0 && this->pnl_wid == 800 && this->pnl_hgt == 600) {
++                    long left = r.left < 0 ? 0 : r.left, right = r.right > 799 ? 799 : r.right;
++                    long top = r.top < 0 ? 0 : r.top, bottom = r.bottom > 599 ? 599 : r.bottom;
++                    if (left <= right) {
++                        for (long y = top; y <= bottom && y < 20; y++)
++                            memcpy((unsigned char*) this->render_area->DisplayOffsets[y] + left, kept_top + y * 800 + left, right - left + 1);
++                        for (long y = top < 474 ? 474 : top; y <= bottom; y++)
++                            memcpy((unsigned char*) this->render_area->DisplayOffsets[y] + left, kept_bottom + (y - 474) * 800 + left, right - left + 1);
++                    }
 +                    this->render_area->Unlock(s_scr_game_draw3);
 +                    this->draw_finish();
 +                    return;
 +                }
-+                if (kept_bottom && kept_area == this->render_area && flag == 0 && this->pnl_wid == 800 && this->pnl_hgt == 600
-+                    && r.top >= 474 && r.left >= 0 && r.right < 800 && r.bottom < 600) {
-+                    for (long y = r.top; y <= r.bottom; y++)
-+                        memcpy((unsigned char*) this->render_area->DisplayOffsets[y] + r.left, kept_bottom + (y - 474) * 800 + r.left, r.right - r.left + 1);
-+                    this->render_area->Unlock(s_scr_game_draw3);
-+                    this->draw_finish();
-+                    return;
-+                }
++                { extern void aoe_lat(int, int, int); aoe_lat('S', flag, r.left << 16 | r.top); aoe_lat('T', flag, r.right << 16 | r.bottom); }
                  if (this->pnl_wid >= 1024 && this->pnl_hgt >= 768) {
                      this->game_screen_pic->shape_draw(this->render_area, 0, 0, 0, 0, 0);
                      this->game_screen_pic->shape_draw(this->render_area, 0, 642, 1, 0, 0);
@@ -827,7 +837,7 @@ index 76606b50a..35aae7c9c 100644
      long calc_y;
      long y;
 diff --git a/src/tpnl_obj.cpp b/src/tpnl_obj.cpp
-index 016de3c58..c1741595b 100644
+index 016de3c58..ab44a1282 100644
 --- a/src/tpnl_obj.cpp
 +++ b/src/tpnl_obj.cpp
 @@ -142,6 +142,7 @@ unsigned char TRIBE_Panel_Object::get_mode() {
@@ -838,6 +848,17 @@ index 016de3c58..c1741595b 100644
      float dx;
      short work_type;
      TRIBE_Building_Object* bldg_obj;
+@@ -718,7 +719,9 @@ long TRIBE_Panel_Object::handle_idle() {
+         return 0;
+ 
+     unsigned long now = debug_timeGetTime("C:\\msdev\\work\\age1_x1\\tpnl_obj.cpp", 892);
+-    if (now - this->idle_time < this->idle_interval)
++    // The port: another object selected is told at once, not at the next look.
++    if (now - this->idle_time < this->idle_interval
++        && !(this->mode != 2 && this->player != 0 && this->player->selected_obj != this->game_obj))
+         return 0;
+ 
+     this->idle_time = debug_timeGetTime("C:\\msdev\\work\\age1_x1\\tpnl_obj.cpp", 895);
 diff --git a/src/tribegam.cpp b/src/tribegam.cpp
 index a600fe043..1a52df678 100644
 --- a/src/tribegam.cpp
@@ -947,7 +968,7 @@ index a3c3afc39..6be4416f8 100644
                  case 0:
                      player = new TRIBE_Player(
 diff --git a/src/view.cpp b/src/view.cpp
-index 6439e31fe..81a0cae1d 100644
+index 6439e31fe..df323111d 100644
 --- a/src/view.cpp
 +++ b/src/view.cpp
 @@ -1,3 +1,4 @@
@@ -955,7 +976,7 @@ index 6439e31fe..81a0cae1d 100644
  #include <windows.h>
  #include "../include/program_mode.h"
  #include <ddraw.h>
-@@ -1863,6 +1864,76 @@ long RGE_View::view_function(
+@@ -1863,7 +1864,81 @@ long RGE_View::view_function(
      return result;
  }
  
@@ -1029,10 +1050,15 @@ index 6439e31fe..81a0cae1d 100644
 +
 +}
 +
++#pragma push_macro("fog_next_shape")
++#undef fog_next_shape
++#define fog_next_shape (aoe_my_words->fog)
  long RGE_View::view_function_terrain(unsigned char function_mode_in, tagRECT save_render_rect) {
++    AoeCoreWords* const aoe_my_words = &aoe_core_words[mcw_on_worker() ? 1 : 0];
      int start_map_x;
      int start_row;
-@@ -2011,7 +2082,7 @@ long RGE_View::view_function_terrain(unsigned char function_mode_in, tagRECT sav
+     int cols_2_scan;
+@@ -2011,7 +2086,7 @@ long RGE_View::view_function_terrain(unsigned char function_mode_in, tagRECT sav
  
                              draw_this_tile: {
                                  Tile_FogEdge_Table* edge_table = this->Tile_Edge_Tables[tile->tile_type];
@@ -1041,7 +1067,7 @@ index 6439e31fe..81a0cae1d 100644
                                  VSpanMiniList* normal_draw_data;
                                  VSpanMiniList* fog_draw_data;
                                  VSpanMiniList* black_draw_data;
-@@ -2044,7 +2115,7 @@ long RGE_View::view_function_terrain(unsigned char function_mode_in, tagRECT sav
+@@ -2044,7 +2119,7 @@ long RGE_View::view_function_terrain(unsigned char function_mode_in, tagRECT sav
  
                                  normal_draw_data = edge_table[black_tile_mask_num].normal_draw;
                                  fog_draw_data = edge_table[black_tile_mask_num].fog_draw;
@@ -1050,7 +1076,7 @@ index 6439e31fe..81a0cae1d 100644
  
                                  if (MapVis == RGE_TILE_FOGGED) {
                                      fog_draw_data = edge_table[0].normal_draw;
-@@ -2374,81 +2445,26 @@ long RGE_View::view_function_terrain(unsigned char function_mode_in, tagRECT sav
+@@ -2374,81 +2449,26 @@ long RGE_View::view_function_terrain(unsigned char function_mode_in, tagRECT sav
          MouseSystem->Poll();
      }
  
@@ -1144,7 +1170,7 @@ index 6439e31fe..81a0cae1d 100644
              );
              if (new_node != 0) {
                  DClipInfo_Node* tail = this->futur_objs->Draw_Level_Tail[0x1e];
-@@ -2459,8 +2475,6 @@ no_mouse_process: {
+@@ -2459,8 +2479,6 @@ no_mouse_process: {
                  }
                  this->futur_objs->Draw_Level_Tail[0x1e] = new_node;
              }
@@ -1153,7 +1179,15 @@ index 6439e31fe..81a0cae1d 100644
      }
  }
  
-@@ -4232,8 +4246,8 @@ void DClipInfo_List::SetNumZones(int New_Size) {
+@@ -2759,6 +2777,7 @@ void RGE_View::Add_GDI_Clip_Mask(DClipInfo_Node* SDI, TSpan_List_Manager* Clip_M
+     }
+ }
+ 
++#pragma pop_macro("fog_next_shape")
+ void RGE_View::draw_multi_object_outline() {
+ }
+ 
+@@ -4232,8 +4251,8 @@ void DClipInfo_List::SetNumZones(int New_Size) {
      int i;
  
      if (New_Size >= Max_Zones) {
@@ -1164,7 +1198,7 @@ index 6439e31fe..81a0cae1d 100644
          if (Zone_Ptrs != 0) {
              i = 0;
              if (Used_Zones > 0) {
-@@ -4243,8 +4257,8 @@ void DClipInfo_List::SetNumZones(int New_Size) {
+@@ -4243,8 +4262,8 @@ void DClipInfo_List::SetNumZones(int New_Size) {
                      i = i + 1;
                  } while (i < Used_Zones);
              }
@@ -1175,7 +1209,7 @@ index 6439e31fe..81a0cae1d 100644
          }
          Zone_Ptrs = Ptrs;
          Zone_Size_Ptrs = new_zone_sizes;
-@@ -4262,7 +4276,7 @@ void DClipInfo_List::InitNewZone(int Zone_Size) {
+@@ -4262,7 +4281,7 @@ void DClipInfo_List::InitNewZone(int Zone_Size) {
      Used_Zones = zone_index + 1;
      alloc_size = Element_Size * Zone_Size;
      Zone_Size_Ptrs[zone_index] = Zone_Size;
@@ -1245,3 +1279,93 @@ index 0b7cd1ad5..5fba4e362 100644
              rge_close(fd);
              return 0;
          }
+diff --git a/src/zone_map.cpp b/src/zone_map.cpp
+index b57eb84fd..3db09910e 100644
+--- a/src/zone_map.cpp
++++ b/src/zone_map.cpp
+@@ -160,55 +160,43 @@ uchar RGE_Zone_Map::do_zone_map() {
+     return 1;
+ }
+ 
++// The port: every tile is put on the list at most once, so an array holds it (a block a tile from calloc and two
++// double comparisons a neighbour were 11 million instructions a map: two seconds with the game standing still).
++// Which tiles a zone gets does not depend on the order.
+ void RGE_Zone_Map::do_zone_map_area(long x, long y, unsigned char group, unsigned char zone) {
+-    Zone_Queue* zone_end = 0;
+-    Zone_Queue* zone_queue = 0;
++    static int* list;
++    static long list_tiles;
++    long tiles = this->map->map_width * this->map->map_height;
++    if (tiles > list_tiles) { free(list); list = (int*) malloc(tiles * sizeof(int)); list_tiles = tiles; }
++    unsigned char same[256];
++    for (int i = 0; i < 256; i++)
++        same[i] = i < this->terrain_passability_rules_num
++            && ((this->terrain_passability_rules[i] > g_zone_passability_zero_threshold) ? 1 : 0) == (group & 0xff);
+     long max_x = this->map->map_width - 1;
+     long max_y = this->map->map_height - 1;
+-    do {
+-        if (x > 0) {
+-            RGE_Tile* tile = this->map->map_row_offset[y] + x - 1;
+-            unsigned char* cell = this->zone_map_rows[y] + x - 1;
+-            if (*cell == 0xff) {
+-                if (((this->terrain_passability_rules[tile->terrain_type] > g_zone_passability_zero_threshold) ? 1 : 0)
+-                    == (group & 0xff)) {
+-                    *cell = zone;
+-                    zone_push(&zone_end, &zone_queue, x - 1, y);
+-                }
+-            }
++    long used = 0;
++    for (;;) {
++        if (x > 0 && this->zone_map_rows[y][x - 1] == 0xff && same[this->map->map_row_offset[y][x - 1].terrain_type]) {
++            this->zone_map_rows[y][x - 1] = zone;
++            list[used++] = (int) (y << 16 | (x - 1));
+         }
+-        if (y > 0) {
+-            RGE_Tile* tile = this->map->map_row_offset[y - 1] + x;
+-            if (this->zone_map_rows[y - 1][x] == 0xff) {
+-                if (((this->terrain_passability_rules[tile->terrain_type] > g_zone_passability_zero_threshold) ? 1 : 0)
+-                    == (group & 0xff)) {
+-                    this->zone_map_rows[y - 1][x] = zone;
+-                    zone_push(&zone_end, &zone_queue, x, y - 1);
+-                }
+-            }
++        if (y > 0 && this->zone_map_rows[y - 1][x] == 0xff && same[this->map->map_row_offset[y - 1][x].terrain_type]) {
++            this->zone_map_rows[y - 1][x] = zone;
++            list[used++] = (int) ((y - 1) << 16 | x);
+         }
+-        if (x < max_x) {
+-            RGE_Tile* tile = this->map->map_row_offset[y] + x + 1;
+-            unsigned char* cell = this->zone_map_rows[y] + x + 1;
+-            if (*cell == 0xff) {
+-                if (((this->terrain_passability_rules[tile->terrain_type] > g_zone_passability_zero_threshold) ? 1 : 0)
+-                    == (group & 0xff)) {
+-                    *cell = zone;
+-                    zone_push(&zone_end, &zone_queue, x + 1, y);
+-                }
+-            }
++        if (x < max_x && this->zone_map_rows[y][x + 1] == 0xff && same[this->map->map_row_offset[y][x + 1].terrain_type]) {
++            this->zone_map_rows[y][x + 1] = zone;
++            list[used++] = (int) (y << 16 | (x + 1));
+         }
+-        if (y < max_y) {
+-            RGE_Tile* tile = this->map->map_row_offset[y + 1] + x;
+-            if (this->zone_map_rows[y + 1][x] == 0xff) {
+-                if (((this->terrain_passability_rules[tile->terrain_type] > g_zone_passability_zero_threshold) ? 1 : 0)
+-                    == (group & 0xff)) {
+-                    this->zone_map_rows[y + 1][x] = zone;
+-                    zone_push(&zone_end, &zone_queue, x, y + 1);
+-                }
+-            }
++        if (y < max_y && this->zone_map_rows[y + 1][x] == 0xff && same[this->map->map_row_offset[y + 1][x].terrain_type]) {
++            this->zone_map_rows[y + 1][x] = zone;
++            list[used++] = (int) ((y + 1) << 16 | x);
+         }
+-    } while (zone_pop(&zone_end, &zone_queue, x, y));
++        if (!used) break;
++        used--;
++        x = list[used] & 0xffff;
++        y = (unsigned) list[used] >> 16;
++    }
+ }
+ 
+ RGE_Zone_Map* RGE_Zone_Map::check_info(float* new_terrain_rules, long new_terrain_rules_num) {
