@@ -59,7 +59,7 @@ namespace cpuemu {
 static std::string g_cpuConsole;   // what the interpreter's console said since it was last looked at
 static void cpuConsoleHook(char c) { g_cpuConsole.push_back(c); }
 
-// --cpu --save-state: a snapshot the shader machine (experiments/rvc_opt, 256 cores, TICK_MRT) resumes from.
+// --cpu --save-state: a snapshot the shader machine (experiments/rvc_lean, 256 cores, TICK_MRT) resumes from.
 // `data` is the state texture as drawn, W texels wide: the GPU's memory and the control words are kept as
 // they are there; Linux's RAM (shown four times a second) is the processor's, and every core's state is
 // written where the shader keeps it (src/types.h: decode, encode_l1, mc_geo_read, mc_state_at; src/mc.h),
@@ -154,7 +154,7 @@ static int cpuSnapshotCores(std::vector<uint8_t>& data, uint32_t W, uint32_t wid
 namespace {
 
 struct Options {
-    std::string rvcDir = "rvc/_Nix/rvc";
+    std::string rvcDir = "experiments/rvc_lean";
     std::string payloadDir;  // default <rvc>/data-net
     std::string ramPrefix = "linux_payload", mtdPrefix = "rootfs", dtbPrefix = "dts";
     std::string cacheDir = "build/shadercache";
@@ -213,11 +213,9 @@ struct Options {
     int netId = 1;            // --net-id N: this machine's number, its address 10.0.0.N
     double netLoss = 0, netDelay = 0;   // --net-loss percent, --net-delay milliseconds: of every packet sent
     int cores = 1;            // core 0 and the worker cores: kCores wherever the machine has workers (docs/machine/multicore.md)
-    bool lazy = false;        // --lazy: a fill or copy is left to the commit and the pass goes on (LAZY_MEMOP)
     bool blits = false;       // --blits: the commit's points and the GPU's lists as the world's blits (src/amp.h)
     bool noBands = false;     // --no-bands: the commit rewrites all of RAM, not only the bands written to (COMMIT_BANDS off)
     bool unpackInPlace = false;   // --unpack-in-place: a tick that can (an rvc_lean variant) has its unpack drawn into the state texture, no zone copies
-    bool pingPong = false;    // --ping-pong: two state textures, as before RAM was written in place (RAM_INPLACE off)
     // --replay DIR;DIR;...: with --load-state, the tick of each folder (its CPUTick pass) beside the machine's own, each
     // run --replay-frames frames from the snapshot's state, --replay-rounds times in turn: wall time a frame, instructions a frame
     std::vector<std::string> replayDirs;
@@ -302,21 +300,18 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
   --viz                open a window showing memory live (writes glow); --no-viz turns it off
   --viz-capture FILE   save the memory view as a BMP at exit
   --resume             when started without other arguments: resume the shell snapshot instead of booting
-  --image NAME|DIR     boot a named image instead of --payload/--ram/--mtd/--dtb; --image list shows them.
+  --image NAME|DIR     boot a named image instead of --payload/--ram/--mtd/--dtb; --image list shows them
+                       (experiments/rvc_lean's tick runs linux-net only; on --cpu the display's shader is all it compiles).
                        DIR: a folder of our Linux without an MMU (a private image, build\\images\\NAME)
                        Without it (and without --payload, --ram or --load-state) a menu asks at start
                        when run from a console; scripts with redirected input or --no-stdin get linux-net.
-  --machine M          how much machine the shader is compiled with (experiments/rvc_opt only):
+  --machine M          how much machine the shader is compiled with (the tick itself is the no-MMU machine's only):
                          full      everything; needed for Linux
                          nopaging  NO_PAGING: satp hardwired to 0, no translation or TLBs
                          mmode     M_MODE_ONLY: also no supervisor/user mode or trap delegation
                          auto      (default) the smallest one the chosen image runs on
   --no-gpu             leave out the GPU device (the passes in <rvc>/gpu.shader, docs/machine/gpu.md)
   --no-bands           have the commit rewrite all of RAM instead of only the bands written to
-  --ping-pong          D3D11: two state textures, the commit drawing one from the other, in place of
-                       RAM in one texture written in place (docs/machine/gpu.md, "RAM in one texture")
-  --lazy               leave a parallel fill or copy to the commit and run on (LAZY_MEMOP, docs/machine/boot.md):
-                       fewer passes end early, every instruction is some 1.5 percent slower
   --blits              D3D11: the commit's gather and RAM points and the GPU's lists drawn as Unity's world
                        draws them, patches of a blit amplified by a geometry shader (src/amp.h)
   --readback-batch N   D3D11: read the rows of N frames back with one Map (1); the console's
@@ -362,18 +357,18 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
                        (and start the pc log there)
   --no-desktop         terminal mode: boot to the shell only (by default the guest starts its desktop);
                        --desktop asks for it in a run with other arguments
-  --kernel mmu|nommu   Linux with the MMU (build\\images\\linux) or without one (build\\images\\nommu, the machine
+  --kernel mmu|nommu   (mmu: not on experiments/rvc_lean's tick) Linux with the MMU (build\\images\\linux) or without one (build\\images\\nommu, the machine
                        without paging; docs/system/nommu.md); the default is nommu once that image has been made
-  --isa base|zb        RV32IMAF, or with Zba and Zbb (the shader's ZB; without an MMU build\\images\\nommu-zb,
+  --isa base|zb        (zb: not on experiments/rvc_lean's tick) RV32IMAF, or with Zba and Zbb (the shader's ZB; without an MMU build\\images\\nommu-zb,
                        whose programs use them)
   --tabs               the console as four terminals: 0x1e and a digit, either way, says whose bytes follow
   --workers auto|2|4|8 how geotune lays out the workers at boot (docs/machine/multicore.md, "Packing the small workers")
   --dxc / --d3d11      backend: D3D12 with DXC-compiled DXIL, or D3D11 with FXC bytecode (what VRChat
-                       runs). rvc_harness_dxc.exe defaults to --dxc. DXC implies NO_DOUBLES and, unless
-                       --rvc is given, the experiments/rvc_opt shader (upstream does not compile with DXC).
+                       runs). rvc_harness_dxc.exe defaults to --dxc. DXC implies NO_DOUBLES. experiments/rvc_lean
+                       has no tick for D3D12 (eight targets only): --dxc needs another --rvc.
   --doubles            with --dxc: keep the shader's double math (about 15 percent slower)
   --dxc-opt "FLAGS"    DXC optimisation flags (default -O3)   --dxc-sm 6_x   --dxc-dir DIR
-  --profile            compile with PROFILE defined and print the shader's PROF() event counters at
+  --profile            (not on experiments/rvc_lean's tick) compile with PROFILE defined and print the shader's PROF() event counters at
                        exit (names from <rvc>/src/prof.h; with --bench, counted after the warm-up)
   --stats S            print speed stats to stderr every S seconds (title bar always shows them)
   --warp               use WARP (software) instead of the GPU
@@ -426,7 +421,7 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--list-adapters") { listAdapters(); exit(0); }
         else if (a == "--rvc") {
             o.rvcDir = next("--rvc");
-            std::replace(o.rvcDir.begin(), o.rvcDir.end(), '\\', '/');   // compared with "experiments/rvc_opt"
+            std::replace(o.rvcDir.begin(), o.rvcDir.end(), '\\', '/');   // compared with "experiments/rvc_compute"
             o.rvcDirSet = true;
         }
         else if (a == "--payload") { o.payloadDir = next("--payload"); o.payloadSet = true; }
@@ -535,9 +530,7 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--stats-from") o.statsFrom = unescape(next("--stats-from"));
         else if (a == "--define") o.defines.push_back(next("--define"));
         else if (a == "--no-bands") o.noBands = true;
-        else if (a == "--ping-pong") o.pingPong = true;
         else if (a == "--unpack-in-place") o.unpackInPlace = true;
-        else if (a == "--lazy") o.lazy = true;
         else if (a == "--blits") o.blits = true;
         else if (a == "--no-mrt") o.noMrt = true;
         else if (a == "--readback-batch") o.readbackBatch = atoi(next("--readback-batch").c_str());
@@ -656,11 +649,9 @@ void findRepoRoot(const Options& o) {
 // What the emulated machine can boot: payload PNG sets shipped with rvc, under kUpstream.
 const char* const kUpstream = "rvc/_Nix/rvc";
 
-// The patched shader's folder, or a copy of it beside other work (any folder named rvc_opt...).
-bool isOpt(const std::string& dir) {
-    // (experiments/rvc_lean: the same machine with the processor rewritten in the compute shader's shape)
-    std::string name = fs::u8path(dir).filename().u8string();
-    return dir == "experiments/rvc_opt" || name.rfind("rvc_opt", 0) == 0 || name.rfind("rvc_lean", 0) == 0;
+// The machine's shader's folder, or a copy of it beside other work (any folder named rvc_lean...).
+bool isLean(const std::string& dir) {
+    return fs::u8path(dir).filename().u8string().rfind("rvc_lean", 0) == 0;
 }
 const char* const kPrograms = "programs/bin";   // our own programs, as raw memory images
 struct BootImage {
@@ -751,7 +742,7 @@ void printLinuxChoice(const Options& o) {
 bool chooseImage(Options& o, bool canResume) {
     std::vector<const BootImage*> list;
     for (auto& im : kImages)
-        if (imageAvailable(im)) list.push_back(&im);
+        if (imageAvailable(im) && (!isLean(o.rvcDir) || !strcmp(im.name, "linux-net"))) list.push_back(&im);
     fprintf(stderr, "\n  rvc: a RISC-V machine in a pixel shader    [%s]\n\n  Boot which image?\n\n",
             o.dxc ? "D3D12 + DXC" : "D3D11 + FXC");
     for (size_t i = 0; i < list.size(); ++i) {
@@ -821,9 +812,6 @@ int main(int argc, char** argv) {
         else if (a != "--resume" && a != "--no-viz" && a != "--dxc" && a != "--d3d11" && a != "--no-desktop" && a != "--cpu") terminalMode = false;
     }
     std::error_code ec;
-    bool haveOpt = fs::exists("experiments/rvc_opt/main.shader", ec);
-    // (--cpu needs the shader with the GPU device and the display: upstream's has neither)
-    if ((terminalMode || opt.dxc || opt.cpu) && !opt.rvcDirSet && haveOpt) opt.rvcDir = "experiments/rvc_opt";
     const char* shellSnap = "build/snapshots/rvc_shell.snap";
     bool canResume = terminalMode && fs::exists(shellSnap, ec);
     // Nothing on the command line says what to boot: ask, if there is someone to ask.
@@ -860,8 +848,17 @@ int main(int argc, char** argv) {
         opt.linuxFolder = opt.image, opt.image = "linux-net", opt.kernel = "nommu";
         std::replace(opt.linuxFolder.begin(), opt.linuxFolder.end(), '\\', '/');
     }
-    // (Linux without an MMU runs on the patched shader only)
-    if (opt.kernel == "nommu" && opt.image == "linux-net" && !opt.rvcDirSet && haveOpt) opt.rvcDir = "experiments/rvc_opt";
+    // The tick is the no-MMU machine's, with no machine mode, no firmware to run, one form of the pass:
+    // what else the harness can ask for needs another --rvc (--cpu runs none of the tick).
+    if (isLean(opt.rvcDir) && !opt.cpu) {
+        const char* no = opt.dxc ? "--dxc" : opt.noMrt ? "--no-mrt" : opt.profile ? "--profile" : opt.isa == "zb" ? "--isa zb"
+                       : opt.kernel == "mmu" && !opt.image.empty() ? "Linux with the MMU"
+                       : !opt.image.empty() && opt.image != "linux-net" ? "that image" : nullptr;
+        if (no) {
+            fprintf(stderr, "[harness] %s: %s tick has no such machine\n", no, opt.rvcDir.c_str());
+            return 2;
+        }
+    }
     if (!opt.image.empty() && !opt.payloadSet) {
         const BootImage* im = findImage(opt.image);
         if (!im) {
@@ -874,25 +871,24 @@ int main(int argc, char** argv) {
     bool nommuLinux = opt.kernel == "nommu" && opt.image == "linux-net" && opt.loadState.empty();
     if (opt.machine < 0) {
         const BootImage* im = opt.loadState.empty() ? findImage(opt.image) : nullptr;
-        opt.machine = im && (isOpt(opt.rvcDir) || opt.rvcDir == "experiments/rvc_compute") ? (nommuLinux ? 1 : im->machine) : 0;
+        opt.machine = im && (isLean(opt.rvcDir) || opt.rvcDir == "experiments/rvc_compute") ? (nommuLinux ? 1 : im->machine) : 0;
     }
     if (nommuLinux && !linuxBuilt(opt)) {
         fprintf(stderr, "[harness] %s has not been made (docs/system/nommu.md)\n", linuxDir(opt).c_str());
         return 1;
     }
-    if (opt.isa == "zb" && isOpt(opt.rvcDir)) opt.defines.push_back("ZB");
+    if (opt.isa == "zb" && isLean(opt.rvcDir)) opt.defines.push_back("ZB");
     // Our Linux image, and snapshots (which are of it), have no firmware: the machine answers
     // the kernel's calls to it (docs/machine/boot.md).
     // (Linux without an MMU is our kernel on the machine without paging, its SBI and float unit kept)
     bool linuxMachine = opt.machine == 0 || (opt.machine == 1 && opt.ourKernel);
-    opt.sbi = linuxMachine && (isOpt(opt.rvcDir) || opt.rvcDir == "experiments/rvc_compute") && (opt.ourKernel || !opt.loadState.empty());
+    opt.sbi = linuxMachine && (isLean(opt.rvcDir) || opt.rvcDir == "experiments/rvc_compute") && (opt.ourKernel || !opt.loadState.empty());
     if (opt.machine == 1) opt.defines.push_back("NO_PAGING");
     if (opt.machine == 2) opt.defines.push_back("M_MODE_ONLY");
     // The full machine has single-precision float instructions (docs/machine/fpu.md).
-    if (linuxMachine && (isOpt(opt.rvcDir) || opt.rvcDir == "experiments/rvc_compute") &&
+    if (linuxMachine && (isLean(opt.rvcDir) || opt.rvcDir == "experiments/rvc_compute") &&
         std::find(opt.defines.begin(), opt.defines.end(), "FPU") == opt.defines.end())
         opt.defines.push_back("FPU");
-    if (opt.lazy && opt.machine == 0 && isOpt(opt.rvcDir)) opt.defines.push_back("LAZY_MEMOP");
     if (opt.machine > 0)
         fprintf(stderr, "[harness] machine: %s\n", opt.machine == 1 ? "no paging (NO_PAGING)" : "machine mode only (M_MODE_ONLY)");
     if (opt.image == "linux-net" && opt.loadState.empty())
@@ -931,7 +927,7 @@ int main(int argc, char** argv) {
     bo.gpu = opt.gpu;
     bo.profile = opt.profile;
     bo.stateLog = !opt.l1Log.empty();
-    if (isOpt(opt.rvcDir)) {
+    if (isLean(opt.rvcDir)) {
         // its tick keeps one rectangle from the top of the state block (STATE_ROWS in src/types.h)
         // The harness's machine: the shader's own write cache (384 texels), and on D3D11 the
         // tick in eight targets, a pixel for every eight texels of state (docs/machine/multicore.md).
@@ -960,8 +956,8 @@ int main(int argc, char** argv) {
     bo.dxcDir = opt.dxcDir;
     // The GPU device is a second shader next to the CPU's; upstream rvc has none.
     SLShader gpuShader;
-    // (a processor folder without devices of its own, experiments/rvc_lean, has experiments/rvc_opt's)
-    fs::path deviceDir = fs::exists(fs::u8path(opt.rvcDir) / "gpu.shader", ec) ? fs::u8path(opt.rvcDir) : fs::u8path("experiments/rvc_opt");
+    // (a processor folder without devices of its own has experiments/rvc_lean's)
+    fs::path deviceDir = fs::exists(fs::u8path(opt.rvcDir) / "gpu.shader", ec) ? fs::u8path(opt.rvcDir) : fs::u8path("experiments/rvc_lean");
     std::string gpuPath = (deviceDir / "gpu.shader").u8string();
     if (!opt.noGpu && fs::exists(fs::u8path(gpuPath), ec)) {
         if (!loadShaderLab(gpuPath, gpuShader, err)) {
@@ -999,20 +995,16 @@ int main(int argc, char** argv) {
         if (opt.dxc) { fprintf(stderr, "[harness] --cpu is for the D3D11 backend\n"); return 2; }
     }
     if (!opt.noBands) opt.defines.push_back("COMMIT_BANDS");
-    // RAM in one texture, written in place (src/ram.h): D3D11, with no fill or copy left to the commit
-    bool lazyOn = std::find(opt.defines.begin(), opt.defines.end(), "LAZY_MEMOP") != opt.defines.end();
+    // RAM in one texture, written in place (src/ram.h)
     // (a rvc_lean folder with a commit of its own, keep two state textures: their commits have no
-    // RAM_INPLACE passes; experiments/rvc_lean now takes rvc_opt's commit, whose main.shader brings in src/ram.h)
-    bool lean = fs::u8path(opt.rvcDir).filename().u8string().rfind("rvc_lean", 0) == 0;
+    // RAM_INPLACE passes; experiments/rvc_lean's main.shader brings in src/ram.h)
+    bool lean = isLean(opt.rvcDir);
     std::string shaderText;
     readFileBinary(shaderPath, shaderText);
     bool ownCommit = lean && shaderText.find("ram.h") == std::string::npos;
     bo.tickDirect = ownCommit && opt.unpackInPlace;
     bo.laneField = lean && shaderText.find("LANE_FIELD") != std::string::npos && !opt.cpu;
-    if (!opt.dxc && !opt.pingPong && isOpt(opt.rvcDir) && !ownCommit && !getenv("RVC11_COMPUTE")) {
-        if (lazyOn) fprintf(stderr, "[harness] --lazy has two state textures (RAM_INPLACE off)\n");
-        else bo.ramInplace = true;
-    }
+    if (!opt.dxc && lean && !ownCommit && !getenv("RVC11_COMPUTE")) bo.ramInplace = true;
     // under DXC a local array is not zeroed at the start of every tick, a static one is
     if (opt.dxc) opt.defines.push_back("L1_LOCAL");
     bo.compile.flags = opt.fxcFlags;

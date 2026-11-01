@@ -1,7 +1,7 @@
 # The RISC-V machine's instruction set: what to add, measured (28 October 2026)
 
 Step five of `riscv-backport-plan.md` (section 6, "The ISA fork, last"). The machine runs RV32IMAF, ilp32, on the
-D3D11 tick of `experiments/rvc_opt`. Every candidate here was measured in the same way:
+D3D11 tick of the old tick. Every candidate here was measured in the same way:
 
 - The programs were built again with it.
 - `rvc_cpu` ran them with the new instructions.
@@ -78,7 +78,7 @@ costs the same, so a Zba or Zbb instruction counts as one fast instruction. That
   fewer passes, so more of the passes reach the write cache's limit. That is a gain, not a loss: the window is 1.75%
   fewer passes. The layout control moved the same count by 9%.
 - **On the tick.** `ZB` (`zb_exec`, Zba and Zbb) is already in `emu.h`, behind the `K_ALU` block's `[branch] if (!ok)`.
-  - Zbs and Zicond were added for this study as `ZB_X` (`build/isa/alt/rvc_opt_zb`, about 20 lines).
+  - Zbs and Zicond were added for this study as `ZB_X` (`build/isa/alt/old_tick_zb`, about 20 lines).
   - Without `ZB` on the tick, every one of these instructions takes the general path. That makes the zb build
     36% slower modelled (Doom's core 0: 35,569 ms to 48,267).
   - With `ZB` on, the model gives core 0 -1.5% (Doom), -1.6% (Quake), -2.6% (Tiberian Dawn), -1.6% (qjs) and
@@ -109,7 +109,7 @@ costs the same, so a Zba or Zbb instruction counts as one fast instruction. That
 - **On the tick today.** The four `fmadd` opcodes take the general path, which makes a product and a sum, each
   rounded. Built with contraction and run on today's tick, nxray's workers would be 2.2x slower in the model (45,583
   ms to 98,665) and Quake's core 0 12% slower. Contraction comes only with the fast case.
-- **The prototype.** `build/isa/alt/rvc_opt_fma` adds one `case 0x43: case 0x47: case 0x4b: case 0x4f:` to
+- **The prototype.** `build/isa/alt/old_tick_fma` adds one `case 0x43: case 0x47: case 0x4b: case 0x4f:` to
   `fast_exec_l1`'s last `switch (opc)`. It makes the general path's product and sum, single precision only.
   - With it the model gives nxray's workers -4.0% and Quake's core 0 -0.6% against base.
   - The card's cost of the case is not measured yet (below).
@@ -234,16 +234,16 @@ Not recommended.
 
 ## The tick, prototyped
 
-Three variants, copies of `experiments/rvc_opt` made by the study's script (scratchpad `tickvar.py`):
+Three variants, copies of the old tick made by the study's script (scratchpad `tickvar.py`):
 
-- `build/isa/alt/rvc_opt_zb` (`ZB`, `ZB_X`);
-- `build/isa/alt/rvc_opt_fma` (`FAST_FMA`);
-- `build/isa/alt/rvc_opt_zbfma` (both).
+- `build/isa/alt/old_tick_zb` (`ZB`, `ZB_X`);
+- `build/isa/alt/old_tick_fma` (`FAST_FMA`);
+- `build/isa/alt/old_tick_zbfma` (both).
 
 None of them has been compiled or run yet. The WARP check and the card's timing both wait until the before/after
 comparison frees the harness lock. Owed, in order:
 
-1. `python tools/test_card.py fptest mctest-3 lanetest --warp --mark-ok --rvc build/isa/alt/rvc_opt_zbfma --image
+1. `python tools/test_card.py fptest mctest-3 lanetest --warp --mark-ok --rvc build/isa/alt/old_tick_zbfma --image
    build/images/isa-zb`, then the same with `--image build/images/isa-fma`. Use `--parts`, not `--max-wall 0`.
 2. `tools/cso_loops.py` on the compiled blobs against the tree's: the fast loop's length and registers.
 3. `RVC_TICK_ALT` with the tree's tick and each variant in turn, on the shell loop and Doom's timedemo on the base
@@ -271,7 +271,7 @@ comparison frees the harness lock. Owed, in order:
 ## The card's timing (28 October 2026): not taken
 
 The three variants' own changes (`ZB`/`ZB_X`, `FAST_FMA`; 31 to 33 lines of `main.shader` and `src/emu.h`) were put on
-the backport's tick (the after machine's, RAM in one piece) in `build/isa2/rvc_opt_{zb,fma,zbfma}`. Each passed
+the backport's tick (the after machine's, RAM in one piece) in `build/isa2/the old tick_{zb,fma,zbfma}`. Each passed
 `mctest-3` on WARP (`tools/test_card.py mctest-3 --warp --parts --max-wall 0`, 174 to 182 s), the case the tree's own
 stamp holds. `lanetest` and `fptest` do not finish on WARP in parts with the tree's tick either (no line in 280 s), so
 they say nothing of the variants.

@@ -49,7 +49,7 @@ def reads(w):
 
 
 def is_fast(w):
-    """the tick's fast step (experiments/rvc_opt/src/emu.h fast_exec_l1) makes it"""
+    """the tick's fast step (experiments/rvc_lean/src/emu.h fast_exec_l1) makes it"""
     op, rd, f3, rs1, rs2, f7 = fields(w)
     if op in (0x13, 0x33):
         if op == 0x33 and f7 == 1:

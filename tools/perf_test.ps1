@@ -3,7 +3,7 @@
 # Runs are deterministic, so `instructions` and `state` only change when emulation changes.
 #
 #   tools\perf_test.ps1                 # default 2048 ticks per frame
-#   tools\perf_test.ps1 -Rvc experiments\rvc_opt   # another shader folder, same snapshot
+#   tools\perf_test.ps1 -Rvc experiments\rvc_lean   # another shader folder, same snapshot
 #   tools\perf_test.ps1 -Ticks 8192    # extra arguments after that go to rvc_harness
 param(
     [int]$Ticks = 2048,

@@ -1,13 +1,17 @@
-# rvc_opt
+# The shader's sources, the commit and the write cache
 
-The machine's shader: a patched copy of the one from [pimaker/rvc](https://github.com/pimaker/rvc) (`_Nix/rvc`, MIT
+(These notes were the older tick's, and `README.md` has this tick's. "The tick" below, its `cpu.h`, `emu.h`, `fast_run_l1`, its
+`--machine`, `--profile`, `--dxc` paths, is that older tick, whose sources Unity's `MachineTick.shader` still includes: this tick
+is the same rules in `tick.hlsl`. The write cache and what was learnt hold for both.)
+
+The machine's shader: derived from the one in [pimaker/rvc](https://github.com/pimaker/rvc) (`_Nix/rvc`, MIT
 License, Copyright (c) 2021 PiMaker). Its state layout, commit and fast path are its own now
 (`docs/machine/multicore.md`, `docs/machine/gpu.md`), and it runs Linux without the MMU (`docs/system/nommu.md`). What the tick
 costs and how to measure it is `docs/machine/tick-costs.md`; here is how it is built and why.
 
     bin\rvc_harness.exe --image linux-net
 
-`tools\gpu_queue.ps1` runs it (one at a time for every session). `python tools/test_all.py lazy mctest-3` and the rest check the
+`tools\gpu_queue.ps1` runs it (one at a time for every session). `python tools/test_all.py mctest-3` and the rest check the
 machine on `rvc_cpu`; `tools/test_card.py` on the card.
 
 ## Build switches

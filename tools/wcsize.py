@@ -51,7 +51,7 @@ def card(bits, unity):
         sys.exit(f'{snap}: make it with python tools/test_card.py doom-3 first')
     log = os.path.join(ROOT, 'build', 'wcsize', f'card{bits}.log')
     p = locked(['pwsh', '-NoProfile', '-File', os.path.join(ROOT, 'tools', 'gpu_queue.ps1'), os.path.join(ROOT, 'bin', 'rvc_harness.exe'),
-                '--d3d11', '--rvc', 'experiments/rvc_opt', '--define', 'NO_PAGING', '--define', f'L1_TABLE_BITS={bits}',
+                '--d3d11', '--rvc', 'experiments/rvc_lean', '--define', 'NO_PAGING', '--define', f'L1_TABLE_BITS={bits}',
                 '--image', os.path.join(ROOT, 'build', 'images', 'nommu'), '--no-desktop', '--no-viz', '--no-stdin',
                 '--load-state', snap, '--uart-log', log, '--seconds', '52', '--stats-after', '0', '--unity', unity,
                 '--input', DOOM + '\\n', '--until', 'LX-DONE'])

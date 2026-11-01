@@ -51,7 +51,7 @@ Shader "Nix/rvc_lean"
             Name "CPUTick"
 
             HLSLPROGRAM
-            // (rvc_lean: its own tick; the commit, the GPU device and the sound card are rvc_opt's, RAM written in place)
+            // (RAM written in place; the GPU device and the sound card are gpu.shader and sound.shader)
             #pragma target 5.0
             #pragma vertex vert
             #pragma geometry tick_geom
@@ -76,7 +76,7 @@ Shader "Nix/rvc_lean"
             // Cache buster: 31
 
             // custom crt include
-            #include "../rvc_opt/crt.cginc"
+            #include "crt.cginc"
             #include "UnityCG.cginc"
 
             float _Init, _InitRaw;
@@ -142,8 +142,8 @@ Shader "Nix/rvc_lean"
             static uint2 s_dim;
             static uint2 m_dim;
 
-            #include "../rvc_opt/helpers.cginc"
-            #include "../rvc_opt/src/types.h" // includes fb.h
+            #include "helpers.cginc"
+            #include "src/types.h" // includes fb.h
 
 #ifdef GPU_DEVICE
             // The GPU device's picture, for copying into the RAM framebuffer (docs/machine/gpu.md).
@@ -152,12 +152,12 @@ Shader "Nix/rvc_lean"
             #ifndef RAM_INPLACE
             #define GPU_WRITEBACK
             #endif
-            #include "../rvc_opt/src/gpu.h"
+            #include "src/gpu.h"
 #endif
 
-            #include "../rvc_opt/src/zap.h"
+            #include "src/zap.h"
             #ifdef RAM_INPLACE
-            #include "../rvc_opt/src/ram.h"
+            #include "src/ram.h"
             #ifdef COMMIT_GATHER
             ram_point commit_vert(uint id : SV_VertexID) { return ram_point_vert(id); }
             uint4 frag(ram_v2f i) : SV_Target { return ram_gather_texel(i); }

@@ -1,5 +1,5 @@
 # The card's code of a tick: its D3D11 blob as DXIL on D3D12 under Nsight, then the trace's SASS.  Run through tools\gpu_queue.ps1 by this script.
-#   pwsh experiments\rv_fuse\sass.ps1 -Name tree -Rvc experiments\rvc_opt [-Stamp]    (the blob comes from a short WARP run of the harness)
+#   pwsh experiments\rv_fuse\sass.ps1 -Name tree -Rvc experiments\rvc_lean [-Stamp]    (the blob comes from a short WARP run of the harness)
 param([string]$Name, [string]$Rvc, [string]$Code = '', [string]$Load = 'shell', [string]$Dir = 'C:\Users\micha\agents_isa\snap', [string]$Image = 'C:\Users\micha\agents_isa\img',
       [string]$Ngfx = 'C:\Program Files\NVIDIA Corporation\Nsight Graphics 2026.3.1\host\windows-desktop-nomad-x64\ngfx.exe')
 $snap = Join-Path $Dir "$Load\$Load.snap"

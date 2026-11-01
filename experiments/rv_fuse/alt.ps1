@@ -3,8 +3,8 @@
 param([string]$Load = 'shell', [string]$Ticks, [int]$Frames = 12000, [string]$Snap = '', [string]$Dir = 'C:\Users\micha\agents_isa\snap',
       [string]$Image = (Join-Path $PSScriptRoot '..\..\build\images\nommu'))
 $snap = Join-Path $Dir "$Load\$(if ($Snap) { $Snap } else { "$Load.snap" })"
-$env:RVC_TICK_ALT = (($Ticks -split ',') | ForEach-Object { (Resolve-Path "experiments\rvc_opt_$_").Path }) -join ';'
-$flags = '--d3d11', '--rvc', 'experiments\rvc_opt', '--define', 'NO_PAGING', '--image', $Image, '--no-desktop', '--no-viz', '--no-stdin',
+$env:RVC_TICK_ALT = (($Ticks -split ',') | ForEach-Object { (Resolve-Path "experiments\rvc_lean_$_").Path }) -join ';'
+$flags = '--d3d11', '--rvc', 'experiments\rvc_lean', '--define', 'NO_PAGING', '--image', $Image, '--no-desktop', '--no-viz', '--no-stdin',
     '--load-state', $snap, '--frames', "$Frames", '--stats-after', '2'
 for ($try = 0; $try -lt 1500; $try++) {
     $o = & pwsh -NoProfile -File tools\gpu_queue.ps1 bin\rvc_harness.exe @flags 2>&1 | ForEach-Object { "$_" }

@@ -1,6 +1,6 @@
 Shader "ShaderEmu/MachineTick"
 {
-    // The machine's CPUTick pass (experiments/rvc_opt/main.shader's with TICK_MRT), drawn by a
+    // The machine's CPUTick pass (the old tick's main.shader's with TICK_MRT), drawn by a
     // camera of its own that EmuMachine.cs renders once a round: a pass with several targets
     // is a camera's in VRChat. A pixel is eight texels of state, one in each of eight targets
     // (docs/machine/multicore.md, "Eight texels a pixel"). It includes none of the GPU device's sources.
@@ -106,7 +106,7 @@ Shader "ShaderEmu/MachineTick"
             // Core 0's state is the block at the left of the state rows and the workers' is the
             // band beside it, each worker a strip of whole 8 x 8 tiles of it, as the geometry
             // says (src/types.cginc, docs/machine/multicore.md); mc_core is the core looked at. RAM is
-            // read with RAM_TEX, which no core's block moves. As experiments/rvc_opt/main.shader.
+            // read with RAM_TEX, which no core's block moves. As the old tick's main.shader.
             static uint2 state_off = uint2(0, 0);
             static uint mc_core = 0;
             static uint mc_bits_now = 6;    // the write cache's size of the core looked at
