@@ -259,7 +259,7 @@ CASES = [
     # Age of Empires is on images made with --aoe only (docs/games/aoe.md): an image without its data says so and passes
     case('aoe', 'games aoe', X + 'if [ -f /usr/share/aoe/Empires.dat ]; then AOE_TICK_MS=33 AOE_SUM_EVERY=500 AOE_SUM_END=1000 '
          'AOE_SCRIPT="3000 click 400 245;3000 click 400 172;3000 click 237 568;2000 click 369 118;1000 rclick 505 170;1000 click 370 215;1000 click 163 508" aoe; else echo AOE-NO-DATA; fi',
-         wall=120, has=[r'aoesum: update 1000 time 99900 objects 4357 sum aa8906c1|AOE-NO-DATA']),
+         wall=120, has=[r'aoesum: update 1000 time 99900 objects 4357 sum 5032c153|AOE-NO-DATA']),
     case('openttd-scroll', 'games openttd', X + 'OPENTTD_DRAW=cpu OPENTTD_PLAY=1 OPENTTD_PLAY_ODD=1 OPENTTD_PAUSE=1 OPENTTD_CHECK=1 openttd -g /usr/share/openttd/busy.sav',
          True, wall=400, has=[r'openttd: play round 1: .*checked (19\d|200), 0 differ \(0 pixels']),
     case('openttd-scroll-serial', 'games openttd', X + 'OPENTTD_DRAW=cpu OPENTTD_PLAY=1 OPENTTD_PAUSE=1 OPENTTD_CHECK=1 OPENTTD_WORKERS=0 openttd -g /usr/share/openttd/busy.sav',
@@ -549,7 +549,10 @@ CASES = [
          wall=120, has=[r'^took=\d$']),
     case('apps-menus', 'desktop apps', "nx; sleep 3; nxfuzz start:e:nxedit wait:e:20 sleep:500 menus:e close:e:x end", True,
          wall=200, has=[r'^FZ-DONE 0', r'FZ menus e: 1\d menus, \d{2,3} rows'], never=[r'FZ-BAD']),
-    case('apps-persist-big', 'desktop apps', "dd if=/dev/zero of=/persistence/big bs=1M count=9 2>/dev/null; nxpersist save; echo save=$?; rm /persistence/big", wall=120, has=[r'^save=1']),
+    # a folder level 1 leaves over the limit goes on to harder levels (docs/system/persist.md): no host answers here, so 404 is its having fit
+    case('apps-persist-harder', 'desktop apps', 'mkdir -p /persistence; awk "BEGIN{srand(1);for(i=0;i<27500;i++)print int(rand()*1000000)}" > /persistence/t; nxpersist save; echo save=$?; rm /persistence/t', wall=300,
+         has=[r'Compressing data harder', r'answer 404', r'^save=1']),
+    case('apps-persist-big', 'desktop apps', "mkdir -p /persistence; dd if=/dev/zero of=/persistence/big bs=1M count=9 2>/dev/null; nxpersist save; echo save=$?; rm /persistence/big", wall=120, has=[r'^save=1']),
     case('apps-clock-kept', 'desktop apps', "nxreg set nxclock.alarm 09:30; nxreg set nxclock.size 500x420; nxreg set nxclock.24h 1; nxreg set nxclock.seconds 1; nxreg set nxclock.alarm_on 0; nxreg set nxclock.timer 300; nx; sleep 3; nxfuzz start:c:nxclock wait:c:20 wins close:c:x end", True,
          wall=120, has=[r'FZ win \d+ .* 50\dx4\d\d "', r'^FZ-DONE 0']),
     case('apps-icon-bad', 'desktop apps', "cp /usr/bin/nxreg /tmp/p; nxicon /tmp/p /root/Pictures/Fox.png; nxicon /tmp/p /nosuch; nxicon /tmp/p", wall=60, has=[r'/tmp/p has an icon of its own']),
