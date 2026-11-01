@@ -651,6 +651,13 @@ LRESULT DispatchMessage(const MSG* m) {
 }
 void PostQuitMessage(int) { quitting = 1; }
 BOOL PostMessage(HWND h, UINT m, WPARAM a, LPARAM b) {
+    // As Windows does: moves not yet taken are one move. Each message is a look at the game's idle work, a whole frame.
+    static int moves_all = -1;
+    if (moves_all < 0) { const char* e = getenv("AOE_MOVES"); moves_all = e && !strcmp(e, "all"); }
+    if (m == WM_MOUSEMOVE && !moves_all && q_head != q_tail) {
+        MSG* last = &queue[(q_tail + QUEUE - 1) % QUEUE];
+        if (last->message == WM_MOUSEMOVE) { last->wParam = a; last->lParam = b; last->time = timeGetTime(); return 1; }
+    }
     int t = (q_tail + 1) % QUEUE;
     if (t == q_head) return 0;
     MSG* q = &queue[q_tail];
@@ -665,7 +672,12 @@ LRESULT SendMessage(HWND h, UINT m, WPARAM a, LPARAM b) {
 static int take(LPMSG m, UINT remove) {
     if (q_head != q_tail) {
         *m = queue[q_head];
-        if (remove & PM_REMOVE) q_head = (q_head + 1) % QUEUE;
+        if (remove & PM_REMOVE) {
+            int waiting = (q_tail - q_head + QUEUE) % QUEUE;
+            q_head = (q_head + 1) % QUEUE;
+            if (m->message == WM_MOUSEMOVE) aoe_lat('m', waiting, 0);
+            else if (m->message == WM_LBUTTONDOWN || m->message == WM_RBUTTONDOWN || m->message == WM_KEYDOWN) aoe_lat('d', waiting, m->message);
+        }
         return 1;
     }
     if (quitting) {
@@ -683,6 +695,7 @@ static int take(LPMSG m, UINT remove) {
     return 0;
 }
 BOOL PeekMessage(LPMSG m, HWND, UINT, UINT, UINT remove) {
+    aoe_lat('e', 0, 0);
     if (q_head == q_tail) { if (tick_ms > 0) virtual_now += tick_ms; aoe_events(); }
     return take(m, remove);
 }

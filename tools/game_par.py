@@ -67,6 +67,14 @@ AOE_PLAY = '3000 click 400 245;3000 click 400 172;3000 click 237 568;2000 click 
 AOE_FRAMES = lambda log: int(re.search(r'aoe: mark ends, (\d+) frames', log)[1])
 AOE_RATE = lambda log: tuple(int(x) for x in re.search(r'aoe: mark ends, (\d+) frames in (\d+) ms', log).groups())
 
+# (one line of the shell's: its terminal takes about 1,000 characters. X Y in the window, then what nxkey puts before them.)
+AOE_ACTS = 'f select 369 118;f order 505 170 r:;f select-building 370 215;f train 163 508;f box 300 100 drag: :$((OX+500)),$((OY+300));' \
+           'f order-many 450 350 r:;f select-again 369 118;f build-menu 40 508;f menu-back 40 508;f scroll 799 300 wheel: :0;f scroll-back 1 300 wheel: :0;f stop 400 300 wheel: :0;'
+AOE_PERSON = ('f(){ echo -n "act $1 ";cat /proc/uptime;X=$(($2+OX));Y=$(($3+OY));nxkey $4$X,$Y$5;sleep 5; };nx & sleep 10; AOE_LAT=1 AOE_SCRIPT="'
+              + AOE_PLAY.rsplit(';', 3)[0] + ';3000 ready" aoe & '
+              'while [ ! -e /tmp/aoe-ready ];do sleep 1;done;read OX OY </tmp/aoe-ready;sleep 2;echo aoe: play begins;'
+              + AOE_ACTS + 'killall -TERM aoe.bin;sleep 60')
+
 GAMES = {
     'doom': dict(
         what='-timedemo demo1, one tic a frame, from its first rate line to the end',
@@ -135,6 +143,15 @@ GAMES = {
         what='the same game, the pointer at the right and left edges in turn for 1.5 s each (over what is explored), updates 100 to 300',
         cmd='nano-X -p & sleep 2; AOE_MARK=100,300 AOE_SCRIPT="' + AOE_PLAY + ';1000 move 799 300' + ';1500 move 0 300;1500 move 799 300' * 12 + '" aoe', wall=900,
         mark='aoe: mark begins', until='aoe: mark over', frames=AOE_FRAMES, rate=AOE_RATE),
+    # (a person's input: real events through the kernel and the window system on the desktop: tools/aoe_play.py reads the log)
+    'aoe-play': dict(
+        what='the game on the desktop, each act by nxkey: selecting, ordering, a box dragged, the build menu, scrolling',
+        cmd=AOE_PERSON, wall=1000, mark='aoe: play begins', until='aoe: mark over',
+        frames=lambda log: max(1, len(re.findall(r'^L \d+ \d+ \d+ P ', log, re.M)))),
+    'aoe-play-moving': dict(
+        what='the same with the pointer going round all the time, as a hand moves it',
+        cmd=AOE_PERSON, wall=1000, mark='aoe: play begins', until='aoe: mark over', more=['--pointer-sweep', '0'],
+        frames=lambda log: max(1, len(re.findall(r'^L \d+ \d+ \d+ P ', log, re.M)))),
     'halflife': dict(
         what='hldemo1, standing where it starts, the fight at 31 to 45 s of the level (docs/games/halflife.md, "Speed")',
         cmd='nano-X -p & sleep 2; HL_MARK=${HL_MARK:-31,45} halflife +map hldemo1', wall=600,

@@ -10,6 +10,7 @@ unsigned char *aoe_win_open(int w, int h, const char *title);
 void aoe_win_palette(const unsigned char *rgbx);
 void aoe_win_present(void);
 void aoe_win_settle(void);
+void aoe_win_origin(int *x, int *y);
 void aoe_win_close(void);
 int aoe_win_event(struct aoe_event *e);
 void aoe_win_rest(void);

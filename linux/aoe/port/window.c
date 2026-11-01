@@ -69,6 +69,18 @@ void aoe_win_present(void)
     drawn = 1;
 }
 
+void aoe_win_origin(int *x, int *y)
+{
+    GR_WINDOW_INFO info;
+    GR_WINDOW_ID w = window;
+    *x = *y = 0;
+    while (w && w != GR_ROOT_WINDOW_ID) {
+        GrGetWindowInfo(w, &info);
+        *x += info.x; *y += info.y;
+        w = info.parent;
+    }
+}
+
 void aoe_win_close(void)
 {
     aoe_win_settle();

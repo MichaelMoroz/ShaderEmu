@@ -430,7 +430,7 @@ index f3e0cf3a4..212817f2a 100644
      this->update_map_info(in_map);
      this->create_shared_resources();
 diff --git a/src/scr_game.cpp b/src/scr_game.cpp
-index 92412fb64..8d13a0513 100644
+index 92412fb64..6600578f6 100644
 --- a/src/scr_game.cpp
 +++ b/src/scr_game.cpp
 @@ -167,7 +167,7 @@ TRIBE_Screen_Game::TRIBE_Screen_Game() : TScreenPanel(s_Game_Screen) {
@@ -442,7 +442,7 @@ index 92412fb64..8d13a0513 100644
          }
          if (this->button_bldg_pics[i] == 0 || !(this->button_bldg_pics[i])->is_loaded()) {
              this->error_code = 1;
-@@ -1083,6 +1083,55 @@ long TRIBE_Screen_Game::handle_idle() {
+@@ -1083,6 +1083,56 @@ long TRIBE_Screen_Game::handle_idle() {
      return result;
  }
  
@@ -464,6 +464,7 @@ index 92412fb64..8d13a0513 100644
 +        e = getenv("AOE_SUM_END"); end = e ? atoi(e) : 0;
 +    }
 +    aoe_updates++;
++    { extern void aoe_lat(int, int, int); aoe_lat('U', 0, 0); }
 +    aoe_world_ms = w->world_time;
 +    if (!every || aoe_updates % every) return;
 +    unsigned h = 2166136261u, count = 0;
@@ -498,7 +499,7 @@ index 92412fb64..8d13a0513 100644
  void TRIBE_Screen_Game::handle_game_update() {
      int update_counter = 0;
  
-@@ -1143,6 +1192,7 @@ void TRIBE_Screen_Game::handle_game_update() {
+@@ -1143,6 +1193,7 @@ void TRIBE_Screen_Game::handle_game_update() {
                  game_state = 1;
              } else {
                  game_state = this->world->update();
@@ -506,7 +507,7 @@ index 92412fb64..8d13a0513 100644
                  if (out_of_sync2 != 0) {
                      return;
                  }
-@@ -3520,12 +3570,41 @@ void TRIBE_Screen_Game::draw() {
+@@ -3520,12 +3571,41 @@ void TRIBE_Screen_Game::draw() {
          this->draw_setup(flag);
          if (this->game_screen_pic) {
              if (this->render_area->Lock(s_scr_game_draw3, 1)) {
@@ -807,7 +808,7 @@ index 6919808e6..3f60592f0 100644
      if (this->update_time > 1.0f) {
          do {
 diff --git a/src/tpnl_btn.cpp b/src/tpnl_btn.cpp
-index 76606b50a..6c194b10b 100644
+index 76606b50a..35aae7c9c 100644
 --- a/src/tpnl_btn.cpp
 +++ b/src/tpnl_btn.cpp
 @@ -1,3 +1,6 @@
@@ -817,6 +818,26 @@ index 76606b50a..6c194b10b 100644
  
  #include "../include/scr_game.h"
  #include "../include/tpnl_btn.h"
+@@ -58,6 +61,7 @@ int TRIBE_Panel_Button::is_inside(long x, long y) {
+ }
+ 
+ void TRIBE_Panel_Button::draw() {
++    { extern void aoe_lat(int, int, int); aoe_lat('R', 2, 0); }
+     HGDIOBJ old_font;
+     long calc_y;
+     long y;
+diff --git a/src/tpnl_obj.cpp b/src/tpnl_obj.cpp
+index 016de3c58..c1741595b 100644
+--- a/src/tpnl_obj.cpp
++++ b/src/tpnl_obj.cpp
+@@ -142,6 +142,7 @@ unsigned char TRIBE_Panel_Object::get_mode() {
+ }
+ 
+ void TRIBE_Panel_Object::draw() {
++    { extern void aoe_lat(int, int, int); aoe_lat('R', 1, 0); }
+     float dx;
+     short work_type;
+     TRIBE_Building_Object* bldg_obj;
 diff --git a/src/tribegam.cpp b/src/tribegam.cpp
 index a600fe043..1a52df678 100644
 --- a/src/tribegam.cpp

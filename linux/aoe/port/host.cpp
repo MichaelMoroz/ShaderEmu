@@ -1,5 +1,8 @@
 // The machine's side: the clock, the fonts' file, and (AOE_NOWINDOW=1 for now) what stands for a window.
 #include <sys/mman.h>
+#include <signal.h>
+#include <time.h>
+extern "C" int mcw_on_worker(void);
 #include <sys/time.h>
 #include "ddraw.h"
 #include "aoe_port.h"
@@ -70,8 +73,35 @@ unsigned char* aoe_page(int w, int h) {
 void aoe_palette_set(const PALETTEENTRY* p) { if (window_open) aoe_win_palette((const unsigned char*) p); }
 static long frames;
 long aoe_frames(void) { return frames; }
+// AOE_LAT=1: what became of each input, and every picture, kept in memory and written at the end (docs/games/aoe.md, "Playing").
+// M a move came, B a button came (a x, b y), m a move's message taken, d a button's message taken (a the queue's length),
+// e the message before was done, P a picture, U a world update, R a reply a panel drew (a what).
+struct LatRecord { unsigned ms, instructions, frame; unsigned short kind, a; int b; };
+enum { LAT_RECORDS = 1 << 17 };
+static LatRecord* lat; static int lat_n, lat_on = -1;
+static volatile sig_atomic_t lat_stop;
+static void lat_term(int) { lat_stop = 1; }
+void aoe_lat(int kind, int a, int b) {
+    if (lat_on < 0) {
+        lat_on = getenv("AOE_LAT") != 0;
+        if (lat_on) { lat = (LatRecord*) malloc(sizeof(LatRecord) * LAT_RECORDS); signal(SIGTERM, lat_term); }
+    }
+    if (!lat_on || lat_n == LAT_RECORDS || mcw_on_worker()) return;
+    struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
+    unsigned count; __asm__ volatile("rdinstret %0" : "=r"(count));
+    LatRecord* r = &lat[lat_n++];
+    r->ms = t.tv_sec * 1000 + t.tv_nsec / 1000000; r->instructions = count; r->frame = frames; r->kind = kind; r->a = a; r->b = b;
+}
+static void lat_write(void) {
+    aoe_win_settle();
+    for (int i = 0; i < lat_n; i++) fprintf(stderr, "L %u %u %u %c %d %d\n", lat[i].ms, lat[i].instructions, lat[i].frame, lat[i].kind, lat[i].a, lat[i].b);
+    fprintf(stderr, "aoe: mark over\n");
+    aoe_window_close();
+    _exit(0);
+}
 void aoe_present(void) {
     frames++;
+    aoe_lat('P', 0, 0);
     // AOE_PICSUM=N: a sum of the picture every N frames, to compare two ways of drawing it
     static int picsum = -1; static long picdump = getenv("AOE_PICDUMP") ? atol(getenv("AOE_PICDUMP")) : 0;
     if (picsum < 0) { const char* e = getenv("AOE_PICSUM"); picsum = e ? atoi(e) : 0; }
@@ -105,6 +135,7 @@ static void events_of_window(void) {
             if (e.a) { aoe_keys[e.a] = 0; aoe_post(WM_KEYUP, e.a, 1); }
             break;
         case AOE_BUTTON_DOWN:
+            aoe_lat('B', e.a, e.b);
             aoe_mouse_x = e.a; aoe_mouse_y = e.b;
             aoe_keys[e.c == 1 ? 1 : 2] = 1;
             aoe_post(e.c == 1 ? WM_LBUTTONDOWN : WM_RBUTTONDOWN, e.c == 1 ? MK_LBUTTON : MK_RBUTTON, MAKELONG(e.a, e.b));
@@ -115,6 +146,7 @@ static void events_of_window(void) {
             aoe_post(e.c == 1 ? WM_LBUTTONUP : WM_RBUTTONUP, 0, MAKELONG(e.a, e.b));
             break;
         case AOE_MOVE:
+            aoe_lat('M', e.a, e.b);
             aoe_mouse_x = e.a; aoe_mouse_y = e.b;
             aoe_post(WM_MOUSEMOVE, (aoe_keys[1] ? MK_LBUTTON : 0) | (aoe_keys[2] ? MK_RBUTTON : 0), MAKELONG(e.a, e.b));
             break;
@@ -135,6 +167,7 @@ void aoe_panel_changed(const char* n) {
     if (getenv("AOE_DEBUG")) fprintf(stderr, "aoe: panel %s at %lu, frame %ld\n", n, step_from, frames);
 }
 void aoe_events(void) {
+    if (lat_stop) lat_write();
     if (window_open) {
         events_of_window();
         // nothing drawn since the last look: the rest of the pass is another program's
@@ -197,6 +230,11 @@ void aoe_events(void) {
         aoe_post(WM_KEYUP, x, 1);
     } else if (!strcmp(what, "char")) {
         aoe_post(WM_CHAR, x, 1);
+    } else if (!strcmp(what, "ready")) {
+        // the game's up: says where the window's picture lies on the screen, for a script of real input
+        int ox = 0, oy = 0; aoe_win_origin(&ox, &oy);
+        FILE* f = fopen("/tmp/aoe-ready", "w");
+        if (f) { fprintf(f, "%d %d\n", ox, oy); fclose(f); }
     } else if (!strcmp(what, "quit")) {
         fprintf(stderr, "aoe: script's end, frames %ld\n", frames);
         aoe_window_close();
