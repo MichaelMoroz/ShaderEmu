@@ -346,8 +346,9 @@ bool ShaderEmu_GL_Changed(void)
     bool near = false;
     for (LayerType layer = LAYER_GROUND; layer < LAYER_COUNT; layer++) {
         int count = Map.Layer[layer].Count();
+        ObjectClass* const* list = count ? &Map.Layer[layer][0] : NULL;
         for (int index = 0; index < count; index++) {
-            const ObjectClass* object = Map.Layer[layer][index];
+            const ObjectClass* object = list[index];
             all += (uintptr_t)object; // (whatever their order: an object lies where no other lies)
             if (object->IsToDisplay && !near) {
                 int x = Coord_XCell(object->Coord), y = Coord_YCell(object->Coord);
@@ -1086,8 +1087,9 @@ static bool Behind_Note(int refresh, unsigned scenes, unsigned& away)
     for (LayerType layer = LAYER_GROUND; layer < LAYER_COUNT; layer++) {
         int count = Map.Layer[layer].Count();
         int turn = refresh == 256 && count ? (int)(scenes % (unsigned)count) : -1;
+        ObjectClass* const* list = count ? &Map.Layer[layer][0] : NULL; // (nothing here changes a layer)
         for (int index = 0; index < count; index++) {
-            ObjectClass* object = Map.Layer[layer][index];
+            ObjectClass* object = list[index];
             bool anew = index == turn;
             if (object->ShaderEmu_Away == view && !object->IsToDisplay && !anew) {
                 passed++;

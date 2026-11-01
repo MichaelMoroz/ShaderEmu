@@ -4099,10 +4099,10 @@ index eb7bece..e7a4ef0 100644
          if (LogicPage->Lock()) {
  
 diff --git a/tiberiandawn/house.cpp b/tiberiandawn/house.cpp
-index 7e9f27c..25bdd9b 100644
+index 7e9f27c..a0e7826 100644
 --- a/tiberiandawn/house.cpp
 +++ b/tiberiandawn/house.cpp
-@@ -179,6 +179,35 @@ HouseClass::operator HousesType(void) const
+@@ -179,6 +179,37 @@ HouseClass::operator HousesType(void) const
   *=============================================================================================*/
  HouseClass* HouseClass::As_Pointer(HousesType house)
  {
@@ -4113,21 +4113,23 @@ index 7e9f27c..25bdd9b 100644
 +    */
 +    static int count = -1;
 +    static unsigned missing;
-+    static unsigned char where[32];
++    static HouseClass* where[32];
 +    if (count != Houses.Count()) {
 +        count = Houses.Count();
 +        missing = 0;
++        memset(where, 0, sizeof(where));
 +    }
 +    if ((unsigned)house < 32) {
 +        if (missing & (1u << house)) {
 +            return (0);
 +        }
-+        if (where[house] < count && Houses.Ptr(where[house])->Class->House == house) {
-+            return (Houses.Ptr(where[house]));
++        HouseClass* known = where[house];
++        if (known && known->Class->House == house) {
++            return (known);
 +        }
 +        for (int index = 0; index < count; index++) {
 +            if (Houses.Ptr(index)->Class->House == house) {
-+                where[house] = (unsigned char)index;
++                where[house] = Houses.Ptr(index);
 +                return (Houses.Ptr(index));
 +            }
 +        }
@@ -4138,7 +4140,7 @@ index 7e9f27c..25bdd9b 100644
      for (int index = 0; index < Houses.Count(); index++) {
          if (Houses.Ptr(index)->Class->House == house) {
              return (Houses.Ptr(index));
-@@ -367,6 +396,10 @@ HouseClass::HouseClass(HousesType house)
+@@ -367,6 +398,10 @@ HouseClass::HouseClass(HousesType house)
      , CapturedBuildings()
      , TotalCrates()
  {
@@ -4149,7 +4151,7 @@ index 7e9f27c..25bdd9b 100644
      for (int i = 0; i < MAP_TOTAL_REGIONS; ++i) {
          Regions[i].Init();
      }
-@@ -430,7 +463,7 @@ HouseClass::HouseClass(HousesType house)
+@@ -430,7 +465,7 @@ HouseClass::HouseClass(HousesType house)
      IsCivEvacuated = false;
      IsDefeated = false;
      IsDiscovered = false;
@@ -4158,7 +4160,7 @@ index 7e9f27c..25bdd9b 100644
      WasHuman = false;
      IsMaxedOut = false;
      IsStarted = false;
-@@ -7358,6 +7391,96 @@ ZoneType HouseClass::Which_Zone(CELL cell) const
+@@ -7358,6 +7393,96 @@ ZoneType HouseClass::Which_Zone(CELL cell) const
      return (Which_Zone(Cell_Coord(cell)));
  }
  
@@ -4369,10 +4371,10 @@ index f4f1ef3..ea8fa26 100644
      GScreenClass::Decode_Pointers();
  }
 diff --git a/tiberiandawn/layer.cpp b/tiberiandawn/layer.cpp
-index bb688bc..ae5f041 100644
+index bb688bc..f0d9087 100644
 --- a/tiberiandawn/layer.cpp
 +++ b/tiberiandawn/layer.cpp
-@@ -84,8 +84,139 @@ bool LayerClass::Submit(ObjectClass const* object, bool sort)
+@@ -84,8 +84,148 @@ bool LayerClass::Submit(ObjectClass const* object, bool sort)
   *   10/17/1994 JLB : Created.                                                                 *
   *   03/10/1995 JLB : Uses comparison operator.                                                *
   *=============================================================================================*/
@@ -4420,18 +4422,23 @@ index bb688bc..ae5f041 100644
 +    }
 +    ObjectClass* lower = out[0];
 +    COORDINATE lower_y = lower->ShaderEmu_SortState == 1 && lower->ShaderEmu_SortFor == lower->Coord ? lower->ShaderEmu_SortKey : lower->Sort_Y();
++    unsigned first = 0, last = 0; // (what it moved: [first, last) of the list; count below 1024, 10 bits each, then the count)
 +    for (int index = 0; index < (int)count - 1; index++) {
 +        ObjectClass* next = out[index + 1];
 +        COORDINATE next_y = next->ShaderEmu_SortState == 1 && next->ShaderEmu_SortFor == next->Coord ? next->ShaderEmu_SortKey : next->Sort_Y();
 +        if (next_y < lower_y) {
 +            out[index + 1] = lower;
 +            out[index] = next;
++            if (!last) {
++                first = index;
++            }
++            last = index + 2;
 +        } else {
 +            lower = next;
 +            lower_y = next_y;
 +        }
 +    }
-+    return count;
++    return count | first << 11 | last << 21;
 +}
 +
 +void ShaderEmu_Sort_Begin(LayerClass& layer)
@@ -4444,7 +4451,7 @@ index bb688bc..ae5f041 100644
 +            });
 +        }
 +    }
-+    if (!ShaderEmu_Sorting && layer.Count() > 1 && layer.Count() <= 1024) {
++    if (!ShaderEmu_Sorting && layer.Count() > 1 && layer.Count() < 1024) {
 +        ShaderEmu_Sorting = mcw_try_call(ShaderEmu_Sort_Job, (uint32_t)(uintptr_t)&layer, (uint32_t)layer.Count());
 +        ShaderEmu_Sort_Of = &layer;
 +    }
@@ -4476,7 +4483,8 @@ index bb688bc..ae5f041 100644
 +    ** that out from its type's size every time).
 +    */
 +    if (ShaderEmu_Sorting && ShaderEmu_Sort_Of == this) {
-+        int made = (int)mcw_join(ShaderEmu_Sorting);
++        unsigned said = mcw_join(ShaderEmu_Sorting);
++        int made = said & 0x7ff, first = (said >> 11) & 0x3ff, last = said >> 21;
 +        ShaderEmu_Sorting = 0;
 +        if (made == Count()) {
 +            if (ShaderEmu_Sort_Check) {
@@ -4485,8 +4493,11 @@ index bb688bc..ae5f041 100644
 +                ShaderEmu_Sort_Here(here, made);
 +                ShaderEmu_Sorts_Wrong += memcmp(here, ShaderEmu_Sorted, made * sizeof(here[0])) != 0;
 +            }
-+            for (int index = 0; index < made; index++) {
-+                (*this)[index] = ShaderEmu_Sorted[index];
++            if (last) {
++                ObjectClass** to = &(*this)[0];
++                for (int index = first; index < last; index++) {
++                    to[index] = ShaderEmu_Sorted[index];
++                }
 +            }
 +            ShaderEmu_Sorts_Made++;
 +            return;
@@ -4512,7 +4523,7 @@ index bb688bc..ae5f041 100644
      for (int index = 0; index < Count() - 1; index++) {
          if (*(*this)[index + 1] < *(*this)[index]) {
              ObjectClass* temp;
-@@ -138,11 +269,21 @@ int LayerClass::Sorted_Add(ObjectClass const* const object)
+@@ -138,11 +278,21 @@ int LayerClass::Sorted_Add(ObjectClass const* const object)
      **	There is room for the new object now. Add it to the right sorted position.
      */
      int index;
