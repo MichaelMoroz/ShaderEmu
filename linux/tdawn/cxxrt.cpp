@@ -6,6 +6,83 @@
 #include <string>
 #include <time.h>
 
+// sprintf for the plain forms the game builds its file names with (a thousand at a start, 1,500 instructions each
+// through the library's), anything else the library's; and the character searches of its INI files, whose
+// library forms clear a table of 32 bytes each call.
+#include <cstdarg>
+#include <cstring>
+extern "C" int sprintf(char* out, const char* format, ...)
+{
+    va_list args;
+    va_start(args, format);
+    char* to = out;
+    for (const char* f = format; *f; f++) {
+        if (*f != '%') {
+            *to++ = *f;
+            continue;
+        }
+        f++;
+        int width = 0;
+        bool zero = *f == '0';
+        while (*f >= '0' && *f <= '9') {
+            width = width * 10 + (*f++ - '0');
+        }
+        if (*f == 's' && !width) {
+            for (const char* s = va_arg(args, const char*); *s;) {
+                *to++ = *s++;
+            }
+        } else if (*f == 'd' && (zero || !width)) {
+            int v = va_arg(args, int);
+            unsigned u = v < 0 ? 0u - (unsigned)v : (unsigned)v;
+            char digits[12];
+            int n = 0;
+            do {
+                digits[n++] = '0' + u % 10;
+                u /= 10;
+            } while (u);
+            if (v < 0) {
+                goto library; // (a sign among padding: the library's)
+            }
+            while (n < width) {
+                digits[n++] = '0';
+            }
+            while (n) {
+                *to++ = digits[--n];
+            }
+        } else if (*f == '%' && !width) {
+            *to++ = '%';
+        } else {
+            goto library;
+        }
+    }
+    *to = 0;
+    va_end(args);
+    return (int)(to - out);
+library:
+    va_end(args);
+    va_start(args, format);
+    int result = vsprintf(out, format, args);
+    va_end(args);
+    return result;
+}
+extern "C" size_t strcspn(const char* s, const char* reject)
+{
+    const char* p = s;
+    for (; *p; p++) {
+        for (const char* r = reject; *r; r++) {
+            if (*r == *p) {
+                return (size_t)(p - s);
+            }
+        }
+    }
+    return (size_t)(p - s);
+}
+extern "C" char* strpbrk(const char* s, const char* accept)
+{
+    s += strcspn(s, accept);
+    return *s ? (char*)s : nullptr;
+}
+
 void* operator new(std::size_t size)
 {
     void* p = malloc(size ? size : 1);
