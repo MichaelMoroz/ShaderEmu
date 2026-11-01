@@ -7,7 +7,7 @@ NGFX = os.path.expandvars(r'%USERPROFILE%\.cargo\bin\ngfx-trace.exe')
 ap = argparse.ArgumentParser(); ap.add_argument('trace'); ap.add_argument('out'); ap.add_argument('--sms', type=int, default=36); a = ap.parse_args()
 q = subprocess.run([NGFX, 'query', a.trace, 'devices.0.ShaderProfilerReport.pcCountersInfo.pcSamplingSession.codeBlocks', '--compact', '--limit', '64'], capture_output=True, text=True)
 blocks = [b['shaderInstance']['vaRange'] for b in json.loads(q.stdout)]
-big = [(int(b['address']), int(b['address']) + int(b['size'])) for b in blocks if int(b['size']) > 100000]
+big = [(int(b['address']), int(b['address']) + int(b['size'])) for b in blocks if int(b['size']) > 3000]
 rows = []
 with tempfile.TemporaryDirectory() as d:
     for i in range(a.sms):
@@ -24,3 +24,4 @@ with tempfile.TemporaryDirectory() as d:
 x = np.concatenate(rows)
 np.save(a.out, x)
 print(x.shape)
+

@@ -143,3 +143,33 @@ Quake and nxray; the translated form (not begun). Head-to-head against gpu_vm no
 - **Hot loop of step 12:** 68 card instructions, 35 clocks of WAIT hints (about 64 ns on the card, 181 clocks at 2.83 GHz; the rest is not split yet).
 - **A way out and back, before doing its work:** the hints alone say about 130 clocks, about 46 ns: 12 + 15 + 52 on the way out to a load's body, 53 on the way back in. An `ISETP` before a `BRA` waits 13, a `BSSY` 12. This is a lower bound.
 - **Zeroing:** `#pragma static_noinit` did not take effect with this tree's fxc2: 2,018 zeroing stores in the bytecode, and 2,090 `STL` in the card's code. Why it did not take effect is not settled (`tools/fxc2`'s build differs from gpu_vm's). A local array (step 15) has none, and gives 179 and 163 against 181 and 164: about 1%, registers and memory as the model's.
+
+## PC samples on real code, a predecoded form, fewer branches (1 November 2026)
+
+`fresh12.cpp` is this tick's own D3D12 runner (a frame is one go of a stretch: state and the texels `dirty.py` names put back, N passes of tick and commit); `trace12.ps1` traces it, 0.5 s capture, long wait, no counters lost; `rv_fuse/acct/pc_account.py` and `pc_blocks.py` read the samples. Samples are D3D12's code on Doom's stretch, 61,887 to 137,793 of them; whether D3D12's code is D3D11's is still not known, and the prices are D3D11's.
+
+| Step | What | Doom ns | Shell ns | Ways out a 100 | Instructions a pass, Doom / shell | Passes ended full, Doom |
+|---|---|---|---|---|---|---|
+| 15 | Base | 179 | 163 | 65, 60 | 7,370 / 6,086 (stretch's end) | 5 of 20 |
+| 16 | `xlate.py`: a texel of predecoded fields for each RV word in a texture of its own; arithmetic, lui, auipc, jal, branches and loads on one path | 208 | 189 | 11, 14 | the same | 5 of 20 |
+| 17 | 15, no code fetch while the pc stays in its texel | 193 | 176 | 65, 60 | the same | 5 of 20 |
+| 18 | 15, two tests fewer: no second budget test, a load's range and filter one test, RAM read first | 194 | 159 | 65, 60 | the same | 5 of 20 |
+
+All four: registers, pc and every byte of RAM as the model's. Lean on long runs is 175 and 161, with about 4.5 to 4.9% of Doom's passes full: not like for like, and this stretch's 25% full is one stretch and a smaller, plainer cache than lean's.
+
+**Where step 15's Doom goes** (shares of samples, ns at 179; a share by block is measured, the ns are that share times the D3D11 price, inferred):
+
+| | Share | ns an instruction |
+|---|---|---|
+| Waits on a texture's result, first use after each of the three TLDs | 28.5% | 51 |
+| Fetch block's other work, of which the wait is above | 9.1% | 16 |
+| The questions after the arithmetic loop (31 card instructions, 2 BRA) and the way back | 18.0% | 32 |
+| A load's body beside its wait, with the lookup's | 14.0% | 25 |
+| Arithmetic body beside its wait | 8.3% | 15 |
+| Control body | 8.5% | 15 |
+
+In step 16 one instruction, the first use of the code's fetch, is 30.6% of all samples: 63 ns a fetch at 16 bytes an RV word, against about 40 on step 15's 4. So predecoding pays more in fetch waits than decoding cost, and taking away 54 ways out in 100 did not repay it. Skipping the fetch by a branch costs more than the fetch (step 17). A step of one path costs more than the branches it removes, on this card.
+
+**Sizing merged forms** (`pairs.py`, the long profiles' counts, adjacent words only, no liveness: an upper bound, inferred, nothing run): 24.6% of instructions on Doom, 21.0% shell, 20.5% Quake, 7.7% nxray. If a merged op saved only the trip (fetch and questions, about 70 of 179, inferred) this is about 161 at Doom's 24.6%: +11%, not +25%. Not built. `rv_fuse`'s `w3x` measured the same direction at 186 to 194.
+
+**Not done:** the merged form as a step; floats and devices, so no Quake or nxray stretch; no Linux boot, media or Tiberian Dawn stretch; no WARP check.

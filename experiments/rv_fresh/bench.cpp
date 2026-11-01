@@ -37,7 +37,7 @@ static ID3DBlob* compile(const std::string& file, const char* entry, const char*
 }
 int main(int argc, char** argv) {
     if (argc < 3) { printf("bench SHADER RAM.bin [--core WxH] [--budget N] [--passes N] [--warp] [-D X=V] [--dump N] [--out BLOB]\n"); return 1; }
-    std::string shader = argv[1], ramf = argv[2], out, commitf; int commitN = 0; bool twice = false; std::string snapf, dumpram; int reps = 3, maxpasses = 400; int cw = 4, ch = 8, budget = 8192, passes = 400, dump = 0; bool warp = false; std::vector<std::string> defs;
+    std::string shader = argv[1], ramf = argv[2], out, commitf; int commitN = 0; bool twice = false; std::string snapf, dumpram, codef; int reps = 3, maxpasses = 400; int cw = 4, ch = 8, budget = 8192, passes = 400, dump = 0; bool warp = false; std::vector<std::string> defs;
     for (int i = 3; i < argc; i++) {
         std::string a = argv[i];
         if (a == "--core") sscanf(argv[++i], "%dx%d", &cw, &ch);
@@ -48,6 +48,7 @@ int main(int argc, char** argv) {
         else if (a == "--dump") dump = atoi(argv[++i]);
         else if (a == "--out") out = argv[++i];
         else if (a == "--snap") snapf = argv[++i];
+        else if (a == "--code") codef = argv[++i];
         else if (a == "--twice") twice = true;
         else if (a == "--dump-ram") dumpram = argv[++i];
         else if (a == "--reps") reps = atoi(argv[++i]);
@@ -71,6 +72,11 @@ int main(int argc, char** argv) {
     for (int p = 0; p < 2; p++) for (int k = 0; k < 8; k++) S[p][k] = tex(SW, SH, zero.data(), SW * 16);
     ID3DBlob* vs = compile(shader, "vert", "vs_5_0", defs), *ps = compile(shader, "frag", "ps_5_0", defs);
     if (!out.empty()) { FILE* o = fopen(out.c_str(), "wb"); fwrite(ps->GetBufferPointer(), 1, ps->GetBufferSize(), o); fclose(o); }
+    if (!codef.empty()) {   // the predecoded form (xlate.py), slot 9: stays bound
+        FILE* g = fopen(codef.c_str(), "rb"); if (!g) { printf("no %s\n", codef.c_str()); return 1; }
+        std::vector<unsigned> code((size_t)RW * RH * 4); fread(code.data(), 4, code.size(), g); fclose(g);
+        Tex C = tex(RW, RH, code.data(), RW * 16); ctx->PSSetShaderResources(9, 1, &C.s);
+    }
     ID3D11VertexShader* v; ID3D11PixelShader* p;
     check(dev->CreateVertexShader(vs->GetBufferPointer(), vs->GetBufferSize(), nullptr, &v), "vs"); check(dev->CreatePixelShader(ps->GetBufferPointer(), ps->GetBufferSize(), nullptr, &p), "ps");
     ctx->VSSetShader(v, nullptr, 0); ctx->PSSetShader(p, nullptr, 0); ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);

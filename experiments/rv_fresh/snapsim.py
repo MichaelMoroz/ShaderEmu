@@ -34,11 +34,12 @@ def regs(sn):
         else: x[k + 4] = t[3]
     return x, pc
 RAM_LO = 0x82000000; RAM_HI = 0x92000000
-def run(sn, x, pc, n):
+def run(sn, x, pc, n, pcs=None):
     kinds = collections.Counter(); runs = collections.Counter(); cur = 0; done = 0; stop = None; sub = collections.Counter()
     res = None
     for done in range(n):
         if not RAM_LO <= pc < RAM_HI: stop = 'pc outside RAM %08x' % pc; break
+        if pcs is not None: pcs.add(pc)
         w = sn.r32(pc); op = w & 0x7f; f3 = w >> 12 & 7; rd = w >> 7 & 31; a = x[w >> 15 & 31]; b = x[w >> 20 & 31]; nx = (pc + 4) & M; v = None; k = None; f7 = w >> 25
         if op == 0x13 or (op == 0x33 and f7 != 1):
             y = b if op == 0x33 else sx(w >> 20, 12) & M; s = y & 31; alt = w >> 30 & 1
@@ -108,7 +109,7 @@ def run(sn, x, pc, n):
         pc = nx
     else:
         done = n
-    return dict(done=done, stop=stop, pc=pc), kinds, runs, sub
+    return dict(done=done, stop=stop, pc=pc, pcs=pcs), kinds, runs, sub
 if __name__ == '__main__':
     ap = argparse.ArgumentParser(); ap.add_argument('snap'); ap.add_argument('n', nargs='?', type=int, default=300000); ap.add_argument('--out', default=''); a = ap.parse_args()
     sn = Snap(a.snap); x, pc = regs(sn)
