@@ -1,0 +1,174 @@
+== gzip
+oracle sil=0 R=32   passes     5113 b/p   7969 | budget  94.5 real   0.8 read-back   4.7
+oracle sil=0 R=64   passes     5016 b/p   8123 | budget  98.4 real   0.8 read-back   0.8
+oracle sil=0 R=128  passes     4996 b/p   8156 | budget  99.1 real   0.8 read-back   0.1
+oracle sil=0 R=168  passes     4996 b/p   8156 | budget  99.2 real   0.8 read-back   0.0
+oracle sil=0 R=224  passes     4996 b/p   8156 | budget  99.2 real   0.8 read-back   0.0
+oracle sil=1 R=32   passes     5055 b/p   8060 | budget  97.1 real   0.8 read-back   2.1
+oracle sil=1 R=64   passes     5003 b/p   8144 | budget  99.0 real   0.8 read-back   0.2
+oracle sil=1 R=128  passes     4996 b/p   8156 | budget  99.2 real   0.8 read-back   0.0
+oracle sil=1 R=168  passes     4996 b/p   8156 | budget  99.2 real   0.8 read-back   0.0
+oracle sil=1 R=224  passes     4996 b/p   8156 | budget  99.2 real   0.8 read-back   0.0
+s=4,e=168,r=128,p=l,sil=0,f=256          passes   162780 b/p    250 | budget   0.1 real   0.0 full   0.0 readback  99.9 | at full  2021 at rb   244 | div 0 | stored a pass 0
+s=8,e=168,r=128,p=l,sil=0,f=256          passes   162757 b/p    250 | budget   0.1 real   0.0 full   0.0 readback  99.9 | at full  3610 at rb   244 | div 0 | stored a pass 0
+s=4,e=168,r=128,p=l,sil=0,f=1024         passes    65448 b/p    623 | budget   0.9 real   0.1 full   0.1 readback  99.0 | at full  2062 at rb   553 | div 0 | stored a pass 1
+s=8,e=168,r=128,p=l,sil=0,f=1024         passes    65427 b/p    623 | budget   0.9 real   0.1 full   0.0 readback  99.0 | at full  3360 at rb   553 | div 0 | stored a pass 1
+s=4,e=168,r=128,p=l,sil=0,f=4096         passes    32197 b/p   1266 | budget   2.4 real   0.1 full   0.1 readback  97.4 | at full  2215 at rb  1096 | div 0 | stored a pass 1
+s=8,e=168,r=128,p=l,sil=0,f=4096         passes    32180 b/p   1266 | budget   2.4 real   0.1 full   0.1 readback  97.5 | at full  3660 at rb  1097 | div 0 | stored a pass 1
+s=4,e=168,r=128,p=l,sil=0,f=16384        passes    11440 b/p   3562 | budget  21.2 real   0.3 full   0.3 readback  78.1 | at full  2521 at rb  2320 | div 0 | stored a pass 4
+s=8,e=168,r=128,p=l,sil=0,f=16384        passes    11423 b/p   3567 | budget  21.2 real   0.4 full   0.1 readback  78.3 | at full  3993 at rb  2322 | div 0 | stored a pass 4
+s=4,e=168,r=128,p=l,sil=0,f=4096,counted=1,cap=70 passes    32197 b/p   1266 | budget   2.4 real   0.1 full   0.1 readback  97.4 | at full  2215 at rb  1096 | div 37 | stored a pass 1
+s=4,e=168,r=128,p=l,sil=1,f=256          passes   160295 b/p    254 | budget   0.1 real   0.0 full   0.0 readback  99.9 | at full  3861 at rb   248 | div 0 | stored a pass 0
+s=8,e=168,r=128,p=l,sil=1,f=256          passes   160293 b/p    254 | budget   0.1 real   0.0 full   0.0 readback  99.9 | at full     0 at rb   248 | div 0 | stored a pass 0
+s=4,e=168,r=128,p=l,sil=1,f=1024         passes    64589 b/p    631 | budget   0.9 real   0.1 full   0.0 readback  99.0 | at full  3941 at rb   560 | div 0 | stored a pass 0
+s=8,e=168,r=128,p=l,sil=1,f=1024         passes    64587 b/p    631 | budget   0.9 real   0.1 full   0.0 readback  99.0 | at full     0 at rb   560 | div 0 | stored a pass 0
+s=4,e=168,r=128,p=l,sil=1,f=4096         passes    31764 b/p   1283 | budget   2.5 real   0.1 full   0.0 readback  97.4 | at full  3996 at rb  1109 | div 0 | stored a pass 0
+s=8,e=168,r=128,p=l,sil=1,f=4096         passes    31762 b/p   1283 | budget   2.5 real   0.1 full   0.0 readback  97.4 | at full     0 at rb  1109 | div 0 | stored a pass 0
+s=4,e=168,r=128,p=l,sil=1,f=16384        passes    11209 b/p   3635 | budget  22.2 real   0.4 full   0.0 readback  77.4 | at full  4346 at rb  2341 | div 0 | stored a pass 1
+s=8,e=168,r=128,p=l,sil=1,f=16384        passes    11207 b/p   3636 | budget  22.2 real   0.4 full   0.0 readback  77.5 | at full     0 at rb  2342 | div 0 | stored a pass 1
+s=4,e=168,r=128,p=l,sil=1,f=4096,counted=1,cap=70 passes    31764 b/p   1283 | budget   2.5 real   0.1 full   0.0 readback  97.4 | at full  3996 at rb  1109 | div 2 | stored a pass 0
+== png
+oracle sil=0 R=32   passes      986 b/p   7408 | budget  86.0 real   3.7 read-back  10.3
+oracle sil=0 R=64   passes      933 b/p   7829 | budget  92.5 real   3.9 read-back   3.6
+oracle sil=0 R=128  passes      920 b/p   7939 | budget  95.7 real   3.9 read-back   0.4
+oracle sil=0 R=168  passes      919 b/p   7948 | budget  96.0 real   3.9 read-back   0.1
+oracle sil=0 R=224  passes      919 b/p   7948 | budget  96.0 real   3.9 read-back   0.1
+oracle sil=1 R=32   passes      969 b/p   7538 | budget  87.4 real   3.7 read-back   8.9
+oracle sil=1 R=64   passes      928 b/p   7871 | budget  93.8 real   3.9 read-back   2.4
+oracle sil=1 R=128  passes      920 b/p   7939 | budget  95.7 real   3.9 read-back   0.4
+oracle sil=1 R=168  passes      919 b/p   7948 | budget  96.0 real   3.9 read-back   0.1
+oracle sil=1 R=224  passes      919 b/p   7948 | budget  96.0 real   3.9 read-back   0.1
+s=4,e=168,r=128,p=l,sil=0,f=256          passes    18537 b/p    394 | budget   0.1 real   0.2 full   0.0 readback  99.7 | at full  2668 at rb   390 | div 0 | stored a pass 0
+s=8,e=168,r=128,p=l,sil=0,f=256          passes    18536 b/p    394 | budget   0.1 real   0.2 full   0.0 readback  99.8 | at full     0 at rb   390 | div 0 | stored a pass 0
+s=4,e=168,r=128,p=l,sil=0,f=1024         passes     6080 b/p   1201 | budget   0.2 real   0.6 full   0.0 readback  99.2 | at full  3275 at rb  1193 | div 0 | stored a pass 1
+s=8,e=168,r=128,p=l,sil=0,f=1024         passes     6079 b/p   1202 | budget   0.2 real   0.6 full   0.0 readback  99.2 | at full     0 at rb  1194 | div 0 | stored a pass 1
+s=4,e=168,r=128,p=l,sil=0,f=4096         passes     2117 b/p   3450 | budget  14.0 real   1.7 full   0.0 readback  84.3 | at full  3147 at rb  2719 | div 0 | stored a pass 3
+s=8,e=168,r=128,p=l,sil=0,f=4096         passes     2117 b/p   3450 | budget  14.0 real   1.7 full   0.0 readback  84.3 | at full     0 at rb  2720 | div 0 | stored a pass 3
+s=4,e=168,r=128,p=l,sil=0,f=16384        passes     1205 b/p   6062 | budget  64.5 real   3.0 full   0.2 readback  32.3 | at full  3708 at rb  2316 | div 0 | stored a pass 6
+s=8,e=168,r=128,p=l,sil=0,f=16384        passes     1204 b/p   6067 | budget  64.5 real   3.0 full   0.1 readback  32.4 | at full  2914 at rb  2338 | div 0 | stored a pass 6
+s=4,e=168,r=128,p=l,sil=0,f=4096,counted=1,cap=70 passes     2117 b/p   3450 | budget  14.0 real   1.7 full   0.0 readback  84.3 | at full  3147 at rb  2719 | div 1 | stored a pass 3
+s=4,e=168,r=128,p=l,sil=1,f=256          passes    14593 b/p    501 | budget   0.1 real   0.2 full   0.0 readback  99.7 | at full  2669 at rb   496 | div 0 | stored a pass 1
+s=8,e=168,r=128,p=l,sil=1,f=256          passes    14592 b/p    501 | budget   0.1 real   0.2 full   0.0 readback  99.7 | at full     0 at rb   496 | div 0 | stored a pass 1
+s=4,e=168,r=128,p=l,sil=1,f=1024         passes     5287 b/p   1382 | budget   0.2 real   0.7 full   0.0 readback  99.1 | at full  4227 at rb  1371 | div 0 | stored a pass 1
+s=8,e=168,r=128,p=l,sil=1,f=1024         passes     5286 b/p   1382 | budget   0.2 real   0.7 full   0.0 readback  99.1 | at full     0 at rb  1372 | div 0 | stored a pass 1
+s=4,e=168,r=128,p=l,sil=1,f=4096         passes     1987 b/p   3676 | budget  15.4 real   1.8 full   0.1 readback  82.7 | at full  3239 at rb  2894 | div 0 | stored a pass 2
+s=8,e=168,r=128,p=l,sil=1,f=4096         passes     1987 b/p   3676 | budget  15.4 real   1.8 full   0.0 readback  82.8 | at full     0 at rb  2895 | div 0 | stored a pass 2
+s=4,e=168,r=128,p=l,sil=1,f=16384        passes     1172 b/p   6232 | budget  66.8 real   3.1 full   0.2 readback  29.9 | at full  4620 at rb  2394 | div 0 | stored a pass 4
+s=8,e=168,r=128,p=l,sil=1,f=16384        passes     1172 b/p   6232 | budget  66.8 real   3.1 full   0.0 readback  30.1 | at full     0 at rb  2415 | div 0 | stored a pass 5
+s=4,e=168,r=128,p=l,sil=1,f=4096,counted=1,cap=70 passes     1987 b/p   3676 | budget  15.4 real   1.8 full   0.1 readback  82.7 | at full  3239 at rb  2894 | div 1 | stored a pass 2
+== mp3_1
+oracle sil=0 R=32   passes    24359 b/p   3924 | budget   3.5 real  11.8 read-back  84.7
+oracle sil=0 R=64   passes    17488 b/p   5465 | budget   6.1 real  16.5 read-back  77.4
+oracle sil=0 R=128  passes    14498 b/p   6592 | budget  57.5 real  19.9 read-back  22.6
+oracle sil=0 R=168  passes    13323 b/p   7174 | budget  73.3 real  21.7 read-back   5.0
+oracle sil=0 R=224  passes    13322 b/p   7174 | budget  78.3 real  21.7 read-back   0.1
+oracle sil=1 R=32   passes    23048 b/p   4147 | budget   3.8 real  12.5 read-back  83.7
+oracle sil=1 R=64   passes    16298 b/p   5864 | budget   7.2 real  17.7 read-back  75.1
+oracle sil=1 R=128  passes    13387 b/p   7139 | budget  71.3 real  21.6 read-back   7.2
+oracle sil=1 R=168  passes    13323 b/p   7174 | budget  77.9 real  21.7 read-back   0.4
+oracle sil=1 R=224  passes    13322 b/p   7174 | budget  78.3 real  21.7 read-back   0.0
+s=4,e=168,r=128,p=l,sil=0,f=256          passes   973587 b/p     98 | budget   0.1 real   0.3 full   0.0 readback  99.6 | at full  2482 at rb    92 | div 0 | stored a pass 0
+s=8,e=168,r=128,p=l,sil=0,f=256          passes   973582 b/p     98 | budget   0.1 real   0.3 full   0.0 readback  99.6 | at full  2051 at rb    92 | div 0 | stored a pass 0
+s=4,e=168,r=128,p=l,sil=0,f=1024         passes   380139 b/p    251 | budget   0.2 real   0.8 full   0.0 readback  99.0 | at full  2631 at rb   233 | div 0 | stored a pass 0
+s=8,e=168,r=128,p=l,sil=0,f=1024         passes   380135 b/p    251 | budget   0.2 real   0.8 full   0.0 readback  99.0 | at full  2706 at rb   233 | div 0 | stored a pass 0
+s=4,e=168,r=128,p=l,sil=0,f=4096         passes   157463 b/p    607 | budget   0.5 real   1.8 full   0.0 readback  97.7 | at full  2604 at rb   563 | div 0 | stored a pass 4
+s=8,e=168,r=128,p=l,sil=0,f=4096         passes   157459 b/p    607 | budget   0.5 real   1.8 full   0.0 readback  97.7 | at full  2317 at rb   563 | div 0 | stored a pass 4
+s=4,e=168,r=128,p=l,sil=0,f=16384        passes    27070 b/p   3531 | budget   2.9 real  10.7 full   0.0 readback  86.4 | at full  2781 at rb  3590 | div 0 | stored a pass 33
+s=8,e=168,r=128,p=l,sil=0,f=16384        passes    27066 b/p   3531 | budget   2.9 real  10.7 full   0.0 readback  86.4 | at full  2708 at rb  3590 | div 0 | stored a pass 33
+s=4,e=168,r=128,p=l,sil=0,f=4096,counted=1,cap=70 passes   157463 b/p    607 | budget   0.5 real   1.8 full   0.0 readback  97.7 | at full  2604 at rb   563 | div 8 | stored a pass 4
+s=4,e=168,r=128,p=l,sil=1,f=256          passes   938646 b/p    102 | budget   0.1 real   0.3 full   0.0 readback  99.6 | at full  3130 at rb    95 | div 0 | stored a pass 0
+s=8,e=168,r=128,p=l,sil=1,f=256          passes   938641 b/p    102 | budget   0.1 real   0.3 full   0.0 readback  99.6 | at full  5077 at rb    95 | div 0 | stored a pass 0
+s=4,e=168,r=128,p=l,sil=1,f=1024         passes   372699 b/p    256 | budget   0.2 real   0.8 full   0.0 readback  99.0 | at full  3468 at rb   237 | div 0 | stored a pass 0
+s=8,e=168,r=128,p=l,sil=1,f=1024         passes   372695 b/p    256 | budget   0.2 real   0.8 full   0.0 readback  99.0 | at full  5019 at rb   237 | div 0 | stored a pass 0
+s=4,e=168,r=128,p=l,sil=1,f=4096         passes   154788 b/p    617 | budget   0.5 real   1.9 full   0.0 readback  97.6 | at full  3199 at rb   572 | div 0 | stored a pass 3
+s=8,e=168,r=128,p=l,sil=1,f=4096         passes   154785 b/p    617 | budget   0.5 real   1.9 full   0.0 readback  97.6 | at full  5875 at rb   572 | div 0 | stored a pass 3
+s=4,e=168,r=128,p=l,sil=1,f=16384        passes    26382 b/p   3623 | budget   3.1 real  10.9 full   0.0 readback  85.9 | at full  4282 at rb  3692 | div 0 | stored a pass 20
+s=8,e=168,r=128,p=l,sil=1,f=16384        passes    26379 b/p   3623 | budget   3.1 real  10.9 full   0.0 readback  85.9 | at full  6866 at rb  3692 | div 0 | stored a pass 20
+s=4,e=168,r=128,p=l,sil=1,f=4096,counted=1,cap=70 passes   154788 b/p    617 | budget   0.5 real   1.9 full   0.0 readback  97.6 | at full  3199 at rb   572 | div 5 | stored a pass 3
+== jpeg
+oracle sil=0 R=32   passes      179 b/p   4292 | budget  25.1 real  22.3 read-back  52.5
+oracle sil=0 R=64   passes      133 b/p   5777 | budget  46.6 real  30.1 read-back  23.3
+oracle sil=0 R=128  passes      122 b/p   6298 | budget  61.5 real  32.8 read-back   5.7
+oracle sil=0 R=168  passes      121 b/p   6350 | budget  62.8 real  33.1 read-back   4.1
+oracle sil=0 R=224  passes      121 b/p   6350 | budget  62.8 real  33.1 read-back   4.1
+oracle sil=1 R=32   passes      166 b/p   4629 | budget  28.3 real  24.1 read-back  47.6
+oracle sil=1 R=64   passes      129 b/p   5956 | budget  50.4 real  31.0 read-back  18.6
+oracle sil=1 R=128  passes      122 b/p   6298 | budget  61.5 real  32.8 read-back   5.7
+oracle sil=1 R=168  passes      121 b/p   6350 | budget  62.8 real  33.1 read-back   4.1
+oracle sil=1 R=224  passes      121 b/p   6350 | budget  62.8 real  33.1 read-back   4.1
+s=4,e=168,r=128,p=l,sil=0,f=256          passes     2552 b/p    301 | budget   0.4 real   1.6 full   0.9 readback  97.1 | at full  1975 at rb   250 | div 0 | stored a pass 4
+s=8,e=168,r=128,p=l,sil=0,f=256          passes     2541 b/p    302 | budget   0.4 real   1.6 full   0.5 readback  97.5 | at full  3229 at rb   253 | div 0 | stored a pass 5
+s=4,e=168,r=128,p=l,sil=0,f=1024         passes      959 b/p    801 | budget   2.0 real   4.2 full   2.3 readback  91.6 | at full  2489 at rb   610 | div 0 | stored a pass 10
+s=8,e=168,r=128,p=l,sil=0,f=1024         passes      950 b/p    809 | budget   2.0 real   4.2 full   1.3 readback  92.5 | at full  3692 at rb   621 | div 0 | stored a pass 11
+s=4,e=168,r=128,p=l,sil=0,f=4096         passes      442 b/p   1738 | budget   7.5 real   9.0 full   4.8 readback  78.7 | at full  2519 at rb  1111 | div 0 | stored a pass 25
+s=8,e=168,r=128,p=l,sil=0,f=4096         passes      435 b/p   1766 | budget   7.6 real   9.2 full   2.8 readback  80.5 | at full  3826 at rb  1127 | div 0 | stored a pass 28
+s=4,e=168,r=128,p=l,sil=0,f=16384        passes      390 b/p   1970 | budget   9.5 real  10.3 full   5.9 readback  74.4 | at full  3112 at rb  1156 | div 0 | stored a pass 32
+s=8,e=168,r=128,p=l,sil=0,f=16384        passes      381 b/p   2017 | budget   9.7 real  10.5 full   3.1 readback  76.6 | at full  4359 at rb  1219 | div 0 | stored a pass 36
+s=4,e=168,r=128,p=l,sil=0,f=4096,counted=1,cap=70 passes      442 b/p   1738 | budget   7.5 real   9.0 full   4.8 readback  78.7 | at full  2519 at rb  1111 | div 21 | stored a pass 25
+s=4,e=168,r=128,p=l,sil=1,f=256          passes     2233 b/p    344 | budget   0.5 real   1.8 full   0.9 readback  96.8 | at full  2240 at rb   284 | div 0 | stored a pass 4
+s=8,e=168,r=128,p=l,sil=1,f=256          passes     2222 b/p    346 | budget   0.5 real   1.8 full   0.4 readback  97.3 | at full  4235 at rb   287 | div 0 | stored a pass 5
+s=4,e=168,r=128,p=l,sil=1,f=1024         passes      869 b/p    884 | budget   2.3 real   4.6 full   2.3 readback  90.8 | at full  2678 at rb   643 | div 0 | stored a pass 10
+s=8,e=168,r=128,p=l,sil=1,f=1024         passes      860 b/p    893 | budget   2.3 real   4.7 full   1.2 readback  91.9 | at full  4218 at rb   657 | div 0 | stored a pass 11
+s=4,e=168,r=128,p=l,sil=1,f=4096         passes      397 b/p   1935 | budget   8.1 real  10.1 full   4.8 readback  77.1 | at full  2677 at rb  1256 | div 0 | stored a pass 22
+s=8,e=168,r=128,p=l,sil=1,f=4096         passes      391 b/p   1965 | budget   8.2 real  10.2 full   2.6 readback  79.0 | at full  4377 at rb  1270 | div 0 | stored a pass 25
+s=4,e=168,r=128,p=l,sil=1,f=16384        passes      348 b/p   2208 | budget  10.9 real  11.5 full   5.5 readback  72.1 | at full  3341 at rb  1291 | div 0 | stored a pass 28
+s=8,e=168,r=128,p=l,sil=1,f=16384        passes      341 b/p   2253 | budget  11.1 real  11.7 full   2.6 readback  74.5 | at full  5256 at rb  1349 | div 0 | stored a pass 32
+s=4,e=168,r=128,p=l,sil=1,f=4096,counted=1,cap=70 passes      397 b/p   1935 | budget   8.1 real  10.1 full   4.8 readback  77.1 | at full  2677 at rb  1256 | div 19 | stored a pass 22
+== boot
+oracle sil=0 R=32   passes     2173 b/p   2733 | budget  10.1 real  10.4 read-back  79.4
+oracle sil=0 R=64   passes     1019 b/p   5829 | budget  48.7 real  22.3 read-back  29.0
+oracle sil=0 R=128  passes      854 b/p   6955 | budget  72.5 real  26.6 read-back   0.9
+oracle sil=0 R=168  passes      853 b/p   6964 | budget  72.7 real  26.6 read-back   0.7
+oracle sil=0 R=224  passes      851 b/p   6980 | budget  72.6 real  26.7 read-back   0.7
+oracle sil=1 R=32   passes     1770 b/p   3356 | budget  14.1 real  12.8 read-back  73.1
+oracle sil=1 R=64   passes      935 b/p   6353 | budget  55.1 real  24.3 read-back  20.6
+oracle sil=1 R=128  passes      854 b/p   6955 | budget  72.5 real  26.6 read-back   0.9
+oracle sil=1 R=168  passes      853 b/p   6964 | budget  72.7 real  26.6 read-back   0.7
+oracle sil=1 R=224  passes      851 b/p   6980 | budget  72.6 real  26.7 read-back   0.7
+s=4,e=168,r=128,p=l,sil=0,f=256          passes    19435 b/p    306 | budget   0.6 real   1.2 full   0.1 readback  98.2 | at full  3954 at rb   258 | div 0 | stored a pass 2
+s=8,e=168,r=128,p=l,sil=0,f=256          passes    19418 b/p    306 | budget   0.6 real   1.2 full   0.0 readback  98.2 | at full     0 at rb   261 | div 0 | stored a pass 2
+s=4,e=168,r=128,p=l,sil=0,f=1024         passes     6773 b/p    877 | budget   2.2 real   3.4 full   0.3 readback  94.1 | at full  3988 at rb   713 | div 0 | stored a pass 3
+s=8,e=168,r=128,p=l,sil=0,f=1024         passes     6756 b/p    879 | budget   2.2 real   3.4 full   0.0 readback  94.4 | at full     0 at rb   722 | div 0 | stored a pass 4
+s=4,e=168,r=128,p=l,sil=0,f=4096         passes     2893 b/p   2053 | budget   7.0 real   7.8 full   0.8 readback  84.3 | at full  3965 at rb  1632 | div 0 | stored a pass 13
+s=8,e=168,r=128,p=l,sil=0,f=4096         passes     2877 b/p   2065 | budget   7.2 real   7.9 full   0.0 readback  84.9 | at full     0 at rb  1656 | div 0 | stored a pass 13
+s=4,e=168,r=128,p=l,sil=0,f=16384        passes     1873 b/p   3171 | budget  13.3 real  12.1 full   1.6 readback  72.9 | at full  4276 at rb  2560 | div 0 | stored a pass 25
+s=8,e=168,r=128,p=l,sil=0,f=16384        passes     1861 b/p   3192 | budget  13.7 real  12.2 full   0.1 readback  74.0 | at full  6656 at rb  2603 | div 0 | stored a pass 26
+s=4,e=168,r=128,p=l,sil=0,f=4096,counted=1,cap=70 passes     2893 b/p   2053 | budget   7.0 real   7.8 full   0.8 readback  84.3 | at full  3965 at rb  1632 | div 23 | stored a pass 13
+s=4,e=168,r=128,p=l,sil=1,f=256          passes    17494 b/p    340 | budget   0.7 real   1.3 full   0.1 readback  98.0 | at full  3399 at rb   287 | div 0 | stored a pass 1
+s=8,e=168,r=128,p=l,sil=1,f=256          passes    17480 b/p    340 | budget   0.7 real   1.3 full   0.0 readback  98.0 | at full     0 at rb   290 | div 0 | stored a pass 1
+s=4,e=168,r=128,p=l,sil=1,f=1024         passes     6155 b/p    965 | budget   2.5 real   3.7 full   0.2 readback  93.5 | at full  3537 at rb   784 | div 0 | stored a pass 2
+s=8,e=168,r=128,p=l,sil=1,f=1024         passes     6141 b/p    967 | budget   2.5 real   3.7 full   0.0 readback  93.8 | at full     0 at rb   793 | div 0 | stored a pass 2
+s=4,e=168,r=128,p=l,sil=1,f=4096         passes     2579 b/p   2303 | budget   8.7 real   8.8 full   0.6 readback  81.9 | at full  3280 at rb  1814 | div 0 | stored a pass 8
+s=8,e=168,r=128,p=l,sil=1,f=4096         passes     2567 b/p   2314 | budget   8.7 real   8.8 full   0.0 readback  82.4 | at full     0 at rb  1836 | div 0 | stored a pass 9
+s=4,e=168,r=128,p=l,sil=1,f=16384        passes     1654 b/p   3591 | budget  17.0 real  13.7 full   1.4 readback  67.8 | at full  4014 at rb  2891 | div 0 | stored a pass 17
+s=8,e=168,r=128,p=l,sil=1,f=16384        passes     1644 b/p   3613 | budget  17.2 real  13.8 full   0.2 readback  68.9 | at full  6805 at rb  2940 | div 0 | stored a pass 18
+s=4,e=168,r=128,p=l,sil=1,f=4096,counted=1,cap=70 passes     2579 b/p   2303 | budget   8.7 real   8.8 full   0.6 readback  81.9 | at full  3280 at rb  1814 | div 15 | stored a pass 8
+== tdawn
+oracle sil=0 R=32   passes    21411 b/p   5511 | budget  43.8 real  16.1 read-back  40.1
+oracle sil=0 R=64   passes    17120 b/p   6892 | budget  69.8 real  20.1 read-back  10.0
+oracle sil=0 R=128  passes    16241 b/p   7265 | budget  78.5 real  21.2 read-back   0.3
+oracle sil=0 R=168  passes    16232 b/p   7269 | budget  78.6 real  21.2 read-back   0.2
+oracle sil=0 R=224  passes    16228 b/p   7271 | budget  78.7 real  21.3 read-back   0.0
+oracle sil=1 R=32   passes    19603 b/p   6019 | budget  54.8 real  17.6 read-back  27.6
+oracle sil=1 R=64   passes    16454 b/p   7171 | budget  75.2 real  21.0 read-back   3.8
+oracle sil=1 R=128  passes    16237 b/p   7267 | budget  78.5 real  21.2 read-back   0.3
+oracle sil=1 R=168  passes    16228 b/p   7271 | budget  78.7 real  21.3 read-back   0.1
+oracle sil=1 R=224  passes    16228 b/p   7271 | budget  78.7 real  21.3 read-back   0.0
+s=4,e=168,r=128,p=l,sil=0,f=256          passes   428935 b/p    275 | budget   1.1 real   0.8 full   0.1 readback  98.0 | at full  1862 at rb   181 | div 0 | stored a pass 1
+s=8,e=168,r=128,p=l,sil=0,f=256          passes   428685 b/p    275 | budget   1.1 real   0.8 full   0.1 readback  98.0 | at full  3318 at rb   182 | div 0 | stored a pass 1
+s=4,e=168,r=128,p=l,sil=0,f=1024         passes   175561 b/p    672 | budget   2.9 real   2.0 full   0.3 readback  94.9 | at full  1967 at rb   440 | div 0 | stored a pass 2
+s=8,e=168,r=128,p=l,sil=0,f=1024         passes   175345 b/p    673 | budget   2.9 real   2.0 full   0.1 readback  95.0 | at full  3275 at rb   441 | div 0 | stored a pass 2
+s=4,e=168,r=128,p=l,sil=0,f=4096         passes    85075 b/p   1387 | budget   6.3 real   4.1 full   0.5 readback  89.1 | at full  2160 at rb   917 | div 0 | stored a pass 6
+s=8,e=168,r=128,p=l,sil=0,f=4096         passes    84890 b/p   1390 | budget   6.4 real   4.1 full   0.3 readback  89.3 | at full  3365 at rb   919 | div 0 | stored a pass 6
+s=4,e=168,r=128,p=l,sil=0,f=16384        passes    35353 b/p   3337 | budget  18.2 real   9.8 full   1.5 readback  70.6 | at full  2189 at rb  2388 | div 0 | stored a pass 17
+s=8,e=168,r=128,p=l,sil=0,f=16384        passes    35120 b/p   3360 | budget  18.3 real   9.8 full   0.8 readback  71.1 | at full  3744 at rb  2391 | div 0 | stored a pass 18
+s=4,e=168,r=128,p=l,sil=0,f=4096,counted=1,cap=70 passes    85075 b/p   1387 | budget   6.3 real   4.1 full   0.5 readback  89.1 | at full  2160 at rb   917 | div 440 | stored a pass 6
+s=4,e=168,r=128,p=l,sil=1,f=256          passes   323424 b/p    365 | budget   1.5 real   1.1 full   0.1 readback  97.3 | at full  1815 at rb   241 | div 0 | stored a pass 1
+s=8,e=168,r=128,p=l,sil=1,f=256          passes   323272 b/p    365 | budget   1.5 real   1.1 full   0.0 readback  97.4 | at full  3153 at rb   242 | div 0 | stored a pass 1
+s=4,e=168,r=128,p=l,sil=1,f=1024         passes   127240 b/p    927 | budget   4.0 real   2.7 full   0.2 readback  93.1 | at full  2035 at rb   614 | div 0 | stored a pass 1
+s=8,e=168,r=128,p=l,sil=1,f=1024         passes   127116 b/p    928 | budget   4.0 real   2.7 full   0.1 readback  93.2 | at full  3139 at rb   615 | div 0 | stored a pass 1
+s=4,e=168,r=128,p=l,sil=1,f=4096         passes    71645 b/p   1647 | budget   7.9 real   4.8 full   0.3 readback  87.0 | at full  2198 at rb  1074 | div 0 | stored a pass 2
+s=8,e=168,r=128,p=l,sil=1,f=4096         passes    71545 b/p   1649 | budget   7.9 real   4.8 full   0.2 readback  87.1 | at full  3169 at rb  1075 | div 0 | stored a pass 2
+s=4,e=168,r=128,p=l,sil=1,f=16384        passes    27908 b/p   4228 | budget  25.6 real  12.4 full   0.9 readback  61.2 | at full  2147 at rb  2984 | div 0 | stored a pass 7
+s=8,e=168,r=128,p=l,sil=1,f=16384        passes    27787 b/p   4246 | budget  25.7 real  12.4 full   0.5 readback  61.4 | at full  3423 at rb  2988 | div 0 | stored a pass 7
+s=4,e=168,r=128,p=l,sil=1,f=4096,counted=1,cap=70 passes    71645 b/p   1647 | budget   7.9 real   4.8 full   0.3 readback  87.0 | at full  2198 at rb  1074 | div 243 | stored a pass 2
