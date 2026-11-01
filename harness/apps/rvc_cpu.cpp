@@ -603,7 +603,7 @@ static inline bool load(Core& c, u32 va, int size, u32& value, Trap& t) {
     return true;
 }
 
-// RVC_WCACHE=1: each core's write cache as the shader machine's (experiments/rvc_opt/src/mem.h):
+// RVC_WCACHE=1: each core's write cache as the shader machine's (experiments/rvc_lean/src/mem.h):
 // three tables (2^bits buckets, half and a quarter) of three texels a bucket; a store that changes a texel no
 // bucket has room for ends the core's pass before it, and the instruction runs in the next.
 static bool wc_on = false;
@@ -669,7 +669,7 @@ static inline bool store(Core& c, u32 va, int size, u32 value, Trap& t) {
     return true;
 }
 
-// ---- the firmware's calls (experiments/rvc_opt/src/emu.h, sbi_call) ----
+// ---- the firmware's calls (experiments/rvc_lean/src/emu.h, sbi_call) ----
 
 static u64 sbi_counts[16];
 static void sbi_call(Core& c) {
@@ -1094,7 +1094,7 @@ static bool zb(u32 ins, u32 op, u32 f3, u32 f7, u32 rs2, u32 a, u32 b, u32& resu
     return false;
 }
 
-// ---- the worker cores (experiments/rvc_opt/src/mc.h, docs/machine/multicore.md) ----
+// ---- the worker cores (experiments/rvc_lean/src/mc.h, docs/machine/multicore.md) ----
 //
 // A worker is parked until core 0 writes a start texel in the mailbox page: "MCSU", a pc, a
 // stack and a page table. It then runs in user mode on that page table; `pause` puts it to

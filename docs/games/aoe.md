@@ -1,6 +1,6 @@
 # Age of Empires, the 1997 trial
 
-The decompiled game (`github.com/dcostap/aoe1-decomp`, pinned at `6d6d8b1`; the plan read `f4fdf3f`) over a Win32 and DirectDraw layer of our own, with the data of the trial (`docs/plans/aoe-plan.md`). It starts on the desktop and plays. It has no sound and uses no worker cores.
+The decompiled game (`github.com/dcostap/aoe1-decomp`, pinned at `6d6d8b1`; the plan read `f4fdf3f`) over a Win32 and DirectDraw layer of our own, with the data of the trial (`docs/plans/aoe-plan.md`). It starts on the desktop and plays. It has no sound and uses no worker cores, and runs at 6 to 8 frames a second ("Speed").
 
 **No game data in the repository.** The data is under the trial's EULA, and the code is recovered from Microsoft's binary. Nothing of the game or the trial is committed: only the port, the patch and the tools. The program is not in `ALL` in `linux/nommu/build.sh` or in `linux/prebuilt`. The trial's `Empires.exe` is not read at all. The game's own `verify_cd` is set to 0, because the trial has no CD.
 
@@ -75,7 +75,60 @@ The pictures stayed the same bytes under qemu (23 pictures over 200 updates). Th
 
 What is left: `ASMDraw_Sprite` 23%, clip spans 17% (before the deferral), terrain 8%, double-precision calls about 10% (`sincos` in `doTrivialMove`, `boundAngle`). The world's update was 290 thousand an update.
 
-Speed on the calibrated clock (`--pass-model`, not checked on the card), at the start of a game with few units: 4.4 to 5.2 frames a second in steady stretches, and game time at about half of real time (0.48 to 0.52). An earlier build, with no rest when idle, held 6.2 frames and 0.62 further into a game; the two were not compared turn about, so the difference is not explained. A start reached the main menu at 17 s and the game screen at 138 s of the calibrated clock, about 9 s of that the script's waits. Most of it is loading the data.
+## Speed
+
+The aim is 15 frames a second, and it is not reached. All of the game is on the first core. Measured on 31 October and 1 November 2026 with `tools/game_par.py` (`aoe`, `aoe-late`, `aoe-scroll`, on an image made with `--aoe`), one run a scene. Game time is the game's milliseconds over real ones.
+
+| Scene | Clock | Frames a second | Game time | Core 0 a frame |
+|---|---|---|---|---|
+| `aoe`, updates 50 to 300, before the changes below | calibrated | 4.7 | 0.47 | 990k |
+| `aoe`, after | calibrated | 6.0 | 0.60 | 782k |
+| `aoe`, after | the card | 8.3 | 0.80 | 94.7 passes, 784 passes a second |
+| `aoe-scroll`, before | calibrated | not comparable: it scrolled into black | | |
+| `aoe-scroll`, after | calibrated | 5.6 | 0.52 | 890k |
+| `aoe-late`, updates 4000 to 4300, after | calibrated | 8.0 | 0.80 | 579k |
+
+The card ran 38% more frames than the calibrated clock in the one scene run on both, so that clock is not close for this game; the cause was not looked for. `aoe-late` is a game left to the computer players, and how many units it had was not counted, so it may not be the heavy game it is meant to be. It costs less than the early scene, which says it should be read with care.
+
+At 784 passes a second, 15 frames a second is 52 passes a frame, about 350k instructions of core 0. Where the early scene's 782k go (`tools/prof.py`, before the clip and top bar changes, when it was 820k):
+
+| Part | Instructions a frame |
+|---|---|
+| The world's update | 223k (Gaia's animals 99k, players 115k) |
+| Walking the visible tiles and their objects | about 180k (the loop itself 103k, objects 55k, `get_tile_mask_num` 21k) |
+| Drawing the view from its lists | about 95k |
+| Panels: copies (`Blt`), the message panel, the minimap, text | the rest, about 280k |
+
+What paid, with the same sums and the same 23 pictures under qemu:
+
+- Under a button, the bottom and top pictures are copied from what was kept at the last whole drawing (`TRIBE_Screen_Game::draw`), not drawn through their rows: most of the 150k a frame it cost.
+- A sine and cosine of an angle seen already are kept (`doTrivialMove`): an angle is one of an object's facets, and a pair was 4,200 instructions.
+- `SetClipRect` with the rectangle the list already holds does nothing.
+
+What did not pay: `-O3 -fsched-pressure -funroll-loops` (`AOE_OPT`) gave 0.5% fewer instructions for 38% more code, so it is not the default.
+
+The way on, not tried, and these are estimates from the table. Drawing the view from its lists needs no game state (`view_function_terrain` from "Draw_Level_Head" on), so a worker could do it while the first core goes on, for about 95k. It wants its own copy of `aoe_asm.cpp`'s statics and its own copy of the `TDrawArea` for lines, and the cursor and panels over the view must wait for it. Copying the panels less is worth a few percent each. That alone leaves about 590k, or roughly 10 frames a second on the card. 15 also needs the tile walk cheaper or shared out, or the world on a worker. The world allocates and the panels do too, and `malloc` is one side at a time (`docs/machine/multicore.md`), so the world on a worker while panels draw wants an allocator of its own.
+
+A start, on the card, reached the game screen at about 250 s from the command, where the calibrated clock said 138 s. It was not worked on.
+
+## What ends a round
+
+A world runs a fixed number of rounds a Unity frame, so a pass that ends early loses the rest of its instructions there; in the harness it costs 0.2 ms, and the card's figures do not show it. `RVC_PASSLOG` on `rvc_cpu` says who ended each pass, and `reached` in `EmuMachine` is the share a round ran in the world.
+
+`TSpan_List_Manager::ResetAll` cleared five arrays of 600 lines, 2,400 bytes each. A `memset` from 2 KB up is a parallel fill, which ends the pass, so a clip of a few lines could end five. It now clears only the lines written since the last reset (`aoe_dirty_lo`, `aoe_dirty_hi`: the regions set since then, and every line after a scroll or a merge), in pieces under 2 KB. `TRIGONOMETRY` makes only the two tables anything reads. On the calibrated clock, from power-on through the script above to update 300:
+
+| | before | after |
+|---|---|---|
+| instructions lost to passes ended by those `memset`s | 66 million | about 1 million |
+| share of the pass run, the last quarter of the run | 84.3% | 99.1% |
+| the main menu | 17.0 s | 8.8 s |
+| the game screen | 116 s | 107 s |
+
+The sums and the menu's picture stayed the same. A rest when nothing was drawn (`aoe_events`) is a program at its menu with nothing to do: `reached` of about 0.12 and stall 9 there is idle, not stuck. The largest cost left in the start is drawing: each panel's 800-pixel picture is painted twice on the way to the menu, by `set_focus` and by `UpdateWindow`.
+
+## A window made again
+
+The window manager gives a new window its frame after the program has mapped it, and the window then has other memory (800 x 600 at 20, 20 became 806 x 629 at -3, -26). A game at its menu draws nothing more, so the window stayed black in the world with the program resting. A capture taken before the manager has done this shows the menu, so it says nothing. The port now shows its page again on any update of the window but an unmap, and on an exposure: the page is still the picture.
 
 ## A bug to remember
 
@@ -90,6 +143,6 @@ The cursor is the game's own, drawn into its picture, and it is in captures from
 ## Not done
 
 - Sound and music: `DirectSoundCreate` fails and the game runs silent. `docs/machine/sound.md` is the way.
-- Workers: none, so `RVC_RACES` has nothing to say yet. The plan's next gains are the drawing and the start.
-- A timing on the card; `linux/nommu/memory.py`.
+- Workers: none, so `RVC_RACES` has nothing to say yet. See "Speed".
+- `linux/nommu/memory.py`.
 - Saving, multiplayer (DirectPlay stubs) and scenarios were not tried. Computer players gather and build over 5 game minutes; a whole game was not played.

@@ -90,7 +90,7 @@ share of a game's frame").
 
 The same interpreter inside the harness, for using the machine by hand at that speed:
 
-    bin\rvc_harness.exe --d3d11 --rvc experiments\rvc_opt --image linux-net --cpu --desktop --viz
+    bin\rvc_harness.exe --d3d11 --rvc experiments\rvc_lean --image linux-net --cpu --desktop --viz
 
 Everything the harness has is there: its window with the display and the memory view, the
 keys and the pointer, the console, `--expect`, `--send`, `--until`, `--save-state`,
@@ -127,12 +127,12 @@ is taken with `--save-state` at the run's end and `snapshot_screen.py`, never fr
 
 That snapshot is one the shader machine resumes from: `--save-state` writes
 the processor's RAM and every core's registers, CSRs, timer and worker word where
-`experiments/rvc_opt` keeps them, with empty write caches (`cpuSnapshotCores`), and the guest's
+`experiments/rvc_lean` keeps them, with empty write caches (`cpuSnapshotCores`), and the guest's
 clock goes on from the processor's. So a moment reached here in seconds is measured on the card from the same state:
 
-    bin\rvc_harness.exe --d3d11 --rvc experiments\rvc_opt --define NO_PAGING --image linux-net --cpu --no-desktop
+    bin\rvc_harness.exe --d3d11 --rvc experiments\rvc_lean --define NO_PAGING --image linux-net --cpu --no-desktop
         --input "nano-X -p & sleep 10; quake +timedemo demo1\n" --until "You got the nails" --save-state Q.snap
-    bin\rvc_harness.exe --d3d11 --rvc experiments\rvc_opt --define NO_PAGING --image linux-net --no-desktop --load-state Q.snap
+    bin\rvc_harness.exe --d3d11 --rvc experiments\rvc_lean --define NO_PAGING --image linux-net --no-desktop --load-state Q.snap
 
 The interpreter knows only the geometry of workers all alike, which geotune then leaves; the
 snapshot lays them out as geotune does on the card (16 big, the rest small in blocks of 2, or as
@@ -215,7 +215,7 @@ to a folder of its own.
   (`docs/machine/multicore.md`, "Races"); `RVC_CALLS=FILE` what core 0's calls cost ("Finding the
   work"). `RVC_WCACHE=1` gives every core the shader machine's write cache (three tables of
   buckets of three texels, 6 bits for core 0 and the geometry's for a worker,
-  `experiments/rvc_opt/src/mem.h`): a store that changes a texel no bucket has room for ends that
+  `experiments/rvc_lean/src/mem.h`): a store that changes a texel no bucket has room for ends that
   core's pass before it, and the end says how many passes ended so. `RVC_ADFAULT=1` makes a
   clear accessed or written bit in a page table entry fault, as a walk on the shader machine does
   (`src/mmu.h`); under the no-MMU kernel there is no walk and it changes nothing. Every run
@@ -275,7 +275,7 @@ meshes and pack, `cc`'s outputs) a case keeps the md5 of every such line. A chan
 moves one on purpose sets the new value with the reason. Captures are not in it.
 
 `python tools/test_card.py CASE_OR_TAG ...` runs the same cases on the card: `bin/rvc_harness.exe --d3d11`
-with `experiments/rvc_opt`, one at a time through `tools\gpu_queue.ps1`, each console checked by test_all's
+with `experiments/rvc_lean`, one at a time through `tools\gpu_queue.ps1`, each console checked by test_all's
 rules. The card boots in some 50 s, so a case resumes a snapshot of the shell made once on the processor
 (`build/test_card/shell.snap`; `--snapshot` makes it again) and its wall is at most 55 s (`--max-wall`). A case
 is skipped for another image, for host words that change as it runs, for `rvc_cpu`'s own devices (its `env`),
@@ -291,5 +291,4 @@ The card runs a processor folder only when its `warp_ok` holds the folder's stam
 `rvc_harness` says so and exits 3. `--warp` runs the cases on WARP, D3D11's software device, and with
 `--mark-ok` writes the stamp when every case passed: `python tools/test_card.py mctest-3 --warp --parts
 --max-wall 240 --mark-ok`. WARP is some 300 thousand instructions a second: `mctest 3` took 313 s in parts on
-28 October 2026 (`steptest` did not end in 240). The stamp is of the sources only: a define (`--define`,
-`--lazy`) is the same tick checked. `--cpu` is not the card's tick and needs none.
+28 October 2026 (`steptest` did not end in 240). The stamp is of the sources only: a define (`--define`) is the same tick checked. `--cpu` is not the card's tick and needs none.

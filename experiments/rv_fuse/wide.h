@@ -221,6 +221,63 @@ uint wide_run_l1(L1P uint room) {
 #endif
     [loop]
     while (true) {
+#ifdef WIDE_F
+        // (gpu_vm's fast step's form: both successors asked for every trip, no block around a fetch, the six registers read at the
+        // top, control by selects; a near jump is a beq x0, x0. A bundle with anything else goes through the body below, one at a time.)
+        [loop]
+        while ((cur.w & 0x84) == 0 && trips < WIDE_ROOM) {
+            uint f_ctl = cur.w, f_X = cur.x, f_Y = cur.y, f_Z = cur.z;
+            uint f_tn = b + WIDE_STRIDE, f_tg = b + AS_UNSIGNED(AS_SIGNED(f_ctl) >> 21);
+            uint4 f_nx = CODE_TEX(f_tn), f_tc = CODE_TEX(f_tg);
+            uint f_a = WR[(f_X >> 6) & 0x1f], f_c = WR[(f_X >> 11) & 0x1f];
+            uint f_ya = WR[(f_Y >> 6) & 0x1f], f_yb = WR[(f_Y >> 11) & 0x1f];
+            uint f_ca = WR[(f_ctl >> 11) & 0x1f], f_cb = WR[(f_ctl >> 16) & 0x1f];
+            uint f_v, f_dst = f_X & 0x3f;
+            [branch]
+            if ((f_ctl & 2u) == 0u) {
+                uint f_b = f_c + f_Z, f_f = (f_X >> 16) & 15, f_sh = f_b & 0x1f;
+                uint f_r0 = (f_f & 1) ? f_a - f_b : f_a + f_b;
+                uint f_r1 = (f_f & 1) ? f_a | f_b : f_a & f_b;
+                uint f_r2 = (f_f & 1) ? f_a << f_sh : f_a ^ f_b;
+                uint f_r3 = (f_f & 1) ? AS_UNSIGNED(AS_SIGNED(f_a) >> f_sh) : f_a >> f_sh;
+                uint f_turn = (f_f & 1) ? 0 : 0x80000000;
+                uint f_r4 = (f_a ^ f_turn) < (f_b ^ f_turn) ? 1 : 0;
+                uint f_u = (f_f & 8) ? f_r4 : (f_f & 4) ? ((f_f & 2) ? f_r3 : f_r2) : ((f_f & 2) ? f_r1 : f_r0);
+                f_v = (f_ctl & 1u) ? f_u : f_a + f_b;
+            } else {
+                uint f_va = f_a + f_Z, f_3 = (f_X >> 16) & 7, f_off = f_va & 3;
+                [branch]
+                if ((f_ctl & 1u) == 0u) {
+                    [branch]
+                    if (!(f_va != 0 && f_off + (1u << (f_3 & 3)) <= 4 && (f_va ^ 0x80000000) < RAM_MAX)) break;
+                    uint f_m = mem_get_cached_or_tex(f_va & 0x7ffffffc) >> (f_off * 8);
+                    uint f_up = (f_3 & 3) == 0 ? 24 : (f_3 & 3) == 1 ? 16 : 0;
+                    f_m <<= f_up;
+                    f_v = (f_3 & 4) ? f_m >> f_up : AS_UNSIGNED(AS_SIGNED(f_m) >> f_up);
+                } else {
+                    [branch]
+                    if (!((f_va & 0x80000000) != 0 && f_off + (1u << f_3) <= 4)) break;
+                    uint f_mask = (f_3 == 2 ? 0xffffffff : f_3 == 1 ? 0xffff : 0xff) << (f_off * 8);
+                    mem_set_ram(f_va & 0x7ffffffc, f_c << (f_off * 8), f_mask, false);
+                    f_v = 0;
+                    f_dst = 32;
+                }
+            }
+            WR[f_dst] = f_v;
+            uint f_yra = (f_Y >> 6) & 0x1f, f_yrb = (f_Y >> 11) & 0x1f;
+            WR[f_Y & 0x3f] = (f_yra == f_dst ? f_v : f_ya) + (f_yrb == f_dst ? f_v : f_yb) + AS_UNSIGNED(AS_SIGNED(f_Y) >> 20);
+            uint f_f3 = (f_ctl >> 8) & 7;
+            bool f_lt = (f_f3 & 2) ? f_ca < f_cb : AS_SIGNED(f_ca) < AS_SIGNED(f_cb);
+            bool f_go = (f_ctl & 0x40u) != 0 && ((f_f3 & 4) ? f_lt : f_ca == f_cb) != ((f_f3 & 1) != 0);
+            rv += (f_ctl >> 3) & 7;
+            trips++;
+            b = f_go ? f_tg : f_tn;
+            cur = f_go ? f_tc : f_nx;
+        }
+        [branch]
+        if (trips >= WIDE_ROOM) break;
+        nx = CODE_TEX(b + WIDE_STRIDE);
+#endif
         uint ctl = cur.w, X = cur.x, path = ctl & 7;
 #ifdef WIDE_V2
         // (the plain trip: arithmetic, no control, one test; no budget test on this way: every straight run ends in control or a leaving bundle)

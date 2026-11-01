@@ -33,7 +33,7 @@ REFUSED = 75   # the harnesses' lock (run_lock): nothing ran
 
 def harness(machine):
     M = MACHINES[machine]
-    return [os.path.join(M['root'], M['exe']), '--d3d11', '--rvc', 'experiments/rvc_opt', '--define', 'NO_PAGING',
+    return [os.path.join(M['root'], M['exe']), '--d3d11', '--rvc', M.get('rvc', 'experiments/rvc_lean'), '--define', 'NO_PAGING',
             '--image', M['image'], '--no-desktop', '--no-viz', '--no-stdin', '--seconds', str(TIMEOUT)] + list(M.get('args', ()))
 
 

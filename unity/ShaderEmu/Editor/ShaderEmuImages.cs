@@ -45,7 +45,7 @@ public static class ShaderEmuImages
     [MenuItem("ShaderEmu/Sync shader sources from the repository")]
     public static void SyncShaders()
     {
-        string from = Repo + "/experiments/rvc_opt", to = Root + "/Shaders";
+        string from = Repo + "/experiments/rvc_lean", to = Root + "/Shaders";
         foreach (string file in new[] { "crt.cginc", "helpers.cginc" }) WriteIfChanged(to + "/" + file, File.ReadAllText(from + "/" + file));
         Directory.CreateDirectory(to + "/src");
         // As .cginc: Unity tracks those as shader includes; a changed .h was never recompiled.

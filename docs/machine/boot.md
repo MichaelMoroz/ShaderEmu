@@ -94,12 +94,12 @@ into a private image and runs them (copies of the files in `/tmp`: a mapped ROM 
 
 ### A fill or a copy that does not end the pass (`LAZY_MEMOP`)
 
-Only for the tick with paging (`rvc_harness --lazy` compiles it when the machine is the full one, and `types.h` undefines it under `NO_PAGING`): the machine that
+Only in the sources of the old tick with paging (`src/emu.h`, `src/mem.h`; the harness no longer builds it, and its `--lazy` is gone): the machine that
 runs Linux does not have it. With it a parallel fill or a copy, from RAM or from the ROM, is taken down and the pass goes on; the commit makes it when the
 pass ends and lays what the pass stored to its destination afterwards on top. Its destination's pages leave every TLB the fast path reads (`pend_unmap` in `emu.h`),
 so only the general path reaches them (`mem_get_slow`, `pend_texel` in `mem.h`), and it is two a pass, whole texels, a source apart from the destination, core 0. With
 it undefined the tick is the same blob, and it stays off because compiled in it costs every instruction ("The same loop, compiled slower" in
-`experiments/rvc_opt/README.md`). `rvc_cpu` makes every fill and copy at once.
+`experiments/rvc_lean/NOTES.md`). `rvc_cpu` makes every fill and copy at once.
 
 `programs\lazy` is its test, a program in the kernel's place (supervisor mode, paging on) that fills and copies in every order that could show, against
 plain loops. `python tools\make_lazy_image.py DIR` makes its image folder; `python tools/test_all.py lazy` must print twenty lines with `ok` and `lazy: sum 1a4a1226`.
@@ -111,7 +111,7 @@ its clock word's values (`console.md`, "Words in memory"). The driver counts wha
 what there is room for and keeps the rest in its buffer (1 KB), and the idle loop wakes the console's thread at the next pass
 (`arch_cpu_idle_exit`): a program that prints is not stopped, and a pass that waits for the console is an idle one. The kernel's own messages are not put off: with no
 room left they end the pass (`pause`) and go on in the next. Nothing of the machine changes for it, and it wants no call of the machine's own: a call added to `sbi_call`
-costs every instruction (`experiments/rvc_opt/README.md`, "The same loop, compiled slower").
+costs every instruction (`experiments/rvc_lean/NOTES.md`, "The same loop, compiled slower").
 
 ## What an operation costs in the tick shader
 

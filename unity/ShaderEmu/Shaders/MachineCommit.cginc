@@ -1,4 +1,4 @@
-// The commit's own code with RAM in one texture (experiments/rvc_opt/main.shader's Commit pass
+// The commit's own code with RAM in one texture (experiments/rvc_lean/main.shader's Commit pass
 // under RAM_INPLACE; src/ram.cginc, docs/machine/gpu.md "RAM in one texture"), for Machine.shader's
 // Commit (the state rows), MachineGather.shader and MachineCommitPoints.shader (RAM). Include
 // after UnityCG.cginc and MachineBlit.cginc; MachineGather.shader defines COMMIT_GATHER first.

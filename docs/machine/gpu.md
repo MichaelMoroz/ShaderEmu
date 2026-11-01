@@ -1,7 +1,7 @@
 # GPU
 
 The machine has a GPU: a second device next to the CPU, in its own shader
-(`experiments/rvc_opt/gpu.shader`). It draws real triangles with the graphics card's
+(`experiments/rvc_lean/gpu.shader`). It draws real triangles with the graphics card's
 rasteriser. A program writes vertex buffers and a short list of commands into RAM and sets one
 word; the list is then drawn into the GPU's own colour and depth target.
 
@@ -411,8 +411,7 @@ On the card (RTX 5090, harness, `RVC_PASS_PROF`, 29 October 2026, the mean of 20
 ## RAM in one texture
 
 The machine's state and RAM are one texture of 2048 x 9280 (290 MiB), written in place (`RAM_INPLACE`,
-`experiments/rvc_opt/src/ram.h`), and no pass reads the texture it draws: the D3D11 harness's default
-(`--ping-pong` is two textures, and `--lazy` and D3D12 have two) and the world's. Beside it: the state
+`experiments/rvc_lean/src/ram.h`), and no pass reads the texture it draws: the D3D11 harness's and the world's. Beside it: the state
 rows after the tick (2048 x 64), a stage (2048 x 21) and the control pass's rows, 2.9 MiB.
 
 A pass, after the tick (which reads the state) and the unpack into the tick's texture:
@@ -495,7 +494,7 @@ In the world every round's pass but the tick is a blit (`VRCGraphics.Blit`): the
 (`MachineCommitBlit.shader`) and the GPU's lists (`GpuDrawBlit.shader`), as a camera's `Render` is some 0.13 ms of the
 main thread where a blit is next to nothing. The tick stays a camera's: it draws eight targets at once.
 
-- **Points from a blit** (`experiments/rvc_opt/src/amp.h`). A blit's two triangles are two patches of three points;
+- **Points from a blit** (`experiments/rvc_lean/src/amp.h`). A blit's two triangles are two patches of three points;
   the hull shader asks for a quad domain at factor 8 (never more: a driver may clamp a larger factor), 81 points a
   patch, and a geometry shader of `AMP_INST` instances makes a call of each point and instance: 5,184 calls a blit
   at 32. The calls make the meshes' points and triangles. The hull shader returns no control point by its index
@@ -524,5 +523,5 @@ main thread where a blit is next to nothing. The tick stays a camera's: it draws
 - `EmuMachine.oldPaths` bit 5 draws the points by a camera, bit 6 the GPU's lists (both: no order probe either), for a
   comparison in one session. The meshes and both cameras stay in the scene for that.
 - In the harness `--blits` draws the gather, the RAM commit and the GPU's lists so (`gatherAmp_`, `ramAmp_`,
-  `gpuAmp_` in `rvc_backend11.cpp`, the probe from `experiments/rvc_opt/amp.shader`), for WARP and the card;
+  `gpuAmp_` in `rvc_backend11.cpp`, the probe from `experiments/rvc_lean/amp.shader`), for WARP and the card;
   `tools/test_card.py --with=--blits` runs the cases with it.

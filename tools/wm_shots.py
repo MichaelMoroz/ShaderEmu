@@ -50,7 +50,7 @@ def main():
         # (the bar's words go to the console; nx comes back with the desktop up)
         before, scene = SCENES[name] if isinstance(SCENES[name], tuple) else ("", SCENES[name])
         send = "%sexport NXBAR_PRINT=1; nx; sleep 4; %s; sleep 1; echo LX-''DONE\\n" % (before, scene)
-        cmd = ["pwsh", "-NoProfile", "-File", os.path.join(ROOT, "tools", "gpu_queue.ps1"), harness, "--d3d11", "--rvc", "experiments\\rvc_opt",
+        cmd = ["pwsh", "-NoProfile", "-File", os.path.join(ROOT, "tools", "gpu_queue.ps1"), harness, "--d3d11", "--rvc", "experiments\\rvc_lean",
                "--image", args.image, "--cpu", "--warp", "--no-desktop", "--expect", "/ # ", "--send", send,
                "--until", "LX-DONE", "--save-state", snap]
         run = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, errors="replace", timeout=900)

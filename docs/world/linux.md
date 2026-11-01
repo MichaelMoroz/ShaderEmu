@@ -41,7 +41,7 @@ which of the two layers VRChat is on.
 
 Compile the machine into an empty cache folder first, with the world's switches:
 
-    bin\rvc_harness.exe --d3d11 --rvc experiments\rvc_opt --kernel nommu --image linux-net --no-stdin --no-mrt --define L1_TABLE_BITS=6 --cache build\cache_vrc --until "/ # " --seconds 60
+    bin\rvc_harness.exe --d3d11 --rvc experiments\rvc_lean --kernel nommu --image linux-net --no-stdin --cache build\cache_vrc --until "/ # " --seconds 60
 
 (`--kernel nommu`, the default, is the world's machine: `NO_PAGING`, `SBI_HLE` and `FPU`, `docs/system/nommu.md`).
 

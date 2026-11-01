@@ -6,7 +6,7 @@ For this project it changes two things:
 
 - The `CPUTick` pass compiles in seconds, where FXC takes minutes, so the shader can be tuned on
   D3D11, the backend VRChat runs.
-- It compiles what FXC cannot: the big arrays as locals of the pass, which `experiments/rvc_opt`
+- It compiles what FXC cannot: the big arrays as locals of the pass, which `experiments/rvc_lean`
   uses when it sees that compiler (`__FXC2__` is predefined by it). Under FXC the shader builds
   with static arrays, zeroed every pass.
 
@@ -31,7 +31,7 @@ a newer FXC2 checkout and run the check at the end of this page.
 - The harness commits in bands (`COMMIT_BANDS`, a quad per 4 MB band something wrote to), and
   what the cores stored is drawn as points, a texel each (`multicore.md`, "The commit as points").
   `--no-bands` has the commit rewrite all of RAM; hashes taken without bands need it.
-- The fast loop leaves from where a thing is found out (`experiments/rvc_opt/README.md`,
+- The fast loop leaves from where a thing is found out (`experiments/rvc_lean/NOTES.md`,
   "How the tick is shaped"), and fxc2 puts the code behind a test of a flag where the flag
   was set, when both sides of the branch before it leave a constant there: what is left of
   `if (!step()) break;` is one test.

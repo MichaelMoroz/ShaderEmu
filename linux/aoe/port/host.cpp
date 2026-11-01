@@ -142,6 +142,22 @@ void aoe_events(void) {
             aoe_updates - stats_updates, aoe_world_ms - stats_world);
         stats_at = timeGetTime(); stats_frames = frames; stats_updates = aoe_updates; stats_world = aoe_world_ms;
     }
+    // AOE_MARK=A,B: the span of world updates A to B, for tools/game_par.py and tools/prof.py
+    static int mark_read, mark_a, mark_b;
+    if (!mark_read) { const char* e = getenv("AOE_MARK"); mark_read = 1; if (e) sscanf(e, "%d,%d", &mark_a, &mark_b); }
+    if (mark_a) {
+        static unsigned long m_ms, m_world; static long m_frames; static unsigned long m_updates;
+        if (mark_a > 0 && aoe_updates >= (unsigned long) mark_a) {
+            mark_a = -2;
+            m_ms = timeGetTime(); m_world = aoe_world_ms; m_frames = frames; m_updates = aoe_updates;
+            fprintf(stderr, "aoe: mark begins\n");
+        } else if (mark_a == -2 && aoe_updates >= (unsigned long) mark_b) {
+            mark_a = 0;
+            fprintf(stderr, "aoe: mark ends, %ld frames in %lu ms, updates %lu, game ms %lu\n", frames - m_frames, timeGetTime() - m_ms,
+                aoe_updates - m_updates, aoe_world_ms - m_world);
+            fprintf(stderr, "aoe: mark over\n");   // (what a run stops at: the line before is whole by then)
+        }
+    }
     if (!script || !*script) return;
     int at;
     if (sscanf(script, "%d", &at) != 1 || timeGetTime() - step_from < (unsigned long) at) return;
@@ -160,6 +176,9 @@ void aoe_events(void) {
         aoe_post(WM_MOUSEMOVE, 0, MAKELONG(x, y));
         aoe_post(WM_RBUTTONDOWN, MK_RBUTTON, MAKELONG(x, y));
         aoe_post(WM_RBUTTONUP, 0, MAKELONG(x, y));
+    } else if (!strcmp(what, "move")) {
+        aoe_mouse_x = x; aoe_mouse_y = y;
+        aoe_post(WM_MOUSEMOVE, 0, MAKELONG(x, y));
     } else if (!strcmp(what, "close")) {
         aoe_post(WM_CLOSE, 0, 0);
     } else if (!strcmp(what, "key")) {

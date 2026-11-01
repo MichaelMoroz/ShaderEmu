@@ -328,7 +328,7 @@ def main():
 
     # The boot image from 0x80000000: the devices' 32 MB (zeros), the kernel at +32 MiB (0x82000000), where it
     # is linked to run and the machine starts, and the device tree at +62 MiB (0x83e00000), where the machine
-    # tells the kernel it is (experiments/rvc_opt/src/layout.h).
+    # tells the kernel it is (experiments/rvc_lean/src/layout.h).
     kernel, payload = ours('Image'), os.path.join(OUT, 'linux_payload.bin')
     if os.path.exists(kernel):
         image = open(kernel, 'rb').read()

@@ -3,7 +3,7 @@ collects the WL lines into one JSON per round.
 
     python programs/wl/run.py OUT [--cmd "wl -s 3 all" ...] [--rounds 1] [--limit 900]
 
-The image is RV_IMAGE (build/images/nommu_wl), the harness bin/rvc_harness.exe with experiments/rvc_opt (RV_EXE: another
+The image is RV_IMAGE (build/images/nommu_wl), the harness bin/rvc_harness.exe with experiments/rvc_lean (RV_EXE: another
 harness); RV_EXTRA adds harness options (--ticks 8192). Every run goes through tools/gpu_queue.ps1.
 """
 import argparse, json, os, re, subprocess, time
@@ -15,7 +15,7 @@ RV_IMAGE = os.environ.get('RV_IMAGE', os.path.join(ROOT, 'build', 'images', 'nom
 def harness(extra, log):
     """The command line of one run (the no-MMU Linux runs without paging)."""
     return ['pwsh', '-NoProfile', '-File', os.path.join(ROOT, 'tools', 'gpu_queue.ps1'),
-            os.environ.get('RV_EXE', os.path.join(ROOT, 'bin', 'rvc_harness.exe')), '--d3d11', '--rvc', 'experiments/rvc_opt',
+            os.environ.get('RV_EXE', os.path.join(ROOT, 'bin', 'rvc_harness.exe')), '--d3d11', '--rvc', 'experiments/rvc_lean',
             '--define', 'NO_PAGING', '--image', RV_IMAGE, '--no-desktop', '--no-stdin', '--uart-log', log] + \
         os.environ.get('RV_EXTRA', '').split() + extra
 
