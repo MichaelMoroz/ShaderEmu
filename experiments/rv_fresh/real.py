@@ -6,7 +6,7 @@ HERE = os.path.dirname(os.path.abspath(__file__)); ROOT = os.path.abspath(os.pat
 SNAP = os.environ.get('AGENTS_ISA', r'C:\Users\micha\agents_isa')
 sys.path.insert(0, HERE)
 import snapsim
-ap = argparse.ArgumentParser(); ap.add_argument('shader'); ap.add_argument('loads'); ap.add_argument('--reps', default='4'); ap.add_argument('-D', action='append', default=[]); ap.add_argument('--check', action='store_true'); ap.add_argument('--note', default=''); ap.add_argument('--snapfile', default='')
+ap = argparse.ArgumentParser(); ap.add_argument('shader'); ap.add_argument('loads'); ap.add_argument('--reps', default='4'); ap.add_argument('-D', action='append', default=[]); ap.add_argument('--check', action='store_true'); ap.add_argument('--note', default=''); ap.add_argument('--snapfile', default=''); ap.add_argument('--twice', action='store_true')
 a = ap.parse_args()
 empty = os.path.join(ROOT, 'logs', 'fresh_empty.bin'); open(empty, 'wb').write(b'\0' * 16)
 for load in a.loads.split(','):
@@ -15,6 +15,7 @@ for load in a.loads.split(','):
     cmd = ['pwsh', '-NoProfile', '-File', os.path.join(ROOT, 'tools', 'gpu_queue.ps1'), os.path.join(ROOT, 'bin', 'fresh.exe'), os.path.join(HERE, a.shader), empty, '--core', '8x8', '--snap', snap, '--reps', a.reps,
            '--commit', os.path.join(HERE, 'steps', 'commit.hlsl'), '368']
     if a.check: cmd += ['--dump-ram', dump]
+    if a.twice: cmd += ['--twice']
     for d in a.D: cmd += ['-D', d]
     o = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, errors='replace').stdout
     m = re.search(r'SNAP .*', o)

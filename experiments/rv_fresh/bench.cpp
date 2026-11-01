@@ -37,7 +37,7 @@ static ID3DBlob* compile(const std::string& file, const char* entry, const char*
 }
 int main(int argc, char** argv) {
     if (argc < 3) { printf("bench SHADER RAM.bin [--core WxH] [--budget N] [--passes N] [--warp] [-D X=V] [--dump N] [--out BLOB]\n"); return 1; }
-    std::string shader = argv[1], ramf = argv[2], out, commitf; int commitN = 0; std::string snapf, dumpram; int reps = 3, maxpasses = 400; int cw = 4, ch = 8, budget = 8192, passes = 400, dump = 0; bool warp = false; std::vector<std::string> defs;
+    std::string shader = argv[1], ramf = argv[2], out, commitf; int commitN = 0; bool twice = false; std::string snapf, dumpram; int reps = 3, maxpasses = 400; int cw = 4, ch = 8, budget = 8192, passes = 400, dump = 0; bool warp = false; std::vector<std::string> defs;
     for (int i = 3; i < argc; i++) {
         std::string a = argv[i];
         if (a == "--core") sscanf(argv[++i], "%dx%d", &cw, &ch);
@@ -48,6 +48,7 @@ int main(int argc, char** argv) {
         else if (a == "--dump") dump = atoi(argv[++i]);
         else if (a == "--out") out = argv[++i];
         else if (a == "--snap") snapf = argv[++i];
+        else if (a == "--twice") twice = true;
         else if (a == "--dump-ram") dumpram = argv[++i];
         else if (a == "--reps") reps = atoi(argv[++i]);
         else if (a == "--max-passes") maxpasses = atoi(argv[++i]);
@@ -94,10 +95,15 @@ int main(int argc, char** argv) {
         for (int l = 29; l < 37; l++) { int k = 4 * (l - 29); xr[k + 1] = snapState[l][0]; xr[k + 2] = snapState[l][1]; xr[k + 3] = snapState[l][2]; if (l == 36) pc = snapState[l][3]; else xr[k + 4] = snapState[l][3]; }
         D3D11_TEXTURE2D_DESC pd = {}; R.t->GetDesc(&pd); pd.Usage = D3D11_USAGE_DEFAULT; pd.BindFlags = 0; ID3D11Texture2D* pristine; D3D11_SUBRESOURCE_DATA pi = {ram.data(), RW * 16, 0};
         pd.BindFlags = D3D11_BIND_SHADER_RESOURCE; check(dev->CreateTexture2D(&pd, &pi, &pristine), "pristine");
-        int lastSide = 0;
+        int lastSide = 0; std::vector<unsigned> dirty;
         double tick = 0, commit = 0; unsigned long long ins = 0, outs = 0, full = 0, passes = 0; unsigned lastc[4] = {}, lastx[4] = {};
         for (int rep = 0; rep < reps; rep++) {
-            ctx->CopyResource(R.t, pristine);
+            // only what the last go changed goes back: a copy of the whole of RAM would empty the card's caches, which a machine's passes do not
+            if (rep == 0) ctx->CopyResource(R.t, pristine);
+            else {
+                for (unsigned t : dirty) { D3D11_BOX b = {t & 2047, t >> 11, 0, (t & 2047) + 1, (t >> 11) + 1, 1}; ctx->CopySubresourceRegion(R.t, 0, t & 2047, t >> 11, 0, pristine, 0, &b); }
+                dirty.clear();
+            }
             int c0 = 0;
             for (int k = 0; k < 8; k++) { D3D11_BOX b = {0, 0, 0, 1, 1, 1}; ctx->UpdateSubresource(S[0][k].t, 0, &b, xr + 4 * k, 16, 0); }
             { unsigned w[4] = {pc, 0, 0, 0}; D3D11_BOX b = {1, 0, 0, 2, 1, 1}; ctx->UpdateSubresource(S[0][0].t, 0, &b, w, 16, 0); }
@@ -110,6 +116,7 @@ int main(int argc, char** argv) {
                 ctx->OMSetRenderTargets(8, r, nullptr); ctx->PSSetShaderResources(0, 9, sv);
                 D3D11_VIEWPORT vs0 = {0, 0, (float)SW, (float)SH, 0, 1}; ctx->RSSetViewports(1, &vs0); ctx->RSSetScissorRects(1, &sc);
                 ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST); ctx->VSSetShader(v, nullptr, 0); ctx->PSSetShader(p, nullptr, 0);
+                if (twice) { ctx->Draw(3, 0); ctx->End(qa); }   // the same pass again, the texture's caches as the first left them: the second is the one timed
                 ctx->Draw(3, 0); c0 = 1 - c0; ctx->End(qb);
                 ctx->OMSetRenderTargets(0, nullptr, nullptr);
                 ID3D11ShaderResourceView* n2[9] = {}; ctx->PSSetShaderResources(0, 9, n2);
@@ -131,6 +138,15 @@ int main(int argc, char** argv) {
                 if (rep > 0 && did > 0) { tick += (double)(tb - ta) / dj.Frequency; commit += (double)(tc - tb) / dj.Frequency; ins += did; passes++; outs += xw[0]; full += xw[1]; }
                 memcpy(lastc, cw, 16); memcpy(lastx, xw, 16);
                 lastSide = c0;
+                // the entries' tags, texels 16 to 107 of the core (mem.hlsl), to know what the commit changed
+                for (int k = 0; k < 8; k++) {
+                    ctx->CopyResource(st, S[c0][k].t); D3D11_MAPPED_SUBRESOURCE mt; check(ctx->Map(st, 0, D3D11_MAP_READ, 0, &mt), "map");
+                    for (int lin = 16 + ((k - 16 % 8 + 8) % 8); lin < 108; lin += 8) {
+                        unsigned tg[4]; memcpy(tg, (char*)mt.pData + (lin >> 6) * mt.RowPitch + ((lin >> 3) & 7) * 16, 16);
+                        for (int e = 0; e < 4; e++) if (tg[e] != 0xffffffffu) dirty.push_back(tg[e]);
+                    }
+                    ctx->Unmap(st, 0);
+                }
                 if (cw[2] != 0) break;
             }
         }

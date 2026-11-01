@@ -142,4 +142,4 @@ In the flat column lean is 3.3 times gpu_vm. The field is wired but not yet run 
 
 ## A tick from an empty shader (1 November 2026)
 
-Steps and costs are in `experiments/rv_fresh/NOTES.md`. In short: arithmetic about half lean's price, test mixes level with lean with less in the tick, no real program run yet, no WARP check.
+Steps and costs are in `experiments/rv_fresh/NOTES.md`. In short: arithmetic about half lean's price, test mixes level with lean with less in the tick, stretches of real code (shell, Doom) not ahead of lean, 165 and 181-201 ns against long runs at 161 and 175, not like for like; real code leaves the arithmetic loop 60 to 65 times in 100; no WARP check.

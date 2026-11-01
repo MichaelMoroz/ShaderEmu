@@ -89,8 +89,49 @@ commit and no devices, traps, atomics, multiplication, floats, unaligned accesse
   what they do is the open question, and the figures above (a jump's price not a line in distance) cannot settle it. A SASS listing would.
 - How often real code leaves the hot loop decides this design. The mixes are made up: 6 of 12 arithmetic. No real program has run.
 
+## Real code (1 November 2026)
+
+`snapsim.py` runs a snapshot's core 0 on a model, from its RAM and registers, to the first thing the tick lacks. `real.py` runs the same on the
+card (`bench --snap`), repeating the stretch; the first go is not timed and only changed texels are put back between goes. Step 12 adds RAM at its
+addresses, multiplication and division, atomics, fence and the time CSR read as 0; anything else stops it.
+
+**How often real code leaves the hot loop (the model):**
+
+| Load | Stretch, instructions | Stops at | Arithmetic | Load | Branch | Store | Other | Leaves the loop |
+|---|---|---|---|---|---|---|---|---|
+| shell | 6,086 | `ecall` | 40.4% | 22.2% | 17.6% | 11.4% | 8.4% | every 1.70 (58.8%) |
+| Doom | 29,478 | a load from the devices (`81000c00`) | 35.2% | 27.8% | 20.2% | 8.1% | 8.7% | every 1.56 (64.0%) |
+| Quake | 21 | a load from the devices (`80c01404`) | | | | | | too short to say |
+| nxray | 0 | a float instruction | | | | | | none |
+
+Arithmetic before a way out: 0 in 61% of ways out on the shell and 72% on Doom, 1 in 23% and 16%. So the hot loop is rarely in a run, and these
+snapshots show only what they were doing at that moment. Only lui and arithmetic count as staying in that table; on the card auipc and the others
+leave as well (60 and 65 ways out in 100).
+
+**Prices on the card, ns an instruction of the tick's draw, 2 to 5 timed goes of one stretch, repeated:**
+
+| Step | Shape | Doom | Shell |
+|---|---|---|---|
+| 12 | Arithmetic loop, the rest a way out | 181, 201 | 165, 165 |
+| 13 | One loop, a tree, arithmetic first | 188 | 175 |
+| 14 | One loop, loads first, then arithmetic | 189 | 177 |
+
+Lean's tick on long runs of the same loads is 175 and 161 (`RESULTS.md`). That is **not like for like**: other code over a longer time, and with what
+the new tick still lacks. On these figures the new tick is not ahead on real code. +25% (139) is not reached, and the shape of the loop moves it by 5%
+at most, so arithmetic's low price is not what real code sees. A way out's mean (Doom at 188, arithmetic at 67) is about 256 ns, inferred, against 115 to
+160 in tight loops; where the rest goes is not known. Run to run Doom moved by about 10%.
+
+**Checks.** Step 12 on both stretches: all 32 registers, the pc and every byte of RAM as the model's (3,015 bytes on Doom, 941 on the shell, none
+changed that the model did not write).
+
+**Write cache fill.** `fill`, a store to a new texel each trip: step 8 stopped at 351 of 368 entries (95%), step 10's buckets at 292 (79%). In real code
+Doom's stretch had 1 pass in 4 end full, at 7,370 instructions a pass on the mean; the shell's none. Not gpu_vm's 2,000 to 3,000, but one stretch.
+
+**Not settled.** The commit's time reads about 0.5 ns an instruction and is not to be trusted: the timestamps may not separate it from the tick. `--twice`,
+to time a pass with the texture's caches warm, read 0.01 to 0.55 ns, which cannot be a pass: the test does not work, and how much of real code's price is
+texture waits is still not measured.
+
 ## Where it stopped
 
-Next: real code without the whole machine (a snapshot's RAM and registers, on to the first instruction the tick lacks), which needs
-multiplication and more; the path out cheaper, with SASS if a trace can be had; the translated form as a step of its own (not begun). The
-head-to-head against gpu_vm (shell, gzip, Doom, Quake; flat, World, VR) has not been run again, and nothing here has had a WARP check.
+Next, if the design goes on: why a way out costs 256 on real code against 115 to 160 in tight loops. A SASS listing would say. Floats and the devices for
+Quake and nxray; the translated form (not begun). Head-to-head against gpu_vm not run again; no WARP check.
