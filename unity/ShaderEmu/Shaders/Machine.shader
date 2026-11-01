@@ -1,6 +1,6 @@
 Shader "ShaderEmu/Machine"
 {
-    // The machine's commit of the state rows (experiments/rvc_opt/main.shader's, RAM in one
+    // The machine's commit of the state rows (experiments/rvc_lean/main.shader's, RAM in one
     // texture), the GPU device's control pass and the passes around them, drawn by EmuMachine.cs
     // with VRCGraphics.Blit; none reads the texture it draws. The CPUTick pass is
     // MachineTick.shader: a file of its own, so that nothing changed here or in the GPU's

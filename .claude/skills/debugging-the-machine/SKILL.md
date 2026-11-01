@@ -12,7 +12,7 @@ Workers and races have their own skill (`worker-core-bugs`). Depth: `docs/machin
 | Need | Use |
 |---|---|
 | Does it run, what did it print, instructions, sums, crashes | `bin\rvc_cpu.exe`: boots in under a second, 100 to 200 M instructions a second, no card, no GPU, no sound unless `RVC_SOUND=1` |
-| What it looks like, the window, drawing, keys by hand | `bin\rvc_harness.exe --d3d11 --rvc experiments\rvc_opt --image linux-net --cpu --desktop`, through `tools\gpu_queue.ps1` |
+| What it looks like, the window, drawing, keys by hand | `bin\rvc_harness.exe --d3d11 --rvc experiments\rvc_lean --image linux-net --cpu --desktop`, through `tools\gpu_queue.ps1` |
 | A picture with no card time | the same with `--warp`: `--cpu --warp --save-state F.snap`, then `python tools\snapshot_screen.py F.snap OUT.png`. Not `--screen-log`, which can miss a window |
 | Right here, wrong on the card | `RVC_RACES` on `rvc_cpu` first, then `python tools\test_card.py CASE` |
 | The tick itself | `tick-and-shader-changes` skill |
@@ -31,7 +31,7 @@ More time went on this than on any bug.
 - **The wrong folder.** A worktree has no `bin\`, `build\` or `rvc\`, and a tool there quietly lacks what it expects: name the image and the emulator.
 - **A rebuilt ELF.** `prof.py report` refuses an ELF that is not the image's; addr2line does not, and gives a wrong line with confidence. Keep the ELF with the image.
 - **A snapshot of a layout before** is refused (`SX86SNP2`, `RVCSNAP2`): make it again (`python tools\test_card.py mctest-3 --snapshot`). Under `--cpu`, `--load-state` restores only the texture; use `rvc_cpu --save`/`--load` there.
-- **The tick**: `rvc_harness` exits 3 when `experiments\rvc_opt\warp_ok` lacks the folder's stamp. See `tick-and-shader-changes`.
+- **The tick**: `rvc_harness` exits 3 when `experiments\rvc_lean\warp_ok` lacks the folder's stamp. See `tick-and-shader-changes`.
 - **Another agent's run or build** beside yours. `~/nm` is shared: `building-the-system` has the private home.
 
 ## 3. A program that crashed

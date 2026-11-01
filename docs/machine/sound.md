@@ -130,7 +130,8 @@ so its samples can be played where they lie.
 mix, the cursor and the control words; the model mixes them again from the snapshot's memory
 (and `--rom rootfs.bin`) and must agree on every sample and on the device's words.
 
-    bin\rvc_harness.exe --dxc --image sound --no-stdin --fixed-dt 0.004 --until "sound: " --sound-capture s.wav --save-state s.snap
+    (the `sound` test card is bare metal, which the tick no longer runs: capture from Linux on the same machine)
+    bin\rvc_harness.exe --no-stdin --fixed-dt 0.004 --until "sound: " --sound-capture s.wav --save-state s.snap
     python tools\sound_reference.py s.wav s.snap --stream-test
 
 `programs\sound` is the test card: every kind of voice for half a second. From Linux,

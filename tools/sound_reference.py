@@ -5,7 +5,7 @@
 
 out.wav.frames holds, per mix, the host's cursor and the machine's control row after that
 frame. From those and the samples in the snapshot's RAM (and the ROM) this computes every
-sample again, in the integers the shader uses (experiments/rvc_opt/src/sound.h), and compares:
+sample again, in the integers the shader uses (experiments/rvc_lean/src/sound.h), and compares:
 the device's own words frame by frame, then the samples. Exit code 0 when all are equal.
 
 Sample data must not have changed during the run, except a stream's: --stream-test takes

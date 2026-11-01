@@ -98,7 +98,7 @@ each direction; packet k of a direction is the one that made the count k.
 
 ### What a host does every pass
 
-In the shader the device is `GPU_NET` in `experiments/rvc_opt/src/gpu.h` (`gpu_control`): the
+In the shader the device is `GPU_NET` in `experiments/rvc_lean/src/gpu.h` (`gpu_control`): the
 host texel is written from four uniforms and the ring from a texture, in the control pass.
 Only a host that defines `GPU_NET` and has these compiles it (`gpu.shader` does):
 
@@ -257,7 +257,7 @@ machine with its own `--uart-log`. Start them from PowerShell.
 
 - **Ping, both ways** (interpreters): each of
   `bin\rvc_cpu.exe --quiet --net 47000 --net-id N --uart-log logs\lan_N.log --expect "/ # " --send "sleep 4; ping -c 4 10.0.0.M\n" --until "packet loss"`
-  must say `4 received`. On the shader: `bin\rvc_harness.exe --rvc experiments\rvc_opt --load-state build\snapshots\rvc_shell.snap --no-stdin --net 47000 --net-id N
+  must say `4 received`. On the shader: `bin\rvc_harness.exe --rvc experiments\rvc_lean --load-state build\snapshots\rvc_shell.snap --no-stdin --net 47000 --net-id N
   --input "..."`.
 - **A file through TCP on a bad link** (`--net-loss 5 --net-delay 250` on both): on 1,
   `nc -l -p 5000 < /dev/null > /tmp/f; md5sum /tmp/f`; on 2, `dd if=/bin/busybox of=/tmp/s

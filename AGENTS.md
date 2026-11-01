@@ -90,12 +90,10 @@
   editing a hook, `git checkout` the files it patches in the kernel tree first.
 - `GrGetWindowInfo` does not wait for the GPU any more. A program that writes its window's
   buffer reads a pixel first (`GrReadArea`), as `nxmon` and `nxpaint` do.
-- `rvc_harness --lazy` (`LAZY_MEMOP`): a fill or a copy, from the ROM too, is left to the
-  commit and the pass goes on; its destination's pages are in no TLB until then. Off by
-  default: it costs 1% of a shell loop and 3% of Doom though the fast loop is instruction for
-  instruction the same (`tools\cso_loops.py`; `experiments/rvc_opt/README.md`, "The same loop, compiled slower"). With
-  it undefined the tick is the same blob. Its test: `programs\lazy`, 20 lines ok, sum
-  `1a4a1226`, on `rvc_cpu` and on the shader machine off and on.
+- `LAZY_MEMOP` (a fill or a copy left to the commit) was the old tick's, and is gone with it: it cost 1% of a shell loop
+  and 3% of Doom though the fast loop was instruction for instruction the same (`tools\cso_loops.py`;
+  `experiments/rvc_lean/NOTES.md`, "The same loop, compiled slower"). Its test `programs\lazy`, 20 lines ok, sum
+  `1a4a1226`, runs on `rvc_cpu`.
 - A change to the tick is measured whole, alternating with the tree, on the shell loop AND on
   Doom's timedemo: they disagree (two SBI calls in the general path: level, and 1.9% under).
   Nearly every change to the tick's function, however far from the fast loop, has cost 1 to
@@ -275,15 +273,14 @@
   `media_inflate_stream`, and `open --unpack` runs it first; it exits 3 (busybox then) for what it cannot do,
   a lack of memory in one piece too. `tools/test_all.py unarc` packs a folder with busybox and unpacks it both ways.
 - The devices are 0x80000000 to 0x82000000 and RAM is one range, 0x82000000 to 0x92000000, the kernel at its start
-  (28 October 2026; `docs/system/nommu.md`, "Memory"): the layout is `experiments/rvc_opt/src/layout.h` for the tick and
+  (28 October 2026; `docs/system/nommu.md`, "Memory"): the layout is `experiments/rvc_lean/src/layout.h` for the tick and
   `harness/apps/rvc_layout.h` for the host. The state texture is 2048 x 9280 (`STATE_TEX_HEIGHT`, `kStateHeight`, Unity's
   StateA). The commit's band mask stays 32 bits, bit b for bands b, b + 32 and b + 64 (`ram_bands`); the control words'
   bands (4 and 5) are drawn apart (`_CommitAlways`, `CONTROL_BANDS`). A GPU copy into RAM goes only below 0x81e00000. A
   snapshot of the layout before (devices at 0x86000000) is refused: make it again.
 - RAM is one texture written in place (`src/ram.h`, `docs/machine/gpu.md`, "RAM in one texture"; Unity has StateA alone):
   no commit pass reads what it draws, what it needs of RAM is gathered into a stage first, and a copy from RAM to RAM
-  is 256 KB a pass, in `rvc_cpu` too (`copy_pass`). `programs\copytest` must say `sum 0e7f76c3` on both; `--ping-pong`
-  is the two textures of before (and `--lazy`, D3D12).
+  is 256 KB a pass, in `rvc_cpu` too (`copy_pass`). `programs\copytest` must say `sum 0e7f76c3` on both.
 - OpenTTD (`docs/games/openttd.md`) is compiled by its own GCC with all of libstdc++ (`linux/openttd/toolchain.sh`), runs on
   the first core but for its viewports (`ViewportFlush` in its `viewport.cpp`: the parts of a picture cut in pieces, each
   found, sorted and drawn by a core into a buffer of its own), and its patch keeps the game state the build computer's: after

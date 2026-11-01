@@ -16,7 +16,7 @@ foreach ($n in $Only) {
     $env:RVC_PROF = $dir
     $env:RVC_PROF_MEM = '0'
     $t = Measure-Command {
-        & pwsh -NoProfile -File tools\gpu_queue.ps1 $Exe --d3d11 --rvc experiments\rvc_opt --define NO_PAGING --image $Image --no-desktop --no-viz --no-stdin `
+        & pwsh -NoProfile -File tools\gpu_queue.ps1 $Exe --d3d11 --rvc experiments\rvc_lean --define NO_PAGING --image $Image --no-desktop --no-viz --no-stdin `
             --cpu --cpu-ips 5500000 --frames 1000000 --uart-log "$dir\uart.log" --input ($loads[$n] + '\n') --until 'SNAP' --save-state "$dir\$n.snap" 2>&1 | Select-Object -Last 4 | Out-Host
     }
     "$n : $([int]$t.TotalSeconds) s, $((Get-Item "$dir\$n.snap").Length) bytes, pcs $((Get-Content "$dir\pcs.txt").Count)"

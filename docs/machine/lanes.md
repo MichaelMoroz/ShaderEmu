@@ -1,8 +1,8 @@
 # Lanes: pixels of the tick, each running a function on an index of its own
 
 The lean tick has them (`experiments/rvc_lean/tick.hlsl`, which the world's `MachineTickLean.shader` runs from a
-verbatim copy, `lean/tick.hlsl`; in the harness `--rvc experiments\rvc_lean`). `rvc_cpu`, `rvc_harness --cpu`,
-`experiments/rvc_opt` and the compute machine have none: the library makes every index a plain call there, which
+verbatim copy, `lean/tick.hlsl`; in the harness `--rvc experiments\rvc_lean`). `rvc_cpu`, `rvc_harness --cpu`
+and the compute machine have none: the library makes every index a plain call there, which
 gives the same output.
 
 A worker is a block of the tick's pixels, and every one of them runs the whole pass to write back
@@ -203,7 +203,7 @@ at 2^5 (`--workers 8`) 6,885. Lanes gain from large caches, the field from neith
 - The field in the world is wired and has not been run there: `MachineTickLean.shader` defines `LANE_FIELD`, the
   tick's mesh has the field's primitive (`ShaderEmuBuilder`: 17 triangles), `Machine.shader`'s Unpack fills rows 48 to
   63 from the targets while a job is posted, `MachineCommit.cginc` defines `LANE_FIELD` for `src/ram.cginc` (synced from
-  `experiments/rvc_opt/src/ram.h`), and the commit's points and `EmuMachine` have the field's 7,936 points
+  `experiments/rvc_lean/src/ram.h`), and the commit's points and `EmuMachine` have the field's 7,936 points
   (`_FieldPoints`). Unlike the harness, the world draws the primitive and the points every round, a job posted or
   not (with none posted they draw nothing), and does not count the field's instructions in its figures. To run it:
   "Sync shader sources from the repository" and the builder, then `example shader` in the world.

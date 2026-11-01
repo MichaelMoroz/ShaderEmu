@@ -1,5 +1,5 @@
 #pragma once
-// The machine's physical layout, as experiments/rvc_opt/src/layout.h has it (docs/system/nommu.md, "Memory"):
+// The machine's physical layout, as experiments/rvc_lean/src/layout.h has it (docs/system/nommu.md, "Memory"):
 // the devices' 32 MB from 0x80000000 (the GPU's memory, the mailboxes, the control words, the network's and
 // the console's rows, the sound card's memory, the device words), then RAM in one range to 0x92000000, where
 // the kernel starts. Until 28 October 2026 the devices were at 0x86000000 (RAM below and above them); a

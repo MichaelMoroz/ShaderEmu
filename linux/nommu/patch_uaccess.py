@@ -6,7 +6,7 @@
   functions ask for). asm-generic's UACCESS_MEMCPY said yes to anything, so a bad pointer given to a system call
   faulted in the kernel or wrote over the firmware; now it is EFAULT. A range of 0 bytes is anywhere.
 - get_user, put_user: one load or store (two for 64 bits), aligned or not: the machine makes a misaligned access
-  itself, in the general step (experiments/rvc_opt/src/emu.h). UACCESS_MEMCPY made every one a get_unaligned or put_unaligned: a word four byte loads or stores and
+  itself, in the general step (experiments/rvc_lean/src/emu.h). UACCESS_MEMCPY made every one a get_unaligned or put_unaligned: a word four byte loads or stores and
   the shifts between.
    python3 patch_uaccess.py K"""
 import sys
