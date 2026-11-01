@@ -13,6 +13,7 @@ $env:RVC_THREADS = '1'
 $logs = @()
 foreach ($s in ($Scenarios -split ',')) {
     $log = (Resolve-Path build/rv_fewer).Path + "\cnt$s.uart"
+    Remove-Item $log -ErrorAction SilentlyContinue  # (--uart-log adds to what is there; profile.py refuses two builds' runs)
     $td = "TDAWN_AUTO=1 TDAWN_SEED=7 TDAWN_NO_DELAY=1 TDAWN_SCENE=inline TDAWN_FRAMES_CORE=0 TDAWN_SCEN=$s TDAWN_FRAMES=$Frames"
     & "$main\bin\rvc_cpu.exe" --image build/images/cnt --quiet --uart-log $log --expect "/ # " --send "nano-X -p & sleep 2; $td tdawn FROMINSTALL; echo H2H'' B\n" --until "H2H B" --seconds 1500 2>&1 | Select-Object -Last 1
     Select-String -Path $log -Pattern 'done at frame' | % { $_.Line.Trim() }

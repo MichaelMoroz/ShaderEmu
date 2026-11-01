@@ -342,6 +342,19 @@ index 2a46e07..de9ec8e 100644
      }
  }
 +#endif
+diff --git a/common/ftimer.h b/common/ftimer.h
+index c812619..b64c20f 100644
+--- a/common/ftimer.h
++++ b/common/ftimer.h
+@@ -721,7 +721,7 @@ public:
+     {
+         return (Time() == 0);
+     };
+-    int Time(void) const
++    __attribute__((always_inline)) int Time(void) const
+     {
+         int remain = DelayTime - (Frame - Started);
+         if (remain < 0)
 diff --git a/common/graphicsviewport.cpp b/common/graphicsviewport.cpp
 index 1dda825..c77c3fc 100644
 --- a/common/graphicsviewport.cpp
@@ -1328,6 +1341,24 @@ index ea6a5c0..31c6e4b 100644
      return duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
  }
  
+diff --git a/common/vector.h b/common/vector.h
+index cd86400..ff271fd 100644
+--- a/common/vector.h
++++ b/common/vector.h
+@@ -76,11 +76,11 @@ public:
+     VectorClass(VectorClass<T> const&); // Copy constructor.
+     virtual ~VectorClass(void);
+ 
+-    T& operator[](unsigned index)
++    __attribute__((always_inline)) T& operator[](unsigned index)
+     {
+         return (Vector[index]);
+     };
+-    T const& operator[](unsigned index) const
++    __attribute__((always_inline)) T const& operator[](unsigned index) const
+     {
+         return (Vector[index]);
+     };
 diff --git a/common/vqadrawer.cpp b/common/vqadrawer.cpp
 index cd3b404..f0d1108 100644
 --- a/common/vqadrawer.cpp
@@ -2036,7 +2067,7 @@ index c7ad7f4..1d17104 100644
      return (ptr);
  }
 diff --git a/tiberiandawn/cell.h b/tiberiandawn/cell.h
-index f9c20ea..307e158 100644
+index f9c20ea..7ba7870 100644
 --- a/tiberiandawn/cell.h
 +++ b/tiberiandawn/cell.h
 @@ -191,6 +191,18 @@ public:
@@ -2058,6 +2089,15 @@ index f9c20ea..307e158 100644
  
      int operator==(CellClass const& cell) const
      {
+@@ -225,7 +237,7 @@ public:
+     COORDINATE Cell_Coord(void) const;
+     int Cell_Color(bool override = false) const;
+     CELL Cell_Number(void) const;
+-    LandType Land_Type(void) const
++    __attribute__((always_inline)) LandType Land_Type(void) const
+     {
+         return ((OverrideLand != LAND_COUNT) ? OverrideLand : Land);
+     };
 @@ -247,6 +259,9 @@ public:
      void Occupy_Down(ObjectClass* object);
      void Occupy_Up(ObjectClass* object);
@@ -3082,6 +3122,26 @@ index a8aebd8..912d76b 100644
  
      Hide_Mouse();
      SeenBuff.Blit(HidPage);
+diff --git a/tiberiandawn/coord.cpp b/tiberiandawn/coord.cpp
+index 277de17..9c9bd15 100644
+--- a/tiberiandawn/coord.cpp
++++ b/tiberiandawn/coord.cpp
+@@ -59,6 +59,7 @@
+  * HISTORY:                                                                                    *
+  *   06/17/1996 JLB : Created.                                                                 *
+  *=============================================================================================*/
++#ifndef SHADEREMU
+ CELL Coord_Cell(COORDINATE coord)
+ {
+     CELL_COMPOSITE cell;
+@@ -68,6 +69,7 @@ CELL Coord_Cell(COORDINATE coord)
+     return (cell.Cell);
+     //	return(XY_Cell(((COORD_COMPOSITE)coord).Sub.X, ((COORD_COMPOSITE)composite).Sub.Y));
+ }
++#endif
+ 
+ /***********************************************************************************************
+  * Distance -- Determines the lepton distance between two coordinates.                         *
 diff --git a/tiberiandawn/display.cpp b/tiberiandawn/display.cpp
 index 20ff4f6..594c4a2 100644
 --- a/tiberiandawn/display.cpp
@@ -3981,6 +4041,28 @@ index 14320b1..c983722 100644
      void Debug_Draw_Map(const char* txt, CELL start, CELL dest, bool pause);
      void Debug_Draw_Path(PathType* path);
      bool Follow_Edge(CELL start,
+diff --git a/tiberiandawn/function.h b/tiberiandawn/function.h
+index d5df069..3361820 100644
+--- a/tiberiandawn/function.h
++++ b/tiberiandawn/function.h
+@@ -843,7 +843,7 @@ inline COORDINATE XYPixel_Coord(int x, int y)
+                                   (int)((x * ICON_LEPTON_W) / ICON_PIXEL_W) /*+LEPTON_OFFSET_X*/));
+ }
+ 
+-inline int Lepton_To_Pixel(int lepton)
++__attribute__((always_inline)) inline int Lepton_To_Pixel(int lepton)
+ {
+     return ((lepton * ICON_PIXEL_W) + (ICON_LEPTON_W / 2) - ((lepton < 0) ? (ICON_LEPTON_W - 1) : 0)) / ICON_LEPTON_W;
+ }
+@@ -928,7 +928,7 @@ inline COORDINATE Adjacent_Cell(COORDINATE coord, DirType dir)
+ {
+     return Adjacent_Cell(coord, Dir_Facing(dir));
+ }
+-inline CELL Adjacent_Cell(CELL cell, FacingType dir)
++__attribute__((always_inline)) inline CELL Adjacent_Cell(CELL cell, FacingType dir)
+ {
+     return (CELL)(cell + AdjacentCell[dir]);
+ }
 diff --git a/tiberiandawn/gscreen.cpp b/tiberiandawn/gscreen.cpp
 index 4efa828..9b98877 100644
 --- a/tiberiandawn/gscreen.cpp
@@ -4823,6 +4905,26 @@ index 967688e..76dce7c 100644
  
      /*
      ------------------------------ Read the INI ------------------------------
+diff --git a/tiberiandawn/miscasm.h b/tiberiandawn/miscasm.h
+index ec90a58..838f708 100644
+--- a/tiberiandawn/miscasm.h
++++ b/tiberiandawn/miscasm.h
+@@ -4,7 +4,15 @@
+ class GraphicViewPortClass;
+ 
+ int Distance_Coord(COORDINATE coord1, COORDINATE coord2);
++#ifdef SHADEREMU
++/* (X's cell byte, then Y's, in the MAP_CELL_MAX_X_BITS each has of a cell (defines.h, 7), what the composites say: everywhere inline) */
++__attribute__((always_inline)) inline CELL Coord_Cell(COORDINATE coord)
++{
++    return (CELL)((((unsigned)coord >> 8) & 127) | ((((unsigned)coord >> 24) & 127) << 7));
++}
++#else
+ CELL Coord_Cell(COORDINATE coord);
++#endif
+ void Fat_Put_Pixel(int x, int y, int color, int siz, GraphicViewPortClass& gpage);
+ 
+ #endif
 diff --git a/tiberiandawn/msglist.cpp b/tiberiandawn/msglist.cpp
 index 01b705d..0a29bdd 100644
 --- a/tiberiandawn/msglist.cpp
