@@ -97,6 +97,10 @@ into a private image and runs them (copies of the files in `/tmp`: a mapped ROM 
 `programs\lazy` tests fills and copies, a program in the kernel's place (supervisor mode, paging on) that fills and copies in every order that could show, against
 plain loops. `python tools\make_lazy_image.py DIR` makes its image folder; `python tools/test_all.py lazy` must print twenty lines with `ok` and `lazy: sum 1a4a1226`.
 
+### Work of the boot that nothing reads (`linux/nommu/patch_bootwork.py`)
+
+While memblock hands over its free ranges no page in them needs a look (`se_pages_pristine`), the IP identifiers start at 0, no uevent is made before the first program, and the console's log level is 4 (the kernel's notices stay in `dmesg`). On the card, to the prompt: 7.2 million instructions and 1,307 ms became 4.7 million and 919 ms (1 November 2026, `experiments/rv_acct/NOTES.md`). A boot's time is taken to the prompt (`RVC_MARK='/ # '`): what a harness types after it is idle passes.
+
 ### The console (`console_hook.py`, `patch_console.py`)
 
 `linux/nommu/patch_console.py` makes the console's driver (`hvc_riscv_sbi.c`) write a ring of 256 bytes in memory, which the host reads between two of

@@ -26,6 +26,11 @@ LOADS = {   # the command, seconds at most, the lines kept as the work's proof
     'avi': (A + 'media_test video "/root/Videos/Big Buck Bunny.avi" 16' + B, 170, r'sum'),
     'tdawn': (PRE + A + TD + 'TDAWN_SCEN=3 TDAWN_FRAMES=1300 tdawn FROMINSTALL' + B, 280, r'done at frame'),
     'doom': (PRE + A + 'DOOM_VIEW=told DOOM_HASH_TICS=100 doom -1 -timedemo demo1' + B, 150, r'timed \d+'),
+    # no test's sum in what is timed, at the players' worker counts (experiments/rv_acct/NOTES.md)
+    'jpeg_ns': (A + 'nxview --decode /usr/share/picture-fox.jpg /tmp/b.ppm' + B, 120, r'nxview: '),
+    'png_ns': (A + 'nxview --decode /usr/share/picture-fox.png /tmp/a.ppm' + B, 120, r'nxview: '),
+    'mpeg24': (A + 'MEDIA_TEST_NOSUM=1 media_test video "/root/Videos/Big Buck Bunny.mpg" 24' + B, 170, r'video: '),
+    'avi64': (A + 'MEDIA_TEST_NOSUM=1 media_test video "/root/Videos/Big Buck Bunny.avi" 64' + B, 170, r'video: '),
     'shell': (A + 'i=0; while [ $i -lt 4000 ]; do i=$((i+1)); done' + B, 90, ''),
 }
 ap = argparse.ArgumentParser()

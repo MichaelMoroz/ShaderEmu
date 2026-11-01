@@ -38,8 +38,14 @@ for name, f in syms:
     t.sort()
     tables.setdefault('kernel' if name == 'kernel' else 'user', []).append((name, [x[0] for x in t], [x[1] for x in t]))
 
+KERNEL_LO, KERNEL_HI = 1, 0
+for name, addrs, names in tables.get('kernel', []):
+    if addrs and addrs[0] < 0xc0000000:
+        KERNEL_LO, KERNEL_HI = addrs[0], addrs[-1] + 0x4000
+
 def where(pc):
-    kind = 'kernel' if pc >= 0xc0000000 else 'user'
+    # (the no-MMU kernel lies at the start of RAM and programs above it: by its own names' range, past the MMU's 0xc0000000 too)
+    kind = 'kernel' if pc >= 0xc0000000 or KERNEL_LO <= pc < KERNEL_HI else 'user'
     best = None
     for name, addrs, names in tables.get(kind, []):
         i = bisect.bisect_right(addrs, pc) - 1
