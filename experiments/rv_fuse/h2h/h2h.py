@@ -7,7 +7,7 @@ import argparse, json, os, re, subprocess, sys, time
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, '..', '..', '..'))
 GVM = r'D:\Development\GPU-VM'
-RVIMG = r'D:\Development\ShaderEmu\build\images\nommu'
+RVIMG = os.path.join(ROOT, 'build', 'images', 'nommu')
 PRE = 'nano-X -p & sleep 2; '
 LOADS = {   # the command, seconds at most
     'echo': ('echo H2H"" A; echo H2H"" B', 40),
