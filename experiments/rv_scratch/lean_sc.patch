@@ -1,0 +1,76 @@
+diff --git a/experiments/rvc_lean/tick.hlsl b/experiments/rvc_lean_sc/tick.hlsl
+index 26dc0350..7206f10f 100644
+--- a/experiments/rvc_lean/tick.hlsl
++++ b/experiments/rvc_lean_sc/tick.hlsl
+@@ -188,6 +188,15 @@ uint4 put(uint4 v, uint i, uint x) { return uint4(i == 0 ? x : v.x, i == 1 ? x :
+ uint unpack(float4 f) { return uint(f.a * 255.0 + 0.5) << 24 | uint(f.b * 255.0 + 0.5) << 16 | uint(f.g * 255.0 + 0.5) << 8 | uint(f.r * 255.0 + 0.5); }
+ 
+ // ---- The processor's state in this pass
++#ifdef SC_N
++// scratch: words of no pass but this one, and what was read of them, which goes out in texel 39.w
++static uint sc_sink = 0;
++#if SC_N > 0 && defined(SC_VEC)
++static uint4 scv[SC_N / 4];
++#elif SC_N > 0
++static uint sc[SC_N];
++#endif
++#endif
+ static uint xr[65];   // x0-x31, f0-f31 as bits, and [64] for writes that must not land
+ static uint pc, priv, stall, clock, mstatus, mie, mip, stvec, sscratch, sepc, scause, stval, scounteren, fcsr;
+ static uint tcmp_lo, tcmp_hi, now_lo, now_hi, res_en, res_addr, msrc, mdst, mn, ovf_addr, ovf_val, bloom, dirty, mc_word;
+@@ -513,6 +522,26 @@ uint fast(inout uint4 c[C_N], uint room) {
+         uint w = cur.x, opc = w & 0x7f, f3 = (w >> 12) & 7, rd = (w >> 7) & 31;
+         uint a = xr[(w >> 15) & 31], b = xr[(w >> 20) & 31], next = pc + 4, v = 0, dst = rd == 0 ? 64 : rd;
+         bool ok = true;
++#ifdef SC_N
++#if SC_N == 0
++        sc_sink ^= ((w >> 7) ^ (pc >> 2)) + ((w >> 15) ^ (pc >> 3)) + w;   // the indices' arithmetic, no array
++#else
++        {
++            uint ri = ((w >> 7) ^ (pc >> 2)) & (SC_N - 1), wi = ((w >> 15) ^ (pc >> 3)) & (SC_N - 1);
++#ifdef SC_VEC
++            uint sv = idx(scv[ri >> 2], ri & 3);
++            uint4 sw = scv[wi >> 2];
++            uint sq = wi & 3, sn = sv + w;
++            sw.x = sq == 0 ? sn : sw.x; sw.y = sq == 1 ? sn : sw.y; sw.z = sq == 2 ? sn : sw.z; sw.w = sq == 3 ? sn : sw.w;
++            scv[wi >> 2] = sw;
++#else
++            uint sv = sc[ri];
++            sc[wi] = sv + w;
++#endif
++            sc_sink ^= sv;
++        }
++#endif
++#endif
+         // arithmetic, loads, stores and floats a group, in it arithmetic and loads one
+         bool alu = (w & 0x5f) == 0x13 && (w & 0xfe00007f) != 0x02000033, ld = opc == 0x03;   // (flw and fsw are the floats')
+         [branch] if (alu || ld || opc == 0x23 || (w & 0x5f) == 0x07 || opc == 0x53) {
+@@ -841,7 +870,13 @@ uint4 state_out(inout uint4 c[C_N], uint lin) {
+     return lin == 0 ? uint4(mstatus, mie, mip, stvec) : lin == 1 ? uint4(sscratch, sepc, scause, stval) : lin == 2 ? uint4(scounteren, fcsr, 0, 0) :
+            lin == 8 ? uint4(ovf_addr, ovf_val, priv, 0) : lin == 10 ? uint4(0, tcmp_lo, tcmp_hi, 0) : lin == 11 ? uint4(0, 0, 0, 0xffffffff) :
+            lin == 28 ? uint4(stall, clock, was.z, lane_word) : lin == 37 ? uint4(res_en, res_addr, msrc, mdst) : lin == 38 ? uint4(0, 0, mn, 0) :
+-           lin == 39 ? uint4(was.x, used, early ? 1 : 0, 0) : lin == 40 ? uint4(0, 0, stall, 0) : lin == 41 ? uint4(bloom, dirty, was.z, mc_word) : lin < 41 ? (uint4)0 : was;
++           lin == 39 ? uint4(was.x, used, early ? 1 : 0,
++#ifdef SC_N
++           sc_sink
++#else
++           0
++#endif
++           ) : lin == 40 ? uint4(0, 0, stall, 0) : lin == 41 ? uint4(bloom, dirty, was.z, mc_word) : lin < 41 ? (uint4)0 : was;
+ }
+ 
+ // ---- Lanes (docs/machine/lanes.md). A job is a function, an index for each call of it, and an
+@@ -1161,6 +1196,13 @@ tick_out frag(v2f i) {
+             // and the workers all of theirs: core 0 runs as with a round a frame, the workers it waits for more
+             uint n = 0, most = max(_Ticks / max(_TicksDivisor, 1), 2);
+             most = core != 0 ? most : min(most, most * max(_TickFull, 1) - min(used, most * max(_TickFull, 1)));
++#if defined(SC_N) && SC_N > 0
++#ifdef SC_VEC
++            { [loop] for (uint si = 0; si < SC_N / 4; si++) scv[si] = 0; }
++#else
++            { [loop] for (uint si = 0; si < SC_N; si++) sc[si] = 0; }
++#endif
++#endif
+             // (one loop for a core and for a lane, whose indices are its runs one after another)
+             [loop] for (;;) {
+                 [loop] while (n < most && stall == 0) {
