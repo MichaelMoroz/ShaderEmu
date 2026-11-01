@@ -161,9 +161,9 @@ every run. `aoe-play` on the card, the build before and the build after in turn 
 
 | | Before | After |
 |---|---|---|
-| `aoe-play`, frames a second | 9.3, 8.7 | 13.6, 11.3 |
-| Passes a frame | 98, 104 | 66, 80 |
-| `aoe-play-moving`, one run each | 11.5 (78 passes) | 14.6 (62 passes) |
+| `aoe-play`, frames a second | 9.3, 8.7 | 13.6, 11.3, and 9.9 on the merged build |
+| Passes a frame | 98, 104 | 66, 80, 85 |
+| `aoe-play-moving` | 11.5 (78 passes) | 14.6 (62 passes), 12.6 (65 passes) on the merged build |
 
 The runs on one side spread as much as that because other sessions' runs held the machine between them. On the calibrated clock:
 `aoe-play` 14.7, `aoe-play-moving` 13.8. Standing acts reach 13 to 21 on that clock, scrolling 5 to 15.
