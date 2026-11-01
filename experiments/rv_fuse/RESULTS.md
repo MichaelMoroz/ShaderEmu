@@ -66,3 +66,76 @@ in real code a bundle of gpu_vm's is 196 ns (Doom) and this loop's empty trip is
 - Two texels a bundle: not built, see the line above.
 - The 8 x 8 core: gpu_vm's own RESULTS has its levels; here the pass already holds at 8192.
 - `tcc`, `hlsl`, the NES, `rvc_cpu`: nothing passed, so nothing brought in.
+
+## What the 1.03 ms is (1 November 2026, the lean tick; scripts and logs in `acct/`)
+
+The old tick is gone from the tree (`experiments/rvc_lean` is the only one), so the tree here is lean and `w3x`/`w3y` are `wide3.h` ported to it (`make_w3_lean.py`, shapes 1001 and 2025, the same code files). Every run had its guest's output read: 0 oops, doomstat, quakestat and raystat lines going on. Numbers from `rvc_opt` are marked as such.
+
+**It is not a pass's cost: the fit took a cost per RV instruction for a cost per pass.** The tick against the pass's budget (`--ticks`, `acct/ladder.py`, `ladder_lean.log`; `ladder_rvc_opt.log` the same for the old tick), ms of the tick by the GPU's timestamps:
+
+| Budget | lean Doom | `w3x` Doom | lean shell | `w3x` shell |
+|---|---|---|---|---|
+| 2 | 0.036 | 0.037 | 0.036 | 0.037 |
+| 1,024 | 0.210 | 0.229 | 0.201 | 0.232 |
+| 4,096 | 0.728 | 0.825 | 0.691 | 0.813 |
+| 8,192 | 1.465 | 1.625 | 1.358 | 1.562 |
+
+Straight lines through 0.036 ms: 175 ns an RV instruction on Doom and 161 on the shell for lean, 194 and 186 for `w3x` (`rvc_opt` through 0.050 ms: 165 to 177 on Doom at every step from 256 to 8,192). A pass with nothing in it costs 0.036 ms of tick. So the 1.03 ms of the line by density is about 0.04 ms a pass and about 0.99 ms that goes with the count of RV instructions, 121 ns each (inferred: the old fit with the measured intercept); `w3x` at 2.04 RV a bundle is about 390 ns a trip against 135 for an empty one. Texture-cache misses by data reached in a pass are not the part either: the slope does not fall as a pass gets longer.
+
+**Where a pass goes, ms** (measured on the card, D3D11, `ladder_lean.log`; whole frames, one timed in 64):
+
+| | lean Doom | `w3x` Doom | lean shell | `w3x` shell |
+|---|---|---|---|---|
+| Tick with no instructions | 0.036 | 0.037 | 0.036 | 0.037 |
+| The instructions | 1.429 | 1.588 | 1.322 | 1.525 |
+| Commit (unpack, gather, rows, points) | 0.052 | 0.053 | 0.051 | 0.052 |
+| Devices (in the world: once a Unity frame, not a pass) | 0.078 | 0.084 | 0.076 | 0.077 |
+| Left (wall against the timestamps) | 0.021 | 0.025 | 0.013 | 0.034 |
+| **Wall** | **1.616** | **1.787** | **1.498** | **1.725** |
+
+Inside "the instructions", from the card's PC samples (below). **Inferred for lean**: the samples are of `rvc_opt` on the shell's snapshot under D3D12, and the shares are carried to lean's 1.322 ms by hand:
+
+| What the warp was at | Share | ms of lean's shell (inferred) |
+|---|---|---|
+| Arithmetic and selects running (some 1.4 clocks an instruction) | 56% | 0.74 |
+| Branches, their NOPs and barriers (a branch about three times a plain instruction) | 18% | 0.24 |
+| Waiting for a texture read | 17.5% | 0.23 |
+| LDL and STL, running and waited for | 6.6% | 0.09 |
+| Other | 1.5% | 0.02 |
+
+So 74% is the length of the path in the card's own instructions, some 200 to 260 for an RV instruction (inferred from lines run once an instruction at 0.28% each). The register file is under 7%. An older translated loop (`rvc_opt_s1`, not `w3x`'s shape) has texture waits at 32.5% of its samples and arithmetic at 35%: a bundle's fetch waits where the tree's does not. No sample exists of `w3x` or of Doom.
+
+**The trace.** The UI is not needed: `ngfx-trace extract` gives `gpus.0.SamplingData.PcSamplingPerSM.N.pcSamplesStorage`, every SM's raw samples (16 bytes: pc, a word, a word whose bits 0-5 are the warp and 8-13 the reason, read off what they sit on: 8 is a scoreboard wait; the other reasons' meanings are not known), `query` of `devices.0.ShaderProfilerReport.pcCountersInfo.pcSamplingSession.codeBlocks` gives each shader's `vaRange`, and with `ngfx-trace sass` that is every instruction's time (`acct/pc_samples.py`, `pc_account.py`, `pc_blocks.py`, `pc_classes.py`). `nsight_lines.py` was not fixed: its table is not needed. Limits, all of which bound the table above:
+- A new trace could not be taken. One trace of lean ran to its transfer and was killed by the script's 50 s limit (its file is empty); every trace since says `GPU Performance Counters unavailable`, with no such process left, for over an hour and a half. The kill is the likely cause, not a proven one. `sass.ps1` now has 56 s and a shorter capture. It wants a look by the owner: a driver reset or a reboot is not an agent's to do with others on the card.
+- `rvc_trace12` on lean reports `instructions=0` and the same state hash at budgets 8,192 and 2,048, at the same frames a second: it runs the tick and does not get on with the guest. So a trace of it may be one pass held. The `rvc_opt` traces used were not checked for this and may be the same: read their shares as those of one place in the shell, not of the load.
+- Whether D3D12 and D3D11 compile alike could not be settled: SASS exists only for D3D12, and the runner above gives no time to compare. The two are known to differ in what a change costs (the skill's note).
+
+**The bundles on lean, whole runs in turn** (`acct/final.log`, `acct.jsonl`). The older figures of -6% and -10% were against `rvc_opt`.
+
+| Load | lean | Best bundle tick | |
+|---|---|---|---|
+| shell | 190.6, 192.0 ns an RV | `w3x` 214.4, 220.8 | -11 to -13% |
+| Doom | 208.2, 210.2 | `w3x` 227.5, 233.1 | -8 to -10% (other agents' CPU runs beside: 1.70 ms a pass where the ladder's was 1.62, so a comparison, not a level) |
+| Quake | 8.07 M/s all cores | `w3y` 7.36 | -9%; drawn 14-15 tenths against 19-20 |
+| nxray | 1,257 M/s all cores | `w3y` 1,090 | -13%; a picture 20-23 ms against 30 |
+
+Lean's write cache: `write cache full` 4.5-4.9% of Doom's passes (`acct/longer.log`). Nothing here clears the bar.
+
+**What was tried to take something away:**
+- A longer pass, to spread the fixed 0.17 ms (`acct/longer.py`, two rounds in turn, whole runs, M/s of core 0; nxray all cores). 8,192 / 12,288 / 16,384: shell 5.33 / 5.46-5.50 / 5.57-5.78, Doom 4.97-5.03 / 5.07-5.09 / 4.91-5.10, Quake 1.85 / 1.79-1.82 / 1.74-1.78, nxray 1,313-1,333 / 1,266-1,280 / 1,128-1,160. The shell gains 3 to 8%, Doom up to 2%, Quake and nxray lose: not taken. (The first round's shell at 8,192 ran at a low clock and is left out.)
+- The last K texels a jump fetched kept in registers, so that a jump back does not wait for the texture (`acct/make_jt.py`, in one run with the tree, one round): shell -3.1 / -3.1 / -4.2% at K of 1, 2, 4, Doom -1.6 / -2.1 / -1.4%, Quake -0.2 / +0.3 / -0.6%, nxray -0.7 / -3.6 / -3.6%. Not taken.
+- Nothing fixed is left worth taking: tick, commit and devices together are 0.17 ms of a pass, and the devices' 0.08 is not a pass's in the world.
+
+**nxray.** The gap was the old tick's: `rvc_opt` has no lanes. On lean it is the other way round (`acct/nxray.jsonl`; `h2h.py nxray_free` has no test's sums, which were most of core 0 in `RAY_FRAMES` runs: 135 ms a picture with the test, 6 of them the picture; that the sum is what fills the difference is read from the source, not measured apart):
+
+| | Flat | World (11.1, 1.4) | VR (11.1, 7.1) |
+|---|---|---|---|
+| lean, the field's lanes (default) | 116-122 pictures a second, 23-24 M rays/s, 8-9 ms | 90, 18 M rays/s, 11-12 ms | 45-48, 9 M rays/s, 22 ms |
+| lean, workers' lanes (`RAY_FIELD=0`) | 14 ms | 11-12 ms | 11-22 ms |
+| lean, no lanes (`RAY_LANES=0`) | 47 ms | | |
+| `rvc_opt`, 31 October | 53-69 ms | 100-155 ms | 111-145 ms |
+| gpu_vm | 35-37 pictures a second, 7.1-7.5 M rays/s, 24-36 ms | 22 ms (31 October) | 44-66 ms (31 October) |
+
+In the flat column lean is 3.3 times gpu_vm. The field is wired but not yet run in Unity (`AGENTS.md`), so its World column is the harness's, not the world's. Without lanes the old gap is still there, from counts over 60 pictures: 1,485 M worker instructions against 1,097 M (24.8 M a picture against 18.3 M, 1.35 times) and 2.59 ns of the card an instruction of all cores against 1.82 (1.42 times), with 18.5 passes a picture against 30. That second factor fits gpu_vm's cores of one warp (its own RESULTS: 1.98 to 0.93 ns a bundle by shape alone; inferred, not measured here), and `docs/machine/multicore.md`'s layouts move nxray from 93 ms to 58. Compiled float code and a float's time were not compared apart.
+
+**+25%.** By bundles it is out of reach on these figures. +25% of the tick is 1.17 ms against lean's 1.465: 139 ns an RV instruction. With 135 ns a trip and 121 ns an RV (inferred), 3 RV a bundle, more than `pack2.py` gives at six ops, is 166 ns: +5% on lean. Reaching 139 at 3 RV a bundle wants the op's cost down from 121 to 94 with the trip as it is; at today's 2.04 RV a bundle, to 73. What would do it is fewer card instructions on the way through an op, the 74% above, and that was not built. Real gain on real programs from this work: none that passes; lanes already give nxray more than gpu_vm was ahead by.
