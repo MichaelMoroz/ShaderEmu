@@ -46,3 +46,53 @@ def alu():
     w[-1] = bne(5, 0, -4 * (len(w) - 1 - top))
     w += [j(-4 * (len(w) - 1), 0)]
     return img(w)
+def spread():
+    "adds whose registers change and whose destination was not just read: x8 to x15 by turns, over a page"
+    w = [addi(k, 0, k) for k in range(1, 32)]
+    n = len(w)
+    while len(w) < 1023:
+        k = len(w) % 8
+        w.append(add(8 + k, 16 + k, 24 + k))
+    return img(w + [j(-4 * 1023 + 4 * n, 0)])
+def _ctl(every, far):
+    "a taken jump every EVERY instructions, to the next group; FAR texels-worth of nops between groups so the target is not the next texel"
+    w = [addi(2, 0, 3), addi(7, 0, 5)]
+    start = len(w)
+    for g in range(40):
+        w += [add(1 + (g & 1), 1, 2)] * (every - 1)
+        w += [j(4 * (far + 1), 0)] + [0x13] * far
+    w += [j(-4 * (len(w) - start), 0)]
+    return img(w)
+def jmp4(): return _ctl(4, 0)
+def jmp6(): return _ctl(6, 0)
+def jmp6far(): return _ctl(6, 9)
+def blt():
+    "a loop of 5 with a taken branch by bne and a not taken one"
+    w = [addi(2, 0, 3), addi(5, 0, 0)]
+    w += [addi(5, 5, 1), add(1, 1, 2), b(8, 0, 0, 1), add(1, 1, 5), bne(5, 0, -16)]
+    return img(w)
+lw = lambda d, a, im: i(im, a, 2, d, 0x03)
+lbu = lambda d, a, im: i(im, a, 4, d, 0x03)
+lui = lambda d, im: (im << 12) | (d << 7) | 0x37
+DATA = 0x2000
+def _withdata(w):
+    d = [(0x01010101 * (k + 1) + k * 77) & 0xffffffff for k in range(4096)]
+    b_ = img(w).ljust(DATA, b'\0') + img(d)
+    return b_
+def loads():
+    "the old classes' loads: 14 lw from a page, addi and bnez"
+    w = [lui(10, 2), addi(5, 0, 1000)]
+    top = len(w)
+    w += [lw(6 + (k % 4), 10, 4 * k) for k in range(14)] + [addi(5, 5, -1), 0]
+    w[-1] = bne(5, 0, -4 * (len(w) - 1 - top))
+    w += [j(-4 * (len(w) - 1), 0)]
+    return _withdata(w)
+def mix0():
+    "no stores yet: 5 arithmetic, 3 loads, a jump a trip, by a walking pointer"
+    w = [lui(10, 2), addi(2, 0, 3), addi(5, 0, 0)]
+    top = len(w)
+    w += [lw(6, 10, 0), add(7, 6, 2), lw(28, 10, 4), xor(29, 28, 7), addi(5, 5, 8), lbu(30, 10, 9), add(1, 1, 30), i(0xff8, 5, 7, 5, 0x13), add(10, 5, 0), 0]
+    w[-2] = add(10, 5, 0)
+    w.insert(-1, slli(11, 5, 0))
+    w[-1] = j(-4 * (len(w) - 1 - top), 0)
+    return _withdata(w)

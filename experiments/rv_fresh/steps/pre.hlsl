@@ -7,7 +7,10 @@ float4 vert(uint id : SV_VertexID) : SV_Position { return float4(id == 1 ? 3 : -
 struct Out { uint4 o0 : SV_Target0; uint4 o1 : SV_Target1; uint4 o2 : SV_Target2; uint4 o3 : SV_Target3; uint4 o4 : SV_Target4; uint4 o5 : SV_Target5; uint4 o6 : SV_Target6; uint4 o7 : SV_Target7; };
 #define RAM(t) _Ram.Load(int3((t) & 2047, (t) >> 11, 0))
 #pragma static_noinit
-static uint x[33];   // registers, [32] the sink
+#ifndef XN
+#define XN 64
+#endif
+static uint x[XN];   // registers, [32] the sink
 void regs_in() {
     int3 a = int3(0, 0, 0); uint4 t;
     t = _S0.Load(a); x[0] = t.x; x[1] = t.y; x[2] = t.z; x[3] = t.w;

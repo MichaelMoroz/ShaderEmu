@@ -16,3 +16,94 @@
 05:51 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=2 ns=46.72 pass_us=382.7 L2
 05:51 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=3 ns=48.59 pass_us=398.0 L3
 05:51 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=4 ns=97.00 pass_us=794.7 L4
+06:58 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=5 ns=51.30 pass_us=420.3 L5_sub_reg_and_alt
+06:58 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=6 ns=49.37 pass_us=404.4 L6_sub_alt
+06:58 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=7 ns=49.46 pass_us=405.1 L7_ult
+06:58 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=8 ns=49.54 pass_us=405.8 L8_slt_turn
+06:58 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=9 ns=52.89 pass_us=433.2 L9_slt_no_compare
+06:59 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=10 ns=53.03 pass_us=434.4 L10_5and8
+06:59 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=4 ns=50.91 pass_us=417.1 L4_again
+06:59 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=3 ns=48.71 pass_us=399.0 L3_again
+06:59 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=3 PAD=1 ns=55.77 pass_us=456.8 L3_pad8ops
+06:59 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=3 PAD=2 ns=63.44 pass_us=519.7 L3_pad16
+06:59 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=3 PAD=4 ns=81.16 pass_us=664.9 L3_pad32
+06:59 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=3 PAD=8 ns=191.12 pass_us=1565.7 L3_pad64
+06:59 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=3 PAD=16 ns=258.85 pass_us=2120.5 L3_pad128
+07:00 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=3 PAD=5 ns=89.80 pass_us=735.6 pad40
+07:00 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=3 PAD=6 ns=173.87 pass_us=1424.3 pad48
+07:00 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=3 PAD=7 ns=182.35 pass_us=1493.8 pad56
+07:00 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=3 PAD=8 ns=190.62 pass_us=1561.5 pad64_again
+07:00 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=3 PAD=8 SKIP ns=135.30 pass_us=1108.4 pad64_notrun
+07:00 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=3 PAD=16 SKIP ns=135.31 pass_us=1108.4 pad128_notrun
+07:00 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=3 PAD=32 SKIP ns=173.37 pass_us=1420.3 pad256_notrun
+07:00 steps\s3b.hlsl adds core=8x8 budget=8192 LEVEL=3 PAD=8 ns=190.71 pass_us=1562.3 pad64_8x8
+07:00 steps\s3.hlsl alu core=4x8 budget=8192 TREE ns=149.83 pass_us=1227.4 s3_tree_again
+07:00 steps\s3.hlsl alu core=4x8 budget=8192  ns=165.52 pass_us=1355.9 s3_onepath_again
+07:01 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=3 NOARR ns=35.90 pass_us=294.1 noarr
+07:01 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=3 NOARR PAD=4 ns=68.41 pass_us=560.4 noarr_pad32
+07:01 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=3 NOARR PAD=8 ns=101.34 pass_us=830.2 noarr_pad64
+07:01 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=3 NOARR PAD=8 SKIP ns=60.97 pass_us=499.4 noarr_pad64_notrun
+07:01 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=3 AFTER ns=48.67 pass_us=398.7 after128
+07:01 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=4 ns=50.78 pass_us=416.0 L4_3rd
+07:02 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=3 NOARR PAD=1 SKIP ns=43.67 pass_us=357.8 noarr_skip8
+07:02 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=3 NOARR PAD=4 SKIP ns=59.61 pass_us=488.3 noarr_skip32
+07:02 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=3 NOARR PAD=32 SKIP ns=81.12 pass_us=664.5 noarr_skip256
+07:02 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=3 PAD=1 SKIP ns=55.50 pass_us=454.7 arr_skip8
+07:02 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=3 PAD=4 SKIP ns=60.30 pass_us=494.0 arr_skip32
+07:02 steps\s4.hlsl adds core=4x8 budget=8192  ns=93.62 pass_us=766.9 s4_nest_pad0
+07:02 steps\s4.hlsl adds core=4x8 budget=8192 PAD=8 ns=92.53 pass_us=758.0 s4_nest_outer64
+07:02 steps\s4.hlsl adds core=4x8 budget=8192 PAD=32 ns=92.73 pass_us=759.6 s4_nest_outer256
+07:02 steps\s4.hlsl adds core=4x8 budget=8192 PAD=8 FLAT ns=0.00 pass_us=1.0 s4_flat_64
+07:02 steps\s4.hlsl adds core=4x8 budget=8192 PAD=8 SLOW ns=102.28 pass_us=837.9 s4_nest_every_instr_out
+07:02 steps\s4.hlsl adds core=4x8 budget=8192  ns=93.86 pass_us=768.9 
+07:03 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=3 PAD=8 NORD ns=84.89 pass_us=695.4 past_noreads
+07:03 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=3 PAD=8 NOWR ns=46.92 pass_us=384.4 past_nowrites
+07:03 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=3 NORD ns=65.28 pass_us=534.8 small_noreads
+07:03 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=3 NOWR ns=28.10 pass_us=230.2 small_nowrites
+07:03 steps\s3b.hlsl spread core=4x8 budget=8192 LEVEL=3 ns=48.59 pass_us=398.0 small_spread
+07:03 steps\s3b.hlsl spread core=4x8 budget=8192 LEVEL=3 PAD=8 ns=190.61 pass_us=1561.5 past_spread
+07:03 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=3 PAD=8 XN=64 ns=114.02 pass_us=934.0 past_x64
+07:03 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=3 XN=64 ns=48.84 pass_us=400.1 small_x64
+07:03 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=3 XN=256 ns=48.59 pass_us=398.1 small_x256
+07:03 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=3 PAD=8 XN=256 ns=114.47 pass_us=937.7 past_x256
+07:04 steps\s3.hlsl alu core=4x8 budget=8192 XN=64 ns=94.75 pass_us=776.2 s3_onepath_x64
+07:04 steps\s3.hlsl alu core=4x8 budget=8192 XN=64 TREE ns=87.67 pass_us=718.2 s3_tree_x64
+07:04 steps\s3.hlsl add14 core=4x8 budget=8192 XN=64 ns=94.99 pass_us=778.1 s3_onepath_x64
+07:04 steps\s3.hlsl add14 core=4x8 budget=8192 XN=64 TREE ns=87.84 pass_us=719.6 s3_tree_x64
+07:04 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=4 XN=64 ns=50.69 pass_us=415.3 L4_x64
+07:04 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=4 XN=40 ns=50.78 pass_us=416.0 L4_x40
+07:04 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=3 PAD=8 XN=40 ns=114.89 pass_us=941.2 past_x40
+07:04 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=3 PAD=8 XN=48 ns=114.63 pass_us=939.0 past_x48
+07:04 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=3 PAD=8 XN=56 ns=113.93 pass_us=933.3 past_x56
+07:04 steps\s3.hlsl alu core=4x8 budget=2048 XN=64 ns=95.54 pass_us=195.7 
+07:04 steps\s4.hlsl adds core=4x8 budget=8192  ns=94.12 pass_us=771.0 s4_nest_x64
+07:04 steps\s4.hlsl adds core=4x8 budget=8192 PAD=32 ns=92.38 pass_us=756.8 s4_nest_outer256_x64
+07:04 steps\s4.hlsl adds core=4x8 budget=8192 PAD=8 SLOW ns=102.91 pass_us=843.0 s4_every_instr_out_x64
+07:04 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=4 PAD=1 SKIP ns=59.22 pass_us=485.2 skip8_x64
+07:05 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=4 PAD=8 SKIP ns=62.92 pass_us=515.4 skip64_x64
+07:05 steps\s3b.hlsl adds core=4x8 budget=8192 LEVEL=4 PAD=32 SKIP ns=92.81 pass_us=760.3 skip256_x64
+07:05 steps\s5.hlsl adds core=4x8 budget=8192 MODE=0 ns=50.42 pass_us=413.1 s5_m0
+07:05 steps\s5.hlsl adds core=4x8 budget=8192 MODE=1 ns=0.00 pass_us=1.0 s5_m1_ifbreak
+07:05 steps\s5.hlsl adds core=4x8 budget=8192 MODE=2 ns=0.00 pass_us=1.1 s5_m2_cond
+07:05 steps\s5.hlsl adds core=4x8 budget=8192 MODE=3 ns=62.61 pass_us=512.9 s5_m3_nest_cond
+07:05 steps\s5.hlsl adds core=4x8 budget=8192 MODE=4 ns=94.91 pass_us=777.5 s5_m4_nest_ifbreak
+07:06 steps\s6.hlsl alu core=4x8 budget=8192  ns=64.23 pass_us=526.2 s6_out
+07:06 steps\s6.hlsl alu core=4x8 budget=8192 IN ns=113.13 pass_us=926.8 s6_in
+07:06 steps\s6.hlsl jmp6 core=4x8 budget=8192  ns=72.54 pass_us=594.3 s6_out
+07:06 steps\s6.hlsl jmp6 core=4x8 budget=8192 IN ns=113.77 pass_us=932.0 s6_in
+07:06 steps\s6.hlsl jmp6far core=4x8 budget=8192  ns=72.89 pass_us=597.1 s6_out
+07:06 steps\s6.hlsl jmp6far core=4x8 budget=8192 IN ns=114.12 pass_us=934.9 s6_in
+07:06 steps\s6.hlsl jmp4 core=4x8 budget=8192  ns=77.99 pass_us=638.9 s6_out
+07:06 steps\s6.hlsl jmp4 core=4x8 budget=8192 IN ns=113.54 pass_us=930.1 s6_in
+07:06 steps\s6.hlsl blt core=4x8 budget=8192  ns=86.96 pass_us=712.4 s6_out
+07:06 steps\s6.hlsl blt core=4x8 budget=8192 IN ns=113.09 pass_us=926.4 s6_in
+07:07 steps\s7.hlsl loads core=4x8 budget=8192  ns=152.72 pass_us=1251.1 s7_out
+07:07 steps\s7.hlsl loads core=4x8 budget=8192 LDLOOP ns=97.01 pass_us=794.7 s7_ldloop
+07:07 steps\s7.hlsl loads core=4x8 budget=8192 LDIN ns=135.85 pass_us=1112.9 s7_ldin
+07:07 steps\s7.hlsl mix0 core=4x8 budget=8192  ns=101.24 pass_us=829.4 s7_out
+07:07 steps\s7.hlsl mix0 core=4x8 budget=8192 LDLOOP ns=108.38 pass_us=887.9 s7_ldloop
+07:07 steps\s7.hlsl mix0 core=4x8 budget=8192 LDIN ns=120.12 pass_us=984.1 s7_ldin
+07:07 steps\s7.hlsl alu core=4x8 budget=8192  ns=65.48 pass_us=536.4 s7_out
+07:07 steps\s7.hlsl alu core=4x8 budget=8192 LDLOOP ns=65.67 pass_us=538.0 s7_ldloop
+07:07 steps\s7.hlsl alu core=4x8 budget=8192 LDIN ns=101.02 pass_us=827.5 s7_ldin
+07:07 steps\s7.hlsl mix0 core=4x8 budget=2048  ns=104.15 pass_us=213.3 
