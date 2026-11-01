@@ -1,6 +1,6 @@
 Shader "ShaderEmu/Sound"
 {
-    // The sound card's mix (experiments/rvc_lean/sound.shader's, docs/machine/sound.md), drawn by
+    // The sound card's mix (shader_vm/sound.shader's, docs/machine/sound.md), drawn by
     // EmuSound.cs with Blit into a 128 x 128 two-float target: the ring of samples from the
     // cursor on, left and right, already at the volume the visitor chose.
     Properties

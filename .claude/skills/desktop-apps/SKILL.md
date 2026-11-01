@@ -58,7 +58,7 @@ Programs print state for tests: `NXFILES_PRINT=1`, `NXWEB_DUMP=1`, `NXPAINT_SCRI
 
 **A capture.** `rvc_cpu` has no GPU or display. Through the queue, no card time:
 
-    pwsh tools\gpu_queue.ps1 bin\rvc_harness.exe --d3d11 --rvc experiments\rvc_lean --image linux-net --cpu --warp --no-desktop --expect "/ # " --send "nano-X -p & sleep 2; CMD; sleep 5; echo LX-''DONE\n" --until LX-DONE --save-state F.snap
+    pwsh tools\gpu_queue.ps1 bin\rvc_harness.exe --d3d11 --rvc shader_vm --image linux-net --cpu --warp --no-desktop --expect "/ # " --send "nano-X -p & sleep 2; CMD; sleep 5; echo LX-''DONE\n" --until LX-DONE --save-state F.snap
     python tools\snapshot_screen.py F.snap OUT.png
 
 A GPU list that reads memory a program wrote a frame before wants `--cpu-fresh`. Do not capture from `--screen-log`. Look at the picture: a blank form passed every count.

@@ -488,7 +488,7 @@ A deflate stream someone else made (a `.gz`, a zip's entry) has no pieces, and
   most); windows are made a round per step of the chain over every core, and a part's values become bytes in its place with no second
   inflate, unless it made more than its ring. On the card, h2h's `png_ns` (the fox, 1 November 2026, three runs a side): 2,574 ms to
   1,616, 1,977 passes to 1,294. Passes ended full 12 to 33 (0.6% to 2.5%), 22 of them in the kernel's page allocator for 5.7 MB of values:
-  0.12 million instructions lost of 5.7 million. `experiments/rv_play/NOTES.md`.
+  0.12 million instructions lost of 5.7 million. `experiments/rv_play/NOTES.md` of commit b6b5f2b9.
 
 `media_test gunzip FILE [WORKERS [OUT]]` prints the bytes, the CRC and the FNV-1a sum.
 

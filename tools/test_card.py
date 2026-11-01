@@ -1,4 +1,4 @@
-"""tools/test_all.py's cases on the graphics card: bin/rvc_harness.exe (D3D11, fxc2, experiments/rvc_lean) one at a
+"""tools/test_all.py's cases on the graphics card: bin/rvc_harness.exe (D3D11, fxc2, shader_vm) one at a
 time through tools\\gpu_queue.ps1, each console checked by test_all's own rules.
 
     python tools/test_card.py CASE_OR_TAG ... [--image build/images/nommu] [--max-wall 55] [--wall-scale 1]
@@ -128,7 +128,7 @@ def main():
     ap.add_argument('select', nargs='+', help='case names or tags, as test_all.py takes them')
     ap.add_argument('--image', default=os.path.join(ROOT, 'build', 'images', 'nommu'))
     ap.add_argument('--harness', default=os.path.join(ROOT, 'bin', 'rvc_harness.exe'))
-    ap.add_argument('--rvc', default='experiments/rvc_lean', help='the tick (its folder)')
+    ap.add_argument('--rvc', default='shader_vm', help='the tick (its folder)')
     ap.add_argument('--logs', default=os.path.join(ROOT, 'build', 'test_card'))
     ap.add_argument('--wall-scale', type=float, default=1.0)
     ap.add_argument('--max-wall', type=float, default=55, help="a case's seconds at most (0: its wall)")

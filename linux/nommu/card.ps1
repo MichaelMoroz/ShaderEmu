@@ -29,7 +29,7 @@ foreach ($c in $Configs) {
     $defs = @(); foreach ($d in ($def -split ',' | Where-Object { $_ })) { $defs += '--define'; $defs += $d }
     $log = "$out\$App-$img-$($def -replace ',','_').log"; Remove-Item $log -ErrorAction SilentlyContinue
     Push-Location $root
-    $t = Measure-Command { $o = pwsh -NoProfile -File "$repo\tools\gpu_queue.ps1" "$repo\bin\rvc_harness.exe" --d3d11 --rvc "$repo\experiments\rvc_lean" @defs --image linux-net --no-stdin --uart-log $log --seconds $secs --expect '/ # ' --send "$cmd\n" --until $until 2>&1 }
+    $t = Measure-Command { $o = pwsh -NoProfile -File "$repo\tools\gpu_queue.ps1" "$repo\bin\rvc_harness.exe" --d3d11 --rvc "$repo\shader_vm" @defs --image linux-net --no-stdin --uart-log $log --seconds $secs --expect '/ # ' --send "$cmd\n" --until $until 2>&1 }
     Pop-Location
     $h = ($o | Select-String '^\[harness\] \d+ frames' | ForEach-Object { $_.Line.Trim() }) -join ' '
     $r = (Select-String -Path $log -Pattern 'timed \d+ gametics in \d+ realtics|\d+ frames [\d.]+ seconds\s+[\d.]+ fps|raystat: picture \d+, \d+ x \d+: \d+ ms|rastat: frame \d+: [\d.]+ game frames/s|q3stat: frame \d+: 100 frames in \d+ ms' | ForEach-Object { $_.Matches[0].Value }) -join ' | '

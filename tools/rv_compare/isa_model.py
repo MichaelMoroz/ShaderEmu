@@ -49,7 +49,7 @@ def reads(w):
 
 
 def is_fast(w):
-    """the tick's fast step (experiments/rvc_lean/tick.hlsl) makes it"""
+    """the tick's fast step (shader_vm/tick.hlsl) makes it"""
     op, rd, f3, rs1, rs2, f7 = fields(w)
     if op in (0x13, 0x33):
         if op == 0x33 and f7 == 1:

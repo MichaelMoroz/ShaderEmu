@@ -1,4 +1,4 @@
-"""No MMU: work of the boot that nothing reads (experiments/rv_acct/NOTES.md, docs/machine/boot.md).
+"""No MMU: work of the boot that nothing reads (docs/machine/boot.md).
 
 - mm/page_alloc.c, mm/memblock.c: while memblock hands over its free ranges every page in them is as memmap_init_range
   made it (free, count 0, no flags), and the ranges hold no reserved page, so __free_pages_core's loop and

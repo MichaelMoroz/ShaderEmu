@@ -2,14 +2,14 @@
 # summary per marker (CPUTick, Commit). Nsight only attaches to D3D12, so this runs
 # bin\rvc_trace12.exe: the same FXC bytecode as rvc_harness, on Direct3D 12.
 #
-#   pwsh tools\gpu_trace.ps1                                   # experiments\rvc_lean
+#   pwsh tools\gpu_trace.ps1                                   # shader_vm
 #   pwsh tools\gpu_trace.ps1 -Filter warps_issue_stalled,latency   # only metrics containing these
 #   pwsh tools\gpu_trace.ps1 -Extra '--define NO_PAGING'      # more rvc_trace12 arguments
 #
 # --no-doubles is always passed: NVIDIA's D3D12 path miscomputes rvc's double math (timer and
 # MULH), so the guest diverges without it. The shader folder must support NO_DOUBLES.
 param(
-    [string]$Rvc = 'experiments\rvc_lean',
+    [string]$Rvc = 'shader_vm',
     [string]$Payload = 'rvc\_Nix\rvc\data-net',
     [string]$Out = 'logs\nsight',
     [int]$Frames = 20,

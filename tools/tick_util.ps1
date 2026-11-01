@@ -5,7 +5,7 @@
 # (default FL-GO: put  echo FL-''GO;  into -Cmd). -Nm name=FILE: `nm -n` of a program, to name
 # where its passes ended (the kernel's is made here). -Name must be new: logs\tick_NAME.log.
 param([string]$Name, [string]$Cmd = '', [string]$From = 'FL-GO', [string]$Until = 'LX-DONE', [int]$Seconds = 60,
-      [string[]]$Nm = @(), [string]$Rvc = 'experiments\rvc_lean', [string[]]$More = @(), [int]$Top = 10, [switch]$Whole)
+      [string[]]$Nm = @(), [string]$Rvc = 'shader_vm', [string[]]$More = @(), [int]$Top = 10, [switch]$Whole)
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 $out = 'build\tick_util'

@@ -44,7 +44,7 @@ r = subprocess.run([sys.executable, os.path.join(ROOT, 'tools', 'private_image.p
 print(r.stdout[-600:], r.stderr[-600:])
 if r.returncode:
     raise SystemExit('tools/private_image.py %s failed (exit %d): see its output above' % (name, r.returncode))
-# RAM in one range from the kernel at 0x82000000, after the devices' 32 MB (experiments/rvc_lean/src/layout.h),
+# RAM in one range from the kernel at 0x82000000, after the devices' 32 MB (shader_vm/src/layout.h),
 # to 0x92000000 (where the state texture ends: kStateHeight in harness/apps/rvc_backend.h)
 RAM = [(0x82000000, 0x10000000)]
 

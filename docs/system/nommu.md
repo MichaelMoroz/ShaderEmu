@@ -168,7 +168,7 @@ down further are slower a pass under fxc.
 
 ## Memory
 
-The layout (28 October 2026), in one place for the tick (`experiments/rvc_lean/src/layout.h`)
+The layout (28 October 2026), in one place for the tick (`shader_vm/src/layout.h`)
 and one for the host (`harness/apps/rvc_layout.h`):
 
 | from | to | what |

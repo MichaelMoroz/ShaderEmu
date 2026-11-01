@@ -6,7 +6,7 @@ using VRC.SDKBase;
 using VRC.Udon;
 using VRC.Udon.Common.Interfaces;
 
-// The machine's second processor (experiments/udon_aot): the kernel and programs translated to Udon.
+// The machine's second processor (tools/udon_aot): the kernel and programs translated to Udon.
 // With it picked, EmuMachine runs as it always does but its own processor is held at reset, and
 // this runs the guest on `mem`: the pages it wrote go into the state in one upload a frame
 // (UdonAotScatter), and the words the control pass writes come back from a readback (UdonAotWords).

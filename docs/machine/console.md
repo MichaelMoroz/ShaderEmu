@@ -50,7 +50,7 @@ them all over the console.
 
 To check it in the harness (`--send` knows `\xNN` there, not in `rvc_cpu`):
 
-    bin\rvc_harness.exe --rvc experiments\rvc_lean --image linux-net --tabs --no-stdin ^
+    bin\rvc_harness.exe --rvc shader_vm --image linux-net --tabs --no-stdin ^
         --input "echo one-''tab\n" --expect "one-tab" --send "\x1e2tty\n" --until "/dev/pts/1"
 
 ## In the world

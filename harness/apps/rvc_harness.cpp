@@ -59,7 +59,7 @@ namespace cpuemu {
 static std::string g_cpuConsole;   // what the interpreter's console said since it was last looked at
 static void cpuConsoleHook(char c) { g_cpuConsole.push_back(c); }
 
-// --cpu --save-state: a snapshot the shader machine (experiments/rvc_lean, 256 cores, TICK_MRT) resumes from.
+// --cpu --save-state: a snapshot the shader machine (shader_vm, 256 cores, TICK_MRT) resumes from.
 // `data` is the state texture as drawn, W texels wide: the GPU's memory and the control words are kept as
 // they are there; Linux's RAM (shown four times a second) is the processor's, and every core's state is
 // written where the shader keeps it (src/types.h: decode, encode_l1, mc_geo_read, mc_state_at; src/mc.h),
@@ -154,7 +154,7 @@ static int cpuSnapshotCores(std::vector<uint8_t>& data, uint32_t W, uint32_t wid
 namespace {
 
 struct Options {
-    std::string rvcDir = "experiments/rvc_lean";
+    std::string rvcDir = "shader_vm";
     std::string payloadDir;  // default <rvc>/data-net
     std::string ramPrefix = "linux_payload", mtdPrefix = "rootfs", dtbPrefix = "dts";
     std::string cacheDir = "build/shadercache";
@@ -215,7 +215,7 @@ struct Options {
     int cores = 1;            // core 0 and the worker cores: kCores wherever the machine has workers (docs/machine/multicore.md)
     bool blits = false;       // --blits: the commit's points and the GPU's lists as the world's blits (src/amp.h)
     bool noBands = false;     // --no-bands: the commit rewrites all of RAM, not only the bands written to (COMMIT_BANDS off)
-    bool unpackInPlace = false;   // --unpack-in-place: a tick that can (an rvc_lean variant) has its unpack drawn into the state texture, no zone copies
+    bool unpackInPlace = false;   // --unpack-in-place: a tick that can (an shader_vm variant) has its unpack drawn into the state texture, no zone copies
     // --replay DIR;DIR;...: with --load-state, the tick of each folder (its CPUTick pass) beside the machine's own, each
     // run --replay-frames frames from the snapshot's state, --replay-rounds times in turn: wall time a frame, instructions a frame
     std::vector<std::string> replayDirs;
@@ -301,7 +301,7 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
   --viz-capture FILE   save the memory view as a BMP at exit
   --resume             when started without other arguments: resume the shell snapshot instead of booting
   --image NAME|DIR     boot a named image instead of --payload/--ram/--mtd/--dtb; --image list shows them
-                       (experiments/rvc_lean's tick runs linux-net only; on --cpu the display's shader is all it compiles).
+                       (shader_vm's tick runs linux-net only; on --cpu the display's shader is all it compiles).
                        DIR: a folder of our Linux without an MMU (a private image, build\\images\\NAME)
                        Without it (and without --payload, --ram or --load-state) a menu asks at start
                        when run from a console; scripts with redirected input or --no-stdin get linux-net.
@@ -337,7 +337,7 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
                        F - U ms on the card (U: Unity's own part of a frame, default 1.4), the devices once a frame;
                        R: Unity's CPU a round in ms (default 0): a frame's rounds cost at least R each
   --tick-split F       of them the first F always run; the others give core 0 the rest of its F x --ticks,
-                       and run the workers only while core 0 rests (experiments/rvc_lean: 0, all)
+                       and run the workers only while core 0 rests (shader_vm: 0, all)
   --open ADDRESS       tell the guest to open an address, or a file of this computer (file:// and its path);
                        several are told ten seconds apart (docs/system/open.md)
   --open-after TEXT    not before the console has shown TEXT
@@ -357,18 +357,18 @@ Runs rvc's main.shader (RISC-V Linux) headlessly on D3D11 and connects its UART 
                        (and start the pc log there)
   --no-desktop         terminal mode: boot to the shell only (by default the guest starts its desktop);
                        --desktop asks for it in a run with other arguments
-  --kernel mmu|nommu   (mmu: not on experiments/rvc_lean's tick) Linux with the MMU (build\\images\\linux) or without one (build\\images\\nommu, the machine
+  --kernel mmu|nommu   (mmu: not on shader_vm's tick) Linux with the MMU (build\\images\\linux) or without one (build\\images\\nommu, the machine
                        without paging; docs/system/nommu.md); the default is nommu once that image has been made
-  --isa base|zb        (zb: not on experiments/rvc_lean's tick) RV32IMAF, or with Zba and Zbb (the shader's ZB; without an MMU build\\images\\nommu-zb,
+  --isa base|zb        (zb: not on shader_vm's tick) RV32IMAF, or with Zba and Zbb (the shader's ZB; without an MMU build\\images\\nommu-zb,
                        whose programs use them)
   --tabs               the console as four terminals: 0x1e and a digit, either way, says whose bytes follow
   --workers auto|2|4|8 how geotune lays out the workers at boot (docs/machine/multicore.md, "Packing the small workers")
   --dxc / --d3d11      backend: D3D12 with DXC-compiled DXIL, or D3D11 with FXC bytecode (what VRChat
-                       runs). rvc_harness_dxc.exe defaults to --dxc. DXC implies NO_DOUBLES. experiments/rvc_lean
+                       runs). rvc_harness_dxc.exe defaults to --dxc. DXC implies NO_DOUBLES. shader_vm
                        has no tick for D3D12 (eight targets only): --dxc needs another --rvc.
   --doubles            with --dxc: keep the shader's double math (about 15 percent slower)
   --dxc-opt "FLAGS"    DXC optimisation flags (default -O3)   --dxc-sm 6_x   --dxc-dir DIR
-  --profile            (not on experiments/rvc_lean's tick) compile with PROFILE defined and print the shader's PROF() event counters at
+  --profile            (not on shader_vm's tick) compile with PROFILE defined and print the shader's PROF() event counters at
                        exit (names from <rvc>/src/prof.h; with --bench, counted after the warm-up)
   --stats S            print speed stats to stderr every S seconds (title bar always shows them)
   --warp               use WARP (software) instead of the GPU
@@ -649,9 +649,9 @@ void findRepoRoot(const Options& o) {
 // What the emulated machine can boot: payload PNG sets shipped with rvc, under kUpstream.
 const char* const kUpstream = "rvc/_Nix/rvc";
 
-// The machine's shader's folder, or a copy of it beside other work (any folder named rvc_lean...).
+// The machine's shader's folder, or a copy of it beside other work (any folder named shader_vm...).
 bool isLean(const std::string& dir) {
-    return fs::u8path(dir).filename().u8string().rfind("rvc_lean", 0) == 0;
+    return fs::u8path(dir).filename().u8string().rfind("shader_vm", 0) == 0;
 }
 const char* const kPrograms = "programs/bin";   // our own programs, as raw memory images
 struct BootImage {
@@ -956,8 +956,8 @@ int main(int argc, char** argv) {
     bo.dxcDir = opt.dxcDir;
     // The GPU device is a second shader next to the CPU's; upstream rvc has none.
     SLShader gpuShader;
-    // (a processor folder without devices of its own has experiments/rvc_lean's)
-    fs::path deviceDir = fs::exists(fs::u8path(opt.rvcDir) / "gpu.shader", ec) ? fs::u8path(opt.rvcDir) : fs::u8path("experiments/rvc_lean");
+    // (a processor folder without devices of its own has shader_vm's)
+    fs::path deviceDir = fs::exists(fs::u8path(opt.rvcDir) / "gpu.shader", ec) ? fs::u8path(opt.rvcDir) : fs::u8path("shader_vm");
     std::string gpuPath = (deviceDir / "gpu.shader").u8string();
     if (!opt.noGpu && fs::exists(fs::u8path(gpuPath), ec)) {
         if (!loadShaderLab(gpuPath, gpuShader, err)) {
@@ -996,8 +996,8 @@ int main(int argc, char** argv) {
     }
     if (!opt.noBands) opt.defines.push_back("COMMIT_BANDS");
     // RAM in one texture, written in place (src/ram.h)
-    // (a rvc_lean folder with a commit of its own, keep two state textures: their commits have no
-    // RAM_INPLACE passes; experiments/rvc_lean's main.shader brings in src/ram.h)
+    // (a shader_vm folder with a commit of its own, keep two state textures: their commits have no
+    // RAM_INPLACE passes; shader_vm's main.shader brings in src/ram.h)
     bool lean = isLean(opt.rvcDir);
     std::string shaderText;
     readFileBinary(shaderPath, shaderText);
@@ -1736,7 +1736,7 @@ int main(int argc, char** argv) {
                 word(CTRL + 0x3c) = (opt.desktop ? 1u : 0u) | (opt.tabs ? 2u : 0u) | (uint32_t)(kGpuTarget / 16) << 8 | (uint32_t)(kGpuTarget / 16) << 16;
                 console_hook = cpuConsoleHook;
                 cpuRunning = true;
-                if (const char* d = getenv("RVC_PROF"); d && *d) prof::ticks = 8192, prof::init(d, cores.size(), true);   // (a profile up to --save-state: experiments/rv_fuse)
+                if (const char* d = getenv("RVC_PROF"); d && *d) prof::ticks = 8192, prof::init(d, cores.size(), true);   // (a profile up to --save-state)
                 backend.cpuMode = true;
                 cpuT0 = wall;
             }

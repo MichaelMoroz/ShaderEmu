@@ -437,7 +437,7 @@ against 65: 62fc7fc); Quake III's `com_maxfps` 85 capped both machines before 24
 
 ## 5b. What gpu_vm did without
 
-- **One tick in the tree.** vm.exe has no legacy modes; RISC-V carries `rvc_lean`, `rvc_compute` (each with a `gpu.h` of
+- **One tick in the tree.** vm.exe has no legacy modes; RISC-V carries `shader_vm`, `rvc_compute` (each with a `gpu.h` of
   its own), `rvc_backend12`, `rvc_compute_harness` and options such as `--compute`, `--dxc`, `--ping-pong`,
   `--tick-split`, `--zap`, `--isa`, `--rvc`. gpu_vm's rule: an experiment's result is a row of RESULTS.md and its code
   goes. Clean-up, no speed.

@@ -6,7 +6,7 @@ For this project it changes two things:
 
 - The `CPUTick` pass compiles in seconds, where FXC takes minutes, so the shader can be tuned on
   D3D11, the backend VRChat runs.
-- It compiles what FXC cannot: the big arrays as locals of the pass, which `experiments/rvc_lean`
+- It compiles what FXC cannot: the big arrays as locals of the pass, which `shader_vm`
   uses when it sees that compiler (`__FXC2__` is predefined by it). Under FXC the shader builds
   with static arrays, zeroed every pass.
 
@@ -50,7 +50,7 @@ states; with `--no-doubles` on D3D11 the hashes are equal.
 
 fxc2 also has `mulhi(a, b)`, `umulExtended(a, b, hi, lo)` and `imulExtended` (both halves of the
 product from one instruction), and struct member functions. The shader uses none of them:
-`mulhu32()` and `mulhs32()` in `experiments/rvc_lean/tick.hlsl` are four multiplications and a carry chain under both
+`mulhu32()` and `mulhs32()` in `shader_vm/tick.hlsl` are four multiplications and a carry chain under both
 compilers, as a `umul` or `imul` is turned into an invalid SPIR-V module by the layers that run
 Direct3D on Linux (`docs/world/linux.md`).
 

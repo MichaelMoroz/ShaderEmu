@@ -19,7 +19,7 @@ commit that exists.
 A worker is a block of the tick's pixels: at size 5, 35 pixels hold its 276 texels. Every one of
 them runs the whole pass, the same instructions on the
 same registers, only to write back its own eight texels of the worker's state
-(`experiments/rvc_lean/tick.hlsl`, the comment at the top and `frag`). So a warp of the card does
+(`shader_vm/tick.hlsl`, the comment at the top and `frag`). So a warp of the card does
 one instruction stream of work, and the other lanes of it repeat that stream.
 
 If each of those pixels ran the same code on its own data, the same pass would do one stream a
@@ -39,7 +39,7 @@ pass and no change to the commit.
   a load looks there first. In lanes, that array is the lane's stack, and nobody else sees it.
 - **A way out to RAM.** The commit takes a worker's stores bucket by bucket: a texel of three
   tags (a RAM texel's number and one), then those three texels, written where the tags say
-  (`ram_commit_geom` in `experiments/rvc_lean/src/ram.h`). It does not care where in the tables a
+  (`ram_commit_geom` in `shader_vm/src/ram.h`). It does not care where in the tables a
   bucket was, and it asks only that texel 41's first word (`bloom`) is not 0.
 - **Two whole buckets a pixel.** The cache begins at texel 44 (`L1_AT`) and a bucket is four
   texels, so a pixel whose eight texels lie within the cache holds exactly two buckets: the pixel
@@ -212,7 +212,7 @@ Doom's timedemo and Quake e1m1 from one snapshot, and kept only within what two 
    `RVC_RACES`. A test program (`programs/lanes`) with a sum, and its case in `tools/test_all.py`.
 3. **`nxray` on lanes**, with a switch for the old way (`RAY_LANES=0`): the sums of
    `docs/apps/raytrace.md` (`RAY_FRAMES=4` on `rvc_cpu`) the same both ways.
-4. **The lean tick** (`experiments/rvc_lean/tick.hlsl`; Unity's `MachineTickLean.shader` is a
+4. **The lean tick** (`shader_vm/tick.hlsl`; Unity's `MachineTickLean.shader` is a
    verbatim copy). `rvc_harness --cpu --warp` through `tools\gpu_queue.ps1`: the same sums as
    `rvc_cpu`. Then on the card: the three loads against the tree (above), and `nxray`'s pictures a
    second with and without lanes, with a page of the frames.

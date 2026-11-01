@@ -2,7 +2,7 @@
 under ROOT: `rvc` below), the image it boots and the shell snapshot every part starts from.
 
     root   the harness's working folder: the tick and build/shadercache are read from there
-    rvc    the tick's folder under root (experiments/rvc_lean; a frozen tree of before it: RVCMP_BEFORE_RVC)
+    rvc    the tick's folder under root (shader_vm; a frozen tree of before it: RVCMP_BEFORE_RVC)
     exe    the harness, under root
     image  the image's folder (linux_payload.bin, rootfs.bin, dts.bin): --image DIR
     shell  the snapshot at the shell with `nano-X -p` up, made by `cmp.py shell MACHINE` on the processor
@@ -22,7 +22,7 @@ MACHINES = {
     'before': dict(root=BEFORE, exe=os.path.join('bin', 'rvc_harness.exe'),
                    image=os.path.join(BEFORE, 'build', 'images', 'nommu'),
                    shell=os.path.join(BEFORE, 'snap', 'shell.snap'), args=[],
-                   rvc=os.environ.get('RVCMP_BEFORE_RVC', 'experiments/rvc_lean')),
+                   rvc=os.environ.get('RVCMP_BEFORE_RVC', 'shader_vm')),
     # the backport's tree as built in its checkout: bin\rvc_harness.exe, build/images/nommu
     'after': dict(root=AFTER, exe=os.path.join('bin', 'rvc_harness.exe'),
                   image=os.environ.get('RVCMP_AFTER_IMAGE', os.path.join(AFTER, 'build', 'images', 'nommu')),

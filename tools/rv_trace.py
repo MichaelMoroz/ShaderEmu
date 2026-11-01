@@ -1,6 +1,6 @@
 """Turns hot straight-line traces of guest code into HLSL for the tick's fast loop (an experiment).
 
-    python tools/rv_trace.py CODE.BIN BASE PC.LOG START[:MAX] [START[:MAX] ...] > experiments/rvc_lean/src/blocks.h
+    python tools/rv_trace.py CODE.BIN BASE PC.LOG START[:MAX] [START[:MAX] ...] > shader_vm/src/blocks.h
 
 CODE.BIN is the code as it sits in memory and BASE the address of its first byte (our kernel:
 linux/prebuilt/Image 0xc0000000); PC.LOG is a --pc-log profile of it (tools/pc_hot.py says how

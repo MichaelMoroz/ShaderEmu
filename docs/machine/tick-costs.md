@@ -53,7 +53,7 @@ A count is a guide, never a verdict: only the two builds run in turn say what a 
 
 ## The shape the code must keep
 
-These are the fast step's rules (`experiments/rvc_lean/tick.hlsl`). The text's form is the gain, and most of the time goes to which blocks an instruction passes on its way, which
+These are the fast step's rules (`shader_vm/tick.hlsl`). The text's form is the gain, and most of the time goes to which blocks an instruction passes on its way, which
 operations counted do not predict.
 
 - **The kinds are a tree of tests written in the `if`s** (`K_ALU`, `K_FP`): arithmetic, loads, stores and floats a group,

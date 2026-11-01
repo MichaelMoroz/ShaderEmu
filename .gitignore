@@ -6,6 +6,7 @@
 /bin_fxc2/
 /logs/
 /programs/build/
+/shader_vm_*/
 *.cso
 .vs/
 __pycache__/

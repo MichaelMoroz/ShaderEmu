@@ -193,7 +193,7 @@ int main(int argc, char** argv) {
         if (std::string(pr.second) == "_Data_MTD") {   // the ROM: one RGBAFloat texture, a 16-byte texel a pixel
             std::string bin;
             if (!readFileBinary((fs::u8path(opt.payloadDir) / "rootfs.bin").u8string(), bin)) die("rootfs.bin: cannot read the ROM");
-            // RVC_CODE_FILE: rows under the ROM's, as rvc_backend11.cpp (experiments/rv_fuse/wide.h)
+            // RVC_CODE_FILE: rows under the ROM's, as rvc_backend11.cpp
             if (const char* cf = getenv("RVC_CODE_FILE"); cf && *cf) {
                 std::string code;
                 if (!readFileBinary(cf, code)) die("RVC_CODE_FILE");

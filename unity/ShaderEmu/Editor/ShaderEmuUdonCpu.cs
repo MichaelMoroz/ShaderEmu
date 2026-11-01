@@ -7,7 +7,7 @@ using UnityEngine;
 using UnityEngine.UI;
 using VRC.Udon;
 
-// The second machine model (experiments/udon_aot): the kernel translated to Udon, its program from
+// The second machine model (tools/udon_aot): the kernel translated to Udon, its program from
 // build/udon_linux (made with L2U_DIRTY=1), its driver EmuUdonCpu and a toggle on the control panel.
 public static partial class ShaderEmuBuilder
 {
@@ -18,7 +18,7 @@ public static partial class ShaderEmuBuilder
         GameObject panelObject = GameObject.Find("Control panel");
         if (machine == null || panelObject == null) throw new System.Exception("no machine in the open scene: run ShaderEmu/Build world");
         string dir = ShaderEmuImages.Repo + "/build/udon_linux";
-        if (!File.Exists(dir + "/prog.syms")) throw new System.Exception("no translated kernel: run experiments/udon_aot/l2u/l2u.exe into build/udon_linux");
+        if (!File.Exists(dir + "/prog.syms")) throw new System.Exception("no translated kernel: run tools/udon_aot/l2u/l2u.exe into build/udon_linux");
         CreateProgramAssets();
         UdonSharpEditorUtility.CopyUdonToProxy(machine);
         Transform world = machine.transform.parent;

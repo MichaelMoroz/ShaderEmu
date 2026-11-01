@@ -1,17 +1,17 @@
 ---
 name: tick-and-shader-changes
-description: Change and measure the ShaderEmu tick and its shaders (experiments/rvc_lean, Unity's copy, fxc2) - measuring a change whole and alternating, the three loads, RVC_TICK_ALT in one run, the shape the fast loop must keep, HLSL traps, the WARP stamp (warp_ok, --stamp, --mark-ok), rvc_cpu in step with the tick, bringing it to Unity, VRChat's constraints, and changing fxc2 itself. Use before editing tick code, main.shader, src/*.h, tick.hlsl, gpu.shader, a commit pass, or fxc2, or when asked what a tick change is worth. Triggers on: tick, fast loop, fast_exec_l1, fxc2, DXBC, warp_ok, stamp, RVC_TICK_ALT, shell loop and Doom, rvc_lean, MachineTickLean, Sync shader sources, cso_loops, tick_path.
+description: Change and measure the ShaderEmu tick and its shaders (shader_vm, Unity's copy, fxc2) - measuring a change whole and alternating, the three loads, RVC_TICK_ALT in one run, the shape the fast loop must keep, HLSL traps, the WARP stamp (warp_ok, --stamp, --mark-ok), rvc_cpu in step with the tick, bringing it to Unity, VRChat's constraints, and changing fxc2 itself. Use before editing tick code, main.shader, src/*.h, tick.hlsl, gpu.shader, a commit pass, or fxc2, or when asked what a tick change is worth. Triggers on: tick, fast loop, fast_exec_l1, fxc2, DXBC, warp_ok, stamp, RVC_TICK_ALT, shell loop and Doom, shader_vm, MachineTickLean, Sync shader sources, cso_loops, tick_path.
 ---
 
 # Changing the tick
 
-Depth: `docs/machine/tick-costs.md` (costs and shape), `docs/machine/speed.md`, `docs/machine/fxc2.md`, `experiments/rvc_lean/README.md`.
+Depth: `docs/machine/tick-costs.md` (costs and shape), `docs/machine/speed.md`, `docs/machine/fxc2.md`, `shader_vm/README.md`.
 
 Limits: VRChat, D3D11 DXBC, no UAVs in the fragment shader, no texture arrays. fxc2 may change, as long as it still compiles the harness, Unity, and the ShaderEmu and Poiyomi shaders its README measures. The whole stack is ours, so fix a cost at the cheapest layer: often a guest's source, not the tick.
 
 ## 1. Which tick
 
-- `experiments/rvc_lean`: the only tick, the harness's default, the test set's and the world's. `unity/ShaderEmu/Shaders/lean/tick.hlsl` is a verbatim copy of `tick.hlsl` (`diff -q` them). A copy of the whole folder whose name begins `rvc_lean` runs with the right defines, so `rvc_lean_try` works. It has the lanes; `rvc_cpu` does not. `--dxc`, `--no-mrt`, `--profile`, `--isa zb` and bare-metal images are refused: it has no such machine.
+- `shader_vm`: the only tick, the harness's default, the test set's and the world's. `unity/ShaderEmu/Shaders/lean/tick.hlsl` is a verbatim copy of `tick.hlsl` (`diff -q` them). A copy of the whole folder whose name begins `shader_vm` runs with the right defines, so `shader_vm_try` works. It has the lanes; `rvc_cpu` does not. `--dxc`, `--no-mrt`, `--profile`, `--isa zb` and bare-metal images are refused: it has no such machine.
 - A change of behaviour also goes into `harness/apps/rvc_cpu.cpp`, or the tests no longer test the machine. `rvc_layout.h` and `layout.h` hold the layout, one each for host and tick.
 
 ## 2. Before writing
@@ -34,7 +34,7 @@ Limits: VRChat, D3D11 DXBC, no UAVs in the fragment shader, no texture arrays. f
 
 The card refuses a tick it has not seen in software: `rvc_harness` says so and exits 3 unless `warp_ok` in the processor's folder holds its sources' hash.
 
-    bin\rvc_harness.exe --rvc experiments\rvc_lean --stamp
+    bin\rvc_harness.exe --rvc shader_vm --stamp
     python tools\test_card.py mctest-3 --warp --parts --max-wall 240 --mark-ok
 
 WARP is about 300 thousand instructions a second, so `--parts` (45 s runs, resumed). The stamp is of the sources: a `--define` is the same tick checked. Commit `warp_ok`'s change with its own message (`WARP stamp for ...: mctest-3 passed in 25 s parts`).
@@ -53,8 +53,8 @@ A change is judged on the **whole run**, on all three loads, alternating with th
 
 Best: one run, both ticks, one clock.
 
-    $env:RVC_TICK_ALT='D:\path\rvc_lean_try'
-    pwsh tools\gpu_queue.ps1 bin\rvc_harness.exe --d3d11 --rvc experiments\rvc_lean --image linux-net --stats-after 5 --load-state SNAP
+    $env:RVC_TICK_ALT='D:\path\shader_vm_try'
+    pwsh tools\gpu_queue.ps1 bin\rvc_harness.exe --d3d11 --rvc shader_vm --image linux-net --stats-after 5 --load-state SNAP
 
 Each frame's tick is picked by a hash of the frame (`RVC_TICK_ALT_SHIFT=N`), and `STATS tick N DIR: X ms` says each. The same layout is required. Two copies of one tick gave 0.9548 and 0.9545 ms: that is the noise to beat. `--replay` runs each tick from one snapshot.
 

@@ -398,7 +398,7 @@ Not done: the two `.ini` files read a line at a time in Red Alert, the key arith
 
 ## Fewer instructions, 1 November 2026
 
-`experiments/rv_fewer/NOTES.md` has every number. h2h's load on the card went from 27,387 ms to 21,952 (1.248x, three runs a side), ended full 4.3% to 1.8%, core 0 on `rvc_cpu` 137.67 to 108.78 million, state `1a9a814b`: play 1.150x, the level's load about 1.59x.
+`experiments/rv_fewer/NOTES.md` of commit b6b5f2b9 has every number. h2h's load on the card went from 27,387 ms to 21,952 (1.248x, three runs a side), ended full 4.3% to 1.8%, core 0 on `rvc_cpu` 137.67 to 108.78 million, state `1a9a814b`: play 1.150x, the level's load about 1.59x.
 
 - The build goes by nothing of its folder: `tdawn-relative` gives the compiler paths from where it runs, since GCC knows a function that is not public, in the counts, by a sum with its path in it, and with whole paths they were lost silently in any other folder (the same commit 113.6 million against 108.8). Counts can be made in a private home now; two homes give the same bytes. Red Alert's build still has whole paths: `ralert.profile` holds in `~/nm` only.
 
@@ -406,13 +406,13 @@ Not done: the two `.ini` files read a line at a time in Red Alert, the key arith
 - The houses' scan bits come from a table made again only when `ShaderEmu_Scan_Gen` says something they read has changed (`ShaderEmu_Scan_Objects`; `TDAWN_CHECK_SCANS=1` makes it every time and counts how often it differs).
 - `CellRedraw` is cleared only if `ShaderEmu_Cell_Flagged`: its 2,048 bytes are exactly what `memset` gives the machine's fill, and that ended a pass every frame. A cleared table of 2,048 bytes or more a frame is worth looking for (`passes.ps1`).
 - The layers' sort says what it moved (`ShaderEmu_Sort_Job`'s answer: count, first, last), and the first core copies that.
-- Counts go stale fast: a change to a small function all callers inline loses its callers' counts (`Coord_Cell` by shifts: +5 million until they were made again, then -1). `experiments/rv_fewer/counts.ps1` makes them again in about two minutes. Counts of missions 1, 3 and 5; mission 10, which they did not see, is -20.9% too.
+- Counts go stale fast: a change to a small function all callers inline loses its callers' counts (`Coord_Cell` by shifts: +5 million until they were made again, then -1). `experiments/rv_fewer/counts.ps1` of commit b6b5f2b9 makes them again in about two minutes. Counts of missions 1, 3 and 5; mission 10, which they did not see, is -20.9% too.
 - `prof`'s names by the innermost frame are lines, not calls: `VectorClass::operator[]` and `Cell_Y` there are inlined.
 - Tried and lost: compiler settings (none kept), a list of who is awake in the logic's loop, `Is_Ally` forced inline. Left in on purpose: the fades, which wait by the clock and could go only for the measure's sake under `TDAWN_NO_DELAY`.
 
 ## What play waits for, 1 November 2026
 
-`experiments/rv_play/NOTES.md` has the numbers. Play on the card is 17,080 ms to 16,846 (three runs a side), state `1a9a814b`; against 19,626 before the work on instructions that is 1.165x, not the 1.25x asked for. Core 0 is what bounds it: 88.5% of its passes end by the budget, and all that is left of its waits is worth at most 460 ms (inferred).
+`experiments/rv_play/NOTES.md` of commit b6b5f2b9 has the numbers. Play on the card is 17,080 ms to 16,846 (three runs a side), state `1a9a814b`; against 19,626 before the work on instructions that is 1.165x, not the 1.25x asked for. Core 0 is what bounds it: 88.5% of its passes end by the budget, and all that is left of its waits is worth at most 460 ms (inferred).
 
 - A colour set while a list is in flight waits for that list, not the game (`host_palette_set` in `host.c`, stored by `host_settle` or before the next list): 524 passes a run went waiting right after a show. Anything else that stores to the palette goes through it. `TDAWN_HOLD_LATE=600` with `TDAWN_SWAP=wait` and without gives the same picture, 0 pixels.
 - The ground layer's sort starts before the input rather than after (`ShaderEmu_Sort_Begin`), and any input drops it (`ShaderEmu_Sort_Drop`), as a key or a click can reach anything.

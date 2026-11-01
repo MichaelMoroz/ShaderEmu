@@ -31,8 +31,8 @@
   is what the harness, `rvc_cpu` and `tools/test_all.py` run by default; with the MMU is legacy.
 - Tiberian Dawn's scan bits come from a table (`docs/games/tdawn.md`, "Fewer instructions"): a new write of `IsLocked`, `IsInLimbo`, `IsDiscoveredByPlayer`, `IsHuman` or a techno's `House` raises
   `ShaderEmu_Scan_Gen` (`TDAWN_CHECK_SCANS=1` must say 0 wrong), a new `CellRedraw` setter sets `ShaderEmu_Cell_Flagged`, and what writes cells outside `DisplayClass::Read_INI` and a load unsets `ShaderEmu_Cells_Clean`.
-  After a change to a function many inline, make the counts again (`experiments/rv_fewer/counts.ps1`), or its callers run without them. h2h's 27.4 s to 21.95 s (1.248x): a load is 1.59x, play 1.15x; say which.
-  Played counts hold only where a non-public function's path is the same (GCC's sum has it): Tiberian Dawn compiles with relative paths (`tdawn-relative`); a game with whole paths loses its counts silently in another folder (113.6 M against 108.8), so before claiming a build's speed, build the commit in a second home and compare the bytes (`experiments/rv_fewer/home2.sh`).
+  After a change to a function many inline, make the counts again (`experiments/rv_fewer/counts.ps1` of commit b6b5f2b9, in git only since `experiments` went), or its callers run without them. h2h's 27.4 s to 21.95 s (1.248x): a load is 1.59x, play 1.15x; say which.
+  Played counts hold only where a non-public function's path is the same (GCC's sum has it): Tiberian Dawn compiles with relative paths (`tdawn-relative`); a game with whole paths loses its counts silently in another folder (113.6 M against 108.8), so before claiming a build's speed, build the commit in a second home and compare the bytes (`experiments/rv_fewer/home2.sh` of commit b6b5f2b9).
 - Tiberian Dawn makes a unit's second path search on a worker core while the first core makes
   the first, and does not run a search that must come out as one already made (`docs/games/tdawn.md`,
   "A unit's path searches"). Code a search reaches (`Can_Enter_Cell` of units and infantry,
@@ -187,7 +187,7 @@
   `rvc_harness --cpu --warp`, still through `tools\gpu_queue.ps1`.
 
 - The fast step tells an instruction's kind by a tree of tests and a load has one way out
-  (`experiments/rvc_lean/tick.hlsl`; `docs/machine/tick-costs.md`, the
+  (`shader_vm/tick.hlsl`; `docs/machine/tick-costs.md`, the
   sections of 13 October 2026). The text's form is the gain: the same tests as bools computed
   first were 4% slower, and operations counted do not say which way a shape goes. After any
   change to the fast loop's control flow run the three loads in turn from one snapshot (a
@@ -274,7 +274,7 @@
   `media_inflate_stream`, and `open --unpack` runs it first; it exits 3 (busybox then) for what it cannot do,
   a lack of memory in one piece too. `tools/test_all.py unarc` packs a folder with busybox and unpacks it both ways.
 - The devices are 0x80000000 to 0x82000000 and RAM is one range, 0x82000000 to 0x92000000, the kernel at its start
-  (28 October 2026; `docs/system/nommu.md`, "Memory"): the layout is `experiments/rvc_lean/src/layout.h` for the tick and
+  (28 October 2026; `docs/system/nommu.md`, "Memory"): the layout is `shader_vm/src/layout.h` for the tick and
   `harness/apps/rvc_layout.h` for the host. The state texture is 2048 x 9280 (`STATE_TEX_HEIGHT`, `kStateHeight`, Unity's
   StateA). The commit's band mask stays 32 bits, bit b for bands b, b + 32 and b + 64 (`ram_bands`); the control words'
   bands (4 and 5) are drawn apart (`_CommitAlways`, `CONTROL_BANDS`). A GPU copy into RAM goes only below 0x81e00000. A

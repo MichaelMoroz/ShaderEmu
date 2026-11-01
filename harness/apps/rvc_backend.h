@@ -24,12 +24,12 @@ struct BackendOptions {
     std::string dxcOpt = "-O3", dxcSm = "6_6", dxcDir;
     const SLShader* gpuShader = nullptr;   // the GPU device's passes (gpu.shader), if the machine has one
     const SLShader* soundShader = nullptr; // the sound card's mix pass (sound.shader); needs the GPU device
-    unsigned tickRows = 64;       // rows of the 64 texels wide state block that the tick pass draws (16: rvc_lean)
+    unsigned tickRows = 64;       // rows of the 64 texels wide state block that the tick pass draws (16: shader_vm)
     int readbackBatch = 1;        // D3D11: frames whose rows are read back with one Map (--readback-batch)
     bool stateLog = false;        // D3D12 only: read the CPU's 64 x 64 state texels back every frame (--l1-log)
     bool tickDirect = false;      // --unpack-in-place: the unpack draws into the state texture itself, no zone copied in and back (a tick that does not read the texture there)
     bool ramInplace = false;      // D3D11: RAM in one texture written in place, the commit's passes with RAM_INPLACE (src/ram.h)
-    bool laneField = false;       // D3D11, RAM in place: the tick has the lanes' field (LANE_FIELD, experiments/rvc_lean; docs/machine/lanes.md)
+    bool laneField = false;       // D3D11, RAM in place: the tick has the lanes' field (LANE_FIELD, shader_vm; docs/machine/lanes.md)
     // --blits (D3D11, RAM in place): the gather, the RAM commit and the GPU's lists drawn as the world's blits draw them,
     // patches amplified by a geometry shader (src/amp.h; docs/machine/gpu.md, "Blits in place of cameras"), with
     // amp.shader's order probe first
@@ -71,7 +71,7 @@ const unsigned kControlRow = 64 + rvlayout::devT(0x100000) / 2048, kControlTexel
 // next the guest's, then the ring of kConRing bytes; the control pass writes the first.
 const unsigned kConHost = 40, kConRing = 256;
 const float kConZone[4] = {kConHost + 0.5f, kStateHeight - kNetRow - 0.5f, 1, 1};
-// The lanes' field (docs/machine/lanes.md, experiments/rvc_lean/tick.hlsl): its job's texel and its groups'
+// The lanes' field (docs/machine/lanes.md, shader_vm/tick.hlsl): its job's texel and its groups'
 // words in the mailboxes' page (rvlayout::kMbox + 0x1900 and + 0x1a00), which popRow() returns after the network's
 // texels: kFieldRead of them from the job's. The tick's primitive after the cores' draws it; the commit has
 // a point for each of its buckets, before the picture's.

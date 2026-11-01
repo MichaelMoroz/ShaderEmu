@@ -245,7 +245,7 @@ public:
                 err = base.u8string() + ".bin: cannot read the ROM";
                 return false;
             }
-            // RVC_CODE_FILE: rows under the ROM's, from the texture's first (experiments/rv_fuse/wide.h)
+            // RVC_CODE_FILE: rows under the ROM's, from the texture's first
             if (const char* cf = getenv("RVC_CODE_FILE"); cf && *cf) {
                 std::string code;
                 if (!readFileBinary(cf, code)) { err = std::string(cf) + ": cannot read"; return false; }
@@ -350,7 +350,7 @@ public:
             if (rounds == 1 && getenv("RVC_PASS_PROF")) { prof_.labels = kPassLabels; profBegin(tag); }
             if (mrt_) tickDraw(mat, zones[0]);
             prof_.mark(gpu_.ctx.Get());
-            // (tickDirect_, experiments/rvc_lean: the unpack draws into the state texture itself, which it
+            // (tickDirect_, shader_vm: the unpack draws into the state texture itself, which it
             // does not read, so no zone is copied in and back)
             if (!freeze && tickDirect_ && mrt_)
                 drawInto(unpackPasses_[0], mat, crt_.currentRTV(), 0, (std::max)(6u, 3 * groups), D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST, &zones[0]);

@@ -12,7 +12,7 @@ firmware's part itself.
 
 - It starts at the kernel (`0x82000000`, `KERNEL_AT` in `src/layout.h`) in supervisor mode with the device tree's address in
   `a1`. The tree has to be in RAM, so `make_linux_image.py` and `image.py` put it at `0x83e00000` (`TREE_AT`).
-- An `ecall` from supervisor mode is an SBI call answered in place (`experiments/rvc_lean/tick.hlsl`): set_timer and the base extension's
+- An `ecall` from supervisor mode is an SBI call answered in place (`shader_vm/tick.hlsl`): set_timer and the base extension's
   version and probe calls. Anything else returns "not supported". The console is memory the kernel writes itself (`console.md`,
   "Words in memory"), so no console call is answered (`CSR_FIELDS`, `docs/system/nommu.md`).
 - The timer raises the supervisor's timer interrupt directly, and every trap is the supervisor's: nothing runs in machine mode.
@@ -99,7 +99,7 @@ plain loops. `python tools\make_lazy_image.py DIR` makes its image folder; `pyth
 
 ### Work of the boot that nothing reads (`linux/nommu/patch_bootwork.py`)
 
-While memblock hands over its free ranges no page in them needs a look (`se_pages_pristine`), the IP identifiers start at 0, no uevent is made before the first program, and the console's log level is 4 (the kernel's notices stay in `dmesg`). On the card, to the prompt: 7.2 million instructions and 1,307 ms became 4.7 million and 919 ms (1 November 2026, `experiments/rv_acct/NOTES.md`). A boot's time is taken to the prompt (`RVC_MARK='/ # '`): what a harness types after it is idle passes.
+While memblock hands over its free ranges no page in them needs a look (`se_pages_pristine`), the IP identifiers start at 0, no uevent is made before the first program, and the console's log level is 4 (the kernel's notices stay in `dmesg`). On the card, to the prompt: 7.2 million instructions and 1,307 ms became 4.7 million and 919 ms (1 November 2026, `experiments/rv_acct/NOTES.md` of commit b6b5f2b9). A boot's time is taken to the prompt (`RVC_MARK='/ # '`): what a harness types after it is idle passes.
 
 ### The console (`console_hook.py`, `patch_console.py`)
 

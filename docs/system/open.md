@@ -116,7 +116,7 @@ unpacker, and nothing is opened.
 - The whole way, in the harness: a file of 512 KB of noise that begins `NES\x1a`, wrapped by
   `tools\file_to_png.py`, is asked for in three parts and arrives with the host's own CRC-32.
 
-      pwsh tools\gpu_queue.ps1 bin\rvc_harness.exe --d3d11 --rvc experiments\rvc_lean --no-stdin --desktop --uart-log logs\uart.log --open "file://C:\...\big.nes.png" --open-after "GPU drawing" --until "is nes"
+      pwsh tools\gpu_queue.ps1 bin\rvc_harness.exe --d3d11 --rvc shader_vm --no-stdin --desktop --uart-log logs\uart.log --open "file://C:\...\big.nes.png" --open-after "GPU drawing" --until "is nes"
 
 - In the world's play mode: `openField.SetUrl(new VRCUrl(...))` and the machine's `OpenLink`
   event. The editor cannot download a test file, so an editor hook hands the machine the PNG

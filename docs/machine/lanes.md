@@ -1,7 +1,7 @@
 # Lanes: pixels of the tick, each running a function on an index of its own
 
-The lean tick has them (`experiments/rvc_lean/tick.hlsl`, which the world's `MachineTickLean.shader` runs from a
-verbatim copy, `lean/tick.hlsl`; in the harness `--rvc experiments\rvc_lean`). `rvc_cpu`, `rvc_harness --cpu`
+The lean tick has them (`shader_vm/tick.hlsl`, which the world's `MachineTickLean.shader` runs from a
+verbatim copy, `lean/tick.hlsl`; in the harness `--rvc shader_vm`). `rvc_cpu`, `rvc_harness --cpu`
 and the compute machine have none: the library makes every index a plain call there, which
 gives the same output.
 
@@ -76,7 +76,7 @@ The field's pixels are rows 8-15 of the tick's targets' two bands (no core's blo
 eight a lane. The tick's primitive after the 256 cores' draws it, as many rows as the posted job
 wants, and the commit has a point for each of its 7,936 buckets, before the picture's; its state
 pass keeps of a lane's texels only the last words of its two tags (the commit's other rows are as
-they were). All under `LANE_FIELD`, which `experiments/rvc_lean/main.shader` defines; the harness
+they were). All under `LANE_FIELD`, which `shader_vm/main.shader` defines; the harness
 draws the field when the folder's `main.shader` has it (`BackendOptions::laneField`), and sets
 `_LaneField` and `_FieldPoints`.
 
@@ -190,7 +190,7 @@ made by a core and said so.
 are the same on the field as on its workers (`NXPATH_FIELD=0`). `tools/test_all.py` has
 `lanetest 255 50 1 40; lanetest 31 40 3 20` and `steptest 31 3000`, which on `rvc_cpu` compare plain calls with
 themselves and check the library's paths. What only the card can show is run under
-`--rvc experiments\rvc_lean`: `lanetest` with 1, 3 and 6 texels an index, with 3 workers and with 255, on the
+`--rvc shader_vm`: `lanetest` with 1, 3 and 6 texels an index, with 3 workers and with 255, on the
 workers' lanes and on the field, and `steptest`. `rvc_cpu` has no lanes: a program's output is checked there, its
 speed only on the card.
 
@@ -203,7 +203,7 @@ at 2^5 (`--workers 8`) 6,885. Lanes gain from large caches, the field from neith
 - The field in the world is wired and has not been run there: `MachineTickLean.shader` defines `LANE_FIELD`, the
   tick's mesh has the field's primitive (`ShaderEmuBuilder`: 17 triangles), `Machine.shader`'s Unpack fills rows 48 to
   63 from the targets while a job is posted, `MachineCommit.cginc` defines `LANE_FIELD` for `src/ram.cginc` (synced from
-  `experiments/rvc_lean/src/ram.h`), and the commit's points and `EmuMachine` have the field's 7,936 points
+  `shader_vm/src/ram.h`), and the commit's points and `EmuMachine` have the field's 7,936 points
   (`_FieldPoints`). Unlike the harness, the world draws the primitive and the points every round, a job posted or
   not (with none posted they draw nothing), and does not count the field's instructions in its figures. To run it:
   "Sync shader sources from the repository" and the builder, then `example shader` in the world.

@@ -5,7 +5,7 @@ The machine has 256 cores, all run by the one tick pass: core 0, which runs Linu
 both about how the GPU runs pixels: the state as whole tiles of pixels, and workers that keep no more than
 they need ("What the card does with pixels" and the sections after it).
 
-    pwsh tools\gpu_queue.ps1 bin\rvc_harness.exe --rvc experiments\rvc_lean --image build\images\nommu
+    pwsh tools\gpu_queue.ps1 bin\rvc_harness.exe --rvc shader_vm --image build\images\nommu
     / # mctest            (every worker; "mctest N LIMIT" for other numbers, "mctest N LIMIT bench" for the cost of a pass)
 
 The D3D11 harness with its eight targets, `rvc_cpu` and the world all compile `CORES=256`; the harness's
@@ -710,7 +710,7 @@ The VRChat machine is the one without an MMU (`NO_PAGING`, `docs/system/nommu.md
 256 cores, the guest's geometry, the tick in eight targets, the commit as points, the shader's
 own write cache (336 texels: 64 + 32 + 16 buckets of three) and passes of 8,192 (the control panel's `tickSlider` sets 1,024 to 32,768)
 (`CORES`, `L1_TABLE_BITS` and the sizes in `MachineBlit.cginc`). Its tick is the lean one (`MachineTickLean.shader`,
-`lean/tick.hlsl`, a verbatim copy of `experiments/rvc_lean/tick.hlsl`), the only tick.
+`lean/tick.hlsl`, a verbatim copy of `shader_vm/tick.hlsl`), the only tick.
 
 - **The tick is a camera's pass.** The tick's shader is on a mesh of seventeen triangles (one for every sixteen cores and one
   for the lanes' field) that only the tick's camera sees (a layer of its own); `EmuMachine` gives the
@@ -748,7 +748,7 @@ own write cache (336 texels: 64 + 32 + 16 buckets of three) and passes of 8,192 
 **Measuring it.** The world's speed is measured in the editor with the Game view in front (play mode started by a script leaves the Scene
 view there, and the room is then drawn small), by `totalInstructions` over several seconds, a change and the tree in turn. A session's level
 differs from another's: only the two sides of one session compare. With the processor busy elsewhere the main thread is the limit at any
-round length. The tick's bytecode is the harness's under `--rvc experiments\rvc_lean`: the editor's compiler is the same file as the harness's
+round length. The tick's bytecode is the harness's under `--rvc shader_vm`: the editor's compiler is the same file as the harness's
 fxc2 (`Data\Tools\fxc2_d3dcompiler.dll`), so a round costs what a pass costs in the harness; what is left between them is what a frame has
 beyond its rounds (the room's cameras, the editor's own drawing, the frame's end), so more rounds a frame come nearer the harness's speed.
 A guest's wait for something the host gives once a Unity frame shows as rounds that end at once to the frame's end.

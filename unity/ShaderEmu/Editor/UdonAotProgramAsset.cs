@@ -8,7 +8,7 @@ using VRC.Udon.Common;
 using VRC.Udon.Common.Interfaces;
 using VRC.Udon.Editor.ProgramSources;
 
-// experiments/udon_aot/linux2udon.py's output as an Udon program: its bytecode and heap as the
+// tools/udon_aot/linux2udon.py's output as an Udon program: its bytecode and heap as the
 // generator wrote them, with no assembler (the kernel is 50 MB of bytecode). EmuUdonCpu runs it.
 public class UdonAotProgramAsset : UdonProgramAsset
 {

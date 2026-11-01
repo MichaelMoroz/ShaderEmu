@@ -41,8 +41,8 @@ It boots the image in `build\images\nommu` from power-on every time (`docs/syste
 `--uart-log`, `--ticks`, `--pointer-sweep`, `--desktop` and `--tabs`, and ends with
 what each core ran, the firmware calls and the traps by cause. `--seconds` is the guest's
 time, `--wall` this computer's, `--instructions` core 0's. `--help` lists the rest: the host's
-words (`--host`, `docs/world/holodeck.md`), the network (`--net`, `docs/system/lan.md`), `--native`
-(`experiments/isa_proto/ISA.md`). `\n`, `\r` and `\t` are `--send`'s only escapes here; the
+words (`--host`, `docs/world/holodeck.md`), the network (`--net`, `docs/system/lan.md`).
+`\n`, `\r` and `\t` are `--send`'s only escapes here; the
 harness's has `\xNN` as well. Start it from PowerShell or cmd: Git Bash turns `"/ # "` into a path.
 
 `--pc-log FILE` writes the first core's pc at the end of every pass and the instructions the
@@ -90,7 +90,7 @@ share of a game's frame").
 
 The same interpreter inside the harness, for using the machine by hand at that speed:
 
-    bin\rvc_harness.exe --d3d11 --rvc experiments\rvc_lean --image linux-net --cpu --desktop --viz
+    bin\rvc_harness.exe --d3d11 --rvc shader_vm --image linux-net --cpu --desktop --viz
 
 Everything the harness has is there: its window with the display and the memory view, the
 keys and the pointer, the console, `--expect`, `--send`, `--until`, `--save-state`,
@@ -127,12 +127,12 @@ is taken with `--save-state` at the run's end and `snapshot_screen.py`, never fr
 
 That snapshot is one the shader machine resumes from: `--save-state` writes
 the processor's RAM and every core's registers, CSRs, timer and worker word where
-`experiments/rvc_lean` keeps them, with empty write caches (`cpuSnapshotCores`), and the guest's
+`shader_vm` keeps them, with empty write caches (`cpuSnapshotCores`), and the guest's
 clock goes on from the processor's. So a moment reached here in seconds is measured on the card from the same state:
 
-    bin\rvc_harness.exe --d3d11 --rvc experiments\rvc_lean --define NO_PAGING --image linux-net --cpu --no-desktop
+    bin\rvc_harness.exe --d3d11 --rvc shader_vm --define NO_PAGING --image linux-net --cpu --no-desktop
         --input "nano-X -p & sleep 10; quake +timedemo demo1\n" --until "You got the nails" --save-state Q.snap
-    bin\rvc_harness.exe --d3d11 --rvc experiments\rvc_lean --define NO_PAGING --image linux-net --no-desktop --load-state Q.snap
+    bin\rvc_harness.exe --d3d11 --rvc shader_vm --define NO_PAGING --image linux-net --no-desktop --load-state Q.snap
 
 The interpreter knows only the geometry of workers all alike, which geotune then leaves; the
 snapshot lays them out as geotune does on the card (16 big, the rest small in blocks of 2, or as
@@ -215,7 +215,7 @@ to a folder of its own.
   (`docs/machine/multicore.md`, "Races"); `RVC_CALLS=FILE` what core 0's calls cost ("Finding the
   work"). `RVC_WCACHE=1` gives every core the shader machine's write cache (three tables of
   buckets of three texels, 6 bits for core 0 and the geometry's for a worker,
-  `experiments/rvc_lean/tick.hlsl`): a store that changes a texel no bucket has room for ends that
+  `shader_vm/tick.hlsl`): a store that changes a texel no bucket has room for ends that
   core's pass before it, and the end says how many passes ended so. `RVC_ADFAULT=1` makes a
   clear accessed or written bit in a page table entry fault, as a walk on the shader machine does
  ; under the no-MMU kernel there is no walk and it changes nothing. Every run
@@ -275,7 +275,7 @@ meshes and pack, `cc`'s outputs) a case keeps the md5 of every such line. A chan
 moves one on purpose sets the new value with the reason. Captures are not in it.
 
 `python tools/test_card.py CASE_OR_TAG ...` runs the same cases on the card: `bin/rvc_harness.exe --d3d11`
-with `experiments/rvc_lean`, one at a time through `tools\gpu_queue.ps1`, each console checked by test_all's
+with `shader_vm`, one at a time through `tools\gpu_queue.ps1`, each console checked by test_all's
 rules. The card boots in some 50 s, so a case resumes a snapshot of the shell made once on the processor
 (`build/test_card/shell.snap`; `--snapshot` makes it again) and its wall is at most 55 s (`--max-wall`). A case
 is skipped for another image, for host words that change as it runs, for `rvc_cpu`'s own devices (its `env`),

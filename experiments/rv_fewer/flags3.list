@@ -1,6 +1,0 @@
--fsched-pressure
--fno-tree-vectorize
--fno-schedule-insns2
--fno-tree-pre
--fno-ivopts
--fno-gcse

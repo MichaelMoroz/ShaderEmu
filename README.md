@@ -151,7 +151,7 @@ VR frame, a played round 10.3 to 11.2 pictures and 2.6 to 2.9 game ticks a secon
 (`docs/games/openttd.md`, "Speed on 31 October").
 
 The D3D11 build needs no FXC: [fxc2](https://github.com/MichaelMoroz/FXC2) compiles the CPU shader
-in seconds where FXC takes minutes (`docs/machine/fxc2.md`). `experiments/rvc_lean/README.md` says how the
+in seconds where FXC takes minutes (`docs/machine/fxc2.md`). `shader_vm/README.md` says how the
 CPU shader is built and why.
 
 ## Try it (Windows)
@@ -220,7 +220,7 @@ longer answers: before the first build, `mkdir -p ~/nm/work/src/pathtrace-data` 
 
 ## Layout
 
-- `experiments/rvc_lean/` – the machine, in the harness and in the world (`MachineTickLean`): the CPU's tick
+- `shader_vm/` – the machine, in the harness and in the world (`MachineTickLean`): the CPU's tick
   (`tick.hlsl`) and commit (`main.shader`, `src/`) and the GPU device (`gpu.shader`). Derived from rvc's shader (MIT, see its
   `LICENSE`).
 - `harness/` – runs the shaders outside Unity. `apps/rvc_harness.cpp` is the frontend over two
@@ -245,7 +245,7 @@ longer answers: before the first build, `mkdir -p ~/nm/work/src/pathtrace-data` 
 - `programs/` – bare-metal programs in C, `programs/linux`: the OpenGL library and
   `glxgears`, `programs/mc`: the worker cores' library (`mcw.c`, `mcwx.h`) and its tests,
   `programs/hlsl`: the HLSL compiler, `programs/wl`: the machine's workloads piece by piece.
-- `experiments/` – beside `rvc_lean`, the studies `isa_proto` and `udon_aot`.
+- `tools/udon_aot/` – the kernel translated to Udon, for the world's second machine (`EmuUdonCpu`).
 - `unity/ShaderEmu/` – the VRChat world: UdonSharp scripts, shaders and the editor scripts
   that build the scene.
 - `world/` – the Blender scripts that model the room, its computers and the city (`docs/world/world.md`).
@@ -289,7 +289,7 @@ a shader the sound card follows.
 
 ## Licence
 
-MIT (`LICENSE`). `experiments/rvc_lean` is derived from pimaker's rvc and keeps its own MIT
+MIT (`LICENSE`). `shader_vm` is derived from pimaker's rvc and keeps its own MIT
 licence file. The kernel drivers in `linux/kernel` are GPL-2.0, as they are built into Linux.
 `linux/prebuilt` holds binaries built from other projects' sources; its README lists them
 with their licences.

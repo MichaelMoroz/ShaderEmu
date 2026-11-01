@@ -1,7 +1,0 @@
-classes P0 : STATS seconds=0.86 instructions=6021120 ips=6963553 frames=737 fps=852.4 per_frame=8169.8
-classes P1 : STATS seconds=1.05 instructions=6021120 ips=5749434 frames=732 fps=699.0 per_frame=8225.6
-classes P2 : STATS seconds=2.06 instructions=11345920 ips=5511388 frames=1382 fps=671.3 per_frame=8209.8
-classes P3 : STATS seconds=2.90 instructions=17088512 ips=5902047 frames=2083 fps=719.4 per_frame=8203.8
-classes P4 : STATS seconds=3.87 instructions=23183360 ips=5988585 frames=2827 fps=730.3 per_frame=8200.7
-classes P5 : STATS seconds=5.57 instructions=33775616 ips=6061648 frames=4120 fps=739.4 per_frame=8198.0
-classes P6 : STATS seconds=6.46 instructions=39799399 ips=6159640 frames=4859 fps=752.0 per_frame=8190.9
