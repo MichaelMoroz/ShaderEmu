@@ -1,0 +1,23 @@
+diff --git a/harness/apps/rvc_cpu.cpp b/harness/apps/rvc_cpu.cpp
+index 07cf701e..4409bc1e 100644
+--- a/harness/apps/rvc_cpu.cpp
++++ b/harness/apps/rvc_cpu.cpp
+@@ -1173,7 +1173,9 @@ static void make_step_kinds() {
+     step_kinds_made = true;
+ }
+ 
+-static bool keep_last = getenv("RVC_CPU_LAST") != nullptr;   // core 0's last instructions, for the summary
++static FILE* ni_trace = getenv("RVC_NI_TRACE") ? fopen(getenv("RVC_NI_TRACE"), "wb") : nullptr;
++static long long ni_skip = getenv("RVC_NI_SKIP") ? atoll(getenv("RVC_NI_SKIP")) : 0, ni_left = getenv("RVC_NI_N") ? atoll(getenv("RVC_NI_N")) : 4000000;
++static bool keep_last = getenv("RVC_CPU_LAST") != nullptr || ni_trace;   // core 0's last instructions, for the summary
+ static std::atomic<bool> workers_threaded{false};             // workers run on several host threads now
+ static bool amo_threaded(Core& c, u32 kind, u32 a, u32 b, u32& result, Trap& t, bool& illegal);
+ 
+@@ -1188,6 +1190,7 @@ static __declspec(noinline) int general_step(Core& c, u32 ins) {
+     if (!W && c.hart == 0 && keep_last) { last_pc[c.clock & 31] = pc; last_ins[c.clock & 31] = ins; }
+     u32 op = ins & 0x7f, rd = (ins >> 7) & 31, f3 = (ins >> 12) & 7, rs1 = (ins >> 15) & 31, rs2 = (ins >> 20) & 31, f7 = ins >> 25;
+     u32 a = c.x[rs1], b = c.x[rs2], next = pc + 4, result = 0;
++    if (!W && c.hart == 0 && ni_trace && ni_left > 0) { if (ni_skip > 0) ni_skip--; else { u32 r[4] = {pc, ins, a, b}; fwrite(r, 16, 1, ni_trace); if (--ni_left == 0) { fclose(ni_trace); ni_trace = nullptr; } } }
+     bool write = true, illegal = false;
+     if (!W && calls_on && c.hart == 0) call_fast(c, c.clock - 1);   // (this one is counted in c.clock already)
+     if ((zb_on || zbs_on || zicond_on) && (op == 0x13 || op == 0x33) && zb(ins, op, f3, f7, rs2, a, b, result)) { _InterlockedIncrement64((volatile long long*)&zb_run); op = 0x80; }   // (no opcode is 0x80)
