@@ -385,6 +385,8 @@
   `test_all.py openttd-scroll` with `RVC_DEVICE_EVERY=6` too, since `rvc_cpu` otherwise takes a list back at once: calibrated runs do not show this.
 - A vehicle in OpenTTD must always have a drawn copy: light pictures and a following view read it (`Vehicle::drawn`; a new one in a depot had none, and its window showed the map's corner; `test_all.py openttd-depot`). A sync runs with the tick
   (`docs/games/openttd.md`, "A sync with the tick running"): copies are made at the tick's end and listed by the tick; what changes a vehicle apart from `UpdateViewport` on the tick's worker sets `tw_made[...].told` and `VehicleChanged`, and `OPENTTD_MADE_CHECK=1` must not rise after the first hold. A check run (`OPENTTD_CHECK`) makes copies by another path: `test_all.py openttd-depot` is what follows a moving vehicle in a run without it.
+- OpenTTD makes copies only of vehicles near a view (`docs/games/openttd.md`, "Round four"): a vehicle's `drawn` may be anywhere while `veh_far`, and what reads it for a place outside the views goes by `x_pos`. `OPENTTD_MADE_CHECK=1` must say 0 off; `tools/openttd_title.py` (title and the drive with lists drawn) must PASS: `test_all` draws no lists.
+- OpenTTD saves uncompressed by default (`docs/games/openttd.md`, "Saves are not compressed"): `nxpersist` packs what is kept; a format that cannot start falls back to `none`. `test_all.py openttd-save` must say as saved.
 - OpenTTD is compiled whole with `openttd.profile.gz` (`docs/games/openttd.md`, "The compiler"): its LTO link keeps
   `-fdata-sections -fno-common` and the 16-byte assembler, or statics a worker writes share texels (`RVC_RACES` undone), and
   after a large change to the source `linux/openttd/counts.py` makes the counts anew. `build.sh` puts the tree back from
