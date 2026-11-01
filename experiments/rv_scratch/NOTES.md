@@ -39,7 +39,7 @@ a7b0  STL [R77], R90 &rd=0x2                     ?trans4;            (a texel: t
 ```
 
 Measured as well:
-- From 16 to 32 and 32 to 64 the listings differ by 2N in constant-address `STL` (32, then 64) and a few other lines elsewhere (`IADD3`, `NOP`, `MOV`, net under 15). Each word of `sc` is stored twice before the loop; that the two are fxc2's entry `mov`s and the patch's loop, unrolled, is inferred. 64 to 256 adds 256 such `STL` and some 230 lines to make their addresses (`ULEA`, `UIADD3`).
+- From 16 to 32 and 32 to 64 the listings differ by 2N in constant-address `STL` (32, then 64) and a few other lines elsewhere (`IADD3`, `NOP`, `MOV`, net under 15). Each word of `sc` is stored twice before the loop; that the two are fxc2's entry `mov`s and the patch's loop, unrolled, is inferred. 64 to 256 adds 256 such `STL`, not 384, with some 230 lines to make their addresses (`ULEA`, `UIADD3`) and one more `BRA`, so at 256 part of the zeroing is probably a real loop (inferred; how many times it runs was not read).
 - Registers do not follow the time: 122 at each N in `s0`, and the array's own cost is 1 register on `s0`, 6 or 7 on `s2`.
 
 Question by question:
