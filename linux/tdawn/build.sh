@@ -84,9 +84,23 @@ if [ "${TDAWN_PROFILE:-}" = count ]; then
     PGO="-L$WORK/src/nogcov -fprofile-generate -fprofile-update=single"; COUNTS="-DSHADEREMU_PGO"
 elif [ -f "$HERE/tdawn.profile" ]; then
     python3 "$HERE/profile.py" put "$HERE/tdawn.profile" "$BUILD"
-    PGO="-fprofile-use -fprofile-partial-training -fprofile-correction -Wno-missing-profile -Wno-coverage-mismatch"
+    # The compiler reads the counts as it compiles, and make knows nothing of the .gcda files: the counts' sum in the flags
+    # compiles every file again when they change (files with no change kept old counts).
+    PGO="-fprofile-use -fprofile-partial-training -fprofile-correction -Wno-missing-profile -Wno-coverage-mismatch -DSHADEREMU_COUNTS=$(sha1sum "$HERE/tdawn.profile" | cut -c1-12)"
 fi
+# The compiler is given paths from where it runs. GCC knows a function that is not public, in the counts, by a sum with its source's
+# path in it: with whole paths the counts held only in the folder they were made in (core 0 113.6 million elsewhere against 108.8).
+TOP=$(dirname "$WORK")
+cat > "$WORK/bin/tdawn-relative" <<EOF
+#!/usr/bin/env bash
+top=$TOP
+rel=\$(realpath --relative-to="\$PWD" "\$top")
+compiler=\$1; shift
+exec "\$compiler" "\${@//\$top\//\$rel/}"
+EOF
+chmod +x "$WORK/bin/tdawn-relative"
 cmake -S "$SRC" -B "$BUILD" -DCMAKE_TOOLCHAIN_FILE="$WORK/src/tdawn-toolchain.cmake" -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_CXX_COMPILER_LAUNCHER="$WORK/bin/tdawn-relative" \
     -DSDL2=OFF -DOPENAL=OFF -DNETWORKING=OFF -DBUILD_VANILLARA=OFF -DSHADEREMU=ON \
     -DSHADEREMU_GLES="$WORK/src/tdawn-gles.o" -DSHADEREMU_NANOX="$MW/src/lib/libnano-X.a" \
     -DCMAKE_CXX_FLAGS="-O2 -fno-pie -fno-lifetime-dse -w -DSHADEREMU $GLINC $LTO $PGO ${TDAWN_XFLAGS:-}" -DCMAKE_CXX_FLAGS_RELEASE="-DNDEBUG" \
