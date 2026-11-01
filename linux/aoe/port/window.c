@@ -24,7 +24,7 @@ uint8_t *aoe_win_open(int w, int h, const char *title)
      * "A window wider or taller than the screen has room for"), and the game's picture stays whole, above the bar. */
     window = GrNewWindowEx(GR_WM_PROPS_APPWINDOW | GR_WM_PROPS_ONTOP, (char *) title, GR_ROOT_WINDOW_ID, -1, -1, w, h, 0);
     GrSelectEvents(window, GR_EVENT_MASK_KEY_DOWN | GR_EVENT_MASK_KEY_UP | GR_EVENT_MASK_BUTTON_DOWN |
-        GR_EVENT_MASK_BUTTON_UP | GR_EVENT_MASK_MOUSE_POSITION | GR_EVENT_MASK_CLOSE_REQ | GR_EVENT_MASK_UPDATE);
+        GR_EVENT_MASK_BUTTON_UP | GR_EVENT_MASK_MOUSE_POSITION | GR_EVENT_MASK_CLOSE_REQ | GR_EVENT_MASK_UPDATE | GR_EVENT_MASK_EXPOSURE);
     GrMapWindow(window);
     GrSetFocus(window);
     if (seglInit(window) < 0) { fprintf(stderr, "aoe: this machine has no GPU\n"); exit(1); }
@@ -135,7 +135,15 @@ int aoe_win_event(struct aoe_event *e)
             e->kind = AOE_CLOSE;
             return 1;
         case GR_EVENT_TYPE_UPDATE:
-            if (g.update.utype == GR_UPDATE_SIZE) seglWindowChanged();
+            if (g.update.utype == GR_UPDATE_UNMAP || g.update.utype == GR_UPDATE_UNMAPTEMP || g.update.utype == GR_UPDATE_DESTROY)
+                continue;
+            /* A frame or a move gives the window other memory, and a game at its menu draws nothing more: the page
+             * is still the picture, so it is shown again (docs/games/aoe.md, "A window made again"). */
+            seglWindowChanged();
+            aoe_win_present();
+            continue;
+        case GR_EVENT_TYPE_EXPOSURE:
+            aoe_win_present();
             continue;
         default:
             continue;

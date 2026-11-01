@@ -1,8 +1,14 @@
 diff --git a/include/drawarea.h b/include/drawarea.h
-index 591015c52..427960cf4 100644
+index 591015c52..19adb2416 100644
 --- a/include/drawarea.h
 +++ b/include/drawarea.h
-@@ -97,6 +97,7 @@ class TSpan_List_Manager {
+@@ -92,11 +92,13 @@ class TSpan_List_Manager {
+     int Max_Span_Px;
+     int Min_Line;
+     int Max_Line;
++    int aoe_dirty_lo, aoe_dirty_hi;   // the port: the lines written since the last ResetAll
+ 
+     TSpan_List_Manager(int Surface_Width, int Surface_Height);
      ~TSpan_List_Manager();
      void ResetAll();
      void SetSpanRegions(int MinS, int MinL, int MaxS, int MaxL);
@@ -10,7 +16,7 @@ index 591015c52..427960cf4 100644
      void AddSpan(int LeftPx, int RightPx, int Line);
      void AddShape(TShape* theShape, int shape_num, int Xpos, int Ypos, int Mirror);
      void AddShape_Align(unsigned char* Shape_Base, Shape_Info* SI, int Xpos, int Ypos, int Mirror);
-@@ -151,6 +152,8 @@ class TDrawArea {
+@@ -151,6 +153,8 @@ class TDrawArea {
      void** CurDisplayOffsets;            // +0xC0
      void** FloatOffsets;                 // +0xC4
      RGE_Color_Table* shadow_color_table; // +0xC8
@@ -349,13 +355,75 @@ index ba309be4a..b37bad5d2 100644
          this->playerCivDrop[i]->append_line(0x280A, 17);
  
 diff --git a/src/spanlist.cpp b/src/spanlist.cpp
-index 1d48af6a4..3396f6707 100644
+index 1d48af6a4..b61275155 100644
 --- a/src/spanlist.cpp
 +++ b/src/spanlist.cpp
-@@ -290,6 +290,23 @@ void TSpan_List_Manager::ResetAll() {
-     }
+@@ -193,6 +193,8 @@ TSpan_List_Manager::TSpan_List_Manager(int Surface_Width, int Surface_Height) :
+     this->Num_Pixels = Surface_Width;
+     if (Surface_Width < 0x10)
+         this->Num_Pixels = 0x10;
++    this->aoe_dirty_lo = 0;
++    this->aoe_dirty_hi = this->Num_Lines - 1;
+     this->SetSpanRegions(0, 0, this->Num_Pixels - 1, this->Num_Lines - 1);
+     this->Line_Head_Ptrs = (VSpan_Node**) calloc(this->Num_Lines, 4);
+     this->Line_Tail_Ptrs = (VSpan_Node**) calloc(this->Num_Lines, 4);
+@@ -261,32 +263,55 @@ void TSpan_List_Manager::SetSpanRegions(int MinS, int MinL, int MaxS, int MaxL)
+ 
+     this->Min_Line = MinL;
+     this->Max_Line = MaxL;
++    if (MinL < this->aoe_dirty_lo) this->aoe_dirty_lo = MinL;
++    if (MaxL > this->aoe_dirty_hi) this->aoe_dirty_hi = MaxL;
+     this->Min_Span_Px = MinS;
+     this->Max_Span_Px = MaxS;
  }
  
++// The port: only the lines written since the last reset, as writes stay within the region (the region is
++// added to them when it is set; a scroll and a merge write every line). Pieces under 2 KB, stored by the processor:
++// five fills of 2,400 bytes ended up to five passes for a clip of a few lines, which in a world's fixed rounds
++// is the rest of each pass lost (docs/games/aoe.md, "What ends a round").
++static void aoe_clear_lines(void* lines, int lo, int count) {
++    char* at = (char*) lines + lo * 4;
++    for (int bytes = count * 4; bytes > 0; ) {
++        int piece = bytes < 2044 ? bytes : 2044;
++        memset(at, 0, piece);
++        at += piece;
++        bytes -= piece;
++    }
++}
++
+ void TSpan_List_Manager::ResetAll() {
+     this->VSList.ReclaimAllNodes();
+ 
+-    {
+-        unsigned int size = this->Num_Lines * 4;
+-        memset(this->Line_Head_Ptrs, 0, size);
+-    }
+-    {
+-        unsigned int size = this->Num_Lines * 4;
+-        memset(this->Line_Tail_Ptrs, 0, size);
++    int lo = this->aoe_dirty_lo, count = this->aoe_dirty_hi - lo + 1;
++    if (count > 0) {
++        aoe_clear_lines(this->Line_Head_Ptrs, lo, count);
++        aoe_clear_lines(this->Line_Tail_Ptrs, lo, count);
++        aoe_clear_lines(this->LeftMostPx, lo, count);
++        aoe_clear_lines(this->RightMostPx, lo, count);
++        aoe_clear_lines(this->Span_Count, lo, count);
+     }
+-    {
+-        unsigned int size = this->Num_Lines * 4;
+-        memset(this->LeftMostPx, 0, size);
+-    }
+-    {
+-        unsigned int size = this->Num_Lines * 4;
+-        memset(this->RightMostPx, 0, size);
+-    }
+-    {
+-        unsigned int size = this->Num_Lines * 4;
+-        memset(this->Span_Count, 0, size);
++    this->aoe_dirty_lo = this->Min_Line;
++    this->aoe_dirty_hi = this->Max_Line;
++}
++
 +// The port: every line of a rectangle one span, on a list just reset: what SetClipRect made by AddSpan a line.
 +void TSpan_List_Manager::AddRect(int LeftPx, int RightPx, int Top, int Bottom) {
 +    for (int line = Top; line <= Bottom; line++) {
@@ -370,12 +438,36 @@ index 1d48af6a4..3396f6707 100644
 +        this->LeftMostPx[line] = LeftPx;
 +        this->RightMostPx[line] = RightPx;
 +        this->Span_Count[line] = 1;
-+    }
-+}
-+
- void TSpan_List_Manager::AddSpan(int LeftPx, int RightPx, int Line) {
-     int temp;
+     }
+ }
  
+@@ -835,6 +860,8 @@ int TSpan_List_Manager::PointVisible(int x, int Line) {
+ 
+ void TSpan_List_Manager::Merge_n_Align(TSpan_List_Manager* List1, TSpan_List_Manager* List2) {
+     ResetAll();
++    aoe_dirty_lo = 0;
++    aoe_dirty_hi = Num_Lines - 1;
+ 
+     if (Num_Lines != List1->Num_Lines)
+         return;
+@@ -907,6 +934,8 @@ void TSpan_List_Manager::ScrollSpansHorizontally(int XOffset, int ClipToCurrentR
+             this->ResetAll();
+             return;
+         }
++        this->aoe_dirty_lo = 0;
++        this->aoe_dirty_hi = this->Num_Lines - 1;
+ 
+         int y = 0;
+         if (0 < this->Num_Lines) {
+@@ -977,6 +1006,8 @@ void TSpan_List_Manager::ScrollSpansVertically(int YOffset, int ClipToCurrentReg
+         this->ResetAll();
+         return;
+     }
++    this->aoe_dirty_lo = 0;
++    this->aoe_dirty_hi = this->Num_Lines - 1;
+ 
+     y1 = 0;
+     y2 = YOffset;
 diff --git a/src/taiinfmd.cpp b/src/taiinfmd.cpp
 index 0d961d41b..c6978b038 100644
 --- a/src/taiinfmd.cpp
@@ -474,6 +566,54 @@ index a600fe043..1a52df678 100644
  
      this->disable_input();
      this->set_game_mode(RGE_GAME_MODE_NORMAL, 0);
+diff --git a/src/trig.cpp b/src/trig.cpp
+index f5e7b7544..6036353b6 100644
+--- a/src/trig.cpp
++++ b/src/trig.cpp
+@@ -4,40 +4,12 @@
+ #include <math.h>
+ 
+ TRIGONOMETRY::TRIGONOMETRY() {
+-    int i;
+-
+-    // Phase 1: 4096-entry table (0 to 2*PI in 4096 steps)
+-    for (i = 0; i < 0x1000; i++) {
+-        double rad = (double) i * 0.001533980788;
+-        sines[i] = (float) sin(rad);
+-        cose[i] = (float) cos(rad);
+-
+-        if (i == 0x400 || i == 0xC00)
+-            tane[i] = 0.0f;
+-        else
+-            tane[i] = (float) tan(rad);
+-
+-        if (i == 0 || i == 0x800)
+-            atane[i] = 0.0f;
+-        else
+-            atane[i] = (float) atan(rad);
+-    }
+-
+-    // Phase 2: 360-entry table (degree-based, 0 to 360 in 360 steps)
+-    for (i = 0; i < 0x168; i++) {
++    // The port: only the tables anything reads (fractal.cpp's sin360, cos360): all of them took 46 million
++    // instructions of soft doubles before main, a quarter of the start to the menu.
++    for (int i = 0; i < 0x168; i++) {
+         double rad = (double) i * 0.01745329252;
+         sine360[i] = (float) sin(rad);
+         cose360[i] = (float) cos(rad);
+-
+-        if (i == 0x5A || i == 0x10E)
+-            tane360[i] = 0.0f;
+-        else
+-            tane360[i] = (float) tan(rad);
+-
+-        if (i == 0 || i == 0xB4)
+-            atane360[i] = 0.0f;
+-        else
+-            atane360[i] = (float) atan(rad);
+     }
+ }
+ 
 diff --git a/src/tworld.cpp b/src/tworld.cpp
 index a3c3afc39..6be4416f8 100644
 --- a/src/tworld.cpp
