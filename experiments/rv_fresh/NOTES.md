@@ -135,3 +135,11 @@ texture waits is still not measured.
 
 Next, if the design goes on: why a way out costs 256 on real code against 115 to 160 in tight loops. A SASS listing would say. Floats and the devices for
 Quake and nxray; the translated form (not begun). Head-to-head against gpu_vm not run again; no WARP check.
+
+## SASS of the new tick (1 November 2026: traces work again, no reset or reboot)
+
+`sass.ps1` takes a step's blob through `rvc_trace12` under Nsight, `sass_wait.py` sums a listing's scheduling hints by block. The code is D3D12's (DXIL), not proved the same as D3D11's.
+
+- **Hot loop of step 12:** 68 card instructions, 35 clocks of WAIT hints (about 64 ns on the card, 181 clocks at 2.83 GHz; the rest is not split yet).
+- **A way out and back, before doing its work:** the hints alone say about 130 clocks, about 46 ns: 12 + 15 + 52 on the way out to a load's body, 53 on the way back in. An `ISETP` before a `BRA` waits 13, a `BSSY` 12. This is a lower bound.
+- **Zeroing:** `#pragma static_noinit` did not take effect with this tree's fxc2: 2,018 zeroing stores in the bytecode, and 2,090 `STL` in the card's code. Why it did not take effect is not settled (`tools/fxc2`'s build differs from gpu_vm's). A local array (step 15) has none, and gives 179 and 163 against 181 and 164: about 1%, registers and memory as the model's.

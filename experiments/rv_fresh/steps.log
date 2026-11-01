@@ -157,3 +157,9 @@
 07:20 steps\s13.hlsl real shell  SNAP instructions=30430 passes=5 a_pass=6086 tick_ns=0.01 commit_ns=0.60 whole_ns=0.61 ways_out_a_100=59.6 full_passes=0 stop=1 word=00000073 pc=84728910 count=6086 twice
 07:20 steps\s12.hlsl real doom  SNAP instructions=147390 passes=20 a_pass=7370 tick_ns=180.81 commit_ns=0.50 whole_ns=181.30 ways_out_a_100=64.8 full_passes=5 stop=2 word=000e2f03 pc=86413134 count=29478 
 07:20 steps\s12.hlsl real shell  SNAP instructions=30430 passes=5 a_pass=6086 tick_ns=164.88 commit_ns=0.60 whole_ns=165.48 ways_out_a_100=59.6 full_passes=0 stop=1 word=00000073 pc=84728910 count=6086 
+07:23 steps\s15.hlsl real doom  SNAP instructions=147390 passes=20 a_pass=7370 tick_ns=179.33 commit_ns=0.50 whole_ns=179.83 ways_out_a_100=64.8 full_passes=5 stop=2 word=000e2f03 pc=86413134 count=29478 
+07:23 steps\s15.hlsl real shell  SNAP instructions=30430 passes=5 a_pass=6086 tick_ns=162.89 commit_ns=0.60 whole_ns=163.49 ways_out_a_100=59.6 full_passes=0 stop=1 word=00000073 pc=84728910 count=6086 
+07:23 steps\s12.hlsl real doom  SNAP instructions=147390 passes=20 a_pass=7370 tick_ns=180.97 commit_ns=0.50 whole_ns=181.47 ways_out_a_100=64.8 full_passes=5 stop=2 word=000e2f03 pc=86413134 count=29478 
+07:23 steps\s12.hlsl real shell  SNAP instructions=30430 passes=5 a_pass=6086 tick_ns=164.24 commit_ns=0.60 whole_ns=164.84 ways_out_a_100=59.6 full_passes=0 stop=1 word=00000073 pc=84728910 count=6086 
+07:23 steps\s15.hlsl real doom  SNAP instructions=147390 passes=20 a_pass=7370 tick_ns=178.90 commit_ns=0.50 whole_ns=179.40 ways_out_a_100=64.8 full_passes=5 stop=2 word=000e2f03 pc=86413134 count=29478 
+07:23 steps\s15.hlsl real shell  SNAP instructions=30430 passes=5 a_pass=6086 tick_ns=162.13 commit_ns=0.60 whole_ns=162.73 ways_out_a_100=59.6 full_passes=0 stop=1 word=00000073 pc=84728910 count=6086 
