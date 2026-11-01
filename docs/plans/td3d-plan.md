@@ -72,5 +72,5 @@ Each shows something, and ends with its gate. Stop and report if a gate fails.
 
 1. **Clicks and the view's window** reach into the game's input and drawing code more than a renderer's swap would suggest (step 1). It is also where the 3D view could change game state by mistake: state sums watch it.
 2. **The look:** models by script could come out too plain to be worth it. Step 3's one tank, and step 4's first three kinds, show it cheaply. Then CC0 packs or the developer's own.
-3. **The frame:** a battle of moving models drawn every frame, where today most of a scene's rectangles are kept. Parts are extra draws. Step 3 sets the budget before the set is made.
+3. **The number of draws in a battle.** A model's vertices stay in the ROM and a move or a turn is only its matrix, with no new sprite frame for each facing, so the cores' work should be like a sprite's or less. What grows is a command (64 bytes) and a matrix for each moving part, against 6 KB of texels a pass (some 7 texels a part: 100 parts a frame are about 2 passes, an estimate), the vertex shader's search over more commands, and the card's time for the triangles. Step 3 sets the budget before the set is made.
 4. **The world's frame:** the card's time with depth at 1280 x 720 in VR.
