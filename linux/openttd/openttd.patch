@@ -4407,7 +4407,7 @@ index 9070e07..8c35392 100644
  	this->tick_counter++;
  
 diff --git a/src/saveload/saveload.cpp b/src/saveload/saveload.cpp
-index ebec3d2..0ec99f2 100644
+index ebec3d2..426ea90 100644
 --- a/src/saveload/saveload.cpp
 +++ b/src/saveload/saveload.cpp
 @@ -70,6 +70,7 @@
@@ -4720,7 +4720,7 @@ index ebec3d2..0ec99f2 100644
  	{
 -		if (lzma_easy_encoder(&this->lzma, compression_level, LZMA_CHECK_CRC32) != LZMA_OK) SlError(STR_GAME_SAVELOAD_ERROR_BROKEN_INTERNAL_ERROR, "cannot initialize compressor");
 +		/* OPENTTD_SAVE_NOENCODER=1: as when memory has no piece for it (test_all's openttd-save) */
-+		const lzma_ret r = GetEnv("OPENTTD_SAVE_NOENCODER") != nullptr ? LZMA_MEM_ERROR : lzma_easy_encoder(&this->lzma, compression_level, LZMA_CHECK_CRC32);
++		const lzma_ret r = GetEnv("OPENTTD_SAVE_NOENCODER").has_value() ? LZMA_MEM_ERROR : lzma_easy_encoder(&this->lzma, compression_level, LZMA_CHECK_CRC32);
 +		if (r != LZMA_OK) {
 +			fmt::print(stderr, "openttd: LZMA at preset {} does not start, lzma_ret {}, {} bytes asked\n", compression_level, static_cast<int>(r), lzma_easy_encoder_memusage(compression_level));
 +			SlError(STR_GAME_SAVELOAD_ERROR_BROKEN_INTERNAL_ERROR, "cannot initialize compressor");

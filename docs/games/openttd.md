@@ -537,6 +537,21 @@ Calibrated, 31 October 2026 (the call at the tick's end in, same model and round
 
 A tick is 92 to 103 ms, a wait 12% to 18%, building 23%, zoomed out 28%: the copies are 15 to 20 ms of a tick, so a tick's length is about what it was before this section, and the gain in ticks is the hold's. Not measured again on the card.
 
+### Saves are not compressed
+
+A save's default format is `none` (1 November 2026, `GetSavegameFormat`): what is kept between sessions is packed by `nxpersist`, and LZMA at preset 2 asks 16.9 MB, in pieces of several MB that the no-MMU kernel must find whole, and is most of the time the tick waits. A config that names a format whose encoder cannot start saves in `none` and says so (`LZMA at preset 2 does not start, lzma_ret 5, 16879783 bytes asked`; `OPENTTD_SAVE_NOENCODER=1` makes it so). Old saves and `busy.sav` load as ever; a load of LZMA still wants its dictionary (1 MB at preset 2) and the ring in one piece each, and if memory has none it fails: a load has no other way.
+
+Measured on `rvc_cpu` at 2 MIPS, a save and the load of what it wrote, the sum as saved each time:
+
+| Game | Format | File | Save | Load | `nxpersist` |
+|---|---|---|---|---|---|
+| `busy.sav`, 256 x 256 | `none` | 1,207,730 | 22.8 s | 20.6 s | 226 KB: not kept |
+| | `lzma:2` | 156,308 | 109.6 s | 30.1 s | over 96 KB: not kept |
+| new, 64 x 64 | `none` | 91,923 | 1.6 s | 10.1 s | 20.8 KB, the game's file alone |
+| | `lzma:2` | 15,576 | 8.8 s | 11.5 s | about its file's size |
+
+So a kept folder holds about four small games and not six. `OPENTTD_SAVE_AT=N:FILE` (`OPENTTD_SAVE_FORMAT=lzma`) saves at tick N as the Save window does and writes the sum beside it, `OPENTTD_LOAD_CHECK=FILE.sum` compares after a load: `test_all.py openttd-save`.
+
 ### Round four: copies near the views, a tick's end without a hold
 
 A copy cost measured, 31 October to 1 November 2026, `prof.py` on the quiet window scene: `VehicleMakeAhead` 42k, `VehicleDrawMake` 28k, `VehiclesMakeLater` 11k a tick, 80k of 535k (15%), and on the first core `MarkAllViewportsDirty`, `UpdateViewportNow`, the boxes and `VehiclesApply` 28% of it.
