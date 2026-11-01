@@ -1,8 +1,33 @@
 # Fewer instructions on Tiberian Dawn's first core (1 November 2026)
 
 The question: Tiberian Dawn at least 25% faster on the card with passes not ending full more often or much sooner, by taking
-instructions away rather than making the step faster. Result: **27,393 ms to 21,914 ms on h2h's load, 1.250x**, reached with
-nothing to spare (see "How far to trust it"). No tick, kernel or library change: the game, its build's counts, one `sprintf`.
+instructions away rather than making the step faster. Result, of a build from the committed tree: **27,387 ms to 21,952 ms on h2h's load, 1.248x: just under the 25% asked.**
+Play 1.150x. No tick, kernel or library change: the game, its build's counts, one `sprintf`.
+
+## Correction: the first result did not hold outside its folder
+
+Below, g14's 1.250x was a real binary but not what the commit built elsewhere: main's build of the same commit, 23,005 23,003 23,060 ms (1.19x), core 0 119.4 M on the card, state the same.
+
+- **Cause.** GCC knows a function that is not public, in the counts, by a sum with its source's whole path and object in it (`coverage_compute_profile_id`, from memory of its source, not read here; what is measured is the effect). Counts made in `~/agents/fewer` lost those functions in any other folder, silently. `-Wno-missing-profile` hides it. A clean build of one commit in a second home at another path: core 0 113.6 M against 108.84 M, and the same kind of difference from the counted build as main's (`Keyboard_Process`, `ShaderEmu_Stats`, `Sync_Delay`).
+- **Not the cause.** Stale objects: main had 108 of 31 October, as make does not see `.gcda` files, but the merge built over a clean old tree here was 21,955 ms, 108.82 M. A build of 35 s is normal (39 s clean here). `libc.a` differs in member times only: linked in, the game's bytes are the same. Compiler flags and the other inputs were the same but for paths.
+- **Fix.** `tdawn-relative`, a compiler launcher in `linux/tdawn/build.sh`: paths from where the compiler runs. The counts' sum in the flags (`SHADEREMU_COUNTS`) compiles every file when counts change, in both games. Counts made again under it.
+- **Proof.** Flat game 88327D99, 6,334,756 bytes: one home; a second home clean; the second home with the old tree built first and this one over it: the stripped ELF has the same sum (a3c1fa71) in all three. `~/nm` itself was not touched: **its build is still to be seen.** The bytes there are 88327D99 only if the merged tree's other inputs (`programs/mc`, `gles.c`, libmedia, ...) are these.
+- **Red Alert** keeps whole paths, as its counts were made under them: `ralert.profile` holds only in `~/nm`. Its game's bytes did not move with the flag (9f26724f). Not measured under `~/nm` or made relative.
+
+| final, from the committed tree | tree | final |
+|---|---|---|
+| h2h wall, 3 runs each, in turn | 27,375 27,388 27,399 (27,387) | 21,957 21,964 21,936 (21,952): **1.248x** |
+| passes | 18,913 | 15,160 |
+| core 0 on the card | 143.7 M | 114.4 M |
+| a pass | 7,599 | 7,549 |
+| ended full | 4.3% | 1.8% |
+| play, 2 runs each | 19,622 19,631 | 17,075 17,068: **1.150x** |
+| rvc_cpu core 0 (play) | 137.67 M | 108.78 M (87.29 M) |
+| state | `1a9a814b` | `1a9a814b` |
+
+`test_all.py tdawn` 7 of 7, `--races` 7 of 7, `ralert` 12 of 12, checks 0 wrong. g14 and this build have the same instructions on `rvc_cpu` and differ about 0.2% on the card by where things lie (a clean rebuild without relative paths, A45A9818, was 21,912): the line is within that, and on this build it is not reached.
+
+Everything below is the history as first written; its 1.250x and "reached" are g14's.
 
 ## On the card
 
