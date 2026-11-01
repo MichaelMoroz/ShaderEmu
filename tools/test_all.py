@@ -264,6 +264,13 @@ CASES = [
     case('aoe', 'games aoe', X + 'if [ -f /usr/share/aoe/Empires.dat ]; then AOE_SIZE=800 AOE_VIEW=inline AOE_TICK_MS=33 AOE_SUM_EVERY=500 AOE_SUM_END=1000 '
          'AOE_SCRIPT="3000 click 400 245;3000 click 400 172;3000 click 237 568;2000 click 369 118;1000 rclick 505 170;1000 click 370 215;1000 click 163 508" aoe; else echo AOE-NO-DATA; fi',
          wall=120, has=[r'^(aoesum: update 1000 time 99900 objects 4357 sum 5032c153|AOE-NO-DATA)']),
+    # the music on the card's clock (docs/games/aoe.md, "Music"): songs in the game's order, cut short at 4 s of the card's so that many end in the run, and the state
+    # sum as with no card: when a song ends is the card's, and the game must not feel it
+    case('aoe-music', 'games aoe', X + 'if [ -f /usr/share/aoe/Empires.dat ]; then AOE_MUSIC_LOG=1 AOE_MUSIC_CUT=4 AOE_VIEW=inline AOE_TICK_MS=33 AOE_SUM_EVERY=500 AOE_SUM_END=1000 '
+         'AOE_SCRIPT="' + AOE_640 + '" aoe; else echo AOE-NO-DATA; fi',
+         wall=180, env={'RVC_SOUND': '1'},
+         has=[r'^(aoemus: play \S*open\.mid, 1505 notes|AOE-NO-DATA)', r'^(aoemus: play \S*music1\.mid, 3766 notes|AOE-NO-DATA)', r'^(aoemus: play \S*music2\.mid, 5388 notes|AOE-NO-DATA)',
+              r'^(aoesum: update 1000 time 99900 objects 4357 sum 5032c153|AOE-NO-DATA)']),
     # the window it opens as, 640 x 480 (docs/games/aoe.md, "Windowed"): the same game by the same script, at this size's places
     case('aoe-640', 'games aoe', X + 'if [ -f /usr/share/aoe/Empires.dat ]; then AOE_VIEW=inline AOE_TICK_MS=33 AOE_SUM_EVERY=500 AOE_SUM_END=1000 '
          'AOE_SCRIPT="' + AOE_640 + '" aoe; else echo AOE-NO-DATA; fi',

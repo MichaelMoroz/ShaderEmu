@@ -280,9 +280,10 @@ int _set_new_mode(int) { return 0; }
 // A fixed step for runs that must come out the same (AOE_TICK_MS): the clock moves at each look for messages.
 static unsigned long virtual_now;
 static int tick_ms = -1;
+int aoe_clock_still;   // (the game told of a song's end: when that comes is the card's, and must not move this clock)
 extern "C" DWORD timeGetTime(void) {
     if (tick_ms < 0) { const char* e = getenv("AOE_TICK_MS"); tick_ms = e ? atoi(e) : 0; }
-    if (tick_ms) return aoe_view_in_job() ? virtual_now : virtual_now++;   // and a wait on the clock itself ends
+    if (tick_ms) return aoe_view_in_job() || aoe_clock_still ? virtual_now : virtual_now++;   // and a wait on the clock itself ends
     return aoe_clock_ms();
 }
 extern "C" DWORD GetTickCount(void) { return timeGetTime(); }
@@ -346,20 +347,11 @@ int GetSystemMetrics(int i) {
     }
     return 0;
 }
-// no networks, no CD
+// no networks, no CD; MCI and the mixer are aoe_music.cpp's
 HRESULT DirectPlayCreate(void*, void**, void*) { return E_FAIL; }
 HRESULT DirectPlayLobbyCreateA(void*, void**, void*, void*, DWORD) { return E_FAIL; }
 HRESULT DirectPlayEnumerateA(void*, void*) { return E_FAIL; }
-DWORD mciSendCommandA(UINT, UINT, DWORD, DWORD) { return 1; }
-BOOL mciGetErrorStringA(DWORD, LPSTR s, UINT n) { if (s && n) s[0] = 0; return 1; }
 HWND MCIWndCreateA(HWND, HINSTANCE, DWORD, LPCSTR) { return 0; }
-UINT mixerOpen(HMIXER*, UINT, DWORD, DWORD, DWORD) { return 1; }
-UINT mixerClose(HMIXER) { return 0; }
-UINT mixerGetLineInfoA(HMIXER, MIXERLINEA*, DWORD) { return 1; }
-UINT mixerGetLineControlsA(HMIXER, MIXERLINECONTROLSA*, DWORD) { return 1; }
-UINT mixerGetControlDetailsA(HMIXER, MIXERCONTROLDETAILS*, DWORD) { return 1; }
-UINT mixerSetControlDetails(HMIXER, MIXERCONTROLDETAILS*, DWORD) { return 1; }
-UINT mixerGetNumDevs(void) { return 0; }
 void ds_stream_init(void) {}
 void ds_stream_exit(void) {}
 void ds_stream_messages(void) {}
@@ -698,11 +690,12 @@ static int take(LPMSG m, UINT remove) {
 }
 BOOL PeekMessage(LPMSG m, HWND, UINT, UINT, UINT remove) {
     aoe_lat('e', 0, 0);
+    aoe_music_look();
     if (q_head == q_tail) { if (tick_ms > 0) virtual_now += tick_ms; aoe_events(); }
     return take(m, remove);
 }
 BOOL GetMessage(LPMSG m, HWND, UINT, UINT) {
-    while (!take(m, PM_REMOVE)) { if (tick_ms > 0) virtual_now += tick_ms; aoe_events(); if (q_head == q_tail) aoe_idle(10); }
+    while (!take(m, PM_REMOVE)) { aoe_music_look(); if (tick_ms > 0) virtual_now += tick_ms; aoe_events(); if (q_head == q_tail) aoe_idle(10); }
     return m->message != WM_QUIT;
 }
 UINT SetTimer(HWND, UINT, UINT, void*) { return 1; }

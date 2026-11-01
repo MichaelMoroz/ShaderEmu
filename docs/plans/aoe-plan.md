@@ -89,8 +89,8 @@ Counted in `src/*.cpp`:
   as Tiberian Dawn's clock reads it.
 - **DirectPlay** (5 files) and Winsock: out. Single player only; the multiplayer screens say so.
 - **DirectSound** (1 file): effects as voices pointed at their WAVs in the DRS, as Quake's are.
-- **Music** is MCI (27 uses, CD audio and MIDI). The trial has MIDI only. Doom plays scores on
-  the sound card's FM voices (`docs/machine/sound.md`); the trial's MIDI could go the same way, or wait.
+- **Music** is MCI (27 uses, CD audio and MIDI). The trial has MIDI only. It is played on the sound card's
+  FM voices through the game's own music code: `docs/games/aoe.md`, "Music".
 - **The registry** (2 files): keys of the image's registry (`registry.h`).
 - **`language.dll`**: its string table taken out when the image is made, and `LoadString`
   reads that.

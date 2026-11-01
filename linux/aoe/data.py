@@ -16,6 +16,10 @@ URL = 'https://archive.org/download/aoe-trial-1997/MSAoE.exe'
 MD5 = 'dadea8f91c7e2b70ff5c2be7aad6c682'
 SHA256 = '60e01bd94cc88af64fd2ca40a75f3df783b8ea7725971ddd02c60f4d11e96973'
 TRIAL = 'MSAoE.exe'
+# The instruments of its music (the trial has none: Windows had them): DMXOPL's General MIDI bank, MIT, the copy OpenTTD fetches
+BANK_URL = 'https://raw.githubusercontent.com/sneakernets/DMXOPL/e83c144a2e6d3c283e20f9d16d011126931892f5/GENMIDI.op2'
+BANK_SHA256 = '92fc03c7734c45b1ece2bfad1f79d1abbd2b27ec6b45fbfb1c5a74f5ce0138c9'
+BANK = 'genmidi.op2'
 
 
 class Missing(Exception):
@@ -56,6 +60,27 @@ def fetch(cache):
         raise Missing('what %s gave is not the trial (md5 %s, wanted %s)' % (url, got, MD5))
     os.replace(part, exe)
     return exe
+
+
+def bank(cache):
+    """The music's instruments in the cache, or None: the game then plays with no music."""
+    path = os.path.join(cache, BANK)
+    if os.path.exists(path) and digest(path, 'sha256') == BANK_SHA256:
+        return path
+    part = path + '.part'
+    try:
+        request = urllib.request.Request(BANK_URL, headers={'User-Agent': 'ShaderEmu image build'})
+        with urllib.request.urlopen(request, timeout=60) as r, open(part, 'wb') as f:
+            shutil.copyfileobj(r, f)
+    except OSError as e:
+        print('aoe: the music\'s instruments could not be fetched: %s. The game goes in with no music.' % e, file=sys.stderr)
+        return None
+    if digest(part, 'sha256') != BANK_SHA256:
+        os.remove(part)
+        print('aoe: what %s gave is not the bank. The game goes in with no music.' % BANK_URL, file=sys.stderr)
+        return None
+    os.replace(part, path)
+    return path
 
 
 def seven_zip():
@@ -134,11 +159,14 @@ def main():
     try:
         made = data(cache)
         built = program()
+        instruments = bank(cache)
     except Missing as e:
         print('aoe: %s. The image goes on without the game.' % e, file=sys.stderr)
         return 3
     # program and data together or not at all, so that nothing below can leave half
     shutil.copytree(made, os.path.join(overlay, 'usr', 'share', 'aoe'), dirs_exist_ok=True)
+    if instruments:
+        shutil.copyfile(instruments, os.path.join(overlay, 'usr', 'share', 'aoe', BANK))
     os.makedirs(os.path.join(overlay, 'usr', 'bin'), exist_ok=True)
     for name in ('aoe.bin', 'aoe'):
         shutil.copyfile(os.path.join(built, 'usr', 'bin', name), os.path.join(overlay, 'usr', 'bin', name))

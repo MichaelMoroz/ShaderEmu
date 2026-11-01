@@ -11,7 +11,7 @@ extern "C" {
 }
 int __cdecl RESFILE_locate_resource(unsigned long rType, unsigned long rId, int& file, int& offset, unsigned char*& mapped_file, int& size);
 
-enum { VOICES = 16, GAIN = 160 };   // of 256: room for a fight's sounds on top of each other before the mix clips
+enum { VOICES = 16, GAIN = 160 };   // of 256: room for a fight's sounds on top of each other before the mix clips. Music has the other 16 (aoe_music.cpp)
 static int voices[VOICES];
 static IDirectSoundBuffer* holder[VOICES];
 static unsigned begun[VOICES], plays;
@@ -94,7 +94,7 @@ HRESULT IDirectSoundBuffer::Play(DWORD, DWORD, DWORD flags) {
     holder[slot] = this; voice = slot; begun[slot] = ++plays;
     unsigned samples = wf.wBitsPerSample == 16 ? bytes / 2 : bytes;
     snd_play(voices[slot], (wf.wBitsPerSample == 16 ? SND_PCM16 : SND_PCM8) | SND_SMOOTH | (flags & DSBPLAY_LOOPING ? SND_LOOPED : 0), phys, samples, 0, step_of(this), volume_of(this));
-    if (log_on) fprintf(stderr, "aoesnd: play %u at %08x, %u bytes, %d Hz, %d bits, voice %d, volume %08x, at %lu ms\n", plays, phys, (unsigned) bytes, (int) wf.nSamplesPerSec, wf.wBitsPerSample, slot, volume_of(this), timeGetTime());
+    if (log_on) fprintf(stderr, "aoesnd: play %u at %08x, %u bytes, %d Hz, %d bits, voice %d, volume %08x, at %lu ms, clock %u\n", plays, phys, (unsigned) bytes, (int) wf.nSamplesPerSec, wf.wBitsPerSample, slot, volume_of(this), timeGetTime(), SND_CLOCK);
     return DS_OK;
 }
 HRESULT IDirectSoundBuffer::Stop() {

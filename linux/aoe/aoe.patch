@@ -526,8 +526,7 @@ index b672d36a..7c39465f 100644
      info.fixed_window_size = 1;
      info.use_dir_draw = 1;
      info.use_sys_mem = 0;
--    info.use_music = 1;
-+    info.use_music = 0;   // the port: MIDI through Windows' MCI, which the machine has not (docs/games/aoe.md, "Sound")
+     info.use_music = 1;
      info.use_sound = 1;
      info.fast_view = 1;
 -    info.auto_scroll = 1;

@@ -104,6 +104,8 @@ double-voice instruments as two notes, the drums from channel 10. Program, volum
 expression, pan and all-notes-off are read; pitch bend is not. A song's start and end as the
 music set gives them are kept, and the volume slider sets the voices' volume. OpenMSX is
 unpacked into the base set folder: music sets are not looked for in tars.
+The instruments and the notes are `linux/userland/shaderemu_fm.h`, shared with Age of Empires: a change there
+keeps these songs' sums (`OPENTTD_MUSIC_SUM=all`) and `tools/aoe_music_check.py`'s PASS.
 
 A song is made on a worker core (`SongService` in `shaderemu_m.cpp`): the first core reads the
 file and goes on, a free worker reads it from those bytes (`MidiFile::SeLoadData`, upstream's

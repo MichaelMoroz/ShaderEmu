@@ -38,7 +38,7 @@ int aoe_view_wanted(void) {
         const char* e = getenv("AOE_VIEW");
         st.wanted = !e || strcmp(e, "whole");   // whole: as before, without any of this
         if (st.wanted && !getenv("AOE_NOWINDOW") && !(e && !strcmp(e, "inline"))) {
-            st.workers = mcw_open(1);
+            st.workers = mcw_open(2);   // the view's, and the one a song is made on (aoe_music.cpp)
             if (st.workers > 0) {
                 mcw_touch_code((const void*) _start, (unsigned) (etext - (char*) _start));
                 mcw_touch(__DATA_BEGIN__, (unsigned) (_end - __DATA_BEGIN__));
@@ -48,6 +48,7 @@ int aoe_view_wanted(void) {
     return st.wanted;
 }
 
+int aoe_view_second_worker(void) { aoe_view_wanted(); return st.workers >= 2 ? 2 : 0; }
 int aoe_view_busy(void) { return st.busy; }
 int aoe_view_in_job(void) { return st.inline_job || (st.workers && mcw_on_worker()); }
 void aoe_view_walked(void) { job_counts.walked_at = my_instructions(); walked.v = 1; }

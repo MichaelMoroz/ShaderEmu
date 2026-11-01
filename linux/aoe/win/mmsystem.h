@@ -45,6 +45,7 @@ typedef struct _MMCKINFO { FOURCC ckid; DWORD cksize; FOURCC fccType; DWORD dwDa
 #define MCI_DEVTYPE_SEQUENCER 523
 #define MCI_SEQ_MAPPER 0xffff
 #define MCI_MCIAVI_PLAY_WINDOW 0x1000000
+#define MM_MCINOTIFY 0x3B9
 #define MCI_NOTIFY_SUCCESSFUL 1
 #define MCI_NOTIFY_ABORTED 4
 #define MCI_MAKE_TMSF(t,m,s,f) ((DWORD)(((BYTE)(t)|((WORD)(m)<<8))|(((DWORD)(BYTE)(s)|((WORD)(f)<<8))<<16)))

@@ -1,6 +1,6 @@
 # Age of Empires, the 1997 trial
 
-The decompiled game (`github.com/dcostap/aoe1-decomp`, pinned at `6d6d8b1`; the plan read `f4fdf3f`) over a Win32 and DirectDraw layer of our own, with the data of the trial (`docs/plans/aoe-plan.md`). It opens as a window of 640 x 480 on the desktop and plays, with its sound effects on the sound card and the map dragged by the right button ("Windowed", "Sound", "Controls"). It draws its view on a worker core, and at 800 x 600 played at 11 to 15 frames a second on the card ("Speed in play").
+The decompiled game (`github.com/dcostap/aoe1-decomp`, pinned at `6d6d8b1`; the plan read `f4fdf3f`) over a Win32 and DirectDraw layer of our own, with the data of the trial (`docs/plans/aoe-plan.md`). It opens as a window of 640 x 480 on the desktop and plays, with its sound effects and its music on the sound card and the map dragged by the right button ("Windowed", "Sound", "Music", "Controls"). It draws its view on a worker core, and at 800 x 600 played at 11 to 15 frames a second on the card ("Speed in play").
 
 **No game data in the repository.** The data is under the trial's EULA, and the code is recovered from Microsoft's binary. Nothing of the game or the trial is committed: only the port, the patch and the tools. The program is not in `ALL` in `linux/nommu/build.sh` or in `linux/prebuilt`. The trial's `Empires.exe` is not read at all. The game's own `verify_cd` is set to 0, because the trial has no CD.
 
@@ -18,7 +18,8 @@ The game goes into an image only when asked:
 1. It fetches `MSAoE.exe` into the cache (`AOE_CACHE`, by default `~/.cache/shaderemu/aoe`), and refuses it unless its md5 and sha256 are those in the script.
 2. It unpacks it with 7-Zip and makes the data (`make_data.py`: `language.txt`, `aoe-fonts.bin`, and the files copied flat). A mark says which scripts made it, and a cache with the same mark is used as it is, with no network.
 3. It builds the program (`program.sh`, into `build/aoe/out`; `AOE_WSL_HOME` is a private home, `AOE_PROGRAM` a folder already made).
-4. It puts the data, `aoe.bin`, `aoe` and the Start menu's line into that image's overlay, and never into the root.
+4. It fetches the music's instruments into the same cache (`genmidi.op2`, DMXOPL's General MIDI bank, MIT, the commit OpenTTD fetches, against its checksum). If that fails the game goes in with no music.
+5. It puts the data, the bank, `aoe.bin`, `aoe` and the Start menu's line into that image's overlay, and never into the root.
 
 If any step fails it says which, the image goes on without the game, and `test_all.py aoe` prints `AOE-NO-DATA` and passes. A plain build runs none of this and is byte for byte as before. `--save-prebuilt` turns the switch off, and what it saves comes from the root, so neither the data nor the game can be saved.
 
@@ -52,9 +53,10 @@ The program alone:
 | `AOE_SIZE=800` | 800 x 600, above the bar: the way before; else the window of 640 x 480 ("Windowed") |
 | `AOE_SCROLL=edge` | the map scrolls at the window's edges, and by the game's own right drag with nothing selected: the way before ("Controls") |
 | `AOE_SOUND=0`, `AOE_SOUND_LOG=1` | no sound; `aoesnd:` each wave found, played and seen to end (`python tools/aoe_sound_check.py LOG IMAGE`, "Sound") |
+| `AOE_MUSIC=0`, `AOE_MUSIC_LOG=1` or `2`, `AOE_MUSIC_CUT=S` | no music (`AOE_SOUND=0` has none either); `aoemus:` each song and what the card's words say, with 2 every note and instrument for `tools/aoe_music_check.py`; each song ends after S s ("Music") |
 | `AOE_INPUT_LOG=1` | `aoeinput:` an order, a box and a drag, each with its places; the script's `view` step prints `aoeview:` where the view stands and how many are selected |
 
-`test_all.py aoe --image build/images/NAME` plays the script below to update 1000 (at 800 x 600), `aoe-640` the same at the window's size, and `aoe-drag` the controls. An image with no data prints `AOE-NO-DATA` and passes.
+`test_all.py aoe --image build/images/NAME` plays the script below to update 1000 (at 800 x 600), `aoe-640` the same at the window's size, and `aoe-drag` the controls. `aoe-music` is `aoe-640` with the card's clock moving (`RVC_SOUND=1`), which those have not, and songs cut to 4 s. An image with no data prints `AOE-NO-DATA` and passes.
 
 The script starts a Random Map game, sends a villager to a tree and trains a villager. At 640 x 480 the menus' places are times 0.8, the view's 80 and 60 less and the bottom panel's 120 up (`AOE_PLAY_640` in `tools/game_par.py`), and the sums are the same: `5032c153` at update 1000.
 
@@ -254,7 +256,23 @@ A card's 16-bit samples must lie on an even address and most of the trial's wave
 
 `AOE_SOUND_LOG=1` says each wave played and when its voice was seen to end, and `python tools/aoe_sound_check.py LOG IMAGE` reads each address from the image's ROM as the card will and finds that the samples are a wave of the trial, whole: on `aoe-play`, 8 plays of 6 waves, 0 not of the trial, 0 of silence, 8 seen to end and none in under half their length, each after the act that asks for one. What was heard was not checked: the check goes by the addresses, and no mix was captured. Over the same six timings the window gave 15.5 frames a second with sound and 16.1 with `AOE_SOUND=0`, inside the spread between timings (14.3 to 17.9 silent).
 
-Music is not played. The trial has 12 MIDI files and no instruments, and Windows' MCI played them: on this machine it means OpenTTD's driver (`shaderemu_m.cpp`, 450 lines, a MIDI reader), DMXOPL's bank fetched at build time, 20 voices of the card's 32, and a worker that makes a song's tracks. `info.use_music` is 0. That is the cost of it, and none of it is in the game's frames once a song is made; it was not tried.
+## Music
+
+The game's own `TMusic_System` (`music.cpp`, not changed) plays it: what plays when, what comes next and how loud are all the game's. It asks Windows for a CD, which fails, then for the MCI sequencer and the synthesizer's mixer line, and `port/aoe_music.cpp` is those two on the card's FM voices. `info.use_music` is 1 again. So: `open.mid` at the first menu, once; in a game `music1.mid` to `music9.mid` in turn and round again, the next at each song's end by the game's `MM_MCINOTIFY`; `won.mid` or `lost.mid` at the end; the options' slider is the mixer's level, and its default of half (registry `Music Volume`, -5000) is the game's. A slider at the bottom turns music off as the game does. Windows' notice of a stopped song comes too, at the next look, since the game counts them.
+
+The notes are made as OpenTTD's are: `linux/userland/shaderemu_fm.h` has the bank's instruments and the channel messages as notes given to voices, and OpenTTD's driver now goes through it too (`OPENTTD_MUSIC_SUM=all`: the 32 songs of OpenMSX give the same sums and notes as before). What is the port's own is 60 lines of Standard MIDI File reader, since OpenTTD's `MidiFile` is its own C++. So as in OpenTTD: program, volume, expression, pan and all-notes-off are followed, and the pitch wheel, the sustain pedal and drums outside the bank's 35 to 81 are not. `python tools/aoe_music_check.py --files IMAGE` says how many each song has. `Lost.mid` has 1,302 wheel messages and `Music1.mid` 1,554 (and 316 drums outside the bank, the most), so those will sound the least like the original.
+
+**Voices.** The effects keep their 16 and music has the other 16 (`VOICES` in `aoe_music.cpp`), since 32 is all the card has. OpenTTD has 20, because its mixer takes 8. The songs want up to 19 to 32 at once, counting a two-voice instrument as two, so a note is cut when all 16 sound (the oldest goes): 7 to 179 notes of a song, at most about 3% (`Music1.mid` 122 of 3,766, `Music6.mid` 179 of 6,138). More voices for music would mean fewer than the effects' 16.
+
+**A song on a worker.** The first core reads the file into sound memory and posts the job to a second worker (`mcw_open(2)`, the view has the first), which makes the notes and writes the tracks; the voices start when the first core next looks. All the job writes lies in sound memory or its own `SongJob`, 1.4 MB for the largest song the format can have here, and none of it in the program's data. With `AOE_VIEW=inline` or no workers the first core makes it. Nothing here moves the game: a song's end is a sent message with `AOE_TICK_MS`'s clock held (`aoe_clock_still`), not one of the queue, as a message taken is a look with the idle work not done. The state sums do not move: `aoe-music`, nine songs a round cut short at 4 s, says `5032c153` at update 1000.
+
+**What it costs** (`rvc_cpu`, 1 November 2026): on the first core at most 289 instructions a look on average, about one look a frame, against about 340 thousand a frame, and that with the log's own prints in it; 25 to 42 thousand a song to read and post. On a worker 1.7 to 5.6 million a song. `game_par.py aoe --calibrated`, with `AOE_MUSIC=0` and without: core 0 342.0k and 342.9k a frame, 11.6 and 11.1 frames a second, all cores 586k and 616k. But two runs of that scene differed by 44k in core 0 before salts were tried, and salts did not move it, so that says little about 0.9k. The card's mix of 16 more FM voices was not measured: it is not in any `rvc_cpu` number, and it is the card's sound pass, not the first core.
+
+**Checks.** `AOE_MUSIC_LOG=2 AOE_SOUND_LOG=1` on `rvc_cpu` with `RVC_SOUND=1`, then `python tools/aoe_music_check.py LOG IMAGE`, reads each MIDI file with a reader of its own and works out each note from the file and the bank: start, instrument, loudness, pitch against 440 Hz's scale, and length. Against the words the machine wrote for the card, on `open.mid`, `music1.mid` and `music2.mid` in play: all notes found, none other, pitch within 0.000%, every note held as the file says or cut (as many as the driver counted), all 350 instruments as the bank says, 16 voices kind 5 on voices 16 to 31 with the effects on 0 to 15, the card's position moving with its clock to the song's end, and the next song after it. Effects played beside the music in those runs. `RVC_RACES` with `RVC_RACES_NEAR=4`, 35 songs on the worker with `AOE_MUSIC_CUT=2`: 0 undone, and the near places are core 0 and core 1's, not the song's worker.
+
+`--wav FILE` writes what those words sound like: `tools/sound_reference.py`'s FM, in the card's integers, with the effects' samples from the ROM at the clock values in the log (not interpolated). It is that model's mix and not a capture of the shader, since `rvc_cpu` mixes nothing and a capture wants the card. A song at the default level peaks at 5,442 of 32,767 alone, and with the effects of those runs at 22,119, none clipped. **Nobody has listened to it yet**: whether the instruments sound right is not checked by any of this, and it has not run on the card or in a world. The options' slider was not moved in a run, and `won.mid` and `lost.mid` were not reached by play: the first level the mixer gets is the only one exercised, and those two songs' notes were only read from the files.
+
+A MIDI file is game data: it comes from the trial's cache, with the rest (`KEEP` in `make_data.py`), and goes only into an image made with `--aoe`.
 
 ## What ends a round
 
@@ -287,6 +305,6 @@ The cursor is the game's own, drawn into its picture, and it is in captures from
 
 ## Not done
 
-- Music ("Sound").
+- The pitch wheel and the sustain pedal in the music ("Music").
 - `linux/nommu/memory.py`.
 - Saving, multiplayer (DirectPlay stubs) and scenarios were not tried. Computer players gather and build over 5 game minutes; a whole game was not played.

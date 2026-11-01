@@ -104,9 +104,10 @@ so its samples can be played where they lie.
   lies in the ROM.
 - **The NES** (`linux/nes/apu_shaderemu.c`, `docs/games/nes.md`, "Sound"): each of its five channels a
   voice playing a wave already in sound memory.
-- **Age of Empires** (`linux/aoe/port/sound.cpp`, `docs/games/aoe.md`, "Sound"): a wave is a voice pointed at it in the DRS files in the ROM, which `make_data.py` writes with every item on an even offset.
+- **Age of Empires** (`linux/aoe/port/sound.cpp`, `docs/games/aoe.md`, "Sound"): a wave is a voice pointed at it in the DRS files in the ROM, which `make_data.py` writes with every item on an even offset. Its MIDI songs are FM tracks on the other 16 voices, made on a worker (`port/aoe_music.cpp`, "Music").
 - **OpenTTD** (`linux/openttd/mixer_shaderemu.cpp`): a channel is a voice; a sound is copied into sound
   memory the first time it plays.
+  Its MIDI songs are FM tracks on 20 voices. `linux/userland/shaderemu_fm.h` makes a General MIDI bank and MIDI messages into FM notes, for it and Age of Empires.
 - **`nxplay` and `nxvideo`** (`docs/apps/play.md`, `docs/apps/video.md`): a stream voice's ring, decoded by libmedia.
 
 ## The host
