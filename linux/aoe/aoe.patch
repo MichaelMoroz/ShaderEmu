@@ -13,7 +13,7 @@ index ace2f53a7..bb040047e 100644
      friend class TPanel;
      friend class RGE_Scenario;
 diff --git a/include/drawarea.h b/include/drawarea.h
-index 591015c52..19adb2416 100644
+index 591015c52..e370f5dbb 100644
 --- a/include/drawarea.h
 +++ b/include/drawarea.h
 @@ -92,11 +92,13 @@ class TSpan_List_Manager {
@@ -30,12 +30,15 @@ index 591015c52..19adb2416 100644
      void AddSpan(int LeftPx, int RightPx, int Line);
      void AddShape(TShape* theShape, int shape_num, int Xpos, int Ypos, int Mirror);
      void AddShape_Align(unsigned char* Shape_Base, Shape_Info* SI, int Xpos, int Ypos, int Mirror);
-@@ -151,6 +153,8 @@ class TDrawArea {
+@@ -151,6 +153,11 @@ class TDrawArea {
      void** CurDisplayOffsets;            // +0xC0
      void** FloatOffsets;                 // +0xC4
      RGE_Color_Table* shadow_color_table; // +0xC8
 +    int aoe_whole_clip_owed;
 +    long aoe_clip_made[5];   // the rectangle SpanList holds, and [4] that it holds one
++    TSpan_List_Manager* aoe_clip_lists[4];   // the port: the spans of the rectangles asked for before, with these
++    long aoe_clip_rects[4][4];
++    int aoe_clip_next;
      TSpan_List_Manager* SpanList;        // +0xCC
      TSpan_List_Manager* CurSpanList;     // +0xD0
      int Float_X_Delta;                   // +0xD4
@@ -273,7 +276,7 @@ index 2ec743511..695fe1608 100644
          this->mouse_pointer->draw(1);
          this->erase_mouse = 1;
 diff --git a/src/drawarea.cpp b/src/drawarea.cpp
-index 9f77ab2ed..5f863b04f 100644
+index 9f77ab2ed..e7e4a8bc4 100644
 --- a/src/drawarea.cpp
 +++ b/src/drawarea.cpp
 @@ -1,3 +1,4 @@
@@ -281,15 +284,17 @@ index 9f77ab2ed..5f863b04f 100644
  #include "../include/drawarea.h"
  #include "../include/asm_draw.h"
  #include "../include/color.h"
-@@ -964,6 +965,7 @@ TDrawArea::TDrawArea(char* SurfaceName, int ForceSystemMem) {
+@@ -964,6 +965,9 @@ TDrawArea::TDrawArea(char* SurfaceName, int ForceSystemMem) {
      this->Orien = 1;
      this->SpanList = 0;
      this->CurSpanList = 0;
 +    this->aoe_whole_clip_owed = 0;
++    memset(this->aoe_clip_lists, 0, sizeof this->aoe_clip_lists);
++    this->aoe_clip_next = 0;
      this->shadow_color_table = 0;
  
      int name_length = (int) strlen(SurfaceName);
-@@ -1116,7 +1118,9 @@ unsigned char TDrawArea::CheckSurface() {
+@@ -1116,7 +1120,9 @@ unsigned char TDrawArea::CheckSurface() {
      return 0;
  }
  
@@ -299,7 +304,15 @@ index 9f77ab2ed..5f863b04f 100644
      if (this->DrawSystem != 0) {
          if (this->DrawSystem->DrawType == 1)
              return this->Bits;
-@@ -1509,6 +1513,7 @@ void TDrawArea::SetClipRect(tagRECT* rect) {
+@@ -1270,6 +1276,7 @@ void TDrawArea::SetSize(long wid_in, long hgt_in, int ExtendSurface) {
+         }
+     }
+ 
++    for (int aoe_i = 0; aoe_i < 4; aoe_i++) if (this->aoe_clip_lists[aoe_i] != 0) { delete this->aoe_clip_lists[aoe_i]; this->aoe_clip_lists[aoe_i] = 0; }
+     if (this->SpanList != 0) {
+         delete this->SpanList;
+     }
+@@ -1509,6 +1516,7 @@ void TDrawArea::SetClipRect(tagRECT* rect) {
      this->SetClipRect(this->ClipRect.left, this->ClipRect.top, this->ClipRect.right, this->ClipRect.bottom);
  }
  
@@ -307,7 +320,7 @@ index 9f77ab2ed..5f863b04f 100644
  void TDrawArea::SetClipRect(long x1, long y1, long x2, long y2) {
      TSpan_List_Manager* span_list = this->SpanList;
  
-@@ -1517,6 +1522,18 @@ void TDrawArea::SetClipRect(long x1, long y1, long x2, long y2) {
+@@ -1517,22 +1525,73 @@ void TDrawArea::SetClipRect(long x1, long y1, long x2, long y2) {
      this->ClipRect.right = x2;
      this->ClipRect.bottom = y2;
  
@@ -326,7 +339,14 @@ index 9f77ab2ed..5f863b04f 100644
      if (span_list != 0 && span_list->Num_Lines != this->Height) {
          if (this->SpanList != 0) {
              delete this->SpanList;
-@@ -1527,12 +1544,26 @@ void TDrawArea::SetClipRect(long x1, long y1, long x2, long y2) {
+         }
+         this->SpanList = 0;
++        for (int i = 0; i < 4; i++) {
++            if (this->aoe_clip_lists[i] != 0) delete this->aoe_clip_lists[i];
++            this->aoe_clip_lists[i] = 0;
++        }
+     }
+ 
      if (this->SpanList == 0) {
          span_list = new TSpan_List_Manager(this->Width, this->Height);
          this->SpanList = span_list;
@@ -338,7 +358,28 @@ index 9f77ab2ed..5f863b04f 100644
 +        this->CurSpanList = this->SpanList;
 +        return;
 +    }
-+    this->aoe_clip_made[0] = x1; this->aoe_clip_made[1] = y1; this->aoe_clip_made[2] = x2; this->aoe_clip_made[3] = y2; this->aoe_clip_made[4] = 1;
++    // The port: and the panels ask for a few rectangles in turn: 25,000 instructions a frame made anew (AddRect and its nodes)
++    {
++        int made = this->aoe_clip_made[4] == 1, k;
++        for (k = 0; k < 4; k++) {
++            long* r = this->aoe_clip_rects[k];
++            if (this->aoe_clip_lists[k] != 0 && r[0] == x1 && r[1] == y1 && r[2] == x2 && r[3] == y2) break;
++        }
++        int found = k < 4;
++        if (!found) { k = this->aoe_clip_next; this->aoe_clip_next = (k + 1) & 3; }
++        TSpan_List_Manager* other = this->aoe_clip_lists[k];
++        if (made || found) {
++            this->aoe_clip_lists[k] = this->SpanList;
++            for (int i = 0; i < 4; i++) this->aoe_clip_rects[k][i] = this->aoe_clip_made[i];
++            if (!made) this->aoe_clip_lists[k] = 0;
++            this->SpanList = other != 0 ? other : new TSpan_List_Manager(this->Width, this->Height);
++        }
++        this->aoe_clip_made[0] = x1; this->aoe_clip_made[1] = y1; this->aoe_clip_made[2] = x2; this->aoe_clip_made[3] = y2; this->aoe_clip_made[4] = 1;
++        if (found) {
++            this->CurSpanList = this->SpanList;
++            return;
++        }
++    }
      this->SpanList->ResetAll();
      span_list = this->SpanList;
      span_list->SetSpanRegions(this->ClipRect.left, this->ClipRect.top, this->ClipRect.right, this->ClipRect.bottom);
@@ -353,7 +394,7 @@ index 9f77ab2ed..5f863b04f 100644
      int y = this->ClipRect.top;
      if (y <= this->ClipRect.bottom) {
          do {
-@@ -2286,3 +2317,9 @@ void TDrawArea::take_snapshot(char* filespec, int& index_no) {
+@@ -2286,3 +2345,9 @@ void TDrawArea::take_snapshot(char* filespec, int& index_no) {
      }
      free(row);
  }
@@ -892,7 +933,7 @@ index d0ddcafa6..0967f4d2a 100644
  #include "../include/program_mode.h"
  #include "../include/asp_list.h"
 diff --git a/src/taiinfmd.cpp b/src/taiinfmd.cpp
-index 0d961d41b..c6978b038 100644
+index 0d961d41b..87c342895 100644
 --- a/src/taiinfmd.cpp
 +++ b/src/taiinfmd.cpp
 @@ -155,7 +155,7 @@ TribeInformationAIModule::TribeInformationAIModule(void* pW, int pID) :
@@ -931,7 +972,39 @@ index 0d961d41b..c6978b038 100644
      }
  
      return 1;
-@@ -2418,7 +2415,7 @@ void TribeInformationAIModule::removeObject(int objID) {
+@@ -2164,14 +2161,8 @@ ConstructionItem* TribeInformationAIModule::influencePlaceStructure(
+                 continue;
+             }
+ 
+-            int blockingObject = -1;
+-            if (masterObj->check_placement(
+-                    this->md->player, (float) x - (-0.5f), (float) y - (-0.5f), &blockingObject, 1, 1, 1, 1, 1, 1
+-                )
+-                != 0) {
+-                continue;
+-            }
+-
++            // The port: the influence map first (a few words), check_placement (376 instructions, 12% of the first core) for
++            // what is left: neither changes anything, so the same places come out.
+             int basePlacementTotal = 0;
+             int blocked = 0;
+             for (int clearX = minClear.x; clearX <= maxClear.x && blocked == 0; ++clearX) {
+@@ -2188,6 +2179,14 @@ ConstructionItem* TribeInformationAIModule::influencePlaceStructure(
+                 continue;
+             }
+ 
++            int blockingObject = -1;
++            if (masterObj->check_placement(
++                    this->md->player, (float) x - (-0.5f), (float) y - (-0.5f), &blockingObject, 1, 1, 1, 1, 1, 1
++                )
++                != 0) {
++                continue;
++            }
++
+             if (placementType == 4 || placementType == 6) {
+                 int old_connection_count = iMap.connectionCountValue;
+                 int connection_count = iMap.connectionsIncluding(minClear, maxClear, 0xff, 0xff, 1, 0, 1);
+@@ -2418,7 +2417,7 @@ void TribeInformationAIModule::removeObject(int objID) {
          ObjectMemory* mem = objectMemory(objID);
          if (mem != 0) {
              // obj->owner->id, kept raw for the same reason as in initialize.
