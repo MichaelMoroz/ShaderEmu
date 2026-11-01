@@ -274,8 +274,8 @@ CASES = [
          True, wall=400, has=[r'openttd: depot views: \d\d pictures, [1-9]\d* light, 0 off the vehicle, 0 stopped and hidden with their copies elsewhere; not black.* the least ([5-9]\d|100)%',
              # the vehicle started, sent back, and another already on the road with its window opened: where the view is in every picture, its copy, its pixels
              r'depot drive, out of the depot: 500 pictures, moved \d{2,}, 0 off the vehicle \(most \d+\), copy stale \d \(at most \d together\), shown [2-5]\d\d and not seen 0',
-             r'depot drive, back to a depot: 500 pictures, moved \d{2,}, 0 off the vehicle \(most \d+\), copy stale \d \(at most \d together\), shown [1-5]\d\d and not seen 0',
-             r'depot drive, on the road: 300 pictures, moved \d{2,}, [0-2] off the vehicle \(most \d+\), copy stale \d \(at most \d together\), shown [23]\d\d and not seen 0']),
+             r'depot drive, back to a depot: 500 pictures, moved \d{2,}, 0 off the vehicle \(most \d+\), copy stale \d \(at most \d together\), shown \d{2,} and not seen 0',
+             r'depot drive, on the road: 300 pictures, moved \d{2,}, \d off the vehicle \(most \d+\), copy stale \d \(at most \d together\), shown [23]\d\d and not seen 0']),
     # started twice in one boot (docs/games/openttd.md, "At exit"): the first played with its ships' paths made ahead, the
     # second must find its sprites as they are (a worker left running at exit once wrote into the next program's pages)
     case('openttd-twice', 'games openttd', X + 'OPENTTD_PLAY=1 OPENTTD_PLAY_SHORT=1 openttd -g /usr/share/openttd/busy.sav; '

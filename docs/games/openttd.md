@@ -537,6 +537,32 @@ Calibrated, 31 October 2026 (the call at the tick's end in, same model and round
 
 A tick is 92 to 103 ms, a wait 12% to 18%, building 23%, zoomed out 28%: the copies are 15 to 20 ms of a tick, so a tick's length is about what it was before this section, and the gain in ticks is the hold's. Not measured again on the card.
 
+### Round four: copies near the views, a tick's end without a hold
+
+A copy cost measured, 31 October to 1 November 2026, `prof.py` on the quiet window scene: `VehicleMakeAhead` 42k, `VehicleDrawMake` 28k, `VehiclesMakeLater` 11k a tick, 80k of 535k (15%), and on the first core `MarkAllViewportsDirty`, `UpdateViewportNow`, the boxes and `VehiclesApply` 28% of it.
+
+- **Copies near the views.** The first core says at a hold which rectangles are near a view (each view and 512 pixels, `VehRegionUpdate`, at most six); at its end the tick makes no copy of a vehicle outside them and marks it `veh_far`. When a view comes within 256 pixels of a rectangle's edge they are said anew and a far vehicle whose place or copy lies in them is made (a scan of all vehicles). A picture past the rectangles holds the tick (`VehViewsOut`). A followed vehicle that is far is read live. `OPENTTD_VEH_ALL=1` is without. The tick's copies fell to about 28k.
+- **A tick's end without a hold.** The tick turns to the other side of copies itself if the first core has applied the last (`_veh_turned`, `_veh_applied`), and a picture applies what is turned; holds fell from 0.40 a picture to 0.16, wait from 12% to 10%. `OPENTTD_TICK_HOLD=1` is the old way.
+- **Hidden vehicles** that move list themselves for the tick's end like any other; a vehicle whose copy the tick could not make (`made_failed`) is made by the next sync even if it moved since.
+- **Checkered rectangles** are a record a row (`DrawCheckerRows`: a toolbar was 685k instructions by `SetPixel`); a hold looks for sprites to make only if a copy wants one or a view moved; `Train::UpdateDeltaXY` goes by what it depends on; a wagon on one tile keeps its tile hash without a call. Counts made anew with the copies in (`zoom`'s counting run dies of `bad_alloc` and `ticks` and `world` give no counts: the five played runs do).
+- **Zoomed out:** `OPENTTD_PACE_MS` 250, not 130: pictures 12.9 to 11.7 a second, ticks 4.5 to 6.4 (no pace at all: 10.0, 7.7). With every view at 4x out or further copies turn at most every 200 ms (`OPENTTD_ZOOM_COPY_MS`).
+
+`OPENTTD_MADE_CHECK=1` now looks at every vehicle at every sync, after the first 40 of a run: one near the views that has not moved since the tick's end must have a copy (or a copy this sync applies) at its place. It said 0 off in the depot's drive (312,801 looked at, 170,336 far). `tools/openttd_title.py` runs that drive with the lists drawn, under `rvc_harness --cpu --warp`, and compares the title with `OPENTTD_DRAW=cpu`.
+
+Not built, by what the profile bounds: rail and road searches ahead, 18k a tick here (4%), with the ships' 1,060 lines to copy and rail's reservations read under a moving tick; retained land layers, since the land's tile loop (`ViewportAddLandscape` own, half of a piece) makes the parents too and is not saved by keeping ground pixels. More workers than 47 die of `bad_alloc` (`OPENTTD_WORKERS=95`).
+
+Calibrated, 1 November 2026, model of October (fitted on the old tick: ratios between builds, not speeds on today's), before as "Gameplay scenes":
+
+| Scene | Pictures a second before, after | Ticks a second before, after | x pictures, ticks |
+|---|---|---|---|
+| scroll | 15.17, 29.79 | 5.66, 9.83 | 1.96, 1.74 |
+| following a vehicle | 15.18, 30.93 | 5.92, 10.52 | 2.04, 1.78 |
+| windows, none open | 15.17, 30.45 | 6.84, 10.96 | 2.01, 1.60 |
+| many windows open | 15.18, 28.44 | 5.74, 10.13 | 1.87, 1.76 |
+| vehicle windows | 15.09, 31.00 | 6.15, 10.48 | 2.05, 1.70 |
+| building | 14.06, 26.88 | 5.81, 9.41 | 1.91, 1.62 |
+| zoomed out | 7.51, 11.17 | 3.42, 6.52 | 1.49, 1.91 |
+
 ## The start
 
 From the program's start to a game loaded with `-g` (`busy.sav`) is 35 s, calibrated, 31 October 2026 (`/proc/uptime` round a

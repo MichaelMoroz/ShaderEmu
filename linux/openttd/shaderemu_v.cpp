@@ -892,8 +892,8 @@ static void PlayDepotLook(bool last)
 	SeGpuSettle();
 	uint32_t least = 100, kept_off = 0;
 	std::string each;
-	for (const Vehicle *h : Vehicle::Iterate()) { /* (none of these moves: its copy must say where it is) */
-		if (h->vehstatus.Test(VehState::Hidden) && h->vehstatus.Test(VehState::Stopped) && (h->drawn.x != h->x_pos || h->drawn.y != h->y_pos || h->drawn.z != h->z_pos)) kept_off++;
+	for (const Vehicle *h : Vehicle::Iterate()) { /* (its copy must say where it is) */
+		if (h->vehstatus.Test(VehState::Hidden) && h->vehstatus.Test(VehState::Stopped) && !h->veh_far && std::abs(h->drawn.x - h->x_pos) + std::abs(h->drawn.y - h->y_pos) > 16) { /* (one still coasting in a tunnel moves: a tick's way) */ kept_off++; fmt::print(stderr, "openttd: depot off: vehicle {} at {},{},{} copy {},{},{} hidden {} failed {} type {}\n", h->index.base(), h->x_pos, h->y_pos, h->z_pos, h->drawn.x, h->drawn.y, h->drawn.z, h->drawn.hidden, h->made_failed, static_cast<int>(h->type)); }
 	}
 	for (const Window *o : Window::Iterate()) {
 		if (o->viewport == nullptr || o->window_class == WC_MAIN_WINDOW) continue;
@@ -1245,8 +1245,8 @@ static void PlayStep()
 			TwTimes(tick, park, instret);
 			const double s = std::chrono::duration<double>(now - p.start).count();
 			const uint64_t ticks = TimerGameTick::counter - p.ticks;
-extern uint32_t _veh_made_wrong, _veh_synced, _veh_ahead, _veh_copies_off, _veh_copies_seen, _veh_copies_far, _veh_region_scans, _veh_region_made;
-if (GetEnv("OPENTTD_MADE_CHECK").has_value()) PlayLine(fmt::format("openttd: copies near the views: {} looked at, {} far, {} off; {} rectangles said, {} made from far\n", _veh_copies_seen, _veh_copies_far, _veh_copies_off, _veh_region_scans, _veh_region_made));
+extern uint32_t _veh_made_wrong, _veh_synced, _veh_ahead, _veh_copies_off, _veh_copies_seen, _veh_copies_far, _veh_copies_moving, _veh_region_scans, _veh_region_made;
+if (GetEnv("OPENTTD_MADE_CHECK").has_value()) PlayLine(fmt::format("openttd: copies near the views: {} looked at, {} far, {} moved since the tick's end, {} off; {} rectangles said, {} made from far\n", _veh_copies_seen, _veh_copies_far, _veh_copies_moving, _veh_copies_off, _veh_region_scans, _veh_region_made));
 if (GetEnv("OPENTTD_MADE_CHECK").has_value()) PlayLine(fmt::format("openttd: vehicles listed {}, as the tick made them {}, the short look not agreeing {}; copies looked at {}, not as the vehicle {}\n", _veh_synced, _veh_ahead, _veh_made_wrong, _veh_copies_seen, _veh_copies_off));
 			PlayLine(fmt::format("openttd: play {} tick on a worker: {:.2f} ticks a second, {:.0f} ms of the worker's a tick, waiting {:.0f}% "
 					"of the time, {:.2f} MIPS in ticks; the first core waited {:.1f} ms a picture for it ({:.1f} holds, the longest {:.1f} ms)\n",
