@@ -3,39 +3,77 @@
 #include <stdlib.h>
 #include <string.h>
 #include "../include/drawarea.h"
+#include "aoe_cores.h"
 
 struct Span { Span* next; Span* prev; int x0, x1; };
 
-static unsigned char** surface_offsets;
-static Span** span_heads;
-static Span** span_tails;
-static unsigned char* xlate_table;
-static long min_line, max_line, min_span, max_span;
-static unsigned color_xform;
-static unsigned shadow_mask[4], shadow_value[4];
+// A core's own: the first core's panels and the view on a worker draw at once (port/aoe_view.cpp)
+enum { INDEX_FROM = 256, INDEX_STEP = 64, INDEXES = 8 };
+struct RowMark { unsigned offset; int column; };
+struct RowIndex { const unsigned* data; long width, height; unsigned check; int columns; RowMark* marks; };
+struct AsmState {
+    unsigned char** surface_offsets_;
+    Span** span_heads_;
+    Span** span_tails_;
+    unsigned char* xlate_table_;
+    long min_line_, max_line_, min_span_, max_span_;
+    unsigned color_xform_;
+    unsigned shadow_mask_[4], shadow_value_[4];
+    RowIndex indexes_[INDEXES];
+    int index_next_;
+} __attribute__((aligned(64)));
+static AsmState states[2];
+extern "C" int mcw_on_worker(void);
+static inline AsmState* asm_state(void) { return states + (mcw_on_worker() ? 1 : 0); }
+#define surface_offsets A->surface_offsets_
+#define span_heads A->span_heads_
+#define span_tails A->span_tails_
+#define xlate_table A->xlate_table_
+#define min_line A->min_line_
+#define max_line A->max_line_
+#define min_span A->min_span_
+#define max_span A->max_span_
+#define color_xform A->color_xform_
+#define shadow_mask A->shadow_mask_
+#define shadow_value A->shadow_value_
+#define indexes A->indexes_
+#define index_next A->index_next_
+#define AS AsmState* A = asm_state();
+// The worker starts as the first core stands
+void aoe_asm_for_worker(void) {
+    RowIndex keep[INDEXES]; memcpy(keep, states[1].indexes_, sizeof keep);
+    int next = states[1].index_next_;
+    states[1] = states[0];
+    memcpy(states[1].indexes_, keep, sizeof keep);
+    states[1].index_next_ = next;
+}
+
 
 extern "C" {
-void ASMSet_Shadowing(unsigned long m1, unsigned long v1, unsigned long m2, unsigned long v2) {
+void ASMSet_Shadowing(unsigned long m1, unsigned long v1, unsigned long m2, unsigned long v2) { AS
+
     shadow_mask[0] = shadow_mask[2] = m1;
     shadow_value[0] = shadow_value[2] = v1;
     shadow_mask[1] = shadow_mask[3] = m2;
     shadow_value[1] = shadow_value[3] = v2;
 }
-void ASMSet_ShadowingEx(unsigned long* p) {
+void ASMSet_ShadowingEx(unsigned long* p) { AS
+
     for (int i = 0; i < 4; i++) { shadow_mask[i] = p[i]; shadow_value[i] = p[i + 4]; }
 }
-void ASMSet_Surface_Info(void* offsets, void* heads, void* tails, long minspan, long minline, long maxspan, long maxline) {
+void ASMSet_Surface_Info(void* offsets, void* heads, void* tails, long minspan, long minline, long maxspan, long maxline) { AS
     surface_offsets = (unsigned char**) offsets;
     span_heads = (Span**) heads;
     span_tails = (Span**) tails;
     min_line = minline; max_line = maxline; min_span = minspan; max_span = maxspan;
 }
-void ASMSet_Color_Xform(int color) { color_xform = (unsigned char) color * 0x01010101u; }
-int ASMGet_Color_Xform(void) { return color_xform & 0xff; }
-void ASMSet_Xlate_Table(void* table) { xlate_table = (unsigned char*) table; }
-void* ASMGet_Xlate_Table(void) { return xlate_table; }
+void ASMSet_Color_Xform(int color) { AS color_xform = (unsigned char) color * 0x01010101u; }
+int ASMGet_Color_Xform(void) { AS return color_xform & 0xff; }
+void ASMSet_Xlate_Table(void* table) { AS xlate_table = (unsigned char*) table; }
+void* ASMGet_Xlate_Table(void) { AS return xlate_table; }
 
-void ASMDraw_HLine(long x1, long x2, long y, unsigned long color) {
+void ASMDraw_HLine(long x1, long x2, long y, unsigned long color) { AS
+
     if (y < min_line || y > max_line) return;
     if (x1 > x2) { long t = x1; x1 = x2; x2 = t; }
     if (x2 < min_span || x1 > max_span) return;
@@ -62,7 +100,7 @@ enum { OP_COPY, OP_FILL, OP_XFORM, OP_XFILL, OP_SHADOW };
 
 // One run of a row. a to b are columns, left to right; src is what the column `from` takes
 // (going by `dir`). The kinds' pixels go by the row's fog.
-static inline void put_run(int op, unsigned char* row, long a, long b, const unsigned char* src, unsigned char value,
+static inline void put_run(AsmState* A, int op, unsigned char* row, long a, long b, const unsigned char* src, unsigned char value,
                            int fog, unsigned m, unsigned v, int dir, long from) {
     unsigned char* d = row + a;
     long n = b - a + 1;
@@ -106,11 +144,6 @@ static inline void put_run(int op, unsigned char* row, long a, long b, const uns
 
 // A big picture's rows have hundreds of commands, and a button at the right of the screen has its piece of
 // the picture behind it drawn from each row's start. Where each row stands every 64 columns, made once.
-struct RowMark { unsigned offset; int column; };
-struct RowIndex { const unsigned* data; long width, height; unsigned check; int columns; RowMark* marks; };
-enum { INDEX_FROM = 256, INDEX_STEP = 64, INDEXES = 8 };
-static RowIndex indexes[INDEXES];
-static int index_next;
 
 // One command of a row, left to right; 0 at the row's end.
 static inline int row_command(const unsigned char*& s, long& at) {
@@ -152,16 +185,16 @@ static inline int row_command(const unsigned char*& s, long& at) {
     }
 }
 
-static const RowIndex* row_index(unsigned char* base, const unsigned* data, long width, long height) {
+static const RowIndex* row_index(AsmState* A, unsigned char* base, const unsigned* data, long width, long height) {
     unsigned check = data[0] * 31 + data[height / 2] * 7 + data[height - 1] + (unsigned) width * 65599 + (unsigned) height;
     for (int i = 0; i < INDEXES; i++)
         if (indexes[i].data == data && indexes[i].check == check) return &indexes[i];
     RowIndex* x = &indexes[index_next];
     index_next = (index_next + 1) % INDEXES;
-    free(x->marks);
+    aoe_any_free(x->marks);
     x->data = data; x->width = width; x->height = height; x->check = check;
     x->columns = width / INDEX_STEP + 1;
-    x->marks = (RowMark*) malloc(height * x->columns * sizeof(RowMark));
+    x->marks = (RowMark*) aoe_any_calloc(height * x->columns, sizeof(RowMark));
     if (!x->marks) { x->data = 0; return 0; }
     for (long row = 0; row < height; row++) {
         const unsigned char* start = base + data[row];
@@ -179,7 +212,7 @@ static const RowIndex* row_index(unsigned char* base, const unsigned* data, long
     return x;
 }
 
-extern "C" void ASMDraw_Sprite(void* base_, long x, long y, long width, long height, long data_offsets, long outline_offset, int flags) {
+extern "C" void ASMDraw_Sprite(void* base_, long x, long y, long width, long height, long data_offsets, long outline_offset, int flags) { AS
     unsigned char* base = (unsigned char*) base_;
     long skip = 0;
     long last = height + y - 1;
@@ -197,7 +230,7 @@ extern "C" void ASMDraw_Sprite(void* base_, long x, long y, long width, long hei
     unsigned short* outline = (unsigned short*) (base + outline_offset) + skip * 2;
     int fog = flags & 1, mirror = flags & 2;
     unsigned m = 0xffffffff, v = 0;
-    const RowIndex* index = !mirror && width >= INDEX_FROM && height + skip > 0 ? row_index(base, data - skip, width, height + (last > max_line ? last - max_line : 0) + skip) : 0;
+    const RowIndex* index = !mirror && width >= INDEX_FROM && height + skip > 0 ? row_index(A, base, data - skip, width, height + (last > max_line ? last - max_line : 0) + skip) : 0;
 
     for (long row = 0; row < height; row++) {
         long line = y + row;
@@ -275,7 +308,7 @@ extern "C" void ASMDraw_Sprite(void* base_, long x, long y, long width, long hei
                 if (!span) goto next_row;   // nothing more of this row shows
                 for (Span* t = span; t && t->x0 <= b; t = t->next) {
                     long p = a < t->x0 ? t->x0 : a, q = b > t->x1 ? t->x1 : b;
-                    if (p <= q) put_run(op, line_base, p, q, px, value, fog, m, v, 1, a);
+                    if (p <= q) put_run(A, op, line_base, p, q, px, value, fog, m, v, 1, a);
                     if (b <= t->x1) break;
                 }
             } else {
@@ -284,7 +317,7 @@ extern "C" void ASMDraw_Sprite(void* base_, long x, long y, long width, long hei
                 while (span && span->x0 > b) span = span->prev;
                 for (Span* t = span; t && t->x1 >= a; t = t->prev) {
                     long p = a < t->x0 ? t->x0 : a, q = b > t->x1 ? t->x1 : b;
-                    if (p <= q) put_run(op, line_base, p, q, px, value, fog, m, v, -1, b);
+                    if (p <= q) put_run(A, op, line_base, p, q, px, value, fog, m, v, -1, b);
                     if (a >= t->x0) break;
                 }
             }

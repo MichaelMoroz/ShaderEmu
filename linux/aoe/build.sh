@@ -67,7 +67,8 @@ echo "objects: $(ls "$OBJ"/*.o | wc -l)"
 # the GL library, compiled apart as in the other ports
 rv32-cc -O2 -fno-pie -w -DNDEBUG -DSHADEREMU -idirafter $REPO/programs/linux/include -I$WORK/src/microwindows/src/include -I$REPO/linux/userland \
     -fno-common -fdata-sections -msmall-data-limit=0 -c "$REPO/programs/linux/gles.c" -o "$WORK/src/aoe-gles.o"
-LIBS="$WORK/src/aoe-gles.o $WORK/src/microwindows/src/lib/libnano-X.a"
+rv32-cc -O2 -fno-pie -w -idirafter $REPO/programs/linux/include -I$REPO/programs/mc -c "$REPO/programs/mc/mcw.c" -o "$WORK/src/aoe-mcw.o"
+LIBS="$WORK/src/aoe-gles.o $WORK/src/aoe-mcw.o $WORK/src/microwindows/src/lib/libnano-X.a"
 rv32-c++ -O2 -fno-pie -g "$OBJ"/*.o $LIBS -lm -o "$OBJ/aoe.elf" 2>"$OBJ/link.log" || true
 grep -oE "undefined reference to .*" "$OBJ/link.log" | sort | uniq -c | sort -rn | head -"${AOE_CHECK_TOP:-300}" || true
 grep -v "undefined reference\|in function" "$OBJ/link.log" | head -20 || true

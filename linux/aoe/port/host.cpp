@@ -72,6 +72,17 @@ static long frames;
 long aoe_frames(void) { return frames; }
 void aoe_present(void) {
     frames++;
+    // AOE_PICSUM=N: a sum of the picture every N frames, to compare two ways of drawing it
+    static int picsum = -1; static long picdump = getenv("AOE_PICDUMP") ? atol(getenv("AOE_PICDUMP")) : 0;
+    if (picsum < 0) { const char* e = getenv("AOE_PICSUM"); picsum = e ? atoi(e) : 0; }
+    if (picsum && page && frames % picsum == 0) {
+        if (window_open) aoe_win_settle();
+        const unsigned* p = (const unsigned*) page; unsigned hs[3] = {2166136261u, 2166136261u, 2166136261u};
+        for (int i = 0; i < 800 * 600 / 4; i++) { int row = i / 200, b = row < 20 ? 0 : row < 474 ? 1 : 2; hs[b] = (hs[b] ^ p[i]) * 16777619u; }
+        fprintf(stderr, "aoepic %ld %08x %08x %08x\n", frames, hs[0], hs[1], hs[2]);
+        if (frames == picdump) for (int r = 0; r < 30; r++) { fprintf(stderr, "aoegrid %02d ", r); for (int c = 0; c < 40; c++) { unsigned g = 0; for (int y = 0; y < 20; y++) for (int x = 0; x < 20; x++) g = g * 31 + page[(r * 20 + y) * 800 + c * 20 + x]; fprintf(stderr, "%02x", (g ^ g >> 8 ^ g >> 16) & 255); } fprintf(stderr, "\n"); }
+        if (frames == picdump && getenv("AOE_PICROWS")) for (int y = 474; y < 600; y++) { fprintf(stderr, "aoerow "); for (int x = 0; x < 260; x++) fprintf(stderr, "%02x", page[y * 800 + x]); fprintf(stderr, "\n"); }
+    }
     if (window_open) aoe_win_present();
 }
 void aoe_before_blit(void) { if (window_open) aoe_win_settle(); }

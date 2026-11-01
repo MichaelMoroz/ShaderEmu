@@ -1,3 +1,4 @@
+#include "aoe_cores.h"
 // Windows, as far as the game asks for it: files, the clock, strings, the registry, windows and
 // messages (one real window, the rest records). docs/games/aoe.md, "What stands for Windows".
 #include <dirent.h>
@@ -279,7 +280,7 @@ static unsigned long virtual_now;
 static int tick_ms = -1;
 extern "C" DWORD timeGetTime(void) {
     if (tick_ms < 0) { const char* e = getenv("AOE_TICK_MS"); tick_ms = e ? atoi(e) : 0; }
-    if (tick_ms) return virtual_now++;   // and a wait on the clock itself ends
+    if (tick_ms) return aoe_view_in_job() ? virtual_now : virtual_now++;   // and a wait on the clock itself ends
     return aoe_clock_ms();
 }
 extern "C" DWORD GetTickCount(void) { return timeGetTime(); }
