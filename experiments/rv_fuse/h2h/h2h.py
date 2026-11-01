@@ -17,6 +17,10 @@ LOADS = {   # the command, seconds at most
     'doom': (PRE + 'echo H2H"" A; DOOM_VIEW=told DOOM_HASH_TICS=100 doom -1 -timedemo demo1; echo H2H"" B', 150),
     'quake': (PRE + 'echo H2H"" A; quake +timedemo demo1; echo H2H"" B', 170),
     'nxray': (PRE + 'echo H2H"" A; RAY_FRAMES=60 nxray; echo H2H"" B', 120),
+    'nxray_free': (PRE + 'echo H2H"" A; nxray & sleep 12; echo H2H"" B', 60),
+    'nxray_nofield': (PRE + 'echo H2H"" A; RAY_FIELD=0 RAY_FRAMES=60 nxray; echo H2H"" B', 120),
+    'nxray_nolanes': (PRE + 'echo H2H"" A; RAY_FIELD=0 RAY_LANES=0 RAY_FRAMES=60 nxray; echo H2H"" B', 120),
+    'nxray_tuned': (PRE + 'echo H2H"" A; geotune again; RAY_FRAMES=60 nxray; echo H2H"" B', 120),
 }
 ap = argparse.ArgumentParser()
 ap.add_argument('machine'); ap.add_argument('load'); ap.add_argument('--mode', default='flat')
@@ -32,7 +36,7 @@ if a.machine == 'gvm':
     prompt, cwd = '@gpuvm:~# ', GVM
     if a.tick: exe += ['--tick', a.tick]
 else:
-    exe = [os.path.join(ROOT, 'bin', 'rvc_harness.exe'), '--d3d11', '--rvc', a.tick or 'experiments\\rvc_opt', '--define', 'NO_PAGING', '--image', a.image or RVIMG,
+    exe = [os.path.join(ROOT, 'bin', 'rvc_harness.exe'), '--d3d11', '--rvc', a.tick or 'experiments\\rvc_lean', '--define', 'NO_PAGING', '--image', a.image or RVIMG,
            '--no-desktop', '--no-viz', '--no-stdin', '--frame-log', frames]
     prompt, cwd = '/ # ', ROOT
 exe += unity + ['--seconds', str(secs), '--stats-after', '0', '--uart-log', log, '--expect', prompt, '--send', cmd + '\\n', '--until', 'H2H B']
